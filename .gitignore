@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+.env
+*.swp
+*.orig
+esp/
+*.iso
+*.img
+*.pdf
+*.PDF
+prebuilt/
+rustc-ice-*.txt
+*.DLL
+*.dll

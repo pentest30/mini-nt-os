@@ -1,0 +1,15 @@
+[package]
+name    = "hal"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "hal"
+
+[dependencies]
+boot-info  = { path = "../boot-info" }
+x86_64     = { workspace = true }
+uart_16550 = { workspace = true }
+spin       = { workspace = true }
+bitflags   = { workspace = true }
+log        = { workspace = true }

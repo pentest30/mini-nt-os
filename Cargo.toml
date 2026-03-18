@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+members = [
+    "boot-info",
+    "bootloader",
+    "bump-alloc",
+    "hal",
+    "kernel",
+    "executive/ke",
+    "executive/mm",
+    "executive/ob",
+    "executive/ps",
+    "executive/io",
+    "win32/kernel32",
+    "win32/user32",
+    "win32/winmm",
+    "win32/msvcrt",
+    "directx/d3d8",
+    "directx/d3d9",
+    "directx/dsound",
+    "directx/dinput8",
+    "tools/pe-loader",
+    "tools/mkfat",
+]
+
+[workspace.package]
+version     = "0.1.0"
+edition     = "2021"
+authors     = ["micro-nt-os contributors"]
+license     = "MIT"
+
+# Shared kernel-mode profile: small, no unwind, abort on panic
+[profile.kernel]
+inherits        = "release"
+panic           = "abort"
+opt-level       = "s"
+lto             = true
+codegen-units   = 1
+debug           = false
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic           = "abort"
+lto             = true
+codegen-units   = 1
+
+# Workspace-wide dependencies (kernel crates share these versions)
+[workspace.dependencies]
+# HAL / low-level
+x86_64          = { version = "0.15", default-features = false, features = ["nightly", "instructions"] }
+uart_16550      = { version = "0.3",  default-features = false }
+spin            = { version = "0.9",  default-features = false, features = ["lazy", "spin_mutex", "once"] }
+bitflags        = { version = "2.4",  default-features = false }
+# Memory
+# linked_list_allocator removed — replaced by bump-alloc crate (T5-1)
+# Boot
+uefi            = { version = "0.26", features = ["alloc", "global_allocator", "logger"] }
+# PE parsing (user-mode tool only)
+pelite          = { version = "0.10" }
+# Logging (no_std)
+log             = { version = "0.4", default-features = false }

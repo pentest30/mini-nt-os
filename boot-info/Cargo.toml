@@ -1,0 +1,10 @@
+[package]
+name    = "boot-info"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "boot_info"
+
+[dependencies]
+# no_std, no deps

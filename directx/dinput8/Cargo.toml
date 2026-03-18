@@ -1,0 +1,10 @@
+[package]
+name    = "dinput8"
+version.workspace = true
+edition.workspace = true
+[lib]
+crate-type = ["cdylib"]
+name = "dinput8"
+[dependencies]
+spin = { workspace = true }
+log  = { workspace = true }

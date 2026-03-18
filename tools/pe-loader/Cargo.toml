@@ -1,0 +1,13 @@
+[package]
+name    = "pe-loader"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "pe-loader"
+path = "src/main.rs"
+
+# This tool runs on the HOST (std environment) for testing.
+# The actual kernel PE loader (no_std) lives in executive/ps/src/loader.rs.
+[dependencies]
+pelite = { workspace = true }

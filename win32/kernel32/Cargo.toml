@@ -1,0 +1,19 @@
+[package]
+name    = "kernel32"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]   # builds as kernel32.dll
+name = "kernel32"
+
+[dependencies]
+hal          = { path = "../../hal" }
+ob           = { path = "../../executive/ob" }
+ps           = { path = "../../executive/ps" }
+mm           = { path = "../../executive/mm" }
+io-manager   = { path = "../../executive/io" }
+ke           = { path = "../../executive/ke" }
+spin         = { workspace = true }
+log          = { workspace = true }
+x86_64       = { workspace = true }

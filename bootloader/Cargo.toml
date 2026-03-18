@@ -1,0 +1,14 @@
+[package]
+name    = "bootloader"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bootloader"
+path = "src/main.rs"
+
+[dependencies]
+boot-info   = { path = "../boot-info" }
+uefi        = { workspace = true }
+x86_64      = { workspace = true }
+log         = { workspace = true }

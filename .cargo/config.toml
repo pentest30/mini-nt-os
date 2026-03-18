@@ -1,0 +1,35 @@
+# .cargo/config.toml
+# Per-target build configuration for kernel and UEFI crates.
+
+# ── Bare-metal kernel target ────────────────────────────────────────────────
+[target.x86_64-unknown-none]
+rustflags = [
+    "-C", "code-model=kernel",
+    "-C", "relocation-model=static",
+    "-C", "no-redzone=yes",
+    "-C", "target-feature=-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2",
+    # Disable auto-vectorization: LLVM nightly now requires 16-byte stack alignment
+    # for vectorized code, but bare-metal interrupt stacks may only be 8-byte aligned.
+    # Must be re-evaluated if/when the kernel saves/restores XMM context on ISR entry.
+    "-C", "llvm-args=-vectorize-loops=false",
+    "-C", "llvm-args=-vectorize-slp=false",
+]
+
+# ── UEFI bootloader target ──────────────────────────────────────────────────
+[target.x86_64-unknown-uefi]
+rustflags = [
+    "-C", "relocation-model=pic",
+]
+
+# ── Win32 DLL cross-compilation (host → x86 target) ─────────────────────────
+# Used when building kernel32.dll, user32.dll, etc. as actual PE DLLs.
+# Requires the i686-pc-windows-msvc or i686-unknown-windows target.
+[target.i686-pc-windows-msvc]
+rustflags = [
+    "-C", "target-feature=+sse2",
+]
+
+# ── Default build target for `cargo check` ──────────────────────────────────
+# Keep as host for IDE support; override per-crate via command line.
+# [build]
+# target = "x86_64-unknown-none"

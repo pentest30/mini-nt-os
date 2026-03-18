@@ -1,0 +1,21 @@
+[package]
+name    = "kernel"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"
+
+[dependencies]
+boot-info        = { path = "../boot-info" }
+hal              = { path = "../hal" }
+ke               = { path = "../executive/ke" }
+mm               = { path = "../executive/mm" }
+ob               = { path = "../executive/ob" }
+ps               = { path = "../executive/ps" }
+io-manager       = { path = "../executive/io" }
+x86_64           = { workspace = true }
+spin             = { workspace = true }
+log              = { workspace = true }
+bump-alloc       = { path = "../bump-alloc" }

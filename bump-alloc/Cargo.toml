@@ -1,0 +1,7 @@
+[package]
+name    = "bump-alloc"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "bump_alloc"

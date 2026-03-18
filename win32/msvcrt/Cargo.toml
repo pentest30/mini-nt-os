@@ -1,0 +1,10 @@
+[package]
+name    = "msvcrt"
+version.workspace = true
+edition.workspace = true
+[lib]
+crate-type = ["cdylib"]
+name = "msvcrt"
+[dependencies]
+spin = { workspace = true }
+log  = { workspace = true }

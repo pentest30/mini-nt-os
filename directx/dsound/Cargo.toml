@@ -1,0 +1,10 @@
+[package]
+name    = "dsound"
+version.workspace = true
+edition.workspace = true
+[lib]
+crate-type = ["cdylib"]
+name = "dsound"
+[dependencies]
+spin = { workspace = true }
+log  = { workspace = true }

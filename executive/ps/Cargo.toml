@@ -1,0 +1,14 @@
+[package]
+name    = "ps"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "ps"
+
+[dependencies]
+ob       = { path = "../ob" }
+mm       = { path = "../mm" }
+ke       = { path = "../ke" }
+spin     = { workspace = true }
+log      = { workspace = true }

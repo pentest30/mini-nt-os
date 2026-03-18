@@ -1,0 +1,14 @@
+[package]
+name    = "ke"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "ke"
+
+[dependencies]
+hal      = { path = "../../hal" }
+x86_64   = { workspace = true }
+spin     = { workspace = true }
+bitflags = { workspace = true }
+log      = { workspace = true }

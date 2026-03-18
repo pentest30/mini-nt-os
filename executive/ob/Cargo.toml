@@ -1,0 +1,12 @@
+[package]
+name    = "ob"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "ob"
+
+[dependencies]
+spin     = { workspace = true }
+bitflags = { workspace = true }
+log      = { workspace = true }
