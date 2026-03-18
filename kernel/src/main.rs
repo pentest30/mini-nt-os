@@ -365,11 +365,14 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     // running in the background; its framebuffer output is suppressed by
     // EXCLUSIVE=true inside launcher::run(). When the user presses D we
     // drop to the kernel debug shell.
-    launcher::run();
-    // Kill all user-mode threads (CMD.EXE etc.) so the kernel shell has
-    // exclusive console input — no thread races for serial/PS2 keystrokes.
-    ke::scheduler::terminate_user_threads();
-    kernel_shell(boot_info.hhdm_offset);
+    loop {
+        launcher::run();
+        // Kill all user-mode threads (CMD.EXE etc.) so the kernel shell has
+        // exclusive console input — no thread races for serial/PS2 keystrokes.
+        ke::scheduler::terminate_user_threads();
+        // kernel_shell returns when ESC is pressed → back to launcher.
+        kernel_shell(boot_info.hhdm_offset);
+    }
 }
 
 fn set_kernel_segments() {
@@ -835,16 +838,18 @@ fn shell_write(s: &str) {
     hal::fb::write_str(s);
 }
 
-fn kernel_shell(hhdm_offset: u64) -> ! {
+fn kernel_shell(hhdm_offset: u64) {
     // Clear the framebuffer and enter text-console mode.
     let (w, h) = hal::fb::screen_dims();
     hal::fb::draw_rect(0, 0, w, h, 0x00_00_00_00);
 
-    shell_write("\n  Mino NT Shell  --  type 'help'\n\n");
+    shell_write("\n  Mino NT Shell  --  type 'help'  (ESC = back to launcher)\n\n");
     let mut line_buf = [0u8; 128];
     loop {
         shell_write("$ ");
         let n = shell_read_line(&mut line_buf);
+        // ESC pressed during read → return to launcher
+        if n == 1 && line_buf[0] == 0x1B { return; }
         let cmd = core::str::from_utf8(&line_buf[..n]).unwrap_or("").trim();
         if cmd.is_empty() { continue; }
 
@@ -853,6 +858,7 @@ fn kernel_shell(hhdm_offset: u64) -> ! {
             shell_write("  cat <file>  print file contents\n");
             shell_write("  run <file>  load and exec PE32 image\n");
             shell_write("  help        this message\n");
+            shell_write("  ESC         back to launcher\n");
         } else if cmd == "ls" || cmd.starts_with("ls ") {
             let path = if cmd.len() > 3 { cmd[3..].trim() } else { "/" };
             shell_ls(path);
@@ -876,10 +882,21 @@ fn shell_read_line(buf: &mut [u8]) -> usize {
         // Poll both COM1 and PS/2 keyboard so the shell works via QEMU keyboard.
         let b = loop {
             if let Some(byte) = hal::serial::try_read_byte() { break byte; }
-            if let Some(byte) = hal::ps2::try_read_byte()    { break byte; }
+            // PS/2: read from IRQ1 ring buffer, convert scancode to ASCII.
+            if let Some(sc) = hal::ps2::pop_scancode() {
+                if let Some(ascii) = hal::ps2::scancode_to_ascii_pub(sc) {
+                    break ascii;
+                }
+                continue; // key release or unmapped — try again
+            }
             x86_64::instructions::hlt();
         };
         match b {
+            0x1B => {
+                // ESC — return immediately so caller can go back to launcher
+                buf[0] = 0x1B;
+                return 1;
+            }
             b'\r' | b'\n' => {
                 hal::serial::write_byte(b'\r');
                 hal::serial::write_byte(b'\n');

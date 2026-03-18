@@ -19,8 +19,8 @@ use spin::Mutex;
 
 /// Page size: 4 KiB.
 pub const PAGE_SIZE: usize = 4096;
-/// Maximum order (2^10 pages = 4 MiB block).
-pub const MAX_ORDER: usize = 11;
+/// Maximum order (2^12 pages = 16 MiB block). Increased for Phase 3 DLL loading.
+pub const MAX_ORDER: usize = 13;
 /// Maximum free-list entries per order level.
 const MAX_FREE_ENTRIES: usize = 512;
 

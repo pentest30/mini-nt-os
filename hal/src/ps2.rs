@@ -14,10 +14,62 @@
 //! WI7e Ch.3 "Trap Dispatching" §I/O Interrupt Handling
 //! ReactOS drivers/keyboard/i8042prt/
 
+use core::sync::atomic::{AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
 
 const PS2_DATA:   u16 = 0x60;
 const PS2_STATUS: u16 = 0x64;
+
+// ── ISR-safe key ring buffer ─────────────────────────────────────────────────
+// Lock-free SPSC ring: ISR writes (producer), message queue reads (consumer).
+const KEY_BUF_SIZE: usize = 64;
+static KEY_BUF: [core::sync::atomic::AtomicU8; KEY_BUF_SIZE] = {
+    const ZERO: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+    [ZERO; KEY_BUF_SIZE]
+};
+static KEY_HEAD: AtomicUsize = AtomicUsize::new(0); // ISR writes here
+static KEY_TAIL: AtomicUsize = AtomicUsize::new(0); // consumer reads here
+
+/// Called from the IRQ1 ISR — push a scancode into the ring buffer.
+/// No heap, no locks, ISR-safe.
+pub fn isr_push_scancode(scancode: u8) {
+    let head = KEY_HEAD.load(Ordering::Relaxed);
+    let next = (head + 1) % KEY_BUF_SIZE;
+    let tail = KEY_TAIL.load(Ordering::Acquire);
+    if next == tail { return; } // buffer full — drop key
+    KEY_BUF[head].store(scancode, Ordering::Relaxed);
+    KEY_HEAD.store(next, Ordering::Release);
+}
+
+/// Pop the next scancode from the ring buffer. Returns None if empty.
+/// Called from the message queue at PASSIVE_LEVEL.
+pub fn pop_scancode() -> Option<u8> {
+    let tail = KEY_TAIL.load(Ordering::Relaxed);
+    let head = KEY_HEAD.load(Ordering::Acquire);
+    if tail == head { return None; }
+    let sc = KEY_BUF[tail].load(Ordering::Relaxed);
+    KEY_TAIL.store((tail + 1) % KEY_BUF_SIZE, Ordering::Release);
+    Some(sc)
+}
+
+/// Convert a scancode set 1 make code to (virtual_key, ascii).
+/// Returns None for key-release (bit 7 set) or unmapped keys.
+pub fn scancode_to_key(sc: u8) -> Option<(u32, u8)> {
+    if sc & 0x80 != 0 { return None; } // key release
+    let ascii = scancode_to_ascii(sc)?;
+    // Map to VK_* codes used by Win32 WM_KEYDOWN
+    let vk = match ascii {
+        b'\n' => 0x0D, // VK_RETURN
+        0x08  => 0x08, // VK_BACK
+        0x1B  => 0x1B, // VK_ESCAPE
+        b'\t' => 0x09, // VK_TAB
+        b' '  => 0x20, // VK_SPACE
+        b'a'..=b'z' => 0x41 + (ascii - b'a') as u32, // VK_A..VK_Z
+        b'0'..=b'9' => 0x30 + (ascii - b'0') as u32, // VK_0..VK_9
+        _ => ascii as u32,
+    };
+    Some((vk, ascii))
+}
 
 /// Flush any stale byte from the PS/2 output buffer.
 ///
@@ -121,6 +173,12 @@ static SC1_TO_ASCII: [u8; 89] = {
 
     t
 };
+
+/// Public wrapper for the launcher's `read_key()`.
+pub fn scancode_to_ascii_pub(sc: u8) -> Option<u8> {
+    if sc & 0x80 != 0 { return None; } // key release
+    scancode_to_ascii(sc)
+}
 
 fn scancode_to_ascii(sc: u8) -> Option<u8> {
     let idx = sc as usize;

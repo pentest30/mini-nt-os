@@ -383,6 +383,10 @@ struct StubModule {
     dll: &'static str,
     base: u32,
     exports: &'static [StubExport],
+    /// Ordinal bias: the ordinal number of exports[0].
+    /// Set to 0 for modules that are never imported by ordinal (bias ignored).
+    /// Set to 1 when the first export has ordinal 1 (dsound, wsock32 style).
+    ordinal_base: u16,
 }
 
 // ntdll stubs use SYSENTER (21 bytes each) — spaced 0x20 to avoid overlap.
@@ -475,6 +479,8 @@ const STUB_EXPORTS_KERNEL32: &[StubExport] = &[
     StubExport { name: "CreateFileA",                rva: 0x14D0 },
     StubExport { name: "LocalAlloc",                 rva: 0x14E0 },
     StubExport { name: "GetSystemTimeAsFileTime",    rva: 0x14F0 },
+    StubExport { name: "GlobalAlloc",                rva: 0x1500 },
+    StubExport { name: "GlobalFree",                 rva: 0x1510 },
 ];
 
 const STUB_EXPORTS_USER32: &[StubExport] = &[
@@ -529,6 +535,7 @@ const STUB_EXPORTS_USER32: &[StubExport] = &[
     StubExport { name: "EnumDisplayDevicesA",      rva: 0x1300 },
     StubExport { name: "ClientToScreen",           rva: 0x1360 },
     StubExport { name: "ScreenToClient",           rva: 0x1370 },
+    StubExport { name: "MessageBoxA",              rva: 0x1380 },
 ];
 
 const STUB_EXPORTS_MSVCRT: &[StubExport] = &[
@@ -566,6 +573,7 @@ const STUB_EXPORTS_ADVAPI32: &[StubExport] = &[
     StubExport { name: "RegQueryValueExW",        rva: 0x1040 },
     StubExport { name: "RegNotifyChangeKeyValue", rva: 0x1050 },
     StubExport { name: "AllocateLocallyUniqueId", rva: 0x1060 },
+    StubExport { name: "GetUserNameA",            rva: 0x1070 },
 ];
 
 // gdi32.dll — minimal GDI stubs (d3d9 uses for fallback paths).
@@ -575,6 +583,7 @@ const STUB_EXPORTS_GDI32: &[StubExport] = &[
     StubExport { name: "CreateBitmap",       rva: 0x1020 },
     StubExport { name: "DeleteObject",       rva: 0x1030 },
     StubExport { name: "StretchBlt",         rva: 0x1040 },
+    StubExport { name: "Polygon",            rva: 0x1050 },
 ];
 
 // setupapi.dll — GPU device enumeration (DXVK falls back gracefully on failure).
@@ -866,6 +875,43 @@ const STUB_EXPORTS_UCRT_UTILITY: &[StubExport] = &[
     StubExport { name: "rand_s", rva: 0x1000 },
 ];
 
+// dbghelp.dll — Ghost Recon imports SymGetLineFromAddr by name.
+// Return FALSE so debug paths in game code fail gracefully.
+const STUB_EXPORTS_DBGHELP: &[StubExport] = &[
+    StubExport { name: "SymGetLineFromAddr", rva: 0x1000 },
+];
+
+// ole32.dll — CoFreeUnusedLibraries is imported by some DLLs; void no-op.
+const STUB_EXPORTS_OLE32: &[StubExport] = &[
+    StubExport { name: "CoFreeUnusedLibraries", rva: 0x1000 },
+    StubExport { name: "CoInitialize",          rva: 0x1010 },
+    StubExport { name: "CoUninitialize",         rva: 0x1020 },
+];
+
+// dinput8.dll — DirectInput8Create exported by name (some builds also ordinal).
+const STUB_EXPORTS_DINPUT8: &[StubExport] = &[
+    StubExport { name: "DirectInput8Create", rva: 0x1000 },
+];
+
+// dsound.dll — DirectSoundCreate is ordinal #1 and also exported by name.
+const STUB_EXPORTS_DSOUND: &[StubExport] = &[
+    StubExport { name: "DirectSoundCreate",   rva: 0x1000 }, // ordinal 1
+    StubExport { name: "DirectSoundCreate8",  rva: 0x1010 }, // ordinal 2 (Ghost Recon)
+];
+
+// wsock32.dll — accept is ordinal #1; also exported by name.
+// Return SOCKET_ERROR (0xFFFF_FFFF as u32) so callers fall back to TCP-less mode.
+const STUB_EXPORTS_WSOCK32: &[StubExport] = &[
+    StubExport { name: "accept",   rva: 0x1000 }, // ordinal 1
+    StubExport { name: "connect",  rva: 0x1010 },
+    StubExport { name: "send",     rva: 0x1020 },
+    StubExport { name: "recv",     rva: 0x1030 },
+    StubExport { name: "closesocket", rva: 0x1040 },
+    StubExport { name: "WSAStartup",  rva: 0x1050 },
+    StubExport { name: "WSACleanup", rva: 0x1060 },
+    StubExport { name: "gethostbyname", rva: 0x1070 },
+];
+
 // ── Dynamic DLL tracking ──────────────────────────────────────────────────────
 // Filled by load_dll() / register_loaded_dll() when a real PE DLL is loaded
 // into the process address space at runtime (LoadLibraryA).
@@ -874,23 +920,46 @@ const STUB_EXPORTS_UCRT_UTILITY: &[StubExport] = &[
 struct DllEntry {
     base: u32,
     size: u32,
-    name: [u8; 32],   // uppercase, NUL-padded, filename only
+    entry_rva: u32,    // AddressOfEntryPoint (DllMain RVA), 0 if none
+    name: [u8; 32],    // uppercase, NUL-padded, filename only
 }
 
 static LOADED_DLL_MAP: spin::Mutex<[Option<DllEntry>; 32]> = spin::Mutex::new([None; 32]);
 
 pub fn register_loaded_dll(base: u32, size: u32, name: &str) {
+    // Read entry point RVA from the mapped PE header
+    let entry_rva = unsafe {
+        let e_lfanew = core::ptr::read_unaligned((base as u64 + 0x3C) as *const u32);
+        if e_lfanew > 0 && e_lfanew < 0x1000 {
+            let opt_off = base as u64 + e_lfanew as u64 + 4 + 20;
+            core::ptr::read_unaligned((opt_off + 16) as *const u32)
+        } else { 0 }
+    };
     let mut map = LOADED_DLL_MAP.lock();
-    // strip path, uppercase
     let base_name = name.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(name);
-    let mut entry = DllEntry { base, size, name: [0u8; 32] };
+    let mut entry = DllEntry { base, size, entry_rva, name: [0u8; 32] };
     for (i, b) in base_name.bytes().take(31).enumerate() {
         entry.name[i] = b.to_ascii_uppercase();
     }
     for slot in map.iter_mut() {
         if slot.is_none() { *slot = Some(entry); return; }
     }
-    map[0] = Some(entry); // evict oldest
+    map[0] = Some(entry);
+}
+
+/// Return (base, entry_point_va) for all loaded DLLs that have a non-zero entry point.
+/// `exclude_base` filters out the game EXE (which shouldn't get DllMain called).
+pub fn loaded_dll_entry_points(exclude_base: u32) -> alloc::vec::Vec<(u32, u32)> {
+    let map = LOADED_DLL_MAP.lock();
+    let mut out = alloc::vec::Vec::new();
+    for slot in map.iter() {
+        if let Some(e) = slot {
+            if e.entry_rva != 0 && e.base != exclude_base {
+                out.push((e.base, e.base.wrapping_add(e.entry_rva)));
+            }
+        }
+    }
+    out
 }
 
 pub fn resolve_loaded_dll_base(dll: &str) -> Option<u32> {
@@ -908,31 +977,39 @@ pub fn resolve_loaded_dll_base(dll: &str) -> Option<u32> {
 }
 
 const STUB_MODULES: &[StubModule] = &[
-    StubModule { dll: "ntdll.dll",    base: 0x1000_0000, exports: STUB_EXPORTS_NTDLL    },
-    StubModule { dll: "kernel32.dll", base: 0x7000_0000, exports: STUB_EXPORTS_KERNEL32 },
-    StubModule { dll: "user32.dll",   base: 0x7100_0000, exports: STUB_EXPORTS_USER32   },
-    StubModule { dll: "msvcrt.dll",   base: 0x7200_0000, exports: STUB_EXPORTS_MSVCRT   },
-    StubModule { dll: "winmm.dll",    base: 0x7300_0000, exports: STUB_EXPORTS_WINMM    },
-    StubModule { dll: "d3d8.dll",     base: 0x7400_0000, exports: STUB_EXPORTS_D3D8     },
-    StubModule { dll: "advapi32.dll", base: 0x7500_0000, exports: STUB_EXPORTS_ADVAPI32 },
-    StubModule { dll: "gdi32.dll",    base: 0x7600_0000, exports: STUB_EXPORTS_GDI32    },
-    StubModule { dll: "setupapi.dll", base: 0x7700_0000, exports: STUB_EXPORTS_SETUPAPI },
-    StubModule { dll: "d3d9.dll",     base: 0x7900_0000, exports: STUB_EXPORTS_D3D9     },
+    StubModule { dll: "ntdll.dll",    base: 0x1000_0000, exports: STUB_EXPORTS_NTDLL,    ordinal_base: 0 },
+    StubModule { dll: "kernel32.dll", base: 0x7000_0000, exports: STUB_EXPORTS_KERNEL32, ordinal_base: 0 },
+    StubModule { dll: "user32.dll",   base: 0x7100_0000, exports: STUB_EXPORTS_USER32,   ordinal_base: 0 },
+    StubModule { dll: "msvcrt.dll",   base: 0x7200_0000, exports: STUB_EXPORTS_MSVCRT,   ordinal_base: 0 },
+    StubModule { dll: "winmm.dll",    base: 0x7300_0000, exports: STUB_EXPORTS_WINMM,    ordinal_base: 0 },
+    StubModule { dll: "d3d8.dll",     base: 0x7400_0000, exports: STUB_EXPORTS_D3D8,     ordinal_base: 0 },
+    StubModule { dll: "advapi32.dll", base: 0x7500_0000, exports: STUB_EXPORTS_ADVAPI32, ordinal_base: 0 },
+    StubModule { dll: "gdi32.dll",    base: 0x7600_0000, exports: STUB_EXPORTS_GDI32,    ordinal_base: 0 },
+    StubModule { dll: "setupapi.dll", base: 0x7700_0000, exports: STUB_EXPORTS_SETUPAPI, ordinal_base: 0 },
+    StubModule { dll: "d3d9.dll",     base: 0x7900_0000, exports: STUB_EXPORTS_D3D9,     ordinal_base: 0 },
     // api-ms-win-crt-* (UCRT) — bases at 0x78xx_0000
-    StubModule { dll: "api-ms-win-crt-runtime-l1-1-0.dll",    base: 0x7800_0000, exports: STUB_EXPORTS_UCRT_RUNTIME    },
-    StubModule { dll: "api-ms-win-crt-heap-l1-1-0.dll",       base: 0x7810_0000, exports: STUB_EXPORTS_UCRT_HEAP       },
-    StubModule { dll: "api-ms-win-crt-string-l1-1-0.dll",     base: 0x7820_0000, exports: STUB_EXPORTS_UCRT_STRING     },
-    StubModule { dll: "api-ms-win-crt-private-l1-1-0.dll",    base: 0x7830_0000, exports: STUB_EXPORTS_UCRT_PRIVATE    },
-    StubModule { dll: "api-ms-win-crt-stdio-l1-1-0.dll",      base: 0x7840_0000, exports: STUB_EXPORTS_UCRT_STDIO      },
-    StubModule { dll: "api-ms-win-crt-convert-l1-1-0.dll",    base: 0x7850_0000, exports: STUB_EXPORTS_UCRT_CONVERT    },
-    StubModule { dll: "api-ms-win-crt-environment-l1-1-0.dll",base: 0x7860_0000, exports: STUB_EXPORTS_UCRT_ENV        },
-    StubModule { dll: "api-ms-win-crt-filesystem-l1-1-0.dll", base: 0x7870_0000, exports: STUB_EXPORTS_UCRT_FILESYSTEM },
-    StubModule { dll: "api-ms-win-crt-locale-l1-1-0.dll",     base: 0x7880_0000, exports: STUB_EXPORTS_UCRT_LOCALE     },
-    StubModule { dll: "api-ms-win-crt-math-l1-1-0.dll",       base: 0x7890_0000, exports: STUB_EXPORTS_UCRT_MATH       },
-    StubModule { dll: "api-ms-win-crt-time-l1-1-0.dll",       base: 0x78A0_0000, exports: STUB_EXPORTS_UCRT_TIME       },
-    StubModule { dll: "api-ms-win-crt-utility-l1-1-0.dll",    base: 0x78B0_0000, exports: STUB_EXPORTS_UCRT_UTILITY    },
+    StubModule { dll: "api-ms-win-crt-runtime-l1-1-0.dll",    base: 0x7800_0000, exports: STUB_EXPORTS_UCRT_RUNTIME,    ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-heap-l1-1-0.dll",       base: 0x7810_0000, exports: STUB_EXPORTS_UCRT_HEAP,       ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-string-l1-1-0.dll",     base: 0x7820_0000, exports: STUB_EXPORTS_UCRT_STRING,     ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-private-l1-1-0.dll",    base: 0x7830_0000, exports: STUB_EXPORTS_UCRT_PRIVATE,    ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-stdio-l1-1-0.dll",      base: 0x7840_0000, exports: STUB_EXPORTS_UCRT_STDIO,      ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-convert-l1-1-0.dll",    base: 0x7850_0000, exports: STUB_EXPORTS_UCRT_CONVERT,    ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-environment-l1-1-0.dll",base: 0x7860_0000, exports: STUB_EXPORTS_UCRT_ENV,        ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-filesystem-l1-1-0.dll", base: 0x7870_0000, exports: STUB_EXPORTS_UCRT_FILESYSTEM, ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-locale-l1-1-0.dll",     base: 0x7880_0000, exports: STUB_EXPORTS_UCRT_LOCALE,     ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-math-l1-1-0.dll",       base: 0x7890_0000, exports: STUB_EXPORTS_UCRT_MATH,       ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-time-l1-1-0.dll",       base: 0x78A0_0000, exports: STUB_EXPORTS_UCRT_TIME,       ordinal_base: 0 },
+    StubModule { dll: "api-ms-win-crt-utility-l1-1-0.dll",    base: 0x78B0_0000, exports: STUB_EXPORTS_UCRT_UTILITY,    ordinal_base: 0 },
     // Vulkan ICD loader shim — DXVK d3d8→d3d9→vulkan-1 chain
-    StubModule { dll: "vulkan-1.dll", base: 0x7C00_0000, exports: STUB_EXPORTS_VULKAN1 },
+    StubModule { dll: "vulkan-1.dll", base: 0x7C00_0000, exports: STUB_EXPORTS_VULKAN1, ordinal_base: 0 },
+    // Ghost Recon additional imports
+    StubModule { dll: "dbghelp.dll",  base: 0x7D00_0000, exports: STUB_EXPORTS_DBGHELP,  ordinal_base: 0 },
+    StubModule { dll: "ole32.dll",    base: 0x7D10_0000, exports: STUB_EXPORTS_OLE32,    ordinal_base: 0 },
+    StubModule { dll: "dinput8.dll",  base: 0x7D20_0000, exports: STUB_EXPORTS_DINPUT8,  ordinal_base: 0 },
+    // dsound: ordinal 1 = DirectSoundCreate, ordinal 2 = DirectSoundCreate8
+    StubModule { dll: "dsound.dll",   base: 0x7D30_0000, exports: STUB_EXPORTS_DSOUND,   ordinal_base: 1 },
+    // wsock32: ordinal 1 = accept (first export in the array)
+    StubModule { dll: "wsock32.dll",  base: 0x7D40_0000, exports: STUB_EXPORTS_WSOCK32,  ordinal_base: 1 },
 ];
 
 fn write_nt_syscall_stub(dst: *mut u8, syscall_no: u32, ret_imm: u16) {
@@ -2000,6 +2077,10 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x4E0), 0x209A, 0x0008); // LocalAlloc(2) → reuse HeapAlloc
             // GetSystemTimeAsFileTime(FILETIME*) → void, write a plausible timestamp
             write_win32_stub(page.add(0x4F0), 0x209C, 0x0004);
+            // ── Global heap (GlobalAlloc / GlobalFree) ───────────────────────
+            // GlobalAlloc(uFlags, dwBytes) → HGLOBAL: reuse HeapAlloc handler
+            write_win32_stub(page.add(0x500), 0x209A, 0x0008); // GlobalAlloc(2)
+            write_const_stub( page.add(0x510), 1, 4);          // GlobalFree(1) → TRUE
         }
 
     } else if eq_ascii_nocase(module_name, "user32.dll") {
@@ -2059,6 +2140,8 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             // 0x310..0x352 is occupied by DispatchMessageA body — skip to 0x360
             write_const_stub( page.add(0x360), 1, 0x0008);     // ClientToScreen(2) → TRUE
             write_const_stub( page.add(0x370), 1, 0x0008);     // ScreenToClient(2) → TRUE
+            // MessageBoxA(hWnd, lpText, lpCaption, uType) → IDOK = 1
+            write_win32_stub(page.add(0x380), 0x2122, 0x0010); // MessageBoxA(4)
         }
 
     } else if eq_ascii_nocase(module_name, "msvcrt.dll") {
@@ -2092,6 +2175,8 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x040), 0x20E4, 0x0018); // RegQueryValueExW(6)
             write_const_stub( page.add(0x050), 0, 0x0014);     // RegNotifyChangeKeyValue(5) → S_OK
             write_win32_stub(page.add(0x060), 0x20E6, 0x0004); // AllocateLocallyUniqueId(1)
+            // GetUserNameA(lpBuffer, pcbBuffer) → writes "Player\0", returns TRUE
+            write_win32_stub(page.add(0x070), 0x209D, 0x0008); // GetUserNameA(2)
         }
 
     } else if eq_ascii_nocase(module_name, "gdi32.dll") {
@@ -2101,6 +2186,8 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub(page.add(0x020), 0x200, 0x0014);  // CreateBitmap(5) → fake HBITMAP
             write_const_stub(page.add(0x030), 1, 4);           // DeleteObject(1) → TRUE
             write_const_stub(page.add(0x040), 1, 0x002C);      // StretchBlt(11) → TRUE
+            // Polygon(hdc, lppt, cCount) → TRUE; Ghost Recon uses GDI for debug overlays.
+            write_const_stub(page.add(0x050), 1, 0x000C);      // Polygon(3) → TRUE
         }
 
     } else if eq_ascii_nocase(module_name, "setupapi.dll") {
@@ -2328,6 +2415,54 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         unsafe {
             // rand_s(unsigned*) → 0 (S_OK), fills output with 0
             write_cdecl_const_stub(page.add(0x000), 0);
+        }
+
+    } else if eq_ascii_nocase(module_name, "dbghelp.dll") {
+        // SymGetLineFromAddr(hProcess, dwAddr, pdwDisplacement, Line) → FALSE
+        // Ghost Recon calls this only in debug/crash paths; returning FALSE is safe.
+        unsafe {
+            write_const_stub(page.add(0x000), 0, 0x0010); // SymGetLineFromAddr(4) → FALSE
+        }
+
+    } else if eq_ascii_nocase(module_name, "ole32.dll") {
+        // CoFreeUnusedLibraries() → void no-op.
+        // CoInitialize(pvReserved) → S_OK (0).
+        // CoUninitialize() → void.
+        unsafe {
+            write_const_stub(page.add(0x000), 0, 0); // CoFreeUnusedLibraries() → void
+            write_const_stub(page.add(0x010), 0, 4); // CoInitialize(1) → S_OK
+            write_const_stub(page.add(0x020), 0, 0); // CoUninitialize() → void
+        }
+
+    } else if eq_ascii_nocase(module_name, "dinput8.dll") {
+        // DirectInput8Create(hInst, dwVersion, riid, ppvOut, pUnkOuter) → E_NOTIMPL
+        // Returns E_NOTIMPL so the game either disables DI8 or falls back to WM_INPUT.
+        unsafe {
+            write_const_stub(page.add(0x000), 0x8000_4001u32, 0x0014); // DirectInput8Create(5)
+        }
+
+    } else if eq_ascii_nocase(module_name, "dsound.dll") {
+        // DirectSoundCreate  (ordinal 1, also by name): returns DSERR_NODRIVER.
+        // DirectSoundCreate8 (ordinal 2, also by name): same.
+        // 0x88780078 = DSERR_NODRIVER — game falls back to null audio.
+        unsafe {
+            write_const_stub(page.add(0x000), 0x8878_0078u32, 0x000C); // DirectSoundCreate(3)
+            write_const_stub(page.add(0x010), 0x8878_0078u32, 0x0010); // DirectSoundCreate8(4)
+        }
+
+    } else if eq_ascii_nocase(module_name, "wsock32.dll") {
+        // All stubs return SOCKET_ERROR (0xFFFF_FFFF) or WSAEINVAL so the game
+        // disables its network code cleanly.
+        // accept(s, addr, addrlen) stdcall 3 args
+        unsafe {
+            write_const_stub(page.add(0x000), 0xFFFF_FFFFu32, 0x000C); // accept(3) → SOCKET_ERROR
+            write_const_stub(page.add(0x010), 0xFFFF_FFFFu32, 0x000C); // connect(3) → SOCKET_ERROR
+            write_const_stub(page.add(0x020), 0xFFFF_FFFFu32, 0x0010); // send(4) → SOCKET_ERROR
+            write_const_stub(page.add(0x030), 0xFFFF_FFFFu32, 0x0010); // recv(4) → SOCKET_ERROR
+            write_const_stub(page.add(0x040), 0xFFFF_FFFFu32, 0x0004); // closesocket(1) → SOCKET_ERROR
+            write_const_stub(page.add(0x050), 0x0000_0000u32, 0x0008); // WSAStartup(2) → 0 (success)
+            write_const_stub(page.add(0x060), 0x0000_0000u32, 0);      // WSACleanup() → 0
+            write_const_stub(page.add(0x070), 0x0000_0000u32, 0x0004); // gethostbyname(1) → NULL
         }
 
     } else if eq_ascii_nocase(module_name, "vulkan-1.dll") {
@@ -2625,9 +2760,21 @@ fn resolve_import_symbol(dll: &str, name: &str, ordinal: Option<u16>) -> Option<
         }
     }
     // 2. Fall back to stub modules (static stubs)
-    if let Some(base) = resolve_stub_module_base(dll) {
-        if ordinal.is_some() { return None; } // stubs don't support ordinal imports
-        return resolve_stub_proc_by_base(base, name);
+    for module in STUB_MODULES {
+        if !eq_ascii_nocase(dll, module.dll) {
+            continue;
+        }
+        if let Some(ord) = ordinal {
+            // Ordinal resolution: exports array is indexed from ordinal_base.
+            if module.ordinal_base > 0 {
+                let idx = (ord as usize).wrapping_sub(module.ordinal_base as usize);
+                if idx < module.exports.len() {
+                    return Some(module.base.wrapping_add(module.exports[idx].rva));
+                }
+            }
+            return None; // ordinal out of range or module has no ordinal support
+        }
+        return resolve_stub_proc_by_base(module.base, name);
     }
     None
 }
@@ -2916,6 +3063,21 @@ pub fn load_image<'a>(
         mm::vad::PageProtect::EXECUTE_READWRITE,  // wide open; tightened per-section in Phase 3
     ).map_err(|_| "load_image: failed to allocate image range")?;
 
+    // Copy PE headers into the image base (for GetModuleHandle / GetProcAddress).
+    {
+        let soh = read_u32(image_data, opt_off + 60).unwrap_or(0x400) as usize;
+        let hdr_copy = soh.min(image_data.len()).min(image_size as usize);
+        if hdr_copy > 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    image_data.as_ptr(),
+                    load_base as *mut u8,
+                    hdr_copy,
+                );
+            }
+        }
+    }
+
     // Copy each section's raw data into the mapped range using direct byte reads.
     // (Avoids packed-struct field-access UB that miscompiles on x86_64-unknown-none.)
     for i in 0..n_sect {
@@ -3005,6 +3167,21 @@ pub fn load_dll(
     };
 
     log::info!("load_dll: preferred={:#x} load={:#x} size={:#x}", preferred_base, load_base, image_size);
+
+    // Copy PE headers (DOS header + NT headers + section table) into the image base.
+    // Windows always maps headers so GetModuleHandle/GetProcAddress can parse them.
+    let size_of_headers = read_u32(image_data, opt_off + 60).unwrap_or(0x400) as usize;
+    let hdr_copy = size_of_headers.min(image_data.len()).min(image_size as usize);
+    if hdr_copy > 0 {
+        // SAFETY: load_base..+image_size committed above; hdr_copy is bounded.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                image_data.as_ptr(),
+                load_base as *mut u8,
+                hdr_copy,
+            );
+        }
+    }
 
     // Copy sections
     for i in 0..n_sect {

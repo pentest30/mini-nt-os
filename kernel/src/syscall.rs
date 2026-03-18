@@ -102,9 +102,11 @@ const WIN32_QUERY_PERF_FREQ:      u32 = 0x2099;
 const WIN32_HEAP_ALLOC:           u32 = 0x209A;
 const WIN32_SET_LAST_ERROR:       u32 = 0x209B;
 const WIN32_GET_SYSTEM_TIME_FT:  u32 = 0x209C;
+const WIN32_GET_USER_NAME_A:      u32 = 0x209D; // ADVAPI32 GetUserNameA
 // ── user32 Phase 3A ───────────────────────────────────────────────────────────
 const WIN32_GET_CLIENT_RECT:      u32 = 0x2120;
 const WIN32_ENUM_DISPLAY_SETTINGS:u32 = 0x2121;
+const WIN32_MESSAGE_BOX_A:        u32 = 0x2122;
 // ── UCRT (api-ms-win-crt-*) ───────────────────────────────────────────────────
 const UCRT_REALLOC:               u32 = 0x20B3;
 const UCRT_INIT_ONEXIT_TABLE:     u32 = 0x20B8;
@@ -222,6 +224,12 @@ pub fn install(vad: mm::vad::VadTree, hhdm_offset: u64) {
     core::mem::forget(vad);
 }
 
+/// Return the HHDM offset from the syscall context (for launcher process setup).
+pub fn SYSCALL_CTX_PUB() -> Option<u64> {
+    let guard = SYSCALL_CTX.lock();
+    guard.as_ref().map(|c| c.hhdm_offset)
+}
+
 pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
     // Trace Win32 UI syscalls (0x2010..0x201F) during message pump debugging.
     if number >= 0x2010 && number <= 0x201F {
@@ -312,6 +320,7 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         // ── user32 Phase 3A ───────────────────────────────────────────────────
         WIN32_GET_CLIENT_RECT      => win32_get_client_rect(args_ptr),
         WIN32_ENUM_DISPLAY_SETTINGS=> win32_enum_display_settings_w(args_ptr),
+        WIN32_MESSAGE_BOX_A        => 1, // IDOK — no real window; Ghost Recon never blocks on dialogs
         // ── UCRT ──────────────────────────────────────────────────────────────
         UCRT_REALLOC               => ucrt_realloc(args_ptr),
         UCRT_INIT_ONEXIT_TABLE     => ucrt_init_onexit_table(args_ptr),
@@ -339,6 +348,7 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         ADVAPI_REG_OPEN_KEY_EX_W   => advapi_reg_open_key_ex_w(args_ptr),
         ADVAPI_REG_QUERY_VALUE_W   => advapi_reg_query_value_ex_w(args_ptr),
         ADVAPI_ALLOC_LUID          => advapi_alloc_luid(args_ptr),
+        WIN32_GET_USER_NAME_A      => win32_get_user_name_a(args_ptr),
         // ── Vulkan ICD loader ───────────────────────────────────────────────
         VK_GET_INSTANCE_PROC_ADDR   => vk_get_instance_proc_addr(args_ptr),
         VK_GET_DEVICE_PROC_ADDR     => vk_get_device_proc_addr(args_ptr),
@@ -450,15 +460,30 @@ fn nt_read_file(args_ptr: u32) -> u32 {
         // we spin waiting for serial input.  No locks are held at this point.
         // SAFETY: no spin::Mutex is held; safe to re-enable IRQs.
         x86_64::instructions::interrupts::enable();
-        let first = hal::serial::read_byte_blocking();
+        // Block until a byte arrives from serial or PS/2 keyboard.
+        // Skip PS/2 when the launcher has exclusive input focus.
+        let first = loop {
+            if let Some(b) = hal::serial::try_read_byte() { break b; }
+            if !hal::fb::is_exclusive() {
+                if let Some(sc) = hal::ps2::pop_scancode() {
+                    if let Some(ascii) = hal::ps2::scancode_to_ascii_pub(sc) {
+                        break ascii;
+                    }
+                    continue;
+                }
+            }
+            x86_64::instructions::hlt();
+        };
         x86_64::instructions::interrupts::disable();
         unsafe { (buffer_ptr as *mut u8).write_unaligned(first); }
         n += 1;
         while n < length {
-            let b = match hal::serial::try_read_byte() {
-                Some(v) => v,
-                None => break,
-            };
+            let b = if let Some(v) = hal::serial::try_read_byte() { v }
+                    else if !hal::fb::is_exclusive() {
+                        if let Some(sc) = hal::ps2::pop_scancode() {
+                            match hal::ps2::scancode_to_ascii_pub(sc) { Some(a) => a, None => continue }
+                        } else { break }
+                    } else { break };
             unsafe { (buffer_ptr as *mut u8).add(n as usize).write_unaligned(b); }
             n += 1;
         }
@@ -1704,60 +1729,24 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
             continue;
         }
 
-        // Allocate physical pages from buddy allocator (bypasses 4 MB heap limit).
-        // Split into multiple buddy blocks to stay within MAX_ORDER (2^10 = 1024 pages).
+        // Allocate contiguous physical pages from buddy allocator (bypasses heap).
+        // MAX_ORDER=13 supports up to 2^12 = 4096 pages = 16 MB in one allocation.
         let pages_needed = (size + 4095) / 4096;
+        let order = pages_needed.next_power_of_two().trailing_zeros() as usize;
         let hhdm_offset = {
             let guard = SYSCALL_CTX.lock();
             match guard.as_ref() { Some(c) => c.hhdm_offset, None => return 0 }
         };
-
-        // Allocate buddy blocks: up to 4 blocks of order ≤ 10 (max 4 × 4MB = 16 MB).
-        let mut blocks: [(mm::buddy::Pfn, usize); 4] = [(mm::buddy::Pfn(0), 0); 4];
-        let mut block_count = 0usize;
-        let mut pages_alloc = 0usize;
-        {
+        let pfn = {
             let mut buddy = mm::buddy::BUDDY.lock();
-            let b = match buddy.as_mut() { Some(b) => b, None => continue };
-            while pages_alloc < pages_needed && block_count < 4 {
-                let remaining = pages_needed - pages_alloc;
-                let mut order = remaining.next_power_of_two().trailing_zeros() as usize;
-                if order >= mm::buddy::MAX_ORDER { order = mm::buddy::MAX_ORDER - 1; }
-                // Try decreasing orders until one succeeds
-                loop {
-                    if let Some(pfn) = b.alloc(order) {
-                        blocks[block_count] = (pfn, order);
-                        block_count += 1;
-                        pages_alloc += 1 << order;
-                        break;
-                    }
-                    if order == 0 {
-                        log::warn!("[loadlib] buddy OOM for {}", path);
-                        break;
-                    }
-                    order -= 1;
-                }
-                if pages_alloc < pages_needed && order == 0 { break; }
+            match buddy.as_mut().and_then(|b| b.alloc(order)) {
+                Some(p) => p,
+                None => { log::warn!("[loadlib] buddy OOM for {} (order {})", path, order); continue; }
             }
-        }
-        if pages_alloc < pages_needed {
-            // Free any partial allocations
-            let mut buddy = mm::buddy::BUDDY.lock();
-            if let Some(b) = buddy.as_mut() {
-                for i in 0..block_count { b.free(blocks[i].0, blocks[i].1); }
-            }
-            log::warn!("[loadlib] not enough buddy pages for {} ({} needed)", path, pages_needed);
-            continue;
-        }
-
-        // Use the first (largest) block as the contiguous read buffer.
-        // For files ≤ 4 MB this is a single block; for larger files we
-        // need the blocks to be contiguous. Since buddy tends to give
-        // sequential blocks, check and use directly.
-        let pfn0 = blocks[0].0;
-        let phys_base = pfn0.to_phys();
+        };
+        let phys_base = pfn.to_phys();
         let buf_ptr = (hhdm_offset + phys_base) as *mut u8;
-        let buf_len = pages_alloc * 4096;
+        let buf_len = (1usize << order) * 4096;
         // SAFETY: buddy pages are mapped via HHDM; we own them exclusively.
         let bytes: &mut [u8] = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
         // Zero the buffer (buddy pages may contain stale data).
@@ -1767,14 +1756,12 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
             Ok(n) => n,
             Err(_) => {
                 let mut buddy = mm::buddy::BUDDY.lock();
-                if let Some(b) = buddy.as_mut() {
-                    for i in 0..block_count { b.free(blocks[i].0, blocks[i].1); }
-                }
+                if let Some(b) = buddy.as_mut() { b.free(pfn, order); }
                 continue;
             }
         };
         let bytes = &bytes[..read_len];
-        log::info!("[loadlib] loading {} from FAT ({} bytes, {} buddy pages)", path, read_len, pages_alloc);
+        log::info!("[loadlib] loading {} from FAT ({} bytes, order {} buddy)", path, read_len, order);
 
         // Pre-load dependencies: scan import table and recursively load
         // any DLLs that aren't already available as stubs or loaded DLLs.
@@ -1803,9 +1790,7 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
         // Free the buddy pages — DLL sections are now copied into user VA.
         {
             let mut buddy = mm::buddy::BUDDY.lock();
-            if let Some(b) = buddy.as_mut() {
-                for i in 0..block_count { b.free(blocks[i].0, blocks[i].1); }
-            }
+            if let Some(b) = buddy.as_mut() { b.free(pfn, order); }
         }
 
         match result {
@@ -2097,7 +2082,46 @@ fn post_quit_message_internal(code: u32) {
 }
 
 fn pump_serial_messages() {
+    let now = win32_get_tick_count();
+    let hwnd = first_registered_window();
+
+    // 1. PS/2 keyboard scancodes (from IRQ1 ring buffer)
+    //    Skip when launcher has exclusive input focus.
     let mut n = 0u32;
+    while n < 16 && !hal::fb::is_exclusive() {
+        let sc = match hal::ps2::pop_scancode() {
+            Some(v) => v,
+            None => break,
+        };
+        if let Some((vk, ascii)) = hal::ps2::scancode_to_key(sc) {
+            // WM_KEYDOWN
+            push_win32_message(Win32Msg {
+                hwnd,
+                message: WM_KEYDOWN,
+                w_param: vk,
+                l_param: 1,
+                time: now,
+                pt_x: 0,
+                pt_y: 0,
+            });
+            // WM_CHAR (for text input)
+            if ascii >= 0x20 || ascii == b'\n' || ascii == 0x08 {
+                push_win32_message(Win32Msg {
+                    hwnd,
+                    message: 0x0102, // WM_CHAR
+                    w_param: ascii as u32,
+                    l_param: 1,
+                    time: now,
+                    pt_x: 0,
+                    pt_y: 0,
+                });
+            }
+        }
+        n = n.wrapping_add(1);
+    }
+
+    // 2. Serial input (fallback for -serial stdio / headless QEMU)
+    n = 0;
     while n < 16 {
         let b = match hal::serial::try_read_byte() {
             Some(v) => v,
@@ -2108,7 +2132,7 @@ fn pump_serial_messages() {
             message: WM_KEYDOWN,
             w_param: b as u32,
             l_param: 1,
-            time: win32_get_tick_count(),
+            time: now,
             pt_x: 0,
             pt_y: 0,
         });
@@ -3188,6 +3212,34 @@ fn advapi_alloc_luid(args_ptr: u32) -> u32 {
     let luid = { let mut c = LUID_CTR.lock(); let v = *c; *c = c.wrapping_add(1); v };
     // SAFETY: validated 8-byte user buffer.
     unsafe { (ptr as *mut u64).write_unaligned(luid); }
+    1 // TRUE
+}
+
+/// GetUserNameA(lpBuffer: LPSTR, pcbBuffer: LPDWORD) → BOOL
+///
+/// Writes "Player\0" into lpBuffer and sets *pcbBuffer to 7 (including NUL).
+/// Returns TRUE on success, FALSE if buffer too small (< 7 bytes).
+///
+/// IRQL: PASSIVE_LEVEL
+fn win32_get_user_name_a(args_ptr: u32) -> u32 {
+    let buf_ptr  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let size_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    if !is_user_range(buf_ptr, 7) { return 0; }
+    if !is_user_range(size_ptr, 4) { return 0; }
+    // SAFETY: both pointers validated above.
+    let provided = unsafe { (size_ptr as *const u32).read_unaligned() };
+    if provided < 7 {
+        // SetLastError would be ERROR_INSUFFICIENT_BUFFER; stub just fails.
+        unsafe { (size_ptr as *mut u32).write_unaligned(7); }
+        return 0; // FALSE
+    }
+    const NAME: &[u8] = b"Player\0";
+    unsafe {
+        for (i, &b) in NAME.iter().enumerate() {
+            (buf_ptr as *mut u8).add(i).write_unaligned(b);
+        }
+        (size_ptr as *mut u32).write_unaligned(7);
+    }
     1 // TRUE
 }
 

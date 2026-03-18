@@ -29,6 +29,11 @@ pub fn set_exclusive(on: bool) {
     EXCLUSIVE.store(on, Ordering::Relaxed);
 }
 
+/// Returns true if the launcher owns the screen (and PS/2 input).
+pub fn is_exclusive() -> bool {
+    EXCLUSIVE.load(Ordering::Relaxed)
+}
+
 // ── Colours ───────────────────────────────────────────────────────────────────
 
 const FG: u32 = 0x00_FF_FF_FF; // white

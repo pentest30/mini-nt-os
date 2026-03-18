@@ -19,6 +19,7 @@
 
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;
 use spin::Once;
@@ -61,6 +62,10 @@ pub unsafe fn init() {
         // ── APIC timer (IRQ0 → vector 0x20) ────────────────────────────────
         // SAFETY: vector 0x20 does not overlap any CPU exception (0x00–0x1F).
         unsafe { idt[0x20].set_handler_fn(irq_timer); }
+
+        // ── PS/2 keyboard (IRQ1 → vector 0x21) ──────────────────────────────
+        // SAFETY: vector 0x21 does not overlap CPU exceptions or the timer.
+        unsafe { idt[0x21].set_handler_fn(irq_keyboard); }
 
         // ── NT syscall gate (INT 0x2E) ───────────────────────────────────────
         // DPL=3 so user-mode code (games) can invoke it directly.
@@ -399,6 +404,21 @@ hal_int2e_entry:
 #[cfg(not(target_os = "none"))]
 #[allow(dead_code)]
 extern "C" fn hal_int2e_entry_stub() {}
+
+// ── PS/2 keyboard IRQ1 handler ────────────────────────────────────────────
+
+extern "x86-interrupt" fn irq_keyboard(_frame: InterruptStackFrame) {
+    // Read the scancode from port 0x60 (must read to acknowledge the 8042).
+    // SAFETY: port 0x60 is the PS/2 data register; always safe at CPL 0.
+    let scancode: u8 = unsafe { Port::<u8>::new(0x60).read() };
+
+    // Push into the lock-free ring buffer (ISR-safe, no heap).
+    super::ps2::isr_push_scancode(scancode);
+
+    // Send EOI to the master PIC (IRQ1 is on the master 8259).
+    // SAFETY: port 0x20 is the master PIC command register.
+    unsafe { Port::<u8>::new(0x20).write(0x20); }
+}
 
 // ── APIC helpers ─────────────────────────────────────────────────────────────
 

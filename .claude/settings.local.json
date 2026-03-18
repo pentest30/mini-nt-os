@@ -75,7 +75,8 @@
       "Bash(SRC=\"C:/Users/i.baouche/projects/micro-os/micro-nt-os\" && DST=\"/tmp/mini-nt-os\" && rsync -av --exclude='target/' --exclude='*.pdf' --exclude='*.PDF' --exclude='prebuilt/' --exclude='rustc-ice-*' --exclude='.git/' --exclude='mini-nt-push-tmp/' --exclude='*.DLL' --exclude='*.dll' --exclude='.idea/' \"$SRC/\" \"$DST/\" 2>&1 | tail -5)",
       "Bash(SRC=\"C:/Users/i.baouche/projects/micro-os/micro-nt-os\")",
       "Bash(DST=\"/tmp/mini-nt-os\")",
-      "Read(//c/Users/i.baouche/projects/micro-os/micro-nt-os/**)"
+      "Read(//c/Users/i.baouche/projects/micro-os/micro-nt-os/**)",
+      "Read(//c/Program Files \\(x86\\)/Red Storm Entertainment/Ghost Recon/**)"
     ]
   }
 }

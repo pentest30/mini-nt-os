@@ -77,20 +77,33 @@ pub unsafe fn init() {
     // Ensure no upper-layer callback runs before Ke is initialised.
     TICK_HOOK.store(0, Ordering::Release);
 
-    // ── 0. Disable legacy 8259 PIC ───────────────────────────────────────────
-    // Mask all IRQs on both master and slave PIC so that PS/2 keyboard IRQ1
-    // (and any other legacy IRQ) never fires as an unhandled PIC interrupt.
-    // Without this, pressing a key causes IRQ1 → un-present IDT vector →
-    // #GP/#NP exception → kernel panic / freeze.  We use the LAPIC for all
-    // interrupt routing; PS/2 data is read by polling ports 0x60/0x64.
-    // SAFETY: I/O ports 0x21 and 0xA1 are always accessible at CPL 0.
+    // ── 0. Remap legacy 8259 PIC (IRQ0→0x20, IRQ8→0x28) ─────────────────────
+    // Remap master PIC to vectors 0x20–0x27 and slave to 0x28–0x2F so they
+    // don't overlap CPU exceptions (0x00–0x1F).  Then unmask only IRQ1
+    // (PS/2 keyboard) on the master; all other legacy IRQs stay masked.
+    // SAFETY: I/O ports 0x20/0x21/0xA0/0xA1 are always accessible at CPL 0.
     unsafe {
-        let mut master_imr = Port::<u8>::new(0x21);
-        let mut slave_imr  = Port::<u8>::new(0xA1);
-        master_imr.write(0xFF); // mask all master PIC IRQs (IRQ0–7)
-        slave_imr.write(0xFF);  // mask all slave PIC IRQs  (IRQ8–15)
+        let mut master_cmd = Port::<u8>::new(0x20);
+        let mut master_dat = Port::<u8>::new(0x21);
+        let mut slave_cmd  = Port::<u8>::new(0xA0);
+        let mut slave_dat  = Port::<u8>::new(0xA1);
+        // ICW1: begin init sequence (IC4 needed)
+        master_cmd.write(0x11);
+        slave_cmd.write(0x11);
+        // ICW2: vector offset
+        master_dat.write(0x20); // master: IRQ0 → vector 0x20
+        slave_dat.write(0x28);  // slave:  IRQ8 → vector 0x28
+        // ICW3: master/slave wiring
+        master_dat.write(0x04); // slave on IRQ2
+        slave_dat.write(0x02);  // slave cascade identity
+        // ICW4: 8086 mode
+        master_dat.write(0x01);
+        slave_dat.write(0x01);
+        // OCW1: mask all except IRQ1 (keyboard) on master; mask all on slave
+        master_dat.write(0xFD); // 1111_1101 = unmask IRQ1 only
+        slave_dat.write(0xFF);  // mask all slave IRQs
     }
-    log::info!("HAL timer: legacy 8259 PIC masked");
+    log::info!("HAL timer: 8259 PIC remapped (IRQ1 unmasked for PS/2 keyboard)");
 
     // ── 1. Software-enable local APIC ────────────────────────────────────────
     // Spurious Interrupt Vector Register (SVR):

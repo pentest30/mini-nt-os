@@ -57,6 +57,13 @@ make_fat_img_with_mkfat() {
         echo "[F2] Including HELLO.EXE in ramdisk"
     fi
 
+    # D3D8 test EXE (Phase 3: DXVK chain test)
+    local d3d8test="$ROOT/target/win32test/d3d8test.exe"
+    if [[ -f "$d3d8test" ]]; then
+        extra_args+=("$(_wp "$d3d8test"):D3D8TEST.EXE")
+        echo "[F2] Including d3d8test.exe in ramdisk"
+    fi
+
     # DXVK x32 prebuilt DLLs (Phase 3: d3d8→d3d9→vulkan-1 chain)
     local dxvk_dir="$ROOT/prebuilt/x32"
     for dll in d3d8.dll d3d9.dll dxgi.dll; do
