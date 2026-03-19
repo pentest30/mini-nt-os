@@ -236,7 +236,10 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     crate::syscall::install(vad, hhdm_offset);
     hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
 
-    let dll_entries = ps::loader::loaded_dll_entry_points(base);
+    // Skip DllMain — MinGW CRT crashes at 0x11017e during constructor init.
+    // The d3d8/d3d9 stubs handle Direct3DCreate8 via COM vtable without DllMain.
+    // TODO Phase 4: proper MinGW CRT init (TLS, .CRT$XCA constructors).
+    let dll_entries: alloc::vec::Vec<(u32,u32)> = alloc::vec::Vec::new();
     let code = tramp_va as *mut u8;
     let mut off = 0usize;
 
@@ -333,8 +336,10 @@ fn repaint_row(i: usize, selected: usize) {
 /// # IRQL: PASSIVE_LEVEL
 pub fn run() {
     hal::fb::set_exclusive(true);
+    hal::serial::write_str("[launcher] repaint start\r\n");
     let mut selected: usize = 0;
     repaint(selected);
+    hal::serial::write_str("[launcher] repaint done — waiting for input\r\n");
 
     loop {
         match read_key() {

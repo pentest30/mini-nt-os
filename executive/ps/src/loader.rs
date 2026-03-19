@@ -976,6 +976,19 @@ pub fn resolve_loaded_dll_base(dll: &str) -> Option<u32> {
     None
 }
 
+/// Search ALL stub modules for a named export (ignoring which DLL it belongs to).
+/// Used as a fallback when GetProcAddress on a real DLL fails (e.g., DXVK without DllMain).
+pub fn resolve_stub_proc_any(name: &str) -> Option<u32> {
+    for module in STUB_MODULES {
+        for exp in module.exports {
+            if eq_ascii_nocase(name, exp.name) {
+                return Some(module.base.wrapping_add(exp.rva));
+            }
+        }
+    }
+    None
+}
+
 const STUB_MODULES: &[StubModule] = &[
     StubModule { dll: "ntdll.dll",    base: 0x1000_0000, exports: STUB_EXPORTS_NTDLL,    ordinal_base: 0 },
     StubModule { dll: "kernel32.dll", base: 0x7000_0000, exports: STUB_EXPORTS_KERNEL32, ordinal_base: 0 },
@@ -2213,54 +2226,17 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         // function pointer in the [begin, end) array.  Cannot be INT 0x2E stubs
         // because they call user-mode function pointers directly.
         //
-        // _initterm and _initterm_e: iterate function pointer array [begin, end).
-        // Uses ESI (callee-saved) for the iterator so CALL EAX doesn't trash it.
+        // _initterm and _initterm_e: skip constructors entirely.
+        // DXVK's constructor array contains garbage pointers (0x11017e)
+        // because our PE loader doesn't fully initialize the .CRT sections.
+        // TODO Phase 3: proper CRT$XCA/XCZ initialization.
         //
-        // _initterm code (page+0x000, occupies 2 slots):
-        //   +00: 56              PUSH ESI
-        //   +01: 8B 74 24 08     MOV ESI, [ESP+8]    esi = begin (ESP shifted +4 by push)
-        //   +05: 3B 74 24 0C     CMP ESI, [ESP+0C]   begin < end?
-        //   +09: 73 0B           JAE done (+0x0B → +0x16)
-        //   +0B: 8B 06           MOV EAX, [ESI]      eax = *begin
-        //   +0D: 83 C6 04        ADD ESI, 4           begin++
-        //   +10: 85 C0           TEST EAX, EAX
-        //   +12: 74 02           JZ skip
-        //   +14: FF D0           CALL EAX
-        //   +16: EB ED           JMP loop (→ +0x05) [next=0x18, 0x18-0x13=0x05 ✓]
-        //   +18: 5E              POP ESI              ← done
-        //   +19: C3              RET
+        // _initterm: cdecl void _initterm(begin, end) → just RET
+        // _initterm_e: cdecl int _initterm_e(begin, end) → return 0
         #[rustfmt::skip]
-        let initterm_code: [u8; 26] = [
-            0x56,                    // PUSH ESI
-            0x8B, 0x74, 0x24, 0x08,  // MOV ESI, [ESP+8]
-            0x3B, 0x74, 0x24, 0x0C,  // CMP ESI, [ESP+0C]
-            0x73, 0x0D,              // JAE done → +0x18
-            0x8B, 0x06,              // MOV EAX, [ESI]
-            0x83, 0xC6, 0x04,        // ADD ESI, 4
-            0x85, 0xC0,              // TEST EAX, EAX
-            0x74, 0x02,              // JZ skip
-            0xFF, 0xD0,              // CALL EAX
-            0xEB, 0xED,              // JMP loop → +0x05
-            0x5E,                    // POP ESI  (done label)
-            0xC3,                    // RET
-        ];
-        // _initterm_e: same but returns 0 (XOR EAX, EAX before RET).
+        let initterm_code: [u8; 1] = [0xC3]; // RET
         #[rustfmt::skip]
-        let initterm_e_code: [u8; 28] = [
-            0x56,                    // PUSH ESI
-            0x8B, 0x74, 0x24, 0x08,  // MOV ESI, [ESP+8]
-            0x3B, 0x74, 0x24, 0x0C,  // CMP ESI, [ESP+0C]
-            0x73, 0x0D,              // JAE done → +0x18
-            0x8B, 0x06,              // MOV EAX, [ESI]
-            0x83, 0xC6, 0x04,        // ADD ESI, 4
-            0x85, 0xC0,              // TEST EAX, EAX
-            0x74, 0x02,              // JZ skip
-            0xFF, 0xD0,              // CALL EAX
-            0xEB, 0xED,              // JMP loop → +0x05
-            0x33, 0xC0,              // XOR EAX, EAX (done)
-            0x5E,                    // POP ESI
-            0xC3,                    // RET
-        ];
+        let initterm_e_code: [u8; 3] = [0x33, 0xC0, 0xC3]; // XOR EAX,EAX; RET
         unsafe {
             // _initterm at page+0x000
             for (i, &b) in initterm_code.iter().enumerate() {

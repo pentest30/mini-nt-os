@@ -1641,12 +1641,23 @@ fn win32_get_proc_address(args_ptr: u32) -> u32 {
     let len = read_cstr_user_buf(lp_proc_ptr, &mut buf);
     if len == 0 { return 0; }
     let name = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return 0 };
-    // Try stub modules first
+    // Try stub modules first (exact base match)
     if let Some(va) = ps::loader::resolve_stub_proc_by_base(h_module, name) {
         return va;
     }
     // Try real loaded DLL export directory
-    ps::loader::resolve_export_from_base_pub(h_module, name).unwrap_or(0)
+    if let Some(va) = ps::loader::resolve_export_from_base_pub(h_module, name) {
+        return va;
+    }
+    // Fallback: if the real DLL's export exists but DllMain wasn't called
+    // (globals uninitialized), redirect to the stub module's implementation.
+    // This allows d3d8test to use our D3D8 COM vtable stubs instead of
+    // crashing in uninitialized DXVK code.
+    if let Some(va) = ps::loader::resolve_stub_proc_any(name) {
+        log::info!("[GetProcAddress] fallback stub for {}", name);
+        return va;
+    }
+    0
 }
 
 fn win32_get_module_handle_a(args_ptr: u32) -> u32 {
