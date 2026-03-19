@@ -1,47 +1,111 @@
+# micro-nt-os
 
-## Mino — micro-nt-os
+A minimal NT-compatible OS kernel written in Rust, targeting XP-era (2000–2007) Win32 game compatibility.
 
-Mino is a bare-metal operating system kernel written entirely in Rust, designed to run XP-era Win32 games (2000–2007) on modern x86_64 hardware without Windows. It is not a Windows clone and not an emulator — it is a minimal, purpose-built NT-compatible kernel that implements just enough of the Windows NT architecture for real games to run natively on top of it.
+## Goal
 
-### What it is
+Run XP-era games on bare metal by implementing the NT kernel + Win32 subsystem + DirectX translation layer in Rust.
 
-At its core Mino is a monolithic kernel structured after Windows NT's Executive layer model. It boots via UEFI, sets up 4-level x86_64 page tables, initialises the NT subsystems in the correct order, loads Win32 game binaries as PE32 executables, and dispatches their syscalls through a real NT-compatible syscall table. The OS version it reports to software is Windows XP SP2 (5.1.2600) — the same version those games were built for.
+## Architecture
 
-The project has five completed phases and is currently entering its third:
+```
+┌─────────────────────────────────────────────────┐
+│           XP-era game (.exe, PE32)              │
+├─────────────────────────────────────────────────┤
+│  Win32 subsystem                                │
+│  kernel32 · user32 · winmm · msvcrt            │
+├────────────────────┬────────────────────────────┤
+│  DirectX shim      │  NT Executive              │
+│  d3d9 · dsound     │  Ob · Ps · Mm · Io · Ke   │
+│  dinput8           │                            │
+├────────────────────┴────────────────────────────┤
+│  NT Kernel (Ke) — scheduler, IRQL, APC, DPC    │
+├─────────────────────────────────────────────────┤
+│  HAL — GDT, IDT, APIC, serial, timer           │
+├─────────────────────────────────────────────────┤
+│  x86_64 hardware / QEMU                        │
+└─────────────────────────────────────────────────┘
+```
 
-- The hardware abstraction layer handles GDT, IDT, APIC timer calibration, IRQL levels, serial output, and GOP framebuffer initialisation.
-- The NT Executive implements the Object Manager (handle tables, named object namespace), Process Manager (EPROCESS, ETHREAD, PEB, TEB at exact XP offsets), Memory Manager (buddy allocator, VAD tree, VirtualAlloc backed by real page tables), I/O Manager (IRP lifecycle, driver/device objects), and Kernel layer (scheduler, KEvent, APC/DPC queues, KTHREAD context switching).
-- Ring-3 user mode works — a PE32 binary can be loaded, have its imports resolved from stub DLLs, and run in unprivileged mode with INT 0x2E and SYSENTER syscall dispatch both functional.
-- A read-only FAT32 driver is implemented. `NtCreateProcess` can load a real executable from disk.
-- Win32 stubs for `kernel32.dll`, `user32.dll`, `winmm.dll`, and `msvcrt.dll` expose the ~50 APIs that XP-era games actually call, including a working message pump with `PeekMessage`, `DispatchMessage`, `WM_PAINT`, and `WM_KEYDOWN`.
+## Development phases
 
-### What makes it different
+| Phase | Milestone |
+|-------|-----------|
+| 1 | HAL + physical memory manager + boot to kernel_main |
+| 2 | Context switching + VirtualAlloc + PE32 loader + first process |
+| 3 | Win32 message pump + D3D9→Vulkan + first game frame |
+| 4 | Broad game compatibility (audio, input, save files) |
 
-Most hobby OS projects stop at "hello world from ring 0" or at best a shell. Mino's scope is deliberately narrower and more concrete: run a specific game (Tom Clancy's Ghost Recon, 2001) from boot to main menu, with real 3D rendering. Every architectural decision is driven by that goal.
+**Current phase: 2.5** — Ring-3 + syscalls + first native binary. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a full guide to what we have built and how it works.
 
-The DirectX strategy is intentionally pragmatic — rather than implementing D3D8 and D3D9 from scratch (a multi-year effort), Mino loads the prebuilt DXVK PE DLLs unmodified. DXVK already translates DirectX 8/9/10/11 to Vulkan with battle-tested compatibility. The only piece Mino writes itself is `vulkan-1.dll` — a thin ICD loader shim of around 500 lines that routes Vulkan calls from DXVK to Mino's HAL Vulkan backend. This collapses years of DirectX work into weeks.
+## Quick start
 
-The user-facing interface is a console-style game launcher — think PS3 XMB or Steam Big Picture — rendered with `egui` directly to the framebuffer. There is no Win32 desktop, no window manager, no GDI. Games run in D3D exclusive fullscreen, the display server hands the framebuffer directly to the DXVK device, and on exit it reclaims it. Game installation uses a custom `.mpack` archive format: users install games on Windows normally, run the `mino-pack` host tool to package the installed folder, copy it to USB, and the Mino launcher installs it directly.
+```bash
+# Prerequisites
+rustup toolchain install nightly
+rustup target add x86_64-unknown-uefi
+cargo install cargo-make   # optional, for build scripts
 
-### Technical facts
+# Check everything compiles
+cargo check --workspace
 
-| Property | Value |
-|---|---|
-| Language | Rust (nightly, `no_std` throughout kernel) |
-| Architecture | x86_64, bare metal, UEFI boot |
-| NT compatibility | Windows XP SP2 (5.1.2600) |
-| Syscall ABI | INT 0x2E + SYSENTER, exact XP SP2 syscall numbers |
-| Memory model | 2GB/2GB user/kernel split, no ASLR, buddy allocator + VAD tree |
-| DirectX | DXVK 2.4 prebuilt (D3D8/D3D9 → Vulkan), custom vulkan-1.dll shim |
-| Audio | OpenAL Soft prebuilt PE DLL |
-| Launcher UI | egui → raw framebuffer, console game launcher aesthetic |
-| Primary target game | Tom Clancy's Ghost Recon (2001), GOG version |
-| Current phase | Phase 3 — display server, launcher, vulkan-1.dll, DXVK integration |
+# Analyse a game binary (host tool, runs on your machine)
+cargo run -p pe-loader -- /path/to/game.exe
 
-### What it is not
+# Build the UEFI bootloader
+cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
 
-Mino does not implement DRM bypass — it targets DRM-free GOG versions of games. It does not implement a full Win32 desktop or Win32k GDI. It does not support MSI or graphical installers. It does not run DOS games (v8086 support is deferred to Phase 5). It is not trying to be ReactOS — the goal is game compatibility, not full NT fidelity.
+# Run in QEMU (once bootloader is functional)
+# See docs/qemu.md for the full command
+```
 
-### Status
+## Key references
 
-Phases 1 and 2 are complete. The kernel boots on VirtualBox and QEMU, reaches `kernel_main`, initialises all NT subsystems, runs ring-3 code, dispatches syscalls, and can load and execute a real PE32 binary from a FAT32 ramdisk. Phase 3 is beginning: display server, game launcher UI, `vulkan-1.dll` shim, DXVK integration, and the first game rendering a frame.
+- **Windows Internals** (Yosifovich et al.) — NT design bible
+- **ReactOS** — open source NT-compatible kernel, primary reference for data structure layouts
+- **Wine** — Win32 API implementation, reference for API semantics
+- **DXVK** — D3D9→Vulkan translation, reference for DirectX shim architecture
+- **Geoff Chappell's site** — undocumented NT internals (PEB/TEB offsets, syscall numbers)
+- **"Writing an OS in Rust"** (Philipp Oppermann, https://os.phil-opp.com/) — Rust no_std kernel
+  patterns for paging, IDT, heap allocation, and interrupt handling. See
+  [`docs/references/phil-opp-writing-an-os-in-rust.md`](docs/references/phil-opp-writing-an-os-in-rust.md)
+  for a full chapter-by-chapter relevance mapping to micro-nt-os Phase 1/2 tasks.
+
+## Repository layout
+
+```
+micro-nt-os/
+├── CLAUDE.md          ← Claude Code context (read this first)
+├── Cargo.toml         ← workspace root
+├── bootloader/        ← UEFI application, jumps to kernel
+├── hal/               ← hardware abstraction (GDT, IDT, IRQL, timer)
+├── kernel/            ← kernel entry point, heap allocator
+├── executive/
+│   ├── ke/            ← scheduler, sync, APC, DPC
+│   ├── mm/            ← physical + virtual memory manager
+│   ├── ob/            ← object manager, handle tables, namespace
+│   ├── ps/            ← process + thread manager, PEB/TEB
+│   └── io/            ← I/O manager, IRP, driver model
+├── win32/
+│   ├── kernel32/      ← core Win32 API (memory, process, timing, sync)
+│   ├── user32/        ← window management, message pump
+│   ├── winmm/         ← multimedia timer
+│   └── msvcrt/        ← C runtime (malloc, memcpy, etc.)
+├── directx/
+│   ├── d3d9/          ← Direct3D 9 COM skeleton → Vulkan backend
+│   ├── dsound/        ← DirectSound 8 → HDA audio
+│   └── dinput8/       ← DirectInput 8 → HID
+└── tools/
+    └── pe-loader/     ← host tool: analyse PE32 game binaries
+```
+
+## Contributing / using Claude Code
+
+This project is designed to be developed with [Claude Code](https://claude.ai/code).
+The `CLAUDE.md` file at the root provides full context for every session.
+
+Key rules:
+- Every `unsafe` block needs a `// SAFETY:` comment
+- No heap allocation at `IRQL >= DISPATCH_LEVEL`  
+- PEB OS version fields must remain XP-compatible (5.1.2600)
+- All Win32 exports use `stdcall` calling convention

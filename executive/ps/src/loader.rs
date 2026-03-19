@@ -2213,52 +2213,53 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         // function pointer in the [begin, end) array.  Cannot be INT 0x2E stubs
         // because they call user-mode function pointers directly.
         //
-        // _initterm code (22 bytes at page+0x000, occupies 2 slots):
-        //   +00: 8B 4C 24 04   MOV ECX, [ESP+4]      ecx = begin
-        //   +04: 3B 4C 24 08   CMP ECX, [ESP+8]      begin < end?
-        //   +08: 73 11         JAE done (+0x11 → +0x1B)
-        //   +0A: 8B 01         MOV EAX, [ECX]        eax = *begin
-        //   +0C: 83 C1 04      ADD ECX, 4            begin++
-        //   +0F: 85 C0         TEST EAX, EAX
-        //   +11: 74 02         JZ skip (+0x02 → +0x15)
-        //   +13: FF D0         CALL EAX
-        //   +15: EB ED         JMP loop (→ +0x04)   [next_ip=0x17, +ED=-19, 0x17-19=4 ✓]
-        //   +17..1A: CC CC CC CC
-        //   +1B: C3            RET (cdecl, 2 args cleaned by caller)
+        // _initterm and _initterm_e: iterate function pointer array [begin, end).
+        // Uses ESI (callee-saved) for the iterator so CALL EAX doesn't trash it.
+        //
+        // _initterm code (page+0x000, occupies 2 slots):
+        //   +00: 56              PUSH ESI
+        //   +01: 8B 74 24 08     MOV ESI, [ESP+8]    esi = begin (ESP shifted +4 by push)
+        //   +05: 3B 74 24 0C     CMP ESI, [ESP+0C]   begin < end?
+        //   +09: 73 0B           JAE done (+0x0B → +0x16)
+        //   +0B: 8B 06           MOV EAX, [ESI]      eax = *begin
+        //   +0D: 83 C6 04        ADD ESI, 4           begin++
+        //   +10: 85 C0           TEST EAX, EAX
+        //   +12: 74 02           JZ skip
+        //   +14: FF D0           CALL EAX
+        //   +16: EB ED           JMP loop (→ +0x05) [next=0x18, 0x18-0x13=0x05 ✓]
+        //   +18: 5E              POP ESI              ← done
+        //   +19: C3              RET
         #[rustfmt::skip]
-        let initterm_code: [u8; 28] = [
-            0x8B, 0x4C, 0x24, 0x04,  // MOV ECX, [ESP+4]
-            0x3B, 0x4C, 0x24, 0x08,  // CMP ECX, [ESP+8]
-            0x73, 0x11,              // JAE +0x11 → done
-            0x8B, 0x01,              // MOV EAX, [ECX]
-            0x83, 0xC1, 0x04,        // ADD ECX, 4
+        let initterm_code: [u8; 26] = [
+            0x56,                    // PUSH ESI
+            0x8B, 0x74, 0x24, 0x08,  // MOV ESI, [ESP+8]
+            0x3B, 0x74, 0x24, 0x0C,  // CMP ESI, [ESP+0C]
+            0x73, 0x0D,              // JAE done → +0x18
+            0x8B, 0x06,              // MOV EAX, [ESI]
+            0x83, 0xC6, 0x04,        // ADD ESI, 4
             0x85, 0xC0,              // TEST EAX, EAX
             0x74, 0x02,              // JZ skip
             0xFF, 0xD0,              // CALL EAX
-            0xEB, 0xED,              // JMP loop
-            0xCC, 0xCC, 0xCC, 0xCC, // padding
-            0xC3,                   // RET
+            0xEB, 0xED,              // JMP loop → +0x05
+            0x5E,                    // POP ESI  (done label)
+            0xC3,                    // RET
         ];
-        // _initterm_e code (30 bytes at page+0x020, occupies 2 slots):
-        //   Same loop but after done: XOR EAX, EAX; RET (returns 0 on success).
-        //   +08: 73 12  JAE done (+0x12 → +0x1C)
-        //   +15: EB ED  JMP loop (next_ip=0x37, ED=-19, 0x37-19=0x24=start+4 ✓)
-        //   +1C: 33 C0  XOR EAX, EAX
-        //   +1E: C3     RET
+        // _initterm_e: same but returns 0 (XOR EAX, EAX before RET).
         #[rustfmt::skip]
-        let initterm_e_code: [u8; 30] = [
-            0x8B, 0x4C, 0x24, 0x04,  // MOV ECX, [ESP+4]
-            0x3B, 0x4C, 0x24, 0x08,  // CMP ECX, [ESP+8]
-            0x73, 0x12,              // JAE +0x12 → done
-            0x8B, 0x01,              // MOV EAX, [ECX]
-            0x83, 0xC1, 0x04,        // ADD ECX, 4
+        let initterm_e_code: [u8; 28] = [
+            0x56,                    // PUSH ESI
+            0x8B, 0x74, 0x24, 0x08,  // MOV ESI, [ESP+8]
+            0x3B, 0x74, 0x24, 0x0C,  // CMP ESI, [ESP+0C]
+            0x73, 0x0D,              // JAE done → +0x18
+            0x8B, 0x06,              // MOV EAX, [ESI]
+            0x83, 0xC6, 0x04,        // ADD ESI, 4
             0x85, 0xC0,              // TEST EAX, EAX
             0x74, 0x02,              // JZ skip
             0xFF, 0xD0,              // CALL EAX
-            0xEB, 0xED,              // JMP loop  [next_ip=page+0x037, -19=page+0x024 ✓]
-            0xCC, 0xCC, 0xCC, 0xCC, // padding
-            0x33, 0xC0,              // XOR EAX, EAX
-            0xC3,                   // RET
+            0xEB, 0xED,              // JMP loop → +0x05
+            0x33, 0xC0,              // XOR EAX, EAX (done)
+            0x5E,                    // POP ESI
+            0xC3,                    // RET
         ];
         unsafe {
             // _initterm at page+0x000

@@ -104,12 +104,10 @@ extern "x86-interrupt" fn exception_invalid_opcode(frame: InterruptStackFrame) {
     );
 }
 
-extern "x86-interrupt" fn exception_breakpoint(frame: InterruptStackFrame) {
-    // Non-fatal — log and resume execution (used by debuggers).
-    log::warn!(
-        "EXCEPTION: #BP Breakpoint at {:#x}",
-        frame.instruction_pointer
-    );
+extern "x86-interrupt" fn exception_breakpoint(_frame: InterruptStackFrame) {
+    // Silently skip INT3 at unimplemented stubs.
+    // DXVK's DllMain calls CRT functions that hit INT3 padding.
+    // Returning from #BP advances RIP past the INT3 byte automatically.
 }
 
 extern "x86-interrupt" fn exception_double_fault(
@@ -128,36 +126,41 @@ extern "x86-interrupt" fn exception_page_fault(
     frame: InterruptStackFrame,
     error: PageFaultErrorCode,
 ) {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static IN_PF: AtomicBool = AtomicBool::new(false);
+    if IN_PF.swap(true, Ordering::SeqCst) {
+        // Nested page fault — halt immediately to avoid infinite recursion.
+        loop { x86_64::instructions::hlt(); }
+    }
+    exception_page_fault_inner(frame, error);
+}
+
+fn exception_page_fault_inner(
+    frame: InterruptStackFrame,
+    error: PageFaultErrorCode,
+) {
     use x86_64::registers::control::Cr2;
-    use core::sync::atomic::Ordering;
 
     // SAFETY: reading CR2 is always safe inside a page-fault handler.
     let faulting_addr = unsafe { Cr2::read() };
-    // Extract raw u64 from the possibly-invalid VirtAddr Result.
     let cr2_raw: u64 = match faulting_addr {
         Ok(v)  => v.as_u64(),
-        Err(e) => e.0,  // VirtAddrNotValid wraps the raw u64
+        Err(e) => e.0,
     };
-    let hhdm = crate::HHDM_OFFSET.load(Ordering::Acquire);
+    let rip = frame.instruction_pointer.as_u64();
 
-    // Walk page tables for the faulting address and the instruction pointer.
-    if hhdm != 0 {
-        let rip = frame.instruction_pointer.as_u64();
-        log::error!(
-            "[#PF diag] CR2={:#x}  RIP={:#x}  err={:#?}",
-            cr2_raw, rip, error
-        );
-        pf_dump_pte(hhdm, cr2_raw, "CR2");
-        pf_dump_pte(hhdm, rip,     "RIP");
-        // Also dump nearby user addresses to see what's mapped
-        for va in [0x2001000u64, 0x7FFF0000u64, 0x10000000u64] {
-            pf_dump_pte(hhdm, va, "    ");
-        }
-    }
+    // ISR-safe output only — no heap allocation, no log::* macros.
+    super::serial::write_str("\n[#PF] CR2=0x");
+    serial_hex64(cr2_raw);
+    super::serial::write_str(" RIP=0x");
+    serial_hex64(rip);
+    super::serial::write_str(" err=0x");
+    serial_hex64(error.bits());
+    super::serial::write_str("\n");
 
     panic!(
-        "EXCEPTION: #PF Page Fault\n  Address : {:#x}\n  Flags   : {:#?}\n{:#?}",
-        cr2_raw, error, frame
+        "EXCEPTION: #PF Page Fault at {:#x}",
+        cr2_raw
     );
 }
 
@@ -220,10 +223,65 @@ extern "x86-interrupt" fn exception_gpf(
     frame: InterruptStackFrame,
     error: u64,
 ) {
+    let rip = frame.instruction_pointer.as_u64();
+    // Dump bytes at the faulting instruction (ISR-safe, no heap).
+    super::serial::write_str("[#GP] RIP=0x");
+    serial_hex64(rip);
+    super::serial::write_str(" err=0x");
+    serial_hex64(error);
+    super::serial::write_str(" bytes:");
+    for off in 0u64..16 {
+        super::serial::write_str(" ");
+        let addr = rip.wrapping_add(off);
+        // Only read if address looks plausible
+        if addr < 0x8000_0000_0000_0000 || addr >= 0xFFFF_8000_0000_0000 {
+            let b = unsafe { core::ptr::read_volatile(addr as *const u8) };
+            serial_hex8(b);
+        } else {
+            super::serial::write_str("??");
+        }
+    }
+    // Dump segment registers
+    let (fs, gs, ds, es): (u16, u16, u16, u16);
+    unsafe {
+        core::arch::asm!("mov {0:x}, fs", out(reg) fs);
+        core::arch::asm!("mov {0:x}, gs", out(reg) gs);
+        core::arch::asm!("mov {0:x}, ds", out(reg) ds);
+        core::arch::asm!("mov {0:x}, es", out(reg) es);
+    }
+    super::serial::write_str("\n[#GP] FS=0x");
+    serial_hex16(fs);
+    super::serial::write_str(" GS=0x");
+    serial_hex16(gs);
+    super::serial::write_str(" DS=0x");
+    serial_hex16(ds);
+    super::serial::write_str(" ES=0x");
+    serial_hex16(es);
+    super::serial::write_str("\n");
     panic!(
         "EXCEPTION: #GP General Protection Fault (selector={:#x})\n{:#?}",
         error, frame
     );
+}
+
+fn serial_hex8(b: u8) {
+    let hex = b"0123456789abcdef";
+    super::serial::write_byte(hex[(b >> 4) as usize]);
+    super::serial::write_byte(hex[(b & 0xF) as usize]);
+}
+fn serial_hex16(v: u16) {
+    serial_hex8((v >> 8) as u8);
+    serial_hex8(v as u8);
+}
+fn serial_hex64(v: u64) {
+    let mut started = false;
+    for i in (0..16).rev() {
+        let nib = ((v >> (i * 4)) & 0xF) as u8;
+        if nib != 0 || started || i == 0 {
+            super::serial::write_byte(b"0123456789abcdef"[nib as usize]);
+            started = true;
+        }
+    }
 }
 
 extern "x86-interrupt" fn exception_stack_segment(

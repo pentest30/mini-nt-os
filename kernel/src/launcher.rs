@@ -236,12 +236,7 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     crate::syscall::install(vad, hhdm_offset);
     hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
 
-    // TODO Phase 3: call DllMain for loaded DLLs once CRT/TLS init is working.
-    // DXVK's MinGW CRT startup accesses TLS via segment registers that aren't
-    // yet properly configured. For now, skip DllMain — Direct3DCreate8 will
-    // crash on uninitialized state, which we'll fix incrementally.
-    let dll_entries: alloc::vec::Vec<(u32,u32)> = alloc::vec::Vec::new();
-    // let dll_entries = ps::loader::loaded_dll_entry_points(base);
+    let dll_entries = ps::loader::loaded_dll_entry_points(base);
     let code = tramp_va as *mut u8;
     let mut off = 0usize;
 
