@@ -154,6 +154,12 @@ fn launch_game(fat_path: &str) -> Option<usize> {
         return None;
     }
 
+    // Debug: check if BSS is properly zeroed at the crash address
+    let bss_val = unsafe { core::ptr::read_volatile(0x947BC4u64 as *const u32) };
+    hal::serial::write_str("[BSS] 0x947BC4=");
+    serial_write_hex(bss_val);
+    hal::serial::write_str("\r\n");
+
     // Read entry point RVA from the loaded PE header (now mapped at base).
     // SAFETY: base is a valid mapped user VA; load_dll copies PE headers there.
     let entry_rva = unsafe {

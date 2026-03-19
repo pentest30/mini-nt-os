@@ -77,14 +77,14 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         executable: bool,
         user:       bool,
     ) -> Result<(), &'static str> {
-        // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page
-        // (e.g. a stub module committed during a prior load_image for this same address
-        // space).  We still fall through for supervisor-only bootloader huge pages so
-        // that map_page can split the huge page and install a proper user-accessible
-        // 4 KiB leaf entry with the section data.
+        // Check if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
+        // If so, just zero the page (for BSS sections / VirtualAlloc guarantees)
+        // but don't allocate a new frame.
         if let Some((_p, f)) = self.pt.translate_flags(VirtAddr::new(virt_addr)) {
             use x86_64::structures::paging::PageTableFlags as F;
             if f.contains(F::USER_ACCESSIBLE) && !f.contains(F::HUGE_PAGE) {
+                // Zero the page — process reuse requires clean state.
+                unsafe { core::ptr::write_bytes(virt_addr as *mut u8, 0, 4096); }
                 return Ok(());
             }
         }
@@ -107,6 +107,13 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         // SAFETY: virt is a freshly claimed user-mode address; phys is a
         //         fresh page-aligned frame from the buddy.
         unsafe { self.pt.map_page(virt, phys, flags) };
+
+        // Zero the page — Windows guarantees MEM_COMMIT pages are zeroed.
+        // Without this, .bss sections contain stale data from recycled frames.
+        // SAFETY: the page was just mapped at `virt`; writing 4096 zeros is valid.
+        unsafe {
+            core::ptr::write_bytes(virt_addr as *mut u8, 0, 4096);
+        }
         Ok(())
     }
 
