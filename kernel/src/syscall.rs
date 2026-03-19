@@ -120,6 +120,7 @@ const WIN32_FIND_FIRST_FILE_A:    u32 = 0x20AB;
 const WIN32_GET_FILE_ATTRS_A:     u32 = 0x20AC;
 const WIN32_GET_FULL_PATH_A:      u32 = 0x20AD;
 const WIN32_GET_CP_INFO:          u32 = 0x20AE;
+const WIN32_GET_FILE_TYPE:        u32 = 0x20AF;
 const WIN32_GET_COMMAND_LINE_A:   u32 = 0x20AF;
 const WIN32_GET_LOCAL_TIME:       u32 = 0x20B0;
 const WIN32_GET_STARTUP_INFO_A:   u32 = 0x20B1;
@@ -369,6 +370,7 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         WIN32_GET_FILE_ATTRS_A     => win32_get_file_attributes_a(args_ptr),
         WIN32_GET_FULL_PATH_A      => win32_get_full_path_name_a(args_ptr),
         WIN32_GET_CP_INFO          => win32_get_cp_info(args_ptr),
+        WIN32_GET_FILE_TYPE        => win32_get_file_type(args_ptr),
         WIN32_GET_COMMAND_LINE_A   => win32_get_command_line_a(),
         WIN32_GET_LOCAL_TIME       => win32_get_local_time(args_ptr),
         WIN32_GET_STARTUP_INFO_A   => win32_get_startup_info_a(args_ptr),
@@ -2667,11 +2669,27 @@ fn win32_query_perf_freq(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn win32_heap_alloc(args_ptr: u32) -> u32 {
     let _heap  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let _flags = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let flags  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
     let size   = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    // Delegate to the same allocator as malloc.
-    let fake_malloc_args = [size];
-    win32_malloc(fake_malloc_args.as_ptr() as u32 - 4)
+    if size == 0 { return 0; }
+    // Allocate directly via VirtualAlloc (same as win32_malloc but inline).
+    let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
+    let alloc   = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
+    let result = {
+        let mut guard = SYSCALL_CTX.lock();
+        let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+        let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
+        match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, size as u64, alloc, protect) {
+            Ok(base) => base as u32,
+            Err(_) => 0,
+        }
+    };
+    // Zero memory if HEAP_ZERO_MEMORY (0x08) flag is set
+    if flags & 0x08 != 0 && result != 0 && size > 0 {
+        let sz = (size as u64).min(0x100000);
+        unsafe { core::ptr::write_bytes(result as *mut u8, 0, sz as usize); }
+    }
+    result
 }
 
 /// GetClientRect — returns a 1920×1080 RECT.
@@ -4126,6 +4144,17 @@ fn allocate_game_file_handle(file: io_manager::FatFile) -> u32 {
     0xFFFF_FFFF
 }
 
+fn win32_get_file_type(args_ptr: u32) -> u32 {
+    let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    // Stdio pseudo-handles (3=stdin, 7=stdout, 11=stderr) → FILE_TYPE_CHAR
+    // FAT file handles → FILE_TYPE_DISK
+    match handle {
+        3 | 7 | 11 => 2,  // FILE_TYPE_CHAR (console/device)
+        0 => 0,           // FILE_TYPE_UNKNOWN
+        _ => 1,           // FILE_TYPE_DISK
+    }
+}
+
 fn win32_message_box_a(args_ptr: u32) -> u32 {
     // MessageBoxA(hWnd, lpText, lpCaption, uType)
     let text_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 1 };
@@ -4265,12 +4294,13 @@ fn win32_get_startup_info_a(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn win32_get_std_handle(args_ptr: u32) -> u32 {
     let n = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    // Return fake but non-zero handles
+    // Return non-zero pseudo-handles that look like real Windows handles.
+    // The CRT checks these are non-NULL and calls GetFileType on them.
     match n {
-        0xFFFF_FFF6 => 0, // STD_INPUT_HANDLE  (-10) → 0 (no stdin)
-        0xFFFF_FFF5 => 1, // STD_OUTPUT_HANDLE (-11) → 1
-        0xFFFF_FFF4 => 2, // STD_ERROR_HANDLE  (-12) → 2
-        _ => 0xFFFF_FFFF, // INVALID_HANDLE_VALUE
+        0xFFFF_FFF6 => 3,  // STD_INPUT_HANDLE  (-10)
+        0xFFFF_FFF5 => 7,  // STD_OUTPUT_HANDLE (-11)
+        0xFFFF_FFF4 => 11, // STD_ERROR_HANDLE  (-12)
+        _ => 0xFFFF_FFFF,  // INVALID_HANDLE_VALUE
     }
 }
 

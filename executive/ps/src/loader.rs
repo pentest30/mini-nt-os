@@ -2432,7 +2432,7 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub( page.add(0x7B0), 0, 0);          // GetEnvironmentStrings() → NULL
             write_const_stub( page.add(0x7C0), 0, 0);          // GetEnvironmentStringsW() → NULL
             write_const_stub( page.add(0x7D0), 0, 0x000C);     // GetEnvironmentVariableA(3) → 0 (not found)
-            write_const_stub( page.add(0x7E0), 1, 4);          // GetFileType(1) → FILE_TYPE_DISK=1
+            write_win32_stub(page.add(0x7E0), 0x20AF, 0x0004); // GetFileType(1) → syscall
             write_win32_stub(page.add(0x7F0), 0x20B0, 0x0004); // GetLocalTime(1) → fill SYSTEMTIME
             write_const_stub( page.add(0x800), 0, 0x0010);     // GetLocaleInfoA(4) → 0
             write_const_stub( page.add(0x810), 0, 0x0010);     // GetLocaleInfoW(4) → 0
