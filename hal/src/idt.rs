@@ -28,6 +28,8 @@ use super::gdt::DOUBLE_FAULT_IST_INDEX;
 
 static IDT: Once<InterruptDescriptorTable> = Once::new();
 static SYSCALL_HOOK: AtomicUsize = AtomicUsize::new(0);
+static USER_FAULT_HOOK: AtomicUsize = AtomicUsize::new(0);
+static IN_PF_OUTER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -126,9 +128,7 @@ extern "x86-interrupt" fn exception_page_fault(
     frame: InterruptStackFrame,
     error: PageFaultErrorCode,
 ) {
-    use core::sync::atomic::{AtomicBool, Ordering};
-    static IN_PF: AtomicBool = AtomicBool::new(false);
-    if IN_PF.swap(true, Ordering::SeqCst) {
+    if IN_PF_OUTER.swap(true, core::sync::atomic::Ordering::SeqCst) {
         // Nested page fault — log minimal info then halt.
         let cr2 = unsafe { x86_64::registers::control::Cr2::read_raw() };
         super::serial::write_str("\n[NESTED #PF] CR2=0x");
@@ -163,6 +163,20 @@ fn exception_page_fault_inner(
     super::serial::write_str(" err=0x");
     serial_hex64(error.bits());
     super::serial::write_str("\n");
+
+    // User-mode page faults: terminate the game thread instead of panicking.
+    let is_user = error.contains(PageFaultErrorCode::USER_MODE);
+    if is_user {
+        super::serial::write_str("[#PF] user-mode fault — terminating thread\n");
+        IN_PF_OUTER.store(false, core::sync::atomic::Ordering::SeqCst);
+        // Call the terminate hook if registered (set by kernel to ke::scheduler::terminate_current_thread)
+        let hook = USER_FAULT_HOOK.load(core::sync::atomic::Ordering::Acquire);
+        if hook != 0 {
+            let f: fn() = unsafe { core::mem::transmute(hook) };
+            f();
+        }
+        loop { x86_64::instructions::hlt(); }
+    }
 
     panic!(
         "EXCEPTION: #PF Page Fault at {:#x}",
@@ -375,6 +389,13 @@ pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
     }
     let f: fn(u32, u32) -> u32 = unsafe { core::mem::transmute(hook) };
     f(number, args_ptr)
+}
+
+/// Register a function to call when a user-mode page fault occurs.
+/// Typically set to `ke::scheduler::terminate_current_thread`.
+pub fn set_user_fault_hook(hook: Option<fn()>) {
+    let addr = hook.map_or(0usize, |f| f as usize);
+    USER_FAULT_HOOK.store(addr, Ordering::Release);
 }
 
 pub fn set_syscall_hook(hook: Option<fn(u32, u32) -> u32>) {

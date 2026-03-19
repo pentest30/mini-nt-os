@@ -308,6 +308,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     // interrupts re-enable (avoid a timer ISR firing with a half-initialised hook).
     hal::timer::set_tick_hook(Some(ke::scheduler::schedule));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
+    hal::idt::set_user_fault_hook(Some(ke::scheduler::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
 

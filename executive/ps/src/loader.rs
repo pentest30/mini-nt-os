@@ -2647,11 +2647,8 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         // function pointer in the [begin, end) array.  Cannot be INT 0x2E stubs
         // because they call user-mode function pointers directly.
         //
-        // _initterm and _initterm_e: iterate function pointer array [begin, end).
-        // Uses ESI (callee-saved) so CALL EAX doesn't trash the loop variable.
-        // Required by MSVC CRT — without it, CRT calls _amsg_exit(R6030).
-        // NOTE: DXVK's MinGW .CRT sections have garbage pointers — DllMain
-        // trampoline is disabled for DXVK, so only the game EXE's _initterm runs.
+        // _initterm: run constructors. User-mode #PF now terminates the thread
+        // instead of panicking the kernel, so crashed constructors are survivable.
         #[rustfmt::skip]
         let initterm_code: [u8; 26] = [
             0x56,                    // PUSH ESI
