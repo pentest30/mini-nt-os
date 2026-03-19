@@ -2880,7 +2880,68 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub(page.add(0x000), 0, 0);               // CoFreeUnusedLibraries() → void
             write_const_stub(page.add(0x010), 0, 4);               // CoInitialize(1) → S_OK
             write_const_stub(page.add(0x020), 0, 0);               // CoUninitialize() → void
-            write_const_stub(page.add(0x030), 0x8000_4002u32, 0x0014); // CoCreateInstance(5) → E_NOINTERFACE
+            // CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv) → S_OK
+            // Writes a generic COM object pointer to *ppv.
+            // The object is at page+0x080 with a vtable at page+0x100.
+            //
+            // MOV EAX, [ESP+20]   ; ppv (5th arg, after ret addr)
+            // MOV ECX, obj_va     ; generic COM object address
+            // MOV [EAX], ECX      ; *ppv = obj
+            // XOR EAX, EAX        ; return S_OK
+            // RET 20              ; stdcall 5 args
+            {
+                let obj_va = base.wrapping_add(0x1080); // page+0x080
+                let d = page.add(0x030);
+                d.add(0).write_unaligned(0x8Bu8);  // MOV EAX, [ESP+0x14]
+                d.add(1).write_unaligned(0x44u8);
+                d.add(2).write_unaligned(0x24u8);
+                d.add(3).write_unaligned(0x14u8);
+                d.add(4).write_unaligned(0xB9u8);  // MOV ECX, obj_va
+                (d.add(5) as *mut u32).write_unaligned(obj_va);
+                d.add(9).write_unaligned(0x89u8);   // MOV [EAX], ECX
+                d.add(10).write_unaligned(0x08u8);
+                d.add(11).write_unaligned(0x33u8);  // XOR EAX, EAX
+                d.add(12).write_unaligned(0xC0u8);
+                d.add(13).write_unaligned(0xC2u8);  // RET 0x14
+                (d.add(14) as *mut u16).write_unaligned(0x14);
+            }
+
+            // Generic COM vtable at page+0x100 (64 slots × 4 bytes = 256 bytes)
+            // Each slot points to a "XOR EAX,EAX; RET N" stub at page+0x200+
+            // We create stubs for various arg counts (RET 4..RET 32).
+            {
+                let vtbl = page.add(0x100);
+                // Create 8 generic stubs at page+0x200 with different RET sizes
+                // stub[0]: XOR EAX,EAX; RET 4  (1 arg methods like Release)
+                // stub[1]: XOR EAX,EAX; RET 8  (2 arg methods)
+                // ...up to stub[7]: XOR EAX,EAX; RET 32
+                for s in 0u32..8 {
+                    let stub = page.add(0x200 + s as usize * 8);
+                    stub.add(0).write_unaligned(0x33u8); // XOR EAX, EAX
+                    stub.add(1).write_unaligned(0xC0u8);
+                    stub.add(2).write_unaligned(0xC2u8); // RET imm16
+                    let ret_n = (s + 1) * 4;
+                    (stub.add(3) as *mut u16).write_unaligned(ret_n as u16);
+                }
+                // Fill all 64 vtable slots with the "RET 8" stub (2 args = this + 1)
+                // This handles most COM methods (QueryInterface, AddRef, Release, etc.)
+                let stub_ret8 = base.wrapping_add(0x1208); // stub[1] = RET 8
+                let stub_ret4 = base.wrapping_add(0x1200); // stub[0] = RET 4
+                let stub_ret12 = base.wrapping_add(0x1210); // stub[2] = RET 12
+                for i in 0u32..64 {
+                    let stub_addr = match i {
+                        1 => stub_ret4,  // AddRef → RET 4 (returns 1, but XOR gives 0... ok for stub)
+                        2 => stub_ret4,  // Release → RET 4
+                        0 => stub_ret12, // QueryInterface(this, riid, ppv) → RET 12
+                        _ => stub_ret8,  // default: RET 8 (this + 1 arg)
+                    };
+                    (vtbl.add(i as usize * 4) as *mut u32).write_unaligned(stub_addr);
+                }
+                // Generic COM object at page+0x080: vtable ptr + refcount
+                let obj = page.add(0x080);
+                (obj as *mut u32).write_unaligned(base.wrapping_add(0x1100)); // vtable ptr
+                (obj.add(4) as *mut u32).write_unaligned(1); // refcount = 1
+            }
             write_win32_stub(page.add(0x040), 0x2020, 0x0000);     // CoTaskMemAlloc(1) → reuse malloc (cdecl)
             write_const_stub(page.add(0x050), 0, 4);               // CoTaskMemFree(1) → void
         }
@@ -3647,6 +3708,13 @@ pub fn load_dll(
     };
 
     log::info!("load_dll: preferred={:#x} load={:#x} size={:#x}", preferred_base, load_base, image_size);
+
+    // Zero the ENTIRE image range before copying sections.
+    // Pages may be reused from a previous process at the same VA (e.g., HELLO.EXE
+    // loaded at 0x400000 before Ghost Recon). Stale CRT flags in .data cause the
+    // new CRT to skip initialization, leaving pointers NULL → crash.
+    // SAFETY: load_base..+image_size was just committed above.
+    unsafe { core::ptr::write_bytes(load_base as *mut u8, 0, image_size as usize); }
 
     // Copy PE headers (DOS header + NT headers + section table) into the image base.
     // Windows always maps headers so GetModuleHandle/GetProcAddress can parse them.
