@@ -77,14 +77,12 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         executable: bool,
         user:       bool,
     ) -> Result<(), &'static str> {
-        // Check if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
-        // If so, just zero the page (for BSS sections / VirtualAlloc guarantees)
-        // but don't allocate a new frame.
+        // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
+        // DO NOT zero — the page may contain live data (e.g., game stack being reused).
+        // Fresh pages from the buddy allocator are zeroed below instead.
         if let Some((_p, f)) = self.pt.translate_flags(VirtAddr::new(virt_addr)) {
             use x86_64::structures::paging::PageTableFlags as F;
             if f.contains(F::USER_ACCESSIBLE) && !f.contains(F::HUGE_PAGE) {
-                // Zero the page — process reuse requires clean state.
-                unsafe { core::ptr::write_bytes(virt_addr as *mut u8, 0, 4096); }
                 return Ok(());
             }
         }

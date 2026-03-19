@@ -162,6 +162,21 @@ fn exception_page_fault_inner(
     serial_hex64(rip);
     super::serial::write_str(" err=0x");
     serial_hex64(error.bits());
+    // If RIP=0 (NULL call), dump the return address from the user stack
+    // to find WHERE the CALL [NULL] happened
+    // Dump stack pointer and top-of-stack for all user faults
+    let user_esp = frame.stack_pointer.as_u64();
+    super::serial::write_str(" ESP=0x");
+    serial_hex64(user_esp);
+    if rip == 0 && user_esp > 0x1000 && user_esp < 0x80000000 {
+        // Dump a few stack words
+        super::serial::write_str(" stk:");
+        for j in 0u64..4 {
+            let val = unsafe { core::ptr::read_volatile((user_esp + j * 4) as *const u32) };
+            super::serial::write_str(" ");
+            serial_hex64(val as u64);
+        }
+    }
     super::serial::write_str("\n");
 
     // User-mode page faults: terminate the game thread instead of panicking.

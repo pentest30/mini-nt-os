@@ -2648,10 +2648,11 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         // because they call user-mode function pointers directly.
         //
         // _initterm: kernel-driven constructor iteration via syscall.
-        // _initterm: no-op for now. Constructors crash because they call through
-        // uninitialized COM vtables (NULL pointers from CoCreateInstance returning
-        // E_NOINTERFACE). TODO Phase 4: proper COM stub objects.
-        let initterm_code: [u8; 1] = [0xC3]; // RET
+        // _initterm: run constructors with logging. Each constructor address
+        // is logged via syscall 0x2126 BEFORE calling it, so we can identify
+        // which one crashes. User-mode fault recovery keeps the OS alive.
+        // Code at page+0x000 (entry) JMPs to page+0x100 (body, 42 bytes).
+        let initterm_code: [u8; 5] = [0xE9, 0xFB, 0x00, 0x00, 0x00]; // JMP +0xFB → page+0x100
         #[rustfmt::skip]
         let initterm_e_code: [u8; 28] = [
             0x56,                    // PUSH ESI
@@ -2676,6 +2677,35 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             // _initterm_e at page+0x020
             for (i, &b) in initterm_e_code.iter().enumerate() {
                 page.add(0x020 + i).write_unaligned(b);
+            }
+            // _initterm body at page+0x100 (logging + calling constructors)
+            {
+                #[rustfmt::skip]
+                let body: [u8; 42] = [
+                    0x56,                        // PUSH ESI
+                    0x53,                        // PUSH EBX
+                    0x8B, 0x74, 0x24, 0x0C,      // MOV ESI, [ESP+0C]
+                    0x8B, 0x5C, 0x24, 0x10,      // MOV EBX, [ESP+10]
+                    0x3B, 0xF3,                  // CMP ESI, EBX
+                    0x73, 0x17,                  // JAE done
+                    0x8B, 0x06,                  // MOV EAX, [ESI]
+                    0x83, 0xC6, 0x04,            // ADD ESI, 4
+                    0x85, 0xC0,                  // TEST EAX, EAX
+                    0x74, 0xF3,                  // JZ loop
+                    0x50,                        // PUSH EAX
+                    0xB8, 0x26, 0x21, 0x00, 0x00,// MOV EAX, 0x2126
+                    0x8D, 0x14, 0x24,            // LEA EDX, [ESP]
+                    0xCD, 0x2E,                  // INT 0x2E
+                    0x58,                        // POP EAX
+                    0xFF, 0xD0,                  // CALL EAX
+                    0xEB, 0xE3,                  // JMP loop
+                    0x5B,                        // POP EBX
+                    0x5E,                        // POP ESI
+                    0xC3,                        // RET
+                ];
+                for (i, &b) in body.iter().enumerate() {
+                    page.add(0x100 + i).write_unaligned(b);
+                }
             }
             // _initialize_onexit_table(1) → 0x20B8, cdecl
             write_win32_stub(page.add(0x040), 0x20B8, 0x0000);
@@ -3633,7 +3663,7 @@ pub fn load_dll(
         }
     }
 
-    // Copy sections
+    // Copy sections and zero BSS regions
     for i in 0..n_sect {
         let sh = sec_table + i * 40;
         if sh + 40 > image_data.len() { break; }
@@ -3641,6 +3671,14 @@ pub fn load_dll(
         let virt_off = read_u32(image_data, sh + 12).unwrap_or(0) as usize;
         let raw_sz   = read_u32(image_data, sh + 16).unwrap_or(0) as usize;
         let file_off = read_u32(image_data, sh + 20).unwrap_or(0) as usize;
+
+        // Zero the BSS portion (virt_sz > raw_sz) — pages may be reused and dirty.
+        if virt_sz > raw_sz {
+            let bss_start = load_base + virt_off as u64 + raw_sz as u64;
+            let bss_len = virt_sz - raw_sz;
+            unsafe { core::ptr::write_bytes(bss_start as *mut u8, 0, bss_len); }
+        }
+
         if raw_sz == 0 { continue; }
         if file_off + raw_sz > image_data.len() { continue; }
         // SAFETY: load_base..+image_size committed above; bounds checked.
