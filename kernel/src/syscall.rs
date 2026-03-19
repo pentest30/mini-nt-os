@@ -103,10 +103,38 @@ const WIN32_HEAP_ALLOC:           u32 = 0x209A;
 const WIN32_SET_LAST_ERROR:       u32 = 0x209B;
 const WIN32_GET_SYSTEM_TIME_FT:  u32 = 0x209C;
 const WIN32_GET_USER_NAME_A:      u32 = 0x209D; // ADVAPI32 GetUserNameA
+// ── Ghost Recon kernel32 ────────────────────────────────────────────────────
+const WIN32_GLOBAL_MEMORY_STATUS: u32 = 0x20A0;
+const WIN32_GET_MODULE_FILE_A:    u32 = 0x20A1;
+const WIN32_MULTI_BYTE_TO_WIDE:   u32 = 0x20A2;
+const WIN32_GET_VERSION_EX_A:     u32 = 0x20A3;
+const WIN32_LSTRCPY_A:            u32 = 0x20A4;
+const WIN32_GET_CURRENT_DIR_A:    u32 = 0x20A5;
+const WIN32_LSTRCAT_A:            u32 = 0x20A6;
+const WIN32_LSTRCPYN_A:           u32 = 0x20A7;
+const WIN32_LSTRLEN_A:            u32 = 0x20A8;
+const WIN32_WRITE_FILE:           u32 = 0x20A9;
+const WIN32_GET_FILE_SIZE:        u32 = 0x20AA;
+const WIN32_FIND_FIRST_FILE_A:    u32 = 0x20AB;
+const WIN32_GET_FILE_ATTRS_A:     u32 = 0x20AC;
+const WIN32_GET_FULL_PATH_A:      u32 = 0x20AD;
+const WIN32_GET_CP_INFO:          u32 = 0x20AE;
+const WIN32_GET_COMMAND_LINE_A:   u32 = 0x20AF;
+const WIN32_GET_LOCAL_TIME:       u32 = 0x20B0;
+const WIN32_GET_STARTUP_INFO_A:   u32 = 0x20B1;
+const WIN32_GET_STD_HANDLE:       u32 = 0x20B2;
+const WIN32_HEAP_REALLOC:         u32 = 0x20B4;
+const WIN32_MUL_DIV:              u32 = 0x20B5;
+const WIN32_READ_FILE:            u32 = 0x20B6;
+const WIN32_WIDE_TO_MULTI_BYTE:   u32 = 0x20B7;
 // ── user32 Phase 3A ───────────────────────────────────────────────────────────
 const WIN32_GET_CLIENT_RECT:      u32 = 0x2120;
 const WIN32_ENUM_DISPLAY_SETTINGS:u32 = 0x2121;
 const WIN32_MESSAGE_BOX_A:        u32 = 0x2122;
+const WIN32_ENUM_DISPLAY_SETTINGS_A: u32 = 0x2123;
+const WIN32_GET_SYSTEM_METRICS:   u32 = 0x2124;
+// ── winmm ───────────────────────────────────────────────────────────────────
+const WIN32_TIME_GET_DEV_CAPS:    u32 = 0x2033;
 // ── UCRT (api-ms-win-crt-*) ───────────────────────────────────────────────────
 const UCRT_REALLOC:               u32 = 0x20B3;
 const UCRT_INIT_ONEXIT_TABLE:     u32 = 0x20B8;
@@ -317,10 +345,38 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         WIN32_HEAP_ALLOC           => win32_heap_alloc(args_ptr),
         WIN32_SET_LAST_ERROR       => 0, // nop
         WIN32_GET_SYSTEM_TIME_FT   => win32_get_system_time_as_file_time(args_ptr),
+        // ── Ghost Recon kernel32 ────────────────────────────────────────────
+        WIN32_GLOBAL_MEMORY_STATUS => win32_global_memory_status(args_ptr),
+        WIN32_GET_MODULE_FILE_A    => win32_get_module_file_name_a(args_ptr),
+        WIN32_MULTI_BYTE_TO_WIDE   => win32_multi_byte_to_wide_char(args_ptr),
+        WIN32_GET_VERSION_EX_A     => win32_get_version_ex_a(args_ptr),
+        WIN32_LSTRCPY_A            => win32_lstrcpy_a(args_ptr),
+        WIN32_GET_CURRENT_DIR_A    => win32_get_current_dir_a(args_ptr),
+        WIN32_LSTRCAT_A            => win32_lstrcat_a(args_ptr),
+        WIN32_LSTRCPYN_A           => win32_lstrcpyn_a(args_ptr),
+        WIN32_LSTRLEN_A            => win32_lstrlen_a(args_ptr),
+        WIN32_WRITE_FILE           => win32_write_file(args_ptr),
+        WIN32_GET_FILE_SIZE        => win32_get_file_size(args_ptr),
+        WIN32_FIND_FIRST_FILE_A    => 0xFFFF_FFFF, // INVALID_HANDLE_VALUE — no files found
+        WIN32_GET_FILE_ATTRS_A     => win32_get_file_attributes_a(args_ptr),
+        WIN32_GET_FULL_PATH_A      => win32_get_full_path_name_a(args_ptr),
+        WIN32_GET_CP_INFO          => win32_get_cp_info(args_ptr),
+        WIN32_GET_COMMAND_LINE_A   => win32_get_command_line_a(),
+        WIN32_GET_LOCAL_TIME       => win32_get_local_time(args_ptr),
+        WIN32_GET_STARTUP_INFO_A   => win32_get_startup_info_a(args_ptr),
+        WIN32_GET_STD_HANDLE       => win32_get_std_handle(args_ptr),
+        WIN32_HEAP_REALLOC         => win32_heap_realloc(args_ptr),
+        WIN32_MUL_DIV              => win32_mul_div(args_ptr),
+        WIN32_READ_FILE            => win32_read_file_k32(args_ptr),
+        WIN32_WIDE_TO_MULTI_BYTE   => win32_wide_char_to_multi_byte(args_ptr),
         // ── user32 Phase 3A ───────────────────────────────────────────────────
         WIN32_GET_CLIENT_RECT      => win32_get_client_rect(args_ptr),
         WIN32_ENUM_DISPLAY_SETTINGS=> win32_enum_display_settings_w(args_ptr),
         WIN32_MESSAGE_BOX_A        => 1, // IDOK — no real window; Ghost Recon never blocks on dialogs
+        WIN32_ENUM_DISPLAY_SETTINGS_A => win32_enum_display_settings_a(args_ptr),
+        WIN32_GET_SYSTEM_METRICS   => win32_get_system_metrics(args_ptr),
+        // ── winmm ───────────────────────────────────────────────────────────
+        WIN32_TIME_GET_DEV_CAPS    => win32_time_get_dev_caps(args_ptr),
         // ── UCRT ──────────────────────────────────────────────────────────────
         UCRT_REALLOC               => ucrt_realloc(args_ptr),
         UCRT_INIT_ONEXIT_TABLE     => ucrt_init_onexit_table(args_ptr),
@@ -3746,6 +3802,557 @@ fn vk_queue_present(args_ptr: u32) -> u32 {
     let src_ptr = map_addr as *const u32;
     hal::fb::blit_bgra(src_ptr, src_w, src_h, 0, 0);
     0 // VK_SUCCESS
+}
+
+// ── Ghost Recon kernel32 handlers ────────────────────────────────────────────
+
+/// GlobalMemoryStatus(MEMORYSTATUS*) → void
+/// # IRQL: PASSIVE
+fn win32_global_memory_status(args_ptr: u32) -> u32 {
+    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    if !is_user_range(p, 32) { return 0; }
+    // SAFETY: validated 32-byte user buffer (MEMORYSTATUS is 32 bytes on 32-bit).
+    unsafe {
+        core::ptr::write_bytes(p as *mut u8, 0, 32);
+        // dwLength
+        (p as *mut u32).write_unaligned(32);
+        // dwMemoryLoad = 50%
+        ((p + 4) as *mut u32).write_unaligned(50);
+        // dwTotalPhys = 512 MB
+        ((p + 8) as *mut u32).write_unaligned(512 * 1024 * 1024);
+        // dwAvailPhys = 256 MB
+        ((p + 12) as *mut u32).write_unaligned(256 * 1024 * 1024);
+        // dwTotalPageFile = 1 GB
+        ((p + 16) as *mut u32).write_unaligned(1024 * 1024 * 1024);
+        // dwAvailPageFile = 512 MB
+        ((p + 20) as *mut u32).write_unaligned(512 * 1024 * 1024);
+        // dwTotalVirtual = 2 GB
+        ((p + 24) as *mut u32).write_unaligned(0x7FFF_0000);
+        // dwAvailVirtual = 1.5 GB
+        ((p + 28) as *mut u32).write_unaligned(0x5FFF_0000);
+    }
+    0
+}
+
+/// GetModuleFileNameA(hModule, lpFilename, nSize) → DWORD chars written
+/// # IRQL: PASSIVE
+fn win32_get_module_file_name_a(args_ptr: u32) -> u32 {
+    let _module = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let buf     = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let size    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let path = b"C:\\game.exe\0";
+    let copy_len = (path.len() as u32).min(size);
+    if copy_len == 0 || !is_user_range(buf, copy_len) { return 0; }
+    // SAFETY: validated user buffer.
+    unsafe {
+        core::ptr::copy_nonoverlapping(path.as_ptr(), buf as *mut u8, copy_len as usize);
+    }
+    copy_len - 1 // exclude NUL
+}
+
+/// MultiByteToWideChar(CodePage, dwFlags, lpMBS, cbMBS, lpWCS, cchWCS) → int
+/// Simple ASCII→UTF16 expansion.
+/// # IRQL: PASSIVE
+fn win32_multi_byte_to_wide_char(args_ptr: u32) -> u32 {
+    let _cp    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let _flags = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let src    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let src_len= match read_arg_u32(args_ptr, 3) { Ok(v) => v as i32, Err(_) => return 0 };
+    let dst    = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
+    let dst_len= match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return 0 };
+    // Determine source length
+    let actual_src_len = if src_len == -1 {
+        // NUL-terminated — count chars including NUL
+        let mut n = 0u32;
+        while is_user_range(src + n, 1) {
+            let b = unsafe { ((src + n) as *const u8).read_unaligned() };
+            n += 1;
+            if b == 0 { break; }
+            if n > 0x10000 { break; }
+        }
+        n
+    } else {
+        src_len as u32
+    };
+    // If dst_len == 0, just return required size
+    if dst_len == 0 {
+        return actual_src_len;
+    }
+    let copy_n = actual_src_len.min(dst_len);
+    if copy_n == 0 { return 0; }
+    if !is_user_range(src, actual_src_len) || !is_user_range(dst, copy_n * 2) { return 0; }
+    // SAFETY: validated buffers.
+    unsafe {
+        for i in 0..copy_n {
+            let b = ((src + i) as *const u8).read_unaligned();
+            ((dst + i * 2) as *mut u16).write_unaligned(b as u16);
+        }
+    }
+    copy_n
+}
+
+/// GetVersionExA(OSVERSIONINFOA*) → BOOL
+/// Fills with XP SP2 values.
+/// # IRQL: PASSIVE
+fn win32_get_version_ex_a(args_ptr: u32) -> u32 {
+    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    if !is_user_range(p, 148) { return 0; }
+    // OSVERSIONINFOA: dwOSVersionInfoSize(4), dwMajorVersion(4), dwMinorVersion(4),
+    //                 dwBuildNumber(4), dwPlatformId(4), szCSDVersion[128]
+    // SAFETY: validated 148-byte user buffer.
+    unsafe {
+        core::ptr::write_bytes(p as *mut u8, 0, 148);
+        (p as *mut u32).write_unaligned(148); // dwOSVersionInfoSize
+        ((p + 4) as *mut u32).write_unaligned(5);    // dwMajorVersion
+        ((p + 8) as *mut u32).write_unaligned(1);    // dwMinorVersion
+        ((p + 12) as *mut u32).write_unaligned(2600); // dwBuildNumber
+        ((p + 16) as *mut u32).write_unaligned(2);    // VER_PLATFORM_WIN32_NT
+        // szCSDVersion at offset 20: "Service Pack 2\0"
+        let sp = b"Service Pack 2\0";
+        core::ptr::copy_nonoverlapping(sp.as_ptr(), (p + 20) as *mut u8, sp.len());
+    }
+    1 // TRUE
+}
+
+/// lstrcpyA(dst, src) → dst
+/// # IRQL: PASSIVE
+fn win32_lstrcpy_a(args_ptr: u32) -> u32 {
+    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    if dst == 0 || src == 0 { return 0; }
+    // Copy until NUL (with limit)
+    let mut i = 0u32;
+    loop {
+        if i > 0x10000 { break; }
+        let b = unsafe { ((src + i) as *const u8).read_unaligned() };
+        unsafe { ((dst + i) as *mut u8).write_unaligned(b); }
+        if b == 0 { break; }
+        i += 1;
+    }
+    dst
+}
+
+/// GetCurrentDirectoryA(nBufferLength, lpBuffer) → DWORD
+/// # IRQL: PASSIVE
+fn win32_get_current_dir_a(args_ptr: u32) -> u32 {
+    let size = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let buf  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let dir = b"C:\\\0";
+    if size < dir.len() as u32 || !is_user_range(buf, dir.len() as u32) { return dir.len() as u32; }
+    unsafe { core::ptr::copy_nonoverlapping(dir.as_ptr(), buf as *mut u8, dir.len()); }
+    3 // "C:\" = 3 chars
+}
+
+/// lstrcatA(dst, src) → dst
+/// # IRQL: PASSIVE
+fn win32_lstrcat_a(args_ptr: u32) -> u32 {
+    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    if dst == 0 || src == 0 { return 0; }
+    // Find end of dst
+    let mut d = 0u32;
+    while d < 0x10000 {
+        let b = unsafe { ((dst + d) as *const u8).read_unaligned() };
+        if b == 0 { break; }
+        d += 1;
+    }
+    // Copy src
+    let mut s = 0u32;
+    loop {
+        if s > 0x10000 { break; }
+        let b = unsafe { ((src + s) as *const u8).read_unaligned() };
+        unsafe { ((dst + d + s) as *mut u8).write_unaligned(b); }
+        if b == 0 { break; }
+        s += 1;
+    }
+    dst
+}
+
+/// lstrcpynA(dst, src, iMaxLength) → dst
+/// # IRQL: PASSIVE
+fn win32_lstrcpyn_a(args_ptr: u32) -> u32 {
+    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let max = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    if dst == 0 || src == 0 || max == 0 { return 0; }
+    let limit = max.min(0x10000);
+    let mut i = 0u32;
+    while i < limit - 1 {
+        let b = unsafe { ((src + i) as *const u8).read_unaligned() };
+        unsafe { ((dst + i) as *mut u8).write_unaligned(b); }
+        if b == 0 { return dst; }
+        i += 1;
+    }
+    unsafe { ((dst + i) as *mut u8).write_unaligned(0); }
+    dst
+}
+
+/// lstrlenA(lpString) → int
+/// # IRQL: PASSIVE
+fn win32_lstrlen_a(args_ptr: u32) -> u32 {
+    let s = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    if s == 0 { return 0; }
+    let mut n = 0u32;
+    while n < 0x10000 {
+        let b = unsafe { ((s + n) as *const u8).read_unaligned() };
+        if b == 0 { break; }
+        n += 1;
+    }
+    n
+}
+
+/// WriteFile(hFile, lpBuffer, nNumberOfBytesToWrite, lpNumberOfBytesWritten, lpOverlapped) → BOOL
+/// Delegates to NtWriteFile for real handles; fakes success for stdout/stderr.
+/// # IRQL: PASSIVE
+fn win32_write_file(args_ptr: u32) -> u32 {
+    let handle    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let buf       = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let count     = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let written   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let _overlapped = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
+    // For stdout/stderr fake handles, log and succeed
+    if handle <= 2 {
+        if is_user_range(buf, count) && count > 0 {
+            let slice = unsafe { core::slice::from_raw_parts(buf as *const u8, count as usize) };
+            if let Ok(s) = core::str::from_utf8(slice) {
+                log::info!("[WriteFile] {}", s.trim_end());
+            }
+        }
+        if written != 0 && is_user_range(written, 4) {
+            let _ = write_u32_user(written, count);
+        }
+        return 1; // TRUE
+    }
+    // For real file handles, report written = count (stub)
+    if written != 0 && is_user_range(written, 4) {
+        let _ = write_u32_user(written, count);
+    }
+    1
+}
+
+/// GetFileSize(hFile) → DWORD (only uses handle arg)
+/// # IRQL: PASSIVE
+fn win32_get_file_size(args_ptr: u32) -> u32 {
+    let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    // Look up file state
+    let map = FILE_HANDLE_MAP.lock();
+    for slot in map.iter() {
+        if let Some((h, ref file)) = slot {
+            if *h == handle {
+                return file.file_size;
+            }
+        }
+    }
+    0xFFFF_FFFF // INVALID_FILE_SIZE
+}
+
+/// GetFileAttributesA(lpFileName) → DWORD
+/// Returns FILE_ATTRIBUTE_NORMAL for everything, INVALID for unknown files.
+/// # IRQL: PASSIVE
+fn win32_get_file_attributes_a(args_ptr: u32) -> u32 {
+    let _name = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    // Return FILE_ATTRIBUTE_NORMAL (0x80) — game checks if files exist
+    0x80
+}
+
+/// GetFullPathNameA(lpFileName, nBufferLength, lpBuffer, lpFilePart) → DWORD
+/// # IRQL: PASSIVE
+fn win32_get_full_path_name_a(args_ptr: u32) -> u32 {
+    let name = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let size = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let buf  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let _part = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    if name == 0 || buf == 0 { return 0; }
+    // Prepend "C:\" and copy the filename
+    let prefix = b"C:\\";
+    // Get source length
+    let mut slen = 0u32;
+    while slen < 0x1000 {
+        let b = unsafe { ((name + slen) as *const u8).read_unaligned() };
+        if b == 0 { break; }
+        slen += 1;
+    }
+    let total = prefix.len() as u32 + slen + 1; // +1 for NUL
+    if total > size { return total; }
+    if !is_user_range(buf, total) { return 0; }
+    unsafe {
+        core::ptr::copy_nonoverlapping(prefix.as_ptr(), buf as *mut u8, prefix.len());
+        core::ptr::copy_nonoverlapping(name as *const u8, (buf + prefix.len() as u32) as *mut u8, slen as usize);
+        ((buf + prefix.len() as u32 + slen) as *mut u8).write_unaligned(0);
+    }
+    prefix.len() as u32 + slen
+}
+
+/// GetCPInfo(CodePage, lpCPInfo) → BOOL
+/// # IRQL: PASSIVE
+fn win32_get_cp_info(args_ptr: u32) -> u32 {
+    let _cp = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let info = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    if !is_user_range(info, 20) { return 0; }
+    // CPINFO: MaxCharSize(4), DefaultChar[2], LeadByte[12]
+    // SAFETY: validated 20-byte buffer.
+    unsafe {
+        core::ptr::write_bytes(info as *mut u8, 0, 20);
+        (info as *mut u32).write_unaligned(1); // MaxCharSize = 1 (single-byte)
+        ((info + 4) as *mut u8).write_unaligned(b'?'); // DefaultChar[0]
+    }
+    1 // TRUE
+}
+
+/// GetCommandLineA() → LPCSTR
+/// Returns a pointer to a static command line string in kernel memory.
+/// For Ghost Recon we return "-nointro\0".
+/// # IRQL: PASSIVE
+static COMMAND_LINE_BUF: Mutex<u32> = Mutex::new(0);
+
+fn win32_get_command_line_a() -> u32 {
+    let mut guard = COMMAND_LINE_BUF.lock();
+    if *guard != 0 {
+        return *guard;
+    }
+    // Allocate a small user-mode buffer for the command line string
+    let cmd = b"-nointro\0";
+    let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
+    let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
+    let mut ctx_guard = SYSCALL_CTX.lock();
+    let ctx = match ctx_guard.as_mut() { Some(v) => v, None => return 0 };
+    let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
+    match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, 0x1000, alloc, protect) {
+        Ok(base) => {
+            // SAFETY: freshly allocated page.
+            unsafe {
+                core::ptr::copy_nonoverlapping(cmd.as_ptr(), base as *mut u8, cmd.len());
+            }
+            *guard = base as u32;
+            base as u32
+        }
+        Err(_) => 0,
+    }
+}
+
+/// GetLocalTime / GetSystemTime(SYSTEMTIME*) → void
+/// Fills a plausible XP-era time.
+/// # IRQL: PASSIVE
+fn win32_get_local_time(args_ptr: u32) -> u32 {
+    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    if !is_user_range(p, 16) { return 0; }
+    // SYSTEMTIME: wYear(2), wMonth(2), wDayOfWeek(2), wDay(2), wHour(2), wMinute(2), wSecond(2), wMilliseconds(2)
+    // SAFETY: validated 16-byte user buffer.
+    unsafe {
+        (p as *mut u16).write_unaligned(2003);       // wYear
+        ((p + 2) as *mut u16).write_unaligned(6);     // wMonth (June)
+        ((p + 4) as *mut u16).write_unaligned(3);     // wDayOfWeek (Tuesday)
+        ((p + 6) as *mut u16).write_unaligned(15);    // wDay
+        ((p + 8) as *mut u16).write_unaligned(12);    // wHour
+        ((p + 10) as *mut u16).write_unaligned(0);    // wMinute
+        ((p + 12) as *mut u16).write_unaligned(0);    // wSecond
+        ((p + 14) as *mut u16).write_unaligned(0);    // wMilliseconds
+    }
+    0
+}
+
+/// GetStartupInfoA(STARTUPINFOA*) → void
+/// Zeros the 68-byte struct.
+/// # IRQL: PASSIVE
+fn win32_get_startup_info_a(args_ptr: u32) -> u32 {
+    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    if !is_user_range(p, 68) { return 0; }
+    // SAFETY: validated 68-byte user buffer.
+    unsafe {
+        core::ptr::write_bytes(p as *mut u8, 0, 68);
+        (p as *mut u32).write_unaligned(68); // cb = sizeof(STARTUPINFOA)
+    }
+    0
+}
+
+/// GetStdHandle(nStdHandle) → HANDLE
+/// STD_INPUT_HANDLE = -10, STD_OUTPUT_HANDLE = -11, STD_ERROR_HANDLE = -12
+/// # IRQL: PASSIVE
+fn win32_get_std_handle(args_ptr: u32) -> u32 {
+    let n = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    // Return fake but non-zero handles
+    match n {
+        0xFFFF_FFF6 => 0, // STD_INPUT_HANDLE  (-10) → 0 (no stdin)
+        0xFFFF_FFF5 => 1, // STD_OUTPUT_HANDLE (-11) → 1
+        0xFFFF_FFF4 => 2, // STD_ERROR_HANDLE  (-12) → 2
+        _ => 0xFFFF_FFFF, // INVALID_HANDLE_VALUE
+    }
+}
+
+/// HeapReAlloc(hHeap, dwFlags, lpMem, dwBytes) → LPVOID
+/// # IRQL: PASSIVE
+fn win32_heap_realloc(args_ptr: u32) -> u32 {
+    let _heap  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let _flags = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let old    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let size   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    // Simple realloc: allocate new, copy old data (up to 1 page for safety), return new
+    if size == 0 { return 0; }
+    let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
+    let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
+    let mut guard = SYSCALL_CTX.lock();
+    let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+    let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
+    match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, size as u64, alloc, protect) {
+        Ok(new_base) => {
+            if old != 0 {
+                // Copy min(old alloc, new size) — use 1 page as conservative upper bound
+                let copy_size = (size as usize).min(0x1000);
+                // SAFETY: old and new_base are user-VA, kernel has full mapping.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(old as *const u8, new_base as *mut u8, copy_size);
+                }
+            }
+            new_base as u32
+        }
+        Err(_) => 0,
+    }
+}
+
+/// MulDiv(nNumber, nNumerator, nDenominator) → int
+/// # IRQL: PASSIVE
+fn win32_mul_div(args_ptr: u32) -> u32 {
+    let a = match read_arg_u32(args_ptr, 0) { Ok(v) => v as i32, Err(_) => return 0xFFFF_FFFF };
+    let b = match read_arg_u32(args_ptr, 1) { Ok(v) => v as i32, Err(_) => return 0xFFFF_FFFF };
+    let c = match read_arg_u32(args_ptr, 2) { Ok(v) => v as i32, Err(_) => return 0xFFFF_FFFF };
+    if c == 0 { return 0xFFFF_FFFF; } // -1
+    let result = (a as i64 * b as i64) / c as i64;
+    result as i32 as u32
+}
+
+/// ReadFile(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped) → BOOL
+/// Win32 wrapper around NtReadFile.
+/// # IRQL: PASSIVE
+fn win32_read_file_k32(args_ptr: u32) -> u32 {
+    let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let buf    = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let count  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let read   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let _overlapped = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
+    if !is_user_range(buf, count) { return 0; }
+    // Look up file handle via lookup helper, then read
+    let mut state = match lookup_file_handle_state(handle) {
+        Some(v) => v,
+        None => {
+            // Unknown handle — fake success with 0 bytes
+            if read != 0 && is_user_range(read, 4) { let _ = write_u32_user(read, 0); }
+            return 0;
+        }
+    };
+    let avail = state.file_size.saturating_sub(state.position);
+    let to_read = count.min(avail);
+    if to_read == 0 {
+        if read != 0 && is_user_range(read, 4) { let _ = write_u32_user(read, 0); }
+        return 1; // TRUE, 0 bytes (EOF)
+    }
+    let mut tmp = alloc::vec![0u8; to_read as usize];
+    let n = match io_manager::read_fat_file(&mut state, &mut tmp) {
+        Ok(v) => v as u32,
+        Err(_) => return 0,
+    };
+    // SAFETY: validated user buffer.
+    unsafe {
+        core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf as *mut u8, n as usize);
+    }
+    remember_file_handle_state(handle, state);
+    if read != 0 && is_user_range(read, 4) { let _ = write_u32_user(read, n); }
+    1 // TRUE
+}
+
+/// WideCharToMultiByte(CodePage, dwFlags, lpWCS, cchWCS, lpMBS, cbMBS, lpDefault, lpUsedDefault)
+/// Simple UTF16→ASCII truncation.
+/// # IRQL: PASSIVE
+fn win32_wide_char_to_multi_byte(args_ptr: u32) -> u32 {
+    let _cp      = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let _flags   = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let src      = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let src_len  = match read_arg_u32(args_ptr, 3) { Ok(v) => v as i32, Err(_) => return 0 };
+    let dst      = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
+    let dst_len  = match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return 0 };
+    // Determine source length in chars
+    let actual_src_len = if src_len == -1 {
+        let mut n = 0u32;
+        while n < 0x10000 && is_user_range(src + n * 2, 2) {
+            let ch = unsafe { ((src + n * 2) as *const u16).read_unaligned() };
+            n += 1;
+            if ch == 0 { break; }
+        }
+        n
+    } else {
+        src_len as u32
+    };
+    if dst_len == 0 {
+        return actual_src_len;
+    }
+    let copy_n = actual_src_len.min(dst_len);
+    if copy_n == 0 { return 0; }
+    if !is_user_range(src, actual_src_len * 2) || !is_user_range(dst, copy_n) { return 0; }
+    // SAFETY: validated buffers.
+    unsafe {
+        for i in 0..copy_n {
+            let ch = ((src + i * 2) as *const u16).read_unaligned();
+            let b = if ch < 128 { ch as u8 } else { b'?' };
+            ((dst + i) as *mut u8).write_unaligned(b);
+        }
+    }
+    copy_n
+}
+
+/// EnumDisplaySettingsA — same as W but for DEVMODEA (156 bytes, no Unicode names).
+/// # IRQL: PASSIVE
+fn win32_enum_display_settings_a(args_ptr: u32) -> u32 {
+    let _device  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let mode_num = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let dm       = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    if mode_num > 0 && mode_num < 0xFFFF_FFFE { return 0; }
+    if !is_user_range(dm, 156) { return 0; }
+    // SAFETY: validated DEVMODEA (156 bytes).
+    unsafe {
+        core::ptr::write_bytes(dm as *mut u8, 0, 156);
+        // dmSize at offset 36
+        ((dm + 36) as *mut u16).write_unaligned(156);
+        // dmFields
+        ((dm + 40) as *mut u32).write_unaligned(0x0058_0000);
+        // dmBitsPerPel at offset 104
+        ((dm + 104) as *mut u32).write_unaligned(32);
+        // dmPelsWidth at offset 108
+        ((dm + 108) as *mut u32).write_unaligned(1024);
+        // dmPelsHeight at offset 112
+        ((dm + 112) as *mut u32).write_unaligned(768);
+        // dmDisplayFrequency at offset 120
+        ((dm + 120) as *mut u32).write_unaligned(60);
+    }
+    1 // TRUE
+}
+
+/// GetSystemMetrics(nIndex) → int
+/// # IRQL: PASSIVE
+fn win32_get_system_metrics(args_ptr: u32) -> u32 {
+    let index = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    match index {
+        0  => 1024, // SM_CXSCREEN
+        1  => 768,  // SM_CYSCREEN
+        5  => 3,    // SM_CXBORDER
+        6  => 3,    // SM_CYBORDER
+        32 => 1024, // SM_CXFULLSCREEN
+        33 => 768,  // SM_CYFULLSCREEN
+        _ => 0,
+    }
+}
+
+/// timeGetDevCaps(TIMECAPS*, cbSize) → MMRESULT
+/// # IRQL: PASSIVE
+fn win32_time_get_dev_caps(args_ptr: u32) -> u32 {
+    let p    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 1 };
+    let _size = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 1 };
+    if !is_user_range(p, 8) { return 1; } // TIMERR_NOCANDO
+    // TIMECAPS: wPeriodMin(4), wPeriodMax(4)
+    // SAFETY: validated 8-byte user buffer.
+    unsafe {
+        (p as *mut u32).write_unaligned(1);    // wPeriodMin = 1ms
+        ((p + 4) as *mut u32).write_unaligned(1000000); // wPeriodMax
+    }
+    0 // TIMERR_NOERROR
 }
 
 fn normalize_nt_path_to_fat(path: &str) -> Option<String> {

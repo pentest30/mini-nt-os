@@ -481,6 +481,88 @@ const STUB_EXPORTS_KERNEL32: &[StubExport] = &[
     StubExport { name: "GetSystemTimeAsFileTime",    rva: 0x14F0 },
     StubExport { name: "GlobalAlloc",                rva: 0x1500 },
     StubExport { name: "GlobalFree",                 rva: 0x1510 },
+    // ── Ghost Recon CRT / kernel32 imports ─────────────────────────────────
+    StubExport { name: "GlobalMemoryStatus",         rva: 0x1520 },
+    StubExport { name: "SetCurrentDirectoryA",       rva: 0x1530 },
+    StubExport { name: "GetModuleFileNameA",         rva: 0x1540 },
+    StubExport { name: "MultiByteToWideChar",        rva: 0x1550 },
+    StubExport { name: "GetVersionExA",              rva: 0x1560 },
+    StubExport { name: "lstrcpyA",                   rva: 0x1570 },
+    StubExport { name: "GetCurrentDirectoryA",       rva: 0x1580 },
+    StubExport { name: "CreateDirectoryA",           rva: 0x1590 },
+    StubExport { name: "VirtualQueryEx",             rva: 0x15A0 },
+    StubExport { name: "lstrcatA",                   rva: 0x15B0 },
+    StubExport { name: "lstrcpynA",                  rva: 0x15C0 },
+    StubExport { name: "lstrlenA",                   rva: 0x15D0 },
+    StubExport { name: "WriteFile",                  rva: 0x15E0 },
+    StubExport { name: "SetFilePointer",             rva: 0x15F0 },
+    StubExport { name: "GetFileTime",                rva: 0x1600 },
+    StubExport { name: "GetFileSize",                rva: 0x1610 },
+    StubExport { name: "FileTimeToDosDateTime",      rva: 0x1620 },
+    StubExport { name: "FileTimeToLocalFileTime",    rva: 0x1630 },
+    StubExport { name: "FindClose",                  rva: 0x1640 },
+    StubExport { name: "DeleteFileA",                rva: 0x1650 },
+    StubExport { name: "FindFirstFileA",             rva: 0x1660 },
+    StubExport { name: "FindNextFileA",              rva: 0x1670 },
+    StubExport { name: "GetFileAttributesA",         rva: 0x1680 },
+    StubExport { name: "GetVolumeInformationA",      rva: 0x1690 },
+    StubExport { name: "GetDriveTypeA",              rva: 0x16A0 },
+    StubExport { name: "GetLogicalDriveStringsA",    rva: 0x16B0 },
+    StubExport { name: "GetFullPathNameA",           rva: 0x16C0 },
+    StubExport { name: "CreateProcessA",             rva: 0x16D0 },
+    StubExport { name: "InterlockedExchange",        rva: 0x16E0 },
+    StubExport { name: "InterlockedDecrement",       rva: 0x16F0 },
+    StubExport { name: "InterlockedIncrement",       rva: 0x1700 },
+    StubExport { name: "CompareStringA",             rva: 0x1710 },
+    StubExport { name: "CompareStringW",             rva: 0x1720 },
+    StubExport { name: "ExitThread",                 rva: 0x1730 },
+    StubExport { name: "FileTimeToSystemTime",       rva: 0x1740 },
+    StubExport { name: "FlushFileBuffers",           rva: 0x1750 },
+    StubExport { name: "FreeEnvironmentStringsA",    rva: 0x1760 },
+    StubExport { name: "FreeEnvironmentStringsW",    rva: 0x1770 },
+    StubExport { name: "GetACP",                     rva: 0x1780 },
+    StubExport { name: "GetCPInfo",                  rva: 0x1790 },
+    StubExport { name: "GetCommandLineA",            rva: 0x17A0 },
+    StubExport { name: "GetEnvironmentStrings",      rva: 0x17B0 },
+    StubExport { name: "GetEnvironmentStringsW",     rva: 0x17C0 },
+    StubExport { name: "GetEnvironmentVariableA",    rva: 0x17D0 },
+    StubExport { name: "GetFileType",                rva: 0x17E0 },
+    StubExport { name: "GetLocalTime",               rva: 0x17F0 },
+    StubExport { name: "GetLocaleInfoA",             rva: 0x1800 },
+    StubExport { name: "GetLocaleInfoW",             rva: 0x1810 },
+    StubExport { name: "GetOEMCP",                   rva: 0x1820 },
+    StubExport { name: "GetStartupInfoA",            rva: 0x1830 },
+    StubExport { name: "GetStdHandle",               rva: 0x1840 },
+    StubExport { name: "GetStringTypeA",             rva: 0x1850 },
+    StubExport { name: "GetStringTypeW",             rva: 0x1860 },
+    StubExport { name: "GetSystemTime",              rva: 0x1870 },
+    StubExport { name: "GetTimeZoneInformation",     rva: 0x1880 },
+    StubExport { name: "GetUserDefaultLCID",         rva: 0x1890 },
+    StubExport { name: "GetVersion",                 rva: 0x18A0 },
+    StubExport { name: "HeapCreate",                 rva: 0x18B0 },
+    StubExport { name: "HeapDestroy",                rva: 0x18C0 },
+    StubExport { name: "HeapReAlloc",                rva: 0x18D0 },
+    StubExport { name: "HeapSize",                   rva: 0x18E0 },
+    StubExport { name: "IsBadCodePtr",               rva: 0x18F0 },
+    StubExport { name: "IsBadReadPtr",               rva: 0x1900 },
+    StubExport { name: "IsBadWritePtr",              rva: 0x1910 },
+    StubExport { name: "IsValidCodePage",            rva: 0x1920 },
+    StubExport { name: "IsValidLocale",              rva: 0x1930 },
+    StubExport { name: "LCMapStringA",               rva: 0x1940 },
+    StubExport { name: "LCMapStringW",               rva: 0x1950 },
+    StubExport { name: "MoveFileA",                  rva: 0x1960 },
+    StubExport { name: "MulDiv",                     rva: 0x1970 },
+    StubExport { name: "ReadFile",                   rva: 0x1980 },
+    StubExport { name: "RtlUnwind",                  rva: 0x1990 },
+    StubExport { name: "SetEndOfFile",               rva: 0x19A0 },
+    StubExport { name: "SetEnvironmentVariableA",    rva: 0x19B0 },
+    StubExport { name: "SetHandleCount",             rva: 0x19C0 },
+    StubExport { name: "SetStdHandle",               rva: 0x19D0 },
+    StubExport { name: "SetUnhandledExceptionFilter",rva: 0x19E0 },
+    StubExport { name: "TerminateProcess",           rva: 0x19F0 },
+    StubExport { name: "UnhandledExceptionFilter",   rva: 0x1A00 },
+    StubExport { name: "WideCharToMultiByte",        rva: 0x1A10 },
+    StubExport { name: "EnumSystemLocalesA",        rva: 0x1A20 },
 ];
 
 const STUB_EXPORTS_USER32: &[StubExport] = &[
@@ -536,6 +618,29 @@ const STUB_EXPORTS_USER32: &[StubExport] = &[
     StubExport { name: "ClientToScreen",           rva: 0x1360 },
     StubExport { name: "ScreenToClient",           rva: 0x1370 },
     StubExport { name: "MessageBoxA",              rva: 0x1380 },
+    // ── Ghost Recon user32 imports ─────────────────────────────────────────
+    StubExport { name: "AdjustWindowRect",         rva: 0x1390 },
+    StubExport { name: "CloseWindow",              rva: 0x13A0 },
+    StubExport { name: "EnumDisplaySettingsA",     rva: 0x13B0 },
+    StubExport { name: "FindWindowA",              rva: 0x13C0 },
+    StubExport { name: "FrameRect",                rva: 0x13D0 },
+    StubExport { name: "GetDoubleClickTime",       rva: 0x13E0 },
+    StubExport { name: "GetMenu",                  rva: 0x13F0 },
+    StubExport { name: "GetQueueStatus",           rva: 0x1400 },
+    StubExport { name: "GetSystemMetrics",         rva: 0x1410 },
+    StubExport { name: "LoadCursorA",              rva: 0x1420 },
+    StubExport { name: "LoadIconA",                rva: 0x1430 },
+    StubExport { name: "LoadImageA",               rva: 0x1440 },
+    StubExport { name: "MsgWaitForMultipleObjects",rva: 0x1450 },
+    StubExport { name: "PostMessageA",             rva: 0x1460 },
+    StubExport { name: "PostThreadMessageA",       rva: 0x1470 },
+    StubExport { name: "RegisterClassExA",         rva: 0x1480 },
+    StubExport { name: "RegisterWindowMessageA",   rva: 0x1490 },
+    StubExport { name: "SetFocus",                 rva: 0x14A0 },
+    StubExport { name: "SetForegroundWindow",      rva: 0x14B0 },
+    StubExport { name: "UpdateWindow",             rva: 0x14C0 },
+    StubExport { name: "wsprintfA",                rva: 0x14D0 },
+    StubExport { name: "wvsprintfA",               rva: 0x14E0 },
 ];
 
 const STUB_EXPORTS_MSVCRT: &[StubExport] = &[
@@ -551,6 +656,10 @@ const STUB_EXPORTS_WINMM: &[StubExport] = &[
     StubExport { name: "timeBeginPeriod", rva: 0x1000 },
     StubExport { name: "timeEndPeriod", rva: 0x1010 },
     StubExport { name: "timeGetTime", rva: 0x1020 },
+    // ── Ghost Recon winmm imports ──────────────────────────────────────────
+    StubExport { name: "timeGetDevCaps", rva: 0x1030 },
+    StubExport { name: "timeKillEvent",  rva: 0x1040 },
+    StubExport { name: "timeSetEvent",   rva: 0x1050 },
 ];
 
 // d3d8.dll — Direct3D 8 (Ghost Recon 2001).
@@ -584,6 +693,17 @@ const STUB_EXPORTS_GDI32: &[StubExport] = &[
     StubExport { name: "DeleteObject",       rva: 0x1030 },
     StubExport { name: "StretchBlt",         rva: 0x1040 },
     StubExport { name: "Polygon",            rva: 0x1050 },
+    // ── Ghost Recon gdi32 imports ──────────────────────────────────────────
+    StubExport { name: "CreateDIBSection",  rva: 0x1060 },
+    StubExport { name: "CreatePen",         rva: 0x1070 },
+    StubExport { name: "CreateSolidBrush",  rva: 0x1080 },
+    StubExport { name: "Ellipse",           rva: 0x1090 },
+    StubExport { name: "GdiFlush",          rva: 0x10A0 },
+    StubExport { name: "GetStockObject",    rva: 0x10B0 },
+    StubExport { name: "Polyline",          rva: 0x10C0 },
+    StubExport { name: "SelectObject",      rva: 0x10D0 },
+    StubExport { name: "SetPixel",          rva: 0x10E0 },
+    StubExport { name: "TextOutA",          rva: 0x10F0 },
 ];
 
 // setupapi.dll — GPU device enumeration (DXVK falls back gracefully on failure).
@@ -878,7 +998,18 @@ const STUB_EXPORTS_UCRT_UTILITY: &[StubExport] = &[
 // dbghelp.dll — Ghost Recon imports SymGetLineFromAddr by name.
 // Return FALSE so debug paths in game code fail gracefully.
 const STUB_EXPORTS_DBGHELP: &[StubExport] = &[
-    StubExport { name: "SymGetLineFromAddr", rva: 0x1000 },
+    StubExport { name: "SymGetLineFromAddr",      rva: 0x1000 },
+    StubExport { name: "StackWalk",               rva: 0x1010 },
+    StubExport { name: "SymCleanup",              rva: 0x1020 },
+    StubExport { name: "SymFunctionTableAccess",  rva: 0x1030 },
+    StubExport { name: "SymGetModuleInfo",        rva: 0x1040 },
+    StubExport { name: "SymGetOptions",           rva: 0x1050 },
+    StubExport { name: "SymGetSymFromAddr",       rva: 0x1060 },
+    StubExport { name: "SymInitialize",           rva: 0x1070 },
+    StubExport { name: "SymLoadModule",           rva: 0x1080 },
+    StubExport { name: "SymSetOptions",           rva: 0x1090 },
+    StubExport { name: "SymUnDName",              rva: 0x10A0 },
+    StubExport { name: "UnDecorateSymbolName",    rva: 0x10B0 },
 ];
 
 // ole32.dll — CoFreeUnusedLibraries is imported by some DLLs; void no-op.
@@ -886,6 +1017,9 @@ const STUB_EXPORTS_OLE32: &[StubExport] = &[
     StubExport { name: "CoFreeUnusedLibraries", rva: 0x1000 },
     StubExport { name: "CoInitialize",          rva: 0x1010 },
     StubExport { name: "CoUninitialize",         rva: 0x1020 },
+    StubExport { name: "CoCreateInstance",       rva: 0x1030 },
+    StubExport { name: "CoTaskMemAlloc",         rva: 0x1040 },
+    StubExport { name: "CoTaskMemFree",          rva: 0x1050 },
 ];
 
 // dinput8.dll — DirectInput8Create exported by name (some builds also ordinal).
@@ -895,21 +1029,142 @@ const STUB_EXPORTS_DINPUT8: &[StubExport] = &[
 
 // dsound.dll — DirectSoundCreate is ordinal #1 and also exported by name.
 const STUB_EXPORTS_DSOUND: &[StubExport] = &[
-    StubExport { name: "DirectSoundCreate",   rva: 0x1000 }, // ordinal 1
-    StubExport { name: "DirectSoundCreate8",  rva: 0x1010 }, // ordinal 2 (Ghost Recon)
+    StubExport { name: "DirectSoundCreate",         rva: 0x1000 }, // ordinal 1
+    StubExport { name: "DirectSoundCreate8",         rva: 0x1010 }, // ordinal 2
+    StubExport { name: "DirectSoundCaptureCreate",   rva: 0x1020 }, // ordinal 3 (pad)
+    StubExport { name: "DirectSoundCaptureCreate8",  rva: 0x1030 }, // ordinal 4 (pad)
+    StubExport { name: "DirectSoundCapture5",        rva: 0x1040 }, // ordinal 5 (pad)
+    StubExport { name: "DirectSoundCapture6",        rva: 0x1050 }, // ordinal 6 (pad)
+    StubExport { name: "DirectSoundCapture7",        rva: 0x1060 }, // ordinal 7 (pad)
+    StubExport { name: "GetDeviceID",                rva: 0x1070 }, // ordinal 8 (pad)
+    StubExport { name: "DirectSoundFullDuplexCreate",rva: 0x1080 }, // ordinal 9 (pad)
+    StubExport { name: "DllCanUnloadNow",            rva: 0x1090 }, // ordinal 10 (pad)
+    StubExport { name: "DirectSoundEnumerateA",      rva: 0x10A0 }, // ordinal 11
 ];
 
 // wsock32.dll — accept is ordinal #1; also exported by name.
 // Return SOCKET_ERROR (0xFFFF_FFFF as u32) so callers fall back to TCP-less mode.
 const STUB_EXPORTS_WSOCK32: &[StubExport] = &[
-    StubExport { name: "accept",   rva: 0x1000 }, // ordinal 1
-    StubExport { name: "connect",  rva: 0x1010 },
-    StubExport { name: "send",     rva: 0x1020 },
-    StubExport { name: "recv",     rva: 0x1030 },
-    StubExport { name: "closesocket", rva: 0x1040 },
-    StubExport { name: "WSAStartup",  rva: 0x1050 },
-    StubExport { name: "WSACleanup", rva: 0x1060 },
-    StubExport { name: "gethostbyname", rva: 0x1070 },
+    StubExport { name: "accept",         rva: 0x1000 }, // ordinal 1
+    StubExport { name: "bind",           rva: 0x1010 }, // ordinal 2
+    StubExport { name: "closesocket",    rva: 0x1020 }, // ordinal 3
+    StubExport { name: "connect",        rva: 0x1030 }, // ordinal 4
+    StubExport { name: "getpeername",    rva: 0x1040 }, // ordinal 5
+    StubExport { name: "getsockname",    rva: 0x1050 }, // ordinal 6
+    StubExport { name: "getsockopt",     rva: 0x1060 }, // ordinal 7
+    StubExport { name: "htonl",          rva: 0x1070 }, // ordinal 8
+    StubExport { name: "htons",          rva: 0x1080 }, // ordinal 9
+    StubExport { name: "inet_addr",      rva: 0x1090 }, // ordinal 10
+    StubExport { name: "inet_ntoa",      rva: 0x10A0 }, // ordinal 11
+    StubExport { name: "listen",         rva: 0x10B0 }, // ordinal 12
+    StubExport { name: "ntohl",          rva: 0x10C0 }, // ordinal 13
+    StubExport { name: "ntohs",          rva: 0x10D0 }, // ordinal 14
+    StubExport { name: "recv",           rva: 0x10E0 }, // ordinal 15
+    StubExport { name: "recvfrom",       rva: 0x10F0 }, // ordinal 16
+    StubExport { name: "select",         rva: 0x1100 }, // ordinal 17
+    StubExport { name: "send",           rva: 0x1110 }, // ordinal 18
+    StubExport { name: "sendto",         rva: 0x1120 }, // ordinal 19
+    StubExport { name: "setsockopt",     rva: 0x1130 }, // ordinal 20
+    StubExport { name: "shutdown",       rva: 0x1140 }, // ordinal 21
+    StubExport { name: "socket",         rva: 0x1150 }, // ordinal 22
+    StubExport { name: "gethostbyaddr",  rva: 0x1160 }, // ordinal 23 (placeholder)
+    // ordinals 24-51: padding stubs
+    StubExport { name: "ws_ord24",  rva: 0x1170 }, // 24
+    StubExport { name: "ws_ord25",  rva: 0x1170 }, // 25
+    StubExport { name: "ws_ord26",  rva: 0x1170 }, // 26
+    StubExport { name: "ws_ord27",  rva: 0x1170 }, // 27
+    StubExport { name: "ws_ord28",  rva: 0x1170 }, // 28
+    StubExport { name: "ws_ord29",  rva: 0x1170 }, // 29
+    StubExport { name: "ws_ord30",  rva: 0x1170 }, // 30
+    StubExport { name: "ws_ord31",  rva: 0x1170 }, // 31
+    StubExport { name: "ws_ord32",  rva: 0x1170 }, // 32
+    StubExport { name: "ws_ord33",  rva: 0x1170 }, // 33
+    StubExport { name: "ws_ord34",  rva: 0x1170 }, // 34
+    StubExport { name: "ws_ord35",  rva: 0x1170 }, // 35
+    StubExport { name: "ws_ord36",  rva: 0x1170 }, // 36
+    StubExport { name: "ws_ord37",  rva: 0x1170 }, // 37
+    StubExport { name: "ws_ord38",  rva: 0x1170 }, // 38
+    StubExport { name: "ws_ord39",  rva: 0x1170 }, // 39
+    StubExport { name: "ws_ord40",  rva: 0x1170 }, // 40
+    StubExport { name: "ws_ord41",  rva: 0x1170 }, // 41
+    StubExport { name: "ws_ord42",  rva: 0x1170 }, // 42
+    StubExport { name: "ws_ord43",  rva: 0x1170 }, // 43
+    StubExport { name: "ws_ord44",  rva: 0x1170 }, // 44
+    StubExport { name: "ws_ord45",  rva: 0x1170 }, // 45
+    StubExport { name: "ws_ord46",  rva: 0x1170 }, // 46
+    StubExport { name: "ws_ord47",  rva: 0x1170 }, // 47
+    StubExport { name: "ws_ord48",  rva: 0x1170 }, // 48
+    StubExport { name: "ws_ord49",  rva: 0x1170 }, // 49
+    StubExport { name: "ws_ord50",  rva: 0x1170 }, // 50
+    StubExport { name: "ws_ord51",  rva: 0x1170 }, // 51
+    StubExport { name: "gethostbyname",  rva: 0x1180 }, // ordinal 52
+    // ordinals 53-56: padding
+    StubExport { name: "ws_ord53",  rva: 0x1170 }, // 53
+    StubExport { name: "ws_ord54",  rva: 0x1170 }, // 54
+    StubExport { name: "ws_ord55",  rva: 0x1170 }, // 55
+    StubExport { name: "ws_ord56",  rva: 0x1170 }, // 56
+    StubExport { name: "gethostname",    rva: 0x1190 }, // ordinal 57
+    // ordinals 58-110: padding
+    StubExport { name: "ws_ord58",  rva: 0x1170 }, // 58
+    StubExport { name: "ws_ord59",  rva: 0x1170 }, // 59
+    StubExport { name: "ws_ord60",  rva: 0x1170 }, // 60
+    StubExport { name: "ws_ord61",  rva: 0x1170 }, // 61
+    StubExport { name: "ws_ord62",  rva: 0x1170 }, // 62
+    StubExport { name: "ws_ord63",  rva: 0x1170 }, // 63
+    StubExport { name: "ws_ord64",  rva: 0x1170 }, // 64
+    StubExport { name: "ws_ord65",  rva: 0x1170 }, // 65
+    StubExport { name: "ws_ord66",  rva: 0x1170 }, // 66
+    StubExport { name: "ws_ord67",  rva: 0x1170 }, // 67
+    StubExport { name: "ws_ord68",  rva: 0x1170 }, // 68
+    StubExport { name: "ws_ord69",  rva: 0x1170 }, // 69
+    StubExport { name: "ws_ord70",  rva: 0x1170 }, // 70
+    StubExport { name: "ws_ord71",  rva: 0x1170 }, // 71
+    StubExport { name: "ws_ord72",  rva: 0x1170 }, // 72
+    StubExport { name: "ws_ord73",  rva: 0x1170 }, // 73
+    StubExport { name: "ws_ord74",  rva: 0x1170 }, // 74
+    StubExport { name: "ws_ord75",  rva: 0x1170 }, // 75
+    StubExport { name: "ws_ord76",  rva: 0x1170 }, // 76
+    StubExport { name: "ws_ord77",  rva: 0x1170 }, // 77
+    StubExport { name: "ws_ord78",  rva: 0x1170 }, // 78
+    StubExport { name: "ws_ord79",  rva: 0x1170 }, // 79
+    StubExport { name: "ws_ord80",  rva: 0x1170 }, // 80
+    StubExport { name: "ws_ord81",  rva: 0x1170 }, // 81
+    StubExport { name: "ws_ord82",  rva: 0x1170 }, // 82
+    StubExport { name: "ws_ord83",  rva: 0x1170 }, // 83
+    StubExport { name: "ws_ord84",  rva: 0x1170 }, // 84
+    StubExport { name: "ws_ord85",  rva: 0x1170 }, // 85
+    StubExport { name: "ws_ord86",  rva: 0x1170 }, // 86
+    StubExport { name: "ws_ord87",  rva: 0x1170 }, // 87
+    StubExport { name: "ws_ord88",  rva: 0x1170 }, // 88
+    StubExport { name: "ws_ord89",  rva: 0x1170 }, // 89
+    StubExport { name: "ws_ord90",  rva: 0x1170 }, // 90
+    StubExport { name: "ws_ord91",  rva: 0x1170 }, // 91
+    StubExport { name: "ws_ord92",  rva: 0x1170 }, // 92
+    StubExport { name: "ws_ord93",  rva: 0x1170 }, // 93
+    StubExport { name: "ws_ord94",  rva: 0x1170 }, // 94
+    StubExport { name: "ws_ord95",  rva: 0x1170 }, // 95
+    StubExport { name: "ws_ord96",  rva: 0x1170 }, // 96
+    StubExport { name: "ws_ord97",  rva: 0x1170 }, // 97
+    StubExport { name: "ws_ord98",  rva: 0x1170 }, // 98
+    StubExport { name: "ws_ord99",  rva: 0x1170 }, // 99
+    StubExport { name: "ws_ord100", rva: 0x1170 }, // 100
+    StubExport { name: "ws_ord101", rva: 0x1170 }, // 101
+    StubExport { name: "ws_ord102", rva: 0x1170 }, // 102
+    StubExport { name: "ws_ord103", rva: 0x1170 }, // 103
+    StubExport { name: "ws_ord104", rva: 0x1170 }, // 104
+    StubExport { name: "ws_ord105", rva: 0x1170 }, // 105
+    StubExport { name: "ws_ord106", rva: 0x1170 }, // 106
+    StubExport { name: "ws_ord107", rva: 0x1170 }, // 107
+    StubExport { name: "ws_ord108", rva: 0x1170 }, // 108
+    StubExport { name: "ws_ord109", rva: 0x1170 }, // 109
+    StubExport { name: "ws_ord110", rva: 0x1170 }, // 110
+    StubExport { name: "WSAStartup",     rva: 0x11A0 }, // ordinal 111
+    // ordinals 112-114: padding
+    StubExport { name: "ws_ord112", rva: 0x1170 }, // 112
+    StubExport { name: "ws_ord113", rva: 0x1170 }, // 113
+    StubExport { name: "ws_ord114", rva: 0x1170 }, // 114
+    StubExport { name: "WSACleanup",     rva: 0x11B0 }, // ordinal 115
+    StubExport { name: "WSASetLastError",rva: 0x11C0 }, // ordinal 116
 ];
 
 // ── Dynamic DLL tracking ──────────────────────────────────────────────────────
@@ -2094,6 +2349,128 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             // GlobalAlloc(uFlags, dwBytes) → HGLOBAL: reuse HeapAlloc handler
             write_win32_stub(page.add(0x500), 0x209A, 0x0008); // GlobalAlloc(2)
             write_const_stub( page.add(0x510), 1, 4);          // GlobalFree(1) → TRUE
+            // ── Ghost Recon CRT / kernel32 imports ─────────────────────────
+            write_win32_stub(page.add(0x520), 0x20A0, 0x0004); // GlobalMemoryStatus(1)
+            write_const_stub( page.add(0x530), 1, 4);          // SetCurrentDirectoryA(1) → TRUE
+            write_win32_stub(page.add(0x540), 0x20A1, 0x000C); // GetModuleFileNameA(3)
+            write_win32_stub(page.add(0x550), 0x20A2, 0x0018); // MultiByteToWideChar(6)
+            write_win32_stub(page.add(0x560), 0x20A3, 0x0004); // GetVersionExA(1)
+            write_win32_stub(page.add(0x570), 0x20A4, 0x0008); // lstrcpyA(2)
+            write_win32_stub(page.add(0x580), 0x20A5, 0x0008); // GetCurrentDirectoryA(2)
+            write_const_stub( page.add(0x590), 1, 8);          // CreateDirectoryA(2) → TRUE
+            write_win32_stub(page.add(0x5A0), 0x2095, 0x0010); // VirtualQueryEx(4) — reuse VirtualQuery
+            write_win32_stub(page.add(0x5B0), 0x20A6, 0x0008); // lstrcatA(2)
+            write_win32_stub(page.add(0x5C0), 0x20A7, 0x000C); // lstrcpynA(3)
+            write_win32_stub(page.add(0x5D0), 0x20A8, 0x0004); // lstrlenA(1)
+            write_win32_stub(page.add(0x5E0), 0x20A9, 0x0014); // WriteFile(5)
+            write_const_stub( page.add(0x5F0), 0, 0x0010);     // SetFilePointer(4) → 0
+            write_const_stub( page.add(0x600), 1, 0x0010);     // GetFileTime(4) → TRUE (zeroed)
+            write_win32_stub(page.add(0x610), 0x20AA, 0x0004); // GetFileSize(1)
+            write_const_stub( page.add(0x620), 1, 0x000C);     // FileTimeToDosDateTime(3) → TRUE
+            write_const_stub( page.add(0x630), 1, 8);          // FileTimeToLocalFileTime(2) → TRUE
+            write_const_stub( page.add(0x640), 1, 4);          // FindClose(1) → TRUE
+            write_const_stub( page.add(0x650), 0, 4);          // DeleteFileA(1) → FALSE
+            write_win32_stub(page.add(0x660), 0x20AB, 0x0008); // FindFirstFileA(2)
+            write_const_stub( page.add(0x670), 0, 8);          // FindNextFileA(2) → FALSE (no more)
+            write_win32_stub(page.add(0x680), 0x20AC, 0x0004); // GetFileAttributesA(1)
+            write_const_stub( page.add(0x690), 1, 0x001C);     // GetVolumeInformationA(7) → TRUE
+            write_const_stub( page.add(0x6A0), 3, 4);          // GetDriveTypeA(1) → DRIVE_FIXED=3
+            write_const_stub( page.add(0x6B0), 0, 8);          // GetLogicalDriveStringsA(2) → 0
+            write_win32_stub(page.add(0x6C0), 0x20AD, 0x0010); // GetFullPathNameA(4)
+            write_const_stub( page.add(0x6D0), 0, 0x0028);     // CreateProcessA(10) → FALSE
+            // InterlockedExchange: MOV EAX,[ESP+8]; MOV ECX,[ESP+4]; XCHG [ECX],EAX; RET 8
+            {
+                let p = page.add(0x6E0);
+                p.add(0).write_unaligned(0x8Bu8); p.add(1).write_unaligned(0x44u8);
+                p.add(2).write_unaligned(0x24u8); p.add(3).write_unaligned(0x08u8); // MOV EAX,[ESP+8]
+                p.add(4).write_unaligned(0x8Bu8); p.add(5).write_unaligned(0x4Cu8);
+                p.add(6).write_unaligned(0x24u8); p.add(7).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
+                p.add(8).write_unaligned(0x87u8); p.add(9).write_unaligned(0x01u8); // XCHG [ECX],EAX
+                p.add(10).write_unaligned(0xC2u8);
+                (p.add(11) as *mut u16).write_unaligned(8u16); // RET 8
+            }
+            // InterlockedDecrement: MOV ECX,[ESP+4]; MOV EAX,-1; LOCK XADD [ECX],EAX; DEC EAX; RET 4
+            {
+                let p = page.add(0x6F0);
+                p.add(0).write_unaligned(0x8Bu8); p.add(1).write_unaligned(0x4Cu8);
+                p.add(2).write_unaligned(0x24u8); p.add(3).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
+                p.add(4).write_unaligned(0xB8u8);
+                (p.add(5) as *mut u32).write_unaligned(0xFFFF_FFFFu32); // MOV EAX,-1
+                p.add(9).write_unaligned(0xF0u8);  // LOCK
+                p.add(10).write_unaligned(0x0Fu8); p.add(11).write_unaligned(0xC1u8);
+                p.add(12).write_unaligned(0x01u8); // XADD [ECX],EAX
+                p.add(13).write_unaligned(0x48u8); // DEC EAX
+                p.add(14).write_unaligned(0xC2u8);
+                (p.add(15) as *mut u16).write_unaligned(4u16); // RET 4  (17 bytes total → fits 0x10+slot)
+            }
+            // InterlockedIncrement: MOV ECX,[ESP+4]; MOV EAX,1; LOCK XADD [ECX],EAX; INC EAX; RET 4
+            {
+                let p = page.add(0x700);
+                p.add(0).write_unaligned(0x8Bu8); p.add(1).write_unaligned(0x4Cu8);
+                p.add(2).write_unaligned(0x24u8); p.add(3).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
+                p.add(4).write_unaligned(0xB8u8);
+                (p.add(5) as *mut u32).write_unaligned(1u32); // MOV EAX,1
+                p.add(9).write_unaligned(0xF0u8);  // LOCK
+                p.add(10).write_unaligned(0x0Fu8); p.add(11).write_unaligned(0xC1u8);
+                p.add(12).write_unaligned(0x01u8); // XADD [ECX],EAX
+                p.add(13).write_unaligned(0x40u8); // INC EAX
+                p.add(14).write_unaligned(0xC2u8);
+                (p.add(15) as *mut u16).write_unaligned(4u16); // RET 4
+            }
+            write_const_stub( page.add(0x710), 2, 0x0018);     // CompareStringA(6) → CSTR_EQUAL=2
+            write_const_stub( page.add(0x720), 2, 0x0018);     // CompareStringW(6) → CSTR_EQUAL=2
+            write_win32_stub(page.add(0x730), 0x2007, 0x0004); // ExitThread(1) → reuse ExitProcess
+            write_const_stub( page.add(0x740), 1, 0x0010);     // FileTimeToSystemTime(4) → TRUE
+            write_const_stub( page.add(0x750), 1, 4);          // FlushFileBuffers(1) → TRUE
+            write_const_stub( page.add(0x760), 1, 4);          // FreeEnvironmentStringsA(1) → TRUE
+            write_const_stub( page.add(0x770), 1, 4);          // FreeEnvironmentStringsW(1) → TRUE
+            write_const_stub( page.add(0x780), 1252, 0);       // GetACP() → 1252 (Western)
+            write_win32_stub(page.add(0x790), 0x20AE, 0x0008); // GetCPInfo(2)
+            write_win32_stub(page.add(0x7A0), 0x20AF, 0x0000); // GetCommandLineA() → ptr to "-nointro\0"
+            write_const_stub( page.add(0x7B0), 0, 0);          // GetEnvironmentStrings() → NULL
+            write_const_stub( page.add(0x7C0), 0, 0);          // GetEnvironmentStringsW() → NULL
+            write_const_stub( page.add(0x7D0), 0, 0x000C);     // GetEnvironmentVariableA(3) → 0 (not found)
+            write_const_stub( page.add(0x7E0), 1, 4);          // GetFileType(1) → FILE_TYPE_DISK=1
+            write_win32_stub(page.add(0x7F0), 0x20B0, 0x0004); // GetLocalTime(1) → fill SYSTEMTIME
+            write_const_stub( page.add(0x800), 0, 0x0010);     // GetLocaleInfoA(4) → 0
+            write_const_stub( page.add(0x810), 0, 0x0010);     // GetLocaleInfoW(4) → 0
+            write_const_stub( page.add(0x820), 437, 0);        // GetOEMCP() → 437 (US)
+            write_win32_stub(page.add(0x830), 0x20B1, 0x0004); // GetStartupInfoA(1)
+            write_win32_stub(page.add(0x840), 0x20B2, 0x0004); // GetStdHandle(1)
+            write_const_stub( page.add(0x850), 0, 0x0014);     // GetStringTypeA(5) → FALSE
+            write_const_stub( page.add(0x860), 0, 0x0010);     // GetStringTypeW(4) → FALSE
+            write_win32_stub(page.add(0x870), 0x20B0, 0x0004); // GetSystemTime(1) → reuse GetLocalTime
+            write_const_stub( page.add(0x880), 0, 4);          // GetTimeZoneInformation(1) → TIME_ZONE_ID_UNKNOWN=0
+            write_const_stub( page.add(0x890), 0x0409, 0);     // GetUserDefaultLCID() → en-US
+            // GetVersion() → 0x0A280105 (XP SP2: 5.1 build 2600 platform 2)
+            write_const_stub( page.add(0x8A0), 0x0A28_0105u32, 0);
+            write_const_stub( page.add(0x8B0), 0x8000u32, 0x000C); // HeapCreate(3) → fake handle
+            write_const_stub( page.add(0x8C0), 1, 4);          // HeapDestroy(1) → TRUE
+            write_win32_stub(page.add(0x8D0), 0x20B4, 0x0010); // HeapReAlloc(4)
+            write_const_stub( page.add(0x8E0), 0, 0x000C);     // HeapSize(3) → 0
+            write_const_stub( page.add(0x8F0), 0, 8);          // IsBadCodePtr(2) → FALSE (valid)
+            write_const_stub( page.add(0x900), 0, 8);          // IsBadReadPtr(2) → FALSE (valid)
+            write_const_stub( page.add(0x910), 0, 8);          // IsBadWritePtr(2) → FALSE (valid)
+            write_const_stub( page.add(0x920), 1, 4);          // IsValidCodePage(1) → TRUE
+            write_const_stub( page.add(0x930), 1, 8);          // IsValidLocale(2) → TRUE
+            write_const_stub( page.add(0x940), 0, 0x0018);     // LCMapStringA(6) → 0
+            write_const_stub( page.add(0x950), 0, 0x0018);     // LCMapStringW(6) → 0
+            write_const_stub( page.add(0x960), 0, 8);          // MoveFileA(2) → FALSE
+            write_win32_stub(page.add(0x970), 0x20B5, 0x000C); // MulDiv(3)
+            write_win32_stub(page.add(0x980), 0x20B6, 0x0014); // ReadFile(5)
+            // RtlUnwind: void, 4 args → just return
+            write_const_stub( page.add(0x990), 0, 0x0010);     // RtlUnwind(4) → void
+            write_const_stub( page.add(0x9A0), 1, 4);          // SetEndOfFile(1) → TRUE
+            write_const_stub( page.add(0x9B0), 1, 0x000C);     // SetEnvironmentVariableA(3) → TRUE
+            // SetHandleCount(cHandles) → return cHandles (identity)
+            write_const_stub( page.add(0x9C0), 20, 4);         // SetHandleCount(1) → 20
+            write_const_stub( page.add(0x9D0), 1, 8);          // SetStdHandle(2) → TRUE
+            // SetUnhandledExceptionFilter(1) → NULL (no previous filter)
+            write_const_stub( page.add(0x9E0), 0, 4);
+            write_win32_stub(page.add(0x9F0), 0x2007, 0x0008); // TerminateProcess(2) → reuse ExitProcess
+            write_const_stub( page.add(0xA00), 0, 4);          // UnhandledExceptionFilter(1) → EXCEPTION_CONTINUE_SEARCH
+            write_win32_stub(page.add(0xA10), 0x20B7, 0x0020); // WideCharToMultiByte(8)
+            write_const_stub( page.add(0xA20), 1, 8);          // EnumSystemLocalesA(2) → TRUE
         }
 
     } else if eq_ascii_nocase(module_name, "user32.dll") {
@@ -2155,6 +2532,31 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub( page.add(0x370), 1, 0x0008);     // ScreenToClient(2) → TRUE
             // MessageBoxA(hWnd, lpText, lpCaption, uType) → IDOK = 1
             write_win32_stub(page.add(0x380), 0x2122, 0x0010); // MessageBoxA(4)
+            // ── Ghost Recon user32 imports ─────────────────────────────────
+            write_const_stub( page.add(0x390), 1, 0x000C);     // AdjustWindowRect(3) → TRUE
+            write_const_stub( page.add(0x3A0), 1, 4);          // CloseWindow(1) → TRUE
+            write_win32_stub(page.add(0x3B0), 0x2123, 0x000C); // EnumDisplaySettingsA(3)
+            write_const_stub( page.add(0x3C0), 0, 8);          // FindWindowA(2) → NULL (not found)
+            write_const_stub( page.add(0x3D0), 0, 0x000C);     // FrameRect(3) → 0
+            write_const_stub( page.add(0x3E0), 500, 0);        // GetDoubleClickTime() → 500ms
+            write_const_stub( page.add(0x3F0), 0, 4);          // GetMenu(1) → NULL
+            write_const_stub( page.add(0x400), 0, 4);          // GetQueueStatus(1) → 0 (no messages)
+            write_win32_stub(page.add(0x410), 0x2124, 0x0004); // GetSystemMetrics(1)
+            write_const_stub( page.add(0x420), 0x100, 8);      // LoadCursorA(2) → fake HCURSOR
+            write_const_stub( page.add(0x430), 0x200, 8);      // LoadIconA(2) → fake HICON
+            write_const_stub( page.add(0x440), 0x300, 0x0018); // LoadImageA(6) → fake HANDLE
+            write_const_stub( page.add(0x450), 0, 0x0014);     // MsgWaitForMultipleObjects(5) → WAIT_OBJECT_0
+            write_const_stub( page.add(0x460), 1, 0x0010);     // PostMessageA(4) → TRUE
+            write_const_stub( page.add(0x470), 1, 0x0010);     // PostThreadMessageA(4) → TRUE
+            write_win32_stub(page.add(0x480), 0x2017, 0x0004); // RegisterClassExA(1) → reuse RegisterClassA
+            write_const_stub( page.add(0x490), 0xC000, 4);     // RegisterWindowMessageA(1) → 0xC000
+            write_const_stub( page.add(0x4A0), 0x1000, 4);     // SetFocus(1) → prev HWND
+            write_const_stub( page.add(0x4B0), 1, 4);          // SetForegroundWindow(1) → TRUE
+            write_const_stub( page.add(0x4C0), 1, 4);          // UpdateWindow(1) → TRUE
+            // wsprintfA: cdecl, varargs — just return 0 (wrote 0 chars)
+            write_cdecl_const_stub(page.add(0x4D0), 0);
+            // wvsprintfA: cdecl — just return 0
+            write_cdecl_const_stub(page.add(0x4E0), 0);
         }
 
     } else if eq_ascii_nocase(module_name, "msvcrt.dll") {
@@ -2173,6 +2575,10 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x000), 0x2030, 0x0004); // timeBeginPeriod(1)
             write_win32_stub(page.add(0x010), 0x2031, 0x0004); // timeEndPeriod(1)
             write_win32_stub(page.add(0x020), 0x2032, 0x0000); // timeGetTime()
+            // ── Ghost Recon winmm imports ──────────────────────────────────
+            write_win32_stub(page.add(0x030), 0x2033, 0x0008); // timeGetDevCaps(2)
+            write_const_stub( page.add(0x040), 0, 4);          // timeKillEvent(1) → TIMERR_NOERROR
+            write_const_stub( page.add(0x050), 1, 0x0014);     // timeSetEvent(5) → fake timer ID 1
         }
 
     } else if eq_ascii_nocase(module_name, "d3d8.dll") {
@@ -2201,6 +2607,17 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub(page.add(0x040), 1, 0x002C);      // StretchBlt(11) → TRUE
             // Polygon(hdc, lppt, cCount) → TRUE; Ghost Recon uses GDI for debug overlays.
             write_const_stub(page.add(0x050), 1, 0x000C);      // Polygon(3) → TRUE
+            // ── Ghost Recon gdi32 imports ──────────────────────────────────
+            write_const_stub(page.add(0x060), 0, 0x0018);      // CreateDIBSection(6) → NULL
+            write_const_stub(page.add(0x070), 0x300, 0x0014);  // CreatePen(5) → fake HPEN
+            write_const_stub(page.add(0x080), 0x400, 4);       // CreateSolidBrush(1) → fake HBRUSH
+            write_const_stub(page.add(0x090), 1, 0x0014);      // Ellipse(5) → TRUE
+            write_const_stub(page.add(0x0A0), 1, 0);           // GdiFlush() → TRUE
+            write_const_stub(page.add(0x0B0), 0x500, 4);       // GetStockObject(1) → fake GDI obj
+            write_const_stub(page.add(0x0C0), 1, 0x000C);      // Polyline(3) → TRUE
+            write_const_stub(page.add(0x0D0), 0x600, 8);       // SelectObject(2) → fake prev obj
+            write_const_stub(page.add(0x0E0), 0, 0x000C);      // SetPixel(3) → CLR_INVALID=0
+            write_const_stub(page.add(0x0F0), 1, 0x0014);      // TextOutA(5) → TRUE
         }
 
     } else if eq_ascii_nocase(module_name, "setupapi.dll") {
@@ -2395,10 +2812,20 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         }
 
     } else if eq_ascii_nocase(module_name, "dbghelp.dll") {
-        // SymGetLineFromAddr(hProcess, dwAddr, pdwDisplacement, Line) → FALSE
-        // Ghost Recon calls this only in debug/crash paths; returning FALSE is safe.
+        // All dbghelp functions return FALSE/0 — Ghost Recon only uses these in debug paths.
         unsafe {
             write_const_stub(page.add(0x000), 0, 0x0010); // SymGetLineFromAddr(4) → FALSE
+            write_const_stub(page.add(0x010), 0, 0x001C); // StackWalk(7) → FALSE
+            write_const_stub(page.add(0x020), 1, 4);      // SymCleanup(1) → TRUE
+            write_const_stub(page.add(0x030), 0, 8);      // SymFunctionTableAccess(2) → NULL
+            write_const_stub(page.add(0x040), 0, 8);      // SymGetModuleInfo(2) → FALSE
+            write_const_stub(page.add(0x050), 0, 0);      // SymGetOptions() → 0
+            write_const_stub(page.add(0x060), 0, 0x0010); // SymGetSymFromAddr(4) → FALSE
+            write_const_stub(page.add(0x070), 1, 0x000C); // SymInitialize(3) → TRUE
+            write_const_stub(page.add(0x080), 0, 0x0018); // SymLoadModule(6) → 0
+            write_const_stub(page.add(0x090), 0, 4);      // SymSetOptions(1) → 0 (prev options)
+            write_const_stub(page.add(0x0A0), 0, 0x0010); // SymUnDName(4) → FALSE
+            write_const_stub(page.add(0x0B0), 0, 0x0010); // UnDecorateSymbolName(4) → 0
         }
 
     } else if eq_ascii_nocase(module_name, "ole32.dll") {
@@ -2406,9 +2833,12 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         // CoInitialize(pvReserved) → S_OK (0).
         // CoUninitialize() → void.
         unsafe {
-            write_const_stub(page.add(0x000), 0, 0); // CoFreeUnusedLibraries() → void
-            write_const_stub(page.add(0x010), 0, 4); // CoInitialize(1) → S_OK
-            write_const_stub(page.add(0x020), 0, 0); // CoUninitialize() → void
+            write_const_stub(page.add(0x000), 0, 0);               // CoFreeUnusedLibraries() → void
+            write_const_stub(page.add(0x010), 0, 4);               // CoInitialize(1) → S_OK
+            write_const_stub(page.add(0x020), 0, 0);               // CoUninitialize() → void
+            write_const_stub(page.add(0x030), 0x8000_4002u32, 0x0014); // CoCreateInstance(5) → E_NOINTERFACE
+            write_win32_stub(page.add(0x040), 0x2020, 0x0000);     // CoTaskMemAlloc(1) → reuse malloc (cdecl)
+            write_const_stub(page.add(0x050), 0, 4);               // CoTaskMemFree(1) → void
         }
 
     } else if eq_ascii_nocase(module_name, "dinput8.dll") {
@@ -2419,27 +2849,56 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         }
 
     } else if eq_ascii_nocase(module_name, "dsound.dll") {
-        // DirectSoundCreate  (ordinal 1, also by name): returns DSERR_NODRIVER.
-        // DirectSoundCreate8 (ordinal 2, also by name): same.
         // 0x88780078 = DSERR_NODRIVER — game falls back to null audio.
         unsafe {
-            write_const_stub(page.add(0x000), 0x8878_0078u32, 0x000C); // DirectSoundCreate(3)
-            write_const_stub(page.add(0x010), 0x8878_0078u32, 0x0010); // DirectSoundCreate8(4)
+            write_const_stub(page.add(0x000), 0x8878_0078u32, 0x000C); // DirectSoundCreate(3) ord 1
+            write_const_stub(page.add(0x010), 0x8878_0078u32, 0x0010); // DirectSoundCreate8(4) ord 2
+            write_const_stub(page.add(0x020), 0x8878_0078u32, 0x000C); // ord 3 → DSERR_NODRIVER
+            write_const_stub(page.add(0x030), 0x8878_0078u32, 0x000C); // ord 4 → DSERR_NODRIVER
+            write_const_stub(page.add(0x040), 0x8878_0078u32, 0x000C); // ord 5 → DSERR_NODRIVER
+            write_const_stub(page.add(0x050), 0x8878_0078u32, 0x000C); // ord 6 → DSERR_NODRIVER
+            write_const_stub(page.add(0x060), 0x8878_0078u32, 0x000C); // ord 7 → DSERR_NODRIVER
+            write_const_stub(page.add(0x070), 0x8878_0078u32, 0x000C); // ord 8 GetDeviceID
+            write_const_stub(page.add(0x080), 0x8878_0078u32, 0x000C); // ord 9
+            write_const_stub(page.add(0x090), 0, 0);                   // ord 10 DllCanUnloadNow → S_FALSE
+            // DirectSoundEnumerateA(cb, ctx) → DS_OK (0); just return without calling callback
+            write_const_stub(page.add(0x0A0), 0, 8);                   // ord 11
         }
 
     } else if eq_ascii_nocase(module_name, "wsock32.dll") {
-        // All stubs return SOCKET_ERROR (0xFFFF_FFFF) or WSAEINVAL so the game
-        // disables its network code cleanly.
-        // accept(s, addr, addrlen) stdcall 3 args
+        // All stubs return SOCKET_ERROR (0xFFFF_FFFF) so the game disables network.
+        // Ordinal-indexed: each export array entry maps to an ordinal via ordinal_base.
         unsafe {
-            write_const_stub(page.add(0x000), 0xFFFF_FFFFu32, 0x000C); // accept(3) → SOCKET_ERROR
-            write_const_stub(page.add(0x010), 0xFFFF_FFFFu32, 0x000C); // connect(3) → SOCKET_ERROR
-            write_const_stub(page.add(0x020), 0xFFFF_FFFFu32, 0x0010); // send(4) → SOCKET_ERROR
-            write_const_stub(page.add(0x030), 0xFFFF_FFFFu32, 0x0010); // recv(4) → SOCKET_ERROR
-            write_const_stub(page.add(0x040), 0xFFFF_FFFFu32, 0x0004); // closesocket(1) → SOCKET_ERROR
-            write_const_stub(page.add(0x050), 0x0000_0000u32, 0x0008); // WSAStartup(2) → 0 (success)
-            write_const_stub(page.add(0x060), 0x0000_0000u32, 0);      // WSACleanup() → 0
-            write_const_stub(page.add(0x070), 0x0000_0000u32, 0x0004); // gethostbyname(1) → NULL
+            write_const_stub(page.add(0x000), 0xFFFF_FFFFu32, 0x000C); // ord 1  accept(3)
+            write_const_stub(page.add(0x010), 0xFFFF_FFFFu32, 0x000C); // ord 2  bind(3)
+            write_const_stub(page.add(0x020), 0xFFFF_FFFFu32, 4);      // ord 3  closesocket(1)
+            write_const_stub(page.add(0x030), 0xFFFF_FFFFu32, 0x000C); // ord 4  connect(3)
+            write_const_stub(page.add(0x040), 0xFFFF_FFFFu32, 0x000C); // ord 5  getpeername(3)
+            write_const_stub(page.add(0x050), 0xFFFF_FFFFu32, 0x000C); // ord 6  getsockname(3)
+            write_const_stub(page.add(0x060), 0xFFFF_FFFFu32, 0x0014); // ord 7  getsockopt(5)
+            write_const_stub(page.add(0x070), 0, 4);                   // ord 8  htonl(1) → 0
+            write_const_stub(page.add(0x080), 0, 4);                   // ord 9  htons(1) → 0
+            write_const_stub(page.add(0x090), 0xFFFF_FFFFu32, 4);      // ord 10 inet_addr(1) → INADDR_NONE
+            write_const_stub(page.add(0x0A0), 0, 4);                   // ord 11 inet_ntoa(1) → NULL
+            write_const_stub(page.add(0x0B0), 0xFFFF_FFFFu32, 8);      // ord 12 listen(2)
+            write_const_stub(page.add(0x0C0), 0, 4);                   // ord 13 ntohl(1) → 0
+            write_const_stub(page.add(0x0D0), 0, 4);                   // ord 14 ntohs(1) → 0
+            write_const_stub(page.add(0x0E0), 0xFFFF_FFFFu32, 0x0010); // ord 15 recv(4)
+            write_const_stub(page.add(0x0F0), 0xFFFF_FFFFu32, 0x0018); // ord 16 recvfrom(6)
+            write_const_stub(page.add(0x100), 0xFFFF_FFFFu32, 0x0014); // ord 17 select(5)
+            write_const_stub(page.add(0x110), 0xFFFF_FFFFu32, 0x0010); // ord 18 send(4)
+            write_const_stub(page.add(0x120), 0xFFFF_FFFFu32, 0x0018); // ord 19 sendto(6)
+            write_const_stub(page.add(0x130), 0xFFFF_FFFFu32, 0x0014); // ord 20 setsockopt(5)
+            write_const_stub(page.add(0x140), 0xFFFF_FFFFu32, 8);      // ord 21 shutdown(2)
+            write_const_stub(page.add(0x150), 0xFFFF_FFFFu32, 0x000C); // ord 22 socket(3)
+            write_const_stub(page.add(0x160), 0, 0x000C);              // ord 23 gethostbyaddr(3) → NULL
+            // ord 24-51: padding → all point to 0x1170 (a single SOCKET_ERROR stub)
+            write_const_stub(page.add(0x170), 0xFFFF_FFFFu32, 4);      // generic SOCKET_ERROR stub
+            write_const_stub(page.add(0x180), 0, 4);                   // ord 52 gethostbyname(1) → NULL
+            write_const_stub(page.add(0x190), 0, 4);                   // ord 57 gethostname(1) → NULL/err
+            write_const_stub(page.add(0x1A0), 0, 8);                   // ord 111 WSAStartup(2) → 0
+            write_const_stub(page.add(0x1B0), 0, 0);                   // ord 115 WSACleanup() → 0
+            write_const_stub(page.add(0x1C0), 0, 4);                   // ord 116 WSASetLastError(1) → void
         }
 
     } else if eq_ascii_nocase(module_name, "vulkan-1.dll") {
