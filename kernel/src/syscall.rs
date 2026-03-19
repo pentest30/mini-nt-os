@@ -366,7 +366,7 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         WIN32_LSTRLEN_A            => win32_lstrlen_a(args_ptr),
         WIN32_WRITE_FILE           => win32_write_file(args_ptr),
         WIN32_GET_FILE_SIZE        => win32_get_file_size(args_ptr),
-        WIN32_FIND_FIRST_FILE_A    => 0xFFFF_FFFF, // INVALID_HANDLE_VALUE — no files found
+        WIN32_FIND_FIRST_FILE_A    => win32_find_first_file_a(args_ptr),
         WIN32_GET_FILE_ATTRS_A     => win32_get_file_attributes_a(args_ptr),
         WIN32_GET_FULL_PATH_A      => win32_get_full_path_name_a(args_ptr),
         WIN32_GET_CP_INFO          => win32_get_cp_info(args_ptr),
@@ -3867,7 +3867,7 @@ fn win32_get_module_file_name_a(args_ptr: u32) -> u32 {
     let _module = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
     let buf     = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
     let size    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let path = b"C:\\game.exe\0";
+    let path = b"C:\\GhostRecon\\GhostRecon.exe\0";
     let copy_len = (path.len() as u32).min(size);
     if copy_len == 0 || !is_user_range(buf, copy_len) { return 0; }
     // SAFETY: validated user buffer.
@@ -3964,10 +3964,10 @@ fn win32_lstrcpy_a(args_ptr: u32) -> u32 {
 fn win32_get_current_dir_a(args_ptr: u32) -> u32 {
     let size = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
     let buf  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let dir = b"C:\\\0";
+    let dir = b"C:\\GhostRecon\0";
     if size < dir.len() as u32 || !is_user_range(buf, dir.len() as u32) { return dir.len() as u32; }
     unsafe { core::ptr::copy_nonoverlapping(dir.as_ptr(), buf as *mut u8, dir.len()); }
-    3 // "C:\" = 3 chars
+    (dir.len() - 1) as u32 // exclude NUL
 }
 
 /// lstrcatA(dst, src) → dst
@@ -4084,19 +4084,8 @@ fn win32_create_file_a(args_ptr: u32) -> u32 {
     let len = read_cstr_user_buf(name_ptr, &mut buf);
     if len == 0 { return 0xFFFF_FFFF; }
     let path = core::str::from_utf8(&buf[..len]).unwrap_or("");
-    log::info!("[CreateFileA] '{}'", path);
-
-    // Strip drive letter and backslash prefix, convert \ to /
-    let mut fat_path = alloc::string::String::from("/");
-    let stripped = path.trim_start_matches(|c: char| c == '\\' || c == '/')
-        .trim_start_matches(|c: char| c.is_ascii_alphanumeric())
-        .trim_start_matches(':')
-        .trim_start_matches(|c: char| c == '\\' || c == '/');
-    let stripped = if stripped.is_empty() { path.trim_start_matches(|c: char| c == '\\' || c == '/') } else { stripped };
-    for ch in stripped.chars() {
-        if ch == '\\' { fat_path.push('/'); }
-        else { fat_path.push(ch.to_ascii_uppercase()); }
-    }
+    let fat_path = win32_path_to_fat(path);
+    log::info!("[CreateFileA] '{}' -> '{}'", path, fat_path);
 
     // Try ramdisk first
     if let Ok(file) = io_manager::open_fat_file(&fat_path) {
@@ -4169,14 +4158,112 @@ fn win32_message_box_a(args_ptr: u32) -> u32 {
     1 // IDOK
 }
 
+/// Convert a Win32 path like "C:\GhostRecon\Data\Shell\texture.rsb" to "/DATA/SHELL/TEXTURE.RSB"
+fn win32_path_to_fat(path: &str) -> alloc::string::String {
+    let mut fat = alloc::string::String::from("/");
+    // Strip drive letter prefix (e.g., "C:\GhostRecon\")
+    let mut s = path;
+    if s.len() >= 2 && s.as_bytes()[1] == b':' { s = &s[2..]; }
+    // Strip leading slashes
+    s = s.trim_start_matches(|c: char| c == '\\' || c == '/');
+    // Strip "GhostRecon\" prefix if present (game dir name)
+    if s.len() > 11 && s[..11].eq_ignore_ascii_case("GhostRecon\\") { s = &s[11..]; }
+    if s.len() > 11 && s[..11].eq_ignore_ascii_case("GhostRecon/") { s = &s[11..]; }
+    for ch in s.chars() {
+        if ch == '\\' { fat.push('/'); }
+        else { fat.push(ch.to_ascii_uppercase()); }
+    }
+    // Remove trailing wildcard for FindFirstFile patterns
+    if fat.ends_with("/*") || fat.ends_with("\\*") {
+        fat.truncate(fat.len() - 2);
+    }
+    if fat.ends_with("*.*") {
+        fat.truncate(fat.len() - 3);
+    }
+    fat
+}
+
+fn win32_find_first_file_a(args_ptr: u32) -> u32 {
+    // FindFirstFileA(lpFileName, lpFindFileData) → HANDLE or INVALID_HANDLE_VALUE
+    let name_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let data_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let mut buf = [0u8; 260];
+    let len = read_cstr_user_buf(name_ptr, &mut buf);
+    if len == 0 { return 0xFFFF_FFFF; }
+    let path = core::str::from_utf8(&buf[..len]).unwrap_or("");
+    let fat_path = win32_path_to_fat(path);
+    log::info!("[FindFirstFileA] '{}' -> '{}'", path, fat_path);
+
+    // Try to list the directory on the game disk
+    if let Ok(entries) = io_manager::list_game_dir(&fat_path) {
+        if !entries.is_empty() && is_user_range(data_ptr, 320) {
+            // Fill WIN32_FIND_DATAA (320 bytes):
+            //   +0   dwFileAttributes (u32)
+            //   +4   ftCreationTime (8)
+            //   +12  ftLastAccessTime (8)
+            //   +20  ftLastWriteTime (8)
+            //   +28  nFileSizeHigh (u32)
+            //   +32  nFileSizeLow (u32)
+            //   +36  dwReserved0/1 (8)
+            //   +44  cFileName[260]
+            //   +304 cAlternateFileName[14]
+            unsafe { core::ptr::write_bytes(data_ptr as *mut u8, 0, 320); }
+            let e = &entries[0];
+            let attr: u32 = if e.attr & 0x10 != 0 { 0x10 } else { 0x80 };
+            let _ = write_u32_user(data_ptr, attr);
+            let _ = write_u32_user(data_ptr + 32, e.file_size);
+            // Write filename
+            let name_bytes = e.name.as_bytes();
+            for (i, &b) in name_bytes.iter().take(259).enumerate() {
+                let _ = write_u8_user(data_ptr + 44 + i as u32, b);
+            }
+            return 0x100; // fake search handle
+        }
+    }
+
+    // Also try ramdisk
+    if let Ok(entries) = io_manager::list_fat_dir(&fat_path) {
+        if !entries.is_empty() && is_user_range(data_ptr, 320) {
+            unsafe { core::ptr::write_bytes(data_ptr as *mut u8, 0, 320); }
+            let e = &entries[0];
+            let attr: u32 = if e.attr & 0x10 != 0 { 0x10 } else { 0x80 };
+            let _ = write_u32_user(data_ptr, attr);
+            let _ = write_u32_user(data_ptr + 32, e.file_size);
+            let name_bytes = e.name.as_bytes();
+            for (i, &b) in name_bytes.iter().take(259).enumerate() {
+                let _ = write_u8_user(data_ptr + 44 + i as u32, b);
+            }
+            return 0x100;
+        }
+    }
+
+    0xFFFF_FFFF // not found
+}
+
 fn win32_get_file_attributes_a(args_ptr: u32) -> u32 {
     let name_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
-    let mut buf = [0u8; 128];
+    let mut buf = [0u8; 260];
     let len = read_cstr_user_buf(name_ptr, &mut buf);
-    let path = core::str::from_utf8(&buf[..len]).unwrap_or("?");
-    log::info!("[GetFileAttribA] '{}'", path);
-    // Return FILE_ATTRIBUTE_NORMAL (0x80) for files, DIRECTORY (0x10) for known dirs
-    0x80
+    if len == 0 { return 0xFFFF_FFFF; }
+    let path = core::str::from_utf8(&buf[..len]).unwrap_or("");
+    let fat_path = win32_path_to_fat(path);
+
+    // Check game disk for the path (try as directory first, then file)
+    if let Ok(_entries) = io_manager::list_game_dir(&fat_path) {
+        return 0x10; // FILE_ATTRIBUTE_DIRECTORY
+    }
+    if let Ok(_file) = io_manager::open_game_file(&fat_path) {
+        return 0x80; // FILE_ATTRIBUTE_NORMAL
+    }
+    // Check ramdisk
+    if let Ok(_entries) = io_manager::list_fat_dir(&fat_path) {
+        return 0x10;
+    }
+    if let Ok(_file) = io_manager::open_fat_file(&fat_path) {
+        return 0x80;
+    }
+
+    0xFFFF_FFFF // INVALID_FILE_ATTRIBUTES (not found)
 }
 
 /// GetFullPathNameA(lpFileName, nBufferLength, lpBuffer, lpFilePart) → DWORD

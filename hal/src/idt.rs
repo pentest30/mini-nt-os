@@ -129,7 +129,13 @@ extern "x86-interrupt" fn exception_page_fault(
     use core::sync::atomic::{AtomicBool, Ordering};
     static IN_PF: AtomicBool = AtomicBool::new(false);
     if IN_PF.swap(true, Ordering::SeqCst) {
-        // Nested page fault — halt immediately to avoid infinite recursion.
+        // Nested page fault — log minimal info then halt.
+        let cr2 = unsafe { x86_64::registers::control::Cr2::read_raw() };
+        super::serial::write_str("\n[NESTED #PF] CR2=0x");
+        serial_hex64(cr2);
+        super::serial::write_str(" RIP=0x");
+        serial_hex64(frame.instruction_pointer.as_u64());
+        super::serial::write_str("\n");
         loop { x86_64::instructions::hlt(); }
     }
     exception_page_fault_inner(frame, error);
