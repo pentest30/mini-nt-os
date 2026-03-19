@@ -2429,10 +2429,10 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub( page.add(0x780), 1252, 0);       // GetACP() → 1252 (Western)
             write_win32_stub(page.add(0x790), 0x20AE, 0x0008); // GetCPInfo(2)
             write_win32_stub(page.add(0x7A0), 0x20AF, 0x0000); // GetCommandLineA() → ptr to "-nointro\0"
-            write_const_stub( page.add(0x7B0), 0, 0);          // GetEnvironmentStrings() → NULL
+            write_win32_stub(page.add(0x7B0), 0x2125, 0x0000); // GetEnvironmentStrings() → syscall
             write_const_stub( page.add(0x7C0), 0, 0);          // GetEnvironmentStringsW() → NULL
             write_const_stub( page.add(0x7D0), 0, 0x000C);     // GetEnvironmentVariableA(3) → 0 (not found)
-            write_win32_stub(page.add(0x7E0), 0x20AF, 0x0004); // GetFileType(1) → syscall
+            write_win32_stub(page.add(0x7E0), 0x20B7, 0x0004); // GetFileType(1) → syscall
             write_win32_stub(page.add(0x7F0), 0x20B0, 0x0004); // GetLocalTime(1) → fill SYSTEMTIME
             write_const_stub( page.add(0x800), 0, 0x0010);     // GetLocaleInfoA(4) → 0
             write_const_stub( page.add(0x810), 0, 0x0010);     // GetLocaleInfoW(4) → 0

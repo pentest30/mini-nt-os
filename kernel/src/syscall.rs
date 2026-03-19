@@ -120,7 +120,7 @@ const WIN32_FIND_FIRST_FILE_A:    u32 = 0x20AB;
 const WIN32_GET_FILE_ATTRS_A:     u32 = 0x20AC;
 const WIN32_GET_FULL_PATH_A:      u32 = 0x20AD;
 const WIN32_GET_CP_INFO:          u32 = 0x20AE;
-const WIN32_GET_FILE_TYPE:        u32 = 0x20AF;
+const WIN32_GET_FILE_TYPE:        u32 = 0x20B7; // was 0x20AF — collided with GetCommandLineA!
 const WIN32_GET_COMMAND_LINE_A:   u32 = 0x20AF;
 const WIN32_GET_LOCAL_TIME:       u32 = 0x20B0;
 const WIN32_GET_STARTUP_INFO_A:   u32 = 0x20B1;
@@ -135,6 +135,7 @@ const WIN32_ENUM_DISPLAY_SETTINGS:u32 = 0x2121;
 const WIN32_MESSAGE_BOX_A:        u32 = 0x2122;
 const WIN32_ENUM_DISPLAY_SETTINGS_A: u32 = 0x2123;
 const WIN32_GET_SYSTEM_METRICS:   u32 = 0x2124;
+const WIN32_GET_ENV_STRINGS_A:   u32 = 0x2125;
 // ── winmm ───────────────────────────────────────────────────────────────────
 const WIN32_TIME_GET_DEV_CAPS:    u32 = 0x2033;
 // ── UCRT (api-ms-win-crt-*) ───────────────────────────────────────────────────
@@ -385,6 +386,7 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         WIN32_MESSAGE_BOX_A        => win32_message_box_a(args_ptr),
         WIN32_ENUM_DISPLAY_SETTINGS_A => win32_enum_display_settings_a(args_ptr),
         WIN32_GET_SYSTEM_METRICS   => win32_get_system_metrics(args_ptr),
+        WIN32_GET_ENV_STRINGS_A    => win32_get_env_strings_a(),
         // ── winmm ───────────────────────────────────────────────────────────
         WIN32_TIME_GET_DEV_CAPS    => win32_time_get_dev_caps(args_ptr),
         // ── UCRT ──────────────────────────────────────────────────────────────
@@ -4133,6 +4135,36 @@ fn allocate_game_file_handle(file: io_manager::FatFile) -> u32 {
     0xFFFF_FFFF
 }
 
+static ENV_BLOCK_PTR: Mutex<u32> = Mutex::new(0);
+fn win32_get_env_strings_a() -> u32 {
+    let mut guard = ENV_BLOCK_PTR.lock();
+    if *guard != 0 { return *guard; }
+    // Allocate a page for the environment block at a fixed VA.
+    let fixed_va = 0x00E1_0000u64;
+    let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
+    let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
+    let mut ctx_guard = SYSCALL_CTX.lock();
+    let ctx = match ctx_guard.as_mut() { Some(v) => v, None => return 0 };
+    let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
+    match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), fixed_va, 0x1000, alloc, protect) {
+        Ok(base) => {
+            // Write a minimal environment block: "PATH=C:\0\0" (double-NUL terminated)
+            let env = b"PATH=C:\\\0\0";
+            unsafe { core::ptr::copy_nonoverlapping(env.as_ptr(), base as *mut u8, env.len()); }
+            *guard = base as u32;
+            base as u32
+        }
+        Err(_) => {
+            // Fallback: use a fixed address in the PEB page
+            let addr = 0x7FFD_E200u32;
+            let env = b"PATH=C:\\\0\0";
+            unsafe { core::ptr::copy_nonoverlapping(env.as_ptr(), addr as *mut u8, env.len()); }
+            *guard = addr;
+            addr
+        }
+    }
+}
+
 fn win32_get_file_type(args_ptr: u32) -> u32 {
     let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
     // Stdio pseudo-handles (3=stdin, 7=stdout, 11=stderr) → FILE_TYPE_CHAR
@@ -4321,23 +4353,34 @@ fn win32_get_command_line_a() -> u32 {
     if *guard != 0 {
         return *guard;
     }
-    // Allocate a small user-mode buffer for the command line string
-    let cmd = b"-nointro\0";
+    // Allocate a small user-mode buffer for the command line string.
+    // Use a FIXED VA to avoid allocator issues during early CRT init.
+    let cmd = b"GhostRecon.exe -nointro\0";
+    let fixed_va = 0x00E0_0000u64; // fixed page below the trampoline
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
     let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
     let mut ctx_guard = SYSCALL_CTX.lock();
     let ctx = match ctx_guard.as_mut() { Some(v) => v, None => return 0 };
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
-    match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, 0x1000, alloc, protect) {
+    match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), fixed_va, 0x1000, alloc, protect) {
         Ok(base) => {
-            // SAFETY: freshly allocated page.
             unsafe {
                 core::ptr::copy_nonoverlapping(cmd.as_ptr(), base as *mut u8, cmd.len());
             }
             *guard = base as u32;
+            log::info!("[GetCommandLineA] -> {:#x}", base as u32);
             base as u32
         }
-        Err(_) => 0,
+        Err(e) => {
+            log::warn!("[GetCommandLineA] alloc failed: {}", e);
+            // Fallback: return a pointer into the PEB page (offset 0x100)
+            let peb_cmd = 0x7FFD_E100u32;
+            unsafe {
+                core::ptr::copy_nonoverlapping(cmd.as_ptr(), peb_cmd as *mut u8, cmd.len());
+            }
+            *guard = peb_cmd;
+            peb_cmd
+        }
     }
 }
 
