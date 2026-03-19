@@ -136,6 +136,7 @@ const WIN32_MESSAGE_BOX_A:        u32 = 0x2122;
 const WIN32_ENUM_DISPLAY_SETTINGS_A: u32 = 0x2123;
 const WIN32_GET_SYSTEM_METRICS:   u32 = 0x2124;
 const WIN32_GET_ENV_STRINGS_A:   u32 = 0x2125;
+const WIN32_LOG_INITTERM:        u32 = 0x2126;
 // ── winmm ───────────────────────────────────────────────────────────────────
 const WIN32_TIME_GET_DEV_CAPS:    u32 = 0x2033;
 // ── UCRT (api-ms-win-crt-*) ───────────────────────────────────────────────────
@@ -387,6 +388,12 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         WIN32_ENUM_DISPLAY_SETTINGS_A => win32_enum_display_settings_a(args_ptr),
         WIN32_GET_SYSTEM_METRICS   => win32_get_system_metrics(args_ptr),
         WIN32_GET_ENV_STRINGS_A    => win32_get_env_strings_a(),
+        WIN32_LOG_INITTERM         => {
+            let addr = read_arg_u32(args_ptr, 0).unwrap_or(0);
+            hal::serial::write_str("[_initterm] calling 0x");
+            hal::serial::write_fmt(core::format_args!("{:x}\n", addr));
+            0
+        },
         // ── winmm ───────────────────────────────────────────────────────────
         WIN32_TIME_GET_DEV_CAPS    => win32_time_get_dev_caps(args_ptr),
         // ── UCRT ──────────────────────────────────────────────────────────────

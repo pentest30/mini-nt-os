@@ -2647,23 +2647,11 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         // function pointer in the [begin, end) array.  Cannot be INT 0x2E stubs
         // because they call user-mode function pointers directly.
         //
-        // _initterm: run constructors. User-mode #PF now terminates the thread
-        // instead of panicking the kernel, so crashed constructors are survivable.
-        #[rustfmt::skip]
-        let initterm_code: [u8; 26] = [
-            0x56,                    // PUSH ESI
-            0x8B, 0x74, 0x24, 0x08,  // MOV ESI, [ESP+8]
-            0x3B, 0x74, 0x24, 0x0C,  // CMP ESI, [ESP+0C]
-            0x73, 0x0D,              // JAE done
-            0x8B, 0x06,              // MOV EAX, [ESI]
-            0x83, 0xC6, 0x04,        // ADD ESI, 4
-            0x85, 0xC0,              // TEST EAX, EAX
-            0x74, 0x02,              // JZ skip
-            0xFF, 0xD0,              // CALL EAX
-            0xEB, 0xED,              // JMP loop
-            0x5E,                    // POP ESI (done)
-            0xC3,                    // RET
-        ];
+        // _initterm: kernel-driven constructor iteration via syscall.
+        // _initterm: no-op for now. Constructors crash because they call through
+        // uninitialized COM vtables (NULL pointers from CoCreateInstance returning
+        // E_NOINTERFACE). TODO Phase 4: proper COM stub objects.
+        let initterm_code: [u8; 1] = [0xC3]; // RET
         #[rustfmt::skip]
         let initterm_e_code: [u8; 28] = [
             0x56,                    // PUSH ESI
