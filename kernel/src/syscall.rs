@@ -58,6 +58,7 @@ const WIN32_MEMCPY:             u32 = 0x2023;
 const WIN32_MEMSET:             u32 = 0x2024;
 const WIN32_STRLEN:             u32 = 0x2025;
 const WIN32_TIME_BEGIN_PERIOD:  u32 = 0x2030;
+const WIN32_CREATE_FILE_A:     u32 = 0x2033;
 const WIN32_TIME_END_PERIOD:    u32 = 0x2031;
 const WIN32_TIME_GET_TIME:      u32 = 0x2032;
 const WIN32_LIST_DIR:           u32 = 0x2040;
@@ -263,6 +264,12 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
     if number >= 0x2010 && number <= 0x201F {
         log::info!("[w32dbg] dispatch: syscall={:#x} args_ptr={:#x}", number, args_ptr);
     }
+    // Trace all game syscalls (0x20xx range, skip known high-frequency ones)
+    if number >= 0x2000 && number != 0x2000 && number != 0x2012 && number != 0x2014
+        && number != 0x2015 {
+        hal::serial::write_str("[sys] ");
+        hal::serial::write_fmt(core::format_args!("{:#x}\n", number));
+    }
     match number {
         // ── NT native syscalls ────────────────────────────────────────────────
         SYSCALL_NT_CREATE_PROCESS           => nt_create_process(args_ptr),
@@ -306,6 +313,7 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         WIN32_LIST_DIR          => win32_list_dir(args_ptr),
         WIN32_CAT_FILE          => win32_cat_file(args_ptr),
         WIN32_DRAW_DEMO_FRAME   => win32_draw_demo_frame(),
+        WIN32_CREATE_FILE_A     => win32_create_file_a(args_ptr),
         WIN32_LOOKUP_WNDPROC    => win32_lookup_wndproc(args_ptr),
         // ── kernel32 Phase 3A ─────────────────────────────────────────────────
         WIN32_TLS_ALLOC            => win32_tls_alloc(),
@@ -372,7 +380,7 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         // ── user32 Phase 3A ───────────────────────────────────────────────────
         WIN32_GET_CLIENT_RECT      => win32_get_client_rect(args_ptr),
         WIN32_ENUM_DISPLAY_SETTINGS=> win32_enum_display_settings_w(args_ptr),
-        WIN32_MESSAGE_BOX_A        => 1, // IDOK — no real window; Ghost Recon never blocks on dialogs
+        WIN32_MESSAGE_BOX_A        => win32_message_box_a(args_ptr),
         WIN32_ENUM_DISPLAY_SETTINGS_A => win32_enum_display_settings_a(args_ptr),
         WIN32_GET_SYSTEM_METRICS   => win32_get_system_metrics(args_ptr),
         // ── winmm ───────────────────────────────────────────────────────────
@@ -1697,6 +1705,7 @@ fn win32_get_proc_address(args_ptr: u32) -> u32 {
     let len = read_cstr_user_buf(lp_proc_ptr, &mut buf);
     if len == 0 { return 0; }
     let name = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return 0 };
+    log::info!("[GetProcAddr] {:#x}!{}", h_module, name);
     // Try stub modules first (exact base match)
     if let Some(va) = ps::loader::resolve_stub_proc_by_base(h_module, name) {
         return va;
@@ -4049,9 +4058,95 @@ fn win32_get_file_size(args_ptr: u32) -> u32 {
 /// GetFileAttributesA(lpFileName) → DWORD
 /// Returns FILE_ATTRIBUTE_NORMAL for everything, INVALID for unknown files.
 /// # IRQL: PASSIVE
+/// CreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
+///             dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile) → HANDLE
+fn win32_create_file_a(args_ptr: u32) -> u32 {
+    let name_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let mut buf = [0u8; 260];
+    let len = read_cstr_user_buf(name_ptr, &mut buf);
+    if len == 0 { return 0xFFFF_FFFF; }
+    let path = core::str::from_utf8(&buf[..len]).unwrap_or("");
+    log::info!("[CreateFileA] '{}'", path);
+
+    // Strip drive letter and backslash prefix, convert \ to /
+    let mut fat_path = alloc::string::String::from("/");
+    let stripped = path.trim_start_matches(|c: char| c == '\\' || c == '/')
+        .trim_start_matches(|c: char| c.is_ascii_alphanumeric())
+        .trim_start_matches(':')
+        .trim_start_matches(|c: char| c == '\\' || c == '/');
+    let stripped = if stripped.is_empty() { path.trim_start_matches(|c: char| c == '\\' || c == '/') } else { stripped };
+    for ch in stripped.chars() {
+        if ch == '\\' { fat_path.push('/'); }
+        else { fat_path.push(ch.to_ascii_uppercase()); }
+    }
+
+    // Try ramdisk first
+    if let Ok(file) = io_manager::open_fat_file(&fat_path) {
+        let handle = allocate_file_handle(file);
+        log::info!("[CreateFileA] '{}' -> ramdisk handle {:#x}", path, handle);
+        return handle;
+    }
+
+    // Try ATA game disk
+    if let Ok(file) = io_manager::open_game_file(&fat_path) {
+        let handle = allocate_game_file_handle(file);
+        log::info!("[CreateFileA] '{}' -> game disk handle {:#x}", path, handle);
+        return handle;
+    }
+
+    log::info!("[CreateFileA] '{}' -> NOT FOUND", path);
+    0xFFFF_FFFF // INVALID_HANDLE_VALUE
+}
+
+/// Allocate a file handle for a ramdisk FAT file.
+fn allocate_file_handle(file: io_manager::FatFile) -> u32 {
+    let mut map = FILE_HANDLE_MAP.lock();
+    for (i, slot) in map.iter_mut().enumerate() {
+        if slot.is_none() {
+            let handle = ((i + 1) as u32) * 4 + 0x100; // handles 0x104, 0x108, ...
+            *slot = Some((handle, file));
+            return handle;
+        }
+    }
+    0xFFFF_FFFF
+}
+
+// Game file handles stored separately (use ATA read instead of ramdisk read)
+static GAME_FILE_MAP: Mutex<[Option<(u32, io_manager::FatFile)>; 64]> = Mutex::new([None; 64]);
+
+fn allocate_game_file_handle(file: io_manager::FatFile) -> u32 {
+    let mut map = GAME_FILE_MAP.lock();
+    for (i, slot) in map.iter_mut().enumerate() {
+        if slot.is_none() {
+            let handle = ((i + 1) as u32) * 4 + 0x1000; // game handles 0x1004, 0x1008, ...
+            *slot = Some((handle, file));
+            return handle;
+        }
+    }
+    0xFFFF_FFFF
+}
+
+fn win32_message_box_a(args_ptr: u32) -> u32 {
+    // MessageBoxA(hWnd, lpText, lpCaption, uType)
+    let text_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 1 };
+    let cap_ptr  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 1 };
+    let mut tbuf = [0u8; 256];
+    let mut cbuf = [0u8; 128];
+    let tlen = read_cstr_user_buf(text_ptr, &mut tbuf);
+    let clen = read_cstr_user_buf(cap_ptr, &mut cbuf);
+    let text = core::str::from_utf8(&tbuf[..tlen]).unwrap_or("?");
+    let cap  = core::str::from_utf8(&cbuf[..clen]).unwrap_or("?");
+    log::info!("[MessageBoxA] '{}': {}", cap, text);
+    1 // IDOK
+}
+
 fn win32_get_file_attributes_a(args_ptr: u32) -> u32 {
-    let _name = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
-    // Return FILE_ATTRIBUTE_NORMAL (0x80) — game checks if files exist
+    let name_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let mut buf = [0u8; 128];
+    let len = read_cstr_user_buf(name_ptr, &mut buf);
+    let path = core::str::from_utf8(&buf[..len]).unwrap_or("?");
+    log::info!("[GetFileAttribA] '{}'", path);
+    // Return FILE_ATTRIBUTE_NORMAL (0x80) for files, DIRECTORY (0x10) for known dirs
     0x80
 }
 

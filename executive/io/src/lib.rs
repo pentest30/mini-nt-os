@@ -200,6 +200,52 @@ fn fat_next(base_ptr: *const u8, fat_byte_offset: usize, cluster: u32) -> Result
     }
 }
 
+// ── ATA disk block device (channel 1, game data) ────────────────────────────
+
+struct AtaBlockDevice;
+
+impl BlockDevice for AtaBlockDevice {
+    fn sector_size(&self) -> u32 { 512 }
+
+    fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        if out.len() != 512 { return Err(FatError::Io); }
+        hal::ata::read_sector(lba as u32, out).map_err(|_| FatError::Io)
+    }
+}
+
+static ATA_PRESENT: Mutex<Option<bool>> = Mutex::new(None);
+
+fn ata_device() -> Option<AtaBlockDevice> {
+    let mut guard = ATA_PRESENT.lock();
+    let present = *guard.get_or_insert_with(|| {
+        let p = hal::ata::probe();
+        if p { log::info!("Io: ATA channel 1 disk detected"); }
+        p
+    });
+    if present { Some(AtaBlockDevice) } else { None }
+}
+
+/// Open a file on the game data disk (ATA channel 1, FAT32).
+pub fn open_game_file(path: &str) -> Result<FatFile, FatError> {
+    prep_rep_ops();
+    let dev = ata_device().ok_or(FatError::Io)?;
+    FatVolume::mount_and_open(dev, path)
+}
+
+/// Read from a game data file.
+pub fn read_game_file(file: &mut FatFile, out: &mut [u8]) -> Result<usize, FatError> {
+    prep_rep_ops();
+    let dev = ata_device().ok_or(FatError::Io)?;
+    FatVolume::mount_and_read(dev, file, out)
+}
+
+/// List a directory on the game data disk.
+pub fn list_game_dir(path: &str) -> Result<Vec<DirEntryInfo>, FatError> {
+    prep_rep_ops();
+    let dev = ata_device().ok_or(FatError::Io)?;
+    FatVolume::mount(dev)?.list_dir(path)
+}
+
 fn leak_vec(data: Vec<u8>) -> (usize, usize) {
     let mut data = ManuallyDrop::new(data);
     (data.as_mut_ptr() as usize, data.len())

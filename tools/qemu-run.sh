@@ -270,9 +270,22 @@ fi
 ESP_WIN="$(_winpath "$ESP")"
 SERIAL_WIN="$(_winpath "$SERIAL_LOG")"
 
+# Game data disk: Ghost Recon GOG install directory as virtual FAT on IDE channel 1
+GAME_ARGS=()
+GR_DIR="/c/Program Files (x86)/GOG Galaxy/Games/Tom Clancys Ghost Recon/Data"
+if [[ -d "$GR_DIR" ]]; then
+    GR_WIN="$(_winpath "$GR_DIR")"
+    # Only Data/ dir (181 MB) fits in QEMU's FAT16 limit (516 MB)
+    # Use ide,index=2 = secondary master (ports 0x170-0x177)
+    GAME_ARGS+=(-drive "if=none,id=gamedisk,format=raw,file=fat:rw:$GR_WIN"
+                -device "ide-hd,drive=gamedisk,bus=ide.1")
+    echo "[F2] Game disk: $GR_DIR (IDE secondary, ~181 MB)"
+fi
+
 timeout "$TIMEOUT" "$QEMU_BIN" \
     "${FIRMWARE_ARGS[@]}" \
     -drive "format=raw,file=fat:rw:$ESP_WIN" \
+    "${GAME_ARGS[@]}" \
     -serial "file:$SERIAL_WIN" \
     -display none \
     -m "${MEMORY}M" \

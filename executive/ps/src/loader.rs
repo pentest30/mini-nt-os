@@ -641,6 +641,8 @@ const STUB_EXPORTS_USER32: &[StubExport] = &[
     StubExport { name: "UpdateWindow",             rva: 0x14C0 },
     StubExport { name: "wsprintfA",                rva: 0x14D0 },
     StubExport { name: "wvsprintfA",               rva: 0x14E0 },
+    StubExport { name: "GetActiveWindow",          rva: 0x14F0 },
+    StubExport { name: "GetLastActivePopup",       rva: 0x1500 },
 ];
 
 const STUB_EXPORTS_MSVCRT: &[StubExport] = &[
@@ -2341,7 +2343,7 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub( page.add(0x4A0), 1, 8);          // GetProcessAffinityMask(2) → TRUE
             write_const_stub( page.add(0x4B0), 0, 0x1C);       // DeviceIoControl(7) → FALSE
             write_const_stub( page.add(0x4C0), 1, 8);          // CreateDirectoryW(2) → TRUE
-            write_const_stub( page.add(0x4D0), 0xFFFF_FFFFu32, 0x0018); // CreateFileA(6) → INVALID
+            write_win32_stub(page.add(0x4D0), 0x2033, 0x001C); // CreateFileA(7) → syscall
             write_win32_stub(page.add(0x4E0), 0x209A, 0x0008); // LocalAlloc(2) → reuse HeapAlloc
             // GetSystemTimeAsFileTime(FILETIME*) → void, write a plausible timestamp
             write_win32_stub(page.add(0x4F0), 0x209C, 0x0004);
@@ -2557,6 +2559,8 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_cdecl_const_stub(page.add(0x4D0), 0);
             // wvsprintfA: cdecl — just return 0
             write_cdecl_const_stub(page.add(0x4E0), 0);
+            write_const_stub( page.add(0x4F0), 1, 0);          // GetActiveWindow() → fake HWND
+            write_const_stub( page.add(0x500), 1, 4);          // GetLastActivePopup(1) → fake HWND
         }
 
     } else if eq_ascii_nocase(module_name, "msvcrt.dll") {
@@ -2643,17 +2647,42 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
         // function pointer in the [begin, end) array.  Cannot be INT 0x2E stubs
         // because they call user-mode function pointers directly.
         //
-        // _initterm and _initterm_e: skip constructors entirely.
-        // DXVK's constructor array contains garbage pointers (0x11017e)
-        // because our PE loader doesn't fully initialize the .CRT sections.
-        // TODO Phase 3: proper CRT$XCA/XCZ initialization.
-        //
-        // _initterm: cdecl void _initterm(begin, end) → just RET
-        // _initterm_e: cdecl int _initterm_e(begin, end) → return 0
+        // _initterm and _initterm_e: iterate function pointer array [begin, end).
+        // Uses ESI (callee-saved) so CALL EAX doesn't trash the loop variable.
+        // Required by MSVC CRT — without it, CRT calls _amsg_exit(R6030).
+        // NOTE: DXVK's MinGW .CRT sections have garbage pointers — DllMain
+        // trampoline is disabled for DXVK, so only the game EXE's _initterm runs.
         #[rustfmt::skip]
-        let initterm_code: [u8; 1] = [0xC3]; // RET
+        let initterm_code: [u8; 26] = [
+            0x56,                    // PUSH ESI
+            0x8B, 0x74, 0x24, 0x08,  // MOV ESI, [ESP+8]
+            0x3B, 0x74, 0x24, 0x0C,  // CMP ESI, [ESP+0C]
+            0x73, 0x0D,              // JAE done
+            0x8B, 0x06,              // MOV EAX, [ESI]
+            0x83, 0xC6, 0x04,        // ADD ESI, 4
+            0x85, 0xC0,              // TEST EAX, EAX
+            0x74, 0x02,              // JZ skip
+            0xFF, 0xD0,              // CALL EAX
+            0xEB, 0xED,              // JMP loop
+            0x5E,                    // POP ESI (done)
+            0xC3,                    // RET
+        ];
         #[rustfmt::skip]
-        let initterm_e_code: [u8; 3] = [0x33, 0xC0, 0xC3]; // XOR EAX,EAX; RET
+        let initterm_e_code: [u8; 28] = [
+            0x56,                    // PUSH ESI
+            0x8B, 0x74, 0x24, 0x08,  // MOV ESI, [ESP+8]
+            0x3B, 0x74, 0x24, 0x0C,  // CMP ESI, [ESP+0C]
+            0x73, 0x0D,              // JAE done
+            0x8B, 0x06,              // MOV EAX, [ESI]
+            0x83, 0xC6, 0x04,        // ADD ESI, 4
+            0x85, 0xC0,              // TEST EAX, EAX
+            0x74, 0x02,              // JZ skip
+            0xFF, 0xD0,              // CALL EAX
+            0xEB, 0xED,              // JMP loop
+            0x33, 0xC0,              // XOR EAX, EAX (done)
+            0x5E,                    // POP ESI
+            0xC3,                    // RET
+        ];
         unsafe {
             // _initterm at page+0x000
             for (i, &b) in initterm_code.iter().enumerate() {

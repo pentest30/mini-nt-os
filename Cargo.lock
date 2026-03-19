@@ -107,6 +107,7 @@ dependencies = [
 name = "io-manager"
 version = "0.1.0"
 dependencies = [
+ "hal",
  "ke",
  "log",
  "ob",

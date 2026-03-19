@@ -9,6 +9,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![feature(abi_x86_interrupt)]
 
+pub mod ata;
 pub mod fb;
 pub mod gdt;
 pub mod idt;

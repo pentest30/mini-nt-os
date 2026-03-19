@@ -9,5 +9,6 @@ name = "io_manager"
 [dependencies]
 ob   = { path = "../ob" }
 ke   = { path = "../ke" }
+hal  = { path = "../../hal" }
 spin = { workspace = true }
 log  = { workspace = true }
