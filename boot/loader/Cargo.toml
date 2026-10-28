@@ -12,7 +12,7 @@ test  = false
 bench = false
 
 [dependencies]
-boot-info   = { path = "../boot-info" }
+boot-info   = { path = "../../abi" }
 uefi        = { workspace = true }
 x86_64      = { workspace = true }
 log         = { workspace = true }

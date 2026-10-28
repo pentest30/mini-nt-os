@@ -48,5 +48,5 @@ Ces observations décrivent le comportement du jeu, pas celui de Mino.
 
 ## À compléter
 
-- Les autres quirks contenus dans les handlers `win32_*` de `kernel/src/syscall.rs`, avant leur suppression.
+- Les autres quirks contenus dans les handlers `win32_*` de `kernel/ntoskrnl/src/syscall.rs`, avant leur suppression.
 - La liste des imports observés (`docs/compat/imports-observes.md`) et des méthodes D3D8 appelées (`docs/compat/d3d8-appels.md`), voir [04 §5](../04-audit-reutilisation.md#5-la-connaissance-à-conserver-sans-le-code).

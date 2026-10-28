@@ -8,6 +8,6 @@ name = "pe-loader"
 path = "src/main.rs"
 
 # This tool runs on the HOST (std environment) for testing.
-# The actual kernel PE loader (no_std) lives in executive/ps/src/loader.rs.
+# The actual kernel PE loader (no_std) lives in kernel/ps/src/loader.rs.
 [dependencies]
 pelite = { workspace = true }

@@ -7,7 +7,7 @@ edition.workspace = true
 name = "ke"
 
 [dependencies]
-hal      = { path = "../../hal" }
+hal      = { path = "../hal" }
 x86_64   = { workspace = true }
 spin     = { workspace = true }
 bitflags = { workspace = true }

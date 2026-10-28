@@ -7,7 +7,7 @@ edition.workspace = true
 name = "hal"
 
 [dependencies]
-boot-info  = { path = "../boot-info" }
+boot-info  = { path = "../../abi" }
 x86_64     = { workspace = true }
 uart_16550 = { workspace = true }
 spin       = { workspace = true }

@@ -1,4 +1,4 @@
-// kernel/build.rs — pass the custom linker script to the linker.
+// kernel/ntoskrnl/build.rs — pass the custom linker script to the linker.
 
 fn main() {
     // Tell the linker to use our custom script with an absolute path.

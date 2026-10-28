@@ -47,8 +47,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   Déplacements par `git mv`. Une PR traite un seul sujet.
 - **Jalon courant : M0 — Assainir** ([05](docs/05-feuille-de-route.md#m0--assainir)), en commençant par les corrections
   immédiates de l'[audit §7](docs/04-audit-reutilisation.md#7-corrections-à-faire-tout-de-suite-avant-le-jalon-m0).
-- Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/src/syscall.rs`,
-  le générateur de stubs de `executive/ps/src/loader.rs`, `kernel/src/launcher.rs`, `win32/*`, `directx/*`.
+- Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
+  le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
 
 ## Commandes

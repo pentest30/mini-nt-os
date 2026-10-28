@@ -1,16 +1,17 @@
 [workspace]
 resolver = "2"
+# Arborescence cible : docs/02-architecture.md §10.
 members = [
-    "boot-info",
-    "bootloader",
-    "hal",
-    "kernel",
-    "executive/ke",
-    "executive/mm",
-    "executive/ob",
-    "executive/ps",
-    "executive/io",
-    "tools/pe-loader",
+    "abi",
+    "boot/loader",
+    "kernel/ntoskrnl",
+    "kernel/hal",
+    "kernel/ke",
+    "kernel/mm",
+    "kernel/ob",
+    "kernel/ps",
+    "kernel/io",
+    "tools/pe-inspect",
     "tools/mkfat",
 ]
 # Code mort de l'ancienne architecture (ADR-019), hors du workspace en attendant

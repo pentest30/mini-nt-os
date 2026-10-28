@@ -20,13 +20,13 @@ trace-syscalls = []
 test-stack-overflow = []
 
 [dependencies]
-boot-info        = { path = "../boot-info" }
+boot-info        = { path = "../../abi" }
 hal              = { path = "../hal" }
-ke               = { path = "../executive/ke" }
-mm               = { path = "../executive/mm" }
-ob               = { path = "../executive/ob" }
-ps               = { path = "../executive/ps" }
-io-manager       = { path = "../executive/io" }
+ke               = { path = "../ke" }
+mm               = { path = "../mm" }
+ob               = { path = "../ob" }
+ps               = { path = "../ps" }
+io-manager       = { path = "../io" }
 x86_64           = { workspace = true }
 spin             = { workspace = true }
 log              = { workspace = true }

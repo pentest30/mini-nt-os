@@ -7,7 +7,7 @@ edition.workspace = true
 name = "ps"
 
 [dependencies]
-hal      = { path = "../../hal" }
+hal      = { path = "../hal" }
 ob       = { path = "../ob" }
 mm       = { path = "../mm" }
 ke       = { path = "../ke" }

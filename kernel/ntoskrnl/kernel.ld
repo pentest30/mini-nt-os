@@ -1,4 +1,4 @@
-/* kernel/kernel.ld — Linker script for the Mino kernel (ELF64, ADR-014).
+/* kernel/ntoskrnl/kernel.ld — Linker script for the Mino kernel (ELF64, ADR-014).
  *
  * The kernel is linked in the top 2 GiB of the address space, as
  * `code-model=kernel` expects. The bootloader loads each PT_LOAD segment into

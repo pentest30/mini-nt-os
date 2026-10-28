@@ -202,7 +202,7 @@ fn build_fat_image(files: &[([u8; 11], Vec<u8>)]) -> Vec<u8> {
 
 // ── PE32 builder ──────────────────────────────────────────────────────────────
 //
-// Generates the same binary as kernel/src/main.rs::build_test_pe32.
+// Generates the same binary as kernel/ntoskrnl/src/main.rs::build_test_pe32.
 // Preferred base: 0x0200_0000  Entry RVA: 0x1000
 //
 // The ring-3 code exercises the full syscall path:
