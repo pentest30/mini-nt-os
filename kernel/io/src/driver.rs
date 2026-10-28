@@ -1,25 +1,22 @@
 //! Driver / Device objects.
 
-use alloc::string::String;
 use super::irp::Irp;
+use alloc::string::String;
 
 pub type DispatchFn = fn(&mut Irp) -> i32;
 
 pub struct DriverObject {
-    pub name:      String,
-    pub dispatch:  [Option<DispatchFn>; 28], // one per IRP_MJ_*
+    pub name: String,
+    pub dispatch: [Option<DispatchFn>; 28], // one per IRP_MJ_*
 }
 
 impl DriverObject {
     pub fn new(name: &str) -> Self {
-        Self {
-            name:     name.into(),
-            dispatch: [None; 28],
-        }
+        Self { name: name.into(), dispatch: [None; 28] }
     }
 }
 
 pub struct DeviceObject {
-    pub name:   String,
+    pub name: String,
     pub driver: alloc::sync::Arc<spin::Mutex<DriverObject>>,
 }

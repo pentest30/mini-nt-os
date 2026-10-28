@@ -23,8 +23,8 @@
 
 use uefi::table::boot::{AllocateType, BootServices, MemoryType};
 use x86_64::{
-    PhysAddr,
     structures::paging::{PageTable, PageTableFlags},
+    PhysAddr,
 };
 
 /// Base virtual address of the Higher-Half Direct Map.
@@ -39,15 +39,12 @@ const HUGE_2M: u64 = 2 * 1024 * 1024;
 
 /// Flags for a 2 MiB huge-page data leaf (present, writable, huge).
 const HUGE_DATA: PageTableFlags = PageTableFlags::from_bits_truncate(
-    PageTableFlags::PRESENT.bits()
-        | PageTableFlags::WRITABLE.bits()
-        | PageTableFlags::HUGE_PAGE.bits(),
+    PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits() | PageTableFlags::HUGE_PAGE.bits(),
 );
 
 /// Flags for an intermediate page-directory entry (present, writable).
-const DIR_FLAGS: PageTableFlags = PageTableFlags::from_bits_truncate(
-    PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits(),
-);
+const DIR_FLAGS: PageTableFlags =
+    PageTableFlags::from_bits_truncate(PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits());
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -89,16 +86,10 @@ pub unsafe fn build(bt: &BootServices) -> PhysAddr {
 /// Map `[virt_start, virt_start + size)` → `[phys_start, phys_start + size)`
 /// using 2 MiB huge pages. Both `virt_start` and `phys_start` must be 2 MiB
 /// aligned; `size` must be a multiple of 2 MiB.
-unsafe fn build_range(
-    bt:         &BootServices,
-    l4_phys:    PhysAddr,
-    virt_start: u64,
-    phys_start: u64,
-    size:       u64,
-) {
-    debug_assert!(virt_start % HUGE_2M == 0);
-    debug_assert!(phys_start % HUGE_2M == 0);
-    debug_assert!(size % HUGE_2M == 0);
+unsafe fn build_range(bt: &BootServices, l4_phys: PhysAddr, virt_start: u64, phys_start: u64, size: u64) {
+    debug_assert!(virt_start.is_multiple_of(HUGE_2M));
+    debug_assert!(phys_start.is_multiple_of(HUGE_2M));
+    debug_assert!(size.is_multiple_of(HUGE_2M));
 
     let n_pages = size / HUGE_2M;
 
@@ -181,7 +172,9 @@ pub unsafe fn map_kernel(bt: &BootServices, l4_phys: PhysAddr, image: &crate::lo
     }
     log::info!(
         "paging: kernel {:#x}..{:#x} mapped W^X ({} segments)",
-        image.virt_base, image.virt_base + image.size, image.segment_count,
+        image.virt_base,
+        image.virt_base + image.size,
+        image.segment_count,
     );
 }
 

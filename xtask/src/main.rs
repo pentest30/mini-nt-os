@@ -3,13 +3,15 @@
 //!
 //! ```text
 //! cargo xtask build [--features F]
+//! cargo xtask lint
 //! cargo xtask run   [--cpu CPU] [--features F] [--memory MB] [--gdb] [--headless]
 //!                   [--add HOST_PATH:FAT_NAME]... [--data-dir DIR]
 //! cargo xtask test  [--host] [--boot] [--scenario NAME]... [--cpu CPU] [--timeout S]
 //! ```
 //!
 //! CPU is `default` (QEMU's CPU, AMD vendor: `int 2Eh`), `intel` (SYSENTER,
-//! ADR-004) or any QEMU `-cpu` model. Boot scenarios live in `tests/boot/`.
+//! ADR-004) or any QEMU `-cpu` model. Boot scenarios live in
+//! `tests/boot/<scenario>/scenario.txt`.
 //!
 //! The firmware and the emulator are found automatically, or given with
 //! `--ovmf FILE` (combined image), `--ovmf-code FILE` and `--ovmf-vars FILE`
@@ -38,6 +40,8 @@ usage: cargo xtask <command> [options]
 commands:
   build   build mino-loader and ntoskrnl
           --features F        ntoskrnl features (comma-separated)
+  lint    rustfmt --check, then clippy -D warnings on the host and the
+          bare-metal targets (06 §6)
   run     build, then boot in QEMU with the serial port on stdio
           --cpu CPU           default | intel | QEMU -cpu model
           --features F        ntoskrnl features
@@ -79,6 +83,10 @@ fn dispatch(mut args: Args) -> Result<()> {
             println!("ntoskrnl:    {}", artifacts.kernel.display());
             Ok(())
         }
+        Some("lint") => {
+            args.finish()?;
+            lint(&ws)
+        }
         Some("run") => run(&ws, args),
         Some("test") => test(&ws, args),
         Some("help") | Some("-h") | Some("--help") | None => {
@@ -90,6 +98,29 @@ fn dispatch(mut args: Args) -> Result<()> {
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
+
+/// `cargo fmt --check`, then clippy with warnings denied: the host workspace,
+/// and the kernel and loader on their own targets (cfg(target_os = "none")
+/// code), the kernel with and without its features. `-D warnings` goes to
+/// clippy, not RUSTFLAGS, which would replace the target flags of
+/// .cargo/config.toml.
+fn lint(ws: &Workspace) -> Result<()> {
+    cargo(ws, &["fmt", "--all", "--check"])?;
+    cargo(ws, &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?;
+    let bare_metal: [&[&str]; 3] = [
+        &["-p", "ntoskrnl", "--target", KERNEL_TARGET],
+        &["-p", "ntoskrnl", "--target", KERNEL_TARGET, "--features", "trace-syscalls,test-stack-overflow"],
+        &["-p", "mino-loader", "--target", LOADER_TARGET],
+    ];
+    for target_args in bare_metal {
+        let mut args = vec!["clippy", "--profile", PROFILE];
+        args.extend_from_slice(target_args);
+        args.extend_from_slice(&["--", "-D", "warnings"]);
+        cargo(ws, &args)?;
+    }
+    println!("xtask: lint clean");
+    Ok(())
+}
 
 /// Builds, then boots interactively: serial on stdio, until QEMU exits.
 fn run(ws: &Workspace, mut args: Args) -> Result<()> {
@@ -220,11 +251,8 @@ fn build(ws: &Workspace, features: Option<&str>) -> Result<Artifacts> {
 /// Runs cargo in the workspace root and fails if it fails.
 pub fn cargo(ws: &Workspace, args: &[&str]) -> Result<()> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(&cargo)
-        .args(args)
-        .current_dir(&ws.root)
-        .status()
-        .map_err(|e| format!("cannot run cargo: {e}"))?;
+    let status =
+        Command::new(&cargo).args(args).current_dir(&ws.root).status().map_err(|e| format!("cannot run cargo: {e}"))?;
     if status.success() {
         Ok(())
     } else {
@@ -244,9 +272,7 @@ impl Workspace {
             .parent()
             .expect("xtask lives one level below the workspace root")
             .to_path_buf();
-        let target = std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("target"));
+        let target = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
         Self { root, target }
     }
 }

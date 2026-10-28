@@ -33,174 +33,174 @@ const SYSCALL_NT_QUERY_INFORMATION_FILE: u32 = 0x00B4;
 const SYSCALL_NT_CLOSE: u32 = 0x0019;
 
 // ── Win32 syscall numbers (INT 0x2E from kernel32/user32/msvcrt/winmm stubs) ──
-const WIN32_GET_TICK_COUNT:     u32 = 0x2000;
-const WIN32_SLEEP:              u32 = 0x2001;
-const WIN32_VIRTUAL_ALLOC:      u32 = 0x2002;
-const WIN32_VIRTUAL_FREE:       u32 = 0x2003;
-const WIN32_VIRTUAL_PROTECT:    u32 = 0x2004;
-const WIN32_GET_PROC_ADDRESS:   u32 = 0x2005;
-const WIN32_GET_MODULE_HANDLE:  u32 = 0x2006;
-const WIN32_EXIT_PROCESS:       u32 = 0x2007;
-const WIN32_CREATE_WINDOW:      u32 = 0x2010;
-const WIN32_SHOW_WINDOW:        u32 = 0x2011;
-const WIN32_GET_MESSAGE:        u32 = 0x2012;
-const WIN32_DISPATCH_MESSAGE:   u32 = 0x2013;
-const WIN32_TRANSLATE_MESSAGE:  u32 = 0x2014;
-const WIN32_PEEK_MESSAGE:       u32 = 0x2015;
-const WIN32_POST_QUIT_MESSAGE:  u32 = 0x2016;
-const WIN32_REGISTER_CLASS_A:   u32 = 0x2017;
-const WIN32_DEF_WINDOW_PROC_A:  u32 = 0x2018;
-const WIN32_LOOKUP_WNDPROC:     u32 = 0x2019;
-const WIN32_SET_TIMER:          u32 = 0x2060;
-const WIN32_KILL_TIMER:         u32 = 0x2061;
-const WM_KEYDOWN:               u32 = 0x0100;
-const WIN32_MALLOC:             u32 = 0x2020;
-const WIN32_CALLOC:             u32 = 0x2021;
-const WIN32_FREE:               u32 = 0x2022;
-const WIN32_MEMCPY:             u32 = 0x2023;
-const WIN32_MEMSET:             u32 = 0x2024;
-const WIN32_STRLEN:             u32 = 0x2025;
-const WIN32_TIME_BEGIN_PERIOD:  u32 = 0x2030;
-const WIN32_CREATE_FILE_A:     u32 = 0x2033;
-const WIN32_TIME_END_PERIOD:    u32 = 0x2031;
-const WIN32_TIME_GET_TIME:      u32 = 0x2032;
-const WIN32_LIST_DIR:           u32 = 0x2040;
-const WIN32_CAT_FILE:           u32 = 0x2041;
-const WIN32_DRAW_DEMO_FRAME:    u32 = 0x2050;
+const WIN32_GET_TICK_COUNT: u32 = 0x2000;
+const WIN32_SLEEP: u32 = 0x2001;
+const WIN32_VIRTUAL_ALLOC: u32 = 0x2002;
+const WIN32_VIRTUAL_FREE: u32 = 0x2003;
+const WIN32_VIRTUAL_PROTECT: u32 = 0x2004;
+const WIN32_GET_PROC_ADDRESS: u32 = 0x2005;
+const WIN32_GET_MODULE_HANDLE: u32 = 0x2006;
+const WIN32_EXIT_PROCESS: u32 = 0x2007;
+const WIN32_CREATE_WINDOW: u32 = 0x2010;
+const WIN32_SHOW_WINDOW: u32 = 0x2011;
+const WIN32_GET_MESSAGE: u32 = 0x2012;
+const WIN32_DISPATCH_MESSAGE: u32 = 0x2013;
+const WIN32_TRANSLATE_MESSAGE: u32 = 0x2014;
+const WIN32_PEEK_MESSAGE: u32 = 0x2015;
+const WIN32_POST_QUIT_MESSAGE: u32 = 0x2016;
+const WIN32_REGISTER_CLASS_A: u32 = 0x2017;
+const WIN32_DEF_WINDOW_PROC_A: u32 = 0x2018;
+const WIN32_LOOKUP_WNDPROC: u32 = 0x2019;
+const WIN32_SET_TIMER: u32 = 0x2060;
+const WIN32_KILL_TIMER: u32 = 0x2061;
+const WM_KEYDOWN: u32 = 0x0100;
+const WIN32_MALLOC: u32 = 0x2020;
+const WIN32_CALLOC: u32 = 0x2021;
+const WIN32_FREE: u32 = 0x2022;
+const WIN32_MEMCPY: u32 = 0x2023;
+const WIN32_MEMSET: u32 = 0x2024;
+const WIN32_STRLEN: u32 = 0x2025;
+const WIN32_TIME_BEGIN_PERIOD: u32 = 0x2030;
+const WIN32_CREATE_FILE_A: u32 = 0x2033;
+const WIN32_TIME_END_PERIOD: u32 = 0x2031;
+const WIN32_TIME_GET_TIME: u32 = 0x2032;
+const WIN32_LIST_DIR: u32 = 0x2040;
+const WIN32_CAT_FILE: u32 = 0x2041;
+const WIN32_DRAW_DEMO_FRAME: u32 = 0x2050;
 
 // ── kernel32 Phase 3A ─────────────────────────────────────────────────────────
-const WIN32_TLS_ALLOC:            u32 = 0x2070;
-const WIN32_TLS_FREE:             u32 = 0x2071;
-const WIN32_TLS_GET_VALUE:        u32 = 0x2072;
-const WIN32_TLS_SET_VALUE:        u32 = 0x2073;
-const WIN32_INIT_CRITICAL_SEC:    u32 = 0x2074;
-const WIN32_ENTER_CRITICAL_SEC:   u32 = 0x2075;
-const WIN32_LEAVE_CRITICAL_SEC:   u32 = 0x2076;
-const WIN32_TRY_ENTER_CRITICAL:   u32 = 0x2078;
-const WIN32_ACQUIRE_SRW_EXCL:     u32 = 0x2079;
-const WIN32_RELEASE_SRW_EXCL:     u32 = 0x207A;
-const WIN32_GET_MODULE_HANDLE_W:  u32 = 0x207F;
+const WIN32_TLS_ALLOC: u32 = 0x2070;
+const WIN32_TLS_FREE: u32 = 0x2071;
+const WIN32_TLS_GET_VALUE: u32 = 0x2072;
+const WIN32_TLS_SET_VALUE: u32 = 0x2073;
+const WIN32_INIT_CRITICAL_SEC: u32 = 0x2074;
+const WIN32_ENTER_CRITICAL_SEC: u32 = 0x2075;
+const WIN32_LEAVE_CRITICAL_SEC: u32 = 0x2076;
+const WIN32_TRY_ENTER_CRITICAL: u32 = 0x2078;
+const WIN32_ACQUIRE_SRW_EXCL: u32 = 0x2079;
+const WIN32_RELEASE_SRW_EXCL: u32 = 0x207A;
+const WIN32_GET_MODULE_HANDLE_W: u32 = 0x207F;
 const WIN32_GET_MODULE_HANDLE_EX: u32 = 0x2080;
-const WIN32_LOAD_LIBRARY_A:       u32 = 0x2081;
-const WIN32_GET_SYSTEM_INFO:      u32 = 0x2082;
-const WIN32_GET_TICK_COUNT_64:    u32 = 0x2083;
-const WIN32_CREATE_THREAD_K32:    u32 = 0x2084;
-const WIN32_GET_CURRENT_PID:      u32 = 0x2085;
-const WIN32_GET_CURRENT_TID:      u32 = 0x2086;
-const WIN32_WAIT_FOR_MULTI:       u32 = 0x2087;
-const WIN32_WAIT_SINGLE_EX:       u32 = 0x2088;
-const WIN32_CREATE_EVENT_A:       u32 = 0x2089;
-const WIN32_SET_EVENT:            u32 = 0x208A;
-const WIN32_RESET_EVENT:          u32 = 0x208B;
-const WIN32_CREATE_SEMAPHORE_A:   u32 = 0x208C;
-const WIN32_RELEASE_SEMAPHORE:    u32 = 0x208D;
-const WIN32_CREATE_FILE_MAPPING:  u32 = 0x208E;
-const WIN32_MAP_VIEW_OF_FILE:     u32 = 0x208F;
-const WIN32_GET_TEMP_PATH_A:      u32 = 0x2091;
-const WIN32_GET_TEMP_FILE_A:      u32 = 0x2092;
-const WIN32_OUTPUT_DEBUG_STR:     u32 = 0x2093;
-const WIN32_VIRTUAL_QUERY:        u32 = 0x2095;
-const WIN32_GET_MODULE_FILE_W:    u32 = 0x2096;
-const WIN32_QUERY_PERF_COUNTER:   u32 = 0x2098;
-const WIN32_QUERY_PERF_FREQ:      u32 = 0x2099;
-const WIN32_HEAP_ALLOC:           u32 = 0x209A;
-const WIN32_SET_LAST_ERROR:       u32 = 0x209B;
-const WIN32_GET_SYSTEM_TIME_FT:  u32 = 0x209C;
-const WIN32_GET_USER_NAME_A:      u32 = 0x209D; // ADVAPI32 GetUserNameA
-// ── Ghost Recon kernel32 ────────────────────────────────────────────────────
+const WIN32_LOAD_LIBRARY_A: u32 = 0x2081;
+const WIN32_GET_SYSTEM_INFO: u32 = 0x2082;
+const WIN32_GET_TICK_COUNT_64: u32 = 0x2083;
+const WIN32_CREATE_THREAD_K32: u32 = 0x2084;
+const WIN32_GET_CURRENT_PID: u32 = 0x2085;
+const WIN32_GET_CURRENT_TID: u32 = 0x2086;
+const WIN32_WAIT_FOR_MULTI: u32 = 0x2087;
+const WIN32_WAIT_SINGLE_EX: u32 = 0x2088;
+const WIN32_CREATE_EVENT_A: u32 = 0x2089;
+const WIN32_SET_EVENT: u32 = 0x208A;
+const WIN32_RESET_EVENT: u32 = 0x208B;
+const WIN32_CREATE_SEMAPHORE_A: u32 = 0x208C;
+const WIN32_RELEASE_SEMAPHORE: u32 = 0x208D;
+const WIN32_CREATE_FILE_MAPPING: u32 = 0x208E;
+const WIN32_MAP_VIEW_OF_FILE: u32 = 0x208F;
+const WIN32_GET_TEMP_PATH_A: u32 = 0x2091;
+const WIN32_GET_TEMP_FILE_A: u32 = 0x2092;
+const WIN32_OUTPUT_DEBUG_STR: u32 = 0x2093;
+const WIN32_VIRTUAL_QUERY: u32 = 0x2095;
+const WIN32_GET_MODULE_FILE_W: u32 = 0x2096;
+const WIN32_QUERY_PERF_COUNTER: u32 = 0x2098;
+const WIN32_QUERY_PERF_FREQ: u32 = 0x2099;
+const WIN32_HEAP_ALLOC: u32 = 0x209A;
+const WIN32_SET_LAST_ERROR: u32 = 0x209B;
+const WIN32_GET_SYSTEM_TIME_FT: u32 = 0x209C;
+const WIN32_GET_USER_NAME_A: u32 = 0x209D; // ADVAPI32 GetUserNameA
+                                           // ── Ghost Recon kernel32 ────────────────────────────────────────────────────
 const WIN32_GLOBAL_MEMORY_STATUS: u32 = 0x20A0;
-const WIN32_GET_MODULE_FILE_A:    u32 = 0x20A1;
-const WIN32_MULTI_BYTE_TO_WIDE:   u32 = 0x20A2;
-const WIN32_GET_VERSION_EX_A:     u32 = 0x20A3;
-const WIN32_LSTRCPY_A:            u32 = 0x20A4;
-const WIN32_GET_CURRENT_DIR_A:    u32 = 0x20A5;
-const WIN32_LSTRCAT_A:            u32 = 0x20A6;
-const WIN32_LSTRCPYN_A:           u32 = 0x20A7;
-const WIN32_LSTRLEN_A:            u32 = 0x20A8;
-const WIN32_WRITE_FILE:           u32 = 0x20A9;
-const WIN32_GET_FILE_SIZE:        u32 = 0x20AA;
-const WIN32_FIND_FIRST_FILE_A:    u32 = 0x20AB;
-const WIN32_GET_FILE_ATTRS_A:     u32 = 0x20AC;
-const WIN32_GET_FULL_PATH_A:      u32 = 0x20AD;
-const WIN32_GET_CP_INFO:          u32 = 0x20AE;
-const WIN32_GET_FILE_TYPE:        u32 = 0x20B7; // was 0x20AF — collided with GetCommandLineA!
-const WIN32_GET_COMMAND_LINE_A:   u32 = 0x20AF;
-const WIN32_GET_LOCAL_TIME:       u32 = 0x20B0;
-const WIN32_GET_STARTUP_INFO_A:   u32 = 0x20B1;
-const WIN32_GET_STD_HANDLE:       u32 = 0x20B2;
-const WIN32_HEAP_REALLOC:         u32 = 0x20B4;
-const WIN32_MUL_DIV:              u32 = 0x20B5;
-const WIN32_READ_FILE:            u32 = 0x20B6;
-const WIN32_WIDE_TO_MULTI_BYTE:   u32 = 0x20BA; // was 0x20B7 — collided with GetFileType!
-// ── user32 Phase 3A ───────────────────────────────────────────────────────────
-const WIN32_GET_CLIENT_RECT:      u32 = 0x2120;
-const WIN32_ENUM_DISPLAY_SETTINGS:u32 = 0x2121;
-const WIN32_MESSAGE_BOX_A:        u32 = 0x2122;
+const WIN32_GET_MODULE_FILE_A: u32 = 0x20A1;
+const WIN32_MULTI_BYTE_TO_WIDE: u32 = 0x20A2;
+const WIN32_GET_VERSION_EX_A: u32 = 0x20A3;
+const WIN32_LSTRCPY_A: u32 = 0x20A4;
+const WIN32_GET_CURRENT_DIR_A: u32 = 0x20A5;
+const WIN32_LSTRCAT_A: u32 = 0x20A6;
+const WIN32_LSTRCPYN_A: u32 = 0x20A7;
+const WIN32_LSTRLEN_A: u32 = 0x20A8;
+const WIN32_WRITE_FILE: u32 = 0x20A9;
+const WIN32_GET_FILE_SIZE: u32 = 0x20AA;
+const WIN32_FIND_FIRST_FILE_A: u32 = 0x20AB;
+const WIN32_GET_FILE_ATTRS_A: u32 = 0x20AC;
+const WIN32_GET_FULL_PATH_A: u32 = 0x20AD;
+const WIN32_GET_CP_INFO: u32 = 0x20AE;
+const WIN32_GET_FILE_TYPE: u32 = 0x20B7; // was 0x20AF — collided with GetCommandLineA!
+const WIN32_GET_COMMAND_LINE_A: u32 = 0x20AF;
+const WIN32_GET_LOCAL_TIME: u32 = 0x20B0;
+const WIN32_GET_STARTUP_INFO_A: u32 = 0x20B1;
+const WIN32_GET_STD_HANDLE: u32 = 0x20B2;
+const WIN32_HEAP_REALLOC: u32 = 0x20B4;
+const WIN32_MUL_DIV: u32 = 0x20B5;
+const WIN32_READ_FILE: u32 = 0x20B6;
+const WIN32_WIDE_TO_MULTI_BYTE: u32 = 0x20BA; // was 0x20B7 — collided with GetFileType!
+                                              // ── user32 Phase 3A ───────────────────────────────────────────────────────────
+const WIN32_GET_CLIENT_RECT: u32 = 0x2120;
+const WIN32_ENUM_DISPLAY_SETTINGS: u32 = 0x2121;
+const WIN32_MESSAGE_BOX_A: u32 = 0x2122;
 const WIN32_ENUM_DISPLAY_SETTINGS_A: u32 = 0x2123;
-const WIN32_GET_SYSTEM_METRICS:   u32 = 0x2124;
-const WIN32_GET_ENV_STRINGS_A:   u32 = 0x2125;
-const WIN32_LOG_INITTERM:        u32 = 0x2126;
+const WIN32_GET_SYSTEM_METRICS: u32 = 0x2124;
+const WIN32_GET_ENV_STRINGS_A: u32 = 0x2125;
+const WIN32_LOG_INITTERM: u32 = 0x2126;
 // ── winmm ───────────────────────────────────────────────────────────────────
-const WIN32_TIME_GET_DEV_CAPS:    u32 = 0x2034; // was 0x2033 — collided with CreateFileA!
-// ── UCRT (api-ms-win-crt-*) ───────────────────────────────────────────────────
-const UCRT_REALLOC:               u32 = 0x20B3;
-const UCRT_INIT_ONEXIT_TABLE:     u32 = 0x20B8;
-const UCRT_REG_ONEXIT_FN:         u32 = 0x20B9;
-const UCRT_BEGINTHREADEX:         u32 = 0x20BB;
-const UCRT_ERRNO_PTR:             u32 = 0x20BD;
-const UCRT_STRCMP:                u32 = 0x20C8;
-const UCRT_STRNCMP:               u32 = 0x20C9;
-const UCRT_STRNCPY:               u32 = 0x20CA;
-const UCRT_STRNLEN:               u32 = 0x20CB;
-const UCRT_STRCHR:                u32 = 0x20CC;
-const UCRT_STRDUP:                u32 = 0x20CD;
-const UCRT_WCSLEN:                u32 = 0x20CE;
-const UCRT_WCSNLEN:               u32 = 0x20CF;
-const UCRT_WCSCMP:                u32 = 0x20D0;
-const UCRT_WCSICMP:               u32 = 0x20D1;
-const UCRT_STRTOUL:               u32 = 0x20D2;
-const UCRT_MEMCMP:                u32 = 0x20D3;
-const UCRT_MEMCHR:                u32 = 0x20D4;
-const UCRT_MEMMOVE:               u32 = 0x20D5;
+const WIN32_TIME_GET_DEV_CAPS: u32 = 0x2034; // was 0x2033 — collided with CreateFileA!
+                                             // ── UCRT (api-ms-win-crt-*) ───────────────────────────────────────────────────
+const UCRT_REALLOC: u32 = 0x20B3;
+const UCRT_INIT_ONEXIT_TABLE: u32 = 0x20B8;
+const UCRT_REG_ONEXIT_FN: u32 = 0x20B9;
+const UCRT_BEGINTHREADEX: u32 = 0x20BB;
+const UCRT_ERRNO_PTR: u32 = 0x20BD;
+const UCRT_STRCMP: u32 = 0x20C8;
+const UCRT_STRNCMP: u32 = 0x20C9;
+const UCRT_STRNCPY: u32 = 0x20CA;
+const UCRT_STRNLEN: u32 = 0x20CB;
+const UCRT_STRCHR: u32 = 0x20CC;
+const UCRT_STRDUP: u32 = 0x20CD;
+const UCRT_WCSLEN: u32 = 0x20CE;
+const UCRT_WCSNLEN: u32 = 0x20CF;
+const UCRT_WCSCMP: u32 = 0x20D0;
+const UCRT_WCSICMP: u32 = 0x20D1;
+const UCRT_STRTOUL: u32 = 0x20D2;
+const UCRT_MEMCMP: u32 = 0x20D3;
+const UCRT_MEMCHR: u32 = 0x20D4;
+const UCRT_MEMMOVE: u32 = 0x20D5;
 // ── ADVAPI32 ──────────────────────────────────────────────────────────────────
-const ADVAPI_REG_OPEN_KEY_EX_A:   u32 = 0x20E0;
-const ADVAPI_REG_QUERY_VALUE_A:   u32 = 0x20E1;
-const ADVAPI_REG_CLOSE_KEY:       u32 = 0x20E2;
-const ADVAPI_REG_OPEN_KEY_EX_W:   u32 = 0x20E3;
-const ADVAPI_REG_QUERY_VALUE_W:   u32 = 0x20E4;
-const ADVAPI_ALLOC_LUID:          u32 = 0x20E6;
+const ADVAPI_REG_OPEN_KEY_EX_A: u32 = 0x20E0;
+const ADVAPI_REG_QUERY_VALUE_A: u32 = 0x20E1;
+const ADVAPI_REG_CLOSE_KEY: u32 = 0x20E2;
+const ADVAPI_REG_OPEN_KEY_EX_W: u32 = 0x20E3;
+const ADVAPI_REG_QUERY_VALUE_W: u32 = 0x20E4;
+const ADVAPI_ALLOC_LUID: u32 = 0x20E6;
 
 // ── Vulkan ICD loader syscalls (vulkan-1.dll stubs → INT 0x2E) ──────────────
-const VK_GET_INSTANCE_PROC_ADDR:   u32 = 0x3000;
-const VK_GET_DEVICE_PROC_ADDR:     u32 = 0x3001;
-const VK_ENUM_INST_EXT_PROPS:      u32 = 0x3004;
-const VK_ENUM_INST_LAYER_PROPS:    u32 = 0x3005;
-const VK_ENUM_INST_VERSION:        u32 = 0x3006;
-const VK_ENUM_PHYSICAL_DEVICES:    u32 = 0x3007;
-const VK_GET_PHYS_DEV_PROPS:       u32 = 0x3008;
-const VK_GET_PHYS_DEV_PROPS2:      u32 = 0x3009;
-const VK_GET_PHYS_DEV_FEATURES:    u32 = 0x300A;
-const VK_GET_PHYS_DEV_FEATURES2:   u32 = 0x300B;
-const VK_GET_PHYS_DEV_MEM_PROPS:   u32 = 0x300C;
-const VK_GET_PHYS_DEV_MEM_PROPS2:  u32 = 0x300D;
+const VK_GET_INSTANCE_PROC_ADDR: u32 = 0x3000;
+const VK_GET_DEVICE_PROC_ADDR: u32 = 0x3001;
+const VK_ENUM_INST_EXT_PROPS: u32 = 0x3004;
+const VK_ENUM_INST_LAYER_PROPS: u32 = 0x3005;
+const VK_ENUM_INST_VERSION: u32 = 0x3006;
+const VK_ENUM_PHYSICAL_DEVICES: u32 = 0x3007;
+const VK_GET_PHYS_DEV_PROPS: u32 = 0x3008;
+const VK_GET_PHYS_DEV_PROPS2: u32 = 0x3009;
+const VK_GET_PHYS_DEV_FEATURES: u32 = 0x300A;
+const VK_GET_PHYS_DEV_FEATURES2: u32 = 0x300B;
+const VK_GET_PHYS_DEV_MEM_PROPS: u32 = 0x300C;
+const VK_GET_PHYS_DEV_MEM_PROPS2: u32 = 0x300D;
 const VK_GET_PHYS_DEV_QUEUE_PROPS: u32 = 0x300E;
-const VK_GET_PHYS_DEV_FMT_PROPS:   u32 = 0x300F;
-const VK_GET_PHYS_DEV_FMT_PROPS2:  u32 = 0x3010;
-const VK_ENUM_DEV_EXT_PROPS:       u32 = 0x3011;
-const VK_GET_SURFACE_CAPS:         u32 = 0x3012;
-const VK_GET_SURFACE_FORMATS:      u32 = 0x3013;
-const VK_GET_SURFACE_PRESENT_MODES:u32 = 0x3014;
-const VK_GET_SURFACE_SUPPORT:      u32 = 0x3015;
-const VK_GET_SWAPCHAIN_IMAGES:     u32 = 0x3016;
-const VK_ACQUIRE_NEXT_IMAGE:       u32 = 0x3017;
-const VK_ALLOC_CMD_BUFFERS:        u32 = 0x3018;
-const VK_MAP_MEMORY:               u32 = 0x3019;
-const VK_GET_IMAGE_MEM_REQS:       u32 = 0x301A;
-const VK_GET_BUFFER_MEM_REQS:      u32 = 0x301B;
-const VK_ALLOC_DESCRIPTOR_SETS:    u32 = 0x301C;
-const VK_CREATE_GRAPHICS_PIPES:    u32 = 0x301D;
-const VK_CREATE_COMPUTE_PIPES:     u32 = 0x301E;
-const VK_QUEUE_PRESENT:            u32 = 0x301F;
+const VK_GET_PHYS_DEV_FMT_PROPS: u32 = 0x300F;
+const VK_GET_PHYS_DEV_FMT_PROPS2: u32 = 0x3010;
+const VK_ENUM_DEV_EXT_PROPS: u32 = 0x3011;
+const VK_GET_SURFACE_CAPS: u32 = 0x3012;
+const VK_GET_SURFACE_FORMATS: u32 = 0x3013;
+const VK_GET_SURFACE_PRESENT_MODES: u32 = 0x3014;
+const VK_GET_SURFACE_SUPPORT: u32 = 0x3015;
+const VK_GET_SWAPCHAIN_IMAGES: u32 = 0x3016;
+const VK_ACQUIRE_NEXT_IMAGE: u32 = 0x3017;
+const VK_ALLOC_CMD_BUFFERS: u32 = 0x3018;
+const VK_MAP_MEMORY: u32 = 0x3019;
+const VK_GET_IMAGE_MEM_REQS: u32 = 0x301A;
+const VK_GET_BUFFER_MEM_REQS: u32 = 0x301B;
+const VK_ALLOC_DESCRIPTOR_SETS: u32 = 0x301C;
+const VK_CREATE_GRAPHICS_PIPES: u32 = 0x301D;
+const VK_CREATE_COMPUTE_PIPES: u32 = 0x301E;
+const VK_QUEUE_PRESENT: u32 = 0x301F;
 
 const USER_MIN_VA: u32 = 0x0000_1000;
 const USER_MAX_EXCLUSIVE: u32 = 0x8000_0000;
@@ -220,14 +220,15 @@ static WIN32_NEXT_HWND: Mutex<u32> = Mutex::new(1);
 // One-shot smoke markers — log each path only once so CMD.EXE's prompt loop
 // doesn't flood the framebuffer console with repeated [INFO] messages.
 static SMOKE_INT2E_LOGGED: AtomicBool = AtomicBool::new(false);
-static SMOKE_IAT_LOGGED:   AtomicBool = AtomicBool::new(false);
+static SMOKE_IAT_LOGGED: AtomicBool = AtomicBool::new(false);
 static WIN32_MSG_QUEUE: Mutex<[Option<Win32Msg>; 64]> = Mutex::new([None; 64]);
 static WIN32_QUIT_PENDING: Mutex<Option<u32>> = Mutex::new(None);
 static WIN32_NEXT_CLASS_ATOM: Mutex<u32> = Mutex::new(1);
 static WIN32_CLASS_MAP: Mutex<[Option<(u32, u32, u32)>; 64]> = Mutex::new([None; 64]);
 static WIN32_WINDOW_PROC_MAP: Mutex<[Option<(u32, u32)>; 64]> = Mutex::new([None; 64]);
-/// Timer table: (hwnd, timer_id, period_ms, next_fire_ms)
-static WIN32_TIMER_TABLE: Mutex<[Option<(u32, u32, u32, u32)>; 16]> = Mutex::new([None; 16]);
+/// Win32 timer: (hwnd, timer_id, period_ms, next_fire_ms).
+type Win32Timer = (u32, u32, u32, u32);
+static WIN32_TIMER_TABLE: Mutex<[Option<Win32Timer>; 16]> = Mutex::new([None; 16]);
 /// Tick count (ms) at which WM_PAINT was last synthesised. Rate-limits paint messages to ~60 fps.
 static WIN32_LAST_PAINT_MS: Mutex<u32> = Mutex::new(0);
 
@@ -250,10 +251,7 @@ struct Win32Msg {
 
 pub fn install(vad: mm::vad::VadTree, hhdm_offset: u64) {
     let mut guard = SYSCALL_CTX.lock();
-    *guard = Some(SyscallContext {
-        hhdm_offset,
-        vad: mm::vad::VadTree::new(),
-    });
+    *guard = Some(SyscallContext { hhdm_offset, vad: mm::vad::VadTree::new() });
     core::mem::forget(vad);
 }
 
@@ -266,12 +264,11 @@ pub fn syscall_ctx_pub() -> Option<u64> {
 /// Serial trace of Win32 syscalls, compiled in by the `trace-syscalls` feature.
 fn trace_syscall(number: u32, args_ptr: u32) {
     // Trace Win32 UI syscalls (0x2010..0x201F) during message pump debugging.
-    if number >= 0x2010 && number <= 0x201F {
+    if (0x2010..=0x201F).contains(&number) {
         log::info!("[w32dbg] dispatch: syscall={:#x} args_ptr={:#x}", number, args_ptr);
     }
     // Trace all game syscalls (0x20xx range, skip known high-frequency ones)
-    if number >= 0x2000 && number != 0x2000 && number != 0x2012 && number != 0x2014
-        && number != 0x2015 {
+    if number > 0x2000 && number != 0x2012 && number != 0x2014 && number != 0x2015 {
         hal::serial::write_str("[sys] ");
         hal::serial::write_fmt(core::format_args!("{:#x}\n", number));
     }
@@ -284,186 +281,186 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
     }
     match number {
         // ── NT native syscalls ────────────────────────────────────────────────
-        SYSCALL_NT_CREATE_PROCESS           => nt_create_process(args_ptr),
-        SYSCALL_NT_CREATE_THREAD            => nt_create_thread(args_ptr),
-        SYSCALL_NT_TERMINATE_PROCESS        => nt_terminate_process(args_ptr),
-        SYSCALL_NT_WRITE_FILE               => nt_write_file(args_ptr),
-        SYSCALL_NT_CREATE_FILE              => nt_create_file(args_ptr),
-        SYSCALL_NT_READ_FILE                => nt_read_file(args_ptr),
-        SYSCALL_NT_ALLOCATE_VIRTUAL_MEMORY  => nt_allocate_virtual_memory(args_ptr),
-        SYSCALL_NT_QUERY_INFORMATION_FILE   => nt_query_information_file(args_ptr),
-        SYSCALL_NT_CLOSE                    => nt_close(args_ptr),
+        SYSCALL_NT_CREATE_PROCESS => nt_create_process(args_ptr),
+        SYSCALL_NT_CREATE_THREAD => nt_create_thread(args_ptr),
+        SYSCALL_NT_TERMINATE_PROCESS => nt_terminate_process(args_ptr),
+        SYSCALL_NT_WRITE_FILE => nt_write_file(args_ptr),
+        SYSCALL_NT_CREATE_FILE => nt_create_file(args_ptr),
+        SYSCALL_NT_READ_FILE => nt_read_file(args_ptr),
+        SYSCALL_NT_ALLOCATE_VIRTUAL_MEMORY => nt_allocate_virtual_memory(args_ptr),
+        SYSCALL_NT_QUERY_INFORMATION_FILE => nt_query_information_file(args_ptr),
+        SYSCALL_NT_CLOSE => nt_close(args_ptr),
         // ── Win32 syscalls (kernel32 / user32 / msvcrt / winmm stubs) ────────
-        WIN32_GET_TICK_COUNT    => win32_get_tick_count(),
-        WIN32_SLEEP             => 0, // no-op; TODO: KeDelayExecutionThread
-        WIN32_VIRTUAL_ALLOC     => win32_virtual_alloc(args_ptr),
-        WIN32_VIRTUAL_FREE      => 1, // TRUE; no-op decommit stub
-        WIN32_VIRTUAL_PROTECT   => win32_virtual_protect(args_ptr),
-        WIN32_GET_PROC_ADDRESS  => win32_get_proc_address(args_ptr),
+        WIN32_GET_TICK_COUNT => win32_get_tick_count(),
+        WIN32_SLEEP => 0, // no-op; TODO: KeDelayExecutionThread
+        WIN32_VIRTUAL_ALLOC => win32_virtual_alloc(args_ptr),
+        WIN32_VIRTUAL_FREE => 1, // TRUE; no-op decommit stub
+        WIN32_VIRTUAL_PROTECT => win32_virtual_protect(args_ptr),
+        WIN32_GET_PROC_ADDRESS => win32_get_proc_address(args_ptr),
         WIN32_GET_MODULE_HANDLE => win32_get_module_handle_a(args_ptr),
-        WIN32_EXIT_PROCESS      => win32_exit_process(args_ptr),
-        WIN32_CREATE_WINDOW     => win32_create_window(args_ptr),
-        WIN32_SHOW_WINDOW       => 1,
-        WIN32_GET_MESSAGE       => win32_get_message(args_ptr),
-        WIN32_DISPATCH_MESSAGE  => win32_dispatch_message(args_ptr),
+        WIN32_EXIT_PROCESS => win32_exit_process(args_ptr),
+        WIN32_CREATE_WINDOW => win32_create_window(args_ptr),
+        WIN32_SHOW_WINDOW => 1,
+        WIN32_GET_MESSAGE => win32_get_message(args_ptr),
+        WIN32_DISPATCH_MESSAGE => win32_dispatch_message(args_ptr),
         WIN32_TRANSLATE_MESSAGE => 1,
-        WIN32_PEEK_MESSAGE      => win32_peek_message(args_ptr),
+        WIN32_PEEK_MESSAGE => win32_peek_message(args_ptr),
         WIN32_POST_QUIT_MESSAGE => win32_post_quit_message(args_ptr),
-        WIN32_REGISTER_CLASS_A  => win32_register_class_a(args_ptr),
+        WIN32_REGISTER_CLASS_A => win32_register_class_a(args_ptr),
         WIN32_DEF_WINDOW_PROC_A => win32_def_window_proc_a(args_ptr),
-        WIN32_SET_TIMER         => win32_set_timer(args_ptr),
-        WIN32_KILL_TIMER        => win32_kill_timer(args_ptr),
-        WIN32_MALLOC            => win32_malloc(args_ptr),
-        WIN32_CALLOC            => win32_calloc(args_ptr),
-        WIN32_FREE              => 0, // no-op; Phase 2.5: memory is never returned
-        WIN32_MEMCPY            => win32_memcpy(args_ptr),
-        WIN32_MEMSET            => win32_memset(args_ptr),
-        WIN32_STRLEN            => win32_strlen(args_ptr),
+        WIN32_SET_TIMER => win32_set_timer(args_ptr),
+        WIN32_KILL_TIMER => win32_kill_timer(args_ptr),
+        WIN32_MALLOC => win32_malloc(args_ptr),
+        WIN32_CALLOC => win32_calloc(args_ptr),
+        WIN32_FREE => 0, // no-op; Phase 2.5: memory is never returned
+        WIN32_MEMCPY => win32_memcpy(args_ptr),
+        WIN32_MEMSET => win32_memset(args_ptr),
+        WIN32_STRLEN => win32_strlen(args_ptr),
         WIN32_TIME_BEGIN_PERIOD => win32_time_begin_period(args_ptr),
-        WIN32_TIME_END_PERIOD   => 0, // TIMERR_NOERROR
-        WIN32_TIME_GET_TIME     => win32_get_tick_count(),
-        WIN32_LIST_DIR          => win32_list_dir(args_ptr),
-        WIN32_CAT_FILE          => win32_cat_file(args_ptr),
-        WIN32_DRAW_DEMO_FRAME   => win32_draw_demo_frame(),
-        WIN32_CREATE_FILE_A     => win32_create_file_a(args_ptr),
-        WIN32_LOOKUP_WNDPROC    => win32_lookup_wndproc(args_ptr),
+        WIN32_TIME_END_PERIOD => 0, // TIMERR_NOERROR
+        WIN32_TIME_GET_TIME => win32_get_tick_count(),
+        WIN32_LIST_DIR => win32_list_dir(args_ptr),
+        WIN32_CAT_FILE => win32_cat_file(args_ptr),
+        WIN32_DRAW_DEMO_FRAME => win32_draw_demo_frame(),
+        WIN32_CREATE_FILE_A => win32_create_file_a(args_ptr),
+        WIN32_LOOKUP_WNDPROC => win32_lookup_wndproc(args_ptr),
         // ── kernel32 Phase 3A ─────────────────────────────────────────────────
-        WIN32_TLS_ALLOC            => win32_tls_alloc(),
-        WIN32_TLS_FREE             => win32_tls_free(args_ptr),
-        WIN32_TLS_GET_VALUE        => win32_tls_get_value(args_ptr),
-        WIN32_TLS_SET_VALUE        => win32_tls_set_value(args_ptr),
-        WIN32_INIT_CRITICAL_SEC    => win32_init_critical_section(args_ptr),
-        WIN32_ENTER_CRITICAL_SEC   => win32_enter_critical_section(args_ptr),
-        WIN32_LEAVE_CRITICAL_SEC   => win32_leave_critical_section(args_ptr),
-        WIN32_TRY_ENTER_CRITICAL   => win32_try_enter_critical_section(args_ptr),
-        WIN32_ACQUIRE_SRW_EXCL     => win32_acquire_srw_exclusive(args_ptr),
-        WIN32_RELEASE_SRW_EXCL     => win32_release_srw_exclusive(args_ptr),
-        WIN32_GET_MODULE_HANDLE_W  => win32_get_module_handle_w(args_ptr),
+        WIN32_TLS_ALLOC => win32_tls_alloc(),
+        WIN32_TLS_FREE => win32_tls_free(args_ptr),
+        WIN32_TLS_GET_VALUE => win32_tls_get_value(args_ptr),
+        WIN32_TLS_SET_VALUE => win32_tls_set_value(args_ptr),
+        WIN32_INIT_CRITICAL_SEC => win32_init_critical_section(args_ptr),
+        WIN32_ENTER_CRITICAL_SEC => win32_enter_critical_section(args_ptr),
+        WIN32_LEAVE_CRITICAL_SEC => win32_leave_critical_section(args_ptr),
+        WIN32_TRY_ENTER_CRITICAL => win32_try_enter_critical_section(args_ptr),
+        WIN32_ACQUIRE_SRW_EXCL => win32_acquire_srw_exclusive(args_ptr),
+        WIN32_RELEASE_SRW_EXCL => win32_release_srw_exclusive(args_ptr),
+        WIN32_GET_MODULE_HANDLE_W => win32_get_module_handle_w(args_ptr),
         WIN32_GET_MODULE_HANDLE_EX => win32_get_module_handle_ex_a(args_ptr),
-        WIN32_LOAD_LIBRARY_A       => win32_load_library_a(args_ptr),
-        WIN32_GET_SYSTEM_INFO      => win32_get_system_info(args_ptr),
-        WIN32_GET_TICK_COUNT_64    => win32_get_tick_count(),
-        WIN32_CREATE_THREAD_K32    => win32_create_thread_k32(args_ptr),
-        WIN32_GET_CURRENT_PID      => 1, // fixed PID
-        WIN32_GET_CURRENT_TID      => 1, // fixed TID
-        WIN32_WAIT_FOR_MULTI       => 0, // WAIT_OBJECT_0; stub
-        WIN32_WAIT_SINGLE_EX       => 0, // WAIT_OBJECT_0; stub
-        WIN32_CREATE_EVENT_A       => win32_create_event_a(args_ptr),
-        WIN32_SET_EVENT            => 1,
-        WIN32_RESET_EVENT          => 1,
-        WIN32_CREATE_SEMAPHORE_A   => 1, // fake semaphore handle
-        WIN32_RELEASE_SEMAPHORE    => 1,
-        WIN32_CREATE_FILE_MAPPING  => win32_create_file_mapping(args_ptr),
-        WIN32_MAP_VIEW_OF_FILE     => win32_map_view_of_file(args_ptr),
-        WIN32_GET_TEMP_PATH_A      => win32_get_temp_path_a(args_ptr),
-        WIN32_GET_TEMP_FILE_A      => win32_get_temp_file_name_a(args_ptr),
-        WIN32_OUTPUT_DEBUG_STR     => win32_output_debug_string(args_ptr),
-        WIN32_VIRTUAL_QUERY        => win32_virtual_query(args_ptr),
-        WIN32_GET_MODULE_FILE_W    => win32_get_module_file_name_w(args_ptr),
-        WIN32_QUERY_PERF_COUNTER   => win32_query_perf_counter(args_ptr),
-        WIN32_QUERY_PERF_FREQ      => win32_query_perf_freq(args_ptr),
-        WIN32_HEAP_ALLOC           => win32_heap_alloc(args_ptr),
-        WIN32_SET_LAST_ERROR       => 0, // nop
-        WIN32_GET_SYSTEM_TIME_FT   => win32_get_system_time_as_file_time(args_ptr),
+        WIN32_LOAD_LIBRARY_A => win32_load_library_a(args_ptr),
+        WIN32_GET_SYSTEM_INFO => win32_get_system_info(args_ptr),
+        WIN32_GET_TICK_COUNT_64 => win32_get_tick_count(),
+        WIN32_CREATE_THREAD_K32 => win32_create_thread_k32(args_ptr),
+        WIN32_GET_CURRENT_PID => 1, // fixed PID
+        WIN32_GET_CURRENT_TID => 1, // fixed TID
+        WIN32_WAIT_FOR_MULTI => 0,  // WAIT_OBJECT_0; stub
+        WIN32_WAIT_SINGLE_EX => 0,  // WAIT_OBJECT_0; stub
+        WIN32_CREATE_EVENT_A => win32_create_event_a(args_ptr),
+        WIN32_SET_EVENT => 1,
+        WIN32_RESET_EVENT => 1,
+        WIN32_CREATE_SEMAPHORE_A => 1, // fake semaphore handle
+        WIN32_RELEASE_SEMAPHORE => 1,
+        WIN32_CREATE_FILE_MAPPING => win32_create_file_mapping(args_ptr),
+        WIN32_MAP_VIEW_OF_FILE => win32_map_view_of_file(args_ptr),
+        WIN32_GET_TEMP_PATH_A => win32_get_temp_path_a(args_ptr),
+        WIN32_GET_TEMP_FILE_A => win32_get_temp_file_name_a(args_ptr),
+        WIN32_OUTPUT_DEBUG_STR => win32_output_debug_string(args_ptr),
+        WIN32_VIRTUAL_QUERY => win32_virtual_query(args_ptr),
+        WIN32_GET_MODULE_FILE_W => win32_get_module_file_name_w(args_ptr),
+        WIN32_QUERY_PERF_COUNTER => win32_query_perf_counter(args_ptr),
+        WIN32_QUERY_PERF_FREQ => win32_query_perf_freq(args_ptr),
+        WIN32_HEAP_ALLOC => win32_heap_alloc(args_ptr),
+        WIN32_SET_LAST_ERROR => 0, // nop
+        WIN32_GET_SYSTEM_TIME_FT => win32_get_system_time_as_file_time(args_ptr),
         // ── Ghost Recon kernel32 ────────────────────────────────────────────
         WIN32_GLOBAL_MEMORY_STATUS => win32_global_memory_status(args_ptr),
-        WIN32_GET_MODULE_FILE_A    => win32_get_module_file_name_a(args_ptr),
-        WIN32_MULTI_BYTE_TO_WIDE   => win32_multi_byte_to_wide_char(args_ptr),
-        WIN32_GET_VERSION_EX_A     => win32_get_version_ex_a(args_ptr),
-        WIN32_LSTRCPY_A            => win32_lstrcpy_a(args_ptr),
-        WIN32_GET_CURRENT_DIR_A    => win32_get_current_dir_a(args_ptr),
-        WIN32_LSTRCAT_A            => win32_lstrcat_a(args_ptr),
-        WIN32_LSTRCPYN_A           => win32_lstrcpyn_a(args_ptr),
-        WIN32_LSTRLEN_A            => win32_lstrlen_a(args_ptr),
-        WIN32_WRITE_FILE           => win32_write_file(args_ptr),
-        WIN32_GET_FILE_SIZE        => win32_get_file_size(args_ptr),
-        WIN32_FIND_FIRST_FILE_A    => win32_find_first_file_a(args_ptr),
-        WIN32_GET_FILE_ATTRS_A     => win32_get_file_attributes_a(args_ptr),
-        WIN32_GET_FULL_PATH_A      => win32_get_full_path_name_a(args_ptr),
-        WIN32_GET_CP_INFO          => win32_get_cp_info(args_ptr),
-        WIN32_GET_FILE_TYPE        => win32_get_file_type(args_ptr),
-        WIN32_GET_COMMAND_LINE_A   => win32_get_command_line_a(),
-        WIN32_GET_LOCAL_TIME       => win32_get_local_time(args_ptr),
-        WIN32_GET_STARTUP_INFO_A   => win32_get_startup_info_a(args_ptr),
-        WIN32_GET_STD_HANDLE       => win32_get_std_handle(args_ptr),
-        WIN32_HEAP_REALLOC         => win32_heap_realloc(args_ptr),
-        WIN32_MUL_DIV              => win32_mul_div(args_ptr),
-        WIN32_READ_FILE            => win32_read_file_k32(args_ptr),
-        WIN32_WIDE_TO_MULTI_BYTE   => win32_wide_char_to_multi_byte(args_ptr),
+        WIN32_GET_MODULE_FILE_A => win32_get_module_file_name_a(args_ptr),
+        WIN32_MULTI_BYTE_TO_WIDE => win32_multi_byte_to_wide_char(args_ptr),
+        WIN32_GET_VERSION_EX_A => win32_get_version_ex_a(args_ptr),
+        WIN32_LSTRCPY_A => win32_lstrcpy_a(args_ptr),
+        WIN32_GET_CURRENT_DIR_A => win32_get_current_dir_a(args_ptr),
+        WIN32_LSTRCAT_A => win32_lstrcat_a(args_ptr),
+        WIN32_LSTRCPYN_A => win32_lstrcpyn_a(args_ptr),
+        WIN32_LSTRLEN_A => win32_lstrlen_a(args_ptr),
+        WIN32_WRITE_FILE => win32_write_file(args_ptr),
+        WIN32_GET_FILE_SIZE => win32_get_file_size(args_ptr),
+        WIN32_FIND_FIRST_FILE_A => win32_find_first_file_a(args_ptr),
+        WIN32_GET_FILE_ATTRS_A => win32_get_file_attributes_a(args_ptr),
+        WIN32_GET_FULL_PATH_A => win32_get_full_path_name_a(args_ptr),
+        WIN32_GET_CP_INFO => win32_get_cp_info(args_ptr),
+        WIN32_GET_FILE_TYPE => win32_get_file_type(args_ptr),
+        WIN32_GET_COMMAND_LINE_A => win32_get_command_line_a(),
+        WIN32_GET_LOCAL_TIME => win32_get_local_time(args_ptr),
+        WIN32_GET_STARTUP_INFO_A => win32_get_startup_info_a(args_ptr),
+        WIN32_GET_STD_HANDLE => win32_get_std_handle(args_ptr),
+        WIN32_HEAP_REALLOC => win32_heap_realloc(args_ptr),
+        WIN32_MUL_DIV => win32_mul_div(args_ptr),
+        WIN32_READ_FILE => win32_read_file_k32(args_ptr),
+        WIN32_WIDE_TO_MULTI_BYTE => win32_wide_char_to_multi_byte(args_ptr),
         // ── user32 Phase 3A ───────────────────────────────────────────────────
-        WIN32_GET_CLIENT_RECT      => win32_get_client_rect(args_ptr),
-        WIN32_ENUM_DISPLAY_SETTINGS=> win32_enum_display_settings_w(args_ptr),
-        WIN32_MESSAGE_BOX_A        => win32_message_box_a(args_ptr),
+        WIN32_GET_CLIENT_RECT => win32_get_client_rect(args_ptr),
+        WIN32_ENUM_DISPLAY_SETTINGS => win32_enum_display_settings_w(args_ptr),
+        WIN32_MESSAGE_BOX_A => win32_message_box_a(args_ptr),
         WIN32_ENUM_DISPLAY_SETTINGS_A => win32_enum_display_settings_a(args_ptr),
-        WIN32_GET_SYSTEM_METRICS   => win32_get_system_metrics(args_ptr),
-        WIN32_GET_ENV_STRINGS_A    => win32_get_env_strings_a(),
-        WIN32_LOG_INITTERM         => {
+        WIN32_GET_SYSTEM_METRICS => win32_get_system_metrics(args_ptr),
+        WIN32_GET_ENV_STRINGS_A => win32_get_env_strings_a(),
+        WIN32_LOG_INITTERM => {
             let addr = read_arg_u32(args_ptr, 0).unwrap_or(0);
             hal::serial::write_str("[_initterm] calling 0x");
             hal::serial::write_fmt(core::format_args!("{:x}\n", addr));
             0
-        },
+        }
         // ── winmm ───────────────────────────────────────────────────────────
-        WIN32_TIME_GET_DEV_CAPS    => win32_time_get_dev_caps(args_ptr),
+        WIN32_TIME_GET_DEV_CAPS => win32_time_get_dev_caps(args_ptr),
         // ── UCRT ──────────────────────────────────────────────────────────────
-        UCRT_REALLOC               => ucrt_realloc(args_ptr),
-        UCRT_INIT_ONEXIT_TABLE     => ucrt_init_onexit_table(args_ptr),
-        UCRT_REG_ONEXIT_FN         => ucrt_register_onexit_fn(args_ptr),
-        UCRT_BEGINTHREADEX         => ucrt_beginthreadex(args_ptr),
-        UCRT_ERRNO_PTR             => ucrt_errno_ptr(),
-        UCRT_STRCMP                => ucrt_strcmp(args_ptr),
-        UCRT_STRNCMP               => ucrt_strncmp(args_ptr),
-        UCRT_STRNCPY               => ucrt_strncpy(args_ptr),
-        UCRT_STRNLEN               => ucrt_strnlen(args_ptr),
-        UCRT_STRCHR                => ucrt_strchr(args_ptr),
-        UCRT_STRDUP                => ucrt_strdup(args_ptr),
-        UCRT_WCSLEN                => ucrt_wcslen(args_ptr),
-        UCRT_WCSNLEN               => ucrt_wcsnlen(args_ptr),
-        UCRT_WCSCMP                => ucrt_wcscmp(args_ptr),
-        UCRT_WCSICMP               => ucrt_wcsicmp(args_ptr),
-        UCRT_STRTOUL               => ucrt_strtoul(args_ptr),
-        UCRT_MEMCMP                => ucrt_memcmp(args_ptr),
-        UCRT_MEMCHR                => ucrt_memchr(args_ptr),
-        UCRT_MEMMOVE               => win32_memcpy(args_ptr), // overlap-safe approximation
+        UCRT_REALLOC => ucrt_realloc(args_ptr),
+        UCRT_INIT_ONEXIT_TABLE => ucrt_init_onexit_table(args_ptr),
+        UCRT_REG_ONEXIT_FN => ucrt_register_onexit_fn(args_ptr),
+        UCRT_BEGINTHREADEX => ucrt_beginthreadex(args_ptr),
+        UCRT_ERRNO_PTR => ucrt_errno_ptr(),
+        UCRT_STRCMP => ucrt_strcmp(args_ptr),
+        UCRT_STRNCMP => ucrt_strncmp(args_ptr),
+        UCRT_STRNCPY => ucrt_strncpy(args_ptr),
+        UCRT_STRNLEN => ucrt_strnlen(args_ptr),
+        UCRT_STRCHR => ucrt_strchr(args_ptr),
+        UCRT_STRDUP => ucrt_strdup(args_ptr),
+        UCRT_WCSLEN => ucrt_wcslen(args_ptr),
+        UCRT_WCSNLEN => ucrt_wcsnlen(args_ptr),
+        UCRT_WCSCMP => ucrt_wcscmp(args_ptr),
+        UCRT_WCSICMP => ucrt_wcsicmp(args_ptr),
+        UCRT_STRTOUL => ucrt_strtoul(args_ptr),
+        UCRT_MEMCMP => ucrt_memcmp(args_ptr),
+        UCRT_MEMCHR => ucrt_memchr(args_ptr),
+        UCRT_MEMMOVE => win32_memcpy(args_ptr), // overlap-safe approximation
         // ── ADVAPI32 ──────────────────────────────────────────────────────────
-        ADVAPI_REG_OPEN_KEY_EX_A   => advapi_reg_open_key_ex_a(args_ptr),
-        ADVAPI_REG_QUERY_VALUE_A   => advapi_reg_query_value_ex_a(args_ptr),
-        ADVAPI_REG_CLOSE_KEY       => advapi_reg_close_key(args_ptr),
-        ADVAPI_REG_OPEN_KEY_EX_W   => advapi_reg_open_key_ex_w(args_ptr),
-        ADVAPI_REG_QUERY_VALUE_W   => advapi_reg_query_value_ex_w(args_ptr),
-        ADVAPI_ALLOC_LUID          => advapi_alloc_luid(args_ptr),
-        WIN32_GET_USER_NAME_A      => win32_get_user_name_a(args_ptr),
+        ADVAPI_REG_OPEN_KEY_EX_A => advapi_reg_open_key_ex_a(args_ptr),
+        ADVAPI_REG_QUERY_VALUE_A => advapi_reg_query_value_ex_a(args_ptr),
+        ADVAPI_REG_CLOSE_KEY => advapi_reg_close_key(args_ptr),
+        ADVAPI_REG_OPEN_KEY_EX_W => advapi_reg_open_key_ex_w(args_ptr),
+        ADVAPI_REG_QUERY_VALUE_W => advapi_reg_query_value_ex_w(args_ptr),
+        ADVAPI_ALLOC_LUID => advapi_alloc_luid(args_ptr),
+        WIN32_GET_USER_NAME_A => win32_get_user_name_a(args_ptr),
         // ── Vulkan ICD loader ───────────────────────────────────────────────
-        VK_GET_INSTANCE_PROC_ADDR   => vk_get_instance_proc_addr(args_ptr),
-        VK_GET_DEVICE_PROC_ADDR     => vk_get_device_proc_addr(args_ptr),
-        VK_ENUM_INST_EXT_PROPS      => vk_enum_inst_ext_props(args_ptr),
-        VK_ENUM_INST_LAYER_PROPS    => vk_enum_inst_layer_props(args_ptr),
-        VK_ENUM_INST_VERSION        => vk_enum_inst_version(args_ptr),
-        VK_ENUM_PHYSICAL_DEVICES    => vk_enum_physical_devices(args_ptr),
-        VK_GET_PHYS_DEV_PROPS       => vk_get_phys_dev_props(args_ptr),
-        VK_GET_PHYS_DEV_PROPS2      => vk_get_phys_dev_props2(args_ptr),
-        VK_GET_PHYS_DEV_FEATURES    => vk_get_phys_dev_features(args_ptr),
-        VK_GET_PHYS_DEV_FEATURES2   => vk_get_phys_dev_features2(args_ptr),
-        VK_GET_PHYS_DEV_MEM_PROPS   => vk_get_phys_dev_mem_props(args_ptr),
-        VK_GET_PHYS_DEV_MEM_PROPS2  => vk_get_phys_dev_mem_props2(args_ptr),
+        VK_GET_INSTANCE_PROC_ADDR => vk_get_instance_proc_addr(args_ptr),
+        VK_GET_DEVICE_PROC_ADDR => vk_get_device_proc_addr(args_ptr),
+        VK_ENUM_INST_EXT_PROPS => vk_enum_inst_ext_props(args_ptr),
+        VK_ENUM_INST_LAYER_PROPS => vk_enum_inst_layer_props(args_ptr),
+        VK_ENUM_INST_VERSION => vk_enum_inst_version(args_ptr),
+        VK_ENUM_PHYSICAL_DEVICES => vk_enum_physical_devices(args_ptr),
+        VK_GET_PHYS_DEV_PROPS => vk_get_phys_dev_props(args_ptr),
+        VK_GET_PHYS_DEV_PROPS2 => vk_get_phys_dev_props2(args_ptr),
+        VK_GET_PHYS_DEV_FEATURES => vk_get_phys_dev_features(args_ptr),
+        VK_GET_PHYS_DEV_FEATURES2 => vk_get_phys_dev_features2(args_ptr),
+        VK_GET_PHYS_DEV_MEM_PROPS => vk_get_phys_dev_mem_props(args_ptr),
+        VK_GET_PHYS_DEV_MEM_PROPS2 => vk_get_phys_dev_mem_props2(args_ptr),
         VK_GET_PHYS_DEV_QUEUE_PROPS => vk_get_phys_dev_queue_props(args_ptr),
-        VK_GET_PHYS_DEV_FMT_PROPS   => vk_get_phys_dev_fmt_props(args_ptr),
-        VK_GET_PHYS_DEV_FMT_PROPS2  => vk_get_phys_dev_fmt_props(args_ptr), // same handler
-        VK_ENUM_DEV_EXT_PROPS       => vk_enum_dev_ext_props(args_ptr),
-        VK_GET_SURFACE_CAPS         => vk_get_surface_caps(args_ptr),
-        VK_GET_SURFACE_FORMATS      => vk_get_surface_formats(args_ptr),
-        VK_GET_SURFACE_PRESENT_MODES=> vk_get_surface_present_modes(args_ptr),
-        VK_GET_SURFACE_SUPPORT      => vk_get_surface_support(args_ptr),
-        VK_GET_SWAPCHAIN_IMAGES     => vk_get_swapchain_images(args_ptr),
-        VK_ACQUIRE_NEXT_IMAGE       => vk_acquire_next_image(args_ptr),
-        VK_ALLOC_CMD_BUFFERS        => vk_alloc_cmd_buffers(args_ptr),
-        VK_MAP_MEMORY               => vk_map_memory(args_ptr),
-        VK_GET_IMAGE_MEM_REQS       => vk_get_mem_reqs(args_ptr),
-        VK_GET_BUFFER_MEM_REQS      => vk_get_mem_reqs(args_ptr), // same layout
-        VK_ALLOC_DESCRIPTOR_SETS    => vk_alloc_descriptor_sets(args_ptr),
-        VK_CREATE_GRAPHICS_PIPES    => vk_create_pipelines(args_ptr),
-        VK_CREATE_COMPUTE_PIPES     => vk_create_pipelines(args_ptr),
-        VK_QUEUE_PRESENT            => vk_queue_present(args_ptr),
+        VK_GET_PHYS_DEV_FMT_PROPS => vk_get_phys_dev_fmt_props(args_ptr),
+        VK_GET_PHYS_DEV_FMT_PROPS2 => vk_get_phys_dev_fmt_props(args_ptr), // same handler
+        VK_ENUM_DEV_EXT_PROPS => vk_enum_dev_ext_props(args_ptr),
+        VK_GET_SURFACE_CAPS => vk_get_surface_caps(args_ptr),
+        VK_GET_SURFACE_FORMATS => vk_get_surface_formats(args_ptr),
+        VK_GET_SURFACE_PRESENT_MODES => vk_get_surface_present_modes(args_ptr),
+        VK_GET_SURFACE_SUPPORT => vk_get_surface_support(args_ptr),
+        VK_GET_SWAPCHAIN_IMAGES => vk_get_swapchain_images(args_ptr),
+        VK_ACQUIRE_NEXT_IMAGE => vk_acquire_next_image(args_ptr),
+        VK_ALLOC_CMD_BUFFERS => vk_alloc_cmd_buffers(args_ptr),
+        VK_MAP_MEMORY => vk_map_memory(args_ptr),
+        VK_GET_IMAGE_MEM_REQS => vk_get_mem_reqs(args_ptr),
+        VK_GET_BUFFER_MEM_REQS => vk_get_mem_reqs(args_ptr), // same layout
+        VK_ALLOC_DESCRIPTOR_SETS => vk_alloc_descriptor_sets(args_ptr),
+        VK_CREATE_GRAPHICS_PIPES => vk_create_pipelines(args_ptr),
+        VK_CREATE_COMPUTE_PIPES => vk_create_pipelines(args_ptr),
+        VK_QUEUE_PRESENT => vk_queue_present(args_ptr),
         _ => STATUS_INVALID_SYSTEM_SERVICE,
     }
 }
@@ -547,7 +544,9 @@ fn nt_read_file(args_ptr: u32) -> u32 {
         // Block until a byte arrives from serial or PS/2 keyboard.
         // Skip PS/2 when the launcher has exclusive input focus.
         let first = loop {
-            if let Some(b) = hal::serial::try_read_byte() { break b; }
+            if let Some(b) = hal::serial::try_read_byte() {
+                break b;
+            }
             if !hal::fb::is_exclusive() {
                 if let Some(sc) = hal::ps2::pop_scancode() {
                     if let Some(ascii) = hal::ps2::scancode_to_ascii_pub(sc) {
@@ -559,16 +558,28 @@ fn nt_read_file(args_ptr: u32) -> u32 {
             x86_64::instructions::hlt();
         };
         x86_64::instructions::interrupts::disable();
-        unsafe { (buffer_ptr as *mut u8).write_unaligned(first); }
+        unsafe {
+            (buffer_ptr as *mut u8).write_unaligned(first);
+        }
         n += 1;
         while n < length {
-            let b = if let Some(v) = hal::serial::try_read_byte() { v }
-                    else if !hal::fb::is_exclusive() {
-                        if let Some(sc) = hal::ps2::pop_scancode() {
-                            match hal::ps2::scancode_to_ascii_pub(sc) { Some(a) => a, None => continue }
-                        } else { break }
-                    } else { break };
-            unsafe { (buffer_ptr as *mut u8).add(n as usize).write_unaligned(b); }
+            let b = if let Some(v) = hal::serial::try_read_byte() {
+                v
+            } else if !hal::fb::is_exclusive() {
+                if let Some(sc) = hal::ps2::pop_scancode() {
+                    match hal::ps2::scancode_to_ascii_pub(sc) {
+                        Some(a) => a,
+                        None => continue,
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            };
+            unsafe {
+                (buffer_ptr as *mut u8).add(n as usize).write_unaligned(b);
+            }
             n += 1;
         }
         if iosb_ptr != 0 {
@@ -605,7 +616,9 @@ fn nt_read_file(args_ptr: u32) -> u32 {
     };
     let mut i = 0usize;
     while i < n {
-        unsafe { (buffer_ptr as *mut u8).add(i).write_unaligned(tmp[i]); }
+        unsafe {
+            (buffer_ptr as *mut u8).add(i).write_unaligned(tmp[i]);
+        }
         i += 1;
     }
     remember_file_handle_state(file_handle, state);
@@ -679,9 +692,7 @@ fn nt_create_process(args_ptr: u32) -> u32 {
             Some(v) => v,
             None => return STATUS_NOT_IMPLEMENTED,
         };
-        let mut mapper = SyscallMapper {
-            pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) },
-        };
+        let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
         let mut user_vad = mm::vad::VadTree::new();
         if let Ok(img) = ps::loader::load_image(&bytes, &mut user_vad, &mut mapper, None) {
             if let Ok(proc_ctx) = ps::loader::setup_process(&img, &mut user_vad, &mut mapper, pid, 1) {
@@ -761,12 +772,7 @@ fn nt_create_thread(args_ptr: u32) -> u32 {
         let _ = write_u32_user(client_id_ptr, target_pid);
         let _ = write_u32_user(client_id_ptr.wrapping_add(4), tid as u32);
     }
-    log::info!(
-        "[smoke] NtCreateThread ok handle={:#x} pid={} tid={}",
-        thread_handle as u32,
-        target_pid,
-        tid as u32
-    );
+    log::info!("[smoke] NtCreateThread ok handle={:#x} pid={} tid={}", thread_handle as u32, target_pid, tid as u32);
     // If NtCreateProcess loaded an image for this process, launch it now via
     // the scheduler rather than calling jump_to_ring3_32 directly.  This lets
     // the calling thread (e.g. the interactive shell) continue running after
@@ -903,11 +909,26 @@ fn nt_terminate_process(args_ptr: u32) -> u32 {
 //   5  FileStandardInformation    — sizes + link count + flags (24 bytes)
 //  14  FilePositionInformation    — current byte offset (8 bytes)
 fn nt_query_information_file(args_ptr: u32) -> u32 {
-    let file_handle  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(s) => return s };
-    let iosb_ptr     = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(s) => return s };
-    let info_ptr     = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(s) => return s };
-    let length       = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(s) => return s };
-    let info_class   = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(s) => return s };
+    let file_handle = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
+    let iosb_ptr = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
+    let info_ptr = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
+    let length = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
+    let info_class = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
 
     if info_ptr == 0 || !is_user_range(info_ptr, length.max(1)) {
         return STATUS_ACCESS_VIOLATION;
@@ -915,13 +936,15 @@ fn nt_query_information_file(args_ptr: u32) -> u32 {
 
     let file = match lookup_file_handle_state(file_handle) {
         Some(v) => v,
-        None    => return STATUS_INVALID_HANDLE,
+        None => return STATUS_INVALID_HANDLE,
     };
 
     let status = match info_class {
         // FileBasicInformation — synthetic timestamps, archive attribute
         1 => {
-            if length < 36 { return STATUS_BUFFER_TOO_SMALL; }
+            if length < 36 {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
             // CreationTime, LastAccessTime, LastWriteTime, ChangeTime (4 × LARGE_INTEGER = 32 bytes)
             // all zero (FAT has no sub-second timestamps in our simplified driver)
             let mut i = 0u32;
@@ -939,10 +962,12 @@ fn nt_query_information_file(args_ptr: u32) -> u32 {
         }
         // FileStandardInformation — sizes, link count, is-directory
         5 => {
-            if length < 22 { return STATUS_BUFFER_TOO_SMALL; }
-            let size      = file.file_size as u64;
-            let alloc_sz  = (size + 511) & !511; // round up to 512-byte sector
-            // AllocationSize (8 bytes LARGE_INTEGER)
+            if length < 22 {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            let size = file.file_size as u64;
+            let alloc_sz = (size + 511) & !511; // round up to 512-byte sector
+                                                // AllocationSize (8 bytes LARGE_INTEGER)
             if write_u64_user(info_ptr, alloc_sz).is_err() {
                 return STATUS_ACCESS_VIOLATION;
             }
@@ -964,7 +989,9 @@ fn nt_query_information_file(args_ptr: u32) -> u32 {
         }
         // FilePositionInformation — current file pointer
         14 => {
-            if length < 8 { return STATUS_BUFFER_TOO_SMALL; }
+            if length < 8 {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
             if write_u64_user(info_ptr, file.position as u64).is_err() {
                 return STATUS_ACCESS_VIOLATION;
             }
@@ -983,7 +1010,10 @@ fn nt_query_information_file(args_ptr: u32) -> u32 {
 /// NtClose — release a handle.  For file handles, drops the cached FatFile state.
 /// For process/thread handles, a no-op for now (objects are reference-counted).
 fn nt_close(args_ptr: u32) -> u32 {
-    let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(s) => return s };
+    let handle = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
     // Drop any file-handle state so the handle slot can be reused.
     let mut map = FILE_HANDLE_MAP.lock();
     for slot in map.iter_mut() {
@@ -1072,7 +1102,8 @@ fn nt_write_file(args_ptr: u32) -> u32 {
                     let mut ok = true;
                     while k < 11 {
                         let b_lo = unsafe { (buffer_ptr as *const u8).add((p2 as usize) + (k * 2)).read_unaligned() };
-                        let b_hi = unsafe { (buffer_ptr as *const u8).add((p2 as usize) + (k * 2) + 1).read_unaligned() };
+                        let b_hi =
+                            unsafe { (buffer_ptr as *const u8).add((p2 as usize) + (k * 2) + 1).read_unaligned() };
                         if b_lo != pat[k] || b_hi != 0 {
                             ok = false;
                             break;
@@ -1101,7 +1132,7 @@ fn nt_write_file(args_ptr: u32) -> u32 {
             return STATUS_SUCCESS;
         }
     }
-    if length <= 64 && length >= 7 {
+    if (7..=64).contains(&length) {
         let b0 = unsafe { (buffer_ptr as *const u8).read_unaligned() };
         let b1 = unsafe { (buffer_ptr as *const u8).add(1).read_unaligned() };
         let b2 = unsafe { (buffer_ptr as *const u8).add(2).read_unaligned() };
@@ -1175,9 +1206,7 @@ fn nt_allocate_virtual_memory(args_ptr: u32) -> u32 {
         Some(v) => v,
         None => return STATUS_NOT_IMPLEMENTED,
     };
-    let mut mapper = SyscallMapper {
-        pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) },
-    };
+    let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     let out_base = mm::virtual_alloc::allocate(
         &mut ctx.vad,
         Some(&mut mapper),
@@ -1254,7 +1283,6 @@ impl mm::virtual_alloc::PageMapper for SyscallMapper {
         Ok(())
     }
 }
-
 
 fn read_arg_u32(args_ptr: u32, index: u32) -> Result<u32, u32> {
     let addr = args_ptr.wrapping_add(index.wrapping_mul(4));
@@ -1398,7 +1426,10 @@ fn win32_create_window(args_ptr: u32) -> u32 {
 }
 
 fn win32_get_message(args_ptr: u32) -> u32 {
-    let msg_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let msg_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0xFFFF_FFFF,
+    };
     if msg_ptr == 0 || !is_user_range(msg_ptr, 28) {
         return 0xFFFF_FFFF;
     }
@@ -1422,11 +1453,10 @@ fn win32_get_message(args_ptr: u32) -> u32 {
 
     // 4. WM_QUIT
     if let Some(code) = *WIN32_QUIT_PENDING.lock() {
-        let msg = Win32Msg {
-            hwnd: 0, message: 0x0012, w_param: code, l_param: 0,
-            time: now, pt_x: 0, pt_y: 0,
-        };
-        if !write_win32_message(msg_ptr, &msg) { return 0xFFFF_FFFF; }
+        let msg = Win32Msg { hwnd: 0, message: 0x0012, w_param: code, l_param: 0, time: now, pt_x: 0, pt_y: 0 };
+        if !write_win32_message(msg_ptr, &msg) {
+            return 0xFFFF_FFFF;
+        }
         return 0;
     }
 
@@ -1442,27 +1472,37 @@ fn win32_get_message(args_ptr: u32) -> u32 {
             let msg = Win32Msg {
                 hwnd,
                 message: 0x000F, // WM_PAINT
-                w_param: 0, l_param: 0,
-                time: now, pt_x: 0, pt_y: 0,
+                w_param: 0,
+                l_param: 0,
+                time: now,
+                pt_x: 0,
+                pt_y: 0,
             };
-            if !write_win32_message(msg_ptr, &msg) { return 0xFFFF_FFFF; }
+            if !write_win32_message(msg_ptr, &msg) {
+                return 0xFFFF_FFFF;
+            }
             return 1;
         }
     }
 
     // 6. No messages yet (startup phase or too soon for WM_PAINT).
     //    Return a null message so the caller can check WM_QUIT.
-    let msg = Win32Msg {
-        hwnd: 0, message: 0, w_param: 0, l_param: 0,
-        time: now, pt_x: 0, pt_y: 0,
-    };
-    if !write_win32_message(msg_ptr, &msg) { return 0xFFFF_FFFF; }
+    let msg = Win32Msg { hwnd: 0, message: 0, w_param: 0, l_param: 0, time: now, pt_x: 0, pt_y: 0 };
+    if !write_win32_message(msg_ptr, &msg) {
+        return 0xFFFF_FFFF;
+    }
     1
 }
 
 fn win32_peek_message(args_ptr: u32) -> u32 {
-    let msg_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let remove = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
+    let msg_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let remove = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if msg_ptr == 0 || !is_user_range(msg_ptr, 28) {
         return 0;
     }
@@ -1502,7 +1542,10 @@ fn win32_peek_message(args_ptr: u32) -> u32 {
 }
 
 fn win32_dispatch_message(args_ptr: u32) -> u32 {
-    let msg_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let msg_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if msg_ptr == 0 || !is_user_range(msg_ptr, 28) {
         return 0;
     }
@@ -1536,10 +1579,12 @@ fn win32_post_quit_message(args_ptr: u32) -> u32 {
 /// lpTimerFunc is ignored — we deliver WM_TIMER to the message queue instead.
 /// This matches Windows behaviour when the thread has a message loop.
 fn win32_set_timer(args_ptr: u32) -> u32 {
-    let hwnd       = read_arg_u32(args_ptr, 0).unwrap_or(0);
-    let id         = read_arg_u32(args_ptr, 1).unwrap_or(1);
-    let period_ms  = read_arg_u32(args_ptr, 2).unwrap_or(0);
-    if period_ms == 0 { return 0; }
+    let hwnd = read_arg_u32(args_ptr, 0).unwrap_or(0);
+    let id = read_arg_u32(args_ptr, 1).unwrap_or(1);
+    let period_ms = read_arg_u32(args_ptr, 2).unwrap_or(0);
+    if period_ms == 0 {
+        return 0;
+    }
     let now = win32_get_tick_count();
     let entry = (hwnd, id, period_ms, now.wrapping_add(period_ms));
     let mut table = WIN32_TIMER_TABLE.lock();
@@ -1565,7 +1610,7 @@ fn win32_set_timer(args_ptr: u32) -> u32 {
 /// KillTimer(hwnd, nIDEvent) → TRUE (1) always.
 fn win32_kill_timer(args_ptr: u32) -> u32 {
     let hwnd = read_arg_u32(args_ptr, 0).unwrap_or(0);
-    let id   = read_arg_u32(args_ptr, 1).unwrap_or(0);
+    let id = read_arg_u32(args_ptr, 1).unwrap_or(0);
     let mut table = WIN32_TIMER_TABLE.lock();
     for slot in table.iter_mut() {
         if let Some((h, tid, _, _)) = *slot {
@@ -1582,22 +1627,20 @@ fn win32_kill_timer(args_ptr: u32) -> u32 {
 /// Called inside GetMessageA before checking the queue.
 fn fire_due_timers(now: u32) {
     let mut table = WIN32_TIMER_TABLE.lock();
-    for slot in table.iter_mut() {
-        if let Some(ref mut e) = slot {
-            let (hwnd, id, period_ms, next_fire) = *e;
-            if now.wrapping_sub(next_fire) < 0x8000_0000u32 {
-                // next_fire has been reached (wrapping-safe ≤ check)
-                push_win32_message(Win32Msg {
-                    hwnd,
-                    message: 0x0113, // WM_TIMER
-                    w_param: id,
-                    l_param: 0,
-                    time: now,
-                    pt_x: 0,
-                    pt_y: 0,
-                });
-                e.3 = now.wrapping_add(period_ms);
-            }
+    for e in table.iter_mut().flatten() {
+        let (hwnd, id, period_ms, next_fire) = *e;
+        if now.wrapping_sub(next_fire) < 0x8000_0000u32 {
+            // next_fire has been reached (wrapping-safe ≤ check)
+            push_win32_message(Win32Msg {
+                hwnd,
+                message: 0x0113, // WM_TIMER
+                w_param: id,
+                l_param: 0,
+                time: now,
+                pt_x: 0,
+                pt_y: 0,
+            });
+            e.3 = now.wrapping_add(period_ms);
         }
     }
 }
@@ -1614,7 +1657,10 @@ fn first_registered_window() -> u32 {
 }
 
 fn win32_register_class_a(args_ptr: u32) -> u32 {
-    let wc_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let wc_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if wc_ptr == 0 || !is_user_range(wc_ptr, 40) {
         log::info!("[w32dbg] RegisterClassA: bad wc_ptr={:#x}", wc_ptr);
         return 0;
@@ -1672,30 +1718,56 @@ fn win32_lookup_wndproc(args_ptr: u32) -> u32 {
 
 fn win32_virtual_alloc(args_ptr: u32) -> u32 {
     // VirtualAlloc(lpAddress, dwSize, flAllocationType, flProtect) -> base or 0
-    let lp_address   = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let dw_size      = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let fl_alloc     = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let fl_protect   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
-    if dw_size == 0 { return 0; }
+    let lp_address = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let dw_size = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let fl_alloc = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let fl_protect = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if dw_size == 0 {
+        return 0;
+    }
     let protect = mm::vad::PageProtect::from_bits_truncate(fl_protect);
-    if protect.is_empty() { return 0; }
+    if protect.is_empty() {
+        return 0;
+    }
     let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(fl_alloc);
     let mut guard = SYSCALL_CTX.lock();
-    let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+    let ctx = match guard.as_mut() {
+        Some(v) => v,
+        None => return 0,
+    };
     // SAFETY: hhdm_offset stored at install(); page tables live for kernel lifetime.
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     match mm::virtual_alloc::allocate(
-        &mut ctx.vad, Some(&mut mapper),
-        lp_address as u64, dw_size as u64, alloc, protect,
+        &mut ctx.vad,
+        Some(&mut mapper),
+        lp_address as u64,
+        dw_size as u64,
+        alloc,
+        protect,
     ) {
         Ok(base) => base as u32,
-        Err(_)   => 0,
+        Err(_) => 0,
     }
 }
 
 fn win32_virtual_protect(args_ptr: u32) -> u32 {
     // VirtualProtect(lpAddr, dwSize, flNew, lpOldProtect) -> 1 (TRUE) stub
-    let lp_old = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let lp_old = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if lp_old != 0 && is_user_range(lp_old, 4) {
         let _ = write_u32_user(lp_old, 0x04); // PAGE_READWRITE
     }
@@ -1704,16 +1776,27 @@ fn win32_virtual_protect(args_ptr: u32) -> u32 {
 
 fn win32_get_proc_address(args_ptr: u32) -> u32 {
     // GetProcAddress(hModule, lpProcName) -> function VA or 0
-    let h_module    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let lp_proc_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let h_module = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let lp_proc_ptr = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // lpProcName <= 0xFFFF means ordinal lookup
     if lp_proc_ptr <= 0xFFFF {
         return ps::loader::resolve_export_by_ordinal_pub(h_module, lp_proc_ptr as u16).unwrap_or(0);
     }
     let mut buf = [0u8; 128];
     let len = read_cstr_user_buf(lp_proc_ptr, &mut buf);
-    if len == 0 { return 0; }
-    let name = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return 0 };
+    if len == 0 {
+        return 0;
+    }
+    let name = match core::str::from_utf8(&buf[..len]) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     log::info!("[GetProcAddr] {:#x}!{}", h_module, name);
     // Try stub modules first (exact base match)
     if let Some(va) = ps::loader::resolve_stub_proc_by_base(h_module, name) {
@@ -1736,28 +1819,46 @@ fn win32_get_proc_address(args_ptr: u32) -> u32 {
 
 fn win32_get_module_handle_a(args_ptr: u32) -> u32 {
     // GetModuleHandleA(lpModuleName) -> base or 0 (NULL → .exe base)
-    let lp_name = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let lp_name = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if lp_name == 0 {
         return 0x0040_0000; // typical XP .exe load address
     }
     let mut buf = [0u8; 128];
     let len = read_cstr_user_buf(lp_name, &mut buf);
-    if len == 0 { return 0; }
-    let name = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return 0 };
+    if len == 0 {
+        return 0;
+    }
+    let name = match core::str::from_utf8(&buf[..len]) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     ps::loader::resolve_stub_module_base(name).unwrap_or(0)
 }
 
 fn win32_load_library_a(args_ptr: u32) -> u32 {
-    let lp_name = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if lp_name == 0 { return 0x0040_0000; } // NULL → caller's exe base
+    let lp_name = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if lp_name == 0 {
+        return 0x0040_0000;
+    } // NULL → caller's exe base
 
     let mut buf = [0u8; 128];
     let len = read_cstr_user_buf(lp_name, &mut buf);
-    if len == 0 { return 0; }
-    let full = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return 0 };
+    if len == 0 {
+        return 0;
+    }
+    let full = match core::str::from_utf8(&buf[..len]) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
 
     // Strip path: take filename part only
-    let base_name = full.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(full);
+    let base_name = full.rsplit(['\\', '/']).next().unwrap_or(full);
 
     // 1. Already-loaded real DLLs (highest priority — avoids redundant loads)
     if let Some(b) = ps::loader::resolve_loaded_dll_base(base_name) {
@@ -1767,7 +1868,9 @@ fn win32_load_library_a(args_ptr: u32) -> u32 {
 
     // 2. Load from FAT ramdisk (prefer real DXVK DLLs over stubs)
     let fat_base = load_dll_from_fat(base_name);
-    if fat_base != 0 { return fat_base; }
+    if fat_base != 0 {
+        return fat_base;
+    }
 
     // 3. Fall back to stub modules (pre-mapped at fixed VAs)
     if let Some(b) = ps::loader::resolve_stub_module_base(base_name) {
@@ -1807,26 +1910,35 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
     ];
 
     for path in &paths {
-        let mut file = match io_manager::open_fat_file(path) { Ok(f) => f, Err(_) => continue };
+        let mut file = match io_manager::open_fat_file(path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
         let size = file.file_size as usize;
-        if size < 64 || size > 16 * 1024 * 1024 {
+        if !(64..=16 * 1024 * 1024).contains(&size) {
             log::warn!("[loadlib] {} size {} out of range", path, size);
             continue;
         }
 
         // Allocate contiguous physical pages from buddy allocator (bypasses heap).
         // MAX_ORDER=13 supports up to 2^12 = 4096 pages = 16 MB in one allocation.
-        let pages_needed = (size + 4095) / 4096;
+        let pages_needed = size.div_ceil(4096);
         let order = pages_needed.next_power_of_two().trailing_zeros() as usize;
         let hhdm_offset = {
             let guard = SYSCALL_CTX.lock();
-            match guard.as_ref() { Some(c) => c.hhdm_offset, None => return 0 }
+            match guard.as_ref() {
+                Some(c) => c.hhdm_offset,
+                None => return 0,
+            }
         };
         let pfn = {
             let mut buddy = mm::buddy::BUDDY.lock();
             match buddy.as_mut().and_then(|b| b.alloc(order)) {
                 Some(p) => p,
-                None => { log::warn!("[loadlib] buddy OOM for {} (order {})", path, order); continue; }
+                None => {
+                    log::warn!("[loadlib] buddy OOM for {} (order {})", path, order);
+                    continue;
+                }
             }
         };
         let phys_base = pfn.to_phys();
@@ -1835,13 +1947,17 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
         // SAFETY: buddy pages are mapped via HHDM; we own them exclusively.
         let bytes: &mut [u8] = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
         // Zero the buffer (buddy pages may contain stale data).
-        unsafe { core::ptr::write_bytes(buf_ptr, 0, size); }
+        unsafe {
+            core::ptr::write_bytes(buf_ptr, 0, size);
+        }
 
         let read_len = match io_manager::read_fat_file_bulk(&mut file, &mut bytes[..size]) {
             Ok(n) => n,
             Err(_) => {
                 let mut buddy = mm::buddy::BUDDY.lock();
-                if let Some(b) = buddy.as_mut() { b.free(pfn, order); }
+                if let Some(b) = buddy.as_mut() {
+                    b.free(pfn, order);
+                }
                 continue;
             }
         };
@@ -1852,9 +1968,13 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
         // any DLLs that aren't already available as stubs or loaded DLLs.
         let deps = ps::loader::list_import_dlls(bytes);
         for dep in &deps {
-            let dep_base = dep.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(dep);
-            if ps::loader::resolve_stub_module_base(dep_base).is_some() { continue; }
-            if ps::loader::resolve_loaded_dll_base(dep_base).is_some() { continue; }
+            let dep_base = dep.rsplit(['\\', '/']).next().unwrap_or(dep);
+            if ps::loader::resolve_stub_module_base(dep_base).is_some() {
+                continue;
+            }
+            if ps::loader::resolve_loaded_dll_base(dep_base).is_some() {
+                continue;
+            }
             log::info!("[loadlib] {} needs {} — loading dependency", dll_name, dep_base);
             let r = load_dll_from_fat_inner(dep_base, depth + 1);
             if r == 0 {
@@ -1868,14 +1988,19 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
 
         let result = {
             let mut guard = SYSCALL_CTX.lock();
-            let ctx = match guard.as_mut() { Some(c) => c, None => return 0 };
+            let ctx = match guard.as_mut() {
+                Some(c) => c,
+                None => return 0,
+            };
             ps::loader::load_dll(bytes, &mut ctx.vad, &mut mapper)
         };
 
         // Free the buddy pages — DLL sections are now copied into user VA.
         {
             let mut buddy = mm::buddy::BUDDY.lock();
-            if let Some(b) = buddy.as_mut() { b.free(pfn, order); }
+            if let Some(b) = buddy.as_mut() {
+                b.free(pfn, order);
+            }
         }
 
         match result {
@@ -1907,44 +2032,70 @@ fn win32_exit_process(args_ptr: u32) -> u32 {
 fn win32_get_system_time_as_file_time(args_ptr: u32) -> u32 {
     // GetSystemTimeAsFileTime(FILETIME* lpSystemTimeAsFileTime) → void
     // FILETIME = 100-ns intervals since 1601-01-01. Write a plausible XP-era value.
-    let p_ft = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p_ft, 8) { return 0; }
+    let p_ft = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p_ft, 8) {
+        return 0;
+    }
     // ~2003-01-01 00:00:00 UTC in FILETIME units
     let _ = write_u64_user(p_ft, 0x01C2_A820_0000_0000u64);
     0
 }
 
 fn win32_malloc(args_ptr: u32) -> u32 {
-    let size = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if size == 0 { return 0; }
+    let size = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if size == 0 {
+        return 0;
+    }
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04); // PAGE_READWRITE
-    let alloc   = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000); // MEM_COMMIT|MEM_RESERVE
+    let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000); // MEM_COMMIT|MEM_RESERVE
     let mut guard = SYSCALL_CTX.lock();
-    let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+    let ctx = match guard.as_mut() {
+        Some(v) => v,
+        None => return 0,
+    };
     // SAFETY: hhdm_offset is valid for the kernel lifetime.
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, size as u64, alloc, protect) {
         Ok(base) => base as u32,
-        Err(_)   => 0,
+        Err(_) => 0,
     }
 }
 
 fn win32_calloc(args_ptr: u32) -> u32 {
-    let n    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let size = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let n = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let size = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let total = n.saturating_mul(size);
-    if total == 0 { return 0; }
+    if total == 0 {
+        return 0;
+    }
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
-    let alloc   = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
+    let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
     let mut guard = SYSCALL_CTX.lock();
-    let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+    let ctx = match guard.as_mut() {
+        Some(v) => v,
+        None => return 0,
+    };
     // SAFETY: hhdm_offset valid; fresh pages from buddy may contain stale data → zero below.
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, total as u64, alloc, protect) {
         Ok(base) => {
             let rounded = ((total as u64 + 0xFFF) & !0xFFF) as u32;
             // SAFETY: `base` is a freshly committed VA, no other reference exists.
-            unsafe { core::ptr::write_bytes(base as *mut u8, 0, rounded as usize); }
+            unsafe {
+                core::ptr::write_bytes(base as *mut u8, 0, rounded as usize);
+            }
             base as u32
         }
         Err(_) => 0,
@@ -1953,14 +2104,25 @@ fn win32_calloc(args_ptr: u32) -> u32 {
 
 fn win32_memcpy(args_ptr: u32) -> u32 {
     // memcpy(dst, src, n) -> dst
-    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let n   = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return dst };
+    let dst = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let n = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return dst,
+    };
     let mut i = 0u32;
     while i < n {
         // SAFETY: caller is responsible for valid src/dst; mirrors libc memcpy.
         let b = unsafe { (src.wrapping_add(i) as *const u8).read_unaligned() };
-        unsafe { (dst.wrapping_add(i) as *mut u8).write_unaligned(b); }
+        unsafe {
+            (dst.wrapping_add(i) as *mut u8).write_unaligned(b);
+        }
         i = i.wrapping_add(1);
     }
     dst
@@ -1968,13 +2130,24 @@ fn win32_memcpy(args_ptr: u32) -> u32 {
 
 fn win32_memset(args_ptr: u32) -> u32 {
     // memset(dst, c, n) -> dst
-    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let c   = match read_arg_u32(args_ptr, 1) { Ok(v) => v as u8, Err(_) => return dst };
-    let n   = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return dst };
+    let dst = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let c = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v as u8,
+        Err(_) => return dst,
+    };
+    let n = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return dst,
+    };
     let mut i = 0u32;
     while i < n {
         // SAFETY: caller guarantees writability; mirrors libc memset.
-        unsafe { (dst.wrapping_add(i) as *mut u8).write_unaligned(c); }
+        unsafe {
+            (dst.wrapping_add(i) as *mut u8).write_unaligned(c);
+        }
         i = i.wrapping_add(1);
     }
     dst
@@ -1982,30 +2155,54 @@ fn win32_memset(args_ptr: u32) -> u32 {
 
 fn win32_strlen(args_ptr: u32) -> u32 {
     // strlen(s) -> length
-    let s = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if s == 0 { return 0; }
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if s == 0 {
+        return 0;
+    }
     let mut len = 0u32;
     loop {
-        if len > 0x10000 { break; } // safety cap: no string longer than 64 KiB
-        // SAFETY: caller ensures s is a valid C string.
+        if len > 0x10000 {
+            break;
+        } // safety cap: no string longer than 64 KiB
+          // SAFETY: caller ensures s is a valid C string.
         let b = unsafe { (s.wrapping_add(len) as *const u8).read_unaligned() };
-        if b == 0 { break; }
+        if b == 0 {
+            break;
+        }
         len = len.wrapping_add(1);
     }
     len
 }
 
 fn win32_time_begin_period(args_ptr: u32) -> u32 {
-    let period_ms = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 1 };
+    let period_ms = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 1,
+    };
     hal::timer::set_resolution(period_ms.saturating_mul(10_000)); // ms → 100-ns units
     0 // TIMERR_NOERROR
 }
 
 fn win32_list_dir(args_ptr: u32) -> u32 {
-    let path_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(s) => return s };
-    let out_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(s) => return s };
-    let out_len = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(s) => return s };
-    let written_ptr = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(s) => return s };
+    let path_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
+    let out_ptr = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
+    let out_len = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
+    let written_ptr = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
     if out_len == 0 {
         return STATUS_BUFFER_TOO_SMALL;
     }
@@ -2013,11 +2210,7 @@ fn win32_list_dir(args_ptr: u32) -> u32 {
         return STATUS_ACCESS_VIOLATION;
     }
     let mut path_buf = [0u8; 260];
-    let path_len = if path_ptr == 0 {
-        0
-    } else {
-        read_cstr_user_buf(path_ptr, &mut path_buf)
-    };
+    let path_len = if path_ptr == 0 { 0 } else { read_cstr_user_buf(path_ptr, &mut path_buf) };
     let path = if path_len == 0 {
         String::from("/")
     } else {
@@ -2041,16 +2234,12 @@ fn win32_list_dir(args_ptr: u32) -> u32 {
         let mut i = 0u32;
         while i < name.len() as u32 {
             unsafe {
-                (out_ptr as *mut u8)
-                    .add((written + i) as usize)
-                    .write_unaligned(name[i as usize]);
+                (out_ptr as *mut u8).add((written + i) as usize).write_unaligned(name[i as usize]);
             }
             i += 1;
         }
         unsafe {
-            (out_ptr as *mut u8)
-                .add((written + name.len() as u32) as usize)
-                .write_unaligned(b'\n');
+            (out_ptr as *mut u8).add((written + name.len() as u32) as usize).write_unaligned(b'\n');
         }
         written += need;
     }
@@ -2097,7 +2286,10 @@ fn normalize_list_dir_path(path: &str) -> String {
 }
 
 fn win32_cat_file(args_ptr: u32) -> u32 {
-    let path_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(s) => return s };
+    let path_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(s) => return s,
+    };
     if path_ptr == 0 {
         return STATUS_INVALID_PARAMETER;
     }
@@ -2227,8 +2419,8 @@ fn pump_serial_messages() {
 
 fn hash_ascii_fold(bytes: &[u8]) -> u32 {
     let mut h: u32 = 0x811C_9DC5;
-    for b in bytes.iter().copied() {
-        let c = if b'A' <= b && b <= b'Z' { b + 32 } else { b };
+    for b in bytes {
+        let c = b.to_ascii_lowercase();
         h ^= c as u32;
         h = h.wrapping_mul(0x0100_0193);
     }
@@ -2295,13 +2487,27 @@ fn lookup_window_wndproc(hwnd: u32) -> u32 {
 }
 
 fn write_win32_message(ptr: u32, msg: &Win32Msg) -> bool {
-    if write_u32_user(ptr, msg.hwnd).is_err() { return false; }
-    if write_u32_user(ptr.wrapping_add(4), msg.message).is_err() { return false; }
-    if write_u32_user(ptr.wrapping_add(8), msg.w_param).is_err() { return false; }
-    if write_u32_user(ptr.wrapping_add(12), msg.l_param).is_err() { return false; }
-    if write_u32_user(ptr.wrapping_add(16), msg.time).is_err() { return false; }
-    if write_u32_user(ptr.wrapping_add(20), msg.pt_x).is_err() { return false; }
-    if write_u32_user(ptr.wrapping_add(24), msg.pt_y).is_err() { return false; }
+    if write_u32_user(ptr, msg.hwnd).is_err() {
+        return false;
+    }
+    if write_u32_user(ptr.wrapping_add(4), msg.message).is_err() {
+        return false;
+    }
+    if write_u32_user(ptr.wrapping_add(8), msg.w_param).is_err() {
+        return false;
+    }
+    if write_u32_user(ptr.wrapping_add(12), msg.l_param).is_err() {
+        return false;
+    }
+    if write_u32_user(ptr.wrapping_add(16), msg.time).is_err() {
+        return false;
+    }
+    if write_u32_user(ptr.wrapping_add(20), msg.pt_x).is_err() {
+        return false;
+    }
+    if write_u32_user(ptr.wrapping_add(24), msg.pt_y).is_err() {
+        return false;
+    }
     true
 }
 
@@ -2355,8 +2561,13 @@ fn win32_tls_alloc() -> u32 {
 
 /// # IRQL: PASSIVE
 fn win32_tls_free(args_ptr: u32) -> u32 {
-    let slot = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if slot >= 64 { return 0; }
+    let slot = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if slot >= 64 {
+        return 0;
+    }
     TLS_BITMAP.lock().fetch_clear_bit(slot as usize);
     1 // TRUE
 }
@@ -2365,8 +2576,13 @@ fn win32_tls_free(args_ptr: u32) -> u32 {
 /// Reads TEB.TlsSlots[slot] at TEB_VA + 0xE10 + slot*4.
 fn win32_tls_get_value(args_ptr: u32) -> u32 {
     const TEB_VA: u32 = 0x7FFD_E000;
-    let slot = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if slot >= 64 { return 0; }
+    let slot = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if slot >= 64 {
+        return 0;
+    }
     let addr = TEB_VA.wrapping_add(0xE10).wrapping_add(slot.wrapping_mul(4));
     // SAFETY: TEB is mapped and valid for the lifetime of the process.
     unsafe { (addr as *const u32).read_unaligned() }
@@ -2376,12 +2592,22 @@ fn win32_tls_get_value(args_ptr: u32) -> u32 {
 /// Writes TEB.TlsSlots[slot] at TEB_VA + 0xE10 + slot*4.
 fn win32_tls_set_value(args_ptr: u32) -> u32 {
     const TEB_VA: u32 = 0x7FFD_E000;
-    let slot  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let value = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if slot >= 64 { return 0; }
+    let slot = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let value = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if slot >= 64 {
+        return 0;
+    }
     let addr = TEB_VA.wrapping_add(0xE10).wrapping_add(slot.wrapping_mul(4));
     // SAFETY: TEB is mapped and valid for the lifetime of the process.
-    unsafe { (addr as *mut u32).write_unaligned(value); }
+    unsafe {
+        (addr as *mut u32).write_unaligned(value);
+    }
     1 // TRUE
 }
 
@@ -2394,13 +2620,18 @@ fn win32_tls_set_value(args_ptr: u32) -> u32 {
 ///   +0x14 ULONG  SpinCount
 /// # IRQL: PASSIVE
 fn win32_init_critical_section(args_ptr: u32) -> u32 {
-    let cs = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(cs, 24) { return 0; }
+    let cs = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(cs, 24) {
+        return 0;
+    }
     // SAFETY: validated user pointer, CRITICAL_SECTION is 24 bytes.
     unsafe {
-        (cs as *mut u32).write_unaligned(0);           // DebugInfo = NULL
+        (cs as *mut u32).write_unaligned(0); // DebugInfo = NULL
         (cs.wrapping_add(4) as *mut i32).write_unaligned(-1); // LockCount = -1 (unlocked)
-        (cs.wrapping_add(8) as *mut u32).write_unaligned(0);  // RecursionCount
+        (cs.wrapping_add(8) as *mut u32).write_unaligned(0); // RecursionCount
         (cs.wrapping_add(12) as *mut u32).write_unaligned(0); // OwningThread
         (cs.wrapping_add(16) as *mut u32).write_unaligned(0); // LockSemaphore
         (cs.wrapping_add(20) as *mut u32).write_unaligned(0); // SpinCount
@@ -2411,97 +2642,164 @@ fn win32_init_critical_section(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 /// Acquires CRITICAL_SECTION. Phase 3A: single-threaded, just set LockCount=0.
 fn win32_enter_critical_section(args_ptr: u32) -> u32 {
-    let cs = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(cs, 24) { return 0; }
+    let cs = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(cs, 24) {
+        return 0;
+    }
     // SAFETY: validated pointer.
-    unsafe { (cs.wrapping_add(4) as *mut i32).write_unaligned(0); }
+    unsafe {
+        (cs.wrapping_add(4) as *mut i32).write_unaligned(0);
+    }
     0
 }
 
 /// # IRQL: PASSIVE
 fn win32_leave_critical_section(args_ptr: u32) -> u32 {
-    let cs = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(cs, 24) { return 0; }
+    let cs = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(cs, 24) {
+        return 0;
+    }
     // SAFETY: validated pointer.
-    unsafe { (cs.wrapping_add(4) as *mut i32).write_unaligned(-1); }
+    unsafe {
+        (cs.wrapping_add(4) as *mut i32).write_unaligned(-1);
+    }
     0
 }
 
 /// # IRQL: PASSIVE
 fn win32_try_enter_critical_section(args_ptr: u32) -> u32 {
-    let cs = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(cs, 24) { return 0; }
+    let cs = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(cs, 24) {
+        return 0;
+    }
     // Phase 3A: always succeeds (single-threaded).
     // SAFETY: validated pointer.
-    unsafe { (cs.wrapping_add(4) as *mut i32).write_unaligned(0); }
+    unsafe {
+        (cs.wrapping_add(4) as *mut i32).write_unaligned(0);
+    }
     1 // TRUE
 }
 
 /// SRWLOCK is a single PVOID (4 bytes). Exclusive = bit 0 set.
 /// # IRQL: PASSIVE
 fn win32_acquire_srw_exclusive(args_ptr: u32) -> u32 {
-    let lock = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(lock, 4) { return 0; }
+    let lock = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(lock, 4) {
+        return 0;
+    }
     // SAFETY: validated pointer. Phase 3A: no contention, just set bit 0.
-    unsafe { (lock as *mut u32).write_unaligned(1); }
+    unsafe {
+        (lock as *mut u32).write_unaligned(1);
+    }
     0
 }
 
 /// # IRQL: PASSIVE
 fn win32_release_srw_exclusive(args_ptr: u32) -> u32 {
-    let lock = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(lock, 4) { return 0; }
+    let lock = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(lock, 4) {
+        return 0;
+    }
     // SAFETY: validated pointer.
-    unsafe { (lock as *mut u32).write_unaligned(0); }
+    unsafe {
+        (lock as *mut u32).write_unaligned(0);
+    }
     0
 }
 
 /// GetModuleHandleW — same table as A but name is UTF-16LE.
 /// # IRQL: PASSIVE
 fn win32_get_module_handle_w(args_ptr: u32) -> u32 {
-    let lp_name = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if lp_name == 0 { return 0x0040_0000; }
+    let lp_name = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if lp_name == 0 {
+        return 0x0040_0000;
+    }
     // Read UTF-16LE name and convert to ASCII for lookup.
     let mut buf = [0u8; 128];
     let mut len = 0usize;
     let mut i = 0usize;
     while i < 127 {
         let addr = lp_name.wrapping_add((i * 2) as u32);
-        if !is_user_range(addr, 2) { break; }
+        if !is_user_range(addr, 2) {
+            break;
+        }
         // SAFETY: validated pointer.
         let lo = unsafe { (addr as *const u8).read_unaligned() };
         let hi = unsafe { (addr.wrapping_add(1) as *const u8).read_unaligned() };
-        if lo == 0 && hi == 0 { break; }
+        if lo == 0 && hi == 0 {
+            break;
+        }
         buf[len] = if hi == 0 { lo } else { b'?' };
         len += 1;
         i += 1;
     }
-    if len == 0 { return 0; }
-    let name = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return 0 };
+    if len == 0 {
+        return 0;
+    }
+    let name = match core::str::from_utf8(&buf[..len]) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     ps::loader::resolve_stub_module_base(name).unwrap_or(0)
 }
 
 /// GetModuleHandleExA — ignores flags, delegates to base lookup.
 /// # IRQL: PASSIVE
 fn win32_get_module_handle_ex_a(args_ptr: u32) -> u32 {
-    let _flags   = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let lp_name  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let out_hmod = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let _flags = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let lp_name = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let out_hmod = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let fake_args = [lp_name];
     let base = win32_get_module_handle_a(fake_args.as_ptr() as u32 - 4);
     // SAFETY: out_hmod is user memory — write if valid.
     if is_user_range(out_hmod, 4) {
         let _ = write_u32_user(out_hmod, base);
     }
-    if base != 0 { 1 } else { 0 }
+    if base != 0 {
+        1
+    } else {
+        0
+    }
 }
 
 /// SYSTEM_INFO layout (XP, 36 bytes).
 /// Games check wProcessorArchitecture (x86=0) and dwNumberOfProcessors.
 /// # IRQL: PASSIVE
 fn win32_get_system_info(args_ptr: u32) -> u32 {
-    let ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(ptr, 36) { return 0; }
+    let ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(ptr, 36) {
+        return 0;
+    }
     // SAFETY: validated 36-byte user buffer.
     unsafe {
         core::ptr::write_bytes(ptr as *mut u8, 0, 36);
@@ -2531,7 +2829,10 @@ fn win32_get_system_info(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn win32_create_thread_k32(args_ptr: u32) -> u32 {
     // CreateThread(attrs, stack, fn, arg, flags, tid_ptr) → fake handle
-    let tid_ptr = match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return 0 };
+    let tid_ptr = match read_arg_u32(args_ptr, 5) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if tid_ptr != 0 && is_user_range(tid_ptr, 4) {
         let _ = write_u32_user(tid_ptr, 0xFF); // fake TID
     }
@@ -2549,17 +2850,25 @@ fn win32_create_event_a(args_ptr: u32) -> u32 {
 /// CreateFileMappingA — backed by VirtualAlloc for now.
 /// # IRQL: PASSIVE
 fn win32_create_file_mapping(args_ptr: u32) -> u32 {
-    let max_size_lo = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
-    if max_size_lo == 0 { return 0; }
+    let max_size_lo = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if max_size_lo == 0 {
+        return 0;
+    }
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
-    let alloc   = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
+    let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
     let mut guard = SYSCALL_CTX.lock();
-    let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+    let ctx = match guard.as_mut() {
+        Some(v) => v,
+        None => return 0,
+    };
     // SAFETY: hhdm_offset valid for kernel lifetime.
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, max_size_lo as u64, alloc, protect) {
         Ok(base) => base as u32,
-        Err(_)   => 0,
+        Err(_) => 0,
     }
 }
 
@@ -2574,11 +2883,19 @@ fn win32_map_view_of_file(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn win32_get_temp_path_a(args_ptr: u32) -> u32 {
     const TEMP: &[u8] = b"C:\\Temp\\\0";
-    let _len = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let buf  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let _len = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if buf != 0 && is_user_range(buf, TEMP.len() as u32) {
         // SAFETY: validated user buffer.
-        unsafe { core::ptr::copy_nonoverlapping(TEMP.as_ptr(), buf as *mut u8, TEMP.len()); }
+        unsafe {
+            core::ptr::copy_nonoverlapping(TEMP.as_ptr(), buf as *mut u8, TEMP.len());
+        }
     }
     (TEMP.len() - 1) as u32 // return length without null
 }
@@ -2587,10 +2904,15 @@ fn win32_get_temp_path_a(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn win32_get_temp_file_name_a(args_ptr: u32) -> u32 {
     const NAME: &[u8] = b"C:\\Temp\\mino0000.tmp\0";
-    let buf = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if buf != 0 && is_user_range(buf, NAME.len() as u32) {
         // SAFETY: validated user buffer.
-        unsafe { core::ptr::copy_nonoverlapping(NAME.as_ptr(), buf as *mut u8, NAME.len()); }
+        unsafe {
+            core::ptr::copy_nonoverlapping(NAME.as_ptr(), buf as *mut u8, NAME.len());
+        }
     }
     0x1234 // unique identifier (fake)
 }
@@ -2598,8 +2920,13 @@ fn win32_get_temp_file_name_a(args_ptr: u32) -> u32 {
 /// OutputDebugStringA — log to serial.
 /// # IRQL: PASSIVE
 fn win32_output_debug_string(args_ptr: u32) -> u32 {
-    let ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if ptr == 0 { return 0; }
+    let ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if ptr == 0 {
+        return 0;
+    }
     let mut buf = [0u8; 256];
     let len = read_cstr_user_buf(ptr, &mut buf);
     if len > 0 {
@@ -2613,19 +2940,27 @@ fn win32_output_debug_string(args_ptr: u32) -> u32 {
 /// VirtualQuery — fills MEMORY_BASIC_INFORMATION (28 bytes).
 /// # IRQL: PASSIVE
 fn win32_virtual_query(args_ptr: u32) -> u32 {
-    let addr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let buf  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(buf, 28) { return 0; }
+    let addr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(buf, 28) {
+        return 0;
+    }
     // SAFETY: validated 28-byte user buffer.
     unsafe {
         core::ptr::write_bytes(buf as *mut u8, 0, 28);
-        (buf as *mut u32).write_unaligned(addr & !0xFFF);        // BaseAddress
-        (buf.wrapping_add(4) as *mut u32).write_unaligned(0);   // AllocationBase
-        (buf.wrapping_add(8) as *mut u32).write_unaligned(0x04);// AllocationProtect PAGE_READWRITE
+        (buf as *mut u32).write_unaligned(addr & !0xFFF); // BaseAddress
+        (buf.wrapping_add(4) as *mut u32).write_unaligned(0); // AllocationBase
+        (buf.wrapping_add(8) as *mut u32).write_unaligned(0x04); // AllocationProtect PAGE_READWRITE
         (buf.wrapping_add(12) as *mut u32).write_unaligned(0x1000); // RegionSize = 4KiB
         (buf.wrapping_add(16) as *mut u32).write_unaligned(0x1000); // State MEM_COMMIT
-        (buf.wrapping_add(20) as *mut u32).write_unaligned(0x04);   // Protect PAGE_READWRITE
-        (buf.wrapping_add(24) as *mut u32).write_unaligned(0x20000);// Type MEM_PRIVATE
+        (buf.wrapping_add(20) as *mut u32).write_unaligned(0x04); // Protect PAGE_READWRITE
+        (buf.wrapping_add(24) as *mut u32).write_unaligned(0x20000); // Type MEM_PRIVATE
     }
     28
 }
@@ -2634,13 +2969,32 @@ fn win32_virtual_query(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn win32_get_module_file_name_w(args_ptr: u32) -> u32 {
     const PATH_W: &[u16] = &[
-        b'C' as u16, b'\\' as u16, b'G' as u16, b'a' as u16, b'm' as u16,
-        b'e' as u16, b's' as u16, b'\\' as u16, b'g' as u16, b'a' as u16,
-        b'm' as u16, b'e' as u16, b'.' as u16, b'e' as u16, b'x' as u16,
-        b'e' as u16, 0u16,
+        b'C' as u16,
+        b'\\' as u16,
+        b'G' as u16,
+        b'a' as u16,
+        b'm' as u16,
+        b'e' as u16,
+        b's' as u16,
+        b'\\' as u16,
+        b'g' as u16,
+        b'a' as u16,
+        b'm' as u16,
+        b'e' as u16,
+        b'.' as u16,
+        b'e' as u16,
+        b'x' as u16,
+        b'e' as u16,
+        0u16,
     ];
-    let buf  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let size = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let size = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let copy_chars = core::cmp::min(size as usize, PATH_W.len());
     if buf != 0 && is_user_range(buf, (copy_chars * 2) as u32) {
         // SAFETY: validated user buffer.
@@ -2654,37 +3008,65 @@ fn win32_get_module_file_name_w(args_ptr: u32) -> u32 {
 /// QueryPerformanceCounter — returns HAL tick count as a LARGE_INTEGER.
 /// # IRQL: PASSIVE
 fn win32_query_perf_counter(args_ptr: u32) -> u32 {
-    let ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(ptr, 8) { return 0; }
+    let ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(ptr, 8) {
+        return 0;
+    }
     let ticks = hal::timer::get_tick_count();
     // SAFETY: validated 8-byte user buffer.
-    unsafe { (ptr as *mut u64).write_unaligned(ticks); }
+    unsafe {
+        (ptr as *mut u64).write_unaligned(ticks);
+    }
     1 // TRUE
 }
 
 /// QueryPerformanceFrequency — returns PIT frequency (1193182 Hz) per Ghost Recon quirk.
 /// # IRQL: PASSIVE
 fn win32_query_perf_freq(args_ptr: u32) -> u32 {
-    let ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(ptr, 8) { return 0; }
+    let ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(ptr, 8) {
+        return 0;
+    }
     // SAFETY: validated 8-byte user buffer.
-    unsafe { (ptr as *mut u64).write_unaligned(1_193_182u64); }
+    unsafe {
+        (ptr as *mut u64).write_unaligned(1_193_182u64);
+    }
     1 // TRUE
 }
 
 /// HeapAlloc(hHeap, dwFlags, dwBytes) — ignores heap handle, routes to malloc.
 /// # IRQL: PASSIVE
 fn win32_heap_alloc(args_ptr: u32) -> u32 {
-    let _heap  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let flags  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let size   = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    if size == 0 { return 0; }
+    let _heap = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let flags = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let size = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if size == 0 {
+        return 0;
+    }
     // Allocate directly via VirtualAlloc (same as win32_malloc but inline).
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
-    let alloc   = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
+    let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
     let result = {
         let mut guard = SYSCALL_CTX.lock();
-        let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+        let ctx = match guard.as_mut() {
+            Some(v) => v,
+            None => return 0,
+        };
         let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
         match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, size as u64, alloc, protect) {
             Ok(base) => base as u32,
@@ -2694,7 +3076,9 @@ fn win32_heap_alloc(args_ptr: u32) -> u32 {
     // Zero memory if HEAP_ZERO_MEMORY (0x08) flag is set
     if flags & 0x08 != 0 && result != 0 && size > 0 {
         let sz = (size as u64).min(0x100000);
-        unsafe { core::ptr::write_bytes(result as *mut u8, 0, sz as usize); }
+        unsafe {
+            core::ptr::write_bytes(result as *mut u8, 0, sz as usize);
+        }
     }
     result
 }
@@ -2702,9 +3086,17 @@ fn win32_heap_alloc(args_ptr: u32) -> u32 {
 /// GetClientRect — returns a 1920×1080 RECT.
 /// # IRQL: PASSIVE
 fn win32_get_client_rect(args_ptr: u32) -> u32 {
-    let _hwnd = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let rect  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(rect, 16) { return 0; }
+    let _hwnd = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let rect = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(rect, 16) {
+        return 0;
+    }
     // RECT { left=0, top=0, right=1920, bottom=1080 }
     // SAFETY: validated 16-byte user buffer.
     unsafe {
@@ -2719,13 +3111,26 @@ fn win32_get_client_rect(args_ptr: u32) -> u32 {
 /// EnumDisplaySettingsW — fills DEVMODEW for mode 0 with 1920×1080×32 @ 60Hz.
 /// # IRQL: PASSIVE
 fn win32_enum_display_settings_w(args_ptr: u32) -> u32 {
-    let _device = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let mode_num = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let dm       = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let _device = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let mode_num = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let dm = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // ENUM_CURRENT_SETTINGS = 0xFFFFFFFF, ENUM_REGISTRY_SETTINGS = 0xFFFFFFFE — both allowed.
     // For mode index > 0, return FALSE (only one mode).
-    if mode_num > 0 && mode_num < 0xFFFF_FFFE { return 0; }
-    if !is_user_range(dm, 220) { return 0; }
+    if mode_num > 0 && mode_num < 0xFFFF_FFFE {
+        return 0;
+    }
+    if !is_user_range(dm, 220) {
+        return 0;
+    }
     // SAFETY: validated DEVMODEW (220 bytes) user buffer.
     unsafe {
         core::ptr::write_bytes(dm as *mut u8, 0, 220);
@@ -2750,9 +3155,17 @@ fn win32_enum_display_settings_w(args_ptr: u32) -> u32 {
 /// realloc(ptr, size) — alloc new + copy. Phase 3A: no-shrink, always alloc new.
 /// # IRQL: PASSIVE
 fn ucrt_realloc(args_ptr: u32) -> u32 {
-    let old_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let new_size = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if new_size == 0 { return 0; }
+    let old_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let new_size = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if new_size == 0 {
+        return 0;
+    }
     let fake_args = [new_size];
     let new_ptr = win32_malloc(fake_args.as_ptr() as u32 - 4);
     if new_ptr != 0 && old_ptr != 0 {
@@ -2760,11 +3173,15 @@ fn ucrt_realloc(args_ptr: u32) -> u32 {
         let mut i = 0u32;
         while i < new_size {
             let addr = old_ptr.wrapping_add(i);
-            if !is_user_range(addr, 1) { break; }
+            if !is_user_range(addr, 1) {
+                break;
+            }
             // SAFETY: validated source pointer.
             let b = unsafe { (addr as *const u8).read_unaligned() };
             // SAFETY: new_ptr is freshly allocated.
-            unsafe { (new_ptr.wrapping_add(i) as *mut u8).write_unaligned(b); }
+            unsafe {
+                (new_ptr.wrapping_add(i) as *mut u8).write_unaligned(b);
+            }
             i = i.wrapping_add(1);
         }
     }
@@ -2774,10 +3191,15 @@ fn ucrt_realloc(args_ptr: u32) -> u32 {
 /// _initialize_onexit_table(table*) — zero the 12-byte struct.
 /// # IRQL: PASSIVE
 fn ucrt_init_onexit_table(args_ptr: u32) -> u32 {
-    let table = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let table = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if table != 0 && is_user_range(table, 12) {
         // SAFETY: validated pointer.
-        unsafe { core::ptr::write_bytes(table as *mut u8, 0, 12); }
+        unsafe {
+            core::ptr::write_bytes(table as *mut u8, 0, 12);
+        }
     }
     0 // success
 }
@@ -2786,16 +3208,20 @@ fn ucrt_init_onexit_table(args_ptr: u32) -> u32 {
 /// Table layout: { first: *fn, last: *fn, end: *fn } (3 pointers).
 /// # IRQL: PASSIVE
 fn ucrt_register_onexit_fn(args_ptr: u32) -> u32 {
-    let table = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let func  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if table == 0 || !is_user_range(table, 12) { return 0; }
+    let table = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let func = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if table == 0 || !is_user_range(table, 12) {
+        return 0;
+    }
     // SAFETY: validated 12-byte table.
-    let (first, last, end) = unsafe {
-        (
-            (table as *mut u32).read_unaligned(),
-            (table.wrapping_add(4) as *mut u32).read_unaligned(),
-            (table.wrapping_add(8) as *mut u32).read_unaligned(),
-        )
+    let (last, end) = unsafe {
+        ((table.wrapping_add(4) as *mut u32).read_unaligned(), (table.wrapping_add(8) as *mut u32).read_unaligned())
     };
     if last < end {
         // SAFETY: last points into an allocated array (within end).
@@ -2805,11 +3231,13 @@ fn ucrt_register_onexit_fn(args_ptr: u32) -> u32 {
         }
     } else {
         // Table full or not initialized — allocate new backing array.
-        let cap = if first == 0 { 16u32 } else { 16 };
+        let cap = 16u32;
         let fake_args = [cap * 4];
         let new_arr = win32_malloc(fake_args.as_ptr() as u32 - 4);
-        if new_arr == 0 { return 1; } // out of memory
-        // SAFETY: new_arr freshly allocated.
+        if new_arr == 0 {
+            return 1;
+        } // out of memory
+          // SAFETY: new_arr freshly allocated.
         unsafe {
             (new_arr as *mut u32).write_unaligned(func);
             (table as *mut u32).write_unaligned(new_arr);
@@ -2848,16 +3276,28 @@ fn ucrt_errno_ptr() -> u32 {
 /// strcmp(s1, s2) — lexicographic comparison.
 /// # IRQL: PASSIVE
 fn ucrt_strcmp(args_ptr: u32) -> u32 {
-    let s1 = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let s2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let s1 = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let s2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut i = 0u32;
     loop {
-        if i > 0x8000 { return 0; }
+        if i > 0x8000 {
+            return 0;
+        }
         // SAFETY: caller provides valid C strings.
         let a = unsafe { (s1.wrapping_add(i) as *const u8).read_unaligned() };
         let b = unsafe { (s2.wrapping_add(i) as *const u8).read_unaligned() };
-        if a != b { return (a as i32 - b as i32) as u32; }
-        if a == 0 { return 0; }
+        if a != b {
+            return (a as i32 - b as i32) as u32;
+        }
+        if a == 0 {
+            return 0;
+        }
         i = i.wrapping_add(1);
     }
 }
@@ -2865,16 +3305,29 @@ fn ucrt_strcmp(args_ptr: u32) -> u32 {
 /// strncmp(s1, s2, n)
 /// # IRQL: PASSIVE
 fn ucrt_strncmp(args_ptr: u32) -> u32 {
-    let s1 = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let s2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let n  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let s1 = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let s2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let n = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut i = 0u32;
     while i < n {
         // SAFETY: caller provides valid pointers for n bytes.
         let a = unsafe { (s1.wrapping_add(i) as *const u8).read_unaligned() };
         let b = unsafe { (s2.wrapping_add(i) as *const u8).read_unaligned() };
-        if a != b { return (a as i32 - b as i32) as u32; }
-        if a == 0 { return 0; }
+        if a != b {
+            return (a as i32 - b as i32) as u32;
+        }
+        if a == 0 {
+            return 0;
+        }
         i = i.wrapping_add(1);
     }
     0
@@ -2883,20 +3336,35 @@ fn ucrt_strncmp(args_ptr: u32) -> u32 {
 /// strncpy(dst, src, n) — copies up to n bytes, pads with NUL.
 /// # IRQL: PASSIVE
 fn ucrt_strncpy(args_ptr: u32) -> u32 {
-    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let n   = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return dst };
+    let dst = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let n = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return dst,
+    };
     let mut i = 0u32;
     let mut done = false;
     while i < n {
-        let b = if done { 0u8 } else {
+        let b = if done {
+            0u8
+        } else {
             // SAFETY: caller ensures src is valid.
             let c = unsafe { (src.wrapping_add(i) as *const u8).read_unaligned() };
-            if c == 0 { done = true; }
+            if c == 0 {
+                done = true;
+            }
             c
         };
         // SAFETY: caller ensures dst is valid for n bytes.
-        unsafe { (dst.wrapping_add(i) as *mut u8).write_unaligned(b); }
+        unsafe {
+            (dst.wrapping_add(i) as *mut u8).write_unaligned(b);
+        }
         i = i.wrapping_add(1);
     }
     dst
@@ -2905,13 +3373,21 @@ fn ucrt_strncpy(args_ptr: u32) -> u32 {
 /// strnlen(s, maxlen) — length up to maxlen.
 /// # IRQL: PASSIVE
 fn ucrt_strnlen(args_ptr: u32) -> u32 {
-    let s      = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let maxlen = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let maxlen = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut len = 0u32;
     while len < maxlen {
         // SAFETY: caller provides valid pointer.
         let b = unsafe { (s.wrapping_add(len) as *const u8).read_unaligned() };
-        if b == 0 { break; }
+        if b == 0 {
+            break;
+        }
         len = len.wrapping_add(1);
     }
     len
@@ -2920,15 +3396,27 @@ fn ucrt_strnlen(args_ptr: u32) -> u32 {
 /// strchr(s, c) — returns pointer to first occurrence or NULL.
 /// # IRQL: PASSIVE
 fn ucrt_strchr(args_ptr: u32) -> u32 {
-    let s = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let c = match read_arg_u32(args_ptr, 1) { Ok(v) => v as u8, Err(_) => return 0 };
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let c = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v as u8,
+        Err(_) => return 0,
+    };
     let mut i = 0u32;
     loop {
-        if i > 0x8000 { return 0; }
+        if i > 0x8000 {
+            return 0;
+        }
         // SAFETY: caller provides valid C string.
         let b = unsafe { (s.wrapping_add(i) as *const u8).read_unaligned() };
-        if b == c { return s.wrapping_add(i); }
-        if b == 0 { return 0; }
+        if b == c {
+            return s.wrapping_add(i);
+        }
+        if b == 0 {
+            return 0;
+        }
         i = i.wrapping_add(1);
     }
 }
@@ -2936,8 +3424,13 @@ fn ucrt_strchr(args_ptr: u32) -> u32 {
 /// _strdup(s) — allocate copy of s.
 /// # IRQL: PASSIVE
 fn ucrt_strdup(args_ptr: u32) -> u32 {
-    let s = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if s == 0 { return 0; }
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if s == 0 {
+        return 0;
+    }
     let len_args = [s];
     let len = win32_strlen(len_args.as_ptr() as u32 - 4);
     let size_args = [len.wrapping_add(1)];
@@ -2952,15 +3445,24 @@ fn ucrt_strdup(args_ptr: u32) -> u32 {
 /// wcslen(s) — wide string length.
 /// # IRQL: PASSIVE
 fn ucrt_wcslen(args_ptr: u32) -> u32 {
-    let s = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if s == 0 { return 0; }
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if s == 0 {
+        return 0;
+    }
     let mut len = 0u32;
     loop {
-        if len > 0x8000 { break; }
+        if len > 0x8000 {
+            break;
+        }
         // SAFETY: caller provides valid wide C string.
         let lo = unsafe { (s.wrapping_add(len * 2) as *const u8).read_unaligned() };
         let hi = unsafe { (s.wrapping_add(len * 2 + 1) as *const u8).read_unaligned() };
-        if lo == 0 && hi == 0 { break; }
+        if lo == 0 && hi == 0 {
+            break;
+        }
         len = len.wrapping_add(1);
     }
     len
@@ -2969,14 +3471,22 @@ fn ucrt_wcslen(args_ptr: u32) -> u32 {
 /// wcsnlen(s, maxlen)
 /// # IRQL: PASSIVE
 fn ucrt_wcsnlen(args_ptr: u32) -> u32 {
-    let s      = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let maxlen = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let maxlen = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut len = 0u32;
     while len < maxlen {
         // SAFETY: caller provides valid wide pointer.
         let lo = unsafe { (s.wrapping_add(len * 2) as *const u8).read_unaligned() };
         let hi = unsafe { (s.wrapping_add(len * 2 + 1) as *const u8).read_unaligned() };
-        if lo == 0 && hi == 0 { break; }
+        if lo == 0 && hi == 0 {
+            break;
+        }
         len = len.wrapping_add(1);
     }
     len
@@ -2985,16 +3495,28 @@ fn ucrt_wcsnlen(args_ptr: u32) -> u32 {
 /// wcscmp(s1, s2) — wide string comparison.
 /// # IRQL: PASSIVE
 fn ucrt_wcscmp(args_ptr: u32) -> u32 {
-    let s1 = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let s2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let s1 = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let s2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut i = 0u32;
     loop {
-        if i > 0x8000 { return 0; }
+        if i > 0x8000 {
+            return 0;
+        }
         // SAFETY: caller provides valid wide C strings.
         let a = unsafe { (s1.wrapping_add(i * 2) as *const u16).read_unaligned() };
         let b = unsafe { (s2.wrapping_add(i * 2) as *const u16).read_unaligned() };
-        if a != b { return (a as i32 - b as i32) as u32; }
-        if a == 0 { return 0; }
+        if a != b {
+            return (a as i32 - b as i32) as u32;
+        }
+        if a == 0 {
+            return 0;
+        }
         i = i.wrapping_add(1);
     }
 }
@@ -3002,18 +3524,34 @@ fn ucrt_wcscmp(args_ptr: u32) -> u32 {
 /// _wcsicmp(s1, s2) — case-insensitive wide comparison (ASCII range only).
 /// # IRQL: PASSIVE
 fn ucrt_wcsicmp(args_ptr: u32) -> u32 {
-    let s1 = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let s2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let s1 = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let s2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut i = 0u32;
     loop {
-        if i > 0x8000 { return 0; }
+        if i > 0x8000 {
+            return 0;
+        }
         // SAFETY: caller provides valid wide C strings.
         let mut a = unsafe { (s1.wrapping_add(i * 2) as *const u16).read_unaligned() };
         let mut b = unsafe { (s2.wrapping_add(i * 2) as *const u16).read_unaligned() };
-        if a >= b'A' as u16 && a <= b'Z' as u16 { a += 32; }
-        if b >= b'A' as u16 && b <= b'Z' as u16 { b += 32; }
-        if a != b { return (a as i32 - b as i32) as u32; }
-        if a == 0 { return 0; }
+        if a >= b'A' as u16 && a <= b'Z' as u16 {
+            a += 32;
+        }
+        if b >= b'A' as u16 && b <= b'Z' as u16 {
+            b += 32;
+        }
+        if a != b {
+            return (a as i32 - b as i32) as u32;
+        }
+        if a == 0 {
+            return 0;
+        }
         i = i.wrapping_add(1);
     }
 }
@@ -3021,29 +3559,51 @@ fn ucrt_wcsicmp(args_ptr: u32) -> u32 {
 /// strtoul(str, endptr, base) — parse unsigned long.
 /// # IRQL: PASSIVE
 fn ucrt_strtoul(args_ptr: u32) -> u32 {
-    let s       = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let endptr  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let base    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    if s == 0 { return 0; }
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let endptr = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let base = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if s == 0 {
+        return 0;
+    }
     let mut i = 0u32;
     // Skip whitespace.
     while i < 32 {
         let b = unsafe { (s.wrapping_add(i) as *const u8).read_unaligned() };
-        if b != b' ' && b != b'\t' { break; }
+        if b != b' ' && b != b'\t' {
+            break;
+        }
         i += 1;
     }
     let radix = if base == 0 { 10 } else { base };
     let mut val = 0u32;
     loop {
         let b = unsafe { (s.wrapping_add(i) as *const u8).read_unaligned() };
-        let digit = if b >= b'0' && b <= b'9' { (b - b'0') as u32 }
-                    else if b >= b'a' && b <= b'f' { (b - b'a' + 10) as u32 }
-                    else if b >= b'A' && b <= b'F' { (b - b'A' + 10) as u32 }
-                    else { break };
-        if digit >= radix { break; }
+        let digit = if b.is_ascii_digit() {
+            (b - b'0') as u32
+        } else if (b'a'..=b'f').contains(&b) {
+            (b - b'a' + 10) as u32
+        } else if (b'A'..=b'F').contains(&b) {
+            (b - b'A' + 10) as u32
+        } else {
+            break;
+        };
+        if digit >= radix {
+            break;
+        }
         val = val.wrapping_mul(radix).wrapping_add(digit);
         i += 1;
-        if i > 32 { break; }
+        if i > 32 {
+            break;
+        }
     }
     if endptr != 0 && is_user_range(endptr, 4) {
         let _ = write_u32_user(endptr, s.wrapping_add(i));
@@ -3054,15 +3614,26 @@ fn ucrt_strtoul(args_ptr: u32) -> u32 {
 /// memcmp(s1, s2, n) — byte comparison.
 /// # IRQL: PASSIVE
 fn ucrt_memcmp(args_ptr: u32) -> u32 {
-    let s1 = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let s2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let n  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let s1 = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let s2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let n = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut i = 0u32;
     while i < n {
         // SAFETY: caller ensures valid pointers for n bytes.
         let a = unsafe { (s1.wrapping_add(i) as *const u8).read_unaligned() };
         let b = unsafe { (s2.wrapping_add(i) as *const u8).read_unaligned() };
-        if a != b { return (a as i32 - b as i32) as u32; }
+        if a != b {
+            return (a as i32 - b as i32) as u32;
+        }
         i = i.wrapping_add(1);
     }
     0
@@ -3071,14 +3642,25 @@ fn ucrt_memcmp(args_ptr: u32) -> u32 {
 /// memchr(s, c, n) — find byte in memory block.
 /// # IRQL: PASSIVE
 fn ucrt_memchr(args_ptr: u32) -> u32 {
-    let s = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let c = match read_arg_u32(args_ptr, 1) { Ok(v) => v as u8, Err(_) => return 0 };
-    let n = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let c = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v as u8,
+        Err(_) => return 0,
+    };
+    let n = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut i = 0u32;
     while i < n {
         // SAFETY: caller ensures valid pointer for n bytes.
         let b = unsafe { (s.wrapping_add(i) as *const u8).read_unaligned() };
-        if b == c { return s.wrapping_add(i); }
+        if b == c {
+            return s.wrapping_add(i);
+        }
         i = i.wrapping_add(1);
     }
     0
@@ -3096,12 +3678,7 @@ struct RegEntry {
 }
 
 const REG_TABLE: &[RegEntry] = &[
-    RegEntry {
-        subkey: "Software\\Microsoft\\DirectX",
-        value_name: "Version",
-        data_type: 1,
-        data: b"4.09.00.0900\0",
-    },
+    RegEntry { subkey: "Software\\Microsoft\\DirectX", value_name: "Version", data_type: 1, data: b"4.09.00.0900\0" },
     RegEntry {
         subkey: "Software\\Microsoft\\DirectX",
         value_name: "InstalledVersion",
@@ -3133,10 +3710,10 @@ fn reg_find_subkey(subkey: &str) -> Option<usize> {
 
 /// Case-insensitive ASCII string comparison for registry keys.
 fn eq_ascii_nocase_str(a: &str, b: &str) -> bool {
-    if a.len() != b.len() { return false; }
-    a.bytes().zip(b.bytes()).all(|(x, y)| {
-        x.to_ascii_lowercase() == y.to_ascii_lowercase()
-    })
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes().zip(b.bytes()).all(|(x, y)| x.eq_ignore_ascii_case(&y))
 }
 
 fn reg_alloc_fake_hkey(subkey_idx: usize) -> u32 {
@@ -3165,13 +3742,27 @@ fn reg_lookup_open_key(fake_hkey: u32) -> Option<usize> {
 /// # IRQL: PASSIVE
 fn advapi_reg_open_key_ex_a(args_ptr: u32) -> u32 {
     const ERROR_FILE_NOT_FOUND: u32 = 2;
-    let _hkey    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let subkey_p = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let out_p    = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
+    let _hkey = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let subkey_p = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let out_p = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
     let mut buf = [0u8; 256];
     let len = read_cstr_user_buf(subkey_p, &mut buf);
-    if len == 0 { return ERROR_FILE_NOT_FOUND; }
-    let subkey = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return ERROR_FILE_NOT_FOUND };
+    if len == 0 {
+        return ERROR_FILE_NOT_FOUND;
+    }
+    let subkey = match core::str::from_utf8(&buf[..len]) {
+        Ok(s) => s,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
     // Check if any entry in REG_TABLE uses this subkey.
     if let Some(idx) = reg_find_subkey(subkey) {
         let fake = reg_alloc_fake_hkey(idx);
@@ -3187,33 +3778,64 @@ fn advapi_reg_open_key_ex_a(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn advapi_reg_query_value_ex_a(args_ptr: u32) -> u32 {
     const ERROR_FILE_NOT_FOUND: u32 = 2;
-    const ERROR_MORE_DATA: u32      = 234;
-    let hkey     = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let name_p   = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let type_p   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let data_p   = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let size_p   = match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
+    const ERROR_MORE_DATA: u32 = 234;
+    let hkey = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let name_p = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let type_p = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let data_p = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let size_p = match read_arg_u32(args_ptr, 5) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
 
-    let subkey_idx = match reg_lookup_open_key(hkey) { Some(v) => v, None => return ERROR_FILE_NOT_FOUND };
+    let subkey_idx = match reg_lookup_open_key(hkey) {
+        Some(v) => v,
+        None => return ERROR_FILE_NOT_FOUND,
+    };
     let mut buf = [0u8; 128];
     let len = read_cstr_user_buf(name_p, &mut buf);
-    let value_name = if len > 0 { match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return ERROR_FILE_NOT_FOUND } } else { "" };
+    let value_name = if len > 0 {
+        match core::str::from_utf8(&buf[..len]) {
+            Ok(s) => s,
+            Err(_) => return ERROR_FILE_NOT_FOUND,
+        }
+    } else {
+        ""
+    };
 
     // Find matching entry: same subkey AND value_name.
     let subkey_str = REG_TABLE[subkey_idx].subkey;
     for entry in REG_TABLE {
-        if !eq_ascii_nocase_str(entry.subkey, subkey_str) { continue; }
-        if !eq_ascii_nocase_str(entry.value_name, value_name) { continue; }
+        if !eq_ascii_nocase_str(entry.subkey, subkey_str) {
+            continue;
+        }
+        if !eq_ascii_nocase_str(entry.value_name, value_name) {
+            continue;
+        }
         // Write type.
         if type_p != 0 && is_user_range(type_p, 4) {
             let _ = write_u32_user(type_p, entry.data_type);
         }
         // Check / write data size.
         if size_p != 0 && is_user_range(size_p, 4) {
-            let avail = match read_u32_user(size_p) { Ok(v) => v, Err(_) => 0 };
+            let avail = read_u32_user(size_p).unwrap_or_default();
             let _ = write_u32_user(size_p, entry.data.len() as u32);
             if data_p != 0 {
-                if (avail as usize) < entry.data.len() { return ERROR_MORE_DATA; }
+                if (avail as usize) < entry.data.len() {
+                    return ERROR_MORE_DATA;
+                }
                 if is_user_range(data_p, entry.data.len() as u32) {
                     // SAFETY: validated user buffer.
                     unsafe {
@@ -3230,11 +3852,17 @@ fn advapi_reg_query_value_ex_a(args_ptr: u32) -> u32 {
 /// RegCloseKey(hKey)
 /// # IRQL: PASSIVE
 fn advapi_reg_close_key(args_ptr: u32) -> u32 {
-    let hkey = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let hkey = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut keys = REG_OPEN_KEYS.lock();
     for slot in keys.iter_mut() {
         if let Some((h, _)) = *slot {
-            if h == hkey { *slot = None; break; }
+            if h == hkey {
+                *slot = None;
+                break;
+            }
         }
     }
     0 // ERROR_SUCCESS
@@ -3244,22 +3872,41 @@ fn advapi_reg_close_key(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn advapi_reg_open_key_ex_w(args_ptr: u32) -> u32 {
     const ERROR_FILE_NOT_FOUND: u32 = 2;
-    let hkey     = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let subkey_w = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let opts     = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let sam      = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let out_p    = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
+    let hkey = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let subkey_w = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let opts = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let sam = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let out_p = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
     // Convert wide subkey to ASCII buf on stack.
     let mut ascii_buf = [0u8; 256];
     let mut ascii_len = 0usize;
     let mut wi = 0usize;
     while wi < 255 {
         let addr = subkey_w.wrapping_add((wi * 2) as u32);
-        if !is_user_range(addr, 2) { break; }
+        if !is_user_range(addr, 2) {
+            break;
+        }
         // SAFETY: validated pointer.
         let lo = unsafe { (addr as *const u8).read_unaligned() };
         let hi = unsafe { (addr.wrapping_add(1) as *const u8).read_unaligned() };
-        if lo == 0 && hi == 0 { break; }
+        if lo == 0 && hi == 0 {
+            break;
+        }
         ascii_buf[ascii_len] = if hi == 0 { lo } else { b'?' };
         ascii_len += 1;
         wi += 1;
@@ -3276,22 +3923,44 @@ fn advapi_reg_open_key_ex_w(args_ptr: u32) -> u32 {
 fn advapi_reg_query_value_ex_w(args_ptr: u32) -> u32 {
     // For Phase 3A: convert wide value name to ASCII, use same table (data stays as ASCII bytes).
     const ERROR_FILE_NOT_FOUND: u32 = 2;
-    let hkey   = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let name_w = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let opts   = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let type_p = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let data_p = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
-    let size_p = match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return ERROR_FILE_NOT_FOUND };
+    let hkey = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let name_w = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let opts = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let type_p = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let data_p = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
+    let size_p = match read_arg_u32(args_ptr, 5) {
+        Ok(v) => v,
+        Err(_) => return ERROR_FILE_NOT_FOUND,
+    };
     let mut ascii_buf = [0u8; 128];
     let mut ascii_len = 0usize;
     let mut wi = 0usize;
     while wi < 127 {
         let addr = name_w.wrapping_add((wi * 2) as u32);
-        if !is_user_range(addr, 2) { break; }
+        if !is_user_range(addr, 2) {
+            break;
+        }
         // SAFETY: validated pointer.
         let lo = unsafe { (addr as *const u8).read_unaligned() };
         let hi = unsafe { (addr.wrapping_add(1) as *const u8).read_unaligned() };
-        if lo == 0 && hi == 0 { break; }
+        if lo == 0 && hi == 0 {
+            break;
+        }
         ascii_buf[ascii_len] = if hi == 0 { lo } else { b'?' };
         ascii_len += 1;
         wi += 1;
@@ -3306,11 +3975,23 @@ fn advapi_reg_query_value_ex_w(args_ptr: u32) -> u32 {
 /// # IRQL: PASSIVE
 fn advapi_alloc_luid(args_ptr: u32) -> u32 {
     static LUID_CTR: spin::Mutex<u64> = spin::Mutex::new(1);
-    let ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(ptr, 8) { return 0; }
-    let luid = { let mut c = LUID_CTR.lock(); let v = *c; *c = c.wrapping_add(1); v };
+    let ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(ptr, 8) {
+        return 0;
+    }
+    let luid = {
+        let mut c = LUID_CTR.lock();
+        let v = *c;
+        *c = c.wrapping_add(1);
+        v
+    };
     // SAFETY: validated 8-byte user buffer.
-    unsafe { (ptr as *mut u64).write_unaligned(luid); }
+    unsafe {
+        (ptr as *mut u64).write_unaligned(luid);
+    }
     1 // TRUE
 }
 
@@ -3321,15 +4002,27 @@ fn advapi_alloc_luid(args_ptr: u32) -> u32 {
 ///
 /// IRQL: PASSIVE_LEVEL
 fn win32_get_user_name_a(args_ptr: u32) -> u32 {
-    let buf_ptr  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let size_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(buf_ptr, 7) { return 0; }
-    if !is_user_range(size_ptr, 4) { return 0; }
+    let buf_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let size_ptr = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(buf_ptr, 7) {
+        return 0;
+    }
+    if !is_user_range(size_ptr, 4) {
+        return 0;
+    }
     // SAFETY: both pointers validated above.
     let provided = unsafe { (size_ptr as *const u32).read_unaligned() };
     if provided < 7 {
         // SetLastError would be ERROR_INSUFFICIENT_BUFFER; stub just fails.
-        unsafe { (size_ptr as *mut u32).write_unaligned(7); }
+        unsafe {
+            (size_ptr as *mut u32).write_unaligned(7);
+        }
         return 0; // FALSE
     }
     const NAME: &[u8] = b"Player\0";
@@ -3344,10 +4037,14 @@ fn win32_get_user_name_a(args_ptr: u32) -> u32 {
 
 // ── Trait extension: bit-clear helper for u64 (TLS bitmap) ───────────────────
 
-trait FetchClearBit { fn fetch_clear_bit(&mut self, bit: usize); }
+trait FetchClearBit {
+    fn fetch_clear_bit(&mut self, bit: usize);
+}
 impl FetchClearBit for u64 {
     fn fetch_clear_bit(&mut self, bit: usize) {
-        if bit < 64 { *self &= !(1u64 << bit); }
+        if bit < 64 {
+            *self &= !(1u64 << bit);
+        }
     }
 }
 
@@ -3369,11 +4066,19 @@ static VK_MAP_REGION: Mutex<u32> = Mutex::new(0);
 
 fn vk_get_instance_proc_addr(args_ptr: u32) -> u32 {
     // args: (VkInstance instance, const char* pName)
-    let p_name = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let p_name = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let mut buf = [0u8; 64];
     let len = read_cstr_user_buf(p_name, &mut buf);
-    if len == 0 { return 0; }
-    let name = match core::str::from_utf8(&buf[..len]) { Ok(s) => s, Err(_) => return 0 };
+    if len == 0 {
+        return 0;
+    }
+    let name = match core::str::from_utf8(&buf[..len]) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     // Look up in vulkan-1 stub exports → returns VA of the stub code
     const VK_BASE: u32 = 0x7C00_0000;
     if let Some(addr) = ps::loader::resolve_stub_proc_by_base(VK_BASE, name) {
@@ -3390,8 +4095,14 @@ fn vk_get_device_proc_addr(args_ptr: u32) -> u32 {
 
 fn vk_enum_inst_ext_props(args_ptr: u32) -> u32 {
     // vkEnumerateInstanceExtensionProperties(pLayerName, pPropertyCount, pProperties)
-    let p_count = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let p_props = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_props = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Report 1 extension: VK_KHR_surface (DXVK requires it)
     if p_props == 0 {
         // Query count only
@@ -3423,14 +4134,20 @@ fn vk_enum_inst_ext_props(args_ptr: u32) -> u32 {
 
 fn vk_enum_inst_layer_props(args_ptr: u32) -> u32 {
     // No layers — write count = 0
-    let p_count = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let _ = write_u32_user(p_count, 0);
     0
 }
 
 fn vk_enum_inst_version(args_ptr: u32) -> u32 {
     // vkEnumerateInstanceVersion(uint32_t* pApiVersion)
-    let p_ver = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let p_ver = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Vulkan 1.2.0: VK_MAKE_API_VERSION(0, 1, 2, 0) = (1<<22)|(2<<12) = 0x0040_2000
     let _ = write_u32_user(p_ver, (1 << 22) | (2 << 12));
     0
@@ -3438,8 +4155,14 @@ fn vk_enum_inst_version(args_ptr: u32) -> u32 {
 
 fn vk_enum_physical_devices(args_ptr: u32) -> u32 {
     // vkEnumeratePhysicalDevices(VkInstance, uint32_t* pCount, VkPhysicalDevice* pPhysDevs)
-    let p_count = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let p_devs  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_devs = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if p_devs == 0 {
         let _ = write_u32_user(p_count, 1);
         return 0;
@@ -3449,6 +4172,7 @@ fn vk_enum_physical_devices(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_props(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceProperties(VkPhysicalDevice, VkPhysicalDeviceProperties*)
     // VkPhysicalDeviceProperties (32-bit): 816 bytes
@@ -3461,36 +4185,41 @@ fn vk_get_phys_dev_props(args_ptr: u32) -> u32 {
     //   +0x114: pipelineCacheUUID (uint8_t[16])
     //   +0x124: limits (VkPhysicalDeviceLimits, 504 bytes)
     //   +0x31C: sparseProperties (VkPhysicalDeviceSparseProperties, 20 bytes)
-    let p_props = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p_props, 816) { return 0; }
+    let p_props = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p_props, 816) {
+        return 0;
+    }
     // Zero entire struct first
     for i in (0..816).step_by(4) {
         let _ = write_u32_user(p_props + i, 0);
     }
     let _ = write_u32_user(p_props + 0x00, (1 << 22) | (2 << 12)); // apiVersion 1.2.0
     let _ = write_u32_user(p_props + 0x04, 0x0001_0000); // driverVersion
-    let _ = write_u32_user(p_props + 0x08, 0x10DE);       // vendorID (NVIDIA)
-    let _ = write_u32_user(p_props + 0x0C, 0x1C82);       // deviceID (GTX 1050)
-    let _ = write_u32_user(p_props + 0x10, 2);             // DISCRETE_GPU
-    // deviceName = "Mino Vulkan Stub GPU"
+    let _ = write_u32_user(p_props + 0x08, 0x10DE); // vendorID (NVIDIA)
+    let _ = write_u32_user(p_props + 0x0C, 0x1C82); // deviceID (GTX 1050)
+    let _ = write_u32_user(p_props + 0x10, 2); // DISCRETE_GPU
+                                               // deviceName = "Mino Vulkan Stub GPU"
     let name = b"Mino Vulkan Stub GPU\0";
     for (i, &b) in name.iter().enumerate() {
         let _ = write_u8_user(p_props + 0x14 + i as u32, b);
     }
     // Fill critical limits that DXVK checks:
     let limits = p_props + 0x124;
-    let _ = write_u32_user(limits + 0,  4096);       // maxImageDimension1D
-    let _ = write_u32_user(limits + 4,  4096);       // maxImageDimension2D
-    let _ = write_u32_user(limits + 8,  256);        // maxImageDimension3D
-    let _ = write_u32_user(limits + 12, 4096);       // maxImageDimensionCube
-    let _ = write_u32_user(limits + 16, 256);        // maxImageArrayLayers
-    let _ = write_u32_user(limits + 20, 65536);      // maxTexelBufferElements
-    let _ = write_u32_user(limits + 24, 16384);      // maxUniformBufferRange
-    let _ = write_u32_user(limits + 28, 0x0800_0000);// maxStorageBufferRange (128MB)
-    let _ = write_u32_user(limits + 32, 128);        // maxPushConstantsSize
-    let _ = write_u32_user(limits + 36, 4096);       // maxMemoryAllocationCount
-    let _ = write_u32_user(limits + 40, 4096);       // maxSamplerAllocationCount
-    // maxBoundDescriptorSets (+76)
+    let _ = write_u32_user(limits + 0, 4096); // maxImageDimension1D
+    let _ = write_u32_user(limits + 4, 4096); // maxImageDimension2D
+    let _ = write_u32_user(limits + 8, 256); // maxImageDimension3D
+    let _ = write_u32_user(limits + 12, 4096); // maxImageDimensionCube
+    let _ = write_u32_user(limits + 16, 256); // maxImageArrayLayers
+    let _ = write_u32_user(limits + 20, 65536); // maxTexelBufferElements
+    let _ = write_u32_user(limits + 24, 16384); // maxUniformBufferRange
+    let _ = write_u32_user(limits + 28, 0x0800_0000); // maxStorageBufferRange (128MB)
+    let _ = write_u32_user(limits + 32, 128); // maxPushConstantsSize
+    let _ = write_u32_user(limits + 36, 4096); // maxMemoryAllocationCount
+    let _ = write_u32_user(limits + 40, 4096); // maxSamplerAllocationCount
+                                               // maxBoundDescriptorSets (+76)
     let _ = write_u32_user(limits + 76, 8);
     // maxPerStageDescriptorSamplers (+80..+100): set all to reasonable values
     for off in (80..104).step_by(4) {
@@ -3517,7 +4246,10 @@ fn vk_get_phys_dev_props(args_ptr: u32) -> u32 {
 fn vk_get_phys_dev_props2(args_ptr: u32) -> u32 {
     // VkPhysicalDeviceProperties2KHR has sType+pNext+VkPhysicalDeviceProperties
     // sType at +0 (=1000059001), pNext at +4, properties at +8
-    let p_props2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let p_props2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Redirect to fill the embedded VkPhysicalDeviceProperties at offset 8
     let inner_ptr = p_props2 + 8;
     // Build a temporary args array pointing to the inner struct
@@ -3528,8 +4260,13 @@ fn vk_get_phys_dev_props2(args_ptr: u32) -> u32 {
 
 fn vk_get_phys_dev_features(args_ptr: u32) -> u32 {
     // VkPhysicalDeviceFeatures: 55 VkBool32 fields = 220 bytes. Set all to TRUE.
-    let p_feat = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p_feat, 220) { return 0; }
+    let p_feat = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p_feat, 220) {
+        return 0;
+    }
     for i in (0..220).step_by(4) {
         let _ = write_u32_user(p_feat + i, 1); // VK_TRUE
     }
@@ -3538,33 +4275,44 @@ fn vk_get_phys_dev_features(args_ptr: u32) -> u32 {
 
 fn vk_get_phys_dev_features2(args_ptr: u32) -> u32 {
     // VkPhysicalDeviceFeatures2: sType(+0), pNext(+4), features(+8, 220 bytes)
-    let p_feat2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let p_feat2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let inner = p_feat2 + 8;
-    if !is_user_range(inner, 220) { return 0; }
+    if !is_user_range(inner, 220) {
+        return 0;
+    }
     for i in (0..220).step_by(4) {
         let _ = write_u32_user(inner + i, 1);
     }
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_mem_props(args_ptr: u32) -> u32 {
     // VkPhysicalDeviceMemoryProperties (32-bit):
     //   +0x00: memoryTypeCount (u32)
     //   +0x04: memoryTypes[32] — each 8 bytes (propertyFlags u32, heapIndex u32) = 256 bytes
     //   +0x104: memoryHeapCount (u32)
     //   +0x108: memoryHeaps[16] — each 12 bytes (size u64, flags u32) = 192 bytes
-    let p = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p, 0x1C8) { return 0; }
+    let p = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p, 0x1C8) {
+        return 0;
+    }
     // Zero entire struct
     for i in (0u32..0x1C8).step_by(4) {
         let _ = write_u32_user(p + i, 0);
     }
     // 2 memory types, 2 heaps
     let _ = write_u32_user(p + 0x00, 2); // memoryTypeCount
-    // Type 0: DEVICE_LOCAL (propertyFlags=0x01, heapIndex=0)
+                                         // Type 0: DEVICE_LOCAL (propertyFlags=0x01, heapIndex=0)
     let _ = write_u32_user(p + 0x04, 0x01); // propertyFlags
-    let _ = write_u32_user(p + 0x08, 0);    // heapIndex
-    // Type 1: HOST_VISIBLE|HOST_COHERENT (propertyFlags=0x06, heapIndex=1)
+    let _ = write_u32_user(p + 0x08, 0); // heapIndex
+                                         // Type 1: HOST_VISIBLE|HOST_COHERENT (propertyFlags=0x06, heapIndex=1)
     let _ = write_u32_user(p + 0x0C, 0x06);
     let _ = write_u32_user(p + 0x10, 1);
     // memoryHeapCount
@@ -3572,7 +4320,7 @@ fn vk_get_phys_dev_mem_props(args_ptr: u32) -> u32 {
     // Heap 0: 256 MB device-local (flags=0x01)
     let _ = write_u64_user(p + 0x108, 256 * 1024 * 1024); // size
     let _ = write_u32_user(p + 0x110, 0x01); // flags = DEVICE_LOCAL
-    // Heap 1: 512 MB host-visible
+                                             // Heap 1: 512 MB host-visible
     let _ = write_u64_user(p + 0x114, 512 * 1024 * 1024);
     let _ = write_u32_user(p + 0x11C, 0x00); // flags = 0
     0
@@ -3580,39 +4328,57 @@ fn vk_get_phys_dev_mem_props(args_ptr: u32) -> u32 {
 
 fn vk_get_phys_dev_mem_props2(args_ptr: u32) -> u32 {
     // VkPhysicalDeviceMemoryProperties2: sType(+0), pNext(+4), memoryProperties(+8)
-    let p2 = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let p2 = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let fake_args: [u32; 2] = [0, p2 + 8];
     vk_get_phys_dev_mem_props(fake_args.as_ptr() as u32)
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_queue_props(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceQueueFamilyProperties(physDev, pCount, pQueueFamilyProperties)
     // VkQueueFamilyProperties: queueFlags(u32), queueCount(u32), timestampValidBits(u32),
     //                          minImageTransferGranularity(3×u32) = 24 bytes
-    let p_count = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let p_props = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_props = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if p_props == 0 {
         let _ = write_u32_user(p_count, 1);
         return 0; // void, but return convention
     }
     let _ = write_u32_user(p_count, 1);
-    if !is_user_range(p_props, 24) { return 0; }
+    if !is_user_range(p_props, 24) {
+        return 0;
+    }
     // queueFlags: GRAPHICS|COMPUTE|TRANSFER|SPARSE = 0x0F
     let _ = write_u32_user(p_props + 0, 0x0F);
-    let _ = write_u32_user(p_props + 4, 4);  // queueCount
+    let _ = write_u32_user(p_props + 4, 4); // queueCount
     let _ = write_u32_user(p_props + 8, 64); // timestampValidBits
-    // minImageTransferGranularity {1,1,1}
+                                             // minImageTransferGranularity {1,1,1}
     let _ = write_u32_user(p_props + 12, 1);
     let _ = write_u32_user(p_props + 16, 1);
     let _ = write_u32_user(p_props + 20, 1);
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_fmt_props(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceFormatProperties(physDev, VkFormat, VkFormatProperties*)
     // VkFormatProperties: linearTilingFeatures(u32), optimalTilingFeatures(u32), bufferFeatures(u32) = 12 bytes
-    let p_props = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p_props, 12) { return 0; }
+    let p_props = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p_props, 12) {
+        return 0;
+    }
     // Report all common features: sampled|storage|color_attach|depth|blit|transfer|vertex
     let all_features: u32 = 0x1FF01; // common feature bits
     let _ = write_u32_user(p_props + 0, all_features); // linearTilingFeatures
@@ -3623,8 +4389,14 @@ fn vk_get_phys_dev_fmt_props(args_ptr: u32) -> u32 {
 
 fn vk_enum_dev_ext_props(args_ptr: u32) -> u32 {
     // vkEnumerateDeviceExtensionProperties(physDev, pLayerName, pPropertyCount, pProperties)
-    let p_count = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let p_props = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_props = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Report 1 extension: VK_KHR_swapchain
     if p_props == 0 {
         let _ = write_u32_user(p_count, 1);
@@ -3641,23 +4413,29 @@ fn vk_enum_dev_ext_props(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_surface_caps(args_ptr: u32) -> u32 {
     // VkSurfaceCapabilitiesKHR: 52 bytes
     //   minImageCount(u32), maxImageCount(u32), currentExtent(2×u32),
     //   minImageExtent(2×u32), maxImageExtent(2×u32), maxImageArrayLayers(u32),
     //   supportedTransforms(u32), currentTransform(u32), supportedCompositeAlpha(u32),
     //   supportedUsageFlags(u32)
-    let p_caps = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p_caps, 52) { return 0; }
-    let _ = write_u32_user(p_caps + 0,  2);    // minImageCount
-    let _ = write_u32_user(p_caps + 4,  8);    // maxImageCount
-    let _ = write_u32_user(p_caps + 8,  800);  // currentExtent.width
-    let _ = write_u32_user(p_caps + 12, 600);  // currentExtent.height
-    let _ = write_u32_user(p_caps + 16, 1);    // minImageExtent.width
-    let _ = write_u32_user(p_caps + 20, 1);    // minImageExtent.height
+    let p_caps = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p_caps, 52) {
+        return 0;
+    }
+    let _ = write_u32_user(p_caps + 0, 2); // minImageCount
+    let _ = write_u32_user(p_caps + 4, 8); // maxImageCount
+    let _ = write_u32_user(p_caps + 8, 800); // currentExtent.width
+    let _ = write_u32_user(p_caps + 12, 600); // currentExtent.height
+    let _ = write_u32_user(p_caps + 16, 1); // minImageExtent.width
+    let _ = write_u32_user(p_caps + 20, 1); // minImageExtent.height
     let _ = write_u32_user(p_caps + 24, 4096); // maxImageExtent.width
     let _ = write_u32_user(p_caps + 28, 4096); // maxImageExtent.height
-    let _ = write_u32_user(p_caps + 32, 1);    // maxImageArrayLayers
+    let _ = write_u32_user(p_caps + 32, 1); // maxImageArrayLayers
     let _ = write_u32_user(p_caps + 36, 0x01); // supportedTransforms (IDENTITY)
     let _ = write_u32_user(p_caps + 40, 0x01); // currentTransform (IDENTITY)
     let _ = write_u32_user(p_caps + 44, 0x01); // supportedCompositeAlpha (OPAQUE)
@@ -3665,11 +4443,18 @@ fn vk_get_surface_caps(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_surface_formats(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceSurfaceFormatsKHR(physDev, surface, pFormatCount, pFormats)
     // VkSurfaceFormatKHR: format(u32) + colorSpace(u32) = 8 bytes
-    let p_count = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let p_fmts  = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_fmts = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if p_fmts == 0 {
         let _ = write_u32_user(p_count, 1);
         return 0;
@@ -3677,14 +4462,20 @@ fn vk_get_surface_formats(args_ptr: u32) -> u32 {
     let _ = write_u32_user(p_count, 1);
     if is_user_range(p_fmts, 8) {
         let _ = write_u32_user(p_fmts + 0, 44); // VK_FORMAT_B8G8R8A8_UNORM
-        let _ = write_u32_user(p_fmts + 4, 0);  // VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+        let _ = write_u32_user(p_fmts + 4, 0); // VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
     }
     0
 }
 
 fn vk_get_surface_present_modes(args_ptr: u32) -> u32 {
-    let p_count = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let p_modes = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_modes = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if p_modes == 0 {
         let _ = write_u32_user(p_count, 1);
         return 0;
@@ -3698,15 +4489,25 @@ fn vk_get_surface_present_modes(args_ptr: u32) -> u32 {
 
 fn vk_get_surface_support(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceSurfaceSupportKHR(physDev, queueFamilyIndex, surface, pSupported)
-    let p_supported = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let p_supported = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let _ = write_u32_user(p_supported, 1); // VK_TRUE
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_swapchain_images(args_ptr: u32) -> u32 {
     // vkGetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages)
-    let p_count  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let p_images = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let p_count = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_images = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     if p_images == 0 {
         let _ = write_u32_user(p_count, 2);
         return 0;
@@ -3723,7 +4524,10 @@ fn vk_acquire_next_image(args_ptr: u32) -> u32 {
     // vkAcquireNextImageKHR(dev, swapchain, timeout_lo, timeout_hi, semaphore, fence, pImageIndex)
     // On 32-bit: args at index 0..6, but timeout is u64 so pImageIndex is at index 6
     // args: [dev, sc, timeout_lo, timeout_hi, sem, fence, pIdx]
-    let p_idx = match read_arg_u32(args_ptr, 6) { Ok(v) => v, Err(_) => return 0 };
+    let p_idx = match read_arg_u32(args_ptr, 6) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let _ = write_u32_user(p_idx, 0); // always return image index 0
     0 // VK_SUCCESS
 }
@@ -3732,11 +4536,19 @@ fn vk_alloc_cmd_buffers(args_ptr: u32) -> u32 {
     // vkAllocateCommandBuffers(device, pAllocateInfo, pCommandBuffers)
     // VkCommandBufferAllocateInfo: sType(+0), pNext(+4), commandPool(+8),
     //                              level(+12), commandBufferCount(+16)
-    let p_alloc_info = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let p_cmd_bufs   = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let p_alloc_info = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_cmd_bufs = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let count = if is_user_range(p_alloc_info + 16, 4) {
         unsafe { read_unaligned((p_alloc_info + 16) as *const u32) }
-    } else { 1 };
+    } else {
+        1
+    };
     let count = core::cmp::min(count, 64); // sanity cap
     for i in 0..count {
         let _ = write_u32_user(p_cmd_bufs + i * 4, 0xDE00_0100 + i);
@@ -3748,7 +4560,10 @@ fn vk_map_memory(args_ptr: u32) -> u32 {
     // vkMapMemory(device, memory, offset_lo, offset_hi, size_lo, size_hi, flags, ppData)
     // offset and size are VkDeviceSize (u64) on 32-bit → index 2..5
     // flags at index 6, ppData at index 7
-    let pp_data = match read_arg_u32(args_ptr, 7) { Ok(v) => v, Err(_) => return 0 };
+    let pp_data = match read_arg_u32(args_ptr, 7) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Allocate a scratch region for the mapped memory
     let mut guard = VK_MAP_REGION.lock();
     if *guard == 0 {
@@ -3765,15 +4580,21 @@ fn vk_map_memory(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_mem_reqs(args_ptr: u32) -> u32 {
     // vkGetImageMemoryRequirements / vkGetBufferMemoryRequirements
     // (device, image_or_buffer, VkMemoryRequirements*)
     // VkMemoryRequirements: size(u64), alignment(u64), memoryTypeBits(u32) = 20 bytes
-    let p_reqs = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p_reqs, 20) { return 0; }
-    let _ = write_u64_user(p_reqs + 0, 4 * 1024 * 1024);  // size = 4 MB
-    let _ = write_u64_user(p_reqs + 8, 256);                // alignment = 256
-    let _ = write_u32_user(p_reqs + 16, 0x03);              // memoryTypeBits (types 0+1)
+    let p_reqs = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p_reqs, 20) {
+        return 0;
+    }
+    let _ = write_u64_user(p_reqs + 0, 4 * 1024 * 1024); // size = 4 MB
+    let _ = write_u64_user(p_reqs + 8, 256); // alignment = 256
+    let _ = write_u32_user(p_reqs + 16, 0x03); // memoryTypeBits (types 0+1)
     0
 }
 
@@ -3781,11 +4602,19 @@ fn vk_alloc_descriptor_sets(args_ptr: u32) -> u32 {
     // vkAllocateDescriptorSets(device, pAllocateInfo, pDescriptorSets)
     // VkDescriptorSetAllocateInfo: sType(+0), pNext(+4), descriptorPool(+8),
     //                              descriptorSetCount(+12), pSetLayouts(+16)
-    let p_alloc_info = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let p_sets       = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let p_alloc_info = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_sets = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let count = if is_user_range(p_alloc_info + 12, 4) {
         unsafe { read_unaligned((p_alloc_info + 12) as *const u32) }
-    } else { 1 };
+    } else {
+        1
+    };
     let count = core::cmp::min(count, 64);
     for i in 0..count {
         let _ = write_u32_user(p_sets + i * 4, 0xDE00_0200 + i);
@@ -3796,8 +4625,14 @@ fn vk_alloc_descriptor_sets(args_ptr: u32) -> u32 {
 fn vk_create_pipelines(args_ptr: u32) -> u32 {
     // vkCreateGraphicsPipelines / vkCreateComputePipelines
     // (device, pipelineCache, createInfoCount, pCreateInfos, pAllocator, pPipelines)
-    let count      = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let p_pipelines = match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return 0 };
+    let count = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let p_pipelines = match read_arg_u32(args_ptr, 5) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let count = core::cmp::min(count, 64);
     for i in 0..count {
         let _ = write_u32_user(p_pipelines + i * 4, 0xDE00_0300 + i);
@@ -3820,19 +4655,33 @@ fn vk_queue_present(_args_ptr: u32) -> u32 {
     // For now: blit from the vkMapMemory scratch region (0x3000_0000) to the GOP
     // framebuffer.  DXVK will have rendered into that region via mapped memory.
     let (fb_w, fb_h) = hal::fb::dimensions();
-    if fb_w == 0 || fb_h == 0 { return 0; } // no framebuffer
+    if fb_w == 0 || fb_h == 0 {
+        return 0;
+    } // no framebuffer
 
     let map_addr = *VK_MAP_REGION.lock();
-    if map_addr == 0 { return 0; }
+    if map_addr == 0 {
+        return 0;
+    }
 
     // Treat the mapped region as a BGRA8888 framebuffer at the surface dimensions
     // reported by vk_get_surface_caps (800×600).
     let src_w = 800u32.min(fb_w);
     let src_h = 600u32.min(fb_h);
 
-    // SAFETY: map_addr is in user VA space which is mapped in kernel CR3.
-    let src_ptr = map_addr as *const u32;
-    hal::fb::blit_bgra(src_ptr, src_w, src_h, 0, 0);
+    // vk_map_memory hands out a fixed user VA that nothing maps: blit only if
+    // the whole region is mapped, or the kernel would fault on it.
+    let len = (src_w * src_h) as usize;
+    let Some(hhdm_offset) = syscall_ctx_pub() else { return 0 };
+    // SAFETY: CR3 holds the kernel tables; hhdm_offset is the bootloader's HHDM.
+    let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
+    let start = map_addr as u64;
+    if !(start..start + len as u64 * 4).step_by(4096).all(|va| pt.translate(x86_64::VirtAddr::new(va)).is_some()) {
+        return 0;
+    }
+    // SAFETY: the len pixels at map_addr are mapped (checked above).
+    let src = unsafe { core::slice::from_raw_parts(map_addr as *const u32, len) };
+    hal::fb::blit_bgra(src, src_w, src_h, 0, 0);
     0 // VK_SUCCESS
 }
 
@@ -3841,8 +4690,13 @@ fn vk_queue_present(_args_ptr: u32) -> u32 {
 /// GlobalMemoryStatus(MEMORYSTATUS*) → void
 /// # IRQL: PASSIVE
 fn win32_global_memory_status(args_ptr: u32) -> u32 {
-    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p, 32) { return 0; }
+    let p = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p, 32) {
+        return 0;
+    }
     // SAFETY: validated 32-byte user buffer (MEMORYSTATUS is 32 bytes on 32-bit).
     unsafe {
         core::ptr::write_bytes(p as *mut u8, 0, 32);
@@ -3869,12 +4723,23 @@ fn win32_global_memory_status(args_ptr: u32) -> u32 {
 /// GetModuleFileNameA(hModule, lpFilename, nSize) → DWORD chars written
 /// # IRQL: PASSIVE
 fn win32_get_module_file_name_a(args_ptr: u32) -> u32 {
-    let _module = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let buf     = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let size    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
+    let _module = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let size = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let path = b"C:\\GhostRecon\\GhostRecon.exe\0";
     let copy_len = (path.len() as u32).min(size);
-    if copy_len == 0 || !is_user_range(buf, copy_len) { return 0; }
+    if copy_len == 0 || !is_user_range(buf, copy_len) {
+        return 0;
+    }
     // SAFETY: validated user buffer.
     unsafe {
         core::ptr::copy_nonoverlapping(path.as_ptr(), buf as *mut u8, copy_len as usize);
@@ -3886,12 +4751,30 @@ fn win32_get_module_file_name_a(args_ptr: u32) -> u32 {
 /// Simple ASCII→UTF16 expansion.
 /// # IRQL: PASSIVE
 fn win32_multi_byte_to_wide_char(args_ptr: u32) -> u32 {
-    let _cp    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let _flags = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let src    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let src_len= match read_arg_u32(args_ptr, 3) { Ok(v) => v as i32, Err(_) => return 0 };
-    let dst    = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
-    let dst_len= match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return 0 };
+    let _cp = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let _flags = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src_len = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v as i32,
+        Err(_) => return 0,
+    };
+    let dst = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let dst_len = match read_arg_u32(args_ptr, 5) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Determine source length
     let actual_src_len = if src_len == -1 {
         // NUL-terminated — count chars including NUL
@@ -3899,8 +4782,12 @@ fn win32_multi_byte_to_wide_char(args_ptr: u32) -> u32 {
         while is_user_range(src + n, 1) {
             let b = unsafe { ((src + n) as *const u8).read_unaligned() };
             n += 1;
-            if b == 0 { break; }
-            if n > 0x10000 { break; }
+            if b == 0 {
+                break;
+            }
+            if n > 0x10000 {
+                break;
+            }
         }
         n
     } else {
@@ -3911,8 +4798,12 @@ fn win32_multi_byte_to_wide_char(args_ptr: u32) -> u32 {
         return actual_src_len;
     }
     let copy_n = actual_src_len.min(dst_len);
-    if copy_n == 0 { return 0; }
-    if !is_user_range(src, actual_src_len) || !is_user_range(dst, copy_n * 2) { return 0; }
+    if copy_n == 0 {
+        return 0;
+    }
+    if !is_user_range(src, actual_src_len) || !is_user_range(dst, copy_n * 2) {
+        return 0;
+    }
     // SAFETY: validated buffers.
     unsafe {
         for i in 0..copy_n {
@@ -3927,19 +4818,24 @@ fn win32_multi_byte_to_wide_char(args_ptr: u32) -> u32 {
 /// Fills with XP SP2 values.
 /// # IRQL: PASSIVE
 fn win32_get_version_ex_a(args_ptr: u32) -> u32 {
-    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p, 148) { return 0; }
+    let p = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p, 148) {
+        return 0;
+    }
     // OSVERSIONINFOA: dwOSVersionInfoSize(4), dwMajorVersion(4), dwMinorVersion(4),
     //                 dwBuildNumber(4), dwPlatformId(4), szCSDVersion[128]
     // SAFETY: validated 148-byte user buffer.
     unsafe {
         core::ptr::write_bytes(p as *mut u8, 0, 148);
         (p as *mut u32).write_unaligned(148); // dwOSVersionInfoSize
-        ((p + 4) as *mut u32).write_unaligned(5);    // dwMajorVersion
-        ((p + 8) as *mut u32).write_unaligned(1);    // dwMinorVersion
+        ((p + 4) as *mut u32).write_unaligned(5); // dwMajorVersion
+        ((p + 8) as *mut u32).write_unaligned(1); // dwMinorVersion
         ((p + 12) as *mut u32).write_unaligned(2600); // dwBuildNumber
-        ((p + 16) as *mut u32).write_unaligned(2);    // VER_PLATFORM_WIN32_NT
-        // szCSDVersion at offset 20: "Service Pack 2\0"
+        ((p + 16) as *mut u32).write_unaligned(2); // VER_PLATFORM_WIN32_NT
+                                                   // szCSDVersion at offset 20: "Service Pack 2\0"
         let sp = b"Service Pack 2\0";
         core::ptr::copy_nonoverlapping(sp.as_ptr(), (p + 20) as *mut u8, sp.len());
     }
@@ -3949,16 +4845,30 @@ fn win32_get_version_ex_a(args_ptr: u32) -> u32 {
 /// lstrcpyA(dst, src) → dst
 /// # IRQL: PASSIVE
 fn win32_lstrcpy_a(args_ptr: u32) -> u32 {
-    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if dst == 0 || src == 0 { return 0; }
+    let dst = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if dst == 0 || src == 0 {
+        return 0;
+    }
     // Copy until NUL (with limit)
     let mut i = 0u32;
     loop {
-        if i > 0x10000 { break; }
+        if i > 0x10000 {
+            break;
+        }
         let b = unsafe { ((src + i) as *const u8).read_unaligned() };
-        unsafe { ((dst + i) as *mut u8).write_unaligned(b); }
-        if b == 0 { break; }
+        unsafe {
+            ((dst + i) as *mut u8).write_unaligned(b);
+        }
+        if b == 0 {
+            break;
+        }
         i += 1;
     }
     dst
@@ -3967,34 +4877,60 @@ fn win32_lstrcpy_a(args_ptr: u32) -> u32 {
 /// GetCurrentDirectoryA(nBufferLength, lpBuffer) → DWORD
 /// # IRQL: PASSIVE
 fn win32_get_current_dir_a(args_ptr: u32) -> u32 {
-    let size = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let buf  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
+    let size = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     let dir = b"C:\\GhostRecon\0";
-    if size < dir.len() as u32 || !is_user_range(buf, dir.len() as u32) { return dir.len() as u32; }
-    unsafe { core::ptr::copy_nonoverlapping(dir.as_ptr(), buf as *mut u8, dir.len()); }
+    if size < dir.len() as u32 || !is_user_range(buf, dir.len() as u32) {
+        return dir.len() as u32;
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(dir.as_ptr(), buf as *mut u8, dir.len());
+    }
     (dir.len() - 1) as u32 // exclude NUL
 }
 
 /// lstrcatA(dst, src) → dst
 /// # IRQL: PASSIVE
 fn win32_lstrcat_a(args_ptr: u32) -> u32 {
-    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if dst == 0 || src == 0 { return 0; }
+    let dst = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if dst == 0 || src == 0 {
+        return 0;
+    }
     // Find end of dst
     let mut d = 0u32;
     while d < 0x10000 {
         let b = unsafe { ((dst + d) as *const u8).read_unaligned() };
-        if b == 0 { break; }
+        if b == 0 {
+            break;
+        }
         d += 1;
     }
     // Copy src
     let mut s = 0u32;
     loop {
-        if s > 0x10000 { break; }
+        if s > 0x10000 {
+            break;
+        }
         let b = unsafe { ((src + s) as *const u8).read_unaligned() };
-        unsafe { ((dst + d + s) as *mut u8).write_unaligned(b); }
-        if b == 0 { break; }
+        unsafe {
+            ((dst + d + s) as *mut u8).write_unaligned(b);
+        }
+        if b == 0 {
+            break;
+        }
         s += 1;
     }
     dst
@@ -4003,31 +4939,55 @@ fn win32_lstrcat_a(args_ptr: u32) -> u32 {
 /// lstrcpynA(dst, src, iMaxLength) → dst
 /// # IRQL: PASSIVE
 fn win32_lstrcpyn_a(args_ptr: u32) -> u32 {
-    let dst = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let src = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let max = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    if dst == 0 || src == 0 || max == 0 { return 0; }
+    let dst = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let max = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if dst == 0 || src == 0 || max == 0 {
+        return 0;
+    }
     let limit = max.min(0x10000);
     let mut i = 0u32;
     while i < limit - 1 {
         let b = unsafe { ((src + i) as *const u8).read_unaligned() };
-        unsafe { ((dst + i) as *mut u8).write_unaligned(b); }
-        if b == 0 { return dst; }
+        unsafe {
+            ((dst + i) as *mut u8).write_unaligned(b);
+        }
+        if b == 0 {
+            return dst;
+        }
         i += 1;
     }
-    unsafe { ((dst + i) as *mut u8).write_unaligned(0); }
+    unsafe {
+        ((dst + i) as *mut u8).write_unaligned(0);
+    }
     dst
 }
 
 /// lstrlenA(lpString) → int
 /// # IRQL: PASSIVE
 fn win32_lstrlen_a(args_ptr: u32) -> u32 {
-    let s = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if s == 0 { return 0; }
+    let s = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if s == 0 {
+        return 0;
+    }
     let mut n = 0u32;
     while n < 0x10000 {
         let b = unsafe { ((s + n) as *const u8).read_unaligned() };
-        if b == 0 { break; }
+        if b == 0 {
+            break;
+        }
         n += 1;
     }
     n
@@ -4037,11 +4997,26 @@ fn win32_lstrlen_a(args_ptr: u32) -> u32 {
 /// Delegates to NtWriteFile for real handles; fakes success for stdout/stderr.
 /// # IRQL: PASSIVE
 fn win32_write_file(args_ptr: u32) -> u32 {
-    let handle    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let buf       = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let count     = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let written   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
-    let _overlapped = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
+    let handle = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let count = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let written = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let _overlapped = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // For stdout/stderr fake handles, log and succeed
     if handle <= 2 {
         if is_user_range(buf, count) && count > 0 {
@@ -4065,14 +5040,15 @@ fn win32_write_file(args_ptr: u32) -> u32 {
 /// GetFileSize(hFile) → DWORD (only uses handle arg)
 /// # IRQL: PASSIVE
 fn win32_get_file_size(args_ptr: u32) -> u32 {
-    let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let handle = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0xFFFF_FFFF,
+    };
     // Look up file state
     let map = FILE_HANDLE_MAP.lock();
-    for slot in map.iter() {
-        if let Some((h, ref file)) = slot {
-            if *h == handle {
-                return file.file_size;
-            }
+    for (h, ref file) in map.iter().flatten() {
+        if *h == handle {
+            return file.file_size;
         }
     }
     0xFFFF_FFFF // INVALID_FILE_SIZE
@@ -4084,10 +5060,15 @@ fn win32_get_file_size(args_ptr: u32) -> u32 {
 /// CreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes,
 ///             dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile) → HANDLE
 fn win32_create_file_a(args_ptr: u32) -> u32 {
-    let name_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let name_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0xFFFF_FFFF,
+    };
     let mut buf = [0u8; 260];
     let len = read_cstr_user_buf(name_ptr, &mut buf);
-    if len == 0 { return 0xFFFF_FFFF; }
+    if len == 0 {
+        return 0xFFFF_FFFF;
+    }
     let path = core::str::from_utf8(&buf[..len]).unwrap_or("");
     let fat_path = win32_path_to_fat(path);
     log::info!("[CreateFileA] '{}' -> '{}'", path, fat_path);
@@ -4141,19 +5122,26 @@ fn allocate_game_file_handle(file: io_manager::FatFile) -> u32 {
 static ENV_BLOCK_PTR: Mutex<u32> = Mutex::new(0);
 fn win32_get_env_strings_a() -> u32 {
     let mut guard = ENV_BLOCK_PTR.lock();
-    if *guard != 0 { return *guard; }
+    if *guard != 0 {
+        return *guard;
+    }
     // Allocate a page for the environment block at a fixed VA.
     let fixed_va = 0x00E1_0000u64;
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
     let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
     let mut ctx_guard = SYSCALL_CTX.lock();
-    let ctx = match ctx_guard.as_mut() { Some(v) => v, None => return 0 };
+    let ctx = match ctx_guard.as_mut() {
+        Some(v) => v,
+        None => return 0,
+    };
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), fixed_va, 0x1000, alloc, protect) {
         Ok(base) => {
             // Write a minimal environment block: "PATH=C:\0\0" (double-NUL terminated)
             let env = b"PATH=C:\\\0\0";
-            unsafe { core::ptr::copy_nonoverlapping(env.as_ptr(), base as *mut u8, env.len()); }
+            unsafe {
+                core::ptr::copy_nonoverlapping(env.as_ptr(), base as *mut u8, env.len());
+            }
             *guard = base as u32;
             base as u32
         }
@@ -4161,7 +5149,9 @@ fn win32_get_env_strings_a() -> u32 {
             // Fallback: use a fixed address in the PEB page
             let addr = 0x7FFD_E200u32;
             let env = b"PATH=C:\\\0\0";
-            unsafe { core::ptr::copy_nonoverlapping(env.as_ptr(), addr as *mut u8, env.len()); }
+            unsafe {
+                core::ptr::copy_nonoverlapping(env.as_ptr(), addr as *mut u8, env.len());
+            }
             *guard = addr;
             addr
         }
@@ -4169,26 +5159,35 @@ fn win32_get_env_strings_a() -> u32 {
 }
 
 fn win32_get_file_type(args_ptr: u32) -> u32 {
-    let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let handle = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Stdio pseudo-handles (3=stdin, 7=stdout, 11=stderr) → FILE_TYPE_CHAR
     // FAT file handles → FILE_TYPE_DISK
     match handle {
-        3 | 7 | 11 => 2,  // FILE_TYPE_CHAR (console/device)
-        0 => 0,           // FILE_TYPE_UNKNOWN
-        _ => 1,           // FILE_TYPE_DISK
+        3 | 7 | 11 => 2, // FILE_TYPE_CHAR (console/device)
+        0 => 0,          // FILE_TYPE_UNKNOWN
+        _ => 1,          // FILE_TYPE_DISK
     }
 }
 
 fn win32_message_box_a(args_ptr: u32) -> u32 {
     // MessageBoxA(hWnd, lpText, lpCaption, uType)
-    let text_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 1 };
-    let cap_ptr  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 1 };
+    let text_ptr = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 1,
+    };
+    let cap_ptr = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 1,
+    };
     let mut tbuf = [0u8; 256];
     let mut cbuf = [0u8; 128];
     let tlen = read_cstr_user_buf(text_ptr, &mut tbuf);
     let clen = read_cstr_user_buf(cap_ptr, &mut cbuf);
     let text = core::str::from_utf8(&tbuf[..tlen]).unwrap_or("?");
-    let cap  = core::str::from_utf8(&cbuf[..clen]).unwrap_or("?");
+    let cap = core::str::from_utf8(&cbuf[..clen]).unwrap_or("?");
     log::info!("[MessageBoxA] '{}': {}", cap, text);
     1 // IDOK
 }
@@ -4198,15 +5197,24 @@ fn win32_path_to_fat(path: &str) -> alloc::string::String {
     let mut fat = alloc::string::String::from("/");
     // Strip drive letter prefix (e.g., "C:\GhostRecon\")
     let mut s = path;
-    if s.len() >= 2 && s.as_bytes()[1] == b':' { s = &s[2..]; }
+    if s.len() >= 2 && s.as_bytes()[1] == b':' {
+        s = &s[2..];
+    }
     // Strip leading slashes
-    s = s.trim_start_matches(|c: char| c == '\\' || c == '/');
+    s = s.trim_start_matches(['\\', '/']);
     // Strip "GhostRecon\" prefix if present (game dir name)
-    if s.len() > 11 && s[..11].eq_ignore_ascii_case("GhostRecon\\") { s = &s[11..]; }
-    if s.len() > 11 && s[..11].eq_ignore_ascii_case("GhostRecon/") { s = &s[11..]; }
+    if s.len() > 11 && s[..11].eq_ignore_ascii_case("GhostRecon\\") {
+        s = &s[11..];
+    }
+    if s.len() > 11 && s[..11].eq_ignore_ascii_case("GhostRecon/") {
+        s = &s[11..];
+    }
     for ch in s.chars() {
-        if ch == '\\' { fat.push('/'); }
-        else { fat.push(ch.to_ascii_uppercase()); }
+        if ch == '\\' {
+            fat.push('/');
+        } else {
+            fat.push(ch.to_ascii_uppercase());
+        }
     }
     // Remove trailing wildcard for FindFirstFile patterns
     if fat.ends_with("/*") || fat.ends_with("\\*") {
@@ -4220,11 +5228,19 @@ fn win32_path_to_fat(path: &str) -> alloc::string::String {
 
 fn win32_find_first_file_a(args_ptr: u32) -> u32 {
     // FindFirstFileA(lpFileName, lpFindFileData) → HANDLE or INVALID_HANDLE_VALUE
-    let name_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
-    let data_ptr = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let name_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0xFFFF_FFFF,
+    };
+    let data_ptr = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0xFFFF_FFFF,
+    };
     let mut buf = [0u8; 260];
     let len = read_cstr_user_buf(name_ptr, &mut buf);
-    if len == 0 { return 0xFFFF_FFFF; }
+    if len == 0 {
+        return 0xFFFF_FFFF;
+    }
     let path = core::str::from_utf8(&buf[..len]).unwrap_or("");
     let fat_path = win32_path_to_fat(path);
     log::info!("[FindFirstFileA] '{}' -> '{}'", path, fat_path);
@@ -4242,7 +5258,9 @@ fn win32_find_first_file_a(args_ptr: u32) -> u32 {
             //   +36  dwReserved0/1 (8)
             //   +44  cFileName[260]
             //   +304 cAlternateFileName[14]
-            unsafe { core::ptr::write_bytes(data_ptr as *mut u8, 0, 320); }
+            unsafe {
+                core::ptr::write_bytes(data_ptr as *mut u8, 0, 320);
+            }
             let e = &entries[0];
             let attr: u32 = if e.attr & 0x10 != 0 { 0x10 } else { 0x80 };
             let _ = write_u32_user(data_ptr, attr);
@@ -4259,7 +5277,9 @@ fn win32_find_first_file_a(args_ptr: u32) -> u32 {
     // Also try ramdisk
     if let Ok(entries) = io_manager::list_fat_dir(&fat_path) {
         if !entries.is_empty() && is_user_range(data_ptr, 320) {
-            unsafe { core::ptr::write_bytes(data_ptr as *mut u8, 0, 320); }
+            unsafe {
+                core::ptr::write_bytes(data_ptr as *mut u8, 0, 320);
+            }
             let e = &entries[0];
             let attr: u32 = if e.attr & 0x10 != 0 { 0x10 } else { 0x80 };
             let _ = write_u32_user(data_ptr, attr);
@@ -4276,10 +5296,15 @@ fn win32_find_first_file_a(args_ptr: u32) -> u32 {
 }
 
 fn win32_get_file_attributes_a(args_ptr: u32) -> u32 {
-    let name_ptr = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0xFFFF_FFFF };
+    let name_ptr = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0xFFFF_FFFF,
+    };
     let mut buf = [0u8; 260];
     let len = read_cstr_user_buf(name_ptr, &mut buf);
-    if len == 0 { return 0xFFFF_FFFF; }
+    if len == 0 {
+        return 0xFFFF_FFFF;
+    }
     let path = core::str::from_utf8(&buf[..len]).unwrap_or("");
     let fat_path = win32_path_to_fat(path);
 
@@ -4304,23 +5329,43 @@ fn win32_get_file_attributes_a(args_ptr: u32) -> u32 {
 /// GetFullPathNameA(lpFileName, nBufferLength, lpBuffer, lpFilePart) → DWORD
 /// # IRQL: PASSIVE
 fn win32_get_full_path_name_a(args_ptr: u32) -> u32 {
-    let name = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let size = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let buf  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let _part = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
-    if name == 0 || buf == 0 { return 0; }
+    let name = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let size = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let buf = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let _part = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if name == 0 || buf == 0 {
+        return 0;
+    }
     // Prepend "C:\" and copy the filename
     let prefix = b"C:\\";
     // Get source length
     let mut slen = 0u32;
     while slen < 0x1000 {
         let b = unsafe { ((name + slen) as *const u8).read_unaligned() };
-        if b == 0 { break; }
+        if b == 0 {
+            break;
+        }
         slen += 1;
     }
     let total = prefix.len() as u32 + slen + 1; // +1 for NUL
-    if total > size { return total; }
-    if !is_user_range(buf, total) { return 0; }
+    if total > size {
+        return total;
+    }
+    if !is_user_range(buf, total) {
+        return 0;
+    }
     unsafe {
         core::ptr::copy_nonoverlapping(prefix.as_ptr(), buf as *mut u8, prefix.len());
         core::ptr::copy_nonoverlapping(name as *const u8, (buf + prefix.len() as u32) as *mut u8, slen as usize);
@@ -4332,9 +5377,17 @@ fn win32_get_full_path_name_a(args_ptr: u32) -> u32 {
 /// GetCPInfo(CodePage, lpCPInfo) → BOOL
 /// # IRQL: PASSIVE
 fn win32_get_cp_info(args_ptr: u32) -> u32 {
-    let _cp = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let info = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(info, 20) { return 0; }
+    let _cp = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let info = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(info, 20) {
+        return 0;
+    }
     // CPINFO: MaxCharSize(4), DefaultChar[2], LeadByte[12]
     // SAFETY: validated 20-byte buffer.
     unsafe {
@@ -4363,7 +5416,10 @@ fn win32_get_command_line_a() -> u32 {
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
     let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
     let mut ctx_guard = SYSCALL_CTX.lock();
-    let ctx = match ctx_guard.as_mut() { Some(v) => v, None => return 0 };
+    let ctx = match ctx_guard.as_mut() {
+        Some(v) => v,
+        None => return 0,
+    };
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), fixed_va, 0x1000, alloc, protect) {
         Ok(base) => {
@@ -4391,19 +5447,24 @@ fn win32_get_command_line_a() -> u32 {
 /// Fills a plausible XP-era time.
 /// # IRQL: PASSIVE
 fn win32_get_local_time(args_ptr: u32) -> u32 {
-    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p, 16) { return 0; }
+    let p = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p, 16) {
+        return 0;
+    }
     // SYSTEMTIME: wYear(2), wMonth(2), wDayOfWeek(2), wDay(2), wHour(2), wMinute(2), wSecond(2), wMilliseconds(2)
     // SAFETY: validated 16-byte user buffer.
     unsafe {
-        (p as *mut u16).write_unaligned(2003);       // wYear
-        ((p + 2) as *mut u16).write_unaligned(6);     // wMonth (June)
-        ((p + 4) as *mut u16).write_unaligned(3);     // wDayOfWeek (Tuesday)
-        ((p + 6) as *mut u16).write_unaligned(15);    // wDay
-        ((p + 8) as *mut u16).write_unaligned(12);    // wHour
-        ((p + 10) as *mut u16).write_unaligned(0);    // wMinute
-        ((p + 12) as *mut u16).write_unaligned(0);    // wSecond
-        ((p + 14) as *mut u16).write_unaligned(0);    // wMilliseconds
+        (p as *mut u16).write_unaligned(2003); // wYear
+        ((p + 2) as *mut u16).write_unaligned(6); // wMonth (June)
+        ((p + 4) as *mut u16).write_unaligned(3); // wDayOfWeek (Tuesday)
+        ((p + 6) as *mut u16).write_unaligned(15); // wDay
+        ((p + 8) as *mut u16).write_unaligned(12); // wHour
+        ((p + 10) as *mut u16).write_unaligned(0); // wMinute
+        ((p + 12) as *mut u16).write_unaligned(0); // wSecond
+        ((p + 14) as *mut u16).write_unaligned(0); // wMilliseconds
     }
     0
 }
@@ -4412,8 +5473,13 @@ fn win32_get_local_time(args_ptr: u32) -> u32 {
 /// Zeros the 68-byte struct.
 /// # IRQL: PASSIVE
 fn win32_get_startup_info_a(args_ptr: u32) -> u32 {
-    let p = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(p, 68) { return 0; }
+    let p = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(p, 68) {
+        return 0;
+    }
     // SAFETY: validated 68-byte user buffer.
     unsafe {
         core::ptr::write_bytes(p as *mut u8, 0, 68);
@@ -4426,7 +5492,10 @@ fn win32_get_startup_info_a(args_ptr: u32) -> u32 {
 /// STD_INPUT_HANDLE = -10, STD_OUTPUT_HANDLE = -11, STD_ERROR_HANDLE = -12
 /// # IRQL: PASSIVE
 fn win32_get_std_handle(args_ptr: u32) -> u32 {
-    let n = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let n = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Return non-zero pseudo-handles that look like real Windows handles.
     // The CRT checks these are non-NULL and calls GetFileType on them.
     match n {
@@ -4440,16 +5509,33 @@ fn win32_get_std_handle(args_ptr: u32) -> u32 {
 /// HeapReAlloc(hHeap, dwFlags, lpMem, dwBytes) → LPVOID
 /// # IRQL: PASSIVE
 fn win32_heap_realloc(args_ptr: u32) -> u32 {
-    let _heap  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let _flags = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let old    = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let size   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
+    let _heap = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let _flags = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let old = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let size = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Simple realloc: allocate new, copy old data (up to 1 page for safety), return new
-    if size == 0 { return 0; }
+    if size == 0 {
+        return 0;
+    }
     let protect = mm::vad::PageProtect::from_bits_truncate(0x04);
     let alloc = mm::virtual_alloc::AllocType::from_bits_truncate(0x3000);
     let mut guard = SYSCALL_CTX.lock();
-    let ctx = match guard.as_mut() { Some(v) => v, None => return 0 };
+    let ctx = match guard.as_mut() {
+        Some(v) => v,
+        None => return 0,
+    };
     let mut mapper = SyscallMapper { pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) } };
     match mm::virtual_alloc::allocate(&mut ctx.vad, Some(&mut mapper), 0, size as u64, alloc, protect) {
         Ok(new_base) => {
@@ -4470,10 +5556,21 @@ fn win32_heap_realloc(args_ptr: u32) -> u32 {
 /// MulDiv(nNumber, nNumerator, nDenominator) → int
 /// # IRQL: PASSIVE
 fn win32_mul_div(args_ptr: u32) -> u32 {
-    let a = match read_arg_u32(args_ptr, 0) { Ok(v) => v as i32, Err(_) => return 0xFFFF_FFFF };
-    let b = match read_arg_u32(args_ptr, 1) { Ok(v) => v as i32, Err(_) => return 0xFFFF_FFFF };
-    let c = match read_arg_u32(args_ptr, 2) { Ok(v) => v as i32, Err(_) => return 0xFFFF_FFFF };
-    if c == 0 { return 0xFFFF_FFFF; } // -1
+    let a = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v as i32,
+        Err(_) => return 0xFFFF_FFFF,
+    };
+    let b = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v as i32,
+        Err(_) => return 0xFFFF_FFFF,
+    };
+    let c = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v as i32,
+        Err(_) => return 0xFFFF_FFFF,
+    };
+    if c == 0 {
+        return 0xFFFF_FFFF;
+    } // -1
     let result = (a as i64 * b as i64) / c as i64;
     result as i32 as u32
 }
@@ -4482,25 +5579,46 @@ fn win32_mul_div(args_ptr: u32) -> u32 {
 /// Win32 wrapper around NtReadFile.
 /// # IRQL: PASSIVE
 fn win32_read_file_k32(args_ptr: u32) -> u32 {
-    let handle = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let buf    = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let count  = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let read   = match read_arg_u32(args_ptr, 3) { Ok(v) => v, Err(_) => return 0 };
-    let _overlapped = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
-    if !is_user_range(buf, count) { return 0; }
+    let handle = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let buf = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let count = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let read = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let _overlapped = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if !is_user_range(buf, count) {
+        return 0;
+    }
     // Look up file handle via lookup helper, then read
     let mut state = match lookup_file_handle_state(handle) {
         Some(v) => v,
         None => {
             // Unknown handle — fake success with 0 bytes
-            if read != 0 && is_user_range(read, 4) { let _ = write_u32_user(read, 0); }
+            if read != 0 && is_user_range(read, 4) {
+                let _ = write_u32_user(read, 0);
+            }
             return 0;
         }
     };
     let avail = state.file_size.saturating_sub(state.position);
     let to_read = count.min(avail);
     if to_read == 0 {
-        if read != 0 && is_user_range(read, 4) { let _ = write_u32_user(read, 0); }
+        if read != 0 && is_user_range(read, 4) {
+            let _ = write_u32_user(read, 0);
+        }
         return 1; // TRUE, 0 bytes (EOF)
     }
     let mut tmp = alloc::vec![0u8; to_read as usize];
@@ -4513,7 +5631,9 @@ fn win32_read_file_k32(args_ptr: u32) -> u32 {
         core::ptr::copy_nonoverlapping(tmp.as_ptr(), buf as *mut u8, n as usize);
     }
     remember_file_handle_state(handle, state);
-    if read != 0 && is_user_range(read, 4) { let _ = write_u32_user(read, n); }
+    if read != 0 && is_user_range(read, 4) {
+        let _ = write_u32_user(read, n);
+    }
     1 // TRUE
 }
 
@@ -4521,19 +5641,39 @@ fn win32_read_file_k32(args_ptr: u32) -> u32 {
 /// Simple UTF16→ASCII truncation.
 /// # IRQL: PASSIVE
 fn win32_wide_char_to_multi_byte(args_ptr: u32) -> u32 {
-    let _cp      = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let _flags   = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let src      = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let src_len  = match read_arg_u32(args_ptr, 3) { Ok(v) => v as i32, Err(_) => return 0 };
-    let dst      = match read_arg_u32(args_ptr, 4) { Ok(v) => v, Err(_) => return 0 };
-    let dst_len  = match read_arg_u32(args_ptr, 5) { Ok(v) => v, Err(_) => return 0 };
+    let _cp = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let _flags = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let src_len = match read_arg_u32(args_ptr, 3) {
+        Ok(v) => v as i32,
+        Err(_) => return 0,
+    };
+    let dst = match read_arg_u32(args_ptr, 4) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let dst_len = match read_arg_u32(args_ptr, 5) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     // Determine source length in chars
     let actual_src_len = if src_len == -1 {
         let mut n = 0u32;
         while n < 0x10000 && is_user_range(src + n * 2, 2) {
             let ch = unsafe { ((src + n * 2) as *const u16).read_unaligned() };
             n += 1;
-            if ch == 0 { break; }
+            if ch == 0 {
+                break;
+            }
         }
         n
     } else {
@@ -4543,8 +5683,12 @@ fn win32_wide_char_to_multi_byte(args_ptr: u32) -> u32 {
         return actual_src_len;
     }
     let copy_n = actual_src_len.min(dst_len);
-    if copy_n == 0 { return 0; }
-    if !is_user_range(src, actual_src_len * 2) || !is_user_range(dst, copy_n) { return 0; }
+    if copy_n == 0 {
+        return 0;
+    }
+    if !is_user_range(src, actual_src_len * 2) || !is_user_range(dst, copy_n) {
+        return 0;
+    }
     // SAFETY: validated buffers.
     unsafe {
         for i in 0..copy_n {
@@ -4559,11 +5703,24 @@ fn win32_wide_char_to_multi_byte(args_ptr: u32) -> u32 {
 /// EnumDisplaySettingsA — same as W but for DEVMODEA (156 bytes, no Unicode names).
 /// # IRQL: PASSIVE
 fn win32_enum_display_settings_a(args_ptr: u32) -> u32 {
-    let _device  = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
-    let mode_num = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
-    let dm       = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    if mode_num > 0 && mode_num < 0xFFFF_FFFE { return 0; }
-    if !is_user_range(dm, 156) { return 0; }
+    let _device = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let mode_num = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    let dm = match read_arg_u32(args_ptr, 2) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    if mode_num > 0 && mode_num < 0xFFFF_FFFE {
+        return 0;
+    }
+    if !is_user_range(dm, 156) {
+        return 0;
+    }
     // SAFETY: validated DEVMODEA (156 bytes).
     unsafe {
         core::ptr::write_bytes(dm as *mut u8, 0, 156);
@@ -4586,12 +5743,15 @@ fn win32_enum_display_settings_a(args_ptr: u32) -> u32 {
 /// GetSystemMetrics(nIndex) → int
 /// # IRQL: PASSIVE
 fn win32_get_system_metrics(args_ptr: u32) -> u32 {
-    let index = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
+    let index = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
     match index {
-        0  => 1024, // SM_CXSCREEN
-        1  => 768,  // SM_CYSCREEN
-        5  => 3,    // SM_CXBORDER
-        6  => 3,    // SM_CYBORDER
+        0 => 1024,  // SM_CXSCREEN
+        1 => 768,   // SM_CYSCREEN
+        5 => 3,     // SM_CXBORDER
+        6 => 3,     // SM_CYBORDER
         32 => 1024, // SM_CXFULLSCREEN
         33 => 768,  // SM_CYFULLSCREEN
         _ => 0,
@@ -4601,13 +5761,21 @@ fn win32_get_system_metrics(args_ptr: u32) -> u32 {
 /// timeGetDevCaps(TIMECAPS*, cbSize) → MMRESULT
 /// # IRQL: PASSIVE
 fn win32_time_get_dev_caps(args_ptr: u32) -> u32 {
-    let p    = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 1 };
-    let _size = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 1 };
-    if !is_user_range(p, 8) { return 1; } // TIMERR_NOCANDO
-    // TIMECAPS: wPeriodMin(4), wPeriodMax(4)
-    // SAFETY: validated 8-byte user buffer.
+    let p = match read_arg_u32(args_ptr, 0) {
+        Ok(v) => v,
+        Err(_) => return 1,
+    };
+    let _size = match read_arg_u32(args_ptr, 1) {
+        Ok(v) => v,
+        Err(_) => return 1,
+    };
+    if !is_user_range(p, 8) {
+        return 1;
+    } // TIMERR_NOCANDO
+      // TIMECAPS: wPeriodMin(4), wPeriodMax(4)
+      // SAFETY: validated 8-byte user buffer.
     unsafe {
-        (p as *mut u32).write_unaligned(1);    // wPeriodMin = 1ms
+        (p as *mut u32).write_unaligned(1); // wPeriodMin = 1ms
         ((p + 4) as *mut u32).write_unaligned(1000000); // wPeriodMax
     }
     0 // TIMERR_NOERROR

@@ -20,10 +20,10 @@
 #[cfg(target_os = "none")]
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use spin::Once;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;
-use spin::Once;
 
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
 
@@ -60,9 +60,7 @@ pub unsafe fn init() {
         // SAFETY: DOUBLE_FAULT_IST_INDEX (0) is valid; gdt::init() populated
         // interrupt_stack_table[0] with a live 4 KiB stack before this runs.
         unsafe {
-            idt.double_fault
-                .set_handler_fn(exception_double_fault)
-                .set_stack_index(DOUBLE_FAULT_IST_INDEX);
+            idt.double_fault.set_handler_fn(exception_double_fault).set_stack_index(DOUBLE_FAULT_IST_INDEX);
         }
 
         // ── APIC timer (IRQ0 → vector 0x20) ────────────────────────────────
@@ -82,7 +80,9 @@ pub unsafe fn init() {
         // SAFETY: vector 0x2E does not overlap CPU exceptions; hal_int2e_entry
         // is a valid 64-bit function pointer with the correct interrupt-gate ABI.
         unsafe {
-            extern "C" { fn hal_int2e_entry(); }
+            extern "C" {
+                fn hal_int2e_entry();
+            }
             idt[0x2E]
                 .set_handler_addr(VirtAddr::new(hal_int2e_entry as *const () as u64))
                 .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
@@ -104,10 +104,7 @@ extern "x86-interrupt" fn exception_divide_error(frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn exception_invalid_opcode(frame: InterruptStackFrame) {
-    panic!(
-        "EXCEPTION: #UD Invalid Opcode at {:#x}\n{:#?}",
-        frame.instruction_pointer, frame
-    );
+    panic!("EXCEPTION: #UD Invalid Opcode at {:#x}\n{:#?}", frame.instruction_pointer, frame);
 }
 
 extern "x86-interrupt" fn exception_breakpoint(_frame: InterruptStackFrame) {
@@ -116,10 +113,7 @@ extern "x86-interrupt" fn exception_breakpoint(_frame: InterruptStackFrame) {
     // Returning from #BP advances RIP past the INT3 byte automatically.
 }
 
-extern "x86-interrupt" fn exception_double_fault(
-    frame: InterruptStackFrame,
-    error: u64,
-) -> ! {
+extern "x86-interrupt" fn exception_double_fault(frame: InterruptStackFrame, error: u64) -> ! {
     // Running on IST[0]: the interrupted stack may be exhausted, so no locks,
     // no formatting, no heap. A kernel stack overflow usually lands here: the
     // #PF on the guard page cannot push its frame onto the same stack.
@@ -148,8 +142,13 @@ fn stop_on_trap(
             "UNEXPECTED_KERNEL_MODE_TRAP",
             params,
             "KERNEL STACK OVERFLOW: guard page hit",
-            &[("fault address", cr2), ("RIP          ", rip), ("RSP          ", rsp),
-              ("stack bottom ", bottom), ("stack top    ", top)],
+            &[
+                ("fault address", cr2),
+                ("RIP          ", rip),
+                ("RSP          ", rsp),
+                ("stack bottom ", bottom),
+                ("stack top    ", top),
+            ],
         ),
         None => super::bugcheck::stop(
             super::bugcheck::UNEXPECTED_KERNEL_MODE_TRAP,
@@ -174,10 +173,7 @@ fn stack_guard_hit(addr: u64) -> Option<(u64, u64)> {
     f(addr)
 }
 
-extern "x86-interrupt" fn exception_page_fault(
-    frame: InterruptStackFrame,
-    error: PageFaultErrorCode,
-) {
+extern "x86-interrupt" fn exception_page_fault(frame: InterruptStackFrame, error: PageFaultErrorCode) {
     if IN_PF_OUTER.swap(true, core::sync::atomic::Ordering::SeqCst) {
         // Nested page fault — log minimal info then halt.
         let cr2 = x86_64::registers::control::Cr2::read_raw();
@@ -186,20 +182,19 @@ extern "x86-interrupt" fn exception_page_fault(
         super::serial::write_str(" RIP=0x");
         serial_hex64(frame.instruction_pointer.as_u64());
         super::serial::write_str("\n");
-        loop { x86_64::instructions::hlt(); }
+        loop {
+            x86_64::instructions::hlt();
+        }
     }
     exception_page_fault_inner(frame, error);
 }
 
-fn exception_page_fault_inner(
-    frame: InterruptStackFrame,
-    error: PageFaultErrorCode,
-) {
+fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorCode) {
     use x86_64::registers::control::Cr2;
 
     let faulting_addr = Cr2::read();
     let cr2_raw: u64 = match faulting_addr {
-        Ok(v)  => v.as_u64(),
+        Ok(v) => v.as_u64(),
         Err(e) => e.0,
     };
     let rip = frame.instruction_pointer.as_u64();
@@ -239,7 +234,9 @@ fn exception_page_fault_inner(
             let f: fn() = unsafe { core::mem::transmute(hook) };
             f();
         }
-        loop { x86_64::instructions::hlt(); }
+        loop {
+            x86_64::instructions::hlt();
+        }
     }
 
     // Kernel-mode fault in a guard page: a stack overflow whose #PF frame still
@@ -248,10 +245,7 @@ fn exception_page_fault_inner(
         stop_on_trap(0xE, error.bits(), &frame, cr2_raw, Some(guard), "page fault");
     }
 
-    panic!(
-        "EXCEPTION: #PF Page Fault at {:#x}",
-        cr2_raw
-    );
+    panic!("EXCEPTION: #PF Page Fault at {:#x}", cr2_raw);
 }
 
 /// Walk the x86_64 page-table hierarchy for `va` and log the leaf PTE flags.
@@ -259,7 +253,11 @@ fn exception_page_fault_inner(
 /// No heap allocation — safe to call from a fault handler.
 #[expect(dead_code, reason = "page-fault diagnostic kept for M0 (audit §3.1)")]
 fn pf_dump_pte(hhdm: u64, va: u64, label: &str) {
-    use x86_64::{registers::control::Cr3, structures::paging::{PageTable, PageTableFlags}, VirtAddr};
+    use x86_64::{
+        registers::control::Cr3,
+        structures::paging::{PageTable, PageTableFlags},
+        VirtAddr,
+    };
 
     let (l4f, _) = Cr3::read();
     // SAFETY: HHDM maps every physical frame; CR3 points to the live PML4.
@@ -282,7 +280,14 @@ fn pf_dump_pte(hhdm: u64, va: u64, label: &str) {
     }
     let user3 = e3.flags().contains(PageTableFlags::USER_ACCESSIBLE);
     if e3.flags().contains(PageTableFlags::HUGE_PAGE) {
-        log::error!("  {} {:#x}: L3 1GB HUGE phys={:#x} user={} flags={:?}", label, va, e3.addr().as_u64(), user3, e3.flags());
+        log::error!(
+            "  {} {:#x}: L3 1GB HUGE phys={:#x} user={} flags={:?}",
+            label,
+            va,
+            e3.addr().as_u64(),
+            user3,
+            e3.flags()
+        );
         return;
     }
     log::error!("  {} {:#x}: L3 phys={:#x} user={} flags={:?}", label, va, e3.addr().as_u64(), user3, e3.flags());
@@ -295,7 +300,14 @@ fn pf_dump_pte(hhdm: u64, va: u64, label: &str) {
     }
     let user2 = e2.flags().contains(PageTableFlags::USER_ACCESSIBLE);
     if e2.flags().contains(PageTableFlags::HUGE_PAGE) {
-        log::error!("  {} {:#x}: L2 2MB HUGE phys={:#x} user={} flags={:?}", label, va, e2.addr().as_u64(), user2, e2.flags());
+        log::error!(
+            "  {} {:#x}: L2 2MB HUGE phys={:#x} user={} flags={:?}",
+            label,
+            va,
+            e2.addr().as_u64(),
+            user2,
+            e2.flags()
+        );
         return;
     }
     log::error!("  {} {:#x}: L2 phys={:#x} user={} flags={:?}", label, va, e2.addr().as_u64(), user2, e2.flags());
@@ -310,10 +322,7 @@ fn pf_dump_pte(hhdm: u64, va: u64, label: &str) {
     log::error!("  {} {:#x}: L1 phys={:#x} user={} flags={:?}", label, va, e1.addr().as_u64(), user1, e1.flags());
 }
 
-extern "x86-interrupt" fn exception_gpf(
-    frame: InterruptStackFrame,
-    error: u64,
-) {
+extern "x86-interrupt" fn exception_gpf(frame: InterruptStackFrame, error: u64) {
     let rip = frame.instruction_pointer.as_u64();
     // Dump bytes at the faulting instruction (ISR-safe, no heap).
     super::serial::write_str("[#GP] RIP=0x");
@@ -325,7 +334,7 @@ extern "x86-interrupt" fn exception_gpf(
         super::serial::write_str(" ");
         let addr = rip.wrapping_add(off);
         // Only read if address looks plausible
-        if addr < 0x8000_0000_0000_0000 || addr >= 0xFFFF_8000_0000_0000 {
+        if !(0x8000_0000_0000_0000..0xFFFF_8000_0000_0000).contains(&addr) {
             let b = unsafe { core::ptr::read_volatile(addr as *const u8) };
             serial_hex8(b);
         } else {
@@ -349,10 +358,7 @@ extern "x86-interrupt" fn exception_gpf(
     super::serial::write_str(" ES=0x");
     serial_hex16(es);
     super::serial::write_str("\n");
-    panic!(
-        "EXCEPTION: #GP General Protection Fault (selector={:#x})\n{:#?}",
-        error, frame
-    );
+    panic!("EXCEPTION: #GP General Protection Fault (selector={:#x})\n{:#?}", error, frame);
 }
 
 fn serial_hex8(b: u8) {
@@ -375,24 +381,12 @@ fn serial_hex64(v: u64) {
     }
 }
 
-extern "x86-interrupt" fn exception_stack_segment(
-    frame: InterruptStackFrame,
-    error: u64,
-) {
-    panic!(
-        "EXCEPTION: #SS Stack Segment Fault (error={:#x})\n{:#?}",
-        error, frame
-    );
+extern "x86-interrupt" fn exception_stack_segment(frame: InterruptStackFrame, error: u64) {
+    panic!("EXCEPTION: #SS Stack Segment Fault (error={:#x})\n{:#?}", error, frame);
 }
 
-extern "x86-interrupt" fn exception_segment_not_present(
-    frame: InterruptStackFrame,
-    error: u64,
-) {
-    panic!(
-        "EXCEPTION: #NP Segment Not Present (selector={:#x})\n{:#?}",
-        error, frame
-    );
+extern "x86-interrupt" fn exception_segment_not_present(frame: InterruptStackFrame, error: u64) {
+    panic!("EXCEPTION: #NP Segment Not Present (selector={:#x})\n{:#?}", error, frame);
 }
 
 // ── IRQ handlers ─────────────────────────────────────────────────────────────
@@ -405,7 +399,7 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     // Log "[alive] tick=N\n" every 1000 ms using the ISR-safe serial writer.
     // We cannot use log::info! here (heap alloc forbidden at IRQL >= DISPATCH).
     let ms = super::timer::get_tick_count();
-    if ms % 1000 == 0 {
+    if ms.is_multiple_of(1000) {
         super::serial::write_str_isr("[alive] tick=");
         let mut buf = [0u8; 20];
         let mut n = ms;
@@ -462,6 +456,10 @@ pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
     f(number, args_ptr)
 }
 
+/// Kernel-stack guard lookup: the `(bottom, top)` of the stack whose guard
+/// page holds the address, if any.
+pub type StackGuardHook = fn(u64) -> Option<(u64, u64)>;
+
 /// Register the kernel-stack guard-page lookup used by the #DF and #PF
 /// handlers to recognise a stack overflow. Returns the overflowed stack's
 /// `(bottom, top)` when the address is in a guard page.
@@ -470,7 +468,7 @@ pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
 ///
 /// # IRQL
 /// Any level.
-pub fn set_stack_guard_hook(hook: Option<fn(u64) -> Option<(u64, u64)>>) {
+pub fn set_stack_guard_hook(hook: Option<StackGuardHook>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     STACK_GUARD_HOOK.store(addr, Ordering::Release);
 }
@@ -585,7 +583,9 @@ extern "x86-interrupt" fn irq_keyboard(_frame: InterruptStackFrame) {
 
     // Send EOI to the master PIC (IRQ1 is on the master 8259).
     // SAFETY: port 0x20 is the master PIC command register.
-    unsafe { Port::<u8>::new(0x20).write(0x20); }
+    unsafe {
+        Port::<u8>::new(0x20).write(0x20);
+    }
 }
 
 // ── APIC helpers ─────────────────────────────────────────────────────────────

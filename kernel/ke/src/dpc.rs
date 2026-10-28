@@ -13,7 +13,7 @@ use spin::Mutex;
 pub type DpcRoutine = fn(arg: *mut u8);
 
 pub struct Kdpc {
-    pub routine:  DpcRoutine,
+    pub routine: DpcRoutine,
     pub argument: *mut u8,
 }
 
@@ -34,7 +34,7 @@ pub fn drain() {
         let dpc = DPC_QUEUE.lock().pop_front();
         match dpc {
             Some(d) => (d.routine)(d.argument),
-            None    => break,
+            None => break,
         }
     }
 }

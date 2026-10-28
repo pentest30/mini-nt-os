@@ -16,7 +16,7 @@
 /// Shared by `jump_to_ring3_32`, the scheduler's initial thread frame and the
 /// SYSENTER return path so the three cannot drift apart again.
 pub const USER_RFLAGS: u64 = (1u64 << 9)   // IF
-                           | (1u64 << 1);  // reserved, always 1
+                           | (1u64 << 1); // reserved, always 1
 const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOPL=0");
 
 // ── ring3_iretq_trampoline ────────────────────────────────────────────────────
@@ -42,9 +42,9 @@ const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOP
 core::arch::global_asm!(
     ".global ring3_iretq_trampoline",
     "ring3_iretq_trampoline:",
-    "   pop rax",          // rax = FS selector; RSP → RIP slot
-    "   mov fs, ax",       // load TEB segment (DPL=3, base=TEB32_VA)
-    "   iretq",            // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
+    "   pop rax",    // rax = FS selector; RSP → RIP slot
+    "   mov fs, ax", // load TEB segment (DPL=3, base=TEB32_VA)
+    "   iretq",      // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
 );
 
 /// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
@@ -55,7 +55,9 @@ core::arch::global_asm!(
 /// # IRQL: DISPATCH_LEVEL (invoked by the scheduler context-switch path).
 pub fn ring3_iretq_trampoline_fn() -> u64 {
     // SAFETY: the symbol is defined by the global_asm! above and is always valid.
-    unsafe extern "C" { fn ring3_iretq_trampoline(); }
+    unsafe extern "C" {
+        fn ring3_iretq_trampoline();
+    }
     ring3_iretq_trampoline as *const () as u64
 }
 
@@ -90,14 +92,14 @@ pub unsafe fn jump_to_ring3_32(
     user_data32: u16,
     user_teb_fs: u16,
     entry_point: u32,
-    stack_top:   u32,
+    stack_top: u32,
 ) -> ! {
     const RFLAGS: u64 = USER_RFLAGS;
 
-    let cs:   u64 = (user_code32 as u64) | 3;  // RPL = 3
-    let ss:   u64 = (user_data32 as u64) | 3;  // RPL = 3
-    let rip:  u64 = entry_point as u64;
-    let rsp:  u64 = stack_top   as u64;
+    let cs: u64 = (user_code32 as u64) | 3; // RPL = 3
+    let ss: u64 = (user_data32 as u64) | 3; // RPL = 3
+    let rip: u64 = entry_point as u64;
+    let rsp: u64 = stack_top as u64;
 
     // SAFETY: see function-level safety contract.
     unsafe {

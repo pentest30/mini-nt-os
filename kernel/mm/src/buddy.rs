@@ -29,14 +29,16 @@ const MAX_FREE_ENTRIES: usize = 512;
 pub struct Pfn(pub u64);
 
 impl Pfn {
-    pub fn to_phys(self) -> u64 { self.0 * PAGE_SIZE as u64 }
+    pub fn to_phys(self) -> u64 {
+        self.0 * PAGE_SIZE as u64
+    }
 }
 
 // ── Fixed-size free list ──────────────────────────────────────────────────────
 
 /// A fixed-capacity stack of PFNs — no heap allocation required.
 struct FreeList {
-    data:  [u64; MAX_FREE_ENTRIES],
+    data: [u64; MAX_FREE_ENTRIES],
     count: usize,
 }
 
@@ -52,7 +54,9 @@ impl FreeList {
     }
 
     fn pop(&mut self) -> Option<u64> {
-        if self.count == 0 { return None; }
+        if self.count == 0 {
+            return None;
+        }
         self.count -= 1;
         Some(self.data[self.count])
     }
@@ -73,22 +77,24 @@ impl FreeList {
 /// Buddy allocator state — ~44 KiB in kernel BSS (no heap required).
 pub struct BuddyAllocator {
     /// free_lists[order] = set of free block PFNs of size 2^order pages.
-    free_lists:  [FreeList; MAX_ORDER],
+    free_lists: [FreeList; MAX_ORDER],
     total_pages: u64,
-    free_pages:  u64,
+    free_pages: u64,
 }
 
 pub static BUDDY: Mutex<Option<BuddyAllocator>> = Mutex::new(None);
+
+impl Default for BuddyAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl BuddyAllocator {
     /// Create a new empty allocator (no heap allocation).
     pub fn new() -> Self {
         // core::array::from_fn works for any N without heap.
-        Self {
-            free_lists:  core::array::from_fn(|_| FreeList::new()),
-            total_pages: 0,
-            free_pages:  0,
-        }
+        Self { free_lists: core::array::from_fn(|_| FreeList::new()), total_pages: 0, free_pages: 0 }
     }
 
     /// Mark a physical region [start_pfn, start_pfn + page_count) as free.
@@ -96,14 +102,14 @@ impl BuddyAllocator {
         let mut pfn = start_pfn.0;
         let end = pfn + page_count;
         self.total_pages += page_count;
-        self.free_pages  += page_count;
+        self.free_pages += page_count;
 
         while pfn < end {
             // Find the largest aligned order that fits within [pfn, end).
             let mut order = MAX_ORDER - 1;
             while order > 0 {
                 let block_size = 1u64 << order;
-                if pfn % block_size == 0 && pfn + block_size <= end {
+                if pfn.is_multiple_of(block_size) && pfn + block_size <= end {
                     break;
                 }
                 order -= 1;
@@ -142,13 +148,13 @@ impl BuddyAllocator {
         self.free_pages += 1u64 << order;
 
         let mut current_order = order;
-        let mut current_pfn   = pfn.0;
+        let mut current_pfn = pfn.0;
 
         while current_order < MAX_ORDER - 1 {
             let buddy_pfn = current_pfn ^ (1u64 << current_order);
             if let Some(pos) = self.free_lists[current_order].position(buddy_pfn) {
                 self.free_lists[current_order].remove(pos);
-                current_pfn   = current_pfn.min(buddy_pfn);
+                current_pfn = current_pfn.min(buddy_pfn);
                 current_order += 1;
             } else {
                 break;
@@ -158,13 +164,18 @@ impl BuddyAllocator {
         self.free_lists[current_order].push(current_pfn);
     }
 
-    pub fn total_pages(&self) -> u64 { self.total_pages }
-    pub fn free_pages(&self)  -> u64 { self.free_pages  }
+    pub fn total_pages(&self) -> u64 {
+        self.total_pages
+    }
+    pub fn free_pages(&self) -> u64 {
+        self.free_pages
+    }
 }
 
 /// Global accessor — initialised by `mm::init()`.
 pub fn with<F, R>(f: F) -> R
-where F: FnOnce(&mut BuddyAllocator) -> R
+where
+    F: FnOnce(&mut BuddyAllocator) -> R,
 {
     f(BUDDY.lock().as_mut().expect("Mm buddy allocator not initialised"))
 }

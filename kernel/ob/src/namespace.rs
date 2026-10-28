@@ -11,11 +11,11 @@
 //! Games use named objects via kernel32's CreateEvent/OpenEvent etc.,
 //! which prepend "\\BaseNamedObjects\\" before calling Nt APIs.
 
+use super::object::ObjectRef;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use spin::Mutex;
-use super::object::ObjectRef;
 
 struct Directory {
     children: BTreeMap<String, NamespaceEntry>,
@@ -26,18 +26,13 @@ enum NamespaceEntry {
     Directory(Directory),
 }
 
-static ROOT: Mutex<Directory> = Mutex::new(Directory {
-    children: BTreeMap::new(),
-});
+static ROOT: Mutex<Directory> = Mutex::new(Directory { children: BTreeMap::new() });
 
 /// Initialise the root namespace with required directories.
 pub fn init() {
     let mut root = ROOT.lock();
     for name in &["Device", "BaseNamedObjects", "Registry", "KernelObjects"] {
-        root.children.insert(
-            name.to_string(),
-            NamespaceEntry::Directory(Directory { children: BTreeMap::new() }),
-        );
+        root.children.insert(name.to_string(), NamespaceEntry::Directory(Directory { children: BTreeMap::new() }));
     }
     log::info!("Ob namespace: root directories created");
 }
@@ -45,10 +40,12 @@ pub fn init() {
 /// Insert a named object at an absolute NT path (e.g. "\\BaseNamedObjects\\MyEvent").
 pub fn insert(path: &str, object: ObjectRef) -> Result<(), &'static str> {
     let parts: Vec<&str> = path.trim_matches('\\').split('\\').collect();
-    if parts.is_empty() { return Err("empty path"); }
+    if parts.is_empty() {
+        return Err("empty path");
+    }
 
     let mut root = ROOT.lock();
-    let mut dir  = &mut root.children;
+    let mut dir = &mut root.children;
 
     for &component in &parts[..parts.len() - 1] {
         match dir.get_mut(component) {
@@ -58,7 +55,9 @@ pub fn insert(path: &str, object: ObjectRef) -> Result<(), &'static str> {
     }
 
     let name = parts[parts.len() - 1];
-    if dir.contains_key(name) { return Err("object already exists"); }
+    if dir.contains_key(name) {
+        return Err("object already exists");
+    }
     dir.insert(name.to_string(), NamespaceEntry::Object(object));
     Ok(())
 }

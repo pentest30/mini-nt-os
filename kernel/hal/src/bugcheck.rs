@@ -54,9 +54,9 @@ fn out(s: &str) {
 /// Writes `value` as `digits` lowercase hex digits, zero-padded.
 fn hex(value: u64, digits: u32) {
     let mut buf = [0u8; 16];
-    for i in 0..digits as usize {
+    for (i, digit) in buf.iter_mut().take(digits as usize).enumerate() {
         let nibble = (value >> ((digits as usize - 1 - i) * 4)) & 0xF;
-        buf[i] = b"0123456789abcdef"[nibble as usize];
+        *digit = b"0123456789abcdef"[nibble as usize];
     }
     // The buffer holds only ASCII hex digits.
     out(core::str::from_utf8(&buf[..digits as usize]).unwrap_or("?"));

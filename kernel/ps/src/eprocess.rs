@@ -5,40 +5,39 @@
 
 use alloc::string::String;
 use alloc::sync::Arc;
-use spin::Mutex;
-use ob::handle::HandleTable;
 use mm::vad::VadTree;
-use ob::{ObjectHeader, ObjectType, KernelObject};
+use ob::handle::HandleTable;
+use ob::{KernelObject, ObjectHeader, ObjectType};
+use spin::Mutex;
 
 /// Process ID type (matches NT's CLIENT_ID.UniqueProcess).
 pub type ProcessId = u64;
 
 /// Executive Process object.
 pub struct EProcess {
-    pub header:      ObjectHeader,
-    pub pid:         ProcessId,
-    pub image_name:  String,          // up to 15 chars in NT (EPROCESS.ImageFileName)
+    pub header: ObjectHeader,
+    pub pid: ProcessId,
+    pub image_name: String, // up to 15 chars in NT (EPROCESS.ImageFileName)
     pub handle_table: Mutex<HandleTable>,
-    pub vad:         Mutex<VadTree>,
-    pub exit_code:   Mutex<Option<i32>>,
+    pub vad: Mutex<VadTree>,
+    pub exit_code: Mutex<Option<i32>>,
 }
 
 impl KernelObject for EProcess {
-    fn header(&self) -> &ObjectHeader { &self.header }
+    fn header(&self) -> &ObjectHeader {
+        &self.header
+    }
 }
 
 impl EProcess {
     pub fn new(pid: ProcessId, image_name: &str) -> Arc<Self> {
         Arc::new(Self {
-            header: ObjectHeader {
-                name:     None,
-                obj_type: ObjectType::Process,
-            },
+            header: ObjectHeader { name: None, obj_type: ObjectType::Process },
             pid,
             image_name: image_name.chars().take(15).collect(),
             handle_table: Mutex::new(HandleTable::new()),
-            vad:          Mutex::new(VadTree::new()),
-            exit_code:    Mutex::new(None),
+            vad: Mutex::new(VadTree::new()),
+            exit_code: Mutex::new(None),
         })
     }
 }

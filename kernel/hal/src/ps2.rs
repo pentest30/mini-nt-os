@@ -17,16 +17,14 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
 
-const PS2_DATA:   u16 = 0x60;
+const PS2_DATA: u16 = 0x60;
 const PS2_STATUS: u16 = 0x64;
 
 // ── ISR-safe key ring buffer ─────────────────────────────────────────────────
 // Lock-free SPSC ring: ISR writes (producer), message queue reads (consumer).
 const KEY_BUF_SIZE: usize = 64;
-static KEY_BUF: [core::sync::atomic::AtomicU8; KEY_BUF_SIZE] = {
-    const ZERO: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
-    [ZERO; KEY_BUF_SIZE]
-};
+static KEY_BUF: [core::sync::atomic::AtomicU8; KEY_BUF_SIZE] =
+    [const { core::sync::atomic::AtomicU8::new(0) }; KEY_BUF_SIZE];
 static KEY_HEAD: AtomicUsize = AtomicUsize::new(0); // ISR writes here
 static KEY_TAIL: AtomicUsize = AtomicUsize::new(0); // consumer reads here
 
@@ -36,7 +34,9 @@ pub fn isr_push_scancode(scancode: u8) {
     let head = KEY_HEAD.load(Ordering::Relaxed);
     let next = (head + 1) % KEY_BUF_SIZE;
     let tail = KEY_TAIL.load(Ordering::Acquire);
-    if next == tail { return; } // buffer full — drop key
+    if next == tail {
+        return;
+    } // buffer full — drop key
     KEY_BUF[head].store(scancode, Ordering::Relaxed);
     KEY_HEAD.store(next, Ordering::Release);
 }
@@ -46,7 +46,9 @@ pub fn isr_push_scancode(scancode: u8) {
 pub fn pop_scancode() -> Option<u8> {
     let tail = KEY_TAIL.load(Ordering::Relaxed);
     let head = KEY_HEAD.load(Ordering::Acquire);
-    if tail == head { return None; }
+    if tail == head {
+        return None;
+    }
     let sc = KEY_BUF[tail].load(Ordering::Relaxed);
     KEY_TAIL.store((tail + 1) % KEY_BUF_SIZE, Ordering::Release);
     Some(sc)
@@ -55,15 +57,17 @@ pub fn pop_scancode() -> Option<u8> {
 /// Convert a scancode set 1 make code to (virtual_key, ascii).
 /// Returns None for key-release (bit 7 set) or unmapped keys.
 pub fn scancode_to_key(sc: u8) -> Option<(u32, u8)> {
-    if sc & 0x80 != 0 { return None; } // key release
+    if sc & 0x80 != 0 {
+        return None;
+    } // key release
     let ascii = scancode_to_ascii(sc)?;
     // Map to VK_* codes used by Win32 WM_KEYDOWN
     let vk = match ascii {
-        b'\n' => 0x0D, // VK_RETURN
-        0x08  => 0x08, // VK_BACK
-        0x1B  => 0x1B, // VK_ESCAPE
-        b'\t' => 0x09, // VK_TAB
-        b' '  => 0x20, // VK_SPACE
+        b'\n' => 0x0D,                               // VK_RETURN
+        0x08 => 0x08,                                // VK_BACK
+        0x1B => 0x1B,                                // VK_ESCAPE
+        b'\t' => 0x09,                               // VK_TAB
+        b' ' => 0x20,                                // VK_SPACE
         b'a'..=b'z' => 0x41 + (ascii - b'a') as u32, // VK_A..VK_Z
         b'0'..=b'9' => 0x30 + (ascii - b'0') as u32, // VK_0..VK_9
         _ => ascii as u32,
@@ -83,10 +87,12 @@ pub unsafe fn init() {
     // on bare-metal x86 when we own the hardware.
     unsafe {
         let mut status = Port::<u8>::new(PS2_STATUS);
-        let mut data   = Port::<u8>::new(PS2_DATA);
+        let mut data = Port::<u8>::new(PS2_DATA);
         // Drain up to 16 stale bytes left by UEFI firmware.
         for _ in 0..16 {
-            if status.read() & 0x01 == 0 { break; }
+            if status.read() & 0x01 == 0 {
+                break;
+            }
             let _ = data.read();
         }
     }
@@ -138,36 +144,79 @@ static SC1_TO_ASCII: [u8; 89] = {
     t[0x01] = 0x1B;
 
     // Digit row
-    t[0x02] = b'1'; t[0x03] = b'2'; t[0x04] = b'3'; t[0x05] = b'4';
-    t[0x06] = b'5'; t[0x07] = b'6'; t[0x08] = b'7'; t[0x09] = b'8';
-    t[0x0A] = b'9'; t[0x0B] = b'0'; t[0x0C] = b'-'; t[0x0D] = b'=';
+    t[0x02] = b'1';
+    t[0x03] = b'2';
+    t[0x04] = b'3';
+    t[0x05] = b'4';
+    t[0x06] = b'5';
+    t[0x07] = b'6';
+    t[0x08] = b'7';
+    t[0x09] = b'8';
+    t[0x0A] = b'9';
+    t[0x0B] = b'0';
+    t[0x0C] = b'-';
+    t[0x0D] = b'=';
     t[0x0E] = 0x08; // Backspace
     t[0x0F] = b'\t';
 
     // QWERTY row
-    t[0x10] = b'q'; t[0x11] = b'w'; t[0x12] = b'e'; t[0x13] = b'r';
-    t[0x14] = b't'; t[0x15] = b'y'; t[0x16] = b'u'; t[0x17] = b'i';
-    t[0x18] = b'o'; t[0x19] = b'p'; t[0x1A] = b'['; t[0x1B] = b']';
+    t[0x10] = b'q';
+    t[0x11] = b'w';
+    t[0x12] = b'e';
+    t[0x13] = b'r';
+    t[0x14] = b't';
+    t[0x15] = b'y';
+    t[0x16] = b'u';
+    t[0x17] = b'i';
+    t[0x18] = b'o';
+    t[0x19] = b'p';
+    t[0x1A] = b'[';
+    t[0x1B] = b']';
     t[0x1C] = b'\n'; // Enter
 
     // ASDF row (0x1D = left Ctrl — skip)
-    t[0x1E] = b'a'; t[0x1F] = b's'; t[0x20] = b'd'; t[0x21] = b'f';
-    t[0x22] = b'g'; t[0x23] = b'h'; t[0x24] = b'j'; t[0x25] = b'k';
-    t[0x26] = b'l'; t[0x27] = b';'; t[0x28] = b'\''; t[0x29] = b'`';
+    t[0x1E] = b'a';
+    t[0x1F] = b's';
+    t[0x20] = b'd';
+    t[0x21] = b'f';
+    t[0x22] = b'g';
+    t[0x23] = b'h';
+    t[0x24] = b'j';
+    t[0x25] = b'k';
+    t[0x26] = b'l';
+    t[0x27] = b';';
+    t[0x28] = b'\'';
+    t[0x29] = b'`';
 
     // ZXCV row (0x2A = left Shift — skip, 0x2B = \)
     t[0x2B] = b'\\';
-    t[0x2C] = b'z'; t[0x2D] = b'x'; t[0x2E] = b'c'; t[0x2F] = b'v';
-    t[0x30] = b'b'; t[0x31] = b'n'; t[0x32] = b'm';
-    t[0x33] = b','; t[0x34] = b'.'; t[0x35] = b'/';
+    t[0x2C] = b'z';
+    t[0x2D] = b'x';
+    t[0x2E] = b'c';
+    t[0x2F] = b'v';
+    t[0x30] = b'b';
+    t[0x31] = b'n';
+    t[0x32] = b'm';
+    t[0x33] = b',';
+    t[0x34] = b'.';
+    t[0x35] = b'/';
 
     // Space
     t[0x39] = b' ';
 
     // Keypad (numlock on): map digits and operators
-    t[0x47] = b'7'; t[0x48] = b'8'; t[0x49] = b'9'; t[0x4A] = b'-';
-    t[0x4B] = b'4'; t[0x4C] = b'5'; t[0x4D] = b'6'; t[0x4E] = b'+';
-    t[0x4F] = b'1'; t[0x50] = b'2'; t[0x51] = b'3'; t[0x52] = b'0';
+    t[0x47] = b'7';
+    t[0x48] = b'8';
+    t[0x49] = b'9';
+    t[0x4A] = b'-';
+    t[0x4B] = b'4';
+    t[0x4C] = b'5';
+    t[0x4D] = b'6';
+    t[0x4E] = b'+';
+    t[0x4F] = b'1';
+    t[0x50] = b'2';
+    t[0x51] = b'3';
+    t[0x52] = b'0';
     t[0x53] = b'.';
     // Keypad Enter (0x1C extended — handled in main table) and / are extended.
 
@@ -176,7 +225,9 @@ static SC1_TO_ASCII: [u8; 89] = {
 
 /// Public wrapper for the launcher's `read_key()`.
 pub fn scancode_to_ascii_pub(sc: u8) -> Option<u8> {
-    if sc & 0x80 != 0 { return None; } // key release
+    if sc & 0x80 != 0 {
+        return None;
+    } // key release
     scancode_to_ascii(sc)
 }
 
@@ -186,5 +237,9 @@ fn scancode_to_ascii(sc: u8) -> Option<u8> {
         return None;
     }
     let c = SC1_TO_ASCII[idx];
-    if c == 0 { None } else { Some(c) }
+    if c == 0 {
+        None
+    } else {
+        Some(c)
+    }
 }

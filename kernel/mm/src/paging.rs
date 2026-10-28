@@ -15,12 +15,11 @@
 //! Phil-Opp "Writing an OS in Rust" §Paging Implementation
 
 use x86_64::{
-    PhysAddr, VirtAddr,
     registers::control::Cr3,
     structures::paging::{
-        FrameAllocator, FrameDeallocator, Mapper, OffsetPageTable,
-        Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+        FrameAllocator, FrameDeallocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
     },
+    PhysAddr, VirtAddr,
 };
 
 use crate::buddy::{Pfn, BUDDY};
@@ -90,7 +89,7 @@ fn zero_frame(phys: u64) {
 ///
 /// # IRQL: PASSIVE_LEVEL — the buddy lock is a `spin::Mutex` (spins at DISPATCH).
 pub struct MmPageTables {
-    inner:       OffsetPageTable<'static>,
+    inner: OffsetPageTable<'static>,
     /// Raw HHDM offset — stored so `patch_user_path` can walk intermediate
     /// entries directly without a second borrow of `self.inner`.
     phys_offset: u64,
@@ -138,9 +137,7 @@ impl MmPageTables {
     pub unsafe fn remove_identity_map(&mut self) {
         let (l4f, _) = Cr3::read();
         // SAFETY: the HHDM maps the live PML4 frame.
-        let l4 = unsafe {
-            &mut *((self.phys_offset + l4f.start_address().as_u64()) as *mut PageTable)
-        };
+        let l4 = unsafe { &mut *((self.phys_offset + l4f.start_address().as_u64()) as *mut PageTable) };
         l4[0].set_unused();
         // PML4[0] spans whole TLB entries: drop them all, global ones aside
         // (the identity map never sets GLOBAL).
@@ -164,18 +161,21 @@ impl MmPageTables {
     ///   (at least through the PD level) and accessible via the HHDM.
     /// - The patched page tables must be the active CR3.
     /// - IRQL: PASSIVE_LEVEL.
-    #[expect(dead_code, reason = "no caller since the bootloader maps user ranges itself; revisit with per-process PML4 (M2)")]
+    #[expect(
+        dead_code,
+        reason = "no caller since the bootloader maps user ranges itself; revisit with per-process PML4 (M2)"
+    )]
     unsafe fn patch_user_intermediate_entries(&mut self, virt: VirtAddr) {
         let hhdm = self.phys_offset;
 
         // ── Level 4 — PML4 ───────────────────────────────────────────────────
         let (l4_frame, _) = Cr3::read();
         // SAFETY: HHDM maps every physical address; l4_frame is a live PML4.
-        let l4 = unsafe {
-            &mut *((hhdm + l4_frame.start_address().as_u64()) as *mut PageTable)
-        };
+        let l4 = unsafe { &mut *((hhdm + l4_frame.start_address().as_u64()) as *mut PageTable) };
         let l4e = &mut l4[virt.p4_index()];
-        if !l4e.flags().contains(PageTableFlags::PRESENT) { return; }
+        if !l4e.flags().contains(PageTableFlags::PRESENT) {
+            return;
+        }
         {
             let (a, f) = (l4e.addr(), l4e.flags() | PageTableFlags::USER_ACCESSIBLE);
             l4e.set_addr(a, f);
@@ -184,11 +184,11 @@ impl MmPageTables {
 
         // ── Level 3 — PDPT ───────────────────────────────────────────────────
         // SAFETY: l3_phys is valid (came from a PRESENT PML4 entry).
-        let l3 = unsafe {
-            &mut *((hhdm + l3_phys.as_u64()) as *mut PageTable)
-        };
+        let l3 = unsafe { &mut *((hhdm + l3_phys.as_u64()) as *mut PageTable) };
         let l3e = &mut l3[virt.p3_index()];
-        if !l3e.flags().contains(PageTableFlags::PRESENT) { return; }
+        if !l3e.flags().contains(PageTableFlags::PRESENT) {
+            return;
+        }
         {
             let (a, f) = (l3e.addr(), l3e.flags() | PageTableFlags::USER_ACCESSIBLE);
             l3e.set_addr(a, f);
@@ -202,9 +202,7 @@ impl MmPageTables {
 
         // ── Level 2 — PD ─────────────────────────────────────────────────────
         // SAFETY: l2_phys is valid (came from a PRESENT, non-huge PDPT entry).
-        let l2 = unsafe {
-            &mut *((hhdm + l2_phys.as_u64()) as *mut PageTable)
-        };
+        let l2 = unsafe { &mut *((hhdm + l2_phys.as_u64()) as *mut PageTable) };
         let l2e = &mut l2[virt.p2_index()];
         if l2e.flags().contains(PageTableFlags::PRESENT) {
             let (a, f) = (l2e.addr(), l2e.flags() | PageTableFlags::USER_ACCESSIBLE);
@@ -224,12 +222,7 @@ impl MmPageTables {
     /// - `virt` must not already be mapped as a 4 KiB page.
     /// - `phys` must be page-aligned and valid.
     /// - Must not be called at IRQL >= DISPATCH (buddy lock is a spin mutex).
-    pub unsafe fn map_page(
-        &mut self,
-        virt:  VirtAddr,
-        phys:  PhysAddr,
-        flags: PageTableFlags,
-    ) {
+    pub unsafe fn map_page(&mut self, virt: VirtAddr, phys: PhysAddr, flags: PageTableFlags) {
         let h = self.phys_offset;
         let user = flags.contains(PageTableFlags::USER_ACCESSIBLE);
         let mut parent = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
@@ -301,9 +294,7 @@ impl MmPageTables {
     pub unsafe fn unmap_page(&mut self, virt: VirtAddr) -> PhysFrame<Size4KiB> {
         let page = Page::<Size4KiB>::containing_address(virt);
         // SAFETY: caller guarantees the page is mapped.
-        let (frame, flush) = self.inner
-            .unmap(page)
-            .expect("MmPageTables::unmap_page: page not mapped");
+        let (frame, flush) = self.inner.unmap(page).expect("MmPageTables::unmap_page: page not mapped");
         flush.flush();
         frame
     }
@@ -317,24 +308,32 @@ impl MmPageTables {
         let (l4f, _) = Cr3::read();
         let l4 = unsafe { &*((h + l4f.start_address().as_u64()) as *const PageTable) };
         let e4 = &l4[virt.p4_index()];
-        if !e4.flags().contains(PageTableFlags::PRESENT) { return None; }
+        if !e4.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
         let l3 = unsafe { &*((h + e4.addr().as_u64()) as *const PageTable) };
         let e3 = &l3[virt.p3_index()];
-        if !e3.flags().contains(PageTableFlags::PRESENT) { return None; }
+        if !e3.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
         if e3.flags().contains(PageTableFlags::HUGE_PAGE) {
             let off = virt.as_u64() & ((1u64 << 30) - 1);
             return Some((PhysAddr::new(e3.addr().as_u64() + off), e3.flags()));
         }
         let l2 = unsafe { &*((h + e3.addr().as_u64()) as *const PageTable) };
         let e2 = &l2[virt.p2_index()];
-        if !e2.flags().contains(PageTableFlags::PRESENT) { return None; }
+        if !e2.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
         if e2.flags().contains(PageTableFlags::HUGE_PAGE) {
             let off = virt.as_u64() & ((1u64 << 21) - 1);
             return Some((PhysAddr::new(e2.addr().as_u64() + off), e2.flags()));
         }
         let l1 = unsafe { &*((h + e2.addr().as_u64()) as *const PageTable) };
         let e1 = &l1[virt.p1_index()];
-        if !e1.flags().contains(PageTableFlags::PRESENT) { return None; }
+        if !e1.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
         Some((PhysAddr::new(e1.addr().as_u64() + (virt.as_u64() & 0xFFF)), e1.flags()))
     }
 

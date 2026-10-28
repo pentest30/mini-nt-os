@@ -128,16 +128,11 @@ pub fn find_firmware(opts: &Options, run_dir: &Path) -> Result<Firmware> {
         }
         return Ok(Firmware::Pflash { code, vars });
     }
-    BIOS_CANDIDATES
-        .iter()
-        .map(PathBuf::from)
-        .find(|p| p.is_file())
-        .map(Firmware::Bios)
-        .ok_or_else(|| {
-            "OVMF firmware not found: install it (Debian and Ubuntu: `ovmf`; on Windows QEMU \
+    BIOS_CANDIDATES.iter().map(PathBuf::from).find(|p| p.is_file()).map(Firmware::Bios).ok_or_else(|| {
+        "OVMF firmware not found: install it (Debian and Ubuntu: `ovmf`; on Windows QEMU \
              ships share\\edk2-x86_64-code.fd), or pass --ovmf or --ovmf-code"
-                .into()
-        })
+            .into()
+    })
 }
 
 fn qemu_binary(opts: &Options) -> Result<PathBuf> {

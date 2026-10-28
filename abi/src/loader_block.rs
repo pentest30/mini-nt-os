@@ -7,7 +7,6 @@
 //! bootloader writes this structure into physical memory before jumping
 //! to `kernel_main`, so any mismatch silently corrupts the kernel.
 
-
 /// Maximum number of memory regions reported by the bootloader.
 /// 256 is enough for any QEMU or real machine memory map.
 pub const MEMORY_MAP_MAX: usize = 256;
@@ -73,22 +72,28 @@ pub struct BootInfo {
 /// ASCII "MINOBOOT" → `0x544F4F42_4F4E494D`.
 pub const BOOT_INFO_MAGIC: u64 = 0x544F4F42_4F4E494Du64;
 
+impl Default for BootInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BootInfo {
     /// Create a zeroed-out `BootInfo` with the magic pre-filled.
     /// The bootloader calls this, then populates each field.
     pub const fn new() -> Self {
         Self {
-            magic:            BOOT_INFO_MAGIC,
+            magic: BOOT_INFO_MAGIC,
             kernel_phys_base: 0,
-            kernel_size:      0,
-            hhdm_offset:      0xFFFF_8000_0000_0000,
-            rsdp_phys:        0,
+            kernel_size: 0,
+            hhdm_offset: 0xFFFF_8000_0000_0000,
+            rsdp_phys: 0,
             ramdisk_phys_base: 0,
-            ramdisk_size:      0,
-            memory_map_len:   0,
-            _pad:             0,
-            framebuffer:      FramebufferInfo::zeroed(),
-            memory_map:       [MemoryRegion::zeroed(); MEMORY_MAP_MAX],
+            ramdisk_size: 0,
+            memory_map_len: 0,
+            _pad: 0,
+            framebuffer: FramebufferInfo::zeroed(),
+            memory_map: [MemoryRegion::zeroed(); MEMORY_MAP_MAX],
         }
     }
 
@@ -122,11 +127,7 @@ pub struct MemoryRegion {
 
 impl MemoryRegion {
     pub const fn zeroed() -> Self {
-        Self {
-            kind:       MemoryKind::Reserved,
-            start_pfn:  0,
-            page_count: 0,
-        }
+        Self { kind: MemoryKind::Reserved, start_pfn: 0, page_count: 0 }
     }
 
     /// Physical start address of the region.
@@ -184,9 +185,9 @@ impl MemoryKind {
 #[derive(Debug, Clone, Copy)]
 pub struct FramebufferInfo {
     /// Physical base address of the linear framebuffer.
-    pub base:   u64,
+    pub base: u64,
     /// Horizontal resolution in pixels.
-    pub width:  u32,
+    pub width: u32,
     /// Vertical resolution in pixels.
     pub height: u32,
     /// Pixels per scan line (may be > `width` due to hardware alignment).

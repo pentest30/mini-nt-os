@@ -1,0 +1,4 @@
+# rustfmt (06 §6, `cargo fmt --check` in CI). Long lines and compact one-line
+# blocks match the existing kernel code and keep the formatting diff small.
+max_width = 120
+use_small_heuristics = "Max"

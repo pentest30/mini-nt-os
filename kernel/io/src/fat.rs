@@ -60,7 +60,7 @@ impl<D: BlockDevice> FatVolume<D> {
     #[inline(always)]
     pub fn mount(device: D) -> Result<Self, FatError> {
         let bytes_per_sector = device.sector_size();
-        if bytes_per_sector < 512 || bytes_per_sector > 4096 || (bytes_per_sector & (bytes_per_sector - 1)) != 0 {
+        if !(512..=4096).contains(&bytes_per_sector) || (bytes_per_sector & (bytes_per_sector - 1)) != 0 {
             return Err(FatError::Unsupported);
         }
         let mut sector = vec![0u8; bytes_per_sector as usize];
@@ -85,23 +85,22 @@ impl<D: BlockDevice> FatVolume<D> {
         let mut sectors_per_fat32 = sectors_per_fat32;
         let mut root_cluster = root_cluster;
         let mut first_data_sector: u32 = 0;
-        let bpb_ok =
-            bps != 0
-                && spc != 0
-                && rsvd != 0
-                && fats != 0
-                && root_cluster >= 2
-                && bps as u32 == bytes_per_sector
-                && root_entries == 0
-                && sectors_per_fat16 == 0
-                && sectors_per_fat32 != 0
-                && {
-                    let total_sectors = if total16 != 0 { total16 } else { total32 };
-                    total_sectors != 0 && {
-                        let f = rsvd as u32 + (fats as u32 * sectors_per_fat32);
-                        f < total_sectors
-                    }
-                };
+        let bpb_ok = bps != 0
+            && spc != 0
+            && rsvd != 0
+            && fats != 0
+            && root_cluster >= 2
+            && bps as u32 == bytes_per_sector
+            && root_entries == 0
+            && sectors_per_fat16 == 0
+            && sectors_per_fat32 != 0
+            && {
+                let total_sectors = if total16 != 0 { total16 } else { total32 };
+                total_sectors != 0 && {
+                    let f = rsvd as u32 + (fats as u32 * sectors_per_fat32);
+                    f < total_sectors
+                }
+            };
         if bpb_ok {
             first_data_sector = rsvd as u32 + (fats as u32 * sectors_per_fat32);
         }
@@ -162,18 +161,14 @@ impl<D: BlockDevice> FatVolume<D> {
     pub fn open(&self, path: &str) -> Result<FatFile, FatError> {
         let bps = self.bpb.bytes_per_sector;
         let spc = self.bpb.sectors_per_cluster;
-        if bps < 512 || bps > 4096 || (bps & (bps - 1)) != 0 || spc == 0 {
+        if !(512..=4096).contains(&bps) || (bps & (bps - 1)) != 0 || spc == 0 {
             return Err(FatError::InvalidBpb);
         }
         let mut cluster = self.bpb.root_cluster;
         let mut parts = path.split('/').filter(|s| !s.is_empty());
         let first = parts.next().ok_or(FatError::PathFormat)?;
         let mut pending = Some(first);
-        loop {
-            let name = match pending.take() {
-                Some(v) => v,
-                None => break,
-            };
+        while let Some(name) = pending.take() {
             let entry = self.find_in_dir(cluster, name)?;
             if let Some(next) = parts.next() {
                 if (entry.attr & 0x10) == 0 {
@@ -194,13 +189,13 @@ impl<D: BlockDevice> FatVolume<D> {
     pub fn list_dir(&self, path: &str) -> Result<Vec<DirEntryInfo>, FatError> {
         let bps = self.bpb.bytes_per_sector;
         let spc = self.bpb.sectors_per_cluster;
-        if bps < 512 || bps > 4096 || (bps & (bps - 1)) != 0 || spc == 0 {
+        if !(512..=4096).contains(&bps) || (bps & (bps - 1)) != 0 || spc == 0 {
             return Err(FatError::InvalidBpb);
         }
         let mut cluster = self.bpb.root_cluster;
         if path != "/" && !path.is_empty() {
-            let mut parts = path.split('/').filter(|s| !s.is_empty());
-            while let Some(name) = parts.next() {
+            let parts = path.split('/').filter(|s| !s.is_empty());
+            for name in parts {
                 let entry = self.find_in_dir(cluster, name)?;
                 if (entry.attr & 0x10) == 0 {
                     return Err(FatError::NotFound);
@@ -250,7 +245,7 @@ impl<D: BlockDevice> FatVolume<D> {
         let target = short_name_11(name)?;
         let bps = self.bpb.bytes_per_sector as usize;
         let spc = self.bpb.sectors_per_cluster as usize;
-        if bps < 512 || bps > 4096 || spc == 0 {
+        if !(512..=4096).contains(&bps) || spc == 0 {
             return Err(FatError::InvalidBpb);
         }
         let bytes_per_cluster = bps * spc;
@@ -287,7 +282,7 @@ impl<D: BlockDevice> FatVolume<D> {
     fn read_dir_entries(&self, dir_cluster: u32) -> Result<Vec<DirEntryInfo>, FatError> {
         let bps = self.bpb.bytes_per_sector as usize;
         let spc = self.bpb.sectors_per_cluster as usize;
-        if bps < 512 || bps > 4096 || spc == 0 {
+        if !(512..=4096).contains(&bps) || spc == 0 {
             return Err(FatError::InvalidBpb);
         }
         let bytes_per_cluster = bps * spc;
@@ -410,7 +405,24 @@ fn short_name_11(name: &str) -> Result<[u8; 11], FatError> {
 fn upcase_fat_char(ch: u8) -> Result<u8, FatError> {
     match ch {
         b'a'..=b'z' => Ok(ch - 32),
-        b'A'..=b'Z' | b'0'..=b'9' | b'$' | b'%' | b'\'' | b'-' | b'_' | b'@' | b'~' | b'`' | b'!' | b'(' | b')' | b'{' | b'}' | b'^' | b'#' | b'&' => Ok(ch),
+        b'A'..=b'Z'
+        | b'0'..=b'9'
+        | b'$'
+        | b'%'
+        | b'\''
+        | b'-'
+        | b'_'
+        | b'@'
+        | b'~'
+        | b'`'
+        | b'!'
+        | b'('
+        | b')'
+        | b'{'
+        | b'}'
+        | b'^'
+        | b'#'
+        | b'&' => Ok(ch),
         _ => Err(FatError::Unsupported),
     }
 }
@@ -465,14 +477,20 @@ mod tests {
     }
 
     impl BlockDevice for MemDisk {
-        fn sector_size(&self) -> u32 { self.sector_size }
+        fn sector_size(&self) -> u32 {
+            self.sector_size
+        }
         fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
             let s = self.sector_size as usize;
-            if out.len() != s { return Err(FatError::Io); }
+            if out.len() != s {
+                return Err(FatError::Io);
+            }
             let l = lba as usize;
             let data = self.data.borrow();
             let end = (l + 1) * s;
-            if end > data.len() { return Err(FatError::Io); }
+            if end > data.len() {
+                return Err(FatError::Io);
+            }
             out.copy_from_slice(&data[l * s..end]);
             Ok(())
         }

@@ -26,6 +26,14 @@ static mut HAL_SYSENTER_USER_CS: u64 = 0;
 #[unsafe(no_mangle)]
 static mut HAL_SYSENTER_USER_SS: u64 = 0;
 
+/// Programs the SYSENTER MSRs: kernel CS, entry stack, and `hal_sysenter_entry`.
+///
+/// # Safety
+/// The GDT (kernel and 32-bit user selectors) and the kernel stack must be set
+/// up, and the CPU must support SYSENTER; called once, from `hal::init`.
+///
+/// # IRQL
+/// Any level; interrupts disabled during HAL initialisation.
 #[cfg(target_os = "none")]
 pub unsafe fn init() {
     let cs = gdt::kernel_code_selector() as u64;
@@ -42,6 +50,10 @@ pub unsafe fn init() {
     }
 }
 
+/// Host build (tests, `cargo check`): no SYSENTER to set up.
+///
+/// # Safety
+/// None: does nothing.
 #[cfg(not(target_os = "none"))]
 pub unsafe fn init() {}
 
@@ -60,6 +72,10 @@ pub unsafe fn set_entry_stack(top: u64) {
     unsafe { msr::wrmsr(IA32_SYSENTER_ESP, top) };
 }
 
+/// Host build (tests, `cargo check`): no SYSENTER to set up.
+///
+/// # Safety
+/// None: does nothing.
 #[cfg(not(target_os = "none"))]
 pub unsafe fn set_entry_stack(_top: u64) {}
 

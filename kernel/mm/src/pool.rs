@@ -115,11 +115,7 @@ impl Pool {
     /// off while the lock is held, so an interrupt can never spin on it.
     fn with_lock<R>(&self, f: impl FnOnce(&mut Inner) -> R) -> R {
         let irq = irq_save();
-        while self
-            .locked
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
+        while self.locked.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
             core::hint::spin_loop();
         }
         // SAFETY: the lock is held, so this is the only live reference to inner.

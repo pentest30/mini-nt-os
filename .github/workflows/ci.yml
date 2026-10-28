@@ -1,10 +1,7 @@
-# CI for M0 (docs/05-feuille-de-route.md): no warnings, host tests, bare-metal
-# builds, and the boot scenarios of tests/boot/ through `cargo xtask test`: the
-# smoke test on both syscall paths (ADR-004), and a provoked kernel stack
-# overflow that must end on the STOP screen.
-#
-# Not enabled yet: `cargo fmt --check` and `cargo clippy -D warnings` (06 §6),
-# because the existing code is neither formatted nor clippy-clean.
+# CI (06 §6): rustfmt and clippy (`cargo xtask lint`), no warnings, host
+# tests, bare-metal builds, and the boot scenarios of tests/boot/ through
+# `cargo xtask test`: the smoke test on both syscall paths (ADR-004), and a
+# provoked kernel stack overflow that must end on the STOP screen.
 name: CI
 
 on:
@@ -21,6 +18,15 @@ defaults:
     shell: bash
 
 jobs:
+  lint:
+    name: rustfmt and clippy (-D warnings, host and bare-metal)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - run: cargo xtask lint
+
   host:
     name: Host check and tests (-D warnings)
     runs-on: ubuntu-24.04

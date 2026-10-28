@@ -17,7 +17,7 @@ pub mod namespace;
 pub mod object;
 
 pub use handle::{Handle, HandleTable, INVALID_HANDLE};
-pub use object::{KernelObject, ObjectType, ObjectHeader};
+pub use object::{KernelObject, ObjectHeader, ObjectType};
 
 /// Initialise the object manager.
 pub fn init() {

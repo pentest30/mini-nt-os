@@ -33,22 +33,22 @@ pub(crate) fn apic_reg(offset: u64) -> u64 {
     crate::HHDM_OFFSET.load(core::sync::atomic::Ordering::Relaxed) + APIC_PHYS + offset
 }
 
-const APIC_SVR:           u64 = 0x0F0; // Spurious Interrupt Vector Register
-const APIC_TIMER_LVT:     u64 = 0x320; // Timer Local Vector Table entry
-const APIC_TIMER_INIT:    u64 = 0x380; // Initial count register
+const APIC_SVR: u64 = 0x0F0; // Spurious Interrupt Vector Register
+const APIC_TIMER_LVT: u64 = 0x320; // Timer Local Vector Table entry
+const APIC_TIMER_INIT: u64 = 0x380; // Initial count register
 const APIC_TIMER_CURRENT: u64 = 0x390; // Current count register (read-only)
-const APIC_TIMER_DIVIDE:  u64 = 0x3E0; // Divide configuration register
+const APIC_TIMER_DIVIDE: u64 = 0x3E0; // Divide configuration register
 
 /// Timer LVT: periodic mode (bit 17) | vector 0x20.
-const TIMER_VECTOR:       u32 = 0x20;
+const TIMER_VECTOR: u32 = 0x20;
 const LVT_TIMER_PERIODIC: u32 = 1 << 17;
-const LVT_MASKED:         u32 = 1 << 16;
+const LVT_MASKED: u32 = 1 << 16;
 
 // ── PIT I/O ports and constants ───────────────────────────────────────────────
 
-const PIT_CMD:  u16 = 0x43; // PIT mode/command register
-const PIT_CH2:  u16 = 0x42; // PIT channel 2 data port
-const PCSPKR:   u16 = 0x61; // PC speaker / system control port
+const PIT_CMD: u16 = 0x43; // PIT mode/command register
+const PIT_CH2: u16 = 0x42; // PIT channel 2 data port
+const PCSPKR: u16 = 0x61; // PC speaker / system control port
 
 /// PIT ticks that represent 10 ms at 1.193182 MHz: ⌊1_193_182 × 10 / 1000⌋.
 const PIT_10MS: u16 = 11_931;
@@ -92,23 +92,23 @@ pub unsafe fn init() {
     unsafe {
         let mut master_cmd = Port::<u8>::new(0x20);
         let mut master_dat = Port::<u8>::new(0x21);
-        let mut slave_cmd  = Port::<u8>::new(0xA0);
-        let mut slave_dat  = Port::<u8>::new(0xA1);
+        let mut slave_cmd = Port::<u8>::new(0xA0);
+        let mut slave_dat = Port::<u8>::new(0xA1);
         // ICW1: begin init sequence (IC4 needed)
         master_cmd.write(0x11);
         slave_cmd.write(0x11);
         // ICW2: vector offset
         master_dat.write(0x20); // master: IRQ0 → vector 0x20
-        slave_dat.write(0x28);  // slave:  IRQ8 → vector 0x28
-        // ICW3: master/slave wiring
+        slave_dat.write(0x28); // slave:  IRQ8 → vector 0x28
+                               // ICW3: master/slave wiring
         master_dat.write(0x04); // slave on IRQ2
-        slave_dat.write(0x02);  // slave cascade identity
-        // ICW4: 8086 mode
+        slave_dat.write(0x02); // slave cascade identity
+                               // ICW4: 8086 mode
         master_dat.write(0x01);
         slave_dat.write(0x01);
         // OCW1: mask all except IRQ1 (keyboard) on master; mask all on slave
         master_dat.write(0xFD); // 1111_1101 = unmask IRQ1 only
-        slave_dat.write(0xFF);  // mask all slave IRQs
+        slave_dat.write(0xFF); // mask all slave IRQs
     }
     log::info!("HAL timer: 8259 PIC remapped (IRQ1 unmasked for PS/2 keyboard)");
 
@@ -124,7 +124,9 @@ pub unsafe fn init() {
 
     // ── 2. Set timer divisor = 16 ────────────────────────────────────────────
     // APIC divide config: 0x3 = divide by 16.
-    unsafe { apic_write(APIC_TIMER_DIVIDE, 0x3); }
+    unsafe {
+        apic_write(APIC_TIMER_DIVIDE, 0x3);
+    }
 
     // ── 3. Mask the timer LVT and start APIC timer at max count ──────────────
     unsafe {
@@ -137,7 +139,7 @@ pub unsafe fn init() {
     let ticks_per_ms = unsafe {
         let mut pit_cmd = Port::<u8>::new(PIT_CMD);
         let mut pit_ch2 = Port::<u8>::new(PIT_CH2);
-        let mut pcspkr  = Port::<u8>::new(PCSPKR);
+        let mut pcspkr = Port::<u8>::new(PCSPKR);
 
         // Enable channel 2 gate (bit 0), disable speaker (clear bit 1).
         let ctrl = pcspkr.read();
@@ -150,8 +152,8 @@ pub unsafe fn init() {
         //   [3:1] = 000 → mode 0
         //   [0]   = 0  → binary
         pit_cmd.write(0xB0);
-        pit_ch2.write((PIT_10MS & 0xFF) as u8);  // lobyte
-        pit_ch2.write((PIT_10MS >> 8)   as u8);  // hibyte
+        pit_ch2.write((PIT_10MS & 0xFF) as u8); // lobyte
+        pit_ch2.write((PIT_10MS >> 8) as u8); // hibyte
 
         // Poll until PIT channel 2 output goes high (port 0x61 bit 5).
         // Output in mode 0 transitions LOW→HIGH when the counter reaches 0.
@@ -185,9 +187,11 @@ pub unsafe fn init() {
 
     // ── 5. Program APIC timer: periodic mode ─────────────────────────────────
     // Stop first (prevent spurious fire between LVT write and INIT write).
-    unsafe { apic_write(APIC_TIMER_INIT, 0); }
     unsafe {
-        apic_write(APIC_TIMER_LVT,  LVT_TIMER_PERIODIC | TIMER_VECTOR);
+        apic_write(APIC_TIMER_INIT, 0);
+    }
+    unsafe {
+        apic_write(APIC_TIMER_LVT, LVT_TIMER_PERIODIC | TIMER_VECTOR);
         apic_write(APIC_TIMER_INIT, (ticks_per_ms * TICK_INTERVAL_MS) as u32);
     }
 
@@ -200,11 +204,12 @@ pub unsafe fn init() {
 ///
 /// # IRQL: CLOCK_LEVEL (hardware interrupt context)
 #[inline]
+#[expect(clippy::identity_op, reason = "KUSER_SHARED_DATA fields are written at their offsets, 0x000 included")]
 pub fn tick() {
     let ticks = TICK_COUNT.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let sud = SHARED_USER_DATA_VA.load(Ordering::Relaxed);
     if sud != 0 {
-        let tick_ms              = ticks.wrapping_mul(TICK_INTERVAL_MS);
+        let tick_ms = ticks.wrapping_mul(TICK_INTERVAL_MS);
         let interrupt_time_100ns = tick_ms.wrapping_mul(10_000);
 
         // KSYSTEM_TIME split: LowPart (u32), High1Time (u32), High2Time (u32).
@@ -270,12 +275,11 @@ pub fn set_resolution(hundred_ns: u32) {
 
     // SAFETY: APIC MMIO is mapped at apic_reg(0) (HHDM); caller guarantees
     // PASSIVE_LEVEL.
-    unsafe { apic_write(APIC_TIMER_INIT, new_count); }
+    unsafe {
+        apic_write(APIC_TIMER_INIT, new_count);
+    }
 
-    log::info!(
-        "timer::set_resolution: {}ms interval ({}×100ns request)",
-        ms, hundred_ns
-    );
+    log::info!("timer::set_resolution: {}ms interval ({}×100ns request)", ms, hundred_ns);
 }
 
 /// Register or clear the timer tick callback.
@@ -304,7 +308,9 @@ pub fn set_shared_user_data_addr(addr: Option<u64>) {
 #[inline]
 pub fn call_schedule_hook() {
     let addr = TICK_HOOK.load(Ordering::Acquire);
-    if addr == 0 { return; }
+    if addr == 0 {
+        return;
+    }
     // SAFETY: `addr` was written by `set_tick_hook` with a valid `fn()`.
     let f: fn() = unsafe { core::mem::transmute(addr) };
     f();

@@ -16,9 +16,7 @@ pub fn is_intel() -> bool {
 
 /// Vendor check on the CPUID leaf 0 registers, in vendor-string order (EBX, EDX, ECX).
 fn is_intel_vendor(ebx: u32, edx: u32, ecx: u32) -> bool {
-    ebx == u32::from_le_bytes(*b"Genu")
-        && edx == u32::from_le_bytes(*b"ineI")
-        && ecx == u32::from_le_bytes(*b"ntel")
+    ebx == u32::from_le_bytes(*b"Genu") && edx == u32::from_le_bytes(*b"ineI") && ecx == u32::from_le_bytes(*b"ntel")
 }
 
 #[cfg(test)]

@@ -86,7 +86,7 @@ pub fn init(boot_info: &BootInfo, kernel_phys_end: u64) {
     HHDM_OFFSET.store(boot_info.hhdm_offset, Ordering::Release);
     let mut total: u64 = 0;
     let kernel_start_pfn = boot_info.kernel_phys_base / 4096;
-    let kernel_end_pfn = (kernel_phys_end + 4095) / 4096;
+    let kernel_end_pfn = kernel_phys_end.div_ceil(4096);
 
     {
         let mut buddy = buddy::BUDDY.lock();

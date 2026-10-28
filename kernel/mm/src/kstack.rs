@@ -34,9 +34,7 @@ pub const MAX_STACKS: u64 = 4096;
 const SLOT_SIZE: u64 = GUARD_SIZE + KERNEL_STACK_SIZE;
 const PAGES: usize = (KERNEL_STACK_SIZE / 4096) as usize;
 const STACK_FLAGS: PageTableFlags = PageTableFlags::from_bits_truncate(
-    PageTableFlags::PRESENT.bits()
-        | PageTableFlags::WRITABLE.bits()
-        | PageTableFlags::NO_EXECUTE.bits(),
+    PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits() | PageTableFlags::NO_EXECUTE.bits(),
 );
 
 /// Number of slots handed out so far.
@@ -66,9 +64,8 @@ const fn stack_of_slot(slot: u64) -> KernelStack {
 /// # IRQL
 /// PASSIVE_LEVEL. Takes the buddy lock and edits the kernel page tables.
 pub fn allocate() -> Option<KernelStack> {
-    let slot = ALLOCATED
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_STACKS).then_some(n + 1))
-        .ok()?;
+    let slot =
+        ALLOCATED.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_STACKS).then_some(n + 1)).ok()?;
     let stack = stack_of_slot(slot);
 
     // Take every frame first: map_page allocates page-table frames through the
