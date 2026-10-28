@@ -4,6 +4,11 @@
 # Usage:
 #   ./tools/qemu-run.sh [--timeout N] [--memory M] [--ovmf /path/to/OVMF.fd]
 #                       [--ovmf-code /path/to/code.fd] [--ovmf-vars /path/to/vars.fd]
+#                       [--cpu MODEL]
+#
+# --cpu is passed to QEMU as -cpu MODEL. QEMU's default CPU reports an AMD
+# vendor; use e.g. --cpu qemu64,vendor=GenuineIntel to exercise the SYSENTER
+# path (ADR-004).
 #
 # OVMF modes (auto-detected):
 #   Combined  : single OVMF.fd  → -bios OVMF.fd
@@ -26,6 +31,7 @@ MEMORY=256
 OVMF_ARG=""
 OVMF_CODE_ARG=""
 OVMF_VARS_ARG=""
+CPU_ARG=""
 
 make_fat_img_with_mkfat() {
     local out="$1"
@@ -94,13 +100,14 @@ while [[ $# -gt 0 ]]; do
         --ovmf)      OVMF_ARG="$2";   shift 2 ;;
         --ovmf-code) OVMF_CODE_ARG="$2"; shift 2 ;;
         --ovmf-vars) OVMF_VARS_ARG="$2"; shift 2 ;;
+        --cpu)       CPU_ARG="$2";    shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
 # ── Locate cargo ───────────────────────────────────────────────────────────────
 CARGO="${CARGO:-}"
-for c in cargo "$HOME/.cargo/bin/cargo" "/c/Users/$USERNAME/.cargo/bin/cargo"; do
+for c in cargo "$HOME/.cargo/bin/cargo" "/c/Users/${USERNAME:-}/.cargo/bin/cargo"; do
     if command -v "$c" &>/dev/null || [[ -x "$c" ]]; then CARGO="$c"; break; fi
 done
 if [[ -z "$CARGO" ]]; then echo "[F2] ERROR: cargo not found."; exit 1; fi
@@ -282,7 +289,11 @@ if [[ -d "$GR_DIR" ]]; then
     echo "[F2] Game disk: $GR_DIR (IDE secondary, ~181 MB)"
 fi
 
+CPU_ARGS=()
+[[ -n "$CPU_ARG" ]] && CPU_ARGS+=(-cpu "$CPU_ARG")
+
 timeout "$TIMEOUT" "$QEMU_BIN" \
+    "${CPU_ARGS[@]}" \
     "${FIRMWARE_ARGS[@]}" \
     -drive "format=raw,file=fat:rw:$ESP_WIN" \
     "${GAME_ARGS[@]}" \
