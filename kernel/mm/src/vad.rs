@@ -41,10 +41,10 @@ bitflags! {
 /// VAD node — describes one virtual memory region.
 #[derive(Clone, Debug)]
 pub struct VadNode {
-    pub start:   u64,
-    pub end:     u64,   // exclusive
+    pub start: u64,
+    pub end: u64, // exclusive
     pub protect: PageProtect,
-    pub kind:    VadKind,
+    pub kind: VadKind,
 }
 
 impl VadNode {
@@ -74,10 +74,14 @@ impl VadTree {
     }
 
     /// Number of entries currently in the tree.
-    pub fn len(&self) -> usize { self.nodes.len() }
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
 
     /// Returns `true` if the tree has no entries.
-    pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
 
     /// Insert a new VAD node. Returns `Err("VAD overlap")` if the range
     /// overlaps any existing node.
@@ -102,11 +106,7 @@ impl VadTree {
 
     /// Find the VAD node containing `addr`, if any.
     pub fn find(&self, addr: u64) -> Option<&VadNode> {
-        self.nodes
-            .range(..=addr)
-            .next_back()
-            .map(|(_, node)| node)
-            .filter(|node| addr < node.end)
+        self.nodes.range(..=addr).next_back().map(|(_, node)| node).filter(|node| addr < node.end)
     }
 
     /// Remove the VAD node starting at `start_addr` (VirtualFree MEM_RELEASE).
@@ -174,8 +174,12 @@ fn align_up(addr: u64, align: u64) -> u64 {
 mod tests {
     use super::*;
 
-    fn rw() -> PageProtect { PageProtect::READWRITE }
-    fn rx() -> PageProtect { PageProtect::EXECUTE_READ }
+    fn rw() -> PageProtect {
+        PageProtect::READWRITE
+    }
+    fn rx() -> PageProtect {
+        PageProtect::EXECUTE_READ
+    }
 
     // ── T2-1a: insert / find / remove ────────────────────────────────────────
 
@@ -185,7 +189,7 @@ mod tests {
         t.insert(VadNode::private(0x1000, 0x2000, rw())).unwrap();
         let n = t.find(0x1000).expect("find at start");
         assert_eq!(n.start, 0x1000);
-        assert_eq!(n.end,   0x2000);
+        assert_eq!(n.end, 0x2000);
     }
 
     #[test]
@@ -319,7 +323,7 @@ mod tests {
         let mut t = VadTree::new();
         t.insert(VadNode::private(1 * PAGE, 3 * PAGE, rw())).unwrap(); // gap before: [0,1), after: [3,5)
         t.insert(VadNode::private(5 * PAGE, 8 * PAGE, rw())).unwrap(); // gap [3,5) = 2 pages
-        // Ask for exactly 2 pages starting search from PAGE
+                                                                       // Ask for exactly 2 pages starting search from PAGE
         let addr = t.find_free_gap(PAGE, 2 * PAGE, PAGE).expect("gap");
         assert_eq!(addr, 3 * PAGE);
     }

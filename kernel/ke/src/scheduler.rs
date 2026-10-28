@@ -15,8 +15,8 @@
 //!
 //! WI7e Ch.4 "Scheduling", ReactOS ntoskrnl/ke/thrdschd.c
 
-use spin::Mutex;
 use crate::thread::{KContext, ThreadState};
+use spin::Mutex;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -42,9 +42,9 @@ const IDLE_PRIORITY: u8 = 0;
 /// capacity is the correct NT-kernel pattern.
 #[derive(Clone, Copy)]
 pub struct ReadyQueue {
-    buf:  [usize; MAX_READY],
+    buf: [usize; MAX_READY],
     head: usize,
-    len:  usize,
+    len: usize,
 }
 
 impl ReadyQueue {
@@ -54,15 +54,21 @@ impl ReadyQueue {
 
     /// Returns `true` if the queue is empty.
     #[inline]
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
 
     /// Returns `true` if the queue is full.
     #[inline]
-    pub fn is_full(&self) -> bool { self.len == MAX_READY }
+    pub fn is_full(&self) -> bool {
+        self.len == MAX_READY
+    }
 
     /// Enqueue a thread index. Returns `false` if the queue is full.
     pub fn push(&mut self, tid: usize) -> bool {
-        if self.is_full() { return false; }
+        if self.is_full() {
+            return false;
+        }
         let tail = (self.head + self.len) % MAX_READY;
         self.buf[tail] = tid;
         self.len += 1;
@@ -71,7 +77,9 @@ impl ReadyQueue {
 
     /// Dequeue the next ready thread index. Returns `None` if empty.
     pub fn pop(&mut self) -> Option<usize> {
-        if self.is_empty() { return None; }
+        if self.is_empty() {
+            return None;
+        }
         let tid = self.buf[self.head];
         self.head = (self.head + 1) % MAX_READY;
         self.len -= 1;
@@ -80,7 +88,9 @@ impl ReadyQueue {
 
     /// Number of items in the queue.
     #[inline]
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 }
 
 // ── Thread record ─────────────────────────────────────────────────────────────
@@ -93,13 +103,13 @@ impl ReadyQueue {
 /// can update TSS.RSP0 before switching to them in ring-3.
 #[derive(Clone, Copy)]
 pub struct ThreadRecord {
-    pub ctx:              KContext,
-    pub state:            ThreadState,
-    pub priority:         u8,
-    pub used:             bool,
+    pub ctx: KContext,
+    pub state: ThreadState,
+    pub priority: u8,
+    pub used: bool,
     /// `true` for threads that run in ring-3. The scheduler updates TSS.RSP0
     /// to `kernel_stack_top` before switching to these threads.
-    pub user_mode:        bool,
+    pub user_mode: bool,
     /// Top of this thread's dedicated kernel stack (initial RSP0 value).
     /// Zero for kernel-mode threads (boot, idle).
     pub kernel_stack_top: u64,
@@ -122,11 +132,11 @@ impl ThreadRecord {
 
 /// Scheduler state — no heap, all static.
 pub struct SchedulerInner {
-    pub threads:     [ThreadRecord; MAX_THREADS],
-    pub current:     usize,     // index of the currently running thread
-    pub idle_tid:    usize,     // index of the idle thread (never terminates)
-    pub ready:       ReadyQueue,
-    pub tick_count:  u64,
+    pub threads: [ThreadRecord; MAX_THREADS],
+    pub current: usize,  // index of the currently running thread
+    pub idle_tid: usize, // index of the idle thread (never terminates)
+    pub ready: ReadyQueue,
+    pub tick_count: u64,
 }
 
 impl SchedulerInner {
@@ -236,15 +246,17 @@ pub struct Scheduler;
 /// # IRQL: PASSIVE_LEVEL, before the first user thread.
 pub unsafe fn init(idle_stack_top: u64) {
     let tids = SCHED.with(|sched| {
-        if sched.is_some() { return None; }
+        if sched.is_some() {
+            return None;
+        }
 
         let mut s = SchedulerInner::new();
 
         // TID 0 — boot thread (kernel_main). Captures the live RSP/RIP on first
         // context switch; KContext fields are filled in by ke_context_switch.
         let boot_tid = s.alloc_tid().expect("scheduler: no slot for boot thread");
-        s.threads[boot_tid].used     = true;
-        s.threads[boot_tid].state    = ThreadState::Running;
+        s.threads[boot_tid].used = true;
+        s.threads[boot_tid].state = ThreadState::Running;
         s.threads[boot_tid].priority = BOOT_PRIORITY;
         s.current = boot_tid;
 
@@ -259,11 +271,11 @@ pub unsafe fn init(idle_stack_top: u64) {
             *(rsp as *mut u64) = idle_thread_main as *const () as u64;
             rsp as u64
         };
-        s.threads[idle_tid].used          = true;
-        s.threads[idle_tid].state         = ThreadState::Ready;
-        s.threads[idle_tid].priority      = IDLE_PRIORITY;
-        s.threads[idle_tid].ctx.rsp       = idle_rsp;
-        s.threads[idle_tid].ctx.rip       = idle_thread_main as *const () as u64;
+        s.threads[idle_tid].used = true;
+        s.threads[idle_tid].state = ThreadState::Ready;
+        s.threads[idle_tid].priority = IDLE_PRIORITY;
+        s.threads[idle_tid].ctx.rsp = idle_rsp;
+        s.threads[idle_tid].ctx.rip = idle_thread_main as *const () as u64;
         s.idle_tid = idle_tid;
 
         *sched = Some(s);
@@ -316,8 +328,8 @@ pub fn schedule() {
                 unsafe { hal::gdt::set_kernel_stack_top(s.threads[next].kernel_stack_top) };
             }
             // SAFETY: pointers into the static SCHED table — 'static lifetime.
-            let old_ctx = &mut s.threads[cur].ctx  as *mut  crate::thread::KContext;
-            let new_ctx = &    s.threads[next].ctx as *const crate::thread::KContext;
+            let old_ctx = &mut s.threads[cur].ctx as *mut crate::thread::KContext;
+            let new_ctx = &s.threads[next].ctx as *const crate::thread::KContext;
             (old_ctx, new_ctx)
         })
         // lock released here, interrupts back to their state (still off in the ISR)
@@ -398,9 +410,9 @@ pub unsafe fn spawn_user_thread(
     kernel_stack_top: u64,
     entry32: u32,
     stack32: u32,
-    cs:      u16,
-    ss:      u16,
-    fs:      u16,
+    cs: u16,
+    ss: u16,
+    fs: u16,
 ) -> Option<usize> {
     const RFLAGS: u64 = hal::ring3::USER_RFLAGS; // IF=1, IOPL=0
     let kstack_top = kernel_stack_top;
@@ -413,13 +425,13 @@ pub unsafe fn spawn_user_thread(
     // SAFETY: frame_base is the top 56 bytes of the caller's stack, which the
     //         caller guarantees is mapped, writable and owned by this thread.
     unsafe {
-        frame_base.add(0).write(0);                // placeholder for trampoline addr
-        frame_base.add(1).write(fs as u64);        // FS selector → popped by trampoline
-        frame_base.add(2).write(entry32 as u64);   // RIP  ┐
-        frame_base.add(3).write((cs as u64) | 3);  // CS   │
-        frame_base.add(4).write(RFLAGS);            // RFLAGS│ IRETQ frame
-        frame_base.add(5).write(stack32 as u64);   // RSP  │
-        frame_base.add(6).write((ss as u64) | 3);  // SS   ┘
+        frame_base.add(0).write(0); // placeholder for trampoline addr
+        frame_base.add(1).write(fs as u64); // FS selector → popped by trampoline
+        frame_base.add(2).write(entry32 as u64); // RIP  ┐
+        frame_base.add(3).write((cs as u64) | 3); // CS   │
+        frame_base.add(4).write(RFLAGS); // RFLAGS│ IRETQ frame
+        frame_base.add(5).write(stack32 as u64); // RSP  │
+        frame_base.add(6).write((ss as u64) | 3); // SS   ┘
     }
 
     // ── Register with the scheduler ───────────────────────────────────────
@@ -427,13 +439,13 @@ pub unsafe fn spawn_user_thread(
         let s = sched.as_mut()?;
         let tid = s.alloc_tid()?;
 
-        s.threads[tid].used             = true;
-        s.threads[tid].state            = ThreadState::Ready;
-        s.threads[tid].priority         = BOOT_PRIORITY; // same as boot thread
-        s.threads[tid].user_mode        = true;
+        s.threads[tid].used = true;
+        s.threads[tid].state = ThreadState::Ready;
+        s.threads[tid].priority = BOOT_PRIORITY; // same as boot thread
+        s.threads[tid].user_mode = true;
         s.threads[tid].kernel_stack_top = kstack_top;
-        s.threads[tid].ctx.rsp          = frame_base as u64;
-        s.threads[tid].ctx.rip          = hal::ring3::ring3_iretq_trampoline_fn();
+        s.threads[tid].ctx.rsp = frame_base as u64;
+        s.threads[tid].ctx.rip = hal::ring3::ring3_iretq_trampoline_fn();
         // Non-volatile GP registers can be zero — ring-3 ABI doesn't use callee-saved regs
         // across the kernel→user transition; the trampoline doesn't inspect them.
         s.threads[tid].ctx.rbx = 0;
@@ -450,7 +462,10 @@ pub unsafe fn spawn_user_thread(
     // Outside the lock: logging is slow (serial, framebuffer console).
     log::info!(
         "Ke scheduler: spawned user-mode thread TID={} entry={:#010x} usp={:#010x} kstack_top={:#x}",
-        tid, entry32, stack32, kstack_top,
+        tid,
+        entry32,
+        stack32,
+        kstack_top,
     );
     Some(tid)
 }
@@ -470,9 +485,15 @@ pub fn terminate_user_threads() {
         let Some(s) = sched.as_mut() else { return };
         let cur = s.current;
         for (tid, thread) in s.threads.iter_mut().enumerate() {
-            if !thread.used { continue; }
-            if tid == cur  { continue; } // don't terminate ourselves
-            if tid == 0    { continue; } // never kill boot thread
+            if !thread.used {
+                continue;
+            }
+            if tid == cur {
+                continue;
+            } // don't terminate ourselves
+            if tid == 0 {
+                continue;
+            } // never kill boot thread
             if thread.user_mode && thread.state != ThreadState::Terminated {
                 thread.state = ThreadState::Terminated;
             }
@@ -503,11 +524,13 @@ pub fn terminate_current_thread() {
                 // SAFETY: same as schedule() — IF=0, single-CPU.
                 unsafe { hal::gdt::set_kernel_stack_top(s.threads[next].kernel_stack_top) };
             }
-            let old_ctx = &mut s.threads[old].ctx  as *mut  crate::thread::KContext;
-            let new_ctx = &    s.threads[next].ctx as *const crate::thread::KContext;
+            let old_ctx = &mut s.threads[old].ctx as *mut crate::thread::KContext;
+            let new_ctx = &s.threads[next].ctx as *const crate::thread::KContext;
             (old_ctx, new_ctx)
         }))
-    }) else { return };
+    }) else {
+        return;
+    };
 
     if let Some((old_ctx, new_ctx)) = switch {
         // SAFETY: pointers into static SCHED table; IF=0 (no concurrent ISR).
@@ -562,22 +585,22 @@ mod tests {
         let mut s = SchedulerInner::new();
 
         // TID 0: boot/current (Running)
-        s.threads[0].used     = true;
-        s.threads[0].state    = ThreadState::Running;
+        s.threads[0].used = true;
+        s.threads[0].state = ThreadState::Running;
         s.threads[0].priority = 8;
         s.current = 0;
 
         // TID 1: idle (always available)
-        s.threads[1].used     = true;
-        s.threads[1].state    = ThreadState::Ready;
+        s.threads[1].used = true;
+        s.threads[1].state = ThreadState::Ready;
         s.threads[1].priority = 0;
         s.idle_tid = 1;
 
         // TIDs 2..2+n: additional ready threads
         for i in 0..n {
             let tid = 2 + i;
-            s.threads[tid].used     = true;
-            s.threads[tid].state    = ThreadState::Ready;
+            s.threads[tid].used = true;
+            s.threads[tid].state = ThreadState::Ready;
             s.threads[tid].priority = 4;
             s.ready.push(tid);
         }
@@ -621,19 +644,27 @@ mod tests {
     fn ready_queue_wraps_around_correctly() {
         let mut q = ReadyQueue::new();
         // Fill to capacity
-        for i in 0..MAX_READY { assert!(q.push(i)); }
+        for i in 0..MAX_READY {
+            assert!(q.push(i));
+        }
         assert!(q.is_full());
         assert!(!q.push(99), "push to full queue must return false");
         // Drain half and refill — tests wrap-around
-        for _ in 0..(MAX_READY / 2) { q.pop(); }
-        for i in 0..(MAX_READY / 2) { assert!(q.push(100 + i)); }
+        for _ in 0..(MAX_READY / 2) {
+            q.pop();
+        }
+        for i in 0..(MAX_READY / 2) {
+            assert!(q.push(100 + i));
+        }
         assert_eq!(q.len(), MAX_READY);
     }
 
     #[test]
     fn ready_queue_push_returns_false_when_full() {
         let mut q = ReadyQueue::new();
-        for i in 0..MAX_READY { q.push(i); }
+        for i in 0..MAX_READY {
+            q.push(i);
+        }
         assert!(!q.push(999));
     }
 
@@ -653,14 +684,16 @@ mod tests {
     #[test]
     fn alloc_tid_returns_none_when_table_full() {
         let mut s = SchedulerInner::new();
-        for i in 0..MAX_THREADS { s.threads[i].used = true; }
+        for i in 0..MAX_THREADS {
+            s.threads[i].used = true;
+        }
         assert!(s.alloc_tid().is_none());
     }
 
     #[test]
     fn pick_next_moves_current_to_ready_if_running() {
         let mut s = make_scheduler_with_n_ready(1); // TID 2 in queue
-        // Current = TID 0 (Running), ready has TID 2
+                                                    // Current = TID 0 (Running), ready has TID 2
         let result = s.pick_next();
         assert!(result.is_some());
         let (prev, next) = result.unwrap();
@@ -678,7 +711,7 @@ mod tests {
     #[test]
     fn round_robin_two_threads_alternate() {
         let mut s = make_scheduler_with_n_ready(2); // TIDs 2 and 3 in queue
-        // Tick 1: switch 0 → 2
+                                                    // Tick 1: switch 0 → 2
         let (_, next1) = s.pick_next().expect("first switch");
         assert_eq!(next1, 2);
         // Tick 2: switch 2 → 3 (TID 0 re-enqueued from tick 1)
@@ -734,7 +767,7 @@ mod tests {
         s.current = s.idle_tid;
         s.threads[s.idle_tid].state = ThreadState::Running;
         // A new thread becomes ready
-        s.threads[2].used  = true;
+        s.threads[2].used = true;
         s.threads[2].state = ThreadState::Ready;
         s.ready.push(2);
         // pick_next should switch idle → TID 2

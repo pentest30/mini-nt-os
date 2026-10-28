@@ -87,7 +87,9 @@ pub fn write_fmt(args: core::fmt::Arguments) {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
             // Use write_byte directly to avoid recursive lock acquisition.
             if let Some(ref mut port) = *COM1.lock() {
-                for b in s.bytes() { port.send(b); }
+                for b in s.bytes() {
+                    port.send(b);
+                }
             }
             Ok(())
         }

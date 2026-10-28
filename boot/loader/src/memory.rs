@@ -62,12 +62,7 @@ pub fn collect(bt: &BootServices) -> ([MemoryRegion; MEMORY_MAP_MAX], usize) {
 /// Mark a physical range [start_pfn, start_pfn+pages) as `KernelImage` in
 /// the region array returned by `collect()`. Called after loading the kernel
 /// so that `mm::init` does not hand out kernel pages to the buddy allocator.
-pub fn mark_kernel(
-    regions: &mut [MemoryRegion],
-    count:   usize,
-    kernel_start_pfn: u64,
-    kernel_pages:     u64,
-) {
+pub fn mark_kernel(regions: &mut [MemoryRegion], count: usize, kernel_start_pfn: u64, kernel_pages: u64) {
     // Simple approach: find the Usable region that contains the kernel and
     // split it. For Phase 1 (kernel at 1 MiB on a machine with contiguous
     // low RAM) this is always a single region split into at most 3 pieces.
@@ -81,17 +76,14 @@ pub fn mark_kernel(
 
         if r.start_pfn <= kernel_start_pfn && k_end <= r_end {
             // Kernel is fully inside this region.
-            let before_pfn   = r.start_pfn;
+            let before_pfn = r.start_pfn;
             let before_pages = kernel_start_pfn - before_pfn;
-            let after_pfn    = k_end;
-            let after_pages  = r_end - k_end;
+            let after_pfn = k_end;
+            let after_pages = r_end - k_end;
 
             // Overwrite this slot with the KernelImage region.
-            regions[i] = MemoryRegion {
-                kind:       MemoryKind::KernelImage,
-                start_pfn:  kernel_start_pfn,
-                page_count: kernel_pages,
-            };
+            regions[i] =
+                MemoryRegion { kind: MemoryKind::KernelImage, start_pfn: kernel_start_pfn, page_count: kernel_pages };
 
             // Compact remaining: shift everything right and insert before/after.
             // For simplicity just mark and leave — the buddy allocator skips
@@ -113,8 +105,7 @@ fn uefi_type_to_kind(ty: MemoryType) -> MemoryKind {
 
         MemoryType::ACPI_RECLAIM => MemoryKind::AcpiReclaimable,
 
-        MemoryType::RUNTIME_SERVICES_CODE
-        | MemoryType::RUNTIME_SERVICES_DATA => MemoryKind::UefiRuntime,
+        MemoryType::RUNTIME_SERVICES_CODE | MemoryType::RUNTIME_SERVICES_DATA => MemoryKind::UefiRuntime,
 
         MemoryType::LOADER_CODE
         | MemoryType::LOADER_DATA

@@ -85,23 +85,22 @@ impl<D: BlockDevice> FatVolume<D> {
         let mut sectors_per_fat32 = sectors_per_fat32;
         let mut root_cluster = root_cluster;
         let mut first_data_sector: u32 = 0;
-        let bpb_ok =
-            bps != 0
-                && spc != 0
-                && rsvd != 0
-                && fats != 0
-                && root_cluster >= 2
-                && bps as u32 == bytes_per_sector
-                && root_entries == 0
-                && sectors_per_fat16 == 0
-                && sectors_per_fat32 != 0
-                && {
-                    let total_sectors = if total16 != 0 { total16 } else { total32 };
-                    total_sectors != 0 && {
-                        let f = rsvd as u32 + (fats as u32 * sectors_per_fat32);
-                        f < total_sectors
-                    }
-                };
+        let bpb_ok = bps != 0
+            && spc != 0
+            && rsvd != 0
+            && fats != 0
+            && root_cluster >= 2
+            && bps as u32 == bytes_per_sector
+            && root_entries == 0
+            && sectors_per_fat16 == 0
+            && sectors_per_fat32 != 0
+            && {
+                let total_sectors = if total16 != 0 { total16 } else { total32 };
+                total_sectors != 0 && {
+                    let f = rsvd as u32 + (fats as u32 * sectors_per_fat32);
+                    f < total_sectors
+                }
+            };
         if bpb_ok {
             first_data_sector = rsvd as u32 + (fats as u32 * sectors_per_fat32);
         }
@@ -410,7 +409,24 @@ fn short_name_11(name: &str) -> Result<[u8; 11], FatError> {
 fn upcase_fat_char(ch: u8) -> Result<u8, FatError> {
     match ch {
         b'a'..=b'z' => Ok(ch - 32),
-        b'A'..=b'Z' | b'0'..=b'9' | b'$' | b'%' | b'\'' | b'-' | b'_' | b'@' | b'~' | b'`' | b'!' | b'(' | b')' | b'{' | b'}' | b'^' | b'#' | b'&' => Ok(ch),
+        b'A'..=b'Z'
+        | b'0'..=b'9'
+        | b'$'
+        | b'%'
+        | b'\''
+        | b'-'
+        | b'_'
+        | b'@'
+        | b'~'
+        | b'`'
+        | b'!'
+        | b'('
+        | b')'
+        | b'{'
+        | b'}'
+        | b'^'
+        | b'#'
+        | b'&' => Ok(ch),
         _ => Err(FatError::Unsupported),
     }
 }
@@ -465,14 +481,20 @@ mod tests {
     }
 
     impl BlockDevice for MemDisk {
-        fn sector_size(&self) -> u32 { self.sector_size }
+        fn sector_size(&self) -> u32 {
+            self.sector_size
+        }
         fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
             let s = self.sector_size as usize;
-            if out.len() != s { return Err(FatError::Io); }
+            if out.len() != s {
+                return Err(FatError::Io);
+            }
             let l = lba as usize;
             let data = self.data.borrow();
             let end = (l + 1) * s;
-            if end > data.len() { return Err(FatError::Io); }
+            if end > data.len() {
+                return Err(FatError::Io);
+            }
             out.copy_from_slice(&data[l * s..end]);
             Ok(())
         }

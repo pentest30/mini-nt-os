@@ -12,9 +12,9 @@
 #![no_std]
 extern crate alloc;
 
-use core::arch::asm;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::arch::asm;
 use core::mem::ManuallyDrop;
 use spin::Mutex;
 
@@ -23,7 +23,7 @@ pub mod fat;
 pub mod file;
 pub mod irp;
 
-pub use driver::{DriverObject, DeviceObject};
+pub use driver::{DeviceObject, DriverObject};
 pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
 pub use file::FileObject;
 pub use irp::{Irp, IrpMajor};
@@ -58,11 +58,7 @@ impl BlockDevice for RamBlockDevice {
         }
         // SAFETY: data_addr..data_addr+data_len is valid for reads; out is valid for writes.
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                (self.data_addr as *const u8).add(off),
-                out.as_mut_ptr(),
-                s,
-            );
+            core::ptr::copy_nonoverlapping((self.data_addr as *const u8).add(off), out.as_mut_ptr(), s);
         }
         Ok(())
     }
@@ -110,23 +106,29 @@ pub fn read_fat_file_bulk(file: &mut FatFile, out: &mut [u8]) -> Result<usize, F
     let total_size = size as usize;
 
     // Parse BPB from sector 0
-    if total_size < 48 { return Err(FatError::InvalidBpb); }
+    if total_size < 48 {
+        return Err(FatError::InvalidBpb);
+    }
     // SAFETY: base_ptr..+total_size is mapped via HHDM.
     let bps = unsafe { u16::from_le_bytes([*base_ptr.add(11), *base_ptr.add(12)]) } as usize;
     let spc = unsafe { *base_ptr.add(13) } as usize;
     let rsvd = unsafe { u16::from_le_bytes([*base_ptr.add(14), *base_ptr.add(15)]) } as usize;
     let fats = unsafe { *base_ptr.add(16) } as usize;
-    let spf = unsafe {
-        u32::from_le_bytes([*base_ptr.add(36), *base_ptr.add(37), *base_ptr.add(38), *base_ptr.add(39)])
-    } as usize;
-    if bps == 0 || spc == 0 || rsvd == 0 || fats == 0 { return Err(FatError::InvalidBpb); }
+    let spf =
+        unsafe { u32::from_le_bytes([*base_ptr.add(36), *base_ptr.add(37), *base_ptr.add(38), *base_ptr.add(39)]) }
+            as usize;
+    if bps == 0 || spc == 0 || rsvd == 0 || fats == 0 {
+        return Err(FatError::InvalidBpb);
+    }
     let bpc = bps * spc; // bytes per cluster
     let fat_start = rsvd * bps; // FAT byte offset in ramdisk
     let data_start = (rsvd + fats * spf) * bps; // data area byte offset
 
     let remaining = (file.file_size.saturating_sub(file.position)) as usize;
     let target = remaining.min(out.len());
-    if target == 0 { return Ok(0); }
+    if target == 0 {
+        return Ok(0);
+    }
 
     // Walk to the starting cluster (skip past file.position)
     let mut cluster = file.first_cluster;
@@ -145,7 +147,9 @@ pub fn read_fat_file_bulk(file: &mut FatFile, out: &mut [u8]) -> Result<usize, F
         loop {
             let next = fat_next(base_ptr, fat_start, run_start + run_len - 1);
             match next {
-                Ok(n) if n == run_start + run_len => { run_len += 1; }
+                Ok(n) if n == run_start + run_len => {
+                    run_len += 1;
+                }
                 _ => break,
             }
         }
@@ -162,11 +166,7 @@ pub fn read_fat_file_bulk(file: &mut FatFile, out: &mut [u8]) -> Result<usize, F
 
         // SAFETY: src is within ramdisk HHDM mapping; out is caller-provided.
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                base_ptr.add(src_start),
-                out.as_mut_ptr().add(written),
-                can_take,
-            );
+            core::ptr::copy_nonoverlapping(base_ptr.add(src_start), out.as_mut_ptr().add(written), can_take);
         }
         written += can_take;
         cluster_offset = 0;
@@ -186,12 +186,7 @@ fn fat_next(base_ptr: *const u8, fat_byte_offset: usize, cluster: u32) -> Result
     let off = fat_byte_offset + cluster as usize * 4;
     // SAFETY: FAT table is within the ramdisk mapping.
     let raw = unsafe {
-        u32::from_le_bytes([
-            *base_ptr.add(off),
-            *base_ptr.add(off + 1),
-            *base_ptr.add(off + 2),
-            *base_ptr.add(off + 3),
-        ])
+        u32::from_le_bytes([*base_ptr.add(off), *base_ptr.add(off + 1), *base_ptr.add(off + 2), *base_ptr.add(off + 3)])
     } & 0x0FFF_FFFF;
     if raw >= 0x0FFF_FFF8 || raw < 2 {
         Err(FatError::NotFound) // EOF or invalid
@@ -205,10 +200,14 @@ fn fat_next(base_ptr: *const u8, fat_byte_offset: usize, cluster: u32) -> Result
 struct AtaBlockDevice;
 
 impl BlockDevice for AtaBlockDevice {
-    fn sector_size(&self) -> u32 { 512 }
+    fn sector_size(&self) -> u32 {
+        512
+    }
 
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
-        if out.len() != 512 { return Err(FatError::Io); }
+        if out.len() != 512 {
+            return Err(FatError::Io);
+        }
         hal::ata::read_sector(lba as u32, out).map_err(|_| FatError::Io)
     }
 }
@@ -219,10 +218,16 @@ fn ata_device() -> Option<AtaBlockDevice> {
     let mut guard = ATA_PRESENT.lock();
     let present = *guard.get_or_insert_with(|| {
         let p = hal::ata::probe();
-        if p { log::info!("Io: ATA channel 1 disk detected"); }
+        if p {
+            log::info!("Io: ATA channel 1 disk detected");
+        }
         p
     });
-    if present { Some(AtaBlockDevice) } else { None }
+    if present {
+        Some(AtaBlockDevice)
+    } else {
+        None
+    }
 }
 
 /// Open a file on the game data disk (ATA channel 1, FAT32).
@@ -316,12 +321,7 @@ fn ramdisk_device() -> Option<PhysRamBlockDevice> {
     if phys == 0 || size < 512 {
         return None;
     }
-    Some(PhysRamBlockDevice {
-        sector_size: 512,
-        phys_base: phys,
-        total_size: size as usize,
-        hhdm_offset: hhdm,
-    })
+    Some(PhysRamBlockDevice { sector_size: 512, phys_base: phys, total_size: size as usize, hhdm_offset: hhdm })
 }
 
 fn ensure_demo_source() -> Result<(), FatError> {

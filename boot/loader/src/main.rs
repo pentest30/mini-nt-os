@@ -22,11 +22,15 @@ mod memory;
 mod paging;
 
 use abi::{BootInfo, FramebufferInfo, PixelFormat};
-use paging::HHDM_OFFSET;
 use core::arch::asm;
-use uefi::{entry, Handle, Status, table::{Boot, SystemTable}};
-use uefi::table::boot::{AllocateType, MemoryType};
+use paging::HHDM_OFFSET;
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat as GopFmt};
+use uefi::table::boot::{AllocateType, MemoryType};
+use uefi::{
+    entry,
+    table::{Boot, SystemTable},
+    Handle, Status,
+};
 use x86_64::{
     registers::control::{Cr0, Cr0Flags, Cr3, Cr3Flags},
     registers::model_specific::{Efer, EferFlags},
@@ -65,16 +69,25 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
     let rsdp_phys = st
         .config_table()
         .iter()
-        .find(|t| {
-            t.guid == uefi::table::cfg::ACPI2_GUID
-                || t.guid == uefi::table::cfg::ACPI_GUID
-        })
+        .find(|t| t.guid == uefi::table::cfg::ACPI2_GUID || t.guid == uefi::table::cfg::ACPI_GUID)
         .map(|t| t.address as usize as u64)
         .unwrap_or(0);
     log::info!("bootloader: RSDP at {:#x}", rsdp_phys);
 
     // ── B3 / B2 / B1 inside a block so `bt` borrow ends before exit_boot_services ──
-    let (kernel_phys, kernel_size, kernel_entry, ramdisk_phys, ramdisk_size, regions, region_count, pml4_phys, boot_info_phys, boot_stack_top, fb_info) = {
+    let (
+        kernel_phys,
+        kernel_size,
+        kernel_entry,
+        ramdisk_phys,
+        ramdisk_size,
+        regions,
+        region_count,
+        pml4_phys,
+        boot_info_phys,
+        boot_stack_top,
+        fb_info,
+    ) = {
         let bt = st.boot_services();
 
         // B3: Load the kernel ELF from the ESP into physical memory.
@@ -120,18 +133,21 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
     // SAFETY: single-threaded; BOOT_INFO written only here; no concurrent access.
     unsafe {
         BOOT_INFO.kernel_phys_base = kernel_phys;
-        BOOT_INFO.kernel_size      = kernel_size;
-        BOOT_INFO.rsdp_phys        = rsdp_phys;
+        BOOT_INFO.kernel_size = kernel_size;
+        BOOT_INFO.rsdp_phys = rsdp_phys;
         BOOT_INFO.ramdisk_phys_base = ramdisk_phys;
-        BOOT_INFO.ramdisk_size      = ramdisk_size;
-        BOOT_INFO.framebuffer      = fb_info;
-        BOOT_INFO.memory_map_len   = region_count as u32;
-        BOOT_INFO.memory_map       = regions;
+        BOOT_INFO.ramdisk_size = ramdisk_size;
+        BOOT_INFO.framebuffer = fb_info;
+        BOOT_INFO.memory_map_len = region_count as u32;
+        BOOT_INFO.memory_map = regions;
     }
 
     log::info!(
         "bootloader: BootInfo ready — {} regions, kernel {:#x}+{}B, entry {:#x}",
-        region_count, kernel_phys, kernel_size, kernel_entry,
+        region_count,
+        kernel_phys,
+        kernel_size,
+        kernel_entry,
     );
 
     // ── Disable logger and allocator BEFORE ExitBootServices ─────────────────
@@ -196,7 +212,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
 /// Must be called while UEFI boot services are active.
 fn query_gop(bt: &uefi::table::boot::BootServices) -> FramebufferInfo {
     let handle = match bt.get_handle_for_protocol::<GraphicsOutput>() {
-        Ok(h)  => h,
+        Ok(h) => h,
         Err(_) => {
             log::warn!("bootloader: GOP not available — framebuffer disabled");
             return FramebufferInfo::zeroed();
@@ -204,28 +220,25 @@ fn query_gop(bt: &uefi::table::boot::BootServices) -> FramebufferInfo {
     };
 
     let mut gop = match bt.open_protocol_exclusive::<GraphicsOutput>(handle) {
-        Ok(g)  => g,
+        Ok(g) => g,
         Err(e) => {
             log::warn!("bootloader: GOP open failed ({:?}) — framebuffer disabled", e.status());
             return FramebufferInfo::zeroed();
         }
     };
 
-    let mode   = gop.current_mode_info();
+    let mode = gop.current_mode_info();
     let (w, h) = mode.resolution();
     let stride = mode.stride();
     let format = match mode.pixel_format() {
         GopFmt::Bgr => PixelFormat::Bgr,
         GopFmt::Rgb => PixelFormat::Rgb,
-        _           => PixelFormat::Unknown,
+        _ => PixelFormat::Unknown,
     };
     // SAFETY: GOP framebuffer pointer is valid for the lifetime of boot services.
     let base = gop.frame_buffer().as_mut_ptr() as u64;
 
-    log::info!(
-        "bootloader: GOP {}×{} stride={} fmt={:?} base={:#x}",
-        w, h, stride, format, base
-    );
+    log::info!("bootloader: GOP {}×{} stride={} fmt={:?} base={:#x}", w, h, stride, format, base);
 
     FramebufferInfo { base, width: w as u32, height: h as u32, stride: stride as u32, format }
 }

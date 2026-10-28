@@ -21,10 +21,10 @@ mod syscall;
 use abi::BootInfo;
 use core::arch::asm;
 use x86_64::{
-    instructions::segmentation::{DS, ES, SS, Segment},
-    PhysAddr, VirtAddr,
+    instructions::segmentation::{Segment, DS, ES, SS},
     structures::gdt::SegmentSelector,
     structures::paging::PageTableFlags,
+    PhysAddr, VirtAddr,
 };
 
 /// Kernel heap — the nonpaged pool (`mm::pool`): size classes for small
@@ -35,19 +35,17 @@ static ALLOCATOR: mm::pool::Pool = mm::pool::Pool::new();
 
 /// First virtual address of the kernel heap region.
 /// Chosen above the kernel HHDM image region and below UEFI runtime services.
-const HEAP_START: u64   = 0xFFFF_8800_0000_0000;
+const HEAP_START: u64 = 0xFFFF_8800_0000_0000;
 
 /// Kernel heap size: 4 MiB = 1024 × 4 KiB pages.
-const HEAP_SIZE:  usize = 4 * 1024 * 1024;
+const HEAP_SIZE: usize = 4 * 1024 * 1024;
 
 /// Number of 4 KiB pages to map for the heap.
 const HEAP_PAGES: usize = HEAP_SIZE / 4096;
 
 /// Page flags for the heap: present, writable, NX.
 const HEAP_FLAGS: PageTableFlags = PageTableFlags::from_bits_truncate(
-    PageTableFlags::PRESENT.bits()
-        | PageTableFlags::WRITABLE.bits()
-        | PageTableFlags::NO_EXECUTE.bits(),
+    PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits() | PageTableFlags::NO_EXECUTE.bits(),
 );
 
 // ── KernelPageMapper ─────────────────────────────────────────────────────────
@@ -66,10 +64,10 @@ struct KernelPageMapper {
 impl mm::virtual_alloc::PageMapper for KernelPageMapper {
     fn commit_page(
         &mut self,
-        virt_addr:  u64,
-        writable:   bool,
+        virt_addr: u64,
+        writable: bool,
         executable: bool,
-        user:       bool,
+        user: bool,
     ) -> Result<(), &'static str> {
         // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
         // DO NOT zero — the page may contain live data (e.g., game stack being reused).
@@ -92,9 +90,15 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         let virt = VirtAddr::new(virt_addr);
 
         let mut flags = PageTableFlags::PRESENT;
-        if writable    { flags |= PageTableFlags::WRITABLE; }
-        if !executable { flags |= PageTableFlags::NO_EXECUTE; }
-        if user        { flags |= PageTableFlags::USER_ACCESSIBLE; }
+        if writable {
+            flags |= PageTableFlags::WRITABLE;
+        }
+        if !executable {
+            flags |= PageTableFlags::NO_EXECUTE;
+        }
+        if user {
+            flags |= PageTableFlags::USER_ACCESSIBLE;
+        }
 
         // SAFETY: virt is a freshly claimed user-mode address; phys is a
         //         fresh page-aligned frame from the buddy.
@@ -110,11 +114,11 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
     }
 
     fn decommit_page(&mut self, virt_addr: u64) -> Result<(), &'static str> {
-        let virt  = VirtAddr::new(virt_addr);
+        let virt = VirtAddr::new(virt_addr);
         // SAFETY: virt_addr was previously mapped by commit_page; single-CPU
         //         Phase 2 — no concurrent unmap possible.
-        let frame = unsafe { self.pt.unmap_page(virt) };  // also flushes TLB
-        // Return frame to buddy.
+        let frame = unsafe { self.pt.unmap_page(virt) }; // also flushes TLB
+                                                         // Return frame to buddy.
         let pfn = mm::Pfn(frame.start_address().as_u64() / 4096);
         if let Some(b) = mm::buddy::BUDDY.lock().as_mut() {
             b.free(pfn, 0);
@@ -122,7 +126,6 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         Ok(())
     }
 }
-
 
 /// Kernel entry point.
 ///
@@ -217,7 +220,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         // normally never sees these frames; but if UEFI coalesces or
         // mis-categorises regions we could corrupt the ramdisk before Io reads it.
         let ramdisk_start_pfn = boot_info.ramdisk_phys_base / 4096;
-        let ramdisk_end_pfn   = if boot_info.ramdisk_size > 0 {
+        let ramdisk_end_pfn = if boot_info.ramdisk_size > 0 {
             (boot_info.ramdisk_phys_base + boot_info.ramdisk_size + 4095) / 4096
         } else {
             0
@@ -229,17 +232,11 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
             let mut guard = mm::buddy::BUDDY.lock();
             let buddy = guard.as_mut().expect("mm not initialised");
             for slot in heap_frames.iter_mut() {
-                let mut candidate = buddy
-                    .alloc(0)
-                    .expect("out of physical memory mapping heap");
+                let mut candidate = buddy.alloc(0).expect("out of physical memory mapping heap");
                 while (candidate.0 >= kernel_start_pfn && candidate.0 < kernel_end_pfn)
-                    || (ramdisk_end_pfn > 0
-                        && candidate.0 >= ramdisk_start_pfn
-                        && candidate.0 < ramdisk_end_pfn)
+                    || (ramdisk_end_pfn > 0 && candidate.0 >= ramdisk_start_pfn && candidate.0 < ramdisk_end_pfn)
                 {
-                    candidate = buddy
-                        .alloc(0)
-                        .expect("out of memory skipping kernel/ramdisk frames");
+                    candidate = buddy.alloc(0).expect("out of memory skipping kernel/ramdisk frames");
                 }
                 *slot = candidate;
             }
@@ -299,7 +296,10 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     let boot_stack = mm::kstack::allocate().expect("no kernel stack for the boot thread");
     log::info!(
         "kstack: boot thread on guarded stack {:#x}..{:#x}, syscall entry {:#x}..{:#x}",
-        boot_stack.bottom, boot_stack.top, entry_stack.bottom, entry_stack.top,
+        boot_stack.bottom,
+        boot_stack.top,
+        entry_stack.bottom,
+        entry_stack.top,
     );
     // SAFETY: boot_stack is a fresh 16-byte aligned stack owned by the boot
     // thread for the life of the system. kernel_main_phase1 never returns, so
@@ -342,11 +342,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     unsafe { ke::init(idle_stack.top) };
     ob::init();
     ps::init();
-    io_manager::init(
-        boot_info.ramdisk_phys_base,
-        boot_info.ramdisk_size,
-        boot_info.hhdm_offset,
-    );
+    io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
     fat_smoke_probe();
 
     // Wire preemptive round-robin: timer ISR calls schedule() after each EOI.
@@ -369,25 +365,14 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     try_load_dxvk_chain();
 
     // ── 5b. Phase 2: PE loader smoke test + process setup ─────────────────────
-    log::info!(
-        "heap before loader_demo: used={} free={}",
-        ALLOCATOR.used(), ALLOCATOR.free(),
-    );
+    log::info!("heap before loader_demo: used={} free={}", ALLOCATOR.used(), ALLOCATOR.free(),);
     let ring3_ctx = loader_demo(boot_info.hhdm_offset);
 
     // ── Ready ─────────────────────────────────────────────────────────────────
-    let free_pages = mm::buddy::BUDDY
-        .lock()
-        .as_ref()
-        .map(|b| b.free_pages())
-        .unwrap_or(0);
+    let free_pages = mm::buddy::BUDDY.lock().as_ref().map(|b| b.free_pages()).unwrap_or(0);
 
     // End of phase 1: the boot scenarios (tests/boot/) wait for this line.
-    log::info!(
-        "kernel: phase 1 done — ticks: {}, free_pages: {}",
-        hal::timer::get_tick_count(),
-        free_pages,
-    );
+    log::info!("kernel: phase 1 done — ticks: {}, free_pages: {}", hal::timer::get_tick_count(), free_pages,);
     // ── Phase 2.5: scheduler-based ring-3 launch ─────────────────────────────
     //
     // Register the initial user-mode process as a scheduler thread.  The timer
@@ -401,12 +386,10 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // NtTerminateProcess → ke::scheduler::terminate_current_thread().
     let (entry_point, stack_top) = ring3_ctx;
 
-    log::info!(
-        "kernel_main: spawning user thread  entry={:#010x}  usp={:#010x}",
-        entry_point, stack_top,
-    );
+    log::info!("kernel_main: spawning user thread  entry={:#010x}  usp={:#010x}", entry_point, stack_top,);
 
-    let user_tid = spawn_user_thread(entry_point, stack_top).expect("kernel_main: scheduler full — cannot spawn initial user thread");
+    let user_tid = spawn_user_thread(entry_point, stack_top)
+        .expect("kernel_main: scheduler full — cannot spawn initial user thread");
 
     log::info!("kernel_main: user thread TID={} spawned — launching Mino UI", user_tid);
 
@@ -484,7 +467,9 @@ fn heap_self_test() {
     assert_eq!(ALLOCATOR.used(), used_before, "heap self-test: memory not given back");
     log::info!(
         "[smoke] heap self-test ok: {} rounds, peak {} KiB, back to {} bytes used",
-        ROUNDS, (peak - used_before) / 1024, used_before,
+        ROUNDS,
+        (peak - used_before) / 1024,
+        used_before,
     );
 }
 
@@ -531,7 +516,10 @@ fn check_kernel_wx(hhdm_offset: u64) {
     let data = check(".data/.bss", core::ptr::addr_of!(__data_start), core::ptr::addr_of!(__data_end), true, false);
     log::info!(
         "[smoke] kernel W^X ok: .text {} pages RX, .rodata {} pages R, .data/.bss {} pages RW+NX at {:#x}",
-        text, rodata, data, kernel_main as *const () as u64,
+        text,
+        rodata,
+        data,
+        kernel_main as *const () as u64,
     );
 }
 
@@ -736,8 +724,8 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
 
     // Build a tiny but valid PE32 in heap memory.
     let pe_bytes = build_test_pe32(
-        0x0200_0000,  // preferred image base, as in tools/mkfat's TEST.EXE
-        0x1000,       // AddressOfEntryPoint RVA
+        0x0200_0000, // preferred image base, as in tools/mkfat's TEST.EXE
+        0x1000,      // AddressOfEntryPoint RVA
     );
 
     let mut vad = mm::vad::VadTree::new();
@@ -746,16 +734,16 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
     let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
     let mut mapper = KernelPageMapper { pt };
 
-    let img = ps::loader::load_image(&pe_bytes, &mut vad, &mut mapper, None)
-        .expect("loader_demo: load_image failed");
+    let img = ps::loader::load_image(&pe_bytes, &mut vad, &mut mapper, None).expect("loader_demo: load_image failed");
 
     log::info!(
         "loader_demo: PE loaded — base={:#x}  entry={:#x}  size={} B",
-        img.image_base, img.entry_point, img.image_size,
+        img.image_base,
+        img.entry_point,
+        img.image_size,
     );
 
-    let ctx = ps::loader::setup_process(&img, &mut vad, &mut mapper, 4, 1)
-        .expect("loader_demo: setup_process failed");
+    let ctx = ps::loader::setup_process(&img, &mut vad, &mut mapper, 4, 1).expect("loader_demo: setup_process failed");
     hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
 
     log::info!("loader_demo: VAD has {} entry(ies)", vad.len());
@@ -792,7 +780,12 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
 
     log::info!("build_test_pe32: before alloc heap used={} free={}", ALLOCATOR.used(), ALLOCATOR.free());
     let mut buf = alloc::vec![0u8; 0x3000]; // 12 KiB — enough for headers + one section
-    log::info!("build_test_pe32: after alloc ptr={:#x} heap used={} free={}", buf.as_ptr() as usize, ALLOCATOR.used(), ALLOCATOR.free());
+    log::info!(
+        "build_test_pe32: after alloc ptr={:#x} heap used={} free={}",
+        buf.as_ptr() as usize,
+        ALLOCATOR.used(),
+        ALLOCATOR.free()
+    );
 
     // ── DOS header ────────────────────────────────────────────────────────────
     buf[0..2].copy_from_slice(&IMAGE_DOS_SIGNATURE.to_le_bytes());
@@ -802,57 +795,57 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     // ── NT signature ──────────────────────────────────────────────────────────
     buf[0x40..0x44].copy_from_slice(&IMAGE_NT_SIGNATURE.to_le_bytes());
 
-    let fh_off  = 0x44usize;
-    let opt_sz  = core::mem::size_of::<ImageOptionalHeader32>() as u16;
+    let fh_off = 0x44usize;
+    let opt_sz = core::mem::size_of::<ImageOptionalHeader32>() as u16;
     let nsec: u16 = 2;
 
     // ── FILE_HEADER ───────────────────────────────────────────────────────────
-    buf[fh_off..fh_off+2].copy_from_slice(&MACHINE_I386.to_le_bytes());
-    buf[fh_off+2..fh_off+4].copy_from_slice(&nsec.to_le_bytes());
-    buf[fh_off+16..fh_off+18].copy_from_slice(&opt_sz.to_le_bytes());
+    buf[fh_off..fh_off + 2].copy_from_slice(&MACHINE_I386.to_le_bytes());
+    buf[fh_off + 2..fh_off + 4].copy_from_slice(&nsec.to_le_bytes());
+    buf[fh_off + 16..fh_off + 18].copy_from_slice(&opt_sz.to_le_bytes());
 
     // ── OPTIONAL_HEADER32 ─────────────────────────────────────────────────────
     let opt_off = fh_off + core::mem::size_of::<ImageFileHeader>();
     // magic
-    buf[opt_off..opt_off+2].copy_from_slice(&IMAGE_NT_OPTIONAL_HDR32_MAGIC.to_le_bytes());
+    buf[opt_off..opt_off + 2].copy_from_slice(&IMAGE_NT_OPTIONAL_HDR32_MAGIC.to_le_bytes());
     // entry point RVA at offset 16
-    buf[opt_off+16..opt_off+20].copy_from_slice(&entry_rva.to_le_bytes());
+    buf[opt_off + 16..opt_off + 20].copy_from_slice(&entry_rva.to_le_bytes());
     // image base at offset 28
-    buf[opt_off+28..opt_off+32].copy_from_slice(&image_base.to_le_bytes());
+    buf[opt_off + 28..opt_off + 32].copy_from_slice(&image_base.to_le_bytes());
     // SizeOfImage at offset 56 (covers .text at 0x1000 and .data at 0x2000)
     let size_of_image: u32 = 0x3000;
-    buf[opt_off+56..opt_off+60].copy_from_slice(&size_of_image.to_le_bytes());
+    buf[opt_off + 56..opt_off + 60].copy_from_slice(&size_of_image.to_le_bytes());
     // SizeOfHeaders at offset 60
     let size_of_headers: u32 = 0x400;
-    buf[opt_off+60..opt_off+64].copy_from_slice(&size_of_headers.to_le_bytes());
+    buf[opt_off + 60..opt_off + 64].copy_from_slice(&size_of_headers.to_le_bytes());
     // number of data directories at offset 92
     let n_dirs: u32 = 16;
-    buf[opt_off+92..opt_off+96].copy_from_slice(&n_dirs.to_le_bytes());
+    buf[opt_off + 92..opt_off + 96].copy_from_slice(&n_dirs.to_le_bytes());
 
     // ── Section headers (.text, .data) ───────────────────────────────────────
     let sh_off = opt_off + opt_sz as usize;
     let text_rva: u32 = 0x1000;
     let text_raw: u32 = 0x600;
     let text_off = size_of_headers as usize;
-    buf[sh_off..sh_off+5].copy_from_slice(b".text");
-    buf[sh_off+8..sh_off+12].copy_from_slice(&(text_raw).to_le_bytes());
-    buf[sh_off+12..sh_off+16].copy_from_slice(&text_rva.to_le_bytes());
-    buf[sh_off+16..sh_off+20].copy_from_slice(&text_raw.to_le_bytes());
-    buf[sh_off+20..sh_off+24].copy_from_slice(&size_of_headers.to_le_bytes());
+    buf[sh_off..sh_off + 5].copy_from_slice(b".text");
+    buf[sh_off + 8..sh_off + 12].copy_from_slice(&(text_raw).to_le_bytes());
+    buf[sh_off + 12..sh_off + 16].copy_from_slice(&text_rva.to_le_bytes());
+    buf[sh_off + 16..sh_off + 20].copy_from_slice(&text_raw.to_le_bytes());
+    buf[sh_off + 20..sh_off + 24].copy_from_slice(&size_of_headers.to_le_bytes());
     let text_chars: u32 = SCN_MEM_EXECUTE | SCN_MEM_READ | SCN_CNT_CODE;
-    buf[sh_off+36..sh_off+40].copy_from_slice(&text_chars.to_le_bytes());
+    buf[sh_off + 36..sh_off + 40].copy_from_slice(&text_chars.to_le_bytes());
 
     let sh2 = sh_off + 40;
     let data_rva: u32 = 0x2000;
     let data_raw: u32 = 0x600;
     let data_off = (size_of_headers + text_raw) as usize;
-    buf[sh2..sh2+5].copy_from_slice(b".data");
-    buf[sh2+8..sh2+12].copy_from_slice(&(data_raw).to_le_bytes());
-    buf[sh2+12..sh2+16].copy_from_slice(&data_rva.to_le_bytes());
-    buf[sh2+16..sh2+20].copy_from_slice(&data_raw.to_le_bytes());
-    buf[sh2+20..sh2+24].copy_from_slice(&(size_of_headers + text_raw).to_le_bytes());
+    buf[sh2..sh2 + 5].copy_from_slice(b".data");
+    buf[sh2 + 8..sh2 + 12].copy_from_slice(&(data_raw).to_le_bytes());
+    buf[sh2 + 12..sh2 + 16].copy_from_slice(&data_rva.to_le_bytes());
+    buf[sh2 + 16..sh2 + 20].copy_from_slice(&data_raw.to_le_bytes());
+    buf[sh2 + 20..sh2 + 24].copy_from_slice(&(size_of_headers + text_raw).to_le_bytes());
     let data_chars: u32 = SCN_MEM_READ | SCN_MEM_WRITE | SCN_CNT_INITIALIZED_DATA;
-    buf[sh2+36..sh2+40].copy_from_slice(&data_chars.to_le_bytes());
+    buf[sh2 + 36..sh2 + 40].copy_from_slice(&data_chars.to_le_bytes());
 
     fn emit_u32(dst: &mut alloc::vec::Vec<u8>, v: u32) {
         dst.extend_from_slice(&v.to_le_bytes());
@@ -873,9 +866,9 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     let import_iat_rva: u32 = data_rva + 0x1D0;
     let import_ibn_rva: u32 = data_rva + 0x1E0;
     let import_dll_rva: u32 = data_rva + 0x1F0;
-    let import_iat_va    = image_base.wrapping_add(import_iat_rva);
+    let import_iat_va = image_base.wrapping_add(import_iat_rva);
     let sysenter_iosb_va = image_base.wrapping_add(data_rva + 0xD0);
-    let sysenter_msg_va  = image_base.wrapping_add(data_rva + 0xD8);
+    let sysenter_msg_va = image_base.wrapping_add(data_rva + 0xD8);
     let args_create_proc_va = image_base.wrapping_add(data_rva + 0x80);
     let out_proc_handle_va = image_base.wrapping_add(data_rva + 0x90);
     let args_create_thread_va = image_base.wrapping_add(data_rva + 0xA0);
@@ -888,24 +881,30 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     let msg = b"[smoke] int2e write+alloc+term\n";
     let iat_msg = b"[iat] NtWriteFile via IAT\n";
     let iat_proof_msg = b"IATOK";
-    let sysenter_msg  = b"[smoke] SYSENTER path hit\n";
+    let sysenter_msg = b"[smoke] SYSENTER path hit\n";
 
     let mut code = alloc::vec::Vec::<u8>::new();
     code.extend_from_slice(&[0x66, 0xB8, 0x23, 0x00]);
     code.extend_from_slice(&[0x8E, 0xD8]);
     code.extend_from_slice(&[0x8E, 0xC0]);
-    code.push(0xBA); emit_u32(&mut code, args_write_va);
+    code.push(0xBA);
+    emit_u32(&mut code, args_write_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.push(0xBA); emit_u32(&mut code, 0);
+    code.push(0xBA);
+    emit_u32(&mut code, 0);
     code.extend_from_slice(&[0xB8, 0x50, 0x20, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.push(0xBA); emit_u32(&mut code, args_create_proc_va);
+    code.push(0xBA);
+    emit_u32(&mut code, args_create_proc_va);
     code.extend_from_slice(&[0xB8, 0x1B, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xA1]); emit_u32(&mut code, out_proc_handle_va);
-    code.extend_from_slice(&[0xA3]); emit_u32(&mut code, args_create_thread_va + 12);
-    code.push(0xBA); emit_u32(&mut code, args_create_thread_va);
+    code.extend_from_slice(&[0xA1]);
+    emit_u32(&mut code, out_proc_handle_va);
+    code.extend_from_slice(&[0xA3]);
+    emit_u32(&mut code, args_create_thread_va + 12);
+    code.push(0xBA);
+    emit_u32(&mut code, args_create_thread_va);
     code.extend_from_slice(&[0xB8, 0x35, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
     emit_push_u32(&mut code, 0);
@@ -917,15 +916,20 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     emit_push_u32(&mut code, 0);
     emit_push_u32(&mut code, 0);
     emit_push_u32(&mut code, 0);
-    code.extend_from_slice(&[0xFF, 0x15]); emit_u32(&mut code, import_iat_va);
-    code.push(0xBA); emit_u32(&mut code, args_iat_proof_va);
+    code.extend_from_slice(&[0xFF, 0x15]);
+    emit_u32(&mut code, import_iat_va);
+    code.push(0xBA);
+    emit_u32(&mut code, args_iat_proof_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.push(0xBA); emit_u32(&mut code, args_alloc_va);
+    code.push(0xBA);
+    emit_u32(&mut code, args_alloc_va);
     code.extend_from_slice(&[0xB8, 0x11, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0x8B, 0x1D]); emit_u32(&mut code, out_base_va);
-    code.extend_from_slice(&[0xC7, 0x03]); emit_u32(&mut code, 0x1234_5678);
+    code.extend_from_slice(&[0x8B, 0x1D]);
+    emit_u32(&mut code, out_base_va);
+    code.extend_from_slice(&[0xC7, 0x03]);
+    emit_u32(&mut code, 0x1234_5678);
 
     // SYSENTER from compatibility mode #UDs on non-Intel CPUs (ADR-004): skip the
     // direct SYSENTER test there and say so, so the smoke script can tell.
@@ -933,31 +937,32 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
         // NtWriteFile via SYSENTER (XP SP2 ABI).
         // Stack layout at SYSENTER: [EDX+0]=ret_addr  [EDX+4..]=args[0..8].
         // Push in reverse: Key → ... → FileHandle → then call/pop trick for ret_addr.
-        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (Key)
-        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ByteOffset)
-        emit_push_u32(&mut code, sysenter_msg.len() as u32);      // push Length
-        emit_push_u32(&mut code, sysenter_msg_va);                // push Buffer
-        emit_push_u32(&mut code, sysenter_iosb_va);               // push IoStatusBlock
-        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ApcContext)
-        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ApcRoutine)
-        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (Event)
-        code.extend_from_slice(&[0x6A, 0xFF]);                    // push -1 (FileHandle = serial)
-        // call/pop trick: push address of `pop eax`, add 16 → .after_sysenter.
-        // delta = 1(pop)+5(add)+1(push)+2(mov edx,esp)+5(mov eax,imm)+2(sysenter) = 16
+        code.extend_from_slice(&[0x6A, 0x00]); // push 0  (Key)
+        code.extend_from_slice(&[0x6A, 0x00]); // push 0  (ByteOffset)
+        emit_push_u32(&mut code, sysenter_msg.len() as u32); // push Length
+        emit_push_u32(&mut code, sysenter_msg_va); // push Buffer
+        emit_push_u32(&mut code, sysenter_iosb_va); // push IoStatusBlock
+        code.extend_from_slice(&[0x6A, 0x00]); // push 0  (ApcContext)
+        code.extend_from_slice(&[0x6A, 0x00]); // push 0  (ApcRoutine)
+        code.extend_from_slice(&[0x6A, 0x00]); // push 0  (Event)
+        code.extend_from_slice(&[0x6A, 0xFF]); // push -1 (FileHandle = serial)
+                                               // call/pop trick: push address of `pop eax`, add 16 → .after_sysenter.
+                                               // delta = 1(pop)+5(add)+1(push)+2(mov edx,esp)+5(mov eax,imm)+2(sysenter) = 16
         code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call .se_eip
-        code.push(0x58);                                          // pop eax  (.se_eip)
-        code.extend_from_slice(&[0x05, 16, 0, 0, 0]);            // add eax, 16
-        code.push(0x50);                                          // push eax (ret addr)
-        code.extend_from_slice(&[0x89, 0xE2]);                    // mov edx, esp
+        code.push(0x58); // pop eax  (.se_eip)
+        code.extend_from_slice(&[0x05, 16, 0, 0, 0]); // add eax, 16
+        code.push(0x50); // push eax (ret addr)
+        code.extend_from_slice(&[0x89, 0xE2]); // mov edx, esp
         code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // mov eax, NtWriteFile
-        code.extend_from_slice(&[0x0F, 0x34]);                    // sysenter
-        // .after_sysenter: ret@SharedUserData+0x300 popped ret_addr; 9 args remain.
-        code.extend_from_slice(&[0x83, 0xC4, 0x24]);              // add esp, 36
+        code.extend_from_slice(&[0x0F, 0x34]); // sysenter
+                                               // .after_sysenter: ret@SharedUserData+0x300 popped ret_addr; 9 args remain.
+        code.extend_from_slice(&[0x83, 0xC4, 0x24]); // add esp, 36
     } else {
         log::info!("[smoke] SYSENTER path skipped: CPU is not Intel (ADR-004)");
     }
 
-    code.push(0xBA); emit_u32(&mut code, args_term_va);
+    code.push(0xBA);
+    emit_u32(&mut code, args_term_va);
     code.extend_from_slice(&[0xB8, 0xC2, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E, 0xEB, 0xFE]);
     let code_end = text_off + code.len();
@@ -966,7 +971,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     let args_write_off = data_off;
     let args_alloc_off = data_off + 0x20;
     let sysenter_iosb_off = data_off + 0xD0;
-    let sysenter_msg_off  = data_off + 0xD8;
+    let sysenter_msg_off = data_off + 0xD8;
     let iat_iosb_off = data_off + 0x130;
     let iat_msg_off = data_off + 0x138;
     let args_iat_proof_off = data_off + 0x148;
@@ -1022,7 +1027,6 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     buf[iat_msg_off..iat_msg_off + iat_msg.len()].copy_from_slice(iat_msg);
     buf[iat_proof_msg_off..iat_proof_msg_off + iat_proof_msg.len()].copy_from_slice(iat_proof_msg);
 
-
     buf[out_base_off..out_base_off + 4].copy_from_slice(&0u32.to_le_bytes());
     buf[out_size_off..out_size_off + 4].copy_from_slice(&0x1000u32.to_le_bytes());
     buf[args_term_off + 4..args_term_off + 8].copy_from_slice(&0u32.to_le_bytes());
@@ -1061,9 +1065,13 @@ fn kernel_shell(hhdm_offset: u64) {
         shell_write("$ ");
         let n = shell_read_line(&mut line_buf);
         // ESC pressed during read → return to launcher
-        if n == 1 && line_buf[0] == 0x1B { return; }
+        if n == 1 && line_buf[0] == 0x1B {
+            return;
+        }
         let cmd = core::str::from_utf8(&line_buf[..n]).unwrap_or("").trim();
-        if cmd.is_empty() { continue; }
+        if cmd.is_empty() {
+            continue;
+        }
 
         if cmd == "help" {
             shell_write("  ls [path]   list directory\n");
@@ -1093,7 +1101,9 @@ fn shell_read_line(buf: &mut [u8]) -> usize {
         // HLT-based read so timer interrupts can run while we wait.
         // Poll both COM1 and PS/2 keyboard so the shell works via QEMU keyboard.
         let b = loop {
-            if let Some(byte) = hal::serial::try_read_byte() { break byte; }
+            if let Some(byte) = hal::serial::try_read_byte() {
+                break byte;
+            }
             // PS/2: read from IRQ1 ring buffer, convert scancode to ASCII.
             if let Some(sc) = hal::ps2::pop_scancode() {
                 if let Some(ascii) = hal::ps2::scancode_to_ascii_pub(sc) {
@@ -1187,7 +1197,9 @@ fn shell_cat(path: &str) {
         Ok(n) => {
             for &b in &buf[..n] {
                 hal::serial::write_byte(b);
-                if b == b'\n' || b >= 0x20 { hal::fb::write_byte(b); }
+                if b == b'\n' || b >= 0x20 {
+                    hal::fb::write_byte(b);
+                }
             }
             shell_write("\n");
         }
@@ -1271,17 +1283,25 @@ fn shell_norm_path(s: &str) -> alloc::string::String {
         return alloc::string::String::from("/");
     }
     let mut out = alloc::string::String::new();
-    if !s.starts_with('/') { out.push('/'); }
+    if !s.starts_with('/') {
+        out.push('/');
+    }
     for ch in s.chars() {
-        if ch == '\\' { out.push('/'); }
-        else { out.push(ch.to_ascii_uppercase()); }
+        if ch == '\\' {
+            out.push('/');
+        } else {
+            out.push(ch.to_ascii_uppercase());
+        }
     }
     out
 }
 
 /// Write a u32 to serial in decimal (no heap allocation).
 fn serial_write_u32(mut n: u32) {
-    if n == 0 { hal::serial::write_byte(b'0'); return; }
+    if n == 0 {
+        hal::serial::write_byte(b'0');
+        return;
+    }
     let mut buf = [0u8; 10];
     let mut i = 10usize;
     while n > 0 {

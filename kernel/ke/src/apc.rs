@@ -15,8 +15,8 @@ pub type ApcRoutine = fn(arg: *mut u8);
 
 #[derive(Debug)]
 pub struct Kapc {
-    pub routine:   ApcRoutine,
-    pub argument:  *mut u8,
+    pub routine: ApcRoutine,
+    pub argument: *mut u8,
     pub kernel_mode: bool,
 }
 
@@ -25,15 +25,12 @@ unsafe impl Send for Kapc {}
 
 pub struct ApcQueue {
     kernel: VecDeque<Kapc>,
-    user:   VecDeque<Kapc>,
+    user: VecDeque<Kapc>,
 }
 
 impl ApcQueue {
     pub const fn new() -> Self {
-        Self {
-            kernel: VecDeque::new(),
-            user:   VecDeque::new(),
-        }
+        Self { kernel: VecDeque::new(), user: VecDeque::new() }
     }
 
     pub fn enqueue(&mut self, apc: Kapc) {

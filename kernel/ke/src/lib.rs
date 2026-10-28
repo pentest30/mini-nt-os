@@ -17,7 +17,7 @@ pub mod event;
 pub mod scheduler;
 pub mod thread;
 
-pub use event::{KEvent, EventType};
+pub use event::{EventType, KEvent};
 pub use scheduler::Scheduler;
 
 /// Initialise the Ke layer. Called from kernel_main after HAL and Mm.

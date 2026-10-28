@@ -14,29 +14,29 @@
 /// Reference: Geoff Chappell winternl.h / ReactOS include/ndk/pstypes.h
 #[repr(C, packed)]
 pub struct Peb32 {
-    pub inherited_address_space:    u8,         // 0x00
-    pub read_image_file_exec_opts:  u8,         // 0x01
-    pub being_debugged:             u8,         // 0x02  ← IsDebuggerPresent()
-    pub bit_field:                  u8,         // 0x03
-    pub mutant:                     u32,        // 0x04
-    pub image_base_address:         u32,        // 0x08  ← GetModuleHandle(NULL)
-    pub ldr:                        u32,        // 0x0C  → PEB_LDR_DATA *
-    pub process_parameters:         u32,        // 0x10  → RTL_USER_PROCESS_PARAMETERS *
-    pub sub_system_data:            u32,        // 0x14
-    pub process_heap:               u32,        // 0x18  ← GetProcessHeap()
-    pub fast_peb_lock:              u32,        // 0x1C
-    _pad1:                          [u8; 0x54], // 0x20–0x73 (skipped fields)
-    pub os_major_version:           u32,        // 0x74  ← must be 5 (XP)
-    pub os_minor_version:           u32,        // 0x78  ← must be 1 (XP)
-    pub os_build_number:            u16,        // 0x7C  ← 2600 (XP RTM) or 2600 SP3
-    pub os_csd_version:             u16,        // 0x7E
-    pub os_platform_id:             u32,        // 0x80  ← 2 = VER_PLATFORM_WIN32_NT
-    pub image_subsystem:            u32,        // 0x84
-    pub image_subsystem_major_ver:  u32,        // 0x88
-    pub image_subsystem_minor_ver:  u32,        // 0x8C
-    _pad2:                          [u8; 0x14], // 0x90–0xA3
-    pub number_of_processors:       u32,        // 0xA4
-    pub nt_global_flag:             u32,        // 0xA8
+    pub inherited_address_space: u8,    // 0x00
+    pub read_image_file_exec_opts: u8,  // 0x01
+    pub being_debugged: u8,             // 0x02  ← IsDebuggerPresent()
+    pub bit_field: u8,                  // 0x03
+    pub mutant: u32,                    // 0x04
+    pub image_base_address: u32,        // 0x08  ← GetModuleHandle(NULL)
+    pub ldr: u32,                       // 0x0C  → PEB_LDR_DATA *
+    pub process_parameters: u32,        // 0x10  → RTL_USER_PROCESS_PARAMETERS *
+    pub sub_system_data: u32,           // 0x14
+    pub process_heap: u32,              // 0x18  ← GetProcessHeap()
+    pub fast_peb_lock: u32,             // 0x1C
+    _pad1: [u8; 0x54],                  // 0x20–0x73 (skipped fields)
+    pub os_major_version: u32,          // 0x74  ← must be 5 (XP)
+    pub os_minor_version: u32,          // 0x78  ← must be 1 (XP)
+    pub os_build_number: u16,           // 0x7C  ← 2600 (XP RTM) or 2600 SP3
+    pub os_csd_version: u16,            // 0x7E
+    pub os_platform_id: u32,            // 0x80  ← 2 = VER_PLATFORM_WIN32_NT
+    pub image_subsystem: u32,           // 0x84
+    pub image_subsystem_major_ver: u32, // 0x88
+    pub image_subsystem_minor_ver: u32, // 0x8C
+    _pad2: [u8; 0x14],                  // 0x90–0xA3
+    pub number_of_processors: u32,      // 0xA4
+    pub nt_global_flag: u32,            // 0xA8
 }
 
 impl Peb32 {
@@ -45,17 +45,17 @@ impl Peb32 {
     /// `heap_base`  — address of the default process heap.
     pub fn new_xp(image_base: u32, heap_base: u32) -> Self {
         let mut peb: Peb32 = unsafe { core::mem::zeroed() };
-        peb.image_base_address       = image_base;
-        peb.process_heap             = heap_base;
-        peb.os_major_version         = 5;      // Windows XP
-        peb.os_minor_version         = 1;
-        peb.os_build_number          = 2600;   // XP SP2 build
-        peb.os_csd_version           = 0x0200; // Service Pack 2
-        peb.os_platform_id           = 2;      // VER_PLATFORM_WIN32_NT
-        peb.image_subsystem          = 2;      // IMAGE_SUBSYSTEM_WINDOWS_GUI
+        peb.image_base_address = image_base;
+        peb.process_heap = heap_base;
+        peb.os_major_version = 5; // Windows XP
+        peb.os_minor_version = 1;
+        peb.os_build_number = 2600; // XP SP2 build
+        peb.os_csd_version = 0x0200; // Service Pack 2
+        peb.os_platform_id = 2; // VER_PLATFORM_WIN32_NT
+        peb.image_subsystem = 2; // IMAGE_SUBSYSTEM_WINDOWS_GUI
         peb.image_subsystem_major_ver = 4;
         peb.image_subsystem_minor_ver = 0;
-        peb.number_of_processors     = 1;
+        peb.number_of_processors = 1;
         peb
     }
 }

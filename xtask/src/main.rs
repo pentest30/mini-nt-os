@@ -220,11 +220,8 @@ fn build(ws: &Workspace, features: Option<&str>) -> Result<Artifacts> {
 /// Runs cargo in the workspace root and fails if it fails.
 pub fn cargo(ws: &Workspace, args: &[&str]) -> Result<()> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-    let status = Command::new(&cargo)
-        .args(args)
-        .current_dir(&ws.root)
-        .status()
-        .map_err(|e| format!("cannot run cargo: {e}"))?;
+    let status =
+        Command::new(&cargo).args(args).current_dir(&ws.root).status().map_err(|e| format!("cannot run cargo: {e}"))?;
     if status.success() {
         Ok(())
     } else {
@@ -244,9 +241,7 @@ impl Workspace {
             .parent()
             .expect("xtask lives one level below the workspace root")
             .to_path_buf();
-        let target = std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("target"));
+        let target = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root.join("target"));
         Self { root, target }
     }
 }

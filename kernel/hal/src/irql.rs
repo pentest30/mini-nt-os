@@ -32,15 +32,15 @@ use core::sync::atomic::{AtomicU8, Ordering};
 #[repr(u8)]
 pub enum Irql {
     /// Normal thread execution — page faults and heap allocations safe.
-    Passive  = 0,
+    Passive = 0,
     /// APC delivery level — page faults still allowed.
-    Apc      = 1,
+    Apc = 1,
     /// Scheduler / DPC level — NO page faults, NO heap allocations.
     Dispatch = 2,
     /// Device interrupt level (raw values 3–30).
-    Device   = 3,
+    Device = 3,
     /// High level — NMI / machine check, nothing is safe.
-    High     = 31,
+    High = 31,
 }
 
 impl Irql {
@@ -56,11 +56,11 @@ impl Irql {
     #[inline]
     pub const fn from_u8(v: u8) -> Self {
         match v {
-            0      => Irql::Passive,
-            1      => Irql::Apc,
-            2      => Irql::Dispatch,
+            0 => Irql::Passive,
+            1 => Irql::Apc,
+            2 => Irql::Dispatch,
             3..=30 => Irql::Device,
-            _      => Irql::High,
+            _ => Irql::High,
         }
     }
 }
@@ -115,11 +115,7 @@ pub fn current() -> Irql {
 pub fn raise(new_irql: Irql) -> Irql {
     let prev_raw = CURRENT_IRQL.swap(new_irql.as_u8(), Ordering::AcqRel);
     let prev = Irql::from_u8(prev_raw);
-    debug_assert!(
-        new_irql >= prev,
-        "IRQL raise: attempted to lower from {:?} to {:?}",
-        prev, new_irql
-    );
+    debug_assert!(new_irql >= prev, "IRQL raise: attempted to lower from {:?} to {:?}", prev, new_irql);
     // TODO Phase 1: mask via APIC TPR.
     // SAFETY: APIC MMIO is mapped and stable at this point.
     // unsafe { apic_write(APIC_TPR, (new_irql.as_u8() as u32) << 4); }
@@ -138,11 +134,7 @@ pub fn raise(new_irql: Irql) -> Irql {
 #[inline]
 pub fn lower(old_irql: Irql) {
     let cur = Irql::from_u8(CURRENT_IRQL.load(Ordering::Relaxed));
-    debug_assert!(
-        old_irql <= cur,
-        "IRQL lower: target {:?} is above current {:?}",
-        old_irql, cur
-    );
+    debug_assert!(old_irql <= cur, "IRQL lower: target {:?} is above current {:?}", old_irql, cur);
     CURRENT_IRQL.store(old_irql.as_u8(), Ordering::Release);
     // TODO Phase 1: unmask via APIC TPR.
     // SAFETY: APIC MMIO is mapped and stable at this point.

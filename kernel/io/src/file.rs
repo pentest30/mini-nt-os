@@ -5,17 +5,19 @@
 //! holds the actual data.
 
 use alloc::string::String;
-use ob::{ObjectHeader, ObjectType, KernelObject};
+use ob::{KernelObject, ObjectHeader, ObjectType};
 
 pub struct FileObject {
-    pub header:        ObjectHeader,
-    pub path:          String,
+    pub header: ObjectHeader,
+    pub path: String,
     pub current_offset: u64,
-    pub flags:         u32,
+    pub flags: u32,
 }
 
 impl KernelObject for FileObject {
-    fn header(&self) -> &ObjectHeader { &self.header }
+    fn header(&self) -> &ObjectHeader {
+        &self.header
+    }
 }
 
 impl FileObject {

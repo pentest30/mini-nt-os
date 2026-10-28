@@ -6,44 +6,44 @@
 //! # IRQL: PASSIVE_LEVEL
 
 // ── Scale ─────────────────────────────────────────────────────────────────────
-const SC: u32 = 2;          // font pixel scale factor → 16×16 glyphs
-const GW: u32 = 8 * SC;    // glyph width  in screen pixels
-const GH: u32 = 8 * SC;    // glyph height in screen pixels
+const SC: u32 = 2; // font pixel scale factor → 16×16 glyphs
+const GW: u32 = 8 * SC; // glyph width  in screen pixels
+const GH: u32 = 8 * SC; // glyph height in screen pixels
 
 // ── Colours (0x00_RR_GG_BB) ──────────────────────────────────────────────────
 const HEADER_BG: u32 = 0x00_0D_2A_4A; // dark navy
 const HEADER_FG: u32 = 0x00_FF_FF_FF; // white
-const BODY_BG:   u32 = 0x00_08_08_10; // near-black body
+const BODY_BG: u32 = 0x00_08_08_10; // near-black body
 const SELECT_BG: u32 = 0x00_00_5C_9E; // blue highlight
 const SELECT_FG: u32 = 0x00_FF_FF_FF; // white
 const NORMAL_FG: u32 = 0x00_99_AA_BB; // light gray
 const STATUS_BG: u32 = 0x00_0A_0A_14; // dark bar
 const STATUS_FG: u32 = 0x00_55_66_77; // dim gray
 const ACCENT_FG: u32 = 0x00_00_CC_88; // green accent
-const DIM_FG:    u32 = 0x00_44_55_66; // dimmed metadata
+const DIM_FG: u32 = 0x00_44_55_66; // dimmed metadata
 
 // ── Layout (all values in screen pixels) ─────────────────────────────────────
-const PAD:       u32 = 16;
-const HEADER_H:  u32 = GH + PAD * 2; // header bar height
+const PAD: u32 = 16;
+const HEADER_H: u32 = GH + PAD * 2; // header bar height
 const DIVIDER_Y: u32 = HEADER_H;
-const SUBTITLE_Y:u32 = DIVIDER_Y + PAD;
-const LIST_Y:    u32 = SUBTITLE_Y + GH + PAD * 2;
-const ROW_H:     u32 = GH + PAD;     // game row height
-const STATUS_H:  u32 = GH + PAD;     // status bar height
+const SUBTITLE_Y: u32 = DIVIDER_Y + PAD;
+const LIST_Y: u32 = SUBTITLE_Y + GH + PAD * 2;
+const ROW_H: u32 = GH + PAD; // game row height
+const STATUS_H: u32 = GH + PAD; // status bar height
 
 // ── Game registry ─────────────────────────────────────────────────────────────
 struct Game {
-    name:   &'static str,
+    name: &'static str,
     status: &'static str,
-    path:   &'static str,
+    path: &'static str,
 }
 
 static GAMES: &[Game] = &[
-    Game { name: "D3D8 Test (DXVK chain)",  status: "Ready",         path: "/D3D8TEST.EXE"        },
-    Game { name: "Ghost Recon 2001 (GOG)",  status: "Need GOG EXE",  path: "/GHOSTREC.EXE"        },
-    Game { name: "Quake 3 Arena",           status: "Phase 3+",       path: "/GAMES/Q3/Q3.EXE"     },
-    Game { name: "Half-Life 2",             status: "Phase 4 target", path: "/GAMES/HL2/HL2.EXE"   },
-    Game { name: "Halo: Combat Evolved",    status: "Phase 4+",       path: "/GAMES/HALO/HALO.EXE" },
+    Game { name: "D3D8 Test (DXVK chain)", status: "Ready", path: "/D3D8TEST.EXE" },
+    Game { name: "Ghost Recon 2001 (GOG)", status: "Need GOG EXE", path: "/GHOSTREC.EXE" },
+    Game { name: "Quake 3 Arena", status: "Phase 3+", path: "/GAMES/Q3/Q3.EXE" },
+    Game { name: "Half-Life 2", status: "Phase 4 target", path: "/GAMES/HL2/HL2.EXE" },
+    Game { name: "Halo: Combat Evolved", status: "Phase 4+", path: "/GAMES/HALO/HALO.EXE" },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -62,7 +62,9 @@ fn rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
 
 fn repaint(selected: usize) {
     let (w, h) = hal::fb::screen_dims();
-    if w == 0 || h == 0 { return; }
+    if w == 0 || h == 0 {
+        return;
+    }
 
     // ── Background ──────────────────────────────────────────────────────────
     rect(0, 0, w, h, BODY_BG);
@@ -79,7 +81,7 @@ fn repaint(selected: usize) {
 
     // ── Game list ────────────────────────────────────────────────────────────
     for (i, game) in GAMES.iter().enumerate() {
-        let row_y  = LIST_Y + i as u32 * ROW_H;
+        let row_y = LIST_Y + i as u32 * ROW_H;
         let is_sel = i == selected;
         let row_bg = if is_sel { SELECT_BG } else { BODY_BG };
         let row_fg = if is_sel { SELECT_FG } else { NORMAL_FG };
@@ -118,7 +120,9 @@ fn read_key() -> u8 {
             // Key release or unmapped — try again.
             continue;
         }
-        if let Some(b) = hal::serial::try_read_byte() { return b; }
+        if let Some(b) = hal::serial::try_read_byte() {
+            return b;
+        }
         x86_64::instructions::hlt();
     }
 }
@@ -133,9 +137,11 @@ fn read_key() -> u8 {
 #[inline]
 fn drain_input() {
     for _ in 0..32 {
-        let ps2_empty    = hal::ps2::pop_scancode().is_none();
+        let ps2_empty = hal::ps2::pop_scancode().is_none();
         let serial_empty = hal::serial::try_read_byte().is_none();
-        if ps2_empty && serial_empty { break; }
+        if ps2_empty && serial_empty {
+            break;
+        }
     }
 }
 
@@ -174,7 +180,10 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     // Set up PEB/TEB/stack for the game process
     let hhdm_offset = {
         let guard = crate::syscall::syscall_ctx_pub();
-        match guard { Some(h) => h, None => return None }
+        match guard {
+            Some(h) => h,
+            None => return None,
+        }
     };
 
     let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
@@ -186,21 +195,13 @@ fn launch_game(fat_path: &str) -> Option<usize> {
         let opt_off = base as u64 + e_lfanew as u64 + 4 + 20;
         core::ptr::read_unaligned((opt_off + 56) as *const u32)
     };
-    let img = ps::loader::LoadedImage {
-        image_base: base as u64,
-        entry_point: entry_point as u64,
-        image_size,
-    };
+    let img = ps::loader::LoadedImage { image_base: base as u64, entry_point: entry_point as u64, image_size };
 
     // Allocate a fresh VAD for the game process
     let mut vad = mm::vad::VadTree::new();
     // Register the game image region in the VAD so setup_process doesn't conflict
-    use mm::vad::{VadNode, PageProtect};
-    let _ = vad.insert(VadNode::private(
-        base as u64,
-        base as u64 + image_size as u64,
-        PageProtect::EXECUTE_READWRITE,
-    ));
+    use mm::vad::{PageProtect, VadNode};
+    let _ = vad.insert(VadNode::private(base as u64, base as u64 + image_size as u64, PageProtect::EXECUTE_READWRITE));
 
     static GAME_PID: spin::Mutex<u32> = spin::Mutex::new(100);
     let pid = {
@@ -223,11 +224,8 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     // Build a user-mode trampoline page BEFORE installing the VAD.
     let tramp_va = 0x00F0_0000u32;
     {
-        use mm::vad::{VadNode, PageProtect};
-        let _ = vad.insert(VadNode::private(
-            tramp_va as u64, tramp_va as u64 + 0x1000,
-            PageProtect::EXECUTE_READWRITE,
-        ));
+        use mm::vad::{PageProtect, VadNode};
+        let _ = vad.insert(VadNode::private(tramp_va as u64, tramp_va as u64 + 0x1000, PageProtect::EXECUTE_READWRITE));
         use mm::virtual_alloc::PageMapper;
         let _ = mapper.commit_page(tramp_va as u64, true, true, true);
     }
@@ -239,7 +237,7 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     // Skip DllMain — MinGW CRT crashes at 0x11017e during constructor init.
     // The d3d8/d3d9 stubs handle Direct3DCreate8 via COM vtable without DllMain.
     // TODO Phase 4: proper MinGW CRT init (TLS, .CRT$XCA constructors).
-    let dll_entries: alloc::vec::Vec<(u32,u32)> = alloc::vec::Vec::new();
+    let dll_entries: alloc::vec::Vec<(u32, u32)> = alloc::vec::Vec::new();
     let code = tramp_va as *mut u8;
     let mut off = 0usize;
 
@@ -255,28 +253,41 @@ fn launch_game(fat_path: &str) -> Option<usize> {
         // (stdcall: callee cleans 12 bytes)
         unsafe {
             // push 0
-            *code.add(off) = 0x6A; off += 1;
-            *code.add(off) = 0x00; off += 1;
+            *code.add(off) = 0x6A;
+            off += 1;
+            *code.add(off) = 0x00;
+            off += 1;
             // push 1
-            *code.add(off) = 0x6A; off += 1;
-            *code.add(off) = 0x01; off += 1;
+            *code.add(off) = 0x6A;
+            off += 1;
+            *code.add(off) = 0x01;
+            off += 1;
             // push imm32 (dll_base)
-            *code.add(off) = 0x68; off += 1;
-            (code.add(off) as *mut u32).write_unaligned(dll_base); off += 4;
+            *code.add(off) = 0x68;
+            off += 1;
+            (code.add(off) as *mut u32).write_unaligned(dll_base);
+            off += 4;
             // mov eax, imm32 (dll_entry)
-            *code.add(off) = 0xB8; off += 1;
-            (code.add(off) as *mut u32).write_unaligned(dll_entry); off += 4;
+            *code.add(off) = 0xB8;
+            off += 1;
+            (code.add(off) as *mut u32).write_unaligned(dll_entry);
+            off += 4;
             // call eax
-            *code.add(off) = 0xFF; off += 1;
-            *code.add(off) = 0xD0; off += 1;
+            *code.add(off) = 0xFF;
+            off += 1;
+            *code.add(off) = 0xD0;
+            off += 1;
         }
     }
 
     // JMP game_entry (absolute)
     unsafe {
-        *code.add(off) = 0xB8; off += 1;  // MOV EAX, entry_point
-        (code.add(off) as *mut u32).write_unaligned(entry_point); off += 4;
-        *code.add(off) = 0xFF; off += 1;  // JMP EAX
+        *code.add(off) = 0xB8;
+        off += 1; // MOV EAX, entry_point
+        (code.add(off) as *mut u32).write_unaligned(entry_point);
+        off += 4;
+        *code.add(off) = 0xFF;
+        off += 1; // JMP EAX
         *code.add(off) = 0xE0;
     }
 
@@ -289,10 +300,17 @@ fn launch_game(fat_path: &str) -> Option<usize> {
 }
 
 fn serial_write_u32(mut n: u32) {
-    if n == 0 { hal::serial::write_byte(b'0'); return; }
+    if n == 0 {
+        hal::serial::write_byte(b'0');
+        return;
+    }
     let mut buf = [0u8; 10];
     let mut i = buf.len();
-    while n > 0 { i -= 1; buf[i] = b'0' + (n % 10) as u8; n /= 10; }
+    while n > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
     hal::serial::write_str(unsafe { core::str::from_utf8_unchecked(&buf[i..]) });
 }
 
@@ -301,7 +319,14 @@ fn serial_write_hex(n: u32) {
     let mut buf = [0u8; 8];
     let mut v = n;
     let mut i = buf.len();
-    loop { i -= 1; buf[i] = hex[(v & 0xF) as usize]; v >>= 4; if v == 0 || i == 0 { break; } }
+    loop {
+        i -= 1;
+        buf[i] = hex[(v & 0xF) as usize];
+        v >>= 4;
+        if v == 0 || i == 0 {
+            break;
+        }
+    }
     hal::serial::write_str(unsafe { core::str::from_utf8_unchecked(&buf[i..]) });
 }
 
@@ -310,9 +335,11 @@ fn serial_write_hex(n: u32) {
 /// Redraw only a single game row (fast — avoids full-screen repaint).
 fn repaint_row(i: usize, selected: usize) {
     let (w, _) = hal::fb::screen_dims();
-    if w == 0 { return; }
+    if w == 0 {
+        return;
+    }
     let game = &GAMES[i];
-    let row_y  = LIST_Y + i as u32 * ROW_H;
+    let row_y = LIST_Y + i as u32 * ROW_H;
     let is_sel = i == selected;
     let row_bg = if is_sel { SELECT_BG } else { BODY_BG };
     let row_fg = if is_sel { SELECT_FG } else { NORMAL_FG };

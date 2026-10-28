@@ -15,11 +15,11 @@
 //!
 //! WI7e Ch.3 "Trap Dispatching"
 
+use core::sync::atomic::{AtomicU64, Ordering};
+use spin::Once;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
-use spin::Once;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 // Virtual address of TSS.privilege_stack_table[0] in static memory.
 // Written once inside init(); used by set_kernel_stack_top() at runtime.
@@ -49,12 +49,12 @@ pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 // ── Static storage ────────────────────────────────────────────────────────────
 
 static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
-static TSS: Once<TaskStateSegment>                   = Once::new();
+static TSS: Once<TaskStateSegment> = Once::new();
 
 struct Selectors {
     kernel_code: SegmentSelector,
     kernel_data: SegmentSelector,
-    tss:         SegmentSelector,
+    tss: SegmentSelector,
     /// 32-bit ring-3 code segment (L=0, D=1, DPL=3, base=0, limit=4GB).
     user_code32: SegmentSelector,
     /// 32-bit ring-3 data segment (DPL=3, base=0, limit=4GB).
@@ -79,17 +79,13 @@ pub unsafe fn init() {
 
         // RSP0: kernel stack for privilege-level transitions.
         tss.privilege_stack_table[0] = {
-            let top = unsafe {
-                (core::ptr::addr_of_mut!(KERNEL_STACK) as *mut u8).add(16 * 1024)
-            };
+            let top = unsafe { (core::ptr::addr_of_mut!(KERNEL_STACK) as *mut u8).add(16 * 1024) };
             VirtAddr::new(top as u64)
         };
 
         // IST[0]: double-fault stack — survives kernel stack overflow.
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-            let top = unsafe {
-                (core::ptr::addr_of_mut!(DOUBLE_FAULT_STACK) as *mut u8).add(DOUBLE_FAULT_STACK_SIZE)
-            };
+            let top = unsafe { (core::ptr::addr_of_mut!(DOUBLE_FAULT_STACK) as *mut u8).add(DOUBLE_FAULT_STACK_SIZE) };
             VirtAddr::new(top as u64)
         };
 
@@ -102,10 +98,7 @@ pub unsafe fn init() {
     // (4-byte aligned) and creating a reference to a VirtAddr field inside it
     // would be undefined behaviour (misaligned reference).
     // SAFETY: tss is in 'static Once storage — the address is stable forever.
-    TSS_RSP0_VA.store(
-        core::ptr::addr_of!(tss.privilege_stack_table[0]) as u64,
-        Ordering::Relaxed,
-    );
+    TSS_RSP0_VA.store(core::ptr::addr_of!(tss.privilege_stack_table[0]) as u64, Ordering::Relaxed);
 
     let (gdt, sel) = GDT.call_once(|| {
         let mut gdt = GlobalDescriptorTable::new();
@@ -116,15 +109,14 @@ pub unsafe fn init() {
         let user_teb_fs = gdt.append(Descriptor::UserSegment(0x7F40_F2FD_F000_0FFF));
         let tss_sel = gdt.append(Descriptor::tss_segment(tss));
 
-        (gdt, Selectors { kernel_code, kernel_data, tss: tss_sel,
-                          user_code32, user_data32, user_teb_fs })
+        (gdt, Selectors { kernel_code, kernel_data, tss: tss_sel, user_code32, user_data32, user_teb_fs })
     });
 
     gdt.load();
 
     // SAFETY: all selectors belong to the GDT we just loaded above.
     unsafe {
-        use x86_64::instructions::segmentation::{CS, DS, ES, SS, Segment};
+        use x86_64::instructions::segmentation::{Segment, CS, DS, ES, SS};
         use x86_64::instructions::tables::load_tss;
         CS::set_reg(sel.kernel_code);
         SS::set_reg(sel.kernel_data);

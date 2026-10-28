@@ -20,20 +20,20 @@
 
 // ── Compile-time PE32 constants ──────────────────────────────────────────────
 
-pub const IMAGE_DOS_SIGNATURE:    u16 = 0x5A4D; // "MZ"
-pub const IMAGE_NT_SIGNATURE:     u32 = 0x0000_4550; // "PE\0\0"
+pub const IMAGE_DOS_SIGNATURE: u16 = 0x5A4D; // "MZ"
+pub const IMAGE_NT_SIGNATURE: u32 = 0x0000_4550; // "PE\0\0"
 pub const IMAGE_NT_OPTIONAL_HDR32_MAGIC: u16 = 0x010B;
 
 /// IMAGE_FILE_MACHINE_I386
 pub const MACHINE_I386: u16 = 0x014C;
 
 /// Section characteristic flags (matches IMAGE_SCN_* in winnt.h)
-pub const SCN_CNT_CODE:               u32 = 0x0000_0020;
-pub const SCN_CNT_INITIALIZED_DATA:   u32 = 0x0000_0040;
+pub const SCN_CNT_CODE: u32 = 0x0000_0020;
+pub const SCN_CNT_INITIALIZED_DATA: u32 = 0x0000_0040;
 pub const SCN_CNT_UNINITIALIZED_DATA: u32 = 0x0000_0080;
-pub const SCN_MEM_EXECUTE:            u32 = 0x2000_0000;
-pub const SCN_MEM_READ:               u32 = 0x4000_0000;
-pub const SCN_MEM_WRITE:              u32 = 0x8000_0000;
+pub const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+pub const SCN_MEM_READ: u32 = 0x4000_0000;
+pub const SCN_MEM_WRITE: u32 = 0x8000_0000;
 
 // ── Error type ───────────────────────────────────────────────────────────────
 
@@ -54,79 +54,79 @@ pub enum PeError {
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct ImageDosHeader {
-    pub e_magic:    u16,    // 0x00  "MZ"
-    _reserved:      [u8; 0x3A],
-    pub e_lfanew:   u32,    // 0x3C  offset to IMAGE_NT_HEADERS
+    pub e_magic: u16, // 0x00  "MZ"
+    _reserved: [u8; 0x3A],
+    pub e_lfanew: u32, // 0x3C  offset to IMAGE_NT_HEADERS
 }
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct ImageFileHeader {
-    pub machine:                u16,
-    pub number_of_sections:     u16,
-    pub time_date_stamp:        u32,
+    pub machine: u16,
+    pub number_of_sections: u16,
+    pub time_date_stamp: u32,
     pub pointer_to_symbol_table: u32,
-    pub number_of_symbols:      u32,
+    pub number_of_symbols: u32,
     pub size_of_optional_header: u16,
-    pub characteristics:        u16,
+    pub characteristics: u16,
 }
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct ImageOptionalHeader32 {
-    pub magic:                          u16,  // IMAGE_NT_OPTIONAL_HDR32_MAGIC
-    pub major_linker_version:           u8,
-    pub minor_linker_version:           u8,
-    pub size_of_code:                   u32,
-    pub size_of_initialized_data:       u32,
-    pub size_of_uninitialized_data:     u32,
-    pub address_of_entry_point:         u32,  // RVA
-    pub base_of_code:                   u32,
-    pub base_of_data:                   u32,
-    pub image_base:                     u32,
-    pub section_alignment:              u32,
-    pub file_alignment:                 u32,
-    pub major_os_version:               u16,
-    pub minor_os_version:               u16,
-    pub major_image_version:            u16,
-    pub minor_image_version:            u16,
-    pub major_subsystem_version:        u16,
-    pub minor_subsystem_version:        u16,
-    pub win32_version_value:            u32,
-    pub size_of_image:                  u32,
-    pub size_of_headers:                u32,
-    pub checksum:                       u32,
-    pub subsystem:                      u16,
-    pub dll_characteristics:            u16,
-    pub size_of_stack_reserve:          u32,
-    pub size_of_stack_commit:           u32,
-    pub size_of_heap_reserve:           u32,
-    pub size_of_heap_commit:            u32,
-    pub loader_flags:                   u32,
-    pub number_of_rva_and_sizes:        u32,
-    pub data_directory:                 [ImageDataDirectory; 16],
+    pub magic: u16, // IMAGE_NT_OPTIONAL_HDR32_MAGIC
+    pub major_linker_version: u8,
+    pub minor_linker_version: u8,
+    pub size_of_code: u32,
+    pub size_of_initialized_data: u32,
+    pub size_of_uninitialized_data: u32,
+    pub address_of_entry_point: u32, // RVA
+    pub base_of_code: u32,
+    pub base_of_data: u32,
+    pub image_base: u32,
+    pub section_alignment: u32,
+    pub file_alignment: u32,
+    pub major_os_version: u16,
+    pub minor_os_version: u16,
+    pub major_image_version: u16,
+    pub minor_image_version: u16,
+    pub major_subsystem_version: u16,
+    pub minor_subsystem_version: u16,
+    pub win32_version_value: u32,
+    pub size_of_image: u32,
+    pub size_of_headers: u32,
+    pub checksum: u32,
+    pub subsystem: u16,
+    pub dll_characteristics: u16,
+    pub size_of_stack_reserve: u32,
+    pub size_of_stack_commit: u32,
+    pub size_of_heap_reserve: u32,
+    pub size_of_heap_commit: u32,
+    pub loader_flags: u32,
+    pub number_of_rva_and_sizes: u32,
+    pub data_directory: [ImageDataDirectory; 16],
 }
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ImageDataDirectory {
     pub virtual_address: u32, // RVA
-    pub size:            u32,
+    pub size: u32,
 }
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct ImageSectionHeader {
-    pub name:                     [u8; 8],
-    pub virtual_size:             u32,
-    pub virtual_address:          u32,   // RVA
-    pub size_of_raw_data:         u32,
-    pub pointer_to_raw_data:      u32,   // file offset
-    pub pointer_to_relocations:   u32,
-    pub pointer_to_linenumbers:   u32,
-    pub number_of_relocations:    u16,
-    pub number_of_linenumbers:    u16,
-    pub characteristics:          u32,
+    pub name: [u8; 8],
+    pub virtual_size: u32,
+    pub virtual_address: u32, // RVA
+    pub size_of_raw_data: u32,
+    pub pointer_to_raw_data: u32, // file offset
+    pub pointer_to_relocations: u32,
+    pub pointer_to_linenumbers: u32,
+    pub number_of_relocations: u16,
+    pub number_of_linenumbers: u16,
+    pub characteristics: u32,
 }
 
 impl ImageSectionHeader {
@@ -147,11 +147,11 @@ impl ImageSectionHeader {
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct ImageImportDescriptor {
-    pub original_first_thunk: u32,  // RVA to INT (Import Name Table)
-    pub time_date_stamp:      u32,
-    pub forwarder_chain:      u32,
-    pub name:                 u32,  // RVA to DLL name string
-    pub first_thunk:          u32,  // RVA to IAT (Import Address Table)
+    pub original_first_thunk: u32, // RVA to INT (Import Name Table)
+    pub time_date_stamp: u32,
+    pub forwarder_chain: u32,
+    pub name: u32,        // RVA to DLL name string
+    pub first_thunk: u32, // RVA to IAT (Import Address Table)
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────────
@@ -161,8 +161,8 @@ pub struct ImageImportDescriptor {
 /// All data is borrowed from the backing byte slice — no allocations.
 #[derive(Debug)]
 pub struct Pe32<'a> {
-    data:     &'a [u8],
-    nt_off:   usize,         // offset of IMAGE_NT_HEADERS in data
+    data: &'a [u8],
+    nt_off: usize, // offset of IMAGE_NT_HEADERS in data
 }
 
 impl<'a> Pe32<'a> {
@@ -199,18 +199,20 @@ impl<'a> Pe32<'a> {
         Ok(Self { data, nt_off })
     }
 
-    fn file_header_offset(&self) -> usize { self.nt_off + 4 }
-    fn opt_header_offset(&self)  -> usize { self.nt_off + 4 + core::mem::size_of::<ImageFileHeader>() }
+    fn file_header_offset(&self) -> usize {
+        self.nt_off + 4
+    }
+    fn opt_header_offset(&self) -> usize {
+        self.nt_off + 4 + core::mem::size_of::<ImageFileHeader>()
+    }
     fn section_table_offset(&self) -> usize {
         // Read size_of_optional_header directly to avoid packed-struct field-access UB.
-        let opt_sz = read_u16(self.data, self.file_header_offset() + 16)
-            .unwrap_or(0) as usize;
+        let opt_sz = read_u16(self.data, self.file_header_offset() + 16).unwrap_or(0) as usize;
         self.opt_header_offset() + opt_sz
     }
 
     pub fn file_header(&self) -> ImageFileHeader {
-        read_struct::<ImageFileHeader>(self.data, self.file_header_offset())
-            .expect("file_header: already validated")
+        read_struct::<ImageFileHeader>(self.data, self.file_header_offset()).expect("file_header: already validated")
     }
 
     pub fn optional_header(&self) -> ImageOptionalHeader32 {
@@ -221,10 +223,9 @@ impl<'a> Pe32<'a> {
     /// Iterator over section headers.
     pub fn sections(&self) -> impl Iterator<Item = ImageSectionHeader> + '_ {
         // Read number_of_sections directly from image bytes to avoid packed-struct UB.
-        let n     = read_u16(self.data, self.file_header_offset() + 2)
-            .unwrap_or(0) as usize;
-        let base  = self.section_table_offset();
-        let sz    = core::mem::size_of::<ImageSectionHeader>();
+        let n = read_u16(self.data, self.file_header_offset() + 2).unwrap_or(0) as usize;
+        let base = self.section_table_offset();
+        let sz = core::mem::size_of::<ImageSectionHeader>();
         (0..n).filter_map(move |i| read_struct::<ImageSectionHeader>(self.data, base + i * sz).ok())
     }
 
@@ -232,13 +233,9 @@ impl<'a> Pe32<'a> {
     pub fn imports(&self) -> impl Iterator<Item = ImportEntry<'_>> + '_ {
         let opt = self.optional_header();
         // Directory entry 1 = import table
-        let dir = if opt.number_of_rva_and_sizes > 1 {
-            opt.data_directory[1]
-        } else {
-            ImageDataDirectory::default()
-        };
+        let dir = if opt.number_of_rva_and_sizes > 1 { opt.data_directory[1] } else { ImageDataDirectory::default() };
 
-        let rva  = dir.virtual_address;
+        let rva = dir.virtual_address;
         let data = self.data;
         let base = self.nt_off; // unused; rva is absolute from image base
         let _ = base;
@@ -250,9 +247,9 @@ impl<'a> Pe32<'a> {
 /// A single import descriptor (one DLL worth of imports).
 pub struct ImportEntry<'a> {
     pub dll_name_rva: u32,
-    pub int_rva:      u32,  // Import Name Table RVA
-    pub iat_rva:      u32,  // Import Address Table RVA
-    data:             &'a [u8],
+    pub int_rva: u32, // Import Name Table RVA
+    pub iat_rva: u32, // Import Address Table RVA
+    data: &'a [u8],
 }
 
 impl<'a> ImportEntry<'a> {
@@ -263,29 +260,33 @@ impl<'a> ImportEntry<'a> {
 }
 
 struct ImportIter<'a> {
-    data:        &'a [u8],
-    rva:         u32,     // RVA of the first IMAGE_IMPORT_DESCRIPTOR
-    index:       usize,
+    data: &'a [u8],
+    rva: u32, // RVA of the first IMAGE_IMPORT_DESCRIPTOR
+    index: usize,
 }
 
 impl<'a> Iterator for ImportIter<'a> {
     type Item = ImportEntry<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.rva == 0 { return None; }
+        if self.rva == 0 {
+            return None;
+        }
         let base_off = rva_to_file_offset(self.data, self.rva)?;
         let off = base_off + self.index * core::mem::size_of::<ImageImportDescriptor>();
         let desc = read_struct::<ImageImportDescriptor>(self.data, off).ok()?;
         // The list ends at the first descriptor without a name or an IAT, as
         // in the ReactOS and Wine loaders. This covers the all-zero terminator
         // and a terminator overlapped by the next table.
-        if desc.name == 0 || desc.first_thunk == 0 { return None; }
+        if desc.name == 0 || desc.first_thunk == 0 {
+            return None;
+        }
         self.index += 1;
         Some(ImportEntry {
             dll_name_rva: desc.name,
-            int_rva:      desc.original_first_thunk,
-            iat_rva:      desc.first_thunk,
-            data:         self.data,
+            int_rva: desc.original_first_thunk,
+            iat_rva: desc.first_thunk,
+            data: self.data,
         })
     }
 }
@@ -296,21 +297,27 @@ impl<'a> Iterator for ImportIter<'a> {
 /// Falls back to `rva as usize` for the PE header range (RVA < first section VA).
 fn rva_to_file_offset(data: &[u8], rva: u32) -> Option<usize> {
     // Parse e_lfanew to locate the section table.
-    if data.len() < 0x40 { return None; }
+    if data.len() < 0x40 {
+        return None;
+    }
     let e_lfanew = u32::from_le_bytes(data.get(0x3C..0x40)?.try_into().ok()?) as usize;
     // FileHeader at e_lfanew+4; n_sections at +2, size_of_optional_header at +16.
-    if e_lfanew + 4 + 20 > data.len() { return None; }
-    let n_sec  = u16::from_le_bytes(data.get(e_lfanew+4+2..e_lfanew+4+4)?.try_into().ok()?) as usize;
-    let opt_sz = u16::from_le_bytes(data.get(e_lfanew+4+16..e_lfanew+4+18)?.try_into().ok()?) as usize;
+    if e_lfanew + 4 + 20 > data.len() {
+        return None;
+    }
+    let n_sec = u16::from_le_bytes(data.get(e_lfanew + 4 + 2..e_lfanew + 4 + 4)?.try_into().ok()?) as usize;
+    let opt_sz = u16::from_le_bytes(data.get(e_lfanew + 4 + 16..e_lfanew + 4 + 18)?.try_into().ok()?) as usize;
     let sec_table = e_lfanew + 4 + 20 + opt_sz;
     // Each IMAGE_SECTION_HEADER is 40 bytes.
     for i in 0..n_sec {
         let sh = sec_table + i * 40;
-        if sh + 40 > data.len() { break; }
-        let vsz    = u32::from_le_bytes(data[sh+8 ..sh+12].try_into().ok()?) as usize;
-        let va     = u32::from_le_bytes(data[sh+12..sh+16].try_into().ok()?) as usize;
-        let raw_sz = u32::from_le_bytes(data[sh+16..sh+20].try_into().ok()?) as usize;
-        let raw_off= u32::from_le_bytes(data[sh+20..sh+24].try_into().ok()?) as usize;
+        if sh + 40 > data.len() {
+            break;
+        }
+        let vsz = u32::from_le_bytes(data[sh + 8..sh + 12].try_into().ok()?) as usize;
+        let va = u32::from_le_bytes(data[sh + 12..sh + 16].try_into().ok()?) as usize;
+        let raw_sz = u32::from_le_bytes(data[sh + 16..sh + 20].try_into().ok()?) as usize;
+        let raw_off = u32::from_le_bytes(data[sh + 20..sh + 24].try_into().ok()?) as usize;
         let extent = vsz.max(raw_sz);
         if rva as usize >= va && (rva as usize) < va + extent {
             return Some(raw_off + (rva as usize - va));
@@ -322,27 +329,35 @@ fn rva_to_file_offset(data: &[u8], rva: u32) -> Option<usize> {
 
 fn read_struct<T: Copy>(data: &[u8], off: usize) -> Result<T, PeError> {
     let sz = core::mem::size_of::<T>();
-    if off + sz > data.len() { return Err(PeError::OffsetOutOfRange); }
+    if off + sz > data.len() {
+        return Err(PeError::OffsetOutOfRange);
+    }
     // SAFETY: bounds checked above; T is repr(C, packed) — any bit pattern valid.
     Ok(unsafe { core::ptr::read_unaligned(data.as_ptr().add(off) as *const T) })
 }
 
 fn read_u32(data: &[u8], off: usize) -> Result<u32, PeError> {
-    if off + 4 > data.len() { return Err(PeError::OffsetOutOfRange); }
-    Ok(u32::from_le_bytes(data[off..off+4].try_into().unwrap()))
+    if off + 4 > data.len() {
+        return Err(PeError::OffsetOutOfRange);
+    }
+    Ok(u32::from_le_bytes(data[off..off + 4].try_into().unwrap()))
 }
 
 fn read_u16(data: &[u8], off: usize) -> Result<u16, PeError> {
-    if off + 2 > data.len() { return Err(PeError::OffsetOutOfRange); }
-    Ok(u16::from_le_bytes(data[off..off+2].try_into().unwrap()))
+    if off + 2 > data.len() {
+        return Err(PeError::OffsetOutOfRange);
+    }
+    Ok(u16::from_le_bytes(data[off..off + 2].try_into().unwrap()))
 }
 
 /// Read a NUL-terminated ASCII string from a PE RVA (file offset resolved via section table).
 fn rva_to_str(data: &[u8], rva: u32) -> Option<&str> {
     let off = rva_to_file_offset(data, rva)?;
-    if off >= data.len() { return None; }
+    if off >= data.len() {
+        return None;
+    }
     let end = data[off..].iter().position(|&b| b == 0).unwrap_or(0);
-    core::str::from_utf8(&data[off..off+end]).ok()
+    core::str::from_utf8(&data[off..off + end]).ok()
 }
 
 /// Reads a NUL-terminated string of at most `max` bytes (and 256) at `ptr`.
@@ -370,10 +385,7 @@ fn eq_ascii_nocase(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.as_bytes()
-        .iter()
-        .zip(b.as_bytes().iter())
-        .all(|(x, y)| fold_ascii_lower(*x) == fold_ascii_lower(*y))
+    a.as_bytes().iter().zip(b.as_bytes().iter()).all(|(x, y)| fold_ascii_lower(*x) == fold_ascii_lower(*y))
 }
 
 struct StubExport {
@@ -393,258 +405,258 @@ struct StubModule {
 
 // ntdll stubs use SYSENTER (21 bytes each) — spaced 0x20 to avoid overlap.
 const STUB_EXPORTS_NTDLL: &[StubExport] = &[
-    StubExport { name: "NtWriteFile",                rva: 0x1000 },
-    StubExport { name: "NtAllocateVirtualMemory",    rva: 0x1020 },
-    StubExport { name: "NtTerminateProcess",         rva: 0x1040 },
-    StubExport { name: "NtCreateProcess",            rva: 0x1060 },
-    StubExport { name: "NtCreateThread",             rva: 0x1080 },
+    StubExport { name: "NtWriteFile", rva: 0x1000 },
+    StubExport { name: "NtAllocateVirtualMemory", rva: 0x1020 },
+    StubExport { name: "NtTerminateProcess", rva: 0x1040 },
+    StubExport { name: "NtCreateProcess", rva: 0x1060 },
+    StubExport { name: "NtCreateThread", rva: 0x1080 },
 ];
 
 const STUB_EXPORTS_KERNEL32: &[StubExport] = &[
-    StubExport { name: "GetTickCount",               rva: 0x1000 },
-    StubExport { name: "Sleep",                      rva: 0x1010 },
-    StubExport { name: "VirtualAlloc",               rva: 0x1020 },
-    StubExport { name: "VirtualFree",                rva: 0x1030 },
-    StubExport { name: "VirtualProtect",             rva: 0x1040 },
-    StubExport { name: "GetProcAddress",             rva: 0x1050 },
-    StubExport { name: "GetModuleHandleA",           rva: 0x1060 },
-    StubExport { name: "ExitProcess",                rva: 0x1070 },
-    StubExport { name: "TlsAlloc",                   rva: 0x1080 },
-    StubExport { name: "TlsFree",                    rva: 0x1090 },
-    StubExport { name: "TlsGetValue",                rva: 0x10A0 },
-    StubExport { name: "TlsSetValue",                rva: 0x10B0 },
-    StubExport { name: "InitializeCriticalSection",  rva: 0x10C0 },
-    StubExport { name: "EnterCriticalSection",       rva: 0x10D0 },
-    StubExport { name: "LeaveCriticalSection",       rva: 0x10E0 },
-    StubExport { name: "DeleteCriticalSection",      rva: 0x10F0 },
-    StubExport { name: "TryEnterCriticalSection",    rva: 0x1100 },
-    StubExport { name: "AcquireSRWLockExclusive",    rva: 0x1110 },
-    StubExport { name: "ReleaseSRWLockExclusive",    rva: 0x1120 },
-    StubExport { name: "InitializeConditionVariable",rva: 0x1130 },
-    StubExport { name: "SleepConditionVariableSRW",  rva: 0x1140 },
-    StubExport { name: "WakeAllConditionVariable",   rva: 0x1150 },
-    StubExport { name: "WakeConditionVariable",      rva: 0x1160 },
-    StubExport { name: "GetModuleHandleW",           rva: 0x1170 },
-    StubExport { name: "GetModuleHandleExA",         rva: 0x1180 },
-    StubExport { name: "LoadLibraryA",               rva: 0x1190 },
-    StubExport { name: "FreeLibrary",                rva: 0x11A0 },
-    StubExport { name: "GetSystemInfo",              rva: 0x11B0 },
-    StubExport { name: "GetTickCount64",             rva: 0x11C0 },
-    StubExport { name: "CreateThread",               rva: 0x11D0 },
-    StubExport { name: "GetCurrentProcess",          rva: 0x11E0 },
-    StubExport { name: "GetCurrentThread",           rva: 0x11F0 },
-    StubExport { name: "GetCurrentProcessId",        rva: 0x1200 },
-    StubExport { name: "GetCurrentThreadId",         rva: 0x1210 },
-    StubExport { name: "WaitForMultipleObjects",     rva: 0x1220 },
-    StubExport { name: "WaitForSingleObjectEx",      rva: 0x1230 },
-    StubExport { name: "WaitForSingleObject",        rva: 0x1240 },
-    StubExport { name: "CloseHandle",                rva: 0x1250 },
-    StubExport { name: "CreateEventA",               rva: 0x1260 },
-    StubExport { name: "SetEvent",                   rva: 0x1270 },
-    StubExport { name: "ResetEvent",                 rva: 0x1280 },
-    StubExport { name: "CreateSemaphoreA",           rva: 0x1290 },
-    StubExport { name: "ReleaseSemaphore",           rva: 0x12A0 },
-    StubExport { name: "DuplicateHandle",            rva: 0x12B0 },
-    StubExport { name: "CreateFileMappingA",         rva: 0x12C0 },
-    StubExport { name: "MapViewOfFile",              rva: 0x12D0 },
-    StubExport { name: "UnmapViewOfFile",            rva: 0x12E0 },
-    StubExport { name: "GetTempPathA",               rva: 0x12F0 },
-    StubExport { name: "GetTempFileNameA",           rva: 0x1300 },
-    StubExport { name: "OutputDebugStringA",         rva: 0x1310 },
-    StubExport { name: "FormatMessageA",             rva: 0x1320 },
-    StubExport { name: "VirtualQuery",               rva: 0x1330 },
-    StubExport { name: "GetModuleFileNameW",         rva: 0x1340 },
-    StubExport { name: "IsDebuggerPresent",          rva: 0x1350 },
-    StubExport { name: "OpenProcess",                rva: 0x1360 },
-    StubExport { name: "QueryPerformanceCounter",    rva: 0x1370 },
-    StubExport { name: "QueryPerformanceFrequency",  rva: 0x1380 },
-    StubExport { name: "RaiseException",             rva: 0x1390 },
-    StubExport { name: "HeapAlloc",                  rva: 0x13A0 },
-    StubExport { name: "HeapFree",                   rva: 0x13B0 },
-    StubExport { name: "GetProcessHeap",             rva: 0x13C0 },
-    StubExport { name: "LocalFree",                  rva: 0x13D0 },
-    StubExport { name: "GetLastError",               rva: 0x13E0 },
-    StubExport { name: "SetLastError",               rva: 0x13F0 },
-    StubExport { name: "GetEnvironmentVariableW",    rva: 0x1400 },
-    StubExport { name: "GetHandleInformation",       rva: 0x1410 },
-    StubExport { name: "SuspendThread",              rva: 0x1420 },
-    StubExport { name: "ResumeThread",               rva: 0x1430 },
-    StubExport { name: "GetThreadPriority",          rva: 0x1440 },
-    StubExport { name: "SetThreadPriority",          rva: 0x1450 },
-    StubExport { name: "GetThreadContext",           rva: 0x1460 },
-    StubExport { name: "SetThreadContext",           rva: 0x1470 },
-    StubExport { name: "SwitchToThread",             rva: 0x1480 },
-    StubExport { name: "SetProcessAffinityMask",     rva: 0x1490 },
-    StubExport { name: "GetProcessAffinityMask",     rva: 0x14A0 },
-    StubExport { name: "DeviceIoControl",            rva: 0x14B0 },
-    StubExport { name: "CreateDirectoryW",           rva: 0x14C0 },
-    StubExport { name: "CreateFileA",                rva: 0x14D0 },
-    StubExport { name: "LocalAlloc",                 rva: 0x14E0 },
-    StubExport { name: "GetSystemTimeAsFileTime",    rva: 0x14F0 },
-    StubExport { name: "GlobalAlloc",                rva: 0x1500 },
-    StubExport { name: "GlobalFree",                 rva: 0x1510 },
+    StubExport { name: "GetTickCount", rva: 0x1000 },
+    StubExport { name: "Sleep", rva: 0x1010 },
+    StubExport { name: "VirtualAlloc", rva: 0x1020 },
+    StubExport { name: "VirtualFree", rva: 0x1030 },
+    StubExport { name: "VirtualProtect", rva: 0x1040 },
+    StubExport { name: "GetProcAddress", rva: 0x1050 },
+    StubExport { name: "GetModuleHandleA", rva: 0x1060 },
+    StubExport { name: "ExitProcess", rva: 0x1070 },
+    StubExport { name: "TlsAlloc", rva: 0x1080 },
+    StubExport { name: "TlsFree", rva: 0x1090 },
+    StubExport { name: "TlsGetValue", rva: 0x10A0 },
+    StubExport { name: "TlsSetValue", rva: 0x10B0 },
+    StubExport { name: "InitializeCriticalSection", rva: 0x10C0 },
+    StubExport { name: "EnterCriticalSection", rva: 0x10D0 },
+    StubExport { name: "LeaveCriticalSection", rva: 0x10E0 },
+    StubExport { name: "DeleteCriticalSection", rva: 0x10F0 },
+    StubExport { name: "TryEnterCriticalSection", rva: 0x1100 },
+    StubExport { name: "AcquireSRWLockExclusive", rva: 0x1110 },
+    StubExport { name: "ReleaseSRWLockExclusive", rva: 0x1120 },
+    StubExport { name: "InitializeConditionVariable", rva: 0x1130 },
+    StubExport { name: "SleepConditionVariableSRW", rva: 0x1140 },
+    StubExport { name: "WakeAllConditionVariable", rva: 0x1150 },
+    StubExport { name: "WakeConditionVariable", rva: 0x1160 },
+    StubExport { name: "GetModuleHandleW", rva: 0x1170 },
+    StubExport { name: "GetModuleHandleExA", rva: 0x1180 },
+    StubExport { name: "LoadLibraryA", rva: 0x1190 },
+    StubExport { name: "FreeLibrary", rva: 0x11A0 },
+    StubExport { name: "GetSystemInfo", rva: 0x11B0 },
+    StubExport { name: "GetTickCount64", rva: 0x11C0 },
+    StubExport { name: "CreateThread", rva: 0x11D0 },
+    StubExport { name: "GetCurrentProcess", rva: 0x11E0 },
+    StubExport { name: "GetCurrentThread", rva: 0x11F0 },
+    StubExport { name: "GetCurrentProcessId", rva: 0x1200 },
+    StubExport { name: "GetCurrentThreadId", rva: 0x1210 },
+    StubExport { name: "WaitForMultipleObjects", rva: 0x1220 },
+    StubExport { name: "WaitForSingleObjectEx", rva: 0x1230 },
+    StubExport { name: "WaitForSingleObject", rva: 0x1240 },
+    StubExport { name: "CloseHandle", rva: 0x1250 },
+    StubExport { name: "CreateEventA", rva: 0x1260 },
+    StubExport { name: "SetEvent", rva: 0x1270 },
+    StubExport { name: "ResetEvent", rva: 0x1280 },
+    StubExport { name: "CreateSemaphoreA", rva: 0x1290 },
+    StubExport { name: "ReleaseSemaphore", rva: 0x12A0 },
+    StubExport { name: "DuplicateHandle", rva: 0x12B0 },
+    StubExport { name: "CreateFileMappingA", rva: 0x12C0 },
+    StubExport { name: "MapViewOfFile", rva: 0x12D0 },
+    StubExport { name: "UnmapViewOfFile", rva: 0x12E0 },
+    StubExport { name: "GetTempPathA", rva: 0x12F0 },
+    StubExport { name: "GetTempFileNameA", rva: 0x1300 },
+    StubExport { name: "OutputDebugStringA", rva: 0x1310 },
+    StubExport { name: "FormatMessageA", rva: 0x1320 },
+    StubExport { name: "VirtualQuery", rva: 0x1330 },
+    StubExport { name: "GetModuleFileNameW", rva: 0x1340 },
+    StubExport { name: "IsDebuggerPresent", rva: 0x1350 },
+    StubExport { name: "OpenProcess", rva: 0x1360 },
+    StubExport { name: "QueryPerformanceCounter", rva: 0x1370 },
+    StubExport { name: "QueryPerformanceFrequency", rva: 0x1380 },
+    StubExport { name: "RaiseException", rva: 0x1390 },
+    StubExport { name: "HeapAlloc", rva: 0x13A0 },
+    StubExport { name: "HeapFree", rva: 0x13B0 },
+    StubExport { name: "GetProcessHeap", rva: 0x13C0 },
+    StubExport { name: "LocalFree", rva: 0x13D0 },
+    StubExport { name: "GetLastError", rva: 0x13E0 },
+    StubExport { name: "SetLastError", rva: 0x13F0 },
+    StubExport { name: "GetEnvironmentVariableW", rva: 0x1400 },
+    StubExport { name: "GetHandleInformation", rva: 0x1410 },
+    StubExport { name: "SuspendThread", rva: 0x1420 },
+    StubExport { name: "ResumeThread", rva: 0x1430 },
+    StubExport { name: "GetThreadPriority", rva: 0x1440 },
+    StubExport { name: "SetThreadPriority", rva: 0x1450 },
+    StubExport { name: "GetThreadContext", rva: 0x1460 },
+    StubExport { name: "SetThreadContext", rva: 0x1470 },
+    StubExport { name: "SwitchToThread", rva: 0x1480 },
+    StubExport { name: "SetProcessAffinityMask", rva: 0x1490 },
+    StubExport { name: "GetProcessAffinityMask", rva: 0x14A0 },
+    StubExport { name: "DeviceIoControl", rva: 0x14B0 },
+    StubExport { name: "CreateDirectoryW", rva: 0x14C0 },
+    StubExport { name: "CreateFileA", rva: 0x14D0 },
+    StubExport { name: "LocalAlloc", rva: 0x14E0 },
+    StubExport { name: "GetSystemTimeAsFileTime", rva: 0x14F0 },
+    StubExport { name: "GlobalAlloc", rva: 0x1500 },
+    StubExport { name: "GlobalFree", rva: 0x1510 },
     // ── Ghost Recon CRT / kernel32 imports ─────────────────────────────────
-    StubExport { name: "GlobalMemoryStatus",         rva: 0x1520 },
-    StubExport { name: "SetCurrentDirectoryA",       rva: 0x1530 },
-    StubExport { name: "GetModuleFileNameA",         rva: 0x1540 },
-    StubExport { name: "MultiByteToWideChar",        rva: 0x1550 },
-    StubExport { name: "GetVersionExA",              rva: 0x1560 },
-    StubExport { name: "lstrcpyA",                   rva: 0x1570 },
-    StubExport { name: "GetCurrentDirectoryA",       rva: 0x1580 },
-    StubExport { name: "CreateDirectoryA",           rva: 0x1590 },
-    StubExport { name: "VirtualQueryEx",             rva: 0x15A0 },
-    StubExport { name: "lstrcatA",                   rva: 0x15B0 },
-    StubExport { name: "lstrcpynA",                  rva: 0x15C0 },
-    StubExport { name: "lstrlenA",                   rva: 0x15D0 },
-    StubExport { name: "WriteFile",                  rva: 0x15E0 },
-    StubExport { name: "SetFilePointer",             rva: 0x15F0 },
-    StubExport { name: "GetFileTime",                rva: 0x1600 },
-    StubExport { name: "GetFileSize",                rva: 0x1610 },
-    StubExport { name: "FileTimeToDosDateTime",      rva: 0x1620 },
-    StubExport { name: "FileTimeToLocalFileTime",    rva: 0x1630 },
-    StubExport { name: "FindClose",                  rva: 0x1640 },
-    StubExport { name: "DeleteFileA",                rva: 0x1650 },
-    StubExport { name: "FindFirstFileA",             rva: 0x1660 },
-    StubExport { name: "FindNextFileA",              rva: 0x1670 },
-    StubExport { name: "GetFileAttributesA",         rva: 0x1680 },
-    StubExport { name: "GetVolumeInformationA",      rva: 0x1690 },
-    StubExport { name: "GetDriveTypeA",              rva: 0x16A0 },
-    StubExport { name: "GetLogicalDriveStringsA",    rva: 0x16B0 },
-    StubExport { name: "GetFullPathNameA",           rva: 0x16C0 },
-    StubExport { name: "CreateProcessA",             rva: 0x16D0 },
-    StubExport { name: "InterlockedExchange",        rva: 0x16E0 },
-    StubExport { name: "InterlockedDecrement",       rva: 0x16F0 },
-    StubExport { name: "InterlockedIncrement",       rva: 0x1700 },
-    StubExport { name: "CompareStringA",             rva: 0x1710 },
-    StubExport { name: "CompareStringW",             rva: 0x1720 },
-    StubExport { name: "ExitThread",                 rva: 0x1730 },
-    StubExport { name: "FileTimeToSystemTime",       rva: 0x1740 },
-    StubExport { name: "FlushFileBuffers",           rva: 0x1750 },
-    StubExport { name: "FreeEnvironmentStringsA",    rva: 0x1760 },
-    StubExport { name: "FreeEnvironmentStringsW",    rva: 0x1770 },
-    StubExport { name: "GetACP",                     rva: 0x1780 },
-    StubExport { name: "GetCPInfo",                  rva: 0x1790 },
-    StubExport { name: "GetCommandLineA",            rva: 0x17A0 },
-    StubExport { name: "GetEnvironmentStrings",      rva: 0x17B0 },
-    StubExport { name: "GetEnvironmentStringsW",     rva: 0x17C0 },
-    StubExport { name: "GetEnvironmentVariableA",    rva: 0x17D0 },
-    StubExport { name: "GetFileType",                rva: 0x17E0 },
-    StubExport { name: "GetLocalTime",               rva: 0x17F0 },
-    StubExport { name: "GetLocaleInfoA",             rva: 0x1800 },
-    StubExport { name: "GetLocaleInfoW",             rva: 0x1810 },
-    StubExport { name: "GetOEMCP",                   rva: 0x1820 },
-    StubExport { name: "GetStartupInfoA",            rva: 0x1830 },
-    StubExport { name: "GetStdHandle",               rva: 0x1840 },
-    StubExport { name: "GetStringTypeA",             rva: 0x1850 },
-    StubExport { name: "GetStringTypeW",             rva: 0x1860 },
-    StubExport { name: "GetSystemTime",              rva: 0x1870 },
-    StubExport { name: "GetTimeZoneInformation",     rva: 0x1880 },
-    StubExport { name: "GetUserDefaultLCID",         rva: 0x1890 },
-    StubExport { name: "GetVersion",                 rva: 0x18A0 },
-    StubExport { name: "HeapCreate",                 rva: 0x18B0 },
-    StubExport { name: "HeapDestroy",                rva: 0x18C0 },
-    StubExport { name: "HeapReAlloc",                rva: 0x18D0 },
-    StubExport { name: "HeapSize",                   rva: 0x18E0 },
-    StubExport { name: "IsBadCodePtr",               rva: 0x18F0 },
-    StubExport { name: "IsBadReadPtr",               rva: 0x1900 },
-    StubExport { name: "IsBadWritePtr",              rva: 0x1910 },
-    StubExport { name: "IsValidCodePage",            rva: 0x1920 },
-    StubExport { name: "IsValidLocale",              rva: 0x1930 },
-    StubExport { name: "LCMapStringA",               rva: 0x1940 },
-    StubExport { name: "LCMapStringW",               rva: 0x1950 },
-    StubExport { name: "MoveFileA",                  rva: 0x1960 },
-    StubExport { name: "MulDiv",                     rva: 0x1970 },
-    StubExport { name: "ReadFile",                   rva: 0x1980 },
-    StubExport { name: "RtlUnwind",                  rva: 0x1990 },
-    StubExport { name: "SetEndOfFile",               rva: 0x19A0 },
-    StubExport { name: "SetEnvironmentVariableA",    rva: 0x19B0 },
-    StubExport { name: "SetHandleCount",             rva: 0x19C0 },
-    StubExport { name: "SetStdHandle",               rva: 0x19D0 },
-    StubExport { name: "SetUnhandledExceptionFilter",rva: 0x19E0 },
-    StubExport { name: "TerminateProcess",           rva: 0x19F0 },
-    StubExport { name: "UnhandledExceptionFilter",   rva: 0x1A00 },
-    StubExport { name: "WideCharToMultiByte",        rva: 0x1A10 },
-    StubExport { name: "EnumSystemLocalesA",        rva: 0x1A20 },
+    StubExport { name: "GlobalMemoryStatus", rva: 0x1520 },
+    StubExport { name: "SetCurrentDirectoryA", rva: 0x1530 },
+    StubExport { name: "GetModuleFileNameA", rva: 0x1540 },
+    StubExport { name: "MultiByteToWideChar", rva: 0x1550 },
+    StubExport { name: "GetVersionExA", rva: 0x1560 },
+    StubExport { name: "lstrcpyA", rva: 0x1570 },
+    StubExport { name: "GetCurrentDirectoryA", rva: 0x1580 },
+    StubExport { name: "CreateDirectoryA", rva: 0x1590 },
+    StubExport { name: "VirtualQueryEx", rva: 0x15A0 },
+    StubExport { name: "lstrcatA", rva: 0x15B0 },
+    StubExport { name: "lstrcpynA", rva: 0x15C0 },
+    StubExport { name: "lstrlenA", rva: 0x15D0 },
+    StubExport { name: "WriteFile", rva: 0x15E0 },
+    StubExport { name: "SetFilePointer", rva: 0x15F0 },
+    StubExport { name: "GetFileTime", rva: 0x1600 },
+    StubExport { name: "GetFileSize", rva: 0x1610 },
+    StubExport { name: "FileTimeToDosDateTime", rva: 0x1620 },
+    StubExport { name: "FileTimeToLocalFileTime", rva: 0x1630 },
+    StubExport { name: "FindClose", rva: 0x1640 },
+    StubExport { name: "DeleteFileA", rva: 0x1650 },
+    StubExport { name: "FindFirstFileA", rva: 0x1660 },
+    StubExport { name: "FindNextFileA", rva: 0x1670 },
+    StubExport { name: "GetFileAttributesA", rva: 0x1680 },
+    StubExport { name: "GetVolumeInformationA", rva: 0x1690 },
+    StubExport { name: "GetDriveTypeA", rva: 0x16A0 },
+    StubExport { name: "GetLogicalDriveStringsA", rva: 0x16B0 },
+    StubExport { name: "GetFullPathNameA", rva: 0x16C0 },
+    StubExport { name: "CreateProcessA", rva: 0x16D0 },
+    StubExport { name: "InterlockedExchange", rva: 0x16E0 },
+    StubExport { name: "InterlockedDecrement", rva: 0x16F0 },
+    StubExport { name: "InterlockedIncrement", rva: 0x1700 },
+    StubExport { name: "CompareStringA", rva: 0x1710 },
+    StubExport { name: "CompareStringW", rva: 0x1720 },
+    StubExport { name: "ExitThread", rva: 0x1730 },
+    StubExport { name: "FileTimeToSystemTime", rva: 0x1740 },
+    StubExport { name: "FlushFileBuffers", rva: 0x1750 },
+    StubExport { name: "FreeEnvironmentStringsA", rva: 0x1760 },
+    StubExport { name: "FreeEnvironmentStringsW", rva: 0x1770 },
+    StubExport { name: "GetACP", rva: 0x1780 },
+    StubExport { name: "GetCPInfo", rva: 0x1790 },
+    StubExport { name: "GetCommandLineA", rva: 0x17A0 },
+    StubExport { name: "GetEnvironmentStrings", rva: 0x17B0 },
+    StubExport { name: "GetEnvironmentStringsW", rva: 0x17C0 },
+    StubExport { name: "GetEnvironmentVariableA", rva: 0x17D0 },
+    StubExport { name: "GetFileType", rva: 0x17E0 },
+    StubExport { name: "GetLocalTime", rva: 0x17F0 },
+    StubExport { name: "GetLocaleInfoA", rva: 0x1800 },
+    StubExport { name: "GetLocaleInfoW", rva: 0x1810 },
+    StubExport { name: "GetOEMCP", rva: 0x1820 },
+    StubExport { name: "GetStartupInfoA", rva: 0x1830 },
+    StubExport { name: "GetStdHandle", rva: 0x1840 },
+    StubExport { name: "GetStringTypeA", rva: 0x1850 },
+    StubExport { name: "GetStringTypeW", rva: 0x1860 },
+    StubExport { name: "GetSystemTime", rva: 0x1870 },
+    StubExport { name: "GetTimeZoneInformation", rva: 0x1880 },
+    StubExport { name: "GetUserDefaultLCID", rva: 0x1890 },
+    StubExport { name: "GetVersion", rva: 0x18A0 },
+    StubExport { name: "HeapCreate", rva: 0x18B0 },
+    StubExport { name: "HeapDestroy", rva: 0x18C0 },
+    StubExport { name: "HeapReAlloc", rva: 0x18D0 },
+    StubExport { name: "HeapSize", rva: 0x18E0 },
+    StubExport { name: "IsBadCodePtr", rva: 0x18F0 },
+    StubExport { name: "IsBadReadPtr", rva: 0x1900 },
+    StubExport { name: "IsBadWritePtr", rva: 0x1910 },
+    StubExport { name: "IsValidCodePage", rva: 0x1920 },
+    StubExport { name: "IsValidLocale", rva: 0x1930 },
+    StubExport { name: "LCMapStringA", rva: 0x1940 },
+    StubExport { name: "LCMapStringW", rva: 0x1950 },
+    StubExport { name: "MoveFileA", rva: 0x1960 },
+    StubExport { name: "MulDiv", rva: 0x1970 },
+    StubExport { name: "ReadFile", rva: 0x1980 },
+    StubExport { name: "RtlUnwind", rva: 0x1990 },
+    StubExport { name: "SetEndOfFile", rva: 0x19A0 },
+    StubExport { name: "SetEnvironmentVariableA", rva: 0x19B0 },
+    StubExport { name: "SetHandleCount", rva: 0x19C0 },
+    StubExport { name: "SetStdHandle", rva: 0x19D0 },
+    StubExport { name: "SetUnhandledExceptionFilter", rva: 0x19E0 },
+    StubExport { name: "TerminateProcess", rva: 0x19F0 },
+    StubExport { name: "UnhandledExceptionFilter", rva: 0x1A00 },
+    StubExport { name: "WideCharToMultiByte", rva: 0x1A10 },
+    StubExport { name: "EnumSystemLocalesA", rva: 0x1A20 },
 ];
 
 const STUB_EXPORTS_USER32: &[StubExport] = &[
-    StubExport { name: "CreateWindowExA",          rva: 0x1000 },
-    StubExport { name: "ShowWindow",               rva: 0x1010 },
-    StubExport { name: "GetMessageA",              rva: 0x1020 },
-    StubExport { name: "DispatchMessageA",         rva: 0x1030 },
-    StubExport { name: "TranslateMessage",         rva: 0x1040 },
-    StubExport { name: "PeekMessageA",             rva: 0x1050 },
-    StubExport { name: "PostQuitMessage",          rva: 0x1060 },
-    StubExport { name: "RegisterClassA",           rva: 0x1070 },
-    StubExport { name: "DefWindowProcA",           rva: 0x1080 },
-    StubExport { name: "CreateWindowExW",          rva: 0x1090 },
-    StubExport { name: "DefWindowProcW",           rva: 0x10A0 },
-    StubExport { name: "RegisterClassExW",         rva: 0x10B0 },
-    StubExport { name: "DestroyWindow",            rva: 0x10C0 },
-    StubExport { name: "GetClientRect",            rva: 0x10D0 },
-    StubExport { name: "GetWindowRect",            rva: 0x10E0 },
-    StubExport { name: "EnumDisplaySettingsW",     rva: 0x10F0 },
+    StubExport { name: "CreateWindowExA", rva: 0x1000 },
+    StubExport { name: "ShowWindow", rva: 0x1010 },
+    StubExport { name: "GetMessageA", rva: 0x1020 },
+    StubExport { name: "DispatchMessageA", rva: 0x1030 },
+    StubExport { name: "TranslateMessage", rva: 0x1040 },
+    StubExport { name: "PeekMessageA", rva: 0x1050 },
+    StubExport { name: "PostQuitMessage", rva: 0x1060 },
+    StubExport { name: "RegisterClassA", rva: 0x1070 },
+    StubExport { name: "DefWindowProcA", rva: 0x1080 },
+    StubExport { name: "CreateWindowExW", rva: 0x1090 },
+    StubExport { name: "DefWindowProcW", rva: 0x10A0 },
+    StubExport { name: "RegisterClassExW", rva: 0x10B0 },
+    StubExport { name: "DestroyWindow", rva: 0x10C0 },
+    StubExport { name: "GetClientRect", rva: 0x10D0 },
+    StubExport { name: "GetWindowRect", rva: 0x10E0 },
+    StubExport { name: "EnumDisplaySettingsW", rva: 0x10F0 },
     StubExport { name: "ChangeDisplaySettingsExW", rva: 0x1100 },
-    StubExport { name: "EnumDisplayMonitors",      rva: 0x1110 },
-    StubExport { name: "GetMonitorInfoW",          rva: 0x1120 },
-    StubExport { name: "MonitorFromPoint",         rva: 0x1130 },
-    StubExport { name: "SetWindowPos",             rva: 0x1140 },
-    StubExport { name: "MoveWindow",               rva: 0x1150 },
-    StubExport { name: "GetWindowLongW",           rva: 0x1160 },
-    StubExport { name: "SetWindowLongW",           rva: 0x1170 },
-    StubExport { name: "GetWindowLongA",           rva: 0x1180 },
-    StubExport { name: "SetWindowLongA",           rva: 0x1190 },
-    StubExport { name: "IsWindow",                 rva: 0x11A0 },
-    StubExport { name: "IsWindowVisible",          rva: 0x11B0 },
-    StubExport { name: "IsIconic",                 rva: 0x11C0 },
-    StubExport { name: "GetForegroundWindow",      rva: 0x11D0 },
-    StubExport { name: "SetCursor",                rva: 0x11E0 },
-    StubExport { name: "SetCursorPos",             rva: 0x11F0 },
-    StubExport { name: "GetCursorPos",             rva: 0x1200 },
-    StubExport { name: "ReleaseDC",                rva: 0x1210 },
-    StubExport { name: "GetDCEx",                  rva: 0x1220 },
-    StubExport { name: "OffsetRect",               rva: 0x1230 },
-    StubExport { name: "SetRect",                  rva: 0x1240 },
-    StubExport { name: "SetProcessDPIAware",       rva: 0x1250 },
-    StubExport { name: "CallWindowProcA",          rva: 0x1260 },
-    StubExport { name: "CallWindowProcW",          rva: 0x1270 },
-    StubExport { name: "IsWindowUnicode",          rva: 0x1280 },
-    StubExport { name: "AdjustWindowRectEx",       rva: 0x1290 },
-    StubExport { name: "PostMessageW",             rva: 0x12A0 },
-    StubExport { name: "CreateIconIndirect",       rva: 0x12B0 },
-    StubExport { name: "DestroyCursor",            rva: 0x12C0 },
-    StubExport { name: "QueryDisplayConfig",       rva: 0x12D0 },
-    StubExport { name: "DisplayConfigGetDeviceInfo",rva: 0x12E0 },
-    StubExport { name: "GetDisplayConfigBufferSizes",rva: 0x12F0 },
-    StubExport { name: "EnumDisplayDevicesA",      rva: 0x1300 },
-    StubExport { name: "ClientToScreen",           rva: 0x1360 },
-    StubExport { name: "ScreenToClient",           rva: 0x1370 },
-    StubExport { name: "MessageBoxA",              rva: 0x1380 },
+    StubExport { name: "EnumDisplayMonitors", rva: 0x1110 },
+    StubExport { name: "GetMonitorInfoW", rva: 0x1120 },
+    StubExport { name: "MonitorFromPoint", rva: 0x1130 },
+    StubExport { name: "SetWindowPos", rva: 0x1140 },
+    StubExport { name: "MoveWindow", rva: 0x1150 },
+    StubExport { name: "GetWindowLongW", rva: 0x1160 },
+    StubExport { name: "SetWindowLongW", rva: 0x1170 },
+    StubExport { name: "GetWindowLongA", rva: 0x1180 },
+    StubExport { name: "SetWindowLongA", rva: 0x1190 },
+    StubExport { name: "IsWindow", rva: 0x11A0 },
+    StubExport { name: "IsWindowVisible", rva: 0x11B0 },
+    StubExport { name: "IsIconic", rva: 0x11C0 },
+    StubExport { name: "GetForegroundWindow", rva: 0x11D0 },
+    StubExport { name: "SetCursor", rva: 0x11E0 },
+    StubExport { name: "SetCursorPos", rva: 0x11F0 },
+    StubExport { name: "GetCursorPos", rva: 0x1200 },
+    StubExport { name: "ReleaseDC", rva: 0x1210 },
+    StubExport { name: "GetDCEx", rva: 0x1220 },
+    StubExport { name: "OffsetRect", rva: 0x1230 },
+    StubExport { name: "SetRect", rva: 0x1240 },
+    StubExport { name: "SetProcessDPIAware", rva: 0x1250 },
+    StubExport { name: "CallWindowProcA", rva: 0x1260 },
+    StubExport { name: "CallWindowProcW", rva: 0x1270 },
+    StubExport { name: "IsWindowUnicode", rva: 0x1280 },
+    StubExport { name: "AdjustWindowRectEx", rva: 0x1290 },
+    StubExport { name: "PostMessageW", rva: 0x12A0 },
+    StubExport { name: "CreateIconIndirect", rva: 0x12B0 },
+    StubExport { name: "DestroyCursor", rva: 0x12C0 },
+    StubExport { name: "QueryDisplayConfig", rva: 0x12D0 },
+    StubExport { name: "DisplayConfigGetDeviceInfo", rva: 0x12E0 },
+    StubExport { name: "GetDisplayConfigBufferSizes", rva: 0x12F0 },
+    StubExport { name: "EnumDisplayDevicesA", rva: 0x1300 },
+    StubExport { name: "ClientToScreen", rva: 0x1360 },
+    StubExport { name: "ScreenToClient", rva: 0x1370 },
+    StubExport { name: "MessageBoxA", rva: 0x1380 },
     // ── Ghost Recon user32 imports ─────────────────────────────────────────
-    StubExport { name: "AdjustWindowRect",         rva: 0x1390 },
-    StubExport { name: "CloseWindow",              rva: 0x13A0 },
-    StubExport { name: "EnumDisplaySettingsA",     rva: 0x13B0 },
-    StubExport { name: "FindWindowA",              rva: 0x13C0 },
-    StubExport { name: "FrameRect",                rva: 0x13D0 },
-    StubExport { name: "GetDoubleClickTime",       rva: 0x13E0 },
-    StubExport { name: "GetMenu",                  rva: 0x13F0 },
-    StubExport { name: "GetQueueStatus",           rva: 0x1400 },
-    StubExport { name: "GetSystemMetrics",         rva: 0x1410 },
-    StubExport { name: "LoadCursorA",              rva: 0x1420 },
-    StubExport { name: "LoadIconA",                rva: 0x1430 },
-    StubExport { name: "LoadImageA",               rva: 0x1440 },
-    StubExport { name: "MsgWaitForMultipleObjects",rva: 0x1450 },
-    StubExport { name: "PostMessageA",             rva: 0x1460 },
-    StubExport { name: "PostThreadMessageA",       rva: 0x1470 },
-    StubExport { name: "RegisterClassExA",         rva: 0x1480 },
-    StubExport { name: "RegisterWindowMessageA",   rva: 0x1490 },
-    StubExport { name: "SetFocus",                 rva: 0x14A0 },
-    StubExport { name: "SetForegroundWindow",      rva: 0x14B0 },
-    StubExport { name: "UpdateWindow",             rva: 0x14C0 },
-    StubExport { name: "wsprintfA",                rva: 0x14D0 },
-    StubExport { name: "wvsprintfA",               rva: 0x14E0 },
-    StubExport { name: "GetActiveWindow",          rva: 0x14F0 },
-    StubExport { name: "GetLastActivePopup",       rva: 0x1500 },
+    StubExport { name: "AdjustWindowRect", rva: 0x1390 },
+    StubExport { name: "CloseWindow", rva: 0x13A0 },
+    StubExport { name: "EnumDisplaySettingsA", rva: 0x13B0 },
+    StubExport { name: "FindWindowA", rva: 0x13C0 },
+    StubExport { name: "FrameRect", rva: 0x13D0 },
+    StubExport { name: "GetDoubleClickTime", rva: 0x13E0 },
+    StubExport { name: "GetMenu", rva: 0x13F0 },
+    StubExport { name: "GetQueueStatus", rva: 0x1400 },
+    StubExport { name: "GetSystemMetrics", rva: 0x1410 },
+    StubExport { name: "LoadCursorA", rva: 0x1420 },
+    StubExport { name: "LoadIconA", rva: 0x1430 },
+    StubExport { name: "LoadImageA", rva: 0x1440 },
+    StubExport { name: "MsgWaitForMultipleObjects", rva: 0x1450 },
+    StubExport { name: "PostMessageA", rva: 0x1460 },
+    StubExport { name: "PostThreadMessageA", rva: 0x1470 },
+    StubExport { name: "RegisterClassExA", rva: 0x1480 },
+    StubExport { name: "RegisterWindowMessageA", rva: 0x1490 },
+    StubExport { name: "SetFocus", rva: 0x14A0 },
+    StubExport { name: "SetForegroundWindow", rva: 0x14B0 },
+    StubExport { name: "UpdateWindow", rva: 0x14C0 },
+    StubExport { name: "wsprintfA", rva: 0x14D0 },
+    StubExport { name: "wvsprintfA", rva: 0x14E0 },
+    StubExport { name: "GetActiveWindow", rva: 0x14F0 },
+    StubExport { name: "GetLastActivePopup", rva: 0x1500 },
 ];
 
 const STUB_EXPORTS_MSVCRT: &[StubExport] = &[
@@ -662,60 +674,56 @@ const STUB_EXPORTS_WINMM: &[StubExport] = &[
     StubExport { name: "timeGetTime", rva: 0x1020 },
     // ── Ghost Recon winmm imports ──────────────────────────────────────────
     StubExport { name: "timeGetDevCaps", rva: 0x1030 },
-    StubExport { name: "timeKillEvent",  rva: 0x1040 },
-    StubExport { name: "timeSetEvent",   rva: 0x1050 },
+    StubExport { name: "timeKillEvent", rva: 0x1040 },
+    StubExport { name: "timeSetEvent", rva: 0x1050 },
 ];
 
 // d3d8.dll — Direct3D 8 (Ghost Recon 2001).
-const STUB_EXPORTS_D3D8: &[StubExport] = &[
-    StubExport { name: "Direct3DCreate8", rva: 0x1000 },
-];
+const STUB_EXPORTS_D3D8: &[StubExport] = &[StubExport { name: "Direct3DCreate8", rva: 0x1000 }];
 
 // d3d9.dll — DXVK stub (d3d8.dll imports only Direct3DCreate9 from here).
-const STUB_EXPORTS_D3D9: &[StubExport] = &[
-    StubExport { name: "Direct3DCreate9",   rva: 0x1000 },
-    StubExport { name: "Direct3DCreate9Ex", rva: 0x1010 },
-];
+const STUB_EXPORTS_D3D9: &[StubExport] =
+    &[StubExport { name: "Direct3DCreate9", rva: 0x1000 }, StubExport { name: "Direct3DCreate9Ex", rva: 0x1010 }];
 
 // advapi32.dll — Registry + security.
 const STUB_EXPORTS_ADVAPI32: &[StubExport] = &[
-    StubExport { name: "RegOpenKeyExA",           rva: 0x1000 },
-    StubExport { name: "RegQueryValueExA",        rva: 0x1010 },
-    StubExport { name: "RegCloseKey",             rva: 0x1020 },
-    StubExport { name: "RegOpenKeyExW",           rva: 0x1030 },
-    StubExport { name: "RegQueryValueExW",        rva: 0x1040 },
+    StubExport { name: "RegOpenKeyExA", rva: 0x1000 },
+    StubExport { name: "RegQueryValueExA", rva: 0x1010 },
+    StubExport { name: "RegCloseKey", rva: 0x1020 },
+    StubExport { name: "RegOpenKeyExW", rva: 0x1030 },
+    StubExport { name: "RegQueryValueExW", rva: 0x1040 },
     StubExport { name: "RegNotifyChangeKeyValue", rva: 0x1050 },
     StubExport { name: "AllocateLocallyUniqueId", rva: 0x1060 },
-    StubExport { name: "GetUserNameA",            rva: 0x1070 },
+    StubExport { name: "GetUserNameA", rva: 0x1070 },
 ];
 
 // gdi32.dll — minimal GDI stubs (d3d9 uses for fallback paths).
 const STUB_EXPORTS_GDI32: &[StubExport] = &[
     StubExport { name: "CreateCompatibleDC", rva: 0x1000 },
-    StubExport { name: "DeleteDC",           rva: 0x1010 },
-    StubExport { name: "CreateBitmap",       rva: 0x1020 },
-    StubExport { name: "DeleteObject",       rva: 0x1030 },
-    StubExport { name: "StretchBlt",         rva: 0x1040 },
-    StubExport { name: "Polygon",            rva: 0x1050 },
+    StubExport { name: "DeleteDC", rva: 0x1010 },
+    StubExport { name: "CreateBitmap", rva: 0x1020 },
+    StubExport { name: "DeleteObject", rva: 0x1030 },
+    StubExport { name: "StretchBlt", rva: 0x1040 },
+    StubExport { name: "Polygon", rva: 0x1050 },
     // ── Ghost Recon gdi32 imports ──────────────────────────────────────────
-    StubExport { name: "CreateDIBSection",  rva: 0x1060 },
-    StubExport { name: "CreatePen",         rva: 0x1070 },
-    StubExport { name: "CreateSolidBrush",  rva: 0x1080 },
-    StubExport { name: "Ellipse",           rva: 0x1090 },
-    StubExport { name: "GdiFlush",          rva: 0x10A0 },
-    StubExport { name: "GetStockObject",    rva: 0x10B0 },
-    StubExport { name: "Polyline",          rva: 0x10C0 },
-    StubExport { name: "SelectObject",      rva: 0x10D0 },
-    StubExport { name: "SetPixel",          rva: 0x10E0 },
-    StubExport { name: "TextOutA",          rva: 0x10F0 },
+    StubExport { name: "CreateDIBSection", rva: 0x1060 },
+    StubExport { name: "CreatePen", rva: 0x1070 },
+    StubExport { name: "CreateSolidBrush", rva: 0x1080 },
+    StubExport { name: "Ellipse", rva: 0x1090 },
+    StubExport { name: "GdiFlush", rva: 0x10A0 },
+    StubExport { name: "GetStockObject", rva: 0x10B0 },
+    StubExport { name: "Polyline", rva: 0x10C0 },
+    StubExport { name: "SelectObject", rva: 0x10D0 },
+    StubExport { name: "SetPixel", rva: 0x10E0 },
+    StubExport { name: "TextOutA", rva: 0x10F0 },
 ];
 
 // setupapi.dll — GPU device enumeration (DXVK falls back gracefully on failure).
 const STUB_EXPORTS_SETUPAPI: &[StubExport] = &[
-    StubExport { name: "SetupDiGetClassDevsW",            rva: 0x1000 },
-    StubExport { name: "SetupDiEnumDeviceInterfaces",     rva: 0x1010 },
-    StubExport { name: "SetupDiGetDeviceInterfaceDetailW",rva: 0x1020 },
-    StubExport { name: "SetupDiOpenDevRegKey",            rva: 0x1030 },
+    StubExport { name: "SetupDiGetClassDevsW", rva: 0x1000 },
+    StubExport { name: "SetupDiEnumDeviceInterfaces", rva: 0x1010 },
+    StubExport { name: "SetupDiGetDeviceInterfaceDetailW", rva: 0x1020 },
+    StubExport { name: "SetupDiOpenDevRegKey", rva: 0x1030 },
 ];
 
 // vulkan-1.dll — Vulkan ICD loader shim.
@@ -725,149 +733,149 @@ const STUB_EXPORTS_SETUPAPI: &[StubExport] = &[
 // Game relevance: Ghost Recon 2001 → DXVK d3d8 → d3d9 → vulkan-1 → these stubs.
 const STUB_EXPORTS_VULKAN1: &[StubExport] = &[
     // ── Instance / device lifecycle ─────────────────────────────────────────
-    StubExport { name: "vkGetInstanceProcAddr",                          rva: 0x1000 }, //  0
-    StubExport { name: "vkGetDeviceProcAddr",                            rva: 0x1010 }, //  1
-    StubExport { name: "vkCreateInstance",                               rva: 0x1020 }, //  2
-    StubExport { name: "vkDestroyInstance",                              rva: 0x1030 }, //  3
-    StubExport { name: "vkEnumerateInstanceExtensionProperties",         rva: 0x1040 }, //  4
-    StubExport { name: "vkEnumerateInstanceLayerProperties",             rva: 0x1050 }, //  5
-    StubExport { name: "vkEnumerateInstanceVersion",                     rva: 0x1060 }, //  6
+    StubExport { name: "vkGetInstanceProcAddr", rva: 0x1000 }, //  0
+    StubExport { name: "vkGetDeviceProcAddr", rva: 0x1010 },   //  1
+    StubExport { name: "vkCreateInstance", rva: 0x1020 },      //  2
+    StubExport { name: "vkDestroyInstance", rva: 0x1030 },     //  3
+    StubExport { name: "vkEnumerateInstanceExtensionProperties", rva: 0x1040 }, //  4
+    StubExport { name: "vkEnumerateInstanceLayerProperties", rva: 0x1050 }, //  5
+    StubExport { name: "vkEnumerateInstanceVersion", rva: 0x1060 }, //  6
     // ── Physical device ──────────────────────────────────────────────────────
-    StubExport { name: "vkEnumeratePhysicalDevices",                     rva: 0x1070 }, //  7
-    StubExport { name: "vkGetPhysicalDeviceProperties",                  rva: 0x1080 }, //  8
-    StubExport { name: "vkGetPhysicalDeviceProperties2KHR",              rva: 0x1090 }, //  9
-    StubExport { name: "vkGetPhysicalDeviceFeatures",                    rva: 0x10A0 }, // 10
-    StubExport { name: "vkGetPhysicalDeviceFeatures2KHR",                rva: 0x10B0 }, // 11
-    StubExport { name: "vkGetPhysicalDeviceMemoryProperties",            rva: 0x10C0 }, // 12
-    StubExport { name: "vkGetPhysicalDeviceMemoryProperties2KHR",        rva: 0x10D0 }, // 13
-    StubExport { name: "vkGetPhysicalDeviceQueueFamilyProperties",       rva: 0x10E0 }, // 14
-    StubExport { name: "vkGetPhysicalDeviceFormatProperties",            rva: 0x10F0 }, // 15
-    StubExport { name: "vkGetPhysicalDeviceFormatProperties2KHR",        rva: 0x1100 }, // 16
-    StubExport { name: "vkEnumerateDeviceExtensionProperties",           rva: 0x1110 }, // 17
+    StubExport { name: "vkEnumeratePhysicalDevices", rva: 0x1070 }, //  7
+    StubExport { name: "vkGetPhysicalDeviceProperties", rva: 0x1080 }, //  8
+    StubExport { name: "vkGetPhysicalDeviceProperties2KHR", rva: 0x1090 }, //  9
+    StubExport { name: "vkGetPhysicalDeviceFeatures", rva: 0x10A0 }, // 10
+    StubExport { name: "vkGetPhysicalDeviceFeatures2KHR", rva: 0x10B0 }, // 11
+    StubExport { name: "vkGetPhysicalDeviceMemoryProperties", rva: 0x10C0 }, // 12
+    StubExport { name: "vkGetPhysicalDeviceMemoryProperties2KHR", rva: 0x10D0 }, // 13
+    StubExport { name: "vkGetPhysicalDeviceQueueFamilyProperties", rva: 0x10E0 }, // 14
+    StubExport { name: "vkGetPhysicalDeviceFormatProperties", rva: 0x10F0 }, // 15
+    StubExport { name: "vkGetPhysicalDeviceFormatProperties2KHR", rva: 0x1100 }, // 16
+    StubExport { name: "vkEnumerateDeviceExtensionProperties", rva: 0x1110 }, // 17
     // ── Surface (KHR) ────────────────────────────────────────────────────────
-    StubExport { name: "vkGetPhysicalDeviceSurfaceCapabilitiesKHR",      rva: 0x1120 }, // 18
-    StubExport { name: "vkGetPhysicalDeviceSurfaceFormatsKHR",           rva: 0x1130 }, // 19
-    StubExport { name: "vkGetPhysicalDeviceSurfacePresentModesKHR",      rva: 0x1140 }, // 20
-    StubExport { name: "vkGetPhysicalDeviceSurfaceSupportKHR",           rva: 0x1150 }, // 21
-    StubExport { name: "vkCreateWin32SurfaceKHR",                        rva: 0x1160 }, // 22
-    StubExport { name: "vkDestroySurfaceKHR",                            rva: 0x1170 }, // 23
+    StubExport { name: "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", rva: 0x1120 }, // 18
+    StubExport { name: "vkGetPhysicalDeviceSurfaceFormatsKHR", rva: 0x1130 },      // 19
+    StubExport { name: "vkGetPhysicalDeviceSurfacePresentModesKHR", rva: 0x1140 }, // 20
+    StubExport { name: "vkGetPhysicalDeviceSurfaceSupportKHR", rva: 0x1150 },      // 21
+    StubExport { name: "vkCreateWin32SurfaceKHR", rva: 0x1160 },                   // 22
+    StubExport { name: "vkDestroySurfaceKHR", rva: 0x1170 },                       // 23
     // ── Logical device ───────────────────────────────────────────────────────
-    StubExport { name: "vkCreateDevice",                                 rva: 0x1180 }, // 24
-    StubExport { name: "vkDestroyDevice",                                rva: 0x1190 }, // 25
-    StubExport { name: "vkGetDeviceQueue",                               rva: 0x11A0 }, // 26
+    StubExport { name: "vkCreateDevice", rva: 0x1180 },   // 24
+    StubExport { name: "vkDestroyDevice", rva: 0x1190 },  // 25
+    StubExport { name: "vkGetDeviceQueue", rva: 0x11A0 }, // 26
     // ── Swapchain ────────────────────────────────────────────────────────────
-    StubExport { name: "vkCreateSwapchainKHR",                           rva: 0x11B0 }, // 27
-    StubExport { name: "vkDestroySwapchainKHR",                          rva: 0x11C0 }, // 28
-    StubExport { name: "vkGetSwapchainImagesKHR",                        rva: 0x11D0 }, // 29
-    StubExport { name: "vkAcquireNextImageKHR",                          rva: 0x11E0 }, // 30
-    StubExport { name: "vkQueuePresentKHR",                              rva: 0x11F0 }, // 31
+    StubExport { name: "vkCreateSwapchainKHR", rva: 0x11B0 }, // 27
+    StubExport { name: "vkDestroySwapchainKHR", rva: 0x11C0 }, // 28
+    StubExport { name: "vkGetSwapchainImagesKHR", rva: 0x11D0 }, // 29
+    StubExport { name: "vkAcquireNextImageKHR", rva: 0x11E0 }, // 30
+    StubExport { name: "vkQueuePresentKHR", rva: 0x11F0 },    // 31
     // ── Command pool / buffers ───────────────────────────────────────────────
-    StubExport { name: "vkCreateCommandPool",                            rva: 0x1200 }, // 32
-    StubExport { name: "vkDestroyCommandPool",                           rva: 0x1210 }, // 33
-    StubExport { name: "vkResetCommandPool",                             rva: 0x1220 }, // 34
-    StubExport { name: "vkAllocateCommandBuffers",                       rva: 0x1230 }, // 35
-    StubExport { name: "vkFreeCommandBuffers",                           rva: 0x1240 }, // 36
-    StubExport { name: "vkBeginCommandBuffer",                           rva: 0x1250 }, // 37
-    StubExport { name: "vkEndCommandBuffer",                             rva: 0x1260 }, // 38
-    StubExport { name: "vkResetCommandBuffer",                           rva: 0x1270 }, // 39
+    StubExport { name: "vkCreateCommandPool", rva: 0x1200 }, // 32
+    StubExport { name: "vkDestroyCommandPool", rva: 0x1210 }, // 33
+    StubExport { name: "vkResetCommandPool", rva: 0x1220 },  // 34
+    StubExport { name: "vkAllocateCommandBuffers", rva: 0x1230 }, // 35
+    StubExport { name: "vkFreeCommandBuffers", rva: 0x1240 }, // 36
+    StubExport { name: "vkBeginCommandBuffer", rva: 0x1250 }, // 37
+    StubExport { name: "vkEndCommandBuffer", rva: 0x1260 },  // 38
+    StubExport { name: "vkResetCommandBuffer", rva: 0x1270 }, // 39
     // ── Synchronization ──────────────────────────────────────────────────────
-    StubExport { name: "vkCreateFence",                                  rva: 0x1280 }, // 40
-    StubExport { name: "vkDestroyFence",                                 rva: 0x1290 }, // 41
-    StubExport { name: "vkResetFences",                                  rva: 0x12A0 }, // 42
-    StubExport { name: "vkGetFenceStatus",                               rva: 0x12B0 }, // 43
-    StubExport { name: "vkWaitForFences",                                rva: 0x12C0 }, // 44
-    StubExport { name: "vkCreateSemaphore",                              rva: 0x12D0 }, // 45
-    StubExport { name: "vkDestroySemaphore",                             rva: 0x12E0 }, // 46
+    StubExport { name: "vkCreateFence", rva: 0x1280 },      // 40
+    StubExport { name: "vkDestroyFence", rva: 0x1290 },     // 41
+    StubExport { name: "vkResetFences", rva: 0x12A0 },      // 42
+    StubExport { name: "vkGetFenceStatus", rva: 0x12B0 },   // 43
+    StubExport { name: "vkWaitForFences", rva: 0x12C0 },    // 44
+    StubExport { name: "vkCreateSemaphore", rva: 0x12D0 },  // 45
+    StubExport { name: "vkDestroySemaphore", rva: 0x12E0 }, // 46
     // ── Render pass / framebuffer ─────────────────────────────────────────────
-    StubExport { name: "vkCreateRenderPass",                             rva: 0x12F0 }, // 47
-    StubExport { name: "vkDestroyRenderPass",                            rva: 0x1300 }, // 48
-    StubExport { name: "vkCreateFramebuffer",                            rva: 0x1310 }, // 49
-    StubExport { name: "vkDestroyFramebuffer",                           rva: 0x1320 }, // 50
+    StubExport { name: "vkCreateRenderPass", rva: 0x12F0 },   // 47
+    StubExport { name: "vkDestroyRenderPass", rva: 0x1300 },  // 48
+    StubExport { name: "vkCreateFramebuffer", rva: 0x1310 },  // 49
+    StubExport { name: "vkDestroyFramebuffer", rva: 0x1320 }, // 50
     // ── Image / image view ───────────────────────────────────────────────────
-    StubExport { name: "vkCreateImageView",                              rva: 0x1330 }, // 51
-    StubExport { name: "vkDestroyImageView",                             rva: 0x1340 }, // 52
-    StubExport { name: "vkCreateImage",                                  rva: 0x1350 }, // 53
-    StubExport { name: "vkDestroyImage",                                 rva: 0x1360 }, // 54
-    StubExport { name: "vkGetImageSubresourceLayout",                    rva: 0x1370 }, // 55
+    StubExport { name: "vkCreateImageView", rva: 0x1330 },  // 51
+    StubExport { name: "vkDestroyImageView", rva: 0x1340 }, // 52
+    StubExport { name: "vkCreateImage", rva: 0x1350 },      // 53
+    StubExport { name: "vkDestroyImage", rva: 0x1360 },     // 54
+    StubExport { name: "vkGetImageSubresourceLayout", rva: 0x1370 }, // 55
     // ── Buffer / buffer view ─────────────────────────────────────────────────
-    StubExport { name: "vkCreateBuffer",                                 rva: 0x1380 }, // 56
-    StubExport { name: "vkDestroyBuffer",                                rva: 0x1390 }, // 57
-    StubExport { name: "vkCreateBufferView",                             rva: 0x13A0 }, // 58
-    StubExport { name: "vkDestroyBufferView",                            rva: 0x13B0 }, // 59
+    StubExport { name: "vkCreateBuffer", rva: 0x1380 },      // 56
+    StubExport { name: "vkDestroyBuffer", rva: 0x1390 },     // 57
+    StubExport { name: "vkCreateBufferView", rva: 0x13A0 },  // 58
+    StubExport { name: "vkDestroyBufferView", rva: 0x13B0 }, // 59
     // ── Memory ───────────────────────────────────────────────────────────────
-    StubExport { name: "vkAllocateMemory",                               rva: 0x13C0 }, // 60
-    StubExport { name: "vkFreeMemory",                                   rva: 0x13D0 }, // 61
-    StubExport { name: "vkMapMemory",                                    rva: 0x13E0 }, // 62
-    StubExport { name: "vkUnmapMemory",                                  rva: 0x13F0 }, // 63
-    StubExport { name: "vkBindBufferMemory",                             rva: 0x1400 }, // 64
-    StubExport { name: "vkBindImageMemory",                              rva: 0x1410 }, // 65
-    StubExport { name: "vkGetImageMemoryRequirements",                   rva: 0x1420 }, // 66
-    StubExport { name: "vkGetBufferMemoryRequirements",                  rva: 0x1430 }, // 67
+    StubExport { name: "vkAllocateMemory", rva: 0x13C0 },   // 60
+    StubExport { name: "vkFreeMemory", rva: 0x13D0 },       // 61
+    StubExport { name: "vkMapMemory", rva: 0x13E0 },        // 62
+    StubExport { name: "vkUnmapMemory", rva: 0x13F0 },      // 63
+    StubExport { name: "vkBindBufferMemory", rva: 0x1400 }, // 64
+    StubExport { name: "vkBindImageMemory", rva: 0x1410 },  // 65
+    StubExport { name: "vkGetImageMemoryRequirements", rva: 0x1420 }, // 66
+    StubExport { name: "vkGetBufferMemoryRequirements", rva: 0x1430 }, // 67
     // ── Shader / pipeline ────────────────────────────────────────────────────
-    StubExport { name: "vkCreateShaderModule",                           rva: 0x1440 }, // 68
-    StubExport { name: "vkDestroyShaderModule",                          rva: 0x1450 }, // 69
-    StubExport { name: "vkCreatePipelineLayout",                         rva: 0x1460 }, // 70
-    StubExport { name: "vkDestroyPipelineLayout",                        rva: 0x1470 }, // 71
-    StubExport { name: "vkCreateDescriptorSetLayout",                    rva: 0x1480 }, // 72
-    StubExport { name: "vkDestroyDescriptorSetLayout",                   rva: 0x1490 }, // 73
-    StubExport { name: "vkCreateDescriptorPool",                         rva: 0x14A0 }, // 74
-    StubExport { name: "vkDestroyDescriptorPool",                        rva: 0x14B0 }, // 75
-    StubExport { name: "vkAllocateDescriptorSets",                       rva: 0x14C0 }, // 76
-    StubExport { name: "vkUpdateDescriptorSets",                         rva: 0x14D0 }, // 77
-    StubExport { name: "vkFreeDescriptorSets",                           rva: 0x14E0 }, // 78
-    StubExport { name: "vkCreateGraphicsPipelines",                      rva: 0x14F0 }, // 79
-    StubExport { name: "vkCreateComputePipelines",                       rva: 0x1500 }, // 80
-    StubExport { name: "vkDestroyPipeline",                              rva: 0x1510 }, // 81
-    StubExport { name: "vkCreatePipelineCache",                          rva: 0x1520 }, // 82
-    StubExport { name: "vkDestroyPipelineCache",                         rva: 0x1530 }, // 83
-    StubExport { name: "vkCreateSampler",                                rva: 0x1540 }, // 84
-    StubExport { name: "vkDestroySampler",                               rva: 0x1550 }, // 85
+    StubExport { name: "vkCreateShaderModule", rva: 0x1440 }, // 68
+    StubExport { name: "vkDestroyShaderModule", rva: 0x1450 }, // 69
+    StubExport { name: "vkCreatePipelineLayout", rva: 0x1460 }, // 70
+    StubExport { name: "vkDestroyPipelineLayout", rva: 0x1470 }, // 71
+    StubExport { name: "vkCreateDescriptorSetLayout", rva: 0x1480 }, // 72
+    StubExport { name: "vkDestroyDescriptorSetLayout", rva: 0x1490 }, // 73
+    StubExport { name: "vkCreateDescriptorPool", rva: 0x14A0 }, // 74
+    StubExport { name: "vkDestroyDescriptorPool", rva: 0x14B0 }, // 75
+    StubExport { name: "vkAllocateDescriptorSets", rva: 0x14C0 }, // 76
+    StubExport { name: "vkUpdateDescriptorSets", rva: 0x14D0 }, // 77
+    StubExport { name: "vkFreeDescriptorSets", rva: 0x14E0 }, // 78
+    StubExport { name: "vkCreateGraphicsPipelines", rva: 0x14F0 }, // 79
+    StubExport { name: "vkCreateComputePipelines", rva: 0x1500 }, // 80
+    StubExport { name: "vkDestroyPipeline", rva: 0x1510 },    // 81
+    StubExport { name: "vkCreatePipelineCache", rva: 0x1520 }, // 82
+    StubExport { name: "vkDestroyPipelineCache", rva: 0x1530 }, // 83
+    StubExport { name: "vkCreateSampler", rva: 0x1540 },      // 84
+    StubExport { name: "vkDestroySampler", rva: 0x1550 },     // 85
     // ── Query pool ───────────────────────────────────────────────────────────
-    StubExport { name: "vkCreateQueryPool",                              rva: 0x1560 }, // 86
-    StubExport { name: "vkDestroyQueryPool",                             rva: 0x1570 }, // 87
-    StubExport { name: "vkGetQueryPoolResults",                          rva: 0x1580 }, // 88
+    StubExport { name: "vkCreateQueryPool", rva: 0x1560 },     // 86
+    StubExport { name: "vkDestroyQueryPool", rva: 0x1570 },    // 87
+    StubExport { name: "vkGetQueryPoolResults", rva: 0x1580 }, // 88
     // ── Queue submit / idle ──────────────────────────────────────────────────
-    StubExport { name: "vkQueueSubmit",                                  rva: 0x1590 }, // 89
-    StubExport { name: "vkQueueWaitIdle",                                rva: 0x15A0 }, // 90
-    StubExport { name: "vkDeviceWaitIdle",                               rva: 0x15B0 }, // 91
+    StubExport { name: "vkQueueSubmit", rva: 0x1590 },    // 89
+    StubExport { name: "vkQueueWaitIdle", rva: 0x15A0 },  // 90
+    StubExport { name: "vkDeviceWaitIdle", rva: 0x15B0 }, // 91
     // ── vkCmd* draw commands ─────────────────────────────────────────────────
-    StubExport { name: "vkCmdBeginRenderPass",                           rva: 0x15C0 }, // 92
-    StubExport { name: "vkCmdEndRenderPass",                             rva: 0x15D0 }, // 93
-    StubExport { name: "vkCmdBindPipeline",                              rva: 0x15E0 }, // 94
-    StubExport { name: "vkCmdBindVertexBuffers",                         rva: 0x15F0 }, // 95
-    StubExport { name: "vkCmdBindIndexBuffer",                           rva: 0x1600 }, // 96
-    StubExport { name: "vkCmdDraw",                                      rva: 0x1610 }, // 97
-    StubExport { name: "vkCmdDrawIndexed",                               rva: 0x1620 }, // 98
-    StubExport { name: "vkCmdBindDescriptorSets",                        rva: 0x1630 }, // 99
-    StubExport { name: "vkCmdSetViewport",                               rva: 0x1640 }, // 100
-    StubExport { name: "vkCmdSetScissor",                                rva: 0x1650 }, // 101
-    StubExport { name: "vkCmdCopyBuffer",                                rva: 0x1660 }, // 102
-    StubExport { name: "vkCmdCopyImage",                                 rva: 0x1670 }, // 103
-    StubExport { name: "vkCmdCopyBufferToImage",                         rva: 0x1680 }, // 104
-    StubExport { name: "vkCmdCopyImageToBuffer",                         rva: 0x1690 }, // 105
-    StubExport { name: "vkCmdPipelineBarrier",                           rva: 0x16A0 }, // 106
-    StubExport { name: "vkCmdPushConstants",                             rva: 0x16B0 }, // 107
-    StubExport { name: "vkCmdClearColorImage",                           rva: 0x16C0 }, // 108
-    StubExport { name: "vkCmdClearDepthStencilImage",                    rva: 0x16D0 }, // 109
-    StubExport { name: "vkCmdResolveImage",                              rva: 0x16E0 }, // 110
-    StubExport { name: "vkCmdBlitImage",                                 rva: 0x16F0 }, // 111
-    StubExport { name: "vkCmdFillBuffer",                                rva: 0x1700 }, // 112
-    StubExport { name: "vkCmdDispatch",                                  rva: 0x1710 }, // 113
-    StubExport { name: "vkCmdExecuteCommands",                           rva: 0x1720 }, // 114
-    StubExport { name: "vkCmdSetLineWidth",                              rva: 0x1730 }, // 115
-    StubExport { name: "vkCmdSetDepthBias",                              rva: 0x1740 }, // 116
-    StubExport { name: "vkCmdSetBlendConstants",                         rva: 0x1750 }, // 117
-    StubExport { name: "vkCmdSetDepthBounds",                            rva: 0x1760 }, // 118
-    StubExport { name: "vkCmdSetStencilCompareMask",                     rva: 0x1770 }, // 119
-    StubExport { name: "vkCmdSetStencilWriteMask",                       rva: 0x1780 }, // 120
-    StubExport { name: "vkCmdSetStencilReference",                       rva: 0x1790 }, // 121
-    StubExport { name: "vkCmdWriteTimestamp",                            rva: 0x17A0 }, // 122
-    StubExport { name: "vkCmdResetQueryPool",                            rva: 0x17B0 }, // 123
-    StubExport { name: "vkCmdBeginQuery",                                rva: 0x17C0 }, // 124
-    StubExport { name: "vkCmdEndQuery",                                  rva: 0x17D0 }, // 125
-    StubExport { name: "vkCmdCopyQueryPoolResults",                      rva: 0x17E0 }, // 126
-    StubExport { name: "vkCreateRenderPass2KHR",                         rva: 0x17F0 }, // 127
-    StubExport { name: "vkQueueSubmit2KHR",                              rva: 0x1800 }, // 128
+    StubExport { name: "vkCmdBeginRenderPass", rva: 0x15C0 }, // 92
+    StubExport { name: "vkCmdEndRenderPass", rva: 0x15D0 },   // 93
+    StubExport { name: "vkCmdBindPipeline", rva: 0x15E0 },    // 94
+    StubExport { name: "vkCmdBindVertexBuffers", rva: 0x15F0 }, // 95
+    StubExport { name: "vkCmdBindIndexBuffer", rva: 0x1600 }, // 96
+    StubExport { name: "vkCmdDraw", rva: 0x1610 },            // 97
+    StubExport { name: "vkCmdDrawIndexed", rva: 0x1620 },     // 98
+    StubExport { name: "vkCmdBindDescriptorSets", rva: 0x1630 }, // 99
+    StubExport { name: "vkCmdSetViewport", rva: 0x1640 },     // 100
+    StubExport { name: "vkCmdSetScissor", rva: 0x1650 },      // 101
+    StubExport { name: "vkCmdCopyBuffer", rva: 0x1660 },      // 102
+    StubExport { name: "vkCmdCopyImage", rva: 0x1670 },       // 103
+    StubExport { name: "vkCmdCopyBufferToImage", rva: 0x1680 }, // 104
+    StubExport { name: "vkCmdCopyImageToBuffer", rva: 0x1690 }, // 105
+    StubExport { name: "vkCmdPipelineBarrier", rva: 0x16A0 }, // 106
+    StubExport { name: "vkCmdPushConstants", rva: 0x16B0 },   // 107
+    StubExport { name: "vkCmdClearColorImage", rva: 0x16C0 }, // 108
+    StubExport { name: "vkCmdClearDepthStencilImage", rva: 0x16D0 }, // 109
+    StubExport { name: "vkCmdResolveImage", rva: 0x16E0 },    // 110
+    StubExport { name: "vkCmdBlitImage", rva: 0x16F0 },       // 111
+    StubExport { name: "vkCmdFillBuffer", rva: 0x1700 },      // 112
+    StubExport { name: "vkCmdDispatch", rva: 0x1710 },        // 113
+    StubExport { name: "vkCmdExecuteCommands", rva: 0x1720 }, // 114
+    StubExport { name: "vkCmdSetLineWidth", rva: 0x1730 },    // 115
+    StubExport { name: "vkCmdSetDepthBias", rva: 0x1740 },    // 116
+    StubExport { name: "vkCmdSetBlendConstants", rva: 0x1750 }, // 117
+    StubExport { name: "vkCmdSetDepthBounds", rva: 0x1760 },  // 118
+    StubExport { name: "vkCmdSetStencilCompareMask", rva: 0x1770 }, // 119
+    StubExport { name: "vkCmdSetStencilWriteMask", rva: 0x1780 }, // 120
+    StubExport { name: "vkCmdSetStencilReference", rva: 0x1790 }, // 121
+    StubExport { name: "vkCmdWriteTimestamp", rva: 0x17A0 },  // 122
+    StubExport { name: "vkCmdResetQueryPool", rva: 0x17B0 },  // 123
+    StubExport { name: "vkCmdBeginQuery", rva: 0x17C0 },      // 124
+    StubExport { name: "vkCmdEndQuery", rva: 0x17D0 },        // 125
+    StubExport { name: "vkCmdCopyQueryPoolResults", rva: 0x17E0 }, // 126
+    StubExport { name: "vkCreateRenderPass2KHR", rva: 0x17F0 }, // 127
+    StubExport { name: "vkQueueSubmit2KHR", rva: 0x1800 },    // 128
 ];
 
 // ── api-ms-win-crt-* (UCRT forwarder DLLs) ────────────────────────────────────
@@ -875,300 +883,292 @@ const STUB_EXPORTS_VULKAN1: &[StubExport] = &[
 // RVAs are laid out sequentially at 0x10 increments per function.
 
 const STUB_EXPORTS_UCRT_RUNTIME: &[StubExport] = &[
-    StubExport { name: "_initterm",                   rva: 0x1000 }, // inline code (2 slots)
-    StubExport { name: "_initterm_e",                 rva: 0x1020 }, // inline code (2 slots)
-    StubExport { name: "_initialize_onexit_table",    rva: 0x1040 },
-    StubExport { name: "_register_onexit_function",   rva: 0x1050 },
-    StubExport { name: "_execute_onexit_table",       rva: 0x1060 }, // inline code (2 slots)
-    StubExport { name: "_beginthreadex",              rva: 0x1080 },
-    StubExport { name: "_endthreadex",                rva: 0x1090 },
-    StubExport { name: "_errno",                      rva: 0x10A0 },
-    StubExport { name: "abort",                       rva: 0x10B0 },
-    StubExport { name: "strerror",                    rva: 0x10C0 },
-    StubExport { name: "_assert",                     rva: 0x10D0 },
-    StubExport { name: "_exit",                       rva: 0x10E0 },
-    StubExport { name: "strerror_s",                  rva: 0x10F0 },
+    StubExport { name: "_initterm", rva: 0x1000 },   // inline code (2 slots)
+    StubExport { name: "_initterm_e", rva: 0x1020 }, // inline code (2 slots)
+    StubExport { name: "_initialize_onexit_table", rva: 0x1040 },
+    StubExport { name: "_register_onexit_function", rva: 0x1050 },
+    StubExport { name: "_execute_onexit_table", rva: 0x1060 }, // inline code (2 slots)
+    StubExport { name: "_beginthreadex", rva: 0x1080 },
+    StubExport { name: "_endthreadex", rva: 0x1090 },
+    StubExport { name: "_errno", rva: 0x10A0 },
+    StubExport { name: "abort", rva: 0x10B0 },
+    StubExport { name: "strerror", rva: 0x10C0 },
+    StubExport { name: "_assert", rva: 0x10D0 },
+    StubExport { name: "_exit", rva: 0x10E0 },
+    StubExport { name: "strerror_s", rva: 0x10F0 },
 ];
 
 const STUB_EXPORTS_UCRT_HEAP: &[StubExport] = &[
-    StubExport { name: "malloc",         rva: 0x1000 },
-    StubExport { name: "free",           rva: 0x1010 },
-    StubExport { name: "calloc",         rva: 0x1020 },
-    StubExport { name: "realloc",        rva: 0x1030 },
-    StubExport { name: "_aligned_malloc",rva: 0x1040 },
-    StubExport { name: "_aligned_free",  rva: 0x1050 },
+    StubExport { name: "malloc", rva: 0x1000 },
+    StubExport { name: "free", rva: 0x1010 },
+    StubExport { name: "calloc", rva: 0x1020 },
+    StubExport { name: "realloc", rva: 0x1030 },
+    StubExport { name: "_aligned_malloc", rva: 0x1040 },
+    StubExport { name: "_aligned_free", rva: 0x1050 },
 ];
 
 const STUB_EXPORTS_UCRT_STRING: &[StubExport] = &[
-    StubExport { name: "memset",   rva: 0x1000 },
-    StubExport { name: "strcmp",   rva: 0x1010 },
-    StubExport { name: "strlen",   rva: 0x1020 },
-    StubExport { name: "strncmp",  rva: 0x1030 },
-    StubExport { name: "strncpy",  rva: 0x1040 },
-    StubExport { name: "strnlen",  rva: 0x1050 },
-    StubExport { name: "strcoll",  rva: 0x1060 },
-    StubExport { name: "strxfrm",  rva: 0x1070 },
+    StubExport { name: "memset", rva: 0x1000 },
+    StubExport { name: "strcmp", rva: 0x1010 },
+    StubExport { name: "strlen", rva: 0x1020 },
+    StubExport { name: "strncmp", rva: 0x1030 },
+    StubExport { name: "strncpy", rva: 0x1040 },
+    StubExport { name: "strnlen", rva: 0x1050 },
+    StubExport { name: "strcoll", rva: 0x1060 },
+    StubExport { name: "strxfrm", rva: 0x1070 },
     StubExport { name: "towlower", rva: 0x1080 },
     StubExport { name: "towupper", rva: 0x1090 },
-    StubExport { name: "wcscoll",  rva: 0x10A0 },
-    StubExport { name: "wcslen",   rva: 0x10B0 },
-    StubExport { name: "wcsnlen",  rva: 0x10C0 },
-    StubExport { name: "wcscmp",   rva: 0x10D0 },
-    StubExport { name: "wcsxfrm",  rva: 0x10E0 },
-    StubExport { name: "wctype",   rva: 0x10F0 },
+    StubExport { name: "wcscoll", rva: 0x10A0 },
+    StubExport { name: "wcslen", rva: 0x10B0 },
+    StubExport { name: "wcsnlen", rva: 0x10C0 },
+    StubExport { name: "wcscmp", rva: 0x10D0 },
+    StubExport { name: "wcsxfrm", rva: 0x10E0 },
+    StubExport { name: "wctype", rva: 0x10F0 },
     StubExport { name: "_wcsicmp", rva: 0x1100 },
-    StubExport { name: "_strdup",  rva: 0x1110 },
+    StubExport { name: "_strdup", rva: 0x1110 },
     StubExport { name: "iswctype", rva: 0x1120 },
-    StubExport { name: "_mbstrlen",rva: 0x1130 },
+    StubExport { name: "_mbstrlen", rva: 0x1130 },
 ];
 
 const STUB_EXPORTS_UCRT_PRIVATE: &[StubExport] = &[
-    StubExport { name: "memcpy",   rva: 0x1000 },
-    StubExport { name: "memmove",  rva: 0x1010 },
-    StubExport { name: "memcmp",   rva: 0x1020 },
-    StubExport { name: "memchr",   rva: 0x1030 },
-    StubExport { name: "strchr",   rva: 0x1040 },
+    StubExport { name: "memcpy", rva: 0x1000 },
+    StubExport { name: "memmove", rva: 0x1010 },
+    StubExport { name: "memcmp", rva: 0x1020 },
+    StubExport { name: "memchr", rva: 0x1030 },
+    StubExport { name: "strchr", rva: 0x1040 },
     StubExport { name: "_setjmp3", rva: 0x1050 },
-    StubExport { name: "longjmp",  rva: 0x1060 },
+    StubExport { name: "longjmp", rva: 0x1060 },
 ];
 
 const STUB_EXPORTS_UCRT_STDIO: &[StubExport] = &[
-    StubExport { name: "__acrt_iob_func",         rva: 0x1000 },
-    StubExport { name: "__stdio_common_vfprintf",  rva: 0x1010 },
-    StubExport { name: "__stdio_common_vsprintf",  rva: 0x1020 },
-    StubExport { name: "_get_osfhandle",           rva: 0x1030 },
-    StubExport { name: "_lseeki64",                rva: 0x1040 },
-    StubExport { name: "_wfopen",                  rva: 0x1050 },
-    StubExport { name: "fclose",                   rva: 0x1060 },
-    StubExport { name: "fflush",                   rva: 0x1070 },
-    StubExport { name: "fopen",                    rva: 0x1080 },
-    StubExport { name: "fputc",                    rva: 0x1090 },
-    StubExport { name: "fputs",                    rva: 0x10A0 },
-    StubExport { name: "fwrite",                   rva: 0x10B0 },
-    StubExport { name: "setvbuf",                  rva: 0x10C0 },
-    StubExport { name: "_write",                   rva: 0x10D0 },
-    StubExport { name: "_read",                    rva: 0x10E0 },
-    StubExport { name: "_fileno",                  rva: 0x10F0 },
-    StubExport { name: "fread",                    rva: 0x1100 },
-    StubExport { name: "ftell",                    rva: 0x1110 },
-    StubExport { name: "_fseeki64",                rva: 0x1120 },
-    StubExport { name: "_ftelli64",                rva: 0x1130 },
-    StubExport { name: "_fdopen",                  rva: 0x1140 },
+    StubExport { name: "__acrt_iob_func", rva: 0x1000 },
+    StubExport { name: "__stdio_common_vfprintf", rva: 0x1010 },
+    StubExport { name: "__stdio_common_vsprintf", rva: 0x1020 },
+    StubExport { name: "_get_osfhandle", rva: 0x1030 },
+    StubExport { name: "_lseeki64", rva: 0x1040 },
+    StubExport { name: "_wfopen", rva: 0x1050 },
+    StubExport { name: "fclose", rva: 0x1060 },
+    StubExport { name: "fflush", rva: 0x1070 },
+    StubExport { name: "fopen", rva: 0x1080 },
+    StubExport { name: "fputc", rva: 0x1090 },
+    StubExport { name: "fputs", rva: 0x10A0 },
+    StubExport { name: "fwrite", rva: 0x10B0 },
+    StubExport { name: "setvbuf", rva: 0x10C0 },
+    StubExport { name: "_write", rva: 0x10D0 },
+    StubExport { name: "_read", rva: 0x10E0 },
+    StubExport { name: "_fileno", rva: 0x10F0 },
+    StubExport { name: "fread", rva: 0x1100 },
+    StubExport { name: "ftell", rva: 0x1110 },
+    StubExport { name: "_fseeki64", rva: 0x1120 },
+    StubExport { name: "_ftelli64", rva: 0x1130 },
+    StubExport { name: "_fdopen", rva: 0x1140 },
 ];
 
 const STUB_EXPORTS_UCRT_CONVERT: &[StubExport] = &[
-    StubExport { name: "btowc",      rva: 0x1000 },
-    StubExport { name: "mbrtowc",    rva: 0x1010 },
-    StubExport { name: "mbsrtowcs",  rva: 0x1020 },
-    StubExport { name: "strtoul",    rva: 0x1030 },
-    StubExport { name: "wcrtomb",    rva: 0x1040 },
-    StubExport { name: "wctob",      rva: 0x1050 },
+    StubExport { name: "btowc", rva: 0x1000 },
+    StubExport { name: "mbrtowc", rva: 0x1010 },
+    StubExport { name: "mbsrtowcs", rva: 0x1020 },
+    StubExport { name: "strtoul", rva: 0x1030 },
+    StubExport { name: "wcrtomb", rva: 0x1040 },
+    StubExport { name: "wctob", rva: 0x1050 },
 ];
 
-const STUB_EXPORTS_UCRT_ENV: &[StubExport] = &[
-    StubExport { name: "getenv", rva: 0x1000 },
-];
+const STUB_EXPORTS_UCRT_ENV: &[StubExport] = &[StubExport { name: "getenv", rva: 0x1000 }];
 
 const STUB_EXPORTS_UCRT_FILESYSTEM: &[StubExport] = &[
-    StubExport { name: "_fstat64",    rva: 0x1000 },
-    StubExport { name: "_lock_file",  rva: 0x1010 },
-    StubExport { name: "_unlock_file",rva: 0x1020 },
-    StubExport { name: "remove",      rva: 0x1030 },
+    StubExport { name: "_fstat64", rva: 0x1000 },
+    StubExport { name: "_lock_file", rva: 0x1010 },
+    StubExport { name: "_unlock_file", rva: 0x1020 },
+    StubExport { name: "remove", rva: 0x1030 },
 ];
 
 const STUB_EXPORTS_UCRT_LOCALE: &[StubExport] = &[
     StubExport { name: "___mb_cur_max_func", rva: 0x1000 },
-    StubExport { name: "localeconv",         rva: 0x1010 },
-    StubExport { name: "setlocale",          rva: 0x1020 },
+    StubExport { name: "localeconv", rva: 0x1010 },
+    StubExport { name: "setlocale", rva: 0x1020 },
 ];
 
 const STUB_EXPORTS_UCRT_MATH: &[StubExport] = &[
-    StubExport { name: "cos",    rva: 0x1000 },
-    StubExport { name: "fmaxf",  rva: 0x1010 },
-    StubExport { name: "fminf",  rva: 0x1020 },
-    StubExport { name: "pow",    rva: 0x1030 },
-    StubExport { name: "_fdopen",rva: 0x1040 },
+    StubExport { name: "cos", rva: 0x1000 },
+    StubExport { name: "fmaxf", rva: 0x1010 },
+    StubExport { name: "fminf", rva: 0x1020 },
+    StubExport { name: "pow", rva: 0x1030 },
+    StubExport { name: "_fdopen", rva: 0x1040 },
 ];
 
-const STUB_EXPORTS_UCRT_TIME: &[StubExport] = &[
-    StubExport { name: "strftime",  rva: 0x1000 },
-    StubExport { name: "wcsftime",  rva: 0x1010 },
-];
+const STUB_EXPORTS_UCRT_TIME: &[StubExport] =
+    &[StubExport { name: "strftime", rva: 0x1000 }, StubExport { name: "wcsftime", rva: 0x1010 }];
 
-const STUB_EXPORTS_UCRT_UTILITY: &[StubExport] = &[
-    StubExport { name: "rand_s", rva: 0x1000 },
-];
+const STUB_EXPORTS_UCRT_UTILITY: &[StubExport] = &[StubExport { name: "rand_s", rva: 0x1000 }];
 
 // dbghelp.dll — Ghost Recon imports SymGetLineFromAddr by name.
 // Return FALSE so debug paths in game code fail gracefully.
 const STUB_EXPORTS_DBGHELP: &[StubExport] = &[
-    StubExport { name: "SymGetLineFromAddr",      rva: 0x1000 },
-    StubExport { name: "StackWalk",               rva: 0x1010 },
-    StubExport { name: "SymCleanup",              rva: 0x1020 },
-    StubExport { name: "SymFunctionTableAccess",  rva: 0x1030 },
-    StubExport { name: "SymGetModuleInfo",        rva: 0x1040 },
-    StubExport { name: "SymGetOptions",           rva: 0x1050 },
-    StubExport { name: "SymGetSymFromAddr",       rva: 0x1060 },
-    StubExport { name: "SymInitialize",           rva: 0x1070 },
-    StubExport { name: "SymLoadModule",           rva: 0x1080 },
-    StubExport { name: "SymSetOptions",           rva: 0x1090 },
-    StubExport { name: "SymUnDName",              rva: 0x10A0 },
-    StubExport { name: "UnDecorateSymbolName",    rva: 0x10B0 },
+    StubExport { name: "SymGetLineFromAddr", rva: 0x1000 },
+    StubExport { name: "StackWalk", rva: 0x1010 },
+    StubExport { name: "SymCleanup", rva: 0x1020 },
+    StubExport { name: "SymFunctionTableAccess", rva: 0x1030 },
+    StubExport { name: "SymGetModuleInfo", rva: 0x1040 },
+    StubExport { name: "SymGetOptions", rva: 0x1050 },
+    StubExport { name: "SymGetSymFromAddr", rva: 0x1060 },
+    StubExport { name: "SymInitialize", rva: 0x1070 },
+    StubExport { name: "SymLoadModule", rva: 0x1080 },
+    StubExport { name: "SymSetOptions", rva: 0x1090 },
+    StubExport { name: "SymUnDName", rva: 0x10A0 },
+    StubExport { name: "UnDecorateSymbolName", rva: 0x10B0 },
 ];
 
 // ole32.dll — CoFreeUnusedLibraries is imported by some DLLs; void no-op.
 const STUB_EXPORTS_OLE32: &[StubExport] = &[
     StubExport { name: "CoFreeUnusedLibraries", rva: 0x1000 },
-    StubExport { name: "CoInitialize",          rva: 0x1010 },
-    StubExport { name: "CoUninitialize",         rva: 0x1020 },
-    StubExport { name: "CoCreateInstance",       rva: 0x1030 },
-    StubExport { name: "CoTaskMemAlloc",         rva: 0x1040 },
-    StubExport { name: "CoTaskMemFree",          rva: 0x1050 },
+    StubExport { name: "CoInitialize", rva: 0x1010 },
+    StubExport { name: "CoUninitialize", rva: 0x1020 },
+    StubExport { name: "CoCreateInstance", rva: 0x1030 },
+    StubExport { name: "CoTaskMemAlloc", rva: 0x1040 },
+    StubExport { name: "CoTaskMemFree", rva: 0x1050 },
 ];
 
 // dinput8.dll — DirectInput8Create exported by name (some builds also ordinal).
-const STUB_EXPORTS_DINPUT8: &[StubExport] = &[
-    StubExport { name: "DirectInput8Create", rva: 0x1000 },
-];
+const STUB_EXPORTS_DINPUT8: &[StubExport] = &[StubExport { name: "DirectInput8Create", rva: 0x1000 }];
 
 // dsound.dll — DirectSoundCreate is ordinal #1 and also exported by name.
 const STUB_EXPORTS_DSOUND: &[StubExport] = &[
-    StubExport { name: "DirectSoundCreate",         rva: 0x1000 }, // ordinal 1
-    StubExport { name: "DirectSoundCreate8",         rva: 0x1010 }, // ordinal 2
-    StubExport { name: "DirectSoundCaptureCreate",   rva: 0x1020 }, // ordinal 3 (pad)
-    StubExport { name: "DirectSoundCaptureCreate8",  rva: 0x1030 }, // ordinal 4 (pad)
-    StubExport { name: "DirectSoundCapture5",        rva: 0x1040 }, // ordinal 5 (pad)
-    StubExport { name: "DirectSoundCapture6",        rva: 0x1050 }, // ordinal 6 (pad)
-    StubExport { name: "DirectSoundCapture7",        rva: 0x1060 }, // ordinal 7 (pad)
-    StubExport { name: "GetDeviceID",                rva: 0x1070 }, // ordinal 8 (pad)
-    StubExport { name: "DirectSoundFullDuplexCreate",rva: 0x1080 }, // ordinal 9 (pad)
-    StubExport { name: "DllCanUnloadNow",            rva: 0x1090 }, // ordinal 10 (pad)
-    StubExport { name: "DirectSoundEnumerateA",      rva: 0x10A0 }, // ordinal 11
+    StubExport { name: "DirectSoundCreate", rva: 0x1000 },  // ordinal 1
+    StubExport { name: "DirectSoundCreate8", rva: 0x1010 }, // ordinal 2
+    StubExport { name: "DirectSoundCaptureCreate", rva: 0x1020 }, // ordinal 3 (pad)
+    StubExport { name: "DirectSoundCaptureCreate8", rva: 0x1030 }, // ordinal 4 (pad)
+    StubExport { name: "DirectSoundCapture5", rva: 0x1040 }, // ordinal 5 (pad)
+    StubExport { name: "DirectSoundCapture6", rva: 0x1050 }, // ordinal 6 (pad)
+    StubExport { name: "DirectSoundCapture7", rva: 0x1060 }, // ordinal 7 (pad)
+    StubExport { name: "GetDeviceID", rva: 0x1070 },        // ordinal 8 (pad)
+    StubExport { name: "DirectSoundFullDuplexCreate", rva: 0x1080 }, // ordinal 9 (pad)
+    StubExport { name: "DllCanUnloadNow", rva: 0x1090 },    // ordinal 10 (pad)
+    StubExport { name: "DirectSoundEnumerateA", rva: 0x10A0 }, // ordinal 11
 ];
 
 // wsock32.dll — accept is ordinal #1; also exported by name.
 // Return SOCKET_ERROR (0xFFFF_FFFF as u32) so callers fall back to TCP-less mode.
 const STUB_EXPORTS_WSOCK32: &[StubExport] = &[
-    StubExport { name: "accept",         rva: 0x1000 }, // ordinal 1
-    StubExport { name: "bind",           rva: 0x1010 }, // ordinal 2
-    StubExport { name: "closesocket",    rva: 0x1020 }, // ordinal 3
-    StubExport { name: "connect",        rva: 0x1030 }, // ordinal 4
-    StubExport { name: "getpeername",    rva: 0x1040 }, // ordinal 5
-    StubExport { name: "getsockname",    rva: 0x1050 }, // ordinal 6
-    StubExport { name: "getsockopt",     rva: 0x1060 }, // ordinal 7
-    StubExport { name: "htonl",          rva: 0x1070 }, // ordinal 8
-    StubExport { name: "htons",          rva: 0x1080 }, // ordinal 9
-    StubExport { name: "inet_addr",      rva: 0x1090 }, // ordinal 10
-    StubExport { name: "inet_ntoa",      rva: 0x10A0 }, // ordinal 11
-    StubExport { name: "listen",         rva: 0x10B0 }, // ordinal 12
-    StubExport { name: "ntohl",          rva: 0x10C0 }, // ordinal 13
-    StubExport { name: "ntohs",          rva: 0x10D0 }, // ordinal 14
-    StubExport { name: "recv",           rva: 0x10E0 }, // ordinal 15
-    StubExport { name: "recvfrom",       rva: 0x10F0 }, // ordinal 16
-    StubExport { name: "select",         rva: 0x1100 }, // ordinal 17
-    StubExport { name: "send",           rva: 0x1110 }, // ordinal 18
-    StubExport { name: "sendto",         rva: 0x1120 }, // ordinal 19
-    StubExport { name: "setsockopt",     rva: 0x1130 }, // ordinal 20
-    StubExport { name: "shutdown",       rva: 0x1140 }, // ordinal 21
-    StubExport { name: "socket",         rva: 0x1150 }, // ordinal 22
-    StubExport { name: "gethostbyaddr",  rva: 0x1160 }, // ordinal 23 (placeholder)
+    StubExport { name: "accept", rva: 0x1000 },        // ordinal 1
+    StubExport { name: "bind", rva: 0x1010 },          // ordinal 2
+    StubExport { name: "closesocket", rva: 0x1020 },   // ordinal 3
+    StubExport { name: "connect", rva: 0x1030 },       // ordinal 4
+    StubExport { name: "getpeername", rva: 0x1040 },   // ordinal 5
+    StubExport { name: "getsockname", rva: 0x1050 },   // ordinal 6
+    StubExport { name: "getsockopt", rva: 0x1060 },    // ordinal 7
+    StubExport { name: "htonl", rva: 0x1070 },         // ordinal 8
+    StubExport { name: "htons", rva: 0x1080 },         // ordinal 9
+    StubExport { name: "inet_addr", rva: 0x1090 },     // ordinal 10
+    StubExport { name: "inet_ntoa", rva: 0x10A0 },     // ordinal 11
+    StubExport { name: "listen", rva: 0x10B0 },        // ordinal 12
+    StubExport { name: "ntohl", rva: 0x10C0 },         // ordinal 13
+    StubExport { name: "ntohs", rva: 0x10D0 },         // ordinal 14
+    StubExport { name: "recv", rva: 0x10E0 },          // ordinal 15
+    StubExport { name: "recvfrom", rva: 0x10F0 },      // ordinal 16
+    StubExport { name: "select", rva: 0x1100 },        // ordinal 17
+    StubExport { name: "send", rva: 0x1110 },          // ordinal 18
+    StubExport { name: "sendto", rva: 0x1120 },        // ordinal 19
+    StubExport { name: "setsockopt", rva: 0x1130 },    // ordinal 20
+    StubExport { name: "shutdown", rva: 0x1140 },      // ordinal 21
+    StubExport { name: "socket", rva: 0x1150 },        // ordinal 22
+    StubExport { name: "gethostbyaddr", rva: 0x1160 }, // ordinal 23 (placeholder)
     // ordinals 24-51: padding stubs
-    StubExport { name: "ws_ord24",  rva: 0x1170 }, // 24
-    StubExport { name: "ws_ord25",  rva: 0x1170 }, // 25
-    StubExport { name: "ws_ord26",  rva: 0x1170 }, // 26
-    StubExport { name: "ws_ord27",  rva: 0x1170 }, // 27
-    StubExport { name: "ws_ord28",  rva: 0x1170 }, // 28
-    StubExport { name: "ws_ord29",  rva: 0x1170 }, // 29
-    StubExport { name: "ws_ord30",  rva: 0x1170 }, // 30
-    StubExport { name: "ws_ord31",  rva: 0x1170 }, // 31
-    StubExport { name: "ws_ord32",  rva: 0x1170 }, // 32
-    StubExport { name: "ws_ord33",  rva: 0x1170 }, // 33
-    StubExport { name: "ws_ord34",  rva: 0x1170 }, // 34
-    StubExport { name: "ws_ord35",  rva: 0x1170 }, // 35
-    StubExport { name: "ws_ord36",  rva: 0x1170 }, // 36
-    StubExport { name: "ws_ord37",  rva: 0x1170 }, // 37
-    StubExport { name: "ws_ord38",  rva: 0x1170 }, // 38
-    StubExport { name: "ws_ord39",  rva: 0x1170 }, // 39
-    StubExport { name: "ws_ord40",  rva: 0x1170 }, // 40
-    StubExport { name: "ws_ord41",  rva: 0x1170 }, // 41
-    StubExport { name: "ws_ord42",  rva: 0x1170 }, // 42
-    StubExport { name: "ws_ord43",  rva: 0x1170 }, // 43
-    StubExport { name: "ws_ord44",  rva: 0x1170 }, // 44
-    StubExport { name: "ws_ord45",  rva: 0x1170 }, // 45
-    StubExport { name: "ws_ord46",  rva: 0x1170 }, // 46
-    StubExport { name: "ws_ord47",  rva: 0x1170 }, // 47
-    StubExport { name: "ws_ord48",  rva: 0x1170 }, // 48
-    StubExport { name: "ws_ord49",  rva: 0x1170 }, // 49
-    StubExport { name: "ws_ord50",  rva: 0x1170 }, // 50
-    StubExport { name: "ws_ord51",  rva: 0x1170 }, // 51
-    StubExport { name: "gethostbyname",  rva: 0x1180 }, // ordinal 52
+    StubExport { name: "ws_ord24", rva: 0x1170 },      // 24
+    StubExport { name: "ws_ord25", rva: 0x1170 },      // 25
+    StubExport { name: "ws_ord26", rva: 0x1170 },      // 26
+    StubExport { name: "ws_ord27", rva: 0x1170 },      // 27
+    StubExport { name: "ws_ord28", rva: 0x1170 },      // 28
+    StubExport { name: "ws_ord29", rva: 0x1170 },      // 29
+    StubExport { name: "ws_ord30", rva: 0x1170 },      // 30
+    StubExport { name: "ws_ord31", rva: 0x1170 },      // 31
+    StubExport { name: "ws_ord32", rva: 0x1170 },      // 32
+    StubExport { name: "ws_ord33", rva: 0x1170 },      // 33
+    StubExport { name: "ws_ord34", rva: 0x1170 },      // 34
+    StubExport { name: "ws_ord35", rva: 0x1170 },      // 35
+    StubExport { name: "ws_ord36", rva: 0x1170 },      // 36
+    StubExport { name: "ws_ord37", rva: 0x1170 },      // 37
+    StubExport { name: "ws_ord38", rva: 0x1170 },      // 38
+    StubExport { name: "ws_ord39", rva: 0x1170 },      // 39
+    StubExport { name: "ws_ord40", rva: 0x1170 },      // 40
+    StubExport { name: "ws_ord41", rva: 0x1170 },      // 41
+    StubExport { name: "ws_ord42", rva: 0x1170 },      // 42
+    StubExport { name: "ws_ord43", rva: 0x1170 },      // 43
+    StubExport { name: "ws_ord44", rva: 0x1170 },      // 44
+    StubExport { name: "ws_ord45", rva: 0x1170 },      // 45
+    StubExport { name: "ws_ord46", rva: 0x1170 },      // 46
+    StubExport { name: "ws_ord47", rva: 0x1170 },      // 47
+    StubExport { name: "ws_ord48", rva: 0x1170 },      // 48
+    StubExport { name: "ws_ord49", rva: 0x1170 },      // 49
+    StubExport { name: "ws_ord50", rva: 0x1170 },      // 50
+    StubExport { name: "ws_ord51", rva: 0x1170 },      // 51
+    StubExport { name: "gethostbyname", rva: 0x1180 }, // ordinal 52
     // ordinals 53-56: padding
-    StubExport { name: "ws_ord53",  rva: 0x1170 }, // 53
-    StubExport { name: "ws_ord54",  rva: 0x1170 }, // 54
-    StubExport { name: "ws_ord55",  rva: 0x1170 }, // 55
-    StubExport { name: "ws_ord56",  rva: 0x1170 }, // 56
-    StubExport { name: "gethostname",    rva: 0x1190 }, // ordinal 57
+    StubExport { name: "ws_ord53", rva: 0x1170 },    // 53
+    StubExport { name: "ws_ord54", rva: 0x1170 },    // 54
+    StubExport { name: "ws_ord55", rva: 0x1170 },    // 55
+    StubExport { name: "ws_ord56", rva: 0x1170 },    // 56
+    StubExport { name: "gethostname", rva: 0x1190 }, // ordinal 57
     // ordinals 58-110: padding
-    StubExport { name: "ws_ord58",  rva: 0x1170 }, // 58
-    StubExport { name: "ws_ord59",  rva: 0x1170 }, // 59
-    StubExport { name: "ws_ord60",  rva: 0x1170 }, // 60
-    StubExport { name: "ws_ord61",  rva: 0x1170 }, // 61
-    StubExport { name: "ws_ord62",  rva: 0x1170 }, // 62
-    StubExport { name: "ws_ord63",  rva: 0x1170 }, // 63
-    StubExport { name: "ws_ord64",  rva: 0x1170 }, // 64
-    StubExport { name: "ws_ord65",  rva: 0x1170 }, // 65
-    StubExport { name: "ws_ord66",  rva: 0x1170 }, // 66
-    StubExport { name: "ws_ord67",  rva: 0x1170 }, // 67
-    StubExport { name: "ws_ord68",  rva: 0x1170 }, // 68
-    StubExport { name: "ws_ord69",  rva: 0x1170 }, // 69
-    StubExport { name: "ws_ord70",  rva: 0x1170 }, // 70
-    StubExport { name: "ws_ord71",  rva: 0x1170 }, // 71
-    StubExport { name: "ws_ord72",  rva: 0x1170 }, // 72
-    StubExport { name: "ws_ord73",  rva: 0x1170 }, // 73
-    StubExport { name: "ws_ord74",  rva: 0x1170 }, // 74
-    StubExport { name: "ws_ord75",  rva: 0x1170 }, // 75
-    StubExport { name: "ws_ord76",  rva: 0x1170 }, // 76
-    StubExport { name: "ws_ord77",  rva: 0x1170 }, // 77
-    StubExport { name: "ws_ord78",  rva: 0x1170 }, // 78
-    StubExport { name: "ws_ord79",  rva: 0x1170 }, // 79
-    StubExport { name: "ws_ord80",  rva: 0x1170 }, // 80
-    StubExport { name: "ws_ord81",  rva: 0x1170 }, // 81
-    StubExport { name: "ws_ord82",  rva: 0x1170 }, // 82
-    StubExport { name: "ws_ord83",  rva: 0x1170 }, // 83
-    StubExport { name: "ws_ord84",  rva: 0x1170 }, // 84
-    StubExport { name: "ws_ord85",  rva: 0x1170 }, // 85
-    StubExport { name: "ws_ord86",  rva: 0x1170 }, // 86
-    StubExport { name: "ws_ord87",  rva: 0x1170 }, // 87
-    StubExport { name: "ws_ord88",  rva: 0x1170 }, // 88
-    StubExport { name: "ws_ord89",  rva: 0x1170 }, // 89
-    StubExport { name: "ws_ord90",  rva: 0x1170 }, // 90
-    StubExport { name: "ws_ord91",  rva: 0x1170 }, // 91
-    StubExport { name: "ws_ord92",  rva: 0x1170 }, // 92
-    StubExport { name: "ws_ord93",  rva: 0x1170 }, // 93
-    StubExport { name: "ws_ord94",  rva: 0x1170 }, // 94
-    StubExport { name: "ws_ord95",  rva: 0x1170 }, // 95
-    StubExport { name: "ws_ord96",  rva: 0x1170 }, // 96
-    StubExport { name: "ws_ord97",  rva: 0x1170 }, // 97
-    StubExport { name: "ws_ord98",  rva: 0x1170 }, // 98
-    StubExport { name: "ws_ord99",  rva: 0x1170 }, // 99
-    StubExport { name: "ws_ord100", rva: 0x1170 }, // 100
-    StubExport { name: "ws_ord101", rva: 0x1170 }, // 101
-    StubExport { name: "ws_ord102", rva: 0x1170 }, // 102
-    StubExport { name: "ws_ord103", rva: 0x1170 }, // 103
-    StubExport { name: "ws_ord104", rva: 0x1170 }, // 104
-    StubExport { name: "ws_ord105", rva: 0x1170 }, // 105
-    StubExport { name: "ws_ord106", rva: 0x1170 }, // 106
-    StubExport { name: "ws_ord107", rva: 0x1170 }, // 107
-    StubExport { name: "ws_ord108", rva: 0x1170 }, // 108
-    StubExport { name: "ws_ord109", rva: 0x1170 }, // 109
-    StubExport { name: "ws_ord110", rva: 0x1170 }, // 110
-    StubExport { name: "WSAStartup",     rva: 0x11A0 }, // ordinal 111
+    StubExport { name: "ws_ord58", rva: 0x1170 },   // 58
+    StubExport { name: "ws_ord59", rva: 0x1170 },   // 59
+    StubExport { name: "ws_ord60", rva: 0x1170 },   // 60
+    StubExport { name: "ws_ord61", rva: 0x1170 },   // 61
+    StubExport { name: "ws_ord62", rva: 0x1170 },   // 62
+    StubExport { name: "ws_ord63", rva: 0x1170 },   // 63
+    StubExport { name: "ws_ord64", rva: 0x1170 },   // 64
+    StubExport { name: "ws_ord65", rva: 0x1170 },   // 65
+    StubExport { name: "ws_ord66", rva: 0x1170 },   // 66
+    StubExport { name: "ws_ord67", rva: 0x1170 },   // 67
+    StubExport { name: "ws_ord68", rva: 0x1170 },   // 68
+    StubExport { name: "ws_ord69", rva: 0x1170 },   // 69
+    StubExport { name: "ws_ord70", rva: 0x1170 },   // 70
+    StubExport { name: "ws_ord71", rva: 0x1170 },   // 71
+    StubExport { name: "ws_ord72", rva: 0x1170 },   // 72
+    StubExport { name: "ws_ord73", rva: 0x1170 },   // 73
+    StubExport { name: "ws_ord74", rva: 0x1170 },   // 74
+    StubExport { name: "ws_ord75", rva: 0x1170 },   // 75
+    StubExport { name: "ws_ord76", rva: 0x1170 },   // 76
+    StubExport { name: "ws_ord77", rva: 0x1170 },   // 77
+    StubExport { name: "ws_ord78", rva: 0x1170 },   // 78
+    StubExport { name: "ws_ord79", rva: 0x1170 },   // 79
+    StubExport { name: "ws_ord80", rva: 0x1170 },   // 80
+    StubExport { name: "ws_ord81", rva: 0x1170 },   // 81
+    StubExport { name: "ws_ord82", rva: 0x1170 },   // 82
+    StubExport { name: "ws_ord83", rva: 0x1170 },   // 83
+    StubExport { name: "ws_ord84", rva: 0x1170 },   // 84
+    StubExport { name: "ws_ord85", rva: 0x1170 },   // 85
+    StubExport { name: "ws_ord86", rva: 0x1170 },   // 86
+    StubExport { name: "ws_ord87", rva: 0x1170 },   // 87
+    StubExport { name: "ws_ord88", rva: 0x1170 },   // 88
+    StubExport { name: "ws_ord89", rva: 0x1170 },   // 89
+    StubExport { name: "ws_ord90", rva: 0x1170 },   // 90
+    StubExport { name: "ws_ord91", rva: 0x1170 },   // 91
+    StubExport { name: "ws_ord92", rva: 0x1170 },   // 92
+    StubExport { name: "ws_ord93", rva: 0x1170 },   // 93
+    StubExport { name: "ws_ord94", rva: 0x1170 },   // 94
+    StubExport { name: "ws_ord95", rva: 0x1170 },   // 95
+    StubExport { name: "ws_ord96", rva: 0x1170 },   // 96
+    StubExport { name: "ws_ord97", rva: 0x1170 },   // 97
+    StubExport { name: "ws_ord98", rva: 0x1170 },   // 98
+    StubExport { name: "ws_ord99", rva: 0x1170 },   // 99
+    StubExport { name: "ws_ord100", rva: 0x1170 },  // 100
+    StubExport { name: "ws_ord101", rva: 0x1170 },  // 101
+    StubExport { name: "ws_ord102", rva: 0x1170 },  // 102
+    StubExport { name: "ws_ord103", rva: 0x1170 },  // 103
+    StubExport { name: "ws_ord104", rva: 0x1170 },  // 104
+    StubExport { name: "ws_ord105", rva: 0x1170 },  // 105
+    StubExport { name: "ws_ord106", rva: 0x1170 },  // 106
+    StubExport { name: "ws_ord107", rva: 0x1170 },  // 107
+    StubExport { name: "ws_ord108", rva: 0x1170 },  // 108
+    StubExport { name: "ws_ord109", rva: 0x1170 },  // 109
+    StubExport { name: "ws_ord110", rva: 0x1170 },  // 110
+    StubExport { name: "WSAStartup", rva: 0x11A0 }, // ordinal 111
     // ordinals 112-114: padding
-    StubExport { name: "ws_ord112", rva: 0x1170 }, // 112
-    StubExport { name: "ws_ord113", rva: 0x1170 }, // 113
-    StubExport { name: "ws_ord114", rva: 0x1170 }, // 114
-    StubExport { name: "WSACleanup",     rva: 0x11B0 }, // ordinal 115
-    StubExport { name: "WSASetLastError",rva: 0x11C0 }, // ordinal 116
+    StubExport { name: "ws_ord112", rva: 0x1170 },       // 112
+    StubExport { name: "ws_ord113", rva: 0x1170 },       // 113
+    StubExport { name: "ws_ord114", rva: 0x1170 },       // 114
+    StubExport { name: "WSACleanup", rva: 0x11B0 },      // ordinal 115
+    StubExport { name: "WSASetLastError", rva: 0x11C0 }, // ordinal 116
 ];
 
 // ── Dynamic DLL tracking ──────────────────────────────────────────────────────
@@ -1180,8 +1180,8 @@ struct DllEntry {
     base: u32,
     #[expect(dead_code, reason = "recorded for address-to-module lookups, not queried yet")]
     size: u32,
-    entry_rva: u32,    // AddressOfEntryPoint (DllMain RVA), 0 if none
-    name: [u8; 32],    // uppercase, NUL-padded, filename only
+    entry_rva: u32, // AddressOfEntryPoint (DllMain RVA), 0 if none
+    name: [u8; 32], // uppercase, NUL-padded, filename only
 }
 
 static LOADED_DLL_MAP: spin::Mutex<[Option<DllEntry>; 32]> = spin::Mutex::new([None; 32]);
@@ -1193,7 +1193,9 @@ pub fn register_loaded_dll(base: u32, size: u32, name: &str) {
         if e_lfanew > 0 && e_lfanew < 0x1000 {
             let opt_off = base as u64 + e_lfanew as u64 + 4 + 20;
             core::ptr::read_unaligned((opt_off + 16) as *const u32)
-        } else { 0 }
+        } else {
+            0
+        }
     };
     let mut map = LOADED_DLL_MAP.lock();
     let base_name = name.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(name);
@@ -1202,7 +1204,10 @@ pub fn register_loaded_dll(base: u32, size: u32, name: &str) {
         entry.name[i] = b.to_ascii_uppercase();
     }
     for slot in map.iter_mut() {
-        if slot.is_none() { *slot = Some(entry); return; }
+        if slot.is_none() {
+            *slot = Some(entry);
+            return;
+        }
     }
     map[0] = Some(entry);
 }
@@ -1250,39 +1255,99 @@ pub fn resolve_stub_proc_any(name: &str) -> Option<u32> {
 }
 
 const STUB_MODULES: &[StubModule] = &[
-    StubModule { dll: "ntdll.dll",    base: 0x1000_0000, exports: STUB_EXPORTS_NTDLL,    ordinal_base: 0 },
+    StubModule { dll: "ntdll.dll", base: 0x1000_0000, exports: STUB_EXPORTS_NTDLL, ordinal_base: 0 },
     StubModule { dll: "kernel32.dll", base: 0x7000_0000, exports: STUB_EXPORTS_KERNEL32, ordinal_base: 0 },
-    StubModule { dll: "user32.dll",   base: 0x7100_0000, exports: STUB_EXPORTS_USER32,   ordinal_base: 0 },
-    StubModule { dll: "msvcrt.dll",   base: 0x7200_0000, exports: STUB_EXPORTS_MSVCRT,   ordinal_base: 0 },
-    StubModule { dll: "winmm.dll",    base: 0x7300_0000, exports: STUB_EXPORTS_WINMM,    ordinal_base: 0 },
-    StubModule { dll: "d3d8.dll",     base: 0x7400_0000, exports: STUB_EXPORTS_D3D8,     ordinal_base: 0 },
+    StubModule { dll: "user32.dll", base: 0x7100_0000, exports: STUB_EXPORTS_USER32, ordinal_base: 0 },
+    StubModule { dll: "msvcrt.dll", base: 0x7200_0000, exports: STUB_EXPORTS_MSVCRT, ordinal_base: 0 },
+    StubModule { dll: "winmm.dll", base: 0x7300_0000, exports: STUB_EXPORTS_WINMM, ordinal_base: 0 },
+    StubModule { dll: "d3d8.dll", base: 0x7400_0000, exports: STUB_EXPORTS_D3D8, ordinal_base: 0 },
     StubModule { dll: "advapi32.dll", base: 0x7500_0000, exports: STUB_EXPORTS_ADVAPI32, ordinal_base: 0 },
-    StubModule { dll: "gdi32.dll",    base: 0x7600_0000, exports: STUB_EXPORTS_GDI32,    ordinal_base: 0 },
+    StubModule { dll: "gdi32.dll", base: 0x7600_0000, exports: STUB_EXPORTS_GDI32, ordinal_base: 0 },
     StubModule { dll: "setupapi.dll", base: 0x7700_0000, exports: STUB_EXPORTS_SETUPAPI, ordinal_base: 0 },
-    StubModule { dll: "d3d9.dll",     base: 0x7900_0000, exports: STUB_EXPORTS_D3D9,     ordinal_base: 0 },
+    StubModule { dll: "d3d9.dll", base: 0x7900_0000, exports: STUB_EXPORTS_D3D9, ordinal_base: 0 },
     // api-ms-win-crt-* (UCRT) — bases at 0x78xx_0000
-    StubModule { dll: "api-ms-win-crt-runtime-l1-1-0.dll",    base: 0x7800_0000, exports: STUB_EXPORTS_UCRT_RUNTIME,    ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-heap-l1-1-0.dll",       base: 0x7810_0000, exports: STUB_EXPORTS_UCRT_HEAP,       ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-string-l1-1-0.dll",     base: 0x7820_0000, exports: STUB_EXPORTS_UCRT_STRING,     ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-private-l1-1-0.dll",    base: 0x7830_0000, exports: STUB_EXPORTS_UCRT_PRIVATE,    ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-stdio-l1-1-0.dll",      base: 0x7840_0000, exports: STUB_EXPORTS_UCRT_STDIO,      ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-convert-l1-1-0.dll",    base: 0x7850_0000, exports: STUB_EXPORTS_UCRT_CONVERT,    ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-environment-l1-1-0.dll",base: 0x7860_0000, exports: STUB_EXPORTS_UCRT_ENV,        ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-filesystem-l1-1-0.dll", base: 0x7870_0000, exports: STUB_EXPORTS_UCRT_FILESYSTEM, ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-locale-l1-1-0.dll",     base: 0x7880_0000, exports: STUB_EXPORTS_UCRT_LOCALE,     ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-math-l1-1-0.dll",       base: 0x7890_0000, exports: STUB_EXPORTS_UCRT_MATH,       ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-time-l1-1-0.dll",       base: 0x78A0_0000, exports: STUB_EXPORTS_UCRT_TIME,       ordinal_base: 0 },
-    StubModule { dll: "api-ms-win-crt-utility-l1-1-0.dll",    base: 0x78B0_0000, exports: STUB_EXPORTS_UCRT_UTILITY,    ordinal_base: 0 },
+    StubModule {
+        dll: "api-ms-win-crt-runtime-l1-1-0.dll",
+        base: 0x7800_0000,
+        exports: STUB_EXPORTS_UCRT_RUNTIME,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-heap-l1-1-0.dll",
+        base: 0x7810_0000,
+        exports: STUB_EXPORTS_UCRT_HEAP,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-string-l1-1-0.dll",
+        base: 0x7820_0000,
+        exports: STUB_EXPORTS_UCRT_STRING,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-private-l1-1-0.dll",
+        base: 0x7830_0000,
+        exports: STUB_EXPORTS_UCRT_PRIVATE,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-stdio-l1-1-0.dll",
+        base: 0x7840_0000,
+        exports: STUB_EXPORTS_UCRT_STDIO,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-convert-l1-1-0.dll",
+        base: 0x7850_0000,
+        exports: STUB_EXPORTS_UCRT_CONVERT,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-environment-l1-1-0.dll",
+        base: 0x7860_0000,
+        exports: STUB_EXPORTS_UCRT_ENV,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-filesystem-l1-1-0.dll",
+        base: 0x7870_0000,
+        exports: STUB_EXPORTS_UCRT_FILESYSTEM,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-locale-l1-1-0.dll",
+        base: 0x7880_0000,
+        exports: STUB_EXPORTS_UCRT_LOCALE,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-math-l1-1-0.dll",
+        base: 0x7890_0000,
+        exports: STUB_EXPORTS_UCRT_MATH,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-time-l1-1-0.dll",
+        base: 0x78A0_0000,
+        exports: STUB_EXPORTS_UCRT_TIME,
+        ordinal_base: 0,
+    },
+    StubModule {
+        dll: "api-ms-win-crt-utility-l1-1-0.dll",
+        base: 0x78B0_0000,
+        exports: STUB_EXPORTS_UCRT_UTILITY,
+        ordinal_base: 0,
+    },
     // Vulkan ICD loader shim — DXVK d3d8→d3d9→vulkan-1 chain
     StubModule { dll: "vulkan-1.dll", base: 0x7C00_0000, exports: STUB_EXPORTS_VULKAN1, ordinal_base: 0 },
     // Ghost Recon additional imports
-    StubModule { dll: "dbghelp.dll",  base: 0x7D00_0000, exports: STUB_EXPORTS_DBGHELP,  ordinal_base: 0 },
-    StubModule { dll: "ole32.dll",    base: 0x7D10_0000, exports: STUB_EXPORTS_OLE32,    ordinal_base: 0 },
-    StubModule { dll: "dinput8.dll",  base: 0x7D20_0000, exports: STUB_EXPORTS_DINPUT8,  ordinal_base: 0 },
+    StubModule { dll: "dbghelp.dll", base: 0x7D00_0000, exports: STUB_EXPORTS_DBGHELP, ordinal_base: 0 },
+    StubModule { dll: "ole32.dll", base: 0x7D10_0000, exports: STUB_EXPORTS_OLE32, ordinal_base: 0 },
+    StubModule { dll: "dinput8.dll", base: 0x7D20_0000, exports: STUB_EXPORTS_DINPUT8, ordinal_base: 0 },
     // dsound: ordinal 1 = DirectSoundCreate, ordinal 2 = DirectSoundCreate8
-    StubModule { dll: "dsound.dll",   base: 0x7D30_0000, exports: STUB_EXPORTS_DSOUND,   ordinal_base: 1 },
+    StubModule { dll: "dsound.dll", base: 0x7D30_0000, exports: STUB_EXPORTS_DSOUND, ordinal_base: 1 },
     // wsock32: ordinal 1 = accept (first export in the array)
-    StubModule { dll: "wsock32.dll",  base: 0x7D40_0000, exports: STUB_EXPORTS_WSOCK32,  ordinal_base: 1 },
+    StubModule { dll: "wsock32.dll", base: 0x7D40_0000, exports: STUB_EXPORTS_WSOCK32, ordinal_base: 1 },
 ];
 
 fn write_nt_syscall_stub(dst: *mut u8, syscall_no: u32, ret_imm: u16) {
@@ -1306,9 +1371,9 @@ fn write_nt_syscall_stub(dst: *mut u8, syscall_no: u32, ret_imm: u16) {
             let _ = ret_imm;
             dst.add(0).write_unaligned(0xB8u8);
             (dst.add(1) as *mut u32).write_unaligned(syscall_no);
-            dst.add(5).write_unaligned(0x8Bu8);   // MOV EDX, ESP
+            dst.add(5).write_unaligned(0x8Bu8); // MOV EDX, ESP
             dst.add(6).write_unaligned(0xD4u8);
-            dst.add(7).write_unaligned(0x0Fu8);   // SYSENTER
+            dst.add(7).write_unaligned(0x0Fu8); // SYSENTER
             dst.add(8).write_unaligned(0x34u8);
         } else {
             dst.add(0).write_unaligned(0xB8);
@@ -1372,9 +1437,9 @@ unsafe fn write_dispatch_message_a(page: *mut u8) {
     // SAFETY: slot 0x030 is within the INT3-filled stub page (initialised just above).
     unsafe {
         let jmp = page.add(0x030);
-        jmp.add(0).write_unaligned(0xE9u8);                 // JMP rel32
+        jmp.add(0).write_unaligned(0xE9u8); // JMP rel32
         (jmp.add(1) as *mut u32).write_unaligned(0x2DBu32); // +0x2DB → 0x310
-        // Remaining 11 bytes of slot stay INT3 (already written).
+                                                            // Remaining 11 bytes of slot stay INT3 (already written).
     }
 
     // ── Offset 0x310: DispatchMessageA body ────────────────────────────────
@@ -1480,17 +1545,17 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
     // ── VA shortcuts ─────────────────────────────────────────────────────────
     let code = base.wrapping_add(0x1000); // VA of page[0]
 
-    let vtbl8_va    = code.wrapping_add(0xA20); // IDirect3D8 vtable
-    let obj8_va     = code.wrapping_add(0xA60); // IDirect3D8 object
-    let vtbldev_va  = code.wrapping_add(0xA70); // IDirect3DDevice8 vtable
-    let objdev_va   = code.wrapping_add(0xBF8); // IDirect3DDevice8 object
-    let vtbltex_va  = code.wrapping_add(0xC00); // IDirect3DTexture8 vtable
-    let objtex_va   = code.wrapping_add(0xC50); // IDirect3DTexture8 object
-    let vtblvb_va   = code.wrapping_add(0xC60); // IDirect3DVertexBuffer8 vtable
-    let objvb_va    = code.wrapping_add(0xCA0); // IDirect3DVertexBuffer8 object
-    let vtblib_va   = code.wrapping_add(0xCB0); // IDirect3DIndexBuffer8 vtable
-    let objib_va    = code.wrapping_add(0xCF0); // IDirect3DIndexBuffer8 object
-    let lockbuf_va  = code.wrapping_add(0xD00); // zeroed 64-byte lock buffer
+    let vtbl8_va = code.wrapping_add(0xA20); // IDirect3D8 vtable
+    let obj8_va = code.wrapping_add(0xA60); // IDirect3D8 object
+    let vtbldev_va = code.wrapping_add(0xA70); // IDirect3DDevice8 vtable
+    let objdev_va = code.wrapping_add(0xBF8); // IDirect3DDevice8 object
+    let vtbltex_va = code.wrapping_add(0xC00); // IDirect3DTexture8 vtable
+    let objtex_va = code.wrapping_add(0xC50); // IDirect3DTexture8 object
+    let vtblvb_va = code.wrapping_add(0xC60); // IDirect3DVertexBuffer8 vtable
+    let objvb_va = code.wrapping_add(0xCA0); // IDirect3DVertexBuffer8 object
+    let vtblib_va = code.wrapping_add(0xCB0); // IDirect3DIndexBuffer8 vtable
+    let objib_va = code.wrapping_add(0xCF0); // IDirect3DIndexBuffer8 object
+    let lockbuf_va = code.wrapping_add(0xD00); // zeroed 64-byte lock buffer
 
     // ── Local helpers (closures over `page`) ─────────────────────────────────
 
@@ -1526,7 +1591,7 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
     // Used for CreateDevice/CreateTexture/CreateVB/CreateIB — write COM obj ptr.
     //   8B 44 24 oo  C7 00 vv vv vv vv  33 C0  C2 nn nn  (15 bytes)
     let create_out = |dst: *mut u8, arg_off: u8, obj_va_: u32, ret_n: u16| unsafe {
-        dst.write_unaligned(0x8B);      // MOV EAX, [esp+arg_off]
+        dst.write_unaligned(0x8B); // MOV EAX, [esp+arg_off]
         dst.add(1).write_unaligned(0x44);
         dst.add(2).write_unaligned(0x24);
         dst.add(3).write_unaligned(arg_off);
@@ -1931,27 +1996,27 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
 
         // IUnknown
         ret_val(tex.add(0x000), e_ni, 12); // QI → E_NOTIMPL
-        ret_val(tex.add(0x010), 1, 4);     // AddRef → 1
-        s_ok(tex.add(0x020), 4);           // Release → 0
+        ret_val(tex.add(0x010), 1, 4); // AddRef → 1
+        s_ok(tex.add(0x020), 4); // Release → 0
 
         // IDirect3DResource8 (8 methods)
-        s_ok(tex.add(0x030), 8);           // GetDevice
-        s_ok(tex.add(0x040), 20);          // SetPrivateData (5 total)
-        s_ok(tex.add(0x050), 16);          // GetPrivateData (4 total)
-        s_ok(tex.add(0x060), 8);           // FreePrivateData
-        s_ok(tex.add(0x070), 8);           // SetPriority
-        ret_val(tex.add(0x080), 0, 4);     // GetPriority → 0
-        s_ok(tex.add(0x090), 4);           // PreLoad (void)
+        s_ok(tex.add(0x030), 8); // GetDevice
+        s_ok(tex.add(0x040), 20); // SetPrivateData (5 total)
+        s_ok(tex.add(0x050), 16); // GetPrivateData (4 total)
+        s_ok(tex.add(0x060), 8); // FreePrivateData
+        s_ok(tex.add(0x070), 8); // SetPriority
+        ret_val(tex.add(0x080), 0, 4); // GetPriority → 0
+        s_ok(tex.add(0x090), 4); // PreLoad (void)
         ret_val(tex.add(0x0A0), 4 /*D3DRTYPE_TEXTURE*/, 4); // GetType
 
         // IDirect3DBaseTexture8 (3 methods)
-        ret_val(tex.add(0x0B0), 0, 8);     // SetLOD → 0 (prev LOD)
-        ret_val(tex.add(0x0C0), 0, 4);     // GetLOD → 0
-        ret_val(tex.add(0x0D0), 1, 4);     // GetLevelCount → 1
+        ret_val(tex.add(0x0B0), 0, 8); // SetLOD → 0 (prev LOD)
+        ret_val(tex.add(0x0C0), 0, 4); // GetLOD → 0
+        ret_val(tex.add(0x0D0), 1, 4); // GetLevelCount → 1
 
         // IDirect3DTexture8 (5 methods)
-        s_ok(tex.add(0x0E0), 12);          // GetLevelDesc
-        s_ok(tex.add(0x0F0), 12);          // GetSurfaceLevel → S_OK (stub)
+        s_ok(tex.add(0x0E0), 12); // GetLevelDesc
+        s_ok(tex.add(0x0F0), 12); // GetSurfaceLevel → S_OK (stub)
 
         // LockRect (2 code slots, vtable entry at vtable[16])
         // LockRect(this, Level, pLockedRect, pRect, Flags) → 5 total → RET 20
@@ -1982,8 +2047,8 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
             pu16(lr.add(20), 0x14);
         }
 
-        s_ok(tex.add(0x120), 8);           // UnlockRect(Level) → 2 total, RET 8
-        s_ok(tex.add(0x130), 8);           // AddDirtyRect(pRect) → 2 total, RET 8
+        s_ok(tex.add(0x120), 8); // UnlockRect(Level) → 2 total, RET 8
+        s_ok(tex.add(0x130), 8); // AddDirtyRect(pRect) → 2 total, RET 8
     } // tex stubs end at page+0x860
 
     // ── IDirect3DVertexBuffer8 stubs (page+0x860..0x93F, 14 slots) ──────────
@@ -1997,17 +2062,17 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
 
         // IUnknown
         ret_val(vb.add(0x000), e_ni, 12); // QI
-        ret_val(vb.add(0x010), 1, 4);     // AddRef
-        s_ok(vb.add(0x020), 4);           // Release
+        ret_val(vb.add(0x010), 1, 4); // AddRef
+        s_ok(vb.add(0x020), 4); // Release
 
         // IDirect3DResource8
-        s_ok(vb.add(0x030), 8);           // GetDevice
-        s_ok(vb.add(0x040), 20);          // SetPrivateData
-        s_ok(vb.add(0x050), 16);          // GetPrivateData
-        s_ok(vb.add(0x060), 8);           // FreePrivateData
-        s_ok(vb.add(0x070), 8);           // SetPriority
-        ret_val(vb.add(0x080), 0, 4);     // GetPriority
-        s_ok(vb.add(0x090), 4);           // PreLoad
+        s_ok(vb.add(0x030), 8); // GetDevice
+        s_ok(vb.add(0x040), 20); // SetPrivateData
+        s_ok(vb.add(0x050), 16); // GetPrivateData
+        s_ok(vb.add(0x060), 8); // FreePrivateData
+        s_ok(vb.add(0x070), 8); // SetPriority
+        ret_val(vb.add(0x080), 0, 4); // GetPriority
+        s_ok(vb.add(0x090), 4); // PreLoad
         ret_val(vb.add(0x0A0), 5 /*D3DRTYPE_VERTEXBUFFER*/, 4); // GetType
 
         // IDirect3DVertexBuffer8
@@ -2028,8 +2093,8 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
             lk.add(12).write_unaligned(0xC2);
             pu16(lk.add(13), 20);
         }
-        s_ok(vb.add(0x0C0), 4);           // Unlock → S_OK, 1 total, RET 4
-        s_ok(vb.add(0x0D0), 8);           // GetDesc
+        s_ok(vb.add(0x0C0), 4); // Unlock → S_OK, 1 total, RET 4
+        s_ok(vb.add(0x0D0), 8); // GetDesc
     } // vb stubs end at page+0x940
 
     // ── IDirect3DIndexBuffer8 stubs (page+0x940..0xA1F, 14 slots) ───────────
@@ -2086,8 +2151,8 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
     // ── IDirect3D8 object (page+0xA60, 8 bytes) ──────────────────────────────
     unsafe {
         let obj = page.add(0xA60) as *mut u32;
-        obj.add(0).write_unaligned(vtbl8_va);   // vtable pointer
-        obj.add(1).write_unaligned(1);           // ref count = 1
+        obj.add(0).write_unaligned(vtbl8_va); // vtable pointer
+        obj.add(1).write_unaligned(1); // ref count = 1
     }
 
     // ── IDirect3DDevice8 vtable (page+0xA70, 97 × 4 bytes) ──────────────────
@@ -2182,14 +2247,14 @@ unsafe fn write_d3d8_page(page: *mut u8, base: u32) {
 unsafe fn write_const_stub(dst: *mut u8, val: u32, ret_n: u16) {
     if val == 0 {
         dst.write_unaligned(0x33);
-        dst.add(1).write_unaligned(0xC0);                       // XOR EAX, EAX
+        dst.add(1).write_unaligned(0xC0); // XOR EAX, EAX
         dst.add(2).write_unaligned(0xC2);
-        (dst.add(3) as *mut u16).write_unaligned(ret_n);        // RET ret_n
+        (dst.add(3) as *mut u16).write_unaligned(ret_n); // RET ret_n
     } else {
         dst.write_unaligned(0xB8);
-        (dst.add(1) as *mut u32).write_unaligned(val);          // MOV EAX, val
+        (dst.add(1) as *mut u32).write_unaligned(val); // MOV EAX, val
         dst.add(5).write_unaligned(0xC2);
-        (dst.add(6) as *mut u16).write_unaligned(ret_n);        // RET ret_n
+        (dst.add(6) as *mut u16).write_unaligned(ret_n); // RET ret_n
     }
 }
 
@@ -2200,12 +2265,12 @@ unsafe fn write_const_stub(dst: *mut u8, val: u32, ret_n: u16) {
 unsafe fn write_cdecl_const_stub(dst: *mut u8, val: u32) {
     if val == 0 {
         dst.write_unaligned(0x33);
-        dst.add(1).write_unaligned(0xC0);  // XOR EAX, EAX
-        dst.add(2).write_unaligned(0xC3);  // RET
+        dst.add(1).write_unaligned(0xC0); // XOR EAX, EAX
+        dst.add(2).write_unaligned(0xC3); // RET
     } else {
         dst.write_unaligned(0xB8);
         (dst.add(1) as *mut u32).write_unaligned(val); // MOV EAX, val
-        dst.add(5).write_unaligned(0xC3);              // RET
+        dst.add(5).write_unaligned(0xC3); // RET
     }
 }
 
@@ -2221,11 +2286,11 @@ unsafe fn write_cdecl_const_stub(dst: *mut u8, val: u32) {
 /// # Safety
 /// `dst` must point to at least 15 writable bytes.
 unsafe fn write_vk_create_stub(dst: *mut u8, arg_offset: u8, handle: u32, ret_n: u16) {
-    dst.add(0).write_unaligned(0x8B);  // MOV ECX, [ESP+imm8]
+    dst.add(0).write_unaligned(0x8B); // MOV ECX, [ESP+imm8]
     dst.add(1).write_unaligned(0x4C);
     dst.add(2).write_unaligned(0x24);
     dst.add(3).write_unaligned(arg_offset);
-    dst.add(4).write_unaligned(0xC7);  // MOV DWORD PTR [ECX], imm32
+    dst.add(4).write_unaligned(0xC7); // MOV DWORD PTR [ECX], imm32
     dst.add(5).write_unaligned(0x01);
     (dst.add(6) as *mut u32).write_unaligned(handle);
     dst.add(10).write_unaligned(0x33); // XOR EAX, EAX
@@ -2252,7 +2317,6 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_nt_syscall_stub(page.add(0x060), 0x001B, 0x0020); // NtCreateProcess (8)
             write_nt_syscall_stub(page.add(0x080), 0x0035, 0x0028); // NtCreateThread (10)
         }
-
     } else if eq_ascii_nocase(module_name, "kernel32.dll") {
         // INT 0x2E Win32 stubs (14 bytes) in 0x10-byte slots; stdcall unless noted.
         unsafe {
@@ -2265,146 +2329,154 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x050), 0x2005, 0x0008); // GetProcAddress(2)
             write_win32_stub(page.add(0x060), 0x2006, 0x0004); // GetModuleHandleA(1)
             write_win32_stub(page.add(0x070), 0x2007, 0x0004); // ExitProcess(1)
-            // ── TLS ──────────────────────────────────────────────────────────
+                                                               // ── TLS ──────────────────────────────────────────────────────────
             write_win32_stub(page.add(0x080), 0x2070, 0x0000); // TlsAlloc()
             write_win32_stub(page.add(0x090), 0x2071, 0x0004); // TlsFree(1)
             write_win32_stub(page.add(0x0A0), 0x2072, 0x0004); // TlsGetValue(1)
             write_win32_stub(page.add(0x0B0), 0x2073, 0x0008); // TlsSetValue(2)
-            // ── Critical section ─────────────────────────────────────────────
+                                                               // ── Critical section ─────────────────────────────────────────────
             write_win32_stub(page.add(0x0C0), 0x2074, 0x0004); // InitializeCriticalSection(1)
             write_win32_stub(page.add(0x0D0), 0x2075, 0x0004); // EnterCriticalSection(1)
             write_win32_stub(page.add(0x0E0), 0x2076, 0x0004); // LeaveCriticalSection(1)
-            write_const_stub( page.add(0x0F0), 0, 4);          // DeleteCriticalSection(1) → void
+            write_const_stub(page.add(0x0F0), 0, 4); // DeleteCriticalSection(1) → void
             write_win32_stub(page.add(0x100), 0x2078, 0x0004); // TryEnterCriticalSection(1)
-            // ── SRW / Condvar ────────────────────────────────────────────────
+                                                               // ── SRW / Condvar ────────────────────────────────────────────────
             write_win32_stub(page.add(0x110), 0x2079, 0x0004); // AcquireSRWLockExclusive(1)
             write_win32_stub(page.add(0x120), 0x207A, 0x0004); // ReleaseSRWLockExclusive(1)
-            write_const_stub( page.add(0x130), 0, 4);          // InitializeConditionVariable(1) → void
-            write_const_stub( page.add(0x140), 1, 8);          // SleepConditionVariableSRW(2) → TRUE
-            write_const_stub( page.add(0x150), 0, 4);          // WakeAllConditionVariable(1) → void
-            write_const_stub( page.add(0x160), 0, 4);          // WakeConditionVariable(1) → void
-            // ── Module handles ────────────────────────────────────────────────
+            write_const_stub(page.add(0x130), 0, 4); // InitializeConditionVariable(1) → void
+            write_const_stub(page.add(0x140), 1, 8); // SleepConditionVariableSRW(2) → TRUE
+            write_const_stub(page.add(0x150), 0, 4); // WakeAllConditionVariable(1) → void
+            write_const_stub(page.add(0x160), 0, 4); // WakeConditionVariable(1) → void
+                                                     // ── Module handles ────────────────────────────────────────────────
             write_win32_stub(page.add(0x170), 0x207F, 0x0004); // GetModuleHandleW(1)
             write_win32_stub(page.add(0x180), 0x2080, 0x000C); // GetModuleHandleExA(3)
             write_win32_stub(page.add(0x190), 0x2081, 0x0004); // LoadLibraryA(1)
-            write_const_stub( page.add(0x1A0), 1, 4);          // FreeLibrary(1) → TRUE
-            // ── System info / timing ─────────────────────────────────────────
+            write_const_stub(page.add(0x1A0), 1, 4); // FreeLibrary(1) → TRUE
+                                                     // ── System info / timing ─────────────────────────────────────────
             write_win32_stub(page.add(0x1B0), 0x2082, 0x0004); // GetSystemInfo(1)
             write_win32_stub(page.add(0x1C0), 0x2083, 0x0000); // GetTickCount64()
-            // ── Threading ────────────────────────────────────────────────────
+                                                               // ── Threading ────────────────────────────────────────────────────
             write_win32_stub(page.add(0x1D0), 0x2084, 0x0018); // CreateThread(6)
-            write_const_stub( page.add(0x1E0), 0xFFFF_FFFFu32, 0); // GetCurrentProcess → -1
-            write_const_stub( page.add(0x1F0), 0xFFFF_FFFEu32, 0); // GetCurrentThread → -2
+            write_const_stub(page.add(0x1E0), 0xFFFF_FFFFu32, 0); // GetCurrentProcess → -1
+            write_const_stub(page.add(0x1F0), 0xFFFF_FFFEu32, 0); // GetCurrentThread → -2
             write_win32_stub(page.add(0x200), 0x2085, 0x0000); // GetCurrentProcessId()
             write_win32_stub(page.add(0x210), 0x2086, 0x0000); // GetCurrentThreadId()
-            // ── Synchronisation ──────────────────────────────────────────────
+                                                               // ── Synchronisation ──────────────────────────────────────────────
             write_win32_stub(page.add(0x220), 0x2087, 0x0010); // WaitForMultipleObjects(4)
             write_win32_stub(page.add(0x230), 0x2088, 0x000C); // WaitForSingleObjectEx(3)
             write_win32_stub(page.add(0x240), 0x2088, 0x0008); // WaitForSingleObject(2) — reuse handler
-            write_const_stub( page.add(0x250), 1, 4);          // CloseHandle(1) → TRUE
+            write_const_stub(page.add(0x250), 1, 4); // CloseHandle(1) → TRUE
             write_win32_stub(page.add(0x260), 0x2089, 0x0010); // CreateEventA(4)
             write_win32_stub(page.add(0x270), 0x208A, 0x0004); // SetEvent(1)
             write_win32_stub(page.add(0x280), 0x208B, 0x0004); // ResetEvent(1)
             write_win32_stub(page.add(0x290), 0x208C, 0x0014); // CreateSemaphoreA(5)
             write_win32_stub(page.add(0x2A0), 0x208D, 0x000C); // ReleaseSemaphore(3)
-            write_const_stub( page.add(0x2B0), 1, 0x1C);       // DuplicateHandle(7) → TRUE
-            // ── File mapping ─────────────────────────────────────────────────
+            write_const_stub(page.add(0x2B0), 1, 0x1C); // DuplicateHandle(7) → TRUE
+                                                        // ── File mapping ─────────────────────────────────────────────────
             write_win32_stub(page.add(0x2C0), 0x208E, 0x0018); // CreateFileMappingA(6)
             write_win32_stub(page.add(0x2D0), 0x208F, 0x0014); // MapViewOfFile(5)
-            write_const_stub( page.add(0x2E0), 1, 4);          // UnmapViewOfFile(1) → TRUE
-            // ── Temp paths ───────────────────────────────────────────────────
+            write_const_stub(page.add(0x2E0), 1, 4); // UnmapViewOfFile(1) → TRUE
+                                                     // ── Temp paths ───────────────────────────────────────────────────
             write_win32_stub(page.add(0x2F0), 0x2091, 0x0008); // GetTempPathA(2)
             write_win32_stub(page.add(0x300), 0x2092, 0x0010); // GetTempFileNameA(4)
             write_win32_stub(page.add(0x310), 0x2093, 0x0004); // OutputDebugStringA(1)
-            write_const_stub( page.add(0x320), 0, 0x0010);     // FormatMessageA(4) → 0
-            // ── Memory / debug ───────────────────────────────────────────────
+            write_const_stub(page.add(0x320), 0, 0x0010); // FormatMessageA(4) → 0
+                                                          // ── Memory / debug ───────────────────────────────────────────────
             write_win32_stub(page.add(0x330), 0x2095, 0x000C); // VirtualQuery(3)
             write_win32_stub(page.add(0x340), 0x2096, 0x000C); // GetModuleFileNameW(3)
-            write_const_stub( page.add(0x350), 0, 0);          // IsDebuggerPresent() → FALSE
-            write_const_stub( page.add(0x360), 0x500, 4);      // OpenProcess(1) → fake handle
-            // ── Performance ──────────────────────────────────────────────────
+            write_const_stub(page.add(0x350), 0, 0); // IsDebuggerPresent() → FALSE
+            write_const_stub(page.add(0x360), 0x500, 4); // OpenProcess(1) → fake handle
+                                                         // ── Performance ──────────────────────────────────────────────────
             write_win32_stub(page.add(0x370), 0x2098, 0x0004); // QueryPerformanceCounter(1)
             write_win32_stub(page.add(0x380), 0x2099, 0x0004); // QueryPerformanceFrequency(1)
-            write_const_stub( page.add(0x390), 0, 0x0010);     // RaiseException(4) → void
-            // ── Heap ─────────────────────────────────────────────────────────
+            write_const_stub(page.add(0x390), 0, 0x0010); // RaiseException(4) → void
+                                                          // ── Heap ─────────────────────────────────────────────────────────
             write_win32_stub(page.add(0x3A0), 0x209A, 0x000C); // HeapAlloc(3)
-            write_const_stub( page.add(0x3B0), 1, 0x000C);     // HeapFree(3) → TRUE
-            write_const_stub( page.add(0x3C0), 0x8000, 0);     // GetProcessHeap() → fake handle
-            write_const_stub( page.add(0x3D0), 0, 4);          // LocalFree(1) → NULL (success)
-            // ── Error / env ──────────────────────────────────────────────────
-            write_const_stub( page.add(0x3E0), 0, 0);          // GetLastError() → 0
+            write_const_stub(page.add(0x3B0), 1, 0x000C); // HeapFree(3) → TRUE
+            write_const_stub(page.add(0x3C0), 0x8000, 0); // GetProcessHeap() → fake handle
+            write_const_stub(page.add(0x3D0), 0, 4); // LocalFree(1) → NULL (success)
+                                                     // ── Error / env ──────────────────────────────────────────────────
+            write_const_stub(page.add(0x3E0), 0, 0); // GetLastError() → 0
             write_win32_stub(page.add(0x3F0), 0x209B, 0x0004); // SetLastError(1)
-            write_const_stub( page.add(0x400), 0, 0x000C);     // GetEnvironmentVariableW(3) → 0
-            write_const_stub( page.add(0x410), 1, 8);          // GetHandleInformation(2) → TRUE
-            // ── Thread control ───────────────────────────────────────────────
-            write_const_stub( page.add(0x420), 0, 4);          // SuspendThread(1) → prev count 0
-            write_const_stub( page.add(0x430), 1, 4);          // ResumeThread(1) → prev count 1
-            write_const_stub( page.add(0x440), 0, 4);          // GetThreadPriority(1) → NORMAL
-            write_const_stub( page.add(0x450), 1, 8);          // SetThreadPriority(2) → TRUE
-            write_const_stub( page.add(0x460), 0, 8);          // GetThreadContext(2) → 0
-            write_const_stub( page.add(0x470), 0, 8);          // SetThreadContext(2) → 0
-            write_const_stub( page.add(0x480), 1, 0);          // SwitchToThread() → TRUE
-            write_const_stub( page.add(0x490), 1, 8);          // SetProcessAffinityMask(2) → TRUE
-            write_const_stub( page.add(0x4A0), 1, 8);          // GetProcessAffinityMask(2) → TRUE
-            write_const_stub( page.add(0x4B0), 0, 0x1C);       // DeviceIoControl(7) → FALSE
-            write_const_stub( page.add(0x4C0), 1, 8);          // CreateDirectoryW(2) → TRUE
+            write_const_stub(page.add(0x400), 0, 0x000C); // GetEnvironmentVariableW(3) → 0
+            write_const_stub(page.add(0x410), 1, 8); // GetHandleInformation(2) → TRUE
+                                                     // ── Thread control ───────────────────────────────────────────────
+            write_const_stub(page.add(0x420), 0, 4); // SuspendThread(1) → prev count 0
+            write_const_stub(page.add(0x430), 1, 4); // ResumeThread(1) → prev count 1
+            write_const_stub(page.add(0x440), 0, 4); // GetThreadPriority(1) → NORMAL
+            write_const_stub(page.add(0x450), 1, 8); // SetThreadPriority(2) → TRUE
+            write_const_stub(page.add(0x460), 0, 8); // GetThreadContext(2) → 0
+            write_const_stub(page.add(0x470), 0, 8); // SetThreadContext(2) → 0
+            write_const_stub(page.add(0x480), 1, 0); // SwitchToThread() → TRUE
+            write_const_stub(page.add(0x490), 1, 8); // SetProcessAffinityMask(2) → TRUE
+            write_const_stub(page.add(0x4A0), 1, 8); // GetProcessAffinityMask(2) → TRUE
+            write_const_stub(page.add(0x4B0), 0, 0x1C); // DeviceIoControl(7) → FALSE
+            write_const_stub(page.add(0x4C0), 1, 8); // CreateDirectoryW(2) → TRUE
             write_win32_stub(page.add(0x4D0), 0x2033, 0x001C); // CreateFileA(7) → syscall
             write_win32_stub(page.add(0x4E0), 0x209A, 0x0008); // LocalAlloc(2) → reuse HeapAlloc
-            // GetSystemTimeAsFileTime(FILETIME*) → void, write a plausible timestamp
+                                                               // GetSystemTimeAsFileTime(FILETIME*) → void, write a plausible timestamp
             write_win32_stub(page.add(0x4F0), 0x209C, 0x0004);
             // ── Global heap (GlobalAlloc / GlobalFree) ───────────────────────
             // GlobalAlloc(uFlags, dwBytes) → HGLOBAL: reuse HeapAlloc handler
             write_win32_stub(page.add(0x500), 0x209A, 0x0008); // GlobalAlloc(2)
-            write_const_stub( page.add(0x510), 1, 4);          // GlobalFree(1) → TRUE
-            // ── Ghost Recon CRT / kernel32 imports ─────────────────────────
+            write_const_stub(page.add(0x510), 1, 4); // GlobalFree(1) → TRUE
+                                                     // ── Ghost Recon CRT / kernel32 imports ─────────────────────────
             write_win32_stub(page.add(0x520), 0x20A0, 0x0004); // GlobalMemoryStatus(1)
-            write_const_stub( page.add(0x530), 1, 4);          // SetCurrentDirectoryA(1) → TRUE
+            write_const_stub(page.add(0x530), 1, 4); // SetCurrentDirectoryA(1) → TRUE
             write_win32_stub(page.add(0x540), 0x20A1, 0x000C); // GetModuleFileNameA(3)
             write_win32_stub(page.add(0x550), 0x20A2, 0x0018); // MultiByteToWideChar(6)
             write_win32_stub(page.add(0x560), 0x20A3, 0x0004); // GetVersionExA(1)
             write_win32_stub(page.add(0x570), 0x20A4, 0x0008); // lstrcpyA(2)
             write_win32_stub(page.add(0x580), 0x20A5, 0x0008); // GetCurrentDirectoryA(2)
-            write_const_stub( page.add(0x590), 1, 8);          // CreateDirectoryA(2) → TRUE
+            write_const_stub(page.add(0x590), 1, 8); // CreateDirectoryA(2) → TRUE
             write_win32_stub(page.add(0x5A0), 0x2095, 0x0010); // VirtualQueryEx(4) — reuse VirtualQuery
             write_win32_stub(page.add(0x5B0), 0x20A6, 0x0008); // lstrcatA(2)
             write_win32_stub(page.add(0x5C0), 0x20A7, 0x000C); // lstrcpynA(3)
             write_win32_stub(page.add(0x5D0), 0x20A8, 0x0004); // lstrlenA(1)
             write_win32_stub(page.add(0x5E0), 0x20A9, 0x0014); // WriteFile(5)
-            write_const_stub( page.add(0x5F0), 0, 0x0010);     // SetFilePointer(4) → 0
-            write_const_stub( page.add(0x600), 1, 0x0010);     // GetFileTime(4) → TRUE (zeroed)
+            write_const_stub(page.add(0x5F0), 0, 0x0010); // SetFilePointer(4) → 0
+            write_const_stub(page.add(0x600), 1, 0x0010); // GetFileTime(4) → TRUE (zeroed)
             write_win32_stub(page.add(0x610), 0x20AA, 0x0004); // GetFileSize(1)
-            write_const_stub( page.add(0x620), 1, 0x000C);     // FileTimeToDosDateTime(3) → TRUE
-            write_const_stub( page.add(0x630), 1, 8);          // FileTimeToLocalFileTime(2) → TRUE
-            write_const_stub( page.add(0x640), 1, 4);          // FindClose(1) → TRUE
-            write_const_stub( page.add(0x650), 0, 4);          // DeleteFileA(1) → FALSE
+            write_const_stub(page.add(0x620), 1, 0x000C); // FileTimeToDosDateTime(3) → TRUE
+            write_const_stub(page.add(0x630), 1, 8); // FileTimeToLocalFileTime(2) → TRUE
+            write_const_stub(page.add(0x640), 1, 4); // FindClose(1) → TRUE
+            write_const_stub(page.add(0x650), 0, 4); // DeleteFileA(1) → FALSE
             write_win32_stub(page.add(0x660), 0x20AB, 0x0008); // FindFirstFileA(2)
-            write_const_stub( page.add(0x670), 0, 8);          // FindNextFileA(2) → FALSE (no more)
+            write_const_stub(page.add(0x670), 0, 8); // FindNextFileA(2) → FALSE (no more)
             write_win32_stub(page.add(0x680), 0x20AC, 0x0004); // GetFileAttributesA(1)
-            write_const_stub( page.add(0x690), 1, 0x001C);     // GetVolumeInformationA(7) → TRUE
-            write_const_stub( page.add(0x6A0), 3, 4);          // GetDriveTypeA(1) → DRIVE_FIXED=3
-            write_const_stub( page.add(0x6B0), 0, 8);          // GetLogicalDriveStringsA(2) → 0
+            write_const_stub(page.add(0x690), 1, 0x001C); // GetVolumeInformationA(7) → TRUE
+            write_const_stub(page.add(0x6A0), 3, 4); // GetDriveTypeA(1) → DRIVE_FIXED=3
+            write_const_stub(page.add(0x6B0), 0, 8); // GetLogicalDriveStringsA(2) → 0
             write_win32_stub(page.add(0x6C0), 0x20AD, 0x0010); // GetFullPathNameA(4)
-            write_const_stub( page.add(0x6D0), 0, 0x0028);     // CreateProcessA(10) → FALSE
-            // InterlockedExchange: MOV EAX,[ESP+8]; MOV ECX,[ESP+4]; XCHG [ECX],EAX; RET 8
+            write_const_stub(page.add(0x6D0), 0, 0x0028); // CreateProcessA(10) → FALSE
+                                                          // InterlockedExchange: MOV EAX,[ESP+8]; MOV ECX,[ESP+4]; XCHG [ECX],EAX; RET 8
             {
                 let p = page.add(0x6E0);
-                p.add(0).write_unaligned(0x8Bu8); p.add(1).write_unaligned(0x44u8);
-                p.add(2).write_unaligned(0x24u8); p.add(3).write_unaligned(0x08u8); // MOV EAX,[ESP+8]
-                p.add(4).write_unaligned(0x8Bu8); p.add(5).write_unaligned(0x4Cu8);
-                p.add(6).write_unaligned(0x24u8); p.add(7).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
-                p.add(8).write_unaligned(0x87u8); p.add(9).write_unaligned(0x01u8); // XCHG [ECX],EAX
+                p.add(0).write_unaligned(0x8Bu8);
+                p.add(1).write_unaligned(0x44u8);
+                p.add(2).write_unaligned(0x24u8);
+                p.add(3).write_unaligned(0x08u8); // MOV EAX,[ESP+8]
+                p.add(4).write_unaligned(0x8Bu8);
+                p.add(5).write_unaligned(0x4Cu8);
+                p.add(6).write_unaligned(0x24u8);
+                p.add(7).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
+                p.add(8).write_unaligned(0x87u8);
+                p.add(9).write_unaligned(0x01u8); // XCHG [ECX],EAX
                 p.add(10).write_unaligned(0xC2u8);
                 (p.add(11) as *mut u16).write_unaligned(8u16); // RET 8
             }
             // InterlockedDecrement: MOV ECX,[ESP+4]; MOV EAX,-1; LOCK XADD [ECX],EAX; DEC EAX; RET 4
             {
                 let p = page.add(0x6F0);
-                p.add(0).write_unaligned(0x8Bu8); p.add(1).write_unaligned(0x4Cu8);
-                p.add(2).write_unaligned(0x24u8); p.add(3).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
+                p.add(0).write_unaligned(0x8Bu8);
+                p.add(1).write_unaligned(0x4Cu8);
+                p.add(2).write_unaligned(0x24u8);
+                p.add(3).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
                 p.add(4).write_unaligned(0xB8u8);
                 (p.add(5) as *mut u32).write_unaligned(0xFFFF_FFFFu32); // MOV EAX,-1
-                p.add(9).write_unaligned(0xF0u8);  // LOCK
-                p.add(10).write_unaligned(0x0Fu8); p.add(11).write_unaligned(0xC1u8);
+                p.add(9).write_unaligned(0xF0u8); // LOCK
+                p.add(10).write_unaligned(0x0Fu8);
+                p.add(11).write_unaligned(0xC1u8);
                 p.add(12).write_unaligned(0x01u8); // XADD [ECX],EAX
                 p.add(13).write_unaligned(0x48u8); // DEC EAX
                 p.add(14).write_unaligned(0xC2u8);
@@ -2413,161 +2485,162 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             // InterlockedIncrement: MOV ECX,[ESP+4]; MOV EAX,1; LOCK XADD [ECX],EAX; INC EAX; RET 4
             {
                 let p = page.add(0x700);
-                p.add(0).write_unaligned(0x8Bu8); p.add(1).write_unaligned(0x4Cu8);
-                p.add(2).write_unaligned(0x24u8); p.add(3).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
+                p.add(0).write_unaligned(0x8Bu8);
+                p.add(1).write_unaligned(0x4Cu8);
+                p.add(2).write_unaligned(0x24u8);
+                p.add(3).write_unaligned(0x04u8); // MOV ECX,[ESP+4]
                 p.add(4).write_unaligned(0xB8u8);
                 (p.add(5) as *mut u32).write_unaligned(1u32); // MOV EAX,1
-                p.add(9).write_unaligned(0xF0u8);  // LOCK
-                p.add(10).write_unaligned(0x0Fu8); p.add(11).write_unaligned(0xC1u8);
+                p.add(9).write_unaligned(0xF0u8); // LOCK
+                p.add(10).write_unaligned(0x0Fu8);
+                p.add(11).write_unaligned(0xC1u8);
                 p.add(12).write_unaligned(0x01u8); // XADD [ECX],EAX
                 p.add(13).write_unaligned(0x40u8); // INC EAX
                 p.add(14).write_unaligned(0xC2u8);
                 (p.add(15) as *mut u16).write_unaligned(4u16); // RET 4
             }
-            write_const_stub( page.add(0x710), 2, 0x0018);     // CompareStringA(6) → CSTR_EQUAL=2
-            write_const_stub( page.add(0x720), 2, 0x0018);     // CompareStringW(6) → CSTR_EQUAL=2
+            write_const_stub(page.add(0x710), 2, 0x0018); // CompareStringA(6) → CSTR_EQUAL=2
+            write_const_stub(page.add(0x720), 2, 0x0018); // CompareStringW(6) → CSTR_EQUAL=2
             write_win32_stub(page.add(0x730), 0x2007, 0x0004); // ExitThread(1) → reuse ExitProcess
-            write_const_stub( page.add(0x740), 1, 0x0010);     // FileTimeToSystemTime(4) → TRUE
-            write_const_stub( page.add(0x750), 1, 4);          // FlushFileBuffers(1) → TRUE
-            write_const_stub( page.add(0x760), 1, 4);          // FreeEnvironmentStringsA(1) → TRUE
-            write_const_stub( page.add(0x770), 1, 4);          // FreeEnvironmentStringsW(1) → TRUE
-            write_const_stub( page.add(0x780), 1252, 0);       // GetACP() → 1252 (Western)
+            write_const_stub(page.add(0x740), 1, 0x0010); // FileTimeToSystemTime(4) → TRUE
+            write_const_stub(page.add(0x750), 1, 4); // FlushFileBuffers(1) → TRUE
+            write_const_stub(page.add(0x760), 1, 4); // FreeEnvironmentStringsA(1) → TRUE
+            write_const_stub(page.add(0x770), 1, 4); // FreeEnvironmentStringsW(1) → TRUE
+            write_const_stub(page.add(0x780), 1252, 0); // GetACP() → 1252 (Western)
             write_win32_stub(page.add(0x790), 0x20AE, 0x0008); // GetCPInfo(2)
             write_win32_stub(page.add(0x7A0), 0x20AF, 0x0000); // GetCommandLineA() → ptr to "-nointro\0"
             write_win32_stub(page.add(0x7B0), 0x2125, 0x0000); // GetEnvironmentStrings() → syscall
-            write_const_stub( page.add(0x7C0), 0, 0);          // GetEnvironmentStringsW() → NULL
-            write_const_stub( page.add(0x7D0), 0, 0x000C);     // GetEnvironmentVariableA(3) → 0 (not found)
+            write_const_stub(page.add(0x7C0), 0, 0); // GetEnvironmentStringsW() → NULL
+            write_const_stub(page.add(0x7D0), 0, 0x000C); // GetEnvironmentVariableA(3) → 0 (not found)
             write_win32_stub(page.add(0x7E0), 0x20B7, 0x0004); // GetFileType(1) → syscall
             write_win32_stub(page.add(0x7F0), 0x20B0, 0x0004); // GetLocalTime(1) → fill SYSTEMTIME
-            write_const_stub( page.add(0x800), 0, 0x0010);     // GetLocaleInfoA(4) → 0
-            write_const_stub( page.add(0x810), 0, 0x0010);     // GetLocaleInfoW(4) → 0
-            write_const_stub( page.add(0x820), 437, 0);        // GetOEMCP() → 437 (US)
+            write_const_stub(page.add(0x800), 0, 0x0010); // GetLocaleInfoA(4) → 0
+            write_const_stub(page.add(0x810), 0, 0x0010); // GetLocaleInfoW(4) → 0
+            write_const_stub(page.add(0x820), 437, 0); // GetOEMCP() → 437 (US)
             write_win32_stub(page.add(0x830), 0x20B1, 0x0004); // GetStartupInfoA(1)
             write_win32_stub(page.add(0x840), 0x20B2, 0x0004); // GetStdHandle(1)
-            write_const_stub( page.add(0x850), 0, 0x0014);     // GetStringTypeA(5) → FALSE
-            write_const_stub( page.add(0x860), 0, 0x0010);     // GetStringTypeW(4) → FALSE
+            write_const_stub(page.add(0x850), 0, 0x0014); // GetStringTypeA(5) → FALSE
+            write_const_stub(page.add(0x860), 0, 0x0010); // GetStringTypeW(4) → FALSE
             write_win32_stub(page.add(0x870), 0x20B0, 0x0004); // GetSystemTime(1) → reuse GetLocalTime
-            write_const_stub( page.add(0x880), 0, 4);          // GetTimeZoneInformation(1) → TIME_ZONE_ID_UNKNOWN=0
-            write_const_stub( page.add(0x890), 0x0409, 0);     // GetUserDefaultLCID() → en-US
-            // GetVersion() → 0x0A280105 (XP SP2: 5.1 build 2600 platform 2)
-            write_const_stub( page.add(0x8A0), 0x0A28_0105u32, 0);
-            write_const_stub( page.add(0x8B0), 0x8000u32, 0x000C); // HeapCreate(3) → fake handle
-            write_const_stub( page.add(0x8C0), 1, 4);          // HeapDestroy(1) → TRUE
+            write_const_stub(page.add(0x880), 0, 4); // GetTimeZoneInformation(1) → TIME_ZONE_ID_UNKNOWN=0
+            write_const_stub(page.add(0x890), 0x0409, 0); // GetUserDefaultLCID() → en-US
+                                                          // GetVersion() → 0x0A280105 (XP SP2: 5.1 build 2600 platform 2)
+            write_const_stub(page.add(0x8A0), 0x0A28_0105u32, 0);
+            write_const_stub(page.add(0x8B0), 0x8000u32, 0x000C); // HeapCreate(3) → fake handle
+            write_const_stub(page.add(0x8C0), 1, 4); // HeapDestroy(1) → TRUE
             write_win32_stub(page.add(0x8D0), 0x20B4, 0x0010); // HeapReAlloc(4)
-            write_const_stub( page.add(0x8E0), 0, 0x000C);     // HeapSize(3) → 0
-            write_const_stub( page.add(0x8F0), 0, 8);          // IsBadCodePtr(2) → FALSE (valid)
-            write_const_stub( page.add(0x900), 0, 8);          // IsBadReadPtr(2) → FALSE (valid)
-            write_const_stub( page.add(0x910), 0, 8);          // IsBadWritePtr(2) → FALSE (valid)
-            write_const_stub( page.add(0x920), 1, 4);          // IsValidCodePage(1) → TRUE
-            write_const_stub( page.add(0x930), 1, 8);          // IsValidLocale(2) → TRUE
-            write_const_stub( page.add(0x940), 0, 0x0018);     // LCMapStringA(6) → 0
-            write_const_stub( page.add(0x950), 0, 0x0018);     // LCMapStringW(6) → 0
-            write_const_stub( page.add(0x960), 0, 8);          // MoveFileA(2) → FALSE
+            write_const_stub(page.add(0x8E0), 0, 0x000C); // HeapSize(3) → 0
+            write_const_stub(page.add(0x8F0), 0, 8); // IsBadCodePtr(2) → FALSE (valid)
+            write_const_stub(page.add(0x900), 0, 8); // IsBadReadPtr(2) → FALSE (valid)
+            write_const_stub(page.add(0x910), 0, 8); // IsBadWritePtr(2) → FALSE (valid)
+            write_const_stub(page.add(0x920), 1, 4); // IsValidCodePage(1) → TRUE
+            write_const_stub(page.add(0x930), 1, 8); // IsValidLocale(2) → TRUE
+            write_const_stub(page.add(0x940), 0, 0x0018); // LCMapStringA(6) → 0
+            write_const_stub(page.add(0x950), 0, 0x0018); // LCMapStringW(6) → 0
+            write_const_stub(page.add(0x960), 0, 8); // MoveFileA(2) → FALSE
             write_win32_stub(page.add(0x970), 0x20B5, 0x000C); // MulDiv(3)
             write_win32_stub(page.add(0x980), 0x20B6, 0x0014); // ReadFile(5)
-            // RtlUnwind: void, 4 args → just return
-            write_const_stub( page.add(0x990), 0, 0x0010);     // RtlUnwind(4) → void
-            write_const_stub( page.add(0x9A0), 1, 4);          // SetEndOfFile(1) → TRUE
-            write_const_stub( page.add(0x9B0), 1, 0x000C);     // SetEnvironmentVariableA(3) → TRUE
-            // SetHandleCount(cHandles) → return cHandles (identity)
-            write_const_stub( page.add(0x9C0), 20, 4);         // SetHandleCount(1) → 20
-            write_const_stub( page.add(0x9D0), 1, 8);          // SetStdHandle(2) → TRUE
-            // SetUnhandledExceptionFilter(1) → NULL (no previous filter)
-            write_const_stub( page.add(0x9E0), 0, 4);
+                                                               // RtlUnwind: void, 4 args → just return
+            write_const_stub(page.add(0x990), 0, 0x0010); // RtlUnwind(4) → void
+            write_const_stub(page.add(0x9A0), 1, 4); // SetEndOfFile(1) → TRUE
+            write_const_stub(page.add(0x9B0), 1, 0x000C); // SetEnvironmentVariableA(3) → TRUE
+                                                          // SetHandleCount(cHandles) → return cHandles (identity)
+            write_const_stub(page.add(0x9C0), 20, 4); // SetHandleCount(1) → 20
+            write_const_stub(page.add(0x9D0), 1, 8); // SetStdHandle(2) → TRUE
+                                                     // SetUnhandledExceptionFilter(1) → NULL (no previous filter)
+            write_const_stub(page.add(0x9E0), 0, 4);
             write_win32_stub(page.add(0x9F0), 0x2007, 0x0008); // TerminateProcess(2) → reuse ExitProcess
-            write_const_stub( page.add(0xA00), 0, 4);          // UnhandledExceptionFilter(1) → EXCEPTION_CONTINUE_SEARCH
+            write_const_stub(page.add(0xA00), 0, 4); // UnhandledExceptionFilter(1) → EXCEPTION_CONTINUE_SEARCH
             write_win32_stub(page.add(0xA10), 0x20BA, 0x0020); // WideCharToMultiByte(8)
-            write_const_stub( page.add(0xA20), 1, 8);          // EnumSystemLocalesA(2) → TRUE
+            write_const_stub(page.add(0xA20), 1, 8); // EnumSystemLocalesA(2) → TRUE
         }
-
     } else if eq_ascii_nocase(module_name, "user32.dll") {
         unsafe {
             // ── Original 9 ───────────────────────────────────────────────────
             write_win32_stub(page.add(0x000), 0x2010, 0x0030); // CreateWindowExA(12)
             write_win32_stub(page.add(0x010), 0x2011, 0x0008); // ShowWindow(2)
             write_win32_stub(page.add(0x020), 0x2012, 0x0010); // GetMessageA(4)
-            write_dispatch_message_a(page);                     // DispatchMessageA (slot 0x030)
+            write_dispatch_message_a(page); // DispatchMessageA (slot 0x030)
             write_win32_stub(page.add(0x040), 0x2014, 0x0004); // TranslateMessage(1)
             write_win32_stub(page.add(0x050), 0x2015, 0x0014); // PeekMessageA(5)
             write_win32_stub(page.add(0x060), 0x2016, 0x0004); // PostQuitMessage(1)
             write_win32_stub(page.add(0x070), 0x2017, 0x0004); // RegisterClassA(1)
             write_win32_stub(page.add(0x080), 0x2018, 0x0010); // DefWindowProcA(4)
-            // ── Extended window API ──────────────────────────────────────────
+                                                               // ── Extended window API ──────────────────────────────────────────
             write_win32_stub(page.add(0x090), 0x2010, 0x0030); // CreateWindowExW(12) — same handler
             write_win32_stub(page.add(0x0A0), 0x2018, 0x0010); // DefWindowProcW(4) — same handler
             write_win32_stub(page.add(0x0B0), 0x2017, 0x0004); // RegisterClassExW(1) — same handler
-            write_const_stub( page.add(0x0C0), 1, 4);          // DestroyWindow(1) → TRUE
+            write_const_stub(page.add(0x0C0), 1, 4); // DestroyWindow(1) → TRUE
             write_win32_stub(page.add(0x0D0), 0x2120, 0x0008); // GetClientRect(2)
-            write_const_stub( page.add(0x0E0), 1, 8);          // GetWindowRect(2) → TRUE (zeroed)
+            write_const_stub(page.add(0x0E0), 1, 8); // GetWindowRect(2) → TRUE (zeroed)
             write_win32_stub(page.add(0x0F0), 0x2121, 0x000C); // EnumDisplaySettingsW(3)
-            write_const_stub( page.add(0x100), 0, 0x0014);     // ChangeDisplaySettingsExW(5) → 0 ok
-            write_const_stub( page.add(0x110), 0, 0x0010);     // EnumDisplayMonitors(4) → FALSE
-            write_const_stub( page.add(0x120), 0, 8);          // GetMonitorInfoW(2) → FALSE
-            write_const_stub( page.add(0x130), 0x100, 0x000C); // MonitorFromPoint(3) → fake HMONITOR
-            write_const_stub( page.add(0x140), 1, 0x001C);     // SetWindowPos(7) → TRUE
-            write_const_stub( page.add(0x150), 1, 0x0018);     // MoveWindow(6) → TRUE
-            write_const_stub( page.add(0x160), 0, 8);          // GetWindowLongW(2) → 0
-            write_const_stub( page.add(0x170), 0, 0x000C);     // SetWindowLongW(3) → 0 (prev)
-            write_const_stub( page.add(0x180), 0, 8);          // GetWindowLongA(2) → 0
-            write_const_stub( page.add(0x190), 0, 0x000C);     // SetWindowLongA(3) → 0 (prev)
-            write_const_stub( page.add(0x1A0), 1, 4);          // IsWindow(1) → TRUE
-            write_const_stub( page.add(0x1B0), 1, 4);          // IsWindowVisible(1) → TRUE
-            write_const_stub( page.add(0x1C0), 0, 4);          // IsIconic(1) → FALSE
-            write_const_stub( page.add(0x1D0), 0x1000, 0);     // GetForegroundWindow() → fake HWND
-            write_const_stub( page.add(0x1E0), 0, 4);          // SetCursor(1) → NULL (prev cursor)
-            write_const_stub( page.add(0x1F0), 1, 8);          // SetCursorPos(2) → TRUE
-            write_const_stub( page.add(0x200), 1, 4);          // GetCursorPos(1) → TRUE (zeroed pt)
-            write_const_stub( page.add(0x210), 1, 8);          // ReleaseDC(2) → TRUE
-            write_const_stub( page.add(0x220), 0x100, 0x000C); // GetDCEx(3) → fake HDC
-            write_const_stub( page.add(0x230), 1, 0x000C);     // OffsetRect(3) → TRUE
-            write_const_stub( page.add(0x240), 1, 0x0014);     // SetRect(5) → TRUE
-            write_const_stub( page.add(0x250), 1, 0);          // SetProcessDPIAware() → TRUE
-            write_const_stub( page.add(0x260), 0, 0x0014);     // CallWindowProcA(5) → 0
-            write_const_stub( page.add(0x270), 0, 0x0014);     // CallWindowProcW(5) → 0
-            write_const_stub( page.add(0x280), 1, 4);          // IsWindowUnicode(1) → TRUE
-            write_const_stub( page.add(0x290), 1, 0x0010);     // AdjustWindowRectEx(4) → TRUE
-            write_const_stub( page.add(0x2A0), 1, 0x0010);     // PostMessageW(4) → TRUE
-            write_const_stub( page.add(0x2B0), 0x200, 4);      // CreateIconIndirect(1) → fake HICON
-            write_const_stub( page.add(0x2C0), 1, 4);          // DestroyCursor(1) → TRUE
-            // QueryDisplayConfig, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes → not supported
-            write_const_stub( page.add(0x2D0), 0xC000_0225u32, 0x0014); // QueryDisplayConfig(5)
-            write_const_stub( page.add(0x2E0), 0xC000_0225u32, 4);      // DisplayConfigGetDeviceInfo(1)
-            write_const_stub( page.add(0x2F0), 0xC000_0225u32, 0x000C); // GetDisplayConfigBufferSizes(3)
-            write_const_stub( page.add(0x300), 0, 0x0010);     // EnumDisplayDevicesA(4) → FALSE
-            // 0x310..0x352 is occupied by DispatchMessageA body — skip to 0x360
-            write_const_stub( page.add(0x360), 1, 0x0008);     // ClientToScreen(2) → TRUE
-            write_const_stub( page.add(0x370), 1, 0x0008);     // ScreenToClient(2) → TRUE
-            // MessageBoxA(hWnd, lpText, lpCaption, uType) → IDOK = 1
+            write_const_stub(page.add(0x100), 0, 0x0014); // ChangeDisplaySettingsExW(5) → 0 ok
+            write_const_stub(page.add(0x110), 0, 0x0010); // EnumDisplayMonitors(4) → FALSE
+            write_const_stub(page.add(0x120), 0, 8); // GetMonitorInfoW(2) → FALSE
+            write_const_stub(page.add(0x130), 0x100, 0x000C); // MonitorFromPoint(3) → fake HMONITOR
+            write_const_stub(page.add(0x140), 1, 0x001C); // SetWindowPos(7) → TRUE
+            write_const_stub(page.add(0x150), 1, 0x0018); // MoveWindow(6) → TRUE
+            write_const_stub(page.add(0x160), 0, 8); // GetWindowLongW(2) → 0
+            write_const_stub(page.add(0x170), 0, 0x000C); // SetWindowLongW(3) → 0 (prev)
+            write_const_stub(page.add(0x180), 0, 8); // GetWindowLongA(2) → 0
+            write_const_stub(page.add(0x190), 0, 0x000C); // SetWindowLongA(3) → 0 (prev)
+            write_const_stub(page.add(0x1A0), 1, 4); // IsWindow(1) → TRUE
+            write_const_stub(page.add(0x1B0), 1, 4); // IsWindowVisible(1) → TRUE
+            write_const_stub(page.add(0x1C0), 0, 4); // IsIconic(1) → FALSE
+            write_const_stub(page.add(0x1D0), 0x1000, 0); // GetForegroundWindow() → fake HWND
+            write_const_stub(page.add(0x1E0), 0, 4); // SetCursor(1) → NULL (prev cursor)
+            write_const_stub(page.add(0x1F0), 1, 8); // SetCursorPos(2) → TRUE
+            write_const_stub(page.add(0x200), 1, 4); // GetCursorPos(1) → TRUE (zeroed pt)
+            write_const_stub(page.add(0x210), 1, 8); // ReleaseDC(2) → TRUE
+            write_const_stub(page.add(0x220), 0x100, 0x000C); // GetDCEx(3) → fake HDC
+            write_const_stub(page.add(0x230), 1, 0x000C); // OffsetRect(3) → TRUE
+            write_const_stub(page.add(0x240), 1, 0x0014); // SetRect(5) → TRUE
+            write_const_stub(page.add(0x250), 1, 0); // SetProcessDPIAware() → TRUE
+            write_const_stub(page.add(0x260), 0, 0x0014); // CallWindowProcA(5) → 0
+            write_const_stub(page.add(0x270), 0, 0x0014); // CallWindowProcW(5) → 0
+            write_const_stub(page.add(0x280), 1, 4); // IsWindowUnicode(1) → TRUE
+            write_const_stub(page.add(0x290), 1, 0x0010); // AdjustWindowRectEx(4) → TRUE
+            write_const_stub(page.add(0x2A0), 1, 0x0010); // PostMessageW(4) → TRUE
+            write_const_stub(page.add(0x2B0), 0x200, 4); // CreateIconIndirect(1) → fake HICON
+            write_const_stub(page.add(0x2C0), 1, 4); // DestroyCursor(1) → TRUE
+                                                     // QueryDisplayConfig, DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes → not supported
+            write_const_stub(page.add(0x2D0), 0xC000_0225u32, 0x0014); // QueryDisplayConfig(5)
+            write_const_stub(page.add(0x2E0), 0xC000_0225u32, 4); // DisplayConfigGetDeviceInfo(1)
+            write_const_stub(page.add(0x2F0), 0xC000_0225u32, 0x000C); // GetDisplayConfigBufferSizes(3)
+            write_const_stub(page.add(0x300), 0, 0x0010); // EnumDisplayDevicesA(4) → FALSE
+                                                          // 0x310..0x352 is occupied by DispatchMessageA body — skip to 0x360
+            write_const_stub(page.add(0x360), 1, 0x0008); // ClientToScreen(2) → TRUE
+            write_const_stub(page.add(0x370), 1, 0x0008); // ScreenToClient(2) → TRUE
+                                                          // MessageBoxA(hWnd, lpText, lpCaption, uType) → IDOK = 1
             write_win32_stub(page.add(0x380), 0x2122, 0x0010); // MessageBoxA(4)
-            // ── Ghost Recon user32 imports ─────────────────────────────────
-            write_const_stub( page.add(0x390), 1, 0x000C);     // AdjustWindowRect(3) → TRUE
-            write_const_stub( page.add(0x3A0), 1, 4);          // CloseWindow(1) → TRUE
+                                                               // ── Ghost Recon user32 imports ─────────────────────────────────
+            write_const_stub(page.add(0x390), 1, 0x000C); // AdjustWindowRect(3) → TRUE
+            write_const_stub(page.add(0x3A0), 1, 4); // CloseWindow(1) → TRUE
             write_win32_stub(page.add(0x3B0), 0x2123, 0x000C); // EnumDisplaySettingsA(3)
-            write_const_stub( page.add(0x3C0), 0, 8);          // FindWindowA(2) → NULL (not found)
-            write_const_stub( page.add(0x3D0), 0, 0x000C);     // FrameRect(3) → 0
-            write_const_stub( page.add(0x3E0), 500, 0);        // GetDoubleClickTime() → 500ms
-            write_const_stub( page.add(0x3F0), 0, 4);          // GetMenu(1) → NULL
-            write_const_stub( page.add(0x400), 0, 4);          // GetQueueStatus(1) → 0 (no messages)
+            write_const_stub(page.add(0x3C0), 0, 8); // FindWindowA(2) → NULL (not found)
+            write_const_stub(page.add(0x3D0), 0, 0x000C); // FrameRect(3) → 0
+            write_const_stub(page.add(0x3E0), 500, 0); // GetDoubleClickTime() → 500ms
+            write_const_stub(page.add(0x3F0), 0, 4); // GetMenu(1) → NULL
+            write_const_stub(page.add(0x400), 0, 4); // GetQueueStatus(1) → 0 (no messages)
             write_win32_stub(page.add(0x410), 0x2124, 0x0004); // GetSystemMetrics(1)
-            write_const_stub( page.add(0x420), 0x100, 8);      // LoadCursorA(2) → fake HCURSOR
-            write_const_stub( page.add(0x430), 0x200, 8);      // LoadIconA(2) → fake HICON
-            write_const_stub( page.add(0x440), 0x300, 0x0018); // LoadImageA(6) → fake HANDLE
-            write_const_stub( page.add(0x450), 0, 0x0014);     // MsgWaitForMultipleObjects(5) → WAIT_OBJECT_0
-            write_const_stub( page.add(0x460), 1, 0x0010);     // PostMessageA(4) → TRUE
-            write_const_stub( page.add(0x470), 1, 0x0010);     // PostThreadMessageA(4) → TRUE
+            write_const_stub(page.add(0x420), 0x100, 8); // LoadCursorA(2) → fake HCURSOR
+            write_const_stub(page.add(0x430), 0x200, 8); // LoadIconA(2) → fake HICON
+            write_const_stub(page.add(0x440), 0x300, 0x0018); // LoadImageA(6) → fake HANDLE
+            write_const_stub(page.add(0x450), 0, 0x0014); // MsgWaitForMultipleObjects(5) → WAIT_OBJECT_0
+            write_const_stub(page.add(0x460), 1, 0x0010); // PostMessageA(4) → TRUE
+            write_const_stub(page.add(0x470), 1, 0x0010); // PostThreadMessageA(4) → TRUE
             write_win32_stub(page.add(0x480), 0x2017, 0x0004); // RegisterClassExA(1) → reuse RegisterClassA
-            write_const_stub( page.add(0x490), 0xC000, 4);     // RegisterWindowMessageA(1) → 0xC000
-            write_const_stub( page.add(0x4A0), 0x1000, 4);     // SetFocus(1) → prev HWND
-            write_const_stub( page.add(0x4B0), 1, 4);          // SetForegroundWindow(1) → TRUE
-            write_const_stub( page.add(0x4C0), 1, 4);          // UpdateWindow(1) → TRUE
-            // wsprintfA: cdecl, varargs — just return 0 (wrote 0 chars)
+            write_const_stub(page.add(0x490), 0xC000, 4); // RegisterWindowMessageA(1) → 0xC000
+            write_const_stub(page.add(0x4A0), 0x1000, 4); // SetFocus(1) → prev HWND
+            write_const_stub(page.add(0x4B0), 1, 4); // SetForegroundWindow(1) → TRUE
+            write_const_stub(page.add(0x4C0), 1, 4); // UpdateWindow(1) → TRUE
+                                                     // wsprintfA: cdecl, varargs — just return 0 (wrote 0 chars)
             write_cdecl_const_stub(page.add(0x4D0), 0);
             // wvsprintfA: cdecl — just return 0
             write_cdecl_const_stub(page.add(0x4E0), 0);
-            write_const_stub( page.add(0x4F0), 1, 0);          // GetActiveWindow() → fake HWND
-            write_const_stub( page.add(0x500), 1, 4);          // GetLastActivePopup(1) → fake HWND
+            write_const_stub(page.add(0x4F0), 1, 0); // GetActiveWindow() → fake HWND
+            write_const_stub(page.add(0x500), 1, 4); // GetLastActivePopup(1) → fake HWND
         }
-
     } else if eq_ascii_nocase(module_name, "msvcrt.dll") {
         // __cdecl — caller cleans, ret_imm = 0.
         unsafe {
@@ -2578,21 +2651,20 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x040), 0x2024, 0x0000); // memset
             write_win32_stub(page.add(0x050), 0x2025, 0x0000); // strlen
         }
-
     } else if eq_ascii_nocase(module_name, "winmm.dll") {
         unsafe {
             write_win32_stub(page.add(0x000), 0x2030, 0x0004); // timeBeginPeriod(1)
             write_win32_stub(page.add(0x010), 0x2031, 0x0004); // timeEndPeriod(1)
             write_win32_stub(page.add(0x020), 0x2032, 0x0000); // timeGetTime()
-            // ── Ghost Recon winmm imports ──────────────────────────────────
+                                                               // ── Ghost Recon winmm imports ──────────────────────────────────
             write_win32_stub(page.add(0x030), 0x2034, 0x0008); // timeGetDevCaps(2)
-            write_const_stub( page.add(0x040), 0, 4);          // timeKillEvent(1) → TIMERR_NOERROR
-            write_const_stub( page.add(0x050), 1, 0x0014);     // timeSetEvent(5) → fake timer ID 1
+            write_const_stub(page.add(0x040), 0, 4); // timeKillEvent(1) → TIMERR_NOERROR
+            write_const_stub(page.add(0x050), 1, 0x0014); // timeSetEvent(5) → fake timer ID 1
         }
-
     } else if eq_ascii_nocase(module_name, "d3d8.dll") {
-        unsafe { write_d3d8_page(page, base); }
-
+        unsafe {
+            write_d3d8_page(page, base);
+        }
     } else if eq_ascii_nocase(module_name, "advapi32.dll") {
         // stdcall registry + security stubs.
         unsafe {
@@ -2601,50 +2673,46 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x020), 0x20E2, 0x0004); // RegCloseKey(1)
             write_win32_stub(page.add(0x030), 0x20E3, 0x0014); // RegOpenKeyExW(5)
             write_win32_stub(page.add(0x040), 0x20E4, 0x0018); // RegQueryValueExW(6)
-            write_const_stub( page.add(0x050), 0, 0x0014);     // RegNotifyChangeKeyValue(5) → S_OK
+            write_const_stub(page.add(0x050), 0, 0x0014); // RegNotifyChangeKeyValue(5) → S_OK
             write_win32_stub(page.add(0x060), 0x20E6, 0x0004); // AllocateLocallyUniqueId(1)
-            // GetUserNameA(lpBuffer, pcbBuffer) → writes "Player\0", returns TRUE
+                                                               // GetUserNameA(lpBuffer, pcbBuffer) → writes "Player\0", returns TRUE
             write_win32_stub(page.add(0x070), 0x209D, 0x0008); // GetUserNameA(2)
         }
-
     } else if eq_ascii_nocase(module_name, "gdi32.dll") {
         unsafe {
-            write_const_stub(page.add(0x000), 0x100, 4);       // CreateCompatibleDC(1) → fake HDC
-            write_const_stub(page.add(0x010), 1, 4);           // DeleteDC(1) → TRUE
-            write_const_stub(page.add(0x020), 0x200, 0x0014);  // CreateBitmap(5) → fake HBITMAP
-            write_const_stub(page.add(0x030), 1, 4);           // DeleteObject(1) → TRUE
-            write_const_stub(page.add(0x040), 1, 0x002C);      // StretchBlt(11) → TRUE
-            // Polygon(hdc, lppt, cCount) → TRUE; Ghost Recon uses GDI for debug overlays.
-            write_const_stub(page.add(0x050), 1, 0x000C);      // Polygon(3) → TRUE
-            // ── Ghost Recon gdi32 imports ──────────────────────────────────
-            write_const_stub(page.add(0x060), 0, 0x0018);      // CreateDIBSection(6) → NULL
-            write_const_stub(page.add(0x070), 0x300, 0x0014);  // CreatePen(5) → fake HPEN
-            write_const_stub(page.add(0x080), 0x400, 4);       // CreateSolidBrush(1) → fake HBRUSH
-            write_const_stub(page.add(0x090), 1, 0x0014);      // Ellipse(5) → TRUE
-            write_const_stub(page.add(0x0A0), 1, 0);           // GdiFlush() → TRUE
-            write_const_stub(page.add(0x0B0), 0x500, 4);       // GetStockObject(1) → fake GDI obj
-            write_const_stub(page.add(0x0C0), 1, 0x000C);      // Polyline(3) → TRUE
-            write_const_stub(page.add(0x0D0), 0x600, 8);       // SelectObject(2) → fake prev obj
-            write_const_stub(page.add(0x0E0), 0, 0x000C);      // SetPixel(3) → CLR_INVALID=0
-            write_const_stub(page.add(0x0F0), 1, 0x0014);      // TextOutA(5) → TRUE
+            write_const_stub(page.add(0x000), 0x100, 4); // CreateCompatibleDC(1) → fake HDC
+            write_const_stub(page.add(0x010), 1, 4); // DeleteDC(1) → TRUE
+            write_const_stub(page.add(0x020), 0x200, 0x0014); // CreateBitmap(5) → fake HBITMAP
+            write_const_stub(page.add(0x030), 1, 4); // DeleteObject(1) → TRUE
+            write_const_stub(page.add(0x040), 1, 0x002C); // StretchBlt(11) → TRUE
+                                                          // Polygon(hdc, lppt, cCount) → TRUE; Ghost Recon uses GDI for debug overlays.
+            write_const_stub(page.add(0x050), 1, 0x000C); // Polygon(3) → TRUE
+                                                          // ── Ghost Recon gdi32 imports ──────────────────────────────────
+            write_const_stub(page.add(0x060), 0, 0x0018); // CreateDIBSection(6) → NULL
+            write_const_stub(page.add(0x070), 0x300, 0x0014); // CreatePen(5) → fake HPEN
+            write_const_stub(page.add(0x080), 0x400, 4); // CreateSolidBrush(1) → fake HBRUSH
+            write_const_stub(page.add(0x090), 1, 0x0014); // Ellipse(5) → TRUE
+            write_const_stub(page.add(0x0A0), 1, 0); // GdiFlush() → TRUE
+            write_const_stub(page.add(0x0B0), 0x500, 4); // GetStockObject(1) → fake GDI obj
+            write_const_stub(page.add(0x0C0), 1, 0x000C); // Polyline(3) → TRUE
+            write_const_stub(page.add(0x0D0), 0x600, 8); // SelectObject(2) → fake prev obj
+            write_const_stub(page.add(0x0E0), 0, 0x000C); // SetPixel(3) → CLR_INVALID=0
+            write_const_stub(page.add(0x0F0), 1, 0x0014); // TextOutA(5) → TRUE
         }
-
     } else if eq_ascii_nocase(module_name, "setupapi.dll") {
         // DXVK uses setupapi for GPU device enumeration; failure is handled gracefully.
         unsafe {
             write_const_stub(page.add(0x000), 0xFFFF_FFFFu32, 0x0010); // SetupDiGetClassDevsW(4) → INVALID
-            write_const_stub(page.add(0x010), 0, 0x0014);  // SetupDiEnumDeviceInterfaces(5) → FALSE
-            write_const_stub(page.add(0x020), 0, 0x0018);  // SetupDiGetDeviceInterfaceDetailW(6) → FALSE
+            write_const_stub(page.add(0x010), 0, 0x0014); // SetupDiEnumDeviceInterfaces(5) → FALSE
+            write_const_stub(page.add(0x020), 0, 0x0018); // SetupDiGetDeviceInterfaceDetailW(6) → FALSE
             write_const_stub(page.add(0x030), 0xFFFF_FFFFu32, 0x0018); // SetupDiOpenDevRegKey(6) → INVALID
         }
-
     } else if eq_ascii_nocase(module_name, "d3d9.dll") {
         // Fallback stub — returns NULL from Direct3DCreate9 when DXVK isn't loaded.
         unsafe {
             write_const_stub(page.add(0x000), 0, 4); // Direct3DCreate9(1) → NULL
             write_const_stub(page.add(0x010), 0, 8); // Direct3DCreate9Ex(2) → NULL
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-runtime-l1-1-0.dll") {
         // UCRT runtime forwarder — cdecl throughout.
         //
@@ -2735,7 +2803,6 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             // strerror_s(3) → 0 (S_OK), cdecl
             write_cdecl_const_stub(page.add(0x0F0), 0);
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-heap-l1-1-0.dll") {
         // All cdecl (ret_imm = 0).
         unsafe {
@@ -2743,10 +2810,9 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x010), 0x2022, 0x0000); // free
             write_win32_stub(page.add(0x020), 0x2021, 0x0000); // calloc
             write_win32_stub(page.add(0x030), 0x20B3, 0x0000); // realloc
-            write_cdecl_const_stub(page.add(0x040), 0);        // _aligned_malloc → NULL stub
-            write_cdecl_const_stub(page.add(0x050), 0);        // _aligned_free → void stub
+            write_cdecl_const_stub(page.add(0x040), 0); // _aligned_malloc → NULL stub
+            write_cdecl_const_stub(page.add(0x050), 0); // _aligned_free → void stub
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-string-l1-1-0.dll") {
         unsafe {
             write_win32_stub(page.add(0x000), 0x2024, 0x0000); // memset
@@ -2756,21 +2822,20 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x040), 0x20CA, 0x0000); // strncpy
             write_win32_stub(page.add(0x050), 0x20CB, 0x0000); // strnlen
             write_win32_stub(page.add(0x060), 0x20C8, 0x0000); // strcoll → reuse strcmp
-            write_cdecl_const_stub(page.add(0x070), 0);        // strxfrm → 0
-            write_cdecl_const_stub(page.add(0x080), 0);        // towlower → 0 stub
-            write_cdecl_const_stub(page.add(0x090), 0);        // towupper → 0 stub
+            write_cdecl_const_stub(page.add(0x070), 0); // strxfrm → 0
+            write_cdecl_const_stub(page.add(0x080), 0); // towlower → 0 stub
+            write_cdecl_const_stub(page.add(0x090), 0); // towupper → 0 stub
             write_win32_stub(page.add(0x0A0), 0x20D0, 0x0000); // wcscoll → reuse wcscmp
             write_win32_stub(page.add(0x0B0), 0x20CE, 0x0000); // wcslen
             write_win32_stub(page.add(0x0C0), 0x20CF, 0x0000); // wcsnlen
             write_win32_stub(page.add(0x0D0), 0x20D0, 0x0000); // wcscmp
-            write_cdecl_const_stub(page.add(0x0E0), 0);        // wcsxfrm → 0
-            write_cdecl_const_stub(page.add(0x0F0), 0);        // wctype → 0
+            write_cdecl_const_stub(page.add(0x0E0), 0); // wcsxfrm → 0
+            write_cdecl_const_stub(page.add(0x0F0), 0); // wctype → 0
             write_win32_stub(page.add(0x100), 0x20D1, 0x0000); // _wcsicmp
             write_win32_stub(page.add(0x110), 0x20CD, 0x0000); // _strdup
-            write_cdecl_const_stub(page.add(0x120), 0);        // iswctype → 0
-            write_cdecl_const_stub(page.add(0x130), 0);        // _mbstrlen → 0
+            write_cdecl_const_stub(page.add(0x120), 0); // iswctype → 0
+            write_cdecl_const_stub(page.add(0x130), 0); // _mbstrlen → 0
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-private-l1-1-0.dll") {
         unsafe {
             write_win32_stub(page.add(0x000), 0x2023, 0x0000); // memcpy
@@ -2778,66 +2843,60 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x020), 0x20D3, 0x0000); // memcmp
             write_win32_stub(page.add(0x030), 0x20D4, 0x0000); // memchr
             write_win32_stub(page.add(0x040), 0x20CC, 0x0000); // strchr
-            write_cdecl_const_stub(page.add(0x050), 0);        // _setjmp3 → 0 (like setjmp first call)
-            write_cdecl_const_stub(page.add(0x060), 0);        // longjmp → stub (will malfunction but rare)
+            write_cdecl_const_stub(page.add(0x050), 0); // _setjmp3 → 0 (like setjmp first call)
+            write_cdecl_const_stub(page.add(0x060), 0); // longjmp → stub (will malfunction but rare)
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-stdio-l1-1-0.dll") {
         // All stub-return 0; DXVK only uses stdio for logging fallbacks.
         unsafe {
-            write_cdecl_const_stub(page.add(0x000), 0);        // __acrt_iob_func → NULL
-            write_cdecl_const_stub(page.add(0x010), 0);        // __stdio_common_vfprintf → 0
-            write_cdecl_const_stub(page.add(0x020), 0);        // __stdio_common_vsprintf → 0
+            write_cdecl_const_stub(page.add(0x000), 0); // __acrt_iob_func → NULL
+            write_cdecl_const_stub(page.add(0x010), 0); // __stdio_common_vfprintf → 0
+            write_cdecl_const_stub(page.add(0x020), 0); // __stdio_common_vsprintf → 0
             write_cdecl_const_stub(page.add(0x030), 0xFFFF_FFFFu32); // _get_osfhandle → INVALID
-            write_cdecl_const_stub(page.add(0x040), 0);        // _lseeki64 → 0
-            write_cdecl_const_stub(page.add(0x050), 0);        // _wfopen → NULL
-            write_cdecl_const_stub(page.add(0x060), 0);        // fclose → 0
-            write_cdecl_const_stub(page.add(0x070), 0);        // fflush → 0
-            write_cdecl_const_stub(page.add(0x080), 0);        // fopen → NULL
-            write_cdecl_const_stub(page.add(0x090), 0);        // fputc → 0
-            write_cdecl_const_stub(page.add(0x0A0), 0);        // fputs → 0
-            write_cdecl_const_stub(page.add(0x0B0), 0);        // fwrite → 0
-            write_cdecl_const_stub(page.add(0x0C0), 0);        // setvbuf → 0
-            write_cdecl_const_stub(page.add(0x0D0), 0);        // _write → 0
-            write_cdecl_const_stub(page.add(0x0E0), 0);        // _read → 0
-            write_cdecl_const_stub(page.add(0x0F0), 0);        // _fileno → 0
-            write_cdecl_const_stub(page.add(0x100), 0);        // fread → 0
-            write_cdecl_const_stub(page.add(0x110), 0);        // ftell → 0
-            write_cdecl_const_stub(page.add(0x120), 0);        // _fseeki64 → 0
-            write_cdecl_const_stub(page.add(0x130), 0);        // _ftelli64 → 0
-            write_cdecl_const_stub(page.add(0x140), 0);        // _fdopen → NULL
+            write_cdecl_const_stub(page.add(0x040), 0); // _lseeki64 → 0
+            write_cdecl_const_stub(page.add(0x050), 0); // _wfopen → NULL
+            write_cdecl_const_stub(page.add(0x060), 0); // fclose → 0
+            write_cdecl_const_stub(page.add(0x070), 0); // fflush → 0
+            write_cdecl_const_stub(page.add(0x080), 0); // fopen → NULL
+            write_cdecl_const_stub(page.add(0x090), 0); // fputc → 0
+            write_cdecl_const_stub(page.add(0x0A0), 0); // fputs → 0
+            write_cdecl_const_stub(page.add(0x0B0), 0); // fwrite → 0
+            write_cdecl_const_stub(page.add(0x0C0), 0); // setvbuf → 0
+            write_cdecl_const_stub(page.add(0x0D0), 0); // _write → 0
+            write_cdecl_const_stub(page.add(0x0E0), 0); // _read → 0
+            write_cdecl_const_stub(page.add(0x0F0), 0); // _fileno → 0
+            write_cdecl_const_stub(page.add(0x100), 0); // fread → 0
+            write_cdecl_const_stub(page.add(0x110), 0); // ftell → 0
+            write_cdecl_const_stub(page.add(0x120), 0); // _fseeki64 → 0
+            write_cdecl_const_stub(page.add(0x130), 0); // _ftelli64 → 0
+            write_cdecl_const_stub(page.add(0x140), 0); // _fdopen → NULL
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-convert-l1-1-0.dll") {
         unsafe {
-            write_cdecl_const_stub(page.add(0x000), 0);        // btowc → 0
-            write_cdecl_const_stub(page.add(0x010), 0);        // mbrtowc → 0
-            write_cdecl_const_stub(page.add(0x020), 0);        // mbsrtowcs → 0
+            write_cdecl_const_stub(page.add(0x000), 0); // btowc → 0
+            write_cdecl_const_stub(page.add(0x010), 0); // mbrtowc → 0
+            write_cdecl_const_stub(page.add(0x020), 0); // mbsrtowcs → 0
             write_win32_stub(page.add(0x030), 0x20D2, 0x0000); // strtoul
-            write_cdecl_const_stub(page.add(0x040), 0);        // wcrtomb → 0
-            write_cdecl_const_stub(page.add(0x050), 0);        // wctob → 0
+            write_cdecl_const_stub(page.add(0x040), 0); // wcrtomb → 0
+            write_cdecl_const_stub(page.add(0x050), 0); // wctob → 0
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-environment-l1-1-0.dll") {
         unsafe {
             write_cdecl_const_stub(page.add(0x000), 0); // getenv → NULL (not found)
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-filesystem-l1-1-0.dll") {
         unsafe {
             write_cdecl_const_stub(page.add(0x000), 0xFFFF_FFFFu32); // _fstat64 → -1 (fail)
-            write_cdecl_const_stub(page.add(0x010), 0);              // _lock_file → void
-            write_cdecl_const_stub(page.add(0x020), 0);              // _unlock_file → void
+            write_cdecl_const_stub(page.add(0x010), 0); // _lock_file → void
+            write_cdecl_const_stub(page.add(0x020), 0); // _unlock_file → void
             write_cdecl_const_stub(page.add(0x030), 0xFFFF_FFFFu32); // remove → -1 (fail)
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-locale-l1-1-0.dll") {
         unsafe {
             write_cdecl_const_stub(page.add(0x000), 1); // ___mb_cur_max_func → 1 (ASCII)
             write_cdecl_const_stub(page.add(0x010), 0); // localeconv → NULL
             write_cdecl_const_stub(page.add(0x020), 0); // setlocale → NULL
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-math-l1-1-0.dll") {
         // FP stubs — DXVK uses these rarely; return 0 (0.0 in IEEE 754).
         unsafe {
@@ -2847,67 +2906,63 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_cdecl_const_stub(page.add(0x030), 0); // pow → 0.0
             write_cdecl_const_stub(page.add(0x040), 0); // _fdopen → NULL
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-time-l1-1-0.dll") {
         unsafe {
             write_cdecl_const_stub(page.add(0x000), 0); // strftime → 0
             write_cdecl_const_stub(page.add(0x010), 0); // wcsftime → 0
         }
-
     } else if eq_ascii_nocase(module_name, "api-ms-win-crt-utility-l1-1-0.dll") {
         unsafe {
             // rand_s(unsigned*) → 0 (S_OK), fills output with 0
             write_cdecl_const_stub(page.add(0x000), 0);
         }
-
     } else if eq_ascii_nocase(module_name, "dbghelp.dll") {
         // All dbghelp functions return FALSE/0 — Ghost Recon only uses these in debug paths.
         unsafe {
             write_const_stub(page.add(0x000), 0, 0x0010); // SymGetLineFromAddr(4) → FALSE
             write_const_stub(page.add(0x010), 0, 0x001C); // StackWalk(7) → FALSE
-            write_const_stub(page.add(0x020), 1, 4);      // SymCleanup(1) → TRUE
-            write_const_stub(page.add(0x030), 0, 8);      // SymFunctionTableAccess(2) → NULL
-            write_const_stub(page.add(0x040), 0, 8);      // SymGetModuleInfo(2) → FALSE
-            write_const_stub(page.add(0x050), 0, 0);      // SymGetOptions() → 0
+            write_const_stub(page.add(0x020), 1, 4); // SymCleanup(1) → TRUE
+            write_const_stub(page.add(0x030), 0, 8); // SymFunctionTableAccess(2) → NULL
+            write_const_stub(page.add(0x040), 0, 8); // SymGetModuleInfo(2) → FALSE
+            write_const_stub(page.add(0x050), 0, 0); // SymGetOptions() → 0
             write_const_stub(page.add(0x060), 0, 0x0010); // SymGetSymFromAddr(4) → FALSE
             write_const_stub(page.add(0x070), 1, 0x000C); // SymInitialize(3) → TRUE
             write_const_stub(page.add(0x080), 0, 0x0018); // SymLoadModule(6) → 0
-            write_const_stub(page.add(0x090), 0, 4);      // SymSetOptions(1) → 0 (prev options)
+            write_const_stub(page.add(0x090), 0, 4); // SymSetOptions(1) → 0 (prev options)
             write_const_stub(page.add(0x0A0), 0, 0x0010); // SymUnDName(4) → FALSE
             write_const_stub(page.add(0x0B0), 0, 0x0010); // UnDecorateSymbolName(4) → 0
         }
-
     } else if eq_ascii_nocase(module_name, "ole32.dll") {
         // CoFreeUnusedLibraries() → void no-op.
         // CoInitialize(pvReserved) → S_OK (0).
         // CoUninitialize() → void.
         unsafe {
-            write_const_stub(page.add(0x000), 0, 0);               // CoFreeUnusedLibraries() → void
-            write_const_stub(page.add(0x010), 0, 4);               // CoInitialize(1) → S_OK
-            write_const_stub(page.add(0x020), 0, 0);               // CoUninitialize() → void
-            // CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv) → S_OK
-            // Writes a generic COM object pointer to *ppv.
-            // The object is at page+0x080 with a vtable at page+0x100.
-            //
-            // MOV EAX, [ESP+20]   ; ppv (5th arg, after ret addr)
-            // MOV ECX, obj_va     ; generic COM object address
-            // MOV [EAX], ECX      ; *ppv = obj
-            // XOR EAX, EAX        ; return S_OK
-            // RET 20              ; stdcall 5 args
+            write_const_stub(page.add(0x000), 0, 0); // CoFreeUnusedLibraries() → void
+            write_const_stub(page.add(0x010), 0, 4); // CoInitialize(1) → S_OK
+            write_const_stub(page.add(0x020), 0, 0); // CoUninitialize() → void
+                                                     // CoCreateInstance(rclsid, pUnkOuter, dwClsContext, riid, ppv) → S_OK
+                                                     // Writes a generic COM object pointer to *ppv.
+                                                     // The object is at page+0x080 with a vtable at page+0x100.
+                                                     //
+                                                     // MOV EAX, [ESP+20]   ; ppv (5th arg, after ret addr)
+                                                     // MOV ECX, obj_va     ; generic COM object address
+                                                     // MOV [EAX], ECX      ; *ppv = obj
+                                                     // XOR EAX, EAX        ; return S_OK
+                                                     // RET 20              ; stdcall 5 args
             {
                 let obj_va = base.wrapping_add(0x1080); // page+0x080
                 let d = page.add(0x030);
-                d.add(0).write_unaligned(0x8Bu8);  // MOV EAX, [ESP+0x14]
+                d.add(0).write_unaligned(0x8Bu8); // MOV EAX, [ESP+0x14]
                 d.add(1).write_unaligned(0x44u8);
                 d.add(2).write_unaligned(0x24u8);
                 d.add(3).write_unaligned(0x14u8);
-                d.add(4).write_unaligned(0xB9u8);  // MOV ECX, obj_va
+                d.add(4).write_unaligned(0xB9u8); // MOV ECX, obj_va
                 (d.add(5) as *mut u32).write_unaligned(obj_va);
-                d.add(9).write_unaligned(0x89u8);   // MOV [EAX], ECX
+                d.add(9).write_unaligned(0x89u8); // MOV [EAX], ECX
                 d.add(10).write_unaligned(0x08u8);
-                d.add(11).write_unaligned(0x33u8);  // XOR EAX, EAX
+                d.add(11).write_unaligned(0x33u8); // XOR EAX, EAX
                 d.add(12).write_unaligned(0xC0u8);
-                d.add(13).write_unaligned(0xC2u8);  // RET 0x14
+                d.add(13).write_unaligned(0xC2u8); // RET 0x14
                 (d.add(14) as *mut u16).write_unaligned(0x14);
             }
 
@@ -2947,17 +3002,15 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
                 (obj as *mut u32).write_unaligned(base.wrapping_add(0x1100)); // vtable ptr
                 (obj.add(4) as *mut u32).write_unaligned(1); // refcount = 1
             }
-            write_win32_stub(page.add(0x040), 0x2020, 0x0000);     // CoTaskMemAlloc(1) → reuse malloc (cdecl)
-            write_const_stub(page.add(0x050), 0, 4);               // CoTaskMemFree(1) → void
+            write_win32_stub(page.add(0x040), 0x2020, 0x0000); // CoTaskMemAlloc(1) → reuse malloc (cdecl)
+            write_const_stub(page.add(0x050), 0, 4); // CoTaskMemFree(1) → void
         }
-
     } else if eq_ascii_nocase(module_name, "dinput8.dll") {
         // DirectInput8Create(hInst, dwVersion, riid, ppvOut, pUnkOuter) → E_NOTIMPL
         // Returns E_NOTIMPL so the game either disables DI8 or falls back to WM_INPUT.
         unsafe {
             write_const_stub(page.add(0x000), 0x8000_4001u32, 0x0014); // DirectInput8Create(5)
         }
-
     } else if eq_ascii_nocase(module_name, "dsound.dll") {
         // 0x88780078 = DSERR_NODRIVER — game falls back to null audio.
         unsafe {
@@ -2970,47 +3023,45 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub(page.add(0x060), 0x8878_0078u32, 0x000C); // ord 7 → DSERR_NODRIVER
             write_const_stub(page.add(0x070), 0x8878_0078u32, 0x000C); // ord 8 GetDeviceID
             write_const_stub(page.add(0x080), 0x8878_0078u32, 0x000C); // ord 9
-            write_const_stub(page.add(0x090), 0, 0);                   // ord 10 DllCanUnloadNow → S_FALSE
-            // DirectSoundEnumerateA(cb, ctx) → DS_OK (0); just return without calling callback
-            write_const_stub(page.add(0x0A0), 0, 8);                   // ord 11
+            write_const_stub(page.add(0x090), 0, 0); // ord 10 DllCanUnloadNow → S_FALSE
+                                                     // DirectSoundEnumerateA(cb, ctx) → DS_OK (0); just return without calling callback
+            write_const_stub(page.add(0x0A0), 0, 8); // ord 11
         }
-
     } else if eq_ascii_nocase(module_name, "wsock32.dll") {
         // All stubs return SOCKET_ERROR (0xFFFF_FFFF) so the game disables network.
         // Ordinal-indexed: each export array entry maps to an ordinal via ordinal_base.
         unsafe {
             write_const_stub(page.add(0x000), 0xFFFF_FFFFu32, 0x000C); // ord 1  accept(3)
             write_const_stub(page.add(0x010), 0xFFFF_FFFFu32, 0x000C); // ord 2  bind(3)
-            write_const_stub(page.add(0x020), 0xFFFF_FFFFu32, 4);      // ord 3  closesocket(1)
+            write_const_stub(page.add(0x020), 0xFFFF_FFFFu32, 4); // ord 3  closesocket(1)
             write_const_stub(page.add(0x030), 0xFFFF_FFFFu32, 0x000C); // ord 4  connect(3)
             write_const_stub(page.add(0x040), 0xFFFF_FFFFu32, 0x000C); // ord 5  getpeername(3)
             write_const_stub(page.add(0x050), 0xFFFF_FFFFu32, 0x000C); // ord 6  getsockname(3)
             write_const_stub(page.add(0x060), 0xFFFF_FFFFu32, 0x0014); // ord 7  getsockopt(5)
-            write_const_stub(page.add(0x070), 0, 4);                   // ord 8  htonl(1) → 0
-            write_const_stub(page.add(0x080), 0, 4);                   // ord 9  htons(1) → 0
-            write_const_stub(page.add(0x090), 0xFFFF_FFFFu32, 4);      // ord 10 inet_addr(1) → INADDR_NONE
-            write_const_stub(page.add(0x0A0), 0, 4);                   // ord 11 inet_ntoa(1) → NULL
-            write_const_stub(page.add(0x0B0), 0xFFFF_FFFFu32, 8);      // ord 12 listen(2)
-            write_const_stub(page.add(0x0C0), 0, 4);                   // ord 13 ntohl(1) → 0
-            write_const_stub(page.add(0x0D0), 0, 4);                   // ord 14 ntohs(1) → 0
+            write_const_stub(page.add(0x070), 0, 4); // ord 8  htonl(1) → 0
+            write_const_stub(page.add(0x080), 0, 4); // ord 9  htons(1) → 0
+            write_const_stub(page.add(0x090), 0xFFFF_FFFFu32, 4); // ord 10 inet_addr(1) → INADDR_NONE
+            write_const_stub(page.add(0x0A0), 0, 4); // ord 11 inet_ntoa(1) → NULL
+            write_const_stub(page.add(0x0B0), 0xFFFF_FFFFu32, 8); // ord 12 listen(2)
+            write_const_stub(page.add(0x0C0), 0, 4); // ord 13 ntohl(1) → 0
+            write_const_stub(page.add(0x0D0), 0, 4); // ord 14 ntohs(1) → 0
             write_const_stub(page.add(0x0E0), 0xFFFF_FFFFu32, 0x0010); // ord 15 recv(4)
             write_const_stub(page.add(0x0F0), 0xFFFF_FFFFu32, 0x0018); // ord 16 recvfrom(6)
             write_const_stub(page.add(0x100), 0xFFFF_FFFFu32, 0x0014); // ord 17 select(5)
             write_const_stub(page.add(0x110), 0xFFFF_FFFFu32, 0x0010); // ord 18 send(4)
             write_const_stub(page.add(0x120), 0xFFFF_FFFFu32, 0x0018); // ord 19 sendto(6)
             write_const_stub(page.add(0x130), 0xFFFF_FFFFu32, 0x0014); // ord 20 setsockopt(5)
-            write_const_stub(page.add(0x140), 0xFFFF_FFFFu32, 8);      // ord 21 shutdown(2)
+            write_const_stub(page.add(0x140), 0xFFFF_FFFFu32, 8); // ord 21 shutdown(2)
             write_const_stub(page.add(0x150), 0xFFFF_FFFFu32, 0x000C); // ord 22 socket(3)
-            write_const_stub(page.add(0x160), 0, 0x000C);              // ord 23 gethostbyaddr(3) → NULL
-            // ord 24-51: padding → all point to 0x1170 (a single SOCKET_ERROR stub)
-            write_const_stub(page.add(0x170), 0xFFFF_FFFFu32, 4);      // generic SOCKET_ERROR stub
-            write_const_stub(page.add(0x180), 0, 4);                   // ord 52 gethostbyname(1) → NULL
-            write_const_stub(page.add(0x190), 0, 4);                   // ord 57 gethostname(1) → NULL/err
-            write_const_stub(page.add(0x1A0), 0, 8);                   // ord 111 WSAStartup(2) → 0
-            write_const_stub(page.add(0x1B0), 0, 0);                   // ord 115 WSACleanup() → 0
-            write_const_stub(page.add(0x1C0), 0, 4);                   // ord 116 WSASetLastError(1) → void
+            write_const_stub(page.add(0x160), 0, 0x000C); // ord 23 gethostbyaddr(3) → NULL
+                                                          // ord 24-51: padding → all point to 0x1170 (a single SOCKET_ERROR stub)
+            write_const_stub(page.add(0x170), 0xFFFF_FFFFu32, 4); // generic SOCKET_ERROR stub
+            write_const_stub(page.add(0x180), 0, 4); // ord 52 gethostbyname(1) → NULL
+            write_const_stub(page.add(0x190), 0, 4); // ord 57 gethostname(1) → NULL/err
+            write_const_stub(page.add(0x1A0), 0, 8); // ord 111 WSAStartup(2) → 0
+            write_const_stub(page.add(0x1B0), 0, 0); // ord 115 WSACleanup() → 0
+            write_const_stub(page.add(0x1C0), 0, 4); // ord 116 WSASetLastError(1) → void
         }
-
     } else if eq_ascii_nocase(module_name, "vulkan-1.dll") {
         // ── Vulkan ICD loader shim ──────────────────────────────────────────
         // Stubs in 0x10-byte slots. Three types:
@@ -3208,7 +3259,7 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub(page.add(0x5B0), 0, 4);
             // 92–126: vkCmd* (all void, various arg counts)
             write_const_stub(page.add(0x5C0), 0, 12); // vkCmdBeginRenderPass
-            write_const_stub(page.add(0x5D0), 0, 4);  // vkCmdEndRenderPass
+            write_const_stub(page.add(0x5D0), 0, 4); // vkCmdEndRenderPass
             write_const_stub(page.add(0x5E0), 0, 12); // vkCmdBindPipeline
             write_const_stub(page.add(0x5F0), 0, 20); // vkCmdBindVertexBuffers
             write_const_stub(page.add(0x600), 0, 20); // vkCmdBindIndexBuffer
@@ -3230,9 +3281,9 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub(page.add(0x700), 0, 24); // vkCmdFillBuffer (has u64s)
             write_const_stub(page.add(0x710), 0, 16); // vkCmdDispatch
             write_const_stub(page.add(0x720), 0, 12); // vkCmdExecuteCommands
-            write_const_stub(page.add(0x730), 0, 8);  // vkCmdSetLineWidth
+            write_const_stub(page.add(0x730), 0, 8); // vkCmdSetLineWidth
             write_const_stub(page.add(0x740), 0, 16); // vkCmdSetDepthBias
-            write_const_stub(page.add(0x750), 0, 8);  // vkCmdSetBlendConstants
+            write_const_stub(page.add(0x750), 0, 8); // vkCmdSetBlendConstants
             write_const_stub(page.add(0x760), 0, 12); // vkCmdSetDepthBounds
             write_const_stub(page.add(0x770), 0, 12); // vkCmdSetStencilCompareMask
             write_const_stub(page.add(0x780), 0, 12); // vkCmdSetStencilWriteMask
@@ -3242,7 +3293,7 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub(page.add(0x7C0), 0, 16); // vkCmdBeginQuery
             write_const_stub(page.add(0x7D0), 0, 12); // vkCmdEndQuery
             write_const_stub(page.add(0x7E0), 0, 36); // vkCmdCopyQueryPoolResults (has u64s)
-            // 127: vkCreateRenderPass2KHR(dev, pCI, pAlloc, pRP) → create
+                                                      // 127: vkCreateRenderPass2KHR(dev, pCI, pAlloc, pRP) → create
             write_vk_create_stub(page.add(0x7F0), 0x10, 0xDE00_0018, 16);
             // 128: vkQueueSubmit2KHR → VK_SUCCESS (4 args)
             write_const_stub(page.add(0x800), 0, 16);
@@ -3341,7 +3392,9 @@ fn resolve_export_from_base(base: u32, name: &str) -> Option<u32> {
         let opt_off = base.wrapping_add(e_lfanew).wrapping_add(24);
         // DataDirectory[0] = export table: at opt_off + 0x60
         let export_rva = (opt_off.wrapping_add(0x60) as *const u32).read_unaligned();
-        if export_rva == 0 { return None; }
+        if export_rva == 0 {
+            return None;
+        }
 
         let exp = base.wrapping_add(export_rva);
         // IMAGE_EXPORT_DIRECTORY layout:
@@ -3355,13 +3408,13 @@ fn resolve_export_from_base(base: u32, name: &str) -> Option<u32> {
         //  +28 AddressOfFunctions (RVA → u32[NumberOfFunctions])
         //  +32 AddressOfNames      (RVA → u32[NumberOfNames])
         //  +36 AddressOfNameOrdinals (RVA → u16[NumberOfNames])
-        let n_names      = (exp.wrapping_add(24) as *const u32).read_unaligned() as usize;
+        let n_names = (exp.wrapping_add(24) as *const u32).read_unaligned() as usize;
         let fn_table_rva = (exp.wrapping_add(28) as *const u32).read_unaligned();
         let nm_table_rva = (exp.wrapping_add(32) as *const u32).read_unaligned();
-        let ord_table_rva= (exp.wrapping_add(36) as *const u32).read_unaligned();
+        let ord_table_rva = (exp.wrapping_add(36) as *const u32).read_unaligned();
 
-        let fn_table  = base.wrapping_add(fn_table_rva)  as *const u32;
-        let nm_table  = base.wrapping_add(nm_table_rva)  as *const u32;
+        let fn_table = base.wrapping_add(fn_table_rva) as *const u32;
+        let nm_table = base.wrapping_add(nm_table_rva) as *const u32;
         let ord_table = base.wrapping_add(ord_table_rva) as *const u16;
 
         for i in 0..n_names {
@@ -3370,14 +3423,16 @@ fn resolve_export_from_base(base: u32, name: &str) -> Option<u32> {
             // Read export name from user VA
             let mut len = 0usize;
             while len < 256 {
-                if name_ptr.add(len).read_unaligned() == 0 { break; }
+                if name_ptr.add(len).read_unaligned() == 0 {
+                    break;
+                }
                 len += 1;
             }
             let export_name_bytes = core::slice::from_raw_parts(name_ptr, len);
             let export_name = core::str::from_utf8(export_name_bytes).unwrap_or("");
             if eq_ascii_nocase(export_name, name) {
                 let ordinal = ord_table.add(i).read_unaligned() as usize;
-                let fn_rva  = fn_table.add(ordinal).read_unaligned();
+                let fn_rva = fn_table.add(ordinal).read_unaligned();
                 return Some(base.wrapping_add(fn_rva));
             }
         }
@@ -3391,16 +3446,22 @@ fn resolve_export_by_ordinal(base: u32, ordinal: u16) -> Option<u32> {
         let e_lfanew = (base.wrapping_add(0x3C) as *const u32).read_unaligned();
         let opt_off = base.wrapping_add(e_lfanew).wrapping_add(24);
         let export_rva = (opt_off.wrapping_add(0x60) as *const u32).read_unaligned();
-        if export_rva == 0 { return None; }
+        if export_rva == 0 {
+            return None;
+        }
         let exp = base.wrapping_add(export_rva);
         let ordinal_base = (exp.wrapping_add(16) as *const u32).read_unaligned(); // Base
-        let n_funcs      = (exp.wrapping_add(20) as *const u32).read_unaligned() as usize;
+        let n_funcs = (exp.wrapping_add(20) as *const u32).read_unaligned() as usize;
         let fn_table_rva = (exp.wrapping_add(28) as *const u32).read_unaligned();
-        let fn_table     = base.wrapping_add(fn_table_rva) as *const u32;
+        let fn_table = base.wrapping_add(fn_table_rva) as *const u32;
         let idx = (ordinal as u32).wrapping_sub(ordinal_base) as usize;
-        if idx >= n_funcs { return None; }
+        if idx >= n_funcs {
+            return None;
+        }
         let fn_rva = fn_table.add(idx).read_unaligned();
-        if fn_rva == 0 { return None; }
+        if fn_rva == 0 {
+            return None;
+        }
         Some(base.wrapping_add(fn_rva))
     }
 }
@@ -3423,16 +3484,18 @@ pub fn resolve_export_by_ordinal_pub(base: u32, ordinal: u16) -> Option<u32> {
 /// # IRQL: PASSIVE_LEVEL
 pub fn apply_relocations(load_base: u64, preferred_base: u64) -> Result<(), &'static str> {
     let delta = load_base.wrapping_sub(preferred_base) as i64;
-    if delta == 0 { return Ok(()); }
+    if delta == 0 {
+        return Ok(());
+    }
 
     // SAFETY: load_base is committed memory (sections were mapped before this call).
     unsafe {
         let e_lfanew = (load_base.wrapping_add(0x3C) as *const u32).read_unaligned() as u64;
-        let opt_off  = load_base.wrapping_add(e_lfanew).wrapping_add(24); // past PE sig + FileHeader
+        let opt_off = load_base.wrapping_add(e_lfanew).wrapping_add(24); // past PE sig + FileHeader
 
         // DataDirectory[5] = base relocation table: opt_off + 0x60 + 5*8
         let reloc_dir_off = opt_off.wrapping_add(0x60).wrapping_add(5 * 8);
-        let reloc_rva  = (reloc_dir_off as *const u32).read_unaligned() as u64;
+        let reloc_rva = (reloc_dir_off as *const u32).read_unaligned() as u64;
         let reloc_size = (reloc_dir_off.wrapping_add(4) as *const u32).read_unaligned() as u64;
 
         if reloc_rva == 0 || reloc_size == 0 {
@@ -3443,26 +3506,30 @@ pub fn apply_relocations(load_base: u64, preferred_base: u64) -> Result<(), &'st
         let mut offset = 0u64; // byte offset into the reloc directory
         while offset + 8 <= reloc_size {
             let block_ptr = load_base.wrapping_add(reloc_rva).wrapping_add(offset);
-            let page_rva  = (block_ptr as *const u32).read_unaligned() as u64;
-            let block_sz  = (block_ptr.wrapping_add(4) as *const u32).read_unaligned() as u64;
-            if block_sz < 8 { break; }
+            let page_rva = (block_ptr as *const u32).read_unaligned() as u64;
+            let block_sz = (block_ptr.wrapping_add(4) as *const u32).read_unaligned() as u64;
+            if block_sz < 8 {
+                break;
+            }
 
             let n_entries = (block_sz - 8) / 2;
             for i in 0..n_entries {
                 let entry_ptr = block_ptr.wrapping_add(8).wrapping_add(i * 2) as *const u16;
                 let entry = entry_ptr.read_unaligned();
                 let reloc_type = (entry >> 12) as u8;
-                let page_off   = (entry & 0x0FFF) as u64;
-                let target_va  = load_base.wrapping_add(page_rva).wrapping_add(page_off);
+                let page_off = (entry & 0x0FFF) as u64;
+                let target_va = load_base.wrapping_add(page_rva).wrapping_add(page_off);
 
                 match reloc_type {
-                    0 => {}   // IMAGE_REL_BASED_ABSOLUTE — padding, skip
-                    3 => {    // IMAGE_REL_BASED_HIGHLOW — 32-bit delta
+                    0 => {} // IMAGE_REL_BASED_ABSOLUTE — padding, skip
+                    3 => {
+                        // IMAGE_REL_BASED_HIGHLOW — 32-bit delta
                         let ptr = target_va as *mut u32;
                         let val = ptr.read_unaligned();
                         ptr.write_unaligned((val as i64).wrapping_add(delta) as u32);
                     }
-                    10 => {   // IMAGE_REL_BASED_DIR64 — 64-bit delta (PE32+ DLLs)
+                    10 => {
+                        // IMAGE_REL_BASED_DIR64 — 64-bit delta (PE32+ DLLs)
                         let ptr = target_va as *mut u64;
                         let val = ptr.read_unaligned();
                         ptr.write_unaligned((val as i128).wrapping_add(delta as i128) as u64);
@@ -3486,7 +3553,11 @@ pub fn apply_relocations(load_base: u64, preferred_base: u64) -> Result<(), &'st
 pub fn patch_imports(load_base: u64, image_size: u32, pe: &Pe32<'_>) -> Result<(), &'static str> {
     // Address of `len` bytes at `rva`, if they lie inside the image.
     let in_image = |rva: u64, len: u64| -> Option<u64> {
-        if rva.checked_add(len)? <= image_size as u64 { Some(load_base + rva) } else { None }
+        if rva.checked_add(len)? <= image_size as u64 {
+            Some(load_base + rva)
+        } else {
+            None
+        }
     };
     let mut total = 0u32;
     for imp in pe.imports() {
@@ -3500,8 +3571,8 @@ pub fn patch_imports(load_base: u64, image_size: u32, pe: &Pe32<'_>) -> Result<(
             if val == 0 {
                 break;
             }
-            let iat_ptr = in_image(imp.iat_rva as u64 + idx as u64 * 4, 4)
-                .ok_or("load_image: IAT outside the image")? as *mut u32;
+            let iat_ptr = in_image(imp.iat_rva as u64 + idx as u64 * 4, 4).ok_or("load_image: IAT outside the image")?
+                as *mut u32;
             let is_ordinal = (val & 0x8000_0000) != 0;
             let target = if is_ordinal {
                 let ord = (val & 0xFFFF) as u16;
@@ -3515,8 +3586,7 @@ pub fn patch_imports(load_base: u64, image_size: u32, pe: &Pe32<'_>) -> Result<(
             } else {
                 // IMAGE_IMPORT_BY_NAME: a u16 hint, then the name.
                 let name_rva = val as u64 + 2;
-                let name_ptr = in_image(name_rva, 1)
-                    .ok_or("load_image: import name outside the image")? as *const u8;
+                let name_ptr = in_image(name_rva, 1).ok_or("load_image: import name outside the image")? as *const u8;
                 let max = (image_size as u64 - name_rva) as usize;
                 let name = read_cstr_at(name_ptr, max).ok_or("load_image: bad import name")?;
                 match resolve_import_symbol(dll, name, None) {
@@ -3567,44 +3637,52 @@ pub struct LoadedImage {
 #[inline(never)]
 pub fn load_image<'a>(
     image_data: &'a [u8],
-    vad:        &mut mm::vad::VadTree,
-    mapper:     &mut dyn mm::virtual_alloc::PageMapper,
+    vad: &mut mm::vad::VadTree,
+    mapper: &mut dyn mm::virtual_alloc::PageMapper,
     force_base: Option<u64>,
 ) -> Result<LoadedImage, &'static str> {
     let pe = Pe32::parse(image_data).map_err(|_| "load_image: PE parse failed")?;
 
     // Read all header fields directly from image_data bytes to avoid packed-struct
     // field-access UB (Rust/LLVM can miscompile packed field reads in no_std/kernel).
-    let nt_off   = read_u32(image_data, 0x3C).map_err(|_| "load_image: bad e_lfanew")? as usize;
-    let opt_off  = nt_off + 4 + core::mem::size_of::<ImageFileHeader>();   // = nt_off + 24
-    let n_sect   = read_u16(image_data, nt_off + 4 + 2).map_err(|_| "load_image: bad n_sect")? as usize;
-    let opt_sz   = read_u16(image_data, nt_off + 4 + 16).map_err(|_| "load_image: bad opt_sz")? as usize;
+    let nt_off = read_u32(image_data, 0x3C).map_err(|_| "load_image: bad e_lfanew")? as usize;
+    let opt_off = nt_off + 4 + core::mem::size_of::<ImageFileHeader>(); // = nt_off + 24
+    let n_sect = read_u16(image_data, nt_off + 4 + 2).map_err(|_| "load_image: bad n_sect")? as usize;
+    let opt_sz = read_u16(image_data, nt_off + 4 + 16).map_err(|_| "load_image: bad opt_sz")? as usize;
     let sec_table = opt_off + opt_sz;
 
     let preferred_base = read_u32(image_data, opt_off + 28).map_err(|_| "load_image: bad image_base")? as u64;
-    let entry_rva      = read_u32(image_data, opt_off + 16).map_err(|_| "load_image: bad entry_rva")? as u64;
+    let entry_rva = read_u32(image_data, opt_off + 16).map_err(|_| "load_image: bad entry_rva")? as u64;
 
     // Compute image size from SizeOfImage, or fall back to highest section end.
-    let mut image_size = read_u32(image_data, opt_off + 56)
-        .map_err(|_| "load_image: bad size_of_image")?;
+    let mut image_size = read_u32(image_data, opt_off + 56).map_err(|_| "load_image: bad size_of_image")?;
     if image_size == 0 {
         for i in 0..n_sect {
             let sh = sec_table + i * 40;
-            if sh + 40 > image_data.len() { break; }
-            let virt_sz  = read_u32(image_data, sh + 8).unwrap_or(0);
+            if sh + 40 > image_data.len() {
+                break;
+            }
+            let virt_sz = read_u32(image_data, sh + 8).unwrap_or(0);
             let virt_off = read_u32(image_data, sh + 12).unwrap_or(0);
-            let raw_sz   = read_u32(image_data, sh + 16).unwrap_or(0);
+            let raw_sz = read_u32(image_data, sh + 16).unwrap_or(0);
             let end = virt_off + virt_sz.max(raw_sz);
-            if end > image_size { image_size = end; }
+            if end > image_size {
+                image_size = end;
+            }
         }
-        if image_size == 0 { image_size = 0x1000; }
+        if image_size == 0 {
+            image_size = 0x1000;
+        }
     }
 
     // Choose load address.
     let load_base = force_base.unwrap_or(preferred_base);
     log::info!(
         "load_image: preferred_base={:#x} load_base={:#x} entry_rva={:#x} image_size={:#x}",
-        preferred_base, load_base, entry_rva, image_size,
+        preferred_base,
+        load_base,
+        entry_rva,
+        image_size,
     );
 
     // Reserve + commit the full image range in one VAD entry.
@@ -3614,8 +3692,9 @@ pub fn load_image<'a>(
         load_base,
         image_size as u64,
         mm::virtual_alloc::AllocType::MEM_RESERVE | mm::virtual_alloc::AllocType::MEM_COMMIT,
-        mm::vad::PageProtect::EXECUTE_READWRITE,  // wide open; tightened per-section in Phase 3
-    ).map_err(|_| "load_image: failed to allocate image range")?;
+        mm::vad::PageProtect::EXECUTE_READWRITE, // wide open; tightened per-section in Phase 3
+    )
+    .map_err(|_| "load_image: failed to allocate image range")?;
 
     // Copy PE headers into the image base (for GetModuleHandle / GetProcAddress).
     {
@@ -3623,11 +3702,7 @@ pub fn load_image<'a>(
         let hdr_copy = soh.min(image_data.len()).min(image_size as usize);
         if hdr_copy > 0 {
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    image_data.as_ptr(),
-                    load_base as *mut u8,
-                    hdr_copy,
-                );
+                core::ptr::copy_nonoverlapping(image_data.as_ptr(), load_base as *mut u8, hdr_copy);
             }
         }
     }
@@ -3635,15 +3710,21 @@ pub fn load_image<'a>(
     // Copy each section's raw data into the mapped range using direct byte reads.
     // (Avoids packed-struct field-access UB that miscompiles on x86_64-unknown-none.)
     for i in 0..n_sect {
-        let sh       = sec_table + i * 40;
-        if sh + 40 > image_data.len() { break; }
-        let virt_sz  = read_u32(image_data, sh + 8).unwrap_or(0) as usize;
+        let sh = sec_table + i * 40;
+        if sh + 40 > image_data.len() {
+            break;
+        }
+        let virt_sz = read_u32(image_data, sh + 8).unwrap_or(0) as usize;
         let virt_off = read_u32(image_data, sh + 12).unwrap_or(0) as usize;
-        let raw_sz   = read_u32(image_data, sh + 16).unwrap_or(0) as usize;
+        let raw_sz = read_u32(image_data, sh + 16).unwrap_or(0) as usize;
         let file_off = read_u32(image_data, sh + 20).unwrap_or(0) as usize;
 
-        if raw_sz == 0 { continue; }
-        if file_off + raw_sz > image_data.len() { continue; }
+        if raw_sz == 0 {
+            continue;
+        }
+        if file_off + raw_sz > image_data.len() {
+            continue;
+        }
 
         // SAFETY: load_base..+image_size committed above; bounds checked.
         unsafe {
@@ -3658,15 +3739,8 @@ pub fn load_image<'a>(
     patch_imports(load_base, image_size, &pe)?;
     apply_relocations(load_base, preferred_base)?;
 
-    let image = LoadedImage {
-        image_base:  load_base,
-        entry_point: load_base + entry_rva,
-        image_size,
-    };
-    log::info!(
-        "load_image: base={:#x} entry={:#x} size={:#x}",
-        image.image_base, image.entry_point, image.image_size,
-    );
+    let image = LoadedImage { image_base: load_base, entry_point: load_base + entry_rva, image_size };
+    log::info!("load_image: base={:#x} entry={:#x} size={:#x}", image.image_base, image.entry_point, image.image_size,);
     Ok(image)
 }
 
@@ -3677,12 +3751,17 @@ pub fn load_image<'a>(
 /// List the DLL names in a PE32 image's import directory (for dependency pre-loading).
 /// Returns up to 16 unique DLL names as lowercase strings.
 pub fn list_import_dlls(image_data: &[u8]) -> alloc::vec::Vec<alloc::string::String> {
-    let pe = match Pe32::parse(image_data) { Ok(p) => p, Err(_) => return alloc::vec::Vec::new() };
+    let pe = match Pe32::parse(image_data) {
+        Ok(p) => p,
+        Err(_) => return alloc::vec::Vec::new(),
+    };
     let mut out = alloc::vec::Vec::new();
     for imp in pe.imports() {
         let dll = imp.dll_name();
         let lower: alloc::string::String = dll.chars().map(|c| c.to_ascii_lowercase()).collect();
-        if out.len() >= 16 { break; }
+        if out.len() >= 16 {
+            break;
+        }
         if !out.iter().any(|s: &alloc::string::String| s == &lower) {
             out.push(lower);
         }
@@ -3697,29 +3776,38 @@ pub fn load_dll(
 ) -> Result<LoadedImage, &'static str> {
     let pe = Pe32::parse(image_data).map_err(|_| "load_dll: bad PE32")?;
 
-    let nt_off   = read_u32(image_data, 0x3C).map_err(|_| "load_dll: bad e_lfanew")? as usize;
-    let opt_off  = nt_off + 4 + core::mem::size_of::<ImageFileHeader>();
-    let n_sect   = read_u16(image_data, nt_off + 4 + 2).map_err(|_| "load_dll: n_sect")? as usize;
-    let opt_sz   = read_u16(image_data, nt_off + 4 + 16).map_err(|_| "load_dll: opt_sz")? as usize;
+    let nt_off = read_u32(image_data, 0x3C).map_err(|_| "load_dll: bad e_lfanew")? as usize;
+    let opt_off = nt_off + 4 + core::mem::size_of::<ImageFileHeader>();
+    let n_sect = read_u16(image_data, nt_off + 4 + 2).map_err(|_| "load_dll: n_sect")? as usize;
+    let opt_sz = read_u16(image_data, nt_off + 4 + 16).map_err(|_| "load_dll: opt_sz")? as usize;
     let sec_table = opt_off + opt_sz;
 
     let preferred_base = read_u32(image_data, opt_off + 28).map_err(|_| "load_dll: image_base")? as u64;
-    let entry_rva      = read_u32(image_data, opt_off + 16).map_err(|_| "load_dll: entry_rva")? as u64;
+    let entry_rva = read_u32(image_data, opt_off + 16).map_err(|_| "load_dll: entry_rva")? as u64;
     let mut image_size = read_u32(image_data, opt_off + 56).map_err(|_| "load_dll: size_of_image")?;
-    if image_size == 0 { image_size = 0x1000; }
+    if image_size == 0 {
+        image_size = 0x1000;
+    }
 
     // Try preferred base first; fall back to allocator choice
     let load_base = match mm::virtual_alloc::allocate(
-        vad, Some(mapper), preferred_base, image_size as u64,
+        vad,
+        Some(mapper),
+        preferred_base,
+        image_size as u64,
         mm::virtual_alloc::AllocType::MEM_RESERVE | mm::virtual_alloc::AllocType::MEM_COMMIT,
         mm::vad::PageProtect::EXECUTE_READWRITE,
     ) {
         Ok(_) => preferred_base,
         Err(_) => mm::virtual_alloc::allocate(
-            vad, Some(mapper), 0, image_size as u64,
+            vad,
+            Some(mapper),
+            0,
+            image_size as u64,
             mm::virtual_alloc::AllocType::MEM_RESERVE | mm::virtual_alloc::AllocType::MEM_COMMIT,
             mm::vad::PageProtect::EXECUTE_READWRITE,
-        ).map_err(|_| "load_dll: out of address space")?,
+        )
+        .map_err(|_| "load_dll: out of address space")?,
     };
 
     log::info!("load_dll: preferred={:#x} load={:#x} size={:#x}", preferred_base, load_base, image_size);
@@ -3729,7 +3817,9 @@ pub fn load_dll(
     // loaded at 0x400000 before Ghost Recon). Stale CRT flags in .data cause the
     // new CRT to skip initialization, leaving pointers NULL → crash.
     // SAFETY: load_base..+image_size was just committed above.
-    unsafe { core::ptr::write_bytes(load_base as *mut u8, 0, image_size as usize); }
+    unsafe {
+        core::ptr::write_bytes(load_base as *mut u8, 0, image_size as usize);
+    }
 
     // Copy PE headers (DOS header + NT headers + section table) into the image base.
     // Windows always maps headers so GetModuleHandle/GetProcAddress can parse them.
@@ -3738,32 +3828,36 @@ pub fn load_dll(
     if hdr_copy > 0 {
         // SAFETY: load_base..+image_size committed above; hdr_copy is bounded.
         unsafe {
-            core::ptr::copy_nonoverlapping(
-                image_data.as_ptr(),
-                load_base as *mut u8,
-                hdr_copy,
-            );
+            core::ptr::copy_nonoverlapping(image_data.as_ptr(), load_base as *mut u8, hdr_copy);
         }
     }
 
     // Copy sections and zero BSS regions
     for i in 0..n_sect {
         let sh = sec_table + i * 40;
-        if sh + 40 > image_data.len() { break; }
-        let virt_sz  = read_u32(image_data, sh + 8).unwrap_or(0) as usize;
+        if sh + 40 > image_data.len() {
+            break;
+        }
+        let virt_sz = read_u32(image_data, sh + 8).unwrap_or(0) as usize;
         let virt_off = read_u32(image_data, sh + 12).unwrap_or(0) as usize;
-        let raw_sz   = read_u32(image_data, sh + 16).unwrap_or(0) as usize;
+        let raw_sz = read_u32(image_data, sh + 16).unwrap_or(0) as usize;
         let file_off = read_u32(image_data, sh + 20).unwrap_or(0) as usize;
 
         // Zero the BSS portion (virt_sz > raw_sz) — pages may be reused and dirty.
         if virt_sz > raw_sz {
             let bss_start = load_base + virt_off as u64 + raw_sz as u64;
             let bss_len = virt_sz - raw_sz;
-            unsafe { core::ptr::write_bytes(bss_start as *mut u8, 0, bss_len); }
+            unsafe {
+                core::ptr::write_bytes(bss_start as *mut u8, 0, bss_len);
+            }
         }
 
-        if raw_sz == 0 { continue; }
-        if file_off + raw_sz > image_data.len() { continue; }
+        if raw_sz == 0 {
+            continue;
+        }
+        if file_off + raw_sz > image_data.len() {
+            continue;
+        }
         // SAFETY: load_base..+image_size committed above; bounds checked.
         unsafe {
             let dst = (load_base + virt_off as u64) as *mut u8;
@@ -3778,22 +3872,18 @@ pub fn load_dll(
     // Patch imports (resolve against stubs + already-loaded DLLs)
     patch_imports(load_base, image_size, &pe)?;
 
-    Ok(LoadedImage {
-        image_base:  load_base,
-        entry_point: load_base + entry_rva,
-        image_size,
-    })
+    Ok(LoadedImage { image_base: load_base, entry_point: load_base + entry_rva, image_size })
 }
 
 // ── Process setup ─────────────────────────────────────────────────────────────
 
 /// XP-compatible fixed addresses for the per-process PEB and TEB.
 /// Games and CRT assume these are at known locations (no ASLR on XP).
-pub const PEB32_VA:        u32   = 0x7FFD_E000;
-pub const TEB32_VA:        u32   = 0x7FFD_F000;
+pub const PEB32_VA: u32 = 0x7FFD_E000;
+pub const TEB32_VA: u32 = 0x7FFD_F000;
 pub const SHARED_USER_DATA32_VA: u32 = 0x7FFE_0000;
 /// Top of the initial user-mode stack (grows downward from this VA).
-pub const USER_STACK_TOP:  u32   = 0x7FFF_0000;
+pub const USER_STACK_TOP: u32 = 0x7FFF_0000;
 /// Number of 4 KiB pages committed for the initial stack (64 KiB total).
 pub const USER_STACK_PAGES: usize = 15;
 
@@ -3801,11 +3891,11 @@ pub const USER_STACK_PAGES: usize = 15;
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessContext {
     /// Virtual address of the PEB32 page (0x7FFD_E000).
-    pub peb_addr:    u32,
+    pub peb_addr: u32,
     /// Virtual address of the TEB32 page (0x7FFD_F000).
-    pub teb_addr:    u32,
+    pub teb_addr: u32,
     /// Initial user-mode stack pointer (top of committed stack).
-    pub stack_top:   u32,
+    pub stack_top: u32,
     /// Bottom of the committed stack region (stack_top − stack_size).
     pub stack_limit: u32,
 }
@@ -3825,48 +3915,60 @@ pub struct ProcessContext {
 ///
 /// # IRQL: PASSIVE_LEVEL
 pub fn setup_process(
-    image:  &LoadedImage,
-    vad:    &mut mm::vad::VadTree,
+    image: &LoadedImage,
+    vad: &mut mm::vad::VadTree,
     mapper: &mut dyn mm::virtual_alloc::PageMapper,
-    pid:    u32,
-    tid:    u32,
+    pid: u32,
+    tid: u32,
 ) -> Result<ProcessContext, &'static str> {
-    use mm::virtual_alloc::{allocate, AllocType};
     use mm::vad::PageProtect;
+    use mm::virtual_alloc::{allocate, AllocType};
 
     // ── 1. Map PEB page ───────────────────────────────────────────────────────
     allocate(
-        vad, Some(mapper),
-        PEB32_VA as u64, 0x1000,
+        vad,
+        Some(mapper),
+        PEB32_VA as u64,
+        0x1000,
         AllocType::MEM_RESERVE | AllocType::MEM_COMMIT,
         PageProtect::READWRITE,
-    ).map_err(|_| "setup_process: failed to allocate PEB")?;
+    )
+    .map_err(|_| "setup_process: failed to allocate PEB")?;
 
     // ── 2. Map TEB page ───────────────────────────────────────────────────────
     allocate(
-        vad, Some(mapper),
-        TEB32_VA as u64, 0x1000,
+        vad,
+        Some(mapper),
+        TEB32_VA as u64,
+        0x1000,
         AllocType::MEM_RESERVE | AllocType::MEM_COMMIT,
         PageProtect::READWRITE,
-    ).map_err(|_| "setup_process: failed to allocate TEB")?;
+    )
+    .map_err(|_| "setup_process: failed to allocate TEB")?;
 
     // EXECUTE_READWRITE: the C3 (RET) byte at +0x300 must be executable —
     // the SYSENTER return path does IRETQ to SharedUserData+0x300.
     allocate(
-        vad, Some(mapper),
-        SHARED_USER_DATA32_VA as u64, 0x1000,
+        vad,
+        Some(mapper),
+        SHARED_USER_DATA32_VA as u64,
+        0x1000,
         AllocType::MEM_RESERVE | AllocType::MEM_COMMIT,
         PageProtect::EXECUTE_READWRITE,
-    ).map_err(|_| "setup_process: failed to allocate SharedUserData")?;
+    )
+    .map_err(|_| "setup_process: failed to allocate SharedUserData")?;
 
     // ── 3. Map initial user stack ─────────────────────────────────────────────
     let stack_limit = USER_STACK_TOP - (USER_STACK_PAGES as u32 * 0x1000);
     allocate(
-        vad, Some(mapper),
-        stack_limit as u64, USER_STACK_PAGES as u64 * 0x1000,
+        vad,
+        Some(mapper),
+        stack_limit as u64,
+        USER_STACK_PAGES as u64 * 0x1000,
         AllocType::MEM_RESERVE | AllocType::MEM_COMMIT,
         PageProtect::READWRITE,
-    ).map_err(|_| "setup_process: failed to allocate user stack")?;
+    )
+    .map_err(|_| "setup_process: failed to allocate user stack")?;
 
     // ── 4. Initialise PEB32 ───────────────────────────────────────────────────
     // PEB32_VA is now mapped USER_ACCESSIBLE+RW. Write XP-compatible values.
@@ -3876,16 +3978,16 @@ pub fn setup_process(
         // Zero-fill first so padding bytes are clean.
         core::ptr::write_bytes(peb as *mut u8, 0, core::mem::size_of::<crate::peb::Peb32>());
         let peb = &mut *peb;
-        peb.image_base_address         = image.image_base as u32;
-        peb.os_major_version           = 5;      // Windows XP
-        peb.os_minor_version           = 1;
-        peb.os_build_number            = 2600;   // XP SP2
-        peb.os_csd_version             = 0x0200; // SP2
-        peb.os_platform_id             = 2;      // VER_PLATFORM_WIN32_NT
-        peb.image_subsystem            = 2;      // IMAGE_SUBSYSTEM_WINDOWS_GUI
-        peb.image_subsystem_major_ver  = 4;
-        peb.image_subsystem_minor_ver  = 0;
-        peb.number_of_processors       = 1;
+        peb.image_base_address = image.image_base as u32;
+        peb.os_major_version = 5; // Windows XP
+        peb.os_minor_version = 1;
+        peb.os_build_number = 2600; // XP SP2
+        peb.os_csd_version = 0x0200; // SP2
+        peb.os_platform_id = 2; // VER_PLATFORM_WIN32_NT
+        peb.image_subsystem = 2; // IMAGE_SUBSYSTEM_WINDOWS_GUI
+        peb.image_subsystem_major_ver = 4;
+        peb.image_subsystem_minor_ver = 0;
+        peb.number_of_processors = 1;
         // process_heap: 0 for now; Phase 3 installs a real user-mode heap.
     }
 
@@ -3896,13 +3998,13 @@ pub fn setup_process(
         core::ptr::write_bytes(teb as *mut u8, 0, core::mem::size_of::<crate::teb::Teb32>());
         let teb = &mut *teb;
         teb.nt_tib.exception_list = 0xFFFF_FFFF; // empty SEH chain sentinel
-        teb.nt_tib.stack_base     = USER_STACK_TOP;
-        teb.nt_tib.stack_limit    = stack_limit;
+        teb.nt_tib.stack_base = USER_STACK_TOP;
+        teb.nt_tib.stack_limit = stack_limit;
         // CRITICAL: FS:[0x18] must point to the TEB itself (CRT, SEH, TLS).
-        teb.nt_tib.self_ptr       = TEB32_VA;
-        teb.peb                   = PEB32_VA;
-        teb.client_id_process     = pid;
-        teb.client_id_thread      = tid;
+        teb.nt_tib.self_ptr = TEB32_VA;
+        teb.peb = PEB32_VA;
+        teb.client_id_process = pid;
+        teb.client_id_thread = tid;
     }
 
     // SAFETY: SHARED_USER_DATA32_VA was committed above; single-CPU Phase 2.
@@ -3913,21 +4015,33 @@ pub fn setup_process(
         (sud.add(0x004) as *mut u32).write_unaligned(0x0100_0000);
         (sud.add(0x014) as *mut u64).write_unaligned(0);
         // XP SP2 version fields — correct KUSER_SHARED_DATA offsets.
-        (sud.add(0x264) as *mut u32).write_unaligned(1);    // NtProductType = VER_NT_WORKSTATION
-        (sud.add(0x268) as *mut u32).write_unaligned(1);    // ProductTypeIsValid = TRUE
-        (sud.add(0x26C) as *mut u32).write_unaligned(5);    // NtMajorVersion = 5 (XP)
-        (sud.add(0x270) as *mut u32).write_unaligned(1);    // NtMinorVersion = 1 (XP)
-        // TickCount at 0x320 already zero-initialised above; timer ISR updates it.
-        // KiFastSystemCallRet at 0x300: single `ret` (0xC3) byte.
-        // SYSENTER IRETQ path returns here; `ret` pops the caller's return address.
+        (sud.add(0x264) as *mut u32).write_unaligned(1); // NtProductType = VER_NT_WORKSTATION
+        (sud.add(0x268) as *mut u32).write_unaligned(1); // ProductTypeIsValid = TRUE
+        (sud.add(0x26C) as *mut u32).write_unaligned(5); // NtMajorVersion = 5 (XP)
+        (sud.add(0x270) as *mut u32).write_unaligned(1); // NtMinorVersion = 1 (XP)
+                                                         // TickCount at 0x320 already zero-initialised above; timer ISR updates it.
+                                                         // KiFastSystemCallRet at 0x300: single `ret` (0xC3) byte.
+                                                         // SYSENTER IRETQ path returns here; `ret` pops the caller's return address.
         (sud.add(0x300) as *mut u8).write(0xC3);
         // SystemCallReturn at 0x308: pointer to KiFastSystemCallRet (= SUD + 0x300).
         (sud.add(0x308) as *mut u32).write_unaligned(SHARED_USER_DATA32_VA + 0x300);
         (sud.add(0x2D4) as *mut u32).write_unaligned(2);
         let root = [
-            b'\\' as u16, b'?' as u16, b'?' as u16, b'\\' as u16,
-            b'C' as u16, b':' as u16, b'\\' as u16,
-            b'W' as u16, b'I' as u16, b'N' as u16, b'D' as u16, b'O' as u16, b'W' as u16, b'S' as u16, 0,
+            b'\\' as u16,
+            b'?' as u16,
+            b'?' as u16,
+            b'\\' as u16,
+            b'C' as u16,
+            b':' as u16,
+            b'\\' as u16,
+            b'W' as u16,
+            b'I' as u16,
+            b'N' as u16,
+            b'D' as u16,
+            b'O' as u16,
+            b'W' as u16,
+            b'S' as u16,
+            0,
         ];
         let mut i = 0usize;
         while i < root.len() {
@@ -3938,15 +4052,14 @@ pub fn setup_process(
 
     log::info!(
         "Ps: setup_process — PEB={:#x} TEB={:#x} stack={:#x}..{:#x} entry={:#x}",
-        PEB32_VA, TEB32_VA, stack_limit, USER_STACK_TOP, image.entry_point,
+        PEB32_VA,
+        TEB32_VA,
+        stack_limit,
+        USER_STACK_TOP,
+        image.entry_point,
     );
 
-    Ok(ProcessContext {
-        peb_addr:    PEB32_VA,
-        teb_addr:    TEB32_VA,
-        stack_top:   USER_STACK_TOP,
-        stack_limit,
-    })
+    Ok(ProcessContext { peb_addr: PEB32_VA, teb_addr: TEB32_VA, stack_top: USER_STACK_TOP, stack_limit })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -3976,10 +4089,10 @@ mod tests {
     //   - Optional: import descriptor + DLL name string
 
     fn make_pe32(
-        image_base:  u32,
+        image_base: u32,
         entry_point: u32,
-        sections:    &[(&str, u32, u32, u32)],  // (name, va, virtual_size, characteristics)
-        imports:     &[&str],                    // DLL names
+        sections: &[(&str, u32, u32, u32)], // (name, va, virtual_size, characteristics)
+        imports: &[&str],                   // DLL names
     ) -> alloc::vec::Vec<u8> {
         let mut buf = alloc::vec![0u8; 0x10000];
 
@@ -3998,19 +4111,19 @@ mod tests {
         let opt_sz = core::mem::size_of::<ImageOptionalHeader32>() as u16;
 
         // FILE_HEADER
-        buf[fh_off..fh_off+2].copy_from_slice(&MACHINE_I386.to_le_bytes());
-        buf[fh_off+2..fh_off+4].copy_from_slice(&nsec.to_le_bytes());
-        buf[fh_off+16..fh_off+18].copy_from_slice(&opt_sz.to_le_bytes());
+        buf[fh_off..fh_off + 2].copy_from_slice(&MACHINE_I386.to_le_bytes());
+        buf[fh_off + 2..fh_off + 4].copy_from_slice(&nsec.to_le_bytes());
+        buf[fh_off + 16..fh_off + 18].copy_from_slice(&opt_sz.to_le_bytes());
 
         // OPTIONAL_HEADER32
         let opt_off = fh_off + core::mem::size_of::<ImageFileHeader>();
-        buf[opt_off..opt_off+2].copy_from_slice(&IMAGE_NT_OPTIONAL_HDR32_MAGIC.to_le_bytes());
-        buf[opt_off+16..opt_off+20].copy_from_slice(&entry_point.to_le_bytes());
-        buf[opt_off+28..opt_off+32].copy_from_slice(&image_base.to_le_bytes());
+        buf[opt_off..opt_off + 2].copy_from_slice(&IMAGE_NT_OPTIONAL_HDR32_MAGIC.to_le_bytes());
+        buf[opt_off + 16..opt_off + 20].copy_from_slice(&entry_point.to_le_bytes());
+        buf[opt_off + 28..opt_off + 32].copy_from_slice(&image_base.to_le_bytes());
 
         // data_directory[0] (export) — zero; data_directory[1] (import)
         let num_dirs: u32 = 16;
-        buf[opt_off+92..opt_off+96].copy_from_slice(&num_dirs.to_le_bytes());
+        buf[opt_off + 92..opt_off + 96].copy_from_slice(&num_dirs.to_le_bytes());
 
         // Import directory: if we have imports, put them after section table
         let sec_table_off = opt_off + opt_sz as usize;
@@ -4021,24 +4134,23 @@ mod tests {
             let import_dir_rva = import_desc_off as u32;
             // data_directory[1] in optional header
             let dd_off = opt_off + 96 + 8; // skip export dir entry (8 bytes)
-            buf[dd_off..dd_off+4].copy_from_slice(&import_dir_rva.to_le_bytes());
+            buf[dd_off..dd_off + 4].copy_from_slice(&import_dir_rva.to_le_bytes());
             let import_dir_size = (imports.len() + 1) as u32 * 20;
-            buf[dd_off+4..dd_off+8].copy_from_slice(&import_dir_size.to_le_bytes());
+            buf[dd_off + 4..dd_off + 8].copy_from_slice(&import_dir_size.to_le_bytes());
 
             // Write IMAGE_IMPORT_DESCRIPTOR entries
-            let mut name_rva = import_desc_off as u32
-                + (imports.len() + 1) as u32 * 20; // after null terminator
+            let mut name_rva = import_desc_off as u32 + (imports.len() + 1) as u32 * 20; // after null terminator
             for (i, dll) in imports.iter().enumerate() {
                 let desc_off = import_desc_off + i * 20;
                 // name RVA
-                buf[desc_off+12..desc_off+16].copy_from_slice(&name_rva.to_le_bytes());
+                buf[desc_off + 12..desc_off + 16].copy_from_slice(&name_rva.to_le_bytes());
                 // first_thunk (non-zero so it's not null terminator)
                 let iat_rva: u32 = 0x5000 + i as u32 * 4;
-                buf[desc_off+16..desc_off+20].copy_from_slice(&iat_rva.to_le_bytes());
+                buf[desc_off + 16..desc_off + 20].copy_from_slice(&iat_rva.to_le_bytes());
                 // write DLL name string
                 let name_bytes = dll.as_bytes();
                 let off = name_rva as usize;
-                buf[off..off+name_bytes.len()].copy_from_slice(name_bytes);
+                buf[off..off + name_bytes.len()].copy_from_slice(name_bytes);
                 buf[off + name_bytes.len()] = 0; // NUL
                 name_rva += dll.len() as u32 + 1;
             }
@@ -4050,10 +4162,10 @@ mod tests {
             let sh_off = sec_table_off + i * sec_sz;
             let name_bytes = name.as_bytes();
             let n = name_bytes.len().min(8);
-            buf[sh_off..sh_off+n].copy_from_slice(&name_bytes[..n]);
-            buf[sh_off+8..sh_off+12].copy_from_slice(&vsz.to_le_bytes());
-            buf[sh_off+12..sh_off+16].copy_from_slice(&va.to_le_bytes());
-            buf[sh_off+36..sh_off+40].copy_from_slice(&chars.to_le_bytes());
+            buf[sh_off..sh_off + n].copy_from_slice(&name_bytes[..n]);
+            buf[sh_off + 8..sh_off + 12].copy_from_slice(&vsz.to_le_bytes());
+            buf[sh_off + 12..sh_off + 16].copy_from_slice(&va.to_le_bytes());
+            buf[sh_off + 36..sh_off + 40].copy_from_slice(&chars.to_le_bytes());
         }
 
         buf
@@ -4113,7 +4225,8 @@ mod tests {
     #[test]
     fn parse_single_text_section() {
         let data = make_pe32(
-            0x0040_0000, 0x1000,
+            0x0040_0000,
+            0x1000,
             &[(".text", 0x1000, 0x500, SCN_MEM_EXECUTE | SCN_MEM_READ | SCN_CNT_CODE)],
             &[],
         );
@@ -4129,11 +4242,9 @@ mod tests {
     #[test]
     fn parse_two_sections_in_order() {
         let data = make_pe32(
-            0x0040_0000, 0x1000,
-            &[
-                (".text",  0x1000, 0x400, SCN_MEM_EXECUTE | SCN_MEM_READ),
-                (".rdata", 0x2000, 0x200, SCN_MEM_READ),
-            ],
+            0x0040_0000,
+            0x1000,
+            &[(".text", 0x1000, 0x400, SCN_MEM_EXECUTE | SCN_MEM_READ), (".rdata", 0x2000, 0x200, SCN_MEM_READ)],
             &[],
         );
         let pe = Pe32::parse(&data).unwrap();
@@ -4144,7 +4255,8 @@ mod tests {
     #[test]
     fn data_section_is_writable_not_executable() {
         let data = make_pe32(
-            0x0040_0000, 0x1000,
+            0x0040_0000,
+            0x1000,
             &[(".data", 0x3000, 0x100, SCN_MEM_READ | SCN_MEM_WRITE | SCN_CNT_INITIALIZED_DATA)],
             &[],
         );
@@ -4175,14 +4287,9 @@ mod tests {
 
     #[test]
     fn multiple_import_dll_names_in_order() {
-        let data = make_pe32(
-            0x0040_0000, 0x1000, &[],
-            &["kernel32.dll", "user32.dll", "d3d9.dll"],
-        );
+        let data = make_pe32(0x0040_0000, 0x1000, &[], &["kernel32.dll", "user32.dll", "d3d9.dll"]);
         let pe = Pe32::parse(&data).unwrap();
-        let names: alloc::vec::Vec<_> = pe.imports()
-            .map(|i| i.dll_name().to_owned_str())
-            .collect();
+        let names: alloc::vec::Vec<_> = pe.imports().map(|i| i.dll_name().to_owned_str()).collect();
         assert_eq!(names, ["kernel32.dll", "user32.dll", "d3d9.dll"]);
     }
 
@@ -4205,10 +4312,7 @@ mod tests {
         let pe = Pe32::parse(&data).unwrap();
         let mut image = data.clone();
         let base = image.as_mut_ptr() as u64;
-        assert_eq!(
-            patch_imports(base, 0x1000, &pe),
-            Err("load_image: import thunk outside the image"),
-        );
+        assert_eq!(patch_imports(base, 0x1000, &pe), Err("load_image: import thunk outside the image"),);
         // Mapped in full, the IAT is empty and nothing is patched.
         assert_eq!(patch_imports(base, image.len() as u32, &pe), Ok(()));
     }
@@ -4221,7 +4325,7 @@ mod tests {
         // Corrupt the optional header magic to PE32+ (0x020B)
         let opt_off = 0x44 + core::mem::size_of::<ImageFileHeader>();
         data[opt_off] = 0x0B;
-        data[opt_off+1] = 0x02;
+        data[opt_off + 1] = 0x02;
         assert_eq!(Pe32::parse(&data).unwrap_err(), PeError::NotPe32);
     }
 
@@ -4257,8 +4361,14 @@ mod tests {
             // SAFETY: MAP_FIXED_NOREPLACE never replaces an existing mapping, so no
             // memory the test process already uses can be affected.
             let p = unsafe {
-                mmap(va as *mut c_void, REGION as usize, PROT_READ_WRITE,
-                     MAP_PRIVATE_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0)
+                mmap(
+                    va as *mut c_void,
+                    REGION as usize,
+                    PROT_READ_WRITE,
+                    MAP_PRIVATE_ANONYMOUS | MAP_FIXED_NOREPLACE,
+                    -1,
+                    0,
+                )
             };
             if p as u64 == va {
                 return true;
@@ -4303,7 +4413,9 @@ mod tests {
         }
 
         #[cfg(not(any(target_os = "linux", windows)))]
-        pub fn map_region(_va: u64) -> bool { false }
+        pub fn map_region(_va: u64) -> bool {
+            false
+        }
 
         #[cfg(not(any(target_os = "linux", windows)))]
         pub fn unmap_region(_va: u64) {}
@@ -4329,9 +4441,7 @@ mod tests {
     }
 
     impl mm::virtual_alloc::PageMapper for HostMapper {
-        fn commit_page(&mut self, virt: u64, _w: bool, _x: bool, _u: bool)
-            -> Result<(), &'static str>
-        {
+        fn commit_page(&mut self, virt: u64, _w: bool, _x: bool, _u: bool) -> Result<(), &'static str> {
             let region = virt & !(host_mem::REGION - 1);
             if !self.regions.contains(&region) {
                 if !host_mem::map_region(region) {
@@ -4342,7 +4452,9 @@ mod tests {
             self.committed += 1;
             Ok(())
         }
-        fn decommit_page(&mut self, _virt: u64) -> Result<(), &'static str> { Ok(()) }
+        fn decommit_page(&mut self, _virt: u64) -> Result<(), &'static str> {
+            Ok(())
+        }
     }
 
     impl Drop for HostMapper {
@@ -4355,34 +4467,34 @@ mod tests {
     }
 
     // Simpler mock that only counts calls, used where we don't copy section data.
-    struct CountMapper { pub count: usize }
+    struct CountMapper {
+        pub count: usize,
+    }
     impl mm::virtual_alloc::PageMapper for CountMapper {
         fn commit_page(&mut self, _v: u64, _w: bool, _x: bool, _u: bool) -> Result<(), &'static str> {
-            self.count += 1; Ok(())
+            self.count += 1;
+            Ok(())
         }
-        fn decommit_page(&mut self, _v: u64) -> Result<(), &'static str> { Ok(()) }
+        fn decommit_page(&mut self, _v: u64) -> Result<(), &'static str> {
+            Ok(())
+        }
     }
 
     #[test]
     fn load_image_returns_correct_entry_point() {
-        let data = make_pe32(0x0040_0000, 0x1234,
-                             &[(".text", 0x1000, 0x100, SCN_MEM_EXECUTE | SCN_MEM_READ)],
-                             &[]);
+        let data = make_pe32(0x0040_0000, 0x1234, &[(".text", 0x1000, 0x100, SCN_MEM_EXECUTE | SCN_MEM_READ)], &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = HostMapper::new();
-        let img = load_image(&data, &mut vad, &mut m, Some(0x0040_0000))
-            .expect("load must succeed");
-        assert_eq!(img.image_base,  0x0040_0000);
+        let mut m = HostMapper::new();
+        let img = load_image(&data, &mut vad, &mut m, Some(0x0040_0000)).expect("load must succeed");
+        assert_eq!(img.image_base, 0x0040_0000);
         assert_eq!(img.entry_point, 0x0040_0000 + 0x1234);
     }
 
     #[test]
     fn load_image_inserts_vad_entry() {
-        let data = make_pe32(0x0040_0000, 0x1000,
-                             &[(".text", 0x1000, 0x200, SCN_MEM_EXECUTE | SCN_MEM_READ)],
-                             &[]);
+        let data = make_pe32(0x0040_0000, 0x1000, &[(".text", 0x1000, 0x200, SCN_MEM_EXECUTE | SCN_MEM_READ)], &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = HostMapper::new();
+        let mut m = HostMapper::new();
         let img = load_image(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
         assert!(vad.find(img.image_base).is_some(), "VAD entry for image must exist");
     }
@@ -4392,11 +4504,9 @@ mod tests {
         // image_size in our make_pe32 helper is 0 (default). Let's set it via
         // the opt header (opt_off + SizeOfImage offset).
         // For simplicity just check that >0 pages were committed.
-        let data = make_pe32(0x0040_0000, 0x1000,
-                             &[(".text", 0x1000, 0x200, SCN_MEM_EXECUTE | SCN_MEM_READ)],
-                             &[]);
+        let data = make_pe32(0x0040_0000, 0x1000, &[(".text", 0x1000, 0x200, SCN_MEM_EXECUTE | SCN_MEM_READ)], &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = HostMapper::new();
+        let mut m = HostMapper::new();
         load_image(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
         assert!(m.committed > 0, "load_image must commit pages for the image");
     }
@@ -4405,7 +4515,7 @@ mod tests {
     fn load_image_force_base_overrides_preferred() {
         let data = make_pe32(0x0040_0000, 0x1000, &[], &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = HostMapper::new();
+        let mut m = HostMapper::new();
         let img = load_image(&data, &mut vad, &mut m, Some(0x0200_0000)).unwrap();
         assert_eq!(img.image_base, 0x0200_0000, "force_base must be honoured");
         assert_eq!(img.entry_point, 0x0200_0000 + 0x1000);
@@ -4415,7 +4525,7 @@ mod tests {
     fn load_image_bad_pe_returns_error() {
         let bad_data = alloc::vec![0u8; 64]; // too small / no MZ
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = CountMapper { count: 0 };
+        let mut m = CountMapper { count: 0 };
         assert!(load_image(&bad_data, &mut vad, &mut m, None).is_err());
     }
 }

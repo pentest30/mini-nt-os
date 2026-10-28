@@ -16,16 +16,14 @@ use pelite::FileMap;
 use std::path::PathBuf;
 
 fn main() {
-    let path = std::env::args().nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            eprintln!("Usage: pe-inspect <game.exe>");
-            std::process::exit(1);
-        });
+    let path = std::env::args().nth(1).map(PathBuf::from).unwrap_or_else(|| {
+        eprintln!("Usage: pe-inspect <game.exe>");
+        std::process::exit(1);
+    });
 
-    let map  = FileMap::open(&path).expect("Cannot open file");
-    let pe   = PeFile::from_bytes(&map).expect("Not a valid PE32 file");
-    let opt  = pe.optional_header();
+    let map = FileMap::open(&path).expect("Cannot open file");
+    let pe = PeFile::from_bytes(&map).expect("Not a valid PE32 file");
+    let opt = pe.optional_header();
 
     println!("=== PE Analysis: {} ===\n", path.display());
 
@@ -33,21 +31,23 @@ fn main() {
     println!("Image base:    0x{:08X}", opt.ImageBase);
     println!("Entry point:   0x{:08X}", opt.AddressOfEntryPoint);
     println!("Size of image: {} KiB", opt.SizeOfImage / 1024);
-    println!("Subsystem:     {}", match opt.Subsystem {
-        2 => "WINDOWS_GUI",
-        3 => "WINDOWS_CUI",
-        _ => "other",
-    });
+    println!(
+        "Subsystem:     {}",
+        match opt.Subsystem {
+            2 => "WINDOWS_GUI",
+            3 => "WINDOWS_CUI",
+            _ => "other",
+        }
+    );
 
     // ── Sections ──────────────────────────────────────────────────────────────
     println!("\n--- Sections ---");
     for section in pe.section_headers() {
         let name = section.name().unwrap_or("?");
-        println!("  {:<8} VA=0x{:08X}  size=0x{:08X}  chars=0x{:08X}",
-            name,
-            section.VirtualAddress,
-            section.VirtualSize,
-            section.Characteristics);
+        println!(
+            "  {:<8} VA=0x{:08X}  size=0x{:08X}  chars=0x{:08X}",
+            name, section.VirtualAddress, section.VirtualSize, section.Characteristics
+        );
     }
 
     // ── Imports ───────────────────────────────────────────────────────────────

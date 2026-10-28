@@ -33,21 +33,21 @@ pub const MAX_SEGMENTS: usize = 8;
 /// One PT_LOAD segment of the kernel, with its rights.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Segment {
-    pub vaddr:      u64,
-    pub memsz:      u64,
-    pub writable:   bool,
+    pub vaddr: u64,
+    pub memsz: u64,
+    pub writable: bool,
     pub executable: bool,
 }
 
 /// The kernel image in physical memory: `[virt_base, virt_base + size)` is
 /// backed by `[phys_base, phys_base + size)`, page for page.
 pub struct KernelImage {
-    pub phys_base:     u64,
-    pub virt_base:     u64,
+    pub phys_base: u64,
+    pub virt_base: u64,
     /// Whole span in bytes, page-aligned, BSS included.
-    pub size:          u64,
-    pub entry:         u64,
-    pub segments:      [Segment; MAX_SEGMENTS],
+    pub size: u64,
+    pub entry: u64,
+    pub segments: [Segment; MAX_SEGMENTS],
     pub segment_count: usize,
 }
 
@@ -66,7 +66,11 @@ pub fn load_kernel(bt: &BootServices) -> KernelImage {
     let _ = unsafe { bt.free_pages(file_phys, pages(file_size)) };
     log::info!(
         "loader: kernel ELF at {:#x}..{:#x} (phys {:#x}), entry {:#x}, {} segments",
-        image.virt_base, image.virt_base + image.size, image.phys_base, image.entry, image.segment_count,
+        image.virt_base,
+        image.virt_base + image.size,
+        image.phys_base,
+        image.entry,
+        image.segment_count,
     );
     image
 }
@@ -101,8 +105,10 @@ fn place_segments(bt: &BootServices, file: &[u8]) -> KernelImage {
         let (offset, vaddr, filesz, memsz) =
             (rd64(file, ph + 8), rd64(file, ph + 16), rd64(file, ph + 32), rd64(file, ph + 40));
         assert!(filesz <= memsz, "loader: segment file size exceeds memory size");
-        assert!(offset.checked_add(filesz).is_some_and(|end| end <= file.len() as u64),
-                "loader: segment outside the file");
+        assert!(
+            offset.checked_add(filesz).is_some_and(|end| end <= file.len() as u64),
+            "loader: segment outside the file"
+        );
         assert!(vaddr >= KERNEL_LINK_MIN, "loader: kernel must be linked in the top 2 GiB");
         segments[count] = Segment { vaddr, memsz, writable: flags & PF_W != 0, executable: flags & PF_X != 0 };
         offsets[count] = (offset, filesz);
@@ -111,11 +117,7 @@ fn place_segments(bt: &BootServices, file: &[u8]) -> KernelImage {
     assert!(count > 0, "loader: kernel.elf has no PT_LOAD segment");
 
     let virt_base = segments[..count].iter().map(|s| s.vaddr & !0xFFF).min().unwrap_or(0);
-    let virt_end = segments[..count]
-        .iter()
-        .map(|s| (s.vaddr + s.memsz + 0xFFF) & !0xFFF)
-        .max()
-        .unwrap_or(0);
+    let virt_end = segments[..count].iter().map(|s| (s.vaddr + s.memsz + 0xFFF) & !0xFFF).max().unwrap_or(0);
     assert!(entry >= virt_base && entry < virt_end, "loader: entry point outside the image");
     let size = virt_end - virt_base;
 
@@ -155,16 +157,10 @@ pub fn load_optional_ramdisk(bt: &BootServices) -> Option<(u64, u64)> {
     load_file(bt, RAMDISK_FILENAME, false)
 }
 
-fn load_file(
-    bt: &BootServices,
-    filename: &CStr16,
-    require_present: bool,
-) -> Option<(u64, u64)> {
+fn load_file(bt: &BootServices, filename: &CStr16, require_present: bool) -> Option<(u64, u64)> {
     // ── Find a SimpleFileSystem protocol handle ───────────────────────────────
     // Look for handles that support SimpleFileSystem (ESP and other volumes).
-    let handles = bt
-        .find_handles::<SimpleFileSystem>()
-        .expect("loader: no SimpleFileSystem handles found");
+    let handles = bt.find_handles::<SimpleFileSystem>().expect("loader: no SimpleFileSystem handles found");
 
     // Try each volume until we find the file.
     for handle in handles.iter() {
@@ -188,9 +184,7 @@ fn load_file(
 
         // Query file size via FileInfo.
         let mut info_buf = [0u8; 256];
-        let info: &FileInfo = file
-            .get_info(&mut info_buf)
-            .expect("loader: failed to get file info");
+        let info: &FileInfo = file.get_info(&mut info_buf).expect("loader: failed to get file info");
         let file_size = info.file_size() as usize;
 
         assert!(file_size <= KERNEL_MAX_SIZE, "loader: file too large ({} > {} bytes)", file_size, KERNEL_MAX_SIZE);

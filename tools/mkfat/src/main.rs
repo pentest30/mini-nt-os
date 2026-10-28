@@ -20,14 +20,11 @@ fn main() {
     let out = args.get(1).cloned().unwrap_or_else(|| "fat.img".to_string());
 
     let pe32 = build_test_pe32(0x0200_0000, 0x1000);
-    let cmd  = build_cmd_pe32(0x0210_0000, 0x1000);
+    let cmd = build_cmd_pe32(0x0210_0000, 0x1000);
 
     // Standard files always present.
-    let mut files: Vec<([u8; 11], Vec<u8>)> = vec![
-        (*b"KERNEL  BIN", b"ABCD".to_vec()),
-        (*b"TEST    EXE", pe32),
-        (*b"CMD     EXE", cmd),
-    ];
+    let mut files: Vec<([u8; 11], Vec<u8>)> =
+        vec![(*b"KERNEL  BIN", b"ABCD".to_vec()), (*b"TEST    EXE", pe32), (*b"CMD     EXE", cmd)];
 
     // Extra files from HOST_PATH:FAT_NAME pairs.
     // We split on the LAST ':' so Windows drive letters (C:\...) are handled correctly.
@@ -36,7 +33,7 @@ fn main() {
             match fat_short_name(fat_name) {
                 Ok(name) => match fs::read(host) {
                     Ok(data) => files.push((name, data)),
-                    Err(e)   => eprintln!("[mkfat] skipping {arg}: {e}"),
+                    Err(e) => eprintln!("[mkfat] skipping {arg}: {e}"),
                 },
                 Err(e) => eprintln!("[mkfat] skipping {arg}: bad FAT name: {e}"),
             }
@@ -66,8 +63,12 @@ fn fat_short_name(s: &str) -> Result<[u8; 11], &'static str> {
     } else {
         (upper.as_str(), None)
     };
-    if base.is_empty() || base.len() > 8 { return Err("base name must be 1–8 chars"); }
-    if ext.map_or(false, |e| e.len() > 3) { return Err("extension must be ≤3 chars"); }
+    if base.is_empty() || base.len() > 8 {
+        return Err("base name must be 1–8 chars");
+    }
+    if ext.map_or(false, |e| e.len() > 3) {
+        return Err("extension must be ≤3 chars");
+    }
     out[..base.len()].copy_from_slice(base.as_bytes());
     if let Some(e) = ext {
         out[8..8 + e.len()].copy_from_slice(e.as_bytes());
@@ -77,8 +78,12 @@ fn fat_short_name(s: &str) -> Result<[u8; 11], &'static str> {
 
 fn fat_name_display(name: &[u8; 11]) -> String {
     let base: String = name[..8].iter().copied().filter(|&b| b != b' ').map(|b| b as char).collect();
-    let ext:  String = name[8..].iter().copied().filter(|&b| b != b' ').map(|b| b as char).collect();
-    if ext.is_empty() { base } else { format!("{base}.{ext}") }
+    let ext: String = name[8..].iter().copied().filter(|&b| b != b' ').map(|b| b as char).collect();
+    if ext.is_empty() {
+        base
+    } else {
+        format!("{base}.{ext}")
+    }
 }
 
 // ── FAT32 image builder ───────────────────────────────────────────────────────
@@ -137,13 +142,13 @@ fn build_fat_image(files: &[([u8; 11], Vec<u8>)]) -> Vec<u8> {
     {
         let b = &mut img[..SECTOR];
         b[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes()); // BytesPerSector
-        b[13] = 1;                                                   // SectorsPerCluster
+        b[13] = 1; // SectorsPerCluster
         b[14..16].copy_from_slice(&(reserved_sectors as u16).to_le_bytes()); // ReservedSectors
-        b[16] = 1;                                                   // NumberOfFATs
-        // RootEntryCount=0, TotalSectors16=0 → FAT32 variant
-        b[32..36].copy_from_slice(&total_sectors.to_le_bytes());     // TotalSectors32
-        b[36..40].copy_from_slice(&fat_sectors.to_le_bytes());       // FATsize32
-        b[44..48].copy_from_slice(&2u32.to_le_bytes());              // RootCluster
+        b[16] = 1; // NumberOfFATs
+                   // RootEntryCount=0, TotalSectors16=0 → FAT32 variant
+        b[32..36].copy_from_slice(&total_sectors.to_le_bytes()); // TotalSectors32
+        b[36..40].copy_from_slice(&fat_sectors.to_le_bytes()); // FATsize32
+        b[44..48].copy_from_slice(&2u32.to_le_bytes()); // RootCluster
     }
 
     // ── FAT (reserved_sectors .. reserved_sectors + fat_sectors) ─────────────
@@ -184,8 +189,9 @@ fn build_fat_image(files: &[([u8; 11], Vec<u8>)]) -> Vec<u8> {
             d[off..off + 11].copy_from_slice(name);
             d[off + 11] = 0x20; // archive attribute
             d[off + 20..off + 22].copy_from_slice(&((fc >> 16) as u16).to_le_bytes()); // FstClusHI
-            d[off + 26..off + 28].copy_from_slice(&(fc as u16).to_le_bytes());         // FstClusLO
-            d[off + 28..off + 32].copy_from_slice(&(data.len() as u32).to_le_bytes()); // FileSize
+            d[off + 26..off + 28].copy_from_slice(&(fc as u16).to_le_bytes()); // FstClusLO
+            d[off + 28..off + 32].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            // FileSize
         }
     }
 
@@ -226,8 +232,8 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     // ── NT signature ──────────────────────────────────────────────────────────
     buf[0x40..0x44].copy_from_slice(&IMAGE_NT_SIGNATURE.to_le_bytes());
 
-    let fh_off  = 0x44usize;
-    let opt_sz  = std::mem::size_of::<ImageOptionalHeader32>() as u16;
+    let fh_off = 0x44usize;
+    let opt_sz = std::mem::size_of::<ImageOptionalHeader32>() as u16;
     let nsec: u16 = 2;
 
     // ── FILE_HEADER ───────────────────────────────────────────────────────────
@@ -248,7 +254,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[opt_off + 92..opt_off + 96].copy_from_slice(&n_dirs.to_le_bytes());
 
     // ── Section headers (.text, .data) ───────────────────────────────────────
-    let sh_off   = opt_off + opt_sz as usize;
+    let sh_off = opt_off + opt_sz as usize;
     let text_rva: u32 = 0x1000;
     let text_raw: u32 = 0x600;
     let text_off = size_of_headers as usize;
@@ -260,7 +266,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     let text_chars: u32 = SCN_MEM_EXECUTE | SCN_MEM_READ | SCN_CNT_CODE;
     buf[sh_off + 36..sh_off + 40].copy_from_slice(&text_chars.to_le_bytes());
 
-    let sh2      = sh_off + 40;
+    let sh2 = sh_off + 40;
     let data_rva: u32 = 0x2000;
     let data_raw: u32 = 0x600;
     let data_off = (size_of_headers + text_raw) as usize;
@@ -273,80 +279,86 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[sh2 + 36..sh2 + 40].copy_from_slice(&data_chars.to_le_bytes());
 
     // ── Compute key virtual addresses ─────────────────────────────────────────
-    let args_write_va       = image_base.wrapping_add(data_rva + 0x00);
-    let args_alloc_va       = image_base.wrapping_add(data_rva + 0x20);
-    let iat_iosb_va         = image_base.wrapping_add(data_rva + 0x130);
-    let iat_msg_va          = image_base.wrapping_add(data_rva + 0x138);
-    let args_iat_proof_va   = image_base.wrapping_add(data_rva + 0x148);
-    let iat_proof_msg_va    = image_base.wrapping_add(data_rva + 0x160);
+    let args_write_va = image_base.wrapping_add(data_rva + 0x00);
+    let args_alloc_va = image_base.wrapping_add(data_rva + 0x20);
+    let iat_iosb_va = image_base.wrapping_add(data_rva + 0x130);
+    let iat_msg_va = image_base.wrapping_add(data_rva + 0x138);
+    let args_iat_proof_va = image_base.wrapping_add(data_rva + 0x148);
+    let iat_proof_msg_va = image_base.wrapping_add(data_rva + 0x160);
     let import_desc_rva: u32 = data_rva + 0x1A0;
-    let import_int_rva:  u32 = data_rva + 0x1C8;
-    let import_iat_rva:  u32 = data_rva + 0x1D0;
-    let import_ibn_rva:  u32 = data_rva + 0x1E0;
-    let import_dll_rva:  u32 = data_rva + 0x1F0;
-    let import_iat_va        = image_base.wrapping_add(import_iat_rva);
-    let sysenter_iosb_va     = image_base.wrapping_add(data_rva + 0xD0);
-    let sysenter_msg_va      = image_base.wrapping_add(data_rva + 0xD8);
-    let args_create_proc_va  = image_base.wrapping_add(data_rva + 0x80);
-    let out_proc_handle_va   = image_base.wrapping_add(data_rva + 0x90);
-    let args_create_thread_va= image_base.wrapping_add(data_rva + 0xA0);
+    let import_int_rva: u32 = data_rva + 0x1C8;
+    let import_iat_rva: u32 = data_rva + 0x1D0;
+    let import_ibn_rva: u32 = data_rva + 0x1E0;
+    let import_dll_rva: u32 = data_rva + 0x1F0;
+    let import_iat_va = image_base.wrapping_add(import_iat_rva);
+    let sysenter_iosb_va = image_base.wrapping_add(data_rva + 0xD0);
+    let sysenter_msg_va = image_base.wrapping_add(data_rva + 0xD8);
+    let args_create_proc_va = image_base.wrapping_add(data_rva + 0x80);
+    let out_proc_handle_va = image_base.wrapping_add(data_rva + 0x90);
+    let args_create_thread_va = image_base.wrapping_add(data_rva + 0xA0);
     let out_thread_handle_va = image_base.wrapping_add(data_rva + 0xB8);
-    let out_client_id_va     = image_base.wrapping_add(data_rva + 0xC0);
-    let out_base_va          = image_base.wrapping_add(data_rva + 0x40);
-    let out_size_va          = image_base.wrapping_add(data_rva + 0x44);
-    let args_term_va         = image_base.wrapping_add(data_rva + 0x48);
-    let msg_va               = image_base.wrapping_add(data_rva + 0x60);
+    let out_client_id_va = image_base.wrapping_add(data_rva + 0xC0);
+    let out_base_va = image_base.wrapping_add(data_rva + 0x40);
+    let out_size_va = image_base.wrapping_add(data_rva + 0x44);
+    let args_term_va = image_base.wrapping_add(data_rva + 0x48);
+    let msg_va = image_base.wrapping_add(data_rva + 0x60);
 
     // ── Win32 test VAs (data_rva + 0x200 onward, after the import table) ─────
-    let wc_ptr_va      = image_base.wrapping_add(data_rva + 0x200); // WNDCLASSA (40 bytes)
-    let class_name_va  = image_base.wrapping_add(data_rva + 0x228); // "TestWnd\0" (8 bytes)
-    let w32_msg_va     = image_base.wrapping_add(data_rva + 0x230); // MSG struct (28 bytes)
-    let args_rc_va     = image_base.wrapping_add(data_rva + 0x24C); // RegisterClassA args (4 bytes)
-    let args_cw_va     = image_base.wrapping_add(data_rva + 0x250); // CreateWindowExA args (48 bytes)
-    let args_gm_va     = image_base.wrapping_add(data_rva + 0x280); // GetMessageA args (16 bytes)
-    let wp_marker_va   = image_base.wrapping_add(data_rva + 0x298); // "[smoke] WndProc called\n"
-    let wp_iosb_va     = image_base.wrapping_add(data_rva + 0x2B0); // WndProc IOSB (8 bytes)
-    let args_wp_va     = image_base.wrapping_add(data_rva + 0x2B8); // NtWriteFile args for WndProc
-    let se_skip_msg_va  = image_base.wrapping_add(data_rva + 0x300); // SYSENTER skip marker
+    let wc_ptr_va = image_base.wrapping_add(data_rva + 0x200); // WNDCLASSA (40 bytes)
+    let class_name_va = image_base.wrapping_add(data_rva + 0x228); // "TestWnd\0" (8 bytes)
+    let w32_msg_va = image_base.wrapping_add(data_rva + 0x230); // MSG struct (28 bytes)
+    let args_rc_va = image_base.wrapping_add(data_rva + 0x24C); // RegisterClassA args (4 bytes)
+    let args_cw_va = image_base.wrapping_add(data_rva + 0x250); // CreateWindowExA args (48 bytes)
+    let args_gm_va = image_base.wrapping_add(data_rva + 0x280); // GetMessageA args (16 bytes)
+    let wp_marker_va = image_base.wrapping_add(data_rva + 0x298); // "[smoke] WndProc called\n"
+    let wp_iosb_va = image_base.wrapping_add(data_rva + 0x2B0); // WndProc IOSB (8 bytes)
+    let args_wp_va = image_base.wrapping_add(data_rva + 0x2B8); // NtWriteFile args for WndProc
+    let se_skip_msg_va = image_base.wrapping_add(data_rva + 0x300); // SYSENTER skip marker
     let se_skip_iosb_va = image_base.wrapping_add(data_rva + 0x340); // its IOSB (8 bytes)
     let args_se_skip_va = image_base.wrapping_add(data_rva + 0x348); // its NtWriteFile args (36 bytes)
 
-    let msg           = b"[smoke] int2e write+alloc+term\n";
-    let iat_msg       = b"[iat] NtWriteFile via IAT\n";
+    let msg = b"[smoke] int2e write+alloc+term\n";
+    let iat_msg = b"[iat] NtWriteFile via IAT\n";
     let iat_proof_msg = b"IATOK";
-    let sysenter_msg  = b"[smoke] SYSENTER path hit\n";
-    let se_skip_msg   = b"[smoke] SYSENTER path skipped: CPU is not Intel (ADR-004)\n";
-    let wp_marker     = b"[smoke] WndProc called\n";
+    let sysenter_msg = b"[smoke] SYSENTER path hit\n";
+    let se_skip_msg = b"[smoke] SYSENTER path skipped: CPU is not Intel (ADR-004)\n";
+    let wp_marker = b"[smoke] WndProc called\n";
 
     // ── Ring-3 machine code (.text section) ──────────────────────────────────
     let mut code = Vec::<u8>::new();
 
     // Set DS/ES to user data selector (0x23)
     code.extend_from_slice(&[0x66, 0xB8, 0x23, 0x00]); // MOV AX, 0x23
-    code.extend_from_slice(&[0x8E, 0xD8]);              // MOV DS, AX
-    code.extend_from_slice(&[0x8E, 0xC0]);              // MOV ES, AX
+    code.extend_from_slice(&[0x8E, 0xD8]); // MOV DS, AX
+    code.extend_from_slice(&[0x8E, 0xC0]); // MOV ES, AX
 
     // NtWriteFile (0x112) with args_write_va
-    code.push(0xBA); eu32(&mut code, args_write_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // MOV EAX, 0x112
-    code.extend_from_slice(&[0xCD, 0x2E]);              // INT 0x2E
+    code.extend_from_slice(&[0xCD, 0x2E]); // INT 0x2E
 
     // Win32 draw demo frame (0x2050) — user-mode initiated framebuffer output
-    code.push(0xBA); eu32(&mut code, 0);
+    code.push(0xBA);
+    eu32(&mut code, 0);
     code.extend_from_slice(&[0xB8, 0x50, 0x20, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
 
     // NtCreateProcess (0x001B)
-    code.push(0xBA); eu32(&mut code, args_create_proc_va);
+    code.push(0xBA);
+    eu32(&mut code, args_create_proc_va);
     code.extend_from_slice(&[0xB8, 0x1B, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
 
     // Copy process handle to thread args
-    code.extend_from_slice(&[0xA1]); eu32(&mut code, out_proc_handle_va);
-    code.extend_from_slice(&[0xA3]); eu32(&mut code, args_create_thread_va + 12);
+    code.extend_from_slice(&[0xA1]);
+    eu32(&mut code, out_proc_handle_va);
+    code.extend_from_slice(&[0xA3]);
+    eu32(&mut code, args_create_thread_va + 12);
 
     // NtCreateThread (0x0035)
-    code.push(0xBA); eu32(&mut code, args_create_thread_va);
+    code.push(0xBA);
+    eu32(&mut code, args_create_thread_va);
     code.extend_from_slice(&[0xB8, 0x35, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
 
@@ -360,30 +372,35 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     epush(&mut code, 0);
     epush(&mut code, 0);
     epush(&mut code, 0);
-    code.extend_from_slice(&[0xFF, 0x15]); eu32(&mut code, import_iat_va);
+    code.extend_from_slice(&[0xFF, 0x15]);
+    eu32(&mut code, import_iat_va);
 
     // NtWriteFile (0x112) with args_iat_proof_va — writes "IATOK"
-    code.push(0xBA); eu32(&mut code, args_iat_proof_va);
+    code.push(0xBA);
+    eu32(&mut code, args_iat_proof_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
 
     // NtAllocateVirtualMemory (0x0011) with args_alloc_va
-    code.push(0xBA); eu32(&mut code, args_alloc_va);
+    code.push(0xBA);
+    eu32(&mut code, args_alloc_va);
     code.extend_from_slice(&[0xB8, 0x11, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
 
     // Write 4 bytes to allocated page (sanity write)
-    code.extend_from_slice(&[0x8B, 0x1D]); eu32(&mut code, out_base_va);
-    code.extend_from_slice(&[0xC7, 0x03]); eu32(&mut code, 0x1234_5678);
+    code.extend_from_slice(&[0x8B, 0x1D]);
+    eu32(&mut code, out_base_va);
+    code.extend_from_slice(&[0xC7, 0x03]);
+    eu32(&mut code, 0x1234_5678);
 
     // SYSENTER from compatibility mode #UDs on non-Intel CPUs (ADR-004), and this
     // image is built on the host, so the check happens in ring 3: CPUID leaf 0
     // vendor must be "GenuineIntel", otherwise report the skip via INT 0x2E.
-    code.extend_from_slice(&[0x31, 0xC0]);              // xor eax, eax
-    code.extend_from_slice(&[0x0F, 0xA2]);              // cpuid (vendor in EBX, EDX, ECX)
+    code.extend_from_slice(&[0x31, 0xC0]); // xor eax, eax
+    code.extend_from_slice(&[0x0F, 0xA2]); // cpuid (vendor in EBX, EDX, ECX)
     let mut j_se_skip = Vec::new();
     for (modrm, word) in [(0xFBu8, b"Genu"), (0xFA, b"ineI"), (0xF9, b"ntel")] {
-        code.extend_from_slice(&[0x81, modrm]);         // cmp ebx/edx/ecx, imm32
+        code.extend_from_slice(&[0x81, modrm]); // cmp ebx/edx/ecx, imm32
         eu32(&mut code, u32::from_le_bytes(*word));
         code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); // jne .se_skip
         j_se_skip.push(code.len() - 4);
@@ -392,40 +409,44 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     // NtWriteFile via SYSENTER (XP SP2 ABI).
     // Stack layout at SYSENTER: [EDX+0]=ret_addr [EDX+4..]=args[0..8].
     // Push in reverse: Key → ... → FileHandle → ret_addr (topmost).
-    code.extend_from_slice(&[0x6A, 0x00]);              // push 0  (Key)
-    code.extend_from_slice(&[0x6A, 0x00]);              // push 0  (ByteOffset)
-    epush(&mut code, sysenter_msg.len() as u32);        // push Length
-    epush(&mut code, sysenter_msg_va);                  // push Buffer
-    epush(&mut code, sysenter_iosb_va);                 // push IoStatusBlock
-    code.extend_from_slice(&[0x6A, 0x00]);              // push 0  (ApcContext)
-    code.extend_from_slice(&[0x6A, 0x00]);              // push 0  (ApcRoutine)
-    code.extend_from_slice(&[0x6A, 0x00]);              // push 0  (Event)
-    code.extend_from_slice(&[0x6A, 0xFF]);              // push -1 (FileHandle = serial)
-    // call/pop trick: get VA of the pop-eax instruction, add delta → .after_sysenter.
-    // delta = 1(pop) + 5(add) + 1(push) + 2(mov edx,esp) + 5(mov eax,imm) + 2(sysenter) = 16
+    code.extend_from_slice(&[0x6A, 0x00]); // push 0  (Key)
+    code.extend_from_slice(&[0x6A, 0x00]); // push 0  (ByteOffset)
+    epush(&mut code, sysenter_msg.len() as u32); // push Length
+    epush(&mut code, sysenter_msg_va); // push Buffer
+    epush(&mut code, sysenter_iosb_va); // push IoStatusBlock
+    code.extend_from_slice(&[0x6A, 0x00]); // push 0  (ApcContext)
+    code.extend_from_slice(&[0x6A, 0x00]); // push 0  (ApcRoutine)
+    code.extend_from_slice(&[0x6A, 0x00]); // push 0  (Event)
+    code.extend_from_slice(&[0x6A, 0xFF]); // push -1 (FileHandle = serial)
+                                           // call/pop trick: get VA of the pop-eax instruction, add delta → .after_sysenter.
+                                           // delta = 1(pop) + 5(add) + 1(push) + 2(mov edx,esp) + 5(mov eax,imm) + 2(sysenter) = 16
     code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call .se_eip
-    code.push(0x58);                                    // pop eax  (.se_eip)
-    code.extend_from_slice(&[0x05, 16, 0, 0, 0]);      // add eax, 16
-    code.push(0x50);                                    // push eax (ret addr)
-    code.extend_from_slice(&[0x89, 0xE2]);              // mov edx, esp
+    code.push(0x58); // pop eax  (.se_eip)
+    code.extend_from_slice(&[0x05, 16, 0, 0, 0]); // add eax, 16
+    code.push(0x50); // push eax (ret addr)
+    code.extend_from_slice(&[0x89, 0xE2]); // mov edx, esp
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // mov eax, 0x112
-    code.extend_from_slice(&[0x0F, 0x34]);              // sysenter
-    // .after_sysenter: ret at SharedUserData+0x300 popped ret_addr; 9 args remain.
-    code.extend_from_slice(&[0x83, 0xC4, 0x24]);        // add esp, 36
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);        // jmp .se_done
+    code.extend_from_slice(&[0x0F, 0x34]); // sysenter
+                                           // .after_sysenter: ret at SharedUserData+0x300 popped ret_addr; 9 args remain.
+    code.extend_from_slice(&[0x83, 0xC4, 0x24]); // add esp, 36
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); // jmp .se_done
     let j_se_done = code.len() - 4;
     // .se_skip: NtWriteFile(se_skip_msg) via INT 0x2E
     let se_skip_off = code.len();
-    for j in j_se_skip { patch_rel32(&mut code, j, se_skip_off); }
-    code.push(0xBA); eu32(&mut code, args_se_skip_va);
+    for j in j_se_skip {
+        patch_rel32(&mut code, j, se_skip_off);
+    }
+    code.push(0xBA);
+    eu32(&mut code, args_se_skip_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // MOV EAX, 0x112
-    code.extend_from_slice(&[0xCD, 0x2E]);              // INT 0x2E
-    // .se_done:
+    code.extend_from_slice(&[0xCD, 0x2E]); // INT 0x2E
+                                           // .se_done:
     let se_done_off = code.len();
     patch_rel32(&mut code, j_se_done, se_done_off);
 
     // Win32 draw demo frame (0x2050) — user-mode initiated framebuffer output
-    code.push(0xBA); eu32(&mut code, 0);
+    code.push(0xBA);
+    eu32(&mut code, 0);
     code.extend_from_slice(&[0xB8, 0x50, 0x20, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
 
@@ -445,37 +466,42 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     //    c. PostQuitMessage(0) → next GetMessage returns WM_QUIT (loop ends)
 
     // RegisterClassA via direct INT 0x2E (kernel stores class→wndproc mapping)
-    code.push(0xBA); eu32(&mut code, args_rc_va);
+    code.push(0xBA);
+    eu32(&mut code, args_rc_va);
     code.extend_from_slice(&[0xB8, 0x17, 0x20, 0x00, 0x00]); // MOV EAX, 0x2017
     code.extend_from_slice(&[0xCD, 0x2E]);
     // EAX = atom; store to CreateWindowExA args[1] (lpClassName)
     // A3 imm32 = MOV [abs32], EAX (32-bit mode)
-    code.push(0xA3); eu32(&mut code, args_cw_va.wrapping_add(4));
+    code.push(0xA3);
+    eu32(&mut code, args_cw_va.wrapping_add(4));
 
     // CreateWindowExA via INT 0x2E → EAX = hwnd; WM_CREATE queued by kernel
-    code.push(0xBA); eu32(&mut code, args_cw_va);
+    code.push(0xBA);
+    eu32(&mut code, args_cw_va);
     code.extend_from_slice(&[0xB8, 0x10, 0x20, 0x00, 0x00]); // MOV EAX, 0x2010
     code.extend_from_slice(&[0xCD, 0x2E]);
 
     // msg_loop:
     let msg_loop_off = code.len();
     // GetMessageA(w32_msg_va, 0, 0, 0) via INT 0x2E
-    code.push(0xBA); eu32(&mut code, args_gm_va);
+    code.push(0xBA);
+    eu32(&mut code, args_gm_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x20, 0x00, 0x00]); // MOV EAX, 0x2012
     code.extend_from_slice(&[0xCD, 0x2E]);
     code.extend_from_slice(&[0x85, 0xC0]); // TEST EAX, EAX
-    code.extend_from_slice(&[0x0F, 0x84, 0, 0, 0, 0]); let j_msg_done = code.len() - 4; // JZ rel32
+    code.extend_from_slice(&[0x0F, 0x84, 0, 0, 0, 0]);
+    let j_msg_done = code.len() - 4; // JZ rel32
 
     // DispatchMessageA via user32 stub (ring-3 WndProc dispatch)
     // user32 base = 0x7100_0000, DispatchMessageA stub at 0x7100_1030
-    epush(&mut code, w32_msg_va);                                    // PUSH lpMsg
-    code.extend_from_slice(&[0xB8, 0x30, 0x10, 0x00, 0x71]);        // MOV EAX, 0x7100_1030
-    code.extend_from_slice(&[0xFF, 0xD0]);                           // CALL EAX (stub RET 4 cleans lpMsg)
+    epush(&mut code, w32_msg_va); // PUSH lpMsg
+    code.extend_from_slice(&[0xB8, 0x30, 0x10, 0x00, 0x71]); // MOV EAX, 0x7100_1030
+    code.extend_from_slice(&[0xFF, 0xD0]); // CALL EAX (stub RET 4 cleans lpMsg)
 
     // PostQuitMessage(0) via user32 stub at 0x7100_1060
-    code.extend_from_slice(&[0x6A, 0x00]);                           // PUSH 0 (exit code)
-    code.extend_from_slice(&[0xB8, 0x60, 0x10, 0x00, 0x71]);        // MOV EAX, 0x7100_1060
-    code.extend_from_slice(&[0xFF, 0xD0]);                           // CALL EAX (stub RET 4)
+    code.extend_from_slice(&[0x6A, 0x00]); // PUSH 0 (exit code)
+    code.extend_from_slice(&[0xB8, 0x60, 0x10, 0x00, 0x71]); // MOV EAX, 0x7100_1060
+    code.extend_from_slice(&[0xFF, 0xD0]); // CALL EAX (stub RET 4)
 
     // JMP back to msg_loop (EB rel8)
     // Displacement = msg_loop_off - (code.len() + 2);  must fit in i8.
@@ -489,7 +515,8 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     patch_rel32(&mut code, j_msg_done, msg_done_off);
 
     // NtTerminateProcess (0x00C2) — terminates thread after Win32 pump completes
-    code.push(0xBA); eu32(&mut code, args_term_va);
+    code.push(0xBA);
+    eu32(&mut code, args_term_va);
     code.extend_from_slice(&[0xB8, 0xC2, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
 
@@ -501,16 +528,16 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     // Only reachable via CALL from DispatchMessageA stub (0x7100_1030).
     // Action: write "[smoke] WndProc called\n" to serial via NtWriteFile.
     let wndproc_off = code.len(); // record for patching WNDCLASSA.lpfnWndProc
-    code.push(0xBA); eu32(&mut code, args_wp_va);                    // MOV EDX, args_wp_va (5 bytes)
-    code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);        // MOV EAX, 0x112    (5 bytes)
-    code.extend_from_slice(&[0xCD, 0x2E]);                           // INT 0x2E          (2 bytes)
-    code.extend_from_slice(&[0x33, 0xC0]);                           // XOR EAX, EAX      (2 bytes)
-    code.extend_from_slice(&[0xC2, 0x10, 0x00]);                     // RET 16            (3 bytes)
-    // Total WndProc = 5+5+2+2+3 = 17 bytes ✓
+    code.push(0xBA);
+    eu32(&mut code, args_wp_va); // MOV EDX, args_wp_va (5 bytes)
+    code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // MOV EAX, 0x112    (5 bytes)
+    code.extend_from_slice(&[0xCD, 0x2E]); // INT 0x2E          (2 bytes)
+    code.extend_from_slice(&[0x33, 0xC0]); // XOR EAX, EAX      (2 bytes)
+    code.extend_from_slice(&[0xC2, 0x10, 0x00]); // RET 16            (3 bytes)
+                                                 // Total WndProc = 5+5+2+2+3 = 17 bytes ✓
 
     let code_end = text_off + code.len();
-    assert!(code.len() <= text_raw as usize,
-        "Win32 test: code too large ({} > {})", code.len(), text_raw);
+    assert!(code.len() <= text_raw as usize, "Win32 test: code too large ({} > {})", code.len(), text_raw);
     buf[text_off..code_end].copy_from_slice(&code);
 
     // Patch WndProc VA into WNDCLASSA.lpfnWndProc (+4)
@@ -519,28 +546,28 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[wc_off + 4..wc_off + 8].copy_from_slice(&wndproc_va.to_le_bytes());
 
     // ── Data section ─────────────────────────────────────────────────────────
-    let args_write_off       = data_off;
-    let args_alloc_off       = data_off + 0x20;
-    let iat_iosb_off         = data_off + 0x130;
-    let iat_msg_off          = data_off + 0x138;
-    let args_iat_proof_off   = data_off + 0x148;
-    let iat_proof_msg_off    = data_off + 0x160;
-    let import_desc_off      = data_off + 0x1A0;
-    let import_int_off       = data_off + 0x1C8;
-    let import_iat_off       = data_off + 0x1D0;
-    let import_ibn_off       = data_off + 0x1E0;
-    let import_dll_off       = data_off + 0x1F0;
-    let sysenter_iosb_off    = data_off + 0xD0;
-    let sysenter_msg_off     = data_off + 0xD8;
+    let args_write_off = data_off;
+    let args_alloc_off = data_off + 0x20;
+    let iat_iosb_off = data_off + 0x130;
+    let iat_msg_off = data_off + 0x138;
+    let args_iat_proof_off = data_off + 0x148;
+    let iat_proof_msg_off = data_off + 0x160;
+    let import_desc_off = data_off + 0x1A0;
+    let import_int_off = data_off + 0x1C8;
+    let import_iat_off = data_off + 0x1D0;
+    let import_ibn_off = data_off + 0x1E0;
+    let import_dll_off = data_off + 0x1F0;
+    let sysenter_iosb_off = data_off + 0xD0;
+    let sysenter_msg_off = data_off + 0xD8;
     let args_create_proc_off = data_off + 0x80;
-    let out_proc_handle_off  = data_off + 0x90;
+    let out_proc_handle_off = data_off + 0x90;
     let args_create_thread_off = data_off + 0xA0;
-    let out_thread_handle_off= data_off + 0xB8;
-    let out_client_id_off    = data_off + 0xC0;
-    let out_base_off         = data_off + 0x40;
-    let out_size_off         = data_off + 0x44;
-    let args_term_off        = data_off + 0x48;
-    let msg_off              = data_off + 0x60;
+    let out_thread_handle_off = data_off + 0xB8;
+    let out_client_id_off = data_off + 0xC0;
+    let out_base_off = data_off + 0x40;
+    let out_size_off = data_off + 0x44;
+    let args_term_off = data_off + 0x48;
+    let msg_off = data_off + 0x60;
 
     // NtWriteFile args: buf_ptr=msg_va, len=msg.len()
     buf[args_write_off + 16..args_write_off + 20].copy_from_slice(&0u32.to_le_bytes());
@@ -603,15 +630,15 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[sysenter_msg_off..sysenter_msg_off + sysenter_msg.len()].copy_from_slice(sysenter_msg);
 
     // ── Win32 test data (offsets 0x200..0x2DC within .data section) ──────────
-    let wc_off         = data_off + 0x200; // WNDCLASSA (40 bytes); lpfnWndProc patched above
-    let cls_name_off   = data_off + 0x228; // "TestWnd\0"
-    let w32_msg_off    = data_off + 0x230; // MSG struct (28 bytes, zeroed)
-    let args_rc_off    = data_off + 0x24C; // RegisterClassA args (4 bytes)
-    let _args_cw_off   = data_off + 0x250; // CreateWindowExA args (48 bytes)
-    let args_gm_off    = data_off + 0x280; // GetMessageA args (16 bytes)
-    let wp_marker_off  = data_off + 0x298; // "[smoke] WndProc called\n"
-    let _wp_iosb_off   = data_off + 0x2B0; // WndProc NtWriteFile IOSB (8 bytes)
-    let args_wp_off    = data_off + 0x2B8; // WndProc NtWriteFile args (36 bytes)
+    let wc_off = data_off + 0x200; // WNDCLASSA (40 bytes); lpfnWndProc patched above
+    let cls_name_off = data_off + 0x228; // "TestWnd\0"
+    let w32_msg_off = data_off + 0x230; // MSG struct (28 bytes, zeroed)
+    let args_rc_off = data_off + 0x24C; // RegisterClassA args (4 bytes)
+    let _args_cw_off = data_off + 0x250; // CreateWindowExA args (48 bytes)
+    let args_gm_off = data_off + 0x280; // GetMessageA args (16 bytes)
+    let wp_marker_off = data_off + 0x298; // "[smoke] WndProc called\n"
+    let _wp_iosb_off = data_off + 0x2B0; // WndProc NtWriteFile IOSB (8 bytes)
+    let args_wp_off = data_off + 0x2B8; // WndProc NtWriteFile args (36 bytes)
 
     // WNDCLASSA: lpszClassName = class_name_va (+36)
     buf[wc_off + 36..wc_off + 40].copy_from_slice(&class_name_va.to_le_bytes());
@@ -646,7 +673,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
 
     // SYSENTER skip marker and its NtWriteFile args (9 × 4 = 36 bytes):
     // [0] FileHandle=0, [4] IoStatusBlock, [5] Buffer, [6] Length
-    let se_skip_msg_off  = data_off + 0x300;
+    let se_skip_msg_off = data_off + 0x300;
     let args_se_skip_off = data_off + 0x348;
     buf[se_skip_msg_off..se_skip_msg_off + se_skip_msg.len()].copy_from_slice(se_skip_msg);
     buf[args_se_skip_off + 16..args_se_skip_off + 20].copy_from_slice(&se_skip_iosb_va.to_le_bytes());
@@ -667,8 +694,8 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[0x3C..0x40].copy_from_slice(&nt_off.to_le_bytes());
     buf[0x40..0x44].copy_from_slice(&IMAGE_NT_SIGNATURE.to_le_bytes());
 
-    let fh_off  = 0x44usize;
-    let opt_sz  = std::mem::size_of::<ImageOptionalHeader32>() as u16;
+    let fh_off = 0x44usize;
+    let opt_sz = std::mem::size_of::<ImageOptionalHeader32>() as u16;
     let nsec: u16 = 2;
     buf[fh_off..fh_off + 2].copy_from_slice(&MACHINE_I386.to_le_bytes());
     buf[fh_off + 2..fh_off + 4].copy_from_slice(&nsec.to_le_bytes());
@@ -685,7 +712,7 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     let n_dirs: u32 = 16;
     buf[opt_off + 92..opt_off + 96].copy_from_slice(&n_dirs.to_le_bytes());
 
-    let sh_off   = opt_off + opt_sz as usize;
+    let sh_off = opt_off + opt_sz as usize;
     let text_rva: u32 = 0x1000;
     let text_raw: u32 = 0x600;
     let text_off = size_of_headers as usize;
@@ -697,7 +724,7 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     let text_chars: u32 = SCN_MEM_EXECUTE | SCN_MEM_READ | SCN_CNT_CODE;
     buf[sh_off + 36..sh_off + 40].copy_from_slice(&text_chars.to_le_bytes());
 
-    let sh2      = sh_off + 40;
+    let sh2 = sh_off + 40;
     let data_rva: u32 = 0x2000;
     let data_raw: u32 = 0x600;
     let data_off = (size_of_headers + text_raw) as usize;
@@ -752,133 +779,214 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     code.extend_from_slice(&[0x66, 0xB8, 0x23, 0x00]);
     code.extend_from_slice(&[0x8E, 0xD8]);
     code.extend_from_slice(&[0x8E, 0xC0]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_boot_run = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_boot_run = code.len() - 4;
 
     let loop_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_write_prompt_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_prompt_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.push(0xBA); eu32(&mut code, args_read_va);
+    code.push(0xBA);
+    eu32(&mut code, args_read_va);
     code.extend_from_slice(&[0xB8, 0xB7, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xA1]); eu32(&mut code, input_buf_va);
-    code.extend_from_slice(&[0x3D]); eu32(&mut code, 0x706C_6568);
-    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); let j_help_nomatch = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 4);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_help_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_help_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_help_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_help_s = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_help_bad = code.len() - 4;
+    code.extend_from_slice(&[0xA1]);
+    eu32(&mut code, input_buf_va);
+    code.extend_from_slice(&[0x3D]);
+    eu32(&mut code, 0x706C_6568);
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]);
+    let j_help_nomatch = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 4);
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_help_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_help_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_help_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_help_s = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_help_bad = code.len() - 4;
 
     let dir_check_off = code.len();
-    code.push(0xA0); eu32(&mut code, input_buf_va);
-    code.extend_from_slice(&[0x3C, b'd', 0x0F, 0x85, 0, 0, 0, 0]); let j_dir_nomatch = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 1);
-    code.extend_from_slice(&[0x3C, b'i', 0x0F, 0x85, 0, 0, 0, 0]); let j_dir_nomatch2 = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 2);
-    code.extend_from_slice(&[0x3C, b'r', 0x0F, 0x85, 0, 0, 0, 0]); let j_dir_nomatch3 = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 3);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_dir_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_dir_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_dir_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_dir_s = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_dir_bad = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va);
+    code.extend_from_slice(&[0x3C, b'd', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_dir_nomatch = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 1);
+    code.extend_from_slice(&[0x3C, b'i', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_dir_nomatch2 = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 2);
+    code.extend_from_slice(&[0x3C, b'r', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_dir_nomatch3 = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 3);
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_dir_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_dir_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_dir_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_dir_s = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_dir_bad = code.len() - 4;
 
     let cat_check_off = code.len();
-    code.push(0xA0); eu32(&mut code, input_buf_va);
-    code.extend_from_slice(&[0x3C, b'c', 0x0F, 0x85, 0, 0, 0, 0]); let j_cat_nomatch = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 1);
-    code.extend_from_slice(&[0x3C, b'a', 0x0F, 0x85, 0, 0, 0, 0]); let j_cat_nomatch2 = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 2);
-    code.extend_from_slice(&[0x3C, b't', 0x0F, 0x85, 0, 0, 0, 0]); let j_cat_nomatch3 = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 3);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_cat_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_cat_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_cat_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_cat_s = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_cat_bad = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va);
+    code.extend_from_slice(&[0x3C, b'c', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_cat_nomatch = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 1);
+    code.extend_from_slice(&[0x3C, b'a', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_cat_nomatch2 = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 2);
+    code.extend_from_slice(&[0x3C, b't', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_cat_nomatch3 = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 3);
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cat_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cat_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cat_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cat_s = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_cat_bad = code.len() - 4;
 
     let run_check_off = code.len();
-    code.push(0xA0); eu32(&mut code, input_buf_va);
-    code.extend_from_slice(&[0x3C, b'r', 0x0F, 0x85, 0, 0, 0, 0]); let j_run_nomatch = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 1);
-    code.extend_from_slice(&[0x3C, b'u', 0x0F, 0x85, 0, 0, 0, 0]); let j_run_nomatch2 = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 2);
-    code.extend_from_slice(&[0x3C, b'n', 0x0F, 0x85, 0, 0, 0, 0]); let j_run_nomatch3 = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 3);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_run_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_run_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_run_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_run_s = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_run_bad = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va);
+    code.extend_from_slice(&[0x3C, b'r', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_run_nomatch = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 1);
+    code.extend_from_slice(&[0x3C, b'u', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_run_nomatch2 = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 2);
+    code.extend_from_slice(&[0x3C, b'n', 0x0F, 0x85, 0, 0, 0, 0]);
+    let j_run_nomatch3 = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 3);
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_run_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_run_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_run_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_run_s = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_run_bad = code.len() - 4;
 
     let exit_check_off = code.len();
-    code.extend_from_slice(&[0xA1]); eu32(&mut code, input_buf_va);
-    code.extend_from_slice(&[0x3D]); eu32(&mut code, 0x7469_7865);
-    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); let j_exit_nomatch = code.len() - 4;
-    code.push(0xA0); eu32(&mut code, input_buf_va + 4);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_exit_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_exit_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_exit_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_exit_s = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_unknown = code.len() - 4;
+    code.extend_from_slice(&[0xA1]);
+    eu32(&mut code, input_buf_va);
+    code.extend_from_slice(&[0x3D]);
+    eu32(&mut code, 0x7469_7865);
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]);
+    let j_exit_nomatch = code.len() - 4;
+    code.push(0xA0);
+    eu32(&mut code, input_buf_va + 4);
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_exit_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_exit_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_exit_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_exit_s = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_unknown = code.len() - 4;
 
     let help_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_write_help_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_help_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_help_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_help_loop = code.len() - 4;
 
     let dir_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_list_va);
+    code.push(0xBA);
+    eu32(&mut code, args_list_va);
     code.extend_from_slice(&[0xB8, 0x40, 0x20, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xA1]); eu32(&mut code, list_written_va);
-    code.extend_from_slice(&[0xA3]); eu32(&mut code, args_write_dir_va + 24);
-    code.push(0xBA); eu32(&mut code, args_write_dir_va);
+    code.extend_from_slice(&[0xA1]);
+    eu32(&mut code, list_written_va);
+    code.extend_from_slice(&[0xA3]);
+    eu32(&mut code, args_write_dir_va + 24);
+    code.push(0xBA);
+    eu32(&mut code, args_write_dir_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_dir_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_dir_loop = code.len() - 4;
 
     let cat_off = code.len();
-    code.extend_from_slice(&[0xBE]); eu32(&mut code, input_buf_va);
+    code.extend_from_slice(&[0xBE]);
+    eu32(&mut code, input_buf_va);
     code.extend_from_slice(&[0x83, 0xC6, 0x03]);
-    code.extend_from_slice(&[0xBF]); eu32(&mut code, exec_path_va);
+    code.extend_from_slice(&[0xBF]);
+    eu32(&mut code, exec_path_va);
     code.extend_from_slice(&[0xC6, 0x07, b'/']);
     code.push(0x47);
     let cskip_loop = code.len();
     code.extend_from_slice(&[0x8A, 0x06]);
     code.extend_from_slice(&[0x3C, b' ']);
-    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); let j_cskip_done = code.len() - 4;
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]);
+    let j_cskip_done = code.len() - 4;
     code.push(0x46);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_cskip_back = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_cskip_back = code.len() - 4;
     let ccopy_loop = code.len();
     patch_rel32(&mut code, j_cskip_done, ccopy_loop);
     patch_rel32(&mut code, j_cskip_back, cskip_loop);
     code.extend_from_slice(&[0x8A, 0x06]);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_cusage_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_cusage_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_cusage_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_cusage_s = code.len() - 4;
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cusage_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cusage_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cusage_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cusage_s = code.len() - 4;
     code.extend_from_slice(&[0x3C, b'a']);
-    code.extend_from_slice(&[0x0F, 0x82, 0, 0, 0, 0]); let j_cup_lo = code.len() - 4;
+    code.extend_from_slice(&[0x0F, 0x82, 0, 0, 0, 0]);
+    let j_cup_lo = code.len() - 4;
     code.extend_from_slice(&[0x3C, b'z']);
-    code.extend_from_slice(&[0x0F, 0x87, 0, 0, 0, 0]); let j_cup_hi = code.len() - 4;
+    code.extend_from_slice(&[0x0F, 0x87, 0, 0, 0, 0]);
+    let j_cup_hi = code.len() - 4;
     code.extend_from_slice(&[0x2C, 0x20]);
     let cup_done = code.len();
     patch_rel32(&mut code, j_cup_lo, cup_done);
     patch_rel32(&mut code, j_cup_hi, cup_done);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_cdone_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_cdone_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_cdone_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_cdone_s = code.len() - 4;
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cdone_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cdone_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cdone_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_cdone_s = code.len() - 4;
     code.extend_from_slice(&[0x88, 0x07]);
     code.push(0x47);
     code.push(0x46);
-    code.extend_from_slice(&[0x81, 0xFF]); eu32(&mut code, exec_path_va + 63);
-    code.extend_from_slice(&[0x0F, 0x83, 0, 0, 0, 0]); let j_cdone_ge = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_ccopy_back = code.len() - 4;
+    code.extend_from_slice(&[0x81, 0xFF]);
+    eu32(&mut code, exec_path_va + 63);
+    code.extend_from_slice(&[0x0F, 0x83, 0, 0, 0, 0]);
+    let j_cdone_ge = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_ccopy_back = code.len() - 4;
     let cparse_done = code.len();
     patch_rel32(&mut code, j_cdone_0, cparse_done);
     patch_rel32(&mut code, j_cdone_n, cparse_done);
@@ -887,61 +995,85 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     patch_rel32(&mut code, j_cdone_ge, cparse_done);
     patch_rel32(&mut code, j_ccopy_back, ccopy_loop);
     code.extend_from_slice(&[0xC6, 0x07, 0x00]);
-    code.push(0xBA); eu32(&mut code, args_cat_va);
+    code.push(0xBA);
+    eu32(&mut code, args_cat_va);
     code.extend_from_slice(&[0xB8, 0x41, 0x20, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
     code.extend_from_slice(&[0x85, 0xC0]);
-    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); let j_cat_fail = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_cat_loop = code.len() - 4;
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]);
+    let j_cat_fail = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_cat_loop = code.len() - 4;
     let cat_fail_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_write_runfail_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_runfail_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_catfail_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_catfail_loop = code.len() - 4;
     let cat_usage_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_write_usage_cat_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_usage_cat_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_catusage_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_catusage_loop = code.len() - 4;
 
     let run_off = code.len();
-    code.extend_from_slice(&[0xBE]); eu32(&mut code, input_buf_va);
+    code.extend_from_slice(&[0xBE]);
+    eu32(&mut code, input_buf_va);
     code.extend_from_slice(&[0x83, 0xC6, 0x04]);
-    code.extend_from_slice(&[0xBF]); eu32(&mut code, exec_path_va);
+    code.extend_from_slice(&[0xBF]);
+    eu32(&mut code, exec_path_va);
     code.extend_from_slice(&[0xC6, 0x07, b'/']);
     code.push(0x47);
     let skip_loop = code.len();
     code.extend_from_slice(&[0x8A, 0x06]);
     code.extend_from_slice(&[0x3C, b' ']);
-    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); let j_skip_done = code.len() - 4;
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]);
+    let j_skip_done = code.len() - 4;
     code.push(0x46);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_skip_back = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_skip_back = code.len() - 4;
     let copy_loop = code.len();
     patch_rel32(&mut code, j_skip_done, copy_loop);
     patch_rel32(&mut code, j_skip_back, skip_loop);
     code.extend_from_slice(&[0x8A, 0x06]);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_rusage_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_rusage_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_rusage_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_rusage_s = code.len() - 4;
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_rusage_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_rusage_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_rusage_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_rusage_s = code.len() - 4;
     code.extend_from_slice(&[0x3C, b'a']);
-    code.extend_from_slice(&[0x0F, 0x82, 0, 0, 0, 0]); let j_up_lo = code.len() - 4;
+    code.extend_from_slice(&[0x0F, 0x82, 0, 0, 0, 0]);
+    let j_up_lo = code.len() - 4;
     code.extend_from_slice(&[0x3C, b'z']);
-    code.extend_from_slice(&[0x0F, 0x87, 0, 0, 0, 0]); let j_up_hi = code.len() - 4;
+    code.extend_from_slice(&[0x0F, 0x87, 0, 0, 0, 0]);
+    let j_up_hi = code.len() - 4;
     code.extend_from_slice(&[0x2C, 0x20]);
     let up_done = code.len();
     patch_rel32(&mut code, j_up_lo, up_done);
     patch_rel32(&mut code, j_up_hi, up_done);
-    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]); let j_done_0 = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]); let j_done_n = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]); let j_done_r = code.len() - 4;
-    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]); let j_done_s = code.len() - 4;
+    code.extend_from_slice(&[0x3C, 0x00, 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_done_0 = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\n', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_done_n = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b'\r', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_done_r = code.len() - 4;
+    code.extend_from_slice(&[0x3C, b' ', 0x0F, 0x84, 0, 0, 0, 0]);
+    let j_done_s = code.len() - 4;
     code.extend_from_slice(&[0x88, 0x07]);
     code.push(0x47);
     code.push(0x46);
-    code.extend_from_slice(&[0x81, 0xFF]); eu32(&mut code, exec_path_va + 63);
-    code.extend_from_slice(&[0x0F, 0x83, 0, 0, 0, 0]); let j_done_ge = code.len() - 4;
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_copy_back = code.len() - 4;
+    code.extend_from_slice(&[0x81, 0xFF]);
+    eu32(&mut code, exec_path_va + 63);
+    code.extend_from_slice(&[0x0F, 0x83, 0, 0, 0, 0]);
+    let j_done_ge = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_copy_back = code.len() - 4;
     let parse_done = code.len();
     patch_rel32(&mut code, j_done_0, parse_done);
     patch_rel32(&mut code, j_done_n, parse_done);
@@ -951,39 +1083,53 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     patch_rel32(&mut code, j_copy_back, copy_loop);
     code.extend_from_slice(&[0xC6, 0x07, 0x00]);
     let run_usage_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_write_usage_run_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_usage_run_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_runusage_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_runusage_loop = code.len() - 4;
     let run_create_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_create_proc_va);
+    code.push(0xBA);
+    eu32(&mut code, args_create_proc_va);
     code.extend_from_slice(&[0xB8, 0x1B, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xA1]); eu32(&mut code, out_proc_handle_va);
-    code.extend_from_slice(&[0xA3]); eu32(&mut code, args_create_thread_va + 12);
-    code.push(0xBA); eu32(&mut code, args_create_thread_va);
+    code.extend_from_slice(&[0xA1]);
+    eu32(&mut code, out_proc_handle_va);
+    code.extend_from_slice(&[0xA3]);
+    eu32(&mut code, args_create_thread_va + 12);
+    code.push(0xBA);
+    eu32(&mut code, args_create_thread_va);
     code.extend_from_slice(&[0xB8, 0x35, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
     code.extend_from_slice(&[0x85, 0xC0]);
-    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); let j_runfail_thread = code.len() - 4;
-    code.push(0xBA); eu32(&mut code, args_write_runok_va);
+    code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]);
+    let j_runfail_thread = code.len() - 4;
+    code.push(0xBA);
+    eu32(&mut code, args_write_runok_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_run_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_run_loop = code.len() - 4;
     let run_fail_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_write_runfail_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_runfail_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_runfail_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_runfail_loop = code.len() - 4;
 
     let unknown_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_write_unknown_va);
+    code.push(0xBA);
+    eu32(&mut code, args_write_unknown_va);
     code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E]);
-    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]); let j_unknown_loop = code.len() - 4;
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+    let j_unknown_loop = code.len() - 4;
 
     let exit_off = code.len();
-    code.push(0xBA); eu32(&mut code, args_term_va);
+    code.push(0xBA);
+    eu32(&mut code, args_term_va);
     code.extend_from_slice(&[0xB8, 0xC2, 0x00, 0x00, 0x00]);
     code.extend_from_slice(&[0xCD, 0x2E, 0xEB, 0xFE]);
 
@@ -1083,7 +1229,8 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[args_write_help_off + 20..args_write_help_off + 24].copy_from_slice(&help_va.to_le_bytes());
     buf[args_write_help_off + 24..args_write_help_off + 28].copy_from_slice(&(help.len() as u32).to_le_bytes());
     buf[args_write_unknown_off + 20..args_write_unknown_off + 24].copy_from_slice(&unknown_va.to_le_bytes());
-    buf[args_write_unknown_off + 24..args_write_unknown_off + 28].copy_from_slice(&(unknown.len() as u32).to_le_bytes());
+    buf[args_write_unknown_off + 24..args_write_unknown_off + 28]
+        .copy_from_slice(&(unknown.len() as u32).to_le_bytes());
 
     buf[args_read_off..args_read_off + 4].copy_from_slice(&0u32.to_le_bytes());
     buf[args_read_off + 16..args_read_off + 20].copy_from_slice(&read_iosb_va.to_le_bytes());
@@ -1102,11 +1249,14 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[args_write_runok_off + 20..args_write_runok_off + 24].copy_from_slice(&runok_va.to_le_bytes());
     buf[args_write_runok_off + 24..args_write_runok_off + 28].copy_from_slice(&(runok.len() as u32).to_le_bytes());
     buf[args_write_runfail_off + 20..args_write_runfail_off + 24].copy_from_slice(&runfail_va.to_le_bytes());
-    buf[args_write_runfail_off + 24..args_write_runfail_off + 28].copy_from_slice(&(runfail.len() as u32).to_le_bytes());
+    buf[args_write_runfail_off + 24..args_write_runfail_off + 28]
+        .copy_from_slice(&(runfail.len() as u32).to_le_bytes());
     buf[args_write_usage_run_off + 20..args_write_usage_run_off + 24].copy_from_slice(&usage_run_va.to_le_bytes());
-    buf[args_write_usage_run_off + 24..args_write_usage_run_off + 28].copy_from_slice(&(usage_run.len() as u32).to_le_bytes());
+    buf[args_write_usage_run_off + 24..args_write_usage_run_off + 28]
+        .copy_from_slice(&(usage_run.len() as u32).to_le_bytes());
     buf[args_write_usage_cat_off + 20..args_write_usage_cat_off + 24].copy_from_slice(&usage_cat_va.to_le_bytes());
-    buf[args_write_usage_cat_off + 24..args_write_usage_cat_off + 28].copy_from_slice(&(usage_cat.len() as u32).to_le_bytes());
+    buf[args_write_usage_cat_off + 24..args_write_usage_cat_off + 28]
+        .copy_from_slice(&(usage_cat.len() as u32).to_le_bytes());
     buf[args_cat_off..args_cat_off + 4].copy_from_slice(&exec_path_va.to_le_bytes());
 
     buf[args_create_proc_off..args_create_proc_off + 4].copy_from_slice(&out_proc_handle_va.to_le_bytes());
@@ -1141,14 +1291,14 @@ fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
 // ── PE32 constants/types ──────────────────────────────────────────────────────
 mod pe32 {
     pub const IMAGE_DOS_SIGNATURE: u16 = 0x5A4D;
-    pub const IMAGE_NT_SIGNATURE:  u32 = 0x0000_4550;
-    pub const MACHINE_I386:        u16 = 0x014C;
+    pub const IMAGE_NT_SIGNATURE: u32 = 0x0000_4550;
+    pub const MACHINE_I386: u16 = 0x014C;
     pub const IMAGE_NT_OPTIONAL_HDR32_MAGIC: u16 = 0x010B;
-    pub const SCN_CNT_CODE:              u32 = 0x0000_0020;
-    pub const SCN_CNT_INITIALIZED_DATA:  u32 = 0x0000_0040;
-    pub const SCN_MEM_EXECUTE:           u32 = 0x2000_0000;
-    pub const SCN_MEM_READ:              u32 = 0x4000_0000;
-    pub const SCN_MEM_WRITE:             u32 = 0x8000_0000;
+    pub const SCN_CNT_CODE: u32 = 0x0000_0020;
+    pub const SCN_CNT_INITIALIZED_DATA: u32 = 0x0000_0040;
+    pub const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+    pub const SCN_MEM_READ: u32 = 0x4000_0000;
+    pub const SCN_MEM_WRITE: u32 = 0x8000_0000;
 
     // Sized placeholders to get sizeof without a full definition.
     // ImageFileHeader = 20 bytes, ImageOptionalHeader32 = 96 + 16*8 = 224 bytes.

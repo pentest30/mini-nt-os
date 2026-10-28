@@ -44,14 +44,14 @@ pub fn set_hhdm_offset(v: u64) {
 pub unsafe fn init() {
     // SAFETY: caller guarantees single-call, interrupts disabled.
     unsafe {
-        serial::init();         // first — UART must be open before logger_init
-        serial::logger_init();  // register SerialLogger as the global log backend
-        gdt::init();     // TSS with RSP0 + IST[0] double-fault stack
+        serial::init(); // first — UART must be open before logger_init
+        serial::logger_init(); // register SerialLogger as the global log backend
+        gdt::init(); // TSS with RSP0 + IST[0] double-fault stack
         sysenter::init();
-        idt::init();     // exception + timer + syscall handlers (needs GDT/TSS)
-        irql::init();    // set IRQL = PASSIVE, program APIC TPR
-        timer::init();   // APIC timer calibration + periodic tick (needs IDT)
-        ps2::init();     // flush PS/2 output buffer left by UEFI firmware
+        idt::init(); // exception + timer + syscall handlers (needs GDT/TSS)
+        irql::init(); // set IRQL = PASSIVE, program APIC TPR
+        timer::init(); // APIC timer calibration + periodic tick (needs IDT)
+        ps2::init(); // flush PS/2 output buffer left by UEFI firmware
     }
     log::info!("HAL initialised");
 }

@@ -65,16 +65,7 @@ impl KThread {
         }
 
         Self {
-            context: KContext {
-                rsp: rsp as u64,
-                rbx: 0,
-                rbp: 0,
-                r12: 0,
-                r13: 0,
-                r14: 0,
-                r15: 0,
-                rip: entry as u64,
-            },
+            context: KContext { rsp: rsp as u64, rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0, rip: entry as u64 },
             state: ThreadState::Initialized,
             priority,
             stack,
@@ -85,16 +76,7 @@ impl KThread {
     /// kernel execution context.
     pub fn bootstrap_current(priority: Priority) -> Self {
         Self {
-            context: KContext {
-                rsp: 0,
-                rbx: 0,
-                rbp: 0,
-                r12: 0,
-                r13: 0,
-                r14: 0,
-                r15: 0,
-                rip: 0,
-            },
+            context: KContext { rsp: 0, rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0, rip: 0 },
             state: ThreadState::Running,
             priority,
             stack: alloc::vec![].into_boxed_slice(),
@@ -231,27 +213,32 @@ mod tests {
 
     #[test]
     fn new_thread_rsp_is_16_byte_aligned() {
-        fn dummy_entry() -> ! { loop {} }
+        fn dummy_entry() -> ! {
+            loop {}
+        }
         let t = KThread::new(dummy_entry, 8);
         assert_eq!(t.context.rsp % 16, 0, "initial RSP must be 16-byte aligned");
     }
 
     #[test]
     fn new_thread_entry_on_stack_top() {
-        fn dummy_entry() -> ! { loop {} }
+        fn dummy_entry() -> ! {
+            loop {}
+        }
         let t = KThread::new(dummy_entry, 8);
         // SAFETY: rsp is a valid pointer into our owned stack buffer.
         let word_at_rsp = unsafe { *(t.context.rsp as *const u64) };
         assert_eq!(
-            word_at_rsp,
-            dummy_entry as *const () as u64,
+            word_at_rsp, dummy_entry as *const () as u64,
             "[rsp] must hold the entry address so ret jumps there"
         );
     }
 
     #[test]
     fn new_thread_rsp_inside_stack_buffer() {
-        fn dummy_entry() -> ! { loop {} }
+        fn dummy_entry() -> ! {
+            loop {}
+        }
         let t = KThread::new(dummy_entry, 8);
         let stack_start = t.stack.as_ptr() as u64;
         let stack_end = stack_start + t.stack.len() as u64;
@@ -266,7 +253,9 @@ mod tests {
 
     #[test]
     fn new_thread_callee_regs_zeroed() {
-        fn dummy_entry() -> ! { loop {} }
+        fn dummy_entry() -> ! {
+            loop {}
+        }
         let t = KThread::new(dummy_entry, 8);
         assert_eq!(t.context.rbx, 0);
         assert_eq!(t.context.rbp, 0);
@@ -278,7 +267,9 @@ mod tests {
 
     #[test]
     fn new_thread_state_is_initialized() {
-        fn dummy_entry() -> ! { loop {} }
+        fn dummy_entry() -> ! {
+            loop {}
+        }
         let t = KThread::new(dummy_entry, 8);
         assert_eq!(t.state, ThreadState::Initialized);
     }

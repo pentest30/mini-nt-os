@@ -24,7 +24,7 @@ pub struct KEvent {
 }
 
 struct EventInner {
-    kind:      EventType,
+    kind: EventType,
     signalled: bool,
     // TODO Phase 2: wait queue (list of blocked KTHREADs).
 }
@@ -32,9 +32,7 @@ struct EventInner {
 impl KEvent {
     /// Create a new event.
     pub const fn new(kind: EventType, initial_state: bool) -> Self {
-        Self {
-            inner: Mutex::new(EventInner { kind, signalled: initial_state }),
-        }
+        Self { inner: Mutex::new(EventInner { kind, signalled: initial_state }) }
     }
 
     /// Signal the event. Returns the previous signalled state.
