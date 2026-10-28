@@ -314,6 +314,8 @@ SYSENTER_TEXT="[smoke] SYSENTER path hit"
 SYSENTER_SKIP_TEXT="[smoke] SYSENTER path skipped"   # non-Intel CPU (ADR-004)
 WNDPROC_TEXT="[smoke] WndProc called"
 HELLO_EXE_TEXT="[smoke] HELLO.EXE ran ok"
+# Syscall dispatch trace: only allowed with --features trace-syscalls (06 §5).
+SYSCALL_TRACE_RE='^\[sys\] |\[w32dbg\] dispatch:'
 
 if [[ -f "$SERIAL_LOG" ]] \
     && grep -Fq "$SUCCESS_TEXT" "$SERIAL_LOG" \
@@ -322,7 +324,8 @@ if [[ -f "$SERIAL_LOG" ]] \
     && grep -Fq "$CREATE_PROCESS_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$CREATE_THREAD_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$FAT_PROBE_TEXT" "$SERIAL_LOG" \
-    && { grep -Fq "$SYSENTER_TEXT" "$SERIAL_LOG" || grep -Fq "$SYSENTER_SKIP_TEXT" "$SERIAL_LOG"; }
+    && { grep -Fq "$SYSENTER_TEXT" "$SERIAL_LOG" || grep -Fq "$SYSENTER_SKIP_TEXT" "$SERIAL_LOG"; } \
+    && ! grep -Eq "$SYSCALL_TRACE_RE" "$SERIAL_LOG"
 then
     echo "[F2] PASS — all Phase 2.5 smoke markers found"
     # Report bonus Phase 3 markers if present
@@ -344,6 +347,7 @@ else
     echo "      required: '$CREATE_THREAD_TEXT'"
     echo "      required: '$FAT_PROBE_TEXT'"
     echo "      required: '$SYSENTER_TEXT' (Intel) or '$SYSENTER_SKIP_TEXT' (other vendors)"
+    echo "      forbidden: syscall dispatch trace /$SYSCALL_TRACE_RE/ (trace-syscalls feature is off)"
     echo "      optional: '$WNDPROC_TEXT'  ← Phase 3: Win32 WndProc dispatch via user32 stub"
     echo "--- Serial output ($SERIAL_LOG) ---"
     cat "$SERIAL_LOG" 2>/dev/null || echo "(no output)"

@@ -606,10 +606,10 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     let cls_name_off   = data_off + 0x228; // "TestWnd\0"
     let w32_msg_off    = data_off + 0x230; // MSG struct (28 bytes, zeroed)
     let args_rc_off    = data_off + 0x24C; // RegisterClassA args (4 bytes)
-    let args_cw_off    = data_off + 0x250; // CreateWindowExA args (48 bytes)
+    let _args_cw_off   = data_off + 0x250; // CreateWindowExA args (48 bytes)
     let args_gm_off    = data_off + 0x280; // GetMessageA args (16 bytes)
     let wp_marker_off  = data_off + 0x298; // "[smoke] WndProc called\n"
-    let wp_iosb_off    = data_off + 0x2B0; // WndProc NtWriteFile IOSB (8 bytes)
+    let _wp_iosb_off   = data_off + 0x2B0; // WndProc NtWriteFile IOSB (8 bytes)
     let args_wp_off    = data_off + 0x2B8; // WndProc NtWriteFile args (36 bytes)
 
     // WNDCLASSA: lpszClassName = class_name_va (+36)
@@ -1151,7 +1151,9 @@ mod pe32 {
 
     // Sized placeholders to get sizeof without a full definition.
     // ImageFileHeader = 20 bytes, ImageOptionalHeader32 = 96 + 16*8 = 224 bytes.
+    #[expect(dead_code, reason = "size-only placeholder")]
     pub struct ImageFileHeader([u8; 20]);
+    #[expect(dead_code, reason = "size-only placeholder")]
     pub struct ImageOptionalHeader32([u8; 224]);
 }
 

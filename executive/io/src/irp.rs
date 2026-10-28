@@ -9,7 +9,7 @@
 //!   CreateFile            → IRP_MJ_CREATE
 
 use alloc::boxed::Box;
-use ke::event::{KEvent, EventType};
+use ke::event::KEvent;
 
 /// IRP major function codes (IRP_MJ_*).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

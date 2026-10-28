@@ -150,9 +150,9 @@ pub fn lower(old_irql: Irql) {
 
     // Re-enable hardware interrupts when returning to PASSIVE or APC.
     if old_irql < Irql::Dispatch {
-        // SAFETY: lowering to PASSIVE/APC — all required data structures
-        // are consistent, so interrupts are safe to re-enable here.
-        unsafe { x86_64::instructions::interrupts::enable() };
+        // Lowering to PASSIVE/APC: all required data structures are
+        // consistent, so interrupts can be re-enabled here.
+        x86_64::instructions::interrupts::enable();
     }
 }
 

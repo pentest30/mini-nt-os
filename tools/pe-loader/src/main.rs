@@ -77,7 +77,7 @@ fn main() {
     // ── TLS (DRM / self-modifying code indicator) ──────────────────────────
     println!("\n--- TLS ---");
     match pe.tls() {
-        Ok(tls) => {
+        Ok(_) => {
             println!("  TLS callbacks present — check for DRM/anti-debug");
             // callback count requires iterating; skip for brevity
         }

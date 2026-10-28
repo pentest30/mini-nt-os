@@ -6,6 +6,10 @@ edition.workspace = true
 [[bin]]
 name = "bootloader"
 path = "src/main.rs"
+# no_std binary with its own panic handler: it cannot be linked into the
+# std test harness, and it has no unit tests (they live in the library crates).
+test  = false
+bench = false
 
 [dependencies]
 boot-info   = { path = "../boot-info" }

@@ -123,8 +123,8 @@ unsafe fn map_huge_2m(bt: &BootServices, l4_phys: PhysAddr, virt: u64, phys: u64
     // ── Level 4 → Level 3 ────────────────────────────────────────────────────
     let l3_phys = if l4[l4_idx].is_unused() {
         let frame = alloc_zeroed_frame(bt);
-        // SAFETY: frame is freshly allocated; DIR_FLAGS marks it present+writable.
-        unsafe { l4[l4_idx].set_addr(frame, DIR_FLAGS) };
+        // frame is freshly allocated; DIR_FLAGS marks it present+writable.
+        l4[l4_idx].set_addr(frame, DIR_FLAGS);
         frame
     } else {
         PhysAddr::new(l4[l4_idx].addr().as_u64())
@@ -136,8 +136,7 @@ unsafe fn map_huge_2m(bt: &BootServices, l4_phys: PhysAddr, virt: u64, phys: u64
     // ── Level 3 → Level 2 ────────────────────────────────────────────────────
     let l2_phys = if l3[l3_idx].is_unused() {
         let frame = alloc_zeroed_frame(bt);
-        // SAFETY: as above.
-        unsafe { l3[l3_idx].set_addr(frame, DIR_FLAGS) };
+        l3[l3_idx].set_addr(frame, DIR_FLAGS);
         frame
     } else {
         PhysAddr::new(l3[l3_idx].addr().as_u64())
@@ -148,8 +147,8 @@ unsafe fn map_huge_2m(bt: &BootServices, l4_phys: PhysAddr, virt: u64, phys: u64
 
     // ── Level 2 leaf (2 MiB huge page) ───────────────────────────────────────
     if l2[l2_idx].is_unused() {
-        // SAFETY: PhysAddr is 2 MiB aligned; HUGE_DATA sets HUGE_PAGE bit.
-        unsafe { l2[l2_idx].set_addr(PhysAddr::new(phys), HUGE_DATA) };
+        // PhysAddr is 2 MiB aligned; HUGE_DATA sets HUGE_PAGE bit.
+        l2[l2_idx].set_addr(PhysAddr::new(phys), HUGE_DATA);
     }
     // Already mapped — skip (can happen if ranges overlap, which they don't here).
 }

@@ -136,6 +136,7 @@ impl MmPageTables {
     ///   (at least through the PD level) and accessible via the HHDM.
     /// - The patched page tables must be the active CR3.
     /// - IRQL: PASSIVE_LEVEL.
+    #[expect(dead_code, reason = "no caller since the bootloader maps user ranges itself; revisit with per-process PML4 (M2)")]
     unsafe fn patch_user_intermediate_entries(&mut self, virt: VirtAddr) {
         let hhdm = self.phys_offset;
 

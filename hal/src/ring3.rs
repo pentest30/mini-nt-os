@@ -19,6 +19,46 @@ pub const USER_RFLAGS: u64 = (1u64 << 9)   // IF
                            | (1u64 << 1);  // reserved, always 1
 const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOPL=0");
 
+// ── ring3_iretq_trampoline ────────────────────────────────────────────────────
+//
+// Called via `ret` from `ke_context_switch` when the scheduler first switches
+// to a new user-mode thread.
+//
+// Stack layout on entry — RSP points to slot after trampoline addr was popped:
+//   [RSP+ 0]  FS selector (u64) — TEB segment descriptor
+//   [RSP+ 8]  RIP (u64) — ring-3 entry point (32-bit EIP)
+//   [RSP+16]  CS  (u64) — ring-3 code32 selector | RPL=3
+//   [RSP+24]  RFLAGS (u64)
+//   [RSP+32]  RSP (u64) — ring-3 stack top
+//   [RSP+40]  SS  (u64) — ring-3 data32 selector | RPL=3
+//
+// Execution:
+//   1. `pop rax` — FS selector → rax; RSP advances to RIP slot
+//   2. `mov fs, ax` — load TEB segment into FS
+//   3. `iretq` — pops RIP/CS/RFLAGS/RSP/SS → enters ring-3
+//
+// # IRQL: DISPATCH_LEVEL on entry (from ke_context_switch inside timer ISR).
+// After IRETQ the CPU restores RFLAGS (IF=1) and switches to ring-3.
+core::arch::global_asm!(
+    ".global ring3_iretq_trampoline",
+    "ring3_iretq_trampoline:",
+    "   pop rax",          // rax = FS selector; RSP → RIP slot
+    "   mov fs, ax",       // load TEB segment (DPL=3, base=TEB32_VA)
+    "   iretq",            // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
+);
+
+/// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
+///
+/// Used by `ke::scheduler::spawn_user_thread` as the initial `ret` target
+/// in a new user-mode thread's kernel stack frame.
+///
+/// # IRQL: DISPATCH_LEVEL (invoked by the scheduler context-switch path).
+pub fn ring3_iretq_trampoline_fn() -> u64 {
+    // SAFETY: the symbol is defined by the global_asm! above and is always valid.
+    unsafe extern "C" { fn ring3_iretq_trampoline(); }
+    ring3_iretq_trampoline as *const () as u64
+}
+
 /// Switch from ring-0 (64-bit) to ring-3 (32-bit IA-32e compatibility mode).
 ///
 /// Builds a 5-entry IRETQ stack frame on the current kernel stack:
@@ -42,47 +82,6 @@ const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOP
 /// - `stack_top` must point to mapped, writable user-mode stack (at least 4 KiB below).
 /// - PEB, TEB, and all image pages must have `USER_ACCESSIBLE` set in the page tables.
 ///
-// ── ring3_iretq_trampoline ────────────────────────────────────────────────────
-//
-// Called via `ret` from `ke_context_switch` when the scheduler first switches
-// to a new user-mode thread.
-//
-// Stack layout on entry — RSP points to slot after trampoline addr was popped:
-//   [RSP+ 0]  FS selector (u64) — TEB segment descriptor
-//   [RSP+ 8]  RIP (u64) — ring-3 entry point (32-bit EIP)
-//   [RSP+16]  CS  (u64) — ring-3 code32 selector | RPL=3
-//   [RSP+24]  RFLAGS (u64)
-//   [RSP+32]  RSP (u64) — ring-3 stack top
-//   [RSP+40]  SS  (u64) — ring-3 data32 selector | RPL=3
-//
-// Execution:
-//   1. `pop rax` — FS selector → rax; RSP advances to RIP slot
-//   2. `mov fs, ax` — load TEB segment into FS
-//   3. `iretq` — pops RIP/CS/RFLAGS/RSP/SS → enters ring-3
-//
-// # IRQL: DISPATCH_LEVEL on entry (from ke_context_switch inside timer ISR).
-// After IRETQ the CPU restores RFLAGS (IF=1) and switches to ring-3.
-core::arch::global_asm!(
-    ".intel_syntax noprefix",
-    ".global ring3_iretq_trampoline",
-    "ring3_iretq_trampoline:",
-    "   pop rax",          // rax = FS selector; RSP → RIP slot
-    "   mov fs, ax",       // load TEB segment (DPL=3, base=TEB32_VA)
-    "   iretq",            // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
-);
-
-/// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
-///
-/// Used by `ke::scheduler::spawn_user_thread` as the initial `ret` target
-/// in a new user-mode thread's kernel stack frame.
-///
-/// # IRQL: DISPATCH_LEVEL (invoked by the scheduler context-switch path).
-pub fn ring3_iretq_trampoline_fn() -> u64 {
-    // SAFETY: the symbol is defined by the global_asm! above and is always valid.
-    unsafe extern "C" { fn ring3_iretq_trampoline(); }
-    ring3_iretq_trampoline as u64
-}
-
 /// # IRQL: PASSIVE_LEVEL
 /// Must be called with interrupts enabled (RFLAGS.IF=1) so the APIC timer
 /// continues to fire after the transition.

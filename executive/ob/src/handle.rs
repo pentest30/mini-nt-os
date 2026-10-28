@@ -5,7 +5,6 @@
 //! Phase 3: implement the full NT 3-level handle table structure.
 
 use alloc::vec::Vec;
-use spin::Mutex;
 use super::object::ObjectRef;
 
 /// A Win32/NT kernel handle value.
@@ -19,7 +18,9 @@ pub const CURRENT_THREAD_HANDLE:  Handle = u64::MAX - 2; // (HANDLE)-2
 
 struct Entry {
     object:     ObjectRef,
+    #[expect(dead_code, reason = "NT handle attributes, read once NtDuplicateObject and inheritance exist (M2)")]
     access:     u32,   // granted access mask
+    #[expect(dead_code, reason = "NT handle attributes, read once NtDuplicateObject and inheritance exist (M2)")]
     inherit:    bool,
 }
 

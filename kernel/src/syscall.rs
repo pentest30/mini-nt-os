@@ -18,7 +18,6 @@ const STATUS_INVALID_PARAMETER: u32 = 0xC000_000D;
 const STATUS_INVALID_SYSTEM_SERVICE: u32 = 0xC000_001C;
 const STATUS_ACCESS_VIOLATION: u32 = 0xC000_0005;
 const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
-const STATUS_NO_MEMORY: u32 = 0xC000_0017;
 const STATUS_UNSUCCESSFUL: u32 = 0xC000_0001;
 const STATUS_BUFFER_TOO_SMALL: u32 = 0xC000_0023;
 const STATUS_OBJECT_NAME_NOT_FOUND: u32 = 0xC000_0034;
@@ -235,8 +234,6 @@ static WIN32_LAST_PAINT_MS: Mutex<u32> = Mutex::new(0);
 // ── Phase 3A state ────────────────────────────────────────────────────────────
 /// TLS slot allocation bitmap (64 slots, XP TlsSlots in TEB at offset 0xE10).
 static TLS_BITMAP: Mutex<u64> = Mutex::new(0);
-/// Per-process errno value (single-threaded approximation for Phase 3A).
-static ERRNO_VAL: Mutex<i32> = Mutex::new(0);
 /// Opened registry keys: [(fake_hkey, subkey_index)]. fake_hkey = index+1.
 static REG_OPEN_KEYS: Mutex<[Option<(u32, usize)>; 32]> = Mutex::new([None; 32]);
 
@@ -261,12 +258,13 @@ pub fn install(vad: mm::vad::VadTree, hhdm_offset: u64) {
 }
 
 /// Return the HHDM offset from the syscall context (for launcher process setup).
-pub fn SYSCALL_CTX_PUB() -> Option<u64> {
+pub fn syscall_ctx_pub() -> Option<u64> {
     let guard = SYSCALL_CTX.lock();
     guard.as_ref().map(|c| c.hhdm_offset)
 }
 
-pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
+/// Serial trace of Win32 syscalls, compiled in by the `trace-syscalls` feature.
+fn trace_syscall(number: u32, args_ptr: u32) {
     // Trace Win32 UI syscalls (0x2010..0x201F) during message pump debugging.
     if number >= 0x2010 && number <= 0x201F {
         log::info!("[w32dbg] dispatch: syscall={:#x} args_ptr={:#x}", number, args_ptr);
@@ -276,6 +274,13 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         && number != 0x2015 {
         hal::serial::write_str("[sys] ");
         hal::serial::write_fmt(core::format_args!("{:#x}\n", number));
+    }
+}
+
+pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
+    // Hot path: tracing only with `--features trace-syscalls` (06 §5).
+    if cfg!(feature = "trace-syscalls") {
+        trace_syscall(number, args_ptr);
     }
     match number {
         // ── NT native syscalls ────────────────────────────────────────────────
@@ -2493,7 +2498,7 @@ fn win32_get_module_handle_ex_a(args_ptr: u32) -> u32 {
     let _flags   = match read_arg_u32(args_ptr, 0) { Ok(v) => v, Err(_) => return 0 };
     let lp_name  = match read_arg_u32(args_ptr, 1) { Ok(v) => v, Err(_) => return 0 };
     let out_hmod = match read_arg_u32(args_ptr, 2) { Ok(v) => v, Err(_) => return 0 };
-    let mut fake_args = [lp_name];
+    let fake_args = [lp_name];
     let base = win32_get_module_handle_a(fake_args.as_ptr() as u32 - 4);
     // SAFETY: out_hmod is user memory — write if valid.
     if is_user_range(out_hmod, 4) {
@@ -3100,8 +3105,6 @@ struct RegEntry {
     data_type: u32,
     data: &'static [u8], // for REG_SZ: UTF-8 + NUL
 }
-
-const HKLM: u32 = 0x8000_0002;
 
 const REG_TABLE: &[RegEntry] = &[
     RegEntry {
@@ -3761,7 +3764,7 @@ fn vk_map_memory(args_ptr: u32) -> u32 {
     let mut guard = VK_MAP_REGION.lock();
     if *guard == 0 {
         // Allocate 16 MB of user-mode memory for map targets
-        let size = 16 * 1024 * 1024u64;
+        let _size = 16 * 1024 * 1024u64;
         let ctx = SYSCALL_CTX.lock();
         if let Some(ref _c) = *ctx {
             // Use a fixed VA in the user range
@@ -3813,7 +3816,7 @@ fn vk_create_pipelines(args_ptr: u32) -> u32 {
     0
 }
 
-fn vk_queue_present(args_ptr: u32) -> u32 {
+fn vk_queue_present(_args_ptr: u32) -> u32 {
     // vkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
     // VkPresentInfoKHR (32-bit):
     //   +0  sType (u32)

@@ -43,10 +43,10 @@ sa migration est décrite dans l'audit.
 ## Démarrage rapide
 
 ```bash
-rustup show                     # installe le nightly épinglé de rust-toolchain.toml
+rustup toolchain install        # installe le nightly épinglé de rust-toolchain.toml
 cargo check -p kernel
 cargo test -p mm
-tools/qemu-run.sh               # construit et lance dans QEMU (OVMF, série sur stdio)
+bash tools/qemu-run.sh          # construit, démarre QEMU et vérifie les marqueurs série
 ```
 
 Les commandes `cargo xtask` (build, image, run, test) remplaceront les scripts de `tools/` pendant le jalon M0.

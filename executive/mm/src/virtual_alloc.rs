@@ -254,18 +254,12 @@ mod tests {
     }
 
     fn rw()  -> PageProtect { PageProtect::READWRITE }
-    fn rx()  -> PageProtect { PageProtect::EXECUTE_READ }
     fn na()  -> PageProtect { PageProtect::NOACCESS }
 
     fn commit(vad: &mut VadTree, mapper: &mut MockMapper, size: u64) -> u64 {
         allocate(vad, Some(mapper), 0, size,
                  AllocType::MEM_RESERVE | AllocType::MEM_COMMIT, rw())
             .expect("alloc failed")
-    }
-
-    fn reserve(vad: &mut VadTree, size: u64) -> u64 {
-        allocate(vad, None, 0, size, AllocType::MEM_RESERVE, na())
-            .expect("reserve failed")
     }
 
     // ── T4-1a: commit call count ──────────────────────────────────────────────

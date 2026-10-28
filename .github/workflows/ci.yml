@@ -1,0 +1,82 @@
+# CI for M0 (docs/05-feuille-de-route.md): no warnings, host tests, bare-metal
+# builds and the QEMU smoke test on both syscall paths (ADR-004).
+#
+# Not enabled yet: `cargo fmt --check` and `cargo clippy -D warnings` (06 §6),
+# because the existing code is neither formatted nor clippy-clean.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    # Explicit `bash` runs with `-eo pipefail`, so a failing cargo piped to tee fails the step.
+    shell: bash
+
+jobs:
+  host:
+    name: Host check and tests (-D warnings)
+    runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - run: cargo check --workspace
+      - run: cargo test --workspace
+
+  bare-metal:
+    name: Kernel and bootloader builds (no warnings)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      # RUSTFLAGS would replace the target rustflags of .cargo/config.toml,
+      # so warnings are detected in the build output instead.
+      - name: Build kernel, bootloader, and kernel with trace-syscalls
+        run: |
+          cargo build -p kernel --target x86_64-unknown-none --profile kernel 2>&1 | tee build.log
+          cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel 2>&1 | tee -a build.log
+          cargo build -p kernel --target x86_64-unknown-none --profile kernel --features trace-syscalls 2>&1 | tee -a build.log
+          if grep -E '^warning' build.log; then
+            echo "::error::bare-metal build emitted warnings"
+            exit 1
+          fi
+
+  qemu:
+    name: QEMU smoke test (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default CPU, AMD vendor, int 2Eh
+            cpu: ""
+          - name: Intel CPU, SYSENTER
+            cpu: --cpu qemu64,vendor=GenuineIntel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - name: Install QEMU and OVMF
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 ovmf
+      - name: Boot and check serial markers
+        run: |
+          bash tools/qemu-run.sh --timeout 120 \
+            --ovmf-code /usr/share/OVMF/OVMF_CODE_4M.fd \
+            --ovmf-vars /usr/share/OVMF/OVMF_VARS_4M.fd \
+            ${{ matrix.cpu }}
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-${{ strategy.job-index }}
+          path: target/qemu-run/serial.log
+          if-no-files-found: ignore

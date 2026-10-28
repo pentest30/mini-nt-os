@@ -187,6 +187,7 @@ impl Console {
     }
 
     #[inline]
+    #[expect(dead_code, reason = "pixel primitive for the future DisplayDriver (02 §7.2)")]
     fn put_pixel(&mut self, x: u32, y: u32, color: u32) {
         if x >= self.width || y >= self.height { return; }
         let native = self.to_native(color);
@@ -359,10 +360,10 @@ fn bga_init_lfb(width: u32, height: u32) {
     const F_LFB:        u16 = 0x40;
     const F_NOCLEARMEM: u16 = 0x80;
 
-    // SAFETY: I/O port access on bare-metal x86; ports 0x01CE/0x01CF are the
-    // standard Bochs VBE DISPI index/data ports used by QEMU's standard VGA.
-    let mut idx: Port<u16> = unsafe { Port::new(BGA_IDX) };
-    let mut dat: Port<u16> = unsafe { Port::new(BGA_DAT) };
+    // Ports 0x01CE/0x01CF are the standard Bochs VBE DISPI index/data ports
+    // used by QEMU's standard VGA.
+    let mut idx: Port<u16> = Port::new(BGA_IDX);
+    let mut dat: Port<u16> = Port::new(BGA_DAT);
 
     // Verify BGA is present: ID register must be 0xB0C0–0xB0C6.
     let id = unsafe { idx.write(R_ID); dat.read() };

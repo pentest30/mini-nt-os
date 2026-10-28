@@ -4,7 +4,6 @@
 //! Full NT EPROCESS is ~600 bytes on XP x86; we include what we need.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 use alloc::sync::Arc;
 use spin::Mutex;
 use ob::handle::HandleTable;

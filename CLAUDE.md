@@ -56,16 +56,16 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 En attendant `cargo xtask` (02 §9.2) :
 
 ```bash
-cargo check -p kernel
-cargo test -p mm
-cargo test -p ke
-cargo test -p bump-alloc
-cargo test -p io-manager
-cargo build -p kernel --target x86_64-unknown-none --profile kernel
+cargo check --workspace
+cargo test --workspace
+cargo build -p kernel --target x86_64-unknown-none --profile kernel [--features trace-syscalls]
 cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
-tools/qemu-run.sh          # construit le noyau et lance QEMU (OVMF, série sur stdio)
+bash tools/qemu-run.sh [--cpu qemu64,vendor=GenuineIntel]   # QEMU sans affichage, vérifie target/qemu-run/serial.log
 ```
 
-`cargo check --workspace` passe, mais avec des warnings (il n'en faut aucun pour sortir de M0). `cargo test -p ps` ne compile pas
-et les doctests de `ke` échouent : ce sont deux corrections immédiates de M0. La CI cible exécute `cargo fmt --check`, `cargo clippy -D warnings`, les tests hôte et les
-scénarios QEMU de base.
+- Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
+  où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
+- `trace-syscalls` active la trace série des appels système. Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
+  `--cpu qemu64,vendor=GenuineIntel` exerce le chemin SYSENTER.
+- La CI (`.github/workflows/ci.yml`) exécute ces commandes, dont le smoke test sur les deux CPU. `cargo fmt --check` et
+  `cargo clippy -D warnings` (06 §6) restent à activer.
