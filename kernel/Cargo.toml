@@ -15,6 +15,9 @@ bench = false
 # Trace Win32 syscalls on the serial port at dispatch. Debugging only:
 # unconditional logging on the syscall hot path is not allowed (06 §5).
 trace-syscalls = []
+# Overflow the boot thread's kernel stack right after the switch to guarded
+# stacks: the boot must end on the STOP screen, not a triple fault (M0).
+test-stack-overflow = []
 
 [dependencies]
 boot-info        = { path = "../boot-info" }

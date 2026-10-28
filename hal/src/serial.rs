@@ -22,6 +22,29 @@ pub unsafe fn init() {
     *COM1.lock() = Some(port);
 }
 
+/// Write a string to COM1 by direct port I/O, without taking the COM1 lock.
+///
+/// For fatal paths only (STOP screen): a fault may arrive while the lock is
+/// held, and waiting for it would hang. Output may interleave with a writer
+/// that was interrupted mid-line.
+///
+/// # IRQL
+/// Any level.
+pub fn write_str_unlocked(s: &str) {
+    let mut line_status = Port::<u8>::new(COM1_BASE + 5);
+    let mut data = Port::<u8>::new(COM1_BASE);
+    for &b in s.as_bytes() {
+        // SAFETY: COM1 is a standard UART initialised by `init`; reading LSR
+        // and writing THR have no effect beyond sending the byte.
+        unsafe {
+            while line_status.read() & 0x20 == 0 {
+                core::hint::spin_loop();
+            }
+            data.write(b);
+        }
+    }
+}
+
 /// Write a byte to COM1. No-ops if the port is not yet initialised.
 pub fn write_byte(b: u8) {
     if let Some(ref mut port) = *COM1.lock() {

@@ -35,8 +35,10 @@ static mut KERNEL_STACK: [u8; 16 * 1024] = [0u8; 16 * 1024];
 ///
 /// Separate from KERNEL_STACK: a stack overflow causing a double fault
 /// switches to this clean stack rather than triple-faulting the machine.
-/// 4 KiB is enough for the double-fault handler to log and halt.
-static mut DOUBLE_FAULT_STACK: [u8; 4 * 1024] = [0u8; 4 * 1024];
+/// The handler only prints the STOP screen, without locks or formatting;
+/// 16 KiB leaves a wide margin since an overflow here would triple-fault.
+const DOUBLE_FAULT_STACK_SIZE: usize = 16 * 1024;
+static mut DOUBLE_FAULT_STACK: [u8; DOUBLE_FAULT_STACK_SIZE] = [0u8; DOUBLE_FAULT_STACK_SIZE];
 
 // ── Exported constants ────────────────────────────────────────────────────────
 
@@ -86,7 +88,7 @@ pub unsafe fn init() {
         // IST[0]: double-fault stack — survives kernel stack overflow.
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
             let top = unsafe {
-                (core::ptr::addr_of_mut!(DOUBLE_FAULT_STACK) as *mut u8).add(4 * 1024)
+                (core::ptr::addr_of_mut!(DOUBLE_FAULT_STACK) as *mut u8).add(DOUBLE_FAULT_STACK_SIZE)
             };
             VirtAddr::new(top as u64)
         };
@@ -132,7 +134,7 @@ pub unsafe fn init() {
         load_tss(sel.tss);
     }
 
-    log::trace!("HAL GDT: loaded (kernel CS/DS + TSS [RSP0=16K, IST0=4K] + user32 segments)");
+    log::trace!("HAL GDT: loaded (kernel CS/DS + TSS [RSP0=16K, IST0=16K] + user32 segments)");
 }
 
 // ── Selector accessors ────────────────────────────────────────────────────────

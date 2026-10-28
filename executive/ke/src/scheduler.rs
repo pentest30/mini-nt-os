@@ -30,18 +30,6 @@ const BOOT_PRIORITY: u8 = 8;
 /// Idle thread always runs at priority 0.
 const IDLE_PRIORITY: u8 = 0;
 
-/// Size of the idle thread's kernel stack. Static allocation, no heap.
-const IDLE_STACK_SIZE: usize = 4096;
-
-// ── Static idle-thread storage ────────────────────────────────────────────────
-//
-// By using static buffers for the idle thread we avoid any heap allocation
-// inside `init()`. This sidesteps the LockedHeap / timer-ISR deadlock that
-// plagued earlier attempts with `Box<KThread>`.
-
-/// Idle thread kernel stack — never heap-allocated.
-static mut IDLE_STACK: [u8; IDLE_STACK_SIZE] = [0u8; IDLE_STACK_SIZE];
-
 // ── Ready queue ───────────────────────────────────────────────────────────────
 
 /// Fixed-capacity FIFO queue of thread-table indices.
@@ -211,11 +199,17 @@ pub struct Scheduler;
 ///
 /// Creates two threads:
 ///   - TID 0: boot thread (current execution = `kernel_main`).
-///   - TID 1: idle thread (static stack, `idle_thread_main`).
+///   - TID 1: idle thread (`idle_thread_main`) on the kernel stack whose top
+///     is `idle_stack_top`. The caller owns the allocation (Mm, guarded
+///     stack); `init()` itself allocates nothing.
+///
+/// # Safety
+/// `idle_stack_top` must be the 16-byte aligned top of a mapped, writable
+/// kernel stack reserved for the idle thread for the life of the system.
 ///
 /// # IRQL: must be called with interrupts DISABLED to avoid a timer ISR
 /// re-entering SCHED.lock() while we are holding it here.
-pub fn init() {
+pub unsafe fn init(idle_stack_top: u64) {
     let mut guard = SCHED.lock();
     if guard.is_some() { return; }
 
@@ -229,14 +223,14 @@ pub fn init() {
     s.threads[boot_tid].priority = BOOT_PRIORITY;
     s.current = boot_tid;
 
-    // TID 1 — idle thread. Stack lives in a static buffer — zero heap.
+    // TID 1 — idle thread, on the caller-provided stack.
     let idle_tid = s.alloc_tid().expect("scheduler: no slot for idle thread");
-    // SAFETY: IDLE_STACK is static; we set up the stack frame here (single-
-    //         threaded init; no concurrent access before interrupts re-enable).
+    // SAFETY: the caller guarantees idle_stack_top tops a mapped, writable
+    //         stack reserved for the idle thread; single-threaded init, no
+    //         concurrent access before interrupts re-enable.
     let idle_rsp = unsafe {
-        let top = (core::ptr::addr_of_mut!(IDLE_STACK) as *mut u8).add(IDLE_STACK_SIZE);
         // 16-byte align then push one return-address slot.
-        let rsp = ((top as usize) - 8) & !0xF;
+        let rsp = ((idle_stack_top as usize) - 8) & !0xF;
         *(rsp as *mut u64) = idle_thread_main as *const () as u64;
         rsp as u64
     };
@@ -341,9 +335,10 @@ pub fn make_ready(tid: usize) {
 
 /// Register a new ring-3 (user-mode) thread with the scheduler.
 ///
-/// Allocates an 8 KiB kernel stack, builds the `ring3_iretq_trampoline` frame
-/// on it, and adds the thread to the ready queue so the next `schedule()` call
-/// can switch to it.
+/// Builds the `ring3_iretq_trampoline` frame on the caller-provided kernel
+/// stack and adds the thread to the ready queue so the next `schedule()` call
+/// can switch to it. As in NT, the stack comes from Mm through the caller;
+/// Ke never allocates one.
 ///
 /// Stack frame layout (highest address = `kernel_stack_top`):
 ///
@@ -360,32 +355,31 @@ pub fn make_ready(tid: usize) {
 /// `ctx.rsp` = `top-56` (where ke_context_switch loads RSP and writes ctx.rip).
 /// `ctx.rip` = address of `ring3_iretq_trampoline`.
 ///
-/// # IRQL: PASSIVE_LEVEL — heap allocation happens here.
+/// # Safety
+/// `kernel_stack_top` must be the 16-byte aligned top of a mapped, writable
+/// kernel stack of at least 4 KiB, used by no other thread and kept alive for
+/// the life of this one.
+///
+/// # IRQL: PASSIVE_LEVEL.
 /// Returns the scheduler TID, or `None` if the thread table is full.
-pub fn spawn_user_thread(
+pub unsafe fn spawn_user_thread(
+    kernel_stack_top: u64,
     entry32: u32,
     stack32: u32,
     cs:      u16,
     ss:      u16,
     fs:      u16,
 ) -> Option<usize> {
-    // ── Allocate dedicated kernel stack ───────────────────────────────────
-    // 8 KiB matches the kernel stack used for syscall / interrupt handling.
-    // Bump allocator never returns this memory, which is fine — Phase 2.5.
-    const KSTACK_SIZE: usize = 8 * 1024;
     const RFLAGS: u64 = hal::ring3::USER_RFLAGS; // IF=1, IOPL=0
-
-    let kstack = alloc::vec![0u8; KSTACK_SIZE];
-    let kstack_top = kstack.as_ptr() as u64 + KSTACK_SIZE as u64;
-    // Leak: the stack must outlive this thread; bump allocator never frees.
-    core::mem::forget(kstack);
+    let kstack_top = kernel_stack_top;
 
     // ── Build kernel stack frame (7 × u64 = 56 bytes) ────────────────────
     // Frame is placed at the TOP of the kernel stack.
     // ke_context_switch writes ctx.rip into frame[0] before executing `ret`,
     // so frame[0] just needs to be writeable — its initial value is ignored.
     let frame_base = (kstack_top - 7 * 8) as *mut u64;
-    // SAFETY: frame_base is inside our freshly-allocated kstack buffer.
+    // SAFETY: frame_base is the top 56 bytes of the caller's stack, which the
+    //         caller guarantees is mapped, writable and owned by this thread.
     unsafe {
         frame_base.add(0).write(0);                // placeholder for trampoline addr
         frame_base.add(1).write(fs as u64);        // FS selector → popped by trampoline

@@ -480,6 +480,21 @@ pub fn write_str(s: &str) {
     }
 }
 
+/// Write a string to the framebuffer console for a fatal error screen.
+///
+/// Ignores exclusive mode, and skips the output instead of waiting when the
+/// console lock is held (the faulting code may own it).
+///
+/// # IRQL
+/// Any level.
+pub fn write_str_fatal(s: &str) {
+    if let Some(mut console) = CONSOLE.try_lock() {
+        if let Some(ref mut c) = *console {
+            c.write_str_inner(s);
+        }
+    }
+}
+
 /// Write a single byte to the framebuffer console (ASCII only).
 ///
 /// Handles `\n`, `\r`, backspace (`0x08`), and printable 0x20–0x7E.

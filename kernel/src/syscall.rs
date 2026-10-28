@@ -778,13 +778,7 @@ fn nt_create_thread(args_ptr: u32) -> u32 {
     // the child is spawned, and lets NtTerminateProcess switch back to the
     // parent via terminate_current_thread().
     if let Some((entry, stack)) = take_process_launch(process_handle) {
-        let spawned = ke::scheduler::spawn_user_thread(
-            entry,
-            stack,
-            hal::gdt::user_code32_selector(),
-            hal::gdt::user_data32_selector(),
-            hal::gdt::user_teb_fs_selector(),
-        );
+        let spawned = crate::spawn_user_thread(entry, stack);
         if spawned.is_none() {
             log::warn!("[smoke] NtCreateThread: scheduler full — dropping child");
         }
