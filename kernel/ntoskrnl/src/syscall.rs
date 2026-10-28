@@ -4669,9 +4669,19 @@ fn vk_queue_present(_args_ptr: u32) -> u32 {
     let src_w = 800u32.min(fb_w);
     let src_h = 600u32.min(fb_h);
 
-    // SAFETY: map_addr is in user VA space which is mapped in kernel CR3.
-    let src_ptr = map_addr as *const u32;
-    hal::fb::blit_bgra(src_ptr, src_w, src_h, 0, 0);
+    // vk_map_memory hands out a fixed user VA that nothing maps: blit only if
+    // the whole region is mapped, or the kernel would fault on it.
+    let len = (src_w * src_h) as usize;
+    let Some(hhdm_offset) = syscall_ctx_pub() else { return 0 };
+    // SAFETY: CR3 holds the kernel tables; hhdm_offset is the bootloader's HHDM.
+    let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
+    let start = map_addr as u64;
+    if !(start..start + len as u64 * 4).step_by(4096).all(|va| pt.translate(x86_64::VirtAddr::new(va)).is_some()) {
+        return 0;
+    }
+    // SAFETY: the len pixels at map_addr are mapped (checked above).
+    let src = unsafe { core::slice::from_raw_parts(map_addr as *const u32, len) };
+    hal::fb::blit_bgra(src, src_w, src_h, 0, 0);
     0 // VK_SUCCESS
 }
 

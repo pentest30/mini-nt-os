@@ -464,14 +464,14 @@ pub fn init(info: &FramebufferInfo, hhdm_offset: u64) {
 
 /// Blit a BGRA8888 source buffer to the framebuffer.
 ///
-/// `src` is a row-major BGRA pixel buffer (4 bytes/pixel).
-/// `src_w` / `src_h` are the source dimensions in pixels.
-/// The image is placed at (dst_x, dst_y) and clipped to framebuffer bounds.
+/// `src` is a row-major BGRA pixel buffer (4 bytes/pixel) of `src_w` ×
+/// `src_h` pixels; rows beyond its length are not drawn. The image is placed
+/// at (dst_x, dst_y) and clipped to framebuffer bounds.
 ///
 /// Used by the Vulkan present path to display swapchain images.
 ///
 /// # IRQL: PASSIVE_LEVEL
-pub fn blit_bgra(src: *const u32, src_w: u32, src_h: u32, dst_x: u32, dst_y: u32) {
+pub fn blit_bgra(src: &[u32], src_w: u32, src_h: u32, dst_x: u32, dst_y: u32) {
     let guard = CONSOLE.lock();
     let c = match guard.as_ref() {
         Some(c) => c,
@@ -490,9 +490,9 @@ pub fn blit_bgra(src: *const u32, src_w: u32, src_h: u32, dst_x: u32, dst_y: u32
             if dx >= fb_w {
                 continue;
             }
-            // SAFETY: src is caller-validated; fb is the HHDM-mapped framebuffer.
-            let pixel = unsafe { *src.add((row * src_w + col) as usize) };
+            let Some(&pixel) = src.get((row * src_w + col) as usize) else { return };
             let native = c.to_native(pixel);
+            // SAFETY: (dx, dy) is inside the framebuffer, mapped through the HHDM.
             unsafe {
                 *fb.add((dy * fb_w + dx) as usize) = native;
             }
