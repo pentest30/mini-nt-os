@@ -1,7 +1,11 @@
+#[cfg(target_os = "none")]
 use core::arch::global_asm;
 
+#[cfg(target_os = "none")]
 use crate::gdt;
+#[cfg(target_os = "none")]
 use crate::idt;
+#[cfg(target_os = "none")]
 use crate::msr::{self, IA32_SYSENTER_CS, IA32_SYSENTER_EIP, IA32_SYSENTER_ESP};
 
 #[cfg(target_os = "none")]
@@ -44,7 +48,6 @@ pub unsafe fn init() {}
 #[cfg(target_os = "none")]
 global_asm!(
     r#"
-    .intel_syntax noprefix
     .global hal_sysenter_entry
 hal_sysenter_entry:
     cld

@@ -59,7 +59,6 @@ pub fn read_byte_blocking() -> u8 {
 /// Uses the same `SerialWriter` approach as `SerialLogger::log` but acquires
 /// the COM1 lock directly. Safe to call from the panic handler.
 pub fn write_fmt(args: core::fmt::Arguments) {
-    use core::fmt::Write;
     struct SerialWriterDirect;
     impl core::fmt::Write for SerialWriterDirect {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -119,7 +118,6 @@ impl log::Log for SerialLogger {
         write_str("[");
         write_str(record.level().as_str());
         write_str("] ");
-        use core::fmt::Write;
         let mut w = SerialWriter;
         let _ = core::fmt::write(&mut w, *record.args());
         write_str("\n");

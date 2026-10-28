@@ -11,6 +11,7 @@
 use x86_64::instructions::port::Port;
 
 const ATA1_DATA:    u16 = 0x170;
+#[expect(dead_code, reason = "register map; error handling not implemented yet")]
 const ATA1_ERROR:   u16 = 0x171;
 const ATA1_SECT_CT: u16 = 0x172;
 const ATA1_LBA_LO:  u16 = 0x173;

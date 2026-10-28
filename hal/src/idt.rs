@@ -17,6 +17,7 @@
 //!
 //! WI7e Ch.3 "Trap Dispatching", Ch.2 "System Service Dispatching"
 
+#[cfg(target_os = "none")]
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
@@ -62,12 +63,12 @@ pub unsafe fn init() {
         }
 
         // ── APIC timer (IRQ0 → vector 0x20) ────────────────────────────────
-        // SAFETY: vector 0x20 does not overlap any CPU exception (0x00–0x1F).
-        unsafe { idt[0x20].set_handler_fn(irq_timer); }
+        // Vector 0x20 does not overlap any CPU exception (0x00–0x1F).
+        idt[0x20].set_handler_fn(irq_timer);
 
         // ── PS/2 keyboard (IRQ1 → vector 0x21) ──────────────────────────────
-        // SAFETY: vector 0x21 does not overlap CPU exceptions or the timer.
-        unsafe { idt[0x21].set_handler_fn(irq_keyboard); }
+        // Vector 0x21 does not overlap CPU exceptions or the timer.
+        idt[0x21].set_handler_fn(irq_keyboard);
 
         // ── NT syscall gate (INT 0x2E) ───────────────────────────────────────
         // DPL=3 so user-mode code (games) can invoke it directly.
@@ -87,8 +88,8 @@ pub unsafe fn init() {
         idt
     });
 
-    // SAFETY: `idt` has 'static lifetime via `Once`; safe to load here.
-    unsafe { idt.load(); }
+    // `idt` has 'static lifetime via `Once`, as `load` requires.
+    idt.load();
 
     log::trace!("HAL IDT: loaded (exceptions + APIC timer 0x20 + NT syscall 0x2E)");
 }
@@ -130,7 +131,7 @@ extern "x86-interrupt" fn exception_page_fault(
 ) {
     if IN_PF_OUTER.swap(true, core::sync::atomic::Ordering::SeqCst) {
         // Nested page fault — log minimal info then halt.
-        let cr2 = unsafe { x86_64::registers::control::Cr2::read_raw() };
+        let cr2 = x86_64::registers::control::Cr2::read_raw();
         super::serial::write_str("\n[NESTED #PF] CR2=0x");
         serial_hex64(cr2);
         super::serial::write_str(" RIP=0x");
@@ -147,8 +148,7 @@ fn exception_page_fault_inner(
 ) {
     use x86_64::registers::control::Cr2;
 
-    // SAFETY: reading CR2 is always safe inside a page-fault handler.
-    let faulting_addr = unsafe { Cr2::read() };
+    let faulting_addr = Cr2::read();
     let cr2_raw: u64 = match faulting_addr {
         Ok(v)  => v.as_u64(),
         Err(e) => e.0,
@@ -202,11 +202,12 @@ fn exception_page_fault_inner(
 /// Walk the x86_64 page-table hierarchy for `va` and log the leaf PTE flags.
 /// Uses the supplied `hhdm` offset to convert physical addresses to virtual.
 /// No heap allocation — safe to call from a fault handler.
+#[expect(dead_code, reason = "page-fault diagnostic kept for M0 (audit §3.1)")]
 fn pf_dump_pte(hhdm: u64, va: u64, label: &str) {
     use x86_64::{registers::control::Cr3, structures::paging::{PageTable, PageTableFlags}, VirtAddr};
 
+    let (l4f, _) = Cr3::read();
     // SAFETY: HHDM maps every physical frame; CR3 points to the live PML4.
-    let (l4f, _) = unsafe { Cr3::read() };
     let l4 = unsafe { &*((hhdm + l4f.start_address().as_u64()) as *const PageTable) };
 
     let virt = VirtAddr::new_truncate(va);
@@ -450,7 +451,6 @@ pub fn set_syscall_hook(hook: Option<fn(u32, u32) -> u32>) {
 #[cfg(target_os = "none")]
 global_asm!(
     r#"
-    .intel_syntax noprefix
     .global hal_int2e_entry
 hal_int2e_entry:
     cld
