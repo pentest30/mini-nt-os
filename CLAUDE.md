@@ -41,7 +41,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 
 ## Travailler dans ce dépôt
 
-- Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask test`.
+- Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
 - **Jalon courant : M0 — Assainir** ([05](docs/05-feuille-de-route.md#m0--assainir)), en commençant par les corrections
@@ -55,6 +55,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 `cargo xtask` (02 §9.2, `xtask/`) :
 
 ```bash
+cargo xtask lint                                     # cargo fmt --check, clippy -D warnings (hôte et bare-metal)
 cargo xtask test                                     # tests hôte, puis scénarios de démarrage QEMU (tests/boot/)
 cargo xtask test --boot --scenario smoke --cpu intel # un scénario, un CPU
 cargo xtask run [--cpu intel] [--gdb] [--headless]   # démarre dans QEMU, port série sur stdio
@@ -70,11 +71,12 @@ cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel [--feature
 cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 ```
 
-- Un scénario de démarrage est un fichier de `tests/boot/` : features du noyau, CPU, marqueurs série attendus et interdits.
+- Un scénario de démarrage est un répertoire de `tests/boot/` dont `scenario.txt` donne les features du noyau, les CPU,
+  les marqueurs série attendus et interdits.
   Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
 - `trace-syscalls` active la trace série des appels système. Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
-- La CI (`.github/workflows/ci.yml`) exécute `cargo xtask test`, avec les builds bare-metal sans warning. `cargo fmt --check` et
-  `cargo clippy -D warnings` (06 §6) restent à activer.
+- Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.
+- La CI (`.github/workflows/ci.yml`) exécute `cargo xtask lint` et `cargo xtask test`, avec les builds bare-metal sans warning.
