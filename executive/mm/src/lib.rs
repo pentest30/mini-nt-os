@@ -17,6 +17,7 @@
 extern crate alloc;
 
 pub mod buddy;
+pub mod kstack;
 pub mod paging;
 pub mod vad;
 pub mod virtual_alloc;
@@ -25,7 +26,12 @@ pub use buddy::{BuddyAllocator, Pfn};
 pub use paging::MmPageTables;
 pub use virtual_alloc::PageMapper;
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
 use boot_info::BootInfo;
+
+/// Bootloader HHDM offset, recorded by [`init`] for code that edits page tables later.
+static HHDM_OFFSET: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn add_usable_excluding_kernel(
@@ -76,6 +82,7 @@ fn add_usable_excluding_kernel(
 ///
 /// # IRQL: PASSIVE_LEVEL — called once during kernel init, interrupts off.
 pub fn init(boot_info: &BootInfo, kernel_phys_end: u64) {
+    HHDM_OFFSET.store(boot_info.hhdm_offset, Ordering::Release);
     let mut total: u64 = 0;
     let kernel_start_pfn = boot_info.kernel_phys_base / 4096;
     let kernel_end_pfn = (kernel_phys_end + 4095) / 4096;
