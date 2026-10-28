@@ -11,12 +11,12 @@
 //!   - `tick()`  → called from timer ISR (DIRQL); must not block or alloc.
 //!   - `schedule()` → called at DISPATCH_LEVEL from tick(); no alloc.
 //!   - The scheduler lock is shared with the timer ISR, so it is only taken
-//!     with interrupts disabled ([`SchedLock::with`]).
+//!     with interrupts disabled (`hal::sync::IrqLock`).
 //!
 //! WI7e Ch.4 "Scheduling", ReactOS ntoskrnl/ke/thrdschd.c
 
 use crate::thread::{KContext, ThreadState};
-use spin::Mutex;
+use hal::sync::IrqLock;
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -215,31 +215,10 @@ impl SchedulerInner {
 
 // ── Global scheduler ─────────────────────────────────────────────────────────
 
-/// Scheduler state, shared with the timer ISR (`tick`, `schedule`).
-static SCHED: SchedLock = SchedLock::new();
-
-/// The scheduler lock, reachable only through [`SchedLock::with`].
-///
-/// `with` holds it with interrupts disabled: the timer ISR takes the same
-/// lock, and on a single CPU a tick that interrupted a holder would spin on
-/// it forever with IF=0. Interim form of a `KSpinLock` taken at
-/// DISPATCH_LEVEL (06 §4).
-struct SchedLock(Mutex<Option<SchedulerInner>>);
-
-impl SchedLock {
-    const fn new() -> Self {
-        Self(Mutex::new(None))
-    }
-
-    /// Runs `f` on the scheduler state, with the lock held and interrupts
-    /// disabled; their previous state is restored afterwards.
-    ///
-    /// # IRQL
-    /// Any level. `f` must not block, allocate or log: interrupts are off.
-    fn with<R>(&self, f: impl FnOnce(&mut Option<SchedulerInner>) -> R) -> R {
-        x86_64::instructions::interrupts::without_interrupts(|| f(&mut self.0.lock()))
-    }
-}
+/// Scheduler state, shared with the timer ISR (`tick`, `schedule`): an
+/// `IrqLock`, so a tick never finds it held by the thread it interrupted.
+/// The closures given to `SCHED.with` must not block, allocate or log.
+static SCHED: IrqLock<Option<SchedulerInner>> = IrqLock::new(None);
 
 pub struct Scheduler;
 
