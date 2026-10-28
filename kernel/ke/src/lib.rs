@@ -2,6 +2,7 @@
 //!
 //! Provides:
 //!   - Thread scheduler (round-robin → priority in Phase 2)
+//!   - Dispatcher (ADR-005): waitable objects, KWAIT_BLOCK, wait and signal
 //!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX
 //!   - APC (Asynchronous Procedure Call) queues
 //!   - DPC (Deferred Procedure Call) lists
@@ -9,9 +10,11 @@
 //! NT reference: ntoskrnl/ke/
 
 #![no_std]
+#![deny(unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 
 pub mod apc;
+pub mod dispatcher;
 pub mod dpc;
 pub mod event;
 pub mod scheduler;
