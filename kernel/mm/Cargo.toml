@@ -1,0 +1,14 @@
+[package]
+name    = "mm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "mm"
+
+[dependencies]
+abi       = { path = "../../abi" }
+spin     = { workspace = true }
+bitflags = { workspace = true }
+x86_64   = { workspace = true }
+log      = { workspace = true }

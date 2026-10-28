@@ -44,7 +44,7 @@ sa migration est décrite dans l'audit.
 
 ```bash
 rustup toolchain install        # installe le nightly épinglé de rust-toolchain.toml
-cargo check -p kernel
+cargo check -p ntoskrnl
 cargo test -p mm
 bash tools/qemu-run.sh          # construit, démarre QEMU et vérifie les marqueurs série
 ```

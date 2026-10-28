@@ -43,10 +43,10 @@ jobs:
       # so warnings are detected in the build output instead.
       - name: Build kernel (with and without its test features) and bootloader
         run: |
-          cargo build -p kernel --target x86_64-unknown-none --profile kernel 2>&1 | tee build.log
-          cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel 2>&1 | tee -a build.log
-          cargo build -p kernel --target x86_64-unknown-none --profile kernel --features trace-syscalls 2>&1 | tee -a build.log
-          cargo build -p kernel --target x86_64-unknown-none --profile kernel --features test-stack-overflow 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel 2>&1 | tee build.log
+          cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features trace-syscalls 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-stack-overflow 2>&1 | tee -a build.log
           if grep -E '^warning' build.log; then
             echo "::error::bare-metal build emitted warnings"
             exit 1

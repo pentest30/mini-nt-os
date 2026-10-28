@@ -47,9 +47,9 @@ function Resolve-KernelElf {
     # The bootloader loads the kernel ELF as is (ADR-014): no objcopy step.
     $targetRoot = Join-Path $RepoRoot "target"
     $elfCandidates = @(
-        (Join-Path $targetRoot "x86_64-unknown-none\$ProfileDir\kernel"),
-        (Join-Path $targetRoot "x86_64-unknown-none\release\kernel"),
-        (Join-Path $targetRoot "x86_64-unknown-none\debug\kernel")
+        (Join-Path $targetRoot "x86_64-unknown-none\$ProfileDir\ntoskrnl"),
+        (Join-Path $targetRoot "x86_64-unknown-none\release\ntoskrnl"),
+        (Join-Path $targetRoot "x86_64-unknown-none\debug\ntoskrnl")
     )
 
     $kernelElfPath = Resolve-FirstExistingPath -Candidates $elfCandidates
@@ -64,7 +64,7 @@ $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Resolve-Path (Join-Path $scriptRoot "..")
 $profileDir = "kernel"
 
-$bootloaderEfi = Join-Path $repoRoot "target\x86_64-unknown-uefi\$profileDir\bootloader.efi"
+$bootloaderEfi = Join-Path $repoRoot "target\x86_64-unknown-uefi\$profileDir\mino-loader.efi"
 
 $ovmfCandidates = @(
     $OvmfPath,
@@ -88,13 +88,13 @@ Push-Location $repoRoot
 try {
     if (-not $SkipBuild) {
         Write-Host "Building bootloader (UEFI, profile=$profileDir)..."
-        cargo build -p bootloader --target x86_64-unknown-uefi --profile $profileDir
+        cargo build -p mino-loader --target x86_64-unknown-uefi --profile $profileDir
         if ($LASTEXITCODE -ne 0) {
             throw "Bootloader build failed with exit code $LASTEXITCODE."
         }
 
         Write-Host "Building kernel (target x86_64-unknown-none, profile=$profileDir)..."
-        cargo build -p kernel --target x86_64-unknown-none --profile $profileDir
+        cargo build -p ntoskrnl --target x86_64-unknown-none --profile $profileDir
         if ($LASTEXITCODE -ne 0) {
             throw "Kernel build failed with exit code $LASTEXITCODE."
         }

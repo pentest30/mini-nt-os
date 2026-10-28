@@ -1,0 +1,32 @@
+[package]
+name    = "ntoskrnl"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ntoskrnl"
+path = "src/main.rs"
+# no_std binary with its own panic handler: it cannot be linked into the
+# std test harness, and it has no unit tests (they live in the library crates).
+test  = false
+bench = false
+
+[features]
+# Trace Win32 syscalls on the serial port at dispatch. Debugging only:
+# unconditional logging on the syscall hot path is not allowed (06 §5).
+trace-syscalls = []
+# Overflow the boot thread's kernel stack right after the switch to guarded
+# stacks: the boot must end on the STOP screen, not a triple fault (M0).
+test-stack-overflow = []
+
+[dependencies]
+abi              = { path = "../../abi" }
+hal              = { path = "../hal" }
+ke               = { path = "../ke" }
+mm               = { path = "../mm" }
+ob               = { path = "../ob" }
+ps               = { path = "../ps" }
+io-manager       = { path = "../io" }
+x86_64           = { workspace = true }
+spin             = { workspace = true }
+log              = { workspace = true }

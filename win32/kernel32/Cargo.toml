@@ -8,12 +8,12 @@ crate-type = ["cdylib"]   # builds as kernel32.dll
 name = "kernel32"
 
 [dependencies]
-hal          = { path = "../../hal" }
-ob           = { path = "../../executive/ob" }
-ps           = { path = "../../executive/ps" }
-mm           = { path = "../../executive/mm" }
-io-manager   = { path = "../../executive/io" }
-ke           = { path = "../../executive/ke" }
+hal          = { path = "../../kernel/hal" }
+ob           = { path = "../../kernel/ob" }
+ps           = { path = "../../kernel/ps" }
+mm           = { path = "../../kernel/mm" }
+io-manager   = { path = "../../kernel/io" }
+ke           = { path = "../../kernel/ke" }
 spin         = { workspace = true }
 log          = { workspace = true }
 x86_64       = { workspace = true }
