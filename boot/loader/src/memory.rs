@@ -4,7 +4,7 @@
 //! builds the compact `MemoryRegion` array that the kernel reads from
 //! `BootInfo`. Must be called *before* `ExitBootServices`.
 
-use boot_info::{MemoryKind, MemoryRegion, MEMORY_MAP_MAX};
+use abi::{MemoryKind, MemoryRegion, MEMORY_MAP_MAX};
 use uefi::table::boot::{BootServices, MemoryType};
 
 /// Collect the UEFI physical memory map into a `MemoryRegion` array.

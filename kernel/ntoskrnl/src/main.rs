@@ -18,7 +18,7 @@ extern crate alloc;
 mod launcher;
 mod syscall;
 
-use boot_info::BootInfo;
+use abi::BootInfo;
 use core::arch::asm;
 use x86_64::{
     instructions::segmentation::{DS, ES, SS, Segment},

@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "abi"
+version = "0.1.0"
+
+[[package]]
 name = "bit_field"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -19,20 +23,6 @@ name = "bitflags"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
-
-[[package]]
-name = "boot-info"
-version = "0.1.0"
-
-[[package]]
-name = "bootloader"
-version = "0.1.0"
-dependencies = [
- "boot-info",
- "log",
- "uefi",
- "x86_64",
-]
 
 [[package]]
 name = "const_fn"
@@ -59,8 +49,8 @@ checksum = "c2ea6706d74fca54e15f1d40b5cf7fe7f764aaec61352a9fcec58fe27e042fc8"
 name = "hal"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "bitflags 2.11.0",
- "boot-info",
  "log",
  "spin",
  "uart_16550",
@@ -90,22 +80,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kernel"
-version = "0.1.0"
-dependencies = [
- "boot-info",
- "hal",
- "io-manager",
- "ke",
- "log",
- "mm",
- "ob",
- "ps",
- "spin",
- "x86_64",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -118,6 +92,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
+name = "mino-loader"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "log",
+ "uefi",
+ "x86_64",
+]
+
+[[package]]
 name = "mkfat"
 version = "0.1.0"
 
@@ -125,8 +109,8 @@ version = "0.1.0"
 name = "mm"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "bitflags 2.11.0",
- "boot-info",
  "log",
  "spin",
  "x86_64",
@@ -139,6 +123,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b93853da6d84c2e3c7d730d6473e8817692dd89be387eb01b94d7f108ecb5b8c"
 
 [[package]]
+name = "ntoskrnl"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "hal",
+ "io-manager",
+ "ke",
+ "log",
+ "mm",
+ "ob",
+ "ps",
+ "spin",
+ "x86_64",
+]
+
+[[package]]
 name = "ob"
 version = "0.1.0"
 dependencies = [
@@ -148,7 +148,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pe-loader"
+name = "pe-inspect"
 version = "0.1.0"
 dependencies = [
  "pelite",

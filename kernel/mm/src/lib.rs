@@ -29,7 +29,7 @@ pub use virtual_alloc::PageMapper;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use boot_info::BootInfo;
+use abi::BootInfo;
 
 /// Bootloader HHDM offset, recorded by [`init`] for code that edits page tables later.
 static HHDM_OFFSET: AtomicU64 = AtomicU64::new(0);

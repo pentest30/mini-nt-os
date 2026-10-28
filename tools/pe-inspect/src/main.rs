@@ -1,9 +1,9 @@
-//! PE loader — host-side analysis tool.
+//! pe-inspect — host-side PE analysis tool.
 //!
 //! Run this on a game .exe to inspect what APIs it needs before
 //! implementing them in the Win32 layer.
 //!
-//! Usage: pe-loader <path-to-game.exe>
+//! Usage: pe-inspect <path-to-game.exe>
 //!
 //! Output:
 //!   - Image base, entry point, section layout
@@ -19,7 +19,7 @@ fn main() {
     let path = std::env::args().nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            eprintln!("Usage: pe-loader <game.exe>");
+            eprintln!("Usage: pe-inspect <game.exe>");
             std::process::exit(1);
         });
 

@@ -119,8 +119,8 @@ done
 if [[ -z "$CARGO" ]]; then echo "[F2] ERROR: cargo not found."; exit 1; fi
 
 # ── Build ──────────────────────────────────────────────────────────────────────
-echo "[F2] Building bootloader (x86_64-unknown-uefi, profile=kernel)..."
-"$CARGO" build -p bootloader --target x86_64-unknown-uefi --profile kernel \
+echo "[F2] Building mino-loader (x86_64-unknown-uefi, profile=kernel)..."
+"$CARGO" build -p mino-loader --target x86_64-unknown-uefi --profile kernel \
     --manifest-path "$ROOT/Cargo.toml"
 
 KERNEL_FEATURES=()
@@ -130,13 +130,13 @@ case "$SCENARIO" in
     *) echo "Unknown scenario: $SCENARIO"; exit 1 ;;
 esac
 
-echo "[F2] Building kernel (x86_64-unknown-none, profile=kernel, scenario=$SCENARIO)..."
-"$CARGO" build -p kernel --target x86_64-unknown-none --profile kernel \
+echo "[F2] Building ntoskrnl (x86_64-unknown-none, profile=kernel, scenario=$SCENARIO)..."
+"$CARGO" build -p ntoskrnl --target x86_64-unknown-none --profile kernel \
     "${KERNEL_FEATURES[@]}" --manifest-path "$ROOT/Cargo.toml"
 
 # ── Locate binaries ────────────────────────────────────────────────────────────
-BL_EFI="$ROOT/target/x86_64-unknown-uefi/kernel/bootloader.efi"
-KRN_ELF="$ROOT/target/x86_64-unknown-none/kernel/kernel"
+BL_EFI="$ROOT/target/x86_64-unknown-uefi/kernel/mino-loader.efi"
+KRN_ELF="$ROOT/target/x86_64-unknown-none/kernel/ntoskrnl"
 
 [[ -f "$BL_EFI" ]] || { echo "[F2] ERROR: bootloader EFI not found at $BL_EFI"; exit 1; }
 [[ -f "$KRN_ELF" ]] || { echo "[F2] ERROR: kernel ELF not found at $KRN_ELF"; exit 1; }

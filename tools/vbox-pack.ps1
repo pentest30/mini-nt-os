@@ -22,7 +22,7 @@ function Resolve-KernelElf {
         [string]$ProfileDir
     )
     # The bootloader loads the kernel ELF as is (ADR-014): no objcopy step.
-    $kernelElfPath = Join-Path $RepoRoot "target\x86_64-unknown-none\$ProfileDir\kernel"
+    $kernelElfPath = Join-Path $RepoRoot "target\x86_64-unknown-none\$ProfileDir\ntoskrnl"
     if (-not (Test-Path -LiteralPath $kernelElfPath)) {
         throw "Kernel ELF not found at $kernelElfPath"
     }
@@ -171,14 +171,14 @@ if ([string]::IsNullOrWhiteSpace($VhdPath)) {
 }
 $VhdPath = [System.IO.Path]::GetFullPath($VhdPath)
 
-$bootloaderEfi = Join-Path $repoRoot "target\x86_64-unknown-uefi\$profileDir\bootloader.efi"
+$bootloaderEfi = Join-Path $repoRoot "target\x86_64-unknown-uefi\$profileDir\mino-loader.efi"
 
 Push-Location $repoRoot
 try {
     if (-not $SkipBuild) {
-        cargo build -p bootloader --target x86_64-unknown-uefi --profile $profileDir
+        cargo build -p mino-loader --target x86_64-unknown-uefi --profile $profileDir
         if ($LASTEXITCODE -ne 0) { throw "Bootloader build failed." }
-        cargo build -p kernel --target x86_64-unknown-none --profile $profileDir
+        cargo build -p ntoskrnl --target x86_64-unknown-none --profile $profileDir
         if ($LASTEXITCODE -ne 0) { throw "Kernel build failed." }
     }
     if (-not (Test-Path -LiteralPath $bootloaderEfi)) {

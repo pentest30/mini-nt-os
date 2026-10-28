@@ -58,8 +58,8 @@ En attendant `cargo xtask` (02 §9.2) :
 ```bash
 cargo check --workspace
 cargo test --workspace
-cargo build -p kernel --target x86_64-unknown-none --profile kernel [--features trace-syscalls]
-cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
+cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel [--features trace-syscalls]
+cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 bash tools/qemu-run.sh [--cpu qemu64,vendor=GenuineIntel]   # QEMU sans affichage, vérifie target/qemu-run/serial.log
 bash tools/qemu-run.sh --scenario stack-overflow           # débordement de pile noyau provoqué → écran STOP
 ```

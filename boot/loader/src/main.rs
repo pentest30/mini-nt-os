@@ -21,7 +21,7 @@ mod loader;
 mod memory;
 mod paging;
 
-use boot_info::{BootInfo, FramebufferInfo, PixelFormat};
+use abi::{BootInfo, FramebufferInfo, PixelFormat};
 use paging::HHDM_OFFSET;
 use core::arch::asm;
 use uefi::{entry, Handle, Status, table::{Boot, SystemTable}};

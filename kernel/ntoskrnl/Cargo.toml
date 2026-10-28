@@ -1,10 +1,10 @@
 [package]
-name    = "kernel"
+name    = "ntoskrnl"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "kernel"
+name = "ntoskrnl"
 path = "src/main.rs"
 # no_std binary with its own panic handler: it cannot be linked into the
 # std test harness, and it has no unit tests (they live in the library crates).
@@ -20,7 +20,7 @@ trace-syscalls = []
 test-stack-overflow = []
 
 [dependencies]
-boot-info        = { path = "../../abi" }
+abi              = { path = "../../abi" }
 hal              = { path = "../hal" }
 ke               = { path = "../ke" }
 mm               = { path = "../mm" }

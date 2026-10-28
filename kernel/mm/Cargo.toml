@@ -7,7 +7,7 @@ edition.workspace = true
 name = "mm"
 
 [dependencies]
-boot-info = { path = "../../abi" }
+abi       = { path = "../../abi" }
 spin     = { workspace = true }
 bitflags = { workspace = true }
 x86_64   = { workspace = true }

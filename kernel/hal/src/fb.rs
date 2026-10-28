@@ -13,7 +13,7 @@
 //! The CONSOLE spin-lock is held only briefly per character; never call from ISR.
 
 use spin::Mutex;
-use boot_info::{FramebufferInfo, PixelFormat};
+use abi::{FramebufferInfo, PixelFormat};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// When true, `write_log_record` is silenced — the launcher owns the screen.
