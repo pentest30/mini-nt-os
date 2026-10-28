@@ -1,111 +1,69 @@
-# micro-nt-os
+# Mino (mini-nt-os)
 
-A minimal NT-compatible OS kernel written in Rust, targeting XP-era (2000–2007) Win32 game compatibility.
+**Mino est un système d'exploitation libre, compatible Windows XP, dont le noyau est écrit en Rust.**
 
-## Goal
+On démarre sur un bureau de style XP (barre des tâches, menu Démarrer, explorateur, panneau de configuration),
+puis on y lance des applications et des jeux 32 bits de l'ère XP (2001–2008) sans les modifier.
 
-Run XP-era games on bare metal by implementing the NT kernel + Win32 subsystem + DirectX translation layer in Rust.
+- **Écrit en Rust** : tout le code privilégié (noyau NT, partie noyau de Win32, pilotes).
+- **Réutilisé** : l'espace utilisateur de ReactOS (`ntdll`, `kernel32`, `user32`, `csrss`, `explorer`…), en binaires épinglés à une version.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│           XP-era game (.exe, PE32)              │
-├─────────────────────────────────────────────────┤
-│  Win32 subsystem                                │
-│  kernel32 · user32 · winmm · msvcrt            │
-├────────────────────┬────────────────────────────┤
-│  DirectX shim      │  NT Executive              │
-│  d3d9 · dsound     │  Ob · Ps · Mm · Io · Ke   │
-│  dinput8           │                            │
-├────────────────────┴────────────────────────────┤
-│  NT Kernel (Ke) — scheduler, IRQL, APC, DPC    │
-├─────────────────────────────────────────────────┤
-│  HAL — GDT, IDT, APIC, serial, timer           │
-├─────────────────────────────────────────────────┤
-│  x86_64 hardware / QEMU                        │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Applications PE32 i386 : explorer, notepad, jeux D3D8/9…     │
+├──────────────────────────────────────────────────────────────┤
+│ DLL Win32 et processus système (ReactOS, épinglés)           │
+│ d3d8/d3d9/ddraw → wined3d → opengl32 (Mesa, rendu logiciel)  │
+├══════════════════════════════════════════════════════════════┤  ← ring 3 / ring 0
+│ win32k (Rust) : USER · GDI · polices                         │
+│ Exécutif NT (Rust) : Ob · Ps · Mm · Io · Cm · Se · Lpc · Ex  │
+│ Ke (Rust) : dispatcher, ordonnanceur, IRQL, APC, DPC         │
+│ HAL et pilotes (Rust)                                        │
+├──────────────────────────────────────────────────────────────┤
+│ Chargeur UEFI (Rust) → ntoskrnl ELF64                        │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## Development phases
+## Documentation
 
-| Phase | Milestone |
-|-------|-----------|
-| 1 | HAL + physical memory manager + boot to kernel_main |
-| 2 | Context switching + VirtualAlloc + PE32 loader + first process |
-| 3 | Win32 message pump + D3D9→Vulkan + first game frame |
-| 4 | Broad game compatibility (audio, input, save files) |
+| Document | Contenu |
+|---|---|
+| [01 — Vision et périmètre](docs/01-vision.md) | Objectif, périmètre, jalons visibles |
+| [02 — Architecture](docs/02-architecture.md) | Architecture cible, composant par composant |
+| [03 — Décisions](docs/03-decisions.md) | Décisions d'architecture (ADR) |
+| [04 — Audit et réutilisation](docs/04-audit-reutilisation.md) | État du code existant et plan de migration |
+| [05 — Feuille de route](docs/05-feuille-de-route.md) | Jalons M0 à M10 et critères de sortie |
 
-**Current phase: 2.5** — Ring-3 + syscalls + first native binary. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for a full guide to what we have built and how it works.
+**Jalon en cours : M0 — Assainir.** Le code actuel suit encore l'ancienne architecture (Win32 réimplémenté dans le noyau) ;
+sa migration est décrite dans l'audit.
 
-## Quick start
+## Démarrage rapide
 
 ```bash
-# Prerequisites
-rustup toolchain install nightly
-rustup target add x86_64-unknown-uefi
-cargo install cargo-make   # optional, for build scripts
-
-# Check everything compiles
-cargo check --workspace
-
-# Analyse a game binary (host tool, runs on your machine)
-cargo run -p pe-loader -- /path/to/game.exe
-
-# Build the UEFI bootloader
-cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
-
-# Run in QEMU (once bootloader is functional)
-# See docs/qemu.md for the full command
+rustup show                     # installe le nightly épinglé de rust-toolchain.toml
+cargo check -p kernel
+cargo test -p mm
+tools/qemu-run.sh               # construit et lance dans QEMU (OVMF, série sur stdio)
 ```
 
-## Key references
+Les commandes `cargo xtask` (build, image, run, test) remplaceront les scripts de `tools/` pendant le jalon M0.
 
-- **Windows Internals** (Yosifovich et al.) — NT design bible
-- **ReactOS** — open source NT-compatible kernel, primary reference for data structure layouts
-- **Wine** — Win32 API implementation, reference for API semantics
-- **DXVK** — D3D9→Vulkan translation, reference for DirectX shim architecture
-- **Geoff Chappell's site** — undocumented NT internals (PEB/TEB offsets, syscall numbers)
-- **"Writing an OS in Rust"** (Philipp Oppermann, https://os.phil-opp.com/) — Rust no_std kernel
-  patterns for paging, IDT, heap allocation, and interrupt handling. See
-  [`docs/references/phil-opp-writing-an-os-in-rust.md`](docs/references/phil-opp-writing-an-os-in-rust.md)
-  for a full chapter-by-chapter relevance mapping to micro-nt-os Phase 1/2 tasks.
+## Plateformes
 
-## Repository layout
+QEMU (OVMF, q35) est la plateforme de référence ; VirtualBox (EFI) sert de seconde plateforme.
+Les machines réelles x86-64 UEFI arrivent au jalon M9.
 
-```
-micro-nt-os/
-├── CLAUDE.md          ← Claude Code context (read this first)
-├── Cargo.toml         ← workspace root
-├── bootloader/        ← UEFI application, jumps to kernel
-├── hal/               ← hardware abstraction (GDT, IDT, IRQL, timer)
-├── kernel/            ← kernel entry point, heap allocator
-├── executive/
-│   ├── ke/            ← scheduler, sync, APC, DPC
-│   ├── mm/            ← physical + virtual memory manager
-│   ├── ob/            ← object manager, handle tables, namespace
-│   ├── ps/            ← process + thread manager, PEB/TEB
-│   └── io/            ← I/O manager, IRP, driver model
-├── win32/
-│   ├── kernel32/      ← core Win32 API (memory, process, timing, sync)
-│   ├── user32/        ← window management, message pump
-│   ├── winmm/         ← multimedia timer
-│   └── msvcrt/        ← C runtime (malloc, memcpy, etc.)
-├── directx/
-│   ├── d3d9/          ← Direct3D 9 COM skeleton → Vulkan backend
-│   ├── dsound/        ← DirectSound 8 → HDA audio
-│   └── dinput8/       ← DirectInput 8 → HID
-└── tools/
-    └── pe-loader/     ← host tool: analyse PE32 game binaries
-```
+## Contribuer, avec ou sans Claude Code
 
-## Contributing / using Claude Code
+[`CLAUDE.md`](CLAUDE.md) résume le contexte et les règles pour chaque session. Les règles essentielles :
 
-This project is designed to be developed with [Claude Code](https://claude.ai/code).
-The `CLAUDE.md` file at the root provides full context for every session.
+- chaque bloc `unsafe` porte un commentaire `// SAFETY:` ;
+- aucune allocation à `IRQL >= DISPATCH_LEVEL` ;
+- la version affichée reste XP 5.1.2600 SP2 ;
+- aucun code, binaire ou ressource Microsoft, et interdiction de consulter le code source d'XP qui a fuité.
 
-Key rules:
-- Every `unsafe` block needs a `// SAFETY:` comment
-- No heap allocation at `IRQL >= DISPATCH_LEVEL`  
-- PEB OS version fields must remain XP-compatible (5.1.2600)
-- All Win32 exports use `stdcall` calling convention
+## Licence
+
+MIT pour l'instant. Le choix définitif est ouvert (ADR-007).
