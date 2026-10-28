@@ -707,7 +707,7 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
 
     // Build a tiny but valid PE32 in heap memory.
     let pe_bytes = build_test_pe32(
-        0x0200_0000,  // preferred image base (32 MiB, safe above heap frame range)
+        0x0200_0000,  // preferred image base, as in tools/mkfat's TEST.EXE
         0x1000,       // AddressOfEntryPoint RVA
     );
 
@@ -757,9 +757,8 @@ fn fat_smoke_probe() {
 /// Build a minimal valid PE32 binary as a heap-allocated byte vector.
 /// Used only by `loader_demo`.
 fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
-    // NOTE: image_base must be at a VA that is NOT used by the heap's physical
-    // frames in the identity map.  Safe choices: > 32 MiB (0x200_0000) on
-    // a 128 MiB QEMU machine where heap frames start at ~1 MiB and span ~4 MiB.
+    // Same layout as tools/mkfat's TEST.EXE: the import directory (data +
+    // 0x1A0) holds one descriptor and its all-zero terminator, then the INT.
     use ps::loader::*;
 
     log::info!("build_test_pe32: before alloc heap used={} free={}", ALLOCATOR.used(), ALLOCATOR.free());
@@ -841,7 +840,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     let args_iat_proof_va = image_base.wrapping_add(data_rva + 0x148);
     let iat_proof_msg_va = image_base.wrapping_add(data_rva + 0x160);
     let import_desc_rva: u32 = data_rva + 0x1A0;
-    let import_int_rva: u32 = data_rva + 0x1C0;
+    let import_int_rva: u32 = data_rva + 0x1C8;
     let import_iat_rva: u32 = data_rva + 0x1D0;
     let import_ibn_rva: u32 = data_rva + 0x1E0;
     let import_dll_rva: u32 = data_rva + 0x1F0;
@@ -944,7 +943,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     let args_iat_proof_off = data_off + 0x148;
     let iat_proof_msg_off = data_off + 0x160;
     let import_desc_off = data_off + 0x1A0;
-    let import_int_off = data_off + 0x1C0;
+    let import_int_off = data_off + 0x1C8;
     let import_iat_off = data_off + 0x1D0;
     let import_ibn_off = data_off + 0x1E0;
     let import_dll_off = data_off + 0x1F0;

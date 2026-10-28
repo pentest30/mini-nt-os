@@ -280,7 +280,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     let args_iat_proof_va   = image_base.wrapping_add(data_rva + 0x148);
     let iat_proof_msg_va    = image_base.wrapping_add(data_rva + 0x160);
     let import_desc_rva: u32 = data_rva + 0x1A0;
-    let import_int_rva:  u32 = data_rva + 0x1C0;
+    let import_int_rva:  u32 = data_rva + 0x1C8;
     let import_iat_rva:  u32 = data_rva + 0x1D0;
     let import_ibn_rva:  u32 = data_rva + 0x1E0;
     let import_dll_rva:  u32 = data_rva + 0x1F0;
@@ -526,7 +526,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     let args_iat_proof_off   = data_off + 0x148;
     let iat_proof_msg_off    = data_off + 0x160;
     let import_desc_off      = data_off + 0x1A0;
-    let import_int_off       = data_off + 0x1C0;
+    let import_int_off       = data_off + 0x1C8;
     let import_iat_off       = data_off + 0x1D0;
     let import_ibn_off       = data_off + 0x1E0;
     let import_dll_off       = data_off + 0x1F0;
@@ -556,7 +556,8 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[opt_off + 104..opt_off + 108].copy_from_slice(&import_desc_rva.to_le_bytes());
     buf[opt_off + 108..opt_off + 112].copy_from_slice(&40u32.to_le_bytes());
 
-    // Import descriptor: ntdll.dll, NtWriteFile
+    // Import descriptor: ntdll.dll, NtWriteFile. The directory holds it and
+    // its all-zero terminator (0x1A0..0x1C8); the INT starts after them.
     buf[import_desc_off..import_desc_off + 4].copy_from_slice(&import_int_rva.to_le_bytes());
     buf[import_desc_off + 12..import_desc_off + 16].copy_from_slice(&import_dll_rva.to_le_bytes());
     buf[import_desc_off + 16..import_desc_off + 20].copy_from_slice(&import_iat_rva.to_le_bytes());

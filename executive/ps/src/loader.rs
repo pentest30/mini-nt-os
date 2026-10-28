@@ -276,8 +276,10 @@ impl<'a> Iterator for ImportIter<'a> {
         let base_off = rva_to_file_offset(self.data, self.rva)?;
         let off = base_off + self.index * core::mem::size_of::<ImageImportDescriptor>();
         let desc = read_struct::<ImageImportDescriptor>(self.data, off).ok()?;
-        // Null terminator
-        if desc.name == 0 && desc.first_thunk == 0 { return None; }
+        // The list ends at the first descriptor without a name or an IAT, as
+        // in the ReactOS and Wine loaders. This covers the all-zero terminator
+        // and a terminator overlapped by the next table.
+        if desc.name == 0 || desc.first_thunk == 0 { return None; }
         self.index += 1;
         Some(ImportEntry {
             dll_name_rva: desc.name,
@@ -343,9 +345,10 @@ fn rva_to_str(data: &[u8], rva: u32) -> Option<&str> {
     core::str::from_utf8(&data[off..off+end]).ok()
 }
 
-fn read_cstr_at(ptr: *const u8) -> Option<&'static str> {
+/// Reads a NUL-terminated string of at most `max` bytes (and 256) at `ptr`.
+fn read_cstr_at(ptr: *const u8, max: usize) -> Option<&'static str> {
     let mut len = 0usize;
-    while len < 256 {
+    while len < max.min(256) {
         let b = unsafe { ptr.add(len).read_unaligned() };
         if b == 0 {
             let s = unsafe { core::slice::from_raw_parts(ptr, len) };
@@ -3476,19 +3479,29 @@ pub fn apply_relocations(load_base: u64, preferred_base: u64) -> Result<(), &'st
     Ok(())
 }
 
-pub fn patch_imports(load_base: u64, pe: &Pe32<'_>) -> Result<(), &'static str> {
+/// Resolves the imports of `pe`, mapped at `load_base`, and fills its IAT.
+///
+/// Thunks and names must lie in the `image_size` bytes mapped at `load_base`:
+/// a malformed image is an error, not a read elsewhere in the address space.
+pub fn patch_imports(load_base: u64, image_size: u32, pe: &Pe32<'_>) -> Result<(), &'static str> {
+    // Address of `len` bytes at `rva`, if they lie inside the image.
+    let in_image = |rva: u64, len: u64| -> Option<u64> {
+        if rva.checked_add(len)? <= image_size as u64 { Some(load_base + rva) } else { None }
+    };
     let mut total = 0u32;
     for imp in pe.imports() {
         let dll = imp.dll_name();
         let int_rva = if imp.int_rva != 0 { imp.int_rva } else { imp.iat_rva };
         let mut idx = 0u32;
         loop {
-            let thunk_ptr = (load_base + int_rva as u64 + (idx as u64) * 4) as *const u32;
+            let thunk_ptr = in_image(int_rva as u64 + idx as u64 * 4, 4)
+                .ok_or("load_image: import thunk outside the image")? as *const u32;
             let val = unsafe { thunk_ptr.read_unaligned() };
             if val == 0 {
                 break;
             }
-            let iat_ptr = (load_base + imp.iat_rva as u64 + (idx as u64) * 4) as *mut u32;
+            let iat_ptr = in_image(imp.iat_rva as u64 + idx as u64 * 4, 4)
+                .ok_or("load_image: IAT outside the image")? as *mut u32;
             let is_ordinal = (val & 0x8000_0000) != 0;
             let target = if is_ordinal {
                 let ord = (val & 0xFFFF) as u16;
@@ -3500,9 +3513,12 @@ pub fn patch_imports(load_base: u64, pe: &Pe32<'_>) -> Result<(), &'static str> 
                     }
                 }
             } else {
-                let ibn_ptr = (load_base + val as u64) as *const u8;
-                let name_ptr = unsafe { ibn_ptr.add(2) };
-                let name = read_cstr_at(name_ptr).ok_or("load_image: bad import name")?;
+                // IMAGE_IMPORT_BY_NAME: a u16 hint, then the name.
+                let name_rva = val as u64 + 2;
+                let name_ptr = in_image(name_rva, 1)
+                    .ok_or("load_image: import name outside the image")? as *const u8;
+                let max = (image_size as u64 - name_rva) as usize;
+                let name = read_cstr_at(name_ptr, max).ok_or("load_image: bad import name")?;
                 match resolve_import_symbol(dll, name, None) {
                     Some(v) => v,
                     None => {
@@ -3639,7 +3655,7 @@ pub fn load_image<'a>(
     }
 
     map_stub_modules(vad, mapper)?;
-    patch_imports(load_base, &pe)?;
+    patch_imports(load_base, image_size, &pe)?;
     apply_relocations(load_base, preferred_base)?;
 
     let image = LoadedImage {
@@ -3760,7 +3776,7 @@ pub fn load_dll(
     apply_relocations(load_base, preferred_base)?;
 
     // Patch imports (resolve against stubs + already-loaded DLLs)
-    patch_imports(load_base, &pe)?;
+    patch_imports(load_base, image_size, &pe)?;
 
     Ok(LoadedImage {
         image_base:  load_base,
@@ -4168,6 +4184,33 @@ mod tests {
             .map(|i| i.dll_name().to_owned_str())
             .collect();
         assert_eq!(names, ["kernel32.dll", "user32.dll", "d3d9.dll"]);
+    }
+
+    #[test]
+    fn import_list_ends_at_descriptor_without_iat() {
+        // The smoke test's PEs put their INT over the terminator's Name field:
+        // the list must end there, not yield a descriptor with INT = IAT = 0.
+        let mut data = make_pe32(0x0040_0000, 0x1000, &[], &["ntdll.dll"]);
+        let dir = { Pe32::parse(&data).unwrap().optional_header().data_directory[1] };
+        let terminator = dir.virtual_address as usize + 20;
+        data[terminator + 12..terminator + 16].copy_from_slice(&0x1234u32.to_le_bytes());
+        let pe = Pe32::parse(&data).unwrap();
+        assert_eq!(pe.imports().count(), 1);
+    }
+
+    #[test]
+    fn patch_imports_stays_inside_the_image() {
+        // make_pe32 puts the IAT at RVA 0x5000: outside a 0x1000-byte image.
+        let data = make_pe32(0x0040_0000, 0x1000, &[], &["ntdll.dll"]);
+        let pe = Pe32::parse(&data).unwrap();
+        let mut image = data.clone();
+        let base = image.as_mut_ptr() as u64;
+        assert_eq!(
+            patch_imports(base, 0x1000, &pe),
+            Err("load_image: import thunk outside the image"),
+        );
+        // Mapped in full, the IAT is empty and nothing is patched.
+        assert_eq!(patch_imports(base, image.len() as u32, &pe), Ok(()));
     }
 
     // ── T3-1e: error paths ────────────────────────────────────────────────────
