@@ -44,12 +44,11 @@ sa migration est décrite dans l'audit.
 
 ```bash
 rustup toolchain install        # installe le nightly épinglé de rust-toolchain.toml
-cargo check -p ntoskrnl
-cargo test -p mm
-bash tools/qemu-run.sh          # construit, démarre QEMU et vérifie les marqueurs série
+cargo xtask test                # tests hôte, puis démarrages QEMU sans affichage vérifiés par marqueurs série
+cargo xtask run                 # démarre dans QEMU, port série sur stdio
 ```
 
-Les commandes `cargo xtask` (build, image, run, test) remplaceront les scripts de `tools/` pendant le jalon M0.
+QEMU et OVMF doivent être installés (Debian, Ubuntu : `qemu-system-x86 ovmf`). `cargo xtask help` liste les options.
 
 ## Plateformes
 

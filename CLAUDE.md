@@ -41,8 +41,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 
 ## Travailler dans ce dépôt
 
-- Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask test`
-  (tant que `xtask` n'existe pas : les tests hôte ci-dessous).
+- Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
 - **Jalon courant : M0 — Assainir** ([05](docs/05-feuille-de-route.md#m0--assainir)), en commençant par les corrections
@@ -53,20 +52,29 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 
 ## Commandes
 
-En attendant `cargo xtask` (02 §9.2) :
+`cargo xtask` (02 §9.2, `xtask/`) :
+
+```bash
+cargo xtask test                                     # tests hôte, puis scénarios de démarrage QEMU (tests/boot/)
+cargo xtask test --boot --scenario smoke --cpu intel # un scénario, un CPU
+cargo xtask run [--cpu intel] [--gdb] [--headless]   # démarre dans QEMU, port série sur stdio
+cargo xtask build [--features trace-syscalls]        # mino-loader et ntoskrnl
+cargo xtask help
+```
+
+Et directement :
 
 ```bash
 cargo check --workspace
-cargo test --workspace
 cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel [--features trace-syscalls]
 cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
-bash tools/qemu-run.sh [--cpu qemu64,vendor=GenuineIntel]   # QEMU sans affichage, vérifie target/qemu-run/serial.log
-bash tools/qemu-run.sh --scenario stack-overflow           # débordement de pile noyau provoqué → écran STOP
 ```
 
+- Un scénario de démarrage est un fichier de `tests/boot/` : features du noyau, CPU, marqueurs série attendus et interdits.
+  Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
 - `trace-syscalls` active la trace série des appels système. Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
-  `--cpu qemu64,vendor=GenuineIntel` exerce le chemin SYSENTER.
-- La CI (`.github/workflows/ci.yml`) exécute ces commandes, dont le smoke test sur les deux CPU et le scénario `stack-overflow`. `cargo fmt --check` et
+  `--cpu intel` exerce le chemin SYSENTER.
+- La CI (`.github/workflows/ci.yml`) exécute `cargo xtask test`, avec les builds bare-metal sans warning. `cargo fmt --check` et
   `cargo clippy -D warnings` (06 §6) restent à activer.

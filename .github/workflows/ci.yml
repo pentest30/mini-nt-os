@@ -1,6 +1,7 @@
 # CI for M0 (docs/05-feuille-de-route.md): no warnings, host tests, bare-metal
-# builds, the QEMU smoke test on both syscall paths (ADR-004), and a provoked
-# kernel stack overflow that must end on the STOP screen.
+# builds, and the boot scenarios of tests/boot/ through `cargo xtask test`: the
+# smoke test on both syscall paths (ADR-004), and a provoked kernel stack
+# overflow that must end on the STOP screen.
 #
 # Not enabled yet: `cargo fmt --check` and `cargo clippy -D warnings` (06 §6),
 # because the existing code is neither formatted nor clippy-clean.
@@ -30,7 +31,7 @@ jobs:
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: rustup toolchain install && cargo --version
       - run: cargo check --workspace
-      - run: cargo test --workspace
+      - run: cargo xtask test --host
 
   bare-metal:
     name: Kernel and bootloader builds (no warnings)
@@ -60,9 +61,9 @@ jobs:
       matrix:
         include:
           - name: smoke, default CPU, AMD vendor, int 2Eh
-            args: ""
+            args: --scenario smoke --cpu default
           - name: smoke, Intel CPU, SYSENTER
-            args: --cpu qemu64,vendor=GenuineIntel
+            args: --scenario smoke --cpu intel
           - name: kernel stack overflow, STOP screen
             args: --scenario stack-overflow
     steps:
@@ -71,16 +72,15 @@ jobs:
         run: rustup toolchain install && cargo --version
       - name: Install QEMU and OVMF
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 ovmf
+      # Scenarios of tests/boot/; the firmware is found in /usr/share/OVMF.
       - name: Boot and check serial markers
-        run: |
-          bash tools/qemu-run.sh --timeout 120 \
-            --ovmf-code /usr/share/OVMF/OVMF_CODE_4M.fd \
-            --ovmf-vars /usr/share/OVMF/OVMF_VARS_4M.fd \
-            ${{ matrix.args }}
-      - name: Upload serial log
+        run: cargo xtask test --boot ${{ matrix.args }}
+      - name: Upload serial and QEMU logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: serial-${{ strategy.job-index }}
-          path: target/qemu-run/serial.log
+          name: boot-logs-${{ strategy.job-index }}
+          path: |
+            target/xtask/boot/*/serial.log
+            target/xtask/boot/*/qemu.log
           if-no-files-found: ignore
