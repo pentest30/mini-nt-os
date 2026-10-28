@@ -2471,7 +2471,7 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_const_stub( page.add(0x9E0), 0, 4);
             write_win32_stub(page.add(0x9F0), 0x2007, 0x0008); // TerminateProcess(2) → reuse ExitProcess
             write_const_stub( page.add(0xA00), 0, 4);          // UnhandledExceptionFilter(1) → EXCEPTION_CONTINUE_SEARCH
-            write_win32_stub(page.add(0xA10), 0x20B7, 0x0020); // WideCharToMultiByte(8)
+            write_win32_stub(page.add(0xA10), 0x20BA, 0x0020); // WideCharToMultiByte(8)
             write_const_stub( page.add(0xA20), 1, 8);          // EnumSystemLocalesA(2) → TRUE
         }
 
@@ -2580,7 +2580,7 @@ fn initialise_stub_module_code(base: u32, module_name: &str) {
             write_win32_stub(page.add(0x010), 0x2031, 0x0004); // timeEndPeriod(1)
             write_win32_stub(page.add(0x020), 0x2032, 0x0000); // timeGetTime()
             // ── Ghost Recon winmm imports ──────────────────────────────────
-            write_win32_stub(page.add(0x030), 0x2033, 0x0008); // timeGetDevCaps(2)
+            write_win32_stub(page.add(0x030), 0x2034, 0x0008); // timeGetDevCaps(2)
             write_const_stub( page.add(0x040), 0, 4);          // timeKillEvent(1) → TIMERR_NOERROR
             write_const_stub( page.add(0x050), 1, 0x0014);     // timeSetEvent(5) → fake timer ID 1
         }
