@@ -7,7 +7,7 @@
 | [03 — Décisions](03-decisions.md) | ADR-001 à ADR-019, avec leur statut |
 | [04 — Audit et réutilisation](04-audit-reutilisation.md) | Audit du commit `6d3e235` : ce qu'on garde, refond ou abandonne, défauts à corriger |
 | [05 — Feuille de route](05-feuille-de-route.md) | Jalons M0 à M10 et leurs critères de sortie |
-| 06 — Conventions | *Référencé par les documents 01 à 04, pas encore rédigé* |
+| [06 — Conventions](06-conventions.md) | Règles de développement : hygiène juridique, organisation, `unsafe`, IRQL, erreurs, tests, Git, documentation |
 
 Autres dossiers :
 

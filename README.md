@@ -1,6 +1,6 @@
 # Mino (mini-nt-os)
 
-**Mino est un système d'exploitation libre, compatible Windows XP, dont le noyau est écrit en Rust.**
+**Mino est un système d'exploitation libre, compatible XP, dont le noyau est écrit en Rust.**
 
 On démarre sur un bureau de style XP (barre des tâches, menu Démarrer, explorateur, panneau de configuration),
 puis on y lance des applications et des jeux 32 bits de l'ère XP (2001–2008) sans les modifier.
@@ -35,6 +35,7 @@ puis on y lance des applications et des jeux 32 bits de l'ère XP (2001–2008) 
 | [03 — Décisions](docs/03-decisions.md) | Décisions d'architecture (ADR) |
 | [04 — Audit et réutilisation](docs/04-audit-reutilisation.md) | État du code existant et plan de migration |
 | [05 — Feuille de route](docs/05-feuille-de-route.md) | Jalons M0 à M10 et critères de sortie |
+| [06 — Conventions](docs/06-conventions.md) | Règles de développement (hygiène juridique, `unsafe`, IRQL, tests, Git) |
 
 **Jalon en cours : M0 — Assainir.** Le code actuel suit encore l'ancienne architecture (Win32 réimplémenté dans le noyau) ;
 sa migration est décrite dans l'audit.
@@ -57,12 +58,9 @@ Les machines réelles x86-64 UEFI arrivent au jalon M9.
 
 ## Contribuer, avec ou sans Claude Code
 
-[`CLAUDE.md`](CLAUDE.md) résume le contexte et les règles pour chaque session. Les règles essentielles :
-
-- chaque bloc `unsafe` porte un commentaire `// SAFETY:` ;
-- aucune allocation à `IRQL >= DISPATCH_LEVEL` ;
-- la version affichée reste XP 5.1.2600 SP2 ;
-- aucun code, binaire ou ressource Microsoft, et interdiction de consulter le code source d'XP qui a fuité.
+Toute contribution suit [06 — Conventions](docs/06-conventions.md), à commencer par l'hygiène juridique : aucun code,
+binaire ou ressource Microsoft, et interdiction de consulter les sources fuitées d'XP ou de Server 2003.
+[`CLAUDE.md`](CLAUDE.md) résume le contexte et les règles non négociables pour les sessions Claude Code.
 
 ## Licence
 
