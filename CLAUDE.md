@@ -61,11 +61,12 @@ cargo test --workspace
 cargo build -p kernel --target x86_64-unknown-none --profile kernel [--features trace-syscalls]
 cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
 bash tools/qemu-run.sh [--cpu qemu64,vendor=GenuineIntel]   # QEMU sans affichage, vérifie target/qemu-run/serial.log
+bash tools/qemu-run.sh --scenario stack-overflow           # débordement de pile noyau provoqué → écran STOP
 ```
 
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
 - `trace-syscalls` active la trace série des appels système. Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu qemu64,vendor=GenuineIntel` exerce le chemin SYSENTER.
-- La CI (`.github/workflows/ci.yml`) exécute ces commandes, dont le smoke test sur les deux CPU. `cargo fmt --check` et
+- La CI (`.github/workflows/ci.yml`) exécute ces commandes, dont le smoke test sur les deux CPU et le scénario `stack-overflow`. `cargo fmt --check` et
   `cargo clippy -D warnings` (06 §6) restent à activer.

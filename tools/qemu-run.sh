@@ -4,11 +4,15 @@
 # Usage:
 #   ./tools/qemu-run.sh [--timeout N] [--memory M] [--ovmf /path/to/OVMF.fd]
 #                       [--ovmf-code /path/to/code.fd] [--ovmf-vars /path/to/vars.fd]
-#                       [--cpu MODEL]
+#                       [--cpu MODEL] [--scenario stack-overflow]
 #
 # --cpu is passed to QEMU as -cpu MODEL. QEMU's default CPU reports an AMD
 # vendor; use e.g. --cpu qemu64,vendor=GenuineIntel to exercise the SYSENTER
 # path (ADR-004).
+#
+# --scenario stack-overflow builds the kernel with `test-stack-overflow`: the
+# boot thread overflows its guarded kernel stack and the run passes only if
+# the STOP screen names the overflow (no triple fault). M0 exit criterion.
 #
 # OVMF modes (auto-detected):
 #   Combined  : single OVMF.fd  → -bios OVMF.fd
@@ -32,6 +36,7 @@ OVMF_ARG=""
 OVMF_CODE_ARG=""
 OVMF_VARS_ARG=""
 CPU_ARG=""
+SCENARIO="smoke"
 
 make_fat_img_with_mkfat() {
     local out="$1"
@@ -101,6 +106,7 @@ while [[ $# -gt 0 ]]; do
         --ovmf-code) OVMF_CODE_ARG="$2"; shift 2 ;;
         --ovmf-vars) OVMF_VARS_ARG="$2"; shift 2 ;;
         --cpu)       CPU_ARG="$2";    shift 2 ;;
+        --scenario)  SCENARIO="$2";   shift 2 ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -141,9 +147,16 @@ echo "[F2] Building bootloader (x86_64-unknown-uefi, profile=kernel)..."
 "$CARGO" build -p bootloader --target x86_64-unknown-uefi --profile kernel \
     --manifest-path "$ROOT/Cargo.toml"
 
-echo "[F2] Building kernel (x86_64-unknown-none, profile=kernel)..."
+KERNEL_FEATURES=()
+case "$SCENARIO" in
+    smoke) ;;
+    stack-overflow) KERNEL_FEATURES=(--features test-stack-overflow) ;;
+    *) echo "Unknown scenario: $SCENARIO"; exit 1 ;;
+esac
+
+echo "[F2] Building kernel (x86_64-unknown-none, profile=kernel, scenario=$SCENARIO)..."
 "$CARGO" build -p kernel --target x86_64-unknown-none --profile kernel \
-    --manifest-path "$ROOT/Cargo.toml"
+    "${KERNEL_FEATURES[@]}" --manifest-path "$ROOT/Cargo.toml"
 
 # ── Locate binaries ────────────────────────────────────────────────────────────
 BL_EFI="$ROOT/target/x86_64-unknown-uefi/kernel/bootloader.efi"
@@ -304,6 +317,24 @@ timeout "$TIMEOUT" "$QEMU_BIN" \
     2>&1 | head -5 || true   # show first QEMU errors; allow timeout exit code
 
 # ── Check output ──────────────────────────────────────────────────────────────
+if [[ "$SCENARIO" == "stack-overflow" ]]; then
+    STOP_TEXT="*** STOP: 0x0000007f"
+    OVERFLOW_TEXT="KERNEL STACK OVERFLOW: guard page hit"
+    HALT_TEXT="System halted."
+    if [[ -f "$SERIAL_LOG" ]] \
+        && grep -Fq "$STOP_TEXT" "$SERIAL_LOG" \
+        && grep -Fq "$OVERFLOW_TEXT" "$SERIAL_LOG" \
+        && grep -Fq "$HALT_TEXT" "$SERIAL_LOG"
+    then
+        echo "[F2] PASS — kernel stack overflow ended on the STOP screen"
+        cat "$SERIAL_LOG"
+        exit 0
+    fi
+    echo "[F2] FAIL — expected '$STOP_TEXT', '$OVERFLOW_TEXT' and '$HALT_TEXT'"
+    cat "$SERIAL_LOG" 2>/dev/null || echo "(no output)"
+    exit 1
+fi
+
 SUCCESS_TEXT="kernel_main ready"
 SMOKE_TEXT="[smoke] int2e write path hit"
 IAT_TEXT="[smoke] IAT NtWriteFile path hit"
