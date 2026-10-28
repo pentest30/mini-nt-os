@@ -10,6 +10,7 @@
 #![feature(abi_x86_interrupt)]
 
 pub mod ata;
+pub mod cpuid;
 pub mod fb;
 pub mod gdt;
 pub mod idt;

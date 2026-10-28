@@ -307,11 +307,15 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     let wp_marker_va   = image_base.wrapping_add(data_rva + 0x298); // "[smoke] WndProc called\n"
     let wp_iosb_va     = image_base.wrapping_add(data_rva + 0x2B0); // WndProc IOSB (8 bytes)
     let args_wp_va     = image_base.wrapping_add(data_rva + 0x2B8); // NtWriteFile args for WndProc
+    let se_skip_msg_va  = image_base.wrapping_add(data_rva + 0x300); // SYSENTER skip marker
+    let se_skip_iosb_va = image_base.wrapping_add(data_rva + 0x340); // its IOSB (8 bytes)
+    let args_se_skip_va = image_base.wrapping_add(data_rva + 0x348); // its NtWriteFile args (36 bytes)
 
     let msg           = b"[smoke] int2e write+alloc+term\n";
     let iat_msg       = b"[iat] NtWriteFile via IAT\n";
     let iat_proof_msg = b"IATOK";
     let sysenter_msg  = b"[smoke] SYSENTER path hit\n";
+    let se_skip_msg   = b"[smoke] SYSENTER path skipped: CPU is not Intel (ADR-004)\n";
     let wp_marker     = b"[smoke] WndProc called\n";
 
     // ── Ring-3 machine code (.text section) ──────────────────────────────────
@@ -372,6 +376,19 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     code.extend_from_slice(&[0x8B, 0x1D]); eu32(&mut code, out_base_va);
     code.extend_from_slice(&[0xC7, 0x03]); eu32(&mut code, 0x1234_5678);
 
+    // SYSENTER from compatibility mode #UDs on non-Intel CPUs (ADR-004), and this
+    // image is built on the host, so the check happens in ring 3: CPUID leaf 0
+    // vendor must be "GenuineIntel", otherwise report the skip via INT 0x2E.
+    code.extend_from_slice(&[0x31, 0xC0]);              // xor eax, eax
+    code.extend_from_slice(&[0x0F, 0xA2]);              // cpuid (vendor in EBX, EDX, ECX)
+    let mut j_se_skip = Vec::new();
+    for (modrm, word) in [(0xFBu8, b"Genu"), (0xFA, b"ineI"), (0xF9, b"ntel")] {
+        code.extend_from_slice(&[0x81, modrm]);         // cmp ebx/edx/ecx, imm32
+        eu32(&mut code, u32::from_le_bytes(*word));
+        code.extend_from_slice(&[0x0F, 0x85, 0, 0, 0, 0]); // jne .se_skip
+        j_se_skip.push(code.len() - 4);
+    }
+
     // NtWriteFile via SYSENTER (XP SP2 ABI).
     // Stack layout at SYSENTER: [EDX+0]=ret_addr [EDX+4..]=args[0..8].
     // Push in reverse: Key → ... → FileHandle → ret_addr (topmost).
@@ -395,6 +412,17 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     code.extend_from_slice(&[0x0F, 0x34]);              // sysenter
     // .after_sysenter: ret at SharedUserData+0x300 popped ret_addr; 9 args remain.
     code.extend_from_slice(&[0x83, 0xC4, 0x24]);        // add esp, 36
+    code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);        // jmp .se_done
+    let j_se_done = code.len() - 4;
+    // .se_skip: NtWriteFile(se_skip_msg) via INT 0x2E
+    let se_skip_off = code.len();
+    for j in j_se_skip { patch_rel32(&mut code, j, se_skip_off); }
+    code.push(0xBA); eu32(&mut code, args_se_skip_va);
+    code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // MOV EAX, 0x112
+    code.extend_from_slice(&[0xCD, 0x2E]);              // INT 0x2E
+    // .se_done:
+    let se_done_off = code.len();
+    patch_rel32(&mut code, j_se_done, se_done_off);
 
     // Win32 draw demo frame (0x2050) — user-mode initiated framebuffer output
     code.push(0xBA); eu32(&mut code, 0);
@@ -614,6 +642,15 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf[args_wp_off + 16..args_wp_off + 20].copy_from_slice(&wp_iosb_va.to_le_bytes());
     buf[args_wp_off + 20..args_wp_off + 24].copy_from_slice(&wp_marker_va.to_le_bytes());
     buf[args_wp_off + 24..args_wp_off + 28].copy_from_slice(&(wp_marker.len() as u32).to_le_bytes());
+
+    // SYSENTER skip marker and its NtWriteFile args (9 × 4 = 36 bytes):
+    // [0] FileHandle=0, [4] IoStatusBlock, [5] Buffer, [6] Length
+    let se_skip_msg_off  = data_off + 0x300;
+    let args_se_skip_off = data_off + 0x348;
+    buf[se_skip_msg_off..se_skip_msg_off + se_skip_msg.len()].copy_from_slice(se_skip_msg);
+    buf[args_se_skip_off + 16..args_se_skip_off + 20].copy_from_slice(&se_skip_iosb_va.to_le_bytes());
+    buf[args_se_skip_off + 20..args_se_skip_off + 24].copy_from_slice(&se_skip_msg_va.to_le_bytes());
+    buf[args_se_skip_off + 24..args_se_skip_off + 28].copy_from_slice(&(se_skip_msg.len() as u32).to_le_bytes());
 
     let _ = w32_msg_off; // used via w32_msg_va in code
 

@@ -1283,10 +1283,12 @@ const STUB_MODULES: &[StubModule] = &[
 ];
 
 fn write_nt_syscall_stub(dst: *mut u8, syscall_no: u32, ret_imm: u16) {
-    const USE_SYSENTER_STUB: bool = true;
+    // SYSENTER from compatibility mode only exists on Intel; AMD raises #UD.
+    // Every other vendor gets the INT 0x2E stub (ADR-004).
+    let use_sysenter_stub = hal::cpuid::is_intel();
     // SAFETY: dst points into ntdll stub module page (0x1000 bytes, committed RWX).
     unsafe {
-        if USE_SYSENTER_STUB {
+        if use_sysenter_stub {
             // XP SP2 KiFastSystemCall ABI:
             //   EAX = service number
             //   EDX = user ESP at SYSENTER (kernel reads args at [EDX+4..])

@@ -191,6 +191,7 @@ dependencies = [
 name = "ps"
 version = "0.1.0"
 dependencies = [
+ "hal",
  "ke",
  "log",
  "mm",
