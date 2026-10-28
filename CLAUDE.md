@@ -76,7 +76,7 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
-- `trace-syscalls` active la trace série des appels système. Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
+- `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
 - Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.
 - La CI (`.github/workflows/ci.yml`) exécute `cargo xtask lint` et `cargo xtask test`, avec les builds bare-metal sans warning.

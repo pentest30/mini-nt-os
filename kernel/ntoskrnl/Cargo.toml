@@ -18,6 +18,8 @@ trace-syscalls = []
 # Overflow the boot thread's kernel stack right after the switch to guarded
 # stacks: the boot must end on the STOP screen, not a triple fault (M0).
 test-stack-overflow = []
+# Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
+heartbeat = ["hal/heartbeat"]
 
 [dependencies]
 abi              = { path = "../../abi" }
