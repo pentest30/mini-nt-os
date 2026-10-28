@@ -457,8 +457,9 @@ pub fn terminate_user_threads() {
 /// kept in the table (for handle-table lookup) but will never be scheduled
 /// again.
 ///
-/// # IRQL: PASSIVE_LEVEL (called from syscall handler with IF=0 via INT 0x2E,
-///         effectively DISPATCH_LEVEL — no alloc inside this function).
+/// # IRQL
+/// PASSIVE_LEVEL nominally, but the INT 0x2E syscall handler calls it with IF=0,
+/// so it is effectively DISPATCH_LEVEL — no alloc inside this function.
 pub fn terminate_current_thread() {
     let switch = {
         let mut guard = SCHED.lock();
