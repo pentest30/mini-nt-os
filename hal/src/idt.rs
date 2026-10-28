@@ -30,6 +30,9 @@ use super::gdt::DOUBLE_FAULT_IST_INDEX;
 static IDT: Once<InterruptDescriptorTable> = Once::new();
 static SYSCALL_HOOK: AtomicUsize = AtomicUsize::new(0);
 static USER_FAULT_HOOK: AtomicUsize = AtomicUsize::new(0);
+/// `fn(u64) -> Option<(u64, u64)>`: guard-page lookup for kernel stacks, see
+/// [`set_stack_guard_hook`].
+static STACK_GUARD_HOOK: AtomicUsize = AtomicUsize::new(0);
 static IN_PF_OUTER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 // ── Init ─────────────────────────────────────────────────────────────────────
@@ -117,12 +120,58 @@ extern "x86-interrupt" fn exception_double_fault(
     frame: InterruptStackFrame,
     error: u64,
 ) -> ! {
-    // Running on IST[0] — the regular kernel stack may be corrupt.
-    // Only use async-safe operations: serial write via `log`, no heap.
-    panic!(
-        "EXCEPTION: #DF Double Fault (error={:#x})\n{:#?}",
-        error, frame
-    );
+    // Running on IST[0]: the interrupted stack may be exhausted, so no locks,
+    // no formatting, no heap. A kernel stack overflow usually lands here: the
+    // #PF on the guard page cannot push its frame onto the same stack.
+    let cr2 = x86_64::registers::control::Cr2::read_raw();
+    let rsp = frame.stack_pointer.as_u64();
+    let guard = stack_guard_hit(cr2).or_else(|| stack_guard_hit(rsp));
+    stop_on_trap(8, error, &frame, cr2, guard, "double fault");
+}
+
+/// STOP screen for a trap the kernel cannot handle, naming a kernel stack
+/// overflow when the fault hit a guard page.
+fn stop_on_trap(
+    trap: u64,
+    error: u64,
+    frame: &InterruptStackFrame,
+    cr2: u64,
+    guard: Option<(u64, u64)>,
+    what: &str,
+) -> ! {
+    let rip = frame.instruction_pointer.as_u64();
+    let rsp = frame.stack_pointer.as_u64();
+    let params = [trap, error, rip, cr2];
+    match guard {
+        Some((bottom, top)) => super::bugcheck::stop(
+            super::bugcheck::UNEXPECTED_KERNEL_MODE_TRAP,
+            "UNEXPECTED_KERNEL_MODE_TRAP",
+            params,
+            "KERNEL STACK OVERFLOW: guard page hit",
+            &[("fault address", cr2), ("RIP          ", rip), ("RSP          ", rsp),
+              ("stack bottom ", bottom), ("stack top    ", top)],
+        ),
+        None => super::bugcheck::stop(
+            super::bugcheck::UNEXPECTED_KERNEL_MODE_TRAP,
+            "UNEXPECTED_KERNEL_MODE_TRAP",
+            params,
+            what,
+            &[("CR2          ", cr2), ("RIP          ", rip), ("RSP          ", rsp)],
+        ),
+    }
+}
+
+/// Asks the kernel whether `addr` is in a kernel stack guard page; returns
+/// that stack's `(bottom, top)`.
+fn stack_guard_hit(addr: u64) -> Option<(u64, u64)> {
+    let hook = STACK_GUARD_HOOK.load(Ordering::Acquire);
+    if hook == 0 {
+        return None;
+    }
+    // SAFETY: only `set_stack_guard_hook` stores into STACK_GUARD_HOOK, always
+    // a `fn(u64) -> Option<(u64, u64)>`.
+    let f: fn(u64) -> Option<(u64, u64)> = unsafe { core::mem::transmute(hook) };
+    f(addr)
 }
 
 extern "x86-interrupt" fn exception_page_fault(
@@ -191,6 +240,12 @@ fn exception_page_fault_inner(
             f();
         }
         loop { x86_64::instructions::hlt(); }
+    }
+
+    // Kernel-mode fault in a guard page: a stack overflow whose #PF frame still
+    // fitted above the guard (otherwise it would have been a double fault).
+    if let Some(guard) = stack_guard_hit(cr2_raw) {
+        stop_on_trap(0xE, error.bits(), &frame, cr2_raw, Some(guard), "page fault");
     }
 
     panic!(
@@ -405,6 +460,19 @@ pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
     }
     let f: fn(u32, u32) -> u32 = unsafe { core::mem::transmute(hook) };
     f(number, args_ptr)
+}
+
+/// Register the kernel-stack guard-page lookup used by the #DF and #PF
+/// handlers to recognise a stack overflow. Returns the overflowed stack's
+/// `(bottom, top)` when the address is in a guard page.
+///
+/// The hook runs inside fault handlers: it must not lock, allocate or fault.
+///
+/// # IRQL
+/// Any level.
+pub fn set_stack_guard_hook(hook: Option<fn(u64) -> Option<(u64, u64)>>) {
+    let addr = hook.map_or(0usize, |f| f as usize);
+    STACK_GUARD_HOOK.store(addr, Ordering::Release);
 }
 
 /// Register a function to call when a user-mode page fault occurs.

@@ -45,6 +45,24 @@ pub unsafe fn init() {
 #[cfg(not(target_os = "none"))]
 pub unsafe fn init() {}
 
+/// Point SYSENTER_ESP at `top`: the kernel stack SYSENTER switches to.
+///
+/// # Safety
+/// `top` must be the 16-byte aligned top of a mapped, writable kernel stack
+/// that stays valid for as long as it is installed.
+///
+/// # IRQL
+/// Any level.
+#[cfg(target_os = "none")]
+pub unsafe fn set_entry_stack(top: u64) {
+    // SAFETY: writing IA32_SYSENTER_ESP only changes where the next SYSENTER
+    // lands; the caller guarantees `top` is a valid stack.
+    unsafe { msr::wrmsr(IA32_SYSENTER_ESP, top) };
+}
+
+#[cfg(not(target_os = "none"))]
+pub unsafe fn set_entry_stack(_top: u64) {}
+
 #[cfg(target_os = "none")]
 global_asm!(
     r#"
