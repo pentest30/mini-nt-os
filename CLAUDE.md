@@ -66,6 +66,6 @@ cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
 tools/qemu-run.sh          # construit le noyau et lance QEMU (OVMF, série sur stdio)
 ```
 
-`cargo check --workspace` échoue tant que `win32/*` et `directx/*` sont membres du workspace, et `cargo test -p ps` ne compile pas :
-ce sont deux corrections immédiates de M0. La CI cible exécute `cargo fmt --check`, `cargo clippy -D warnings`, les tests hôte et les
+`cargo check --workspace` passe, mais avec des warnings (il n'en faut aucun pour sortir de M0). `cargo test -p ps` ne compile pas
+et les doctests de `ke` échouent : ce sont deux corrections immédiates de M0. La CI cible exécute `cargo fmt --check`, `cargo clippy -D warnings`, les tests hôte et les
 scénarios QEMU de base.
