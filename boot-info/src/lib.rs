@@ -180,8 +180,8 @@ impl MemoryKind {
 
 /// GOP linear framebuffer descriptor filled by the bootloader.
 ///
-/// The kernel accesses the framebuffer at `hhdm_offset + base` (physical
-/// address mapped into the HHDM by the bootloader's identity map).
+/// The kernel accesses the framebuffer at `hhdm_offset + base`: the HHDM
+/// built by the bootloader covers [0, 4 GiB).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FramebufferInfo {

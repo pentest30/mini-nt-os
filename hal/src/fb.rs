@@ -408,9 +408,8 @@ pub fn init(info: &FramebufferInfo, hhdm_offset: u64) {
     // pixel writes are visible in the QEMU SDL window.
     bga_init_lfb(info.width, info.height);
 
-    // SAFETY: bootloader identity-maps [0, 4 GiB); framebuffer is below 4 GiB
-    //         on all supported platforms.  After HHDM activation, access via
-    //         hhdm_offset + phys is always valid.
+    // SAFETY: the HHDM maps [0, 4 GiB) and the framebuffer is below 4 GiB on
+    //         all supported platforms, so hhdm_offset + phys is valid.
     let virt = (hhdm_offset + info.base) as *mut u32;
     let cols = info.width  / GW;
     let rows = info.height / GH;

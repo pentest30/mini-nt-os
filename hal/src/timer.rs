@@ -116,7 +116,7 @@ pub unsafe fn init() {
     // Spurious Interrupt Vector Register (SVR):
     //   bit 8  = APIC software enable
     //   bits 7:0 = spurious vector (must be >= 0xF0 on some firmwares; 0xFF safe)
-    // SAFETY: APIC MMIO identity-mapped by bootloader.
+    // SAFETY: APIC MMIO is mapped at apic_reg(0) (identity map at this point).
     unsafe {
         let svr = apic_read(APIC_SVR);
         apic_write(APIC_SVR, svr | 0x100 | 0xFF);
@@ -268,7 +268,8 @@ pub fn set_resolution(hundred_ns: u32) {
     let ms = ((hundred_ns / 10_000) as u64).clamp(1, 15);
     let new_count = (ticks_per_ms * ms) as u32;
 
-    // SAFETY: APIC MMIO identity-mapped; caller guarantees PASSIVE_LEVEL.
+    // SAFETY: APIC MMIO is mapped at apic_reg(0) (HHDM); caller guarantees
+    // PASSIVE_LEVEL.
     unsafe { apic_write(APIC_TIMER_INIT, new_count); }
 
     log::info!(
