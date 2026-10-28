@@ -226,8 +226,9 @@ static WIN32_QUIT_PENDING: Mutex<Option<u32>> = Mutex::new(None);
 static WIN32_NEXT_CLASS_ATOM: Mutex<u32> = Mutex::new(1);
 static WIN32_CLASS_MAP: Mutex<[Option<(u32, u32, u32)>; 64]> = Mutex::new([None; 64]);
 static WIN32_WINDOW_PROC_MAP: Mutex<[Option<(u32, u32)>; 64]> = Mutex::new([None; 64]);
-/// Timer table: (hwnd, timer_id, period_ms, next_fire_ms)
-static WIN32_TIMER_TABLE: Mutex<[Option<(u32, u32, u32, u32)>; 16]> = Mutex::new([None; 16]);
+/// Win32 timer: (hwnd, timer_id, period_ms, next_fire_ms).
+type Win32Timer = (u32, u32, u32, u32);
+static WIN32_TIMER_TABLE: Mutex<[Option<Win32Timer>; 16]> = Mutex::new([None; 16]);
 /// Tick count (ms) at which WM_PAINT was last synthesised. Rate-limits paint messages to ~60 fps.
 static WIN32_LAST_PAINT_MS: Mutex<u32> = Mutex::new(0);
 
@@ -263,11 +264,11 @@ pub fn syscall_ctx_pub() -> Option<u64> {
 /// Serial trace of Win32 syscalls, compiled in by the `trace-syscalls` feature.
 fn trace_syscall(number: u32, args_ptr: u32) {
     // Trace Win32 UI syscalls (0x2010..0x201F) during message pump debugging.
-    if number >= 0x2010 && number <= 0x201F {
+    if (0x2010..=0x201F).contains(&number) {
         log::info!("[w32dbg] dispatch: syscall={:#x} args_ptr={:#x}", number, args_ptr);
     }
     // Trace all game syscalls (0x20xx range, skip known high-frequency ones)
-    if number >= 0x2000 && number != 0x2000 && number != 0x2012 && number != 0x2014 && number != 0x2015 {
+    if number > 0x2000 && number != 0x2012 && number != 0x2014 && number != 0x2015 {
         hal::serial::write_str("[sys] ");
         hal::serial::write_fmt(core::format_args!("{:#x}\n", number));
     }
@@ -1131,7 +1132,7 @@ fn nt_write_file(args_ptr: u32) -> u32 {
             return STATUS_SUCCESS;
         }
     }
-    if length <= 64 && length >= 7 {
+    if (7..=64).contains(&length) {
         let b0 = unsafe { (buffer_ptr as *const u8).read_unaligned() };
         let b1 = unsafe { (buffer_ptr as *const u8).add(1).read_unaligned() };
         let b2 = unsafe { (buffer_ptr as *const u8).add(2).read_unaligned() };
@@ -1626,22 +1627,20 @@ fn win32_kill_timer(args_ptr: u32) -> u32 {
 /// Called inside GetMessageA before checking the queue.
 fn fire_due_timers(now: u32) {
     let mut table = WIN32_TIMER_TABLE.lock();
-    for slot in table.iter_mut() {
-        if let Some(ref mut e) = slot {
-            let (hwnd, id, period_ms, next_fire) = *e;
-            if now.wrapping_sub(next_fire) < 0x8000_0000u32 {
-                // next_fire has been reached (wrapping-safe ≤ check)
-                push_win32_message(Win32Msg {
-                    hwnd,
-                    message: 0x0113, // WM_TIMER
-                    w_param: id,
-                    l_param: 0,
-                    time: now,
-                    pt_x: 0,
-                    pt_y: 0,
-                });
-                e.3 = now.wrapping_add(period_ms);
-            }
+    for e in table.iter_mut().flatten() {
+        let (hwnd, id, period_ms, next_fire) = *e;
+        if now.wrapping_sub(next_fire) < 0x8000_0000u32 {
+            // next_fire has been reached (wrapping-safe ≤ check)
+            push_win32_message(Win32Msg {
+                hwnd,
+                message: 0x0113, // WM_TIMER
+                w_param: id,
+                l_param: 0,
+                time: now,
+                pt_x: 0,
+                pt_y: 0,
+            });
+            e.3 = now.wrapping_add(period_ms);
         }
     }
 }
@@ -1859,7 +1858,7 @@ fn win32_load_library_a(args_ptr: u32) -> u32 {
     };
 
     // Strip path: take filename part only
-    let base_name = full.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(full);
+    let base_name = full.rsplit(['\\', '/']).next().unwrap_or(full);
 
     // 1. Already-loaded real DLLs (highest priority — avoids redundant loads)
     if let Some(b) = ps::loader::resolve_loaded_dll_base(base_name) {
@@ -1916,14 +1915,14 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
             Err(_) => continue,
         };
         let size = file.file_size as usize;
-        if size < 64 || size > 16 * 1024 * 1024 {
+        if !(64..=16 * 1024 * 1024).contains(&size) {
             log::warn!("[loadlib] {} size {} out of range", path, size);
             continue;
         }
 
         // Allocate contiguous physical pages from buddy allocator (bypasses heap).
         // MAX_ORDER=13 supports up to 2^12 = 4096 pages = 16 MB in one allocation.
-        let pages_needed = (size + 4095) / 4096;
+        let pages_needed = size.div_ceil(4096);
         let order = pages_needed.next_power_of_two().trailing_zeros() as usize;
         let hhdm_offset = {
             let guard = SYSCALL_CTX.lock();
@@ -1969,7 +1968,7 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
         // any DLLs that aren't already available as stubs or loaded DLLs.
         let deps = ps::loader::list_import_dlls(bytes);
         for dep in &deps {
-            let dep_base = dep.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(dep);
+            let dep_base = dep.rsplit(['\\', '/']).next().unwrap_or(dep);
             if ps::loader::resolve_stub_module_base(dep_base).is_some() {
                 continue;
             }
@@ -2420,8 +2419,8 @@ fn pump_serial_messages() {
 
 fn hash_ascii_fold(bytes: &[u8]) -> u32 {
     let mut h: u32 = 0x811C_9DC5;
-    for b in bytes.iter().copied() {
-        let c = if b'A' <= b && b <= b'Z' { b + 32 } else { b };
+    for b in bytes {
+        let c = b.to_ascii_lowercase();
         h ^= c as u32;
         h = h.wrapping_mul(0x0100_0193);
     }
@@ -3221,12 +3220,8 @@ fn ucrt_register_onexit_fn(args_ptr: u32) -> u32 {
         return 0;
     }
     // SAFETY: validated 12-byte table.
-    let (first, last, end) = unsafe {
-        (
-            (table as *mut u32).read_unaligned(),
-            (table.wrapping_add(4) as *mut u32).read_unaligned(),
-            (table.wrapping_add(8) as *mut u32).read_unaligned(),
-        )
+    let (last, end) = unsafe {
+        ((table.wrapping_add(4) as *mut u32).read_unaligned(), (table.wrapping_add(8) as *mut u32).read_unaligned())
     };
     if last < end {
         // SAFETY: last points into an allocated array (within end).
@@ -3236,7 +3231,7 @@ fn ucrt_register_onexit_fn(args_ptr: u32) -> u32 {
         }
     } else {
         // Table full or not initialized — allocate new backing array.
-        let cap = if first == 0 { 16u32 } else { 16 };
+        let cap = 16u32;
         let fake_args = [cap * 4];
         let new_arr = win32_malloc(fake_args.as_ptr() as u32 - 4);
         if new_arr == 0 {
@@ -3592,11 +3587,11 @@ fn ucrt_strtoul(args_ptr: u32) -> u32 {
     let mut val = 0u32;
     loop {
         let b = unsafe { (s.wrapping_add(i) as *const u8).read_unaligned() };
-        let digit = if b >= b'0' && b <= b'9' {
+        let digit = if b.is_ascii_digit() {
             (b - b'0') as u32
-        } else if b >= b'a' && b <= b'f' {
+        } else if (b'a'..=b'f').contains(&b) {
             (b - b'a' + 10) as u32
-        } else if b >= b'A' && b <= b'F' {
+        } else if (b'A'..=b'F').contains(&b) {
             (b - b'A' + 10) as u32
         } else {
             break;
@@ -3718,7 +3713,7 @@ fn eq_ascii_nocase_str(a: &str, b: &str) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    a.bytes().zip(b.bytes()).all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+    a.bytes().zip(b.bytes()).all(|(x, y)| x.eq_ignore_ascii_case(&y))
 }
 
 fn reg_alloc_fake_hkey(subkey_idx: usize) -> u32 {
@@ -3835,10 +3830,7 @@ fn advapi_reg_query_value_ex_a(args_ptr: u32) -> u32 {
         }
         // Check / write data size.
         if size_p != 0 && is_user_range(size_p, 4) {
-            let avail = match read_u32_user(size_p) {
-                Ok(v) => v,
-                Err(_) => 0,
-            };
+            let avail = read_u32_user(size_p).unwrap_or_default();
             let _ = write_u32_user(size_p, entry.data.len() as u32);
             if data_p != 0 {
                 if (avail as usize) < entry.data.len() {
@@ -4180,6 +4172,7 @@ fn vk_enum_physical_devices(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_props(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceProperties(VkPhysicalDevice, VkPhysicalDeviceProperties*)
     // VkPhysicalDeviceProperties (32-bit): 816 bytes
@@ -4296,6 +4289,7 @@ fn vk_get_phys_dev_features2(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_mem_props(args_ptr: u32) -> u32 {
     // VkPhysicalDeviceMemoryProperties (32-bit):
     //   +0x00: memoryTypeCount (u32)
@@ -4342,6 +4336,7 @@ fn vk_get_phys_dev_mem_props2(args_ptr: u32) -> u32 {
     vk_get_phys_dev_mem_props(fake_args.as_ptr() as u32)
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_queue_props(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceQueueFamilyProperties(physDev, pCount, pQueueFamilyProperties)
     // VkQueueFamilyProperties: queueFlags(u32), queueCount(u32), timestampValidBits(u32),
@@ -4373,6 +4368,7 @@ fn vk_get_phys_dev_queue_props(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_phys_dev_fmt_props(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceFormatProperties(physDev, VkFormat, VkFormatProperties*)
     // VkFormatProperties: linearTilingFeatures(u32), optimalTilingFeatures(u32), bufferFeatures(u32) = 12 bytes
@@ -4417,6 +4413,7 @@ fn vk_enum_dev_ext_props(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_surface_caps(args_ptr: u32) -> u32 {
     // VkSurfaceCapabilitiesKHR: 52 bytes
     //   minImageCount(u32), maxImageCount(u32), currentExtent(2×u32),
@@ -4446,6 +4443,7 @@ fn vk_get_surface_caps(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_surface_formats(args_ptr: u32) -> u32 {
     // vkGetPhysicalDeviceSurfaceFormatsKHR(physDev, surface, pFormatCount, pFormats)
     // VkSurfaceFormatKHR: format(u32) + colorSpace(u32) = 8 bytes
@@ -4499,6 +4497,7 @@ fn vk_get_surface_support(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_swapchain_images(args_ptr: u32) -> u32 {
     // vkGetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages)
     let p_count = match read_arg_u32(args_ptr, 2) {
@@ -4581,6 +4580,7 @@ fn vk_map_memory(args_ptr: u32) -> u32 {
     0
 }
 
+#[expect(clippy::identity_op, reason = "Vulkan structure fields are written at their offsets, 0 included")]
 fn vk_get_mem_reqs(args_ptr: u32) -> u32 {
     // vkGetImageMemoryRequirements / vkGetBufferMemoryRequirements
     // (device, image_or_buffer, VkMemoryRequirements*)
@@ -5046,11 +5046,9 @@ fn win32_get_file_size(args_ptr: u32) -> u32 {
     };
     // Look up file state
     let map = FILE_HANDLE_MAP.lock();
-    for slot in map.iter() {
-        if let Some((h, ref file)) = slot {
-            if *h == handle {
-                return file.file_size;
-            }
+    for (h, ref file) in map.iter().flatten() {
+        if *h == handle {
+            return file.file_size;
         }
     }
     0xFFFF_FFFF // INVALID_FILE_SIZE
@@ -5203,7 +5201,7 @@ fn win32_path_to_fat(path: &str) -> alloc::string::String {
         s = &s[2..];
     }
     // Strip leading slashes
-    s = s.trim_start_matches(|c: char| c == '\\' || c == '/');
+    s = s.trim_start_matches(['\\', '/']);
     // Strip "GhostRecon\" prefix if present (game dir name)
     if s.len() > 11 && s[..11].eq_ignore_ascii_case("GhostRecon\\") {
         s = &s[11..];

@@ -1,8 +1,8 @@
 //! KEVENT — NT kernel event object.
 //!
 //! Two variants (mirrors NT exactly):
-//!   - `NotificationEvent`  — stays signalled until manually reset;
-//!                            all waiters released at once.
+//!   - `NotificationEvent` — stays signalled until manually reset; all
+//!     waiters released at once.
 //!   - `SynchronizationEvent` — auto-resets after releasing ONE waiter.
 //!
 //! Used pervasively: I/O completion, process exit, timer expiry, etc.

@@ -61,11 +61,20 @@ impl KThread {
         unsafe {
             // SAFETY: rsp points at the top of our stack buffer and reserves
             // one 8-byte return slot used by the switch stub.
-            *(rsp as *mut u64) = entry as u64;
+            *(rsp as *mut u64) = entry as usize as u64;
         }
 
         Self {
-            context: KContext { rsp: rsp as u64, rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0, rip: entry as u64 },
+            context: KContext {
+                rsp: rsp as u64,
+                rbx: 0,
+                rbp: 0,
+                r12: 0,
+                r13: 0,
+                r14: 0,
+                r15: 0,
+                rip: entry as usize as u64,
+            },
             state: ThreadState::Initialized,
             priority,
             stack,
@@ -214,7 +223,7 @@ mod tests {
     #[test]
     fn new_thread_rsp_is_16_byte_aligned() {
         fn dummy_entry() -> ! {
-            loop {}
+            unreachable!("only its address is used")
         }
         let t = KThread::new(dummy_entry, 8);
         assert_eq!(t.context.rsp % 16, 0, "initial RSP must be 16-byte aligned");
@@ -223,7 +232,7 @@ mod tests {
     #[test]
     fn new_thread_entry_on_stack_top() {
         fn dummy_entry() -> ! {
-            loop {}
+            unreachable!("only its address is used")
         }
         let t = KThread::new(dummy_entry, 8);
         // SAFETY: rsp is a valid pointer into our owned stack buffer.
@@ -237,7 +246,7 @@ mod tests {
     #[test]
     fn new_thread_rsp_inside_stack_buffer() {
         fn dummy_entry() -> ! {
-            loop {}
+            unreachable!("only its address is used")
         }
         let t = KThread::new(dummy_entry, 8);
         let stack_start = t.stack.as_ptr() as u64;
@@ -254,7 +263,7 @@ mod tests {
     #[test]
     fn new_thread_callee_regs_zeroed() {
         fn dummy_entry() -> ! {
-            loop {}
+            unreachable!("only its address is used")
         }
         let t = KThread::new(dummy_entry, 8);
         assert_eq!(t.context.rbx, 0);
@@ -268,7 +277,7 @@ mod tests {
     #[test]
     fn new_thread_state_is_initialized() {
         fn dummy_entry() -> ! {
-            loop {}
+            unreachable!("only its address is used")
         }
         let t = KThread::new(dummy_entry, 8);
         assert_eq!(t.state, ThreadState::Initialized);

@@ -66,8 +66,7 @@ pub fn mark_kernel(regions: &mut [MemoryRegion], count: usize, kernel_start_pfn:
     // Simple approach: find the Usable region that contains the kernel and
     // split it. For Phase 1 (kernel at 1 MiB on a machine with contiguous
     // low RAM) this is always a single region split into at most 3 pieces.
-    for i in 0..count {
-        let r = &regions[i];
+    for r in regions.iter_mut().take(count) {
         if r.kind != MemoryKind::Usable {
             continue;
         }
@@ -82,8 +81,7 @@ pub fn mark_kernel(regions: &mut [MemoryRegion], count: usize, kernel_start_pfn:
             let after_pages = r_end - k_end;
 
             // Overwrite this slot with the KernelImage region.
-            regions[i] =
-                MemoryRegion { kind: MemoryKind::KernelImage, start_pfn: kernel_start_pfn, page_count: kernel_pages };
+            *r = MemoryRegion { kind: MemoryKind::KernelImage, start_pfn: kernel_start_pfn, page_count: kernel_pages };
 
             // Compact remaining: shift everything right and insert before/after.
             // For simplicity just mark and leave — the buddy allocator skips

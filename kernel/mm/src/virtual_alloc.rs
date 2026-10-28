@@ -172,8 +172,8 @@ pub fn allocate(
 /// Free virtual memory.
 ///
 /// - `MEM_RELEASE`   → remove VAD entry and decommit all pages.
-/// - `MEM_DECOMMIT`  → Phase 2: accepted but no per-page tracking yet,
-///                     so pages are not individually decommitted (no-op).
+/// - `MEM_DECOMMIT`  → Phase 2: accepted but no per-page tracking yet, so
+///   pages are not individually decommitted (no-op).
 pub fn free(
     vad: &mut VadTree,
     mapper: Option<&mut dyn PageMapper>,

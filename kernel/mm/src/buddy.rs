@@ -84,6 +84,12 @@ pub struct BuddyAllocator {
 
 pub static BUDDY: Mutex<Option<BuddyAllocator>> = Mutex::new(None);
 
+impl Default for BuddyAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuddyAllocator {
     /// Create a new empty allocator (no heap allocation).
     pub fn new() -> Self {
@@ -103,7 +109,7 @@ impl BuddyAllocator {
             let mut order = MAX_ORDER - 1;
             while order > 0 {
                 let block_size = 1u64 << order;
-                if pfn % block_size == 0 && pfn + block_size <= end {
+                if pfn.is_multiple_of(block_size) && pfn + block_size <= end {
                     break;
                 }
                 order -= 1;

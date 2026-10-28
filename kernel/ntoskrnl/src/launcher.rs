@@ -180,10 +180,7 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     // Set up PEB/TEB/stack for the game process
     let hhdm_offset = {
         let guard = crate::syscall::syscall_ctx_pub();
-        match guard {
-            Some(h) => h,
-            None => return None,
-        }
+        guard?
     };
 
     let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };

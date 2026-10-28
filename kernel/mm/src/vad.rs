@@ -171,6 +171,7 @@ fn align_up(addr: u64, align: u64) -> u64 {
 // T2-1c: find_free_gap — empty tree, with gaps, with adjacent allocations
 
 #[cfg(test)]
+#[expect(clippy::identity_op, reason = "page counts are written uniformly: 1 * PAGE, 3 * PAGE")]
 mod tests {
     use super::*;
 

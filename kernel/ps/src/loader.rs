@@ -375,8 +375,8 @@ fn read_cstr_at(ptr: *const u8, max: usize) -> Option<&'static str> {
 }
 
 fn fold_ascii_lower(mut b: u8) -> u8 {
-    if b >= b'A' && b <= b'Z' {
-        b = b + 32;
+    if b.is_ascii_uppercase() {
+        b += 32;
     }
     b
 }
@@ -1198,7 +1198,7 @@ pub fn register_loaded_dll(base: u32, size: u32, name: &str) {
         }
     };
     let mut map = LOADED_DLL_MAP.lock();
-    let base_name = name.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(name);
+    let base_name = name.rsplit(['\\', '/']).next().unwrap_or(name);
     let mut entry = DllEntry { base, size, entry_rva, name: [0u8; 32] };
     for (i, b) in base_name.bytes().take(31).enumerate() {
         entry.name[i] = b.to_ascii_uppercase();
@@ -1217,25 +1217,21 @@ pub fn register_loaded_dll(base: u32, size: u32, name: &str) {
 pub fn loaded_dll_entry_points(exclude_base: u32) -> alloc::vec::Vec<(u32, u32)> {
     let map = LOADED_DLL_MAP.lock();
     let mut out = alloc::vec::Vec::new();
-    for slot in map.iter() {
-        if let Some(e) = slot {
-            if e.entry_rva != 0 && e.base != exclude_base {
-                out.push((e.base, e.base.wrapping_add(e.entry_rva)));
-            }
+    for e in map.iter().flatten() {
+        if e.entry_rva != 0 && e.base != exclude_base {
+            out.push((e.base, e.base.wrapping_add(e.entry_rva)));
         }
     }
     out
 }
 
 pub fn resolve_loaded_dll_base(dll: &str) -> Option<u32> {
-    let base_name = dll.rsplit(|c: char| c == '\\' || c == '/').next().unwrap_or(dll);
+    let base_name = dll.rsplit(['\\', '/']).next().unwrap_or(dll);
     let map = LOADED_DLL_MAP.lock();
-    for slot in map.iter() {
-        if let Some(e) = slot {
-            let len = e.name.iter().position(|&b| b == 0).unwrap_or(32);
-            if eq_ascii_nocase(base_name, core::str::from_utf8(&e.name[..len]).unwrap_or("")) {
-                return Some(e.base);
-            }
+    for e in map.iter().flatten() {
+        let len = e.name.iter().position(|&b| b == 0).unwrap_or(32);
+        if eq_ascii_nocase(base_name, core::str::from_utf8(&e.name[..len]).unwrap_or("")) {
+            return Some(e.base);
         }
     }
     None
@@ -3387,7 +3383,7 @@ fn resolve_export_from_base(base: u32, name: &str) -> Option<u32> {
     // SAFETY: base is a user VA mapped by load_dll; kernel uses same page tables.
     unsafe {
         // Read e_lfanew (DOS header offset 0x3C)
-        let e_lfanew = (base.wrapping_add(0x3C) as *const u32).read_unaligned() as u32;
+        let e_lfanew = (base.wrapping_add(0x3C) as *const u32).read_unaligned();
         // Optional header is at NT headers + 4 (sig) + 20 (FileHeader)
         let opt_off = base.wrapping_add(e_lfanew).wrapping_add(24);
         // DataDirectory[0] = export table: at opt_off + 0x60
@@ -3631,12 +3627,12 @@ pub struct LoadedImage {
 /// - `image_data` — raw PE32 binary (e.g. from a file or embedded blob).
 /// - `vad`        — per-process VAD tree (updated with new entries).
 /// - `mapper`     — physical-page mapper; called for each committed page.
-/// - `force_base` — if `Some(addr)`, load at that address regardless of
-///                  the PE's preferred base. Pass `None` to use the PE's
-///                  `ImageBase` if available, or bottom-up otherwise.
+/// - `force_base` — if `Some(addr)`, load at that address regardless of the
+///   PE's preferred base. Pass `None` to use the PE's `ImageBase` if
+///   available, or bottom-up otherwise.
 #[inline(never)]
-pub fn load_image<'a>(
-    image_data: &'a [u8],
+pub fn load_image(
+    image_data: &[u8],
     vad: &mut mm::vad::VadTree,
     mapper: &mut dyn mm::virtual_alloc::PageMapper,
     force_base: Option<u64>,
@@ -4022,7 +4018,7 @@ pub fn setup_process(
                                                          // TickCount at 0x320 already zero-initialised above; timer ISR updates it.
                                                          // KiFastSystemCallRet at 0x300: single `ret` (0xC3) byte.
                                                          // SYSENTER IRETQ path returns here; `ret` pops the caller's return address.
-        (sud.add(0x300) as *mut u8).write(0xC3);
+        sud.add(0x300).write(0xC3);
         // SystemCallReturn at 0x308: pointer to KiFastSystemCallRet (= SUD + 0x300).
         (sud.add(0x308) as *mut u32).write_unaligned(SHARED_USER_DATA32_VA + 0x300);
         (sud.add(0x2D4) as *mut u32).write_unaligned(2);
@@ -4060,6 +4056,18 @@ pub fn setup_process(
     );
 
     Ok(ProcessContext { peb_addr: PEB32_VA, teb_addr: TEB32_VA, stack_top: USER_STACK_TOP, stack_limit })
+}
+
+// ── Helper: owned str for no_std test comparisons ────────────────────────────
+#[cfg(test)]
+trait ToOwnedStr {
+    fn to_owned_str(&self) -> alloc::string::String;
+}
+#[cfg(test)]
+impl ToOwnedStr for &str {
+    fn to_owned_str(&self) -> alloc::string::String {
+        alloc::string::String::from(*self)
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -4527,17 +4535,5 @@ mod tests {
         let mut vad = mm::vad::VadTree::new();
         let mut m = CountMapper { count: 0 };
         assert!(load_image(&bad_data, &mut vad, &mut m, None).is_err());
-    }
-}
-
-// ── Helper: owned str for no_std test comparisons ────────────────────────────
-#[cfg(test)]
-trait ToOwnedStr {
-    fn to_owned_str(&self) -> alloc::string::String;
-}
-#[cfg(test)]
-impl ToOwnedStr for &str {
-    fn to_owned_str(&self) -> alloc::string::String {
-        alloc::string::String::from(*self)
     }
 }

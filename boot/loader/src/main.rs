@@ -110,20 +110,20 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
         //     address is known; does not allocate any UEFI pages).
         let fb = query_gop(bt);
 
-        let boot_info_pages = (core::mem::size_of::<BootInfo>() + 4095) / 4096;
+        let boot_info_pages = core::mem::size_of::<BootInfo>().div_ceil(4096);
         let bi_phys = bt
             .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, boot_info_pages)
             .expect("bootloader: failed to allocate BootInfo pages") as u64;
         let boot_stack_pages = 16usize;
         let boot_stack_phys = bt
             .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, boot_stack_pages)
-            .expect("bootloader: failed to allocate boot stack pages") as u64;
+            .expect("bootloader: failed to allocate boot stack pages");
         let stack_top = boot_stack_phys + (boot_stack_pages as u64) * 4096;
 
         // B1: Collect UEFI physical memory map; mark kernel pages KernelImage.
         // Called after all UEFI allocations so the snapshot reflects everything.
         let (mut rgns, count) = memory::collect(bt);
-        memory::mark_kernel(&mut rgns, count, kp / 4096, (ks + 4095) / 4096);
+        memory::mark_kernel(&mut rgns, count, kp / 4096, ks.div_ceil(4096));
 
         (kp, ks, ke, rdp, rds, rgns, count, pml4, bi_phys, stack_top, fb)
         // `bt` borrow released here

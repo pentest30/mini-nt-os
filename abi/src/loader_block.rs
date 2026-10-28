@@ -72,6 +72,12 @@ pub struct BootInfo {
 /// ASCII "MINOBOOT" → `0x544F4F42_4F4E494D`.
 pub const BOOT_INFO_MAGIC: u64 = 0x544F4F42_4F4E494Du64;
 
+impl Default for BootInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BootInfo {
     /// Create a zeroed-out `BootInfo` with the magic pre-filled.
     /// The bootloader calls this, then populates each field.

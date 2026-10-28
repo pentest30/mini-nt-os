@@ -4,7 +4,7 @@
 //!   1. HAL        — GDT, IDT, serial, IRQL, APIC timer (enables interrupts)
 //!   2. Mm         — feed BootInfo memory map to buddy allocator
 //!   3. Heap (E1)  — map 256 × 4 KiB pages at HEAP_START via MmPageTables;
-//!                   init LockedHeap there
+//!      init LockedHeap there
 //!   4. Executive  — Ke, Ob, Ps, Io stubs (Phase 2)
 //!
 //! Heap virtual address: 0xFFFF_8800_0000_0000 (above the kernel image HHDM
@@ -213,7 +213,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         let kernel_start_pfn = boot_info.kernel_phys_base / 4096;
         // Use the same BSS-inclusive end we passed to mm::init() so the heap
         // frame skip covers the full kernel footprint (code + data + BSS).
-        let kernel_end_pfn = (kernel_end_phys + 4095) / 4096;
+        let kernel_end_pfn = kernel_end_phys.div_ceil(4096);
 
         // Ramdisk frame range — must not be handed to the heap allocator.
         // UEFI LOADER_DATA is BootloaderReclaimable (not Usable) so the buddy
@@ -221,7 +221,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         // mis-categorises regions we could corrupt the ramdisk before Io reads it.
         let ramdisk_start_pfn = boot_info.ramdisk_phys_base / 4096;
         let ramdisk_end_pfn = if boot_info.ramdisk_size > 0 {
-            (boot_info.ramdisk_phys_base + boot_info.ramdisk_size + 4095) / 4096
+            (boot_info.ramdisk_phys_base + boot_info.ramdisk_size).div_ceil(4096)
         } else {
             0
         };
@@ -773,6 +773,7 @@ fn fat_smoke_probe() {
 
 /// Build a minimal valid PE32 binary as a heap-allocated byte vector.
 /// Used only by `loader_demo`.
+#[expect(clippy::identity_op, reason = "data section offsets are listed uniformly, 0x00 included")]
 fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     // Same layout as tools/mkfat's TEST.EXE: the import directory (data +
     // 0x1A0) holds one descriptor and its all-zero terminator, then the INT.
@@ -1082,10 +1083,10 @@ fn kernel_shell(hhdm_offset: u64) {
         } else if cmd == "ls" || cmd.starts_with("ls ") {
             let path = if cmd.len() > 3 { cmd[3..].trim() } else { "/" };
             shell_ls(path);
-        } else if cmd.starts_with("cat ") {
-            shell_cat(cmd[4..].trim());
-        } else if cmd.starts_with("run ") {
-            shell_run(cmd[4..].trim(), hhdm_offset);
+        } else if let Some(path) = cmd.strip_prefix("cat ") {
+            shell_cat(path.trim());
+        } else if let Some(path) = cmd.strip_prefix("run ") {
+            shell_run(path.trim(), hhdm_offset);
         } else {
             shell_write("Unknown command. Type 'help'.\n");
         }
@@ -1125,6 +1126,9 @@ fn shell_read_line(buf: &mut [u8]) -> usize {
                 hal::fb::write_byte(b'\n');
                 break;
             }
+            // Not a match guard: on an empty line, DEL (0x7F) would fall
+            // through to the printable arm below.
+            #[expect(clippy::collapsible_match, reason = "a backspace on an empty line must be ignored")]
             0x08 | 0x7F => {
                 if n > 0 {
                     n -= 1;
@@ -1243,7 +1247,7 @@ fn shell_run(path: &str, hhdm_offset: u64) {
 fn shell_load_and_spawn(fat_path: &str, hhdm_offset: u64) -> Option<usize> {
     let mut file = io_manager::open_fat_file(fat_path).ok()?;
     let size = file.file_size as usize;
-    if size < 64 || size > 512 * 1024 {
+    if !(64..=512 * 1024).contains(&size) {
         log::warn!("shell_load_and_spawn: bad size {}", size);
         return None;
     }

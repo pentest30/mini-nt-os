@@ -47,6 +47,12 @@ pub struct ReadyQueue {
     len: usize,
 }
 
+impl Default for ReadyQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReadyQueue {
     pub const fn new() -> Self {
         Self { buf: [0; MAX_READY], head: 0, len: 0 }
@@ -137,6 +143,12 @@ pub struct SchedulerInner {
     pub idle_tid: usize, // index of the idle thread (never terminates)
     pub ready: ReadyQueue,
     pub tick_count: u64,
+}
+
+impl Default for SchedulerInner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SchedulerInner {

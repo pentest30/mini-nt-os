@@ -334,7 +334,7 @@ extern "x86-interrupt" fn exception_gpf(frame: InterruptStackFrame, error: u64) 
         super::serial::write_str(" ");
         let addr = rip.wrapping_add(off);
         // Only read if address looks plausible
-        if addr < 0x8000_0000_0000_0000 || addr >= 0xFFFF_8000_0000_0000 {
+        if !(0x8000_0000_0000_0000..0xFFFF_8000_0000_0000).contains(&addr) {
             let b = unsafe { core::ptr::read_volatile(addr as *const u8) };
             serial_hex8(b);
         } else {
@@ -399,7 +399,7 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     // Log "[alive] tick=N\n" every 1000 ms using the ISR-safe serial writer.
     // We cannot use log::info! here (heap alloc forbidden at IRQL >= DISPATCH).
     let ms = super::timer::get_tick_count();
-    if ms % 1000 == 0 {
+    if ms.is_multiple_of(1000) {
         super::serial::write_str_isr("[alive] tick=");
         let mut buf = [0u8; 20];
         let mut n = ms;
@@ -456,6 +456,10 @@ pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
     f(number, args_ptr)
 }
 
+/// Kernel-stack guard lookup: the `(bottom, top)` of the stack whose guard
+/// page holds the address, if any.
+pub type StackGuardHook = fn(u64) -> Option<(u64, u64)>;
+
 /// Register the kernel-stack guard-page lookup used by the #DF and #PF
 /// handlers to recognise a stack overflow. Returns the overflowed stack's
 /// `(bottom, top)` when the address is in a guard page.
@@ -464,7 +468,7 @@ pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
 ///
 /// # IRQL
 /// Any level.
-pub fn set_stack_guard_hook(hook: Option<fn(u64) -> Option<(u64, u64)>>) {
+pub fn set_stack_guard_hook(hook: Option<StackGuardHook>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     STACK_GUARD_HOOK.store(addr, Ordering::Release);
 }

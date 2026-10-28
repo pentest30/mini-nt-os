@@ -341,7 +341,7 @@ impl Console {
             if px + gw > self.width {
                 break;
             }
-            if ch >= 0x20 && ch < 0x80 {
+            if (0x20..0x80).contains(&ch) {
                 self.draw_glyph_px(px, py, ch, fg, bg, scale);
             }
             px += gw;

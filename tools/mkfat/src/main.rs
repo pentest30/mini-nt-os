@@ -66,7 +66,7 @@ fn fat_short_name(s: &str) -> Result<[u8; 11], &'static str> {
     if base.is_empty() || base.len() > 8 {
         return Err("base name must be 1–8 chars");
     }
-    if ext.map_or(false, |e| e.len() > 3) {
+    if ext.is_some_and(|e| e.len() > 3) {
         return Err("extension must be ≤3 chars");
     }
     out[..base.len()].copy_from_slice(base.as_bytes());
@@ -121,14 +121,14 @@ fn build_fat_image(files: &[([u8; 11], Vec<u8>)]) -> Vec<u8> {
     let mut cluster_counts: Vec<u32> = Vec::with_capacity(files.len());
 
     for (_, data) in files {
-        let n = ((data.len() + SECTOR - 1) / SECTOR).max(1) as u32;
+        let n = data.len().div_ceil(SECTOR).max(1) as u32;
         first_clusters.push(next_cluster);
         cluster_counts.push(n);
         next_cluster += n;
     }
 
     // Total FAT entries needed: 0..next_cluster
-    let fat_sectors = ((next_cluster as usize * 4) + SECTOR - 1) / SECTOR;
+    let fat_sectors = (next_cluster as usize * 4).div_ceil(SECTOR);
     let fat_sectors = fat_sectors.max(1) as u32;
 
     let reserved_sectors: u32 = 1;
@@ -219,6 +219,7 @@ fn build_fat_image(files: &[([u8; 11], Vec<u8>)]) -> Vec<u8> {
 //   NtAllocateVirtualMemory (0x0011)
 //   NtTerminateProcess (0x00C2) then JMP$
 
+#[expect(clippy::identity_op, reason = "data section offsets are listed uniformly, 0x00 included")]
 fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     use pe32::*;
 
@@ -685,6 +686,7 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     buf
 }
 
+#[expect(clippy::identity_op, reason = "data section offsets are listed uniformly, 0x00 included")]
 fn build_cmd_pe32(image_base: u32, entry_rva: u32) -> Vec<u8> {
     use pe32::*;
 

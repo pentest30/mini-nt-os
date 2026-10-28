@@ -204,6 +204,7 @@ pub unsafe fn init() {
 ///
 /// # IRQL: CLOCK_LEVEL (hardware interrupt context)
 #[inline]
+#[expect(clippy::identity_op, reason = "KUSER_SHARED_DATA fields are written at their offsets, 0x000 included")]
 pub fn tick() {
     let ticks = TICK_COUNT.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
     let sud = SHARED_USER_DATA_VA.load(Ordering::Relaxed);

@@ -87,9 +87,9 @@ pub unsafe fn build(bt: &BootServices) -> PhysAddr {
 /// using 2 MiB huge pages. Both `virt_start` and `phys_start` must be 2 MiB
 /// aligned; `size` must be a multiple of 2 MiB.
 unsafe fn build_range(bt: &BootServices, l4_phys: PhysAddr, virt_start: u64, phys_start: u64, size: u64) {
-    debug_assert!(virt_start % HUGE_2M == 0);
-    debug_assert!(phys_start % HUGE_2M == 0);
-    debug_assert!(size % HUGE_2M == 0);
+    debug_assert!(virt_start.is_multiple_of(HUGE_2M));
+    debug_assert!(phys_start.is_multiple_of(HUGE_2M));
+    debug_assert!(size.is_multiple_of(HUGE_2M));
 
     let n_pages = size / HUGE_2M;
 

@@ -23,10 +23,8 @@ const PS2_STATUS: u16 = 0x64;
 // ── ISR-safe key ring buffer ─────────────────────────────────────────────────
 // Lock-free SPSC ring: ISR writes (producer), message queue reads (consumer).
 const KEY_BUF_SIZE: usize = 64;
-static KEY_BUF: [core::sync::atomic::AtomicU8; KEY_BUF_SIZE] = {
-    const ZERO: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
-    [ZERO; KEY_BUF_SIZE]
-};
+static KEY_BUF: [core::sync::atomic::AtomicU8; KEY_BUF_SIZE] =
+    [const { core::sync::atomic::AtomicU8::new(0) }; KEY_BUF_SIZE];
 static KEY_HEAD: AtomicUsize = AtomicUsize::new(0); // ISR writes here
 static KEY_TAIL: AtomicUsize = AtomicUsize::new(0); // consumer reads here
 

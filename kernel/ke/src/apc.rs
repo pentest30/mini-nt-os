@@ -28,6 +28,12 @@ pub struct ApcQueue {
     user: VecDeque<Kapc>,
 }
 
+impl Default for ApcQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ApcQueue {
     pub const fn new() -> Self {
         Self { kernel: VecDeque::new(), user: VecDeque::new() }

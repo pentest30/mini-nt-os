@@ -29,6 +29,12 @@ pub struct HandleTable {
     entries: Vec<Option<Entry>>,
 }
 
+impl Default for HandleTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HandleTable {
     pub fn new() -> Self {
         Self { entries: Vec::new() }

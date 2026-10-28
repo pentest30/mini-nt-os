@@ -4,6 +4,13 @@ pub const IA32_SYSENTER_CS: u32 = 0x174;
 pub const IA32_SYSENTER_ESP: u32 = 0x175;
 pub const IA32_SYSENTER_EIP: u32 = 0x176;
 
+/// Reads model-specific register `msr`.
+///
+/// # Safety
+/// The CPU must implement `msr`, or `rdmsr` raises #GP.
+///
+/// # IRQL
+/// Any level.
 #[inline]
 pub unsafe fn rdmsr(msr: u32) -> u64 {
     let lo: u32;
@@ -20,6 +27,14 @@ pub unsafe fn rdmsr(msr: u32) -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
+/// Writes `value` to model-specific register `msr`.
+///
+/// # Safety
+/// The CPU must implement `msr` and accept `value` (else #GP), and the
+/// caller answers for what the new value does (e.g. the SYSENTER entry).
+///
+/// # IRQL
+/// Any level.
 #[inline]
 pub unsafe fn wrmsr(msr: u32, value: u64) {
     let lo = value as u32;

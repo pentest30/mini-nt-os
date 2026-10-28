@@ -191,7 +191,7 @@ fn load_file(bt: &BootServices, filename: &CStr16, require_present: bool) -> Opt
         assert!(file_size > 0, "loader: file is empty");
 
         // ── Allocate physical pages ───────────────────────────────────────────
-        let page_count = (file_size + 4095) / 4096;
+        let page_count = file_size.div_ceil(4096);
         let phys_base = bt
             .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, page_count)
             .expect("loader: failed to allocate pages");

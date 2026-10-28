@@ -188,7 +188,7 @@ fn fat_next(base_ptr: *const u8, fat_byte_offset: usize, cluster: u32) -> Result
     let raw = unsafe {
         u32::from_le_bytes([*base_ptr.add(off), *base_ptr.add(off + 1), *base_ptr.add(off + 2), *base_ptr.add(off + 3)])
     } & 0x0FFF_FFFF;
-    if raw >= 0x0FFF_FFF8 || raw < 2 {
+    if !(2..0x0FFF_FFF8).contains(&raw) {
         Err(FatError::NotFound) // EOF or invalid
     } else {
         Ok(raw)
