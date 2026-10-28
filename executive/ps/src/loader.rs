@@ -4185,46 +4185,133 @@ mod tests {
         assert_eq!(Pe32::parse(&data).unwrap_err(), PeError::NotPe32);
     }
 
-    // ── T4-2: load_image — MockMapper + VadTree ───────────────────────────────
+    // ── T4-2: load_image — HostMapper + VadTree ───────────────────────────────
     //
-    // `load_image` writes to the virtual address space via the PageMapper.
-    // In tests we intercept those writes with a BackedMapper that allocates
-    // real host heap memory so section data copies can actually happen.
+    // `load_image` copies headers, sections, stub code and IAT entries straight
+    // to their user VAs, which is valid in the kernel because the target address
+    // space is current. On the host those VAs are unmapped, so `HostMapper` backs
+    // every committed page with real memory mapped at that exact address.
 
-    struct BackedMapper {
-        committed: alloc::vec::Vec<u64>,
-        // Each committed page gets a heap-allocated backing buffer.
-        // The pointer is the virtual address; we store (va, *mut u8) pairs.
-        backing: alloc::vec::Vec<(u64, alloc::boxed::Box<[u8; 4096]>)>,
+    extern crate std;
+
+    /// Fixed-address mappings in the host test process, in 64 KiB regions
+    /// (the Windows allocation granularity; Linux uses the same unit).
+    mod host_mem {
+        use core::ffi::c_void;
+
+        pub const REGION: u64 = 0x1_0000;
+
+        #[cfg(target_os = "linux")]
+        unsafe extern "C" {
+            fn mmap(addr: *mut c_void, len: usize, prot: i32, flags: i32, fd: i32, off: i64) -> *mut c_void;
+            fn munmap(addr: *mut c_void, len: usize) -> i32;
+        }
+
+        /// Maps a zeroed read-write region at exactly `va`; fails if anything is already there.
+        #[cfg(target_os = "linux")]
+        pub fn map_region(va: u64) -> bool {
+            const PROT_READ_WRITE: i32 = 0x1 | 0x2;
+            const MAP_PRIVATE_ANONYMOUS: i32 = 0x02 | 0x20;
+            const MAP_FIXED_NOREPLACE: i32 = 0x10_0000;
+            const MAP_FAILED: usize = usize::MAX;
+            // SAFETY: MAP_FIXED_NOREPLACE never replaces an existing mapping, so no
+            // memory the test process already uses can be affected.
+            let p = unsafe {
+                mmap(va as *mut c_void, REGION as usize, PROT_READ_WRITE,
+                     MAP_PRIVATE_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0)
+            };
+            if p as u64 == va {
+                return true;
+            }
+            if p as usize != MAP_FAILED {
+                // Kernels older than 4.17 treat the flag as a hint and map elsewhere.
+                // SAFETY: `p` was just mapped by the call above and is not used.
+                unsafe { munmap(p, REGION as usize) };
+            }
+            false
+        }
+
+        #[cfg(target_os = "linux")]
+        pub fn unmap_region(va: u64) {
+            // SAFETY: `va` is a region `map_region` mapped; its owner no longer uses it.
+            unsafe { munmap(va as *mut c_void, REGION as usize) };
+        }
+
+        #[cfg(windows)]
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn VirtualAlloc(addr: *mut c_void, size: usize, ty: u32, protect: u32) -> *mut c_void;
+            fn VirtualFree(addr: *mut c_void, size: usize, ty: u32) -> i32;
+        }
+
+        /// Maps a zeroed read-write region at exactly `va`; fails if anything is already there.
+        #[cfg(windows)]
+        pub fn map_region(va: u64) -> bool {
+            const MEM_COMMIT_RESERVE: u32 = 0x1000 | 0x2000;
+            const PAGE_READWRITE: u32 = 0x04;
+            // SAFETY: VirtualAlloc at a fixed address fails rather than replacing an
+            // existing allocation.
+            let p = unsafe { VirtualAlloc(va as *mut c_void, REGION as usize, MEM_COMMIT_RESERVE, PAGE_READWRITE) };
+            p as u64 == va
+        }
+
+        #[cfg(windows)]
+        pub fn unmap_region(va: u64) {
+            const MEM_RELEASE: u32 = 0x8000;
+            // SAFETY: `va` is a region `map_region` allocated; its owner no longer uses it.
+            unsafe { VirtualFree(va as *mut c_void, 0, MEM_RELEASE) };
+        }
+
+        #[cfg(not(any(target_os = "linux", windows)))]
+        pub fn map_region(_va: u64) -> bool { false }
+
+        #[cfg(not(any(target_os = "linux", windows)))]
+        pub fn unmap_region(_va: u64) {}
     }
 
-    impl BackedMapper {
-        fn new() -> Self { Self { committed: alloc::vec![], backing: alloc::vec![] } }
+    /// Serialises the tests that load images: they all map the same fixed VAs
+    /// (image bases, stub modules) in the one test process.
+    static HOST_VA_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Page mapper that backs every committed VA with host memory at that address,
+    /// and releases it when dropped.
+    struct HostMapper {
+        committed: usize,
+        regions: alloc::vec::Vec<u64>,
+        _lock: std::sync::MutexGuard<'static, ()>,
     }
 
-    impl mm::virtual_alloc::PageMapper for BackedMapper {
+    impl HostMapper {
+        fn new() -> Self {
+            let lock = HOST_VA_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            Self { committed: 0, regions: alloc::vec![], _lock: lock }
+        }
+    }
+
+    impl mm::virtual_alloc::PageMapper for HostMapper {
         fn commit_page(&mut self, virt: u64, _w: bool, _x: bool, _u: bool)
             -> Result<(), &'static str>
         {
-            self.committed.push(virt);
-            // Allocate a zero-filled page and register its address.
-            // We then redirect the virtual address to this buffer by
-            // overwriting the target memory (works only in test because
-            // the test runner IS the host process — no real page tables).
-            let page = alloc::boxed::Box::new([0u8; 4096]);
-            // Point the "virtual address" at our host buffer.
-            // SAFETY: test-only; the VA space is the host process's own.
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    page.as_ptr(),
-                    virt as *mut u8,
-                    4096,
-                );
+            let region = virt & !(host_mem::REGION - 1);
+            if !self.regions.contains(&region) {
+                if !host_mem::map_region(region) {
+                    return Err("HostMapper: fixed-address host mapping failed");
+                }
+                self.regions.push(region);
             }
-            self.backing.push((virt, page));
+            self.committed += 1;
             Ok(())
         }
         fn decommit_page(&mut self, _virt: u64) -> Result<(), &'static str> { Ok(()) }
+    }
+
+    impl Drop for HostMapper {
+        fn drop(&mut self) {
+            // Runs before the fields drop, so the regions go before the lock is released.
+            for &region in &self.regions {
+                host_mem::unmap_region(region);
+            }
+        }
     }
 
     // Simpler mock that only counts calls, used where we don't copy section data.
@@ -4236,14 +4323,25 @@ mod tests {
         fn decommit_page(&mut self, _v: u64) -> Result<(), &'static str> { Ok(()) }
     }
 
+    /// Calls `load_image` with a fresh out-slot and returns it on success.
+    fn load(
+        data: &[u8],
+        vad: &mut mm::vad::VadTree,
+        mapper: &mut dyn mm::virtual_alloc::PageMapper,
+        force_base: Option<u64>,
+    ) -> Result<LoadedImage, &'static str> {
+        let mut img = LoadedImage { image_base: 0, entry_point: 0, image_size: 0 };
+        load_image(data, &mut img, vad, mapper, force_base).map(|()| img)
+    }
+
     #[test]
     fn load_image_returns_correct_entry_point() {
         let data = make_pe32(0x0040_0000, 0x1234,
                              &[(".text", 0x1000, 0x100, SCN_MEM_EXECUTE | SCN_MEM_READ)],
                              &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = CountMapper { count: 0 };
-        let img = load_image(&data, &mut vad, &mut m, Some(0x0040_0000))
+        let mut m   = HostMapper::new();
+        let img = load(&data, &mut vad, &mut m, Some(0x0040_0000))
             .expect("load must succeed");
         assert_eq!(img.image_base,  0x0040_0000);
         assert_eq!(img.entry_point, 0x0040_0000 + 0x1234);
@@ -4255,8 +4353,8 @@ mod tests {
                              &[(".text", 0x1000, 0x200, SCN_MEM_EXECUTE | SCN_MEM_READ)],
                              &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = CountMapper { count: 0 };
-        let img = load_image(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
+        let mut m   = HostMapper::new();
+        let img = load(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
         assert!(vad.find(img.image_base).is_some(), "VAD entry for image must exist");
     }
 
@@ -4269,19 +4367,17 @@ mod tests {
                              &[(".text", 0x1000, 0x200, SCN_MEM_EXECUTE | SCN_MEM_READ)],
                              &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = CountMapper { count: 0 };
-        load_image(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
-        // image_size is 0 in our test PE → allocate rounds to one page minimum
-        // (size_of_image = 0 → skipped, but we still get the VAD entry)
-        // Just verify no panic.
+        let mut m   = HostMapper::new();
+        load(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
+        assert!(m.committed > 0, "load_image must commit pages for the image");
     }
 
     #[test]
     fn load_image_force_base_overrides_preferred() {
         let data = make_pe32(0x0040_0000, 0x1000, &[], &[]);
         let mut vad = mm::vad::VadTree::new();
-        let mut m   = CountMapper { count: 0 };
-        let img = load_image(&data, &mut vad, &mut m, Some(0x0200_0000)).unwrap();
+        let mut m   = HostMapper::new();
+        let img = load(&data, &mut vad, &mut m, Some(0x0200_0000)).unwrap();
         assert_eq!(img.image_base, 0x0200_0000, "force_base must be honoured");
         assert_eq!(img.entry_point, 0x0200_0000 + 0x1000);
     }
@@ -4291,7 +4387,7 @@ mod tests {
         let bad_data = alloc::vec![0u8; 64]; // too small / no MZ
         let mut vad = mm::vad::VadTree::new();
         let mut m   = CountMapper { count: 0 };
-        assert!(load_image(&bad_data, &mut vad, &mut m, None).is_err());
+        assert!(load(&bad_data, &mut vad, &mut m, None).is_err());
     }
 }
 
