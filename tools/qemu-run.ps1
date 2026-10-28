@@ -38,79 +38,26 @@ function Resolve-CommandPath {
     return $null
 }
 
-function Resolve-RustLlvmObjcopy {
-    $rustc = Resolve-CommandPath -Names @("rustc")
-    if (-not $rustc) {
-        return $null
-    }
-
-    $sysroot = (& $rustc --print sysroot).Trim()
-    if ([string]::IsNullOrWhiteSpace($sysroot)) {
-        return $null
-    }
-
-    $hostLine = (& $rustc -vV | Where-Object { $_ -like "host:*" } | Select-Object -First 1)
-    if (-not $hostLine) {
-        return $null
-    }
-
-    $hostTriple = ($hostLine -replace "^host:\s*", "").Trim()
-    if ([string]::IsNullOrWhiteSpace($hostTriple)) {
-        return $null
-    }
-
-    $candidates = @(
-        (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\llvm-objcopy.exe"),
-        (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\llvm-objcopy")
-    )
-
-    return Resolve-FirstExistingPath -Candidates $candidates
-}
-
-function Ensure-KernelBin {
+function Resolve-KernelElf {
     param(
         [string]$RepoRoot,
         [string]$ProfileDir
     )
 
+    # The bootloader loads the kernel ELF as is (ADR-014): no objcopy step.
     $targetRoot = Join-Path $RepoRoot "target"
-    $kernelTargetDir = Join-Path $targetRoot "x86_64-unknown-none\$ProfileDir"
-    $kernelBinPath = Join-Path $kernelTargetDir "kernel.bin"
-
-    if (Test-Path -LiteralPath $kernelBinPath) {
-        return $kernelBinPath
-    }
-
     $elfCandidates = @(
-        (Join-Path $kernelTargetDir "kernel"),
+        (Join-Path $targetRoot "x86_64-unknown-none\$ProfileDir\kernel"),
         (Join-Path $targetRoot "x86_64-unknown-none\release\kernel"),
         (Join-Path $targetRoot "x86_64-unknown-none\debug\kernel")
     )
 
     $kernelElfPath = Resolve-FirstExistingPath -Candidates $elfCandidates
     if (-not $kernelElfPath) {
-        throw "kernel.bin not found, and no kernel ELF artifact found. Expected one of: $($elfCandidates -join ', ')."
+        throw "Kernel ELF not found. Expected one of: $($elfCandidates -join ', ')."
     }
 
-    $objcopy = Resolve-CommandPath -Names @("rust-objcopy", "llvm-objcopy")
-    if (-not $objcopy) {
-        $objcopy = Resolve-RustLlvmObjcopy
-    }
-    if (-not $objcopy) {
-        throw "No objcopy found. Install cargo-binutils (rust-objcopy) or ensure rustup llvm-tools are installed."
-    }
-
-    Write-Host "Generating kernel.bin from $kernelElfPath via $objcopy..."
-    & $objcopy -O binary $kernelElfPath $kernelBinPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "objcopy failed with exit code $LASTEXITCODE while generating kernel.bin."
-    }
-
-    if (-not (Test-Path -LiteralPath $kernelBinPath)) {
-        throw "objcopy reported success but kernel.bin was not created at $kernelBinPath."
-    }
-
-    return $kernelBinPath
+    return $kernelElfPath
 }
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -157,7 +104,7 @@ try {
         throw "Bootloader EFI artifact not found: $bootloaderEfi"
     }
 
-    $kernelBin = Ensure-KernelBin -RepoRoot $repoRoot -ProfileDir $profileDir
+    $kernelElf = Resolve-KernelElf -RepoRoot $repoRoot -ProfileDir $profileDir
 
     $workDir = Join-Path $repoRoot "target\qemu-run"
     $espDir = Join-Path $workDir "esp"
@@ -171,7 +118,7 @@ try {
     New-Item -ItemType Directory -Path $efiBootDir -Force | Out-Null
 
     Copy-Item -LiteralPath $bootloaderEfi -Destination (Join-Path $efiBootDir "BOOTX64.EFI") -Force
-    Copy-Item -LiteralPath $kernelBin -Destination (Join-Path $espDir "kernel.bin") -Force
+    Copy-Item -LiteralPath $kernelElf -Destination (Join-Path $espDir "kernel.elf") -Force
 
     Write-Host "Starting QEMU..."
     Write-Host "QEMU: $resolvedQemu"

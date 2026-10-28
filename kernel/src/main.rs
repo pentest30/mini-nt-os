@@ -135,8 +135,8 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
 ///
 /// # IRQL: HIGH on entry; drops to PASSIVE after `hal::init()`.
 ///
-/// Placed in `.text.entry` so the linker script can guarantee it sits at
-/// the very first byte of the kernel flat binary (physical 0x0010_0000).
+/// Placed in `.text.entry`, first in the text segment. The bootloader jumps
+/// here through the ELF entry point, at the kernel's link address.
 #[no_mangle]
 #[link_section = ".text.entry"]
 pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
@@ -190,10 +190,10 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     // ── 2. Mm: feed buddy allocator from BootInfo memory map ─────────────────
     // Pass the true kernel physical end (including BSS) so the buddy never
     // hands out BSS frames as page-table pages, which would alias statics.
-    //
-    // SAFETY: __bss_end is a linker symbol; taking its address is valid.
-    let bss_end_phys = unsafe { &__bss_end as *const u8 as u64 };
-    mm::init(boot_info, bss_end_phys);
+    // The bootloader laid the whole ELF image, BSS included, out in one block.
+    let kernel_end_phys = boot_info.kernel_phys_base + boot_info.kernel_size;
+    mm::init(boot_info, kernel_end_phys);
+    check_kernel_wx(boot_info.hhdm_offset);
 
     // ── 3. Heap (E1): pre-allocate all frames, then map them ─────────────────
     //
@@ -209,7 +209,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         let kernel_start_pfn = boot_info.kernel_phys_base / 4096;
         // Use the same BSS-inclusive end we passed to mm::init() so the heap
         // frame skip covers the full kernel footprint (code + data + BSS).
-        let kernel_end_pfn = (bss_end_phys + 4095) / 4096;
+        let kernel_end_pfn = (kernel_end_phys + 4095) / 4096;
 
         // Ramdisk frame range — must not be handed to the heap allocator.
         // UEFI LOADER_DATA is BootloaderReclaimable (not Usable) so the buddy
@@ -481,6 +481,53 @@ fn heap_self_test() {
     log::info!(
         "[smoke] heap self-test ok: {} rounds, peak {} KiB, back to {} bytes used",
         ROUNDS, (peak - used_before) / 1024, used_before,
+    );
+}
+
+/// Checks that the kernel image is W^X as the bootloader mapped it (ADR-014):
+/// every page of .text is RX, of .rodata R, of .data/.bss RW + NX, and the CPU
+/// enforces it (CR0.WP, EFER.NXE). Prints `[smoke] kernel W^X ok`, which the
+/// smoke test requires.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn check_kernel_wx(hhdm_offset: u64) {
+    use x86_64::registers::control::{Cr0, Cr0Flags};
+    use x86_64::registers::model_specific::{Efer, EferFlags};
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    extern "C" {
+        static __text_start: u8;
+        static __text_end: u8;
+        static __rodata_start: u8;
+        static __rodata_end: u8;
+        static __data_start: u8;
+        static __data_end: u8;
+    }
+
+    assert!(Cr0::read().contains(Cr0Flags::WRITE_PROTECT), "W^X: CR0.WP is off");
+    assert!(Efer::read().contains(EferFlags::NO_EXECUTE_ENABLE), "W^X: EFER.NXE is off");
+
+    // SAFETY: hhdm_offset is the bootloader's HHDM; CR3 holds the kernel tables.
+    let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
+    let check = |name: &str, start: *const u8, end: *const u8, writable: bool, executable: bool| {
+        let (start, end) = (start as u64, end as u64);
+        for va in (start..end).step_by(4096) {
+            let (_, flags) = pt
+                .translate_flags(VirtAddr::new(va))
+                .unwrap_or_else(|| panic!("W^X: {} page {:#x} is not mapped", name, va));
+            assert_eq!(flags.contains(F::WRITABLE), writable, "W^X: {} page {:#x} writable", name, va);
+            assert_eq!(!flags.contains(F::NO_EXECUTE), executable, "W^X: {} page {:#x} executable", name, va);
+        }
+        (end - start) / 4096
+    };
+    // Only the addresses of the linker symbols are taken, never their contents.
+    let text = check(".text", core::ptr::addr_of!(__text_start), core::ptr::addr_of!(__text_end), false, true);
+    let rodata = check(".rodata", core::ptr::addr_of!(__rodata_start), core::ptr::addr_of!(__rodata_end), false, false);
+    let data = check(".data/.bss", core::ptr::addr_of!(__data_start), core::ptr::addr_of!(__data_end), true, false);
+    log::info!(
+        "[smoke] kernel W^X ok: .text {} pages RX, .rodata {} pages R, .data/.bss {} pages RW+NX at {:#x}",
+        text, rodata, data, kernel_main as *const () as u64,
     );
 }
 

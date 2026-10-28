@@ -1,9 +1,9 @@
 //! Bootloader — UEFI entry point.
 //!
 //! Boot sequence:
-//!   B3 — Load `kernel.bin` from the ESP into physical 0x0010_0000.
+//!   B3 — Load `kernel.elf` from the ESP: segments into one physical block.
 //!   B1 — Collect UEFI memory map; classify and merge regions.
-//!   B2 — Build 4-level page tables (identity [0, 4 GiB) + HHDM).
+//!   B2 — Build 4-level page tables (identity [0, 4 GiB) + HHDM + kernel W^X).
 //!   B4 — Fill `BootInfo`, exit UEFI boot services, switch CR3, jump.
 //!
 //! Build target: x86_64-unknown-uefi
@@ -19,19 +19,14 @@ mod paging;
 
 use boot_info::{BootInfo, FramebufferInfo, PixelFormat};
 use core::arch::asm;
-use loader::KERNEL_PHYS_BASE;
-use paging::HHDM_OFFSET;
 use uefi::{entry, Handle, Status, table::{Boot, SystemTable}};
 use uefi::table::boot::{AllocateType, MemoryType};
 use uefi::proto::console::gop::{GraphicsOutput, PixelFormat as GopFmt};
 use x86_64::{
-    registers::control::{Cr3, Cr3Flags},
+    registers::control::{Cr0, Cr0Flags, Cr3, Cr3Flags},
+    registers::model_specific::{Efer, EferFlags},
     structures::paging::PhysFrame,
 };
-
-/// Virtual entry address: HHDM base + kernel physical load address.
-/// The kernel binary is a flat binary; `kernel_main` is at its first byte.
-const KERNEL_VIRT_ENTRY: u64 = HHDM_OFFSET + KERNEL_PHYS_BASE;
 
 /// UEFI logger — writes to the firmware text console.
 /// Must be disabled before ExitBootServices.
@@ -74,11 +69,12 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
     log::info!("bootloader: RSDP at {:#x}", rsdp_phys);
 
     // ── B3 / B2 / B1 inside a block so `bt` borrow ends before exit_boot_services ──
-    let (kernel_phys, kernel_size, ramdisk_phys, ramdisk_size, regions, region_count, pml4_phys, boot_info_phys, boot_stack_top, fb_info) = {
+    let (kernel_phys, kernel_size, kernel_entry, ramdisk_phys, ramdisk_size, regions, region_count, pml4_phys, boot_info_phys, boot_stack_top, fb_info) = {
         let bt = st.boot_services();
 
-        // B3: Load kernel binary from ESP into physical memory.
-        let (kp, ks) = loader::load(bt);
+        // B3: Load the kernel ELF from the ESP into physical memory.
+        let kernel = loader::load_kernel(bt);
+        let (kp, ks, ke) = (kernel.phys_base, kernel.size, kernel.entry);
         let (rdp, rds) = loader::load_optional_ramdisk(bt).unwrap_or((0, 0));
 
         // B2: Build 4-level page tables (identity + HHDM).
@@ -88,6 +84,8 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
         // kernel corrupts the PML4 when mapping its heap.
         // SAFETY: single-threaded UEFI boot services context; identity map active.
         let pml4 = unsafe { paging::build(bt) };
+        // SAFETY: as above; `kernel` was just laid out by the loader.
+        unsafe { paging::map_kernel(bt, pml4, &kernel) };
         log::info!("bootloader: PML4 at {:#x}", pml4.as_u64());
 
         // B0: Query GOP framebuffer (before memory::collect so the FB physical
@@ -109,7 +107,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
         let (mut rgns, count) = memory::collect(bt);
         memory::mark_kernel(&mut rgns, count, kp / 4096, (ks + 4095) / 4096);
 
-        (kp, ks, rdp, rds, rgns, count, pml4, bi_phys, stack_top, fb)
+        (kp, ks, ke, rdp, rds, rgns, count, pml4, bi_phys, stack_top, fb)
         // `bt` borrow released here
     };
 
@@ -128,7 +126,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
 
     log::info!(
         "bootloader: BootInfo ready — {} regions, kernel {:#x}+{}B, entry {:#x}",
-        region_count, kernel_phys, kernel_size, KERNEL_VIRT_ENTRY,
+        region_count, kernel_phys, kernel_size, kernel_entry,
     );
 
     // ── Disable logger and allocator BEFORE ExitBootServices ─────────────────
@@ -140,6 +138,17 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
     // uefi 0.26: exit_boot_services is a safe fn (takes self by value).
     let (_runtime, _mmap) = st.exit_boot_services(MemoryType::LOADER_DATA);
 
+    // ── Enforce the kernel's W^X ──────────────────────────────────────────────
+    // EFER.NXE before loading CR3: the new tables set NX bits, which are
+    // reserved (and fault) without it. CR0.WP makes ring 0 honour read-only
+    // pages too, so the kernel's .text and .rodata are really read-only.
+    // SAFETY: every x86-64 CPU we target supports NX; the bootloader's own
+    // code and data live in writable, executable identity-mapped pages.
+    unsafe {
+        Efer::update(|flags| flags.insert(EferFlags::NO_EXECUTE_ENABLE));
+        Cr0::update(|flags| flags.insert(Cr0Flags::WRITE_PROTECT));
+    }
+
     // ── Activate our page tables ──────────────────────────────────────────────
     // SAFETY: pml4_phys is a valid, fully-built PML4.
     //         The current IP is in the identity-mapped [0, 4 GiB) region,
@@ -150,7 +159,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
     }
 
     // ── Jump to kernel_main ───────────────────────────────────────────────────
-    // SAFETY: KERNEL_VIRT_ENTRY is mapped (HHDM covers [0, 4 GiB)).
+    // SAFETY: kernel_entry is inside the kernel's text segment, mapped RX.
     //         BOOT_INFO lives at its physical address, identity-mapped by the
     //         bootloader; the kernel can reach it via the HHDM too.
     //         kernel_entry never returns (-> !).
@@ -169,7 +178,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
             "jmp {entry}",
             stack = in(reg) boot_stack_top,
             boot_info = in(reg) boot_info_dst as u64,
-            entry = in(reg) KERNEL_VIRT_ENTRY,
+            entry = in(reg) kernel_entry,
             options(noreturn),
         );
     }

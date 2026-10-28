@@ -118,30 +118,6 @@ for c in cargo "$HOME/.cargo/bin/cargo" "/c/Users/${USERNAME:-}/.cargo/bin/cargo
 done
 if [[ -z "$CARGO" ]]; then echo "[F2] ERROR: cargo not found."; exit 1; fi
 
-# ── Locate objcopy ────────────────────────────────────────────────────────────
-# Prefer rust-objcopy/llvm-objcopy from the Rust toolchain.
-OBJCOPY="${OBJCOPY:-}"
-if [[ -z "$OBJCOPY" ]]; then
-    # Glob all rustup toolchain bin dirs for rust-objcopy / llvm-objcopy.
-    RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}"
-    for name in rust-objcopy llvm-objcopy; do
-        for cand in "$RUSTUP_HOME"/toolchains/*/lib/rustlib/*/bin/"$name"{,.exe}; do
-            [[ -f "$cand" ]] && { OBJCOPY="$cand"; break 2; }
-        done
-    done
-fi
-# Fall back to any objcopy in PATH
-if [[ -z "$OBJCOPY" ]]; then
-    for cmd in rust-objcopy llvm-objcopy objcopy; do
-        command -v "$cmd" &>/dev/null && { OBJCOPY="$cmd"; break; }
-    done
-fi
-if [[ -z "$OBJCOPY" ]]; then
-    echo "[F2] ERROR: No objcopy found. Run: rustup component add llvm-tools"
-    exit 1
-fi
-echo "[F2] Using objcopy: $OBJCOPY"
-
 # ── Build ──────────────────────────────────────────────────────────────────────
 echo "[F2] Building bootloader (x86_64-unknown-uefi, profile=kernel)..."
 "$CARGO" build -p bootloader --target x86_64-unknown-uefi --profile kernel \
@@ -165,13 +141,6 @@ KRN_ELF="$ROOT/target/x86_64-unknown-none/kernel/kernel"
 [[ -f "$BL_EFI" ]] || { echo "[F2] ERROR: bootloader EFI not found at $BL_EFI"; exit 1; }
 [[ -f "$KRN_ELF" ]] || { echo "[F2] ERROR: kernel ELF not found at $KRN_ELF"; exit 1; }
 
-# ── Extract flat kernel binary ─────────────────────────────────────────────────
-KRN_BIN="$ROOT/target/x86_64-unknown-none/kernel/kernel.bin"
-# Always delete the old .bin so objcopy re-extracts from the current ELF.
-rm -f "$KRN_BIN"
-echo "[F2] Extracting flat binary: $OBJCOPY -O binary $KRN_ELF $KRN_BIN"
-"$OBJCOPY" -O binary "$KRN_ELF" "$KRN_BIN"
-
 # ── Assemble ESP directory ─────────────────────────────────────────────────────
 RUNDIR="$ROOT/target/qemu-run"
 ESP="$RUNDIR/esp"
@@ -179,11 +148,11 @@ rm -rf "$RUNDIR"
 mkdir -p "$ESP/EFI/BOOT"
 
 cp "$BL_EFI"  "$ESP/EFI/BOOT/BOOTX64.EFI"
-cp "$KRN_BIN" "$ESP/kernel.bin"
+cp "$KRN_ELF" "$ESP/kernel.elf"   # ELF linked in the top 2 GiB (ADR-014)
 make_fat_img_with_mkfat "$ESP/fat.img"
 
 echo "[F2] ESP assembled at $ESP"
-ls -lh "$ESP/EFI/BOOT/BOOTX64.EFI" "$ESP/kernel.bin" "$ESP/fat.img"
+ls -lh "$ESP/EFI/BOOT/BOOTX64.EFI" "$ESP/kernel.elf" "$ESP/fat.img"
 
 # ── Locate OVMF firmware ───────────────────────────────────────────────────────
 # Strategy 1: combined OVMF.fd for -bios mode.
@@ -346,12 +315,14 @@ SYSENTER_SKIP_TEXT="[smoke] SYSENTER path skipped"   # non-Intel CPU (ADR-004)
 WNDPROC_TEXT="[smoke] WndProc called"
 HELLO_EXE_TEXT="[smoke] HELLO.EXE ran ok"
 HEAP_TEXT="[smoke] heap self-test ok"
+WX_TEXT="[smoke] kernel W^X ok"
 # Syscall dispatch trace: only allowed with --features trace-syscalls (06 §5).
 SYSCALL_TRACE_RE='^\[sys\] |\[w32dbg\] dispatch:'
 
 if [[ -f "$SERIAL_LOG" ]] \
     && grep -Fq "$SUCCESS_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$HEAP_TEXT" "$SERIAL_LOG" \
+    && grep -Fq "$WX_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$SMOKE_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$IAT_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$CREATE_PROCESS_TEXT" "$SERIAL_LOG" \
@@ -375,6 +346,7 @@ else
     echo "[F2] FAIL — required markers not found within ${TIMEOUT}s"
     echo "      required: '$SUCCESS_TEXT'"
     echo "      required: '$HEAP_TEXT'"
+    echo "      required: '$WX_TEXT'"
     echo "      required: '$SMOKE_TEXT'"
     echo "      required: '$IAT_TEXT'"
     echo "      required: '$CREATE_PROCESS_TEXT'"
