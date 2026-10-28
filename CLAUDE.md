@@ -67,6 +67,5 @@ cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
 tools/qemu-run.sh          # construit le noyau et lance QEMU (OVMF, série sur stdio)
 ```
 
-`cargo check --workspace` passe, mais avec des warnings (il n'en faut aucun pour sortir de M0). `cargo test --workspace` échoue
-sur les binaires `kernel` et `bootloader` (harnais de test hôte impossible) ; en attendant, ajouter `--exclude kernel --exclude bootloader`. `tools/qemu-run.sh --cpu qemu64,vendor=GenuineIntel` exerce le chemin SYSENTER. La CI cible exécute `cargo fmt --check`, `cargo clippy -D warnings`, les tests hôte et les
+`cargo check --workspace` passe, mais avec des warnings (il n'en faut aucun pour sortir de M0). `cargo test --workspace` passe. `tools/qemu-run.sh --cpu qemu64,vendor=GenuineIntel` exerce le chemin SYSENTER. La CI cible exécute `cargo fmt --check`, `cargo clippy -D warnings`, les tests hôte et les
 scénarios QEMU de base.
