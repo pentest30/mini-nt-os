@@ -7,9 +7,11 @@
 //!   - `init()` can be called with interrupts disabled → no allocator contact.
 //!
 //! IRQL discipline:
-//!   - `init()`  → call with IRQs disabled (called from kernel_main).
+//!   - `init()`  → PASSIVE_LEVEL, once, from kernel_main.
 //!   - `tick()`  → called from timer ISR (DIRQL); must not block or alloc.
 //!   - `schedule()` → called at DISPATCH_LEVEL from tick(); no alloc.
+//!   - The scheduler lock is shared with the timer ISR, so it is only taken
+//!     with interrupts disabled ([`SchedLock::with`]).
 //!
 //! WI7e Ch.4 "Scheduling", ReactOS ntoskrnl/ke/thrdschd.c
 
@@ -191,7 +193,31 @@ impl SchedulerInner {
 
 // ── Global scheduler ─────────────────────────────────────────────────────────
 
-static SCHED: Mutex<Option<SchedulerInner>> = Mutex::new(None);
+/// Scheduler state, shared with the timer ISR (`tick`, `schedule`).
+static SCHED: SchedLock = SchedLock::new();
+
+/// The scheduler lock, reachable only through [`SchedLock::with`].
+///
+/// `with` holds it with interrupts disabled: the timer ISR takes the same
+/// lock, and on a single CPU a tick that interrupted a holder would spin on
+/// it forever with IF=0. Interim form of a `KSpinLock` taken at
+/// DISPATCH_LEVEL (06 §4).
+struct SchedLock(Mutex<Option<SchedulerInner>>);
+
+impl SchedLock {
+    const fn new() -> Self {
+        Self(Mutex::new(None))
+    }
+
+    /// Runs `f` on the scheduler state, with the lock held and interrupts
+    /// disabled; their previous state is restored afterwards.
+    ///
+    /// # IRQL
+    /// Any level. `f` must not block, allocate or log: interrupts are off.
+    fn with<R>(&self, f: impl FnOnce(&mut Option<SchedulerInner>) -> R) -> R {
+        x86_64::instructions::interrupts::without_interrupts(|| f(&mut self.0.lock()))
+    }
+}
 
 pub struct Scheduler;
 
@@ -207,42 +233,45 @@ pub struct Scheduler;
 /// `idle_stack_top` must be the 16-byte aligned top of a mapped, writable
 /// kernel stack reserved for the idle thread for the life of the system.
 ///
-/// # IRQL: must be called with interrupts DISABLED to avoid a timer ISR
-/// re-entering SCHED.lock() while we are holding it here.
+/// # IRQL: PASSIVE_LEVEL, before the first user thread.
 pub unsafe fn init(idle_stack_top: u64) {
-    let mut guard = SCHED.lock();
-    if guard.is_some() { return; }
+    let tids = SCHED.with(|sched| {
+        if sched.is_some() { return None; }
 
-    let mut s = SchedulerInner::new();
+        let mut s = SchedulerInner::new();
 
-    // TID 0 — boot thread (kernel_main). Captures the live RSP/RIP on first
-    // context switch; KContext fields are filled in by ke_context_switch.
-    let boot_tid = s.alloc_tid().expect("scheduler: no slot for boot thread");
-    s.threads[boot_tid].used     = true;
-    s.threads[boot_tid].state    = ThreadState::Running;
-    s.threads[boot_tid].priority = BOOT_PRIORITY;
-    s.current = boot_tid;
+        // TID 0 — boot thread (kernel_main). Captures the live RSP/RIP on first
+        // context switch; KContext fields are filled in by ke_context_switch.
+        let boot_tid = s.alloc_tid().expect("scheduler: no slot for boot thread");
+        s.threads[boot_tid].used     = true;
+        s.threads[boot_tid].state    = ThreadState::Running;
+        s.threads[boot_tid].priority = BOOT_PRIORITY;
+        s.current = boot_tid;
 
-    // TID 1 — idle thread, on the caller-provided stack.
-    let idle_tid = s.alloc_tid().expect("scheduler: no slot for idle thread");
-    // SAFETY: the caller guarantees idle_stack_top tops a mapped, writable
-    //         stack reserved for the idle thread; single-threaded init, no
-    //         concurrent access before interrupts re-enable.
-    let idle_rsp = unsafe {
-        // 16-byte align then push one return-address slot.
-        let rsp = ((idle_stack_top as usize) - 8) & !0xF;
-        *(rsp as *mut u64) = idle_thread_main as *const () as u64;
-        rsp as u64
-    };
-    s.threads[idle_tid].used          = true;
-    s.threads[idle_tid].state         = ThreadState::Ready;
-    s.threads[idle_tid].priority      = IDLE_PRIORITY;
-    s.threads[idle_tid].ctx.rsp       = idle_rsp;
-    s.threads[idle_tid].ctx.rip       = idle_thread_main as *const () as u64;
-    s.idle_tid = idle_tid;
+        // TID 1 — idle thread, on the caller-provided stack.
+        let idle_tid = s.alloc_tid().expect("scheduler: no slot for idle thread");
+        // SAFETY: the caller guarantees idle_stack_top tops a mapped, writable
+        //         stack reserved for the idle thread; single-threaded init, no
+        //         concurrent access before interrupts re-enable.
+        let idle_rsp = unsafe {
+            // 16-byte align then push one return-address slot.
+            let rsp = ((idle_stack_top as usize) - 8) & !0xF;
+            *(rsp as *mut u64) = idle_thread_main as *const () as u64;
+            rsp as u64
+        };
+        s.threads[idle_tid].used          = true;
+        s.threads[idle_tid].state         = ThreadState::Ready;
+        s.threads[idle_tid].priority      = IDLE_PRIORITY;
+        s.threads[idle_tid].ctx.rsp       = idle_rsp;
+        s.threads[idle_tid].ctx.rip       = idle_thread_main as *const () as u64;
+        s.idle_tid = idle_tid;
 
-    *guard = Some(s);
-    log::info!("Ke scheduler: initialised (boot TID={}, idle TID={})", boot_tid, idle_tid);
+        *sched = Some(s);
+        Some((boot_tid, idle_tid))
+    });
+    if let Some((boot_tid, idle_tid)) = tids {
+        log::info!("Ke scheduler: initialised (boot TID={}, idle TID={})", boot_tid, idle_tid);
+    }
 }
 
 /// Called from the APIC timer ISR at every clock tick.
@@ -253,9 +282,11 @@ pub unsafe fn init(idle_stack_top: u64) {
 ///
 /// # IRQL: DIRQL (hardware interrupt) — no alloc, no page faults.
 pub fn tick() {
-    let mut guard = SCHED.lock();
-    let Some(s) = guard.as_mut() else { return };
-    s.tick_count += 1;
+    SCHED.with(|sched| {
+        if let Some(s) = sched.as_mut() {
+            s.tick_count += 1;
+        }
+    });
 }
 
 /// Preemptive round-robin context switch.
@@ -272,9 +303,8 @@ pub fn tick() {
 /// # IRQL: DIRQL — no alloc, no page faults, interrupts disabled.
 pub fn schedule() {
     // ── Select next thread while holding the lock ─────────────────────────
-    let switch = {
-        let mut guard = SCHED.lock();
-        let Some(s) = guard.as_mut() else { return };
+    let switch = SCHED.with(|sched| {
+        let s = sched.as_mut()?;
         s.pick_next().map(|(cur, next)| {
             // Update TSS.RSP0 when switching to a user-mode thread so that the
             // next ring-3→ring-0 transition pushes the interrupt frame onto that
@@ -290,8 +320,8 @@ pub fn schedule() {
             let new_ctx = &    s.threads[next].ctx as *const crate::thread::KContext;
             (old_ctx, new_ctx)
         })
-        // lock released here — guard drops at end of block
-    };
+        // lock released here, interrupts back to their state (still off in the ISR)
+    });
 
     // ── Perform the switch outside the lock ───────────────────────────────
     if let Some((old_ctx, new_ctx)) = switch {
@@ -313,24 +343,26 @@ pub fn schedule() {
 ///
 /// # IRQL: PASSIVE_LEVEL
 pub fn is_thread_running(tid: usize) -> bool {
-    let guard = SCHED.lock();
-    let Some(s) = guard.as_ref() else { return false };
-    if tid >= MAX_THREADS || !s.threads[tid].used {
-        return false;
-    }
-    s.threads[tid].state != ThreadState::Terminated
+    SCHED.with(|sched| {
+        let Some(s) = sched.as_ref() else { return false };
+        if tid >= MAX_THREADS || !s.threads[tid].used {
+            return false;
+        }
+        s.threads[tid].state != ThreadState::Terminated
+    })
 }
 
 /// Enqueue a thread in the ready queue.
 ///
 /// Called when a thread becomes runnable (e.g., after a wait completes).
 pub fn make_ready(tid: usize) {
-    let mut guard = SCHED.lock();
-    let Some(s) = guard.as_mut() else { return };
-    if tid < MAX_THREADS && s.threads[tid].used {
-        s.threads[tid].state = ThreadState::Ready;
-        s.ready.push(tid);
-    }
+    SCHED.with(|sched| {
+        let Some(s) = sched.as_mut() else { return };
+        if tid < MAX_THREADS && s.threads[tid].used {
+            s.threads[tid].state = ThreadState::Ready;
+            s.ready.push(tid);
+        }
+    });
 }
 
 /// Register a new ring-3 (user-mode) thread with the scheduler.
@@ -391,28 +423,31 @@ pub unsafe fn spawn_user_thread(
     }
 
     // ── Register with the scheduler ───────────────────────────────────────
-    let mut guard = SCHED.lock();
-    let s = guard.as_mut()?;
-    let tid = s.alloc_tid()?;
+    let tid = SCHED.with(|sched| {
+        let s = sched.as_mut()?;
+        let tid = s.alloc_tid()?;
 
-    s.threads[tid].used             = true;
-    s.threads[tid].state            = ThreadState::Ready;
-    s.threads[tid].priority         = BOOT_PRIORITY; // same as boot thread
-    s.threads[tid].user_mode        = true;
-    s.threads[tid].kernel_stack_top = kstack_top;
-    s.threads[tid].ctx.rsp          = frame_base as u64;
-    s.threads[tid].ctx.rip          = hal::ring3::ring3_iretq_trampoline_fn();
-    // Non-volatile GP registers can be zero — ring-3 ABI doesn't use callee-saved regs
-    // across the kernel→user transition; the trampoline doesn't inspect them.
-    s.threads[tid].ctx.rbx = 0;
-    s.threads[tid].ctx.rbp = 0;
-    s.threads[tid].ctx.r12 = 0;
-    s.threads[tid].ctx.r13 = 0;
-    s.threads[tid].ctx.r14 = 0;
-    s.threads[tid].ctx.r15 = 0;
+        s.threads[tid].used             = true;
+        s.threads[tid].state            = ThreadState::Ready;
+        s.threads[tid].priority         = BOOT_PRIORITY; // same as boot thread
+        s.threads[tid].user_mode        = true;
+        s.threads[tid].kernel_stack_top = kstack_top;
+        s.threads[tid].ctx.rsp          = frame_base as u64;
+        s.threads[tid].ctx.rip          = hal::ring3::ring3_iretq_trampoline_fn();
+        // Non-volatile GP registers can be zero — ring-3 ABI doesn't use callee-saved regs
+        // across the kernel→user transition; the trampoline doesn't inspect them.
+        s.threads[tid].ctx.rbx = 0;
+        s.threads[tid].ctx.rbp = 0;
+        s.threads[tid].ctx.r12 = 0;
+        s.threads[tid].ctx.r13 = 0;
+        s.threads[tid].ctx.r14 = 0;
+        s.threads[tid].ctx.r15 = 0;
 
-    s.ready.push(tid);
+        s.ready.push(tid);
+        Some(tid)
+    })?;
 
+    // Outside the lock: logging is slow (serial, framebuffer console).
     log::info!(
         "Ke scheduler: spawned user-mode thread TID={} entry={:#010x} usp={:#010x} kstack_top={:#x}",
         tid, entry32, stack32, kstack_top,
@@ -431,17 +466,18 @@ pub unsafe fn spawn_user_thread(
 ///
 /// # IRQL: PASSIVE_LEVEL
 pub fn terminate_user_threads() {
-    let mut guard = SCHED.lock();
-    let Some(s) = guard.as_mut() else { return };
-    let cur = s.current;
-    for (tid, thread) in s.threads.iter_mut().enumerate() {
-        if !thread.used { continue; }
-        if tid == cur  { continue; } // don't terminate ourselves
-        if tid == 0    { continue; } // never kill boot thread
-        if thread.user_mode && thread.state != ThreadState::Terminated {
-            thread.state = ThreadState::Terminated;
+    SCHED.with(|sched| {
+        let Some(s) = sched.as_mut() else { return };
+        let cur = s.current;
+        for (tid, thread) in s.threads.iter_mut().enumerate() {
+            if !thread.used { continue; }
+            if tid == cur  { continue; } // don't terminate ourselves
+            if tid == 0    { continue; } // never kill boot thread
+            if thread.user_mode && thread.state != ThreadState::Terminated {
+                thread.state = ThreadState::Terminated;
+            }
         }
-    }
+    });
 }
 
 /// Mark the currently running thread as Terminated and context-switch away.
@@ -455,14 +491,14 @@ pub fn terminate_user_threads() {
 /// PASSIVE_LEVEL nominally, but the INT 0x2E syscall handler calls it with IF=0,
 /// so it is effectively DISPATCH_LEVEL — no alloc inside this function.
 pub fn terminate_current_thread() {
-    let switch = {
-        let mut guard = SCHED.lock();
-        let Some(s) = guard.as_mut() else { return };
+    // Outer None: no scheduler yet, nothing to terminate.
+    let Some(switch) = SCHED.with(|sched| {
+        let s = sched.as_mut()?;
         let cur = s.current;
         // Mark as terminated so pick_next won't re-enqueue it.
         s.threads[cur].state = ThreadState::Terminated;
         // pick_next will skip re-enqueue because state != Running.
-        s.pick_next().map(|(old, next)| {
+        Some(s.pick_next().map(|(old, next)| {
             if s.threads[next].user_mode && s.threads[next].kernel_stack_top != 0 {
                 // SAFETY: same as schedule() — IF=0, single-CPU.
                 unsafe { hal::gdt::set_kernel_stack_top(s.threads[next].kernel_stack_top) };
@@ -470,8 +506,8 @@ pub fn terminate_current_thread() {
             let old_ctx = &mut s.threads[old].ctx  as *mut  crate::thread::KContext;
             let new_ctx = &    s.threads[next].ctx as *const crate::thread::KContext;
             (old_ctx, new_ctx)
-        })
-    };
+        }))
+    }) else { return };
 
     if let Some((old_ctx, new_ctx)) = switch {
         // SAFETY: pointers into static SCHED table; IF=0 (no concurrent ISR).
