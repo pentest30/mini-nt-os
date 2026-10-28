@@ -616,7 +616,6 @@ mod tests {
         let t0 = s.alloc_tid().expect("slot 0");
         s.threads[t0].used = true;
         let t1 = s.alloc_tid().expect("slot 1");
-        s.threads[t1].used = true;
         assert_eq!(t0, 0);
         assert_eq!(t1, 1);
     }

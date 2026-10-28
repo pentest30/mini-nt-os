@@ -243,7 +243,7 @@ impl<'a> Pe32<'a> {
         let base = self.nt_off; // unused; rva is absolute from image base
         let _ = base;
 
-        ImportIter { data, image_base: opt.image_base, rva, index: 0 }
+        ImportIter { data, rva, index: 0 }
     }
 }
 
@@ -264,7 +264,6 @@ impl<'a> ImportEntry<'a> {
 
 struct ImportIter<'a> {
     data:        &'a [u8],
-    image_base:  u32,
     rva:         u32,     // RVA of the first IMAGE_IMPORT_DESCRIPTOR
     index:       usize,
 }
@@ -1176,6 +1175,7 @@ const STUB_EXPORTS_WSOCK32: &[StubExport] = &[
 #[derive(Clone, Copy)]
 struct DllEntry {
     base: u32,
+    #[expect(dead_code, reason = "recorded for address-to-module lookups, not queried yet")]
     size: u32,
     entry_rva: u32,    // AddressOfEntryPoint (DllMain RVA), 0 if none
     name: [u8; 32],    // uppercase, NUL-padded, filename only
@@ -4392,9 +4392,11 @@ mod tests {
 }
 
 // ── Helper: owned str for no_std test comparisons ────────────────────────────
+#[cfg(test)]
 trait ToOwnedStr {
     fn to_owned_str(&self) -> alloc::string::String;
 }
+#[cfg(test)]
 impl ToOwnedStr for &str {
     fn to_owned_str(&self) -> alloc::string::String {
         alloc::string::String::from(*self)

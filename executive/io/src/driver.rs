@@ -1,7 +1,6 @@
 //! Driver / Device objects.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 use super::irp::Irp;
 
 pub type DispatchFn = fn(&mut Irp) -> i32;

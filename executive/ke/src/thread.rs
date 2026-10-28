@@ -136,7 +136,6 @@ pub unsafe fn context_switch_raw(old_ctx: *mut KContext, new_ctx: *const KContex
 
 global_asm!(
     r#"
-    .intel_syntax noprefix
     .global ke_context_switch
 ke_context_switch:
     # rdi = old_ctx, rsi = new_ctx
