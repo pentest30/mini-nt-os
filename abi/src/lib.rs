@@ -2,12 +2,15 @@
 //! sides must honour, with no other definition anywhere (CLAUDE.md, rule 5).
 //!
 //! - [`loader_block`]: loader → kernel handoff.
+//! - [`ntstatus`]: `NtStatus` and the NTSTATUS values in use.
 //!
 //! The XP user-mode layouts (PEB, TEB, `KUSER_SHARED_DATA`, `CONTEXT`…) will
 //! join it. `no_std`, without dependencies.
 
 #![no_std]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod loader_block;
+pub mod ntstatus;
 
 pub use loader_block::*;
