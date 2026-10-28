@@ -27,17 +27,11 @@ use x86_64::{
     structures::paging::PageTableFlags,
 };
 
-/// Kernel heap — backed by a bump allocator.
-///
-/// `BumpAllocator` never fails due to fragmentation (zero fragmentation),
-/// which is critical because `linked_list_allocator` was found to corrupt
-/// its free-list when BTreeMap/Arc small allocs preceded a large alloc.
-///
-/// # Phase 3 upgrade
-/// When we need real dealloc (per-process heaps), swap for a slab allocator.
-/// The `GlobalAlloc` interface is unchanged.
+/// Kernel heap — the nonpaged pool (`mm::pool`): size classes for small
+/// blocks, merged page runs for large ones, and memory really freed.
+/// `heap_self_test` checks it at every boot.
 #[global_allocator]
-static ALLOCATOR: bump_alloc::BumpAllocator = bump_alloc::BumpAllocator::new();
+static ALLOCATOR: mm::pool::Pool = mm::pool::Pool::new();
 
 /// First virtual address of the kernel heap region.
 /// Chosen above the kernel HHDM image region and below UEFI runtime services.
@@ -263,7 +257,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
             unsafe { pt.map_page(virt, phys, HEAP_FLAGS) };
         }
 
-        // Phase 3 — initialise the bump allocator.
+        // Phase 3 — hand the mapped region to the pool.
         // SAFETY: HEAP_START..+HEAP_SIZE is now fully mapped RW+NX;
         //         this is the one and only call to init().
         unsafe { ALLOCATOR.init(HEAP_START as *mut u8, HEAP_SIZE) };
@@ -335,10 +329,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         provoke_stack_overflow();
     }
 
+    heap_self_test();
+
     // ── 4. Executive initialisation ───────────────────────────────────────────
-    // With the bump allocator (T5-1) there is no free-list fragmentation, so
-    // ob/ps/io can safely run before or after loader_demo without corrupting
-    // subsequent large allocations.
     x86_64::instructions::interrupts::disable();
     set_kernel_segments();
     let idle_stack = mm::kstack::allocate().expect("no kernel stack for the idle thread");
@@ -444,6 +437,51 @@ pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
             hal::gdt::user_teb_fs_selector(),
         )
     }
+}
+
+/// Churns the pool with the pattern blamed for the old heap "corruption"
+/// (B-tree nodes mixed with ~12 KiB blocks, audit §4.2), checking every value
+/// and every block, then checks that freeing gave all the memory back.
+/// Prints `[smoke] heap self-test ok`, which the smoke test requires.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, before any other thread exists (exact `used()` accounting).
+fn heap_self_test() {
+    use alloc::collections::BTreeMap;
+    use alloc::vec::Vec;
+
+    const ROUNDS: u32 = 2000;
+    let used_before = ALLOCATOR.used();
+    let mut peak = used_before;
+    {
+        let mut map: BTreeMap<u32, u64> = BTreeMap::new();
+        let mut blocks: Vec<Vec<u8>> = Vec::new();
+        for round in 0..ROUNDS {
+            map.insert(round, u64::from(round) * 3);
+            if round % 4 == 3 {
+                map.remove(&(round - 2));
+            }
+            if round % 50 == 0 {
+                blocks.push(alloc::vec![round as u8; 12 * 1024]);
+                if blocks.len() > 8 {
+                    let old = blocks.remove(0);
+                    assert!(old.iter().all(|&b| b == old[0]), "heap self-test: 12 KiB block overwritten");
+                }
+            }
+            peak = peak.max(ALLOCATOR.used());
+        }
+        for (key, value) in &map {
+            assert_eq!(*value, u64::from(*key) * 3, "heap self-test: BTreeMap value overwritten");
+        }
+        for block in &blocks {
+            assert!(block.iter().all(|&b| b == block[0]), "heap self-test: 12 KiB block overwritten");
+        }
+    }
+    assert_eq!(ALLOCATOR.used(), used_before, "heap self-test: memory not given back");
+    log::info!(
+        "[smoke] heap self-test ok: {} rounds, peak {} KiB, back to {} bytes used",
+        ROUNDS, (peak - used_before) / 1024, used_before,
+    );
 }
 
 /// Kernel-stack guard-page lookup for the fault handlers (`hal::idt`).
@@ -609,7 +647,7 @@ fn try_load_dxvk_chain() {
 }
 
 fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
-    // IRQs must stay disabled while we use the bump allocator and page tables.
+    // IRQs must stay disabled while we edit the page tables.
     x86_64::instructions::interrupts::disable();
     set_kernel_segments();
 

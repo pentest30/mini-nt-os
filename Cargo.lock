@@ -35,10 +35,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bump-alloc"
-version = "0.1.0"
-
-[[package]]
 name = "const_fn"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -98,7 +94,6 @@ name = "kernel"
 version = "0.1.0"
 dependencies = [
  "boot-info",
- "bump-alloc",
  "hal",
  "io-manager",
  "ke",

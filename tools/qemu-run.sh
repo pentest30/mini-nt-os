@@ -345,11 +345,13 @@ SYSENTER_TEXT="[smoke] SYSENTER path hit"
 SYSENTER_SKIP_TEXT="[smoke] SYSENTER path skipped"   # non-Intel CPU (ADR-004)
 WNDPROC_TEXT="[smoke] WndProc called"
 HELLO_EXE_TEXT="[smoke] HELLO.EXE ran ok"
+HEAP_TEXT="[smoke] heap self-test ok"
 # Syscall dispatch trace: only allowed with --features trace-syscalls (06 §5).
 SYSCALL_TRACE_RE='^\[sys\] |\[w32dbg\] dispatch:'
 
 if [[ -f "$SERIAL_LOG" ]] \
     && grep -Fq "$SUCCESS_TEXT" "$SERIAL_LOG" \
+    && grep -Fq "$HEAP_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$SMOKE_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$IAT_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$CREATE_PROCESS_TEXT" "$SERIAL_LOG" \
@@ -372,6 +374,7 @@ then
 else
     echo "[F2] FAIL — required markers not found within ${TIMEOUT}s"
     echo "      required: '$SUCCESS_TEXT'"
+    echo "      required: '$HEAP_TEXT'"
     echo "      required: '$SMOKE_TEXT'"
     echo "      required: '$IAT_TEXT'"
     echo "      required: '$CREATE_PROCESS_TEXT'"
