@@ -1,5 +1,7 @@
-//! Boot scenarios (ADR-018): one text file per scenario in `tests/boot/`,
-//! naming the kernel features, the CPUs to boot on and the serial markers.
+//! Boot scenarios (ADR-018, 06 §6): one directory per scenario in
+//! `tests/boot/`, whose `scenario.txt` names the kernel features, the CPUs to
+//! boot on and the serial markers. The directory can later hold the
+//! scenario's own files.
 //!
 //! ```text
 //! # Whole-line comment.
@@ -62,7 +64,7 @@ impl Scenario {
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            let at = || format!("{name}.txt:{}", n + 1);
+            let at = || format!("{name}/{SCENARIO_FILE}:{}", n + 1);
             let (key, value) = line
                 .split_once('=')
                 .map(|(k, v)| (k.trim(), v.trim()))
@@ -85,10 +87,10 @@ impl Scenario {
             }
         }
         if sc.expect.is_empty() {
-            return Err(format!("{name}.txt: no `expect` marker"));
+            return Err(format!("{name}/{SCENARIO_FILE}: no `expect` marker"));
         }
         if sc.cpus.is_empty() {
-            return Err(format!("{name}.txt: empty `cpus`"));
+            return Err(format!("{name}/{SCENARIO_FILE}: empty `cpus`"));
         }
         Ok(sc)
     }
@@ -116,17 +118,19 @@ impl Scenario {
     }
 }
 
-/// The scenarios of `dir` (`*.txt`), sorted by name; only `names` if given.
+/// File describing a scenario, in its directory.
+const SCENARIO_FILE: &str = "scenario.txt";
+
+/// The scenarios of `dir` (its subdirectories holding a `scenario.txt`),
+/// sorted by name; only `names` if given.
 pub fn load_all(dir: &Path, names: &[String]) -> Result<Vec<Scenario>> {
     let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let mut paths: Vec<_> = entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|x| x == "txt"))
-        .collect();
+    let mut paths: Vec<_> =
+        entries.filter_map(|e| e.ok().map(|e| e.path().join(SCENARIO_FILE))).filter(|p| p.is_file()).collect();
     paths.sort();
     let mut scenarios = Vec::new();
     for path in paths {
-        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+        let name = path.parent().and_then(Path::file_name).and_then(|s| s.to_str()).unwrap_or_default().to_string();
         if !names.is_empty() && !names.contains(&name) {
             continue;
         }
