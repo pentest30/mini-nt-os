@@ -1,3 +1,7 @@
+// Deux constantes de même valeur rendent un bras de `dispatch` inatteignable
+// et détournent l'appel vers un autre handler : on refuse de compiler.
+#![deny(unreachable_patterns)]
+
 extern crate alloc;
 
 use alloc::string::String;
@@ -128,7 +132,7 @@ const WIN32_GET_STD_HANDLE:       u32 = 0x20B2;
 const WIN32_HEAP_REALLOC:         u32 = 0x20B4;
 const WIN32_MUL_DIV:              u32 = 0x20B5;
 const WIN32_READ_FILE:            u32 = 0x20B6;
-const WIN32_WIDE_TO_MULTI_BYTE:   u32 = 0x20B7;
+const WIN32_WIDE_TO_MULTI_BYTE:   u32 = 0x20BA; // was 0x20B7 — collided with GetFileType!
 // ── user32 Phase 3A ───────────────────────────────────────────────────────────
 const WIN32_GET_CLIENT_RECT:      u32 = 0x2120;
 const WIN32_ENUM_DISPLAY_SETTINGS:u32 = 0x2121;
@@ -138,7 +142,7 @@ const WIN32_GET_SYSTEM_METRICS:   u32 = 0x2124;
 const WIN32_GET_ENV_STRINGS_A:   u32 = 0x2125;
 const WIN32_LOG_INITTERM:        u32 = 0x2126;
 // ── winmm ───────────────────────────────────────────────────────────────────
-const WIN32_TIME_GET_DEV_CAPS:    u32 = 0x2033;
+const WIN32_TIME_GET_DEV_CAPS:    u32 = 0x2034; // was 0x2033 — collided with CreateFileA!
 // ── UCRT (api-ms-win-crt-*) ───────────────────────────────────────────────────
 const UCRT_REALLOC:               u32 = 0x20B3;
 const UCRT_INIT_ONEXIT_TABLE:     u32 = 0x20B8;

@@ -45,22 +45,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413d67b29ef1021b4d60f4aa1e925ca031751e213832b4b1d588fae623c05c60"
 
 [[package]]
-name = "d3d8"
-version = "0.1.0"
-dependencies = [
- "log",
- "spin",
-]
-
-[[package]]
-name = "d3d9"
-version = "0.1.0"
-dependencies = [
- "log",
- "spin",
-]
-
-[[package]]
 name = "dataview"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -74,22 +58,6 @@ name = "derive_pod"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2ea6706d74fca54e15f1d40b5cf7fe7f764aaec61352a9fcec58fe27e042fc8"
-
-[[package]]
-name = "dinput8"
-version = "0.1.0"
-dependencies = [
- "log",
- "spin",
-]
-
-[[package]]
-name = "dsound"
-version = "0.1.0"
-dependencies = [
- "log",
- "spin",
-]
 
 [[package]]
 name = "hal"
@@ -143,21 +111,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kernel32"
-version = "0.1.0"
-dependencies = [
- "hal",
- "io-manager",
- "ke",
- "log",
- "mm",
- "ob",
- "ps",
- "spin",
- "x86_64",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -182,14 +135,6 @@ dependencies = [
  "log",
  "spin",
  "x86_64",
-]
-
-[[package]]
-name = "msvcrt"
-version = "0.1.0"
-dependencies = [
- "log",
- "spin",
 ]
 
 [[package]]
@@ -246,6 +191,7 @@ dependencies = [
 name = "ps"
 version = "0.1.0"
 dependencies = [
+ "hal",
  "ke",
  "log",
  "mm",
@@ -395,14 +341,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
-name = "user32"
-version = "0.1.0"
-dependencies = [
- "log",
- "spin",
-]
-
-[[package]]
 name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -429,13 +367,6 @@ name = "winapi-x86_64-pc-windows-gnu"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
-
-[[package]]
-name = "winmm"
-version = "0.1.0"
-dependencies = [
- "log",
-]
 
 [[package]]
 name = "x86"

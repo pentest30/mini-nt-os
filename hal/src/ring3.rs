@@ -10,6 +10,15 @@
 //! WI7e Ch.3 "Trap Dispatching" §Kernel-to-User Mode Transition
 //! WI7e Ch.6 §User-Mode Stack and Entry Point
 
+/// RFLAGS loaded on every entry to ring 3: IF=1, reserved bit 1, IOPL=0.
+///
+/// IOPL=0 makes `in`/`out`, `cli` and `sti` fault (#GP) in user mode, as on XP.
+/// Shared by `jump_to_ring3_32`, the scheduler's initial thread frame and the
+/// SYSENTER return path so the three cannot drift apart again.
+pub const USER_RFLAGS: u64 = (1u64 << 9)   // IF
+                           | (1u64 << 1);  // reserved, always 1
+const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOPL=0");
+
 /// Switch from ring-0 (64-bit) to ring-3 (32-bit IA-32e compatibility mode).
 ///
 /// Builds a 5-entry IRETQ stack frame on the current kernel stack:
@@ -17,7 +26,7 @@
 /// ```text
 ///   [RSP+32]  SS     = user_data32 | 3   (ring-3 RPL)
 ///   [RSP+24]  RSP    = stack_top (zero-extended to 64 bits)
-///   [RSP+16]  RFLAGS = IF=1, IOPL=3, reserved bit 1
+///   [RSP+16]  RFLAGS = USER_RFLAGS (IF=1, IOPL=0, reserved bit 1)
 ///   [RSP+ 8]  CS     = user_code32 | 3
 ///   [RSP+ 0]  RIP    = entry_point (zero-extended to 64 bits)
 /// ```
@@ -84,13 +93,7 @@ pub unsafe fn jump_to_ring3_32(
     entry_point: u32,
     stack_top:   u32,
 ) -> ! {
-    // RFLAGS value for ring-3:
-    //   IF   = 1  (bit  9) — enable hardware interrupts
-    //   IOPL = 3  (bits 13:12) — allow I/O port access (Phase 3: restrict to 0)
-    //   bit 1    = 1  (always-set reserved bit)
-    const RFLAGS: u64 = (1u64 << 9)   // IF
-                      | (3u64 << 12)  // IOPL = 3
-                      | (1u64 << 1);  // reserved
+    const RFLAGS: u64 = USER_RFLAGS;
 
     let cs:   u64 = (user_code32 as u64) | 3;  // RPL = 3
     let ss:   u64 = (user_data32 as u64) | 3;  // RPL = 3

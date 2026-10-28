@@ -77,11 +77,12 @@ hal_sysenter_entry:
     // RSP  = original user ESP (r12d); [RSP+0] = user return address.
     push qword ptr [rip + HAL_SYSENTER_USER_SS]
     push r12                   // new RSP = user ESP (r12 preserved by callee)
-    mov  r11d, 0x3202          // RFLAGS: IF=1, IOPL=0, reserved bit set
+    mov  r11d, {user_rflags}   // RFLAGS: IF=1, IOPL=0, reserved bit set
     push r11
     push qword ptr [rip + HAL_SYSENTER_USER_CS]
     mov  r8d, 0x7FFE0300       // SharedUserData KiFastSystemCallRet
     push r8
     iretq
-    "#
+    "#,
+    user_rflags = const crate::ring3::USER_RFLAGS,
 );

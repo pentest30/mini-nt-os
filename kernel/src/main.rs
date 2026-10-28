@@ -727,29 +727,35 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     code.extend_from_slice(&[0x8B, 0x1D]); emit_u32(&mut code, out_base_va);
     code.extend_from_slice(&[0xC7, 0x03]); emit_u32(&mut code, 0x1234_5678);
 
-    // NtWriteFile via SYSENTER (XP SP2 ABI).
-    // Stack layout at SYSENTER: [EDX+0]=ret_addr  [EDX+4..]=args[0..8].
-    // Push in reverse: Key → ... → FileHandle → then call/pop trick for ret_addr.
-    code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (Key)
-    code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ByteOffset)
-    emit_push_u32(&mut code, sysenter_msg.len() as u32);      // push Length
-    emit_push_u32(&mut code, sysenter_msg_va);                // push Buffer
-    emit_push_u32(&mut code, sysenter_iosb_va);               // push IoStatusBlock
-    code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ApcContext)
-    code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ApcRoutine)
-    code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (Event)
-    code.extend_from_slice(&[0x6A, 0xFF]);                    // push -1 (FileHandle = serial)
-    // call/pop trick: push address of `pop eax`, add 16 → .after_sysenter.
-    // delta = 1(pop)+5(add)+1(push)+2(mov edx,esp)+5(mov eax,imm)+2(sysenter) = 16
-    code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call .se_eip
-    code.push(0x58);                                          // pop eax  (.se_eip)
-    code.extend_from_slice(&[0x05, 16, 0, 0, 0]);            // add eax, 16
-    code.push(0x50);                                          // push eax (ret addr)
-    code.extend_from_slice(&[0x89, 0xE2]);                    // mov edx, esp
-    code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // mov eax, NtWriteFile
-    code.extend_from_slice(&[0x0F, 0x34]);                    // sysenter
-    // .after_sysenter: ret@SharedUserData+0x300 popped ret_addr; 9 args remain.
-    code.extend_from_slice(&[0x83, 0xC4, 0x24]);              // add esp, 36
+    // SYSENTER from compatibility mode #UDs on non-Intel CPUs (ADR-004): skip the
+    // direct SYSENTER test there and say so, so the smoke script can tell.
+    if hal::cpuid::is_intel() {
+        // NtWriteFile via SYSENTER (XP SP2 ABI).
+        // Stack layout at SYSENTER: [EDX+0]=ret_addr  [EDX+4..]=args[0..8].
+        // Push in reverse: Key → ... → FileHandle → then call/pop trick for ret_addr.
+        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (Key)
+        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ByteOffset)
+        emit_push_u32(&mut code, sysenter_msg.len() as u32);      // push Length
+        emit_push_u32(&mut code, sysenter_msg_va);                // push Buffer
+        emit_push_u32(&mut code, sysenter_iosb_va);               // push IoStatusBlock
+        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ApcContext)
+        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (ApcRoutine)
+        code.extend_from_slice(&[0x6A, 0x00]);                    // push 0  (Event)
+        code.extend_from_slice(&[0x6A, 0xFF]);                    // push -1 (FileHandle = serial)
+        // call/pop trick: push address of `pop eax`, add 16 → .after_sysenter.
+        // delta = 1(pop)+5(add)+1(push)+2(mov edx,esp)+5(mov eax,imm)+2(sysenter) = 16
+        code.extend_from_slice(&[0xE8, 0x00, 0x00, 0x00, 0x00]); // call .se_eip
+        code.push(0x58);                                          // pop eax  (.se_eip)
+        code.extend_from_slice(&[0x05, 16, 0, 0, 0]);            // add eax, 16
+        code.push(0x50);                                          // push eax (ret addr)
+        code.extend_from_slice(&[0x89, 0xE2]);                    // mov edx, esp
+        code.extend_from_slice(&[0xB8, 0x12, 0x01, 0x00, 0x00]); // mov eax, NtWriteFile
+        code.extend_from_slice(&[0x0F, 0x34]);                    // sysenter
+        // .after_sysenter: ret@SharedUserData+0x300 popped ret_addr; 9 args remain.
+        code.extend_from_slice(&[0x83, 0xC4, 0x24]);              // add esp, 36
+    } else {
+        log::info!("[smoke] SYSENTER path skipped: CPU is not Intel (ADR-004)");
+    }
 
     code.push(0xBA); emit_u32(&mut code, args_term_va);
     code.extend_from_slice(&[0xB8, 0xC2, 0x00, 0x00, 0x00]);
