@@ -178,10 +178,10 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
 
     // ── 1.5. Framebuffer console ─────────────────────────────────────────────
     // Init before the first log::info! so kernel messages appear on screen.
-    // SAFETY: HHDM is active; bootloader identity-maps [0, 4 GiB) so the
-    //         GOP framebuffer (always below 4 GiB on QEMU/VBox) is reachable
-    //         at hhdm_offset + framebuffer.base.
-    unsafe { hal::fb::init(&boot_info.framebuffer, boot_info.hhdm_offset) };
+    // HHDM is active; bootloader identity-maps [0, 4 GiB) so the GOP
+    // framebuffer (always below 4 GiB on QEMU/VBox) is reachable at
+    // hhdm_offset + framebuffer.base.
+    hal::fb::init(&boot_info.framebuffer, boot_info.hhdm_offset);
     hal::fb::write_str("[fb] boot banner enabled\n");
 
     log::info!("micro-nt-os kernel_main — Phase 1");

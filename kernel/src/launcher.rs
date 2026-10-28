@@ -179,7 +179,7 @@ fn launch_game(fat_path: &str) -> Option<usize> {
 
     // Set up PEB/TEB/stack for the game process
     let hhdm_offset = {
-        let guard = crate::syscall::SYSCALL_CTX_PUB();
+        let guard = crate::syscall::syscall_ctx_pub();
         match guard { Some(h) => h, None => return None }
     };
 
@@ -283,7 +283,7 @@ fn launch_game(fat_path: &str) -> Option<usize> {
         *code.add(off) = 0xB8; off += 1;  // MOV EAX, entry_point
         (code.add(off) as *mut u32).write_unaligned(entry_point); off += 4;
         *code.add(off) = 0xFF; off += 1;  // JMP EAX
-        *code.add(off) = 0xE0; off += 1;
+        *code.add(off) = 0xE0;
     }
 
     hal::serial::write_str("[launch_game] trampoline built (");
