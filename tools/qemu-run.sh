@@ -18,7 +18,7 @@
 #   Combined  : single OVMF.fd  → -bios OVMF.fd
 #   Split     : code.fd + vars  → -drive if=pflash (code ro) + (vars rw copy)
 #
-# Exits 0 if serial output contains "kernel_main ready" within the timeout.
+# Exits 0 if serial output contains "kernel: phase 1 done" within the timeout.
 # Exits 1 otherwise.
 #
 # Environment:
@@ -304,7 +304,7 @@ if [[ "$SCENARIO" == "stack-overflow" ]]; then
     exit 1
 fi
 
-SUCCESS_TEXT="kernel_main ready"
+SUCCESS_TEXT="kernel: phase 1 done"
 SMOKE_TEXT="[smoke] int2e write path hit"
 IAT_TEXT="[smoke] IAT NtWriteFile path hit"
 CREATE_PROCESS_TEXT="[smoke] NtCreateProcess ok"

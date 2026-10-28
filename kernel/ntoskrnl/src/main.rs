@@ -382,8 +382,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         .map(|b| b.free_pages())
         .unwrap_or(0);
 
+    // End of phase 1: the boot scenarios (tests/boot/) wait for this line.
     log::info!(
-        "kernel_main ready — ticks: {}, free_pages: {}",
+        "kernel: phase 1 done — ticks: {}, free_pages: {}",
         hal::timer::get_tick_count(),
         free_pages,
     );
