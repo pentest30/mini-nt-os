@@ -373,9 +373,7 @@ pub fn spawn_user_thread(
     // 8 KiB matches the kernel stack used for syscall / interrupt handling.
     // Bump allocator never returns this memory, which is fine — Phase 2.5.
     const KSTACK_SIZE: usize = 8 * 1024;
-    const RFLAGS: u64 = (1u64 << 9)   // IF = 1
-                      | (3u64 << 12)  // IOPL = 3
-                      | (1u64 << 1);  // reserved always-1 bit
+    const RFLAGS: u64 = hal::ring3::USER_RFLAGS; // IF=1, IOPL=0
 
     let kstack = alloc::vec![0u8; KSTACK_SIZE];
     let kstack_top = kstack.as_ptr() as u64 + KSTACK_SIZE as u64;
