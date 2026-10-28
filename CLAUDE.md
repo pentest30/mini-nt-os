@@ -62,6 +62,7 @@ cargo test -p ke
 cargo test -p bump-alloc
 cargo test -p io-manager
 cargo build -p kernel --target x86_64-unknown-none --profile kernel
+cargo build -p kernel --target x86_64-unknown-none --profile kernel --features trace-syscalls   # trace série des appels système
 cargo build -p bootloader --target x86_64-unknown-uefi --profile kernel
 tools/qemu-run.sh          # construit le noyau et lance QEMU (OVMF, série sur stdio)
 ```

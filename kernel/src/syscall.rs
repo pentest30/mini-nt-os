@@ -266,7 +266,8 @@ pub fn SYSCALL_CTX_PUB() -> Option<u64> {
     guard.as_ref().map(|c| c.hhdm_offset)
 }
 
-pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
+/// Serial trace of Win32 syscalls, compiled in by the `trace-syscalls` feature.
+fn trace_syscall(number: u32, args_ptr: u32) {
     // Trace Win32 UI syscalls (0x2010..0x201F) during message pump debugging.
     if number >= 0x2010 && number <= 0x201F {
         log::info!("[w32dbg] dispatch: syscall={:#x} args_ptr={:#x}", number, args_ptr);
@@ -276,6 +277,13 @@ pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
         && number != 0x2015 {
         hal::serial::write_str("[sys] ");
         hal::serial::write_fmt(core::format_args!("{:#x}\n", number));
+    }
+}
+
+pub fn dispatch(number: u32, args_ptr: u32) -> u32 {
+    // Hot path: tracing only with `--features trace-syscalls` (06 §5).
+    if cfg!(feature = "trace-syscalls") {
+        trace_syscall(number, args_ptr);
     }
     match number {
         // ── NT native syscalls ────────────────────────────────────────────────
