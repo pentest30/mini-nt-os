@@ -1,0 +1,12 @@
+# Kernel stack overflow (M0): the boot thread overflows its guarded kernel
+# stack right after switching to it; the boot must end on a readable STOP
+# screen naming the overflow, not on a triple fault (QEMU runs -no-reboot).
+features = test-stack-overflow
+cpus     = default
+timeout  = 120
+
+expect = *** STOP: 0x0000007f
+expect = KERNEL STACK OVERFLOW: guard page hit
+expect = System halted.
+
+forbid = KERNEL PANIC

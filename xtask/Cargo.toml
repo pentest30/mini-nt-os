@@ -1,0 +1,9 @@
+[package]
+name    = "xtask"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Build and test driver (02 §9.2), run as `cargo xtask <command>` through the
+# alias in .cargo/config.toml. Host tool, std only: no dependency.
+[dependencies]

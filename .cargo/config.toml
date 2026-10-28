@@ -1,6 +1,10 @@
 # .cargo/config.toml
 # Per-target build configuration for kernel and UEFI crates.
 
+# ── cargo xtask (02 §9.2) ───────────────────────────────────────────────────
+[alias]
+xtask = "run --quiet --package xtask --"
+
 # ── Bare-metal kernel target ────────────────────────────────────────────────
 [target.x86_64-unknown-none]
 rustflags = [
