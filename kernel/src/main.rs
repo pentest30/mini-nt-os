@@ -285,13 +285,65 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         log::info!("heap: Box allocation probe OK");
     }
 
+    // ── 3b. Guarded kernel stacks (M0, 02 §4.2) ──────────────────────────────
+    // From here on every kernel stack comes from mm::kstack, with an unmapped
+    // guard page below it: an overflow faults, and the #DF/#PF handlers print
+    // a STOP screen naming it instead of corrupting memory or triple-faulting.
+    hal::idt::set_stack_guard_hook(Some(kstack_guard_hit));
+
+    // Ring-3 → ring-0 entry: RSP0 until a user thread installs its own, and
+    // SYSENTER_ESP (shared by all threads until the trap rework of M3).
+    let entry_stack = mm::kstack::allocate().expect("no kernel stack for syscall entry");
+    // SAFETY: entry_stack is reserved for ring-3 entry for the life of the system.
+    unsafe {
+        hal::gdt::set_kernel_stack_top(entry_stack.top);
+        hal::sysenter::set_entry_stack(entry_stack.top);
+    }
+
+    // The boot thread leaves the bootloader's unguarded stack for good.
+    let boot_stack = mm::kstack::allocate().expect("no kernel stack for the boot thread");
+    log::info!(
+        "kstack: boot thread on guarded stack {:#x}..{:#x}, syscall entry {:#x}..{:#x}",
+        boot_stack.bottom, boot_stack.top, entry_stack.bottom, entry_stack.top,
+    );
+    // SAFETY: boot_stack is a fresh 16-byte aligned stack owned by the boot
+    // thread for the life of the system. kernel_main_phase1 never returns, so
+    // nothing on the bootloader stack is used again.
+    unsafe {
+        asm!(
+            "mov rsp, {top}",
+            "xor ebp, ebp",
+            "call {phase1}",
+            "ud2",
+            top = in(reg) boot_stack.top,
+            phase1 = sym kernel_main_phase1,
+            in("rdi") boot_info_ptr,
+            options(noreturn),
+        );
+    }
+}
+
+/// Rest of the boot sequence, on the boot thread's guarded kernel stack.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
+    // SAFETY: kernel_main validated this pointer before switching stacks.
+    let boot_info: &'static BootInfo = unsafe { &*boot_info_ptr };
+
+    if cfg!(feature = "test-stack-overflow") {
+        provoke_stack_overflow();
+    }
+
     // ── 4. Executive initialisation ───────────────────────────────────────────
     // With the bump allocator (T5-1) there is no free-list fragmentation, so
     // ob/ps/io can safely run before or after loader_demo without corrupting
     // subsequent large allocations.
     x86_64::instructions::interrupts::disable();
     set_kernel_segments();
-    ke::init();
+    let idle_stack = mm::kstack::allocate().expect("no kernel stack for the idle thread");
+    // SAFETY: idle_stack is reserved for the idle thread for the life of the system.
+    unsafe { ke::init(idle_stack.top) };
     ob::init();
     ps::init();
     io_manager::init(
@@ -357,13 +409,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         entry_point, stack_top,
     );
 
-    let user_tid = ke::scheduler::spawn_user_thread(
-        entry_point,
-        stack_top,
-        hal::gdt::user_code32_selector(),
-        hal::gdt::user_data32_selector(),
-        hal::gdt::user_teb_fs_selector(),
-    ).expect("kernel_main: scheduler full — cannot spawn initial user thread");
+    let user_tid = spawn_user_thread(entry_point, stack_top).expect("kernel_main: scheduler full — cannot spawn initial user thread");
 
     log::info!("kernel_main: user thread TID={} spawned — launching Mino UI", user_tid);
 
@@ -379,6 +425,49 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         // kernel_shell returns when ESC is pressed → back to launcher.
         kernel_shell(boot_info.hhdm_offset);
     }
+}
+
+/// Spawns a ring-3 thread on a fresh guarded kernel stack (`mm::kstack`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
+    let kstack = mm::kstack::allocate()?;
+    // SAFETY: kstack was just allocated for this thread alone and is never freed.
+    unsafe {
+        ke::scheduler::spawn_user_thread(
+            kstack.top,
+            entry32,
+            stack32,
+            hal::gdt::user_code32_selector(),
+            hal::gdt::user_data32_selector(),
+            hal::gdt::user_teb_fs_selector(),
+        )
+    }
+}
+
+/// Kernel-stack guard-page lookup for the fault handlers (`hal::idt`).
+fn kstack_guard_hit(addr: u64) -> Option<(u64, u64)> {
+    mm::kstack::guard_hit(addr).map(|s| (s.bottom, s.top))
+}
+
+/// Recurses until the boot thread's kernel stack runs into its guard page.
+/// Expected outcome: the STOP screen naming a kernel stack overflow.
+/// Called only with the `test-stack-overflow` feature.
+fn provoke_stack_overflow() -> ! {
+    log::info!("[smoke] provoking a kernel stack overflow (test-stack-overflow)");
+    let depth = recurse(0);
+    panic!("stack overflow test: recursion returned at depth {}", depth);
+}
+
+#[inline(never)]
+fn recurse(depth: u64) -> u64 {
+    // 512 bytes per frame, live across the call so frames cannot be merged.
+    let frame = core::hint::black_box([depth; 64]);
+    if core::hint::black_box(depth) == u64::MAX {
+        return frame[0];
+    }
+    recurse(depth + 1) + frame[63]
 }
 
 fn set_kernel_segments() {
@@ -1063,13 +1152,7 @@ fn shell_load_and_spawn(fat_path: &str, hhdm_offset: u64) -> Option<usize> {
 
     hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
 
-    ke::scheduler::spawn_user_thread(
-        img.entry_point as u32,
-        ctx.stack_top,
-        hal::gdt::user_code32_selector(),
-        hal::gdt::user_data32_selector(),
-        hal::gdt::user_teb_fs_selector(),
-    )
+    spawn_user_thread(img.entry_point as u32, ctx.stack_top)
 }
 
 /// Normalise a shell path argument → FAT-style "/NAME.EXT" uppercase.

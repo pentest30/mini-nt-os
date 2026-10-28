@@ -291,13 +291,7 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     hal::serial::write_str(" DllMain calls + game entry)\r\n");
 
     // Spawn ring-3 thread — starts at the trampoline, which calls DllMains then jumps to game
-    ke::scheduler::spawn_user_thread(
-        tramp_va,
-        ctx.stack_top,
-        hal::gdt::user_code32_selector(),
-        hal::gdt::user_data32_selector(),
-        hal::gdt::user_teb_fs_selector(),
-    )
+    crate::spawn_user_thread(tramp_va, ctx.stack_top)
 }
 
 fn serial_write_u32(mut n: u32) {
