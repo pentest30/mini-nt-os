@@ -360,7 +360,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
-    // Emits "[smoke] HELLO.EXE ran ok" on success — checked by qemu-run.sh.
+    // Emits "[smoke] HELLO.EXE ran ok" on success (not required by tests/boot/).
     try_run_hello_exe(boot_info.hhdm_offset);
 
     // ── 5a2. Phase 3: DXVK DLL chain load test ────────────────────────────────
@@ -382,8 +382,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         .map(|b| b.free_pages())
         .unwrap_or(0);
 
+    // End of phase 1: the boot scenarios (tests/boot/) wait for this line.
     log::info!(
-        "kernel_main ready — ticks: {}, free_pages: {}",
+        "kernel: phase 1 done — ticks: {}, free_pages: {}",
         hal::timer::get_tick_count(),
         free_pages,
     );

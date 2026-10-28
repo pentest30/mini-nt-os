@@ -1,0 +1,24 @@
+# Smoke test (M0): the kernel boots to the end of phase 1, then the ring-3
+# test programs of the FAT ramdisk (tools/mkfat) run through the system call
+# paths: int 2Eh everywhere, SYSENTER on Intel (ADR-004).
+cpus    = default, intel
+timeout = 120
+
+expect = [smoke] kernel W^X ok
+expect = [smoke] identity map removed
+expect = [smoke] heap self-test ok
+expect = [smoke] FAT read probe hit
+expect = kernel: phase 1 done
+expect = [smoke] int2e write path hit
+expect = [smoke] IAT NtWriteFile path hit
+expect = [smoke] NtCreateProcess ok
+expect = [smoke] NtCreateThread ok
+expect = [smoke] SYSENTER path hit | [smoke] SYSENTER path skipped
+
+# A fatal error ends the run at once.
+forbid = *** STOP:
+forbid = KERNEL PANIC
+
+# The system call trace belongs to the trace-syscalls feature only (06 §5).
+forbid-line-start = [sys]
+forbid = [w32dbg] dispatch:

@@ -167,7 +167,7 @@ if ((Get-VmState -Name $VmName) -eq "running") {
 Invoke-VBoxManage -Args @("startvm", $VmName, "--type", "headless")
 
 $requiredMarkers = @(
-    "kernel_main ready",
+    "kernel: phase 1 done",
     "[smoke] int2e write path hit",
     "[smoke] NtCreateProcess ok",
     "[smoke] NtCreateThread ok"

@@ -10,7 +10,7 @@
 //!   e.g.: mkfat fat.img /path/to/hello.exe:HELLO.EXE
 //!
 //! FAT names must be plain 8.3 (no subdirectory path).
-//! The tool is invoked by tools/qemu-run.sh before assembling the ESP.
+//! `cargo xtask` runs it to build the ramdisk of each ESP it lays out.
 
 use std::env;
 use std::fs;

@@ -27,9 +27,9 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - `cargo xtask run` et `cargo xtask test` (QEMU sans affichage, marqueurs série) en CI.
 
 **Critères de sortie**
-- [ ] `cargo check --workspace` et `cargo test --workspace` passent sans warning (`-D warnings` en CI).
-- [ ] Le smoke test QEMU démarre jusqu'à `kernel: phase 1 done`.
-- [ ] Un débordement de pile noyau provoqué volontairement produit un écran d'erreur fatale lisible, pas un *triple fault*.
+- [x] `cargo check --workspace` et `cargo test --workspace` passent sans warning (`-D warnings` en CI).
+- [x] Le smoke test QEMU démarre jusqu'à `kernel: phase 1 done`.
+- [x] Un débordement de pile noyau provoqué volontairement produit un écran d'erreur fatale lisible, pas un *triple fault*.
 
 ## M1 — Noyau Ke
 

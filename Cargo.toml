@@ -13,6 +13,7 @@ members = [
     "kernel/io",
     "tools/pe-inspect",
     "tools/mkfat",
+    "xtask",
 ]
 # Code mort de l'ancienne architecture (ADR-019), hors du workspace en attendant
 # sa suppression après extraction de la connaissance (audit §5 et §6).
