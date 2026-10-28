@@ -6,8 +6,10 @@
 //!      Covers UEFI runtime, MMIO, APIC (0xFEE0_0000), bootloader code.
 //!
 //!   2. HHDM [HHDM_OFFSET, HHDM_OFFSET + HHDM_SIZE) → [0, HHDM_SIZE).
-//!      2 MiB huge pages. The kernel image at physical 0x0010_0000 is
-//!      accessible at HHDM_OFFSET + 0x0010_0000 = 0xFFFF_8000_0010_0000.
+//!      2 MiB huge pages.
+//!
+//!   3. Kernel image at its link address (0xFFFF_FFFF_8000_0000, ADR-014),
+//!      4 KiB pages with each segment's rights: W^X ([`map_kernel`]).
 //!
 //! All page table frames are allocated from UEFI (LOADER_DATA).
 //! After ExitBootServices we write CR3 to activate these tables.
@@ -151,6 +153,73 @@ unsafe fn map_huge_2m(bt: &BootServices, l4_phys: PhysAddr, virt: u64, phys: u64
         l2[l2_idx].set_addr(PhysAddr::new(phys), HUGE_DATA);
     }
     // Already mapped — skip (can happen if ranges overlap, which they don't here).
+}
+
+/// Map the kernel image's segments at their link addresses with 4 KiB pages:
+/// writable only if the segment is, executable only if the segment is.
+///
+/// # Safety
+/// Must be called from UEFI boot services context; `l4_phys` is the PML4
+/// returned by [`build`] and `image` describes memory loaded by the loader.
+pub unsafe fn map_kernel(bt: &BootServices, l4_phys: PhysAddr, image: &crate::loader::KernelImage) {
+    for seg in &image.segments[..image.segment_count] {
+        let mut flags = PageTableFlags::PRESENT;
+        if seg.writable {
+            flags |= PageTableFlags::WRITABLE;
+        }
+        if !seg.executable {
+            flags |= PageTableFlags::NO_EXECUTE;
+        }
+        let start = seg.vaddr & !0xFFF;
+        let end = (seg.vaddr + seg.memsz + 0xFFF) & !0xFFF;
+        for virt in (start..end).step_by(4096) {
+            let phys = image.phys_base + (virt - image.virt_base);
+            // SAFETY: forwarded from the caller.
+            unsafe { map_4k(bt, l4_phys, virt, phys, flags) };
+        }
+    }
+    log::info!(
+        "paging: kernel {:#x}..{:#x} mapped W^X ({} segments)",
+        image.virt_base, image.virt_base + image.size, image.segment_count,
+    );
+}
+
+/// Map one 4 KiB page `virt` → `phys`. A page already mapped (two segments
+/// sharing it) keeps the union of the rights; the linker script page-aligns
+/// every segment, so this does not happen with our kernel.
+///
+/// # Safety
+/// `l4_phys` must point to a valid, accessible PML4 frame.
+unsafe fn map_4k(bt: &BootServices, l4_phys: PhysAddr, virt: u64, phys: u64, flags: PageTableFlags) {
+    let index = |level: u32| ((virt >> (12 + 9 * level)) & 0x1FF) as usize;
+    let mut table_phys = l4_phys;
+    for level in [3u32, 2, 1] {
+        // SAFETY: table_phys is a page-table frame we allocated (or the PML4);
+        // phys == virt in UEFI context.
+        let table = unsafe { &mut *(table_phys.as_u64() as *mut PageTable) };
+        let entry = &mut table[index(level)];
+        assert!(!entry.flags().contains(PageTableFlags::HUGE_PAGE), "paging: kernel range overlaps a huge page");
+        table_phys = if entry.is_unused() {
+            let frame = alloc_zeroed_frame(bt);
+            entry.set_addr(frame, DIR_FLAGS);
+            frame
+        } else {
+            entry.addr()
+        };
+    }
+    // SAFETY: as above; table_phys is now the page table for `virt`.
+    let pt = unsafe { &mut *(table_phys.as_u64() as *mut PageTable) };
+    let pte = &mut pt[index(0)];
+    if pte.is_unused() {
+        pte.set_addr(PhysAddr::new(phys), flags);
+    } else {
+        let old = pte.flags();
+        let mut merged = old | flags;
+        if !(old.contains(PageTableFlags::NO_EXECUTE) && flags.contains(PageTableFlags::NO_EXECUTE)) {
+            merged.remove(PageTableFlags::NO_EXECUTE);
+        }
+        pte.set_flags(merged);
+    }
 }
 
 // ── UEFI frame allocator ──────────────────────────────────────────────────────

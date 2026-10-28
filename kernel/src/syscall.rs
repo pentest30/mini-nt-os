@@ -683,12 +683,7 @@ fn nt_create_process(args_ptr: u32) -> u32 {
             pt: unsafe { mm::MmPageTables::new(ctx.hhdm_offset) },
         };
         let mut user_vad = mm::vad::VadTree::new();
-        let mut img = ps::loader::LoadedImage {
-            image_base: 0,
-            entry_point: 0,
-            image_size: 0,
-        };
-        if ps::loader::load_image(&bytes, &mut img, &mut user_vad, &mut mapper, None).is_ok() {
+        if let Ok(img) = ps::loader::load_image(&bytes, &mut user_vad, &mut mapper, None) {
             if let Ok(proc_ctx) = ps::loader::setup_process(&img, &mut user_vad, &mut mapper, pid, 1) {
                 launch_ctx = Some((img.entry_point as u32, proc_ctx.stack_top));
             }

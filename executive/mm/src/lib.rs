@@ -19,6 +19,7 @@ extern crate alloc;
 pub mod buddy;
 pub mod kstack;
 pub mod paging;
+pub mod pool;
 pub mod vad;
 pub mod virtual_alloc;
 

@@ -30,4 +30,3 @@ io-manager       = { path = "../executive/io" }
 x86_64           = { workspace = true }
 spin             = { workspace = true }
 log              = { workspace = true }
-bump-alloc       = { path = "../bump-alloc" }

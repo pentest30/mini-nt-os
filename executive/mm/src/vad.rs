@@ -9,17 +9,16 @@
 //! The PE loader inserts VAD nodes when mapping an .exe or .dll.
 //! Games call VirtualAlloc which also inserts nodes.
 //!
-//! Implementation note (Phase 2.5):
-//!   We use a fixed-size sorted array instead of BTreeMap. The BTreeMap
-//!   requires the global allocator for its internal B-tree nodes, and we
-//!   observed corruption when the bump allocator's heap region is not yet
-//!   fully mapped at the time of the first BTreeMap insert. A flat sorted
-//!   array has no internal allocation overhead and is sufficient for the
-//!   ~32 VAD entries a process accumulates during Phase 2–3.
+//! Implementation: a `BTreeMap` keyed by start address. It replaced a
+//! 64-entry array that worked around a "BTreeMap corruption" blamed on the
+//! early heap (audit §4.2); with guarded kernel stacks and `mm::pool`, the
+//! boot heap self-test and the smoke test run clean. The AVL tree of NT
+//! comes with the per-process address spaces of M2.
 //!
 //! WI7e Ch.5 §Virtual Address Descriptors
 //! ReactOS ntoskrnl/mm/vadnode.c
 
+use alloc::collections::BTreeMap;
 use bitflags::bitflags;
 
 bitflags! {
@@ -64,126 +63,61 @@ pub enum VadKind {
     Mapped,
 }
 
-// ── Fixed-size sorted-array VAD store ────────────────────────────────────────
-
-/// Maximum number of VAD entries per process.
-/// 64 is plenty for Phase 2–3 (image + stubs + PEB/TEB + heap regions).
-const MAX_VAD: usize = 64;
-
-/// Per-process VAD tree.
-///
-/// Internally a sorted array of up to `MAX_VAD` nodes, ordered by `start`.
-/// Gives O(log n) find via binary search; O(n) insert/remove via array shift.
-/// No heap allocation for internal bookkeeping — avoids bump-allocator races
-/// during early boot before the heap mapping is stable.
+/// Per-process VAD tree: non-overlapping nodes keyed by start address.
 pub struct VadTree {
-    // Invariant: entries[0..len] are valid, sorted by .start, non-overlapping.
-    entries: [Option<VadNode>; MAX_VAD],
-    len:     usize,
+    nodes: BTreeMap<u64, VadNode>,
 }
 
 impl VadTree {
     pub fn new() -> Self {
-        // SAFETY: Option<VadNode> with None is valid zero-bits on all
-        // platforms Rust targets; const-init is safe here.
-        Self {
-            entries: [const { None }; MAX_VAD],
-            len: 0,
-        }
+        Self { nodes: BTreeMap::new() }
     }
 
     /// Number of entries currently in the tree.
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize { self.nodes.len() }
 
     /// Returns `true` if the tree has no entries.
-    pub fn is_empty(&self) -> bool { self.len == 0 }
+    pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
     /// Insert a new VAD node. Returns `Err("VAD overlap")` if the range
-    /// overlaps any existing node, or `Err("VAD table full")` if the
-    /// fixed-size table is exhausted.
+    /// overlaps any existing node.
     ///
     /// Overlap condition: two ranges [a, b) and [c, d) overlap iff a < d && c < b.
     pub fn insert(&mut self, node: VadNode) -> Result<(), &'static str> {
-        if self.len >= MAX_VAD {
-            return Err("VAD table full");
-        }
-
-        // Binary search for the insertion point (first entry with start >= node.start).
-        let idx = self.lower_bound(node.start);
-
-        // Check the entry immediately before (it might extend into our range).
-        if idx > 0 {
-            let prev = self.entries[idx - 1].as_ref().unwrap();
+        // The node starting at or below node.start might extend into our range.
+        if let Some((_, prev)) = self.nodes.range(..=node.start).next_back() {
             if prev.end > node.start {
                 return Err("VAD overlap");
             }
         }
-        // Check the entry at idx (it might start inside our range).
-        if idx < self.len {
-            let next = self.entries[idx].as_ref().unwrap();
+        // The first node starting after node.start might begin inside our range.
+        if let Some((_, next)) = self.nodes.range(node.start..).next() {
             if next.start < node.end {
                 return Err("VAD overlap");
             }
         }
-
-        // Shift entries[idx..] right by one to make room.
-        let mut i = self.len;
-        while i > idx {
-            self.entries[i] = self.entries[i - 1].take();
-            i -= 1;
-        }
-        self.entries[idx] = Some(node);
-        self.len += 1;
+        self.nodes.insert(node.start, node);
         Ok(())
     }
 
     /// Find the VAD node containing `addr`, if any.
     pub fn find(&self, addr: u64) -> Option<&VadNode> {
-        if self.len == 0 {
-            return None;
-        }
-        // Find the last entry with start <= addr.
-        // lower_bound returns first index with start >= addr+1, i.e. start > addr.
-        // So the candidate is one before that.
-        let idx = self.upper_bound(addr); // first entry with start > addr
-        if idx == 0 {
-            return None;
-        }
-        let node = self.entries[idx - 1].as_ref().unwrap();
-        if addr < node.end {
-            Some(node)
-        } else {
-            None
-        }
+        self.nodes
+            .range(..=addr)
+            .next_back()
+            .map(|(_, node)| node)
+            .filter(|node| addr < node.end)
     }
 
     /// Remove the VAD node starting at `start_addr` (VirtualFree MEM_RELEASE).
     /// Returns the removed node, or `None` if not found.
     pub fn remove(&mut self, start_addr: u64) -> Option<VadNode> {
-        let idx = self.lower_bound(start_addr);
-        if idx >= self.len {
-            return None;
-        }
-        let entry = self.entries[idx].as_ref()?;
-        if entry.start != start_addr {
-            return None;
-        }
-        let removed = self.entries[idx].take().unwrap();
-        // Shift entries[idx+1..] left by one.
-        let mut i = idx;
-        while i + 1 < self.len {
-            self.entries[i] = self.entries[i + 1].take();
-            i += 1;
-        }
-        self.len -= 1;
-        Some(removed)
+        self.nodes.remove(&start_addr)
     }
 
     /// Return an iterator over (start, end) pairs — for diagnostics only.
     pub fn debug_ranges(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
-        self.entries[..self.len]
-            .iter()
-            .map(|e| { let n = e.as_ref().unwrap(); (n.start, n.end) })
+        self.nodes.values().map(|n| (n.start, n.end))
     }
 
     /// Find the lowest free virtual range of at least `size` bytes,
@@ -197,8 +131,7 @@ impl VadTree {
         debug_assert!(align.is_power_of_two());
         let mut cursor = align_up(search_start, align);
 
-        for entry in &self.entries[..self.len] {
-            let node = entry.as_ref().unwrap();
+        for node in self.nodes.values() {
             if node.start < search_start {
                 // Behind our search start; skip but update cursor if needed.
                 if node.end > cursor {
@@ -217,37 +150,11 @@ impl VadTree {
         // Gap after the last node (or the tree is empty).
         Some(cursor)
     }
+}
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    /// Index of the first entry whose `start >= key` (classic lower_bound).
-    fn lower_bound(&self, key: u64) -> usize {
-        let mut lo = 0usize;
-        let mut hi = self.len;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.entries[mid].as_ref().unwrap().start < key {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
-    }
-
-    /// Index of the first entry whose `start > key` (classic upper_bound).
-    fn upper_bound(&self, key: u64) -> usize {
-        let mut lo = 0usize;
-        let mut hi = self.len;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.entries[mid].as_ref().unwrap().start <= key {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        lo
+impl Default for VadTree {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -463,6 +370,19 @@ mod tests {
         // Gaps must not be findable
         assert!(t.find(0x2000).is_none());
         assert!(t.find(0x4000).is_none());
+    }
+
+    #[test]
+    fn more_than_64_regions_fit() {
+        // The array version refused the 65th node (audit §4.5).
+        let mut t = VadTree::new();
+        for i in 0..1000u64 {
+            t.insert(VadNode::private(i * 2 * PAGE, i * 2 * PAGE + PAGE, rw())).unwrap();
+        }
+        assert_eq!(t.len(), 1000);
+        assert_eq!(t.find(999 * 2 * PAGE).map(|n| n.start), Some(999 * 2 * PAGE));
+        assert!(t.find(999 * 2 * PAGE + PAGE).is_none(), "gap between nodes");
+        assert_eq!(t.find_free_gap(0, PAGE, PAGE), Some(PAGE));
     }
 
     #[test]

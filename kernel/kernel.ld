@@ -1,44 +1,65 @@
-/* kernel/kernel.ld — Linker script for the Mino kernel flat binary.
+/* kernel/kernel.ld — Linker script for the Mino kernel (ELF64, ADR-014).
  *
- * Physical load address: 0x0010_0000 (1 MiB mark).
- * The bootloader allocates pages there and loads kernel.bin verbatim.
- * The flat binary is produced with:  objcopy -O binary kernel kernel.bin
+ * The kernel is linked in the top 2 GiB of the address space, as
+ * `code-model=kernel` expects. The bootloader loads each PT_LOAD segment into
+ * one physically contiguous block and maps it at its virtual address with the
+ * segment's rights, so the image is W^X:
  *
- * kernel_main MUST be at the very first byte of the binary (byte 0 = 0x10_0000).
- * We achieve this by placing kernel_main in ".text.entry" and listing that
- * section first in the .text output group.
+ *   text    .text                 R X
+ *   rodata  .rodata .got          R
+ *   data    .data .bss            R W  (no execute)
+ *
+ * Every output section starts on a page boundary, so no page mixes rights.
+ * The __*_start / __*_end symbols let the kernel check those rights at boot.
  */
 
 ENTRY(kernel_main)
 
-SECTIONS {
-    /* Start at 1 MiB — matches KERNEL_PHYS_BASE in the bootloader. */
-    . = 0x00100000;
+KERNEL_VMA = 0xFFFFFFFF80000000;
 
-    .text : {
-        /* kernel_main is tagged #[link_section = ".text.entry"]; place it first
-         * so it sits at physical 0x00100000 = first byte of kernel.bin. */
+PHDRS {
+    text   PT_LOAD FLAGS(5);   /* R X */
+    rodata PT_LOAD FLAGS(4);   /* R   */
+    data   PT_LOAD FLAGS(6);   /* R W */
+}
+
+SECTIONS {
+    . = KERNEL_VMA;
+    __kernel_start = .;
+
+    .text : ALIGN(4096) {
+        __text_start = .;
         KEEP(*(.text.entry))
         *(.text .text.*)
-    }
+        . = ALIGN(4096);
+        __text_end = .;
+    } :text
 
     .rodata : ALIGN(4096) {
+        __rodata_start = .;
         *(.rodata .rodata.*)
-    }
+        /* Static linking: GOT entries are final at link time, never written. */
+        *(.got .got.*)
+        *(.data.rel.ro .data.rel.ro.*)
+        . = ALIGN(4096);
+        __rodata_end = .;
+    } :rodata
 
     .data : ALIGN(4096) {
+        __data_start = .;
         *(.data .data.*)
-        /* Rust global statics that have non-zero initializers end up here. */
-    }
+    } :data
 
     .bss : ALIGN(4096) {
         __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)
         __bss_end = .;
-    }
+        . = ALIGN(4096);
+        __data_end = .;
+    } :data
 
-    /* objcopy -O binary writes zeros for the BSS range automatically. */
+    __kernel_end = .;
 
     /DISCARD/ : {
         *(.comment)

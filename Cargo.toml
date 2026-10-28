@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "boot-info",
     "bootloader",
-    "bump-alloc",
     "hal",
     "kernel",
     "executive/ke",
@@ -52,7 +51,7 @@ uart_16550      = { version = "0.3",  default-features = false }
 spin            = { version = "0.9",  default-features = false, features = ["lazy", "spin_mutex", "once"] }
 bitflags        = { version = "2.4",  default-features = false }
 # Memory
-# linked_list_allocator removed — replaced by bump-alloc crate (T5-1)
+# Kernel heap: mm::pool (no allocator crate, ADR-016).
 # Boot
 uefi            = { version = "0.26", features = ["alloc", "global_allocator", "logger"] }
 # PE parsing (user-mode tool only)

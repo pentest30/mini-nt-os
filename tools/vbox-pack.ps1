@@ -16,53 +16,17 @@ function Resolve-CommandPath {
     return $null
 }
 
-function Resolve-RustLlvmObjcopy {
-    $rustc = Resolve-CommandPath -Names @("rustc")
-    if (-not $rustc) { return $null }
-    $sysroot = (& $rustc --print sysroot).Trim()
-    if ([string]::IsNullOrWhiteSpace($sysroot)) { return $null }
-    $hostLine = (& $rustc -vV | Where-Object { $_ -like "host:*" } | Select-Object -First 1)
-    if (-not $hostLine) { return $null }
-    $hostTriple = ($hostLine -replace "^host:\s*", "").Trim()
-    if ([string]::IsNullOrWhiteSpace($hostTriple)) { return $null }
-    $candidates = @(
-        (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\llvm-objcopy.exe"),
-        (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\llvm-objcopy"),
-        (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\rust-objcopy.exe"),
-        (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\rust-objcopy")
-    )
-    foreach ($c in $candidates) {
-        if (Test-Path -LiteralPath $c) { return $c }
-    }
-    return $null
-}
-
-function Ensure-KernelBin {
+function Resolve-KernelElf {
     param(
         [string]$RepoRoot,
         [string]$ProfileDir
     )
-    $targetRoot = Join-Path $RepoRoot "target"
-    $kernelTargetDir = Join-Path $targetRoot "x86_64-unknown-none\$ProfileDir"
-    $kernelBinPath = Join-Path $kernelTargetDir "kernel.bin"
-    if (Test-Path -LiteralPath $kernelBinPath) { return $kernelBinPath }
-    $kernelElfPath = Join-Path $kernelTargetDir "kernel"
+    # The bootloader loads the kernel ELF as is (ADR-014): no objcopy step.
+    $kernelElfPath = Join-Path $RepoRoot "target\x86_64-unknown-none\$ProfileDir\kernel"
     if (-not (Test-Path -LiteralPath $kernelElfPath)) {
         throw "Kernel ELF not found at $kernelElfPath"
     }
-    $objcopy = Resolve-CommandPath -Names @("rust-objcopy", "llvm-objcopy")
-    if (-not $objcopy) { $objcopy = Resolve-RustLlvmObjcopy }
-    if (-not $objcopy) {
-        throw "No objcopy found. Install llvm-tools or cargo-binutils."
-    }
-    & $objcopy -O binary $kernelElfPath $kernelBinPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "objcopy failed with exit code $LASTEXITCODE"
-    }
-    if (-not (Test-Path -LiteralPath $kernelBinPath)) {
-        throw "kernel.bin not created at $kernelBinPath"
-    }
-    return $kernelBinPath
+    return $kernelElfPath
 }
 
 function New-FatImageFromMkfat {
@@ -220,7 +184,7 @@ try {
     if (-not (Test-Path -LiteralPath $bootloaderEfi)) {
         throw "Bootloader EFI missing: $bootloaderEfi"
     }
-    $kernelBin = Ensure-KernelBin -RepoRoot $repoRoot -ProfileDir $profileDir
+    $kernelElf = Resolve-KernelElf -RepoRoot $repoRoot -ProfileDir $profileDir
     New-Item -ItemType Directory -Path $vboxDir -Force | Out-Null
     $fatImg = Join-Path $vboxDir "fat.img"
     New-FatImageFromMkfat -RepoRoot $repoRoot -OutPath $fatImg
@@ -251,7 +215,7 @@ try {
         $efiBoot = Join-Path $root "EFI\BOOT"
         New-Item -ItemType Directory -Path $efiBoot -Force | Out-Null
         Copy-Item -LiteralPath $bootloaderEfi -Destination (Join-Path $efiBoot "BOOTX64.EFI") -Force
-        Copy-Item -LiteralPath $kernelBin     -Destination (Join-Path $root    "kernel.bin")   -Force
+        Copy-Item -LiteralPath $kernelElf     -Destination (Join-Path $root    "kernel.elf")   -Force
         Copy-Item -LiteralPath $fatImg        -Destination (Join-Path $root    "fat.img")      -Force
     }
     finally {
@@ -268,7 +232,7 @@ try {
     Write-Host "VHD ready: $VhdPath"
     Write-Host "Contents:"
     Write-Host "  EFI\BOOT\BOOTX64.EFI"
-    Write-Host "  kernel.bin"
+    Write-Host "  kernel.elf"
     Write-Host "  fat.img"
 }
 finally {
