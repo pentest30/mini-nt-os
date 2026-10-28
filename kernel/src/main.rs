@@ -564,8 +564,7 @@ fn loader_from_fat(hhdm_offset: u64) -> Option<(u32, u32)> {
     let mut vad = mm::vad::VadTree::new();
     let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
     let mut mapper = KernelPageMapper { pt };
-    let mut img = ps::loader::LoadedImage { image_base: 0, entry_point: 0, image_size: 0 };
-    ps::loader::load_image(&pe_bytes, &mut img, &mut vad, &mut mapper, None).ok()?;
+    let img = ps::loader::load_image(&pe_bytes, &mut vad, &mut mapper, None).ok()?;
     let ctx = ps::loader::setup_process(&img, &mut vad, &mut mapper, 4, 1).ok()?;
     hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
     syscall::install(vad, hhdm_offset);
@@ -671,8 +670,7 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
     let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
     let mut mapper = KernelPageMapper { pt };
 
-    let mut img = ps::loader::LoadedImage { image_base: 0, entry_point: 0, image_size: 0 };
-    ps::loader::load_image(&pe_bytes, &mut img, &mut vad, &mut mapper, None)
+    let img = ps::loader::load_image(&pe_bytes, &mut vad, &mut mapper, None)
         .expect("loader_demo: load_image failed");
 
     log::info!(
@@ -1169,9 +1167,7 @@ fn shell_load_and_spawn(fat_path: &str, hhdm_offset: u64) -> Option<usize> {
     let pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
     let mut mapper = KernelPageMapper { pt };
     let mut vad = mm::vad::VadTree::new();
-    let mut img = ps::loader::LoadedImage { image_base: 0, entry_point: 0, image_size: 0 };
-
-    ps::loader::load_image(&bytes, &mut img, &mut vad, &mut mapper, None).ok()?;
+    let img = ps::loader::load_image(&bytes, &mut vad, &mut mapper, None).ok()?;
 
     // Use a fresh PID for each spawned process (start at 8 to avoid colliding
     // with the initial smoke-test process which used PID=4).

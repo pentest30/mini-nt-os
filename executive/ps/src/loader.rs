@@ -3539,14 +3539,10 @@ pub struct LoadedImage {
 ///   1. Parse the PE32 header.
 ///   2. Determine the load address (preferred `ImageBase` or bottom-up).
 ///   3. For every section: allocate + commit pages, copy raw data.
-///   4. Fill `out` with base, entry point, and size.
-///
-/// Uses an out-parameter to avoid a large-struct `Result` return, which is
-/// unreliable under LTO + `opt-level="s"` on bare-metal targets.
+///   4. Return base, entry point, and size.
 ///
 /// # Arguments
 /// - `image_data` — raw PE32 binary (e.g. from a file or embedded blob).
-/// - `out`        — caller-owned slot; filled on success.
 /// - `vad`        — per-process VAD tree (updated with new entries).
 /// - `mapper`     — physical-page mapper; called for each committed page.
 /// - `force_base` — if `Some(addr)`, load at that address regardless of
@@ -3555,11 +3551,10 @@ pub struct LoadedImage {
 #[inline(never)]
 pub fn load_image<'a>(
     image_data: &'a [u8],
-    out:        &mut LoadedImage,
     vad:        &mut mm::vad::VadTree,
     mapper:     &mut dyn mm::virtual_alloc::PageMapper,
     force_base: Option<u64>,
-) -> Result<(), &'static str> {
+) -> Result<LoadedImage, &'static str> {
     let pe = Pe32::parse(image_data).map_err(|_| "load_image: PE parse failed")?;
 
     // Read all header fields directly from image_data bytes to avoid packed-struct
@@ -3647,14 +3642,16 @@ pub fn load_image<'a>(
     patch_imports(load_base, &pe)?;
     apply_relocations(load_base, preferred_base)?;
 
-    out.image_base  = load_base;
-    out.entry_point = load_base + entry_rva;
-    out.image_size  = image_size;
+    let image = LoadedImage {
+        image_base:  load_base,
+        entry_point: load_base + entry_rva,
+        image_size,
+    };
     log::info!(
         "load_image: base={:#x} entry={:#x} size={:#x}",
-        out.image_base, out.entry_point, out.image_size,
+        image.image_base, image.entry_point, image.image_size,
     );
-    Ok(())
+    Ok(image)
 }
 
 /// Load a PE32 DLL into an existing process address space.
@@ -4323,17 +4320,6 @@ mod tests {
         fn decommit_page(&mut self, _v: u64) -> Result<(), &'static str> { Ok(()) }
     }
 
-    /// Calls `load_image` with a fresh out-slot and returns it on success.
-    fn load(
-        data: &[u8],
-        vad: &mut mm::vad::VadTree,
-        mapper: &mut dyn mm::virtual_alloc::PageMapper,
-        force_base: Option<u64>,
-    ) -> Result<LoadedImage, &'static str> {
-        let mut img = LoadedImage { image_base: 0, entry_point: 0, image_size: 0 };
-        load_image(data, &mut img, vad, mapper, force_base).map(|()| img)
-    }
-
     #[test]
     fn load_image_returns_correct_entry_point() {
         let data = make_pe32(0x0040_0000, 0x1234,
@@ -4341,7 +4327,7 @@ mod tests {
                              &[]);
         let mut vad = mm::vad::VadTree::new();
         let mut m   = HostMapper::new();
-        let img = load(&data, &mut vad, &mut m, Some(0x0040_0000))
+        let img = load_image(&data, &mut vad, &mut m, Some(0x0040_0000))
             .expect("load must succeed");
         assert_eq!(img.image_base,  0x0040_0000);
         assert_eq!(img.entry_point, 0x0040_0000 + 0x1234);
@@ -4354,7 +4340,7 @@ mod tests {
                              &[]);
         let mut vad = mm::vad::VadTree::new();
         let mut m   = HostMapper::new();
-        let img = load(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
+        let img = load_image(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
         assert!(vad.find(img.image_base).is_some(), "VAD entry for image must exist");
     }
 
@@ -4368,7 +4354,7 @@ mod tests {
                              &[]);
         let mut vad = mm::vad::VadTree::new();
         let mut m   = HostMapper::new();
-        load(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
+        load_image(&data, &mut vad, &mut m, Some(0x0040_0000)).unwrap();
         assert!(m.committed > 0, "load_image must commit pages for the image");
     }
 
@@ -4377,7 +4363,7 @@ mod tests {
         let data = make_pe32(0x0040_0000, 0x1000, &[], &[]);
         let mut vad = mm::vad::VadTree::new();
         let mut m   = HostMapper::new();
-        let img = load(&data, &mut vad, &mut m, Some(0x0200_0000)).unwrap();
+        let img = load_image(&data, &mut vad, &mut m, Some(0x0200_0000)).unwrap();
         assert_eq!(img.image_base, 0x0200_0000, "force_base must be honoured");
         assert_eq!(img.entry_point, 0x0200_0000 + 0x1000);
     }
@@ -4387,7 +4373,7 @@ mod tests {
         let bad_data = alloc::vec![0u8; 64]; // too small / no MZ
         let mut vad = mm::vad::VadTree::new();
         let mut m   = CountMapper { count: 0 };
-        assert!(load(&bad_data, &mut vad, &mut m, None).is_err());
+        assert!(load_image(&bad_data, &mut vad, &mut m, None).is_err());
     }
 }
 
