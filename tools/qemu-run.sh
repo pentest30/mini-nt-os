@@ -316,6 +316,7 @@ WNDPROC_TEXT="[smoke] WndProc called"
 HELLO_EXE_TEXT="[smoke] HELLO.EXE ran ok"
 HEAP_TEXT="[smoke] heap self-test ok"
 WX_TEXT="[smoke] kernel W^X ok"
+IDMAP_TEXT="[smoke] identity map removed"
 # Syscall dispatch trace: only allowed with --features trace-syscalls (06 §5).
 SYSCALL_TRACE_RE='^\[sys\] |\[w32dbg\] dispatch:'
 
@@ -323,6 +324,7 @@ if [[ -f "$SERIAL_LOG" ]] \
     && grep -Fq "$SUCCESS_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$HEAP_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$WX_TEXT" "$SERIAL_LOG" \
+    && grep -Fq "$IDMAP_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$SMOKE_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$IAT_TEXT" "$SERIAL_LOG" \
     && grep -Fq "$CREATE_PROCESS_TEXT" "$SERIAL_LOG" \
@@ -347,6 +349,7 @@ else
     echo "      required: '$SUCCESS_TEXT'"
     echo "      required: '$HEAP_TEXT'"
     echo "      required: '$WX_TEXT'"
+    echo "      required: '$IDMAP_TEXT'"
     echo "      required: '$SMOKE_TEXT'"
     echo "      required: '$IAT_TEXT'"
     echo "      required: '$CREATE_PROCESS_TEXT'"

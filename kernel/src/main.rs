@@ -129,9 +129,10 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
 /// # Safety
 /// - Called exactly once by the bootloader.
 /// - CPU is in 64-bit long mode, interrupts disabled on entry.
-/// - `boot_info_ptr` points to a valid, static `BootInfo` in identity-mapped
-///   physical memory.
-/// - The bootloader's identity map [0, 4 GiB) and HHDM are active.
+/// - `boot_info_ptr` points to a valid, static `BootInfo` in the HHDM, and
+///   the stack is in the HHDM too.
+/// - The bootloader's identity map [0, 4 GiB) and HHDM are active; the
+///   identity map is removed at the start of phase 1.
 ///
 /// # IRQL: HIGH on entry; drops to PASSIVE after `hal::init()`.
 ///
@@ -159,7 +160,7 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     set_kernel_segments();
 
     // ── Validate BootInfo ────────────────────────────────────────────────────
-    // SAFETY: boot_info_ptr provided by the bootloader in identity-mapped memory.
+    // SAFETY: boot_info_ptr provided by the bootloader, in the HHDM.
     let boot_info: &'static BootInfo = unsafe {
         assert!(!boot_info_ptr.is_null(), "null BootInfo pointer");
         let bi = &*boot_info_ptr;
@@ -167,13 +168,13 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         bi
     };
 
-    // Store HHDM offset for the page-fault handler's page-table walk.
+    // Store HHDM offset for the page-fault handler's page-table walk and for
+    // APIC MMIO, which stops using the identity map from here on.
     hal::set_hhdm_offset(boot_info.hhdm_offset);
 
     // ── 1.5. Framebuffer console ─────────────────────────────────────────────
     // Init before the first log::info! so kernel messages appear on screen.
-    // HHDM is active; bootloader identity-maps [0, 4 GiB) so the GOP
-    // framebuffer (always below 4 GiB on QEMU/VBox) is reachable at
+    // The GOP framebuffer (always below 4 GiB on QEMU/VBox) is reachable at
     // hhdm_offset + framebuffer.base.
     hal::fb::init(&boot_info.framebuffer, boot_info.hhdm_offset);
     hal::fb::write_str("[fb] boot banner enabled\n");
@@ -324,6 +325,8 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
 extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // SAFETY: kernel_main validated this pointer before switching stacks.
     let boot_info: &'static BootInfo = unsafe { &*boot_info_ptr };
+
+    remove_identity_map(boot_info.hhdm_offset);
 
     if cfg!(feature = "test-stack-overflow") {
         provoke_stack_overflow();
@@ -529,6 +532,31 @@ fn check_kernel_wx(hhdm_offset: u64) {
         "[smoke] kernel W^X ok: .text {} pages RX, .rodata {} pages R, .data/.bss {} pages RW+NX at {:#x}",
         text, rodata, data, kernel_main as *const () as u64,
     );
+}
+
+/// Ends the bootloader's identity map (ADR-014, 02 §4.1) and checks that the
+/// user half is empty while the HHDM still reaches the same memory.
+///
+/// # IRQL
+/// PASSIVE_LEVEL. Called once, at the start of phase 1.
+fn remove_identity_map(hhdm_offset: u64) {
+    // SAFETY: from phase 1 on, the kernel runs on its image, a guarded kernel
+    // stack and HHDM addresses only (BootInfo, frames, APIC); no process has
+    // been created, so PML4[0] holds nothing but the identity map.
+    let mut pt = unsafe { mm::MmPageTables::new(hhdm_offset) };
+    // SAFETY: as above.
+    unsafe { pt.remove_identity_map() };
+
+    const APIC_PHYS: u64 = 0xFEE0_0000;
+    for va in [0x1000, 0x10_0000, APIC_PHYS] {
+        assert!(pt.translate(VirtAddr::new(va)).is_none(), "identity map still maps {:#x}", va);
+    }
+    assert_eq!(
+        pt.translate(VirtAddr::new(hhdm_offset + APIC_PHYS)),
+        Some(PhysAddr::new(APIC_PHYS)),
+        "HHDM no longer maps the APIC",
+    );
+    log::info!("[smoke] identity map removed: user half empty, APIC at {:#x}", hhdm_offset + APIC_PHYS);
 }
 
 /// Kernel-stack guard-page lookup for the fault handlers (`hal::idt`).

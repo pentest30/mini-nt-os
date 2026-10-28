@@ -40,10 +40,7 @@ unsafe impl FrameAllocator<Size4KiB> for BuddyFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
         let pfn = BUDDY.lock().as_mut()?.alloc(0)?; // order 0 = single 4 KiB page
         let phys = pfn.to_phys();
-        if phys >= 0x1_0000_0000 {
-            panic!("BuddyFrameAllocator: frame above 4GiB not identity-mapped ({:#x})", phys);
-        }
-        unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096) };
+        zero_frame(phys);
         let addr = PhysAddr::new(phys);
         // SAFETY: to_phys() returns a page-aligned address from the buddy.
         Some(PhysFrame::containing_address(addr))
@@ -68,11 +65,18 @@ fn alloc_zeroed_pt_phys() -> u64 {
         .alloc(0)
         .expect("alloc_zeroed_pt_phys: out of physical memory");
     let phys = pfn.to_phys();
-    if phys >= 0x1_0000_0000 {
-        panic!("alloc_zeroed_pt_phys: frame above 4GiB not identity-mapped ({:#x})", phys);
-    }
-    unsafe { core::ptr::write_bytes(phys as *mut u8, 0, 4096) };
+    zero_frame(phys);
     phys
+}
+
+/// Zeroes a fresh frame through the HHDM (the identity map is gone after
+/// phase 0). The bootloader's HHDM covers the first 4 GiB only.
+fn zero_frame(phys: u64) {
+    assert!(phys < 0x1_0000_0000, "frame {:#x} above the 4 GiB HHDM", phys);
+    let virt = crate::HHDM_OFFSET.load(core::sync::atomic::Ordering::Acquire) + phys;
+    // SAFETY: the frame comes fresh from the buddy, so nothing else uses it,
+    // and the HHDM maps it writable.
+    unsafe { core::ptr::write_bytes(virt as *mut u8, 0, 4096) };
 }
 
 // ── Page table manager ────────────────────────────────────────────────────────
@@ -117,6 +121,30 @@ impl MmPageTables {
         let inner = unsafe { OffsetPageTable::new(l4, phys_offset) };
 
         Self { inner, phys_offset: hhdm_offset }
+    }
+
+    /// Removes the bootloader's identity map of [0, 4 GiB) by clearing PML4[0]
+    /// (ADR-014): the user half then starts empty, and a bad user pointer
+    /// faults instead of reading physical memory. The tables under PML4[0]
+    /// are bootloader memory, not reclaimed for now.
+    ///
+    /// # Safety
+    /// - Nothing uses an identity address any more: code, stacks, `BootInfo`
+    ///   and MMIO are reached through the kernel image or the HHDM.
+    /// - No user mapping exists yet: PML4[0] holds the identity map only.
+    ///
+    /// # IRQL
+    /// Any level. Edits the active PML4 and flushes the TLB.
+    pub unsafe fn remove_identity_map(&mut self) {
+        let (l4f, _) = Cr3::read();
+        // SAFETY: the HHDM maps the live PML4 frame.
+        let l4 = unsafe {
+            &mut *((self.phys_offset + l4f.start_address().as_u64()) as *mut PageTable)
+        };
+        l4[0].set_unused();
+        // PML4[0] spans whole TLB entries: drop them all, global ones aside
+        // (the identity map never sets GLOBAL).
+        x86_64::instructions::tlb::flush_all();
     }
 
     /// Patch `USER_ACCESSIBLE` into the PML4 → PDPT → PD intermediate entries

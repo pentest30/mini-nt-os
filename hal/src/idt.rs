@@ -592,19 +592,16 @@ extern "x86-interrupt" fn irq_keyboard(_frame: InterruptStackFrame) {
 
 /// Send End-Of-Interrupt to the local APIC.
 ///
-/// Writes 0 to the APIC EOI register at the architectural default base
-/// address (0xFEE0_0000 + 0x0B0). The bootloader identity-maps this range
-/// so the write is valid in Phase 1.
+/// Writes 0 to the APIC EOI register (offset 0x0B0), reached like every APIC
+/// register through `timer::apic_reg` (HHDM once set).
 ///
 /// # Safety
 /// Must be called only from an APIC-sourced interrupt handler.
-/// The APIC MMIO range must be identity-mapped (guaranteed by bootloader).
 #[inline]
 unsafe fn apic_eoi() {
-    // SAFETY: 0xFEE0_00B0 is the APIC EOI MMIO register.
-    // Identity-mapped by the bootloader for Phase 1.
-    // Writing 0 acknowledges the current interrupt.
+    // SAFETY: apic_reg(0xB0) is the mapped APIC EOI register; writing 0
+    // acknowledges the current interrupt.
     unsafe {
-        core::ptr::write_volatile(0xFEE0_00B0usize as *mut u32, 0);
+        core::ptr::write_volatile(super::timer::apic_reg(0xB0) as *mut u32, 0);
     }
 }

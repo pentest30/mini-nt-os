@@ -3,7 +3,8 @@
 //! Builds the minimal page tables needed to hand off to the kernel:
 //!
 //!   1. Identity map [0, 4 GiB) — 2 MiB huge pages.
-//!      Covers UEFI runtime, MMIO, APIC (0xFEE0_0000), bootloader code.
+//!      Keeps the bootloader running across the CR3 switch; the kernel
+//!      removes it (PML4[0]) after its phase 0 (ADR-014).
 //!
 //!   2. HHDM [HHDM_OFFSET, HHDM_OFFSET + HHDM_SIZE) → [0, HHDM_SIZE).
 //!      2 MiB huge pages.

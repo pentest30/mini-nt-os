@@ -6,6 +6,10 @@
 //!   B2 — Build 4-level page tables (identity [0, 4 GiB) + HHDM + kernel W^X).
 //!   B4 — Fill `BootInfo`, exit UEFI boot services, switch CR3, jump.
 //!
+//! The kernel only gets HHDM addresses (BootInfo, boot stack): the identity
+//! map serves the bootloader's last instructions and is removed by the
+//! kernel after its phase 0 (ADR-014).
+//!
 //! Build target: x86_64-unknown-uefi
 //! uefi crate 0.26: helpers module does not exist; use allocator::init +
 //! logger::Logger directly.
@@ -18,6 +22,7 @@ mod memory;
 mod paging;
 
 use boot_info::{BootInfo, FramebufferInfo, PixelFormat};
+use paging::HHDM_OFFSET;
 use core::arch::asm;
 use uefi::{entry, Handle, Status, table::{Boot, SystemTable}};
 use uefi::table::boot::{AllocateType, MemoryType};
@@ -160,9 +165,10 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
 
     // ── Jump to kernel_main ───────────────────────────────────────────────────
     // SAFETY: kernel_entry is inside the kernel's text segment, mapped RX.
-    //         BOOT_INFO lives at its physical address, identity-mapped by the
-    //         bootloader; the kernel can reach it via the HHDM too.
-    //         kernel_entry never returns (-> !).
+    //         BootInfo is copied to its LOADER_DATA pages through the identity
+    //         map, then handed over at its HHDM address, like the boot stack
+    //         (both below 4 GiB, so inside the HHDM). kernel_entry never
+    //         returns (-> !).
     unsafe {
         // The kernel (x86_64-unknown-none) uses the SysV AMD64 ABI where the
         // first argument is in rdi. The bootloader (x86_64-unknown-uefi) uses
@@ -176,8 +182,8 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
             "and rsp, -16",
             "mov rdi, {boot_info}",
             "jmp {entry}",
-            stack = in(reg) boot_stack_top,
-            boot_info = in(reg) boot_info_dst as u64,
+            stack = in(reg) HHDM_OFFSET + boot_stack_top,
+            boot_info = in(reg) HHDM_OFFSET + boot_info_dst as u64,
             entry = in(reg) kernel_entry,
             options(noreturn),
         );

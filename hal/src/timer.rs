@@ -23,8 +23,15 @@ pub const TICK_INTERVAL_MS: u64 = 10;
 
 // ── APIC MMIO ─────────────────────────────────────────────────────────────────
 
-/// xAPIC MMIO base — architectural default, identity-mapped by the bootloader.
-const APIC_BASE: u64 = 0xFEE0_0000;
+/// xAPIC MMIO physical base — architectural default.
+const APIC_PHYS: u64 = 0xFEE0_0000;
+
+/// Virtual address of APIC register `offset`: through the HHDM once the
+/// kernel has set it, through the identity map before (early `init`).
+#[inline]
+pub(crate) fn apic_reg(offset: u64) -> u64 {
+    crate::HHDM_OFFSET.load(core::sync::atomic::Ordering::Relaxed) + APIC_PHYS + offset
+}
 
 const APIC_SVR:           u64 = 0x0F0; // Spurious Interrupt Vector Register
 const APIC_TIMER_LVT:     u64 = 0x320; // Timer Local Vector Table entry
@@ -70,8 +77,8 @@ static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
 ///
 /// # Safety
 /// - Must run after `idt::init()` (IDT loaded; timer ISR at vector 0x20 reachable).
-/// - The APIC MMIO region at `0xFEE0_0000` must be identity-mapped (done by
-///   the bootloader).
+/// - The APIC MMIO region at `0xFEE0_0000` must be mapped: identity map at
+///   boot, HHDM once `set_hhdm_offset` has run (see `apic_reg`).
 /// - Interrupts must be disabled on entry; this function enables them.
 pub unsafe fn init() {
     // Ensure no upper-layer callback runs before Ke is initialised.
@@ -304,15 +311,15 @@ pub fn call_schedule_hook() {
 
 // ── APIC MMIO helpers ─────────────────────────────────────────────────────────
 
-/// Read a 32-bit APIC register at `offset` from `APIC_BASE`.
+/// Read a 32-bit APIC register at `offset`.
 ///
 /// # Safety
-/// APIC MMIO must be mapped at `APIC_BASE` and `offset` must be a valid
+/// APIC MMIO must be mapped at `apic_reg(0)` and `offset` must be a valid
 /// APIC register offset aligned to 16 bytes.
 #[inline]
 unsafe fn apic_read(offset: u64) -> u32 {
     // SAFETY: caller guarantees mapping and valid offset.
-    unsafe { core::ptr::read_volatile((APIC_BASE + offset) as *const u32) }
+    unsafe { core::ptr::read_volatile(apic_reg(offset) as *const u32) }
 }
 
 /// Write a 32-bit APIC register at `offset`.
@@ -322,5 +329,5 @@ unsafe fn apic_read(offset: u64) -> u32 {
 #[inline]
 unsafe fn apic_write(offset: u64, value: u32) {
     // SAFETY: caller guarantees mapping and valid offset.
-    unsafe { core::ptr::write_volatile((APIC_BASE + offset) as *mut u32, value) }
+    unsafe { core::ptr::write_volatile(apic_reg(offset) as *mut u32, value) }
 }

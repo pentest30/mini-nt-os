@@ -25,10 +25,13 @@ pub mod timer;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-/// HHDM offset stored by the kernel after boot for use by fault handlers.
+/// HHDM offset stored by the kernel after boot. Physical memory and MMIO are
+/// reached at `HHDM_OFFSET + phys` (the identity map is gone after phase 0).
+/// Zero until `set_hhdm_offset`, so early HAL accesses use the identity map.
 pub static HHDM_OFFSET: AtomicU64 = AtomicU64::new(0);
 
-/// Store the HHDM offset so the page-fault handler can walk page tables.
+/// Store the HHDM offset for page-table walks and MMIO. Call it before the
+/// identity map is removed.
 pub fn set_hhdm_offset(v: u64) {
     HHDM_OFFSET.store(v, Ordering::Release);
 }
