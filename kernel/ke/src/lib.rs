@@ -3,6 +3,7 @@
 //! Provides:
 //!   - Thread scheduler (round-robin → priority in Phase 2)
 //!   - Dispatcher (ADR-005): waitable objects, KWAIT_BLOCK, wait and signal
+//!   - Timer wheel and KTIMER objects (periodic, with a DPC)
 //!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX
 //!   - APC (Asynchronous Procedure Call) queues
 //!   - DPC (Deferred Procedure Call) queue, without allocation, and the
@@ -21,6 +22,7 @@ pub mod dpc;
 pub mod event;
 pub mod scheduler;
 pub mod thread;
+pub mod timer;
 
 pub use event::{EventType, KEvent};
 pub use scheduler::Scheduler;

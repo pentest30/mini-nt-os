@@ -1,6 +1,7 @@
 //! Tests hôte du dispatcher (critère de sortie de M1, 05).
 //!
-//! `Sim` simule l'ordonnanceur, les timers et l'IRQL. Un thread ne se bloque que
+//! `Sim` simule l'ordonnanceur et l'IRQL ; ses timers sont ceux de la vraie roue
+//! (`ke::timer`), à une heure figée que les tests avancent. Un thread ne se bloque que
 //! dans `Sim::swap_thread` : il relâche le verrou, exécute l'action suivante de la
 //! file (les autres threads : signaler, livrer un APC, faire expirer un timer, ou
 //! attendre à leur tour), puis exige que le thread ait été réveillé. Une action qui
@@ -9,12 +10,16 @@
 
 extern crate std;
 
+use core::ffi::c_void;
 use std::boxed::Box;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::vec::Vec;
 
 use super::*;
+use crate::timer::{
+    deadline, ke_cancel_timer, ke_initialize_timer, ke_read_state_timer, ke_set_timer, ki_expire_timers, TimerTable,
+};
 
 struct Sim;
 
@@ -28,7 +33,7 @@ std::thread_local! {
     static IRQL: Cell<Irql> = const { Cell::new(Irql::Passive) };
     static ACTIONS: RefCell<VecDeque<Action>> = RefCell::new(VecDeque::new());
     static READIED: RefCell<Vec<*mut KThread>> = const { RefCell::new(Vec::new()) };
-    static TIMERS: RefCell<Vec<*mut KTimer>> = const { RefCell::new(Vec::new()) };
+    static TABLE: Cell<*const TimerTable> = const { Cell::new(ptr::null()) };
 }
 
 // SAFETY: chaque méthode respecte le contrat du trait ; swap_thread relâche le
@@ -60,16 +65,14 @@ unsafe impl Platform for Sim {
     }
 
     unsafe fn insert_timer(timer: *mut KTimer, due_time: i64) -> bool {
-        let deadline = if due_time < 0 { NOW - due_time } else { due_time };
-        if deadline <= NOW {
-            return false;
-        }
-        TIMERS.with_borrow_mut(|t| t.push(timer));
-        true
+        let now = NOW as u64;
+        // SAFETY: verrou tenu, `timer` valide (contrat du trait).
+        unsafe { table().insert(timer, deadline(due_time, now, now), || now) }
     }
 
     unsafe fn cancel_timer(timer: *mut KTimer) {
-        TIMERS.with_borrow_mut(|t| t.retain(|&x| x != timer));
+        // SAFETY: verrou tenu, `timer` valide (contrat du trait).
+        unsafe { table().remove(timer) };
     }
 
     fn raise_irql(new: Irql) -> Irql {
@@ -115,6 +118,28 @@ fn mutant() -> *mut KMutant {
     alloc(|m| unsafe { ke_initialize_mutant(m) })
 }
 
+fn timer(kind: ObjectType) -> *mut KTimer {
+    // SAFETY: mémoire fraîche, adresse stable.
+    alloc(|t| unsafe { ke_initialize_timer(t, kind) })
+}
+
+/// La roue de timers du thread de test.
+fn table() -> &'static TimerTable {
+    // SAFETY: posée par `setup`, jamais libérée.
+    unsafe { &*TABLE.get() }
+}
+
+/// Le DPC d'expiration s'exécute à l'heure `now`.
+fn expire_at(now: i64) {
+    // SAFETY: verrou tenu par `locked` ; la roue est celle de `Sim::insert_timer`.
+    locked(|| unsafe { ki_expire_timers::<Sim>(table(), || now as u64) });
+}
+
+fn armed(t: *mut KTimer) -> bool {
+    // SAFETY: timer initialisé du test.
+    unsafe { (*t).header.inserted != 0 }
+}
+
 /// En-tête d'un objet : premier champ de chaque objet `#[repr(C)]`.
 fn hdr<T>(obj: *mut T) -> *mut DispatcherHeader {
     obj.cast()
@@ -134,7 +159,7 @@ fn then(action: impl FnOnce() + 'static) {
 fn setup() -> *mut KThread {
     ACTIONS.with_borrow_mut(VecDeque::clear);
     READIED.with_borrow_mut(Vec::clear);
-    TIMERS.with_borrow_mut(Vec::clear);
+    TABLE.set(Box::leak(Box::new(TimerTable::new())));
     IRQL.set(Irql::Passive);
     let t = new_thread();
     run_as(t);
@@ -402,7 +427,7 @@ fn timeout_already_expired_returns_at_once() {
     assert!(no_waiter(hdr(e)));
     // SAFETY: thread initialisé.
     assert!(!unsafe { (*t).timer_armed });
-    assert!(TIMERS.with_borrow(Vec::is_empty));
+    assert!(table().is_empty());
     finish();
 }
 
@@ -411,15 +436,14 @@ fn timeout_expiring_during_the_wait_returns_timeout() {
     let t = setup();
     let e = event(ObjectType::NotificationEvent, false);
     then(move || {
-        // SAFETY: timer du thread, armé par l'attente.
-        let timer = unsafe { ptr::addr_of_mut!((*t).timer) };
-        // Le DPC d'horloge le retire de la file, puis le signale.
-        TIMERS.with_borrow_mut(|q| q.retain(|&x| x != timer));
-        // SAFETY: verrou tenu par `locked`.
-        locked(|| unsafe { ki_timer_expired::<Sim>(timer) });
+        expire_at(NOW + 9_999);
+        // SAFETY: thread initialisé.
+        assert_eq!(unsafe { (*t).state }, ThreadState::Waiting, "1 ms is not over yet");
+        expire_at(NOW + 10_000);
     });
     assert_eq!(wait_one(hdr(e), Some(-10_000)), STATUS_TIMEOUT);
     assert!(no_waiter(hdr(e)), "the object's wait block is unlinked too");
+    assert!(table().is_empty());
     finish();
 }
 
@@ -429,12 +453,127 @@ fn signal_before_the_timeout_cancels_the_timer() {
     let e = event(ObjectType::NotificationEvent, false);
     then(move || set(e));
     assert_eq!(wait_one(hdr(e), Some(-10_000)), STATUS_WAIT_0);
-    assert!(TIMERS.with_borrow(Vec::is_empty), "timer cancelled");
+    assert!(table().is_empty(), "timer cancelled");
     // SAFETY: thread initialisé.
     unsafe {
         assert!(!(*t).timer_armed);
         assert!(no_waiter(ptr::addr_of_mut!((*t).timer.header)));
     }
+    finish();
+}
+
+// ── Objets KTIMER ────────────────────────────────────────────────────────────
+
+fn set_timer(t: *mut KTimer, due_time: i64, period_ms: i32, dpc: *const crate::dpc::KDpc) -> bool {
+    // SAFETY: timer initialisé ; le DPC éventuel vit jusqu'à la fin du test.
+    unsafe { ke_set_timer::<Sim>(t, due_time, period_ms, dpc) }
+}
+
+fn timer_signaled(t: *mut KTimer) -> bool {
+    // SAFETY: timer initialisé.
+    unsafe { ke_read_state_timer(t) }
+}
+
+#[test]
+fn waiting_on_a_notification_timer_returns_when_it_expires() {
+    setup();
+    let t = timer(ObjectType::NotificationTimer);
+    assert!(!set_timer(t, -20_000, 0, ptr::null()), "was not set");
+    assert!(armed(t));
+    then(move || expire_at(NOW + 20_000));
+    assert_eq!(wait_one(hdr(t), None), STATUS_WAIT_0);
+    assert!(timer_signaled(t), "a notification timer stays signaled");
+    assert!(!armed(t));
+    assert_eq!(wait_one(hdr(t), None), STATUS_WAIT_0, "signaled: no wait");
+    finish();
+}
+
+#[test]
+fn a_synchronization_timer_releases_one_waiter_per_expiry() {
+    let a = setup();
+    let b = new_thread();
+    let t = timer(ObjectType::SynchronizationTimer);
+    set_timer(t, -10_000, 0, ptr::null());
+    then(move || {
+        run_as(b);
+        then(move || {
+            expire_at(NOW + 10_000);
+            assert_eq!(state(a), ThreadState::Ready, "the first waiter is woken");
+            assert_eq!(state(b), ThreadState::Waiting, "one waiter per expiry");
+            assert!(!timer_signaled(t), "auto-reset");
+            set_timer(t, -10_000, 0, ptr::null());
+            expire_at(NOW + 10_000);
+        });
+        assert_eq!(wait_one(hdr(t), None), STATUS_WAIT_0);
+    });
+    assert_eq!(wait_one(hdr(t), None), STATUS_WAIT_0);
+    finish();
+}
+
+#[test]
+fn a_periodic_timer_is_rearmed_at_its_next_deadline_still_to_come() {
+    setup();
+    let t = timer(ObjectType::NotificationTimer);
+    set_timer(t, -10_000, 5, ptr::null());
+    expire_at(NOW + 10_000);
+    assert!(timer_signaled(t));
+    // SAFETY: timer initialisé.
+    let due = || unsafe { (*t).due_time } as i64;
+    assert!(armed(t));
+    assert_eq!(due(), NOW + 60_000, "one period after the first deadline");
+    expire_at(NOW + 130_000);
+    assert_eq!(due(), NOW + 160_000, "missed periods are skipped");
+    // SAFETY: timer initialisé.
+    unsafe {
+        assert!(ke_cancel_timer::<Sim>(t));
+        assert!(!ke_cancel_timer::<Sim>(t));
+    }
+    assert!(table().is_empty());
+    finish();
+}
+
+#[test]
+fn an_expiring_timer_queues_its_dpc() {
+    let _queue = crate::dpc::tests::GLOBAL_QUEUE.lock().unwrap();
+    setup();
+    fn nop(_: *const crate::dpc::KDpc, _: *mut c_void, _: *mut c_void, _: *mut c_void) {}
+    let dpc = Box::leak(Box::new(crate::dpc::KDpc::new(nop, ptr::null_mut())));
+    let t = timer(ObjectType::NotificationTimer);
+    set_timer(t, -10_000, 0, dpc);
+    // SAFETY: DPC du test, jamais libéré.
+    assert!(!unsafe { crate::dpc::ke_remove_queue_dpc(dpc) }, "not before the deadline");
+    expire_at(NOW + 10_000);
+    // SAFETY: comme ci-dessus.
+    assert!(unsafe { crate::dpc::ke_remove_queue_dpc(dpc) }, "queued at the deadline");
+    finish();
+}
+
+#[test]
+fn setting_a_timer_already_due_fires_it_at_once() {
+    setup();
+    let t = timer(ObjectType::NotificationTimer);
+    assert!(!set_timer(t, NOW, 0, ptr::null()), "absolute deadline, already reached");
+    assert!(timer_signaled(t));
+    assert!(!armed(t));
+    set_timer(t, NOW, 5, ptr::null());
+    assert!(timer_signaled(t));
+    // SAFETY: timer initialisé.
+    assert_eq!(unsafe { (*t).due_time } as i64, NOW + 50_000, "a periodic series starts from now");
+    finish();
+}
+
+#[test]
+fn setting_an_armed_timer_again_moves_its_deadline_and_resets_it() {
+    setup();
+    let t = timer(ObjectType::NotificationTimer);
+    set_timer(t, NOW, 0, ptr::null());
+    assert!(!set_timer(t, -10_000, 0, ptr::null()), "fired, so not armed any more");
+    assert!(!timer_signaled(t), "setting resets the signal state");
+    assert!(set_timer(t, -30_000, 0, ptr::null()), "was armed");
+    expire_at(NOW + 10_000);
+    assert!(!timer_signaled(t), "the first deadline is gone");
+    expire_at(NOW + 30_000);
+    assert!(timer_signaled(t));
     finish();
 }
 

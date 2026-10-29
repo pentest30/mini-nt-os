@@ -37,6 +37,9 @@ struct DpcLink {
 // SAFETY: `routine` et `context` ne changent plus après `new` ; `link` n'est lu
 // ou écrit que par le détenteur de la file où le DPC est inséré.
 unsafe impl Sync for KDpc {}
+// SAFETY: un KDPC n'est lié à aucun thread : `context` est opaque, à la charge
+// de sa routine.
+unsafe impl Send for KDpc {}
 
 impl KDpc {
     /// KeInitializeDpc.
@@ -196,7 +199,7 @@ pub fn ki_dispatch_interrupt() {
 
 /// Exécute les DPC de la file jusqu'à la vider, y compris ceux insérés pendant
 /// ce temps.
-fn ki_retire_dpc_list() {
+pub(crate) fn ki_retire_dpc_list() {
     while let Some((dpc, arg1, arg2)) = DPC_QUEUE.with(DpcQueue::pop) {
         // SAFETY: un DPC reste valide jusqu'à l'exécution de sa routine (contrat
         // de `ke_insert_queue_dpc`).
@@ -219,13 +222,18 @@ fn with_interrupts_enabled(f: impl FnOnce()) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     extern crate std;
 
     use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
     use std::vec::Vec;
 
     use super::*;
+
+    /// Les tests hôte s'exécutent en parallèle : ceux qui passent par la file
+    /// globale la prennent tour à tour.
+    pub(crate) static GLOBAL_QUEUE: Mutex<()> = Mutex::new(());
 
     fn nop(_: *const KDpc, _: *mut c_void, _: *mut c_void, _: *mut c_void) {}
 
@@ -285,9 +293,9 @@ mod tests {
         assert!(!unsafe { q.remove(&d[1]) }, "popped");
     }
 
-    /// Seul test qui touche la file globale.
     #[test]
     fn retiring_the_queue_runs_each_routine_with_its_context_and_arguments() {
+        let _queue = GLOBAL_QUEUE.lock().unwrap();
         static SUM: AtomicUsize = AtomicUsize::new(0);
         fn add(dpc: *const KDpc, context: *mut c_void, arg1: *mut c_void, arg2: *mut c_void) {
             assert!(!dpc.is_null());

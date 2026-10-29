@@ -26,6 +26,8 @@ use abi::ntstatus::{
 };
 use hal::irql::Irql;
 
+use crate::dpc::KDpc;
+
 pub const THREAD_WAIT_OBJECTS: usize = 3;
 pub const TIMER_WAIT_BLOCK: usize = 3;
 pub const MAXIMUM_WAIT_OBJECTS: usize = 64;
@@ -60,6 +62,8 @@ pub unsafe trait Platform {
 
     /// Format NT : négatif = relatif (unités de 100 ns), positif = absolu.
     /// Retourne `false` si l'échéance est déjà passée (timer non inséré).
+    /// Inséré, le timer a `header.inserted` à 1 ; `cancel_timer` et son
+    /// expiration le remettent à 0 (`ke::timer::TimerTable` le fait).
     ///
     /// # Safety
     /// Verrou dispatcher tenu ; `timer` reste valide jusqu'à son échéance ou son
@@ -224,9 +228,13 @@ pub struct KMutant {
 #[repr(C)]
 pub struct KTimer {
     pub header: DispatcherHeader,
+    /// Échéance en interrupt time (100 ns), tant que le timer est armé.
     pub due_time: u64,
     pub timer_list_entry: ListEntry,
+    /// Période en millisecondes ; 0 pour un timer à une seule échéance.
     pub period: i32,
+    /// DPC inséré à chaque échéance, ou nul (`ke::timer::ke_set_timer`).
+    pub dpc: *const KDpc,
 }
 
 #[repr(u16)]
@@ -331,6 +339,7 @@ impl KThread {
             ptr::addr_of_mut!((*timer).due_time).write(0);
             ListEntry::init(ptr::addr_of_mut!((*timer).timer_list_entry));
             ptr::addr_of_mut!((*timer).period).write(0);
+            ptr::addr_of_mut!((*timer).dpc).write(ptr::null());
             ListEntry::init(ptr::addr_of_mut!((*this).mutant_list_head));
         }
     }
@@ -869,8 +878,9 @@ pub unsafe fn ke_release_mutant<P: Platform>(m: *mut KMutant, abandoned: bool) -
 // Intégrations timers / APC (appelées verrou tenu)
 // ---------------------------------------------------------------------------
 
-/// Appelé par le DPC d'horloge quand un timer arrive à échéance (déjà retiré de la
-/// file des timers). Réveille notamment les threads dont c'est le timeout.
+/// Appelé par le DPC d'expiration quand un timer arrive à échéance (déjà retiré de
+/// la roue). Réveille notamment les threads dont c'est le timeout. Le DPC du timer
+/// et le réarmement d'un timer périodique reviennent à `ke::timer`.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `timer` est valide.
@@ -884,7 +894,6 @@ pub unsafe fn ki_timer_expired<P: Platform>(timer: *mut KTimer) {
         (*h).signal_state = 1;
         ki_wait_test::<P>(h);
     }
-    // TODO : réarmer si (*timer).period != 0.
 }
 
 /// Appelé après l'insertion d'un APC utilisateur. Un thread en attente alertable
