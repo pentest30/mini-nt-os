@@ -4,43 +4,49 @@
 //! hardware interrupt priority. We model them as a typed enum rather
 //! than a raw `u8` so the compiler catches level-ordering mistakes.
 //!
-//! XP-era IRQL hierarchy (x86):
+//! The scale is the x64 one: an IRQL is an APIC priority class, so the IRQL
+//! *is* the APIC task priority, CR8 (02 §Ke: IRQLs "implémentés via le TPR").
+//! An interrupt vector's class (vector >> 4) is the IRQL its ISR runs at, and
+//! the APIC delivers it only above the current IRQL:
 //!
-//!   PASSIVE  (0) — normal thread execution, page faults allowed
-//!   APC      (1) — APC delivery; page faults still allowed
-//!   DISPATCH (2) — scheduler / DPC; NO page faults, NO heap
-//!   DIRQL    (3..26) — device interrupts
-//!   CLOCK2   (28)
-//!   IPI      (29)
-//!   HIGH     (31) — NMI / machine check; nothing is maskable
+//!   PASSIVE  (0)     — normal thread execution, page faults allowed
+//!   APC      (1)     — APC delivery; page faults still allowed
+//!   DISPATCH (2)     — scheduler / DPC; NO page faults, NO heap
+//!   DEVICE   (3..12) — device interrupts (DIRQL): the 8259's vectors 0x30–0x3F
+//!   CLOCK    (13)    — APIC timer, vector 0xD0: it still ticks at DISPATCH_LEVEL
+//!   IPI      (14)
+//!   HIGH     (15)    — every maskable interrupt masked
+//!
+//! CR8 is the only copy of the IRQL (an atomic stands in for it on the host,
+//! in tests): an ISR that interrupts a raise or a lower restores exactly the
+//! CR8 it found ([`enter_interrupt`], [`exit_interrupt`]).
+//!
+//! Exception: the PS/2 keyboard comes through the 8259 as ExtINT, which the
+//! TPR does not mask. Until it is routed through the IOAPIC, its ISR can
+//! interrupt code above DEVICE_LEVEL; it then leaves that IRQL as it is.
 //!
 //! In debug builds, `assert_alloc_safe()` fires if heap allocation is
 //! attempted at IRQL >= DISPATCH_LEVEL, matching NT kernel behaviour.
-//!
-//! The IRQL is a per-CPU software value, in the processor's KPCR
-//! (`hal::pcr`, ADR-015). The APIC TPR will mirror it once the clock vector
-//! sits above DISPATCH_LEVEL (M1).
 //!
 //! The dispatch is NT's DISPATCH software interrupt: Ke's hook drains the DPC
 //! queue, then switches threads if a quantum end asked for it. Requested by
 //! [`request_dispatch`] (DPC queued, quantum end), it runs below
 //! DISPATCH_LEVEL only: at once if the requester is there with interrupts
 //! enabled, at the epilogue of the ISR that requested it if the interrupted
-//! code was there ([`dispatch_from_interrupt`]), otherwise as soon as [`lower`]
+//! code was there ([`exit_interrupt`]), otherwise as soon as [`lower`]
 //! brings the IRQL below DISPATCH_LEVEL with interrupts enabled. A thread
 //! holding a `KSpinLock` (at DISPATCH_LEVEL) is therefore never preempted.
 //!
 //! WI7e Ch.3 "Interrupt Request Levels and Deferred Procedure Calls"
 
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 // ── IRQL type ────────────────────────────────────────────────────────────────
 
-/// Interrupt Request Level.
+/// Interrupt Request Level: an APIC priority class, the value of CR8.
 ///
-/// Stored as `u8` in the KPCR and in APIC TPR writes.
-/// Device IRQLs 3–30 are collapsed to [`Irql::Device`] for simplicity;
-/// the raw byte is preserved in the KPCR for TPR programming.
+/// Device IRQLs 3–12 are collapsed to [`Irql::Device`] until interrupt
+/// objects give each device its own level.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(u8)]
 pub enum Irql {
@@ -50,14 +56,18 @@ pub enum Irql {
     Apc = 1,
     /// Scheduler / DPC level — NO page faults, NO heap allocations.
     Dispatch = 2,
-    /// Device interrupt level (raw values 3–30).
+    /// Device interrupt level (DIRQL, 3–12).
     Device = 3,
-    /// High level — NMI / machine check, nothing is safe.
-    High = 31,
+    /// Clock interrupt level (APIC timer).
+    Clock = 13,
+    /// Inter-processor interrupt level.
+    Ipi = 14,
+    /// High level — every maskable interrupt masked.
+    High = 15,
 }
 
 impl Irql {
-    /// Convert to raw `u8` for APIC TPR writes.
+    /// The APIC priority class, as written to CR8.
     ///
     /// This is `const fn` so it can be used in static initialisers.
     #[inline]
@@ -72,7 +82,9 @@ impl Irql {
             0 => Irql::Passive,
             1 => Irql::Apc,
             2 => Irql::Dispatch,
-            3..=30 => Irql::Device,
+            3..=12 => Irql::Device,
+            13 => Irql::Clock,
+            14 => Irql::Ipi,
             _ => Irql::High,
         }
     }
@@ -80,12 +92,42 @@ impl Irql {
 
 // ── Per-CPU IRQL storage ─────────────────────────────────────────────────────
 
-/// Current IRQL of this CPU, in its KPCR. The ring-3 trampoline (`ring3.rs`)
-/// stores PASSIVE_LEVEL there before entering user mode.
+/// This CPU's IRQL: CR8, the APIC task priority. The ring-3 trampoline
+/// (`ring3.rs`) clears it before entering user mode.
 #[inline]
-fn irql() -> &'static AtomicU8 {
-    &crate::pcr::current().irql
+fn read_raw() -> u8 {
+    #[cfg(target_os = "none")]
+    {
+        let cr8: u64;
+        // SAFETY: reading CR8 has no side effect.
+        unsafe { core::arch::asm!("mov {}, cr8", out(reg) cr8, options(nomem, nostack, preserves_flags)) };
+        cr8 as u8
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        HOST_IRQL.load(Ordering::Relaxed)
+    }
 }
+
+/// Sets this CPU's IRQL. Not `nomem`: memory accesses must not move across a
+/// change of IRQL.
+#[inline]
+fn write_raw(irql: u8) {
+    #[cfg(target_os = "none")]
+    {
+        // SAFETY: `irql` is an `Irql` (0..=15): CR8's reserved bits stay clear.
+        // Raising masks interrupts, lowering lets the pending ones in.
+        unsafe { core::arch::asm!("mov cr8, {}", in(reg) u64::from(irql), options(nostack, preserves_flags)) };
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        HOST_IRQL.store(irql, Ordering::Relaxed);
+    }
+}
+
+/// CR8 of the host tests.
+#[cfg(not(target_os = "none"))]
+static HOST_IRQL: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 /// The DISPATCH interrupt handler: `fn()` stored as `usize`, 0 until Ke
 /// registers it.
@@ -95,15 +137,15 @@ static DISPATCH_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 /// Initialise the IRQL subsystem.
 ///
-/// Sets the APIC Task Priority Register to 0 (PASSIVE) so all interrupt
-/// vectors are unmasked. Called from `hal::init()` after the APIC is mapped.
+/// Sets CR8, the APIC task priority, to PASSIVE_LEVEL so all interrupt
+/// vectors are unmasked. Called from `hal::init()`.
 ///
 /// # IRQL: Called at PASSIVE_LEVEL during boot, with interrupts disabled.
 ///
 /// # Safety
 /// Must be called exactly once, before any interrupt is enabled.
 pub unsafe fn init() {
-    irql().store(Irql::Passive.as_u8(), Ordering::Release);
+    write_raw(Irql::Passive.as_u8());
     log::trace!("IRQL: initialised at PASSIVE_LEVEL");
 }
 
@@ -112,7 +154,7 @@ pub unsafe fn init() {
 /// # IRQL: Any level (read-only, safe from ISR context).
 #[inline]
 pub fn current() -> Irql {
-    Irql::from_u8(irql().load(Ordering::Relaxed))
+    Irql::from_u8(read_raw())
 }
 
 /// Raise the IRQL to `new_irql`. Returns the previous IRQL — NT's
@@ -124,8 +166,9 @@ pub fn current() -> Irql {
 /// # IRQL: Any level. After return, current IRQL == `new_irql`.
 #[inline]
 pub fn raise(new_irql: Irql) -> Irql {
-    let prev = Irql::from_u8(irql().swap(new_irql.as_u8(), Ordering::AcqRel));
+    let prev = current();
     assert!(new_irql >= prev, "IRQL raise: attempted to lower from {:?} to {:?}", prev, new_irql);
+    write_raw(new_irql.as_u8());
     prev
 }
 
@@ -139,9 +182,9 @@ pub fn raise(new_irql: Irql) -> Irql {
 /// # IRQL: Any level. After return, current IRQL == `old_irql`.
 #[inline]
 pub fn lower(old_irql: Irql) {
-    let cur = Irql::from_u8(irql().load(Ordering::Relaxed));
+    let cur = current();
     assert!(old_irql <= cur, "IRQL lower: target {:?} is above current {:?}", old_irql, cur);
-    irql().store(old_irql.as_u8(), Ordering::Release);
+    write_raw(old_irql.as_u8());
     if old_irql < Irql::Dispatch && dispatch_pending().load(Ordering::Acquire) && interrupts_enabled() {
         x86_64::instructions::interrupts::without_interrupts(run_dispatch);
     }
@@ -169,13 +212,30 @@ pub fn request_dispatch() {
     }
 }
 
-/// From an ISR epilogue (EOI sent, interrupts disabled): runs the DISPATCH
-/// interrupt the ISR requested, if the interrupted code ran below
-/// DISPATCH_LEVEL; otherwise it stays pending until the IRQL drops.
+/// From an ISR prologue: raises the IRQL to the ISR's `level` and returns the
+/// interrupted IRQL, for [`exit_interrupt`]. The APIC only delivers an
+/// interrupt above the current IRQL, so `level` is above it, except for the
+/// 8259's ExtINT interrupts (PS/2 keyboard), which the TPR does not mask:
+/// those leave a higher IRQL as it is.
 ///
-/// # IRQL: DIRQL, in an ISR.
-pub fn dispatch_from_interrupt() {
-    if current() < Irql::Dispatch {
+/// # IRQL: In an ISR, interrupts disabled.
+pub fn enter_interrupt(level: Irql) -> Irql {
+    let interrupted = current();
+    if level > interrupted {
+        write_raw(level.as_u8());
+    }
+    interrupted
+}
+
+/// From an ISR epilogue (EOI sent, interrupts disabled): back to the
+/// `interrupted` IRQL, then the DISPATCH interrupt the ISR requested, if the
+/// interrupted code ran below DISPATCH_LEVEL; otherwise it stays pending until
+/// the IRQL drops.
+///
+/// # IRQL: In an ISR, interrupts disabled.
+pub fn exit_interrupt(interrupted: Irql) {
+    write_raw(interrupted.as_u8());
+    if interrupted < Irql::Dispatch {
         run_dispatch();
     }
 }
@@ -196,7 +256,7 @@ fn run_dispatch() {
         }
     }
     // Not `lower`: interrupts are off, and the dispatch has just run.
-    irql().store(old.as_u8(), Ordering::Release);
+    write_raw(old.as_u8());
 }
 
 /// The DISPATCH software interrupt of this CPU is requested and has not run
@@ -256,5 +316,39 @@ impl IrqlGuard {
 impl Drop for IrqlGuard {
     fn drop(&mut self) {
         lower(self.prev);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn levels_are_apic_priority_classes() {
+        for irql in [Irql::Passive, Irql::Apc, Irql::Dispatch, Irql::Device, Irql::Clock, Irql::Ipi, Irql::High] {
+            assert_eq!(Irql::from_u8(irql.as_u8()), irql);
+            assert!(irql.as_u8() <= 15, "CR8 holds 4 bits");
+        }
+        assert_eq!(Irql::from_u8(12), Irql::Device, "DIRQLs 3 to 12");
+        assert!(Irql::Clock > Irql::Dispatch, "the clock ticks at DISPATCH_LEVEL");
+        assert_eq!(crate::timer::CLOCK_VECTOR >> 4, Irql::Clock.as_u8());
+    }
+
+    /// The only test that changes the IRQL: the host's stand-in CR8 is global.
+    #[test]
+    fn an_isr_runs_at_its_level_and_restores_the_one_it_interrupted() {
+        assert_eq!(current(), Irql::Passive);
+        let before = raise(Irql::Dispatch);
+        let interrupted = enter_interrupt(Irql::Clock);
+        assert_eq!((interrupted, current()), (Irql::Dispatch, Irql::Clock));
+        exit_interrupt(interrupted);
+        assert_eq!(current(), Irql::Dispatch, "no DISPATCH interrupt above PASSIVE");
+        let high = raise(Irql::High);
+        let interrupted = enter_interrupt(Irql::Device);
+        assert_eq!(current(), Irql::High, "an ExtINT ISR leaves a higher IRQL as it is");
+        exit_interrupt(interrupted);
+        lower(high);
+        lower(before);
+        assert_eq!(current(), Irql::Passive);
     }
 }

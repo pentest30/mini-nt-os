@@ -47,8 +47,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - **Jalon courant : M1 — Noyau Ke** ([05](docs/05-feuille-de-route.md#m1--noyau-ke)). M0 est terminé. Le dispatcher
   (ADR-005) tourne sur l'ordonnanceur à 32 priorités de `kernel/ke/src/sched.rs` (préemption différée sous
   `DISPATCH_LEVEL`, `KSpinLock`, DPC sans allocation, roue de timers, état FPU/SSE par thread ; scénarios `ke-events`
-  et `fpu`). L'état par CPU passe par GS : KPCR (`hal::pcr`, IRQL) puis KPRCB (`ke::prcb`, files prêtes et DPC). Les
-  critères de sortie sont cochés ; reste : IRQL par le TPR, boosts et écran d'erreur symbolisé.
+  et `fpu`). L'IRQL est le TPR de l'APIC (CR8, échelle x64 : horloge à CLOCK_LEVEL). L'état par CPU passe par GS : KPCR
+  (`hal::pcr`) puis KPRCB (`ke::prcb`, files prêtes et DPC). Les critères de sortie sont cochés ; reste : boosts et
+  écran d'erreur symbolisé.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
