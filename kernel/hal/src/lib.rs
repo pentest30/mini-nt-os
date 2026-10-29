@@ -20,6 +20,7 @@ pub mod msr;
 pub mod ps2;
 pub mod ring3;
 pub mod serial;
+pub mod sync;
 pub mod sysenter;
 pub mod timer;
 

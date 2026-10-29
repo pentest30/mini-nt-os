@@ -6,6 +6,11 @@ edition.workspace = true
 [lib]
 name = "hal"
 
+[features]
+# "[alive] tick=N" on the serial port every second, from the timer ISR.
+# Debugging only (06 §5).
+heartbeat = []
+
 [dependencies]
 abi        = { path = "../../abi" }
 x86_64     = { workspace = true }

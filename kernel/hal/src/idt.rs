@@ -398,8 +398,11 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     // ── 2. Heartbeat log (ISR-safe, no heap) ─────────────────────────────────
     // Log "[alive] tick=N\n" every 1000 ms using the ISR-safe serial writer.
     // We cannot use log::info! here (heap alloc forbidden at IRQL >= DISPATCH).
+    // Debugging only (feature `heartbeat`): unconditional logging in an ISR
+    // is not allowed (06 §5), and its lines would split the serial markers of
+    // the boot scenarios.
     let ms = super::timer::get_tick_count();
-    if ms.is_multiple_of(1000) {
+    if cfg!(feature = "heartbeat") && ms.is_multiple_of(1000) {
         super::serial::write_str_isr("[alive] tick=");
         let mut buf = [0u8; 20];
         let mut n = ms;

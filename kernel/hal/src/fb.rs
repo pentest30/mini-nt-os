@@ -12,9 +12,9 @@
 //! `write_log_record` is called from `SerialLogger::log` at PASSIVE_LEVEL.
 //! The CONSOLE spin-lock is held only briefly per character; never call from ISR.
 
+use crate::sync::IrqLock;
 use abi::{FramebufferInfo, PixelFormat};
 use core::sync::atomic::{AtomicBool, Ordering};
-use spin::Mutex;
 
 /// When true, `write_log_record` is silenced — the launcher owns the screen.
 static EXCLUSIVE: AtomicBool = AtomicBool::new(false);
@@ -160,11 +160,13 @@ struct Console {
     rows: u32, // total rows
 }
 
-// SAFETY: Console is accessed exclusively through the CONSOLE spin-lock.
+// SAFETY: Console is accessed exclusively through the CONSOLE lock.
 //         The raw pointer is a stable HHDM-mapped physical range.
 unsafe impl Send for Console {}
 
-static CONSOLE: Mutex<Option<Console>> = Mutex::new(None);
+/// Held with interrupts disabled: system call handlers log to the screen too
+/// (see `IrqLock`).
+static CONSOLE: IrqLock<Option<Console>> = IrqLock::new(None);
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
@@ -459,7 +461,7 @@ pub fn init(info: &FramebufferInfo, hhdm_offset: u64) {
 
     c.clear();
     c.write_str_inner("micro-nt-os  [fb ok]\n");
-    *CONSOLE.lock() = Some(c);
+    CONSOLE.with(|console| *console = Some(c));
 }
 
 /// Blit a BGRA8888 source buffer to the framebuffer.
@@ -472,11 +474,14 @@ pub fn init(info: &FramebufferInfo, hhdm_offset: u64) {
 ///
 /// # IRQL: PASSIVE_LEVEL
 pub fn blit_bgra(src: &[u32], src_w: u32, src_h: u32, dst_x: u32, dst_y: u32) {
-    let guard = CONSOLE.lock();
-    let c = match guard.as_ref() {
-        Some(c) => c,
-        None => return,
-    };
+    CONSOLE.with(|console| {
+        if let Some(c) = console {
+            blit_bgra_locked(c, src, src_w, src_h, dst_x, dst_y);
+        }
+    });
+}
+
+fn blit_bgra_locked(c: &Console, src: &[u32], src_w: u32, src_h: u32, dst_x: u32, dst_y: u32) {
     let fb = c.fb;
     let fb_w = c.stride;
     let fb_h = c.height;
@@ -502,11 +507,7 @@ pub fn blit_bgra(src: &[u32], src_w: u32, src_h: u32, dst_x: u32, dst_y: u32) {
 
 /// Return the current framebuffer dimensions (width, height) or (0, 0) if uninitialised.
 pub fn dimensions() -> (u32, u32) {
-    let guard = CONSOLE.lock();
-    match guard.as_ref() {
-        Some(c) => (c.width, c.height),
-        None => (0, 0),
-    }
+    CONSOLE.with(|console| console.as_ref().map_or((0, 0), |c| (c.width, c.height)))
 }
 
 /// Write a string directly to the framebuffer console.
@@ -516,9 +517,11 @@ pub fn write_str(s: &str) {
     if EXCLUSIVE.load(Ordering::Relaxed) {
         return;
     }
-    if let Some(ref mut c) = *CONSOLE.lock() {
-        c.write_str_inner(s);
-    }
+    CONSOLE.with(|console| {
+        if let Some(c) = console {
+            c.write_str_inner(s);
+        }
+    });
 }
 
 /// Write a string to the framebuffer console for a fatal error screen.
@@ -529,11 +532,11 @@ pub fn write_str(s: &str) {
 /// # IRQL
 /// Any level.
 pub fn write_str_fatal(s: &str) {
-    if let Some(mut console) = CONSOLE.try_lock() {
-        if let Some(ref mut c) = *console {
+    CONSOLE.try_with(|console| {
+        if let Some(c) = console {
             c.write_str_inner(s);
         }
-    }
+    });
 }
 
 /// Write a single byte to the framebuffer console (ASCII only).
@@ -544,35 +547,33 @@ pub fn write_byte(b: u8) {
     if EXCLUSIVE.load(Ordering::Relaxed) {
         return;
     }
-    if let Some(ref mut c) = *CONSOLE.lock() {
-        c.write_char(b as char);
-    }
+    CONSOLE.with(|console| {
+        if let Some(c) = console {
+            c.write_char(b as char);
+        }
+    });
 }
 
 /// Return the virtual address of the framebuffer pointer stored in CONSOLE,
 /// or 0 if not initialised. Debug only.
 pub fn fb_ptr_addr() -> u64 {
-    match CONSOLE.lock().as_ref() {
-        Some(c) => c.fb as u64,
-        None => 0,
-    }
+    CONSOLE.with(|console| console.as_ref().map_or(0, |c| c.fb as u64))
 }
 
 /// Framebuffer dimensions `(width, height)`. Returns `(0, 0)` if not yet init.
 pub fn screen_dims() -> (u32, u32) {
-    match CONSOLE.lock().as_ref() {
-        Some(c) => (c.width, c.height),
-        None => (0, 0),
-    }
+    dimensions()
 }
 
 /// Fill a rectangle with `color` (0x00_RR_GG_BB).
 ///
 /// # IRQL: PASSIVE_LEVEL
 pub fn draw_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
-    if let Some(ref mut c) = *CONSOLE.lock() {
-        c.fill_rect(x, y, w, h, color);
-    }
+    CONSOLE.with(|console| {
+        if let Some(c) = console {
+            c.fill_rect(x, y, w, h, color);
+        }
+    });
 }
 
 /// Draw a string at pixel coordinates with explicit foreground/background.
@@ -582,9 +583,11 @@ pub fn draw_rect(x: u32, y: u32, w: u32, h: u32, color: u32) {
 ///
 /// # IRQL: PASSIVE_LEVEL
 pub fn draw_text_at(x: u32, y: u32, text: &str, fg: u32, bg: u32, scale: u32) {
-    if let Some(ref mut c) = *CONSOLE.lock() {
-        c.draw_str_px(x, y, text, fg, bg, scale);
-    }
+    CONSOLE.with(|console| {
+        if let Some(c) = console {
+            c.draw_str_px(x, y, text, fg, bg, scale);
+        }
+    });
 }
 
 /// Write a formatted log record to the framebuffer.
@@ -596,16 +599,6 @@ pub fn write_log_record(level: &str, args: &core::fmt::Arguments<'_>) {
     if EXCLUSIVE.load(Ordering::Relaxed) {
         return;
     }
-    let mut guard = CONSOLE.lock();
-    let c = match guard.as_mut() {
-        Some(c) => c,
-        None => return,
-    };
-
-    c.write_str_inner("[");
-    c.write_str_inner(level);
-    c.write_str_inner("] ");
-
     struct FbWriter<'a>(&'a mut Console);
     impl core::fmt::Write for FbWriter<'_> {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
@@ -613,6 +606,12 @@ pub fn write_log_record(level: &str, args: &core::fmt::Arguments<'_>) {
             Ok(())
         }
     }
-    let _ = core::fmt::write(&mut FbWriter(c), *args);
-    c.write_str_inner("\n");
+    CONSOLE.with(|console| {
+        let Some(c) = console else { return };
+        c.write_str_inner("[");
+        c.write_str_inner(level);
+        c.write_str_inner("] ");
+        let _ = core::fmt::write(&mut FbWriter(c), *args);
+        c.write_str_inner("\n");
+    });
 }

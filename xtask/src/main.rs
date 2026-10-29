@@ -109,7 +109,7 @@ fn lint(ws: &Workspace) -> Result<()> {
     cargo(ws, &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?;
     let bare_metal: [&[&str]; 3] = [
         &["-p", "ntoskrnl", "--target", KERNEL_TARGET],
-        &["-p", "ntoskrnl", "--target", KERNEL_TARGET, "--features", "trace-syscalls,test-stack-overflow"],
+        &["-p", "ntoskrnl", "--target", KERNEL_TARGET, "--features", "trace-syscalls,test-stack-overflow,heartbeat"],
         &["-p", "mino-loader", "--target", LOADER_TARGET],
     ];
     for target_args in bare_metal {

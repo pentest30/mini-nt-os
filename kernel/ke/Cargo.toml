@@ -7,6 +7,7 @@ edition.workspace = true
 name = "ke"
 
 [dependencies]
+abi      = { path = "../../abi" }
 hal      = { path = "../hal" }
 x86_64   = { workspace = true }
 spin     = { workspace = true }

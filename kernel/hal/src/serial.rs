@@ -4,11 +4,12 @@
 //! formatted records to COM1. Call `logger_init()` once after `serial::init()`
 //! to redirect all `log::info!` / `log::warn!` / etc. calls to the UART.
 
-use spin::Mutex;
+use crate::sync::IrqLock;
 use uart_16550::SerialPort;
 use x86_64::instructions::port::Port;
 
-static COM1: Mutex<Option<SerialPort>> = Mutex::new(None);
+/// Held with interrupts disabled: system call handlers log too (see `IrqLock`).
+static COM1: IrqLock<Option<SerialPort>> = IrqLock::new(None);
 const COM1_BASE: u16 = 0x3F8;
 
 /// Initialise COM1 at 115200 baud.
@@ -19,7 +20,7 @@ pub unsafe fn init() {
     // SAFETY: 0x3F8 is the standard COM1 I/O port address.
     let mut port = unsafe { SerialPort::new(0x3F8) };
     port.init();
-    *COM1.lock() = Some(port);
+    COM1.with(|com1| *com1 = Some(port));
 }
 
 /// Write a string to COM1 by direct port I/O, without taking the COM1 lock.
@@ -47,9 +48,11 @@ pub fn write_str_unlocked(s: &str) {
 
 /// Write a byte to COM1. No-ops if the port is not yet initialised.
 pub fn write_byte(b: u8) {
-    if let Some(ref mut port) = *COM1.lock() {
-        port.send(b);
-    }
+    COM1.with(|com1| {
+        if let Some(port) = com1 {
+            port.send(b);
+        }
+    });
 }
 
 pub fn try_read_byte() -> Option<u8> {
@@ -85,12 +88,11 @@ pub fn write_fmt(args: core::fmt::Arguments) {
     struct SerialWriterDirect;
     impl core::fmt::Write for SerialWriterDirect {
         fn write_str(&mut self, s: &str) -> core::fmt::Result {
-            // Use write_byte directly to avoid recursive lock acquisition.
-            if let Some(ref mut port) = *COM1.lock() {
-                for b in s.bytes() {
-                    port.send(b);
+            COM1.with(|com1| {
+                if let Some(port) = com1 {
+                    s.bytes().for_each(|b| port.send(b));
                 }
-            }
+            });
             Ok(())
         }
     }
@@ -104,7 +106,7 @@ pub fn write_str(s: &str) {
     }
 }
 
-/// Write a string to COM1 from an ISR context using `try_lock`.
+/// Write a string to COM1 from an ISR context, without waiting for the lock.
 ///
 /// Unlike `write_str`, this never spins — if the PASSIVE-level code already
 /// holds the COM1 lock, this call is silently skipped (bytes may be lost).
@@ -112,13 +114,11 @@ pub fn write_str(s: &str) {
 ///
 /// # IRQL: DISPATCH_LEVEL or above (ISR-safe)
 pub fn write_str_isr(s: &str) {
-    if let Some(ref mut guard) = COM1.try_lock() {
-        if let Some(ref mut port) = **guard {
-            for b in s.bytes() {
-                port.send(b);
-            }
+    COM1.try_with(|com1| {
+        if let Some(port) = com1 {
+            s.bytes().for_each(|b| port.send(b));
         }
-    }
+    });
 }
 
 // ── Serial logger ─────────────────────────────────────────────────────────────

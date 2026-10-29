@@ -42,7 +42,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - Écran d'erreur fatale (`KeBugCheckEx`) symbolisé.
 
 **Critères de sortie**
-- [ ] Tests hôte du dispatcher : WaitAny, WaitAll partiel, mutant récursif puis abandonné, timeout déjà échu, APC pendant une attente alertable.
+- [x] Tests hôte du dispatcher : WaitAny, WaitAll partiel, mutant récursif puis abandonné, timeout déjà échu, APC pendant une attente alertable.
 - [ ] Scénario QEMU : 2 threads noyau échangent 10 000 signaux via deux événements, sans perte ni blocage.
 - [ ] Scénario QEMU : 4 threads qui font du calcul flottant en parallèle obtiennent des résultats identiques à ceux de l'hôte.
 
