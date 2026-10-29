@@ -22,6 +22,7 @@ pub mod pcr;
 pub mod ps2;
 pub mod ring3;
 pub mod serial;
+pub mod symbols;
 pub mod sync;
 pub mod sysenter;
 pub mod timer;
