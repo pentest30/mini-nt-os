@@ -79,6 +79,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
         kernel_phys,
         kernel_size,
         kernel_entry,
+        kernel_symbols,
         ramdisk_phys,
         ramdisk_size,
         regions,
@@ -92,7 +93,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
 
         // B3: Load the kernel ELF from the ESP into physical memory.
         let kernel = loader::load_kernel(bt);
-        let (kp, ks, ke) = (kernel.phys_base, kernel.size, kernel.entry);
+        let (kp, ks, ke, ksym) = (kernel.phys_base, kernel.size, kernel.entry, kernel.symbols);
         let (rdp, rds) = loader::load_optional_ramdisk(bt).unwrap_or((0, 0));
 
         // B2: Build 4-level page tables (identity + HHDM).
@@ -125,7 +126,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
         let (mut rgns, count) = memory::collect(bt);
         memory::mark_kernel(&mut rgns, count, kp / 4096, ks.div_ceil(4096));
 
-        (kp, ks, ke, rdp, rds, rgns, count, pml4, bi_phys, stack_top, fb)
+        (kp, ks, ke, ksym, rdp, rds, rgns, count, pml4, bi_phys, stack_top, fb)
         // `bt` borrow released here
     };
 
@@ -134,6 +135,7 @@ fn efi_main(_image: Handle, mut st: SystemTable<Boot>) -> Status {
     unsafe {
         BOOT_INFO.kernel_phys_base = kernel_phys;
         BOOT_INFO.kernel_size = kernel_size;
+        BOOT_INFO.symbols = kernel_symbols;
         BOOT_INFO.rsdp_phys = rsdp_phys;
         BOOT_INFO.ramdisk_phys_base = ramdisk_phys;
         BOOT_INFO.ramdisk_size = ramdisk_size;

@@ -190,6 +190,9 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
         boot_info.hhdm_offset,
         boot_info.memory_map_len,
     );
+    // Before anything that can stop the system, so the STOP screen names the
+    // functions on the stack.
+    register_symbols(boot_info);
 
     // ── 2. Mm: feed buddy allocator from BootInfo memory map ─────────────────
     // Pass the true kernel physical end (including BSS) so the buddy never
@@ -333,6 +336,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
 
     heap_self_test();
+    symbols_self_test();
 
     // ── 4. Executive initialisation ───────────────────────────────────────────
     x86_64::instructions::interrupts::disable();
@@ -617,6 +621,52 @@ fn dpc_self_test() {
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interrupts enabled, timer running.
+/// Registers the kernel's ELF symbol table, which the bootloader copied below
+/// 4 GiB (`BootInfo::symbols`), so inside the HHDM.
+///
+/// # IRQL
+/// HIGH_LEVEL, once, during phase 0.
+fn register_symbols(boot_info: &BootInfo) {
+    const HHDM_SIZE: u64 = 4 << 30;
+    let symbols = boot_info.symbols;
+    if !symbols.is_present() {
+        log::warn!("no kernel symbol table: the STOP screen will show bare addresses");
+        return;
+    }
+    let end = symbols.phys.checked_add(symbols.symtab_size).and_then(|e| e.checked_add(symbols.strtab_size));
+    assert!(end.is_some_and(|end| end <= HHDM_SIZE), "kernel symbol table outside the HHDM");
+    let base = (boot_info.hhdm_offset + symbols.phys) as *const u8;
+    // SAFETY: the bootloader copied both tables to [phys, end), a LOADER_DATA
+    // block that the buddy never receives (`BootloaderReclaimable`) and the
+    // HHDM maps (checked above); nothing writes to it after the handoff.
+    let (symtab, strtab) = unsafe {
+        (
+            core::slice::from_raw_parts(base, symbols.symtab_size as usize),
+            core::slice::from_raw_parts(base.add(symbols.symtab_size as usize), symbols.strtab_size as usize),
+        )
+    };
+    let table = hal::symbols::SymbolTable::new(symtab, strtab);
+    hal::symbols::init(table);
+    log::info!("kernel symbols: {} functions", table.function_count());
+}
+
+/// Finds this very function, and a code address inside it, through the
+/// registered symbol table.
+fn symbols_self_test() {
+    let here = symbols_self_test as fn() as usize as u64;
+    fn demangled(addr: u64, buf: &mut [u8]) -> Option<(&str, u64)> {
+        let (name, offset) = hal::symbols::lookup(addr)?;
+        let mut out = hal::symbols::FixedBuf::new(buf);
+        hal::symbols::write_demangled(name, &mut out).ok()?;
+        Some((out.into_str(), offset))
+    }
+    let (mut a, mut b) = ([0u8; 128], [0u8; 128]);
+    assert_eq!(demangled(here, &mut a), Some(("ntoskrnl::symbols_self_test", 0)), "kernel symbol lookup");
+    assert_eq!(demangled(here + 1, &mut b), Some(("ntoskrnl::symbols_self_test", 1)));
+    assert_eq!(hal::symbols::lookup(0x1000), None, "a user address has no kernel symbol");
+    log::info!("[smoke] symbols: kernel functions found by address");
+}
+
 fn tpr_self_test() {
     use hal::irql::{Irql, IrqlGuard};
 

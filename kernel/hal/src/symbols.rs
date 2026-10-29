@@ -107,6 +107,12 @@ impl<'a> FixedBuf<'a> {
         // sont copiés.
         core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
     }
+
+    /// Le texte écrit, pour la durée de vie du tampon.
+    pub fn into_str(self) -> &'a str {
+        let buf: &'a [u8] = self.buf;
+        core::str::from_utf8(&buf[..self.len]).unwrap_or("")
+    }
 }
 
 impl fmt::Write for FixedBuf<'_> {
@@ -173,5 +179,6 @@ mod tests {
         write!(buf, "abc").unwrap();
         write!(buf, "dé€fgh").unwrap();
         assert_eq!(buf.as_str(), "abcdé", "the euro sign does not fit whole");
+        assert_eq!(buf.into_str(), "abcdé");
     }
 }

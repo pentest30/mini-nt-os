@@ -66,7 +66,52 @@ pub struct BootInfo {
 
     /// Physical memory map provided by UEFI.
     pub memory_map: [MemoryRegion; MEMORY_MAP_MAX],
+
+    /// The kernel ELF's symbol table, for the fatal error screen.
+    pub symbols: KernelSymbols,
 }
+
+/// Where the loader copied the kernel ELF's `.symtab` and `.strtab`: one
+/// LOADER_DATA block below 4 GiB (so inside the HHDM), `.strtab` right after
+/// `.symtab`. All zero when the ELF has no symbol table.
+///
+/// The block is `BootloaderReclaimable`: whoever reclaims that memory must
+/// keep it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KernelSymbols {
+    /// Physical address of `.symtab`.
+    pub phys: u64,
+    /// Size of `.symtab` in bytes, a multiple of `size_of::<Elf64_Sym>()` (24).
+    pub symtab_size: u64,
+    /// Size of `.strtab` in bytes, at `phys + symtab_size`.
+    pub strtab_size: u64,
+}
+
+impl KernelSymbols {
+    pub const fn zeroed() -> Self {
+        Self { phys: 0, symtab_size: 0, strtab_size: 0 }
+    }
+
+    /// `true` if the loader found a symbol table.
+    #[inline]
+    pub fn is_present(&self) -> bool {
+        self.phys != 0 && self.symtab_size != 0
+    }
+}
+
+// The loader and the kernel are built separately: pin what they exchange.
+const _: () = {
+    use core::mem::{offset_of, size_of};
+    assert!(size_of::<FramebufferInfo>() == 24);
+    assert!(size_of::<MemoryRegion>() == 24);
+    assert!(size_of::<KernelSymbols>() == 24);
+    assert!(offset_of!(BootInfo, memory_map_len) == 56);
+    assert!(offset_of!(BootInfo, framebuffer) == 64);
+    assert!(offset_of!(BootInfo, memory_map) == 88);
+    assert!(offset_of!(BootInfo, symbols) == 88 + 24 * MEMORY_MAP_MAX);
+    assert!(size_of::<BootInfo>() == 88 + 24 * MEMORY_MAP_MAX + 24);
+};
 
 /// Sentinel value stored in `BootInfo::magic`.
 /// ASCII "MINOBOOT" → `0x544F4F42_4F4E494D`.
@@ -94,6 +139,7 @@ impl BootInfo {
             _pad: 0,
             framebuffer: FramebufferInfo::zeroed(),
             memory_map: [MemoryRegion::zeroed(); MEMORY_MAP_MAX],
+            symbols: KernelSymbols::zeroed(),
         }
     }
 
