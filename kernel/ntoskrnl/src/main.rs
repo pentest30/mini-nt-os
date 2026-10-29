@@ -358,9 +358,13 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     deferred_preemption_self_test();
     dpc_self_test();
     ke_self_test();
+    fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY + 1, "pinger above ponger");
+    }
+    if cfg!(feature = "test-fpu") {
+        fpu_parallel_test();
     }
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
@@ -710,6 +714,43 @@ fn ke_self_test() {
     log::info!("[smoke] Ke: priority preemption, event wait, delay, thread end and timeout ok");
 }
 
+/// Checks that the FPU state follows each thread (ADR-009): the boot thread's
+/// control words survive a switch to a new thread, which starts with the
+/// initial ones whatever its creator had loaded.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn fpu_self_test() {
+    use abi::fpu::{INITIAL_FCW, INITIAL_MXCSR};
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    const FCW: u16 = 0x0F7F; // round toward zero, 64-bit precision
+    const MXCSR: u32 = 0x7F80; // round toward zero
+    static SEEN: AtomicU64 = AtomicU64::new(0);
+    fn probe(_: *mut core::ffi::c_void) {
+        let (fcw, mxcsr) = hal::fpu::control_words();
+        SEEN.store(u64::from(fcw) << 32 | u64::from(mxcsr), Ordering::Relaxed);
+    }
+    let kept = ke::fpu::with_floating_point(|| {
+        hal::fpu::set_control_words(FCW, MXCSR);
+        // Higher priority: it runs, and ends, before this returns.
+        spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, probe, core::ptr::null_mut());
+        hal::fpu::control_words()
+    });
+    assert_eq!(kept, (FCW, MXCSR), "the boot thread's FPU state was lost across a switch");
+    let seen = SEEN.load(Ordering::Relaxed);
+    assert_eq!(
+        seen,
+        u64::from(INITIAL_FCW) << 32 | u64::from(INITIAL_MXCSR),
+        "a new thread did not start with the initial FPU state"
+    );
+    log::info!(
+        "[smoke] FPU: state kept across switches, new thread starts with FCW {:#06x} MXCSR {:#06x}",
+        INITIAL_FCW,
+        INITIAL_MXCSR
+    );
+}
+
 /// M1 exit criterion (05): two kernel threads exchange 10 000 round trips
 /// through two synchronization events, without a loss or a hang. The ponger
 /// runs at normal priority, the pinger at `pinger_priority`: above it, each
@@ -809,6 +850,71 @@ fn event_ping_pong_test(pinger_priority: u8, label: &str) {
         ROUND_TRIPS,
         (hal::timer::interrupt_time() - start) / 10_000,
         ke::sched::context_switches() - switches,
+    );
+}
+
+/// M1 exit criterion (05): four kernel threads compute in floating point at
+/// the same time (SSE and x87, each with its own rounding modes), preempted in
+/// the middle of their computations, and get the host's results
+/// (`ke::fpu::workload`). Called only with the `test-fpu` feature (scenario
+/// `tests/boot/fpu`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn fpu_parallel_test() {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    use ke::dispatcher::{ke_wait_for_multiple_objects, ProcessorMode, WaitBlock, WaitType};
+    use ke::fpu::workload::{run, EXPECTED, WORKLOADS};
+    use ke::sched::KePlatform;
+
+    /// Switches the four threads go through before they stop: about ten
+    /// quanta each, most of them in the middle of a computation.
+    const MIN_SWITCHES: u64 = 40;
+    static START: AtomicU64 = AtomicU64::new(0);
+    static ROUNDS: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+    static MISMATCHES: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+    fn worker(index: *mut c_void) {
+        let i = index.addr();
+        ke::fpu::with_floating_point(|| loop {
+            if run(&WORKLOADS[i]) != EXPECTED[i] {
+                MISMATCHES[i].fetch_add(1, Ordering::Relaxed);
+            }
+            let rounds = ROUNDS[i].fetch_add(1, Ordering::Relaxed) + 1;
+            if rounds >= 2 && ke::sched::context_switches() - START.load(Ordering::Relaxed) >= MIN_SWITCHES {
+                break;
+            }
+        });
+    }
+
+    START.store(ke::sched::context_switches(), Ordering::Relaxed);
+    let start = hal::timer::interrupt_time();
+    let threads = [0, 1, 2, 3].map(|i| {
+        let tid = spawn_kernel_thread(ke::sched::NORMAL_PRIORITY, worker, core::ptr::without_provenance_mut(i));
+        ke::sched::thread_object(tid).expect("thread object")
+    });
+    let mut blocks = [const { WaitBlock::new() }; 4];
+    // SAFETY: on the boot thread; the thread objects are never freed.
+    let status = unsafe {
+        ke_wait_for_multiple_objects::<KePlatform>(
+            &threads,
+            WaitType::WaitAll,
+            ProcessorMode::Kernel,
+            false,
+            Some(-90 * 1000 * 10_000),
+            Some(&mut blocks),
+        )
+    };
+    let rounds = ROUNDS.each_ref().map(|r| r.load(Ordering::Relaxed));
+    let mismatches = MISMATCHES.each_ref().map(|m| m.load(Ordering::Relaxed));
+    assert_eq!(status, STATUS_WAIT_0, "floating-point threads did not end: {rounds:?} rounds");
+    assert_eq!(mismatches, [0; 4], "results differ from the host's in {mismatches:?} of {rounds:?} rounds");
+    log::info!(
+        "[fpu] 4 threads: results identical to the host ({:?} rounds, {} context switches, {} ms)",
+        rounds,
+        ke::sched::context_switches() - START.load(Ordering::Relaxed),
+        (hal::timer::interrupt_time() - start) / 10_000,
     );
 }
 

@@ -21,6 +21,9 @@ test-stack-overflow = []
 # Two kernel threads exchange 10 000 round trips through two events, after
 # the boot self-tests (M1 exit criterion, scenario tests/boot/ke-events).
 test-ke-events = []
+# Four kernel threads compute in floating point in parallel and must get the
+# host's results (M1 exit criterion, scenario tests/boot/fpu).
+test-fpu = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 
