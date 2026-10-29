@@ -72,6 +72,24 @@ pub(crate) fn init_bsp() {
     assert!(ptr::eq(current(), &BSP_PRCB), "the KPCR does not reach the boot processor's KPRCB");
 }
 
+/// Le KPRCB du processeur courant, ou `None` avant `ke::init` : pour l'écran
+/// d'erreur fatale, qui ne doit pas échouer à son tour.
+///
+/// # IRQL
+/// Tout niveau.
+pub(crate) fn try_current() -> Option<&'static KPrcb> {
+    #[cfg(target_os = "none")]
+    {
+        let prcb = hal::pcr::current().prcb().cast::<KPrcb>();
+        // SAFETY: non nul, c'est un KPRCB statique enregistré par `init_bsp`.
+        (!prcb.is_null()).then(|| unsafe { &*prcb })
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        Some(&BSP_PRCB)
+    }
+}
+
 /// Le KPRCB du processeur courant, par son KPCR. Sur l'hôte (tests), celui du
 /// processeur de démarrage.
 ///

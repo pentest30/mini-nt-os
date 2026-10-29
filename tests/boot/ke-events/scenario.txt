@@ -9,5 +9,4 @@ timeout  = 120
 expect = [ke-events] equal priorities: 10000 round trips
 expect = [ke-events] pinger above ponger: 10000 round trips
 
-forbid = KERNEL PANIC
 forbid = *** STOP:

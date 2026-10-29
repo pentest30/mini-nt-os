@@ -7,6 +7,7 @@ timeout = 120
 expect = [smoke] kernel W^X ok
 expect = [smoke] identity map removed
 expect = [smoke] heap self-test ok
+expect = [smoke] symbols: kernel functions found by address
 expect = [smoke] TPR: clock ticks at DISPATCH_LEVEL
 expect = [smoke] dispatch deferred
 expect = [smoke] DPC: run at once
@@ -22,7 +23,6 @@ expect = [smoke] SYSENTER path hit | [smoke] SYSENTER path skipped
 
 # A fatal error ends the run at once.
 forbid = *** STOP:
-forbid = KERNEL PANIC
 
 # The system call trace belongs to the trace-syscalls feature only (06 §5).
 forbid-line-start = [sys]

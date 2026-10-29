@@ -46,6 +46,7 @@ pub const STATUS_USER_APC: NtStatus = NtStatus(0x0000_00C0);
 pub const STATUS_KERNEL_APC: NtStatus = NtStatus(0x0000_0100);
 pub const STATUS_ALERTED: NtStatus = NtStatus(0x0000_0101);
 pub const STATUS_TIMEOUT: NtStatus = NtStatus(0x0000_0102);
+pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
 pub const STATUS_MUTANT_NOT_OWNED: NtStatus = NtStatus(0xC000_0046);
 pub const STATUS_SEMAPHORE_LIMIT_EXCEEDED: NtStatus = NtStatus(0xC000_0047);
 

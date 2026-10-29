@@ -11,6 +11,8 @@ rustflags = [
     "-C", "code-model=kernel",
     "-C", "relocation-model=static",
     "-C", "no-redzone=yes",
+    # Keep the RBP chain: the STOP screen walks it for its call stack.
+    "-C", "force-frame-pointers=yes",
     "-C", "target-feature=-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2",
     # Disable auto-vectorization: LLVM nightly now requires 16-byte stack alignment
     # for vectorized code, but bare-metal interrupt stacks may only be 8-byte aligned.

@@ -8,5 +8,4 @@ timeout  = 120
 
 expect = [fpu] 4 threads: results identical to the host
 
-forbid = KERNEL PANIC
 forbid = *** STOP:

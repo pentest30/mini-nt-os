@@ -4,9 +4,12 @@
 //! Its PT_LOAD segments are copied into one physically contiguous block,
 //! laid out exactly as their virtual addresses (BSS zeroed), and described by a
 //! [`KernelImage`] that `paging::map_kernel` maps with each segment's rights.
+//! Its `.symtab` and `.strtab`, which no segment covers, are copied apart for
+//! the fatal error screen ([`KernelSymbols`]).
 //!
 //! The optional ramdisk (`fat.img`) is loaded verbatim.
 
+use abi::KernelSymbols;
 use uefi::{
     prelude::BootServices,
     proto::media::{
@@ -49,6 +52,8 @@ pub struct KernelImage {
     pub entry: u64,
     pub segments: [Segment; MAX_SEGMENTS],
     pub segment_count: usize,
+    /// The ELF's symbol table, copied out of the file.
+    pub symbols: KernelSymbols,
 }
 
 /// Load `kernel.elf` from the ESP and lay its segments out in physical memory.
@@ -61,7 +66,8 @@ pub fn load_kernel(bt: &BootServices) -> KernelImage {
         .unwrap_or_else(|| panic!("loader: kernel.elf not found on any SimpleFileSystem volume"));
     // SAFETY: load_file just read file_size bytes at file_phys (identity-mapped).
     let file = unsafe { core::slice::from_raw_parts(file_phys as *const u8, file_size as usize) };
-    let image = place_segments(bt, file);
+    let mut image = place_segments(bt, file);
+    image.symbols = copy_symbols(bt, file);
     // SAFETY: the file buffer was allocated by load_file and is no longer used.
     let _ = unsafe { bt.free_pages(file_phys, pages(file_size)) };
     log::info!(
@@ -71,6 +77,12 @@ pub fn load_kernel(bt: &BootServices) -> KernelImage {
         image.phys_base,
         image.entry,
         image.segment_count,
+    );
+    log::info!(
+        "loader: kernel symbols at {:#x}, {}+{} bytes",
+        image.symbols.phys,
+        image.symbols.symtab_size,
+        image.symbols.strtab_size,
     );
     image
 }
@@ -134,7 +146,56 @@ fn place_segments(bt: &BootServices, file: &[u8]) -> KernelImage {
         }
     }
 
-    KernelImage { phys_base, virt_base, size, entry, segments, segment_count: count }
+    KernelImage { phys_base, virt_base, size, entry, segments, segment_count: count, symbols: KernelSymbols::zeroed() }
+}
+
+/// Copies the ELF's `.symtab` and the `.strtab` it names into one LOADER_DATA
+/// block below 4 GiB, which the kernel reaches through the HHDM. A kernel
+/// without a symbol table (stripped) gets zeros.
+fn copy_symbols(bt: &BootServices, file: &[u8]) -> KernelSymbols {
+    const SHT_SYMTAB: u32 = 2;
+    const SHT_STRTAB: u32 = 3;
+    const SYM_SIZE: u64 = 24;
+    /// Highest address of the block: the HHDM covers [0, 4 GiB).
+    const HHDM_LIMIT: u64 = 0xFFFF_FFFF;
+
+    let shoff = rd64(file, 0x28) as usize;
+    let shentsize = rd16(file, 0x3A) as usize;
+    let shnum = rd16(file, 0x3C) as usize;
+    if shoff == 0 || shnum == 0 {
+        return KernelSymbols::zeroed();
+    }
+    assert!(shentsize >= 64, "loader: bad section header size");
+    // (sh_type, sh_offset, sh_size, sh_link) of section `i`.
+    let section = |i: usize| {
+        let sh = shoff + i * shentsize;
+        (rd32(file, sh + 4), rd64(file, sh + 24), rd64(file, sh + 32), rd32(file, sh + 40) as usize)
+    };
+    let Some((_, sym_off, sym_size, link)) = (0..shnum).map(section).find(|s| s.0 == SHT_SYMTAB) else {
+        return KernelSymbols::zeroed();
+    };
+    assert!(link < shnum, "loader: .symtab names no string table");
+    let (str_type, str_off, str_size, _) = section(link);
+    assert!(str_type == SHT_STRTAB, "loader: .symtab names no string table");
+    assert!(sym_size % SYM_SIZE == 0, "loader: .symtab is not a whole number of entries");
+    let in_file = |off: u64, size: u64| off.checked_add(size).is_some_and(|end| end <= file.len() as u64);
+    assert!(in_file(sym_off, sym_size) && in_file(str_off, str_size), "loader: symbol table outside the file");
+
+    let phys = bt
+        .allocate_pages(AllocateType::MaxAddress(HHDM_LIMIT), MemoryType::LOADER_DATA, pages(sym_size + str_size))
+        .expect("loader: failed to allocate pages for the kernel symbols");
+    // SAFETY: [phys, phys + sym_size + str_size) was just allocated
+    // (identity-mapped); both sources lie inside `file` (checked above).
+    unsafe {
+        let dst = phys as *mut u8;
+        core::ptr::copy_nonoverlapping(file.as_ptr().add(sym_off as usize), dst, sym_size as usize);
+        core::ptr::copy_nonoverlapping(
+            file.as_ptr().add(str_off as usize),
+            dst.add(sym_size as usize),
+            str_size as usize,
+        );
+    }
+    KernelSymbols { phys, symtab_size: sym_size, strtab_size: str_size }
 }
 
 fn pages(bytes: u64) -> usize {
