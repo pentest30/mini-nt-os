@@ -5,6 +5,8 @@
 
 use abi::fpu::FxSaveArea;
 
+pub mod workload;
+
 /// Exécute `f` avec un état x87/SSE propre (pile x87 vide, FCW et MXCSR
 /// initiaux), puis rend à l'appelant l'état qu'il avait : par exemple celui du
 /// thread utilisateur dont un appel système s'exécute. Préempté pendant `f`, le

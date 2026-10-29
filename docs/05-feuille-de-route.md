@@ -44,7 +44,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 **Critères de sortie**
 - [x] Tests hôte du dispatcher : WaitAny, WaitAll partiel, mutant récursif puis abandonné, timeout déjà échu, APC pendant une attente alertable.
 - [x] Scénario QEMU : 2 threads noyau échangent 10 000 signaux via deux événements, sans perte ni blocage.
-- [ ] Scénario QEMU : 4 threads qui font du calcul flottant en parallèle obtiennent des résultats identiques à ceux de l'hôte.
+- [x] Scénario QEMU : 4 threads qui font du calcul flottant en parallèle obtiennent des résultats identiques à ceux de l'hôte.
 
 ## M2 — Mémoire, objets, processus
 

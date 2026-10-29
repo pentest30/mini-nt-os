@@ -1,0 +1,12 @@
+# Floating point in parallel (M1 exit criterion, 05; ADR-009): four kernel
+# threads iterate a chaotic map in SSE and x87, each with its own rounding
+# modes, preempted in the middle of their computations, and must get the
+# results the host computes with the same code (ke::fpu::workload).
+features = test-fpu
+cpus     = default, intel
+timeout  = 120
+
+expect = [fpu] 4 threads: results identical to the host
+
+forbid = KERNEL PANIC
+forbid = *** STOP:
