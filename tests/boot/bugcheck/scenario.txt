@@ -1,0 +1,20 @@
+# Fatal error screen (M1): an assertion fails two calls deep after the boot
+# self-tests; the panic goes through KeBugCheckEx, whose STOP screen gives the
+# code, the panic message and the kernel call stack, symbolized and demangled.
+features = test-bugcheck
+cpus     = default
+timeout  = 120
+
+expect = *** STOP: 0x0000001e (0x0000000080000003,
+expect = KMODE_EXCEPTION_NOT_HANDLED
+expect = thread        0x
+expect = deliberate bugcheck (test-bugcheck)
+expect = Call stack:
+expect = ntoskrnl::bugcheck_test_inner+0x
+expect = ntoskrnl::bugcheck_test_outer+0x
+expect = ntoskrnl::kernel_main_phase1+0x
+expect = System halted.
+
+# The screen itself must not fault.
+forbid = STOP while printing the STOP screen
+forbid = [NESTED #PF]

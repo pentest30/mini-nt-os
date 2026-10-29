@@ -223,7 +223,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 ### 5.11 Diagnostic (`kernel/kd`)
 
 - `DbgPrint` et `int 2Dh` (le service de débogage appelé par `ntdll`) sont redirigés vers COM1 avec un préfixe processus/thread. Les versions *debug* des DLL ReactOS écrivent leurs `DPRINT` par ce canal.
-- Écran d'erreur fatale avec code et paramètres, pile noyau symbolisée (table des symboles intégrée au noyau au moment du lien).
+- Écran d'erreur fatale avec code et paramètres, pile noyau symbolisée : la chaîne des RBP (noyau compilé avec les pointeurs de cadre), nommée par la table des symboles de l'ELF du noyau, que le chargeur lui transmet.
 - Débogage au niveau source via le *gdbstub* de QEMU (`-s -S`) et un fichier ELF avec ses symboles. Le protocole KD de Windows n'est pas prévu.
 
 ---

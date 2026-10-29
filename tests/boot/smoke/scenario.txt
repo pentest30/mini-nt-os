@@ -23,7 +23,6 @@ expect = [smoke] SYSENTER path hit | [smoke] SYSENTER path skipped
 
 # A fatal error ends the run at once.
 forbid = *** STOP:
-forbid = KERNEL PANIC
 
 # The system call trace belongs to the trace-syscalls feature only (06 §5).
 forbid-line-start = [sys]

@@ -25,6 +25,7 @@ use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;
 
+use super::bugcheck::{self, interrupted_rbp, BugCheckCode, StackStart};
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
 
 static IDT: Once<InterruptDescriptorTable> = Once::new();
@@ -61,7 +62,7 @@ pub unsafe fn init() {
 
         // Double fault must use IST[0] to survive kernel stack overflow.
         // SAFETY: DOUBLE_FAULT_IST_INDEX (0) is valid; gdt::init() populated
-        // interrupt_stack_table[0] with a live 4 KiB stack before this runs.
+        // interrupt_stack_table[0] with a live 16 KiB stack before this runs.
         unsafe {
             idt.double_fault.set_handler_fn(exception_double_fault).set_stack_index(DOUBLE_FAULT_IST_INDEX);
         }
@@ -105,31 +106,39 @@ pub unsafe fn init() {
 
 // ── Exception handlers ───────────────────────────────────────────────────────
 
+// Each handler reads the interrupted code's RBP first, from the frame its
+// prologue built, so the STOP screen's call stack starts at the trap.
+
 extern "x86-interrupt" fn exception_divide_error(frame: InterruptStackFrame) {
-    panic!("EXCEPTION: #DE Divide Error\n{:#?}", frame);
+    let rbp = interrupted_rbp();
+    stop_on_trap(0, 0, &frame, 0, None, "divide error (#DE)", rbp);
 }
 
 extern "x86-interrupt" fn exception_invalid_opcode(frame: InterruptStackFrame) {
-    panic!("EXCEPTION: #UD Invalid Opcode at {:#x}\n{:#?}", frame.instruction_pointer, frame);
+    let rbp = interrupted_rbp();
+    stop_on_trap(6, 0, &frame, 0, None, "invalid opcode (#UD)", rbp);
 }
 
 extern "x86-interrupt" fn exception_device_not_available(frame: InterruptStackFrame) {
-    floating_point_trap(7, &frame, "device not available (#NM): CR0.TS is never set");
+    let rbp = interrupted_rbp();
+    floating_point_trap(7, &frame, "device not available (#NM): CR0.TS is never set", rbp);
 }
 
 extern "x86-interrupt" fn exception_x87_floating_point(frame: InterruptStackFrame) {
-    floating_point_trap(16, &frame, "x87 floating-point exception (#MF)");
+    let rbp = interrupted_rbp();
+    floating_point_trap(16, &frame, "x87 floating-point exception (#MF)", rbp);
 }
 
 extern "x86-interrupt" fn exception_simd_floating_point(frame: InterruptStackFrame) {
-    floating_point_trap(19, &frame, "SIMD floating-point exception (#XM)");
+    let rbp = interrupted_rbp();
+    floating_point_trap(19, &frame, "SIMD floating-point exception (#XM)", rbp);
 }
 
 /// A floating-point trap. In user mode, the thread is terminated as on any
 /// other user fault, until exceptions reach user mode (M3); in kernel mode,
 /// where the FPU is only used under `ke::fpu::with_floating_point` with every
 /// exception masked, it is a STOP.
-fn floating_point_trap(trap: u64, frame: &InterruptStackFrame, what: &str) -> ! {
+fn floating_point_trap(trap: u64, frame: &InterruptStackFrame, what: &str, rbp: u64) -> ! {
     if frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3 {
         super::serial::write_str("[FPU] user-mode floating-point fault — terminating thread\n");
         let hook = USER_FAULT_HOOK.load(Ordering::Acquire);
@@ -142,7 +151,7 @@ fn floating_point_trap(trap: u64, frame: &InterruptStackFrame, what: &str) -> ! 
             x86_64::instructions::hlt();
         }
     }
-    stop_on_trap(trap, 0, frame, 0, None, what)
+    stop_on_trap(trap, 0, frame, 0, None, what, rbp)
 }
 
 extern "x86-interrupt" fn exception_breakpoint(_frame: InterruptStackFrame) {
@@ -152,17 +161,21 @@ extern "x86-interrupt" fn exception_breakpoint(_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn exception_double_fault(frame: InterruptStackFrame, error: u64) -> ! {
-    // Running on IST[0]: the interrupted stack may be exhausted, so no locks,
-    // no formatting, no heap. A kernel stack overflow usually lands here: the
-    // #PF on the guard page cannot push its frame onto the same stack.
+    let rbp = interrupted_rbp();
+    // Running on IST[0] (16 KiB): the interrupted stack may be exhausted. The
+    // STOP screen takes no lock and does not allocate; its deepest recursion,
+    // demangling, is bounded (`symbols::demangle`). A kernel stack overflow
+    // usually lands here: the #PF on the guard page cannot push its frame onto
+    // the same stack.
     let cr2 = x86_64::registers::control::Cr2::read_raw();
     let rsp = frame.stack_pointer.as_u64();
     let guard = stack_guard_hit(cr2).or_else(|| stack_guard_hit(rsp));
-    stop_on_trap(8, error, &frame, cr2, guard, "double fault");
+    stop_on_trap(8, error, &frame, cr2, guard, "double fault", rbp);
 }
 
 /// STOP screen for a trap the kernel cannot handle, naming a kernel stack
-/// overflow when the fault hit a guard page.
+/// overflow when the fault hit a guard page. `rbp` is the interrupted code's
+/// ([`interrupted_rbp`]).
 fn stop_on_trap(
     trap: u64,
     error: u64,
@@ -170,16 +183,17 @@ fn stop_on_trap(
     cr2: u64,
     guard: Option<(u64, u64)>,
     what: &str,
+    rbp: u64,
 ) -> ! {
     let rip = frame.instruction_pointer.as_u64();
     let rsp = frame.stack_pointer.as_u64();
     let params = [trap, error, rip, cr2];
+    let start = StackStart::Trap { rip, rbp };
     match guard {
-        Some((bottom, top)) => super::bugcheck::stop(
-            super::bugcheck::UNEXPECTED_KERNEL_MODE_TRAP,
-            "UNEXPECTED_KERNEL_MODE_TRAP",
+        Some((bottom, top)) => bugcheck::stop(
+            BugCheckCode::UNEXPECTED_KERNEL_MODE_TRAP,
             params,
-            "KERNEL STACK OVERFLOW: guard page hit",
+            Some(&"KERNEL STACK OVERFLOW: guard page hit"),
             &[
                 ("fault address", cr2),
                 ("RIP          ", rip),
@@ -187,13 +201,14 @@ fn stop_on_trap(
                 ("stack bottom ", bottom),
                 ("stack top    ", top),
             ],
+            start,
         ),
-        None => super::bugcheck::stop(
-            super::bugcheck::UNEXPECTED_KERNEL_MODE_TRAP,
-            "UNEXPECTED_KERNEL_MODE_TRAP",
+        None => bugcheck::stop(
+            BugCheckCode::UNEXPECTED_KERNEL_MODE_TRAP,
             params,
-            what,
+            Some(&what),
             &[("CR2          ", cr2), ("RIP          ", rip), ("RSP          ", rsp)],
+            start,
         ),
     }
 }
@@ -212,6 +227,7 @@ fn stack_guard_hit(addr: u64) -> Option<(u64, u64)> {
 }
 
 extern "x86-interrupt" fn exception_page_fault(frame: InterruptStackFrame, error: PageFaultErrorCode) {
+    let rbp = interrupted_rbp();
     if IN_PF_OUTER.swap(true, core::sync::atomic::Ordering::SeqCst) {
         // Nested page fault — log minimal info then halt.
         let cr2 = x86_64::registers::control::Cr2::read_raw();
@@ -224,10 +240,10 @@ extern "x86-interrupt" fn exception_page_fault(frame: InterruptStackFrame, error
             x86_64::instructions::hlt();
         }
     }
-    exception_page_fault_inner(frame, error);
+    exception_page_fault_inner(frame, error, rbp);
 }
 
-fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorCode) {
+fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorCode, rbp: u64) {
     use x86_64::registers::control::Cr2;
 
     let faulting_addr = Cr2::read();
@@ -280,10 +296,23 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
     // Kernel-mode fault in a guard page: a stack overflow whose #PF frame still
     // fitted above the guard (otherwise it would have been a double fault).
     if let Some(guard) = stack_guard_hit(cr2_raw) {
-        stop_on_trap(0xE, error.bits(), &frame, cr2_raw, Some(guard), "page fault");
+        stop_on_trap(0xE, error.bits(), &frame, cr2_raw, Some(guard), "page fault", rbp);
     }
 
-    panic!("EXCEPTION: #PF Page Fault at {:#x}", cr2_raw);
+    // Any other kernel-mode fault: a reference to an invalid address.
+    let write = error.contains(PageFaultErrorCode::CAUSED_BY_WRITE);
+    bugcheck::stop(
+        BugCheckCode::PAGE_FAULT_IN_NONPAGED_AREA,
+        [cr2_raw, u64::from(write), rip, 0],
+        Some(&"page fault in kernel mode"),
+        &[
+            ("CR2          ", cr2_raw),
+            ("RIP          ", rip),
+            ("RSP          ", frame.stack_pointer.as_u64()),
+            ("error code   ", error.bits()),
+        ],
+        StackStart::Trap { rip, rbp },
+    );
 }
 
 /// Walk the x86_64 page-table hierarchy for `va` and log the leaf PTE flags.
@@ -361,6 +390,7 @@ fn pf_dump_pte(hhdm: u64, va: u64, label: &str) {
 }
 
 extern "x86-interrupt" fn exception_gpf(frame: InterruptStackFrame, error: u64) {
+    let rbp = interrupted_rbp();
     let rip = frame.instruction_pointer.as_u64();
     // Dump bytes at the faulting instruction (ISR-safe, no heap).
     super::serial::write_str("[#GP] RIP=0x");
@@ -396,7 +426,7 @@ extern "x86-interrupt" fn exception_gpf(frame: InterruptStackFrame, error: u64) 
     super::serial::write_str(" ES=0x");
     serial_hex16(es);
     super::serial::write_str("\n");
-    panic!("EXCEPTION: #GP General Protection Fault (selector={:#x})\n{:#?}", error, frame);
+    stop_on_trap(13, error, &frame, 0, None, "general protection fault (#GP)", rbp);
 }
 
 fn serial_hex8(b: u8) {
@@ -420,11 +450,13 @@ fn serial_hex64(v: u64) {
 }
 
 extern "x86-interrupt" fn exception_stack_segment(frame: InterruptStackFrame, error: u64) {
-    panic!("EXCEPTION: #SS Stack Segment Fault (error={:#x})\n{:#?}", error, frame);
+    let rbp = interrupted_rbp();
+    stop_on_trap(12, error, &frame, 0, None, "stack segment fault (#SS)", rbp);
 }
 
 extern "x86-interrupt" fn exception_segment_not_present(frame: InterruptStackFrame, error: u64) {
-    panic!("EXCEPTION: #NP Segment Not Present (selector={:#x})\n{:#?}", error, frame);
+    let rbp = interrupted_rbp();
+    stop_on_trap(11, error, &frame, 0, None, "segment not present (#NP)", rbp);
 }
 
 // ── IRQ handlers ─────────────────────────────────────────────────────────────

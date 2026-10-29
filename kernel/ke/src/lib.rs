@@ -10,6 +10,7 @@
 //!   - APC (Asynchronous Procedure Call) queues
 //!   - DPC (Deferred Procedure Call) queue, without allocation, and the
 //!     DISPATCH interrupt that drains it
+//!   - `KeBugCheckEx`, the fatal error screen (`bugcheck`)
 //!
 //! NT reference: ntoskrnl/ke/
 
@@ -18,6 +19,7 @@
 extern crate alloc;
 
 pub mod apc;
+pub mod bugcheck;
 pub mod clock;
 pub mod dispatcher;
 pub mod dpc;

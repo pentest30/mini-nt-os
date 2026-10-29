@@ -24,6 +24,10 @@ test-ke-events = []
 # Four kernel threads compute in floating point in parallel and must get the
 # host's results (M1 exit criterion, scenario tests/boot/fpu).
 test-fpu = []
+# Fails an assertion two calls deep after the boot self-tests: the boot must
+# end on the STOP screen of KeBugCheckEx, with the panic message and a
+# symbolized call stack (M1, scenario tests/boot/bugcheck).
+test-bugcheck = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 

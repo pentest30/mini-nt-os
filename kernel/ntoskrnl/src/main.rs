@@ -371,6 +371,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     if cfg!(feature = "test-fpu") {
         fpu_parallel_test();
     }
+    if cfg!(feature = "test-bugcheck") {
+        bugcheck_test_outer();
+    }
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
@@ -627,14 +630,13 @@ fn dpc_self_test() {
 /// # IRQL
 /// HIGH_LEVEL, once, during phase 0.
 fn register_symbols(boot_info: &BootInfo) {
-    const HHDM_SIZE: u64 = 4 << 30;
     let symbols = boot_info.symbols;
     if !symbols.is_present() {
         log::warn!("no kernel symbol table: the STOP screen will show bare addresses");
         return;
     }
     let end = symbols.phys.checked_add(symbols.symtab_size).and_then(|e| e.checked_add(symbols.strtab_size));
-    assert!(end.is_some_and(|end| end <= HHDM_SIZE), "kernel symbol table outside the HHDM");
+    assert!(end.is_some_and(|end| end <= hal::HHDM_SIZE), "kernel symbol table outside the HHDM");
     let base = (boot_info.hhdm_offset + symbols.phys) as *const u8;
     // SAFETY: the bootloader copied both tables to [phys, end), a LOADER_DATA
     // block that the buddy never receives (`BootloaderReclaimable`) and the
@@ -1010,6 +1012,22 @@ fn provoke_stack_overflow() -> ! {
     log::info!("[smoke] provoking a kernel stack overflow (test-stack-overflow)");
     let depth = recurse(0);
     panic!("stack overflow test: recursion returned at depth {}", depth);
+}
+
+/// Fails an assertion two calls deep: the STOP screen of a `panic!`, through
+/// `KeBugCheckEx`, must name both functions (feature `test-bugcheck`).
+#[inline(never)]
+fn bugcheck_test_outer() {
+    // Used after the call, so that the call is not a tail call: this frame
+    // stays on the stack.
+    core::hint::black_box(bugcheck_test_inner(core::hint::black_box(1)));
+}
+
+#[inline(never)]
+fn bugcheck_test_inner(depth: u32) -> u32 {
+    log::info!("[smoke] failing an assertion on purpose (test-bugcheck)");
+    assert!(depth == 0, "deliberate bugcheck (test-bugcheck)");
+    depth
 }
 
 #[inline(never)]
@@ -1767,34 +1785,15 @@ fn serial_write_u32(mut n: u32) {
     unsafe { hal::serial::write_str(core::str::from_utf8_unchecked(&buf[i..])) };
 }
 
-/// Panic handler — write message to serial and halt.
+/// A `panic!` is a violated invariant (06 §5): it stops the system through
+/// `KeBugCheckEx`, like a failed assertion on XP without a kernel debugger
+/// (KMODE_EXCEPTION_NOT_HANDLED, P1 = STATUS_BREAKPOINT). The message and its
+/// location are the STOP screen's reason.
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    hal::serial::write_str("\n\n*** KERNEL PANIC ***\n");
-    // Print the panic message (e.g. "memory allocation of N bytes failed").
-    hal::serial::write_fmt(core::format_args!("msg: {}\n", info.message()));
-    if let Some(loc) = info.location() {
-        hal::serial::write_str(loc.file());
-        hal::serial::write_str(":");
-        // Write line number without heap/alloc.
-        let mut n = loc.line();
-        if n == 0 {
-            hal::serial::write_str("0");
-        } else {
-            let mut buf = [0u8; 10];
-            let mut i = 10usize;
-            while n > 0 {
-                i -= 1;
-                buf[i] = b'0' + (n % 10) as u8;
-                n /= 10;
-            }
-            // SAFETY: buf[i..] contains only ASCII digits.
-            hal::serial::write_str(unsafe { core::str::from_utf8_unchecked(&buf[i..]) });
-        }
-        hal::serial::write_str("\n");
-    }
-    hal::serial::write_str("System halted.\n");
-    loop {
-        x86_64::instructions::hlt();
-    }
+    ke::bugcheck::ke_bug_check_with_reason(
+        ke::bugcheck::BugCheckCode::KMODE_EXCEPTION_NOT_HANDLED,
+        [u64::from(abi::ntstatus::STATUS_BREAKPOINT.0), 0, 0, 0],
+        info,
+    )
 }

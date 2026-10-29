@@ -34,6 +34,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 /// Zero until `set_hhdm_offset`, so early HAL accesses use the identity map.
 pub static HHDM_OFFSET: AtomicU64 = AtomicU64::new(0);
 
+/// Physical memory covered by the HHDM: the bootloader maps [0, 4 GiB).
+pub const HHDM_SIZE: u64 = 1 << 32;
+
 /// Store the HHDM offset for page-table walks and MMIO. Call it before the
 /// identity map is removed.
 pub fn set_hhdm_offset(v: u64) {

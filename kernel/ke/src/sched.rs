@@ -400,6 +400,17 @@ fn current_thread() -> *mut Thread {
     prcb::current().current_thread.load(Ordering::Relaxed)
 }
 
+/// TID du thread courant, sans verrou ni assertion (écran d'erreur fatale) ;
+/// `None` avant `ke::init` ou sans thread courant.
+///
+/// # IRQL
+/// Tout niveau.
+pub(crate) fn try_current_tid() -> Option<usize> {
+    let thread = prcb::try_current()?.current_thread.load(Ordering::Relaxed);
+    // SAFETY: le thread courant vit tant qu'il s'exécute, donc pendant cet appel.
+    (!thread.is_null()).then(|| unsafe { (*thread).tid })
+}
+
 /// Commutations effectuées depuis le démarrage (statistiques, auto-tests).
 static CONTEXT_SWITCHES: AtomicU64 = AtomicU64::new(0);
 
