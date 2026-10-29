@@ -345,14 +345,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
     fat_smoke_probe();
 
-    // Wire preemptive round-robin: timer ISR calls schedule() after each EOI.
-    // Must be registered after ke::init() (scheduler table is ready) and before
-    // interrupts re-enable (avoid a timer ISR firing with a half-initialised hook).
-    hal::timer::set_tick_hook(Some(ke::scheduler::schedule));
+    // Wire preemptive round-robin: the dispatch (timer ISR below
+    // DISPATCH_LEVEL, or IRQL drop) runs schedule(). Registered after ke::init()
+    // (scheduler table ready) and before interrupts re-enable.
+    hal::irql::set_dispatch_hook(Some(ke::scheduler::schedule));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
     hal::idt::set_user_fault_hook(Some(ke::scheduler::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
+    deferred_preemption_self_test();
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
@@ -546,6 +547,32 @@ fn remove_identity_map(hhdm_offset: u64) {
         "HHDM no longer maps the APIC",
     );
     log::info!("[smoke] identity map removed: user half empty, APIC at {:#x}", hhdm_offset + APIC_PHYS);
+}
+
+/// Checks that DISPATCH_LEVEL defers preemption (M1, `hal::irql`): the boot
+/// thread holds a KSpinLock across several timer ticks without being switched
+/// out (the idle thread is ready), then the pending dispatch runs on release.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled, scheduler and dispatch hook ready.
+fn deferred_preemption_self_test() {
+    const TICKS: u64 = 5;
+    static LOCK: hal::sync::KSpinLock<()> = hal::sync::KSpinLock::new(());
+    let tick_ms = hal::timer::TICK_INTERVAL_MS;
+    let switches;
+    {
+        let _guard = LOCK.lock();
+        // Counted once the lock is held: a tick just before may switch freely.
+        switches = ke::scheduler::context_switches();
+        let start = hal::timer::get_tick_count();
+        while hal::timer::get_tick_count() < start + TICKS * tick_ms {
+            core::hint::spin_loop();
+        }
+        assert_eq!(ke::scheduler::context_switches(), switches, "preempted while holding a KSpinLock");
+    }
+    // The dispatch requested by those ticks ran when the guard lowered the IRQL.
+    assert!(ke::scheduler::context_switches() > switches, "pending dispatch not run on IRQL drop");
+    log::info!("[smoke] dispatch deferred: {} ticks under a KSpinLock without preemption, run on release", TICKS);
 }
 
 /// Kernel-stack guard-page lookup for the fault handlers (`hal::idt`).
@@ -1262,7 +1289,7 @@ fn shell_load_and_spawn(fat_path: &str, hhdm_offset: u64) -> Option<usize> {
 
     // Use a fresh PID for each spawned process (start at 8 to avoid colliding
     // with the initial smoke-test process which used PID=4).
-    static SHELL_NEXT_PID: spin::Mutex<u32> = spin::Mutex::new(8);
+    static SHELL_NEXT_PID: hal::sync::KSpinLock<u32> = hal::sync::KSpinLock::new(8);
     let pid = {
         let mut p = SHELL_NEXT_PID.lock();
         let out = *p;

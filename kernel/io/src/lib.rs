@@ -16,7 +16,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::arch::asm;
 use core::mem::ManuallyDrop;
-use spin::Mutex;
+use hal::sync::KSpinLock;
 
 pub mod driver;
 pub mod fat;
@@ -212,7 +212,7 @@ impl BlockDevice for AtaBlockDevice {
     }
 }
 
-static ATA_PRESENT: Mutex<Option<bool>> = Mutex::new(None);
+static ATA_PRESENT: KSpinLock<Option<bool>> = KSpinLock::new(None);
 
 fn ata_device() -> Option<AtaBlockDevice> {
     let mut guard = ATA_PRESENT.lock();
@@ -256,8 +256,8 @@ fn leak_vec(data: Vec<u8>) -> (usize, usize) {
     (data.as_mut_ptr() as usize, data.len())
 }
 
-static DEMO_SOURCE: Mutex<Option<(u32, usize, usize)>> = Mutex::new(None);
-static RAMDISK_SOURCE: Mutex<(u64, u64, u64)> = Mutex::new((0, 0, 0));
+static DEMO_SOURCE: KSpinLock<Option<(u32, usize, usize)>> = KSpinLock::new(None);
+static RAMDISK_SOURCE: KSpinLock<(u64, u64, u64)> = KSpinLock::new((0, 0, 0));
 
 fn prep_rep_ops() {
     unsafe {

@@ -1184,7 +1184,7 @@ struct DllEntry {
     name: [u8; 32], // uppercase, NUL-padded, filename only
 }
 
-static LOADED_DLL_MAP: spin::Mutex<[Option<DllEntry>; 32]> = spin::Mutex::new([None; 32]);
+static LOADED_DLL_MAP: hal::sync::KSpinLock<[Option<DllEntry>; 32]> = hal::sync::KSpinLock::new([None; 32]);
 
 pub fn register_loaded_dll(base: u32, size: u32, name: &str) {
     // Read entry point RVA from the mapped PE header

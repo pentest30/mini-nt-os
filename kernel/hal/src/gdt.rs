@@ -15,8 +15,8 @@
 //!
 //! WI7e Ch.3 "Trap Dispatching"
 
+use crate::sync::Once;
 use core::sync::atomic::{AtomicU64, Ordering};
-use spin::Once;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;

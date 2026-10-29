@@ -17,10 +17,10 @@
 //!
 //! WI7e Ch.3 "Trap Dispatching", Ch.2 "System Service Dispatching"
 
+use crate::sync::Once;
 #[cfg(target_os = "none")]
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use spin::Once;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;
@@ -431,12 +431,12 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     // SAFETY: inside the APIC timer ISR (vector 0x20); EOI is required.
     unsafe { apic_eoi() };
 
-    // ── 4. Preemptive scheduler tick ─────────────────────────────────────────
-    // Called after EOI so the APIC is free to fire the next tick while we
-    // are executing on the new thread's stack.  The hook (if set) calls
-    // `ke::scheduler::schedule()` which saves the current context and
-    // restores the next runnable thread.
-    super::timer::call_schedule_hook();
+    // ── 4. Preemption ────────────────────────────────────────────────────────
+    // After EOI, so the APIC is free to fire the next tick while we run on the
+    // next thread's stack. The dispatch (Ke's scheduler) runs now only if the
+    // interrupted code was below DISPATCH_LEVEL; otherwise it waits for the
+    // IRQL to drop (a KSpinLock holder is never preempted).
+    super::irql::dispatch_from_interrupt();
 }
 
 /// C-ABI trampoline called by the naked `hal_int2e_entry` handler.

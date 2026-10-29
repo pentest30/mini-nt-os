@@ -8,7 +8,7 @@ name = "mm"
 
 [dependencies]
 abi       = { path = "../../abi" }
-spin     = { workspace = true }
+hal       = { path = "../hal" }
 bitflags = { workspace = true }
 x86_64   = { workspace = true }
 log      = { workspace = true }

@@ -18,5 +18,5 @@ impl DriverObject {
 
 pub struct DeviceObject {
     pub name: String,
-    pub driver: alloc::sync::Arc<spin::Mutex<DriverObject>>,
+    pub driver: alloc::sync::Arc<hal::sync::KSpinLock<DriverObject>>,
 }

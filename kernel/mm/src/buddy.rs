@@ -15,7 +15,7 @@
 //! BootInfo regions the total entries across all levels is ~350, so 512 per
 //! level is a large safety margin.
 
-use spin::Mutex;
+use hal::sync::KSpinLock;
 
 /// Page size: 4 KiB.
 pub const PAGE_SIZE: usize = 4096;
@@ -82,7 +82,7 @@ pub struct BuddyAllocator {
     free_pages: u64,
 }
 
-pub static BUDDY: Mutex<Option<BuddyAllocator>> = Mutex::new(None);
+pub static BUDDY: KSpinLock<Option<BuddyAllocator>> = KSpinLock::new(None);
 
 impl Default for BuddyAllocator {
     fn default() -> Self {

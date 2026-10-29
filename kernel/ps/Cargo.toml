@@ -11,5 +11,4 @@ hal      = { path = "../hal" }
 ob       = { path = "../ob" }
 mm       = { path = "../mm" }
 ke       = { path = "../ke" }
-spin     = { workspace = true }
 log      = { workspace = true }

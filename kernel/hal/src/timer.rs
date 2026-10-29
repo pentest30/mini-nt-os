@@ -13,7 +13,7 @@
 //!
 //! WI7e Ch.3 "Clock Intervals and Timer Resolution"
 
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::instructions::port::Port;
 
 // ── Tick interval ─────────────────────────────────────────────────────────────
@@ -63,8 +63,6 @@ static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Zero means the timer has not been calibrated yet.
 static APIC_TICKS_PER_MS: AtomicU64 = AtomicU64::new(0);
 
-/// Optional timer tick callback registered by higher layers (Ke).
-static TICK_HOOK: AtomicUsize = AtomicUsize::new(0);
 static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -81,9 +79,6 @@ static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
 ///   boot, HHDM once `set_hhdm_offset` has run (see `apic_reg`).
 /// - Interrupts must be disabled on entry; this function enables them.
 pub unsafe fn init() {
-    // Ensure no upper-layer callback runs before Ke is initialised.
-    TICK_HOOK.store(0, Ordering::Release);
-
     // ── 0. Remap legacy 8259 PIC (IRQ0→0x20, IRQ8→0x28) ─────────────────────
     // Remap master PIC to vectors 0x20–0x27 and slave to 0x28–0x2F so they
     // don't overlap CPU exceptions (0x00–0x1F).  Then unmask only IRQ1
@@ -282,38 +277,8 @@ pub fn set_resolution(hundred_ns: u32) {
     log::info!("timer::set_resolution: {}ms interval ({}×100ns request)", ms, hundred_ns);
 }
 
-/// Register or clear the timer tick callback.
-///
-/// Pass `Some(ke::scheduler::schedule)` to enable preemptive round-robin.
-/// Call this after both HAL and Ke have been initialised, with interrupts
-/// disabled to avoid a race with the timer ISR.
-///
-/// # IRQL: PASSIVE_LEVEL only (during init).
-pub fn set_tick_hook(hook: Option<fn()>) {
-    let addr = hook.map_or(0usize, |f| f as usize);
-    TICK_HOOK.store(addr, Ordering::Release);
-}
-
 pub fn set_shared_user_data_addr(addr: Option<u64>) {
     SHARED_USER_DATA_VA.store(addr.unwrap_or(0), Ordering::Release);
-}
-
-/// Invoke the scheduler hook registered via `set_tick_hook`, if any.
-///
-/// Called by the timer ISR **after** sending APIC EOI so the APIC can
-/// accept the next periodic tick before we switch stacks.  Must be
-/// async-signal-safe: no heap allocation, no page faults.
-///
-/// # IRQL: DIRQL (timer ISR) — no alloc, no page faults.
-#[inline]
-pub fn call_schedule_hook() {
-    let addr = TICK_HOOK.load(Ordering::Acquire);
-    if addr == 0 {
-        return;
-    }
-    // SAFETY: `addr` was written by `set_tick_hook` with a valid `fn()`.
-    let f: fn() = unsafe { core::mem::transmute(addr) };
-    f();
 }
 
 // ── APIC MMIO helpers ─────────────────────────────────────────────────────────

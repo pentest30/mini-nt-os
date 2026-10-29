@@ -215,6 +215,18 @@ impl SchedulerInner {
 
 // ── Global scheduler ─────────────────────────────────────────────────────────
 
+/// Context switches performed so far (statistics, and the boot self-test of
+/// deferred preemption).
+static CONTEXT_SWITCHES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Number of context switches since boot.
+///
+/// # IRQL
+/// Any level.
+pub fn context_switches() -> u64 {
+    CONTEXT_SWITCHES.load(core::sync::atomic::Ordering::Relaxed)
+}
+
 /// Scheduler state, shared with the timer ISR (`tick`, `schedule`): an
 /// `IrqLock`, so a tick never finds it held by the thread it interrupted.
 /// The closures given to `SCHED.with` must not block, allocate or log.
@@ -333,6 +345,7 @@ pub fn schedule() {
         //   - Called inside the timer ISR with IF=0 (single-CPU; no concurrent
         //     access to these slots while we are switching).
         //   - `pick_next()` guarantees old_ctx ≠ new_ctx.
+        CONTEXT_SWITCHES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         unsafe { crate::thread::context_switch_raw(old_ctx, new_ctx) };
     }
 }
@@ -525,6 +538,7 @@ pub fn terminate_current_thread() {
 
     if let Some((old_ctx, new_ctx)) = switch {
         // SAFETY: pointers into static SCHED table; IF=0 (no concurrent ISR).
+        CONTEXT_SWITCHES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         unsafe { crate::thread::context_switch_raw(old_ctx, new_ctx) };
         // If context_switch_raw returns (shouldn't for a terminated thread)
         // fall through to the halt loop below.
@@ -548,8 +562,10 @@ fn idle_thread_main() -> ! {
     // RFLAGS (IF=1) and land back at the `hlt` below.  The `sti` here only
     // matters for the very first invocation.
     //
-    // SAFETY: we are at PASSIVE_LEVEL equivalent — the switch stub has already
-    // dropped back to the idle stack; no kernel locks are held.
+    // The idle thread runs at PASSIVE_LEVEL, so that a tick preempts it at
+    // once: drop the DISPATCH_LEVEL of the dispatch that started it.
+    hal::irql::lower(hal::irql::Irql::Passive);
+    // No kernel lock is held: the switch stub has just landed on the idle stack.
     x86_64::instructions::interrupts::enable();
     loop {
         x86_64::instructions::hlt();

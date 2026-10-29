@@ -87,7 +87,7 @@ fn zero_frame(phys: u64) {
 /// accessible at `hhdm_offset + phys`, which `OffsetPageTable` uses to walk
 /// the hierarchy.
 ///
-/// # IRQL: PASSIVE_LEVEL — the buddy lock is a `spin::Mutex` (spins at DISPATCH).
+/// # IRQL: <= DISPATCH_LEVEL — the buddy lock is a `KSpinLock`.
 pub struct MmPageTables {
     inner: OffsetPageTable<'static>,
     /// Raw HHDM offset — stored so `patch_user_path` can walk intermediate

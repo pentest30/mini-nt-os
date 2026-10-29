@@ -50,6 +50,8 @@ codegen-units   = 1
 # HAL / low-level
 x86_64          = { version = "0.15", default-features = false, features = ["nightly", "instructions"] }
 uart_16550      = { version = "0.3",  default-features = false }
+# Tools only (ADR-016): no workspace member uses it; the kernel has
+# hal::sync (KSpinLock, IrqLock, Once). Kept for the excluded win32/ code.
 spin            = { version = "0.9",  default-features = false, features = ["lazy", "spin_mutex", "once"] }
 bitflags        = { version = "2.4",  default-features = false }
 # Memory
