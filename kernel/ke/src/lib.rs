@@ -20,20 +20,20 @@ pub mod clock;
 pub mod dispatcher;
 pub mod dpc;
 pub mod event;
-pub mod scheduler;
+pub mod sched;
 pub mod thread;
 pub mod timer;
 
 pub use event::{EventType, KEvent};
-pub use scheduler::Scheduler;
+pub use sched::Scheduler;
 
 /// Initialise the Ke layer. Called from kernel_main after HAL and Mm.
 ///
 /// # Safety
-/// See [`scheduler::init`]: `idle_stack_top` tops a mapped, writable kernel
+/// See [`sched::init`]: `idle_stack_top` tops a mapped, writable kernel
 /// stack reserved for the idle thread.
 pub unsafe fn init(idle_stack_top: u64) {
     // SAFETY: forwarded from the caller's guarantee.
-    unsafe { scheduler::init(idle_stack_top) };
+    unsafe { sched::init(idle_stack_top) };
     log::info!("Ke: initialised");
 }

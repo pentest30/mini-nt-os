@@ -228,7 +228,7 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
     if is_user {
         super::serial::write_str("[#PF] user-mode fault — terminating thread\n");
         IN_PF_OUTER.store(false, core::sync::atomic::Ordering::SeqCst);
-        // Call the terminate hook if registered (set by kernel to ke::scheduler::terminate_current_thread)
+        // Call the terminate hook if registered (set by kernel to ke::sched::terminate_current_thread)
         let hook = USER_FAULT_HOOK.load(core::sync::atomic::Ordering::Acquire);
         if hook != 0 {
             let f: fn() = unsafe { core::mem::transmute(hook) };
@@ -479,7 +479,7 @@ pub fn set_stack_guard_hook(hook: Option<StackGuardHook>) {
 }
 
 /// Register a function to call when a user-mode page fault occurs.
-/// Typically set to `ke::scheduler::terminate_current_thread`.
+/// Typically set to `ke::sched::terminate_current_thread`.
 pub fn set_user_fault_hook(hook: Option<fn()>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     USER_FAULT_HOOK.store(addr, Ordering::Release);

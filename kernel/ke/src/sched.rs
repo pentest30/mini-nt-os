@@ -375,7 +375,7 @@ pub fn schedule() {
 ///
 /// Used by the kernel shell to spin-wait for a child process to exit:
 /// ```ignore
-/// while ke::scheduler::is_thread_running(child_tid) { hlt(); }
+/// while ke::sched::is_thread_running(child_tid) { hlt(); }
 /// ```
 ///
 /// # IRQL: PASSIVE_LEVEL

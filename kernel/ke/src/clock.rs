@@ -9,5 +9,5 @@
 /// Dans l'ISR d'horloge, interruptions masquées : ni attente, ni `KSpinLock`.
 pub fn ki_clock_interrupt() {
     crate::timer::ki_check_timers();
-    crate::scheduler::request_reschedule();
+    crate::sched::request_reschedule();
 }

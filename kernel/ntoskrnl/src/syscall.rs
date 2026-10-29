@@ -894,7 +894,7 @@ fn nt_terminate_process(args_ptr: u32) -> u32 {
     // Mark the current scheduler thread as Terminated and switch to the next
     // runnable thread (e.g. the shell / boot thread).  This function does not
     // return for the calling thread.
-    ke::scheduler::terminate_current_thread();
+    ke::sched::terminate_current_thread();
     // terminate_current_thread() only returns if there is no other runnable
     // thread.  In that case halt — the machine is idle.
     STATUS_SUCCESS
@@ -2023,7 +2023,7 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
 fn win32_exit_process(args_ptr: u32) -> u32 {
     let code = read_arg_u32(args_ptr, 0).unwrap_or(0);
     log::info!("Win32 ExitProcess({})", code);
-    ke::scheduler::terminate_current_thread();
+    ke::sched::terminate_current_thread();
     loop {
         x86_64::instructions::hlt();
     }

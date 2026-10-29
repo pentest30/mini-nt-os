@@ -352,7 +352,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
-    hal::idt::set_user_fault_hook(Some(ke::scheduler::terminate_current_thread));
+    hal::idt::set_user_fault_hook(Some(ke::sched::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
     deferred_preemption_self_test();
@@ -387,7 +387,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // handles the ring-0→ring-3 transition via ring3_iretq_trampoline when it
     // first context-switches to this thread.  This allows the boot thread to
     // re-run (e.g. as a kernel shell) after the user-mode process exits via
-    // NtTerminateProcess → ke::scheduler::terminate_current_thread().
+    // NtTerminateProcess → ke::sched::terminate_current_thread().
     let (entry_point, stack_top) = ring3_ctx;
 
     log::info!("kernel_main: spawning user thread  entry={:#010x}  usp={:#010x}", entry_point, stack_top,);
@@ -405,7 +405,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         launcher::run();
         // Kill all user-mode threads (CMD.EXE etc.) so the kernel shell has
         // exclusive console input — no thread races for serial/PS2 keystrokes.
-        ke::scheduler::terminate_user_threads();
+        ke::sched::terminate_user_threads();
         // kernel_shell returns when ESC is pressed → back to launcher.
         kernel_shell(boot_info.hhdm_offset);
     }
@@ -419,7 +419,7 @@ pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
     let kstack = mm::kstack::allocate()?;
     // SAFETY: kstack was just allocated for this thread alone and is never freed.
     unsafe {
-        ke::scheduler::spawn_user_thread(
+        ke::sched::spawn_user_thread(
             kstack.top,
             entry32,
             stack32,
@@ -614,15 +614,15 @@ fn deferred_preemption_self_test() {
     {
         let _guard = LOCK.lock();
         // Counted once the lock is held: a tick just before may switch freely.
-        switches = ke::scheduler::context_switches();
+        switches = ke::sched::context_switches();
         let start = hal::timer::get_tick_count();
         while hal::timer::get_tick_count() < start + TICKS * tick_ms {
             core::hint::spin_loop();
         }
-        assert_eq!(ke::scheduler::context_switches(), switches, "preempted while holding a KSpinLock");
+        assert_eq!(ke::sched::context_switches(), switches, "preempted while holding a KSpinLock");
     }
     // The dispatch requested by those ticks ran when the guard lowered the IRQL.
-    assert!(ke::scheduler::context_switches() > switches, "pending dispatch not run on IRQL drop");
+    assert!(ke::sched::context_switches() > switches, "pending dispatch not run on IRQL drop");
     log::info!("[smoke] dispatch deferred: {} ticks under a KSpinLock without preemption, run on release", TICKS);
 }
 
@@ -744,7 +744,7 @@ fn try_run_hello_exe(hhdm_offset: u64) {
     match tid {
         Some(t) => {
             // Wait for the process to exit via NtTerminateProcess.
-            while ke::scheduler::is_thread_running(t) {
+            while ke::sched::is_thread_running(t) {
                 x86_64::instructions::hlt();
             }
             log::info!("[smoke] HELLO.EXE ran ok");
@@ -1307,7 +1307,7 @@ fn shell_run(path: &str, hhdm_offset: u64) {
     match tid {
         Some(t) => {
             shell_write("[shell] running...\n");
-            while ke::scheduler::is_thread_running(t) {
+            while ke::sched::is_thread_running(t) {
                 x86_64::instructions::hlt();
             }
             shell_write("[shell] process exited\n");

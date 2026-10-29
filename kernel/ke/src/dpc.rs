@@ -192,8 +192,8 @@ pub unsafe fn ke_remove_queue_dpc(dpc: *const KDpc) -> bool {
 /// DISPATCH_LEVEL, interruptions masquées à l'entrée et à la sortie.
 pub fn ki_dispatch_interrupt() {
     ki_retire_dpc_list();
-    if crate::scheduler::take_reschedule() {
-        crate::scheduler::schedule();
+    if crate::sched::take_reschedule() {
+        crate::sched::schedule();
     }
 }
 

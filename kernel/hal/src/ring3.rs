@@ -52,7 +52,7 @@ core::arch::global_asm!(
 
 /// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
 ///
-/// Used by `ke::scheduler::spawn_user_thread` as the initial `ret` target
+/// Used by `ke::sched::spawn_user_thread` as the initial `ret` target
 /// in a new user-mode thread's kernel stack frame.
 ///
 /// # IRQL: DISPATCH_LEVEL (invoked by the scheduler context-switch path).
