@@ -358,6 +358,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     deferred_preemption_self_test();
     dpc_self_test();
     ke_self_test();
+    fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY + 1, "pinger above ponger");
@@ -708,6 +709,43 @@ fn ke_self_test() {
     assert_eq!(wait(header, 30), STATUS_TIMEOUT);
     assert!(hal::timer::interrupt_time() - start >= 30 * MS as u64, "timed out too early");
     log::info!("[smoke] Ke: priority preemption, event wait, delay, thread end and timeout ok");
+}
+
+/// Checks that the FPU state follows each thread (ADR-009): the boot thread's
+/// control words survive a switch to a new thread, which starts with the
+/// initial ones whatever its creator had loaded.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn fpu_self_test() {
+    use abi::fpu::{INITIAL_FCW, INITIAL_MXCSR};
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    const FCW: u16 = 0x0F7F; // round toward zero, 64-bit precision
+    const MXCSR: u32 = 0x7F80; // round toward zero
+    static SEEN: AtomicU64 = AtomicU64::new(0);
+    fn probe(_: *mut core::ffi::c_void) {
+        let (fcw, mxcsr) = hal::fpu::control_words();
+        SEEN.store(u64::from(fcw) << 32 | u64::from(mxcsr), Ordering::Relaxed);
+    }
+    let kept = ke::fpu::with_floating_point(|| {
+        hal::fpu::set_control_words(FCW, MXCSR);
+        // Higher priority: it runs, and ends, before this returns.
+        spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, probe, core::ptr::null_mut());
+        hal::fpu::control_words()
+    });
+    assert_eq!(kept, (FCW, MXCSR), "the boot thread's FPU state was lost across a switch");
+    let seen = SEEN.load(Ordering::Relaxed);
+    assert_eq!(
+        seen,
+        u64::from(INITIAL_FCW) << 32 | u64::from(INITIAL_MXCSR),
+        "a new thread did not start with the initial FPU state"
+    );
+    log::info!(
+        "[smoke] FPU: state kept across switches, new thread starts with FCW {:#06x} MXCSR {:#06x}",
+        INITIAL_FCW,
+        INITIAL_MXCSR
+    );
 }
 
 /// M1 exit criterion (05): two kernel threads exchange 10 000 round trips

@@ -13,6 +13,7 @@ pub mod ata;
 pub mod bugcheck;
 pub mod cpuid;
 pub mod fb;
+pub mod fpu;
 pub mod gdt;
 pub mod idt;
 pub mod irql;
@@ -47,6 +48,7 @@ pub unsafe fn init() {
     unsafe {
         serial::init(); // first — UART must be open before logger_init
         serial::logger_init(); // register SerialLogger as the global log backend
+        fpu::init(); // x87/SSE on, the boot thread's initial FPU state (ADR-009)
         gdt::init(); // TSS with RSP0 + IST[0] double-fault stack
         sysenter::init();
         idt::init(); // exception + timer + syscall handlers (needs GDT/TSS)

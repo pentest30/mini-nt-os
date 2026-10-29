@@ -55,6 +55,9 @@ pub unsafe fn init() {
         idt.general_protection_fault.set_handler_fn(exception_gpf);
         idt.stack_segment_fault.set_handler_fn(exception_stack_segment);
         idt.segment_not_present.set_handler_fn(exception_segment_not_present);
+        idt.device_not_available.set_handler_fn(exception_device_not_available);
+        idt.x87_floating_point.set_handler_fn(exception_x87_floating_point);
+        idt.simd_floating_point.set_handler_fn(exception_simd_floating_point);
 
         // Double fault must use IST[0] to survive kernel stack overflow.
         // SAFETY: DOUBLE_FAULT_IST_INDEX (0) is valid; gdt::init() populated
@@ -105,6 +108,38 @@ extern "x86-interrupt" fn exception_divide_error(frame: InterruptStackFrame) {
 
 extern "x86-interrupt" fn exception_invalid_opcode(frame: InterruptStackFrame) {
     panic!("EXCEPTION: #UD Invalid Opcode at {:#x}\n{:#?}", frame.instruction_pointer, frame);
+}
+
+extern "x86-interrupt" fn exception_device_not_available(frame: InterruptStackFrame) {
+    floating_point_trap(7, &frame, "device not available (#NM): CR0.TS is never set");
+}
+
+extern "x86-interrupt" fn exception_x87_floating_point(frame: InterruptStackFrame) {
+    floating_point_trap(16, &frame, "x87 floating-point exception (#MF)");
+}
+
+extern "x86-interrupt" fn exception_simd_floating_point(frame: InterruptStackFrame) {
+    floating_point_trap(19, &frame, "SIMD floating-point exception (#XM)");
+}
+
+/// A floating-point trap. In user mode, the thread is terminated as on any
+/// other user fault, until exceptions reach user mode (M3); in kernel mode,
+/// where the FPU is only used under `ke::fpu::with_floating_point` with every
+/// exception masked, it is a STOP.
+fn floating_point_trap(trap: u64, frame: &InterruptStackFrame, what: &str) -> ! {
+    if frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3 {
+        super::serial::write_str("[FPU] user-mode floating-point fault — terminating thread\n");
+        let hook = USER_FAULT_HOOK.load(Ordering::Acquire);
+        if hook != 0 {
+            // SAFETY: `hook` was stored by `set_user_fault_hook` from a valid `fn()`.
+            let terminate: fn() = unsafe { core::mem::transmute(hook) };
+            terminate();
+        }
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+    stop_on_trap(trap, 0, frame, 0, None, what)
 }
 
 extern "x86-interrupt" fn exception_breakpoint(_frame: InterruptStackFrame) {

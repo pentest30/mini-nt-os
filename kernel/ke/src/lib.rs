@@ -4,6 +4,7 @@
 //!   - Scheduler: 32 priorities, quantum, preemption, waits (`sched`)
 //!   - Dispatcher (ADR-005): waitable objects, KWAIT_BLOCK, wait and signal
 //!   - Timer wheel and KTIMER objects (periodic, with a DPC)
+//!   - FPU state per thread (ADR-009) and kernel FPU brackets (`fpu`)
 //!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX
 //!   - APC (Asynchronous Procedure Call) queues
 //!   - DPC (Deferred Procedure Call) queue, without allocation, and the
@@ -20,6 +21,7 @@ pub mod clock;
 pub mod dispatcher;
 pub mod dpc;
 pub mod event;
+pub mod fpu;
 pub mod sched;
 pub mod thread;
 pub mod timer;

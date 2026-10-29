@@ -1,7 +1,8 @@
 //! Ordonnanceur (M1, 02 §Ke) : 32 priorités, quantum, attente, préemption.
 //!
 //! Un thread est un [`Thread`] : la tranche dispatcher (`dispatcher::KThread`) en
-//! tête, puis son contexte de commutation, sa priorité et son quantum. Les threads
+//! tête, puis son contexte de commutation, sa priorité, son quantum et son état
+//! FPU (ADR-009). Les threads
 //! prêts attendent dans une file par priorité (anneau de TID, [`ReadyQueue`]) ; un
 //! bitmap résume les files non vides. Le thread idle n'est dans aucune file : il
 //! tourne quand aucun autre n'est prêt.
@@ -30,6 +31,7 @@ use core::ffi::c_void;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 
+use abi::fpu::FxSaveArea;
 use abi::ntstatus::NtStatus;
 use hal::irql::Irql;
 
@@ -156,6 +158,8 @@ pub struct Thread {
     kernel_stack_top: u64,
     /// Routine d'un thread noyau, lancée par [`ki_thread_startup`].
     start: Option<(ThreadRoutine, *mut c_void)>,
+    /// État x87/SSE, sauvegardé et restauré à chaque commutation (ADR-009).
+    fpu: FxSaveArea,
 }
 
 impl Thread {
@@ -183,6 +187,7 @@ impl Thread {
             ptr::addr_of_mut!((*t).user_mode).write(user_mode);
             ptr::addr_of_mut!((*t).kernel_stack_top).write(kernel_stack_top);
             ptr::addr_of_mut!((*t).start).write(start);
+            ptr::addr_of_mut!((*t).fpu).write(FxSaveArea::initial());
         }
         t
     }
@@ -406,6 +411,11 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
         CONTEXT_SWITCHES.fetch_add(1, Ordering::Relaxed);
         DISPATCHER_LOCK.unlock();
         x86_64::instructions::interrupts::without_interrupts(|| {
+            // ADR-009 : l'état FPU suit chaque thread, sans commutation
+            // paresseuse. Le noyau, compilé sans SSE, ne touche plus ces
+            // registres d'ici la reprise de `new`.
+            hal::fpu::save(ptr::addr_of_mut!((*old).fpu));
+            hal::fpu::restore(ptr::addr_of!((*new).fpu));
             context_switch_raw(ptr::addr_of_mut!((*old).ctx), ptr::addr_of!((*new).ctx))
         });
     }
