@@ -359,6 +359,12 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::idt::set_user_fault_hook(Some(ke::sched::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
+    // Raises starved threads every second (ke::sched).
+    spawn_kernel_thread(
+        ke::balance::BALANCE_SET_MANAGER_PRIORITY,
+        ke::balance::ke_balance_set_manager,
+        core::ptr::null_mut(),
+    );
     tpr_self_test();
     deferred_preemption_self_test();
     dpc_self_test();
@@ -371,6 +377,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
     if cfg!(feature = "test-fpu") {
         fpu_parallel_test();
+    }
+    if cfg!(feature = "test-ke-starvation") {
+        starvation_test();
     }
     if cfg!(feature = "test-bugcheck") {
         bugcheck_test_outer();
@@ -1010,6 +1019,53 @@ fn event_ping_pong_test(pinger_priority: u8, label: &str) {
         (hal::timer::interrupt_time() - start) / 10_000,
         ke::sched::context_switches() - switches,
     );
+}
+
+/// Starvation (M1, boosts): a thread of priority 4 is ready while one of
+/// priority 9 spins. The balance set manager raises the starved thread to 15
+/// once it has been ready for 4 s, at its next pass (one per second); the
+/// starved thread then runs, and the spinning thread, which watches for it,
+/// stops. Without that raise, the starved thread runs only once the other
+/// gives up, 10 s later, after the boot thread has seen it had not run.
+/// Called only with the `test-ke-starvation` feature (scenario
+/// `tests/boot/ke-starvation`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn starvation_test() {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::sync::atomic::{AtomicU64, Ordering};
+    use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+
+    const MS: u64 = 10_000;
+    static START: AtomicU64 = AtomicU64::new(0);
+    static RAN_AT: AtomicU64 = AtomicU64::new(0);
+    fn starved(_: *mut core::ffi::c_void) {
+        RAN_AT.store(hal::timer::interrupt_time(), Ordering::Release);
+    }
+    fn hog(_: *mut core::ffi::c_void) {
+        let give_up = START.load(Ordering::Relaxed) + 10_000 * MS;
+        while RAN_AT.load(Ordering::Acquire) == 0 && hal::timer::interrupt_time() < give_up {
+            core::hint::spin_loop();
+        }
+    }
+
+    log::info!("[ke-starvation] a priority-9 thread spins while a priority-4 one is ready");
+    START.store(hal::timer::interrupt_time(), Ordering::Relaxed);
+    spawn_kernel_thread(4, starved, core::ptr::null_mut());
+    let hog = spawn_kernel_thread(9, hog, core::ptr::null_mut());
+    let hog = ke::sched::thread_object(hog).expect("thread object");
+    // SAFETY: on the boot thread; the thread object is never freed.
+    let status = unsafe {
+        ke_wait_for_single_object::<KePlatform>(hog, ProcessorMode::Kernel, false, Some(-20_000 * MS as i64))
+    };
+    assert_eq!(status, STATUS_WAIT_0, "the spinning thread did not end");
+    let ran_at = RAN_AT.load(Ordering::Acquire);
+    assert_ne!(ran_at, 0, "the starved thread never ran while the other spun");
+    let after_ms = (ran_at - START.load(Ordering::Relaxed)) / MS;
+    assert!((4000..6000).contains(&after_ms), "the starved thread ran after {after_ms} ms, not after 4 to 5 s");
+    log::info!("[ke-starvation] the starved thread ran after {} ms, raised by the balance set manager", after_ms);
 }
 
 /// M1 exit criterion (05): four kernel threads compute in floating point at

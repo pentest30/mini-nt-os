@@ -48,9 +48,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (ADR-005) tourne sur l'ordonnanceur à 32 priorités de `kernel/ke/src/sched.rs` (préemption différée sous
   `DISPATCH_LEVEL`, `KSpinLock`, DPC sans allocation, roue de timers, état FPU/SSE par thread ; scénarios `ke-events`
   et `fpu`). L'IRQL est le TPR de l'APIC (CR8, échelle x64 : horloge à CLOCK_LEVEL). L'état par CPU passe par GS : KPCR
-  (`hal::pcr`) puis KPRCB (`ke::prcb`, files prêtes et DPC). `panic!` et les traps noyau finissent sur l'écran STOP
-  (`ke::bugcheck`, `hal::bugcheck`) : pile d'appels par les pointeurs de cadre, symboles de l'ELF transmis par le
-  chargeur (scénario `bugcheck`). Les critères de sortie sont cochés ; reste : boosts.
+  (`hal::pcr`) puis KPRCB (`ke::prcb`, files prêtes et DPC). Boosts : relèvement porté par chaque réveil, décroissance
+  par quantum (compté en tiers de tick), threads affamés relevés par le balance set manager (`ke::balance`, scénario
+  `ke-starvation`). `panic!` et les traps noyau finissent sur l'écran STOP (`ke::bugcheck`, `hal::bugcheck`) : pile
+  d'appels par les pointeurs de cadre, symboles de l'ELF transmis par le chargeur (scénario `bugcheck`). Les critères
+  de sortie sont cochés ; reste : les APC noyau (`KAPC`, `KeInsertQueueApc`, livraison sous APC_LEVEL ; `ke::apc`
+  n'est qu'une file provisoire). Les APC utilisateur viennent au M3.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

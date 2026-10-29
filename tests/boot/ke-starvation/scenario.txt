@@ -1,0 +1,11 @@
+# Starvation (M1, boosts): a priority-9 kernel thread spins while a
+# priority-4 one is ready. The balance set manager must raise the starved
+# thread after about 4 s, so that it runs while the other still spins.
+features = test-ke-starvation
+cpus     = default, intel
+timeout  = 120
+
+expect = [ke-starvation] the starved thread ran after
+expect = kernel: phase 1 done
+
+forbid = *** STOP:

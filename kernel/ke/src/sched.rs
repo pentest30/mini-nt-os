@@ -25,14 +25,20 @@
 //!   reçoit un quantum neuf. À chaque fin de quantum, la priorité courante perd un
 //!   niveau jusqu'à sa base ([`decay`]). Les threads temps réel (base 16 à 31)
 //!   gardent leur priorité.
+//! - Famine : un thread de priorité variable prêt depuis au moins 4 s passe à 15
+//!   pour un double quantum, puis revient à sa base, ou dès qu'il attend
+//!   ([`Scheduler::scan_starved`], que le balance set manager, `ke::balance`,
+//!   lance chaque seconde). Un thread
+//!   moins prioritaire finit ainsi par s'exécuter, et par rendre un verrou qu'un
+//!   thread plus prioritaire attend.
 //!
 //! Table et ordonnancement sont protégés par le verrou dispatcher (ADR-005). Une
 //! commutation relâche ce verrou juste avant de changer de pile, en restant à
 //! DISPATCH_LEVEL : sur un seul CPU (ADR-015), rien de ce qui touche à cet état ne
 //! peut s'exécuter entre-temps. Le thread repris rabaisse lui-même son IRQL.
 //!
-//! Pas encore : relèvement des threads affamés, changement de priorité,
-//! récupération des threads terminés (leur objet et leur pile restent alloués).
+//! Pas encore : changement de priorité, récupération des threads terminés (leur
+//! objet et leur pile restent alloués).
 //!
 //! [`KePlatform`] relie le dispatcher, les timers et l'IRQL à cet ordonnanceur.
 
@@ -76,6 +82,12 @@ const QUANTUM_UNITS_PER_TICK: i32 = 3;
 
 /// Un quantum entier, en unités.
 const QUANTUM: i32 = QUANTUM_TICKS as i32 * QUANTUM_UNITS_PER_TICK;
+
+/// Un thread prêt depuis autant de ticks est affamé : 4 s.
+pub const STARVATION_TICKS: u64 = 4000 / hal::timer::TICK_INTERVAL_MS;
+
+/// Threads affamés relevés au plus par examen des files prêtes.
+const STARVATION_BOOSTS: usize = 10;
 
 // ── File prête ───────────────────────────────────────────────────────────────
 
@@ -135,6 +147,11 @@ impl ReadyQueue {
         true
     }
 
+    /// Les threads de la file, du premier au dernier.
+    pub fn iter(&self) -> impl Iterator<Item = *mut Thread> + '_ {
+        (0..self.len).map(move |i| self.buf[(self.head + i) % MAX_THREADS])
+    }
+
     /// Sort le premier thread.
     pub fn pop(&mut self) -> Option<*mut Thread> {
         if self.is_empty() {
@@ -179,6 +196,11 @@ pub struct Thread {
     priority: u8,
     /// Unités restantes du quantum (un tick en vaut [`QUANTUM_UNITS_PER_TICK`]).
     quantum: i32,
+    /// Heure (horloge de l'ordonnanceur, en ticks) de son entrée en file prête.
+    ready_since: u64,
+    /// Relevé à 15 contre la famine, jusqu'à la fin de ce quantum ou sa
+    /// prochaine attente.
+    starvation_boost: bool,
     /// Thread utilisateur : TSS.RSP0 doit pointer sur sa pile noyau.
     user_mode: bool,
     kernel_stack_top: u64,
@@ -211,6 +233,8 @@ impl Thread {
             ptr::addr_of_mut!((*t).base_priority).write(priority);
             ptr::addr_of_mut!((*t).priority).write(priority);
             ptr::addr_of_mut!((*t).quantum).write(QUANTUM);
+            ptr::addr_of_mut!((*t).ready_since).write(0);
+            ptr::addr_of_mut!((*t).starvation_boost).write(false);
             ptr::addr_of_mut!((*t).user_mode).write(user_mode);
             ptr::addr_of_mut!((*t).kernel_stack_top).write(kernel_stack_top);
             ptr::addr_of_mut!((*t).start).write(start);
@@ -268,6 +292,8 @@ pub struct Scheduler {
     summary: u32,
     current: *mut Thread,
     idle: *mut Thread,
+    /// Ticks d'horloge vus par ce processeur ([`dispatch`](Self::dispatch)).
+    clock: u64,
 }
 
 impl Default for Scheduler {
@@ -283,6 +309,7 @@ impl Scheduler {
             summary: 0,
             current: ptr::null_mut(),
             idle: ptr::null_mut(),
+            clock: 0,
         }
     }
 
@@ -306,6 +333,7 @@ impl Scheduler {
         // SAFETY: garanti par l'appelant.
         let p = unsafe {
             (*thread).tcb.state = ThreadState::Ready;
+            (*thread).ready_since = self.clock;
             (*thread).priority
         };
         let queue = &mut self.ready[usize::from(p)];
@@ -326,6 +354,10 @@ impl Scheduler {
     pub unsafe fn ready_unwaited(&mut self, thread: *mut Thread, increment: u8) -> bool {
         // SAFETY: garanti par l'appelant ; hors file, la priorité peut changer.
         unsafe {
+            if (*thread).starvation_boost {
+                // Il a attendu : le relèvement contre la famine a servi.
+                end_quantum(thread);
+            }
             let (base, current) = ((*thread).base_priority, (*thread).priority);
             let boosted = wait_boost(base, current, increment);
             if boosted > current {
@@ -334,8 +366,7 @@ impl Scheduler {
             } else {
                 (*thread).quantum -= 1;
                 if (*thread).quantum <= 0 {
-                    (*thread).quantum = QUANTUM;
-                    (*thread).priority = decay(base, current);
+                    end_quantum(thread);
                 }
             }
             self.ready(thread, false)
@@ -386,6 +417,7 @@ impl Scheduler {
     /// Interruption DISPATCH, `ticks` d'horloge après la précédente : le
     /// prochain thread s'il faut commuter, le courant étant remis en file.
     pub fn dispatch(&mut self, ticks: u32) -> Option<*mut Thread> {
+        self.clock += u64::from(ticks);
         let cur = self.current;
         if cur == self.idle {
             let next = self.pop_highest()?;
@@ -398,8 +430,7 @@ impl Scheduler {
             (*cur).quantum = (*cur).quantum.saturating_sub(used);
             let expired = (*cur).quantum <= 0;
             if expired {
-                (*cur).quantum = QUANTUM;
-                (*cur).priority = decay((*cur).base_priority, (*cur).priority);
+                end_quantum(cur);
             }
             expired
         };
@@ -412,6 +443,59 @@ impl Scheduler {
         } else {
             None
         }
+    }
+
+    /// Relève les threads affamés : ceux de priorité variable, sous 15, prêts
+    /// depuis au moins `threshold` ticks passent à 15 pour un double quantum,
+    /// au bout duquel ils reviennent à leur base. Au plus [`STARVATION_BOOSTS`]
+    /// par appel, les moins prioritaires d'abord ; toutes les files sont
+    /// examinées (au plus [`MAX_THREADS`] threads). `true` si l'un d'eux doit
+    /// préempter le thread courant.
+    pub fn scan_starved(&mut self, threshold: u64) -> bool {
+        let mut starved = [ptr::null_mut(); STARVATION_BOOSTS];
+        let mut found = 0;
+        'scan: for queue in &self.ready[1..usize::from(LOW_REALTIME_PRIORITY - 1)] {
+            for thread in queue.iter() {
+                // SAFETY: l'ordonnanceur ne tient que des threads valides.
+                let since = unsafe { (*thread).ready_since };
+                if self.clock.saturating_sub(since) >= threshold {
+                    starved[found] = thread;
+                    found += 1;
+                    if found == STARVATION_BOOSTS {
+                        break 'scan;
+                    }
+                }
+            }
+        }
+        let mut preempt = false;
+        for &thread in &starved[..found] {
+            // SAFETY: un thread prêt de ces files, valide ; retiré de sa file
+            // avant de changer de priorité.
+            unsafe {
+                self.unready(thread);
+                (*thread).priority = LOW_REALTIME_PRIORITY - 1;
+                (*thread).quantum = 2 * QUANTUM;
+                (*thread).starvation_boost = true;
+                preempt |= self.ready(thread, false);
+            }
+        }
+        preempt
+    }
+}
+
+/// Fin du quantum d'un thread qui n'est dans aucune file : quantum neuf, et sa
+/// priorité perd un niveau ([`decay`]), ou revient à sa base après un
+/// relèvement contre la famine.
+///
+/// # Safety
+/// `thread` est valide et n'est dans aucune file.
+unsafe fn end_quantum(thread: *mut Thread) {
+    // SAFETY: garanti par l'appelant.
+    unsafe {
+        (*thread).quantum = QUANTUM;
+        let base = (*thread).base_priority;
+        (*thread).priority = if (*thread).starvation_boost { base } else { decay(base, (*thread).priority) };
+        (*thread).starvation_boost = false;
     }
 }
 
@@ -788,6 +872,23 @@ pub fn thread_priority(tid: usize) -> Option<u8> {
         let priority = (!t.is_null()).then(|| (*t).priority);
         DISPATCHER_LOCK.release::<KePlatform>(old_irql);
         priority
+    }
+}
+
+/// Examine les files prêtes de ce processeur et relève les threads affamés
+/// ([`Scheduler::scan_starved`]) ; appelé chaque seconde par le balance set
+/// manager (`ke::balance`).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn ki_scan_ready_queues() {
+    // SAFETY: verrou tenu de acquire à release.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        if (*sched()).scan_starved(STARVATION_TICKS) {
+            request_reschedule();
+        }
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
     }
 }
 
@@ -1169,6 +1270,60 @@ mod tests {
         // SAFETY: thread du test, hors file.
         unsafe { s.ready_unwaited(t, 6) };
         assert_eq!(priority(t), LOW_REALTIME_PRIORITY + 2);
+    }
+
+    // ── Famine ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_starved_thread_runs_at_fifteen_for_a_double_quantum_then_returns_to_its_base() {
+        let (mut s, boot) = scheduler();
+        let low = thread(4);
+        ready(&mut s, low, false);
+        assert_eq!(s.dispatch(STARVATION_TICKS as u32 - 1), None, "the boot thread keeps the processor");
+        assert!(!s.scan_starved(STARVATION_TICKS), "not starved yet");
+        assert_eq!(priority(low), 4);
+        assert_eq!(s.dispatch(1), None);
+        assert!(s.scan_starved(STARVATION_TICKS), "starved: raised above the boot thread");
+        assert_eq!(priority(low), LOW_REALTIME_PRIORITY - 1);
+        assert_eq!(s.dispatch(0), Some(low));
+        assert_eq!(s.dispatch(2 * QUANTUM_TICKS - 1), None, "a double quantum");
+        assert_eq!(s.dispatch(1), Some(boot), "back at its base once it is over");
+        assert_eq!(priority(low), 4);
+    }
+
+    #[test]
+    fn a_scan_raises_ten_variable_priority_threads_below_fifteen_at_most() {
+        let (mut s, _) = scheduler();
+        let lows: alloc::vec::Vec<_> = (0..STARVATION_BOOSTS + 2).map(|_| thread(3)).collect();
+        let others = [thread(LOW_REALTIME_PRIORITY - 1), thread(LOW_REALTIME_PRIORITY)];
+        for &t in lows.iter().chain(&others) {
+            ready(&mut s, t, false);
+        }
+        s.clock = STARVATION_TICKS;
+        s.scan_starved(STARVATION_TICKS);
+        let raised = |lows: &[*mut Thread]| lows.iter().filter(|&&t| priority(t) == LOW_REALTIME_PRIORITY - 1).count();
+        assert_eq!(raised(&lows), STARVATION_BOOSTS);
+        assert_eq!(others.map(priority), [LOW_REALTIME_PRIORITY - 1, LOW_REALTIME_PRIORITY]);
+        // SAFETY: threads du test.
+        assert!(others.iter().all(|&t| !unsafe { (*t).starvation_boost }), "nothing to raise at 15 and above");
+        s.clock += STARVATION_TICKS;
+        s.scan_starved(STARVATION_TICKS);
+        assert_eq!(raised(&lows), lows.len(), "the rest at the next scan");
+    }
+
+    #[test]
+    fn a_starved_thread_that_waits_loses_its_raise() {
+        let (mut s, _) = scheduler();
+        let low = thread(4);
+        ready(&mut s, low, false);
+        s.clock = STARVATION_TICKS;
+        s.scan_starved(STARVATION_TICKS);
+        // SAFETY: thread du test : il s'exécute, attend, puis est réveillé.
+        unsafe {
+            s.unready(low);
+            s.ready_unwaited(low, 1);
+        }
+        assert_eq!((priority(low), quantum(low)), (5, QUANTUM), "its base plus the wake's increment");
     }
 
     #[test]
