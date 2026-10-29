@@ -357,6 +357,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     x86_64::instructions::interrupts::enable();
     deferred_preemption_self_test();
     dpc_self_test();
+    ke_self_test();
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
@@ -600,30 +601,109 @@ fn dpc_self_test() {
     log::info!("[smoke] DPC: run at once, deferred under a KSpinLock, removable");
 }
 
-/// Checks that DISPATCH_LEVEL defers preemption (M1, `hal::irql`): the boot
-/// thread holds a KSpinLock across several timer ticks without being switched
-/// out (the idle thread is ready), then the pending dispatch runs on release.
+/// Starts a kernel thread on a fresh guarded kernel stack (`mm::kstack`);
+/// returns its TID.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn spawn_kernel_thread(priority: u8, routine: ke::sched::ThreadRoutine, context: *mut core::ffi::c_void) -> usize {
+    let stack = mm::kstack::allocate().expect("no kernel stack for a kernel thread");
+    // SAFETY: the stack was just allocated for this thread alone and is never
+    // freed; callers keep `context` valid for the thread's life.
+    unsafe { ke::sched::create_kernel_thread(stack.top, priority, routine, context) }.expect("thread table full")
+}
+
+/// Checks that DISPATCH_LEVEL defers preemption (M1, `hal::irql`): with a
+/// kernel thread of the same priority ready, the boot thread holds a KSpinLock
+/// for more than a quantum without being switched out, then the switch asked
+/// for by the quantum end runs on release.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interrupts enabled, scheduler and dispatch hook ready.
 fn deferred_preemption_self_test() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
     const TICKS: u64 = 5;
     static LOCK: hal::sync::KSpinLock<()> = hal::sync::KSpinLock::new(());
+    static RELEASED: AtomicBool = AtomicBool::new(false);
+    fn peer(_: *mut core::ffi::c_void) {
+        while !RELEASED.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+    spawn_kernel_thread(ke::sched::NORMAL_PRIORITY, peer, core::ptr::null_mut());
+
     let tick_ms = hal::timer::TICK_INTERVAL_MS;
     let switches;
     {
         let _guard = LOCK.lock();
-        // Counted once the lock is held: a tick just before may switch freely.
+        // Counted once the lock is held: a tick just before may switch freely
+        // (the peer then spins until its own quantum ends).
         switches = ke::sched::context_switches();
         let start = hal::timer::get_tick_count();
         while hal::timer::get_tick_count() < start + TICKS * tick_ms {
             core::hint::spin_loop();
         }
         assert_eq!(ke::sched::context_switches(), switches, "preempted while holding a KSpinLock");
+        RELEASED.store(true, Ordering::Release);
     }
     // The dispatch requested by those ticks ran when the guard lowered the IRQL.
     assert!(ke::sched::context_switches() > switches, "pending dispatch not run on IRQL drop");
     log::info!("[smoke] dispatch deferred: {} ticks under a KSpinLock without preemption, run on release", TICKS);
+}
+
+/// Checks the scheduler and the dispatcher on real threads (M1, `ke::sched`): a
+/// kernel thread of higher priority runs before its creation returns; after a
+/// 20 ms delay it wakes the boot thread through an event, then ends, which
+/// signals its thread object; a wait on an event nobody sets times out.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn ke_self_test() {
+    use abi::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT, STATUS_WAIT_0};
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use ke::dispatcher::{
+        ke_delay_execution_thread, ke_initialize_event, ke_set_event, ke_wait_for_single_object, DispatcherHeader,
+        KEvent, ObjectType, ProcessorMode,
+    };
+    use ke::sched::KePlatform;
+
+    const MS: i64 = 10_000;
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    fn signaler(event: *mut c_void) {
+        STARTED.store(true, Ordering::Relaxed);
+        // SAFETY: on a scheduler thread; the event is never freed.
+        unsafe {
+            let delay = ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -20 * MS);
+            assert_eq!(delay, STATUS_SUCCESS);
+            ke_set_event::<KePlatform>(event.cast());
+        }
+    }
+    let wait = |object: *mut DispatcherHeader, timeout_ms: i64| {
+        // SAFETY: on the boot thread; the objects waited on are never freed.
+        unsafe { ke_wait_for_single_object::<KePlatform>(object, ProcessorMode::Kernel, false, Some(-timeout_ms * MS)) }
+    };
+
+    let event = alloc::boxed::Box::into_raw(alloc::boxed::Box::<KEvent>::new_uninit()).cast::<KEvent>();
+    // SAFETY: fresh memory at a fixed address, never freed.
+    let header = unsafe {
+        ke_initialize_event(event, ObjectType::SynchronizationEvent, false);
+        core::ptr::addr_of_mut!((*event).header)
+    };
+    let start = hal::timer::interrupt_time();
+    let tid = spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, signaler, event.cast());
+    assert!(STARTED.load(Ordering::Relaxed), "a higher-priority thread did not preempt its creator");
+    assert_eq!(wait(header, 1000), STATUS_WAIT_0, "event not set");
+    let waited = hal::timer::interrupt_time() - start;
+    assert!(waited >= 20 * MS as u64, "20 ms delay over after {waited} x 100 ns");
+    let thread = ke::sched::thread_object(tid).expect("thread object");
+    assert_eq!(wait(thread, 1000), STATUS_WAIT_0, "thread end not signaled");
+
+    let start = hal::timer::interrupt_time();
+    assert_eq!(wait(header, 30), STATUS_TIMEOUT);
+    assert!(hal::timer::interrupt_time() - start >= 30 * MS as u64, "timed out too early");
+    log::info!("[smoke] Ke: priority preemption, event wait, delay, thread end and timeout ok");
 }
 
 /// Kernel-stack guard-page lookup for the fault handlers (`hal::idt`).

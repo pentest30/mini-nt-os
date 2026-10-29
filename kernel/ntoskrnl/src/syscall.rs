@@ -895,8 +895,8 @@ fn nt_terminate_process(args_ptr: u32) -> u32 {
     // runnable thread (e.g. the shell / boot thread).  This function does not
     // return for the calling thread.
     ke::sched::terminate_current_thread();
-    // terminate_current_thread() only returns if there is no other runnable
-    // thread.  In that case halt — the machine is idle.
+    // terminate_current_thread() only returns before ke::init (no scheduler);
+    // afterwards the idle thread is always there to switch to.
     STATUS_SUCCESS
 }
 

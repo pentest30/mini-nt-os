@@ -1,7 +1,7 @@
 //! Ke — Kernel executive layer.
 //!
 //! Provides:
-//!   - Thread scheduler (round-robin → priority in Phase 2)
+//!   - Scheduler: 32 priorities, quantum, preemption, waits (`sched`)
 //!   - Dispatcher (ADR-005): waitable objects, KWAIT_BLOCK, wait and signal
 //!   - Timer wheel and KTIMER objects (periodic, with a DPC)
 //!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX
@@ -25,7 +25,6 @@ pub mod thread;
 pub mod timer;
 
 pub use event::{EventType, KEvent};
-pub use sched::Scheduler;
 
 /// Initialise the Ke layer. Called from kernel_main after HAL and Mm.
 ///

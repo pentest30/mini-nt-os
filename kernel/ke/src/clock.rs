@@ -2,12 +2,12 @@
 //! avancée par `hal::timer` (02 §Ke, « Horloges »).
 
 /// Crochet d'horloge (`hal::timer::set_clock_hook`), à chaque tick : DPC
-/// d'expiration si l'heure atteint un timer armé, et fin de quantum (d'un tick
-/// tant que l'ordonnanceur est le tourniquet de la phase 2).
+/// d'expiration si l'heure atteint un timer armé, et tick imputé au quantum du
+/// thread courant.
 ///
 /// # IRQL
 /// Dans l'ISR d'horloge, interruptions masquées : ni attente, ni `KSpinLock`.
 pub fn ki_clock_interrupt() {
     crate::timer::ki_check_timers();
-    crate::sched::request_reschedule();
+    crate::sched::clock_tick();
 }

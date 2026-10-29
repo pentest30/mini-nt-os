@@ -389,6 +389,19 @@ impl DispatcherLock {
         self.locked.store(false, Ordering::Release);
         P::lower_irql(old_irql);
     }
+
+    /// Relâche le verrou en restant à DISPATCH_LEVEL : juste avant une commutation
+    /// de thread, dont le thread repris rabaisse lui-même son IRQL (`ke::sched`).
+    ///
+    /// # Safety
+    /// Le verrou est tenu par ce CPU ; rien ne s'exécute sur ce CPU avant la
+    /// commutation qui touche à l'état qu'il protège.
+    ///
+    /// # IRQL
+    /// DISPATCH_LEVEL, inchangé.
+    pub unsafe fn unlock(&self) {
+        self.locked.store(false, Ordering::Release);
+    }
 }
 
 pub static DISPATCHER_LOCK: DispatcherLock = DispatcherLock::new();

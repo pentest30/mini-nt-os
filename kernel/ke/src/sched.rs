@@ -1,49 +1,65 @@
-//! Thread scheduler — Phase 2 bootstrap.
+//! Ordonnanceur (M1, 02 §Ke) : 32 priorités, quantum, attente, préemption.
 //!
-//! Design principles (no heap allocation anywhere in this module):
-//!   - Thread records live in a fixed-size static table (MAX_THREADS slots).
-//!   - The idle thread's kernel stack lives in a `static mut` byte array.
-//!   - The ready queue is a ring buffer of thread-table indices.
-//!   - `init()` can be called with interrupts disabled → no allocator contact.
+//! Un thread est un [`Thread`] : la tranche dispatcher (`dispatcher::KThread`) en
+//! tête, puis son contexte de commutation, sa priorité et son quantum. Les threads
+//! prêts attendent dans une file par priorité (anneau de TID, [`ReadyQueue`]) ; un
+//! bitmap résume les files non vides. Le thread idle n'est dans aucune file : il
+//! tourne quand aucun autre n'est prêt.
 //!
-//! IRQL discipline:
-//!   - `init()`  → PASSIVE_LEVEL, once, from kernel_main.
-//!   - `tick()`  → called from timer ISR (DIRQL); must not block or alloc.
-//!   - `schedule()` → called at DISPATCH_LEVEL by the DISPATCH interrupt
-//!     (`ke::dpc`), on a quantum end; no alloc.
-//!   - The scheduler lock is shared with the timer ISR, so it is only taken
-//!     with interrupts disabled (`hal::sync::IrqLock`).
+//! - Préemption : un thread qui devient prêt avec une priorité supérieure à celle
+//!   du thread courant le préempte à la prochaine interruption DISPATCH ; le
+//!   préempté repasse en tête de sa file, avec le reste de son quantum.
+//! - Quantum : deux ticks d'horloge. À son terme, le thread cède la place aux
+//!   threads prêts de même priorité et repasse en queue de sa file.
+//! - Attente : le dispatcher (`Platform::swap_thread`) bascule vers le thread prêt
+//!   le plus prioritaire, ou vers idle.
 //!
-//! WI7e Ch.4 "Scheduling", ReactOS ntoskrnl/ke/thrdschd.c
+//! L'état de l'ordonnanceur est protégé par le verrou dispatcher (ADR-005). Une
+//! commutation relâche ce verrou juste avant de changer de pile, en restant à
+//! DISPATCH_LEVEL : sur un seul CPU (ADR-015), rien de ce qui touche à cet état ne
+//! peut s'exécuter entre-temps. Le thread repris rabaisse lui-même son IRQL.
+//!
+//! Pas encore : boosts de priorité, changement de priorité, récupération des
+//! threads terminés (leur objet et leur pile restent alloués).
+//!
+//! [`KePlatform`] relie le dispatcher, les timers et l'IRQL à cet ordonnanceur.
 
-use crate::thread::{KContext, ThreadState};
-use hal::sync::IrqLock;
+use alloc::boxed::Box;
+use core::cell::UnsafeCell;
+use core::ffi::c_void;
+use core::ptr;
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 
-// ── Constants ────────────────────────────────────────────────────────────────
+use abi::ntstatus::NtStatus;
+use hal::irql::Irql;
 
-/// Maximum number of concurrently tracked threads (Phase 2 bootstrap).
-pub const MAX_THREADS: usize = 8;
+use crate::dispatcher::{ki_thread_exit, DispatcherHeader, KThread, KTimer, Platform, ThreadState, DISPATCHER_LOCK};
+use crate::thread::{context_switch_raw, KContext};
 
-/// Maximum depth of the ready queue.
-const MAX_READY: usize = MAX_THREADS;
+// ── Constantes ───────────────────────────────────────────────────────────────
 
-/// Priority used for the boot thread (kernel_main).
-const BOOT_PRIORITY: u8 = 8;
+/// Nombre maximal de threads.
+pub const MAX_THREADS: usize = 64;
 
-/// Idle thread always runs at priority 0.
-const IDLE_PRIORITY: u8 = 0;
+/// Niveaux de priorité : 0 (idle) à 31.
+pub const PRIORITY_LEVELS: usize = 32;
 
-// ── Ready queue ───────────────────────────────────────────────────────────────
+/// Priorité du thread idle, qui n'appartient qu'à lui.
+pub const IDLE_PRIORITY: u8 = 0;
 
-/// Fixed-capacity FIFO queue of thread-table indices.
-///
-/// # Why not `VecDeque`?
-/// `VecDeque` allocates on the heap. Heap allocation is forbidden at
-/// DISPATCH_LEVEL (IRQL discipline). A ring buffer with a compile-time
-/// capacity is the correct NT-kernel pattern.
+/// Priorité normale : celle du thread de démarrage et des threads utilisateur.
+pub const NORMAL_PRIORITY: u8 = 8;
+
+/// Durée d'un quantum, en ticks d'horloge.
+const QUANTUM_TICKS: i32 = 2;
+
+// ── File prête ───────────────────────────────────────────────────────────────
+
+/// File FIFO de TID, en anneau de capacité fixe : l'ordonnanceur n'alloue jamais
+/// (il s'exécute à DISPATCH_LEVEL). Un thread y figure au plus une fois.
 #[derive(Clone, Copy)]
 pub struct ReadyQueue {
-    buf: [usize; MAX_READY],
+    buf: [usize; MAX_THREADS],
     head: usize,
     len: usize,
 }
@@ -56,381 +72,526 @@ impl Default for ReadyQueue {
 
 impl ReadyQueue {
     pub const fn new() -> Self {
-        Self { buf: [0; MAX_READY], head: 0, len: 0 }
+        Self { buf: [0; MAX_THREADS], head: 0, len: 0 }
     }
 
-    /// Returns `true` if the queue is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
 
-    /// Returns `true` if the queue is full.
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.len == MAX_READY
+        self.len == MAX_THREADS
     }
 
-    /// Enqueue a thread index. Returns `false` if the queue is full.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Ajoute en queue ; `false` si la file est pleine.
     pub fn push(&mut self, tid: usize) -> bool {
         if self.is_full() {
             return false;
         }
-        let tail = (self.head + self.len) % MAX_READY;
-        self.buf[tail] = tid;
+        self.buf[(self.head + self.len) % MAX_THREADS] = tid;
         self.len += 1;
         true
     }
 
-    /// Dequeue the next ready thread index. Returns `None` if empty.
+    /// Ajoute en tête ; `false` si la file est pleine.
+    pub fn push_front(&mut self, tid: usize) -> bool {
+        if self.is_full() {
+            return false;
+        }
+        self.head = (self.head + MAX_THREADS - 1) % MAX_THREADS;
+        self.buf[self.head] = tid;
+        self.len += 1;
+        true
+    }
+
+    /// Sort le premier TID.
     pub fn pop(&mut self) -> Option<usize> {
         if self.is_empty() {
             return None;
         }
         let tid = self.buf[self.head];
-        self.head = (self.head + 1) % MAX_READY;
+        self.head = (self.head + 1) % MAX_THREADS;
         self.len -= 1;
         Some(tid)
     }
 
-    /// Number of items in the queue.
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-}
-
-// ── Thread record ─────────────────────────────────────────────────────────────
-
-/// One entry in the static thread table.
-///
-/// `ctx` is an *owned* context stored inline — no pointer indirection needed
-/// for the boot and idle threads. User threads (Phase 2.5+) set `user_mode`
-/// and carry their kernel-stack top in `kernel_stack_top` so the scheduler
-/// can update TSS.RSP0 before switching to them in ring-3.
-#[derive(Clone, Copy)]
-pub struct ThreadRecord {
-    pub ctx: KContext,
-    pub state: ThreadState,
-    pub priority: u8,
-    pub used: bool,
-    /// `true` for threads that run in ring-3. The scheduler updates TSS.RSP0
-    /// to `kernel_stack_top` before switching to these threads.
-    pub user_mode: bool,
-    /// Top of this thread's dedicated kernel stack (initial RSP0 value).
-    /// Zero for kernel-mode threads (boot, idle).
-    pub kernel_stack_top: u64,
-}
-
-impl ThreadRecord {
-    pub const fn empty() -> Self {
-        Self {
-            ctx: KContext { rsp: 0, rbx: 0, rbp: 0, r12: 0, r13: 0, r14: 0, r15: 0, rip: 0 },
-            state: ThreadState::Initialized,
-            priority: 0,
-            used: false,
-            user_mode: false,
-            kernel_stack_top: 0,
+    /// Retire `tid` où qu'il soit, sans changer l'ordre des autres ; `false`
+    /// s'il n'y est pas.
+    pub fn remove(&mut self, tid: usize) -> bool {
+        let Some(at) = (0..self.len).find(|&i| self.buf[(self.head + i) % MAX_THREADS] == tid) else {
+            return false;
+        };
+        for i in at..self.len - 1 {
+            self.buf[(self.head + i) % MAX_THREADS] = self.buf[(self.head + i + 1) % MAX_THREADS];
         }
+        self.len -= 1;
+        true
     }
 }
 
-// ── Scheduler inner state ─────────────────────────────────────────────────────
+// ── Thread ───────────────────────────────────────────────────────────────────
 
-/// Scheduler state — no heap, all static.
-pub struct SchedulerInner {
-    pub threads: [ThreadRecord; MAX_THREADS],
-    pub current: usize,  // index of the currently running thread
-    pub idle_tid: usize, // index of the idle thread (never terminates)
-    pub ready: ReadyQueue,
-    pub tick_count: u64,
+/// Routine d'un thread noyau.
+pub type ThreadRoutine = fn(context: *mut c_void);
+
+/// Un thread : la tranche dispatcher en tête, à la même adresse que le
+/// `KThread` que voit le dispatcher, puis ce que l'ordonnanceur en sait.
+#[repr(C)]
+pub struct Thread {
+    pub tcb: KThread,
+    ctx: KContext,
+    tid: usize,
+    priority: u8,
+    /// Ticks d'horloge restants du quantum.
+    quantum: i32,
+    /// Thread utilisateur : TSS.RSP0 doit pointer sur sa pile noyau.
+    user_mode: bool,
+    kernel_stack_top: u64,
+    /// Routine d'un thread noyau, lancée par [`ki_thread_startup`].
+    start: Option<(ThreadRoutine, *mut c_void)>,
 }
 
-impl Default for SchedulerInner {
+impl Thread {
+    /// Alloue un thread et l'initialise ; il n'est jamais libéré (les threads ne
+    /// sont pas encore récupérés).
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL (alloue).
+    fn create(
+        priority: u8,
+        ctx: KContext,
+        user_mode: bool,
+        kernel_stack_top: u64,
+        start: Option<(ThreadRoutine, *mut c_void)>,
+    ) -> *mut Thread {
+        let t = Box::into_raw(Box::<Thread>::new_uninit()).cast::<Thread>();
+        // SAFETY: mémoire fraîche, à adresse stable ; chaque champ est écrit par
+        // pointeur brut, sans référence vers de la mémoire non initialisée.
+        unsafe {
+            KThread::init(ptr::addr_of_mut!((*t).tcb));
+            ptr::addr_of_mut!((*t).ctx).write(ctx);
+            ptr::addr_of_mut!((*t).tid).write(usize::MAX);
+            ptr::addr_of_mut!((*t).priority).write(priority);
+            ptr::addr_of_mut!((*t).quantum).write(QUANTUM_TICKS);
+            ptr::addr_of_mut!((*t).user_mode).write(user_mode);
+            ptr::addr_of_mut!((*t).kernel_stack_top).write(kernel_stack_top);
+            ptr::addr_of_mut!((*t).start).write(start);
+        }
+        t
+    }
+}
+
+// ── État de l'ordonnanceur ───────────────────────────────────────────────────
+
+/// Threads, files prêtes et thread courant. Dans le noyau, sous le verrou
+/// dispatcher.
+pub struct Scheduler {
+    threads: [*mut Thread; MAX_THREADS],
+    ready: [ReadyQueue; PRIORITY_LEVELS],
+    /// Bit `p` : la file de priorité `p` n'est pas vide.
+    summary: u32,
+    current: usize,
+    idle: usize,
+}
+
+impl Default for Scheduler {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SchedulerInner {
+impl Scheduler {
     pub const fn new() -> Self {
         Self {
-            threads: [ThreadRecord::empty(); MAX_THREADS],
+            threads: [ptr::null_mut(); MAX_THREADS],
+            ready: [const { ReadyQueue::new() }; PRIORITY_LEVELS],
+            summary: 0,
             current: 0,
-            idle_tid: 1,
-            ready: ReadyQueue::new(),
-            tick_count: 0,
+            idle: 0,
         }
     }
 
-    /// Allocate the next free thread slot. Returns the TID or `None` if full.
-    pub fn alloc_tid(&mut self) -> Option<usize> {
-        self.threads.iter().position(|t| !t.used)
-    }
-
-    /// Schedule: pick the next thread to run and return (current_tid, next_tid).
+    /// Enregistre `thread` et lui donne son TID ; `None` si la table est pleine.
     ///
-    /// Returns `None` if no switch is needed (only one runnable thread).
-    /// The caller is responsible for calling `ke::thread::switch_to` with the
-    /// actual `KContext` pointers.
-    pub fn pick_next(&mut self) -> Option<(usize, usize)> {
-        let cur = self.current;
+    /// # Safety
+    /// `thread` est valide pour toute la vie de l'ordonnanceur.
+    pub unsafe fn register(&mut self, thread: *mut Thread) -> Option<usize> {
+        let tid = self.threads.iter().position(|t| t.is_null())?;
+        self.threads[tid] = thread;
+        // SAFETY: garanti par l'appelant.
+        unsafe { (*thread).tid = tid };
+        Some(tid)
+    }
 
-        // Determine the next thread: try ready queue first, then idle fallback.
-        // Skip any Terminated entries — terminate_user_threads() marks threads
-        // Terminated while they may still be sitting in the queue. Without this
-        // check, pick_next() would pop a Terminated thread and immediately set
-        // its state back to Running, undoing the termination.
-        let next_from_queue = loop {
-            match self.ready.pop() {
-                Some(tid) if self.threads[tid].state == ThreadState::Terminated => {
-                    // Discard — thread was terminated after being enqueued.
-                }
-                other => break other,
-            }
-        };
+    /// Le thread `tid`, ou nul.
+    pub fn thread(&self, tid: usize) -> *mut Thread {
+        self.threads.get(tid).copied().unwrap_or(ptr::null_mut())
+    }
 
-        let next = match next_from_queue {
-            Some(tid) => tid,
-            None => {
-                // Queue empty: fall back to idle unless we ARE idle.
-                if cur == self.idle_tid {
-                    // Already on idle with nothing to do — no switch.
-                    return None;
-                }
-                self.idle_tid
-            }
-        };
+    fn priority(&self, tid: usize) -> u8 {
+        // SAFETY: les threads enregistrés sont valides (contrat de `register`).
+        unsafe { (*self.threads[tid]).priority }
+    }
 
-        // Now re-enqueue current (if it's still runnable and not idle).
-        if self.threads[cur].state == ThreadState::Running && cur != self.idle_tid {
-            self.threads[cur].state = ThreadState::Ready;
-            self.ready.push(cur);
+    /// `tid` devient prêt : en queue de la file de sa priorité, ou en tête s'il
+    /// vient d'être préempté. `true` s'il doit préempter le thread courant.
+    pub fn ready(&mut self, tid: usize, front: bool) -> bool {
+        let p = self.priority(tid);
+        // SAFETY: les threads enregistrés sont valides.
+        unsafe { (*self.threads[tid]).tcb.state = ThreadState::Ready };
+        let queue = &mut self.ready[usize::from(p)];
+        let queued = if front { queue.push_front(tid) } else { queue.push(tid) };
+        assert!(queued, "ready queue overflow: a thread is queued twice");
+        self.summary |= 1 << p;
+        tid != self.current && (self.current == self.idle || p > self.priority(self.current))
+    }
+
+    /// Retire de sa file un thread prêt.
+    pub fn unready(&mut self, tid: usize) {
+        let p = usize::from(self.priority(tid));
+        self.ready[p].remove(tid);
+        if self.ready[p].is_empty() {
+            self.summary &= !(1 << p);
         }
+    }
 
-        self.threads[next].state = ThreadState::Running;
-        self.current = next;
-        Some((cur, next))
+    /// Priorité du plus prioritaire des threads prêts.
+    fn highest(&self) -> Option<u8> {
+        (self.summary != 0).then(|| 31 - self.summary.leading_zeros() as u8)
+    }
+
+    fn pop_highest(&mut self) -> Option<usize> {
+        let p = usize::from(self.highest()?);
+        let tid = self.ready[p].pop();
+        if self.ready[p].is_empty() {
+            self.summary &= !(1 << p);
+        }
+        tid
+    }
+
+    fn make_current(&mut self, tid: usize) -> usize {
+        // SAFETY: les threads enregistrés sont valides.
+        unsafe { (*self.threads[tid]).tcb.state = ThreadState::Running };
+        self.current = tid;
+        tid
+    }
+
+    /// Le thread courant cède le processeur (il attend, ou se termine) : le plus
+    /// prioritaire des threads prêts devient courant, ou idle.
+    pub fn select_next(&mut self) -> usize {
+        let next = self.pop_highest().unwrap_or(self.idle);
+        self.make_current(next)
+    }
+
+    /// Interruption DISPATCH, `ticks` d'horloge après la précédente : le
+    /// prochain thread s'il faut commuter, le courant étant remis en file.
+    pub fn dispatch(&mut self, ticks: u32) -> Option<usize> {
+        let cur = self.current;
+        if cur == self.idle {
+            let next = self.pop_highest()?;
+            return Some(self.make_current(next));
+        }
+        // SAFETY: les threads enregistrés sont valides.
+        let expired = unsafe {
+            let t = self.threads[cur];
+            (*t).quantum = (*t).quantum.saturating_sub(ticks as i32);
+            let expired = (*t).quantum <= 0;
+            if expired {
+                (*t).quantum = QUANTUM_TICKS;
+            }
+            expired
+        };
+        let best = self.highest()?;
+        let prio = self.priority(cur);
+        if best > prio || (expired && best == prio) {
+            self.ready(cur, !expired);
+            let next = self.pop_highest()?;
+            Some(self.make_current(next))
+        } else {
+            None
+        }
     }
 }
 
-// ── Global scheduler ─────────────────────────────────────────────────────────
+// ── Ordonnanceur du noyau ────────────────────────────────────────────────────
 
-/// A thread switch is due at the next DISPATCH interrupt (end of quantum).
-static RESCHEDULE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// L'état de l'ordonnanceur du noyau, sous le verrou dispatcher.
+struct SchedulerCell(UnsafeCell<Scheduler>);
 
-/// Asks for a thread switch at the next DISPATCH interrupt: at once below
-/// DISPATCH_LEVEL with interrupts enabled, else as soon as the IRQL drops.
+// SAFETY: l'état n'est touché que verrou dispatcher tenu (voir `sched`).
+unsafe impl Sync for SchedulerCell {}
+
+static SCHED: SchedulerCell = SchedulerCell(UnsafeCell::new(Scheduler::new()));
+
+/// L'état de l'ordonnanceur. Chaque accès crée une référence qui ne vit que le
+/// temps d'un appel de méthode : jamais à travers un appel au dispatcher, qui peut
+/// revenir ici (`KePlatform::ready_thread`).
+///
+/// # Safety
+/// Verrou dispatcher tenu.
+unsafe fn sched() -> *mut Scheduler {
+    SCHED.0.get()
+}
+
+/// Le thread courant. Seule une commutation le change ; lu sans verrou.
+static CURRENT: AtomicPtr<Thread> = AtomicPtr::new(ptr::null_mut());
+
+/// Ticks d'horloge pas encore imputés au quantum du thread courant.
+static CLOCK_TICKS: AtomicU32 = AtomicU32::new(0);
+
+/// Une commutation est à examiner à la prochaine interruption DISPATCH (fin de
+/// quantum, ou préemption).
+static RESCHEDULE: AtomicBool = AtomicBool::new(false);
+
+/// Commutations effectuées depuis le démarrage (statistiques, auto-tests).
+static CONTEXT_SWITCHES: AtomicU64 = AtomicU64::new(0);
+
+/// Nombre de commutations depuis le démarrage.
 ///
 /// # IRQL
-/// Any level, ISR included.
+/// Tout niveau.
+pub fn context_switches() -> u64 {
+    CONTEXT_SWITCHES.load(Ordering::Relaxed)
+}
+
+/// Demande l'examen d'une commutation à la prochaine interruption DISPATCH :
+/// aussitôt sous DISPATCH_LEVEL avec les interruptions actives, sinon quand
+/// l'IRQL redescend.
+///
+/// # IRQL
+/// Tout niveau, ISR comprise.
 pub fn request_reschedule() {
-    RESCHEDULE.store(true, core::sync::atomic::Ordering::Release);
+    RESCHEDULE.store(true, Ordering::Release);
     hal::irql::request_dispatch();
 }
 
-/// Consumes a pending thread-switch request (`ke::dpc::ki_dispatch_interrupt`).
+/// Consomme une demande d'examen (`ke::dpc::ki_dispatch_interrupt`).
 pub(crate) fn take_reschedule() -> bool {
-    RESCHEDULE.swap(false, core::sync::atomic::Ordering::AcqRel)
+    RESCHEDULE.swap(false, Ordering::AcqRel)
 }
 
-/// Context switches performed so far (statistics, and the boot self-test of
-/// deferred preemption).
-static CONTEXT_SWITCHES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-
-/// Number of context switches since boot.
+/// Partie ordonnancement de l'interruption d'horloge (`ke::clock`) : un tick à
+/// imputer au quantum du thread courant.
 ///
 /// # IRQL
-/// Any level.
-pub fn context_switches() -> u64 {
-    CONTEXT_SWITCHES.load(core::sync::atomic::Ordering::Relaxed)
+/// Dans l'ISR d'horloge.
+pub(crate) fn clock_tick() {
+    CLOCK_TICKS.fetch_add(1, Ordering::Relaxed);
+    request_reschedule();
 }
 
-/// Scheduler state, shared with the timer ISR (`tick`, `schedule`): an
-/// `IrqLock`, so a tick never finds it held by the thread it interrupted.
-/// The closures given to `SCHED.with` must not block, allocate or log.
-static SCHED: IrqLock<Option<SchedulerInner>> = IrqLock::new(None);
-
-pub struct Scheduler;
-
-/// Initialise the scheduler.
-///
-/// Creates two threads:
-///   - TID 0: boot thread (current execution = `kernel_main`).
-///   - TID 1: idle thread (`idle_thread_main`) on the kernel stack whose top
-///     is `idle_stack_top`. The caller owns the allocation (Mm, guarded
-///     stack); `init()` itself allocates nothing.
+/// Commute de `old` vers `new`, qui vient de devenir courant : relâche le verrou
+/// dispatcher juste avant de changer de pile, en restant à DISPATCH_LEVEL.
+/// Revient quand `old` est repris, à DISPATCH_LEVEL, verrou non tenu.
 ///
 /// # Safety
-/// `idle_stack_top` must be the 16-byte aligned top of a mapped, writable
-/// kernel stack reserved for the idle thread for the life of the system.
-///
-/// # IRQL: PASSIVE_LEVEL, before the first user thread.
-pub unsafe fn init(idle_stack_top: u64) {
-    let tids = SCHED.with(|sched| {
-        if sched.is_some() {
-            return None;
+/// Verrou dispatcher tenu, à DISPATCH_LEVEL ; `old` est le thread qui
+/// s'exécute ; `new` est un autre thread enregistré.
+unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
+    // SAFETY: garanti par l'appelant ; à DISPATCH_LEVEL, rien d'autre ne
+    // s'exécute sur ce CPU (ADR-015) entre le relâchement du verrou et la
+    // commutation, faite interruptions masquées.
+    unsafe {
+        if (*new).user_mode {
+            hal::gdt::set_kernel_stack_top((*new).kernel_stack_top);
         }
-
-        let mut s = SchedulerInner::new();
-
-        // TID 0 — boot thread (kernel_main). Captures the live RSP/RIP on first
-        // context switch; KContext fields are filled in by ke_context_switch.
-        let boot_tid = s.alloc_tid().expect("scheduler: no slot for boot thread");
-        s.threads[boot_tid].used = true;
-        s.threads[boot_tid].state = ThreadState::Running;
-        s.threads[boot_tid].priority = BOOT_PRIORITY;
-        s.current = boot_tid;
-
-        // TID 1 — idle thread, on the caller-provided stack.
-        let idle_tid = s.alloc_tid().expect("scheduler: no slot for idle thread");
-        // SAFETY: the caller guarantees idle_stack_top tops a mapped, writable
-        //         stack reserved for the idle thread; single-threaded init, no
-        //         concurrent access before interrupts re-enable.
-        let idle_rsp = unsafe {
-            // 16-byte align then push one return-address slot.
-            let rsp = ((idle_stack_top as usize) - 8) & !0xF;
-            *(rsp as *mut u64) = idle_thread_main as *const () as u64;
-            rsp as u64
-        };
-        s.threads[idle_tid].used = true;
-        s.threads[idle_tid].state = ThreadState::Ready;
-        s.threads[idle_tid].priority = IDLE_PRIORITY;
-        s.threads[idle_tid].ctx.rsp = idle_rsp;
-        s.threads[idle_tid].ctx.rip = idle_thread_main as *const () as u64;
-        s.idle_tid = idle_tid;
-
-        *sched = Some(s);
-        Some((boot_tid, idle_tid))
-    });
-    if let Some((boot_tid, idle_tid)) = tids {
-        log::info!("Ke scheduler: initialised (boot TID={}, idle TID={})", boot_tid, idle_tid);
+        CURRENT.store(new, Ordering::Relaxed);
+        CONTEXT_SWITCHES.fetch_add(1, Ordering::Relaxed);
+        DISPATCHER_LOCK.unlock();
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            context_switch_raw(ptr::addr_of_mut!((*old).ctx), ptr::addr_of!((*new).ctx))
+        });
     }
 }
 
-/// Called from the APIC timer ISR at every clock tick.
-///
-/// Increments the monotonic tick counter.  The actual context switch is
-/// triggered by `schedule()`, which is called separately after EOI
-/// (so the APIC can accept the next interrupt before we switch stacks).
-///
-/// # IRQL: DIRQL (hardware interrupt) — no alloc, no page faults.
-pub fn tick() {
-    SCHED.with(|sched| {
-        if let Some(s) = sched.as_mut() {
-            s.tick_count += 1;
-        }
-    });
-}
+/// La plateforme du dispatcher dans le noyau : cet ordonnanceur, la roue de
+/// timers de `ke::timer` et l'IRQL de `hal::irql`.
+pub struct KePlatform;
 
-/// Preemptive round-robin context switch.
-///
-/// Called by the DISPATCH interrupt (`ke::dpc::ki_dispatch_interrupt`) when a
-/// quantum end asked for it: from the APIC timer ISR **after** EOI, so the
-/// APIC can accept the next periodic tick before we switch stacks, or when
-/// the IRQL drops below DISPATCH_LEVEL.
-///
-/// Acquires the scheduler lock, calls `pick_next()` to select the next
-/// thread, releases the lock, then calls the raw context-switch stub.
-/// Releasing the lock before switching avoids a lock-across-context-switch
-/// scenario on SMP (Phase 3+); on Phase 2 single-CPU it makes no difference
-/// since interrupts are already disabled inside the ISR.
-///
-/// # IRQL: DISPATCH_LEVEL — no alloc, no page faults, interrupts disabled.
-pub fn schedule() {
-    // ── Select next thread while holding the lock ─────────────────────────
-    let switch = SCHED.with(|sched| {
-        let s = sched.as_mut()?;
-        s.pick_next().map(|(cur, next)| {
-            // Update TSS.RSP0 when switching to a user-mode thread so that the
-            // next ring-3→ring-0 transition pushes the interrupt frame onto that
-            // thread's dedicated kernel stack rather than the shared boot stack.
-            //
-            // SAFETY: called at DISPATCH_LEVEL (timer ISR, IF=0, single-CPU).
-            //         TSS RSP0 write is atomic w.r.t. any concurrent ISR.
-            if s.threads[next].user_mode && s.threads[next].kernel_stack_top != 0 {
-                unsafe { hal::gdt::set_kernel_stack_top(s.threads[next].kernel_stack_top) };
+// SAFETY: chaque méthode respecte le contrat du trait : `ready_thread` met le
+// thread en file, `swap_thread` relâche le verrou et ne revient qu'au thread
+// repris, à son IRQL ; les timers sont ceux de `ke::timer`, qui tient
+// `header.inserted`.
+unsafe impl Platform for KePlatform {
+    fn current_thread() -> *mut KThread {
+        // `tcb` est le premier champ d'un `Thread` `#[repr(C)]`.
+        CURRENT.load(Ordering::Relaxed).cast()
+    }
+
+    unsafe fn ready_thread(thread: *mut KThread) {
+        let t = thread.cast::<Thread>();
+        // SAFETY: verrou tenu ; tout `KThread` du noyau est le `tcb` d'un `Thread`
+        // enregistré.
+        unsafe {
+            (*t).quantum = QUANTUM_TICKS;
+            if (*sched()).ready((*t).tid, false) {
+                request_reschedule();
             }
-            // SAFETY: pointers into the static SCHED table — 'static lifetime.
-            let old_ctx = &mut s.threads[cur].ctx as *mut crate::thread::KContext;
-            let new_ctx = &s.threads[next].ctx as *const crate::thread::KContext;
-            (old_ctx, new_ctx)
-        })
-        // lock released here, interrupts back to their state (still off in the ISR)
-    });
+        }
+    }
 
-    // ── Perform the switch outside the lock ───────────────────────────────
-    if let Some((old_ctx, new_ctx)) = switch {
-        // SAFETY:
-        //   - Both pointers are into the static `SCHED` table (always valid).
-        //   - Called inside the timer ISR with IF=0 (single-CPU; no concurrent
-        //     access to these slots while we are switching).
-        //   - `pick_next()` guarantees old_ctx ≠ new_ctx.
-        CONTEXT_SWITCHES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        unsafe { crate::thread::context_switch_raw(old_ctx, new_ctx) };
+    unsafe fn swap_thread(old_irql: Irql) -> NtStatus {
+        let old = CURRENT.load(Ordering::Relaxed);
+        // SAFETY: verrou tenu (contrat du trait) ; le thread courant attend, il
+        // n'est donc dans aucune file : le suivant est un autre thread.
+        unsafe {
+            let next = (*sched()).select_next();
+            switch_to(old, (*sched()).thread(next));
+        }
+        hal::irql::lower(old_irql);
+        // SAFETY: le thread repris est valide ; son statut a été fixé par qui l'a
+        // réveillé.
+        unsafe { (*old).tcb.wait_status }
+    }
+
+    unsafe fn insert_timer(timer: *mut KTimer, due_time: i64) -> bool {
+        // SAFETY: contrat du trait.
+        unsafe { crate::timer::ki_insert_timer(timer, due_time) }
+    }
+
+    unsafe fn cancel_timer(timer: *mut KTimer) {
+        // SAFETY: contrat du trait.
+        unsafe { crate::timer::ki_cancel_timer(timer) };
+    }
+
+    fn raise_irql(new: Irql) -> Irql {
+        hal::irql::raise(new)
+    }
+
+    fn lower_irql(new: Irql) {
+        hal::irql::lower(new)
     }
 }
 
-/// Returns `true` if the thread at `tid` is still alive (not Terminated).
+/// Initialise l'ordonnanceur : le code en cours devient le thread de démarrage
+/// (TID 0, priorité normale), et le thread idle (TID 1) est créé sur la pile
+/// `idle_stack_top` ; branche l'expiration des timers.
 ///
-/// Used by the kernel shell to spin-wait for a child process to exit:
-/// ```ignore
-/// while ke::sched::is_thread_running(child_tid) { hlt(); }
-/// ```
+/// # Safety
+/// `idle_stack_top` est le haut, aligné sur 16 octets, d'une pile noyau projetée
+/// et réservée au thread idle pour toute la vie du système.
 ///
-/// # IRQL: PASSIVE_LEVEL
-pub fn is_thread_running(tid: usize) -> bool {
-    SCHED.with(|sched| {
-        let Some(s) = sched.as_ref() else { return false };
-        if tid >= MAX_THREADS || !s.threads[tid].used {
-            return false;
-        }
-        s.threads[tid].state != ThreadState::Terminated
-    })
+/// # IRQL
+/// PASSIVE_LEVEL, interruptions masquées, une seule fois.
+pub unsafe fn init(idle_stack_top: u64) {
+    let boot = Thread::create(NORMAL_PRIORITY, KContext::default(), false, 0, None);
+    let idle = Thread::create(
+        IDLE_PRIORITY,
+        KContext::initial(idle_stack_top, idle_thread_main as *const () as u64),
+        false,
+        0,
+        None,
+    );
+    // SAFETY: rien d'autre n'utilise encore l'ordonnanceur ; verrou tenu de
+    // acquire à release.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let s = &mut *sched();
+        assert!(s.threads.iter().all(|t| t.is_null()), "scheduler initialised twice");
+        let boot_tid = s.register(boot).expect("thread table");
+        s.idle = s.register(idle).expect("thread table");
+        s.make_current(boot_tid);
+        CURRENT.store(boot, Ordering::Relaxed);
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+    }
+    crate::timer::init::<KePlatform>();
+    log::info!("Ke scheduler: initialised (boot TID=0, idle TID=1, {} priorities)", PRIORITY_LEVELS);
 }
 
-/// Enqueue a thread in the ready queue.
+/// Enregistre `t` et le rend prêt ; il préempte l'appelant à la libération du
+/// verrou s'il est plus prioritaire. Libère `t` si la table est pleine.
 ///
-/// Called when a thread becomes runnable (e.g., after a wait completes).
-pub fn make_ready(tid: usize) {
-    SCHED.with(|sched| {
-        let Some(s) = sched.as_mut() else { return };
-        if tid < MAX_THREADS && s.threads[tid].used {
-            s.threads[tid].state = ThreadState::Ready;
-            s.ready.push(tid);
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn start_thread(t: *mut Thread) -> Option<usize> {
+    // SAFETY: `t` est un thread neuf, valide pour toujours s'il est enregistré ;
+    // verrou tenu de acquire à release.
+    let tid = unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let tid = (*sched()).register(t);
+        if let Some(tid) = tid {
+            if (*sched()).ready(tid, false) {
+                request_reschedule();
+            }
         }
-    });
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        tid
+    };
+    if tid.is_none() {
+        // SAFETY: jamais enregistré : personne d'autre ne le connaît.
+        drop(unsafe { Box::from_raw(t) });
+    }
+    tid
 }
 
-/// Register a new ring-3 (user-mode) thread with the scheduler.
+/// Crée un thread noyau qui exécute `routine(context)` à la priorité
+/// `priority`, sur la pile `stack_top`, puis se termine. Son TID, ou `None` si
+/// la table est pleine. S'il est plus prioritaire que l'appelant, il s'exécute
+/// avant le retour.
 ///
-/// Builds the `ring3_iretq_trampoline` frame on the caller-provided kernel
-/// stack and adds the thread to the ready queue so the next `schedule()` call
-/// can switch to it. As in NT, the stack comes from Mm through the caller;
-/// Ke never allocates one.
+/// # Safety
+/// `stack_top` est le haut, aligné sur 16 octets, d'une pile noyau projetée,
+/// réservée à ce thread et gardée pour toute sa vie ; `context` reste valide
+/// tant que `routine` s'en sert.
 ///
-/// Stack frame layout (highest address = `kernel_stack_top`):
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub unsafe fn create_kernel_thread(
+    stack_top: u64,
+    priority: u8,
+    routine: ThreadRoutine,
+    context: *mut c_void,
+) -> Option<usize> {
+    assert!((1..PRIORITY_LEVELS as u8).contains(&priority), "priority {priority} (0 is the idle thread's)");
+    let ctx = KContext::initial(stack_top, ki_thread_startup as *const () as u64);
+    start_thread(Thread::create(priority, ctx, false, 0, Some((routine, context))))
+}
+
+/// Premier code d'un thread noyau, où arrive sa première commutation (verrou
+/// relâché, DISPATCH_LEVEL, interruptions masquées).
+extern "C" fn ki_thread_startup() -> ! {
+    x86_64::instructions::interrupts::enable();
+    hal::irql::lower(Irql::Passive);
+    // SAFETY: le thread courant est valide ; `start` ne change plus après sa
+    // création.
+    let start = unsafe { (*CURRENT.load(Ordering::Relaxed)).start };
+    let (routine, context) = start.expect("kernel thread without a start routine");
+    routine(context);
+    terminate_current_thread();
+    unreachable!("a terminated thread was resumed");
+}
+
+/// Enregistre un thread utilisateur (ring 3), prêt à s'exécuter.
+///
+/// Construit sur sa pile noyau la trame de `ring3_iretq_trampoline`, où arrive
+/// sa première commutation :
 ///
 /// ```text
-///   [top-56]  placeholder (overwritten with trampoline addr by ke_context_switch)
-///   [top-48]  FS selector (u64)   ← popped into RAX by trampoline
-///   [top-40]  EIP / entry32 (u64) ┐
-///   [top-32]  CS | RPL=3  (u64)   │
-///   [top-24]  RFLAGS (u64)        ├─ IRETQ frame consumed by trampoline's iretq
-///   [top-16]  user RSP32  (u64)   │
-///   [top- 8]  SS | RPL=3  (u64)   ┘
+///   [top-56]  adresse de reprise (écrite par la commutation)
+///   [top-48]  sélecteur FS (TEB), dépilé dans RAX par le trampoline
+///   [top-40]  EIP 32 bits  ┐
+///   [top-32]  CS | 3       │
+///   [top-24]  RFLAGS       ├─ trame d'IRETQ
+///   [top-16]  ESP 32 bits  │
+///   [top- 8]  SS | 3       ┘
 /// ```
 ///
-/// `ctx.rsp` = `top-56` (where ke_context_switch loads RSP and writes ctx.rip).
-/// `ctx.rip` = address of `ring3_iretq_trampoline`.
+/// La pile vient de Mm par l'appelant ; Ke n'en alloue jamais. Son TID, ou
+/// `None` si la table est pleine.
 ///
 /// # Safety
-/// `kernel_stack_top` must be the 16-byte aligned top of a mapped, writable
-/// kernel stack of at least 4 KiB, used by no other thread and kept alive for
-/// the life of this one.
+/// `kernel_stack_top` est le haut, aligné sur 16 octets, d'une pile noyau
+/// projetée d'au moins 4 Kio, réservée à ce thread et gardée pour toute sa vie.
 ///
-/// # IRQL: PASSIVE_LEVEL.
-/// Returns the scheduler TID, or `None` if the thread table is full.
+/// # IRQL
+/// PASSIVE_LEVEL.
 pub unsafe fn spawn_user_thread(
     kernel_stack_top: u64,
     entry32: u32,
@@ -439,217 +600,161 @@ pub unsafe fn spawn_user_thread(
     ss: u16,
     fs: u16,
 ) -> Option<usize> {
-    const RFLAGS: u64 = hal::ring3::USER_RFLAGS; // IF=1, IOPL=0
-    let kstack_top = kernel_stack_top;
-
-    // ── Build kernel stack frame (7 × u64 = 56 bytes) ────────────────────
-    // Frame is placed at the TOP of the kernel stack.
-    // ke_context_switch writes ctx.rip into frame[0] before executing `ret`,
-    // so frame[0] just needs to be writeable — its initial value is ignored.
-    let frame_base = (kstack_top - 7 * 8) as *mut u64;
-    // SAFETY: frame_base is the top 56 bytes of the caller's stack, which the
-    //         caller guarantees is mapped, writable and owned by this thread.
+    let frame = (kernel_stack_top - 7 * 8) as *mut u64;
+    // SAFETY: les 56 octets du haut de la pile, projetée, accessible en écriture
+    // et réservée à ce thread (contrat).
     unsafe {
-        frame_base.add(0).write(0); // placeholder for trampoline addr
-        frame_base.add(1).write(fs as u64); // FS selector → popped by trampoline
-        frame_base.add(2).write(entry32 as u64); // RIP  ┐
-        frame_base.add(3).write((cs as u64) | 3); // CS   │
-        frame_base.add(4).write(RFLAGS); // RFLAGS│ IRETQ frame
-        frame_base.add(5).write(stack32 as u64); // RSP  │
-        frame_base.add(6).write((ss as u64) | 3); // SS   ┘
+        frame.add(0).write(0);
+        frame.add(1).write(u64::from(fs));
+        frame.add(2).write(u64::from(entry32));
+        frame.add(3).write(u64::from(cs) | 3);
+        frame.add(4).write(hal::ring3::USER_RFLAGS);
+        frame.add(5).write(u64::from(stack32));
+        frame.add(6).write(u64::from(ss) | 3);
     }
-
-    // ── Register with the scheduler ───────────────────────────────────────
-    let tid = SCHED.with(|sched| {
-        let s = sched.as_mut()?;
-        let tid = s.alloc_tid()?;
-
-        s.threads[tid].used = true;
-        s.threads[tid].state = ThreadState::Ready;
-        s.threads[tid].priority = BOOT_PRIORITY; // same as boot thread
-        s.threads[tid].user_mode = true;
-        s.threads[tid].kernel_stack_top = kstack_top;
-        s.threads[tid].ctx.rsp = frame_base as u64;
-        s.threads[tid].ctx.rip = hal::ring3::ring3_iretq_trampoline_fn();
-        // Non-volatile GP registers can be zero — ring-3 ABI doesn't use callee-saved regs
-        // across the kernel→user transition; the trampoline doesn't inspect them.
-        s.threads[tid].ctx.rbx = 0;
-        s.threads[tid].ctx.rbp = 0;
-        s.threads[tid].ctx.r12 = 0;
-        s.threads[tid].ctx.r13 = 0;
-        s.threads[tid].ctx.r14 = 0;
-        s.threads[tid].ctx.r15 = 0;
-
-        s.ready.push(tid);
-        Some(tid)
-    })?;
-
-    // Outside the lock: logging is slow (serial, framebuffer console).
+    let ctx = KContext { rsp: frame as u64, rip: hal::ring3::ring3_iretq_trampoline_fn(), ..KContext::default() };
+    let tid = start_thread(Thread::create(NORMAL_PRIORITY, ctx, true, kernel_stack_top, None))?;
     log::info!(
         "Ke scheduler: spawned user-mode thread TID={} entry={:#010x} usp={:#010x} kstack_top={:#x}",
         tid,
         entry32,
         stack32,
-        kstack_top,
+        kernel_stack_top,
     );
     Some(tid)
 }
 
-/// Terminate all user-mode threads except the current one.
-///
-/// Call this when the kernel shell takes exclusive console ownership so that
-/// no user-mode thread (e.g. CMD.EXE) can steal serial/PS2 input or flood
-/// the framebuffer with log messages.
-///
-/// Threads already Terminated are left alone. The boot thread (TID 0) is
-/// never touched regardless of user_mode flag.
-///
-/// # IRQL: PASSIVE_LEVEL
-pub fn terminate_user_threads() {
-    SCHED.with(|sched| {
-        let Some(s) = sched.as_mut() else { return };
-        let cur = s.current;
-        for (tid, thread) in s.threads.iter_mut().enumerate() {
-            if !thread.used {
-                continue;
-            }
-            if tid == cur {
-                continue;
-            } // don't terminate ourselves
-            if tid == 0 {
-                continue;
-            } // never kill boot thread
-            if thread.user_mode && thread.state != ThreadState::Terminated {
-                thread.state = ThreadState::Terminated;
-            }
-        }
-    });
-}
-
-/// Mark the currently running thread as Terminated and context-switch away.
-///
-/// Used by `NtTerminateProcess`/`NtTerminateThread` to exit the current
-/// user-mode thread cooperatively.  After this call the thread's slot is
-/// kept in the table (for handle-table lookup) but will never be scheduled
-/// again.
+/// `true` si le thread `tid` existe et n'est pas terminé.
 ///
 /// # IRQL
-/// PASSIVE_LEVEL nominally, but the INT 0x2E syscall handler calls it with IF=0,
-/// so it is effectively DISPATCH_LEVEL — no alloc inside this function.
-pub fn terminate_current_thread() {
-    // Outer None: no scheduler yet, nothing to terminate.
-    let Some(switch) = SCHED.with(|sched| {
-        let s = sched.as_mut()?;
-        let cur = s.current;
-        // Mark as terminated so pick_next won't re-enqueue it.
-        s.threads[cur].state = ThreadState::Terminated;
-        // pick_next will skip re-enqueue because state != Running.
-        Some(s.pick_next().map(|(old, next)| {
-            if s.threads[next].user_mode && s.threads[next].kernel_stack_top != 0 {
-                // SAFETY: same as schedule() — IF=0, single-CPU.
-                unsafe { hal::gdt::set_kernel_stack_top(s.threads[next].kernel_stack_top) };
+/// <= DISPATCH_LEVEL.
+pub fn is_thread_running(tid: usize) -> bool {
+    // SAFETY: verrou tenu de acquire à release ; les threads enregistrés sont
+    // valides.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*sched()).thread(tid);
+        let running = !t.is_null() && (*t).tcb.state != ThreadState::Terminated;
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        running
+    }
+}
+
+/// L'objet thread de `tid`, à attendre pour connaître sa fin ; il reste valide
+/// (les threads ne sont jamais libérés).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn thread_object(tid: usize) -> Option<*mut DispatcherHeader> {
+    // SAFETY: verrou tenu de acquire à release ; un thread enregistré est valide.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*sched()).thread(tid);
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        (!t.is_null()).then(|| ptr::addr_of_mut!((*t).tcb.header))
+    }
+}
+
+/// Termine tous les threads utilisateur, sauf le thread courant : le shell du
+/// noyau prend la console.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn terminate_user_threads() {
+    // SAFETY: verrou tenu de acquire à release ; les threads enregistrés sont
+    // valides.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let current = CURRENT.load(Ordering::Relaxed);
+        for tid in 0..MAX_THREADS {
+            let t = (*sched()).thread(tid);
+            if t.is_null() || t == current || !(*t).user_mode || (*t).tcb.state == ThreadState::Terminated {
+                continue;
             }
-            let old_ctx = &mut s.threads[old].ctx as *mut crate::thread::KContext;
-            let new_ctx = &s.threads[next].ctx as *const crate::thread::KContext;
-            (old_ctx, new_ctx)
-        }))
-    }) else {
+            if (*t).tcb.state == ThreadState::Ready {
+                (*sched()).unready(tid);
+            }
+            ki_thread_exit::<KePlatform>(ptr::addr_of_mut!((*t).tcb));
+        }
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+    }
+}
+
+/// Termine le thread courant : objet thread signalé, mutants abandonnés, puis
+/// commutation vers le suivant. Ne revient pas, sauf avant `init`.
+///
+/// Appelé par `NtTerminateProcess`/`NtTerminateThread` et par le gestionnaire
+/// des fautes en mode utilisateur, interruptions masquées.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn terminate_current_thread() {
+    let current = CURRENT.load(Ordering::Relaxed);
+    if current.is_null() {
         return;
-    };
-
-    if let Some((old_ctx, new_ctx)) = switch {
-        // SAFETY: pointers into static SCHED table; IF=0 (no concurrent ISR).
-        CONTEXT_SWITCHES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        unsafe { crate::thread::context_switch_raw(old_ctx, new_ctx) };
-        // If context_switch_raw returns (shouldn't for a terminated thread)
-        // fall through to the halt loop below.
     }
+    // SAFETY: le verrou, pris ici, est relâché par la commutation ; le thread
+    // courant est valide et, terminé, n'est dans aucune file : le suivant est un
+    // autre thread.
+    unsafe {
+        DISPATCHER_LOCK.acquire::<KePlatform>();
+        assert!(current != (*sched()).thread((*sched()).idle), "the idle thread cannot end");
+        ki_thread_exit::<KePlatform>(ptr::addr_of_mut!((*current).tcb));
+        let next = (*sched()).select_next();
+        switch_to(current, (*sched()).thread(next));
+    }
+    unreachable!("a terminated thread was resumed");
+}
 
-    // No runnable thread — spin until the next timer tick selects someone else.
-    loop {
-        x86_64::instructions::hlt();
+/// Interruption DISPATCH (`ke::dpc::ki_dispatch_interrupt`) : impute les ticks
+/// au quantum, puis commute si un thread plus prioritaire est prêt, ou à la fin
+/// du quantum si un thread de même priorité l'est.
+///
+/// # IRQL
+/// DISPATCH_LEVEL, interruptions masquées.
+pub fn schedule() {
+    let old = CURRENT.load(Ordering::Relaxed);
+    if old.is_null() {
+        return;
+    }
+    let ticks = CLOCK_TICKS.swap(0, Ordering::Relaxed);
+    // SAFETY: l'interruption DISPATCH ne s'exécute que si le code interrompu
+    // était sous DISPATCH_LEVEL : il ne tient pas le verrou. Verrou tenu jusqu'à
+    // la commutation, qui le relâche, ou jusqu'au release.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        match (*sched()).dispatch(ticks) {
+            Some(next) => switch_to(old, (*sched()).thread(next)),
+            None => DISPATCHER_LOCK.release::<KePlatform>(old_irql),
+        }
     }
 }
 
-fn idle_thread_main() -> ! {
-    // The first time this function runs, we arrive here via `ret` from
-    // `ke_context_switch` which was called inside the APIC timer ISR.
-    // At that point IF=0 (ISR has interrupts disabled).  We must re-enable
-    // interrupts so future timer ticks can preempt the idle `hlt` loop and
-    // switch us back to a runnable thread.
-    //
-    // On subsequent visits, `ke_context_switch` returns inside the timer ISR
-    // handler body, which eventually executes `iretq` to restore the saved
-    // RFLAGS (IF=1) and land back at the `hlt` below.  The `sti` here only
-    // matters for the very first invocation.
-    //
-    // The idle thread runs at PASSIVE_LEVEL, so that a tick preempts it at
-    // once: drop the DISPATCH_LEVEL of the dispatch that started it.
-    hal::irql::lower(hal::irql::Irql::Passive);
-    // No kernel lock is held: the switch stub has just landed on the idle stack.
+/// Le thread idle, à priorité 0, quand aucun autre n'est prêt. Sa première
+/// commutation l'amène ici verrou relâché, à DISPATCH_LEVEL, interruptions
+/// masquées.
+extern "C" fn idle_thread_main() -> ! {
     x86_64::instructions::interrupts::enable();
+    hal::irql::lower(Irql::Passive);
     loop {
         x86_64::instructions::hlt();
     }
 }
-
-// ── Tests ────────────────────────────────────────────────────────────────────
-// Run with: cargo test -p ke
-//
-// Tests cover:
-//   T1-2a: ReadyQueue FIFO semantics and wrap-around.
-//   T1-2b: SchedulerInner state transitions (no actual context switch needed).
-//   T1-2c: Round-robin: two threads alternate on successive pick_next calls.
-//   T1-2d: Idle thread always runs when queue is empty.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thread::ThreadState;
 
-    // ── Helper: build a minimal SchedulerInner for testing ───────────────────
-
-    fn make_scheduler_with_n_ready(n: usize) -> SchedulerInner {
-        let mut s = SchedulerInner::new();
-
-        // TID 0: boot/current (Running)
-        s.threads[0].used = true;
-        s.threads[0].state = ThreadState::Running;
-        s.threads[0].priority = 8;
-        s.current = 0;
-
-        // TID 1: idle (always available)
-        s.threads[1].used = true;
-        s.threads[1].state = ThreadState::Ready;
-        s.threads[1].priority = 0;
-        s.idle_tid = 1;
-
-        // TIDs 2..2+n: additional ready threads
-        for i in 0..n {
-            let tid = 2 + i;
-            s.threads[tid].used = true;
-            s.threads[tid].state = ThreadState::Ready;
-            s.threads[tid].priority = 4;
-            s.ready.push(tid);
-        }
-        s
-    }
-
-    // ── T1-2a: ReadyQueue ────────────────────────────────────────────────────
-
-    #[test]
-    fn ready_queue_new_is_empty() {
-        let q = ReadyQueue::new();
-        assert!(q.is_empty());
-        assert_eq!(q.len(), 0);
-    }
+    // ── ReadyQueue ───────────────────────────────────────────────────────────
 
     #[test]
     fn ready_queue_push_pop_fifo_order() {
         let mut q = ReadyQueue::new();
+        assert!(q.is_empty());
         q.push(10);
         q.push(20);
         q.push(30);
+        assert_eq!(q.len(), 3);
         assert_eq!(q.pop(), Some(10));
         assert_eq!(q.pop(), Some(20));
         assert_eq!(q.pop(), Some(30));
@@ -657,151 +762,166 @@ mod tests {
     }
 
     #[test]
-    fn ready_queue_len_tracks_items() {
+    fn ready_queue_wraps_around_and_refuses_overflow() {
         let mut q = ReadyQueue::new();
-        q.push(1);
-        q.push(2);
-        assert_eq!(q.len(), 2);
-        q.pop();
-        assert_eq!(q.len(), 1);
-        q.pop();
-        assert_eq!(q.len(), 0);
-    }
-
-    #[test]
-    fn ready_queue_wraps_around_correctly() {
-        let mut q = ReadyQueue::new();
-        // Fill to capacity
-        for i in 0..MAX_READY {
+        for i in 0..MAX_THREADS {
             assert!(q.push(i));
         }
         assert!(q.is_full());
-        assert!(!q.push(99), "push to full queue must return false");
-        // Drain half and refill — tests wrap-around
-        for _ in 0..(MAX_READY / 2) {
+        assert!(!q.push(99));
+        assert!(!q.push_front(99));
+        for _ in 0..MAX_THREADS / 2 {
             q.pop();
         }
-        for i in 0..(MAX_READY / 2) {
+        for i in 0..MAX_THREADS / 2 {
             assert!(q.push(100 + i));
         }
-        assert_eq!(q.len(), MAX_READY);
+        assert_eq!(q.len(), MAX_THREADS);
+        assert_eq!(q.pop(), Some(MAX_THREADS / 2));
     }
 
     #[test]
-    fn ready_queue_push_returns_false_when_full() {
+    fn ready_queue_push_front_goes_first() {
         let mut q = ReadyQueue::new();
-        for i in 0..MAX_READY {
-            q.push(i);
+        q.push(1);
+        q.push(2);
+        q.push_front(0);
+        assert_eq!([q.pop(), q.pop(), q.pop()], [Some(0), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn ready_queue_remove_keeps_the_order_of_the_others() {
+        let mut q = ReadyQueue::new();
+        for _ in 0..MAX_THREADS - 2 {
+            q.push(9);
+            q.pop();
         }
-        assert!(!q.push(999));
-    }
-
-    // ── T1-2b: SchedulerInner state transitions ───────────────────────────────
-
-    #[test]
-    fn alloc_tid_returns_sequential_slots() {
-        let mut s = SchedulerInner::new();
-        // First free slot is 0
-        let t0 = s.alloc_tid().expect("slot 0");
-        s.threads[t0].used = true;
-        let t1 = s.alloc_tid().expect("slot 1");
-        assert_eq!(t0, 0);
-        assert_eq!(t1, 1);
-    }
-
-    #[test]
-    fn alloc_tid_returns_none_when_table_full() {
-        let mut s = SchedulerInner::new();
-        for i in 0..MAX_THREADS {
-            s.threads[i].used = true;
+        for tid in 1..=5 {
+            q.push(tid);
         }
-        assert!(s.alloc_tid().is_none());
+        assert!(q.remove(3), "across the end of the ring");
+        assert!(q.remove(1));
+        assert!(q.remove(5));
+        assert!(!q.remove(5));
+        assert_eq!([q.pop(), q.pop(), q.pop()], [Some(2), Some(4), None]);
+    }
+
+    // ── Scheduler ────────────────────────────────────────────────────────────
+
+    /// Ordonnanceur avec le thread de démarrage (TID 0, priorité normale,
+    /// courant) et idle (TID 1).
+    fn scheduler() -> Box<Scheduler> {
+        let mut s = Box::new(Scheduler::new());
+        add(&mut s, NORMAL_PRIORITY);
+        s.idle = add(&mut s, IDLE_PRIORITY);
+        s.make_current(0);
+        s
+    }
+
+    /// Enregistre un thread de priorité `priority`, ni prêt ni courant.
+    fn add(s: &mut Scheduler, priority: u8) -> usize {
+        let t = Thread::create(priority, KContext::default(), false, 0, None);
+        // SAFETY: jamais libéré.
+        unsafe { s.register(t) }.expect("thread table")
+    }
+
+    fn state(s: &Scheduler, tid: usize) -> ThreadState {
+        // SAFETY: thread enregistré du test.
+        unsafe { (*s.thread(tid)).tcb.state }
     }
 
     #[test]
-    fn pick_next_moves_current_to_ready_if_running() {
-        let mut s = make_scheduler_with_n_ready(1); // TID 2 in queue
-                                                    // Current = TID 0 (Running), ready has TID 2
-        let result = s.pick_next();
-        assert!(result.is_some());
-        let (prev, next) = result.unwrap();
-        assert_eq!(prev, 0);
-        assert_eq!(next, 2);
-        // TID 0 should be back in ready (it was Running → Ready → enqueued)
-        assert_eq!(s.threads[0].state, ThreadState::Ready);
-        // TID 2 is now Running
-        assert_eq!(s.threads[2].state, ThreadState::Running);
-        assert_eq!(s.current, 2);
-    }
-
-    // ── T1-2c: Round-robin ────────────────────────────────────────────────────
-
-    #[test]
-    fn round_robin_two_threads_alternate() {
-        let mut s = make_scheduler_with_n_ready(2); // TIDs 2 and 3 in queue
-                                                    // Tick 1: switch 0 → 2
-        let (_, next1) = s.pick_next().expect("first switch");
-        assert_eq!(next1, 2);
-        // Tick 2: switch 2 → 3 (TID 0 re-enqueued from tick 1)
-        let (_, next2) = s.pick_next().expect("second switch");
-        assert_eq!(next2, 3);
-        // Tick 3: switch 3 → 0 (TIDs 0, 2 are in queue)
-        let (_, next3) = s.pick_next().expect("third switch");
-        assert_eq!(next3, 0);
+    fn a_higher_priority_thread_preempts_at_the_next_dispatch() {
+        let mut s = scheduler();
+        let high = add(&mut s, NORMAL_PRIORITY + 1);
+        assert!(s.ready(high, false), "preempts the current thread");
+        assert_eq!(s.dispatch(0), Some(high));
+        assert_eq!(s.current, high);
+        assert_eq!(state(&s, high), ThreadState::Running);
+        assert_eq!(state(&s, 0), ThreadState::Ready, "the preempted thread is queued");
     }
 
     #[test]
-    fn round_robin_preserves_fifo_order() {
-        let mut s = make_scheduler_with_n_ready(3); // TIDs 2, 3, 4
-        let mut seq = alloc::vec::Vec::new();
-        for _ in 0..4 {
-            if let Some((_, next)) = s.pick_next() {
-                seq.push(next);
-            }
+    fn an_equal_priority_thread_waits_for_the_end_of_the_quantum() {
+        let mut s = scheduler();
+        let peer = add(&mut s, NORMAL_PRIORITY);
+        assert!(!s.ready(peer, false));
+        assert_eq!(s.dispatch(1), None, "one tick of the quantum left");
+        assert_eq!(s.dispatch(1), Some(peer));
+        assert_eq!(s.dispatch(2), Some(0), "round robin");
+    }
+
+    #[test]
+    fn a_lower_priority_thread_waits_while_a_higher_one_runs() {
+        let mut s = scheduler();
+        let low = add(&mut s, NORMAL_PRIORITY - 1);
+        assert!(!s.ready(low, false));
+        assert_eq!(s.dispatch(QUANTUM_TICKS as u32 * 3), None, "quantum over, but no peer");
+        assert_eq!(s.current, 0);
+        assert_eq!(s.select_next(), low, "it runs once the current thread waits");
+    }
+
+    #[test]
+    fn a_preempted_thread_resumes_before_its_peers() {
+        let mut s = scheduler();
+        let peer = add(&mut s, NORMAL_PRIORITY);
+        let high = add(&mut s, NORMAL_PRIORITY + 1);
+        s.ready(peer, false);
+        s.ready(high, false);
+        assert_eq!(s.dispatch(0), Some(high));
+        assert_eq!(s.select_next(), 0, "back at the head of its queue, before its peer");
+        assert_eq!(s.select_next(), peer);
+    }
+
+    #[test]
+    fn a_thread_preempted_at_the_end_of_its_quantum_goes_after_its_peers() {
+        let mut s = scheduler();
+        let peer = add(&mut s, NORMAL_PRIORITY);
+        let high = add(&mut s, NORMAL_PRIORITY + 1);
+        s.ready(peer, false);
+        s.ready(high, false);
+        assert_eq!(s.dispatch(QUANTUM_TICKS as u32), Some(high));
+        assert_eq!(s.select_next(), peer);
+        assert_eq!(s.select_next(), 0);
+    }
+
+    #[test]
+    fn idle_runs_when_nothing_is_ready_and_is_never_queued() {
+        let mut s = scheduler();
+        assert_eq!(s.select_next(), s.idle, "the boot thread waits");
+        assert_eq!(s.dispatch(5), None, "idle keeps the processor");
+        assert_eq!(s.summary, 0);
+        assert!(s.ready(0, false), "any ready thread preempts idle");
+        assert_eq!(s.dispatch(0), Some(0));
+        assert_eq!(s.summary, 0, "idle was not queued");
+        assert_eq!(state(&s, 0), ThreadState::Running);
+    }
+
+    #[test]
+    fn unready_removes_a_thread_and_clears_its_priority() {
+        let mut s = scheduler();
+        let a = add(&mut s, 4);
+        let b = add(&mut s, 4);
+        s.ready(a, false);
+        s.ready(b, false);
+        s.unready(a);
+        assert_eq!(s.highest(), Some(4));
+        s.unready(b);
+        assert_eq!(s.highest(), None);
+        assert_eq!(s.select_next(), s.idle);
+    }
+
+    #[test]
+    fn register_fails_when_the_table_is_full() {
+        let mut s = scheduler();
+        for _ in 2..MAX_THREADS {
+            add(&mut s, 1);
         }
-        // Must visit 2, 3, 4 in insertion order before cycling back
-        assert_eq!(seq[0], 2);
-        assert_eq!(seq[1], 3);
-        assert_eq!(seq[2], 4);
-    }
-
-    // ── T1-2d: Idle thread fallback ──────────────────────────────────────────
-
-    #[test]
-    fn idle_thread_runs_when_queue_is_empty() {
-        let mut s = make_scheduler_with_n_ready(0); // no user threads, only idle
-        let result = s.pick_next();
-        assert!(result.is_some());
-        let (_, next) = result.unwrap();
-        assert_eq!(next, s.idle_tid, "must fall back to idle when queue empty");
-    }
-
-    #[test]
-    fn idle_thread_not_re_enqueued_into_ready_queue() {
-        let mut s = make_scheduler_with_n_ready(0);
-        s.current = s.idle_tid; // simulate idle is currently running
-        s.threads[s.idle_tid].state = ThreadState::Running;
-        // pick_next: idle is running, queue empty → no switch needed
-        let result = s.pick_next();
-        assert!(result.is_none(), "no switch needed when only idle is runnable");
-        // Idle must NOT appear in the ready queue
-        assert_eq!(s.ready.len(), 0);
-    }
-
-    #[test]
-    fn idle_thread_yields_to_newly_ready_thread() {
-        let mut s = make_scheduler_with_n_ready(0);
-        // Put idle as current
-        s.current = s.idle_tid;
-        s.threads[s.idle_tid].state = ThreadState::Running;
-        // A new thread becomes ready
-        s.threads[2].used = true;
-        s.threads[2].state = ThreadState::Ready;
-        s.ready.push(2);
-        // pick_next should switch idle → TID 2
-        let result = s.pick_next();
-        assert!(result.is_some());
-        let (_, next) = result.unwrap();
-        assert_eq!(next, 2);
+        let extra = Thread::create(1, KContext::default(), false, 0, None);
+        // SAFETY: refusé, donc libre ; libéré aussitôt.
+        unsafe {
+            assert!(s.register(extra).is_none());
+            drop(Box::from_raw(extra));
+        }
     }
 }
