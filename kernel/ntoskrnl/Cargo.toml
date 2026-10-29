@@ -18,6 +18,9 @@ trace-syscalls = []
 # Overflow the boot thread's kernel stack right after the switch to guarded
 # stacks: the boot must end on the STOP screen, not a triple fault (M0).
 test-stack-overflow = []
+# Two kernel threads exchange 10 000 round trips through two events, after
+# the boot self-tests (M1 exit criterion, scenario tests/boot/ke-events).
+test-ke-events = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 

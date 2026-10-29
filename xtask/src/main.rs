@@ -99,6 +99,9 @@ fn dispatch(mut args: Args) -> Result<()> {
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
+/// Every ntoskrnl feature, checked together by `lint`.
+const ALL_KERNEL_FEATURES: &str = "trace-syscalls,test-stack-overflow,test-ke-events,heartbeat";
+
 /// `cargo fmt --check`, then clippy with warnings denied: the host workspace,
 /// and the kernel and loader on their own targets (cfg(target_os = "none")
 /// code), the kernel with and without its features. `-D warnings` goes to
@@ -109,7 +112,7 @@ fn lint(ws: &Workspace) -> Result<()> {
     cargo(ws, &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?;
     let bare_metal: [&[&str]; 3] = [
         &["-p", "ntoskrnl", "--target", KERNEL_TARGET],
-        &["-p", "ntoskrnl", "--target", KERNEL_TARGET, "--features", "trace-syscalls,test-stack-overflow,heartbeat"],
+        &["-p", "ntoskrnl", "--target", KERNEL_TARGET, "--features", ALL_KERNEL_FEATURES],
         &["-p", "mino-loader", "--target", LOADER_TARGET],
     ];
     for target_args in bare_metal {

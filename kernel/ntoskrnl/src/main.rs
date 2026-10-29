@@ -358,6 +358,10 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     deferred_preemption_self_test();
     dpc_self_test();
     ke_self_test();
+    if cfg!(feature = "test-ke-events") {
+        event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
+        event_ping_pong_test(ke::sched::NORMAL_PRIORITY + 1, "pinger above ponger");
+    }
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
@@ -704,6 +708,108 @@ fn ke_self_test() {
     assert_eq!(wait(header, 30), STATUS_TIMEOUT);
     assert!(hal::timer::interrupt_time() - start >= 30 * MS as u64, "timed out too early");
     log::info!("[smoke] Ke: priority preemption, event wait, delay, thread end and timeout ok");
+}
+
+/// M1 exit criterion (05): two kernel threads exchange 10 000 round trips
+/// through two synchronization events, without a loss or a hang. The ponger
+/// runs at normal priority, the pinger at `pinger_priority`: above it, each
+/// round trip preempts the ponger. A lost wake-up leaves both threads waiting,
+/// which the boot thread's timeout reports. Called only with the
+/// `test-ke-events` feature (scenario `tests/boot/ke-events`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn event_ping_pong_test(pinger_priority: u8, label: &str) {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicU32, Ordering};
+    use ke::dispatcher::{
+        ke_initialize_event, ke_set_event, ke_wait_for_multiple_objects, ke_wait_for_single_object, KEvent, ObjectType,
+        ProcessorMode, WaitBlock, WaitType,
+    };
+    use ke::sched::KePlatform;
+
+    const ROUND_TRIPS: u32 = 10_000;
+    struct PingPong {
+        ping: KEvent,
+        pong: KEvent,
+        pings: AtomicU32,
+        pongs: AtomicU32,
+    }
+    /// Waits on `event`, then sets `answer`, `ROUND_TRIPS` times (or the other
+    /// way round), counting in `count`.
+    ///
+    /// # Safety
+    /// On a scheduler thread; both events are initialised and never freed.
+    unsafe fn exchange(wait_first: bool, event: *mut KEvent, answer: *mut KEvent, count: &AtomicU32) {
+        for _ in 0..ROUND_TRIPS {
+            // SAFETY: guaranteed by the caller.
+            unsafe {
+                if !wait_first {
+                    ke_set_event::<KePlatform>(answer);
+                }
+                let header = core::ptr::addr_of_mut!((*event).header);
+                let status = ke_wait_for_single_object::<KePlatform>(header, ProcessorMode::Kernel, false, None);
+                assert_eq!(status, STATUS_WAIT_0);
+                count.fetch_add(1, Ordering::Relaxed);
+                if wait_first {
+                    ke_set_event::<KePlatform>(answer);
+                }
+            }
+        }
+    }
+    fn ponger(pp: *mut c_void) {
+        let pp = pp.cast::<PingPong>();
+        // SAFETY: on its own thread; `pp` is never freed.
+        unsafe {
+            exchange(true, core::ptr::addr_of_mut!((*pp).ping), core::ptr::addr_of_mut!((*pp).pong), &(*pp).pongs)
+        };
+    }
+    fn pinger(pp: *mut c_void) {
+        let pp = pp.cast::<PingPong>();
+        // SAFETY: as above.
+        unsafe {
+            exchange(false, core::ptr::addr_of_mut!((*pp).pong), core::ptr::addr_of_mut!((*pp).ping), &(*pp).pings)
+        };
+    }
+
+    let pp = alloc::boxed::Box::into_raw(alloc::boxed::Box::<PingPong>::new_uninit()).cast::<PingPong>();
+    // SAFETY: fresh memory at a fixed address, never freed; each field is
+    // written in place.
+    unsafe {
+        ke_initialize_event(core::ptr::addr_of_mut!((*pp).ping), ObjectType::SynchronizationEvent, false);
+        ke_initialize_event(core::ptr::addr_of_mut!((*pp).pong), ObjectType::SynchronizationEvent, false);
+        core::ptr::addr_of_mut!((*pp).pings).write(AtomicU32::new(0));
+        core::ptr::addr_of_mut!((*pp).pongs).write(AtomicU32::new(0));
+    }
+    let switches = ke::sched::context_switches();
+    let start = hal::timer::interrupt_time();
+    let ponger = spawn_kernel_thread(ke::sched::NORMAL_PRIORITY, ponger, pp.cast());
+    let pinger = spawn_kernel_thread(pinger_priority, pinger, pp.cast());
+    let threads = [ponger, pinger].map(|tid| ke::sched::thread_object(tid).expect("thread object"));
+    let mut blocks = [const { WaitBlock::new() }; 2];
+    // SAFETY: on the boot thread; the thread objects are never freed.
+    let status = unsafe {
+        ke_wait_for_multiple_objects::<KePlatform>(
+            &threads,
+            WaitType::WaitAll,
+            ProcessorMode::Kernel,
+            false,
+            Some(-30 * 1000 * 10_000),
+            Some(&mut blocks),
+        )
+    };
+    // SAFETY: `pp` is never freed.
+    let (pings, pongs) = unsafe { ((*pp).pings.load(Ordering::Relaxed), (*pp).pongs.load(Ordering::Relaxed)) };
+    assert_eq!(status, STATUS_WAIT_0, "ping-pong hung ({label}): {pings} pings, {pongs} pongs answered");
+    assert_eq!((pings, pongs), (ROUND_TRIPS, ROUND_TRIPS));
+    log::info!(
+        "[ke-events] {}: {} round trips in {} ms, {} context switches",
+        label,
+        ROUND_TRIPS,
+        (hal::timer::interrupt_time() - start) / 10_000,
+        ke::sched::context_switches() - switches,
+    );
 }
 
 /// Kernel-stack guard-page lookup for the fault handlers (`hal::idt`).

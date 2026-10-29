@@ -1,0 +1,13 @@
+# Event ping-pong (M1 exit criterion, 05): two kernel threads exchange 10 000
+# round trips through two synchronization events, once at equal priorities and
+# once with the pinger above the ponger (a preemption at each round trip),
+# without a lost wake-up or a hang.
+features = test-ke-events
+cpus     = default, intel
+timeout  = 120
+
+expect = [ke-events] equal priorities: 10000 round trips
+expect = [ke-events] pinger above ponger: 10000 round trips
+
+forbid = KERNEL PANIC
+forbid = *** STOP:
