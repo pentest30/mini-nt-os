@@ -11,11 +11,13 @@
 //! - [`IrqLock`]: held with interrupts disabled. For data an ISR touches too
 //!   (serial port, console, scheduler state).
 //!
-//! `spin::Mutex` is not allowed in the kernel.
+//! `spin::Mutex` is not allowed in the kernel, and `spin` itself is for tools
+//! only (ADR-016): [`Once`] covers one-time initialisation.
 
 use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use crate::irql::{self, Irql};
 
@@ -164,9 +166,82 @@ fn without_interrupts<R>(f: impl FnOnce() -> R) -> R {
     }
 }
 
+/// One-time initialisation, for statics built at boot (GDT, IDT, System
+/// process).
+pub struct Once<T> {
+    state: AtomicU8,
+    value: UnsafeCell<MaybeUninit<T>>,
+}
+
+const INCOMPLETE: u8 = 0;
+const RUNNING: u8 = 1;
+const COMPLETE: u8 = 2;
+
+// SAFETY: the value is written once, before COMPLETE is published, and only
+// shared (&T) afterwards.
+unsafe impl<T: Send + Sync> Sync for Once<T> {}
+
+impl<T> Default for Once<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Once<T> {
+    pub const fn new() -> Self {
+        Self { state: AtomicU8::new(INCOMPLETE), value: UnsafeCell::new(MaybeUninit::uninit()) }
+    }
+
+    /// Runs `init` on the first call, then returns the value; later calls
+    /// (and concurrent ones, which wait) return the same value.
+    ///
+    /// # IRQL
+    /// Any level; `init` decides what it may do.
+    pub fn call_once(&self, init: impl FnOnce() -> T) -> &T {
+        if self.state.compare_exchange(INCOMPLETE, RUNNING, Ordering::Acquire, Ordering::Acquire).is_ok() {
+            // SAFETY: RUNNING is ours alone: nobody reads the value before COMPLETE.
+            unsafe { (*self.value.get()).write(init()) };
+            self.state.store(COMPLETE, Ordering::Release);
+        } else {
+            while self.state.load(Ordering::Acquire) != COMPLETE {
+                core::hint::spin_loop();
+            }
+        }
+        // SAFETY: COMPLETE: the value is initialised and never written again.
+        unsafe { (*self.value.get()).assume_init_ref() }
+    }
+
+    /// The value, once initialised.
+    ///
+    /// # IRQL
+    /// Any level.
+    pub fn get(&self) -> Option<&T> {
+        // SAFETY: COMPLETE: the value is initialised and never written again.
+        (self.state.load(Ordering::Acquire) == COMPLETE).then(|| unsafe { (*self.value.get()).assume_init_ref() })
+    }
+}
+
+impl<T> Drop for Once<T> {
+    fn drop(&mut self) {
+        if *self.state.get_mut() == COMPLETE {
+            // SAFETY: initialised, and dropped once.
+            unsafe { self.value.get_mut().assume_init_drop() };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn once_initialises_on_the_first_call_only() {
+        let once = Once::new();
+        assert!(once.get().is_none());
+        assert_eq!(*once.call_once(|| 7), 7);
+        assert_eq!(*once.call_once(|| unreachable!("already initialised")), 7);
+        assert_eq!(once.get(), Some(&7));
+    }
 
     #[test]
     fn kspinlock_guard_derefs_and_releases_on_drop() {

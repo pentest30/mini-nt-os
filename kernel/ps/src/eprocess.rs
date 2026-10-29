@@ -52,7 +52,7 @@ fn alloc_pid() -> ProcessId {
 }
 
 /// The System process (PID 4) — created at boot.
-static SYSTEM_PROCESS: spin::Once<Arc<EProcess>> = spin::Once::new();
+static SYSTEM_PROCESS: hal::sync::Once<Arc<EProcess>> = hal::sync::Once::new();
 
 pub fn init_system_process() {
     SYSTEM_PROCESS.call_once(|| EProcess::new(4, "System"));

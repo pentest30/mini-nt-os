@@ -17,10 +17,10 @@
 //!
 //! WI7e Ch.3 "Trap Dispatching", Ch.2 "System Service Dispatching"
 
+use crate::sync::Once;
 #[cfg(target_os = "none")]
 use core::arch::global_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use spin::Once;
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;

@@ -15,6 +15,5 @@ heartbeat = []
 abi        = { path = "../../abi" }
 x86_64     = { workspace = true }
 uart_16550 = { workspace = true }
-spin       = { workspace = true }
 bitflags   = { workspace = true }
 log        = { workspace = true }
