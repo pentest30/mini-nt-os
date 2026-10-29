@@ -37,7 +37,7 @@ puis on y lance des applications et des jeux 32 bits de l'ère XP (2001–2008) 
 | [05 — Feuille de route](docs/05-feuille-de-route.md) | Jalons M0 à M10 et critères de sortie |
 | [06 — Conventions](docs/06-conventions.md) | Règles de développement (hygiène juridique, `unsafe`, IRQL, tests, Git) |
 
-**Jalon en cours : M0 — Assainir.** Le code actuel suit encore l'ancienne architecture (Win32 réimplémenté dans le noyau) ;
+**Jalon en cours : M1 — Noyau Ke** (M0 est terminé). Le code actuel suit encore l'ancienne architecture (Win32 réimplémenté dans le noyau) ;
 sa migration est décrite dans l'audit.
 
 ## Démarrage rapide

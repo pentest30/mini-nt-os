@@ -44,8 +44,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
-- **Jalon courant : M0 — Assainir** ([05](docs/05-feuille-de-route.md#m0--assainir)), en commençant par les corrections
-  immédiates de l'[audit §7](docs/04-audit-reutilisation.md#7-corrections-à-faire-tout-de-suite-avant-le-jalon-m0).
+- **Jalon courant : M1 — Noyau Ke** ([05](docs/05-feuille-de-route.md#m1--noyau-ke)). M0 est terminé. Le dispatcher
+  (`kernel/ke/src/dispatcher.rs`, ADR-005) est intégré avec ses tests hôte ; reste à le brancher sur un ordonnanceur
+  préemptif sous `DISPATCH_LEVEL` (IRQL par le TPR, DPC, `KSpinLock`), puis FPU/SSE, `KPRCB` et écran d'erreur symbolisé.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
