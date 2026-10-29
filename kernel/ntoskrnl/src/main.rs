@@ -363,6 +363,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     deferred_preemption_self_test();
     dpc_self_test();
     ke_self_test();
+    boost_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -755,7 +756,7 @@ fn ke_self_test() {
     use core::sync::atomic::{AtomicBool, Ordering};
     use ke::dispatcher::{
         ke_delay_execution_thread, ke_initialize_event, ke_set_event, ke_wait_for_single_object, DispatcherHeader,
-        KEvent, ObjectType, ProcessorMode,
+        KEvent, ObjectType, ProcessorMode, EVENT_INCREMENT,
     };
     use ke::sched::KePlatform;
 
@@ -767,7 +768,7 @@ fn ke_self_test() {
         unsafe {
             let delay = ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -20 * MS);
             assert_eq!(delay, STATUS_SUCCESS);
-            ke_set_event::<KePlatform>(event.cast());
+            ke_set_event::<KePlatform>(event.cast(), EVENT_INCREMENT);
         }
     }
     let wait = |object: *mut DispatcherHeader, timeout_ms: i64| {
@@ -782,7 +783,8 @@ fn ke_self_test() {
         core::ptr::addr_of_mut!((*event).header)
     };
     let start = hal::timer::interrupt_time();
-    let tid = spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, signaler, event.cast());
+    // Above the boot thread, boost included.
+    let tid = spawn_kernel_thread(ke::sched::current_priority() + 1, signaler, event.cast());
     assert!(STARTED.load(Ordering::Relaxed), "a higher-priority thread did not preempt its creator");
     assert_eq!(wait(header, 1000), STATUS_WAIT_0, "event not set");
     let waited = hal::timer::interrupt_time() - start;
@@ -794,6 +796,79 @@ fn ke_self_test() {
     assert_eq!(wait(header, 30), STATUS_TIMEOUT);
     assert!(hal::timer::interrupt_time() - start >= 30 * MS as u64, "timed out too early");
     log::info!("[smoke] Ke: priority preemption, event wait, delay, thread end and timeout ok");
+}
+
+/// Checks wait boosts (M1, `ke::sched`): a thread of base priority 7, woken
+/// through an event with the increment that lifts it one level above the boot
+/// thread (itself at 8, or above while a boost of its own lasts), preempts it
+/// before `ke_set_event` returns; one quantum later, its boost has decayed by
+/// one level, to the boot thread's priority, and the boot thread gets the
+/// processor back while the woken thread still spins.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn boost_self_test() {
+    use abi::ntstatus::{STATUS_SUCCESS, STATUS_WAIT_0};
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+    use ke::dispatcher::{
+        ke_delay_execution_thread, ke_initialize_event, ke_set_event, ke_wait_for_single_object, KEvent, ObjectType,
+        ProcessorMode,
+    };
+    use ke::sched::{KePlatform, LOW_REALTIME_PRIORITY, NORMAL_PRIORITY};
+
+    const MS: i64 = 10_000;
+    static WOKEN_AT: AtomicU8 = AtomicU8::new(0);
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+    fn sleeper(event: *mut c_void) {
+        let event = event.cast::<KEvent>();
+        // SAFETY: on a scheduler thread; the event is never freed.
+        let status = unsafe {
+            ke_wait_for_single_object::<KePlatform>(
+                core::ptr::addr_of_mut!((*event).header),
+                ProcessorMode::Kernel,
+                false,
+                None,
+            )
+        };
+        assert_eq!(status, STATUS_WAIT_0);
+        WOKEN_AT.store(ke::sched::current_priority(), Ordering::Relaxed);
+        while !RELEASE.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+
+    let event = alloc::boxed::Box::into_raw(alloc::boxed::Box::<KEvent>::new_uninit()).cast::<KEvent>();
+    // SAFETY: fresh memory at a fixed address, never freed.
+    unsafe { ke_initialize_event(event, ObjectType::SynchronizationEvent, false) };
+    let tid = spawn_kernel_thread(NORMAL_PRIORITY - 1, sleeper, event.cast());
+    // Below the boot thread, the sleeper runs, and starts waiting, only while
+    // the boot thread waits.
+    // SAFETY: on the boot thread.
+    let delay = unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    assert_eq!(delay, STATUS_SUCCESS);
+    assert_eq!(WOKEN_AT.load(Ordering::Relaxed), 0, "the sleeper did not wait");
+    let waker = ke::sched::current_priority();
+    assert!((NORMAL_PRIORITY..LOW_REALTIME_PRIORITY - 1).contains(&waker), "boot thread at {waker}");
+    // SAFETY: the event is initialised and never freed.
+    unsafe { ke_set_event::<KePlatform>(event, waker + 1 - (NORMAL_PRIORITY - 1)) };
+    assert_eq!(
+        WOKEN_AT.load(Ordering::Relaxed),
+        waker + 1,
+        "the woken thread did not run boosted before its waker resumed"
+    );
+    assert_eq!(
+        ke::sched::thread_priority(tid),
+        Some(waker),
+        "the boost did not decay by one level at the end of the quantum"
+    );
+    RELEASE.store(true, Ordering::Release);
+    let thread = ke::sched::thread_object(tid).expect("thread object");
+    // SAFETY: on the boot thread; the thread object is never freed.
+    let end =
+        unsafe { ke_wait_for_single_object::<KePlatform>(thread, ProcessorMode::Kernel, false, Some(-1000 * MS)) };
+    assert_eq!(end, STATUS_WAIT_0, "the woken thread did not end");
+    log::info!("[smoke] Ke: wait boost preempts the waker, then decays one level per quantum");
 }
 
 /// Checks that the FPU state follows each thread (ADR-009): the boot thread's
@@ -815,8 +890,9 @@ fn fpu_self_test() {
     }
     let kept = ke::fpu::with_floating_point(|| {
         hal::fpu::set_control_words(FCW, MXCSR);
-        // Higher priority: it runs, and ends, before this returns.
-        spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, probe, core::ptr::null_mut());
+        // Above the boot thread, boost included: it runs, and ends, before
+        // this returns.
+        spawn_kernel_thread(ke::sched::current_priority() + 1, probe, core::ptr::null_mut());
         hal::fpu::control_words()
     });
     assert_eq!(kept, (FCW, MXCSR), "the boot thread's FPU state was lost across a switch");
@@ -835,10 +911,11 @@ fn fpu_self_test() {
 
 /// M1 exit criterion (05): two kernel threads exchange 10 000 round trips
 /// through two synchronization events, without a loss or a hang. The ponger
-/// runs at normal priority, the pinger at `pinger_priority`: above it, each
-/// round trip preempts the ponger. A lost wake-up leaves both threads waiting,
-/// which the boot thread's timeout reports. Called only with the
-/// `test-ke-events` feature (scenario `tests/boot/ke-events`).
+/// runs at normal priority, the pinger at `pinger_priority`. Each wake carries
+/// `EVENT_INCREMENT`: a woken thread whose boosted priority exceeds its
+/// waker's preempts it. A lost wake-up leaves both threads waiting, which the
+/// boot thread's timeout reports. Called only with the `test-ke-events`
+/// feature (scenario `tests/boot/ke-events`).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interrupts enabled.
@@ -848,7 +925,7 @@ fn event_ping_pong_test(pinger_priority: u8, label: &str) {
     use core::sync::atomic::{AtomicU32, Ordering};
     use ke::dispatcher::{
         ke_initialize_event, ke_set_event, ke_wait_for_multiple_objects, ke_wait_for_single_object, KEvent, ObjectType,
-        ProcessorMode, WaitBlock, WaitType,
+        ProcessorMode, WaitBlock, WaitType, EVENT_INCREMENT,
     };
     use ke::sched::KePlatform;
 
@@ -869,14 +946,14 @@ fn event_ping_pong_test(pinger_priority: u8, label: &str) {
             // SAFETY: guaranteed by the caller.
             unsafe {
                 if !wait_first {
-                    ke_set_event::<KePlatform>(answer);
+                    ke_set_event::<KePlatform>(answer, EVENT_INCREMENT);
                 }
                 let header = core::ptr::addr_of_mut!((*event).header);
                 let status = ke_wait_for_single_object::<KePlatform>(header, ProcessorMode::Kernel, false, None);
                 assert_eq!(status, STATUS_WAIT_0);
                 count.fetch_add(1, Ordering::Relaxed);
                 if wait_first {
-                    ke_set_event::<KePlatform>(answer);
+                    ke_set_event::<KePlatform>(answer, EVENT_INCREMENT);
                 }
             }
         }

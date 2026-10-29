@@ -32,7 +32,8 @@ std::thread_local! {
     static CURRENT: Cell<*mut KThread> = const { Cell::new(ptr::null_mut()) };
     static IRQL: Cell<Irql> = const { Cell::new(Irql::Passive) };
     static ACTIONS: RefCell<VecDeque<Action>> = RefCell::new(VecDeque::new());
-    static READIED: RefCell<Vec<*mut KThread>> = const { RefCell::new(Vec::new()) };
+    /// Threads rendus prêts, avec le relèvement de leur réveil.
+    static READIED: RefCell<Vec<(*mut KThread, u8)>> = const { RefCell::new(Vec::new()) };
     static TABLE: Cell<*const TimerTable> = const { Cell::new(ptr::null()) };
 }
 
@@ -43,8 +44,8 @@ unsafe impl Platform for Sim {
         CURRENT.get()
     }
 
-    unsafe fn ready_thread(thread: *mut KThread) {
-        READIED.with_borrow_mut(|r| r.push(thread));
+    unsafe fn ready_thread(thread: *mut KThread, increment: u8) {
+        READIED.with_borrow_mut(|r| r.push((thread, increment)));
     }
 
     unsafe fn swap_thread(old_irql: Irql) -> NtStatus {
@@ -198,7 +199,17 @@ fn wait_many(objects: &[*mut DispatcherHeader], wait_type: WaitType) -> NtStatus
 
 fn set(e: *mut KEvent) {
     // SAFETY: événement initialisé.
-    unsafe { ke_set_event::<Sim>(e) };
+    unsafe { ke_set_event::<Sim>(e, EVENT_INCREMENT) };
+}
+
+/// Les threads rendus prêts, dans l'ordre.
+fn readied() -> Vec<*mut KThread> {
+    READIED.with_borrow(|r| r.iter().map(|&(t, _)| t).collect())
+}
+
+/// Le relèvement de chaque réveil, dans l'ordre.
+fn increments() -> Vec<u8> {
+    READIED.with_borrow(|r| r.iter().map(|&(_, increment)| increment).collect())
 }
 
 fn signal_state<T>(obj: *mut T) -> i32 {
@@ -231,7 +242,7 @@ fn wait_any_blocks_until_one_object_is_signaled() {
     then(move || set(e1));
     assert_eq!(wait_many(&[hdr(e0), hdr(e1)], WaitType::WaitAny), NtStatus::wait(1));
     assert!(no_waiter(hdr(e0)) && no_waiter(hdr(e1)), "every wait block is unlinked");
-    assert_eq!(READIED.with_borrow(Vec::clone), [t]);
+    assert_eq!(readied(), [t]);
     finish();
 }
 
@@ -289,7 +300,7 @@ fn notification_event_wakes_every_waiter() {
         assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0);
     });
     assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0);
-    assert_eq!(READIED.with_borrow(Vec::clone), [a, b], "woken in wait order");
+    assert_eq!(readied(), [a, b], "woken in wait order");
     assert_eq!(signal_state(e), 1, "a notification event stays signaled");
     finish();
 }
@@ -319,7 +330,7 @@ fn pulse_event_wakes_the_current_waiters_and_leaves_it_reset() {
     setup();
     let e = event(ObjectType::NotificationEvent, false);
     // SAFETY: événement initialisé.
-    then(move || assert_eq!(unsafe { ke_pulse_event::<Sim>(e) }, 0));
+    then(move || assert_eq!(unsafe { ke_pulse_event::<Sim>(e, EVENT_INCREMENT) }, 0));
     assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0);
     assert_eq!(signal_state(e), 0);
     finish();
@@ -333,7 +344,7 @@ fn semaphore_release_wakes_as_many_waiters_as_its_adjustment() {
     then(move || {
         run_as(b);
         // SAFETY: sémaphore initialisé.
-        then(move || assert_eq!(unsafe { ke_release_semaphore::<Sim>(s, 2) }, Ok(0)));
+        then(move || assert_eq!(unsafe { ke_release_semaphore::<Sim>(s, SEMAPHORE_INCREMENT, 2) }, Ok(0)));
         assert_eq!(wait_one(hdr(s), None), STATUS_WAIT_0);
     });
     assert_eq!(wait_one(hdr(s), None), STATUS_WAIT_0);
@@ -347,10 +358,10 @@ fn semaphore_release_beyond_its_limit_fails() {
     let s = semaphore(1, 2);
     // SAFETY: sémaphore initialisé.
     unsafe {
-        assert_eq!(ke_release_semaphore::<Sim>(s, 2), Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED));
-        assert_eq!(ke_release_semaphore::<Sim>(s, 0), Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED));
-        assert_eq!(ke_release_semaphore::<Sim>(s, i32::MAX), Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED));
-        assert_eq!(ke_release_semaphore::<Sim>(s, 1), Ok(1));
+        assert_eq!(ke_release_semaphore::<Sim>(s, SEMAPHORE_INCREMENT, 2), Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED));
+        assert_eq!(ke_release_semaphore::<Sim>(s, SEMAPHORE_INCREMENT, 0), Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED));
+        assert_eq!(ke_release_semaphore::<Sim>(s, SEMAPHORE_INCREMENT, i32::MAX), Err(STATUS_SEMAPHORE_LIMIT_EXCEEDED));
+        assert_eq!(ke_release_semaphore::<Sim>(s, SEMAPHORE_INCREMENT, 1), Ok(1));
     }
     assert_eq!(signal_state(s), 2);
     finish();
@@ -368,12 +379,12 @@ fn mutant_is_recursive_for_its_owner() {
     // SAFETY: mutant et thread initialisés.
     unsafe {
         assert_eq!((*m).owner_thread, t);
-        assert_eq!(ke_release_mutant::<Sim>(m, false), Ok(-1));
+        assert_eq!(ke_release_mutant::<Sim>(m, MUTANT_INCREMENT, false), Ok(-1));
         assert_eq!((*m).owner_thread, t, "still owned after one release of two");
-        assert_eq!(ke_release_mutant::<Sim>(m, false), Ok(0));
+        assert_eq!(ke_release_mutant::<Sim>(m, MUTANT_INCREMENT, false), Ok(0));
         assert!((*m).owner_thread.is_null());
         assert!(ListEntry::is_empty(ptr::addr_of!((*t).mutant_list_head)));
-        assert_eq!(ke_release_mutant::<Sim>(m, false), Err(STATUS_MUTANT_NOT_OWNED));
+        assert_eq!(ke_release_mutant::<Sim>(m, MUTANT_INCREMENT, false), Err(STATUS_MUTANT_NOT_OWNED));
     }
     assert_eq!(signal_state(m), 1);
     finish();
@@ -386,7 +397,7 @@ fn mutant_released_by_another_thread_is_not_owned() {
     assert_eq!(wait_one(hdr(m), None), STATUS_WAIT_0);
     run_as(new_thread());
     // SAFETY: mutant initialisé.
-    assert_eq!(unsafe { ke_release_mutant::<Sim>(m, false) }, Err(STATUS_MUTANT_NOT_OWNED));
+    assert_eq!(unsafe { ke_release_mutant::<Sim>(m, MUTANT_INCREMENT, false) }, Err(STATUS_MUTANT_NOT_OWNED));
     finish();
 }
 
@@ -402,7 +413,7 @@ fn abandoned_mutant_goes_to_the_next_waiter_as_abandoned() {
         // L'owner se termine en le possédant encore.
         run_as(owner);
         // SAFETY: mutant initialisé.
-        assert_eq!(unsafe { ke_release_mutant::<Sim>(m, true) }, Ok(-1));
+        assert_eq!(unsafe { ke_release_mutant::<Sim>(m, MUTANT_INCREMENT, true) }, Ok(-1));
     });
     assert_eq!(wait_one(hdr(m), None), STATUS_ABANDONED_WAIT_0);
     // SAFETY: objets du test initialisés.
@@ -610,7 +621,7 @@ fn a_zero_or_past_delay_returns_at_once() {
 fn an_alertable_user_mode_delay_ends_on_a_user_apc() {
     let t = setup();
     // SAFETY: verrou tenu par `locked` ; thread initialisé.
-    then(move || locked(|| unsafe { ki_try_unwait_for_user_apc::<Sim>(t) }));
+    then(move || locked(|| unsafe { ki_try_unwait_for_user_apc::<Sim>(t, IO_NO_INCREMENT) }));
     assert_eq!(delay(ProcessorMode::User, true, -10_000), STATUS_USER_APC);
     assert!(table().is_empty(), "its timer is cancelled");
     finish();
@@ -669,7 +680,7 @@ fn user_apc_ends_an_alertable_user_mode_wait() {
     let t = setup();
     let e = event(ObjectType::NotificationEvent, false);
     // SAFETY: verrou tenu par `locked`.
-    then(move || locked(|| unsafe { ki_try_unwait_for_user_apc::<Sim>(t) }));
+    then(move || locked(|| unsafe { ki_try_unwait_for_user_apc::<Sim>(t, IO_NO_INCREMENT) }));
     assert_eq!(alertable_user_wait(hdr(e)), STATUS_USER_APC);
     assert!(no_waiter(hdr(e)));
     finish();
@@ -691,7 +702,7 @@ fn user_apc_leaves_non_alertable_and_kernel_mode_waits_alone() {
     let e = event(ObjectType::SynchronizationEvent, false);
     let deliver_then_signal = move || {
         // SAFETY: verrou tenu par `locked`.
-        locked(|| unsafe { ki_try_unwait_for_user_apc::<Sim>(t) });
+        locked(|| unsafe { ki_try_unwait_for_user_apc::<Sim>(t, IO_NO_INCREMENT) });
         assert_eq!(state(t), ThreadState::Waiting, "the APC does not end this wait");
         set(e);
     };
@@ -711,10 +722,65 @@ fn kernel_apc_interrupts_the_wait_which_then_resumes() {
     let t = setup();
     let e = event(ObjectType::SynchronizationEvent, false);
     // SAFETY: verrou tenu par `locked`.
-    then(move || locked(|| unsafe { ki_unwait_for_kernel_apc::<Sim>(t) }));
+    then(move || locked(|| unsafe { ki_unwait_for_kernel_apc::<Sim>(t, IO_NO_INCREMENT) }));
     then(move || set(e));
     assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0, "the wait resumes after the APC");
     assert_eq!(signal_state(e), 0);
-    assert_eq!(READIED.with_borrow(Vec::len), 2, "woken for the APC, then by the event");
+    assert_eq!(readied().len(), 2, "woken for the APC, then by the event");
+    finish();
+}
+
+// ── Relèvements de priorité ──────────────────────────────────────────────────
+
+#[test]
+fn each_wake_carries_the_increment_of_what_woke_the_thread() {
+    let t = setup();
+    let e = event(ObjectType::SynchronizationEvent, false);
+    let s = semaphore(0, 1);
+    let m = mutant();
+    let owner = new_thread();
+    // SAFETY (chaque action) : objets du test initialisés ; verrou tenu par
+    // `locked` là où il le faut.
+    then(move || unsafe {
+        ke_set_event::<Sim>(e, 3);
+    });
+    assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0);
+    then(move || unsafe {
+        ke_pulse_event::<Sim>(e, 4);
+    });
+    assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0);
+    then(move || assert_eq!(unsafe { ke_release_semaphore::<Sim>(s, 5, 1) }, Ok(0)));
+    assert_eq!(wait_one(hdr(s), None), STATUS_WAIT_0);
+    run_as(owner);
+    assert_eq!(wait_one(hdr(m), None), STATUS_WAIT_0);
+    run_as(t);
+    then(move || {
+        run_as(owner);
+        assert_eq!(unsafe { ke_release_mutant::<Sim>(m, 6, false) }, Ok(0));
+    });
+    assert_eq!(wait_one(hdr(m), None), STATUS_WAIT_0);
+    then(move || locked(|| unsafe { ki_unwait_for_kernel_apc::<Sim>(t, 7) }));
+    then(move || expire_at(NOW + 10_000));
+    assert_eq!(wait_one(hdr(e), Some(-10_000)), STATUS_TIMEOUT);
+    assert_eq!(increments(), [3, 4, 5, 6, 7, IO_NO_INCREMENT], "a timeout raises nothing");
+    finish();
+}
+
+#[test]
+fn a_thread_end_wakes_its_waiters_unraised_and_its_mutants_next_owners_raised() {
+    let waiter = setup();
+    let owner = new_thread();
+    let m = mutant();
+    run_as(owner);
+    assert_eq!(wait_one(hdr(m), None), STATUS_WAIT_0);
+    run_as(waiter);
+    then(move || exit_thread(owner));
+    assert_eq!(wait_one(hdr(m), None), STATUS_ABANDONED_WAIT_0);
+    let other = new_thread();
+    let ended = new_thread();
+    run_as(other);
+    then(move || exit_thread(ended));
+    assert_eq!(wait_one(hdr(ended), None), STATUS_WAIT_0);
+    assert_eq!(increments(), [MUTANT_INCREMENT, IO_NO_INCREMENT]);
     finish();
 }

@@ -9,6 +9,9 @@
 //! - Le signaleur consomme l'objet *au nom* du thread réveillé (KiWaitTest). Le thread
 //!   réveillé ne revérifie rien : son `wait_status` est déjà le résultat final.
 //! - Le timeout est un 4e wait block (WaitAny) pointant sur le KTIMER du thread.
+//! - Chaque réveil porte un relèvement de priorité (`increment`, par exemple
+//!   [`EVENT_INCREMENT`]), que l'ordonnanceur applique au thread réveillé
+//!   (`Platform::ready_thread`, `ke::sched`).
 //!
 //! Seules les structures visibles en user mode (TEB, PEB, KUSER_SHARED_DATA) doivent
 //! respecter le layout XP. DispatcherHeader et WaitBlock reprennent ici le layout x86
@@ -29,6 +32,18 @@ use hal::irql::Irql;
 use crate::dpc::KDpc;
 
 pub const THREAD_WAIT_OBJECTS: usize = 3;
+
+// Relèvements de priorité d'un thread réveillé, selon ce qui le réveille :
+// noms et valeurs de l'interface noyau XP.
+
+/// Aucun relèvement.
+pub const IO_NO_INCREMENT: u8 = 0;
+/// Un événement signalé.
+pub const EVENT_INCREMENT: u8 = 1;
+/// Un sémaphore libéré.
+pub const SEMAPHORE_INCREMENT: u8 = 1;
+/// Un mutant libéré ou abandonné.
+pub const MUTANT_INCREMENT: u8 = 1;
 pub const TIMER_WAIT_BLOCK: usize = 3;
 pub const MAXIMUM_WAIT_OBJECTS: usize = 64;
 
@@ -45,11 +60,12 @@ pub unsafe trait Platform {
     /// Thread courant.
     fn current_thread() -> *mut KThread;
 
-    /// Verrou dispatcher tenu. Place le thread dans la file prêt de sa priorité.
+    /// Verrou dispatcher tenu. Place le thread dans la file prêt de sa priorité,
+    /// relevée d'`increment` selon les règles de l'ordonnanceur.
     ///
     /// # Safety
     /// Verrou dispatcher tenu ; `thread` est valide et vient de passer `Ready`.
-    unsafe fn ready_thread(thread: *mut KThread);
+    unsafe fn ready_thread(thread: *mut KThread, increment: u8);
 
     /// Verrou dispatcher tenu, thread courant en état `Waiting`. Bascule vers le
     /// prochain thread prêt. À la reprise de ce thread, le verrou a été relâché et
@@ -507,29 +523,31 @@ unsafe fn ki_unlink_wait_blocks<P: Platform>(thread: *mut KThread) {
     }
 }
 
-/// Sort un thread de l'attente avec un statut final. Verrou tenu.
+/// Sort un thread de l'attente avec un statut final, relevé d'`increment`.
+/// Verrou tenu.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `thread` est en attente (wait blocks chaînés).
 ///
 /// # IRQL
 /// DISPATCH_LEVEL.
-pub unsafe fn ki_unwait_thread<P: Platform>(thread: *mut KThread, status: NtStatus) {
+pub unsafe fn ki_unwait_thread<P: Platform>(thread: *mut KThread, status: NtStatus, increment: u8) {
     // SAFETY: garanti par l'appelant.
     unsafe {
         ki_unlink_wait_blocks::<P>(thread);
         (*thread).wait_status = status;
         (*thread).state = ThreadState::Ready;
-        P::ready_thread(thread);
+        P::ready_thread(thread, increment);
     }
 }
 
-/// Réveille les attentes satisfaisables sur `obj` (KiWaitTest). Verrou tenu.
+/// Réveille les attentes satisfaisables sur `obj` (KiWaitTest), chaque thread
+/// réveillé relevé d'`increment`. Verrou tenu.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `obj` est valide et ses wait blocks appartiennent à des
 /// threads en attente.
-unsafe fn ki_wait_test<P: Platform>(obj: *mut DispatcherHeader) {
+unsafe fn ki_wait_test<P: Platform>(obj: *mut DispatcherHeader, increment: u8) {
     // SAFETY: garanti par l'appelant ; chaque entrée de la liste est le
     // `wait_list_entry` d'un WaitBlock valide.
     unsafe {
@@ -545,13 +563,13 @@ unsafe fn ki_wait_test<P: Platform>(obj: *mut DispatcherHeader) {
                 if consume(obj, thread) {
                     status.0 |= STATUS_ABANDONED_WAIT_0.0;
                 }
-                ki_unwait_thread::<P>(thread, status);
+                ki_unwait_thread::<P>(thread, status, increment);
                 // La liste a été modifiée (tous les blocs du thread retirés) : on repart
                 // de la tête. Termine car chaque tour retire au moins un attendant.
                 entry = (*head).flink;
             } else if ki_all_satisfied(thread) {
                 let status = if ki_consume_all(thread) { STATUS_ABANDONED_WAIT_0 } else { STATUS_WAIT_0 };
-                ki_unwait_thread::<P>(thread, status);
+                ki_unwait_thread::<P>(thread, status, increment);
                 entry = (*head).flink;
             } else {
                 entry = (*entry).flink;
@@ -756,14 +774,15 @@ pub unsafe fn ke_initialize_event(ev: *mut KEvent, kind: ObjectType, signaled: b
     unsafe { DispatcherHeader::init(ptr::addr_of_mut!((*ev).header), kind, signaled as i32) };
 }
 
-/// KeSetEvent : retourne l'état précédent.
+/// KeSetEvent : retourne l'état précédent. Les threads réveillés sont relevés
+/// d'`increment` (en général [`EVENT_INCREMENT`]).
 ///
 /// # Safety
 /// `ev` est un événement initialisé.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub unsafe fn ke_set_event<P: Platform>(ev: *mut KEvent) -> i32 {
+pub unsafe fn ke_set_event<P: Platform>(ev: *mut KEvent, increment: u8) -> i32 {
     // SAFETY: garanti par l'appelant ; verrou tenu de acquire à release.
     unsafe {
         let old_irql = DISPATCHER_LOCK.acquire::<P>();
@@ -773,7 +792,7 @@ pub unsafe fn ke_set_event<P: Platform>(ev: *mut KEvent) -> i32 {
             (*h).signal_state = 1;
             // Notification : réveille tout le monde. Synchronisation : un seul, puis
             // consume() remet l'état à 0 et la boucle de ki_wait_test s'arrête.
-            ki_wait_test::<P>(h);
+            ki_wait_test::<P>(h, increment);
         }
         DISPATCHER_LOCK.release::<P>(old_irql);
         prev
@@ -796,14 +815,15 @@ pub unsafe fn ke_reset_event<P: Platform>(ev: *mut KEvent) -> i32 {
     }
 }
 
-/// KePulseEvent : réveille les attendants actuels puis repasse à non signalé.
+/// KePulseEvent : réveille les attendants actuels, relevés d'`increment`, puis
+/// repasse à non signalé.
 ///
 /// # Safety
 /// `ev` est un événement initialisé.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub unsafe fn ke_pulse_event<P: Platform>(ev: *mut KEvent) -> i32 {
+pub unsafe fn ke_pulse_event<P: Platform>(ev: *mut KEvent, increment: u8) -> i32 {
     // SAFETY: garanti par l'appelant ; verrou tenu de acquire à release.
     unsafe {
         let old_irql = DISPATCHER_LOCK.acquire::<P>();
@@ -811,7 +831,7 @@ pub unsafe fn ke_pulse_event<P: Platform>(ev: *mut KEvent) -> i32 {
         let prev = (*h).signal_state;
         if prev == 0 {
             (*h).signal_state = 1;
-            ki_wait_test::<P>(h);
+            ki_wait_test::<P>(h, increment);
         }
         (*h).signal_state = 0;
         DISPATCHER_LOCK.release::<P>(old_irql);
@@ -832,12 +852,19 @@ pub unsafe fn ke_initialize_semaphore(s: *mut KSemaphore, count: i32, limit: i32
     }
 }
 
+/// KeReleaseSemaphore : ajoute `adjustment` au compte ; les threads réveillés
+/// sont relevés d'`increment` (en général [`SEMAPHORE_INCREMENT`]).
+///
 /// # Safety
 /// `s` est un sémaphore initialisé.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub unsafe fn ke_release_semaphore<P: Platform>(s: *mut KSemaphore, adjustment: i32) -> Result<i32, NtStatus> {
+pub unsafe fn ke_release_semaphore<P: Platform>(
+    s: *mut KSemaphore,
+    increment: u8,
+    adjustment: i32,
+) -> Result<i32, NtStatus> {
     // SAFETY: garanti par l'appelant ; verrou tenu de acquire à release.
     unsafe {
         let old_irql = DISPATCHER_LOCK.acquire::<P>();
@@ -850,7 +877,7 @@ pub unsafe fn ke_release_semaphore<P: Platform>(s: *mut KSemaphore, adjustment: 
         }
         (*h).signal_state = prev + adjustment;
         if prev == 0 {
-            ki_wait_test::<P>(h);
+            ki_wait_test::<P>(h, increment);
         }
         DISPATCHER_LOCK.release::<P>(old_irql);
         Ok(prev)
@@ -875,14 +902,15 @@ pub unsafe fn ke_initialize_mutant(m: *mut KMutant) {
 
 /// KeReleaseMutant. `abandoned = true` abandonne le mutant, quel que soit son
 /// propriétaire ([`ki_thread_exit`] le fait, verrou tenu, pour ceux d'un thread qui
-/// se termine).
+/// se termine). Le thread qui l'acquiert est relevé d'`increment` (en général
+/// [`MUTANT_INCREMENT`]).
 ///
 /// # Safety
 /// `m` est un mutant initialisé.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub unsafe fn ke_release_mutant<P: Platform>(m: *mut KMutant, abandoned: bool) -> Result<i32, NtStatus> {
+pub unsafe fn ke_release_mutant<P: Platform>(m: *mut KMutant, increment: u8, abandoned: bool) -> Result<i32, NtStatus> {
     let thread = P::current_thread();
     // SAFETY: garanti par l'appelant ; verrou tenu de acquire à release.
     unsafe {
@@ -906,7 +934,7 @@ pub unsafe fn ke_release_mutant<P: Platform>(m: *mut KMutant, abandoned: bool) -
                 ListEntry::remove(ptr::addr_of_mut!((*m).mutant_list_entry));
             }
             (*m).owner_thread = ptr::null_mut();
-            ki_wait_test::<P>(h);
+            ki_wait_test::<P>(h, increment);
         }
 
         DISPATCHER_LOCK.release::<P>(old_irql);
@@ -919,8 +947,9 @@ pub unsafe fn ke_release_mutant<P: Platform>(m: *mut KMutant, abandoned: bool) -
 // ---------------------------------------------------------------------------
 
 /// Appelé par le DPC d'expiration quand un timer arrive à échéance (déjà retiré de
-/// la roue). Réveille notamment les threads dont c'est le timeout. Le DPC du timer
-/// et le réarmement d'un timer périodique reviennent à `ke::timer`.
+/// la roue). Réveille notamment les threads dont c'est le timeout, sans relever
+/// leur priorité. Le DPC du timer et le réarmement d'un timer périodique
+/// reviennent à `ke::timer`.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `timer` est valide.
@@ -932,14 +961,15 @@ pub unsafe fn ki_timer_expired<P: Platform>(timer: *mut KTimer) {
     unsafe {
         let h = ptr::addr_of_mut!((*timer).header);
         (*h).signal_state = 1;
-        ki_wait_test::<P>(h);
+        ki_wait_test::<P>(h, IO_NO_INCREMENT);
     }
 }
 
 /// Fin d'un thread : son attente éventuelle est défaite, les mutants qu'il possède
-/// sont abandonnés (le suivant à les acquérir reçoit STATUS_ABANDONED_WAIT_0), et
-/// l'objet thread est signalé, ce qui réveille ceux qui attendent sa fin. Le
-/// retirer de l'ordonnancement revient à l'appelant.
+/// sont abandonnés (le suivant à les acquérir reçoit STATUS_ABANDONED_WAIT_0,
+/// relevé de [`MUTANT_INCREMENT`]), et l'objet thread est signalé, ce qui réveille
+/// sans relèvement ceux qui attendent sa fin. Le retirer de l'ordonnancement
+/// revient à l'appelant.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `thread` est valide.
@@ -962,45 +992,47 @@ pub unsafe fn ki_thread_exit<P: Platform>(thread: *mut KThread) {
             (*m).owner_thread = ptr::null_mut();
             (*m).abandoned = true;
             (*m).header.signal_state = 1;
-            ki_wait_test::<P>(ptr::addr_of_mut!((*m).header));
+            ki_wait_test::<P>(ptr::addr_of_mut!((*m).header), MUTANT_INCREMENT);
         }
         (*thread).header.signal_state = 1;
-        ki_wait_test::<P>(ptr::addr_of_mut!((*thread).header));
+        ki_wait_test::<P>(ptr::addr_of_mut!((*thread).header), IO_NO_INCREMENT);
     }
 }
 
 /// Appelé après l'insertion d'un APC utilisateur. Un thread en attente alertable
-/// en mode utilisateur sort avec STATUS_USER_APC (SleepEx, WaitForSingleObjectEx...).
+/// en mode utilisateur sort avec STATUS_USER_APC (SleepEx, WaitForSingleObjectEx...),
+/// relevé d'`increment` (celui de l'insertion de l'APC).
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `thread` est valide.
 ///
 /// # IRQL
 /// DISPATCH_LEVEL.
-pub unsafe fn ki_try_unwait_for_user_apc<P: Platform>(thread: *mut KThread) {
+pub unsafe fn ki_try_unwait_for_user_apc<P: Platform>(thread: *mut KThread, increment: u8) {
     // SAFETY: garanti par l'appelant.
     unsafe {
         (*thread).user_apc_pending = true;
         if (*thread).state == ThreadState::Waiting && (*thread).alertable && (*thread).wait_mode == ProcessorMode::User
         {
-            ki_unwait_thread::<P>(thread, STATUS_USER_APC);
+            ki_unwait_thread::<P>(thread, STATUS_USER_APC, increment);
         }
     }
 }
 
 /// Appelé après l'insertion d'un APC noyau : l'attente est défaite, l'APC s'exécute
-/// à la reprise, puis ke_wait_for_multiple_objects relance l'attente.
+/// à la reprise, relevé d'`increment` (celui de l'insertion de l'APC), puis
+/// ke_wait_for_multiple_objects relance l'attente.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `thread` est valide.
 ///
 /// # IRQL
 /// DISPATCH_LEVEL.
-pub unsafe fn ki_unwait_for_kernel_apc<P: Platform>(thread: *mut KThread) {
+pub unsafe fn ki_unwait_for_kernel_apc<P: Platform>(thread: *mut KThread, increment: u8) {
     // SAFETY: garanti par l'appelant.
     unsafe {
         if (*thread).state == ThreadState::Waiting {
-            ki_unwait_thread::<P>(thread, STATUS_KERNEL_APC);
+            ki_unwait_thread::<P>(thread, STATUS_KERNEL_APC, increment);
         }
     }
 }

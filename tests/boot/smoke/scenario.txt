@@ -12,6 +12,7 @@ expect = [smoke] TPR: clock ticks at DISPATCH_LEVEL
 expect = [smoke] dispatch deferred
 expect = [smoke] DPC: run at once
 expect = [smoke] Ke: priority preemption
+expect = [smoke] Ke: wait boost preempts the waker
 expect = [smoke] FPU: state kept across switches
 expect = [smoke] FAT read probe hit
 expect = kernel: phase 1 done

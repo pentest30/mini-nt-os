@@ -12,18 +12,27 @@
 //! - Préemption : un thread qui devient prêt avec une priorité supérieure à celle
 //!   du thread courant le préempte à la prochaine interruption DISPATCH ; le
 //!   préempté repasse en tête de sa file, avec le reste de son quantum.
-//! - Quantum : deux ticks d'horloge. À son terme, le thread cède la place aux
-//!   threads prêts de même priorité et repasse en queue de sa file.
+//! - Quantum : deux ticks d'horloge, comptés en tiers de tick. Une attente en
+//!   coûte un tiers : un thread qui attend souvent finit aussi ses quanta. Au
+//!   terme d'un quantum, le thread cède la place aux threads prêts de même
+//!   priorité et repasse en queue de sa file.
 //! - Attente : le dispatcher (`Platform::swap_thread`) bascule vers le thread prêt
 //!   le plus prioritaire, ou vers idle.
+//! - Boosts : un thread a une priorité de base et une priorité courante. Réveillé
+//!   par un signal, un thread de priorité variable (base 1 à 15) passe à sa base
+//!   plus le relèvement du signal (`dispatcher::EVENT_INCREMENT`…), sans dépasser
+//!   15 ni redescendre s'il était déjà plus haut ([`wait_boost`]) ; relevé, il
+//!   reçoit un quantum neuf. À chaque fin de quantum, la priorité courante perd un
+//!   niveau jusqu'à sa base ([`decay`]). Les threads temps réel (base 16 à 31)
+//!   gardent leur priorité.
 //!
 //! Table et ordonnancement sont protégés par le verrou dispatcher (ADR-005). Une
 //! commutation relâche ce verrou juste avant de changer de pile, en restant à
 //! DISPATCH_LEVEL : sur un seul CPU (ADR-015), rien de ce qui touche à cet état ne
 //! peut s'exécuter entre-temps. Le thread repris rabaisse lui-même son IRQL.
 //!
-//! Pas encore : boosts de priorité, changement de priorité, récupération des
-//! threads terminés (leur objet et leur pile restent alloués).
+//! Pas encore : relèvement des threads affamés, changement de priorité,
+//! récupération des threads terminés (leur objet et leur pile restent alloués).
 //!
 //! [`KePlatform`] relie le dispatcher, les timers et l'IRQL à cet ordonnanceur.
 
@@ -55,8 +64,18 @@ pub const IDLE_PRIORITY: u8 = 0;
 /// Priorité normale : celle du thread de démarrage et des threads utilisateur.
 pub const NORMAL_PRIORITY: u8 = 8;
 
+/// Première priorité temps réel : en dessous, la priorité est variable et les
+/// boosts la relèvent, sans jamais l'atteindre.
+pub const LOW_REALTIME_PRIORITY: u8 = 16;
+
 /// Durée d'un quantum, en ticks d'horloge.
-const QUANTUM_TICKS: i32 = 2;
+const QUANTUM_TICKS: u32 = 2;
+
+/// Le quantum se compte en unités, trois par tick : une attente en coûte une.
+const QUANTUM_UNITS_PER_TICK: i32 = 3;
+
+/// Un quantum entier, en unités.
+const QUANTUM: i32 = QUANTUM_TICKS as i32 * QUANTUM_UNITS_PER_TICK;
 
 // ── File prête ───────────────────────────────────────────────────────────────
 
@@ -153,8 +172,12 @@ pub struct Thread {
     pub tcb: KThread,
     ctx: KContext,
     tid: usize,
+    /// Priorité de base, fixée à la création.
+    base_priority: u8,
+    /// Priorité courante : la base, ou plus pendant un boost. Elle choisit la
+    /// file prête du thread ; elle ne change pas tant qu'il y est.
     priority: u8,
-    /// Ticks d'horloge restants du quantum.
+    /// Unités restantes du quantum (un tick en vaut [`QUANTUM_UNITS_PER_TICK`]).
     quantum: i32,
     /// Thread utilisateur : TSS.RSP0 doit pointer sur sa pile noyau.
     user_mode: bool,
@@ -185,8 +208,9 @@ impl Thread {
             KThread::init(ptr::addr_of_mut!((*t).tcb));
             ptr::addr_of_mut!((*t).ctx).write(ctx);
             ptr::addr_of_mut!((*t).tid).write(usize::MAX);
+            ptr::addr_of_mut!((*t).base_priority).write(priority);
             ptr::addr_of_mut!((*t).priority).write(priority);
-            ptr::addr_of_mut!((*t).quantum).write(QUANTUM_TICKS);
+            ptr::addr_of_mut!((*t).quantum).write(QUANTUM);
             ptr::addr_of_mut!((*t).user_mode).write(user_mode);
             ptr::addr_of_mut!((*t).kernel_stack_top).write(kernel_stack_top);
             ptr::addr_of_mut!((*t).start).write(start);
@@ -291,6 +315,33 @@ impl Scheduler {
         self.current == self.idle || p > priority(self.current)
     }
 
+    /// `thread` sort d'une attente, réveillé avec le relèvement `increment`, et
+    /// devient prêt ([`ready`](Self::ready)). Si le relèvement élève sa priorité
+    /// ([`wait_boost`]), il reçoit un quantum neuf ; sinon l'attente coûte une
+    /// unité de son quantum, dont la fin fait décroître sa priorité ([`decay`]).
+    /// `true` s'il doit préempter le thread courant.
+    ///
+    /// # Safety
+    /// Comme [`ready`](Self::ready).
+    pub unsafe fn ready_unwaited(&mut self, thread: *mut Thread, increment: u8) -> bool {
+        // SAFETY: garanti par l'appelant ; hors file, la priorité peut changer.
+        unsafe {
+            let (base, current) = ((*thread).base_priority, (*thread).priority);
+            let boosted = wait_boost(base, current, increment);
+            if boosted > current {
+                (*thread).priority = boosted;
+                (*thread).quantum = QUANTUM;
+            } else {
+                (*thread).quantum -= 1;
+                if (*thread).quantum <= 0 {
+                    (*thread).quantum = QUANTUM;
+                    (*thread).priority = decay(base, current);
+                }
+            }
+            self.ready(thread, false)
+        }
+    }
+
     /// Retire de sa file un thread prêt.
     ///
     /// # Safety
@@ -340,12 +391,15 @@ impl Scheduler {
             let next = self.pop_highest()?;
             return Some(self.make_current(next));
         }
-        // SAFETY: l'ordonnanceur ne tient que des threads valides.
+        // SAFETY: l'ordonnanceur ne tient que des threads valides ; le thread
+        // courant n'est dans aucune file, sa priorité peut changer.
         let expired = unsafe {
-            (*cur).quantum = (*cur).quantum.saturating_sub(ticks as i32);
+            let used = i32::try_from(ticks).unwrap_or(i32::MAX).saturating_mul(QUANTUM_UNITS_PER_TICK);
+            (*cur).quantum = (*cur).quantum.saturating_sub(used);
             let expired = (*cur).quantum <= 0;
             if expired {
-                (*cur).quantum = QUANTUM_TICKS;
+                (*cur).quantum = QUANTUM;
+                (*cur).priority = decay((*cur).base_priority, (*cur).priority);
             }
             expired
         };
@@ -359,6 +413,23 @@ impl Scheduler {
             None
         }
     }
+}
+
+/// Priorité courante d'un thread réveillé par un signal de relèvement
+/// `increment` : sa base plus `increment` pour une priorité variable, bornée à
+/// 15, si c'est plus que sa priorité `current` ; un thread temps réel garde la
+/// sienne.
+pub fn wait_boost(base: u8, current: u8, increment: u8) -> u8 {
+    if base >= LOW_REALTIME_PRIORITY {
+        return current;
+    }
+    let boosted = base.saturating_add(increment).min(LOW_REALTIME_PRIORITY - 1);
+    current.max(boosted)
+}
+
+/// Priorité courante à la fin d'un quantum : un niveau de moins, jusqu'à la base.
+pub fn decay(base: u8, current: u8) -> u8 {
+    current.saturating_sub(1).max(base)
 }
 
 /// Priorité d'un thread que tient l'ordonnanceur (valide).
@@ -491,13 +562,12 @@ unsafe impl Platform for KePlatform {
         current_thread().cast()
     }
 
-    unsafe fn ready_thread(thread: *mut KThread) {
+    unsafe fn ready_thread(thread: *mut KThread, increment: u8) {
         let t = thread.cast::<Thread>();
         // SAFETY: verrou tenu ; tout `KThread` du noyau est le `tcb` d'un `Thread`
-        // enregistré.
+        // enregistré, qui attendait : il n'est dans aucune file.
         unsafe {
-            (*t).quantum = QUANTUM_TICKS;
-            if (*sched()).ready(t, false) {
+            if (*sched()).ready_unwaited(t, increment) {
                 request_reschedule();
             }
         }
@@ -702,6 +772,36 @@ pub fn is_thread_running(tid: usize) -> bool {
         let running = !t.is_null() && (*t).tcb.state != ThreadState::Terminated;
         DISPATCHER_LOCK.release::<KePlatform>(old_irql);
         running
+    }
+}
+
+/// Priorité courante du thread `tid` (KeQueryPriorityThread), boost compris ;
+/// `None` s'il n'existe pas.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn thread_priority(tid: usize) -> Option<u8> {
+    // SAFETY: verrou tenu de acquire à release ; un thread enregistré est valide.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        let priority = (!t.is_null()).then(|| (*t).priority);
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        priority
+    }
+}
+
+/// Priorité courante du thread appelant, boost compris.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn current_priority() -> u8 {
+    // SAFETY: verrou tenu de acquire à release ; le thread courant est valide.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let priority = (*current_thread()).priority;
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        priority
     }
 }
 
@@ -947,7 +1047,7 @@ mod tests {
         let (mut s, boot) = scheduler();
         let low = thread(NORMAL_PRIORITY - 1);
         assert!(!ready(&mut s, low, false));
-        assert_eq!(s.dispatch(QUANTUM_TICKS as u32 * 3), None, "quantum over, but no peer");
+        assert_eq!(s.dispatch(QUANTUM_TICKS * 3), None, "quantum over, but no peer");
         assert_eq!(s.current, boot);
         assert_eq!(s.select_next(), low, "it runs once the current thread waits");
     }
@@ -971,7 +1071,7 @@ mod tests {
         let high = thread(NORMAL_PRIORITY + 1);
         ready(&mut s, peer, false);
         ready(&mut s, high, false);
-        assert_eq!(s.dispatch(QUANTUM_TICKS as u32), Some(high));
+        assert_eq!(s.dispatch(QUANTUM_TICKS), Some(high));
         assert_eq!(s.select_next(), peer);
         assert_eq!(s.select_next(), boot);
     }
@@ -986,6 +1086,98 @@ mod tests {
         assert_eq!(s.dispatch(0), Some(boot));
         assert_eq!(s.summary, 0, "idle was not queued");
         assert_eq!(state(boot), ThreadState::Running);
+    }
+
+    // ── Boosts ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_wait_boost_raises_from_the_base_up_to_fifteen() {
+        assert_eq!(wait_boost(8, 8, 1), 9);
+        assert_eq!(wait_boost(7, 7, 0), 7, "no increment, no boost");
+        assert_eq!(wait_boost(12, 12, 6), 15, "variable priorities stay below real time");
+        assert_eq!(wait_boost(4, 10, 2), 10, "a higher current priority is kept");
+        assert_eq!(wait_boost(4, 5, 2), 6, "from the base, not from the current priority");
+        assert_eq!(wait_boost(16, 16, 6), 16, "real-time threads are never boosted");
+        assert_eq!(wait_boost(15, 15, 6), 15);
+    }
+
+    #[test]
+    fn a_boost_decays_one_level_per_quantum_down_to_the_base() {
+        assert_eq!(decay(7, 9), 8);
+        assert_eq!(decay(7, 8), 7);
+        assert_eq!(decay(7, 7), 7, "never below the base");
+        assert_eq!(decay(0, 0), 0);
+    }
+
+    #[test]
+    fn a_woken_thread_preempts_then_yields_as_its_boost_decays() {
+        let (mut s, boot) = scheduler();
+        let woken = thread(NORMAL_PRIORITY - 1);
+        // SAFETY: thread du test, hors file.
+        assert!(unsafe { s.ready_unwaited(woken, 2) }, "boosted above the boot thread");
+        assert_eq!(s.dispatch(0), Some(woken));
+        assert_eq!(s.dispatch(QUANTUM_TICKS), Some(boot), "one level down: a peer of the boot thread");
+        assert_eq!(priority(woken), NORMAL_PRIORITY);
+        assert_eq!(s.dispatch(QUANTUM_TICKS), Some(woken), "round robin at the decayed priority");
+        assert_eq!(s.dispatch(QUANTUM_TICKS), Some(boot), "back at its base, below the boot thread");
+        assert_eq!(priority(woken), NORMAL_PRIORITY - 1);
+        assert_eq!(priority(boot), NORMAL_PRIORITY, "an unboosted thread keeps its priority");
+    }
+
+    fn quantum(t: *mut Thread) -> i32 {
+        // SAFETY: thread du test.
+        unsafe { (*t).quantum }
+    }
+
+    #[test]
+    fn a_wake_that_raises_the_priority_gives_a_fresh_quantum() {
+        let (mut s, _) = scheduler();
+        let t = thread(NORMAL_PRIORITY - 1);
+        // SAFETY: thread du test, hors file.
+        unsafe {
+            (*t).quantum = 1;
+            s.ready_unwaited(t, 2);
+        }
+        assert_eq!((priority(t), quantum(t)), (NORMAL_PRIORITY + 1, QUANTUM));
+    }
+
+    #[test]
+    fn a_thread_that_waits_often_still_ends_its_quantum_and_decays() {
+        let (mut s, _) = scheduler();
+        let t = thread(NORMAL_PRIORITY);
+        // SAFETY: thread du test, retiré de sa file entre deux réveils.
+        let wake = |s: &mut Scheduler| unsafe {
+            s.ready_unwaited(t, 1);
+            s.unready(t);
+        };
+        wake(&mut s);
+        assert_eq!((priority(t), quantum(t)), (NORMAL_PRIORITY + 1, QUANTUM), "boosted, fresh quantum");
+        for left in (1..QUANTUM).rev() {
+            wake(&mut s);
+            assert_eq!((priority(t), quantum(t)), (NORMAL_PRIORITY + 1, left), "each wait costs one unit");
+        }
+        wake(&mut s);
+        assert_eq!((priority(t), quantum(t)), (NORMAL_PRIORITY, QUANTUM), "quantum over: one level down");
+        wake(&mut s);
+        assert_eq!(priority(t), NORMAL_PRIORITY + 1, "boosted again from its base");
+    }
+
+    #[test]
+    fn a_real_time_thread_keeps_its_priority_when_woken() {
+        let (mut s, _) = scheduler();
+        let t = thread(LOW_REALTIME_PRIORITY + 2);
+        // SAFETY: thread du test, hors file.
+        unsafe { s.ready_unwaited(t, 6) };
+        assert_eq!(priority(t), LOW_REALTIME_PRIORITY + 2);
+    }
+
+    #[test]
+    fn a_boosted_thread_alone_still_decays() {
+        let (mut s, boot) = scheduler();
+        // SAFETY: thread courant du test, hors file.
+        unsafe { (*boot).priority = NORMAL_PRIORITY + 2 };
+        assert_eq!(s.dispatch(QUANTUM_TICKS), None, "nothing else is ready");
+        assert_eq!(priority(boot), NORMAL_PRIORITY + 1);
     }
 
     #[test]
