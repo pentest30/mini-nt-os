@@ -18,6 +18,7 @@ pub mod gdt;
 pub mod idt;
 pub mod irql;
 pub mod msr;
+pub mod pcr;
 pub mod ps2;
 pub mod ring3;
 pub mod serial;
@@ -48,6 +49,7 @@ pub unsafe fn init() {
     unsafe {
         serial::init(); // first — UART must be open before logger_init
         serial::logger_init(); // register SerialLogger as the global log backend
+        pcr::init_bsp(); // GS reaches the KPCR, which holds the IRQL: before any IRQL use
         fpu::init(); // x87/SSE on, the boot thread's initial FPU state (ADR-009)
         gdt::init(); // TSS with RSP0 + IST[0] double-fault stack
         sysenter::init();

@@ -66,6 +66,8 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 
 - `tools/syscall-gen` : génération des tables `ntoskrnl` à partir de la version épinglée de ReactOS.
 - `KTRAP_FRAME`, portes `int 2Ah` à `2Eh`, SYSENTER sur Intel (ADR-004), IF=1 pendant les appels système.
+- SWAPGS à chaque entrée et sortie du mode utilisateur (interruptions, exceptions, appels système) : jusque-là, la base de GS
+  (le KPCR) n'est protégée que par le fait que le code utilisateur XP ne charge pas GS.
 - Primitives de sonde et de copie avec table de correction des fautes (§6.4 de l'architecture).
 - `KiDispatchException` vers `KiUserExceptionDispatcher`, livraison des APC utilisateur, `NtContinue`, `NtRaiseException`.
 - Le noyau mappe `ntdll`, résout ses points d'entrée et remplit `KUSER_SHARED_DATA`.

@@ -17,9 +17,9 @@
 //! In debug builds, `assert_alloc_safe()` fires if heap allocation is
 //! attempted at IRQL >= DISPATCH_LEVEL, matching NT kernel behaviour.
 //!
-//! The IRQL is a per-CPU software value (one CPU for now; the KPRCB will hold
-//! it, ADR-015). The APIC TPR will mirror it once the clock vector sits above
-//! DISPATCH_LEVEL (M1).
+//! The IRQL is a per-CPU software value, in the processor's KPCR
+//! (`hal::pcr`, ADR-015). The APIC TPR will mirror it once the clock vector
+//! sits above DISPATCH_LEVEL (M1).
 //!
 //! The dispatch is NT's DISPATCH software interrupt: Ke's hook drains the DPC
 //! queue, then switches threads if a quantum end asked for it. Requested by
@@ -32,15 +32,15 @@
 //!
 //! WI7e Ch.3 "Interrupt Request Levels and Deferred Procedure Calls"
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 // ── IRQL type ────────────────────────────────────────────────────────────────
 
 /// Interrupt Request Level.
 ///
-/// Stored as `u8` in [`HAL_CURRENT_IRQL`] and in APIC TPR writes.
+/// Stored as `u8` in the KPCR and in APIC TPR writes.
 /// Device IRQLs 3–30 are collapsed to [`Irql::Device`] for simplicity;
-/// the raw byte is preserved in [`HAL_CURRENT_IRQL`] for TPR programming.
+/// the raw byte is preserved in the KPCR for TPR programming.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(u8)]
 pub enum Irql {
@@ -80,15 +80,12 @@ impl Irql {
 
 // ── Per-CPU IRQL storage ─────────────────────────────────────────────────────
 
-/// Current IRQL for this CPU. Starts at PASSIVE_LEVEL, before any HAL init.
-///
-/// Unmangled: the ring-3 trampoline (`ring3.rs`) stores PASSIVE_LEVEL into it
-/// before entering user mode, which runs at PASSIVE_LEVEL.
-#[unsafe(no_mangle)]
-static HAL_CURRENT_IRQL: AtomicU8 = AtomicU8::new(Irql::Passive.as_u8());
-
-/// The DISPATCH software interrupt is requested and has not run yet.
-static DISPATCH_PENDING: AtomicBool = AtomicBool::new(false);
+/// Current IRQL of this CPU, in its KPCR. The ring-3 trampoline (`ring3.rs`)
+/// stores PASSIVE_LEVEL there before entering user mode.
+#[inline]
+fn irql() -> &'static AtomicU8 {
+    &crate::pcr::current().irql
+}
 
 /// The DISPATCH interrupt handler: `fn()` stored as `usize`, 0 until Ke
 /// registers it.
@@ -106,7 +103,7 @@ static DISPATCH_HOOK: AtomicUsize = AtomicUsize::new(0);
 /// # Safety
 /// Must be called exactly once, before any interrupt is enabled.
 pub unsafe fn init() {
-    HAL_CURRENT_IRQL.store(Irql::Passive.as_u8(), Ordering::Release);
+    irql().store(Irql::Passive.as_u8(), Ordering::Release);
     log::trace!("IRQL: initialised at PASSIVE_LEVEL");
 }
 
@@ -115,7 +112,7 @@ pub unsafe fn init() {
 /// # IRQL: Any level (read-only, safe from ISR context).
 #[inline]
 pub fn current() -> Irql {
-    Irql::from_u8(HAL_CURRENT_IRQL.load(Ordering::Relaxed))
+    Irql::from_u8(irql().load(Ordering::Relaxed))
 }
 
 /// Raise the IRQL to `new_irql`. Returns the previous IRQL — NT's
@@ -127,7 +124,7 @@ pub fn current() -> Irql {
 /// # IRQL: Any level. After return, current IRQL == `new_irql`.
 #[inline]
 pub fn raise(new_irql: Irql) -> Irql {
-    let prev = Irql::from_u8(HAL_CURRENT_IRQL.swap(new_irql.as_u8(), Ordering::AcqRel));
+    let prev = Irql::from_u8(irql().swap(new_irql.as_u8(), Ordering::AcqRel));
     assert!(new_irql >= prev, "IRQL raise: attempted to lower from {:?} to {:?}", prev, new_irql);
     prev
 }
@@ -142,10 +139,10 @@ pub fn raise(new_irql: Irql) -> Irql {
 /// # IRQL: Any level. After return, current IRQL == `old_irql`.
 #[inline]
 pub fn lower(old_irql: Irql) {
-    let cur = Irql::from_u8(HAL_CURRENT_IRQL.load(Ordering::Relaxed));
+    let cur = Irql::from_u8(irql().load(Ordering::Relaxed));
     assert!(old_irql <= cur, "IRQL lower: target {:?} is above current {:?}", old_irql, cur);
-    HAL_CURRENT_IRQL.store(old_irql.as_u8(), Ordering::Release);
-    if old_irql < Irql::Dispatch && DISPATCH_PENDING.load(Ordering::Acquire) && interrupts_enabled() {
+    irql().store(old_irql.as_u8(), Ordering::Release);
+    if old_irql < Irql::Dispatch && dispatch_pending().load(Ordering::Acquire) && interrupts_enabled() {
         x86_64::instructions::interrupts::without_interrupts(run_dispatch);
     }
 }
@@ -166,7 +163,7 @@ pub fn set_dispatch_hook(hook: Option<fn()>) {
 ///
 /// # IRQL: Any level, ISR included.
 pub fn request_dispatch() {
-    DISPATCH_PENDING.store(true, Ordering::Release);
+    dispatch_pending().store(true, Ordering::Release);
     if current() < Irql::Dispatch && interrupts_enabled() {
         x86_64::instructions::interrupts::without_interrupts(run_dispatch);
     }
@@ -190,7 +187,7 @@ pub fn dispatch_from_interrupt() {
 /// runs again.
 fn run_dispatch() {
     let old = raise(Irql::Dispatch);
-    while DISPATCH_PENDING.swap(false, Ordering::AcqRel) {
+    while dispatch_pending().swap(false, Ordering::AcqRel) {
         let hook = DISPATCH_HOOK.load(Ordering::Acquire);
         if hook != 0 {
             // SAFETY: `hook` was stored by `set_dispatch_hook` from a valid `fn()`.
@@ -199,7 +196,14 @@ fn run_dispatch() {
         }
     }
     // Not `lower`: interrupts are off, and the dispatch has just run.
-    HAL_CURRENT_IRQL.store(old.as_u8(), Ordering::Release);
+    irql().store(old.as_u8(), Ordering::Release);
+}
+
+/// The DISPATCH software interrupt of this CPU is requested and has not run
+/// yet (KPCR).
+#[inline]
+fn dispatch_pending() -> &'static core::sync::atomic::AtomicBool {
+    &crate::pcr::current().dispatch_pending
 }
 
 fn interrupts_enabled() -> bool {

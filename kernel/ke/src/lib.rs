@@ -2,6 +2,7 @@
 //!
 //! Provides:
 //!   - Scheduler: 32 priorities, quantum, preemption, waits (`sched`)
+//!   - Per-processor state, reached through the HAL's KPCR (`prcb`, ADR-015)
 //!   - Dispatcher (ADR-005): waitable objects, KWAIT_BLOCK, wait and signal
 //!   - Timer wheel and KTIMER objects (periodic, with a DPC)
 //!   - FPU state per thread (ADR-009) and kernel FPU brackets (`fpu`)
@@ -22,6 +23,7 @@ pub mod dispatcher;
 pub mod dpc;
 pub mod event;
 pub mod fpu;
+pub mod prcb;
 pub mod sched;
 pub mod thread;
 pub mod timer;
@@ -34,6 +36,8 @@ pub use event::{EventType, KEvent};
 /// See [`sched::init`]: `idle_stack_top` tops a mapped, writable kernel
 /// stack reserved for the idle thread.
 pub unsafe fn init(idle_stack_top: u64) {
+    // The boot processor's KPRCB first: the scheduler lives in it.
+    prcb::init_bsp();
     // SAFETY: forwarded from the caller's guarantee.
     unsafe { sched::init(idle_stack_top) };
     log::info!("Ke: initialised");

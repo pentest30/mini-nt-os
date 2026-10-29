@@ -7,7 +7,7 @@
 //! DISPATCH ([`ki_dispatch_interrupt`]) dès que l'IRQL passe sous DISPATCH_LEVEL :
 //! chaque routine s'exécute à DISPATCH_LEVEL, interruptions actives.
 //!
-//! Un seul CPU pour l'instant : la file passera dans le KPRCB (ADR-015).
+//! Chaque processeur a la sienne, dans son KPRCB (`ke::prcb`, ADR-015).
 
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
@@ -148,9 +148,11 @@ impl DpcQueue {
     }
 }
 
-/// La file de DPC du CPU. Les ISR y insèrent : elle se prend interruptions
-/// masquées.
-static DPC_QUEUE: IrqLock<DpcQueue> = IrqLock::new(DpcQueue::new());
+/// La file de DPC du processeur courant, dans son KPRCB. Les ISR y insèrent :
+/// elle se prend interruptions masquées.
+fn dpc_queue() -> &'static IrqLock<DpcQueue> {
+    &crate::prcb::current().dpc_queue
+}
 
 /// KeInsertQueueDpc : la routine s'exécutera à DISPATCH_LEVEL, dès que l'IRQL
 /// passera sous DISPATCH_LEVEL (aussitôt si l'appelant y est déjà). `false` si
@@ -165,7 +167,7 @@ static DPC_QUEUE: IrqLock<DpcQueue> = IrqLock::new(DpcQueue::new());
 /// Tout niveau, ISR comprise.
 pub unsafe fn ke_insert_queue_dpc(dpc: *const KDpc, arg1: *mut c_void, arg2: *mut c_void) -> bool {
     // SAFETY: garanti par l'appelant ; une seule file existe.
-    let inserted = DPC_QUEUE.with(|q| unsafe { q.insert(dpc, arg1, arg2) });
+    let inserted = dpc_queue().with(|q| unsafe { q.insert(dpc, arg1, arg2) });
     if inserted {
         hal::irql::request_dispatch();
     }
@@ -182,7 +184,7 @@ pub unsafe fn ke_insert_queue_dpc(dpc: *const KDpc, arg1: *mut c_void, arg2: *mu
 /// Tout niveau, ISR comprise.
 pub unsafe fn ke_remove_queue_dpc(dpc: *const KDpc) -> bool {
     // SAFETY: garanti par l'appelant ; une seule file existe.
-    DPC_QUEUE.with(|q| unsafe { q.remove(dpc) })
+    dpc_queue().with(|q| unsafe { q.remove(dpc) })
 }
 
 /// L'interruption DISPATCH, crochet de `hal::irql` : vide la file de DPC, puis
@@ -200,7 +202,7 @@ pub fn ki_dispatch_interrupt() {
 /// Exécute les DPC de la file jusqu'à la vider, y compris ceux insérés pendant
 /// ce temps.
 pub(crate) fn ki_retire_dpc_list() {
-    while let Some((dpc, arg1, arg2)) = DPC_QUEUE.with(DpcQueue::pop) {
+    while let Some((dpc, arg1, arg2)) = dpc_queue().with(DpcQueue::pop) {
         // SAFETY: un DPC reste valide jusqu'à l'exécution de sa routine (contrat
         // de `ke_insert_queue_dpc`).
         let (routine, context) = unsafe { ((*dpc).routine, (*dpc).context) };
@@ -313,6 +315,6 @@ pub(crate) mod tests {
         }
         ki_retire_dpc_list();
         assert_eq!(SUM.load(Ordering::Relaxed), 10 * 3 + 100 * 7);
-        assert!(DPC_QUEUE.with(|q| q.pop()).is_none());
+        assert!(dpc_queue().with(|q| q.pop()).is_none());
     }
 }
