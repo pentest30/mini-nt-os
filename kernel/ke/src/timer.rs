@@ -289,7 +289,8 @@ unsafe fn ki_fire_timer<P: Platform>(timer: *mut KTimer, rearm: impl FnOnce(*mut
 
 // ── La roue du noyau ─────────────────────────────────────────────────────────
 
-/// La roue de timers du CPU (KPRCB plus tard, ADR-015).
+/// La roue de timers, commune aux processeurs comme celle d'XP : l'ADR-015 ne
+/// demande par processeur que les files DPC et les files prêtes.
 static TIMER_TABLE: TimerTable = TimerTable::new();
 
 /// Le DPC d'expiration, pour la plateforme du noyau ([`init`]).
