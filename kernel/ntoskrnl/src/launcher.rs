@@ -200,7 +200,7 @@ fn launch_game(fat_path: &str) -> Option<usize> {
     use mm::vad::{PageProtect, VadNode};
     let _ = vad.insert(VadNode::private(base as u64, base as u64 + image_size as u64, PageProtect::EXECUTE_READWRITE));
 
-    static GAME_PID: spin::Mutex<u32> = spin::Mutex::new(100);
+    static GAME_PID: hal::sync::KSpinLock<u32> = hal::sync::KSpinLock::new(100);
     let pid = {
         let mut p = GAME_PID.lock();
         let out = *p;

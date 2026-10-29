@@ -5,10 +5,10 @@
 
 use alloc::string::String;
 use alloc::sync::Arc;
+use hal::sync::KSpinLock;
 use mm::vad::VadTree;
 use ob::handle::HandleTable;
 use ob::{KernelObject, ObjectHeader, ObjectType};
-use spin::Mutex;
 
 /// Process ID type (matches NT's CLIENT_ID.UniqueProcess).
 pub type ProcessId = u64;
@@ -18,9 +18,9 @@ pub struct EProcess {
     pub header: ObjectHeader,
     pub pid: ProcessId,
     pub image_name: String, // up to 15 chars in NT (EPROCESS.ImageFileName)
-    pub handle_table: Mutex<HandleTable>,
-    pub vad: Mutex<VadTree>,
-    pub exit_code: Mutex<Option<i32>>,
+    pub handle_table: KSpinLock<HandleTable>,
+    pub vad: KSpinLock<VadTree>,
+    pub exit_code: KSpinLock<Option<i32>>,
 }
 
 impl KernelObject for EProcess {
@@ -35,14 +35,14 @@ impl EProcess {
             header: ObjectHeader { name: None, obj_type: ObjectType::Process },
             pid,
             image_name: image_name.chars().take(15).collect(),
-            handle_table: Mutex::new(HandleTable::new()),
-            vad: Mutex::new(VadTree::new()),
-            exit_code: Mutex::new(None),
+            handle_table: KSpinLock::new(HandleTable::new()),
+            vad: KSpinLock::new(VadTree::new()),
+            exit_code: KSpinLock::new(None),
         })
     }
 }
 
-static NEXT_PID: spin::Mutex<ProcessId> = spin::Mutex::new(4); // NT starts at PID 4
+static NEXT_PID: hal::sync::KSpinLock<ProcessId> = hal::sync::KSpinLock::new(4); // NT starts at PID 4
 
 fn alloc_pid() -> ProcessId {
     let mut pid = NEXT_PID.lock();

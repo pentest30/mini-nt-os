@@ -10,5 +10,4 @@ name = "io_manager"
 ob   = { path = "../ob" }
 ke   = { path = "../ke" }
 hal  = { path = "../hal" }
-spin = { workspace = true }
 log  = { workspace = true }

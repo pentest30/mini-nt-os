@@ -10,6 +10,5 @@ name = "ke"
 abi      = { path = "../../abi" }
 hal      = { path = "../hal" }
 x86_64   = { workspace = true }
-spin     = { workspace = true }
 bitflags = { workspace = true }
 log      = { workspace = true }

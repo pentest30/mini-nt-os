@@ -15,7 +15,7 @@ use super::object::ObjectRef;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use spin::Mutex;
+use hal::sync::KSpinLock;
 
 struct Directory {
     children: BTreeMap<String, NamespaceEntry>,
@@ -26,7 +26,7 @@ enum NamespaceEntry {
     Directory(Directory),
 }
 
-static ROOT: Mutex<Directory> = Mutex::new(Directory { children: BTreeMap::new() });
+static ROOT: KSpinLock<Directory> = KSpinLock::new(Directory { children: BTreeMap::new() });
 
 /// Initialise the root namespace with required directories.
 pub fn init() {

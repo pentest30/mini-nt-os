@@ -30,5 +30,4 @@ ob               = { path = "../ob" }
 ps               = { path = "../ps" }
 io-manager       = { path = "../io" }
 x86_64           = { workspace = true }
-spin             = { workspace = true }
 log              = { workspace = true }

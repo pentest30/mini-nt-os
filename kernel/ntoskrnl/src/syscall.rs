@@ -9,8 +9,8 @@ use alloc::sync::Arc;
 use alloc::vec;
 use core::ptr::{read_unaligned, write_unaligned};
 use core::sync::atomic::{AtomicBool, Ordering};
+use hal::sync::KSpinLock;
 use ob::object::{ObjectRef, ObjectType};
-use spin::Mutex;
 
 const STATUS_SUCCESS: u32 = 0x0000_0000;
 const STATUS_NOT_IMPLEMENTED: u32 = 0xC000_0002;
@@ -210,33 +210,33 @@ struct SyscallContext {
     vad: mm::vad::VadTree,
 }
 
-static SYSCALL_CTX: Mutex<Option<SyscallContext>> = Mutex::new(None);
-static NEXT_TID: Mutex<u64> = Mutex::new(8);
-static PROCESS_HANDLE_PID_MAP: Mutex<[Option<(u32, u32)>; 64]> = Mutex::new([None; 64]);
-static FILE_HANDLE_MAP: Mutex<[Option<(u32, io_manager::FatFile)>; 64]> = Mutex::new([None; 64]);
-static PROCESS_LAUNCH_MAP: Mutex<[Option<(u32, u32, u32)>; 64]> = Mutex::new([None; 64]);
-static WIN32_NEXT_HWND: Mutex<u32> = Mutex::new(1);
+static SYSCALL_CTX: KSpinLock<Option<SyscallContext>> = KSpinLock::new(None);
+static NEXT_TID: KSpinLock<u64> = KSpinLock::new(8);
+static PROCESS_HANDLE_PID_MAP: KSpinLock<[Option<(u32, u32)>; 64]> = KSpinLock::new([None; 64]);
+static FILE_HANDLE_MAP: KSpinLock<[Option<(u32, io_manager::FatFile)>; 64]> = KSpinLock::new([None; 64]);
+static PROCESS_LAUNCH_MAP: KSpinLock<[Option<(u32, u32, u32)>; 64]> = KSpinLock::new([None; 64]);
+static WIN32_NEXT_HWND: KSpinLock<u32> = KSpinLock::new(1);
 
 // One-shot smoke markers — log each path only once so CMD.EXE's prompt loop
 // doesn't flood the framebuffer console with repeated [INFO] messages.
 static SMOKE_INT2E_LOGGED: AtomicBool = AtomicBool::new(false);
 static SMOKE_IAT_LOGGED: AtomicBool = AtomicBool::new(false);
-static WIN32_MSG_QUEUE: Mutex<[Option<Win32Msg>; 64]> = Mutex::new([None; 64]);
-static WIN32_QUIT_PENDING: Mutex<Option<u32>> = Mutex::new(None);
-static WIN32_NEXT_CLASS_ATOM: Mutex<u32> = Mutex::new(1);
-static WIN32_CLASS_MAP: Mutex<[Option<(u32, u32, u32)>; 64]> = Mutex::new([None; 64]);
-static WIN32_WINDOW_PROC_MAP: Mutex<[Option<(u32, u32)>; 64]> = Mutex::new([None; 64]);
+static WIN32_MSG_QUEUE: KSpinLock<[Option<Win32Msg>; 64]> = KSpinLock::new([None; 64]);
+static WIN32_QUIT_PENDING: KSpinLock<Option<u32>> = KSpinLock::new(None);
+static WIN32_NEXT_CLASS_ATOM: KSpinLock<u32> = KSpinLock::new(1);
+static WIN32_CLASS_MAP: KSpinLock<[Option<(u32, u32, u32)>; 64]> = KSpinLock::new([None; 64]);
+static WIN32_WINDOW_PROC_MAP: KSpinLock<[Option<(u32, u32)>; 64]> = KSpinLock::new([None; 64]);
 /// Win32 timer: (hwnd, timer_id, period_ms, next_fire_ms).
 type Win32Timer = (u32, u32, u32, u32);
-static WIN32_TIMER_TABLE: Mutex<[Option<Win32Timer>; 16]> = Mutex::new([None; 16]);
+static WIN32_TIMER_TABLE: KSpinLock<[Option<Win32Timer>; 16]> = KSpinLock::new([None; 16]);
 /// Tick count (ms) at which WM_PAINT was last synthesised. Rate-limits paint messages to ~60 fps.
-static WIN32_LAST_PAINT_MS: Mutex<u32> = Mutex::new(0);
+static WIN32_LAST_PAINT_MS: KSpinLock<u32> = KSpinLock::new(0);
 
 // ── Phase 3A state ────────────────────────────────────────────────────────────
 /// TLS slot allocation bitmap (64 slots, XP TlsSlots in TEB at offset 0xE10).
-static TLS_BITMAP: Mutex<u64> = Mutex::new(0);
+static TLS_BITMAP: KSpinLock<u64> = KSpinLock::new(0);
 /// Opened registry keys: [(fake_hkey, subkey_index)]. fake_hkey = index+1.
-static REG_OPEN_KEYS: Mutex<[Option<(u32, usize)>; 32]> = Mutex::new([None; 32]);
+static REG_OPEN_KEYS: KSpinLock<[Option<(u32, usize)>; 32]> = KSpinLock::new([None; 32]);
 
 #[derive(Clone, Copy)]
 struct Win32Msg {
@@ -539,7 +539,7 @@ fn nt_read_file(args_ptr: u32) -> u32 {
         // INT 0x2E is an interrupt gate (IF=0 on entry). Re-enable interrupts
         // here so the APIC timer can fire and schedule TID=3 (TEST.EXE) while
         // we spin waiting for serial input.  No locks are held at this point.
-        // SAFETY: no spin::Mutex is held; safe to re-enable IRQs.
+        // SAFETY: no KSpinLock is held; safe to re-enable IRQs.
         x86_64::instructions::interrupts::enable();
         // Block until a byte arrives from serial or PS/2 keyboard.
         // Skip PS/2 when the launcher has exclusive input focus.
@@ -3264,7 +3264,7 @@ fn ucrt_errno_ptr() -> u32 {
     // Use a fixed user-mode VA for the errno cell (inside SharedUserData scratch area).
     // For Phase 3A: return a pointer into our static kernel storage projected at a fixed VA.
     // Simpler: allocate once on first call.
-    static ERRNO_VA: spin::Mutex<u32> = spin::Mutex::new(0);
+    static ERRNO_VA: hal::sync::KSpinLock<u32> = hal::sync::KSpinLock::new(0);
     let mut va = ERRNO_VA.lock();
     if *va == 0 {
         let fake_args = [4u32];
@@ -3974,7 +3974,7 @@ fn advapi_reg_query_value_ex_w(args_ptr: u32) -> u32 {
 /// AllocateLocallyUniqueId(LUID*) — writes a monotonically increasing fake LUID.
 /// # IRQL: PASSIVE
 fn advapi_alloc_luid(args_ptr: u32) -> u32 {
-    static LUID_CTR: spin::Mutex<u64> = spin::Mutex::new(1);
+    static LUID_CTR: hal::sync::KSpinLock<u64> = hal::sync::KSpinLock::new(1);
     let ptr = match read_arg_u32(args_ptr, 0) {
         Ok(v) => v,
         Err(_) => return 0,
@@ -4062,7 +4062,7 @@ impl FetchClearBit for u64 {
 /// Fake VkPhysicalDevice handle used throughout the stub ICD.
 const VK_FAKE_PHYS_DEV: u32 = 0xDE00_1000;
 /// Static 16 MB mapping for vkMapMemory results — reuse the bump allocator.
-static VK_MAP_REGION: Mutex<u32> = Mutex::new(0);
+static VK_MAP_REGION: KSpinLock<u32> = KSpinLock::new(0);
 
 fn vk_get_instance_proc_addr(args_ptr: u32) -> u32 {
     // args: (VkInstance instance, const char* pName)
@@ -5105,7 +5105,7 @@ fn allocate_file_handle(file: io_manager::FatFile) -> u32 {
 }
 
 // Game file handles stored separately (use ATA read instead of ramdisk read)
-static GAME_FILE_MAP: Mutex<[Option<(u32, io_manager::FatFile)>; 64]> = Mutex::new([None; 64]);
+static GAME_FILE_MAP: KSpinLock<[Option<(u32, io_manager::FatFile)>; 64]> = KSpinLock::new([None; 64]);
 
 fn allocate_game_file_handle(file: io_manager::FatFile) -> u32 {
     let mut map = GAME_FILE_MAP.lock();
@@ -5119,7 +5119,7 @@ fn allocate_game_file_handle(file: io_manager::FatFile) -> u32 {
     0xFFFF_FFFF
 }
 
-static ENV_BLOCK_PTR: Mutex<u32> = Mutex::new(0);
+static ENV_BLOCK_PTR: KSpinLock<u32> = KSpinLock::new(0);
 fn win32_get_env_strings_a() -> u32 {
     let mut guard = ENV_BLOCK_PTR.lock();
     if *guard != 0 {
@@ -5402,7 +5402,7 @@ fn win32_get_cp_info(args_ptr: u32) -> u32 {
 /// Returns a pointer to a static command line string in kernel memory.
 /// For Ghost Recon we return "-nointro\0".
 /// # IRQL: PASSIVE
-static COMMAND_LINE_BUF: Mutex<u32> = Mutex::new(0);
+static COMMAND_LINE_BUF: KSpinLock<u32> = KSpinLock::new(0);
 
 fn win32_get_command_line_a() -> u32 {
     let mut guard = COMMAND_LINE_BUF.lock();

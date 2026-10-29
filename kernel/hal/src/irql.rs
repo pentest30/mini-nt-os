@@ -17,17 +17,28 @@
 //! In debug builds, `assert_alloc_safe()` fires if heap allocation is
 //! attempted at IRQL >= DISPATCH_LEVEL, matching NT kernel behaviour.
 //!
+//! The IRQL is a per-CPU software value (one CPU for now; the KPRCB will hold
+//! it, ADR-015). The APIC TPR will mirror it once the clock vector sits above
+//! DISPATCH_LEVEL (M1).
+//!
+//! DISPATCH_LEVEL defers preemption, as NT's DISPATCH software interrupt
+//! does: the timer ISR switches threads only if it interrupted code running
+//! below DISPATCH_LEVEL ([`dispatch_from_interrupt`]); otherwise the dispatch
+//! stays pending until [`lower`] brings the IRQL below DISPATCH_LEVEL with
+//! interrupts enabled. A thread holding a `KSpinLock` (at DISPATCH_LEVEL) is
+//! therefore never preempted.
+//!
 //! WI7e Ch.3 "Interrupt Request Levels and Deferred Procedure Calls"
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 // ── IRQL type ────────────────────────────────────────────────────────────────
 
 /// Interrupt Request Level.
 ///
-/// Stored as `u8` in [`CURRENT_IRQL`] and in APIC TPR writes.
+/// Stored as `u8` in [`HAL_CURRENT_IRQL`] and in APIC TPR writes.
 /// Device IRQLs 3–30 are collapsed to [`Irql::Device`] for simplicity;
-/// the raw byte is preserved in [`CURRENT_IRQL`] for TPR programming.
+/// the raw byte is preserved in [`HAL_CURRENT_IRQL`] for TPR programming.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(u8)]
 pub enum Irql {
@@ -67,13 +78,19 @@ impl Irql {
 
 // ── Per-CPU IRQL storage ─────────────────────────────────────────────────────
 
-/// Current IRQL for this CPU.
+/// Current IRQL for this CPU. Starts at PASSIVE_LEVEL, before any HAL init.
 ///
-/// Phase 1: single CPU — one global suffices.
-/// Phase 2 SMP: replace with a per-CPU cell indexed by LAPIC ID.
-///
-/// Starts at PASSIVE_LEVEL (0) — before any HAL init.
-static CURRENT_IRQL: AtomicU8 = AtomicU8::new(Irql::Passive.as_u8());
+/// Unmangled: the ring-3 trampoline (`ring3.rs`) stores PASSIVE_LEVEL into it
+/// before entering user mode, which runs at PASSIVE_LEVEL.
+#[unsafe(no_mangle)]
+static HAL_CURRENT_IRQL: AtomicU8 = AtomicU8::new(Irql::Passive.as_u8());
+
+/// A dispatch (thread switch) was requested while the IRQL was at or above
+/// DISPATCH_LEVEL.
+static DISPATCH_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// The dispatcher: `fn()` stored as `usize`, 0 until Ke registers it.
+static DISPATCH_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -87,10 +104,7 @@ static CURRENT_IRQL: AtomicU8 = AtomicU8::new(Irql::Passive.as_u8());
 /// # Safety
 /// Must be called exactly once, before any interrupt is enabled.
 pub unsafe fn init() {
-    CURRENT_IRQL.store(Irql::Passive.as_u8(), Ordering::Release);
-    // TODO Phase 1: write 0 to APIC TPR once APIC MMIO is mapped.
-    // SAFETY: APIC MMIO mapped by hal::timer::init() before this point.
-    // unsafe { core::ptr::write_volatile((APIC_BASE + APIC_TPR) as *mut u32, 0); }
+    HAL_CURRENT_IRQL.store(Irql::Passive.as_u8(), Ordering::Release);
     log::trace!("IRQL: initialised at PASSIVE_LEVEL");
 }
 
@@ -99,53 +113,86 @@ pub unsafe fn init() {
 /// # IRQL: Any level (read-only, safe from ISR context).
 #[inline]
 pub fn current() -> Irql {
-    Irql::from_u8(CURRENT_IRQL.load(Ordering::Relaxed))
+    Irql::from_u8(HAL_CURRENT_IRQL.load(Ordering::Relaxed))
 }
 
-/// Raise the IRQL to `new_irql`. Returns the previous IRQL.
+/// Raise the IRQL to `new_irql`. Returns the previous IRQL — NT's
+/// `KeRaiseIrql`.
 ///
-/// Programs the APIC Task Priority Register to mask lower-priority
-/// interrupts — equivalent to NT's `KeRaiseIrql`.
-///
-/// # Panics (debug)
-/// Panics if `new_irql < current()`.
+/// # Panics
+/// If `new_irql < current()` (NT: IRQL_NOT_GREATER_OR_EQUAL).
 ///
 /// # IRQL: Any level. After return, current IRQL == `new_irql`.
 #[inline]
 pub fn raise(new_irql: Irql) -> Irql {
-    let prev_raw = CURRENT_IRQL.swap(new_irql.as_u8(), Ordering::AcqRel);
-    let prev = Irql::from_u8(prev_raw);
-    debug_assert!(new_irql >= prev, "IRQL raise: attempted to lower from {:?} to {:?}", prev, new_irql);
-    // TODO Phase 1: mask via APIC TPR.
-    // SAFETY: APIC MMIO is mapped and stable at this point.
-    // unsafe { apic_write(APIC_TPR, (new_irql.as_u8() as u32) << 4); }
+    let prev = Irql::from_u8(HAL_CURRENT_IRQL.swap(new_irql.as_u8(), Ordering::AcqRel));
+    assert!(new_irql >= prev, "IRQL raise: attempted to lower from {:?} to {:?}", prev, new_irql);
     prev
 }
 
-/// Lower the IRQL back to `old_irql` (as returned by a previous [`raise`]).
+/// Lower the IRQL back to `old_irql` (as returned by a previous [`raise`]) —
+/// NT's `KeLowerIrql`. Below DISPATCH_LEVEL with interrupts enabled, runs the
+/// dispatch requested meanwhile, if any: this thread may be switched out here.
 ///
-/// Unmasks interrupts that were suppressed at the higher level.
-/// Equivalent to NT's `KeLowerIrql`.
-///
-/// # Panics (debug)
-/// Panics if `old_irql > current()`.
+/// # Panics
+/// If `old_irql > current()`.
 ///
 /// # IRQL: Any level. After return, current IRQL == `old_irql`.
 #[inline]
 pub fn lower(old_irql: Irql) {
-    let cur = Irql::from_u8(CURRENT_IRQL.load(Ordering::Relaxed));
-    debug_assert!(old_irql <= cur, "IRQL lower: target {:?} is above current {:?}", old_irql, cur);
-    CURRENT_IRQL.store(old_irql.as_u8(), Ordering::Release);
-    // TODO Phase 1: unmask via APIC TPR.
-    // SAFETY: APIC MMIO is mapped and stable at this point.
-    // unsafe { apic_write(APIC_TPR, (old_irql.as_u8() as u32) << 4); }
-
-    // Re-enable hardware interrupts when returning to PASSIVE or APC.
-    if old_irql < Irql::Dispatch {
-        // Lowering to PASSIVE/APC: all required data structures are
-        // consistent, so interrupts can be re-enabled here.
-        x86_64::instructions::interrupts::enable();
+    let cur = Irql::from_u8(HAL_CURRENT_IRQL.load(Ordering::Relaxed));
+    assert!(old_irql <= cur, "IRQL lower: target {:?} is above current {:?}", old_irql, cur);
+    HAL_CURRENT_IRQL.store(old_irql.as_u8(), Ordering::Release);
+    if old_irql < Irql::Dispatch && DISPATCH_PENDING.load(Ordering::Acquire) && interrupts_enabled() {
+        x86_64::instructions::interrupts::without_interrupts(run_dispatch);
     }
+}
+
+/// Registers the dispatcher (Ke's scheduler), run below DISPATCH_LEVEL with
+/// interrupts disabled. `None` until the scheduler is ready.
+///
+/// # IRQL: Any level.
+pub fn set_dispatch_hook(hook: Option<fn()>) {
+    DISPATCH_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+}
+
+/// Requests a dispatch, run as soon as the IRQL drops below DISPATCH_LEVEL.
+///
+/// # IRQL: Any level.
+pub fn request_dispatch() {
+    DISPATCH_PENDING.store(true, Ordering::Release);
+}
+
+/// From an ISR epilogue (EOI sent, interrupts disabled): dispatches now if the
+/// interrupted code ran below DISPATCH_LEVEL, else leaves the dispatch pending.
+///
+/// # IRQL: DIRQL, in an ISR.
+pub fn dispatch_from_interrupt() {
+    if current() < Irql::Dispatch {
+        run_dispatch();
+    } else {
+        request_dispatch();
+    }
+}
+
+/// Runs the dispatcher at DISPATCH_LEVEL, interrupts disabled. The thread
+/// switched to resumes at its own switch point, which restores its own IRQL;
+/// this one restores `old` when it runs again.
+fn run_dispatch() {
+    let old = raise(Irql::Dispatch);
+    DISPATCH_PENDING.store(false, Ordering::Release);
+    let hook = DISPATCH_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        // SAFETY: `hook` was stored by `set_dispatch_hook` from a valid `fn()`.
+        let dispatch: fn() = unsafe { core::mem::transmute(hook) };
+        dispatch();
+    }
+    // Not `lower`: interrupts are off, and the dispatch has just run.
+    HAL_CURRENT_IRQL.store(old.as_u8(), Ordering::Release);
+}
+
+fn interrupts_enabled() -> bool {
+    cfg!(target_os = "none") && x86_64::instructions::interrupts::are_enabled()
 }
 
 // ── Alloc guard ──────────────────────────────────────────────────────────────

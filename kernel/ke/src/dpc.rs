@@ -8,7 +8,7 @@
 //! CRITICAL: No page faults allowed at DISPATCH_LEVEL.
 
 use alloc::collections::VecDeque;
-use spin::Mutex;
+use hal::sync::KSpinLock;
 
 pub type DpcRoutine = fn(arg: *mut u8);
 
@@ -20,7 +20,7 @@ pub struct Kdpc {
 // SAFETY: DPC arguments are caller-managed; treated as opaque.
 unsafe impl Send for Kdpc {}
 
-static DPC_QUEUE: Mutex<VecDeque<Kdpc>> = Mutex::new(VecDeque::new());
+static DPC_QUEUE: KSpinLock<VecDeque<Kdpc>> = KSpinLock::new(VecDeque::new());
 
 /// Enqueue a DPC. Safe to call from any IRQL.
 pub fn queue(dpc: Kdpc) {

@@ -7,7 +7,7 @@
 //!
 //! Used pervasively: I/O completion, process exit, timer expiry, etc.
 
-use spin::Mutex;
+use hal::sync::KSpinLock;
 
 /// Corresponds to NT's `EVENT_TYPE` enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub enum EventType {
 
 /// Kernel event — safe to embed in other kernel objects.
 pub struct KEvent {
-    inner: Mutex<EventInner>,
+    inner: KSpinLock<EventInner>,
 }
 
 struct EventInner {
@@ -32,7 +32,7 @@ struct EventInner {
 impl KEvent {
     /// Create a new event.
     pub const fn new(kind: EventType, initial_state: bool) -> Self {
-        Self { inner: Mutex::new(EventInner { kind, signalled: initial_state }) }
+        Self { inner: KSpinLock::new(EventInner { kind, signalled: initial_state }) }
     }
 
     /// Signal the event. Returns the previous signalled state.
