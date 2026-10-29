@@ -408,7 +408,7 @@ pub fn run() {
                             hal::serial::write_str(")\r\n");
 
                             // Wait for the game process to exit
-                            while ke::scheduler::is_thread_running(tid) {
+                            while ke::sched::is_thread_running(tid) {
                                 x86_64::instructions::hlt();
                             }
                             hal::serial::write_str("[launcher] game exited\r\n");

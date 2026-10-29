@@ -345,15 +345,23 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
     fat_smoke_probe();
 
-    // Wire preemptive round-robin: the dispatch (timer ISR below
-    // DISPATCH_LEVEL, or IRQL drop) runs schedule(). Registered after ke::init()
+    // Wire preemptive round-robin: each clock tick ends the quantum, and the
+    // DISPATCH interrupt (timer ISR below DISPATCH_LEVEL, or IRQL drop) drains
+    // the DPC queue, then runs schedule(). Registered after ke::init()
     // (scheduler table ready) and before interrupts re-enable.
-    hal::irql::set_dispatch_hook(Some(ke::scheduler::schedule));
+    hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
+    hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
-    hal::idt::set_user_fault_hook(Some(ke::scheduler::terminate_current_thread));
+    hal::idt::set_user_fault_hook(Some(ke::sched::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
     deferred_preemption_self_test();
+    dpc_self_test();
+    ke_self_test();
+    if cfg!(feature = "test-ke-events") {
+        event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
+        event_ping_pong_test(ke::sched::NORMAL_PRIORITY + 1, "pinger above ponger");
+    }
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
@@ -384,7 +392,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // handles the ring-0→ring-3 transition via ring3_iretq_trampoline when it
     // first context-switches to this thread.  This allows the boot thread to
     // re-run (e.g. as a kernel shell) after the user-mode process exits via
-    // NtTerminateProcess → ke::scheduler::terminate_current_thread().
+    // NtTerminateProcess → ke::sched::terminate_current_thread().
     let (entry_point, stack_top) = ring3_ctx;
 
     log::info!("kernel_main: spawning user thread  entry={:#010x}  usp={:#010x}", entry_point, stack_top,);
@@ -402,7 +410,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         launcher::run();
         // Kill all user-mode threads (CMD.EXE etc.) so the kernel shell has
         // exclusive console input — no thread races for serial/PS2 keystrokes.
-        ke::scheduler::terminate_user_threads();
+        ke::sched::terminate_user_threads();
         // kernel_shell returns when ESC is pressed → back to launcher.
         kernel_shell(boot_info.hhdm_offset);
     }
@@ -416,7 +424,7 @@ pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
     let kstack = mm::kstack::allocate()?;
     // SAFETY: kstack was just allocated for this thread alone and is never freed.
     unsafe {
-        ke::scheduler::spawn_user_thread(
+        ke::sched::spawn_user_thread(
             kstack.top,
             entry32,
             stack32,
@@ -549,30 +557,259 @@ fn remove_identity_map(hhdm_offset: u64) {
     log::info!("[smoke] identity map removed: user half empty, APIC at {:#x}", hhdm_offset + APIC_PHYS);
 }
 
-/// Checks that DISPATCH_LEVEL defers preemption (M1, `hal::irql`): the boot
-/// thread holds a KSpinLock across several timer ticks without being switched
-/// out (the idle thread is ready), then the pending dispatch runs on release.
+/// Checks the DPC queue (M1, `ke::dpc`): a DPC queued below DISPATCH_LEVEL runs
+/// at once, at DISPATCH_LEVEL with interrupts enabled; one queued under a
+/// KSpinLock runs on release, once however often it was queued; one removed
+/// before that never runs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled, DISPATCH interrupt hook registered.
+fn dpc_self_test() {
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use ke::dpc::{ke_insert_queue_dpc, ke_remove_queue_dpc, KDpc};
+
+    static RUNS: AtomicUsize = AtomicUsize::new(0);
+    static WRONG_CONTEXT: AtomicBool = AtomicBool::new(false);
+    fn count(_: *const KDpc, _: *mut c_void, arg1: *mut c_void, _: *mut c_void) {
+        let at_dispatch = hal::irql::current() == hal::irql::Irql::Dispatch;
+        if !at_dispatch || !x86_64::instructions::interrupts::are_enabled() {
+            WRONG_CONTEXT.store(true, Ordering::Relaxed);
+        }
+        RUNS.fetch_add(arg1 as usize, Ordering::Relaxed);
+    }
+    static DPC: KDpc = KDpc::new(count, core::ptr::null_mut());
+    static LOCK: hal::sync::KSpinLock<()> = hal::sync::KSpinLock::new(());
+    let one = core::ptr::without_provenance_mut::<c_void>(1);
+    let null = core::ptr::null_mut();
+
+    // SAFETY: `DPC` is a static: valid, at a fixed address.
+    unsafe {
+        assert!(ke_insert_queue_dpc(&DPC, one, null));
+        assert_eq!(RUNS.load(Ordering::Relaxed), 1, "DPC queued at PASSIVE_LEVEL did not run at once");
+        {
+            let _guard = LOCK.lock();
+            assert!(ke_insert_queue_dpc(&DPC, one, null));
+            assert!(!ke_insert_queue_dpc(&DPC, one, null), "DPC queued twice");
+            assert_eq!(RUNS.load(Ordering::Relaxed), 1, "DPC ran at DISPATCH_LEVEL");
+        }
+        assert_eq!(RUNS.load(Ordering::Relaxed), 2, "pending DPC not run on IRQL drop");
+        {
+            let _guard = LOCK.lock();
+            assert!(ke_insert_queue_dpc(&DPC, one, null));
+            assert!(ke_remove_queue_dpc(&DPC));
+        }
+    }
+    assert_eq!(RUNS.load(Ordering::Relaxed), 2, "removed DPC ran");
+    assert!(!WRONG_CONTEXT.load(Ordering::Relaxed), "DPC routine not at DISPATCH_LEVEL with interrupts enabled");
+    log::info!("[smoke] DPC: run at once, deferred under a KSpinLock, removable");
+}
+
+/// Starts a kernel thread on a fresh guarded kernel stack (`mm::kstack`);
+/// returns its TID.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn spawn_kernel_thread(priority: u8, routine: ke::sched::ThreadRoutine, context: *mut core::ffi::c_void) -> usize {
+    let stack = mm::kstack::allocate().expect("no kernel stack for a kernel thread");
+    // SAFETY: the stack was just allocated for this thread alone and is never
+    // freed; callers keep `context` valid for the thread's life.
+    unsafe { ke::sched::create_kernel_thread(stack.top, priority, routine, context) }.expect("thread table full")
+}
+
+/// Checks that DISPATCH_LEVEL defers preemption (M1, `hal::irql`): with a
+/// kernel thread of the same priority ready, the boot thread holds a KSpinLock
+/// for more than a quantum without being switched out, then the switch asked
+/// for by the quantum end runs on release.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interrupts enabled, scheduler and dispatch hook ready.
 fn deferred_preemption_self_test() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
     const TICKS: u64 = 5;
     static LOCK: hal::sync::KSpinLock<()> = hal::sync::KSpinLock::new(());
+    static RELEASED: AtomicBool = AtomicBool::new(false);
+    fn peer(_: *mut core::ffi::c_void) {
+        while !RELEASED.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+    spawn_kernel_thread(ke::sched::NORMAL_PRIORITY, peer, core::ptr::null_mut());
+
     let tick_ms = hal::timer::TICK_INTERVAL_MS;
     let switches;
     {
         let _guard = LOCK.lock();
-        // Counted once the lock is held: a tick just before may switch freely.
-        switches = ke::scheduler::context_switches();
+        // Counted once the lock is held: a tick just before may switch freely
+        // (the peer then spins until its own quantum ends).
+        switches = ke::sched::context_switches();
         let start = hal::timer::get_tick_count();
         while hal::timer::get_tick_count() < start + TICKS * tick_ms {
             core::hint::spin_loop();
         }
-        assert_eq!(ke::scheduler::context_switches(), switches, "preempted while holding a KSpinLock");
+        assert_eq!(ke::sched::context_switches(), switches, "preempted while holding a KSpinLock");
+        RELEASED.store(true, Ordering::Release);
     }
     // The dispatch requested by those ticks ran when the guard lowered the IRQL.
-    assert!(ke::scheduler::context_switches() > switches, "pending dispatch not run on IRQL drop");
+    assert!(ke::sched::context_switches() > switches, "pending dispatch not run on IRQL drop");
     log::info!("[smoke] dispatch deferred: {} ticks under a KSpinLock without preemption, run on release", TICKS);
+}
+
+/// Checks the scheduler and the dispatcher on real threads (M1, `ke::sched`): a
+/// kernel thread of higher priority runs before its creation returns; after a
+/// 20 ms delay it wakes the boot thread through an event, then ends, which
+/// signals its thread object; a wait on an event nobody sets times out.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn ke_self_test() {
+    use abi::ntstatus::{STATUS_SUCCESS, STATUS_TIMEOUT, STATUS_WAIT_0};
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, Ordering};
+    use ke::dispatcher::{
+        ke_delay_execution_thread, ke_initialize_event, ke_set_event, ke_wait_for_single_object, DispatcherHeader,
+        KEvent, ObjectType, ProcessorMode,
+    };
+    use ke::sched::KePlatform;
+
+    const MS: i64 = 10_000;
+    static STARTED: AtomicBool = AtomicBool::new(false);
+    fn signaler(event: *mut c_void) {
+        STARTED.store(true, Ordering::Relaxed);
+        // SAFETY: on a scheduler thread; the event is never freed.
+        unsafe {
+            let delay = ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -20 * MS);
+            assert_eq!(delay, STATUS_SUCCESS);
+            ke_set_event::<KePlatform>(event.cast());
+        }
+    }
+    let wait = |object: *mut DispatcherHeader, timeout_ms: i64| {
+        // SAFETY: on the boot thread; the objects waited on are never freed.
+        unsafe { ke_wait_for_single_object::<KePlatform>(object, ProcessorMode::Kernel, false, Some(-timeout_ms * MS)) }
+    };
+
+    let event = alloc::boxed::Box::into_raw(alloc::boxed::Box::<KEvent>::new_uninit()).cast::<KEvent>();
+    // SAFETY: fresh memory at a fixed address, never freed.
+    let header = unsafe {
+        ke_initialize_event(event, ObjectType::SynchronizationEvent, false);
+        core::ptr::addr_of_mut!((*event).header)
+    };
+    let start = hal::timer::interrupt_time();
+    let tid = spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, signaler, event.cast());
+    assert!(STARTED.load(Ordering::Relaxed), "a higher-priority thread did not preempt its creator");
+    assert_eq!(wait(header, 1000), STATUS_WAIT_0, "event not set");
+    let waited = hal::timer::interrupt_time() - start;
+    assert!(waited >= 20 * MS as u64, "20 ms delay over after {waited} x 100 ns");
+    let thread = ke::sched::thread_object(tid).expect("thread object");
+    assert_eq!(wait(thread, 1000), STATUS_WAIT_0, "thread end not signaled");
+
+    let start = hal::timer::interrupt_time();
+    assert_eq!(wait(header, 30), STATUS_TIMEOUT);
+    assert!(hal::timer::interrupt_time() - start >= 30 * MS as u64, "timed out too early");
+    log::info!("[smoke] Ke: priority preemption, event wait, delay, thread end and timeout ok");
+}
+
+/// M1 exit criterion (05): two kernel threads exchange 10 000 round trips
+/// through two synchronization events, without a loss or a hang. The ponger
+/// runs at normal priority, the pinger at `pinger_priority`: above it, each
+/// round trip preempts the ponger. A lost wake-up leaves both threads waiting,
+/// which the boot thread's timeout reports. Called only with the
+/// `test-ke-events` feature (scenario `tests/boot/ke-events`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn event_ping_pong_test(pinger_priority: u8, label: &str) {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicU32, Ordering};
+    use ke::dispatcher::{
+        ke_initialize_event, ke_set_event, ke_wait_for_multiple_objects, ke_wait_for_single_object, KEvent, ObjectType,
+        ProcessorMode, WaitBlock, WaitType,
+    };
+    use ke::sched::KePlatform;
+
+    const ROUND_TRIPS: u32 = 10_000;
+    struct PingPong {
+        ping: KEvent,
+        pong: KEvent,
+        pings: AtomicU32,
+        pongs: AtomicU32,
+    }
+    /// Waits on `event`, then sets `answer`, `ROUND_TRIPS` times (or the other
+    /// way round), counting in `count`.
+    ///
+    /// # Safety
+    /// On a scheduler thread; both events are initialised and never freed.
+    unsafe fn exchange(wait_first: bool, event: *mut KEvent, answer: *mut KEvent, count: &AtomicU32) {
+        for _ in 0..ROUND_TRIPS {
+            // SAFETY: guaranteed by the caller.
+            unsafe {
+                if !wait_first {
+                    ke_set_event::<KePlatform>(answer);
+                }
+                let header = core::ptr::addr_of_mut!((*event).header);
+                let status = ke_wait_for_single_object::<KePlatform>(header, ProcessorMode::Kernel, false, None);
+                assert_eq!(status, STATUS_WAIT_0);
+                count.fetch_add(1, Ordering::Relaxed);
+                if wait_first {
+                    ke_set_event::<KePlatform>(answer);
+                }
+            }
+        }
+    }
+    fn ponger(pp: *mut c_void) {
+        let pp = pp.cast::<PingPong>();
+        // SAFETY: on its own thread; `pp` is never freed.
+        unsafe {
+            exchange(true, core::ptr::addr_of_mut!((*pp).ping), core::ptr::addr_of_mut!((*pp).pong), &(*pp).pongs)
+        };
+    }
+    fn pinger(pp: *mut c_void) {
+        let pp = pp.cast::<PingPong>();
+        // SAFETY: as above.
+        unsafe {
+            exchange(false, core::ptr::addr_of_mut!((*pp).pong), core::ptr::addr_of_mut!((*pp).ping), &(*pp).pings)
+        };
+    }
+
+    let pp = alloc::boxed::Box::into_raw(alloc::boxed::Box::<PingPong>::new_uninit()).cast::<PingPong>();
+    // SAFETY: fresh memory at a fixed address, never freed; each field is
+    // written in place.
+    unsafe {
+        ke_initialize_event(core::ptr::addr_of_mut!((*pp).ping), ObjectType::SynchronizationEvent, false);
+        ke_initialize_event(core::ptr::addr_of_mut!((*pp).pong), ObjectType::SynchronizationEvent, false);
+        core::ptr::addr_of_mut!((*pp).pings).write(AtomicU32::new(0));
+        core::ptr::addr_of_mut!((*pp).pongs).write(AtomicU32::new(0));
+    }
+    let switches = ke::sched::context_switches();
+    let start = hal::timer::interrupt_time();
+    let ponger = spawn_kernel_thread(ke::sched::NORMAL_PRIORITY, ponger, pp.cast());
+    let pinger = spawn_kernel_thread(pinger_priority, pinger, pp.cast());
+    let threads = [ponger, pinger].map(|tid| ke::sched::thread_object(tid).expect("thread object"));
+    let mut blocks = [const { WaitBlock::new() }; 2];
+    // SAFETY: on the boot thread; the thread objects are never freed.
+    let status = unsafe {
+        ke_wait_for_multiple_objects::<KePlatform>(
+            &threads,
+            WaitType::WaitAll,
+            ProcessorMode::Kernel,
+            false,
+            Some(-30 * 1000 * 10_000),
+            Some(&mut blocks),
+        )
+    };
+    // SAFETY: `pp` is never freed.
+    let (pings, pongs) = unsafe { ((*pp).pings.load(Ordering::Relaxed), (*pp).pongs.load(Ordering::Relaxed)) };
+    assert_eq!(status, STATUS_WAIT_0, "ping-pong hung ({label}): {pings} pings, {pongs} pongs answered");
+    assert_eq!((pings, pongs), (ROUND_TRIPS, ROUND_TRIPS));
+    log::info!(
+        "[ke-events] {}: {} round trips in {} ms, {} context switches",
+        label,
+        ROUND_TRIPS,
+        (hal::timer::interrupt_time() - start) / 10_000,
+        ke::sched::context_switches() - switches,
+    );
 }
 
 /// Kernel-stack guard-page lookup for the fault handlers (`hal::idt`).
@@ -693,7 +930,7 @@ fn try_run_hello_exe(hhdm_offset: u64) {
     match tid {
         Some(t) => {
             // Wait for the process to exit via NtTerminateProcess.
-            while ke::scheduler::is_thread_running(t) {
+            while ke::sched::is_thread_running(t) {
                 x86_64::instructions::hlt();
             }
             log::info!("[smoke] HELLO.EXE ran ok");
@@ -1256,7 +1493,7 @@ fn shell_run(path: &str, hhdm_offset: u64) {
     match tid {
         Some(t) => {
             shell_write("[shell] running...\n");
-            while ke::scheduler::is_thread_running(t) {
+            while ke::sched::is_thread_running(t) {
                 x86_64::instructions::hlt();
             }
             shell_write("[shell] process exited\n");

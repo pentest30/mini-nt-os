@@ -21,12 +21,14 @@
 //! it, ADR-015). The APIC TPR will mirror it once the clock vector sits above
 //! DISPATCH_LEVEL (M1).
 //!
-//! DISPATCH_LEVEL defers preemption, as NT's DISPATCH software interrupt
-//! does: the timer ISR switches threads only if it interrupted code running
-//! below DISPATCH_LEVEL ([`dispatch_from_interrupt`]); otherwise the dispatch
-//! stays pending until [`lower`] brings the IRQL below DISPATCH_LEVEL with
-//! interrupts enabled. A thread holding a `KSpinLock` (at DISPATCH_LEVEL) is
-//! therefore never preempted.
+//! The dispatch is NT's DISPATCH software interrupt: Ke's hook drains the DPC
+//! queue, then switches threads if a quantum end asked for it. Requested by
+//! [`request_dispatch`] (DPC queued, quantum end), it runs below
+//! DISPATCH_LEVEL only: at once if the requester is there with interrupts
+//! enabled, at the epilogue of the ISR that requested it if the interrupted
+//! code was there ([`dispatch_from_interrupt`]), otherwise as soon as [`lower`]
+//! brings the IRQL below DISPATCH_LEVEL with interrupts enabled. A thread
+//! holding a `KSpinLock` (at DISPATCH_LEVEL) is therefore never preempted.
 //!
 //! WI7e Ch.3 "Interrupt Request Levels and Deferred Procedure Calls"
 
@@ -85,11 +87,11 @@ impl Irql {
 #[unsafe(no_mangle)]
 static HAL_CURRENT_IRQL: AtomicU8 = AtomicU8::new(Irql::Passive.as_u8());
 
-/// A dispatch (thread switch) was requested while the IRQL was at or above
-/// DISPATCH_LEVEL.
+/// The DISPATCH software interrupt is requested and has not run yet.
 static DISPATCH_PENDING: AtomicBool = AtomicBool::new(false);
 
-/// The dispatcher: `fn()` stored as `usize`, 0 until Ke registers it.
+/// The DISPATCH interrupt handler: `fn()` stored as `usize`, 0 until Ke
+/// registers it.
 static DISPATCH_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -148,44 +150,53 @@ pub fn lower(old_irql: Irql) {
     }
 }
 
-/// Registers the dispatcher (Ke's scheduler), run below DISPATCH_LEVEL with
-/// interrupts disabled. `None` until the scheduler is ready.
+/// Registers the DISPATCH interrupt handler (Ke: DPC queue, then thread
+/// switch), run at DISPATCH_LEVEL with interrupts disabled on entry and exit.
+/// `None` until Ke is ready.
 ///
 /// # IRQL: Any level.
 pub fn set_dispatch_hook(hook: Option<fn()>) {
     DISPATCH_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
 }
 
-/// Requests a dispatch, run as soon as the IRQL drops below DISPATCH_LEVEL.
+/// Requests the DISPATCH interrupt (HalRequestSoftwareInterrupt). Below
+/// DISPATCH_LEVEL with interrupts enabled it runs before this returns: the
+/// caller may be switched out here. Otherwise it runs at the epilogue of the
+/// current ISR, or when the IRQL drops below DISPATCH_LEVEL.
 ///
-/// # IRQL: Any level.
+/// # IRQL: Any level, ISR included.
 pub fn request_dispatch() {
     DISPATCH_PENDING.store(true, Ordering::Release);
+    if current() < Irql::Dispatch && interrupts_enabled() {
+        x86_64::instructions::interrupts::without_interrupts(run_dispatch);
+    }
 }
 
-/// From an ISR epilogue (EOI sent, interrupts disabled): dispatches now if the
-/// interrupted code ran below DISPATCH_LEVEL, else leaves the dispatch pending.
+/// From an ISR epilogue (EOI sent, interrupts disabled): runs the DISPATCH
+/// interrupt the ISR requested, if the interrupted code ran below
+/// DISPATCH_LEVEL; otherwise it stays pending until the IRQL drops.
 ///
 /// # IRQL: DIRQL, in an ISR.
 pub fn dispatch_from_interrupt() {
     if current() < Irql::Dispatch {
         run_dispatch();
-    } else {
-        request_dispatch();
     }
 }
 
-/// Runs the dispatcher at DISPATCH_LEVEL, interrupts disabled. The thread
-/// switched to resumes at its own switch point, which restores its own IRQL;
-/// this one restores `old` when it runs again.
+/// Runs the DISPATCH interrupt at DISPATCH_LEVEL, interrupts disabled, until
+/// no request is left (an ISR may request it again while the handler runs
+/// DPCs with interrupts enabled). The thread switched to resumes at its own
+/// switch point, which restores its own IRQL; this one restores `old` when it
+/// runs again.
 fn run_dispatch() {
     let old = raise(Irql::Dispatch);
-    DISPATCH_PENDING.store(false, Ordering::Release);
-    let hook = DISPATCH_HOOK.load(Ordering::Acquire);
-    if hook != 0 {
-        // SAFETY: `hook` was stored by `set_dispatch_hook` from a valid `fn()`.
-        let dispatch: fn() = unsafe { core::mem::transmute(hook) };
-        dispatch();
+    while DISPATCH_PENDING.swap(false, Ordering::AcqRel) {
+        let hook = DISPATCH_HOOK.load(Ordering::Acquire);
+        if hook != 0 {
+            // SAFETY: `hook` was stored by `set_dispatch_hook` from a valid `fn()`.
+            let dispatch: fn() = unsafe { core::mem::transmute(hook) };
+            dispatch();
+        }
     }
     // Not `lower`: interrupts are off, and the dispatch has just run.
     HAL_CURRENT_IRQL.store(old.as_u8(), Ordering::Release);

@@ -1,7 +1,8 @@
 # CI (06 §6): rustfmt and clippy (`cargo xtask lint`), no warnings, host
 # tests, bare-metal builds, and the boot scenarios of tests/boot/ through
-# `cargo xtask test`: the smoke test on both syscall paths (ADR-004), and a
-# provoked kernel stack overflow that must end on the STOP screen.
+# `cargo xtask test`: the smoke test on both syscall paths (ADR-004), a
+# provoked kernel stack overflow that must end on the STOP screen, and the
+# event ping-pong between two kernel threads (M1).
 name: CI
 
 on:
@@ -54,6 +55,7 @@ jobs:
           cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features trace-syscalls 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-stack-overflow 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-ke-events 2>&1 | tee -a build.log
           if grep -E '^warning' build.log; then
             echo "::error::bare-metal build emitted warnings"
             exit 1
@@ -72,6 +74,8 @@ jobs:
             args: --scenario smoke --cpu intel
           - name: kernel stack overflow, STOP screen
             args: --scenario stack-overflow
+          - name: event ping-pong between two kernel threads (M1)
+            args: --scenario ke-events
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain (rust-toolchain.toml)

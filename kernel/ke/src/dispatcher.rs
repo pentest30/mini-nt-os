@@ -22,9 +22,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::{
     NtStatus, STATUS_ABANDONED_WAIT_0, STATUS_KERNEL_APC, STATUS_MUTANT_NOT_OWNED, STATUS_SEMAPHORE_LIMIT_EXCEEDED,
-    STATUS_TIMEOUT, STATUS_USER_APC, STATUS_WAIT_0,
+    STATUS_SUCCESS, STATUS_TIMEOUT, STATUS_USER_APC, STATUS_WAIT_0,
 };
 use hal::irql::Irql;
+
+use crate::dpc::KDpc;
 
 pub const THREAD_WAIT_OBJECTS: usize = 3;
 pub const TIMER_WAIT_BLOCK: usize = 3;
@@ -60,6 +62,8 @@ pub unsafe trait Platform {
 
     /// Format NT : négatif = relatif (unités de 100 ns), positif = absolu.
     /// Retourne `false` si l'échéance est déjà passée (timer non inséré).
+    /// Inséré, le timer a `header.inserted` à 1 ; `cancel_timer` et son
+    /// expiration le remettent à 0 (`ke::timer::TimerTable` le fait).
     ///
     /// # Safety
     /// Verrou dispatcher tenu ; `timer` reste valide jusqu'à son échéance ou son
@@ -224,9 +228,13 @@ pub struct KMutant {
 #[repr(C)]
 pub struct KTimer {
     pub header: DispatcherHeader,
+    /// Échéance en interrupt time (100 ns), tant que le timer est armé.
     pub due_time: u64,
     pub timer_list_entry: ListEntry,
+    /// Période en millisecondes ; 0 pour un timer à une seule échéance.
     pub period: i32,
+    /// DPC inséré à chaque échéance, ou nul (`ke::timer::ke_set_timer`).
+    pub dpc: *const KDpc,
 }
 
 #[repr(u16)]
@@ -331,6 +339,7 @@ impl KThread {
             ptr::addr_of_mut!((*timer).due_time).write(0);
             ListEntry::init(ptr::addr_of_mut!((*timer).timer_list_entry));
             ptr::addr_of_mut!((*timer).period).write(0);
+            ptr::addr_of_mut!((*timer).dpc).write(ptr::null());
             ListEntry::init(ptr::addr_of_mut!((*this).mutant_list_head));
         }
     }
@@ -379,6 +388,19 @@ impl DispatcherLock {
     pub unsafe fn release<P: Platform>(&self, old_irql: Irql) {
         self.locked.store(false, Ordering::Release);
         P::lower_irql(old_irql);
+    }
+
+    /// Relâche le verrou en restant à DISPATCH_LEVEL : juste avant une commutation
+    /// de thread, dont le thread repris rabaisse lui-même son IRQL (`ke::sched`).
+    ///
+    /// # Safety
+    /// Le verrou est tenu par ce CPU ; rien ne s'exécute sur ce CPU avant la
+    /// commutation qui touche à l'état qu'il protège.
+    ///
+    /// # IRQL
+    /// DISPATCH_LEVEL, inchangé.
+    pub unsafe fn unlock(&self) {
+        self.locked.store(false, Ordering::Release);
     }
 }
 
@@ -544,7 +566,8 @@ unsafe fn ki_wait_test<P: Platform>(obj: *mut DispatcherHeader) {
 
 /// KeWaitForMultipleObjects. Pour plus de 3 objets, l'appelant fournit un tableau
 /// de wait blocks (comme NT). Les doublons en WaitAll doivent être rejetés en amont
-/// (STATUS_INVALID_PARAMETER_MIX côté Nt*).
+/// (STATUS_INVALID_PARAMETER_MIX côté Nt*). Sans objet, un WaitAny avec timeout
+/// n'attend que celui-ci ([`ke_delay_execution_thread`]).
 ///
 /// # Safety
 /// Les objets sont initialisés et restent valides pendant l'attente ; le thread
@@ -561,7 +584,8 @@ pub unsafe fn ke_wait_for_multiple_objects<P: Platform>(
     wait_block_array: Option<&mut [WaitBlock]>,
 ) -> NtStatus {
     let count = objects.len();
-    assert!((1..=MAXIMUM_WAIT_OBJECTS).contains(&count), "wait on {count} objects");
+    assert!(count <= MAXIMUM_WAIT_OBJECTS, "wait on {count} objects");
+    assert!(count > 0 || (wait_type == WaitType::WaitAny && timeout.is_some()), "wait on nothing, forever");
 
     let thread = P::current_thread();
     let blocks: *mut WaitBlock = match wait_block_array {
@@ -675,6 +699,30 @@ pub unsafe fn ke_wait_for_multiple_objects<P: Platform>(
                 return status;
             }
         }
+    }
+}
+
+/// KeDelayExecutionThread : bloque le thread courant pendant `interval` (format NT
+/// des échéances) ; STATUS_SUCCESS à l'échéance. Une attente alertable peut finir
+/// plus tôt (STATUS_USER_APC). Un intervalle nul ou déjà échu retourne aussitôt,
+/// sans céder le processeur.
+///
+/// # Safety
+/// Le thread courant a été initialisé par [`KThread::init`].
+///
+/// # IRQL
+/// <= APC_LEVEL. Peut bloquer.
+pub unsafe fn ke_delay_execution_thread<P: Platform>(
+    wait_mode: ProcessorMode,
+    alertable: bool,
+    interval: i64,
+) -> NtStatus {
+    // SAFETY: garanti par l'appelant ; aucun objet à garder valide.
+    match unsafe {
+        ke_wait_for_multiple_objects::<P>(&[], WaitType::WaitAny, wait_mode, alertable, Some(interval), None)
+    } {
+        STATUS_TIMEOUT => STATUS_SUCCESS,
+        status => status,
     }
 }
 
@@ -825,8 +873,9 @@ pub unsafe fn ke_initialize_mutant(m: *mut KMutant) {
     }
 }
 
-/// KeReleaseMutant. `abandoned = true` est utilisé par le nettoyage à la sortie
-/// d'un thread qui possède encore des mutants (parcours de `mutant_list_head`).
+/// KeReleaseMutant. `abandoned = true` abandonne le mutant, quel que soit son
+/// propriétaire ([`ki_thread_exit`] le fait, verrou tenu, pour ceux d'un thread qui
+/// se termine).
 ///
 /// # Safety
 /// `m` est un mutant initialisé.
@@ -869,8 +918,9 @@ pub unsafe fn ke_release_mutant<P: Platform>(m: *mut KMutant, abandoned: bool) -
 // Intégrations timers / APC (appelées verrou tenu)
 // ---------------------------------------------------------------------------
 
-/// Appelé par le DPC d'horloge quand un timer arrive à échéance (déjà retiré de la
-/// file des timers). Réveille notamment les threads dont c'est le timeout.
+/// Appelé par le DPC d'expiration quand un timer arrive à échéance (déjà retiré de
+/// la roue). Réveille notamment les threads dont c'est le timeout. Le DPC du timer
+/// et le réarmement d'un timer périodique reviennent à `ke::timer`.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `timer` est valide.
@@ -884,7 +934,39 @@ pub unsafe fn ki_timer_expired<P: Platform>(timer: *mut KTimer) {
         (*h).signal_state = 1;
         ki_wait_test::<P>(h);
     }
-    // TODO : réarmer si (*timer).period != 0.
+}
+
+/// Fin d'un thread : son attente éventuelle est défaite, les mutants qu'il possède
+/// sont abandonnés (le suivant à les acquérir reçoit STATUS_ABANDONED_WAIT_0), et
+/// l'objet thread est signalé, ce qui réveille ceux qui attendent sa fin. Le
+/// retirer de l'ordonnancement revient à l'appelant.
+///
+/// # Safety
+/// Verrou dispatcher tenu ; `thread` est valide.
+///
+/// # IRQL
+/// DISPATCH_LEVEL.
+pub unsafe fn ki_thread_exit<P: Platform>(thread: *mut KThread) {
+    // SAFETY: garanti par l'appelant ; la liste des mutants ne contient que les
+    // `mutant_list_entry` de mutants valides que le thread possède.
+    unsafe {
+        if (*thread).state == ThreadState::Waiting {
+            ki_unlink_wait_blocks::<P>(thread);
+        }
+        (*thread).state = ThreadState::Terminated;
+        let mutants = ptr::addr_of_mut!((*thread).mutant_list_head);
+        while !ListEntry::is_empty(mutants) {
+            let entry = (*mutants).flink;
+            ListEntry::remove(entry);
+            let m = containing_record!(entry, KMutant, mutant_list_entry);
+            (*m).owner_thread = ptr::null_mut();
+            (*m).abandoned = true;
+            (*m).header.signal_state = 1;
+            ki_wait_test::<P>(ptr::addr_of_mut!((*m).header));
+        }
+        (*thread).header.signal_state = 1;
+        ki_wait_test::<P>(ptr::addr_of_mut!((*thread).header));
+    }
 }
 
 /// Appelé après l'insertion d'un APC utilisateur. Un thread en attente alertable

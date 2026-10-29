@@ -8,12 +8,15 @@
 //!   5. Set APIC timer to periodic mode, initial count = ticks_per_ms × 10.
 //!   6. Enable interrupts — ISR at vector 0x20 calls `tick()` + EOI.
 //!
-//! After calibration `get_tick_count()` returns real milliseconds since boot,
-//! feeding `kernel32!GetTickCount` and `winmm!timeGetTime`.
+//! Each tick advances the interrupt time ([`interrupt_time`], in 100 ns) by
+//! the interval currently programmed, which `set_resolution` can change: the
+//! clock stays right at any resolution. `get_tick_count()` returns real
+//! milliseconds since boot, feeding `kernel32!GetTickCount` and
+//! `winmm!timeGetTime`.
 //!
 //! WI7e Ch.3 "Clock Intervals and Timer Resolution"
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
 
 // ── Tick interval ─────────────────────────────────────────────────────────────
@@ -55,9 +58,13 @@ const PIT_10MS: u16 = 11_931;
 
 // ── Counters ──────────────────────────────────────────────────────────────────
 
-/// Monotonically-increasing tick counter; one unit = TICK_INTERVAL_MS ms.
-/// Incremented by the APIC timer ISR (vector 0x20).
-static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Interrupt time: 100 ns units since the timer started (NT's InterruptTime,
+/// KUSER_SHARED_DATA). Advanced by the APIC timer ISR (vector 0x20).
+static INTERRUPT_TIME: AtomicU64 = AtomicU64::new(0);
+
+/// Interval between two ticks, in 100 ns units: the period the APIC timer is
+/// programmed with ([`TICK_INTERVAL_MS`], then `set_resolution`).
+static TICK_INTERVAL_100NS: AtomicU64 = AtomicU64::new(TICK_INTERVAL_MS * 10_000);
 
 /// APIC timer ticks per millisecond, stored after calibration.
 /// Zero means the timer has not been calibrated yet.
@@ -65,13 +72,16 @@ static APIC_TICKS_PER_MS: AtomicU64 = AtomicU64::new(0);
 
 static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
 
+/// Ke's clock interrupt handler: `fn()` stored as `usize`, 0 until registered.
+static CLOCK_HOOK: AtomicUsize = AtomicUsize::new(0);
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Initialise the APIC timer and enable hardware interrupts.
 ///
 /// Calibrates the APIC timer frequency using PIT channel 2 as a reference.
-/// After this call the timer fires at 100 Hz (10 ms intervals) and increments
-/// `TICK_COUNT` via the ISR registered in `idt.rs`.
+/// After this call the timer fires at 100 Hz (10 ms intervals) and advances
+/// the interrupt time via the ISR registered in `idt.rs`.
 ///
 /// # Safety
 /// - Must run after `idt::init()` (IDT loaded; timer ISR at vector 0x20 reachable).
@@ -201,11 +211,11 @@ pub unsafe fn init() {
 #[inline]
 #[expect(clippy::identity_op, reason = "KUSER_SHARED_DATA fields are written at their offsets, 0x000 included")]
 pub fn tick() {
-    let ticks = TICK_COUNT.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+    let interval = TICK_INTERVAL_100NS.load(Ordering::Relaxed);
+    let interrupt_time_100ns = INTERRUPT_TIME.fetch_add(interval, Ordering::Relaxed).wrapping_add(interval);
     let sud = SHARED_USER_DATA_VA.load(Ordering::Relaxed);
     if sud != 0 {
-        let tick_ms = ticks.wrapping_mul(TICK_INTERVAL_MS);
-        let interrupt_time_100ns = tick_ms.wrapping_mul(10_000);
+        let tick_ms = interrupt_time_100ns / 10_000;
 
         // KSYSTEM_TIME split: LowPart (u32), High1Time (u32), High2Time (u32).
         // High2Time == High1Time is the XP torn-read safety contract.
@@ -248,7 +258,17 @@ pub fn tick() {
 /// # IRQL: Any level (single atomic read)
 #[inline]
 pub fn get_tick_count() -> u64 {
-    TICK_COUNT.load(Ordering::Relaxed) * TICK_INTERVAL_MS
+    interrupt_time() / 10_000
+}
+
+/// Interrupt time: 100 ns units since the timer started, at the resolution of
+/// the last tick.
+///
+/// # IRQL
+/// Any level (single atomic read).
+#[inline]
+pub fn interrupt_time() -> u64 {
+    INTERRUPT_TIME.load(Ordering::Relaxed)
 }
 
 /// Reprogram the APIC timer to the requested resolution.
@@ -268,6 +288,9 @@ pub fn set_resolution(hundred_ns: u32) {
     let ms = ((hundred_ns / 10_000) as u64).clamp(1, 15);
     let new_count = (ticks_per_ms * ms) as u32;
 
+    // The interrupt time follows the new period. Writing the initial count
+    // restarts the countdown: at most one tick is counted with the old one.
+    set_tick_interval_ms(ms);
     // SAFETY: APIC MMIO is mapped at apic_reg(0) (HHDM); caller guarantees
     // PASSIVE_LEVEL.
     unsafe {
@@ -275,6 +298,33 @@ pub fn set_resolution(hundred_ns: u32) {
     }
 
     log::info!("timer::set_resolution: {}ms interval ({}×100ns request)", ms, hundred_ns);
+}
+
+/// The interval each tick adds to the interrupt time.
+fn set_tick_interval_ms(ms: u64) {
+    TICK_INTERVAL_100NS.store(ms * 10_000, Ordering::Relaxed);
+}
+
+/// Registers Ke's clock interrupt handler, run by the timer ISR at each tick
+/// once the interrupt time has advanced, interrupts disabled.
+///
+/// # IRQL
+/// Any level.
+pub fn set_clock_hook(hook: Option<fn()>) {
+    CLOCK_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+}
+
+/// Runs Ke's clock interrupt handler, if registered.
+///
+/// # IRQL
+/// In the timer ISR.
+pub(crate) fn call_clock_hook() {
+    let hook = CLOCK_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        // SAFETY: `hook` was stored by `set_clock_hook` from a valid `fn()`.
+        let clock: fn() = unsafe { core::mem::transmute(hook) };
+        clock();
+    }
 }
 
 pub fn set_shared_user_data_addr(addr: Option<u64>) {
@@ -302,4 +352,24 @@ unsafe fn apic_read(offset: u64) -> u32 {
 unsafe fn apic_write(offset: u64, value: u32) {
     // SAFETY: caller guarantees mapping and valid offset.
     unsafe { core::ptr::write_volatile(apic_reg(offset) as *mut u32, value) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// After `set_resolution`, a tick adds the new interval, not 10 ms
+    /// (GetTickCount ran up to 10 times too fast after `timeBeginPeriod(1)`).
+    #[test]
+    fn interrupt_time_advances_by_the_programmed_interval() {
+        let start = interrupt_time();
+        tick();
+        assert_eq!(interrupt_time() - start, TICK_INTERVAL_MS * 10_000);
+        set_tick_interval_ms(1);
+        tick();
+        tick();
+        set_tick_interval_ms(TICK_INTERVAL_MS);
+        assert_eq!(interrupt_time() - start, (TICK_INTERVAL_MS + 2) * 10_000);
+        assert_eq!(get_tick_count(), interrupt_time() / 10_000);
+    }
 }
