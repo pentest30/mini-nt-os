@@ -3,6 +3,10 @@ use core::arch::asm;
 pub const IA32_SYSENTER_CS: u32 = 0x174;
 pub const IA32_SYSENTER_ESP: u32 = 0x175;
 pub const IA32_SYSENTER_EIP: u32 = 0x176;
+/// Base of GS (the KPCR in kernel mode, `hal::pcr`).
+pub const IA32_GS_BASE: u32 = 0xC000_0101;
+/// Base that SWAPGS exchanges with GS's.
+pub const IA32_KERNEL_GS_BASE: u32 = 0xC000_0102;
 
 /// Reads model-specific register `msr`.
 ///
