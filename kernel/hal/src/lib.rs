@@ -54,7 +54,7 @@ pub unsafe fn init() {
         gdt::init(); // TSS with RSP0 + IST[0] double-fault stack
         sysenter::init();
         idt::init(); // exception + timer + syscall handlers (needs GDT/TSS)
-        irql::init(); // set IRQL = PASSIVE, program APIC TPR
+        irql::init(); // IRQL = PASSIVE: CR8, the APIC task priority, at 0
         timer::init(); // APIC timer calibration + periodic tick (needs IDT)
         ps2::init(); // flush PS/2 output buffer left by UEFI firmware
     }

@@ -355,6 +355,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::idt::set_user_fault_hook(Some(ke::sched::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
+    tpr_self_test();
     deferred_preemption_self_test();
     dpc_self_test();
     ke_self_test();
@@ -607,6 +608,35 @@ fn dpc_self_test() {
     assert_eq!(RUNS.load(Ordering::Relaxed), 2, "removed DPC ran");
     assert!(!WRONG_CONTEXT.load(Ordering::Relaxed), "DPC routine not at DISPATCH_LEVEL with interrupts enabled");
     log::info!("[smoke] DPC: run at once, deferred under a KSpinLock, removable");
+}
+
+/// Checks that the IRQL is the APIC task priority (M1, `hal::irql`): with
+/// interrupts enabled, the clock (CLOCK_LEVEL) keeps ticking at
+/// DISPATCH_LEVEL, is masked by the APIC alone at HIGH_LEVEL, and is
+/// delivered as soon as the IRQL drops.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled, timer running.
+fn tpr_self_test() {
+    use hal::irql::{Irql, IrqlGuard};
+
+    const PERIODS: u32 = 3;
+    assert!(x86_64::instructions::interrupts::are_enabled());
+    {
+        let _dispatch = IrqlGuard::raise(Irql::Dispatch);
+        let start = hal::timer::interrupt_time();
+        hal::timer::spin_periods(PERIODS);
+        assert!(hal::timer::interrupt_time() > start, "no clock interrupt at DISPATCH_LEVEL");
+    }
+    let masked_at;
+    {
+        let _high = IrqlGuard::raise(Irql::High);
+        masked_at = hal::timer::interrupt_time();
+        hal::timer::spin_periods(PERIODS);
+        assert_eq!(hal::timer::interrupt_time(), masked_at, "clock interrupt delivered at HIGH_LEVEL");
+    }
+    assert!(hal::timer::interrupt_time() > masked_at, "pending clock interrupt not delivered on IRQL drop");
+    log::info!("[smoke] TPR: clock ticks at DISPATCH_LEVEL, masked at HIGH_LEVEL, delivered on drop");
 }
 
 /// Starts a kernel thread on a fresh guarded kernel stack (`mm::kstack`);

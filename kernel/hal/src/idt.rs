@@ -2,7 +2,7 @@
 //!
 //! Registers handlers for:
 //!   - CPU exceptions (vectors 0x00–0x1F)
-//!   - APIC timer     (vector 0x20) — drives the scheduler clock
+//!   - APIC timer     (vector 0xD0, CLOCK_LEVEL) — drives the scheduler clock
 //!   - Syscall gate   (vector 0x2E / INT 2Eh) — NT native syscall ABI
 //!
 //! # Double-fault stack
@@ -66,13 +66,16 @@ pub unsafe fn init() {
             idt.double_fault.set_handler_fn(exception_double_fault).set_stack_index(DOUBLE_FAULT_IST_INDEX);
         }
 
-        // ── APIC timer (IRQ0 → vector 0x20) ────────────────────────────────
-        // Vector 0x20 does not overlap any CPU exception (0x00–0x1F).
-        idt[0x20].set_handler_fn(irq_timer);
-
-        // ── PS/2 keyboard (IRQ1 → vector 0x21) ──────────────────────────────
-        // Vector 0x21 does not overlap CPU exceptions or the timer.
-        idt[0x21].set_handler_fn(irq_keyboard);
+        // ── Interrupts: the vector's class is the ISR's IRQL (hal::irql) ─────
+        // APIC timer at CLOCK_LEVEL, above DISPATCH_LEVEL.
+        idt[super::timer::CLOCK_VECTOR].set_handler_fn(irq_timer);
+        // PS/2 keyboard (8259 IRQ1) at DEVICE_LEVEL.
+        idt[super::timer::PIC_VECTOR_BASE + 1].set_handler_fn(irq_keyboard);
+        // Spurious interrupts: the APIC's (SVR), which a raise of the TPR can
+        // produce for an interrupt it has just masked, and the master 8259's
+        // IRQ7. Neither takes an EOI.
+        idt[0xFF].set_handler_fn(irq_spurious);
+        idt[super::timer::PIC_VECTOR_BASE + 7].set_handler_fn(irq_spurious);
 
         // ── NT syscall gate (INT 0x2E) ───────────────────────────────────────
         // DPL=3 so user-mode code (games) can invoke it directly.
@@ -97,7 +100,7 @@ pub unsafe fn init() {
     // `idt` has 'static lifetime via `Once`, as `load` requires.
     idt.load();
 
-    log::trace!("HAL IDT: loaded (exceptions + APIC timer 0x20 + NT syscall 0x2E)");
+    log::trace!("HAL IDT: loaded (exceptions, clock 0xD0, 8259 0x30, NT syscall 0x2E)");
 }
 
 // ── Exception handlers ───────────────────────────────────────────────────────
@@ -427,6 +430,9 @@ extern "x86-interrupt" fn exception_segment_not_present(frame: InterruptStackFra
 // ── IRQ handlers ─────────────────────────────────────────────────────────────
 
 extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
+    // ── 0. CLOCK_LEVEL for the ISR (the APIC already masks up to it) ─────────
+    let interrupted = super::irql::enter_interrupt(super::irql::Irql::Clock);
+
     // ── 1. Interrupt time, then Ke's clock work (quantum end, which requests
     // the DISPATCH interrupt run in step 4) ─────────────────────────────────
     super::timer::tick();
@@ -465,15 +471,15 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     // would `hlt` waiting for a timer interrupt that never comes (the APIC
     // holds off new interrupts until EOI is received).
     //
-    // SAFETY: inside the APIC timer ISR (vector 0x20); EOI is required.
+    // SAFETY: inside the APIC timer ISR (CLOCK_VECTOR); EOI is required.
     unsafe { apic_eoi() };
 
-    // ── 4. DISPATCH interrupt (DPCs, thread switch) ───────────────────────────
+    // ── 4. Back to the interrupted IRQL, then the DISPATCH interrupt ──────────
     // After EOI, so the APIC is free to fire the next tick while we run on the
-    // next thread's stack. It runs now only if the interrupted code was below
-    // DISPATCH_LEVEL; otherwise it waits for the IRQL to drop (a KSpinLock
-    // holder is never preempted).
-    super::irql::dispatch_from_interrupt();
+    // next thread's stack. The DISPATCH interrupt (DPCs, thread switch) runs
+    // now only if the interrupted code was below DISPATCH_LEVEL; otherwise it
+    // waits for the IRQL to drop (a KSpinLock holder is never preempted).
+    super::irql::exit_interrupt(interrupted);
 }
 
 /// C-ABI trampoline called by the naked `hal_int2e_entry` handler.
@@ -614,6 +620,8 @@ extern "C" fn hal_int2e_entry_stub() {}
 // ── PS/2 keyboard IRQ1 handler ────────────────────────────────────────────
 
 extern "x86-interrupt" fn irq_keyboard(_frame: InterruptStackFrame) {
+    let interrupted = super::irql::enter_interrupt(super::irql::Irql::Device);
+
     // Read the scancode from port 0x60 (must read to acknowledge the 8042).
     // SAFETY: port 0x60 is the PS/2 data register; always safe at CPL 0.
     let scancode: u8 = unsafe { Port::<u8>::new(0x60).read() };
@@ -626,7 +634,11 @@ extern "x86-interrupt" fn irq_keyboard(_frame: InterruptStackFrame) {
     unsafe {
         Port::<u8>::new(0x20).write(0x20);
     }
+    super::irql::exit_interrupt(interrupted);
 }
+
+/// A spurious interrupt: nothing to do, and no EOI.
+extern "x86-interrupt" fn irq_spurious(_frame: InterruptStackFrame) {}
 
 // ── APIC helpers ─────────────────────────────────────────────────────────────
 

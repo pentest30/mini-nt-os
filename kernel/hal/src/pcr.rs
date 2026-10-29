@@ -1,6 +1,7 @@
 //! KPCR : la zone de contrôle de chaque processeur (02 §HAL, ADR-015). En mode
 //! noyau, la base de GS pointe sur celle du CPU courant ; elle porte l'état par
-//! CPU de la HAL (IRQL, interruption DISPATCH en attente) et le KPRCB de Ke.
+//! CPU de la HAL (interruption DISPATCH en attente) et le KPRCB de Ke. L'IRQL,
+//! lui, est CR8 (`hal::irql`).
 //!
 //! Un seul CPU pour l'instant : celui du démarrage (BSP), dont le KPCR est
 //! statique.
@@ -12,9 +13,7 @@
 
 use core::ffi::c_void;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8};
-
-use crate::irql::Irql;
+use core::sync::atomic::{AtomicBool, AtomicPtr};
 
 /// Zone de contrôle d'un processeur.
 #[repr(C)]
@@ -25,14 +24,9 @@ pub struct Kpcr {
     prcb: AtomicPtr<c_void>,
     /// Numéro du processeur.
     number: u32,
-    /// IRQL courant (`hal::irql`).
-    pub(crate) irql: AtomicU8,
     /// L'interruption DISPATCH est demandée et ne s'est pas encore exécutée.
     pub(crate) dispatch_pending: AtomicBool,
 }
-
-/// Décalage de l'IRQL dans le KPCR, pour l'assembleur (`gs:[IRQL_OFFSET]`).
-pub(crate) const IRQL_OFFSET: usize = core::mem::offset_of!(Kpcr, irql);
 
 const _: () = assert!(core::mem::offset_of!(Kpcr, self_ptr) == 0, "gs:[0] is the KPCR's own address");
 
@@ -45,7 +39,6 @@ static BSP_PCR: Kpcr = Kpcr {
     self_ptr: ptr::addr_of!(BSP_PCR),
     prcb: AtomicPtr::new(ptr::null_mut()),
     number: 0,
-    irql: AtomicU8::new(Irql::Passive.as_u8()),
     dispatch_pending: AtomicBool::new(false),
 };
 

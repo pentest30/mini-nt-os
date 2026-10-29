@@ -6,7 +6,7 @@
 //!   3. Program PIT channel 2 for a 10 ms one-shot delay.
 //!   4. Read remaining APIC count → derive `ticks_per_ms`.
 //!   5. Set APIC timer to periodic mode, initial count = ticks_per_ms × 10.
-//!   6. Enable interrupts — ISR at vector 0x20 calls `tick()` + EOI.
+//!   6. Enable interrupts — ISR at vector [`CLOCK_VECTOR`] calls `tick()` + EOI.
 //!
 //! Each tick advances the interrupt time ([`interrupt_time`], in 100 ns) by
 //! the interval currently programmed, which `set_resolution` can change: the
@@ -42,8 +42,18 @@ const APIC_TIMER_INIT: u64 = 0x380; // Initial count register
 const APIC_TIMER_CURRENT: u64 = 0x390; // Current count register (read-only)
 const APIC_TIMER_DIVIDE: u64 = 0x3E0; // Divide configuration register
 
-/// Timer LVT: periodic mode (bit 17) | vector 0x20.
-const TIMER_VECTOR: u32 = 0x20;
+/// Vector of the clock interrupt (APIC timer). Its priority class, 13, is
+/// CLOCK_LEVEL (`hal::irql`): the clock still ticks at DISPATCH_LEVEL.
+pub const CLOCK_VECTOR: u8 = 0xD0;
+const _: () = assert!(CLOCK_VECTOR >> 4 == crate::irql::Irql::Clock.as_u8());
+
+/// First vector of the legacy 8259 PIC (IRQ0); IRQ n arrives at `PIC_VECTOR_BASE
+/// + n`. Class 3: DEVICE_LEVEL.
+pub const PIC_VECTOR_BASE: u8 = 0x30;
+const _: () = assert!(PIC_VECTOR_BASE >> 4 == crate::irql::Irql::Device.as_u8());
+
+/// Timer LVT vector.
+const TIMER_VECTOR: u32 = CLOCK_VECTOR as u32;
 const LVT_TIMER_PERIODIC: u32 = 1 << 17;
 const LVT_MASKED: u32 = 1 << 16;
 
@@ -59,7 +69,7 @@ const PIT_10MS: u16 = 11_931;
 // ── Counters ──────────────────────────────────────────────────────────────────
 
 /// Interrupt time: 100 ns units since the timer started (NT's InterruptTime,
-/// KUSER_SHARED_DATA). Advanced by the APIC timer ISR (vector 0x20).
+/// KUSER_SHARED_DATA). Advanced by the APIC timer ISR ([`CLOCK_VECTOR`]).
 static INTERRUPT_TIME: AtomicU64 = AtomicU64::new(0);
 
 /// Interval between two ticks, in 100 ns units: the period the APIC timer is
@@ -84,13 +94,14 @@ static CLOCK_HOOK: AtomicUsize = AtomicUsize::new(0);
 /// the interrupt time via the ISR registered in `idt.rs`.
 ///
 /// # Safety
-/// - Must run after `idt::init()` (IDT loaded; timer ISR at vector 0x20 reachable).
+/// - Must run after `idt::init()` (IDT loaded; timer ISR at [`CLOCK_VECTOR`] reachable).
 /// - The APIC MMIO region at `0xFEE0_0000` must be mapped: identity map at
 ///   boot, HHDM once `set_hhdm_offset` has run (see `apic_reg`).
 /// - Interrupts must be disabled on entry; this function enables them.
 pub unsafe fn init() {
-    // ── 0. Remap legacy 8259 PIC (IRQ0→0x20, IRQ8→0x28) ─────────────────────
-    // Remap master PIC to vectors 0x20–0x27 and slave to 0x28–0x2F so they
+    // ── 0. Remap legacy 8259 PIC (IRQ0→0x30, IRQ8→0x38) ─────────────────────
+    // Remap master PIC to vectors 0x30–0x37 and slave to 0x38–0x3F (class 3,
+    // DEVICE_LEVEL) so they
     // don't overlap CPU exceptions (0x00–0x1F).  Then unmask only IRQ1
     // (PS/2 keyboard) on the master; all other legacy IRQs stay masked.
     // SAFETY: I/O ports 0x20/0x21/0xA0/0xA1 are always accessible at CPL 0.
@@ -103,9 +114,9 @@ pub unsafe fn init() {
         master_cmd.write(0x11);
         slave_cmd.write(0x11);
         // ICW2: vector offset
-        master_dat.write(0x20); // master: IRQ0 → vector 0x20
-        slave_dat.write(0x28); // slave:  IRQ8 → vector 0x28
-                               // ICW3: master/slave wiring
+        master_dat.write(PIC_VECTOR_BASE); // master: IRQ0 → vector 0x30
+        slave_dat.write(PIC_VECTOR_BASE + 8); // slave:  IRQ8 → vector 0x38
+                                              // ICW3: master/slave wiring
         master_dat.write(0x04); // slave on IRQ2
         slave_dat.write(0x02); // slave cascade identity
                                // ICW4: 8086 mode
@@ -298,6 +309,27 @@ pub fn set_resolution(hundred_ns: u32) {
     }
 
     log::info!("timer::set_resolution: {}ms interval ({}×100ns request)", ms, hundred_ns);
+}
+
+/// Waits for `periods` periods of the APIC timer by watching its count reload,
+/// without its interrupt: the self-tests check with it what the IRQL masks.
+///
+/// # IRQL
+/// Any level, once the timer is running (`init`).
+pub fn spin_periods(periods: u32) {
+    // SAFETY: the APIC is mapped at apic_reg(0) once `init` has run; the
+    // current-count register is read-only.
+    let count = || unsafe { apic_read(APIC_TIMER_CURRENT) };
+    let mut last = count();
+    let mut seen = 0;
+    while seen < periods {
+        let now = count();
+        if now > last {
+            seen += 1; // counted down to 0, then reloaded
+        }
+        last = now;
+        core::hint::spin_loop();
+    }
 }
 
 /// The interval each tick adds to the interrupt time.

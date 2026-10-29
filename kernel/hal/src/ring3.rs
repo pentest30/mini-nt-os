@@ -43,12 +43,12 @@ core::arch::global_asm!(
     ".global ring3_iretq_trampoline",
     "ring3_iretq_trampoline:",
     // User mode runs at PASSIVE_LEVEL: drop the DISPATCH_LEVEL left by the
-    // dispatch that switched to this new thread (hal::irql, in the KPCR).
-    "   mov byte ptr gs:[{irql}], 0",
+    // dispatch that switched to this new thread (hal::irql: CR8).
+    "   xor eax, eax",
+    "   mov cr8, rax",
     "   pop rax",    // rax = FS selector; RSP → RIP slot
     "   mov fs, ax", // load TEB segment (DPL=3, base=TEB32_VA)
     "   iretq",      // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
-    irql = const crate::pcr::IRQL_OFFSET,
 );
 
 /// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
