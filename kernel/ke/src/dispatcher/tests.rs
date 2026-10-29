@@ -577,6 +577,86 @@ fn setting_an_armed_timer_again_moves_its_deadline_and_resets_it() {
     finish();
 }
 
+// ── Délais et fin de thread ──────────────────────────────────────────────────
+
+fn delay(wait_mode: ProcessorMode, alertable: bool, interval: i64) -> NtStatus {
+    // SAFETY: thread courant initialisé.
+    unsafe { ke_delay_execution_thread::<Sim>(wait_mode, alertable, interval) }
+}
+
+#[test]
+fn delay_execution_returns_success_once_the_interval_is_over() {
+    let t = setup();
+    then(move || {
+        expire_at(NOW + 19_999);
+        assert_eq!(state(t), ThreadState::Waiting, "2 ms are not over yet");
+        expire_at(NOW + 20_000);
+    });
+    assert_eq!(delay(ProcessorMode::Kernel, false, -20_000), STATUS_SUCCESS);
+    assert!(table().is_empty());
+    finish();
+}
+
+#[test]
+fn a_zero_or_past_delay_returns_at_once() {
+    setup();
+    assert_eq!(delay(ProcessorMode::Kernel, false, 0), STATUS_SUCCESS);
+    assert_eq!(delay(ProcessorMode::Kernel, false, NOW), STATUS_SUCCESS, "absolute, already reached");
+    assert!(table().is_empty());
+    finish();
+}
+
+#[test]
+fn an_alertable_user_mode_delay_ends_on_a_user_apc() {
+    let t = setup();
+    // SAFETY: verrou tenu par `locked` ; thread initialisé.
+    then(move || locked(|| unsafe { ki_try_unwait_for_user_apc::<Sim>(t) }));
+    assert_eq!(delay(ProcessorMode::User, true, -10_000), STATUS_USER_APC);
+    assert!(table().is_empty(), "its timer is cancelled");
+    finish();
+}
+
+fn exit_thread(t: *mut KThread) {
+    // SAFETY: verrou tenu par `locked` ; thread initialisé.
+    locked(|| unsafe { ki_thread_exit::<Sim>(t) });
+}
+
+#[test]
+fn a_thread_that_exits_wakes_its_waiters_and_abandons_its_mutants() {
+    let waiter = setup();
+    let owner = new_thread();
+    let m = mutant();
+    run_as(owner);
+    assert_eq!(wait_one(hdr(m), None), STATUS_WAIT_0);
+    assert_eq!(wait_one(hdr(m), None), STATUS_WAIT_0, "held recursively when it exits");
+    run_as(waiter);
+    then(move || exit_thread(owner));
+    assert_eq!(wait_one(hdr(owner), None), STATUS_WAIT_0, "the thread object is signaled at its end");
+    assert_eq!(state(owner), ThreadState::Terminated);
+    assert_eq!(wait_one(hdr(m), None), STATUS_ABANDONED_WAIT_0);
+    // SAFETY: objets du test initialisés.
+    unsafe {
+        assert_eq!((*m).owner_thread, waiter);
+        assert!(ListEntry::is_empty(ptr::addr_of!((*owner).mutant_list_head)));
+    }
+    finish();
+}
+
+#[test]
+fn a_waiting_thread_that_exits_leaves_no_wait_block_behind() {
+    let t = setup();
+    let e = event(ObjectType::NotificationEvent, false);
+    then(move || {
+        exit_thread(t);
+        assert_eq!(state(t), ThreadState::Terminated);
+        assert!(no_waiter(hdr(e)));
+        assert!(table().is_empty(), "its timeout is cancelled");
+    });
+    // Le thread ne reprend jamais dans le noyau ; Sim, lui, rend la main.
+    wait_one(hdr(e), Some(-10_000));
+    finish();
+}
+
 // ── APC ──────────────────────────────────────────────────────────────────────
 
 fn alertable_user_wait(obj: *mut DispatcherHeader) -> NtStatus {
