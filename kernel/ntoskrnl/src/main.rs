@@ -345,15 +345,18 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
     fat_smoke_probe();
 
-    // Wire preemptive round-robin: the dispatch (timer ISR below
-    // DISPATCH_LEVEL, or IRQL drop) runs schedule(). Registered after ke::init()
+    // Wire preemptive round-robin: each clock tick ends the quantum, and the
+    // DISPATCH interrupt (timer ISR below DISPATCH_LEVEL, or IRQL drop) drains
+    // the DPC queue, then runs schedule(). Registered after ke::init()
     // (scheduler table ready) and before interrupts re-enable.
-    hal::irql::set_dispatch_hook(Some(ke::scheduler::schedule));
+    hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
+    hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
     hal::idt::set_user_fault_hook(Some(ke::scheduler::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
     deferred_preemption_self_test();
+    dpc_self_test();
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
@@ -547,6 +550,54 @@ fn remove_identity_map(hhdm_offset: u64) {
         "HHDM no longer maps the APIC",
     );
     log::info!("[smoke] identity map removed: user half empty, APIC at {:#x}", hhdm_offset + APIC_PHYS);
+}
+
+/// Checks the DPC queue (M1, `ke::dpc`): a DPC queued below DISPATCH_LEVEL runs
+/// at once, at DISPATCH_LEVEL with interrupts enabled; one queued under a
+/// KSpinLock runs on release, once however often it was queued; one removed
+/// before that never runs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled, DISPATCH interrupt hook registered.
+fn dpc_self_test() {
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use ke::dpc::{ke_insert_queue_dpc, ke_remove_queue_dpc, KDpc};
+
+    static RUNS: AtomicUsize = AtomicUsize::new(0);
+    static WRONG_CONTEXT: AtomicBool = AtomicBool::new(false);
+    fn count(_: *const KDpc, _: *mut c_void, arg1: *mut c_void, _: *mut c_void) {
+        let at_dispatch = hal::irql::current() == hal::irql::Irql::Dispatch;
+        if !at_dispatch || !x86_64::instructions::interrupts::are_enabled() {
+            WRONG_CONTEXT.store(true, Ordering::Relaxed);
+        }
+        RUNS.fetch_add(arg1 as usize, Ordering::Relaxed);
+    }
+    static DPC: KDpc = KDpc::new(count, core::ptr::null_mut());
+    static LOCK: hal::sync::KSpinLock<()> = hal::sync::KSpinLock::new(());
+    let one = core::ptr::without_provenance_mut::<c_void>(1);
+    let null = core::ptr::null_mut();
+
+    // SAFETY: `DPC` is a static: valid, at a fixed address.
+    unsafe {
+        assert!(ke_insert_queue_dpc(&DPC, one, null));
+        assert_eq!(RUNS.load(Ordering::Relaxed), 1, "DPC queued at PASSIVE_LEVEL did not run at once");
+        {
+            let _guard = LOCK.lock();
+            assert!(ke_insert_queue_dpc(&DPC, one, null));
+            assert!(!ke_insert_queue_dpc(&DPC, one, null), "DPC queued twice");
+            assert_eq!(RUNS.load(Ordering::Relaxed), 1, "DPC ran at DISPATCH_LEVEL");
+        }
+        assert_eq!(RUNS.load(Ordering::Relaxed), 2, "pending DPC not run on IRQL drop");
+        {
+            let _guard = LOCK.lock();
+            assert!(ke_insert_queue_dpc(&DPC, one, null));
+            assert!(ke_remove_queue_dpc(&DPC));
+        }
+    }
+    assert_eq!(RUNS.load(Ordering::Relaxed), 2, "removed DPC ran");
+    assert!(!WRONG_CONTEXT.load(Ordering::Relaxed), "DPC routine not at DISPATCH_LEVEL with interrupts enabled");
+    log::info!("[smoke] DPC: run at once, deferred under a KSpinLock, removable");
 }
 
 /// Checks that DISPATCH_LEVEL defers preemption (M1, `hal::irql`): the boot

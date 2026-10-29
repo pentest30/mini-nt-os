@@ -8,6 +8,7 @@ expect = [smoke] kernel W^X ok
 expect = [smoke] identity map removed
 expect = [smoke] heap self-test ok
 expect = [smoke] dispatch deferred
+expect = [smoke] DPC: run at once
 expect = [smoke] FAT read probe hit
 expect = kernel: phase 1 done
 expect = [smoke] int2e write path hit

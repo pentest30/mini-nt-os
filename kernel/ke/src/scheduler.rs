@@ -9,7 +9,8 @@
 //! IRQL discipline:
 //!   - `init()`  → PASSIVE_LEVEL, once, from kernel_main.
 //!   - `tick()`  → called from timer ISR (DIRQL); must not block or alloc.
-//!   - `schedule()` → called at DISPATCH_LEVEL from tick(); no alloc.
+//!   - `schedule()` → called at DISPATCH_LEVEL by the DISPATCH interrupt
+//!     (`ke::dpc`), on a quantum end; no alloc.
 //!   - The scheduler lock is shared with the timer ISR, so it is only taken
 //!     with interrupts disabled (`hal::sync::IrqLock`).
 //!
@@ -215,6 +216,24 @@ impl SchedulerInner {
 
 // ── Global scheduler ─────────────────────────────────────────────────────────
 
+/// A thread switch is due at the next DISPATCH interrupt (end of quantum).
+static RESCHEDULE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Asks for a thread switch at the next DISPATCH interrupt: at once below
+/// DISPATCH_LEVEL with interrupts enabled, else as soon as the IRQL drops.
+///
+/// # IRQL
+/// Any level, ISR included.
+pub fn request_reschedule() {
+    RESCHEDULE.store(true, core::sync::atomic::Ordering::Release);
+    hal::irql::request_dispatch();
+}
+
+/// Consumes a pending thread-switch request (`ke::dpc::ki_dispatch_interrupt`).
+pub(crate) fn take_reschedule() -> bool {
+    RESCHEDULE.swap(false, core::sync::atomic::Ordering::AcqRel)
+}
+
 /// Context switches performed so far (statistics, and the boot self-test of
 /// deferred preemption).
 static CONTEXT_SWITCHES: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -306,8 +325,10 @@ pub fn tick() {
 
 /// Preemptive round-robin context switch.
 ///
-/// Called from the APIC timer ISR hook **after** EOI so the APIC can
-/// accept the next periodic tick before we switch stacks.
+/// Called by the DISPATCH interrupt (`ke::dpc::ki_dispatch_interrupt`) when a
+/// quantum end asked for it: from the APIC timer ISR **after** EOI, so the
+/// APIC can accept the next periodic tick before we switch stacks, or when
+/// the IRQL drops below DISPATCH_LEVEL.
 ///
 /// Acquires the scheduler lock, calls `pick_next()` to select the next
 /// thread, releases the lock, then calls the raw context-switch stub.
@@ -315,7 +336,7 @@ pub fn tick() {
 /// scenario on SMP (Phase 3+); on Phase 2 single-CPU it makes no difference
 /// since interrupts are already disabled inside the ISR.
 ///
-/// # IRQL: DIRQL — no alloc, no page faults, interrupts disabled.
+/// # IRQL: DISPATCH_LEVEL — no alloc, no page faults, interrupts disabled.
 pub fn schedule() {
     // ── Select next thread while holding the lock ─────────────────────────
     let switch = SCHED.with(|sched| {

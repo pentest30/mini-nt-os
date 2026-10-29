@@ -392,8 +392,10 @@ extern "x86-interrupt" fn exception_segment_not_present(frame: InterruptStackFra
 // ── IRQ handlers ─────────────────────────────────────────────────────────────
 
 extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
-    // ── 1. Tick counter ──────────────────────────────────────────────────────
+    // ── 1. Interrupt time, then Ke's clock work (quantum end, which requests
+    // the DISPATCH interrupt run in step 4) ─────────────────────────────────
     super::timer::tick();
+    super::timer::call_clock_hook();
 
     // ── 2. Heartbeat log (ISR-safe, no heap) ─────────────────────────────────
     // Log "[alive] tick=N\n" every 1000 ms using the ISR-safe serial writer.
@@ -431,11 +433,11 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     // SAFETY: inside the APIC timer ISR (vector 0x20); EOI is required.
     unsafe { apic_eoi() };
 
-    // ── 4. Preemption ────────────────────────────────────────────────────────
+    // ── 4. DISPATCH interrupt (DPCs, thread switch) ───────────────────────────
     // After EOI, so the APIC is free to fire the next tick while we run on the
-    // next thread's stack. The dispatch (Ke's scheduler) runs now only if the
-    // interrupted code was below DISPATCH_LEVEL; otherwise it waits for the
-    // IRQL to drop (a KSpinLock holder is never preempted).
+    // next thread's stack. It runs now only if the interrupted code was below
+    // DISPATCH_LEVEL; otherwise it waits for the IRQL to drop (a KSpinLock
+    // holder is never preempted).
     super::irql::dispatch_from_interrupt();
 }
 

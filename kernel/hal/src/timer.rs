@@ -16,7 +16,7 @@
 //!
 //! WI7e Ch.3 "Clock Intervals and Timer Resolution"
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
 
 // ── Tick interval ─────────────────────────────────────────────────────────────
@@ -71,6 +71,9 @@ static TICK_INTERVAL_100NS: AtomicU64 = AtomicU64::new(TICK_INTERVAL_MS * 10_000
 static APIC_TICKS_PER_MS: AtomicU64 = AtomicU64::new(0);
 
 static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
+
+/// Ke's clock interrupt handler: `fn()` stored as `usize`, 0 until registered.
+static CLOCK_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -300,6 +303,28 @@ pub fn set_resolution(hundred_ns: u32) {
 /// The interval each tick adds to the interrupt time.
 fn set_tick_interval_ms(ms: u64) {
     TICK_INTERVAL_100NS.store(ms * 10_000, Ordering::Relaxed);
+}
+
+/// Registers Ke's clock interrupt handler, run by the timer ISR at each tick
+/// once the interrupt time has advanced, interrupts disabled.
+///
+/// # IRQL
+/// Any level.
+pub fn set_clock_hook(hook: Option<fn()>) {
+    CLOCK_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+}
+
+/// Runs Ke's clock interrupt handler, if registered.
+///
+/// # IRQL
+/// In the timer ISR.
+pub(crate) fn call_clock_hook() {
+    let hook = CLOCK_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        // SAFETY: `hook` was stored by `set_clock_hook` from a valid `fn()`.
+        let clock: fn() = unsafe { core::mem::transmute(hook) };
+        clock();
+    }
 }
 
 pub fn set_shared_user_data_addr(addr: Option<u64>) {
