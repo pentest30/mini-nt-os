@@ -6,12 +6,10 @@
 //!   `KiUserApcDispatcher` (`ke::exception`, `ke::apc`) ;
 //! - `LdrInitializeThunk`, par lequel démarre chaque thread
 //!   ([`SystemDll::write_start_frame`]) ;
-//! - `KiIntSystemCall` et `KiFastSystemCallRet`, que `KUSER_SHARED_DATA`
-//!   désigne (`SystemCall`, `SystemCallReturn`).
-//!
-//! Tant que SYSENTER ne revient pas par ntdll (M3), `SystemCall` désigne
-//! `KiIntSystemCall` sur tous les processeurs : c'est un écart provisoire à
-//! l'ADR-004, qui veut `KiFastSystemCall` sur Intel.
+//! - le stub des appels système que `KUSER_SHARED_DATA` désigne
+//!   (`SystemCall`, ADR-004) : `KiFastSystemCall` (SYSENTER) sur Intel,
+//!   `KiIntSystemCall` (`int 2Eh`) ailleurs ; et `KiFastSystemCallRet`, où
+//!   SYSENTER revient (`SystemCallReturn`).
 
 use alloc::sync::Arc;
 
@@ -120,7 +118,9 @@ impl SystemDll {
 /// PASSIVE_LEVEL.
 pub fn install(dll: Option<SystemDll>) {
     let (exception, apc, system_call, system_call_return) = dll.as_ref().map_or((0, 0, 0, 0), |d| {
-        (d.user_exception_dispatcher, d.user_apc_dispatcher, d.int_system_call, d.fast_system_call_ret)
+        // SYSENTER works from compatibility mode on Intel only (ADR-004).
+        let system_call = if hal::cpuid::is_intel() { d.fast_system_call } else { d.int_system_call };
+        (d.user_exception_dispatcher, d.user_apc_dispatcher, system_call, d.fast_system_call_ret)
     });
     ke::exception::set_user_exception_dispatcher(exception);
     ke::apc::set_user_apc_dispatcher(apc);

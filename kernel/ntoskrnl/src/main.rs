@@ -2396,12 +2396,17 @@ fn user_apc_self_test() {
 /// with ntdll's base and the CONTEXT where ReactOS's stub looks for it, then
 /// reaches its entry point. It reads XP SP2's KUSER_SHARED_DATA at
 /// 0x7FFE0000 (version 5.1, system root, DEP policy, a running tick count,
-/// SystemCall on KiIntSystemCall), cannot write to it (the exception reaches
-/// ntdll's dispatcher), and calls a system service through SystemCall as an
-/// ntdll stub does.
+/// SystemCall on KiFastSystemCall on Intel, KiIntSystemCall elsewhere),
+/// cannot write to it (the exception reaches ntdll's dispatcher), and goes
+/// through SystemCall as ntdll's stubs do: a system service keeps EFLAGS
+/// (DF, IF), an APC queued to itself runs in an alertable wait and the wait
+/// returns STATUS_USER_APC with EBX and ESP kept, and ntdll's dispatchers
+/// resume with NtContinue. On Intel, all of these go through SYSENTER.
 fn system_dll_self_test() {
-    use abi::ntstatus::{NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INVALID_HANDLE, STATUS_WAIT_0};
-    use abi::process::NT_CURRENT_PROCESS;
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INVALID_HANDLE, STATUS_SUCCESS, STATUS_USER_APC, STATUS_WAIT_0,
+    };
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
     use abi::services;
     use abi::shared_data::KUSER_SHARED_DATA_VA;
     use alloc::sync::Arc;
@@ -2429,17 +2434,49 @@ fn system_dll_self_test() {
     const FAST_SYSTEM_CALL_RET: u32 = 0x114;
     const RAISE: u32 = 0x118;
     const CALLBACK: u32 = 0x11C;
+    const ZW_CONTINUE: u32 = 0x120;
     const IMAGE_BASE: u32 = 0x40_0000;
     const TEXT: u32 = IMAGE_BASE + 0x1000;
-    const STUB: u32 = TEXT + 0x180;
+    // The program's stubs, and its APC routine.
+    const ZW_CLOSE: u32 = TEXT + 0x180;
+    const ZW_QUEUE_APC_THREAD: u32 = TEXT + 0x190;
+    const ZW_DELAY_EXECUTION: u32 = TEXT + 0x1A0;
+    const ROUTINE: u32 = TEXT + 0x1C0;
     const DATA: u32 = IMAGE_BASE + 0x2000;
-    // The program's: seven KUSER_SHARED_DATA fields, then the write.
+    // The program's: eight KUSER_SHARED_DATA fields, then the write.
     const SHARED: u32 = DATA; // major, minor, SystemCall, SystemCallReturn, root, multiplier, NX policy, ticks
     const AFTER_WRITE: u32 = DATA + 0x20;
     const CLOSED: u32 = DATA + 0x24;
     const DONE: u32 = DATA + 0x28;
     const GO: u32 = DATA + 0x2C;
+    // EFLAGS after a service with DF set; the APC queued, the alertable
+    // wait, ESP before it, EBX and ESP after it, what the routine received.
+    const FLAGS: u32 = DATA + 0x30;
+    const QUEUED: u32 = DATA + 0x34;
+    const DELAYED: u32 = DATA + 0x38;
+    const ESP_BEFORE: u32 = DATA + 0x3C;
+    const KEPT: u32 = DATA + 0x40;
+    const APC_LOG: u32 = DATA + 0x48;
+    // A LARGE_INTEGER: 5 s, relative.
+    const LONG: u32 = DATA + 0x58;
+    const MAGIC: u32 = 0x5C5C_0001;
     let shared = |offset: u32| KUSER_SHARED_DATA_VA + offset;
+
+    /// `call target`, from code that starts at `origin`.
+    fn call_to(code: &mut Code, origin: u32, target: u32) {
+        let at = origin + code.0.len() as u32;
+        code.word(&[0xE8], target.wrapping_sub(at + 5));
+    }
+    /// An ntdll stub: the service in EAX, a call through
+    /// SharedUserData->SystemCall, then `ret` past its arguments.
+    fn stub(service: u32, arguments: u16) -> Code {
+        let mut code = Code::new();
+        code.word(&[0xB8], service)
+            .word(&[0xBA], KUSER_SHARED_DATA_VA + 0x300) // mov edx, &SystemCall
+            .bytes(&[0xFF, 0x12, 0xC2]) // call [edx]; ret …
+            .bytes(&(4 * arguments).to_le_bytes());
+        code
+    }
 
     // ── ntdll ──
     let mut text = [0xCC; 0x200];
@@ -2451,11 +2488,9 @@ fn system_dll_self_test() {
         .bytes(&[0xC7, 0x40, 0x04])
         .bytes(&0x5E5E_5E5Eu32.to_le_bytes()) // mov dword [eax + 4], …
         .bytes(&[0x58, 0xFF, 0xD0]) // pop eax; call eax
-        .bytes(&[0x89, 0xE1, 0x6A, 0x01, 0x51, 0x89, 0xE2]) // mov ecx, esp; push 1; push ecx; mov edx, esp
-        .word(&[0xB8], services::NtContinue)
-        .bytes(&[0xCD, 0x2E])
-        .store_eax(N_FAILED)
-        .bytes(&[0xEB, 0xFE]);
+        .bytes(&[0x89, 0xE1, 0x6A, 0x01, 0x51]); // mov ecx, esp; push 1; push ecx
+    call_to(&mut apc, N_TEXT + APC, N_TEXT + ZW_CONTINUE);
+    apc.store_eax(N_FAILED).bytes(&[0xEB, 0xFE]);
     put(APC, &apc);
     let mut ldr = Code::new();
     // mov eax, [esp + offset]; mov [N_LDR + 4i], eax: its arguments, then
@@ -2476,12 +2511,11 @@ fn system_dll_self_test() {
         .store_eax(N_EXCEPTION + 8)
         .word(&[0x83, 0x86], 0xB8) // add dword [esi + Eip], 5: past the write
         .bytes(&[5])
-        .bytes(&[0x6A, 0x00, 0x56, 0x89, 0xE2]) // push 0; push esi; mov edx, esp
-        .word(&[0xB8], services::NtContinue)
-        .bytes(&[0xCD, 0x2E])
-        .store_eax(N_FAILED)
-        .bytes(&[0xEB, 0xFE]);
+        .bytes(&[0x6A, 0x00, 0x56]); // push 0; push esi
+    call_to(&mut exception, N_TEXT + EXCEPTION, N_TEXT + ZW_CONTINUE);
+    exception.store_eax(N_FAILED).bytes(&[0xEB, 0xFE]);
     put(EXCEPTION, &exception);
+    put(ZW_CONTINUE, &stub(services::NtContinue, 2));
     let mut int_system_call = Code::new();
     int_system_call.bytes(&[0x8D, 0x54, 0x24, 0x08, 0xCD, 0x2E, 0xC3]); // lea edx, [esp + 8]; int 2Eh; ret
     put(INT_SYSTEM_CALL, &int_system_call);
@@ -2525,10 +2559,27 @@ fn system_dll_self_test() {
         .word(&[0xA3], KUSER_SHARED_DATA_VA) // mov [0x7FFE0000], eax: read-only
         .word(&[0xC7, 0x05], AFTER_WRITE)
         .bytes(&1u32.to_le_bytes())
-        .word(&[0x68], 0x1234); // push 0x1234
-    let call_at = TEXT + code.0.len() as u32;
-    code.word(&[0xE8], STUB.wrapping_sub(call_at + 5)) // call STUB: NtClose(0x1234)
-        .store_eax(CLOSED)
+        // NtClose(0x1234) with DF set, then EFLAGS.
+        .bytes(&[0xFD]) // std
+        .word(&[0x68], 0x1234);
+    call_to(&mut code, TEXT, ZW_CLOSE);
+    code.store_eax(CLOSED)
+        .bytes(&[0x9C, 0x58, 0xFC]) // pushfd; pop eax; cld
+        .store_eax(FLAGS)
+        .word(&[0xBB], MAGIC); // mov ebx, MAGIC
+                               // NtQueueApcThread(NtCurrentThread(), ROUTINE, 0x11, 0x22, 0x33).
+    for argument in [0x33, 0x22, 0x11, ROUTINE, NT_CURRENT_THREAD] {
+        code.word(&[0x68], argument);
+    }
+    call_to(&mut code, TEXT, ZW_QUEUE_APC_THREAD);
+    code.store_eax(QUEUED)
+        .word(&[0x89, 0x25], ESP_BEFORE) // mov [ESP_BEFORE], esp
+        .word(&[0x68], LONG)
+        .bytes(&[0x6A, 0x01]); // NtDelayExecution(TRUE, LONG)
+    call_to(&mut code, TEXT, ZW_DELAY_EXECUTION);
+    code.store_eax(DELAYED)
+        .word(&[0x89, 0x1D], KEPT) // mov [KEPT], ebx
+        .word(&[0x89, 0x25], KEPT + 4) // mov [KEPT + 4], esp
         .word(&[0xC7, 0x05], DONE)
         .bytes(&1u32.to_le_bytes())
         .word(&[0x83, 0x3D], GO) // cmp dword [GO], 0
@@ -2536,18 +2587,29 @@ fn system_dll_self_test() {
         .call(services::NtTerminateProcess, &[NT_CURRENT_PROCESS, 0x600D])
         .bytes(&[0xEB, 0xFE]);
     assert!(code.0.len() <= 0x180, "the test program outgrew its slot");
-    // An ntdll stub: the service number in EAX, then SharedUserData->SystemCall.
-    let mut stub = Code::new();
-    stub.word(&[0xB8], services::NtClose)
-        .word(&[0xBA], shared(0x300)) // mov edx, &SystemCall
-        .bytes(&[0xFF, 0x12, 0xC2, 0x04, 0x00]); // call [edx]; ret 4
+    // The routine, stdcall (context, argument1, argument2): logs them.
+    let mut routine = Code::new();
+    for i in 0..3u8 {
+        routine.bytes(&[0x8B, 0x44, 0x24, 4 + 4 * i]).store_eax(APC_LOG + 4 * u32::from(i));
+        // mov eax, [esp + 4 + 4i]
+    }
+    routine.bytes(&[0xC2, 12, 0]); // ret 12
     let mut text = [0xCC; 0x200];
-    text[..code.0.len()].copy_from_slice(&code.0);
-    text[0x180..0x180 + stub.0.len()].copy_from_slice(&stub.0);
+    let mut put = |at: u32, code: &Code| {
+        let at = (at - TEXT) as usize;
+        text[at..at + code.0.len()].copy_from_slice(&code.0);
+    };
+    put(TEXT, &code);
+    put(ZW_CLOSE, &stub(services::NtClose, 1));
+    put(ZW_QUEUE_APC_THREAD, &stub(services::NtQueueApcThread, 5));
+    put(ZW_DELAY_EXECUTION, &stub(services::NtDelayExecution, 2));
+    put(ROUTINE, &routine);
+    let mut data = [0u8; 0x60];
+    data[0x58..0x60].copy_from_slice(&(-5000 * MS).to_le_bytes());
     let file = Pe32Builder::new(IMAGE_BASE)
         .entry_point(0x1000)
         .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
-        .section(".data", 0x2000, 0x40, &[0u8; 0x40], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .section(".data", 0x2000, 0x60, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
         .build();
     let section = Section::create_image(Arc::from(file)).expect("image section");
     let info = section.image().expect("an image").info;
@@ -2573,9 +2635,11 @@ fn system_dll_self_test() {
     assert_eq!(ldr, [0, NTDLL, 0, TEXT, stack.stack_base], "LdrInitializeThunk's arguments and CONTEXT");
     let fields: [u32; 8] = core::array::from_fn(|i| read(SHARED + 4 * i as u32));
     assert_eq!(&fields[..2], &[5, 1], "NtMajorVersion, NtMinorVersion");
+    // ADR-004: SYSENTER on Intel, int 2Eh elsewhere.
+    let system_call = if hal::cpuid::is_intel() { FAST_SYSTEM_CALL } else { INT_SYSTEM_CALL };
     assert_eq!(
         (fields[2], fields[3]),
-        (N_TEXT + INT_SYSTEM_CALL, N_TEXT + FAST_SYSTEM_CALL_RET),
+        (N_TEXT + system_call, N_TEXT + FAST_SYSTEM_CALL_RET),
         "SystemCall, SystemCallReturn"
     );
     assert_eq!(fields[4], u32::from(b'C') | u32::from(b':') << 16, "NtSystemRoot");
@@ -2585,6 +2649,12 @@ fn system_dll_self_test() {
     assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, KUSER_SHARED_DATA_VA], "a write to KUSER_SHARED_DATA");
     assert_eq!(read(AFTER_WRITE), 1, "ntdll's dispatcher did not resume the program");
     assert_eq!(NtStatus(read(CLOSED)), STATUS_INVALID_HANDLE, "NtClose through SystemCall");
+    assert_eq!(read(FLAGS) & 0x600, 0x600, "a system service lost DF, or came back with interrupts masked");
+    assert_eq!(NtStatus(read(QUEUED)), STATUS_SUCCESS, "NtQueueApcThread through SystemCall");
+    let log: [u32; 3] = core::array::from_fn(|i| read(APC_LOG + 4 * i as u32));
+    assert_eq!(log, [0x11, 0x22, 0x33], "the APC did not run with its arguments");
+    assert_eq!(NtStatus(read(DELAYED)), STATUS_USER_APC, "the alertable wait, back from its APC");
+    assert_eq!((read(KEPT), read(KEPT + 4)), (MAGIC, read(ESP_BEFORE)), "EBX or ESP lost across the APC");
 
     process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
     // SAFETY: the object of a process held here.
@@ -2599,7 +2669,11 @@ fn system_dll_self_test() {
     assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, NtStatus(0x600D)), "the process did not end");
     ps::system_dll::install(None);
     ps::wait_for_reaper();
-    log::info!("[smoke] ntdll: mapped at its base, threads start in LdrInitializeThunk, KUSER_SHARED_DATA read-only");
+    log::info!(
+        "[smoke] ntdll: mapped at its base, threads start in LdrInitializeThunk, KUSER_SHARED_DATA read-only, \
+         system calls through SystemCall ({})",
+        if hal::cpuid::is_intel() { "SYSENTER" } else { "int 2Eh" }
+    );
 }
 
 /// Ps, and the M2 exit criteria 1 and 3 (05): see [`process_round`]. The
