@@ -346,6 +346,81 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Écrit `data` en `addr` comme le ferait le processus, sans s'attacher à
+    /// lui (MmCopyVirtualMemory) : chaque page est d'abord résolue comme par
+    /// une faute d'écriture (page à zéro, copie sur écriture) ; l'erreur de
+    /// cette faute sinon (`STATUS_ACCESS_VIOLATION` pour une page réservée ou
+    /// en lecture seule).
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL.
+    pub fn write_bytes(&self, addr: u64, data: &[u8]) -> Result<(), NtStatus> {
+        self.copy(addr, data.len(), Access::Write, |page, done, len| {
+            // SAFETY: `page` is `len` bytes of a page of this space, mapped
+            // writable and held by the VAD lock while this runs.
+            unsafe { core::ptr::copy_nonoverlapping(data[done..].as_ptr(), page, len) }
+        })
+    }
+
+    /// Lit `buffer.len()` octets en `addr` comme le ferait le processus
+    /// (MmCopyVirtualMemory) ; voir [`write_bytes`](Self::write_bytes).
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL.
+    pub fn read_bytes(&self, addr: u64, buffer: &mut [u8]) -> Result<(), NtStatus> {
+        self.copy(addr, buffer.len(), Access::Read, |page, done, len| {
+            // SAFETY: `page` is `len` readable bytes of a page of this space,
+            // held by the VAD lock while this runs.
+            unsafe { core::ptr::copy_nonoverlapping(page, buffer[done..].as_mut_ptr(), len) }
+        })
+    }
+
+    /// Passe sur `[addr, addr + len)` page par page : `copy(page, done, len)`
+    /// reçoit l'adresse, par le HHDM, des `len` octets de la page qui suivent
+    /// les `done` premiers, une fois la page présente avec le droit `access`.
+    fn copy(
+        &self,
+        addr: u64,
+        len: usize,
+        access: Access,
+        mut copy: impl FnMut(*mut u8, usize, usize),
+    ) -> Result<(), NtStatus> {
+        let mut done = 0;
+        while done < len {
+            let va = addr.checked_add(done as u64).ok_or(STATUS_ACCESS_VIOLATION)?;
+            let (page, offset) = (va & !(PAGE - 1), (va & (PAGE - 1)) as usize);
+            let chunk = (len - done).min(PAGE as usize - offset);
+            let mut faulted = false;
+            loop {
+                {
+                    let _vad = self.vad.lock();
+                    let mut tables = self.tables();
+                    if let Some(entry) = tables.leaf_entry(VirtAddr::new(page)) {
+                        let flags = entry.flags();
+                        let usable = flags.contains(PageTableFlags::PRESENT)
+                            && (access != Access::Write || flags.contains(PageTableFlags::WRITABLE));
+                        if usable {
+                            copy((hhdm() + entry.addr().as_u64() + offset as u64) as *mut u8, done, chunk);
+                            break;
+                        }
+                    }
+                }
+                // Once resolved, the page must be usable: a second fault would
+                // mean the tables disagree with the VAD.
+                if faulted {
+                    return Err(STATUS_ACCESS_VIOLATION);
+                }
+                let status = self.access_fault(page, access);
+                if status != STATUS_SUCCESS {
+                    return Err(status);
+                }
+                faulted = true;
+            }
+            done += chunk;
+        }
+        Ok(())
+    }
+
     /// Résout une faute de page à `addr`, dans la moitié basse, d'après la
     /// VAD (`fault::resolve`) : `STATUS_SUCCESS` si l'accès peut reprendre,
     /// sinon l'exception qu'il lève (`STATUS_NO_MEMORY` sans page libre).

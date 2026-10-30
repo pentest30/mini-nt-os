@@ -307,6 +307,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     address_space_self_test();
     vad_self_test();
     demand_paging_self_test();
+    kernel_stack_self_test();
     out_of_page_tables_self_test();
     section_self_test();
     object_manager_self_test();
@@ -1306,6 +1307,18 @@ fn demand_paging_self_test() {
     write(fresh, MARKER);
     assert_eq!(read(page(4)), MARKER + 4, "the data did not survive the guard");
 
+    // Copies from outside the space, as the process would read and write.
+    let straddle = page(9) - 8;
+    let mut back = [0u8; 16];
+    space.read_bytes(straddle, &mut back).expect("read across two pages");
+    assert_eq!(back, [0; 16], "untouched committed pages read as zeros");
+    space.write_bytes(straddle, b"across two pages").expect("write across two pages");
+    space.read_bytes(straddle, &mut back).expect("read back");
+    assert_eq!(&back, b"across two pages");
+    assert_eq!(read(straddle).to_le_bytes(), *b"across t", "the first half at the end of one page");
+    assert_eq!(read(page(9)).to_le_bytes(), *b"wo pages", "the second half at the start of the next");
+    let mut byte = [0u8];
+    assert_eq!(space.read_bytes(page(COMMITTED + 1), &mut byte), Err(STATUS_ACCESS_VIOLATION), "reserved page");
     assert_eq!(space.access_fault(page(COMMITTED + 1), Access::Read), STATUS_ACCESS_VIOLATION, "reserved page");
     assert_eq!(space.access_fault(base + RESERVED, Access::Read), STATUS_ACCESS_VIOLATION, "free page");
 
@@ -1330,6 +1343,26 @@ fn demand_paging_self_test() {
          pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
         COMMITTED / 2
     );
+}
+
+/// Kernel stacks go back (`mm::kstack::free`): their pages to the PFN database,
+/// their slots to the next allocation.
+fn kernel_stack_self_test() {
+    use mm::pfn::{self, PageUsage};
+    let stack_pages = || pfn::stats().active(PageUsage::KernelStack);
+    let before = stack_pages();
+    let stacks = [(); 3].map(|_| mm::kstack::allocate().expect("a kernel stack"));
+    let per_stack = (stack_pages() - before) / 3;
+    for stack in stacks {
+        // SAFETY: allocated just above, never used.
+        unsafe { mm::kstack::free(stack) };
+    }
+    assert_eq!(stack_pages(), before, "freed stacks kept their pages");
+    let again = mm::kstack::allocate().expect("a kernel stack");
+    assert_eq!(again, stacks[2], "the last slot freed comes back first");
+    // SAFETY: allocated just above, never used.
+    unsafe { mm::kstack::free(again) };
+    log::info!("[smoke] Mm: kernel stacks freed and their slots reused ({per_stack} pages each)");
 }
 
 /// A demand-zero fault that gets its page but no page table returns
