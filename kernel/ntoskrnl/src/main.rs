@@ -1598,6 +1598,7 @@ fn process_self_test() {
     log::info!(
         "[smoke] Ps: user stacks grow by their guard page, up to STATUS_STACK_OVERFLOW; a guard elsewhere faults"
     );
+    log::info!("[smoke] Ps: DEP OptIn: code runs from a read-write page until its process turns DEP on");
     log::info!(
         "[smoke] Ps: processes ended on request, on a fault and before their first run; pages, pool, handles, kernel stacks and IDs given back"
     );
@@ -1618,17 +1619,22 @@ fn process_self_test() {
 /// - the stack of `grows` grows by its guard page as its thread pushes
 ///   32 KiB, `TEB.StackLimit` following; `overflow` pushes until
 ///   `STATUS_STACK_OVERFLOW` ends it; `guarded` touches a guard page outside
-///   its stack and ends with `STATUS_GUARD_PAGE_VIOLATION`.
+///   its stack and ends with `STATUS_GUARD_PAGE_VIOLATION`;
+/// - under the OptIn DEP policy (ADR-020), `dep-off` runs code from a
+///   read-write page; `dep-on`, which turns DEP on after its code page was
+///   mapped, faults on it with `STATUS_ACCESS_VIOLATION`.
 ///
 /// Then each process has its exit status, its handles closed, its address
 /// space gone; with the last reference, its IDs are free. Returns the
 /// counters of `one` and `two`.
 fn process_round() -> ([u32; 2], [u32; 2]) {
     use abi::ntstatus::{
-        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_GUARD_PAGE_VIOLATION, STATUS_INVALID_CID, STATUS_PENDING,
-        STATUS_PROCESS_IS_TERMINATING, STATUS_STACK_OVERFLOW, STATUS_THREAD_IS_TERMINATING, STATUS_WAIT_0,
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_ACCESS_VIOLATION, STATUS_GUARD_PAGE_VIOLATION, STATUS_INVALID_CID,
+        STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING, STATUS_STACK_OVERFLOW, STATUS_THREAD_IS_TERMINATING,
+        STATUS_WAIT_0,
     };
     use abi::peb32::Peb32;
+    use abi::process::{MEM_EXECUTE_OPTION_DISABLE, MEM_EXECUTE_OPTION_ENABLE, MEM_EXECUTE_OPTION_PERMANENT};
     use abi::teb32::{NtTib32, Teb32};
     use alloc::sync::Arc;
     use alloc::vec::Vec;
@@ -1692,16 +1698,17 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         Section::create_image(Arc::from(file)).expect("image section")
     };
     let system = ps::system_process();
-    // A thread at `rva`, on a stack sized by the image.
-    let thread = |process: &Arc<Object<EProcess>>, section: &Arc<Section>, rva: u32| {
+    // A thread at `start`, on a stack sized by the image.
+    let thread = |process: &Arc<Object<EProcess>>, section: &Arc<Section>, start: u32| {
         let info = section.image().expect("an image").info;
         let stack = ps::create_user_stack(process, info.stack_reserve, info.stack_commit).expect("a user stack");
-        ps::create_thread(process, IMAGE_BASE + rva, &stack).expect("create a thread")
+        ps::create_thread(process, start, &stack).expect("create a thread")
     };
     // A process, with a thread at each RVA.
     let start = |section: &Arc<Section>, name: &str, rvas: &[u32]| {
         let process = ps::create_process(&system, section, name, false).expect("create a process");
-        let threads: Vec<Arc<Object<EThread>>> = rvas.iter().map(|&rva| thread(&process, section, rva)).collect();
+        let threads: Vec<Arc<Object<EThread>>> =
+            rvas.iter().map(|&rva| thread(&process, section, IMAGE_BASE + rva)).collect();
         (process, threads)
     };
     // Counters, TIDs seen through FS, marker.
@@ -1769,6 +1776,9 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     let (sa, sb) = (state(&a), state(&b));
     assert_eq!((&sa.2[..], &sb.2[..]), (&b"image 1\0"[..], &b"image 2\0"[..]), "each process has its own image");
     assert!(sb.0.iter().all(|count| count % 2 == 0), "image two adds 2: {:?}", sb.0);
+    // Copied on write without DEP, the data page is read-write, not executable.
+    let copied = a.with_space(|space| space.query(u64::from(DATA)).map(|region| region.protect));
+    assert_eq!(copied, Ok(Ok(PageProtect::READWRITE)), "a copied page took the rights of DEP");
     assert_eq!(sa.1, [ta[0].tid(), ta[1].tid()], "a thread of one did not see its own TEB through FS");
     assert_eq!(sb.1, [tb[0].tid(), tb[1].tid()], "a thread of two did not see its own TEB through FS");
 
@@ -1833,8 +1843,59 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         space.allocate(u64::from(GUARD_VA), PAGE_SIZE, commit, PageProtect::READWRITE | PageProtect::GUARD)
     });
     guard.expect("a space").expect("a guard page");
-    let tg = alloc::vec![thread(&g, &stacks, 0x1040)];
+    let tg = alloc::vec![thread(&g, &stacks, IMAGE_BASE + 0x1040)];
     for process in [&e, &f, &g] {
+        assert_eq!(wait(process.dispatcher_object(), 3000), STATUS_WAIT_0, "{} did not end", process.image_file_name());
+    }
+
+    // DEP (ADR-020): under OptIn, code runs from a read-write page; a process
+    // that turns DEP on cannot run it, though the page is already mapped
+    // executable.
+    const CODE_VA: u32 = 0x60_0000;
+    // mov dword [CODE_VA + 0x100], 1; jmp $.
+    let mut data_code = [0xC7, 0x05, 0, 0, 0, 0, 1, 0, 0, 0, 0xEB, 0xFE];
+    data_code[2..6].copy_from_slice(&(CODE_VA + 0x100).to_le_bytes());
+    // The code page is present and executes.
+    let hhdm = hal::HHDM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+    let executes = |process: &EProcess| {
+        let flags = process.with_space(|space| {
+            in_space(space, || {
+                // SAFETY: attached to the space, whose page tables CR3 holds.
+                unsafe { mm::MmPageTables::new(hhdm) }.translate_flags(VirtAddr::new(u64::from(CODE_VA)))
+            })
+        });
+        flags.expect("a space").map(|(_, flags)| !flags.contains(PageTableFlags::NO_EXECUTE))
+    };
+    let with_code = |name: &str| {
+        let (process, _) = start(&one, name, &[]);
+        let page =
+            process.with_space(|space| space.allocate(u64::from(CODE_VA), PAGE_SIZE, commit, PageProtect::READWRITE));
+        page.expect("a space").expect("a read-write page");
+        process.write_memory(u64::from(CODE_VA), &data_code).expect("write the code");
+        assert_eq!(executes(&process), Some(true), "a page mapped by a fault without DEP does not execute");
+        let again = process.with_space(|space| space.protect(u64::from(CODE_VA), PAGE_SIZE, PageProtect::READWRITE));
+        assert_eq!(again, Ok(Ok(PageProtect::READWRITE)));
+        assert_eq!(executes(&process), Some(true), "a page protected again without DEP does not execute");
+        process
+    };
+    let h = with_code("dep-off.exe");
+    assert_eq!(h.execute_options(), MEM_EXECUTE_OPTION_ENABLE, "OptIn starts without DEP");
+    let th = alloc::vec![thread(&h, &one, CODE_VA)];
+    wait_until("no code ran from a read-write page without DEP", &|| read_u32(&h, CODE_VA + 0x100) == 1);
+    let asked = h.with_space(|space| space.query(u64::from(CODE_VA)).map(|region| region.protect));
+    assert_eq!(asked, Ok(Ok(PageProtect::READWRITE)), "the VAD lost the protection asked for");
+    ps::terminate_process(h.clone(), NtStatus(0xDE0F)).expect("terminate dep-off");
+    let i = with_code("dep-on.exe");
+    let on = MEM_EXECUTE_OPTION_DISABLE | MEM_EXECUTE_OPTION_PERMANENT;
+    i.set_execute_options(on).expect("turn DEP on");
+    assert_eq!(executes(&i), Some(false), "a present page still executes under DEP");
+    assert_eq!(
+        i.set_execute_options(MEM_EXECUTE_OPTION_ENABLE),
+        Err(STATUS_ACCESS_DENIED),
+        "a permanent choice changed"
+    );
+    let ti = alloc::vec![thread(&i, &one, CODE_VA)];
+    for process in [&h, &i] {
         assert_eq!(wait(process.dispatcher_object(), 3000), STATUS_WAIT_0, "{} did not end", process.image_file_name());
     }
     ps::wait_for_reaper();
@@ -1847,6 +1908,8 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         (&e, &te, NtStatus(0xE0E0)),
         (&f, &tf, STATUS_STACK_OVERFLOW),
         (&g, &tg, STATUS_GUARD_PAGE_VIOLATION),
+        (&h, &th, NtStatus(0xDE0F)),
+        (&i, &ti, STATUS_ACCESS_VIOLATION),
     ];
     for (process, threads, status) in ended {
         assert_eq!((process.exit_status(), process.active_threads()), (status, 0), "{}", process.image_file_name());
@@ -1867,12 +1930,12 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     assert!(ps::create_thread(&a, IMAGE_BASE, &stack).is_err(), "a thread in an ended process");
     assert_eq!(section_object.handle_count(), 0, "the handle table was not run down");
 
-    let ids: Vec<u32> = [&a, &b, &c, &d, &e, &f, &g]
+    let ids: Vec<u32> = [&a, &b, &c, &d, &e, &f, &g, &h, &i]
         .iter()
         .map(|p| p.pid())
-        .chain([&ta, &tb, &tc, &td, &te, &tf, &tg].iter().flat_map(|threads| threads.iter().map(|t| t.tid())))
+        .chain([&ta, &tb, &tc, &td, &te, &tf, &tg, &th, &ti].iter().flat_map(|threads| threads.iter().map(|t| t.tid())))
         .collect();
-    drop((a, b, c, d, e, f, g, ta, tb, tc, td, te, tf, tg));
+    drop((a, b, c, d, e, f, g, h, i, ta, tb, tc, td, te, tf, tg, th, ti));
     drop((section_object, one, two, faulty, stacks, system));
     for id in ids {
         assert_eq!(ps::lookup_process(id).err(), Some(STATUS_INVALID_CID), "process {id} outlived its references");

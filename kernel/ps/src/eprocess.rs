@@ -22,10 +22,13 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::ntstatus::{
-    NtStatus, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_CID, STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING,
-    STATUS_SECTION_NOT_IMAGE,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_CID, STATUS_INVALID_PARAMETER,
+    STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING, STATUS_SECTION_NOT_IMAGE,
 };
 use abi::peb32::Peb32;
+use abi::process::{
+    MEM_EXECUTE_OPTION_DISABLE, MEM_EXECUTE_OPTION_ENABLE, MEM_EXECUTE_OPTION_PERMANENT, MEM_EXECUTE_OPTION_VALID_FLAGS,
+};
 use hal::sync::{KSpinLock, Once};
 use ke::dispatcher::{DispatcherHeader, ObjectType as KObjectType};
 use mm::address_space::AddressSpace;
@@ -92,6 +95,51 @@ const HEAP_DECOMMIT_TOTAL_FREE_THRESHOLD: u32 = 0x1_0000;
 const HEAP_DECOMMIT_FREE_BLOCK_THRESHOLD: u32 = 0x1000;
 const CRITICAL_SECTION_TIMEOUT: i64 = -2_592_000 * 10_000_000;
 
+/// La politique DEP du système (ADR-020) : les options d'exécution que
+/// reçoit un processus neuf.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DepPolicy {
+    /// DEP coupé, sauf pour les processus qui l'activent : le défaut d'XP SP2.
+    OptIn,
+    /// DEP actif, sauf pour les processus qui le coupent.
+    OptOut,
+    /// DEP actif pour tous, sans exception.
+    AlwaysOn,
+    /// DEP coupé pour tous, sans exception.
+    AlwaysOff,
+}
+
+impl DepPolicy {
+    /// Les options d'exécution (`MEM_EXECUTE_OPTION_*`) d'un processus neuf :
+    /// sous AlwaysOn et AlwaysOff, elles ne changent plus.
+    pub const fn initial_options(self) -> u32 {
+        match self {
+            Self::OptIn => MEM_EXECUTE_OPTION_ENABLE,
+            Self::OptOut => MEM_EXECUTE_OPTION_DISABLE,
+            Self::AlwaysOn => MEM_EXECUTE_OPTION_DISABLE | MEM_EXECUTE_OPTION_PERMANENT,
+            Self::AlwaysOff => MEM_EXECUTE_OPTION_ENABLE | MEM_EXECUTE_OPTION_PERMANENT,
+        }
+    }
+}
+
+/// La politique DEP en vigueur. Une option de démarrage la choisira.
+pub const DEP_POLICY: DepPolicy = DepPolicy::OptIn;
+
+/// MmSetExecuteOptions, sans le processus : les options qui remplacent
+/// `current` par `requested`. `STATUS_INVALID_PARAMETER` pour un drapeau
+/// inconnu, ou sans exactement l'un de `DISABLE` et `ENABLE` ;
+/// `STATUS_ACCESS_DENIED` si `current` est permanent.
+pub fn changed_execute_options(current: u32, requested: u32) -> Result<u32, NtStatus> {
+    let dep = requested & (MEM_EXECUTE_OPTION_DISABLE | MEM_EXECUTE_OPTION_ENABLE);
+    if requested & !MEM_EXECUTE_OPTION_VALID_FLAGS != 0 || dep.count_ones() != 1 {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    if current & MEM_EXECUTE_OPTION_PERMANENT != 0 {
+        return Err(STATUS_ACCESS_DENIED);
+    }
+    Ok(requested)
+}
+
 /// Les threads vivants d'un processus, et où il en est de sa fin.
 pub(crate) struct Threads {
     /// Ses threads qui ne se sont pas terminés. La liste les tient en vie
@@ -130,6 +178,8 @@ pub struct EProcess {
     exit_status: AtomicU32,
     /// Signalé à sa fin : l'objet processus que l'on attend.
     exited: DispatcherEvent,
+    /// Options d'exécution (`MEM_EXECUTE_OPTION_*`, ADR-020).
+    execute_options: KSpinLock<u32>,
 }
 
 impl EProcess {
@@ -162,6 +212,7 @@ impl EProcess {
                 threads: KSpinLock::new(Threads { list: Vec::new(), terminating: false, exited: false }),
                 exit_status: AtomicU32::new(STATUS_PENDING.0),
                 exited: DispatcherEvent::new(KObjectType::NotificationEvent),
+                execute_options: KSpinLock::new(DEP_POLICY.initial_options()),
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
@@ -226,7 +277,8 @@ impl EProcess {
     /// a commencé, ou s'il n'en a pas à lui.
     ///
     /// # IRQL
-    /// < DISPATCH_LEVEL.
+    /// <= DISPATCH_LEVEL ; `f` s'exécute à l'IRQL de l'appelant, donc sous
+    /// DISPATCH_LEVEL s'il lit ou écrit la mémoire du processus.
     pub fn with_space<R>(&self, f: impl FnOnce(&AddressSpace) -> R) -> Result<R, NtStatus> {
         if !self.rundown.acquire() {
             return Err(STATUS_PROCESS_IS_TERMINATING);
@@ -269,6 +321,30 @@ impl EProcess {
     /// <= APC_LEVEL.
     pub fn write_memory(&self, addr: u64, data: &[u8]) -> Result<(), NtStatus> {
         self.with_space(|space| space.write_bytes(addr, data))?
+    }
+
+    /// Ses options d'exécution (`MEM_EXECUTE_OPTION_*`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn execute_options(&self) -> u32 {
+        *self.execute_options.lock()
+    }
+
+    /// NtSetInformationProcess(ProcessExecuteFlags) : remplace ses options
+    /// d'exécution ([`changed_execute_options`]) ; les pages déjà présentes
+    /// de son espace d'adresses prennent aussitôt leurs nouveaux droits.
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL.
+    pub fn set_execute_options(&self, requested: u32) -> Result<(), NtStatus> {
+        let mut options = self.execute_options.lock();
+        let changed = changed_execute_options(*options, requested)?;
+        *options = changed;
+        // Rights follow under the options' lock, so that two changes apply
+        // in order; the space is not destroyed meanwhile.
+        let _ = self.with_space(|space| space.set_execute_enabled(changed & MEM_EXECUTE_OPTION_ENABLE != 0));
+        Ok(())
     }
 
     /// Signale sa fin à qui l'attend.
@@ -346,6 +422,7 @@ pub fn create_process(
 ) -> Result<Arc<Object<EProcess>>, NtStatus> {
     let info = section.image().ok_or(STATUS_SECTION_NOT_IMAGE)?.info;
     let space = AddressSpace::new().ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    space.set_execute_enabled(DEP_POLICY.initial_options() & MEM_EXECUTE_OPTION_ENABLE != 0);
     let built = build_address_space(&space, section, &info);
     let image_base = match built {
         Ok(image_base) => image_base,
@@ -387,4 +464,42 @@ fn build_address_space(
     peb.image_subsystem_minor_version = u32::from(info.subsystem_version.1);
     space.write_bytes(page, peb.as_bytes())?;
     Ok(image_base)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use abi::process::MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION;
+
+    const DISABLE: u32 = MEM_EXECUTE_OPTION_DISABLE;
+    const ENABLE: u32 = MEM_EXECUTE_OPTION_ENABLE;
+    const PERMANENT: u32 = MEM_EXECUTE_OPTION_PERMANENT;
+
+    #[test]
+    fn each_policy_gives_its_options() {
+        assert_eq!(DEP_POLICY, DepPolicy::OptIn, "the XP SP2 default (ADR-020)");
+        assert_eq!(DepPolicy::OptIn.initial_options(), ENABLE);
+        assert_eq!(DepPolicy::OptOut.initial_options(), DISABLE);
+        assert_eq!(DepPolicy::AlwaysOn.initial_options(), DISABLE | PERMANENT);
+        assert_eq!(DepPolicy::AlwaysOff.initial_options(), ENABLE | PERMANENT);
+    }
+
+    #[test]
+    fn options_change_until_made_permanent() {
+        assert_eq!(changed_execute_options(ENABLE, DISABLE), Ok(DISABLE));
+        let thunks = DISABLE | MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION;
+        assert_eq!(changed_execute_options(DISABLE, thunks), Ok(thunks));
+        assert_eq!(changed_execute_options(ENABLE, DISABLE | PERMANENT), Ok(DISABLE | PERMANENT));
+        assert_eq!(changed_execute_options(DISABLE | PERMANENT, ENABLE), Err(STATUS_ACCESS_DENIED));
+        for policy in [DepPolicy::AlwaysOn, DepPolicy::AlwaysOff] {
+            assert_eq!(changed_execute_options(policy.initial_options(), DISABLE), Err(STATUS_ACCESS_DENIED));
+        }
+    }
+
+    #[test]
+    fn options_say_whether_dep_is_on() {
+        for bad in [0, DISABLE | ENABLE, PERMANENT, ENABLE | 0x10] {
+            assert_eq!(changed_execute_options(ENABLE, bad), Err(STATUS_INVALID_PARAMETER), "{bad:#x}");
+        }
+    }
 }

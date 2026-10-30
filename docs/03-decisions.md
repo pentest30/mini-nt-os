@@ -30,6 +30,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 017 | Volume système en FAT32 tant que NTFS n'est pas en écriture | Acceptée |
 | 018 | Conformance : `rostests` et scénarios QEMU | Acceptée |
 | 019 | Décisions de l'ancien `CLAUDE.md` | Remplacées |
+| 020 | DEP : règle OptIn d'XP SP2, exécution permise par défaut | Acceptée |
 
 ---
 
@@ -279,3 +280,32 @@ ReactOS fournit tout cet espace utilisateur, écrit contre l'ABI d'un noyau NT. 
 | « `no_std` in all kernel crates » | ✅ Conservée | ADR-016 |
 | « PEB OS version 5.1.2600 » | ✅ Conservée | ADR-003 |
 | « Every `unsafe` needs `// SAFETY:` » et la discipline d'IRQL | ✅ Conservées et renforcées | [06 — Conventions](06-conventions.md) |
+
+---
+
+## ADR-020 — DEP : règle OptIn d'XP SP2, exécution permise par défaut
+
+**Contexte.** Le noyau tourne en mode long et pose le bit NX sur toute page utilisateur dont la protection n'est pas `PAGE_EXECUTE*`. C'est un DEP actif pour tous les processus. XP SP2 a introduit DEP avec quatre politiques système :
+- `OptIn` : le défaut d'un poste client ;
+- `OptOut` ;
+- `AlwaysOn` ;
+- `AlwaysOff`.
+
+Sous `OptIn`, un programme qui ne l'a pas demandé tourne sans DEP. Or beaucoup de jeux de l'époque exécutent des pages de données : compilateurs à la volée, packers, code qui se modifie. Sous Mino, ils plantent, alors qu'ils tournent sur un XP SP2 par défaut.
+
+**Décision.**
+- La politique du système est `OptIn`. Les trois autres sont nommées (`ps::eprocess::DepPolicy`), et une option de démarrage les choisira plus tard.
+- Chaque processus porte ses options d'exécution, avec les valeurs `MEM_EXECUTE_OPTION_*` de l'ABI (`abi::process`). Elles sont fixées à sa création d'après la politique :
+  - `OptIn` : DEP coupé ;
+  - `OptOut` : DEP actif ;
+  - `AlwaysOn` : DEP actif, de façon permanente ;
+  - `AlwaysOff` : DEP coupé, de façon permanente.
+- Il n'y a pas de liste de binaires système. Sous `OptIn`, tous les processus commencent sans DEP, ceux de ReactOS compris. Un processus active DEP par `NtSetInformationProcess(ProcessExecuteFlags)` (appel système au M3, `EProcess::set_execute_options` dans le noyau) ; avec `PERMANENT`, son choix ne change plus.
+- **Sans DEP**, toute page utilisateur lisible s'exécute, comme sur XP sans NX. **Avec DEP**, seules les protections `PAGE_EXECUTE*` s'exécutent.
+- La VAD garde la protection demandée : `NtQueryVirtualMemory` la rend telle quelle. Seuls les droits des pages en dépendent (`AddressSpace::set_execute_enabled`), et un changement s'applique aussitôt aux pages présentes.
+- Le noyau garde NX pour ses propres pages, quelle que soit la politique (W^X, ADR-014).
+
+**Conséquences.**
+- Les programmes qui exécutent leurs données tournent par défaut, comme sur XP SP2.
+- Pas encore : l'émulation des thunks ATL d'XP SP2 pour les processus sous DEP (`MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION` est accepté, sans effet), ni la liste d'exceptions d'`OptOut`.
+

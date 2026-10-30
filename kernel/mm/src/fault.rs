@@ -24,10 +24,13 @@
 //! le système avant (IRQL_NOT_LESS_OR_EQUAL), car la VAD se prend sous un
 //! verrou tournant.
 //!
-//! Pas encore : politique DEP par processus (NX s'applique toujours, la règle
-//! OptIn d'XP SP2 viendra avec Ps) ; extension de la pile par une faute du
-//! noyau (sa copie du contexte d'une exception sur la pile utilisateur, M3) ;
-//! pagination sur disque.
+//! Les droits d'une page suivent la protection de la VAD ; dans un espace sans
+//! DEP (ADR-020), toute page lisible s'exécute aussi
+//! (`AddressSpace::set_execute_enabled`).
+//!
+//! Pas encore : extension de la pile par une faute du noyau (sa copie du
+//! contexte d'une exception sur la pile utilisateur, M3) ; pagination sur
+//! disque.
 //!
 //! WI7e Ch.5 §Page Fault Handling
 
