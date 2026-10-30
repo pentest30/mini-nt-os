@@ -14,6 +14,10 @@
 //! vector's hook, which must exist; from kernel mode, they jump to the
 //! kernel's handler (`idt`), as if the stub were not there.
 //!
+//! On the way back to user mode, after the vector's hook, the frame goes to
+//! the return hook ([`set_user_return_hook`]), where the kernel delivers the
+//! thread's user APCs.
+//!
 //! GS is saved but not reloaded on the way out: in the kernel, its base is
 //! the KPCR, which loading a selector would lose (no SWAPGS before M3's
 //! entry rework).
@@ -77,6 +81,9 @@ const GATES: usize = (LAST_GATE - FIRST_GATE + 1) as usize;
 static HOOKS: [AtomicUsize; GATES + USER_EXCEPTIONS.len()] =
     [const { AtomicUsize::new(0) }; GATES + USER_EXCEPTIONS.len()];
 
+/// The return hook: a `TrapHook`, or 0.
+static USER_RETURN_HOOK: AtomicUsize = AtomicUsize::new(0);
+
 /// The hook slot of `vector`: a gate, then a user exception.
 fn slot(vector: u8) -> Option<usize> {
     if (FIRST_GATE..=LAST_GATE).contains(&vector) {
@@ -97,6 +104,15 @@ pub fn set_trap_hook(vector: u8, hook: Option<TrapHook>) {
     HOOKS[slot].store(hook.map_or(0, |f| f as usize), Ordering::Release);
 }
 
+/// Plugs `hook` into the way back to user mode: every gate and user
+/// exception gives it the frame after the vector's hook.
+///
+/// # IRQL
+/// Any level.
+pub fn set_user_return_hook(hook: Option<TrapHook>) {
+    USER_RETURN_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+}
+
 /// Called by the gates and the user exception stubs with their frame,
 /// interrupts masked, at the IRQL of the interrupted user code
 /// (PASSIVE_LEVEL). A gate without a hook gives EAX
@@ -108,6 +124,13 @@ pub fn set_trap_hook(vector: u8, hook: Option<TrapHook>) {
 )]
 extern "sysv64" fn hal_trap_dispatch(frame: &mut KTrapFrame) {
     dispatch(frame);
+    let hook = USER_RETURN_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        // SAFETY: only `set_user_return_hook` stores into USER_RETURN_HOOK,
+        // always a `TrapHook`.
+        let hook: TrapHook = unsafe { core::mem::transmute(hook) };
+        hook(frame);
+    }
 }
 
 /// The vector's hook, or what [`hal_trap_dispatch`] does without one.
