@@ -290,6 +290,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::irql::set_apc_hook(Some(ke::apc::ki_apc_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(system_call));
+    sys::gates::install();
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -314,6 +315,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_manager_self_test();
     process_self_test();
     system_service_self_test();
+    trap_gate_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -394,10 +396,11 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
 }
 
-/// A system call (`hal::idt`, `hal::sysenter`), interrupts masked, on the
-/// calling thread's kernel stack. A Ps thread goes to KiSystemService
-/// (`sys`), interrupts enabled; a thread of the legacy loader to its own
-/// dispatcher (`syscall`), which has its own numbers.
+/// A system call through SYSENTER (`hal::sysenter`), interrupts masked, on
+/// the calling thread's kernel stack (`int 2Eh` goes through
+/// `sys::gates`). A Ps thread goes to KiSystemService (`sys`), interrupts
+/// enabled; a thread of the legacy loader to its own dispatcher (`syscall`),
+/// which has its own numbers.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, from user mode.
@@ -1819,6 +1822,123 @@ fn system_service_self_test() {
         sys::IMPLEMENTED.len(),
         NTOSKRNL.len()
     );
+}
+
+/// The user-mode gates (`sys::gates`, `hal::trap`, M3): from a Ps process,
+/// `int 2Ah` gives the tick count, `int 2Eh` keeps EBX, ESI, EDI, EBP and FS
+/// across a system service, `int 2Dh` prints through DbgPrint and skips the
+/// byte after it (the `int 3` of ntdll), `int 2Bh` has no callback to return
+/// from, and `int 2Ch` ends the process with `STATUS_ASSERTION_FAILURE`.
+fn trap_gate_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ASSERTION_FAILURE, STATUS_INVALID_HANDLE, STATUS_NO_CALLBACK_ACTIVE, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const TICKS: u32 = DATA;
+    const CLOSED: u32 = DATA + 0x04;
+    const KEPT: u32 = DATA + 0x08; // EBX, ESI, EDI, EBP
+    const TEB_SELF: u32 = DATA + 0x18;
+    const PRINTED: u32 = DATA + 0x1C;
+    const CALLBACK: u32 = DATA + 0x20;
+    const DONE: u32 = DATA + 0x24;
+    const GO: u32 = DATA + 0x28;
+    const AFTER_ASSERTION: u32 = DATA + 0x2C;
+    const MESSAGE: u32 = DATA + 0x40;
+    const TEXT: &[u8] = b"hello from Mino user mode\n";
+    const KEPT_VALUES: [u32; 4] = [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x4444_4444];
+
+    let mut code = Code::new();
+    code.bytes(&[0xCD, 0x2A])
+        .store_eax(TICKS)
+        // Across exactly one gate, so that two faults cannot cancel out.
+        .word(&[0xBB], KEPT_VALUES[0]) // mov ebx, …
+        .word(&[0xBE], KEPT_VALUES[1]) // mov esi, …
+        .word(&[0xBF], KEPT_VALUES[2]) // mov edi, …
+        .word(&[0xBD], KEPT_VALUES[3]) // mov ebp, …
+        .call(services::NtClose, &[0x1234])
+        .store_eax(CLOSED)
+        .word(&[0x89, 0x1D], KEPT) // mov [KEPT], ebx
+        .word(&[0x89, 0x35], KEPT + 4) // mov [KEPT + 4], esi
+        .word(&[0x89, 0x3D], KEPT + 8) // mov [KEPT + 8], edi
+        .word(&[0x89, 0x2D], KEPT + 12) // mov [KEPT + 12], ebp
+        .bytes(&[0x64, 0xA1, 0x18, 0, 0, 0]) // mov eax, fs:[0x18]
+        .store_eax(TEB_SELF)
+        // DebugService(BREAKPOINT_PRINT, MESSAGE, length), then `inc eax`
+        // where ntdll has its `int 3`: skipped, EAX stays the status.
+        .word(&[0xB8], 1)
+        .word(&[0xB9], MESSAGE)
+        .word(&[0xBA], TEXT.len() as u32)
+        .bytes(&[0xCD, 0x2D, 0x40])
+        .store_eax(PRINTED)
+        .bytes(&[0xCD, 0x2B])
+        .store_eax(CALLBACK)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x83, 0x3D], GO)
+        .bytes(&[0x00, 0x74, 0xF7]) // until [GO] != 0
+        .bytes(&[0xCD, 0x2C])
+        .store_eax(AFTER_ASSERTION)
+        .bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x100];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let mut data = [0u8; 0x80];
+    data[0x40..0x40 + TEXT.len()].copy_from_slice(TEXT);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x80, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "gates.exe", false).expect("a process");
+    let before = hal::timer::get_tick_count() as u32;
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the gate test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let after = hal::timer::get_tick_count() as u32;
+    let ticks = read(TICKS);
+    assert!((before..=after).contains(&ticks), "int 2Ah gave {ticks}, not in [{before}, {after}]");
+    assert_eq!(NtStatus(read(CLOSED)), STATUS_INVALID_HANDLE, "int 2Eh");
+    let kept = [read(KEPT), read(KEPT + 4), read(KEPT + 8), read(KEPT + 12)];
+    assert_eq!(kept, KEPT_VALUES, "a gate lost EBX, ESI, EDI or EBP");
+    assert_eq!(read(TEB_SELF), thread.teb(), "a gate lost FS");
+    assert_eq!(read(PRINTED), 0, "int 2Dh did not skip the byte after it");
+    assert_eq!(NtStatus(read(CALLBACK)), STATUS_NO_CALLBACK_ACTIVE, "int 2Bh");
+
+    process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, STATUS_ASSERTION_FAILURE), "int 2Ch");
+    ps::wait_for_reaper();
+    log::info!("[smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them");
 }
 
 /// Ps, and the M2 exit criteria 1 and 3 (05): see [`process_round`]. The
