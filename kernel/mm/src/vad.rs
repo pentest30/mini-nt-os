@@ -91,6 +91,25 @@ impl PageProtect {
         }
     }
 
+    /// La protection d'une page dans un processus sans DEP (ADR-020) : une
+    /// page lisible s'exécute aussi. `READONLY` devient `EXECUTE_READ`,
+    /// `READWRITE` `EXECUTE_READWRITE`, `WRITECOPY` `EXECUTE_WRITECOPY` ; les
+    /// autres ne changent pas.
+    pub fn with_execute(self) -> Self {
+        let modifiers = self & (Self::GUARD | Self::NOCACHE);
+        let base = self - modifiers;
+        let executable = if base == Self::READONLY {
+            Self::EXECUTE_READ
+        } else if base == Self::READWRITE {
+            Self::EXECUTE_READWRITE
+        } else if base == Self::WRITECOPY {
+            Self::EXECUTE_WRITECOPY
+        } else {
+            base
+        };
+        executable | modifiers
+    }
+
     /// Une écriture qui ne se partage pas devient copie sur écriture :
     /// `READWRITE` devient `WRITECOPY`, `EXECUTE_READWRITE`
     /// `EXECUTE_WRITECOPY`.
@@ -390,6 +409,11 @@ impl VadTree {
     /// Le premier nœud qui commence après `addr`.
     pub fn next_after(&self, addr: u64) -> Option<&VadNode> {
         self.nodes.range(addr + 1..).next().map(|(_, node)| node)
+    }
+
+    /// Les nœuds, par adresse.
+    pub fn nodes(&self) -> impl Iterator<Item = &VadNode> + '_ {
+        self.nodes.values()
     }
 
     /// Remove the VAD node starting at `start_addr` (VirtualFree MEM_RELEASE).
@@ -815,6 +839,18 @@ mod tests {
         assert_eq!(rights(na()), (false, false, false));
         assert_eq!(rights(rw() | PageProtect::GUARD), (true, false, false));
         assert_eq!(rights(rw() | PageProtect::NOCACHE), (true, false, true));
+    }
+
+    #[test]
+    fn without_dep_a_readable_page_executes() {
+        type P = PageProtect;
+        assert_eq!(P::READONLY.with_execute(), P::EXECUTE_READ);
+        assert_eq!(P::READWRITE.with_execute(), P::EXECUTE_READWRITE);
+        assert_eq!(P::WRITECOPY.with_execute(), P::EXECUTE_WRITECOPY);
+        assert_eq!((P::READWRITE | P::GUARD).with_execute(), P::EXECUTE_READWRITE | P::GUARD, "modifiers kept");
+        for unchanged in [P::NOACCESS, P::EXECUTE, P::EXECUTE_READ, P::EXECUTE_READWRITE, P::EXECUTE_WRITECOPY] {
+            assert_eq!(unchanged.with_execute(), unchanged);
+        }
     }
 
     #[test]

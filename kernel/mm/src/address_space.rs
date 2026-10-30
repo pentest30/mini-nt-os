@@ -43,7 +43,7 @@ use crate::fault::{self, Access, Backing, PteState, Resolution};
 use crate::paging::{MmPageTables, PTE_RETAINED, PTE_SHARED};
 use crate::pfn::{self, PageUsage};
 use crate::section::{view_protection, Section};
-use crate::vad::{PageProtect, VadKind, VadNode, VadTree, USER_VA_END};
+use crate::vad::{PageProtect, PageState, VadKind, VadNode, VadTree, USER_VA_END};
 use crate::virtual_alloc::{self, AllocType, FreeType, PageMapper, RegionInfo, ALLOC_GRANULARITY, USER_VA_START};
 use crate::Pfn;
 
@@ -139,6 +139,9 @@ pub struct AddressSpace {
     pml4: Pfn,
     /// Un verrou tournant : la faute de page la consulte, sous DISPATCH_LEVEL.
     vad: KSpinLock<VadTree>,
+    /// DEP coupé (ADR-020) : toute page lisible s'exécute. Changé sous le
+    /// verrou de la VAD.
+    execute_enabled: AtomicBool,
 }
 
 impl AddressSpace {
@@ -159,7 +162,8 @@ impl AddressSpace {
                 l4[i] = if i < KERNEL_HALF { Default::default() } else { system[i].clone() };
             }
         }
-        let space = Arc::new(Self { pml4, vad: KSpinLock::new(VadTree::new()) });
+        let space =
+            Arc::new(Self { pml4, vad: KSpinLock::new(VadTree::new()), execute_enabled: AtomicBool::new(false) });
         SPACES.lock().insert(space.directory_table_base(), space.clone());
         Some(space)
     }
@@ -201,6 +205,54 @@ impl AddressSpace {
         };
     }
 
+    /// DEP est coupé : toute page lisible s'exécute (ADR-020). Un espace
+    /// neuf a DEP actif ; Ps le règle d'après la politique du système.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn execute_enabled(&self) -> bool {
+        self.execute_enabled.load(Ordering::Acquire)
+    }
+
+    /// Coupe DEP (`true`) ou l'active : les pages déjà présentes prennent
+    /// aussitôt leurs nouveaux droits. La VAD garde les protections
+    /// demandées ; seuls les droits des pages changent.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_execute_enabled(&self, enabled: bool) {
+        let vad = self.vad.lock();
+        self.execute_enabled.store(enabled, Ordering::Release);
+        let mut tables = self.tables();
+        for node in vad.nodes() {
+            let mut at = node.start;
+            for run in node.runs() {
+                let end = at + run.pages * PAGE;
+                if run.state == PageState::Committed {
+                    for page in (at..end).step_by(PAGE as usize) {
+                        set_rights(&mut tables, page, self.effective(run.protect));
+                    }
+                }
+                at = end;
+            }
+        }
+    }
+
+    /// La protection qui donne les droits d'une page : celle de la VAD, qui
+    /// s'exécute aussi si DEP est coupé.
+    fn effective(&self, protect: PageProtect) -> PageProtect {
+        if self.execute_enabled() {
+            protect.with_execute()
+        } else {
+            protect
+        }
+    }
+
+    /// Le `PageMapper` des opérations sur la VAD.
+    fn mapper(&self) -> DemandMapper {
+        DemandMapper { tables: self.tables(), execute_enabled: self.execute_enabled() }
+    }
+
     /// Ses tables de pages.
     fn tables(&self) -> MmPageTables {
         // SAFETY: la PML4 vit autant que `self`.
@@ -213,7 +265,7 @@ impl AddressSpace {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn allocate(&self, base: u64, size: u64, alloc_type: AllocType, protect: PageProtect) -> Result<u64, NtStatus> {
-        let mut mapper = DemandMapper { tables: self.tables() };
+        let mut mapper = self.mapper();
         virtual_alloc::allocate(&mut self.vad.lock(), Some(&mut mapper), base, size, alloc_type, protect)
     }
 
@@ -223,7 +275,7 @@ impl AddressSpace {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn free(&self, base: u64, size: u64, free_type: FreeType) -> Result<(u64, u64), NtStatus> {
-        let mut mapper = DemandMapper { tables: self.tables() };
+        let mut mapper = self.mapper();
         virtual_alloc::free(&mut self.vad.lock(), Some(&mut mapper), base, size, free_type)
     }
 
@@ -232,7 +284,7 @@ impl AddressSpace {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn protect(&self, base: u64, size: u64, protect: PageProtect) -> Result<PageProtect, NtStatus> {
-        let mut mapper = DemandMapper { tables: self.tables() };
+        let mut mapper = self.mapper();
         virtual_alloc::protect(&mut self.vad.lock(), Some(&mut mapper), base, size, protect)
     }
 
@@ -434,7 +486,9 @@ impl AddressSpace {
         let mut vad = self.vad.lock();
         let mut tables = self.tables();
         let node = vad.find(page);
-        let state = node.and_then(|node| node.run_at(page)).map(|(_, run)| (run.state, run.protect));
+        // Faults go by the rights of the page: those of the VAD's protection,
+        // with execute if DEP is off.
+        let state = node.and_then(|node| node.run_at(page)).map(|(_, run)| (run.state, self.effective(run.protect)));
         let backing =
             if node.and_then(|node| node.section_page(page)).is_some() { Backing::Section } else { Backing::Private };
         match fault::resolve(state, backing, pte_state(&mut tables, page), access) {
@@ -509,7 +563,9 @@ impl AddressSpace {
                         }
                     }
                 }
-                node.protect(page, page + PAGE, private);
+                // The VAD keeps the protection asked for, without the copy.
+                let (_, run) = node.run_at(page).expect("a page of its VAD");
+                node.protect(page, page + PAGE, run.protect.without_copy());
                 STATUS_SUCCESS
             }
             Resolution::Remap(protect) => {
@@ -585,6 +641,8 @@ impl AddressSpace {
 /// pages qui ont déjà une page physique.
 struct DemandMapper {
     tables: MmPageTables,
+    /// DEP coupé dans l'espace : les droits ajoutent l'exécution.
+    execute_enabled: bool,
 }
 
 impl PageMapper for DemandMapper {
@@ -597,6 +655,7 @@ impl PageMapper for DemandMapper {
     }
 
     fn protect_page(&mut self, virt: u64, protect: PageProtect) {
+        let protect = if self.execute_enabled { protect.with_execute() } else { protect };
         set_rights(&mut self.tables, virt, protect);
     }
 }

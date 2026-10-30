@@ -172,6 +172,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 - **Fautes de page** : résolution à la demande (page à zéro, page de section, copie sur écriture), pages de garde (`STATUS_GUARD_PAGE_VIOLATION`, croissance de pile) et accès invalides transformés en exceptions.
 - **Sections** : sections adossées au fichier d'échange (mémoire partagée), sections de fichier de données et **sections d'image** PE. Ces dernières utilisent la crate `pe`, gèrent la copie sur écriture, et servent à `ntdll`, au chargeur de ntdll et à `NtMapViewOfSection`. Comme sur XP, une image projetée hors de sa base rend `STATUS_IMAGE_NOT_AT_BASE` et c'est `ntdll` qui la reloge, sur des pages qui se copient à l'écriture : le noyau ne reloge pas (sinon le décalage s'appliquerait deux fois).
 - **Espaces d'adresses** : une PML4 par processus, l'attachement à un autre processus (`KeStackAttachProcess`) et l'hyperspace.
+- **DEP** (ADR-020) : règle OptIn d'XP SP2. Sans DEP, toute page utilisateur lisible s'exécute ; avec DEP, seules les protections `PAGE_EXECUTE*`. La VAD garde la protection demandée.
 - **Plus tard** : fichier d'échange et working sets réduits.
 
 ### 5.4 Ob — gestionnaire d'objets (`kernel/ob`)
