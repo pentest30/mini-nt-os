@@ -60,6 +60,7 @@ pub const STATUS_IMAGE_NOT_AT_BASE: NtStatus = NtStatus(0x4000_0003);
 pub const STATUS_GUARD_PAGE_VIOLATION: NtStatus = NtStatus(0x8000_0001);
 pub const STATUS_DATATYPE_MISALIGNMENT: NtStatus = NtStatus(0x8000_0002);
 pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
+pub const STATUS_UNSUCCESSFUL: NtStatus = NtStatus(0xC000_0001);
 pub const STATUS_NOT_IMPLEMENTED: NtStatus = NtStatus(0xC000_0002);
 pub const STATUS_ACCESS_VIOLATION: NtStatus = NtStatus(0xC000_0005);
 pub const STATUS_INVALID_HANDLE: NtStatus = NtStatus(0xC000_0008);
