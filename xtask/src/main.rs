@@ -100,7 +100,8 @@ fn dispatch(mut args: Args) -> Result<()> {
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 /// Every ntoskrnl feature, checked together by `lint`.
-const ALL_KERNEL_FEATURES: &str = "trace-syscalls,test-stack-overflow,test-ke-events,test-fpu,test-bugcheck,heartbeat";
+const ALL_KERNEL_FEATURES: &str =
+    "trace-syscalls,test-stack-overflow,test-ke-events,test-fpu,test-bugcheck,test-ke-starvation,heartbeat";
 
 /// `cargo fmt --check`, then clippy with warnings denied: the host workspace,
 /// and the kernel and loader on their own targets (cfg(target_os = "none")

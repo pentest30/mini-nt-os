@@ -351,18 +351,28 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 
     // Wire preemptive round-robin: each clock tick ends the quantum, and the
     // DISPATCH interrupt (timer ISR below DISPATCH_LEVEL, or IRQL drop) drains
-    // the DPC queue, then runs schedule(). Registered after ke::init()
-    // (scheduler table ready) and before interrupts re-enable.
+    // the DPC queue, then runs schedule(); the APC interrupt delivers the
+    // current thread's kernel APCs. Registered after ke::init() (scheduler
+    // table ready) and before interrupts re-enable.
     hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
+    hal::irql::set_apc_hook(Some(ke::apc::ki_apc_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
     hal::idt::set_user_fault_hook(Some(ke::sched::terminate_current_thread));
 
     x86_64::instructions::interrupts::enable();
+    // Raises starved threads every second (ke::sched).
+    spawn_kernel_thread(
+        ke::balance::BALANCE_SET_MANAGER_PRIORITY,
+        ke::balance::ke_balance_set_manager,
+        core::ptr::null_mut(),
+    );
     tpr_self_test();
     deferred_preemption_self_test();
     dpc_self_test();
     ke_self_test();
+    boost_self_test();
+    apc_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -370,6 +380,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
     if cfg!(feature = "test-fpu") {
         fpu_parallel_test();
+    }
+    if cfg!(feature = "test-ke-starvation") {
+        starvation_test();
     }
     if cfg!(feature = "test-bugcheck") {
         bugcheck_test_outer();
@@ -755,7 +768,7 @@ fn ke_self_test() {
     use core::sync::atomic::{AtomicBool, Ordering};
     use ke::dispatcher::{
         ke_delay_execution_thread, ke_initialize_event, ke_set_event, ke_wait_for_single_object, DispatcherHeader,
-        KEvent, ObjectType, ProcessorMode,
+        KEvent, ObjectType, ProcessorMode, EVENT_INCREMENT,
     };
     use ke::sched::KePlatform;
 
@@ -767,7 +780,7 @@ fn ke_self_test() {
         unsafe {
             let delay = ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -20 * MS);
             assert_eq!(delay, STATUS_SUCCESS);
-            ke_set_event::<KePlatform>(event.cast());
+            ke_set_event::<KePlatform>(event.cast(), EVENT_INCREMENT);
         }
     }
     let wait = |object: *mut DispatcherHeader, timeout_ms: i64| {
@@ -782,7 +795,8 @@ fn ke_self_test() {
         core::ptr::addr_of_mut!((*event).header)
     };
     let start = hal::timer::interrupt_time();
-    let tid = spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, signaler, event.cast());
+    // Above the boot thread, boost included.
+    let tid = spawn_kernel_thread(ke::sched::current_priority() + 1, signaler, event.cast());
     assert!(STARTED.load(Ordering::Relaxed), "a higher-priority thread did not preempt its creator");
     assert_eq!(wait(header, 1000), STATUS_WAIT_0, "event not set");
     let waited = hal::timer::interrupt_time() - start;
@@ -794,6 +808,195 @@ fn ke_self_test() {
     assert_eq!(wait(header, 30), STATUS_TIMEOUT);
     assert!(hal::timer::interrupt_time() - start >= 30 * MS as u64, "timed out too early");
     log::info!("[smoke] Ke: priority preemption, event wait, delay, thread end and timeout ok");
+}
+
+/// Checks wait boosts (M1, `ke::sched`): a thread of base priority 7, woken
+/// through an event with the increment that lifts it one level above the boot
+/// thread (itself at 8, or above while a boost of its own lasts), preempts it
+/// before `ke_set_event` returns; one quantum later, its boost has decayed by
+/// one level, to the boot thread's priority, and the boot thread gets the
+/// processor back while the woken thread still spins.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn boost_self_test() {
+    use abi::ntstatus::{STATUS_SUCCESS, STATUS_WAIT_0};
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+    use ke::dispatcher::{
+        ke_delay_execution_thread, ke_initialize_event, ke_set_event, ke_wait_for_single_object, KEvent, ObjectType,
+        ProcessorMode,
+    };
+    use ke::sched::{KePlatform, LOW_REALTIME_PRIORITY, NORMAL_PRIORITY};
+
+    const MS: i64 = 10_000;
+    static WOKEN_AT: AtomicU8 = AtomicU8::new(0);
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+    fn sleeper(event: *mut c_void) {
+        let event = event.cast::<KEvent>();
+        // SAFETY: on a scheduler thread; the event is never freed.
+        let status = unsafe {
+            ke_wait_for_single_object::<KePlatform>(
+                core::ptr::addr_of_mut!((*event).header),
+                ProcessorMode::Kernel,
+                false,
+                None,
+            )
+        };
+        assert_eq!(status, STATUS_WAIT_0);
+        WOKEN_AT.store(ke::sched::current_priority(), Ordering::Relaxed);
+        while !RELEASE.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+    }
+
+    let event = alloc::boxed::Box::into_raw(alloc::boxed::Box::<KEvent>::new_uninit()).cast::<KEvent>();
+    // SAFETY: fresh memory at a fixed address, never freed.
+    unsafe { ke_initialize_event(event, ObjectType::SynchronizationEvent, false) };
+    let tid = spawn_kernel_thread(NORMAL_PRIORITY - 1, sleeper, event.cast());
+    // Below the boot thread, the sleeper runs, and starts waiting, only while
+    // the boot thread waits.
+    // SAFETY: on the boot thread.
+    let delay = unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    assert_eq!(delay, STATUS_SUCCESS);
+    assert_eq!(WOKEN_AT.load(Ordering::Relaxed), 0, "the sleeper did not wait");
+    let waker = ke::sched::current_priority();
+    assert!((NORMAL_PRIORITY..LOW_REALTIME_PRIORITY - 1).contains(&waker), "boot thread at {waker}");
+    // SAFETY: the event is initialised and never freed.
+    unsafe { ke_set_event::<KePlatform>(event, waker + 1 - (NORMAL_PRIORITY - 1)) };
+    assert_eq!(
+        WOKEN_AT.load(Ordering::Relaxed),
+        waker + 1,
+        "the woken thread did not run boosted before its waker resumed"
+    );
+    assert_eq!(
+        ke::sched::thread_priority(tid),
+        Some(waker),
+        "the boost did not decay by one level at the end of the quantum"
+    );
+    RELEASE.store(true, Ordering::Release);
+    let thread = ke::sched::thread_object(tid).expect("thread object");
+    // SAFETY: on the boot thread; the thread object is never freed.
+    let end =
+        unsafe { ke_wait_for_single_object::<KePlatform>(thread, ProcessorMode::Kernel, false, Some(-1000 * MS)) };
+    assert_eq!(end, STATUS_WAIT_0, "the woken thread did not end");
+    log::info!("[smoke] Ke: wait boost preempts the waker, then decays one level per quantum");
+}
+
+/// Checks kernel APCs on real threads (M1, `ke::apc`): a special APC queued to
+/// the running thread runs at APC_LEVEL before the call returns; one queued
+/// by a DPC runs as soon as the DPC has; a normal APC queued to a thread
+/// waiting at PASSIVE_LEVEL runs in that thread, its kernel routine at
+/// APC_LEVEL and its normal routine at PASSIVE_LEVEL, and the wait goes on
+/// after it.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn apc_self_test() {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
+    use hal::irql::Irql;
+    use ke::apc::{ke_insert_queue_apc, KApc, NormalRoutine};
+    use ke::dispatcher::{
+        ke_initialize_event, ke_set_event, ke_wait_for_single_object, KEvent, KThread, ObjectType, Platform,
+        ProcessorMode, EVENT_INCREMENT, IO_NO_INCREMENT,
+    };
+    use ke::dpc::{ke_insert_queue_dpc, KDpc};
+    use ke::sched::KePlatform;
+
+    const NOT_RUN: u8 = u8::MAX;
+    static SELF_APC: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static DPC_APC: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static KERNEL_ROUTINE: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static NORMAL_ROUTINE: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static NORMAL_IN: AtomicPtr<KThread> = AtomicPtr::new(core::ptr::null_mut());
+    static WOKEN: AtomicBool = AtomicBool::new(false);
+
+    /// Records the IRQL in the `AtomicU8` that `argument1` points to.
+    fn record(
+        _: *mut KApc,
+        _: &mut Option<NormalRoutine>,
+        _: &mut *mut c_void,
+        at: &mut *mut c_void,
+        _: &mut *mut c_void,
+    ) {
+        // SAFETY: every APC of this test passes one of the statics above.
+        unsafe { (*at.cast::<AtomicU8>()).store(hal::irql::current() as u8, Ordering::Relaxed) };
+    }
+    /// Records the IRQL in the `AtomicU8` that `argument2` points to.
+    fn normal(_: *mut c_void, _: *mut c_void, at: *mut c_void) {
+        // SAFETY: as above.
+        unsafe { (*at.cast::<AtomicU8>()).store(hal::irql::current() as u8, Ordering::Relaxed) };
+        NORMAL_IN.store(KePlatform::current_thread(), Ordering::Relaxed);
+    }
+    fn queue_from_dpc(_: *const KDpc, apc: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        // SAFETY: the APC is leaked, initialised for the boot thread.
+        let queued = unsafe {
+            ke_insert_queue_apc::<KePlatform>(
+                apc.cast(),
+                (&raw const DPC_APC).cast_mut().cast(),
+                core::ptr::null_mut(),
+                0,
+            )
+        };
+        assert!(queued && DPC_APC.load(Ordering::Relaxed) == NOT_RUN, "an APC ran at DISPATCH_LEVEL");
+    }
+    fn sleeper(event: *mut c_void) {
+        let event = event.cast::<KEvent>();
+        // SAFETY: on a scheduler thread; the event is never freed.
+        let status = unsafe {
+            ke_wait_for_single_object::<KePlatform>(&raw mut (*event).header, ProcessorMode::Kernel, false, None)
+        };
+        assert_eq!(status, STATUS_WAIT_0);
+        WOKEN.store(true, Ordering::Release);
+    }
+    let leak = |apc: KApc| alloc::boxed::Box::leak(alloc::boxed::Box::new(apc)) as *mut KApc;
+    let arg = |at: &'static AtomicU8| core::ptr::from_ref(at).cast_mut().cast::<c_void>();
+    let me = KePlatform::current_thread();
+
+    // SAFETY: each APC is leaked: valid, at a fixed address, for good.
+    let queued = unsafe {
+        ke_insert_queue_apc::<KePlatform>(
+            leak(KApc::new(me, record, None, None, ProcessorMode::Kernel, core::ptr::null_mut())),
+            arg(&SELF_APC),
+            core::ptr::null_mut(),
+            IO_NO_INCREMENT,
+        )
+    };
+    assert!(queued);
+    assert_eq!(SELF_APC.load(Ordering::Relaxed), Irql::Apc as u8, "special APC to the running thread");
+
+    let from_dpc = leak(KApc::new(me, record, None, None, ProcessorMode::Kernel, core::ptr::null_mut()));
+    let dpc = alloc::boxed::Box::leak(alloc::boxed::Box::new(KDpc::new(queue_from_dpc, from_dpc.cast())));
+    // SAFETY: the DPC is leaked: valid, at a fixed address, for good.
+    assert!(unsafe { ke_insert_queue_dpc(dpc, core::ptr::null_mut(), core::ptr::null_mut()) });
+    assert_eq!(DPC_APC.load(Ordering::Relaxed), Irql::Apc as u8, "APC queued by a DPC, run after it");
+
+    let event = alloc::boxed::Box::into_raw(alloc::boxed::Box::<KEvent>::new_uninit()).cast::<KEvent>();
+    // SAFETY: fresh memory at a fixed address, never freed.
+    unsafe { ke_initialize_event(event, ObjectType::SynchronizationEvent, false) };
+    // Above the boot thread: it runs, and starts waiting, before this returns.
+    let tid = spawn_kernel_thread(ke::sched::current_priority() + 1, sleeper, event.cast());
+    let waiter = ke::sched::thread_object(tid).expect("thread object").cast::<KThread>();
+    let to_waiter = leak(KApc::new(waiter, record, None, Some(normal), ProcessorMode::Kernel, core::ptr::null_mut()));
+    // SAFETY: as above; the waiter is a registered thread, never freed.
+    unsafe {
+        ke_insert_queue_apc::<KePlatform>(to_waiter, arg(&KERNEL_ROUTINE), arg(&NORMAL_ROUTINE), IO_NO_INCREMENT)
+    };
+    assert_eq!(KERNEL_ROUTINE.load(Ordering::Relaxed), Irql::Apc as u8, "kernel routine");
+    assert_eq!(NORMAL_ROUTINE.load(Ordering::Relaxed), Irql::Passive as u8, "normal routine");
+    assert_eq!(NORMAL_IN.load(Ordering::Relaxed), waiter, "the APC ran in another thread's context");
+    assert!(!WOKEN.load(Ordering::Acquire), "the wait did not resume after the APC");
+    // SAFETY: the event is initialised and never freed.
+    unsafe { ke_set_event::<KePlatform>(event, EVENT_INCREMENT) };
+    // SAFETY: on the boot thread; the thread object is never freed.
+    let end = unsafe {
+        ke_wait_for_single_object::<KePlatform>(waiter.cast(), ProcessorMode::Kernel, false, Some(-1000 * 10_000))
+    };
+    assert_eq!(end, STATUS_WAIT_0);
+    assert!(WOKEN.load(Ordering::Acquire));
+    log::info!("[smoke] Ke: kernel APCs run at APC_LEVEL, normal routines at PASSIVE_LEVEL, a wait resumes after them");
 }
 
 /// Checks that the FPU state follows each thread (ADR-009): the boot thread's
@@ -815,8 +1018,9 @@ fn fpu_self_test() {
     }
     let kept = ke::fpu::with_floating_point(|| {
         hal::fpu::set_control_words(FCW, MXCSR);
-        // Higher priority: it runs, and ends, before this returns.
-        spawn_kernel_thread(ke::sched::NORMAL_PRIORITY + 1, probe, core::ptr::null_mut());
+        // Above the boot thread, boost included: it runs, and ends, before
+        // this returns.
+        spawn_kernel_thread(ke::sched::current_priority() + 1, probe, core::ptr::null_mut());
         hal::fpu::control_words()
     });
     assert_eq!(kept, (FCW, MXCSR), "the boot thread's FPU state was lost across a switch");
@@ -835,10 +1039,11 @@ fn fpu_self_test() {
 
 /// M1 exit criterion (05): two kernel threads exchange 10 000 round trips
 /// through two synchronization events, without a loss or a hang. The ponger
-/// runs at normal priority, the pinger at `pinger_priority`: above it, each
-/// round trip preempts the ponger. A lost wake-up leaves both threads waiting,
-/// which the boot thread's timeout reports. Called only with the
-/// `test-ke-events` feature (scenario `tests/boot/ke-events`).
+/// runs at normal priority, the pinger at `pinger_priority`. Each wake carries
+/// `EVENT_INCREMENT`: a woken thread whose boosted priority exceeds its
+/// waker's preempts it. A lost wake-up leaves both threads waiting, which the
+/// boot thread's timeout reports. Called only with the `test-ke-events`
+/// feature (scenario `tests/boot/ke-events`).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interrupts enabled.
@@ -848,7 +1053,7 @@ fn event_ping_pong_test(pinger_priority: u8, label: &str) {
     use core::sync::atomic::{AtomicU32, Ordering};
     use ke::dispatcher::{
         ke_initialize_event, ke_set_event, ke_wait_for_multiple_objects, ke_wait_for_single_object, KEvent, ObjectType,
-        ProcessorMode, WaitBlock, WaitType,
+        ProcessorMode, WaitBlock, WaitType, EVENT_INCREMENT,
     };
     use ke::sched::KePlatform;
 
@@ -869,14 +1074,14 @@ fn event_ping_pong_test(pinger_priority: u8, label: &str) {
             // SAFETY: guaranteed by the caller.
             unsafe {
                 if !wait_first {
-                    ke_set_event::<KePlatform>(answer);
+                    ke_set_event::<KePlatform>(answer, EVENT_INCREMENT);
                 }
                 let header = core::ptr::addr_of_mut!((*event).header);
                 let status = ke_wait_for_single_object::<KePlatform>(header, ProcessorMode::Kernel, false, None);
                 assert_eq!(status, STATUS_WAIT_0);
                 count.fetch_add(1, Ordering::Relaxed);
                 if wait_first {
-                    ke_set_event::<KePlatform>(answer);
+                    ke_set_event::<KePlatform>(answer, EVENT_INCREMENT);
                 }
             }
         }
@@ -933,6 +1138,53 @@ fn event_ping_pong_test(pinger_priority: u8, label: &str) {
         (hal::timer::interrupt_time() - start) / 10_000,
         ke::sched::context_switches() - switches,
     );
+}
+
+/// Starvation (M1, boosts): a thread of priority 4 is ready while one of
+/// priority 9 spins. The balance set manager raises the starved thread to 15
+/// once it has been ready for 4 s, at its next pass (one per second); the
+/// starved thread then runs, and the spinning thread, which watches for it,
+/// stops. Without that raise, the starved thread runs only once the other
+/// gives up, 10 s later, after the boot thread has seen it had not run.
+/// Called only with the `test-ke-starvation` feature (scenario
+/// `tests/boot/ke-starvation`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn starvation_test() {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::sync::atomic::{AtomicU64, Ordering};
+    use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+
+    const MS: u64 = 10_000;
+    static START: AtomicU64 = AtomicU64::new(0);
+    static RAN_AT: AtomicU64 = AtomicU64::new(0);
+    fn starved(_: *mut core::ffi::c_void) {
+        RAN_AT.store(hal::timer::interrupt_time(), Ordering::Release);
+    }
+    fn hog(_: *mut core::ffi::c_void) {
+        let give_up = START.load(Ordering::Relaxed) + 10_000 * MS;
+        while RAN_AT.load(Ordering::Acquire) == 0 && hal::timer::interrupt_time() < give_up {
+            core::hint::spin_loop();
+        }
+    }
+
+    log::info!("[ke-starvation] a priority-9 thread spins while a priority-4 one is ready");
+    START.store(hal::timer::interrupt_time(), Ordering::Relaxed);
+    spawn_kernel_thread(4, starved, core::ptr::null_mut());
+    let hog = spawn_kernel_thread(9, hog, core::ptr::null_mut());
+    let hog = ke::sched::thread_object(hog).expect("thread object");
+    // SAFETY: on the boot thread; the thread object is never freed.
+    let status = unsafe {
+        ke_wait_for_single_object::<KePlatform>(hog, ProcessorMode::Kernel, false, Some(-20_000 * MS as i64))
+    };
+    assert_eq!(status, STATUS_WAIT_0, "the spinning thread did not end");
+    let ran_at = RAN_AT.load(Ordering::Acquire);
+    assert_ne!(ran_at, 0, "the starved thread never ran while the other spun");
+    let after_ms = (ran_at - START.load(Ordering::Relaxed)) / MS;
+    assert!((4000..6000).contains(&after_ms), "the starved thread ran after {after_ms} ms, not after 4 to 5 s");
+    log::info!("[ke-starvation] the starved thread ran after {} ms, raised by the balance set manager", after_ms);
 }
 
 /// M1 exit criterion (05): four kernel threads compute in floating point at

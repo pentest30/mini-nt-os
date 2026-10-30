@@ -1,13 +1,14 @@
 //! Ke — Kernel executive layer.
 //!
 //! Provides:
-//!   - Scheduler: 32 priorities, quantum, preemption, waits (`sched`)
+//!   - Scheduler: 32 priorities, quantum, preemption, waits, boosts (`sched`)
+//!   - Balance set manager: raises starved threads every second (`balance`)
 //!   - Per-processor state, reached through the HAL's KPCR (`prcb`, ADR-015)
 //!   - Dispatcher (ADR-005): waitable objects, KWAIT_BLOCK, wait and signal
 //!   - Timer wheel and KTIMER objects (periodic, with a DPC)
 //!   - FPU state per thread (ADR-009) and kernel FPU brackets (`fpu`)
 //!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX
-//!   - APC (Asynchronous Procedure Call) queues
+//!   - Kernel APCs: `KApc` objects, delivered at APC_LEVEL (`apc`)
 //!   - DPC (Deferred Procedure Call) queue, without allocation, and the
 //!     DISPATCH interrupt that drains it
 //!   - `KeBugCheckEx`, the fatal error screen (`bugcheck`)
@@ -19,6 +20,7 @@
 extern crate alloc;
 
 pub mod apc;
+pub mod balance;
 pub mod bugcheck;
 pub mod clock;
 pub mod dispatcher;

@@ -1,7 +1,7 @@
 //! KPCR : la zone de contrôle de chaque processeur (02 §HAL, ADR-015). En mode
 //! noyau, la base de GS pointe sur celle du CPU courant ; elle porte l'état par
-//! CPU de la HAL (interruption DISPATCH en attente) et le KPRCB de Ke. L'IRQL,
-//! lui, est CR8 (`hal::irql`).
+//! CPU de la HAL (interruptions DISPATCH et APC en attente) et le KPRCB de Ke.
+//! L'IRQL, lui, est CR8 (`hal::irql`).
 //!
 //! Un seul CPU pour l'instant : celui du démarrage (BSP), dont le KPCR est
 //! statique.
@@ -26,6 +26,8 @@ pub struct Kpcr {
     number: u32,
     /// L'interruption DISPATCH est demandée et ne s'est pas encore exécutée.
     pub(crate) dispatch_pending: AtomicBool,
+    /// L'interruption APC est demandée et ne s'est pas encore exécutée.
+    pub(crate) apc_pending: AtomicBool,
 }
 
 const _: () = assert!(core::mem::offset_of!(Kpcr, self_ptr) == 0, "gs:[0] is the KPCR's own address");
@@ -40,6 +42,7 @@ static BSP_PCR: Kpcr = Kpcr {
     prcb: AtomicPtr::new(ptr::null_mut()),
     number: 0,
     dispatch_pending: AtomicBool::new(false),
+    apc_pending: AtomicBool::new(false),
 };
 
 impl Kpcr {

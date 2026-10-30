@@ -28,6 +28,10 @@ test-fpu = []
 # end on the STOP screen of KeBugCheckEx, with the panic message and a
 # symbolized call stack (M1, scenario tests/boot/bugcheck).
 test-bugcheck = []
+# A priority-9 thread spins while a priority-4 one is ready: the balance set
+# manager must give the starved thread the processor after about 4 s (M1,
+# boosts; scenario tests/boot/ke-starvation).
+test-ke-starvation = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 
