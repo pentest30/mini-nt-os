@@ -25,7 +25,7 @@ use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;
 
-use abi::ntstatus::{NtStatus, STATUS_SUCCESS};
+use abi::ntstatus::{NtStatus, STATUS_ACCESS_VIOLATION, STATUS_SUCCESS};
 
 use super::bugcheck::{self, interrupted_rbp, BugCheckCode, StackStart};
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
@@ -141,24 +141,33 @@ extern "x86-interrupt" fn exception_simd_floating_point(frame: InterruptStackFra
     floating_point_trap(19, &frame, "SIMD floating-point exception (#XM)", rbp);
 }
 
-/// A floating-point trap. In user mode, the thread is terminated as on any
-/// other user fault, until exceptions reach user mode (M3); in kernel mode,
-/// where the FPU is only used under `ke::fpu::with_floating_point` with every
-/// exception masked, it is a STOP.
+/// A floating-point trap. In user mode, it goes to the user fault hook as on
+/// any other user fault, until exceptions reach user mode (M3), with
+/// `STATUS_ACCESS_VIOLATION`: the `STATUS_FLOAT_*` code needs the FPU status
+/// decoded, which comes with KiDispatchException. In kernel mode, where the
+/// FPU is only used under `ke::fpu::with_floating_point` with every exception
+/// masked, it is a STOP.
 fn floating_point_trap(trap: u64, frame: &InterruptStackFrame, what: &str, rbp: u64) -> ! {
     if frame.code_segment.rpl() == x86_64::PrivilegeLevel::Ring3 {
-        super::serial::write_str("[FPU] user-mode floating-point fault — terminating thread\n");
-        let hook = USER_FAULT_HOOK.load(Ordering::Acquire);
-        if hook != 0 {
-            // SAFETY: `hook` was stored by `set_user_fault_hook` from a valid `fn()`.
-            let terminate: fn() = unsafe { core::mem::transmute(hook) };
-            terminate();
-        }
-        loop {
-            x86_64::instructions::hlt();
-        }
+        super::serial::write_str("[FPU] user-mode floating-point fault\n");
+        user_fault(STATUS_ACCESS_VIOLATION);
     }
     stop_on_trap(trap, 0, frame, 0, None, what, rbp)
+}
+
+/// A user-mode exception nothing resolved: to the user fault hook, which does
+/// not come back (the thread ends).
+fn user_fault(exception: NtStatus) -> ! {
+    let hook = USER_FAULT_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        // SAFETY: `hook` was stored by `set_user_fault_hook` from a valid
+        // `fn(NtStatus)`.
+        let hook: fn(NtStatus) = unsafe { core::mem::transmute(hook) };
+        hook(exception);
+    }
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
 
 extern "x86-interrupt" fn exception_breakpoint(_frame: InterruptStackFrame) {
@@ -260,6 +269,8 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
     };
     let rip = frame.instruction_pointer.as_u64();
 
+    // The exception of a user-mode access, if nothing resolves it.
+    let mut exception = STATUS_ACCESS_VIOLATION;
     // A user address is the memory manager's (demand-zero and guard pages,
     // `mm::fault`); it takes locks, so not at DISPATCH_LEVEL or above.
     if cr2_raw < USER_HALF_END {
@@ -306,6 +317,7 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
                 // user mode (M3).
                 super::serial::write_str("[#PF] user-mode exception 0x");
                 serial_hex64(u64::from(status.0));
+                exception = status;
             }
             None => {}
         }
@@ -338,17 +350,9 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
     // User-mode page faults: terminate the game thread instead of panicking.
     let is_user = error.contains(PageFaultErrorCode::USER_MODE);
     if is_user {
-        super::serial::write_str("[#PF] user-mode fault — terminating thread\n");
+        super::serial::write_str("[#PF] user-mode fault\n");
         IN_PF_OUTER.store(false, core::sync::atomic::Ordering::SeqCst);
-        // Call the terminate hook if registered (set by kernel to ke::sched::terminate_current_thread)
-        let hook = USER_FAULT_HOOK.load(core::sync::atomic::Ordering::Acquire);
-        if hook != 0 {
-            let f: fn() = unsafe { core::mem::transmute(hook) };
-            f();
-        }
-        loop {
-            x86_64::instructions::hlt();
-        }
+        user_fault(exception);
     }
 
     // Kernel-mode fault in a guard page: a stack overflow whose #PF frame still
@@ -637,9 +641,11 @@ fn page_fault_hook(addr: u64, error: PageFaultErrorCode) -> Option<NtStatus> {
     f(addr, error)
 }
 
-/// Register a function to call when a user-mode page fault occurs.
-/// Typically set to `ke::sched::terminate_current_thread`.
-pub fn set_user_fault_hook(hook: Option<fn()>) {
+/// Registers the function called with the exception of a user-mode fault
+/// that nothing resolved (page fault, floating-point trap); it must not come
+/// back. The kernel ends the thread's process there, until exceptions reach
+/// user mode (M3).
+pub fn set_user_fault_hook(hook: Option<fn(NtStatus)>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     USER_FAULT_HOOK.store(addr, Ordering::Release);
 }

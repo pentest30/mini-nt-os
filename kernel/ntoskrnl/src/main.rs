@@ -394,15 +394,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 
 /// A user-mode fault that nothing resolved (`hal::idt`, interrupts masked):
 /// until exceptions reach user mode (M3), the process of a Ps thread ends
-/// with `STATUS_ACCESS_VIOLATION`, as an unhandled exception would end it; a
+/// with the exception's code, as an unhandled exception would end it; a
 /// thread of the legacy loader just ends.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, from user mode.
-fn user_fault() {
+fn user_fault(exception: abi::ntstatus::NtStatus) {
     // Ps runs the process down with interrupts enabled, as from a system call.
     x86_64::instructions::interrupts::enable();
-    ps::terminate_current_process(abi::ntstatus::STATUS_ACCESS_VIOLATION);
+    ps::terminate_current_process(exception);
 }
 
 /// Spawns a ring-3 thread on a fresh guarded kernel stack (`mm::kstack`).
