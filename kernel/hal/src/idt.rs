@@ -242,7 +242,7 @@ fn stack_guard_hit(addr: u64) -> Option<(u64, u64)> {
     f(addr)
 }
 
-extern "x86-interrupt" fn exception_page_fault(frame: InterruptStackFrame, error: PageFaultErrorCode) {
+extern "x86-interrupt" fn exception_page_fault(mut frame: InterruptStackFrame, error: PageFaultErrorCode) {
     let rbp = interrupted_rbp();
     if IN_PF_OUTER.swap(true, core::sync::atomic::Ordering::SeqCst) {
         // Nested page fault — log minimal info then halt.
@@ -256,10 +256,25 @@ extern "x86-interrupt" fn exception_page_fault(frame: InterruptStackFrame, error
             x86_64::instructions::hlt();
         }
     }
-    exception_page_fault_inner(frame, error, rbp);
+    if let Some(fixup) = exception_page_fault_inner(&frame, error, rbp) {
+        // SAFETY: `fixup` is the fixup of the faulting instruction, in the
+        // same routine (`usermem`): it returns its error with the stack as it
+        // was at the fault.
+        unsafe { frame.as_mut().update(|frame| frame.instruction_pointer = VirtAddr::new(fixup)) };
+    }
 }
 
-fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorCode, rbp: u64) {
+/// A fault on user memory in an instruction of the exception table
+/// (`usermem`): where it resumes.
+fn recover(rip: u64) -> Option<u64> {
+    let fixup = super::usermem::fixup(rip)?;
+    IN_PF_OUTER.store(false, Ordering::SeqCst);
+    Some(fixup)
+}
+
+/// The page fault: `None` once resolved, the fixup where the kernel resumes
+/// after a fault on user memory it copies; otherwise it does not return.
+fn exception_page_fault_inner(frame: &InterruptStackFrame, error: PageFaultErrorCode, rbp: u64) -> Option<u64> {
     use x86_64::registers::control::Cr2;
 
     let faulting_addr = Cr2::read();
@@ -295,11 +310,14 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
             Some(STATUS_SUCCESS) => {
                 // Resolved: the faulting instruction runs again.
                 IN_PF_OUTER.store(false, Ordering::SeqCst);
-                return;
+                return None;
             }
             Some(status) if !error.contains(PageFaultErrorCode::USER_MODE) => {
-                // The kernel touched user memory outside any exception
-                // handler (none before M3): XP stops the same way.
+                if let Some(fixup) = recover(rip) {
+                    return Some(fixup);
+                }
+                // The kernel touched user memory outside the user memory
+                // primitives: XP stops the same way.
                 bugcheck::stop(
                     BugCheckCode::KMODE_EXCEPTION_NOT_HANDLED,
                     [u64::from(status.0), rip, access, cr2_raw],
@@ -318,6 +336,11 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
                 super::serial::write_str("[#PF] user-mode exception 0x");
                 serial_hex64(u64::from(status.0));
                 exception = status;
+            }
+            None if !error.contains(PageFaultErrorCode::USER_MODE) => {
+                if let Some(fixup) = recover(rip) {
+                    return Some(fixup);
+                }
             }
             None => {}
         }
@@ -358,7 +381,7 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
     // Kernel-mode fault in a guard page: a stack overflow whose #PF frame still
     // fitted above the guard (otherwise it would have been a double fault).
     if let Some(guard) = stack_guard_hit(cr2_raw) {
-        stop_on_trap(0xE, error.bits(), &frame, cr2_raw, Some(guard), "page fault", rbp);
+        stop_on_trap(0xE, error.bits(), frame, cr2_raw, Some(guard), "page fault", rbp);
     }
 
     // Any other kernel-mode fault: a reference to an invalid address.
