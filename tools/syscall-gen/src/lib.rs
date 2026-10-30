@@ -5,7 +5,10 @@
 //! - [`parse_w32ksvc`] lit `win32ss/w32ksvc32.h`, avec ses blocs
 //!   conditionnels ;
 //! - [`render`] écrit `abi/src/services.rs` : le numéro de chaque service par
-//!   son nom NT, et les deux tables (nom, octets d'arguments).
+//!   son nom NT, et les deux tables (nom, octets d'arguments) ;
+//! - [`parse_implemented`] lit la liste des handlers du dispatcher, et
+//!   [`render_coverage`] écrit le rapport de couverture
+//!   (`docs/compat/syscalls.md`).
 //!
 //! L'ordre d'une liste donne les numéros : 0x0000 et suivants pour
 //! ntoskrnl, 0x1000 et suivants pour win32k.
@@ -214,6 +217,73 @@ pub fn render(pin: &Pin, ntoskrnl: &[Entry], win32k: &[Entry]) -> String {
     out
 }
 
+/// Les services qui ont un handler : les entrées `(services::NtNom, …),` de
+/// la liste `IMPLEMENTED` du dispatcher, une par ligne, jusqu'à `];`.
+pub fn parse_implemented(source: &str) -> Result<Vec<String>, String> {
+    let mut lines = source.lines().enumerate().skip_while(|(_, line)| !line.contains("pub const IMPLEMENTED"));
+    lines.next().ok_or("no `pub const IMPLEMENTED` list")?;
+    let mut names = Vec::new();
+    for (i, raw) in lines {
+        let line = raw.trim();
+        if line == "];" {
+            return Ok(names);
+        }
+        let name = line
+            .strip_prefix("(services::")
+            .and_then(|rest| rest.split_once(','))
+            .map(|(name, _)| name)
+            .filter(|name| is_identifier(name))
+            .ok_or_else(|| format!("line {}: expected `(services::NtName, handler),`, found `{line}`", i + 1))?;
+        names.push(name.to_owned());
+    }
+    Err("the `IMPLEMENTED` list has no `];`".to_owned())
+}
+
+/// Le rapport de couverture : le nombre de services implémentés par table,
+/// puis chaque service avec son numéro, ses arguments et s'il a un handler.
+/// Chaque nom de `implemented` doit être un service.
+pub fn render_coverage(
+    pin: &Pin,
+    ntoskrnl: &[Entry],
+    win32k: &[Entry],
+    implemented: &[String],
+) -> Result<String, String> {
+    let known: BTreeSet<&str> = ntoskrnl.iter().chain(win32k).map(|e| e.name.as_str()).collect();
+    if let Some(unknown) = implemented.iter().find(|name| !known.contains(name.as_str())) {
+        return Err(format!("`{unknown}` is implemented but is not a service"));
+    }
+    let implemented: BTreeSet<&str> = implemented.iter().map(String::as_str).collect();
+    let count = |entries: &[Entry]| entries.iter().filter(|e| implemented.contains(e.name.as_str())).count();
+    let short = &pin.commit[..pin.commit.len().min(12)];
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# Couverture des appels système\n\n\
+         Généré par `tools/syscall-gen` (`cargo xtask syscall-gen`) : ne pas modifier.\n\n\
+         Les services viennent de ReactOS {} (commit `{short}`), variante i386 de publication. Un service est\n\
+         implémenté quand le dispatcher (`kernel/ntoskrnl/src/sys/mod.rs`) lui connaît un handler ; les autres\n\
+         rendent `STATUS_NOT_IMPLEMENTED`.\n\n\
+         | Table | Implémentés | Services |\n\
+         |---|---:|---:|\n\
+         | ntoskrnl | {} | {} |\n\
+         | win32k | {} | {} |",
+        pin.version,
+        count(ntoskrnl),
+        ntoskrnl.len(),
+        count(win32k),
+        win32k.len()
+    );
+    for (title, base, entries) in [("ntoskrnl", 0, ntoskrnl), ("win32k", WIN32K_BASE, win32k)] {
+        let _ = writeln!(out, "\n## {title}\n\n| Numéro | Service | Arguments | Implémenté |\n|---|---|---:|:---:|");
+        for (i, entry) in entries.iter().enumerate() {
+            let mark = if implemented.contains(entry.name.as_str()) { "✅" } else { "" };
+            let _ =
+                writeln!(out, "| `{:#06x}` | `{}` | {} | {mark} |", base + i as u32, entry.name, entry.argument_count);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +348,31 @@ mod tests {
         assert!(named(&ntoskrnl, "NtClose") && named(&win32k, "NtGdiAbortDoc"));
         assert!(!named(&win32k, "NtUserSetDbgTag"), "a checked build service");
         assert!(!named(&win32k, "NtUserSetWindowLongPtr"), "a 64-bit service");
+    }
+
+    #[test]
+    fn the_implemented_list_is_read_line_by_line() {
+        let source = "const A: u32 = 1;\npub const IMPLEMENTED: &[(u32, Handler)] = &[\n    \
+                      (services::NtClose, object::nt_close),\n    (services::NtA, x::y),\n];\nfn f() {}\n";
+        assert_eq!(parse_implemented(source).unwrap(), ["NtClose", "NtA"]);
+        assert!(parse_implemented("fn f() {}").unwrap_err().contains("no `pub const IMPLEMENTED`"));
+        let bad = "pub const IMPLEMENTED: &[(u32, Handler)] = &[\n    (services::NtA, a), (services::NtB, b),\n];";
+        assert_eq!(parse_implemented(bad).unwrap(), ["NtA"], "one entry per line");
+        let other = "pub const IMPLEMENTED: &[(u32, Handler)] = &[\n    (17, handler),\n];";
+        assert!(parse_implemented(other).unwrap_err().contains("line 2"));
+        assert!(parse_implemented("pub const IMPLEMENTED = &[\n").unwrap_err().contains("no `];`"));
+    }
+
+    #[test]
+    fn coverage_counts_and_marks_the_implemented_services() {
+        let pin = Pin { version: "0.4.16", commit: "51bfc7037359b594876a349b46b992e363e79838" };
+        let ntoskrnl = [e("NtA", 1), e("NtClose", 1)];
+        let report = render_coverage(&pin, &ntoskrnl, &[e("NtGdiC", 2)], &["NtClose".to_owned()]).unwrap();
+        assert!(report.contains("| ntoskrnl | 1 | 2 |\n| win32k | 0 | 1 |"));
+        assert!(report.contains("| `0x0000` | `NtA` | 1 |  |\n| `0x0001` | `NtClose` | 1 | ✅ |"));
+        assert!(report.contains("| `0x1000` | `NtGdiC` | 2 |  |"));
+        let unknown = render_coverage(&pin, &ntoskrnl, &[], &["NtNope".to_owned()]);
+        assert!(unknown.unwrap_err().contains("not a service"));
     }
 
     #[test]
