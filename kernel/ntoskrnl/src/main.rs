@@ -292,6 +292,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::idt::set_syscall_hook(Some(system_call));
     sys::gates::install();
     sys::exceptions::install();
+    sys::apc::install();
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -318,6 +319,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     system_service_self_test();
     trap_gate_self_test();
     exception_self_test();
+    user_apc_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -2198,6 +2200,194 @@ fn exception_self_test() {
     log::info!(
         "[smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher, NtContinue resumes"
     );
+}
+
+/// User APCs (`ke::apc`, `sys::apc`, M3): a Ps process whose APC dispatcher
+/// stands in for ntdll's queues two APCs to itself, which a non-alertable
+/// wait leaves queued and an alertable one runs in order, then returns
+/// STATUS_USER_APC with its registers back; NtTestAlert runs a third; an APC
+/// that the kernel queues ends an alertable wait already blocked; a fifth
+/// stays queued through a non-alertable wait, and is run down with the
+/// process. A bad handle is refused.
+fn user_apc_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_INVALID_HANDLE, STATUS_SUCCESS, STATUS_USER_APC, STATUS_WAIT_0};
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const TEXT: u32 = IMAGE_BASE + 0x1000;
+    const DISPATCHER: u32 = TEXT + 0x200;
+    const ROUTINE: u32 = TEXT + 0x280;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    // The routine's next log entry; what NtContinue returned to the
+    // dispatcher.
+    const LOG: u32 = DATA;
+    const FAILED: u32 = DATA + 0x04;
+    // Handshake with the kernel.
+    const DONE: u32 = DATA + 0x08;
+    const GO: u32 = DATA + 0x0C;
+    const WAITING: u32 = DATA + 0x10;
+    // Statuses, and the log pointer at two points.
+    const QUEUED: u32 = DATA + 0x14; // two, then the bad handle
+    const NON_ALERTABLE: u32 = DATA + 0x20;
+    const NOT_YET: u32 = DATA + 0x24;
+    const DELAYED: u32 = DATA + 0x28;
+    const KEPT: u32 = DATA + 0x2C; // EBX, ESP
+    const ESP_BEFORE: u32 = DATA + 0x34;
+    const TESTED: u32 = DATA + 0x38; // NtQueueApcThread, NtTestAlert
+    const WOKEN: u32 = DATA + 0x40;
+    const STILL: u32 = DATA + 0x44; // NtQueueApcThread, NtDelayExecution
+    const AFTER: u32 = DATA + 0x4C;
+    // LARGE_INTEGER intervals: 10 ms and 5 s, relative.
+    const SHORT: u32 = DATA + 0x50;
+    const LONG: u32 = DATA + 0x58;
+    // One entry per APC run: its context and two arguments.
+    const LOG_START: u32 = DATA + 0x100;
+    const MAGIC: u32 = 0xA9C0_0001;
+
+    let queue = |code: &mut Code, first: u32| {
+        code.call(services::NtQueueApcThread, &[NT_CURRENT_THREAD, ROUTINE, first, first + 1, first + 2]);
+    };
+    let mut code = Code::new();
+    code.word(&[0x89, 0x25], ESP_BEFORE) // mov [ESP_BEFORE], esp
+        .word(&[0xBB], MAGIC); // mov ebx, MAGIC
+    queue(&mut code, 0x11);
+    code.store_eax(QUEUED);
+    queue(&mut code, 0x21);
+    code.store_eax(QUEUED + 4)
+        .call(services::NtQueueApcThread, &[0x1234, ROUTINE, 0, 0, 0])
+        .store_eax(QUEUED + 8)
+        .call(services::NtDelayExecution, &[0, SHORT])
+        .store_eax(NON_ALERTABLE)
+        .word(&[0xA1], LOG) // mov eax, [LOG]
+        .store_eax(NOT_YET)
+        .call(services::NtDelayExecution, &[1, LONG])
+        .store_eax(DELAYED)
+        .word(&[0x89, 0x1D], KEPT) // mov [KEPT], ebx
+        .word(&[0x89, 0x25], KEPT + 4); // mov [KEPT + 4], esp
+    queue(&mut code, 0x31);
+    code.store_eax(TESTED)
+        .call(services::NtTestAlert, &[])
+        .store_eax(TESTED + 4)
+        .word(&[0xC7, 0x05], WAITING)
+        .bytes(&1u32.to_le_bytes())
+        .call(services::NtDelayExecution, &[1, LONG])
+        .store_eax(WOKEN);
+    queue(&mut code, 0x51);
+    code.store_eax(STILL)
+        .call(services::NtDelayExecution, &[0, SHORT])
+        .store_eax(STILL + 4)
+        .word(&[0xA1], LOG)
+        .store_eax(AFTER)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x83, 0x3D], GO) // cmp dword [GO], 0
+        .bytes(&[0x00, 0x74, 0xF7]) // je back to the cmp
+        .call(services::NtTerminateProcess, &[NT_CURRENT_PROCESS, 0x600D])
+        .bytes(&[0xEB, 0xFE]);
+    let main = code.0;
+    assert!(main.len() <= 0x200, "the test program outgrew its slot");
+
+    // The dispatcher, entered with ESP on the routine, its context, its two
+    // arguments, then the CONTEXT: it calls the routine, then
+    // NtContinue(context, TRUE).
+    let mut dispatcher = Code::new();
+    dispatcher
+        .bytes(&[0x58, 0xFF, 0xD0]) // pop eax; call eax
+        .bytes(&[0x89, 0xE1, 0x6A, 0x01, 0x51, 0x89, 0xE2]) // mov ecx, esp; push 1; push ecx; mov edx, esp
+        .word(&[0xB8], services::NtContinue)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(FAILED)
+        .bytes(&[0xEB, 0xFE]);
+    // The routine, stdcall (context, argument1, argument2): logs them.
+    let mut routine = Code::new();
+    routine.word(&[0x8B, 0x3D], LOG); // mov edi, [LOG]
+    for i in 0..3u8 {
+        routine.bytes(&[0x8B, 0x44, 0x24, 4 + 4 * i, 0x89, 0x47, 4 * i]); // mov eax, [esp + 4 + 4i]; mov [edi + 4i], eax
+    }
+    routine
+        .word(&[0x83, 0x05], LOG) // add dword [LOG], 12
+        .bytes(&[12, 0xC2, 12, 0]); // ret 12
+
+    let mut text = [0xCC; 0x300];
+    text[..main.len()].copy_from_slice(&main);
+    text[0x200..0x200 + dispatcher.0.len()].copy_from_slice(&dispatcher.0);
+    text[0x280..0x280 + routine.0.len()].copy_from_slice(&routine.0);
+    let mut data = [0u8; 0x200];
+    data[0..4].copy_from_slice(&LOG_START.to_le_bytes());
+    data[0x50..0x58].copy_from_slice(&(-10 * MS).to_le_bytes());
+    data[0x58..0x60].copy_from_slice(&(-5000 * MS).to_le_bytes());
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x300, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "apc.exe", false).expect("a process");
+    // ntdll's KiUserApcDispatcher, for every process, while it runs.
+    ke::apc::set_user_apc_dispatcher(DISPATCHER);
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the APC test program did not reach {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(WAITING, "its alertable wait");
+    // Into its 5 s wait, then an APC from here ends it.
+    // SAFETY: as above.
+    unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -50 * MS) };
+    thread.queue_user_apc(ROUTINE, 0x41, 0x42, 0x43).expect("an APC for a live thread");
+    wait_for(DONE, "its end");
+
+    let status = |addr: u32| NtStatus(read(addr));
+    assert_eq!(read(FAILED), 0, "NtContinue failed in the dispatcher");
+    assert_eq!((status(QUEUED), status(QUEUED + 4)), (STATUS_SUCCESS, STATUS_SUCCESS), "NtQueueApcThread");
+    assert_eq!(status(QUEUED + 8), STATUS_INVALID_HANDLE, "NtQueueApcThread on a bad handle");
+    assert_eq!(status(NON_ALERTABLE), STATUS_SUCCESS, "a non-alertable NtDelayExecution");
+    assert_eq!(read(NOT_YET), LOG_START, "an APC ran before an alertable wait");
+    assert_eq!(status(DELAYED), STATUS_USER_APC, "the alertable NtDelayExecution, back from its APCs");
+    let entry = |i: u32| [read(LOG_START + 12 * i), read(LOG_START + 12 * i + 4), read(LOG_START + 12 * i + 8)];
+    assert_eq!([entry(0), entry(1)], [[0x11, 0x12, 0x13], [0x21, 0x22, 0x23]], "the queued APCs, in order");
+    assert_eq!((read(KEPT), read(KEPT + 4)), (MAGIC, read(ESP_BEFORE)), "EBX or ESP lost across the APCs");
+    assert_eq!((status(TESTED), status(TESTED + 4)), (STATUS_SUCCESS, STATUS_SUCCESS), "NtTestAlert");
+    assert_eq!(entry(2), [0x31, 0x32, 0x33], "the APC of NtTestAlert");
+    assert_eq!(status(WOKEN), STATUS_USER_APC, "the kernel's APC did not end the wait");
+    assert_eq!(entry(3), [0x41, 0x42, 0x43], "the kernel's APC");
+    assert_eq!((status(STILL), status(STILL + 4)), (STATUS_SUCCESS, STATUS_SUCCESS), "the last APC, then a wait");
+    assert_eq!(read(AFTER), LOG_START + 4 * 12, "an APC ran in a non-alertable wait");
+
+    process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, NtStatus(0x600D)), "the process did not end");
+    ke::apc::set_user_apc_dispatcher(0);
+    ps::wait_for_reaper();
+    log::info!("[smoke] user APCs: queued, then run by alertable waits and NtTestAlert in a user-mode dispatcher");
 }
 
 /// Ps, and the M2 exit criteria 1 and 3 (05): see [`process_round`]. The

@@ -17,22 +17,24 @@
 //! Les threads de l'ancien chargeur gardent leur dispatcher (`syscall.rs`),
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
+pub mod apc;
 pub mod exceptions;
 pub mod gates;
 mod memory;
 mod object;
 mod process;
+mod wait;
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMENTED};
-use abi::process::NT_CURRENT_PROCESS;
+use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
 use abi::service::{lookup, Table};
 use abi::services::{self, NTOSKRNL, WIN32K};
 use hal::trap::KTrapFrame;
 use ob::{AccessMask, Handle, Object};
-use ps::{EProcess, PROCESS_TYPE};
+use ps::{EProcess, EThread, PROCESS_TYPE, THREAD_TYPE};
 
 /// Le handler d'un service, qui reçoit ses arguments, un mot de 32 bits
 /// chacun.
@@ -61,9 +63,12 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
     (services::NtClose, Handler::Status(object::nt_close)),
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
+    (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
+    (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
 ];
 
 /// Au plus 63 arguments par service (`tools/syscall-gen`).
@@ -151,4 +156,13 @@ fn reference_process(handle: u32, access: AccessMask) -> Result<Arc<Object<EProc
         return Ok(current);
     }
     current.handle_table.reference_as::<EProcess>(Handle(handle), &PROCESS_TYPE, access)
+}
+
+/// Le thread que désigne `handle` dans le processus courant, avec les droits
+/// `access` ; `NtCurrentThread()` désigne le thread courant.
+fn reference_thread(handle: u32, access: AccessMask) -> Result<Arc<Object<EThread>>, NtStatus> {
+    if handle == NT_CURRENT_THREAD {
+        return Ok(ps::ethread::current_thread().expect("a system service outside a Ps thread"));
+    }
+    current_process().handle_table.reference_as::<EThread>(Handle(handle), &THREAD_TYPE, access)
 }
