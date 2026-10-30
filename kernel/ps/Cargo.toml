@@ -14,3 +14,6 @@ mm       = { path = "../mm" }
 pe       = { path = "../../libs/pe" }
 ke       = { path = "../ke" }
 log      = { workspace = true }
+
+[dev-dependencies]
+pe       = { path = "../../libs/pe", features = ["builder"] }

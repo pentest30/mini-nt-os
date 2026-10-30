@@ -351,7 +351,8 @@ pub fn create_user_stack(process: &EProcess, reserve: u64, commit: u64) -> Resul
 
 /// PspCreateThread : un thread de `process`, qui démarre en mode utilisateur
 /// en `start_address`, avec ESP à `stack.stack_base`. Son TEB est la première
-/// page libre sous le PEB.
+/// page libre sous le PEB. Avec une DLL système (`system_dll`), il passe
+/// d'abord par `LdrInitializeThunk`.
 ///
 /// # Errors
 /// `STATUS_PROCESS_IS_TERMINATING` si le processus se termine ou n'a pas
@@ -371,6 +372,12 @@ pub fn create_thread(
     if process.threads.lock().terminating {
         return Err(STATUS_PROCESS_IS_TERMINATING);
     }
+    // With a system DLL, the thread starts in LdrInitializeThunk, by way of
+    // its APC dispatcher.
+    let (entry, user_stack) = match crate::system_dll::current() {
+        Some(dll) => (dll.user_apc_dispatcher, dll.write_start_frame(process, start_address, stack.stack_base)?),
+        None => (start_address, stack.stack_base),
+    };
     let tid = CID_TABLE.lock().insert(CidEntry::Thread(Weak::new())).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
     let teb = match create_teb(process, tid, stack) {
         Ok(teb) => teb,
@@ -418,8 +425,8 @@ pub fn create_thread(
     let start = ke::sched::UserThreadStart {
         directory_table_base: process.directory_table_base(),
         kernel_stack_top: kernel_stack.top,
-        entry: start_address,
-        stack: stack.stack_base,
+        entry,
+        stack: user_stack,
         teb,
         owner: Arc::as_ptr(&thread).cast(),
     };
