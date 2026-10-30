@@ -296,6 +296,15 @@ Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le no
   - #DB, #OF, #BR, #NP, #SS et #AC en mode utilisateur ;
   - `STATUS_INTEGER_OVERFLOW` pour un quotient trop grand.
 
+**APC utilisateur** (`ke::apc`, `kernel/ntoskrnl/src/sys/apc.rs`) :
+
+- **File** : un APC utilisateur (NtQueueApcThread) attend que son thread fasse une attente alertable en mode utilisateur, ou appelle NtTestAlert. Une telle attente rend `STATUS_USER_APC`, aussitôt si un APC est en file, sinon à son insertion. Une attente non alertable le laisse en file.
+- **Livraison** : au retour en mode utilisateur par la trame de trap (`hal::trap::set_user_return_hook`), sa routine noyau s'exécute à `APC_LEVEL`. Le noyau met sur la pile le `CONTEXT`, puis la routine, son contexte et ses deux arguments, et le thread reprend dans `KiUserApcDispatcher`. Celui-ci appelle la routine puis `NtContinue(context, TRUE)`, dont le test d'alerte livre l'APC suivant.
+- **Pas encore** :
+  - les alertes (NtAlertThread, `STATUS_ALERTED`) ;
+  - la livraison après SYSENTER, qui n'a pas de trame ;
+  - les attentes sur objets (`NtWaitForSingleObject`…).
+
 ---
 
 ## 7. Le sous-système Win32

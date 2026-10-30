@@ -108,8 +108,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `EXCEPTION_RECORD` sur la pile du thread, qui reprend dans le répartiteur de ntdll (`set_user_exception_dispatcher` ;
   sans répartiteur, le processus se termine avec le code) ; NtContinue, NtRaiseException (seconde chance : fin du
   processus). Les services qui changent la trame (`Handler::Frame`) rendent `STATUS_NOT_IMPLEMENTED` par SYSENTER.
-  À venir : APC utilisateur, SYSENTER pour Ps (retour par ntdll), SWAPGS, ntdll projeté et `KUSER_SHARED_DATA`,
-  `fetch-userland`.
+  APC utilisateur faits (`ke::apc`, `sys::apc`) : routine normale du mode utilisateur (`NormalRoutine::User`),
+  livrables après une attente alertable ou un test d'alerte (NtTestAlert, TestAlert de NtContinue), livrés au retour
+  par la trame de trap (`hal::trap::set_user_return_hook`) au répartiteur de ntdll (`set_user_apc_dispatcher`) ;
+  NtQueueApcThread, NtDelayExecution. À venir : SYSENTER pour Ps (retour par ntdll), SWAPGS, ntdll projeté et
+  `KUSER_SHARED_DATA`, `fetch-userland`.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
