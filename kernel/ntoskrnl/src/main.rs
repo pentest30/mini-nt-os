@@ -13,6 +13,7 @@
 
 extern crate alloc;
 mod launcher;
+mod shared_data;
 mod sys;
 mod syscall;
 
@@ -293,6 +294,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     sys::gates::install();
     sys::exceptions::install();
     sys::apc::install();
+    shared_data::init();
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -320,6 +322,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
+    system_dll_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -2407,6 +2410,218 @@ fn user_apc_self_test() {
     ke::apc::set_user_apc_dispatcher(0);
     ps::wait_for_reaper();
     log::info!("[smoke] user APCs: queued, then run by alertable waits and NtTestAlert in a user-mode dispatcher");
+}
+
+/// The system DLL (`ps::system_dll`) and KUSER_SHARED_DATA (`mm::shared_data`,
+/// M3): with a synthetic ntdll installed, a new process maps it at its base,
+/// and its first thread enters LdrInitializeThunk through the APC dispatcher,
+/// with ntdll's base and the CONTEXT where ReactOS's stub looks for it, then
+/// reaches its entry point. It reads XP SP2's KUSER_SHARED_DATA at
+/// 0x7FFE0000 (version 5.1, system root, DEP policy, a running tick count,
+/// SystemCall on KiIntSystemCall), cannot write to it (the exception reaches
+/// ntdll's dispatcher), and calls a system service through SystemCall as an
+/// ntdll stub does.
+fn system_dll_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INVALID_HANDLE, STATUS_WAIT_0};
+    use abi::process::NT_CURRENT_PROCESS;
+    use abi::services;
+    use abi::shared_data::KUSER_SHARED_DATA_VA;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const NTDLL: u32 = 0x7C90_0000;
+    const N_TEXT: u32 = NTDLL + 0x1000;
+    const N_DATA: u32 = NTDLL + 0x2000;
+    // ntdll's: what its NtContinue returned; LdrInitializeThunk's three
+    // arguments, then EIP and ESP of the CONTEXT above them; the exception's
+    // code and two parameters.
+    const N_FAILED: u32 = N_DATA;
+    const N_LDR: u32 = N_DATA + 0x04;
+    const N_EXCEPTION: u32 = N_DATA + 0x20;
+    // Its entry points, by offset in .text.
+    const APC: u32 = 0x000;
+    const LDR: u32 = 0x040;
+    const EXCEPTION: u32 = 0x0A0;
+    const INT_SYSTEM_CALL: u32 = 0x100;
+    const FAST_SYSTEM_CALL: u32 = 0x110;
+    const FAST_SYSTEM_CALL_RET: u32 = 0x114;
+    const RAISE: u32 = 0x118;
+    const CALLBACK: u32 = 0x11C;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const TEXT: u32 = IMAGE_BASE + 0x1000;
+    const STUB: u32 = TEXT + 0x180;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    // The program's: seven KUSER_SHARED_DATA fields, then the write.
+    const SHARED: u32 = DATA; // major, minor, SystemCall, SystemCallReturn, root, multiplier, NX policy, ticks
+    const AFTER_WRITE: u32 = DATA + 0x20;
+    const CLOSED: u32 = DATA + 0x24;
+    const DONE: u32 = DATA + 0x28;
+    const GO: u32 = DATA + 0x2C;
+    let shared = |offset: u32| KUSER_SHARED_DATA_VA + offset;
+
+    // ── ntdll ──
+    let mut text = [0xCC; 0x200];
+    let mut put = |at: u32, code: &Code| text[at as usize..at as usize + code.0.len()].copy_from_slice(&code.0);
+    // Like ReactOS's, it writes its SEH record past the CONTEXT first.
+    let mut apc = Code::new();
+    apc.word(&[0x8D, 0x84, 0x24], 16 + 0x2CC) // lea eax, [esp + 16 + CONTEXT]
+        .word(&[0xC7, 0x00], 0x5E5E_5E5E) // mov dword [eax], …
+        .bytes(&[0xC7, 0x40, 0x04])
+        .bytes(&0x5E5E_5E5Eu32.to_le_bytes()) // mov dword [eax + 4], …
+        .bytes(&[0x58, 0xFF, 0xD0]) // pop eax; call eax
+        .bytes(&[0x89, 0xE1, 0x6A, 0x01, 0x51, 0x89, 0xE2]) // mov ecx, esp; push 1; push ecx; mov edx, esp
+        .word(&[0xB8], services::NtContinue)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(N_FAILED)
+        .bytes(&[0xEB, 0xFE]);
+    put(APC, &apc);
+    let mut ldr = Code::new();
+    // mov eax, [esp + offset]; mov [N_LDR + 4i], eax: its arguments, then
+    // the CONTEXT's Eip and Esp, 16 bytes above the return address.
+    for (i, offset) in [4u32, 8, 12, 16 + 0xB8, 16 + 0xC4].into_iter().enumerate() {
+        ldr.word(&[0x8B, 0x84, 0x24], offset).word(&[0xA3], N_LDR + 4 * i as u32);
+    }
+    ldr.bytes(&[0xC2, 12, 0]); // ret 12
+    put(LDR, &ldr);
+    let mut exception = Code::new();
+    exception
+        .bytes(&[0x8B, 0x1C, 0x24, 0x8B, 0x74, 0x24, 0x04]) // mov ebx, [esp]; mov esi, [esp + 4]
+        .bytes(&[0x8B, 0x03]) // mov eax, [ebx]: the code
+        .store_eax(N_EXCEPTION)
+        .bytes(&[0x8B, 0x43, 0x14]) // mov eax, [ebx + 0x14]
+        .store_eax(N_EXCEPTION + 4)
+        .bytes(&[0x8B, 0x43, 0x18]) // mov eax, [ebx + 0x18]
+        .store_eax(N_EXCEPTION + 8)
+        .word(&[0x83, 0x86], 0xB8) // add dword [esi + Eip], 5: past the write
+        .bytes(&[5])
+        .bytes(&[0x6A, 0x00, 0x56, 0x89, 0xE2]) // push 0; push esi; mov edx, esp
+        .word(&[0xB8], services::NtContinue)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(N_FAILED)
+        .bytes(&[0xEB, 0xFE]);
+    put(EXCEPTION, &exception);
+    let mut int_system_call = Code::new();
+    int_system_call.bytes(&[0x8D, 0x54, 0x24, 0x08, 0xCD, 0x2E, 0xC3]); // lea edx, [esp + 8]; int 2Eh; ret
+    put(INT_SYSTEM_CALL, &int_system_call);
+    let mut fast_system_call = Code::new();
+    fast_system_call.bytes(&[0x89, 0xE2, 0x0F, 0x34]); // mov edx, esp; sysenter
+    put(FAST_SYSTEM_CALL, &fast_system_call);
+    let mut ret = Code::new();
+    ret.bytes(&[0xC3]);
+    put(FAST_SYSTEM_CALL_RET, &ret);
+    let at = |offset: u32| N_TEXT - NTDLL + offset;
+    let ntdll = Pe32Builder::new(NTDLL)
+        .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x40, &[0u8; 0x40], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .exports(
+            "ntdll.dll",
+            &[
+                ("KiUserApcDispatcher", at(APC)),
+                ("LdrInitializeThunk", at(LDR)),
+                ("KiUserExceptionDispatcher", at(EXCEPTION)),
+                ("KiIntSystemCall", at(INT_SYSTEM_CALL)),
+                ("KiFastSystemCall", at(FAST_SYSTEM_CALL)),
+                ("KiFastSystemCallRet", at(FAST_SYSTEM_CALL_RET)),
+                ("KiRaiseUserExceptionDispatcher", at(RAISE)),
+                ("KiUserCallbackDispatcher", at(CALLBACK)),
+            ],
+        )
+        .build();
+    let dll = ps::system_dll::SystemDll::new(Arc::from(ntdll)).expect("the synthetic ntdll");
+    assert_eq!(dll.int_system_call, N_TEXT + INT_SYSTEM_CALL);
+    ps::system_dll::install(Some(dll));
+
+    // ── the program ──
+    let mut code = Code::new();
+    for (i, offset) in [0x26C, 0x270, 0x300, 0x304, 0x030, 0x004].into_iter().enumerate() {
+        code.word(&[0xA1], shared(offset)).store_eax(SHARED + 4 * i as u32); // mov eax, [0x7FFExxxx]
+    }
+    code.word(&[0x0F, 0xB6, 0x05], shared(0x2D5)) // movzx eax, byte [NXSupportPolicy]
+        .store_eax(SHARED + 0x18)
+        .word(&[0xA1], shared(0x320)) // TickCount
+        .store_eax(SHARED + 0x1C)
+        .word(&[0xA3], KUSER_SHARED_DATA_VA) // mov [0x7FFE0000], eax: read-only
+        .word(&[0xC7, 0x05], AFTER_WRITE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x68], 0x1234); // push 0x1234
+    let call_at = TEXT + code.0.len() as u32;
+    code.word(&[0xE8], STUB.wrapping_sub(call_at + 5)) // call STUB: NtClose(0x1234)
+        .store_eax(CLOSED)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x83, 0x3D], GO) // cmp dword [GO], 0
+        .bytes(&[0x00, 0x74, 0xF7]) // je back to the cmp
+        .call(services::NtTerminateProcess, &[NT_CURRENT_PROCESS, 0x600D])
+        .bytes(&[0xEB, 0xFE]);
+    assert!(code.0.len() <= 0x180, "the test program outgrew its slot");
+    // An ntdll stub: the service number in EAX, then SharedUserData->SystemCall.
+    let mut stub = Code::new();
+    stub.word(&[0xB8], services::NtClose)
+        .word(&[0xBA], shared(0x300)) // mov edx, &SystemCall
+        .bytes(&[0xFF, 0x12, 0xC2, 0x04, 0x00]); // call [edx]; ret 4
+    let mut text = [0xCC; 0x200];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    text[0x180..0x180 + stub.0.len()].copy_from_slice(&stub.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x40, &[0u8; 0x40], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "native.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let _thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the native program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    assert_eq!(read(N_FAILED), 0, "NtContinue failed in ntdll");
+    let ldr: [u32; 5] = core::array::from_fn(|i| read(N_LDR + 4 * i as u32));
+    assert_eq!(ldr, [0, NTDLL, 0, TEXT, stack.stack_base], "LdrInitializeThunk's arguments and CONTEXT");
+    let fields: [u32; 8] = core::array::from_fn(|i| read(SHARED + 4 * i as u32));
+    assert_eq!(&fields[..2], &[5, 1], "NtMajorVersion, NtMinorVersion");
+    assert_eq!(
+        (fields[2], fields[3]),
+        (N_TEXT + INT_SYSTEM_CALL, N_TEXT + FAST_SYSTEM_CALL_RET),
+        "SystemCall, SystemCallReturn"
+    );
+    assert_eq!(fields[4], u32::from(b'C') | u32::from(b':') << 16, "NtSystemRoot");
+    assert_eq!((fields[5], fields[6]), (1 << 24, 2), "TickCountMultiplier, NXSupportPolicy (OptIn)");
+    assert_ne!(fields[7], 0, "the clock does not update TickCount");
+    let exception: [u32; 3] = core::array::from_fn(|i| read(N_EXCEPTION + 4 * i as u32));
+    assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, KUSER_SHARED_DATA_VA], "a write to KUSER_SHARED_DATA");
+    assert_eq!(read(AFTER_WRITE), 1, "ntdll's dispatcher did not resume the program");
+    assert_eq!(NtStatus(read(CLOSED)), STATUS_INVALID_HANDLE, "NtClose through SystemCall");
+
+    process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, NtStatus(0x600D)), "the process did not end");
+    ps::system_dll::install(None);
+    ps::wait_for_reaper();
+    log::info!("[smoke] ntdll: mapped at its base, threads start in LdrInitializeThunk, KUSER_SHARED_DATA read-only");
 }
 
 /// Ps, and the M2 exit criteria 1 and 3 (05): see [`process_round`]. The
