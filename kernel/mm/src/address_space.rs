@@ -11,15 +11,28 @@
 //! Le registre CR3 d'un thread (sa base de répertoire, `directory table
 //! base`) est chargé par Ke à chaque commutation (`ke::sched`).
 //!
+//! Chaque espace tient sa VAD. [`AddressSpace::allocate`] et la suite y
+//! réservent et commitent sans rien projeter : la première faute sur une page
+//! commitée lui donne une page à zéro ([`AddressSpace::access_fault`],
+//! `mm::fault`). Un espace vivant est enregistré par sa base de répertoire,
+//! pour que la faute trouve celui du CR3 courant.
+//!
 //! Pas encore : pages partagées entre espaces (sections), hyperspace.
 
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use abi::ntstatus::{NtStatus, STATUS_ACCESS_VIOLATION, STATUS_GUARD_PAGE_VIOLATION, STATUS_NO_MEMORY, STATUS_SUCCESS};
+use hal::sync::KSpinLock;
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::{PhysAddr, VirtAddr};
 
-use crate::paging::MmPageTables;
+use crate::fault::{self, Access, PteState, Resolution};
+use crate::paging::{MmPageTables, PTE_RETAINED};
 use crate::pfn::{self, PageUsage};
+use crate::vad::{PageProtect, VadTree};
+use crate::virtual_alloc::{self, AllocType, FreeType, PageMapper, RegionInfo};
 use crate::Pfn;
 
 /// Première entrée de la moitié haute de la PML4.
@@ -31,6 +44,11 @@ pub const USER_HALF_END: u64 = 1 << 47;
 static SYSTEM_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 /// La moitié haute de la PML4 du système est complète.
 static KERNEL_HALF_FILLED: AtomicBool = AtomicBool::new(false);
+/// Les espaces vivants, par base de répertoire : la faute de page y trouve
+/// celui du CR3 courant ([`AddressSpace::current`]).
+static SPACES: KSpinLock<BTreeMap<u64, Arc<AddressSpace>>> = KSpinLock::new(BTreeMap::new());
+
+const PAGE: u64 = 4096;
 
 fn hhdm() -> u64 {
     crate::HHDM_OFFSET.load(Ordering::Acquire)
@@ -94,18 +112,20 @@ pub fn system_directory_table_base() -> u64 {
     SYSTEM_DIRECTORY.load(Ordering::Acquire)
 }
 
-/// L'espace d'adresses d'un processus : sa PML4.
+/// L'espace d'adresses d'un processus : sa PML4 et sa VAD.
 pub struct AddressSpace {
     pml4: Pfn,
+    /// Un verrou tournant : la faute de page la consulte, sous DISPATCH_LEVEL.
+    vad: KSpinLock<VadTree>,
 }
 
 impl AddressSpace {
-    /// Un espace neuf : la moitié haute du système, une moitié basse vide ;
-    /// `None` si la mémoire manque.
+    /// Un espace neuf, enregistré : la moitié haute du système, une moitié
+    /// basse vide ; `None` si la mémoire manque.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
-    pub fn new() -> Option<Self> {
+    pub fn new() -> Option<Arc<Self>> {
         assert!(kernel_half_filled(), "address space created before mm::init");
         let pml4 = pfn::allocate_page(PageUsage::PageTable)?;
         // SAFETY: la page vient d'être allouée ; la PML4 du système est
@@ -117,7 +137,18 @@ impl AddressSpace {
                 l4[i] = if i < KERNEL_HALF { Default::default() } else { system[i].clone() };
             }
         }
-        Some(Self { pml4 })
+        let space = Arc::new(Self { pml4, vad: KSpinLock::new(VadTree::new()) });
+        SPACES.lock().insert(space.directory_table_base(), space.clone());
+        Some(space)
+    }
+
+    /// L'espace actif sur ce processeur (CR3) ; `None` dans celui du système.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn current() -> Option<Arc<Self>> {
+        let (frame, _) = x86_64::registers::control::Cr3::read();
+        SPACES.lock().get(&frame.start_address().as_u64()).cloned()
     }
 
     /// Sa base de répertoire : la valeur de CR3 qui l'active.
@@ -148,21 +179,167 @@ impl AddressSpace {
         };
     }
 
-    /// Rend à la base PFN tout ce que possède l'espace : les pages projetées
-    /// dans sa moitié basse, ses tables, puis sa PML4.
+    /// Ses tables de pages.
+    fn tables(&self) -> MmPageTables {
+        // SAFETY: la PML4 vit autant que `self`.
+        unsafe { MmPageTables::for_directory(hhdm(), self.directory_table_base()) }
+    }
+
+    /// NtAllocateVirtualMemory dans cet espace (`virtual_alloc::allocate`),
+    /// sans rien projeter.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn allocate(&self, base: u64, size: u64, alloc_type: AllocType, protect: PageProtect) -> Result<u64, NtStatus> {
+        let mut mapper = DemandMapper { tables: self.tables() };
+        virtual_alloc::allocate(&mut self.vad.lock(), Some(&mut mapper), base, size, alloc_type, protect)
+    }
+
+    /// NtFreeVirtualMemory dans cet espace (`virtual_alloc::free`) : les pages
+    /// décommitées rendent leur page physique.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn free(&self, base: u64, size: u64, free_type: FreeType) -> Result<(u64, u64), NtStatus> {
+        let mut mapper = DemandMapper { tables: self.tables() };
+        virtual_alloc::free(&mut self.vad.lock(), Some(&mut mapper), base, size, free_type)
+    }
+
+    /// NtProtectVirtualMemory dans cet espace (`virtual_alloc::protect`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn protect(&self, base: u64, size: u64, protect: PageProtect) -> Result<PageProtect, NtStatus> {
+        let mut mapper = DemandMapper { tables: self.tables() };
+        virtual_alloc::protect(&mut self.vad.lock(), Some(&mut mapper), base, size, protect)
+    }
+
+    /// NtQueryVirtualMemory dans cet espace (`virtual_alloc::query`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn query(&self, addr: u64) -> Result<RegionInfo, NtStatus> {
+        virtual_alloc::query(&self.vad.lock(), addr)
+    }
+
+    /// Résout une faute de page à `addr`, dans la moitié basse, d'après la
+    /// VAD (`fault::resolve`) : `STATUS_SUCCESS` si l'accès peut reprendre,
+    /// sinon l'exception qu'il lève (`STATUS_NO_MEMORY` sans page libre).
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL.
+    pub fn access_fault(&self, addr: u64, access: Access) -> NtStatus {
+        let page = addr & !(PAGE - 1);
+        let mut vad = self.vad.lock();
+        let mut tables = self.tables();
+        let state = vad.find(page).and_then(|node| node.run_at(page)).map(|(_, run)| (run.state, run.protect));
+        match fault::resolve(state, pte_state(&mut tables, page), access) {
+            Resolution::DemandZero(protect) => {
+                let Some(frame) = pfn::allocate_page(PageUsage::UserPrivate) else {
+                    return STATUS_NO_MEMORY;
+                };
+                // SAFETY: a page just allocated, reached through the HHDM.
+                unsafe { core::ptr::write_bytes((hhdm() + frame.to_phys()) as *mut u8, 0, PAGE as usize) };
+                let flags = MmPageTables::leaf_flags(protect.writable(), protect.executable(), true);
+                // SAFETY: the page has no physical page in this space (resolve
+                // said so); the frame belongs to the space from now on.
+                unsafe { tables.map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) };
+                fault::count_demand_zero();
+                STATUS_SUCCESS
+            }
+            Resolution::Remap(protect) => {
+                set_rights(&mut tables, page, protect);
+                STATUS_SUCCESS
+            }
+            Resolution::Guard => {
+                let node = vad.find_mut(page).expect("a committed page has its VAD");
+                let (_, run) = node.run_at(page).expect("a page of its VAD");
+                node.protect(page, page + PAGE, run.protect - PageProtect::GUARD);
+                STATUS_GUARD_PAGE_VIOLATION
+            }
+            Resolution::AccessViolation => STATUS_ACCESS_VIOLATION,
+        }
+    }
+
+    /// Retire l'espace du registre et rend à la base PFN tout ce qu'il
+    /// possède : les pages de sa moitié basse, ses tables, puis sa PML4.
     ///
     /// # Panics
-    /// S'il est actif sur ce processeur.
+    /// S'il est actif sur ce processeur, ou encore tenu ailleurs.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL. Aucun thread ne doit plus l'utiliser.
-    pub fn destroy(self) {
+    pub fn destroy(self: Arc<Self>) {
         let (frame, _) = x86_64::registers::control::Cr3::read();
-        assert_ne!(frame.start_address().as_u64(), self.directory_table_base(), "destroying the active address space");
+        let directory = self.directory_table_base();
+        assert_ne!(frame.start_address().as_u64(), directory, "destroying the active address space");
+        SPACES.lock().remove(&directory);
+        let space = Arc::try_unwrap(self).unwrap_or_else(|_| panic!("address space {directory:#x} still in use"));
         // SAFETY: cette PML4 et ses tables appartiennent à l'espace, que plus
         // rien n'utilise ; leurs pages ne sont libérées qu'une fois.
-        unsafe { free_tables(self.directory_table_base(), 4, KERNEL_HALF) };
+        unsafe { free_tables(space.directory_table_base(), 4, KERNEL_HALF) };
     }
+}
+
+/// Le `PageMapper` d'un espace : un commit ne projette rien (la faute le
+/// fera) ; un décommit et un changement de protection ne touchent que les
+/// pages qui ont déjà une page physique.
+struct DemandMapper {
+    tables: MmPageTables,
+}
+
+impl PageMapper for DemandMapper {
+    fn commit_page(&mut self, _virt: u64, _writable: bool, _executable: bool, _user: bool) -> Result<(), NtStatus> {
+        Ok(())
+    }
+
+    fn decommit_page(&mut self, virt: u64) {
+        let Some(entry) = self.tables.leaf_entry(VirtAddr::new(virt)) else {
+            return;
+        };
+        if entry.flags().intersects(PageTableFlags::PRESENT | PTE_RETAINED) {
+            let phys = entry.addr().as_u64();
+            entry.set_unused();
+            // Only meaningful if the space is active: switching CR3 flushes
+            // its user pages, never global.
+            x86_64::instructions::tlb::flush(VirtAddr::new(virt));
+            pfn::free_page(Pfn(phys / PAGE));
+        }
+    }
+
+    fn protect_page(&mut self, virt: u64, protect: PageProtect) {
+        set_rights(&mut self.tables, virt, protect);
+    }
+}
+
+/// Ce que la table tient pour la page `virt`.
+fn pte_state(tables: &mut MmPageTables, virt: u64) -> PteState {
+    match tables.leaf_entry(VirtAddr::new(virt)) {
+        Some(entry) if entry.flags().contains(PageTableFlags::PRESENT) => PteState::Present {
+            writable: entry.flags().contains(PageTableFlags::WRITABLE),
+            executable: !entry.flags().contains(PageTableFlags::NO_EXECUTE),
+        },
+        Some(entry) if entry.flags().contains(PTE_RETAINED) => PteState::Retained,
+        _ => PteState::Absent,
+    }
+}
+
+/// Donne `protect` à la page `virt` si elle a une page physique : présente
+/// avec ses droits si la protection permet un accès, tenue non présente sinon.
+fn set_rights(tables: &mut MmPageTables, virt: u64, protect: PageProtect) {
+    let Some(entry) = tables.leaf_entry(VirtAddr::new(virt)) else {
+        return;
+    };
+    if !entry.flags().intersects(PageTableFlags::PRESENT | PTE_RETAINED) {
+        return;
+    }
+    let flags = if protect.accessible() {
+        MmPageTables::leaf_flags(protect.writable(), protect.executable(), true)
+    } else {
+        PTE_RETAINED
+    };
+    entry.set_addr(entry.addr(), flags);
+    x86_64::instructions::tlb::flush(VirtAddr::new(virt));
 }
 
 /// Libère les `entries` premières entrées de la table `phys` de niveau
@@ -175,17 +352,18 @@ unsafe fn free_tables(phys: u64, level: u8, entries: usize) {
     // SAFETY: garanti par l'appelant.
     let t = unsafe { table(phys) };
     for entry in t.iter().take(entries) {
-        if !entry.flags().contains(PageTableFlags::PRESENT) {
+        let held = if level == 1 { PageTableFlags::PRESENT | PTE_RETAINED } else { PageTableFlags::PRESENT };
+        if !entry.flags().intersects(held) {
             continue;
         }
         assert!(!entry.flags().contains(PageTableFlags::HUGE_PAGE), "huge page in a user half");
         let next = entry.addr().as_u64();
         if level == 1 {
-            pfn::free_page(Pfn(next / 4096));
+            pfn::free_page(Pfn(next / PAGE));
         } else {
             // SAFETY: une table de l'espace, désignée par cette entrée.
             unsafe { free_tables(next, level - 1, 512) };
         }
     }
-    pfn::free_page(Pfn(phys / 4096));
+    pfn::free_page(Pfn(phys / PAGE));
 }

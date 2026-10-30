@@ -54,6 +54,21 @@ impl PageProtect {
             && modifiers != Self::GUARD | Self::NOCACHE
             && (base != Self::NOACCESS.bits() || modifiers.is_empty())
     }
+
+    /// Les pages s'écrivent (la copie sur écriture comptée).
+    pub fn writable(self) -> bool {
+        self.intersects(Self::READWRITE | Self::WRITECOPY | Self::EXECUTE_READWRITE | Self::EXECUTE_WRITECOPY)
+    }
+
+    /// Les pages s'exécutent.
+    pub fn executable(self) -> bool {
+        self.intersects(Self::EXECUTE | Self::EXECUTE_READ | Self::EXECUTE_READWRITE | Self::EXECUTE_WRITECOPY)
+    }
+
+    /// Un accès est possible : ni `NOACCESS`, ni une garde pas encore levée.
+    pub fn accessible(self) -> bool {
+        !self.intersects(Self::NOACCESS | Self::GUARD)
+    }
 }
 
 /// État d'une page d'une réservation.
@@ -727,6 +742,21 @@ mod tests {
         for p in invalid {
             assert!(!p.is_valid(), "{p:?}");
         }
+    }
+
+    #[test]
+    fn rights_of_a_protection() {
+        let rights = |p: PageProtect| (p.writable(), p.executable(), p.accessible());
+        assert_eq!(rights(ro()), (false, false, true));
+        assert_eq!(rights(rw()), (true, false, true));
+        assert_eq!(rights(PageProtect::WRITECOPY), (true, false, true));
+        assert_eq!(rights(PageProtect::EXECUTE), (false, true, true));
+        assert_eq!(rights(rx()), (false, true, true));
+        assert_eq!(rights(PageProtect::EXECUTE_READWRITE), (true, true, true));
+        assert_eq!(rights(PageProtect::EXECUTE_WRITECOPY), (true, true, true));
+        assert_eq!(rights(na()), (false, false, false));
+        assert_eq!(rights(rw() | PageProtect::GUARD), (true, false, false));
+        assert_eq!(rights(rw() | PageProtect::NOCACHE), (true, false, true));
     }
 
     #[test]

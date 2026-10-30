@@ -61,6 +61,8 @@ jobs:
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-fpu 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-bugcheck 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-ke-starvation 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-irql 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-access-violation 2>&1 | tee -a build.log
           if grep -E '^warning' build.log; then
             echo "::error::bare-metal build emitted warnings"
             exit 1
@@ -87,6 +89,10 @@ jobs:
             args: --scenario ke-starvation
           - name: failed assertion, symbolized STOP screen (M1)
             args: --scenario bugcheck
+          - name: user page fault at DISPATCH_LEVEL, STOP screen (M2)
+            args: --scenario page-fault-irql
+          - name: kernel read of a reserved user page, STOP screen (M2)
+            args: --scenario page-fault-access-violation
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain (rust-toolchain.toml)

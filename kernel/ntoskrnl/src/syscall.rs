@@ -1274,8 +1274,8 @@ impl mm::virtual_alloc::PageMapper for SyscallMapper {
         mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
     }
 
-    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool) {
-        let flags = mm::MmPageTables::leaf_flags(writable, executable, true);
+    fn protect_page(&mut self, virt_addr: u64, protect: mm::vad::PageProtect) {
+        let flags = mm::MmPageTables::leaf_flags(protect.writable(), protect.executable(), true);
         // SAFETY: virt_addr was previously mapped by commit_page; the VAD has
         //         just given the page these rights.
         unsafe { self.pt.update_flags(x86_64::VirtAddr::new(virt_addr), flags) };

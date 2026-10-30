@@ -23,10 +23,12 @@
 //! In production the kernel passes a `KernelPageMapper` that calls
 //! `mm::pfn` and `mm::MmPageTables`. In tests we use `MockMapper`.
 //!
-//! Pas encore (tâche des fautes de page) : les pages commitées sont projetées
-//! tout de suite, et `PAGE_NOACCESS` comme `PAGE_GUARD` restent lisibles une
-//! fois projetées. Pas encore non plus : libération d'une partie d'une
-//! réservation, `MEM_RESET`.
+//! Le mapper d'un espace d'adresses (`mm::address_space`) ne projette rien au
+//! commit : la faute de page le fera (`mm::fault`). Ceux de l'ancien code
+//! projettent tout de suite, et y rendent lisibles `PAGE_NOACCESS` et
+//! `PAGE_GUARD`.
+//!
+//! Pas encore : libération d'une partie d'une réservation, `MEM_RESET`.
 //!
 //! WI7e Ch.5 §NtAllocateVirtualMemory, §NtFreeVirtualMemory
 
@@ -130,31 +132,9 @@ pub trait PageMapper {
     /// frame to the PFN database.
     fn decommit_page(&mut self, virt_addr: u64);
 
-    /// Change the access rights of one 4 KiB virtual page that
-    /// [`commit_page`](Self::commit_page) backed.
-    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool);
-}
-
-// ── Helper: derive protection flags ──────────────────────────────────────────
-
-#[inline]
-fn protect_writable(p: PageProtect) -> bool {
-    p.intersects(
-        PageProtect::READWRITE
-            | PageProtect::WRITECOPY
-            | PageProtect::EXECUTE_READWRITE
-            | PageProtect::EXECUTE_WRITECOPY,
-    )
-}
-
-#[inline]
-fn protect_executable(p: PageProtect) -> bool {
-    p.intersects(
-        PageProtect::EXECUTE
-            | PageProtect::EXECUTE_READ
-            | PageProtect::EXECUTE_READWRITE
-            | PageProtect::EXECUTE_WRITECOPY,
-    )
+    /// Give `protect` to one committed 4 KiB virtual page; with
+    /// [`commit_page`](Self::commit_page), the page it backed.
+    fn protect_page(&mut self, virt_addr: u64, protect: PageProtect);
 }
 
 /// Les adresses des pages de `[start, end)`.
@@ -258,13 +238,12 @@ pub fn allocate(
 /// réservée reçoit une page physique, une page déjà commitée sa nouvelle
 /// protection. En cas d'échec, défait ce qui a été fait.
 fn map_commit(m: &mut dyn PageMapper, changes: &[PageChange], protect: PageProtect) -> Result<(), NtStatus> {
-    let (writable, executable) = (protect_writable(protect), protect_executable(protect));
     for (i, c) in changes.iter().enumerate() {
         for va in pages(c.start, c.end) {
             let done = match c.old_state {
-                PageState::Reserved => m.commit_page(va, writable, executable, /*user=*/ true),
+                PageState::Reserved => m.commit_page(va, protect.writable(), protect.executable(), /*user=*/ true),
                 PageState::Committed => {
-                    m.protect_page(va, writable, executable);
+                    m.protect_page(va, protect);
                     Ok(())
                 }
             };
@@ -274,11 +253,7 @@ fn map_commit(m: &mut dyn PageMapper, changes: &[PageChange], protect: PageProte
                     for back in pages(undo.start, undo.end.min(va)) {
                         match undo.old_state {
                             PageState::Reserved => m.decommit_page(back),
-                            PageState::Committed => m.protect_page(
-                                back,
-                                protect_writable(undo.old_protect),
-                                protect_executable(undo.old_protect),
-                            ),
+                            PageState::Committed => m.protect_page(back, undo.old_protect),
                         }
                     }
                 }
@@ -370,7 +345,7 @@ pub fn protect(
     let old = node.protect(start, end, protect).ok_or(STATUS_NOT_COMMITTED)?;
     if let Some(m) = mapper {
         for va in pages(start, end) {
-            m.protect_page(va, protect_writable(protect), protect_executable(protect));
+            m.protect_page(va, protect);
         }
     }
     Ok(old)
@@ -468,8 +443,8 @@ mod tests {
         fn decommit_page(&mut self, virt: u64) {
             self.decommitted.push(virt);
         }
-        fn protect_page(&mut self, virt: u64, w: bool, x: bool) {
-            self.protected.push((virt, w, x));
+        fn protect_page(&mut self, virt: u64, p: PageProtect) {
+            self.protected.push((virt, p.writable(), p.executable()));
         }
     }
 

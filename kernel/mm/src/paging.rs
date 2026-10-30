@@ -17,7 +17,8 @@
 use x86_64::{
     registers::control::Cr3,
     structures::paging::{
-        FrameAllocator, FrameDeallocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+        page_table::PageTableEntry, FrameAllocator, FrameDeallocator, Mapper, OffsetPageTable, Page, PageTable,
+        PageTableFlags, PhysFrame, Size4KiB,
     },
     PhysAddr, VirtAddr,
 };
@@ -69,6 +70,12 @@ fn zero_frame(phys: u64) {
     // and the HHDM maps it writable.
     unsafe { core::ptr::write_bytes(virt as *mut u8, 0, 4096) };
 }
+
+/// Software bit of a non-present leaf entry that still holds its physical
+/// page: a `PAGE_NOACCESS` page or a guard page that was touched before
+/// (`mm::address_space`). The processor ignores every other bit of a
+/// non-present entry.
+pub const PTE_RETAINED: PageTableFlags = PageTableFlags::BIT_9;
 
 // ── Page table manager ────────────────────────────────────────────────────────
 
@@ -319,6 +326,26 @@ impl MmPageTables {
         let flush = unsafe { self.inner.update_flags(page, flags | PageTableFlags::PRESENT) }
             .expect("MmPageTables::update_flags: page not mapped");
         flush.flush();
+    }
+
+    /// The level-1 entry of `virt`, if the tables down to it exist and no
+    /// huge page covers it. Whoever changes it flushes the TLB.
+    ///
+    /// # IRQL
+    /// Any level.
+    pub fn leaf_entry(&mut self, virt: VirtAddr) -> Option<&mut PageTableEntry> {
+        let h = self.phys_offset;
+        let mut table = self.l4();
+        for index in [virt.p4_index(), virt.p3_index(), virt.p2_index()] {
+            let entry = &table[index];
+            if !entry.flags().contains(PageTableFlags::PRESENT) || entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                return None;
+            }
+            // SAFETY: a present, non-huge entry above level 1 holds a page
+            // table, which the HHDM maps; `&mut self` keeps it ours.
+            table = unsafe { &mut *((h + entry.addr().as_u64()) as *mut PageTable) };
+        }
+        Some(&mut table[virt.p1_index()])
     }
 
     /// The leaf flags of a page with these rights.

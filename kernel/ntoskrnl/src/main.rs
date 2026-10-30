@@ -101,8 +101,8 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
     }
 
-    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool) {
-        let flags = mm::MmPageTables::leaf_flags(writable, executable, true);
+    fn protect_page(&mut self, virt_addr: u64, protect: mm::vad::PageProtect) {
+        let flags = mm::MmPageTables::leaf_flags(protect.writable(), protect.executable(), true);
         // SAFETY: virt_addr was previously mapped by commit_page; the VAD has
         //         just given the page these rights.
         unsafe { self.pt.update_flags(VirtAddr::new(virt_addr), flags) };
@@ -206,6 +206,9 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     // guard page below it: an overflow faults, and the #DF/#PF handlers print
     // a STOP screen naming it instead of corrupting memory or triple-faulting.
     hal::idt::set_stack_guard_hook(Some(kstack_guard_hit));
+    // Faults on user addresses go to Mm first: demand-zero and guard pages of
+    // the address spaces (mm::fault).
+    hal::idt::set_page_fault_hook(Some(mm::fault::page_fault_hook));
 
     // Ring-3 → ring-0 entry: RSP0 until a user thread installs its own, and
     // SYSENTER_ESP (shared by all threads until the trap rework of M3).
@@ -298,6 +301,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     apc_self_test();
     address_space_self_test();
     vad_self_test();
+    demand_paging_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -311,6 +315,12 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
     if cfg!(feature = "test-bugcheck") {
         bugcheck_test_outer();
+    }
+    if cfg!(feature = "test-page-fault-irql") {
+        page_fault_irql_test();
+    }
+    if cfg!(feature = "test-page-fault-access-violation") {
+        page_fault_access_violation_test();
     }
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
@@ -1212,6 +1222,144 @@ fn vad_self_test() {
     log::info!(
         "[smoke] Mm: VAD reserve, commit, protect, decommit and release reach the page tables and the PFN database"
     );
+}
+
+/// Demand paging (`mm::fault`): in a new address space, reserve 256 MiB,
+/// commit 64 pages one by one and touch every other one: only those take a
+/// page, one fault each. A `PAGE_NOACCESS` page keeps its data out of reach, a
+/// guard page fires once, and releasing then destroying the space gives back
+/// every page.
+fn demand_paging_self_test() {
+    use abi::ntstatus::{STATUS_ACCESS_VIOLATION, STATUS_GUARD_PAGE_VIOLATION};
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::fault::{self, Access};
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{AllocType, FreeType, MemState, PAGE_SIZE};
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    const RESERVED: u64 = 256 << 20;
+    const COMMITTED: u64 = 64;
+    const MARKER: u64 = 0x4445_4D41_4E44_0000;
+    let (rw, ro, guard) = (PageProtect::READWRITE, PageProtect::READONLY, PageProtect::READWRITE | PageProtect::GUARD);
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::PageTable), s.active(PageUsage::UserPrivate))
+    };
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // SAFETY (the three closures): called while attached to the space below,
+    // whose page tables CR3 holds; the addresses are committed pages of it.
+    let flags = |va| unsafe { mm::MmPageTables::new(hhdm) }.translate_flags(VirtAddr::new(va)).map(|(_, f)| f);
+    let read = |va: u64| unsafe { core::ptr::read_volatile(va as *const u64) };
+    let write = |va: u64, value: u64| unsafe { core::ptr::write_volatile(va as *mut u64, value) };
+
+    let before = counts();
+    let space = AddressSpace::new().expect("no PML4");
+    // SAFETY: the space lives until the end of this test, detached before it
+    // is destroyed.
+    let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+    let base = space.allocate(0, RESERVED, AllocType::MEM_RESERVE, PageProtect::NOACCESS).expect("reserve 256 MiB");
+    let page = |i: u64| base + i * PAGE_SIZE;
+    for i in 0..COMMITTED {
+        assert_eq!(space.allocate(page(i), PAGE_SIZE, AllocType::MEM_COMMIT, rw), Ok(page(i)));
+    }
+    assert_eq!(counts().1, before.1, "committing took physical pages");
+    let faults = fault::demand_zero_faults();
+    for i in (0..COMMITTED).step_by(2) {
+        assert_eq!(read(page(i)), 0, "a demand-zero page is not zeroed");
+        write(page(i), MARKER + i);
+    }
+    let touched = counts();
+    assert_eq!(touched.1 - before.1, COMMITTED / 2, "untouched pages took physical memory");
+    assert_eq!(fault::demand_zero_faults() - faults, COMMITTED / 2, "not one fault per touched page");
+    assert!(flags(page(1)).is_none(), "an untouched page is mapped");
+    let f = flags(page(0)).expect("a touched page is not mapped");
+    assert!(f.contains(F::WRITABLE | F::USER_ACCESSIBLE | F::NO_EXECUTE), "{f:?}");
+
+    // PAGE_NOACCESS: out of reach, its data kept for a later protection.
+    assert_eq!(space.protect(page(2), PAGE_SIZE, PageProtect::NOACCESS), Ok(rw));
+    assert!(flags(page(2)).is_none(), "a PAGE_NOACCESS page is mapped");
+    assert_eq!(space.access_fault(page(2), Access::Read), STATUS_ACCESS_VIOLATION);
+    assert_eq!(counts().1, touched.1, "PAGE_NOACCESS gave its page away");
+    assert_eq!(space.protect(page(2), PAGE_SIZE, ro), Ok(PageProtect::NOACCESS));
+    assert_eq!(read(page(2)), MARKER + 2, "the data did not survive PAGE_NOACCESS");
+    assert!(!flags(page(2)).unwrap().contains(F::WRITABLE));
+    assert_eq!(space.access_fault(page(2), Access::Write), STATUS_ACCESS_VIOLATION, "write to a read-only page");
+
+    // Guard pages fire once, untouched or touched before, then work as committed.
+    let fresh = page(COMMITTED);
+    assert_eq!(space.allocate(fresh, PAGE_SIZE, AllocType::MEM_COMMIT, guard), Ok(fresh));
+    assert_eq!(space.protect(page(4), PAGE_SIZE, guard), Ok(rw));
+    for va in [fresh, page(4)] {
+        assert_eq!(space.access_fault(va, Access::Write), STATUS_GUARD_PAGE_VIOLATION);
+        assert_eq!(space.query(va).map(|r| r.protect), Ok(rw), "the guard is still up");
+    }
+    write(fresh, MARKER);
+    assert_eq!(read(page(4)), MARKER + 4, "the data did not survive the guard");
+
+    assert_eq!(space.access_fault(page(COMMITTED + 1), Access::Read), STATUS_ACCESS_VIOLATION, "reserved page");
+    assert_eq!(space.access_fault(base + RESERVED, Access::Read), STATUS_ACCESS_VIOLATION, "free page");
+
+    let mapped = counts().1;
+    assert_eq!(space.free(page(0), PAGE_SIZE, FreeType::MEM_DECOMMIT), Ok((page(0), PAGE_SIZE)));
+    assert_eq!(counts().1, mapped - 1, "decommitting kept the page");
+    assert!(flags(page(0)).is_none(), "a decommitted page is still mapped");
+    assert_eq!(space.query(page(0)).map(|r| r.state), Ok(MemState::Reserve));
+    assert_eq!(space.free(base, 0, FreeType::MEM_RELEASE), Ok((base, RESERVED)));
+    assert_eq!(counts().1, before.1, "releasing did not give back every touched page");
+
+    // A page kept out of reach goes with the space.
+    let last = space.allocate(0, PAGE_SIZE, AllocType::MEM_RESERVE | AllocType::MEM_COMMIT, rw).expect("commit");
+    write(last, MARKER);
+    assert_eq!(space.protect(last, PAGE_SIZE, PageProtect::NOACCESS), Ok(rw));
+    let tables = counts().0 - before.0;
+    ke::sched::ke_unstack_detach(attached);
+    space.destroy();
+    assert_eq!(counts(), before, "destroying the space did not give back every page");
+    log::info!(
+        "[smoke] Mm: demand paging: 256 MiB reserved, {COMMITTED} pages committed, {} touched for as many \
+         pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
+        COMMITTED / 2
+    );
+}
+
+/// An address space where `alloc` has reserved, maybe committed, the page at
+/// `0x400000`, attached for good: for the tests that end on a STOP screen.
+fn attach_stop_test_space(alloc: mm::virtual_alloc::AllocType) -> u64 {
+    const VA: u64 = 0x40_0000;
+    let space = mm::address_space::AddressSpace::new().expect("no PML4");
+    let rw = mm::vad::PageProtect::READWRITE;
+    assert_eq!(space.allocate(VA, mm::virtual_alloc::PAGE_SIZE, alloc, rw), Ok(VA));
+    // SAFETY: the space is never destroyed (the registry keeps it), and the
+    // boot thread never detaches.
+    let _attached_for_good = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+    VA
+}
+
+/// A fault on a user page at DISPATCH_LEVEL must stop the system with
+/// IRQL_NOT_LESS_OR_EQUAL (feature `test-page-fault-irql`).
+#[inline(never)]
+fn page_fault_irql_test() {
+    let va =
+        attach_stop_test_space(mm::virtual_alloc::AllocType::MEM_RESERVE | mm::virtual_alloc::AllocType::MEM_COMMIT);
+    log::info!("[smoke] touching a committed user page at DISPATCH_LEVEL on purpose (test-page-fault-irql)");
+    let _irql = hal::irql::raise(hal::irql::Irql::Dispatch);
+    // SAFETY: none; the fault this read takes must stop the system.
+    let value = unsafe { core::ptr::read_volatile(va as *const u64) };
+    panic!("a page fault at DISPATCH_LEVEL was resolved (read {value:#x})");
+}
+
+/// A kernel-mode read of a reserved user page must stop the system with
+/// KMODE_EXCEPTION_NOT_HANDLED and STATUS_ACCESS_VIOLATION (feature
+/// `test-page-fault-access-violation`).
+#[inline(never)]
+fn page_fault_access_violation_test() {
+    let va = attach_stop_test_space(mm::virtual_alloc::AllocType::MEM_RESERVE);
+    log::info!("[smoke] reading a reserved user page on purpose (test-page-fault-access-violation)");
+    // SAFETY: none; the fault this read takes must stop the system.
+    let value = unsafe { core::ptr::read_volatile(va as *const u64) };
+    panic!("a read of a reserved page succeeded (read {value:#x})");
 }
 
 /// Checks that the FPU state follows each thread (ADR-009): the boot thread's

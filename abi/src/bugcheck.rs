@@ -8,6 +8,10 @@
 pub struct BugCheckCode(pub u32);
 
 impl BugCheckCode {
+    /// A reference to pageable or invalid memory at DISPATCH_LEVEL or above.
+    /// P1: the address; P2: the IRQL; P3: bit 0 set for a write, bit 3 for
+    /// an instruction fetch; P4: the instruction that referenced it.
+    pub const IRQL_NOT_LESS_OR_EQUAL: Self = Self(0x0A);
     /// A kernel-mode exception that nothing handled. P1: the exception code
     /// (NTSTATUS); P2: where it happened; P3, P4: its first two parameters.
     ///
@@ -25,6 +29,7 @@ impl BugCheckCode {
     /// The symbolic name of a known code, or `None`.
     pub const fn name(self) -> Option<&'static str> {
         match self {
+            Self::IRQL_NOT_LESS_OR_EQUAL => Some("IRQL_NOT_LESS_OR_EQUAL"),
             Self::KMODE_EXCEPTION_NOT_HANDLED => Some("KMODE_EXCEPTION_NOT_HANDLED"),
             Self::PAGE_FAULT_IN_NONPAGED_AREA => Some("PAGE_FAULT_IN_NONPAGED_AREA"),
             Self::UNEXPECTED_KERNEL_MODE_TRAP => Some("UNEXPECTED_KERNEL_MODE_TRAP"),
@@ -48,6 +53,7 @@ mod tests {
 
     #[test]
     fn known_codes_have_their_name() {
+        assert_eq!(BugCheckCode(0x0A).name(), Some("IRQL_NOT_LESS_OR_EQUAL"));
         assert_eq!(BugCheckCode(0x7F).name(), Some("UNEXPECTED_KERNEL_MODE_TRAP"));
         assert_eq!(BugCheckCode(0x1E).name(), Some("KMODE_EXCEPTION_NOT_HANDLED"));
         assert_eq!(BugCheckCode(0x50).name(), Some("PAGE_FAULT_IN_NONPAGED_AREA"));

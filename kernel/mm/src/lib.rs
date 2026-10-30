@@ -5,7 +5,7 @@
 //!   - Virtual Address Descriptor tree (VAD) per process — Phase 2
 //!   - NtAllocateVirtualMemory / NtFreeVirtualMemory — Phase 2
 //!   - Section objects (file mapping — needed for PE loader) — Phase 2
-//!   - Page fault handler (demand paging) — Phase 3
+//!   - Page faults: demand-zero pages, guard pages (`fault`)
 //!
 //! Address space layout (XP-compatible 2GB/2GB split):
 //!   User mode:   0x0000_0000_0000_1000 – 0x0000_0000_7FFF_FFFF
@@ -18,6 +18,7 @@ extern crate alloc;
 
 pub mod address_space;
 pub mod buddy;
+pub mod fault;
 pub mod kstack;
 pub mod paging;
 pub mod pfn;

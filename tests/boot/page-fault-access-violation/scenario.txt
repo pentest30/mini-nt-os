@@ -1,0 +1,17 @@
+# Demand paging (M2): a kernel-mode read of a reserved, uncommitted user page
+# is an access violation that nothing handles before M3: the boot must end on
+# KMODE_EXCEPTION_NOT_HANDLED with STATUS_ACCESS_VIOLATION, a read, the address.
+features = test-page-fault-access-violation
+cpus     = default
+timeout  = 120
+
+expect = *** STOP: 0x0000001e (0x00000000c0000005, 0x
+expect = , 0x0000000000000000, 0x0000000000400000)
+expect = KMODE_EXCEPTION_NOT_HANDLED
+expect = exception on a user address in kernel mode
+expect = ntoskrnl::page_fault_access_violation_test+0x
+expect = System halted.
+
+forbid = a read of a reserved page succeeded
+forbid = STOP while printing the STOP screen
+forbid = [NESTED #PF]

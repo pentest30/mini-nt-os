@@ -4462,7 +4462,7 @@ mod tests {
             Ok(())
         }
         fn decommit_page(&mut self, _virt: u64) {}
-        fn protect_page(&mut self, _virt: u64, _w: bool, _x: bool) {}
+        fn protect_page(&mut self, _virt: u64, _protect: mm::vad::PageProtect) {}
     }
 
     impl Drop for HostMapper {
@@ -4484,7 +4484,7 @@ mod tests {
             Ok(())
         }
         fn decommit_page(&mut self, _v: u64) {}
-        fn protect_page(&mut self, _v: u64, _w: bool, _x: bool) {}
+        fn protect_page(&mut self, _v: u64, _protect: mm::vad::PageProtect) {}
     }
 
     #[test]
