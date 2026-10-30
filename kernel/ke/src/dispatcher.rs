@@ -1017,7 +1017,8 @@ pub unsafe fn ki_thread_exit<P: Platform>(thread: *mut KThread) {
             ki_unlink_wait_blocks::<P>(thread);
         }
         (*thread).state = ThreadState::Terminated;
-        // Ses APC encore en file y restent, sans rundown (Ps, M2).
+        // Ses APC encore en file y restent : Ps en a fait le rundown avant
+        // (`ke_rundown_apcs`).
         (*thread).apc_queueable = false;
         let mutants = ptr::addr_of_mut!((*thread).mutant_list_head);
         while !ListEntry::is_empty(mutants) {

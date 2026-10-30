@@ -217,11 +217,17 @@ pub struct Thread {
     /// CR3 de son espace d'adresses, chargé à chaque commutation ; celui d'un
     /// autre espace tant qu'il y est attaché ([`ke_stack_attach`]).
     directory_table_base: u64,
+    /// Adresse de son TEB (thread utilisateur), base du segment FS en mode
+    /// utilisateur : écrite dans le descripteur du TEB à chaque commutation.
+    teb: u32,
+    /// Le thread de l'exécutif qui le possède (ETHREAD de Ps), opaque pour Ke ;
+    /// nul pour un thread noyau.
+    owner: *const c_void,
 }
 
 impl Thread {
-    /// Alloue un thread et l'initialise ; il n'est jamais libéré (les threads ne
-    /// sont pas encore récupérés).
+    /// Alloue un thread et l'initialise ; [`delete_thread`] le libère une fois
+    /// terminé.
     ///
     /// # IRQL
     /// PASSIVE_LEVEL (alloue).
@@ -249,6 +255,8 @@ impl Thread {
             ptr::addr_of_mut!((*t).start).write(start);
             ptr::addr_of_mut!((*t).fpu).write(FxSaveArea::initial());
             ptr::addr_of_mut!((*t).directory_table_base).write(SYSTEM_DIRECTORY.load(Ordering::Relaxed));
+            ptr::addr_of_mut!((*t).teb).write(0);
+            ptr::addr_of_mut!((*t).owner).write(ptr::null());
         }
         t
     }
@@ -288,6 +296,12 @@ impl ThreadTable {
     /// Le thread `tid`, ou nul.
     pub fn get(&self, tid: usize) -> *mut Thread {
         self.threads.get(tid).copied().unwrap_or(ptr::null_mut())
+    }
+
+    /// Retire le thread `tid` de la table et le rend ; nul s'il n'y est pas.
+    /// Son TID pourra servir à un autre thread.
+    pub fn unregister(&mut self, tid: usize) -> *mut Thread {
+        self.threads.get_mut(tid).map(|slot| core::mem::replace(slot, ptr::null_mut())).unwrap_or(ptr::null_mut())
     }
 }
 
@@ -627,6 +641,7 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
     unsafe {
         if (*new).user_mode {
             hal::gdt::set_kernel_stack_top((*new).kernel_stack_top);
+            hal::gdt::set_teb_base((*new).teb);
         }
         prcb::current().current_thread.store(new, Ordering::Relaxed);
         CONTEXT_SWITCHES.fetch_add(1, Ordering::Relaxed);
@@ -908,7 +923,25 @@ extern "C" fn ki_thread_startup() -> ! {
     unreachable!("a terminated thread was resumed");
 }
 
-/// Enregistre un thread utilisateur (ring 3), prêt à s'exécuter.
+/// Ce qu'il faut pour lancer un thread utilisateur ([`create_user_thread`]).
+#[derive(Clone, Copy, Debug)]
+pub struct UserThreadStart {
+    /// CR3 de l'espace d'adresses de son processus.
+    pub directory_table_base: u64,
+    /// Haut, aligné sur 16 octets, de sa pile noyau.
+    pub kernel_stack_top: u64,
+    /// EIP de départ, en mode utilisateur 32 bits.
+    pub entry: u32,
+    /// ESP de départ.
+    pub stack: u32,
+    /// Son TEB : la base de FS en mode utilisateur.
+    pub teb: u32,
+    /// Le thread de l'exécutif qui le possède ([`current_thread_owner`]).
+    pub owner: *const c_void,
+}
+
+/// Enregistre un thread utilisateur (ring 3, 32 bits), prêt à s'exécuter dans
+/// l'espace d'adresses `start.directory_table_base`.
 ///
 /// Construit sur sa pile noyau la trame de `ring3_iretq_trampoline`, où arrive
 /// sa première commutation :
@@ -923,45 +956,94 @@ extern "C" fn ki_thread_startup() -> ! {
 ///   [top- 8]  SS | 3       ┘
 /// ```
 ///
-/// La pile vient de Mm par l'appelant ; Ke n'en alloue jamais. Son TID, ou
-/// `None` si la table est pleine.
+/// Chaque commutation vers lui pointe le descripteur du TEB sur `start.teb`
+/// (`hal::gdt::set_teb_base`). La pile vient de Mm par l'appelant ; Ke n'en
+/// alloue jamais. Son TID, ou `None` si la table est pleine.
 ///
 /// # Safety
-/// `kernel_stack_top` est le haut, aligné sur 16 octets, d'une pile noyau
-/// projetée d'au moins 4 Kio, réservée à ce thread et gardée pour toute sa vie.
+/// `start.kernel_stack_top` est le haut, aligné sur 16 octets, d'une pile
+/// noyau projetée d'au moins 4 Kio, réservée à ce thread et gardée jusqu'à sa
+/// fin ; l'espace d'adresses reste vivant tant que le thread s'exécute.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-pub unsafe fn spawn_user_thread(
-    kernel_stack_top: u64,
-    entry32: u32,
-    stack32: u32,
-    cs: u16,
-    ss: u16,
-    fs: u16,
-) -> Option<usize> {
-    let frame = (kernel_stack_top - 7 * 8) as *mut u64;
+pub unsafe fn create_user_thread(start: &UserThreadStart) -> Option<usize> {
+    let frame = (start.kernel_stack_top - 7 * 8) as *mut u64;
     // SAFETY: les 56 octets du haut de la pile, projetée, accessible en écriture
     // et réservée à ce thread (contrat).
     unsafe {
         frame.add(0).write(0);
-        frame.add(1).write(u64::from(fs));
-        frame.add(2).write(u64::from(entry32));
-        frame.add(3).write(u64::from(cs) | 3);
+        frame.add(1).write(u64::from(hal::gdt::user_teb_fs_selector()));
+        frame.add(2).write(u64::from(start.entry));
+        frame.add(3).write(u64::from(hal::gdt::user_code32_selector()) | 3);
         frame.add(4).write(hal::ring3::USER_RFLAGS);
-        frame.add(5).write(u64::from(stack32));
-        frame.add(6).write(u64::from(ss) | 3);
+        frame.add(5).write(u64::from(start.stack));
+        frame.add(6).write(u64::from(hal::gdt::user_data32_selector()) | 3);
     }
     let ctx = KContext { rsp: frame as u64, rip: hal::ring3::ring3_iretq_trampoline_fn(), ..KContext::default() };
-    let tid = start_thread(Thread::create(NORMAL_PRIORITY, ctx, true, kernel_stack_top, None))?;
+    let t = Thread::create(NORMAL_PRIORITY, ctx, true, start.kernel_stack_top, None);
+    // SAFETY: un thread neuf, encore inconnu de l'ordonnanceur.
+    unsafe {
+        (*t).directory_table_base = start.directory_table_base;
+        (*t).teb = start.teb;
+        (*t).owner = start.owner;
+    }
+    let tid = start_thread(t)?;
     log::info!(
-        "Ke scheduler: spawned user-mode thread TID={} entry={:#010x} usp={:#010x} kstack_top={:#x}",
+        "Ke scheduler: spawned user-mode thread TID={} entry={:#010x} usp={:#010x} teb={:#010x}",
         tid,
-        entry32,
-        stack32,
-        kernel_stack_top,
+        start.entry,
+        start.stack,
+        start.teb,
     );
     Some(tid)
+}
+
+/// Le thread de l'exécutif qui possède le thread courant
+/// ([`UserThreadStart::owner`]) ; nul pour un thread noyau.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn current_thread_owner() -> *const c_void {
+    // SAFETY: le thread courant vit tant qu'il s'exécute ; `owner` ne change
+    // plus après sa création.
+    unsafe { (*current_thread()).owner }
+}
+
+/// Supprime le thread `tid`, terminé : il quitte la table, qui pourra donner
+/// son TID à un autre, et sa mémoire est rendue. Sa pile noyau revient à qui
+/// l'a fournie. `false` s'il n'existe pas.
+///
+/// # Panics
+/// S'il n'est pas terminé.
+///
+/// # Safety
+/// Le thread a quitté le processeur après sa fin : sur ce processeur unique
+/// (ADR-015), c'est le cas dès qu'un autre thread le voit terminé. Personne
+/// n'attend plus son objet thread ni n'en garde l'adresse
+/// ([`thread_object`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub unsafe fn delete_thread(tid: usize) -> bool {
+    // SAFETY: verrou tenu de acquire à release ; un thread enregistré est valide.
+    let t = unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        let terminated = t.is_null() || (*t).tcb.state == ThreadState::Terminated;
+        let t = if terminated { (*threads()).unregister(tid) } else { ptr::null_mut() };
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        assert!(terminated, "thread {tid} deleted before its end");
+        t
+    };
+    if t.is_null() {
+        return false;
+    }
+    // SAFETY: terminé, il n'est dans aucune file ni attente (`ki_thread_exit`),
+    // ni sur le processeur (contrat) ; retiré de la table, plus rien ne le
+    // désigne.
+    drop(unsafe { Box::from_raw(t) });
+    true
 }
 
 /// `true` si le thread `tid` existe et n'est pas terminé.
@@ -1028,7 +1110,7 @@ pub fn current_priority() -> u8 {
 }
 
 /// L'objet thread de `tid`, à attendre pour connaître sa fin ; il reste valide
-/// (les threads ne sont jamais libérés).
+/// jusqu'à [`delete_thread`].
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
@@ -1199,6 +1281,27 @@ mod tests {
 
     fn thread(priority: u8) -> *mut Thread {
         Thread::create(priority, KContext::default(), false, 0, None)
+    }
+
+    #[test]
+    fn an_unregistered_tid_goes_to_the_next_thread() {
+        let mut table = Box::new(ThreadTable::new());
+        let threads = [thread(1), thread(1), thread(1)];
+        for &t in &threads {
+            // SAFETY: libérés en fin de test.
+            unsafe { table.register(t) }.unwrap();
+        }
+        assert_eq!(table.unregister(1), threads[1]);
+        assert!(table.get(1).is_null());
+        assert!(table.unregister(1).is_null(), "already gone");
+        assert!(table.unregister(MAX_THREADS).is_null());
+        let next = thread(1);
+        // SAFETY: libéré en fin de test.
+        assert_eq!(unsafe { table.register(next) }, Some(1));
+        for t in [threads[0], threads[1], threads[2], next] {
+            // SAFETY: threads du test, libérés une fois.
+            drop(unsafe { Box::from_raw(t) });
+        }
     }
 
     #[test]

@@ -22,8 +22,9 @@
 //! verrou dispatcher. Rien n'est alloué : l'appelant fournit le [`KApc`], qui
 //! reste valide jusqu'à l'appel de sa routine noyau ou son retrait de la file.
 //!
-//! Pas encore : rundown des APC d'un thread qui se termine (Ps, M2) ; ils
-//! restent en file.
+//! Un thread qui se termine ne reçoit plus d'APC, et ceux qui restaient en
+//! file passent à leur routine de rundown ([`ke_rundown_apcs`], appelé par
+//! Ps).
 
 use core::ffi::c_void;
 use core::ptr;
@@ -227,6 +228,58 @@ pub unsafe fn ke_remove_queue_apc<P: Platform>(apc: *mut KApc) -> bool {
         }
         DISPATCHER_LOCK.release::<P>(old_irql);
         inserted
+    }
+}
+
+/// Rundown des APC de `thread`, qui se termine (PspExitThread) : il n'en
+/// reçoit plus ([`ke_insert_queue_apc`] rend `false`), et chaque APC encore en
+/// file, noyau puis utilisateur, en est retiré puis passé à sa routine de
+/// rundown s'il en a une, verrou relâché. Un APC sans routine de rundown est
+/// seulement retiré : il revient à qui l'a fourni. Rend le nombre d'APC
+/// retirés.
+///
+/// # Safety
+/// `thread` est valide ; les APC en file le sont aussi (contrat de
+/// [`ke_insert_queue_apc`]).
+///
+/// # IRQL
+/// <= APC_LEVEL.
+pub unsafe fn ke_rundown_apcs<P: Platform>(thread: *mut KThread) -> usize {
+    let mut count = 0;
+    loop {
+        // SAFETY: garanti par l'appelant ; verrou tenu de acquire à release ;
+        // les entrées des files d'APC sont celles de KApc valides.
+        let apc = unsafe {
+            let old_irql = DISPATCHER_LOCK.acquire::<P>();
+            (*thread).apc_queueable = false;
+            let mut apc = ptr::null_mut::<KApc>();
+            for mode in [ProcessorMode::Kernel, ProcessorMode::User] {
+                let head = ptr::addr_of_mut!((*thread).apc_list_head[mode as usize]);
+                if !ListEntry::is_empty(head) {
+                    let entry = (*head).flink;
+                    ListEntry::remove(entry);
+                    apc = apc_of(entry);
+                    (*apc).inserted = false;
+                    break;
+                }
+            }
+            if ListEntry::is_empty(ptr::addr_of!((*thread).apc_list_head[ProcessorMode::Kernel as usize])) {
+                (*thread).kernel_apc_pending = false;
+            }
+            if ListEntry::is_empty(ptr::addr_of!((*thread).apc_list_head[ProcessorMode::User as usize])) {
+                (*thread).user_apc_pending = false;
+            }
+            DISPATCHER_LOCK.release::<P>(old_irql);
+            apc
+        };
+        if apc.is_null() {
+            return count;
+        }
+        count += 1;
+        // SAFETY: l'APC, retiré de la file, est encore valide (contrat).
+        if let Some(rundown) = unsafe { (*apc).rundown_routine } {
+            rundown(apc);
+        }
     }
 }
 

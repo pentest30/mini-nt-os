@@ -397,17 +397,17 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 /// PASSIVE_LEVEL.
 pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
     let kstack = mm::kstack::allocate()?;
-    // SAFETY: kstack was just allocated for this thread alone and is never freed.
-    unsafe {
-        ke::sched::spawn_user_thread(
-            kstack.top,
-            entry32,
-            stack32,
-            hal::gdt::user_code32_selector(),
-            hal::gdt::user_data32_selector(),
-            hal::gdt::user_teb_fs_selector(),
-        )
-    }
+    let start = ke::sched::UserThreadStart {
+        directory_table_base: mm::address_space::system_directory_table_base(),
+        kernel_stack_top: kstack.top,
+        entry: entry32,
+        stack: stack32,
+        teb: ps::loader::TEB32_VA,
+        owner: core::ptr::null(),
+    };
+    // SAFETY: kstack was just allocated for this thread alone and is never
+    // freed; the system address space lives forever.
+    unsafe { ke::sched::create_user_thread(&start) }
 }
 
 /// Churns the pool with the pattern blamed for the old heap "corruption"

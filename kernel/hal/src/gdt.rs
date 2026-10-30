@@ -17,7 +17,7 @@
 
 use crate::sync::Once;
 use core::sync::atomic::{AtomicU64, Ordering};
-use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
+use x86_64::structures::gdt::{Descriptor, Entry, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 
@@ -42,6 +42,10 @@ static mut DOUBLE_FAULT_STACK: [u8; DOUBLE_FAULT_STACK_SIZE] = [0u8; DOUBLE_FAUL
 
 // ── Exported constants ────────────────────────────────────────────────────────
 
+/// The TEB of the legacy loader's single thread, the TEB descriptor's base
+/// until the first switch to a thread with its own TEB.
+const LEGACY_TEB: u32 = 0x7FFD_F000;
+
 /// IST slot index used for the double-fault handler.
 /// Referenced by `idt::init` when registering the double-fault entry.
 pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
@@ -59,7 +63,8 @@ struct Selectors {
     user_code32: SegmentSelector,
     /// 32-bit ring-3 data segment (DPL=3, base=0, limit=4GB).
     user_data32: SegmentSelector,
-    /// 32-bit ring-3 FS segment covering the TEB page at 0x7FFD_F000.
+    /// 32-bit ring-3 FS segment covering the TEB page of the running thread
+    /// ([`set_teb_base`]).
     user_teb_fs: SegmentSelector,
 }
 
@@ -106,7 +111,7 @@ pub unsafe fn init() {
         let kernel_data = gdt.append(Descriptor::kernel_data_segment());
         let user_code32 = gdt.append(Descriptor::UserSegment(0x00CF_FA00_0000_FFFF));
         let user_data32 = gdt.append(Descriptor::UserSegment(0x00CF_F200_0000_FFFF));
-        let user_teb_fs = gdt.append(Descriptor::UserSegment(0x7F40_F2FD_F000_0FFF));
+        let user_teb_fs = gdt.append(Descriptor::UserSegment(teb_descriptor(LEGACY_TEB)));
         let tss_sel = gdt.append(Descriptor::tss_segment(tss));
 
         (gdt, Selectors { kernel_code, kernel_data, tss: tss_sel, user_code32, user_data32, user_teb_fs })
@@ -144,7 +149,8 @@ pub fn user_data32_selector() -> u16 {
     GDT.get().expect("gdt::init not called").1.user_data32.0
 }
 
-/// Raw selector value for the 32-bit TEB/FS segment (base = TEB32_VA).
+/// Raw selector value for the 32-bit TEB/FS segment (base: the running
+/// thread's TEB, [`set_teb_base`]).
 pub fn user_teb_fs_selector() -> u16 {
     GDT.get().expect("gdt::init not called").1.user_teb_fs.0
 }
@@ -182,5 +188,59 @@ pub unsafe fn set_kernel_stack_top(rsp0: u64) {
         // which lives in 'static Once<TaskStateSegment> storage.
         // VirtAddr is repr(transparent) over u64 in x86_64 0.15 — writing u64 is safe.
         unsafe { (ptr as *mut u64).write_volatile(rsp0) };
+    }
+}
+
+/// The descriptor of the 32-bit TEB segment for a TEB at `base`: data,
+/// read/write, DPL 3, present, 32-bit, limit 0xFFF bytes (one page).
+pub const fn teb_descriptor(base: u32) -> u64 {
+    let base = base as u64;
+    0x0040_F200_0000_0FFF | (base & 0x00FF_FFFF) << 16 | (base >> 24) << 56
+}
+
+/// Points the TEB descriptor at `base`, then reloads FS from it: the CPU
+/// keeps the base of a segment register until it is loaded again. Called at
+/// each switch to a user thread, as XP does with its `KGDT_R3_TEB` entry; user
+/// code that reloads FS with the TEB selector finds its own TEB. The kernel
+/// does not use FS. Without a GDT (host tests), does nothing.
+///
+/// # Safety
+/// FS is not in use by the kernel code that runs until the next return to user
+/// mode; nothing else on this CPU changes the GDT meanwhile.
+///
+/// # IRQL: DISPATCH_LEVEL (the context switch).
+pub unsafe fn set_teb_base(base: u32) {
+    let Some((gdt, sel)) = GDT.get() else { return };
+    let entry = &gdt.entries()[sel.user_teb_fs.index() as usize];
+    const _: () = assert!(core::mem::size_of::<Entry>() == 8);
+    // SAFETY: with the `instructions` feature on x86_64, an `Entry` is a
+    // `repr(transparent)` wrapper around an `AtomicU64`: storing through it is
+    // a store to an atomic, which the shared reference allows.
+    let raw = unsafe { &*(entry as *const Entry).cast::<AtomicU64>() };
+    raw.store(teb_descriptor(base), Ordering::Relaxed);
+    #[cfg(target_os = "none")]
+    // SAFETY: the selector belongs to the loaded GDT and designates a
+    // present, writable data segment; ring 0 may load a DPL 3 data selector
+    // whose RPL is 3. The kernel does not use FS (contract).
+    unsafe {
+        use x86_64::instructions::segmentation::{Segment, FS};
+        FS::set_reg(sel.user_teb_fs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_teb_descriptor_carries_its_base() {
+        // The descriptor the GDT has always held for the legacy TEB.
+        assert_eq!(teb_descriptor(0x7FFD_F000), 0x7F40_F2FD_F000_0FFF);
+        let at = teb_descriptor(0x1234_5000);
+        assert_eq!((at >> 16) & 0xFF_FFFF, 0x34_5000, "base bits 0-23");
+        assert_eq!(at >> 56, 0x12, "base bits 24-31");
+        assert_eq!(at & 0xFFFF, 0x0FFF, "one page");
+        assert_eq!((at >> 40) & 0xFF, 0xF2, "present, DPL 3, read/write data");
+        assert_eq!((at >> 52) & 0xF, 0x4, "32-bit, byte granular");
     }
 }
