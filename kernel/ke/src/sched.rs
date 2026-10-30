@@ -643,6 +643,7 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
             hal::gdt::set_kernel_stack_top((*new).kernel_stack_top);
             hal::gdt::set_teb_base((*new).teb);
         }
+        ki_request_pending_apcs(new);
         prcb::current().current_thread.store(new, Ordering::Relaxed);
         CONTEXT_SWITCHES.fetch_add(1, Ordering::Relaxed);
         DISPATCHER_LOCK.unlock();
@@ -656,7 +657,6 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
             context_switch_raw(ptr::addr_of_mut!((*old).ctx), ptr::addr_of!((*new).ctx))
         });
         // `old` est repris.
-        ki_check_apcs_on_resume(old);
     }
 }
 
@@ -679,14 +679,17 @@ fn load_directory_table_base(directory: u64) {
     let _ = directory;
 }
 
-/// Un thread repris (ou qui démarre), à DISPATCH_LEVEL, avec des APC noyau en
-/// attente : l'interruption APC les livrera quand il redescendra sous
-/// APC_LEVEL. Sans verrou : sur ce processeur, à DISPATCH_LEVEL, rien d'autre
-/// ne met d'APC en file (ADR-015).
+/// `thread` va s'exécuter sur ce processeur, qu'il reprenne ou démarre, avec
+/// des APC noyau en attente : l'interruption APC, demandée pour ce
+/// processeur, les livrera quand il passera sous APC_LEVEL. Un thread
+/// utilisateur qui démarre passe en mode utilisateur sans redescendre par
+/// `hal::irql::lower` : ses APC partent à la première interruption qui l'y
+/// trouve.
 ///
 /// # Safety
-/// `thread` est le thread courant, valide.
-unsafe fn ki_check_apcs_on_resume(thread: *mut Thread) {
+/// Verrou dispatcher tenu ; `thread` est valide et devient le thread courant
+/// de ce processeur.
+unsafe fn ki_request_pending_apcs(thread: *mut Thread) {
     // SAFETY: garanti par l'appelant.
     if unsafe { (*thread).tcb.kernel_apc_pending } {
         hal::irql::request_apc();
@@ -911,8 +914,7 @@ fn set_current_directory(directory: u64) -> u64 {
 /// relâché, DISPATCH_LEVEL, interruptions masquées).
 extern "C" fn ki_thread_startup() -> ! {
     x86_64::instructions::interrupts::enable();
-    // SAFETY: le thread courant, valide, vient de démarrer.
-    unsafe { ki_check_apcs_on_resume(current_thread()) };
+    // Ses APC en attente, demandés par la commutation, partent ici.
     hal::irql::lower(Irql::Passive);
     // SAFETY: le thread courant est valide ; `start` ne change plus après sa
     // création.
@@ -1121,6 +1123,21 @@ pub fn thread_object(tid: usize) -> Option<*mut DispatcherHeader> {
         let t = (*threads()).get(tid);
         DISPATCHER_LOCK.release::<KePlatform>(old_irql);
         (!t.is_null()).then(|| ptr::addr_of_mut!((*t).tcb.header))
+    }
+}
+
+/// Le `KThread` de `tid`, pour lui envoyer un APC ; il reste valide jusqu'à
+/// [`delete_thread`].
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn kernel_thread(tid: usize) -> Option<*mut KThread> {
+    // SAFETY: verrou tenu de acquire à release ; un thread enregistré est valide.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        (!t.is_null()).then(|| ptr::addr_of_mut!((*t).tcb))
     }
 }
 
