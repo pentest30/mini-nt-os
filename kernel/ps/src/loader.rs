@@ -3626,37 +3626,28 @@ pub fn setup_process(
     // PEB32_VA is now mapped USER_ACCESSIBLE+RW. Write XP-compatible values.
     // SAFETY: PEB32_VA was committed above; single-CPU Phase 2, no concurrency.
     unsafe {
-        let peb = PEB32_VA as *mut crate::peb::Peb32;
-        // Zero-fill first so padding bytes are clean.
-        core::ptr::write_bytes(peb as *mut u8, 0, core::mem::size_of::<crate::peb::Peb32>());
-        let peb = &mut *peb;
-        peb.image_base_address = image.image_base as u32;
-        peb.os_major_version = 5; // Windows XP
-        peb.os_minor_version = 1;
-        peb.os_build_number = 2600; // XP SP2
-        peb.os_csd_version = 0x0200; // SP2
-        peb.os_platform_id = 2; // VER_PLATFORM_WIN32_NT
-        peb.image_subsystem = 2; // IMAGE_SUBSYSTEM_WINDOWS_GUI
-        peb.image_subsystem_major_ver = 4;
-        peb.image_subsystem_minor_ver = 0;
-        peb.number_of_processors = 1;
+        let peb = PEB32_VA as *mut abi::peb32::Peb32;
+        let mut fields = abi::peb32::Peb32::xp(image.image_base as u32);
+        fields.image_subsystem = 2; // IMAGE_SUBSYSTEM_WINDOWS_GUI
+        fields.image_subsystem_major_version = 4;
+        peb.write_unaligned(fields);
         // process_heap: 0 for now; Phase 3 installs a real user-mode heap.
     }
 
     // ── 5. Initialise TEB32 ───────────────────────────────────────────────────
     // SAFETY: TEB32_VA was committed above.
     unsafe {
-        let teb = TEB32_VA as *mut crate::teb::Teb32;
-        core::ptr::write_bytes(teb as *mut u8, 0, core::mem::size_of::<crate::teb::Teb32>());
-        let teb = &mut *teb;
-        teb.nt_tib.exception_list = 0xFFFF_FFFF; // empty SEH chain sentinel
-        teb.nt_tib.stack_base = USER_STACK_TOP;
-        teb.nt_tib.stack_limit = stack_limit;
-        // CRITICAL: FS:[0x18] must point to the TEB itself (CRT, SEH, TLS).
-        teb.nt_tib.self_ptr = TEB32_VA;
-        teb.peb = PEB32_VA;
-        teb.client_id_process = pid;
-        teb.client_id_thread = tid;
+        let teb = TEB32_VA as *mut abi::teb32::Teb32;
+        // FS:[0x18] points to the TEB itself (CRT, SEH, TLS).
+        teb.write_unaligned(abi::teb32::Teb32::new(
+            TEB32_VA,
+            pid,
+            tid,
+            PEB32_VA,
+            USER_STACK_TOP,
+            stack_limit,
+            stack_limit,
+        ));
     }
 
     // SAFETY: SHARED_USER_DATA32_VA was committed above; single-CPU Phase 2.

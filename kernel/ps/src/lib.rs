@@ -17,8 +17,6 @@ extern crate alloc;
 pub mod eprocess;
 pub mod ethread;
 pub mod loader;
-pub mod peb;
-pub mod teb;
 
 pub use eprocess::EProcess;
 pub use ethread::EThread;
