@@ -135,7 +135,7 @@ Le chargeur ne charge **que** le noyau et le hive `SYSTEM`. Les pilotes sont li�
 
 Points d'invariance :
 
-- **La moitié haute est partagée** : chaque PML4 de processus recopie les entrées 256 à 511 de la PML4 système.
+- **La moitié haute est partagée** : chaque PML4 de processus recopie les entrées 256 à 511 de la PML4 système, complétées dès le démarrage (une PDPT chacune) pour ne plus changer ensuite.
 - **Aucun mapping identité** ne survit à la phase 0.
 - **Le noyau n'accède jamais directement à la mémoire utilisateur** : il passe par les primitives de sonde et de copie décrites au §6.4.
 

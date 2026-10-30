@@ -16,6 +16,7 @@
 #![no_std]
 extern crate alloc;
 
+pub mod address_space;
 pub mod buddy;
 pub mod kstack;
 pub mod paging;
@@ -91,6 +92,9 @@ pub fn init(boot_info: &BootInfo, kernel_phys_end: u64) {
     }
     let stats = frames.stats();
     drop(frames);
+    // SAFETY: once, at the end of mm::init, on the boot PML4, before any
+    // process PML4.
+    unsafe { address_space::init() };
 
     log::info!(
         "Mm: PFN database: {} pages tracked, table at {:#x} ({} KiB), {} MiB free",

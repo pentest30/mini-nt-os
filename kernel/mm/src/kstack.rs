@@ -11,9 +11,9 @@
 //! next slot's, so the CPU faults instead of silently corrupting a neighbour;
 //! [`guard_hit`] lets the fault handlers name the stack involved.
 //!
-//! Not done yet: stacks are never freed (threads are not reaped before M1), and
-//! the region's PML4 entry is created on first use, so per-process PML4s (M2)
-//! must share it like the rest of the kernel half.
+//! Not done yet: stacks are never freed (threads are not reaped). The region
+//! sits under a PML4 entry of the kernel half, filled at boot and shared by
+//! every address space (`mm::address_space`).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

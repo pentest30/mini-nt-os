@@ -638,9 +638,7 @@ pub const NONPAGED_POOL_START: usize = 0xFFFF_8800_0000_0000;
 pub const PAGED_POOL_START: usize = 0xFFFF_8C00_0000_0000;
 /// Pages réservées à chaque pool : 16 Gio d'adresses.
 const POOL_RESERVED_PAGES: usize = (16 << 30) / PAGE;
-/// Pages projetées dès le départ, qui le restent : la table de pages du haut de
-/// chaque plage existe ainsi avant la première PML4 de processus, qui recopie
-/// la moitié haute de celle du système (02 §4.2).
+/// Pages projetées dès le départ, qui le restent.
 const NONPAGED_INITIAL_PAGES: usize = 256;
 const PAGED_INITIAL_PAGES: usize = 16;
 
