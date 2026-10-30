@@ -14,6 +14,11 @@
 //! vector's hook, which must exist; from kernel mode, they jump to the
 //! kernel's handler (`idt`), as if the stub were not there.
 //!
+//! SYSENTER (`sysenter`, on Intel, ADR-004) pushes the same frame under the
+//! pseudo-vector [`SYSENTER`]: SS and CS of user mode, ESP from EDX, the
+//! user's EFLAGS (which SYSENTER keeps, but for IF), and an EIP of 0 that the
+//! hook sets, since SYSENTER loses it.
+//!
 //! On the way back to user mode, after the vector's hook, the frame goes to
 //! the return hook ([`set_user_return_hook`]), where the kernel delivers the
 //! thread's user APCs.
@@ -73,33 +78,45 @@ pub const LAST_GATE: u8 = 0x2E;
 /// #UD, #GP and #PF.
 pub const USER_EXCEPTIONS: [u8; 5] = [0x00, 0x03, 0x06, 0x0D, 0x0E];
 
+/// The frame's vector for SYSENTER, which no IDT vector reaches.
+pub const SYSENTER: u64 = 0x100;
+
 /// What the kernel does with a trap frame.
 pub type TrapHook = fn(&mut KTrapFrame);
 
 const GATES: usize = (LAST_GATE - FIRST_GATE + 1) as usize;
 
-static HOOKS: [AtomicUsize; GATES + USER_EXCEPTIONS.len()] =
-    [const { AtomicUsize::new(0) }; GATES + USER_EXCEPTIONS.len()];
+/// The hooks: the gates, the user exceptions, then SYSENTER.
+static HOOKS: [AtomicUsize; GATES + USER_EXCEPTIONS.len() + 1] =
+    [const { AtomicUsize::new(0) }; GATES + USER_EXCEPTIONS.len() + 1];
 
 /// The return hook: a `TrapHook`, or 0.
 static USER_RETURN_HOOK: AtomicUsize = AtomicUsize::new(0);
 
-/// The hook slot of `vector`: a gate, then a user exception.
-fn slot(vector: u8) -> Option<usize> {
-    if (FIRST_GATE..=LAST_GATE).contains(&vector) {
-        return Some((vector - FIRST_GATE) as usize);
-    }
-    USER_EXCEPTIONS.iter().position(|&v| v == vector).map(|i| GATES + i)
+/// The vector is a gate.
+fn is_gate(vector: u64) -> bool {
+    (u64::from(FIRST_GATE)..=u64::from(LAST_GATE)).contains(&vector)
 }
 
-/// Plugs `hook` into the gate or the user exception `vector`.
+/// The hook slot of `vector`: a gate, a user exception, then SYSENTER.
+fn slot(vector: u64) -> Option<usize> {
+    if is_gate(vector) {
+        return Some((vector - u64::from(FIRST_GATE)) as usize);
+    }
+    if vector == SYSENTER {
+        return Some(GATES + USER_EXCEPTIONS.len());
+    }
+    USER_EXCEPTIONS.iter().position(|&v| u64::from(v) == vector).map(|i| GATES + i)
+}
+
+/// Plugs `hook` into the gate, the user exception or SYSENTER, `vector`.
 ///
 /// # Panics
 /// For another vector.
 ///
 /// # IRQL
 /// Any level.
-pub fn set_trap_hook(vector: u8, hook: Option<TrapHook>) {
+pub fn set_trap_hook(vector: u64, hook: Option<TrapHook>) {
     let slot = slot(vector).unwrap_or_else(|| panic!("no user-mode gate or exception {vector:#x}"));
     HOOKS[slot].store(hook.map_or(0, |f| f as usize), Ordering::Release);
 }
@@ -113,10 +130,11 @@ pub fn set_user_return_hook(hook: Option<TrapHook>) {
     USER_RETURN_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
 }
 
-/// Called by the gates and the user exception stubs with their frame,
-/// interrupts masked, at the IRQL of the interrupted user code
+/// Called by the gates, the user exception stubs and SYSENTER with their
+/// frame, interrupts masked, at the IRQL of the interrupted user code
 /// (PASSIVE_LEVEL). A gate without a hook gives EAX
-/// `STATUS_NOT_IMPLEMENTED`; an exception without a hook is a kernel bug.
+/// `STATUS_NOT_IMPLEMENTED`; an exception or SYSENTER without a hook is a
+/// kernel bug.
 #[cfg_attr(target_os = "none", unsafe(no_mangle))]
 #[cfg_attr(
     all(not(target_os = "none"), not(test)),
@@ -135,7 +153,7 @@ extern "sysv64" fn hal_trap_dispatch(frame: &mut KTrapFrame) {
 
 /// The vector's hook, or what [`hal_trap_dispatch`] does without one.
 fn dispatch(frame: &mut KTrapFrame) {
-    let vector = frame.vector as u8;
+    let vector = frame.vector;
     match slot(vector).map(|slot| HOOKS[slot].load(Ordering::Acquire)) {
         Some(hook) if hook != 0 => {
             // SAFETY: only `set_trap_hook` stores into HOOKS, always a
@@ -143,10 +161,8 @@ fn dispatch(frame: &mut KTrapFrame) {
             let hook: TrapHook = unsafe { core::mem::transmute(hook) };
             hook(frame);
         }
-        _ if (FIRST_GATE..=LAST_GATE).contains(&vector) => {
-            frame.rax = u64::from(abi::ntstatus::STATUS_NOT_IMPLEMENTED.0)
-        }
-        _ => panic!("user-mode exception {vector:#x} without a handler"),
+        _ if is_gate(vector) => frame.rax = u64::from(abi::ntstatus::STATUS_NOT_IMPLEMENTED.0),
+        _ => panic!("user-mode exception or SYSENTER {vector:#x} without a handler"),
     }
 }
 
@@ -244,6 +260,22 @@ core::arch::global_asm!(
     "HAL_EXCEPTION 06, 2, 0",
     "HAL_EXCEPTION 0d, 3, 1",
     "HAL_EXCEPTION 0e, 4, 1",
+    // SYSENTER: on the thread's kernel stack (SYSENTER_ESP), interrupts
+    // masked. The user's ESP is in EDX (zero-extended: the upper halves of
+    // the registers are undefined after compatibility mode); EFLAGS are the
+    // user's but for IF, which goes back on.
+    ".global hal_sysenter_entry",
+    "hal_sysenter_entry:",
+    "   push qword ptr [rip + HAL_SYSENTER_USER_SS]",
+    "   mov r11d, edx",
+    "   push r11",
+    "   pushfq",
+    "   or qword ptr [rsp], 0x200",
+    "   push qword ptr [rip + HAL_SYSENTER_USER_CS]",
+    "   push 0",
+    "   push 0",
+    "   push 0x100",
+    "   jmp hal_trap_common",
     "hal_trap_common:",
     "   cld",
     "   push rax",
@@ -334,10 +366,19 @@ mod tests {
     }
 
     #[test]
-    fn each_gate_and_user_exception_has_its_slot() {
+    fn each_gate_user_exception_and_sysenter_has_its_slot() {
         assert_eq!((slot(0x2A), slot(0x2E)), (Some(0), Some(4)));
         assert_eq!((slot(0x00), slot(0x0E)), (Some(5), Some(9)));
-        assert_eq!((slot(0x0F), slot(0x29), slot(0x2F)), (None, None, None));
+        assert_eq!(slot(SYSENTER), Some(10));
+        assert_eq!((slot(0x0F), slot(0x29), slot(0x2F), slot(0x12A)), (None, None, None, None));
+    }
+
+    #[test]
+    #[should_panic(expected = "without a handler")]
+    fn sysenter_needs_its_hook() {
+        let mut frame = KTrapFrame { vector: SYSENTER, ..KTrapFrame::default() };
+        // `dispatch`: a panic does not unwind out of `extern "sysv64"`.
+        dispatch(&mut frame);
     }
 
     #[test]

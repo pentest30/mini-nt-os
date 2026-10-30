@@ -290,7 +290,6 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
     hal::irql::set_apc_hook(Some(ke::apc::ki_apc_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
-    hal::idt::set_syscall_hook(Some(system_call));
     sys::gates::install();
     sys::exceptions::install();
     sys::apc::install();
@@ -400,27 +399,6 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         ke::sched::terminate_user_threads();
         // kernel_shell returns when ESC is pressed → back to launcher.
         kernel_shell(boot_info.hhdm_offset);
-    }
-}
-
-/// A system call through SYSENTER (`hal::sysenter`), interrupts masked, on
-/// the calling thread's kernel stack (`int 2Eh` goes through
-/// `sys::gates`). A Ps thread goes to KiSystemService (`sys`), interrupts
-/// enabled, without a trap frame; a thread of the legacy loader to its own
-/// dispatcher (`syscall`), which has its own numbers.
-///
-/// # IRQL
-/// PASSIVE_LEVEL, from user mode.
-fn system_call(number: u32, arguments: u32) -> u32 {
-    if ke::sched::current_thread_owner().is_null() {
-        return syscall::dispatch(number, arguments);
-    }
-    x86_64::instructions::interrupts::enable();
-    let completion = sys::dispatch(number, arguments, None);
-    x86_64::instructions::interrupts::disable();
-    match completion {
-        sys::Completion::Status(status) => status.0,
-        sys::Completion::Frame => unreachable!("a new context without a trap frame"),
     }
 }
 

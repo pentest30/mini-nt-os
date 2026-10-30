@@ -1,10 +1,7 @@
 //! Les APC utilisateur (02 §6.5, `ke::apc`) : NtQueueApcThread les met en
 //! file, une attente alertable ou NtTestAlert les rend livrables, et le
 //! retour en mode utilisateur par la trame de trap ([`install`]) les livre à
-//! `ntdll!KiUserApcDispatcher`.
-//!
-//! Par SYSENTER, sans trame, ils restent en file : la prochaine attente
-//! alertable rend encore STATUS_USER_APC.
+//! `ntdll!KiUserApcDispatcher`, après `int 2Eh` comme après SYSENTER.
 
 use abi::ntstatus::{NtStatus, STATUS_SUCCESS};
 use hal::trap::{set_user_return_hook, KTrapFrame};

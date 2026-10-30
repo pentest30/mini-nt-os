@@ -12,9 +12,8 @@
 //! stack overflow, preventing a triple fault and machine reset.
 //!
 //! # Syscall ABI
-//! System calls come through INT 0x2E (`trap`, a full KTRAP_FRAME) or
-//! SYSENTER (`sysenter`, on Intel, ADR-004), whose hook takes the service
-//! number and the arguments' address.
+//! System calls come through INT 0x2E or SYSENTER (on Intel, ADR-004), both
+//! with a full KTRAP_FRAME (`trap`).
 //!
 //! WI7e Ch.3 "Trap Dispatching", Ch.2 "System Service Dispatching"
 
@@ -30,7 +29,6 @@ use super::bugcheck::{self, interrupted_rbp, BugCheckCode, StackStart};
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
 
 static IDT: Once<InterruptDescriptorTable> = Once::new();
-static SYSCALL_HOOK: AtomicUsize = AtomicUsize::new(0);
 static USER_FAULT_HOOK: AtomicUsize = AtomicUsize::new(0);
 /// `fn(u64) -> Option<(u64, u64)>`: guard-page lookup for kernel stacks, see
 /// [`set_stack_guard_hook`].
@@ -588,19 +586,6 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     super::irql::exit_interrupt(interrupted);
 }
 
-/// The SYSENTER system call (`sysenter`): to the kernel's hook, with the
-/// service number and the arguments' address.
-#[cfg(target_os = "none")]
-#[inline]
-pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
-    let hook = SYSCALL_HOOK.load(Ordering::Acquire);
-    if hook == 0 {
-        return 0xC000_0002;
-    }
-    let f: fn(u32, u32) -> u32 = unsafe { core::mem::transmute(hook) };
-    f(number, args_ptr)
-}
-
 /// Kernel-stack guard lookup: the `(bottom, top)` of the stack whose guard
 /// page holds the address, if any.
 pub type StackGuardHook = fn(u64) -> Option<(u64, u64)>;
@@ -653,11 +638,6 @@ fn page_fault_hook(addr: u64, error: PageFaultErrorCode) -> Option<NtStatus> {
 pub fn set_user_fault_hook(hook: Option<fn(NtStatus)>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     USER_FAULT_HOOK.store(addr, Ordering::Release);
-}
-
-pub fn set_syscall_hook(hook: Option<fn(u32, u32) -> u32>) {
-    let addr = hook.map_or(0usize, |f| f as usize);
-    SYSCALL_HOOK.store(addr, Ordering::Release);
 }
 
 // ── PS/2 keyboard IRQ1 handler ────────────────────────────────────────────

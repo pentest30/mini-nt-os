@@ -1,18 +1,16 @@
 //! Les services système (02 §6.2) : KiSystemService pour les threads de Ps,
 //! sur les tables générées à partir de ReactOS (`abi::services`).
 //!
-//! Un appel système arrive par `int 2Eh` ([`gates`], sur la trame de trap)
-//! ou SYSENTER (`hal::sysenter`) avec le numéro du service dans EAX et
-//! l'adresse de ses arguments dans la pile utilisateur. [`dispatch`] trouve le service, copie
+//! Un appel système arrive par `int 2Eh` ou SYSENTER ([`gates`], sur la
+//! trame de trap) avec le numéro du service dans EAX et ses arguments dans
+//! la pile utilisateur. [`dispatch`] trouve le service, copie
 //! ses arguments (`ke::usermem`) et appelle son handler, interruptions
 //! actives, à PASSIVE_LEVEL : il peut attendre ou être préempté. Un numéro
 //! hors des tables rend `STATUS_INVALID_SYSTEM_SERVICE` ; un service sans
 //! handler, `STATUS_NOT_IMPLEMENTED`, journalisé à son premier appel.
 //!
 //! Un service peut aussi donner au thread un nouveau contexte, dans sa trame
-//! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException). SYSENTER n'a
-//! pas encore de trame (son retour passe par ntdll, M3) : ces services y
-//! rendent `STATUS_NOT_IMPLEMENTED`.
+//! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException).
 //!
 //! Les threads de l'ancien chargeur gardent leur dispatcher (`syscall.rs`),
 //! qui a ses propres numéros, jusqu'à sa suppression.
@@ -102,11 +100,11 @@ static REPORTED: [AtomicU32; (NTOSKRNL.len() + WIN32K.len()).div_ceil(32)] =
 
 /// KiSystemService : le service `number`, avec ses arguments copiés depuis
 /// l'adresse utilisateur `arguments` ; `frame` est la trame de trap du
-/// thread, s'il en a une.
+/// thread.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interruptions actives, dans un thread de Ps.
-pub fn dispatch(number: u32, arguments: u32, frame: Option<&mut KTrapFrame>) -> Completion {
+pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completion {
     let Some((table, service)) = lookup(number) else {
         return Completion::Status(STATUS_INVALID_SYSTEM_SERVICE);
     };
@@ -125,14 +123,12 @@ pub fn dispatch(number: u32, arguments: u32, frame: Option<&mut KTrapFrame>) -> 
         Table::Win32k => None,
     };
     let arguments = &words[..count];
-    match (handler, frame) {
-        (Some(Handler::Status(handler)), _) => Completion::Status(handler(arguments)),
-        (Some(Handler::Frame(handler)), Some(frame)) => {
+    match handler {
+        Some(Handler::Status(handler)) => Completion::Status(handler(arguments)),
+        Some(Handler::Frame(handler)) => {
             handler(arguments, frame).map_or_else(Completion::Status, |()| Completion::Frame)
         }
-        // SYSENTER, without a trap frame.
-        (Some(Handler::Frame(_)), None) => Completion::Status(STATUS_NOT_IMPLEMENTED),
-        (None, _) => {
+        None => {
             let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
             let mask = 1 << (bit % 32);
             if REPORTED[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
