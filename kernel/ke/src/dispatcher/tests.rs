@@ -891,7 +891,7 @@ fn special(thread: *mut KThread) -> *mut KApc {
 }
 
 fn normal(thread: *mut KThread) -> *mut KApc {
-    apc(thread, on_kernel, Some(on_normal), ProcessorMode::Kernel)
+    apc(thread, on_kernel, Some(NormalRoutine::Kernel(on_normal)), ProcessorMode::Kernel)
 }
 
 /// Met `apc` en file avec l'étiquette `label` (premier argument système).
@@ -971,7 +971,7 @@ fn special_apcs_run_before_normal_ones_each_in_queue_order() {
 #[test]
 fn a_kernel_routine_can_cancel_the_normal_routine() {
     let t = apc_setup();
-    let a = apc(t, cancel_normal, Some(on_normal), ProcessorMode::Kernel);
+    let a = apc(t, cancel_normal, Some(NormalRoutine::Kernel(on_normal)), ProcessorMode::Kernel);
     at_dispatch_level(|| assert!(queue(a, 1)));
     assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc)]);
     finish();
@@ -1010,7 +1010,7 @@ fn a_guarded_region_holds_back_every_kernel_apc() {
 fn a_normal_apc_waits_for_the_normal_routine_in_progress_but_a_special_one_does_not() {
     let t = apc_setup();
     MORE.with_borrow_mut(|m| m.extend([(normal(t), 2), (special(t), 3)]));
-    let first = apc(t, on_kernel, Some(queue_more), ProcessorMode::Kernel);
+    let first = apc(t, on_kernel, Some(NormalRoutine::Kernel(queue_more)), ProcessorMode::Kernel);
     at_dispatch_level(|| assert!(queue(first, 1)));
     assert_eq!(
         ran_list(),
@@ -1108,8 +1108,8 @@ fn rundown_empties_both_queues_calls_each_rundown_routine_and_closes_the_thread_
     let with_rundown = |normal: Option<NormalRoutine>, mode| {
         Box::leak(Box::new(KApc::new(other, on_kernel, Some(on_rundown), normal, mode, ptr::null_mut()))) as *mut KApc
     };
-    let user = with_rundown(Some(on_normal), ProcessorMode::User);
-    let kernel = with_rundown(Some(on_normal), ProcessorMode::Kernel);
+    let user = with_rundown(Some(NormalRoutine::User(USER_ROUTINE)), ProcessorMode::User);
+    let kernel = with_rundown(Some(NormalRoutine::Kernel(on_normal)), ProcessorMode::Kernel);
     let without = normal(other);
     for (label, a) in [user, kernel, without].into_iter().enumerate() {
         assert!(queue(a, label));
@@ -1131,13 +1131,91 @@ fn a_user_apc_ends_an_alertable_user_mode_wait_and_stays_queued() {
     let t = apc_setup();
     let other = new_thread();
     let e = event(ObjectType::NotificationEvent, false);
-    let a = apc(t, on_kernel, Some(on_normal), ProcessorMode::User);
+    let a = user_apc(t, on_kernel);
     then(move || {
         run_as(other);
         assert!(queue(a, 1));
     });
     assert_eq!(alertable_user_wait(hdr(e)), STATUS_USER_APC);
-    assert!(inserted(a), "delivered on the way back to user mode (M3)");
+    assert!(inserted(a), "delivered on the way back to user mode");
     assert!(ran_list().is_empty());
     finish();
+}
+
+// ── APC utilisateur (`ke::apc`) ──────────────────────────────────────────────
+
+use crate::apc::{ke_test_alert_thread, ki_take_user_apc, UserApc};
+
+/// La routine des APC utilisateur des tests, une adresse du mode utilisateur.
+const USER_ROUTINE: u32 = 0x40_1000;
+
+fn user_apc(thread: *mut KThread, kernel: crate::apc::KernelRoutine) -> *mut KApc {
+    let context = ptr::without_provenance_mut(0xC0);
+    Box::leak(Box::new(KApc::new(
+        thread,
+        kernel,
+        None,
+        Some(NormalRoutine::User(USER_ROUTINE)),
+        ProcessorMode::User,
+        context,
+    )))
+}
+
+fn take_user_apc() -> Option<UserApc> {
+    // SAFETY: le thread courant du test est initialisé.
+    unsafe { ki_take_user_apc::<Sim>() }
+}
+
+/// Ce que reçoit le mode utilisateur pour l'APC `label`.
+fn delivered(label: u32) -> Option<UserApc> {
+    Some(UserApc { routine: USER_ROUTINE, context: 0xC0, argument1: label, argument2: 0 })
+}
+
+#[test]
+fn a_user_apc_waits_for_a_test_alert_then_comes_one_at_a_time_in_order() {
+    let t = apc_setup();
+    let (first, second) = (user_apc(t, on_kernel), user_apc(t, on_kernel));
+    assert!(queue(first, 1) && queue(second, 2));
+    // SAFETY: thread du test.
+    assert!(!unsafe { (*t).user_apc_pending }, "queued, not yet to deliver");
+    assert_eq!(take_user_apc(), None, "no alertable wait, no test alert");
+    ke_test_alert_thread::<Sim>();
+    assert_eq!(take_user_apc(), delivered(1));
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc)], "its kernel routine first, at APC_LEVEL");
+    assert_eq!(take_user_apc(), None, "the next waits for NtContinue's test alert");
+    ke_test_alert_thread::<Sim>();
+    assert_eq!(take_user_apc(), delivered(2));
+    ke_test_alert_thread::<Sim>();
+    // SAFETY: thread du test.
+    assert!(!unsafe { (*t).user_apc_pending }, "nothing left");
+    assert!(!inserted(first) && !inserted(second));
+    finish();
+}
+
+#[test]
+fn an_alertable_user_mode_wait_returns_at_once_on_a_queued_user_apc() {
+    let t = apc_setup();
+    let e = event(ObjectType::NotificationEvent, false);
+    assert!(queue(user_apc(t, on_kernel), 1));
+    assert_eq!(alertable_user_wait(hdr(e)), STATUS_USER_APC);
+    assert_eq!(take_user_apc(), delivered(1), "the wait made it deliverable");
+    finish();
+}
+
+#[test]
+fn a_user_apc_whose_kernel_routine_cancels_it_gives_way_to_the_next() {
+    let t = apc_setup();
+    let (cancelled, next) = (user_apc(t, cancel_normal), user_apc(t, on_kernel));
+    assert!(queue(cancelled, 1) && queue(next, 2));
+    ke_test_alert_thread::<Sim>();
+    assert_eq!(take_user_apc(), delivered(2));
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc), Ran::Kernel(2, Irql::Apc)]);
+    finish();
+}
+
+#[test]
+#[should_panic(expected = "runs in its mode")]
+fn a_user_apc_needs_a_user_mode_routine() {
+    let t = apc_setup();
+    apc(t, on_kernel, Some(NormalRoutine::Kernel(on_normal)), ProcessorMode::User);
 }

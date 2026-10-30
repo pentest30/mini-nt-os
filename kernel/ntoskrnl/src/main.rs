@@ -1072,7 +1072,14 @@ fn apc_self_test() {
     // Above the boot thread: it runs, and starts waiting, before this returns.
     let tid = spawn_kernel_thread(ke::sched::current_priority() + 1, sleeper, event.cast());
     let waiter = ke::sched::thread_object(tid).expect("thread object").cast::<KThread>();
-    let to_waiter = leak(KApc::new(waiter, record, None, Some(normal), ProcessorMode::Kernel, core::ptr::null_mut()));
+    let to_waiter = leak(KApc::new(
+        waiter,
+        record,
+        None,
+        Some(NormalRoutine::Kernel(normal)),
+        ProcessorMode::Kernel,
+        core::ptr::null_mut(),
+    ));
     // SAFETY: as above; the waiter is a registered thread, never freed.
     unsafe {
         ke_insert_queue_apc::<KePlatform>(to_waiter, arg(&KERNEL_ROUTINE), arg(&NORMAL_ROUTINE), IO_NO_INCREMENT)

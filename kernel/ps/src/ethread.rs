@@ -188,7 +188,7 @@ impl EThread {
                 kthread,
                 exit_kernel_routine,
                 None,
-                Some(exit_normal_routine as NormalRoutine),
+                Some(NormalRoutine::Kernel(exit_normal_routine)),
                 ProcessorMode::Kernel,
                 core::ptr::null_mut(),
             ));

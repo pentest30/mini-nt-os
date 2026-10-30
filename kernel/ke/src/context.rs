@@ -9,18 +9,29 @@
 //! (un sélecteur invalide ferait fauter le retour en mode utilisateur, dans
 //! le noyau).
 //!
+//! Une livraison vers le mode utilisateur (exception, APC) met le contexte
+//! complet sur la pile du thread ([`push_user_context`]) et fait reprendre la
+//! trame dans un répartiteur de ntdll ([`enter_user_dispatcher`]).
+//!
 //! Pas encore : l'état x87/SSE (`CONTEXT_FLOATING_POINT`,
 //! `CONTEXT_EXTENDED_REGISTERS`, depuis l'état FPU du thread) et les
 //! registres de débogage.
 
-use abi::context::{Context32, CONTEXT_CONTROL, CONTEXT_INTEGER, CONTEXT_SEGMENTS};
+use core::mem::size_of;
+
+use abi::context::{Context32, CONTEXT_CONTROL, CONTEXT_FULL, CONTEXT_INTEGER, CONTEXT_SEGMENTS};
+use abi::ntstatus::{NtStatus, STATUS_ACCESS_VIOLATION};
 use hal::trap::KTrapFrame;
+
+use crate::usermem::UserPtr;
 
 /// Les drapeaux d'EFLAGS que le mode utilisateur fixe : CF, PF, AF, ZF, SF,
 /// TF, DF, OF, AC et ID. IOPL, NT, RF, VM, VIF et VIP restent au noyau.
 pub const EFLAGS_USER_MASK: u32 = 0x0024_0DD5;
 /// Les drapeaux toujours mis : le bit 1, réservé, et IF.
 pub const EFLAGS_USER_SET: u32 = 0x0000_0202;
+/// TF : le pas à pas.
+const EFLAGS_TF: u64 = 0x100;
 
 /// Les sélecteurs d'un thread i386 en mode utilisateur, RPL 3 compris.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +122,38 @@ pub fn apply_user_context(context: &Context32, flags: u32, frame: &mut KTrapFram
         frame.es = u64::from(selectors.data);
         frame.ds = u64::from(selectors.data);
     }
+}
+
+/// Écrit le `CONTEXT` complet de la trame sur la pile utilisateur, sous ESP
+/// aligné sur 4 ; rend son adresse.
+///
+/// # IRQL
+/// < DISPATCH_LEVEL. Peut faire des fautes de page.
+pub fn push_user_context(frame: &KTrapFrame) -> Result<u32, NtStatus> {
+    let mut context = Context32::zeroed();
+    context.context_flags = CONTEXT_FULL;
+    context_from_trap_frame(frame, CONTEXT_FULL, &mut context);
+    let at = (frame.rsp as u32 & !3).checked_sub(size_of::<Context32>() as u32).ok_or(STATUS_ACCESS_VIOLATION)?;
+    UserPtr::<Context32>::new(at).write(&context)?;
+    Ok(at)
+}
+
+/// La trame reprend en mode utilisateur à `eip`, pile en `esp`, avec les
+/// sélecteurs imposés et sans pas à pas, qui ne suit pas le thread dans le
+/// répartiteur.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn enter_user_dispatcher(frame: &mut KTrapFrame, eip: u32, esp: u32) {
+    let selectors = UserSelectors::current();
+    frame.rsp = u64::from(esp);
+    frame.rip = u64::from(eip);
+    frame.rflags &= !EFLAGS_TF;
+    frame.cs = u64::from(selectors.code);
+    frame.ss = u64::from(selectors.data);
+    frame.ds = u64::from(selectors.data);
+    frame.es = u64::from(selectors.data);
+    frame.fs = u64::from(selectors.teb);
 }
 
 #[cfg(test)]

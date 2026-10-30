@@ -11,23 +11,18 @@
 //! sans répartiteur, ou une pile qui ne reçoit pas le contexte terminent le
 //! processus avec le code de l'exception ; c'est à l'appelant de le faire.
 
-use core::mem::size_of;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use abi::context::{Context32, CONTEXT_FULL};
 use abi::exception::ExceptionRecord32;
 use abi::ntstatus::NtStatus;
 use hal::trap::KTrapFrame;
 
-use crate::context::{context_from_trap_frame, UserSelectors};
+use crate::context::{enter_user_dispatcher, push_user_context};
 use crate::usermem::{copy_to_user, UserPtr};
 
 /// KeUserExceptionDispatcher : l'adresse de `ntdll!KiUserExceptionDispatcher`,
 /// la même dans chaque processus ; 0 sans ntdll.
 static USER_EXCEPTION_DISPATCHER: AtomicU32 = AtomicU32::new(0);
-
-/// TF : le pas à pas, qui ne suit pas le thread dans le répartiteur.
-const EFLAGS_TF: u64 = 0x100;
 
 /// Fixe le répartiteur d'exceptions du mode utilisateur ; 0 n'en laisse
 /// aucun.
@@ -64,28 +59,15 @@ pub fn dispatch_user_exception(
     if !first_chance || dispatcher == 0 {
         return Err(code);
     }
-    let mut context = Context32::zeroed();
-    context.context_flags = CONTEXT_FULL;
-    context_from_trap_frame(frame, CONTEXT_FULL, &mut context);
     // CONTEXT, then the record's used part, then their two addresses, each
     // 4-byte aligned under the thread's stack pointer.
-    let context_at = (frame.rsp as u32 & !3).checked_sub(size_of::<Context32>() as u32).ok_or(code)?;
+    let context_at = push_user_context(frame).map_err(|_| code)?;
     let record_size = record.stack_size();
     let record_at = context_at.checked_sub(record_size as u32).ok_or(code)?;
     let arguments_at = record_at.checked_sub(8).ok_or(code)?;
-    UserPtr::<Context32>::new(context_at).write(&context).map_err(|_| code)?;
     copy_to_user(u64::from(record_at), &record.as_bytes()[..record_size]).map_err(|_| code)?;
     UserPtr::<[u32; 2]>::new(arguments_at).write(&[record_at, context_at]).map_err(|_| code)?;
-
-    let selectors = UserSelectors::current();
-    frame.rsp = u64::from(arguments_at);
-    frame.rip = u64::from(dispatcher);
-    frame.rflags &= !EFLAGS_TF;
-    frame.cs = u64::from(selectors.code);
-    frame.ss = u64::from(selectors.data);
-    frame.ds = u64::from(selectors.data);
-    frame.es = u64::from(selectors.data);
-    frame.fs = u64::from(selectors.teb);
+    enter_user_dispatcher(frame, dispatcher, arguments_at);
     Ok(())
 }
 

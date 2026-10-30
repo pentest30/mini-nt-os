@@ -656,8 +656,14 @@ pub unsafe fn ke_wait_for_multiple_objects<P: Platform>(
         // SAFETY (jusqu'à la fin de l'itération) : verrou tenu ; les objets, le
         // thread et `blocks` (count blocs) sont valides (garanti par l'appelant).
         unsafe {
-            // APC utilisateur déjà en attente : une attente alertable retourne immédiatement.
-            if alertable && wait_mode == ProcessorMode::User && (*thread).user_apc_pending {
+            // APC utilisateur en file : une attente alertable en mode
+            // utilisateur retourne aussitôt, et le thread le recevra.
+            if alertable
+                && wait_mode == ProcessorMode::User
+                && ((*thread).user_apc_pending
+                    || !ListEntry::is_empty(ptr::addr_of!((*thread).apc_list_head[ProcessorMode::User as usize])))
+            {
+                (*thread).user_apc_pending = true;
                 DISPATCHER_LOCK.release::<P>(old_irql);
                 return STATUS_USER_APC;
             }
@@ -1037,7 +1043,8 @@ pub unsafe fn ki_thread_exit<P: Platform>(thread: *mut KThread) {
 
 /// Appelé après l'insertion d'un APC utilisateur. Un thread en attente alertable
 /// en mode utilisateur sort avec STATUS_USER_APC (SleepEx, WaitForSingleObjectEx...),
-/// relevé d'`increment` (celui de l'insertion de l'APC).
+/// relevé d'`increment` (celui de l'insertion de l'APC), et recevra ses APC
+/// utilisateur ; un autre ne les reçoit pas encore.
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `thread` est valide.
@@ -1047,9 +1054,9 @@ pub unsafe fn ki_thread_exit<P: Platform>(thread: *mut KThread) {
 pub unsafe fn ki_try_unwait_for_user_apc<P: Platform>(thread: *mut KThread, increment: u8) {
     // SAFETY: garanti par l'appelant.
     unsafe {
-        (*thread).user_apc_pending = true;
         if (*thread).state == ThreadState::Waiting && (*thread).alertable && (*thread).wait_mode == ProcessorMode::User
         {
+            (*thread).user_apc_pending = true;
             ki_unwait_thread::<P>(thread, STATUS_USER_APC, increment);
         }
     }
