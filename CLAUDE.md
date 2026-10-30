@@ -84,8 +84,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   protégés (`rundown::RundownRef`), puis l'objet processus est signalé ; le *reaper* (thread système) rend piles noyau
   et threads Ke (`ke::sched::delete_thread`). La pile utilisateur grandit par sa garde
   (`AddressSpace::extend_user_stack`, TEB du thread courant dans le KPCR) jusqu'à `STATUS_STACK_OVERFLOW`. Une faute
-  utilisateur non résolue termine le processus avec le code de l'exception jusqu'au M3. Pas encore : politique DEP,
-  handles noyau, Se (accès accordés, ADR-011).
+  utilisateur non résolue termine le processus avec le code de l'exception jusqu'au M3. DEP selon la règle OptIn d'XP
+  SP2 (ADR-020) : options d'exécution par processus (`EProcess::set_execute_options`, `MEM_EXECUTE_OPTION_*`), sans
+  DEP toute page lisible s'exécute (`AddressSpace::set_execute_enabled`), la VAD garde la protection demandée. Pas
+  encore : handles noyau, Se (accès accordés, ADR-011).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
