@@ -53,10 +53,12 @@ pub enum PageUsage {
     UserPrivate = 4,
     /// Un tampon contigu du noyau, rendu après usage (lecture d'un fichier).
     Buffer = 5,
+    /// Le pool paginé (jamais paginé encore, ADR-010).
+    PagedPool = 6,
 }
 
 /// Nombre d'usages de [`PageUsage`].
-pub const USAGE_COUNT: usize = 6;
+pub const USAGE_COUNT: usize = 7;
 
 impl PageUsage {
     const ALL: [PageUsage; USAGE_COUNT] = [
@@ -66,6 +68,7 @@ impl PageUsage {
         PageUsage::NonPagedPool,
         PageUsage::UserPrivate,
         PageUsage::Buffer,
+        PageUsage::PagedPool,
     ];
 }
 

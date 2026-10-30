@@ -8,6 +8,7 @@ expect = [smoke] kernel W^X ok
 expect = [smoke] identity map removed
 expect = [smoke] heap self-test ok
 expect = [smoke] Mm: PFN round trip ok
+expect = [smoke] Mm: pools grow
 expect = [smoke] symbols: kernel functions found by address
 expect = [smoke] TPR: clock ticks at DISPATCH_LEVEL
 expect = [smoke] dispatch deferred
