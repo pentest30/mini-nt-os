@@ -102,6 +102,17 @@ macro_rules! user_value {
 // i386 aligns 64-bit integers on 4 bytes, like LARGE_INTEGER in a probe.
 user_value!(u8 => 1, i8 => 1, u16 => 2, i16 => 2, u32 => 4, i32 => 4, u64 => 4, i64 => 4);
 
+// SAFETY: integers and arrays of integers, without padding (the layouts are
+// asserted in abi).
+unsafe impl UserValue for abi::context::Context32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: as above.
+unsafe impl UserValue for abi::exception::ExceptionRecord32 {
+    const ALIGNMENT: usize = 4;
+}
+
 // SAFETY: an array of values valid for any bit pattern, without padding,
 // is one too.
 unsafe impl<T: UserValue, const N: usize> UserValue for [T; N] {

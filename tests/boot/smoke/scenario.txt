@@ -31,6 +31,7 @@ expect = [smoke] Ps: processes ended on request, on a fault and before their fir
 expect = [smoke] sys: system services from user mode:
 expect = hello from Mino user mode
 expect = [smoke] gates: int 2Ah to 2Eh from user mode
+expect = [smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher
 expect = [smoke] FPU: state kept across switches
 expect = [smoke] FAT read probe hit
 expect = [smoke] Mm: PFN database consistent at the end of phase 1

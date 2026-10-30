@@ -5,15 +5,11 @@
 //! |---|---|
 //! | `int 2Ah` | KiGetTickCount : EAX reçoit les millisecondes depuis le démarrage |
 //! | `int 2Bh` | KiCallbackReturn : `STATUS_NO_CALLBACK_ACTIVE`, en attendant `KeUserModeCallback` (M6) |
-//! | `int 2Ch` | KiRaiseAssertion : le processus finit sur `STATUS_ASSERTION_FAILURE` |
+//! | `int 2Ch` | KiRaiseAssertion : l'exception `STATUS_ASSERTION_FAILURE`, à l'adresse de l'`int 2Ch` ([`super::exceptions`]) |
 //! | `int 2Dh` | KiDebugService : `DbgPrint` vers le port série |
 //! | `int 2Eh` | KiSystemService ([`super::dispatch`]) |
-//!
-//! Jusqu'à ce que les exceptions atteignent le mode utilisateur (M3), une
-//! assertion termine le processus avec son code, comme une exception non
-//! gérée.
 
-use abi::ntstatus::{NtStatus, STATUS_ASSERTION_FAILURE, STATUS_NO_CALLBACK_ACTIVE, STATUS_SUCCESS};
+use abi::ntstatus::{STATUS_ASSERTION_FAILURE, STATUS_NO_CALLBACK_ACTIVE, STATUS_SUCCESS};
 use hal::trap::{set_trap_hook, KTrapFrame};
 
 /// Le service de débogage qui affiche une chaîne (BREAKPOINT_PRINT).
@@ -44,10 +40,11 @@ fn callback_return(frame: &mut KTrapFrame) {
     frame.rax = u64::from(STATUS_NO_CALLBACK_ACTIVE.0);
 }
 
-/// `int 2Ch` : une assertion a échoué en mode utilisateur.
-fn raise_assertion(_frame: &mut KTrapFrame) {
-    x86_64::instructions::interrupts::enable();
-    ps::terminate_current_process(STATUS_ASSERTION_FAILURE);
+/// `int 2Ch` : une assertion a échoué en mode utilisateur ; l'exception est
+/// à l'instruction, deux octets avant EIP.
+fn raise_assertion(frame: &mut KTrapFrame) {
+    frame.rip -= 2;
+    super::exceptions::raise(frame, STATUS_ASSERTION_FAILURE, &[]);
 }
 
 /// `int 2Dh` : EAX donne le service, ECX et EDX ses arguments ; `ntdll` fait
@@ -89,7 +86,8 @@ fn system_service(frame: &mut KTrapFrame) {
         return;
     }
     x86_64::instructions::interrupts::enable();
-    let status: NtStatus = super::dispatch(number, arguments);
+    if let super::Completion::Status(status) = super::dispatch(number, arguments, Some(&mut *frame)) {
+        frame.rax = u64::from(status.0);
+    }
     x86_64::instructions::interrupts::disable();
-    frame.rax = u64::from(status.0);
 }

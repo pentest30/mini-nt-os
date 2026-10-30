@@ -66,6 +66,32 @@ pub unsafe fn init() {
         idt.x87_floating_point.set_handler_fn(exception_x87_floating_point);
         idt.simd_floating_point.set_handler_fn(exception_simd_floating_point);
 
+        // The user exceptions (`trap`): a stub sends user mode to a trap
+        // frame, kernel mode to the handler above. #BP is DPL 3, so that
+        // user mode may execute `int 3`.
+        #[cfg(target_os = "none")]
+        {
+            type Handler = extern "x86-interrupt" fn(InterruptStackFrame);
+            type ErrorHandler = extern "x86-interrupt" fn(InterruptStackFrame, u64);
+            let stub = |vector, handler: u64| VirtAddr::new(super::trap::exception_stub(vector, handler));
+            // SAFETY: each stub is an interrupt-gate entry: it returns with
+            // IRETQ, or jumps to the vector's handler with the stack as the
+            // CPU left it.
+            unsafe {
+                idt.divide_error.set_handler_addr(stub(0x00, exception_divide_error as Handler as *const () as u64));
+                idt.breakpoint
+                    .set_handler_addr(stub(0x03, exception_breakpoint as Handler as *const () as u64))
+                    .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
+                idt.invalid_opcode
+                    .set_handler_addr(stub(0x06, exception_invalid_opcode as Handler as *const () as u64));
+                idt.general_protection_fault
+                    .set_handler_addr(stub(0x0D, exception_gpf as ErrorHandler as *const () as u64));
+                let page_fault =
+                    exception_page_fault as extern "x86-interrupt" fn(InterruptStackFrame, PageFaultErrorCode);
+                idt.page_fault.set_handler_addr(stub(0x0E, page_fault as *const () as u64));
+            }
+        }
+
         // Double fault must use IST[0] to survive kernel stack overflow.
         // SAFETY: DOUBLE_FAULT_IST_INDEX (0) is valid; gdt::init() populated
         // interrupt_stack_table[0] with a live 16 KiB stack before this runs.
@@ -135,10 +161,9 @@ extern "x86-interrupt" fn exception_simd_floating_point(frame: InterruptStackFra
     floating_point_trap(19, &frame, "SIMD floating-point exception (#XM)", rbp);
 }
 
-/// A floating-point trap. In user mode, it goes to the user fault hook as on
-/// any other user fault, until exceptions reach user mode (M3), with
-/// `STATUS_ACCESS_VIOLATION`: the `STATUS_FLOAT_*` code needs the FPU status
-/// decoded, which comes with KiDispatchException. In kernel mode, where the
+/// A floating-point trap. In user mode, it goes to the user fault hook, with
+/// `STATUS_ACCESS_VIOLATION`, until it becomes an exception: the
+/// `STATUS_FLOAT_*` code needs the FPU status decoded. In kernel mode, where the
 /// FPU is only used under `ke::fpu::with_floating_point` with every exception
 /// masked, it is a STOP.
 fn floating_point_trap(trap: u64, frame: &InterruptStackFrame, what: &str, rbp: u64) -> ! {
@@ -278,9 +303,8 @@ fn exception_page_fault_inner(frame: &InterruptStackFrame, error: PageFaultError
     };
     let rip = frame.instruction_pointer.as_u64();
 
-    // The exception of a user-mode access, if nothing resolves it.
-    let mut exception = STATUS_ACCESS_VIOLATION;
-    // A user address is the memory manager's (demand-zero and guard pages,
+    // User-mode faults go through a trap frame (`trap`): only the kernel's
+    // reach this handler. A user address is the memory manager's (demand-zero and guard pages,
     // `mm::fault`); it takes locks, so not at DISPATCH_LEVEL or above.
     if cr2_raw < USER_HALF_END {
         // P3 of IRQL_NOT_LESS_OR_EQUAL and of an access violation: 1 for a
@@ -306,7 +330,7 @@ fn exception_page_fault_inner(frame: &InterruptStackFrame, error: PageFaultError
                 IN_PF_OUTER.store(false, Ordering::SeqCst);
                 return None;
             }
-            Some(status) if !error.contains(PageFaultErrorCode::USER_MODE) => {
+            Some(status) => {
                 if let Some(fixup) = recover(rip) {
                     return Some(fixup);
                 }
@@ -324,19 +348,11 @@ fn exception_page_fault_inner(frame: &InterruptStackFrame, error: PageFaultError
                     StackStart::Trap { rip, rbp },
                 );
             }
-            Some(status) => {
-                // User mode: the thread ends below, until exceptions reach
-                // user mode (M3).
-                super::serial::write_str("[#PF] user-mode exception 0x");
-                serial_hex64(u64::from(status.0));
-                exception = status;
-            }
-            None if !error.contains(PageFaultErrorCode::USER_MODE) => {
+            None => {
                 if let Some(fixup) = recover(rip) {
                     return Some(fixup);
                 }
             }
-            None => {}
         }
     }
 
@@ -347,30 +363,9 @@ fn exception_page_fault_inner(frame: &InterruptStackFrame, error: PageFaultError
     serial_hex64(rip);
     super::serial::write_str(" err=0x");
     serial_hex64(error.bits());
-    // If RIP=0 (NULL call), dump the return address from the user stack
-    // to find WHERE the CALL [NULL] happened
-    // Dump stack pointer and top-of-stack for all user faults
-    let user_esp = frame.stack_pointer.as_u64();
-    super::serial::write_str(" ESP=0x");
-    serial_hex64(user_esp);
-    if rip == 0 && user_esp > 0x1000 && user_esp < 0x80000000 {
-        // Dump a few stack words
-        super::serial::write_str(" stk:");
-        for j in 0u64..4 {
-            let val = unsafe { core::ptr::read_volatile((user_esp + j * 4) as *const u32) };
-            super::serial::write_str(" ");
-            serial_hex64(val as u64);
-        }
-    }
+    super::serial::write_str(" RSP=0x");
+    serial_hex64(frame.stack_pointer.as_u64());
     super::serial::write_str("\n");
-
-    // User-mode page faults: terminate the game thread instead of panicking.
-    let is_user = error.contains(PageFaultErrorCode::USER_MODE);
-    if is_user {
-        super::serial::write_str("[#PF] user-mode fault\n");
-        IN_PF_OUTER.store(false, core::sync::atomic::Ordering::SeqCst);
-        user_fault(exception);
-    }
 
     // Kernel-mode fault in a guard page: a stack overflow whose #PF frame still
     // fitted above the guard (otherwise it would have been a double fault).
@@ -651,10 +646,10 @@ fn page_fault_hook(addr: u64, error: PageFaultErrorCode) -> Option<NtStatus> {
     f(addr, error)
 }
 
-/// Registers the function called with the exception of a user-mode fault
-/// that nothing resolved (page fault, floating-point trap); it must not come
-/// back. The kernel ends the thread's process there, until exceptions reach
-/// user mode (M3).
+/// Registers the function called with the exception of a user-mode
+/// floating-point trap; it must not come back. The kernel ends the thread's
+/// process there, until the trap becomes an exception (the other user-mode
+/// exceptions go through `trap`).
 pub fn set_user_fault_hook(hook: Option<fn(NtStatus)>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     USER_FAULT_HOOK.store(addr, Ordering::Release);

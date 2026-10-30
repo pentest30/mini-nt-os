@@ -244,7 +244,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 | `2Eh` | 3 | `KiSystemService`, appel système de repli |
 | `SYSENTER` | — | Appel système rapide, **sur Intel uniquement** |
 
-Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le noyau branche un handler par vecteur (`kernel/ntoskrnl/src/sys/gates.rs`). Tant que `KeUserModeCallback` n'existe pas, `2Bh` rend `STATUS_NO_CALLBACK_ACTIVE`. Tant que les exceptions n'atteignent pas le mode utilisateur, `2Ch` termine le processus avec `STATUS_ASSERTION_FAILURE`. `2Dh` saute l'`int 3` qui la suit dans `ntdll`.
+Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le noyau branche un handler par vecteur (`kernel/ntoskrnl/src/sys/gates.rs`). Tant que `KeUserModeCallback` n'existe pas, `2Bh` rend `STATUS_NO_CALLBACK_ACTIVE`. `2Ch` lève `STATUS_ASSERTION_FAILURE` à l'adresse de l'instruction (§6.5). `2Dh` saute l'`int 3` qui la suit dans `ntdll`.
 
 **Sélection du chemin rapide (ADR-004)** : SYSENTER n'existe pas en long mode sur AMD, et SYSCALL depuis le mode compatibilité n'existe pas sur Intel ([OSDev](https://wiki.osdev.org/SYSENTER), commentaires de `arch/x86/entry/entry_64_compat.S` dans Linux). Le noyau lit donc CPUID au démarrage et écrit dans `SharedUserData->SystemCall` (offset `0x300`) l'adresse de `ntdll!KiFastSystemCall` sur Intel, ou celle de `ntdll!KiIntSystemCall` (`int 2Eh`) sur les autres processeurs. C'est le mécanisme qu'utilisait XP SP2, et les stubs de `ntdll` passent par ce pointeur.
 
@@ -279,6 +279,22 @@ Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le no
 | APC utilisateur | `KiUserApcDispatcher` |
 | Callback de win32k | `KiUserCallbackDispatcher(index, args, len)` |
 | Démarrage d'un thread | `LdrInitializeThunk` (contexte initial pointant vers `BaseProcessStartThunk` ou `BaseThreadStartThunk`) |
+
+**Exceptions** (`ke::exception`, `kernel/ntoskrnl/src/sys/exceptions.rs`) :
+
+- **Entrée** : #DE, #BP, #UD, #GP et #PF venus du mode utilisateur empilent la trame de trap (`hal::trap`) ; venus du noyau, ils gardent leurs handlers (`hal::idt`).
+- **Codes** :
+  - #DE : `STATUS_INTEGER_DIVIDE_BY_ZERO` ;
+  - #BP : `STATUS_BREAKPOINT`, EIP ramené sur l'`int 3` ;
+  - #UD : `STATUS_ILLEGAL_INSTRUCTION` ;
+  - #GP : `STATUS_PRIVILEGED_INSTRUCTION` pour une instruction privilégiée, `STATUS_ACCESS_VIOLATION` sinon ;
+  - #PF : l'exception que rend Mm.
+- **KiDispatchException** : le noyau met sur la pile du thread son `CONTEXT`, l'`EXCEPTION_RECORD` et leurs deux adresses, puis le thread reprend dans `KiUserExceptionDispatcher`. Celui-ci appelle `NtContinue` pour reprendre, ou `NtRaiseException` en seconde chance.
+- **Fin du processus** : il n'y a ni débogueur ni port d'exception. Le processus se termine avec le code de l'exception dans trois cas : une seconde chance, l'absence de répartiteur (tant que `ntdll` n'est pas projeté), ou une pile qui ne reçoit pas le contexte.
+- **Pas encore** :
+  - les exceptions flottantes, qui terminent le processus ;
+  - #DB, #OF, #BR, #NP, #SS et #AC en mode utilisateur ;
+  - `STATUS_INTEGER_OVERFLOW` pour un quotient trop grand.
 
 ---
 
