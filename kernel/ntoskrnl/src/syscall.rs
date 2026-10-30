@@ -1251,12 +1251,8 @@ impl mm::virtual_alloc::PageMapper for SyscallMapper {
             }
         }
 
-        let pfn = mm::buddy::BUDDY
-            .lock()
-            .as_mut()
-            .ok_or("commit_page: buddy not initialised")?
-            .alloc(0)
-            .ok_or("commit_page: out of physical memory")?;
+        let pfn =
+            mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or("commit_page: out of physical memory")?;
         let phys = x86_64::PhysAddr::new(pfn.to_phys());
         let virt = x86_64::VirtAddr::new(virt_addr);
         let mut flags = x86_64::structures::paging::PageTableFlags::PRESENT;
@@ -1276,10 +1272,7 @@ impl mm::virtual_alloc::PageMapper for SyscallMapper {
     fn decommit_page(&mut self, virt_addr: u64) -> Result<(), &'static str> {
         let virt = x86_64::VirtAddr::new(virt_addr);
         let frame = unsafe { self.pt.unmap_page(virt) };
-        let pfn = mm::Pfn(frame.start_address().as_u64() / 4096);
-        if let Some(b) = mm::buddy::BUDDY.lock().as_mut() {
-            b.free(pfn, 0);
-        }
+        mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
         Ok(())
     }
 }
@@ -1920,7 +1913,7 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
             continue;
         }
 
-        // Allocate contiguous physical pages from buddy allocator (bypasses heap).
+        // Allocate contiguous physical pages (bypasses the heap).
         // MAX_ORDER=13 supports up to 2^12 = 4096 pages = 16 MB in one allocation.
         let pages_needed = size.div_ceil(4096);
         let order = pages_needed.next_power_of_two().trailing_zeros() as usize;
@@ -1931,22 +1924,16 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
                 None => return 0,
             }
         };
-        let pfn = {
-            let mut buddy = mm::buddy::BUDDY.lock();
-            match buddy.as_mut().and_then(|b| b.alloc(order)) {
-                Some(p) => p,
-                None => {
-                    log::warn!("[loadlib] buddy OOM for {} (order {})", path, order);
-                    continue;
-                }
-            }
+        let Some(pfn) = mm::pfn::allocate_pages(order, mm::pfn::PageUsage::Buffer) else {
+            log::warn!("[loadlib] out of physical memory for {} (order {})", path, order);
+            continue;
         };
         let phys_base = pfn.to_phys();
         let buf_ptr = (hhdm_offset + phys_base) as *mut u8;
         let buf_len = (1usize << order) * 4096;
-        // SAFETY: buddy pages are mapped via HHDM; we own them exclusively.
+        // SAFETY: these pages are mapped via HHDM; we own them exclusively.
         let bytes: &mut [u8] = unsafe { core::slice::from_raw_parts_mut(buf_ptr, buf_len) };
-        // Zero the buffer (buddy pages may contain stale data).
+        // Zero the buffer (free pages may contain stale data).
         unsafe {
             core::ptr::write_bytes(buf_ptr, 0, size);
         }
@@ -1954,15 +1941,12 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
         let read_len = match io_manager::read_fat_file_bulk(&mut file, &mut bytes[..size]) {
             Ok(n) => n,
             Err(_) => {
-                let mut buddy = mm::buddy::BUDDY.lock();
-                if let Some(b) = buddy.as_mut() {
-                    b.free(pfn, order);
-                }
+                mm::pfn::free_pages(pfn, order);
                 continue;
             }
         };
         let bytes = &bytes[..read_len];
-        log::info!("[loadlib] loading {} from FAT ({} bytes, order {} buddy)", path, read_len, order);
+        log::info!("[loadlib] loading {} from FAT ({} bytes, order {} block)", path, read_len, order);
 
         // Pre-load dependencies: scan import table and recursively load
         // any DLLs that aren't already available as stubs or loaded DLLs.
@@ -1995,13 +1979,8 @@ fn load_dll_from_fat_inner(dll_name: &str, depth: u32) -> u32 {
             ps::loader::load_dll(bytes, &mut ctx.vad, &mut mapper)
         };
 
-        // Free the buddy pages — DLL sections are now copied into user VA.
-        {
-            let mut buddy = mm::buddy::BUDDY.lock();
-            if let Some(b) = buddy.as_mut() {
-                b.free(pfn, order);
-            }
-        }
+        // Free the buffer — DLL sections are now copied into user VA.
+        mm::pfn::free_pages(pfn, order);
 
         match result {
             Ok(img) => {

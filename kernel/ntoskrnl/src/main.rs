@@ -2,13 +2,10 @@
 //!
 //! Initialisation order (mirrors NT startup sequence):
 //!   1. HAL        — GDT, IDT, serial, IRQL, APIC timer (enables interrupts)
-//!   2. Mm         — feed BootInfo memory map to buddy allocator
-//!   3. Heap (E1)  — map 256 × 4 KiB pages at HEAP_START via MmPageTables;
-//!      init LockedHeap there
+//!   2. Mm         — PFN database from the BootInfo memory map (`mm::pfn`)
+//!   3. Pools      — nonpaged and paged pools (`mm::pool`), which grow on
+//!      demand; the nonpaged pool is Rust's global allocator
 //!   4. Executive  — Ke, Ob, Ps, Io stubs (Phase 2)
-//!
-//! Heap virtual address: 0xFFFF_8800_0000_0000 (above the kernel image HHDM
-//! range, below UEFI runtime services).
 
 #![no_std]
 #![no_main]
@@ -28,25 +25,13 @@ use x86_64::{
 };
 
 /// Kernel heap — the nonpaged pool (`mm::pool`): size classes for small
-/// blocks, merged page runs for large ones, and memory really freed.
-/// `heap_self_test` checks it at every boot.
+/// blocks, merged page runs for large ones, growing on demand and giving
+/// pages back. `heap_self_test` and `pool_self_test` check it at every boot.
 #[global_allocator]
-static ALLOCATOR: mm::pool::Pool = mm::pool::Pool::new();
+static ALLOCATOR: mm::pool::GlobalPool = mm::pool::GlobalPool;
 
-/// First virtual address of the kernel heap region.
-/// Chosen above the kernel HHDM image region and below UEFI runtime services.
-const HEAP_START: u64 = 0xFFFF_8800_0000_0000;
-
-/// Kernel heap size: 4 MiB = 1024 × 4 KiB pages.
-const HEAP_SIZE: usize = 4 * 1024 * 1024;
-
-/// Number of 4 KiB pages to map for the heap.
-const HEAP_PAGES: usize = HEAP_SIZE / 4096;
-
-/// Page flags for the heap: present, writable, NX.
-const HEAP_FLAGS: PageTableFlags = PageTableFlags::from_bits_truncate(
-    PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits() | PageTableFlags::NO_EXECUTE.bits(),
-);
+/// The pool behind the global allocator.
+const HEAP: &mm::pool::Pool<mm::pool::KernelBacking> = &mm::pool::NONPAGED_POOL;
 
 // ── KernelPageMapper ─────────────────────────────────────────────────────────
 //
@@ -71,7 +56,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
     ) -> Result<(), &'static str> {
         // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
         // DO NOT zero — the page may contain live data (e.g., game stack being reused).
-        // Fresh pages from the buddy allocator are zeroed below instead.
+        // Fresh pages are zeroed below instead.
         if let Some((_p, f)) = self.pt.translate_flags(VirtAddr::new(virt_addr)) {
             use x86_64::structures::paging::PageTableFlags as F;
             if f.contains(F::USER_ACCESSIBLE) && !f.contains(F::HUGE_PAGE) {
@@ -79,12 +64,8 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
             }
         }
 
-        let pfn = mm::buddy::BUDDY
-            .lock()
-            .as_mut()
-            .ok_or("commit_page: buddy not initialised")?
-            .alloc(0)
-            .ok_or("commit_page: out of physical memory")?;
+        let pfn =
+            mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or("commit_page: out of physical memory")?;
 
         let phys = PhysAddr::new(pfn.to_phys());
         let virt = VirtAddr::new(virt_addr);
@@ -101,7 +82,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         }
 
         // SAFETY: virt is a freshly claimed user-mode address; phys is a
-        //         fresh page-aligned frame from the buddy.
+        //         fresh page-aligned frame.
         unsafe { self.pt.map_page(virt, phys, flags) };
 
         // Zero the page — Windows guarantees MEM_COMMIT pages are zeroed.
@@ -118,11 +99,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         // SAFETY: virt_addr was previously mapped by commit_page; single-CPU
         //         Phase 2 — no concurrent unmap possible.
         let frame = unsafe { self.pt.unmap_page(virt) }; // also flushes TLB
-                                                         // Return frame to buddy.
-        let pfn = mm::Pfn(frame.start_address().as_u64() / 4096);
-        if let Some(b) = mm::buddy::BUDDY.lock().as_mut() {
-            b.free(pfn, 0);
-        }
+        mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
         Ok(())
     }
 }
@@ -202,77 +179,16 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     mm::init(boot_info, kernel_end_phys);
     check_kernel_wx(boot_info.hhdm_offset);
 
-    // ── 3. Heap (E1): pre-allocate all frames, then map them ─────────────────
-    //
-    // We MUST NOT hold the buddy lock while calling map_page — map_page calls
-    // BuddyFrameAllocator internally which tries to acquire the same lock,
-    // causing a spin-mutex self-deadlock.
-    //
-    // Solution: pre-allocate all HEAP_PAGES frames into a stack array while
-    // holding the lock once, then release the lock, then do all mappings.
-    {
-        x86_64::instructions::interrupts::disable();
-
-        let kernel_start_pfn = boot_info.kernel_phys_base / 4096;
-        // Use the same BSS-inclusive end we passed to mm::init() so the heap
-        // frame skip covers the full kernel footprint (code + data + BSS).
-        let kernel_end_pfn = kernel_end_phys.div_ceil(4096);
-
-        // Ramdisk frame range — must not be handed to the heap allocator.
-        // UEFI LOADER_DATA is BootloaderReclaimable (not Usable) so the buddy
-        // normally never sees these frames; but if UEFI coalesces or
-        // mis-categorises regions we could corrupt the ramdisk before Io reads it.
-        let ramdisk_start_pfn = boot_info.ramdisk_phys_base / 4096;
-        let ramdisk_end_pfn = if boot_info.ramdisk_size > 0 {
-            (boot_info.ramdisk_phys_base + boot_info.ramdisk_size).div_ceil(4096)
-        } else {
-            0
-        };
-
-        // Phase 1 — allocate all frames (buddy lock held, no map_page calls).
-        let mut heap_frames = [mm::Pfn(0u64); HEAP_PAGES];
-        {
-            let mut guard = mm::buddy::BUDDY.lock();
-            let buddy = guard.as_mut().expect("mm not initialised");
-            for slot in heap_frames.iter_mut() {
-                let mut candidate = buddy.alloc(0).expect("out of physical memory mapping heap");
-                while (candidate.0 >= kernel_start_pfn && candidate.0 < kernel_end_pfn)
-                    || (ramdisk_end_pfn > 0 && candidate.0 >= ramdisk_start_pfn && candidate.0 < ramdisk_end_pfn)
-                {
-                    candidate = buddy.alloc(0).expect("out of memory skipping kernel/ramdisk frames");
-                }
-                *slot = candidate;
-            }
-            // buddy lock released here — guard drops at end of this block
-        }
-
-        // Phase 2 — map all pre-allocated frames (no buddy lock held).
-        // map_page may internally allocate intermediate page-table frames via
-        // BuddyFrameAllocator; the lock is free so no deadlock.
-        // SAFETY: bootloader page tables are active; hhdm_offset is correct.
-        let mut pt = unsafe { mm::MmPageTables::new(boot_info.hhdm_offset) };
-        for (i, pfn) in heap_frames.iter().enumerate() {
-            let virt = VirtAddr::new(HEAP_START + (i * 4096) as u64);
-            let phys = PhysAddr::new(pfn.to_phys());
-            // SAFETY: virt is in the unmapped heap range; phys is a fresh frame.
-            unsafe { pt.map_page(virt, phys, HEAP_FLAGS) };
-        }
-
-        // Phase 3 — hand the mapped region to the pool.
-        // SAFETY: HEAP_START..+HEAP_SIZE is now fully mapped RW+NX;
-        //         this is the one and only call to init().
-        unsafe { ALLOCATOR.init(HEAP_START as *mut u8, HEAP_SIZE) };
-
-        x86_64::instructions::interrupts::enable();
-
-        log::info!(
-            "heap: {:#x}..{:#x} ({} KiB, {} pages mapped)",
-            HEAP_START,
-            HEAP_START + HEAP_SIZE as u64,
-            HEAP_SIZE / 1024,
-            HEAP_PAGES,
-        );
-    }
+    // ── 3. Pools: their address ranges, and a first chunk mapped ─────────────
+    // SAFETY: once, right after mm::init, before the first allocation.
+    unsafe { mm::pool::init() };
+    log::info!(
+        "pools: nonpaged at {:#x} ({} KiB mapped), paged at {:#x} ({} KiB mapped), growing on demand",
+        mm::pool::NONPAGED_POOL_START,
+        mm::pool::NONPAGED_POOL.capacity() / 1024,
+        mm::pool::PAGED_POOL_START,
+        mm::pool::PAGED_POOL.capacity() / 1024,
+    );
 
     // Smoke-test: Box allocation forces a real heap use.
     {
@@ -336,6 +252,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
 
     heap_self_test();
+    pfn_self_test();
+    pool_self_test();
     symbols_self_test();
 
     // ── 4. Executive initialisation ───────────────────────────────────────────
@@ -399,14 +317,20 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     try_load_dxvk_chain();
 
     // ── 5b. Phase 2: PE loader smoke test + process setup ─────────────────────
-    log::info!("heap before loader_demo: used={} free={}", ALLOCATOR.used(), ALLOCATOR.free(),);
+    log::info!("heap before loader_demo: used={} free={}", HEAP.used(), HEAP.free(),);
     let ring3_ctx = loader_demo(boot_info.hhdm_offset);
 
     // ── Ready ─────────────────────────────────────────────────────────────────
-    let free_pages = mm::buddy::BUDDY.lock().as_ref().map(|b| b.free_pages()).unwrap_or(0);
+    // Every page allocated and freed so far, by the loader and the ring-3
+    // programs too, went through the PFN database.
+    if let Err(why) = mm::pfn::check() {
+        panic!("PFN database out of step with the free lists: {why}");
+    }
+    let pages = mm::pfn::stats();
+    log::info!("[smoke] Mm: PFN database consistent at the end of phase 1: {pages}");
 
     // End of phase 1: the boot scenarios (tests/boot/) wait for this line.
-    log::info!("kernel: phase 1 done — ticks: {}, free_pages: {}", hal::timer::get_tick_count(), free_pages,);
+    log::info!("kernel: phase 1 done — ticks: {}, free_pages: {}", hal::timer::get_tick_count(), pages.free);
     // ── Phase 2.5: scheduler-based ring-3 launch ─────────────────────────────
     //
     // Register the initial user-mode process as a scheduler thread.  The timer
@@ -472,7 +396,7 @@ fn heap_self_test() {
     use alloc::vec::Vec;
 
     const ROUNDS: u32 = 2000;
-    let used_before = ALLOCATOR.used();
+    let used_before = HEAP.used();
     let mut peak = used_before;
     {
         let mut map: BTreeMap<u32, u64> = BTreeMap::new();
@@ -489,7 +413,7 @@ fn heap_self_test() {
                     assert!(old.iter().all(|&b| b == old[0]), "heap self-test: 12 KiB block overwritten");
                 }
             }
-            peak = peak.max(ALLOCATOR.used());
+            peak = peak.max(HEAP.used());
         }
         for (key, value) in &map {
             assert_eq!(*value, u64::from(*key) * 3, "heap self-test: BTreeMap value overwritten");
@@ -498,7 +422,7 @@ fn heap_self_test() {
             assert!(block.iter().all(|&b| b == block[0]), "heap self-test: 12 KiB block overwritten");
         }
     }
-    assert_eq!(ALLOCATOR.used(), used_before, "heap self-test: memory not given back");
+    assert_eq!(HEAP.used(), used_before, "heap self-test: memory not given back");
     log::info!(
         "[smoke] heap self-test ok: {} rounds, peak {} KiB, back to {} bytes used",
         ROUNDS,
@@ -663,6 +587,88 @@ fn register_symbols(boot_info: &BootInfo) {
     let table = hal::symbols::SymbolTable::new(symtab, strtab);
     hal::symbols::init(table);
     log::info!("kernel symbols: {} functions", table.function_count());
+}
+
+/// Checks the PFN database (M2, `mm::pfn`): it agrees with the free lists
+/// after the boot's allocations (heap, page tables, kernel stacks), and a
+/// block allocated then freed leaves every count as it was.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn pfn_self_test() {
+    use mm::pfn::{self, PageState, PageUsage};
+
+    if let Err(why) = pfn::check() {
+        panic!("PFN database out of step with the free lists: {why}");
+    }
+    let before = pfn::stats();
+    assert!(before.active(PageUsage::PageTable) > 0 && before.active(PageUsage::KernelStack) > 0);
+    let block = pfn::allocate_pages(2, PageUsage::Buffer).expect("no 4 free pages");
+    let during = pfn::stats();
+    assert_eq!(
+        (during.free, during.active(PageUsage::Buffer)),
+        (before.free - 4, before.active(PageUsage::Buffer) + 4)
+    );
+    let state = pfn::PAGE_FRAMES.lock().entry(block).map(|e| e.state);
+    assert_eq!(state, Some(PageState::Active));
+    pfn::free_pages(block, 2);
+    assert_eq!(pfn::stats(), before, "a block allocated then freed changed the counts");
+    log::info!("[smoke] Mm: PFN round trip ok, {before}");
+}
+
+/// Checks the kernel pools (M2, `mm::pool`): the nonpaged pool grows past what
+/// it has mapped, and gives the pages back to the PFN database once the
+/// blocks are freed; tagged blocks of both pools are counted until freed; the
+/// PFN database's pool pages follow exactly what the nonpaged pool maps.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn pool_self_test() {
+    use mm::pfn::{self, PageUsage};
+    use mm::pool::{self, PoolType, TagStats, NONPAGED_POOL, PAGED_POOL};
+
+    const TAG: pool::PoolTag = pool::tag(b"Test");
+    const BLOCK: usize = 256 * 1024;
+    const BLOCKS: usize = 8;
+    const PAGED: usize = 64 * 1024;
+    let pool_pages = |pool: &pool::Pool<pool::KernelBacking>| pool.capacity() as u64 / 4096;
+    let (mapped_before, pages_before) = (pool_pages(&NONPAGED_POOL), pfn::stats().active(PageUsage::NonPagedPool));
+    assert_eq!(pages_before, mapped_before, "nonpaged pool pages outside the pool");
+
+    let mut blocks = [core::ptr::null_mut(); BLOCKS];
+    for block in &mut blocks {
+        *block = pool::ex_allocate_pool_with_tag(PoolType::NonPaged, BLOCK, TAG);
+        assert!(!block.is_null(), "nonpaged pool exhausted");
+        // SAFETY: a live block of BLOCK bytes.
+        unsafe { core::ptr::write_bytes(*block, 0x5A, BLOCK) };
+    }
+    let paged = pool::ex_allocate_pool_with_tag(PoolType::Paged, PAGED, TAG);
+    assert!(!paged.is_null(), "paged pool exhausted");
+    let peak = pool_pages(&NONPAGED_POOL);
+    assert!(peak >= mapped_before + (BLOCKS * BLOCK / 4096 / 2) as u64, "the nonpaged pool did not grow");
+    assert_eq!(pfn::stats().active(PageUsage::NonPagedPool), peak, "the PFN database does not follow the pool");
+    assert_eq!(NONPAGED_POOL.tag_stats(TAG), TagStats { allocations: BLOCKS, bytes: BLOCKS * BLOCK });
+    assert_eq!(PAGED_POOL.tag_stats(TAG), TagStats { allocations: 1, bytes: PAGED });
+
+    for block in blocks {
+        // SAFETY: a live block of the nonpaged pool, with its tag.
+        unsafe { pool::ex_free_pool_with_tag(PoolType::NonPaged, block, TAG) };
+    }
+    // SAFETY: a live block of the paged pool, with its tag.
+    unsafe { pool::ex_free_pool_with_tag(PoolType::Paged, paged, TAG) };
+    assert_eq!(NONPAGED_POOL.tag_stats(TAG), TagStats::default());
+    assert_eq!(PAGED_POOL.tag_stats(TAG), TagStats::default());
+    let after = pool_pages(&NONPAGED_POOL);
+    assert!(
+        after <= mapped_before + pool::GROW_PAGES as u64,
+        "the nonpaged pool kept {after} pages, {mapped_before} before"
+    );
+    assert_eq!(pfn::stats().active(PageUsage::NonPagedPool), after);
+    log::info!(
+        "[smoke] Mm: pools grow ({} KiB mapped at the peak) and give pages back ({} KiB after), tags counted",
+        peak * 4,
+        after * 4
+    );
 }
 
 /// Finds this very function, and a code address inside it, through the
@@ -1440,7 +1446,7 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
         return ctx;
     }
 
-    log::info!("loader_demo: step 1 — heap used={} free={}", ALLOCATOR.used(), ALLOCATOR.free());
+    log::info!("loader_demo: step 1 — heap used={} free={}", HEAP.used(), HEAP.free());
 
     // Build a tiny but valid PE32 in heap memory.
     let pe_bytes = build_test_pe32(
@@ -1499,13 +1505,13 @@ fn build_test_pe32(image_base: u32, entry_rva: u32) -> alloc::vec::Vec<u8> {
     // 0x1A0) holds one descriptor and its all-zero terminator, then the INT.
     use ps::loader::*;
 
-    log::info!("build_test_pe32: before alloc heap used={} free={}", ALLOCATOR.used(), ALLOCATOR.free());
+    log::info!("build_test_pe32: before alloc heap used={} free={}", HEAP.used(), HEAP.free());
     let mut buf = alloc::vec![0u8; 0x3000]; // 12 KiB — enough for headers + one section
     log::info!(
         "build_test_pe32: after alloc ptr={:#x} heap used={} free={}",
         buf.as_ptr() as usize,
-        ALLOCATOR.used(),
-        ALLOCATOR.free()
+        HEAP.used(),
+        HEAP.free()
     );
 
     // ── DOS header ────────────────────────────────────────────────────────────

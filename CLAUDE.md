@@ -44,18 +44,18 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
-- **Jalon courant : M1 — Noyau Ke** ([05](docs/05-feuille-de-route.md#m1--noyau-ke)). M0 est terminé. Le dispatcher
-  (ADR-005) tourne sur l'ordonnanceur à 32 priorités de `kernel/ke/src/sched.rs` (préemption différée sous
-  `DISPATCH_LEVEL`, `KSpinLock`, DPC sans allocation, roue de timers, état FPU/SSE par thread ; scénarios `ke-events`
-  et `fpu`). L'IRQL est le TPR de l'APIC (CR8, échelle x64 : horloge à CLOCK_LEVEL). L'état par CPU passe par GS : KPCR
-  (`hal::pcr`) puis KPRCB (`ke::prcb`, files prêtes et DPC). Boosts : relèvement porté par chaque réveil, décroissance
-  par quantum (compté en tiers de tick), threads affamés relevés par le balance set manager (`ke::balance`, scénario
-  `ke-starvation`). `panic!` et les traps noyau finissent sur l'écran STOP (`ke::bugcheck`, `hal::bugcheck`) : pile
-  d'appels par les pointeurs de cadre, symboles de l'ELF transmis par le chargeur (scénario `bugcheck`). APC noyau
-  (`ke::apc`) : `KApc` sans allocation, spéciaux puis normaux, régions critiques et gardées, livraison par
-  l'interruption APC de la HAL sous APC_LEVEL, attente à PASSIVE_LEVEL défaite puis relancée. Les critères de sortie
-  sont cochés et tous les éléments du jalon sont faits ; les APC utilisateur viennent au M3, le rundown des APC d'un
-  thread qui se termine avec Ps (M2).
+- **Jalon courant : M2 — Mémoire, objets, processus** ([05](docs/05-feuille-de-route.md#m2--mémoire-objets-processus)).
+  M0 et M1 sont terminés. Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
+  `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
+  manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
+  thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
+  (`ke::bugcheck`, `hal::bugcheck`). Scénarios `ke-events`, `fpu`, `ke-starvation`, `bugcheck`. Les APC utilisateur
+  viennent au M3, le rundown des APC d'un thread qui se termine avec Ps.
+  M2 : base PFN faite (`mm::pfn` au-dessus du buddy : toute page physique y passe, avec son usage ; double libération
+  et page réservée arrêtent le système ; cohérence vérifiée en fin de phase 1). Pools faits (`mm::pool`) : non paginé
+  (allocateur global) et paginé, qui grandissent à la demande et rendent leurs pages à la base PFN ;
+  `ex_allocate_pool_with_tag` et compteurs par étiquette. À venir : une PML4 par processus, VAD en arbre, sections,
+  Ob, Ps.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

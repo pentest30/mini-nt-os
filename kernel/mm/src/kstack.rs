@@ -21,6 +21,7 @@ use x86_64::structures::paging::PageTableFlags;
 use x86_64::{PhysAddr, VirtAddr};
 
 use crate::paging::MmPageTables;
+use crate::pfn::PageUsage;
 
 /// Usable size of every kernel stack.
 pub const KERNEL_STACK_SIZE: u64 = 24 * 1024;
@@ -62,21 +63,19 @@ const fn stack_of_slot(slot: u64) -> KernelStack {
 /// guard page. Returns `None` when the region or physical memory is exhausted.
 ///
 /// # IRQL
-/// PASSIVE_LEVEL. Takes the buddy lock and edits the kernel page tables.
+/// PASSIVE_LEVEL. Allocates pages (`mm::pfn`) and edits the kernel page tables.
 pub fn allocate() -> Option<KernelStack> {
     let slot =
         ALLOCATED.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_STACKS).then_some(n + 1)).ok()?;
     let stack = stack_of_slot(slot);
 
-    // Take every frame first: map_page allocates page-table frames through the
-    // buddy lock itself, so the lock must not be held while mapping.
     let mut frames = [0u64; PAGES];
-    {
-        let mut buddy = crate::buddy::BUDDY.lock();
-        let buddy = buddy.as_mut()?;
-        for frame in frames.iter_mut() {
-            *frame = buddy.alloc(0)?.to_phys();
-        }
+    for i in 0..PAGES {
+        let Some(pfn) = crate::pfn::allocate_page(PageUsage::KernelStack) else {
+            frames[..i].iter().for_each(|&phys| crate::pfn::free_page(crate::Pfn(phys / 4096)));
+            return None;
+        };
+        frames[i] = pfn.to_phys();
     }
 
     // SAFETY: HHDM_OFFSET is the bootloader's offset, recorded by mm::init, and
@@ -85,7 +84,7 @@ pub fn allocate() -> Option<KernelStack> {
     for (i, &phys) in frames.iter().enumerate() {
         let virt = VirtAddr::new(stack.bottom + (i as u64) * 4096);
         // SAFETY: this slot was handed out once above, so its pages are not
-        // mapped yet; `phys` is a frame fresh from the buddy allocator.
+        // mapped yet; `phys` is a frame just allocated.
         unsafe { pt.map_page(virt, PhysAddr::new(phys), STACK_FLAGS) };
     }
     // SAFETY: [bottom, top) was mapped writable just above.
