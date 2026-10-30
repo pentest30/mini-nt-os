@@ -3,6 +3,7 @@
 //!
 //! - [`bugcheck`]: the codes of the fatal error screen (`KeBugCheckEx`).
 //! - [`context`]: the x86 `CONTEXT` of a thread.
+//! - [`exception`]: the x86 `EXCEPTION_RECORD`.
 //! - [`fpu`]: the FXSAVE area of a thread's x87/SSE state (ADR-009).
 //! - [`loader_block`]: loader → kernel handoff.
 //! - [`ntstatus`]: `NtStatus` and the NTSTATUS values in use.
@@ -20,6 +21,7 @@
 
 pub mod bugcheck;
 pub mod context;
+pub mod exception;
 pub mod fpu;
 pub mod loader_block;
 pub mod ntstatus;
