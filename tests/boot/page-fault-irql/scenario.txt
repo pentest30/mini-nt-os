@@ -1,0 +1,16 @@
+# Demand paging (M2): a fault on a committed user page at DISPATCH_LEVEL is
+# never resolved, since Mm takes the VAD's lock: the boot must end on
+# IRQL_NOT_LESS_OR_EQUAL, with the address, the IRQL and the faulting code.
+features = test-page-fault-irql
+cpus     = default
+timeout  = 120
+
+expect = *** STOP: 0x0000000a (0x0000000000400000, 0x0000000000000002, 0x0000000000000000, 0x
+expect = IRQL_NOT_LESS_OR_EQUAL
+expect = page fault on a user address at DISPATCH_LEVEL or above
+expect = ntoskrnl::page_fault_irql_test+0x
+expect = System halted.
+
+forbid = a page fault at DISPATCH_LEVEL was resolved
+forbid = STOP while printing the STOP screen
+forbid = [NESTED #PF]

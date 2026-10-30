@@ -32,6 +32,14 @@ test-bugcheck = []
 # manager must give the starved thread the processor after about 4 s (M1,
 # boosts; scenario tests/boot/ke-starvation).
 test-ke-starvation = []
+# Touches a committed user page at DISPATCH_LEVEL after the boot self-tests:
+# the boot must end on IRQL_NOT_LESS_OR_EQUAL (M2, demand paging; scenario
+# tests/boot/page-fault-irql).
+test-page-fault-irql = []
+# Reads a reserved user page in kernel mode after the boot self-tests: the boot
+# must end on KMODE_EXCEPTION_NOT_HANDLED, STATUS_ACCESS_VIOLATION (M2, demand
+# paging; scenario tests/boot/page-fault-access-violation).
+test-page-fault-access-violation = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 
@@ -40,6 +48,7 @@ abi              = { path = "../../abi" }
 hal              = { path = "../hal" }
 ke               = { path = "../ke" }
 mm               = { path = "../mm" }
+pe               = { path = "../../libs/pe", features = ["builder"] }
 ob               = { path = "../ob" }
 ps               = { path = "../ps" }
 io-manager       = { path = "../io" }

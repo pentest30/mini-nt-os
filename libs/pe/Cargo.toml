@@ -1,0 +1,11 @@
+[package]
+name    = "pe"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "pe"
+
+[features]
+# A builder of minimal PE32 images, for tests (needs `alloc`).
+builder = []

@@ -9,6 +9,10 @@ name = "mm"
 [dependencies]
 abi       = { path = "../../abi" }
 hal       = { path = "../hal" }
+pe        = { path = "../../libs/pe" }
 bitflags = { workspace = true }
 x86_64   = { workspace = true }
 log      = { workspace = true }
+
+[dev-dependencies]
+pe       = { path = "../../libs/pe", features = ["builder"] }

@@ -55,10 +55,12 @@ pub enum PageUsage {
     Buffer = 5,
     /// Le pool paginé (jamais paginé encore, ADR-010).
     PagedPool = 6,
+    /// Une page d'une section, partagée par ses vues (`mm::section`).
+    Section = 7,
 }
 
 /// Nombre d'usages de [`PageUsage`].
-pub const USAGE_COUNT: usize = 7;
+pub const USAGE_COUNT: usize = 8;
 
 impl PageUsage {
     const ALL: [PageUsage; USAGE_COUNT] = [
@@ -69,6 +71,7 @@ impl PageUsage {
         PageUsage::UserPrivate,
         PageUsage::Buffer,
         PageUsage::PagedPool,
+        PageUsage::Section,
     ];
 }
 

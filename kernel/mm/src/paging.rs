@@ -17,10 +17,13 @@
 use x86_64::{
     registers::control::Cr3,
     structures::paging::{
-        FrameAllocator, FrameDeallocator, Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
+        page_table::PageTableEntry, FrameAllocator, FrameDeallocator, Mapper, OffsetPageTable, Page, PageTable,
+        PageTableFlags, PhysFrame, Size4KiB,
     },
     PhysAddr, VirtAddr,
 };
+
+use abi::ntstatus::{NtStatus, STATUS_NO_MEMORY};
 
 use crate::buddy::Pfn;
 use crate::pfn::PageUsage;
@@ -53,11 +56,11 @@ impl FrameDeallocator<Size4KiB> for PageTableFrameAllocator {
     }
 }
 
-fn alloc_zeroed_pt_phys() -> u64 {
-    let pfn = crate::pfn::allocate_page(PageUsage::PageTable).expect("alloc_zeroed_pt_phys: out of physical memory");
-    let phys = pfn.to_phys();
+/// A zeroed page table; `None` when physical memory runs out.
+fn alloc_zeroed_pt_phys() -> Option<u64> {
+    let phys = crate::pfn::allocate_page(PageUsage::PageTable)?.to_phys();
     zero_frame(phys);
-    phys
+    Some(phys)
 }
 
 /// Zeroes a fresh frame through the HHDM (the identity map is gone after
@@ -69,6 +72,17 @@ fn zero_frame(phys: u64) {
     // and the HHDM maps it writable.
     unsafe { core::ptr::write_bytes(virt as *mut u8, 0, 4096) };
 }
+
+/// Software bit of a non-present leaf entry that still holds its physical
+/// page: a `PAGE_NOACCESS` page or a guard page that was touched before
+/// (`mm::address_space`). The processor ignores every other bit of a
+/// non-present entry.
+pub const PTE_RETAINED: PageTableFlags = PageTableFlags::BIT_9;
+
+/// Software bit of a leaf entry whose physical page belongs to a section,
+/// shared by its views (`mm::section`): unmapping the page or destroying the
+/// address space leaves it to the section.
+pub const PTE_SHARED: PageTableFlags = PageTableFlags::BIT_10;
 
 // ── Page table manager ────────────────────────────────────────────────────────
 
@@ -218,12 +232,37 @@ impl MmPageTables {
     /// at boot for every address space to share. The TLB entry for `virt` is
     /// flushed after the mapping is installed.
     ///
+    /// # Panics
+    /// When a page table cannot be allocated ([`try_map_page`](Self::try_map_page)
+    /// returns the error instead).
+    ///
     /// # Safety
     /// - `virt` must not already be mapped as a 4 KiB page.
     /// - `phys` must be page-aligned and valid.
-    /// - Must not be called at IRQL >= DISPATCH, nor with the PFN database's
-    ///   lock held (it allocates page tables).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL, never with the PFN database's lock held (it
+    /// allocates page tables).
     pub unsafe fn map_page(&mut self, virt: VirtAddr, phys: PhysAddr, flags: PageTableFlags) {
+        // SAFETY: forwarded.
+        unsafe { self.try_map_page(virt, phys, flags) }.expect("map_page: out of physical memory for a page table");
+    }
+
+    /// [`map_page`](Self::map_page), or `STATUS_NO_MEMORY` when a page table
+    /// cannot be allocated: nothing is mapped then, and the tables created on
+    /// the way stay, empty, with the address space that owns them.
+    ///
+    /// # Safety
+    /// As [`map_page`](Self::map_page).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL, never with the PFN database's lock held.
+    pub unsafe fn try_map_page(
+        &mut self,
+        virt: VirtAddr,
+        phys: PhysAddr,
+        flags: PageTableFlags,
+    ) -> Result<(), NtStatus> {
         let h = self.phys_offset;
         let user = flags.contains(PageTableFlags::USER_ACCESSIBLE);
         let mut parent = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
@@ -238,7 +277,7 @@ impl MmPageTables {
                 "map_page: kernel PML4 entry {} missing after boot",
                 usize::from(virt.p4_index())
             );
-            let p = alloc_zeroed_pt_phys();
+            let p = alloc_zeroed_pt_phys().ok_or(STATUS_NO_MEMORY)?;
             l4e.set_addr(PhysAddr::new(p), parent);
         } else {
             l4e.set_addr(l4e.addr(), l4e.flags() | parent);
@@ -246,7 +285,7 @@ impl MmPageTables {
         let l3 = unsafe { &mut *((h + l4e.addr().as_u64()) as *mut PageTable) };
         let l3e = &mut l3[virt.p3_index()];
         if !l3e.flags().contains(PageTableFlags::PRESENT) {
-            let p = alloc_zeroed_pt_phys();
+            let p = alloc_zeroed_pt_phys().ok_or(STATUS_NO_MEMORY)?;
             l3e.set_addr(PhysAddr::new(p), parent);
         } else {
             if l3e.flags().contains(PageTableFlags::HUGE_PAGE) {
@@ -259,7 +298,7 @@ impl MmPageTables {
         if l2e.flags().contains(PageTableFlags::PRESENT) && l2e.flags().contains(PageTableFlags::HUGE_PAGE) {
             let base = l2e.addr().as_u64();
             let old = l2e.flags();
-            let pt_phys = alloc_zeroed_pt_phys();
+            let pt_phys = alloc_zeroed_pt_phys().ok_or(STATUS_NO_MEMORY)?;
             let pt = unsafe { &mut *((h + pt_phys) as *mut PageTable) };
             for i in 0..512usize {
                 let mut f = PageTableFlags::PRESENT;
@@ -278,7 +317,7 @@ impl MmPageTables {
             x86_64::instructions::tlb::flush_all();
         }
         if !l2e.flags().contains(PageTableFlags::PRESENT) {
-            let p = alloc_zeroed_pt_phys();
+            let p = alloc_zeroed_pt_phys().ok_or(STATUS_NO_MEMORY)?;
             l2e.set_addr(PhysAddr::new(p), parent);
         } else {
             l2e.set_addr(l2e.addr(), l2e.flags() | parent);
@@ -287,6 +326,7 @@ impl MmPageTables {
         let pte = &mut l1[virt.p1_index()];
         pte.set_addr(phys, flags | PageTableFlags::PRESENT);
         x86_64::instructions::tlb::flush_all();
+        Ok(())
     }
 
     /// Unmap the 4 KiB page at `virt` and return its physical frame.
@@ -319,6 +359,26 @@ impl MmPageTables {
         let flush = unsafe { self.inner.update_flags(page, flags | PageTableFlags::PRESENT) }
             .expect("MmPageTables::update_flags: page not mapped");
         flush.flush();
+    }
+
+    /// The level-1 entry of `virt`, if the tables down to it exist and no
+    /// huge page covers it. Whoever changes it flushes the TLB.
+    ///
+    /// # IRQL
+    /// Any level.
+    pub fn leaf_entry(&mut self, virt: VirtAddr) -> Option<&mut PageTableEntry> {
+        let h = self.phys_offset;
+        let mut table = self.l4();
+        for index in [virt.p4_index(), virt.p3_index(), virt.p2_index()] {
+            let entry = &table[index];
+            if !entry.flags().contains(PageTableFlags::PRESENT) || entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+                return None;
+            }
+            // SAFETY: a present, non-huge entry above level 1 holds a page
+            // table, which the HHDM maps; `&mut self` keeps it ours.
+            table = unsafe { &mut *((h + entry.addr().as_u64()) as *mut PageTable) };
+        }
+        Some(&mut table[virt.p1_index()])
     }
 
     /// The leaf flags of a page with these rights.

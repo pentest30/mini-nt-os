@@ -19,8 +19,11 @@
 //! WI7e Ch.5 §Virtual Address Descriptors
 
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::bitflags;
+
+use crate::section::Section;
 
 /// Taille d'une page.
 const PAGE: u64 = 0x1000;
@@ -53,6 +56,53 @@ impl PageProtect {
             && self.bits() & !0x3FF == 0
             && modifiers != Self::GUARD | Self::NOCACHE
             && (base != Self::NOACCESS.bits() || modifiers.is_empty())
+    }
+
+    /// Les pages s'écrivent (la copie sur écriture comptée).
+    pub fn writable(self) -> bool {
+        self.intersects(Self::READWRITE | Self::WRITECOPY | Self::EXECUTE_READWRITE | Self::EXECUTE_WRITECOPY)
+    }
+
+    /// Les pages s'exécutent.
+    pub fn executable(self) -> bool {
+        self.intersects(Self::EXECUTE | Self::EXECUTE_READ | Self::EXECUTE_READWRITE | Self::EXECUTE_WRITECOPY)
+    }
+
+    /// Un accès est possible : ni `NOACCESS`, ni une garde pas encore levée.
+    pub fn accessible(self) -> bool {
+        !self.intersects(Self::NOACCESS | Self::GUARD)
+    }
+
+    /// Une écriture copie d'abord la page partagée (`WRITECOPY`).
+    pub fn copy_on_write(self) -> bool {
+        self.intersects(Self::WRITECOPY | Self::EXECUTE_WRITECOPY)
+    }
+
+    /// La protection d'une page une fois copiée : `WRITECOPY` devient
+    /// `READWRITE`, `EXECUTE_WRITECOPY` `EXECUTE_READWRITE`.
+    pub fn without_copy(self) -> Self {
+        let modifiers = self & (Self::GUARD | Self::NOCACHE);
+        if self.contains(Self::WRITECOPY) {
+            Self::READWRITE | modifiers
+        } else if self.contains(Self::EXECUTE_WRITECOPY) {
+            Self::EXECUTE_READWRITE | modifiers
+        } else {
+            self
+        }
+    }
+
+    /// Une écriture qui ne se partage pas devient copie sur écriture :
+    /// `READWRITE` devient `WRITECOPY`, `EXECUTE_READWRITE`
+    /// `EXECUTE_WRITECOPY`.
+    pub fn with_copy(self) -> Self {
+        let modifiers = self & (Self::GUARD | Self::NOCACHE);
+        if self.contains(Self::READWRITE) {
+            Self::WRITECOPY | modifiers
+        } else if self.contains(Self::EXECUTE_READWRITE) {
+            Self::EXECUTE_WRITECOPY | modifiers
+        } else {
+            self
+        }
     }
 }
 
@@ -103,6 +153,30 @@ impl VadNode {
         let mut node = Self::reserved(start & !(PAGE - 1), align_up(end, PAGE), protect, VadKind::Private);
         node.runs[0].state = PageState::Committed;
         node
+    }
+
+    /// Une vue de section `[start, end)` (`kind`), commitée en entier : ses
+    /// pages ont les protections de `protects`, des suites (nombre de pages,
+    /// protection) qui la couvrent dans l'ordre.
+    ///
+    /// # Panics
+    /// Si `protects` ne couvre pas exactement la vue.
+    pub fn view(start: u64, end: u64, protect: PageProtect, kind: VadKind, protects: &[(u64, PageProtect)]) -> Self {
+        let mut node = Self::reserved(start, end, protect, kind);
+        node.runs =
+            protects.iter().map(|&(pages, protect)| PageRun { pages, state: PageState::Committed, protect }).collect();
+        assert_eq!(node.runs.iter().map(|r| r.pages).sum::<u64>(), (end - start) / PAGE, "protections of a view");
+        node.merge();
+        node
+    }
+
+    /// La section et la page de la section que projette la page `addr` d'une
+    /// vue ; `None` hors d'une vue.
+    pub fn section_page(&self, addr: u64) -> Option<(&Arc<Section>, u64)> {
+        match &self.kind {
+            VadKind::View { section, offset } => Some((section, (offset + addr - self.start) / PAGE)),
+            VadKind::Private => None,
+        }
     }
 
     /// Une réservation dont aucune page n'est commitée.
@@ -254,10 +328,9 @@ impl VadNode {
 pub enum VadKind {
     /// Private memory (VirtualAlloc).
     Private,
-    /// Image mapping (PE loader).
-    Image { path: alloc::string::String },
-    /// Data file mapping (CreateFileMapping).
-    Mapped,
+    /// Une vue de section (NtMapViewOfSection), à `offset` octets de son
+    /// début : image, fichier de données ou mémoire partagée.
+    View { section: Arc<Section>, offset: u64 },
 }
 
 /// Fin (exclue) de l'espace utilisateur d'un processus 32 bits (2 Gio, moins
@@ -297,7 +370,7 @@ impl VadTree {
     }
 
     /// Un nœud recoupe `[start, end)`.
-    fn overlaps(&self, start: u64, end: u64) -> bool {
+    pub(crate) fn overlaps(&self, start: u64, end: u64) -> bool {
         // The node starting at or below start might extend into the range;
         // the first node starting after it might begin inside it.
         self.nodes.range(..=start).next_back().is_some_and(|(_, prev)| prev.end > start)
@@ -727,6 +800,51 @@ mod tests {
         for p in invalid {
             assert!(!p.is_valid(), "{p:?}");
         }
+    }
+
+    #[test]
+    fn rights_of_a_protection() {
+        let rights = |p: PageProtect| (p.writable(), p.executable(), p.accessible());
+        assert_eq!(rights(ro()), (false, false, true));
+        assert_eq!(rights(rw()), (true, false, true));
+        assert_eq!(rights(PageProtect::WRITECOPY), (true, false, true));
+        assert_eq!(rights(PageProtect::EXECUTE), (false, true, true));
+        assert_eq!(rights(rx()), (false, true, true));
+        assert_eq!(rights(PageProtect::EXECUTE_READWRITE), (true, true, true));
+        assert_eq!(rights(PageProtect::EXECUTE_WRITECOPY), (true, true, true));
+        assert_eq!(rights(na()), (false, false, false));
+        assert_eq!(rights(rw() | PageProtect::GUARD), (true, false, false));
+        assert_eq!(rights(rw() | PageProtect::NOCACHE), (true, false, true));
+    }
+
+    #[test]
+    fn copy_on_write_protections() {
+        let wc = PageProtect::WRITECOPY;
+        let ewc = PageProtect::EXECUTE_WRITECOPY;
+        let erw = PageProtect::EXECUTE_READWRITE;
+        assert!(wc.copy_on_write() && ewc.copy_on_write() && !rw().copy_on_write() && !erw.copy_on_write());
+        assert_eq!((wc.without_copy(), ewc.without_copy(), rx().without_copy()), (rw(), erw, rx()));
+        assert_eq!((rw().with_copy(), erw.with_copy(), ro().with_copy()), (wc, ewc, ro()));
+        assert_eq!((wc | PageProtect::GUARD).without_copy(), rw() | PageProtect::GUARD);
+    }
+
+    #[test]
+    fn a_view_starts_committed_with_its_protections() {
+        let wc = PageProtect::WRITECOPY;
+        let section = Section::create_pagefile(4 * PAGE, rw()).unwrap();
+        let kind = VadKind::View { section: section.clone(), offset: 0x1_0000 };
+        let n = VadNode::view(0x10_0000, 0x10_4000, wc, kind, &[(1, ro()), (1, rx()), (2, wc)]);
+        assert_eq!(n.runs(), [run(1, C, ro()), run(1, C, rx()), run(2, C, wc)]);
+        let (s, index) = n.section_page(0x10_2fff).unwrap();
+        assert!(Arc::ptr_eq(s, &section));
+        assert_eq!(index, 0x10 + 2, "offset 64 KiB, third page");
+        assert!(reserved(1).section_page(0x10_0000).is_none(), "private memory");
+    }
+
+    #[test]
+    #[should_panic(expected = "protections of a view")]
+    fn a_view_needs_a_protection_for_each_page() {
+        VadNode::view(0x10_0000, 0x10_4000, rw(), VadKind::Private, &[(3, rw())]);
     }
 
     #[test]

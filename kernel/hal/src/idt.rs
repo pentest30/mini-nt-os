@@ -25,6 +25,8 @@ use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::VirtAddr;
 
+use abi::ntstatus::{NtStatus, STATUS_SUCCESS};
+
 use super::bugcheck::{self, interrupted_rbp, BugCheckCode, StackStart};
 use super::gdt::DOUBLE_FAULT_IST_INDEX;
 
@@ -34,6 +36,11 @@ static USER_FAULT_HOOK: AtomicUsize = AtomicUsize::new(0);
 /// `fn(u64) -> Option<(u64, u64)>`: guard-page lookup for kernel stacks, see
 /// [`set_stack_guard_hook`].
 static STACK_GUARD_HOOK: AtomicUsize = AtomicUsize::new(0);
+/// [`PageFaultHook`]: the memory manager's page faults, see
+/// [`set_page_fault_hook`].
+static PAGE_FAULT_HOOK: AtomicUsize = AtomicUsize::new(0);
+/// End (exclusive) of the user half of an address space.
+const USER_HALF_END: u64 = 1 << 47;
 static IN_PF_OUTER: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 // ── Init ─────────────────────────────────────────────────────────────────────
@@ -252,6 +259,57 @@ fn exception_page_fault_inner(frame: InterruptStackFrame, error: PageFaultErrorC
         Err(e) => e.0,
     };
     let rip = frame.instruction_pointer.as_u64();
+
+    // A user address is the memory manager's (demand-zero and guard pages,
+    // `mm::fault`); it takes locks, so not at DISPATCH_LEVEL or above.
+    if cr2_raw < USER_HALF_END {
+        // P3 of IRQL_NOT_LESS_OR_EQUAL and of an access violation: 1 for a
+        // write, 8 for an instruction fetch.
+        let access = if error.contains(PageFaultErrorCode::INSTRUCTION_FETCH) {
+            8
+        } else {
+            u64::from(error.contains(PageFaultErrorCode::CAUSED_BY_WRITE))
+        };
+        let irql = super::irql::current();
+        if irql >= super::irql::Irql::Dispatch {
+            bugcheck::stop(
+                BugCheckCode::IRQL_NOT_LESS_OR_EQUAL,
+                [cr2_raw, u64::from(irql.as_u8()), access, rip],
+                Some(&"page fault on a user address at DISPATCH_LEVEL or above"),
+                &[("address      ", cr2_raw), ("IRQL         ", u64::from(irql.as_u8())), ("RIP          ", rip)],
+                StackStart::Trap { rip, rbp },
+            );
+        }
+        match page_fault_hook(cr2_raw, error) {
+            Some(STATUS_SUCCESS) => {
+                // Resolved: the faulting instruction runs again.
+                IN_PF_OUTER.store(false, Ordering::SeqCst);
+                return;
+            }
+            Some(status) if !error.contains(PageFaultErrorCode::USER_MODE) => {
+                // The kernel touched user memory outside any exception
+                // handler (none before M3): XP stops the same way.
+                bugcheck::stop(
+                    BugCheckCode::KMODE_EXCEPTION_NOT_HANDLED,
+                    [u64::from(status.0), rip, access, cr2_raw],
+                    Some(&"exception on a user address in kernel mode"),
+                    &[
+                        ("address      ", cr2_raw),
+                        ("RIP          ", rip),
+                        ("RSP          ", frame.stack_pointer.as_u64()),
+                    ],
+                    StackStart::Trap { rip, rbp },
+                );
+            }
+            Some(status) => {
+                // User mode: the thread ends below, until exceptions reach
+                // user mode (M3).
+                super::serial::write_str("[#PF] user-mode exception 0x");
+                serial_hex64(u64::from(status.0));
+            }
+            None => {}
+        }
+    }
 
     // ISR-safe output only — no heap allocation, no log::* macros.
     super::serial::write_str("\n[#PF] CR2=0x");
@@ -549,6 +607,34 @@ pub type StackGuardHook = fn(u64) -> Option<(u64, u64)>;
 pub fn set_stack_guard_hook(hook: Option<StackGuardHook>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     STACK_GUARD_HOOK.store(addr, Ordering::Release);
+}
+
+/// The memory manager's page fault handler (MmAccessFault): given the fault
+/// address, in the user half, and the error code, `None` if the address is
+/// none of its business, `Some(STATUS_SUCCESS)` when the access can run
+/// again, or the exception the access raises.
+pub type PageFaultHook = fn(u64, PageFaultErrorCode) -> Option<NtStatus>;
+
+/// Registers the memory manager's page fault handler, called for faults on
+/// user addresses below DISPATCH_LEVEL, interrupts disabled (a fault on a user
+/// address at DISPATCH_LEVEL or above is IRQL_NOT_LESS_OR_EQUAL).
+///
+/// # IRQL
+/// Any level.
+pub fn set_page_fault_hook(hook: Option<PageFaultHook>) {
+    PAGE_FAULT_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+}
+
+/// Asks the memory manager about a fault on a user address.
+fn page_fault_hook(addr: u64, error: PageFaultErrorCode) -> Option<NtStatus> {
+    let hook = PAGE_FAULT_HOOK.load(Ordering::Acquire);
+    if hook == 0 {
+        return None;
+    }
+    // SAFETY: only `set_page_fault_hook` stores into PAGE_FAULT_HOOK, always a
+    // `PageFaultHook`.
+    let f: PageFaultHook = unsafe { core::mem::transmute(hook) };
+    f(addr, error)
 }
 
 /// Register a function to call when a user-mode page fault occurs.

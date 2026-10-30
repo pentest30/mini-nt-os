@@ -101,8 +101,8 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
     }
 
-    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool) {
-        let flags = mm::MmPageTables::leaf_flags(writable, executable, true);
+    fn protect_page(&mut self, virt_addr: u64, protect: mm::vad::PageProtect) {
+        let flags = mm::MmPageTables::leaf_flags(protect.writable(), protect.executable(), true);
         // SAFETY: virt_addr was previously mapped by commit_page; the VAD has
         //         just given the page these rights.
         unsafe { self.pt.update_flags(VirtAddr::new(virt_addr), flags) };
@@ -206,6 +206,9 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     // guard page below it: an overflow faults, and the #DF/#PF handlers print
     // a STOP screen naming it instead of corrupting memory or triple-faulting.
     hal::idt::set_stack_guard_hook(Some(kstack_guard_hit));
+    // Faults on user addresses go to Mm first: demand-zero and guard pages of
+    // the address spaces (mm::fault).
+    hal::idt::set_page_fault_hook(Some(mm::fault::page_fault_hook));
 
     // Ring-3 → ring-0 entry: RSP0 until a user thread installs its own, and
     // SYSENTER_ESP (shared by all threads until the trap rework of M3).
@@ -298,6 +301,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     apc_self_test();
     address_space_self_test();
     vad_self_test();
+    demand_paging_self_test();
+    out_of_page_tables_self_test();
+    section_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -311,6 +317,12 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
     if cfg!(feature = "test-bugcheck") {
         bugcheck_test_outer();
+    }
+    if cfg!(feature = "test-page-fault-irql") {
+        page_fault_irql_test();
+    }
+    if cfg!(feature = "test-page-fault-access-violation") {
+        page_fault_access_violation_test();
     }
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
@@ -1212,6 +1224,338 @@ fn vad_self_test() {
     log::info!(
         "[smoke] Mm: VAD reserve, commit, protect, decommit and release reach the page tables and the PFN database"
     );
+}
+
+/// Demand paging (`mm::fault`): in a new address space, reserve 256 MiB,
+/// commit 64 pages one by one and touch every other one: only those take a
+/// page, one fault each. A `PAGE_NOACCESS` page keeps its data out of reach, a
+/// guard page fires once, and releasing then destroying the space gives back
+/// every page.
+fn demand_paging_self_test() {
+    use abi::ntstatus::{STATUS_ACCESS_VIOLATION, STATUS_GUARD_PAGE_VIOLATION};
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::fault::{self, Access};
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{AllocType, FreeType, MemState, PAGE_SIZE};
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    const RESERVED: u64 = 256 << 20;
+    const COMMITTED: u64 = 64;
+    const MARKER: u64 = 0x4445_4D41_4E44_0000;
+    let (rw, ro, guard) = (PageProtect::READWRITE, PageProtect::READONLY, PageProtect::READWRITE | PageProtect::GUARD);
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::PageTable), s.active(PageUsage::UserPrivate))
+    };
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // SAFETY (the three closures): called while attached to the space below,
+    // whose page tables CR3 holds; the addresses are committed pages of it.
+    let flags = |va| unsafe { mm::MmPageTables::new(hhdm) }.translate_flags(VirtAddr::new(va)).map(|(_, f)| f);
+    let read = |va: u64| unsafe { core::ptr::read_volatile(va as *const u64) };
+    let write = |va: u64, value: u64| unsafe { core::ptr::write_volatile(va as *mut u64, value) };
+
+    let before = counts();
+    let space = AddressSpace::new().expect("no PML4");
+    // SAFETY: the space lives until the end of this test, detached before it
+    // is destroyed.
+    let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+    let base = space.allocate(0, RESERVED, AllocType::MEM_RESERVE, PageProtect::NOACCESS).expect("reserve 256 MiB");
+    let page = |i: u64| base + i * PAGE_SIZE;
+    for i in 0..COMMITTED {
+        assert_eq!(space.allocate(page(i), PAGE_SIZE, AllocType::MEM_COMMIT, rw), Ok(page(i)));
+    }
+    assert_eq!(counts().1, before.1, "committing took physical pages");
+    let faults = fault::demand_zero_faults();
+    for i in (0..COMMITTED).step_by(2) {
+        assert_eq!(read(page(i)), 0, "a demand-zero page is not zeroed");
+        write(page(i), MARKER + i);
+    }
+    let touched = counts();
+    assert_eq!(touched.1 - before.1, COMMITTED / 2, "untouched pages took physical memory");
+    assert_eq!(fault::demand_zero_faults() - faults, COMMITTED / 2, "not one fault per touched page");
+    assert!(flags(page(1)).is_none(), "an untouched page is mapped");
+    let f = flags(page(0)).expect("a touched page is not mapped");
+    assert!(f.contains(F::WRITABLE | F::USER_ACCESSIBLE | F::NO_EXECUTE), "{f:?}");
+
+    // PAGE_NOACCESS: out of reach, its data kept for a later protection.
+    assert_eq!(space.protect(page(2), PAGE_SIZE, PageProtect::NOACCESS), Ok(rw));
+    assert!(flags(page(2)).is_none(), "a PAGE_NOACCESS page is mapped");
+    assert_eq!(space.access_fault(page(2), Access::Read), STATUS_ACCESS_VIOLATION);
+    assert_eq!(counts().1, touched.1, "PAGE_NOACCESS gave its page away");
+    assert_eq!(space.protect(page(2), PAGE_SIZE, ro), Ok(PageProtect::NOACCESS));
+    assert_eq!(read(page(2)), MARKER + 2, "the data did not survive PAGE_NOACCESS");
+    assert!(!flags(page(2)).unwrap().contains(F::WRITABLE));
+    assert_eq!(space.access_fault(page(2), Access::Write), STATUS_ACCESS_VIOLATION, "write to a read-only page");
+
+    // Guard pages fire once, untouched or touched before, then work as committed.
+    let fresh = page(COMMITTED);
+    assert_eq!(space.allocate(fresh, PAGE_SIZE, AllocType::MEM_COMMIT, guard), Ok(fresh));
+    assert_eq!(space.protect(page(4), PAGE_SIZE, guard), Ok(rw));
+    for va in [fresh, page(4)] {
+        assert_eq!(space.access_fault(va, Access::Write), STATUS_GUARD_PAGE_VIOLATION);
+        assert_eq!(space.query(va).map(|r| r.protect), Ok(rw), "the guard is still up");
+    }
+    write(fresh, MARKER);
+    assert_eq!(read(page(4)), MARKER + 4, "the data did not survive the guard");
+
+    assert_eq!(space.access_fault(page(COMMITTED + 1), Access::Read), STATUS_ACCESS_VIOLATION, "reserved page");
+    assert_eq!(space.access_fault(base + RESERVED, Access::Read), STATUS_ACCESS_VIOLATION, "free page");
+
+    let mapped = counts().1;
+    assert_eq!(space.free(page(0), PAGE_SIZE, FreeType::MEM_DECOMMIT), Ok((page(0), PAGE_SIZE)));
+    assert_eq!(counts().1, mapped - 1, "decommitting kept the page");
+    assert!(flags(page(0)).is_none(), "a decommitted page is still mapped");
+    assert_eq!(space.query(page(0)).map(|r| r.state), Ok(MemState::Reserve));
+    assert_eq!(space.free(base, 0, FreeType::MEM_RELEASE), Ok((base, RESERVED)));
+    assert_eq!(counts().1, before.1, "releasing did not give back every touched page");
+
+    // A page kept out of reach goes with the space.
+    let last = space.allocate(0, PAGE_SIZE, AllocType::MEM_RESERVE | AllocType::MEM_COMMIT, rw).expect("commit");
+    write(last, MARKER);
+    assert_eq!(space.protect(last, PAGE_SIZE, PageProtect::NOACCESS), Ok(rw));
+    let tables = counts().0 - before.0;
+    ke::sched::ke_unstack_detach(attached);
+    space.destroy();
+    assert_eq!(counts(), before, "destroying the space did not give back every page");
+    log::info!(
+        "[smoke] Mm: demand paging: 256 MiB reserved, {COMMITTED} pages committed, {} touched for as many \
+         pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
+        COMMITTED / 2
+    );
+}
+
+/// A demand-zero fault that gets its page but no page table returns
+/// `STATUS_NO_MEMORY` and gives the page back, instead of stopping the system:
+/// every free page but one is taken, and the first page of a new address
+/// space needs three tables.
+fn out_of_page_tables_self_test() {
+    use abi::ntstatus::{STATUS_NO_MEMORY, STATUS_SUCCESS};
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::buddy::MAX_ORDER;
+    use mm::fault::Access;
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{AllocType, PAGE_SIZE};
+
+    let space = AddressSpace::new().expect("no PML4");
+    let commit = AllocType::MEM_RESERVE | AllocType::MEM_COMMIT;
+    let va = space.allocate(0, PAGE_SIZE, commit, PageProtect::READWRITE).expect("commit");
+    let user_pages = || pfn::stats().active(PageUsage::UserPrivate);
+    let before = user_pages();
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // The first page of each block taken holds the previous block and its
+    // order (the PFN plus one, 0 at the end): no pool, no stack.
+    let link = |block: mm::Pfn| (hhdm + block.to_phys()) as *mut [u64; 2];
+    // At DISPATCH_LEVEL, no thread allocates while the pages are taken (ISRs
+    // and DPCs never do).
+    let irql = hal::irql::raise(hal::irql::Irql::Dispatch);
+    let (mut last, mut count) = ([0u64; 2], 0);
+    loop {
+        let free = pfn::stats().free;
+        let largest = (0..MAX_ORDER).rev().filter(|&order| 1 << order < free);
+        let Some((block, order)) =
+            largest.into_iter().find_map(|order| pfn::allocate_pages(order, PageUsage::Buffer).map(|b| (b, order)))
+        else {
+            break;
+        };
+        // SAFETY: the first page of a block just allocated, through the HHDM.
+        unsafe { link(block).write(last) };
+        last = [block.0 + 1, order as u64];
+        count += 1;
+    }
+    let left = pfn::stats().free;
+    let status = space.access_fault(va, Access::Write);
+    while last[0] != 0 {
+        let block = mm::Pfn(last[0] - 1);
+        // SAFETY: a block taken above, still allocated.
+        let previous = unsafe { link(block).read() };
+        pfn::free_pages(block, last[1] as usize);
+        last = previous;
+    }
+    hal::irql::lower(irql);
+    assert_eq!(left, 1, "not one free page left");
+    assert_eq!(status, STATUS_NO_MEMORY);
+    assert_eq!(user_pages(), before, "the fault kept its page");
+    assert_eq!(space.access_fault(va, Access::Write), STATUS_SUCCESS, "memory back, the fault works");
+    space.destroy();
+    log::info!("[smoke] Mm: a fault without a page table returns STATUS_NO_MEMORY ({count} blocks taken)");
+}
+
+/// Sections (`mm::section`): a shared-memory section mapped in two address
+/// spaces shares its pages; each space maps a different image at 0x400000,
+/// with its protections and copy-on-write; a data file reads back. Unmapping,
+/// destroying the spaces and dropping the sections give back every page.
+fn section_self_test() {
+    use abi::ntstatus::{
+        STATUS_ACCESS_VIOLATION, STATUS_IMAGE_NOT_AT_BASE, STATUS_NOT_MAPPED_VIEW, STATUS_SECTION_PROTECTION,
+        STATUS_SUCCESS,
+    };
+    use alloc::sync::Arc;
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::fault::Access;
+    use mm::pfn::{self, PageUsage};
+    use mm::section::Section;
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{MemType, PAGE_SIZE as P};
+    use pe::builder::Pe32Builder;
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    const IMAGE_BASE: u64 = 0x40_0000;
+    const MARKER: u64 = 0x5345_4354_494F_4E00;
+    let (ro, rw) = (PageProtect::READONLY, PageProtect::READWRITE);
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::PageTable), s.active(PageUsage::UserPrivate), s.active(PageUsage::Section))
+    };
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // SAFETY (the three closures): called through `in_space`, attached to a
+    // space whose page tables CR3 holds; the addresses are pages of its views.
+    let flags = |va| unsafe { mm::MmPageTables::new(hhdm) }.translate_flags(VirtAddr::new(va)).map(|(_, f)| f);
+    let read = |va: u64| unsafe { core::ptr::read_volatile(va as *const u64) };
+    let write = |va: u64, value: u64| unsafe { core::ptr::write_volatile(va as *mut u64, value) };
+    /// Runs `f` attached to `space`.
+    fn in_space<R>(space: &AddressSpace, f: impl FnOnce() -> R) -> R {
+        // SAFETY: the space outlives the attachment, which ends here.
+        let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+        let result = f();
+        ke::sched::ke_unstack_detach(attached);
+        result
+    }
+
+    let before = counts();
+    let (a, b) = (AddressSpace::new().expect("no PML4"), AddressSpace::new().expect("no PML4"));
+
+    // Shared memory: one page, whoever writes it.
+    let shared = Section::create_pagefile(4 * P, rw).expect("pagefile section");
+    let (va, vb) = (a.map_view(&shared, 0, 0, 0, rw).expect("map"), b.map_view(&shared, 0, 0, 0, rw).expect("map"));
+    assert_eq!((va.size, va.status), (4 * P, STATUS_SUCCESS));
+    in_space(&a, || write(va.base + P, MARKER));
+    in_space(&b, || {
+        assert_eq!(read(vb.base + P), MARKER, "a view does not see the other's write");
+        write(vb.base + 2 * P, MARKER + 1);
+    });
+    assert_eq!(in_space(&a, || read(va.base + 2 * P)), MARKER + 1);
+    assert_eq!((shared.resident_pages(), counts().2 - before.2), (2, 2), "not one section page per page touched");
+    assert_eq!(counts().1, before.1, "a shared write took a private page");
+    // Protected copy-on-write, a shared page is no longer written in place.
+    assert_eq!(a.protect(va.base + P, P, PageProtect::WRITECOPY), Ok(rw));
+    in_space(&a, || {
+        assert!(!flags(va.base + P).unwrap().contains(F::WRITABLE), "a copy-on-write page mapped writable");
+        write(va.base + P, MARKER + 2);
+    });
+    assert_eq!(in_space(&b, || read(vb.base + P)), MARKER, "a copy went to the other space");
+    assert_eq!(counts().1 - before.1, 1, "copy-on-write did not take one private page");
+
+    // Two images at 0x400000, one per space.
+    let image = |code: u8, data: &[u8]| {
+        let file = Pe32Builder::new(IMAGE_BASE as u32)
+            .entry_point(0x1000)
+            .section(".text", 0x1000, 0x100, &[code; 0x100], pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+            .section(".data", 0x2000, 0x100, data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+            .build();
+        Section::create_image(Arc::from(file)).expect("image section")
+    };
+    let (one, two) = (image(0x90, b"data one"), image(0xCC, b"data two"));
+    for (space, section) in [(&a, &one), (&b, &two)] {
+        let view = space.map_view(section, 0, 0, 0, ro).expect("map an image");
+        assert_eq!((view.base, view.size, view.status), (IMAGE_BASE, 3 * P, STATUS_SUCCESS));
+    }
+    in_space(&a, || {
+        assert_eq!(read(IMAGE_BASE) as u16, 0x5A4D, "no MZ at the image base");
+        assert_eq!(read(IMAGE_BASE + 0x1000), 0x9090_9090_9090_9090);
+        let code = flags(IMAGE_BASE + 0x1000).unwrap();
+        assert!(!code.intersects(F::WRITABLE | F::NO_EXECUTE), "code page: {code:?}");
+        assert_eq!(read(IMAGE_BASE + 0x2000).to_le_bytes(), *b"data one");
+        assert!(!flags(IMAGE_BASE + 0x2000).unwrap().contains(F::WRITABLE), "copy-on-write page mapped writable");
+        write(IMAGE_BASE + 0x2000, MARKER);
+        assert_eq!(read(IMAGE_BASE + 0x2000), MARKER);
+    });
+    assert_eq!(counts().1 - before.1, 2, "copy-on-write did not take one private page");
+    assert_eq!(a.query(IMAGE_BASE + 0x2000).map(|r| r.protect), Ok(rw), "a copied page is read-write");
+    assert_eq!(a.query(IMAGE_BASE).map(|r| r.kind), Ok(Some(MemType::Image)));
+    in_space(&b, || {
+        assert_eq!(read(IMAGE_BASE + 0x1000), 0xCCCC_CCCC_CCCC_CCCC, "each space has its own image at 0x400000");
+        assert_eq!(read(IMAGE_BASE + 0x2000).to_le_bytes(), *b"data two");
+    });
+    let again = b.map_view(&one, 0, 0, 0, ro).expect("map an image twice");
+    assert_eq!(again.status, STATUS_IMAGE_NOT_AT_BASE);
+    assert_eq!(in_space(&b, || read(again.base + 0x2000)).to_le_bytes(), *b"data one", "a copy went to the section");
+    assert_eq!(one.resident_pages(), 3, "headers, code, data");
+
+    // A data file, read-only.
+    let bytes: alloc::vec::Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+    let file = Section::create_data_file(Arc::from(bytes.clone()), 0, ro).expect("data file section");
+    assert_eq!(a.map_view(&file, 0, 0, 0, rw).err(), Some(STATUS_SECTION_PROTECTION));
+    let view = a.map_view(&file, 0, 0, 0, ro).expect("map a data file");
+    assert_eq!(view.size, 2 * P);
+    in_space(&a, || {
+        // SAFETY: two readable pages of a view in the attached space.
+        let mapped = unsafe { core::slice::from_raw_parts(view.base as *const u8, 2 * P as usize) };
+        assert_eq!(&mapped[..5000], &bytes[..], "the view does not hold the file");
+        assert!(mapped[5000..].iter().all(|&b| b == 0), "past the end of the file");
+    });
+    assert_eq!(a.access_fault(view.base, Access::Write), STATUS_ACCESS_VIOLATION, "write to a read-only view");
+
+    let mapped = counts();
+    assert_eq!(a.unmap_view(IMAGE_BASE + 0x1234), Ok(()));
+    assert_eq!((counts().1, counts().2), (mapped.1 - 1, mapped.2), "unmapping: the copy goes, the section's stay");
+    assert_eq!(a.unmap_view(va.base), Ok(()));
+    assert_eq!(counts().1, before.1, "unmapping kept a copy");
+    assert_eq!(a.unmap_view(IMAGE_BASE), Err(STATUS_NOT_MAPPED_VIEW));
+    let resident = [&shared, &one, &two, &file].iter().map(|s| s.resident_pages() as u64).sum::<u64>();
+    assert_eq!(counts().2 - before.2, resident);
+    // Views still mapped in both spaces: their pages stay the sections'.
+    a.destroy();
+    b.destroy();
+    assert_eq!(counts().2 - before.2, resident, "destroying a space freed section pages");
+    drop((shared, one, two, file));
+    assert_eq!(counts(), before, "the sections or the spaces kept pages");
+    log::info!(
+        "[smoke] Mm: sections: shared memory seen by two spaces, a different image at 0x400000 in each, \
+         copy-on-write, a data file; {resident} section pages, all back"
+    );
+}
+
+/// An address space where `alloc` has reserved, maybe committed, the page at
+/// `0x400000`, attached for good: for the tests that end on a STOP screen.
+fn attach_stop_test_space(alloc: mm::virtual_alloc::AllocType) -> u64 {
+    const VA: u64 = 0x40_0000;
+    let space = mm::address_space::AddressSpace::new().expect("no PML4");
+    let rw = mm::vad::PageProtect::READWRITE;
+    assert_eq!(space.allocate(VA, mm::virtual_alloc::PAGE_SIZE, alloc, rw), Ok(VA));
+    // SAFETY: the space is never destroyed (the registry keeps it), and the
+    // boot thread never detaches.
+    let _attached_for_good = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+    VA
+}
+
+/// A fault on a user page at DISPATCH_LEVEL must stop the system with
+/// IRQL_NOT_LESS_OR_EQUAL (feature `test-page-fault-irql`).
+#[inline(never)]
+fn page_fault_irql_test() {
+    let va =
+        attach_stop_test_space(mm::virtual_alloc::AllocType::MEM_RESERVE | mm::virtual_alloc::AllocType::MEM_COMMIT);
+    log::info!("[smoke] touching a committed user page at DISPATCH_LEVEL on purpose (test-page-fault-irql)");
+    let _irql = hal::irql::raise(hal::irql::Irql::Dispatch);
+    // SAFETY: none; the fault this read takes must stop the system.
+    let value = unsafe { core::ptr::read_volatile(va as *const u64) };
+    panic!("a page fault at DISPATCH_LEVEL was resolved (read {value:#x})");
+}
+
+/// A kernel-mode read of a reserved user page must stop the system with
+/// KMODE_EXCEPTION_NOT_HANDLED and STATUS_ACCESS_VIOLATION (feature
+/// `test-page-fault-access-violation`).
+#[inline(never)]
+fn page_fault_access_violation_test() {
+    let va = attach_stop_test_space(mm::virtual_alloc::AllocType::MEM_RESERVE);
+    log::info!("[smoke] reading a reserved user page on purpose (test-page-fault-access-violation)");
+    // SAFETY: none; the fault this read takes must stop the system.
+    let value = unsafe { core::ptr::read_volatile(va as *const u64) };
+    panic!("a read of a reserved page succeeded (read {value:#x})");
 }
 
 /// Checks that the FPU state follows each thread (ADR-009): the boot thread's
