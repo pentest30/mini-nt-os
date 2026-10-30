@@ -246,7 +246,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 
 Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le noyau branche un handler par vecteur (`kernel/ntoskrnl/src/sys/gates.rs`). Tant que `KeUserModeCallback` n'existe pas, `2Bh` rend `STATUS_NO_CALLBACK_ACTIVE`. `2Ch` lève `STATUS_ASSERTION_FAILURE` à l'adresse de l'instruction (§6.5). `2Dh` saute l'`int 3` qui la suit dans `ntdll`.
 
-**Sélection du chemin rapide (ADR-004)** : SYSENTER n'existe pas en long mode sur AMD, et SYSCALL depuis le mode compatibilité n'existe pas sur Intel ([OSDev](https://wiki.osdev.org/SYSENTER), commentaires de `arch/x86/entry/entry_64_compat.S` dans Linux). Le noyau lit donc CPUID au démarrage et écrit dans `SharedUserData->SystemCall` (offset `0x300`) l'adresse de `ntdll!KiFastSystemCall` sur Intel, ou celle de `ntdll!KiIntSystemCall` (`int 2Eh`) sur les autres processeurs. C'est le mécanisme qu'utilisait XP SP2, et les stubs de `ntdll` passent par ce pointeur.
+**Sélection du chemin rapide (ADR-004)** : SYSENTER n'existe pas en long mode sur AMD, et SYSCALL depuis le mode compatibilité n'existe pas sur Intel ([OSDev](https://wiki.osdev.org/SYSENTER), commentaires de `arch/x86/entry/entry_64_compat.S` dans Linux). Le noyau lit donc CPUID au démarrage et écrit dans `SharedUserData->SystemCall` (offset `0x300`) l'adresse de `ntdll!KiFastSystemCall` sur Intel, ou celle de `ntdll!KiIntSystemCall` (`int 2Eh`) sur les autres processeurs. C'est le mécanisme qu'utilisait XP SP2, et les stubs de `ntdll` passent par ce pointeur. Écart provisoire : tant que SYSENTER ne revient pas par `ntdll` pour les processus de Ps, ce pointeur désigne `KiIntSystemCall` sur tous les processeurs (`ps::system_dll`).
 
 ### 6.2 Tables de services
 
@@ -279,6 +279,14 @@ Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le no
 | APC utilisateur | `KiUserApcDispatcher` |
 | Callback de win32k | `KiUserCallbackDispatcher(index, args, len)` |
 | Démarrage d'un thread | `LdrInitializeThunk` (contexte initial pointant vers `BaseProcessStartThunk` ou `BaseThreadStartThunk`) |
+
+**ntdll et `KUSER_SHARED_DATA`** (`ps::system_dll`, `mm::shared_data`, `kernel/ntoskrnl/src/shared_data.rs`) :
+
+- **`KUSER_SHARED_DATA`** (`abi::shared_data`, disposition d'XP SP2) : une page que le noyau remplit au démarrage, avec la version 5.1, la racine `C:\WINDOWS`, les fonctions du processeur, les pages physiques, la politique DEP et le cookie. L'horloge y écrit ses temps par l'alias du noyau. Chaque processus la projette en lecture seule en `0x7FFE0000`.
+- **DLL système** : le noyau résout les points d'entrée de `ntdll` à son installation : les répartiteurs, `LdrInitializeThunk`, `KiIntSystemCall` et `KiFastSystemCallRet` (`SystemCall`, `SystemCallReturn`). Une entrée manquante rend `STATUS_PROCEDURE_NOT_FOUND`. Chaque processus créé ensuite projette `ntdll` à sa base.
+- **Démarrage d'un thread** : comme `PspUserThreadStartup`, le noyau met sur la pile du thread son contexte initial, puis l'APC utilisateur `LdrInitializeThunk(NULL, base de ntdll, NULL)`. Le thread entre dans `KiUserApcDispatcher`, qui reprend le contexte par `NtContinue`.
+- **Réserve** : sous chaque `CONTEXT` d'APC, le noyau laisse 8 octets sous l'ESP interrompu. Le `KiUserApcDispatcher` de ReactOS y écrit son enregistrement SEH.
+- **Pas encore** : le fichier `ntdll.dll` lui-même (`cargo xtask fetch-userland`), puis son installation au démarrage.
 
 **Exceptions** (`ke::exception`, `kernel/ntoskrnl/src/sys/exceptions.rs`) :
 

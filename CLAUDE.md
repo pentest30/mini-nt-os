@@ -111,8 +111,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   APC utilisateur faits (`ke::apc`, `sys::apc`) : routine normale du mode utilisateur (`NormalRoutine::User`),
   livrables après une attente alertable ou un test d'alerte (NtTestAlert, TestAlert de NtContinue), livrés au retour
   par la trame de trap (`hal::trap::set_user_return_hook`) au répartiteur de ntdll (`set_user_apc_dispatcher`) ;
-  NtQueueApcThread, NtDelayExecution. À venir : SYSENTER pour Ps (retour par ntdll), SWAPGS, ntdll projeté et
-  `KUSER_SHARED_DATA`, `fetch-userland`.
+  NtQueueApcThread, NtDelayExecution. `KUSER_SHARED_DATA` fait (`abi::shared_data`, `mm::shared_data`) : une page
+  remplie au démarrage (version 5.1, racine, fonctions du processeur, DEP), mise à jour par l'horloge, en lecture seule
+  en `0x7FFE0000` dans chaque processus. DLL système faite (`ps::system_dll`) : points d'entrée de ntdll résolus à son
+  installation, ntdll projetée à sa base dans chaque processus, threads démarrés par `LdrInitializeThunk` (APC
+  utilisateur, 8 octets réservés sous le `CONTEXT` pour l'enregistrement SEH du répartiteur de ReactOS) ; `SystemCall`
+  désigne `KiIntSystemCall` partout tant que SYSENTER ne revient pas par ntdll. À venir : SYSENTER pour Ps (retour par
+  ntdll), SWAPGS, `fetch-userland` (le fichier ntdll.dll, puis son installation au démarrage).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
