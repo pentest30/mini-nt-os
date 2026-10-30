@@ -218,6 +218,21 @@ pub fn terminate_process(process: Arc<Object<EProcess>>, status: NtStatus) -> Re
     Ok(())
 }
 
+/// NtTerminateProcess(NULL) : termine les autres threads du processus du
+/// thread courant avec `status` ; le thread courant continue, et le statut de
+/// sortie du processus reste à fixer (kernel32 appelle ensuite
+/// NtTerminateProcess sur lui-même). Sans effet pour un thread hors de Ps.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn terminate_other_threads(status: NtStatus) {
+    let Some(current) = ethread::current_thread() else { return };
+    let threads = current.process().threads.lock().list.clone();
+    for thread in threads.iter().filter(|thread| !Arc::ptr_eq(thread, &current)) {
+        thread.request_termination(status);
+    }
+}
+
 /// Termine le processus du thread courant avec `status` (un thread noyau ou
 /// de l'ancien chargeur se termine seul).
 ///
