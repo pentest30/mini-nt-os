@@ -12,6 +12,7 @@
 //! quitté le processeur, le *reaper* rend sa pile noyau ; son thread Ke est
 //! libéré avec l'objet, à son dernier pointeur.
 
+use alloc::boxed::Box;
 use alloc::sync::{Arc, Weak};
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
@@ -20,7 +21,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use abi::ntstatus::{
     NtStatus, STATUS_CONFLICTING_ADDRESSES, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_CID,
-    STATUS_INVALID_PARAMETER, STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING,
+    STATUS_INVALID_PARAMETER, STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING, STATUS_UNSUCCESSFUL,
 };
 use abi::teb32::Teb32;
 use hal::sync::KSpinLock;
@@ -202,6 +203,38 @@ impl EThread {
         }
     }
 
+    /// NtQueueApcThread : met en file pour le thread l'APC utilisateur qui
+    /// appellera `routine(context, argument1, argument2)` dans son mode
+    /// utilisateur, après sa prochaine attente alertable ou son prochain test
+    /// d'alerte. `STATUS_UNSUCCESSFUL` s'il n'est pas lancé ou ne reçoit plus
+    /// d'APC.
+    ///
+    /// # IRQL
+    /// <= APC_LEVEL.
+    pub fn queue_user_apc(&self, routine: u32, context: u32, argument1: u32, argument2: u32) -> Result<(), NtStatus> {
+        let Some(ke_tid) = self.ke_tid() else { return Err(STATUS_UNSUCCESSFUL) };
+        let kthread = ke::sched::kernel_thread(ke_tid).expect("a live thread without its Ke thread");
+        let value = |v: u32| core::ptr::without_provenance_mut(v as usize);
+        let apc = Box::into_raw(Box::new(KApc::new(
+            kthread,
+            free_user_apc,
+            Some(run_down_user_apc),
+            Some(NormalRoutine::User(routine)),
+            ProcessorMode::User,
+            value(context),
+        )));
+        // SAFETY: the APC is boxed, at a fixed address, until its kernel or
+        // rundown routine frees it; the Ke thread lives as long as this
+        // object, whose APCs are run down before it ends.
+        if unsafe { ke_insert_queue_apc::<KePlatform>(apc, value(argument1), value(argument2), 0) } {
+            Ok(())
+        } else {
+            // SAFETY: not queued, so still ours.
+            drop(unsafe { Box::from_raw(apc) });
+            Err(STATUS_UNSUCCESSFUL)
+        }
+    }
+
     /// Le thread s'est terminé lui-même : plus d'APC de fin à mettre en file.
     pub(crate) fn mark_terminating(&self) {
         self.terminating.store(true, Ordering::Release);
@@ -230,6 +263,25 @@ fn exit_kernel_routine(
     _argument1: &mut *mut c_void,
     _argument2: &mut *mut c_void,
 ) {
+}
+
+/// Routine noyau d'un APC de NtQueueApcThread, à APC_LEVEL : l'APC, sorti de
+/// la file, est libéré ; sa routine normale part en mode utilisateur.
+fn free_user_apc(
+    apc: *mut KApc,
+    _normal_routine: &mut Option<NormalRoutine>,
+    _normal_context: &mut *mut c_void,
+    _argument1: &mut *mut c_void,
+    _argument2: &mut *mut c_void,
+) {
+    run_down_user_apc(apc);
+}
+
+/// Un APC de NtQueueApcThread que son thread ne recevra pas : libéré.
+fn run_down_user_apc(apc: *mut KApc) {
+    // SAFETY: boxed by `queue_user_apc`, and out of the queue: no one else
+    // holds it.
+    drop(unsafe { Box::from_raw(apc) });
 }
 
 /// Routine normale de l'APC de fin, à PASSIVE_LEVEL dans le thread : il se
