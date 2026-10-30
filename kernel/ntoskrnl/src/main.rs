@@ -302,6 +302,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     address_space_self_test();
     vad_self_test();
     demand_paging_self_test();
+    out_of_page_tables_self_test();
     section_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
@@ -1323,6 +1324,64 @@ fn demand_paging_self_test() {
          pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
         COMMITTED / 2
     );
+}
+
+/// A demand-zero fault that gets its page but no page table returns
+/// `STATUS_NO_MEMORY` and gives the page back, instead of stopping the system:
+/// every free page but one is taken, and the first page of a new address
+/// space needs three tables.
+fn out_of_page_tables_self_test() {
+    use abi::ntstatus::{STATUS_NO_MEMORY, STATUS_SUCCESS};
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::buddy::MAX_ORDER;
+    use mm::fault::Access;
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{AllocType, PAGE_SIZE};
+
+    let space = AddressSpace::new().expect("no PML4");
+    let commit = AllocType::MEM_RESERVE | AllocType::MEM_COMMIT;
+    let va = space.allocate(0, PAGE_SIZE, commit, PageProtect::READWRITE).expect("commit");
+    let user_pages = || pfn::stats().active(PageUsage::UserPrivate);
+    let before = user_pages();
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // The first page of each block taken holds the previous block and its
+    // order (the PFN plus one, 0 at the end): no pool, no stack.
+    let link = |block: mm::Pfn| (hhdm + block.to_phys()) as *mut [u64; 2];
+    // At DISPATCH_LEVEL, no thread allocates while the pages are taken (ISRs
+    // and DPCs never do).
+    let irql = hal::irql::raise(hal::irql::Irql::Dispatch);
+    let (mut last, mut count) = ([0u64; 2], 0);
+    loop {
+        let free = pfn::stats().free;
+        let largest = (0..MAX_ORDER).rev().filter(|&order| 1 << order < free);
+        let Some((block, order)) =
+            largest.into_iter().find_map(|order| pfn::allocate_pages(order, PageUsage::Buffer).map(|b| (b, order)))
+        else {
+            break;
+        };
+        // SAFETY: the first page of a block just allocated, through the HHDM.
+        unsafe { link(block).write(last) };
+        last = [block.0 + 1, order as u64];
+        count += 1;
+    }
+    let left = pfn::stats().free;
+    let status = space.access_fault(va, Access::Write);
+    while last[0] != 0 {
+        let block = mm::Pfn(last[0] - 1);
+        // SAFETY: a block taken above, still allocated.
+        let previous = unsafe { link(block).read() };
+        pfn::free_pages(block, last[1] as usize);
+        last = previous;
+    }
+    hal::irql::lower(irql);
+    assert_eq!(left, 1, "not one free page left");
+    assert_eq!(status, STATUS_NO_MEMORY);
+    assert_eq!(user_pages(), before, "the fault kept its page");
+    assert_eq!(space.access_fault(va, Access::Write), STATUS_SUCCESS, "memory back, the fault works");
+    space.destroy();
+    log::info!("[smoke] Mm: a fault without a page table returns STATUS_NO_MEMORY ({count} blocks taken)");
 }
 
 /// Sections (`mm::section`): a shared-memory section mapped in two address

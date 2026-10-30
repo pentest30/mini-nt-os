@@ -19,6 +19,7 @@ expect = [smoke] Ke: kernel APCs run at APC_LEVEL
 expect = [smoke] Mm: address spaces:
 expect = [smoke] Mm: VAD reserve, commit, protect, decommit and release
 expect = [smoke] Mm: demand paging:
+expect = [smoke] Mm: a fault without a page table returns STATUS_NO_MEMORY
 expect = [smoke] Mm: sections:
 expect = [smoke] FPU: state kept across switches
 expect = [smoke] FAT read probe hit

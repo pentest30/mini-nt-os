@@ -370,7 +370,12 @@ impl AddressSpace {
                 let flags = MmPageTables::leaf_flags(protect.writable(), protect.executable(), true);
                 // SAFETY: the page has no physical page in this space (resolve
                 // said so); the frame belongs to the space from now on.
-                unsafe { tables.map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) };
+                if let Err(status) =
+                    unsafe { tables.try_map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) }
+                {
+                    pfn::free_page(frame);
+                    return status;
+                }
                 fault::count_demand_zero();
                 STATUS_SUCCESS
             }
@@ -384,8 +389,10 @@ impl AddressSpace {
                 let flags = MmPageTables::leaf_flags(writable, executable, true) | PTE_SHARED;
                 // SAFETY: the page has no physical page in this space (resolve
                 // said so); the frame stays the section's.
-                unsafe { tables.map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) };
-                STATUS_SUCCESS
+                match unsafe { tables.try_map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) } {
+                    Ok(()) => STATUS_SUCCESS,
+                    Err(status) => status,
+                }
             }
             Resolution::CopyOnWrite(protect) => {
                 let node = vad.find_mut(page).expect("a committed page has its VAD");
@@ -416,7 +423,14 @@ impl AddressSpace {
                     }
                     // SAFETY: the page has no physical page in this space; the
                     // copy belongs to the space from now on.
-                    _ => unsafe { tables.map_page(VirtAddr::new(page), PhysAddr::new(copy.to_phys()), flags) },
+                    _ => {
+                        if let Err(status) =
+                            unsafe { tables.try_map_page(VirtAddr::new(page), PhysAddr::new(copy.to_phys()), flags) }
+                        {
+                            pfn::free_page(copy);
+                            return status;
+                        }
+                    }
                 }
                 node.protect(page, page + PAGE, private);
                 STATUS_SUCCESS
