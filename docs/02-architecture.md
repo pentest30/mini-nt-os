@@ -244,6 +244,8 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 | `2Eh` | 3 | `KiSystemService`, appel système de repli |
 | `SYSENTER` | — | Appel système rapide, **sur Intel uniquement** |
 
+Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le noyau branche un handler par vecteur (`kernel/ntoskrnl/src/sys/gates.rs`). Tant que `KeUserModeCallback` n'existe pas, `2Bh` rend `STATUS_NO_CALLBACK_ACTIVE`. Tant que les exceptions n'atteignent pas le mode utilisateur, `2Ch` termine le processus avec `STATUS_ASSERTION_FAILURE`. `2Dh` saute l'`int 3` qui la suit dans `ntdll`.
+
 **Sélection du chemin rapide (ADR-004)** : SYSENTER n'existe pas en long mode sur AMD, et SYSCALL depuis le mode compatibilité n'existe pas sur Intel ([OSDev](https://wiki.osdev.org/SYSENTER), commentaires de `arch/x86/entry/entry_64_compat.S` dans Linux). Le noyau lit donc CPUID au démarrage et écrit dans `SharedUserData->SystemCall` (offset `0x300`) l'adresse de `ntdll!KiFastSystemCall` sur Intel, ou celle de `ntdll!KiIntSystemCall` (`int 2Eh`) sur les autres processeurs. C'est le mécanisme qu'utilisait XP SP2, et les stubs de `ntdll` passent par ce pointeur.
 
 ### 6.2 Tables de services
@@ -259,7 +261,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 ### 6.3 Trame de trap et pile noyau
 
 - **Piles** : chaque thread a sa pile noyau de 24 Kio, encadrée d'une page de garde. `TSS.RSP0` et `SYSENTER_ESP` (par CPU) pointent vers la pile du thread courant.
-- **Trame** : la trame unique `KTRAP_FRAME` (format 64 bits interne) sauvegarde tous les registres généraux, les segments et la trame `IRET`. Elle sait se convertir en `CONTEXT` x86 (format 32 bits) pour les exceptions, `NtGetContextThread` et les APC.
+- **Trame** : la trame unique `KTRAP_FRAME` (format 64 bits interne, `hal::trap::KTrapFrame`) sauvegarde tous les registres généraux, les segments et la trame `IRET`. Elle sait se convertir en `CONTEXT` x86 (format 32 bits, `abi::context`) pour les exceptions, `NtGetContextThread` et les APC (`ke::context`). Un contexte venu du mode utilisateur est assaini : EFLAGS ne garde que les drapeaux du mode utilisateur, et les sélecteurs sont imposés.
 - **Interruptions** : chaque appel système réactive les interruptions et s'exécute à `PASSIVE_LEVEL`. Il peut donc bloquer, être préempté et subir une faute de page.
 - **Segment `FS`** : à chaque changement de contexte, le noyau met à jour la base du descripteur TEB de la GDT du CPU puis recharge `FS`, comme `KiSwapContext` le faisait sous XP.
 

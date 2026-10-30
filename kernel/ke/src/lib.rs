@@ -23,6 +23,7 @@ pub mod apc;
 pub mod balance;
 pub mod bugcheck;
 pub mod clock;
+pub mod context;
 pub mod dispatcher;
 pub mod dpc;
 pub mod event;
