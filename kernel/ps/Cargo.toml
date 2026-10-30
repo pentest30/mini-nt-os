@@ -11,5 +11,6 @@ abi      = { path = "../../abi" }
 hal      = { path = "../hal" }
 ob       = { path = "../ob" }
 mm       = { path = "../mm" }
+pe       = { path = "../../libs/pe" }
 ke       = { path = "../ke" }
 log      = { workspace = true }

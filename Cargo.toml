@@ -11,6 +11,7 @@ members = [
     "kernel/ob",
     "kernel/ps",
     "kernel/io",
+    "libs/pe",
     "tools/pe-inspect",
     "tools/mkfat",
     "xtask",
