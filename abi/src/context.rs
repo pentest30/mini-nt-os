@@ -96,4 +96,10 @@ impl Context32 {
         // which all-zero bytes are a valid value.
         unsafe { core::mem::zeroed() }
     }
+
+    /// Its bytes.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: integers only, without padding (layout asserted above).
+        unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
 }
