@@ -103,8 +103,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   à `2Eh` l'empilent et appellent un handler par vecteur (`sys::gates` : tick count, `STATUS_NO_CALLBACK_ACTIVE`,
   assertion qui termine le processus, `DbgPrint` vers le port série avec le PID et le TID en sautant l'`int 3`,
   KiSystemService) ; GS n'est pas rechargé au retour. `abi::context` (CONTEXT x86) et `ke::context` (conversion,
-  assainissement d'EFLAGS et des sélecteurs). À venir : SYSENTER pour Ps (retour par ntdll), SWAPGS,
-  KiDispatchException, ntdll projeté et `KUSER_SHARED_DATA`, `fetch-userland`.
+  assainissement d'EFLAGS et des sélecteurs). Exceptions du mode utilisateur faites (`ke::exception`, `sys::exceptions`) :
+  #DE, #BP, #UD, #GP, #PF et `int 2Ch` passent par la trame de trap ; KiDispatchException met `CONTEXT` et
+  `EXCEPTION_RECORD` sur la pile du thread, qui reprend dans le répartiteur de ntdll (`set_user_exception_dispatcher` ;
+  sans répartiteur, le processus se termine avec le code) ; NtContinue, NtRaiseException (seconde chance : fin du
+  processus). Les services qui changent la trame (`Handler::Frame`) rendent `STATUS_NOT_IMPLEMENTED` par SYSENTER.
+  À venir : APC utilisateur, SYSENTER pour Ps (retour par ntdll), SWAPGS, ntdll projeté et `KUSER_SHARED_DATA`,
+  `fetch-userland`.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
