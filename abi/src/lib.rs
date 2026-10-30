@@ -8,6 +8,8 @@
 //! - [`object`]: access masks, generic mapping, object attributes.
 //! - [`peb32`], [`teb32`]: the PEB and TEB of an i386 process, as on XP SP2.
 //! - [`process`]: values about processes, such as their execute options.
+//! - [`service`], [`services`]: the system service tables, generated from the
+//!   pinned ReactOS version by `tools/syscall-gen` (ADR-002).
 //!
 //! The XP user-mode layouts (PEB, TEB, `KUSER_SHARED_DATA`, `CONTEXT`…) will
 //! join it. `no_std`, without dependencies.
@@ -22,6 +24,8 @@ pub mod ntstatus;
 pub mod object;
 pub mod peb32;
 pub mod process;
+pub mod service;
+pub mod services;
 pub mod teb32;
 
 pub use loader_block::*;

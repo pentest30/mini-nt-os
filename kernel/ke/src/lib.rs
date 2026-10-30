@@ -31,6 +31,7 @@ pub mod prcb;
 pub mod sched;
 pub mod thread;
 pub mod timer;
+pub mod usermem;
 
 pub use event::{EventType, KEvent};
 

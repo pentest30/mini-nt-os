@@ -44,14 +44,14 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
-- **Jalon courant : M2 — Mémoire, objets, processus** ([05](docs/05-feuille-de-route.md#m2--mémoire-objets-processus)).
-  M0 et M1 sont terminés. Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
+- **Jalon courant : M3 — Frontière NT, puis spike S1** ([05](docs/05-feuille-de-route.md#m3--frontière-nt-puis-spike-s1)).
+  M0, M1 et M2 sont terminés. Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
   `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
   thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
   (`ke::bugcheck`, `hal::bugcheck`). Scénarios `ke-events`, `fpu`, `ke-starvation`, `bugcheck`. Les APC utilisateur
   viennent au M3.
-  M2 : base PFN faite (`mm::pfn` au-dessus du buddy : toute page physique y passe, avec son usage ; double libération
+  Acquis de M2 : base PFN faite (`mm::pfn` au-dessus du buddy : toute page physique y passe, avec son usage ; double libération
   et page réservée arrêtent le système ; cohérence vérifiée en fin de phase 1). Pools faits (`mm::pool`) : non paginé
   (allocateur global) et paginé, qui grandissent à la demande et rendent leurs pages à la base PFN ;
   `ex_allocate_pool_with_tag` et compteurs par étiquette. Une PML4 par processus (`mm::address_space`) : moitié haute
@@ -88,6 +88,19 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   SP2 (ADR-020) : options d'exécution par processus (`EProcess::set_execute_options`, `MEM_EXECUTE_OPTION_*`), sans
   DEP toute page lisible s'exécute (`AddressSpace::set_execute_enabled`), la VAD garde la protection demandée. Pas
   encore : handles noyau, Se (accès accordés, ADR-011).
+  M3 : ReactOS épinglé en 0.4.16 (commit `51bfc703`, i386, version de publication), listes de services copiées dans
+  `tools/syscall-gen/reactos/0.4.16/` avec leur origine. `tools/syscall-gen` génère `abi/src/services.rs` (numéro de
+  chaque service par son nom NT, tables ntoskrnl et win32k avec octets d'arguments ; `abi::service::lookup`) ;
+  `cargo xtask lint` vérifie que le fichier est à jour. Dispatcher des services (`kernel/ntoskrnl/src/sys/`) pour les
+  threads de Ps : interruptions actives à PASSIVE_LEVEL, arguments copiés par `ke::usermem`,
+  `STATUS_INVALID_SYSTEM_SERVICE` hors des tables, `STATUS_NOT_IMPLEMENTED` (journalisé au premier appel) sans
+  handler ; syscall-gen tire de sa liste `IMPLEMENTED` le rapport `docs/compat/syscalls.md`. Services : NtClose,
+  NtTerminateProcess (NULL, soi-même, handle), NtAllocateVirtualMemory, NtFreeVirtualMemory. `ke::usermem` (sondes
+  sous 0x7FFF0000, `copy_from_user`, `copy_to_user`, `UserPtr<T>`) copie par `hal::usermem`, dont une faute sur une
+  adresse utilisateur reprend à sa correction (table des exceptions) au lieu du STOP 0x1E ; une faute du noyau sur la
+  garde de la pile du thread l'étend aussi. SYSENTER_ESP suit la pile noyau du thread. Les threads de l'ancien
+  chargeur gardent `syscall.rs` et ses numéros. À venir : `KTRAP_FRAME`, portes 2Ah–2Dh, SYSENTER pour Ps (retour par
+  ntdll), SWAPGS, KiDispatchException, ntdll projeté et `KUSER_SHARED_DATA`, `fetch-userland`.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
@@ -102,6 +115,7 @@ cargo xtask test                                     # tests hôte, puis scénar
 cargo xtask test --boot --scenario smoke --cpu intel # un scénario, un CPU
 cargo xtask run [--cpu intel] [--gdb] [--headless]   # démarre dans QEMU, port série sur stdio
 cargo xtask build [--features trace-syscalls]        # mino-loader et ntoskrnl
+cargo xtask syscall-gen                              # régénère abi/src/services.rs (listes de ReactOS épinglé)
 cargo xtask help
 ```
 

@@ -7,6 +7,7 @@
 //! cargo xtask run   [--cpu CPU] [--features F] [--memory MB] [--gdb] [--headless]
 //!                   [--add HOST_PATH:FAT_NAME]... [--data-dir DIR]
 //! cargo xtask test  [--host] [--boot] [--scenario NAME]... [--cpu CPU] [--timeout S]
+//! cargo xtask syscall-gen
 //! ```
 //!
 //! CPU is `default` (QEMU's CPU, AMD vendor: `int 2Eh`), `intel` (SYSENTER,
@@ -40,8 +41,8 @@ usage: cargo xtask <command> [options]
 commands:
   build   build mino-loader and ntoskrnl
           --features F        ntoskrnl features (comma-separated)
-  lint    rustfmt --check, then clippy -D warnings on the host and the
-          bare-metal targets (06 §6)
+  lint    rustfmt --check, the generated service tables up to date, then
+          clippy -D warnings on the host and the bare-metal targets (06 §6)
   run     build, then boot in QEMU with the serial port on stdio
           --cpu CPU           default | intel | QEMU -cpu model
           --features F        ntoskrnl features
@@ -56,6 +57,9 @@ commands:
           --scenario NAME     only this scenario (repeatable)
           --cpu CPU           only this CPU
           --timeout S         override the scenarios' timeout
+  syscall-gen
+          regenerate abi/src/services.rs from the pinned ReactOS service
+          lists (tools/syscall-gen, ADR-002)
 
 firmware and emulator (run, test):
   --ovmf FILE | --ovmf-code FILE [--ovmf-vars FILE] | --qemu FILE
@@ -89,6 +93,10 @@ fn dispatch(mut args: Args) -> Result<()> {
         }
         Some("run") => run(&ws, args),
         Some("test") => test(&ws, args),
+        Some("syscall-gen") => {
+            args.finish()?;
+            cargo(&ws, &["run", "--quiet", "-p", "syscall-gen"])
+        }
         Some("help") | Some("-h") | Some("--help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -104,13 +112,16 @@ const ALL_KERNEL_FEATURES: &str =
     "trace-syscalls,test-stack-overflow,test-ke-events,test-fpu,test-bugcheck,test-ke-starvation,\
      test-page-fault-irql,test-page-fault-access-violation,heartbeat";
 
-/// `cargo fmt --check`, then clippy with warnings denied: the host workspace,
+/// `cargo fmt --check`, the service tables generated from the pinned ReactOS
+/// lists up to date (`syscall-gen --check`), then clippy with warnings
+/// denied: the host workspace,
 /// and the kernel and loader on their own targets (cfg(target_os = "none")
 /// code), the kernel with and without its features. `-D warnings` goes to
 /// clippy, not RUSTFLAGS, which would replace the target flags of
 /// .cargo/config.toml.
 fn lint(ws: &Workspace) -> Result<()> {
     cargo(ws, &["fmt", "--all", "--check"])?;
+    cargo(ws, &["run", "--quiet", "-p", "syscall-gen", "--", "--check"])?;
     cargo(ws, &["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"])?;
     let bare_metal: [&[&str]; 3] = [
         &["-p", "ntoskrnl", "--target", KERNEL_TARGET],

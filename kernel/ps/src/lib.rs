@@ -31,7 +31,10 @@ pub mod rundown;
 
 pub use eprocess::{create_process, lookup_process, system_process, EProcess, PROCESS_TYPE};
 pub use ethread::{create_thread, create_user_stack, lookup_thread, EThread, InitialTeb, THREAD_TYPE};
-pub use exit::{exit_thread, terminate_current_process, terminate_process, terminate_thread, wait_for_reaper};
+pub use exit::{
+    exit_thread, terminate_current_process, terminate_other_threads, terminate_process, terminate_thread,
+    wait_for_reaper,
+};
 
 use alloc::boxed::Box;
 use alloc::sync::Weak;

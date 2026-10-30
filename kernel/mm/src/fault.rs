@@ -28,9 +28,7 @@
 //! DEP (ADR-020), toute page lisible s'exécute aussi
 //! (`AddressSpace::set_execute_enabled`).
 //!
-//! Pas encore : extension de la pile par une faute du noyau (sa copie du
-//! contexte d'une exception sur la pile utilisateur, M3) ; pagination sur
-//! disque.
+//! Pas encore : pagination sur disque.
 //!
 //! WI7e Ch.5 §Page Fault Handling
 
@@ -171,8 +169,9 @@ pub fn stack_extension(addr: u64, bottom: u64, base: u64) -> Result<(u64, u64), 
 
 /// La faute de page de Mm, pour `hal::idt` : `None` hors de la moitié basse
 /// d'un espace d'adresses, sinon `STATUS_SUCCESS` si l'accès peut reprendre
-/// ou l'exception qu'il lève. Une garde levée par le mode utilisateur étend
-/// la pile du thread courant, si elle en est (son TEB vient du KPCR).
+/// ou l'exception qu'il lève. Une garde levée dans la pile du thread courant
+/// l'étend (son TEB vient du KPCR), que l'accès vienne du thread ou du noyau
+/// qui copie pour lui (`ke::usermem`).
 ///
 /// # IRQL
 /// < DISPATCH_LEVEL (hal le vérifie avant l'appel).
@@ -183,7 +182,7 @@ pub fn page_fault_hook(addr: u64, error: PageFaultErrorCode) -> Option<NtStatus>
     let space = AddressSpace::current()?;
     let status = space.access_fault(addr, Access::from_error_code(error));
     let teb = hal::pcr::current().teb();
-    if status == STATUS_GUARD_PAGE_VIOLATION && error.contains(PageFaultErrorCode::USER_MODE) && teb != 0 {
+    if status == STATUS_GUARD_PAGE_VIOLATION && teb != 0 {
         return Some(space.extend_user_stack(addr, teb));
     }
     Some(status)

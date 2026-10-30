@@ -1,8 +1,14 @@
 //! Process values shared with user mode.
 //!
+//! - The pseudo-handles of the current process and thread.
 //! - `MEM_EXECUTE_OPTION_*`: a process's execute options (DEP, ADR-020), as
 //!   `NtQueryInformationProcess` and `NtSetInformationProcess` exchange them
 //!   (`ProcessExecuteFlags`, M3).
+
+/// `NtCurrentProcess()`: the calling process, without a handle.
+pub const NT_CURRENT_PROCESS: u32 = 0xFFFF_FFFF;
+/// `NtCurrentThread()`: the calling thread, without a handle.
+pub const NT_CURRENT_THREAD: u32 = 0xFFFF_FFFE;
 
 /// DEP is on: pages without an execute protection do not execute.
 pub const MEM_EXECUTE_OPTION_DISABLE: u32 = 0x01;

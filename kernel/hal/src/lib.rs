@@ -26,6 +26,7 @@ pub mod symbols;
 pub mod sync;
 pub mod sysenter;
 pub mod timer;
+pub mod usermem;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
