@@ -8,7 +8,7 @@
 //!   - Timer wheel and KTIMER objects (periodic, with a DPC)
 //!   - FPU state per thread (ADR-009) and kernel FPU brackets (`fpu`)
 //!   - Synchronisation primitives: KEVENT, KSEMAPHORE, KMUTEX
-//!   - APC (Asynchronous Procedure Call) queues
+//!   - Kernel APCs: `KApc` objects, delivered at APC_LEVEL (`apc`)
 //!   - DPC (Deferred Procedure Call) queue, without allocation, and the
 //!     DISPATCH interrupt that drains it
 //!   - `KeBugCheckEx`, the fatal error screen (`bugcheck`)

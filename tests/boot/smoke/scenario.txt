@@ -13,6 +13,7 @@ expect = [smoke] dispatch deferred
 expect = [smoke] DPC: run at once
 expect = [smoke] Ke: priority preemption
 expect = [smoke] Ke: wait boost preempts the waker
+expect = [smoke] Ke: kernel APCs run at APC_LEVEL
 expect = [smoke] FPU: state kept across switches
 expect = [smoke] FAT read probe hit
 expect = kernel: phase 1 done

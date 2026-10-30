@@ -351,9 +351,11 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 
     // Wire preemptive round-robin: each clock tick ends the quantum, and the
     // DISPATCH interrupt (timer ISR below DISPATCH_LEVEL, or IRQL drop) drains
-    // the DPC queue, then runs schedule(). Registered after ke::init()
-    // (scheduler table ready) and before interrupts re-enable.
+    // the DPC queue, then runs schedule(); the APC interrupt delivers the
+    // current thread's kernel APCs. Registered after ke::init() (scheduler
+    // table ready) and before interrupts re-enable.
     hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
+    hal::irql::set_apc_hook(Some(ke::apc::ki_apc_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
     hal::idt::set_user_fault_hook(Some(ke::sched::terminate_current_thread));
@@ -370,6 +372,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     dpc_self_test();
     ke_self_test();
     boost_self_test();
+    apc_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -878,6 +881,122 @@ fn boost_self_test() {
         unsafe { ke_wait_for_single_object::<KePlatform>(thread, ProcessorMode::Kernel, false, Some(-1000 * MS)) };
     assert_eq!(end, STATUS_WAIT_0, "the woken thread did not end");
     log::info!("[smoke] Ke: wait boost preempts the waker, then decays one level per quantum");
+}
+
+/// Checks kernel APCs on real threads (M1, `ke::apc`): a special APC queued to
+/// the running thread runs at APC_LEVEL before the call returns; one queued
+/// by a DPC runs as soon as the DPC has; a normal APC queued to a thread
+/// waiting at PASSIVE_LEVEL runs in that thread, its kernel routine at
+/// APC_LEVEL and its normal routine at PASSIVE_LEVEL, and the wait goes on
+/// after it.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn apc_self_test() {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
+    use hal::irql::Irql;
+    use ke::apc::{ke_insert_queue_apc, KApc, NormalRoutine};
+    use ke::dispatcher::{
+        ke_initialize_event, ke_set_event, ke_wait_for_single_object, KEvent, KThread, ObjectType, Platform,
+        ProcessorMode, EVENT_INCREMENT, IO_NO_INCREMENT,
+    };
+    use ke::dpc::{ke_insert_queue_dpc, KDpc};
+    use ke::sched::KePlatform;
+
+    const NOT_RUN: u8 = u8::MAX;
+    static SELF_APC: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static DPC_APC: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static KERNEL_ROUTINE: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static NORMAL_ROUTINE: AtomicU8 = AtomicU8::new(NOT_RUN);
+    static NORMAL_IN: AtomicPtr<KThread> = AtomicPtr::new(core::ptr::null_mut());
+    static WOKEN: AtomicBool = AtomicBool::new(false);
+
+    /// Records the IRQL in the `AtomicU8` that `argument1` points to.
+    fn record(
+        _: *mut KApc,
+        _: &mut Option<NormalRoutine>,
+        _: &mut *mut c_void,
+        at: &mut *mut c_void,
+        _: &mut *mut c_void,
+    ) {
+        // SAFETY: every APC of this test passes one of the statics above.
+        unsafe { (*at.cast::<AtomicU8>()).store(hal::irql::current() as u8, Ordering::Relaxed) };
+    }
+    /// Records the IRQL in the `AtomicU8` that `argument2` points to.
+    fn normal(_: *mut c_void, _: *mut c_void, at: *mut c_void) {
+        // SAFETY: as above.
+        unsafe { (*at.cast::<AtomicU8>()).store(hal::irql::current() as u8, Ordering::Relaxed) };
+        NORMAL_IN.store(KePlatform::current_thread(), Ordering::Relaxed);
+    }
+    fn queue_from_dpc(_: *const KDpc, apc: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        // SAFETY: the APC is leaked, initialised for the boot thread.
+        let queued = unsafe {
+            ke_insert_queue_apc::<KePlatform>(
+                apc.cast(),
+                (&raw const DPC_APC).cast_mut().cast(),
+                core::ptr::null_mut(),
+                0,
+            )
+        };
+        assert!(queued && DPC_APC.load(Ordering::Relaxed) == NOT_RUN, "an APC ran at DISPATCH_LEVEL");
+    }
+    fn sleeper(event: *mut c_void) {
+        let event = event.cast::<KEvent>();
+        // SAFETY: on a scheduler thread; the event is never freed.
+        let status = unsafe {
+            ke_wait_for_single_object::<KePlatform>(&raw mut (*event).header, ProcessorMode::Kernel, false, None)
+        };
+        assert_eq!(status, STATUS_WAIT_0);
+        WOKEN.store(true, Ordering::Release);
+    }
+    let leak = |apc: KApc| alloc::boxed::Box::leak(alloc::boxed::Box::new(apc)) as *mut KApc;
+    let arg = |at: &'static AtomicU8| core::ptr::from_ref(at).cast_mut().cast::<c_void>();
+    let me = KePlatform::current_thread();
+
+    // SAFETY: each APC is leaked: valid, at a fixed address, for good.
+    let queued = unsafe {
+        ke_insert_queue_apc::<KePlatform>(
+            leak(KApc::new(me, record, None, None, ProcessorMode::Kernel, core::ptr::null_mut())),
+            arg(&SELF_APC),
+            core::ptr::null_mut(),
+            IO_NO_INCREMENT,
+        )
+    };
+    assert!(queued);
+    assert_eq!(SELF_APC.load(Ordering::Relaxed), Irql::Apc as u8, "special APC to the running thread");
+
+    let from_dpc = leak(KApc::new(me, record, None, None, ProcessorMode::Kernel, core::ptr::null_mut()));
+    let dpc = alloc::boxed::Box::leak(alloc::boxed::Box::new(KDpc::new(queue_from_dpc, from_dpc.cast())));
+    // SAFETY: the DPC is leaked: valid, at a fixed address, for good.
+    assert!(unsafe { ke_insert_queue_dpc(dpc, core::ptr::null_mut(), core::ptr::null_mut()) });
+    assert_eq!(DPC_APC.load(Ordering::Relaxed), Irql::Apc as u8, "APC queued by a DPC, run after it");
+
+    let event = alloc::boxed::Box::into_raw(alloc::boxed::Box::<KEvent>::new_uninit()).cast::<KEvent>();
+    // SAFETY: fresh memory at a fixed address, never freed.
+    unsafe { ke_initialize_event(event, ObjectType::SynchronizationEvent, false) };
+    // Above the boot thread: it runs, and starts waiting, before this returns.
+    let tid = spawn_kernel_thread(ke::sched::current_priority() + 1, sleeper, event.cast());
+    let waiter = ke::sched::thread_object(tid).expect("thread object").cast::<KThread>();
+    let to_waiter = leak(KApc::new(waiter, record, None, Some(normal), ProcessorMode::Kernel, core::ptr::null_mut()));
+    // SAFETY: as above; the waiter is a registered thread, never freed.
+    unsafe {
+        ke_insert_queue_apc::<KePlatform>(to_waiter, arg(&KERNEL_ROUTINE), arg(&NORMAL_ROUTINE), IO_NO_INCREMENT)
+    };
+    assert_eq!(KERNEL_ROUTINE.load(Ordering::Relaxed), Irql::Apc as u8, "kernel routine");
+    assert_eq!(NORMAL_ROUTINE.load(Ordering::Relaxed), Irql::Passive as u8, "normal routine");
+    assert_eq!(NORMAL_IN.load(Ordering::Relaxed), waiter, "the APC ran in another thread's context");
+    assert!(!WOKEN.load(Ordering::Acquire), "the wait did not resume after the APC");
+    // SAFETY: the event is initialised and never freed.
+    unsafe { ke_set_event::<KePlatform>(event, EVENT_INCREMENT) };
+    // SAFETY: on the boot thread; the thread object is never freed.
+    let end = unsafe {
+        ke_wait_for_single_object::<KePlatform>(waiter.cast(), ProcessorMode::Kernel, false, Some(-1000 * 10_000))
+    };
+    assert_eq!(end, STATUS_WAIT_0);
+    assert!(WOKEN.load(Ordering::Acquire));
+    log::info!("[smoke] Ke: kernel APCs run at APC_LEVEL, normal routines at PASSIVE_LEVEL, a wait resumes after them");
 }
 
 /// Checks that the FPU state follows each thread (ADR-009): the boot thread's

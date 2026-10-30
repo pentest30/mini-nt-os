@@ -35,6 +35,19 @@ std::thread_local! {
     /// Threads rendus prêts, avec le relèvement de leur réveil.
     static READIED: RefCell<Vec<(*mut KThread, u8)>> = const { RefCell::new(Vec::new()) };
     static TABLE: Cell<*const TimerTable> = const { Cell::new(ptr::null()) };
+    /// L'interruption APC est demandée.
+    static APC_PENDING: Cell<bool> = const { Cell::new(false) };
+}
+
+/// L'interruption APC, comme la HAL : à APC_LEVEL, tant qu'elle est demandée,
+/// puis retour à l'IRQL d'avant.
+fn run_apc() {
+    let old = Sim::raise_irql(Irql::Apc);
+    while APC_PENDING.replace(false) {
+        // SAFETY: le thread courant du test est initialisé.
+        unsafe { crate::apc::ki_deliver_apc::<Sim>() };
+    }
+    Sim::lower_irql(old);
 }
 
 // SAFETY: chaque méthode respecte le contrat du trait ; swap_thread relâche le
@@ -61,6 +74,11 @@ unsafe impl Platform for Sim {
         unsafe {
             assert_ne!((*me).state, ThreadState::Waiting, "lost wake-up: still waiting once the others ran");
             (*me).state = ThreadState::Running;
+            // Repris avec des APC noyau en attente : ils sont livrés, à l'IRQL
+            // de l'attente (`ke::sched`).
+            if (*me).kernel_apc_pending {
+                Sim::request_apc_interrupt();
+            }
             (*me).wait_status
         }
     }
@@ -85,6 +103,16 @@ unsafe impl Platform for Sim {
     fn lower_irql(new: Irql) {
         assert!(new <= IRQL.get(), "lower from {:?} to {new:?}", IRQL.get());
         IRQL.set(new);
+        if new < Irql::Apc && APC_PENDING.get() {
+            run_apc();
+        }
+    }
+
+    fn request_apc_interrupt() {
+        APC_PENDING.set(true);
+        if IRQL.get() < Irql::Apc {
+            run_apc();
+        }
     }
 }
 
@@ -160,6 +188,7 @@ fn then(action: impl FnOnce() + 'static) {
 fn setup() -> *mut KThread {
     ACTIONS.with_borrow_mut(VecDeque::clear);
     READIED.with_borrow_mut(Vec::clear);
+    APC_PENDING.set(false);
     TABLE.set(Box::leak(Box::new(TimerTable::new())));
     IRQL.set(Irql::Passive);
     let t = new_thread();
@@ -782,5 +811,298 @@ fn a_thread_end_wakes_its_waiters_unraised_and_its_mutants_next_owners_raised() 
     then(move || exit_thread(ended));
     assert_eq!(wait_one(hdr(ended), None), STATUS_WAIT_0);
     assert_eq!(increments(), [MUTANT_INCREMENT, IO_NO_INCREMENT]);
+    finish();
+}
+
+// ── APC noyau (`ke::apc`) ────────────────────────────────────────────────────
+
+use crate::apc::{
+    ke_enter_critical_region, ke_enter_guarded_region, ke_insert_queue_apc, ke_leave_critical_region,
+    ke_leave_guarded_region, ke_remove_queue_apc, KApc, NormalRoutine,
+};
+
+/// Une routine d'APC qui s'est exécutée.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum Ran {
+    /// La routine noyau de l'APC `label`, à l'IRQL donné.
+    Kernel(usize, Irql),
+    /// Sa routine normale.
+    Normal(usize, Irql),
+}
+
+std::thread_local! {
+    static RAN: RefCell<Vec<(Ran, *mut KThread)>> = const { RefCell::new(Vec::new()) };
+    /// APC que la routine normale `queue_more` met en file, avec leur étiquette.
+    static MORE: RefCell<Vec<(*mut KApc, usize)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn ran(what: Ran) {
+    RAN.with_borrow_mut(|r| r.push((what, CURRENT.get())));
+}
+
+/// Les routines exécutées, dans l'ordre.
+fn ran_list() -> Vec<Ran> {
+    RAN.with_borrow(|r| r.iter().map(|&(what, _)| what).collect())
+}
+
+fn on_kernel(
+    _: *mut KApc,
+    _: &mut Option<NormalRoutine>,
+    _: &mut *mut c_void,
+    argument1: &mut *mut c_void,
+    _: &mut *mut c_void,
+) {
+    ran(Ran::Kernel(argument1.addr(), IRQL.get()));
+}
+
+fn cancel_normal(
+    apc: *mut KApc,
+    normal: &mut Option<NormalRoutine>,
+    context: &mut *mut c_void,
+    argument1: &mut *mut c_void,
+    argument2: &mut *mut c_void,
+) {
+    on_kernel(apc, normal, context, argument1, argument2);
+    *normal = None;
+}
+
+fn on_normal(_: *mut c_void, argument1: *mut c_void, _: *mut c_void) {
+    ran(Ran::Normal(argument1.addr(), IRQL.get()));
+}
+
+fn queue_more(context: *mut c_void, argument1: *mut c_void, argument2: *mut c_void) {
+    on_normal(context, argument1, argument2);
+    for (apc, label) in MORE.with_borrow_mut(std::mem::take) {
+        queue(apc, label);
+    }
+}
+
+fn apc(
+    thread: *mut KThread,
+    kernel: crate::apc::KernelRoutine,
+    normal: Option<NormalRoutine>,
+    mode: ProcessorMode,
+) -> *mut KApc {
+    Box::leak(Box::new(KApc::new(thread, kernel, None, normal, mode, ptr::null_mut())))
+}
+
+fn special(thread: *mut KThread) -> *mut KApc {
+    apc(thread, on_kernel, None, ProcessorMode::Kernel)
+}
+
+fn normal(thread: *mut KThread) -> *mut KApc {
+    apc(thread, on_kernel, Some(on_normal), ProcessorMode::Kernel)
+}
+
+/// Met `apc` en file avec l'étiquette `label` (premier argument système).
+fn queue_raised(apc: *mut KApc, label: usize, increment: u8) -> bool {
+    // SAFETY: APC du test, jamais libéré.
+    unsafe { ke_insert_queue_apc::<Sim>(apc, ptr::without_provenance_mut(label), ptr::null_mut(), increment) }
+}
+
+fn queue(apc: *mut KApc, label: usize) -> bool {
+    queue_raised(apc, label, IO_NO_INCREMENT)
+}
+
+fn inserted(apc: *mut KApc) -> bool {
+    // SAFETY: APC du test.
+    unsafe { (*apc).is_inserted() }
+}
+
+/// Exécute `f` à DISPATCH_LEVEL, puis redescend : les APC demandés entre-temps
+/// sont livrés à la descente.
+fn at_dispatch_level(f: impl FnOnce()) {
+    let old = Sim::raise_irql(Irql::Dispatch);
+    f();
+    assert!(ran_list().is_empty(), "no APC runs at DISPATCH_LEVEL");
+    Sim::lower_irql(old);
+}
+
+fn apc_setup() -> *mut KThread {
+    RAN.with_borrow_mut(Vec::clear);
+    MORE.with_borrow_mut(Vec::clear);
+    setup()
+}
+
+#[test]
+fn a_special_apc_queued_to_the_running_thread_runs_at_once_at_apc_level() {
+    let t = apc_setup();
+    let a = special(t);
+    assert!(queue(a, 1));
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc)]);
+    assert!(!inserted(a), "out of the queue once delivered");
+    // SAFETY: thread du test.
+    assert!(!unsafe { (*t).kernel_apc_pending });
+    finish();
+}
+
+#[test]
+fn a_normal_apc_runs_its_kernel_routine_at_apc_level_then_its_normal_routine_at_passive_level() {
+    let t = apc_setup();
+    let a = normal(t);
+    at_dispatch_level(|| assert!(queue(a, 1)));
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc), Ran::Normal(1, Irql::Passive)]);
+    finish();
+}
+
+#[test]
+fn special_apcs_run_before_normal_ones_each_in_queue_order() {
+    let t = apc_setup();
+    let apcs = [normal(t), special(t), normal(t), special(t)];
+    at_dispatch_level(|| {
+        for (label, &a) in apcs.iter().enumerate() {
+            assert!(queue(a, label));
+        }
+    });
+    assert_eq!(
+        ran_list(),
+        [
+            Ran::Kernel(1, Irql::Apc),
+            Ran::Kernel(3, Irql::Apc),
+            Ran::Kernel(0, Irql::Apc),
+            Ran::Normal(0, Irql::Passive),
+            Ran::Kernel(2, Irql::Apc),
+            Ran::Normal(2, Irql::Passive),
+        ]
+    );
+    finish();
+}
+
+#[test]
+fn a_kernel_routine_can_cancel_the_normal_routine() {
+    let t = apc_setup();
+    let a = apc(t, cancel_normal, Some(on_normal), ProcessorMode::Kernel);
+    at_dispatch_level(|| assert!(queue(a, 1)));
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc)]);
+    finish();
+}
+
+#[test]
+fn a_critical_region_holds_back_normal_apcs_but_not_special_ones() {
+    let t = apc_setup();
+    ke_enter_critical_region::<Sim>();
+    ke_enter_critical_region::<Sim>();
+    assert!(queue(normal(t), 1));
+    assert!(queue(special(t), 2));
+    assert_eq!(ran_list(), [Ran::Kernel(2, Irql::Apc)]);
+    ke_leave_critical_region::<Sim>();
+    assert_eq!(ran_list().len(), 1, "still inside the outer region");
+    ke_leave_critical_region::<Sim>();
+    assert_eq!(ran_list()[1..], [Ran::Kernel(1, Irql::Apc), Ran::Normal(1, Irql::Passive)]);
+    finish();
+}
+
+#[test]
+fn a_guarded_region_holds_back_every_kernel_apc() {
+    let t = apc_setup();
+    ke_enter_guarded_region::<Sim>();
+    assert!(queue(special(t), 1));
+    assert!(queue(normal(t), 2));
+    assert!(ran_list().is_empty());
+    assert!(crate::apc::ke_are_apcs_disabled::<Sim>());
+    ke_leave_guarded_region::<Sim>();
+    assert!(!crate::apc::ke_are_apcs_disabled::<Sim>());
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc), Ran::Kernel(2, Irql::Apc), Ran::Normal(2, Irql::Passive)]);
+    finish();
+}
+
+#[test]
+fn a_normal_apc_waits_for_the_normal_routine_in_progress_but_a_special_one_does_not() {
+    let t = apc_setup();
+    MORE.with_borrow_mut(|m| m.extend([(normal(t), 2), (special(t), 3)]));
+    let first = apc(t, on_kernel, Some(queue_more), ProcessorMode::Kernel);
+    at_dispatch_level(|| assert!(queue(first, 1)));
+    assert_eq!(
+        ran_list(),
+        [
+            Ran::Kernel(1, Irql::Apc),
+            Ran::Normal(1, Irql::Passive),
+            Ran::Kernel(3, Irql::Apc),
+            Ran::Kernel(2, Irql::Apc),
+            Ran::Normal(2, Irql::Passive),
+        ]
+    );
+    finish();
+}
+
+#[test]
+fn a_kernel_apc_interrupts_a_passive_level_wait_runs_in_the_waiter_then_the_wait_resumes() {
+    let waiter = apc_setup();
+    let other = new_thread();
+    let e = event(ObjectType::SynchronizationEvent, false);
+    let a = normal(waiter);
+    then(move || {
+        run_as(other);
+        assert!(queue_raised(a, 1, 2));
+        assert!(ran_list().is_empty(), "delivered in the waiter, once it resumes");
+    });
+    then(move || set(e));
+    assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0, "the wait resumes after the APC");
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc), Ran::Normal(1, Irql::Passive)]);
+    assert!(RAN.with_borrow(|r| r.iter().all(|&(_, thread)| thread == waiter)), "in the waiter's context");
+    assert_eq!(increments(), [2, EVENT_INCREMENT], "woken for the APC with its increment, then by the event");
+    finish();
+}
+
+#[test]
+fn a_wait_above_passive_level_is_not_interrupted_by_a_kernel_apc() {
+    let waiter = apc_setup();
+    let other = new_thread();
+    let e = event(ObjectType::SynchronizationEvent, false);
+    let a = normal(waiter);
+    let old = Sim::raise_irql(Irql::Apc);
+    then(move || {
+        run_as(other);
+        assert!(queue(a, 1));
+        assert_eq!(state(waiter), ThreadState::Waiting, "a wait at APC_LEVEL goes on");
+        set(e);
+    });
+    assert_eq!(wait_one(hdr(e), None), STATUS_WAIT_0);
+    assert!(ran_list().is_empty());
+    Sim::lower_irql(old);
+    assert_eq!(ran_list(), [Ran::Kernel(1, Irql::Apc), Ran::Normal(1, Irql::Passive)], "delivered on the way down");
+    finish();
+}
+
+#[test]
+fn an_apc_is_queued_once_and_can_be_taken_back() {
+    let t = apc_setup();
+    let a = normal(t);
+    at_dispatch_level(|| {
+        assert!(queue(a, 1));
+        assert!(!queue(a, 1), "already queued");
+        // SAFETY: APC du test.
+        unsafe {
+            assert!(ke_remove_queue_apc::<Sim>(a));
+            assert!(!ke_remove_queue_apc::<Sim>(a));
+            assert!(!(*t).kernel_apc_pending, "nothing left to deliver");
+        }
+    });
+    assert!(ran_list().is_empty());
+    finish();
+}
+
+#[test]
+fn a_terminated_thread_takes_no_apc() {
+    apc_setup();
+    let ended = new_thread();
+    exit_thread(ended);
+    assert!(!queue(normal(ended), 1));
+    finish();
+}
+
+#[test]
+fn a_user_apc_ends_an_alertable_user_mode_wait_and_stays_queued() {
+    let t = apc_setup();
+    let other = new_thread();
+    let e = event(ObjectType::NotificationEvent, false);
+    let a = apc(t, on_kernel, Some(on_normal), ProcessorMode::User);
+    then(move || {
+        run_as(other);
+        assert!(queue(a, 1));
+    });
+    assert_eq!(alertable_user_wait(hdr(e)), STATUS_USER_APC);
+    assert!(inserted(a), "delivered on the way back to user mode (M3)");
+    assert!(ran_list().is_empty());
     finish();
 }

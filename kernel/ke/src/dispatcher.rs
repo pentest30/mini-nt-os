@@ -97,6 +97,11 @@ pub unsafe trait Platform {
 
     /// KeLowerIrql.
     fn lower_irql(new: Irql);
+
+    /// Demande l'interruption APC du processeur courant : la livraison des APC
+    /// noyau du thread courant (`ke::apc::ki_deliver_apc`) dès que l'IRQL passe
+    /// sous APC_LEVEL, avant de revenir si c'est déjà le cas.
+    fn request_apc_interrupt();
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +179,7 @@ macro_rules! containing_record {
         ($ptr as *mut u8).sub(core::mem::offset_of!($ty, $field)) as *mut $ty
     };
 }
+pub(crate) use containing_record;
 
 // ---------------------------------------------------------------------------
 // Objets dispatcher
@@ -323,6 +329,22 @@ pub struct KThread {
     pub wait_blocks: [WaitBlock; THREAD_WAIT_OBJECTS + 1],
     pub timer: KTimer,
     pub mutant_list_head: ListEntry,
+    /// APC en file (`ke::apc`) : noyau à l'indice `ProcessorMode::Kernel`,
+    /// utilisateur à l'indice `ProcessorMode::User`.
+    pub apc_list_head: [ListEntry; 2],
+    /// Un APC noyau attend sa livraison.
+    pub kernel_apc_pending: bool,
+    /// La routine normale d'un APC noyau s'exécute.
+    pub kernel_apc_in_progress: bool,
+    /// Profondeur de région critique : les APC noyau normaux attendent.
+    pub kernel_apc_disable: u16,
+    /// Profondeur de région gardée : tous les APC noyau attendent.
+    pub special_apc_disable: u16,
+    /// IRQL de l'attente en cours : un APC noyau ne l'interrompt qu'à
+    /// PASSIVE_LEVEL.
+    pub wait_irql: Irql,
+    /// Des APC peuvent encore lui être mis en file : faux une fois terminé.
+    pub apc_queueable: bool,
 }
 
 impl KThread {
@@ -357,6 +379,15 @@ impl KThread {
             ptr::addr_of_mut!((*timer).period).write(0);
             ptr::addr_of_mut!((*timer).dpc).write(ptr::null());
             ListEntry::init(ptr::addr_of_mut!((*this).mutant_list_head));
+            ptr::addr_of_mut!((*this).apc_list_head).write([ListEntry::new(), ListEntry::new()]);
+            ListEntry::init(ptr::addr_of_mut!((*this).apc_list_head[ProcessorMode::Kernel as usize]));
+            ListEntry::init(ptr::addr_of_mut!((*this).apc_list_head[ProcessorMode::User as usize]));
+            ptr::addr_of_mut!((*this).kernel_apc_pending).write(false);
+            ptr::addr_of_mut!((*this).kernel_apc_in_progress).write(false);
+            ptr::addr_of_mut!((*this).kernel_apc_disable).write(0);
+            ptr::addr_of_mut!((*this).special_apc_disable).write(0);
+            ptr::addr_of_mut!((*this).wait_irql).write(Irql::Passive);
+            ptr::addr_of_mut!((*this).apc_queueable).write(true);
         }
     }
 }
@@ -706,12 +737,14 @@ pub unsafe fn ke_wait_for_multiple_objects<P: Platform>(
 
             (*thread).wait_mode = wait_mode;
             (*thread).alertable = alertable;
+            (*thread).wait_irql = old_irql;
             (*thread).wait_status = STATUS_WAIT_0;
             (*thread).state = ThreadState::Waiting;
 
             let status = P::swap_thread(old_irql);
 
-            // Un APC noyau a interrompu l'attente (et l'a défaite) : on la relance.
+            // Un APC noyau a interrompu l'attente (et l'a défaite) ; il a été
+            // livré à la reprise, en redescendant sous APC_LEVEL : on la relance.
             // TODO : recalculer un timeout relatif à partir du temps déjà écoulé.
             if status != STATUS_KERNEL_APC {
                 return status;
@@ -984,6 +1017,8 @@ pub unsafe fn ki_thread_exit<P: Platform>(thread: *mut KThread) {
             ki_unlink_wait_blocks::<P>(thread);
         }
         (*thread).state = ThreadState::Terminated;
+        // Ses APC encore en file y restent, sans rundown (Ps, M2).
+        (*thread).apc_queueable = false;
         let mutants = ptr::addr_of_mut!((*thread).mutant_list_head);
         while !ListEntry::is_empty(mutants) {
             let entry = (*mutants).flink;

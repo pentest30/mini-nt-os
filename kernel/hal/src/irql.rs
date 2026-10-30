@@ -37,6 +37,12 @@
 //! brings the IRQL below DISPATCH_LEVEL with interrupts enabled. A thread
 //! holding a `KSpinLock` (at DISPATCH_LEVEL) is therefore never preempted.
 //!
+//! The APC software interrupt works the same way one level down: Ke's hook
+//! delivers the current thread's kernel APCs at APC_LEVEL, interrupts
+//! enabled. Requested by [`request_apc`] (an APC queued to the running
+//! thread, or a thread resumed with APCs pending), it runs once the IRQL is
+//! below APC_LEVEL, after any pending DISPATCH interrupt.
+//!
 //! WI7e Ch.3 "Interrupt Request Levels and Deferred Procedure Calls"
 
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -132,6 +138,8 @@ static HOST_IRQL: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::n
 /// The DISPATCH interrupt handler: `fn()` stored as `usize`, 0 until Ke
 /// registers it.
 static DISPATCH_HOOK: AtomicUsize = AtomicUsize::new(0);
+/// `fn()` run by the APC software interrupt, or 0.
+static APC_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
@@ -173,8 +181,9 @@ pub fn raise(new_irql: Irql) -> Irql {
 }
 
 /// Lower the IRQL back to `old_irql` (as returned by a previous [`raise`]) —
-/// NT's `KeLowerIrql`. Below DISPATCH_LEVEL with interrupts enabled, runs the
-/// dispatch requested meanwhile, if any: this thread may be switched out here.
+/// NT's `KeLowerIrql`. With interrupts enabled, runs the DISPATCH interrupt
+/// requested meanwhile below DISPATCH_LEVEL (this thread may be switched out
+/// here), then the APC interrupt below APC_LEVEL.
 ///
 /// # Panics
 /// If `old_irql > current()`.
@@ -188,6 +197,9 @@ pub fn lower(old_irql: Irql) {
     if old_irql < Irql::Dispatch && dispatch_pending().load(Ordering::Acquire) && interrupts_enabled() {
         x86_64::instructions::interrupts::without_interrupts(run_dispatch);
     }
+    if old_irql < Irql::Apc && apc_pending().load(Ordering::Acquire) && interrupts_enabled() {
+        run_apc();
+    }
 }
 
 /// Registers the DISPATCH interrupt handler (Ke: DPC queue, then thread
@@ -199,16 +211,41 @@ pub fn set_dispatch_hook(hook: Option<fn()>) {
     DISPATCH_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
 }
 
+/// Registers the APC interrupt handler (Ke: kernel APC delivery to the
+/// current thread), run at APC_LEVEL with interrupts enabled. `None` until Ke
+/// is ready.
+///
+/// # IRQL: Any level.
+pub fn set_apc_hook(hook: Option<fn()>) {
+    APC_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+}
+
 /// Requests the DISPATCH interrupt (HalRequestSoftwareInterrupt). Below
 /// DISPATCH_LEVEL with interrupts enabled it runs before this returns: the
 /// caller may be switched out here. Otherwise it runs at the epilogue of the
-/// current ISR, or when the IRQL drops below DISPATCH_LEVEL.
+/// current ISR, or when the IRQL drops below DISPATCH_LEVEL. An APC
+/// interrupt requested meanwhile follows it.
 ///
 /// # IRQL: Any level, ISR included.
 pub fn request_dispatch() {
     dispatch_pending().store(true, Ordering::Release);
     if current() < Irql::Dispatch && interrupts_enabled() {
         x86_64::instructions::interrupts::without_interrupts(run_dispatch);
+        if current() < Irql::Apc && apc_pending().load(Ordering::Acquire) {
+            run_apc();
+        }
+    }
+}
+
+/// Requests the APC interrupt for the current thread. Below APC_LEVEL with
+/// interrupts enabled it runs before this returns; otherwise at the epilogue
+/// of the current ISR, or when the IRQL drops below APC_LEVEL.
+///
+/// # IRQL: Any level, ISR included.
+pub fn request_apc() {
+    apc_pending().store(true, Ordering::Release);
+    if current() < Irql::Apc && interrupts_enabled() {
+        run_apc();
     }
 }
 
@@ -229,14 +266,24 @@ pub fn enter_interrupt(level: Irql) -> Irql {
 
 /// From an ISR epilogue (EOI sent, interrupts disabled): back to the
 /// `interrupted` IRQL, then the DISPATCH interrupt the ISR requested, if the
-/// interrupted code ran below DISPATCH_LEVEL; otherwise it stays pending until
-/// the IRQL drops.
+/// interrupted code ran below DISPATCH_LEVEL, and a pending APC interrupt
+/// below APC_LEVEL (with interrupts enabled meanwhile); otherwise they stay
+/// pending until the IRQL drops.
 ///
 /// # IRQL: In an ISR, interrupts disabled.
 pub fn exit_interrupt(interrupted: Irql) {
     write_raw(interrupted.as_u8());
     if interrupted < Irql::Dispatch {
         run_dispatch();
+    }
+    if interrupted < Irql::Apc && apc_pending().load(Ordering::Acquire) {
+        // Kernel APCs run interrupts enabled, nested in this ISR's frame on
+        // the interrupted thread's stack; the IRQL masks nothing but them.
+        if cfg!(target_os = "none") {
+            x86_64::instructions::interrupts::enable();
+            run_apc();
+            x86_64::instructions::interrupts::disable();
+        }
     }
 }
 
@@ -257,6 +304,29 @@ fn run_dispatch() {
     }
     // Not `lower`: interrupts are off, and the dispatch has just run.
     write_raw(old.as_u8());
+}
+
+/// Runs the APC interrupt at APC_LEVEL, interrupts enabled, until no request
+/// is left, then lowers back (which runs a DISPATCH or APC interrupt
+/// requested meanwhile).
+fn run_apc() {
+    let old = raise(Irql::Apc);
+    while apc_pending().swap(false, Ordering::AcqRel) {
+        let hook = APC_HOOK.load(Ordering::Acquire);
+        if hook != 0 {
+            // SAFETY: `hook` was stored by `set_apc_hook` from a valid `fn()`.
+            let deliver: fn() = unsafe { core::mem::transmute(hook) };
+            deliver();
+        }
+    }
+    lower(old);
+}
+
+/// The APC software interrupt of this CPU is requested and has not run yet
+/// (KPCR).
+#[inline]
+fn apc_pending() -> &'static core::sync::atomic::AtomicBool {
+    &crate::pcr::current().apc_pending
 }
 
 /// The DISPATCH software interrupt of this CPU is requested and has not run

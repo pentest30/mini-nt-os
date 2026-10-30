@@ -629,6 +629,22 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
             hal::fpu::restore(ptr::addr_of!((*new).fpu));
             context_switch_raw(ptr::addr_of_mut!((*old).ctx), ptr::addr_of!((*new).ctx))
         });
+        // `old` est repris.
+        ki_check_apcs_on_resume(old);
+    }
+}
+
+/// Un thread repris (ou qui démarre), à DISPATCH_LEVEL, avec des APC noyau en
+/// attente : l'interruption APC les livrera quand il redescendra sous
+/// APC_LEVEL. Sans verrou : sur ce processeur, à DISPATCH_LEVEL, rien d'autre
+/// ne met d'APC en file (ADR-015).
+///
+/// # Safety
+/// `thread` est le thread courant, valide.
+unsafe fn ki_check_apcs_on_resume(thread: *mut Thread) {
+    // SAFETY: garanti par l'appelant.
+    if unsafe { (*thread).tcb.kernel_apc_pending } {
+        hal::irql::request_apc();
     }
 }
 
@@ -687,6 +703,10 @@ unsafe impl Platform for KePlatform {
 
     fn lower_irql(new: Irql) {
         hal::irql::lower(new)
+    }
+
+    fn request_apc_interrupt() {
+        hal::irql::request_apc();
     }
 }
 
@@ -777,6 +797,8 @@ pub unsafe fn create_kernel_thread(
 /// relâché, DISPATCH_LEVEL, interruptions masquées).
 extern "C" fn ki_thread_startup() -> ! {
     x86_64::instructions::interrupts::enable();
+    // SAFETY: le thread courant, valide, vient de démarrer.
+    unsafe { ki_check_apcs_on_resume(current_thread()) };
     hal::irql::lower(Irql::Passive);
     // SAFETY: le thread courant est valide ; `start` ne change plus après sa
     // création.
