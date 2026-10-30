@@ -640,7 +640,10 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
     // commutation, faite interruptions masquées.
     unsafe {
         if (*new).user_mode {
+            // Interrupts and system calls from user mode land on its own
+            // kernel stack, so a system call can block or be preempted.
             hal::gdt::set_kernel_stack_top((*new).kernel_stack_top);
+            hal::sysenter::set_entry_stack((*new).kernel_stack_top);
             hal::gdt::set_teb_base((*new).teb);
         }
         hal::pcr::current().set_teb((*new).teb);
