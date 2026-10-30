@@ -3,7 +3,8 @@
 //! Registers handlers for:
 //!   - CPU exceptions (vectors 0x00–0x1F)
 //!   - APIC timer     (vector 0xD0, CLOCK_LEVEL) — drives the scheduler clock
-//!   - Syscall gate   (vector 0x2E / INT 2Eh) — NT native syscall ABI
+//!   - User-mode gates (vectors 0x2A–0x2E, `trap`): tick count, callback
+//!     return, assertion, debug service, system service
 //!
 //! # Double-fault stack
 //! The double-fault handler is configured to use IST slot 0 (see `gdt.rs`).
@@ -11,15 +12,13 @@
 //! stack overflow, preventing a triple fault and machine reset.
 //!
 //! # Syscall ABI
-//! XP games use INT 0x2E (pre-SP1) or SYSENTER (SP1+).
-//! INT 0x2E is supported here for maximum compatibility.
-//! TODO Phase 2: add SYSENTER handler.
+//! System calls come through INT 0x2E (`trap`, a full KTRAP_FRAME) or
+//! SYSENTER (`sysenter`, on Intel, ADR-004), whose hook takes the service
+//! number and the arguments' address.
 //!
 //! WI7e Ch.3 "Trap Dispatching", Ch.2 "System Service Dispatching"
 
 use crate::sync::Once;
-#[cfg(target_os = "none")]
-use core::arch::global_asm;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use x86_64::instructions::port::Port;
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
@@ -85,21 +84,16 @@ pub unsafe fn init() {
         idt[0xFF].set_handler_fn(irq_spurious);
         idt[super::timer::PIC_VECTOR_BASE + 7].set_handler_fn(irq_spurious);
 
-        // ── NT syscall gate (INT 0x2E) ───────────────────────────────────────
-        // DPL=3 so user-mode code (games) can invoke it directly.
-        // Uses a naked global_asm! handler (hal_int2e_entry) so we can write
-        // the dispatch return value directly into EAX before IRETQ.
-        // `extern "x86-interrupt"` cannot do this — its epilogue restores EAX
-        // from the saved value, discarding any write we make inside the handler.
-        // SAFETY: vector 0x2E does not overlap CPU exceptions; hal_int2e_entry
-        // is a valid 64-bit function pointer with the correct interrupt-gate ABI.
-        unsafe {
-            extern "C" {
-                fn hal_int2e_entry();
+        // ── User-mode gates (INT 0x2A to 0x2E, `trap`) ───────────────────────
+        // DPL=3 so user mode can invoke them; their stubs push a KTRAP_FRAME
+        // and return from it.
+        #[cfg(target_os = "none")]
+        for (vector, stub) in super::trap::gates() {
+            // SAFETY: the vectors do not overlap CPU exceptions; each stub is
+            // an interrupt-gate entry that returns with IRETQ.
+            unsafe {
+                idt[vector].set_handler_addr(VirtAddr::new(stub)).set_privilege_level(x86_64::PrivilegeLevel::Ring3);
             }
-            idt[0x2E]
-                .set_handler_addr(VirtAddr::new(hal_int2e_entry as *const () as u64))
-                .set_privilege_level(x86_64::PrivilegeLevel::Ring3);
         }
 
         idt
@@ -108,7 +102,7 @@ pub unsafe fn init() {
     // `idt` has 'static lifetime via `Once`, as `load` requires.
     idt.load();
 
-    log::trace!("HAL IDT: loaded (exceptions, clock 0xD0, 8259 0x30, NT syscall 0x2E)");
+    log::trace!("HAL IDT: loaded (exceptions, clock 0xD0, 8259 0x30, user gates 0x2A-0x2E)");
 }
 
 // ── Exception handlers ───────────────────────────────────────────────────────
@@ -599,16 +593,9 @@ extern "x86-interrupt" fn irq_timer(_frame: InterruptStackFrame) {
     super::irql::exit_interrupt(interrupted);
 }
 
-/// C-ABI trampoline called by the naked `hal_int2e_entry` handler.
-///
-/// # IRQL
-/// Called at IRQL = DISPATCH_LEVEL (inside interrupt handler).
-/// No heap allocation. No page faults.
-#[unsafe(no_mangle)]
-extern "sysv64" fn hal_int2e_dispatch(number: u32, args_ptr: u32) -> u32 {
-    dispatch_syscall(number, args_ptr)
-}
-
+/// The SYSENTER system call (`sysenter`): to the kernel's hook, with the
+/// service number and the arguments' address.
+#[cfg(target_os = "none")]
 #[inline]
 pub(crate) fn dispatch_syscall(number: u32, args_ptr: u32) -> u32 {
     let hook = SYSCALL_HOOK.load(Ordering::Acquire);
@@ -677,92 +664,6 @@ pub fn set_syscall_hook(hook: Option<fn(u32, u32) -> u32>) {
     let addr = hook.map_or(0usize, |f| f as usize);
     SYSCALL_HOOK.store(addr, Ordering::Release);
 }
-
-// ── INT 0x2E naked syscall gate ───────────────────────────────────────────────
-//
-// Why global_asm! instead of extern "x86-interrupt":
-//   `extern "x86-interrupt"` has LLVM save ALL used registers at function entry
-//   and restore them before IRETQ.  Any write to EAX inside the handler body is
-//   silently undone by the epilogue — the user sees the original EAX (syscall
-//   number), never the return value.
-//
-//   This naked handler manually controls the save/restore: after calling
-//   hal_int2e_dispatch it overwrites the saved-EAX slot on the stack with the
-//   return value so that `pop rax` before IRETQ delivers the result to user mode.
-//
-// Stack layout after the 9 pushes below (RSP = lowest address):
-//   [RSP+ 0]  R8   (last  pushed)
-//   [RSP+ 8]  R9
-//   [RSP+16]  R10
-//   [RSP+24]  R11
-//   [RSP+32]  RDI
-//   [RSP+40]  RSI
-//   [RSP+48]  RCX
-//   [RSP+56]  RDX  (args_ptr)
-//   [RSP+64]  RAX  (syscall number — overwritten with return value)
-//   --- interrupt frame (CPU-pushed, 5 × 8 = 40 bytes) ---
-//   [RSP+72]  RIP
-//   [RSP+80]  CS
-//   [RSP+88]  RFLAGS
-//   [RSP+96]  RSP_user
-//   [RSP+104] SS   (== user flat data selector — used to restore DS/ES)
-
-#[cfg(target_os = "none")]
-global_asm!(
-    r#"
-    .global hal_int2e_entry
-hal_int2e_entry:
-    cld
-    push rax
-    push rdx
-    push rcx
-    push rsi
-    push rdi
-    push r11
-    push r10
-    push r9
-    push r8
-
-    // Switch to kernel data segments.
-    // kernel_data selector = kernel_code selector + 8
-    // (GDT layout: null | kernel_code | kernel_data | ...)
-    mov ax, cs
-    add ax, 8
-    mov ds, ax
-    mov es, ax
-
-    // SysV64: arg1=RDI=syscall_number, arg2=RSI=args_ptr
-    mov edi, dword ptr [rsp + 64]
-    mov esi, dword ptr [rsp + 56]
-    call hal_int2e_dispatch
-
-    // Overwrite saved-RAX slot with dispatch return value so pop rax
-    // below delivers EAX=return_value to user mode (not the syscall number).
-    mov dword ptr [rsp + 64], eax
-
-    // Restore user data segments from SS in the interrupt frame.
-    // For 32-bit compat user mode, SS == DS == ES (flat data segment).
-    mov ax, word ptr [rsp + 104]
-    mov ds, ax
-    mov es, ax
-
-    pop r8
-    pop r9
-    pop r10
-    pop r11
-    pop rdi
-    pop rsi
-    pop rcx
-    pop rdx
-    pop rax     // EAX = dispatch return value
-
-    iretq
-    "#
-);
-
-#[cfg(not(target_os = "none"))]
-#[allow(dead_code)]
-extern "C" fn hal_int2e_entry_stub() {}
 
 // ── PS/2 keyboard IRQ1 handler ────────────────────────────────────────────
 

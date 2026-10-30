@@ -98,6 +98,8 @@ pub const STATUS_PROCESS_IS_TERMINATING: NtStatus = NtStatus(0xC000_010A);
 pub const STATUS_MAPPED_FILE_SIZE_ZERO: NtStatus = NtStatus(0xC000_011E);
 pub const STATUS_MAPPED_ALIGNMENT: NtStatus = NtStatus(0xC000_0220);
 pub const STATUS_HANDLE_NOT_CLOSABLE: NtStatus = NtStatus(0xC000_0235);
+pub const STATUS_NO_CALLBACK_ACTIVE: NtStatus = NtStatus(0xC000_0258);
+pub const STATUS_ASSERTION_FAILURE: NtStatus = NtStatus(0xC000_0420);
 
 #[cfg(test)]
 mod tests {

@@ -2,6 +2,7 @@
 //! sides must honour, with no other definition anywhere (CLAUDE.md, rule 5).
 //!
 //! - [`bugcheck`]: the codes of the fatal error screen (`KeBugCheckEx`).
+//! - [`context`]: the x86 `CONTEXT` of a thread.
 //! - [`fpu`]: the FXSAVE area of a thread's x87/SSE state (ADR-009).
 //! - [`loader_block`]: loader → kernel handoff.
 //! - [`ntstatus`]: `NtStatus` and the NTSTATUS values in use.
@@ -18,6 +19,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 pub mod bugcheck;
+pub mod context;
 pub mod fpu;
 pub mod loader_block;
 pub mod ntstatus;

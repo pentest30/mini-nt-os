@@ -1,9 +1,9 @@
 //! Les services système (02 §6.2) : KiSystemService pour les threads de Ps,
 //! sur les tables générées à partir de ReactOS (`abi::services`).
 //!
-//! Un appel système arrive par `int 2Eh` ou SYSENTER (`hal::idt`,
-//! `hal::sysenter`) avec le numéro du service dans EAX et l'adresse de ses
-//! arguments dans la pile utilisateur. [`dispatch`] trouve le service, copie
+//! Un appel système arrive par `int 2Eh` ([`gates`], sur la trame de trap)
+//! ou SYSENTER (`hal::sysenter`) avec le numéro du service dans EAX et
+//! l'adresse de ses arguments dans la pile utilisateur. [`dispatch`] trouve le service, copie
 //! ses arguments (`ke::usermem`) et appelle son handler, interruptions
 //! actives, à PASSIVE_LEVEL : il peut attendre ou être préempté. Un numéro
 //! hors des tables rend `STATUS_INVALID_SYSTEM_SERVICE` ; un service sans
@@ -12,6 +12,7 @@
 //! Les threads de l'ancien chargeur gardent leur dispatcher (`syscall.rs`),
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
+pub mod gates;
 mod memory;
 mod object;
 mod process;
