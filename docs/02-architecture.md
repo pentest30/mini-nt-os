@@ -254,6 +254,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
   - des handlers par défaut qui renvoient `STATUS_NOT_IMPLEMENTED` **et le journalisent** ;
   - un rapport de couverture (nombre d'appels implémentés sur le total).
 - **Aucun numéro écrit à la main**, ni aucun appel système privé : les anciens `0x2000+` disparaissent.
+- **Dispatcher** : `kernel/ntoskrnl/src/sys/` associe à chaque service implémenté son handler (liste `IMPLEMENTED`, d'où vient le rapport de couverture `docs/compat/syscalls.md`). Les tables générées sont dans `abi/src/services.rs`.
 
 ### 6.3 Trame de trap et pile noyau
 
@@ -264,7 +265,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 
 ### 6.4 Accès à la mémoire utilisateur
 
-- **Primitives uniques** : `probe_for_read`, `probe_for_write`, `copy_from_user`, `copy_to_user` et `UserPtr<T>`, regroupées dans `kernel/ke/src/usermem.rs`.
+- **Primitives uniques** : `probe_for_read`, `probe_for_write`, `copy_from_user`, `copy_to_user` et `UserPtr<T>`, regroupées dans `kernel/ke/src/usermem.rs`. Elles copient par `hal::usermem`, qui tient la routine de copie et la table de correction.
 - **Récupération des fautes** : chaque instruction susceptible de fauter est enregistrée dans une table de correspondance (`__ex_table`). Si la faute est irrécupérable, le gestionnaire de faute de page reprend l'exécution à l'adresse de correction, et l'appel système renvoie `STATUS_ACCESS_VIOLATION` au lieu de faire paniquer le noyau.
 - **Interdit** : déréférencer un pointeur utilisateur hors de ces primitives. Une règle de lint et la revue de code y veillent.
 

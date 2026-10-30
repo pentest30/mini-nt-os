@@ -13,6 +13,7 @@
 
 extern crate alloc;
 mod launcher;
+mod sys;
 mod syscall;
 
 use abi::BootInfo;
@@ -288,7 +289,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
     hal::irql::set_apc_hook(Some(ke::apc::ki_apc_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
-    hal::idt::set_syscall_hook(Some(syscall::dispatch));
+    hal::idt::set_syscall_hook(Some(system_call));
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -312,6 +313,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     section_self_test();
     object_manager_self_test();
     process_self_test();
+    system_service_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -390,6 +392,23 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         // kernel_shell returns when ESC is pressed → back to launcher.
         kernel_shell(boot_info.hhdm_offset);
     }
+}
+
+/// A system call (`hal::idt`, `hal::sysenter`), interrupts masked, on the
+/// calling thread's kernel stack. A Ps thread goes to KiSystemService
+/// (`sys`), interrupts enabled; a thread of the legacy loader to its own
+/// dispatcher (`syscall`), which has its own numbers.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, from user mode.
+fn system_call(number: u32, arguments: u32) -> u32 {
+    if ke::sched::current_thread_owner().is_null() {
+        return syscall::dispatch(number, arguments);
+    }
+    x86_64::instructions::interrupts::enable();
+    let status = sys::dispatch(number, arguments);
+    x86_64::instructions::interrupts::disable();
+    status.0
 }
 
 /// A user-mode fault that nothing resolved (`hal::idt`, interrupts masked):
@@ -1571,6 +1590,235 @@ fn in_space<R>(space: &mm::address_space::AddressSpace, f: impl FnOnce() -> R) -
     let result = f();
     ke::sched::ke_unstack_detach(attached);
     result
+}
+
+/// i386 machine code for the self-tests, one instruction at a time.
+struct Code(alloc::vec::Vec<u8>);
+
+impl Code {
+    fn new() -> Self {
+        Self(alloc::vec::Vec::new())
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) -> &mut Self {
+        self.0.extend_from_slice(bytes);
+        self
+    }
+
+    fn word(&mut self, opcode: &[u8], value: u32) -> &mut Self {
+        self.bytes(opcode).bytes(&value.to_le_bytes())
+    }
+
+    /// `int 2Eh` with EAX = `number` and EDX = `arguments`.
+    fn int2e_at(&mut self, number: u32, arguments: u32) -> &mut Self {
+        self.word(&[0xBA], arguments).word(&[0xB8], number).bytes(&[0xCD, 0x2E])
+    }
+
+    /// Pushes `arguments` (stdcall: the first lowest), then `int 2Eh` with
+    /// EAX = `number` and EDX = ESP, then pops them.
+    fn call(&mut self, number: u32, arguments: &[u32]) -> &mut Self {
+        for &argument in arguments.iter().rev() {
+            self.word(&[0x68], argument);
+        }
+        self.bytes(&[0x89, 0xE2]).word(&[0xB8], number).bytes(&[0xCD, 0x2E]);
+        if !arguments.is_empty() {
+            self.bytes(&[0x83, 0xC4, (arguments.len() * 4) as u8]);
+        }
+        self
+    }
+
+    /// `mov [addr], eax`.
+    fn store_eax(&mut self, addr: u32) -> &mut Self {
+        self.word(&[0xA3], addr)
+    }
+}
+
+/// KiSystemService (`sys`, M3): a Ps process calls system services through
+/// `int 2Eh`, each number taken from the generated tables (`abi::services`):
+/// memory allocated, written, read back and freed; a bad handle, an invalid
+/// number, a service without a handler; arguments at an unmapped address or
+/// in the kernel half, an out pointer that faults, and one in the guard page
+/// of the stack, which the kernel grows; the other thread ended by
+/// NtTerminateProcess(NULL), then the process by NtTerminateProcess on
+/// itself.
+fn system_service_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INVALID_HANDLE, STATUS_INVALID_SYSTEM_SERVICE,
+        STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::process::NT_CURRENT_PROCESS;
+    use abi::services::{self, NTOSKRNL};
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    // In and out values.
+    const BASE: u32 = DATA;
+    const SIZE: u32 = DATA + 0x04;
+    const FREE_BASE: u32 = DATA + 0x08;
+    const FREE_SIZE: u32 = DATA + 0x0C;
+    // Statuses and results.
+    const ALLOCATED: u32 = DATA + 0x10;
+    const READ_BACK: u32 = DATA + 0x14;
+    const FREED: u32 = DATA + 0x18;
+    const CLOSED: u32 = DATA + 0x1C;
+    const INVALID: u32 = DATA + 0x20;
+    const UNIMPLEMENTED: u32 = DATA + 0x24;
+    const UNMAPPED_ARGUMENTS: u32 = DATA + 0x28;
+    const KERNEL_ARGUMENTS: u32 = DATA + 0x2C;
+    const UNMAPPED_OUT: u32 = DATA + 0x30;
+    const GUARD_OUT: u32 = DATA + 0x34;
+    const OTHERS: u32 = DATA + 0x38;
+    const AFTER_EXIT: u32 = DATA + 0x3C;
+    // Handshake with the kernel.
+    const DONE: u32 = DATA + 0x40;
+    const GO: u32 = DATA + 0x44;
+    const COMMIT_RESERVE: u32 = 0x3000;
+    const READWRITE: u32 = 0x04;
+    const RELEASE: u32 = 0x8000;
+    const GUARD_OFFSET: u32 = 0x1F00;
+
+    // A service without a handler and without arguments, so that EDX = ESP
+    // at the top of the stack is enough.
+    let unimplemented = (0..NTOSKRNL.len() as u32)
+        .find(|&n| NTOSKRNL[n as usize].argument_bytes == 0 && !sys::is_implemented(n))
+        .expect("every service without arguments is implemented");
+    let mut code = Code::new();
+    code.bytes(&[0x89, 0xE3]) // mov ebx, esp: the top of the stack
+        .call(services::NtAllocateVirtualMemory, &[NT_CURRENT_PROCESS, BASE, 0, SIZE, COMMIT_RESERVE, READWRITE])
+        .store_eax(ALLOCATED)
+        .word(&[0x8B, 0x0D], BASE) // mov ecx, [BASE]
+        .word(&[0xC7, 0x01], 0x1234_5678) // mov dword [ecx], 0x12345678
+        .bytes(&[0x8B, 0x01]) // mov eax, [ecx]
+        .store_eax(READ_BACK)
+        .word(&[0xA1], BASE) // mov eax, [BASE]
+        .store_eax(FREE_BASE)
+        .call(services::NtFreeVirtualMemory, &[NT_CURRENT_PROCESS, FREE_BASE, FREE_SIZE, RELEASE])
+        .store_eax(FREED)
+        .call(services::NtClose, &[0x1234])
+        .store_eax(CLOSED)
+        .bytes(&[0x89, 0xE2]) // mov edx, esp
+        .word(&[0xB8], NTOSKRNL.len() as u32)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(INVALID)
+        .bytes(&[0x89, 0xE2])
+        .word(&[0xB8], unimplemented)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(UNIMPLEMENTED)
+        .int2e_at(services::NtClose, 0x10)
+        .store_eax(UNMAPPED_ARGUMENTS)
+        .int2e_at(services::NtClose, 0x8000_0000)
+        .store_eax(KERNEL_ARGUMENTS)
+        .call(services::NtAllocateVirtualMemory, &[NT_CURRENT_PROCESS, 0x20, 0, SIZE, COMMIT_RESERVE, READWRITE])
+        .store_eax(UNMAPPED_OUT)
+        // NtAllocateVirtualMemory(-1, ebx - GUARD_OFFSET, 0, SIZE, ...): the
+        // base pointer is in the guard page under the committed top.
+        .word(&[0x68], READWRITE)
+        .word(&[0x68], COMMIT_RESERVE)
+        .word(&[0x68], SIZE)
+        .word(&[0x68], 0)
+        .word(&[0x8D, 0x83], GUARD_OFFSET.wrapping_neg()) // lea eax, [ebx - GUARD_OFFSET]
+        .bytes(&[0x50]) // push eax
+        .word(&[0x68], NT_CURRENT_PROCESS)
+        .bytes(&[0x89, 0xE2])
+        .word(&[0xB8], services::NtAllocateVirtualMemory)
+        .bytes(&[0xCD, 0x2E, 0x83, 0xC4, 24])
+        .store_eax(GUARD_OUT)
+        .call(services::NtTerminateProcess, &[0, 0xB0B])
+        .store_eax(OTHERS)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x83, 0x3D], GO) // cmp dword [GO], 0
+        .bytes(&[0x00, 0x74, 0xF7]) // je back to the cmp
+        .call(services::NtTerminateProcess, &[NT_CURRENT_PROCESS, 0x600D])
+        .store_eax(AFTER_EXIT)
+        .bytes(&[0xEB, 0xFE]);
+    let main = code.0;
+    assert!(main.len() <= 0x200, "the test program outgrew its slot");
+    let mut text = [0xCC; 0x210];
+    text[..main.len()].copy_from_slice(&main);
+    text[0x200..0x202].copy_from_slice(&[0xEB, 0xFE]); // the other thread: jmp $
+    let mut data = [0u8; 0x48];
+    data[0x04..0x08].copy_from_slice(&0x2000u32.to_le_bytes());
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x210, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x48, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "services.exe", false).expect("a process");
+    let thread = |start: u32| {
+        let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+        (ps::create_thread(&process, start, &stack).expect("a thread"), stack)
+    };
+    let (other, _) = thread(IMAGE_BASE + 0x1200);
+    let (main, stack) = thread(IMAGE_BASE + 0x1000);
+
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let status = |addr: u32| NtStatus(read(addr));
+    let mut waited = 0;
+    while read(DONE) == 0 {
+        assert!(waited < 300, "the test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        waited += 1;
+    }
+    let base = read(BASE);
+    assert_eq!(status(ALLOCATED), STATUS_SUCCESS, "NtAllocateVirtualMemory");
+    assert!(base != 0 && base % 0x1_0000 == 0, "base {base:#x}");
+    assert_eq!((read(SIZE), read(READ_BACK)), (0x2000, 0x1234_5678));
+    assert_eq!(
+        (status(FREED), read(FREE_BASE), read(FREE_SIZE)),
+        (STATUS_SUCCESS, base, 0x2000),
+        "NtFreeVirtualMemory"
+    );
+    assert_eq!(status(CLOSED), STATUS_INVALID_HANDLE, "NtClose of a bad handle");
+    assert_eq!(status(INVALID), STATUS_INVALID_SYSTEM_SERVICE, "a number past the table");
+    assert_eq!(status(UNIMPLEMENTED), STATUS_NOT_IMPLEMENTED, "{}", NTOSKRNL[unimplemented as usize].name);
+    assert_eq!(status(UNMAPPED_ARGUMENTS), STATUS_ACCESS_VIOLATION, "arguments at an unmapped address");
+    assert_eq!(status(KERNEL_ARGUMENTS), STATUS_ACCESS_VIOLATION, "arguments in the kernel half");
+    assert_eq!(status(UNMAPPED_OUT), STATUS_ACCESS_VIOLATION, "an out pointer at an unmapped address");
+    assert_eq!(status(GUARD_OUT), STATUS_SUCCESS, "an out pointer in the stack guard page");
+    // The lowest free range: the one released above, so it is free again.
+    assert_eq!(read(stack.stack_base - GUARD_OFFSET), base, "the freed range was not reused");
+    let limit = read(main.teb() + 8);
+    assert_eq!(limit, stack.stack_base - 0x2000, "the kernel's fault did not grow the stack");
+    assert_eq!(status(OTHERS), STATUS_SUCCESS, "NtTerminateProcess(NULL)");
+    let object = other.dispatcher_object().expect("a started thread");
+    // SAFETY: the object of a thread held here.
+    let ended =
+        unsafe { ke_wait_for_single_object::<KePlatform>(object, ProcessorMode::Kernel, false, Some(-3000 * MS)) };
+    assert_eq!((ended, other.exit_status()), (STATUS_WAIT_0, NtStatus(0xB0B)), "the other thread did not end");
+    assert_eq!(process.active_threads(), 1, "NtTerminateProcess(NULL) ended the caller");
+
+    process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, NtStatus(0x600D)), "NtTerminateProcess on itself");
+    assert_eq!(main.exit_status(), NtStatus(0x600D));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] sys: system services from user mode: {} of {} ntoskrnl services, the rest STATUS_NOT_IMPLEMENTED",
+        sys::IMPLEMENTED.len(),
+        NTOSKRNL.len()
+    );
 }
 
 /// Ps, and the M2 exit criteria 1 and 3 (05): see [`process_round`]. The

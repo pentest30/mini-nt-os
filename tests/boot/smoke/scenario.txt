@@ -28,6 +28,7 @@ expect = [smoke] Ps: a process reserved 256 MiB and committed it page by page
 expect = [smoke] Ps: user stacks grow by their guard page, up to STATUS_STACK_OVERFLOW
 expect = [smoke] Ps: DEP OptIn: code runs from a read-write page until its process turns DEP on
 expect = [smoke] Ps: processes ended on request, on a fault and before their first run
+expect = [smoke] sys: system services from user mode:
 expect = [smoke] FPU: state kept across switches
 expect = [smoke] FAT read probe hit
 expect = [smoke] Mm: PFN database consistent at the end of phase 1
