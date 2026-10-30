@@ -64,8 +64,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`STATUS_GUARD_PAGE_VIOLATION`) ; `PAGE_NOACCESS`, page réservée ou libre : `STATUS_ACCESS_VIOLATION` ; une page
   inaccessible garde sa page physique (`PTE_RETAINED`). Faute dans la moitié basse à `DISPATCH_LEVEL` : STOP 0x0A ;
   exception en mode noyau sur une adresse utilisateur : STOP 0x1E (pas de `ke::usermem` avant M3). Scénarios
-  `page-fault-irql`, `page-fault-access-violation`. Les mappers de l'ancien code projettent encore au commit. À venir :
-  sections, Ob, Ps (avec la croissance de la pile utilisateur par sa garde et la politique DEP).
+  `page-fault-irql`, `page-fault-access-violation`. Les mappers de l'ancien code projettent encore au commit.
+  Parseur PE dans `libs/pe` (réexporté par `ps::loader`, constructeur de PE de test sous la feature `builder`).
+  Sections faites (`mm::section`) : fichier d'échange, fichier de données (octets en mémoire en attendant Io), image
+  (disposition et protections tirées du PE) ; vues (`AddressSpace::map_view`, `unmap_view`) qui partagent les pages de
+  la section (`PTE_SHARED`, `PageUsage::Section`), copie sur écriture, `STATUS_IMAGE_NOT_AT_BASE` (c'est `ntdll` qui
+  reloge). À venir : Ob (avec l'objet section et ses handles), Ps (avec la croissance de la pile utilisateur par sa
+  garde et la politique DEP).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

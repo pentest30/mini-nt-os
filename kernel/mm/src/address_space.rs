@@ -17,22 +17,32 @@
 //! `mm::fault`). Un espace vivant est enregistré par sa base de répertoire,
 //! pour que la faute trouve celui du CR3 courant.
 //!
-//! Pas encore : pages partagées entre espaces (sections), hyperspace.
+//! Une vue de section ([`AddressSpace::map_view`]) est un nœud de la VAD qui
+//! tient la section : ses pages projettent celles de la section, marquées
+//! `PTE_SHARED`, que ni [`AddressSpace::unmap_view`] ni la destruction de
+//! l'espace ne rendent ; ses copies privées (copie sur écriture), si.
+//!
+//! Pas encore : hyperspace.
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use abi::ntstatus::{NtStatus, STATUS_ACCESS_VIOLATION, STATUS_GUARD_PAGE_VIOLATION, STATUS_NO_MEMORY, STATUS_SUCCESS};
+use abi::ntstatus::{
+    NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_GUARD_PAGE_VIOLATION,
+    STATUS_IMAGE_NOT_AT_BASE, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_INVALID_VIEW_SIZE,
+    STATUS_MAPPED_ALIGNMENT, STATUS_NOT_MAPPED_VIEW, STATUS_NO_MEMORY, STATUS_SUCCESS,
+};
 use hal::sync::KSpinLock;
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::{PhysAddr, VirtAddr};
 
-use crate::fault::{self, Access, PteState, Resolution};
-use crate::paging::{MmPageTables, PTE_RETAINED};
+use crate::fault::{self, Access, Backing, PteState, Resolution};
+use crate::paging::{MmPageTables, PTE_RETAINED, PTE_SHARED};
 use crate::pfn::{self, PageUsage};
-use crate::vad::{PageProtect, VadTree};
-use crate::virtual_alloc::{self, AllocType, FreeType, PageMapper, RegionInfo};
+use crate::section::{view_protection, Section};
+use crate::vad::{PageProtect, VadKind, VadNode, VadTree, USER_VA_END};
+use crate::virtual_alloc::{self, AllocType, FreeType, PageMapper, RegionInfo, ALLOC_GRANULARITY, USER_VA_START};
 use crate::Pfn;
 
 /// Première entrée de la moitié haute de la PML4.
@@ -110,6 +120,16 @@ pub fn kernel_half_filled() -> bool {
 /// Tout niveau.
 pub fn system_directory_table_base() -> u64 {
     SYSTEM_DIRECTORY.load(Ordering::Acquire)
+}
+
+/// Ce que rend NtMapViewOfSection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MappedView {
+    pub base: u64,
+    pub size: u64,
+    /// `STATUS_SUCCESS`, ou `STATUS_IMAGE_NOT_AT_BASE` pour une image
+    /// projetée ailleurs qu'à sa base.
+    pub status: NtStatus,
 }
 
 /// L'espace d'adresses d'un processus : sa PML4 et sa VAD.
@@ -222,6 +242,110 @@ impl AddressSpace {
         virtual_alloc::query(&self.vad.lock(), addr)
     }
 
+    /// NtMapViewOfSection : projette `size` octets de `section` à partir de
+    /// `offset` (`size` 0 : jusqu'au bout), en `base` (0 : là où il y a la
+    /// place), avec `protect`. Rien n'est projeté avant la première faute.
+    ///
+    /// - Fichier de données et mémoire partagée : `offset` aligné sur 64 Kio
+    ///   (`STATUS_MAPPED_ALIGNMENT`), la vue dans la section
+    ///   (`STATUS_INVALID_VIEW_SIZE`), `protect` permise par la section
+    ///   (`STATUS_SECTION_PROTECTION`).
+    /// - Image : toute l'image, chaque page avec la protection de sa section ;
+    ///   en `base` 0, à sa base préférée si la place est libre. Ailleurs, la
+    ///   vue rend `STATUS_IMAGE_NOT_AT_BASE`, et c'est `ntdll` qui reloge ; une
+    ///   image sans relocations ne quitte pas sa base
+    ///   (`STATUS_CONFLICTING_ADDRESSES`).
+    /// - `base` explicite : alignée sur 64 Kio (`STATUS_MAPPED_ALIGNMENT`),
+    ///   la plage libre (`STATUS_CONFLICTING_ADDRESSES`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn map_view(
+        &self,
+        section: &Arc<Section>,
+        base: u64,
+        offset: u64,
+        size: u64,
+        protect: PageProtect,
+    ) -> Result<MappedView, NtStatus> {
+        if !protect.is_valid() {
+            return Err(STATUS_INVALID_PAGE_PROTECTION);
+        }
+        let (size, protects, image) = match section.image() {
+            Some(layout) => {
+                if offset != 0 {
+                    return Err(STATUS_INVALID_PARAMETER);
+                }
+                if size != 0 && size.next_multiple_of(PAGE) != section.size() {
+                    return Err(STATUS_INVALID_VIEW_SIZE);
+                }
+                (section.size(), layout.protects.clone(), Some(layout.info))
+            }
+            None => {
+                if !offset.is_multiple_of(ALLOC_GRANULARITY) {
+                    return Err(STATUS_MAPPED_ALIGNMENT);
+                }
+                let end = if size == 0 { section.size() } else { offset.saturating_add(size) };
+                if offset >= section.size() || end > section.size() {
+                    return Err(STATUS_INVALID_VIEW_SIZE);
+                }
+                let size = (end - offset).next_multiple_of(PAGE);
+                (size, alloc::vec![(size / PAGE, view_protection(section, protect)?)], None)
+            }
+        };
+        let mut vad = self.vad.lock();
+        let fits = |vad: &VadTree, at: u64| {
+            at >= USER_VA_START
+                && at.checked_add(size).is_some_and(|end| end <= USER_VA_END)
+                && !vad.overlaps(at, at + size)
+        };
+        let base = if base != 0 {
+            if !base.is_multiple_of(ALLOC_GRANULARITY) {
+                return Err(STATUS_MAPPED_ALIGNMENT);
+            }
+            if !fits(&vad, base) {
+                return Err(STATUS_CONFLICTING_ADDRESSES);
+            }
+            base
+        } else {
+            let preferred = image.map(|info| info.image_base).filter(|&at| at.is_multiple_of(ALLOC_GRANULARITY));
+            match preferred.filter(|&at| fits(&vad, at)) {
+                Some(at) => at,
+                None => vad.find_free_gap(USER_VA_START, size, ALLOC_GRANULARITY).ok_or(STATUS_NO_MEMORY)?,
+            }
+        };
+        let status = match image {
+            Some(info) if base != info.image_base && info.relocs_stripped => return Err(STATUS_CONFLICTING_ADDRESSES),
+            Some(info) if base != info.image_base => STATUS_IMAGE_NOT_AT_BASE,
+            _ => STATUS_SUCCESS,
+        };
+        let protect = if image.is_some() { section.protect() } else { protects[0].1 };
+        let kind = VadKind::View { section: section.clone(), offset };
+        vad.insert(VadNode::view(base, base + size, protect, kind, &protects)).expect("a free range");
+        Ok(MappedView { base, size, status })
+    }
+
+    /// NtUnmapViewOfSection : retire la vue qui contient `addr`
+    /// (`STATUS_NOT_MAPPED_VIEW` hors d'une vue). Ses copies privées sont
+    /// rendues ; les pages de la section restent à la section.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn unmap_view(&self, addr: u64) -> Result<(), NtStatus> {
+        let mut vad = self.vad.lock();
+        let (start, end) = match vad.find(addr) {
+            Some(node) if matches!(node.kind, VadKind::View { .. }) => (node.start, node.end),
+            _ => return Err(STATUS_NOT_MAPPED_VIEW),
+        };
+        let mut tables = self.tables();
+        for page in (start..end).step_by(PAGE as usize) {
+            release_page(&mut tables, page);
+        }
+        // Dropping the node may drop the section, and its pages with it.
+        vad.remove(start);
+        Ok(())
+    }
+
     /// Résout une faute de page à `addr`, dans la moitié basse, d'après la
     /// VAD (`fault::resolve`) : `STATUS_SUCCESS` si l'accès peut reprendre,
     /// sinon l'exception qu'il lève (`STATUS_NO_MEMORY` sans page libre).
@@ -232,8 +356,11 @@ impl AddressSpace {
         let page = addr & !(PAGE - 1);
         let mut vad = self.vad.lock();
         let mut tables = self.tables();
-        let state = vad.find(page).and_then(|node| node.run_at(page)).map(|(_, run)| (run.state, run.protect));
-        match fault::resolve(state, pte_state(&mut tables, page), access) {
+        let node = vad.find(page);
+        let state = node.and_then(|node| node.run_at(page)).map(|(_, run)| (run.state, run.protect));
+        let backing =
+            if node.and_then(|node| node.section_page(page)).is_some() { Backing::Section } else { Backing::Private };
+        match fault::resolve(state, backing, pte_state(&mut tables, page), access) {
             Resolution::DemandZero(protect) => {
                 let Some(frame) = pfn::allocate_page(PageUsage::UserPrivate) else {
                     return STATUS_NO_MEMORY;
@@ -245,6 +372,53 @@ impl AddressSpace {
                 // said so); the frame belongs to the space from now on.
                 unsafe { tables.map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) };
                 fault::count_demand_zero();
+                STATUS_SUCCESS
+            }
+            Resolution::MapShared(protect) => {
+                let (section, index) = vad.find(page).and_then(|node| node.section_page(page)).expect("a view page");
+                let frame = match section.page(index) {
+                    Ok(frame) => frame,
+                    Err(status) => return status,
+                };
+                let (writable, executable) = fault::page_rights(protect, true);
+                let flags = MmPageTables::leaf_flags(writable, executable, true) | PTE_SHARED;
+                // SAFETY: the page has no physical page in this space (resolve
+                // said so); the frame stays the section's.
+                unsafe { tables.map_page(VirtAddr::new(page), PhysAddr::new(frame.to_phys()), flags) };
+                STATUS_SUCCESS
+            }
+            Resolution::CopyOnWrite(protect) => {
+                let node = vad.find_mut(page).expect("a committed page has its VAD");
+                let (section, index) = node.section_page(page).map(|(s, i)| (s.clone(), i)).expect("a view page");
+                let shared = match section.page(index) {
+                    Ok(frame) => frame,
+                    Err(status) => return status,
+                };
+                let Some(copy) = pfn::allocate_page(PageUsage::UserPrivate) else {
+                    return STATUS_NO_MEMORY;
+                };
+                // SAFETY: two distinct pages reached through the HHDM: the
+                // section's, read, and a page just allocated.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        (hhdm() + shared.to_phys()) as *const u8,
+                        (hhdm() + copy.to_phys()) as *mut u8,
+                        PAGE as usize,
+                    )
+                };
+                let private = protect.without_copy();
+                let (writable, executable) = fault::page_rights(private, false);
+                let flags = MmPageTables::leaf_flags(writable, executable, true);
+                match tables.leaf_entry(VirtAddr::new(page)) {
+                    Some(entry) if entry.flags().contains(PageTableFlags::PRESENT) => {
+                        entry.set_addr(PhysAddr::new(copy.to_phys()), flags);
+                        x86_64::instructions::tlb::flush(VirtAddr::new(page));
+                    }
+                    // SAFETY: the page has no physical page in this space; the
+                    // copy belongs to the space from now on.
+                    _ => unsafe { tables.map_page(VirtAddr::new(page), PhysAddr::new(copy.to_phys()), flags) },
+                }
+                node.protect(page, page + PAGE, private);
                 STATUS_SUCCESS
             }
             Resolution::Remap(protect) => {
@@ -262,7 +436,8 @@ impl AddressSpace {
     }
 
     /// Retire l'espace du registre et rend à la base PFN tout ce qu'il
-    /// possède : les pages de sa moitié basse, ses tables, puis sa PML4.
+    /// possède : les pages de sa moitié basse, ses tables, puis sa PML4 ;
+    /// enfin sa VAD lâche les sections de ses vues.
     ///
     /// # Panics
     /// S'il est actif sur ce processeur, ou encore tenu ailleurs.
@@ -294,21 +469,30 @@ impl PageMapper for DemandMapper {
     }
 
     fn decommit_page(&mut self, virt: u64) {
-        let Some(entry) = self.tables.leaf_entry(VirtAddr::new(virt)) else {
-            return;
-        };
-        if entry.flags().intersects(PageTableFlags::PRESENT | PTE_RETAINED) {
-            let phys = entry.addr().as_u64();
-            entry.set_unused();
-            // Only meaningful if the space is active: switching CR3 flushes
-            // its user pages, never global.
-            x86_64::instructions::tlb::flush(VirtAddr::new(virt));
-            pfn::free_page(Pfn(phys / PAGE));
-        }
+        release_page(&mut self.tables, virt);
     }
 
     fn protect_page(&mut self, virt: u64, protect: PageProtect) {
         set_rights(&mut self.tables, virt, protect);
+    }
+}
+
+/// Retire de la table la page physique de `virt`, s'il y en a une, et la
+/// rend à la base PFN, sauf celle d'une section.
+fn release_page(tables: &mut MmPageTables, virt: u64) {
+    let Some(entry) = tables.leaf_entry(VirtAddr::new(virt)) else {
+        return;
+    };
+    let flags = entry.flags();
+    if flags.intersects(PageTableFlags::PRESENT | PTE_RETAINED) {
+        let phys = entry.addr().as_u64();
+        entry.set_unused();
+        // Only meaningful if the space is active: switching CR3 flushes its
+        // user pages, never global.
+        x86_64::instructions::tlb::flush(VirtAddr::new(virt));
+        if !flags.contains(PTE_SHARED) {
+            pfn::free_page(Pfn(phys / PAGE));
+        }
     }
 }
 
@@ -318,6 +502,7 @@ fn pte_state(tables: &mut MmPageTables, virt: u64) -> PteState {
         Some(entry) if entry.flags().contains(PageTableFlags::PRESENT) => PteState::Present {
             writable: entry.flags().contains(PageTableFlags::WRITABLE),
             executable: !entry.flags().contains(PageTableFlags::NO_EXECUTE),
+            shared: entry.flags().contains(PTE_SHARED),
         },
         Some(entry) if entry.flags().contains(PTE_RETAINED) => PteState::Retained,
         _ => PteState::Absent,
@@ -325,7 +510,8 @@ fn pte_state(tables: &mut MmPageTables, virt: u64) -> PteState {
 }
 
 /// Donne `protect` à la page `virt` si elle a une page physique : présente
-/// avec ses droits si la protection permet un accès, tenue non présente sinon.
+/// avec ses droits si la protection permet un accès, tenue non présente
+/// sinon ; une page de section le reste.
 fn set_rights(tables: &mut MmPageTables, virt: u64, protect: PageProtect) {
     let Some(entry) = tables.leaf_entry(VirtAddr::new(virt)) else {
         return;
@@ -333,12 +519,14 @@ fn set_rights(tables: &mut MmPageTables, virt: u64, protect: PageProtect) {
     if !entry.flags().intersects(PageTableFlags::PRESENT | PTE_RETAINED) {
         return;
     }
+    let shared = entry.flags() & PTE_SHARED;
     let flags = if protect.accessible() {
-        MmPageTables::leaf_flags(protect.writable(), protect.executable(), true)
+        let (writable, executable) = fault::page_rights(protect, !shared.is_empty());
+        MmPageTables::leaf_flags(writable, executable, true)
     } else {
         PTE_RETAINED
     };
-    entry.set_addr(entry.addr(), flags);
+    entry.set_addr(entry.addr(), flags | shared);
     x86_64::instructions::tlb::flush(VirtAddr::new(virt));
 }
 
@@ -359,7 +547,10 @@ unsafe fn free_tables(phys: u64, level: u8, entries: usize) {
         assert!(!entry.flags().contains(PageTableFlags::HUGE_PAGE), "huge page in a user half");
         let next = entry.addr().as_u64();
         if level == 1 {
-            pfn::free_page(Pfn(next / PAGE));
+            // A section's page stays the section's, which the VAD holds.
+            if !entry.flags().contains(PTE_SHARED) {
+                pfn::free_page(Pfn(next / PAGE));
+            }
         } else {
             // SAFETY: une table de l'espace, désignée par cette entrée.
             unsafe { free_tables(next, level - 1, 512) };

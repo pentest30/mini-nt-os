@@ -4,7 +4,7 @@
 //!   - Physical page database (PFN database, `pfn`) over the buddy allocator
 //!   - Virtual Address Descriptor tree (VAD) per process — Phase 2
 //!   - NtAllocateVirtualMemory / NtFreeVirtualMemory — Phase 2
-//!   - Section objects (file mapping — needed for PE loader) — Phase 2
+//!   - Sections: shared memory, data files, PE images, with copy-on-write (`section`)
 //!   - Page faults: demand-zero pages, guard pages (`fault`)
 //!
 //! Address space layout (XP-compatible 2GB/2GB split):
@@ -23,6 +23,7 @@ pub mod kstack;
 pub mod paging;
 pub mod pfn;
 pub mod pool;
+pub mod section;
 pub mod vad;
 pub mod virtual_alloc;
 

@@ -38,6 +38,7 @@ use abi::ntstatus::{
     STATUS_UNABLE_TO_DELETE_SECTION, STATUS_UNABLE_TO_FREE_VM,
 };
 
+use super::section::{self, SectionKind};
 use super::vad::{PageChange, PageProtect, PageState, VadKind, VadNode, VadTree, USER_VA_END};
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -191,7 +192,8 @@ pub fn allocate(
     if size == 0 || !alloc_type.intersects(AllocType::MEM_RESERVE | AllocType::MEM_COMMIT) {
         return Err(STATUS_INVALID_PARAMETER);
     }
-    if !protect.is_valid() {
+    // Copy-on-write needs a section to copy from.
+    if !protect.is_valid() || protect.copy_on_write() {
         return Err(STATUS_INVALID_PAGE_PROTECTION);
     }
 
@@ -207,7 +209,7 @@ pub fn allocate(
     if reserve {
         vad.insert(VadNode::reserved(start, end, protect, VadKind::Private))
             .map_err(|_| STATUS_CONFLICTING_ADDRESSES)?;
-    } else if vad.find(start).is_none_or(|node| end > node.end) {
+    } else if vad.find(start).is_none_or(|node| end > node.end || node.kind != VadKind::Private) {
         return Err(STATUS_CONFLICTING_ADDRESSES);
     }
     if !alloc_type.contains(AllocType::MEM_COMMIT) {
@@ -342,6 +344,11 @@ pub fn protect(
     }
     let (start, end) = user_range(base_addr, size)?;
     let node = vad.find_mut(start).filter(|node| end <= node.end).ok_or(STATUS_CONFLICTING_ADDRESSES)?;
+    let protect = match &node.kind {
+        VadKind::Private if protect.copy_on_write() => return Err(STATUS_INVALID_PAGE_PROTECTION),
+        VadKind::Private => protect,
+        VadKind::View { section, .. } => section::view_protection(section, protect)?,
+    };
     let old = node.protect(start, end, protect).ok_or(STATUS_NOT_COMMITTED)?;
     if let Some(m) = mapper {
         for va in pages(start, end) {
@@ -384,10 +391,10 @@ pub fn query(vad: &VadTree, addr: u64) -> Result<RegionInfo, NtStatus> {
         region_size: run_start + run.pages * PAGE_SIZE - page,
         state: if committed { MemState::Commit } else { MemState::Reserve },
         protect: if committed { run.protect } else { PageProtect::empty() },
-        kind: Some(match node.kind {
+        kind: Some(match &node.kind {
             VadKind::Private => MemType::Private,
-            VadKind::Image { .. } => MemType::Image,
-            VadKind::Mapped => MemType::Mapped,
+            VadKind::View { section, .. } if section.kind() == SectionKind::Image => MemType::Image,
+            VadKind::View { .. } => MemType::Mapped,
         }),
     })
 }
@@ -406,8 +413,11 @@ pub fn query(vad: &VadTree, addr: u64) -> Result<RegionInfo, NtStatus> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::section::Section;
     use super::super::vad::{PageProtect, PageRun};
     use super::*;
+    use abi::ntstatus::STATUS_SECTION_PROTECTION;
+    use alloc::sync::Arc;
     use alloc::vec::Vec;
 
     // ── MockMapper ─────────────────────────────────────────────────────────────
@@ -850,7 +860,8 @@ mod tests {
     #[test]
     fn a_section_view_is_not_freed_here() {
         let mut vad = VadTree::new();
-        vad.insert(VadNode::reserved(BASE, BASE + P, rw(), VadKind::Mapped)).unwrap();
+        let section = crate::section::Section::create_pagefile(P, rw()).unwrap();
+        vad.insert(VadNode::view(BASE, BASE + P, rw(), VadKind::View { section, offset: 0 }, &[(1, rw())])).unwrap();
         assert_eq!(free(&mut vad, None, BASE, 0, FreeType::MEM_RELEASE), Err(STATUS_UNABLE_TO_DELETE_SECTION));
         assert_eq!(vad.len(), 1);
     }
@@ -944,5 +955,67 @@ mod tests {
         let addr = allocate(&mut vad, Some(&mut m), 0, 2 * P, COMMIT, rw()).unwrap();
         assert_eq!(m.committed_pages(), [addr, addr + P]);
         assert_eq!(query(&vad, addr).unwrap().region_size, 2 * P);
+    }
+
+    // ── Vues de section ───────────────────────────────────────────────────────
+
+    /// Une vue de `pages` pages de `section` en `BASE`, avec `protect`.
+    fn view(vad: &mut VadTree, section: Arc<Section>, pages: u64, protect: PageProtect) {
+        let node =
+            VadNode::view(BASE, BASE + pages * P, protect, VadKind::View { section, offset: 0 }, &[(pages, protect)]);
+        vad.insert(node).unwrap();
+    }
+
+    fn image_section() -> Arc<Section> {
+        let file = pe::builder::Pe32Builder::new(0x40_0000)
+            .section(".text", 0x1000, 0x1000, &[0xC3], pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+            .build();
+        Section::create_image(Arc::from(file)).unwrap()
+    }
+
+    #[test]
+    fn private_memory_is_never_copy_on_write() {
+        let mut vad = VadTree::new();
+        for wc in [PageProtect::WRITECOPY, PageProtect::EXECUTE_WRITECOPY] {
+            assert_eq!(allocate(&mut vad, None, 0, P, RESERVE | COMMIT, wc), Err(STATUS_INVALID_PAGE_PROTECTION));
+        }
+        allocate(&mut vad, None, BASE, P, RESERVE | COMMIT, rw()).unwrap();
+        assert_eq!(protect(&mut vad, None, BASE, P, PageProtect::WRITECOPY), Err(STATUS_INVALID_PAGE_PROTECTION));
+    }
+
+    #[test]
+    fn a_view_is_neither_committed_nor_freed_through_virtual_memory() {
+        let mut vad = VadTree::new();
+        view(&mut vad, Section::create_pagefile(4 * P, rw()).unwrap(), 4, rw());
+        assert_eq!(allocate(&mut vad, None, BASE, P, COMMIT, rw()), Err(STATUS_CONFLICTING_ADDRESSES));
+        assert_eq!(free(&mut vad, None, BASE, P, FreeType::MEM_DECOMMIT), Err(STATUS_UNABLE_TO_DELETE_SECTION));
+        assert_eq!(vad.len(), 1);
+    }
+
+    #[test]
+    fn protecting_a_view_asks_its_section() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        view(&mut vad, Section::create_pagefile(2 * P, PageProtect::READONLY).unwrap(), 2, PageProtect::READONLY);
+        assert_eq!(protect(&mut vad, Some(&mut m), BASE, P, rw()), Err(STATUS_SECTION_PROTECTION));
+        assert_eq!(protect(&mut vad, Some(&mut m), BASE, P, PageProtect::WRITECOPY), Ok(PageProtect::READONLY));
+        assert_eq!(runs(&vad), [(1, C, PageProtect::WRITECOPY), (1, C, PageProtect::READONLY)]);
+    }
+
+    #[test]
+    fn writing_to_an_image_view_is_copy_on_write() {
+        let mut vad = VadTree::new();
+        view(&mut vad, image_section(), 2, PageProtect::EXECUTE_READ);
+        assert_eq!(protect(&mut vad, None, BASE + P, P, rw()), Ok(PageProtect::EXECUTE_READ));
+        assert_eq!(query(&vad, BASE + P).unwrap().protect, PageProtect::WRITECOPY, "as XP shows a relocated page");
+        assert_eq!(query(&vad, BASE).unwrap().kind, Some(MemType::Image));
+    }
+
+    #[test]
+    fn query_tells_a_data_view_from_an_image() {
+        let mut vad = VadTree::new();
+        view(&mut vad, Section::create_pagefile(P, rw()).unwrap(), 1, rw());
+        let info = query(&vad, BASE).unwrap();
+        assert_eq!((info.kind, info.state, info.protect), (Some(MemType::Mapped), MemState::Commit, rw()));
     }
 }

@@ -77,6 +77,11 @@ fn zero_frame(phys: u64) {
 /// non-present entry.
 pub const PTE_RETAINED: PageTableFlags = PageTableFlags::BIT_9;
 
+/// Software bit of a leaf entry whose physical page belongs to a section,
+/// shared by its views (`mm::section`): unmapping the page or destroying the
+/// address space leaves it to the section.
+pub const PTE_SHARED: PageTableFlags = PageTableFlags::BIT_10;
+
 // ── Page table manager ────────────────────────────────────────────────────────
 
 /// Page-table manager for one PML4: the active one ([`MmPageTables::new`]),

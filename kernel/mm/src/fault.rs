@@ -4,7 +4,10 @@
 //! se résout d'après sa VAD ([`resolve`]) :
 //!
 //! - page commitée jamais touchée : une page à zéro, projetée avec la
-//!   protection de la VAD (demande à zéro) ;
+//!   protection de la VAD (demande à zéro) ; dans une vue de section, la page
+//!   de la section, partagée (`mm::section`) ;
+//! - écriture sur une page de section en copie sur écriture : une copie
+//!   privée, qui prend la protection inscriptible correspondante ;
 //! - page de garde : la garde est levée et l'accès échoue avec
 //!   `STATUS_GUARD_PAGE_VIOLATION`, une seule fois ; l'accès suivant est normal ;
 //! - page `PAGE_NOACCESS`, réservée ou libre, accès que la protection refuse :
@@ -21,8 +24,7 @@
 //!
 //! Pas encore : extension de la pile utilisateur par sa page de garde (avec le
 //! TEB, Ps) ; politique DEP par processus (NX s'applique toujours, la règle
-//! OptIn d'XP SP2 viendra avec Ps) ; copie sur écriture et pages de section ;
-//! pagination sur disque.
+//! OptIn d'XP SP2 viendra avec Ps) ; pagination sur disque.
 //!
 //! WI7e Ch.5 §Page Fault Handling
 
@@ -58,7 +60,17 @@ impl Access {
     }
 }
 
-/// Ce que la table des pages tient pour une page.
+/// D'où vient une page de la VAD.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backing {
+    /// Mémoire privée : une page à zéro.
+    Private,
+    /// Vue de section : la page de la section.
+    Section,
+}
+
+/// Ce que la table des pages tient pour une page ; `shared` : la page
+/// physique est celle d'une section (`paging::PTE_SHARED`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PteState {
     /// Aucune page physique.
@@ -66,7 +78,7 @@ pub enum PteState {
     /// Une page physique, non présente : `PAGE_NOACCESS` ou garde.
     Retained,
     /// Présente, avec ces droits.
-    Present { writable: bool, executable: bool },
+    Present { writable: bool, executable: bool, shared: bool },
 }
 
 /// Ce qu'il faut faire d'une faute.
@@ -74,6 +86,11 @@ pub enum PteState {
 pub enum Resolution {
     /// Projeter une page à zéro avec cette protection.
     DemandZero(PageProtect),
+    /// Projeter la page de la section avec cette protection.
+    MapShared(PageProtect),
+    /// Copier la page de la section dans une page privée, projetée avec
+    /// cette protection sans la copie ([`PageProtect::without_copy`]).
+    CopyOnWrite(PageProtect),
     /// Rendre à la page physique tenue les droits de cette protection.
     Remap(PageProtect),
     /// Lever la garde de la page : `STATUS_GUARD_PAGE_VIOLATION`.
@@ -82,9 +99,17 @@ pub enum Resolution {
     AccessViolation,
 }
 
+/// Les droits (écriture, exécution) de la page présente d'une page de
+/// protection `protect` : inscriptible, sauf la page d'une section qui se
+/// copie à l'écriture ; une page privée ne se copie pas.
+pub fn page_rights(protect: PageProtect, shared: bool) -> (bool, bool) {
+    (protect.writable() && !(shared && protect.copy_on_write()), protect.executable())
+}
+
 /// Décide d'une faute d'après l'état de la page dans la VAD (`None` : hors de
-/// toute réservation), dans la table des pages, et l'accès.
-pub fn resolve(page: Option<(PageState, PageProtect)>, pte: PteState, access: Access) -> Resolution {
+/// toute réservation) et d'où elle vient, dans la table des pages, et
+/// l'accès.
+pub fn resolve(page: Option<(PageState, PageProtect)>, backing: Backing, pte: PteState, access: Access) -> Resolution {
     let Some((PageState::Committed, protect)) = page else {
         return Resolution::AccessViolation;
     };
@@ -100,17 +125,21 @@ pub fn resolve(page: Option<(PageState, PageProtect)>, pte: PteState, access: Ac
     if !allowed {
         return Resolution::AccessViolation;
     }
-    match pte {
-        PteState::Absent => Resolution::DemandZero(protect),
-        PteState::Retained => Resolution::Remap(protect),
-        PteState::Present { writable, executable }
-            if (writable, executable) != (protect.writable(), protect.executable()) =>
+    let copy = access == Access::Write && protect.copy_on_write();
+    match (backing, pte) {
+        (_, PteState::Retained) => Resolution::Remap(protect),
+        (Backing::Private, PteState::Absent) => Resolution::DemandZero(protect),
+        (Backing::Section, PteState::Absent) if copy => Resolution::CopyOnWrite(protect),
+        (Backing::Section, PteState::Absent) => Resolution::MapShared(protect),
+        (_, PteState::Present { shared: true, .. }) if copy => Resolution::CopyOnWrite(protect),
+        (_, PteState::Present { writable, executable, shared })
+            if (writable, executable) != page_rights(protect, shared) =>
         {
             Resolution::Remap(protect)
         }
         // The page tables already allow this access: nothing explains the
         // fault, and retrying it would loop.
-        PteState::Present { .. } => Resolution::AccessViolation,
+        (_, PteState::Present { .. }) => Resolution::AccessViolation,
     }
 }
 
@@ -146,7 +175,7 @@ mod tests {
     use super::*;
     use Access::{Execute, Read, Write};
     use PteState::{Absent, Present, Retained};
-    use Resolution::{AccessViolation, DemandZero, Guard, Remap};
+    use Resolution::{AccessViolation, CopyOnWrite, DemandZero, Guard, MapShared, Remap};
 
     const C: PageState = PageState::Committed;
     const RW: PageProtect = PageProtect::READWRITE;
@@ -154,35 +183,43 @@ mod tests {
     const RX: PageProtect = PageProtect::EXECUTE_READ;
     const NA: PageProtect = PageProtect::NOACCESS;
 
+    const P: Backing = Backing::Private;
+    const S: Backing = Backing::Section;
+    const WC: PageProtect = PageProtect::WRITECOPY;
+
     fn present(writable: bool, executable: bool) -> PteState {
-        Present { writable, executable }
+        Present { writable, executable, shared: false }
+    }
+
+    fn shared(writable: bool, executable: bool) -> PteState {
+        Present { writable, executable, shared: true }
     }
 
     #[test]
     fn a_first_touch_of_a_committed_page_gets_a_zeroed_page() {
         for access in [Read, Write] {
-            assert_eq!(resolve(Some((C, RW)), Absent, access), DemandZero(RW));
+            assert_eq!(resolve(Some((C, RW)), P, Absent, access), DemandZero(RW));
         }
-        assert_eq!(resolve(Some((C, RX)), Absent, Execute), DemandZero(RX));
+        assert_eq!(resolve(Some((C, RX)), P, Absent, Execute), DemandZero(RX));
     }
 
     #[test]
     fn free_and_reserved_pages_are_access_violations() {
         for access in [Read, Write, Execute] {
-            assert_eq!(resolve(None, Absent, access), AccessViolation);
-            assert_eq!(resolve(Some((PageState::Reserved, RW)), Absent, access), AccessViolation);
+            assert_eq!(resolve(None, P, Absent, access), AccessViolation);
+            assert_eq!(resolve(Some((PageState::Reserved, RW)), P, Absent, access), AccessViolation);
         }
     }
 
     #[test]
     fn the_protection_decides_the_access() {
-        assert_eq!(resolve(Some((C, RO)), Absent, Write), AccessViolation);
-        assert_eq!(resolve(Some((C, RW)), Absent, Execute), AccessViolation, "NX");
-        assert_eq!(resolve(Some((C, RX)), Absent, Write), AccessViolation);
-        assert_eq!(resolve(Some((C, RO)), Absent, Read), DemandZero(RO));
+        assert_eq!(resolve(Some((C, RO)), P, Absent, Write), AccessViolation);
+        assert_eq!(resolve(Some((C, RW)), P, Absent, Execute), AccessViolation, "NX");
+        assert_eq!(resolve(Some((C, RX)), P, Absent, Write), AccessViolation);
+        assert_eq!(resolve(Some((C, RO)), P, Absent, Read), DemandZero(RO));
         for access in [Read, Write, Execute] {
-            assert_eq!(resolve(Some((C, NA)), Absent, access), AccessViolation);
-            assert_eq!(resolve(Some((C, NA)), Retained, access), AccessViolation, "data kept, still no access");
+            assert_eq!(resolve(Some((C, NA)), P, Absent, access), AccessViolation);
+            assert_eq!(resolve(Some((C, NA)), P, Retained, access), AccessViolation, "data kept, still no access");
         }
     }
 
@@ -191,21 +228,49 @@ mod tests {
         let guard = RW | PageProtect::GUARD;
         for pte in [Absent, Retained] {
             for access in [Read, Write, Execute] {
-                assert_eq!(resolve(Some((C, guard)), pte, access), Guard);
+                assert_eq!(resolve(Some((C, guard)), P, pte, access), Guard);
             }
         }
     }
 
     #[test]
     fn a_retained_page_gets_its_rights_back() {
-        assert_eq!(resolve(Some((C, RW)), Retained, Write), Remap(RW));
+        assert_eq!(resolve(Some((C, RW)), P, Retained, Write), Remap(RW));
     }
 
     #[test]
     fn a_present_page_is_remapped_only_when_its_rights_lag_behind_the_vad() {
-        assert_eq!(resolve(Some((C, RW)), present(false, false), Write), Remap(RW), "made writable");
-        assert_eq!(resolve(Some((C, RW)), present(true, false), Write), AccessViolation, "nothing to fix");
-        assert_eq!(resolve(Some((C, RO)), present(false, false), Write), AccessViolation);
+        assert_eq!(resolve(Some((C, RW)), P, present(false, false), Write), Remap(RW), "made writable");
+        assert_eq!(resolve(Some((C, RW)), P, present(true, false), Write), AccessViolation, "nothing to fix");
+        assert_eq!(resolve(Some((C, RO)), P, present(false, false), Write), AccessViolation);
+    }
+
+    #[test]
+    fn a_section_page_maps_the_shared_page_until_a_copy_on_write() {
+        assert_eq!(resolve(Some((C, RO)), S, Absent, Read), MapShared(RO));
+        assert_eq!(resolve(Some((C, RW)), S, Absent, Write), MapShared(RW), "shared write");
+        assert_eq!(resolve(Some((C, WC)), S, Absent, Read), MapShared(WC));
+        assert_eq!(resolve(Some((C, WC)), S, Absent, Write), CopyOnWrite(WC), "written before ever read");
+        assert_eq!(resolve(Some((C, WC)), S, shared(false, false), Write), CopyOnWrite(WC));
+        assert_eq!(resolve(Some((C, WC)), S, shared(false, false), Read), AccessViolation, "nothing to fix");
+        assert_eq!(resolve(Some((C, RO)), S, shared(false, false), Write), AccessViolation);
+        assert_eq!(resolve(Some((C, WC)), S, Retained, Write), Remap(WC), "rights first, then the copy");
+    }
+
+    #[test]
+    fn a_copied_page_is_private_and_writable() {
+        // Its VAD protection became READWRITE; protected back to WRITECOPY,
+        // it is still the view's own page.
+        assert_eq!(resolve(Some((C, WC)), S, present(false, false), Write), Remap(WC));
+        assert_eq!(resolve(Some((C, WC)), S, present(true, false), Write), AccessViolation);
+    }
+
+    #[test]
+    fn page_rights_copy_only_shared_pages() {
+        assert_eq!(page_rights(WC, true), (false, false));
+        assert_eq!(page_rights(WC, false), (true, false));
+        assert_eq!(page_rights(PageProtect::EXECUTE_WRITECOPY, true), (false, true));
+        assert_eq!(page_rights(RW, true), (true, false), "shared write");
     }
 
     #[test]

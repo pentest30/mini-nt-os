@@ -302,6 +302,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     address_space_self_test();
     vad_self_test();
     demand_paging_self_test();
+    section_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -1321,6 +1322,142 @@ fn demand_paging_self_test() {
         "[smoke] Mm: demand paging: 256 MiB reserved, {COMMITTED} pages committed, {} touched for as many \
          pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
         COMMITTED / 2
+    );
+}
+
+/// Sections (`mm::section`): a shared-memory section mapped in two address
+/// spaces shares its pages; each space maps a different image at 0x400000,
+/// with its protections and copy-on-write; a data file reads back. Unmapping,
+/// destroying the spaces and dropping the sections give back every page.
+fn section_self_test() {
+    use abi::ntstatus::{
+        STATUS_ACCESS_VIOLATION, STATUS_IMAGE_NOT_AT_BASE, STATUS_NOT_MAPPED_VIEW, STATUS_SECTION_PROTECTION,
+        STATUS_SUCCESS,
+    };
+    use alloc::sync::Arc;
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::fault::Access;
+    use mm::pfn::{self, PageUsage};
+    use mm::section::Section;
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{MemType, PAGE_SIZE as P};
+    use pe::builder::Pe32Builder;
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    const IMAGE_BASE: u64 = 0x40_0000;
+    const MARKER: u64 = 0x5345_4354_494F_4E00;
+    let (ro, rw) = (PageProtect::READONLY, PageProtect::READWRITE);
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::PageTable), s.active(PageUsage::UserPrivate), s.active(PageUsage::Section))
+    };
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // SAFETY (the three closures): called through `in_space`, attached to a
+    // space whose page tables CR3 holds; the addresses are pages of its views.
+    let flags = |va| unsafe { mm::MmPageTables::new(hhdm) }.translate_flags(VirtAddr::new(va)).map(|(_, f)| f);
+    let read = |va: u64| unsafe { core::ptr::read_volatile(va as *const u64) };
+    let write = |va: u64, value: u64| unsafe { core::ptr::write_volatile(va as *mut u64, value) };
+    /// Runs `f` attached to `space`.
+    fn in_space<R>(space: &AddressSpace, f: impl FnOnce() -> R) -> R {
+        // SAFETY: the space outlives the attachment, which ends here.
+        let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+        let result = f();
+        ke::sched::ke_unstack_detach(attached);
+        result
+    }
+
+    let before = counts();
+    let (a, b) = (AddressSpace::new().expect("no PML4"), AddressSpace::new().expect("no PML4"));
+
+    // Shared memory: one page, whoever writes it.
+    let shared = Section::create_pagefile(4 * P, rw).expect("pagefile section");
+    let (va, vb) = (a.map_view(&shared, 0, 0, 0, rw).expect("map"), b.map_view(&shared, 0, 0, 0, rw).expect("map"));
+    assert_eq!((va.size, va.status), (4 * P, STATUS_SUCCESS));
+    in_space(&a, || write(va.base + P, MARKER));
+    in_space(&b, || {
+        assert_eq!(read(vb.base + P), MARKER, "a view does not see the other's write");
+        write(vb.base + 2 * P, MARKER + 1);
+    });
+    assert_eq!(in_space(&a, || read(va.base + 2 * P)), MARKER + 1);
+    assert_eq!((shared.resident_pages(), counts().2 - before.2), (2, 2), "not one section page per page touched");
+    assert_eq!(counts().1, before.1, "a shared write took a private page");
+    // Protected copy-on-write, a shared page is no longer written in place.
+    assert_eq!(a.protect(va.base + P, P, PageProtect::WRITECOPY), Ok(rw));
+    in_space(&a, || {
+        assert!(!flags(va.base + P).unwrap().contains(F::WRITABLE), "a copy-on-write page mapped writable");
+        write(va.base + P, MARKER + 2);
+    });
+    assert_eq!(in_space(&b, || read(vb.base + P)), MARKER, "a copy went to the other space");
+    assert_eq!(counts().1 - before.1, 1, "copy-on-write did not take one private page");
+
+    // Two images at 0x400000, one per space.
+    let image = |code: u8, data: &[u8]| {
+        let file = Pe32Builder::new(IMAGE_BASE as u32)
+            .entry_point(0x1000)
+            .section(".text", 0x1000, 0x100, &[code; 0x100], pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+            .section(".data", 0x2000, 0x100, data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+            .build();
+        Section::create_image(Arc::from(file)).expect("image section")
+    };
+    let (one, two) = (image(0x90, b"data one"), image(0xCC, b"data two"));
+    for (space, section) in [(&a, &one), (&b, &two)] {
+        let view = space.map_view(section, 0, 0, 0, ro).expect("map an image");
+        assert_eq!((view.base, view.size, view.status), (IMAGE_BASE, 3 * P, STATUS_SUCCESS));
+    }
+    in_space(&a, || {
+        assert_eq!(read(IMAGE_BASE) as u16, 0x5A4D, "no MZ at the image base");
+        assert_eq!(read(IMAGE_BASE + 0x1000), 0x9090_9090_9090_9090);
+        let code = flags(IMAGE_BASE + 0x1000).unwrap();
+        assert!(!code.intersects(F::WRITABLE | F::NO_EXECUTE), "code page: {code:?}");
+        assert_eq!(read(IMAGE_BASE + 0x2000).to_le_bytes(), *b"data one");
+        assert!(!flags(IMAGE_BASE + 0x2000).unwrap().contains(F::WRITABLE), "copy-on-write page mapped writable");
+        write(IMAGE_BASE + 0x2000, MARKER);
+        assert_eq!(read(IMAGE_BASE + 0x2000), MARKER);
+    });
+    assert_eq!(counts().1 - before.1, 2, "copy-on-write did not take one private page");
+    assert_eq!(a.query(IMAGE_BASE + 0x2000).map(|r| r.protect), Ok(rw), "a copied page is read-write");
+    assert_eq!(a.query(IMAGE_BASE).map(|r| r.kind), Ok(Some(MemType::Image)));
+    in_space(&b, || {
+        assert_eq!(read(IMAGE_BASE + 0x1000), 0xCCCC_CCCC_CCCC_CCCC, "each space has its own image at 0x400000");
+        assert_eq!(read(IMAGE_BASE + 0x2000).to_le_bytes(), *b"data two");
+    });
+    let again = b.map_view(&one, 0, 0, 0, ro).expect("map an image twice");
+    assert_eq!(again.status, STATUS_IMAGE_NOT_AT_BASE);
+    assert_eq!(in_space(&b, || read(again.base + 0x2000)).to_le_bytes(), *b"data one", "a copy went to the section");
+    assert_eq!(one.resident_pages(), 3, "headers, code, data");
+
+    // A data file, read-only.
+    let bytes: alloc::vec::Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+    let file = Section::create_data_file(Arc::from(bytes.clone()), 0, ro).expect("data file section");
+    assert_eq!(a.map_view(&file, 0, 0, 0, rw).err(), Some(STATUS_SECTION_PROTECTION));
+    let view = a.map_view(&file, 0, 0, 0, ro).expect("map a data file");
+    assert_eq!(view.size, 2 * P);
+    in_space(&a, || {
+        // SAFETY: two readable pages of a view in the attached space.
+        let mapped = unsafe { core::slice::from_raw_parts(view.base as *const u8, 2 * P as usize) };
+        assert_eq!(&mapped[..5000], &bytes[..], "the view does not hold the file");
+        assert!(mapped[5000..].iter().all(|&b| b == 0), "past the end of the file");
+    });
+    assert_eq!(a.access_fault(view.base, Access::Write), STATUS_ACCESS_VIOLATION, "write to a read-only view");
+
+    let mapped = counts();
+    assert_eq!(a.unmap_view(IMAGE_BASE + 0x1234), Ok(()));
+    assert_eq!((counts().1, counts().2), (mapped.1 - 1, mapped.2), "unmapping: the copy goes, the section's stay");
+    assert_eq!(a.unmap_view(va.base), Ok(()));
+    assert_eq!(counts().1, before.1, "unmapping kept a copy");
+    assert_eq!(a.unmap_view(IMAGE_BASE), Err(STATUS_NOT_MAPPED_VIEW));
+    let resident = [&shared, &one, &two, &file].iter().map(|s| s.resident_pages() as u64).sum::<u64>();
+    assert_eq!(counts().2 - before.2, resident);
+    // Views still mapped in both spaces: their pages stay the sections'.
+    a.destroy();
+    b.destroy();
+    assert_eq!(counts().2 - before.2, resident, "destroying a space freed section pages");
+    drop((shared, one, two, file));
+    assert_eq!(counts(), before, "the sections or the spaces kept pages");
+    log::info!(
+        "[smoke] Mm: sections: shared memory seen by two spaces, a different image at 0x400000 in each, \
+         copy-on-write, a data file; {resident} section pages, all back"
     );
 }
 

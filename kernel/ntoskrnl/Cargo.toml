@@ -48,6 +48,7 @@ abi              = { path = "../../abi" }
 hal              = { path = "../hal" }
 ke               = { path = "../ke" }
 mm               = { path = "../mm" }
+pe               = { path = "../../libs/pe", features = ["builder"] }
 ob               = { path = "../ob" }
 ps               = { path = "../ps" }
 io-manager       = { path = "../io" }

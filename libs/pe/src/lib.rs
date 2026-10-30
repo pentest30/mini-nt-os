@@ -16,6 +16,12 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(feature = "builder")]
+extern crate alloc;
+
+#[cfg(feature = "builder")]
+pub mod builder;
+
 // ── Compile-time PE32 constants ──────────────────────────────────────────────
 
 pub const IMAGE_DOS_SIGNATURE: u16 = 0x5A4D; // "MZ"
@@ -25,10 +31,18 @@ pub const IMAGE_NT_OPTIONAL_HDR32_MAGIC: u16 = 0x010B;
 /// IMAGE_FILE_MACHINE_I386
 pub const MACHINE_I386: u16 = 0x014C;
 
+/// IMAGE_FILE_RELOCS_STRIPPED: the image cannot leave its preferred base.
+pub const FILE_RELOCS_STRIPPED: u16 = 0x0001;
+/// IMAGE_FILE_EXECUTABLE_IMAGE
+pub const FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
+/// IMAGE_FILE_32BIT_MACHINE
+pub const FILE_32BIT_MACHINE: u16 = 0x0100;
+
 /// Section characteristic flags (matches IMAGE_SCN_* in winnt.h)
 pub const SCN_CNT_CODE: u32 = 0x0000_0020;
 pub const SCN_CNT_INITIALIZED_DATA: u32 = 0x0000_0040;
 pub const SCN_CNT_UNINITIALIZED_DATA: u32 = 0x0000_0080;
+pub const SCN_MEM_SHARED: u32 = 0x1000_0000;
 pub const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 pub const SCN_MEM_READ: u32 = 0x4000_0000;
 pub const SCN_MEM_WRITE: u32 = 0x8000_0000;

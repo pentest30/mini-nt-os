@@ -51,7 +51,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 **But :** de vrais processus.
 
 - Base PFN et pools à dalles. Une PML4 par processus. VAD en arbre, réservation et commit, fautes de page à la demande, pages de garde.
-- Sections : adossées au fichier d'échange, fichier de données, **image** (via `libs/pe`, relocations, copie sur écriture).
+- Sections : adossées au fichier d'échange, fichier de données, **image** (via `libs/pe`, copie sur écriture ; relocations par `ntdll` sur `STATUS_IMAGE_NOT_AT_BASE`).
 - Ob complet : types, répertoires, liens symboliques, *parse*, comptes de références, table de handles par processus.
 - Ps : `EPROCESS` et `ETHREAD`, création et terminaison avec *rundown*, PEB32 et TEB32 (crate `abi`).
 

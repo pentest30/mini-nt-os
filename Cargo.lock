@@ -111,6 +111,7 @@ dependencies = [
  "bitflags 2.11.0",
  "hal",
  "log",
+ "pe",
  "x86_64",
 ]
 
@@ -131,6 +132,7 @@ dependencies = [
  "log",
  "mm",
  "ob",
+ "pe",
  "ps",
  "x86_64",
 ]

@@ -170,7 +170,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 - **Pools** : allocateur à dalles par taille pour le pool non paginé et le pool paginé. Tant qu'il n'y a pas de fichier d'échange, le pool paginé ne sort jamais de la mémoire (ADR-010).
 - **VAD** : un arbre par processus, avec les états réservé, commité et libéré, les protections, et les types privé, mappé ou image.
 - **Fautes de page** : résolution à la demande (page à zéro, page de section, copie sur écriture), pages de garde (`STATUS_GUARD_PAGE_VIOLATION`, croissance de pile) et accès invalides transformés en exceptions.
-- **Sections** : sections adossées au fichier d'échange (mémoire partagée), sections de fichier de données et **sections d'image** PE. Ces dernières utilisent la crate `pe`, gèrent les relocations et la copie sur écriture, et servent à `ntdll`, au chargeur de ntdll et à `NtMapViewOfSection`.
+- **Sections** : sections adossées au fichier d'échange (mémoire partagée), sections de fichier de données et **sections d'image** PE. Ces dernières utilisent la crate `pe`, gèrent la copie sur écriture, et servent à `ntdll`, au chargeur de ntdll et à `NtMapViewOfSection`. Comme sur XP, une image projetée hors de sa base rend `STATUS_IMAGE_NOT_AT_BASE` et c'est `ntdll` qui la reloge, sur des pages qui se copient à l'écriture : le noyau ne reloge pas (sinon le décalage s'appliquerait deux fois).
 - **Espaces d'adresses** : une PML4 par processus, l'attachement à un autre processus (`KeStackAttachProcess`) et l'hyperspace.
 - **Plus tard** : fichier d'échange et working sets réduits.
 
