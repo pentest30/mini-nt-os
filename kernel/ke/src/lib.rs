@@ -27,6 +27,7 @@ pub mod context;
 pub mod dispatcher;
 pub mod dpc;
 pub mod event;
+pub mod exception;
 pub mod fpu;
 pub mod prcb;
 pub mod sched;
