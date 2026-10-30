@@ -82,9 +82,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`create_user_stack`). Fin par APC noyau normal (`exit_thread`) : passage dans l'espace du système, rundown des APC
   (`ke_rundown_apcs`) ; le dernier thread ferme les handles et rend l'espace d'adresses, une fois finis les accès
   protégés (`rundown::RundownRef`), puis l'objet processus est signalé ; le *reaper* (thread système) rend piles noyau
-  et threads Ke (`ke::sched::delete_thread`). Une faute utilisateur non résolue termine le processus
-  (`STATUS_ACCESS_VIOLATION`) jusqu'au M3. Pas encore : croissance de la pile utilisateur par sa garde, politique
-  DEP, handles noyau, Se (accès accordés, ADR-011).
+  et threads Ke (`ke::sched::delete_thread`). La pile utilisateur grandit par sa garde
+  (`AddressSpace::extend_user_stack`, TEB du thread courant dans le KPCR) jusqu'à `STATUS_STACK_OVERFLOW`. Une faute
+  utilisateur non résolue termine le processus avec le code de l'exception jusqu'au M3. Pas encore : politique DEP,
+  handles noyau, Se (accès accordés, ADR-011).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

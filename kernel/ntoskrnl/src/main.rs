@@ -394,15 +394,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 
 /// A user-mode fault that nothing resolved (`hal::idt`, interrupts masked):
 /// until exceptions reach user mode (M3), the process of a Ps thread ends
-/// with `STATUS_ACCESS_VIOLATION`, as an unhandled exception would end it; a
+/// with the exception's code, as an unhandled exception would end it; a
 /// thread of the legacy loader just ends.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, from user mode.
-fn user_fault() {
+fn user_fault(exception: abi::ntstatus::NtStatus) {
     // Ps runs the process down with interrupts enabled, as from a system call.
     x86_64::instructions::interrupts::enable();
-    ps::terminate_current_process(abi::ntstatus::STATUS_ACCESS_VIOLATION);
+    ps::terminate_current_process(exception);
 }
 
 /// Spawns a ring-3 thread on a fresh guarded kernel stack (`mm::kstack`).
@@ -1596,11 +1596,14 @@ fn process_self_test() {
         "[smoke] Ps: a process reserved 256 MiB and committed it page by page; only the pages written took memory"
     );
     log::info!(
+        "[smoke] Ps: user stacks grow by their guard page, up to STATUS_STACK_OVERFLOW; a guard elsewhere faults"
+    );
+    log::info!(
         "[smoke] Ps: processes ended on request, on a fault and before their first run; pages, pool, handles, kernel stacks and IDs given back"
     );
 }
 
-/// Four processes on images built here, all at 0x400000:
+/// Processes on images built here, all at 0x400000:
 ///
 /// - `one` and `two` run at once: each thread stores the TID its TEB holds
 ///   (`fs:[0x24]`, so the TEB descriptor must follow each switch) and bumps
@@ -1611,18 +1614,22 @@ fn process_self_test() {
 /// - `early`, with a single thread, is terminated before the thread ever ran:
 ///   it ends at its first tick;
 /// - while they run, `two` reserves 256 MiB and commits it page by page:
-///   only the pages written take memory (M2 exit criterion 2).
+///   only the pages written take memory (M2 exit criterion 2);
+/// - the stack of `grows` grows by its guard page as its thread pushes
+///   32 KiB, `TEB.StackLimit` following; `overflow` pushes until
+///   `STATUS_STACK_OVERFLOW` ends it; `guarded` touches a guard page outside
+///   its stack and ends with `STATUS_GUARD_PAGE_VIOLATION`.
 ///
 /// Then each process has its exit status, its handles closed, its address
 /// space gone; with the last reference, its IDs are free. Returns the
 /// counters of `one` and `two`.
 fn process_round() -> ([u32; 2], [u32; 2]) {
     use abi::ntstatus::{
-        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INVALID_CID, STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING,
-        STATUS_THREAD_IS_TERMINATING, STATUS_WAIT_0,
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_GUARD_PAGE_VIOLATION, STATUS_INVALID_CID, STATUS_PENDING,
+        STATUS_PROCESS_IS_TERMINATING, STATUS_STACK_OVERFLOW, STATUS_THREAD_IS_TERMINATING, STATUS_WAIT_0,
     };
     use abi::peb32::Peb32;
-    use abi::teb32::Teb32;
+    use abi::teb32::{NtTib32, Teb32};
     use alloc::sync::Arc;
     use alloc::vec::Vec;
     use core::mem::offset_of;
@@ -1641,6 +1648,20 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     const DATA: u32 = IMAGE_BASE + 0x2000;
     /// `mov dword [0], 1` then `jmp $`.
     const FAULT: [u8; 12] = [0xC7, 0x05, 0, 0, 0, 0, 1, 0, 0, 0, 0xEB, 0xFE];
+    /// `push eax` then `jmp` back to it.
+    const OVERFLOW: [u8; 3] = [0x50, 0xEB, 0xFD];
+    /// A guard page outside any stack, in `guarded`.
+    const GUARD_VA: u32 = 0x50_0000;
+    // mov ecx, 0x2000; push eax; dec ecx; jnz push: 32 KiB pushed; then
+    // mov dword [DATA+8], 1; jmp $.
+    let mut grow = [0u8; 21];
+    grow[..9].copy_from_slice(&[0xB9, 0x00, 0x20, 0x00, 0x00, 0x50, 0x49, 0x75, 0xFC]);
+    grow[9..11].copy_from_slice(&[0xC7, 0x05]);
+    grow[11..15].copy_from_slice(&(DATA + 8).to_le_bytes());
+    grow[15..].copy_from_slice(&[1, 0, 0, 0, 0xEB, 0xFE]);
+    // mov eax, [GUARD_VA]; jmp $.
+    let mut guarded = [0xA1, 0, 0, 0, 0, 0xEB, 0xFE];
+    guarded[1..5].copy_from_slice(&GUARD_VA.to_le_bytes());
 
     // Thread `slot`: mov eax, fs:[0x24]; mov [DATA+0x10+4*slot], eax;
     // add dword [DATA+4*slot], step; jmp back.
@@ -1655,32 +1676,32 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         code[18..].copy_from_slice(&[0xEB, 0xEC]);
         code
     };
-    let image = |first: &[u8], second: &[u8], marker: &[u8; 8]| {
-        let mut text = [0xCC; 0x40];
-        text[..first.len()].copy_from_slice(first);
-        text[0x20..0x20 + second.len()].copy_from_slice(second);
+    // Thread `i`'s code at RVA 0x1000 + 0x20 * i.
+    let image = |codes: &[&[u8]], marker: &[u8; 8]| {
+        let mut text = [0xCC; 0x60];
+        for (i, code) in codes.iter().enumerate() {
+            text[0x20 * i..0x20 * i + code.len()].copy_from_slice(code);
+        }
         let mut data = [0; 0x28];
         data[0x20..].copy_from_slice(marker);
         let file = Pe32Builder::new(IMAGE_BASE)
             .entry_point(0x1000)
-            .section(".text", 0x1000, 0x40, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+            .section(".text", 0x1000, 0x60, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
             .section(".data", 0x2000, 0x28, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
             .build();
         Section::create_image(Arc::from(file)).expect("image section")
     };
     let system = ps::system_process();
+    // A thread at `rva`, on a stack sized by the image.
+    let thread = |process: &Arc<Object<EProcess>>, section: &Arc<Section>, rva: u32| {
+        let info = section.image().expect("an image").info;
+        let stack = ps::create_user_stack(process, info.stack_reserve, info.stack_commit).expect("a user stack");
+        ps::create_thread(process, IMAGE_BASE + rva, &stack).expect("create a thread")
+    };
     // A process, with a thread at each RVA.
     let start = |section: &Arc<Section>, name: &str, rvas: &[u32]| {
         let process = ps::create_process(&system, section, name, false).expect("create a process");
-        let info = section.image().expect("an image").info;
-        let threads: Vec<Arc<Object<EThread>>> = rvas
-            .iter()
-            .map(|rva| {
-                let stack =
-                    ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
-                ps::create_thread(&process, IMAGE_BASE + rva, &stack).expect("create a thread")
-            })
-            .collect();
+        let threads: Vec<Arc<Object<EThread>>> = rvas.iter().map(|&rva| thread(&process, section, rva)).collect();
         (process, threads)
     };
     // Counters, TIDs seen through FS, marker.
@@ -1714,9 +1735,9 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     };
 
     let (one, two, faulty) = (
-        image(&spinner(0, 1), &spinner(1, 1), b"image 1\0"),
-        image(&spinner(0, 2), &spinner(1, 2), b"image 2\0"),
-        image(&FAULT, &spinner(1, 1), b"faulty\0\0"),
+        image(&[&spinner(0, 1), &spinner(1, 1)], b"image 1\0"),
+        image(&[&spinner(0, 2), &spinner(1, 2)], b"image 2\0"),
+        image(&[&FAULT, &spinner(1, 1)], b"faulty\0\0"),
     );
     let (a, ta) = start(&one, "one.exe", &[0x1000, 0x1020]);
     let (b, tb) = start(&two, "two.exe", &[0x1000, 0x1020]);
@@ -1792,10 +1813,42 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     let (d, td) = start(&one, "early.exe", &[0x1000]);
     ps::terminate_process(d.clone(), NtStatus(0xD0D0)).expect("terminate early");
     assert_eq!(wait(d.dispatcher_object(), 100), STATUS_WAIT_0, "a thread ended before its first run lingered");
+
+    // The stack grows by its guard page, down to its overflow.
+    let stacks = image(&[&grow, &OVERFLOW, &guarded], b"stacks\0\0");
+    let (e, te) = start(&stacks, "grows.exe", &[0x1000]);
+    wait_until("a thread did not push 32 KiB", &|| read_u32(&e, DATA + 8) == 1);
+    let tib = offset_of!(Teb32, nt_tib) as u32;
+    let base = read_u32(&e, te[0].teb() + tib + offset_of!(NtTib32, stack_base) as u32);
+    let limit = read_u32(&e, te[0].teb() + tib + offset_of!(NtTib32, stack_limit) as u32);
+    assert_eq!(limit, base - 0x8000, "TEB.StackLimit did not follow the stack");
+    let region = |va: u32| e.with_space(|space| space.query(u64::from(va))).expect("a space").expect("a region");
+    assert!(region(limit - 0x1000).protect.contains(PageProtect::GUARD), "the guard did not move down");
+    assert_eq!(region(limit - 0x2000).state, MemState::Reserve, "more stack committed than needed");
+    ps::terminate_process(e.clone(), NtStatus(0xE0E0)).expect("terminate grows");
+    let (f, tf) = start(&stacks, "overflow.exe", &[0x1020]);
+    let (g, _) = start(&stacks, "guarded.exe", &[]);
+    let commit = AllocType::MEM_RESERVE | AllocType::MEM_COMMIT;
+    let guard = g.with_space(|space| {
+        space.allocate(u64::from(GUARD_VA), PAGE_SIZE, commit, PageProtect::READWRITE | PageProtect::GUARD)
+    });
+    guard.expect("a space").expect("a guard page");
+    let tg = alloc::vec![thread(&g, &stacks, 0x1040)];
+    for process in [&e, &f, &g] {
+        assert_eq!(wait(process.dispatcher_object(), 3000), STATUS_WAIT_0, "{} did not end", process.image_file_name());
+    }
     ps::wait_for_reaper();
 
-    let ended = [(&a, &ta, NtStatus(0xA0A0)), (&b, &tb, NtStatus(0xB0B0)), (&c, &tc, STATUS_ACCESS_VIOLATION)];
-    for (process, threads, status) in ended.into_iter().chain([(&d, &td, NtStatus(0xD0D0))]) {
+    let ended = [
+        (&a, &ta, NtStatus(0xA0A0)),
+        (&b, &tb, NtStatus(0xB0B0)),
+        (&c, &tc, STATUS_ACCESS_VIOLATION),
+        (&d, &td, NtStatus(0xD0D0)),
+        (&e, &te, NtStatus(0xE0E0)),
+        (&f, &tf, STATUS_STACK_OVERFLOW),
+        (&g, &tg, STATUS_GUARD_PAGE_VIOLATION),
+    ];
+    for (process, threads, status) in ended {
         assert_eq!((process.exit_status(), process.active_threads()), (status, 0), "{}", process.image_file_name());
         let survivors = if core::ptr::eq(process, &a) { &threads[..1] } else { &threads[..] };
         assert!(
@@ -1814,12 +1867,13 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
     assert!(ps::create_thread(&a, IMAGE_BASE, &stack).is_err(), "a thread in an ended process");
     assert_eq!(section_object.handle_count(), 0, "the handle table was not run down");
 
-    let ids: Vec<u32> = [&a, &b, &c, &d]
+    let ids: Vec<u32> = [&a, &b, &c, &d, &e, &f, &g]
         .iter()
         .map(|p| p.pid())
-        .chain([&ta, &tb, &tc, &td].iter().flat_map(|threads| threads.iter().map(|t| t.tid())))
+        .chain([&ta, &tb, &tc, &td, &te, &tf, &tg].iter().flat_map(|threads| threads.iter().map(|t| t.tid())))
         .collect();
-    drop((a, b, c, d, ta, tb, tc, td, section_object, one, two, faulty, system));
+    drop((a, b, c, d, e, f, g, ta, tb, tc, td, te, tf, tg));
+    drop((section_object, one, two, faulty, stacks, system));
     for id in ids {
         assert_eq!(ps::lookup_process(id).err(), Some(STATUS_INVALID_CID), "process {id} outlived its references");
         assert_eq!(ps::lookup_thread(id).err(), Some(STATUS_INVALID_CID), "thread {id} outlived its references");

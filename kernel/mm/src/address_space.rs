@@ -26,13 +26,15 @@
 
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use core::mem::offset_of;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_GUARD_PAGE_VIOLATION,
     STATUS_IMAGE_NOT_AT_BASE, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_INVALID_VIEW_SIZE,
-    STATUS_MAPPED_ALIGNMENT, STATUS_NOT_MAPPED_VIEW, STATUS_NO_MEMORY, STATUS_SUCCESS,
+    STATUS_MAPPED_ALIGNMENT, STATUS_NOT_MAPPED_VIEW, STATUS_NO_MEMORY, STATUS_STACK_OVERFLOW, STATUS_SUCCESS,
 };
+use abi::teb32::{NtTib32, Teb32};
 use hal::sync::KSpinLock;
 use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::{PhysAddr, VirtAddr};
@@ -521,6 +523,39 @@ impl AddressSpace {
                 STATUS_GUARD_PAGE_VIOLATION
             }
             Resolution::AccessViolation => STATUS_ACCESS_VIOLATION,
+        }
+    }
+
+    /// MiCheckForUserStackOverflow : la faute en `addr` vient de lever une
+    /// page de garde, dans le thread dont le TEB est en `teb`. Si elle est
+    /// dans sa pile, la garde descend d'une page, `StackLimit` suit, et
+    /// l'accès reprend (`STATUS_SUCCESS`) ; sinon l'exception que donne
+    /// [`fault::stack_extension`].
+    ///
+    /// # IRQL
+    /// < DISPATCH_LEVEL.
+    pub fn extend_user_stack(&self, addr: u64, teb: u32) -> NtStatus {
+        let tib = u64::from(teb) + offset_of!(Teb32, nt_tib) as u64;
+        let field = |at: u64| {
+            let mut bytes = [0u8; 4];
+            self.read_bytes(at, &mut bytes).map(|()| u64::from(u32::from_le_bytes(bytes)))
+        };
+        let (Ok(base), Ok(bottom)) = (
+            field(tib + offset_of!(NtTib32, stack_base) as u64),
+            field(u64::from(teb) + offset_of!(Teb32, deallocation_stack) as u64),
+        ) else {
+            return STATUS_GUARD_PAGE_VIOLATION;
+        };
+        let (guard, limit) = match fault::stack_extension(addr, bottom, base) {
+            Ok(extension) => extension,
+            Err(status) => return status,
+        };
+        if self.allocate(guard, PAGE, AllocType::MEM_COMMIT, PageProtect::READWRITE | PageProtect::GUARD).is_err() {
+            return STATUS_STACK_OVERFLOW;
+        }
+        match self.write_bytes(tib + offset_of!(NtTib32, stack_limit) as u64, &(limit as u32).to_le_bytes()) {
+            Ok(()) => STATUS_SUCCESS,
+            Err(status) => status,
         }
     }
 

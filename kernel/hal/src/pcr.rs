@@ -1,6 +1,7 @@
 //! KPCR : la zone de contrôle de chaque processeur (02 §HAL, ADR-015). En mode
 //! noyau, la base de GS pointe sur celle du CPU courant ; elle porte l'état par
-//! CPU de la HAL (interruptions DISPATCH et APC en attente) et le KPRCB de Ke.
+//! CPU de la HAL (interruptions DISPATCH et APC en attente), le KPRCB de Ke et
+//! le TEB du thread courant (`NtTib.Self` du KPCR d'XP).
 //! L'IRQL, lui, est CR8 (`hal::irql`).
 //!
 //! Un seul CPU pour l'instant : celui du démarrage (BSP), dont le KPCR est
@@ -13,7 +14,7 @@
 
 use core::ffi::c_void;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicPtr};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
 
 /// Zone de contrôle d'un processeur.
 #[repr(C)]
@@ -28,6 +29,8 @@ pub struct Kpcr {
     pub(crate) dispatch_pending: AtomicBool,
     /// L'interruption APC est demandée et ne s'est pas encore exécutée.
     pub(crate) apc_pending: AtomicBool,
+    /// Le TEB du thread courant ; 0 pour un thread noyau.
+    teb: AtomicU32,
 }
 
 const _: () = assert!(core::mem::offset_of!(Kpcr, self_ptr) == 0, "gs:[0] is the KPCR's own address");
@@ -43,6 +46,7 @@ static BSP_PCR: Kpcr = Kpcr {
     number: 0,
     dispatch_pending: AtomicBool::new(false),
     apc_pending: AtomicBool::new(false),
+    teb: AtomicU32::new(0),
 };
 
 impl Kpcr {
@@ -62,6 +66,22 @@ impl Kpcr {
     /// Tout niveau ; une fois, à l'initialisation de Ke.
     pub fn set_prcb(&self, prcb: *mut c_void) {
         self.prcb.store(prcb, core::sync::atomic::Ordering::Release);
+    }
+
+    /// Le TEB du thread courant ; 0 pour un thread noyau.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn teb(&self) -> u32 {
+        self.teb.load(Ordering::Relaxed)
+    }
+
+    /// Enregistre le TEB du thread qui va s'exécuter sur ce processeur.
+    ///
+    /// # IRQL
+    /// DISPATCH_LEVEL (la commutation).
+    pub fn set_teb(&self, teb: u32) {
+        self.teb.store(teb, Ordering::Relaxed);
     }
 }
 

@@ -643,6 +643,7 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
             hal::gdt::set_kernel_stack_top((*new).kernel_stack_top);
             hal::gdt::set_teb_base((*new).teb);
         }
+        hal::pcr::current().set_teb((*new).teb);
         ki_request_pending_apcs(new);
         prcb::current().current_thread.store(new, Ordering::Relaxed);
         CONTEXT_SWITCHES.fetch_add(1, Ordering::Relaxed);
