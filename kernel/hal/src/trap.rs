@@ -1,5 +1,5 @@
-//! The trap frame (`KTRAP_FRAME`, 02 §6.3) and the user-mode gates
-//! `int 2Ah` to `int 2Eh` (02 §6.1).
+//! The trap frame (`KTRAP_FRAME`, 02 §6.3), the user-mode gates `int 2Ah` to
+//! `int 2Eh` (02 §6.1), and the CPU exceptions of user mode.
 //!
 //! Each gate pushes the same frame: the CPU's IRETQ frame, an error code (0)
 //! and the vector, the general registers, then the DS, ES, FS and GS
@@ -7,6 +7,12 @@
 //! it and may change it (EAX, EIP…); the gate then returns to user mode with
 //! what the frame holds. The kernel converts it to and from an x86 `CONTEXT`
 //! (`ke::context`).
+//!
+//! The exceptions of [`USER_EXCEPTIONS`] (#DE, #BP, #UD, #GP, #PF) enter by
+//! stubs that look at where they come from: from user mode, they push the
+//! same frame (with the CPU's error code for #GP and #PF) and go to the
+//! vector's hook, which must exist; from kernel mode, they jump to the
+//! kernel's handler (`idt`), as if the stub were not there.
 //!
 //! GS is saved but not reloaded on the way out: in the kernel, its base is
 //! the KPCR, which loading a selector would lose (no SWAPGS before M3's
@@ -59,13 +65,27 @@ const _: () = assert!(size_of::<KTrapFrame>() == 26 * 8 && size_of::<KTrapFrame>
 pub const FIRST_GATE: u8 = 0x2A;
 pub const LAST_GATE: u8 = 0x2E;
 
-/// What the kernel does with a gate's frame.
+/// The CPU exceptions that user mode takes through a trap frame: #DE, #BP,
+/// #UD, #GP and #PF.
+pub const USER_EXCEPTIONS: [u8; 5] = [0x00, 0x03, 0x06, 0x0D, 0x0E];
+
+/// What the kernel does with a trap frame.
 pub type TrapHook = fn(&mut KTrapFrame);
 
-static HOOKS: [AtomicUsize; (LAST_GATE - FIRST_GATE + 1) as usize] =
-    [const { AtomicUsize::new(0) }; (LAST_GATE - FIRST_GATE + 1) as usize];
+const GATES: usize = (LAST_GATE - FIRST_GATE + 1) as usize;
 
-/// Plugs `hook` into the gate `vector` (`FIRST_GATE..=LAST_GATE`).
+static HOOKS: [AtomicUsize; GATES + USER_EXCEPTIONS.len()] =
+    [const { AtomicUsize::new(0) }; GATES + USER_EXCEPTIONS.len()];
+
+/// The hook slot of `vector`: a gate, then a user exception.
+fn slot(vector: u8) -> Option<usize> {
+    if (FIRST_GATE..=LAST_GATE).contains(&vector) {
+        return Some((vector - FIRST_GATE) as usize);
+    }
+    USER_EXCEPTIONS.iter().position(|&v| v == vector).map(|i| GATES + i)
+}
+
+/// Plugs `hook` into the gate or the user exception `vector`.
 ///
 /// # Panics
 /// For another vector.
@@ -73,29 +93,71 @@ static HOOKS: [AtomicUsize; (LAST_GATE - FIRST_GATE + 1) as usize] =
 /// # IRQL
 /// Any level.
 pub fn set_trap_hook(vector: u8, hook: Option<TrapHook>) {
-    assert!((FIRST_GATE..=LAST_GATE).contains(&vector), "no user-mode gate {vector:#x}");
-    HOOKS[(vector - FIRST_GATE) as usize].store(hook.map_or(0, |f| f as usize), Ordering::Release);
+    let slot = slot(vector).unwrap_or_else(|| panic!("no user-mode gate or exception {vector:#x}"));
+    HOOKS[slot].store(hook.map_or(0, |f| f as usize), Ordering::Release);
 }
 
-/// Called by the gates with their frame, interrupts masked, at the IRQL of
-/// the interrupted user code (PASSIVE_LEVEL). Without a hook, EAX gets
-/// `STATUS_NOT_IMPLEMENTED`.
+/// Called by the gates and the user exception stubs with their frame,
+/// interrupts masked, at the IRQL of the interrupted user code
+/// (PASSIVE_LEVEL). A gate without a hook gives EAX
+/// `STATUS_NOT_IMPLEMENTED`; an exception without a hook is a kernel bug.
 #[cfg_attr(target_os = "none", unsafe(no_mangle))]
 #[cfg_attr(
     all(not(target_os = "none"), not(test)),
     expect(dead_code, reason = "called by the gates' assembly, which the host does not build")
 )]
 extern "sysv64" fn hal_trap_dispatch(frame: &mut KTrapFrame) {
-    let index = (frame.vector as u8).wrapping_sub(FIRST_GATE) as usize;
-    match HOOKS.get(index).map(|hook| hook.load(Ordering::Acquire)) {
+    dispatch(frame);
+}
+
+/// The vector's hook, or what [`hal_trap_dispatch`] does without one.
+fn dispatch(frame: &mut KTrapFrame) {
+    let vector = frame.vector as u8;
+    match slot(vector).map(|slot| HOOKS[slot].load(Ordering::Acquire)) {
         Some(hook) if hook != 0 => {
             // SAFETY: only `set_trap_hook` stores into HOOKS, always a
             // `TrapHook`.
             let hook: TrapHook = unsafe { core::mem::transmute(hook) };
             hook(frame);
         }
-        _ => frame.rax = u64::from(abi::ntstatus::STATUS_NOT_IMPLEMENTED.0),
+        _ if (FIRST_GATE..=LAST_GATE).contains(&vector) => {
+            frame.rax = u64::from(abi::ntstatus::STATUS_NOT_IMPLEMENTED.0)
+        }
+        _ => panic!("user-mode exception {vector:#x} without a handler"),
     }
+}
+
+/// The kernel-mode handler of each user exception, where its stub jumps
+/// from kernel mode (`idt` sets them).
+#[cfg(target_os = "none")]
+#[unsafe(no_mangle)]
+static HAL_KERNEL_EXCEPTION_HANDLERS: [core::sync::atomic::AtomicU64; USER_EXCEPTIONS.len()] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; USER_EXCEPTIONS.len()];
+
+/// Records `handler`, the kernel-mode handler of the user exception
+/// `vector`; returns the stub for its IDT entry.
+///
+/// # Panics
+/// For a vector outside [`USER_EXCEPTIONS`].
+#[cfg(target_os = "none")]
+pub(crate) fn exception_stub(vector: u8, handler: u64) -> u64 {
+    unsafe extern "C" {
+        fn hal_exception_00();
+        fn hal_exception_03();
+        fn hal_exception_06();
+        fn hal_exception_0d();
+        fn hal_exception_0e();
+    }
+    let stubs = [
+        hal_exception_00 as *const () as u64,
+        hal_exception_03 as *const () as u64,
+        hal_exception_06 as *const () as u64,
+        hal_exception_0d as *const () as u64,
+        hal_exception_0e as *const () as u64,
+    ];
+    let index = USER_EXCEPTIONS.iter().position(|&v| v == vector).expect("not a user exception");
+    HAL_KERNEL_EXCEPTION_HANDLERS[index].store(handler, Ordering::Release);
+    stubs[index]
 }
 
 /// The entry stub of each gate, `FIRST_GATE` first.
@@ -135,6 +197,30 @@ core::arch::global_asm!(
     "HAL_TRAP_GATE 2c",
     "HAL_TRAP_GATE 2d",
     "HAL_TRAP_GATE 2e",
+    // A user exception: from user mode (RPL 3 in the saved CS), the frame,
+    // after the CPU's error code or a 0; from kernel mode, the kernel's
+    // handler, the stack untouched.
+    ".macro HAL_EXCEPTION vector, index, error",
+    ".global hal_exception_\\vector",
+    "hal_exception_\\vector:",
+    "   .if \\error",
+    "   test byte ptr [rsp + 16], 3",
+    "   .else",
+    "   test byte ptr [rsp + 8], 3",
+    "   .endif",
+    "   jz 1f",
+    "   .if \\error == 0",
+    "   push 0",
+    "   .endif",
+    "   push 0x\\vector",
+    "   jmp hal_trap_common",
+    "1: jmp qword ptr [rip + HAL_KERNEL_EXCEPTION_HANDLERS + 8 * \\index]",
+    ".endm",
+    "HAL_EXCEPTION 00, 0, 0",
+    "HAL_EXCEPTION 03, 1, 0",
+    "HAL_EXCEPTION 06, 2, 0",
+    "HAL_EXCEPTION 0d, 3, 1",
+    "HAL_EXCEPTION 0e, 4, 1",
     "hal_trap_common:",
     "   cld",
     "   push rax",
@@ -219,8 +305,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "no user-mode gate")]
-    fn only_the_user_gates_take_a_hook() {
+    #[should_panic(expected = "no user-mode gate or exception")]
+    fn only_the_user_gates_and_exceptions_take_a_hook() {
         set_trap_hook(0x80, None);
+    }
+
+    #[test]
+    fn each_gate_and_user_exception_has_its_slot() {
+        assert_eq!((slot(0x2A), slot(0x2E)), (Some(0), Some(4)));
+        assert_eq!((slot(0x00), slot(0x0E)), (Some(5), Some(9)));
+        assert_eq!((slot(0x0F), slot(0x29), slot(0x2F)), (None, None, None));
+    }
+
+    #[test]
+    #[should_panic(expected = "without a handler")]
+    fn an_exception_needs_its_hook() {
+        let mut frame = KTrapFrame { vector: 0x06, ..KTrapFrame::default() };
+        // `dispatch`: a panic does not unwind out of `extern "sysv64"`.
+        dispatch(&mut frame);
     }
 }

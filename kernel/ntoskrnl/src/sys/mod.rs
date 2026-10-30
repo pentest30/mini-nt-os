@@ -9,9 +9,15 @@
 //! hors des tables rend `STATUS_INVALID_SYSTEM_SERVICE` ; un service sans
 //! handler, `STATUS_NOT_IMPLEMENTED`, journalisé à son premier appel.
 //!
+//! Un service peut aussi donner au thread un nouveau contexte, dans sa trame
+//! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException). SYSENTER n'a
+//! pas encore de trame (son retour passe par ntdll, M3) : ces services y
+//! rendent `STATUS_NOT_IMPLEMENTED`.
+//!
 //! Les threads de l'ancien chargeur gardent leur dispatcher (`syscall.rs`),
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
+pub mod exceptions;
 pub mod gates;
 mod memory;
 mod object;
@@ -24,20 +30,40 @@ use abi::ntstatus::{NtStatus, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMEN
 use abi::process::NT_CURRENT_PROCESS;
 use abi::service::{lookup, Table};
 use abi::services::{self, NTOSKRNL, WIN32K};
+use hal::trap::KTrapFrame;
 use ob::{AccessMask, Handle, Object};
 use ps::{EProcess, PROCESS_TYPE};
 
-/// Le handler d'un service : ses arguments, un mot de 32 bits chacun.
-pub type Handler = fn(&[u32]) -> NtStatus;
+/// Le handler d'un service, qui reçoit ses arguments, un mot de 32 bits
+/// chacun.
+#[derive(Clone, Copy)]
+pub enum Handler {
+    /// Rend un statut, pour EAX.
+    Status(fn(&[u32]) -> NtStatus),
+    /// Met dans la trame de trap le nouveau contexte du thread, ou rend un
+    /// statut d'erreur pour EAX.
+    Frame(fn(&[u32], &mut KTrapFrame) -> Result<(), NtStatus>),
+}
+
+/// Ce qu'un service laisse au thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Completion {
+    /// Un statut, pour EAX.
+    Status(NtStatus),
+    /// Sa trame de trap tient son nouveau contexte.
+    Frame,
+}
 
 /// Les services implémentés, par numéro. `tools/syscall-gen` en tire le
 /// rapport de couverture (`docs/compat/syscalls.md`) : une entrée par ligne,
-/// `(services::NtNom, module::handler),`.
+/// `(services::NtNom, Handler::…(module::handler)),`.
 pub const IMPLEMENTED: &[(u32, Handler)] = &[
-    (services::NtAllocateVirtualMemory, memory::nt_allocate_virtual_memory),
-    (services::NtClose, object::nt_close),
-    (services::NtFreeVirtualMemory, memory::nt_free_virtual_memory),
-    (services::NtTerminateProcess, process::nt_terminate_process),
+    (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
+    (services::NtClose, Handler::Status(object::nt_close)),
+    (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
+    (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
+    (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
 ];
 
 /// Au plus 63 arguments par service (`tools/syscall-gen`).
@@ -70,18 +96,19 @@ static REPORTED: [AtomicU32; (NTOSKRNL.len() + WIN32K.len()).div_ceil(32)] =
     [const { AtomicU32::new(0) }; (NTOSKRNL.len() + WIN32K.len()).div_ceil(32)];
 
 /// KiSystemService : le service `number`, avec ses arguments copiés depuis
-/// l'adresse utilisateur `arguments`.
+/// l'adresse utilisateur `arguments` ; `frame` est la trame de trap du
+/// thread, s'il en a une.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interruptions actives, dans un thread de Ps.
-pub fn dispatch(number: u32, arguments: u32) -> NtStatus {
+pub fn dispatch(number: u32, arguments: u32, frame: Option<&mut KTrapFrame>) -> Completion {
     let Some((table, service)) = lookup(number) else {
-        return STATUS_INVALID_SYSTEM_SERVICE;
+        return Completion::Status(STATUS_INVALID_SYSTEM_SERVICE);
     };
     let count = service.argument_bytes as usize / 4;
     let mut bytes = [0u8; MAX_ARGUMENTS * 4];
     if let Err(status) = ke::usermem::copy_from_user(&mut bytes[..count * 4], u64::from(arguments)) {
-        return status;
+        return Completion::Status(status);
     }
     let mut words = [0u32; MAX_ARGUMENTS];
     for (word, chunk) in words.iter_mut().zip(bytes[..count * 4].chunks_exact(4)) {
@@ -92,15 +119,21 @@ pub fn dispatch(number: u32, arguments: u32) -> NtStatus {
         Table::Ntoskrnl => HANDLERS[index],
         Table::Win32k => None,
     };
-    match handler {
-        Some(handler) => handler(&words[..count]),
-        None => {
+    let arguments = &words[..count];
+    match (handler, frame) {
+        (Some(Handler::Status(handler)), _) => Completion::Status(handler(arguments)),
+        (Some(Handler::Frame(handler)), Some(frame)) => {
+            handler(arguments, frame).map_or_else(Completion::Status, |()| Completion::Frame)
+        }
+        // SYSENTER, without a trap frame.
+        (Some(Handler::Frame(_)), None) => Completion::Status(STATUS_NOT_IMPLEMENTED),
+        (None, _) => {
             let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
             let mask = 1 << (bit % 32);
             if REPORTED[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
                 log::warn!("sys: {} ({number:#06x}) is not implemented", service.name);
             }
-            STATUS_NOT_IMPLEMENTED
+            Completion::Status(STATUS_NOT_IMPLEMENTED)
         }
     }
 }

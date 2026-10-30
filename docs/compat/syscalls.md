@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 4 | 296 |
+| ntoskrnl | 6 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -49,7 +49,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x001f` | `NtCompleteConnectPort` | 1 |  |
 | `0x0020` | `NtCompressKey` | 1 |  |
 | `0x0021` | `NtConnectPort` | 8 |  |
-| `0x0022` | `NtContinue` | 2 |  |
+| `0x0022` | `NtContinue` | 2 | ✅ |
 | `0x0023` | `NtCreateDebugObject` | 4 |  |
 | `0x0024` | `NtCreateDirectoryObject` | 3 |  |
 | `0x0025` | `NtCreateEvent` | 5 |  |
@@ -204,7 +204,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00ba` | `NtQueryVirtualMemory` | 6 |  |
 | `0x00bb` | `NtQueryVolumeInformationFile` | 5 |  |
 | `0x00bc` | `NtQueueApcThread` | 5 |  |
-| `0x00bd` | `NtRaiseException` | 3 |  |
+| `0x00bd` | `NtRaiseException` | 3 | ✅ |
 | `0x00be` | `NtRaiseHardError` | 6 |  |
 | `0x00bf` | `NtReadFile` | 9 |  |
 | `0x00c0` | `NtReadFileScatter` | 9 |  |

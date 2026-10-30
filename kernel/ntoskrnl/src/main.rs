@@ -291,6 +291,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(system_call));
     sys::gates::install();
+    sys::exceptions::install();
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -316,6 +317,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     process_self_test();
     system_service_self_test();
     trap_gate_self_test();
+    exception_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -399,8 +401,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 /// A system call through SYSENTER (`hal::sysenter`), interrupts masked, on
 /// the calling thread's kernel stack (`int 2Eh` goes through
 /// `sys::gates`). A Ps thread goes to KiSystemService (`sys`), interrupts
-/// enabled; a thread of the legacy loader to its own dispatcher (`syscall`),
-/// which has its own numbers.
+/// enabled, without a trap frame; a thread of the legacy loader to its own
+/// dispatcher (`syscall`), which has its own numbers.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, from user mode.
@@ -409,15 +411,18 @@ fn system_call(number: u32, arguments: u32) -> u32 {
         return syscall::dispatch(number, arguments);
     }
     x86_64::instructions::interrupts::enable();
-    let status = sys::dispatch(number, arguments);
+    let completion = sys::dispatch(number, arguments, None);
     x86_64::instructions::interrupts::disable();
-    status.0
+    match completion {
+        sys::Completion::Status(status) => status.0,
+        sys::Completion::Frame => unreachable!("a new context without a trap frame"),
+    }
 }
 
-/// A user-mode fault that nothing resolved (`hal::idt`, interrupts masked):
-/// until exceptions reach user mode (M3), the process of a Ps thread ends
-/// with the exception's code, as an unhandled exception would end it; a
-/// thread of the legacy loader just ends.
+/// A user-mode floating-point trap (`hal::idt`, interrupts masked): until it
+/// becomes an exception (`sys::exceptions`), the process of a Ps thread ends
+/// with the code, as an unhandled exception would end it; a thread of the
+/// legacy loader just ends.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, from user mode.
@@ -1828,7 +1833,8 @@ fn system_service_self_test() {
 /// `int 2Ah` gives the tick count, `int 2Eh` keeps EBX, ESI, EDI, EBP and FS
 /// across a system service, `int 2Dh` prints through DbgPrint and skips the
 /// byte after it (the `int 3` of ntdll), `int 2Bh` has no callback to return
-/// from, and `int 2Ch` ends the process with `STATUS_ASSERTION_FAILURE`.
+/// from, and `int 2Ch`, without an exception dispatcher, ends the process
+/// with `STATUS_ASSERTION_FAILURE`.
 fn trap_gate_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_ASSERTION_FAILURE, STATUS_INVALID_HANDLE, STATUS_NO_CALLBACK_ACTIVE, STATUS_WAIT_0,
@@ -1939,6 +1945,252 @@ fn trap_gate_self_test() {
     assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, STATUS_ASSERTION_FAILURE), "int 2Ch");
     ps::wait_for_reaper();
     log::info!("[smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them");
+}
+
+/// The user-mode exceptions (`sys::exceptions`, `ke::exception`, M3): a Ps
+/// process whose exception dispatcher stands in for ntdll's takes a write to
+/// address 0, `int 3`, `ud2`, a division by zero, `hlt`, a selector past the
+/// GDT and `int 2Ch` with FS null, each with its code, address and
+/// parameters, FS on the TEB, and a CONTEXT that NtContinue resumes past the
+/// instruction; NtRaiseException raises an exception from a context and
+/// refuses 16 parameters, NtContinue a context it cannot read; a second
+/// chance ends the process with the code.
+fn exception_self_test() {
+    use abi::context::{CONTEXT_CONTROL, CONTEXT_INTEGER};
+    use abi::exception::{ExceptionRecord32, BREAKPOINT_BREAK, EXCEPTION_READ_FAULT, EXCEPTION_WRITE_FAULT};
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_ASSERTION_FAILURE, STATUS_BREAKPOINT, STATUS_ILLEGAL_INSTRUCTION,
+        STATUS_INTEGER_DIVIDE_BY_ZERO, STATUS_INVALID_PARAMETER, STATUS_PRIVILEGED_INSTRUCTION, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const TEXT: u32 = IMAGE_BASE + 0x1000;
+    const DISPATCHER: u32 = TEXT + 0x200;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    // The dispatcher's: its next slot, the bytes it skips, whether it gives
+    // up (second chance), and what its system service returned.
+    const SLOT: u32 = DATA;
+    const SKIP: u32 = DATA + 0x04;
+    const SECOND: u32 = DATA + 0x08;
+    const FAILED: u32 = DATA + 0x0C;
+    // Handshake with the kernel.
+    const DONE: u32 = DATA + 0x10;
+    const GO: u32 = DATA + 0x14;
+    // ESP before the faults; EBX and ESP after them; EBX, ESP and EAX after
+    // NtRaiseException, then what it returned; the two refusals.
+    const ESP_BEFORE: u32 = DATA + 0x18;
+    const KEPT: u32 = DATA + 0x1C;
+    const RAISED: u32 = DATA + 0x24;
+    const TOO_MANY: u32 = DATA + 0x34;
+    const BAD_CONTEXT: u32 = DATA + 0x38;
+    const RECORD: u32 = DATA + 0x40;
+    const BAD_RECORD: u32 = DATA + 0x90;
+    // One slot per exception: code, address, parameter count, two
+    // parameters, EIP, EBX and ESP of the context, then the TEB through FS.
+    const SLOTS: u32 = DATA + 0x100;
+    const SLOT_SIZE: u32 = 0x40;
+    const CONTEXT: u32 = DATA + 0x400;
+    const MAGIC: u32 = 0x5EB0_0001;
+    const RAISED_EBX: u32 = 0x5EB0_0002;
+    const RAISED_EAX: u32 = 0x5EB0_0003;
+    const RAISED_CODE: u32 = 0xE000_1234;
+    const RAISED_AT: u32 = 0x1122_3344;
+
+    /// `mov dword [SKIP], length`, then the faulting instruction: its
+    /// address.
+    fn fault(code: &mut Code, instruction: &[u8]) -> u32 {
+        code.word(&[0xC7, 0x05], SKIP).bytes(&(instruction.len() as u32).to_le_bytes());
+        let at = TEXT + code.0.len() as u32;
+        code.bytes(instruction);
+        at
+    }
+
+    let mut code = Code::new();
+    code.word(&[0x89, 0x25], ESP_BEFORE) // mov [ESP_BEFORE], esp
+        .word(&[0xBB], MAGIC); // mov ebx, MAGIC
+    let write = fault(&mut code, &[0xA3, 0, 0, 0, 0]); // mov [0], eax
+    let int3 = fault(&mut code, &[0xCC]);
+    let ud2 = fault(&mut code, &[0x0F, 0x0B]);
+    code.bytes(&[0x31, 0xC9]); // xor ecx, ecx
+    let divide = fault(&mut code, &[0xF7, 0xF1]); // div ecx
+    let hlt = fault(&mut code, &[0xF4]);
+    code.word(&[0xB8], 0xFFFB); // mov eax, a selector past the GDT
+    let selector = fault(&mut code, &[0x8E, 0xD8]); // mov ds, eax
+    code.bytes(&[0x31, 0xC0, 0x8E, 0xE0]); // xor eax, eax; mov fs, eax
+    let assertion = fault(&mut code, &[0xCD, 0x2C]);
+    code.word(&[0x89, 0x1D], KEPT) // mov [KEPT], ebx
+        .word(&[0x89, 0x25], KEPT + 4) // mov [KEPT + 4], esp
+        .word(&[0xC7, 0x05], SKIP)
+        .bytes(&0u32.to_le_bytes())
+        .word(&[0x89, 0x25], CONTEXT + 0xC4) // the context's Esp
+        .call(services::NtRaiseException, &[RECORD, CONTEXT, 1])
+        .store_eax(RAISED + 12);
+    // Where the context of NtRaiseException resumes.
+    let resume = TEXT + code.0.len() as u32;
+    code.store_eax(RAISED + 8)
+        .word(&[0x89, 0x1D], RAISED) // mov [RAISED], ebx
+        .word(&[0x89, 0x25], RAISED + 4) // mov [RAISED + 4], esp
+        .call(services::NtRaiseException, &[BAD_RECORD, CONTEXT, 1])
+        .store_eax(TOO_MANY)
+        .call(services::NtContinue, &[0x10, 0])
+        .store_eax(BAD_CONTEXT)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x83, 0x3D], GO) // cmp dword [GO], 0
+        .bytes(&[0x00, 0x74, 0xF7]) // je back to the cmp
+        .word(&[0xC7, 0x05], SECOND)
+        .bytes(&1u32.to_le_bytes());
+    // A code of its own: an exception at the wrong place cannot end the
+    // process with it.
+    fault(&mut code, &[0x0F, 0x0B]);
+    code.bytes(&[0xEB, 0xFE]);
+    let main = code.0;
+    assert!(main.len() <= 0x200, "the test program outgrew its slot");
+
+    // The dispatcher, entered with ESP on the addresses of the record and
+    // the context: it fills its slot, then NtContinue(context + skip, FALSE),
+    // or NtRaiseException(record, context, FALSE) in second chance.
+    let mut resume_code = Code::new();
+    resume_code
+        .bytes(&[0x6A, 0x00, 0x56, 0x89, 0xE2]) // push 0; push esi; mov edx, esp
+        .word(&[0xB8], services::NtContinue)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(FAILED)
+        .bytes(&[0xEB, 0xFE]);
+    let mut dispatcher = Code::new();
+    dispatcher
+        .bytes(&[0x8B, 0x1C, 0x24]) // mov ebx, [esp]: the record
+        .bytes(&[0x8B, 0x74, 0x24, 0x04]) // mov esi, [esp + 4]: the context
+        .word(&[0x8B, 0x3D], SLOT); // mov edi, [SLOT]
+                                    // The record's code, address, parameter count and two parameters:
+                                    // mov eax, [ebx + offset]; mov [edi + 4i], eax.
+    for (i, offset) in [0x00u8, 0x0C, 0x10, 0x14, 0x18].into_iter().enumerate() {
+        dispatcher.bytes(&[0x8B, 0x43, offset, 0x89, 0x47, 4 * i as u8]);
+    }
+    // The context's Eip, Ebx and Esp: mov eax, [esi + offset]; mov [edi + 4i], eax.
+    for (i, offset) in [0xB8u32, 0xA4, 0xC4].into_iter().enumerate() {
+        dispatcher.word(&[0x8B, 0x86], offset).bytes(&[0x89, 0x47, 4 * (5 + i) as u8]);
+    }
+    dispatcher
+        .bytes(&[0x64, 0xA1, 0x18, 0, 0, 0]) // mov eax, fs:[0x18]
+        .bytes(&[0x89, 0x47, 0x20]) // mov [edi + 0x20], eax
+        .word(&[0x83, 0x05], SLOT) // add dword [SLOT], SLOT_SIZE
+        .bytes(&[SLOT_SIZE as u8])
+        .word(&[0xA1], SKIP) // mov eax, [SKIP]
+        .word(&[0x01, 0x86], 0xB8) // add [esi + Eip], eax
+        .word(&[0x83, 0x3D], SECOND) // cmp dword [SECOND], 0
+        .bytes(&[0x00, 0x75, resume_code.0.len() as u8]) // jne past NtContinue
+        .bytes(&resume_code.0)
+        .bytes(&[0x6A, 0x00, 0x56, 0x53, 0x89, 0xE2]) // push 0; push esi; push ebx; mov edx, esp
+        .word(&[0xB8], services::NtRaiseException)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(FAILED)
+        .bytes(&[0xEB, 0xFE]);
+    assert!(dispatcher.0.len() <= 0x100, "the dispatcher outgrew its slot");
+
+    let mut text = [0xCC; 0x300];
+    text[..main.len()].copy_from_slice(&main);
+    text[0x200..0x200 + dispatcher.0.len()].copy_from_slice(&dispatcher.0);
+    let mut data = [0u8; 0x700];
+    let mut put = |addr: u32, value: u32| {
+        let at = (addr - DATA) as usize;
+        data[at..at + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    put(SLOT, SLOTS);
+    // The context of NtRaiseException: it resumes after the call, with its
+    // own EBX.
+    put(CONTEXT, CONTEXT_CONTROL | CONTEXT_INTEGER);
+    put(CONTEXT + 0xA4, RAISED_EBX);
+    put(CONTEXT + 0xB0, RAISED_EAX);
+    put(CONTEXT + 0xB8, resume);
+    put(CONTEXT + 0xC0, 0x202);
+    put(BAD_RECORD + 0x10, 16);
+    let record = ExceptionRecord32::new(RAISED_CODE, RAISED_AT, &[0xAAAA, 0xBBBB]);
+    let at = (RECORD - DATA) as usize;
+    data[at..at + 0x50].copy_from_slice(record.as_bytes());
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x300, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x700, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "seh.exe", false).expect("a process");
+    // ntdll's KiUserExceptionDispatcher, for every process, while it runs.
+    ke::exception::set_user_exception_dispatcher(DISPATCHER);
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the exception test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    assert_eq!(read(FAILED), 0, "NtContinue failed in the dispatcher");
+    let slot = |i: u32| core::array::from_fn::<u32, 9, _>(|j| read(SLOTS + SLOT_SIZE * i + 4 * j as u32));
+    let esp = read(ESP_BEFORE);
+    let teb = thread.teb();
+    let faults: [(NtStatus, u32, &[u32], &str); 7] = [
+        (STATUS_ACCESS_VIOLATION, write, &[EXCEPTION_WRITE_FAULT, 0], "a write to address 0"),
+        (STATUS_BREAKPOINT, int3, &[BREAKPOINT_BREAK], "int 3"),
+        (STATUS_ILLEGAL_INSTRUCTION, ud2, &[], "ud2"),
+        (STATUS_INTEGER_DIVIDE_BY_ZERO, divide, &[], "a division by zero"),
+        (STATUS_PRIVILEGED_INSTRUCTION, hlt, &[], "hlt"),
+        (STATUS_ACCESS_VIOLATION, selector, &[EXCEPTION_READ_FAULT, u32::MAX], "a selector past the GDT"),
+        (STATUS_ASSERTION_FAILURE, assertion, &[], "int 2Ch with FS null"),
+    ];
+    for (i, &(code, at, parameters, what)) in faults.iter().enumerate() {
+        let [got, address, count, first, second, eip, ebx, context_esp, fs_teb] = slot(i as u32);
+        assert_eq!((NtStatus(got), address, eip), (code, at, at), "{what}: code, address, context EIP");
+        assert_eq!(count as usize, parameters.len(), "{what}: parameter count");
+        assert_eq!(&[first, second][..parameters.len()], parameters, "{what}: parameters");
+        assert_eq!((ebx, context_esp), (MAGIC, esp), "{what}: context EBX and ESP");
+        assert_eq!(fs_teb, teb, "{what}: the dispatcher's FS is not on the TEB");
+    }
+    assert_eq!((read(KEPT), read(KEPT + 4)), (MAGIC, esp), "NtContinue did not restore EBX and ESP");
+    assert_eq!(
+        slot(faults.len() as u32),
+        [RAISED_CODE, RAISED_AT, 2, 0xAAAA, 0xBBBB, resume, RAISED_EBX, esp, teb],
+        "the record and context of NtRaiseException"
+    );
+    assert_eq!(
+        (read(RAISED), read(RAISED + 4), read(RAISED + 8), read(RAISED + 12)),
+        (RAISED_EBX, esp, RAISED_EAX, 0),
+        "the thread did not resume from the context of NtRaiseException"
+    );
+    assert_eq!(NtStatus(read(TOO_MANY)), STATUS_INVALID_PARAMETER, "NtRaiseException with 16 parameters");
+    assert_eq!(NtStatus(read(BAD_CONTEXT)), STATUS_ACCESS_VIOLATION, "NtContinue of an unreadable context");
+
+    process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, STATUS_ILLEGAL_INSTRUCTION), "the second chance");
+    ke::exception::set_user_exception_dispatcher(0);
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher, NtContinue resumes"
+    );
 }
 
 /// Ps, and the M2 exit criteria 1 and 3 (05): see [`process_round`]. The
