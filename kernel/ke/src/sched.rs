@@ -1,8 +1,9 @@
 //! Ordonnanceur (M1, 02 §Ke) : 32 priorités, quantum, attente, préemption.
 //!
 //! Un thread est un [`Thread`] : la tranche dispatcher (`dispatcher::KThread`) en
-//! tête, puis son contexte de commutation, sa priorité, son quantum et son état
-//! FPU (ADR-009). La table des threads ([`ThreadTable`], TID → thread) est
+//! tête, puis son contexte de commutation, sa priorité, son quantum, son état
+//! FPU (ADR-009) et la base de répertoire (CR3) de son espace d'adresses, que
+//! chaque commutation charge (`mm::address_space`). La table des threads ([`ThreadTable`], TID → thread) est
 //! commune aux processeurs ; l'ordonnancement ([`Scheduler`]) est propre à
 //! chacun et vit dans son KPRCB (`ke::prcb`, ADR-015). Les threads prêts d'un
 //! processeur attendent dans une file par priorité (anneau, [`ReadyQueue`]) ; un
@@ -76,6 +77,11 @@ pub const LOW_REALTIME_PRIORITY: u8 = 16;
 
 /// Durée d'un quantum, en ticks d'horloge.
 const QUANTUM_TICKS: u32 = 2;
+
+/// Base de répertoire (CR3) de l'espace du système, celle du démarrage : celle
+/// des threads noyau, et des threads utilisateur de l'ancien chargeur, qui
+/// n'ont pas encore chacun leur espace.
+static SYSTEM_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 /// Le quantum se compte en unités, trois par tick : une attente en coûte une.
 const QUANTUM_UNITS_PER_TICK: i32 = 3;
@@ -208,6 +214,9 @@ pub struct Thread {
     start: Option<(ThreadRoutine, *mut c_void)>,
     /// État x87/SSE, sauvegardé et restauré à chaque commutation (ADR-009).
     fpu: FxSaveArea,
+    /// CR3 de son espace d'adresses, chargé à chaque commutation ; celui d'un
+    /// autre espace tant qu'il y est attaché ([`ke_stack_attach`]).
+    directory_table_base: u64,
 }
 
 impl Thread {
@@ -239,6 +248,7 @@ impl Thread {
             ptr::addr_of_mut!((*t).kernel_stack_top).write(kernel_stack_top);
             ptr::addr_of_mut!((*t).start).write(start);
             ptr::addr_of_mut!((*t).fpu).write(FxSaveArea::initial());
+            ptr::addr_of_mut!((*t).directory_table_base).write(SYSTEM_DIRECTORY.load(Ordering::Relaxed));
         }
         t
     }
@@ -627,11 +637,31 @@ unsafe fn switch_to(old: *mut Thread, new: *mut Thread) {
             // registres d'ici la reprise de `new`.
             hal::fpu::save(ptr::addr_of_mut!((*old).fpu));
             hal::fpu::restore(ptr::addr_of!((*new).fpu));
+            load_directory_table_base((*new).directory_table_base);
             context_switch_raw(ptr::addr_of_mut!((*old).ctx), ptr::addr_of!((*new).ctx))
         });
         // `old` est repris.
         ki_check_apcs_on_resume(old);
     }
+}
+
+/// Charge `directory` dans CR3 s'il n'y est pas déjà (changer CR3 vide le TLB
+/// des pages non globales).
+fn load_directory_table_base(directory: u64) {
+    #[cfg(target_os = "none")]
+    {
+        use x86_64::registers::control::Cr3;
+        let (frame, flags) = Cr3::read_raw();
+        if frame.start_address().as_u64() != directory {
+            let frame = x86_64::structures::paging::PhysFrame::containing_address(x86_64::PhysAddr::new(directory));
+            // SAFETY: `directory` est la PML4 d'un espace vivant, dont la
+            // moitié haute est celle du système : le code, les données et les
+            // piles du noyau y restent projetés.
+            unsafe { Cr3::write_raw(frame, flags) };
+        }
+    }
+    #[cfg(not(target_os = "none"))]
+    let _ = directory;
 }
 
 /// Un thread repris (ou qui démarre), à DISPATCH_LEVEL, avec des APC noyau en
@@ -722,6 +752,8 @@ unsafe impl Platform for KePlatform {
 /// # IRQL
 /// PASSIVE_LEVEL, interruptions masquées, une seule fois.
 pub unsafe fn init(idle_stack_top: u64) {
+    #[cfg(target_os = "none")]
+    SYSTEM_DIRECTORY.store(x86_64::registers::control::Cr3::read_raw().0.start_address().as_u64(), Ordering::Relaxed);
     let boot = Thread::create(NORMAL_PRIORITY, KContext::default(), false, 0, None);
     let idle = Thread::create(
         IDLE_PRIORITY,
@@ -788,9 +820,76 @@ pub unsafe fn create_kernel_thread(
     routine: ThreadRoutine,
     context: *mut c_void,
 ) -> Option<usize> {
+    // SAFETY: forwarded; l'espace du système vit toujours.
+    unsafe { create_kernel_thread_in(SYSTEM_DIRECTORY.load(Ordering::Relaxed), stack_top, priority, routine, context) }
+}
+
+/// Comme [`create_kernel_thread`], dans l'espace d'adresses de base de
+/// répertoire `directory_table_base` (un thread système dans un autre
+/// processus).
+///
+/// # Safety
+/// Comme [`create_kernel_thread`] ; l'espace reste vivant tant que le thread
+/// s'exécute.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub unsafe fn create_kernel_thread_in(
+    directory_table_base: u64,
+    stack_top: u64,
+    priority: u8,
+    routine: ThreadRoutine,
+    context: *mut c_void,
+) -> Option<usize> {
     assert!((1..PRIORITY_LEVELS as u8).contains(&priority), "priority {priority} (0 is the idle thread's)");
     let ctx = KContext::initial(stack_top, ki_thread_startup as *const () as u64);
-    start_thread(Thread::create(priority, ctx, false, 0, Some((routine, context))))
+    let t = Thread::create(priority, ctx, false, 0, Some((routine, context)));
+    // SAFETY: un thread neuf, encore inconnu de l'ordonnanceur.
+    unsafe { (*t).directory_table_base = directory_table_base };
+    start_thread(t)
+}
+
+/// L'espace d'adresses où se trouvait le thread courant avant
+/// [`ke_stack_attach`], à rendre à [`ke_unstack_detach`].
+#[must_use = "the thread stays attached until ke_unstack_detach"]
+pub struct AttachedAddressSpace {
+    previous: u64,
+}
+
+/// KeStackAttachProcess : le thread courant passe dans l'espace d'adresses de
+/// base de répertoire `directory_table_base`, où une commutation le garde,
+/// jusqu'à [`ke_unstack_detach`].
+///
+/// # Safety
+/// L'espace reste vivant jusqu'au détachement.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub unsafe fn ke_stack_attach(directory_table_base: u64) -> AttachedAddressSpace {
+    AttachedAddressSpace { previous: set_current_directory(directory_table_base) }
+}
+
+/// KeUnstackDetachProcess : le thread courant revient dans l'espace d'avant
+/// [`ke_stack_attach`].
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn ke_unstack_detach(attached: AttachedAddressSpace) {
+    set_current_directory(attached.previous);
+}
+
+/// Le thread courant passe dans l'espace `directory` ; rend l'ancien.
+fn set_current_directory(directory: u64) -> u64 {
+    // SAFETY: verrou tenu de acquire à release ; le thread courant est valide.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = current_thread();
+        let previous = (*t).directory_table_base;
+        (*t).directory_table_base = directory;
+        load_directory_table_base(directory);
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        previous
+    }
 }
 
 /// Premier code d'un thread noyau, où arrive sa première commutation (verrou

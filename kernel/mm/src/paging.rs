@@ -72,12 +72,11 @@ fn zero_frame(phys: u64) {
 
 // ── Page table manager ────────────────────────────────────────────────────────
 
-/// Kernel page-table manager.
+/// Page-table manager for one PML4: the active one ([`MmPageTables::new`]),
+/// or that of another address space ([`MmPageTables::for_directory`]).
 ///
-/// Constructed once from the active CR3 and the HHDM offset provided by the
-/// bootloader. All physical addresses in the existing page tables are
-/// accessible at `hhdm_offset + phys`, which `OffsetPageTable` uses to walk
-/// the hierarchy.
+/// All physical addresses in the page tables are accessible at
+/// `hhdm_offset + phys`, which `OffsetPageTable` uses to walk the hierarchy.
 ///
 /// # IRQL: <= DISPATCH_LEVEL — the PFN database's lock is a `KSpinLock`.
 pub struct MmPageTables {
@@ -85,33 +84,44 @@ pub struct MmPageTables {
     /// Raw HHDM offset — stored so `patch_user_path` can walk intermediate
     /// entries directly without a second borrow of `self.inner`.
     phys_offset: u64,
+    /// Physical address of the PML4.
+    pml4: u64,
 }
 
 impl MmPageTables {
-    /// Construct from the current CR3 and the bootloader's HHDM offset.
+    /// The active page tables (CR3), with the bootloader's HHDM offset.
     ///
     /// # Safety
     /// - The bootloader's page tables must be active (called after ExitBootServices).
     /// - `hhdm_offset` must match the value stored in `BootInfo::hhdm_offset`.
-    /// - The PML4 frame at the current CR3 must remain live for `'static`
-    ///   (it is in bootloader memory, never freed in Phase 1).
+    /// - The PML4 at the current CR3 must stay live while this value is used.
     pub unsafe fn new(hhdm_offset: u64) -> Self {
-        let phys_offset = VirtAddr::new(hhdm_offset);
         let (l4_frame, _) = Cr3::read();
-        let phys = l4_frame.start_address();
+        // SAFETY: forwarded; CR3 holds a valid PML4.
+        unsafe { Self::for_directory(hhdm_offset, l4_frame.start_address().as_u64()) }
+    }
 
-        // Translate the PML4 physical address to its HHDM virtual address so we
-        // can obtain a Rust reference to the live PageTable.
-        //
-        // SAFETY: the HHDM maps every physical address; phys is a valid PML4 frame.
-        let virt = phys_offset + phys.as_u64();
-        let l4: &'static mut PageTable = unsafe { &mut *virt.as_mut_ptr() };
-
-        // SAFETY: l4 is the current, valid PML4; phys_offset is the correct HHDM
-        // offset so all physical addresses in the hierarchy are reachable.
+    /// The page tables under the PML4 at physical address `pml4`, active or
+    /// not: an address space's directory table base (`mm::address_space`).
+    ///
+    /// # Safety
+    /// `pml4` is a valid PML4 that stays live while this value is used;
+    /// `hhdm_offset` is the bootloader's.
+    pub unsafe fn for_directory(hhdm_offset: u64, pml4: u64) -> Self {
+        let phys_offset = VirtAddr::new(hhdm_offset);
+        // SAFETY: the HHDM maps every physical address; `pml4` is a valid PML4.
+        let l4: &'static mut PageTable = unsafe { &mut *(phys_offset + pml4).as_mut_ptr() };
+        // SAFETY: l4 is a valid PML4; phys_offset is the correct HHDM offset so
+        // all physical addresses in the hierarchy are reachable.
         let inner = unsafe { OffsetPageTable::new(l4, phys_offset) };
+        Self { inner, phys_offset: hhdm_offset, pml4 }
+    }
 
-        Self { inner, phys_offset: hhdm_offset }
+    /// The PML4 of these tables, through the HHDM.
+    fn l4(&self) -> &'static mut PageTable {
+        // SAFETY: `pml4` is a live PML4 (contract of the constructors); the
+        // HHDM maps it.
+        unsafe { &mut *((self.phys_offset + self.pml4) as *mut PageTable) }
     }
 
     /// Removes the bootloader's identity map of [0, 4 GiB) by clearing PML4[0]
@@ -127,9 +137,7 @@ impl MmPageTables {
     /// # IRQL
     /// Any level. Edits the active PML4 and flushes the TLB.
     pub unsafe fn remove_identity_map(&mut self) {
-        let (l4f, _) = Cr3::read();
-        // SAFETY: the HHDM maps the live PML4 frame.
-        let l4 = unsafe { &mut *((self.phys_offset + l4f.start_address().as_u64()) as *mut PageTable) };
+        let l4 = self.l4();
         l4[0].set_unused();
         // PML4[0] spans whole TLB entries: drop them all, global ones aside
         // (the identity map never sets GLOBAL).
@@ -161,9 +169,7 @@ impl MmPageTables {
         let hhdm = self.phys_offset;
 
         // ── Level 4 — PML4 ───────────────────────────────────────────────────
-        let (l4_frame, _) = Cr3::read();
-        // SAFETY: HHDM maps every physical address; l4_frame is a live PML4.
-        let l4 = unsafe { &mut *((hhdm + l4_frame.start_address().as_u64()) as *mut PageTable) };
+        let l4 = self.l4();
         let l4e = &mut l4[virt.p4_index()];
         if !l4e.flags().contains(PageTableFlags::PRESENT) {
             return;
@@ -207,8 +213,10 @@ impl MmPageTables {
 
     /// Map a single 4 KiB page at virtual address `virt` to physical address `phys`.
     ///
-    /// Intermediate page-table frames are allocated from the PFN database.
-    /// The TLB entry for `virt` is flushed after the mapping is installed.
+    /// Intermediate page-table frames are allocated from the PFN database;
+    /// never a PML4 entry of the kernel half, which `mm::address_space` fills
+    /// at boot for every address space to share. The TLB entry for `virt` is
+    /// flushed after the mapping is installed.
     ///
     /// # Safety
     /// - `virt` must not already be mapped as a 4 KiB page.
@@ -222,10 +230,14 @@ impl MmPageTables {
         if user {
             parent |= PageTableFlags::USER_ACCESSIBLE;
         }
-        let (l4f, _) = Cr3::read();
-        let l4 = unsafe { &mut *((h + l4f.start_address().as_u64()) as *mut PageTable) };
+        let l4 = self.l4();
         let l4e = &mut l4[virt.p4_index()];
         if !l4e.flags().contains(PageTableFlags::PRESENT) {
+            assert!(
+                usize::from(virt.p4_index()) < 256 || !crate::address_space::kernel_half_filled(),
+                "map_page: kernel PML4 entry {} missing after boot",
+                usize::from(virt.p4_index())
+            );
             let p = alloc_zeroed_pt_phys();
             l4e.set_addr(PhysAddr::new(p), parent);
         } else {
@@ -292,14 +304,42 @@ impl MmPageTables {
         frame
     }
 
+    /// Replace the flags of the 4 KiB page mapped at `virt` and flush its
+    /// TLB entry.
+    ///
+    /// # Safety
+    /// `virt` must currently be mapped as a 4 KiB page, and nothing may rely on
+    /// its former access rights.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL (allocates nothing).
+    pub unsafe fn update_flags(&mut self, virt: VirtAddr, flags: PageTableFlags) {
+        let page = Page::<Size4KiB>::containing_address(virt);
+        // SAFETY: caller guarantees the page is mapped and its rights may change.
+        let flush = unsafe { self.inner.update_flags(page, flags | PageTableFlags::PRESENT) }
+            .expect("MmPageTables::update_flags: page not mapped");
+        flush.flush();
+    }
+
+    /// The leaf flags of a page with these rights.
+    ///
+    /// # IRQL
+    /// Any level.
+    pub fn leaf_flags(writable: bool, executable: bool, user: bool) -> PageTableFlags {
+        let mut flags = PageTableFlags::PRESENT;
+        flags.set(PageTableFlags::WRITABLE, writable);
+        flags.set(PageTableFlags::NO_EXECUTE, !executable);
+        flags.set(PageTableFlags::USER_ACCESSIBLE, user);
+        flags
+    }
+
     /// Translate a virtual address to its physical address and leaf PTE flags.
     ///
     /// Returns `None` if any level of the page-table hierarchy is not present.
     /// For 1 GiB and 2 MiB huge pages the flags are those of the huge-page entry.
     pub fn translate_flags(&self, virt: VirtAddr) -> Option<(PhysAddr, PageTableFlags)> {
         let h = self.phys_offset;
-        let (l4f, _) = Cr3::read();
-        let l4 = unsafe { &*((h + l4f.start_address().as_u64()) as *const PageTable) };
+        let l4 = self.l4();
         let e4 = &l4[virt.p4_index()];
         if !e4.flags().contains(PageTableFlags::PRESENT) {
             return None;
@@ -333,8 +373,7 @@ impl MmPageTables {
     /// Translate a virtual address to its physical address, if mapped.
     pub fn translate(&self, virt: VirtAddr) -> Option<PhysAddr> {
         let h = self.phys_offset;
-        let (l4f, _) = Cr3::read();
-        let l4 = unsafe { &*((h + l4f.start_address().as_u64()) as *const PageTable) };
+        let l4 = self.l4();
         let e4 = &l4[virt.p4_index()];
         if !e4.flags().contains(PageTableFlags::PRESENT) {
             return None;

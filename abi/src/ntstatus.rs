@@ -39,6 +39,13 @@ impl core::fmt::Debug for NtStatus {
     }
 }
 
+/// The value in hex, as `0xc0000018`.
+impl core::fmt::Display for NtStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:#010x}", self.0)
+    }
+}
+
 pub const STATUS_SUCCESS: NtStatus = NtStatus(0x0000_0000);
 pub const STATUS_WAIT_0: NtStatus = NtStatus(0x0000_0000);
 pub const STATUS_ABANDONED_WAIT_0: NtStatus = NtStatus(0x0000_0080);
@@ -47,11 +54,22 @@ pub const STATUS_KERNEL_APC: NtStatus = NtStatus(0x0000_0100);
 pub const STATUS_ALERTED: NtStatus = NtStatus(0x0000_0101);
 pub const STATUS_TIMEOUT: NtStatus = NtStatus(0x0000_0102);
 pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
+pub const STATUS_INVALID_PARAMETER: NtStatus = NtStatus(0xC000_000D);
+pub const STATUS_NO_MEMORY: NtStatus = NtStatus(0xC000_0017);
+pub const STATUS_CONFLICTING_ADDRESSES: NtStatus = NtStatus(0xC000_0018);
+pub const STATUS_UNABLE_TO_FREE_VM: NtStatus = NtStatus(0xC000_001A);
+pub const STATUS_UNABLE_TO_DELETE_SECTION: NtStatus = NtStatus(0xC000_001B);
+pub const STATUS_NOT_COMMITTED: NtStatus = NtStatus(0xC000_002D);
+pub const STATUS_INVALID_PAGE_PROTECTION: NtStatus = NtStatus(0xC000_0045);
 pub const STATUS_MUTANT_NOT_OWNED: NtStatus = NtStatus(0xC000_0046);
 pub const STATUS_SEMAPHORE_LIMIT_EXCEEDED: NtStatus = NtStatus(0xC000_0047);
+pub const STATUS_FREE_VM_NOT_AT_BASE: NtStatus = NtStatus(0xC000_009F);
+pub const STATUS_MEMORY_NOT_ALLOCATED: NtStatus = NtStatus(0xC000_00A0);
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
 
     #[test]
@@ -61,6 +79,12 @@ mod tests {
         assert!(!STATUS_MUTANT_NOT_OWNED.is_success());
         assert!(STATUS_MUTANT_NOT_OWNED.is_error());
         assert!(!STATUS_USER_APC.is_error());
+    }
+
+    #[test]
+    fn displays_in_hex() {
+        assert_eq!(std::format!("{STATUS_CONFLICTING_ADDRESSES}"), "0xc0000018");
+        assert_eq!(std::format!("{STATUS_SUCCESS}"), "0x00000000");
     }
 
     #[test]

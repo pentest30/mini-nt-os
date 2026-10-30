@@ -4449,20 +4449,20 @@ mod tests {
     }
 
     impl mm::virtual_alloc::PageMapper for HostMapper {
-        fn commit_page(&mut self, virt: u64, _w: bool, _x: bool, _u: bool) -> Result<(), &'static str> {
+        fn commit_page(&mut self, virt: u64, _w: bool, _x: bool, _u: bool) -> Result<(), abi::ntstatus::NtStatus> {
             let region = virt & !(host_mem::REGION - 1);
             if !self.regions.contains(&region) {
                 if !host_mem::map_region(region) {
-                    return Err("HostMapper: fixed-address host mapping failed");
+                    // The fixed-address host mapping failed.
+                    return Err(abi::ntstatus::STATUS_NO_MEMORY);
                 }
                 self.regions.push(region);
             }
             self.committed += 1;
             Ok(())
         }
-        fn decommit_page(&mut self, _virt: u64) -> Result<(), &'static str> {
-            Ok(())
-        }
+        fn decommit_page(&mut self, _virt: u64) {}
+        fn protect_page(&mut self, _virt: u64, _w: bool, _x: bool) {}
     }
 
     impl Drop for HostMapper {
@@ -4479,13 +4479,12 @@ mod tests {
         pub count: usize,
     }
     impl mm::virtual_alloc::PageMapper for CountMapper {
-        fn commit_page(&mut self, _v: u64, _w: bool, _x: bool, _u: bool) -> Result<(), &'static str> {
+        fn commit_page(&mut self, _v: u64, _w: bool, _x: bool, _u: bool) -> Result<(), abi::ntstatus::NtStatus> {
             self.count += 1;
             Ok(())
         }
-        fn decommit_page(&mut self, _v: u64) -> Result<(), &'static str> {
-            Ok(())
-        }
+        fn decommit_page(&mut self, _v: u64) {}
+        fn protect_page(&mut self, _v: u64, _w: bool, _x: bool) {}
     }
 
     #[test]

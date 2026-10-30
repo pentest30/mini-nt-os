@@ -53,7 +53,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         writable: bool,
         executable: bool,
         user: bool,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), abi::ntstatus::NtStatus> {
         // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
         // DO NOT zero — the page may contain live data (e.g., game stack being reused).
         // Fresh pages are zeroed below instead.
@@ -64,8 +64,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
             }
         }
 
-        let pfn =
-            mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or("commit_page: out of physical memory")?;
+        let pfn = mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or(abi::ntstatus::STATUS_NO_MEMORY)?;
 
         let phys = PhysAddr::new(pfn.to_phys());
         let virt = VirtAddr::new(virt_addr);
@@ -94,13 +93,19 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         Ok(())
     }
 
-    fn decommit_page(&mut self, virt_addr: u64) -> Result<(), &'static str> {
+    fn decommit_page(&mut self, virt_addr: u64) {
         let virt = VirtAddr::new(virt_addr);
         // SAFETY: virt_addr was previously mapped by commit_page; single-CPU
         //         Phase 2 — no concurrent unmap possible.
         let frame = unsafe { self.pt.unmap_page(virt) }; // also flushes TLB
         mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
-        Ok(())
+    }
+
+    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool) {
+        let flags = mm::MmPageTables::leaf_flags(writable, executable, true);
+        // SAFETY: virt_addr was previously mapped by commit_page; the VAD has
+        //         just given the page these rights.
+        unsafe { self.pt.update_flags(VirtAddr::new(virt_addr), flags) };
     }
 }
 
@@ -291,6 +296,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     ke_self_test();
     boost_self_test();
     apc_self_test();
+    address_space_self_test();
+    vad_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -716,10 +723,30 @@ fn tpr_self_test() {
 /// # IRQL
 /// PASSIVE_LEVEL.
 fn spawn_kernel_thread(priority: u8, routine: ke::sched::ThreadRoutine, context: *mut core::ffi::c_void) -> usize {
+    // SAFETY: the system address space lives for good.
+    unsafe { spawn_kernel_thread_in(mm::address_space::system_directory_table_base(), priority, routine, context) }
+}
+
+/// Like [`spawn_kernel_thread`], in the address space of directory table base
+/// `directory_table_base`.
+///
+/// # Safety
+/// The address space stays live while the thread runs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+unsafe fn spawn_kernel_thread_in(
+    directory_table_base: u64,
+    priority: u8,
+    routine: ke::sched::ThreadRoutine,
+    context: *mut core::ffi::c_void,
+) -> usize {
     let stack = mm::kstack::allocate().expect("no kernel stack for a kernel thread");
     // SAFETY: the stack was just allocated for this thread alone and is never
-    // freed; callers keep `context` valid for the thread's life.
-    unsafe { ke::sched::create_kernel_thread(stack.top, priority, routine, context) }.expect("thread table full")
+    // freed; callers keep `context` valid for the thread's life, and the
+    // address space live (contract).
+    unsafe { ke::sched::create_kernel_thread_in(directory_table_base, stack.top, priority, routine, context) }
+        .expect("thread table full")
 }
 
 /// Checks that DISPATCH_LEVEL defers preemption (M1, `hal::irql`): with a
@@ -1003,6 +1030,188 @@ fn apc_self_test() {
     assert_eq!(end, STATUS_WAIT_0);
     assert!(WOKEN.load(Ordering::Acquire));
     log::info!("[smoke] Ke: kernel APCs run at APC_LEVEL, normal routines at PASSIVE_LEVEL, a wait resumes after them");
+}
+
+/// Checks per-process address spaces (M2, `mm::address_space`): the same user
+/// address holds a different page in each of two address spaces, seen by the
+/// boot thread through an attach, and by two kernel threads, one in each
+/// space, that preempt each other; the system address space sees neither.
+/// Destroying the spaces gives back every page they took.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn address_space_self_test() {
+    use abi::ntstatus::STATUS_WAIT_0;
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicU64, Ordering};
+    use ke::dispatcher::{ke_wait_for_multiple_objects, ProcessorMode, WaitBlock, WaitType};
+    use ke::sched::KePlatform;
+    use mm::address_space::AddressSpace;
+    use mm::pfn::{self, PageUsage};
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    const VA: u64 = 0x40_0000;
+    const MARKERS: [u64; 2] = [0x5350_4143_4500_0001, 0x5350_4143_4500_0002];
+    const SPIN_MS: u64 = 60;
+    static READS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+    static WRONG: AtomicU64 = AtomicU64::new(0);
+
+    fn read_va() -> u64 {
+        // SAFETY: VA holds a page in the address space this is called in (the
+        // callers make sure), mapped for the kernel.
+        unsafe { core::ptr::read_volatile(VA as *const u64) }
+    }
+    /// Reads VA for SPIN_MS, preempted by the other reader on quantum ends.
+    fn reader(index: *mut c_void) {
+        let i = index.addr();
+        let end = hal::timer::interrupt_time() + SPIN_MS * 10_000;
+        while hal::timer::interrupt_time() < end {
+            if read_va() != MARKERS[i] {
+                WRONG.fetch_add(1, Ordering::Relaxed);
+            }
+            READS[i].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::PageTable), s.active(PageUsage::UserPrivate))
+    };
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+
+    let before = counts();
+    let spaces = [AddressSpace::new().expect("no PML4"), AddressSpace::new().expect("no PML4")];
+    for (space, marker) in spaces.iter().zip(MARKERS) {
+        let page = pfn::allocate_page(PageUsage::UserPrivate).expect("no page");
+        // SAFETY: a page just allocated, reached through the HHDM.
+        unsafe { ((hhdm + page.to_phys()) as *mut u64).write(marker) };
+        // SAFETY: VA is free in this new space; the page belongs to the space
+        // from now on.
+        unsafe { space.map_page(VA, page.to_phys(), F::PRESENT | F::NO_EXECUTE) };
+    }
+    let created = counts();
+    // SAFETY: CR3 holds the system's tables.
+    let system = unsafe { mm::MmPageTables::new(hhdm) };
+    assert!(system.translate(x86_64::VirtAddr::new(VA)).is_none(), "the system address space sees a process page");
+    for (space, marker) in spaces.iter().zip(MARKERS) {
+        // SAFETY: the space lives until the end of this test.
+        let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+        assert_eq!(read_va(), marker, "attached to a space, the boot thread does not see its page");
+        ke::sched::ke_unstack_detach(attached);
+    }
+
+    let switches = ke::sched::context_switches();
+    let threads = [0usize, 1].map(|i| {
+        // SAFETY: the spaces live until both threads have ended (waited for below).
+        let tid = unsafe {
+            spawn_kernel_thread_in(
+                spaces[i].directory_table_base(),
+                ke::sched::NORMAL_PRIORITY,
+                reader,
+                core::ptr::without_provenance_mut(i),
+            )
+        };
+        ke::sched::thread_object(tid).expect("thread object")
+    });
+    let mut blocks = [const { WaitBlock::new() }; 2];
+    // SAFETY: on the boot thread; the thread objects are never freed.
+    let status = unsafe {
+        ke_wait_for_multiple_objects::<KePlatform>(
+            &threads,
+            WaitType::WaitAll,
+            ProcessorMode::Kernel,
+            false,
+            Some(-2000 * 10_000),
+            Some(&mut blocks),
+        )
+    };
+    assert_eq!(status, STATUS_WAIT_0, "the readers did not end");
+    let reads = READS.each_ref().map(|r| r.load(Ordering::Relaxed));
+    assert_eq!(WRONG.load(Ordering::Relaxed), 0, "a thread saw another address space's page");
+    assert!(reads.iter().all(|&r| r > 0));
+    let switched = ke::sched::context_switches() - switches;
+    assert!(switched >= 4, "the readers did not take turns ({switched} switches)");
+
+    let in_use = counts();
+    for space in spaces {
+        space.destroy();
+    }
+    let after = counts();
+    assert_eq!(
+        (in_use.0 - after.0, in_use.1 - after.1),
+        (created.0 - before.0, created.1 - before.1),
+        "destroying the spaces did not give back every page they took"
+    );
+    log::info!(
+        "[smoke] Mm: address spaces: the same address holds its own page in each, across {switched} switches; \
+         destroyed without a leak ({} page tables, {} pages)",
+        created.0 - before.0,
+        created.1 - before.1
+    );
+}
+
+/// The VAD with the real mapper (`mm::virtual_alloc`): in a new address space,
+/// reserve 16 pages, commit two inside the reservation, protect one, decommit
+/// it, then release everything; the page tables and the PFN database follow.
+fn vad_self_test() {
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::{PageProtect, VadTree};
+    use mm::virtual_alloc::{self, AllocType, FreeType, MemState, PAGE_SIZE};
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    const BASE: u64 = 0x40_0000;
+    const COMMIT: u64 = BASE + 4 * PAGE_SIZE;
+    const MARKER: u64 = 0x5641_4400_0000_0001;
+    let rw = PageProtect::READWRITE;
+    let user_pages = || pfn::stats().active(PageUsage::UserPrivate);
+    let flags = |mapper: &KernelPageMapper, va| mapper.pt.translate_flags(VirtAddr::new(va)).map(|(_, f)| f);
+
+    let space = AddressSpace::new().expect("no PML4");
+    // SAFETY: the space lives until the end of this test, detached before it
+    // is destroyed.
+    let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+    // SAFETY: CR3 holds the attached space's tables.
+    let mut mapper =
+        KernelPageMapper { pt: unsafe { mm::MmPageTables::new(hal::HHDM_OFFSET.load(Ordering::Acquire)) } };
+    let mut vad = VadTree::new();
+    let before = user_pages();
+
+    let reserved =
+        virtual_alloc::allocate(&mut vad, Some(&mut mapper), BASE, 16 * PAGE_SIZE, AllocType::MEM_RESERVE, rw);
+    assert_eq!(reserved, Ok(BASE));
+    assert_eq!(user_pages(), before, "a reservation took physical pages");
+    let committed =
+        virtual_alloc::allocate(&mut vad, Some(&mut mapper), COMMIT, 2 * PAGE_SIZE, AllocType::MEM_COMMIT, rw);
+    assert_eq!(committed, Ok(COMMIT), "commit inside the reservation");
+    assert_eq!(user_pages(), before + 2);
+    let f = flags(&mapper, COMMIT).expect("a committed page is not mapped");
+    assert!(f.contains(F::WRITABLE | F::USER_ACCESSIBLE | F::NO_EXECUTE), "{f:?}");
+    assert!(flags(&mapper, BASE).is_none(), "a reserved page is mapped");
+    // SAFETY: the page was just committed read-write in the attached space.
+    unsafe { core::ptr::write_volatile(COMMIT as *mut u64, MARKER) };
+
+    let old = virtual_alloc::protect(&mut vad, Some(&mut mapper), COMMIT, PAGE_SIZE, PageProtect::EXECUTE_READ);
+    assert_eq!(old, Ok(rw));
+    let f = flags(&mapper, COMMIT).unwrap();
+    assert!(!f.intersects(F::WRITABLE | F::NO_EXECUTE), "the protection did not reach the page tables: {f:?}");
+    // SAFETY: still mapped, now read-only.
+    assert_eq!(unsafe { core::ptr::read_volatile(COMMIT as *const u64) }, MARKER, "protecting lost the data");
+
+    let decommitted = virtual_alloc::free(&mut vad, Some(&mut mapper), COMMIT, PAGE_SIZE, FreeType::MEM_DECOMMIT);
+    assert_eq!(decommitted, Ok((COMMIT, PAGE_SIZE)));
+    assert!(flags(&mapper, COMMIT).is_none(), "a decommitted page is still mapped");
+    assert_eq!(user_pages(), before + 1);
+    assert_eq!(virtual_alloc::query(&vad, COMMIT).map(|r| r.state), Ok(MemState::Reserve));
+    let released = virtual_alloc::free(&mut vad, Some(&mut mapper), BASE, 0, FreeType::MEM_RELEASE);
+    assert_eq!(released, Ok((BASE, 16 * PAGE_SIZE)));
+    assert_eq!(user_pages(), before, "releasing did not give back the committed page");
+    assert!(vad.is_empty());
+    ke::sched::ke_unstack_detach(attached);
+    space.destroy();
+    log::info!(
+        "[smoke] Mm: VAD reserve, commit, protect, decommit and release reach the page tables and the PFN database"
+    );
 }
 
 /// Checks that the FPU state follows each thread (ADR-009): the boot thread's

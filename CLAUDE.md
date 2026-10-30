@@ -54,8 +54,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M2 : base PFN faite (`mm::pfn` au-dessus du buddy : toute page physique y passe, avec son usage ; double libération
   et page réservée arrêtent le système ; cohérence vérifiée en fin de phase 1). Pools faits (`mm::pool`) : non paginé
   (allocateur global) et paginé, qui grandissent à la demande et rendent leurs pages à la base PFN ;
-  `ex_allocate_pool_with_tag` et compteurs par étiquette. À venir : une PML4 par processus, VAD en arbre, sections,
-  Ob, Ps.
+  `ex_allocate_pool_with_tag` et compteurs par étiquette. Une PML4 par processus (`mm::address_space`) : moitié haute
+  complétée au démarrage et partagée, CR3 propre à chaque thread et chargé à la commutation, `ke_stack_attach`.
+  L'ancien chargeur (`NtCreateProcess`) reste dans l'espace du système jusqu'à la réécriture de Ps. VAD faite
+  (`mm::vad`, `mm::virtual_alloc`) : arbre sans limite, état de chaque page (réservée, ou commitée avec sa protection),
+  commit dans une réservation, décommit et libération réels, protection et requête, erreurs `NtStatus`, retour arrière
+  complet si un commit échoue. Les pages commitées sont encore projetées tout de suite. À venir : fautes de page à la
+  demande et pages de garde, sections, Ob, Ps.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
