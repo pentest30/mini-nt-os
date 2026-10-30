@@ -249,7 +249,7 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 ### 6.2 Tables de services
 
 - **Deux tables** : `KiServiceTable` pour `ntoskrnl` (numéros `0x0000–0x0FFF`) et `W32pServiceTable` pour `win32k` (`0x1000–0x1FFF`).
-- **Une seule source de vérité** : l'outil `tools/syscall-gen` lit les listes de services de la version épinglée de ReactOS. Il génère :
+- **Une seule source de vérité** : l'outil `tools/syscall-gen` lit les listes de services de la version épinglée de ReactOS, copiées avec leur origine dans `tools/syscall-gen/reactos/<version>/` (`sysfuncs.lst`, `w32ksvc32.h`, variante i386 de publication). Il génère :
   - les tables Rust (numéro, nombre d'octets d'arguments, pointeur de handler) ;
   - des handlers par défaut qui renvoient `STATUS_NOT_IMPLEMENTED` **et le journalisent** ;
   - un rapport de couverture (nombre d'appels implémentés sur le total).
