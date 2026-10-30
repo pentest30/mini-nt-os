@@ -61,7 +61,7 @@ pub fn dispatch_user_exception(
     }
     // CONTEXT, then the record's used part, then their two addresses, each
     // 4-byte aligned under the thread's stack pointer.
-    let context_at = push_user_context(frame).map_err(|_| code)?;
+    let context_at = push_user_context(frame, 0).map_err(|_| code)?;
     let record_size = record.stack_size();
     let record_at = context_at.checked_sub(record_size as u32).ok_or(code)?;
     let arguments_at = record_at.checked_sub(8).ok_or(code)?;

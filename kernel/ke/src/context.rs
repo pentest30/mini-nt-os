@@ -125,17 +125,40 @@ pub fn apply_user_context(context: &Context32, flags: u32, frame: &mut KTrapFram
 }
 
 /// Écrit le `CONTEXT` complet de la trame sur la pile utilisateur, sous ESP
-/// aligné sur 4 ; rend son adresse.
+/// aligné sur 4 et `reserve` octets laissés au répartiteur ; rend son
+/// adresse.
 ///
 /// # IRQL
 /// < DISPATCH_LEVEL. Peut faire des fautes de page.
-pub fn push_user_context(frame: &KTrapFrame) -> Result<u32, NtStatus> {
+pub fn push_user_context(frame: &KTrapFrame, reserve: u32) -> Result<u32, NtStatus> {
     let mut context = Context32::zeroed();
     context.context_flags = CONTEXT_FULL;
     context_from_trap_frame(frame, CONTEXT_FULL, &mut context);
-    let at = (frame.rsp as u32 & !3).checked_sub(size_of::<Context32>() as u32).ok_or(STATUS_ACCESS_VIOLATION)?;
+    let at = user_context_address(frame.rsp as u32, reserve).ok_or(STATUS_ACCESS_VIOLATION)?;
     UserPtr::<Context32>::new(at).write(&context)?;
     Ok(at)
+}
+
+/// Où va sur la pile utilisateur un `CONTEXT` livré au-dessous de `esp` :
+/// sous `esp` aligné sur 4 et `reserve` octets laissés au répartiteur.
+pub fn user_context_address(esp: u32, reserve: u32) -> Option<u32> {
+    (esp & !3).checked_sub(reserve + size_of::<Context32>() as u32)
+}
+
+/// Le contexte complet d'un thread qui démarre en `eip`, pile en `esp`, les
+/// autres registres à zéro, interruptions actives (RtlInitializeContext).
+pub fn initial_user_context(eip: u32, esp: u32, selectors: UserSelectors) -> Context32 {
+    let mut context = Context32::zeroed();
+    context.context_flags = CONTEXT_FULL;
+    context.eip = eip;
+    context.esp = esp;
+    context.eflags = EFLAGS_USER_SET;
+    context.seg_cs = u32::from(selectors.code);
+    context.seg_ss = u32::from(selectors.data);
+    context.seg_ds = u32::from(selectors.data);
+    context.seg_es = u32::from(selectors.data);
+    context.seg_fs = u32::from(selectors.teb);
+    context
 }
 
 /// La trame reprend en mode utilisateur à `eip`, pile en `esp`, avec les
@@ -210,6 +233,21 @@ mod tests {
         assert_eq!((target.rax, target.rip), (7, 0x0040_1000));
         apply_user_context(&other, CONTEXT_I386 | 0x40, &mut target, SELECTORS);
         assert_eq!(target.rax, 7, "no part known: nothing moves");
+    }
+
+    #[test]
+    fn a_delivered_context_goes_under_the_aligned_stack_and_the_reserve() {
+        assert_eq!(user_context_address(0x0013_0003, 0), Some(0x0013_0000 - 0x2CC));
+        assert_eq!(user_context_address(0x0013_0000, 8), Some(0x0013_0000 - 8 - 0x2CC));
+        assert_eq!(user_context_address(0x100, 8), None, "no room under ESP");
+    }
+
+    #[test]
+    fn a_new_thread_starts_with_the_user_selectors_and_interrupts_enabled() {
+        let context = initial_user_context(0x40_1000, 0x13_0000, SELECTORS);
+        assert_eq!((context.eip, context.esp, context.eflags), (0x40_1000, 0x13_0000, 0x202));
+        assert_eq!((context.seg_cs, context.seg_ss, context.seg_fs, context.seg_gs), (0x1B, 0x23, 0x3B, 0));
+        assert_eq!((context.context_flags, context.eax, context.ebp), (CONTEXT_FULL, 0, 0));
     }
 
     #[test]

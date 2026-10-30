@@ -494,10 +494,15 @@ pub unsafe fn ki_take_user_apc<P: Platform>() -> Option<UserApc> {
     }
 }
 
+/// Ce que `ntdll!KiUserApcDispatcher` de ReactOS écrit entre le `CONTEXT` et
+/// l'ESP interrompu : l'enregistrement SEH qui le protège pendant la routine.
+pub const APC_DISPATCHER_RESERVE: u32 = 8;
+
 /// KiInitializeUserApc : au retour en mode utilisateur, livre le premier APC
 /// utilisateur que le thread courant doit recevoir ([`ki_take_user_apc`]).
-/// Son `CONTEXT`, tiré de la trame, va sur la pile du thread, sous la
-/// routine, son contexte et ses deux arguments ; la trame reprend dans
+/// Son `CONTEXT`, tiré de la trame, va sur la pile du thread, sous
+/// [`APC_DISPATCHER_RESERVE`] octets libres et au-dessus de la routine, son
+/// contexte et ses deux arguments ; la trame reprend dans
 /// `ntdll!KiUserApcDispatcher`. Sans répartiteur, les APC restent en file.
 /// `Err` si la pile ne reçoit pas le contexte : l'APC est perdu, l'appelant
 /// lève l'exception.
@@ -517,7 +522,7 @@ pub fn ki_deliver_user_apc(frame: &mut KTrapFrame) -> Result<(), NtStatus> {
     let Some(apc) = (unsafe { ki_take_user_apc::<crate::sched::KePlatform>() }) else {
         return Ok(());
     };
-    let context_at = push_user_context(frame)?;
+    let context_at = push_user_context(frame, APC_DISPATCHER_RESERVE)?;
     let arguments_at = context_at.checked_sub(16).ok_or(abi::ntstatus::STATUS_ACCESS_VIOLATION)?;
     UserPtr::<[u32; 4]>::new(arguments_at).write(&[apc.routine, apc.context, apc.argument1, apc.argument2])?;
     enter_user_dispatcher(frame, dispatcher, arguments_at);

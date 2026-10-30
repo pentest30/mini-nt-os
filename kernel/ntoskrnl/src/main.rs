@@ -2203,9 +2203,11 @@ fn exception_self_test() {
 }
 
 /// User APCs (`ke::apc`, `sys::apc`, M3): a Ps process whose APC dispatcher
-/// stands in for ntdll's queues two APCs to itself, which a non-alertable
-/// wait leaves queued and an alertable one runs in order, then returns
-/// STATUS_USER_APC with its registers back; NtTestAlert runs a third; an APC
+/// stands in for ReactOS ntdll's (its SEH record between the CONTEXT and the
+/// interrupted ESP) queues two APCs to itself, which a non-alertable wait
+/// leaves queued and an alertable one runs in order, then returns
+/// STATUS_USER_APC with its registers and its stack back; NtTestAlert runs a
+/// third; an APC
 /// that the kernel queues ends an alertable wait already blocked; a fifth
 /// stays queued through a non-alertable wait, and is run down with the
 /// process. A bad handle is refused.
@@ -2244,6 +2246,8 @@ fn user_apc_self_test() {
     const WOKEN: u32 = DATA + 0x40;
     const STILL: u32 = DATA + 0x44; // NtQueueApcThread, NtDelayExecution
     const AFTER: u32 = DATA + 0x4C;
+    // The arguments of the alertable wait, read back after its APCs.
+    const ARGUMENTS: u32 = DATA + 0x60;
     // LARGE_INTEGER intervals: 10 ms and 5 s, relative.
     const SHORT: u32 = DATA + 0x50;
     const LONG: u32 = DATA + 0x58;
@@ -2267,8 +2271,18 @@ fn user_apc_self_test() {
         .store_eax(NON_ALERTABLE)
         .word(&[0xA1], LOG) // mov eax, [LOG]
         .store_eax(NOT_YET)
-        .call(services::NtDelayExecution, &[1, LONG])
+        // NtDelayExecution(TRUE, LONG), its arguments left on the stack
+        // through the APCs, then read back.
+        .word(&[0x68], LONG)
+        .bytes(&[0x6A, 0x01, 0x89, 0xE2]) // push 1; mov edx, esp
+        .word(&[0xB8], services::NtDelayExecution)
+        .bytes(&[0xCD, 0x2E])
         .store_eax(DELAYED)
+        .bytes(&[0x8B, 0x0C, 0x24]) // mov ecx, [esp]
+        .word(&[0x89, 0x0D], ARGUMENTS) // mov [ARGUMENTS], ecx
+        .bytes(&[0x8B, 0x4C, 0x24, 0x04]) // mov ecx, [esp + 4]
+        .word(&[0x89, 0x0D], ARGUMENTS + 4)
+        .bytes(&[0x83, 0xC4, 0x08]) // add esp, 8
         .word(&[0x89, 0x1D], KEPT) // mov [KEPT], ebx
         .word(&[0x89, 0x25], KEPT + 4); // mov [KEPT + 4], esp
     queue(&mut code, 0x31);
@@ -2295,10 +2309,14 @@ fn user_apc_self_test() {
     assert!(main.len() <= 0x200, "the test program outgrew its slot");
 
     // The dispatcher, entered with ESP on the routine, its context, its two
-    // arguments, then the CONTEXT: it calls the routine, then
-    // NtContinue(context, TRUE).
+    // arguments, then the CONTEXT: like ReactOS's, it writes its SEH record
+    // past the CONTEXT, calls the routine, then NtContinue(context, TRUE).
     let mut dispatcher = Code::new();
     dispatcher
+        .word(&[0x8D, 0x84, 0x24], 16 + 0x2CC) // lea eax, [esp + 16 + CONTEXT]
+        .word(&[0xC7, 0x00], 0x5E5E_5E5E) // mov dword [eax], …
+        .bytes(&[0xC7, 0x40, 0x04])
+        .bytes(&0x5E5E_5E5Eu32.to_le_bytes()) // mov dword [eax + 4], …
         .bytes(&[0x58, 0xFF, 0xD0]) // pop eax; call eax
         .bytes(&[0x89, 0xE1, 0x6A, 0x01, 0x51, 0x89, 0xE2]) // mov ecx, esp; push 1; push ecx; mov edx, esp
         .word(&[0xB8], services::NtContinue)
@@ -2364,6 +2382,7 @@ fn user_apc_self_test() {
     assert_eq!(status(NON_ALERTABLE), STATUS_SUCCESS, "a non-alertable NtDelayExecution");
     assert_eq!(read(NOT_YET), LOG_START, "an APC ran before an alertable wait");
     assert_eq!(status(DELAYED), STATUS_USER_APC, "the alertable NtDelayExecution, back from its APCs");
+    assert_eq!((read(ARGUMENTS), read(ARGUMENTS + 4)), (1, LONG), "the APC dispatcher wrote over the stack");
     let entry = |i: u32| [read(LOG_START + 12 * i), read(LOG_START + 12 * i + 4), read(LOG_START + 12 * i + 8)];
     assert_eq!([entry(0), entry(1)], [[0x11, 0x12, 0x13], [0x21, 0x22, 0x23]], "the queued APCs, in order");
     assert_eq!((read(KEPT), read(KEPT + 4)), (MAGIC, read(ESP_BEFORE)), "EBX or ESP lost across the APCs");
