@@ -818,7 +818,7 @@ fn a_thread_end_wakes_its_waiters_unraised_and_its_mutants_next_owners_raised() 
 
 use crate::apc::{
     ke_enter_critical_region, ke_enter_guarded_region, ke_insert_queue_apc, ke_leave_critical_region,
-    ke_leave_guarded_region, ke_remove_queue_apc, KApc, NormalRoutine,
+    ke_leave_guarded_region, ke_remove_queue_apc, ke_rundown_apcs, KApc, NormalRoutine,
 };
 
 /// Une routine d'APC qui s'est exécutée.
@@ -1088,6 +1088,41 @@ fn a_terminated_thread_takes_no_apc() {
     let ended = new_thread();
     exit_thread(ended);
     assert!(!queue(normal(ended), 1));
+    finish();
+}
+
+std::thread_local! {
+    /// APC passés à leur routine de rundown, dans l'ordre.
+    static RUN_DOWN: RefCell<Vec<*mut KApc>> = const { RefCell::new(Vec::new()) };
+}
+
+fn on_rundown(apc: *mut KApc) {
+    RUN_DOWN.with_borrow_mut(|r| r.push(apc));
+}
+
+#[test]
+fn rundown_empties_both_queues_calls_each_rundown_routine_and_closes_the_thread_to_apcs() {
+    apc_setup();
+    RUN_DOWN.with_borrow_mut(Vec::clear);
+    let other = new_thread();
+    let with_rundown = |normal: Option<NormalRoutine>, mode| {
+        Box::leak(Box::new(KApc::new(other, on_kernel, Some(on_rundown), normal, mode, ptr::null_mut()))) as *mut KApc
+    };
+    let user = with_rundown(Some(on_normal), ProcessorMode::User);
+    let kernel = with_rundown(Some(on_normal), ProcessorMode::Kernel);
+    let without = normal(other);
+    for (label, a) in [user, kernel, without].into_iter().enumerate() {
+        assert!(queue(a, label));
+    }
+    // SAFETY: thread et APC du test.
+    unsafe {
+        assert_eq!(ke_rundown_apcs::<Sim>(other), 3);
+        assert!(!(*other).kernel_apc_pending && !(*other).user_apc_pending, "nothing left to deliver");
+    }
+    assert_eq!(RUN_DOWN.with_borrow(Vec::clone), [kernel, user], "kernel APCs first, each routine once");
+    assert!(![user, kernel, without].into_iter().any(inserted));
+    assert!(!queue(normal(other), 4), "the thread takes no more APCs");
+    assert!(ran_list().is_empty(), "run down, not delivered");
     finish();
 }
 

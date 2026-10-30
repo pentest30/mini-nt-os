@@ -56,9 +56,9 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - Ps : `EPROCESS` et `ETHREAD`, création et terminaison avec *rundown*, PEB32 et TEB32 (crate `abi`).
 
 **Critères de sortie**
-- [ ] Deux processus chargent chacun une image différente en `0x400000` et s'exécutent en même temps.
-- [ ] Un processus qui réserve 256 Mio puis commite page par page n'utilise de mémoire physique que pour les pages touchées.
-- [ ] Après la fin d'un processus, toute sa mémoire et tous ses handles sont libérés (compteurs de pool revenus à leur valeur initiale).
+- [x] Deux processus chargent chacun une image différente en `0x400000` et s'exécutent en même temps.
+- [x] Un processus qui réserve 256 Mio puis commite page par page n'utilise de mémoire physique que pour les pages touchées.
+- [x] Après la fin d'un processus, toute sa mémoire et tous ses handles sont libérés (compteurs de pool revenus à leur valeur initiale).
 
 ## M3 — Frontière NT, puis spike S1
 

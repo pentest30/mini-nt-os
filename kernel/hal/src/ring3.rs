@@ -47,13 +47,13 @@ core::arch::global_asm!(
     "   xor eax, eax",
     "   mov cr8, rax",
     "   pop rax",    // rax = FS selector; RSP → RIP slot
-    "   mov fs, ax", // load TEB segment (DPL=3, base=TEB32_VA)
+    "   mov fs, ax", // load TEB segment (DPL=3, base=this thread's TEB)
     "   iretq",      // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
 );
 
 /// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
 ///
-/// Used by `ke::sched::spawn_user_thread` as the initial `ret` target
+/// Used by `ke::sched::create_user_thread` as the initial `ret` target
 /// in a new user-mode thread's kernel stack frame.
 ///
 /// # IRQL: DISPATCH_LEVEL (invoked by the scheduler context-switch path).

@@ -101,6 +101,12 @@ pub struct ImageInfo {
     pub size_of_image: u64,
     /// IMAGE_FILE_RELOCS_STRIPPED : l'image ne quitte pas sa base.
     pub relocs_stripped: bool,
+    /// Sous-système (`IMAGE_SUBSYSTEM_*`) et sa version, pour le PEB.
+    pub subsystem: u16,
+    pub subsystem_version: (u16, u16),
+    /// Pile de ses threads : taille réservée, taille commitée.
+    pub stack_reserve: u64,
+    pub stack_commit: u64,
 }
 
 /// La disposition d'une image en mémoire, tirée de son PE.
@@ -140,6 +146,10 @@ impl ImageLayout {
             entry_point: u64::from(opt.address_of_entry_point),
             size_of_image,
             relocs_stripped: header.characteristics & pe::FILE_RELOCS_STRIPPED != 0,
+            subsystem: opt.subsystem,
+            subsystem_version: (opt.major_subsystem_version, opt.minor_subsystem_version),
+            stack_reserve: u64::from(opt.size_of_stack_reserve),
+            stack_commit: u64::from(opt.size_of_stack_commit),
         };
         let pages = size_of_image / PAGE;
         let mut copies = alloc::vec![(0, 0, size_of_headers)];
@@ -429,8 +439,16 @@ mod tests {
     #[test]
     fn image_pages_take_the_protection_of_their_section() {
         let layout = ImageLayout::new(&image()).unwrap();
-        let info =
-            ImageInfo { image_base: 0x40_0000, entry_point: 0x1010, size_of_image: 0x6000, relocs_stripped: false };
+        let info = ImageInfo {
+            image_base: 0x40_0000,
+            entry_point: 0x1010,
+            size_of_image: 0x6000,
+            relocs_stripped: false,
+            subsystem: 3,
+            subsystem_version: (4, 0),
+            stack_reserve: 0x10_0000,
+            stack_commit: 0x1000,
+        };
         assert_eq!(layout.info, info);
         // Headers, .text (two pages, up to .data), .data, .bss (two pages).
         assert_eq!(layout.protects, [(1, RO), (2, RX), (1, WC), (2, WC)]);

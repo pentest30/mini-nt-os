@@ -6,6 +6,7 @@
 //! - [`loader_block`]: loader → kernel handoff.
 //! - [`ntstatus`]: `NtStatus` and the NTSTATUS values in use.
 //! - [`object`]: access masks, generic mapping, object attributes.
+//! - [`peb32`], [`teb32`]: the PEB and TEB of an i386 process, as on XP SP2.
 //!
 //! The XP user-mode layouts (PEB, TEB, `KUSER_SHARED_DATA`, `CONTEXT`…) will
 //! join it. `no_std`, without dependencies.
@@ -18,5 +19,7 @@ pub mod fpu;
 pub mod loader_block;
 pub mod ntstatus;
 pub mod object;
+pub mod peb32;
+pub mod teb32;
 
 pub use loader_block::*;

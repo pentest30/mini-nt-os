@@ -289,7 +289,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::irql::set_apc_hook(Some(ke::apc::ki_apc_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
     hal::idt::set_syscall_hook(Some(syscall::dispatch));
-    hal::idt::set_user_fault_hook(Some(ke::sched::terminate_current_thread));
+    hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
     // Raises starved threads every second (ke::sched).
@@ -307,9 +307,11 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     address_space_self_test();
     vad_self_test();
     demand_paging_self_test();
+    kernel_stack_self_test();
     out_of_page_tables_self_test();
     section_self_test();
     object_manager_self_test();
+    process_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -390,23 +392,36 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
 }
 
+/// A user-mode fault that nothing resolved (`hal::idt`, interrupts masked):
+/// until exceptions reach user mode (M3), the process of a Ps thread ends
+/// with `STATUS_ACCESS_VIOLATION`, as an unhandled exception would end it; a
+/// thread of the legacy loader just ends.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, from user mode.
+fn user_fault() {
+    // Ps runs the process down with interrupts enabled, as from a system call.
+    x86_64::instructions::interrupts::enable();
+    ps::terminate_current_process(abi::ntstatus::STATUS_ACCESS_VIOLATION);
+}
+
 /// Spawns a ring-3 thread on a fresh guarded kernel stack (`mm::kstack`).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
     let kstack = mm::kstack::allocate()?;
-    // SAFETY: kstack was just allocated for this thread alone and is never freed.
-    unsafe {
-        ke::sched::spawn_user_thread(
-            kstack.top,
-            entry32,
-            stack32,
-            hal::gdt::user_code32_selector(),
-            hal::gdt::user_data32_selector(),
-            hal::gdt::user_teb_fs_selector(),
-        )
-    }
+    let start = ke::sched::UserThreadStart {
+        directory_table_base: mm::address_space::system_directory_table_base(),
+        kernel_stack_top: kstack.top,
+        entry: entry32,
+        stack: stack32,
+        teb: ps::loader::TEB32_VA,
+        owner: core::ptr::null(),
+    };
+    // SAFETY: kstack was just allocated for this thread alone and is never
+    // freed; the system address space lives forever.
+    unsafe { ke::sched::create_user_thread(&start) }
 }
 
 /// Churns the pool with the pattern blamed for the old heap "corruption"
@@ -1306,6 +1321,18 @@ fn demand_paging_self_test() {
     write(fresh, MARKER);
     assert_eq!(read(page(4)), MARKER + 4, "the data did not survive the guard");
 
+    // Copies from outside the space, as the process would read and write.
+    let straddle = page(9) - 8;
+    let mut back = [0u8; 16];
+    space.read_bytes(straddle, &mut back).expect("read across two pages");
+    assert_eq!(back, [0; 16], "untouched committed pages read as zeros");
+    space.write_bytes(straddle, b"across two pages").expect("write across two pages");
+    space.read_bytes(straddle, &mut back).expect("read back");
+    assert_eq!(&back, b"across two pages");
+    assert_eq!(read(straddle).to_le_bytes(), *b"across t", "the first half at the end of one page");
+    assert_eq!(read(page(9)).to_le_bytes(), *b"wo pages", "the second half at the start of the next");
+    let mut byte = [0u8];
+    assert_eq!(space.read_bytes(page(COMMITTED + 1), &mut byte), Err(STATUS_ACCESS_VIOLATION), "reserved page");
     assert_eq!(space.access_fault(page(COMMITTED + 1), Access::Read), STATUS_ACCESS_VIOLATION, "reserved page");
     assert_eq!(space.access_fault(base + RESERVED, Access::Read), STATUS_ACCESS_VIOLATION, "free page");
 
@@ -1330,6 +1357,26 @@ fn demand_paging_self_test() {
          pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
         COMMITTED / 2
     );
+}
+
+/// Kernel stacks go back (`mm::kstack::free`): their pages to the PFN database,
+/// their slots to the next allocation.
+fn kernel_stack_self_test() {
+    use mm::pfn::{self, PageUsage};
+    let stack_pages = || pfn::stats().active(PageUsage::KernelStack);
+    let before = stack_pages();
+    let stacks = [(); 3].map(|_| mm::kstack::allocate().expect("a kernel stack"));
+    let per_stack = (stack_pages() - before) / 3;
+    for stack in stacks {
+        // SAFETY: allocated just above, never used.
+        unsafe { mm::kstack::free(stack) };
+    }
+    assert_eq!(stack_pages(), before, "freed stacks kept their pages");
+    let again = mm::kstack::allocate().expect("a kernel stack");
+    assert_eq!(again, stacks[2], "the last slot freed comes back first");
+    // SAFETY: allocated just above, never used.
+    unsafe { mm::kstack::free(again) };
+    log::info!("[smoke] Mm: kernel stacks freed and their slots reused ({per_stack} pages each)");
 }
 
 /// A demand-zero fault that gets its page but no page table returns
@@ -1524,6 +1571,260 @@ fn in_space<R>(space: &mm::address_space::AddressSpace, f: impl FnOnce() -> R) -
     let result = f();
     ke::sched::ke_unstack_detach(attached);
     result
+}
+
+/// Ps, and the M2 exit criteria 1 and 3 (05): see [`process_round`]. The
+/// round runs twice: the first sizes the global tables (IDs, free kernel stack
+/// slots, the reaper's list); after the second, every page and every pool
+/// byte the processes took is back.
+fn process_self_test() {
+    use mm::pfn::{self, PageUsage};
+
+    let counts = || {
+        let s = pfn::stats();
+        let pages = [PageUsage::PageTable, PageUsage::KernelStack, PageUsage::UserPrivate, PageUsage::Section];
+        (pages.map(|usage| s.active(usage)), HEAP.used(), mm::pool::PAGED_POOL.used())
+    };
+    process_round();
+    let before = counts();
+    let (one, two) = process_round();
+    assert_eq!(counts(), before, "pages or pool kept after the end of the processes");
+    log::info!(
+        "[smoke] Ps: two processes ran at once, each with its own image at 0x400000 (counters {one:?} and {two:?}), each thread on its own TEB"
+    );
+    log::info!(
+        "[smoke] Ps: a process reserved 256 MiB and committed it page by page; only the pages written took memory"
+    );
+    log::info!(
+        "[smoke] Ps: processes ended on request, on a fault and before their first run; pages, pool, handles, kernel stacks and IDs given back"
+    );
+}
+
+/// Four processes on images built here, all at 0x400000:
+///
+/// - `one` and `two` run at once: each thread stores the TID its TEB holds
+///   (`fs:[0x24]`, so the TEB descriptor must follow each switch) and bumps
+///   its counter, by 1 in `one`, by 2 in `two`; a thread of `one` is
+///   terminated, which frees its TEB; then both processes are;
+/// - in `faulty`, the first thread writes to address 0: the process ends with
+///   `STATUS_ACCESS_VIOLATION`, the other thread by its exit APC;
+/// - `early`, with a single thread, is terminated before the thread ever ran:
+///   it ends at its first tick;
+/// - while they run, `two` reserves 256 MiB and commits it page by page:
+///   only the pages written take memory (M2 exit criterion 2).
+///
+/// Then each process has its exit status, its handles closed, its address
+/// space gone; with the last reference, its IDs are free. Returns the
+/// counters of `one` and `two`.
+fn process_round() -> ([u32; 2], [u32; 2]) {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INVALID_CID, STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING,
+        STATUS_THREAD_IS_TERMINATING, STATUS_WAIT_0,
+    };
+    use abi::peb32::Peb32;
+    use abi::teb32::Teb32;
+    use alloc::sync::Arc;
+    use alloc::vec::Vec;
+    use core::mem::offset_of;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, DispatcherHeader, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::pfn::{self, PageUsage};
+    use mm::section::Section;
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{AllocType, MemState, PAGE_SIZE};
+    use ob::{AccessMask, Object};
+    use pe::builder::Pe32Builder;
+    use ps::{EProcess, EThread};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    /// `mov dword [0], 1` then `jmp $`.
+    const FAULT: [u8; 12] = [0xC7, 0x05, 0, 0, 0, 0, 1, 0, 0, 0, 0xEB, 0xFE];
+
+    // Thread `slot`: mov eax, fs:[0x24]; mov [DATA+0x10+4*slot], eax;
+    // add dword [DATA+4*slot], step; jmp back.
+    let spinner = |slot: u32, step: u8| {
+        let mut code = [0u8; 20];
+        code[..6].copy_from_slice(&[0x64, 0xA1, 0x24, 0, 0, 0]);
+        code[6] = 0xA3;
+        code[7..11].copy_from_slice(&(DATA + 0x10 + 4 * slot).to_le_bytes());
+        code[11..13].copy_from_slice(&[0x83, 0x05]);
+        code[13..17].copy_from_slice(&(DATA + 4 * slot).to_le_bytes());
+        code[17] = step;
+        code[18..].copy_from_slice(&[0xEB, 0xEC]);
+        code
+    };
+    let image = |first: &[u8], second: &[u8], marker: &[u8; 8]| {
+        let mut text = [0xCC; 0x40];
+        text[..first.len()].copy_from_slice(first);
+        text[0x20..0x20 + second.len()].copy_from_slice(second);
+        let mut data = [0; 0x28];
+        data[0x20..].copy_from_slice(marker);
+        let file = Pe32Builder::new(IMAGE_BASE)
+            .entry_point(0x1000)
+            .section(".text", 0x1000, 0x40, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+            .section(".data", 0x2000, 0x28, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+            .build();
+        Section::create_image(Arc::from(file)).expect("image section")
+    };
+    let system = ps::system_process();
+    // A process, with a thread at each RVA.
+    let start = |section: &Arc<Section>, name: &str, rvas: &[u32]| {
+        let process = ps::create_process(&system, section, name, false).expect("create a process");
+        let info = section.image().expect("an image").info;
+        let threads: Vec<Arc<Object<EThread>>> = rvas
+            .iter()
+            .map(|rva| {
+                let stack =
+                    ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+                ps::create_thread(&process, IMAGE_BASE + rva, &stack).expect("create a thread")
+            })
+            .collect();
+        (process, threads)
+    };
+    // Counters, TIDs seen through FS, marker.
+    let state = |process: &EProcess| {
+        let mut bytes = [0u8; 0x28];
+        process.read_memory(u64::from(DATA), &mut bytes).expect("read the image's data");
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        ([word(0), word(4)], [word(0x10), word(0x14)], [&bytes[0x20..]].concat())
+    };
+    let delay = |ms: i64| {
+        // SAFETY: a kernel thread at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -ms * MS) }
+    };
+    let wait_until = |what: &str, done: &dyn Fn() -> bool| {
+        for _ in 0..300 {
+            if done() {
+                return;
+            }
+            delay(10);
+        }
+        panic!("Ps self-test: {what}");
+    };
+    let wait = |object: *mut DispatcherHeader, ms: i64| {
+        // SAFETY: the object of a process or a thread held by the caller.
+        unsafe { ke_wait_for_single_object::<KePlatform>(object, ProcessorMode::Kernel, false, Some(-ms * MS)) }
+    };
+    let read_u32 = |process: &EProcess, va: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(va), &mut bytes).expect("read a process");
+        u32::from_le_bytes(bytes)
+    };
+
+    let (one, two, faulty) = (
+        image(&spinner(0, 1), &spinner(1, 1), b"image 1\0"),
+        image(&spinner(0, 2), &spinner(1, 2), b"image 2\0"),
+        image(&FAULT, &spinner(1, 1), b"faulty\0\0"),
+    );
+    let (a, ta) = start(&one, "one.exe", &[0x1000, 0x1020]);
+    let (b, tb) = start(&two, "two.exe", &[0x1000, 0x1020]);
+    assert_eq!((a.image_base(), b.image_base()), (IMAGE_BASE, IMAGE_BASE));
+    // A handle in A's table, which its end must close.
+    let section_object = mm::section::create_section_object(one.clone());
+    a.handle_table.insert(section_object.clone(), AccessMask::GENERIC_ALL, Default::default()).expect("a handle");
+
+    // The PEB, and each TEB under it.
+    let peb = ps::eprocess::PEB_VA;
+    assert_eq!(read_u32(&a, peb + offset_of!(Peb32, image_base_address) as u32), IMAGE_BASE);
+    assert_eq!(read_u32(&a, peb + offset_of!(Peb32, os_major_version) as u32), 5);
+    assert_eq!(read_u32(&a, peb + offset_of!(Peb32, os_build_number) as u32) & 0xFFFF, 2600);
+    assert_eq!((ta[0].teb(), ta[1].teb()), (0x7FFD_E000, 0x7FFD_D000), "TEBs go down from under the PEB");
+    for t in &ta {
+        let field = |offset: usize| read_u32(&a, t.teb() + offset as u32);
+        assert_eq!(field(0x18), t.teb(), "NtTib.Self");
+        assert_eq!((field(offset_of!(Teb32, client_id)), field(offset_of!(Teb32, client_id) + 4)), (a.pid(), t.tid()));
+        assert_eq!(field(offset_of!(Teb32, process_environment_block)), peb);
+    }
+
+    // Both run at once.
+    wait_until("a thread never ran", &|| [&a, &b].iter().all(|p| state(p).0.iter().all(|&count| count > 0)));
+    let (first_a, first_b) = (state(&a).0, state(&b).0);
+    wait_until("a thread stopped while the others ran", &|| {
+        let (now_a, now_b) = (state(&a).0, state(&b).0);
+        (0..2).all(|i| now_a[i] > first_a[i] && now_b[i] > first_b[i])
+    });
+    let (sa, sb) = (state(&a), state(&b));
+    assert_eq!((&sa.2[..], &sb.2[..]), (&b"image 1\0"[..], &b"image 2\0"[..]), "each process has its own image");
+    assert!(sb.0.iter().all(|count| count % 2 == 0), "image two adds 2: {:?}", sb.0);
+    assert_eq!(sa.1, [ta[0].tid(), ta[1].tid()], "a thread of one did not see its own TEB through FS");
+    assert_eq!(sb.1, [tb[0].tid(), tb[1].tid()], "a thread of two did not see its own TEB through FS");
+
+    // 256 MiB reserved, every page committed one by one, a few written.
+    const RESERVED: u64 = 256 << 20;
+    const WRITTEN: u64 = 16;
+    let private = || pfn::stats().active(PageUsage::UserPrivate);
+    let before = private();
+    let base = b
+        .with_space(|space| {
+            let base = space.allocate(0, RESERVED, AllocType::MEM_RESERVE, PageProtect::READWRITE)?;
+            for page in (base..base + RESERVED).step_by(PAGE_SIZE as usize) {
+                space.allocate(page, PAGE_SIZE, AllocType::MEM_COMMIT, PageProtect::READWRITE)?;
+            }
+            Ok::<u64, NtStatus>(base)
+        })
+        .expect("a process")
+        .expect("reserve and commit 256 MiB");
+    assert_eq!(private(), before, "a commit took a page");
+    for i in 0..WRITTEN {
+        b.write_memory(base + i * (RESERVED / WRITTEN), &[0x5A]).expect("write a committed page");
+    }
+    assert_eq!(private() - before, WRITTEN, "not one page per page written");
+    // One thread ends, its process lives on.
+    ps::terminate_thread(ta[1].clone(), NtStatus(0x1111)).expect("terminate a thread");
+    let object = ta[1].dispatcher_object().expect("a started thread");
+    assert_eq!(wait(object, 3000), STATUS_WAIT_0, "a terminated thread did not end");
+    assert_eq!((ta[1].exit_status(), a.exit_status(), a.active_threads()), (NtStatus(0x1111), STATUS_PENDING, 1));
+    let teb = a.with_space(|space| space.query(u64::from(ta[1].teb())).map(|region| region.state));
+    assert_eq!(teb, Ok(Ok(MemState::Free)), "the TEB of an ended thread was not freed");
+    assert_eq!(ps::terminate_thread(ta[1].clone(), NtStatus(1)), Err(STATUS_THREAD_IS_TERMINATING));
+    ps::terminate_process(a.clone(), NtStatus(0xA0A0)).expect("terminate one");
+    ps::terminate_process(b.clone(), NtStatus(0xB0B0)).expect("terminate two");
+    for process in [&a, &b] {
+        assert_eq!(wait(process.dispatcher_object(), 3000), STATUS_WAIT_0, "{} did not end", process.image_file_name());
+    }
+
+    let (c, tc) = start(&faulty, "faulty.exe", &[0x1000, 0x1020]);
+    assert_eq!(wait(c.dispatcher_object(), 3000), STATUS_WAIT_0, "a faulting process did not end");
+    // Created and terminated at once: at the boot thread's priority, its
+    // thread has not run yet. Alone, nothing but its exit APC stops it.
+    let (d, td) = start(&one, "early.exe", &[0x1000]);
+    ps::terminate_process(d.clone(), NtStatus(0xD0D0)).expect("terminate early");
+    assert_eq!(wait(d.dispatcher_object(), 100), STATUS_WAIT_0, "a thread ended before its first run lingered");
+    ps::wait_for_reaper();
+
+    let ended = [(&a, &ta, NtStatus(0xA0A0)), (&b, &tb, NtStatus(0xB0B0)), (&c, &tc, STATUS_ACCESS_VIOLATION)];
+    for (process, threads, status) in ended.into_iter().chain([(&d, &td, NtStatus(0xD0D0))]) {
+        assert_eq!((process.exit_status(), process.active_threads()), (status, 0), "{}", process.image_file_name());
+        let survivors = if core::ptr::eq(process, &a) { &threads[..1] } else { &threads[..] };
+        assert!(
+            survivors.iter().all(|t| t.exit_status() == status),
+            "{}: thread exit status",
+            process.image_file_name()
+        );
+    }
+    assert_eq!(
+        a.read_memory(u64::from(DATA), &mut [0; 4]),
+        Err(STATUS_PROCESS_IS_TERMINATING),
+        "space outlived its end"
+    );
+    assert_eq!(ps::terminate_process(a.clone(), NtStatus(1)), Err(STATUS_PROCESS_IS_TERMINATING));
+    let stack = ps::InitialTeb { stack_base: 0x10_0000, stack_limit: 0xF_F000, stack_allocation_base: 0x1_0000 };
+    assert!(ps::create_thread(&a, IMAGE_BASE, &stack).is_err(), "a thread in an ended process");
+    assert_eq!(section_object.handle_count(), 0, "the handle table was not run down");
+
+    let ids: Vec<u32> = [&a, &b, &c, &d]
+        .iter()
+        .map(|p| p.pid())
+        .chain([&ta, &tb, &tc, &td].iter().flat_map(|threads| threads.iter().map(|t| t.tid())))
+        .collect();
+    drop((a, b, c, d, ta, tb, tc, td, section_object, one, two, faulty, system));
+    for id in ids {
+        assert_eq!(ps::lookup_process(id).err(), Some(STATUS_INVALID_CID), "process {id} outlived its references");
+        assert_eq!(ps::lookup_thread(id).err(), Some(STATUS_INVALID_CID), "thread {id} outlived its references");
+    }
+    (sa.0, sb.0)
 }
 
 /// The object manager (`ob`): the XP namespace and the object types; a named

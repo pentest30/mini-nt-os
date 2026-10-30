@@ -27,12 +27,13 @@ pub struct Pe32Builder {
     section_alignment: u32,
     file_alignment: u32,
     relocs_stripped: bool,
+    stack: (u32, u32),
     sections: Vec<Section>,
 }
 
 impl Pe32Builder {
     /// An image at `image_base`, aligned on 0x1000 in memory and 0x200 in the
-    /// file, without sections.
+    /// file, with a 1 MiB stack of which 4 KiB committed, without sections.
     pub fn new(image_base: u32) -> Self {
         Self {
             image_base,
@@ -40,6 +41,7 @@ impl Pe32Builder {
             section_alignment: 0x1000,
             file_alignment: 0x200,
             relocs_stripped: false,
+            stack: (0x10_0000, 0x1000),
             sections: Vec::new(),
         }
     }
@@ -54,6 +56,12 @@ impl Pe32Builder {
     pub fn alignments(mut self, section: u32, file: u32) -> Self {
         self.section_alignment = section;
         self.file_alignment = file;
+        self
+    }
+
+    /// The stack of its threads: `reserve` bytes, `commit` of them committed.
+    pub fn stack(mut self, reserve: u32, commit: u32) -> Self {
+        self.stack = (reserve, commit);
         self
     }
 
@@ -119,6 +127,8 @@ impl Pe32Builder {
         put32(&mut file, optional_header + 56, size_of_image as u32);
         put32(&mut file, optional_header + 60, size_of_headers as u32);
         put16(&mut file, optional_header + 68, 3); // IMAGE_SUBSYSTEM_WINDOWS_CUI
+        put32(&mut file, optional_header + 72, self.stack.0);
+        put32(&mut file, optional_header + 76, self.stack.1);
         put32(&mut file, optional_header + 92, 16); // NumberOfRvaAndSizes
 
         for (i, section) in self.sections.iter().enumerate() {
@@ -161,10 +171,12 @@ mod tests {
             .section(".text", 0x1000, 0x10, &[0xC3; 0x10], SCN_MEM_EXECUTE | SCN_MEM_READ)
             .section(".bss", 0x2000, 0x3000, &[], SCN_MEM_READ | SCN_MEM_WRITE)
             .relocs_stripped()
+            .stack(0x4_0000, 0x2000)
             .build();
         let pe = Pe32::parse(&file).unwrap();
         let (fh, opt) = (pe.file_header(), pe.optional_header());
         assert_eq!({ opt.image_base }, 0x40_0000);
+        assert_eq!(({ opt.size_of_stack_reserve }, { opt.size_of_stack_commit }), (0x4_0000, 0x2000));
         assert_eq!({ opt.address_of_entry_point }, 0x1000);
         assert_eq!({ opt.size_of_image }, 0x5000);
         assert_eq!({ opt.size_of_headers }, 0x200);

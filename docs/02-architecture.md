@@ -184,6 +184,8 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 ### 5.5 Ps — processus et threads (`kernel/ps`)
 
 - `EPROCESS` et `ETHREAD` sont des structures Rust internes, sans contrainte de layout. Seuls le PEB32 et le TEB32 suivent le format XP au bit près (crate `abi`).
+- **Identifiants** : PID et TID viennent d'une même table (PspCidTable), en multiples de 4 ; System a le PID 4.
+- **Fin** : `NtTerminateProcess` et `NtTerminateThread` passent par un APC noyau dans chaque thread visé, qui se termine dans son propre contexte. Le dernier thread d'un processus ferme ses handles et rend son espace d'adresses, une fois finis les accès en cours (protection de *rundown*), puis signale l'objet processus. Un *reaper* rend la pile noyau des threads terminés, une fois qu'ils ont quitté le processeur.
 - **Appels système** : `NtCreateProcess(Ex)`, `NtCreateThread`, `NtTerminateProcess` et `NtTerminateThread`, avec le *rundown* (fermeture des handles, abandon des mutants), ainsi que `NtQueryInformationProcess/Thread`, `NtSetInformation*`, `NtSuspendThread`/`NtResumeThread` et `NtGetContextThread`/`NtSetContextThread`.
 - **Processus initial** : `smss.exe` est créé directement par le noyau, au moyen d'un équivalent de `RtlCreateUserProcess` en mode noyau.
 - **Notifications** : messages au processus CSR (création et fin de processus et de threads) et ports d'exception et de débogage (plus tard).

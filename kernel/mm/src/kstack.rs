@@ -11,11 +11,14 @@
 //! next slot's, so the CPU faults instead of silently corrupting a neighbour;
 //! [`guard_hit`] lets the fault handlers name the stack involved.
 //!
-//! Not done yet: stacks are never freed (threads are not reaped). The region
-//! sits under a PML4 entry of the kernel half, filled at boot and shared by
-//! every address space (`mm::address_space`).
+//! [`free`] gives a stack's pages back and its slot to the next
+//! [`allocate`]. The region sits under a PML4 entry of the kernel half, filled
+//! at boot and shared by every address space (`mm::address_space`).
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
+
+use hal::sync::KSpinLock;
 
 use x86_64::structures::paging::PageTableFlags;
 use x86_64::{PhysAddr, VirtAddr};
@@ -38,8 +41,10 @@ const STACK_FLAGS: PageTableFlags = PageTableFlags::from_bits_truncate(
     PageTableFlags::PRESENT.bits() | PageTableFlags::WRITABLE.bits() | PageTableFlags::NO_EXECUTE.bits(),
 );
 
-/// Number of slots handed out so far.
+/// Number of slots handed out so far: the high-water mark of the region.
 static ALLOCATED: AtomicU64 = AtomicU64::new(0);
+/// Slots below the high-water mark that [`free`] gave back.
+static FREE_SLOTS: KSpinLock<Vec<u64>> = KSpinLock::new(Vec::new());
 
 /// A mapped kernel stack: `[bottom, top)`, growing down from `top`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,14 +70,20 @@ const fn stack_of_slot(slot: u64) -> KernelStack {
 /// # IRQL
 /// PASSIVE_LEVEL. Allocates pages (`mm::pfn`) and edits the kernel page tables.
 pub fn allocate() -> Option<KernelStack> {
-    let slot =
-        ALLOCATED.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_STACKS).then_some(n + 1)).ok()?;
+    let freed = FREE_SLOTS.lock().pop();
+    let slot = match freed {
+        Some(slot) => slot,
+        None => {
+            ALLOCATED.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n < MAX_STACKS).then_some(n + 1)).ok()?
+        }
+    };
     let stack = stack_of_slot(slot);
 
     let mut frames = [0u64; PAGES];
     for i in 0..PAGES {
         let Some(pfn) = crate::pfn::allocate_page(PageUsage::KernelStack) else {
             frames[..i].iter().for_each(|&phys| crate::pfn::free_page(crate::Pfn(phys / 4096)));
+            FREE_SLOTS.lock().push(slot);
             return None;
         };
         frames[i] = pfn.to_phys();
@@ -90,6 +101,30 @@ pub fn allocate() -> Option<KernelStack> {
     // SAFETY: [bottom, top) was mapped writable just above.
     unsafe { core::ptr::write_bytes(stack.bottom as *mut u8, 0, KERNEL_STACK_SIZE as usize) };
     Some(stack)
+}
+
+/// Gives back a stack from [`allocate`]: its pages go back to the PFN
+/// database and its slot to the next [`allocate`].
+///
+/// # Safety
+/// `stack` came from [`allocate`], is freed once, and nothing runs on it or
+/// points into it any more.
+///
+/// # IRQL
+/// PASSIVE_LEVEL. Edits the kernel page tables.
+pub unsafe fn free(stack: KernelStack) {
+    let slot = (stack.bottom - GUARD_SIZE - REGION_BASE) / SLOT_SIZE;
+    assert_eq!(stack, stack_of_slot(slot), "not a kernel stack");
+    // SAFETY: as in `allocate`.
+    let mut pt = unsafe { MmPageTables::new(crate::HHDM_OFFSET.load(Ordering::Acquire)) };
+    for i in 0..PAGES {
+        let virt = VirtAddr::new(stack.bottom + (i as u64) * 4096);
+        // SAFETY: `allocate` mapped every page of the stack, and nothing uses
+        // them any more (contract).
+        let frame = unsafe { pt.unmap_page(virt) };
+        crate::pfn::free_page(crate::Pfn(frame.start_address().as_u64() / 4096));
+    }
+    FREE_SLOTS.lock().push(slot);
 }
 
 /// If `addr` lies in a guard page of the region, returns the stack it belongs

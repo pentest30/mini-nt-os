@@ -643,8 +643,11 @@ fn nt_create_process(args_ptr: u32) -> u32 {
         Ok(v) => v,
         Err(s) => return s,
     };
-    let proc = ps::eprocess::create("userproc");
-    let pid = proc.pid as u32;
+    let proc = match ps::eprocess::create_legacy("userproc") {
+        Ok(proc) => proc,
+        Err(status) => return status.0,
+    };
+    let pid = proc.pid();
     let mut launch_ctx: Option<(u32, u32)> = None;
     if image_path_ptr != 0 {
         let mut raw = [0u8; 260];
@@ -733,7 +736,7 @@ fn nt_create_thread(args_ptr: u32) -> u32 {
         return STATUS_ACCESS_VIOLATION;
     }
     let system = ps::eprocess::system_process();
-    let mut target_pid = system.pid as u32;
+    let mut target_pid = system.pid();
     if process_handle != 0 && process_handle != 0xFFFF_FFFF {
         let system = ps::eprocess::system_process();
         let process = system.handle_table.reference(
@@ -756,8 +759,7 @@ fn nt_create_thread(args_ptr: u32) -> u32 {
         *next = next.wrapping_add(4);
         out
     };
-    let thread = ps::ethread::EThread::new(tid);
-    let obj: ObjectRef = thread;
+    let obj: ObjectRef = ob::create_object(&ps::ethread::THREAD_TYPE, ());
     let thread_handle = match system.handle_table.insert(obj, ob::AccessMask::GENERIC_ALL, Default::default()) {
         Ok(handle) => handle.0,
         Err(status) => return status.0,
