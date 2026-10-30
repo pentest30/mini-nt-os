@@ -12,9 +12,9 @@
 //! - [`process`]: values about processes, such as their execute options.
 //! - [`service`], [`services`]: the system service tables, generated from the
 //!   pinned ReactOS version by `tools/syscall-gen` (ADR-002).
+//! - [`shared_data`]: `KUSER_SHARED_DATA`, as on XP SP2.
 //!
-//! The XP user-mode layouts (PEB, TEB, `KUSER_SHARED_DATA`, `CONTEXT`…) will
-//! join it. `no_std`, without dependencies.
+//! `no_std`, without dependencies.
 
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -30,6 +30,7 @@ pub mod peb32;
 pub mod process;
 pub mod service;
 pub mod services;
+pub mod shared_data;
 pub mod teb32;
 
 pub use loader_block::*;

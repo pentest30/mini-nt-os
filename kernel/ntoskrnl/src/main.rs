@@ -13,6 +13,7 @@
 
 extern crate alloc;
 mod launcher;
+mod shared_data;
 mod sys;
 mod syscall;
 
@@ -289,9 +290,10 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::irql::set_dispatch_hook(Some(ke::dpc::ki_dispatch_interrupt));
     hal::irql::set_apc_hook(Some(ke::apc::ki_apc_interrupt));
     hal::timer::set_clock_hook(Some(ke::clock::ki_clock_interrupt));
-    hal::idt::set_syscall_hook(Some(system_call));
     sys::gates::install();
     sys::exceptions::install();
+    sys::apc::install();
+    shared_data::init();
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -318,6 +320,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     system_service_self_test();
     trap_gate_self_test();
     exception_self_test();
+    user_apc_self_test();
+    system_dll_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -395,27 +399,6 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         ke::sched::terminate_user_threads();
         // kernel_shell returns when ESC is pressed → back to launcher.
         kernel_shell(boot_info.hhdm_offset);
-    }
-}
-
-/// A system call through SYSENTER (`hal::sysenter`), interrupts masked, on
-/// the calling thread's kernel stack (`int 2Eh` goes through
-/// `sys::gates`). A Ps thread goes to KiSystemService (`sys`), interrupts
-/// enabled, without a trap frame; a thread of the legacy loader to its own
-/// dispatcher (`syscall`), which has its own numbers.
-///
-/// # IRQL
-/// PASSIVE_LEVEL, from user mode.
-fn system_call(number: u32, arguments: u32) -> u32 {
-    if ke::sched::current_thread_owner().is_null() {
-        return syscall::dispatch(number, arguments);
-    }
-    x86_64::instructions::interrupts::enable();
-    let completion = sys::dispatch(number, arguments, None);
-    x86_64::instructions::interrupts::disable();
-    match completion {
-        sys::Completion::Status(status) => status.0,
-        sys::Completion::Frame => unreachable!("a new context without a trap frame"),
     }
 }
 
@@ -1072,7 +1055,14 @@ fn apc_self_test() {
     // Above the boot thread: it runs, and starts waiting, before this returns.
     let tid = spawn_kernel_thread(ke::sched::current_priority() + 1, sleeper, event.cast());
     let waiter = ke::sched::thread_object(tid).expect("thread object").cast::<KThread>();
-    let to_waiter = leak(KApc::new(waiter, record, None, Some(normal), ProcessorMode::Kernel, core::ptr::null_mut()));
+    let to_waiter = leak(KApc::new(
+        waiter,
+        record,
+        None,
+        Some(NormalRoutine::Kernel(normal)),
+        ProcessorMode::Kernel,
+        core::ptr::null_mut(),
+    ));
     // SAFETY: as above; the waiter is a registered thread, never freed.
     unsafe {
         ke_insert_queue_apc::<KePlatform>(to_waiter, arg(&KERNEL_ROUTINE), arg(&NORMAL_ROUTINE), IO_NO_INCREMENT)
@@ -2190,6 +2180,499 @@ fn exception_self_test() {
     ps::wait_for_reaper();
     log::info!(
         "[smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher, NtContinue resumes"
+    );
+}
+
+/// User APCs (`ke::apc`, `sys::apc`, M3): a Ps process whose APC dispatcher
+/// stands in for ReactOS ntdll's (its SEH record between the CONTEXT and the
+/// interrupted ESP) queues two APCs to itself, which a non-alertable wait
+/// leaves queued and an alertable one runs in order, then returns
+/// STATUS_USER_APC with its registers and its stack back; NtTestAlert runs a
+/// third; an APC
+/// that the kernel queues ends an alertable wait already blocked; a fifth
+/// stays queued through a non-alertable wait, and is run down with the
+/// process. A bad handle is refused.
+fn user_apc_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_INVALID_HANDLE, STATUS_SUCCESS, STATUS_USER_APC, STATUS_WAIT_0};
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const TEXT: u32 = IMAGE_BASE + 0x1000;
+    const DISPATCHER: u32 = TEXT + 0x200;
+    const ROUTINE: u32 = TEXT + 0x280;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    // The routine's next log entry; what NtContinue returned to the
+    // dispatcher.
+    const LOG: u32 = DATA;
+    const FAILED: u32 = DATA + 0x04;
+    // Handshake with the kernel.
+    const DONE: u32 = DATA + 0x08;
+    const GO: u32 = DATA + 0x0C;
+    const WAITING: u32 = DATA + 0x10;
+    // Statuses, and the log pointer at two points.
+    const QUEUED: u32 = DATA + 0x14; // two, then the bad handle
+    const NON_ALERTABLE: u32 = DATA + 0x20;
+    const NOT_YET: u32 = DATA + 0x24;
+    const DELAYED: u32 = DATA + 0x28;
+    const KEPT: u32 = DATA + 0x2C; // EBX, ESP
+    const ESP_BEFORE: u32 = DATA + 0x34;
+    const TESTED: u32 = DATA + 0x38; // NtQueueApcThread, NtTestAlert
+    const WOKEN: u32 = DATA + 0x40;
+    const STILL: u32 = DATA + 0x44; // NtQueueApcThread, NtDelayExecution
+    const AFTER: u32 = DATA + 0x4C;
+    // The arguments of the alertable wait, read back after its APCs.
+    const ARGUMENTS: u32 = DATA + 0x60;
+    // LARGE_INTEGER intervals: 10 ms and 5 s, relative.
+    const SHORT: u32 = DATA + 0x50;
+    const LONG: u32 = DATA + 0x58;
+    // One entry per APC run: its context and two arguments.
+    const LOG_START: u32 = DATA + 0x100;
+    const MAGIC: u32 = 0xA9C0_0001;
+
+    let queue = |code: &mut Code, first: u32| {
+        code.call(services::NtQueueApcThread, &[NT_CURRENT_THREAD, ROUTINE, first, first + 1, first + 2]);
+    };
+    let mut code = Code::new();
+    code.word(&[0x89, 0x25], ESP_BEFORE) // mov [ESP_BEFORE], esp
+        .word(&[0xBB], MAGIC); // mov ebx, MAGIC
+    queue(&mut code, 0x11);
+    code.store_eax(QUEUED);
+    queue(&mut code, 0x21);
+    code.store_eax(QUEUED + 4)
+        .call(services::NtQueueApcThread, &[0x1234, ROUTINE, 0, 0, 0])
+        .store_eax(QUEUED + 8)
+        .call(services::NtDelayExecution, &[0, SHORT])
+        .store_eax(NON_ALERTABLE)
+        .word(&[0xA1], LOG) // mov eax, [LOG]
+        .store_eax(NOT_YET)
+        // NtDelayExecution(TRUE, LONG), its arguments left on the stack
+        // through the APCs, then read back.
+        .word(&[0x68], LONG)
+        .bytes(&[0x6A, 0x01, 0x89, 0xE2]) // push 1; mov edx, esp
+        .word(&[0xB8], services::NtDelayExecution)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(DELAYED)
+        .bytes(&[0x8B, 0x0C, 0x24]) // mov ecx, [esp]
+        .word(&[0x89, 0x0D], ARGUMENTS) // mov [ARGUMENTS], ecx
+        .bytes(&[0x8B, 0x4C, 0x24, 0x04]) // mov ecx, [esp + 4]
+        .word(&[0x89, 0x0D], ARGUMENTS + 4)
+        .bytes(&[0x83, 0xC4, 0x08]) // add esp, 8
+        .word(&[0x89, 0x1D], KEPT) // mov [KEPT], ebx
+        .word(&[0x89, 0x25], KEPT + 4); // mov [KEPT + 4], esp
+    queue(&mut code, 0x31);
+    code.store_eax(TESTED)
+        .call(services::NtTestAlert, &[])
+        .store_eax(TESTED + 4)
+        .word(&[0xC7, 0x05], WAITING)
+        .bytes(&1u32.to_le_bytes())
+        .call(services::NtDelayExecution, &[1, LONG])
+        .store_eax(WOKEN);
+    queue(&mut code, 0x51);
+    code.store_eax(STILL)
+        .call(services::NtDelayExecution, &[0, SHORT])
+        .store_eax(STILL + 4)
+        .word(&[0xA1], LOG)
+        .store_eax(AFTER)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x83, 0x3D], GO) // cmp dword [GO], 0
+        .bytes(&[0x00, 0x74, 0xF7]) // je back to the cmp
+        .call(services::NtTerminateProcess, &[NT_CURRENT_PROCESS, 0x600D])
+        .bytes(&[0xEB, 0xFE]);
+    let main = code.0;
+    assert!(main.len() <= 0x200, "the test program outgrew its slot");
+
+    // The dispatcher, entered with ESP on the routine, its context, its two
+    // arguments, then the CONTEXT: like ReactOS's, it writes its SEH record
+    // past the CONTEXT, calls the routine, then NtContinue(context, TRUE).
+    let mut dispatcher = Code::new();
+    dispatcher
+        .word(&[0x8D, 0x84, 0x24], 16 + 0x2CC) // lea eax, [esp + 16 + CONTEXT]
+        .word(&[0xC7, 0x00], 0x5E5E_5E5E) // mov dword [eax], …
+        .bytes(&[0xC7, 0x40, 0x04])
+        .bytes(&0x5E5E_5E5Eu32.to_le_bytes()) // mov dword [eax + 4], …
+        .bytes(&[0x58, 0xFF, 0xD0]) // pop eax; call eax
+        .bytes(&[0x89, 0xE1, 0x6A, 0x01, 0x51, 0x89, 0xE2]) // mov ecx, esp; push 1; push ecx; mov edx, esp
+        .word(&[0xB8], services::NtContinue)
+        .bytes(&[0xCD, 0x2E])
+        .store_eax(FAILED)
+        .bytes(&[0xEB, 0xFE]);
+    // The routine, stdcall (context, argument1, argument2): logs them.
+    let mut routine = Code::new();
+    routine.word(&[0x8B, 0x3D], LOG); // mov edi, [LOG]
+    for i in 0..3u8 {
+        routine.bytes(&[0x8B, 0x44, 0x24, 4 + 4 * i, 0x89, 0x47, 4 * i]); // mov eax, [esp + 4 + 4i]; mov [edi + 4i], eax
+    }
+    routine
+        .word(&[0x83, 0x05], LOG) // add dword [LOG], 12
+        .bytes(&[12, 0xC2, 12, 0]); // ret 12
+
+    let mut text = [0xCC; 0x300];
+    text[..main.len()].copy_from_slice(&main);
+    text[0x200..0x200 + dispatcher.0.len()].copy_from_slice(&dispatcher.0);
+    text[0x280..0x280 + routine.0.len()].copy_from_slice(&routine.0);
+    let mut data = [0u8; 0x200];
+    data[0..4].copy_from_slice(&LOG_START.to_le_bytes());
+    data[0x50..0x58].copy_from_slice(&(-10 * MS).to_le_bytes());
+    data[0x58..0x60].copy_from_slice(&(-5000 * MS).to_le_bytes());
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x300, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "apc.exe", false).expect("a process");
+    // ntdll's KiUserApcDispatcher, for every process, while it runs.
+    ke::apc::set_user_apc_dispatcher(DISPATCHER);
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the APC test program did not reach {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(WAITING, "its alertable wait");
+    // Into its 5 s wait, then an APC from here ends it.
+    // SAFETY: as above.
+    unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -50 * MS) };
+    thread.queue_user_apc(ROUTINE, 0x41, 0x42, 0x43).expect("an APC for a live thread");
+    wait_for(DONE, "its end");
+
+    let status = |addr: u32| NtStatus(read(addr));
+    assert_eq!(read(FAILED), 0, "NtContinue failed in the dispatcher");
+    assert_eq!((status(QUEUED), status(QUEUED + 4)), (STATUS_SUCCESS, STATUS_SUCCESS), "NtQueueApcThread");
+    assert_eq!(status(QUEUED + 8), STATUS_INVALID_HANDLE, "NtQueueApcThread on a bad handle");
+    assert_eq!(status(NON_ALERTABLE), STATUS_SUCCESS, "a non-alertable NtDelayExecution");
+    assert_eq!(read(NOT_YET), LOG_START, "an APC ran before an alertable wait");
+    assert_eq!(status(DELAYED), STATUS_USER_APC, "the alertable NtDelayExecution, back from its APCs");
+    assert_eq!((read(ARGUMENTS), read(ARGUMENTS + 4)), (1, LONG), "the APC dispatcher wrote over the stack");
+    let entry = |i: u32| [read(LOG_START + 12 * i), read(LOG_START + 12 * i + 4), read(LOG_START + 12 * i + 8)];
+    assert_eq!([entry(0), entry(1)], [[0x11, 0x12, 0x13], [0x21, 0x22, 0x23]], "the queued APCs, in order");
+    assert_eq!((read(KEPT), read(KEPT + 4)), (MAGIC, read(ESP_BEFORE)), "EBX or ESP lost across the APCs");
+    assert_eq!((status(TESTED), status(TESTED + 4)), (STATUS_SUCCESS, STATUS_SUCCESS), "NtTestAlert");
+    assert_eq!(entry(2), [0x31, 0x32, 0x33], "the APC of NtTestAlert");
+    assert_eq!(status(WOKEN), STATUS_USER_APC, "the kernel's APC did not end the wait");
+    assert_eq!(entry(3), [0x41, 0x42, 0x43], "the kernel's APC");
+    assert_eq!((status(STILL), status(STILL + 4)), (STATUS_SUCCESS, STATUS_SUCCESS), "the last APC, then a wait");
+    assert_eq!(read(AFTER), LOG_START + 4 * 12, "an APC ran in a non-alertable wait");
+
+    process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, NtStatus(0x600D)), "the process did not end");
+    ke::apc::set_user_apc_dispatcher(0);
+    ps::wait_for_reaper();
+    log::info!("[smoke] user APCs: queued, then run by alertable waits and NtTestAlert in a user-mode dispatcher");
+}
+
+/// The system DLL (`ps::system_dll`) and KUSER_SHARED_DATA (`mm::shared_data`,
+/// M3): with a synthetic ntdll installed, a new process maps it at its base,
+/// and its first thread enters LdrInitializeThunk through the APC dispatcher,
+/// with ntdll's base and the CONTEXT where ReactOS's stub looks for it, then
+/// reaches its entry point. It reads XP SP2's KUSER_SHARED_DATA at
+/// 0x7FFE0000 (version 5.1, system root, DEP policy, a running tick count,
+/// SystemCall on KiFastSystemCall on Intel, KiIntSystemCall elsewhere),
+/// cannot write to it (the exception reaches ntdll's dispatcher), and goes
+/// through SystemCall as ntdll's stubs do: a system service keeps EFLAGS
+/// (DF, IF), an APC queued to itself runs in an alertable wait and the wait
+/// returns STATUS_USER_APC with EBX and ESP kept, and ntdll's dispatchers
+/// resume with NtContinue. On Intel, all of these go through SYSENTER.
+fn system_dll_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INVALID_HANDLE, STATUS_SUCCESS, STATUS_USER_APC, STATUS_WAIT_0,
+    };
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use abi::services;
+    use abi::shared_data::KUSER_SHARED_DATA_VA;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const NTDLL: u32 = 0x7C90_0000;
+    const N_TEXT: u32 = NTDLL + 0x1000;
+    const N_DATA: u32 = NTDLL + 0x2000;
+    // ntdll's: what its NtContinue returned; LdrInitializeThunk's three
+    // arguments, then EIP and ESP of the CONTEXT above them; the exception's
+    // code and two parameters.
+    const N_FAILED: u32 = N_DATA;
+    const N_LDR: u32 = N_DATA + 0x04;
+    const N_EXCEPTION: u32 = N_DATA + 0x20;
+    // Its entry points, by offset in .text.
+    const APC: u32 = 0x000;
+    const LDR: u32 = 0x040;
+    const EXCEPTION: u32 = 0x0A0;
+    const INT_SYSTEM_CALL: u32 = 0x100;
+    const FAST_SYSTEM_CALL: u32 = 0x110;
+    const FAST_SYSTEM_CALL_RET: u32 = 0x114;
+    const RAISE: u32 = 0x118;
+    const CALLBACK: u32 = 0x11C;
+    const ZW_CONTINUE: u32 = 0x120;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const TEXT: u32 = IMAGE_BASE + 0x1000;
+    // The program's stubs, and its APC routine.
+    const ZW_CLOSE: u32 = TEXT + 0x180;
+    const ZW_QUEUE_APC_THREAD: u32 = TEXT + 0x190;
+    const ZW_DELAY_EXECUTION: u32 = TEXT + 0x1A0;
+    const ROUTINE: u32 = TEXT + 0x1C0;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    // The program's: eight KUSER_SHARED_DATA fields, then the write.
+    const SHARED: u32 = DATA; // major, minor, SystemCall, SystemCallReturn, root, multiplier, NX policy, ticks
+    const AFTER_WRITE: u32 = DATA + 0x20;
+    const CLOSED: u32 = DATA + 0x24;
+    const DONE: u32 = DATA + 0x28;
+    const GO: u32 = DATA + 0x2C;
+    // EFLAGS after a service with DF set; the APC queued, the alertable
+    // wait, ESP before it, EBX and ESP after it, what the routine received.
+    const FLAGS: u32 = DATA + 0x30;
+    const QUEUED: u32 = DATA + 0x34;
+    const DELAYED: u32 = DATA + 0x38;
+    const ESP_BEFORE: u32 = DATA + 0x3C;
+    const KEPT: u32 = DATA + 0x40;
+    const APC_LOG: u32 = DATA + 0x48;
+    // A LARGE_INTEGER: 5 s, relative.
+    const LONG: u32 = DATA + 0x58;
+    const MAGIC: u32 = 0x5C5C_0001;
+    let shared = |offset: u32| KUSER_SHARED_DATA_VA + offset;
+
+    /// `call target`, from code that starts at `origin`.
+    fn call_to(code: &mut Code, origin: u32, target: u32) {
+        let at = origin + code.0.len() as u32;
+        code.word(&[0xE8], target.wrapping_sub(at + 5));
+    }
+    /// An ntdll stub: the service in EAX, a call through
+    /// SharedUserData->SystemCall, then `ret` past its arguments.
+    fn stub(service: u32, arguments: u16) -> Code {
+        let mut code = Code::new();
+        code.word(&[0xB8], service)
+            .word(&[0xBA], KUSER_SHARED_DATA_VA + 0x300) // mov edx, &SystemCall
+            .bytes(&[0xFF, 0x12, 0xC2]) // call [edx]; ret …
+            .bytes(&(4 * arguments).to_le_bytes());
+        code
+    }
+
+    // ── ntdll ──
+    let mut text = [0xCC; 0x200];
+    let mut put = |at: u32, code: &Code| text[at as usize..at as usize + code.0.len()].copy_from_slice(&code.0);
+    // Like ReactOS's, it writes its SEH record past the CONTEXT first.
+    let mut apc = Code::new();
+    apc.word(&[0x8D, 0x84, 0x24], 16 + 0x2CC) // lea eax, [esp + 16 + CONTEXT]
+        .word(&[0xC7, 0x00], 0x5E5E_5E5E) // mov dword [eax], …
+        .bytes(&[0xC7, 0x40, 0x04])
+        .bytes(&0x5E5E_5E5Eu32.to_le_bytes()) // mov dword [eax + 4], …
+        .bytes(&[0x58, 0xFF, 0xD0]) // pop eax; call eax
+        .bytes(&[0x89, 0xE1, 0x6A, 0x01, 0x51]); // mov ecx, esp; push 1; push ecx
+    call_to(&mut apc, N_TEXT + APC, N_TEXT + ZW_CONTINUE);
+    apc.store_eax(N_FAILED).bytes(&[0xEB, 0xFE]);
+    put(APC, &apc);
+    let mut ldr = Code::new();
+    // mov eax, [esp + offset]; mov [N_LDR + 4i], eax: its arguments, then
+    // the CONTEXT's Eip and Esp, 16 bytes above the return address.
+    for (i, offset) in [4u32, 8, 12, 16 + 0xB8, 16 + 0xC4].into_iter().enumerate() {
+        ldr.word(&[0x8B, 0x84, 0x24], offset).word(&[0xA3], N_LDR + 4 * i as u32);
+    }
+    ldr.bytes(&[0xC2, 12, 0]); // ret 12
+    put(LDR, &ldr);
+    let mut exception = Code::new();
+    exception
+        .bytes(&[0x8B, 0x1C, 0x24, 0x8B, 0x74, 0x24, 0x04]) // mov ebx, [esp]; mov esi, [esp + 4]
+        .bytes(&[0x8B, 0x03]) // mov eax, [ebx]: the code
+        .store_eax(N_EXCEPTION)
+        .bytes(&[0x8B, 0x43, 0x14]) // mov eax, [ebx + 0x14]
+        .store_eax(N_EXCEPTION + 4)
+        .bytes(&[0x8B, 0x43, 0x18]) // mov eax, [ebx + 0x18]
+        .store_eax(N_EXCEPTION + 8)
+        .word(&[0x83, 0x86], 0xB8) // add dword [esi + Eip], 5: past the write
+        .bytes(&[5])
+        .bytes(&[0x6A, 0x00, 0x56]); // push 0; push esi
+    call_to(&mut exception, N_TEXT + EXCEPTION, N_TEXT + ZW_CONTINUE);
+    exception.store_eax(N_FAILED).bytes(&[0xEB, 0xFE]);
+    put(EXCEPTION, &exception);
+    put(ZW_CONTINUE, &stub(services::NtContinue, 2));
+    let mut int_system_call = Code::new();
+    int_system_call.bytes(&[0x8D, 0x54, 0x24, 0x08, 0xCD, 0x2E, 0xC3]); // lea edx, [esp + 8]; int 2Eh; ret
+    put(INT_SYSTEM_CALL, &int_system_call);
+    let mut fast_system_call = Code::new();
+    fast_system_call.bytes(&[0x89, 0xE2, 0x0F, 0x34]); // mov edx, esp; sysenter
+    put(FAST_SYSTEM_CALL, &fast_system_call);
+    let mut ret = Code::new();
+    ret.bytes(&[0xC3]);
+    put(FAST_SYSTEM_CALL_RET, &ret);
+    let at = |offset: u32| N_TEXT - NTDLL + offset;
+    let ntdll = Pe32Builder::new(NTDLL)
+        .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x40, &[0u8; 0x40], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .exports(
+            "ntdll.dll",
+            &[
+                ("KiUserApcDispatcher", at(APC)),
+                ("LdrInitializeThunk", at(LDR)),
+                ("KiUserExceptionDispatcher", at(EXCEPTION)),
+                ("KiIntSystemCall", at(INT_SYSTEM_CALL)),
+                ("KiFastSystemCall", at(FAST_SYSTEM_CALL)),
+                ("KiFastSystemCallRet", at(FAST_SYSTEM_CALL_RET)),
+                ("KiRaiseUserExceptionDispatcher", at(RAISE)),
+                ("KiUserCallbackDispatcher", at(CALLBACK)),
+            ],
+        )
+        .build();
+    let dll = ps::system_dll::SystemDll::new(Arc::from(ntdll)).expect("the synthetic ntdll");
+    assert_eq!(dll.int_system_call, N_TEXT + INT_SYSTEM_CALL);
+    ps::system_dll::install(Some(dll));
+
+    // ── the program ──
+    let mut code = Code::new();
+    for (i, offset) in [0x26C, 0x270, 0x300, 0x304, 0x030, 0x004].into_iter().enumerate() {
+        code.word(&[0xA1], shared(offset)).store_eax(SHARED + 4 * i as u32); // mov eax, [0x7FFExxxx]
+    }
+    code.word(&[0x0F, 0xB6, 0x05], shared(0x2D5)) // movzx eax, byte [NXSupportPolicy]
+        .store_eax(SHARED + 0x18)
+        .word(&[0xA1], shared(0x320)) // TickCount
+        .store_eax(SHARED + 0x1C)
+        .word(&[0xA3], KUSER_SHARED_DATA_VA) // mov [0x7FFE0000], eax: read-only
+        .word(&[0xC7, 0x05], AFTER_WRITE)
+        .bytes(&1u32.to_le_bytes())
+        // NtClose(0x1234) with DF set, then EFLAGS.
+        .bytes(&[0xFD]) // std
+        .word(&[0x68], 0x1234);
+    call_to(&mut code, TEXT, ZW_CLOSE);
+    code.store_eax(CLOSED)
+        .bytes(&[0x9C, 0x58, 0xFC]) // pushfd; pop eax; cld
+        .store_eax(FLAGS)
+        .word(&[0xBB], MAGIC); // mov ebx, MAGIC
+                               // NtQueueApcThread(NtCurrentThread(), ROUTINE, 0x11, 0x22, 0x33).
+    for argument in [0x33, 0x22, 0x11, ROUTINE, NT_CURRENT_THREAD] {
+        code.word(&[0x68], argument);
+    }
+    call_to(&mut code, TEXT, ZW_QUEUE_APC_THREAD);
+    code.store_eax(QUEUED)
+        .word(&[0x89, 0x25], ESP_BEFORE) // mov [ESP_BEFORE], esp
+        .word(&[0x68], LONG)
+        .bytes(&[0x6A, 0x01]); // NtDelayExecution(TRUE, LONG)
+    call_to(&mut code, TEXT, ZW_DELAY_EXECUTION);
+    code.store_eax(DELAYED)
+        .word(&[0x89, 0x1D], KEPT) // mov [KEPT], ebx
+        .word(&[0x89, 0x25], KEPT + 4) // mov [KEPT + 4], esp
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .word(&[0x83, 0x3D], GO) // cmp dword [GO], 0
+        .bytes(&[0x00, 0x74, 0xF7]) // je back to the cmp
+        .call(services::NtTerminateProcess, &[NT_CURRENT_PROCESS, 0x600D])
+        .bytes(&[0xEB, 0xFE]);
+    assert!(code.0.len() <= 0x180, "the test program outgrew its slot");
+    // The routine, stdcall (context, argument1, argument2): logs them.
+    let mut routine = Code::new();
+    for i in 0..3u8 {
+        routine.bytes(&[0x8B, 0x44, 0x24, 4 + 4 * i]).store_eax(APC_LOG + 4 * u32::from(i));
+        // mov eax, [esp + 4 + 4i]
+    }
+    routine.bytes(&[0xC2, 12, 0]); // ret 12
+    let mut text = [0xCC; 0x200];
+    let mut put = |at: u32, code: &Code| {
+        let at = (at - TEXT) as usize;
+        text[at..at + code.0.len()].copy_from_slice(&code.0);
+    };
+    put(TEXT, &code);
+    put(ZW_CLOSE, &stub(services::NtClose, 1));
+    put(ZW_QUEUE_APC_THREAD, &stub(services::NtQueueApcThread, 5));
+    put(ZW_DELAY_EXECUTION, &stub(services::NtDelayExecution, 2));
+    put(ROUTINE, &routine);
+    let mut data = [0u8; 0x60];
+    data[0x58..0x60].copy_from_slice(&(-5000 * MS).to_le_bytes());
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x60, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "native.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let _thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the native program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    assert_eq!(read(N_FAILED), 0, "NtContinue failed in ntdll");
+    let ldr: [u32; 5] = core::array::from_fn(|i| read(N_LDR + 4 * i as u32));
+    assert_eq!(ldr, [0, NTDLL, 0, TEXT, stack.stack_base], "LdrInitializeThunk's arguments and CONTEXT");
+    let fields: [u32; 8] = core::array::from_fn(|i| read(SHARED + 4 * i as u32));
+    assert_eq!(&fields[..2], &[5, 1], "NtMajorVersion, NtMinorVersion");
+    // ADR-004: SYSENTER on Intel, int 2Eh elsewhere.
+    let system_call = if hal::cpuid::is_intel() { FAST_SYSTEM_CALL } else { INT_SYSTEM_CALL };
+    assert_eq!(
+        (fields[2], fields[3]),
+        (N_TEXT + system_call, N_TEXT + FAST_SYSTEM_CALL_RET),
+        "SystemCall, SystemCallReturn"
+    );
+    assert_eq!(fields[4], u32::from(b'C') | u32::from(b':') << 16, "NtSystemRoot");
+    assert_eq!((fields[5], fields[6]), (1 << 24, 2), "TickCountMultiplier, NXSupportPolicy (OptIn)");
+    assert_ne!(fields[7], 0, "the clock does not update TickCount");
+    let exception: [u32; 3] = core::array::from_fn(|i| read(N_EXCEPTION + 4 * i as u32));
+    assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, KUSER_SHARED_DATA_VA], "a write to KUSER_SHARED_DATA");
+    assert_eq!(read(AFTER_WRITE), 1, "ntdll's dispatcher did not resume the program");
+    assert_eq!(NtStatus(read(CLOSED)), STATUS_INVALID_HANDLE, "NtClose through SystemCall");
+    assert_eq!(read(FLAGS) & 0x600, 0x600, "a system service lost DF, or came back with interrupts masked");
+    assert_eq!(NtStatus(read(QUEUED)), STATUS_SUCCESS, "NtQueueApcThread through SystemCall");
+    let log: [u32; 3] = core::array::from_fn(|i| read(APC_LOG + 4 * i as u32));
+    assert_eq!(log, [0x11, 0x22, 0x33], "the APC did not run with its arguments");
+    assert_eq!(NtStatus(read(DELAYED)), STATUS_USER_APC, "the alertable wait, back from its APC");
+    assert_eq!((read(KEPT), read(KEPT + 4)), (MAGIC, read(ESP_BEFORE)), "EBX or ESP lost across the APC");
+
+    process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, NtStatus(0x600D)), "the process did not end");
+    ps::system_dll::install(None);
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] ntdll: mapped at its base, threads start in LdrInitializeThunk, KUSER_SHARED_DATA read-only, \
+         system calls through SystemCall ({})",
+        if hal::cpuid::is_intel() { "SYSENTER" } else { "int 2Eh" }
     );
 }
 

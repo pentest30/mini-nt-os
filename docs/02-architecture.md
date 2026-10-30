@@ -244,9 +244,9 @@ Chaque composant est une crate dont l'API publique est minimale. Les dépendance
 | `2Eh` | 3 | `KiSystemService`, appel système de repli |
 | `SYSENTER` | — | Appel système rapide, **sur Intel uniquement** |
 
-Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le noyau branche un handler par vecteur (`kernel/ntoskrnl/src/sys/gates.rs`). Tant que `KeUserModeCallback` n'existe pas, `2Bh` rend `STATUS_NO_CALLBACK_ACTIVE`. `2Ch` lève `STATUS_ASSERTION_FAILURE` à l'adresse de l'instruction (§6.5). `2Dh` saute l'`int 3` qui la suit dans `ntdll`.
+Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le noyau branche un handler par vecteur (`kernel/ntoskrnl/src/sys/gates.rs`). Tant que `KeUserModeCallback` n'existe pas, `2Bh` rend `STATUS_NO_CALLBACK_ACTIVE`. `2Ch` lève `STATUS_ASSERTION_FAILURE` à l'adresse de l'instruction (§6.5). `2Dh` saute l'`int 3` qui la suit dans `ntdll`. SYSENTER empile la même trame, sous un pseudo-vecteur (`hal::trap::SYSENTER`) : sélecteurs du mode utilisateur, ESP pris dans EDX, EFLAGS de l'utilisateur avec IF, et un EIP que le noyau fixe. Un thread de Ps suit l'ABI d'XP : arguments en EDX + 8, retour par `ntdll!KiFastSystemCallRet` (`SharedUserData->SystemCallReturn`). Les services qui changent la trame (`NtContinue`, `NtRaiseException`) et la livraison des APC passent donc par SYSENTER comme par `int 2Eh`. L'ancien chargeur garde son ABI : arguments en EDX + 4, retour par le `ret` de son `KUSER_SHARED_DATA`.
 
-**Sélection du chemin rapide (ADR-004)** : SYSENTER n'existe pas en long mode sur AMD, et SYSCALL depuis le mode compatibilité n'existe pas sur Intel ([OSDev](https://wiki.osdev.org/SYSENTER), commentaires de `arch/x86/entry/entry_64_compat.S` dans Linux). Le noyau lit donc CPUID au démarrage et écrit dans `SharedUserData->SystemCall` (offset `0x300`) l'adresse de `ntdll!KiFastSystemCall` sur Intel, ou celle de `ntdll!KiIntSystemCall` (`int 2Eh`) sur les autres processeurs. C'est le mécanisme qu'utilisait XP SP2, et les stubs de `ntdll` passent par ce pointeur.
+**Sélection du chemin rapide (ADR-004)** : SYSENTER n'existe pas en long mode sur AMD, et SYSCALL depuis le mode compatibilité n'existe pas sur Intel ([OSDev](https://wiki.osdev.org/SYSENTER), commentaires de `arch/x86/entry/entry_64_compat.S` dans Linux). Le noyau lit donc CPUID au démarrage et écrit dans `SharedUserData->SystemCall` (offset `0x300`) l'adresse de `ntdll!KiFastSystemCall` sur Intel, ou celle de `ntdll!KiIntSystemCall` (`int 2Eh`) sur les autres processeurs. C'est le mécanisme qu'utilisait XP SP2, et les stubs de `ntdll` passent par ce pointeur (`ps::system_dll`).
 
 ### 6.2 Tables de services
 
@@ -280,6 +280,14 @@ Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le no
 | Callback de win32k | `KiUserCallbackDispatcher(index, args, len)` |
 | Démarrage d'un thread | `LdrInitializeThunk` (contexte initial pointant vers `BaseProcessStartThunk` ou `BaseThreadStartThunk`) |
 
+**ntdll et `KUSER_SHARED_DATA`** (`ps::system_dll`, `mm::shared_data`, `kernel/ntoskrnl/src/shared_data.rs`) :
+
+- **`KUSER_SHARED_DATA`** (`abi::shared_data`, disposition d'XP SP2) : une page que le noyau remplit au démarrage, avec la version 5.1, la racine `C:\WINDOWS`, les fonctions du processeur, les pages physiques, la politique DEP et le cookie. L'horloge y écrit ses temps par l'alias du noyau. Chaque processus la projette en lecture seule en `0x7FFE0000`.
+- **DLL système** : le noyau résout les points d'entrée de `ntdll` à son installation : les répartiteurs, `LdrInitializeThunk`, `KiFastSystemCall` ou `KiIntSystemCall` selon le processeur, et `KiFastSystemCallRet` (`SystemCall`, `SystemCallReturn`). Une entrée manquante rend `STATUS_PROCEDURE_NOT_FOUND`. Chaque processus créé ensuite projette `ntdll` à sa base.
+- **Démarrage d'un thread** : comme `PspUserThreadStartup`, le noyau met sur la pile du thread son contexte initial, puis l'APC utilisateur `LdrInitializeThunk(NULL, base de ntdll, NULL)`. Le thread entre dans `KiUserApcDispatcher`, qui reprend le contexte par `NtContinue`.
+- **Réserve** : sous chaque `CONTEXT` d'APC, le noyau laisse 8 octets sous l'ESP interrompu. Le `KiUserApcDispatcher` de ReactOS y écrit son enregistrement SEH.
+- **Pas encore** : le fichier `ntdll.dll` lui-même (`cargo xtask fetch-userland`), puis son installation au démarrage.
+
 **Exceptions** (`ke::exception`, `kernel/ntoskrnl/src/sys/exceptions.rs`) :
 
 - **Entrée** : #DE, #BP, #UD, #GP et #PF venus du mode utilisateur empilent la trame de trap (`hal::trap`) ; venus du noyau, ils gardent leurs handlers (`hal::idt`).
@@ -295,6 +303,14 @@ Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le no
   - les exceptions flottantes, qui terminent le processus ;
   - #DB, #OF, #BR, #NP, #SS et #AC en mode utilisateur ;
   - `STATUS_INTEGER_OVERFLOW` pour un quotient trop grand.
+
+**APC utilisateur** (`ke::apc`, `kernel/ntoskrnl/src/sys/apc.rs`) :
+
+- **File** : un APC utilisateur (NtQueueApcThread) attend que son thread fasse une attente alertable en mode utilisateur, ou appelle NtTestAlert. Une telle attente rend `STATUS_USER_APC`, aussitôt si un APC est en file, sinon à son insertion. Une attente non alertable le laisse en file.
+- **Livraison** : au retour en mode utilisateur par la trame de trap (`hal::trap::set_user_return_hook`), sa routine noyau s'exécute à `APC_LEVEL`. Le noyau met sur la pile le `CONTEXT`, puis la routine, son contexte et ses deux arguments, et le thread reprend dans `KiUserApcDispatcher`. Celui-ci appelle la routine puis `NtContinue(context, TRUE)`, dont le test d'alerte livre l'APC suivant.
+- **Pas encore** :
+  - les alertes (NtAlertThread, `STATUS_ALERTED`) ;
+  - les attentes sur objets (`NtWaitForSingleObject`…).
 
 ---
 

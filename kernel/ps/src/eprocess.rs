@@ -122,6 +122,19 @@ impl DepPolicy {
     }
 }
 
+impl DepPolicy {
+    /// Sa valeur dans `KUSER_SHARED_DATA.NXSupportPolicy`.
+    pub const fn nx_support_policy(self) -> u8 {
+        use abi::shared_data::*;
+        match self {
+            Self::OptIn => NX_SUPPORT_POLICY_OPTIN,
+            Self::OptOut => NX_SUPPORT_POLICY_OPTOUT,
+            Self::AlwaysOn => NX_SUPPORT_POLICY_ALWAYSON,
+            Self::AlwaysOff => NX_SUPPORT_POLICY_ALWAYSOFF,
+        }
+    }
+}
+
 /// La politique DEP en vigueur. Une option de démarrage la choisira.
 pub const DEP_POLICY: DepPolicy = DepPolicy::OptIn;
 
@@ -439,7 +452,9 @@ pub fn create_process(
     )
 }
 
-/// Projette l'image et écrit le PEB dans `space` ; rend la base de l'image.
+/// Projette l'image, `KUSER_SHARED_DATA` et la DLL système (à sa base, sinon
+/// `STATUS_CONFLICTING_ADDRESSES`), et écrit le PEB dans `space` ; rend la
+/// base de l'image.
 fn build_address_space(
     space: &AddressSpace,
     section: &Arc<Section>,
@@ -447,6 +462,10 @@ fn build_address_space(
 ) -> Result<u32, NtStatus> {
     let view = space.map_view(section, 0, 0, 0, PageProtect::READWRITE)?;
     let image_base = view.base as u32;
+    space.map_shared_data()?;
+    if let Some(dll) = crate::system_dll::current() {
+        space.map_view(dll.section(), u64::from(dll.base), 0, 0, PageProtect::READWRITE)?;
+    }
     let page = u64::from(PEB_VA);
     space.allocate(page, PAGE_SIZE, AllocType::MEM_RESERVE | AllocType::MEM_COMMIT, PageProtect::READWRITE)?;
     let mut peb = Peb32::xp(image_base);
@@ -482,6 +501,14 @@ mod tests {
         assert_eq!(DepPolicy::OptOut.initial_options(), DISABLE);
         assert_eq!(DepPolicy::AlwaysOn.initial_options(), DISABLE | PERMANENT);
         assert_eq!(DepPolicy::AlwaysOff.initial_options(), ENABLE | PERMANENT);
+    }
+
+    #[test]
+    fn each_policy_shows_in_shared_user_data() {
+        assert_eq!(DepPolicy::OptIn.nx_support_policy(), 2, "NX_SUPPORT_POLICY_OPTIN");
+        assert_eq!(DepPolicy::OptOut.nx_support_policy(), 3);
+        assert_eq!(DepPolicy::AlwaysOn.nx_support_policy(), 1);
+        assert_eq!(DepPolicy::AlwaysOff.nx_support_policy(), 0);
     }
 
     #[test]

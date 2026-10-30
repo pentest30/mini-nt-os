@@ -107,9 +107,19 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   #DE, #BP, #UD, #GP, #PF et `int 2Ch` passent par la trame de trap ; KiDispatchException met `CONTEXT` et
   `EXCEPTION_RECORD` sur la pile du thread, qui reprend dans le répartiteur de ntdll (`set_user_exception_dispatcher` ;
   sans répartiteur, le processus se termine avec le code) ; NtContinue, NtRaiseException (seconde chance : fin du
-  processus). Les services qui changent la trame (`Handler::Frame`) rendent `STATUS_NOT_IMPLEMENTED` par SYSENTER.
-  À venir : APC utilisateur, SYSENTER pour Ps (retour par ntdll), SWAPGS, ntdll projeté et `KUSER_SHARED_DATA`,
-  `fetch-userland`.
+  processus). Les services qui changent la trame (`Handler::Frame`) reçoivent la trame de trap.
+  APC utilisateur faits (`ke::apc`, `sys::apc`) : routine normale du mode utilisateur (`NormalRoutine::User`),
+  livrables après une attente alertable ou un test d'alerte (NtTestAlert, TestAlert de NtContinue), livrés au retour
+  par la trame de trap (`hal::trap::set_user_return_hook`) au répartiteur de ntdll (`set_user_apc_dispatcher`) ;
+  NtQueueApcThread, NtDelayExecution. `KUSER_SHARED_DATA` fait (`abi::shared_data`, `mm::shared_data`) : une page
+  remplie au démarrage (version 5.1, racine, fonctions du processeur, DEP), mise à jour par l'horloge, en lecture seule
+  en `0x7FFE0000` dans chaque processus. DLL système faite (`ps::system_dll`) : points d'entrée de ntdll résolus à son
+  installation, ntdll projetée à sa base dans chaque processus, threads démarrés par `LdrInitializeThunk` (APC
+  utilisateur, 8 octets réservés sous le `CONTEXT` pour l'enregistrement SEH du répartiteur de ReactOS) ; `SystemCall`
+  désigne `KiFastSystemCall` sur Intel, `KiIntSystemCall` ailleurs (ADR-004). SYSENTER fait pour Ps : la même trame
+  de trap que `int 2Eh` (pseudo-vecteur `hal::trap::SYSENTER`, EFLAGS de l'utilisateur gardés), ABI d'XP (arguments
+  en EDX + 8, retour par `KiFastSystemCallRet`) ; l'ancien chargeur garde la sienne (EDX + 4, `ret` en `0x7FFE0300`).
+  À venir : SWAPGS, `fetch-userland` (le fichier ntdll.dll, puis son installation au démarrage).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

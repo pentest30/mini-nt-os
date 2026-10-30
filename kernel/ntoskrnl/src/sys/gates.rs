@@ -8,9 +8,10 @@
 //! | `int 2Ch` | KiRaiseAssertion : l'exception `STATUS_ASSERTION_FAILURE`, à l'adresse de l'`int 2Ch` ([`super::exceptions`]) |
 //! | `int 2Dh` | KiDebugService : `DbgPrint` vers le port série |
 //! | `int 2Eh` | KiSystemService ([`super::dispatch`]) |
+//! | SYSENTER | KiFastCallEntry, vers le même KiSystemService |
 
 use abi::ntstatus::{STATUS_ASSERTION_FAILURE, STATUS_NO_CALLBACK_ACTIVE, STATUS_SUCCESS};
-use hal::trap::{set_trap_hook, KTrapFrame};
+use hal::trap::{set_trap_hook, KTrapFrame, SYSENTER};
 
 /// Le service de débogage qui affiche une chaîne (BREAKPOINT_PRINT).
 const BREAKPOINT_PRINT: u32 = 1;
@@ -28,6 +29,7 @@ pub fn install() {
     set_trap_hook(0x2C, Some(raise_assertion));
     set_trap_hook(0x2D, Some(debug_service));
     set_trap_hook(0x2E, Some(system_service));
+    set_trap_hook(SYSENTER, Some(fast_system_service));
 }
 
 /// `int 2Ah` : GetTickCount, en millisecondes (sur 32 bits, qui bouclent).
@@ -76,17 +78,59 @@ fn print(buffer: u32, length: u32) {
     log::info!("DbgPrint {pid}.{tid}: {}", text.trim_end_matches('\n'));
 }
 
-/// `int 2Eh` : un thread de Ps va à KiSystemService, interruptions actives ;
-/// un thread de l'ancien chargeur à son dispatcher (`syscall`), qui a ses
-/// propres numéros.
+/// `int 2Eh` : EAX donne le service, EDX l'adresse de ses arguments. Un
+/// thread de Ps va à KiSystemService ; un thread de l'ancien chargeur à son
+/// dispatcher (`syscall`), qui a ses propres numéros.
 fn system_service(frame: &mut KTrapFrame) {
     let (number, arguments) = (frame.rax as u32, frame.rdx as u32);
     if ke::sched::current_thread_owner().is_null() {
         frame.rax = u64::from(crate::syscall::dispatch(number, arguments));
         return;
     }
+    service(frame, number, arguments);
+}
+
+/// L'adresse où un thread de l'ancien chargeur revient de SYSENTER : le
+/// `ret` de son KUSER_SHARED_DATA, dans l'espace du système.
+const LEGACY_SYSTEM_CALL_RETURN: u32 = ps::loader::SHARED_USER_DATA32_VA + 0x300;
+
+/// SYSENTER : EAX donne le service, EDX la pile utilisateur au `sysenter`, et
+/// la trame attend son EIP de retour.
+///
+/// - Un thread de Ps suit l'ABI d'XP : sur sa pile, le retour dans le stub de
+///   ntdll, celui de l'appelant du stub, puis les arguments (EDX + 8). Il
+///   revient par `ntdll!KiFastSystemCallRet`
+///   (`SharedUserData->SystemCallReturn`), avec ESP en EDX : son `ret` rend
+///   la main au stub.
+/// - Un thread de l'ancien chargeur a ses arguments en EDX + 4 et revient par
+///   [`LEGACY_SYSTEM_CALL_RETURN`].
+fn fast_system_service(frame: &mut KTrapFrame) {
+    let (number, stack) = (frame.rax as u32, frame.rdx as u32);
+    if ke::sched::current_thread_owner().is_null() {
+        frame.rip = u64::from(LEGACY_SYSTEM_CALL_RETURN);
+        frame.rax = u64::from(crate::syscall::dispatch(number, stack.wrapping_add(4)));
+        return;
+    }
+    frame.rip = u64::from(system_call_return());
+    service(frame, number, stack.wrapping_add(8));
+}
+
+/// `SharedUserData->SystemCallReturn` : `ntdll!KiFastSystemCallRet`, ou 0
+/// sans DLL système (le thread faute alors en 0, et son exception le suit).
+fn system_call_return() -> u32 {
+    mm::shared_data::kernel_alias().map_or(0, |shared| {
+        // SAFETY: the kernel alias of the shared page, mapped for good; the
+        // kernel writes this word whole.
+        unsafe { core::ptr::addr_of!((*shared).system_call_return).read_volatile() }
+    })
+}
+
+/// KiSystemService pour un thread de Ps, interruptions actives : le statut
+/// dans EAX, sauf pour un service qui a mis dans la trame le nouveau
+/// contexte du thread.
+fn service(frame: &mut KTrapFrame, number: u32, arguments: u32) {
     x86_64::instructions::interrupts::enable();
-    if let super::Completion::Status(status) = super::dispatch(number, arguments, Some(&mut *frame)) {
+    if let super::Completion::Status(status) = super::dispatch(number, arguments, frame) {
         frame.rax = u64::from(status.0);
     }
     x86_64::instructions::interrupts::disable();

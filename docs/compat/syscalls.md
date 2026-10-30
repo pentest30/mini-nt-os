@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 6 | 296 |
+| ntoskrnl | 9 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -76,7 +76,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x003a` | `NtCreateWaitablePort` | 5 |  |
 | `0x003b` | `NtDebugActiveProcess` | 2 |  |
 | `0x003c` | `NtDebugContinue` | 3 |  |
-| `0x003d` | `NtDelayExecution` | 2 |  |
+| `0x003d` | `NtDelayExecution` | 2 | ✅ |
 | `0x003e` | `NtDeleteAtom` | 1 |  |
 | `0x003f` | `NtDeleteBootEntry` | 1 |  |
 | `0x0040` | `NtDeleteDriverEntry` | 1 |  |
@@ -203,7 +203,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00b9` | `NtQueryValueKey` | 6 |  |
 | `0x00ba` | `NtQueryVirtualMemory` | 6 |  |
 | `0x00bb` | `NtQueryVolumeInformationFile` | 5 |  |
-| `0x00bc` | `NtQueueApcThread` | 5 |  |
+| `0x00bc` | `NtQueueApcThread` | 5 | ✅ |
 | `0x00bd` | `NtRaiseException` | 3 | ✅ |
 | `0x00be` | `NtRaiseHardError` | 6 |  |
 | `0x00bf` | `NtReadFile` | 9 |  |
@@ -283,7 +283,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0109` | `NtTerminateJobObject` | 2 |  |
 | `0x010a` | `NtTerminateProcess` | 2 | ✅ |
 | `0x010b` | `NtTerminateThread` | 2 |  |
-| `0x010c` | `NtTestAlert` | 0 |  |
+| `0x010c` | `NtTestAlert` | 0 | ✅ |
 | `0x010d` | `NtTraceEvent` | 4 |  |
 | `0x010e` | `NtTranslateFilePath` | 4 |  |
 | `0x010f` | `NtUnloadDriver` | 1 |  |

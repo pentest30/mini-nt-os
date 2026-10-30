@@ -80,7 +80,11 @@ static TICK_INTERVAL_100NS: AtomicU64 = AtomicU64::new(TICK_INTERVAL_MS * 10_000
 /// Zero means the timer has not been calibrated yet.
 static APIC_TICKS_PER_MS: AtomicU64 = AtomicU64::new(0);
 
+/// The legacy loader's KUSER_SHARED_DATA, in the system address space.
 static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
+/// The kernel alias of KUSER_SHARED_DATA (`mm::shared_data`), which every Ps
+/// process maps; 0 until set.
+static SHARED_DATA_ALIAS: AtomicU64 = AtomicU64::new(0);
 
 /// Ke's clock interrupt handler: `fn()` stored as `usize`, 0 until registered.
 static CLOCK_HOOK: AtomicUsize = AtomicUsize::new(0);
@@ -220,46 +224,43 @@ pub unsafe fn init() {
 ///
 /// # IRQL: CLOCK_LEVEL (hardware interrupt context)
 #[inline]
-#[expect(clippy::identity_op, reason = "KUSER_SHARED_DATA fields are written at their offsets, 0x000 included")]
 pub fn tick() {
     let interval = TICK_INTERVAL_100NS.load(Ordering::Relaxed);
     let interrupt_time_100ns = INTERRUPT_TIME.fetch_add(interval, Ordering::Relaxed).wrapping_add(interval);
-    let sud = SHARED_USER_DATA_VA.load(Ordering::Relaxed);
-    if sud != 0 {
-        let tick_ms = interrupt_time_100ns / 10_000;
-
-        // KSYSTEM_TIME split: LowPart (u32), High1Time (u32), High2Time (u32).
-        // High2Time == High1Time is the XP torn-read safety contract.
-        let it_lo = interrupt_time_100ns as u32;
-        let it_hi = (interrupt_time_100ns >> 32) as u32;
-        let tc_lo = tick_ms as u32;
-        let tc_hi = (tick_ms >> 32) as u32;
-
-        // SAFETY: SHARED_USER_DATA_VA points to a mapped, writable page; single-CPU ISR.
-        unsafe {
-            // TickCountLowDeprecated at 0x000 — legacy; kept for very old code.
-            core::ptr::write_volatile((sud + 0x000) as *mut u32, tc_lo);
-
-            // InterruptTime at 0x008 (KSYSTEM_TIME: LowPart / High1Time / High2Time).
-            core::ptr::write_volatile((sud + 0x008) as *mut u32, it_lo);
-            core::ptr::write_volatile((sud + 0x00C) as *mut u32, it_hi);
-            core::ptr::write_volatile((sud + 0x010) as *mut u32, it_hi); // High2Time
-
-            // SystemTime at 0x014 — use InterruptTime value (no absolute epoch for now).
-            core::ptr::write_volatile((sud + 0x014) as *mut u32, it_lo);
-            core::ptr::write_volatile((sud + 0x018) as *mut u32, it_hi);
-            core::ptr::write_volatile((sud + 0x01C) as *mut u32, it_hi); // High2Time
-
-            // TickCount at 0x320 (union: KSYSTEM_TIME / ULONGLONG TickCountQuad).
-            // GetTickCount() = (TickCountQuad * TickCountMultiplier[0x004]) >> 24.
-            // With multiplier=0x0100_0000 that simplifies to TickCountQuad directly.
-            core::ptr::write_volatile((sud + 0x320) as *mut u32, tc_lo); // LowPart
-            core::ptr::write_volatile((sud + 0x324) as *mut u32, tc_hi); // High1Time
-            core::ptr::write_volatile((sud + 0x328) as *mut u32, tc_hi); // High2Time
+    for target in [&SHARED_USER_DATA_VA, &SHARED_DATA_ALIAS] {
+        let sud = target.load(Ordering::Relaxed);
+        if sud != 0 {
+            // SAFETY: each target is a mapped, writable KUSER_SHARED_DATA
+            // page (its setter's contract).
+            unsafe { write_times(sud, interrupt_time_100ns) };
         }
     }
-    // TODO Phase 2: invoke Ke scheduler tick callback once ISR hook path
-    // is fully validated on hardware/QEMU.
+}
+
+/// Writes the times of the KUSER_SHARED_DATA page at `sud`: InterruptTime
+/// (0x008), SystemTime (0x014, the interrupt time until the kernel keeps an
+/// absolute time), TickCount in milliseconds (0x320, `TickCountMultiplier`
+/// 1 << 24) and its deprecated low part (0x000). Each KSYSTEM_TIME is
+/// written High2Time, LowPart, then High1Time: a lock-free reader retries
+/// until High1Time equals High2Time.
+///
+/// # Safety
+/// `sud` is a mapped, writable KUSER_SHARED_DATA page.
+unsafe fn write_times(sud: u64, interrupt_time_100ns: u64) {
+    let tick_ms = interrupt_time_100ns / 10_000;
+    let write_time = |offset: u64, value: u64| {
+        // SAFETY: `offset` + 12 lies in the page (guaranteed by the caller).
+        unsafe {
+            core::ptr::write_volatile((sud + offset + 8) as *mut u32, (value >> 32) as u32);
+            core::ptr::write_volatile((sud + offset) as *mut u32, value as u32);
+            core::ptr::write_volatile((sud + offset + 4) as *mut u32, (value >> 32) as u32);
+        }
+    };
+    // SAFETY: as above.
+    unsafe { core::ptr::write_volatile(sud as *mut u32, tick_ms as u32) };
+    write_time(0x008, interrupt_time_100ns);
+    write_time(0x014, interrupt_time_100ns);
+    write_time(0x320, tick_ms);
 }
 
 /// Return elapsed milliseconds since `init()` was called.
@@ -361,6 +362,18 @@ pub(crate) fn call_clock_hook() {
 
 pub fn set_shared_user_data_addr(addr: Option<u64>) {
     SHARED_USER_DATA_VA.store(addr.unwrap_or(0), Ordering::Release);
+}
+
+/// Sets the kernel alias of KUSER_SHARED_DATA, whose times every tick
+/// updates.
+///
+/// # Safety
+/// `alias` is a mapped, writable KUSER_SHARED_DATA page, for good.
+///
+/// # IRQL
+/// Any level.
+pub unsafe fn set_shared_data_alias(alias: u64) {
+    SHARED_DATA_ALIAS.store(alias, Ordering::Release);
 }
 
 // ── APIC MMIO helpers ─────────────────────────────────────────────────────────

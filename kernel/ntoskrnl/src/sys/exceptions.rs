@@ -131,11 +131,16 @@ fn page_fault(frame: &mut KTrapFrame) {
     raise(frame, status, &[access, address as u32]);
 }
 
-/// NtContinue(Context, TestAlert) : le thread reprend avec le contexte.
-/// TestAlert attend les APC utilisateur.
+/// NtContinue(Context, TestAlert) : le thread reprend avec le contexte ;
+/// avec TestAlert (`ntdll!KiUserApcDispatcher`), il recevra au retour ses APC
+/// utilisateur encore en file.
 pub(super) fn nt_continue(arguments: &[u32], frame: &mut KTrapFrame) -> Result<(), NtStatus> {
     let context = UserPtr::<Context32>::new(arguments[0]).read()?;
     apply_user_context(&context, context.context_flags, frame, UserSelectors::current());
+    // A BOOLEAN, in the low byte of its argument.
+    if arguments[1] as u8 != 0 {
+        ke::apc::ke_test_alert_thread::<ke::sched::KePlatform>();
+    }
     Ok(())
 }
 

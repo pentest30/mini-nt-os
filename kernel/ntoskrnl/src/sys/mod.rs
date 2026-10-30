@@ -1,38 +1,38 @@
 //! Les services système (02 §6.2) : KiSystemService pour les threads de Ps,
 //! sur les tables générées à partir de ReactOS (`abi::services`).
 //!
-//! Un appel système arrive par `int 2Eh` ([`gates`], sur la trame de trap)
-//! ou SYSENTER (`hal::sysenter`) avec le numéro du service dans EAX et
-//! l'adresse de ses arguments dans la pile utilisateur. [`dispatch`] trouve le service, copie
+//! Un appel système arrive par `int 2Eh` ou SYSENTER ([`gates`], sur la
+//! trame de trap) avec le numéro du service dans EAX et ses arguments dans
+//! la pile utilisateur. [`dispatch`] trouve le service, copie
 //! ses arguments (`ke::usermem`) et appelle son handler, interruptions
 //! actives, à PASSIVE_LEVEL : il peut attendre ou être préempté. Un numéro
 //! hors des tables rend `STATUS_INVALID_SYSTEM_SERVICE` ; un service sans
 //! handler, `STATUS_NOT_IMPLEMENTED`, journalisé à son premier appel.
 //!
 //! Un service peut aussi donner au thread un nouveau contexte, dans sa trame
-//! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException). SYSENTER n'a
-//! pas encore de trame (son retour passe par ntdll, M3) : ces services y
-//! rendent `STATUS_NOT_IMPLEMENTED`.
+//! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException).
 //!
 //! Les threads de l'ancien chargeur gardent leur dispatcher (`syscall.rs`),
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
+pub mod apc;
 pub mod exceptions;
 pub mod gates;
 mod memory;
 mod object;
 mod process;
+mod wait;
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMENTED};
-use abi::process::NT_CURRENT_PROCESS;
+use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
 use abi::service::{lookup, Table};
 use abi::services::{self, NTOSKRNL, WIN32K};
 use hal::trap::KTrapFrame;
 use ob::{AccessMask, Handle, Object};
-use ps::{EProcess, PROCESS_TYPE};
+use ps::{EProcess, EThread, PROCESS_TYPE, THREAD_TYPE};
 
 /// Le handler d'un service, qui reçoit ses arguments, un mot de 32 bits
 /// chacun.
@@ -61,9 +61,12 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
     (services::NtClose, Handler::Status(object::nt_close)),
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
+    (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
+    (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
 ];
 
 /// Au plus 63 arguments par service (`tools/syscall-gen`).
@@ -97,11 +100,11 @@ static REPORTED: [AtomicU32; (NTOSKRNL.len() + WIN32K.len()).div_ceil(32)] =
 
 /// KiSystemService : le service `number`, avec ses arguments copiés depuis
 /// l'adresse utilisateur `arguments` ; `frame` est la trame de trap du
-/// thread, s'il en a une.
+/// thread.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, interruptions actives, dans un thread de Ps.
-pub fn dispatch(number: u32, arguments: u32, frame: Option<&mut KTrapFrame>) -> Completion {
+pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completion {
     let Some((table, service)) = lookup(number) else {
         return Completion::Status(STATUS_INVALID_SYSTEM_SERVICE);
     };
@@ -120,14 +123,12 @@ pub fn dispatch(number: u32, arguments: u32, frame: Option<&mut KTrapFrame>) -> 
         Table::Win32k => None,
     };
     let arguments = &words[..count];
-    match (handler, frame) {
-        (Some(Handler::Status(handler)), _) => Completion::Status(handler(arguments)),
-        (Some(Handler::Frame(handler)), Some(frame)) => {
+    match handler {
+        Some(Handler::Status(handler)) => Completion::Status(handler(arguments)),
+        Some(Handler::Frame(handler)) => {
             handler(arguments, frame).map_or_else(Completion::Status, |()| Completion::Frame)
         }
-        // SYSENTER, without a trap frame.
-        (Some(Handler::Frame(_)), None) => Completion::Status(STATUS_NOT_IMPLEMENTED),
-        (None, _) => {
+        None => {
             let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
             let mask = 1 << (bit % 32);
             if REPORTED[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
@@ -151,4 +152,13 @@ fn reference_process(handle: u32, access: AccessMask) -> Result<Arc<Object<EProc
         return Ok(current);
     }
     current.handle_table.reference_as::<EProcess>(Handle(handle), &PROCESS_TYPE, access)
+}
+
+/// Le thread que désigne `handle` dans le processus courant, avec les droits
+/// `access` ; `NtCurrentThread()` désigne le thread courant.
+fn reference_thread(handle: u32, access: AccessMask) -> Result<Arc<Object<EThread>>, NtStatus> {
+    if handle == NT_CURRENT_THREAD {
+        return Ok(ps::ethread::current_thread().expect("a system service outside a Ps thread"));
+    }
+    current_process().handle_table.reference_as::<EThread>(Handle(handle), &THREAD_TYPE, access)
 }

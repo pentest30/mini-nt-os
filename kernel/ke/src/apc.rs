@@ -8,9 +8,14 @@
 //!   annuler la suite, puis sa routine normale à PASSIVE_LEVEL. Une région
 //!   critique ([`ke_enter_critical_region`]) le retient, comme la routine
 //!   normale d'un autre APC normal en cours.
-//! - APC utilisateur : mis en file ici, il défait une attente alertable en mode
-//!   utilisateur ; sa livraison au retour en mode utilisateur
-//!   (`ntdll!KiUserApcDispatcher`) vient au M3.
+//! - APC utilisateur : sa routine normale est une adresse du mode
+//!   utilisateur. Il défait une attente alertable en mode utilisateur, qui
+//!   rend STATUS_USER_APC. Le thread ne le reçoit qu'après une attente
+//!   alertable ou un test d'alerte ([`ke_test_alert_thread`]), au retour en
+//!   mode utilisateur ([`ki_deliver_user_apc`]) : sa routine noyau, à
+//!   APC_LEVEL, puis `ntdll!KiUserApcDispatcher`, qui appelle la routine
+//!   normale puis NtContinue avec le contexte interrompu, en testant l'alerte
+//!   pour livrer le suivant.
 //!
 //! Un APC noyau mis en file pour le thread courant se livre dès que l'IRQL
 //! passe sous APC_LEVEL (interruption APC de la HAL, [`ki_deliver_apc`]). Pour
@@ -28,8 +33,11 @@
 
 use core::ffi::c_void;
 use core::ptr;
+use core::sync::atomic::{AtomicU32, Ordering};
 
+use abi::ntstatus::NtStatus;
 use hal::irql::Irql;
+use hal::trap::KTrapFrame;
 
 use crate::dispatcher::{
     containing_record, ki_try_unwait_for_user_apc, ki_unwait_for_kernel_apc, KThread, ListEntry, Platform,
@@ -46,9 +54,18 @@ pub type KernelRoutine = fn(
     argument2: &mut *mut c_void,
 );
 
-/// Routine normale d'un APC : à PASSIVE_LEVEL pour un APC noyau, en mode
-/// utilisateur pour un APC utilisateur.
-pub type NormalRoutine = fn(normal_context: *mut c_void, argument1: *mut c_void, argument2: *mut c_void);
+/// Routine normale d'un APC noyau, à PASSIVE_LEVEL.
+pub type KernelNormalRoutine = fn(normal_context: *mut c_void, argument1: *mut c_void, argument2: *mut c_void);
+
+/// Routine normale d'un APC.
+#[derive(Clone, Copy, Debug)]
+pub enum NormalRoutine {
+    /// Une fonction du noyau, pour un APC noyau.
+    Kernel(KernelNormalRoutine),
+    /// L'adresse d'une routine du mode utilisateur, pour un APC utilisateur :
+    /// `routine(normal_context, argument1, argument2)`, en stdcall.
+    User(u32),
+}
 
 /// Routine appelée à la place de la routine noyau quand un APC ne peut plus
 /// être livré (son thread se termine).
@@ -72,6 +89,9 @@ pub struct KApc {
 impl KApc {
     /// KeInitializeApc : un APC pour `thread`. Sans routine normale, c'est un
     /// APC noyau spécial : `mode` et `normal_context` sont ignorés.
+    ///
+    /// # Panics
+    /// Si la routine normale n'est pas du mode de l'APC.
     pub const fn new(
         thread: *mut KThread,
         kernel_routine: KernelRoutine,
@@ -81,6 +101,15 @@ impl KApc {
         normal_context: *mut c_void,
     ) -> Self {
         let special = normal_routine.is_none();
+        assert!(
+            matches!(
+                (normal_routine, mode),
+                (None, _)
+                    | (Some(NormalRoutine::Kernel(_)), ProcessorMode::Kernel)
+                    | (Some(NormalRoutine::User(_)), ProcessorMode::User)
+            ),
+            "the normal routine of an APC runs in its mode"
+        );
         Self {
             apc_list_entry: ListEntry::new(),
             thread,
@@ -338,10 +367,14 @@ pub unsafe fn ki_deliver_apc<P: Platform>() {
         if special {
             continue;
         }
-        if let Some(normal) = normal {
-            P::lower_irql(Irql::Passive);
-            normal(context, argument1, argument2);
-            P::raise_irql(Irql::Apc);
+        match normal {
+            Some(NormalRoutine::Kernel(normal)) => {
+                P::lower_irql(Irql::Passive);
+                normal(context, argument1, argument2);
+                P::raise_irql(Irql::Apc);
+            }
+            Some(NormalRoutine::User(_)) => panic!("a kernel APC with a user-mode normal routine"),
+            None => {}
         }
         // SAFETY: comme plus haut.
         unsafe {
@@ -350,6 +383,150 @@ pub unsafe fn ki_deliver_apc<P: Platform>() {
             DISPATCHER_LOCK.release::<P>(old_irql);
         }
     }
+}
+
+/// KeUserApcDispatcher : l'adresse de `ntdll!KiUserApcDispatcher`, la même
+/// dans chaque processus ; 0 sans ntdll.
+static USER_APC_DISPATCHER: AtomicU32 = AtomicU32::new(0);
+
+/// Fixe le répartiteur des APC utilisateur ; 0 n'en laisse aucun, et les APC
+/// utilisateur restent en file.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn set_user_apc_dispatcher(address: u32) {
+    USER_APC_DISPATCHER.store(address, Ordering::Release);
+}
+
+/// Le répartiteur des APC utilisateur ; 0 sans ntdll.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn user_apc_dispatcher() -> u32 {
+    USER_APC_DISPATCHER.load(Ordering::Acquire)
+}
+
+/// Un APC utilisateur à livrer : sa routine du mode utilisateur, son contexte
+/// et ses deux arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UserApc {
+    pub routine: u32,
+    pub context: u32,
+    pub argument1: u32,
+    pub argument2: u32,
+}
+
+/// KeTestAlertThread pour le mode utilisateur : si des APC utilisateur sont
+/// en file, le thread courant les recevra au retour en mode utilisateur.
+/// (Pas encore d'alertes, NtAlertThread.)
+///
+/// # IRQL
+/// <= APC_LEVEL.
+pub fn ke_test_alert_thread<P: Platform>() {
+    with_current_thread::<P>(|thread| {
+        // SAFETY: verrou tenu, thread courant valide (`with_current_thread`).
+        unsafe {
+            if !ListEntry::is_empty(ptr::addr_of!((*thread).apc_list_head[ProcessorMode::User as usize])) {
+                (*thread).user_apc_pending = true;
+            }
+        }
+        false
+    });
+}
+
+/// KiDeliverApc pour le mode utilisateur : si le thread courant doit recevoir
+/// ses APC utilisateur, retire le premier de sa file et appelle sa routine
+/// noyau à APC_LEVEL ; rend ce qui reste à livrer en mode utilisateur. Les
+/// suivants attendent un nouveau test d'alerte (NtContinue). Un APC dont la
+/// routine noyau annule la routine normale fait passer au suivant.
+///
+/// # Safety
+/// Le thread courant a été initialisé (`KThread::init`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub unsafe fn ki_take_user_apc<P: Platform>() -> Option<UserApc> {
+    let thread = P::current_thread();
+    loop {
+        // SAFETY: comme dans `ki_deliver_apc` ; la file utilisateur ne contient
+        // que des KApc valides.
+        let (apc, kernel_routine, mut normal, mut context, mut argument1, mut argument2) = unsafe {
+            let old_irql = DISPATCHER_LOCK.acquire::<P>();
+            let head = ptr::addr_of_mut!((*thread).apc_list_head[ProcessorMode::User as usize]);
+            let pending = (*thread).user_apc_pending;
+            (*thread).user_apc_pending = false;
+            if !pending || ListEntry::is_empty(head) {
+                DISPATCHER_LOCK.release::<P>(old_irql);
+                return None;
+            }
+            let apc = apc_of((*head).flink);
+            ListEntry::remove(ptr::addr_of_mut!((*apc).apc_list_entry));
+            (*apc).inserted = false;
+            let fields = (
+                apc,
+                (*apc).kernel_routine,
+                (*apc).normal_routine,
+                (*apc).normal_context,
+                (*apc).system_argument1,
+                (*apc).system_argument2,
+            );
+            DISPATCHER_LOCK.release::<P>(old_irql);
+            fields
+        };
+        // L'APC n'est plus en file : sa routine noyau peut le libérer.
+        let old_irql = P::raise_irql(Irql::Apc);
+        kernel_routine(apc, &mut normal, &mut context, &mut argument1, &mut argument2);
+        P::lower_irql(old_irql);
+        match normal {
+            Some(NormalRoutine::User(routine)) => {
+                // User-mode values, 32 bits wide.
+                let value = |pointer: *mut c_void| pointer.addr() as u32;
+                return Some(UserApc {
+                    routine,
+                    context: value(context),
+                    argument1: value(argument1),
+                    argument2: value(argument2),
+                });
+            }
+            Some(NormalRoutine::Kernel(_)) => panic!("a user APC with a kernel normal routine"),
+            None => ke_test_alert_thread::<P>(),
+        }
+    }
+}
+
+/// Ce que `ntdll!KiUserApcDispatcher` de ReactOS écrit entre le `CONTEXT` et
+/// l'ESP interrompu : l'enregistrement SEH qui le protège pendant la routine.
+pub const APC_DISPATCHER_RESERVE: u32 = 8;
+
+/// KiInitializeUserApc : au retour en mode utilisateur, livre le premier APC
+/// utilisateur que le thread courant doit recevoir ([`ki_take_user_apc`]).
+/// Son `CONTEXT`, tiré de la trame, va sur la pile du thread, sous
+/// [`APC_DISPATCHER_RESERVE`] octets libres et au-dessus de la routine, son
+/// contexte et ses deux arguments ; la trame reprend dans
+/// `ntdll!KiUserApcDispatcher`. Sans répartiteur, les APC restent en file.
+/// `Err` si la pile ne reçoit pas le contexte : l'APC est perdu, l'appelant
+/// lève l'exception.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interruptions actives, dans un thread de l'ordonnanceur.
+/// Écrit sur la pile utilisateur.
+pub fn ki_deliver_user_apc(frame: &mut KTrapFrame) -> Result<(), NtStatus> {
+    use crate::context::{enter_user_dispatcher, push_user_context};
+    use crate::usermem::UserPtr;
+
+    let dispatcher = user_apc_dispatcher();
+    if dispatcher == 0 {
+        return Ok(());
+    }
+    // SAFETY: a thread of the scheduler (guaranteed by the caller).
+    let Some(apc) = (unsafe { ki_take_user_apc::<crate::sched::KePlatform>() }) else {
+        return Ok(());
+    };
+    let context_at = push_user_context(frame, APC_DISPATCHER_RESERVE)?;
+    let arguments_at = context_at.checked_sub(16).ok_or(abi::ntstatus::STATUS_ACCESS_VIOLATION)?;
+    UserPtr::<[u32; 4]>::new(arguments_at).write(&[apc.routine, apc.context, apc.argument1, apc.argument2])?;
+    enter_user_dispatcher(frame, dispatcher, arguments_at);
+    Ok(())
 }
 
 /// Après la sortie d'une région ou la fin d'une routine normale : demande la

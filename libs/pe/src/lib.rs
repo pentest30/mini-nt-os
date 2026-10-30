@@ -3,7 +3,8 @@
 //!
 //! Parses a PE32 image (32-bit, `IMAGE_NT_OPTIONAL_HDR32_MAGIC`, i386) from the
 //! bytes of its file and borrows everything from them: headers, section table,
-//! import descriptors. PE32+ is not needed by an XP-compatible i386 userland.
+//! import descriptors, exports. PE32+ is not needed by an XP-compatible i386
+//! userland.
 //!
 //! Moved from `ps::loader` (audit §6, step 4), which re-exports it for the old
 //! loader. Image sections (`mm::section`) use it.
@@ -253,6 +254,63 @@ impl<'a> Pe32<'a> {
         let _ = base;
 
         ImportIter { data, rva, index: 0 }
+    }
+}
+
+/// Where an export leads.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ExportTarget<'a> {
+    /// The RVA of what it exports.
+    Rva(u32),
+    /// A forwarder, `"Dll.Name"`, that the loader resolves: its RVA falls in
+    /// the export directory.
+    Forwarder(&'a str),
+}
+
+impl<'a> Pe32<'a> {
+    /// The export named `name`; `None` without it or without an export
+    /// directory. The name table is sorted, as the loader expects, and
+    /// searched by halves, names compared byte by byte.
+    pub fn export(&self, name: &str) -> Option<ExportTarget<'a>> {
+        let opt = self.optional_header();
+        if opt.number_of_rva_and_sizes == 0 {
+            return None;
+        }
+        // Directory entry 0 = export directory (IMAGE_EXPORT_DIRECTORY).
+        let directory = opt.data_directory[0];
+        let (start, size) = (directory.virtual_address, directory.size);
+        if start == 0 {
+            return None;
+        }
+        let data = self.data;
+        let header = rva_to_file_offset(data, start)?;
+        let number_of_functions = read_u32(data, header + 20).ok()?;
+        let number_of_names = read_u32(data, header + 24).ok()?;
+        let functions = rva_to_file_offset(data, read_u32(data, header + 28).ok()?)?;
+        let names = rva_to_file_offset(data, read_u32(data, header + 32).ok()?)?;
+        let ordinals = rva_to_file_offset(data, read_u32(data, header + 36).ok()?)?;
+        let (mut low, mut high) = (0usize, number_of_names as usize);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let candidate = rva_to_str(data, read_u32(data, names + 4 * middle).ok()?)?;
+            match candidate.as_bytes().cmp(name.as_bytes()) {
+                core::cmp::Ordering::Less => low = middle + 1,
+                core::cmp::Ordering::Greater => high = middle,
+                core::cmp::Ordering::Equal => {
+                    let index = read_u16(data, ordinals + 2 * middle).ok()?;
+                    if u32::from(index) >= number_of_functions {
+                        return None;
+                    }
+                    let rva = read_u32(data, functions + 4 * usize::from(index)).ok()?;
+                    return Some(if rva >= start && rva - start < size {
+                        ExportTarget::Forwarder(rva_to_str(data, rva)?)
+                    } else {
+                        ExportTarget::Rva(rva)
+                    });
+                }
+            }
+        }
+        None
     }
 }
 

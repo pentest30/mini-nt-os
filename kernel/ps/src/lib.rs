@@ -28,6 +28,7 @@ pub mod exit;
 #[expect(unsafe_op_in_unsafe_fn, reason = "ancien chargeur, à supprimer (audit §5)")]
 pub mod loader;
 pub mod rundown;
+pub mod system_dll;
 
 pub use eprocess::{create_process, lookup_process, system_process, EProcess, PROCESS_TYPE};
 pub use ethread::{create_thread, create_user_stack, lookup_thread, EThread, InitialTeb, THREAD_TYPE};

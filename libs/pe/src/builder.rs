@@ -1,5 +1,5 @@
 //! A builder of minimal PE32 images, for tests (feature `builder`): the
-//! headers and sections an image section needs, nothing else (no imports, no
+//! headers and sections an image section needs, and exports (no imports, no
 //! relocations).
 
 use alloc::vec::Vec;
@@ -29,6 +29,7 @@ pub struct Pe32Builder {
     relocs_stripped: bool,
     stack: (u32, u32),
     sections: Vec<Section>,
+    exports: Option<(&'static str, Vec<(&'static str, u32)>)>,
 }
 
 impl Pe32Builder {
@@ -43,6 +44,7 @@ impl Pe32Builder {
             relocs_stripped: false,
             stack: (0x10_0000, 0x1000),
             sections: Vec::new(),
+            exports: None,
         }
     }
 
@@ -86,16 +88,38 @@ impl Pe32Builder {
         self
     }
 
+    /// Exports `(name, rva)` under the DLL name `dll`, in an `.edata`
+    /// section after the others; the name table is sorted.
+    pub fn exports(mut self, dll: &'static str, exports: &[(&'static str, u32)]) -> Self {
+        self.exports = Some((dll, exports.to_vec()));
+        self
+    }
+
     /// The bytes of the image file.
     pub fn build(&self) -> Vec<u8> {
         let align = |value: usize, to: u32| value.next_multiple_of(to as usize);
+        let mut sections: Vec<&Section> = self.sections.iter().collect();
+        let edata = self.exports.as_ref().map(|(dll, exports)| {
+            let end = self
+                .sections
+                .iter()
+                .map(|s| s.virtual_address + s.virtual_size.max(s.data.len() as u32))
+                .max()
+                .unwrap_or(self.section_alignment);
+            let rva = end.next_multiple_of(self.section_alignment);
+            let data = export_directory(rva, dll, exports);
+            let size = data.len() as u32;
+            (Section { name: ".edata", virtual_address: rva, virtual_size: size, data, characteristics: EDATA }, size)
+        });
+        if let Some((section, _)) = &edata {
+            sections.push(section);
+        }
         let file_header = NT_OFFSET + 4;
         let optional_header = file_header + core::mem::size_of::<ImageFileHeader>();
         let section_table = optional_header + core::mem::size_of::<ImageOptionalHeader32>();
-        let headers_end = section_table + self.sections.len() * core::mem::size_of::<ImageSectionHeader>();
+        let headers_end = section_table + sections.len() * core::mem::size_of::<ImageSectionHeader>();
         let size_of_headers = align(headers_end, self.file_alignment);
-        let size_of_image = self
-            .sections
+        let size_of_image = sections
             .iter()
             .map(|s| s.virtual_address as usize + s.virtual_size.max(s.data.len() as u32) as usize)
             .max()
@@ -112,7 +136,7 @@ impl Pe32Builder {
             characteristics |= FILE_RELOCS_STRIPPED;
         }
         put16(&mut file, file_header, MACHINE_I386);
-        put16(&mut file, file_header + 2, self.sections.len() as u16);
+        put16(&mut file, file_header + 2, sections.len() as u16);
         put16(&mut file, file_header + 16, core::mem::size_of::<ImageOptionalHeader32>() as u16);
         put16(&mut file, file_header + 18, characteristics);
 
@@ -130,8 +154,12 @@ impl Pe32Builder {
         put32(&mut file, optional_header + 72, self.stack.0);
         put32(&mut file, optional_header + 76, self.stack.1);
         put32(&mut file, optional_header + 92, 16); // NumberOfRvaAndSizes
+        if let Some((section, size)) = &edata {
+            put32(&mut file, optional_header + 96, section.virtual_address); // export directory
+            put32(&mut file, optional_header + 100, *size);
+        }
 
-        for (i, section) in self.sections.iter().enumerate() {
+        for (i, section) in sections.iter().enumerate() {
             let raw_size = align(section.data.len(), self.file_alignment);
             let raw_offset = if raw_size == 0 { 0 } else { file.len() };
             let header = section_table + i * core::mem::size_of::<ImageSectionHeader>();
@@ -151,6 +179,45 @@ impl Pe32Builder {
     }
 }
 
+/// `.edata`: initialized, readable data.
+const EDATA: u32 = crate::SCN_CNT_INITIALIZED_DATA | crate::SCN_MEM_READ;
+
+/// An export directory at `rva`: IMAGE_EXPORT_DIRECTORY, then the function,
+/// name and ordinal tables, then the strings. Names sorted, ordinals from 1.
+fn export_directory(rva: u32, dll: &str, exports: &[(&str, u32)]) -> Vec<u8> {
+    let mut sorted: Vec<(usize, &str)> = exports.iter().enumerate().map(|(i, &(name, _))| (i, name)).collect();
+    sorted.sort_by(|a, b| a.1.as_bytes().cmp(b.1.as_bytes()));
+    let count = exports.len();
+    let functions = 40;
+    let names = functions + 4 * count;
+    let ordinals = names + 4 * count;
+    let strings = ordinals + 2 * count;
+    let mut data = alloc::vec![0u8; strings];
+    let string = |data: &mut Vec<u8>, text: &str| {
+        let at = rva + data.len() as u32;
+        data.extend_from_slice(text.as_bytes());
+        data.push(0);
+        at
+    };
+    let dll_name = string(&mut data, dll);
+    put32(&mut data, 12, dll_name);
+    put32(&mut data, 16, 1); // Base
+    put32(&mut data, 20, count as u32); // NumberOfFunctions
+    put32(&mut data, 24, count as u32); // NumberOfNames
+    put32(&mut data, 28, rva + functions as u32);
+    put32(&mut data, 32, rva + names as u32);
+    put32(&mut data, 36, rva + ordinals as u32);
+    for (i, &(_, target)) in exports.iter().enumerate() {
+        put32(&mut data, functions + 4 * i, target);
+    }
+    for (slot, &(index, name)) in sorted.iter().enumerate() {
+        let at = string(&mut data, name);
+        put32(&mut data, names + 4 * slot, at);
+        put16(&mut data, ordinals + 2 * slot, index as u16);
+    }
+    data
+}
+
 fn put16(file: &mut [u8], offset: usize, value: u16) {
     file[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
@@ -162,7 +229,7 @@ fn put32(file: &mut [u8], offset: usize, value: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Pe32, SCN_MEM_EXECUTE, SCN_MEM_READ, SCN_MEM_WRITE};
+    use crate::{ExportTarget, Pe32, SCN_MEM_EXECUTE, SCN_MEM_READ, SCN_MEM_WRITE};
 
     #[test]
     fn a_built_image_parses_back() {
@@ -191,5 +258,31 @@ mod tests {
         assert_eq!(&file[0x200..0x210], &[0xC3; 0x10]);
         assert_eq!(({ sections[1].size_of_raw_data }, { sections[1].pointer_to_raw_data }), (0, 0), "no raw data");
         assert_eq!(file.len(), 0x400);
+    }
+
+    #[test]
+    fn exports_are_found_by_name_and_forwarders_told_apart() {
+        let file = Pe32Builder::new(0x7C90_0000)
+            .section(".text", 0x1000, 0x100, &[0xC3; 0x100], SCN_MEM_EXECUTE | SCN_MEM_READ)
+            .exports("ntdll.dll", &[("NtClose", 0x1010), ("KiUserApcDispatcher", 0x1000), ("RtlAlloc", 0x1020)])
+            .build();
+        let pe = Pe32::parse(&file).unwrap();
+        assert_eq!(pe.export("KiUserApcDispatcher"), Some(ExportTarget::Rva(0x1000)));
+        assert_eq!(pe.export("NtClose"), Some(ExportTarget::Rva(0x1010)));
+        assert_eq!(pe.export("RtlAlloc"), Some(ExportTarget::Rva(0x1020)));
+        assert_eq!(pe.export("NtOpen"), None);
+        assert_eq!(pe.export("ntclose"), None, "names match with their case");
+        assert_eq!({ pe.optional_header().size_of_image }, 0x3000, ".edata after .text");
+        let no_exports =
+            Pe32Builder::new(0x40_0000).section(".text", 0x1000, 0x10, &[0xC3; 0x10], SCN_MEM_EXECUTE).build();
+        assert_eq!(Pe32::parse(&no_exports).unwrap().export("NtClose"), None);
+        // A target inside the export directory is a forwarder string.
+        let edata = 0x2000;
+        let forwarded = Pe32Builder::new(0x7C80_0000)
+            .section(".text", 0x1000, 0x10, &[0xC3; 0x10], SCN_MEM_EXECUTE)
+            .exports("kernel32.dll", &[("HeapAlloc", edata + 0x28 + 4 + 4 + 2 + 13)])
+            .build();
+        let pe = Pe32::parse(&forwarded).unwrap();
+        assert_eq!(pe.export("HeapAlloc"), Some(ExportTarget::Forwarder("HeapAlloc")), "the name, standing in");
     }
 }
