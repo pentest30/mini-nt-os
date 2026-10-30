@@ -50,13 +50,14 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
   thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
   (`ke::bugcheck`, `hal::bugcheck`). Scénarios `ke-events`, `fpu`, `ke-starvation`, `bugcheck`. Les APC utilisateur
-  viennent au M3, le rundown des APC d'un thread qui se termine avec Ps.
+  viennent au M3.
   M2 : base PFN faite (`mm::pfn` au-dessus du buddy : toute page physique y passe, avec son usage ; double libération
   et page réservée arrêtent le système ; cohérence vérifiée en fin de phase 1). Pools faits (`mm::pool`) : non paginé
   (allocateur global) et paginé, qui grandissent à la demande et rendent leurs pages à la base PFN ;
   `ex_allocate_pool_with_tag` et compteurs par étiquette. Une PML4 par processus (`mm::address_space`) : moitié haute
   complétée au démarrage et partagée, CR3 propre à chaque thread et chargé à la commutation, `ke_stack_attach`.
-  L'ancien chargeur (`NtCreateProcess`) reste dans l'espace du système jusqu'à la réécriture de Ps. VAD faite
+  L'ancien chargeur (`NtCreateProcess` de `syscall.rs`) reste dans l'espace du système (`ps::eprocess::create_legacy`).
+  VAD faite
   (`mm::vad`, `mm::virtual_alloc`) : arbre sans limite, état de chaque page (réservée, ou commitée avec sa protection),
   commit dans une réservation, décommit et libération réels, protection et requête, erreurs `NtStatus`, retour arrière
   complet si un commit échoue. Fautes de page faites (`mm::fault`) : chaque `AddressSpace` tient sa VAD et s'enregistre
@@ -74,8 +75,16 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   espace de noms d'XP (`\ObjectTypes`, `\GLOBAL??` derrière `\??`, lien `\DosDevices`…), noms sans casse, liens
   suivis 32 fois au plus, `OBJ_OPENIF`/`OBJ_OPENLINK`/`OBJ_PERMANENT`, nom retiré au dernier handle ; table de handles
   par processus (multiples de 4, droits vérifiés, héritage, protection, duplication, rundown). Type `Section` dans
-  `mm::section`. Pas encore : handles noyau, Se (accès accordés, ADR-011). À venir : Ps (EPROCESS/ETHREAD, avec la
-  croissance de la pile utilisateur par sa garde et la politique DEP).
+  `mm::section`. Ps réécrit (`ps`) : table des CID (PID et TID multiples de 4, System = 4) ; EPROCESS (espace
+  d'adresses neuf, image projetée, PEB en `0x7FFDF000`, table de handles, threads vivants, objet attendable) ;
+  ETHREAD (TEB sous le PEB, pile noyau, thread Ke 32 bits dans l'espace du processus : `ke::sched::create_user_thread`,
+  le descripteur du TEB suit chaque commutation, `hal::gdt::set_teb_base`) ; pile utilisateur avec garde
+  (`create_user_stack`). Fin par APC noyau normal (`exit_thread`) : passage dans l'espace du système, rundown des APC
+  (`ke_rundown_apcs`) ; le dernier thread ferme les handles et rend l'espace d'adresses, une fois finis les accès
+  protégés (`rundown::RundownRef`), puis l'objet processus est signalé ; le *reaper* (thread système) rend piles noyau
+  et threads Ke (`ke::sched::delete_thread`). Une faute utilisateur non résolue termine le processus
+  (`STATUS_ACCESS_VIOLATION`) jusqu'au M3. Pas encore : croissance de la pile utilisateur par sa garde, politique
+  DEP, handles noyau, Se (accès accordés, ADR-011).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
