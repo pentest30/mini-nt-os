@@ -9,7 +9,9 @@
 //! - écriture sur une page de section en copie sur écriture : une copie
 //!   privée, qui prend la protection inscriptible correspondante ;
 //! - page de garde : la garde est levée et l'accès échoue avec
-//!   `STATUS_GUARD_PAGE_VIOLATION`, une seule fois ; l'accès suivant est normal ;
+//!   `STATUS_GUARD_PAGE_VIOLATION`, une seule fois ; l'accès suivant est
+//!   normal. Dans la pile du thread fautif, la garde descend plutôt d'une page
+//!   et l'accès reprend (`AddressSpace::extend_user_stack`) ;
 //! - page `PAGE_NOACCESS`, réservée ou libre, accès que la protection refuse :
 //!   `STATUS_ACCESS_VIOLATION`.
 //!
@@ -22,19 +24,21 @@
 //! le système avant (IRQL_NOT_LESS_OR_EQUAL), car la VAD se prend sous un
 //! verrou tournant.
 //!
-//! Pas encore : extension de la pile utilisateur par sa page de garde (avec le
-//! TEB, Ps) ; politique DEP par processus (NX s'applique toujours, la règle
-//! OptIn d'XP SP2 viendra avec Ps) ; pagination sur disque.
+//! Pas encore : politique DEP par processus (NX s'applique toujours, la règle
+//! OptIn d'XP SP2 viendra avec Ps) ; extension de la pile par une faute du
+//! noyau (sa copie du contexte d'une exception sur la pile utilisateur, M3) ;
+//! pagination sur disque.
 //!
 //! WI7e Ch.5 §Page Fault Handling
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use abi::ntstatus::NtStatus;
+use abi::ntstatus::{NtStatus, STATUS_GUARD_PAGE_VIOLATION, STATUS_STACK_OVERFLOW};
 use x86_64::structures::idt::PageFaultErrorCode;
 
 use crate::address_space::{AddressSpace, USER_HALF_END};
 use crate::vad::{PageProtect, PageState};
+use crate::virtual_alloc::PAGE_SIZE;
 
 /// Les fautes résolues par une page à zéro, depuis le démarrage.
 static DEMAND_ZERO_FAULTS: AtomicU64 = AtomicU64::new(0);
@@ -143,9 +147,29 @@ pub fn resolve(page: Option<(PageState, PageProtect)>, backing: Backing, pte: Pt
     }
 }
 
+/// MiCheckForUserStackOverflow, sans la mémoire : une faute en `addr` a levé
+/// une page de garde, dans une pile réservée de `bottom` (DeallocationStack)
+/// à `base` (StackBase). Dans la pile, la nouvelle garde est la page sous la
+/// page touchée, et la nouvelle limite (StackLimit) le bas de celle-ci ; la
+/// garde ne descend pas sur les deux pages du bas de la réservation
+/// (`STATUS_STACK_OVERFLOW`, la page touchée restant utilisable). Hors de la
+/// pile : `STATUS_GUARD_PAGE_VIOLATION`.
+pub fn stack_extension(addr: u64, bottom: u64, base: u64) -> Result<(u64, u64), NtStatus> {
+    if !(bottom..base).contains(&addr) {
+        return Err(STATUS_GUARD_PAGE_VIOLATION);
+    }
+    let page = addr & !(PAGE_SIZE - 1);
+    let guard = page - PAGE_SIZE;
+    if guard <= bottom + PAGE_SIZE {
+        return Err(STATUS_STACK_OVERFLOW);
+    }
+    Ok((guard, page))
+}
+
 /// La faute de page de Mm, pour `hal::idt` : `None` hors de la moitié basse
 /// d'un espace d'adresses, sinon `STATUS_SUCCESS` si l'accès peut reprendre
-/// ou l'exception qu'il lève.
+/// ou l'exception qu'il lève. Une garde levée par le mode utilisateur étend
+/// la pile du thread courant, si elle en est (son TEB vient du KPCR).
 ///
 /// # IRQL
 /// < DISPATCH_LEVEL (hal le vérifie avant l'appel).
@@ -154,7 +178,12 @@ pub fn page_fault_hook(addr: u64, error: PageFaultErrorCode) -> Option<NtStatus>
         return None;
     }
     let space = AddressSpace::current()?;
-    Some(space.access_fault(addr, Access::from_error_code(error)))
+    let status = space.access_fault(addr, Access::from_error_code(error));
+    let teb = hal::pcr::current().teb();
+    if status == STATUS_GUARD_PAGE_VIOLATION && error.contains(PageFaultErrorCode::USER_MODE) && teb != 0 {
+        return Some(space.extend_user_stack(addr, teb));
+    }
+    Some(status)
 }
 
 /// Compte une faute résolue par une page à zéro.
@@ -173,6 +202,17 @@ pub fn demand_zero_faults() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stack_guard_moves_down_one_page() {
+        const P: u64 = PAGE_SIZE;
+        let (bottom, base) = (0x1_0000, 0x11_0000);
+        assert_eq!(stack_extension(base - 2 * P + 0x10, bottom, base), Ok((base - 3 * P, base - 2 * P)));
+        assert_eq!(stack_extension(bottom + 3 * P, bottom, base), Ok((bottom + 2 * P, bottom + 3 * P)));
+        assert_eq!(stack_extension(bottom + 2 * P + 4, bottom, base), Err(STATUS_STACK_OVERFLOW), "last page kept");
+        assert_eq!(stack_extension(base, bottom, base), Err(STATUS_GUARD_PAGE_VIOLATION), "above the stack");
+        assert_eq!(stack_extension(bottom - 1, bottom, base), Err(STATUS_GUARD_PAGE_VIOLATION), "below it");
+    }
     use Access::{Execute, Read, Write};
     use PteState::{Absent, Present, Retained};
     use Resolution::{AccessViolation, CopyOnWrite, DemandZero, Guard, MapShared, Remap};
