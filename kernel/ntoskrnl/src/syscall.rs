@@ -1239,7 +1239,7 @@ impl mm::virtual_alloc::PageMapper for SyscallMapper {
         writable: bool,
         executable: bool,
         user: bool,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), abi::ntstatus::NtStatus> {
         // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page
         // (e.g. a stub module committed by a previous load_image in the same address
         // space).  Still fall through for supervisor-only bootloader huge pages so
@@ -1251,8 +1251,7 @@ impl mm::virtual_alloc::PageMapper for SyscallMapper {
             }
         }
 
-        let pfn =
-            mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or("commit_page: out of physical memory")?;
+        let pfn = mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or(abi::ntstatus::STATUS_NO_MEMORY)?;
         let phys = x86_64::PhysAddr::new(pfn.to_phys());
         let virt = x86_64::VirtAddr::new(virt_addr);
         let mut flags = x86_64::structures::paging::PageTableFlags::PRESENT;
@@ -1269,11 +1268,17 @@ impl mm::virtual_alloc::PageMapper for SyscallMapper {
         Ok(())
     }
 
-    fn decommit_page(&mut self, virt_addr: u64) -> Result<(), &'static str> {
+    fn decommit_page(&mut self, virt_addr: u64) {
         let virt = x86_64::VirtAddr::new(virt_addr);
         let frame = unsafe { self.pt.unmap_page(virt) };
         mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
-        Ok(())
+    }
+
+    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool) {
+        let flags = mm::MmPageTables::leaf_flags(writable, executable, true);
+        // SAFETY: virt_addr was previously mapped by commit_page; the VAD has
+        //         just given the page these rights.
+        unsafe { self.pt.update_flags(x86_64::VirtAddr::new(virt_addr), flags) };
     }
 }
 

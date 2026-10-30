@@ -53,7 +53,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         writable: bool,
         executable: bool,
         user: bool,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), abi::ntstatus::NtStatus> {
         // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
         // DO NOT zero — the page may contain live data (e.g., game stack being reused).
         // Fresh pages are zeroed below instead.
@@ -64,8 +64,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
             }
         }
 
-        let pfn =
-            mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or("commit_page: out of physical memory")?;
+        let pfn = mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or(abi::ntstatus::STATUS_NO_MEMORY)?;
 
         let phys = PhysAddr::new(pfn.to_phys());
         let virt = VirtAddr::new(virt_addr);
@@ -94,13 +93,19 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         Ok(())
     }
 
-    fn decommit_page(&mut self, virt_addr: u64) -> Result<(), &'static str> {
+    fn decommit_page(&mut self, virt_addr: u64) {
         let virt = VirtAddr::new(virt_addr);
         // SAFETY: virt_addr was previously mapped by commit_page; single-CPU
         //         Phase 2 — no concurrent unmap possible.
         let frame = unsafe { self.pt.unmap_page(virt) }; // also flushes TLB
         mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
-        Ok(())
+    }
+
+    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool) {
+        let flags = mm::MmPageTables::leaf_flags(writable, executable, true);
+        // SAFETY: virt_addr was previously mapped by commit_page; the VAD has
+        //         just given the page these rights.
+        unsafe { self.pt.update_flags(VirtAddr::new(virt_addr), flags) };
     }
 }
 
@@ -292,6 +297,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     boost_self_test();
     apc_self_test();
     address_space_self_test();
+    vad_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -1140,6 +1146,71 @@ fn address_space_self_test() {
          destroyed without a leak ({} page tables, {} pages)",
         created.0 - before.0,
         created.1 - before.1
+    );
+}
+
+/// The VAD with the real mapper (`mm::virtual_alloc`): in a new address space,
+/// reserve 16 pages, commit two inside the reservation, protect one, decommit
+/// it, then release everything; the page tables and the PFN database follow.
+fn vad_self_test() {
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::{PageProtect, VadTree};
+    use mm::virtual_alloc::{self, AllocType, FreeType, MemState, PAGE_SIZE};
+    use x86_64::structures::paging::PageTableFlags as F;
+
+    const BASE: u64 = 0x40_0000;
+    const COMMIT: u64 = BASE + 4 * PAGE_SIZE;
+    const MARKER: u64 = 0x5641_4400_0000_0001;
+    let rw = PageProtect::READWRITE;
+    let user_pages = || pfn::stats().active(PageUsage::UserPrivate);
+    let flags = |mapper: &KernelPageMapper, va| mapper.pt.translate_flags(VirtAddr::new(va)).map(|(_, f)| f);
+
+    let space = AddressSpace::new().expect("no PML4");
+    // SAFETY: the space lives until the end of this test, detached before it
+    // is destroyed.
+    let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+    // SAFETY: CR3 holds the attached space's tables.
+    let mut mapper =
+        KernelPageMapper { pt: unsafe { mm::MmPageTables::new(hal::HHDM_OFFSET.load(Ordering::Acquire)) } };
+    let mut vad = VadTree::new();
+    let before = user_pages();
+
+    let reserved =
+        virtual_alloc::allocate(&mut vad, Some(&mut mapper), BASE, 16 * PAGE_SIZE, AllocType::MEM_RESERVE, rw);
+    assert_eq!(reserved, Ok(BASE));
+    assert_eq!(user_pages(), before, "a reservation took physical pages");
+    let committed =
+        virtual_alloc::allocate(&mut vad, Some(&mut mapper), COMMIT, 2 * PAGE_SIZE, AllocType::MEM_COMMIT, rw);
+    assert_eq!(committed, Ok(COMMIT), "commit inside the reservation");
+    assert_eq!(user_pages(), before + 2);
+    let f = flags(&mapper, COMMIT).expect("a committed page is not mapped");
+    assert!(f.contains(F::WRITABLE | F::USER_ACCESSIBLE | F::NO_EXECUTE), "{f:?}");
+    assert!(flags(&mapper, BASE).is_none(), "a reserved page is mapped");
+    // SAFETY: the page was just committed read-write in the attached space.
+    unsafe { core::ptr::write_volatile(COMMIT as *mut u64, MARKER) };
+
+    let old = virtual_alloc::protect(&mut vad, Some(&mut mapper), COMMIT, PAGE_SIZE, PageProtect::EXECUTE_READ);
+    assert_eq!(old, Ok(rw));
+    let f = flags(&mapper, COMMIT).unwrap();
+    assert!(!f.intersects(F::WRITABLE | F::NO_EXECUTE), "the protection did not reach the page tables: {f:?}");
+    // SAFETY: still mapped, now read-only.
+    assert_eq!(unsafe { core::ptr::read_volatile(COMMIT as *const u64) }, MARKER, "protecting lost the data");
+
+    let decommitted = virtual_alloc::free(&mut vad, Some(&mut mapper), COMMIT, PAGE_SIZE, FreeType::MEM_DECOMMIT);
+    assert_eq!(decommitted, Ok((COMMIT, PAGE_SIZE)));
+    assert!(flags(&mapper, COMMIT).is_none(), "a decommitted page is still mapped");
+    assert_eq!(user_pages(), before + 1);
+    assert_eq!(virtual_alloc::query(&vad, COMMIT).map(|r| r.state), Ok(MemState::Reserve));
+    let released = virtual_alloc::free(&mut vad, Some(&mut mapper), BASE, 0, FreeType::MEM_RELEASE);
+    assert_eq!(released, Ok((BASE, 16 * PAGE_SIZE)));
+    assert_eq!(user_pages(), before, "releasing did not give back the committed page");
+    assert!(vad.is_empty());
+    ke::sched::ke_unstack_detach(attached);
+    space.destroy();
+    log::info!(
+        "[smoke] Mm: VAD reserve, commit, protect, decommit and release reach the page tables and the PFN database"
     );
 }
 

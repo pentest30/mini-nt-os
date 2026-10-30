@@ -1,4 +1,5 @@
-//! NtAllocateVirtualMemory / NtFreeVirtualMemory — Phase 2 implementation.
+//! NtAllocateVirtualMemory, NtFreeVirtualMemory, NtProtectVirtualMemory et
+//! NtQueryVirtualMemory : la mémoire privée d'un processus (02 §5.3).
 //!
 //! Games call VirtualAlloc (→ kernel32) which maps to NtAllocateVirtualMemory.
 //! Common call patterns in XP-era games:
@@ -7,19 +8,35 @@
 //!   VirtualAlloc(NULL,  size, MEM_RESERVE,              PAGE_NOACCESS)
 //!   VirtualAlloc(base,  size, MEM_COMMIT,               PAGE_READWRITE)
 //!
+//! La VAD (`mm::vad`) tient l'état de chaque page : réservée, ou commitée avec
+//! sa protection. Un commit se fait dans une réservation existante, un
+//! décommit rend les pages réservées, une libération rend toute la
+//! réservation.
+//!
 //! Design
 //! ──────
 //! Physical page allocation and page-table mapping are delegated to the
 //! `PageMapper` trait. This decouples policy (VAD bookkeeping) from
-//! mechanism (buddy allocator + OffsetPageTable), which also makes the
+//! mechanism (PFN database + page tables), which also makes the
 //! code testable with a mock.
 //!
 //! In production the kernel passes a `KernelPageMapper` that calls
 //! `mm::pfn` and `mm::MmPageTables`. In tests we use `MockMapper`.
 //!
+//! Pas encore (tâche des fautes de page) : les pages commitées sont projetées
+//! tout de suite, et `PAGE_NOACCESS` comme `PAGE_GUARD` restent lisibles une
+//! fois projetées. Pas encore non plus : libération d'une partie d'une
+//! réservation, `MEM_RESET`.
+//!
 //! WI7e Ch.5 §NtAllocateVirtualMemory, §NtFreeVirtualMemory
 
-use super::vad::{PageProtect, VadKind, VadNode, VadTree};
+use abi::ntstatus::{
+    NtStatus, STATUS_CONFLICTING_ADDRESSES, STATUS_FREE_VM_NOT_AT_BASE, STATUS_INVALID_PAGE_PROTECTION,
+    STATUS_INVALID_PARAMETER, STATUS_MEMORY_NOT_ALLOCATED, STATUS_NOT_COMMITTED, STATUS_NO_MEMORY,
+    STATUS_UNABLE_TO_DELETE_SECTION, STATUS_UNABLE_TO_FREE_VM,
+};
+
+use super::vad::{PageChange, PageProtect, PageState, VadKind, VadNode, VadTree, USER_VA_END};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -50,6 +67,43 @@ pub const USER_VA_START: u64 = 0x0001_0000;
 /// 4 KiB page size.
 pub const PAGE_SIZE: u64 = 0x1000;
 
+/// L'état d'une plage (`MEMORY_BASIC_INFORMATION.State`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum MemState {
+    Commit = 0x1000,
+    Reserve = 0x2000,
+    Free = 0x1_0000,
+}
+
+/// Le type d'une plage (`MEMORY_BASIC_INFORMATION.Type`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum MemType {
+    Private = 0x2_0000,
+    Mapped = 0x4_0000,
+    Image = 0x100_0000,
+}
+
+/// Ce que NtQueryVirtualMemory (`MemoryBasicInformation`) dit d'une adresse :
+/// la plus longue suite de pages de même état et de même protection qui
+/// commence à sa page, et la réservation qui la contient. Le layout de l'ABI
+/// viendra avec l'appel système (M3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RegionInfo {
+    pub base_address: u64,
+    /// Début de la réservation ; 0 pour une plage libre.
+    pub allocation_base: u64,
+    /// Protection donnée à la réservation ; vide pour une plage libre.
+    pub allocation_protect: PageProtect,
+    pub region_size: u64,
+    pub state: MemState,
+    /// Protection des pages commitées ; vide si réservées, `NOACCESS` si libres.
+    pub protect: PageProtect,
+    /// `None` pour une plage libre.
+    pub kind: Option<MemType>,
+}
+
 // ── PageMapper trait ──────────────────────────────────────────────────────────
 
 /// Physical-page commit/decommit interface.
@@ -58,24 +112,27 @@ pub const PAGE_SIZE: u64 = 0x1000;
 /// replaced by `MockMapper` in tests.
 ///
 /// # IRQL
-/// Callers must be at PASSIVE_LEVEL. The buddy allocator and
-/// `MmPageTables` both hold spin locks that imply DISPATCH_LEVEL
-/// semantics.
+/// Callers must be at PASSIVE_LEVEL: committing a page allocates a physical
+/// page and maybe page tables.
 pub trait PageMapper {
     /// Physically back one 4 KiB virtual page.
     ///
     /// The implementation must:
-    ///   1. Allocate one physical frame from the buddy.
+    ///   1. Allocate one physical frame from the PFN database.
     ///   2. Map `virt_addr` → frame in the current page tables.
     ///   3. Zero-fill the frame (required by NT for security).
-    fn commit_page(&mut self, virt_addr: u64, writable: bool, executable: bool, user: bool)
-        -> Result<(), &'static str>;
-
-    /// Remove physical backing from one 4 KiB virtual page.
     ///
-    /// The implementation must unmap the page and return the frame to
-    /// the buddy allocator.
-    fn decommit_page(&mut self, virt_addr: u64) -> Result<(), &'static str>;
+    /// Fails, with nothing mapped, when memory runs out (`STATUS_NO_MEMORY`).
+    fn commit_page(&mut self, virt_addr: u64, writable: bool, executable: bool, user: bool) -> Result<(), NtStatus>;
+
+    /// Remove physical backing from one 4 KiB virtual page that
+    /// [`commit_page`](Self::commit_page) backed: unmap it and return its
+    /// frame to the PFN database.
+    fn decommit_page(&mut self, virt_addr: u64);
+
+    /// Change the access rights of one 4 KiB virtual page that
+    /// [`commit_page`](Self::commit_page) backed.
+    fn protect_page(&mut self, virt_addr: u64, writable: bool, executable: bool);
 }
 
 // ── Helper: derive protection flags ──────────────────────────────────────────
@@ -100,19 +157,49 @@ fn protect_executable(p: PageProtect) -> bool {
     )
 }
 
+/// Les adresses des pages de `[start, end)`.
+fn pages(start: u64, end: u64) -> impl Iterator<Item = u64> {
+    (start..end).step_by(PAGE_SIZE as usize)
+}
+
+fn page_align_up(addr: u64) -> Option<u64> {
+    Some(addr.checked_add(PAGE_SIZE - 1)? & !(PAGE_SIZE - 1))
+}
+
+/// Les pages qui couvrent `[base, base + size)`, non vide et dans l'espace
+/// utilisateur.
+fn user_range(base: u64, size: u64) -> Result<(u64, u64), NtStatus> {
+    let start = base & !(PAGE_SIZE - 1);
+    let end = base.checked_add(size).and_then(page_align_up).ok_or(STATUS_INVALID_PARAMETER)?;
+    if size == 0 || start < USER_VA_START || end > USER_VA_END {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    Ok((start, end))
+}
+
 // ── NtAllocateVirtualMemory ───────────────────────────────────────────────────
 
-/// Allocate virtual memory in `vad`, optionally physically committing pages.
+/// Réserve ou commite de la mémoire privée dans `vad` ; rend la base de la
+/// plage.
 ///
-/// - `base_addr == 0` → bottom-up allocation from `USER_VA_START`.
-/// - `base_addr != 0` → hint; aligned down to `ALLOC_GRANULARITY`.
-/// - `MEM_RESERVE`    → insert VAD node only; no physical pages.
-/// - `MEM_COMMIT`     → also call `mapper.commit_page()` for every page.
-/// - On partial commit failure the VAD entry is rolled back (atomic from
-///   the VAD perspective; partially committed pages may be leaked — Phase 3
-///   adds proper rollback of physical pages).
+/// - `base_addr == 0` : une nouvelle réservation, la plus basse qui tienne au-dessus
+///   de `USER_VA_START`, alignée sur `ALLOC_GRANULARITY`, même avec `MEM_COMMIT`
+///   seul (comme NT).
+/// - `base_addr != 0` avec `MEM_RESERVE` : une nouvelle réservation des pages qui
+///   couvrent `[base_addr, base_addr + size)` ; `STATUS_CONFLICTING_ADDRESSES` si
+///   elle recoupe une réservation. Elle s'aligne sur la page et non sur 64 Kio :
+///   l'ancien chargeur (`setup_process`) place le PEB et le TEB dans le même
+///   granule de 64 Kio.
+/// - `base_addr != 0` avec `MEM_COMMIT` seul : la plage doit tenir dans une
+///   réservation (`STATUS_CONFLICTING_ADDRESSES` sinon).
 ///
-/// Returns the base address of the reserved/committed region.
+/// `MEM_COMMIT` commite les pages réservées de la plage et donne `protect` à ses
+/// pages déjà commitées. Avec `mapper`, les premières sont projetées et les
+/// secondes reprotégées ; en cas d'échec, tout est défait : pages rendues,
+/// protections et VAD comme avant.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
 pub fn allocate(
     vad: &mut VadTree,
     mapper: Option<&mut dyn PageMapper>,
@@ -120,81 +207,214 @@ pub fn allocate(
     size: u64,
     alloc_type: AllocType,
     protect: PageProtect,
-) -> Result<u64, &'static str> {
-    if size == 0 {
-        return Err("NtAllocateVirtualMemory: size == 0");
+) -> Result<u64, NtStatus> {
+    if size == 0 || !alloc_type.intersects(AllocType::MEM_RESERVE | AllocType::MEM_COMMIT) {
+        return Err(STATUS_INVALID_PARAMETER);
     }
-    if !alloc_type.intersects(AllocType::MEM_RESERVE | AllocType::MEM_COMMIT) {
-        return Err("NtAllocateVirtualMemory: must specify MEM_RESERVE or MEM_COMMIT");
+    if !protect.is_valid() {
+        return Err(STATUS_INVALID_PAGE_PROTECTION);
     }
 
-    let size = (size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-
-    let addr = if base_addr == 0 {
-        vad.find_free_gap(USER_VA_START, size, ALLOC_GRANULARITY)
-            .ok_or("NtAllocateVirtualMemory: address space exhausted")?
+    let (start, end, reserve) = if base_addr == 0 {
+        let size = page_align_up(size).ok_or(STATUS_INVALID_PARAMETER)?;
+        let start = vad.find_free_gap(USER_VA_START, size, ALLOC_GRANULARITY).ok_or(STATUS_NO_MEMORY)?;
+        (start, start + size, true)
     } else {
-        // For explicit base addresses snap to page boundary, not 64 KiB.
-        // The 64 KiB granularity applies only to bottom-up (base=0) allocations.
-        // Kernel-internal callers (setup_process for PEB/TEB) require exact
-        // page-level placement; PEB and TEB fall in the same 64 KiB granule
-        // and would alias if we rounded down that far.
-        base_addr & !(PAGE_SIZE - 1)
+        let (start, end) = user_range(base_addr, size)?;
+        (start, end, alloc_type.contains(AllocType::MEM_RESERVE))
     };
 
-    vad.insert(VadNode { start: addr, end: addr + size, protect, kind: VadKind::Private })?;
-
-    // Physically commit pages if requested.
-    if alloc_type.contains(AllocType::MEM_COMMIT) {
-        if let Some(m) = mapper {
-            let writable = protect_writable(protect);
-            let executable = protect_executable(protect);
-
-            let mut va = addr;
-            while va < addr + size {
-                if let Err(e) = m.commit_page(va, writable, executable, /*user=*/ true) {
-                    // Roll back the VAD entry so the address range appears free.
-                    // Physical pages already committed are leaked in Phase 2.
-                    // TODO Phase 3: free partially committed frames here.
-                    vad.remove(addr);
-                    return Err(e);
-                }
-                va += PAGE_SIZE;
-            }
-        }
+    if reserve {
+        vad.insert(VadNode::reserved(start, end, protect, VadKind::Private))
+            .map_err(|_| STATUS_CONFLICTING_ADDRESSES)?;
+    } else if vad.find(start).is_none_or(|node| end > node.end) {
+        return Err(STATUS_CONFLICTING_ADDRESSES);
+    }
+    if !alloc_type.contains(AllocType::MEM_COMMIT) {
+        return Ok(start);
     }
 
-    Ok(addr)
+    let node = vad.find_mut(start).expect("the reservation found or inserted above");
+    let changes = node.commit(start, end, protect);
+    if let Some(m) = mapper {
+        if let Err(status) = map_commit(m, &changes, protect) {
+            if reserve {
+                vad.remove(start);
+            } else {
+                for c in &changes {
+                    match c.old_state {
+                        PageState::Reserved => node.decommit(c.start, c.end),
+                        PageState::Committed => node.commit(c.start, c.end, c.old_protect),
+                    };
+                }
+            }
+            return Err(status);
+        }
+    }
+    Ok(start)
 }
 
-// ── NtFreeVirtualMemory ───────────────────────────────────────────────────────
-
-/// Free virtual memory.
-///
-/// - `MEM_RELEASE`   → remove VAD entry and decommit all pages.
-/// - `MEM_DECOMMIT`  → Phase 2: accepted but no per-page tracking yet, so
-///   pages are not individually decommitted (no-op).
-pub fn free(
-    vad: &mut VadTree,
-    mapper: Option<&mut dyn PageMapper>,
-    base_addr: u64,
-    _size: u64,
-    free_type: FreeType,
-) -> Result<(), &'static str> {
-    if free_type.contains(FreeType::MEM_RELEASE) {
-        let node = vad.remove(base_addr).ok_or("NtFreeVirtualMemory: address not found")?;
-
-        // Decommit every page that was backed with physical frames.
-        if let Some(m) = mapper {
-            let mut va = node.start;
-            while va < node.end {
-                // Best-effort: ignore individual decommit errors.
-                let _ = m.decommit_page(va);
-                va += PAGE_SIZE;
+/// Projette les pages que [`VadNode::commit`] a changées : une page qui était
+/// réservée reçoit une page physique, une page déjà commitée sa nouvelle
+/// protection. En cas d'échec, défait ce qui a été fait.
+fn map_commit(m: &mut dyn PageMapper, changes: &[PageChange], protect: PageProtect) -> Result<(), NtStatus> {
+    let (writable, executable) = (protect_writable(protect), protect_executable(protect));
+    for (i, c) in changes.iter().enumerate() {
+        for va in pages(c.start, c.end) {
+            let done = match c.old_state {
+                PageState::Reserved => m.commit_page(va, writable, executable, /*user=*/ true),
+                PageState::Committed => {
+                    m.protect_page(va, writable, executable);
+                    Ok(())
+                }
+            };
+            if let Err(status) = done {
+                // The changes come in address order: undo every page below `va`.
+                for undo in &changes[..=i] {
+                    for back in pages(undo.start, undo.end.min(va)) {
+                        match undo.old_state {
+                            PageState::Reserved => m.decommit_page(back),
+                            PageState::Committed => m.protect_page(
+                                back,
+                                protect_writable(undo.old_protect),
+                                protect_executable(undo.old_protect),
+                            ),
+                        }
+                    }
+                }
+                return Err(status);
             }
         }
     }
     Ok(())
+}
+
+// ── NtFreeVirtualMemory ───────────────────────────────────────────────────────
+
+/// Rend de la mémoire privée ; rend la plage traitée (base, taille).
+///
+/// - `MEM_DECOMMIT` : les pages commitées de `[base_addr, base_addr + size)`
+///   redeviennent réservées, et `mapper` rend leurs pages physiques. La plage
+///   tient dans une réservation (`STATUS_UNABLE_TO_FREE_VM` sinon) ;
+///   `size == 0` désigne toute la réservation qui commence en `base_addr`.
+/// - `MEM_RELEASE` : la réservation qui commence en `base_addr` disparaît, ses
+///   pages commitées d'abord décommitées. `size` vaut 0 ou couvre toute la
+///   réservation (`STATUS_UNABLE_TO_FREE_VM` sinon).
+///
+/// Une adresse hors de toute réservation donne `STATUS_MEMORY_NOT_ALLOCATED`,
+/// une adresse qui n'en est pas le début là où il le faut
+/// `STATUS_FREE_VM_NOT_AT_BASE`. Une vue de section (image, fichier) se rend
+/// par NtUnmapViewOfSection : `STATUS_UNABLE_TO_DELETE_SECTION`.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn free(
+    vad: &mut VadTree,
+    mapper: Option<&mut dyn PageMapper>,
+    base_addr: u64,
+    size: u64,
+    free_type: FreeType,
+) -> Result<(u64, u64), NtStatus> {
+    let release = free_type == FreeType::MEM_RELEASE;
+    if !release && free_type != FreeType::MEM_DECOMMIT {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let node = vad.find_mut(base_addr).ok_or(STATUS_MEMORY_NOT_ALLOCATED)?;
+    if node.kind != VadKind::Private {
+        return Err(STATUS_UNABLE_TO_DELETE_SECTION);
+    }
+    let (start, end) = if size == 0 { (base_addr, node.end) } else { user_range(base_addr, size)? };
+    if (size == 0 || release) && start != node.start {
+        return Err(STATUS_FREE_VM_NOT_AT_BASE);
+    }
+    if end > node.end || (release && end != node.end) {
+        return Err(STATUS_UNABLE_TO_FREE_VM);
+    }
+
+    let changes = node.decommit(start, end);
+    if let Some(m) = mapper {
+        for va in changes.iter().flat_map(|c| pages(c.start, c.end)) {
+            m.decommit_page(va);
+        }
+    }
+    if release {
+        vad.remove(start);
+    }
+    Ok((start, end - start))
+}
+
+// ── NtProtectVirtualMemory ────────────────────────────────────────────────────
+
+/// Donne la protection `protect` aux pages de `[base_addr, base_addr + size)`,
+/// qui sont toutes commitées et d'une même réservation ; rend l'ancienne
+/// protection de la première.
+///
+/// `STATUS_CONFLICTING_ADDRESSES` si la plage ne tient pas dans une
+/// réservation, `STATUS_NOT_COMMITTED` si une de ses pages n'est pas commitée ;
+/// rien ne change alors.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn protect(
+    vad: &mut VadTree,
+    mapper: Option<&mut dyn PageMapper>,
+    base_addr: u64,
+    size: u64,
+    protect: PageProtect,
+) -> Result<PageProtect, NtStatus> {
+    if !protect.is_valid() {
+        return Err(STATUS_INVALID_PAGE_PROTECTION);
+    }
+    let (start, end) = user_range(base_addr, size)?;
+    let node = vad.find_mut(start).filter(|node| end <= node.end).ok_or(STATUS_CONFLICTING_ADDRESSES)?;
+    let old = node.protect(start, end, protect).ok_or(STATUS_NOT_COMMITTED)?;
+    if let Some(m) = mapper {
+        for va in pages(start, end) {
+            m.protect_page(va, protect_writable(protect), protect_executable(protect));
+        }
+    }
+    Ok(old)
+}
+
+// ── NtQueryVirtualMemory ──────────────────────────────────────────────────────
+
+/// Décrit la plage qui commence à la page de `addr` : libre jusqu'à la
+/// réservation suivante, ou la suite de pages de même état de sa réservation.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn query(vad: &VadTree, addr: u64) -> Result<RegionInfo, NtStatus> {
+    if addr >= USER_VA_END {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let page = addr & !(PAGE_SIZE - 1);
+    let Some(node) = vad.find(page) else {
+        let end = vad.next_after(page).map_or(USER_VA_END, |next| next.start);
+        return Ok(RegionInfo {
+            base_address: page,
+            allocation_base: 0,
+            allocation_protect: PageProtect::empty(),
+            region_size: end - page,
+            state: MemState::Free,
+            protect: PageProtect::NOACCESS,
+            kind: None,
+        });
+    };
+    let (run_start, run) = node.run_at(page).expect("a page of the reservation");
+    let committed = run.state == PageState::Committed;
+    Ok(RegionInfo {
+        base_address: page,
+        allocation_base: node.start,
+        allocation_protect: node.protect,
+        region_size: run_start + run.pages * PAGE_SIZE - page,
+        state: if committed { MemState::Commit } else { MemState::Reserve },
+        protect: if committed { run.protect } else { PageProtect::empty() },
+        kind: Some(match node.kind {
+            VadKind::Private => MemType::Private,
+            VadKind::Image { .. } => MemType::Image,
+            VadKind::Mapped => MemType::Mapped,
+        }),
+    })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -206,41 +426,50 @@ pub fn free(
 // T4-1d: decommit_page called for every page on MEM_RELEASE
 // T4-1e: Protection flags propagated correctly to mapper
 //
-// Legacy T2-2 tests retained below with updated signatures.
+// Legacy T2-2 tests retained below with updated signatures, then reserve and
+// commit, decommit, release, protect and query.
 
 #[cfg(test)]
 mod tests {
-    use super::super::vad::PageProtect;
+    use super::super::vad::{PageProtect, PageRun};
     use super::*;
+    use alloc::vec::Vec;
 
     // ── MockMapper ─────────────────────────────────────────────────────────────
 
+    #[derive(Default)]
     struct MockMapper {
-        committed: alloc::vec::Vec<(u64, bool, bool, bool)>, // (virt, writable, exec, user)
-        decommitted: alloc::vec::Vec<u64>,
-        fail_on: Option<u64>, // return Err on this virtual address
+        committed: Vec<(u64, bool, bool, bool)>, // (virt, writable, exec, user)
+        decommitted: Vec<u64>,
+        protected: Vec<(u64, bool, bool)>, // (virt, writable, exec)
+        fail_on: Option<u64>,              // return Err on this virtual address
     }
 
     impl MockMapper {
         fn new() -> Self {
-            Self { committed: alloc::vec::Vec::new(), decommitted: alloc::vec::Vec::new(), fail_on: None }
+            Self::default()
         }
         fn with_fail(virt: u64) -> Self {
-            Self { committed: alloc::vec::Vec::new(), decommitted: alloc::vec::Vec::new(), fail_on: Some(virt) }
+            Self { fail_on: Some(virt), ..Self::default() }
+        }
+        fn committed_pages(&self) -> Vec<u64> {
+            self.committed.iter().map(|&(va, ..)| va).collect()
         }
     }
 
     impl PageMapper for MockMapper {
-        fn commit_page(&mut self, virt: u64, w: bool, x: bool, u: bool) -> Result<(), &'static str> {
+        fn commit_page(&mut self, virt: u64, w: bool, x: bool, u: bool) -> Result<(), NtStatus> {
             if self.fail_on == Some(virt) {
-                return Err("mock commit fail");
+                return Err(STATUS_NO_MEMORY);
             }
             self.committed.push((virt, w, x, u));
             Ok(())
         }
-        fn decommit_page(&mut self, virt: u64) -> Result<(), &'static str> {
+        fn decommit_page(&mut self, virt: u64) {
             self.decommitted.push(virt);
-            Ok(())
+        }
+        fn protect_page(&mut self, virt: u64, w: bool, x: bool) {
+            self.protected.push((virt, w, x));
         }
     }
 
@@ -326,8 +555,9 @@ mod tests {
         let mut m = MockMapper::with_fail(fail_addr);
         let result =
             allocate(&mut vad, Some(&mut m), 0, 4 * PAGE_SIZE, AllocType::MEM_RESERVE | AllocType::MEM_COMMIT, rw());
-        assert!(result.is_err());
+        assert_eq!(result, Err(STATUS_NO_MEMORY), "must propagate the mapper's status");
         assert!(vad.is_empty(), "partial commit must roll back VAD");
+        assert_eq!(m.decommitted, [expected_base, expected_base + PAGE_SIZE], "the pages backed so far go back");
     }
 
     #[test]
@@ -362,15 +592,15 @@ mod tests {
     }
 
     #[test]
-    fn free_decommit_only_does_not_call_decommit_page() {
-        // MEM_DECOMMIT without MEM_RELEASE — Phase 2 no-op.
+    fn free_decommit_returns_the_page_and_keeps_the_reservation() {
+        // MEM_DECOMMIT without MEM_RELEASE: was a no-op (audit §4.5).
         let mut vad = VadTree::new();
         let mut m = MockMapper::new();
         let addr = commit(&mut vad, &mut m, PAGE_SIZE);
-        m.decommitted.clear(); // reset after initial commit
-        free(&mut vad, Some(&mut m), addr, PAGE_SIZE, FreeType::MEM_DECOMMIT).unwrap();
-        assert_eq!(m.decommitted.len(), 0, "MEM_DECOMMIT without RELEASE must be no-op");
+        assert_eq!(free(&mut vad, Some(&mut m), addr, PAGE_SIZE, FreeType::MEM_DECOMMIT), Ok((addr, PAGE_SIZE)));
+        assert_eq!(m.decommitted, [addr], "MEM_DECOMMIT must return the page");
         assert!(vad.find(addr).is_some(), "VAD entry must remain after decommit-only");
+        assert_eq!(query(&vad, addr).unwrap().state, MemState::Reserve);
     }
 
     // ── T4-1e: protection flags ───────────────────────────────────────────────
@@ -490,5 +720,254 @@ mod tests {
         let addr = alloc_no_mapper(&mut vad, PAGE_SIZE);
         free(&mut vad, None, addr, PAGE_SIZE, FreeType::MEM_RELEASE).unwrap();
         assert!(vad.find(addr).is_none());
+    }
+
+    // ── Réservation puis commit ───────────────────────────────────────────────
+
+    const BASE: u64 = 0x0040_0000;
+    const P: u64 = PAGE_SIZE;
+    const COMMIT: AllocType = AllocType::MEM_COMMIT;
+    const RESERVE: AllocType = AllocType::MEM_RESERVE;
+
+    fn rx() -> PageProtect {
+        PageProtect::EXECUTE_READ
+    }
+
+    /// Une réservation de `pages` pages en `BASE`, rien de commité.
+    fn reserve(vad: &mut VadTree, pages: u64) {
+        assert_eq!(allocate(vad, None, BASE, pages * P, RESERVE, rw()), Ok(BASE));
+    }
+
+    fn runs(vad: &VadTree) -> Vec<(u64, PageState, PageProtect)> {
+        vad.find(BASE)
+            .unwrap()
+            .runs()
+            .iter()
+            .map(|&PageRun { pages, state, protect }| (pages, state, protect))
+            .collect()
+    }
+
+    const R: PageState = PageState::Reserved;
+    const C: PageState = PageState::Committed;
+
+    #[test]
+    fn commit_inside_a_reservation_backs_only_those_pages() {
+        // Reserve-then-commit used to fail: the commit was a second, overlapping VAD.
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        reserve(&mut vad, 16);
+        assert_eq!(allocate(&mut vad, Some(&mut m), BASE + 4 * P, 2 * P, COMMIT, rx()), Ok(BASE + 4 * P));
+        assert_eq!(m.committed, [(BASE + 4 * P, false, true, true), (BASE + 5 * P, false, true, true)]);
+        assert_eq!(vad.len(), 1, "no second VAD");
+        assert_eq!(runs(&vad), [(4, R, rw()), (2, C, rx()), (10, R, rw())]);
+    }
+
+    #[test]
+    fn commit_outside_or_across_a_reservation_fails_and_changes_nothing() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        assert_eq!(allocate(&mut vad, Some(&mut m), BASE, P, COMMIT, rw()), Err(STATUS_CONFLICTING_ADDRESSES));
+        assert!(vad.is_empty());
+        reserve(&mut vad, 4);
+        let across = allocate(&mut vad, Some(&mut m), BASE + 2 * P, 4 * P, COMMIT, rw());
+        assert_eq!(across, Err(STATUS_CONFLICTING_ADDRESSES));
+        let below = allocate(&mut vad, Some(&mut m), BASE - P, 2 * P, COMMIT, rw());
+        assert_eq!(below, Err(STATUS_CONFLICTING_ADDRESSES));
+        assert_eq!(runs(&vad), [(4, R, rw())]);
+        assert!(m.committed.is_empty());
+    }
+
+    #[test]
+    fn reserving_over_a_reservation_fails() {
+        let mut vad = VadTree::new();
+        reserve(&mut vad, 4);
+        let overlap = allocate(&mut vad, None, BASE + 3 * P, 2 * P, RESERVE | COMMIT, rw());
+        assert_eq!(overlap, Err(STATUS_CONFLICTING_ADDRESSES));
+        assert_eq!(vad.len(), 1);
+    }
+
+    #[test]
+    fn recommitting_reprotects_the_committed_pages() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        reserve(&mut vad, 4);
+        allocate(&mut vad, Some(&mut m), BASE, 2 * P, COMMIT, rw()).unwrap();
+        allocate(&mut vad, Some(&mut m), BASE, 4 * P, COMMIT, rx()).unwrap();
+        assert_eq!(m.committed_pages(), [BASE, BASE + P, BASE + 2 * P, BASE + 3 * P], "each page backed once");
+        assert_eq!(m.protected, [(BASE, false, true), (BASE + P, false, true)]);
+        assert_eq!(runs(&vad), [(4, C, rx())]);
+    }
+
+    #[test]
+    fn a_failed_commit_inside_a_reservation_restores_pages_and_protections() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::with_fail(BASE + 3 * P);
+        reserve(&mut vad, 4);
+        allocate(&mut vad, Some(&mut m), BASE, 2 * P, COMMIT, rw()).unwrap();
+        m.committed.clear();
+        let failed = allocate(&mut vad, Some(&mut m), BASE, 4 * P, COMMIT, rx());
+        assert_eq!(failed, Err(STATUS_NO_MEMORY));
+        assert_eq!(m.committed_pages(), [BASE + 2 * P]);
+        assert_eq!(m.decommitted, [BASE + 2 * P], "the page backed by this call goes back");
+        assert_eq!(
+            m.protected,
+            [(BASE, false, true), (BASE + P, false, true), (BASE, true, false), (BASE + P, true, false)],
+            "reprotected, then restored"
+        );
+        assert_eq!(runs(&vad), [(2, C, rw()), (2, R, rw())]);
+    }
+
+    #[test]
+    fn decommitted_pages_can_be_committed_again() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        allocate(&mut vad, Some(&mut m), BASE, 4 * P, RESERVE | COMMIT, rw()).unwrap();
+        assert_eq!(free(&mut vad, Some(&mut m), BASE + P, 2 * P, FreeType::MEM_DECOMMIT), Ok((BASE + P, 2 * P)));
+        assert_eq!(m.decommitted, [BASE + P, BASE + 2 * P]);
+        assert_eq!(runs(&vad), [(1, C, rw()), (2, R, rw()), (1, C, rw())]);
+        m.committed.clear();
+        allocate(&mut vad, Some(&mut m), BASE, 4 * P, COMMIT, rw()).unwrap();
+        assert_eq!(m.committed_pages(), [BASE + P, BASE + 2 * P], "only the decommitted pages are backed again");
+        assert_eq!(runs(&vad), [(4, C, rw())]);
+    }
+
+    #[test]
+    fn decommitting_reserved_pages_returns_nothing() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        reserve(&mut vad, 4);
+        assert_eq!(free(&mut vad, Some(&mut m), BASE, 0, FreeType::MEM_DECOMMIT), Ok((BASE, 4 * P)));
+        assert!(m.decommitted.is_empty());
+        assert_eq!(vad.len(), 1);
+    }
+
+    #[test]
+    fn release_returns_only_the_committed_pages() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        reserve(&mut vad, 8);
+        allocate(&mut vad, Some(&mut m), BASE + 2 * P, P, COMMIT, rw()).unwrap();
+        allocate(&mut vad, Some(&mut m), BASE + 5 * P, P, COMMIT, rw()).unwrap();
+        assert_eq!(free(&mut vad, Some(&mut m), BASE, 0, FreeType::MEM_RELEASE), Ok((BASE, 8 * P)));
+        assert_eq!(m.decommitted, [BASE + 2 * P, BASE + 5 * P]);
+        assert!(vad.is_empty());
+    }
+
+    #[test]
+    fn free_checks_the_address_the_size_and_the_type() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        allocate(&mut vad, Some(&mut m), BASE, 4 * P, RESERVE | COMMIT, rw()).unwrap();
+        let mut free = |base, size, ty| free(&mut vad, Some(&mut m), base, size, ty);
+        assert_eq!(free(BASE + 8 * P, 0, FreeType::MEM_RELEASE), Err(STATUS_MEMORY_NOT_ALLOCATED));
+        assert_eq!(free(BASE + P, 0, FreeType::MEM_RELEASE), Err(STATUS_FREE_VM_NOT_AT_BASE));
+        assert_eq!(free(BASE + P, P, FreeType::MEM_RELEASE), Err(STATUS_FREE_VM_NOT_AT_BASE));
+        assert_eq!(free(BASE + P, 0, FreeType::MEM_DECOMMIT), Err(STATUS_FREE_VM_NOT_AT_BASE));
+        assert_eq!(free(BASE, 2 * P, FreeType::MEM_RELEASE), Err(STATUS_UNABLE_TO_FREE_VM), "partial release");
+        assert_eq!(free(BASE + P, 4 * P, FreeType::MEM_DECOMMIT), Err(STATUS_UNABLE_TO_FREE_VM));
+        let both = FreeType::MEM_RELEASE | FreeType::MEM_DECOMMIT;
+        assert_eq!(free(BASE, 0, both), Err(STATUS_INVALID_PARAMETER));
+        assert_eq!(free(BASE, 0, FreeType::empty()), Err(STATUS_INVALID_PARAMETER));
+        assert!(m.decommitted.is_empty());
+        assert_eq!(runs(&vad), [(4, C, rw())]);
+    }
+
+    #[test]
+    fn a_section_view_is_not_freed_here() {
+        let mut vad = VadTree::new();
+        vad.insert(VadNode::reserved(BASE, BASE + P, rw(), VadKind::Mapped)).unwrap();
+        assert_eq!(free(&mut vad, None, BASE, 0, FreeType::MEM_RELEASE), Err(STATUS_UNABLE_TO_DELETE_SECTION));
+        assert_eq!(vad.len(), 1);
+    }
+
+    #[test]
+    fn protect_changes_committed_pages_and_returns_the_old_protection() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        allocate(&mut vad, Some(&mut m), BASE, 4 * P, RESERVE | COMMIT, rw()).unwrap();
+        assert_eq!(protect(&mut vad, Some(&mut m), BASE + P, 2 * P, rx()), Ok(rw()));
+        assert_eq!(m.protected, [(BASE + P, false, true), (BASE + 2 * P, false, true)]);
+        assert_eq!(runs(&vad), [(1, C, rw()), (2, C, rx()), (1, C, rw())]);
+        assert_eq!(protect(&mut vad, Some(&mut m), BASE + 2 * P, P, rw()), Ok(rx()));
+    }
+
+    #[test]
+    fn protect_refuses_reserved_free_and_invalid() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        reserve(&mut vad, 4);
+        allocate(&mut vad, Some(&mut m), BASE, 2 * P, COMMIT, rw()).unwrap();
+        let mut protect = |base, size, p| protect(&mut vad, Some(&mut m), base, size, p);
+        assert_eq!(protect(BASE + P, 2 * P, rx()), Err(STATUS_NOT_COMMITTED));
+        assert_eq!(protect(BASE + 3 * P, 2 * P, rx()), Err(STATUS_CONFLICTING_ADDRESSES));
+        assert_eq!(protect(BASE + 8 * P, P, rx()), Err(STATUS_CONFLICTING_ADDRESSES));
+        assert_eq!(protect(BASE, P, rx() | rw()), Err(STATUS_INVALID_PAGE_PROTECTION));
+        assert_eq!(protect(BASE, 0, rx()), Err(STATUS_INVALID_PARAMETER));
+        assert!(m.protected.is_empty());
+        assert_eq!(runs(&vad), [(2, C, rw()), (2, R, rw())]);
+    }
+
+    #[test]
+    fn query_describes_free_reserved_and_committed_regions() {
+        let mut vad = VadTree::new();
+        let free_all = query(&vad, BASE + 0x123).unwrap();
+        assert_eq!((free_all.base_address, free_all.region_size), (BASE, USER_VA_END - BASE));
+        assert_eq!((free_all.state, free_all.protect, free_all.kind), (MemState::Free, na(), None));
+
+        reserve(&mut vad, 16);
+        allocate(&mut vad, None, BASE + 4 * P, 2 * P, COMMIT, rx()).unwrap();
+        let below = query(&vad, BASE - 0x10_0000).unwrap();
+        assert_eq!((below.base_address, below.region_size), (BASE - 0x10_0000, 0x10_0000), "free up to the VAD");
+        assert_eq!((below.allocation_base, below.allocation_protect), (0, PageProtect::empty()));
+
+        let reserved = query(&vad, BASE + P + 0x234).unwrap();
+        let expected = RegionInfo {
+            base_address: BASE + P,
+            allocation_base: BASE,
+            allocation_protect: rw(),
+            region_size: 3 * P,
+            state: MemState::Reserve,
+            protect: PageProtect::empty(),
+            kind: Some(MemType::Private),
+        };
+        assert_eq!(reserved, expected);
+        let committed = query(&vad, BASE + 4 * P).unwrap();
+        assert_eq!((committed.region_size, committed.state, committed.protect), (2 * P, MemState::Commit, rx()));
+        let tail = query(&vad, BASE + 6 * P).unwrap();
+        assert_eq!((tail.region_size, tail.state), (10 * P, MemState::Reserve));
+        let above = query(&vad, BASE + 16 * P).unwrap();
+        assert_eq!((above.region_size, above.state), (USER_VA_END - BASE - 16 * P, MemState::Free));
+        assert_eq!(query(&vad, USER_VA_END), Err(STATUS_INVALID_PARAMETER));
+    }
+
+    #[test]
+    fn allocate_checks_protection_and_range() {
+        let mut vad = VadTree::new();
+        let bad = PageProtect::READWRITE | PageProtect::EXECUTE_READ;
+        assert_eq!(allocate(&mut vad, None, 0, P, RESERVE, bad), Err(STATUS_INVALID_PAGE_PROTECTION));
+        assert_eq!(allocate(&mut vad, None, P, P, RESERVE, rw()), Err(STATUS_INVALID_PARAMETER), "below 64 KiB");
+        let over_the_top = allocate(&mut vad, None, USER_VA_END - P, 2 * P, RESERVE, rw());
+        assert_eq!(over_the_top, Err(STATUS_INVALID_PARAMETER));
+        assert_eq!(allocate(&mut vad, None, u64::MAX - P, 2 * P, RESERVE, rw()), Err(STATUS_INVALID_PARAMETER));
+        assert_eq!(allocate(&mut vad, None, 0, P, AllocType::MEM_RESET, rw()), Err(STATUS_INVALID_PARAMETER));
+        assert_eq!(allocate(&mut vad, None, 0, USER_VA_END, RESERVE, rw()), Err(STATUS_NO_MEMORY), "too big");
+        assert!(vad.is_empty());
+    }
+
+    #[test]
+    fn an_unaligned_base_reserves_every_page_it_touches() {
+        let mut vad = VadTree::new();
+        assert_eq!(allocate(&mut vad, None, BASE + 0x800, P, RESERVE, rw()), Ok(BASE));
+        let node = vad.find(BASE).unwrap();
+        assert_eq!((node.start, node.end), (BASE, BASE + 2 * P));
+    }
+
+    #[test]
+    fn commit_alone_at_no_base_reserves_too() {
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        let addr = allocate(&mut vad, Some(&mut m), 0, 2 * P, COMMIT, rw()).unwrap();
+        assert_eq!(m.committed_pages(), [addr, addr + P]);
+        assert_eq!(query(&vad, addr).unwrap().region_size, 2 * P);
     }
 }

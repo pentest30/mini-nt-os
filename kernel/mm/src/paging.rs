@@ -304,6 +304,35 @@ impl MmPageTables {
         frame
     }
 
+    /// Replace the flags of the 4 KiB page mapped at `virt` and flush its
+    /// TLB entry.
+    ///
+    /// # Safety
+    /// `virt` must currently be mapped as a 4 KiB page, and nothing may rely on
+    /// its former access rights.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL (allocates nothing).
+    pub unsafe fn update_flags(&mut self, virt: VirtAddr, flags: PageTableFlags) {
+        let page = Page::<Size4KiB>::containing_address(virt);
+        // SAFETY: caller guarantees the page is mapped and its rights may change.
+        let flush = unsafe { self.inner.update_flags(page, flags | PageTableFlags::PRESENT) }
+            .expect("MmPageTables::update_flags: page not mapped");
+        flush.flush();
+    }
+
+    /// The leaf flags of a page with these rights.
+    ///
+    /// # IRQL
+    /// Any level.
+    pub fn leaf_flags(writable: bool, executable: bool, user: bool) -> PageTableFlags {
+        let mut flags = PageTableFlags::PRESENT;
+        flags.set(PageTableFlags::WRITABLE, writable);
+        flags.set(PageTableFlags::NO_EXECUTE, !executable);
+        flags.set(PageTableFlags::USER_ACCESSIBLE, user);
+        flags
+    }
+
     /// Translate a virtual address to its physical address and leaf PTE flags.
     ///
     /// Returns `None` if any level of the page-table hierarchy is not present.

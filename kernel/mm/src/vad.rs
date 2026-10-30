@@ -1,25 +1,29 @@
-//! VAD — Virtual Address Descriptor tree.
+//! VAD (02 §5.3) : les plages d'adresses d'un processus.
 //!
-//! NT tracks every VirtualAlloc region in an AVL tree of VAD nodes
-//! per process. Each node describes:
-//!   - Virtual address range [start, end)
-//!   - Protection flags (PAGE_READWRITE, PAGE_EXECUTE_READ, …)
-//!   - Type (private, mapped section, image)
+//! Chaque nœud ([`VadNode`]) décrit une réservation `[start, end)` : son type
+//! (privé, image, fichier), la protection donnée à la réservation, et l'état
+//! de chacune de ses pages, réservée ou commitée avec sa protection, en suites
+//! de pages de même état ([`PageRun`]). [`VadNode::commit`],
+//! [`VadNode::decommit`] et [`VadNode::protect`] changent ces états et disent
+//! quelles pages ont changé, pour que l'appelant les projette ou les rende
+//! (`mm::virtual_alloc`).
 //!
-//! The PE loader inserts VAD nodes when mapping an .exe or .dll.
-//! Games call VirtualAlloc which also inserts nodes.
-//!
-//! Implementation: a `BTreeMap` keyed by start address. It replaced a
-//! 64-entry array that worked around a "BTreeMap corruption" blamed on the
-//! early heap (audit §4.2); with guarded kernel stacks and `mm::pool`, the
-//! boot heap self-test and the smoke test run clean. The AVL tree of NT
-//! comes with the per-process address spaces of M2.
+//! L'arbre est un `BTreeMap` (B-arbre équilibré) clé sur le début des nœuds,
+//! plutôt que l'arbre AVL intrusif de NT : mêmes complexités, aucune limite de
+//! nombre, et ses nœuds viennent du pool comme le reste. Il a remplacé un
+//! tableau de 64 entrées qui refusait la 65e allocation (audit §4.5) et
+//! contournait une « corruption du BTreeMap » imputée au premier tas
+//! (audit §4.2) ; avec les piles noyau gardées et `mm::pool`, l'autotest du
+//! tas et le smoke test passent.
 //!
 //! WI7e Ch.5 §Virtual Address Descriptors
-//! ReactOS ntoskrnl/mm/vadnode.c
 
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use bitflags::bitflags;
+
+/// Taille d'une page.
+const PAGE: u64 = 0x1000;
 
 bitflags! {
     /// Page protection flags — matches NT PAGE_* constants.
@@ -38,30 +42,227 @@ bitflags! {
     }
 }
 
-/// VAD node — describes one virtual memory region.
+impl PageProtect {
+    /// Une protection acceptée par NtAllocateVirtualMemory et
+    /// NtProtectVirtualMemory : une seule protection de base, avec au plus
+    /// `GUARD` ou `NOCACHE`, qui ne vont pas avec `NOACCESS`.
+    pub fn is_valid(self) -> bool {
+        let base = self.bits() & 0xFF;
+        let modifiers = self & (Self::GUARD | Self::NOCACHE);
+        base.count_ones() == 1
+            && self.bits() & !0x3FF == 0
+            && modifiers != Self::GUARD | Self::NOCACHE
+            && (base != Self::NOACCESS.bits() || modifiers.is_empty())
+    }
+}
+
+/// État d'une page d'une réservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageState {
+    /// Réservée : aucune mémoire derrière, tout accès fait une faute.
+    Reserved,
+    /// Commitée : utilisable avec sa protection.
+    Committed,
+}
+
+/// Une suite de pages consécutives de même état et de même protection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageRun {
+    pub pages: u64,
+    pub state: PageState,
+    /// Protection des pages commitées ; celle de la réservation sinon.
+    pub protect: PageProtect,
+}
+
+/// Une plage de pages changée par une opération, avec ce qu'elle était.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PageChange {
+    pub start: u64,
+    pub end: u64, // exclusive
+    pub old_state: PageState,
+    pub old_protect: PageProtect,
+}
+
+/// VAD node — describes one reservation and the state of its pages.
 #[derive(Clone, Debug)]
 pub struct VadNode {
     pub start: u64,
     pub end: u64, // exclusive
+    /// Protection donnée à la réservation (AllocationProtect).
     pub protect: PageProtect,
     pub kind: VadKind,
+    /// Les pages de `start` à `end`, dans l'ordre ; deux suites voisines
+    /// diffèrent toujours.
+    runs: Vec<PageRun>,
 }
 
 impl VadNode {
+    /// Une réservation privée des pages qui couvrent `[start, end)`,
+    /// entièrement commitée avec `protect`.
     pub fn private(start: u64, end: u64, protect: PageProtect) -> Self {
-        Self { start, end, protect, kind: VadKind::Private }
+        let mut node = Self::reserved(start & !(PAGE - 1), align_up(end, PAGE), protect, VadKind::Private);
+        node.runs[0].state = PageState::Committed;
+        node
+    }
+
+    /// Une réservation dont aucune page n'est commitée.
+    ///
+    /// # Panics
+    /// Si `[start, end)` n'est pas une plage de pages non vide.
+    pub fn reserved(start: u64, end: u64, protect: PageProtect, kind: VadKind) -> Self {
+        assert!(start.is_multiple_of(PAGE) && end.is_multiple_of(PAGE) && start < end, "VAD [{start:#x}, {end:#x})");
+        let runs = alloc::vec![PageRun { pages: (end - start) / PAGE, state: PageState::Reserved, protect }];
+        Self { start, end, protect, kind, runs }
+    }
+
+    /// Les suites de pages de la réservation, dans l'ordre.
+    pub fn runs(&self) -> &[PageRun] {
+        &self.runs
+    }
+
+    /// La suite qui contient `addr`, et l'adresse de son début.
+    pub fn run_at(&self, addr: u64) -> Option<(u64, PageRun)> {
+        let mut at = self.start;
+        for &run in &self.runs {
+            let end = at + run.pages * PAGE;
+            if (at..end).contains(&addr) {
+                return Some((at, run));
+            }
+            at = end;
+        }
+        None
+    }
+
+    /// Commite les pages de `[start, end)` avec `protect` : les pages
+    /// réservées deviennent commitées, les pages déjà commitées prennent cette
+    /// protection (comme ReactOS et Wine). Rend les plages changées.
+    pub fn commit(&mut self, start: u64, end: u64, protect: PageProtect) -> Vec<PageChange> {
+        self.update(start, end, |run| {
+            let changes = run.state == PageState::Reserved || run.protect != protect;
+            if changes {
+                *run = PageRun { state: PageState::Committed, protect, ..*run };
+            }
+            changes
+        })
+    }
+
+    /// Décommite les pages commitées de `[start, end)` : elles redeviennent
+    /// réservées. Rend les plages qui étaient commitées.
+    pub fn decommit(&mut self, start: u64, end: u64) -> Vec<PageChange> {
+        let reservation = self.protect;
+        self.update(start, end, |run| {
+            let committed = run.state == PageState::Committed;
+            if committed {
+                *run = PageRun { state: PageState::Reserved, protect: reservation, ..*run };
+            }
+            committed
+        })
+    }
+
+    /// Donne la protection `protect` aux pages de `[start, end)`, toutes
+    /// commitées ; rend l'ancienne protection de la première, ou `None`
+    /// (rien de changé) si l'une n'est pas commitée.
+    pub fn protect(&mut self, start: u64, end: u64, protect: PageProtect) -> Option<PageProtect> {
+        self.check_range(start, end)?;
+        let (_, first) = self.run_at(start)?;
+        if !self.runs_in(start, end).all(|r| r.state == PageState::Committed) {
+            return None;
+        }
+        self.update(start, end, |run| {
+            run.protect = protect;
+            true
+        });
+        Some(first.protect)
+    }
+
+    /// Les suites qui recoupent `[start, end)`.
+    fn runs_in(&self, start: u64, end: u64) -> impl Iterator<Item = &PageRun> + '_ {
+        let mut at = self.start;
+        self.runs.iter().filter(move |run| {
+            let run_end = at + run.pages * PAGE;
+            let overlaps = at < end && start < run_end;
+            at = run_end;
+            overlaps
+        })
+    }
+
+    /// `Some` si `[start, end)` est une plage de pages non vide de la réservation.
+    fn check_range(&self, start: u64, end: u64) -> Option<()> {
+        (start.is_multiple_of(PAGE)
+            && end.is_multiple_of(PAGE)
+            && self.start <= start
+            && start < end
+            && end <= self.end)
+            .then_some(())
+    }
+
+    /// Applique `change` à chaque suite de `[start, end)`, coupées à ses bords,
+    /// puis refusionne les suites voisines égales. Rend, dans l'ordre, les
+    /// plages des suites que `change` dit avoir changées, avec leur état
+    /// d'avant.
+    ///
+    /// # Panics
+    /// Si `[start, end)` n'est pas une plage de pages non vide de la réservation.
+    fn update(&mut self, start: u64, end: u64, mut change: impl FnMut(&mut PageRun) -> bool) -> Vec<PageChange> {
+        assert!(self.check_range(start, end).is_some(), "[{start:#x}, {end:#x}) outside the VAD");
+        self.split_at(start);
+        self.split_at(end);
+        let mut changed = Vec::new();
+        let mut at = self.start;
+        for run in &mut self.runs {
+            let run_end = at + run.pages * PAGE;
+            let old = *run;
+            if at >= start && run_end <= end && change(run) {
+                changed.push(PageChange { start: at, end: run_end, old_state: old.state, old_protect: old.protect });
+            }
+            at = run_end;
+        }
+        self.merge();
+        changed
+    }
+
+    /// Coupe la suite qui contient `addr` pour qu'une suite commence en `addr`.
+    fn split_at(&mut self, addr: u64) {
+        let mut at = self.start;
+        for i in 0..self.runs.len() {
+            let run = self.runs[i];
+            let end = at + run.pages * PAGE;
+            if at < addr && addr < end {
+                let before = (addr - at) / PAGE;
+                self.runs[i].pages = before;
+                self.runs.insert(i + 1, PageRun { pages: run.pages - before, ..run });
+                return;
+            }
+            at = end;
+        }
+    }
+
+    /// Fusionne les suites voisines de même état et de même protection.
+    fn merge(&mut self) {
+        let mut merged: Vec<PageRun> = Vec::with_capacity(self.runs.len());
+        for run in self.runs.drain(..) {
+            match merged.last_mut() {
+                Some(last) if last.state == run.state && last.protect == run.protect => last.pages += run.pages,
+                _ => merged.push(run),
+            }
+        }
+        self.runs = merged;
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VadKind {
-    /// Private committed pages (VirtualAlloc MEM_COMMIT).
+    /// Private memory (VirtualAlloc).
     Private,
     /// Image mapping (PE loader).
     Image { path: alloc::string::String },
     /// Data file mapping (CreateFileMapping).
     Mapped,
 }
+
+/// Fin (exclue) de l'espace utilisateur d'un processus 32 bits (2 Gio, moins
+/// la zone interdite du haut, comme XP).
+pub const USER_VA_END: u64 = 0x7FFF_0000;
 
 /// Per-process VAD tree: non-overlapping nodes keyed by start address.
 pub struct VadTree {
@@ -88,25 +289,34 @@ impl VadTree {
     ///
     /// Overlap condition: two ranges [a, b) and [c, d) overlap iff a < d && c < b.
     pub fn insert(&mut self, node: VadNode) -> Result<(), &'static str> {
-        // The node starting at or below node.start might extend into our range.
-        if let Some((_, prev)) = self.nodes.range(..=node.start).next_back() {
-            if prev.end > node.start {
-                return Err("VAD overlap");
-            }
-        }
-        // The first node starting after node.start might begin inside our range.
-        if let Some((_, next)) = self.nodes.range(node.start..).next() {
-            if next.start < node.end {
-                return Err("VAD overlap");
-            }
+        if self.overlaps(node.start, node.end) {
+            return Err("VAD overlap");
         }
         self.nodes.insert(node.start, node);
         Ok(())
     }
 
+    /// Un nœud recoupe `[start, end)`.
+    fn overlaps(&self, start: u64, end: u64) -> bool {
+        // The node starting at or below start might extend into the range;
+        // the first node starting after it might begin inside it.
+        self.nodes.range(..=start).next_back().is_some_and(|(_, prev)| prev.end > start)
+            || self.nodes.range(start..).next().is_some_and(|(_, next)| next.start < end)
+    }
+
     /// Find the VAD node containing `addr`, if any.
     pub fn find(&self, addr: u64) -> Option<&VadNode> {
         self.nodes.range(..=addr).next_back().map(|(_, node)| node).filter(|node| addr < node.end)
+    }
+
+    /// Le nœud qui contient `addr`, modifiable.
+    pub fn find_mut(&mut self, addr: u64) -> Option<&mut VadNode> {
+        self.nodes.range_mut(..=addr).next_back().map(|(_, node)| node).filter(|node| addr < node.end)
+    }
+
+    /// Le premier nœud qui commence après `addr`.
+    pub fn next_after(&self, addr: u64) -> Option<&VadNode> {
+        self.nodes.range(addr + 1..).next().map(|(_, node)| node)
     }
 
     /// Remove the VAD node starting at `start_addr` (VirtualFree MEM_RELEASE).
@@ -121,7 +331,8 @@ impl VadTree {
     }
 
     /// Find the lowest free virtual range of at least `size` bytes,
-    /// starting the search at `search_start` (aligned to `align`).
+    /// starting the search at `search_start` (aligned to `align`), below
+    /// [`USER_VA_END`].
     ///
     /// Returns the base address of the gap, or `None` if the address
     /// space is exhausted.
@@ -141,14 +352,14 @@ impl VadTree {
             }
             // Is there a gap between cursor and this node?
             if node.start >= cursor + size {
-                return Some(cursor);
+                break;
             }
             // Move cursor past this node, realign.
             cursor = align_up(node.end, align);
         }
 
-        // Gap after the last node (or the tree is empty).
-        Some(cursor)
+        // The gap found, or the one after the last node.
+        (cursor.checked_add(size)? <= USER_VA_END).then_some(cursor)
     }
 }
 
@@ -180,6 +391,12 @@ mod tests {
     }
     fn rx() -> PageProtect {
         PageProtect::EXECUTE_READ
+    }
+    fn ro() -> PageProtect {
+        PageProtect::READONLY
+    }
+    fn na() -> PageProtect {
+        PageProtect::NOACCESS
     }
 
     // ── T2-1a: insert / find / remove ────────────────────────────────────────
@@ -301,8 +518,6 @@ mod tests {
 
     // ── T2-1c: find_free_gap ──────────────────────────────────────────────────
 
-    const PAGE: u64 = 0x1000;
-
     #[test]
     fn find_free_gap_empty_tree_returns_search_start() {
         let t = VadTree::new();
@@ -401,5 +616,131 @@ mod tests {
         assert!(t.find(0x1000).is_some());
         assert!(t.find(0x3000).is_none());
         assert!(t.find(0x5000).is_some());
+    }
+
+    // ── États des pages ──────────────────────────────────────────────────────
+
+    fn reserved(pages: u64) -> VadNode {
+        VadNode::reserved(0x10_0000, 0x10_0000 + pages * PAGE, rw(), VadKind::Private)
+    }
+
+    fn run(pages: u64, state: PageState, protect: PageProtect) -> PageRun {
+        PageRun { pages, state, protect }
+    }
+
+    const R: PageState = PageState::Reserved;
+    const C: PageState = PageState::Committed;
+
+    fn change(start: u64, end: u64, old_state: PageState, old_protect: PageProtect) -> PageChange {
+        PageChange { start, end, old_state, old_protect }
+    }
+
+    #[test]
+    fn a_reservation_starts_with_no_page_committed() {
+        let n = reserved(16);
+        assert_eq!(n.runs(), [run(16, R, rw())]);
+        assert_eq!(VadNode::private(0x1000, 0x3000, rw()).runs(), [run(2, C, rw())]);
+        let unaligned = VadNode::private(0x1800, 0x2800, rw());
+        assert_eq!((unaligned.start, unaligned.end), (0x1000, 0x3000), "the pages the range touches");
+        assert_eq!(unaligned.runs(), [run(2, C, rw())]);
+    }
+
+    #[test]
+    fn committing_the_middle_splits_the_reservation_in_three() {
+        let mut n = reserved(16);
+        let base = n.start;
+        let changed = n.commit(base + 4 * PAGE, base + 6 * PAGE, rx());
+        assert_eq!(changed, [change(base + 4 * PAGE, base + 6 * PAGE, R, rw())]);
+        assert_eq!(n.runs(), [run(4, R, rw()), run(2, C, rx()), run(10, R, rw())]);
+        assert_eq!(n.run_at(base + 5 * PAGE), Some((base + 4 * PAGE, run(2, C, rx()))));
+    }
+
+    #[test]
+    fn committing_already_committed_pages_gives_them_the_new_protection() {
+        let mut n = reserved(8);
+        let base = n.start;
+        n.commit(base + 2 * PAGE, base + 4 * PAGE, rx());
+        n.commit(base + 6 * PAGE, base + 8 * PAGE, rw());
+        let changed = n.commit(base, base + 8 * PAGE, rw());
+        assert_eq!(
+            changed,
+            [
+                change(base, base + 2 * PAGE, R, rw()),
+                change(base + 2 * PAGE, base + 4 * PAGE, C, rx()),
+                change(base + 4 * PAGE, base + 6 * PAGE, R, rw()),
+            ],
+            "pages 6 and 7 were already committed with this protection"
+        );
+        assert_eq!(n.runs(), [run(8, C, rw())]);
+    }
+
+    #[test]
+    fn pages_committed_one_by_one_merge_into_one_run() {
+        let mut n = reserved(8);
+        let base = n.start;
+        for i in [3, 0, 7, 1, 2, 6, 4, 5] {
+            n.commit(base + i * PAGE, base + (i + 1) * PAGE, rw());
+        }
+        assert_eq!(n.runs(), [run(8, C, rw())]);
+    }
+
+    #[test]
+    fn decommitting_returns_what_was_committed_and_restores_the_reservation() {
+        let mut n = reserved(8);
+        let base = n.start;
+        n.commit(base, base + 3 * PAGE, rx());
+        n.commit(base + 5 * PAGE, base + 8 * PAGE, rx());
+        let changed = n.decommit(base + 2 * PAGE, base + 6 * PAGE);
+        assert_eq!(
+            changed,
+            [change(base + 2 * PAGE, base + 3 * PAGE, C, rx()), change(base + 5 * PAGE, base + 6 * PAGE, C, rx())]
+        );
+        assert_eq!(n.runs(), [run(2, C, rx()), run(4, R, rw()), run(2, C, rx())]);
+    }
+
+    #[test]
+    fn protect_needs_every_page_committed_and_returns_the_old_protection() {
+        let mut n = reserved(8);
+        let base = n.start;
+        n.commit(base, base + 4 * PAGE, rw());
+        assert_eq!(n.protect(base + 2 * PAGE, base + 6 * PAGE, rx()), None, "pages 4 and 5 are reserved");
+        assert_eq!(n.runs(), [run(4, C, rw()), run(4, R, rw())], "nothing changed");
+        assert_eq!(n.protect(base + PAGE, base + 3 * PAGE, rx()), Some(rw()));
+        assert_eq!(n.runs(), [run(1, C, rw()), run(2, C, rx()), run(1, C, rw()), run(4, R, rw())]);
+        assert_eq!(n.protect(base, base + 4 * PAGE, rw()), Some(rw()));
+        assert_eq!(n.runs(), [run(4, C, rw()), run(4, R, rw())], "merged back");
+    }
+
+    #[test]
+    fn valid_protections() {
+        for p in [na(), ro(), rw(), rx(), PageProtect::EXECUTE_READWRITE, rw() | PageProtect::GUARD] {
+            assert!(p.is_valid(), "{p:?}");
+        }
+        let invalid = [
+            PageProtect::empty(),
+            rw() | rx(),
+            PageProtect::GUARD,
+            na() | PageProtect::GUARD,
+            rw() | PageProtect::GUARD | PageProtect::NOCACHE,
+            PageProtect::from_bits_retain(0x404),
+        ];
+        for p in invalid {
+            assert!(!p.is_valid(), "{p:?}");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "outside the VAD")]
+    fn a_range_beyond_the_reservation_stops() {
+        let mut n = reserved(4);
+        let base = n.start;
+        n.commit(base + 2 * PAGE, base + 6 * PAGE, rw());
+    }
+
+    #[test]
+    fn the_free_gap_search_stops_at_the_end_of_the_user_space() {
+        let t = VadTree::new();
+        assert_eq!(t.find_free_gap(USER_VA_END - PAGE, PAGE, PAGE), Some(USER_VA_END - PAGE));
+        assert_eq!(t.find_free_gap(USER_VA_END - PAGE, 2 * PAGE, PAGE), None);
     }
 }
