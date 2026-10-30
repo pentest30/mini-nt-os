@@ -25,7 +25,7 @@ pub mod irp;
 
 pub use driver::{DeviceObject, DriverObject};
 pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
-pub use file::FileObject;
+pub use file::{FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
 
 struct RamBlockDevice {

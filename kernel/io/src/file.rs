@@ -5,28 +5,31 @@
 //! holds the actual data.
 
 use alloc::string::String;
-use ob::{KernelObject, ObjectHeader, ObjectType};
+use ob::{AccessMask, ObjectType};
+
+/// FILE_ALL_ACCESS.
+pub const FILE_ALL_ACCESS: AccessMask = AccessMask(0x001F_01FF);
+
+/// The `File` type: the generic rights of the XP SDK (FILE_GENERIC_*).
+pub static FILE_TYPE: ObjectType = ObjectType::new(
+    "File",
+    FILE_ALL_ACCESS,
+    ob::GenericMapping {
+        read: AccessMask(0x0012_0089),
+        write: AccessMask(0x0012_0116),
+        execute: AccessMask(0x0012_00A0),
+        all: FILE_ALL_ACCESS,
+    },
+);
 
 pub struct FileObject {
-    pub header: ObjectHeader,
     pub path: String,
     pub current_offset: u64,
     pub flags: u32,
 }
 
-impl KernelObject for FileObject {
-    fn header(&self) -> &ObjectHeader {
-        &self.header
-    }
-}
-
 impl FileObject {
     pub fn new(path: &str, flags: u32) -> Self {
-        Self {
-            header: ObjectHeader { name: None, obj_type: ObjectType::File },
-            path: path.into(),
-            current_offset: 0,
-            flags,
-        }
+        Self { path: path.into(), current_offset: 0, flags }
     }
 }

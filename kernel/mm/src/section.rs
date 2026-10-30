@@ -26,7 +26,11 @@
 //! fichier d'Io : les écritures dans une vue partagée d'une section de fichier
 //! n'y retournent pas.
 //!
-//! Pas encore : objet Ob et handles (NtCreateSection), `SEC_RESERVE`,
+//! L'objet section d'Ob ([`SECTION_TYPE`], [`create_section_object`]) tient
+//! la section ; une vue la tient aussi, et survit donc à la fermeture du
+//! dernier handle de l'objet, comme sur XP.
+//!
+//! Pas encore : appels système (NtCreateSection, M3), `SEC_RESERVE`,
 //! NtExtendSection, vues dans l'espace système, retour au fichier.
 //!
 //! WI7e Ch.5 §Section Objects
@@ -40,12 +44,40 @@ use abi::ntstatus::{
     STATUS_MAPPED_FILE_SIZE_ZERO, STATUS_NO_MEMORY, STATUS_SECTION_PROTECTION, STATUS_SECTION_TOO_BIG,
 };
 use hal::sync::KSpinLock;
+use ob::{AccessMask, GenericMapping, Object, ObjectType};
 
 use crate::pfn::{self, PageUsage};
 use crate::vad::PageProtect;
 use crate::Pfn;
 
 const PAGE: u64 = 4096;
+
+pub const SECTION_QUERY: AccessMask = AccessMask(0x0001);
+pub const SECTION_MAP_WRITE: AccessMask = AccessMask(0x0002);
+pub const SECTION_MAP_READ: AccessMask = AccessMask(0x0004);
+pub const SECTION_MAP_EXECUTE: AccessMask = AccessMask(0x0008);
+pub const SECTION_EXTEND_SIZE: AccessMask = AccessMask(0x0010);
+pub const SECTION_ALL_ACCESS: AccessMask = AccessMask(AccessMask::STANDARD_RIGHTS_REQUIRED.0 | 0x1F);
+
+/// Le type `Section` : son corps est la section (`Arc<Section>`).
+pub static SECTION_TYPE: ObjectType = ObjectType::new(
+    "Section",
+    SECTION_ALL_ACCESS,
+    GenericMapping {
+        read: AccessMask(AccessMask::STANDARD_RIGHTS_READ.0 | SECTION_QUERY.0 | SECTION_MAP_READ.0),
+        write: AccessMask(AccessMask::STANDARD_RIGHTS_WRITE.0 | SECTION_MAP_WRITE.0),
+        execute: AccessMask(AccessMask::STANDARD_RIGHTS_EXECUTE.0 | SECTION_MAP_EXECUTE.0),
+        all: SECTION_ALL_ACCESS,
+    },
+);
+
+/// L'objet section de `section` (ObCreateObject), sans nom ni handle.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn create_section_object(section: Arc<Section>) -> Arc<Object<Arc<Section>>> {
+    ob::create_object(&SECTION_TYPE, section)
+}
 
 /// Ce que contient une section.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -520,6 +552,19 @@ mod tests {
         assert_eq!(Section::create_image(Arc::from(&b"MZ"[..])).err(), Some(STATUS_INVALID_IMAGE_FORMAT));
         let image = Section::create_image(Arc::from(image())).unwrap();
         assert_eq!((image.kind(), image.size(), image.protect()), (SectionKind::Image, 0x6000, EWC));
+    }
+
+    #[test]
+    fn a_section_object_holds_the_section_and_maps_its_rights() {
+        let section = Section::create_pagefile(PAGE, RW).unwrap();
+        let object = create_section_object(section.clone());
+        assert!(Arc::ptr_eq(&**object, &section), "its body is the section");
+        assert_eq!(Arc::strong_count(&section), 2);
+        let read = SECTION_TYPE.granted_access(AccessMask::GENERIC_READ);
+        assert_eq!(read, AccessMask(0x0002_0005), "READ_CONTROL, query, map for reading");
+        assert_eq!(SECTION_TYPE.granted_access(AccessMask::GENERIC_ALL), AccessMask(0x000F_001F));
+        drop(object);
+        assert_eq!(Arc::strong_count(&section), 1, "a view would keep it, not the object");
     }
 
     #[test]

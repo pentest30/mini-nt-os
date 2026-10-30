@@ -1,44 +1,54 @@
 //! EPROCESS — executive process object.
 //!
-//! Selected fields that matter for XP-era game compatibility.
-//! Full NT EPROCESS is ~600 bytes on XP x86; we include what we need.
+//! Selected fields that matter for XP-era game compatibility, until the Ps
+//! rewrite (M2) replaces this object with the real EPROCESS.
 
 use alloc::string::String;
 use alloc::sync::Arc;
 use hal::sync::KSpinLock;
 use mm::vad::VadTree;
-use ob::handle::HandleTable;
-use ob::{KernelObject, ObjectHeader, ObjectType};
+use ob::{create_object, AccessMask, HandleTable, Object, ObjectType};
 
 /// Process ID type (matches NT's CLIENT_ID.UniqueProcess).
 pub type ProcessId = u64;
 
-/// Executive Process object.
+/// PROCESS_ALL_ACCESS as XP defines it.
+pub const PROCESS_ALL_ACCESS: AccessMask = AccessMask(0x001F_0FFF);
+
+/// The `Process` type, provisional until the Ps rewrite: every generic right
+/// maps to full access.
+pub static PROCESS_TYPE: ObjectType = ObjectType::new(
+    "Process",
+    PROCESS_ALL_ACCESS,
+    ob::GenericMapping {
+        read: PROCESS_ALL_ACCESS,
+        write: PROCESS_ALL_ACCESS,
+        execute: PROCESS_ALL_ACCESS,
+        all: PROCESS_ALL_ACCESS,
+    },
+);
+
+/// Executive Process object body.
 pub struct EProcess {
-    pub header: ObjectHeader,
     pub pid: ProcessId,
     pub image_name: String, // up to 15 chars in NT (EPROCESS.ImageFileName)
-    pub handle_table: KSpinLock<HandleTable>,
+    pub handle_table: HandleTable,
     pub vad: KSpinLock<VadTree>,
     pub exit_code: KSpinLock<Option<i32>>,
 }
 
-impl KernelObject for EProcess {
-    fn header(&self) -> &ObjectHeader {
-        &self.header
-    }
-}
-
 impl EProcess {
-    pub fn new(pid: ProcessId, image_name: &str) -> Arc<Self> {
-        Arc::new(Self {
-            header: ObjectHeader { name: None, obj_type: ObjectType::Process },
-            pid,
-            image_name: image_name.chars().take(15).collect(),
-            handle_table: KSpinLock::new(HandleTable::new()),
-            vad: KSpinLock::new(VadTree::new()),
-            exit_code: KSpinLock::new(None),
-        })
+    pub fn new(pid: ProcessId, image_name: &str) -> Arc<Object<Self>> {
+        create_object(
+            &PROCESS_TYPE,
+            Self {
+                pid,
+                image_name: image_name.chars().take(15).collect(),
+                handle_table: HandleTable::new(),
+                vad: KSpinLock::new(VadTree::new()),
+                exit_code: KSpinLock::new(None),
+            },
+        )
     }
 }
 
@@ -52,17 +62,17 @@ fn alloc_pid() -> ProcessId {
 }
 
 /// The System process (PID 4) — created at boot.
-static SYSTEM_PROCESS: hal::sync::Once<Arc<EProcess>> = hal::sync::Once::new();
+static SYSTEM_PROCESS: hal::sync::Once<Arc<Object<EProcess>>> = hal::sync::Once::new();
 
 pub fn init_system_process() {
     SYSTEM_PROCESS.call_once(|| EProcess::new(4, "System"));
 }
 
-pub fn system_process() -> Arc<EProcess> {
+pub fn system_process() -> Arc<Object<EProcess>> {
     SYSTEM_PROCESS.get().expect("System process not initialised").clone()
 }
 
 /// Create a new user process (NtCreateProcess).
-pub fn create(image_name: &str) -> Arc<EProcess> {
+pub fn create(image_name: &str) -> Arc<Object<EProcess>> {
     EProcess::new(alloc_pid(), image_name)
 }

@@ -7,6 +7,6 @@ edition.workspace = true
 name = "ob"
 
 [dependencies]
+abi      = { path = "../../abi" }
 hal      = { path = "../hal" }
-bitflags = { workspace = true }
 log      = { workspace = true }

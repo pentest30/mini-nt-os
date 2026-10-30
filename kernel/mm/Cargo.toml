@@ -9,6 +9,7 @@ name = "mm"
 [dependencies]
 abi       = { path = "../../abi" }
 hal       = { path = "../hal" }
+ob        = { path = "../ob" }
 pe        = { path = "../../libs/pe" }
 bitflags = { workspace = true }
 x86_64   = { workspace = true }
