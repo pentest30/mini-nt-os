@@ -111,6 +111,7 @@ dependencies = [
  "bitflags 2.11.0",
  "hal",
  "log",
+ "ob",
  "pe",
  "x86_64",
 ]
@@ -141,7 +142,7 @@ dependencies = [
 name = "ob"
 version = "0.1.0"
 dependencies = [
- "bitflags 2.11.0",
+ "abi",
  "hal",
  "log",
 ]

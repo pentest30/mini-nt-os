@@ -271,6 +271,11 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // SAFETY: idle_stack is reserved for the idle thread for the life of the system.
     unsafe { ke::init(idle_stack.top) };
     ob::init();
+    for ty in
+        [&mm::section::SECTION_TYPE, &ps::eprocess::PROCESS_TYPE, &ps::ethread::THREAD_TYPE, &io_manager::FILE_TYPE]
+    {
+        ob::namespace().register_type(ty).expect("an object type registered twice");
+    }
     ps::init();
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
     fat_smoke_probe();
@@ -304,6 +309,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     demand_paging_self_test();
     out_of_page_tables_self_test();
     section_self_test();
+    object_manager_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -1417,15 +1423,6 @@ fn section_self_test() {
     let flags = |va| unsafe { mm::MmPageTables::new(hhdm) }.translate_flags(VirtAddr::new(va)).map(|(_, f)| f);
     let read = |va: u64| unsafe { core::ptr::read_volatile(va as *const u64) };
     let write = |va: u64, value: u64| unsafe { core::ptr::write_volatile(va as *mut u64, value) };
-    /// Runs `f` attached to `space`.
-    fn in_space<R>(space: &AddressSpace, f: impl FnOnce() -> R) -> R {
-        // SAFETY: the space outlives the attachment, which ends here.
-        let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
-        let result = f();
-        ke::sched::ke_unstack_detach(attached);
-        result
-    }
-
     let before = counts();
     let (a, b) = (AddressSpace::new().expect("no PML4"), AddressSpace::new().expect("no PML4"));
 
@@ -1517,6 +1514,103 @@ fn section_self_test() {
     log::info!(
         "[smoke] Mm: sections: shared memory seen by two spaces, a different image at 0x400000 in each, \
          copy-on-write, a data file; {resident} section pages, all back"
+    );
+}
+
+/// Runs `f` attached to `space`.
+fn in_space<R>(space: &mm::address_space::AddressSpace, f: impl FnOnce() -> R) -> R {
+    // SAFETY: the space outlives the attachment, which ends here.
+    let attached = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
+    let result = f();
+    ke::sched::ke_unstack_detach(attached);
+    result
+}
+
+/// The object manager (`ob`): the XP namespace and the object types; a named
+/// section shared by two handle tables, as two processes would, each mapping
+/// it through its handle; its name goes with its last handle while the views
+/// keep it; links through `\DosDevices` and `\??`; a thousand handles run
+/// down with the pool back where it was.
+fn object_manager_self_test() {
+    use abi::ntstatus::{STATUS_ACCESS_DENIED, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS};
+    use abi::object::OBJ_PERMANENT;
+    use alloc::sync::Arc;
+    use mm::address_space::AddressSpace;
+    use mm::section::{
+        create_section_object, Section, SECTION_ALL_ACCESS, SECTION_MAP_READ, SECTION_MAP_WRITE, SECTION_TYPE,
+    };
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::PAGE_SIZE;
+    use ob::{AccessMask, HandleTable, ObjectRef};
+
+    const NAME: &str = "\\BaseNamedObjects\\MinoSelfTest";
+    const MARKER: u64 = 0x4F42_4A45_4354_0000;
+    let rw = PageProtect::READWRITE;
+    let ns = ob::namespace();
+    let types = ob::downcast::<ob::Directory>(&ns.open("\\ObjectTypes", None, None, 0).expect("\\ObjectTypes"))
+        .expect("a directory")
+        .entries();
+    let names: alloc::vec::Vec<_> = types.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["Directory", "File", "Process", "Section", "SymbolicLink", "Thread", "Type"]);
+
+    // A named section, two handle tables.
+    let (first, second) = (HandleTable::new(), HandleTable::new());
+    let section: ObjectRef = create_section_object(Section::create_pagefile(4 * PAGE_SIZE, rw).expect("section"));
+    let (h1, status) = ob::insert_object(ns, section, Some(NAME), None, 0, &first, SECTION_ALL_ACCESS).expect("insert");
+    assert_eq!(status, STATUS_SUCCESS);
+    let map_rights = SECTION_MAP_READ | SECTION_MAP_WRITE;
+    let open = |name, access| ob::open_object_by_name(ns, name, None, Some(&SECTION_TYPE), 0, &second, access);
+    let h2 = open("\\basenamedobjects\\MINOSELFTEST", map_rights).expect("open by name, any case");
+    let read_only = open(NAME, SECTION_MAP_READ).expect("open for reading");
+    assert_eq!(second.reference(read_only, Some(&SECTION_TYPE), SECTION_MAP_WRITE).err(), Some(STATUS_ACCESS_DENIED));
+
+    let (a, b) = (AddressSpace::new().expect("no PML4"), AddressSpace::new().expect("no PML4"));
+    let map = |table: &HandleTable, handle, space: &AddressSpace| {
+        let section = table.reference_as::<Arc<Section>>(handle, &SECTION_TYPE, SECTION_MAP_WRITE).expect("reference");
+        space.map_view(&section, 0, 0, 0, rw).expect("map").base
+    };
+    let (va, vb) = (map(&first, h1, &a), map(&second, h2, &b));
+    // SAFETY (both accesses): a read-write view of the attached space.
+    in_space(&a, || unsafe { core::ptr::write_volatile(va as *mut u64, MARKER) });
+    let read =
+        |space: &AddressSpace, va: u64| in_space(space, || unsafe { core::ptr::read_volatile(va as *const u64) });
+    assert_eq!(read(&b, vb), MARKER, "the named section is not shared");
+    for (table, handle) in [(&first, h1), (&second, h2), (&second, read_only)] {
+        table.close(handle).expect("close");
+    }
+    assert_eq!(ns.open(NAME, None, None, 0).err(), Some(STATUS_OBJECT_NAME_NOT_FOUND), "name kept without handles");
+    assert_eq!(read(&b, vb), MARKER, "the views no longer hold the section");
+    for (space, va) in [(&a, va), (&b, vb)] {
+        space.unmap_view(va).expect("unmap");
+    }
+    a.destroy();
+    b.destroy();
+
+    // \DosDevices → \?? → a link of ours → \BaseNamedObjects.
+    let link: ObjectRef = ob::SymbolicLink::create("\\BaseNamedObjects");
+    ns.insert(&link, "\\??\\MinoSelfTest:", None, OBJ_PERMANENT).expect("link");
+    let through = ns.open("\\DosDevices\\MinoSelfTest:", None, None, 0).expect("follow the links");
+    assert!(Arc::ptr_eq(&through, &ns.open("\\BaseNamedObjects", None, None, 0).unwrap()));
+    ob::make_temporary(&link);
+    assert_eq!(ns.open("\\??\\MinoSelfTest:", None, None, 0).err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+
+    // A thousand handles, run down: objects, sections and table all go.
+    let pool = HEAP.used();
+    let table = HandleTable::new();
+    for _ in 0..1000 {
+        let object = create_section_object(Section::create_pagefile(PAGE_SIZE, rw).expect("section"));
+        table.insert(object, AccessMask::GENERIC_ALL, Default::default()).expect("handle");
+    }
+    let used = HEAP.used() - pool;
+    table.rundown();
+    drop(table);
+    assert_eq!(HEAP.used(), pool, "the pool did not come back after the rundown");
+    assert_eq!(SECTION_TYPE.object_count(), 0, "section objects left");
+    log::info!(
+        "[smoke] Ob: XP namespace and {} types; a named section shared by two handle tables, its name gone with \
+         its last handle, its views kept; links through \\DosDevices; 1000 handles ({} KiB) run down, pool back",
+        names.len(),
+        used / 1024
     );
 }
 

@@ -69,8 +69,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   Sections faites (`mm::section`) : fichier d'échange, fichier de données (octets en mémoire en attendant Io), image
   (disposition et protections tirées du PE) ; vues (`AddressSpace::map_view`, `unmap_view`) qui partagent les pages de
   la section (`PTE_SHARED`, `PageUsage::Section`), copie sur écriture, `STATUS_IMAGE_NOT_AT_BASE` (c'est `ntdll` qui
-  reloge). À venir : Ob (avec l'objet section et ses handles), Ps (avec la croissance de la pile utilisateur par sa
-  garde et la politique DEP).
+  reloge). Ob réécrit (`ob`) : `Object<T>` dans un `Arc` (compte de pointeurs), en-tête avec type, nom, compte de
+  handles ; types en `static` avec droits valides, correspondance générique, procédures *parse* et de fermeture ;
+  espace de noms d'XP (`\ObjectTypes`, `\GLOBAL??` derrière `\??`, lien `\DosDevices`…), noms sans casse, liens
+  suivis 32 fois au plus, `OBJ_OPENIF`/`OBJ_OPENLINK`/`OBJ_PERMANENT`, nom retiré au dernier handle ; table de handles
+  par processus (multiples de 4, droits vérifiés, héritage, protection, duplication, rundown). Type `Section` dans
+  `mm::section`. Pas encore : handles noyau, Se (accès accordés, ADR-011). À venir : Ps (EPROCESS/ETHREAD, avec la
+  croissance de la pile utilisateur par sa garde et la politique DEP).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

@@ -5,12 +5,11 @@
 extern crate alloc;
 
 use alloc::string::String;
-use alloc::sync::Arc;
 use alloc::vec;
 use core::ptr::{read_unaligned, write_unaligned};
 use core::sync::atomic::{AtomicBool, Ordering};
 use hal::sync::KSpinLock;
-use ob::object::{ObjectRef, ObjectType};
+use ob::ObjectRef;
 
 const STATUS_SUCCESS: u32 = 0x0000_0000;
 const STATUS_NOT_IMPLEMENTED: u32 = 0xC000_0002;
@@ -490,11 +489,11 @@ fn nt_create_file(args_ptr: u32) -> u32 {
         Err(_) => return STATUS_UNSUCCESSFUL,
     };
     let file_obj = io_manager::FileObject::new(&nt_path, 0);
-    let obj: ObjectRef = Arc::new(file_obj);
+    let obj: ObjectRef = ob::create_object(&io_manager::FILE_TYPE, file_obj);
     let system = ps::eprocess::system_process();
-    let handle = {
-        let mut table = system.handle_table.lock();
-        table.insert(obj, 0, false) as u32
+    let handle = match system.handle_table.insert(obj, ob::AccessMask::GENERIC_ALL, Default::default()) {
+        Ok(handle) => handle.0,
+        Err(status) => return status.0,
     };
     remember_file_handle_state(handle, file_state);
     if write_u32_user(out_handle_ptr, handle).is_err() {
@@ -702,9 +701,9 @@ fn nt_create_process(args_ptr: u32) -> u32 {
     }
     let obj: ObjectRef = proc;
     let system = ps::eprocess::system_process();
-    let handle = {
-        let mut table = system.handle_table.lock();
-        table.insert(obj, 0, false)
+    let handle = match system.handle_table.insert(obj, ob::AccessMask::GENERIC_ALL, Default::default()) {
+        Ok(handle) => handle.0,
+        Err(status) => return status.0,
     };
     if write_u32_user(process_handle_ptr, handle as u32).is_err() {
         return STATUS_ACCESS_VIOLATION;
@@ -737,17 +736,18 @@ fn nt_create_thread(args_ptr: u32) -> u32 {
     let mut target_pid = system.pid as u32;
     if process_handle != 0 && process_handle != 0xFFFF_FFFF {
         let system = ps::eprocess::system_process();
-        let table = system.handle_table.lock();
-        match table.lookup(process_handle as u64) {
-            Some(obj) => {
-                if obj.obj_type() != ObjectType::Process {
-                    return STATUS_INVALID_HANDLE;
-                }
+        let process = system.handle_table.reference(
+            ob::Handle(process_handle),
+            Some(&ps::eprocess::PROCESS_TYPE),
+            ob::AccessMask::NONE,
+        );
+        match process {
+            Ok(_) => {
                 if let Some(pid) = lookup_process_pid_from_handle(process_handle) {
                     target_pid = pid;
                 }
             }
-            None => return STATUS_INVALID_HANDLE,
+            Err(_) => return STATUS_INVALID_HANDLE,
         }
     }
     let tid = {
@@ -758,9 +758,9 @@ fn nt_create_thread(args_ptr: u32) -> u32 {
     };
     let thread = ps::ethread::EThread::new(tid);
     let obj: ObjectRef = thread;
-    let thread_handle = {
-        let mut table = system.handle_table.lock();
-        table.insert(obj, 0, false)
+    let thread_handle = match system.handle_table.insert(obj, ob::AccessMask::GENERIC_ALL, Default::default()) {
+        Ok(handle) => handle.0,
+        Err(status) => return status.0,
     };
     if write_u32_user(thread_handle_ptr, thread_handle as u32).is_err() {
         return STATUS_ACCESS_VIOLATION;
