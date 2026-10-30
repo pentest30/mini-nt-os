@@ -1,8 +1,8 @@
 //! D3 — Kernel page-table manager.
 //!
 //! Wraps `x86_64::structures::paging::OffsetPageTable` and exposes:
-//!   - [`BuddyFrameAllocator`]: implements `FrameAllocator<Size4KiB>` using
-//!     the global buddy allocator.
+//!   - [`PageTableFrameAllocator`]: implements `FrameAllocator<Size4KiB>`
+//!     with pages of the PFN database (`mm::pfn`, usage `PageTable`).
 //!   - [`MmPageTables`]: safe `map_page` / `unmap_page` / `translate` API.
 //!
 //! # Usage
@@ -22,47 +22,39 @@ use x86_64::{
     PhysAddr, VirtAddr,
 };
 
-use crate::buddy::{Pfn, BUDDY};
+use crate::buddy::Pfn;
+use crate::pfn::PageUsage;
 
 // ── Frame allocator ───────────────────────────────────────────────────────────
 
-/// Frame allocator that delegates to the global buddy allocator (order 0).
+/// Frame allocator for the page tables that `map_page` creates: one page of
+/// the PFN database (`mm::pfn`) each, usage `PageTable`, zeroed.
 ///
-/// Acquires the buddy lock on every call, so it must be used only at
-/// `IRQL PASSIVE_LEVEL`. Suitable for intermediate page-table frame
-/// allocation during `map_page`.
-pub struct BuddyFrameAllocator;
+/// Takes the PFN database's lock on every call: never while holding it.
+pub struct PageTableFrameAllocator;
 
 // SAFETY: Every frame returned is a freshly allocated, page-aligned physical
-// frame from the buddy free list; it cannot alias any existing mapping.
-unsafe impl FrameAllocator<Size4KiB> for BuddyFrameAllocator {
+// frame; it cannot alias any existing mapping.
+unsafe impl FrameAllocator<Size4KiB> for PageTableFrameAllocator {
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
-        let pfn = BUDDY.lock().as_mut()?.alloc(0)?; // order 0 = single 4 KiB page
+        let pfn = crate::pfn::allocate_page(PageUsage::PageTable)?;
         let phys = pfn.to_phys();
         zero_frame(phys);
         let addr = PhysAddr::new(phys);
-        // SAFETY: to_phys() returns a page-aligned address from the buddy.
+        // SAFETY: to_phys() returns a page-aligned address.
         Some(PhysFrame::containing_address(addr))
     }
 }
 
-// SAFETY: The frame being freed was previously obtained from the buddy.
-impl FrameDeallocator<Size4KiB> for BuddyFrameAllocator {
+// SAFETY: The frame being freed was previously obtained from `allocate_frame`.
+impl FrameDeallocator<Size4KiB> for PageTableFrameAllocator {
     unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>) {
-        let pfn = Pfn(frame.start_address().as_u64() / 4096);
-        if let Some(b) = BUDDY.lock().as_mut() {
-            b.free(pfn, 0);
-        }
+        crate::pfn::free_page(Pfn(frame.start_address().as_u64() / 4096));
     }
 }
 
 fn alloc_zeroed_pt_phys() -> u64 {
-    let pfn = BUDDY
-        .lock()
-        .as_mut()
-        .expect("alloc_zeroed_pt_phys: buddy not initialised")
-        .alloc(0)
-        .expect("alloc_zeroed_pt_phys: out of physical memory");
+    let pfn = crate::pfn::allocate_page(PageUsage::PageTable).expect("alloc_zeroed_pt_phys: out of physical memory");
     let phys = pfn.to_phys();
     zero_frame(phys);
     phys
@@ -73,7 +65,7 @@ fn alloc_zeroed_pt_phys() -> u64 {
 fn zero_frame(phys: u64) {
     assert!(phys < 0x1_0000_0000, "frame {:#x} above the 4 GiB HHDM", phys);
     let virt = crate::HHDM_OFFSET.load(core::sync::atomic::Ordering::Acquire) + phys;
-    // SAFETY: the frame comes fresh from the buddy, so nothing else uses it,
+    // SAFETY: the frame was just allocated, so nothing else uses it,
     // and the HHDM maps it writable.
     unsafe { core::ptr::write_bytes(virt as *mut u8, 0, 4096) };
 }
@@ -87,7 +79,7 @@ fn zero_frame(phys: u64) {
 /// accessible at `hhdm_offset + phys`, which `OffsetPageTable` uses to walk
 /// the hierarchy.
 ///
-/// # IRQL: <= DISPATCH_LEVEL — the buddy lock is a `KSpinLock`.
+/// # IRQL: <= DISPATCH_LEVEL — the PFN database's lock is a `KSpinLock`.
 pub struct MmPageTables {
     inner: OffsetPageTable<'static>,
     /// Raw HHDM offset — stored so `patch_user_path` can walk intermediate
@@ -215,13 +207,14 @@ impl MmPageTables {
 
     /// Map a single 4 KiB page at virtual address `virt` to physical address `phys`.
     ///
-    /// Intermediate page-table frames are allocated from the buddy allocator.
+    /// Intermediate page-table frames are allocated from the PFN database.
     /// The TLB entry for `virt` is flushed after the mapping is installed.
     ///
     /// # Safety
     /// - `virt` must not already be mapped as a 4 KiB page.
     /// - `phys` must be page-aligned and valid.
-    /// - Must not be called at IRQL >= DISPATCH (buddy lock is a spin mutex).
+    /// - Must not be called at IRQL >= DISPATCH, nor with the PFN database's
+    ///   lock held (it allocates page tables).
     pub unsafe fn map_page(&mut self, virt: VirtAddr, phys: PhysAddr, flags: PageTableFlags) {
         let h = self.phys_offset;
         let user = flags.contains(PageTableFlags::USER_ACCESSIBLE);
@@ -286,7 +279,7 @@ impl MmPageTables {
 
     /// Unmap the 4 KiB page at `virt` and return its physical frame.
     ///
-    /// The returned frame is NOT freed to the buddy — the caller is responsible
+    /// The returned frame is NOT freed (`mm::pfn`) — the caller is responsible
     /// for releasing it (or tracking it for later reclamation).
     ///
     /// # Safety

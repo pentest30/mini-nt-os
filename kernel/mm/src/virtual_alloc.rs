@@ -15,7 +15,7 @@
 //! code testable with a mock.
 //!
 //! In production the kernel passes a `KernelPageMapper` that calls
-//! `mm::buddy::BUDDY` and `mm::MmPageTables`. In tests we use `MockMapper`.
+//! `mm::pfn` and `mm::MmPageTables`. In tests we use `MockMapper`.
 //!
 //! WI7e Ch.5 §NtAllocateVirtualMemory, §NtFreeVirtualMemory
 

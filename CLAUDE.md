@@ -51,7 +51,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
   (`ke::bugcheck`, `hal::bugcheck`). Scénarios `ke-events`, `fpu`, `ke-starvation`, `bugcheck`. Les APC utilisateur
   viennent au M3, le rundown des APC d'un thread qui se termine avec Ps.
-  M2, dans l'ordre de 05 : base PFN et pools à dalles, une PML4 par processus, VAD en arbre, sections, Ob, Ps.
+  M2 : base PFN faite (`mm::pfn` au-dessus du buddy : toute page physique y passe, avec son usage ; double libération
+  et page réservée arrêtent le système ; cohérence vérifiée en fin de phase 1). À venir : pools à dalles, une PML4 par
+  processus, VAD en arbre, sections, Ob, Ps.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

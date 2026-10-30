@@ -71,7 +71,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
     ) -> Result<(), &'static str> {
         // Idempotent: skip if the VA is already mapped as a USER_ACCESSIBLE 4 KiB page.
         // DO NOT zero — the page may contain live data (e.g., game stack being reused).
-        // Fresh pages from the buddy allocator are zeroed below instead.
+        // Fresh pages are zeroed below instead.
         if let Some((_p, f)) = self.pt.translate_flags(VirtAddr::new(virt_addr)) {
             use x86_64::structures::paging::PageTableFlags as F;
             if f.contains(F::USER_ACCESSIBLE) && !f.contains(F::HUGE_PAGE) {
@@ -79,12 +79,8 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
             }
         }
 
-        let pfn = mm::buddy::BUDDY
-            .lock()
-            .as_mut()
-            .ok_or("commit_page: buddy not initialised")?
-            .alloc(0)
-            .ok_or("commit_page: out of physical memory")?;
+        let pfn =
+            mm::pfn::allocate_page(mm::pfn::PageUsage::UserPrivate).ok_or("commit_page: out of physical memory")?;
 
         let phys = PhysAddr::new(pfn.to_phys());
         let virt = VirtAddr::new(virt_addr);
@@ -101,7 +97,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         }
 
         // SAFETY: virt is a freshly claimed user-mode address; phys is a
-        //         fresh page-aligned frame from the buddy.
+        //         fresh page-aligned frame.
         unsafe { self.pt.map_page(virt, phys, flags) };
 
         // Zero the page — Windows guarantees MEM_COMMIT pages are zeroed.
@@ -118,11 +114,7 @@ impl mm::virtual_alloc::PageMapper for KernelPageMapper {
         // SAFETY: virt_addr was previously mapped by commit_page; single-CPU
         //         Phase 2 — no concurrent unmap possible.
         let frame = unsafe { self.pt.unmap_page(virt) }; // also flushes TLB
-                                                         // Return frame to buddy.
-        let pfn = mm::Pfn(frame.start_address().as_u64() / 4096);
-        if let Some(b) = mm::buddy::BUDDY.lock().as_mut() {
-            b.free(pfn, 0);
-        }
+        mm::pfn::free_page(mm::Pfn(frame.start_address().as_u64() / 4096));
         Ok(())
     }
 }
@@ -204,51 +196,20 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
 
     // ── 3. Heap (E1): pre-allocate all frames, then map them ─────────────────
     //
-    // We MUST NOT hold the buddy lock while calling map_page — map_page calls
-    // BuddyFrameAllocator internally which tries to acquire the same lock,
-    // causing a spin-mutex self-deadlock.
-    //
-    // Solution: pre-allocate all HEAP_PAGES frames into a stack array while
-    // holding the lock once, then release the lock, then do all mappings.
+    // The PFN database hands out free pages only: never the kernel image's,
+    // nor the ramdisk's (loader data, reserved), whose pages it marks reserved.
     {
         x86_64::instructions::interrupts::disable();
 
-        let kernel_start_pfn = boot_info.kernel_phys_base / 4096;
-        // Use the same BSS-inclusive end we passed to mm::init() so the heap
-        // frame skip covers the full kernel footprint (code + data + BSS).
-        let kernel_end_pfn = kernel_end_phys.div_ceil(4096);
-
-        // Ramdisk frame range — must not be handed to the heap allocator.
-        // UEFI LOADER_DATA is BootloaderReclaimable (not Usable) so the buddy
-        // normally never sees these frames; but if UEFI coalesces or
-        // mis-categorises regions we could corrupt the ramdisk before Io reads it.
-        let ramdisk_start_pfn = boot_info.ramdisk_phys_base / 4096;
-        let ramdisk_end_pfn = if boot_info.ramdisk_size > 0 {
-            (boot_info.ramdisk_phys_base + boot_info.ramdisk_size).div_ceil(4096)
-        } else {
-            0
-        };
-
-        // Phase 1 — allocate all frames (buddy lock held, no map_page calls).
+        // Phase 1 — allocate all frames.
         let mut heap_frames = [mm::Pfn(0u64); HEAP_PAGES];
-        {
-            let mut guard = mm::buddy::BUDDY.lock();
-            let buddy = guard.as_mut().expect("mm not initialised");
-            for slot in heap_frames.iter_mut() {
-                let mut candidate = buddy.alloc(0).expect("out of physical memory mapping heap");
-                while (candidate.0 >= kernel_start_pfn && candidate.0 < kernel_end_pfn)
-                    || (ramdisk_end_pfn > 0 && candidate.0 >= ramdisk_start_pfn && candidate.0 < ramdisk_end_pfn)
-                {
-                    candidate = buddy.alloc(0).expect("out of memory skipping kernel/ramdisk frames");
-                }
-                *slot = candidate;
-            }
-            // buddy lock released here — guard drops at end of this block
+        for slot in heap_frames.iter_mut() {
+            *slot =
+                mm::pfn::allocate_page(mm::pfn::PageUsage::NonPagedPool).expect("out of physical memory mapping heap");
         }
 
-        // Phase 2 — map all pre-allocated frames (no buddy lock held).
-        // map_page may internally allocate intermediate page-table frames via
-        // BuddyFrameAllocator; the lock is free so no deadlock.
+        // Phase 2 — map them; map_page allocates intermediate page-table frames
+        // itself (`mm::pfn`), so no allocation lock is held here.
         // SAFETY: bootloader page tables are active; hhdm_offset is correct.
         let mut pt = unsafe { mm::MmPageTables::new(boot_info.hhdm_offset) };
         for (i, pfn) in heap_frames.iter().enumerate() {
@@ -336,6 +297,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
 
     heap_self_test();
+    pfn_self_test();
     symbols_self_test();
 
     // ── 4. Executive initialisation ───────────────────────────────────────────
@@ -403,10 +365,16 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     let ring3_ctx = loader_demo(boot_info.hhdm_offset);
 
     // ── Ready ─────────────────────────────────────────────────────────────────
-    let free_pages = mm::buddy::BUDDY.lock().as_ref().map(|b| b.free_pages()).unwrap_or(0);
+    // Every page allocated and freed so far, by the loader and the ring-3
+    // programs too, went through the PFN database.
+    if let Err(why) = mm::pfn::check() {
+        panic!("PFN database out of step with the free lists: {why}");
+    }
+    let pages = mm::pfn::stats();
+    log::info!("[smoke] Mm: PFN database consistent at the end of phase 1: {pages}");
 
     // End of phase 1: the boot scenarios (tests/boot/) wait for this line.
-    log::info!("kernel: phase 1 done — ticks: {}, free_pages: {}", hal::timer::get_tick_count(), free_pages,);
+    log::info!("kernel: phase 1 done — ticks: {}, free_pages: {}", hal::timer::get_tick_count(), pages.free);
     // ── Phase 2.5: scheduler-based ring-3 launch ─────────────────────────────
     //
     // Register the initial user-mode process as a scheduler thread.  The timer
@@ -663,6 +631,33 @@ fn register_symbols(boot_info: &BootInfo) {
     let table = hal::symbols::SymbolTable::new(symtab, strtab);
     hal::symbols::init(table);
     log::info!("kernel symbols: {} functions", table.function_count());
+}
+
+/// Checks the PFN database (M2, `mm::pfn`): it agrees with the free lists
+/// after the boot's allocations (heap, page tables, kernel stacks), and a
+/// block allocated then freed leaves every count as it was.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn pfn_self_test() {
+    use mm::pfn::{self, PageState, PageUsage};
+
+    if let Err(why) = pfn::check() {
+        panic!("PFN database out of step with the free lists: {why}");
+    }
+    let before = pfn::stats();
+    assert!(before.active(PageUsage::PageTable) > 0 && before.active(PageUsage::KernelStack) > 0);
+    let block = pfn::allocate_pages(2, PageUsage::Buffer).expect("no 4 free pages");
+    let during = pfn::stats();
+    assert_eq!(
+        (during.free, during.active(PageUsage::Buffer)),
+        (before.free - 4, before.active(PageUsage::Buffer) + 4)
+    );
+    let state = pfn::PAGE_FRAMES.lock().entry(block).map(|e| e.state);
+    assert_eq!(state, Some(PageState::Active));
+    pfn::free_pages(block, 2);
+    assert_eq!(pfn::stats(), before, "a block allocated then freed changed the counts");
+    log::info!("[smoke] Mm: PFN round trip ok, {before}");
 }
 
 /// Finds this very function, and a code address inside it, through the

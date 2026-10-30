@@ -3,19 +3,18 @@
 //! Manages physical memory in power-of-two page blocks (orders 0–10).
 //! Order 0 = 4 KiB (one page), Order 10 = 4 MiB.
 //!
-//! NT's real PFN database is more complex (coloured, NUMA-aware),
-//! but this covers Phase 1 and Phase 2 needs.
+//! The PFN database (`mm::pfn`) sits on top of it: every allocation and free
+//! goes through `mm::pfn`, which owns the one instance (`PAGE_FRAMES`) and
+//! checks each page's state.
 //!
 //! # No-alloc design
 //! Free lists use fixed-size arrays instead of Vec so the buddy allocator
 //! can be initialised BEFORE the kernel heap exists (mm::init() is called
-//! before the LockedHeap is set up).
+//! before the kernel pool is set up), in a static (`new` is `const`).
 //!
 //! MAX_FREE_ENTRIES per order is 512.  Worst-case with 128 MiB RAM and 31
 //! BootInfo regions the total entries across all levels is ~350, so 512 per
 //! level is a large safety margin.
-
-use hal::sync::KSpinLock;
 
 /// Page size: 4 KiB.
 pub const PAGE_SIZE: usize = 4096;
@@ -82,8 +81,6 @@ pub struct BuddyAllocator {
     free_pages: u64,
 }
 
-pub static BUDDY: KSpinLock<Option<BuddyAllocator>> = KSpinLock::new(None);
-
 impl Default for BuddyAllocator {
     fn default() -> Self {
         Self::new()
@@ -92,9 +89,8 @@ impl Default for BuddyAllocator {
 
 impl BuddyAllocator {
     /// Create a new empty allocator (no heap allocation).
-    pub fn new() -> Self {
-        // core::array::from_fn works for any N without heap.
-        Self { free_lists: core::array::from_fn(|_| FreeList::new()), total_pages: 0, free_pages: 0 }
+    pub const fn new() -> Self {
+        Self { free_lists: [const { FreeList::new() }; MAX_ORDER], total_pages: 0, free_pages: 0 }
     }
 
     /// Mark a physical region [start_pfn, start_pfn + page_count) as free.
@@ -121,7 +117,7 @@ impl BuddyAllocator {
 
     /// Allocate 2^order contiguous physical pages. Returns the base PFN.
     ///
-    /// # IRQL: any (spin lock held by caller via BUDDY.lock())
+    /// # IRQL: any (under the lock of `mm::pfn::PAGE_FRAMES`)
     pub fn alloc(&mut self, order: usize) -> Option<Pfn> {
         assert!(order < MAX_ORDER);
 
@@ -142,7 +138,7 @@ impl BuddyAllocator {
 
     /// Free 2^order pages starting at `pfn`, coalescing with buddies.
     ///
-    /// # IRQL: any (spin lock held by caller via BUDDY.lock())
+    /// # IRQL: any (under the lock of `mm::pfn::PAGE_FRAMES`)
     pub fn free(&mut self, pfn: Pfn, order: usize) {
         assert!(order < MAX_ORDER);
         self.free_pages += 1u64 << order;
@@ -170,21 +166,22 @@ impl BuddyAllocator {
     pub fn free_pages(&self) -> u64 {
         self.free_pages
     }
-}
 
-/// Global accessor — initialised by `mm::init()`.
-pub fn with<F, R>(f: F) -> R
-where
-    F: FnOnce(&mut BuddyAllocator) -> R,
-{
-    f(BUDDY.lock().as_mut().expect("Mm buddy allocator not initialised"))
+    /// Calls `f(pfn, order)` for every free block.
+    pub fn for_each_free_block(&self, mut f: impl FnMut(Pfn, usize)) {
+        for (order, list) in self.free_lists.iter().enumerate() {
+            for &pfn in &list.data[..list.count] {
+                f(Pfn(pfn), order);
+            }
+        }
+    }
 }
 
 // ── Unit tests (task F3) ─────────────────────────────────────────────────────
 //
 // Run with: cargo test -p mm
 // These tests run on the host (std), so we use a local BuddyAllocator
-// instance rather than the global BUDDY mutex.
+// instance rather than the global one (`mm::pfn::PAGE_FRAMES`).
 
 #[cfg(test)]
 mod tests {
