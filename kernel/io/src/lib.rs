@@ -419,3 +419,5 @@ fn build_demo_fat32_disk() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_tests;
