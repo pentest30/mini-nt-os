@@ -10,8 +10,8 @@ jour à chaque commit qui change l'état.
   fait (voir CLAUDE.md).
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- Dernière PR fusionnée : #28 (`fetch-userland`). Les étapes 1 et 2 du spike sont poussées sur la branche, sans PR
-  encore.
+- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). L'étape 2 et le début de l'étape 3 sont poussés sur
+  la branche (après une fusion de `origin/main`, sans réécriture), sans PR encore.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
@@ -31,16 +31,31 @@ rencontrés est publiée.
    `ProcessParameters::system` pour un programme du système (chemins sous `C:\WINDOWS`, la racine de
    `KUSER_SHARED_DATA`). Résultat : `ntdll` lit le registre, puis s'arrête à la création du tas
    (`NtQuerySystemInformation` absent) ; statut `STATUS_NO_MEMORY`.
-3. [ ] **Services du chargeur** (prochaine) : ceux que la sonde révèle, un par un, selon la compétence
+3. [ ] **Services du chargeur** (en cours) : ceux que la sonde révèle, un par un, selon la compétence
    `mino-syscall-impl` (handler dans `kernel/ntoskrnl/src/sys/`, entrée dans `IMPLEMENTED`,
-   `cargo xtask syscall-gen` pour le rapport de couverture). Dans l'ordre :
-   `NtQuerySystemInformation(SystemBasicInformation)` (0x2C octets : la limite haute du mode utilisateur, sans
-   laquelle pas de tas), `NtQueryInformationProcess(ProcessCookie)`, `NtOpenKey` qui rend
-   `STATUS_OBJECT_NAME_NOT_FOUND` (il faut capturer `OBJECT_ATTRIBUTES` ; pas de registre avant Cm),
-   `NtRaiseHardError` journalisé (diagnostic). Puis ce que la sonde révèle ensuite (attendus :
-   `NtProtectVirtualMemory`, `NtQueryVirtualMemory`, `NtSetInformationProcess`, événements et attentes,
-   `\KnownDlls`). Fin de l'étape : la sonde va au bout (statut `0x5151`, ligne
-   `DbgPrint ... [s1] hello from a native process`) ; le scénario `userland` l'attend alors.
+   `cargo xtask syscall-gen` pour le rapport de couverture ; cas testés dans `loader_services_self_test` de
+   `kernel/ntoskrnl/src/main.rs`, marqueur `[smoke] sys: the loader's services:` du scénario `smoke`).
+   - [x] `NtQuerySystemInformation(SystemBasicInformation)` (`sys::system`) : le tas se crée. Les classes non
+     implémentées sont journalisées une fois (`sys::ClassReport`) ; `sys::return_information` pour les tailles
+     fixes.
+   - [ ] **Tables NLS** (prochaine ; donnée de démarrage plutôt que service) : `RtlMultiByteToUnicodeN` faute en
+     lisant la table ANSI, nulle. Le noyau doit projeter dans chaque processus, en lecture seule, une section qui
+     tient `C_1252.NLS` (ANSI), `C_437.NLS` (OEM) et `L_INTL.NLS` (casse), chacun aligné sur une page, et mettre
+     leurs adresses dans `Peb->AnsiCodePageData` (0x58), `OemCodePageData` (0x5C), `UnicodeCaseTableData` (0x60).
+     Plan : `xtask` ajoute les trois fichiers au disque de démarrage (`userland_files` dans `xtask/src/main.rs`,
+     depuis `third_party/reactos/0.4.16/reactos/system32/`) ; `ps::nls` (comme `ps::system_dll`) les tient dans
+     une section de données (`mm::section`) ; `eprocess::build_address_space` la projette et remplit le PEB ;
+     `ntoskrnl::userland` les charge au démarrage.
+   - [ ] `NtQueryInformationProcess(ProcessCookie)` (seulement pour `NtCurrentProcess()`, 4 octets, cookie non nul
+     tiré au premier appel, gardé dans l'EPROCESS).
+   - [ ] `NtOpenKey` qui rend `STATUS_OBJECT_NAME_NOT_FOUND` (capturer `OBJECT_ATTRIBUTES` ; pas de registre avant
+     Cm) ; `NtQueryValueKey` sur un handle invalide rend `STATUS_INVALID_HANDLE`.
+   - [ ] `NtRaiseHardError` journalisé avec ses chaînes, `ResponseReturnToCaller` (pas de port d'erreur).
+   - [ ] Vus ensuite, à traiter selon ce qu'en fait `ntdll` : `NtQueryDefaultLocale`, `NtOpenDirectoryObject`
+     (`\KnownDlls`), `NtOpenFile` (manifeste du contexte d'activation : « Failed to create the implicit act ctx »),
+     `NtQueryAttributesFile`.
+   Fin de l'étape : la sonde va au bout (statut `0x5151`, ligne `DbgPrint ... [s1] hello from a native process`) ;
+   le scénario `userland` l'attend alors.
 4. [ ] **Programme MinGW** : `gcc-mingw-w64-i686` (apt, présent sur les runners Ubuntu et installable ici),
    `-nostdlib -Wl,--subsystem,native -e _NtProcessStartup@4`, bibliothèque d'import de `ntdll` (celle de MinGW, ou
    `llvm-dlltool` sur les exports de `ntdll.dll`). Source sous `tests/` ; `xtask` le construit et le met sur le
@@ -80,6 +95,10 @@ cargo xtask lint && cargo xtask test                        # avant chaque commi
   `llvm-readobj --coff-exports ...`.
 - Points d'entrée du `ntdll` épinglé : `LdrInitializeThunk` `0x7c92f358`, `KiUserExceptionDispatcher`
   `0x7c92f46e`, `KiUserApcDispatcher` `0x7c92f381`.
+- Une exception que `ntdll` traite elle-même (SEH) ne laisse pas de trace : pour la voir, ajouter
+  temporairement dans `raise` (`kernel/ntoskrnl/src/sys/exceptions.rs`) un
+  `log::warn!("TEMP exception {code} at {:#x} esp {:#x} {parameters:x?}", frame.rip, frame.rsp);`, à retirer avant
+  de committer.
 - ReactOS sert de spécification (ses sources `ntdll`, en lecture) ; on ne porte pas son code noyau. Jamais de code
   Microsoft.
 - Réseau : SourceForge passe ; les pages de publication et l'API de GitHub, et reactos.org, sont bloquées.
