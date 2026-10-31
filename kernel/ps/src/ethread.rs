@@ -463,16 +463,18 @@ fn start_thread(
         stack: user_stack,
         teb,
         owner: Arc::as_ptr(&thread).cast(),
+        tid: &thread.ke_tid,
     };
     // SAFETY: la pile noyau est à ce thread jusqu'à ce que le reaper la rende,
     // après sa fin ; l'espace d'adresses vit tant qu'un thread du processus
-    // s'exécute (le dernier le rend en se terminant).
+    // s'exécute (le dernier le rend en se terminant) ; `thread`, tenu ici, garde
+    // son `ke_tid`, où Ke écrit le TID avant que le thread puisse s'exécuter.
     let Some(ke_tid) = (unsafe { ke::sched::create_user_thread(&start) }) else {
         process.threads.lock().list.retain(|t| !Arc::ptr_eq(t, &thread));
         abandon(process, &thread);
         return Err(STATUS_INSUFFICIENT_RESOURCES);
     };
-    thread.ke_tid.store(ke_tid, Ordering::Release);
+    debug_assert_eq!(thread.ke_tid(), Some(ke_tid), "Ke did not publish the thread's TID");
     // Une fin du processus demandée avant que le thread Ke existe n'a pas pu
     // lui envoyer son APC.
     let terminating = process.threads.lock().terminating;

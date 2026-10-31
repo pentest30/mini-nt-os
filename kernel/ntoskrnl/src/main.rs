@@ -319,6 +319,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_manager_self_test();
     process_self_test();
     system_service_self_test();
+    early_exit_self_test();
     loader_services_self_test();
     trap_gate_self_test();
     exception_self_test();
@@ -438,6 +439,7 @@ pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
         stack: stack32,
         teb: ps::loader::TEB32_VA,
         owner: core::ptr::null(),
+        tid: core::ptr::null(),
     };
     // SAFETY: kstack was just allocated for this thread alone and is never
     // freed; the system address space lives forever.
@@ -1827,6 +1829,80 @@ fn system_service_self_test() {
         sys::IMPLEMENTED.len(),
         NTOSKRNL.len()
     );
+}
+
+/// Ps: a thread that runs, and ends, before `create_thread` returns to its
+/// creator. A kernel thread below `NORMAL_PRIORITY` creates a process whose
+/// thread, at `NORMAL_PRIORITY`, preempts it as soon as it is ready and ends
+/// its process at once (NtTerminateProcess on itself); the reaper then takes
+/// a thread whose creator has not resumed. Its Ke thread must be known by
+/// then (it once was published only after `create_user_thread` returned).
+fn early_exit_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_WAIT_0};
+    use abi::process::NT_CURRENT_PROCESS;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::{KePlatform, NORMAL_PRIORITY};
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+
+    /// What the creator gets and gives back.
+    struct Creation {
+        section: Arc<Section>,
+        process: Option<Arc<ob::Object<ps::EProcess>>>,
+        /// The creator's priority while it creates the thread.
+        priority: u8,
+    }
+
+    fn creator(context: *mut core::ffi::c_void) {
+        // SAFETY: the boot thread keeps the `Creation` until this thread ends.
+        let creation = unsafe { &mut *context.cast::<Creation>() };
+        creation.priority = ke::sched::current_priority();
+        let info = creation.section.image().expect("an image").info;
+        let process =
+            ps::create_process(&ps::system_process(), &creation.section, "early.exe", false).expect("a process");
+        let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+        ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+        creation.process = Some(process);
+    }
+
+    let mut code = Code::new();
+    code.call(services::NtTerminateProcess, &[NT_CURRENT_PROCESS, 0x600D]).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x40];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x40, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let mut creation = Creation { section, process: None, priority: 0 };
+    let context = core::ptr::addr_of_mut!(creation).cast();
+    // `creation` outlives the thread, which this thread waits for.
+    let tid = spawn_kernel_thread(NORMAL_PRIORITY - 1, creator, context);
+    let object = ke::sched::thread_object(tid).expect("the creator's object");
+    // SAFETY: a thread object lives as long as its thread's slot.
+    let ended =
+        unsafe { ke_wait_for_single_object::<KePlatform>(object, ProcessorMode::Kernel, false, Some(-3000 * MS)) };
+    assert_eq!(ended, STATUS_WAIT_0, "the creator did not finish");
+    assert!(creation.priority < NORMAL_PRIORITY, "the creator does not run below its thread");
+    let process = creation.process.take().expect("the creator made a process");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, NtStatus(0x600D)), "the process did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    log::info!("[smoke] Ps: a thread that ends before its creator resumes is reaped");
 }
 
 /// The services ntdll's loader calls (spike S1, `sys`): from a Ps process,
