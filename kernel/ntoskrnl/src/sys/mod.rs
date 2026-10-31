@@ -32,6 +32,8 @@ mod section;
 mod system;
 mod wait;
 
+pub(crate) use system::processor_information;
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};

@@ -14,6 +14,38 @@ pub fn is_intel() -> bool {
     is_intel_vendor(r.ebx, r.edx, r.ecx)
 }
 
+/// The vendor string (CPUID leaf 0), as "GenuineIntel".
+///
+/// # IRQL
+/// Any level. No side effects.
+pub fn vendor() -> [u8; 12] {
+    let r = core::arch::x86_64::__cpuid(0);
+    let mut vendor = [0u8; 12];
+    for (chunk, word) in vendor.chunks_exact_mut(4).zip([r.ebx, r.edx, r.ecx]) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    vendor
+}
+
+/// The brand string (CPUID leaves 0x8000_0002 to 0x8000_0004), up to its
+/// first NUL; `None` without those leaves.
+///
+/// # IRQL
+/// Any level. No side effects.
+pub fn brand() -> Option<[u8; 48]> {
+    if core::arch::x86_64::__cpuid(0x8000_0000).eax < 0x8000_0004 {
+        return None;
+    }
+    let mut brand = [0u8; 48];
+    for (i, leaf) in (0x8000_0002u32..=0x8000_0004).enumerate() {
+        let r = core::arch::x86_64::__cpuid(leaf);
+        for (j, word) in [r.eax, r.ebx, r.ecx, r.edx].into_iter().enumerate() {
+            brand[16 * i + 4 * j..16 * i + 4 * j + 4].copy_from_slice(&word.to_le_bytes());
+        }
+    }
+    Some(brand)
+}
+
 /// The processor signature (CPUID leaf 1, EAX), the features of leaf 1
 /// (EDX), and the extended features of leaf 0x8000_0001 (EDX, 0 without it).
 ///

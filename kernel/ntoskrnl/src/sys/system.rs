@@ -38,7 +38,7 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
 /// les donne (`hal::cpuid::level_and_revision`), et ses fonctions
 /// (KeFeatureBits, `hal::cpuid::feature_bits`) : SYSENTER sur Intel
 /// (ADR-004), NX selon EFER.
-fn processor_information() -> SystemProcessorInformation32 {
+pub(crate) fn processor_information() -> SystemProcessorInformation32 {
     use x86_64::registers::model_specific::{Efer, EferFlags};
 
     let (signature, leaf1_edx, extended_edx) = hal::cpuid::signature_and_features();

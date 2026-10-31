@@ -12,6 +12,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
+mod hardware;
 mod launcher;
 mod shared_data;
 mod sys;
@@ -285,6 +286,13 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
     cm::init();
+    match hardware::mount_hardware_hive() {
+        Ok(identifier) => log::info!(
+            "[boot] HARDWARE hive mounted at \\REGISTRY\\MACHINE\\HARDWARE: CentralProcessor\\0 = {identifier}, {}",
+            core::str::from_utf8(&hal::cpuid::vendor()).unwrap_or("?")
+        ),
+        Err(status) => log::error!("[boot] HARDWARE hive refused: {status}"),
+    }
     ps::init();
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
     mount_boot_volume();
