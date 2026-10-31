@@ -6,12 +6,12 @@ jour à chaque commit qui change l'état.
 
 ## État
 
-- Jalon : **M3 terminé** (spike S1 réussi, ses trois critères cochés) ; prochain : **M4**
-  ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)).
+- Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
+  (spike S1 réussi). Étape 0 du M4 faite : la sonde `smss` ; ensuite, l'ordre proposé ci-dessous.
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- PR fusionnées : #29 (étape 1 du spike et ces notes), #30 (étapes 2 et 3). PR ouverte : #31 (étapes 4 et 5, la
-  course du TID, le job CI `native`). Après sa fusion, repartir de `origin/main`.
+- PR fusionnées : #29, #30 et #31 (spike S1). La sonde `smss` (étape 0 du M4) est poussée sur la branche, sans PR
+  encore. Après chaque fusion, repartir de `origin/main`.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
@@ -65,16 +65,33 @@ rencontrés est publiée.
 6. [x] Critères cochés dans 05 : **le M3 est terminé**. L'ADR-002 reste « Proposée » (S1 réussi, S2 et S3 à
    faire). CLAUDE.md : jalon courant M4.
 
-## Prochain jalon : M4 (E/S, registre, systèmes de fichiers)
+## Jalon courant : M4 (E/S, registre, systèmes de fichiers)
 
 But (05) : lancer `smss.exe`. Critères : `smss` démarre, lit `Session Manager`, crée les variables d'environnement
 et `\KnownDlls` ; une valeur du registre persiste après un redémarrage ; un fichier créé sur `C:` reste lisible après
-un redémarrage, sans erreur de `fsck.vfat`. Travaux (05) : Io (IRP, piles de périphériques, objets fichier, E/S
-synchrones et asynchrones, ports de complétion) ; pilotes ATA, virtio-blk, partitions, FAT32 en lecture et écriture
-(ADR-017) ; Cm et `libs/regf`, `tools/mkhive` (ADR-012) ; `\??\C:`, `\SystemRoot`, `\KnownDlls`. Méthode
-recommandée : la même que S1 — lancer `smss.exe` de ReactOS sous la sonde (`userland::run_native`, avec ses
-paramètres), lire où il s'arrête, et ajouter ce qu'il demande, composant par composant. Une session par composant
-(CLAUDE.md) ; commencer par décider de l'ordre avec le mainteneur.
+un redémarrage, sans erreur de `fsck.vfat`. Travaux (05) : Io, pilotes (ATA, virtio-blk, partitions, FAT32 en
+lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\??\C:`, `\SystemRoot`,
+`\KnownDlls`.
+
+0. [x] **Sonde `smss.exe`** (`docs/compat/m4-smss.md`, scénario `smss`, feature `test-smss`,
+   `userland::run_smss_probe`) : le noyau lance le `smss.exe` de ReactOS comme premier processus et journalise ses
+   appels (préfixe `[m4]`). Ajouts pour la sonde : `DbgPrompt` reçoit `i` faute de débogueur (sans quoi `RtlAssert`
+   boucle), `NtQueryVirtualMemory` (`MemoryBasicInformation`). Résultat : `smss` s'arrête au **registre**
+   (`RtlQueryRegistryValues` sur `Session Manager`) ; avant, il demande `ThreadBreakOnTermination`, `NtCreatePort`
+   (LPC), `NtCreateThread` et `NtWriteVirtualMemory`, `NtCreateEvent`, toutes en échec toléré.
+1. [ ] **Ordre proposé** (à confirmer avec le mainteneur) :
+   1. **Cm en mémoire** : `libs/regf` (lecture d'une ruche, hôte et noyau, tests hôte), `tools/mkhive` (ruche
+      `SYSTEM` minimale avec `Session Manager`), la ruche sur le disque de démarrage et chargée au démarrage,
+      `NtOpenKey`, `NtQueryValueKey`, `NtEnumerateKey`/`NtEnumerateValueKey` (selon ce que demande
+      `RtlQueryRegistryValues`). Relancer la sonde.
+   2. **Ex et Ps** que `smss` demande aussitôt : `NtCreateEvent` (objet événement d'Ex sur `KEvent`),
+      `NtCreateThread` et `NtWriteVirtualMemory`, `ThreadBreakOnTermination` (avec l'arrêt
+      `CRITICAL_OBJECT_TERMINATION` à la fin d'un thread critique : la sonde ne devra plus terminer `smss`).
+   3. **Io** (objets fichier, IRP synchrones, `NtCreateFile`/`NtOpenFile`/`NtReadFile`) sur le pilote FAT
+      existant du disque de démarrage, puis virtio-blk, partitions et FAT32 en écriture ; persistance du registre.
+   4. **LPC** (`NtCreatePort` et la suite), avancé du M5 si `smss` ne peut pas aller plus loin sans.
+   Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
+   mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 
 Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) :
 `NtQueryInformationProcess(ProcessCookie)`, `NtSetInformationProcess(ProcessExecuteFlags)`,
