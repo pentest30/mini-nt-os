@@ -98,6 +98,7 @@ pub const STATUS_INSUFFICIENT_RESOURCES: NtStatus = NtStatus(0xC000_009A);
 pub const STATUS_FREE_VM_NOT_AT_BASE: NtStatus = NtStatus(0xC000_009F);
 pub const STATUS_MEMORY_NOT_ALLOCATED: NtStatus = NtStatus(0xC000_00A0);
 pub const STATUS_STACK_OVERFLOW: NtStatus = NtStatus(0xC000_00FD);
+pub const STATUS_NAME_TOO_LONG: NtStatus = NtStatus(0xC000_0106);
 pub const STATUS_INVALID_PARAMETER_3: NtStatus = NtStatus(0xC000_00F1);
 pub const STATUS_PROCESS_IS_TERMINATING: NtStatus = NtStatus(0xC000_010A);
 pub const STATUS_MAPPED_FILE_SIZE_ZERO: NtStatus = NtStatus(0xC000_011E);

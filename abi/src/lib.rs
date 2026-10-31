@@ -28,6 +28,7 @@ pub mod ntstatus;
 pub mod object;
 pub mod peb32;
 pub mod process;
+pub mod process_parameters;
 pub mod service;
 pub mod services;
 pub mod shared_data;
