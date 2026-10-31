@@ -137,7 +137,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`ps::nls` : pages de code ANSI et OEM, casse Unicode, une section en lecture seule projetée dans chaque
   processus). Services : NtQuerySystemInformation (SystemBasicInformation), NtProtectVirtualMemory. La sonde va au
   bout : `LdrInitializeThunk` initialise le processus, lie ses imports et l'appelle, qui écrit par `DbgPrint` et se
-  termine. À venir : le programme MinGW, le test SEH ([`docs/passation.md`](docs/passation.md)).
+  termine. Programme MinGW fait (`tests/native/`, compilé par `xtask/src/native.rs`, lié à `ntdll` par
+  `tests/native/ntdll.def`, scénario `native`) : lancé avec le PEB en argument (`ps::create_thread_with_parameter`),
+  il écrit par `DbgPrint` et se termine. À venir : le test SEH ([`docs/passation.md`](docs/passation.md)).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
@@ -170,6 +172,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
+- Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW
+  (`i686-w64-mingw32-gcc`, paquet `gcc-mingw-w64-i686`). Sans eux, ils sont sautés.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
 - Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.

@@ -111,5 +111,17 @@ sur les deux chemins. Les 17 appels système, dans l'ordre de leur premier appel
 registre (`NtOpenKey`, `NtQueryValueKey`) et les fichiers (`NtOpenFile`, `NtQueryAttributesFile`) attendent Cm et
 Io ; `NtCreateKeyedEvent` attend les événements à clé d'Ex.
 
-**Prochaine étape** : le même programme compilé avec MinGW et lié à `ntdll` (critère de sortie de S1), puis le
-test SEH.
+## Étape 4 : un programme compilé avec MinGW
+
+`tests/native/s1hello.c`, compilé par `cargo xtask` avec `i686-w64-mingw32-gcc` (GCC 13), sans bibliothèque C
+(`-nostdlib`), sous-système NATIVE, point d'entrée `NtProcessStartup(PPEB)`, lié à `ntdll.dll` par une bibliothèque
+d'import que `dlltool --kill-at` tire de `tests/native/ntdll.def` (les exports appelés, avec leurs octets
+d'arguments). Le noyau le lance comme la sonde, depuis le disque de démarrage (`S1HELLO.EXE`), le PEB en argument
+de son point d'entrée (une adresse de retour nulle sous laquelle pointe ESP, puis le PEB, comme
+RtlCreateUserThread).
+
+Résultat, sur les deux chemins : `[s1] hello from a MinGW native program, PEB 7FFDF000`, puis le statut `0x5152`
+du programme ; les mêmes 17 appels système que la sonde. Le premier critère de sortie de S1 est atteint
+(scénario `native`).
+
+**Prochaine étape** : le test SEH (`__try`/`__except` sur une écriture à l'adresse 0).

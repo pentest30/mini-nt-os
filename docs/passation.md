@@ -10,7 +10,7 @@ jour à chaque commit qui change l'état.
   fait (voir CLAUDE.md).
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). Les étapes 2 et 3 sont poussées sur la branche
+- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). Les étapes 2 à 4 sont poussées sur la branche
   (après une fusion de `origin/main`, sans réécriture), sans PR encore.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
@@ -48,13 +48,15 @@ rencontrés est publiée.
      `NtQueryDefaultLocale` (0x0409 tant qu'il n'y a pas de registre, à documenter) ;
    - en attente de Cm (`NtOpenKey`, `NtQueryValueKey`), d'Io (`NtOpenFile`, `NtQueryAttributesFile`), des
      événements à clé d'Ex (`NtCreateKeyedEvent`).
-4. [ ] **Programme MinGW** (prochaine) : `gcc-mingw-w64-i686` (apt, présent sur les runners Ubuntu et installable ici),
-   `-nostdlib -Wl,--subsystem,native -e _NtProcessStartup@4`, bibliothèque d'import de `ntdll` (celle de MinGW, ou
-   `llvm-dlltool` sur les exports de `ntdll.dll`). Source sous `tests/` ; `xtask` le construit et le met sur le
-   disque de démarrage ; le noyau le lance comme la sonde. Le thread initial d'un programme natif reçoit le PEB en
-   paramètre (`NtProcessStartup(PPEB)`) : `ps::create_thread` doit alors poser le paramètre sur la pile (ESP pointe
-   sur une adresse de retour, le paramètre au-dessus), ce qu'il ne fait pas encore.
-5. [ ] **Test SEH** : GCC ne connaît pas `__try`/`__except` en i386. clang
+4. [x] **Programme MinGW** : `tests/native/s1hello.c` (C sans bibliothèque, `NtProcessStartup(PPEB)`), lié à
+   `ntdll` par `tests/native/ntdll.def` (`dlltool --kill-at` ; ajouter à ce fichier chaque export appelé, avec ses
+   octets d'arguments `@N` pour un `stdcall`). `xtask/src/native.rs` compile `tests/native/*` quand MinGW est là
+   (`i686-w64-mingw32-gcc`, paquet `gcc-mingw-w64-i686`) ; les scénarios `requires = native` reçoivent les
+   programmes sur le disque, ou sont sautés sans MinGW (la CI l'installe, job `native`). Le noyau lance ceux de
+   `BOOT_PROGRAMS` (`ntoskrnl::userland::run_boot_programs`) avec le PEB en argument
+   (`ps::create_thread_with_parameter`). Scénario `native` : le `DbgPrint` du programme et son statut `0x5152`.
+   Critère de sortie coché dans 05.
+5. [ ] **Test SEH** (prochaine) : GCC ne connaît pas `__try`/`__except` en i386. clang
    `--target=i686-pc-windows-msvc -fasync-exceptions` (clang 18 et `lld-link` sont installés ici) les compile, mais
    appelle `__except_handler3`, que le `ntdll` de ReactOS n'exporte pas : le test fournit le sien (code écrit par
    nous, d'après la structure documentée de la table des portées). Recommandation : MinGW pour l'étape 4, clang pour
