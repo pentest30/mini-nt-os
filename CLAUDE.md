@@ -162,7 +162,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   CPUID dans `hal::cpuid`). Registre en écriture fait, en mémoire : une ruche montée est un arbre de clés
   (`cm::HiveKey`) ; NtCreateKey, NtSetValueKey, NtDeleteValueKey ; la ruche HARDWARE, volatile, bâtie au démarrage
   (`ntoskrnl::hardware`). `smss` écrit ses variables d'environnement, puis ne trouve pas `csrss.exe` (M5) : le premier
-  critère du M4 est coché ; restent la persistance du registre et du FAT32 en écriture.
+  critère du M4 est coché. FAT32 en écriture fait, sur le disque RAM : `tools/mkfat` écrit un vrai volume FAT32
+  (`fsck.vfat` l'accepte) ; `FatVolume` écrit, `Volume` et `File` créent et écrivent ; NtCreateFile crée, NtReadFile,
+  NtWriteFile, NtSetInformationFile, NtFlushBuffersFile. Restent la persistance (un vrai disque pour `C:`) et les
+  ruches réécrites.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

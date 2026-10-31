@@ -9,9 +9,10 @@ jour à chaque commit qui change l'état.
 - Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
   (spike S1 réussi). Étapes 0, 1, 2, 4 (en mémoire), 5 et 6 du M4 faites : la sonde `smss`, le registre en lecture
   puis en écriture, les répertoires d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`),
-  `SystemProcessorInformation`, la ruche HARDWARE. **Le premier critère de sortie du M4 est coché** : `smss` crée ses
-  variables d'environnement et `\KnownDlls`, puis s'arrête au lancement de `csrss.exe` (M5). Restent les critères 2
-  et 3 : la persistance du registre et des fichiers, donc le FAT32 en écriture.
+  `SystemProcessorInformation`, la ruche HARDWARE, le FAT32 en écriture (sur le disque RAM). **Le premier critère
+  de sortie du M4 est coché** : `smss` crée ses variables d'environnement et `\KnownDlls`, puis s'arrête au lancement
+  de `csrss.exe` (M5). Restent les critères 2 et 3 : la persistance du registre et des fichiers, donc un vrai disque
+  pour `C:` (étape 8).
 - Branche de travail : `claude/m4-io`, partie d'`origin/main` après la fusion de #32. Les PR se fusionnent dans
   `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
   `git merge-base --is-ancestor HEAD origin/main`).
@@ -133,12 +134,24 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    `abi::system_information` : structure et `KF_*` d'XP SP2 ; test dans `loader_services_self_test`). Résultat : `smss`
    ouvre `Session Manager\Environment` en écriture et s'arrête à `NtSetValueKey` (`OS`) : **l'étape 4 (écriture dans
    le registre) est la prochaine**.
-7. [ ] **FAT32 en écriture** (critère 3) : créer et écrire un fichier sur `C:` (NtCreateFile avec création,
-   NtWriteFile), le relire après un redémarrage ; `fsck.vfat` sans erreur sur l'image (il faudra que `tools/mkfat`
-   écrive un BPB complet : signature, FSInfo, deux FAT). Puis le critère 2 : les ruches modifiées réécrites sur `C:`.
-   Ne pas oublier : le disque RAM est en mémoire ; la persistance demande un vrai disque (ATA ou virtio-blk, 05) ou que
-   `xtask` relise l'image après l'arrêt de QEMU.
-8. [ ] **LPC**, et la création de processus depuis le mode utilisateur, seulement pour aller plus loin avec `smss`
+7. [x] **FAT32 en écriture, sur le disque RAM** (une partie du critère 3). `tools/mkfat` écrit un vrai volume FAT32
+   (secteur d'amorçage, FSInfo et leurs copies, 32 secteurs réservés, deux FAT, au moins 65 525 clusters et 4 Mio
+   libres : 33 Mio au moins) ; ses tests le passent à `fsck.vfat -n` (paquet `dosfstools`). `kernel/io` :
+   `BlockDevice::write_sector`, `FatVolume` écrit (FAT dans chaque copie, clusters alloués à zéro et libérés, chaînes
+   vérifiées, données à une position avec l'intervalle à zéro, taille, entrées ajoutées, répertoire qui grandit,
+   sous-répertoires) ; `Volume` (un verrou ; `current` relit l'entrée : toutes les ouvertures voient la même taille ;
+   `create`, `write`, `set_size`) ; `File` (`create_child`, `write`, `set_size`) ; `check_open` écrase ou refuse
+   (lecture seule, répertoire). Services : NtCreateFile qui crée, NtReadFile, NtWriteFile (synchrones),
+   NtSetInformationFile (position, fin de fichier), NtFlushBuffersFile. Tests : hôte (`kernel/io/src/write_tests.rs`,
+   avec `fsck.vfat` sur ce que le pilote écrit), `file_write_self_test` (mode utilisateur), vérifiés par mutation.
+   **Pas encore** : noms longs (un nom que le 8.3 ne tient pas : `STATUS_OBJECT_NAME_INVALID`), suppression et
+   renommage, dates, partage, E/S asynchrones ; le compte de FSInfo reste « inconnu ».
+8. [ ] **La persistance** (critères 2 et 3) : le disque RAM est en mémoire, ce qu'on y écrit disparaît à l'arrêt. Il
+   faut un vrai disque pour `C:` : un pilote ATA (en PIO, `hal::ata` ne sait que lire, sur le canal secondaire) ou
+   virtio-blk, l'image passée à QEMU en `-drive`, et un scénario en deux démarrages sur la même image (`xtask`), puis
+   `fsck.vfat` sur l'image. Ensuite les ruches modifiées réécrites sur `C:` (la ruche entière par `regf::builder`,
+   NtFlushKey, écriture différée).
+9. [ ] **LPC**, et la création de processus depuis le mode utilisateur, seulement pour aller plus loin avec `smss`
    (`csrss.exe`) : c'est le M5.
    Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
    mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
