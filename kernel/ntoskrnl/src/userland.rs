@@ -91,7 +91,10 @@ pub fn run_native_probe() {
 /// Les programmes natifs de test du disque de démarrage (`tests/native`,
 /// compilés par `cargo xtask`) : leur fichier, leur chemin dans leurs
 /// paramètres, et le statut de sortie qu'ils rendent s'ils vont au bout.
-const BOOT_PROGRAMS: &[(&str, &str, u32)] = &[("/S1HELLO.EXE", "C:\\WINDOWS\\system32\\s1hello.exe", 0x5152)];
+const BOOT_PROGRAMS: &[(&str, &str, u32)] = &[
+    ("/S1HELLO.EXE", "C:\\WINDOWS\\system32\\s1hello.exe", 0x5152),
+    ("/S1SEH.EXE", "C:\\WINDOWS\\system32\\s1seh.exe", 0x5153),
+];
 
 /// Lance sous la DLL système les programmes natifs de test que tient le
 /// disque de démarrage ([`run_native`]).
