@@ -1,0 +1,8 @@
+; The exports of ntdll.dll (ReactOS 0.4.16, i386) that the native test
+; programs call, for their import library (`cargo xtask` builds it with
+; dlltool --kill-at). stdcall functions carry their argument bytes (@N); the
+; DLL exports them undecorated.
+LIBRARY ntdll.dll
+EXPORTS
+DbgPrint
+NtTerminateProcess@8

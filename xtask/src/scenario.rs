@@ -12,7 +12,7 @@
 //! expect   = marker A | marker B
 //! forbid   = marker
 //! forbid-line-start = prefix
-//! requires = userland
+//! requires = userland, native
 //! ```
 //!
 //! - `features`: ntoskrnl features, comma-separated (default: none).
@@ -22,8 +22,12 @@
 //! - `expect`: must appear in the serial log; with `|`, one of them.
 //! - `forbid`: fails the run as soon as it appears anywhere.
 //! - `forbid-line-start`: fails the run as soon as a line starts with it.
-//! - `requires = userland`: the ramdisk gets the fetched ReactOS userland
-//!   (`NTDLL.DLL`); without it, the scenario is skipped.
+//! - `requires`, comma-separated; without one of them, the scenario is
+//!   skipped:
+//!   - `userland`: the ramdisk gets the fetched ReactOS userland (`NTDLL.DLL`
+//!     and the NLS tables);
+//!   - `native`: the ramdisk gets the native test programs of
+//!     `tests/native/`, compiled with MinGW (`xtask/src/native.rs`).
 
 use std::fs;
 use std::path::Path;
@@ -38,6 +42,7 @@ pub struct Scenario {
     pub cpus: Vec<Cpu>,
     pub timeout: Duration,
     pub requires_userland: bool,
+    pub requires_native: bool,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
@@ -60,6 +65,7 @@ impl Scenario {
             cpus: vec![Cpu::Default],
             timeout: Duration::from_secs(120),
             requires_userland: false,
+            requires_native: false,
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -85,10 +91,15 @@ impl Scenario {
                 "expect" => sc.expect.push(value.split('|').map(|m| m.trim().to_string()).collect()),
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
-                "requires" => match value {
-                    "userland" => sc.requires_userland = true,
-                    _ => return Err(format!("{}: unknown requirement `{value}`", at())),
-                },
+                "requires" => {
+                    for requirement in list() {
+                        match requirement {
+                            "userland" => sc.requires_userland = true,
+                            "native" => sc.requires_native = true,
+                            _ => return Err(format!("{}: unknown requirement `{requirement}`", at())),
+                        }
+                    }
+                }
                 _ => return Err(format!("{}: unknown key `{key}`", at())),
             }
             if value.is_empty() && key != "features" {
@@ -177,6 +188,9 @@ requires = userland
         assert_eq!(sc.expect, [vec!["ready"], vec!["hit", "skipped"]]);
         assert!(sc.requires_userland);
         assert!(!Scenario::parse("x", "expect = a").unwrap().requires_userland);
+        let both = Scenario::parse("x", "expect = a\nrequires = userland, native").unwrap();
+        assert!(both.requires_userland && both.requires_native);
+        assert!(!sc.requires_native);
     }
 
     #[test]
