@@ -10,8 +10,8 @@ jour à chaque commit qui change l'état.
   fait (voir CLAUDE.md).
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- Dernière PR fusionnée : #28 (`fetch-userland`). L'étape 1 du spike (sonde, commits `ed622d2`…`93be3c7`) est
-  poussée, sans PR encore.
+- Dernière PR fusionnée : #28 (`fetch-userland`). Les étapes 1 et 2 du spike sont poussées sur la branche, sans PR
+  encore.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
@@ -24,18 +24,23 @@ rencontrés est publiée.
    (`pe::builder`, imports `DbgPrint` et `NtTerminateProcess`) sous le vrai `ntdll`, et journalise sa fin et les
    appels système faits (`sys::service_calls`). Résultat : `LdrInitializeThunk` lit `Peb->ProcessParameters`,
    absent, et faute.
-2. [ ] **Paramètres du processus** (en cours) : `RTL_USER_PROCESS_PARAMETERS` (32 bits, 0x290 octets) dans `abi`
-   avec assertions de layout ; Ps l'écrit dans le processus (bloc normalisé, chaînes UTF-16 à la suite ;
-   environnement dans une allocation à lui, car `RtlSetEnvironmentVariable` le réalloue et libère l'ancien) et met
-   son adresse dans le PEB. Chemins sous `C:\WINDOWS` (la racine de `KUSER_SHARED_DATA`). Puis relancer la sonde
-   et noter la suite dans `compat/s1-ntdll.md`.
-3. [ ] **Services du chargeur** : ceux que la sonde révèle, un par un, selon la compétence `mino-syscall-impl`
-   (handler dans `kernel/ntoskrnl/src/sys/`, entrée dans `IMPLEMENTED`, `cargo xtask syscall-gen` pour le rapport
-   de couverture). Déjà vus : `NtQueryInformationProcess` (classe 0x24 `ProcessCookie`), `NtCreateEvent`,
-   `NtWaitForKeyedEvent`. Attendus : `NtQuerySystemInformation`, `NtProtectVirtualMemory`,
-   `NtQueryVirtualMemory`, `NtSetInformationProcess`, attentes et événements, réponses « introuvable » pour le
-   registre (`NtOpenKey`) et `\KnownDlls`. Fin de l'étape : la sonde va au bout (statut `0x5151`, ligne
-   `DbgPrint ... [s1] hello from a native process`).
+2. [x] **Paramètres du processus** : `abi::process_parameters` (`RTL_USER_PROCESS_PARAMETERS` 32 bits, 0x290
+   octets, assertions de layout) ; `ps::process_parameters::write` les écrit dans un processus (bloc normalisé,
+   chaînes UTF-16 à la suite, répertoire courant sur `MAX_PATH` caractères ; environnement dans une allocation à
+   lui, car `RtlSetEnvironmentVariable` le réalloue et libère l'ancien) et met leur adresse dans le PEB ;
+   `ProcessParameters::system` pour un programme du système (chemins sous `C:\WINDOWS`, la racine de
+   `KUSER_SHARED_DATA`). Résultat : `ntdll` lit le registre, puis s'arrête à la création du tas
+   (`NtQuerySystemInformation` absent) ; statut `STATUS_NO_MEMORY`.
+3. [ ] **Services du chargeur** (prochaine) : ceux que la sonde révèle, un par un, selon la compétence
+   `mino-syscall-impl` (handler dans `kernel/ntoskrnl/src/sys/`, entrée dans `IMPLEMENTED`,
+   `cargo xtask syscall-gen` pour le rapport de couverture). Dans l'ordre :
+   `NtQuerySystemInformation(SystemBasicInformation)` (0x2C octets : la limite haute du mode utilisateur, sans
+   laquelle pas de tas), `NtQueryInformationProcess(ProcessCookie)`, `NtOpenKey` qui rend
+   `STATUS_OBJECT_NAME_NOT_FOUND` (il faut capturer `OBJECT_ATTRIBUTES` ; pas de registre avant Cm),
+   `NtRaiseHardError` journalisé (diagnostic). Puis ce que la sonde révèle ensuite (attendus :
+   `NtProtectVirtualMemory`, `NtQueryVirtualMemory`, `NtSetInformationProcess`, événements et attentes,
+   `\KnownDlls`). Fin de l'étape : la sonde va au bout (statut `0x5151`, ligne
+   `DbgPrint ... [s1] hello from a native process`) ; le scénario `userland` l'attend alors.
 4. [ ] **Programme MinGW** : `gcc-mingw-w64-i686` (apt, présent sur les runners Ubuntu et installable ici),
    `-nostdlib -Wl,--subsystem,native -e _NtProcessStartup@4`, bibliothèque d'import de `ntdll` (celle de MinGW, ou
    `llvm-dlltool` sur les exports de `ntdll.dll`). Source sous `tests/` ; `xtask` le construit et le met sur le

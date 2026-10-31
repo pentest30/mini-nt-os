@@ -14,8 +14,10 @@ système :
   `DbgPrint` et `NtTerminateProcess` de `ntdll.dll` ;
 - son code écrit `[s1] hello from a native process` par `DbgPrint`, puis appelle
   `NtTerminateProcess(NtCurrentProcess(), 0x5151)` ;
-- Ps crée le processus (image, `KUSER_SHARED_DATA`, `ntdll` à sa base, PEB) et son thread, qui démarre par
-  `KiUserApcDispatcher` → `LdrInitializeThunk(NULL, base de ntdll, NULL)` ;
+- Ps crée le processus (image, `KUSER_SHARED_DATA`, `ntdll` à sa base, PEB), écrit ses paramètres
+  (`ps::process_parameters`, depuis l'étape 2 : image `C:\WINDOWS\system32\s1native.exe`, répertoire courant et
+  chemin des DLL dans `C:\WINDOWS\system32`, environnement `Path`, `SystemDrive`, `SystemRoot`, `windir`) et crée
+  son thread, qui démarre par `KiUserApcDispatcher` → `LdrInitializeThunk(NULL, base de ntdll, NULL)` ;
 - le noyau attend la fin du processus (10 s au plus), puis journalise son statut de sortie et les appels système
   faits, dans l'ordre de leur premier appel, avec le nombre d'appels et ce qu'a rendu le premier
   (`sys::service_calls`).
@@ -47,5 +49,26 @@ Ce qui se passe :
 Le point 2 est un comportement de `ntdll` (une exception levée avant `RtlpInitializeVectoredExceptionHandling` ne
 peut pas être livrée), pas un défaut du noyau : il disparaît avec la cause du point 1.
 
-**Prochaine étape** : `RTL_USER_PROCESS_PARAMETERS` dans `abi` (assertions de layout) et dans chaque processus
-de Ps, avec `ImagePathName`, `CommandLine`, `CurrentDirectory`, `DllPath` et un environnement.
+## Étape 2 : avec ses paramètres, `ntdll` s'arrête à la création du tas
+
+Le processus a désormais ses `RTL_USER_PROCESS_PARAMETERS` (`abi::process_parameters`, bloc normalisé de 0x290
+octets et ses chaînes, environnement à part). Statut de sortie : `STATUS_NO_MEMORY` (`0xC0000017`), sur les deux
+chemins.
+
+| Ordre | Service | Appels | Premier retour | Appelant | Arguments, et ce qu'en fait `ntdll` |
+|---:|---|---:|---|---|---|
+| 1 | `NtQueryInformationProcess` | 1 | `STATUS_NOT_IMPLEMENTED` | `0x7c96086c` | `ProcessCookie` (0x24), 4 octets ; continue |
+| 2 | `NtOpenKey` | 1 | `STATUS_NOT_IMPLEMENTED` | `0x7c9251f3` | accès 8 (`KEY_ENUMERATE_SUB_KEYS`), vraisemblablement les options d'exécution de l'image ; continue |
+| 3 | `NtQueryValueKey` | 5 | `STATUS_NOT_IMPLEMENTED` | `0x7c925349` | sur un handle qui n'en est pas un (`0x7c94c239`, `NtOpenKey` ayant échoué), classe 2 (`KeyValuePartialInformation`), 0x400 octets ; continue |
+| 4 | `NtQuerySystemInformation` | 1 | `STATUS_NOT_IMPLEMENTED` | `0x7c94eafa` | `SystemBasicInformation` (0), 0x2C octets : « Getting max usermode address failed » (`sdk/lib/rtl/heap.c:1512`), puis « Failed to create process heap » (`dll/ntdll/ldr/ldrinit.c:2042`) |
+| 5 | `NtTestAlert` | 1 | `STATUS_SUCCESS` | | |
+| 6 | `NtContinue` | 1 | un nouveau contexte | | |
+| 7 | `NtRaiseHardError` | 1 | `STATUS_NOT_IMPLEMENTED` | `0x7c92788c` | `STATUS_APP_INIT_FAILURE` (`0xC0000145`), un paramètre |
+| 8 | `NtRaiseException` | 1 | ne revient pas | | `STATUS_NO_MEMORY` en `0x7c92913f`, en seconde chance : fin du processus |
+
+Sans tas, l'initialisation du processus échoue (« DbgPrint() failed! », `dll/ntdll/ldr/ldrinit.c:2577`) ;
+`ntdll` le signale par une erreur dure, puis lève `STATUS_NO_MEMORY`, que personne ne traite.
+
+**Prochaine étape** (services du chargeur) : `NtQuerySystemInformation(SystemBasicInformation)` d'abord ; puis
+`ProcessCookie`, des réponses « introuvable » du registre (`NtOpenKey` : `STATUS_OBJECT_NAME_NOT_FOUND`), et
+`NtRaiseHardError` journalisé ; relancer la sonde après chacun.
