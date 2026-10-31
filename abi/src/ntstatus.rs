@@ -84,6 +84,7 @@ pub const STATUS_INVALID_VIEW_SIZE: NtStatus = NtStatus(0xC000_001F);
 pub const STATUS_ACCESS_DENIED: NtStatus = NtStatus(0xC000_0022);
 pub const STATUS_OBJECT_TYPE_MISMATCH: NtStatus = NtStatus(0xC000_0024);
 pub const STATUS_NOT_COMMITTED: NtStatus = NtStatus(0xC000_002D);
+pub const STATUS_EAS_NOT_SUPPORTED: NtStatus = NtStatus(0xC000_004F);
 pub const STATUS_OBJECT_NAME_INVALID: NtStatus = NtStatus(0xC000_0033);
 pub const STATUS_OBJECT_NAME_NOT_FOUND: NtStatus = NtStatus(0xC000_0034);
 pub const STATUS_OBJECT_NAME_COLLISION: NtStatus = NtStatus(0xC000_0035);

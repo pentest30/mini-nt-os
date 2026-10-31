@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 21 | 296 |
+| ntoskrnl | 26 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -54,7 +54,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0024` | `NtCreateDirectoryObject` | 3 | ✅ |
 | `0x0025` | `NtCreateEvent` | 5 |  |
 | `0x0026` | `NtCreateEventPair` | 3 |  |
-| `0x0027` | `NtCreateFile` | 11 |  |
+| `0x0027` | `NtCreateFile` | 11 | ✅ |
 | `0x0028` | `NtCreateIoCompletion` | 4 |  |
 | `0x0029` | `NtCreateJobObject` | 3 |  |
 | `0x002a` | `NtCreateJobSet` | 3 |  |
@@ -137,7 +137,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0077` | `NtOpenDirectoryObject` | 3 | ✅ |
 | `0x0078` | `NtOpenEvent` | 3 |  |
 | `0x0079` | `NtOpenEventPair` | 3 |  |
-| `0x007a` | `NtOpenFile` | 6 |  |
+| `0x007a` | `NtOpenFile` | 6 | ✅ |
 | `0x007b` | `NtOpenIoCompletion` | 3 |  |
 | `0x007c` | `NtOpenJobObject` | 3 |  |
 | `0x007d` | `NtOpenKey` | 3 | ✅ |
@@ -160,7 +160,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x008e` | `NtPrivilegedServiceAuditAlarm` | 5 |  |
 | `0x008f` | `NtProtectVirtualMemory` | 5 | ✅ |
 | `0x0090` | `NtPulseEvent` | 2 |  |
-| `0x0091` | `NtQueryAttributesFile` | 2 |  |
+| `0x0091` | `NtQueryAttributesFile` | 2 | ✅ |
 | `0x0092` | `NtQueryBootEntryOrder` | 2 |  |
 | `0x0093` | `NtQueryBootOptions` | 2 |  |
 | `0x0094` | `NtQueryDebugFilterState` | 2 |  |
@@ -171,9 +171,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0099` | `NtQueryDriverEntryOrder` | 2 |  |
 | `0x009a` | `NtQueryEaFile` | 9 |  |
 | `0x009b` | `NtQueryEvent` | 5 |  |
-| `0x009c` | `NtQueryFullAttributesFile` | 2 |  |
+| `0x009c` | `NtQueryFullAttributesFile` | 2 | ✅ |
 | `0x009d` | `NtQueryInformationAtom` | 5 |  |
-| `0x009e` | `NtQueryInformationFile` | 5 |  |
+| `0x009e` | `NtQueryInformationFile` | 5 | ✅ |
 | `0x009f` | `NtQueryInformationJobObject` | 5 |  |
 | `0x00a0` | `NtQueryInformationPort` | 5 |  |
 | `0x00a1` | `NtQueryInformationProcess` | 5 |  |

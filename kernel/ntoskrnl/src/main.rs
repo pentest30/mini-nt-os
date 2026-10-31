@@ -330,6 +330,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     loader_services_self_test();
     registry_self_test();
     object_directory_self_test();
+    file_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -2574,6 +2575,225 @@ fn object_directory_self_test() {
     log::info!(
         "[smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, \
          NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject"
+    );
+}
+
+/// The file services from user mode (`sys::file`, Io, M4), on the boot
+/// volume through `\??\C:`: the root opened as a directory, `KERNEL.BIN`
+/// opened relative to it, then described (FileStandardInformation through a
+/// handle with a tag bit, as `smss` does), its attributes read without a
+/// handle; then what must fail: a right the handle lacks, a short buffer, a
+/// file opened as a directory, a missing name and path, a directory created
+/// over itself, an unknown class. Every file object goes with the process.
+fn file_self_test() {
+    use abi::file::*;
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_INFO_CLASS, STATUS_NOT_A_DIRECTORY,
+        STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_SUCCESS,
+        STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_CASE_INSENSITIVE;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const HANDLE: u32 = DATA + 0x40; // 16 handles
+    const IOSB: u32 = DATA + 0x80; // 16 IO_STATUS_BLOCKs
+    const STANDARD: u32 = DATA + 0x100; // 24 bytes
+    const BASIC: u32 = DATA + 0x118; // 40 bytes
+    const ATTRIBUTES: u32 = DATA + 0x140; // 40 bytes
+    const FULL: u32 = DATA + 0x168; // 56 bytes
+    const NETWORK: u32 = DATA + 0x1A0; // 56 bytes
+    const TAGGED: u32 = DATA + 0x1D8; // handle 1 | 1
+    const OA: u32 = DATA + 0x1E0; // 5 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0x258; // 5 UNICODE_STRING
+    const DONE: u32 = DATA + 0x3FC;
+    const KERNEL_BIN: &[u8] = b"ABCD";
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x280usize;
+    let names = ["\\??\\C:\\", "KERNEL.BIN", "\\??\\C:\\kernel.bin", "\\??\\C:\\NOPE.BIN", "\\??\\C:\\NoDir\\x.bin"];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+    }
+    assert!(strings <= 0x3FC, "the strings outgrew the data");
+    for i in 0..names.len() {
+        let at = (OA - DATA) as usize + 24 * i;
+        data[at..at + 4].copy_from_slice(&24u32.to_le_bytes());
+        data[at + 8..at + 12].copy_from_slice(&(DATA + (US + 8 * i) as u32).to_le_bytes());
+        data[at + 12..at + 16].copy_from_slice(&OBJ_CASE_INSENSITIVE.to_le_bytes());
+    }
+    // Handle 7 starts non-zero: a failed open must zero it.
+    data[(HANDLE - DATA) as usize + 28..(HANDLE - DATA) as usize + 32].copy_from_slice(&u32::MAX.to_le_bytes());
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let iosb = |i: u32| Arg::Value(IOSB + 8 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let (open, create, query) = (services::NtOpenFile, services::NtCreateFile, services::NtQueryInformationFile);
+    let sync = FILE_SYNCHRONOUS_IO_NONALERT;
+    let mut code = Code::new();
+    code.call_args(
+        open,
+        &[handle(0), v(FILE_LIST_DIRECTORY | 0x0010_0000), oa(0), iosb(0), v(3), v(FILE_DIRECTORY_FILE | sync)],
+    )
+    .store_eax(status(0))
+    .word(&[0xA1], HANDLE) // mov eax, [handle 0]
+    .store_eax(OA + 24 + 4) // OA 1's RootDirectory
+    .call_args(
+        open,
+        &[handle(1), v(FILE_EXECUTE | 0x0010_0000), oa(1), iosb(1), v(5), v(FILE_NON_DIRECTORY_FILE | sync)],
+    )
+    .store_eax(status(1))
+    .word(&[0xA1], HANDLE + 4) // mov eax, [handle 1]
+    .bytes(&[0x83, 0xC8, 0x01]) // or eax, 1: a tag bit
+    .store_eax(TAGGED)
+    .call_args(query, &[m(TAGGED), iosb(2), v(STANDARD), v(24), v(FILE_STANDARD_INFORMATION)])
+    .store_eax(status(2))
+    .call_args(query, &[m(HANDLE + 4), iosb(3), v(BASIC), v(40), v(FILE_BASIC_INFORMATION)])
+    .store_eax(status(3))
+    .call_args(query, &[m(HANDLE + 4), iosb(4), v(BASIC), v(39), v(FILE_BASIC_INFORMATION)])
+    .store_eax(status(4))
+    .call_args(services::NtQueryAttributesFile, &[oa(2), v(ATTRIBUTES)])
+    .store_eax(status(5))
+    .call_args(services::NtQueryFullAttributesFile, &[oa(2), v(FULL)])
+    .store_eax(status(6))
+    .call_args(open, &[handle(7), v(FILE_READ_ATTRIBUTES), oa(2), iosb(7), v(0), v(FILE_DIRECTORY_FILE)])
+    .store_eax(status(7))
+    .call_args(open, &[handle(8), v(FILE_READ_ATTRIBUTES), oa(3), iosb(8), v(0), v(0)])
+    .store_eax(status(8))
+    .call_args(open, &[handle(9), v(FILE_READ_ATTRIBUTES), oa(4), iosb(9), v(0), v(0)])
+    .store_eax(status(9))
+    .call_args(
+        create,
+        &[
+            handle(10),
+            v(FILE_LIST_DIRECTORY),
+            oa(0),
+            iosb(10),
+            v(0),
+            v(0),
+            v(3),
+            v(FILE_CREATE),
+            v(FILE_DIRECTORY_FILE),
+            v(0),
+            v(0),
+        ],
+    )
+    .store_eax(status(10))
+    .call_args(
+        create,
+        &[
+            handle(11),
+            v(abi::object::AccessMask::GENERIC_READ.0),
+            oa(2),
+            iosb(11),
+            v(0),
+            v(FILE_ATTRIBUTE_NORMAL),
+            v(FILE_SHARE_READ),
+            v(FILE_OPEN_IF),
+            v(FILE_NON_DIRECTORY_FILE),
+            v(0),
+            v(0),
+        ],
+    )
+    .store_eax(status(11))
+    .call_args(query, &[m(HANDLE + 44), iosb(12), v(NETWORK), v(56), v(FILE_NETWORK_OPEN_INFORMATION)])
+    .store_eax(status(12))
+    .call_args(query, &[m(HANDLE + 44), iosb(13), v(NETWORK), v(56), v(0)])
+    .store_eax(status(13))
+    .call_args(services::NtClose, &[m(HANDLE + 4)])
+    .store_eax(status(14))
+    .word(&[0xC7, 0x05], DONE)
+    .bytes(&1u32.to_le_bytes())
+    .bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let files_before = io_manager::FILE_TYPE.object_count();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "files.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let read64 = |addr: u32| u64::from(read(addr)) | u64::from(read(addr + 4)) << 32;
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the file test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..15).map(|i| NtStatus(read(status(i)))).collect();
+    let iosb_at = |i: u32| (read(IOSB + 8 * i), read(IOSB + 8 * i + 4));
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtOpenFile of \\??\\C:\\ as a directory");
+    assert_eq!(iosb_at(0), (0, FILE_OPENED));
+    assert_eq!(statuses[1], STATUS_SUCCESS, "NtOpenFile of KERNEL.BIN relative to it");
+    assert_eq!(statuses[2], STATUS_SUCCESS, "FileStandardInformation through a tagged handle");
+    assert_eq!(iosb_at(2), (0, 24));
+    let size = KERNEL_BIN.len() as u64;
+    assert_eq!((read64(STANDARD), read64(STANDARD + 8), read(STANDARD + 16)), (512, size, 1));
+    assert_eq!(read(STANDARD + 20) & 0xFFFF, 0, "neither delete pending nor a directory");
+    assert_eq!(statuses[3], STATUS_ACCESS_DENIED, "FileBasicInformation without FILE_READ_ATTRIBUTES");
+    assert_eq!(statuses[4], STATUS_INFO_LENGTH_MISMATCH, "a buffer one byte short");
+    assert_eq!(statuses[5], STATUS_SUCCESS, "NtQueryAttributesFile");
+    assert_eq!(read(ATTRIBUTES + 32), FILE_ATTRIBUTE_ARCHIVE);
+    assert_eq!(statuses[6], STATUS_SUCCESS, "NtQueryFullAttributesFile");
+    assert_eq!((read64(FULL + 32), read64(FULL + 40), read(FULL + 48)), (512, size, FILE_ATTRIBUTE_ARCHIVE));
+    assert_eq!((statuses[7], read(HANDLE + 28)), (STATUS_NOT_A_DIRECTORY, 0), "a file as a directory, handle zeroed");
+    assert_eq!(statuses[8], STATUS_OBJECT_NAME_NOT_FOUND);
+    assert_eq!(statuses[9], STATUS_OBJECT_PATH_NOT_FOUND);
+    assert_eq!(statuses[10], STATUS_OBJECT_NAME_COLLISION, "FILE_CREATE over the root");
+    assert_eq!(statuses[11], STATUS_SUCCESS, "NtCreateFile with FILE_OPEN_IF");
+    assert_eq!(iosb_at(11), (0, FILE_OPENED));
+    assert_eq!(statuses[12], STATUS_SUCCESS, "FileNetworkOpenInformation");
+    assert_eq!((read64(NETWORK + 40), read(NETWORK + 48)), (size, FILE_ATTRIBUTE_ARCHIVE));
+    assert_eq!(statuses[13], STATUS_INVALID_INFO_CLASS);
+    assert_eq!(statuses[14], STATUS_SUCCESS, "NtClose of a file handle");
+    assert_eq!(read(TAGGED), read(HANDLE + 4) | 1, "the tag bit was set");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert_eq!(io_manager::FILE_TYPE.object_count(), files_before, "every file object went with the process");
+    log::info!(
+        "[smoke] Io: files from user mode through \\??\\C:: NtOpenFile, NtCreateFile, NtQueryInformationFile, \
+         NtQueryAttributesFile, NtQueryFullAttributesFile"
     );
 }
 
