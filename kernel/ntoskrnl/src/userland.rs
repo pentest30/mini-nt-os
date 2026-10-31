@@ -42,12 +42,17 @@ pub fn install_system_dll() {
 const PROBE_BASE: u32 = 0x40_0000;
 /// Son statut de sortie, s'il va au bout.
 const PROBE_EXIT_STATUS: u32 = 0x5151;
+/// Le chemin de son image et sa ligne de commande, dans ses paramètres.
+const PROBE_PATH: &str = "C:\\WINDOWS\\system32\\s1native.exe";
+const PROBE_COMMAND_LINE: &str = "s1native.exe";
 /// Ce qu'il écrit par `DbgPrint`.
 const PROBE_MESSAGE: &[u8] = b"[s1] hello from a native process\n\0";
 
 /// Spike S1 (05, M3) : un programme natif sous la DLL système. Son image
 /// (sous-système NATIVE) importe `DbgPrint` et `NtTerminateProcess` de
-/// `ntdll.dll` ; son thread démarre par `LdrInitializeThunk`, qui initialise
+/// `ntdll.dll` ; ses paramètres sont ceux d'un programme du système
+/// (`ps::ProcessParameters::system`). Son thread démarre par
+/// `LdrInitializeThunk`, qui initialise
 /// le processus et lie ses imports, puis entre dans le programme, qui écrit
 /// par `DbgPrint` et se termine. Journalise son statut de sortie et les
 /// appels système qu'il a faits, dans l'ordre de leur premier appel.
@@ -75,6 +80,7 @@ pub fn run_native_probe() {
     let info = section.image().expect("an image section").info;
     crate::sys::reset_service_calls();
     let started = ps::create_process(&ps::system_process(), &section, "s1native.exe", false).and_then(|process| {
+        ps::process_parameters::write(&process, &ps::ProcessParameters::system(PROBE_PATH, PROBE_COMMAND_LINE))?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
         ps::create_thread(&process, PROBE_BASE + 0x1000, &stack)?;
         Ok(process)
