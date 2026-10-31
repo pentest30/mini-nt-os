@@ -1,13 +1,17 @@
 //! Les services de Mm.
 
+use abi::memory::{MemoryBasicInformation32, MEMORY_BASIC_INFORMATION};
 use abi::ntstatus::{
-    NtStatus, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_3, STATUS_NO_MEMORY,
-    STATUS_SUCCESS,
+    NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER,
+    STATUS_INVALID_PARAMETER_3, STATUS_NO_MEMORY, STATUS_SUCCESS,
 };
 use ke::usermem::UserPtr;
 use mm::vad::PageProtect;
 use mm::virtual_alloc::{AllocType, FreeType, PAGE_SIZE};
-use ps::eprocess::PROCESS_VM_OPERATION;
+use ps::eprocess::{PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION};
+
+/// Les classes de NtQueryVirtualMemory demandées sans être implémentées.
+static UNSUPPORTED_MEMORY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryVirtualMemory");
 
 /// Au plus 21 bits du haut à zéro (ZeroBits).
 const MAX_ZERO_BITS: u32 = 21;
@@ -96,4 +100,49 @@ fn protect(arguments: &[u32]) -> Result<(), NtStatus> {
     base_address.write(&(start as u32))?;
     region_size.write(&((end - start) as u32))?;
     old_protect.write(&old.bits())
+}
+
+/// NtQueryVirtualMemory(ProcessHandle, BaseAddress, MemoryInformationClass,
+/// MemoryInformation, MemoryInformationLength, ReturnLength) : décrit, dans le
+/// processus (`PROCESS_QUERY_INFORMATION`), la plage de pages de même état et
+/// de même protection qui commence à la page de `BaseAddress`
+/// (`MemoryBasicInformation`, `mm::virtual_alloc::query`).
+/// `STATUS_INFO_LENGTH_MISMATCH` pour un tampon plus petit que
+/// MEMORY_BASIC_INFORMATION ; `STATUS_INVALID_PARAMETER` au-delà de la moitié
+/// utilisateur. Les autres classes rendent `STATUS_NOT_IMPLEMENTED`,
+/// journalisé à leur premier appel.
+pub(super) fn nt_query_virtual_memory(arguments: &[u32]) -> NtStatus {
+    match query(arguments) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
+}
+
+fn query(arguments: &[u32]) -> Result<(), NtStatus> {
+    let (address, class, buffer, length, return_length) =
+        (arguments[1], arguments[2], arguments[3], arguments[4], arguments[5]);
+    if class != MEMORY_BASIC_INFORMATION {
+        return Err(UNSUPPORTED_MEMORY_CLASSES.report(class));
+    }
+    let size = core::mem::size_of::<MemoryBasicInformation32>();
+    if (length as usize) < size {
+        return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    ke::usermem::probe_for_write(u64::from(buffer), size, 4)?;
+    let process = super::reference_process(arguments[0], PROCESS_QUERY_INFORMATION)?;
+    let region = process.with_space(|space| space.query(u64::from(address)))??;
+    let info = MemoryBasicInformation32 {
+        base_address: region.base_address as u32,
+        allocation_base: region.allocation_base as u32,
+        allocation_protect: region.allocation_protect.bits(),
+        region_size: region.region_size as u32,
+        state: region.state as u32,
+        protect: region.protect.bits(),
+        kind: region.kind.map_or(0, |kind| kind as u32),
+    };
+    ke::usermem::copy_to_user(u64::from(buffer), info.as_bytes())?;
+    if return_length != 0 {
+        UserPtr::<u32>::new(return_length).write(&(size as u32))?;
+    }
+    Ok(())
 }

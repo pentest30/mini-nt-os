@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 11 | 296 |
+| ntoskrnl | 12 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -201,7 +201,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00b7` | `NtQueryTimer` | 5 |  |
 | `0x00b8` | `NtQueryTimerResolution` | 3 |  |
 | `0x00b9` | `NtQueryValueKey` | 6 |  |
-| `0x00ba` | `NtQueryVirtualMemory` | 6 |  |
+| `0x00ba` | `NtQueryVirtualMemory` | 6 | ✅ |
 | `0x00bb` | `NtQueryVolumeInformationFile` | 5 |  |
 | `0x00bc` | `NtQueueApcThread` | 5 | ✅ |
 | `0x00bd` | `NtRaiseException` | 3 | ✅ |

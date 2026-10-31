@@ -1912,11 +1912,14 @@ fn early_exit_self_test() {
 /// a misaligned buffer, and a class without a handler; NtProtectVirtualMemory
 /// on part of a page (the whole page changes, the range comes back rounded,
 /// with the old protection), on two pages, on a reserved page
-/// (`STATUS_NOT_COMMITTED`) and with an invalid protection.
+/// (`STATUS_NOT_COMMITTED`) and with an invalid protection;
+/// NtQueryVirtualMemory on those pages, the reserved page, the image, a free
+/// range, with a short buffer and on a kernel address.
 fn loader_services_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_ACCESS_VIOLATION, STATUS_DATATYPE_MISALIGNMENT, STATUS_INFO_LENGTH_MISMATCH,
-        STATUS_INVALID_PAGE_PROTECTION, STATUS_NOT_COMMITTED, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_WAIT_0,
+        STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_NOT_COMMITTED, STATUS_NOT_IMPLEMENTED,
+        STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::process::NT_CURRENT_PROCESS;
     use abi::services;
@@ -1959,6 +1962,13 @@ fn loader_services_self_test() {
     const INVALID_STATUS: u32 = DATA + 0x94;
     const OLD: u32 = DATA + 0x98;
     const DONE: u32 = DATA + 0x9C;
+    // NtQueryVirtualMemory: statuses, the length returned, and four
+    // MEMORY_BASIC_INFORMATION.
+    const QUERIES: u32 = DATA + 0xA0; // committed, reserved, image, free
+    const SHORT_QUERY: u32 = DATA + 0xB0;
+    const KERNEL_QUERY: u32 = DATA + 0xB4;
+    const QUERY_LENGTH: u32 = DATA + 0xB8;
+    const MBI: [u32; 4] = [DATA + 0x120, DATA + 0x140, DATA + 0x160, DATA + 0x180];
     const COMMIT_RESERVE: u32 = 0x3000;
     const RESERVE: u32 = 0x2000;
     const READONLY: u32 = 0x02;
@@ -2004,7 +2014,29 @@ fn loader_services_self_test() {
         .call(protect, &[NT_CURRENT_PROCESS, RESERVED, RESERVED_SIZE, READONLY, OLD])
         .store_eax(RESERVED_STATUS)
         .call(protect, &[NT_CURRENT_PROCESS, BOTH, BOTH_SIZE, 0x03, OLD])
-        .store_eax(INVALID_STATUS)
+        .store_eax(INVALID_STATUS);
+    let query_vm = services::NtQueryVirtualMemory;
+    // The committed pages and the reserved one: their address from memory.
+    for (i, at) in [PAGES, RESERVED].into_iter().enumerate() {
+        code.word(&[0x68], QUERY_LENGTH)
+            .word(&[0x68], 0x1C)
+            .word(&[0x68], MBI[i])
+            .word(&[0x68], 0)
+            .word(&[0xFF, 0x35], at) // push dword [at]
+            .word(&[0x68], NT_CURRENT_PROCESS)
+            .bytes(&[0x89, 0xE2]) // mov edx, esp
+            .word(&[0xB8], query_vm)
+            .bytes(&[0xCD, 0x2E, 0x83, 0xC4, 24])
+            .store_eax(QUERIES + 4 * i as u32);
+    }
+    code.call(query_vm, &[NT_CURRENT_PROCESS, IMAGE_BASE + 0x10, 0, MBI[2], 0x1C, 0])
+        .store_eax(QUERIES + 8)
+        .call(query_vm, &[NT_CURRENT_PROCESS, 0x7000_0000, 0, MBI[3], 0x1C, 0])
+        .store_eax(QUERIES + 12)
+        .call(query_vm, &[NT_CURRENT_PROCESS, IMAGE_BASE, 0, SCRATCH, 0x1B, 0])
+        .store_eax(SHORT_QUERY)
+        .call(query_vm, &[NT_CURRENT_PROCESS, 0x8000_0000, 0, SCRATCH, 0x1C, 0])
+        .store_eax(KERNEL_QUERY)
         .word(&[0xC7, 0x05], DONE)
         .bytes(&1u32.to_le_bytes())
         .bytes(&[0xEB, 0xFE]); // jmp $
@@ -2070,6 +2102,21 @@ fn loader_services_self_test() {
     assert_eq!(status(INVALID_STATUS), STATUS_INVALID_PAGE_PROTECTION, "PAGE_READONLY | PAGE_NOACCESS");
     let protection = process.with_space(|space| space.query(u64::from(pages))).expect("the space").expect("a range");
     assert_eq!((protection.protect.bits(), protection.region_size), (READWRITE, 0x2000), "the VAD after both");
+    let statuses: [NtStatus; 4] = core::array::from_fn(|i| status(QUERIES + 4 * i as u32));
+    assert_eq!(statuses, [STATUS_SUCCESS; 4], "NtQueryVirtualMemory");
+    assert_eq!(read(QUERY_LENGTH), 0x1C, "the length returned");
+    // BaseAddress, AllocationBase, AllocationProtect, RegionSize, State,
+    // Protect, Type.
+    let mbi = |i: usize| -> [u32; 7] { core::array::from_fn(|f| read(MBI[i] + 4 * f as u32)) };
+    let reserved = read(RESERVED);
+    assert_eq!(mbi(0), [pages, pages, READWRITE, 0x2000, 0x1000, READWRITE, 0x2_0000], "two committed pages");
+    assert_eq!(mbi(1), [reserved, reserved, READWRITE, 0x1000, 0x2000, 0, 0x2_0000], "a reserved page");
+    let image = mbi(2);
+    assert_eq!((image[0], image[1], image[6]), (IMAGE_BASE, IMAGE_BASE, 0x100_0000), "the image's headers");
+    let free = mbi(3);
+    assert_eq!((free[0], free[1], free[4], free[5], free[6]), (0x7000_0000, 0, 0x1_0000, 0x01, 0), "a free range");
+    assert_eq!(status(SHORT_QUERY), STATUS_INFO_LENGTH_MISMATCH, "a short buffer");
+    assert_eq!(status(KERNEL_QUERY), STATUS_INVALID_PARAMETER, "a kernel address");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
@@ -2085,7 +2132,8 @@ fn loader_services_self_test() {
     drop(process);
     ps::wait_for_reaper();
     log::info!(
-        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation), NtProtectVirtualMemory"
+        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation), NtProtectVirtualMemory, \
+         NtQueryVirtualMemory"
     );
 }
 
