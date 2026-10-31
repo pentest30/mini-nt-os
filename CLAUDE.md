@@ -126,7 +126,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   de publication de ReactOS 0.4.16 (SourceForge, SHA-256 publié vérifié), `/reactos` de son ISO extrait dans
   `third_party/reactos/0.4.16/` (ignoré par Git) par du code std seul (SHA-256, inflate, ZIP, ISO 9660) ; les
   scénarios `requires = userland` reçoivent `NTDLL.DLL`, que le noyau installe comme DLL système à la fin des tests de
-  la phase 1 (`ntoskrnl::userland`). À venir : spike S1 (programme natif lié à ntdll, test SEH).
+  la phase 1 (`ntoskrnl::userland`). Spike S1 commencé (`docs/compat/s1-ntdll.md`) : un programme natif
+  construit dans le noyau (`pe::builder`, imports de ntdll) démarre sous le vrai ntdll
+  (`userland::run_native_probe`) ; le noyau journalise sa fin et les appels système faits, dans l'ordre du premier
+  (`sys::service_calls`), le premier appel d'un service sans handler avec son appelant et ses arguments, et
+  l'exception qui termine un processus. `LdrInitializeThunk` s'arrête sur `Peb->ProcessParameters` absent. À venir :
+  `RTL_USER_PROCESS_PARAMETERS`, les services du chargeur, le programme MinGW, le test SEH.
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
