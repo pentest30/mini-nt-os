@@ -4457,7 +4457,9 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         assert_eq!(wait(process.dispatcher_object(), 3000), STATUS_WAIT_0, "{} did not end", process.image_file_name());
     }
 
-    let (c, tc) = start(&faulty, "faulty.exe", &[0x1000, 0x1020]);
+    // The spinner first: once the faulting thread exists it may run, and its
+    // fault ends the process, before a thread created after it gets a stack.
+    let (c, tc) = start(&faulty, "faulty.exe", &[0x1020, 0x1000]);
     assert_eq!(wait(c.dispatcher_object(), 3000), STATUS_WAIT_0, "a faulting process did not end");
     // Created and terminated at once: at the boot thread's priority, its
     // thread has not run yet. Alone, nothing but its exit APC stops it.
