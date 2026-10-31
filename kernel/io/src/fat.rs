@@ -66,7 +66,8 @@ pub struct DirEntry {
 }
 
 impl DirEntry {
-    fn parse(ent: &[u8]) -> Self {
+    /// The entry in the 32 bytes `ent`.
+    pub fn parse(ent: &[u8]) -> Self {
         let u16_at = |at: usize| u16::from_le_bytes([ent[at], ent[at + 1]]);
         let hi = u16_at(20) as u32;
         let lo = u16_at(26) as u32;

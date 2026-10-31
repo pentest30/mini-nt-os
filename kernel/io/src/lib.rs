@@ -36,7 +36,7 @@ pub mod volume;
 pub use device::{Device, DEVICE_TYPE};
 pub use driver::{DeviceObject, DriverObject};
 pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
-pub use file::{check_open, File, FileObject, FILE_TYPE};
+pub use file::{check_disposition, check_open, creates, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
 pub use volume::{Node, Volume};
 
@@ -107,6 +107,24 @@ impl BlockDevice for RamBlockDevice {
 impl BlockDevice for PhysRamBlockDevice {
     fn sector_size(&self) -> u32 {
         self.sector_size
+    }
+
+    fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        let s = self.sector_size as usize;
+        let off = lba as usize * s;
+        if data.len() != s || off + s > self.total_size {
+            return Err(FatError::Io);
+        }
+        // SAFETY: the HHDM maps all physical RAM writable; phys_base..+total_size
+        // is the ramdisk, which only the volume's lock-holder writes.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                (self.hhdm_offset + self.phys_base + off as u64) as *mut u8,
+                s,
+            );
+        }
+        Ok(())
     }
 
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {

@@ -81,7 +81,8 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
     out.write(&0)?;
     ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
     let (file, attributes) = open_by_attributes(attributes)?;
-    let information = io_manager::check_open(&file, open.disposition, open.options)?;
+    let granted = FILE_TYPE.granted_access(AccessMask(open.desired));
+    let information = io_manager::check_open(&file, open.disposition, open.options, granted)?;
     file.set_mode(open.options);
     let process = super::current_process();
     let handle_attributes = HandleAttributes { inherit: attributes & OBJ_INHERIT != 0, protect_from_close: false };
@@ -127,7 +128,7 @@ fn write_information(bytes: &[u8], buffer: u32) -> Result<(), NtStatus> {
 pub(super) fn nt_query_attributes_file(arguments: &[u32]) -> NtStatus {
     status(
         open_by_attributes(arguments[0])
-            .and_then(|(file, _)| write_information(&file.basic_information().to_bytes(), arguments[1])),
+            .and_then(|(file, _)| write_information(&file.basic_information()?.to_bytes(), arguments[1])),
     )
 }
 
@@ -136,7 +137,7 @@ pub(super) fn nt_query_attributes_file(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_query_full_attributes_file(arguments: &[u32]) -> NtStatus {
     status(
         open_by_attributes(arguments[0])
-            .and_then(|(file, _)| write_information(&file.network_open_information().to_bytes(), arguments[1])),
+            .and_then(|(file, _)| write_information(&file.network_open_information()?.to_bytes(), arguments[1])),
     )
 }
 
@@ -168,10 +169,10 @@ fn query_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     let file =
         super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask(access))?;
     let information: Vec<u8> = match class {
-        FILE_BASIC_INFORMATION => file.basic_information().to_bytes().into(),
-        FILE_STANDARD_INFORMATION => file.standard_information().to_bytes().into(),
+        FILE_BASIC_INFORMATION => file.basic_information()?.to_bytes().into(),
+        FILE_STANDARD_INFORMATION => file.standard_information()?.to_bytes().into(),
         FILE_POSITION_INFORMATION => FilePositionInformation { current_byte_offset: file.position() }.to_bytes().into(),
-        _ => file.network_open_information().to_bytes().into(),
+        _ => file.network_open_information()?.to_bytes().into(),
     };
     let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information: information.len() as u32 };
     ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;

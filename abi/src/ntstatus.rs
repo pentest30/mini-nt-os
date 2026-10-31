@@ -106,6 +106,7 @@ pub const STATUS_THREAD_IS_TERMINATING: NtStatus = NtStatus(0xC000_004B);
 pub const STATUS_SECTION_TOO_BIG: NtStatus = NtStatus(0xC000_0040);
 pub const STATUS_SECTION_NOT_IMAGE: NtStatus = NtStatus(0xC000_0049);
 pub const STATUS_SECTION_PROTECTION: NtStatus = NtStatus(0xC000_004E);
+pub const STATUS_DISK_FULL: NtStatus = NtStatus(0xC000_007F);
 pub const STATUS_PROCEDURE_NOT_FOUND: NtStatus = NtStatus(0xC000_007A);
 pub const STATUS_INVALID_IMAGE_FORMAT: NtStatus = NtStatus(0xC000_007B);
 pub const STATUS_INTEGER_DIVIDE_BY_ZERO: NtStatus = NtStatus(0xC000_0094);

@@ -217,3 +217,80 @@ fn a_read_only_device_writes_nothing() {
     let entry = make_entry(&short_name("A").unwrap(), 0x20, 0, 0);
     assert_eq!(volume.add_entry(volume.root_cluster(), &entry, 3).err(), Some(FatError::ReadOnly));
 }
+
+/// A disk the test keeps, to read its bytes after the volume wrote them.
+struct Shared(alloc::sync::Arc<RwDisk>);
+
+impl BlockDevice for Shared {
+    fn sector_size(&self) -> u32 {
+        512
+    }
+    fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        self.0.read_sector(lba, out)
+    }
+    fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        self.0.write_sector(lba, data)
+    }
+}
+
+fn mounted(clusters: u32) -> (alloc::sync::Arc<crate::Volume>, alloc::sync::Arc<RwDisk>) {
+    let disk = alloc::sync::Arc::new(fat32(clusters));
+    let volume = crate::Volume::mount(alloc::boxed::Box::new(Shared(disk.clone()))).unwrap();
+    (alloc::sync::Arc::new(volume), disk)
+}
+
+#[test]
+fn files_are_created_written_and_seen_by_every_open() {
+    use crate::{check_open, File};
+    use abi::file::*;
+    use abi::ntstatus::*;
+
+    let (volume, disk) = mounted(FSCK_CLUSTERS);
+    let root = File::open(&volume, "\\").unwrap();
+    let logs = root.create_child("Logs", true, 0).unwrap();
+    assert!(logs.is_directory());
+    assert_eq!(logs.path(), "\\Logs");
+    let file = logs.create_child("today.txt", false, 0).unwrap();
+    assert_eq!((file.path(), file.node().unwrap().size), ("\\Logs\\today.txt", 0));
+    assert_eq!(file.node().unwrap().attributes, FILE_ATTRIBUTE_ARCHIVE);
+    file.write(0, b"hello").unwrap();
+    let other = File::open(&volume, "\\LOGS\\TODAY.TXT").unwrap();
+    assert_eq!(other.read_all().unwrap(), b"hello");
+    file.write(5, b", world").unwrap();
+    assert_eq!(other.node().unwrap().size, 12, "another open sees the new size");
+    assert_eq!(other.read_all().unwrap(), b"hello, world");
+    assert_eq!(check_open(&other, FILE_OVERWRITE_IF, 0, ob::AccessMask::NONE), Ok(FILE_OVERWRITTEN));
+    assert_eq!(file.node().unwrap().size, 0, "emptied for every open");
+
+    assert_eq!(logs.create_child("TODAY.TXT", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
+    assert_eq!(logs.create_child("A long name.txt", false, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
+    assert_eq!(logs.create_child("bad*name", false, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
+    assert_eq!(file.create_child("x", false, 0).err(), Some(STATUS_OBJECT_PATH_NOT_FOUND), "under a file");
+    assert_eq!(logs.write(0, b"x").err(), Some(STATUS_INVALID_DEVICE_REQUEST), "writing a directory");
+    let locked = root.create_child("RO.TXT", false, FILE_ATTRIBUTE_READONLY).unwrap();
+    let write = ob::AccessMask(FILE_WRITE_DATA);
+    assert_eq!(check_open(&locked, FILE_OPEN, 0, write), Err(STATUS_ACCESS_DENIED));
+    let many: Vec<_> = (0..30).map(|i| logs.create_child(&std::format!("N{i}.LOG"), false, 0).unwrap()).collect();
+    many[29].write(0, &[9u8; 2000]).unwrap();
+    assert_eq!(File::open(&volume, "\\Logs\\n29.log").unwrap().read_all().unwrap(), vec![9u8; 2000]);
+    drop((root, logs, file, other, locked, many));
+
+    let bytes = core::mem::take(&mut *disk.0.lock());
+    match fsck(&bytes) {
+        Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat: {report}")),
+        None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
+    }
+}
+
+#[test]
+fn a_full_volume_says_so() {
+    use crate::File;
+    use abi::ntstatus::STATUS_DISK_FULL;
+
+    let (volume, _disk) = mounted(8);
+    let file = File::open(&volume, "\\").unwrap().create_child("FULL.BIN", false, 0).unwrap();
+    file.write(0, &[1u8; 1024]).unwrap();
+    assert_eq!(file.write(1024, &[2u8; 512 * 8]).err(), Some(STATUS_DISK_FULL));
+    assert_eq!(file.node().unwrap().size, 1024, "the size as it was");
+    assert_eq!(file.read_all().unwrap(), vec![1u8; 1024]);
+}
