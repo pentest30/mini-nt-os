@@ -45,8 +45,9 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// The files of `system32` that every boot with the userland gets, with
 /// their names on the boot disk: ntdll, then the NLS tables (ANSI and OEM
 /// code pages, Unicode case table) that each process maps, then `smss.exe`,
-/// which the kernel starts with its `test-smss` feature (M4). `None` until
-/// `fetch-userland` ran.
+/// which the kernel starts with its `test-smss` feature (M4), and the SYSTEM
+/// hive that ReactOS generated, which the kernel mounts (until
+/// `tools/mkhive`, ADR-012). `None` until `fetch-userland` ran.
 pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, &'static str)>> {
     [
         ("ntdll.dll", "NTDLL.DLL"),
@@ -54,6 +55,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, &'static str)>> {
         ("c_437.nls", "C_437.NLS"),
         ("l_intl.nls", "L_INTL.NLS"),
         ("smss.exe", "SMSS.EXE"),
+        ("config/system", "SYSTEM"),
     ]
     .into_iter()
     .map(|(file, name)| system32_file(ws, file).map(|path| (path, name)))

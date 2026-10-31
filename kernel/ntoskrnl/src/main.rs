@@ -357,6 +357,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // and a native program under it (spike S1).
     userland::install_system_dll();
     userland::install_nls_tables();
+    userland::mount_system_hive();
     userland::run_native_probe();
     userland::run_boot_programs();
     if cfg!(feature = "test-smss") {

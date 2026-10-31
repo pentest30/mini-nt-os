@@ -9,13 +9,16 @@ cpus     = default, intel
 timeout  = 180
 
 expect = [m4] SMSS.EXE under the system DLL: exit status
-# Where it stops today: past its environment (NtQueryVirtualMemory), at the
-# registry (Session Manager), before Cm. Update with each step of M4.
-expect = [m4]   NtQueryVirtualMemory (0x00ba)
-expect = SMSS: RtlQueryRegistryValues failed
+# Where it stops today: it reads Session Manager from the SYSTEM hive (Cm),
+# then cannot open \?? (no object directory services yet). Update with each
+# step of M4.
+expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
+expect = [m4]   NtEnumerateValueKey (0x004d)
+expect = SMSS: Unable to open \?? directory
 expect = kernel: phase 1 done
 
 # A fatal error ends the run at once.
 forbid = *** STOP:
 forbid = [m4] SMSS.EXE: the process did not start
 forbid = [m4] SMSS.EXE: no image section
+forbid = [boot] SYSTEM hive refused

@@ -13,6 +13,8 @@ const NTDLL: &str = "/NTDLL.DLL";
 /// Les tables NLS du disque RAM de démarrage : pages de code ANSI et OEM,
 /// casse Unicode.
 const NLS_FILES: [&str; 3] = ["/C_1252.NLS", "/C_437.NLS", "/L_INTL.NLS"];
+/// La ruche SYSTEM du disque RAM de démarrage.
+const SYSTEM_HIVE: &str = "/SYSTEM";
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -64,6 +66,27 @@ pub fn install_nls_tables() {
             ps::nls::install(Some(tables));
         }
         Err(status) => log::error!("[boot] NLS tables refused: {status}"),
+    }
+}
+
+/// Monte la ruche SYSTEM du disque RAM de démarrage en
+/// `\REGISTRY\MACHINE\SYSTEM` (`cm::mount_system_hive`), si le disque la tient :
+/// en attendant `tools/mkhive` (ADR-012), celle que la version épinglée de
+/// ReactOS a générée de ses `.inf`. Elle viendra de `\SystemRoot\System32\Config`,
+/// chargée par le chargeur (ADR-017).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn mount_system_hive() {
+    let Some(hive) = read_boot_file(SYSTEM_HIVE) else {
+        return log::info!("[boot] no SYSTEM hive on the boot disk (cargo xtask fetch-userland)");
+    };
+    let size = hive.len();
+    match cm::mount_system_hive(Arc::from(hive)) {
+        Ok(current) => log::info!(
+            "[boot] SYSTEM hive mounted at \\REGISTRY\\MACHINE\\SYSTEM: {size} bytes, CurrentControlSet = ControlSet{current:03}"
+        ),
+        Err(status) => log::error!("[boot] SYSTEM hive refused: {status}"),
     }
 }
 
