@@ -85,7 +85,8 @@ const PROBE_MESSAGE: &[u8] = b"[s1] hello from a native process\n\0";
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage, quand aucun autre thread de Ps ne tourne.
 pub fn run_native_probe() {
-    run_native("probe", probe_image(), PROBE_PATH, PROBE_COMMAND_LINE, PROBE_EXIT_STATUS);
+    let params = ps::ProcessParameters::system(PROBE_PATH, PROBE_COMMAND_LINE);
+    run_native("s1", "probe", probe_image(), &params, Some(PROBE_EXIT_STATUS));
 }
 
 /// Les programmes natifs de test du disque de démarrage (`tests/native`,
@@ -105,25 +106,58 @@ pub fn run_boot_programs() {
     for &(file, path, exit_status) in BOOT_PROGRAMS {
         if let Some(image) = read_boot_file(file) {
             let name = file.trim_start_matches('/');
-            run_native(name, image, path, name, exit_status);
+            run_native("s1", name, image, &ps::ProcessParameters::system(path, name), Some(exit_status));
         }
     }
 }
 
-/// Lance le programme natif `image` sous la DLL système, et attend sa fin
-/// (10 s au plus) : ses paramètres sont ceux d'un programme du système
-/// (`ps::ProcessParameters::system`, avec `path` et `command_line`) ; son
-/// thread démarre par `LdrInitializeThunk`, qui initialise le processus et
-/// lie ses imports, puis entre dans son point d'entrée avec le PEB pour
-/// argument (`NtProcessStartup(PPEB)`). Journalise, sous le nom `name`, son
-/// statut de sortie (`exit_status` s'il va au bout) et les appels système
-/// faits, dans l'ordre de leur premier appel.
+/// Le gestionnaire de session du disque de démarrage.
+const SMSS: &str = "/SMSS.EXE";
+
+/// M4, découverte : lance le `smss.exe` de ReactOS sous la DLL système
+/// ([`run_native`]), avec les paramètres que le noyau donne au premier
+/// processus (chemin NT de l'image, `Path` et `SystemRoot`), et journalise
+/// les appels système qu'il fait et comment il s'arrête. Il attend `csrss` et
+/// `winlogon`, qu'il ne peut pas encore lancer : il est terminé au bout de
+/// 10 s s'il ne s'est pas arrêté avant.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage, quand aucun autre thread de Ps ne tourne.
+pub fn run_smss_probe() {
+    let Some(image) = read_boot_file(SMSS) else {
+        return log::info!("[m4] no SMSS.EXE on the boot disk (cargo xtask fetch-userland)");
+    };
+    let params = ps::ProcessParameters {
+        image_path_name: "\\SystemRoot\\System32\\smss.exe",
+        command_line: "\\SystemRoot\\System32\\smss.exe",
+        current_directory: "C:\\WINDOWS\\system32\\",
+        dll_path: "C:\\WINDOWS\\system32",
+        window_title: "",
+        desktop_info: "",
+        environment: &["Path=C:\\WINDOWS\\system32", "SystemRoot=C:\\WINDOWS"],
+    };
+    run_native("m4", "SMSS.EXE", image, &params, None);
+}
+
+/// Lance le programme natif `image` sous la DLL système, avec les paramètres
+/// `params`, et attend sa fin (10 s au plus) : son thread démarre par
+/// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
+/// entre dans son point d'entrée avec le PEB pour argument
+/// (`NtProcessStartup(PPEB)`). Journalise, avec le préfixe `[tag]` et sous le
+/// nom `name`, son statut de sortie (`exit_status` s'il va au bout) et les
+/// appels système faits, dans l'ordre de leur premier appel.
 ///
 /// Sans DLL système, ne fait rien.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage, quand aucun autre thread de Ps ne tourne.
-fn run_native(name: &str, image: alloc::vec::Vec<u8>, path: &str, command_line: &str, exit_status: u32) {
+fn run_native(
+    tag: &str,
+    name: &str,
+    image: alloc::vec::Vec<u8>,
+    params: &ps::ProcessParameters<'_>,
+    exit_status: Option<u32>,
+) {
     use abi::ntstatus::{NtStatus, STATUS_TIMEOUT};
     use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
@@ -136,12 +170,12 @@ fn run_native(name: &str, image: alloc::vec::Vec<u8>, path: &str, command_line: 
     }
     let section = match mm::section::Section::create_image(Arc::from(image)) {
         Ok(section) => section,
-        Err(status) => return log::error!("[s1] {name}: no image section: {status}"),
+        Err(status) => return log::error!("[{tag}] {name}: no image section: {status}"),
     };
     let info = section.image().expect("an image section").info;
     crate::sys::reset_service_calls();
     let started = ps::create_process(&ps::system_process(), &section, name, false).and_then(|process| {
-        ps::process_parameters::write(&process, &ps::ProcessParameters::system(path, command_line))?;
+        ps::process_parameters::write(&process, params)?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
         let entry = process.image_base() + info.entry_point as u32;
         ps::create_thread_with_parameter(&process, entry, process.peb(), &stack)?;
@@ -149,7 +183,7 @@ fn run_native(name: &str, image: alloc::vec::Vec<u8>, path: &str, command_line: 
     });
     let process = match started {
         Ok(process) => process,
-        Err(status) => return log::error!("[s1] {name}: the process did not start: {status}"),
+        Err(status) => return log::error!("[{tag}] {name}: the process did not start: {status}"),
     };
     // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
     let waited = unsafe {
@@ -161,7 +195,7 @@ fn run_native(name: &str, image: alloc::vec::Vec<u8>, path: &str, command_line: 
         )
     };
     if waited == STATUS_TIMEOUT {
-        log::error!("[s1] {name}: the process did not end within 10 s: terminated");
+        log::warn!("[{tag}] {name}: the process did not end within 10 s: terminated");
         let _ = ps::terminate_process(process.clone(), STATUS_TIMEOUT);
         // SAFETY: as above.
         unsafe {
@@ -171,8 +205,8 @@ fn run_native(name: &str, image: alloc::vec::Vec<u8>, path: &str, command_line: 
     let status = process.exit_status();
     let calls = crate::sys::service_calls();
     log::info!(
-        "[s1] {name} under the system DLL: exit status {status}{}, {} system services called",
-        if status == NtStatus(exit_status) { " (the program ran to its end)" } else { "" },
+        "[{tag}] {name} under the system DLL: exit status {status}{}, {} system services called",
+        if exit_status.map(NtStatus) == Some(status) { " (the program ran to its end)" } else { "" },
         calls.len()
     );
     for call in calls {
@@ -181,7 +215,7 @@ fn run_native(name: &str, image: alloc::vec::Vec<u8>, path: &str, command_line: 
             Some(crate::sys::Completion::Frame) => "returned a new context".into(),
             None => "did not return".into(),
         };
-        log::info!("[s1]   {} ({:#06x}): {} calls, the first {first}", call.name, call.number, call.calls);
+        log::info!("[{tag}]   {} ({:#06x}): {} calls, the first {first}", call.name, call.number, call.calls);
     }
     drop(process);
     ps::wait_for_reaper();

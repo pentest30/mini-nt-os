@@ -40,6 +40,10 @@ test-page-fault-irql = []
 # must end on KMODE_EXCEPTION_NOT_HANDLED, STATUS_ACCESS_VIOLATION (M2, demand
 # paging; scenario tests/boot/page-fault-access-violation).
 test-page-fault-access-violation = []
+# Starts ReactOS's smss.exe under the system DLL after the S1 programs and
+# logs the system services it calls and how it ends (M4 discovery probe;
+# scenario tests/boot/smss, which needs the userland).
+test-smss = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 

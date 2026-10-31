@@ -1,0 +1,21 @@
+# M4, discovery: ReactOS's smss.exe starts under the system DLL with the
+# parameters of the first process; the kernel logs the system services it
+# calls and how it stops (docs/compat/m4-smss.md). It waits for csrss and
+# winlogon, which it cannot start yet: the kernel ends it after 10 s.
+# Skipped until the userland is fetched.
+features = test-smss
+requires = userland
+cpus     = default, intel
+timeout  = 180
+
+expect = [m4] SMSS.EXE under the system DLL: exit status
+# Where it stops today: past its environment (NtQueryVirtualMemory), at the
+# registry (Session Manager), before Cm. Update with each step of M4.
+expect = [m4]   NtQueryVirtualMemory (0x00ba)
+expect = SMSS: RtlQueryRegistryValues failed
+expect = kernel: phase 1 done
+
+# A fatal error ends the run at once.
+forbid = *** STOP:
+forbid = [m4] SMSS.EXE: the process did not start
+forbid = [m4] SMSS.EXE: no image section
