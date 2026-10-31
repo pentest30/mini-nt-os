@@ -116,7 +116,7 @@ pub fn apply_user_context(context: &Context32, flags: u32, frame: &mut KTrapFram
         frame.rax = u64::from(context.eax);
     }
     if has(flags, CONTEXT_SEGMENTS) {
-        // GS is not reloaded on the way out (hal::trap): it stays null.
+        // A null GS, as XP gives user mode: the way out loads it (hal::trap).
         frame.gs = 0;
         frame.fs = u64::from(selectors.teb);
         frame.es = u64::from(selectors.data);
@@ -177,6 +177,7 @@ pub fn enter_user_dispatcher(frame: &mut KTrapFrame, eip: u32, esp: u32) {
     frame.ds = u64::from(selectors.data);
     frame.es = u64::from(selectors.data);
     frame.fs = u64::from(selectors.teb);
+    frame.gs = 0;
 }
 
 #[cfg(test)]

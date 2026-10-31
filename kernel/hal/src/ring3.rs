@@ -5,7 +5,7 @@
 //! the CPU enters IA-32e compatibility mode and begins executing 32-bit
 //! instructions at EIP. DS/ES/SS are loaded from the supplied selector.
 //! FS is pre-loaded before IRETQ so TEB self-pointer works from the first
-//! instruction.
+//! instruction; GS is swapped to the user's base (SWAPGS, `trap`) and null.
 //!
 //! WI7e Ch.3 "Trap Dispatching" §Kernel-to-User Mode Transition
 //! WI7e Ch.6 §User-Mode Stack and Entry Point
@@ -13,8 +13,7 @@
 /// RFLAGS loaded on every entry to ring 3: IF=1, reserved bit 1, IOPL=0.
 ///
 /// IOPL=0 makes `in`/`out`, `cli` and `sti` fault (#GP) in user mode, as on XP.
-/// Shared by `jump_to_ring3_32`, the scheduler's initial thread frame and the
-/// SYSENTER return path so the three cannot drift apart again.
+/// The scheduler's initial thread frame uses it.
 pub const USER_RFLAGS: u64 = (1u64 << 9)   // IF
                            | (1u64 << 1); // reserved, always 1
 const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOPL=0");
@@ -35,7 +34,9 @@ const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOP
 // Execution:
 //   1. `pop rax` — FS selector → rax; RSP advances to RIP slot
 //   2. `mov fs, ax` — load TEB segment into FS
-//   3. `iretq` — pops RIP/CS/RFLAGS/RSP/SS → enters ring-3
+//   3. `swapgs`, then a null GS — the user's GS base, the KPCR's back in
+//      IA32_KERNEL_GS_BASE
+//   4. `iretq` — pops RIP/CS/RFLAGS/RSP/SS → enters ring-3
 //
 // # IRQL: DISPATCH_LEVEL on entry (from ke_context_switch inside timer ISR).
 // After IRETQ the CPU restores RFLAGS (IF=1) and switches to ring-3.
@@ -46,9 +47,12 @@ core::arch::global_asm!(
     // dispatch that switched to this new thread (hal::irql: CR8).
     "   xor eax, eax",
     "   mov cr8, rax",
-    "   pop rax",    // rax = FS selector; RSP → RIP slot
-    "   mov fs, ax", // load TEB segment (DPL=3, base=this thread's TEB)
-    "   iretq",      // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
+    "   pop rax",      // rax = FS selector; RSP → RIP slot
+    "   mov fs, ax",   // load TEB segment (DPL=3, base=this thread's TEB)
+    "   swapgs",       // the user's GS base; the KPCR's in IA32_KERNEL_GS_BASE
+    "   xor eax, eax", // a null GS for user mode
+    "   mov gs, eax",
+    "   iretq", // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
 );
 
 /// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
@@ -63,70 +67,4 @@ pub fn ring3_iretq_trampoline_fn() -> u64 {
         fn ring3_iretq_trampoline();
     }
     ring3_iretq_trampoline as *const () as u64
-}
-
-/// Switch from ring-0 (64-bit) to ring-3 (32-bit IA-32e compatibility mode).
-///
-/// Builds a 5-entry IRETQ stack frame on the current kernel stack:
-///
-/// ```text
-///   [RSP+32]  SS     = user_data32 | 3   (ring-3 RPL)
-///   [RSP+24]  RSP    = stack_top (zero-extended to 64 bits)
-///   [RSP+16]  RFLAGS = USER_RFLAGS (IF=1, IOPL=0, reserved bit 1)
-///   [RSP+ 8]  CS     = user_code32 | 3
-///   [RSP+ 0]  RIP    = entry_point (zero-extended to 64 bits)
-/// ```
-///
-/// Before IRETQ, FS is loaded with `user_teb_fs` so that `FS:[0x18]`
-/// resolves to the TEB's `NtTib.self_ptr` field immediately in ring-3.
-///
-/// # Safety
-/// - `user_code32` must be a GDT descriptor with L=0, D=1, DPL=3.
-/// - `user_data32` must be a GDT descriptor with DPL=3.
-/// - `user_teb_fs`  must be a GDT descriptor with base = TEB32_VA, DPL=3.
-/// - `entry_point` must point to mapped, executable user-mode memory.
-/// - `stack_top` must point to mapped, writable user-mode stack (at least 4 KiB below).
-/// - PEB, TEB, and all image pages must have `USER_ACCESSIBLE` set in the page tables.
-///
-/// # IRQL: PASSIVE_LEVEL
-/// Must be called with interrupts enabled (RFLAGS.IF=1) so the APIC timer
-/// continues to fire after the transition.
-pub unsafe fn jump_to_ring3_32(
-    user_code32: u16,
-    user_data32: u16,
-    user_teb_fs: u16,
-    entry_point: u32,
-    stack_top: u32,
-) -> ! {
-    const RFLAGS: u64 = USER_RFLAGS;
-
-    let cs: u64 = (user_code32 as u64) | 3; // RPL = 3
-    let ss: u64 = (user_data32 as u64) | 3; // RPL = 3
-    let rip: u64 = entry_point as u64;
-    let rsp: u64 = stack_top as u64;
-
-    // SAFETY: see function-level safety contract.
-    unsafe {
-        core::arch::asm!(
-            // Load FS with the TEB descriptor before switching privilege level.
-            // `:x` gives the 16-bit alias of the allocated GP register (e.g. ax).
-            // Loading a DPL=3 segment from CPL=0 is legal: max(CPL=0,RPL=0) <= DPL=3.
-            "mov fs, {teb_sel:x}",
-            // Push IRETQ frame (5 × 8 bytes) on the kernel stack.
-            "push {ss}",        // [+32] SS
-            "push {rsp_user}",  // [+24] RSP (user stack)
-            "push {rflags}",    // [+16] RFLAGS
-            "push {cs}",        // [+ 8] CS
-            "push {rip}",       // [+ 0] RIP (= EIP in 32-bit mode)
-            // IRETQ pops RIP, CS, RFLAGS, RSP, SS — switches to ring-3.
-            "iretq",
-            teb_sel  = in(reg) user_teb_fs as u64,
-            ss       = in(reg) ss,
-            rsp_user = in(reg) rsp,
-            rflags   = in(reg) RFLAGS,
-            cs       = in(reg) cs,
-            rip      = in(reg) rip,
-            options(noreturn),
-        );
-    }
 }

@@ -322,6 +322,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     exception_self_test();
     user_apc_self_test();
     system_dll_self_test();
+    fatal_entry_self_test();
     fpu_self_test();
     if cfg!(feature = "test-ke-events") {
         event_ping_pong_test(ke::sched::NORMAL_PRIORITY, "equal priorities");
@@ -2394,7 +2395,10 @@ fn user_apc_self_test() {
 /// M3): with a synthetic ntdll installed, a new process maps it at its base,
 /// and its first thread enters LdrInitializeThunk through the APC dispatcher,
 /// with ntdll's base and the CONTEXT where ReactOS's stub looks for it, then
-/// reaches its entry point. It reads XP SP2's KUSER_SHARED_DATA at
+/// reaches its entry point. With GS on its TEB, it takes clock interrupts,
+/// system services and a sleep while a second thread, with GS of its own,
+/// goes through the kernel, and keeps GS (SWAPGS). It reads XP SP2's
+/// KUSER_SHARED_DATA at
 /// 0x7FFE0000 (version 5.1, system root, DEP policy, a running tick count,
 /// SystemCall on KiFastSystemCall on Intel, KiIntSystemCall elsewhere),
 /// cannot write to it (the exception reaches ntdll's dispatcher), and goes
@@ -2442,6 +2446,9 @@ fn system_dll_self_test() {
     const ZW_QUEUE_APC_THREAD: u32 = TEXT + 0x190;
     const ZW_DELAY_EXECUTION: u32 = TEXT + 0x1A0;
     const ROUTINE: u32 = TEXT + 0x1C0;
+    // A second thread, GS on the flat data selector (base 0), which sleeps
+    // through SystemCall in a loop.
+    const SLEEPER: u32 = TEXT + 0x1E0;
     const DATA: u32 = IMAGE_BASE + 0x2000;
     // The program's: eight KUSER_SHARED_DATA fields, then the write.
     const SHARED: u32 = DATA; // major, minor, SystemCall, SystemCallReturn, root, multiplier, NX policy, ticks
@@ -2459,6 +2466,12 @@ fn system_dll_self_test() {
     const APC_LOG: u32 = DATA + 0x48;
     // A LARGE_INTEGER: 5 s, relative.
     const LONG: u32 = DATA + 0x58;
+    // GS loaded with the TEB selector: gs:[0x18] at once, then GS and
+    // gs:[0x18] after clock interrupts and a system service.
+    const GS_KEPT: u32 = DATA + 0x60;
+    // LARGE_INTEGERs: 1 ms and 20 ms, relative.
+    const ONE_MS: u32 = DATA + 0x70;
+    const TWENTY_MS: u32 = DATA + 0x78;
     const MAGIC: u32 = 0x5C5C_0001;
     let shared = |offset: u32| KUSER_SHARED_DATA_VA + offset;
 
@@ -2492,13 +2505,19 @@ fn system_dll_self_test() {
     call_to(&mut apc, N_TEXT + APC, N_TEXT + ZW_CONTINUE);
     apc.store_eax(N_FAILED).bytes(&[0xEB, 0xFE]);
     put(APC, &apc);
-    let mut ldr = Code::new();
     // mov eax, [esp + offset]; mov [N_LDR + 4i], eax: its arguments, then
-    // the CONTEXT's Eip and Esp, 16 bytes above the return address.
+    // the CONTEXT's Eip and Esp, 16 bytes above the return address; for the
+    // first thread only (CONTEXT's Eip on TEXT).
+    let mut record = Code::new();
     for (i, offset) in [4u32, 8, 12, 16 + 0xB8, 16 + 0xC4].into_iter().enumerate() {
-        ldr.word(&[0x8B, 0x84, 0x24], offset).word(&[0xA3], N_LDR + 4 * i as u32);
+        record.word(&[0x8B, 0x84, 0x24], offset).word(&[0xA3], N_LDR + 4 * i as u32);
     }
-    ldr.bytes(&[0xC2, 12, 0]); // ret 12
+    let mut ldr = Code::new();
+    ldr.word(&[0x81, 0xBC, 0x24], 16 + 0xB8) // cmp dword [esp + 16 + Eip], TEXT
+        .bytes(&TEXT.to_le_bytes())
+        .bytes(&[0x75, record.0.len() as u8]) // jne past the record
+        .bytes(&record.0)
+        .bytes(&[0xC2, 12, 0]); // ret 12
     put(LDR, &ldr);
     let mut exception = Code::new();
     exception
@@ -2556,6 +2575,27 @@ fn system_dll_self_test() {
         .store_eax(SHARED + 0x18)
         .word(&[0xA1], shared(0x320)) // TickCount
         .store_eax(SHARED + 0x1C)
+        // GS on the TEB, as user mode may load it.
+        .word(&[0xB8], u32::from(ke::context::UserSelectors::current().teb)) // mov eax, TEB selector
+        .bytes(&[0x8E, 0xE8]) // mov gs, eax
+        .bytes(&[0x65, 0xA1, 0x18, 0, 0, 0]) // mov eax, gs:[0x18]
+        .store_eax(GS_KEPT)
+        // 50 ms of clock interrupts in user mode: until TickCount moves on.
+        .word(&[0x8B, 0x1D], shared(0x320)) // mov ebx, [TickCount]
+        .bytes(&[0x83, 0xC3, 50]) // add ebx, 50
+        .word(&[0xA1], shared(0x320)) // mov eax, [TickCount]
+        .bytes(&[0x39, 0xD8, 0x72, 0xF7]) // cmp eax, ebx; jb back to the mov
+        .word(&[0x68], 0x1234);
+    // NtClose(0x1234) through SystemCall.
+    call_to(&mut code, TEXT, ZW_CLOSE);
+    // NtDelayExecution(FALSE, 20 ms): the sleeper goes through the kernel
+    // meanwhile, with its own GS.
+    code.word(&[0x68], TWENTY_MS).bytes(&[0x6A, 0x00]);
+    call_to(&mut code, TEXT, ZW_DELAY_EXECUTION);
+    code.bytes(&[0x8C, 0xE8]) // mov eax, gs
+        .store_eax(GS_KEPT + 4)
+        .bytes(&[0x65, 0xA1, 0x18, 0, 0, 0]) // mov eax, gs:[0x18]
+        .store_eax(GS_KEPT + 8)
         .word(&[0xA3], KUSER_SHARED_DATA_VA) // mov [0x7FFE0000], eax: read-only
         .word(&[0xC7, 0x05], AFTER_WRITE)
         .bytes(&1u32.to_le_bytes())
@@ -2604,18 +2644,34 @@ fn system_dll_self_test() {
     put(ZW_QUEUE_APC_THREAD, &stub(services::NtQueueApcThread, 5));
     put(ZW_DELAY_EXECUTION, &stub(services::NtDelayExecution, 2));
     put(ROUTINE, &routine);
-    let mut data = [0u8; 0x60];
+    // The sleeper: GS on the data selector, then NtDelayExecution(FALSE,
+    // 1 ms), again and again.
+    let mut sleeper = Code::new();
+    sleeper
+        .word(&[0xB8], u32::from(ke::context::UserSelectors::current().data)) // mov eax, data selector
+        .bytes(&[0x8E, 0xE8]) // mov gs, eax
+        .word(&[0x68], ONE_MS)
+        .bytes(&[0x6A, 0x00]);
+    call_to(&mut sleeper, SLEEPER, ZW_DELAY_EXECUTION);
+    let back = sleeper.0.len() as u8 + 2;
+    sleeper.bytes(&[0xEB, back.wrapping_neg()]); // jmp to the top
+    put(SLEEPER, &sleeper);
+    let mut data = [0u8; 0x80];
     data[0x58..0x60].copy_from_slice(&(-5000 * MS).to_le_bytes());
+    data[0x70..0x78].copy_from_slice(&(-MS).to_le_bytes());
+    data[0x78..0x80].copy_from_slice(&(-20 * MS).to_le_bytes());
     let file = Pe32Builder::new(IMAGE_BASE)
         .entry_point(0x1000)
         .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
-        .section(".data", 0x2000, 0x60, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .section(".data", 0x2000, 0x80, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
         .build();
     let section = Section::create_image(Arc::from(file)).expect("image section");
     let info = section.image().expect("an image").info;
     let process = ps::create_process(&ps::system_process(), &section, "native.exe", false).expect("a process");
     let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
-    let _thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
+    let thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
+    let sleeper_stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let _sleeper = ps::create_thread(&process, SLEEPER, &sleeper_stack).expect("a second thread");
     let read = |addr: u32| {
         let mut bytes = [0u8; 4];
         process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
@@ -2648,6 +2704,13 @@ fn system_dll_self_test() {
     let exception: [u32; 3] = core::array::from_fn(|i| read(N_EXCEPTION + 4 * i as u32));
     assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, KUSER_SHARED_DATA_VA], "a write to KUSER_SHARED_DATA");
     assert_eq!(read(AFTER_WRITE), 1, "ntdll's dispatcher did not resume the program");
+    let teb_selector = u32::from(ke::context::UserSelectors::current().teb);
+    assert_eq!(read(GS_KEPT), thread.teb(), "GS does not reach the TEB");
+    assert_eq!(
+        (read(GS_KEPT + 4) & 0xFFFF, read(GS_KEPT + 8)),
+        (teb_selector, thread.teb()),
+        "GS lost across clock interrupts and a system service"
+    );
     assert_eq!(NtStatus(read(CLOSED)), STATUS_INVALID_HANDLE, "NtClose through SystemCall");
     assert_eq!(read(FLAGS) & 0x600, 0x600, "a system service lost DF, or came back with interrupts masked");
     assert_eq!(NtStatus(read(QUEUED)), STATUS_SUCCESS, "NtQueueApcThread through SystemCall");
@@ -2673,6 +2736,61 @@ fn system_dll_self_test() {
         "[smoke] ntdll: mapped at its base, threads start in LdrInitializeThunk, KUSER_SHARED_DATA read-only, \
          system calls through SystemCall ({})",
         if hal::cpuid::is_intel() { "SYSENTER" } else { "int 2Eh" }
+    );
+}
+
+/// SWAPGS on the exceptions that do not come back (`hal::trap::entry_stub`,
+/// M3): a Ps process loads GS with its TEB selector, then takes an x87
+/// division by zero (#MF); the kernel's user fault path, which reaches the
+/// KPCR through GS, ends the process with `STATUS_ACCESS_VIOLATION`.
+fn fatal_entry_self_test() {
+    use abi::ntstatus::{STATUS_ACCESS_VIOLATION, STATUS_WAIT_0};
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const CONTROL_WORD: u32 = IMAGE_BASE + 0x2000;
+
+    let mut code = Code::new();
+    code.word(&[0xB8], u32::from(ke::context::UserSelectors::current().teb)) // mov eax, TEB selector
+        .bytes(&[0x8E, 0xE8]) // mov gs, eax
+        .bytes(&[0xDB, 0xE3]) // fninit
+        .word(&[0xD9, 0x2D], CONTROL_WORD) // fldcw [CONTROL_WORD]: division by zero unmasked
+        .bytes(&[0xD9, 0xE8, 0xD9, 0xEE, 0xDE, 0xF9]) // fld1; fldz; fdivp
+        .bytes(&[0x9B]) // fwait: #MF
+        .bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x40];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    // XP's control word, 0x027F, but for ZM.
+    let mut data = [0u8; 0x10];
+    data[..2].copy_from_slice(&0x027Bu16.to_le_bytes());
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x40, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x10, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "x87.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let _thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, STATUS_ACCESS_VIOLATION), "the #MF with GS loaded");
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] SWAPGS: user GS kept across interrupts, services and switches; #MF with GS loaded ends the process"
     );
 }
 

@@ -108,6 +108,43 @@ pub unsafe fn init() {
         idt[0xFF].set_handler_fn(irq_spurious);
         idt[super::timer::PIC_VECTOR_BASE + 7].set_handler_fn(irq_spurious);
 
+        // What user mode reaches without a trap frame goes through a stub
+        // that swaps GS (`trap::entry_stub`): the interrupts, and the
+        // exceptions above that do not come back.
+        #[cfg(target_os = "none")]
+        {
+            use super::trap::{entry_stub, Entry};
+            type Handler = extern "x86-interrupt" fn(InterruptStackFrame);
+            type ErrorHandler = extern "x86-interrupt" fn(InterruptStackFrame, u64);
+            let stub = |entry, handler: u64| VirtAddr::new(entry_stub(entry, handler));
+            let handler = |f: Handler| f as *const () as u64;
+            let error_handler = |f: ErrorHandler| f as *const () as u64;
+            // SAFETY: each stub is an interrupt-gate entry: it jumps to its
+            // handler with the stack as the CPU left it, or with an
+            // interrupt frame the handler's IRETQ comes back from.
+            unsafe {
+                idt[super::timer::CLOCK_VECTOR].set_handler_addr(stub(Entry::Clock, handler(irq_timer)));
+                idt[super::timer::PIC_VECTOR_BASE + 1].set_handler_addr(stub(Entry::Keyboard, handler(irq_keyboard)));
+                let spurious = stub(Entry::Spurious, handler(irq_spurious));
+                idt[0xFF].set_handler_addr(spurious);
+                idt[super::timer::PIC_VECTOR_BASE + 7].set_handler_addr(spurious);
+                idt.device_not_available
+                    .set_handler_addr(stub(Entry::DeviceNotAvailable, handler(exception_device_not_available)));
+                idt.x87_floating_point
+                    .set_handler_addr(stub(Entry::X87FloatingPoint, handler(exception_x87_floating_point)));
+                idt.simd_floating_point
+                    .set_handler_addr(stub(Entry::SimdFloatingPoint, handler(exception_simd_floating_point)));
+                idt.segment_not_present
+                    .set_handler_addr(stub(Entry::SegmentNotPresent, error_handler(exception_segment_not_present)));
+                idt.stack_segment_fault
+                    .set_handler_addr(stub(Entry::StackSegment, error_handler(exception_stack_segment)));
+                let double_fault = exception_double_fault as extern "x86-interrupt" fn(InterruptStackFrame, u64) -> !;
+                idt.double_fault
+                    .set_handler_addr(stub(Entry::DoubleFault, double_fault as *const () as u64))
+                    .set_stack_index(DOUBLE_FAULT_IST_INDEX);
+            }
+        }
+
         // ── User-mode gates (INT 0x2A to 0x2E, `trap`) ───────────────────────
         // DPL=3 so user mode can invoke them; their stubs push a KTRAP_FRAME
         // and return from it.
