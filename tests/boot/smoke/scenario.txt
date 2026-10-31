@@ -34,6 +34,7 @@ expect = [smoke] gates: int 2Ah to 2Eh from user mode
 expect = [smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher
 expect = [smoke] user APCs: queued, then run by alertable waits and NtTestAlert
 expect = [smoke] ntdll: mapped at its base, threads start in LdrInitializeThunk
+expect = [smoke] SWAPGS: user GS kept across interrupts, services and switches
 expect = [smoke] FPU: state kept across switches
 expect = [smoke] FAT read probe hit
 expect = [smoke] Mm: PFN database consistent at the end of phase 1
