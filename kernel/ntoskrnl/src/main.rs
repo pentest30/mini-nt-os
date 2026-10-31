@@ -351,6 +351,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     userland::install_system_dll();
     userland::install_nls_tables();
     userland::run_native_probe();
+    userland::run_boot_programs();
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
