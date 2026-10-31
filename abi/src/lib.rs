@@ -24,6 +24,7 @@ pub mod context;
 pub mod exception;
 pub mod fpu;
 pub mod loader_block;
+pub mod memory;
 pub mod ntstatus;
 pub mod object;
 pub mod peb32;
