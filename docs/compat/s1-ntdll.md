@@ -69,6 +69,47 @@ chemins.
 Sans tas, l'initialisation du processus échoue (« DbgPrint() failed! », `dll/ntdll/ldr/ldrinit.c:2577`) ;
 `ntdll` le signale par une erreur dure, puis lève `STATUS_NO_MEMORY`, que personne ne traite.
 
-**Prochaine étape** (services du chargeur) : `NtQuerySystemInformation(SystemBasicInformation)` d'abord ; puis
-`ProcessCookie`, des réponses « introuvable » du registre (`NtOpenKey` : `STATUS_OBJECT_NAME_NOT_FOUND`), et
-`NtRaiseHardError` journalisé ; relancer la sonde après chacun.
+## Étape 3 : le programme va au bout
+
+Trois ajouts y suffisent, chacun révélé par la sonde :
+
+1. `NtQuerySystemInformation(SystemBasicInformation)` : la limite haute du mode utilisateur, sans laquelle
+   `RtlCreateHeap` échoue. Le tas du processus se crée.
+2. Les **tables NLS** (`ps::nls`) : `RtlMultiByteToUnicodeN` (`0x7c95a5f3`) lisait la table ANSI par un pointeur nul
+   (`Peb->AnsiCodePageData`), d'où deux fautes que `ntdll` attrapait elle-même et un échec de l'initialisation
+   avec `STATUS_ACCESS_VIOLATION`. Le noyau projette désormais dans chaque processus une section en lecture seule
+   qui tient `C_1252.NLS`, `C_437.NLS` et `L_INTL.NLS`, comme XP.
+3. `NtProtectVirtualMemory` : « LDR: Unable to unprotect IAT for s1native.exe » ; le chargeur rend la table
+   d'adresses des imports inscriptible pour la lier, puis la reprotège.
+
+Statut de sortie : `0x5151`, celui du programme, qui écrit `[s1] hello from a native process` par `DbgPrint` ;
+sur les deux chemins. Les 17 appels système, dans l'ordre de leur premier appel :
+
+| Ordre | Service | Appels | Premier retour | Ce qu'en fait `ntdll` |
+|---:|---|---:|---|---|
+| 1 | `NtQueryInformationProcess` | 1 | `STATUS_NOT_IMPLEMENTED` | `ProcessCookie` (0x24) : « Failed to receive the process cookie! » ; continue |
+| 2 | `NtOpenKey` | 1 | `STATUS_NOT_IMPLEMENTED` | options d'exécution de l'image ; continue |
+| 3 | `NtQueryValueKey` | 5 | `STATUS_NOT_IMPLEMENTED` | sur un handle non valide (`NtOpenKey` ayant échoué) ; continue |
+| 4 | `NtQuerySystemInformation` | 2 | `STATUS_SUCCESS` | `SystemBasicInformation` : le tas du processus |
+| 5 | `NtAllocateVirtualMemory` | 7 | `STATUS_SUCCESS` | le tas |
+| 6 | `NtQueryDefaultLocale` | 2 | `STATUS_NOT_IMPLEMENTED` | la langue par défaut (premier argument 1 : celle de l'utilisateur) ; continue |
+| 7 | `NtFreeVirtualMemory` | 3 | `STATUS_SUCCESS` | |
+| 8 | `NtOpenDirectoryObject` | 1 | `STATUS_NOT_IMPLEMENTED` | `\KnownDlls` (accès 3) ; continue sans |
+| 9 | `NtOpenFile` | 4 | `STATUS_NOT_IMPLEMENTED` | accès `GENERIC_READ | SYNCHRONIZE` : le manifeste du contexte d'activation implicite (« Failed to create the implicit act ctx ») ; continue |
+| 10 | `NtQueryAttributesFile` | 1 | `STATUS_NOT_IMPLEMENTED` | continue |
+| 11 | `NtProtectVirtualMemory` | 2 | `STATUS_SUCCESS` | la table d'adresses des imports, déprotégée puis reprotégée |
+| 12 | `NtFlushInstructionCache` | 1 | `STATUS_NOT_IMPLEMENTED` | après la liaison des imports (`0x403000`, 12 octets) ; continue |
+| 13 | `NtCreateKeyedEvent` | 1 | `STATUS_NOT_IMPLEMENTED` | l'événement à clé global des sections critiques ; continue |
+| 14 | `NtSetInformationProcess` | 1 | `STATUS_NOT_IMPLEMENTED` | `ProcessExecuteFlags` (0x22) à 0 : « LDR: Could not set process execute flags 0x0 » ; continue |
+| 15 | `NtTestAlert` | 1 | `STATUS_SUCCESS` | |
+| 16 | `NtContinue` | 1 | un nouveau contexte | fin de `LdrInitializeThunk` : le thread entre dans le programme |
+| 17 | `NtTerminateProcess` | 1 | ne revient pas | appelé par le programme |
+
+`NtRaiseHardError` et `NtRaiseException` ne sont plus appelés. Les services encore absents sont tolérés par
+`ntdll` ; ceux qui donnent un résultat juste sans Io ni Cm viendront d'abord (`ProcessCookie`,
+`ProcessExecuteFlags`, `NtFlushInstructionCache`, `NtOpenDirectoryObject` par Ob, `NtQueryDefaultLocale`) ; le
+registre (`NtOpenKey`, `NtQueryValueKey`) et les fichiers (`NtOpenFile`, `NtQueryAttributesFile`) attendent Cm et
+Io ; `NtCreateKeyedEvent` attend les événements à clé d'Ex.
+
+**Prochaine étape** : le même programme compilé avec MinGW et lié à `ntdll` (critère de sortie de S1), puis le
+test SEH.

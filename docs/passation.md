@@ -10,8 +10,8 @@ jour à chaque commit qui change l'état.
   fait (voir CLAUDE.md).
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). L'étape 2 et le début de l'étape 3 sont poussés sur
-  la branche (après une fusion de `origin/main`, sans réécriture), sans PR encore.
+- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). Les étapes 2 et 3 sont poussées sur la branche
+  (après une fusion de `origin/main`, sans réécriture), sans PR encore.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
@@ -31,32 +31,24 @@ rencontrés est publiée.
    `ProcessParameters::system` pour un programme du système (chemins sous `C:\WINDOWS`, la racine de
    `KUSER_SHARED_DATA`). Résultat : `ntdll` lit le registre, puis s'arrête à la création du tas
    (`NtQuerySystemInformation` absent) ; statut `STATUS_NO_MEMORY`.
-3. [ ] **Services du chargeur** (en cours) : ceux que la sonde révèle, un par un, selon la compétence
-   `mino-syscall-impl` (handler dans `kernel/ntoskrnl/src/sys/`, entrée dans `IMPLEMENTED`,
-   `cargo xtask syscall-gen` pour le rapport de couverture ; cas testés dans `loader_services_self_test` de
-   `kernel/ntoskrnl/src/main.rs`, marqueur `[smoke] sys: the loader's services:` du scénario `smoke`).
-   - [x] `NtQuerySystemInformation(SystemBasicInformation)` (`sys::system`) : le tas se crée. Les classes non
-     implémentées sont journalisées une fois (`sys::ClassReport`) ; `sys::return_information` pour les tailles
-     fixes.
-   - [ ] **Tables NLS** (prochaine ; donnée de démarrage plutôt que service) : `RtlMultiByteToUnicodeN` faute en
-     lisant la table ANSI, nulle. Le noyau doit projeter dans chaque processus, en lecture seule, une section qui
-     tient `C_1252.NLS` (ANSI), `C_437.NLS` (OEM) et `L_INTL.NLS` (casse), chacun aligné sur une page, et mettre
-     leurs adresses dans `Peb->AnsiCodePageData` (0x58), `OemCodePageData` (0x5C), `UnicodeCaseTableData` (0x60).
-     Plan : `xtask` ajoute les trois fichiers au disque de démarrage (`userland_files` dans `xtask/src/main.rs`,
-     depuis `third_party/reactos/0.4.16/reactos/system32/`) ; `ps::nls` (comme `ps::system_dll`) les tient dans
-     une section de données (`mm::section`) ; `eprocess::build_address_space` la projette et remplit le PEB ;
-     `ntoskrnl::userland` les charge au démarrage.
-   - [ ] `NtQueryInformationProcess(ProcessCookie)` (seulement pour `NtCurrentProcess()`, 4 octets, cookie non nul
-     tiré au premier appel, gardé dans l'EPROCESS).
-   - [ ] `NtOpenKey` qui rend `STATUS_OBJECT_NAME_NOT_FOUND` (capturer `OBJECT_ATTRIBUTES` ; pas de registre avant
-     Cm) ; `NtQueryValueKey` sur un handle invalide rend `STATUS_INVALID_HANDLE`.
-   - [ ] `NtRaiseHardError` journalisé avec ses chaînes, `ResponseReturnToCaller` (pas de port d'erreur).
-   - [ ] Vus ensuite, à traiter selon ce qu'en fait `ntdll` : `NtQueryDefaultLocale`, `NtOpenDirectoryObject`
-     (`\KnownDlls`), `NtOpenFile` (manifeste du contexte d'activation : « Failed to create the implicit act ctx »),
-     `NtQueryAttributesFile`.
-   Fin de l'étape : la sonde va au bout (statut `0x5151`, ligne `DbgPrint ... [s1] hello from a native process`) ;
-   le scénario `userland` l'attend alors.
-4. [ ] **Programme MinGW** : `gcc-mingw-w64-i686` (apt, présent sur les runners Ubuntu et installable ici),
+3. [x] **Services du chargeur** : la sonde va au bout (statut `0x5151`, `DbgPrint ... [s1] hello from a native
+   process`) ; le scénario `userland` l'attend. Faits, chacun révélé par la sonde : 
+   `NtQuerySystemInformation(SystemBasicInformation)` (`sys::system` ; classes non implémentées journalisées une
+   fois par `sys::ClassReport`, tailles fixes par `sys::return_information`), les **tables NLS** (`ps::nls`, une
+   section en lecture seule projetée dans chaque processus, adresses dans le PEB ; fichiers mis sur le disque par
+   `xtask`, chargés par `userland::install_nls_tables`), `NtProtectVirtualMemory` (`sys::memory`). Les cas sont
+   testés dans `loader_services_self_test` (`kernel/ntoskrnl/src/main.rs`, marqueur
+   `[smoke] sys: the loader's services:`).
+   Encore absents mais tolérés par `ntdll` (liste et arguments dans `compat/s1-ntdll.md`, étape 3), à faire quand
+   ils comptent, selon `mino-syscall-impl` :
+   - justes sans Io ni Cm : `NtQueryInformationProcess(ProcessCookie)` (seulement `NtCurrentProcess()`, 4 octets,
+     cookie non nul tiré au premier appel, gardé dans l'EPROCESS), `NtSetInformationProcess(ProcessExecuteFlags)`
+     (sur `EProcess::set_execute_options`), `NtFlushInstructionCache` (rien à vider sur x86 : vérifier le handle),
+     `NtOpenDirectoryObject` (par Ob : `\KnownDlls` n'existe pas, `STATUS_OBJECT_NAME_NOT_FOUND`),
+     `NtQueryDefaultLocale` (0x0409 tant qu'il n'y a pas de registre, à documenter) ;
+   - en attente de Cm (`NtOpenKey`, `NtQueryValueKey`), d'Io (`NtOpenFile`, `NtQueryAttributesFile`), des
+     événements à clé d'Ex (`NtCreateKeyedEvent`).
+4. [ ] **Programme MinGW** (prochaine) : `gcc-mingw-w64-i686` (apt, présent sur les runners Ubuntu et installable ici),
    `-nostdlib -Wl,--subsystem,native -e _NtProcessStartup@4`, bibliothèque d'import de `ntdll` (celle de MinGW, ou
    `llvm-dlltool` sur les exports de `ntdll.dll`). Source sous `tests/` ; `xtask` le construit et le met sur le
    disque de démarrage ; le noyau le lance comme la sonde. Le thread initial d'un programme natif reçoit le PEB en

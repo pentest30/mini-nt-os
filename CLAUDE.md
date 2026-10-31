@@ -133,9 +133,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`userland::run_native_probe`) ; le noyau journalise sa fin et les appels système faits, dans l'ordre du premier
   (`sys::service_calls`), le premier appel d'un service sans handler avec son appelant et ses arguments, et
   l'exception qui termine un processus. Paramètres du processus faits (`abi::process_parameters`,
-  `ps::process_parameters` : bloc normalisé, environnement à part, adresse dans le PEB) : `LdrInitializeThunk` lit
-  le registre puis s'arrête à la création du tas (`NtQuerySystemInformation`). À venir : les services du chargeur,
-  le programme MinGW, le test SEH ([`docs/passation.md`](docs/passation.md)).
+  `ps::process_parameters` : bloc normalisé, environnement à part, adresse dans le PEB). Tables NLS faites
+  (`ps::nls` : pages de code ANSI et OEM, casse Unicode, une section en lecture seule projetée dans chaque
+  processus). Services : NtQuerySystemInformation (SystemBasicInformation), NtProtectVirtualMemory. La sonde va au
+  bout : `LdrInitializeThunk` initialise le processus, lie ses imports et l'appelle, qui écrit par `DbgPrint` et se
+  termine. À venir : le programme MinGW, le test SEH ([`docs/passation.md`](docs/passation.md)).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
