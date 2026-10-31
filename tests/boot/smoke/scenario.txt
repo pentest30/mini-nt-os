@@ -29,6 +29,7 @@ expect = [smoke] Ps: user stacks grow by their guard page, up to STATUS_STACK_OV
 expect = [smoke] Ps: DEP OptIn: code runs from a read-write page until its process turns DEP on
 expect = [smoke] Ps: processes ended on request, on a fault and before their first run
 expect = [smoke] sys: system services from user mode:
+expect = [smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation), NtProtectVirtualMemory
 expect = hello from Mino user mode
 expect = [smoke] gates: int 2Ah to 2Eh from user mode
 expect = [smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher

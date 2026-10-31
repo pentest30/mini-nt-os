@@ -8,6 +8,9 @@ use alloc::sync::Arc;
 
 /// Où le disque RAM de démarrage la tient.
 const NTDLL: &str = "/NTDLL.DLL";
+/// Les tables NLS du disque RAM de démarrage : pages de code ANSI et OEM,
+/// casse Unicode.
+const NLS_FILES: [&str; 3] = ["/C_1252.NLS", "/C_437.NLS", "/L_INTL.NLS"];
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -38,16 +41,45 @@ pub fn install_system_dll() {
     }
 }
 
+/// Installe les tables NLS (`ps::nls`), si le disque RAM de démarrage les
+/// tient : les processus créés ensuite les projettent.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn install_nls_tables() {
+    let [Some(ansi), Some(oem), Some(case)] = NLS_FILES.map(read_boot_file) else {
+        log::info!("[boot] no NLS tables on the boot disk (cargo xtask fetch-userland)");
+        return;
+    };
+    match ps::nls::NlsTables::new(&ansi, &oem, &case) {
+        Ok(tables) => {
+            log::info!(
+                "[boot] NLS tables installed: ANSI code page {}, OEM code page {}, case table of {} bytes",
+                tables.ansi_code_page,
+                tables.oem_code_page,
+                case.len()
+            );
+            ps::nls::install(Some(tables));
+        }
+        Err(status) => log::error!("[boot] NLS tables refused: {status}"),
+    }
+}
+
 /// La base du programme natif de [`run_native_probe`].
 const PROBE_BASE: u32 = 0x40_0000;
 /// Son statut de sortie, s'il va au bout.
 const PROBE_EXIT_STATUS: u32 = 0x5151;
+/// Le chemin de son image et sa ligne de commande, dans ses paramètres.
+const PROBE_PATH: &str = "C:\\WINDOWS\\system32\\s1native.exe";
+const PROBE_COMMAND_LINE: &str = "s1native.exe";
 /// Ce qu'il écrit par `DbgPrint`.
 const PROBE_MESSAGE: &[u8] = b"[s1] hello from a native process\n\0";
 
 /// Spike S1 (05, M3) : un programme natif sous la DLL système. Son image
 /// (sous-système NATIVE) importe `DbgPrint` et `NtTerminateProcess` de
-/// `ntdll.dll` ; son thread démarre par `LdrInitializeThunk`, qui initialise
+/// `ntdll.dll` ; ses paramètres sont ceux d'un programme du système
+/// (`ps::ProcessParameters::system`). Son thread démarre par
+/// `LdrInitializeThunk`, qui initialise
 /// le processus et lie ses imports, puis entre dans le programme, qui écrit
 /// par `DbgPrint` et se termine. Journalise son statut de sortie et les
 /// appels système qu'il a faits, dans l'ordre de leur premier appel.
@@ -75,6 +107,7 @@ pub fn run_native_probe() {
     let info = section.image().expect("an image section").info;
     crate::sys::reset_service_calls();
     let started = ps::create_process(&ps::system_process(), &section, "s1native.exe", false).and_then(|process| {
+        ps::process_parameters::write(&process, &ps::ProcessParameters::system(PROBE_PATH, PROBE_COMMAND_LINE))?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
         ps::create_thread(&process, PROBE_BASE + 0x1000, &stack)?;
         Ok(process)

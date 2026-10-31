@@ -276,11 +276,12 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
 }
 
 /// The files of the fetched userland for the FAT ramdisk (`HOST:FAT_NAME`):
-/// `NTDLL.DLL`, which the kernel installs as the system DLL; `None` until
+/// `NTDLL.DLL`, which the kernel installs as the system DLL, and the NLS
+/// tables each process maps (`userland::boot_files`); `None` until
 /// `fetch-userland` ran.
 fn userland_files(ws: &Workspace) -> Option<Vec<String>> {
-    let ntdll = userland::ntdll(ws)?;
-    Some(vec![format!("{}:NTDLL.DLL", ntdll.display())])
+    let files = userland::boot_files(ws)?;
+    Some(files.into_iter().map(|(path, name)| format!("{}:{name}", path.display())).collect())
 }
 
 // ── Building ──────────────────────────────────────────────────────────────────

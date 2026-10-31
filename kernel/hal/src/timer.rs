@@ -24,6 +24,12 @@ use x86_64::instructions::port::Port;
 /// Default tick interval in milliseconds (100 Hz = 10 ms, matching XP default).
 pub const TICK_INTERVAL_MS: u64 = 10;
 
+/// The longest interval [`set_resolution`] programs, in milliseconds.
+const MAXIMUM_INTERVAL_MS: u64 = 15;
+/// The longest clock interval, in 100 ns units (NT's KeMaximumIncrement,
+/// which `NtQuerySystemInformation` gives as the timer resolution).
+pub const MAXIMUM_INCREMENT: u32 = MAXIMUM_INTERVAL_MS as u32 * 10_000;
+
 // ── APIC MMIO ─────────────────────────────────────────────────────────────────
 
 /// xAPIC MMIO physical base — architectural default.
@@ -297,7 +303,7 @@ pub fn set_resolution(hundred_ns: u32) {
     }
 
     // hundred_ns units: 10_000 = 1ms; clamp interval to [1ms, 15ms].
-    let ms = ((hundred_ns / 10_000) as u64).clamp(1, 15);
+    let ms = ((hundred_ns / 10_000) as u64).clamp(1, MAXIMUM_INTERVAL_MS);
     let new_count = (ticks_per_ms * ms) as u32;
 
     // The interrupt time follows the new period. Writing the initial count

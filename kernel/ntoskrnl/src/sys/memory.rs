@@ -68,3 +68,32 @@ fn free(arguments: &[u32]) -> Result<(), NtStatus> {
     base_address.write(&(start as u32))?;
     region_size.write(&(length as u32))
 }
+
+/// NtProtectVirtualMemory(ProcessHandle, *BaseAddress, *NumberOfBytesToProtect,
+/// NewAccessProtection, *OldAccessProtection) : donne la protection aux pages
+/// de la plage, toutes commitées et d'une même réservation, dans le processus
+/// (`PROCESS_VM_OPERATION`) ; rend la plage arrondie aux pages et l'ancienne
+/// protection de sa première page. Sur une vue d'image, une protection en
+/// écriture devient de la copie sur écriture (`mm::section::view_protection`).
+pub(super) fn nt_protect_virtual_memory(arguments: &[u32]) -> NtStatus {
+    match protect(arguments) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
+}
+
+fn protect(arguments: &[u32]) -> Result<(), NtStatus> {
+    let (base_address, region_size) = (UserPtr::<u32>::new(arguments[1]), UserPtr::<u32>::new(arguments[2]));
+    let old_protect = UserPtr::<u32>::new(arguments[4]);
+    let new_protect = PageProtect::from_bits(arguments[3]).ok_or(STATUS_INVALID_PAGE_PROTECTION)?;
+    let process = super::reference_process(arguments[0], PROCESS_VM_OPERATION)?;
+    let base = u64::from(base_address.read()?);
+    let size = u64::from(region_size.read()?);
+    let old = process.with_space(|space| space.protect(base, size, new_protect))??;
+    // The range Mm changed: whole pages.
+    let start = base & !(PAGE_SIZE - 1);
+    let end = (base + size).next_multiple_of(PAGE_SIZE);
+    base_address.write(&(start as u32))?;
+    region_size.write(&((end - start) as u32))?;
+    old_protect.write(&old.bits())
+}

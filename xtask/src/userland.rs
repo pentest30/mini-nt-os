@@ -39,10 +39,27 @@ pub fn dir(ws: &Workspace) -> PathBuf {
 
 /// `ntdll.dll` of the fetched userland; `None` until `fetch-userland` ran.
 pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
+    system32_file(ws, "ntdll.dll")
+}
+
+/// The files of `system32` that every boot with the userland gets, with
+/// their names on the boot disk: ntdll, then the NLS tables (ANSI and OEM
+/// code pages, Unicode case table) that each process maps. `None` until
+/// `fetch-userland` ran.
+pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, &'static str)>> {
+    [("ntdll.dll", "NTDLL.DLL"), ("c_1252.nls", "C_1252.NLS"), ("c_437.nls", "C_437.NLS"), ("l_intl.nls", "L_INTL.NLS")]
+        .into_iter()
+        .map(|(file, name)| system32_file(ws, file).map(|path| (path, name)))
+        .collect()
+}
+
+/// The file `name` of the fetched `system32`; `None` until `fetch-userland`
+/// ran, or without it.
+fn system32_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
     let dir = dir(ws);
     let complete = fs::read_to_string(dir.join(STAMP)).is_ok_and(|s| s.trim() == SHA256);
-    let ntdll = dir.join(TREE).join("system32").join("ntdll.dll");
-    (complete && ntdll.is_file()).then_some(ntdll)
+    let file = dir.join(TREE).join("system32").join(name);
+    (complete && file.is_file()).then_some(file)
 }
 
 /// `fetch-userland [--archive FILE] [--force]`: downloads (or takes FILE),
