@@ -452,9 +452,9 @@ pub fn create_process(
     )
 }
 
-/// Projette l'image, `KUSER_SHARED_DATA` et la DLL système (à sa base, sinon
-/// `STATUS_CONFLICTING_ADDRESSES`), et écrit le PEB dans `space` ; rend la
-/// base de l'image.
+/// Projette l'image, `KUSER_SHARED_DATA`, la DLL système (à sa base, sinon
+/// `STATUS_CONFLICTING_ADDRESSES`) et les tables NLS (en lecture seule, où il
+/// y a la place), et écrit le PEB dans `space` ; rend la base de l'image.
 fn build_address_space(
     space: &AddressSpace,
     section: &Arc<Section>,
@@ -466,9 +466,17 @@ fn build_address_space(
     if let Some(dll) = crate::system_dll::current() {
         space.map_view(dll.section(), u64::from(dll.base), 0, 0, PageProtect::READWRITE)?;
     }
+    let nls = match crate::nls::current() {
+        Some(tables) => {
+            let view = space.map_view(tables.section(), 0, 0, 0, PageProtect::READONLY)?;
+            tables.addresses(view.base as u32)
+        }
+        None => (0, 0, 0),
+    };
     let page = u64::from(PEB_VA);
     space.allocate(page, PAGE_SIZE, AllocType::MEM_RESERVE | AllocType::MEM_COMMIT, PageProtect::READWRITE)?;
     let mut peb = Peb32::xp(image_base);
+    (peb.ansi_code_page_data, peb.oem_code_page_data, peb.unicode_case_table_data) = nls;
     peb.heap_segment_reserve = HEAP_SEGMENT_RESERVE;
     peb.heap_segment_commit = HEAP_SEGMENT_COMMIT;
     peb.heap_decommit_total_free_threshold = HEAP_DECOMMIT_TOTAL_FREE_THRESHOLD;
