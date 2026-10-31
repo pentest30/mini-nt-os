@@ -113,6 +113,9 @@ dependencies = [
 [[package]]
 name = "mkfat"
 version = "0.1.0"
+dependencies = [
+ "io-manager",
+]
 
 [[package]]
 name = "mm"

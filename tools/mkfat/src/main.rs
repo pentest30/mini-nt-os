@@ -1,21 +1,25 @@
 //! mkfat — build the FAT32 ramdisk image for micro-nt-os QEMU tests.
 //!
-//! Outputs a raw FAT32 image containing:
+//! Outputs a raw FAT32 image ([`image`]) containing:
 //!   KERNEL.BIN  — 4-byte sentinel "ABCD" for the in-kernel FAT smoke probe
 //!   TEST.EXE    — hand-crafted PE32 that exercises all smoke-test syscalls
 //!   CMD.EXE     — hand-crafted PE32 that exercises the Win32 message pump
 //!   + any extra files supplied on the command line
 //!
-//! Usage:  mkfat <output.img> [HOST_PATH:FAT_NAME ...]
-//!   e.g.: mkfat fat.img /path/to/hello.exe:HELLO.EXE
+//! Usage:  mkfat <output.img> [HOST_PATH:FAT_PATH ...]
+//!   e.g.: mkfat fat.img /path/to/ntdll.dll:WINDOWS/SYSTEM32/NTDLL.DLL
 //!
-//! FAT names must be plain 8.3 (no subdirectory path).
+//! Each component of a FAT path is an 8.3 name (no long names); the
+//! directories on the way are created.
 //! `cargo xtask` runs it to build the ramdisk of each ESP it lays out.
+
+mod image;
 
 use std::env;
 use std::fs;
+use std::process::ExitCode;
 
-fn main() {
+fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let out = args.get(1).cloned().unwrap_or_else(|| "fat.img".to_string());
 
@@ -23,187 +27,41 @@ fn main() {
     let cmd = build_cmd_pe32(0x0210_0000, 0x1000);
 
     // Standard files always present.
-    let mut files: Vec<([u8; 11], Vec<u8>)> =
-        vec![(*b"KERNEL  BIN", b"ABCD".to_vec()), (*b"TEST    EXE", pe32), (*b"CMD     EXE", cmd)];
+    let mut files: Vec<(Vec<image::ShortName>, Vec<u8>)> =
+        vec![(vec![*b"KERNEL  BIN"], b"ABCD".to_vec()), (vec![*b"TEST    EXE"], pe32), (vec![*b"CMD     EXE"], cmd)];
 
-    // Extra files from HOST_PATH:FAT_NAME pairs.
+    // Extra files from HOST_PATH:FAT_PATH pairs.
     // We split on the LAST ':' so Windows drive letters (C:\...) are handled correctly.
     for arg in args.iter().skip(2) {
-        if let Some((host, fat_name)) = arg.rsplit_once(':') {
-            match fat_short_name(fat_name) {
-                Ok(name) => match fs::read(host) {
-                    Ok(data) => files.push((name, data)),
+        if let Some((host, fat_path)) = arg.rsplit_once(':') {
+            match image::short_path(fat_path) {
+                Ok(path) => match fs::read(host) {
+                    Ok(data) => files.push((path, data)),
                     Err(e) => eprintln!("[mkfat] skipping {arg}: {e}"),
                 },
-                Err(e) => eprintln!("[mkfat] skipping {arg}: bad FAT name: {e}"),
+                Err(e) => eprintln!("[mkfat] skipping {arg}: bad FAT path: {e}"),
             }
         } else {
-            eprintln!("[mkfat] skipping {arg}: expected HOST:FATNAME format");
+            eprintln!("[mkfat] skipping {arg}: expected HOST:FAT_PATH format");
         }
     }
 
-    let img = build_fat_image(&files);
+    let img = match image::build(&files) {
+        Ok(img) => img,
+        Err(e) => {
+            eprintln!("[mkfat] {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     fs::write(&out, &img).unwrap_or_else(|e| panic!("mkfat: write {out}: {e}"));
 
     eprint!("[mkfat] {} bytes → {out} ", img.len());
-    for (name, data) in &files {
-        eprint!(" {}={}", fat_name_display(name), data.len());
+    for (path, data) in &files {
+        let path: Vec<String> = path.iter().map(image::display).collect();
+        eprint!(" {}={}", path.join("/"), data.len());
     }
     eprintln!();
-}
-
-// ── FAT name helpers ──────────────────────────────────────────────────────────
-
-/// Convert "FOO.BAR" or "FOOBAR" to an 11-byte space-padded FAT 8.3 name.
-fn fat_short_name(s: &str) -> Result<[u8; 11], &'static str> {
-    let mut out = [b' '; 11];
-    let upper = s.to_ascii_uppercase();
-    let (base, ext) = if let Some(dot) = upper.rfind('.') {
-        (&upper[..dot], Some(&upper[dot + 1..]))
-    } else {
-        (upper.as_str(), None)
-    };
-    if base.is_empty() || base.len() > 8 {
-        return Err("base name must be 1–8 chars");
-    }
-    if ext.is_some_and(|e| e.len() > 3) {
-        return Err("extension must be ≤3 chars");
-    }
-    out[..base.len()].copy_from_slice(base.as_bytes());
-    if let Some(e) = ext {
-        out[8..8 + e.len()].copy_from_slice(e.as_bytes());
-    }
-    Ok(out)
-}
-
-fn fat_name_display(name: &[u8; 11]) -> String {
-    let base: String = name[..8].iter().copied().filter(|&b| b != b' ').map(|b| b as char).collect();
-    let ext: String = name[8..].iter().copied().filter(|&b| b != b' ').map(|b| b as char).collect();
-    if ext.is_empty() {
-        base
-    } else {
-        format!("{base}.{ext}")
-    }
-}
-
-// ── FAT32 image builder ───────────────────────────────────────────────────────
-//
-// Generic builder: accepts any list of (fat_8.3_name, data) pairs.
-//
-// Geometry:
-//   BytesPerSector   = 512
-//   SectorsPerClust  = 1
-//   ReservedSectors  = 1   (sector 0 = BPB/boot sector)
-//   NumberOfFATs     = 1
-//   FAT sectors      = ceil((total_clusters * 4) / 512)   — computed dynamically
-//   RootCluster      = 2   (first data cluster = root directory, 1 sector)
-//   DataStartLBA     = ReservedSectors + FAT sectors
-//
-// Cluster → LBA:
-//   lba = data_start_lba + (cluster − 2)
-//
-// Root directory is 1 cluster (= 1 sector = 16 entries max).
-// Each file occupies ceil(size / 512) contiguous clusters starting at cluster 3.
-//
-// FAT32 dir entry layout (32 bytes):
-//   [0..11]  Name  [11] Attr  [20..22] FstClusHI  [26..28] FstClusLO  [28..32] FileSize
-
-fn build_fat_image(files: &[([u8; 11], Vec<u8>)]) -> Vec<u8> {
-    const SECTOR: usize = 512;
-
-    // ── Compute cluster layout ────────────────────────────────────────────────
-    // cluster 0, 1 = reserved in FAT
-    // cluster 2    = root directory (1 sector)
-    // cluster 3+   = file data, packed sequentially
-
-    let mut next_cluster: u32 = 3;
-    let mut first_clusters: Vec<u32> = Vec::with_capacity(files.len());
-    let mut cluster_counts: Vec<u32> = Vec::with_capacity(files.len());
-
-    for (_, data) in files {
-        let n = data.len().div_ceil(SECTOR).max(1) as u32;
-        first_clusters.push(next_cluster);
-        cluster_counts.push(n);
-        next_cluster += n;
-    }
-
-    // Total FAT entries needed: 0..next_cluster
-    let fat_sectors = (next_cluster as usize * 4).div_ceil(SECTOR);
-    let fat_sectors = fat_sectors.max(1) as u32;
-
-    let reserved_sectors: u32 = 1;
-    let data_start_lba = reserved_sectors + fat_sectors;
-    // root dir at cluster 2 → lba = data_start_lba + (2 − 2) = data_start_lba
-    let total_sectors = data_start_lba + (next_cluster - 2); // data clusters
-
-    let mut img = vec![0u8; total_sectors as usize * SECTOR];
-
-    // ── Sector 0: BPB ────────────────────────────────────────────────────────
-    {
-        let b = &mut img[..SECTOR];
-        b[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes()); // BytesPerSector
-        b[13] = 1; // SectorsPerCluster
-        b[14..16].copy_from_slice(&(reserved_sectors as u16).to_le_bytes()); // ReservedSectors
-        b[16] = 1; // NumberOfFATs
-                   // RootEntryCount=0, TotalSectors16=0 → FAT32 variant
-        b[32..36].copy_from_slice(&total_sectors.to_le_bytes()); // TotalSectors32
-        b[36..40].copy_from_slice(&fat_sectors.to_le_bytes()); // FATsize32
-        b[44..48].copy_from_slice(&2u32.to_le_bytes()); // RootCluster
-    }
-
-    // ── FAT (reserved_sectors .. reserved_sectors + fat_sectors) ─────────────
-    {
-        let fat_off = reserved_sectors as usize * SECTOR;
-        let f = &mut img[fat_off..fat_off + fat_sectors as usize * SECTOR];
-
-        f[0..4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes()); // entry 0: media descriptor
-        f[4..8].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // entry 1: reserved
-        f[8..12].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes()); // entry 2: root dir EOF
-
-        for i in 0..files.len() {
-            let first = first_clusters[i];
-            let count = cluster_counts[i];
-            // Link all but the last cluster to the next.
-            for c in first..first + count - 1 {
-                let off = (c as usize) * 4;
-                f[off..off + 4].copy_from_slice(&(c + 1).to_le_bytes());
-            }
-            // Mark last cluster as EOF.
-            let last_off = ((first + count - 1) as usize) * 4;
-            f[last_off..last_off + 4].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
-        }
-    }
-
-    // ── Root directory cluster (cluster 2 → lba = data_start_lba) ────────────
-    {
-        let root_lba = data_start_lba as usize;
-        let d = &mut img[root_lba * SECTOR..(root_lba + 1) * SECTOR];
-
-        for (i, (name, data)) in files.iter().enumerate() {
-            let off = i * 32;
-            if off + 32 > d.len() {
-                eprintln!("[mkfat] warning: root dir full (max 16 entries); truncating");
-                break;
-            }
-            let fc = first_clusters[i];
-            d[off..off + 11].copy_from_slice(name);
-            d[off + 11] = 0x20; // archive attribute
-            d[off + 20..off + 22].copy_from_slice(&((fc >> 16) as u16).to_le_bytes()); // FstClusHI
-            d[off + 26..off + 28].copy_from_slice(&(fc as u16).to_le_bytes()); // FstClusLO
-            d[off + 28..off + 32].copy_from_slice(&(data.len() as u32).to_le_bytes());
-            // FileSize
-        }
-    }
-
-    // ── File data ─────────────────────────────────────────────────────────────
-    // lba(cluster) = data_start_lba + (cluster − 2)
-    for (i, (_, data)) in files.iter().enumerate() {
-        let lba = data_start_lba + (first_clusters[i] - 2);
-        let start = lba as usize * SECTOR;
-        img[start..start + data.len()].copy_from_slice(data);
-    }
-
-    img
+    ExitCode::SUCCESS
 }
 
 // ── PE32 builder ──────────────────────────────────────────────────────────────
