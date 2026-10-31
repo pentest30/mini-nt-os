@@ -113,6 +113,16 @@ unsafe impl UserValue for abi::exception::ExceptionRecord32 {
     const ALIGNMENT: usize = 4;
 }
 
+// SAFETY: six u32, any bit pattern valid.
+unsafe impl UserValue for abi::object::ObjectAttributes32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: two u16 and a u32, any bit pattern valid.
+unsafe impl UserValue for abi::peb32::UnicodeString32 {
+    const ALIGNMENT: usize = 4;
+}
+
 // SAFETY: an array of values valid for any bit pattern, without padding,
 // is one too.
 unsafe impl<T: UserValue, const N: usize> UserValue for [T; N] {
