@@ -12,3 +12,5 @@ prebuilt/
 rustc-ice-*.txt
 *.DLL
 *.dll
+# The fetched ReactOS userland (cargo xtask fetch-userland), never committed.
+/third_party/
