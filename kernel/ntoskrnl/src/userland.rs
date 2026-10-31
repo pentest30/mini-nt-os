@@ -3,18 +3,20 @@
 //! épinglé (`fetch-userland`), installées à la fin des tests de la phase 1
 //! (`ps::system_dll`, `ps::nls`) ; puis le spike S1 : la sonde, un programme
 //! natif construit dans le noyau, et les programmes natifs de test du disque
-//! (`tests/native`), chacun lancé sous la DLL système. Ces fichiers viendront
-//! de `\SystemRoot\System32` par Io (M4).
+//! (`tests/native`), chacun lancé sous la DLL système. Les fichiers de
+//! l'espace utilisateur sont dans `\WINDOWS\SYSTEM32` du disque, comme sur le
+//! volume système (02 §9.1).
 
 use alloc::sync::Arc;
 
 /// Où le disque RAM de démarrage la tient.
-const NTDLL: &str = "/NTDLL.DLL";
+const NTDLL: &str = "/WINDOWS/SYSTEM32/NTDLL.DLL";
 /// Les tables NLS du disque RAM de démarrage : pages de code ANSI et OEM,
 /// casse Unicode.
-const NLS_FILES: [&str; 3] = ["/C_1252.NLS", "/C_437.NLS", "/L_INTL.NLS"];
+const NLS_FILES: [&str; 3] =
+    ["/WINDOWS/SYSTEM32/C_1252.NLS", "/WINDOWS/SYSTEM32/C_437.NLS", "/WINDOWS/SYSTEM32/L_INTL.NLS"];
 /// La ruche SYSTEM du disque RAM de démarrage.
-const SYSTEM_HIVE: &str = "/SYSTEM";
+const SYSTEM_HIVE: &str = "/WINDOWS/SYSTEM32/CONFIG/SYSTEM";
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -135,7 +137,7 @@ pub fn run_boot_programs() {
 }
 
 /// Le gestionnaire de session du disque de démarrage.
-const SMSS: &str = "/SMSS.EXE";
+const SMSS: &str = "/WINDOWS/SYSTEM32/SMSS.EXE";
 
 /// M4, découverte : lance le `smss.exe` de ReactOS sous la DLL système
 /// ([`run_native`]), avec les paramètres que le noyau donne au premier

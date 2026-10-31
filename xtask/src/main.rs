@@ -56,8 +56,9 @@ commands:
           --memory MB         guest memory (default 256)
           --gdb               wait for gdb on :1234 (QEMU -s -S)
           --headless          no display window
-          --add PATH:NAME     add a host file to the FAT ramdisk (repeatable);
-                              NTDLL.DLL comes with the fetched userland
+          --add PATH:FATPATH  add a host file to the FAT ramdisk (repeatable),
+                              as DIR/NAME.EXT (8.3); the fetched userland
+                              goes under WINDOWS/SYSTEM32
           --data-dir DIR      expose DIR as a FAT disk on IDE secondary
   test    host tests, then the boot scenarios of tests/boot/
           --host              host tests (alone, unless --boot)
@@ -290,10 +291,10 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
     }
 }
 
-/// The files of the fetched userland for the FAT ramdisk (`HOST:FAT_NAME`):
-/// `NTDLL.DLL`, which the kernel installs as the system DLL, and the NLS
-/// tables each process maps (`userland::boot_files`); `None` until
-/// `fetch-userland` ran.
+/// The files of the fetched userland for the FAT ramdisk (`HOST:FAT_PATH`),
+/// under `WINDOWS/SYSTEM32`: `NTDLL.DLL`, which the kernel installs as the
+/// system DLL, the NLS tables each process maps, and the others of
+/// `userland::boot_files`; `None` until `fetch-userland` ran.
 fn userland_files(ws: &Workspace) -> Option<Vec<String>> {
     let files = userland::boot_files(ws)?;
     Some(files.into_iter().map(|(path, name)| format!("{}:{name}", path.display())).collect())
