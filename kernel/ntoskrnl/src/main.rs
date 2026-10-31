@@ -2118,8 +2118,13 @@ fn trap_gate_self_test() {
     const DONE: u32 = DATA + 0x24;
     const GO: u32 = DATA + 0x28;
     const AFTER_ASSERTION: u32 = DATA + 0x2C;
+    // DbgPrompt: the length of the answer, the answer, the prompt.
+    const PROMPTED: u32 = DATA + 0x30;
+    const ANSWER: u32 = DATA + 0x34;
     const MESSAGE: u32 = DATA + 0x40;
     const TEXT: &[u8] = b"hello from Mino user mode\n";
+    const PROMPT: u32 = DATA + 0x60;
+    const QUESTION: &[u8] = b"(boipt)? ";
     const KEPT_VALUES: [u32; 4] = [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x4444_4444];
 
     let mut code = Code::new();
@@ -2145,6 +2150,15 @@ fn trap_gate_self_test() {
         .word(&[0xBA], TEXT.len() as u32)
         .bytes(&[0xCD, 0x2D, 0x40])
         .store_eax(PRINTED)
+        // DebugService(BREAKPOINT_PROMPT, PROMPT, length, ANSWER, 4): the
+        // length of the answer in EAX.
+        .word(&[0xB8], 2)
+        .word(&[0xB9], PROMPT)
+        .word(&[0xBA], QUESTION.len() as u32)
+        .word(&[0xBB], ANSWER)
+        .word(&[0xBF], 4)
+        .bytes(&[0xCD, 0x2D, 0x40])
+        .store_eax(PROMPTED)
         .bytes(&[0xCD, 0x2B])
         .store_eax(CALLBACK)
         .word(&[0xC7, 0x05], DONE)
@@ -2158,6 +2172,7 @@ fn trap_gate_self_test() {
     text[..code.0.len()].copy_from_slice(&code.0);
     let mut data = [0u8; 0x80];
     data[0x40..0x40 + TEXT.len()].copy_from_slice(TEXT);
+    data[0x60..0x60 + QUESTION.len()].copy_from_slice(QUESTION);
     let file = Pe32Builder::new(IMAGE_BASE)
         .entry_point(0x1000)
         .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
@@ -2190,6 +2205,7 @@ fn trap_gate_self_test() {
     assert_eq!(kept, KEPT_VALUES, "a gate lost EBX, ESI, EDI or EBP");
     assert_eq!(read(TEB_SELF), thread.teb(), "a gate lost FS");
     assert_eq!(read(PRINTED), 0, "int 2Dh did not skip the byte after it");
+    assert_eq!((read(PROMPTED), read(ANSWER)), (1, u32::from(b'i')), "DbgPrompt: no debugger answers `i`");
     assert_eq!(NtStatus(read(CALLBACK)), STATUS_NO_CALLBACK_ACTIVE, "int 2Bh");
 
     process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
@@ -2204,7 +2220,7 @@ fn trap_gate_self_test() {
     };
     assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, STATUS_ASSERTION_FAILURE), "int 2Ch");
     ps::wait_for_reaper();
-    log::info!("[smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them");
+    log::info!("[smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them, DbgPrompt answered");
 }
 
 /// The user-mode exceptions (`sys::exceptions`, `ke::exception`, M3): a Ps
