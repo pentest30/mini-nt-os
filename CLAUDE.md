@@ -41,6 +41,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 
 ## Travailler dans ce dépôt
 
+- **Reprendre une session** : [`docs/passation.md`](docs/passation.md) (tâche en cours, prochaines tâches, comment
+  reprendre). Le tenir à jour à chaque commit qui change l'état.
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
