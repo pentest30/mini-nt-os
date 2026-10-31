@@ -6,6 +6,8 @@
 //!   noyau, thread Ke) et de sa pile utilisateur.
 //! - [`exit`] : fin des threads et des processus (APC de fin, rundown,
 //!   reaper).
+//! - [`process_parameters`] : les paramètres d'un processus
+//!   (RTL_USER_PROCESS_PARAMETERS), que le noyau écrit dans ceux qu'il crée.
 //! - [`cid`] : la table des PID et des TID.
 //!
 //! EPROCESS et ETHREAD sont des structures Rust sans contrainte de layout ;
@@ -27,6 +29,7 @@ pub mod ethread;
 pub mod exit;
 #[expect(unsafe_op_in_unsafe_fn, reason = "ancien chargeur, à supprimer (audit §5)")]
 pub mod loader;
+pub mod process_parameters;
 pub mod rundown;
 pub mod system_dll;
 
@@ -36,6 +39,7 @@ pub use exit::{
     exit_thread, terminate_current_process, terminate_other_threads, terminate_process, terminate_thread,
     wait_for_reaper,
 };
+pub use process_parameters::ProcessParameters;
 
 use alloc::boxed::Box;
 use alloc::sync::Weak;
