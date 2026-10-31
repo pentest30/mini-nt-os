@@ -7,9 +7,11 @@ jour à chaque commit qui change l'état.
 ## État
 
 - Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
-  (spike S1 réussi). Étapes 0, 1, 2 et 5 du M4 faites : la sonde `smss`, le registre en lecture, les répertoires
-  d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`), puis `SystemProcessorInformation` ;
-  ensuite, l'écriture dans le registre (étape 4), le prochain mur de `smss` (NtSetValueKey).
+  (spike S1 réussi). Étapes 0, 1, 2, 4 (en mémoire), 5 et 6 du M4 faites : la sonde `smss`, le registre en lecture
+  puis en écriture, les répertoires d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`),
+  `SystemProcessorInformation`, la ruche HARDWARE. **Le premier critère de sortie du M4 est coché** : `smss` crée ses
+  variables d'environnement et `\KnownDlls`, puis s'arrête au lancement de `csrss.exe` (M5). Restent les critères 2
+  et 3 : la persistance du registre et des fichiers, donc le FAT32 en écriture.
 - Branche de travail : `claude/m4-io`, partie d'`origin/main` après la fusion de #32. Les PR se fusionnent dans
   `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
   `git merge-base --is-ancestor HEAD origin/main`).
@@ -100,8 +102,15 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    **Io est le prochain mur**.
 3. [ ] **Ex et Ps** que `smss` demande : `NtCreateEvent`, `NtCreateThread` et `NtWriteVirtualMemory`,
    `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer `smss`).
-4. [ ] **Écriture dans le registre** (`NtDeleteValueKey`, `NtSetValueKey`, `NtCreateKey`), en mémoire d'abord, et
-   `tools/mkhive`.
+4. [x] **Écriture dans le registre, en mémoire** (`docs/compat/m4-smss.md`, étape 5) : une ruche montée est un arbre de
+   clés en mémoire (`cm::HiveKey`, chacune sous son verrou), lu du fichier regf à son montage, sans récursion, borné à
+   512 niveaux ; `Key::set_value`, `delete_value`, `create_subkey` (volatile ou non,
+   `STATUS_CHILD_MUST_BE_VOLATILE`). Services : NtCreateKey (ouvre ou crée, sous un parent qui existe ;
+   `REG_OPTION_CREATE_LINK` : `STATUS_NOT_IMPLEMENTED`), NtSetValueKey, NtDeleteValueKey. Tests : hôte (`kernel/cm`),
+   `registry_write_self_test` (mode utilisateur), vérifiés par mutation. La ruche HARDWARE (`ntoskrnl::hardware`),
+   volatile, bâtie au démarrage. Résultat : `smss` écrit ses six variables, puis ne trouve pas `csrss.exe`.
+   **Pas encore** : l'écriture des ruches sur disque (critère 2 : la ruche entière par `regf::builder`, sur FAT32 en
+   écriture ; NtFlushKey, écriture différée), NtDeleteKey, `tools/mkhive` (ADR-012).
 5. [x] **Io** (`docs/compat/m4-smss.md`, étape 3) : le disque RAM de démarrage tient lieu du volume système.
    `tools/mkfat` écrit des sous-répertoires (`HOTE:DIR/NOM.EXT`, composants 8.3) et des répertoires sur plusieurs
    clusters ; `cargo xtask` range l'espace utilisateur dans `WINDOWS/SYSTEM32` avec les 21 KnownDLLs
@@ -124,7 +133,13 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    `abi::system_information` : structure et `KF_*` d'XP SP2 ; test dans `loader_services_self_test`). Résultat : `smss`
    ouvre `Session Manager\Environment` en écriture et s'arrête à `NtSetValueKey` (`OS`) : **l'étape 4 (écriture dans
    le registre) est la prochaine**.
-7. [ ] **LPC**, seulement si `smss` ne peut aller plus loin sans.
+7. [ ] **FAT32 en écriture** (critère 3) : créer et écrire un fichier sur `C:` (NtCreateFile avec création,
+   NtWriteFile), le relire après un redémarrage ; `fsck.vfat` sans erreur sur l'image (il faudra que `tools/mkfat`
+   écrive un BPB complet : signature, FSInfo, deux FAT). Puis le critère 2 : les ruches modifiées réécrites sur `C:`.
+   Ne pas oublier : le disque RAM est en mémoire ; la persistance demande un vrai disque (ATA ou virtio-blk, 05) ou que
+   `xtask` relise l'image après l'arrêt de QEMU.
+8. [ ] **LPC**, et la création de processus depuis le mode utilisateur, seulement pour aller plus loin avec `smss`
+   (`csrss.exe`) : c'est le M5.
    Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
    mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 

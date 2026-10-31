@@ -88,7 +88,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - `\??\C:`, `\SystemRoot`, `\KnownDlls`.
 
 **Critères de sortie**
-- [ ] `smss.exe` (ReactOS) démarre, lit `Session Manager`, crée les variables d'environnement et `\KnownDlls`.
+- [x] `smss.exe` (ReactOS) démarre, lit `Session Manager`, crée les variables d'environnement et `\KnownDlls`.
 - [ ] Une valeur écrite dans le registre persiste après un redémarrage.
 - [ ] Un fichier créé sur `C:` reste lisible après un redémarrage, et `fsck.vfat` ne signale aucune erreur sur l'image.
 

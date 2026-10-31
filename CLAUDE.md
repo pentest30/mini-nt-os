@@ -159,7 +159,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtQueryVolumeInformationFile (FileFsDeviceInformation) ; sections (`sys::section`) : NtCreateSection (fichier
   d'échange, données, image d'un fichier ouvert), NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection. `smss` met
   21 sections d'image dans `\KnownDlls`. NtQuerySystemInformation(`SystemProcessorInformation`) fait (décodage de
-  CPUID dans `hal::cpuid`) : `smss` s'arrête ensuite à l'écriture du registre (NtSetValueKey).
+  CPUID dans `hal::cpuid`). Registre en écriture fait, en mémoire : une ruche montée est un arbre de clés
+  (`cm::HiveKey`) ; NtCreateKey, NtSetValueKey, NtDeleteValueKey ; la ruche HARDWARE, volatile, bâtie au démarrage
+  (`ntoskrnl::hardware`). `smss` écrit ses variables d'environnement, puis ne trouve pas `csrss.exe` (M5) : le premier
+  critère du M4 est coché ; restent la persistance du registre et du FAT32 en écriture.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
