@@ -9,6 +9,9 @@
 | [05 — Feuille de route](05-feuille-de-route.md) | Jalons M0 à M10 et leurs critères de sortie |
 | [06 — Conventions](06-conventions.md) | Règles de développement : hygiène juridique, organisation, `unsafe`, IRQL, erreurs, tests, Git, documentation |
 
+[Notes de passation](passation.md) : tâche en cours, prochaines tâches, comment reprendre une session (ne font pas
+foi).
+
 Autres dossiers :
 
 - [`compat/`](compat/) : notes de compatibilité par application ou par jeu.

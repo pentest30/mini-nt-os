@@ -1,12 +1,13 @@
 //! A builder of minimal PE32 images, for tests (feature `builder`): the
-//! headers and sections an image section needs, and exports (no imports, no
-//! relocations).
+//! headers and sections an image section needs, exports and imports by name
+//! (no relocations).
 
 use alloc::vec::Vec;
 
 use crate::{
     ImageFileHeader, ImageOptionalHeader32, ImageSectionHeader, FILE_32BIT_MACHINE, FILE_EXECUTABLE_IMAGE,
     FILE_RELOCS_STRIPPED, IMAGE_DOS_SIGNATURE, IMAGE_NT_OPTIONAL_HDR32_MAGIC, IMAGE_NT_SIGNATURE, MACHINE_I386,
+    SUBSYSTEM_WINDOWS_CUI,
 };
 
 /// Where the NT headers start.
@@ -28,13 +29,16 @@ pub struct Pe32Builder {
     file_alignment: u32,
     relocs_stripped: bool,
     stack: (u32, u32),
+    subsystem: u16,
     sections: Vec<Section>,
     exports: Option<(&'static str, Vec<(&'static str, u32)>)>,
+    imports: Vec<(&'static str, Vec<&'static str>)>,
 }
 
 impl Pe32Builder {
     /// An image at `image_base`, aligned on 0x1000 in memory and 0x200 in the
-    /// file, with a 1 MiB stack of which 4 KiB committed, without sections.
+    /// file, with a 1 MiB stack of which 4 KiB committed, for the console
+    /// subsystem, without sections.
     pub fn new(image_base: u32) -> Self {
         Self {
             image_base,
@@ -43,9 +47,17 @@ impl Pe32Builder {
             file_alignment: 0x200,
             relocs_stripped: false,
             stack: (0x10_0000, 0x1000),
+            subsystem: SUBSYSTEM_WINDOWS_CUI,
             sections: Vec::new(),
             exports: None,
+            imports: Vec::new(),
         }
+    }
+
+    /// Its subsystem (`SUBSYSTEM_*`).
+    pub fn subsystem(mut self, subsystem: u16) -> Self {
+        self.subsystem = subsystem;
+        self
     }
 
     /// The entry point's RVA.
@@ -95,23 +107,87 @@ impl Pe32Builder {
         self
     }
 
+    /// Imports `names` from `dll`, by name, in an `.idata` section after the
+    /// others (and after `.edata`). Each call adds a DLL; [`import_slot`]
+    /// gives where the loader writes each address.
+    ///
+    /// [`import_slot`]: Self::import_slot
+    pub fn imports(mut self, dll: &'static str, names: &[&'static str]) -> Self {
+        self.imports.push((dll, names.to_vec()));
+        self
+    }
+
+    /// The RVA of the import address table slot of `name` from `dll`, which
+    /// code calls through (`call [slot]`); `None` if not imported. The
+    /// tables of each DLL come first in `.idata`, one after the other.
+    pub fn import_slot(&self, dll: &str, name: &str) -> Option<u32> {
+        let mut slot = self.idata_rva()?;
+        for (imported, names) in &self.imports {
+            if let Some(i) = names.iter().position(|n| *n == name).filter(|_| *imported == dll) {
+                return Some(slot + 4 * i as u32);
+            }
+            slot += 4 * (names.len() as u32 + 1);
+        }
+        None
+    }
+
+    /// The end of the sections given, aligned: where `.edata` goes.
+    fn sections_end(&self) -> u32 {
+        let end = self
+            .sections
+            .iter()
+            .map(|s| s.virtual_address + s.virtual_size.max(s.data.len() as u32))
+            .max()
+            .unwrap_or(self.section_alignment);
+        end.next_multiple_of(self.section_alignment)
+    }
+
+    /// `.edata`, if there are exports.
+    fn edata(&self) -> Option<Section> {
+        let (dll, exports) = self.exports.as_ref()?;
+        let rva = self.sections_end();
+        let data = export_directory(rva, dll, exports);
+        Some(Section {
+            name: ".edata",
+            virtual_address: rva,
+            virtual_size: data.len() as u32,
+            data,
+            characteristics: EDATA,
+        })
+    }
+
+    /// Where `.idata` goes, if there are imports.
+    fn idata_rva(&self) -> Option<u32> {
+        if self.imports.is_empty() {
+            return None;
+        }
+        Some(self.edata().map_or_else(
+            || self.sections_end(),
+            |e| (e.virtual_address + e.virtual_size).next_multiple_of(self.section_alignment),
+        ))
+    }
+
+    /// `.idata`, if there are imports, and the size of its address tables.
+    fn idata(&self) -> Option<(Section, u32)> {
+        let rva = self.idata_rva()?;
+        let (data, iat_size) = import_directory(rva, &self.imports);
+        let size = data.len() as u32;
+        Some((
+            Section { name: ".idata", virtual_address: rva, virtual_size: size, data, characteristics: IDATA },
+            iat_size,
+        ))
+    }
+
     /// The bytes of the image file.
     pub fn build(&self) -> Vec<u8> {
         let align = |value: usize, to: u32| value.next_multiple_of(to as usize);
         let mut sections: Vec<&Section> = self.sections.iter().collect();
-        let edata = self.exports.as_ref().map(|(dll, exports)| {
-            let end = self
-                .sections
-                .iter()
-                .map(|s| s.virtual_address + s.virtual_size.max(s.data.len() as u32))
-                .max()
-                .unwrap_or(self.section_alignment);
-            let rva = end.next_multiple_of(self.section_alignment);
-            let data = export_directory(rva, dll, exports);
-            let size = data.len() as u32;
-            (Section { name: ".edata", virtual_address: rva, virtual_size: size, data, characteristics: EDATA }, size)
-        });
-        if let Some((section, _)) = &edata {
+        let edata = self.edata();
+        if let Some(section) = &edata {
+            sections.push(section);
+        }
+        let idata = self.idata();
+        if let Some((section, _)) = &idata {
             sections.push(section);
         }
         let file_header = NT_OFFSET + 4;
@@ -150,13 +226,20 @@ impl Pe32Builder {
         put16(&mut file, optional_header + 48, 4); // subsystem version 4.0
         put32(&mut file, optional_header + 56, size_of_image as u32);
         put32(&mut file, optional_header + 60, size_of_headers as u32);
-        put16(&mut file, optional_header + 68, 3); // IMAGE_SUBSYSTEM_WINDOWS_CUI
+        put16(&mut file, optional_header + 68, self.subsystem);
         put32(&mut file, optional_header + 72, self.stack.0);
         put32(&mut file, optional_header + 76, self.stack.1);
         put32(&mut file, optional_header + 92, 16); // NumberOfRvaAndSizes
-        if let Some((section, size)) = &edata {
+        if let Some(section) = &edata {
             put32(&mut file, optional_header + 96, section.virtual_address); // export directory
-            put32(&mut file, optional_header + 100, *size);
+            put32(&mut file, optional_header + 100, section.virtual_size);
+        }
+        if let Some((section, iat_size)) = &idata {
+            // The import directory follows the address tables.
+            put32(&mut file, optional_header + 104, section.virtual_address + iat_size);
+            put32(&mut file, optional_header + 108, IMPORT_DESCRIPTOR as u32 * (self.imports.len() as u32 + 1));
+            put32(&mut file, optional_header + 192, section.virtual_address); // IAT directory
+            put32(&mut file, optional_header + 196, *iat_size);
         }
 
         for (i, section) in sections.iter().enumerate() {
@@ -181,6 +264,44 @@ impl Pe32Builder {
 
 /// `.edata`: initialized, readable data.
 const EDATA: u32 = crate::SCN_CNT_INITIALIZED_DATA | crate::SCN_MEM_READ;
+/// `.idata`: initialized data, writable for the loader to bind it.
+const IDATA: u32 = crate::SCN_CNT_INITIALIZED_DATA | crate::SCN_MEM_READ | crate::SCN_MEM_WRITE;
+/// The size of IMAGE_IMPORT_DESCRIPTOR.
+const IMPORT_DESCRIPTOR: usize = 20;
+
+/// The imports of `dlls` at `rva`: the import address table of each DLL,
+/// then the import descriptors (and their null terminator), the lookup
+/// tables, the hint/name entries and the DLL names. Returns the bytes and the
+/// size of the address tables. Both tables point at the hint/name entries
+/// until the loader binds the address table.
+fn import_directory(rva: u32, dlls: &[(&str, Vec<&str>)]) -> (Vec<u8>, u32) {
+    let thunks: usize = dlls.iter().map(|(_, names)| 4 * (names.len() + 1)).sum();
+    let descriptors = thunks;
+    let lookup = descriptors + IMPORT_DESCRIPTOR * (dlls.len() + 1);
+    let strings = lookup + thunks;
+    let mut data = alloc::vec![0u8; strings];
+    let mut table = 0;
+    for (d, (dll, names)) in dlls.iter().enumerate() {
+        let descriptor = descriptors + IMPORT_DESCRIPTOR * d;
+        put32(&mut data, descriptor, rva + (lookup + table) as u32); // OriginalFirstThunk
+        put32(&mut data, descriptor + 16, rva + table as u32); // FirstThunk
+        for (i, name) in names.iter().enumerate() {
+            let entry = rva + data.len() as u32;
+            data.extend_from_slice(&[0, 0]); // hint
+            data.extend_from_slice(name.as_bytes());
+            data.push(0);
+            data.resize(data.len().next_multiple_of(2), 0);
+            put32(&mut data, table + 4 * i, entry);
+            put32(&mut data, lookup + table + 4 * i, entry);
+        }
+        let name = rva + data.len() as u32;
+        data.extend_from_slice(dll.as_bytes());
+        data.push(0);
+        put32(&mut data, descriptor + 12, name);
+        table += 4 * (names.len() + 1);
+    }
+    (data, thunks as u32)
+}
 
 /// An export directory at `rva`: IMAGE_EXPORT_DIRECTORY, then the function,
 /// name and ordinal tables, then the strings. Names sorted, ordinals from 1.
@@ -229,7 +350,10 @@ fn put32(file: &mut [u8], offset: usize, value: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ExportTarget, Pe32, SCN_MEM_EXECUTE, SCN_MEM_READ, SCN_MEM_WRITE};
+    use crate::{
+        read_u32, rva_to_file_offset, rva_to_str, ExportTarget, Pe32, SCN_MEM_EXECUTE, SCN_MEM_READ, SCN_MEM_WRITE,
+    };
+    use alloc::borrow::ToOwned;
 
     #[test]
     fn a_built_image_parses_back() {
@@ -258,6 +382,40 @@ mod tests {
         assert_eq!(&file[0x200..0x210], &[0xC3; 0x10]);
         assert_eq!(({ sections[1].size_of_raw_data }, { sections[1].pointer_to_raw_data }), (0, 0), "no raw data");
         assert_eq!(file.len(), 0x400);
+    }
+
+    #[test]
+    fn imports_parse_back_and_their_slots_point_at_their_names() {
+        let builder = Pe32Builder::new(0x40_0000)
+            .entry_point(0x1000)
+            .subsystem(crate::SUBSYSTEM_NATIVE)
+            .section(".text", 0x1000, 0x10, &[0xC3; 0x10], SCN_MEM_EXECUTE | SCN_MEM_READ)
+            .exports("probe.exe", &[("Entry", 0x1000)])
+            .imports("ntdll.dll", &["DbgPrint", "NtTerminateProcess"])
+            .imports("kernel32.dll", &["ExitProcess"]);
+        let file = builder.build();
+        let pe = Pe32::parse(&file).unwrap();
+        assert_eq!({ pe.optional_header().subsystem }, crate::SUBSYSTEM_NATIVE);
+        let sections: Vec<_> = pe.sections().map(|s| (s.name_str().to_owned(), s.virtual_address)).collect();
+        let names: Vec<_> = sections.iter().map(|(n, rva)| (n.as_str(), *rva)).collect();
+        assert_eq!(names, [(".text", 0x1000), (".edata", 0x2000), (".idata", 0x3000)], ".idata after .edata");
+        let dlls: Vec<_> = pe.imports().map(|i| (i.dll_name().to_owned(), i.iat_rva)).collect();
+        assert_eq!(dlls, [("ntdll.dll".to_owned(), 0x3000), ("kernel32.dll".to_owned(), 0x300C)]);
+        assert_eq!(builder.import_slot("ntdll.dll", "DbgPrint"), Some(0x3000));
+        assert_eq!(builder.import_slot("ntdll.dll", "NtTerminateProcess"), Some(0x3004));
+        assert_eq!(builder.import_slot("kernel32.dll", "ExitProcess"), Some(0x300C));
+        assert_eq!(builder.import_slot("kernel32.dll", "DbgPrint"), None, "imported from ntdll only");
+        let opt = pe.optional_header();
+        let (import, iat) = (opt.data_directory[1], opt.data_directory[12]);
+        assert_eq!(({ import.virtual_address }, { import.size }), (0x3014, 60), "three descriptors");
+        assert_eq!(({ iat.virtual_address }, { iat.size }), (0x3000, 0x14));
+        // Each slot, and its lookup table twin, points at a hint/name entry.
+        let rva_at = |rva: u32| read_u32(&file, rva_to_file_offset(&file, rva).unwrap()).unwrap();
+        let name_at = |slot: u32| rva_to_str(&file, rva_at(slot) + 2).unwrap();
+        assert_eq!((name_at(0x3000), name_at(0x3004), rva_at(0x3008)), ("DbgPrint", "NtTerminateProcess", 0));
+        assert_eq!(name_at(0x300C), "ExitProcess");
+        let lookup = pe.imports().map(|i| i.int_rva).collect::<Vec<_>>();
+        assert_eq!((name_at(lookup[0] + 4), name_at(lookup[1])), ("NtTerminateProcess", "ExitProcess"));
     }
 
     #[test]
