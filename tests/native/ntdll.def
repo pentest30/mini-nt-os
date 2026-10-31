@@ -6,3 +6,4 @@ LIBRARY ntdll.dll
 EXPORTS
 DbgPrint
 NtTerminateProcess@8
+RtlUnwind@16
