@@ -1,19 +1,23 @@
-//! The FAT32 image: a tree of directories and files.
+//! The FAT32 image: a tree of directories and files, as `fsck.vfat` and
+//! the FAT32 specification want it.
 //!
 //! Each file is given by its path, a list of 8.3 names; the directories on
 //! the way are created. Directories, the root included, take as many
 //! clusters as their entries need; a subdirectory starts with its `.` and
 //! `..` entries. Every directory and file is one contiguous run of clusters,
-//! in depth-first order from the root; an empty file has no cluster.
+//! in depth-first order from the root; an empty file has no cluster. The
+//! clusters after them are free, for what the kernel writes: at least
+//! [`FREE_CLUSTERS`], and enough for the [`MIN_CLUSTERS`] that make a FAT32
+//! volume.
 //!
 //! Geometry:
 //!   BytesPerSector   = 512
 //!   SectorsPerClust  = 1
-//!   ReservedSectors  = 1   (sector 0 = BPB)
-//!   NumberOfFATs     = 1
-//!   FAT sectors      = ceil(clusters × 4 / 512)
+//!   ReservedSectors  = 32  (0: boot sector, 1: FSInfo, 6 and 7: their backups)
+//!   NumberOfFATs     = 2   (the second mirrors the first)
+//!   FAT sectors      = ceil((clusters + 2) × 4 / 512), each FAT
 //!   RootCluster      = 2
-//!   DataStartLBA     = ReservedSectors + FAT sectors
+//!   DataStartLBA     = ReservedSectors + 2 × FAT sectors
 //!   lba(cluster)     = DataStartLBA + (cluster − 2)
 //!
 //! Directory entry (32 bytes): [0..11] name, [11] attributes,
@@ -27,6 +31,12 @@ const ENTRY: usize = 32;
 const ATTR_DIRECTORY: u8 = 0x10;
 const ATTR_ARCHIVE: u8 = 0x20;
 const END_OF_CHAIN: u32 = 0x0FFF_FFFF;
+const RESERVED_SECTORS: usize = 32;
+const FAT_COUNT: usize = 2;
+/// The fewest clusters of a FAT32 volume (below, it would be FAT16).
+pub const MIN_CLUSTERS: usize = 65_525;
+/// Free clusters left after the files, at least: 4 MiB.
+pub const FREE_CLUSTERS: usize = 8192;
 const DOT: ShortName = *b".          ";
 const DOT_DOT: ShortName = *b"..         ";
 
@@ -163,7 +173,8 @@ fn entry(name: &ShortName, attributes: u8, first: u32, size: u32) -> [u8; ENTRY]
 
 struct Image {
     bytes: Vec<u8>,
-    fat_start: usize,
+    /// Where each FAT copy starts.
+    fats: [usize; FAT_COUNT],
     data_start: usize,
 }
 
@@ -172,8 +183,10 @@ impl Image {
     fn chain(&mut self, first: u32, count: u32) {
         for cluster in first..first + count {
             let next = if cluster + 1 == first + count { END_OF_CHAIN } else { cluster + 1 };
-            let at = self.fat_start + cluster as usize * 4;
-            self.bytes[at..at + 4].copy_from_slice(&next.to_le_bytes());
+            for fat in self.fats {
+                let at = fat + cluster as usize * 4;
+                self.bytes[at..at + 4].copy_from_slice(&next.to_le_bytes());
+            }
         }
     }
 
@@ -194,30 +207,89 @@ pub fn build(files: &[(Vec<ShortName>, Vec<u8>)]) -> Result<Vec<u8>, String> {
     let mut next = 2;
     root.place(true, &data, &mut next);
 
-    let fat_sectors = (next as usize * 4).div_ceil(SECTOR).max(1);
-    let reserved_sectors = 1usize;
-    let data_start_lba = reserved_sectors + fat_sectors;
-    let total_sectors = data_start_lba + (next as usize - 2);
+    let clusters = (next as usize - 2 + FREE_CLUSTERS).max(MIN_CLUSTERS + 64);
+    let fat_sectors = ((clusters + 2) * 4).div_ceil(SECTOR);
+    let data_start_lba = RESERVED_SECTORS + FAT_COUNT * fat_sectors;
+    let total_sectors = data_start_lba + clusters;
+    let fat0 = RESERVED_SECTORS * SECTOR;
     let mut image = Image {
         bytes: vec![0u8; total_sectors * SECTOR],
-        fat_start: reserved_sectors * SECTOR,
+        fats: [fat0, fat0 + fat_sectors * SECTOR],
         data_start: data_start_lba * SECTOR,
     };
 
-    let bpb = &mut image.bytes[..SECTOR];
-    bpb[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes()); // BytesPerSector
-    bpb[13] = 1; // SectorsPerCluster
-    bpb[14..16].copy_from_slice(&(reserved_sectors as u16).to_le_bytes());
-    bpb[16] = 1; // NumberOfFATs; RootEntryCount and TotalSectors16 at 0: FAT32
-    bpb[32..36].copy_from_slice(&(total_sectors as u32).to_le_bytes());
-    bpb[36..40].copy_from_slice(&(fat_sectors as u32).to_le_bytes());
-    bpb[44..48].copy_from_slice(&2u32.to_le_bytes()); // RootCluster
-
-    let fat = image.fat_start;
-    image.bytes[fat..fat + 4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes()); // media descriptor
-    image.bytes[fat + 4..fat + 8].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    let boot = boot_sector(total_sectors as u32, fat_sectors as u32);
+    let fs_info = fs_info_sector();
+    for (lba, sector) in [(0, &boot), (1, &fs_info), (6, &boot), (7, &fs_info)] {
+        image.bytes[lba * SECTOR..(lba + 1) * SECTOR].copy_from_slice(sector);
+    }
+    for fat in image.fats {
+        image.bytes[fat..fat + 4].copy_from_slice(&0x0FFF_FFF8u32.to_le_bytes()); // media descriptor F8
+        image.bytes[fat + 4..fat + 8].copy_from_slice(&0x0FFF_FFFFu32.to_le_bytes());
+        // clean, no error
+    }
     root.write(u32::MAX, &data, &mut image);
     Ok(image.bytes)
+}
+
+/// The boot sector: a jump, the BPB of FAT32 and its extension, no label
+/// ("NO NAME"), the signature.
+fn boot_sector(total_sectors: u32, fat_sectors: u32) -> [u8; SECTOR] {
+    let mut b = [0u8; SECTOR];
+    b[0..3].copy_from_slice(&[0xEB, 0x58, 0x90]); // jmp short, nop
+    b[3..11].copy_from_slice(b"MINO    ");
+    b[11..13].copy_from_slice(&(SECTOR as u16).to_le_bytes()); // BytesPerSector
+    b[13] = 1; // SectorsPerCluster
+    b[14..16].copy_from_slice(&(RESERVED_SECTORS as u16).to_le_bytes());
+    b[16] = FAT_COUNT as u8;
+    // RootEntryCount, TotalSectors16 and FATSz16 at 0: FAT32.
+    b[21] = 0xF8; // media: fixed disk
+    b[24..26].copy_from_slice(&63u16.to_le_bytes()); // sectors per track
+    b[26..28].copy_from_slice(&255u16.to_le_bytes()); // heads
+    b[32..36].copy_from_slice(&total_sectors.to_le_bytes());
+    b[36..40].copy_from_slice(&fat_sectors.to_le_bytes());
+    // ExtFlags 0: every FAT mirrored; version 0.0.
+    b[44..48].copy_from_slice(&2u32.to_le_bytes()); // RootCluster
+    b[48..50].copy_from_slice(&1u16.to_le_bytes()); // FSInfo sector
+    b[50..52].copy_from_slice(&6u16.to_le_bytes()); // backup boot sector
+    b[64] = 0x80; // drive number
+    b[66] = 0x29; // extended boot signature
+    b[67..71].copy_from_slice(&0x4D49_4E4Fu32.to_le_bytes()); // volume serial number
+    b[71..82].copy_from_slice(b"NO NAME    ");
+    b[82..90].copy_from_slice(b"FAT32   ");
+    b[510..512].copy_from_slice(&[0x55, 0xAA]);
+    b
+}
+
+/// The FSInfo sector: its signatures, the free count and the next free
+/// cluster unknown (0xFFFFFFFF), as the kernel does not keep them.
+fn fs_info_sector() -> [u8; SECTOR] {
+    let mut s = [0u8; SECTOR];
+    s[0..4].copy_from_slice(&0x4161_5252u32.to_le_bytes());
+    s[484..488].copy_from_slice(&0x6141_7272u32.to_le_bytes());
+    s[488..492].copy_from_slice(&u32::MAX.to_le_bytes());
+    s[492..496].copy_from_slice(&u32::MAX.to_le_bytes());
+    s[508..512].copy_from_slice(&0xAA55_0000u32.to_le_bytes());
+    s
+}
+
+/// `fsck.vfat -n` on `image`, in a file of the directory of the test
+/// binary: `None` without `fsck.vfat`, its output when it fails.
+#[cfg(test)]
+pub fn fsck(image: &[u8]) -> Option<Result<(), String>> {
+    use std::process::Command;
+    let program = ["/usr/sbin/fsck.vfat", "/sbin/fsck.vfat", "fsck.vfat"]
+        .into_iter()
+        .find(|p| Command::new(p).arg("--help").output().is_ok())?;
+    let path = std::env::temp_dir().join(format!("mkfat-{}-{:p}.img", std::process::id(), image.as_ptr()));
+    std::fs::write(&path, image).expect("write the image");
+    let output = Command::new(program).args(["-n", "-v"]).arg(&path).output().expect("run fsck.vfat");
+    let _ = std::fs::remove_file(&path);
+    Some(if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr)))
+    })
 }
 
 #[cfg(test)]
@@ -301,6 +373,27 @@ mod tests {
         assert_eq!((a[0].first_cluster, a[1].first_cluster), (a_in_root, 0), "`..` under the root is cluster 0");
         assert_eq!(b[1].first_cluster, a_in_root);
         assert_eq!(b[0].first_cluster, a[2].first_cluster);
+    }
+
+    #[test]
+    fn the_image_is_a_clean_fat32_volume() {
+        let big: Vec<u8> = (0..70_000u32).map(|i| i as u8).collect();
+        let image = build(&[
+            file("KERNEL.BIN", b"ABCD"),
+            file("WINDOWS/SYSTEM32/NTDLL.DLL", &big),
+            file("WINDOWS/SYSTEM32/CONFIG/SYSTEM", b"regf"),
+            file("EMPTY.TXT", b""),
+        ])
+        .unwrap();
+        assert!(image.len() / SECTOR > MIN_CLUSTERS, "enough clusters for FAT32");
+        assert_eq!(&image[510..512], &[0x55, 0xAA]);
+        assert_eq!(&image[..SECTOR], &image[6 * SECTOR..7 * SECTOR], "the backup boot sector");
+        let volume = FatVolume::mount(Disk(image.clone())).unwrap();
+        assert_eq!(read(&volume, "/WINDOWS/SYSTEM32/NTDLL.DLL"), big);
+        match fsck(&image) {
+            None => std::eprintln!("fsck.vfat not found: the image is not checked (dosfstools)"),
+            Some(result) => result.expect("fsck.vfat finds no error"),
+        }
     }
 
     #[test]
