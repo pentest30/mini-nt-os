@@ -134,3 +134,18 @@ Ensuite :
 Le prochain mur est donc `SystemProcessorInformation` (architecture, niveau, révision et fonctions du processeur), puis,
 dans la même fonction (`SmpCreateDynamicEnvironmentVariables`), l'écriture du registre : NtOpenKey en `GENERIC_WRITE`
 sur `Session Manager\Environment` et NtSetValueKey (`OS`, `PROCESSOR_ARCHITECTURE`, `PROCESSOR_LEVEL`…), l'étape 4.
+
+## Étape 4 : le processeur
+
+NtQuerySystemInformation(`SystemProcessorInformation`) : x86, le niveau et la révision du processeur tels qu'XP SP2 les
+tire de CPUID (famille, plus la famille étendue pour la famille 15 ; modèle et pas, avec le modèle étendu pour la
+famille 15 et pour la famille 6 sur Intel), et `KeFeatureBits` (`KF_*` d'XP SP2 ; `KF_FAST_SYSCALL` seulement là où le
+noyau prend SYSENTER, ADR-004 ; NX selon EFER). `smss` en tire `PROCESSOR_ARCHITECTURE`, `PROCESSOR_LEVEL` et
+`PROCESSOR_REVISION`, ouvre `Session Manager\Environment` en `GENERIC_WRITE` (accordé : pas encore de Se), puis :
+
+| Service | Arguments | Ce qu'en fait `smss` | Composant |
+|---|---|---|---|
+| `NtSetValueKey` | `Environment`, `OS`, `REG_SZ`, 22 octets | « SMSS: Failed writing OS environment variable » : **`SmpInit` échoue** | **Cm** |
+
+Le prochain mur est l'écriture dans le registre (étape 4 de la passation) : NtSetValueKey, puis NtDeleteValueKey
+(déjà demandé plus tôt, toléré) et NtCreateKey, en mémoire d'abord ; la persistance (critère 2 du M4) ensuite.

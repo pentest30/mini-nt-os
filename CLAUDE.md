@@ -158,7 +158,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtCreateFile (ouverture), NtOpenFile, NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryInformationFile,
   NtQueryVolumeInformationFile (FileFsDeviceInformation) ; sections (`sys::section`) : NtCreateSection (fichier
   d'échange, données, image d'un fichier ouvert), NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection. `smss` met
-  21 sections d'image dans `\KnownDlls`, puis s'arrête à `SystemProcessorInformation`, puis à l'écriture du registre.
+  21 sections d'image dans `\KnownDlls`. NtQuerySystemInformation(`SystemProcessorInformation`) fait (décodage de
+  CPUID dans `hal::cpuid`) : `smss` s'arrête ensuite à l'écriture du registre (NtSetValueKey).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

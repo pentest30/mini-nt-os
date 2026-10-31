@@ -8,8 +8,8 @@ jour à chaque commit qui change l'état.
 
 - Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
   (spike S1 réussi). Étapes 0, 1, 2 et 5 du M4 faites : la sonde `smss`, le registre en lecture, les répertoires
-  d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`) ; ensuite, `SystemProcessorInformation`
-  puis l'écriture dans le registre (étape 4), les prochains murs de `smss`.
+  d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`), puis `SystemProcessorInformation` ;
+  ensuite, l'écriture dans le registre (étape 4), le prochain mur de `smss` (NtSetValueKey).
 - Branche de travail : `claude/m4-io`, partie d'`origin/main` après la fusion de #32. Les PR se fusionnent dans
   `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
   `git merge-base --is-ancestor HEAD origin/main`).
@@ -116,13 +116,14 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection. Tests : `kernel/io/src/tests.rs` (hôte),
    `file_self_test` et `section_service_self_test` (depuis le mode utilisateur), vérifiés par mutation.
    Résultat : `smss` met 21 sections d'image dans `\KnownDlls`, puis s'arrête à
-   `NtQuerySystemInformation(SystemProcessorInformation)`.
+   `NtQuerySystemInformation(SystemProcessorInformation)` (étape 6).
    Pas encore : IRP et piles de périphériques (les lectures vont droit au volume), noms longs FAT, écriture FAT
    (critère 3), partage, création ; une section de fichier copie le fichier (deux copies de `shell32` quand deux
    sections le tiennent : à partager par fichier, comme les SectionObjectPointers d'XP).
-6. [ ] **`SystemProcessorInformation`** (classe 1 de NtQuerySystemInformation, 12 octets : architecture, niveau,
-   révision, fonctions ; depuis `hal::cpuid`), puis l'étape 4 : `SmpCreateDynamicEnvironmentVariables` ouvre
-   `Session Manager\Environment` en `GENERIC_WRITE` et y écrit `OS`, `PROCESSOR_*` (NtSetValueKey).
+6. [x] **`SystemProcessorInformation`** (`sys::system`, décodage de CPUID dans `hal::cpuid`, testé sur l'hôte ;
+   `abi::system_information` : structure et `KF_*` d'XP SP2 ; test dans `loader_services_self_test`). Résultat : `smss`
+   ouvre `Session Manager\Environment` en écriture et s'arrête à `NtSetValueKey` (`OS`) : **l'étape 4 (écriture dans
+   le registre) est la prochaine**.
 7. [ ] **LPC**, seulement si `smss` ne peut aller plus loin sans.
    Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
    mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
