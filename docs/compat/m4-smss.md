@@ -53,3 +53,29 @@ Statut de sortie : `STATUS_NOT_IMPLEMENTED`, le statut de `SmpInit`. Sur XP, la 
   Sa création échoue sans arrêter `smss`, qui continue jusqu'au registre.
 - Les fichiers (Io, FAT32 en écriture) viendront ensuite : `\KnownDlls`, `autochk`, le fichier d'échange, puis
   l'ouverture des images de `csrss` et `winlogon`.
+
+## Étape 1 : le registre en lecture
+
+Le noyau monte désormais la ruche SYSTEM du disque de démarrage en `\REGISTRY\MACHINE\SYSTEM` (en attendant
+`tools/mkhive`, celle que ReactOS a générée de ses `.inf`, `system32/config/system` de l'espace utilisateur
+épinglé), avec `CurrentControlSet` vers `ControlSet001` (`Select\Current`). Ce qu'il a fallu :
+
+- `libs/regf` : lecture des ruches en mémoire, sans copie ; un constructeur de ruches pour les tests ;
+- `kernel/cm` : le type `Key` et la procédure *parse* de `\REGISTRY`, ruches montées en lecture, liens ;
+- Ob : un nom relatif à une clé ouverte va à la procédure *parse* de la clé ;
+- les services `NtOpenKey`, `NtQueryKey`, `NtEnumerateKey`, `NtQueryValueKey`, `NtEnumerateValueKey`
+  (classes `KEY_BASIC`, `NODE`, `FULL_INFORMATION` et `KEY_VALUE_BASIC`, `FULL`, `PARTIAL_INFORMATION`), et la
+  capture des `OBJECT_ATTRIBUTES`.
+
+`smss` lit alors sa configuration : `NtOpenKey` (10 appels), `NtEnumerateValueKey` (54), `NtQueryValueKey` (18 ;
+le premier rend `STATUS_INVALID_HANDLE`, juste, au handle invalide que `ntdll` passe après l'échec de son
+`NtOpenKey` des options d'exécution, faute de ruche SOFTWARE). Il s'arrête ensuite :
+
+| Service | Arguments | Ce qu'en fait `smss` | Composant |
+|---|---|---|---|
+| `NtDeleteValueKey` | une clé ouverte | une valeur à effacer ; échec toléré | Cm (écriture) |
+| `NtCreateDirectoryObject` | `\Windows`, `\RPC Control` (de `ObjectDirectories`) | « Unable to create … object directory » ; toléré | Ob |
+| `NtOpenDirectoryObject` | `\??` | « SMSS: Unable to open \?? directory », puis « Unable to initialize DosDevices configuration » : **`SmpInit` échoue** | **Ob** |
+
+Prochaine étape : les services de répertoires d'Ob (`NtCreateDirectoryObject`, `NtOpenDirectoryObject`, sans doute
+`NtCreateSymbolicLinkObject` pour les entrées de `DOS Devices`), sur les répertoires qu'Ob a déjà.

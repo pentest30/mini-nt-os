@@ -7,11 +7,12 @@ jour à chaque commit qui change l'état.
 ## État
 
 - Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
-  (spike S1 réussi). Étape 0 du M4 faite : la sonde `smss` ; ensuite, l'ordre proposé ci-dessous.
+  (spike S1 réussi). Étapes 0 et 1 du M4 faites : la sonde `smss`, le registre en lecture ; ensuite, les
+  services de répertoires d'Ob.
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- PR fusionnées : #29, #30 et #31 (spike S1). La sonde `smss` (étape 0 du M4) est poussée sur la branche, sans PR
-  encore. Après chaque fusion, repartir de `origin/main`.
+- PR fusionnées : #29, #30 et #31 (spike S1). La sonde `smss` et le registre en lecture (étapes 0 et 1 du M4)
+  sont poussés sur la branche, sans PR encore. Après chaque fusion, repartir de `origin/main`.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
@@ -79,17 +80,25 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    boucle), `NtQueryVirtualMemory` (`MemoryBasicInformation`). Résultat : `smss` s'arrête au **registre**
    (`RtlQueryRegistryValues` sur `Session Manager`) ; avant, il demande `ThreadBreakOnTermination`, `NtCreatePort`
    (LPC), `NtCreateThread` et `NtWriteVirtualMemory`, `NtCreateEvent`, toutes en échec toléré.
-1. [ ] **Ordre proposé** (à confirmer avec le mainteneur) :
-   1. **Cm en mémoire** : `libs/regf` (lecture d'une ruche, hôte et noyau, tests hôte), `tools/mkhive` (ruche
-      `SYSTEM` minimale avec `Session Manager`), la ruche sur le disque de démarrage et chargée au démarrage,
-      `NtOpenKey`, `NtQueryValueKey`, `NtEnumerateKey`/`NtEnumerateValueKey` (selon ce que demande
-      `RtlQueryRegistryValues`). Relancer la sonde.
-   2. **Ex et Ps** que `smss` demande aussitôt : `NtCreateEvent` (objet événement d'Ex sur `KEvent`),
-      `NtCreateThread` et `NtWriteVirtualMemory`, `ThreadBreakOnTermination` (avec l'arrêt
-      `CRITICAL_OBJECT_TERMINATION` à la fin d'un thread critique : la sonde ne devra plus terminer `smss`).
-   3. **Io** (objets fichier, IRP synchrones, `NtCreateFile`/`NtOpenFile`/`NtReadFile`) sur le pilote FAT
-      existant du disque de démarrage, puis virtio-blk, partitions et FAT32 en écriture ; persistance du registre.
-   4. **LPC** (`NtCreatePort` et la suite), avancé du M5 si `smss` ne peut pas aller plus loin sans.
+1. [x] **Registre en lecture** (ordre choisi avec le mainteneur : le registre d'abord, LPC laissé au M5) :
+   `libs/regf` (lecture d'une ruche en mémoire ; constructeur sous la feature `builder`), `kernel/cm` (type `Key`,
+   `\REGISTRY` avec `MACHINE` et `USER`, ruches montées en lecture, lien `CurrentControlSet`, `cm::info` pour les
+   classes d'information), Ob (nom relatif à une racine à procédure *parse*), `abi::object::ObjectAttributes32`,
+   `abi::registry`, services `NtOpenKey`, `NtQueryKey`, `NtEnumerateKey`, `NtQueryValueKey`,
+   `NtEnumerateValueKey` (`sys::registry`, capture dans `sys::object`). La ruche montée est celle que ReactOS a
+   générée (`system32/config/system`, mise sur le disque par `xtask` ; `userland::mount_system_hive`) : `tools/mkhive`
+   reste à faire (ADR-012), à partir des `.inf` de ReactOS, absents de l'arborescence extraite (à chercher dans
+   l'ISO). Test : `registry_self_test` (une ruche construite et montée en `\REGISTRY\MACHINE\MinoTest`).
+   Résultat : `smss` lit `Session Manager`, puis s'arrête à `\??` (`NtOpenDirectoryObject`).
+2. [ ] **Services de répertoires d'Ob** (prochaine) : `NtOpenDirectoryObject`, `NtCreateDirectoryObject`, puis ce
+   que la sonde révèle (vraisemblablement `NtCreateSymbolicLinkObject` pour `DOS Devices`, `NtQuerySymbolicLinkObject`).
+3. [ ] **Ex et Ps** que `smss` demande : `NtCreateEvent`, `NtCreateThread` et `NtWriteVirtualMemory`,
+   `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer `smss`).
+4. [ ] **Écriture dans le registre** (`NtDeleteValueKey`, `NtSetValueKey`, `NtCreateKey`), en mémoire d'abord, et
+   `tools/mkhive`.
+5. [ ] **Io** (objets fichier, IRP synchrones, `NtCreateFile`/`NtOpenFile`/`NtReadFile`) sur le pilote FAT du disque
+   de démarrage, puis virtio-blk, partitions, FAT32 en écriture ; persistance du registre.
+6. [ ] **LPC**, seulement si `smss` ne peut aller plus loin sans.
    Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
    mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 

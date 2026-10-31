@@ -145,7 +145,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`UserThreadStart::tid`).
   M4 : sonde `smss.exe` faite (`docs/compat/m4-smss.md`, scénario `smss`, feature `test-smss`) : le `smss` de ReactOS
   s'arrête au registre (`Session Manager`), après des échecs tolérés de LPC, d'Ex et de Ps. `DbgPrompt` reçoit `i`
-  faute de débogueur ; NtQueryVirtualMemory (MemoryBasicInformation). Ordre proposé et suite :
+  faute de débogueur ; NtQueryVirtualMemory (MemoryBasicInformation). Registre en lecture fait : `libs/regf`
+  (ruches en mémoire, constructeur sous `builder`), `kernel/cm` (type `Key`, `\REGISTRY`, ruches montées en lecture,
+  `CurrentControlSet`, `cm::info`), Ob (nom relatif à une racine à procédure *parse*), NtOpenKey, NtQueryKey,
+  NtEnumerateKey, NtQueryValueKey, NtEnumerateValueKey ; la ruche SYSTEM de ReactOS épinglé montée au démarrage
+  (en attendant `tools/mkhive`). `smss` lit `Session Manager` puis s'arrête à `\??`. Suite :
   [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
