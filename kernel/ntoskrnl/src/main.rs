@@ -279,6 +279,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &ps::eprocess::PROCESS_TYPE,
         &ps::ethread::THREAD_TYPE,
         &io_manager::FILE_TYPE,
+        &io_manager::DEVICE_TYPE,
         &cm::KEY_TYPE,
     ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
@@ -286,6 +287,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     cm::init();
     ps::init();
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
+    mount_boot_volume();
     fat_smoke_probe();
 
     // Wire preemptive round-robin: each clock tick ends the quantum, and the
@@ -3961,7 +3963,7 @@ fn object_manager_self_test() {
         .expect("a directory")
         .entries();
     let names: alloc::vec::Vec<_> = types.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["Directory", "File", "Key", "Process", "Section", "SymbolicLink", "Thread", "Type"]);
+    assert_eq!(names, ["Device", "Directory", "File", "Key", "Process", "Section", "SymbolicLink", "Thread", "Type"]);
 
     // A named section, two handle tables.
     let (first, second) = (HandleTable::new(), HandleTable::new());
@@ -4540,6 +4542,20 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
 }
 
 #[allow(dead_code)]
+/// The boot RAM disk as the system volume (`io_manager::mount_boot_volume`):
+/// `\Device\Ramdisk0`, with `\??\C:` and `\SystemRoot` leading to it.
+fn mount_boot_volume() {
+    match io_manager::mount_boot_volume() {
+        Ok(Some(size)) => log::info!(
+            "[boot] Io: boot volume {} (FAT32, {size} bytes), {}",
+            io_manager::BOOT_VOLUME,
+            io_manager::BOOT_LINKS.map(|(name, target)| alloc::format!("{name} -> {target}")).join(", ")
+        ),
+        Ok(None) => log::info!("[boot] Io: no boot RAM disk, no system volume"),
+        Err(status) => log::error!("[boot] Io: the boot volume refused: {status}"),
+    }
+}
+
 fn fat_smoke_probe() {
     match io_manager::smoke_probe_mz() {
         Ok(out) if out == *b"MZ" => {
