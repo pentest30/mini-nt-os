@@ -149,8 +149,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (ruches en mémoire, constructeur sous `builder`), `kernel/cm` (type `Key`, `\REGISTRY`, ruches montées en lecture,
   `CurrentControlSet`, `cm::info`), Ob (nom relatif à une racine à procédure *parse*), NtOpenKey, NtQueryKey,
   NtEnumerateKey, NtQueryValueKey, NtEnumerateValueKey ; la ruche SYSTEM de ReactOS épinglé montée au démarrage
-  (en attendant `tools/mkhive`). `smss` lit `Session Manager` puis s'arrête à `\??`. Suite :
-  [`docs/passation.md`](docs/passation.md).
+  (en attendant `tools/mkhive`). Répertoires d'Ob faits : NtCreateDirectoryObject, NtOpenDirectoryObject,
+  NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject. `smss` lit `Session Manager`, crée ses répertoires et ses
+  liens, puis s'arrête à `NtOpenFile` (KnownDlls) : Io ensuite. Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

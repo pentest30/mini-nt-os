@@ -79,3 +79,19 @@ le premier rend `STATUS_INVALID_HANDLE`, juste, au handle invalide que `ntdll` p
 
 Prochaine étape : les services de répertoires d'Ob (`NtCreateDirectoryObject`, `NtOpenDirectoryObject`, sans doute
 `NtCreateSymbolicLinkObject` pour les entrées de `DOS Devices`), sur les répertoires qu'Ob a déjà.
+
+## Étape 2 : répertoires et liens d'Ob
+
+`NtCreateDirectoryObject`, `NtOpenDirectoryObject`, `NtCreateSymbolicLinkObject`, `NtOpenSymbolicLinkObject`
+(`sys::object`, sur les répertoires et liens qu'Ob a déjà ; un lien ouvert comme lien n'est pas suivi en fin de nom).
+`smss` crée alors `\Windows`, `\RPC Control` et ses liens de `DOS Devices` (`NtCreateDirectoryObject` ×5, dont le
+premier rend `STATUS_OBJECT_NAME_EXISTS` sur un répertoire qui existe déjà ; `NtCreateSymbolicLinkObject` ×5),
+ouvre `\??`, puis s'arrête :
+
+| Service | Arguments | Ce qu'en fait `smss` | Composant |
+|---|---|---|---|
+| `NtOpenProcessToken` | processus courant | `RtlAdjustPrivilege` : « Retrieving token handle failed » ; toléré | Se |
+| `NtOpenFile` | `C:\WINDOWS\system32`, un répertoire | « SMSS: Unable to open a handle to the KnownDll directory », puis « Unable to initialize KnownDll configuration » : **`SmpInit` échoue** | **Io** |
+
+Le prochain mur est donc Io : un fichier (un répertoire) ouvert par son nom, à travers `\??\C:`, un volume et un
+système de fichiers.

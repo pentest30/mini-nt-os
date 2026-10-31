@@ -7,12 +7,13 @@ jour à chaque commit qui change l'état.
 ## État
 
 - Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
-  (spike S1 réussi). Étapes 0 et 1 du M4 faites : la sonde `smss`, le registre en lecture ; ensuite, les
-  services de répertoires d'Ob.
+  (spike S1 réussi). Étapes 0 à 2 du M4 faites : la sonde `smss`, le registre en lecture, les répertoires d'Ob ;
+  ensuite, Io (le prochain mur de `smss`).
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30 et #31 (spike S1). PR ouverte : #32 (étapes 0 et 1 du M4 : sonde `smss`, registre en
-  lecture). L'étape 2 (services de répertoires d'Ob) est en cours sur la même branche. Après chaque fusion,
+  lecture). L'étape 2 (services de répertoires d'Ob) est faite sur la même branche, après la PR (elle la rejoint
+  tant que la PR est ouverte). Après chaque fusion,
   repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main`
   si la branche a des commits non fusionnés : jamais de réécriture).
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
@@ -92,14 +93,27 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    reste à faire (ADR-012), à partir des `.inf` de ReactOS, absents de l'arborescence extraite (à chercher dans
    l'ISO). Test : `registry_self_test` (une ruche construite et montée en `\REGISTRY\MACHINE\MinoTest`).
    Résultat : `smss` lit `Session Manager`, puis s'arrête à `\??` (`NtOpenDirectoryObject`).
-2. [ ] **Services de répertoires d'Ob** (prochaine) : `NtOpenDirectoryObject`, `NtCreateDirectoryObject`, puis ce
-   que la sonde révèle (vraisemblablement `NtCreateSymbolicLinkObject` pour `DOS Devices`, `NtQuerySymbolicLinkObject`).
+2. [x] **Services de répertoires d'Ob** : `NtCreateDirectoryObject`, `NtOpenDirectoryObject`,
+   `NtCreateSymbolicLinkObject`, `NtOpenSymbolicLinkObject` (`sys::object` : `open_by_name`, `create_named` ;
+   un lien ouvert comme lien n'est pas suivi). Test : `object_directory_self_test`. Résultat : `smss` crée ses
+   répertoires et ses liens de `DOS Devices`, puis s'arrête à `NtOpenFile` sur `C:\WINDOWS\system32` (KnownDlls) :
+   **Io est le prochain mur**.
 3. [ ] **Ex et Ps** que `smss` demande : `NtCreateEvent`, `NtCreateThread` et `NtWriteVirtualMemory`,
    `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer `smss`).
 4. [ ] **Écriture dans le registre** (`NtDeleteValueKey`, `NtSetValueKey`, `NtCreateKey`), en mémoire d'abord, et
    `tools/mkhive`.
-5. [ ] **Io** (objets fichier, IRP synchrones, `NtCreateFile`/`NtOpenFile`/`NtReadFile`) sur le pilote FAT du disque
-   de démarrage, puis virtio-blk, partitions, FAT32 en écriture ; persistance du registre.
+5. [ ] **Io** (prochaine, c'est le mur de `smss`) : `NtOpenFile` sur un répertoire (`C:\WINDOWS\system32`, à travers
+   `\??\C:` → un volume), puis `NtCreateSection` sur les DLL de `KnownDLLs` et `NtQueryAttributesFile`. Le code
+   existant : `kernel/io` (`io_manager`, `FILE_TYPE`, un pilote FAT en lecture sur le disque RAM de démarrage,
+   `open_fat_file`, `read_fat_file_bulk`). Plan proposé : un objet `\Device\...` pour le volume du disque de démarrage
+   avec une procédure *parse* qui ouvre un fichier ou un répertoire FAT et rend un objet `File` ; le lien `\??\C:`
+   vers lui ; `NtOpenFile` (et `NtCreateFile` en ouverture seule), `NtQueryAttributesFile`, `NtClose` ; IRP
+   synchrones ensuite. Mettre sur le disque de démarrage une arborescence `WINDOWS\system32` avec les DLL de
+   `KnownDLLs` (toutes ont des noms 8.3 : `KERNEL32.DLL`, `ADVAPI32.DLL`…). Constats : le lecteur FAT
+   (`kernel/io/src/fat.rs`, `FatVolume::open`, `list_dir`) suit déjà les sous-répertoires (chemins séparés par `/`),
+   sans noms longs ; `tools/mkfat` n'écrit que des noms 8.3 à la racine : il faut lui apprendre les
+   sous-répertoires. `kernel/io` mêle encore du code de l'ancienne architecture (`open_game_file`, source « demo ») :
+   ne pas l'étendre, bâtir à côté.
 6. [ ] **LPC**, seulement si `smss` ne peut aller plus loin sans.
    Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
    mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
