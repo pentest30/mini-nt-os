@@ -32,6 +32,7 @@ pub mod process_parameters;
 pub mod service;
 pub mod services;
 pub mod shared_data;
+pub mod system_information;
 pub mod teb32;
 
 pub use loader_block::*;
