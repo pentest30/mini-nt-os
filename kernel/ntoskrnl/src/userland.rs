@@ -162,6 +162,39 @@ pub fn run_smss_probe() {
     };
     run_native("m4", "SMSS.EXE", image, &params, None);
     log_known_dlls();
+    log_environment();
+}
+
+/// Journalise les variables que `smss` a écrites dans
+/// `Session Manager\Environment` : celles qu'il tire du processeur.
+fn log_environment() {
+    const ENVIRONMENT: &str = "\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+    const WRITTEN: [&str; 6] = [
+        "OS",
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_LEVEL",
+        "PROCESSOR_IDENTIFIER",
+        "PROCESSOR_REVISION",
+        "NUMBER_OF_PROCESSORS",
+    ];
+    let Some(key) = ob::namespace()
+        .open(ENVIRONMENT, None, Some(&cm::KEY_TYPE), 0)
+        .ok()
+        .and_then(|object| ob::downcast::<cm::Key>(&object))
+    else {
+        return log::warn!("[m4] no Session Manager\\Environment key");
+    };
+    let found: alloc::vec::Vec<alloc::string::String> = WRITTEN
+        .iter()
+        .filter_map(|name| {
+            let units: alloc::vec::Vec<u16> = name.encode_utf16().collect();
+            let value = key.value(&units).ok().flatten()?;
+            let text: alloc::vec::Vec<u16> =
+                value.data.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&u| u != 0).collect();
+            Some(alloc::format!("{name}={}", alloc::string::String::from_utf16_lossy(&text)))
+        })
+        .collect();
+    log::info!("[m4] Environment: {} of {} variables written: {}", found.len(), WRITTEN.len(), found.join(", "));
 }
 
 /// Journalise ce que `smss` a mis dans `\KnownDlls` : les sections d'image
