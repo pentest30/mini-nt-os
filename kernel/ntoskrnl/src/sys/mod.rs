@@ -26,13 +26,16 @@ pub mod gates;
 mod memory;
 mod object;
 mod process;
+mod system;
 mod wait;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use abi::ntstatus::{NtStatus, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMENTED};
+use abi::ntstatus::{
+    NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
+};
 use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
 use abi::service::{lookup, Table};
 use abi::services::{self, NTOSKRNL, WIN32K};
@@ -69,6 +72,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
     (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
@@ -241,6 +245,57 @@ pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completi
         note_first(bit, completion);
     }
     completion
+}
+
+/// Les classes d'information d'un service demandées sans être
+/// implémentées : chacune est journalisée à son premier appel.
+pub(super) struct ClassReport {
+    service: &'static str,
+    /// Un bit par classe ; la dernière vaut pour toutes celles au-delà.
+    seen: [AtomicU32; 4],
+}
+
+impl ClassReport {
+    pub(super) const fn new(service: &'static str) -> Self {
+        Self { service, seen: [const { AtomicU32::new(0) }; 4] }
+    }
+
+    /// La classe `class` n'est pas implémentée : journalisée la première
+    /// fois ; rend `STATUS_NOT_IMPLEMENTED`.
+    pub(super) fn report(&self, class: u32) -> NtStatus {
+        let bit = class.min(127) as usize;
+        let mask = 1 << (bit % 32);
+        if self.seen[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
+            log::warn!("sys: {} class {class:#x} is not implemented", self.service);
+        }
+        STATUS_NOT_IMPLEMENTED
+    }
+}
+
+/// Rend l'information `information`, d'une taille fixe, dans le tampon
+/// utilisateur de `length` octets en `buffer`, et sa taille en
+/// `return_length` s'il n'est pas nul. `STATUS_INFO_LENGTH_MISMATCH` si
+/// `length` n'est pas sa taille, la taille étant rendue quand même ;
+/// `STATUS_DATATYPE_MISALIGNMENT` pour un tampon qui n'est pas aligné sur 4
+/// octets ; `STATUS_ACCESS_VIOLATION` si l'écriture faute.
+fn return_information(information: &[u8], buffer: u32, length: u32, return_length: u32) -> NtStatus {
+    let size = information.len() as u32;
+    let status = if length != size {
+        STATUS_INFO_LENGTH_MISMATCH
+    } else {
+        match ke::usermem::probe_for_write(u64::from(buffer), information.len(), 4)
+            .and_then(|()| ke::usermem::copy_to_user(u64::from(buffer), information))
+        {
+            Ok(()) => STATUS_SUCCESS,
+            Err(status) => return status,
+        }
+    };
+    if return_length != 0 {
+        if let Err(fault) = ke::usermem::UserPtr::<u32>::new(return_length).write(&size) {
+            return fault;
+        }
+    }
+    status
 }
 
 /// Le processus du thread courant, un thread de Ps.

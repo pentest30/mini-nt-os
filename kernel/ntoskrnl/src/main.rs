@@ -319,6 +319,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_manager_self_test();
     process_self_test();
     system_service_self_test();
+    loader_services_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -1824,6 +1825,123 @@ fn system_service_self_test() {
         sys::IMPLEMENTED.len(),
         NTOSKRNL.len()
     );
+}
+
+/// The services ntdll's loader calls (spike S1, `sys`): from a Ps process,
+/// NtQuerySystemInformation(SystemBasicInformation) with its exact size,
+/// then with a size one byte short and one too large
+/// (`STATUS_INFO_LENGTH_MISMATCH`, the size still returned), an unmapped and
+/// a misaligned buffer, and a class without a handler.
+fn loader_services_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_DATATYPE_MISALIGNMENT, STATUS_INFO_LENGTH_MISMATCH,
+        STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use abi::system_information::SYSTEM_BASIC_INFORMATION;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    // SYSTEM_BASIC_INFORMATION, and the length returned with it.
+    const BASIC: u32 = DATA;
+    const BASIC_LENGTH: u32 = DATA + 0x30;
+    // Statuses, and the length returned on a mismatch.
+    const QUERIED: u32 = DATA + 0x40;
+    const SHORT: u32 = DATA + 0x44;
+    const SHORT_LENGTH: u32 = DATA + 0x48;
+    const UNMAPPED: u32 = DATA + 0x4C;
+    const MISALIGNED: u32 = DATA + 0x50;
+    const UNKNOWN_CLASS: u32 = DATA + 0x54;
+    const LONG: u32 = DATA + 0x58;
+    const DONE: u32 = DATA + 0x5C;
+    // SystemProcessInformation: not implemented.
+    const PROCESS_INFORMATION: u32 = 5;
+    const SCRATCH: u32 = DATA + 0x100;
+
+    let query = services::NtQuerySystemInformation;
+    let mut code = Code::new();
+    code.call(query, &[SYSTEM_BASIC_INFORMATION, BASIC, 0x2C, BASIC_LENGTH])
+        .store_eax(QUERIED)
+        .call(query, &[SYSTEM_BASIC_INFORMATION, SCRATCH, 0x2B, SHORT_LENGTH])
+        .store_eax(SHORT)
+        .call(query, &[SYSTEM_BASIC_INFORMATION, SCRATCH, 0x30, 0])
+        .store_eax(LONG)
+        .call(query, &[SYSTEM_BASIC_INFORMATION, 0x10, 0x2C, 0])
+        .store_eax(UNMAPPED)
+        .call(query, &[SYSTEM_BASIC_INFORMATION, SCRATCH + 2, 0x2C, 0])
+        .store_eax(MISALIGNED)
+        .call(query, &[PROCESS_INFORMATION, SCRATCH, 0x100, 0])
+        .store_eax(UNKNOWN_CLASS)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .bytes(&[0xEB, 0xFE]); // jmp $
+    let mut text = [0xCC; 0x100];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &[], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "loader.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let status = |addr: u32| NtStatus(read(addr));
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    assert_eq!((status(QUERIED), read(BASIC_LENGTH)), (STATUS_SUCCESS, 0x2C), "SystemBasicInformation");
+    let basic: [u32; 11] = core::array::from_fn(|i| read(BASIC + 4 * i as u32));
+    assert_eq!(basic[1], hal::timer::MAXIMUM_INCREMENT, "TimerResolution");
+    assert_eq!((basic[2], basic[6]), (0x1000, 0x1_0000), "PageSize, AllocationGranularity");
+    let pages = mm::pfn::stats();
+    assert!(basic[3] > 0 && u64::from(basic[3]) <= pages.tracked, "NumberOfPhysicalPages {}", basic[3]);
+    assert_eq!((basic[4], u64::from(basic[5])), (1, pages.tracked - 1), "lowest and highest physical pages");
+    assert_eq!((basic[7], basic[8]), (0x1_0000, 0x7FFE_FFFF), "the user-mode address range");
+    assert_eq!((basic[9], basic[10] & 0xFF), (1, 1), "one processor");
+    assert_eq!(
+        (status(SHORT), read(SHORT_LENGTH), read(SCRATCH)),
+        (STATUS_INFO_LENGTH_MISMATCH, 0x2C, 0),
+        "a short buffer gets nothing but the size"
+    );
+    assert_eq!((status(LONG), read(SCRATCH)), (STATUS_INFO_LENGTH_MISMATCH, 0), "the size must be exact");
+    assert_eq!(status(UNMAPPED), STATUS_ACCESS_VIOLATION, "an unmapped buffer");
+    assert_eq!(status(MISALIGNED), STATUS_DATATYPE_MISALIGNMENT, "a misaligned buffer");
+    assert_eq!(status(UNKNOWN_CLASS), STATUS_NOT_IMPLEMENTED, "SystemProcessInformation");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    log::info!("[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation)");
 }
 
 /// The user-mode gates (`sys::gates`, `hal::trap`, M3): from a Ps process,
