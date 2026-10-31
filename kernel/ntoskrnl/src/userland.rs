@@ -161,6 +161,28 @@ pub fn run_smss_probe() {
         environment: &["Path=C:\\WINDOWS\\system32", "SystemRoot=C:\\WINDOWS"],
     };
     run_native("m4", "SMSS.EXE", image, &params, None);
+    log_known_dlls();
+}
+
+/// Journalise ce que `smss` a mis dans `\KnownDlls` : les sections d'image
+/// des KnownDLLs (permanentes), et le lien `KnownDllPath`.
+fn log_known_dlls() {
+    let Ok(directory) = ob::namespace().open("\\KnownDlls", None, Some(&ob::DIRECTORY_TYPE), 0) else {
+        return log::warn!("[m4] no \\KnownDlls directory");
+    };
+    let entries = ob::downcast::<ob::Directory>(&directory).expect("a directory").entries();
+    let sections: alloc::vec::Vec<&str> =
+        entries.iter().filter(|(_, ty)| *ty == mm::section::SECTION_TYPE.name).map(|(name, _)| name.as_str()).collect();
+    let path = ob::namespace()
+        .open("\\KnownDlls\\KnownDllPath", None, Some(&ob::SYMBOLIC_LINK_TYPE), abi::object::OBJ_OPENLINK)
+        .ok()
+        .and_then(|link| ob::downcast::<ob::SymbolicLink>(&link));
+    log::info!(
+        "[m4] \\KnownDlls: {} sections ({}), KnownDllPath -> {}",
+        sections.len(),
+        sections.join(", "),
+        path.as_ref().map_or("none", |link| link.target())
+    );
 }
 
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres

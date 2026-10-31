@@ -10,12 +10,20 @@ timeout  = 180
 
 expect = [m4] SMSS.EXE under the system DLL: exit status
 # Where it stops today: it reads Session Manager from the SYSTEM hive (Cm),
-# creates its object directories and DOS device links (Ob), then cannot open
-# its KnownDlls directory on disk (no Io yet). Update with each step of M4.
+# creates its object directories and DOS device links (Ob), opens its
+# KnownDlls directory on C: through Io, checks each KnownDLL in a view of a
+# data section and makes its image section in \KnownDlls (Mm), then cannot
+# query the processor (SystemProcessorInformation) for its environment
+# variables. Update with each step of M4.
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
+expect = [boot] Io: boot volume \Device\Ramdisk0
 expect = [m4]   NtEnumerateValueKey (0x004d)
 expect = [m4]   NtCreateSymbolicLinkObject (0x0036)
-expect = SMSS: Unable to open a handle to the KnownDll directory
+expect = [m4]   NtOpenFile (0x007a)
+expect = [m4]   NtMapViewOfSection (0x0071): 21 calls
+expect = SMSS: Unable to query system processor information
+expect = [m4] \KnownDlls: 21 sections
+expect = KnownDllPath -> C:\WINDOWS\system32
 expect = kernel: phase 1 done
 
 # A fatal error ends the run at once.
@@ -23,3 +31,7 @@ forbid = *** STOP:
 forbid = [m4] SMSS.EXE: the process did not start
 forbid = [m4] SMSS.EXE: no image section
 forbid = [boot] SYSTEM hive refused
+forbid = [boot] Io: the boot volume refused
+forbid = SMSS: Unable to open a handle to the KnownDll directory
+forbid = SMSS: CreateSection for KnownDll
+forbid = NtCreateSection() failed
