@@ -7,10 +7,10 @@
 //! Un seul CPU pour l'instant : celui du démarrage (BSP), dont le KPCR est
 //! statique.
 //!
-//! Pas encore SWAPGS : le noyau ne change jamais GS, et le code utilisateur XP
-//! ne s'en sert pas (son TEB est en FS). Un programme qui chargerait GS
-//! fausserait la base jusqu'à la refonte des entrées depuis le mode
-//! utilisateur (`KTRAP_FRAME`, M3), qui passeront par SWAPGS.
+//! En mode utilisateur, la base de GS est celle de l'utilisateur, et
+//! IA32_KERNEL_GS_BASE tient celle du KPCR : chaque entrée depuis le mode
+//! utilisateur et chaque retour les échangent (SWAPGS, `trap`). Un programme
+//! peut charger GS sans fausser le KPCR.
 
 use core::ffi::c_void;
 use core::ptr;
@@ -86,7 +86,7 @@ impl Kpcr {
 }
 
 /// Fait pointer GS sur le KPCR du processeur de démarrage. IA32_KERNEL_GS_BASE
-/// reçoit la même adresse, pour qu'un SWAPGS ne la perde pas.
+/// tient la base de GS du mode utilisateur, nulle jusqu'au premier SWAPGS.
 ///
 /// # Safety
 /// Une fois, au début de `hal::init` (après le port série, qui n'utilise pas
@@ -100,7 +100,7 @@ pub unsafe fn init_bsp() {
     // canonique du noyau, valide pour toujours.
     unsafe {
         crate::msr::wrmsr(crate::msr::IA32_GS_BASE, base);
-        crate::msr::wrmsr(crate::msr::IA32_KERNEL_GS_BASE, base);
+        crate::msr::wrmsr(crate::msr::IA32_KERNEL_GS_BASE, 0);
     }
     assert!(ptr::eq(current(), &BSP_PCR), "GS does not reach the boot processor's KPCR");
 }

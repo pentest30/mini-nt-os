@@ -23,9 +23,14 @@
 //! the return hook ([`set_user_return_hook`]), where the kernel delivers the
 //! thread's user APCs.
 //!
-//! GS is saved but not reloaded on the way out: in the kernel, its base is
-//! the KPCR, which loading a selector would lose (no SWAPGS before M3's
-//! entry rework).
+//! GS (02 §6.3): in the kernel, its base is the KPCR (`pcr`); in user mode,
+//! the user's, while IA32_KERNEL_GS_BASE holds the KPCR's. Every entry from
+//! user mode (RPL 3 in the saved CS) swaps them (SWAPGS), and so does every
+//! way back: [`hal_trap_dispatch`]'s frames, the stubs of the interrupts and
+//! exceptions that `idt` handles ([`entry_stub`]), and the first entry of a
+//! thread (`ring3`). On the way back, the user's GS selector is loaded again
+//! after the swap: the base belongs to the processor, not to the thread, and
+//! another thread may have run since the entry.
 
 use core::mem::size_of;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -199,6 +204,63 @@ pub(crate) fn exception_stub(vector: u8, handler: u64) -> u64 {
     stubs[index]
 }
 
+/// The handlers of `idt` that user mode reaches without a trap frame, in
+/// the order of their stubs: the interrupts, which come back, then the
+/// exceptions that stop the system or end the thread, without, then with,
+/// an error code.
+#[cfg(target_os = "none")]
+#[derive(Clone, Copy)]
+pub(crate) enum Entry {
+    Clock,
+    Keyboard,
+    Spurious,
+    DeviceNotAvailable,
+    X87FloatingPoint,
+    SimdFloatingPoint,
+    SegmentNotPresent,
+    StackSegment,
+    DoubleFault,
+}
+
+/// The `idt` handler of each [`Entry`], where its stub goes.
+#[cfg(target_os = "none")]
+#[unsafe(no_mangle)]
+static HAL_ENTRY_HANDLERS: [core::sync::atomic::AtomicU64; 9] = [const { core::sync::atomic::AtomicU64::new(0) }; 9];
+
+/// Records `handler`, the `idt` handler of `entry`; returns the stub for its
+/// IDT entry. From kernel mode, the stub jumps to the handler, the stack as
+/// the CPU left it. From user mode, it swaps GS first; for an interrupt, it
+/// also keeps the user's GS selector and gives the handler a kernel-mode
+/// frame, whose IRETQ comes back to the stub: it swaps GS again, loads the
+/// selector and returns with the CPU's frame.
+#[cfg(target_os = "none")]
+pub(crate) fn entry_stub(entry: Entry, handler: u64) -> u64 {
+    unsafe extern "C" {
+        fn hal_entry_0();
+        fn hal_entry_1();
+        fn hal_entry_2();
+        fn hal_entry_3();
+        fn hal_entry_4();
+        fn hal_entry_5();
+        fn hal_entry_6();
+        fn hal_entry_7();
+        fn hal_entry_8();
+    }
+    let stubs = [
+        hal_entry_0 as *const () as u64,
+        hal_entry_1 as *const () as u64,
+        hal_entry_2 as *const () as u64,
+        hal_entry_3 as *const () as u64,
+        hal_entry_4 as *const () as u64,
+        hal_entry_5 as *const () as u64,
+        hal_entry_6 as *const () as u64,
+        hal_entry_7 as *const () as u64,
+        hal_entry_8 as *const () as u64,
+    ];
+    HAL_ENTRY_HANDLERS[entry as usize].store(handler, Ordering::Release);
+    stubs[entry as usize]
+}
+
 /// The entry stub of each gate, `FIRST_GATE` first.
 #[cfg(target_os = "none")]
 pub(crate) fn gates() -> [(u8, u64); (LAST_GATE - FIRST_GATE + 1) as usize] {
@@ -219,9 +281,10 @@ pub(crate) fn gates() -> [(u8, u64); (LAST_GATE - FIRST_GATE + 1) as usize] {
 }
 
 // Each stub pushes the error code and its vector, then joins the common
-// part, which pushes the rest of the frame (see `KTrapFrame`), switches DS
-// and ES to the kernel's data segment (kernel code selector + 8), calls the
-// hook, and returns to user mode from the frame.
+// part, which swaps GS (from user mode), pushes the rest of the frame (see
+// `KTrapFrame`), switches DS and ES to the kernel's data segment (kernel
+// code selector + 8), calls the hook, and returns to user mode from the
+// frame, GS swapped back and its selector loaded.
 #[cfg(target_os = "none")]
 core::arch::global_asm!(
     ".macro HAL_TRAP_GATE vector",
@@ -276,8 +339,12 @@ core::arch::global_asm!(
     "   push 0",
     "   push 0x100",
     "   jmp hal_trap_common",
+    // The CPU's frame is under the vector and the error code: CS at +24.
     "hal_trap_common:",
-    "   cld",
+    "   test byte ptr [rsp + 24], 3",
+    "   jz 1f",
+    "   swapgs",
+    "1: cld",
     "   push rax",
     "   push rbx",
     "   push rcx",
@@ -307,9 +374,15 @@ core::arch::global_asm!(
     "   mov es, eax",
     "   mov rdi, rsp",
     "   call hal_trap_dispatch",
-    // GS keeps the KPCR's base.
-    "   add rsp, 8",
+    // Back to user mode (CS at +176): the user's GS base, from its selector.
+    "   test byte ptr [rsp + 176], 3",
+    "   jz 2f",
     "   pop rax",
+    "   swapgs",
+    "   mov gs, eax",
+    "   jmp 3f",
+    "2: add rsp, 8",
+    "3: pop rax",
     "   mov fs, eax",
     "   pop rax",
     "   mov es, eax",
@@ -333,6 +406,56 @@ core::arch::global_asm!(
     // The vector and the error code.
     "   add rsp, 16",
     "   iretq",
+    // An interrupt that comes back (`entry_stub`). From user mode, the
+    // user's GS selector goes in a slot over the CPU's frame, then a
+    // kernel-mode frame (SS null, RSP on the slot, RFLAGS, CS, RIP after the
+    // call) goes to the handler.
+    ".macro HAL_INTERRUPT index",
+    ".global hal_entry_\\index",
+    "hal_entry_\\index:",
+    "   test byte ptr [rsp + 8], 3",
+    "   jz 3f",
+    "   swapgs",
+    "   push rax",
+    "   mov eax, gs",
+    "   xchg rax, [rsp]",
+    "   push 0",
+    "   push rsp",
+    "   add qword ptr [rsp], 8",
+    "   pushfq",
+    "   push rax",
+    "   mov eax, cs",
+    "   xchg rax, [rsp]",
+    "   call 3f",
+    "   xchg rax, [rsp]",
+    "   swapgs",
+    "   mov gs, eax",
+    "   pop rax",
+    "   iretq",
+    "3: jmp qword ptr [rip + HAL_ENTRY_HANDLERS + 8 * \\index]",
+    ".endm",
+    // An exception whose handler does not come back.
+    ".macro HAL_FATAL index, error",
+    ".global hal_entry_\\index",
+    "hal_entry_\\index:",
+    "   .if \\error",
+    "   test byte ptr [rsp + 16], 3",
+    "   .else",
+    "   test byte ptr [rsp + 8], 3",
+    "   .endif",
+    "   jz 1f",
+    "   swapgs",
+    "1: jmp qword ptr [rip + HAL_ENTRY_HANDLERS + 8 * \\index]",
+    ".endm",
+    "HAL_INTERRUPT 0",
+    "HAL_INTERRUPT 1",
+    "HAL_INTERRUPT 2",
+    "HAL_FATAL 3, 0",
+    "HAL_FATAL 4, 0",
+    "HAL_FATAL 5, 0",
+    "HAL_FATAL 6, 1",
+    "HAL_FATAL 7, 1",
+    "HAL_FATAL 8, 1",
 );
 
 #[cfg(test)]
