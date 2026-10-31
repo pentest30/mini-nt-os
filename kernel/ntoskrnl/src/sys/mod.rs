@@ -122,17 +122,23 @@ pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completi
         Table::Ntoskrnl => HANDLERS[index],
         Table::Win32k => None,
     };
-    let arguments = &words[..count];
+    let words = &words[..count];
     match handler {
-        Some(Handler::Status(handler)) => Completion::Status(handler(arguments)),
-        Some(Handler::Frame(handler)) => {
-            handler(arguments, frame).map_or_else(Completion::Status, |()| Completion::Frame)
-        }
+        Some(Handler::Status(handler)) => Completion::Status(handler(words)),
+        Some(Handler::Frame(handler)) => handler(words, frame).map_or_else(Completion::Status, |()| Completion::Frame),
         None => {
             let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
             let mask = 1 << (bit % 32);
             if REPORTED[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
-                log::warn!("sys: {} ({number:#06x}) is not implemented", service.name);
+                // In both ABIs, the return address into the caller of the
+                // `Zw` stub sits just under the arguments.
+                let caller = arguments.checked_sub(4).and_then(|at| ke::usermem::UserPtr::<u32>::new(at).read().ok());
+                log::warn!(
+                    "sys: {} ({number:#06x}) is not implemented; called from {:#x?} with {:x?}",
+                    service.name,
+                    caller.unwrap_or(0),
+                    words
+                );
             }
             Completion::Status(STATUS_NOT_IMPLEMENTED)
         }

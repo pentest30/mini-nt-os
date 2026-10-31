@@ -13,8 +13,8 @@
 //!
 //! Sans répartiteur, en seconde chance, ou si la pile ne reçoit pas le
 //! contexte, le processus se termine avec le code de l'exception : il n'y a
-//! ni débogueur ni port d'exception. Un thread de l'ancien chargeur, sans
-//! ntdll, se termine.
+//! ni débogueur ni port d'exception, et le journal le dit. Un thread de
+//! l'ancien chargeur, sans ntdll, se termine.
 //!
 //! Pas encore : `STATUS_INTEGER_OVERFLOW` pour un quotient trop grand (#DE),
 //! les exceptions flottantes (`hal::idt` termine encore le processus).
@@ -61,9 +61,24 @@ pub(super) fn raise(frame: &mut KTrapFrame, code: NtStatus, parameters: &[u32]) 
         ke::exception::dispatch_user_exception(&record, frame, true)
     };
     if let Err(status) = dispatched {
-        ps::terminate_current_process(status);
+        unhandled(&record, status);
     }
     x86_64::instructions::interrupts::disable();
+}
+
+/// Le processus ne reçoit pas l'exception `record` : il se termine avec
+/// `status`. Sans débogueur ni port d'exception pour le dire, le journal le
+/// dit.
+fn unhandled(record: &ExceptionRecord32, status: NtStatus) {
+    let pid = ps::ethread::current_thread().map_or(0, |thread| thread.pid());
+    let count = (record.number_parameters as usize).min(EXCEPTION_MAXIMUM_PARAMETERS);
+    let parameters = &record.exception_information[..count];
+    log::warn!(
+        "sys: process {pid} ends with {status}: exception {} at {:#x}, parameters {parameters:x?}",
+        NtStatus(record.exception_code),
+        record.exception_address
+    );
+    ps::terminate_current_process(status);
 }
 
 /// #DE.
@@ -155,7 +170,7 @@ pub(super) fn nt_raise_exception(arguments: &[u32], frame: &mut KTrapFrame) -> R
     let first_chance = arguments[2] as u8 != 0;
     apply_user_context(&context, context.context_flags, frame, UserSelectors::current());
     if let Err(code) = ke::exception::dispatch_user_exception(&record, frame, first_chance) {
-        ps::terminate_current_process(code);
+        unhandled(&record, code);
     }
     Ok(())
 }
