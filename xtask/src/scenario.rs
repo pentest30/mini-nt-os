@@ -27,7 +27,7 @@
 //!   - `userland`: the ramdisk gets the fetched ReactOS userland (`NTDLL.DLL`
 //!     and the NLS tables);
 //!   - `native`: the ramdisk gets the native test programs of
-//!     `tests/native/`, compiled with MinGW (`xtask/src/native.rs`).
+//!     `tests/native/`, compiled with MinGW or clang (`xtask/src/native.rs`).
 
 use std::fs;
 use std::path::Path;

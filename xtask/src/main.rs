@@ -242,7 +242,8 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             match native::build(ws)? {
                 Some(files) => extra_files.extend(files),
                 None => {
-                    println!("xtask: SKIP {}: needs MinGW (i686-w64-mingw32-gcc) for tests/native", sc.name);
+                    let tool = native::missing_tool().unwrap_or("a compiler");
+                    println!("xtask: SKIP {}: tests/native needs {tool} (MinGW, clang, lld, llvm)", sc.name);
                     skipped.push(sc.name.clone());
                     continue;
                 }
