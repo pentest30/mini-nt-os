@@ -10,8 +10,8 @@ jour à chaque commit qui change l'état.
   ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)).
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). Les étapes 2 à 5 sont poussées sur la branche
-  (après une fusion de `origin/main`, sans réécriture), sans PR encore.
+- PR fusionnées : #29 (étape 1 du spike et ces notes), #30 (étapes 2 et 3). PR ouverte : #31 (étapes 4 et 5, la
+  course du TID, le job CI `native`). Après sa fusion, repartir de `origin/main`.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
