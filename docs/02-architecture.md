@@ -264,6 +264,10 @@ Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le no
 - **Trame** : la trame unique `KTRAP_FRAME` (format 64 bits interne, `hal::trap::KTrapFrame`) sauvegarde tous les registres généraux, les segments et la trame `IRET`. Elle sait se convertir en `CONTEXT` x86 (format 32 bits, `abi::context`) pour les exceptions, `NtGetContextThread` et les APC (`ke::context`). Un contexte venu du mode utilisateur est assaini : EFLAGS ne garde que les drapeaux du mode utilisateur, et les sélecteurs sont imposés.
 - **Interruptions** : chaque appel système réactive les interruptions et s'exécute à `PASSIVE_LEVEL`. Il peut donc bloquer, être préempté et subir une faute de page.
 - **Segment `FS`** : à chaque changement de contexte, le noyau met à jour la base du descripteur TEB de la GDT du CPU puis recharge `FS`, comme `KiSwapContext` le faisait sous XP.
+- **Segment `GS` (SWAPGS)** : en mode noyau, la base de `GS` est le KPCR du processeur ; en mode utilisateur, celle de l'utilisateur, et `IA32_KERNEL_GS_BASE` tient le KPCR.
+  - **Échange** : chaque entrée depuis le mode utilisateur (RPL 3 dans le CS sauvegardé) et chaque retour les échangent. Cela vaut pour la trame de trap (portes, exceptions, SYSENTER), les interruptions, les exceptions qui ne reviennent pas (#NM, #MF, #XM, #NP, #SS, #DF) et le premier passage d'un thread en mode utilisateur.
+  - **Retour** : le noyau recharge ensuite le sélecteur `GS` de l'utilisateur, car la base comme le sélecteur appartiennent au processeur, et un autre thread a pu passer entre-temps. Les interruptions gardent ce sélecteur dans un emplacement au-dessus de la trame du CPU, et le handler revient au stub par une trame du mode noyau.
+  - **Limite** : une NMI ou un #DB entre un SWAPGS et l'IRETQ verrait un CS du noyau avec la base de l'utilisateur. Ni l'une ni l'autre n'a encore de handler.
 
 ### 6.4 Accès à la mémoire utilisateur
 

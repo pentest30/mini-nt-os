@@ -119,7 +119,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   désigne `KiFastSystemCall` sur Intel, `KiIntSystemCall` ailleurs (ADR-004). SYSENTER fait pour Ps : la même trame
   de trap que `int 2Eh` (pseudo-vecteur `hal::trap::SYSENTER`, EFLAGS de l'utilisateur gardés), ABI d'XP (arguments
   en EDX + 8, retour par `KiFastSystemCallRet`) ; l'ancien chargeur garde la sienne (EDX + 4, `ret` en `0x7FFE0300`).
-  À venir : SWAPGS, `fetch-userland` (le fichier ntdll.dll, puis son installation au démarrage).
+  SWAPGS fait (`hal::trap`, `hal::pcr`) : base de GS de l'utilisateur en mode utilisateur, KPCR dans
+  `IA32_KERNEL_GS_BASE` ; échange à chaque entrée depuis le mode utilisateur et à chaque retour (trame de trap,
+  interruptions par des stubs `trap::entry_stub`, exceptions sans retour, premier passage d'un thread), sélecteur
+  `GS` de l'utilisateur rechargé au retour. À venir : `fetch-userland` (le fichier ntdll.dll, puis son installation
+  au démarrage).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
