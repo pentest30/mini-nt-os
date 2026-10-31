@@ -2584,7 +2584,8 @@ fn object_directory_self_test() {
 /// handle with a tag bit, as `smss` does), its attributes read without a
 /// handle; then what must fail: a right the handle lacks, a short buffer, a
 /// file opened as a directory, a missing name and path, a directory created
-/// over itself, an unknown class. Every file object goes with the process.
+/// over itself, an unknown class; the device under the root (as ntdll asks
+/// for its current directory). Every file object goes with the process.
 fn file_self_test() {
     use abi::file::*;
     use abi::ntstatus::{
@@ -2614,6 +2615,7 @@ fn file_self_test() {
     const TAGGED: u32 = DATA + 0x1D8; // handle 1 | 1
     const OA: u32 = DATA + 0x1E0; // 5 OBJECT_ATTRIBUTES of 24 bytes
     const US: usize = 0x258; // 5 UNICODE_STRING
+    const DEVICE: u32 = DATA + 0x3F0; // 8 bytes
     const DONE: u32 = DATA + 0x3FC;
     const KERNEL_BIN: &[u8] = b"ABCD";
 
@@ -2630,7 +2632,7 @@ fn file_self_test() {
         data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
         strings += units.len().next_multiple_of(4);
     }
-    assert!(strings <= 0x3FC, "the strings outgrew the data");
+    assert!(strings <= 0x3F0, "the strings outgrew the data");
     for i in 0..names.len() {
         let at = (OA - DATA) as usize + 24 * i;
         data[at..at + 4].copy_from_slice(&24u32.to_le_bytes());
@@ -2718,6 +2720,11 @@ fn file_self_test() {
     .store_eax(status(13))
     .call_args(services::NtClose, &[m(HANDLE + 4)])
     .store_eax(status(14))
+    .call_args(
+        services::NtQueryVolumeInformationFile,
+        &[m(HANDLE), iosb(15), v(DEVICE), v(8), v(FILE_FS_DEVICE_INFORMATION)],
+    )
+    .store_eax(status(15))
     .word(&[0xC7, 0x05], DONE)
     .bytes(&1u32.to_le_bytes())
     .bytes(&[0xEB, 0xFE]);
@@ -2749,7 +2756,7 @@ fn file_self_test() {
         // SAFETY: the boot thread, at PASSIVE_LEVEL.
         unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
     }
-    let statuses: alloc::vec::Vec<NtStatus> = (0..15).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..16).map(|i| NtStatus(read(status(i)))).collect();
     let iosb_at = |i: u32| (read(IOSB + 8 * i), read(IOSB + 8 * i + 4));
     assert_eq!(statuses[0], STATUS_SUCCESS, "NtOpenFile of \\??\\C:\\ as a directory");
     assert_eq!(iosb_at(0), (0, FILE_OPENED));
@@ -2775,6 +2782,8 @@ fn file_self_test() {
     assert_eq!((read64(NETWORK + 40), read(NETWORK + 48)), (size, FILE_ATTRIBUTE_ARCHIVE));
     assert_eq!(statuses[13], STATUS_INVALID_INFO_CLASS);
     assert_eq!(statuses[14], STATUS_SUCCESS, "NtClose of a file handle");
+    assert_eq!(statuses[15], STATUS_SUCCESS, "NtQueryVolumeInformationFile(FileFsDeviceInformation)");
+    assert_eq!((read(DEVICE), read(DEVICE + 4), iosb_at(15)), (FILE_DEVICE_DISK, FILE_DEVICE_IS_MOUNTED, (0, 8)));
     assert_eq!(read(TAGGED), read(HANDLE + 4) | 1, "the tag bit was set");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
@@ -2793,7 +2802,7 @@ fn file_self_test() {
     assert_eq!(io_manager::FILE_TYPE.object_count(), files_before, "every file object went with the process");
     log::info!(
         "[smoke] Io: files from user mode through \\??\\C:: NtOpenFile, NtCreateFile, NtQueryInformationFile, \
-         NtQueryAttributesFile, NtQueryFullAttributesFile"
+         NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryVolumeInformationFile"
     );
 }
 

@@ -88,6 +88,23 @@ pub const FILE_STANDARD_INFORMATION: u32 = 5;
 pub const FILE_POSITION_INFORMATION: u32 = 14;
 pub const FILE_NETWORK_OPEN_INFORMATION: u32 = 34;
 
+/// `FS_INFORMATION_CLASS`, and FileFsMaximumInformation of XP.
+pub const FILE_FS_DEVICE_INFORMATION: u32 = 4;
+pub const FILE_FS_MAXIMUM_INFORMATION: u32 = 10;
+
+/// Device types and characteristics (FILE_FS_DEVICE_INFORMATION).
+pub const FILE_DEVICE_DISK: u32 = 0x0000_0007;
+pub const FILE_REMOVABLE_MEDIA: u32 = 0x0000_0001;
+pub const FILE_DEVICE_IS_MOUNTED: u32 = 0x0000_0020;
+
+/// FILE_FS_DEVICE_INFORMATION.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileFsDeviceInformation {
+    pub device_type: u32,
+    pub characteristics: u32,
+}
+
 /// FILE_BASIC_INFORMATION. Times in 100 ns since 1601, 0 when unknown.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -155,6 +172,13 @@ impl IoStatusBlock32 {
     }
 }
 
+impl FileFsDeviceInformation {
+    /// Its bytes, as they go to the caller.
+    pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
+        Encoder([0; size_of::<Self>()]).u32(0, self.device_type).u32(4, self.characteristics).0
+    }
+}
+
 impl FileBasicInformation {
     /// Its bytes, as they go to the caller, padding zeroed.
     pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
@@ -205,6 +229,7 @@ impl FileNetworkOpenInformation {
 
 const _: () = {
     assert!(size_of::<IoStatusBlock32>() == 8);
+    assert!(size_of::<FileFsDeviceInformation>() == 8);
     assert!(size_of::<FileBasicInformation>() == 40);
     assert!(offset_of!(FileBasicInformation, file_attributes) == 32);
     assert!(size_of::<FileStandardInformation>() == 24);

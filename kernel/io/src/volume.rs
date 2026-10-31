@@ -16,7 +16,9 @@
 
 use alloc::boxed::Box;
 
-use abi::file::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL};
+use abi::file::{
+    FileFsDeviceInformation, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_DEVICE_DISK, FILE_DEVICE_IS_MOUNTED,
+};
 use abi::ntstatus::{
     NtStatus, STATUS_DISK_CORRUPT_ERROR, STATUS_FILE_CORRUPT_ERROR, STATUS_IO_DEVICE_ERROR, STATUS_OBJECT_NAME_INVALID,
     STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
@@ -87,6 +89,11 @@ impl Volume {
             first_cluster: self.fat.root_cluster(),
             ..Node::default()
         }
+    }
+
+    /// FILE_FS_DEVICE_INFORMATION : le disque qui le porte, fixe, monté.
+    pub fn device_information(&self) -> FileFsDeviceInformation {
+        FileFsDeviceInformation { device_type: FILE_DEVICE_DISK, characteristics: FILE_DEVICE_IS_MOUNTED }
     }
 
     /// La taille d'un cluster, en octets.

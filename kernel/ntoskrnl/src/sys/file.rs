@@ -1,7 +1,8 @@
 //! Les services d'Io sur les fichiers : ouvrir un fichier ou un répertoire
 //! par son nom (NtCreateFile, NtOpenFile), lire ses attributs sans l'ouvrir
 //! (NtQueryAttributesFile, NtQueryFullAttributesFile), décrire un fichier
-//! ouvert (NtQueryInformationFile).
+//! ouvert (NtQueryInformationFile) et son volume
+//! (NtQueryVolumeInformationFile).
 //!
 //! Ob trouve le fichier (la procédure *parse* du volume, `io_manager`), puis
 //! `io_manager::check_open` vérifie la disposition et les options, comme le
@@ -12,10 +13,11 @@
 //! création (le volume est en lecture seule), le partage.
 
 use abi::file::{
-    FileBasicInformation, FileNetworkOpenInformation, FilePositionInformation, FileStandardInformation,
-    IoStatusBlock32, FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE, FILE_MAXIMUM_DISPOSITION,
-    FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES,
-    FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION, FILE_VALID_OPTION_FLAGS,
+    FileBasicInformation, FileFsDeviceInformation, FileNetworkOpenInformation, FilePositionInformation,
+    FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE, FILE_FS_DEVICE_INFORMATION,
+    FILE_FS_MAXIMUM_INFORMATION, FILE_MAXIMUM_DISPOSITION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE,
+    FILE_OPEN, FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
+    FILE_VALID_OPTION_FLAGS,
 };
 use abi::ntstatus::{
     NtStatus, STATUS_EAS_NOT_SUPPORTED, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_INFO_CLASS,
@@ -33,6 +35,7 @@ use super::object::{capture_attributes, give_handle};
 
 /// Les classes demandées sans être implémentées.
 static FILE_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationFile");
+static VOLUME_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryVolumeInformationFile");
 
 /// FileMaximumInformation d'XP : les classes vont de 1 à 40.
 const FILE_MAXIMUM_INFORMATION: u32 = 41;
@@ -170,6 +173,34 @@ fn query_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
         FILE_POSITION_INFORMATION => FilePositionInformation { current_byte_offset: file.position() }.to_bytes().into(),
         _ => file.network_open_information().to_bytes().into(),
     };
+    let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information: information.len() as u32 };
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    write_information(&information, buffer)?;
+    ke::usermem::copy_to_user(u64::from(iosb), &block.to_bytes())
+}
+
+/// NtQueryVolumeInformationFile(FileHandle, IoStatusBlock, FsInformation,
+/// Length, FsInformationClass) : FileFsDeviceInformation, que le
+/// gestionnaire d'E/S rend lui-même, sans droit particulier.
+/// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe.
+pub(super) fn nt_query_volume_information_file(arguments: &[u32]) -> NtStatus {
+    status(query_volume_information_file(arguments))
+}
+
+fn query_volume_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
+    let [handle, iosb, buffer, length, class] = arguments[..5] else { unreachable!("5 arguments") };
+    if class == 0 || class >= FILE_FS_MAXIMUM_INFORMATION {
+        return Err(STATUS_INVALID_INFO_CLASS);
+    }
+    if class != FILE_FS_DEVICE_INFORMATION {
+        return Err(VOLUME_CLASSES.report(class));
+    }
+    if (length as usize) < size_of::<FileFsDeviceInformation>() {
+        return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    let file =
+        super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask::NONE)?;
+    let information = file.device_information().to_bytes();
     let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information: information.len() as u32 };
     ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
     write_information(&information, buffer)?;

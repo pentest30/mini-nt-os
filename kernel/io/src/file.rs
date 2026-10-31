@@ -137,6 +137,11 @@ impl File {
         self.position.store(position, Ordering::Relaxed);
     }
 
+    /// FILE_FS_DEVICE_INFORMATION de son volume.
+    pub fn device_information(&self) -> abi::file::FileFsDeviceInformation {
+        self.volume.device_information()
+    }
+
     /// FILE_BASIC_INFORMATION.
     pub fn basic_information(&self) -> FileBasicInformation {
         let node = &self.node;
