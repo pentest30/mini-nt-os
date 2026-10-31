@@ -1,0 +1,14 @@
+# The ReactOS userland (M3, `cargo xtask fetch-userland`): the ramdisk gets
+# the pinned release's NTDLL.DLL, which the kernel installs as the system DLL
+# at the end of the phase 1 tests (its entry points resolved, KUSER_SHARED_DATA
+# filled). Skipped until the userland is fetched.
+requires = userland
+cpus     = default, intel
+timeout  = 120
+
+expect = [boot] NTDLL.DLL installed as the system DLL: base 0x7c920000
+expect = kernel: phase 1 done
+
+# A fatal error ends the run at once.
+forbid = *** STOP:
+forbid = [boot] NTDLL.DLL refused

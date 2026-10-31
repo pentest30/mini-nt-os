@@ -122,8 +122,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   SWAPGS fait (`hal::trap`, `hal::pcr`) : base de GS de l'utilisateur en mode utilisateur, KPCR dans
   `IA32_KERNEL_GS_BASE` ; échange à chaque entrée depuis le mode utilisateur et à chaque retour (trame de trap,
   interruptions par des stubs `trap::entry_stub`, exceptions sans retour, premier passage d'un thread), sélecteur
-  `GS` de l'utilisateur rechargé au retour. À venir : `fetch-userland` (le fichier ntdll.dll, puis son installation
-  au démarrage).
+  `GS` de l'utilisateur rechargé au retour. `cargo xtask fetch-userland` fait (`xtask/src/userland.rs`) : archive
+  de publication de ReactOS 0.4.16 (SourceForge, SHA-256 publié vérifié), `/reactos` de son ISO extrait dans
+  `third_party/reactos/0.4.16/` (ignoré par Git) par du code std seul (SHA-256, inflate, ZIP, ISO 9660) ; les
+  scénarios `requires = userland` reçoivent `NTDLL.DLL`, que le noyau installe comme DLL système à la fin des tests de
+  la phase 1 (`ntoskrnl::userland`). À venir : spike S1 (programme natif lié à ntdll, test SEH).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
@@ -139,6 +142,7 @@ cargo xtask test --boot --scenario smoke --cpu intel # un scénario, un CPU
 cargo xtask run [--cpu intel] [--gdb] [--headless]   # démarre dans QEMU, port série sur stdio
 cargo xtask build [--features trace-syscalls]        # mino-loader et ntoskrnl
 cargo xtask syscall-gen                              # régénère abi/src/services.rs (listes de ReactOS épinglé)
+cargo xtask fetch-userland [--archive FICHIER]       # ReactOS épinglé : archive vérifiée, arborescence dans third_party/
 cargo xtask help
 ```
 

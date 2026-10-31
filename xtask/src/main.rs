@@ -8,6 +8,7 @@
 //!                   [--add HOST_PATH:FAT_NAME]... [--data-dir DIR]
 //! cargo xtask test  [--host] [--boot] [--scenario NAME]... [--cpu CPU] [--timeout S]
 //! cargo xtask syscall-gen
+//! cargo xtask fetch-userland [--archive FILE] [--force]
 //! ```
 //!
 //! CPU is `default` (QEMU's CPU, AMD vendor: `int 2Eh`), `intel` (SYSENTER,
@@ -19,8 +20,13 @@
 //! (pflash pair), `--qemu FILE`, or the `OVMF_PATH`, `OVMF_CODE`, `OVMF_VARS`
 //! and `QEMU` environment variables.
 
+mod inflate;
+mod iso9660;
 mod qemu;
 mod scenario;
+mod sha256;
+mod userland;
+mod zip;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -49,7 +55,8 @@ commands:
           --memory MB         guest memory (default 256)
           --gdb               wait for gdb on :1234 (QEMU -s -S)
           --headless          no display window
-          --add PATH:NAME     add a host file to the FAT ramdisk (repeatable)
+          --add PATH:NAME     add a host file to the FAT ramdisk (repeatable);
+                              NTDLL.DLL comes with the fetched userland
           --data-dir DIR      expose DIR as a FAT disk on IDE secondary
   test    host tests, then the boot scenarios of tests/boot/
           --host              host tests (alone, unless --boot)
@@ -60,6 +67,11 @@ commands:
   syscall-gen
           regenerate abi/src/services.rs from the pinned ReactOS service
           lists (tools/syscall-gen, ADR-002)
+  fetch-userland
+          download the pinned ReactOS release (curl), check its SHA-256 and
+          unpack its system tree into third_party/reactos/<version>/
+          --archive FILE      use this copy of the release archive
+          --force             unpack again
 
 firmware and emulator (run, test):
   --ovmf FILE | --ovmf-code FILE [--ovmf-vars FILE] | --qemu FILE
@@ -97,6 +109,7 @@ fn dispatch(mut args: Args) -> Result<()> {
             args.finish()?;
             cargo(&ws, &["run", "--quiet", "-p", "syscall-gen"])
         }
+        Some("fetch-userland") => userland::fetch(&ws, args),
         Some("help") | Some("-h") | Some("--help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -145,12 +158,16 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
     let memory_mb = args.value("--memory")?.map(|m| parse_number(&m, "--memory")).transpose()?;
     let gdb = args.flag("--gdb");
     let headless = args.flag("--headless");
-    let extra_files = args.values("--add")?;
+    let mut extra_files = args.values("--add")?;
     let data_dir = args.value("--data-dir")?.map(PathBuf::from);
     let options = qemu::Options::from_args(&mut args)?;
     args.finish()?;
 
     let artifacts = build(ws, features.as_deref())?;
+    match userland_files(ws) {
+        Some(files) => extra_files.extend(files),
+        None => println!("xtask: no ReactOS userland (cargo xtask fetch-userland): the kernel boots without ntdll"),
+    }
     let run_dir = ws.target.join("xtask").join("run");
     let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &extra_files)?;
     let machine = Machine {
@@ -202,8 +219,21 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
 
     let scenarios = scenario::load_all(&ws.root.join("tests").join("boot"), &names)?;
     let mut failures = Vec::new();
+    let mut skipped = Vec::new();
     let mut runs = 0;
     for sc in &scenarios {
+        let extra_files = if sc.requires_userland {
+            match userland_files(ws) {
+                Some(files) => files,
+                None => {
+                    println!("xtask: SKIP {}: needs the ReactOS userland (cargo xtask fetch-userland)", sc.name);
+                    skipped.push(sc.name.clone());
+                    continue;
+                }
+            }
+        } else {
+            Vec::new()
+        };
         let cpus = match &cpu {
             Some(cpu) => vec![cpu.clone()],
             None => sc.cpus.clone(),
@@ -214,7 +244,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             let label = format!("{} ({})", sc.name, cpu.name());
             println!("xtask: boot {label}");
             let run_dir = ws.target.join("xtask").join("boot").join(format!("{}-{}", sc.name, cpu.name()));
-            let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &[])?;
+            let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &extra_files)?;
             let machine = Machine {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
                 esp,
@@ -234,12 +264,23 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             }
         }
     }
+    if !skipped.is_empty() {
+        println!("xtask: {} scenario(s) skipped: {}", skipped.len(), skipped.join(", "));
+    }
     if failures.is_empty() {
         println!("xtask: {runs} boot run(s) passed");
         Ok(())
     } else {
         Err(format!("{} of {runs} boot run(s) failed: {}", failures.len(), failures.join(", ")))
     }
+}
+
+/// The files of the fetched userland for the FAT ramdisk (`HOST:FAT_NAME`):
+/// `NTDLL.DLL`, which the kernel installs as the system DLL; `None` until
+/// `fetch-userland` ran.
+fn userland_files(ws: &Workspace) -> Option<Vec<String>> {
+    let ntdll = userland::ntdll(ws)?;
+    Some(vec![format!("{}:NTDLL.DLL", ntdll.display())])
 }
 
 // ── Building ──────────────────────────────────────────────────────────────────

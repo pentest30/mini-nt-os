@@ -290,7 +290,7 @@ Les portes `2Ah` à `2Eh` empilent toutes la même trame (`hal::trap`), et le no
 - **DLL système** : le noyau résout les points d'entrée de `ntdll` à son installation : les répartiteurs, `LdrInitializeThunk`, `KiFastSystemCall` ou `KiIntSystemCall` selon le processeur, et `KiFastSystemCallRet` (`SystemCall`, `SystemCallReturn`). Une entrée manquante rend `STATUS_PROCEDURE_NOT_FOUND`. Chaque processus créé ensuite projette `ntdll` à sa base.
 - **Démarrage d'un thread** : comme `PspUserThreadStartup`, le noyau met sur la pile du thread son contexte initial, puis l'APC utilisateur `LdrInitializeThunk(NULL, base de ntdll, NULL)`. Le thread entre dans `KiUserApcDispatcher`, qui reprend le contexte par `NtContinue`.
 - **Réserve** : sous chaque `CONTEXT` d'APC, le noyau laisse 8 octets sous l'ESP interrompu. Le `KiUserApcDispatcher` de ReactOS y écrit son enregistrement SEH.
-- **Pas encore** : le fichier `ntdll.dll` lui-même (`cargo xtask fetch-userland`), puis son installation au démarrage.
+- **Au démarrage** : à la fin des tests de la phase 1, le noyau installe comme DLL système le `NTDLL.DLL` du disque RAM de démarrage, si `cargo xtask` l'y a mis (`fetch-userland`). En attendant Io (M4), il ne vient pas encore de `\SystemRoot\System32`.
 
 **Exceptions** (`ke::exception`, `kernel/ntoskrnl/src/sys/exceptions.rs`) :
 
@@ -400,7 +400,7 @@ GPT
 | Commande | Effet |
 |---|---|
 | `cargo xtask build` | Compile `mino-loader` (`x86_64-unknown-uefi`) et `ntoskrnl` (`x86_64-unknown-none`, ELF lié en haut de l'espace) |
-| `cargo xtask fetch-userland` | Télécharge l'ISO ReactOS épinglée, **vérifie son SHA-256**, en extrait les binaires et les `.inf` dans `third_party/reactos/<version>/`. Le dossier est ignoré par Git. |
+| `cargo xtask fetch-userland` | Télécharge l'archive de publication de ReactOS épinglé (`ReactOS-0.4.16-i386.zip`, sur SourceForge, qui publie son SHA-256) avec `curl`, **vérifie son SHA-256**, puis le CRC-32 de l'ISO qu'elle contient. Il extrait ensuite l'arborescence système de l'ISO (`/reactos` : binaires et `.inf`) dans `third_party/reactos/<version>/`, ignoré par Git. `--archive FICHIER` prend une copie déjà téléchargée. Les scénarios marqués `requires = userland` reçoivent `NTDLL.DLL` sur le disque RAM, ou sont sautés sans elle. |
 | `cargo xtask image` | `mkhive` + `mkimage` produisent `target/mino.img` (GPT, ESP, système) |
 | `cargo xtask run [--gdb] [--smp N]` | Lance QEMU (OVMF, q35, sortie série sur stdio) |
 | `cargo xtask test` | Tests hôte, puis tests de démarrage dans QEMU sans affichage (marqueurs série), puis sous-ensemble `rostests` |

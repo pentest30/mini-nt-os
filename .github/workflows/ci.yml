@@ -4,7 +4,8 @@
 # provoked kernel stack overflow that must end on the STOP screen, and the
 # M1 scenarios: event ping-pong between two kernel threads, floating point in
 # four threads, a starved thread raised by the balance set manager, and the
-# symbolized STOP screen of a failed assertion.
+# symbolized STOP screen of a failed assertion; and the ReactOS userland
+# (`cargo xtask fetch-userland`, its archive cached by its pinned SHA-256).
 name: CI
 
 on:
@@ -93,12 +94,26 @@ jobs:
             args: --scenario page-fault-irql
           - name: kernel read of a reserved user page, STOP screen (M2)
             args: --scenario page-fault-access-violation
+          - name: ReactOS userland, NTDLL.DLL installed as the system DLL (M3)
+            args: --scenario userland
+            userland: true
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain (rust-toolchain.toml)
         run: rustup toolchain install && cargo --version
       - name: Install QEMU and OVMF
         run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 ovmf
+      # The pinned ReactOS release archive (xtask/src/userland.rs), by its
+      # SHA-256: downloaded once, then unpacked from the cache.
+      - name: Cache the ReactOS release archive
+        if: matrix.userland
+        uses: actions/cache@v4
+        with:
+          path: third_party/reactos/0.4.16/ReactOS-0.4.16-i386.zip
+          key: reactos-0.4.16-e5851510cf5b79ef51a76b8155dd5ef7faca1155f44d0a1d41c35b77ece4ce2a
+      - name: Fetch the ReactOS userland
+        if: matrix.userland
+        run: cargo xtask fetch-userland
       # Scenarios of tests/boot/; the firmware is found in /usr/share/OVMF.
       - name: Boot and check serial markers
         run: cargo xtask test --boot ${{ matrix.args }}

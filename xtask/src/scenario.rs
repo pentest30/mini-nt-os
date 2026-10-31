@@ -12,6 +12,7 @@
 //! expect   = marker A | marker B
 //! forbid   = marker
 //! forbid-line-start = prefix
+//! requires = userland
 //! ```
 //!
 //! - `features`: ntoskrnl features, comma-separated (default: none).
@@ -21,6 +22,8 @@
 //! - `expect`: must appear in the serial log; with `|`, one of them.
 //! - `forbid`: fails the run as soon as it appears anywhere.
 //! - `forbid-line-start`: fails the run as soon as a line starts with it.
+//! - `requires = userland`: the ramdisk gets the fetched ReactOS userland
+//!   (`NTDLL.DLL`); without it, the scenario is skipped.
 
 use std::fs;
 use std::path::Path;
@@ -34,6 +37,7 @@ pub struct Scenario {
     pub features: Vec<String>,
     pub cpus: Vec<Cpu>,
     pub timeout: Duration,
+    pub requires_userland: bool,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
@@ -55,6 +59,7 @@ impl Scenario {
             features: Vec::new(),
             cpus: vec![Cpu::Default],
             timeout: Duration::from_secs(120),
+            requires_userland: false,
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -80,6 +85,10 @@ impl Scenario {
                 "expect" => sc.expect.push(value.split('|').map(|m| m.trim().to_string()).collect()),
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
+                "requires" => match value {
+                    "userland" => sc.requires_userland = true,
+                    _ => return Err(format!("{}: unknown requirement `{value}`", at())),
+                },
                 _ => return Err(format!("{}: unknown key `{key}`", at())),
             }
             if value.is_empty() && key != "features" {
@@ -156,6 +165,7 @@ expect = ready
 expect = hit | skipped
 forbid = PANIC
 forbid-line-start = [sys]
+requires = userland
 ";
 
     #[test]
@@ -165,6 +175,8 @@ forbid-line-start = [sys]
         assert_eq!(sc.cpus.iter().map(Cpu::name).collect::<Vec<_>>(), ["default", "intel"]);
         assert_eq!(sc.timeout, Duration::from_secs(30));
         assert_eq!(sc.expect, [vec!["ready"], vec!["hit", "skipped"]]);
+        assert!(sc.requires_userland);
+        assert!(!Scenario::parse("x", "expect = a").unwrap().requires_userland);
     }
 
     #[test]
@@ -191,5 +203,6 @@ forbid-line-start = [sys]
         assert!(Scenario::parse("x", "expect = a\nno equals sign").is_err());
         assert!(Scenario::parse("x", "cpus = default").is_err(), "no expect");
         assert!(Scenario::parse("x", "expect =").is_err());
+        assert!(Scenario::parse("x", "expect = a\nrequires = network").is_err());
     }
 }
