@@ -349,6 +349,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // ReactOS's ntdll, if the boot disk has it: the system DLL from now on,
     // and a native program under it (spike S1).
     userland::install_system_dll();
+    userland::install_nls_tables();
     userland::run_native_probe();
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────

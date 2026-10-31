@@ -9,15 +9,19 @@ cpus     = default, intel
 timeout  = 120
 
 expect = [boot] NTDLL.DLL installed as the system DLL: base 0x7c920000
-# ntdll's process initialization reaches its first system service, then,
-# past the process parameters, the creation of the process heap.
+expect = [boot] NLS tables installed: ANSI code page 1252, OEM code page 437
+# ntdll's process initialization reaches its first system service; past the
+# process parameters, the creation of the process heap; with the heap and the
+# NLS tables, the binding of the program's imports.
 expect = [s1]   NtQueryInformationProcess (0x00a1): 1 calls
 expect = [s1]   NtQuerySystemInformation (0x00b5)
+expect = [s1]   NtProtectVirtualMemory (0x008f)
 expect = [s1] native process under the system DLL: exit status
 expect = kernel: phase 1 done
 
 # A fatal error ends the run at once.
 forbid = *** STOP:
 forbid = [boot] NTDLL.DLL refused
+forbid = [boot] NLS tables refused
 forbid = [s1] the native process did not
 forbid = [s1] the native program's image section

@@ -8,6 +8,9 @@ use alloc::sync::Arc;
 
 /// Où le disque RAM de démarrage la tient.
 const NTDLL: &str = "/NTDLL.DLL";
+/// Les tables NLS du disque RAM de démarrage : pages de code ANSI et OEM,
+/// casse Unicode.
+const NLS_FILES: [&str; 3] = ["/C_1252.NLS", "/C_437.NLS", "/L_INTL.NLS"];
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -35,6 +38,30 @@ pub fn install_system_dll() {
             ps::system_dll::install(Some(dll));
         }
         Err(status) => log::error!("[boot] NTDLL.DLL refused as the system DLL: {status}"),
+    }
+}
+
+/// Installe les tables NLS (`ps::nls`), si le disque RAM de démarrage les
+/// tient : les processus créés ensuite les projettent.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn install_nls_tables() {
+    let [Some(ansi), Some(oem), Some(case)] = NLS_FILES.map(read_boot_file) else {
+        log::info!("[boot] no NLS tables on the boot disk (cargo xtask fetch-userland)");
+        return;
+    };
+    match ps::nls::NlsTables::new(&ansi, &oem, &case) {
+        Ok(tables) => {
+            log::info!(
+                "[boot] NLS tables installed: ANSI code page {}, OEM code page {}, case table of {} bytes",
+                tables.ansi_code_page,
+                tables.oem_code_page,
+                case.len()
+            );
+            ps::nls::install(Some(tables));
+        }
+        Err(status) => log::error!("[boot] NLS tables refused: {status}"),
     }
 }
 
