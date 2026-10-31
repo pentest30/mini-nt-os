@@ -75,7 +75,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 
 **Critères de sortie (spike S1)**
 - [x] Un programme natif (sous-système NATIVE) compilé avec MinGW et lié à `ntdll` ReactOS affiche via `DbgPrint` et se termine.
-- [ ] Un test SEH (`__try`/`__except` sur une écriture à l'adresse 0) passe.
+- [x] Un test SEH (`__try`/`__except` sur une écriture à l'adresse 0) passe.
 - [x] Le rapport de couverture des appels système est publié (`docs/compat/syscalls.md`).
 
 ## M4 — E/S, registre, systèmes de fichiers

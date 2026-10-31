@@ -6,11 +6,11 @@ jour à chaque commit qui change l'état.
 
 ## État
 
-- Jalon : **M3, spike S1** ([05](05-feuille-de-route.md#m3--frontière-nt-puis-spike-s1)). Tout le reste du M3 est
-  fait (voir CLAUDE.md).
+- Jalon : **M3 terminé** (spike S1 réussi, ses trois critères cochés) ; prochain : **M4**
+  ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)).
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). Les étapes 2 à 4 sont poussées sur la branche
+- Dernière PR fusionnée : #29 (étape 1 du spike et ces notes). Les étapes 2 à 5 sont poussées sur la branche
   (après une fusion de `origin/main`, sans réécriture), sans PR encore.
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
@@ -56,14 +56,32 @@ rencontrés est publiée.
    `BOOT_PROGRAMS` (`ntoskrnl::userland::run_boot_programs`) avec le PEB en argument
    (`ps::create_thread_with_parameter`). Scénario `native` : le `DbgPrint` du programme et son statut `0x5152`.
    Critère de sortie coché dans 05.
-5. [ ] **Test SEH** (prochaine) : GCC ne connaît pas `__try`/`__except` en i386. clang
-   `--target=i686-pc-windows-msvc -fasync-exceptions` (clang 18 et `lld-link` sont installés ici) les compile, mais
-   appelle `__except_handler3`, que le `ntdll` de ReactOS n'exporte pas : le test fournit le sien (code écrit par
-   nous, d'après la structure documentée de la table des portées). Recommandation : MinGW pour l'étape 4, clang pour
-   l'étape 5.
-6. [ ] Cocher les critères dans 05, passer l'ADR-002 à « Acceptée » si S1 conclut, mettre à jour CLAUDE.md.
+5. [x] **Test SEH** : `tests/native/s1seh.c`, compilé par clang (`i686-pc-windows-msvc`, `-fasync-exceptions`)
+   et lié par `lld-link` avec `tests/native/seh3.c`, notre `_except_handler3` (le `ntdll` de ReactOS ne l'exporte
+   pas) ; bibliothèque d'import par `llvm-dlltool` depuis `ntdll.def`. Écriture en 0, filtre intérieur qui décline,
+   `__finally` exécuté au déroulement (`RtlUnwind`), `__except` extérieur ; statut `0x5153`. Outils : `clang`,
+   `lld`, `llvm` (la CI les installe dans le job `native`). En chemin, course corrigée dans Ps/Ke : le TID Ke d'un
+   thread est publié avant qu'il soit prêt (`UserThreadStart::tid`), test `early_exit_self_test`.
+6. [x] Critères cochés dans 05 : **le M3 est terminé**. L'ADR-002 reste « Proposée » (S1 réussi, S2 et S3 à
+   faire). CLAUDE.md : jalon courant M4.
 
-## Ensuite (hors S1)
+## Prochain jalon : M4 (E/S, registre, systèmes de fichiers)
+
+But (05) : lancer `smss.exe`. Critères : `smss` démarre, lit `Session Manager`, crée les variables d'environnement
+et `\KnownDlls` ; une valeur du registre persiste après un redémarrage ; un fichier créé sur `C:` reste lisible après
+un redémarrage, sans erreur de `fsck.vfat`. Travaux (05) : Io (IRP, piles de périphériques, objets fichier, E/S
+synchrones et asynchrones, ports de complétion) ; pilotes ATA, virtio-blk, partitions, FAT32 en lecture et écriture
+(ADR-017) ; Cm et `libs/regf`, `tools/mkhive` (ADR-012) ; `\??\C:`, `\SystemRoot`, `\KnownDlls`. Méthode
+recommandée : la même que S1 — lancer `smss.exe` de ReactOS sous la sonde (`userland::run_native`, avec ses
+paramètres), lire où il s'arrête, et ajouter ce qu'il demande, composant par composant. Une session par composant
+(CLAUDE.md) ; commencer par décider de l'ordre avec le mainteneur.
+
+Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) :
+`NtQueryInformationProcess(ProcessCookie)`, `NtSetInformationProcess(ProcessExecuteFlags)`,
+`NtFlushInstructionCache`, `NtOpenDirectoryObject`, `NtQueryDefaultLocale` (justes sans Io ni Cm) ; `NtOpenKey`,
+`NtQueryValueKey` (Cm) ; `NtOpenFile`, `NtQueryAttributesFile` (Io) ; `NtCreateKeyedEvent` (Ex).
+
+## Ensuite (hors jalon)
 
 - Router #DB, #BR, #NP, #SS, #AC du mode utilisateur vers KiDispatchException (aujourd'hui seuls #DE, #BP, #UD,
   #GP, #PF et `int 2Ch`).
