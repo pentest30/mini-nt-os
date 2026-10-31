@@ -274,11 +274,16 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // SAFETY: idle_stack is reserved for the idle thread for the life of the system.
     unsafe { ke::init(idle_stack.top) };
     ob::init();
-    for ty in
-        [&mm::section::SECTION_TYPE, &ps::eprocess::PROCESS_TYPE, &ps::ethread::THREAD_TYPE, &io_manager::FILE_TYPE]
-    {
+    for ty in [
+        &mm::section::SECTION_TYPE,
+        &ps::eprocess::PROCESS_TYPE,
+        &ps::ethread::THREAD_TYPE,
+        &io_manager::FILE_TYPE,
+        &cm::KEY_TYPE,
+    ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
+    cm::init();
     ps::init();
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
     fat_smoke_probe();
@@ -321,6 +326,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     system_service_self_test();
     early_exit_self_test();
     loader_services_self_test();
+    registry_self_test();
+    object_directory_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -351,8 +358,12 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // and a native program under it (spike S1).
     userland::install_system_dll();
     userland::install_nls_tables();
+    userland::mount_system_hive();
     userland::run_native_probe();
     userland::run_boot_programs();
+    if cfg!(feature = "test-smss") {
+        userland::run_smss_probe();
+    }
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.
@@ -1641,6 +1652,29 @@ impl Code {
     fn store_eax(&mut self, addr: u32) -> &mut Self {
         self.word(&[0xA3], addr)
     }
+
+    /// Like [`call`](Self::call), with arguments that are values or words
+    /// read from memory at run time (a handle returned earlier).
+    fn call_args(&mut self, number: u32, arguments: &[Arg]) -> &mut Self {
+        for argument in arguments.iter().rev() {
+            match *argument {
+                Arg::Value(value) => self.word(&[0x68], value),      // push value
+                Arg::Memory(addr) => self.word(&[0xFF, 0x35], addr), // push dword [addr]
+            };
+        }
+        self.bytes(&[0x89, 0xE2]).word(&[0xB8], number).bytes(&[0xCD, 0x2E]);
+        if !arguments.is_empty() {
+            self.bytes(&[0x83, 0xC4, (arguments.len() * 4) as u8]);
+        }
+        self
+    }
+}
+
+/// An argument of [`Code::call_args`].
+#[derive(Clone, Copy)]
+enum Arg {
+    Value(u32),
+    Memory(u32),
 }
 
 /// KiSystemService (`sys`, M3): a Ps process calls system services through
@@ -1912,11 +1946,14 @@ fn early_exit_self_test() {
 /// a misaligned buffer, and a class without a handler; NtProtectVirtualMemory
 /// on part of a page (the whole page changes, the range comes back rounded,
 /// with the old protection), on two pages, on a reserved page
-/// (`STATUS_NOT_COMMITTED`) and with an invalid protection.
+/// (`STATUS_NOT_COMMITTED`) and with an invalid protection;
+/// NtQueryVirtualMemory on those pages, the reserved page, the image, a free
+/// range, with a short buffer and on a kernel address.
 fn loader_services_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_ACCESS_VIOLATION, STATUS_DATATYPE_MISALIGNMENT, STATUS_INFO_LENGTH_MISMATCH,
-        STATUS_INVALID_PAGE_PROTECTION, STATUS_NOT_COMMITTED, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_WAIT_0,
+        STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_NOT_COMMITTED, STATUS_NOT_IMPLEMENTED,
+        STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::process::NT_CURRENT_PROCESS;
     use abi::services;
@@ -1959,6 +1996,13 @@ fn loader_services_self_test() {
     const INVALID_STATUS: u32 = DATA + 0x94;
     const OLD: u32 = DATA + 0x98;
     const DONE: u32 = DATA + 0x9C;
+    // NtQueryVirtualMemory: statuses, the length returned, and four
+    // MEMORY_BASIC_INFORMATION.
+    const QUERIES: u32 = DATA + 0xA0; // committed, reserved, image, free
+    const SHORT_QUERY: u32 = DATA + 0xB0;
+    const KERNEL_QUERY: u32 = DATA + 0xB4;
+    const QUERY_LENGTH: u32 = DATA + 0xB8;
+    const MBI: [u32; 4] = [DATA + 0x120, DATA + 0x140, DATA + 0x160, DATA + 0x180];
     const COMMIT_RESERVE: u32 = 0x3000;
     const RESERVE: u32 = 0x2000;
     const READONLY: u32 = 0x02;
@@ -2004,7 +2048,29 @@ fn loader_services_self_test() {
         .call(protect, &[NT_CURRENT_PROCESS, RESERVED, RESERVED_SIZE, READONLY, OLD])
         .store_eax(RESERVED_STATUS)
         .call(protect, &[NT_CURRENT_PROCESS, BOTH, BOTH_SIZE, 0x03, OLD])
-        .store_eax(INVALID_STATUS)
+        .store_eax(INVALID_STATUS);
+    let query_vm = services::NtQueryVirtualMemory;
+    // The committed pages and the reserved one: their address from memory.
+    for (i, at) in [PAGES, RESERVED].into_iter().enumerate() {
+        code.word(&[0x68], QUERY_LENGTH)
+            .word(&[0x68], 0x1C)
+            .word(&[0x68], MBI[i])
+            .word(&[0x68], 0)
+            .word(&[0xFF, 0x35], at) // push dword [at]
+            .word(&[0x68], NT_CURRENT_PROCESS)
+            .bytes(&[0x89, 0xE2]) // mov edx, esp
+            .word(&[0xB8], query_vm)
+            .bytes(&[0xCD, 0x2E, 0x83, 0xC4, 24])
+            .store_eax(QUERIES + 4 * i as u32);
+    }
+    code.call(query_vm, &[NT_CURRENT_PROCESS, IMAGE_BASE + 0x10, 0, MBI[2], 0x1C, 0])
+        .store_eax(QUERIES + 8)
+        .call(query_vm, &[NT_CURRENT_PROCESS, 0x7000_0000, 0, MBI[3], 0x1C, 0])
+        .store_eax(QUERIES + 12)
+        .call(query_vm, &[NT_CURRENT_PROCESS, IMAGE_BASE, 0, SCRATCH, 0x1B, 0])
+        .store_eax(SHORT_QUERY)
+        .call(query_vm, &[NT_CURRENT_PROCESS, 0x8000_0000, 0, SCRATCH, 0x1C, 0])
+        .store_eax(KERNEL_QUERY)
         .word(&[0xC7, 0x05], DONE)
         .bytes(&1u32.to_le_bytes())
         .bytes(&[0xEB, 0xFE]); // jmp $
@@ -2070,6 +2136,21 @@ fn loader_services_self_test() {
     assert_eq!(status(INVALID_STATUS), STATUS_INVALID_PAGE_PROTECTION, "PAGE_READONLY | PAGE_NOACCESS");
     let protection = process.with_space(|space| space.query(u64::from(pages))).expect("the space").expect("a range");
     assert_eq!((protection.protect.bits(), protection.region_size), (READWRITE, 0x2000), "the VAD after both");
+    let statuses: [NtStatus; 4] = core::array::from_fn(|i| status(QUERIES + 4 * i as u32));
+    assert_eq!(statuses, [STATUS_SUCCESS; 4], "NtQueryVirtualMemory");
+    assert_eq!(read(QUERY_LENGTH), 0x1C, "the length returned");
+    // BaseAddress, AllocationBase, AllocationProtect, RegionSize, State,
+    // Protect, Type.
+    let mbi = |i: usize| -> [u32; 7] { core::array::from_fn(|f| read(MBI[i] + 4 * f as u32)) };
+    let reserved = read(RESERVED);
+    assert_eq!(mbi(0), [pages, pages, READWRITE, 0x2000, 0x1000, READWRITE, 0x2_0000], "two committed pages");
+    assert_eq!(mbi(1), [reserved, reserved, READWRITE, 0x1000, 0x2000, 0, 0x2_0000], "a reserved page");
+    let image = mbi(2);
+    assert_eq!((image[0], image[1], image[6]), (IMAGE_BASE, IMAGE_BASE, 0x100_0000), "the image's headers");
+    let free = mbi(3);
+    assert_eq!((free[0], free[1], free[4], free[5], free[6]), (0x7000_0000, 0, 0x1_0000, 0x01, 0), "a free range");
+    assert_eq!(status(SHORT_QUERY), STATUS_INFO_LENGTH_MISMATCH, "a short buffer");
+    assert_eq!(status(KERNEL_QUERY), STATUS_INVALID_PARAMETER, "a kernel address");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
@@ -2085,7 +2166,412 @@ fn loader_services_self_test() {
     drop(process);
     ps::wait_for_reaper();
     log::info!(
-        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation), NtProtectVirtualMemory"
+        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation), NtProtectVirtualMemory, \
+         NtQueryVirtualMemory"
+    );
+}
+
+/// The registry services (`cm`, `sys::registry`, M4): a hive built here is
+/// mounted at `\REGISTRY\MACHINE\MinoTest`; from a Ps process, NtOpenKey by
+/// absolute name, relative to an open key, and on a missing key (its handle
+/// zeroed); NtQueryValueKey in its partial and full classes, with a buffer
+/// that only holds the fixed part (`STATUS_BUFFER_OVERFLOW`) and one that
+/// does not (`STATUS_BUFFER_TOO_SMALL`), on a missing value, a bad handle and
+/// a handle without `KEY_QUERY_VALUE`; NtEnumerateKey, NtQueryKey and
+/// NtEnumerateValueKey, to their end.
+fn registry_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_HANDLE,
+        STATUS_NO_MORE_ENTRIES, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::registry::{
+        KEY_BASIC_INFORMATION, KEY_FULL_INFORMATION, KEY_SET_VALUE, KEY_VALUE_BASIC_INFORMATION,
+        KEY_VALUE_FULL_INFORMATION, KEY_VALUE_PARTIAL_INFORMATION, REG_DWORD, REG_SZ,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use regf::builder::{build, KeyNode};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const KEY_READ: u32 = 0x0002_0019;
+    // Statuses, handles, result lengths.
+    const STATUS: u32 = DATA;
+    const H1: u32 = DATA + 0x40;
+    const H2: u32 = DATA + 0x44;
+    const H3: u32 = DATA + 0x48;
+    const H4: u32 = DATA + 0x4C;
+    const LENGTH: u32 = DATA + 0x50;
+    // OBJECT_ATTRIBUTES, UNICODE_STRING, buffers, the strings.
+    const OA_SUB: u32 = DATA + 0x80;
+    const OA_DEEP: u32 = DATA + 0x98;
+    const OA_MISSING: u32 = DATA + 0xB0;
+    const US_SUB: usize = 0xC8;
+    const US_TEXT: usize = 0xD0;
+    const US_DWORD: usize = 0xD8;
+    const US_MISSING: usize = 0xE0;
+    const US_DEEP: usize = 0xE8;
+    const US_NOPE: usize = 0xF0;
+    const BUFFER: u32 = DATA + 0x100; // nine of 0x40 bytes
+    const DONE: u32 = DATA + 0x3FC;
+    const TEXT: &str = "hello registry";
+
+    // The hive.
+    let mut root = KeyNode::new("MINOTEST");
+    let sub = root.key_mut("Sub");
+    let text: alloc::vec::Vec<u8> = TEXT.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect();
+    sub.set_value("Text", REG_SZ, text.clone());
+    sub.set_value("Dword", REG_DWORD, 0x1234_5678u32.to_le_bytes().to_vec());
+    sub.set_value("", REG_SZ, "def\0".encode_utf16().flat_map(u16::to_le_bytes).collect());
+    sub.key_mut("Deep");
+    let registry = cm::registry().expect("Cm initialised");
+    let hive = cm::HiveFile::new(Arc::from(build(&root, "MINOTEST"))).expect("a hive");
+    cm::mount(&registry, "MACHINE", "MinoTest", hive).expect("mount the test hive");
+
+    // The program's data: strings and their UNICODE_STRING, the attributes.
+    let mut data = alloc::vec![0u8; 0x600];
+    let mut strings = 0x400usize;
+    let mut unicode = |data: &mut alloc::vec::Vec<u8>, at: usize, text: &str| {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+    };
+    unicode(&mut data, US_SUB, "\\Registry\\Machine\\MinoTest\\Sub");
+    unicode(&mut data, US_TEXT, "Text");
+    unicode(&mut data, US_DWORD, "dword");
+    unicode(&mut data, US_MISSING, "Missing");
+    unicode(&mut data, US_DEEP, "deep");
+    unicode(&mut data, US_NOPE, "\\Registry\\Machine\\MinoTest\\Nope");
+    for (oa, name) in [(OA_SUB, US_SUB), (OA_DEEP, US_DEEP), (OA_MISSING, US_NOPE)] {
+        let at = (oa - DATA) as usize;
+        data[at..at + 4].copy_from_slice(&24u32.to_le_bytes());
+        data[at + 8..at + 12].copy_from_slice(&(DATA + name as u32).to_le_bytes());
+    }
+    // H3 starts non-zero: a failed open must zero it.
+    data[0x48..0x4C].copy_from_slice(&u32::MAX.to_le_bytes());
+    let us = |at: usize| Arg::Value(DATA + at as u32);
+    let buffer = |i: u32| Arg::Value(BUFFER + 0x40 * i);
+    let length = |i: u32| Arg::Value(LENGTH + 4 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let (open, query_value) = (services::NtOpenKey, services::NtQueryValueKey);
+    let v = Arg::Value;
+
+    let mut code = Code::new();
+    code.call_args(open, &[v(H1), v(KEY_READ), v(OA_SUB)])
+        .store_eax(status(0))
+        .call_args(
+            query_value,
+            &[Arg::Memory(H1), us(US_TEXT), v(KEY_VALUE_PARTIAL_INFORMATION), buffer(0), v(0x40), length(0)],
+        )
+        .store_eax(status(1))
+        .call_args(
+            query_value,
+            &[Arg::Memory(H1), us(US_DWORD), v(KEY_VALUE_FULL_INFORMATION), buffer(1), v(0x40), length(1)],
+        )
+        .store_eax(status(2))
+        .call_args(
+            query_value,
+            &[Arg::Memory(H1), us(US_TEXT), v(KEY_VALUE_PARTIAL_INFORMATION), buffer(2), v(16), length(2)],
+        )
+        .store_eax(status(3))
+        .call_args(
+            query_value,
+            &[Arg::Memory(H1), us(US_TEXT), v(KEY_VALUE_PARTIAL_INFORMATION), buffer(3), v(8), length(3)],
+        )
+        .store_eax(status(4))
+        .call_args(
+            query_value,
+            &[Arg::Memory(H1), us(US_MISSING), v(KEY_VALUE_PARTIAL_INFORMATION), buffer(8), v(0x40), length(4)],
+        )
+        .store_eax(status(5))
+        // OA_DEEP.RootDirectory = H1, then "deep" relative to it.
+        .word(&[0xA1], H1)
+        .store_eax(OA_DEEP + 4)
+        .call_args(open, &[v(H2), v(KEY_READ), v(OA_DEEP)])
+        .store_eax(status(6))
+        .call_args(
+            services::NtEnumerateKey,
+            &[Arg::Memory(H1), v(0), v(KEY_BASIC_INFORMATION), buffer(4), v(0x40), length(5)],
+        )
+        .store_eax(status(7))
+        .call_args(
+            services::NtEnumerateKey,
+            &[Arg::Memory(H1), v(1), v(KEY_BASIC_INFORMATION), buffer(8), v(0x40), length(6)],
+        )
+        .store_eax(status(8))
+        .call_args(services::NtQueryKey, &[Arg::Memory(H1), v(KEY_FULL_INFORMATION), buffer(5), v(0x40), length(7)])
+        .store_eax(status(9))
+        .call_args(
+            services::NtEnumerateValueKey,
+            &[Arg::Memory(H1), v(0), v(KEY_VALUE_BASIC_INFORMATION), buffer(6), v(0x40), length(8)],
+        )
+        .store_eax(status(10))
+        .call_args(
+            services::NtEnumerateValueKey,
+            &[Arg::Memory(H1), v(3), v(KEY_VALUE_BASIC_INFORMATION), buffer(8), v(0x40), length(9)],
+        )
+        .store_eax(status(11))
+        .call_args(open, &[v(H3), v(KEY_READ), v(OA_MISSING)])
+        .store_eax(status(12))
+        .call_args(
+            query_value,
+            &[v(0x1234), us(US_TEXT), v(KEY_VALUE_PARTIAL_INFORMATION), buffer(8), v(0x40), length(10)],
+        )
+        .store_eax(status(13))
+        .call_args(open, &[v(H4), v(KEY_SET_VALUE), v(OA_SUB)])
+        .store_eax(status(14))
+        .call_args(
+            query_value,
+            &[Arg::Memory(H4), us(US_TEXT), v(KEY_VALUE_PARTIAL_INFORMATION), buffer(8), v(0x40), length(11)],
+        )
+        .store_eax(status(15))
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .bytes(&[0xEB, 0xFE]); // jmp $
+    let mut image_text = [0xCC; 0x800];
+    assert!(code.0.len() <= image_text.len(), "the test program outgrew its slot");
+    image_text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &image_text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x600, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "registry.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let bytes = |addr: u32, n: usize| {
+        let mut bytes = alloc::vec![0u8; n];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        bytes
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the registry test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..16).map(|i| NtStatus(read(status(i)))).collect();
+    let buf = |i: u32| BUFFER + 0x40 * i;
+    let len = |i: u32| read(LENGTH + 4 * i);
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtOpenKey by absolute name");
+    assert_ne!(read(H1), 0);
+    assert_eq!(statuses[1], STATUS_SUCCESS, "NtQueryValueKey, partial");
+    assert_eq!((read(buf(0) + 4), read(buf(0) + 8), len(0)), (REG_SZ, 30, 42), "type, data length, result length");
+    assert_eq!(bytes(buf(0) + 12, 30), text, "the string");
+    assert_eq!(statuses[2], STATUS_SUCCESS, "NtQueryValueKey, full, without case");
+    // Full: title, type, data offset, data length, name length; the name
+    // "Dword" (10 bytes) after 20, the data aligned at 32.
+    let full: [u32; 5] = core::array::from_fn(|i| read(buf(1) + 4 * i as u32));
+    assert_eq!(full, [0, REG_DWORD, 32, 4, 10]);
+    assert_eq!((read(buf(1) + 32), len(1)), (0x1234_5678, 36));
+    assert_eq!((statuses[3], len(2), read(buf(2) + 8)), (STATUS_BUFFER_OVERFLOW, 42, 30), "the fixed part only fits");
+    assert_eq!(read(buf(2) + 16), 0, "nothing past the 16 bytes asked for");
+    assert_eq!((statuses[4], len(3), read(buf(3))), (STATUS_BUFFER_TOO_SMALL, 42, 0), "under the fixed part");
+    assert_eq!(statuses[5], STATUS_OBJECT_NAME_NOT_FOUND, "a missing value");
+    assert_eq!(statuses[6], STATUS_SUCCESS, "NtOpenKey relative to an open key");
+    assert_ne!(read(H2), 0);
+    assert_eq!((statuses[7], read(buf(4) + 12)), (STATUS_SUCCESS, 8), "NtEnumerateKey 0: Deep");
+    assert_eq!(
+        bytes(buf(4) + 16, 8),
+        "Deep".encode_utf16().flat_map(u16::to_le_bytes).collect::<alloc::vec::Vec<u8>>()
+    );
+    assert_eq!(statuses[8], STATUS_NO_MORE_ENTRIES, "NtEnumerateKey past the end");
+    assert_eq!(
+        (statuses[9], read(buf(5) + 20), read(buf(5) + 32)),
+        (STATUS_SUCCESS, 1, 3),
+        "NtQueryKey: 1 subkey, 3 values"
+    );
+    assert_eq!(statuses[10], STATUS_SUCCESS, "NtEnumerateValueKey 0");
+    assert_eq!(statuses[11], STATUS_NO_MORE_ENTRIES, "NtEnumerateValueKey past the end");
+    assert_eq!((statuses[12], read(H3)), (STATUS_OBJECT_NAME_NOT_FOUND, 0), "a missing key, its handle zeroed");
+    assert_eq!(statuses[13], STATUS_INVALID_HANDLE, "a bad handle");
+    assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_ACCESS_DENIED), "KEY_SET_VALUE does not read");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    cm::unmount(&registry, "MACHINE", "MinoTest").expect("unmount the test hive");
+    log::info!(
+        "[smoke] Cm: a mounted hive read from user mode: NtOpenKey, NtQueryValueKey, NtEnumerateKey, NtQueryKey, \
+         NtEnumerateValueKey"
+    );
+}
+
+/// The object directory services (`sys::object`, M4): from a Ps process,
+/// NtCreateDirectoryObject (then `OBJ_OPENIF`: `STATUS_OBJECT_NAME_EXISTS`;
+/// without it: `STATUS_OBJECT_NAME_COLLISION`), NtCreateSymbolicLinkObject
+/// relative to the directory, NtOpenSymbolicLinkObject (the link itself),
+/// NtOpenDirectoryObject through the link, on a missing name (its handle
+/// zeroed) and on a key (`STATUS_OBJECT_TYPE_MISMATCH`). The directory's name
+/// goes with its last handle.
+fn object_directory_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_EXISTS, STATUS_OBJECT_NAME_NOT_FOUND,
+        STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_OPENIF;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 8 statuses
+    const HANDLE: u32 = DATA + 0x20; // 8 handles
+    const OA: u32 = DATA + 0x40; // 6 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0xD0; // 6 UNICODE_STRING
+    const DONE: u32 = DATA + 0x1FC;
+    const ALL_DIRECTORY: u32 = 0x000F_000F;
+    const ALL_LINK: u32 = 0x000F_0001;
+    const QUERY: u32 = 0x0001;
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x200usize;
+    let names = ["\\MinoDir", "Link", "\\MinoDir\\Link", "\\MinoDir\\Missing", "\\REGISTRY"];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+    }
+    let us = |i: usize| DATA + (US + 8 * i) as u32;
+    // OA 0: \MinoDir; 1: \MinoDir with OBJ_OPENIF; 2: Link (root set at run
+    // time); 3: \MinoDir\Link; 4: \MinoDir\Missing; 5: \REGISTRY.
+    for (i, (name, attributes)) in [(0, 0), (0, OBJ_OPENIF), (1, 0), (2, 0), (3, 0), (4, 0)].into_iter().enumerate() {
+        let at = (OA - DATA) as usize + 24 * i;
+        data[at..at + 4].copy_from_slice(&24u32.to_le_bytes());
+        data[at + 8..at + 12].copy_from_slice(&us(name).to_le_bytes());
+        data[at + 12..at + 16].copy_from_slice(&attributes.to_le_bytes());
+    }
+    // Handle 6 starts non-zero: a failed open must zero it.
+    data[0x38..0x3C].copy_from_slice(&u32::MAX.to_le_bytes());
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let v = Arg::Value;
+    let (create_dir, open_dir) = (services::NtCreateDirectoryObject, services::NtOpenDirectoryObject);
+    let mut code = Code::new();
+    code.call_args(create_dir, &[handle(0), v(ALL_DIRECTORY), oa(0)])
+        .store_eax(status(0))
+        .call_args(create_dir, &[handle(1), v(ALL_DIRECTORY), oa(1)])
+        .store_eax(status(1))
+        .call_args(create_dir, &[handle(2), v(ALL_DIRECTORY), oa(0)])
+        .store_eax(status(2))
+        .word(&[0xA1], HANDLE) // mov eax, [handle 0]
+        .store_eax(OA + 24 * 2 + 4) // OA 2's RootDirectory
+        .call_args(services::NtCreateSymbolicLinkObject, &[handle(3), v(ALL_LINK), oa(2), v(us(0))])
+        .store_eax(status(3))
+        .call_args(services::NtOpenSymbolicLinkObject, &[handle(4), v(ALL_LINK), oa(3)])
+        .store_eax(status(4))
+        .call_args(open_dir, &[handle(5), v(QUERY), oa(3)])
+        .store_eax(status(5))
+        .call_args(open_dir, &[handle(6), v(QUERY), oa(4)])
+        .store_eax(status(6))
+        .call_args(open_dir, &[handle(7), v(QUERY), oa(5)])
+        .store_eax(status(7))
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x400];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x400, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "obdir.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the object directory test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..8).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(
+        &statuses[..3],
+        &[STATUS_SUCCESS, STATUS_OBJECT_NAME_EXISTS, STATUS_OBJECT_NAME_COLLISION],
+        "NtCreateDirectoryObject, again with OBJ_OPENIF, again without"
+    );
+    assert_eq!(statuses[3], STATUS_SUCCESS, "NtCreateSymbolicLinkObject relative to the directory");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "NtOpenSymbolicLinkObject");
+    assert_eq!(statuses[5], STATUS_SUCCESS, "NtOpenDirectoryObject through the link");
+    assert_eq!(
+        (statuses[6], read(HANDLE + 24)),
+        (STATUS_OBJECT_NAME_NOT_FOUND, 0),
+        "a missing name, its handle zeroed"
+    );
+    assert_eq!(statuses[7], STATUS_OBJECT_TYPE_MISMATCH, "a key is not a directory");
+    let ns = ob::namespace();
+    let link =
+        ns.open("\\MinoDir\\Link", None, Some(&ob::SYMBOLIC_LINK_TYPE), abi::object::OBJ_OPENLINK).expect("the link");
+    assert_eq!(ob::downcast::<ob::SymbolicLink>(&link).expect("a link").target(), "\\MinoDir");
+    drop(link);
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ns.open("\\MinoDir", None, None, 0).is_err(), "a temporary directory's name goes with its last handle");
+    log::info!(
+        "[smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, \
+         NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject"
     );
 }
 
@@ -2118,8 +2604,13 @@ fn trap_gate_self_test() {
     const DONE: u32 = DATA + 0x24;
     const GO: u32 = DATA + 0x28;
     const AFTER_ASSERTION: u32 = DATA + 0x2C;
+    // DbgPrompt: the length of the answer, the answer, the prompt.
+    const PROMPTED: u32 = DATA + 0x30;
+    const ANSWER: u32 = DATA + 0x34;
     const MESSAGE: u32 = DATA + 0x40;
     const TEXT: &[u8] = b"hello from Mino user mode\n";
+    const PROMPT: u32 = DATA + 0x60;
+    const QUESTION: &[u8] = b"(boipt)? ";
     const KEPT_VALUES: [u32; 4] = [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x4444_4444];
 
     let mut code = Code::new();
@@ -2145,6 +2636,15 @@ fn trap_gate_self_test() {
         .word(&[0xBA], TEXT.len() as u32)
         .bytes(&[0xCD, 0x2D, 0x40])
         .store_eax(PRINTED)
+        // DebugService(BREAKPOINT_PROMPT, PROMPT, length, ANSWER, 4): the
+        // length of the answer in EAX.
+        .word(&[0xB8], 2)
+        .word(&[0xB9], PROMPT)
+        .word(&[0xBA], QUESTION.len() as u32)
+        .word(&[0xBB], ANSWER)
+        .word(&[0xBF], 4)
+        .bytes(&[0xCD, 0x2D, 0x40])
+        .store_eax(PROMPTED)
         .bytes(&[0xCD, 0x2B])
         .store_eax(CALLBACK)
         .word(&[0xC7, 0x05], DONE)
@@ -2158,6 +2658,7 @@ fn trap_gate_self_test() {
     text[..code.0.len()].copy_from_slice(&code.0);
     let mut data = [0u8; 0x80];
     data[0x40..0x40 + TEXT.len()].copy_from_slice(TEXT);
+    data[0x60..0x60 + QUESTION.len()].copy_from_slice(QUESTION);
     let file = Pe32Builder::new(IMAGE_BASE)
         .entry_point(0x1000)
         .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
@@ -2190,6 +2691,7 @@ fn trap_gate_self_test() {
     assert_eq!(kept, KEPT_VALUES, "a gate lost EBX, ESI, EDI or EBP");
     assert_eq!(read(TEB_SELF), thread.teb(), "a gate lost FS");
     assert_eq!(read(PRINTED), 0, "int 2Dh did not skip the byte after it");
+    assert_eq!((read(PROMPTED), read(ANSWER)), (1, u32::from(b'i')), "DbgPrompt: no debugger answers `i`");
     assert_eq!(NtStatus(read(CALLBACK)), STATUS_NO_CALLBACK_ACTIVE, "int 2Bh");
 
     process.write_memory(u64::from(GO), &1u32.to_le_bytes()).expect("let the program go on");
@@ -2204,7 +2706,7 @@ fn trap_gate_self_test() {
     };
     assert_eq!((ended, process.exit_status()), (STATUS_WAIT_0, STATUS_ASSERTION_FAILURE), "int 2Ch");
     ps::wait_for_reaper();
-    log::info!("[smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them");
+    log::info!("[smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them, DbgPrompt answered");
 }
 
 /// The user-mode exceptions (`sys::exceptions`, `ke::exception`, M3): a Ps
@@ -3459,7 +3961,7 @@ fn object_manager_self_test() {
         .expect("a directory")
         .entries();
     let names: alloc::vec::Vec<_> = types.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["Directory", "File", "Process", "Section", "SymbolicLink", "Thread", "Type"]);
+    assert_eq!(names, ["Directory", "File", "Key", "Process", "Section", "SymbolicLink", "Thread", "Type"]);
 
     // A named section, two handle tables.
     let (first, second) = (HandleTable::new(), HandleTable::new());

@@ -6,7 +6,7 @@
 //! | `int 2Ah` | KiGetTickCount : EAX reçoit les millisecondes depuis le démarrage |
 //! | `int 2Bh` | KiCallbackReturn : `STATUS_NO_CALLBACK_ACTIVE`, en attendant `KeUserModeCallback` (M6) |
 //! | `int 2Ch` | KiRaiseAssertion : l'exception `STATUS_ASSERTION_FAILURE`, à l'adresse de l'`int 2Ch` ([`super::exceptions`]) |
-//! | `int 2Dh` | KiDebugService : `DbgPrint` vers le port série |
+//! | `int 2Dh` | KiDebugService : `DbgPrint` vers le port série ; `DbgPrompt`, faute de débogueur, reçoit `i` |
 //! | `int 2Eh` | KiSystemService ([`super::dispatch`]) |
 //! | SYSENTER | KiFastCallEntry, vers le même KiSystemService |
 
@@ -15,6 +15,13 @@ use hal::trap::{set_trap_hook, KTrapFrame, SYSENTER};
 
 /// Le service de débogage qui affiche une chaîne (BREAKPOINT_PRINT).
 const BREAKPOINT_PRINT: u32 = 1;
+/// Le service de débogage qui pose une question au débogueur
+/// (BREAKPOINT_PROMPT).
+const BREAKPOINT_PROMPT: u32 = 2;
+/// La réponse que donne le noyau, faute de débogueur : « Ignore », ce que
+/// demande `RtlAssert` après une assertion qui échoue. Sans réponse, il
+/// reposerait la question sans fin.
+const PROMPT_ANSWER: &[u8] = b"i";
 
 /// Au plus autant d'octets par `DbgPrint`, comme le tampon d'XP.
 const MAX_PRINT: u32 = 512;
@@ -49,18 +56,33 @@ fn raise_assertion(frame: &mut KTrapFrame) {
     super::exceptions::raise(frame, STATUS_ASSERTION_FAILURE, &[]);
 }
 
-/// `int 2Dh` : EAX donne le service, ECX et EDX ses arguments ; `ntdll` fait
-/// suivre l'instruction d'un `int 3`, que le noyau saute. `BREAKPOINT_PRINT`
-/// écrit les EDX octets en ECX (512 au plus) sur le port série, précédés du
-/// PID et du TID ; sans débogueur, les autres services ne font rien.
+/// `int 2Dh` : EAX donne le service, ECX, EDX, EBX et EDI ses arguments ;
+/// `ntdll` fait suivre l'instruction d'un `int 3`, que le noyau saute.
+/// `BREAKPOINT_PRINT` écrit les EDX octets en ECX (512 au plus) sur le port
+/// série, précédés du PID et du TID. `BREAKPOINT_PROMPT` écrit de même la
+/// question, puis, faute de débogueur, met [`PROMPT_ANSWER`] dans le tampon de
+/// EDI octets en EBX et rend sa longueur, ce que le journal dit aussi. Sans
+/// débogueur, les autres services ne font rien.
 fn debug_service(frame: &mut KTrapFrame) {
     frame.rip += 1;
-    if frame.rax as u32 == BREAKPOINT_PRINT {
-        x86_64::instructions::interrupts::enable();
-        print(frame.rcx as u32, (frame.rdx as u32).min(MAX_PRINT));
-        x86_64::instructions::interrupts::disable();
-    }
+    let service = frame.rax as u32;
     frame.rax = u64::from(STATUS_SUCCESS.0);
+    if service != BREAKPOINT_PRINT && service != BREAKPOINT_PROMPT {
+        return;
+    }
+    x86_64::instructions::interrupts::enable();
+    print(frame.rcx as u32, (frame.rdx as u32).min(MAX_PRINT));
+    if service == BREAKPOINT_PROMPT {
+        let answered = PROMPT_ANSWER.len() <= frame.rdi as u32 as usize
+            && ke::usermem::copy_to_user(u64::from(frame.rbx as u32), PROMPT_ANSWER).is_ok();
+        let length = if answered { PROMPT_ANSWER.len() } else { 0 };
+        log::info!(
+            "DbgPrompt: no debugger, answered {:?}",
+            core::str::from_utf8(&PROMPT_ANSWER[..length]).unwrap_or("")
+        );
+        frame.rax = length as u64;
+    }
+    x86_64::instructions::interrupts::disable();
 }
 
 /// Écrit la chaîne de `length` octets en `buffer`, adresse utilisateur.

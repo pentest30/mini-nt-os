@@ -95,6 +95,27 @@ impl GenericMapping {
 const _: () = assert!(core::mem::size_of::<GenericMapping>() == 16);
 const _: () = assert!(core::mem::offset_of!(GenericMapping, all) == 12);
 
+/// OBJECT_ATTRIBUTES as an i386 process passes it: what to open or create,
+/// by name (a UNICODE_STRING), relative to a directory or not.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectAttributes32 {
+    /// Its size, 24.
+    pub length: u32,
+    /// The handle the name is relative to; 0 for an absolute name.
+    pub root_directory: u32,
+    /// The address of the name's UNICODE_STRING; 0 for no name.
+    pub object_name: u32,
+    /// `OBJ_*`.
+    pub attributes: u32,
+    pub security_descriptor: u32,
+    pub security_quality_of_service: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<ObjectAttributes32>() == 24);
+const _: () = assert!(core::mem::offset_of!(ObjectAttributes32, object_name) == 8);
+const _: () = assert!(core::mem::offset_of!(ObjectAttributes32, attributes) == 12);
+
 // `OBJECT_ATTRIBUTES.Attributes`.
 pub const OBJ_INHERIT: u32 = 0x0000_0002;
 pub const OBJ_PERMANENT: u32 = 0x0000_0010;

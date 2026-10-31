@@ -142,7 +142,16 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   il écrit par `DbgPrint` et se termine. Test SEH fait (`tests/native/s1seh.c`, clang `i686-pc-windows-msvc` et
   `lld-link`, avec `tests/native/seh3.c`, notre `_except_handler3`) : écriture en 0 attrapée, filtre qui décline,
   `__finally` au déroulement par `RtlUnwind`. Ke publie le TID d'un thread utilisateur avant de le rendre prêt
-  (`UserThreadStart::tid`). Suite : M4 ([`docs/passation.md`](docs/passation.md)).
+  (`UserThreadStart::tid`).
+  M4 : sonde `smss.exe` faite (`docs/compat/m4-smss.md`, scénario `smss`, feature `test-smss`) : le `smss` de ReactOS
+  s'arrête au registre (`Session Manager`), après des échecs tolérés de LPC, d'Ex et de Ps. `DbgPrompt` reçoit `i`
+  faute de débogueur ; NtQueryVirtualMemory (MemoryBasicInformation). Registre en lecture fait : `libs/regf`
+  (ruches en mémoire, constructeur sous `builder`), `kernel/cm` (type `Key`, `\REGISTRY`, ruches montées en lecture,
+  `CurrentControlSet`, `cm::info`), Ob (nom relatif à une racine à procédure *parse*), NtOpenKey, NtQueryKey,
+  NtEnumerateKey, NtQueryValueKey, NtEnumerateValueKey ; la ruche SYSTEM de ReactOS épinglé montée au démarrage
+  (en attendant `tools/mkhive`). Répertoires d'Ob faits : NtCreateDirectoryObject, NtOpenDirectoryObject,
+  NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject. `smss` lit `Session Manager`, crée ses répertoires et ses
+  liens, puis s'arrête à `NtOpenFile` (KnownDlls) : Io ensuite. Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

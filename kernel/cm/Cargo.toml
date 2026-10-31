@@ -1,0 +1,17 @@
+[package]
+name    = "cm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "cm"
+
+[dependencies]
+abi  = { path = "../../abi" }
+hal  = { path = "../hal" }
+ob   = { path = "../ob" }
+regf = { path = "../../libs/regf" }
+log  = { workspace = true }
+
+[dev-dependencies]
+regf = { path = "../../libs/regf", features = ["builder"] }

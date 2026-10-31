@@ -99,8 +99,10 @@ impl Namespace {
     }
 
     /// ObpLookupObjectName : ce que désigne `name`, absolu (`\…`), ou relatif
-    /// au répertoire `root`. Avec `open_link`, un lien en dernier composant
-    /// est rendu lui-même au lieu d'être suivi (`OBJ_OPENLINK`).
+    /// à `root` : un répertoire, ou un objet dont le type a une procédure
+    /// *parse*, qui reçoit alors le nom (une clé du registre, un
+    /// périphérique). Avec `open_link`, un lien en dernier composant est
+    /// rendu lui-même au lieu d'être suivi (`OBJ_OPENLINK`).
     ///
     /// Erreurs : nom absolu sans `\` ou relatif avec
     /// (`STATUS_OBJECT_PATH_SYNTAX_BAD`), composant vide
@@ -130,7 +132,16 @@ impl Namespace {
         let (mut current, mut rest): (ObjectRef, &str) = match root {
             Some(_) if name.starts_with('\\') => return Err(STATUS_OBJECT_PATH_SYNTAX_BAD),
             Some(root) if name.is_empty() => return Ok(Step::Done(Lookup::Found(root.clone()))),
-            Some(root) => (root.clone(), name),
+            Some(root) => match root.object_type().parse {
+                // Not a directory: its parse procedure takes the name.
+                Some(parse) if downcast::<Directory>(root).is_none() => {
+                    return match parse(root, &alloc::format!("\\{name}"))? {
+                        Parsed::Object(object) => Ok(Step::Done(Lookup::Found(object))),
+                        Parsed::Reparse(name) => Ok(Step::Reparse(name)),
+                    };
+                }
+                _ => (root.clone(), name),
+            },
             None => {
                 let rest = name.strip_prefix('\\').ok_or(STATUS_OBJECT_PATH_SYNTAX_BAD)?;
                 match rest.split_once('\\') {
@@ -413,6 +424,18 @@ mod tests {
         assert_eq!(downcast::<String>(&file).unwrap().as_str(), "\\Windows\\win.ini");
         let volume = found(ns.lookup("\\Device\\HarddiskVolume1", None, false));
         assert_eq!(downcast::<String>(&volume).unwrap().as_str(), "", "opening the device itself");
+    }
+
+    #[test]
+    fn a_name_relative_to_an_object_with_a_parse_procedure_goes_to_it() {
+        let ns = Namespace::new();
+        let disk: ObjectRef = create_object(&DEVICE, ());
+        let file = found(ns.lookup("Windows\\win.ini", Some(&disk), false));
+        assert_eq!(downcast::<String>(&file).unwrap().as_str(), "\\Windows\\win.ini");
+        assert!(Arc::ptr_eq(&found(ns.lookup("", Some(&disk), false)), &disk), "an empty name: the root itself");
+        assert_eq!(ns.lookup("\\A", Some(&disk), false).err(), Some(STATUS_OBJECT_PATH_SYNTAX_BAD));
+        let plain = event();
+        assert_eq!(ns.lookup("x", Some(&plain), false).err(), Some(STATUS_OBJECT_TYPE_MISMATCH), "no parse procedure");
     }
 
     #[test]

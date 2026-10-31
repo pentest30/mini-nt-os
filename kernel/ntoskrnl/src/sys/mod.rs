@@ -26,6 +26,7 @@ pub mod gates;
 mod memory;
 mod object;
 mod process;
+mod registry;
 mod system;
 mod wait;
 
@@ -70,10 +71,20 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
     (services::NtClose, Handler::Status(object::nt_close)),
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
+    (services::NtCreateDirectoryObject, Handler::Status(object::nt_create_directory_object)),
+    (services::NtCreateSymbolicLinkObject, Handler::Status(object::nt_create_symbolic_link_object)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
+    (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
+    (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
+    (services::NtOpenKey, Handler::Status(registry::nt_open_key)),
+    (services::NtOpenSymbolicLinkObject, Handler::Status(object::nt_open_symbolic_link_object)),
     (services::NtProtectVirtualMemory, Handler::Status(memory::nt_protect_virtual_memory)),
+    (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
+    (services::NtQueryValueKey, Handler::Status(registry::nt_query_value_key)),
+    (services::NtQueryVirtualMemory, Handler::Status(memory::nt_query_virtual_memory)),
     (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
