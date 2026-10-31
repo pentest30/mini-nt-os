@@ -11,8 +11,10 @@ jour à chaque commit qui change l'état.
   services de répertoires d'Ob.
 - Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
   `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- PR fusionnées : #29, #30 et #31 (spike S1). La sonde `smss` et le registre en lecture (étapes 0 et 1 du M4)
-  sont poussés sur la branche, sans PR encore. Après chaque fusion, repartir de `origin/main`.
+- PR fusionnées : #29, #30 et #31 (spike S1). PR ouverte : #32 (étapes 0 et 1 du M4 : sonde `smss`, registre en
+  lecture). L'étape 2 (services de répertoires d'Ob) est en cours sur la même branche. Après chaque fusion,
+  repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main`
+  si la branche a des commits non fusionnés : jamais de réécriture).
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
