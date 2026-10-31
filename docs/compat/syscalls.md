@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 34 | 296 |
+| ntoskrnl | 38 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -96,7 +96,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x004e` | `NtExtendSection` | 2 |  |
 | `0x004f` | `NtFilterToken` | 6 |  |
 | `0x0050` | `NtFindAtom` | 3 |  |
-| `0x0051` | `NtFlushBuffersFile` | 2 |  |
+| `0x0051` | `NtFlushBuffersFile` | 2 | ✅ |
 | `0x0052` | `NtFlushInstructionCache` | 3 |  |
 | `0x0053` | `NtFlushKey` | 1 |  |
 | `0x0054` | `NtFlushVirtualMemory` | 4 |  |
@@ -206,7 +206,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00bc` | `NtQueueApcThread` | 5 | ✅ |
 | `0x00bd` | `NtRaiseException` | 3 | ✅ |
 | `0x00be` | `NtRaiseHardError` | 6 |  |
-| `0x00bf` | `NtReadFile` | 9 |  |
+| `0x00bf` | `NtReadFile` | 9 | ✅ |
 | `0x00c0` | `NtReadFileScatter` | 9 |  |
 | `0x00c1` | `NtReadRequestData` | 6 |  |
 | `0x00c2` | `NtReadVirtualMemory` | 5 |  |
@@ -248,7 +248,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00e6` | `NtSetHighEventPair` | 1 |  |
 | `0x00e7` | `NtSetHighWaitLowEventPair` | 1 |  |
 | `0x00e8` | `NtSetInformationDebugObject` | 5 |  |
-| `0x00e9` | `NtSetInformationFile` | 5 |  |
+| `0x00e9` | `NtSetInformationFile` | 5 | ✅ |
 | `0x00ea` | `NtSetInformationJobObject` | 4 |  |
 | `0x00eb` | `NtSetInformationKey` | 4 |  |
 | `0x00ec` | `NtSetInformationObject` | 4 |  |
@@ -299,7 +299,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0119` | `NtWaitForSingleObject` | 3 |  |
 | `0x011a` | `NtWaitHighEventPair` | 1 |  |
 | `0x011b` | `NtWaitLowEventPair` | 1 |  |
-| `0x011c` | `NtWriteFile` | 9 |  |
+| `0x011c` | `NtWriteFile` | 9 | ✅ |
 | `0x011d` | `NtWriteFileGather` | 9 |  |
 | `0x011e` | `NtWriteRequestData` | 6 |  |
 | `0x011f` | `NtWriteVirtualMemory` | 5 |  |

@@ -84,6 +84,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
+    (services::NtFlushBuffersFile, Handler::Status(file::nt_flush_buffers_file)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
@@ -102,10 +103,13 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryVolumeInformationFile, Handler::Status(file::nt_query_volume_information_file)),
     (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
+    (services::NtReadFile, Handler::Status(file::nt_read_file)),
+    (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
     (services::NtSetValueKey, Handler::Status(registry::nt_set_value_key)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
+    (services::NtWriteFile, Handler::Status(file::nt_write_file)),
 ];
 
 /// Au plus 63 arguments par service (`tools/syscall-gen`).

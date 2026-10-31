@@ -340,6 +340,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     registry_write_self_test();
     object_directory_self_test();
     file_self_test();
+    file_write_self_test();
     section_service_self_test();
     trap_gate_self_test();
     exception_self_test();
@@ -2843,6 +2844,185 @@ fn file_self_test() {
     log::info!(
         "[smoke] Io: files from user mode through \\??\\C:: NtOpenFile, NtCreateFile, NtQueryInformationFile, \
          NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryVolumeInformationFile"
+    );
+}
+
+/// Writing files from user mode (`sys::file`, `io_manager`, M4), on the boot
+/// volume: NtCreateFile makes `\??\C:\MINOTEST.TXT`; NtWriteFile writes at
+/// the current position, then past the end (the gap reads as zeros);
+/// NtSetInformationFile moves the position back; NtReadFile reads it all,
+/// then meets the end; a second open overwrites it, which the first handle
+/// sees. A directory, and a file created in it by FILE_OPEN_IF. Then what
+/// must fail: a name taken, a missing directory, a long name, a write
+/// through a read-only handle.
+fn file_write_self_test() {
+    use abi::file::*;
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_END_OF_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
+        STATUS_OBJECT_PATH_NOT_FOUND, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_CASE_INSENSITIVE;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const HANDLE: u32 = DATA + 0x40; // 16 handles
+    const IOSB: u32 = DATA + 0x80; // 16 IO_STATUS_BLOCKs
+    const OFFSET: u32 = DATA + 0x100; // a LARGE_INTEGER: 20; then one at 0
+    const STANDARD: u32 = DATA + 0x110; // 24 bytes
+    const STANDARD_AFTER: u32 = DATA + 0x3D0; // 24 bytes, after the overwrite
+    const READ: u32 = DATA + 0x130; // 64 bytes
+    const OA: u32 = DATA + 0x170; // 6 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0x200; // 6 UNICODE_STRING
+    const TEXT: u32 = DATA + 0x230; // "hello, disk!"
+    const DONE: u32 = DATA + 0x3FC;
+    const READ_WRITE: u32 = 0xC000_0000 | 0x0010_0000; // GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x240usize;
+    let names = [
+        "\\??\\C:\\MINOTEST.TXT",
+        "\\??\\C:\\MINODIR",
+        "\\??\\C:\\MINODIR\\INNER.TXT",
+        "\\??\\C:\\NODIR\\X.TXT",
+        "\\??\\C:\\A long name.txt",
+        "\\??\\C:\\KERNEL.BIN",
+    ];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+        let oa = (OA - DATA) as usize + 24 * i;
+        data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+        data[oa + 8..oa + 12].copy_from_slice(&(DATA + at as u32).to_le_bytes());
+        data[oa + 12..oa + 16].copy_from_slice(&OBJ_CASE_INSENSITIVE.to_le_bytes());
+    }
+    assert!(strings <= 0x3D0, "the strings outgrew the data");
+    data[(OFFSET - DATA) as usize..][..8].copy_from_slice(&20u64.to_le_bytes());
+    data[(TEXT - DATA) as usize..][..12].copy_from_slice(b"hello, disk!");
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let iosb = |i: u32| Arg::Value(IOSB + 8 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let (create, write, read) = (services::NtCreateFile, services::NtWriteFile, services::NtReadFile);
+    let file_options = FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
+    let new_file = |h: u32, access: u32, name: u32, disposition: u32, options: u32| {
+        [handle(h), v(access), oa(name), iosb(h), v(0), v(FILE_ATTRIBUTE_NORMAL), v(0), v(disposition), v(options)]
+            .into_iter()
+            .chain([v(0), v(0)])
+            .collect::<alloc::vec::Vec<_>>()
+    };
+    let h0 = m(HANDLE);
+    let mut code = Code::new();
+    code.call_args(create, &new_file(0, READ_WRITE, 0, FILE_CREATE, file_options)).store_eax(status(0));
+    code.call_args(write, &[h0, v(0), v(0), v(0), iosb(1), v(TEXT), v(11), v(0), v(0)]).store_eax(status(1));
+    code.call_args(write, &[h0, v(0), v(0), v(0), iosb(2), v(TEXT + 11), v(1), v(OFFSET), v(0)]).store_eax(status(2));
+    let query = services::NtQueryInformationFile;
+    code.call_args(query, &[h0, iosb(3), v(STANDARD), v(24), v(FILE_STANDARD_INFORMATION)]).store_eax(status(3));
+    let set = services::NtSetInformationFile;
+    code.call_args(set, &[h0, iosb(4), v(OFFSET + 8), v(8), v(FILE_POSITION_INFORMATION)]).store_eax(status(4));
+    code.call_args(read, &[h0, v(0), v(0), v(0), iosb(5), v(READ), v(64), v(0), v(0)]).store_eax(status(5));
+    code.call_args(read, &[h0, v(0), v(0), v(0), iosb(6), v(READ), v(64), v(0), v(0)]).store_eax(status(6));
+    code.call_args(create, &new_file(7, READ_WRITE, 0, FILE_CREATE, file_options)).store_eax(status(7));
+    code.call_args(create, &new_file(8, READ_WRITE, 0, FILE_OVERWRITE_IF, file_options)).store_eax(status(8));
+    code.call_args(query, &[h0, iosb(9), v(STANDARD_AFTER), v(24), v(FILE_STANDARD_INFORMATION)]).store_eax(status(9));
+    let directory_options = FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
+    code.call_args(create, &new_file(10, FILE_LIST_DIRECTORY | 0x0010_0000, 1, FILE_CREATE, directory_options))
+        .store_eax(status(10));
+    code.call_args(create, &new_file(11, READ_WRITE, 2, FILE_OPEN_IF, file_options)).store_eax(status(11));
+    code.call_args(create, &new_file(12, READ_WRITE, 3, FILE_CREATE, file_options)).store_eax(status(12));
+    code.call_args(create, &new_file(13, READ_WRITE, 4, FILE_CREATE, file_options)).store_eax(status(13));
+    code.call_args(
+        services::NtOpenFile,
+        &[handle(14), v(FILE_READ_DATA | 0x0010_0000), oa(5), iosb(14), v(1), v(file_options)],
+    )
+    .store_eax(status(14));
+    code.call_args(write, &[m(HANDLE + 56), v(0), v(0), v(0), iosb(15), v(TEXT), v(4), v(OFFSET), v(0)])
+        .store_eax(status(15));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "writes.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_u32 = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read_u32(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the file write test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..16).map(|i| NtStatus(read_u32(status(i)))).collect();
+    let iosb_at = |i: u32| (read_u32(IOSB + 8 * i), read_u32(IOSB + 8 * i + 4));
+    assert_eq!((statuses[0], iosb_at(0)), (STATUS_SUCCESS, (0, FILE_CREATED)), "NtCreateFile makes MINOTEST.TXT");
+    assert_eq!((statuses[1], iosb_at(1)), (STATUS_SUCCESS, (0, 11)), "NtWriteFile at the position");
+    assert_eq!((statuses[2], iosb_at(2)), (STATUS_SUCCESS, (0, 1)), "NtWriteFile past the end");
+    assert_eq!((statuses[3], read_u32(STANDARD + 8)), (STATUS_SUCCESS, 21), "21 bytes now");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "NtSetInformationFile(FilePositionInformation)");
+    assert_eq!((statuses[5], iosb_at(5)), (STATUS_SUCCESS, (0, 21)), "NtReadFile from the start");
+    let mut back = [0u8; 21];
+    process.read_memory(u64::from(READ), &mut back).expect("read the process");
+    assert_eq!(&back, b"hello, disk\0\0\0\0\0\0\0\0\0!", "written, a gap of zeros, then the last byte");
+    assert_eq!((statuses[6], iosb_at(6).0), (STATUS_END_OF_FILE, STATUS_END_OF_FILE.0), "then the end");
+    assert_eq!(statuses[7], STATUS_OBJECT_NAME_COLLISION, "FILE_CREATE on a name taken");
+    assert_eq!((statuses[8], iosb_at(8)), (STATUS_SUCCESS, (0, FILE_OVERWRITTEN)), "FILE_OVERWRITE_IF");
+    assert_eq!((statuses[9], read_u32(STANDARD_AFTER + 8)), (STATUS_SUCCESS, 0), "the first handle sees it empty");
+    assert_eq!((statuses[10], iosb_at(10)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a directory");
+    assert_eq!((statuses[11], iosb_at(11)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a file in it, by FILE_OPEN_IF");
+    assert_eq!(statuses[12], STATUS_OBJECT_PATH_NOT_FOUND, "a missing directory");
+    assert_eq!(statuses[13], STATUS_OBJECT_NAME_INVALID, "a long name, not yet");
+    assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_ACCESS_DENIED), "a read-only handle");
+
+    let ns = ob::namespace();
+    let size = |name: &str| {
+        let object = ns.open(name, None, Some(&io_manager::FILE_TYPE), 0).expect(name);
+        ob::downcast::<io_manager::File>(&object).expect("a file").node().expect("its entry").size
+    };
+    assert_eq!((size("\\??\\C:\\minotest.txt"), size("\\??\\C:\\MinoDir\\Inner.txt")), (0, 0));
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Io: files written from user mode on \\??\\C:: NtCreateFile (create, overwrite, directory), \
+         NtWriteFile, NtReadFile, NtSetInformationFile"
     );
 }
 
