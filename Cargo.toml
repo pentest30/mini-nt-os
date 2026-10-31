@@ -12,6 +12,7 @@ members = [
     "kernel/ps",
     "kernel/io",
     "libs/pe",
+    "libs/regf",
     "tools/pe-inspect",
     "tools/syscall-gen",
     "tools/mkfat",
