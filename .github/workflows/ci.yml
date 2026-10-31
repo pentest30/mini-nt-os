@@ -5,7 +5,8 @@
 # M1 scenarios: event ping-pong between two kernel threads, floating point in
 # four threads, a starved thread raised by the balance set manager, and the
 # symbolized STOP screen of a failed assertion; and the ReactOS userland
-# (`cargo xtask fetch-userland`, its archive cached by its pinned SHA-256).
+# (`cargo xtask fetch-userland`, its archive cached by its pinned SHA-256),
+# with the native test programs of tests/native/ compiled by MinGW and clang.
 name: CI
 
 on:
@@ -97,6 +98,10 @@ jobs:
           - name: ReactOS userland, NTDLL.DLL installed as the system DLL (M3)
             args: --scenario userland
             userland: true
+          - name: native programs linked to ntdll, MinGW and SEH (M3, S1)
+            args: --scenario native
+            userland: true
+            native: true
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -114,6 +119,13 @@ jobs:
       - name: Fetch the ReactOS userland
         if: matrix.userland
         run: cargo xtask fetch-userland
+      # Without these compilers, xtask would skip the scenario: the install must
+      # succeed. MinGW for the C programs, clang and lld for the SEH test.
+      - name: Install MinGW, clang, lld and llvm (tests/native)
+        if: matrix.native
+        run: |
+          sudo apt-get install -y -qq gcc-mingw-w64-i686 clang lld llvm
+          i686-w64-mingw32-gcc --version && clang --version && lld-link --version && command -v llvm-dlltool
       # Scenarios of tests/boot/; the firmware is found in /usr/share/OVMF.
       - name: Boot and check serial markers
         run: cargo xtask test --boot ${{ matrix.args }}

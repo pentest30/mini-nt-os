@@ -111,5 +111,50 @@ sur les deux chemins. Les 17 appels système, dans l'ordre de leur premier appel
 registre (`NtOpenKey`, `NtQueryValueKey`) et les fichiers (`NtOpenFile`, `NtQueryAttributesFile`) attendent Cm et
 Io ; `NtCreateKeyedEvent` attend les événements à clé d'Ex.
 
-**Prochaine étape** : le même programme compilé avec MinGW et lié à `ntdll` (critère de sortie de S1), puis le
-test SEH.
+## Étape 4 : un programme compilé avec MinGW
+
+`tests/native/s1hello.c`, compilé par `cargo xtask` avec `i686-w64-mingw32-gcc` (GCC 13), sans bibliothèque C
+(`-nostdlib`), sous-système NATIVE, point d'entrée `NtProcessStartup(PPEB)`, lié à `ntdll.dll` par une bibliothèque
+d'import que `dlltool --kill-at` tire de `tests/native/ntdll.def` (les exports appelés, avec leurs octets
+d'arguments). Le noyau le lance comme la sonde, depuis le disque de démarrage (`S1HELLO.EXE`), le PEB en argument
+de son point d'entrée (une adresse de retour nulle sous laquelle pointe ESP, puis le PEB, comme
+RtlCreateUserThread).
+
+Résultat, sur les deux chemins : `[s1] hello from a MinGW native program, PEB 7FFDF000`, puis le statut `0x5152`
+du programme ; les mêmes 17 appels système que la sonde. Le premier critère de sortie de S1 est atteint
+(scénario `native`).
+
+## Étape 5 : le test SEH
+
+`tests/native/s1seh.c`, compilé par clang pour `i686-pc-windows-msvc` (GCC ne compile pas `__try`/`__except` en
+i386), avec `-fasync-exceptions` pour qu'une instruction qui faute compte dans un bloc `__try`, et lié par
+`lld-link` (sous-système NATIVE 5.01, sans bibliothèque C ni table SafeSEH) à `ntdll` par une bibliothèque d'import
+que `llvm-dlltool` tire du même `ntdll.def`. Le code de clang appelle `_except_handler3`, que le `ntdll` de ReactOS
+n'exporte pas (il vient d'une bibliothèque C) : `tests/native/seh3.c` le fournit, écrit d'après la disposition du
+cadre que génère clang (vérifiée au désassemblage) : enregistrement en EBP - 0x10, table des portées
+{ niveau précédent, filtre, gestionnaire }, filtre nul pour un `__finally` ; filtres, `__finally` et blocs
+`__except` appelés avec EBP sur le cadre de la fonction ; déroulement global par `RtlUnwind` de `ntdll`.
+
+Le test : une écriture à l'adresse 0 dans une fonction à elle, avec un `__finally`, dans un `__try` dont le filtre
+laisse passer l'exception, dans un `__try` dont le filtre la prend. Le noyau livre la faute de page à
+`KiUserExceptionDispatcher` ; `RtlDispatchException` remonte la chaîne de FS:[0] : le filtre intérieur décline,
+l'extérieur accepte ; `RtlUnwind` exécute le `__finally` au passage (deuxième appel de `NtContinue`), puis le bloc
+`__except` extérieur s'exécute.
+
+Résultat, sur les deux chemins : `[s1] SEH: write to 0 caught, code C0000005, inner filter declined, __finally ran
+on unwind`, statut `0x5153` (scénario `native`). Les appels système sont ceux du programme MinGW, avec un
+`NtContinue` de plus (celui de `RtlUnwind`).
+
+Le programme MinGW, plus bref que la sonde sur le chemin `int 2Eh`, a révélé une course dans Ps :
+`ps::create_thread` n'enregistrait le TID Ke du thread qu'au retour de `ke::sched::create_user_thread`, alors qu'un
+thread plus prioritaire que son créateur peut s'exécuter, et finir, avant ce retour ; le *reaper* trouvait alors un
+thread fini sans thread Ke (STOP 0x1E). Ke écrit désormais le TID avant de rendre le thread prêt
+(`UserThreadStart::tid`) ; `early_exit_self_test` (scénario `smoke`) reproduit le cas à coup sûr.
+
+## Bilan
+
+Les trois critères de sortie de S1 sont atteints : un programme natif compilé avec MinGW et lié au `ntdll` de
+ReactOS écrit par `DbgPrint` et se termine ; le test SEH passe ; la liste des appels système est publiée (ce
+document, et `docs/compat/syscalls.md` pour la couverture). Il a fallu au noyau, en plus de ce que le M3 prévoyait :
+les paramètres du processus, les tables NLS, `NtQuerySystemInformation(SystemBasicInformation)` et
+`NtProtectVirtualMemory`. L'ADR-002 reste proposée jusqu'aux spikes S2 et S3.

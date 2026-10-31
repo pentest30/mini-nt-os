@@ -20,12 +20,12 @@ expect = [s1]   NtProtectVirtualMemory (0x008f)
 # The program runs: its DbgPrint, then its own exit status.
 expect = [s1] hello from a native process
 expect = exit status 0x00005151 (the program ran to its end)
-expect = [s1] native process under the system DLL: exit status
+expect = [s1] probe under the system DLL: exit status
 expect = kernel: phase 1 done
 
 # A fatal error ends the run at once.
 forbid = *** STOP:
 forbid = [boot] NTDLL.DLL refused
 forbid = [boot] NLS tables refused
-forbid = [s1] the native process did not
-forbid = [s1] the native program's image section
+forbid = [s1] probe: the process did not
+forbid = [s1] probe: no image section

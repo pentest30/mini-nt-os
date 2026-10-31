@@ -1,8 +1,10 @@
-//! La DLL système au démarrage (02 §3, §6.5) : `NTDLL.DLL` du disque RAM de
-//! démarrage, où `cargo xtask` met celle de ReactOS épinglé
-//! (`fetch-userland`), installée comme DLL système (`ps::system_dll`) à la
-//! fin des tests de la phase 1. Elle viendra de `\SystemRoot\System32` par
-//! Io (M4).
+//! L'espace utilisateur au démarrage (02 §3, §6.5) : `NTDLL.DLL` et les tables
+//! NLS du disque RAM de démarrage, où `cargo xtask` met celles de ReactOS
+//! épinglé (`fetch-userland`), installées à la fin des tests de la phase 1
+//! (`ps::system_dll`, `ps::nls`) ; puis le spike S1 : la sonde, un programme
+//! natif construit dans le noyau, et les programmes natifs de test du disque
+//! (`tests/native`), chacun lancé sous la DLL système. Ces fichiers viendront
+//! de `\SystemRoot\System32` par Io (M4).
 
 use alloc::sync::Arc;
 
@@ -75,20 +77,53 @@ const PROBE_COMMAND_LINE: &str = "s1native.exe";
 /// Ce qu'il écrit par `DbgPrint`.
 const PROBE_MESSAGE: &[u8] = b"[s1] hello from a native process\n\0";
 
-/// Spike S1 (05, M3) : un programme natif sous la DLL système. Son image
-/// (sous-système NATIVE) importe `DbgPrint` et `NtTerminateProcess` de
-/// `ntdll.dll` ; ses paramètres sont ceux d'un programme du système
-/// (`ps::ProcessParameters::system`). Son thread démarre par
-/// `LdrInitializeThunk`, qui initialise
-/// le processus et lie ses imports, puis entre dans le programme, qui écrit
-/// par `DbgPrint` et se termine. Journalise son statut de sortie et les
-/// appels système qu'il a faits, dans l'ordre de leur premier appel.
+/// Spike S1 (05, M3) : un programme natif construit dans le noyau, sous la
+/// DLL système ([`run_native`]). Son image (sous-système NATIVE) importe
+/// `DbgPrint` et `NtTerminateProcess` de `ntdll.dll` ; il écrit par
+/// `DbgPrint` et se termine.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage, quand aucun autre thread de Ps ne tourne.
+pub fn run_native_probe() {
+    run_native("probe", probe_image(), PROBE_PATH, PROBE_COMMAND_LINE, PROBE_EXIT_STATUS);
+}
+
+/// Les programmes natifs de test du disque de démarrage (`tests/native`,
+/// compilés par `cargo xtask`) : leur fichier, leur chemin dans leurs
+/// paramètres, et le statut de sortie qu'ils rendent s'ils vont au bout.
+const BOOT_PROGRAMS: &[(&str, &str, u32)] = &[
+    ("/S1HELLO.EXE", "C:\\WINDOWS\\system32\\s1hello.exe", 0x5152),
+    ("/S1SEH.EXE", "C:\\WINDOWS\\system32\\s1seh.exe", 0x5153),
+];
+
+/// Lance sous la DLL système les programmes natifs de test que tient le
+/// disque de démarrage ([`run_native`]).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage, quand aucun autre thread de Ps ne tourne.
+pub fn run_boot_programs() {
+    for &(file, path, exit_status) in BOOT_PROGRAMS {
+        if let Some(image) = read_boot_file(file) {
+            let name = file.trim_start_matches('/');
+            run_native(name, image, path, name, exit_status);
+        }
+    }
+}
+
+/// Lance le programme natif `image` sous la DLL système, et attend sa fin
+/// (10 s au plus) : ses paramètres sont ceux d'un programme du système
+/// (`ps::ProcessParameters::system`, avec `path` et `command_line`) ; son
+/// thread démarre par `LdrInitializeThunk`, qui initialise le processus et
+/// lie ses imports, puis entre dans son point d'entrée avec le PEB pour
+/// argument (`NtProcessStartup(PPEB)`). Journalise, sous le nom `name`, son
+/// statut de sortie (`exit_status` s'il va au bout) et les appels système
+/// faits, dans l'ordre de leur premier appel.
 ///
 /// Sans DLL système, ne fait rien.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage, quand aucun autre thread de Ps ne tourne.
-pub fn run_native_probe() {
+fn run_native(name: &str, image: alloc::vec::Vec<u8>, path: &str, command_line: &str, exit_status: u32) {
     use abi::ntstatus::{NtStatus, STATUS_TIMEOUT};
     use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
@@ -99,22 +134,22 @@ pub fn run_native_probe() {
     if ps::system_dll::current().is_none() {
         return;
     }
-    let file = probe_image();
-    let section = match mm::section::Section::create_image(Arc::from(file)) {
+    let section = match mm::section::Section::create_image(Arc::from(image)) {
         Ok(section) => section,
-        Err(status) => return log::error!("[s1] the native program's image section: {status}"),
+        Err(status) => return log::error!("[s1] {name}: no image section: {status}"),
     };
     let info = section.image().expect("an image section").info;
     crate::sys::reset_service_calls();
-    let started = ps::create_process(&ps::system_process(), &section, "s1native.exe", false).and_then(|process| {
-        ps::process_parameters::write(&process, &ps::ProcessParameters::system(PROBE_PATH, PROBE_COMMAND_LINE))?;
+    let started = ps::create_process(&ps::system_process(), &section, name, false).and_then(|process| {
+        ps::process_parameters::write(&process, &ps::ProcessParameters::system(path, command_line))?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
-        ps::create_thread(&process, PROBE_BASE + 0x1000, &stack)?;
+        let entry = process.image_base() + info.entry_point as u32;
+        ps::create_thread_with_parameter(&process, entry, process.peb(), &stack)?;
         Ok(process)
     });
     let process = match started {
         Ok(process) => process,
-        Err(status) => return log::error!("[s1] the native process did not start: {status}"),
+        Err(status) => return log::error!("[s1] {name}: the process did not start: {status}"),
     };
     // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
     let waited = unsafe {
@@ -126,7 +161,7 @@ pub fn run_native_probe() {
         )
     };
     if waited == STATUS_TIMEOUT {
-        log::error!("[s1] the native process did not end within 10 s: terminated");
+        log::error!("[s1] {name}: the process did not end within 10 s: terminated");
         let _ = ps::terminate_process(process.clone(), STATUS_TIMEOUT);
         // SAFETY: as above.
         unsafe {
@@ -136,8 +171,8 @@ pub fn run_native_probe() {
     let status = process.exit_status();
     let calls = crate::sys::service_calls();
     log::info!(
-        "[s1] native process under the system DLL: exit status {status}{}, {} system services called",
-        if status == NtStatus(PROBE_EXIT_STATUS) { " (the program ran to its end)" } else { "" },
+        "[s1] {name} under the system DLL: exit status {status}{}, {} system services called",
+        if status == NtStatus(exit_status) { " (the program ran to its end)" } else { "" },
         calls.len()
     );
     for call in calls {

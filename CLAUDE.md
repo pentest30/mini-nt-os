@@ -46,8 +46,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
-- **Jalon courant : M3 — Frontière NT, puis spike S1** ([05](docs/05-feuille-de-route.md#m3--frontière-nt-puis-spike-s1)).
-  M0, M1 et M2 sont terminés. Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
+- **Jalon courant : M4 — E/S, registre, systèmes de fichiers** ([05](docs/05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)).
+  M0 à M3 sont terminés (spike S1 réussi ; l'ADR-002 attend S2 et S3). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
   `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
   thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
@@ -128,7 +128,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   de publication de ReactOS 0.4.16 (SourceForge, SHA-256 publié vérifié), `/reactos` de son ISO extrait dans
   `third_party/reactos/0.4.16/` (ignoré par Git) par du code std seul (SHA-256, inflate, ZIP, ISO 9660) ; les
   scénarios `requires = userland` reçoivent `NTDLL.DLL`, que le noyau installe comme DLL système à la fin des tests de
-  la phase 1 (`ntoskrnl::userland`). Spike S1 commencé (`docs/compat/s1-ntdll.md`) : un programme natif
+  la phase 1 (`ntoskrnl::userland`). Spike S1 fait (`docs/compat/s1-ntdll.md`) : un programme natif
   construit dans le noyau (`pe::builder`, imports de ntdll) démarre sous le vrai ntdll
   (`userland::run_native_probe`) ; le noyau journalise sa fin et les appels système faits, dans l'ordre du premier
   (`sys::service_calls`), le premier appel d'un service sans handler avec son appelant et ses arguments, et
@@ -137,7 +137,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`ps::nls` : pages de code ANSI et OEM, casse Unicode, une section en lecture seule projetée dans chaque
   processus). Services : NtQuerySystemInformation (SystemBasicInformation), NtProtectVirtualMemory. La sonde va au
   bout : `LdrInitializeThunk` initialise le processus, lie ses imports et l'appelle, qui écrit par `DbgPrint` et se
-  termine. À venir : le programme MinGW, le test SEH ([`docs/passation.md`](docs/passation.md)).
+  termine. Programme MinGW fait (`tests/native/`, compilé par `xtask/src/native.rs`, lié à `ntdll` par
+  `tests/native/ntdll.def`, scénario `native`) : lancé avec le PEB en argument (`ps::create_thread_with_parameter`),
+  il écrit par `DbgPrint` et se termine. Test SEH fait (`tests/native/s1seh.c`, clang `i686-pc-windows-msvc` et
+  `lld-link`, avec `tests/native/seh3.c`, notre `_except_handler3`) : écriture en 0 attrapée, filtre qui décline,
+  `__finally` au déroulement par `RtlUnwind`. Ke publie le TID d'un thread utilisateur avant de le rendre prêt
+  (`UserThreadStart::tid`). Suite : M4 ([`docs/passation.md`](docs/passation.md)).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
@@ -170,6 +175,9 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
+- Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW
+  (`i686-w64-mingw32-gcc`, paquet `gcc-mingw-w64-i686`), clang, `lld-link` et `llvm-dlltool` (paquets `clang`, `lld`,
+  `llvm`). Sans eux, ils sont sautés.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
 - Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.

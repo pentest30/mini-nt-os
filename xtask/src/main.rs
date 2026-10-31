@@ -22,6 +22,7 @@
 
 mod inflate;
 mod iso9660;
+mod native;
 mod qemu;
 mod scenario;
 mod sha256;
@@ -165,7 +166,11 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
 
     let artifacts = build(ws, features.as_deref())?;
     match userland_files(ws) {
-        Some(files) => extra_files.extend(files),
+        Some(files) => {
+            extra_files.extend(files);
+            // The native test programs, if MinGW can build them.
+            extra_files.extend(native::build(ws)?.unwrap_or_default());
+        }
         None => println!("xtask: no ReactOS userland (cargo xtask fetch-userland): the kernel boots without ntdll"),
     }
     let run_dir = ws.target.join("xtask").join("run");
@@ -222,18 +227,28 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
     let mut skipped = Vec::new();
     let mut runs = 0;
     for sc in &scenarios {
-        let extra_files = if sc.requires_userland {
+        let mut extra_files = Vec::new();
+        if sc.requires_userland {
             match userland_files(ws) {
-                Some(files) => files,
+                Some(files) => extra_files.extend(files),
                 None => {
                     println!("xtask: SKIP {}: needs the ReactOS userland (cargo xtask fetch-userland)", sc.name);
                     skipped.push(sc.name.clone());
                     continue;
                 }
             }
-        } else {
-            Vec::new()
-        };
+        }
+        if sc.requires_native {
+            match native::build(ws)? {
+                Some(files) => extra_files.extend(files),
+                None => {
+                    let tool = native::missing_tool().unwrap_or("a compiler");
+                    println!("xtask: SKIP {}: tests/native needs {tool} (MinGW, clang, lld, llvm)", sc.name);
+                    skipped.push(sc.name.clone());
+                    continue;
+                }
+            }
+        }
         let cpus = match &cpu {
             Some(cpu) => vec![cpu.clone()],
             None => sc.cpus.clone(),

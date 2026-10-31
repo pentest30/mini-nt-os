@@ -47,7 +47,7 @@ use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::ptr;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use abi::fpu::FxSaveArea;
 use abi::ntstatus::NtStatus;
@@ -801,16 +801,21 @@ pub unsafe fn init(idle_stack_top: u64) {
 }
 
 /// Enregistre `t` et le rend prêt ; il préempte l'appelant à la libération du
-/// verrou s'il est plus prioritaire. Libère `t` si la table est pleine.
+/// verrou s'il est plus prioritaire. Son TID va dans `published`, s'il y en a
+/// un, avant qu'il soit prêt : il peut s'exécuter, et finir, avant que
+/// l'appelant reprenne. Libère `t` si la table est pleine.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-fn start_thread(t: *mut Thread) -> Option<usize> {
+fn start_thread(t: *mut Thread, published: Option<&AtomicUsize>) -> Option<usize> {
     // SAFETY: `t` est un thread neuf, valide pour toujours s'il est enregistré ;
     // verrou tenu de acquire à release.
     let tid = unsafe {
         let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
         let tid = (*threads()).register(t);
+        if let (Some(tid), Some(slot)) = (tid, published) {
+            slot.store(tid, Ordering::Release);
+        }
         if tid.is_some() && (*sched()).ready(t, false) {
             request_reschedule();
         }
@@ -868,7 +873,7 @@ pub unsafe fn create_kernel_thread_in(
     let t = Thread::create(priority, ctx, false, 0, Some((routine, context)));
     // SAFETY: un thread neuf, encore inconnu de l'ordonnanceur.
     unsafe { (*t).directory_table_base = directory_table_base };
-    start_thread(t)
+    start_thread(t, None)
 }
 
 /// L'espace d'adresses où se trouvait le thread courant avant
@@ -944,6 +949,10 @@ pub struct UserThreadStart {
     pub teb: u32,
     /// Le thread de l'exécutif qui le possède ([`current_thread_owner`]).
     pub owner: *const c_void,
+    /// Où Ke écrit son TID avant qu'il soit prêt (`start_thread`), car le
+    /// thread peut s'exécuter, et finir, avant que `create_user_thread`
+    /// revienne ; nul si personne n'en a besoin (l'ancien chargeur).
+    pub tid: *const AtomicUsize,
 }
 
 /// Enregistre un thread utilisateur (ring 3, 32 bits), prêt à s'exécuter dans
@@ -969,7 +978,8 @@ pub struct UserThreadStart {
 /// # Safety
 /// `start.kernel_stack_top` est le haut, aligné sur 16 octets, d'une pile
 /// noyau projetée d'au moins 4 Kio, réservée à ce thread et gardée jusqu'à sa
-/// fin ; l'espace d'adresses reste vivant tant que le thread s'exécute.
+/// fin ; l'espace d'adresses reste vivant tant que le thread s'exécute ;
+/// `start.tid` est nul ou désigne un `AtomicUsize` valide jusqu'au retour.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
@@ -994,7 +1004,9 @@ pub unsafe fn create_user_thread(start: &UserThreadStart) -> Option<usize> {
         (*t).teb = start.teb;
         (*t).owner = start.owner;
     }
-    let tid = start_thread(t)?;
+    // SAFETY: `start.tid`, s'il n'est pas nul, vaut pour toute la création
+    // (contrat).
+    let tid = start_thread(t, unsafe { start.tid.as_ref() })?;
     log::info!(
         "Ke scheduler: spawned user-mode thread TID={} entry={:#010x} usp={:#010x} teb={:#010x}",
         tid,

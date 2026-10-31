@@ -1,0 +1,24 @@
+# Spike S1 (M3): native programs from tests/native/, linked to ReactOS's
+# ntdll only. S1HELLO.EXE, compiled with MinGW: ntdll's LdrInitializeThunk
+# initializes its process, binds its imports and enters NtProcessStartup with
+# the PEB, which the program prints with DbgPrint before ending with status
+# 0x5152. S1SEH.EXE, compiled with clang: a write to address 0 in nested
+# __try blocks, caught by the outer __except after the inner filter declines
+# and a __finally runs on unwind; status 0x5153. Skipped without the userland
+# (cargo xtask fetch-userland) or without the compilers.
+requires = userland, native
+cpus     = default, intel
+timeout  = 120
+
+expect = [s1] hello from a MinGW native program, PEB 7FFDF000
+expect = [s1] S1HELLO.EXE under the system DLL: exit status 0x00005152 (the program ran to its end)
+expect = [s1] SEH: write to 0 caught, code C0000005, inner filter declined, __finally ran on unwind
+expect = [s1] S1SEH.EXE under the system DLL: exit status 0x00005153 (the program ran to its end)
+expect = kernel: phase 1 done
+
+# A fatal error ends the run at once.
+forbid = *** STOP:
+forbid = [s1] S1HELLO.EXE: the process did not
+forbid = [s1] S1HELLO.EXE: no image section
+forbid = [s1] S1SEH.EXE: the process did not
+forbid = [s1] S1SEH.EXE: no image section

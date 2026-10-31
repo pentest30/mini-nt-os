@@ -12,7 +12,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | # | Décision | Statut |
 |---|---|---|
 | 001 | Noyau x86-64, mode utilisateur i386 natif sans WoW64 | Acceptée |
-| 002 | Espace utilisateur ReactOS épinglé ; la frontière est l'ABI noyau de ReactOS | **Proposée** (spikes S1–S3) |
+| 002 | Espace utilisateur ReactOS épinglé ; la frontière est l'ABI noyau de ReactOS | **Proposée** (S1 réussi ; spikes S2–S3) |
 | 003 | Version affichée : Windows XP 5.1.2600 SP2 | Acceptée |
 | 004 | Appels système : `int 2Eh` partout, SYSENTER sur Intel | Acceptée |
 | 005 | Dispatcher NT fidèle, verrou global puis par objet | Acceptée |
