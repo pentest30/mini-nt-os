@@ -17,6 +17,15 @@ pub trait BlockDevice {
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError>;
 }
 
+impl<D: BlockDevice + ?Sized> BlockDevice for alloc::boxed::Box<D> {
+    fn sector_size(&self) -> u32 {
+        (**self).sector_size()
+    }
+    fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        (**self).read_sector(lba, out)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Fat32Bpb {
     pub bytes_per_sector: u16,
@@ -27,11 +36,65 @@ pub struct Fat32Bpb {
     pub root_cluster: u32,
 }
 
-#[derive(Debug, Clone, Copy)]
+/// A directory entry (8.3), with its dates and times as FAT keeps them:
+/// local time, a date of 0 when unknown.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DirEntry {
     pub attr: u8,
     pub first_cluster: u32,
     pub file_size: u32,
+    pub creation_date: u16,
+    pub creation_time: u16,
+    /// Tenths of a second (0 to 199) to add to `creation_time`.
+    pub creation_tenths: u8,
+    pub access_date: u16,
+    pub write_date: u16,
+    pub write_time: u16,
+}
+
+impl DirEntry {
+    fn parse(ent: &[u8]) -> Self {
+        let u16_at = |at: usize| u16::from_le_bytes([ent[at], ent[at + 1]]);
+        let hi = u16_at(20) as u32;
+        let lo = u16_at(26) as u32;
+        Self {
+            attr: ent[11],
+            first_cluster: (hi << 16) | lo,
+            file_size: u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]),
+            creation_tenths: ent[13],
+            creation_time: u16_at(14),
+            creation_date: u16_at(16),
+            access_date: u16_at(18),
+            write_time: u16_at(22),
+            write_date: u16_at(24),
+        }
+    }
+}
+
+/// A FAT date and time (local time, 2 s steps, plus `tenths` of a second)
+/// as an NT time, in 100 ns since 1601 ; 0 for a date of 0 or invalid.
+pub fn nt_time(date: u16, time: u16, tenths: u8) -> u64 {
+    let (year, month, day) = (1980 + i64::from(date >> 9), i64::from((date >> 5) & 0xF), i64::from(date & 0x1F));
+    let (hour, minute, second) = (u64::from(time >> 11), u64::from((time >> 5) & 0x3F), u64::from(time & 0x1F) * 2);
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => return 0,
+    };
+    if date == 0 || day == 0 || day > days_in_month || hour > 23 || minute > 59 || second > 59 || tenths > 199 {
+        return 0;
+    }
+    // Days from 1970-01-01 (H. Hinnant's days_from_civil), then from 1601.
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = (era * 146_097 + doe - 719_468 + 134_774) as u64;
+    let seconds = days * 86_400 + hour * 3600 + minute * 60 + second;
+    seconds * 10_000_000 + u64::from(tenths) * 100_000
 }
 
 #[derive(Debug, Clone)]
@@ -241,7 +304,19 @@ impl<D: BlockDevice> FatVolume<D> {
         Ok(written)
     }
 
-    fn find_in_dir(&self, dir_cluster: u32, name: &str) -> Result<DirEntry, FatError> {
+    /// The cluster of the root directory.
+    pub fn root_cluster(&self) -> u32 {
+        self.bpb.root_cluster
+    }
+
+    /// The size of a cluster, in bytes.
+    pub fn cluster_bytes(&self) -> u32 {
+        u32::from(self.bpb.bytes_per_sector) * u32::from(self.bpb.sectors_per_cluster)
+    }
+
+    /// The entry `name` (8.3, any case) of the directory at `dir_cluster`;
+    /// `NotFound` without it, `Unsupported` for a name 8.3 cannot hold.
+    pub fn find_in_dir(&self, dir_cluster: u32, name: &str) -> Result<DirEntry, FatError> {
         let target = short_name_11(name)?;
         let bps = self.bpb.bytes_per_sector as usize;
         let spc = self.bpb.sectors_per_cluster as usize;
@@ -264,13 +339,9 @@ impl<D: BlockDevice> FatVolume<D> {
                     return Err(FatError::NotFound);
                 }
                 if first != 0xE5 {
-                    let attr = ent[11];
-                    if attr != 0x0F && ent[0..11] == target {
-                        let hi = u16::from_le_bytes([ent[20], ent[21]]) as u32;
-                        let lo = u16::from_le_bytes([ent[26], ent[27]]) as u32;
-                        let first_cluster = (hi << 16) | lo;
-                        let file_size = u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]);
-                        return Ok(DirEntry { attr, first_cluster, file_size });
+                    // Neither a long-name part nor the volume label.
+                    if ent[11] != 0x0F && ent[11] & 0x08 == 0 && ent[0..11] == target {
+                        return Ok(DirEntry::parse(ent));
                     }
                 }
                 i += 32;
@@ -541,6 +612,37 @@ mod tests {
         let n = vol.read(&mut file, &mut out).expect("read");
         assert_eq!(n, 4);
         assert_eq!(&out[..4], b"ABCD");
+    }
+
+    #[test]
+    fn fat_dates_become_nt_times() {
+        assert_eq!(nt_time(0x21, 0, 0), 119_600_064_000_000_000, "1980-01-01");
+        assert_eq!(nt_time(12548, 25692, 50), 127_360_964_965_000_000, "2004-08-04 12:34:56.5");
+        assert_eq!(nt_time(10333, 49021, 0), 125_963_423_980_000_000, "2000-02-29 23:59:58");
+        assert_eq!(nt_time(0, 25692, 0), 0, "no date");
+        assert_eq!(nt_time((21 << 9) | (2 << 5) | 29, 0, 0), 0, "2001-02-29");
+        assert_eq!(nt_time(0x21, 24 << 11, 0), 0, "hour 24");
+    }
+
+    #[test]
+    fn an_entry_gives_its_dates_and_volume_labels_are_skipped() {
+        let disk = make_test_disk();
+        let mut root = [0u8; 512];
+        root[0..11].copy_from_slice(b"KERNEL  BIN");
+        root[11] = 0x08; // a volume label of the same name, first
+        root[32..43].copy_from_slice(b"KERNEL  BIN");
+        root[43] = 0x21;
+        root[32 + 22..32 + 24].copy_from_slice(&25692u16.to_le_bytes());
+        root[32 + 24..32 + 26].copy_from_slice(&12548u16.to_le_bytes());
+        root[32 + 26..32 + 28].copy_from_slice(&3u16.to_le_bytes());
+        root[32 + 28..32 + 32].copy_from_slice(&4u32.to_le_bytes());
+        disk.write_sector(2, &root);
+        let vol = FatVolume::mount(disk).expect("mount");
+        let entry = vol.find_in_dir(vol.root_cluster(), "kernel.bin").expect("found");
+        assert_eq!((entry.attr, entry.first_cluster, entry.file_size), (0x21, 3, 4));
+        assert_eq!((entry.write_date, entry.write_time), (12548, 25692));
+        assert_eq!(vol.find_in_dir(vol.root_cluster(), "other.bin"), Err(FatError::NotFound));
+        assert_eq!(vol.cluster_bytes(), 512);
     }
 
     #[test]

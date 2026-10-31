@@ -1,15 +1,23 @@
-//! Io — I/O Manager executive.
+//! Io — gestionnaire d'E/S (02 §5.6).
 //!
-//! Responsibilities:
-//!   - IRP (I/O Request Packet) lifecycle
-//!   - Driver object / device object model
-//!   - File object creation (NtCreateFile / NtOpenFile)
-//!   - Completion port support (NtCreateIoCompletionPort) — needed by games
+//! - [`volume`] : un système de fichiers monté (FAT32, ADR-017), en lecture.
+//! - [`device`] : le type `Device` ; un périphérique qui porte un volume
+//!   résout la suite d'un nom en fichier (IopParseDevice).
+//! - [`file`] : le type `File`, les fichiers ouverts, et ce que NtCreateFile
+//!   vérifie une fois le fichier trouvé.
 //!
-//! Phase 1: type definitions and stubs.
-//! Phase 2: real IRP dispatch, driver stack.
+//! Au démarrage, [`mount_boot_volume`] fait du disque RAM le volume système :
+//! `\Device\Ramdisk0`, avec `\??\C:` et `\SystemRoot` qui y mènent.
+//!
+//! Pas encore : IRP et piles de périphériques, pilotes de disque, écriture,
+//! E/S asynchrones, ports de complétion.
+//!
+//! Le reste de ce module (`open_fat_file`, `open_game_file`, le volume
+//! « demo », [`DeviceObject`], [`Irp`]) sert l'ancienne architecture : ne pas
+//! l'étendre (audit §5).
 
 #![no_std]
+#![deny(unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 
 use alloc::vec;
@@ -18,15 +26,47 @@ use core::arch::asm;
 use core::mem::ManuallyDrop;
 use hal::sync::KSpinLock;
 
+pub mod device;
 pub mod driver;
 pub mod fat;
 pub mod file;
 pub mod irp;
+pub mod volume;
 
+pub use device::{Device, DEVICE_TYPE};
 pub use driver::{DeviceObject, DriverObject};
 pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
-pub use file::{FileObject, FILE_TYPE};
+pub use file::{check_open, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
+pub use volume::{Node, Volume};
+
+/// Le volume de démarrage.
+pub const BOOT_VOLUME: &str = "\\Device\\Ramdisk0";
+/// Les liens qui y mènent : la lettre `C:`, et `\SystemRoot`, le
+/// répertoire du système.
+pub const BOOT_LINKS: [(&str, &str); 2] =
+    [("\\GLOBAL??\\C:", BOOT_VOLUME), ("\\SystemRoot", "\\Device\\Ramdisk0\\WINDOWS")];
+
+/// Fait du disque RAM de démarrage le volume système, en attendant les
+/// pilotes de disque (ADR-017) : son système de fichiers monté sur le
+/// périphérique [`BOOT_VOLUME`], et les liens [`BOOT_LINKS`], permanents.
+/// Rend sa taille, ou `None` sans disque RAM.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, une fois, après [`init`] et `ob::init`.
+pub fn mount_boot_volume() -> Result<Option<u64>, abi::ntstatus::NtStatus> {
+    let Some(disk) = ramdisk_device() else { return Ok(None) };
+    let size = disk.total_size as u64;
+    let volume = Volume::mount(alloc::boxed::Box::new(disk))?;
+    let namespace = ob::namespace();
+    let device: ob::ObjectRef = Device::with_volume(volume);
+    namespace.insert(&device, BOOT_VOLUME, None, abi::object::OBJ_PERMANENT)?;
+    for (name, target) in BOOT_LINKS {
+        let link: ob::ObjectRef = ob::SymbolicLink::create(target);
+        namespace.insert(&link, name, None, abi::object::OBJ_PERMANENT)?;
+    }
+    Ok(Some(size))
+}
 
 struct RamBlockDevice {
     sector_size: u32,
@@ -376,3 +416,6 @@ fn build_demo_fat32_disk() -> Vec<u8> {
     disk[1536..2048].copy_from_slice(&file);
     disk
 }
+
+#[cfg(test)]
+mod tests;

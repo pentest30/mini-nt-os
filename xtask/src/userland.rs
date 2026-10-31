@@ -43,24 +43,39 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 }
 
 /// The files of `system32` that every boot with the userland gets, with
-/// their names on the boot disk: ntdll, then the NLS tables (ANSI and OEM
-/// code pages, Unicode case table) that each process maps, then `smss.exe`,
-/// which the kernel starts with its `test-smss` feature (M4), and the SYSTEM
-/// hive that ReactOS generated, which the kernel mounts (until
-/// `tools/mkhive`, ADR-012). `None` until `fetch-userland` ran.
-pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, &'static str)>> {
+/// their paths on the boot disk, under `WINDOWS/SYSTEM32` as on the system
+/// volume (02 §9.1): ntdll, then the NLS tables (ANSI and OEM code pages,
+/// Unicode case table) that each process maps, then `smss.exe`, which the
+/// kernel starts with its `test-smss` feature (M4), the SYSTEM hive that
+/// ReactOS generated, which the kernel mounts (until `tools/mkhive`,
+/// ADR-012), and the [`KNOWN_DLLS`]. `None` until `fetch-userland` ran.
+pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     [
         ("ntdll.dll", "NTDLL.DLL"),
         ("c_1252.nls", "C_1252.NLS"),
         ("c_437.nls", "C_437.NLS"),
         ("l_intl.nls", "L_INTL.NLS"),
         ("smss.exe", "SMSS.EXE"),
-        ("config/system", "SYSTEM"),
+        ("config/system", "CONFIG/SYSTEM"),
     ]
     .into_iter()
-    .map(|(file, name)| system32_file(ws, file).map(|path| (path, name)))
+    .map(|(file, name)| (file.to_string(), name.to_ascii_uppercase()))
+    .chain(KNOWN_DLLS.iter().map(|dll| (format!("{dll}.dll"), format!("{}.DLL", dll.to_ascii_uppercase()))))
+    .map(|(file, name)| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{name}"))))
     .collect()
 }
+
+/// The system directory on the boot disk.
+const SYSTEM32: &str = "WINDOWS/SYSTEM32";
+
+/// The `KnownDLLs` of the pinned SYSTEM hive (`Session Manager\KnownDLLs`),
+/// without their `.dll`: `smss` opens each one in `DllDirectory`
+/// (`%SystemRoot%\system32`) and makes a section of it in `\KnownDlls` (M4).
+const KNOWN_DLLS: [&str; 21] = [
+    "advapi32", "comdlg32", "gdi32", "imagehlp", "kernel32", "lz32", "msvcrt", "ole32", "oleaut32", "olecli32",
+    "olesvr32", "olethk32", "rpcrt4", "setupapi", "shell32", "url", "urlmon", "user32", "version", "wininet",
+    "wldap32",
+];
 
 /// The file `name` of the fetched `system32`; `None` until `fetch-userland`
 /// ran, or without it.

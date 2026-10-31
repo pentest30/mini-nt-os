@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 21 | 296 |
+| ntoskrnl | 31 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -54,7 +54,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0024` | `NtCreateDirectoryObject` | 3 | ✅ |
 | `0x0025` | `NtCreateEvent` | 5 |  |
 | `0x0026` | `NtCreateEventPair` | 3 |  |
-| `0x0027` | `NtCreateFile` | 11 |  |
+| `0x0027` | `NtCreateFile` | 11 | ✅ |
 | `0x0028` | `NtCreateIoCompletion` | 4 |  |
 | `0x0029` | `NtCreateJobObject` | 3 |  |
 | `0x002a` | `NtCreateJobSet` | 3 |  |
@@ -67,7 +67,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0031` | `NtCreateProcess` | 8 |  |
 | `0x0032` | `NtCreateProcessEx` | 9 |  |
 | `0x0033` | `NtCreateProfile` | 9 |  |
-| `0x0034` | `NtCreateSection` | 7 |  |
+| `0x0034` | `NtCreateSection` | 7 | ✅ |
 | `0x0035` | `NtCreateSemaphore` | 5 |  |
 | `0x0036` | `NtCreateSymbolicLinkObject` | 4 | ✅ |
 | `0x0037` | `NtCreateThread` | 8 |  |
@@ -128,7 +128,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x006e` | `NtMakeTemporaryObject` | 1 |  |
 | `0x006f` | `NtMapUserPhysicalPages` | 3 |  |
 | `0x0070` | `NtMapUserPhysicalPagesScatter` | 3 |  |
-| `0x0071` | `NtMapViewOfSection` | 10 |  |
+| `0x0071` | `NtMapViewOfSection` | 10 | ✅ |
 | `0x0072` | `NtModifyBootEntry` | 1 |  |
 | `0x0073` | `NtModifyDriverEntry` | 1 |  |
 | `0x0074` | `NtNotifyChangeDirectoryFile` | 9 |  |
@@ -137,7 +137,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0077` | `NtOpenDirectoryObject` | 3 | ✅ |
 | `0x0078` | `NtOpenEvent` | 3 |  |
 | `0x0079` | `NtOpenEventPair` | 3 |  |
-| `0x007a` | `NtOpenFile` | 6 |  |
+| `0x007a` | `NtOpenFile` | 6 | ✅ |
 | `0x007b` | `NtOpenIoCompletion` | 3 |  |
 | `0x007c` | `NtOpenJobObject` | 3 |  |
 | `0x007d` | `NtOpenKey` | 3 | ✅ |
@@ -146,7 +146,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0080` | `NtOpenProcess` | 4 |  |
 | `0x0081` | `NtOpenProcessToken` | 3 |  |
 | `0x0082` | `NtOpenProcessTokenEx` | 4 |  |
-| `0x0083` | `NtOpenSection` | 3 |  |
+| `0x0083` | `NtOpenSection` | 3 | ✅ |
 | `0x0084` | `NtOpenSemaphore` | 3 |  |
 | `0x0085` | `NtOpenSymbolicLinkObject` | 3 | ✅ |
 | `0x0086` | `NtOpenThread` | 4 |  |
@@ -160,7 +160,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x008e` | `NtPrivilegedServiceAuditAlarm` | 5 |  |
 | `0x008f` | `NtProtectVirtualMemory` | 5 | ✅ |
 | `0x0090` | `NtPulseEvent` | 2 |  |
-| `0x0091` | `NtQueryAttributesFile` | 2 |  |
+| `0x0091` | `NtQueryAttributesFile` | 2 | ✅ |
 | `0x0092` | `NtQueryBootEntryOrder` | 2 |  |
 | `0x0093` | `NtQueryBootOptions` | 2 |  |
 | `0x0094` | `NtQueryDebugFilterState` | 2 |  |
@@ -171,9 +171,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0099` | `NtQueryDriverEntryOrder` | 2 |  |
 | `0x009a` | `NtQueryEaFile` | 9 |  |
 | `0x009b` | `NtQueryEvent` | 5 |  |
-| `0x009c` | `NtQueryFullAttributesFile` | 2 |  |
+| `0x009c` | `NtQueryFullAttributesFile` | 2 | ✅ |
 | `0x009d` | `NtQueryInformationAtom` | 5 |  |
-| `0x009e` | `NtQueryInformationFile` | 5 |  |
+| `0x009e` | `NtQueryInformationFile` | 5 | ✅ |
 | `0x009f` | `NtQueryInformationJobObject` | 5 |  |
 | `0x00a0` | `NtQueryInformationPort` | 5 |  |
 | `0x00a1` | `NtQueryInformationProcess` | 5 |  |
@@ -202,7 +202,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00b8` | `NtQueryTimerResolution` | 3 |  |
 | `0x00b9` | `NtQueryValueKey` | 6 | ✅ |
 | `0x00ba` | `NtQueryVirtualMemory` | 6 | ✅ |
-| `0x00bb` | `NtQueryVolumeInformationFile` | 5 |  |
+| `0x00bb` | `NtQueryVolumeInformationFile` | 5 | ✅ |
 | `0x00bc` | `NtQueueApcThread` | 5 | ✅ |
 | `0x00bd` | `NtRaiseException` | 3 | ✅ |
 | `0x00be` | `NtRaiseHardError` | 6 |  |
@@ -292,7 +292,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0112` | `NtUnloadKeyEx` | 2 |  |
 | `0x0113` | `NtUnlockFile` | 5 |  |
 | `0x0114` | `NtUnlockVirtualMemory` | 4 |  |
-| `0x0115` | `NtUnmapViewOfSection` | 2 |  |
+| `0x0115` | `NtUnmapViewOfSection` | 2 | ✅ |
 | `0x0116` | `NtVdmControl` | 2 |  |
 | `0x0117` | `NtWaitForDebugEvent` | 4 |  |
 | `0x0118` | `NtWaitForMultipleObjects` | 5 |  |

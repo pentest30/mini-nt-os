@@ -3,18 +3,19 @@
 //! épinglé (`fetch-userland`), installées à la fin des tests de la phase 1
 //! (`ps::system_dll`, `ps::nls`) ; puis le spike S1 : la sonde, un programme
 //! natif construit dans le noyau, et les programmes natifs de test du disque
-//! (`tests/native`), chacun lancé sous la DLL système. Ces fichiers viendront
-//! de `\SystemRoot\System32` par Io (M4).
+//! (`tests/native`), chacun lancé sous la DLL système. Les fichiers viennent
+//! du volume système par Io (`\SystemRoot\System32`, `\??\C:`) : le disque
+//! RAM de démarrage, qui les range comme le volume système (02 §9.1).
 
 use alloc::sync::Arc;
 
-/// Où le disque RAM de démarrage la tient.
-const NTDLL: &str = "/NTDLL.DLL";
-/// Les tables NLS du disque RAM de démarrage : pages de code ANSI et OEM,
-/// casse Unicode.
-const NLS_FILES: [&str; 3] = ["/C_1252.NLS", "/C_437.NLS", "/L_INTL.NLS"];
-/// La ruche SYSTEM du disque RAM de démarrage.
-const SYSTEM_HIVE: &str = "/SYSTEM";
+/// La DLL système.
+const NTDLL: &str = "\\SystemRoot\\System32\\ntdll.dll";
+/// Les tables NLS : pages de code ANSI et OEM, casse Unicode.
+const NLS_FILES: [&str; 3] =
+    ["\\SystemRoot\\System32\\c_1252.nls", "\\SystemRoot\\System32\\c_437.nls", "\\SystemRoot\\System32\\l_intl.nls"];
+/// La ruche SYSTEM.
+const SYSTEM_HIVE: &str = "\\SystemRoot\\System32\\config\\SYSTEM";
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -116,8 +117,8 @@ pub fn run_native_probe() {
 /// compilés par `cargo xtask`) : leur fichier, leur chemin dans leurs
 /// paramètres, et le statut de sortie qu'ils rendent s'ils vont au bout.
 const BOOT_PROGRAMS: &[(&str, &str, u32)] = &[
-    ("/S1HELLO.EXE", "C:\\WINDOWS\\system32\\s1hello.exe", 0x5152),
-    ("/S1SEH.EXE", "C:\\WINDOWS\\system32\\s1seh.exe", 0x5153),
+    ("\\??\\C:\\S1HELLO.EXE", "C:\\WINDOWS\\system32\\s1hello.exe", 0x5152),
+    ("\\??\\C:\\S1SEH.EXE", "C:\\WINDOWS\\system32\\s1seh.exe", 0x5153),
 ];
 
 /// Lance sous la DLL système les programmes natifs de test que tient le
@@ -128,14 +129,14 @@ const BOOT_PROGRAMS: &[(&str, &str, u32)] = &[
 pub fn run_boot_programs() {
     for &(file, path, exit_status) in BOOT_PROGRAMS {
         if let Some(image) = read_boot_file(file) {
-            let name = file.trim_start_matches('/');
+            let name = file.rsplit('\\').next().unwrap_or(file);
             run_native("s1", name, image, &ps::ProcessParameters::system(path, name), Some(exit_status));
         }
     }
 }
 
 /// Le gestionnaire de session du disque de démarrage.
-const SMSS: &str = "/SMSS.EXE";
+const SMSS: &str = "\\SystemRoot\\System32\\smss.exe";
 
 /// M4, découverte : lance le `smss.exe` de ReactOS sous la DLL système
 /// ([`run_native`]), avec les paramètres que le noyau donne au premier
@@ -160,6 +161,28 @@ pub fn run_smss_probe() {
         environment: &["Path=C:\\WINDOWS\\system32", "SystemRoot=C:\\WINDOWS"],
     };
     run_native("m4", "SMSS.EXE", image, &params, None);
+    log_known_dlls();
+}
+
+/// Journalise ce que `smss` a mis dans `\KnownDlls` : les sections d'image
+/// des KnownDLLs (permanentes), et le lien `KnownDllPath`.
+fn log_known_dlls() {
+    let Ok(directory) = ob::namespace().open("\\KnownDlls", None, Some(&ob::DIRECTORY_TYPE), 0) else {
+        return log::warn!("[m4] no \\KnownDlls directory");
+    };
+    let entries = ob::downcast::<ob::Directory>(&directory).expect("a directory").entries();
+    let sections: alloc::vec::Vec<&str> =
+        entries.iter().filter(|(_, ty)| *ty == mm::section::SECTION_TYPE.name).map(|(name, _)| name.as_str()).collect();
+    let path = ob::namespace()
+        .open("\\KnownDlls\\KnownDllPath", None, Some(&ob::SYMBOLIC_LINK_TYPE), abi::object::OBJ_OPENLINK)
+        .ok()
+        .and_then(|link| ob::downcast::<ob::SymbolicLink>(&link));
+    log::info!(
+        "[m4] \\KnownDlls: {} sections ({}), KnownDllPath -> {}",
+        sections.len(),
+        sections.join(", "),
+        path.as_ref().map_or("none", |link| link.target())
+    );
 }
 
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
@@ -285,10 +308,21 @@ fn probe_image() -> alloc::vec::Vec<u8> {
     image(&text).build()
 }
 
-/// Le fichier `path` du disque RAM de démarrage, en entier.
+/// Le fichier `path` (un nom NT) en entier, par Io ; `None` sans lui, ou
+/// s'il ne se lit pas (journalisé).
 fn read_boot_file(path: &str) -> Option<alloc::vec::Vec<u8>> {
-    let mut file = io_manager::open_fat_file(path).ok()?;
-    let mut bytes = alloc::vec![0u8; file.file_size as usize];
-    let read = io_manager::read_fat_file_bulk(&mut file, &mut bytes).ok()?;
-    (read == bytes.len()).then_some(bytes)
+    use abi::ntstatus::{STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND};
+
+    let read = ob::namespace()
+        .open(path, None, Some(&io_manager::FILE_TYPE), abi::object::OBJ_CASE_INSENSITIVE)
+        .and_then(|object| ob::downcast::<io_manager::File>(&object).ok_or(abi::ntstatus::STATUS_OBJECT_TYPE_MISMATCH))
+        .and_then(|file| file.read_all());
+    match read {
+        Ok(bytes) => Some(bytes),
+        Err(STATUS_OBJECT_NAME_NOT_FOUND | STATUS_OBJECT_PATH_NOT_FOUND) => None,
+        Err(status) => {
+            log::warn!("[boot] {path}: not read: {status}");
+            None
+        }
+    }
 }

@@ -71,6 +71,7 @@ dependencies = [
 name = "io-manager"
 version = "0.1.0"
 dependencies = [
+ "abi",
  "hal",
  "ke",
  "log",
@@ -113,6 +114,9 @@ dependencies = [
 [[package]]
 name = "mkfat"
 version = "0.1.0"
+dependencies = [
+ "io-manager",
+]
 
 [[package]]
 name = "mm"

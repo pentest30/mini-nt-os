@@ -7,15 +7,15 @@ jour à chaque commit qui change l'état.
 ## État
 
 - Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
-  (spike S1 réussi). Étapes 0 à 2 du M4 faites : la sonde `smss`, le registre en lecture, les répertoires d'Ob ;
-  ensuite, Io (le prochain mur de `smss`).
-- Branche de travail : `claude/new-session-696xfc`. Les PR se fusionnent dans `main` ; après une fusion, repartir de
-  `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- PR fusionnées : #29, #30 et #31 (spike S1). PR ouverte : #32 (étapes 0 et 1 du M4 : sonde `smss`, registre en
-  lecture). L'étape 2 (services de répertoires d'Ob) est faite sur la même branche, après la PR (elle la rejoint
-  tant que la PR est ouverte). Après chaque fusion,
-  repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main`
-  si la branche a des commits non fusionnés : jamais de réécriture).
+  (spike S1 réussi). Étapes 0, 1, 2 et 5 du M4 faites : la sonde `smss`, le registre en lecture, les répertoires
+  d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`) ; ensuite, `SystemProcessorInformation`
+  puis l'écriture dans le registre (étape 4), les prochains murs de `smss`.
+- Branche de travail : `claude/m4-io`, partie d'`origin/main` après la fusion de #32. Les PR se fusionnent dans
+  `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
+  `git merge-base --is-ancestor HEAD origin/main`).
+- PR fusionnées : #29, #30, #31 (spike S1) et #32 (étapes 0 à 2 du M4). L'étape 5 (Io) est sur `claude/m4-io`, PR à
+  ouvrir. Après chaque fusion, repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`,
+  ou `git merge origin/main` si la branche a des commits non fusionnés : jamais de réécriture).
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
@@ -102,26 +102,35 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer `smss`).
 4. [ ] **Écriture dans le registre** (`NtDeleteValueKey`, `NtSetValueKey`, `NtCreateKey`), en mémoire d'abord, et
    `tools/mkhive`.
-5. [ ] **Io** (prochaine, c'est le mur de `smss`) : `NtOpenFile` sur un répertoire (`C:\WINDOWS\system32`, à travers
-   `\??\C:` → un volume), puis `NtCreateSection` sur les DLL de `KnownDLLs` et `NtQueryAttributesFile`. Le code
-   existant : `kernel/io` (`io_manager`, `FILE_TYPE`, un pilote FAT en lecture sur le disque RAM de démarrage,
-   `open_fat_file`, `read_fat_file_bulk`). Plan proposé : un objet `\Device\...` pour le volume du disque de démarrage
-   avec une procédure *parse* qui ouvre un fichier ou un répertoire FAT et rend un objet `File` ; le lien `\??\C:`
-   vers lui ; `NtOpenFile` (et `NtCreateFile` en ouverture seule), `NtQueryAttributesFile`, `NtClose` ; IRP
-   synchrones ensuite. Mettre sur le disque de démarrage une arborescence `WINDOWS\system32` avec les DLL de
-   `KnownDLLs` (toutes ont des noms 8.3 : `KERNEL32.DLL`, `ADVAPI32.DLL`…). Constats : le lecteur FAT
-   (`kernel/io/src/fat.rs`, `FatVolume::open`, `list_dir`) suit déjà les sous-répertoires (chemins séparés par `/`),
-   sans noms longs ; `tools/mkfat` n'écrit que des noms 8.3 à la racine : il faut lui apprendre les
-   sous-répertoires. `kernel/io` mêle encore du code de l'ancienne architecture (`open_game_file`, source « demo ») :
-   ne pas l'étendre, bâtir à côté.
-6. [ ] **LPC**, seulement si `smss` ne peut aller plus loin sans.
+5. [x] **Io** (`docs/compat/m4-smss.md`, étape 3) : le disque RAM de démarrage tient lieu du volume système.
+   `tools/mkfat` écrit des sous-répertoires (`HOTE:DIR/NOM.EXT`, composants 8.3) et des répertoires sur plusieurs
+   clusters ; `cargo xtask` range l'espace utilisateur dans `WINDOWS/SYSTEM32` avec les 21 KnownDLLs
+   (`xtask/src/userland.rs`, `KNOWN_DLLS`) ; le chargeur accepte 64 Mio de disque RAM. `kernel/io` : `io::volume`
+   (FAT32 monté, résolution sans casse, erreurs d'un pilote d'XP, dates FAT en temps NT), type `Device` (procédure
+   *parse* : IopParseDevice), type `File` (nom relatif à un répertoire ouvert : IopParseFile ; position, mode
+   synchrone, informations), `check_open` (disposition et options) ; `mount_boot_volume` : `\Device\Ramdisk0`,
+   `\GLOBAL??\C:`, `\SystemRoot`. Le noyau lit ntdll, les NLS, la ruche et `smss` par Io (`userland::read_boot_file`).
+   Services (`sys::file`, `sys::section`) : NtCreateFile (ouverture seule), NtOpenFile, NtQueryAttributesFile,
+   NtQueryFullAttributesFile, NtQueryInformationFile (Basic, Standard, Position, NetworkOpen),
+   NtQueryVolumeInformationFile (FileFsDeviceInformation), NtCreateSection (fichier d'échange, données, image),
+   NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection. Tests : `kernel/io/src/tests.rs` (hôte),
+   `file_self_test` et `section_service_self_test` (depuis le mode utilisateur), vérifiés par mutation.
+   Résultat : `smss` met 21 sections d'image dans `\KnownDlls`, puis s'arrête à
+   `NtQuerySystemInformation(SystemProcessorInformation)`.
+   Pas encore : IRP et piles de périphériques (les lectures vont droit au volume), noms longs FAT, écriture FAT
+   (critère 3), partage, création ; une section de fichier copie le fichier (deux copies de `shell32` quand deux
+   sections le tiennent : à partager par fichier, comme les SectionObjectPointers d'XP).
+6. [ ] **`SystemProcessorInformation`** (classe 1 de NtQuerySystemInformation, 12 octets : architecture, niveau,
+   révision, fonctions ; depuis `hal::cpuid`), puis l'étape 4 : `SmpCreateDynamicEnvironmentVariables` ouvre
+   `Session Manager\Environment` en `GENERIC_WRITE` et y écrit `OS`, `PROCESSOR_*` (NtSetValueKey).
+7. [ ] **LPC**, seulement si `smss` ne peut aller plus loin sans.
    Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
    mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 
 Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) :
 `NtQueryInformationProcess(ProcessCookie)`, `NtSetInformationProcess(ProcessExecuteFlags)`,
-`NtFlushInstructionCache`, `NtOpenDirectoryObject`, `NtQueryDefaultLocale` (justes sans Io ni Cm) ; `NtOpenKey`,
-`NtQueryValueKey` (Cm) ; `NtOpenFile`, `NtQueryAttributesFile` (Io) ; `NtCreateKeyedEvent` (Ex).
+`NtFlushInstructionCache`, `NtQueryDefaultLocale` (justes sans Io ni Cm) ; `NtCreateKeyedEvent` (Ex). `NtOpenKey`,
+`NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
 
 ## Ensuite (hors jalon)
 
@@ -153,9 +162,14 @@ cargo xtask lint && cargo xtask test                        # avant chaque commi
   temporairement dans `raise` (`kernel/ntoskrnl/src/sys/exceptions.rs`) un
   `log::warn!("TEMP exception {code} at {:#x} esp {:#x} {parameters:x?}", frame.rip, frame.rsp);`, à retirer avant
   de committer.
-- ReactOS sert de spécification (ses sources `ntdll`, en lecture) ; on ne porte pas son code noyau. Jamais de code
-  Microsoft.
-- Réseau : SourceForge passe ; les pages de publication et l'API de GitHub, et reactos.org, sont bloquées.
+- ReactOS sert de spécification (ses sources `ntdll`, `smss`, en lecture) ; on ne porte pas son code noyau. Jamais
+  de code Microsoft. Les sources, hors du dépôt, par le proxy Git (sans l'API de GitHub) :
+  `git clone --filter=blob:none --no-checkout --depth 1 --branch 0.4.16 https://github.com/reactos/reactos ../reactos-src`,
+  puis `git sparse-checkout set --no-cone base/system/smss dll/ntdll sdk/lib/rtl` et `git checkout`.
+- Réseau : SourceForge et les clones Git de GitHub passent ; les pages de publication et l'API de GitHub, et
+  reactos.org, sont bloquées.
+- Le scénario `smss` : `cargo xtask test --boot --scenario smss --cpu intel`, journal `[m4]` dans
+  `target/xtask/boot/smss-intel/serial.log` ; `[m4] \KnownDlls:` dit ce que `smss` a mis dans `\KnownDlls`.
 
 ## Pratiques de la session
 

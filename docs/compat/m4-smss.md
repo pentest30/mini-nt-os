@@ -95,3 +95,42 @@ ouvre `\??`, puis s'arrête :
 
 Le prochain mur est donc Io : un fichier (un répertoire) ouvert par son nom, à travers `\??\C:`, un volume et un
 système de fichiers.
+
+## Étape 3 : Io, le volume système et les sections de `\KnownDlls`
+
+Le disque RAM de démarrage tient lieu du volume système (ADR-017, en attendant les pilotes de disque) : `tools/mkfat`
+écrit des sous-répertoires, et `cargo xtask` range l'espace utilisateur dans `\WINDOWS\SYSTEM32` (ntdll, tables NLS,
+`smss.exe`, `CONFIG\SYSTEM`) avec les 21 KnownDLLs de la ruche épinglée (`Session Manager\KnownDLLs`, toutes en noms
+8.3). Le chargeur accepte un disque RAM de 64 Mio (27 Mio avec les KnownDLLs). Ce qu'il a fallu :
+
+- **Io** (`kernel/io`) : un volume FAT32 monté (`io::volume`, en lecture, sans noms longs), le type `Device`, dont la
+  procédure *parse* ouvre un fichier ou un répertoire du volume (IopParseDevice), et le type `File`, dont la procédure
+  *parse* résout un nom relatif à un répertoire ouvert (IopParseFile). Au démarrage, `\Device\Ramdisk0`, avec
+  `\GLOBAL??\C:` et `\SystemRoot` (`\Device\Ramdisk0\WINDOWS`). Le noyau lit désormais ntdll, les tables NLS, la ruche
+  et `smss` par Io (`\SystemRoot\System32\…`).
+- **Services d'Io** : NtCreateFile (ouverture d'un fichier existant ; le volume est en lecture seule), NtOpenFile,
+  NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryInformationFile (FileBasic, FileStandard, FilePosition,
+  FileNetworkOpenInformation), NtQueryVolumeInformationFile (FileFsDeviceInformation, que ntdll demande pour son
+  répertoire courant, `RtlSetCurrentDirectory_U`).
+- **Services des sections** (Mm) : NtCreateSection (fichier d'échange, données, image d'un fichier ouvert), NtOpenSection,
+  NtMapViewOfSection, NtUnmapViewOfSection.
+
+`smss` crée alors `\KnownDlls` (le répertoire existait déjà : `OBJ_OPENIF`), y met le lien `KnownDllPath`
+(`C:\WINDOWS\system32`), ouvre `C:\WINDOWS\system32` comme répertoire, puis, pour chaque KnownDLL : l'ouvre relativement
+à ce répertoire, la vérifie (`LdrVerifyImageMatchesChecksum` : une section de données `SEC_COMMIT` sur le handle avec son
+bit d'étiquette, une vue, FileStandardInformation, la liste des imports), et en fait une section d'image nommée et
+permanente dans `\KnownDlls`. Les imports des KnownDLLs s'ajoutent à la liste ; ceux qui ne sont pas sur le disque
+(`comctl32`, `shlwapi`…) sont sautés, comme sur XP pour un fichier absent. Bilan : 21 sections d'image dans `\KnownDlls`
+(journal `[m4] \KnownDlls: 21 sections`), 36 NtOpenFile, 42 NtCreateSection, 21 vues projetées et retirées.
+
+Ensuite :
+
+| Service | Arguments | Ce qu'en fait `smss` | Composant |
+|---|---|---|---|
+| — | `PagingFiles` vide dans la ruche de ReactOS | « SMSS:PFILE: No paging file was requested » : pas de fichier d'échange | |
+| `NtInitializeRegistry` | 0 | les ruches restantes ; échec toléré | Cm |
+| `NtQuerySystemInformation` | `SystemProcessorInformation` (classe 1), 12 octets | « SMSS: Unable to query system processor information » : **`SmpInit` échoue** | **Ex** |
+
+Le prochain mur est donc `SystemProcessorInformation` (architecture, niveau, révision et fonctions du processeur), puis,
+dans la même fonction (`SmpCreateDynamicEnvironmentVariables`), l'écriture du registre : NtOpenKey en `GENERIC_WRITE`
+sur `Session Manager\Environment` et NtSetValueKey (`OS`, `PROCESSOR_ARCHITECTURE`, `PROCESSOR_LEVEL`…), l'étape 4.

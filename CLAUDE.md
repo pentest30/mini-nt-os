@@ -151,7 +151,15 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtEnumerateKey, NtQueryValueKey, NtEnumerateValueKey ; la ruche SYSTEM de ReactOS épinglé montée au démarrage
   (en attendant `tools/mkhive`). Répertoires d'Ob faits : NtCreateDirectoryObject, NtOpenDirectoryObject,
   NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject. `smss` lit `Session Manager`, crée ses répertoires et ses
-  liens, puis s'arrête à `NtOpenFile` (KnownDlls) : Io ensuite. Suite : [`docs/passation.md`](docs/passation.md).
+  liens. Io fait (`kernel/io`) : le disque RAM de démarrage tient lieu du volume système (`tools/mkfat` écrit des
+  sous-répertoires ; l'espace utilisateur et les 21 KnownDLLs dans `\WINDOWS\SYSTEM32`) ; volume FAT32 en lecture
+  (`io::volume`), types `Device` (*parse* : IopParseDevice) et `File` (nom relatif à un répertoire ouvert),
+  `\Device\Ramdisk0`, `\??\C:`, `\SystemRoot` ; le noyau lit ntdll, les NLS, la ruche et `smss` par Io. Services :
+  NtCreateFile (ouverture), NtOpenFile, NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryInformationFile,
+  NtQueryVolumeInformationFile (FileFsDeviceInformation) ; sections (`sys::section`) : NtCreateSection (fichier
+  d'échange, données, image d'un fichier ouvert), NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection. `smss` met
+  21 sections d'image dans `\KnownDlls`, puis s'arrête à `SystemProcessorInformation`, puis à l'écriture du registre.
+  Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
   Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).

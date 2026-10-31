@@ -111,7 +111,7 @@ pub(super) fn create_named(
 }
 
 /// Écrit `handle` en `out` ; le referme si l'écriture faute.
-fn give_handle(out: &ke::usermem::UserPtr<u32>, handle: ob::Handle) -> Result<(), NtStatus> {
+pub(super) fn give_handle(out: &ke::usermem::UserPtr<u32>, handle: ob::Handle) -> Result<(), NtStatus> {
     if let Err(fault) = out.write(&handle.0) {
         let _ = super::current_process().handle_table.close(handle);
         return Err(fault);

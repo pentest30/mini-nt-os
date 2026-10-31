@@ -6,3 +6,7 @@ edition.workspace = true
 [[bin]]
 name = "mkfat"
 path = "src/main.rs"
+
+[dev-dependencies]
+# The kernel's FAT reader mounts the images built in the tests.
+io-manager = { path = "../../kernel/io" }
