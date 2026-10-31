@@ -366,6 +366,40 @@ pub fn create_thread(
     start_address: u32,
     stack: &InitialTeb,
 ) -> Result<Arc<Object<EThread>>, NtStatus> {
+    start_thread(process, start_address, stack, stack.stack_base)
+}
+
+/// Comme [`create_thread`], mais le thread entre en `start_address` comme dans
+/// une fonction `stdcall` à un argument, `parameter`, ainsi que
+/// RtlCreateUserThread le prépare : au haut de sa pile, une adresse de retour
+/// nulle sous laquelle pointe ESP, puis `parameter`. C'est ainsi que le thread
+/// initial d'un programme natif reçoit le PEB (`NtProcessStartup(PPEB)`).
+///
+/// # Errors
+/// Celles de [`create_thread`], et celles de l'écriture dans la pile.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn create_thread_with_parameter(
+    process: &Arc<Object<EProcess>>,
+    start_address: u32,
+    parameter: u32,
+    stack: &InitialTeb,
+) -> Result<Arc<Object<EThread>>, NtStatus> {
+    let esp = stack.stack_base.checked_sub(8).ok_or(STATUS_INVALID_PARAMETER)?;
+    let mut words = [0u8; 8];
+    words[4..].copy_from_slice(&parameter.to_le_bytes());
+    process.write_memory(u64::from(esp), &words)?;
+    start_thread(process, start_address, stack, esp)
+}
+
+/// Crée et lance le thread, ESP à `esp` dans `stack`.
+fn start_thread(
+    process: &Arc<Object<EProcess>>,
+    start_address: u32,
+    stack: &InitialTeb,
+    esp: u32,
+) -> Result<Arc<Object<EThread>>, NtStatus> {
     if process.peb() == 0 {
         return Err(STATUS_INVALID_PARAMETER);
     }
@@ -375,8 +409,8 @@ pub fn create_thread(
     // With a system DLL, the thread starts in LdrInitializeThunk, by way of
     // its APC dispatcher.
     let (entry, user_stack) = match crate::system_dll::current() {
-        Some(dll) => (dll.user_apc_dispatcher, dll.write_start_frame(process, start_address, stack.stack_base)?),
-        None => (start_address, stack.stack_base),
+        Some(dll) => (dll.user_apc_dispatcher, dll.write_start_frame(process, start_address, esp)?),
+        None => (start_address, esp),
     };
     let tid = CID_TABLE.lock().insert(CidEntry::Thread(Weak::new())).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
     let teb = match create_teb(process, tid, stack) {
