@@ -102,6 +102,9 @@ jobs:
             args: --scenario native
             userland: true
             native: true
+          - name: ReactOS smss.exe under the probe, where it stops (M4)
+            args: --scenario smss
+            userland: true
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain (rust-toolchain.toml)
