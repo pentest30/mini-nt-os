@@ -138,6 +138,7 @@ name = "ntoskrnl"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "cm",
  "hal",
  "io-manager",
  "ke",
@@ -146,6 +147,7 @@ dependencies = [
  "ob",
  "pe",
  "ps",
+ "regf",
  "x86_64",
 ]
 
