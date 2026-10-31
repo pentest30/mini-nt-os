@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 27 | 296 |
+| ntoskrnl | 31 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -67,7 +67,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0031` | `NtCreateProcess` | 8 |  |
 | `0x0032` | `NtCreateProcessEx` | 9 |  |
 | `0x0033` | `NtCreateProfile` | 9 |  |
-| `0x0034` | `NtCreateSection` | 7 |  |
+| `0x0034` | `NtCreateSection` | 7 | ✅ |
 | `0x0035` | `NtCreateSemaphore` | 5 |  |
 | `0x0036` | `NtCreateSymbolicLinkObject` | 4 | ✅ |
 | `0x0037` | `NtCreateThread` | 8 |  |
@@ -128,7 +128,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x006e` | `NtMakeTemporaryObject` | 1 |  |
 | `0x006f` | `NtMapUserPhysicalPages` | 3 |  |
 | `0x0070` | `NtMapUserPhysicalPagesScatter` | 3 |  |
-| `0x0071` | `NtMapViewOfSection` | 10 |  |
+| `0x0071` | `NtMapViewOfSection` | 10 | ✅ |
 | `0x0072` | `NtModifyBootEntry` | 1 |  |
 | `0x0073` | `NtModifyDriverEntry` | 1 |  |
 | `0x0074` | `NtNotifyChangeDirectoryFile` | 9 |  |
@@ -146,7 +146,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0080` | `NtOpenProcess` | 4 |  |
 | `0x0081` | `NtOpenProcessToken` | 3 |  |
 | `0x0082` | `NtOpenProcessTokenEx` | 4 |  |
-| `0x0083` | `NtOpenSection` | 3 |  |
+| `0x0083` | `NtOpenSection` | 3 | ✅ |
 | `0x0084` | `NtOpenSemaphore` | 3 |  |
 | `0x0085` | `NtOpenSymbolicLinkObject` | 3 | ✅ |
 | `0x0086` | `NtOpenThread` | 4 |  |
@@ -292,7 +292,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0112` | `NtUnloadKeyEx` | 2 |  |
 | `0x0113` | `NtUnlockFile` | 5 |  |
 | `0x0114` | `NtUnlockVirtualMemory` | 4 |  |
-| `0x0115` | `NtUnmapViewOfSection` | 2 |  |
+| `0x0115` | `NtUnmapViewOfSection` | 2 | ✅ |
 | `0x0116` | `NtVdmControl` | 2 |  |
 | `0x0117` | `NtWaitForDebugEvent` | 4 |  |
 | `0x0118` | `NtWaitForMultipleObjects` | 5 |  |

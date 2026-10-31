@@ -22,16 +22,19 @@
 //! la vue rend `STATUS_IMAGE_NOT_AT_BASE`, et `ntdll` applique les relocations
 //! sur des pages qui se copient à l'écriture.
 //!
-//! Le fichier est une copie de ses octets en mémoire, en attendant les objets
-//! fichier d'Io : les écritures dans une vue partagée d'une section de fichier
-//! n'y retournent pas.
+//! Le fichier est une copie de ses octets en mémoire, lus par Io à la
+//! création de la section (`sys::section`) : les écritures dans une vue
+//! partagée d'une section de fichier n'y retournent pas.
 //!
 //! L'objet section d'Ob ([`SECTION_TYPE`], [`create_section_object`]) tient
 //! la section ; une vue la tient aussi, et survit donc à la fermeture du
 //! dernier handle de l'objet, comme sur XP.
 //!
-//! Pas encore : appels système (NtCreateSection, M3), `SEC_RESERVE`,
-//! NtExtendSection, vues dans l'espace système, retour au fichier.
+//! Les appels système (NtCreateSection, NtOpenSection, NtMapViewOfSection,
+//! NtUnmapViewOfSection) sont dans `ntoskrnl::sys::section`.
+//!
+//! Pas encore : `SEC_RESERVE`, NtExtendSection, vues dans l'espace système,
+//! retour au fichier, partage des pages d'un même fichier entre ses sections.
 //!
 //! WI7e Ch.5 §Section Objects
 

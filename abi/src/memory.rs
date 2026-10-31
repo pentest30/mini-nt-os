@@ -1,8 +1,20 @@
 //! What `NtQueryVirtualMemory` returns to an i386 process (CLAUDE.md,
-//! rule 5), laid out as on XP SP2. ReactOS's NDK headers (`mmtypes.h`) serve
+//! rule 5), laid out as on XP SP2, and the values of the section services. ReactOS's NDK headers (`mmtypes.h`) serve
 //! as the specification of the format; offsets are checked at compile time.
 
 use core::mem::{offset_of, size_of};
+
+/// Allocation attributes of a section (NtCreateSection).
+pub const SEC_BASED: u32 = 0x0020_0000;
+pub const SEC_NO_CHANGE: u32 = 0x0040_0000;
+pub const SEC_IMAGE: u32 = 0x0100_0000;
+pub const SEC_RESERVE: u32 = 0x0400_0000;
+pub const SEC_COMMIT: u32 = 0x0800_0000;
+pub const SEC_NOCACHE: u32 = 0x1000_0000;
+
+/// `SECTION_INHERIT` (NtMapViewOfSection).
+pub const VIEW_SHARE: u32 = 1;
+pub const VIEW_UNMAP: u32 = 2;
 
 /// MemoryBasicInformation: the range of pages of the same state and
 /// protection that starts at an address.

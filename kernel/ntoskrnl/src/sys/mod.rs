@@ -28,6 +28,7 @@ mod memory;
 mod object;
 mod process;
 mod registry;
+mod section;
 mod system;
 mod wait;
 
@@ -74,14 +75,17 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
     (services::NtCreateDirectoryObject, Handler::Status(object::nt_create_directory_object)),
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
+    (services::NtCreateSection, Handler::Status(section::nt_create_section)),
     (services::NtCreateSymbolicLinkObject, Handler::Status(object::nt_create_symbolic_link_object)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
     (services::NtOpenFile, Handler::Status(file::nt_open_file)),
     (services::NtOpenKey, Handler::Status(registry::nt_open_key)),
+    (services::NtOpenSection, Handler::Status(section::nt_open_section)),
     (services::NtOpenSymbolicLinkObject, Handler::Status(object::nt_open_symbolic_link_object)),
     (services::NtProtectVirtualMemory, Handler::Status(memory::nt_protect_virtual_memory)),
     (services::NtQueryAttributesFile, Handler::Status(file::nt_query_attributes_file)),
@@ -96,6 +100,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
+    (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
 ];
 
 /// Au plus 63 arguments par service (`tools/syscall-gen`).

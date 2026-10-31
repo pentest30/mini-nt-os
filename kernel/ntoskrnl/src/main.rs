@@ -331,6 +331,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     registry_self_test();
     object_directory_self_test();
     file_self_test();
+    section_service_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -2803,6 +2804,191 @@ fn file_self_test() {
     log::info!(
         "[smoke] Io: files from user mode through \\??\\C:: NtOpenFile, NtCreateFile, NtQueryInformationFile, \
          NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryVolumeInformationFile"
+    );
+}
+
+/// The section services from user mode (`sys::section`, M4), on files of
+/// the boot volume: a data section of `KERNEL.BIN`, mapped, read ("ABCD")
+/// and unmapped; the image `TEST.EXE` as a named section, opened again by its
+/// name and mapped at its base; a section backed by the paging file. Then
+/// what must fail: a view the section handle does not allow, a section the
+/// file handle does not allow, a directory, a file that is not an image, a
+/// paging-file section without a size, a view unmapped twice. Every section
+/// goes with the process, and its name with it.
+fn section_service_self_test() {
+    use abi::file::*;
+    use abi::memory::{SEC_COMMIT, SEC_IMAGE, VIEW_SHARE};
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_INVALID_FILE_FOR_SECTION, STATUS_INVALID_IMAGE_FORMAT,
+        STATUS_INVALID_PARAMETER_4, STATUS_NOT_MAPPED_VIEW, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_CASE_INSENSITIVE;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::{
+        Section, SECTION_ALL_ACCESS, SECTION_MAP_EXECUTE, SECTION_MAP_READ, SECTION_QUERY, SECTION_TYPE,
+    };
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const HANDLE: u32 = DATA + 0x40; // 16 handles
+    const IOSB: u32 = DATA + 0x80; // 4 IO_STATUS_BLOCKs
+    const BASE: u32 = DATA + 0xA0; // 4 view bases
+    const SIZE: u32 = DATA + 0xB0; // 4 view sizes
+    const LARGE: u32 = DATA + 0xC0; // a LARGE_INTEGER: 0x2000
+    const RESULT: u32 = DATA + 0xC8; // the first word of the data view
+    const MZ: u32 = DATA + 0xCC; // the first word of the image view
+    const OA: u32 = DATA + 0xD0; // 4 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0x130; // 4 UNICODE_STRING
+    const DONE: u32 = DATA + 0x3FC;
+    const NAMED: &str = "\\BaseNamedObjects\\MinoImage";
+    const TEST_EXE_BASE: u32 = 0x0200_0000;
+    const PAGE_READONLY: u32 = 0x02;
+    const PAGE_READWRITE: u32 = 0x04;
+    const PAGE_EXECUTE: u32 = 0x10;
+    const PAGE_EXECUTE_READ: u32 = 0x20;
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x150usize;
+    let names = ["\\??\\C:\\KERNEL.BIN", "\\??\\C:\\TEST.EXE", "\\??\\C:\\", NAMED];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+        let oa = (OA - DATA) as usize + 24 * i;
+        data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+        data[oa + 8..oa + 12].copy_from_slice(&(DATA + at as u32).to_le_bytes());
+        data[oa + 12..oa + 16].copy_from_slice(&OBJ_CASE_INSENSITIVE.to_le_bytes());
+    }
+    assert!(strings <= 0x3FC, "the strings outgrew the data");
+    data[(LARGE - DATA) as usize..(LARGE - DATA) as usize + 8].copy_from_slice(&0x2000u64.to_le_bytes());
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let iosb = |i: u32| Arg::Value(IOSB + 8 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let current = v(abi::process::NT_CURRENT_PROCESS);
+    let (open, create, map) = (services::NtOpenFile, services::NtCreateSection, services::NtMapViewOfSection);
+    let (unmap, synchronize, sync) = (services::NtUnmapViewOfSection, 0x0010_0000, FILE_SYNCHRONOUS_IO_NONALERT);
+    let all = SECTION_ALL_ACCESS.0;
+    let mut code = Code::new();
+    code.call_args(open, &[handle(0), v(FILE_READ_DATA | synchronize), oa(0), iosb(0), v(1), v(sync)])
+        .store_eax(status(0));
+    code.call_args(open, &[handle(1), v(FILE_EXECUTE | FILE_READ_DATA | synchronize), oa(1), iosb(1), v(1), v(sync)])
+        .store_eax(status(1));
+    code.call_args(
+        open,
+        &[handle(2), v(FILE_LIST_DIRECTORY | synchronize), oa(2), iosb(2), v(3), v(FILE_DIRECTORY_FILE)],
+    )
+    .store_eax(status(2));
+    let read_only = SECTION_MAP_READ.0 | SECTION_QUERY.0;
+    code.call_args(create, &[handle(3), v(read_only), v(0), v(0), v(PAGE_READONLY), v(SEC_COMMIT), m(HANDLE)])
+        .store_eax(status(3));
+    let view = |i: u32, section: u32, protect: u32| {
+        [m(section), current, v(BASE + 4 * i), v(0), v(0), v(0), v(SIZE + 4 * i), v(VIEW_SHARE), v(0), v(protect)]
+    };
+    code.call_args(map, &view(0, HANDLE + 12, PAGE_READONLY)).store_eax(status(4));
+    code.word(&[0xA1], BASE) // mov eax, [base 0]
+        .bytes(&[0x8B, 0x00]) // mov eax, [eax]
+        .store_eax(RESULT);
+    code.call_args(unmap, &[current, m(BASE)]).store_eax(status(5));
+    code.call_args(unmap, &[current, m(BASE)]).store_eax(status(6));
+    code.call_args(map, &view(1, HANDLE + 12, PAGE_READWRITE)).store_eax(status(7));
+    code.call_args(create, &[handle(8), v(all), v(0), v(0), v(PAGE_READWRITE), v(SEC_COMMIT), m(HANDLE)])
+        .store_eax(status(8));
+    code.call_args(create, &[handle(9), v(all), v(0), v(0), v(PAGE_READONLY), v(SEC_COMMIT), m(HANDLE + 8)])
+        .store_eax(status(9));
+    code.call_args(create, &[handle(10), v(all), oa(3), v(0), v(PAGE_EXECUTE), v(SEC_IMAGE), m(HANDLE + 4)])
+        .store_eax(status(10));
+    let image_access = SECTION_MAP_EXECUTE.0 | SECTION_MAP_READ.0;
+    code.call_args(services::NtOpenSection, &[handle(11), v(image_access), oa(3)]).store_eax(status(11));
+    code.call_args(map, &view(2, HANDLE + 44, PAGE_EXECUTE_READ)).store_eax(status(12));
+    code.word(&[0xA1], BASE + 8) // mov eax, [base 2]
+        .bytes(&[0x8B, 0x00]) // mov eax, [eax]
+        .store_eax(MZ);
+    code.call_args(create, &[handle(13), v(all), v(0), v(0), v(PAGE_READONLY), v(SEC_IMAGE), m(HANDLE)])
+        .store_eax(status(13));
+    code.call_args(create, &[handle(14), v(all), v(0), v(LARGE), v(PAGE_READWRITE), v(SEC_COMMIT), v(0)])
+        .store_eax(status(14));
+    code.call_args(create, &[handle(15), v(all), v(0), v(0), v(PAGE_READWRITE), v(SEC_COMMIT), v(0)])
+        .store_eax(status(15));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let sections_before = SECTION_TYPE.object_count();
+    let process = ps::create_process(&ps::system_process(), &section, "sections.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the section test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..16).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(&statuses[..3], &[STATUS_SUCCESS; 3], "the three files open");
+    assert_eq!(statuses[3], STATUS_SUCCESS, "a data section of KERNEL.BIN");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "its view");
+    let base = read(BASE);
+    assert!(base != 0 && base.is_multiple_of(0x1_0000), "a view on 64 KiB: {base:#x}");
+    assert_eq!((read(SIZE), read(RESULT)), (0x1000, u32::from_le_bytes(*b"ABCD")), "the file through the view");
+    assert_eq!((statuses[5], statuses[6]), (STATUS_SUCCESS, STATUS_NOT_MAPPED_VIEW), "unmapped once, not twice");
+    assert_eq!(statuses[7], STATUS_ACCESS_DENIED, "a writable view of a read-only section handle");
+    assert_eq!(statuses[8], STATUS_ACCESS_DENIED, "a writable section of a read-only file handle");
+    assert_eq!(statuses[9], STATUS_INVALID_FILE_FOR_SECTION, "a section of a directory");
+    assert_eq!(statuses[10], STATUS_SUCCESS, "the image section of TEST.EXE, named");
+    assert_eq!(statuses[11], STATUS_SUCCESS, "NtOpenSection by its name");
+    assert_eq!(statuses[12], STATUS_SUCCESS, "the image at its base");
+    assert_eq!((read(BASE + 8), read(MZ) & 0xFFFF), (TEST_EXE_BASE, 0x5A4D), "MZ at the image base");
+    assert_eq!(statuses[13], STATUS_INVALID_IMAGE_FORMAT, "KERNEL.BIN is not an image");
+    assert_eq!(statuses[14], STATUS_SUCCESS, "a paging-file section");
+    assert_eq!(statuses[15], STATUS_INVALID_PARAMETER_4, "a paging-file section without a size");
+    assert!(ob::namespace().open(NAMED, None, None, 0).is_ok(), "the section is named");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    drop(section);
+    assert_eq!(SECTION_TYPE.object_count(), sections_before, "every section went with the process");
+    assert!(ob::namespace().open(NAMED, None, None, 0).is_err(), "a temporary section's name goes with it");
+    log::info!(
+        "[smoke] Mm: sections from user mode on files of \\??\\C:: NtCreateSection (data, image, paging file), \
+         NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection"
     );
 }
 
