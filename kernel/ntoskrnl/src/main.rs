@@ -329,6 +329,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     early_exit_self_test();
     loader_services_self_test();
     registry_self_test();
+    registry_write_self_test();
     object_directory_self_test();
     file_self_test();
     section_service_self_test();
@@ -3019,6 +3020,199 @@ fn section_service_self_test() {
     log::info!(
         "[smoke] Mm: sections from user mode on files of \\??\\C:: NtCreateSection (data, image, paging file), \
          NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection"
+    );
+}
+
+/// The registry write services from user mode (`cm`, `sys::registry`, M4),
+/// on a hive mounted at `\REGISTRY\MACHINE\MinoWrite`: NtCreateKey makes a
+/// key with a class, then opens it again; a volatile key relative to it, and
+/// a durable one under that (refused); a key whose parent is missing, one
+/// under a virtual key, bad options. NtSetValueKey writes a value, then
+/// replaces it, read back through another handle; NtDeleteValueKey removes
+/// it, then finds nothing; a handle without KEY_SET_VALUE writes nothing; an
+/// unmapped buffer faults.
+fn registry_write_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_ACCESS_VIOLATION, STATUS_CHILD_MUST_BE_VOLATILE,
+        STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_CASE_INSENSITIVE;
+    use abi::registry::{
+        KEY_ALL_ACCESS, KEY_VALUE_PARTIAL_INFORMATION, REG_CREATED_NEW_KEY, REG_DWORD, REG_OPENED_EXISTING_KEY,
+        REG_OPTION_VOLATILE, REG_SZ,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use regf::builder::{build, KeyNode};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const KEY_READ: u32 = 0x0002_0019;
+    const STATUS: u32 = DATA; // 16 statuses
+    const HANDLE: u32 = DATA + 0x40; // 16 handles
+    const DISPOSITION: u32 = DATA + 0x80; // 8 dispositions
+    const DWORD_DATA: u32 = DATA + 0xA0;
+    const TEXT_DATA: u32 = DATA + 0xA4; // "hi"
+    const QUERY: u32 = DATA + 0xB0; // 0x20 bytes
+    const QUERY_LENGTH: u32 = DATA + 0xD0;
+    const OA: u32 = DATA + 0xD8; // 6 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0x168; // 8 UNICODE_STRING
+    const DONE: u32 = DATA + 0x3FC;
+
+    let mut root = KeyNode::new("MINOWRITE");
+    root.key_mut("Sub").set_value("Old", REG_DWORD, alloc::vec![1, 0, 0, 0]);
+    let registry = cm::registry().expect("Cm initialised");
+    let hive = cm::HiveFile::new(Arc::from(build(&root, "MINOWRITE"))).expect("a hive");
+    cm::mount(&registry, "MACHINE", "MinoWrite", hive).expect("mount the test hive");
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x1A8usize;
+    let names = [
+        "\\Registry\\Machine\\MinoWrite\\New",
+        "Volatile",
+        "Volatile\\Durable",
+        "\\Registry\\Machine\\MinoWrite\\Missing\\X",
+        "\\Registry\\Machine\\Direct",
+        "\\Registry\\Machine\\MinoWrite\\Sub",
+        "Value",
+        "Old",
+    ];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+        if i < 6 {
+            let oa = (OA - DATA) as usize + 24 * i;
+            data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+            data[oa + 8..oa + 12].copy_from_slice(&(DATA + at as u32).to_le_bytes());
+            data[oa + 12..oa + 16].copy_from_slice(&OBJ_CASE_INSENSITIVE.to_le_bytes());
+        }
+    }
+    assert!(strings <= 0x3FC, "the strings outgrew the data");
+    data[(DWORD_DATA - DATA) as usize..][..4].copy_from_slice(&0x1234u32.to_le_bytes());
+    data[(TEXT_DATA - DATA) as usize..][..6].copy_from_slice(&[b'h', 0, b'i', 0, 0, 0]);
+    // Handle 4 starts non-zero: a failed create must zero it.
+    data[(HANDLE - DATA) as usize + 16..][..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let disposition = |i: u32| Arg::Value(DISPOSITION + 4 * i);
+    let us = |i: u32| Arg::Value(DATA + (US as u32) + 8 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let (create, set, delete) = (services::NtCreateKey, services::NtSetValueKey, services::NtDeleteValueKey);
+    let mut code = Code::new();
+    code.call_args(create, &[handle(0), v(KEY_ALL_ACCESS), oa(0), v(0), us(6), v(0), disposition(0)])
+        .store_eax(status(0));
+    code.call_args(create, &[handle(1), v(KEY_ALL_ACCESS), oa(0), v(0), v(0), v(0), disposition(1)])
+        .store_eax(status(1));
+    code.word(&[0xA1], HANDLE) // mov eax, [handle 0]
+        .store_eax(OA + 24 + 4) // OA 1's RootDirectory
+        .store_eax(OA + 48 + 4); // OA 2's
+    code.call_args(create, &[handle(2), v(KEY_ALL_ACCESS), oa(1), v(0), v(0), v(REG_OPTION_VOLATILE), disposition(2)])
+        .store_eax(status(2));
+    code.call_args(create, &[handle(3), v(KEY_ALL_ACCESS), oa(2), v(0), v(0), v(0), disposition(3)])
+        .store_eax(status(3));
+    code.call_args(create, &[handle(4), v(KEY_ALL_ACCESS), oa(3), v(0), v(0), v(0), v(0)]).store_eax(status(4));
+    code.call_args(create, &[handle(5), v(KEY_ALL_ACCESS), oa(4), v(0), v(0), v(0), disposition(5)])
+        .store_eax(status(5));
+    code.call_args(set, &[m(HANDLE), us(6), v(0), v(REG_SZ), v(TEXT_DATA), v(6)]).store_eax(status(6));
+    code.call_args(set, &[m(HANDLE), us(6), v(0), v(REG_DWORD), v(DWORD_DATA), v(4)]).store_eax(status(7));
+    let query = services::NtQueryValueKey;
+    code.call_args(
+        query,
+        &[m(HANDLE + 4), us(6), v(KEY_VALUE_PARTIAL_INFORMATION), v(QUERY), v(0x20), v(QUERY_LENGTH)],
+    )
+    .store_eax(status(8));
+    code.call_args(services::NtOpenKey, &[handle(9), v(KEY_READ), oa(5)]).store_eax(status(9));
+    code.call_args(set, &[m(HANDLE + 36), us(7), v(0), v(REG_DWORD), v(DWORD_DATA), v(4)]).store_eax(status(10));
+    code.call_args(delete, &[m(HANDLE + 36), us(7)]).store_eax(status(11));
+    code.call_args(delete, &[m(HANDLE), us(6)]).store_eax(status(12));
+    code.call_args(delete, &[m(HANDLE), us(6)]).store_eax(status(13));
+    code.call_args(create, &[handle(14), v(KEY_ALL_ACCESS), oa(0), v(0), v(0), v(0x10), v(0)]).store_eax(status(14));
+    code.call_args(set, &[m(HANDLE), us(7), v(0), v(REG_DWORD), v(0x10), v(4)]).store_eax(status(15));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "regwrite.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the registry write test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..16).map(|i| NtStatus(read(status(i)))).collect();
+    let disposition_at = |i: u32| read(DISPOSITION + 4 * i);
+    assert_eq!((statuses[0], disposition_at(0)), (STATUS_SUCCESS, REG_CREATED_NEW_KEY), "NtCreateKey makes New");
+    assert_eq!((statuses[1], disposition_at(1)), (STATUS_SUCCESS, REG_OPENED_EXISTING_KEY), "then opens it");
+    assert_eq!((statuses[2], disposition_at(2)), (STATUS_SUCCESS, REG_CREATED_NEW_KEY), "a volatile key under it");
+    assert_eq!(statuses[3], STATUS_CHILD_MUST_BE_VOLATILE, "a durable key under a volatile one");
+    assert_eq!((statuses[4], read(HANDLE + 16)), (STATUS_OBJECT_NAME_NOT_FOUND, 0), "no parent, handle zeroed");
+    assert_eq!(statuses[5], STATUS_ACCESS_DENIED, "a key under a virtual key");
+    assert_eq!((statuses[6], statuses[7]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtSetValueKey, then again");
+    assert_eq!(statuses[8], STATUS_SUCCESS, "the value read through the other handle");
+    assert_eq!((read(QUERY + 4), read(QUERY + 8), read(QUERY + 12)), (REG_DWORD, 4, 0x1234), "replaced: a DWORD");
+    assert_eq!(statuses[9], STATUS_SUCCESS, "Sub opened for reading");
+    assert_eq!((statuses[10], statuses[11]), (STATUS_ACCESS_DENIED, STATUS_ACCESS_DENIED), "without KEY_SET_VALUE");
+    assert_eq!((statuses[12], statuses[13]), (STATUS_SUCCESS, STATUS_OBJECT_NAME_NOT_FOUND), "deleted once");
+    assert_eq!(statuses[14], STATUS_INVALID_PARAMETER, "an unknown create option");
+    assert_eq!(statuses[15], STATUS_ACCESS_VIOLATION, "data at an unmapped address");
+
+    let ns = ob::namespace();
+    let open = |name: &str| {
+        let object = ns.open(name, None, Some(&cm::KEY_TYPE), 0).expect(name);
+        ob::downcast::<cm::Key>(&object).expect("a key")
+    };
+    let new = open("\\REGISTRY\\MACHINE\\MinoWrite\\New");
+    let facts = new.facts().expect("facts");
+    assert_eq!((facts.class.as_slice(), facts.values, facts.subkeys), (&[86u16, 97, 108, 117, 101][..], 0, 1));
+    assert!(open("\\REGISTRY\\MACHINE\\MinoWrite\\New\\Volatile").is_volatile());
+    let old = open("\\REGISTRY\\MACHINE\\MinoWrite\\Sub").value(&[79, 108, 100]).expect("read").expect("Old");
+    assert_eq!(old.data, [1, 0, 0, 0], "untouched");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    cm::unmount(&registry, "MACHINE", "MinoWrite").expect("unmount the test hive");
+    log::info!(
+        "[smoke] Cm: registry writes from user mode: NtCreateKey (new, existing, volatile), NtSetValueKey, \
+         NtDeleteValueKey"
     );
 }
 

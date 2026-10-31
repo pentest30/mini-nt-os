@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 31 | 296 |
+| ntoskrnl | 34 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -58,7 +58,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0028` | `NtCreateIoCompletion` | 4 |  |
 | `0x0029` | `NtCreateJobObject` | 3 |  |
 | `0x002a` | `NtCreateJobSet` | 3 |  |
-| `0x002b` | `NtCreateKey` | 7 |  |
+| `0x002b` | `NtCreateKey` | 7 | ✅ |
 | `0x002c` | `NtCreateMailslotFile` | 8 |  |
 | `0x002d` | `NtCreateMutant` | 4 |  |
 | `0x002e` | `NtCreateNamedPipeFile` | 14 |  |
@@ -83,7 +83,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0041` | `NtDeleteFile` | 1 |  |
 | `0x0042` | `NtDeleteKey` | 1 |  |
 | `0x0043` | `NtDeleteObjectAuditAlarm` | 3 |  |
-| `0x0044` | `NtDeleteValueKey` | 2 |  |
+| `0x0044` | `NtDeleteValueKey` | 2 | ✅ |
 | `0x0045` | `NtDeviceIoControlFile` | 10 |  |
 | `0x0046` | `NtDisplayString` | 1 |  |
 | `0x0047` | `NtDuplicateObject` | 7 |  |
@@ -271,7 +271,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00fd` | `NtSetTimer` | 7 |  |
 | `0x00fe` | `NtSetTimerResolution` | 3 |  |
 | `0x00ff` | `NtSetUuidSeed` | 1 |  |
-| `0x0100` | `NtSetValueKey` | 6 |  |
+| `0x0100` | `NtSetValueKey` | 6 | ✅ |
 | `0x0101` | `NtSetVolumeInformationFile` | 5 |  |
 | `0x0102` | `NtShutdownSystem` | 1 |  |
 | `0x0103` | `NtSignalAndWaitForSingleObject` | 4 |  |
