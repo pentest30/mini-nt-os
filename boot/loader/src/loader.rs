@@ -20,8 +20,11 @@ use uefi::{
     CStr16,
 };
 
-/// Maximum file size for kernel or ramdisk: 16 MiB (Phase 3: DXVK DLLs in ramdisk).
+/// Maximum size of the kernel file: 16 MiB.
 const KERNEL_MAX_SIZE: usize = 16 * 1024 * 1024;
+/// Maximum size of the ramdisk: 64 MiB. It holds the userland of the boot
+/// volume, the KnownDLLs of `\WINDOWS\system32` included (M4).
+const RAMDISK_MAX_SIZE: usize = 64 * 1024 * 1024;
 
 /// Filenames on the ESP (in the root directory).
 const KERNEL_FILENAME: &CStr16 = uefi::cstr16!("kernel.elf");
@@ -62,7 +65,7 @@ pub struct KernelImage {
 /// Panics if the kernel file is missing, too large or not a valid x86-64 ELF
 /// executable linked in the top 2 GiB.
 pub fn load_kernel(bt: &BootServices) -> KernelImage {
-    let (file_phys, file_size) = load_file(bt, KERNEL_FILENAME, true)
+    let (file_phys, file_size) = load_file(bt, KERNEL_FILENAME, KERNEL_MAX_SIZE, true)
         .unwrap_or_else(|| panic!("loader: kernel.elf not found on any SimpleFileSystem volume"));
     // SAFETY: load_file just read file_size bytes at file_phys (identity-mapped).
     let file = unsafe { core::slice::from_raw_parts(file_phys as *const u8, file_size as usize) };
@@ -215,10 +218,10 @@ fn rd64(b: &[u8], at: usize) -> u64 {
 }
 
 pub fn load_optional_ramdisk(bt: &BootServices) -> Option<(u64, u64)> {
-    load_file(bt, RAMDISK_FILENAME, false)
+    load_file(bt, RAMDISK_FILENAME, RAMDISK_MAX_SIZE, false)
 }
 
-fn load_file(bt: &BootServices, filename: &CStr16, require_present: bool) -> Option<(u64, u64)> {
+fn load_file(bt: &BootServices, filename: &CStr16, max_size: usize, require_present: bool) -> Option<(u64, u64)> {
     // ── Find a SimpleFileSystem protocol handle ───────────────────────────────
     // Look for handles that support SimpleFileSystem (ESP and other volumes).
     let handles = bt.find_handles::<SimpleFileSystem>().expect("loader: no SimpleFileSystem handles found");
@@ -248,7 +251,7 @@ fn load_file(bt: &BootServices, filename: &CStr16, require_present: bool) -> Opt
         let info: &FileInfo = file.get_info(&mut info_buf).expect("loader: failed to get file info");
         let file_size = info.file_size() as usize;
 
-        assert!(file_size <= KERNEL_MAX_SIZE, "loader: file too large ({} > {} bytes)", file_size, KERNEL_MAX_SIZE);
+        assert!(file_size <= max_size, "loader: file too large ({} > {} bytes)", file_size, max_size);
         assert!(file_size > 0, "loader: file is empty");
 
         // ── Allocate physical pages ───────────────────────────────────────────
