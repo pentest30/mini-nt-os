@@ -39,6 +39,13 @@ pub const FILE_EXECUTABLE_IMAGE: u16 = 0x0002;
 /// IMAGE_FILE_32BIT_MACHINE
 pub const FILE_32BIT_MACHINE: u16 = 0x0100;
 
+/// IMAGE_SUBSYSTEM_NATIVE: a native image, which links to ntdll only.
+pub const SUBSYSTEM_NATIVE: u16 = 1;
+/// IMAGE_SUBSYSTEM_WINDOWS_GUI
+pub const SUBSYSTEM_WINDOWS_GUI: u16 = 2;
+/// IMAGE_SUBSYSTEM_WINDOWS_CUI
+pub const SUBSYSTEM_WINDOWS_CUI: u16 = 3;
+
 /// Section characteristic flags (matches IMAGE_SCN_* in winnt.h)
 pub const SCN_CNT_CODE: u32 = 0x0000_0020;
 pub const SCN_CNT_INITIALIZED_DATA: u32 = 0x0000_0040;
