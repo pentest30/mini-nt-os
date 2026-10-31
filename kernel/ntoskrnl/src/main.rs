@@ -327,6 +327,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     early_exit_self_test();
     loader_services_self_test();
     registry_self_test();
+    object_directory_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -2421,6 +2422,156 @@ fn registry_self_test() {
     log::info!(
         "[smoke] Cm: a mounted hive read from user mode: NtOpenKey, NtQueryValueKey, NtEnumerateKey, NtQueryKey, \
          NtEnumerateValueKey"
+    );
+}
+
+/// The object directory services (`sys::object`, M4): from a Ps process,
+/// NtCreateDirectoryObject (then `OBJ_OPENIF`: `STATUS_OBJECT_NAME_EXISTS`;
+/// without it: `STATUS_OBJECT_NAME_COLLISION`), NtCreateSymbolicLinkObject
+/// relative to the directory, NtOpenSymbolicLinkObject (the link itself),
+/// NtOpenDirectoryObject through the link, on a missing name (its handle
+/// zeroed) and on a key (`STATUS_OBJECT_TYPE_MISMATCH`). The directory's name
+/// goes with its last handle.
+fn object_directory_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_EXISTS, STATUS_OBJECT_NAME_NOT_FOUND,
+        STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_OPENIF;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 8 statuses
+    const HANDLE: u32 = DATA + 0x20; // 8 handles
+    const OA: u32 = DATA + 0x40; // 6 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0xD0; // 6 UNICODE_STRING
+    const DONE: u32 = DATA + 0x1FC;
+    const ALL_DIRECTORY: u32 = 0x000F_000F;
+    const ALL_LINK: u32 = 0x000F_0001;
+    const QUERY: u32 = 0x0001;
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x200usize;
+    let names = ["\\MinoDir", "Link", "\\MinoDir\\Link", "\\MinoDir\\Missing", "\\REGISTRY"];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+    }
+    let us = |i: usize| DATA + (US + 8 * i) as u32;
+    // OA 0: \MinoDir; 1: \MinoDir with OBJ_OPENIF; 2: Link (root set at run
+    // time); 3: \MinoDir\Link; 4: \MinoDir\Missing; 5: \REGISTRY.
+    for (i, (name, attributes)) in [(0, 0), (0, OBJ_OPENIF), (1, 0), (2, 0), (3, 0), (4, 0)].into_iter().enumerate() {
+        let at = (OA - DATA) as usize + 24 * i;
+        data[at..at + 4].copy_from_slice(&24u32.to_le_bytes());
+        data[at + 8..at + 12].copy_from_slice(&us(name).to_le_bytes());
+        data[at + 12..at + 16].copy_from_slice(&attributes.to_le_bytes());
+    }
+    // Handle 6 starts non-zero: a failed open must zero it.
+    data[0x38..0x3C].copy_from_slice(&u32::MAX.to_le_bytes());
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let v = Arg::Value;
+    let (create_dir, open_dir) = (services::NtCreateDirectoryObject, services::NtOpenDirectoryObject);
+    let mut code = Code::new();
+    code.call_args(create_dir, &[handle(0), v(ALL_DIRECTORY), oa(0)])
+        .store_eax(status(0))
+        .call_args(create_dir, &[handle(1), v(ALL_DIRECTORY), oa(1)])
+        .store_eax(status(1))
+        .call_args(create_dir, &[handle(2), v(ALL_DIRECTORY), oa(0)])
+        .store_eax(status(2))
+        .word(&[0xA1], HANDLE) // mov eax, [handle 0]
+        .store_eax(OA + 24 * 2 + 4) // OA 2's RootDirectory
+        .call_args(services::NtCreateSymbolicLinkObject, &[handle(3), v(ALL_LINK), oa(2), v(us(0))])
+        .store_eax(status(3))
+        .call_args(services::NtOpenSymbolicLinkObject, &[handle(4), v(ALL_LINK), oa(3)])
+        .store_eax(status(4))
+        .call_args(open_dir, &[handle(5), v(QUERY), oa(3)])
+        .store_eax(status(5))
+        .call_args(open_dir, &[handle(6), v(QUERY), oa(4)])
+        .store_eax(status(6))
+        .call_args(open_dir, &[handle(7), v(QUERY), oa(5)])
+        .store_eax(status(7))
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x400];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x400, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "obdir.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the object directory test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..8).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(
+        &statuses[..3],
+        &[STATUS_SUCCESS, STATUS_OBJECT_NAME_EXISTS, STATUS_OBJECT_NAME_COLLISION],
+        "NtCreateDirectoryObject, again with OBJ_OPENIF, again without"
+    );
+    assert_eq!(statuses[3], STATUS_SUCCESS, "NtCreateSymbolicLinkObject relative to the directory");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "NtOpenSymbolicLinkObject");
+    assert_eq!(statuses[5], STATUS_SUCCESS, "NtOpenDirectoryObject through the link");
+    assert_eq!(
+        (statuses[6], read(HANDLE + 24)),
+        (STATUS_OBJECT_NAME_NOT_FOUND, 0),
+        "a missing name, its handle zeroed"
+    );
+    assert_eq!(statuses[7], STATUS_OBJECT_TYPE_MISMATCH, "a key is not a directory");
+    let ns = ob::namespace();
+    let link =
+        ns.open("\\MinoDir\\Link", None, Some(&ob::SYMBOLIC_LINK_TYPE), abi::object::OBJ_OPENLINK).expect("the link");
+    assert_eq!(ob::downcast::<ob::SymbolicLink>(&link).expect("a link").target(), "\\MinoDir");
+    drop(link);
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ns.open("\\MinoDir", None, None, 0).is_err(), "a temporary directory's name goes with its last handle");
+    log::info!(
+        "[smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, \
+         NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject"
     );
 }
 

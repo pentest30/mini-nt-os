@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 17 | 296 |
+| ntoskrnl | 21 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -51,7 +51,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0021` | `NtConnectPort` | 8 |  |
 | `0x0022` | `NtContinue` | 2 | ✅ |
 | `0x0023` | `NtCreateDebugObject` | 4 |  |
-| `0x0024` | `NtCreateDirectoryObject` | 3 |  |
+| `0x0024` | `NtCreateDirectoryObject` | 3 | ✅ |
 | `0x0025` | `NtCreateEvent` | 5 |  |
 | `0x0026` | `NtCreateEventPair` | 3 |  |
 | `0x0027` | `NtCreateFile` | 11 |  |
@@ -69,7 +69,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0033` | `NtCreateProfile` | 9 |  |
 | `0x0034` | `NtCreateSection` | 7 |  |
 | `0x0035` | `NtCreateSemaphore` | 5 |  |
-| `0x0036` | `NtCreateSymbolicLinkObject` | 4 |  |
+| `0x0036` | `NtCreateSymbolicLinkObject` | 4 | ✅ |
 | `0x0037` | `NtCreateThread` | 8 |  |
 | `0x0038` | `NtCreateTimer` | 4 |  |
 | `0x0039` | `NtCreateToken` | 13 |  |
@@ -134,7 +134,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0074` | `NtNotifyChangeDirectoryFile` | 9 |  |
 | `0x0075` | `NtNotifyChangeKey` | 10 |  |
 | `0x0076` | `NtNotifyChangeMultipleKeys` | 12 |  |
-| `0x0077` | `NtOpenDirectoryObject` | 3 |  |
+| `0x0077` | `NtOpenDirectoryObject` | 3 | ✅ |
 | `0x0078` | `NtOpenEvent` | 3 |  |
 | `0x0079` | `NtOpenEventPair` | 3 |  |
 | `0x007a` | `NtOpenFile` | 6 |  |
@@ -148,7 +148,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0082` | `NtOpenProcessTokenEx` | 4 |  |
 | `0x0083` | `NtOpenSection` | 3 |  |
 | `0x0084` | `NtOpenSemaphore` | 3 |  |
-| `0x0085` | `NtOpenSymbolicLinkObject` | 3 |  |
+| `0x0085` | `NtOpenSymbolicLinkObject` | 3 | ✅ |
 | `0x0086` | `NtOpenThread` | 4 |  |
 | `0x0087` | `NtOpenThreadToken` | 4 |  |
 | `0x0088` | `NtOpenThreadTokenEx` | 5 |  |

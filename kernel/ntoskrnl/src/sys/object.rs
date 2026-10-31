@@ -57,3 +57,98 @@ pub(super) fn capture_unicode_string(address: u32) -> Result<alloc::vec::Vec<u16
     ke::usermem::copy_from_user(&mut bytes, u64::from(string.buffer))?;
     Ok(bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect())
 }
+
+/// Ouvre l'objet de type `expected` que désignent les attributs en
+/// `attributes`, et met son handle en `out` (0 d'abord, puis le handle ; le
+/// handle est refermé si cette écriture faute).
+pub(super) fn open_by_name(out: u32, desired: u32, attributes: u32, expected: &ob::ObjectType) -> Result<(), NtStatus> {
+    let out = ke::usermem::UserPtr::<u32>::new(out);
+    out.write(&0)?;
+    let mut captured = capture_attributes(attributes)?;
+    // A link opened as a link is not followed at the end of the name.
+    if core::ptr::eq(expected, &ob::SYMBOLIC_LINK_TYPE) {
+        captured.attributes |= abi::object::OBJ_OPENLINK;
+    }
+    let name = captured.name.unwrap_or_default();
+    let process = super::current_process();
+    let handle = ob::open_object_by_name(
+        ob::namespace(),
+        &name,
+        captured.root.as_ref(),
+        Some(expected),
+        captured.attributes,
+        &process.handle_table,
+        ob::AccessMask(desired),
+    )?;
+    give_handle(&out, handle)
+}
+
+/// Nomme `object` d'après les attributs en `attributes` (`OBJ_PERMANENT`,
+/// `OBJ_OPENIF`) et met son handle en `out`, 0 d'abord. Rend le statut
+/// d'ObInsertObject : `STATUS_OBJECT_NAME_EXISTS` avec `OBJ_OPENIF` et un nom
+/// déjà pris par un objet du même type.
+pub(super) fn create_named(
+    out: u32,
+    desired: u32,
+    attributes: u32,
+    object: ob::ObjectRef,
+) -> Result<NtStatus, NtStatus> {
+    let out = ke::usermem::UserPtr::<u32>::new(out);
+    out.write(&0)?;
+    let captured = capture_attributes(attributes)?;
+    let process = super::current_process();
+    let (handle, status) = ob::insert_object(
+        ob::namespace(),
+        object,
+        captured.name.as_deref(),
+        captured.root.as_ref(),
+        captured.attributes,
+        &process.handle_table,
+        ob::AccessMask(desired),
+    )?;
+    give_handle(&out, handle)?;
+    Ok(status)
+}
+
+/// Écrit `handle` en `out` ; le referme si l'écriture faute.
+fn give_handle(out: &ke::usermem::UserPtr<u32>, handle: ob::Handle) -> Result<(), NtStatus> {
+    if let Err(fault) = out.write(&handle.0) {
+        let _ = super::current_process().handle_table.close(handle);
+        return Err(fault);
+    }
+    Ok(())
+}
+
+fn result(result: Result<NtStatus, NtStatus>) -> NtStatus {
+    result.unwrap_or_else(|status| status)
+}
+
+/// NtOpenDirectoryObject(*DirectoryHandle, DesiredAccess, ObjectAttributes) :
+/// un handle sur le répertoire d'Ob que désignent les attributs.
+pub(super) fn nt_open_directory_object(arguments: &[u32]) -> NtStatus {
+    result(open_by_name(arguments[0], arguments[1], arguments[2], &ob::DIRECTORY_TYPE).map(|()| STATUS_SUCCESS))
+}
+
+/// NtCreateDirectoryObject(*DirectoryHandle, DesiredAccess, ObjectAttributes) :
+/// un répertoire d'Ob neuf, nommé (ou non) d'après les attributs.
+pub(super) fn nt_create_directory_object(arguments: &[u32]) -> NtStatus {
+    result(create_named(arguments[0], arguments[1], arguments[2], ob::Directory::create()))
+}
+
+/// NtOpenSymbolicLinkObject(*LinkHandle, DesiredAccess, ObjectAttributes) :
+/// un handle sur le lien que désignent les attributs : le lien lui-même, non
+/// suivi en fin de nom.
+pub(super) fn nt_open_symbolic_link_object(arguments: &[u32]) -> NtStatus {
+    result(open_by_name(arguments[0], arguments[1], arguments[2], &ob::SYMBOLIC_LINK_TYPE).map(|()| STATUS_SUCCESS))
+}
+
+/// NtCreateSymbolicLinkObject(*LinkHandle, DesiredAccess, ObjectAttributes,
+/// LinkTarget) : un lien d'Ob vers le nom `LinkTarget`.
+pub(super) fn nt_create_symbolic_link_object(arguments: &[u32]) -> NtStatus {
+    result(capture_unicode_string(arguments[3]).and_then(|units| {
+        let target =
+            alloc::string::String::from_utf16(&units).map_err(|_| abi::ntstatus::STATUS_OBJECT_NAME_INVALID)?;
+        let link: ob::ObjectRef = ob::SymbolicLink::create(&target);
+        create_named(arguments[0], arguments[1], arguments[2], link)
+    }))
+}

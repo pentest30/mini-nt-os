@@ -10,11 +10,12 @@ timeout  = 180
 
 expect = [m4] SMSS.EXE under the system DLL: exit status
 # Where it stops today: it reads Session Manager from the SYSTEM hive (Cm),
-# then cannot open \?? (no object directory services yet). Update with each
-# step of M4.
+# creates its object directories and DOS device links (Ob), then cannot open
+# its KnownDlls directory on disk (no Io yet). Update with each step of M4.
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [m4]   NtEnumerateValueKey (0x004d)
-expect = SMSS: Unable to open \?? directory
+expect = [m4]   NtCreateSymbolicLinkObject (0x0036)
+expect = SMSS: Unable to open a handle to the KnownDll directory
 expect = kernel: phase 1 done
 
 # A fatal error ends the run at once.
