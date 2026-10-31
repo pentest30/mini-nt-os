@@ -204,6 +204,11 @@ impl<'a> Hive<'a> {
         Key::at(*self, self.root)
     }
 
+    /// The key at cell `offset`: a cell that holds a key node.
+    pub fn key_at(&self, offset: u32) -> Result<Key<'a>, Error> {
+        Key::at(*self, offset)
+    }
+
     /// The payload of the allocated cell at `offset`, without its size.
     fn cell(&self, offset: u32) -> Result<&'a [u8], Error> {
         let at = offset as usize;
