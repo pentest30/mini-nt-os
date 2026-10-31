@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 10 | 296 |
+| ntoskrnl | 11 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -158,7 +158,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x008c` | `NtPrivilegeCheck` | 3 |  |
 | `0x008d` | `NtPrivilegeObjectAuditAlarm` | 6 |  |
 | `0x008e` | `NtPrivilegedServiceAuditAlarm` | 5 |  |
-| `0x008f` | `NtProtectVirtualMemory` | 5 |  |
+| `0x008f` | `NtProtectVirtualMemory` | 5 | ✅ |
 | `0x0090` | `NtPulseEvent` | 2 |  |
 | `0x0091` | `NtQueryAttributesFile` | 2 |  |
 | `0x0092` | `NtQueryBootEntryOrder` | 2 |  |

@@ -72,6 +72,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtProtectVirtualMemory, Handler::Status(memory::nt_protect_virtual_memory)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
     (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
