@@ -2,7 +2,8 @@
 
 use abi::ntstatus::NtStatus;
 use abi::system_information::{
-    SystemBasicInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS, SYSTEM_BASIC_INFORMATION,
+    SystemBasicInformation32, SystemProcessorInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS,
+    PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
 };
 use mm::virtual_alloc::{ALLOC_GRANULARITY, PAGE_SIZE};
 
@@ -16,16 +17,41 @@ static UNSUPPORTED: super::ClassReport = super::ClassReport::new("NtQuerySystemI
 /// | Classe | Contenu |
 /// |---|---|
 /// | `SystemBasicInformation` (0) | page, pages physiques, plage du mode utilisateur, processeurs |
+/// | `SystemProcessorInformation` (1) | architecture, niveau, révision et fonctions du processeur |
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
 pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
     let (class, buffer, length, return_length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
-    let information = match class {
-        SYSTEM_BASIC_INFORMATION => basic_information(),
-        _ => return UNSUPPORTED.report(class),
-    };
-    super::return_information(information.as_bytes(), buffer, length, return_length)
+    match class {
+        SYSTEM_BASIC_INFORMATION => {
+            super::return_information(basic_information().as_bytes(), buffer, length, return_length)
+        }
+        SYSTEM_PROCESSOR_INFORMATION => {
+            super::return_information(processor_information().as_bytes(), buffer, length, return_length)
+        }
+        _ => UNSUPPORTED.report(class),
+    }
+}
+
+/// SYSTEM_PROCESSOR_INFORMATION : x86, la famille et le modèle comme XP SP2
+/// les donne (`hal::cpuid::level_and_revision`), et ses fonctions
+/// (KeFeatureBits, `hal::cpuid::feature_bits`) : SYSENTER sur Intel
+/// (ADR-004), NX selon EFER.
+fn processor_information() -> SystemProcessorInformation32 {
+    use x86_64::registers::model_specific::{Efer, EferFlags};
+
+    let (signature, leaf1_edx, extended_edx) = hal::cpuid::signature_and_features();
+    let intel = hal::cpuid::is_intel();
+    let (level, revision) = hal::cpuid::level_and_revision(signature, intel);
+    let nx_enabled = Efer::read().contains(EferFlags::NO_EXECUTE_ENABLE);
+    SystemProcessorInformation32 {
+        processor_architecture: PROCESSOR_ARCHITECTURE_INTEL,
+        processor_level: level,
+        processor_revision: revision,
+        reserved: 0,
+        processor_feature_bits: hal::cpuid::feature_bits(leaf1_edx, extended_edx, intel, nx_enabled),
+    }
 }
 
 /// SYSTEM_BASIC_INFORMATION : un processeur, les pages de la base PFN, la

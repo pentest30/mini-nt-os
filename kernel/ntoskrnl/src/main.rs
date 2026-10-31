@@ -1947,7 +1947,9 @@ fn early_exit_self_test() {
 /// NtQuerySystemInformation(SystemBasicInformation) with its exact size,
 /// then with a size one byte short and one too large
 /// (`STATUS_INFO_LENGTH_MISMATCH`, the size still returned), an unmapped and
-/// a misaligned buffer, and a class without a handler; NtProtectVirtualMemory
+/// a misaligned buffer, and a class without a handler;
+/// NtQuerySystemInformation(SystemProcessorInformation), exact size only, with
+/// what CPUID and EFER say; NtProtectVirtualMemory
 /// on part of a page (the whole page changes, the range comes back rounded,
 /// with the old protection), on two pages, on a reserved page
 /// (`STATUS_NOT_COMMITTED`) and with an invalid protection;
@@ -1961,7 +1963,7 @@ fn loader_services_self_test() {
     };
     use abi::process::NT_CURRENT_PROCESS;
     use abi::services;
-    use abi::system_information::SYSTEM_BASIC_INFORMATION;
+    use abi::system_information::{SYSTEM_BASIC_INFORMATION, SYSTEM_PROCESSOR_INFORMATION};
     use alloc::sync::Arc;
     use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
@@ -2011,6 +2013,11 @@ fn loader_services_self_test() {
     const RESERVE: u32 = 0x2000;
     const READONLY: u32 = 0x02;
     const READWRITE: u32 = 0x04;
+    // SystemProcessorInformation, the length returned, two statuses.
+    const PROCESSOR: u32 = DATA + 0x1A0;
+    const PROCESSOR_LENGTH: u32 = DATA + 0x1B0;
+    const PROCESSOR_STATUS: u32 = DATA + 0x1B4;
+    const PROCESSOR_SHORT: u32 = DATA + 0x1B8;
     // SystemProcessInformation: not implemented.
     const PROCESS_INFORMATION: u32 = 5;
     const SCRATCH: u32 = DATA + 0x100;
@@ -2028,7 +2035,11 @@ fn loader_services_self_test() {
         .call(query, &[SYSTEM_BASIC_INFORMATION, SCRATCH + 2, 0x2C, 0])
         .store_eax(MISALIGNED)
         .call(query, &[PROCESS_INFORMATION, SCRATCH, 0x100, 0])
-        .store_eax(UNKNOWN_CLASS);
+        .store_eax(UNKNOWN_CLASS)
+        .call(query, &[SYSTEM_PROCESSOR_INFORMATION, PROCESSOR, 12, PROCESSOR_LENGTH])
+        .store_eax(PROCESSOR_STATUS)
+        .call(query, &[SYSTEM_PROCESSOR_INFORMATION, SCRATCH, 11, 0])
+        .store_eax(PROCESSOR_SHORT);
     let set = |code: &mut Code, at: u32, value: u32| {
         code.word(&[0xC7, 0x05], at).bytes(&value.to_le_bytes());
     };
@@ -2123,6 +2134,25 @@ fn loader_services_self_test() {
     assert_eq!((status(LONG), read(SCRATCH)), (STATUS_INFO_LENGTH_MISMATCH, 0), "the size must be exact");
     assert_eq!(status(UNMAPPED), STATUS_ACCESS_VIOLATION, "an unmapped buffer");
     assert_eq!(status(MISALIGNED), STATUS_DATATYPE_MISALIGNMENT, "a misaligned buffer");
+    assert_eq!((status(PROCESSOR_STATUS), read(PROCESSOR_LENGTH)), (STATUS_SUCCESS, 12), "SystemProcessorInformation");
+    assert_eq!(status(PROCESSOR_SHORT), STATUS_INFO_LENGTH_MISMATCH, "its size must be exact");
+    {
+        use abi::system_information::*;
+        use x86_64::registers::model_specific::{Efer, EferFlags};
+
+        let (signature, leaf1, extended) = hal::cpuid::signature_and_features();
+        let intel = hal::cpuid::is_intel();
+        let (level, revision) = hal::cpuid::level_and_revision(signature, intel);
+        let nx = Efer::read().contains(EferFlags::NO_EXECUTE_ENABLE);
+        let (word0, word1, bits) = (read(PROCESSOR), read(PROCESSOR + 4), read(PROCESSOR + 8));
+        assert_eq!(word0 & 0xFFFF, u32::from(PROCESSOR_ARCHITECTURE_INTEL), "x86");
+        assert_eq!((word0 >> 16, word1 & 0xFFFF), (u32::from(level), u32::from(revision)), "level and revision");
+        assert_eq!(bits, hal::cpuid::feature_bits(leaf1, extended, intel, nx), "KeFeatureBits");
+        let x86_64 = KF_CMPXCHG8B | KF_FXSR | KF_XMMI | KF_XMMI64 | KF_RDTSC | KF_CMOV;
+        assert_eq!(bits & x86_64, x86_64, "what every x86-64 processor has: {bits:#x}");
+        assert_eq!(bits & KF_FAST_SYSCALL != 0, intel, "SYSENTER on Intel only (ADR-004)");
+        assert_eq!(bits & KF_NX_ENABLED != 0, nx, "NX as EFER has it");
+    }
     assert_eq!(status(UNKNOWN_CLASS), STATUS_NOT_IMPLEMENTED, "SystemProcessInformation");
     let pages = read(PAGES);
     assert_ne!(pages, 0, "NtAllocateVirtualMemory");
@@ -2170,8 +2200,8 @@ fn loader_services_self_test() {
     drop(process);
     ps::wait_for_reaper();
     log::info!(
-        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation), NtProtectVirtualMemory, \
-         NtQueryVirtualMemory"
+        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation, \
+         SystemProcessorInformation), NtProtectVirtualMemory, NtQueryVirtualMemory"
     );
 }
 
