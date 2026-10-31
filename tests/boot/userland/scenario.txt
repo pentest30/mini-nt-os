@@ -1,14 +1,21 @@
 # The ReactOS userland (M3, `cargo xtask fetch-userland`): the ramdisk gets
 # the pinned release's NTDLL.DLL, which the kernel installs as the system DLL
 # at the end of the phase 1 tests (its entry points resolved, KUSER_SHARED_DATA
-# filled). Skipped until the userland is fetched.
+# filled). Then spike S1: a native program, whose thread starts in ntdll's
+# LdrInitializeThunk; the kernel logs how it ended and the system services it
+# called (docs/compat/s1-ntdll.md). Skipped until the userland is fetched.
 requires = userland
 cpus     = default, intel
 timeout  = 120
 
 expect = [boot] NTDLL.DLL installed as the system DLL: base 0x7c920000
+# ntdll's process initialization reaches its first system service.
+expect = [s1]   NtQueryInformationProcess (0x00a1): 1 calls
+expect = [s1] native process under the system DLL: exit status
 expect = kernel: phase 1 done
 
 # A fatal error ends the run at once.
 forbid = *** STOP:
 forbid = [boot] NTDLL.DLL refused
+forbid = [s1] the native process did not
+forbid = [s1] the native program's image section

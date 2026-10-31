@@ -345,8 +345,10 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         page_fault_access_violation_test();
     }
 
-    // ReactOS's ntdll, if the boot disk has it: the system DLL from now on.
+    // ReactOS's ntdll, if the boot disk has it: the system DLL from now on,
+    // and a native program under it (spike S1).
     userland::install_system_dll();
+    userland::run_native_probe();
 
     // ── 5a. Phase 3: auto-run HELLO.EXE from FAT if present ──────────────────
     // Silently skipped if HELLO.EXE is not on the ramdisk.

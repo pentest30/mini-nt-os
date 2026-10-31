@@ -12,6 +12,11 @@
 //! Un service peut aussi donner au thread un nouveau contexte, dans sa trame
 //! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException).
 //!
+//! Chaque appel est compté, par service ; [`service_calls`] rend les
+//! services appelés depuis [`reset_service_calls`], dans l'ordre de leur
+//! premier appel, avec ce qu'il a rendu (spike S1 : les appels système que
+//! fait `ntdll`).
+//!
 //! Les threads de l'ancien chargeur gardent leur dispatcher (`syscall.rs`),
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
@@ -24,7 +29,8 @@ mod process;
 mod wait;
 
 use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU32, Ordering};
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMENTED};
 use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
@@ -98,6 +104,93 @@ pub fn is_implemented(number: u32) -> bool {
 static REPORTED: [AtomicU32; (NTOSKRNL.len() + WIN32K.len()).div_ceil(32)] =
     [const { AtomicU32::new(0) }; (NTOSKRNL.len() + WIN32K.len()).div_ceil(32)];
 
+/// Autant de services, ntoskrnl puis win32k.
+const SERVICES: usize = NTOSKRNL.len() + WIN32K.len();
+
+/// Les appels de chaque service, ntoskrnl puis win32k.
+static CALLS: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES];
+/// Ce qu'a rendu son premier appel : un statut, [`NEW_CONTEXT`] ou
+/// [`NOT_RETURNED`].
+static FIRST_COMPLETION: [AtomicU64; SERVICES] = [const { AtomicU64::new(0) }; SERVICES];
+/// Dans `FIRST_COMPLETION`, hors des statuts : un nouveau contexte.
+const NEW_CONTEXT: u64 = 1 << 32;
+/// Dans `FIRST_COMPLETION`, hors des statuts : le premier appel n'est pas
+/// revenu (encore en cours, ou le thread s'est terminé dedans).
+const NOT_RETURNED: u64 = 2 << 32;
+/// Les services, dans l'ordre de leur premier appel : les `FIRST_COUNT`
+/// premières entrées.
+static FIRST_CALLS: [AtomicU16; SERVICES] = [const { AtomicU16::new(0) }; SERVICES];
+static FIRST_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Un service appelé : son nom, son numéro, ses appels et ce qu'a rendu le
+/// premier ; `None` s'il n'est pas revenu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServiceCalls {
+    pub name: &'static str,
+    pub number: u32,
+    pub calls: u32,
+    pub first: Option<Completion>,
+}
+
+/// Remet à zéro les compteurs de [`service_calls`].
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL, quand aucun thread de Ps n'appelle de service.
+pub fn reset_service_calls() {
+    for calls in &CALLS {
+        calls.store(0, Ordering::Relaxed);
+    }
+    FIRST_COUNT.store(0, Ordering::Release);
+}
+
+/// Les services appelés depuis [`reset_service_calls`], dans l'ordre de leur
+/// premier appel.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn service_calls() -> Vec<ServiceCalls> {
+    let count = FIRST_COUNT.load(Ordering::Acquire).min(SERVICES);
+    FIRST_CALLS[..count]
+        .iter()
+        .map(|slot| {
+            let bit = usize::from(slot.load(Ordering::Relaxed));
+            let number = if bit < NTOSKRNL.len() { bit as u32 } else { WIN32K_BASE | (bit - NTOSKRNL.len()) as u32 };
+            let name = lookup(number).map_or("?", |(_, service)| service.name);
+            let first = match FIRST_COMPLETION[bit].load(Ordering::Relaxed) {
+                NOT_RETURNED => None,
+                NEW_CONTEXT => Some(Completion::Frame),
+                status => Some(Completion::Status(NtStatus(status as u32))),
+            };
+            ServiceCalls { name, number, calls: CALLS[bit].load(Ordering::Relaxed), first }
+        })
+        .collect()
+}
+
+/// Le premier numéro de la table de win32k.
+const WIN32K_BASE: u32 = 1 << abi::service::TABLE_SHIFT;
+
+/// Compte un appel du service d'indice `bit` ; `true` pour le premier.
+fn count_call(bit: usize) -> bool {
+    if CALLS[bit].fetch_add(1, Ordering::Relaxed) != 0 {
+        return false;
+    }
+    FIRST_COMPLETION[bit].store(NOT_RETURNED, Ordering::Relaxed);
+    let at = FIRST_COUNT.fetch_add(1, Ordering::AcqRel);
+    if let Some(slot) = FIRST_CALLS.get(at) {
+        slot.store(bit as u16, Ordering::Relaxed);
+    }
+    true
+}
+
+/// Note ce qu'a rendu le premier appel du service d'indice `bit`.
+fn note_first(bit: usize, completion: Completion) {
+    let value = match completion {
+        Completion::Status(status) => u64::from(status.0),
+        Completion::Frame => NEW_CONTEXT,
+    };
+    FIRST_COMPLETION[bit].store(value, Ordering::Relaxed);
+}
+
 /// KiSystemService : le service `number`, avec ses arguments copiés depuis
 /// l'adresse utilisateur `arguments` ; `frame` est la trame de trap du
 /// thread.
@@ -122,12 +215,13 @@ pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completi
         Table::Ntoskrnl => HANDLERS[index],
         Table::Win32k => None,
     };
+    let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
+    let first = count_call(bit);
     let words = &words[..count];
-    match handler {
+    let completion = match handler {
         Some(Handler::Status(handler)) => Completion::Status(handler(words)),
         Some(Handler::Frame(handler)) => handler(words, frame).map_or_else(Completion::Status, |()| Completion::Frame),
         None => {
-            let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
             let mask = 1 << (bit % 32);
             if REPORTED[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
                 // In both ABIs, the return address into the caller of the
@@ -142,7 +236,11 @@ pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completi
             }
             Completion::Status(STATUS_NOT_IMPLEMENTED)
         }
+    };
+    if first {
+        note_first(bit, completion);
     }
+    completion
 }
 
 /// Le processus du thread courant, un thread de Ps.
