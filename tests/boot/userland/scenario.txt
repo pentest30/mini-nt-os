@@ -1,9 +1,10 @@
 # The ReactOS userland (M3, `cargo xtask fetch-userland`): the ramdisk gets
 # the pinned release's NTDLL.DLL, which the kernel installs as the system DLL
 # at the end of the phase 1 tests (its entry points resolved, KUSER_SHARED_DATA
-# filled). Then spike S1: a native program, whose thread starts in ntdll's
-# LdrInitializeThunk; the kernel logs how it ended and the system services it
-# called (docs/compat/s1-ntdll.md). Skipped until the userland is fetched.
+# filled) and the NLS tables. Then spike S1: a native program, whose thread
+# starts in ntdll's LdrInitializeThunk, runs to its end; the kernel logs how it
+# ended and the system services it called (docs/compat/s1-ntdll.md). Skipped
+# until the userland is fetched.
 requires = userland
 cpus     = default, intel
 timeout  = 120
@@ -16,6 +17,9 @@ expect = [boot] NLS tables installed: ANSI code page 1252, OEM code page 437
 expect = [s1]   NtQueryInformationProcess (0x00a1): 1 calls
 expect = [s1]   NtQuerySystemInformation (0x00b5)
 expect = [s1]   NtProtectVirtualMemory (0x008f)
+# The program runs: its DbgPrint, then its own exit status.
+expect = [s1] hello from a native process
+expect = exit status 0x00005151 (the program ran to its end)
 expect = [s1] native process under the system DLL: exit status
 expect = kernel: phase 1 done
 
