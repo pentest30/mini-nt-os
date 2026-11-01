@@ -346,6 +346,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     section_service_self_test();
     event_service_self_test();
     process_memory_self_test();
+    process_creation_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -3259,6 +3260,201 @@ fn file_write_self_test() {
     log::info!(
         "[smoke] Io: files written from user mode on the boot RAM disk: NtCreateFile (create, overwrite, directory), \
          NtWriteFile, NtReadFile, NtSetInformationFile"
+    );
+}
+
+/// A process made from user mode (`sys::process`, M5), as
+/// `RtlCreateUserProcess` makes one: NtCreateProcess from an image section,
+/// its basic information, its session set and read back, a stack allocated
+/// in it, then NtCreateThread with a context and an INITIAL_TEB, suspended;
+/// the child does not run until resumed (one suspension more takes one
+/// resume more), then ends with its own status, which the parent waits for
+/// and reads. What must fail: no parent, no section, no context, the only
+/// thread ending itself through a null handle, a short buffer.
+fn process_creation_self_test() {
+    use abi::context::{Context32, CONTEXT_CONTROL, CONTEXT_INTEGER, CONTEXT_SEGMENTS};
+    use abi::ntstatus::{
+        NtStatus, STATUS_CANT_TERMINATE_SELF, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER,
+        STATUS_NOT_IMPLEMENTED, STATUS_PENDING, STATUS_SUCCESS, STATUS_TIMEOUT, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use core::mem::offset_of;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::{create_section_object, Section, SECTION_MAP_EXECUTE, SECTION_QUERY};
+    use ob::{AccessMask, HandleAttributes};
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 20 statuses
+    const PROCESS: u32 = DATA + 0x60;
+    const THREAD: u32 = DATA + 0x64;
+    const SECTION: u32 = DATA + 0x68; // given by the kernel
+    const SCRATCH: u32 = DATA + 0x6C;
+    const CLIENT_ID: u32 = DATA + 0x70;
+    const BASIC: u32 = DATA + 0x80; // PROCESS_BASIC_INFORMATION
+    const BASIC_LENGTH: u32 = DATA + 0x98;
+    const ENDED: u32 = DATA + 0xA0; // PROCESS_BASIC_INFORMATION, after
+    const SESSION: u32 = DATA + 0xB8; // 1
+    const SESSION_READ: u32 = DATA + 0xBC;
+    const STACK: u32 = DATA + 0xC0;
+    const STACK_SIZE: u32 = DATA + 0xC4; // 64 KiB
+    const PREVIOUS: u32 = DATA + 0xC8; // 3 counts
+    const SHORT: u32 = DATA + 0xD8; // -50 ms
+    const LONG: u32 = DATA + 0xE0; // -3 s
+    const INITIAL_TEB: u32 = DATA + 0xF0;
+    const CONTEXT: u32 = DATA + 0x110;
+    const DONE: u32 = DATA + 0x3FC;
+    const CHILD_STATUS: u32 = 0x77;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let previous = |i: u32| Arg::Value(PREVIOUS + 4 * i);
+    let (query, wait) = (services::NtQueryInformationProcess, services::NtWaitForSingleObject);
+    let (create_process, create_thread) = (services::NtCreateProcess, services::NtCreateThread);
+
+    // The child: ends its process with its own status.
+    let mut child = Code::new();
+    child.call(services::NtTerminateProcess, &[u32::MAX, CHILD_STATUS]).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x100];
+    text[..child.0.len()].copy_from_slice(&child.0);
+    let child_file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .build();
+    let child_section = Section::create_image_of(Arc::from(child_file), "\\WINDOWS\\CHILD.EXE").expect("the child");
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    put(SESSION, &1u32.to_le_bytes());
+    put(STACK_SIZE, &0x1_0000u32.to_le_bytes());
+    put(SHORT, &(-50 * MS).to_le_bytes());
+    put(LONG, &(-3000 * MS).to_le_bytes());
+    let mut context = Context32::zeroed();
+    context.context_flags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
+    (context.eip, context.eflags) = (IMAGE_BASE + 0x1000, 0x202);
+    put(CONTEXT, context.as_bytes());
+    let esp_at = CONTEXT + offset_of!(Context32, esp) as u32;
+
+    let mut code = Code::new();
+    code.call_args(create_process, &[v(PROCESS), v(0x001F_0FFF), v(0), v(u32::MAX), v(0), m(SECTION), v(0), v(0)])
+        .store_eax(status(0));
+    code.call_args(query, &[m(PROCESS), v(0), v(BASIC), v(24), v(BASIC_LENGTH)]).store_eax(status(1));
+    code.call_args(services::NtSetInformationProcess, &[m(PROCESS), v(24), v(SESSION), v(4)]).store_eax(status(2));
+    code.call_args(query, &[m(PROCESS), v(24), v(SESSION_READ), v(4), v(0)]).store_eax(status(3));
+    code.call_args(services::NtAllocateVirtualMemory, &[m(PROCESS), v(STACK), v(0), v(STACK_SIZE), v(0x3000), v(4)])
+        .store_eax(status(4));
+    // INITIAL_TEB: the 64 KiB allocated, all committed; ESP 8 bytes under
+    // its top, as RtlInitializeContext leaves it.
+    code.word(&[0xA1], STACK).store_eax(INITIAL_TEB + 0x10).store_eax(INITIAL_TEB + 0x0C);
+    code.bytes(&[0x05]).bytes(&0x1_0000u32.to_le_bytes()).store_eax(INITIAL_TEB + 0x08); // add eax, 64 KiB
+    code.bytes(&[0x83, 0xE8, 0x08]).store_eax(esp_at); // sub eax, 8
+    code.call_args(
+        create_thread,
+        &[v(THREAD), v(0x001F_03FF), v(0), m(PROCESS), v(CLIENT_ID), v(CONTEXT), v(INITIAL_TEB), v(1)],
+    )
+    .store_eax(status(5));
+    code.call_args(wait, &[m(PROCESS), v(0), v(SHORT)]).store_eax(status(6));
+    code.call_args(services::NtSuspendThread, &[m(THREAD), previous(0)]).store_eax(status(7));
+    code.call_args(services::NtResumeThread, &[m(THREAD), previous(1)]).store_eax(status(8));
+    code.call_args(wait, &[m(PROCESS), v(0), v(SHORT)]).store_eax(status(9));
+    code.call_args(services::NtResumeThread, &[m(THREAD), previous(2)]).store_eax(status(10));
+    code.call_args(wait, &[m(PROCESS), v(0), v(LONG)]).store_eax(status(11));
+    code.call_args(query, &[m(PROCESS), v(0), v(ENDED), v(24), v(0)]).store_eax(status(12));
+    code.call_args(create_process, &[v(SCRATCH), v(0x001F_0FFF), v(0), v(0), v(0), m(SECTION), v(0), v(0)])
+        .store_eax(status(13));
+    code.call_args(create_process, &[v(SCRATCH), v(0x001F_0FFF), v(0), v(u32::MAX), v(0), v(0), v(0), v(0)])
+        .store_eax(status(14));
+    code.call_args(create_thread, &[v(SCRATCH), v(0x001F_03FF), v(0), m(PROCESS), v(0), v(0), v(INITIAL_TEB), v(1)])
+        .store_eax(status(15));
+    code.call_args(services::NtTerminateThread, &[v(0), v(1)]).store_eax(status(16));
+    code.call_args(query, &[m(PROCESS), v(0), v(ENDED), v(20), v(0)]).store_eax(status(17));
+    code.call_args(wait, &[m(THREAD), v(0), v(SHORT)]).store_eax(status(18));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "parent.exe", false).expect("a process");
+    let access = AccessMask(SECTION_MAP_EXECUTE.0 | SECTION_QUERY.0);
+    let handle = process
+        .handle_table
+        .insert(create_section_object(child_section), access, HandleAttributes::default())
+        .expect("a section handle");
+    process.write_memory(u64::from(SECTION), &handle.0.to_le_bytes()).expect("write the handle");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 500, "the process creation test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..19).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtCreateProcess");
+    let child_pid = read(BASIC + 0x10);
+    assert_eq!((statuses[1], read(BASIC_LENGTH)), (STATUS_SUCCESS, 24), "ProcessBasicInformation");
+    assert_eq!(
+        (NtStatus(read(BASIC)), read(BASIC + 4), read(BASIC + 0x14)),
+        (STATUS_PENDING, 0x7FFD_F000, process.pid())
+    );
+    let child = ps::lookup_process(child_pid).expect("the child, held by its handle");
+    assert_eq!((child.image_file_name(), child.parent_pid()), ("CHILD.EXE", process.pid()), "named after its image");
+    assert_eq!((statuses[2], statuses[3], read(SESSION_READ)), (STATUS_SUCCESS, STATUS_SUCCESS, 1), "its session");
+    assert_eq!(child.session_id(), 1);
+    assert_eq!(statuses[4], STATUS_SUCCESS, "a stack in the child");
+    assert_eq!(statuses[5], STATUS_SUCCESS, "NtCreateThread, suspended");
+    assert_eq!((read(CLIENT_ID), read(CLIENT_ID + 4) != 0), (child_pid, true), "its CLIENT_ID");
+    assert_eq!(statuses[6], STATUS_TIMEOUT, "a suspended child does not run");
+    assert_eq!((statuses[7], read(PREVIOUS)), (STATUS_SUCCESS, 1), "suspended once more");
+    assert_eq!((statuses[8], read(PREVIOUS + 4), statuses[9]), (STATUS_SUCCESS, 2, STATUS_TIMEOUT), "one resume");
+    assert_eq!((statuses[10], read(PREVIOUS + 8)), (STATUS_SUCCESS, 1), "the last resume");
+    assert_eq!(statuses[11], STATUS_WAIT_0, "the child ran and ended");
+    assert_eq!((statuses[12], read(ENDED)), (STATUS_SUCCESS, CHILD_STATUS), "with its own status");
+    assert_eq!(child.exit_status(), NtStatus(CHILD_STATUS));
+    assert_eq!(
+        (statuses[13], statuses[14]),
+        (STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED),
+        "no parent, no section"
+    );
+    assert_eq!(statuses[15], STATUS_INVALID_PARAMETER, "no context");
+    assert_eq!(statuses[16], STATUS_CANT_TERMINATE_SELF, "the only thread, through a null handle");
+    assert_eq!(statuses[17], STATUS_INFO_LENGTH_MISMATCH, "a short buffer");
+    assert_eq!(statuses[18], STATUS_WAIT_0, "the child's thread, ended");
+    drop(child);
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ps::lookup_process(child_pid).is_err(), "the child goes with the parent's handle");
+    log::info!(
+        "[smoke] Ps: a process made from user mode: NtCreateProcess, NtQueryInformationProcess, \
+         NtSetInformationProcess, NtCreateThread (suspended), NtSuspendThread, NtResumeThread, its end awaited"
     );
 }
 

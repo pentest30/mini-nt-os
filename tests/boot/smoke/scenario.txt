@@ -36,6 +36,7 @@ expect = [smoke] Cm: a mounted hive read from user mode: NtOpenKey, NtQueryValue
 expect = [smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject
 expect = [smoke] Ex: events from user mode: NtCreateEvent, NtOpenEvent, NtSetEvent, NtResetEvent, NtClearEvent, NtPulseEvent, NtQueryEvent; waits: NtWaitForSingleObject, NtWaitForMultipleObjects, one woken by the kernel
 expect = [smoke] Mm: another process's memory from user mode: the first MiB reserved from address 4, NtWriteVirtualMemory, NtReadVirtualMemory (partial copies), NtQuerySection (image, basic)
+expect = [smoke] Ps: a process made from user mode: NtCreateProcess, NtQueryInformationProcess, NtSetInformationProcess, NtCreateThread (suspended), NtSuspendThread, NtResumeThread, its end awaited
 expect = hello from Mino user mode
 expect = [smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them, DbgPrompt answered
 expect = [smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher

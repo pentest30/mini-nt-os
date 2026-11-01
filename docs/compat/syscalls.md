@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 51 | 296 |
+| ntoskrnl | 59 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -64,13 +64,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x002e` | `NtCreateNamedPipeFile` | 14 |  |
 | `0x002f` | `NtCreatePagingFile` | 4 |  |
 | `0x0030` | `NtCreatePort` | 5 |  |
-| `0x0031` | `NtCreateProcess` | 8 |  |
-| `0x0032` | `NtCreateProcessEx` | 9 |  |
+| `0x0031` | `NtCreateProcess` | 8 | ✅ |
+| `0x0032` | `NtCreateProcessEx` | 9 | ✅ |
 | `0x0033` | `NtCreateProfile` | 9 |  |
 | `0x0034` | `NtCreateSection` | 7 | ✅ |
 | `0x0035` | `NtCreateSemaphore` | 5 |  |
 | `0x0036` | `NtCreateSymbolicLinkObject` | 4 | ✅ |
-| `0x0037` | `NtCreateThread` | 8 |  |
+| `0x0037` | `NtCreateThread` | 8 | ✅ |
 | `0x0038` | `NtCreateTimer` | 4 |  |
 | `0x0039` | `NtCreateToken` | 13 |  |
 | `0x003a` | `NtCreateWaitablePort` | 5 |  |
@@ -176,7 +176,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x009e` | `NtQueryInformationFile` | 5 | ✅ |
 | `0x009f` | `NtQueryInformationJobObject` | 5 |  |
 | `0x00a0` | `NtQueryInformationPort` | 5 |  |
-| `0x00a1` | `NtQueryInformationProcess` | 5 |  |
+| `0x00a1` | `NtQueryInformationProcess` | 5 | ✅ |
 | `0x00a2` | `NtQueryInformationThread` | 5 |  |
 | `0x00a3` | `NtQueryInformationToken` | 5 |  |
 | `0x00a4` | `NtQueryInstallUILanguage` | 1 |  |
@@ -229,7 +229,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00d3` | `NtResetWriteWatch` | 3 |  |
 | `0x00d4` | `NtRestoreKey` | 3 |  |
 | `0x00d5` | `NtResumeProcess` | 1 |  |
-| `0x00d6` | `NtResumeThread` | 2 |  |
+| `0x00d6` | `NtResumeThread` | 2 | ✅ |
 | `0x00d7` | `NtSaveKey` | 2 |  |
 | `0x00d8` | `NtSaveKeyEx` | 3 |  |
 | `0x00d9` | `NtSaveMergedKeys` | 3 |  |
@@ -252,7 +252,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00ea` | `NtSetInformationJobObject` | 4 |  |
 | `0x00eb` | `NtSetInformationKey` | 4 |  |
 | `0x00ec` | `NtSetInformationObject` | 4 |  |
-| `0x00ed` | `NtSetInformationProcess` | 4 |  |
+| `0x00ed` | `NtSetInformationProcess` | 4 | ✅ |
 | `0x00ee` | `NtSetInformationThread` | 4 |  |
 | `0x00ef` | `NtSetInformationToken` | 4 |  |
 | `0x00f0` | `NtSetIntervalProfile` | 2 |  |
@@ -278,11 +278,11 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0104` | `NtStartProfile` | 1 |  |
 | `0x0105` | `NtStopProfile` | 1 |  |
 | `0x0106` | `NtSuspendProcess` | 1 |  |
-| `0x0107` | `NtSuspendThread` | 2 |  |
+| `0x0107` | `NtSuspendThread` | 2 | ✅ |
 | `0x0108` | `NtSystemDebugControl` | 6 |  |
 | `0x0109` | `NtTerminateJobObject` | 2 |  |
 | `0x010a` | `NtTerminateProcess` | 2 | ✅ |
-| `0x010b` | `NtTerminateThread` | 2 |  |
+| `0x010b` | `NtTerminateThread` | 2 | ✅ |
 | `0x010c` | `NtTestAlert` | 0 | ✅ |
 | `0x010d` | `NtTraceEvent` | 4 |  |
 | `0x010e` | `NtTranslateFilePath` | 4 |  |

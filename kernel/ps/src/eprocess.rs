@@ -193,6 +193,9 @@ pub struct EProcess {
     exited: DispatcherEvent,
     /// Options d'exécution (`MEM_EXECUTE_OPTION_*`, ADR-020).
     execute_options: KSpinLock<u32>,
+    /// SessionId : sa session (Terminal Services), celle de son créateur au
+    /// départ.
+    session_id: AtomicU32,
 }
 
 impl EProcess {
@@ -204,6 +207,7 @@ impl EProcess {
         handle_table: HandleTable,
         peb: u32,
         image_base: u32,
+        session_id: u32,
     ) -> Result<Arc<Object<Self>>, NtStatus> {
         let pid = CID_TABLE.lock().insert(CidEntry::Process(Weak::new())).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
         let directory_table_base = space
@@ -226,6 +230,7 @@ impl EProcess {
                 exit_status: AtomicU32::new(STATUS_PENDING.0),
                 exited: DispatcherEvent::new(KObjectType::NotificationEvent),
                 execute_options: KSpinLock::new(DEP_POLICY.initial_options()),
+                session_id: AtomicU32::new(session_id),
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
@@ -364,6 +369,25 @@ impl EProcess {
     pub(crate) fn signal_exited(&self) {
         self.exited.set();
     }
+
+    /// SessionId.
+    pub fn session_id(&self) -> u32 {
+        self.session_id.load(Ordering::Acquire)
+    }
+
+    /// NtSetInformationProcess(ProcessSessionInformation) : le met dans la
+    /// session `session_id`, que son PEB dit aussi (`Peb->SessionId`).
+    ///
+    /// # IRQL
+    /// <= APC_LEVEL.
+    pub fn set_session_id(&self, session_id: u32) -> Result<(), NtStatus> {
+        if self.peb != 0 {
+            let at = u64::from(self.peb) + core::mem::offset_of!(Peb32, session_id) as u64;
+            self.write_memory(at, &session_id.to_le_bytes())?;
+        }
+        self.session_id.store(session_id, Ordering::Release);
+        Ok(())
+    }
 }
 
 impl Drop for EProcess {
@@ -378,7 +402,7 @@ static SYSTEM_PROCESS: Once<Arc<Object<EProcess>>> = Once::new();
 /// Crée le processus System, dans l'espace d'adresses du système.
 pub(crate) fn init_system_process() {
     SYSTEM_PROCESS.call_once(|| {
-        let system = EProcess::create(0, "System", None, HandleTable::new(), 0, 0).expect("no PID for System");
+        let system = EProcess::create(0, "System", None, HandleTable::new(), 0, 0, 0).expect("no PID for System");
         assert_eq!(system.pid(), 4, "System is not the first process");
         system
     });
@@ -409,11 +433,12 @@ pub fn lookup_process(pid: ProcessId) -> Result<Arc<Object<EProcess>>, NtStatus>
 /// # IRQL
 /// <= DISPATCH_LEVEL.
 pub fn create_legacy(image_file_name: &str) -> Result<Arc<Object<EProcess>>, NtStatus> {
-    EProcess::create(system_process().pid(), image_file_name, None, HandleTable::new(), 0, 0)
+    EProcess::create(system_process().pid(), image_file_name, None, HandleTable::new(), 0, 0, 0)
 }
 
 /// PspCreateProcess : un processus sans thread pour l'image `section`, fils
-/// de `parent`, dont il hérite les handles héritables avec `inherit_handles`.
+/// de `parent`, dont il hérite la session, et les handles héritables avec
+/// `inherit_handles`.
 ///
 /// Son espace d'adresses est neuf ; l'image y est projetée à sa base
 /// préférée, ou ailleurs si elle a des relocations (`ntdll` la relogera), et
@@ -436,7 +461,8 @@ pub fn create_process(
     let info = section.image().ok_or(STATUS_SECTION_NOT_IMAGE)?.info;
     let space = AddressSpace::new().ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
     space.set_execute_enabled(DEP_POLICY.initial_options() & MEM_EXECUTE_OPTION_ENABLE != 0);
-    let built = build_address_space(&space, section, &info);
+    let session_id = parent.session_id();
+    let built = build_address_space(&space, section, &info, session_id);
     let image_base = match built {
         Ok(image_base) => image_base,
         Err(status) => {
@@ -445,11 +471,10 @@ pub fn create_process(
         }
     };
     let handle_table = if inherit_handles { parent.handle_table.inherit() } else { HandleTable::new() };
-    EProcess::create(parent.pid(), image_file_name, Some(space.clone()), handle_table, PEB_VA, image_base).inspect_err(
-        |_| {
+    EProcess::create(parent.pid(), image_file_name, Some(space.clone()), handle_table, PEB_VA, image_base, session_id)
+        .inspect_err(|_| {
             space.destroy();
-        },
-    )
+        })
 }
 
 /// Projette l'image, `KUSER_SHARED_DATA`, la DLL système (à sa base, sinon
@@ -459,6 +484,7 @@ fn build_address_space(
     space: &AddressSpace,
     section: &Arc<Section>,
     info: &mm::section::ImageInfo,
+    session_id: u32,
 ) -> Result<u32, NtStatus> {
     let view = space.map_view(section, 0, 0, 0, PageProtect::READWRITE)?;
     let image_base = view.base as u32;
@@ -489,6 +515,7 @@ fn build_address_space(
     peb.image_subsystem = u32::from(info.subsystem);
     peb.image_subsystem_major_version = u32::from(info.subsystem_version.0);
     peb.image_subsystem_minor_version = u32::from(info.subsystem_version.1);
+    peb.session_id = session_id;
     space.write_bytes(page, peb.as_bytes())?;
     Ok(image_base)
 }

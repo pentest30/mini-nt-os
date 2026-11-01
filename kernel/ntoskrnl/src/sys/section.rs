@@ -139,7 +139,7 @@ fn create_section(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
             }
             let bytes: Arc<[u8]> = Arc::from(file.read_all()?);
             if allocation & SEC_IMAGE != 0 {
-                Section::create_image(bytes)?
+                Section::create_image_of(bytes, file.path())?
             } else {
                 Section::create_data_file(bytes, size, protect)?
             }

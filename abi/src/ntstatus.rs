@@ -122,6 +122,7 @@ pub const STATUS_REGISTRY_CORRUPT: NtStatus = NtStatus(0xC000_014C);
 pub const STATUS_REGISTRY_IO_FAILED: NtStatus = NtStatus(0xC000_014D);
 pub const STATUS_CHILD_MUST_BE_VOLATILE: NtStatus = NtStatus(0xC000_0181);
 pub const STATUS_NAME_TOO_LONG: NtStatus = NtStatus(0xC000_0106);
+pub const STATUS_CANT_TERMINATE_SELF: NtStatus = NtStatus(0xC000_00DB);
 pub const STATUS_INVALID_PARAMETER_1: NtStatus = NtStatus(0xC000_00EF);
 pub const STATUS_INVALID_PARAMETER_2: NtStatus = NtStatus(0xC000_00F0);
 pub const STATUS_INVALID_PARAMETER_3: NtStatus = NtStatus(0xC000_00F1);
