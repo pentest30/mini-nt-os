@@ -16,22 +16,22 @@ expect = [m4] SMSS.EXE under the system DLL: exit status
 # environment variables in the registry from the processor (Ex) and the
 # HARDWARE hive (Cm), then finds csrss.exe, the Win32 subsystem it starts
 # next, creates the event csrss signals once connected (Ex), creates and
-# resumes its process (Ps, Mm), and waits; the loader of csrss stops first
-# (M5).
+# resumes its process (Ps, Mm), and waits; csrss loads its DLLs, then
+# CsrServerInitialization stops at the process token (Se, M5).
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
 expect = [m4]   NtEnumerateValueKey (0x004d)
 expect = [m4]   NtCreateSymbolicLinkObject (0x0036)
 expect = [m4]   NtOpenFile (0x007a)
-expect = [m4]   NtMapViewOfSection (0x0071): 21 calls
+expect = [m4]   NtMapViewOfSection (0x0071):
 expect = [boot] HARDWARE hive mounted at \REGISTRY\MACHINE\HARDWARE
 expect = [m4]   NtQuerySystemInformation (0x00b5)
 expect = [m4]   NtSetValueKey (0x0100)
 expect = [m4]   NtCreateEvent (0x0025): 2 calls, the first returned 0x00000000
 expect = [m4]   NtCreateProcess (0x0031): 1 calls, the first returned 0x00000000
 expect = [m4]   NtResumeThread (0x00d6): 1 calls, the first returned 0x00000000
-expect = LDR: Process initialization failure for \??\C:\WINDOWS\system32\csrss.exe
+expect = CSRSRV:CsrServerInitialization: CsrSetProcessSecurity failed
 expect = [m4] Environment: 6 of 6 variables written
 expect = [m4] \KnownDlls: 21 sections
 expect = KnownDllPath -> C:\WINDOWS\system32
@@ -51,6 +51,7 @@ forbid = SMSS: Failed writing
 forbid = SMSS: Unable to open \Registry\Machine\Hardware
 forbid = SMSS: Unable to find subsystem
 forbid = SMSS: Failed load of
+forbid = LDR: Process initialization failure
 forbid = SMSS: Subsystem execute failed
 forbid = SMSS: Unable to create \Device\VolumesSafeForWriteAccess event
 forbid = [boot] HARDWARE hive refused

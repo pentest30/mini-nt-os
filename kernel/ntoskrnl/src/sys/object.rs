@@ -156,3 +156,46 @@ pub(super) fn nt_create_symbolic_link_object(arguments: &[u32]) -> NtStatus {
         create_named(arguments[0], arguments[1], arguments[2], link)
     }))
 }
+
+/// NtQuerySymbolicLinkObject(LinkHandle, *LinkTarget, *ReturnedLength) : la
+/// cible du lien (`SYMBOLIC_LINK_QUERY`) dans le UNICODE_STRING `LinkTarget`,
+/// dont le tampon a `MaximumLength` octets, et sa longueur dans `Length`.
+/// Comme ReactOS : avec `ReturnedLength`, la cible est copiée avec son zéro
+/// final, et sa taille ainsi comptée y est rendue, même quand le tampon est
+/// trop petit (`STATUS_BUFFER_TOO_SMALL`) ; sans lui, sans le zéro.
+pub(super) fn nt_query_symbolic_link_object(arguments: &[u32]) -> NtStatus {
+    use abi::peb32::UnicodeString32;
+    use ke::usermem::UserPtr;
+
+    let (handle, target, returned) = (arguments[0], arguments[1], arguments[2]);
+    let query = || {
+        let string = UserPtr::<UnicodeString32>::new(target).read()?;
+        if returned != 0 {
+            ke::usermem::probe_for_write(u64::from(returned), 4, 4)?;
+        }
+        let link = super::current_process().handle_table.reference_as::<ob::SymbolicLink>(
+            ob::Handle(handle),
+            &ob::SYMBOLIC_LINK_TYPE,
+            ob::symlink::SYMBOLIC_LINK_QUERY,
+        )?;
+        let mut bytes: alloc::vec::Vec<u8> = link.target().encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let length = u16::try_from(bytes.len()).map_err(|_| abi::ntstatus::STATUS_NAME_TOO_LONG)?;
+        let maximum = u32::from(length) + 2;
+        if returned != 0 {
+            bytes.extend_from_slice(&[0, 0]);
+        }
+        let status = if bytes.len() <= usize::from(string.maximum_length) {
+            ke::usermem::probe_for_write(u64::from(string.buffer), bytes.len(), 2)?;
+            ke::usermem::copy_to_user(u64::from(string.buffer), &bytes)?;
+            UserPtr::<u16>::new(target).write(&length)?;
+            STATUS_SUCCESS
+        } else {
+            abi::ntstatus::STATUS_BUFFER_TOO_SMALL
+        };
+        if returned != 0 {
+            UserPtr::<u32>::new(returned).write(&maximum)?;
+        }
+        Ok(status)
+    };
+    result(query())
+}

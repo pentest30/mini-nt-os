@@ -109,6 +109,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryInformationProcess, Handler::Status(process::nt_query_information_process)),
     (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
     (services::NtQuerySection, Handler::Status(section::nt_query_section)),
+    (services::NtQuerySymbolicLinkObject, Handler::Status(object::nt_query_symbolic_link_object)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
     (services::NtQueryValueKey, Handler::Status(registry::nt_query_value_key)),
     (services::NtQueryVirtualMemory, Handler::Status(memory::nt_query_virtual_memory)),

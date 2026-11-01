@@ -2578,12 +2578,13 @@ fn registry_self_test() {
 /// without it: `STATUS_OBJECT_NAME_COLLISION`), NtCreateSymbolicLinkObject
 /// relative to the directory, NtOpenSymbolicLinkObject (the link itself),
 /// NtOpenDirectoryObject through the link, on a missing name (its handle
-/// zeroed) and on a key (`STATUS_OBJECT_TYPE_MISMATCH`). The directory's name
-/// goes with its last handle.
+/// zeroed) and on a key (`STATUS_OBJECT_TYPE_MISMATCH`); NtQuerySymbolicLinkObject
+/// (M5) with and without its returned length, in a buffer too small with it,
+/// and on a directory. The directory's name goes with its last handle.
 fn object_directory_self_test() {
     use abi::ntstatus::{
-        NtStatus, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_EXISTS, STATUS_OBJECT_NAME_NOT_FOUND,
-        STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
+        NtStatus, STATUS_BUFFER_TOO_SMALL, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_EXISTS,
+        STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::object::OBJ_OPENIF;
     use abi::services;
@@ -2600,6 +2601,12 @@ fn object_directory_self_test() {
     const HANDLE: u32 = DATA + 0x20; // 8 handles
     const OA: u32 = DATA + 0x40; // 6 OBJECT_ATTRIBUTES of 24 bytes
     const US: usize = 0xD0; // 6 UNICODE_STRING
+    const MORE: u32 = DATA + 0x170; // 4 statuses more
+    const TARGET: u32 = DATA + 0x180; // a UNICODE_STRING, its buffer of 0x40 bytes after
+    const RETURNED: u32 = DATA + 0x1D0;
+    const SHORT: u32 = DATA + 0x1D4; // a UNICODE_STRING, its buffer of 16 bytes at SHORT_BUFFER
+    const SHORT_BUFFER: u32 = DATA + 0x1DC;
+    const SHORT_RETURNED: u32 = DATA + 0x1EC;
     const DONE: u32 = DATA + 0x1FC;
     const ALL_DIRECTORY: u32 = 0x000F_000F;
     const ALL_LINK: u32 = 0x000F_0001;
@@ -2629,6 +2636,11 @@ fn object_directory_self_test() {
     }
     // Handle 6 starts non-zero: a failed open must zero it.
     data[0x38..0x3C].copy_from_slice(&u32::MAX.to_le_bytes());
+    for (at, maximum, buffer) in [(TARGET, 0x40u16, TARGET + 0x10), (SHORT, 16, SHORT_BUFFER)] {
+        let at = (at - DATA) as usize;
+        data[at + 2..at + 4].copy_from_slice(&maximum.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&buffer.to_le_bytes());
+    }
     let oa = |i: u32| Arg::Value(OA + 24 * i);
     let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
     let status = |i: u32| STATUS + 4 * i;
@@ -2652,7 +2664,17 @@ fn object_directory_self_test() {
         .call_args(open_dir, &[handle(6), v(QUERY), oa(4)])
         .store_eax(status(6))
         .call_args(open_dir, &[handle(7), v(QUERY), oa(5)])
-        .store_eax(status(7))
+        .store_eax(status(7));
+    let query = services::NtQuerySymbolicLinkObject;
+    let link = Arg::Memory(HANDLE + 16);
+    code.call_args(query, &[link, v(TARGET), v(RETURNED)])
+        .store_eax(MORE)
+        .call_args(query, &[link, v(SHORT), v(SHORT_RETURNED)])
+        .store_eax(MORE + 4)
+        .call_args(query, &[link, v(SHORT), v(0)])
+        .store_eax(MORE + 8)
+        .call_args(query, &[Arg::Memory(HANDLE), v(TARGET), v(0)])
+        .store_eax(MORE + 12)
         .word(&[0xC7, 0x05], DONE)
         .bytes(&1u32.to_le_bytes())
         .bytes(&[0xEB, 0xFE]);
@@ -2697,6 +2719,15 @@ fn object_directory_self_test() {
         "a missing name, its handle zeroed"
     );
     assert_eq!(statuses[7], STATUS_OBJECT_TYPE_MISMATCH, "a key is not a directory");
+    let more: alloc::vec::Vec<NtStatus> = (0..4).map(|i| NtStatus(read(MORE + 4 * i))).collect();
+    let mut target = [0u8; 18];
+    process.read_memory(u64::from(TARGET + 0x10), &mut target).expect("read the target");
+    let expected: alloc::vec::Vec<u8> = "\\MinoDir\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    assert_eq!((more[0], read(TARGET) & 0xFFFF, read(RETURNED)), (STATUS_SUCCESS, 16, 18), "NtQuerySymbolicLinkObject");
+    assert_eq!(&target[..], &expected[..], "the target, with its final zero");
+    assert_eq!((more[1], read(SHORT_RETURNED)), (STATUS_BUFFER_TOO_SMALL, 18), "no room for the zero");
+    assert_eq!((more[2], read(SHORT) & 0xFFFF), (STATUS_SUCCESS, 16), "without the returned length, it fits");
+    assert_eq!(more[3], STATUS_OBJECT_TYPE_MISMATCH, "a directory is not a link");
     let ns = ob::namespace();
     let link =
         ns.open("\\MinoDir\\Link", None, Some(&ob::SYMBOLIC_LINK_TYPE), abi::object::OBJ_OPENLINK).expect("the link");
@@ -2719,7 +2750,7 @@ fn object_directory_self_test() {
     assert!(ns.open("\\MinoDir", None, None, 0).is_err(), "a temporary directory's name goes with its last handle");
     log::info!(
         "[smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, \
-         NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject"
+         NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject, NtQuerySymbolicLinkObject"
     );
 }
 

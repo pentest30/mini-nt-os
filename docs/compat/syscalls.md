@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 59 | 296 |
+| ntoskrnl | 60 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -193,7 +193,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00af` | `NtQuerySection` | 5 | ✅ |
 | `0x00b0` | `NtQuerySecurityObject` | 5 |  |
 | `0x00b1` | `NtQuerySemaphore` | 5 |  |
-| `0x00b2` | `NtQuerySymbolicLinkObject` | 3 |  |
+| `0x00b2` | `NtQuerySymbolicLinkObject` | 3 | ✅ |
 | `0x00b3` | `NtQuerySystemEnvironmentValue` | 4 |  |
 | `0x00b4` | `NtQuerySystemEnvironmentValueEx` | 5 |  |
 | `0x00b5` | `NtQuerySystemInformation` | 4 | ✅ |

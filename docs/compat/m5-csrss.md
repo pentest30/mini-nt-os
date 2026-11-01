@@ -93,3 +93,22 @@ NtReplyWaitReceivePort rend `STATUS_NOT_IMPLEMENTED` et la boucle recommence san
 | `NtQuerySymbolicLinkObject` | `\KnownDlls\KnownDllPath` | « LDR: Process initialization failure for \??\C:\WINDOWS\system32\csrss.exe » (`STATUS_APP_INIT_FAILURE` par NtRaiseHardError), **`csrss` se termine** | **Ob** |
 
 `smss`, qui attend toujours, est terminé par la sonde au bout de 10 s.
+
+## Étape 4 : le chargeur de `csrss` va au bout
+
+NtQuerySymbolicLinkObject (Ob, `SYMBOLIC_LINK_QUERY`) : la cible du lien dans le UNICODE_STRING de l'appelant ;
+comme ReactOS, avec la longueur rendue demandée, la cible est copiée avec son zéro final et cette taille est
+rendue, même quand le tampon est trop petit (`STATUS_BUFFER_TOO_SMALL`). Test : `object_directory_self_test`.
+
+Le chargeur de `csrss` lit alors `\KnownDlls\KnownDllPath`, projette `csrsrv.dll` (absente de `\KnownDlls` :
+NtOpenSection rend `STATUS_OBJECT_NAME_NOT_FOUND`, puis NtOpenFile, NtCreateSection, NtMapViewOfSection), écrit
+« Failed to create the implicit act ctx » (pas de manifeste, toléré), et entre dans `main` :
+
+| Service | Arguments | Ce qu'en fait `csrss` | Composant |
+|---|---|---|---|
+| `NtSetInformationProcess` | `ProcessBasePriority` (5) | sa priorité ; échec ignoré | Ps |
+| `NtSetInformationProcess` | `ProcessUserModeIOPL` (0x10) | l'IOPL du mode utilisateur, pour les registres VGA : « CSRSS: Could not raise IOPL », NtRaiseHardError(`STATUS_IO_PRIVILEGE_FAILED`) ; toléré | Ps (le noyau garde IOPL 0, `hal::ring3`) |
+| `NtOpenProcessToken` | soi-même, `TOKEN_QUERY` | `CsrSetProcessSecurity` (le jeton, `TokenUser`, puis NtSetSecurityObject sur le processus) : « CsrSetProcessSecurity failed », « CSRSS: Unable to initialize server », **`csrss` se termine** | **Se** |
+
+Le prochain mur de `csrss` est donc Se (02 §5.8, ADR-011) : un jeton par processus (NtOpenProcessToken,
+NtQueryInformationToken), les descripteurs de sécurité des objets (NtSetSecurityObject).
