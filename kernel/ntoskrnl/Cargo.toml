@@ -61,6 +61,7 @@ ob               = { path = "../ob" }
 cm               = { path = "../cm" }
 ex               = { path = "../ex" }
 lpc              = { path = "../lpc" }
+se               = { path = "../se" }
 regf             = { path = "../../libs/regf", features = ["builder"] }
 ps               = { path = "../ps" }
 io-manager       = { path = "../io" }

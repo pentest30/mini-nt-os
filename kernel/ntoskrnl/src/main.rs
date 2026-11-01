@@ -349,6 +349,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     process_memory_self_test();
     process_creation_self_test();
     port_self_test();
+    security_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -3621,6 +3622,231 @@ fn port_self_test() {
     log::info!(
         "[smoke] Lpc: ports from user mode: NtCreatePort, NtReplyWaitReceivePort waits until the kernel sends a \
          datagram (LpcRequestPort)"
+    );
+}
+
+/// Se from user mode (`sys::security`, M5), as csrss and smss use it: in a
+/// process the kernel creates, the token is a copy of System's, with its own
+/// id. NtOpenProcessToken, then NtQueryInformationToken for its size, then
+/// TokenUser and TokenStatistics; a TOKEN_QUERY handle neither reads the
+/// source nor adjusts privileges; an unknown class. As RtlAdjustPrivilege:
+/// NtOpenProcessTokenEx for TOKEN_ADJUST_PRIVILEGES and TOKEN_QUERY,
+/// SeLoadDriverPrivilege enabled with its previous state, then again (no
+/// change); a privilege the token lacks (STATUS_NOT_ALL_ASSIGNED) after a
+/// previous state too small to take the change (nothing changes); no new
+/// state. No thread token (STATUS_NO_TOKEN). As CsrSetProcessSecurity: a
+/// DACL set on the process (NtSetSecurityObject on NtCurrentProcess()),
+/// read back by NtQuerySecurityObject, its size first; the owner, which it
+/// does not have; what must fail: another revision, an owner missing, a
+/// token handle without WRITE_DAC, a SACL.
+fn security_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_HANDLE, STATUS_INVALID_INFO_CLASS,
+        STATUS_INVALID_OWNER, STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED, STATUS_NO_TOKEN, STATUS_SUCCESS,
+        STATUS_UNKNOWN_REVISION, STATUS_WAIT_0,
+    };
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use abi::security::{
+        SecurityDescriptor32, DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, SACL_SECURITY_INFORMATION,
+        SE_BACKUP_PRIVILEGE, SE_DACL_PRESENT, SE_LOAD_DRIVER_PRIVILEGE, SE_PRIVILEGE_ENABLED, SE_SELF_RELATIVE,
+        SE_SYNC_AGENT_PRIVILEGE, TOKEN_SOURCE, TOKEN_STATISTICS, TOKEN_USER,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use se::{Acl, Luid, SecurityDescriptor, Sid};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 32 statuses
+    const HANDLE: u32 = DATA + 0x80; // 4 handles
+    const LENGTH: u32 = DATA + 0x90; // 12 lengths
+    const QUERY: u32 = DATA + 0x100; // 0x100 bytes
+    const STATS: u32 = DATA + 0x200; // TOKEN_STATISTICS
+    const NEW_STATE: u32 = DATA + 0x240; // 1 privilege
+    const NEW_STATE2: u32 = DATA + 0x250; // 2 privileges
+    const PREVIOUS: u32 = DATA + 0x270;
+    const PREVIOUS2: u32 = DATA + 0x280;
+    const PREVIOUS3: u32 = DATA + 0x290;
+    const SD: u32 = DATA + 0x300; // absolute, its DACL at ACL
+    const ACL: u32 = DATA + 0x320;
+    const BAD_SD: u32 = DATA + 0x360;
+    const SD_OUT: u32 = DATA + 0x400; // 0x80 bytes
+    const SD_OUT2: u32 = DATA + 0x480; // 0x40 bytes
+    const DONE: u32 = DATA + 0x7FC;
+    // As CsrSetProcessSecurity: what its user may do to it.
+    const CSRSS_ACCESS: u32 = 0x0002_0C79;
+    const TOKEN_QUERY: u32 = 0x8;
+    const ADJUST_AND_QUERY: u32 = 0x28;
+
+    let dacl = Acl::allowing(&[(CSRSS_ACCESS, Sid::LOCAL_SYSTEM)]);
+    let mut data = alloc::vec![0u8; 0x800];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    let privileges = |entries: &[(u32, u32)]| {
+        let mut bytes = (entries.len() as u32).to_le_bytes().to_vec();
+        for &(luid, attributes) in entries {
+            bytes.extend_from_slice(&u64::from(luid).to_le_bytes());
+            bytes.extend_from_slice(&attributes.to_le_bytes());
+        }
+        bytes
+    };
+    put(NEW_STATE, &privileges(&[(SE_LOAD_DRIVER_PRIVILEGE, SE_PRIVILEGE_ENABLED)]));
+    put(
+        NEW_STATE2,
+        &privileges(&[(SE_BACKUP_PRIVILEGE, SE_PRIVILEGE_ENABLED), (SE_SYNC_AGENT_PRIVILEGE, SE_PRIVILEGE_ENABLED)]),
+    );
+    let header = SecurityDescriptor32 { revision: 1, control: SE_DACL_PRESENT, dacl: ACL, ..Default::default() };
+    put(SD, header.as_bytes());
+    put(ACL, dacl.bytes());
+    put(BAD_SD, SecurityDescriptor32 { revision: 2, ..header }.as_bytes());
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let handle = |i: u32| HANDLE + 4 * i;
+    let length = |i: u32| LENGTH + 4 * i;
+    let (query, adjust) = (services::NtQueryInformationToken, services::NtAdjustPrivilegesToken);
+    let (set_security, query_security) = (services::NtSetSecurityObject, services::NtQuerySecurityObject);
+    let me = NT_CURRENT_PROCESS;
+    let mut code = Code::new();
+    code.call_args(services::NtOpenProcessToken, &[v(me), v(TOKEN_QUERY), v(handle(0))]).store_eax(status(0));
+    code.call_args(query, &[m(handle(0)), v(TOKEN_USER), v(0), v(0), v(length(0))]).store_eax(status(1));
+    code.call_args(query, &[m(handle(0)), v(TOKEN_USER), v(QUERY), v(0x100), v(length(1))]).store_eax(status(2));
+    code.call_args(query, &[m(handle(0)), v(TOKEN_STATISTICS), v(STATS), v(0x38), v(length(2))]).store_eax(status(3));
+    code.call_args(query, &[m(handle(0)), v(TOKEN_SOURCE), v(QUERY), v(0x100), v(length(3))]).store_eax(status(4));
+    code.call_args(query, &[m(handle(0)), v(99), v(QUERY), v(0x100), v(length(3))]).store_eax(status(5));
+    code.call_args(adjust, &[m(handle(0)), v(0), v(NEW_STATE), v(16), v(PREVIOUS), v(length(4))]).store_eax(status(6));
+    code.call_args(services::NtOpenProcessTokenEx, &[v(me), v(ADJUST_AND_QUERY), v(0), v(handle(1))])
+        .store_eax(status(7));
+    code.call_args(adjust, &[m(handle(1)), v(0), v(NEW_STATE), v(16), v(PREVIOUS), v(length(5))]).store_eax(status(8));
+    code.call_args(adjust, &[m(handle(1)), v(0), v(NEW_STATE), v(16), v(PREVIOUS2), v(length(6))]).store_eax(status(9));
+    code.call_args(adjust, &[m(handle(1)), v(0), v(NEW_STATE2), v(4), v(PREVIOUS3), v(length(7))])
+        .store_eax(status(10));
+    code.call_args(adjust, &[m(handle(1)), v(0), v(NEW_STATE2), v(16), v(PREVIOUS3), v(length(8))])
+        .store_eax(status(11));
+    code.call_args(adjust, &[m(handle(1)), v(0), v(0), v(0), v(0), v(0)]).store_eax(status(12));
+    code.call_args(services::NtOpenThreadToken, &[v(NT_CURRENT_THREAD), v(TOKEN_QUERY), v(0), v(handle(2))])
+        .store_eax(status(13));
+    code.call_args(services::NtOpenThreadTokenEx, &[v(0x1234), v(TOKEN_QUERY), v(0), v(0), v(handle(2))])
+        .store_eax(status(14));
+    code.call_args(set_security, &[v(me), v(DACL_SECURITY_INFORMATION), v(SD)]).store_eax(status(15));
+    code.call_args(query_security, &[v(me), v(DACL_SECURITY_INFORMATION), v(0), v(0), v(length(9))])
+        .store_eax(status(16));
+    code.call_args(query_security, &[v(me), v(DACL_SECURITY_INFORMATION), v(SD_OUT), v(0x80), v(length(10))])
+        .store_eax(status(17));
+    code.call_args(query_security, &[v(me), v(OWNER_SECURITY_INFORMATION), v(SD_OUT2), v(0x40), v(length(11))])
+        .store_eax(status(18));
+    code.call_args(set_security, &[v(me), v(DACL_SECURITY_INFORMATION), v(BAD_SD)]).store_eax(status(19));
+    code.call_args(set_security, &[v(me), v(OWNER_SECURITY_INFORMATION), v(SD)]).store_eax(status(20));
+    code.call_args(set_security, &[m(handle(0)), v(DACL_SECURITY_INFORMATION), v(SD)]).store_eax(status(21));
+    code.call_args(set_security, &[v(me), v(SACL_SECURITY_INFORMATION), v(SD)]).store_eax(status(22));
+    code.call_args(services::NtClose, &[m(handle(0))]).store_eax(status(23));
+    code.call_args(services::NtClose, &[m(handle(1))]).store_eax(status(24));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x800, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let system = ps::system_process();
+    let process = ps::create_process(&system, &section, "security.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_bytes = |addr: u32, length: usize| {
+        let mut bytes = alloc::vec![0u8; length];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        bytes
+    };
+    let read = |addr: u32| {
+        let bytes = read_bytes(addr, 4);
+        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the security test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..25).map(|i| NtStatus(read(status(i)))).collect();
+    // The token: a copy of System's.
+    let token = process.primary_token();
+    let system_token = system.primary_token();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtOpenProcessToken");
+    assert_eq!((statuses[1], read(length(0))), (STATUS_BUFFER_TOO_SMALL, 20), "TokenUser: its size first");
+    assert_eq!((statuses[2], read(length(1))), (STATUS_SUCCESS, 20), "TokenUser");
+    assert_eq!((read(QUERY), read(QUERY + 4)), (QUERY + 8, 0), "TOKEN_USER: the SID after it");
+    assert_eq!(Sid::parse(&read_bytes(QUERY + 8, 12)), Ok(Sid::LOCAL_SYSTEM), "LocalSystem");
+    assert_eq!((statuses[3], read(length(2))), (STATUS_SUCCESS, 0x38), "TokenStatistics");
+    assert_eq!(read(STATS), token.token_id().0 as u32, "the process's own token");
+    assert_ne!(token.token_id(), system_token.token_id(), "a copy of System's, with its own id");
+    assert_eq!((read(STATS + 8), read(STATS + 0x18)), (0x3E7, 1), "SYSTEM_LUID, a primary token");
+    assert_eq!((read(STATS + 0x28), read(STATS + 0x2C)), (3, 24), "its groups and privileges");
+    assert_eq!(statuses[4], STATUS_ACCESS_DENIED, "TokenSource needs TOKEN_QUERY_SOURCE");
+    assert_eq!(statuses[5], STATUS_INVALID_INFO_CLASS, "an unknown class");
+    assert_eq!(statuses[6], STATUS_ACCESS_DENIED, "no TOKEN_ADJUST_PRIVILEGES");
+    assert_eq!(statuses[7], STATUS_SUCCESS, "NtOpenProcessTokenEx");
+    let load = Luid(SE_LOAD_DRIVER_PRIVILEGE.into());
+    assert_eq!((statuses[8], read(length(5))), (STATUS_SUCCESS, 16), "SeLoadDriverPrivilege enabled");
+    assert_eq!(
+        (read(PREVIOUS), read(PREVIOUS + 4), read(PREVIOUS + 8), read(PREVIOUS + 12)),
+        (1, SE_LOAD_DRIVER_PRIVILEGE, 0, 0),
+        "its previous state: disabled"
+    );
+    assert_eq!((statuses[9], read(length(6)), read(PREVIOUS2)), (STATUS_SUCCESS, 4, 0), "enabled already");
+    assert_eq!((statuses[10], read(length(7))), (STATUS_BUFFER_TOO_SMALL, 16), "no room for the change");
+    assert_eq!((statuses[11], read(length(8))), (STATUS_NOT_ALL_ASSIGNED, 16), "SeSyncAgentPrivilege is not held");
+    assert_eq!((read(PREVIOUS3), read(PREVIOUS3 + 4)), (1, SE_BACKUP_PRIVILEGE), "SeBackupPrivilege changed");
+    assert!(token.is_privilege_enabled(load) && token.is_privilege_enabled(Luid(SE_BACKUP_PRIVILEGE.into())));
+    assert!(!system_token.is_privilege_enabled(load), "System's own token is not the process's");
+    assert_eq!(statuses[12], STATUS_INVALID_PARAMETER, "no new state");
+    assert_eq!(statuses[13], STATUS_NO_TOKEN, "no thread token");
+    assert_eq!(statuses[14], STATUS_INVALID_HANDLE, "a bad thread handle");
+    // The descriptor of the process.
+    let expected = SecurityDescriptor { dacl: Some(Some(dacl)), ..Default::default() }.to_self_relative();
+    assert_eq!(statuses[15], STATUS_SUCCESS, "NtSetSecurityObject: a DACL on the process");
+    assert_eq!(process.security_descriptor().as_deref(), Some(&expected[..]), "kept by the process");
+    assert_eq!((statuses[16], read(length(9))), (STATUS_BUFFER_TOO_SMALL, 48), "NtQuerySecurityObject: its size");
+    assert_eq!((statuses[17], read(length(10))), (STATUS_SUCCESS, 48), "NtQuerySecurityObject");
+    assert_eq!(read_bytes(SD_OUT, expected.len()), expected, "the DACL read back, self-relative");
+    let empty = SecurityDescriptor32 { revision: 1, control: SE_SELF_RELATIVE, ..Default::default() };
+    assert_eq!((statuses[18], read(length(11))), (STATUS_SUCCESS, 20), "no owner");
+    assert_eq!(read_bytes(SD_OUT2, 20), empty.as_bytes(), "an empty descriptor");
+    assert_eq!(statuses[19], STATUS_UNKNOWN_REVISION, "another revision");
+    assert_eq!(statuses[20], STATUS_INVALID_OWNER, "an owner the descriptor lacks");
+    assert_eq!(statuses[21], STATUS_ACCESS_DENIED, "a token handle without WRITE_DAC");
+    assert_eq!(statuses[22], STATUS_ACCESS_DENIED, "no ACCESS_SYSTEM_SECURITY");
+    assert_eq!((statuses[23], statuses[24]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtClose");
+    assert_eq!(process.security_descriptor().as_deref(), Some(&expected[..]), "unchanged by the failures");
+    drop((token, system_token));
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Se: tokens from user mode: NtOpenProcessToken(Ex), NtQueryInformationToken, \
+         NtAdjustPrivilegesToken, NtOpenThreadToken(Ex) (no token); NtSetSecurityObject and NtQuerySecurityObject \
+         on a process"
     );
 }
 

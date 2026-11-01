@@ -31,6 +31,7 @@ mod port;
 mod process;
 mod registry;
 mod section;
+mod security;
 mod system;
 mod wait;
 
@@ -74,6 +75,7 @@ pub enum Completion {
 /// rapport de couverture (`docs/compat/syscalls.md`) : une entrée par ligne,
 /// `(services::NtNom, Handler::…(module::handler)),`.
 pub const IMPLEMENTED: &[(u32, Handler)] = &[
+    (services::NtAdjustPrivilegesToken, Handler::Status(security::nt_adjust_privileges_token)),
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
     (services::NtClearEvent, Handler::Status(event::nt_clear_event)),
     (services::NtClose, Handler::Status(object::nt_close)),
@@ -100,8 +102,12 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtOpenEvent, Handler::Status(event::nt_open_event)),
     (services::NtOpenFile, Handler::Status(file::nt_open_file)),
     (services::NtOpenKey, Handler::Status(registry::nt_open_key)),
+    (services::NtOpenProcessToken, Handler::Status(security::nt_open_process_token)),
+    (services::NtOpenProcessTokenEx, Handler::Status(security::nt_open_process_token_ex)),
     (services::NtOpenSection, Handler::Status(section::nt_open_section)),
     (services::NtOpenSymbolicLinkObject, Handler::Status(object::nt_open_symbolic_link_object)),
+    (services::NtOpenThreadToken, Handler::Status(security::nt_open_thread_token)),
+    (services::NtOpenThreadTokenEx, Handler::Status(security::nt_open_thread_token_ex)),
     (services::NtProtectVirtualMemory, Handler::Status(memory::nt_protect_virtual_memory)),
     (services::NtPulseEvent, Handler::Status(event::nt_pulse_event)),
     (services::NtQueryAttributesFile, Handler::Status(file::nt_query_attributes_file)),
@@ -109,8 +115,10 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),
     (services::NtQueryInformationProcess, Handler::Status(process::nt_query_information_process)),
+    (services::NtQueryInformationToken, Handler::Status(security::nt_query_information_token)),
     (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
     (services::NtQuerySection, Handler::Status(section::nt_query_section)),
+    (services::NtQuerySecurityObject, Handler::Status(security::nt_query_security_object)),
     (services::NtQuerySymbolicLinkObject, Handler::Status(object::nt_query_symbolic_link_object)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
     (services::NtQueryValueKey, Handler::Status(registry::nt_query_value_key)),
@@ -126,6 +134,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtSetEvent, Handler::Status(event::nt_set_event)),
     (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
     (services::NtSetInformationProcess, Handler::Status(process::nt_set_information_process)),
+    (services::NtSetSecurityObject, Handler::Status(security::nt_set_security_object)),
     (services::NtSetValueKey, Handler::Status(registry::nt_set_value_key)),
     (services::NtSuspendThread, Handler::Status(process::nt_suspend_thread)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
