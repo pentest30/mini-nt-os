@@ -208,6 +208,25 @@ impl VadNode {
         Self { start, end, protect, kind, runs }
     }
 
+    /// L'état de la page `addr` et sa protection, et la fin (exclue) des
+    /// pages qui suivent dans le même état : celui de sa suite, et dans une
+    /// vue d'une section `SEC_RESERVE`, l'engagement de la section (une page
+    /// que la section n'a pas commitée est réservée).
+    pub fn page_state(&self, addr: u64) -> Option<(PageState, PageProtect, u64)> {
+        let page = addr & !(PAGE - 1);
+        let (run_start, run) = self.run_at(page)?;
+        let end = run_start + run.pages * PAGE;
+        match (&self.kind, run.state) {
+            (VadKind::View { section, offset }, PageState::Committed) => {
+                let index = (offset + page - self.start) / PAGE;
+                let (committed, pages) = section.committed_run(index, (end - page) / PAGE);
+                let state = if committed { PageState::Committed } else { PageState::Reserved };
+                Some((state, run.protect, page + pages * PAGE))
+            }
+            _ => Some((run.state, run.protect, end)),
+        }
+    }
+
     /// Les suites de pages de la réservation, dans l'ordre.
     pub fn runs(&self) -> &[PageRun] {
         &self.runs

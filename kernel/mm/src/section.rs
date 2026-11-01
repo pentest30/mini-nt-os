@@ -30,10 +30,22 @@
 //! la section ; une vue la tient aussi, et survit donc à la fermeture du
 //! dernier handle de l'objet, comme sur XP.
 //!
+//! Une section du fichier d'échange peut naître réservée (`SEC_RESERVE`) :
+//! ses pages ne sont utilisables qu'une fois commitées, par
+//! NtAllocateVirtualMemory(`MEM_COMMIT`) dans l'une de ses vues. L'engagement
+//! est celui de la section ([`Section::commit`]) : une page commitée dans une
+//! vue l'est dans toutes, dans chaque processus, comme les pages prototypes
+//! d'XP. Elle peut aussi être basée (`SEC_BASED`) : sa création lui donne une
+//! adresse, la même dans chaque processus, cherchée du haut vers le bas sous
+//! [`HIGH_SECTION_BASE`] parmi celles des autres sections basées ; une vue
+//! sans adresse demandée y va. La section partagée de `csrss` (1 Mio) tombe
+//! ainsi en `0x7F6F0000`, comme sur XP.
+//!
 //! Les appels système (NtCreateSection, NtOpenSection, NtMapViewOfSection,
 //! NtUnmapViewOfSection) sont dans `ntoskrnl::sys::section`.
 //!
-//! Pas encore : `SEC_RESERVE`, NtExtendSection, vues dans l'espace système,
+//! Pas encore : le décommit des pages d'une section, `SEC_BASED` pour un
+//! fichier, NtExtendSection, vues dans l'espace système,
 //! retour au fichier, partage des pages d'un même fichier entre ses sections.
 //!
 //! WI7e Ch.5 §Section Objects
@@ -51,10 +63,36 @@ use hal::sync::KSpinLock;
 use ob::{AccessMask, GenericMapping, Object, ObjectType};
 
 use crate::pfn::{self, PageUsage};
-use crate::vad::PageProtect;
+use crate::vad::{PageProtect, USER_VA_END};
+use crate::virtual_alloc::{ALLOC_GRANULARITY, USER_VA_START};
 use crate::Pfn;
 
 const PAGE: u64 = 4096;
+
+/// MmHighSectionBase : les sections basées vont sous cette adresse
+/// (exclue), 8 Mio sous le haut du mode utilisateur.
+pub const HIGH_SECTION_BASE: u64 = USER_VA_END - 0x80_0000;
+
+/// Les plages des sections basées (début → fin exclue), de tous les
+/// processus.
+static BASED_SECTIONS: KSpinLock<BTreeMap<u64, u64>> = KSpinLock::new(BTreeMap::new());
+
+/// MiFindEmptyAddressRangeDownBasedTree : la plus haute plage libre de
+/// `size` octets parmi `taken`, alignée sur 64 Kio, sous
+/// [`HIGH_SECTION_BASE`] et au-dessus du bas du mode utilisateur.
+fn find_based_range(taken: &BTreeMap<u64, u64>, size: u64) -> Option<u64> {
+    let mut top = HIGH_SECTION_BASE;
+    // From the highest range down: each gap is tried above it.
+    for (&start, &end) in taken.range(..HIGH_SECTION_BASE).rev().chain(core::iter::once((&0, &0))) {
+        if let Some(candidate) = top.checked_sub(size).map(|at| at & !(ALLOC_GRANULARITY - 1)) {
+            if candidate >= end.max(USER_VA_START) {
+                return Some(candidate);
+            }
+        }
+        top = top.min(start);
+    }
+    None
+}
 
 pub const SECTION_QUERY: AccessMask = AccessMask(0x0001);
 pub const SECTION_MAP_WRITE: AccessMask = AccessMask(0x0002);
@@ -284,6 +322,10 @@ pub struct Section {
     size: u64,
     protect: PageProtect,
     source: Source,
+    /// `SEC_RESERVE` : un bit par page commitée. `None` : toutes le sont.
+    committed: Option<KSpinLock<Vec<u64>>>,
+    /// `SEC_BASED` : son adresse dans chaque processus.
+    based: Option<u64>,
     /// Le chemin du fichier d'une image, s'il est connu : le nom du processus
     /// qu'on en crée.
     file_name: Option<String>,
@@ -304,7 +346,16 @@ impl Section {
         source: Source,
         file_name: Option<String>,
     ) -> Arc<Self> {
-        Arc::new(Self { kind, size, protect, source, file_name, pages: KSpinLock::new(BTreeMap::new()) })
+        Arc::new(Self {
+            kind,
+            size,
+            protect,
+            source,
+            committed: None,
+            based: None,
+            file_name,
+            pages: KSpinLock::new(BTreeMap::new()),
+        })
     }
 
     /// Une section de `size` octets adossée au fichier d'échange : des pages
@@ -313,11 +364,44 @@ impl Section {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn create_pagefile(size: u64, protect: PageProtect) -> Result<Arc<Self>, NtStatus> {
+        Self::create_shared(size, protect, false, false)
+    }
+
+    /// Une section de `size` octets adossée au fichier d'échange, ses pages
+    /// réservées avec `reserve` (`SEC_RESERVE`, voir [`commit`](Self::commit))
+    /// et basée avec `based` (`SEC_BASED`) : son adresse, prise parmi celles
+    /// des sections basées (`STATUS_NO_MEMORY` sans place), lui reste jusqu'à
+    /// sa destruction.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn create_shared(size: u64, protect: PageProtect, reserve: bool, based: bool) -> Result<Arc<Self>, NtStatus> {
         check_protection(protect)?;
-        if size == 0 {
+        if size == 0 || size > USER_VA_END {
             return Err(STATUS_INVALID_PARAMETER);
         }
-        Ok(Self::new(SectionKind::Pagefile, size, protect, Source::Zero))
+        let pages = size.div_ceil(PAGE);
+        let committed = reserve.then(|| KSpinLock::new(alloc::vec![0u64; pages.div_ceil(64) as usize]));
+        let based = match based {
+            false => None,
+            true => {
+                let span = pages * PAGE;
+                let mut taken = BASED_SECTIONS.lock();
+                let start = find_based_range(&taken, span).ok_or(STATUS_NO_MEMORY)?;
+                taken.insert(start, start + span);
+                Some(start)
+            }
+        };
+        Ok(Arc::new(Self {
+            kind: SectionKind::Pagefile,
+            size,
+            protect,
+            source: Source::Zero,
+            committed,
+            based,
+            file_name: None,
+            pages: KSpinLock::new(BTreeMap::new()),
+        }))
     }
 
     /// Une section du fichier de données `file`, de `size` octets (0 : tout
@@ -379,6 +463,56 @@ impl Section {
     /// image.
     pub fn protect(&self) -> PageProtect {
         self.protect
+    }
+
+    /// `SEC_RESERVE` : ses pages ne sont utilisables qu'une fois commitées.
+    pub fn is_reserve(&self) -> bool {
+        self.committed.is_some()
+    }
+
+    /// `SEC_BASED` : son adresse dans chaque processus.
+    pub fn based_address(&self) -> Option<u64> {
+        self.based
+    }
+
+    /// La page `index` est commitée : toujours, sauf dans une section
+    /// `SEC_RESERVE` qui ne l'a pas encore commitée.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn is_committed(&self, index: u64) -> bool {
+        self.committed_run(index, 1).0
+    }
+
+    /// L'état de la page `index` (commitée ou non), et combien de pages, `limit`
+    /// au plus, le partagent à partir d'elle.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn committed_run(&self, index: u64, limit: u64) -> (bool, u64) {
+        let Some(bits) = &self.committed else { return (true, limit) };
+        let bits = bits.lock();
+        let at = |page: u64| bits.get((page / 64) as usize).is_some_and(|word| word >> (page % 64) & 1 != 0);
+        let state = at(index);
+        let pages = self.size.div_ceil(PAGE);
+        let count = (index..(index + limit).min(pages)).take_while(|&page| at(page) == state).count() as u64;
+        (state, count.max(1))
+    }
+
+    /// Commite `count` pages de la section à partir de la page `first`
+    /// (NtAllocateVirtualMemory dans une vue) ; celles qui l'étaient le
+    /// restent. Rien à faire hors d'une section `SEC_RESERVE`, dont les pages
+    /// sont toutes commitées.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn commit(&self, first: u64, count: u64) {
+        let Some(bits) = &self.committed else { return };
+        let mut bits = bits.lock();
+        let pages = self.size.div_ceil(PAGE);
+        for page in first..(first + count).min(pages) {
+            bits[(page / 64) as usize] |= 1 << (page % 64);
+        }
     }
 
     /// La disposition de l'image, pour une section d'image.
@@ -445,6 +579,9 @@ impl Drop for Section {
         // pages any more.
         for &page in self.pages.lock().values() {
             pfn::free_page(page);
+        }
+        if let Some(start) = self.based {
+            BASED_SECTIONS.lock().remove(&start);
         }
     }
 }
@@ -640,6 +777,54 @@ mod tests {
         assert_eq!(SECTION_TYPE.granted_access(AccessMask::GENERIC_ALL), AccessMask(0x000F_001F));
         drop(object);
         assert_eq!(Arc::strong_count(&section), 1, "a view would keep it, not the object");
+    }
+
+    #[test]
+    fn based_sections_go_top_down_under_the_high_section_base() {
+        let mut taken = BTreeMap::new();
+        // csrss's shared section, 1 MiB, lands where XP puts it.
+        assert_eq!(HIGH_SECTION_BASE, 0x7F7F_0000);
+        assert_eq!(find_based_range(&taken, 0x10_0000), Some(0x7F6F_0000));
+        taken.insert(0x7F6F_0000, 0x7F7F_0000);
+        assert_eq!(find_based_range(&taken, 0x1000), Some(0x7F6E_0000), "below it, aligned on 64 KiB");
+        taken.insert(0x7F00_0000, 0x7F60_0000);
+        assert_eq!(find_based_range(&taken, 0x8_0000), Some(0x7F67_0000), "the top of the gap between two");
+        assert_eq!(find_based_range(&taken, 0x10_0000), Some(0x7EF0_0000), "the gap too small: below both");
+        assert_eq!(find_based_range(&taken, HIGH_SECTION_BASE), None, "no room");
+        let low = BTreeMap::from([(USER_VA_START, HIGH_SECTION_BASE)]);
+        assert_eq!(find_based_range(&low, 0x1000), None, "everything taken");
+    }
+
+    #[test]
+    fn a_reserved_section_commits_its_pages_one_range_at_a_time() {
+        let section = Section::create_shared(70 * PAGE, RW, true, false).unwrap();
+        assert!(section.is_reserve() && section.based_address().is_none());
+        assert_eq!(section.committed_run(0, 70), (false, 70), "nothing committed");
+        section.commit(1, 2);
+        section.commit(64, 10);
+        assert_eq!(section.committed_run(0, 70), (false, 1));
+        assert_eq!(section.committed_run(1, 70), (true, 2));
+        assert_eq!(section.committed_run(3, 70), (false, 61), "across the first word");
+        assert_eq!(section.committed_run(64, 70), (true, 6), "up to the end of the section");
+        assert_eq!(section.committed_run(3, 5), (false, 5), "within the limit");
+        assert!(section.is_committed(65) && !section.is_committed(63));
+        let committed = Section::create_pagefile(PAGE, RW).unwrap();
+        assert!(!committed.is_reserve() && committed.is_committed(0));
+        assert_eq!(committed.committed_run(0, 9), (true, 9));
+        committed.commit(0, 1);
+        assert_eq!(Section::create_shared(0, RW, true, false).err(), Some(STATUS_INVALID_PARAMETER));
+    }
+
+    #[test]
+    fn a_based_section_keeps_its_address_until_it_goes() {
+        // The only test that makes based sections: the table is shared.
+        let first = Section::create_shared(0x10_0000, RW, true, true).unwrap();
+        let second = Section::create_shared(0x2000, RW, false, true).unwrap();
+        assert_eq!(first.based_address(), Some(0x7F6F_0000));
+        assert_eq!(second.based_address(), Some(0x7F6E_0000));
+        drop(first);
+        let third = Section::create_shared(0x8_0000, RW, false, true).unwrap();
+        assert_eq!(third.based_address(), Some(0x7F77_0000), "the first one's range is free again");
     }
 
     #[test]
