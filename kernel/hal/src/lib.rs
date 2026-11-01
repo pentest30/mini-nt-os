@@ -19,6 +19,7 @@ pub mod idt;
 pub mod irql;
 pub mod msr;
 pub mod pcr;
+pub mod power;
 pub mod ps2;
 pub mod ring3;
 pub mod serial;
