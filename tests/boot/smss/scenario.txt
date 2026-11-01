@@ -35,6 +35,7 @@ expect = [m4]   NtResumeThread (0x00d6): 1 calls, the first returned 0x00000000
 expect = [m4]   NtCreatePort (0x0030): 1 calls, the first returned 0x00000000
 expect = [m4]   NtReplyWaitReceivePort (0x00cb): 2 calls, the first did not return
 expect = CSRSRV:CsrServerInitialization: CsrSetProcessSecurity failed
+expect = [m4] SMSS.EXE created csrss.exe (PID
 expect = [m4] Environment: 6 of 6 variables written
 expect = [m4] \KnownDlls: 21 sections
 expect = KnownDllPath -> C:\WINDOWS\system32

@@ -223,8 +223,9 @@ fn log_known_dlls() {
 /// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
 /// entre dans son point d'entrée avec le PEB pour argument
 /// (`NtProcessStartup(PPEB)`). Journalise, avec le préfixe `[tag]` et sous le
-/// nom `name`, son statut de sortie (`exit_status` s'il va au bout) et les
-/// appels système faits, dans l'ordre de leur premier appel.
+/// nom `name`, son statut de sortie (`exit_status` s'il va au bout), celui de
+/// chaque processus qu'il a créé (attendu 2 s, puis terminé), et les appels
+/// système faits par eux tous, dans l'ordre de leur premier appel.
 ///
 /// Sans DLL système, ne fait rien.
 ///
@@ -243,6 +244,8 @@ fn run_native(
 
     /// Dix secondes, en unités de 100 ns, relatives.
     const TIMEOUT: i64 = -10 * 1000 * 10_000;
+    /// Deux secondes de plus pour chacun des processus qu'il a créés.
+    const CHILD_TIMEOUT: i64 = -2 * 1000 * 10_000;
 
     if ps::system_dll::current().is_none() {
         return;
@@ -273,6 +276,9 @@ fn run_native(
             Some(TIMEOUT),
         )
     };
+    // The processes it created, while its handles still hold those that
+    // ended.
+    let children = ps::child_processes(process.pid());
     if waited == STATUS_TIMEOUT {
         log::warn!("[{tag}] {name}: the process did not end within 10 s: terminated");
         let _ = ps::terminate_process(process.clone(), STATUS_TIMEOUT);
@@ -282,12 +288,34 @@ fn run_native(
         };
     }
     let status = process.exit_status();
-    let calls = crate::sys::service_calls();
     log::info!(
-        "[{tag}] {name} under the system DLL: exit status {status}{}, {} system services called",
+        "[{tag}] {name} under the system DLL: exit status {status}{}",
         if exit_status.map(NtStatus) == Some(status) { " (the program ran to its end)" } else { "" },
-        calls.len()
     );
+    // The processes it created (smss: csrss) end too, terminated after 2 s.
+    for child in children {
+        let (child_name, pid) = (child.image_file_name(), child.pid());
+        // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
+        let waited = unsafe {
+            ke_wait_for_single_object::<KePlatform>(
+                child.dispatcher_object(),
+                ProcessorMode::Kernel,
+                false,
+                Some(CHILD_TIMEOUT),
+            )
+        };
+        if waited == STATUS_TIMEOUT {
+            log::warn!("[{tag}] {name}: its process {child_name} (PID {pid}) did not end within 2 s: terminated");
+            let _ = ps::terminate_process(child.clone(), STATUS_TIMEOUT);
+            // SAFETY: as above.
+            unsafe {
+                ke_wait_for_single_object::<KePlatform>(child.dispatcher_object(), ProcessorMode::Kernel, false, None)
+            };
+        }
+        log::info!("[{tag}] {name} created {child_name} (PID {pid}): exit status {}", child.exit_status());
+    }
+    let calls = crate::sys::service_calls();
+    log::info!("[{tag}] {name} and its processes: {} system services called", calls.len());
     for call in calls {
         let first = match call.first {
             Some(crate::sys::Completion::Status(status)) => alloc::format!("returned {status}"),

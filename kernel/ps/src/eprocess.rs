@@ -427,6 +427,25 @@ pub fn lookup_process(pid: ProcessId) -> Result<Arc<Object<EProcess>>, NtStatus>
     }
 }
 
+/// Les processus vivants que `parent` a créés (InheritedFromUniqueProcessId),
+/// dans l'ordre de leurs PID.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn child_processes(parent: ProcessId) -> Vec<Arc<Object<EProcess>>> {
+    let processes: Vec<Arc<Object<EProcess>>> = CID_TABLE
+        .lock()
+        .iter()
+        .filter_map(|(_, entry)| match entry {
+            CidEntry::Process(process) => process.upgrade(),
+            CidEntry::Thread(_) => None,
+        })
+        .collect();
+    // Filtered once the table is unlocked: dropping the last reference to a
+    // process takes its lock to give back the PID.
+    processes.into_iter().filter(|process| process.parent_pid() == parent).collect()
+}
+
 /// Un processus de l'ancien chargeur (`NtCreateProcess` de `syscall.rs`) :
 /// son PID et sa table de handles, dans l'espace du système.
 ///

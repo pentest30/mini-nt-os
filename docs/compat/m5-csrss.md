@@ -3,6 +3,9 @@
 Observations du début du M5 ([05](../05-feuille-de-route.md#m5--mode-console-puis-spike-s2)) : ce que fait le
 `smss.exe` de ReactOS 0.4.16 quand `csrss.exe` et ses DLL serveur sont sur le disque, puis ce que fait `csrss.exe`.
 La sonde est celle du M4 ([`m4-smss.md`](m4-smss.md)), scénario `smss` ; à mettre à jour à chaque étape du M5.
+Elle journalise aussi chaque processus que `smss` a créé (`ps::child_processes`), relevé avant la fin de `smss`
+tant que ses handles le tiennent, attendu 2 s puis terminé : « [m4] SMSS.EXE created csrss.exe (PID 20): exit
+status 0xc0000002 ». Les appels système comptés sont ceux de `smss` et de ses processus.
 
 ## Étape 1 : `csrss.exe` sur le disque
 

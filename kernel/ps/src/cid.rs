@@ -86,6 +86,11 @@ impl<T> CidTable<T> {
         Some(object)
     }
 
+    /// Les identifiants donnés et ce qu'ils désignent, dans l'ordre.
+    pub fn iter(&self) -> impl Iterator<Item = (u32, &T)> + '_ {
+        self.entries.iter().enumerate().filter_map(|(index, entry)| Some(((index * 4) as u32, entry.as_ref()?)))
+    }
+
     /// Nombre d'identifiants donnés.
     pub fn len(&self) -> usize {
         self.entries.iter().filter(|e| e.is_some()).count()
@@ -140,5 +145,14 @@ mod tests {
         table.remove(4);
         assert_eq!(table.insert(4), Some(4));
         assert!(!table.is_empty());
+    }
+
+    #[test]
+    fn the_ids_given_come_in_order() {
+        let mut table = CidTable::new();
+        let ids: Vec<u32> = ["a", "b", "c"].into_iter().map(|o| table.insert(o).unwrap()).collect();
+        table.remove(ids[1]);
+        let listed: Vec<(u32, &str)> = table.iter().map(|(id, o)| (id, *o)).collect();
+        assert_eq!(listed, [(ids[0], "a"), (ids[2], "c")]);
     }
 }
