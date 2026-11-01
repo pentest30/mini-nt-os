@@ -509,6 +509,27 @@ mod tests {
     }
 
     #[test]
+    fn classes_and_write_times_read_back() {
+        let mut root = KeyNode::new("ROOT");
+        root.last_written = 0x01D9_0000_1234_5678;
+        let lsa = root.key_mut("Control\\Lsa");
+        lsa.class = "Ωmega class".into();
+        lsa.last_written = 0x01C4_0000_0000_0001;
+        root.key_mut("Control\\Plain");
+        let file = build(&root, "SYSTEM");
+        let hive = Hive::parse(&file).expect("a hive");
+        let root = hive.root().unwrap();
+        assert_eq!(root.last_written(), 0x01D9_0000_1234_5678);
+        let lsa = root.open("Control\\Lsa").unwrap().unwrap();
+        let class: Vec<u16> = lsa.class().unwrap().expect("a class").units().collect();
+        assert_eq!(class, "Ωmega class".encode_utf16().collect::<Vec<_>>());
+        assert_eq!(lsa.last_written(), 0x01C4_0000_0000_0001);
+        assert!(root.open("Control\\Plain").unwrap().unwrap().class().unwrap().is_none(), "no class");
+        let control = root.open("Control").unwrap().unwrap();
+        assert_eq!(control.maxima().1, 22, "the longest subkey class, in bytes");
+    }
+
+    #[test]
     fn names_outside_latin1_are_utf16_and_match_without_case() {
         let file = sample();
         let root = Hive::parse(&file).unwrap().root().unwrap();
