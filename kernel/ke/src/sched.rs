@@ -686,9 +686,8 @@ fn load_directory_table_base(directory: u64) {
 /// `thread` va s'exécuter sur ce processeur, qu'il reprenne ou démarre, avec
 /// des APC noyau en attente : l'interruption APC, demandée pour ce
 /// processeur, les livrera quand il passera sous APC_LEVEL. Un thread
-/// utilisateur qui démarre passe en mode utilisateur sans redescendre par
-/// `hal::irql::lower` : ses APC partent à la première interruption qui l'y
-/// trouve.
+/// utilisateur qui démarre y passe avant sa première instruction du mode
+/// utilisateur (`hal::ring3`).
 ///
 /// # Safety
 /// Verrou dispatcher tenu ; `thread` est valide et devient le thread courant
@@ -807,7 +806,7 @@ pub unsafe fn init(idle_stack_top: u64) {
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-fn start_thread(t: *mut Thread, published: Option<&AtomicUsize>) -> Option<usize> {
+fn start_thread(t: *mut Thread, published: Option<&AtomicUsize>, ready: bool) -> Option<usize> {
     // SAFETY: `t` est un thread neuf, valide pour toujours s'il est enregistré ;
     // verrou tenu de acquire à release.
     let tid = unsafe {
@@ -816,7 +815,7 @@ fn start_thread(t: *mut Thread, published: Option<&AtomicUsize>) -> Option<usize
         if let (Some(tid), Some(slot)) = (tid, published) {
             slot.store(tid, Ordering::Release);
         }
-        if tid.is_some() && (*sched()).ready(t, false) {
+        if ready && tid.is_some() && (*sched()).ready(t, false) {
             request_reschedule();
         }
         DISPATCHER_LOCK.release::<KePlatform>(old_irql);
@@ -873,7 +872,7 @@ pub unsafe fn create_kernel_thread_in(
     let t = Thread::create(priority, ctx, false, 0, Some((routine, context)));
     // SAFETY: un thread neuf, encore inconnu de l'ordonnanceur.
     unsafe { (*t).directory_table_base = directory_table_base };
-    start_thread(t, None)
+    start_thread(t, None, true)
 }
 
 /// L'espace d'adresses où se trouvait le thread courant avant
@@ -953,6 +952,10 @@ pub struct UserThreadStart {
     /// thread peut s'exécuter, et finir, avant que `create_user_thread`
     /// revienne ; nul si personne n'en a besoin (l'ancien chargeur).
     pub tid: *const AtomicUsize,
+    /// Prêt dès sa création ; sinon, il attend [`ready_new_thread`] (Ps lui
+    /// met d'abord en file ce qu'il doit faire avant le mode utilisateur, la
+    /// suspension d'un thread créé suspendu).
+    pub ready: bool,
 }
 
 /// Enregistre un thread utilisateur (ring 3, 32 bits), prêt à s'exécuter dans
@@ -1006,7 +1009,7 @@ pub unsafe fn create_user_thread(start: &UserThreadStart) -> Option<usize> {
     }
     // SAFETY: `start.tid`, s'il n'est pas nul, vaut pour toute la création
     // (contrat).
-    let tid = start_thread(t, unsafe { start.tid.as_ref() })?;
+    let tid = start_thread(t, unsafe { start.tid.as_ref() }, start.ready)?;
     log::info!(
         "Ke scheduler: spawned user-mode thread TID={} entry={:#010x} usp={:#010x} teb={:#010x}",
         tid,
@@ -1015,6 +1018,26 @@ pub unsafe fn create_user_thread(start: &UserThreadStart) -> Option<usize> {
         start.teb,
     );
     Some(tid)
+}
+
+/// Rend prêt le thread `tid`, créé sans l'être ([`UserThreadStart::ready`]).
+///
+/// # Panics
+/// Si `tid` ne désigne pas un thread créé et pas encore prêt.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn ready_new_thread(tid: usize) {
+    // SAFETY: verrou tenu de acquire à release ; un thread enregistré est valide.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        assert!(!t.is_null() && (*t).tcb.state == ThreadState::Initialized, "thread {tid} is not a new thread");
+        if (*sched()).ready(t, false) {
+            request_reschedule();
+        }
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+    }
 }
 
 /// Le thread de l'exécutif qui possède le thread courant

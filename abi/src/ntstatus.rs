@@ -104,6 +104,7 @@ pub const STATUS_IO_DEVICE_ERROR: NtStatus = NtStatus(0xC000_0185);
 pub const STATUS_INVALID_PAGE_PROTECTION: NtStatus = NtStatus(0xC000_0045);
 pub const STATUS_MUTANT_NOT_OWNED: NtStatus = NtStatus(0xC000_0046);
 pub const STATUS_SEMAPHORE_LIMIT_EXCEEDED: NtStatus = NtStatus(0xC000_0047);
+pub const STATUS_SUSPEND_COUNT_EXCEEDED: NtStatus = NtStatus(0xC000_004A);
 pub const STATUS_THREAD_IS_TERMINATING: NtStatus = NtStatus(0xC000_004B);
 pub const STATUS_SECTION_TOO_BIG: NtStatus = NtStatus(0xC000_0040);
 pub const STATUS_SECTION_NOT_IMAGE: NtStatus = NtStatus(0xC000_0049);

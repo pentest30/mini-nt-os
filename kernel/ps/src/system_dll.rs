@@ -13,6 +13,7 @@
 
 use alloc::sync::Arc;
 
+use abi::context::Context32;
 use abi::ntstatus::{NtStatus, STATUS_INVALID_IMAGE_FORMAT, STATUS_INVALID_PARAMETER, STATUS_PROCEDURE_NOT_FOUND};
 use hal::sync::KSpinLock;
 use ke::apc::APC_DISPATCHER_RESERVE;
@@ -96,9 +97,18 @@ impl SystemDll {
     /// # IRQL
     /// PASSIVE_LEVEL.
     pub fn write_start_frame(&self, process: &EProcess, start: u32, stack: u32) -> Result<u32, NtStatus> {
-        let context_at = user_context_address(stack, APC_DISPATCHER_RESERVE).ok_or(STATUS_INVALID_PARAMETER)?;
+        self.write_context_frame(process, &initial_user_context(start, stack, UserSelectors::current()))
+    }
+
+    /// Comme [`write_start_frame`](Self::write_start_frame), avec le contexte
+    /// initial `context`, complet et assaini (NtCreateThread) : sur la pile
+    /// en `context.esp`.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn write_context_frame(&self, process: &EProcess, context: &Context32) -> Result<u32, NtStatus> {
+        let context_at = user_context_address(context.esp, APC_DISPATCHER_RESERVE).ok_or(STATUS_INVALID_PARAMETER)?;
         let arguments_at = context_at - 16;
-        let context = initial_user_context(start, stack, UserSelectors::current());
         process.write_memory(u64::from(context_at), context.as_bytes())?;
         let mut arguments = [0u8; 16];
         for (slot, value) in arguments.chunks_exact_mut(4).zip([self.ldr_initialize_thunk, 0, self.base, 0]) {

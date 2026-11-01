@@ -336,6 +336,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     process_self_test();
     system_service_self_test();
     early_exit_self_test();
+    suspend_self_test();
     loader_services_self_test();
     registry_self_test();
     registry_write_self_test();
@@ -471,6 +472,7 @@ pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
         teb: ps::loader::TEB32_VA,
         owner: core::ptr::null(),
         tid: core::ptr::null(),
+        ready: true,
     };
     // SAFETY: kstack was just allocated for this thread alone and is never
     // freed; the system address space lives forever.
@@ -1882,6 +1884,101 @@ fn system_service_self_test() {
         "[smoke] sys: system services from user mode: {} of {} ntoskrnl services, the rest STATUS_NOT_IMPLEMENTED",
         sys::IMPLEMENTED.len(),
         NTOSKRNL.len()
+    );
+}
+
+/// Ps: suspended threads (`EThread::suspend`, M5). A thread created
+/// suspended runs none of its user code until resumed, then counts in a
+/// loop; a suspension stops the count where it is, two take two resumes, the
+/// count stops at `MAXIMUM_SUSPEND_COUNT`; a suspended thread still ends when
+/// its process is terminated, and then refuses a suspension.
+fn suspend_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_SUSPEND_COUNT_EXCEEDED, STATUS_THREAD_IS_TERMINATING, STATUS_WAIT_0};
+    use alloc::sync::Arc;
+    use ke::context::{initial_user_context, UserSelectors};
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use ps::ethread::MAXIMUM_SUSPEND_COUNT;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const STARTED: u32 = IMAGE_BASE + 0x2000;
+    const COUNTER: u32 = IMAGE_BASE + 0x2004;
+    let sleep = |ms: i64| {
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -ms * MS) };
+    };
+    // mov dword [STARTED], 1; loop: inc dword [COUNTER]; jmp loop
+    let mut code = Code::new();
+    code.word(&[0xC7, 0x05], STARTED).bytes(&1u32.to_le_bytes());
+    code.word(&[0xFF, 0x05], COUNTER).bytes(&[0xEB, 0xF8]);
+    let mut text = [0xCC; 0x100];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x10, &[0; 0x10], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "suspend.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let context = initial_user_context(IMAGE_BASE + 0x1000, stack.stack_base, UserSelectors::current());
+    let thread = ps::create_thread_with_context(&process, &context, &stack, true).expect("a suspended thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    sleep(50);
+    assert_eq!((read(STARTED), thread.suspend_count()), (0, 1), "created suspended: no user code ran");
+    assert_eq!(thread.resume(), 1, "resumed");
+    sleep(30);
+    assert_eq!(read(STARTED), 1, "it runs once resumed");
+    let stopped = |what: &str| {
+        sleep(20);
+        let before = read(COUNTER);
+        sleep(30);
+        assert_eq!(read(COUNTER), before, "{what}: the count goes on");
+    };
+    let runs = |what: &str| {
+        let before = read(COUNTER);
+        sleep(30);
+        assert!(read(COUNTER) > before, "{what}: the count does not go on");
+    };
+    runs("resumed");
+    assert_eq!(thread.suspend(), Ok(0));
+    stopped("suspended");
+    assert_eq!((thread.suspend(), thread.suspend_count()), (Ok(1), 2), "suspended twice");
+    assert_eq!(thread.resume(), 2);
+    stopped("one resume of two");
+    assert_eq!(thread.resume(), 1);
+    runs("resumed twice");
+    assert_eq!(thread.resume(), 0, "not suspended");
+    for count in 0..MAXIMUM_SUSPEND_COUNT {
+        assert_eq!(thread.suspend(), Ok(count));
+    }
+    assert_eq!(thread.suspend(), Err(STATUS_SUSPEND_COUNT_EXCEEDED));
+    stopped("suspended to the limit");
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the process");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "a suspended thread did not end with its process");
+    assert_eq!(thread.suspend(), Err(STATUS_THREAD_IS_TERMINATING));
+    drop((thread, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Ps: suspended threads: created suspended, suspended and resumed, up to the limit, ended while \
+         suspended"
     );
 }
 

@@ -32,6 +32,9 @@ const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOP
 //   [RSP+40]  SS  (u64) — ring-3 data32 selector | RPL=3
 //
 // Execution:
+//   0. `call ring3_thread_first_lower` — down to PASSIVE_LEVEL through
+//      `irql::lower`, which runs the thread's pending kernel APCs (its
+//      suspension, its end) before any user instruction
 //   1. `pop rax` — FS selector → rax; RSP advances to RIP slot
 //   2. `mov fs, ax` — load TEB segment into FS
 //   3. `swapgs`, then a null GS — the user's GS base, the KPCR's back in
@@ -43,17 +46,31 @@ const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOP
 core::arch::global_asm!(
     ".global ring3_iretq_trampoline",
     "ring3_iretq_trampoline:",
-    // User mode runs at PASSIVE_LEVEL: drop the DISPATCH_LEVEL left by the
-    // dispatch that switched to this new thread (hal::irql: CR8).
-    "   xor eax, eax",
-    "   mov cr8, rax",
+    // RSP is 16-byte aligned here (the frame starts 48 bytes under the top of
+    // the kernel stack), as the call wants.
+    "   call {first_lower}",
     "   pop rax",      // rax = FS selector; RSP → RIP slot
     "   mov fs, ax",   // load TEB segment (DPL=3, base=this thread's TEB)
     "   swapgs",       // the user's GS base; the KPCR's in IA32_KERNEL_GS_BASE
     "   xor eax, eax", // a null GS for user mode
     "   mov gs, eax",
     "   iretq", // → ring-3: pops RIP/CS/RFLAGS/RSP/SS
+    first_lower = sym ring3_thread_first_lower,
 );
+
+/// The first time a new user-mode thread drops below DISPATCH_LEVEL, still in
+/// the kernel: interrupts on, the IRQL down to PASSIVE_LEVEL through
+/// [`lower`](crate::irql::lower), which runs the DISPATCH and APC interrupts
+/// requested meanwhile (this thread may be switched out, or wait in a kernel
+/// APC); then interrupts off again until IRETQ, which turns them back on in
+/// user mode.
+///
+/// # IRQL: DISPATCH_LEVEL on entry, PASSIVE_LEVEL on return.
+extern "C" fn ring3_thread_first_lower() {
+    x86_64::instructions::interrupts::enable();
+    crate::irql::lower(crate::irql::Irql::Passive);
+    x86_64::instructions::interrupts::disable();
+}
 
 /// Exported symbol from the `ring3_iretq_trampoline` global_asm above.
 ///

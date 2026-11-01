@@ -11,6 +11,13 @@
 //! appelle `crate::exit::exit_thread` dans son contexte. Une fois qu'il a
 //! quitté le processeur, le *reaper* rend sa pile noyau ; son thread Ke est
 //! libéré avec l'objet, à son dernier pointeur.
+//!
+//! Sa suspension aussi ([`EThread::suspend`], KeSuspendThread) : un APC
+//! noyau dont la routine normale attend, dans son contexte, l'événement que
+//! la reprise signale quand le compte de suspensions retombe à 0. Un thread
+//! créé suspendu reçoit cet APC avant d'être prêt : il le traite avant sa
+//! première instruction du mode utilisateur (`hal::ring3`). Sa fin le
+//! reprend de force.
 
 use alloc::boxed::Box;
 use alloc::sync::{Arc, Weak};
@@ -19,14 +26,17 @@ use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
+use abi::context::Context32;
 use abi::ntstatus::{
     NtStatus, STATUS_CONFLICTING_ADDRESSES, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_CID,
-    STATUS_INVALID_PARAMETER, STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING, STATUS_UNSUCCESSFUL,
+    STATUS_INVALID_PARAMETER, STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING, STATUS_SUSPEND_COUNT_EXCEEDED,
+    STATUS_THREAD_IS_TERMINATING, STATUS_UNSUCCESSFUL,
 };
 use abi::teb32::Teb32;
 use hal::sync::KSpinLock;
 use ke::apc::{ke_insert_queue_apc, KApc, NormalRoutine};
-use ke::dispatcher::{DispatcherHeader, ProcessorMode};
+use ke::context::{initial_user_context, sanitized_user_context, UserSelectors};
+use ke::dispatcher::{ke_wait_for_single_object, DispatcherHeader, ObjectType as KObjectType, ProcessorMode};
 use ke::sched::KePlatform;
 use mm::kstack::KernelStack;
 use mm::vad::PageProtect;
@@ -34,7 +44,7 @@ use mm::virtual_alloc::{AllocType, FreeType, ALLOC_GRANULARITY, PAGE_SIZE};
 use ob::{create_object, AccessMask, GenericMapping, Object, ObjectType};
 
 use crate::eprocess::{EProcess, ProcessId};
-use crate::{CidEntry, CID_TABLE};
+use crate::{CidEntry, DispatcherEvent, CID_TABLE};
 
 pub type ThreadId = u32;
 
@@ -82,6 +92,17 @@ const MAX_TEBS: u32 = 0x1000;
 /// Pas de thread Ke (pas encore créé).
 const NO_KE_THREAD: usize = usize::MAX;
 
+/// MAXIMUM_SUSPEND_COUNT d'XP.
+pub const MAXIMUM_SUSPEND_COUNT: u32 = 0x7F;
+
+/// La suspension d'un thread.
+struct Suspension {
+    /// SuspendCount : les suspensions que la reprise n'a pas défaites.
+    count: u32,
+    /// L'APC de suspension est écrit : le thread Ke existe.
+    apc_ready: bool,
+}
+
 /// INITIAL_TEB : la pile utilisateur d'un thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InitialTeb {
@@ -112,11 +133,20 @@ pub struct EThread {
     terminating: AtomicBool,
     /// L'APC qui le termine, écrit une fois par qui pose `terminating`.
     exit_apc: UnsafeCell<MaybeUninit<KApc>>,
+    /// Sa suspension.
+    suspension: KSpinLock<Suspension>,
+    /// Signalé (synchronisation) quand le compte de suspensions retombe à 0 :
+    /// l'APC de suspension l'attend.
+    resume_event: DispatcherEvent,
+    /// L'APC de suspension, écrit une fois, avant que le thread soit prêt.
+    suspend_apc: UnsafeCell<MaybeUninit<KApc>>,
 }
 
 // SAFETY: `exit_apc` n'est écrit qu'une fois, par qui fait passer
-// `terminating` à `true`, avant sa mise en file ; Ke n'y touche ensuite que
-// sous le verrou dispatcher. Le reste est immuable ou synchronisé.
+// `terminating` à `true`, avant sa mise en file ; `suspend_apc` une fois,
+// sous le verrou `suspension`, avant que le thread soit prêt ; Ke n'y touche
+// ensuite que sous le verrou dispatcher. Le reste est immuable ou
+// synchronisé.
 unsafe impl Send for EThread {}
 // SAFETY: voir `Send`.
 unsafe impl Sync for EThread {}
@@ -194,12 +224,16 @@ impl EThread {
                 core::ptr::null_mut(),
             ));
             // Relevé de 2, comme XP, pour qu'il se termine vite.
-            ke_insert_queue_apc::<KePlatform>(
+            let queued = ke_insert_queue_apc::<KePlatform>(
                 apc,
                 core::ptr::without_provenance_mut(status.0 as usize),
                 core::ptr::null_mut(),
                 2,
-            )
+            );
+            // A suspended thread waits in its suspension's APC, before this
+            // one: it must go on to end.
+            self.force_resume();
+            queued
         }
     }
 
@@ -239,6 +273,114 @@ impl EThread {
     pub(crate) fn mark_terminating(&self) {
         self.terminating.store(true, Ordering::Release);
     }
+
+    /// Écrit l'APC de suspension, une fois le thread Ke créé, avant qu'il
+    /// soit prêt ; avec `suspended`, le met en file (compte 1).
+    fn prepare_suspension(&self, kthread: *mut ke::dispatcher::KThread, suspended: bool) {
+        let mut suspension = self.suspension.lock();
+        let apc = self.suspend_apc.get().cast::<KApc>();
+        // SAFETY: écrit une fois, sous le verrou, avant que quiconque puisse
+        // le mettre en file (`apc_ready`) ; à l'adresse fixe du corps de
+        // l'objet ; le thread Ke vit autant que l'objet.
+        unsafe {
+            apc.write(KApc::new(
+                kthread,
+                suspend_kernel_routine,
+                None,
+                Some(NormalRoutine::Kernel(suspend_normal_routine)),
+                ProcessorMode::Kernel,
+                self.resume_event.header().cast(),
+            ));
+        }
+        suspension.apc_ready = true;
+        if suspended {
+            suspension.count = 1;
+            // SAFETY: l'APC vient d'être écrit ; il n'est pas en file.
+            let queued =
+                unsafe { ke_insert_queue_apc::<KePlatform>(apc, core::ptr::null_mut(), core::ptr::null_mut(), 0) };
+            debug_assert!(queued, "a new thread refused its suspension");
+        }
+    }
+
+    /// KeSuspendThread (NtSuspendThread) : une suspension de plus ; le
+    /// thread s'arrête à sa prochaine reprise sous APC_LEVEL, en mode
+    /// utilisateur compris. Rend le compte d'avant.
+    ///
+    /// # Errors
+    /// `STATUS_THREAD_IS_TERMINATING` si sa fin est demandée ;
+    /// `STATUS_SUSPEND_COUNT_EXCEEDED` au-delà de [`MAXIMUM_SUSPEND_COUNT`] ;
+    /// `STATUS_UNSUCCESSFUL` s'il n'est pas lancé.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn suspend(&self) -> Result<u32, NtStatus> {
+        if self.terminating.load(Ordering::Acquire) {
+            return Err(STATUS_THREAD_IS_TERMINATING);
+        }
+        let mut suspension = self.suspension.lock();
+        if !suspension.apc_ready {
+            return Err(STATUS_UNSUCCESSFUL);
+        }
+        let previous = suspension.count;
+        if previous == MAXIMUM_SUSPEND_COUNT {
+            return Err(STATUS_SUSPEND_COUNT_EXCEEDED);
+        }
+        suspension.count += 1;
+        if previous == 0 {
+            // SAFETY: écrit par `prepare_suspension` (`apc_ready`).
+            let queued = unsafe {
+                ke_insert_queue_apc::<KePlatform>(
+                    self.suspend_apc.get().cast::<KApc>(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                    0,
+                )
+            };
+            // Still queued from a suspension the thread has not reached: the
+            // resume that came meanwhile signaled the event, taken back here.
+            if !queued {
+                self.resume_event.reset();
+            }
+        }
+        Ok(previous)
+    }
+
+    /// KeResumeThread (NtResumeThread) : une suspension de moins ; à 0, le
+    /// thread repart. Rend le compte d'avant.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn resume(&self) -> u32 {
+        let mut suspension = self.suspension.lock();
+        let previous = suspension.count;
+        if previous != 0 {
+            suspension.count -= 1;
+            if suspension.count == 0 {
+                self.resume_event.set();
+            }
+        }
+        previous
+    }
+
+    /// KeForceResumeThread : le compte à 0, le thread repart (sa fin).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    fn force_resume(&self) {
+        let mut suspension = self.suspension.lock();
+        if suspension.count != 0 {
+            suspension.count = 0;
+            self.resume_event.set();
+        }
+    }
+
+    /// SuspendCount.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn suspend_count(&self) -> u32 {
+        self.suspension.lock().count
+    }
 }
 
 impl Drop for EThread {
@@ -253,6 +395,28 @@ impl Drop for EThread {
         }
         debug_assert!(self.kernel_stack.lock().is_none(), "thread {} keeps its kernel stack", self.tid);
     }
+}
+
+/// Routine noyau de l'APC de suspension, à APC_LEVEL : la routine normale
+/// attendra.
+fn suspend_kernel_routine(
+    _apc: *mut KApc,
+    _normal_routine: &mut Option<NormalRoutine>,
+    _normal_context: &mut *mut c_void,
+    _argument1: &mut *mut c_void,
+    _argument2: &mut *mut c_void,
+) {
+}
+
+/// Routine normale de l'APC de suspension (KiSuspendThread), à
+/// PASSIVE_LEVEL, dans le thread suspendu : attend l'événement de reprise,
+/// `context`.
+fn suspend_normal_routine(context: *mut c_void, _argument1: *mut c_void, _argument2: *mut c_void) {
+    // SAFETY: l'événement de reprise du thread courant, qui vit autant que
+    // l'objet thread, donc pendant toute son exécution.
+    unsafe {
+        ke_wait_for_single_object::<KePlatform>(context.cast::<DispatcherHeader>(), ProcessorMode::Kernel, false, None)
+    };
 }
 
 /// Routine noyau de l'APC de fin, à APC_LEVEL : la routine normale fera tout.
@@ -366,7 +530,28 @@ pub fn create_thread(
     start_address: u32,
     stack: &InitialTeb,
 ) -> Result<Arc<Object<EThread>>, NtStatus> {
-    start_thread(process, start_address, stack, stack.stack_base)
+    let context = initial_user_context(start_address, stack.stack_base, UserSelectors::current());
+    start_thread(process, &context, stack, false)
+}
+
+/// PspCreateThread pour NtCreateThread : un thread de `process` qui démarre
+/// avec le contexte `context`, venu du mode utilisateur et assaini ici
+/// (`ke::context::sanitized_user_context`), sur la pile `stack` ; avec
+/// `suspended`, il ne s'exécute qu'après sa reprise ([`EThread::resume`]).
+///
+/// # Errors
+/// Celles de [`create_thread`].
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn create_thread_with_context(
+    process: &Arc<Object<EProcess>>,
+    context: &Context32,
+    stack: &InitialTeb,
+    suspended: bool,
+) -> Result<Arc<Object<EThread>>, NtStatus> {
+    let context = sanitized_user_context(context, UserSelectors::current());
+    start_thread(process, &context, stack, suspended)
 }
 
 /// Comme [`create_thread`], mais le thread entre en `start_address` comme dans
@@ -390,16 +575,18 @@ pub fn create_thread_with_parameter(
     let mut words = [0u8; 8];
     words[4..].copy_from_slice(&parameter.to_le_bytes());
     process.write_memory(u64::from(esp), &words)?;
-    start_thread(process, start_address, stack, esp)
+    start_thread(process, &initial_user_context(start_address, esp, UserSelectors::current()), stack, false)
 }
 
-/// Crée et lance le thread, ESP à `esp` dans `stack`.
+/// Crée et lance le thread, avec le contexte initial `context`, complet et
+/// assaini, sur la pile `stack` ; suspendu avec `suspended`.
 fn start_thread(
     process: &Arc<Object<EProcess>>,
-    start_address: u32,
+    context: &Context32,
     stack: &InitialTeb,
-    esp: u32,
+    suspended: bool,
 ) -> Result<Arc<Object<EThread>>, NtStatus> {
+    let start_address = context.eip;
     if process.peb() == 0 {
         return Err(STATUS_INVALID_PARAMETER);
     }
@@ -409,8 +596,8 @@ fn start_thread(
     // With a system DLL, the thread starts in LdrInitializeThunk, by way of
     // its APC dispatcher.
     let (entry, user_stack) = match crate::system_dll::current() {
-        Some(dll) => (dll.user_apc_dispatcher, dll.write_start_frame(process, start_address, esp)?),
-        None => (start_address, esp),
+        Some(dll) => (dll.user_apc_dispatcher, dll.write_context_frame(process, context)?),
+        None => (start_address, context.esp),
     };
     let tid = CID_TABLE.lock().insert(CidEntry::Thread(Weak::new())).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
     let teb = match create_teb(process, tid, stack) {
@@ -438,6 +625,9 @@ fn start_thread(
             exit_status: AtomicU32::new(STATUS_PENDING.0),
             terminating: AtomicBool::new(false),
             exit_apc: UnsafeCell::new(MaybeUninit::uninit()),
+            suspension: KSpinLock::new(Suspension { count: 0, apc_ready: false }),
+            resume_event: DispatcherEvent::new(KObjectType::SynchronizationEvent),
+            suspend_apc: UnsafeCell::new(MaybeUninit::uninit()),
         },
     );
     CID_TABLE.lock().set(tid, CidEntry::Thread(Arc::downgrade(&thread)));
@@ -464,6 +654,7 @@ fn start_thread(
         teb,
         owner: Arc::as_ptr(&thread).cast(),
         tid: &thread.ke_tid,
+        ready: false,
     };
     // SAFETY: la pile noyau est à ce thread jusqu'à ce que le reaper la rende,
     // après sa fin ; l'espace d'adresses vit tant qu'un thread du processus
@@ -475,12 +666,15 @@ fn start_thread(
         return Err(STATUS_INSUFFICIENT_RESOURCES);
     };
     debug_assert_eq!(thread.ke_tid(), Some(ke_tid), "Ke did not publish the thread's TID");
+    // Its suspension is ready, or queued, before it can run.
+    thread.prepare_suspension(ke::sched::kernel_thread(ke_tid).expect("the Ke thread just created"), suspended);
     // Une fin du processus demandée avant que le thread Ke existe n'a pas pu
     // lui envoyer son APC.
     let terminating = process.threads.lock().terminating;
     if terminating {
         thread.request_termination(process.exit_status());
     }
+    ke::sched::ready_new_thread(ke_tid);
     Ok(thread)
 }
 
