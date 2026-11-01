@@ -1,13 +1,14 @@
 //! Les services des sections de Mm : créer une section (adossée au fichier
 //! d'échange, ou d'un fichier ouvert : données ou image), l'ouvrir par son
-//! nom, en projeter une vue dans un processus et la retirer.
+//! nom, en projeter une vue dans un processus et la retirer, dire ce qu'elle
+//! est (NtQuerySection).
 //!
 //! Une section de fichier prend une copie des octets du fichier
 //! (`io_manager::File::read_all`, `mm::section`) : ce qui s'écrit dans une
 //! vue n'y retourne pas.
 //!
 //! Pas encore : `SEC_RESERVE` (`STATUS_NOT_IMPLEMENTED`, journalisé une
-//! fois), `SEC_BASED`, `ZeroBits` d'une vue, NtExtendSection, NtQuerySection.
+//! fois), `SEC_BASED`, `ZeroBits` d'une vue, NtExtendSection.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -32,8 +33,10 @@ use super::object::{create_named, open_by_name};
 
 /// Au plus 21 bits du haut à zéro (ZeroBits).
 const MAX_ZERO_BITS: u32 = 21;
+/// MEM_TOP_DOWN : la vue va le plus haut où il y a la place.
+const MEM_TOP_DOWN: u32 = 0x0010_0000;
 /// MEM_TOP_DOWN et MEM_RESERVE, les seuls types d'allocation d'une vue.
-const VIEW_ALLOCATION_TYPES: u32 = 0x0010_0000 | 0x0000_2000;
+const VIEW_ALLOCATION_TYPES: u32 = MEM_TOP_DOWN | 0x0000_2000;
 
 fn status(result: Result<NtStatus, NtStatus>) -> NtStatus {
     result.unwrap_or_else(|status| status)
@@ -138,7 +141,7 @@ fn create_section(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
             }
             let bytes: Arc<[u8]> = Arc::from(file.read_all()?);
             if allocation & SEC_IMAGE != 0 {
-                Section::create_image(bytes)?
+                Section::create_image_of(bytes, file.path())?
             } else {
                 Section::create_data_file(bytes, size, protect)?
             }
@@ -202,7 +205,11 @@ fn map_view(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         0 => 0,
         at => UserPtr::<u64>::new(at).read()?,
     };
-    let view = process.with_space(|space| space.map_view(&section, base, offset, size, protect))??;
+    let view = if allocation & MEM_TOP_DOWN != 0 {
+        process.with_space(|space| space.map_view_top_down(&section, base, offset, size, protect))??
+    } else {
+        process.with_space(|space| space.map_view(&section, base, offset, size, protect))??
+    };
     let written = base_address.write(&(view.base as u32)).and_then(|()| view_size.write(&(view.size as u32)));
     if let Err(fault) = written {
         let _ = process.with_space(|space| space.unmap_view(view.base));
@@ -218,4 +225,68 @@ pub(super) fn nt_unmap_view_of_section(arguments: &[u32]) -> NtStatus {
         process.with_space(|space| space.unmap_view(u64::from(arguments[1])))??;
         Ok(STATUS_SUCCESS)
     }))
+}
+
+/// Les classes de NtQuerySection demandées sans être implémentées.
+static UNSUPPORTED_SECTION_CLASSES: super::ClassReport = super::ClassReport::new("NtQuerySection");
+
+/// NtQuerySection(SectionHandle, SectionInformationClass, SectionInformation,
+/// SectionInformationLength, ResultLength) : ce que sait la section
+/// (`SECTION_QUERY`). `SectionBasicInformation` : ses attributs (`SEC_IMAGE`
+/// et `SEC_FILE` pour une image, `SEC_FILE` pour un fichier de données,
+/// `SEC_COMMIT` pour le fichier d'échange) et sa taille ;
+/// `SectionImageInformation`, pour une image seulement
+/// (`STATUS_SECTION_NOT_IMAGE` sinon) : son point d'entrée à sa base
+/// préférée, sa pile, son sous-système et les champs de son PE. Les autres
+/// classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur premier appel.
+pub(super) fn nt_query_section(arguments: &[u32]) -> NtStatus {
+    use abi::memory::{
+        SectionBasicInformation32, SectionImageInformation32, SECTION_BASIC_INFORMATION, SECTION_IMAGE_INFORMATION,
+        SEC_FILE,
+    };
+    use mm::section::{SectionKind, SECTION_QUERY};
+
+    let (handle, class, buffer, length, return_length) =
+        (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
+    if class != SECTION_BASIC_INFORMATION && class != SECTION_IMAGE_INFORMATION {
+        return UNSUPPORTED_SECTION_CLASSES.report(class);
+    }
+    let section = match super::current_process().handle_table.reference_as::<Arc<Section>>(
+        Handle(handle),
+        &SECTION_TYPE,
+        SECTION_QUERY,
+    ) {
+        Ok(section) => section,
+        Err(status) => return status,
+    };
+    if class == SECTION_BASIC_INFORMATION {
+        let attributes = match section.kind() {
+            SectionKind::Image => SEC_IMAGE | SEC_FILE,
+            SectionKind::DataFile => SEC_FILE,
+            SectionKind::Pagefile => SEC_COMMIT,
+        };
+        let information = SectionBasicInformation32 { base_address: 0, attributes, size: section.size() as i64 };
+        return super::return_information(information.as_bytes(), buffer, length, return_length);
+    }
+    let Some(image) = section.image() else { return abi::ntstatus::STATUS_SECTION_NOT_IMAGE };
+    let info = image.info;
+    let information = SectionImageInformation32 {
+        transfer_address: (info.image_base + info.entry_point) as u32,
+        zero_bits: 0,
+        maximum_stack_size: info.stack_reserve as u32,
+        committed_stack_size: info.stack_commit as u32,
+        sub_system_type: u32::from(info.subsystem),
+        sub_system_minor_version: info.subsystem_version.1,
+        sub_system_major_version: info.subsystem_version.0,
+        gp_value: 0,
+        image_characteristics: info.characteristics,
+        dll_characteristics: info.dll_characteristics,
+        machine: info.machine,
+        image_contains_code: u8::from(info.contains_code),
+        image_flags: 0,
+        loader_flags: info.loader_flags,
+        image_file_size: info.file_size as u32,
+        reserved: 0,
+    };
+    super::return_information(information.as_bytes(), buffer, length, return_length)
 }

@@ -1,0 +1,12 @@
+[package]
+name    = "ex"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "ex"
+
+[dependencies]
+abi      = { path = "../../abi" }
+ke       = { path = "../ke" }
+ob       = { path = "../ob" }

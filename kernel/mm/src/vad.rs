@@ -458,6 +458,25 @@ impl VadTree {
         // The gap found, or the one after the last node.
         (cursor.checked_add(size)? <= USER_VA_END).then_some(cursor)
     }
+
+    /// La plus haute plage libre de `size` octets, alignée sur `align`, entre
+    /// `floor` et `limit` (exclu) : MEM_TOP_DOWN. `None` s'il n'y en a pas.
+    pub fn find_free_gap_top_down(&self, floor: u64, limit: u64, size: u64, align: u64) -> Option<u64> {
+        debug_assert!(align.is_power_of_two());
+        let mut end = limit;
+        for node in self.nodes.values().rev() {
+            if node.start >= end {
+                continue;
+            }
+            let candidate = end.checked_sub(size)? & !(align - 1);
+            if candidate >= node.end {
+                return (candidate >= floor).then_some(candidate);
+            }
+            end = node.start;
+        }
+        let candidate = end.checked_sub(size)? & !(align - 1);
+        (candidate >= floor).then_some(candidate)
+    }
 }
 
 impl Default for VadTree {
@@ -670,6 +689,21 @@ mod tests {
         // 1-page hole at [2*PAGE, 3*PAGE) is too small; must get gap at [6*PAGE, ...)
         let addr = t.find_free_gap(PAGE, 3 * PAGE, PAGE).expect("gap");
         assert_eq!(addr, 6 * PAGE);
+    }
+
+    #[test]
+    fn find_free_gap_top_down_takes_the_highest_hole() {
+        const G: u64 = 0x1_0000;
+        let mut t = VadTree::new();
+        assert_eq!(t.find_free_gap_top_down(G, 0x10 * G, 2 * PAGE, G), Some(0xF * G), "an empty tree");
+        // The shared page at the top, a node under it: the gap below both.
+        t.insert(VadNode::private(0xF * G, 0x10 * G, rw())).unwrap();
+        t.insert(VadNode::private(0xE * G + PAGE, 0xE * G + 2 * PAGE, rw())).unwrap();
+        assert_eq!(t.find_free_gap_top_down(G, 0x10 * G, 2 * PAGE, G), Some(0xD * G));
+        // A hole with no aligned room between two nodes is skipped.
+        t.insert(VadNode::private(0xB * G, 0xD * G + PAGE, rw())).unwrap();
+        assert_eq!(t.find_free_gap_top_down(G, 0x10 * G, 2 * PAGE, G), Some(0xA * G));
+        assert_eq!(t.find_free_gap_top_down(0xB * G, 0x10 * G, 2 * PAGE, G), None, "nothing above the floor");
     }
 
     // ── Additional edge cases ─────────────────────────────────────────────────

@@ -145,6 +145,30 @@ pub fn user_context_address(esp: u32, reserve: u32) -> Option<u32> {
     (esp & !3).checked_sub(reserve + size_of::<Context32>() as u32)
 }
 
+/// Le contexte initial d'un thread que donne le mode utilisateur
+/// (NtCreateThread), assaini comme le ferait KeContextToKframes, puis rendu
+/// complet : ses parties `CONTEXT_CONTROL` et `CONTEXT_INTEGER` (EFLAGS
+/// assainis), les sélecteurs `selectors` ; ce qu'il ne donne pas, à zéro.
+pub fn sanitized_user_context(context: &Context32, selectors: UserSelectors) -> Context32 {
+    let flags = context.context_flags;
+    let mut sanitized = initial_user_context(0, 0, selectors);
+    if has(flags, CONTEXT_CONTROL) {
+        sanitized.ebp = context.ebp;
+        sanitized.eip = context.eip;
+        sanitized.eflags = sanitize_eflags(context.eflags);
+        sanitized.esp = context.esp;
+    }
+    if has(flags, CONTEXT_INTEGER) {
+        sanitized.edi = context.edi;
+        sanitized.esi = context.esi;
+        sanitized.ebx = context.ebx;
+        sanitized.edx = context.edx;
+        sanitized.ecx = context.ecx;
+        sanitized.eax = context.eax;
+    }
+    sanitized
+}
+
 /// Le contexte complet d'un thread qui démarre en `eip`, pile en `esp`, les
 /// autres registres à zéro, interruptions actives (RtlInitializeContext).
 pub fn initial_user_context(eip: u32, esp: u32, selectors: UserSelectors) -> Context32 {
@@ -208,6 +232,25 @@ mod tests {
             vector: 0x2E,
             ..KTrapFrame::default()
         }
+    }
+
+    #[test]
+    fn a_thread_context_from_user_mode_is_sanitized_and_made_full() {
+        // As RtlInitializeContext gives it: the selectors of i386 XP, IOPL 3
+        // and the trap flag asked for.
+        let mut context = Context32::zeroed();
+        context.context_flags = CONTEXT_I386 | CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
+        (context.eip, context.esp, context.ebp, context.eflags) = (0x0040_11E8, 0x0012_FFF8, 0, 0x3200 | 0x100);
+        (context.eax, context.ebx, context.ecx, context.edx, context.esi, context.edi) = (0, 1, 2, 3, 4, 5);
+        (context.seg_cs, context.seg_ds, context.seg_fs, context.seg_gs) = (0x1B, 0x23, 0x3B, 0x2B);
+        let sanitized = sanitized_user_context(&context, SELECTORS);
+        assert_eq!(sanitized.context_flags, CONTEXT_FULL);
+        assert_eq!((sanitized.eip, sanitized.esp, sanitized.ebx, sanitized.edi), (0x0040_11E8, 0x0012_FFF8, 1, 5));
+        assert_eq!(sanitized.eflags, 0x302, "no IOPL; the trap flag is the user's");
+        assert_eq!((sanitized.seg_cs, sanitized.seg_ss, sanitized.seg_fs, sanitized.seg_gs), (0x1B, 0x23, 0x3B, 0));
+        // Without its integer part: zeroed registers.
+        context.context_flags = CONTEXT_I386 | CONTEXT_CONTROL;
+        assert_eq!(sanitized_user_context(&context, SELECTORS).ebx, 0);
     }
 
     #[test]

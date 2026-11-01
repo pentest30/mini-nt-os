@@ -172,6 +172,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   classes et dates), NtFlushKey ; scénario `registry-persistence` (une valeur et l'empreinte de la ruche SYSTEM
   relues au second démarrage) : les trois critères sont cochés, **le M4 est terminé**. Ses dettes sont dans la
   passation.
+  M5, étape 1 (`csrss.exe` lancé par `smss`, [`docs/compat/m5-csrss.md`](docs/compat/m5-csrss.md)) : crate `ex`
+  (événements, NtWaitForSingleObject et NtWaitForMultipleObjects), crate `lpc` (ports de connexion, NtCreatePort,
+  NtReplyWaitReceivePort qui attend), processus et threads créés depuis le mode utilisateur (NtCreateProcess(Ex),
+  NtCreateThread avec un contexte assaini, threads suspendus par un APC noyau livré avant le mode utilisateur),
+  NtRead/WriteVirtualMemory, NtQuerySection, tables NLS au plus haut, NtQuerySymbolicLinkObject. `csrss` charge
+  ses DLL et s'arrête au jeton de son processus : Se est le prochain composant.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

@@ -9,13 +9,12 @@ jour à chaque commit qui change l'état.
 - Jalon courant : **M5** ([05](05-feuille-de-route.md#m5--mode-console-puis-spike-s2)) ; **M4 terminé** : ses trois
   critères de sortie sont cochés (`smss` crée ses variables d'environnement et `\KnownDlls` ; un fichier de `C:` et une
   valeur du registre se relisent après un redémarrage, scénarios `persistence` et `registry-persistence`, `fsck.vfat`
-  propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). `smss` s'arrête au lancement de
-  `csrss.exe`, le premier mur du M5.
-- Branche de travail : `claude/m4-io`, partie d'`origin/main` après la fusion de #32. Les PR se fusionnent dans
-  `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
-  `git merge-base --is-ancestor HEAD origin/main`).
-- PR fusionnées : #29, #30, #31 (spike S1) et #32 (étapes 0 à 2 du M4). Les étapes 4 à 9 du M4 sont sur
-  `claude/m4-io`, PR à ouvrir. Après chaque fusion, repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`,
+  propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée et lance
+  `csrss.exe`, qui charge ses DLL puis s'arrête au jeton de son processus (Se) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
+- Branches de travail : `claude/m4-io` (les étapes 4 à 9 du M4, PR à ouvrir), puis `claude/m5-csrss` par-dessus
+  (l'étape 1 du M5). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si
+  la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
+- PR fusionnées : #29, #30, #31 (spike S1) et #32 (étapes 0 à 2 du M4). Après chaque fusion, repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`,
   ou `git merge origin/main` si la branche a des commits non fusionnés : jamais de réécriture).
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
@@ -176,24 +175,57 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
 - Registre : `tools/mkhive` (ADR-012 ; la ruche SYSTEM vient encore de ReactOS), écriture différée (rien ne va sur
   disque sans NtFlushKey), journal `.LOG`, NtDeleteKey, clés liens, notifications, ruches SOFTWARE et DEFAULT.
 
-## Jalon suivant : M5 (mode console, spike S2)
+## Jalon courant : M5 (mode console, spike S2)
 
-Premières étapes proposées, dans l'ordre où `smss` les demandera :
+Étapes, dans l'ordre où `smss` et `csrss` les demandent (journal : [`compat/m5-csrss.md`](compat/m5-csrss.md)) :
 
-1. [ ] Mettre `csrss.exe` et ses DLL (`csrsrv`, `basesrv`, `winsrv`) sur le disque, relancer la sonde `smss` et lire le
-   mur suivant : sans doute `RtlCreateUserProcess`, donc NtCreateProcess(Ex) et NtCreateThread depuis le mode
-   utilisateur (Ps), NtWriteVirtualMemory (Mm), puis le port d'API de `smss` (LPC).
-2. [ ] Les objets d'Ex que `smss` demande déjà : NtCreateEvent (`\Device\VolumesSafeForWriteAccess`), les événements à
-   clé (NtCreateKeyedEvent, pour les sections critiques de ntdll), et `ThreadBreakOnTermination` (avec l'arrêt
-   `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer `smss`).
+1. [x] **`csrss.exe` sur le disque, et lancé par `smss`.** `xtask` met `csrss.exe`, `csrsrv.dll`, `basesrv.dll` et
+   `winsrv.dll` dans `WINDOWS\SYSTEM32`. Pour que `smss` crée `csrss` (`RtlCreateUserProcess`) :
+   - crate `ex` : le type `Event` ; NtCreateEvent (attributs facultatifs), NtOpenEvent, NtSetEvent, NtResetEvent,
+     NtClearEvent, NtPulseEvent, NtQueryEvent ; NtWaitForSingleObject et NtWaitForMultipleObjects (processus,
+     thread, événement) ;
+   - Mm : une plage désignée sous 64 Kio (le premier Mio d'un sous-système, depuis l'adresse 4) ; les tables NLS au
+     plus haut (`0x7FFB0000`, `map_view_top_down`, `MEM_TOP_DOWN`) ; NtReadVirtualMemory, NtWriteVirtualMemory
+     (`STATUS_PARTIAL_COPY`) ; NtQuerySection (`SectionImageInformation`, `SectionBasicInformation`) ;
+   - Ke et Ps : un thread créé sans être prêt (`UserThreadStart::ready`, `ready_new_thread`), le trampoline de
+     `hal::ring3` qui livre les APC noyau avant le mode utilisateur, la suspension (APC qui attend l'événement de
+     reprise, reprise forcée à la fin) ; NtCreateProcess(Ex), NtCreateThread (contexte assaini, `INITIAL_TEB`),
+     NtSuspendThread, NtResumeThread, NtTerminateThread, NtQueryInformationProcess et NtSetInformationProcess
+     (`ProcessBasicInformation`, `ProcessSessionInformation`) ; la session d'un processus ; son nom d'après son image ;
+   - Ob : NtQuerySymbolicLinkObject ;
+   - crate `lpc` : le type `Port`, NtCreatePort, NtReplyWaitReceivePort qui attend (le noyau peut envoyer un
+     datagramme, LpcRequestPort) : les threads d'API de `smss` attendent sur `\SmApiPort` ;
+   - la sonde journalise les processus que `smss` crée.
+   Tests : `event_service_self_test`, `process_memory_self_test`, `suspend_self_test`, `process_creation_self_test`,
+   `port_self_test`, `object_directory_self_test` étendu, tests hôte (ex, lpc, VAD, contexte) ; vérifiés par
+   mutation. `csrss` démarre, charge `csrsrv`, entre dans `main`, puis `CsrServerInitialization` échoue à
+   `CsrSetProcessSecurity` (NtOpenProcessToken).
+2. [ ] **Se : les jetons** (02 §5.8, ADR-011), le mur de `csrss` : un jeton par processus, hérité du créateur
+   (celui de System : SID `LocalSystem`, groupes, privilèges), NtOpenProcessToken(Ex), NtOpenThreadToken(Ex)
+   (`STATUS_NO_TOKEN` sans emprunt d'identité), NtQueryInformationToken (`TokenUser` d'abord, puis ce que `csrss` et
+   `smss` demandent), NtSetSecurityObject sur un processus (le descripteur gardé ; contrôle permissif, ADR-011),
+   NtAdjustPrivilegesToken (le privilège `SeLoadDriverPrivilege` que `smss` demande pour `Kmode`).
+3. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
+   NtRequestWaitReplyPort, NtReplyPort, NtReplyWaitReceivePort avec réponse, NtListenPort ; puis les sections de
+   port (messages volumineux). `csrss` se connecte à `\SmApiPort` (`SmConnectToSm`) et `smss` signale son événement.
+4. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
+   `ntdll`), `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer
+   `smss`), NtSetInformationProcess(`ProcessBasePriority`, `ProcessDefaultHardErrorMode`).
 
 Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal
-`[m4]`, mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
+`[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 
-Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) :
-`NtQueryInformationProcess(ProcessCookie)`, `NtSetInformationProcess(ProcessExecuteFlags)`,
-`NtFlushInstructionCache`, `NtQueryDefaultLocale` (justes sans Io ni Cm) ; `NtCreateKeyedEvent` (Ex). `NtOpenKey`,
-`NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
+Questions ouvertes du M5 :
+- `ProcessExecuteFlags` : le `ntdll` de ReactOS y passe 0 sous `OptIn` ; la règle du M3
+  (`ps::eprocess::changed_execute_options`, exactement `DISABLE` ou `ENABLE`) le refuse. Le service reste à faire,
+  après avoir tranché (ADR-020).
+- `ProcessUserModeIOPL` : `csrss` demande l'IOPL 3 pour les registres VGA ; le noyau garde IOPL 0 (`hal::ring3`).
+  À décider avec la console (frontal texte de `consrv`).
+
+Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) : les
+classes `ProcessCookie` de NtQueryInformationProcess et `ProcessExecuteFlags` de NtSetInformationProcess (les deux
+services sont faits pour d'autres classes), `NtFlushInstructionCache`, `NtQueryDefaultLocale` ; `NtCreateKeyedEvent`
+(Ex). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
 
 ## Ensuite (hors jalon)
 

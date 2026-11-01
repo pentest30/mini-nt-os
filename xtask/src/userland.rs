@@ -48,7 +48,9 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// Unicode case table) that each process maps, then `smss.exe`, which the
 /// kernel starts with its `test-smss` feature (M4), the SYSTEM hive that
 /// ReactOS generated, which the kernel mounts (until `tools/mkhive`,
-/// ADR-012), and the [`KNOWN_DLLS`]. `None` until `fetch-userland` ran.
+/// ADR-012), the Win32 subsystem that `smss` starts (`csrss.exe` and its
+/// server DLLs, M5), and the [`KNOWN_DLLS`]. `None` until `fetch-userland`
+/// ran.
 pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     [
         ("ntdll.dll", "NTDLL.DLL"),
@@ -57,6 +59,10 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         ("l_intl.nls", "L_INTL.NLS"),
         ("smss.exe", "SMSS.EXE"),
         ("config/system", "CONFIG/SYSTEM"),
+        ("csrss.exe", "CSRSS.EXE"),
+        ("csrsrv.dll", "CSRSRV.DLL"),
+        ("basesrv.dll", "BASESRV.DLL"),
+        ("winsrv.dll", "WINSRV.DLL"),
     ]
     .into_iter()
     .map(|(file, name)| (file.to_string(), name.to_ascii_uppercase()))

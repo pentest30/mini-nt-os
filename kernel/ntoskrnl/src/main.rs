@@ -282,6 +282,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &io_manager::FILE_TYPE,
         &io_manager::DEVICE_TYPE,
         &cm::KEY_TYPE,
+        &ex::EVENT_TYPE,
+        &lpc::PORT_TYPE,
     ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
@@ -335,6 +337,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     process_self_test();
     system_service_self_test();
     early_exit_self_test();
+    suspend_self_test();
     loader_services_self_test();
     registry_self_test();
     registry_write_self_test();
@@ -342,6 +345,10 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     file_self_test();
     file_write_self_test();
     section_service_self_test();
+    event_service_self_test();
+    process_memory_self_test();
+    process_creation_self_test();
+    port_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -468,6 +475,7 @@ pub(crate) fn spawn_user_thread(entry32: u32, stack32: u32) -> Option<usize> {
         teb: ps::loader::TEB32_VA,
         owner: core::ptr::null(),
         tid: core::ptr::null(),
+        ready: true,
     };
     // SAFETY: kstack was just allocated for this thread alone and is never
     // freed; the system address space lives forever.
@@ -1882,6 +1890,101 @@ fn system_service_self_test() {
     );
 }
 
+/// Ps: suspended threads (`EThread::suspend`, M5). A thread created
+/// suspended runs none of its user code until resumed, then counts in a
+/// loop; a suspension stops the count where it is, two take two resumes, the
+/// count stops at `MAXIMUM_SUSPEND_COUNT`; a suspended thread still ends when
+/// its process is terminated, and then refuses a suspension.
+fn suspend_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_SUSPEND_COUNT_EXCEEDED, STATUS_THREAD_IS_TERMINATING, STATUS_WAIT_0};
+    use alloc::sync::Arc;
+    use ke::context::{initial_user_context, UserSelectors};
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use ps::ethread::MAXIMUM_SUSPEND_COUNT;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const STARTED: u32 = IMAGE_BASE + 0x2000;
+    const COUNTER: u32 = IMAGE_BASE + 0x2004;
+    let sleep = |ms: i64| {
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -ms * MS) };
+    };
+    // mov dword [STARTED], 1; loop: inc dword [COUNTER]; jmp loop
+    let mut code = Code::new();
+    code.word(&[0xC7, 0x05], STARTED).bytes(&1u32.to_le_bytes());
+    code.word(&[0xFF, 0x05], COUNTER).bytes(&[0xEB, 0xF8]);
+    let mut text = [0xCC; 0x100];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x10, &[0; 0x10], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "suspend.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let context = initial_user_context(IMAGE_BASE + 0x1000, stack.stack_base, UserSelectors::current());
+    let thread = ps::create_thread_with_context(&process, &context, &stack, true).expect("a suspended thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    sleep(50);
+    assert_eq!((read(STARTED), thread.suspend_count()), (0, 1), "created suspended: no user code ran");
+    assert_eq!(thread.resume(), 1, "resumed");
+    sleep(30);
+    assert_eq!(read(STARTED), 1, "it runs once resumed");
+    let stopped = |what: &str| {
+        sleep(20);
+        let before = read(COUNTER);
+        sleep(30);
+        assert_eq!(read(COUNTER), before, "{what}: the count goes on");
+    };
+    let runs = |what: &str| {
+        let before = read(COUNTER);
+        sleep(30);
+        assert!(read(COUNTER) > before, "{what}: the count does not go on");
+    };
+    runs("resumed");
+    assert_eq!(thread.suspend(), Ok(0));
+    stopped("suspended");
+    assert_eq!((thread.suspend(), thread.suspend_count()), (Ok(1), 2), "suspended twice");
+    assert_eq!(thread.resume(), 2);
+    stopped("one resume of two");
+    assert_eq!(thread.resume(), 1);
+    runs("resumed twice");
+    assert_eq!(thread.resume(), 0, "not suspended");
+    for count in 0..MAXIMUM_SUSPEND_COUNT {
+        assert_eq!(thread.suspend(), Ok(count));
+    }
+    assert_eq!(thread.suspend(), Err(STATUS_SUSPEND_COUNT_EXCEEDED));
+    stopped("suspended to the limit");
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the process");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "a suspended thread did not end with its process");
+    assert_eq!(thread.suspend(), Err(STATUS_THREAD_IS_TERMINATING));
+    drop((thread, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Ps: suspended threads: created suspended, suspended and resumed, up to the limit, ended while \
+         suspended"
+    );
+}
+
 /// Ps: a thread that runs, and ends, before `create_thread` returns to its
 /// creator. A kernel thread below `NORMAL_PRIORITY` creates a process whose
 /// thread, at `NORMAL_PRIORITY`, preempts it as soon as it is ready and ends
@@ -2477,12 +2580,13 @@ fn registry_self_test() {
 /// without it: `STATUS_OBJECT_NAME_COLLISION`), NtCreateSymbolicLinkObject
 /// relative to the directory, NtOpenSymbolicLinkObject (the link itself),
 /// NtOpenDirectoryObject through the link, on a missing name (its handle
-/// zeroed) and on a key (`STATUS_OBJECT_TYPE_MISMATCH`). The directory's name
-/// goes with its last handle.
+/// zeroed) and on a key (`STATUS_OBJECT_TYPE_MISMATCH`); NtQuerySymbolicLinkObject
+/// (M5) with and without its returned length, in a buffer too small with it,
+/// and on a directory. The directory's name goes with its last handle.
 fn object_directory_self_test() {
     use abi::ntstatus::{
-        NtStatus, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_EXISTS, STATUS_OBJECT_NAME_NOT_FOUND,
-        STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
+        NtStatus, STATUS_BUFFER_TOO_SMALL, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_EXISTS,
+        STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::object::OBJ_OPENIF;
     use abi::services;
@@ -2499,6 +2603,12 @@ fn object_directory_self_test() {
     const HANDLE: u32 = DATA + 0x20; // 8 handles
     const OA: u32 = DATA + 0x40; // 6 OBJECT_ATTRIBUTES of 24 bytes
     const US: usize = 0xD0; // 6 UNICODE_STRING
+    const MORE: u32 = DATA + 0x170; // 4 statuses more
+    const TARGET: u32 = DATA + 0x180; // a UNICODE_STRING, its buffer of 0x40 bytes after
+    const RETURNED: u32 = DATA + 0x1D0;
+    const SHORT: u32 = DATA + 0x1D4; // a UNICODE_STRING, its buffer of 16 bytes at SHORT_BUFFER
+    const SHORT_BUFFER: u32 = DATA + 0x1DC;
+    const SHORT_RETURNED: u32 = DATA + 0x1EC;
     const DONE: u32 = DATA + 0x1FC;
     const ALL_DIRECTORY: u32 = 0x000F_000F;
     const ALL_LINK: u32 = 0x000F_0001;
@@ -2528,6 +2638,11 @@ fn object_directory_self_test() {
     }
     // Handle 6 starts non-zero: a failed open must zero it.
     data[0x38..0x3C].copy_from_slice(&u32::MAX.to_le_bytes());
+    for (at, maximum, buffer) in [(TARGET, 0x40u16, TARGET + 0x10), (SHORT, 16, SHORT_BUFFER)] {
+        let at = (at - DATA) as usize;
+        data[at + 2..at + 4].copy_from_slice(&maximum.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&buffer.to_le_bytes());
+    }
     let oa = |i: u32| Arg::Value(OA + 24 * i);
     let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
     let status = |i: u32| STATUS + 4 * i;
@@ -2551,7 +2666,17 @@ fn object_directory_self_test() {
         .call_args(open_dir, &[handle(6), v(QUERY), oa(4)])
         .store_eax(status(6))
         .call_args(open_dir, &[handle(7), v(QUERY), oa(5)])
-        .store_eax(status(7))
+        .store_eax(status(7));
+    let query = services::NtQuerySymbolicLinkObject;
+    let link = Arg::Memory(HANDLE + 16);
+    code.call_args(query, &[link, v(TARGET), v(RETURNED)])
+        .store_eax(MORE)
+        .call_args(query, &[link, v(SHORT), v(SHORT_RETURNED)])
+        .store_eax(MORE + 4)
+        .call_args(query, &[link, v(SHORT), v(0)])
+        .store_eax(MORE + 8)
+        .call_args(query, &[Arg::Memory(HANDLE), v(TARGET), v(0)])
+        .store_eax(MORE + 12)
         .word(&[0xC7, 0x05], DONE)
         .bytes(&1u32.to_le_bytes())
         .bytes(&[0xEB, 0xFE]);
@@ -2596,6 +2721,15 @@ fn object_directory_self_test() {
         "a missing name, its handle zeroed"
     );
     assert_eq!(statuses[7], STATUS_OBJECT_TYPE_MISMATCH, "a key is not a directory");
+    let more: alloc::vec::Vec<NtStatus> = (0..4).map(|i| NtStatus(read(MORE + 4 * i))).collect();
+    let mut target = [0u8; 18];
+    process.read_memory(u64::from(TARGET + 0x10), &mut target).expect("read the target");
+    let expected: alloc::vec::Vec<u8> = "\\MinoDir\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    assert_eq!((more[0], read(TARGET) & 0xFFFF, read(RETURNED)), (STATUS_SUCCESS, 16, 18), "NtQuerySymbolicLinkObject");
+    assert_eq!(&target[..], &expected[..], "the target, with its final zero");
+    assert_eq!((more[1], read(SHORT_RETURNED)), (STATUS_BUFFER_TOO_SMALL, 18), "no room for the zero");
+    assert_eq!((more[2], read(SHORT) & 0xFFFF), (STATUS_SUCCESS, 16), "without the returned length, it fits");
+    assert_eq!(more[3], STATUS_OBJECT_TYPE_MISMATCH, "a directory is not a link");
     let ns = ob::namespace();
     let link =
         ns.open("\\MinoDir\\Link", None, Some(&ob::SYMBOLIC_LINK_TYPE), abi::object::OBJ_OPENLINK).expect("the link");
@@ -2618,7 +2752,7 @@ fn object_directory_self_test() {
     assert!(ns.open("\\MinoDir", None, None, 0).is_err(), "a temporary directory's name goes with its last handle");
     log::info!(
         "[smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, \
-         NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject"
+         NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject, NtQuerySymbolicLinkObject"
     );
 }
 
@@ -3159,6 +3293,685 @@ fn file_write_self_test() {
     log::info!(
         "[smoke] Io: files written from user mode on the boot RAM disk: NtCreateFile (create, overwrite, directory), \
          NtWriteFile, NtReadFile, NtSetInformationFile"
+    );
+}
+
+/// A process made from user mode (`sys::process`, M5), as
+/// `RtlCreateUserProcess` makes one: NtCreateProcess from an image section,
+/// its basic information, its session set and read back, a stack allocated
+/// in it, then NtCreateThread with a context and an INITIAL_TEB, suspended;
+/// the child does not run until resumed (one suspension more takes one
+/// resume more), then ends with its own status, which the parent waits for
+/// and reads. What must fail: no parent, no section, no context, the only
+/// thread ending itself through a null handle, a short buffer.
+fn process_creation_self_test() {
+    use abi::context::{Context32, CONTEXT_CONTROL, CONTEXT_INTEGER, CONTEXT_SEGMENTS};
+    use abi::ntstatus::{
+        NtStatus, STATUS_CANT_TERMINATE_SELF, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER,
+        STATUS_NOT_IMPLEMENTED, STATUS_PENDING, STATUS_SUCCESS, STATUS_TIMEOUT, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use core::mem::offset_of;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::{create_section_object, Section, SECTION_MAP_EXECUTE, SECTION_QUERY};
+    use ob::{AccessMask, HandleAttributes};
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 20 statuses
+    const PROCESS: u32 = DATA + 0x60;
+    const THREAD: u32 = DATA + 0x64;
+    const SECTION: u32 = DATA + 0x68; // given by the kernel
+    const SCRATCH: u32 = DATA + 0x6C;
+    const CLIENT_ID: u32 = DATA + 0x70;
+    const BASIC: u32 = DATA + 0x80; // PROCESS_BASIC_INFORMATION
+    const BASIC_LENGTH: u32 = DATA + 0x98;
+    const ENDED: u32 = DATA + 0xA0; // PROCESS_BASIC_INFORMATION, after
+    const SESSION: u32 = DATA + 0xB8; // 1
+    const SESSION_READ: u32 = DATA + 0xBC;
+    const STACK: u32 = DATA + 0xC0;
+    const STACK_SIZE: u32 = DATA + 0xC4; // 64 KiB
+    const PREVIOUS: u32 = DATA + 0xC8; // 3 counts
+    const SHORT: u32 = DATA + 0xD8; // -50 ms
+    const LONG: u32 = DATA + 0xE0; // -3 s
+    const INITIAL_TEB: u32 = DATA + 0xF0;
+    const CONTEXT: u32 = DATA + 0x110;
+    const DONE: u32 = DATA + 0x3FC;
+    const CHILD_STATUS: u32 = 0x77;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let previous = |i: u32| Arg::Value(PREVIOUS + 4 * i);
+    let (query, wait) = (services::NtQueryInformationProcess, services::NtWaitForSingleObject);
+    let (create_process, create_thread) = (services::NtCreateProcess, services::NtCreateThread);
+
+    // The child: ends its process with its own status.
+    let mut child = Code::new();
+    child.call(services::NtTerminateProcess, &[u32::MAX, CHILD_STATUS]).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x100];
+    text[..child.0.len()].copy_from_slice(&child.0);
+    let child_file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x100, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .build();
+    let child_section = Section::create_image_of(Arc::from(child_file), "\\WINDOWS\\CHILD.EXE").expect("the child");
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    put(SESSION, &1u32.to_le_bytes());
+    put(STACK_SIZE, &0x1_0000u32.to_le_bytes());
+    put(SHORT, &(-50 * MS).to_le_bytes());
+    put(LONG, &(-3000 * MS).to_le_bytes());
+    let mut context = Context32::zeroed();
+    context.context_flags = CONTEXT_CONTROL | CONTEXT_INTEGER | CONTEXT_SEGMENTS;
+    (context.eip, context.eflags) = (IMAGE_BASE + 0x1000, 0x202);
+    put(CONTEXT, context.as_bytes());
+    let esp_at = CONTEXT + offset_of!(Context32, esp) as u32;
+
+    let mut code = Code::new();
+    code.call_args(create_process, &[v(PROCESS), v(0x001F_0FFF), v(0), v(u32::MAX), v(0), m(SECTION), v(0), v(0)])
+        .store_eax(status(0));
+    code.call_args(query, &[m(PROCESS), v(0), v(BASIC), v(24), v(BASIC_LENGTH)]).store_eax(status(1));
+    code.call_args(services::NtSetInformationProcess, &[m(PROCESS), v(24), v(SESSION), v(4)]).store_eax(status(2));
+    code.call_args(query, &[m(PROCESS), v(24), v(SESSION_READ), v(4), v(0)]).store_eax(status(3));
+    code.call_args(services::NtAllocateVirtualMemory, &[m(PROCESS), v(STACK), v(0), v(STACK_SIZE), v(0x3000), v(4)])
+        .store_eax(status(4));
+    // INITIAL_TEB: the 64 KiB allocated, all committed; ESP 8 bytes under
+    // its top, as RtlInitializeContext leaves it.
+    code.word(&[0xA1], STACK).store_eax(INITIAL_TEB + 0x10).store_eax(INITIAL_TEB + 0x0C);
+    code.bytes(&[0x05]).bytes(&0x1_0000u32.to_le_bytes()).store_eax(INITIAL_TEB + 0x08); // add eax, 64 KiB
+    code.bytes(&[0x83, 0xE8, 0x08]).store_eax(esp_at); // sub eax, 8
+    code.call_args(
+        create_thread,
+        &[v(THREAD), v(0x001F_03FF), v(0), m(PROCESS), v(CLIENT_ID), v(CONTEXT), v(INITIAL_TEB), v(1)],
+    )
+    .store_eax(status(5));
+    code.call_args(wait, &[m(PROCESS), v(0), v(SHORT)]).store_eax(status(6));
+    code.call_args(services::NtSuspendThread, &[m(THREAD), previous(0)]).store_eax(status(7));
+    code.call_args(services::NtResumeThread, &[m(THREAD), previous(1)]).store_eax(status(8));
+    code.call_args(wait, &[m(PROCESS), v(0), v(SHORT)]).store_eax(status(9));
+    code.call_args(services::NtResumeThread, &[m(THREAD), previous(2)]).store_eax(status(10));
+    code.call_args(wait, &[m(PROCESS), v(0), v(LONG)]).store_eax(status(11));
+    code.call_args(query, &[m(PROCESS), v(0), v(ENDED), v(24), v(0)]).store_eax(status(12));
+    code.call_args(create_process, &[v(SCRATCH), v(0x001F_0FFF), v(0), v(0), v(0), m(SECTION), v(0), v(0)])
+        .store_eax(status(13));
+    code.call_args(create_process, &[v(SCRATCH), v(0x001F_0FFF), v(0), v(u32::MAX), v(0), v(0), v(0), v(0)])
+        .store_eax(status(14));
+    code.call_args(create_thread, &[v(SCRATCH), v(0x001F_03FF), v(0), m(PROCESS), v(0), v(0), v(INITIAL_TEB), v(1)])
+        .store_eax(status(15));
+    code.call_args(services::NtTerminateThread, &[v(0), v(1)]).store_eax(status(16));
+    code.call_args(query, &[m(PROCESS), v(0), v(ENDED), v(20), v(0)]).store_eax(status(17));
+    code.call_args(wait, &[m(THREAD), v(0), v(SHORT)]).store_eax(status(18));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "parent.exe", false).expect("a process");
+    let access = AccessMask(SECTION_MAP_EXECUTE.0 | SECTION_QUERY.0);
+    let handle = process
+        .handle_table
+        .insert(create_section_object(child_section), access, HandleAttributes::default())
+        .expect("a section handle");
+    process.write_memory(u64::from(SECTION), &handle.0.to_le_bytes()).expect("write the handle");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 500, "the process creation test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..19).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtCreateProcess");
+    let child_pid = read(BASIC + 0x10);
+    assert_eq!((statuses[1], read(BASIC_LENGTH)), (STATUS_SUCCESS, 24), "ProcessBasicInformation");
+    assert_eq!(
+        (NtStatus(read(BASIC)), read(BASIC + 4), read(BASIC + 0x14)),
+        (STATUS_PENDING, 0x7FFD_F000, process.pid())
+    );
+    let child = ps::lookup_process(child_pid).expect("the child, held by its handle");
+    assert_eq!((child.image_file_name(), child.parent_pid()), ("CHILD.EXE", process.pid()), "named after its image");
+    assert_eq!((statuses[2], statuses[3], read(SESSION_READ)), (STATUS_SUCCESS, STATUS_SUCCESS, 1), "its session");
+    assert_eq!(child.session_id(), 1);
+    assert_eq!(statuses[4], STATUS_SUCCESS, "a stack in the child");
+    assert_eq!(statuses[5], STATUS_SUCCESS, "NtCreateThread, suspended");
+    assert_eq!((read(CLIENT_ID), read(CLIENT_ID + 4) != 0), (child_pid, true), "its CLIENT_ID");
+    assert_eq!(statuses[6], STATUS_TIMEOUT, "a suspended child does not run");
+    assert_eq!((statuses[7], read(PREVIOUS)), (STATUS_SUCCESS, 1), "suspended once more");
+    assert_eq!((statuses[8], read(PREVIOUS + 4), statuses[9]), (STATUS_SUCCESS, 2, STATUS_TIMEOUT), "one resume");
+    assert_eq!((statuses[10], read(PREVIOUS + 8)), (STATUS_SUCCESS, 1), "the last resume");
+    assert_eq!(statuses[11], STATUS_WAIT_0, "the child ran and ended");
+    assert_eq!((statuses[12], read(ENDED)), (STATUS_SUCCESS, CHILD_STATUS), "with its own status");
+    assert_eq!(child.exit_status(), NtStatus(CHILD_STATUS));
+    assert_eq!(
+        (statuses[13], statuses[14]),
+        (STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED),
+        "no parent, no section"
+    );
+    assert_eq!(statuses[15], STATUS_INVALID_PARAMETER, "no context");
+    assert_eq!(statuses[16], STATUS_CANT_TERMINATE_SELF, "the only thread, through a null handle");
+    assert_eq!(statuses[17], STATUS_INFO_LENGTH_MISMATCH, "a short buffer");
+    assert_eq!(statuses[18], STATUS_WAIT_0, "the child's thread, ended");
+    drop(child);
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ps::lookup_process(child_pid).is_err(), "the child goes with the parent's handle");
+    log::info!(
+        "[smoke] Ps: a process made from user mode: NtCreateProcess, NtQueryInformationProcess, \
+         NtSetInformationProcess, NtCreateThread (suspended), NtSuspendThread, NtResumeThread, its end awaited"
+    );
+}
+
+/// The ports of Lpc from user mode (`sys::port`, M5), as `smss` uses its API
+/// port before any client: NtCreatePort (named), then NtReplyWaitReceivePort
+/// blocks until a message comes; the kernel sends one (LpcRequestPort, a
+/// datagram), which arrives whole. What must fail: a message length past
+/// the limit, a reply (no connection yet), a bad handle, an event.
+fn port_self_test() {
+    use abi::lpc::{LPC_DATAGRAM, LPC_KERNELMODE_MESSAGE};
+    use abi::ntstatus::{
+        NtStatus, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER_4, STATUS_NOT_IMPLEMENTED,
+        STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 8 statuses
+    const PORT: u32 = DATA + 0x20;
+    const OTHER: u32 = DATA + 0x24;
+    const EVENT: u32 = DATA + 0x28;
+    const CONTEXT: u32 = DATA + 0x2C;
+    const OA: u32 = DATA + 0x30;
+    const US: u32 = DATA + 0x48;
+    const NAME: u32 = DATA + 0x50;
+    const MESSAGE: u32 = DATA + 0x100; // 0x130 bytes
+    const READY: u32 = DATA + 0x3F4;
+    const RECEIVED: u32 = DATA + 0x3F8;
+    const DONE: u32 = DATA + 0x3FC;
+    const PORT_NAME: &str = "\\MinoPort";
+    const TEXT: &[u8] = b"hello, port";
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let units: alloc::vec::Vec<u8> = PORT_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    data[(NAME - DATA) as usize..][..units.len()].copy_from_slice(&units);
+    let us = (US - DATA) as usize;
+    data[us..us + 2].copy_from_slice(&(units.len() as u16).to_le_bytes());
+    data[us + 2..us + 4].copy_from_slice(&(units.len() as u16).to_le_bytes());
+    data[us + 4..us + 8].copy_from_slice(&NAME.to_le_bytes());
+    let oa = (OA - DATA) as usize;
+    data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+    data[oa + 8..oa + 12].copy_from_slice(&US.to_le_bytes());
+    data[(CONTEXT - DATA) as usize..][..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let receive = services::NtReplyWaitReceivePort;
+    let mut code = Code::new();
+    code.call_args(services::NtCreatePort, &[v(PORT), v(OA), v(0x28), v(0x130), v(0)]).store_eax(status(0));
+    code.call_args(services::NtCreatePort, &[v(OTHER), v(0), v(0x28), v(0x149), v(0)]).store_eax(status(1));
+    code.call_args(receive, &[m(PORT), v(0), v(MESSAGE), v(MESSAGE)]).store_eax(status(2));
+    code.call_args(receive, &[v(0x1234), v(0), v(0), v(MESSAGE)]).store_eax(status(3));
+    code.call_args(services::NtCreateEvent, &[v(EVENT), v(0x001F_0003), v(0), v(0), v(0)]);
+    code.call_args(receive, &[m(EVENT), v(0), v(0), v(MESSAGE)]).store_eax(status(4));
+    code.word(&[0xC7, 0x05], READY).bytes(&1u32.to_le_bytes());
+    code.call_args(receive, &[m(PORT), v(CONTEXT), v(0), v(MESSAGE)]).store_eax(RECEIVED);
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x400];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x400, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "port.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the port test program did not {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(READY, "reach its wait");
+    // SAFETY: as above. The program has time to block in its wait.
+    unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -50 * MS) };
+    assert_eq!(read(DONE), 0, "NtReplyWaitReceivePort returned before any message");
+    let object = ob::namespace().open(PORT_NAME, None, Some(&lpc::PORT_TYPE), 0).expect("the named port");
+    let port = ob::downcast::<lpc::Port>(&object).expect("a port");
+    let id = port.request(TEXT).expect("a datagram from the kernel");
+    wait_for(DONE, "receive the datagram");
+    drop((port, object));
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..5).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtCreatePort");
+    assert_eq!(statuses[1], STATUS_INVALID_PARAMETER_4, "messages past the limit");
+    assert_eq!(statuses[2], STATUS_NOT_IMPLEMENTED, "a reply: no connection yet");
+    assert_eq!(statuses[3], STATUS_INVALID_HANDLE, "a bad handle");
+    assert_eq!(statuses[4], STATUS_OBJECT_TYPE_MISMATCH, "an event is not a port");
+    assert_eq!(NtStatus(read(RECEIVED)), STATUS_SUCCESS, "NtReplyWaitReceivePort");
+    let header = (read(MESSAGE), read(MESSAGE + 4), read(MESSAGE + 0x10));
+    let length = (0x18 + TEXT.len() as u32) << 16 | TEXT.len() as u32;
+    assert_eq!(header, (length, u32::from(LPC_DATAGRAM | LPC_KERNELMODE_MESSAGE), id), "its header");
+    let mut received = [0u8; TEXT.len()];
+    process.read_memory(u64::from(MESSAGE + 0x18), &mut received).expect("read the data");
+    assert_eq!(&received, TEXT, "its data");
+    assert_eq!(read(CONTEXT), 0, "no client, no context");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ob::namespace().open(PORT_NAME, None, None, 0).is_err(), "the port goes with its handle");
+    log::info!(
+        "[smoke] Lpc: ports from user mode: NtCreatePort, NtReplyWaitReceivePort waits until the kernel sends a \
+         datagram (LpcRequestPort)"
+    );
+}
+
+/// Another process's memory from user mode (`sys::memory`, `sys::section`,
+/// M5), as `RtlCreateUserProcess` uses it: in a second process, without a
+/// thread, the first MiB reserved from address 4 and a page committed, then
+/// written and read back through NtWriteVirtualMemory and
+/// NtReadVirtualMemory; a read across the end of the page copies what is
+/// before it (`STATUS_PARTIAL_COPY`), a reserved page nothing, a range past
+/// the user half is refused; nothing to copy is no error, even with a bad
+/// handle. NtQuerySection on an image section (`SectionImageInformation`,
+/// `SectionBasicInformation`) and on a paging-file section.
+fn process_memory_self_test() {
+    use abi::memory::{SectionImageInformation32, SEC_FILE};
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE, STATUS_PARTIAL_COPY,
+        STATUS_SECTION_NOT_IMAGE, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::{create_section_object, Section, SECTION_QUERY};
+    use mm::vad::PageProtect;
+    use ob::{AccessMask, HandleAttributes};
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const MIB: u32 = 0x10_0000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const TARGET: u32 = DATA + 0x40; // the other process's handle
+    const IMAGE: u32 = DATA + 0x44; // an image section's handle
+    const PAGEFILE: u32 = DATA + 0x48; // a paging-file section's handle
+    const LOW_BASE: u32 = DATA + 0x50;
+    const LOW_SIZE: u32 = DATA + 0x54;
+    const PAGE_BASE: u32 = DATA + 0x58;
+    const PAGE_SIZE: u32 = DATA + 0x5C;
+    const COUNT: u32 = DATA + 0x60; // 8 byte counts
+    const SOURCE: u32 = DATA + 0x80; // 8 bytes
+    const DESTINATION: u32 = DATA + 0x88; // 8 bytes
+    const IMAGE_INFO: u32 = DATA + 0x90; // 0x30 bytes
+    const IMAGE_INFO_LENGTH: u32 = DATA + 0xC0;
+    const BASIC_INFO: u32 = DATA + 0xC8; // 0x10 bytes
+    const NEAR_END: u32 = DATA + 0xD8; // PAGE_BASE + 0xFFC, computed
+    const DONE: u32 = DATA + 0x1FC;
+    const ALL_ACCESS: u32 = 0x001F_0FFF;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let count = |i: u32| Arg::Value(COUNT + 4 * i);
+    let (allocate, write, read) =
+        (services::NtAllocateVirtualMemory, services::NtWriteVirtualMemory, services::NtReadVirtualMemory);
+    let query = services::NtQuerySection;
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let mut put = |at: u32, value: u32| data[(at - DATA) as usize..][..4].copy_from_slice(&value.to_le_bytes());
+    put(LOW_BASE, 4);
+    put(LOW_SIZE, MIB - 256);
+    put(PAGE_SIZE, 0x1000);
+    put(SOURCE, 0x4D49_4E4F); // "ONIM"
+    put(SOURCE + 4, 0x0035_4D4D);
+    let mut code = Code::new();
+    code.call_args(allocate, &[m(TARGET), v(LOW_BASE), v(0), v(LOW_SIZE), v(0x2000), v(4)]).store_eax(status(0));
+    code.call_args(allocate, &[m(TARGET), v(PAGE_BASE), v(0), v(PAGE_SIZE), v(0x3000), v(4)]).store_eax(status(1));
+    code.call_args(write, &[m(TARGET), m(PAGE_BASE), v(SOURCE), v(8), count(0)]).store_eax(status(2));
+    code.call_args(read, &[m(TARGET), m(PAGE_BASE), v(DESTINATION), v(8), count(1)]).store_eax(status(3));
+    code.word(&[0xA1], PAGE_BASE).bytes(&[0x05]).bytes(&0xFFCu32.to_le_bytes()).store_eax(NEAR_END); // add eax, 0xFFC
+    code.call_args(read, &[m(TARGET), m(NEAR_END), v(DESTINATION), v(8), count(2)]).store_eax(status(4));
+    code.call_args(read, &[m(TARGET), v(0x1_0000), v(DESTINATION), v(4), count(3)]).store_eax(status(5));
+    code.call_args(write, &[m(TARGET), v(0x7FFE_FFFC), v(SOURCE), v(8), v(0)]).store_eax(status(6));
+    code.call_args(read, &[v(0x1234), m(PAGE_BASE), v(DESTINATION), v(0), v(0)]).store_eax(status(7));
+    code.call_args(read, &[v(0x1234), m(PAGE_BASE), v(DESTINATION), v(4), v(0)]).store_eax(status(8));
+    code.call_args(query, &[m(IMAGE), v(1), v(IMAGE_INFO), v(0x30), v(IMAGE_INFO_LENGTH)]).store_eax(status(9));
+    code.call_args(query, &[m(IMAGE), v(0), v(BASIC_INFO), v(0x10), v(0)]).store_eax(status(10));
+    code.call_args(query, &[m(PAGEFILE), v(1), v(IMAGE_INFO), v(0x30), v(0)]).store_eax(status(11));
+    code.call_args(query, &[m(IMAGE), v(1), v(IMAGE_INFO), v(0x2C), v(0)]).store_eax(status(12));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let file_size = file.len() as u32;
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let system = ps::system_process();
+    let process = ps::create_process(&system, &section, "vmcopy.exe", false).expect("a process");
+    let target = ps::create_process(&system, &section, "vmtarget.exe", false).expect("the target process");
+    let attributes = HandleAttributes::default();
+    let give = |object: ob::ObjectRef, access: u32, at: u32| {
+        let handle = process.handle_table.insert(object, AccessMask(access), attributes).expect("a handle");
+        process.write_memory(u64::from(at), &handle.0.to_le_bytes()).expect("write the handle");
+    };
+    give(target.clone(), ALL_ACCESS, TARGET);
+    give(create_section_object(section.clone()), SECTION_QUERY.0, IMAGE);
+    let pagefile = Section::create_pagefile(0x1000, PageProtect::READWRITE).expect("a paging-file section");
+    give(create_section_object(pagefile), SECTION_QUERY.0, PAGEFILE);
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_at = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read_at(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the memory test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..13).map(|i| NtStatus(read_at(status(i)))).collect();
+    let count_at = |i: u32| read_at(COUNT + 4 * i);
+    assert_eq!((statuses[0], read_at(LOW_BASE), read_at(LOW_SIZE)), (STATUS_SUCCESS, 0, MIB), "the first MiB");
+    let page = read_at(PAGE_BASE);
+    assert_eq!(statuses[1], STATUS_SUCCESS, "a page committed in the other process");
+    assert!(page >= MIB, "a free range above the first MiB: {page:#x}");
+    assert_eq!((statuses[2], count_at(0)), (STATUS_SUCCESS, 8), "NtWriteVirtualMemory");
+    let mut written = [0u8; 8];
+    target.read_memory(u64::from(page), &mut written).expect("read the target");
+    assert_eq!(&written, b"ONIMMM5\0", "the bytes in the other process");
+    assert_eq!((statuses[3], count_at(1), read_at(DESTINATION + 4)), (STATUS_SUCCESS, 8, 0x0035_4D4D), "read back");
+    assert_eq!((statuses[4], count_at(2)), (STATUS_PARTIAL_COPY, 4), "up to the end of the page");
+    assert_eq!((statuses[5], count_at(3)), (STATUS_PARTIAL_COPY, 0), "a reserved page");
+    assert_eq!(statuses[6], STATUS_ACCESS_VIOLATION, "past the user half");
+    assert_eq!((statuses[7], statuses[8]), (STATUS_SUCCESS, STATUS_INVALID_HANDLE), "nothing to copy, a bad handle");
+    assert_eq!((statuses[9], read_at(IMAGE_INFO_LENGTH)), (STATUS_SUCCESS, 0x30), "SectionImageInformation");
+    let mut bytes = [0u8; 0x30];
+    process.read_memory(u64::from(IMAGE_INFO), &mut bytes).expect("read the image information");
+    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let half = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+    let expected = SectionImageInformation32 {
+        transfer_address: IMAGE_BASE + 0x1000,
+        maximum_stack_size: info.stack_reserve as u32,
+        committed_stack_size: info.stack_commit as u32,
+        sub_system_type: u32::from(info.subsystem),
+        sub_system_minor_version: info.subsystem_version.1,
+        sub_system_major_version: info.subsystem_version.0,
+        image_characteristics: info.characteristics,
+        machine: 0x14C,
+        image_contains_code: 1,
+        image_file_size: file_size,
+        ..SectionImageInformation32::default()
+    };
+    assert_eq!(&bytes[..], expected.as_bytes(), "SectionImageInformation, as XP lays it out");
+    assert_eq!((word(0), half(0x20)), (IMAGE_BASE + 0x1000, 0x14C));
+    let basic = (read_at(BASIC_INFO + 4), read_at(BASIC_INFO + 8));
+    assert_eq!(
+        (statuses[10], basic),
+        (STATUS_SUCCESS, (abi::memory::SEC_IMAGE | SEC_FILE, info.size_of_image as u32)),
+        "SectionBasicInformation"
+    );
+    assert_eq!(statuses[11], STATUS_SECTION_NOT_IMAGE, "a paging-file section has no image");
+    assert_eq!(statuses[12], STATUS_INFO_LENGTH_MISMATCH, "a short buffer");
+    let low = target.with_space(|space| space.query(0)).expect("the target's space").expect("query");
+    assert_eq!((low.base_address, low.region_size), (0, u64::from(MIB)), "page 0, reserved");
+
+    for (program, name) in [(&process, "the memory test program"), (&target, "the target process")] {
+        ps::terminate_process(program.clone(), NtStatus(0x600D)).expect(name);
+        // SAFETY: the object of a process held here.
+        let ended = unsafe {
+            ke_wait_for_single_object::<KePlatform>(
+                program.dispatcher_object(),
+                ProcessorMode::Kernel,
+                false,
+                Some(-3000 * MS),
+            )
+        };
+        assert_eq!(ended, STATUS_WAIT_0, "{name} did not end");
+    }
+    drop((process, target));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Mm: another process's memory from user mode: the first MiB reserved from address 4, \
+         NtWriteVirtualMemory, NtReadVirtualMemory (partial copies), NtQuerySection (image, basic)"
+    );
+}
+
+/// The events of Ex and the waits from user mode (`sys::event`, `sys::wait`,
+/// M5): a notification event without attributes and a named
+/// synchronization event, set, reset, pulsed and queried, with the state
+/// before; a wait that a synchronization event satisfies once; WaitAny on
+/// two events, WaitAll on one event twice; the named event opened again
+/// without the right to query or wait; a bad handle, no object, the process
+/// itself. Then a wait without timeout, which the kernel ends by setting the
+/// event by its name.
+fn event_service_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_1,
+        STATUS_INVALID_PARAMETER_MIX, STATUS_SUCCESS, STATUS_TIMEOUT, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 24 statuses
+    const HANDLE: u32 = DATA + 0x60; // 8 handles
+    const PREVIOUS: u32 = DATA + 0x80; // 4 states
+    const QUERY: u32 = DATA + 0x90; // EVENT_BASIC_INFORMATION
+    const QUERY_LENGTH: u32 = DATA + 0x98;
+    const ZERO: u32 = DATA + 0xA0; // a timeout of 0
+    const ANY: u32 = DATA + 0xB0; // 2 handles
+    const ALL: u32 = DATA + 0xB8; // 2 handles
+    const OA: u32 = DATA + 0xC0;
+    const US: u32 = DATA + 0xD8;
+    const NAME: u32 = DATA + 0xE0;
+    const READY: u32 = DATA + 0x1F4;
+    const WAITED: u32 = DATA + 0x1F8;
+    const DONE: u32 = DATA + 0x1FC;
+    const EVENT_NAME: &str = "\\BaseNamedObjects\\MinoEvent";
+    const ALL_ACCESS: u32 = 0x001F_0003;
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let units: alloc::vec::Vec<u8> = EVENT_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    data[(NAME - DATA) as usize..][..units.len()].copy_from_slice(&units);
+    let length = units.len() as u16;
+    let us = (US - DATA) as usize;
+    data[us..us + 2].copy_from_slice(&length.to_le_bytes());
+    data[us + 2..us + 4].copy_from_slice(&length.to_le_bytes());
+    data[us + 4..us + 8].copy_from_slice(&NAME.to_le_bytes());
+    let oa = (OA - DATA) as usize;
+    data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+    data[oa + 8..oa + 12].copy_from_slice(&US.to_le_bytes());
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let handle = |i: u32| HANDLE + 4 * i;
+    let status = |i: u32| STATUS + 4 * i;
+    let mut code = Code::new();
+    let wait = services::NtWaitForSingleObject;
+    let wait_many = services::NtWaitForMultipleObjects;
+    code.call_args(services::NtCreateEvent, &[v(handle(0)), v(ALL_ACCESS), v(0), v(0), v(0)]).store_eax(status(0));
+    code.call_args(services::NtCreateEvent, &[v(handle(1)), v(ALL_ACCESS), v(OA), v(1), v(1)]).store_eax(status(1));
+    code.call_args(services::NtCreateEvent, &[v(handle(2)), v(ALL_ACCESS), v(0), v(2), v(0)]).store_eax(status(2));
+    code.call_args(wait, &[m(handle(1)), v(0), v(ZERO)]).store_eax(status(3));
+    code.call_args(wait, &[m(handle(1)), v(0), v(ZERO)]).store_eax(status(4));
+    code.call_args(services::NtSetEvent, &[m(handle(0)), v(PREVIOUS)]).store_eax(status(5));
+    code.call_args(services::NtQueryEvent, &[m(handle(0)), v(0), v(QUERY), v(8), v(QUERY_LENGTH)]).store_eax(status(6));
+    code.call_args(wait, &[m(handle(0)), v(0), v(ZERO)]).store_eax(status(7));
+    code.call_args(wait, &[m(handle(0)), v(0), v(ZERO)]).store_eax(status(8));
+    code.call_args(services::NtResetEvent, &[m(handle(0)), v(PREVIOUS + 4)]).store_eax(status(9));
+    code.call_args(services::NtPulseEvent, &[m(handle(0)), v(PREVIOUS + 8)]).store_eax(status(10));
+    code.call_args(services::NtSetEvent, &[m(handle(1)), v(0)]).store_eax(status(11));
+    code.word(&[0xA1], handle(0)).store_eax(ANY).store_eax(ALL).store_eax(ALL + 4);
+    code.word(&[0xA1], handle(1)).store_eax(ANY + 4);
+    code.call_args(wait_many, &[v(2), v(ANY), v(1), v(0), v(ZERO)]).store_eax(status(12));
+    code.call_args(wait_many, &[v(2), v(ALL), v(0), v(0), v(ZERO)]).store_eax(status(13));
+    code.call_args(services::NtOpenEvent, &[v(handle(3)), v(2), v(OA)]).store_eax(status(14));
+    code.call_args(services::NtQueryEvent, &[m(handle(3)), v(0), v(QUERY), v(8), v(0)]).store_eax(status(15));
+    code.call_args(wait, &[m(handle(3)), v(0), v(ZERO)]).store_eax(status(16));
+    code.call_args(wait, &[v(0x1234), v(0), v(ZERO)]).store_eax(status(17));
+    code.call_args(wait_many, &[v(0), v(ANY), v(1), v(0), v(ZERO)]).store_eax(status(18));
+    code.call_args(wait, &[v(u32::MAX), v(0), v(ZERO)]).store_eax(status(19));
+    code.call_args(services::NtClearEvent, &[m(handle(3))]).store_eax(status(20));
+    // Then a wait without timeout on the named event, which the kernel sets.
+    code.word(&[0xC7, 0x05], READY).bytes(&1u32.to_le_bytes());
+    code.call_args(wait, &[m(handle(1)), v(0), v(0)]).store_eax(WAITED);
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "events.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the event test program did not {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(READY, "reach its last wait");
+    // SAFETY: as above. The program has time to block in its wait.
+    unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -50 * MS) };
+    assert_eq!(read(DONE), 0, "the wait without timeout returned before the event was set");
+    let object = ob::namespace().open(EVENT_NAME, None, Some(&ex::EVENT_TYPE), 0).expect("the named event");
+    let event = ob::downcast::<ex::Event>(&object).expect("an event");
+    assert_eq!(event.set(), 0, "the kernel sets the named event");
+    wait_for(DONE, "wake from its wait");
+    assert_eq!(event.state(), 0, "the wait it satisfied reset the synchronization event");
+    drop(event);
+    drop(object);
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..21).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!((statuses[0], statuses[1]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtCreateEvent, then named");
+    assert_eq!(statuses[2], STATUS_INVALID_PARAMETER, "no third kind of event");
+    assert_eq!((statuses[3], statuses[4]), (STATUS_WAIT_0, STATUS_TIMEOUT), "a synchronization event, once");
+    assert_eq!((statuses[5], read(PREVIOUS)), (STATUS_SUCCESS, 0), "NtSetEvent: it was not signaled");
+    assert_eq!(
+        (statuses[6], read(QUERY), read(QUERY + 4), read(QUERY_LENGTH)),
+        (STATUS_SUCCESS, 0, 1, 8),
+        "NtQueryEvent"
+    );
+    assert_eq!((statuses[7], statuses[8]), (STATUS_WAIT_0, STATUS_WAIT_0), "a notification event stays signaled");
+    assert_eq!((statuses[9], read(PREVIOUS + 4)), (STATUS_SUCCESS, 1), "NtResetEvent: it was");
+    assert_eq!((statuses[10], read(PREVIOUS + 8)), (STATUS_SUCCESS, 0), "NtPulseEvent");
+    assert_eq!(statuses[11], STATUS_SUCCESS, "NtSetEvent without the state before");
+    assert_eq!(statuses[12], NtStatus::wait(1), "WaitAny: the second, signaled");
+    assert_eq!(statuses[13], STATUS_INVALID_PARAMETER_MIX, "WaitAll: one object twice");
+    assert_eq!(statuses[14], STATUS_SUCCESS, "NtOpenEvent by its name");
+    assert_eq!((statuses[15], statuses[16]), (STATUS_ACCESS_DENIED, STATUS_ACCESS_DENIED), "neither query nor wait");
+    assert_eq!(statuses[17], STATUS_INVALID_HANDLE, "a bad handle");
+    assert_eq!(statuses[18], STATUS_INVALID_PARAMETER_1, "no object");
+    assert_eq!(statuses[19], STATUS_TIMEOUT, "the process itself, not ended");
+    assert_eq!(statuses[20], STATUS_SUCCESS, "NtClearEvent with EVENT_MODIFY_STATE");
+    assert_eq!(NtStatus(read(WAITED)), STATUS_WAIT_0, "the wait without timeout, ended by the kernel");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(
+        ob::namespace().open(EVENT_NAME, None, None, 0).is_err(),
+        "the named event goes with the process's handles"
+    );
+    log::info!(
+        "[smoke] Ex: events from user mode: NtCreateEvent, NtOpenEvent, NtSetEvent, NtResetEvent, NtClearEvent, \
+         NtPulseEvent, NtQueryEvent; waits: NtWaitForSingleObject, NtWaitForMultipleObjects, one woken by the kernel"
     );
 }
 
@@ -4956,7 +5769,10 @@ fn object_manager_self_test() {
         .expect("a directory")
         .entries();
     let names: alloc::vec::Vec<_> = types.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["Device", "Directory", "File", "Key", "Process", "Section", "SymbolicLink", "Thread", "Type"]);
+    assert_eq!(
+        names,
+        ["Device", "Directory", "Event", "File", "Key", "Port", "Process", "Section", "SymbolicLink", "Thread", "Type"]
+    );
 
     // A named section, two handle tables.
     let (first, second) = (HandleTable::new(), HandleTable::new());

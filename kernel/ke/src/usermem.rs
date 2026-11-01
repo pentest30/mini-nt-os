@@ -118,6 +118,16 @@ unsafe impl UserValue for abi::object::ObjectAttributes32 {
     const ALIGNMENT: usize = 4;
 }
 
+// SAFETY: two u32, any bit pattern valid.
+unsafe impl UserValue for abi::teb32::ClientId32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: five u32, any bit pattern valid.
+unsafe impl UserValue for abi::process::InitialTeb32 {
+    const ALIGNMENT: usize = 4;
+}
+
 // SAFETY: two u16 and a u32, any bit pattern valid.
 unsafe impl UserValue for abi::peb32::UnicodeString32 {
     const ALIGNMENT: usize = 4;

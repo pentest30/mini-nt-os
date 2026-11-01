@@ -39,6 +39,7 @@
 //! WI7e Ch.5 §Section Objects
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -110,6 +111,16 @@ pub struct ImageInfo {
     /// Pile de ses threads : taille réservée, taille commitée.
     pub stack_reserve: u64,
     pub stack_commit: u64,
+    /// `IMAGE_FILE_MACHINE_*`, et les `IMAGE_FILE_*` de l'en-tête du fichier.
+    pub machine: u16,
+    pub characteristics: u16,
+    /// `IMAGE_DLLCHARACTERISTICS_*` et `LoaderFlags` de l'en-tête optionnel.
+    pub dll_characteristics: u16,
+    pub loader_flags: u32,
+    /// Elle a du code : `SizeOfCode`, ou un point d'entrée.
+    pub contains_code: bool,
+    /// La taille de son fichier.
+    pub file_size: u64,
 }
 
 /// La disposition d'une image en mémoire, tirée de son PE.
@@ -153,6 +164,12 @@ impl ImageLayout {
             subsystem_version: (opt.major_subsystem_version, opt.minor_subsystem_version),
             stack_reserve: u64::from(opt.size_of_stack_reserve),
             stack_commit: u64::from(opt.size_of_stack_commit),
+            machine: header.machine,
+            characteristics: header.characteristics,
+            dll_characteristics: opt.dll_characteristics,
+            loader_flags: opt.loader_flags,
+            contains_code: opt.size_of_code != 0 || opt.address_of_entry_point != 0,
+            file_size: file.len() as u64,
         };
         let pages = size_of_image / PAGE;
         let mut copies = alloc::vec![(0, 0, size_of_headers)];
@@ -267,6 +284,9 @@ pub struct Section {
     size: u64,
     protect: PageProtect,
     source: Source,
+    /// Le chemin du fichier d'une image, s'il est connu : le nom du processus
+    /// qu'on en crée.
+    file_name: Option<String>,
     /// Les pages créées, par indice ; un verrou tournant, pris sous celui de
     /// la VAD par la faute de page.
     pages: KSpinLock<BTreeMap<u64, Pfn>>,
@@ -274,7 +294,17 @@ pub struct Section {
 
 impl Section {
     fn new(kind: SectionKind, size: u64, protect: PageProtect, source: Source) -> Arc<Self> {
-        Arc::new(Self { kind, size, protect, source, pages: KSpinLock::new(BTreeMap::new()) })
+        Self::named(kind, size, protect, source, None)
+    }
+
+    fn named(
+        kind: SectionKind,
+        size: u64,
+        protect: PageProtect,
+        source: Source,
+        file_name: Option<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self { kind, size, protect, source, file_name, pages: KSpinLock::new(BTreeMap::new()) })
     }
 
     /// Une section de `size` octets adossée au fichier d'échange : des pages
@@ -317,6 +347,23 @@ impl Section {
         let layout = ImageLayout::new(&file)?;
         let size = layout.info.size_of_image;
         Ok(Self::new(SectionKind::Image, size, PageProtect::EXECUTE_WRITECOPY, Source::Image { file, layout }))
+    }
+
+    /// Comme [`create_image`](Self::create_image), pour l'image du fichier
+    /// `file_name` (NtCreateSection), qui nommera le processus qu'on en crée.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn create_image_of(file: Arc<[u8]>, file_name: &str) -> Result<Arc<Self>, NtStatus> {
+        let layout = ImageLayout::new(&file)?;
+        let size = layout.info.size_of_image;
+        let source = Source::Image { file, layout };
+        Ok(Self::named(SectionKind::Image, size, PageProtect::EXECUTE_WRITECOPY, source, Some(file_name.into())))
+    }
+
+    /// Le chemin du fichier de l'image, s'il est connu.
+    pub fn file_name(&self) -> Option<&str> {
+        self.file_name.as_deref()
     }
 
     pub fn kind(&self) -> SectionKind {
@@ -451,8 +498,15 @@ mod tests {
             subsystem_version: (4, 0),
             stack_reserve: 0x10_0000,
             stack_commit: 0x1000,
+            machine: 0x14C,
+            characteristics: layout.info.characteristics,
+            dll_characteristics: 0,
+            loader_flags: 0,
+            contains_code: true,
+            file_size: image().len() as u64,
         };
         assert_eq!(layout.info, info);
+        assert_ne!(info.characteristics & 0x0002, 0, "an executable image");
         // Headers, .text (two pages, up to .data), .data, .bss (two pages).
         assert_eq!(layout.protects, [(1, RO), (2, RX), (1, WC), (2, WC)]);
     }
