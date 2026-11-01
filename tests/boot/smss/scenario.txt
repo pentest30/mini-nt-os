@@ -19,8 +19,9 @@ expect = [m4] SMSS.EXE under the system DLL: exit status
 # csrss.exe, the Win32 subsystem it starts next, creates the event csrss
 # signals once connected (Ex), creates and resumes its process (Ps, Mm),
 # and waits; csrss loads its DLLs, protects its process with a DACL for its
-# token's user (Se), then CsrServerInitialization stops at its shared
-# section (SharedSection=, a based section: Mm, M5).
+# token's user (Se), creates its shared section (SharedSection=, based and
+# reserved: Mm) and its heap, loads basesrv, then fails to load winsrv: a
+# DLL of its imports is not on the disk (advapi32_vista.dll, for rpcrt4).
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -44,7 +45,8 @@ expect = [m4]   NtReplyWaitReceivePort (0x00cb): 2 calls, the first did not retu
 # csrss: the size of TokenUser, then TokenUser, and the DACL of its process.
 expect = [m4]   NtQueryInformationToken (0x00a3): 2 calls, the first returned 0xc0000023
 expect = [m4]   NtSetSecurityObject (0x00f6): 1 calls, the first returned 0x00000000
-expect = CSRSRV:CsrServerInitialization: CsrParseServerCommandLine failed
+expect = CSRSS: *** Failed loading ServerDll=winsrv (Status == 0xc0000135)
+expect = LdrpMapDll failed  with status c0000135 for dll advapi32_vista.dll
 expect = [m4] SMSS.EXE created csrss.exe (PID
 expect = [m4] Environment: 6 of 6 variables written
 expect = [m4] \KnownDlls: 21 sections
@@ -73,3 +75,5 @@ forbid = Retrieving token handle failed
 forbid = SMSS: Session space creation failed
 forbid = SMSS: Load of WIN32K failed
 forbid = CsrSetProcessSecurity failed
+forbid = Invalid syntax for SharedSection
+forbid = Failed loading ServerDll=basesrv

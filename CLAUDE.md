@@ -184,8 +184,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtOpenProcessToken(Ex), NtOpenThreadToken(Ex) (`STATUS_NO_TOKEN`), NtQueryInformationToken,
   NtAdjustPrivilegesToken, NtSetSecurityObject, NtQuerySecurityObject ; NtSetSystemInformation (session de `smss`,
   `ps::session` ; win32k « chargé », il fait partie du noyau) sous `SeLoadDriverPrivilege`. Contrôle d'accès
-  permissif, contrôle des privilèges appliqué. `csrss` protège son processus, puis s'arrête à sa section partagée
-  (`SEC_BASED | SEC_RESERVE`) : Mm est le prochain composant.
+  permissif, contrôle des privilèges appliqué. `csrss` protège son processus, puis s'arrête à sa section partagée.
+  M5, étape 3 (Mm) : sections `SEC_RESERVE` (l'engagement est celui de la section, vu de toutes ses vues :
+  `Section::commit`, `VadNode::page_state`, MEM_COMMIT dans une vue) et `SEC_BASED` (une adresse prise à la
+  création sous `0x7F7F0000`, la même dans chaque processus) ; NtCreateSection et NtQuerySection les acceptent.
+  `csrss` met sa section partagée en `0x7F6F0000`, charge `basesrv`, puis ne trouve pas `advapi32_vista.dll` (imports
+  de `winsrv`) : le disque de démarrage est le prochain point.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
