@@ -236,6 +236,14 @@ pub(super) fn nt_adjust_privileges_token(arguments: &[u32]) -> NtStatus {
     status(adjust())
 }
 
+/// SeSinglePrivilegeCheck : le privilège `privilege` (`SE_*_PRIVILEGE`) est
+/// actif dans le jeton primaire du processus courant (aucun thread n'emprunte
+/// d'identité). Le contrôle des privilèges s'applique : l'appelant active
+/// d'abord celui qu'il lui faut, comme `smss` le fait.
+pub(super) fn privilege_enabled(privilege: u32) -> bool {
+    super::current_process().primary_token().is_privilege_enabled(Luid(u64::from(privilege)))
+}
+
 /// SeSetSecurityAccessMask et SeQuerySecurityAccessMask : les droits que
 /// demande l'écriture (`write`) ou la lecture des parties `information`
 /// d'un descripteur.

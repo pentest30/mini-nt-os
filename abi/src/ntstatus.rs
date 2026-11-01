@@ -80,6 +80,7 @@ pub const STATUS_BUFFER_TOO_SMALL: NtStatus = NtStatus(0xC000_0023);
 pub const STATUS_CONFLICTING_ADDRESSES: NtStatus = NtStatus(0xC000_0018);
 pub const STATUS_NOT_MAPPED_VIEW: NtStatus = NtStatus(0xC000_0019);
 pub const STATUS_UNABLE_TO_FREE_VM: NtStatus = NtStatus(0xC000_001A);
+pub const STATUS_ALREADY_COMMITTED: NtStatus = NtStatus(0xC000_0021);
 pub const STATUS_UNABLE_TO_DELETE_SECTION: NtStatus = NtStatus(0xC000_001B);
 pub const STATUS_INVALID_SYSTEM_SERVICE: NtStatus = NtStatus(0xC000_001C);
 pub const STATUS_ILLEGAL_INSTRUCTION: NtStatus = NtStatus(0xC000_001D);

@@ -3638,12 +3638,17 @@ fn port_self_test() {
 /// DACL set on the process (NtSetSecurityObject on NtCurrentProcess()),
 /// read back by NtQuerySecurityObject, its size first; the owner, which it
 /// does not have; what must fail: another revision, an owner missing, a
-/// token handle without WRITE_DAC, a SACL.
+/// token handle without WRITE_DAC, a SACL. The classes of
+/// NtSetSystemInformation smss calls under SeLoadDriverPrivilege: refused
+/// before the privilege is enabled; then the size checked, no session to
+/// leave (the test program is not the session leader, which smss must be: it
+/// creates none), win32k "loaded", and only win32k.
 fn security_self_test() {
     use abi::ntstatus::{
-        NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_HANDLE, STATUS_INVALID_INFO_CLASS,
-        STATUS_INVALID_OWNER, STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED, STATUS_NO_TOKEN, STATUS_SUCCESS,
-        STATUS_UNKNOWN_REVISION, STATUS_WAIT_0,
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_TOO_SMALL, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE,
+        STATUS_INVALID_INFO_CLASS, STATUS_INVALID_OWNER, STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED,
+        STATUS_NO_TOKEN, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS, STATUS_UNABLE_TO_FREE_VM, STATUS_UNKNOWN_REVISION,
+        STATUS_WAIT_0,
     };
     use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
     use abi::security::{
@@ -3652,6 +3657,9 @@ fn security_self_test() {
         SE_SYNC_AGENT_PRIVILEGE, TOKEN_SOURCE, TOKEN_STATISTICS, TOKEN_USER,
     };
     use abi::services;
+    use abi::system_information::{
+        SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
+    };
     use alloc::sync::Arc;
     use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
@@ -3677,6 +3685,11 @@ fn security_self_test() {
     const BAD_SD: u32 = DATA + 0x360;
     const SD_OUT: u32 = DATA + 0x400; // 0x80 bytes
     const SD_OUT2: u32 = DATA + 0x480; // 0x40 bytes
+    const WIN32K_US: u32 = DATA + 0x500; // UNICODE_STRING
+    const OTHER_US: u32 = DATA + 0x508; // UNICODE_STRING
+    const WIN32K_NAME: u32 = DATA + 0x510;
+    const OTHER_NAME: u32 = DATA + 0x580;
+    const SESSION: u32 = DATA + 0x5F0;
     const DONE: u32 = DATA + 0x7FC;
     // As CsrSetProcessSecurity: what its user may do to it.
     const CSRSS_ACCESS: u32 = 0x0002_0C79;
@@ -3703,6 +3716,16 @@ fn security_self_test() {
     put(SD, header.as_bytes());
     put(ACL, dacl.bytes());
     put(BAD_SD, SecurityDescriptor32 { revision: 2, ..header }.as_bytes());
+    for (us, at, name) in [
+        (WIN32K_US, WIN32K_NAME, "\\SystemRoot\\System32\\win32k.sys"),
+        (OTHER_US, OTHER_NAME, "\\SystemRoot\\System32\\WIN32K.SYS"),
+    ] {
+        let units: alloc::vec::Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        put(at, &units);
+        let length = (units.len() as u16).to_le_bytes();
+        put(us, &[length[0], length[1], length[0], length[1]]);
+        put(us + 4, &at.to_le_bytes());
+    }
 
     let (v, m) = (Arg::Value, Arg::Memory);
     let status = |i: u32| STATUS + 4 * i;
@@ -3721,6 +3744,8 @@ fn security_self_test() {
     code.call_args(adjust, &[m(handle(0)), v(0), v(NEW_STATE), v(16), v(PREVIOUS), v(length(4))]).store_eax(status(6));
     code.call_args(services::NtOpenProcessTokenEx, &[v(me), v(ADJUST_AND_QUERY), v(0), v(handle(1))])
         .store_eax(status(7));
+    let set_system = services::NtSetSystemInformation;
+    code.call_args(set_system, &[v(SYSTEM_SESSION_CREATE), v(SESSION), v(4)]).store_eax(status(25));
     code.call_args(adjust, &[m(handle(1)), v(0), v(NEW_STATE), v(16), v(PREVIOUS), v(length(5))]).store_eax(status(8));
     code.call_args(adjust, &[m(handle(1)), v(0), v(NEW_STATE), v(16), v(PREVIOUS2), v(length(6))]).store_eax(status(9));
     code.call_args(adjust, &[m(handle(1)), v(0), v(NEW_STATE2), v(4), v(PREVIOUS3), v(length(7))])
@@ -3743,6 +3768,11 @@ fn security_self_test() {
     code.call_args(set_security, &[v(me), v(OWNER_SECURITY_INFORMATION), v(SD)]).store_eax(status(20));
     code.call_args(set_security, &[m(handle(0)), v(DACL_SECURITY_INFORMATION), v(SD)]).store_eax(status(21));
     code.call_args(set_security, &[v(me), v(SACL_SECURITY_INFORMATION), v(SD)]).store_eax(status(22));
+    code.call_args(set_system, &[v(SYSTEM_SESSION_CREATE), v(SESSION), v(3)]).store_eax(status(26));
+    code.call_args(set_system, &[v(SYSTEM_SESSION_DETACH), v(SESSION), v(4)]).store_eax(status(27));
+    let extend = SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION;
+    code.call_args(set_system, &[v(extend), v(WIN32K_US), v(8)]).store_eax(status(28));
+    code.call_args(set_system, &[v(extend), v(OTHER_US), v(8)]).store_eax(status(29));
     code.call_args(services::NtClose, &[m(handle(0))]).store_eax(status(23));
     code.call_args(services::NtClose, &[m(handle(1))]).store_eax(status(24));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
@@ -3778,7 +3808,7 @@ fn security_self_test() {
         unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
     }
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..25).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..30).map(|i| NtStatus(read(status(i)))).collect();
     // The token: a copy of System's.
     let token = process.primary_token();
     let system_token = system.primary_token();
@@ -3828,6 +3858,11 @@ fn security_self_test() {
     assert_eq!(statuses[22], STATUS_ACCESS_DENIED, "no ACCESS_SYSTEM_SECURITY");
     assert_eq!((statuses[23], statuses[24]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtClose");
     assert_eq!(process.security_descriptor().as_deref(), Some(&expected[..]), "unchanged by the failures");
+    assert_eq!(statuses[25], STATUS_PRIVILEGE_NOT_HELD, "SystemSessionCreate before SeLoadDriverPrivilege");
+    assert_eq!(statuses[26], STATUS_INFO_LENGTH_MISMATCH, "SystemSessionCreate: a ULONG");
+    assert_eq!(statuses[27], STATUS_UNABLE_TO_FREE_VM, "SystemSessionDetach: in no session");
+    assert_eq!(statuses[28], STATUS_SUCCESS, "SystemExtendServiceTableInformation: win32k");
+    assert_eq!(statuses[29], STATUS_PRIVILEGE_NOT_HELD, "only win32k, by its exact name");
     drop((token, system_token));
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
@@ -3846,7 +3881,7 @@ fn security_self_test() {
     log::info!(
         "[smoke] Se: tokens from user mode: NtOpenProcessToken(Ex), NtQueryInformationToken, \
          NtAdjustPrivilegesToken, NtOpenThreadToken(Ex) (no token); NtSetSecurityObject and NtQuerySecurityObject \
-         on a process"
+         on a process; NtSetSystemInformation under SeLoadDriverPrivilege"
     );
 }
 

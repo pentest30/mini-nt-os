@@ -10,6 +10,7 @@
 //!   projetées dans chaque processus.
 //! - [`process_parameters`] : les paramètres d'un processus
 //!   (RTL_USER_PROCESS_PARAMETERS), que le noyau écrit dans ceux qu'il crée.
+//! - [`session`] : les sessions que crée `smss` (MmSessionCreate).
 //! - [`cid`] : la table des PID et des TID.
 //!
 //! EPROCESS et ETHREAD sont des structures Rust sans contrainte de layout ;
@@ -34,6 +35,7 @@ pub mod loader;
 pub mod nls;
 pub mod process_parameters;
 pub mod rundown;
+pub mod session;
 pub mod system_dll;
 
 pub use eprocess::{child_processes, create_process, lookup_process, system_process, EProcess, PROCESS_TYPE};
@@ -46,6 +48,7 @@ pub use exit::{
     wait_for_reaper,
 };
 pub use process_parameters::ProcessParameters;
+pub use session::{create_session, detach_session};
 
 use alloc::boxed::Box;
 use alloc::sync::Weak;

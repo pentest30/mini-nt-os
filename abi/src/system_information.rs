@@ -13,6 +13,18 @@ pub const SYSTEM_BASIC_INFORMATION: u32 = 0;
 /// feature bits of the processors.
 pub const SYSTEM_PROCESSOR_INFORMATION: u32 = 1;
 
+/// SystemExtendServiceTableInformation (NtSetSystemInformation): load
+/// win32k, whose UNICODE_STRING name it is given.
+pub const SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION: u32 = 38;
+
+/// SystemSessionCreate (NtSetSystemInformation): a new session, the caller
+/// in it; its ID goes back in the buffer.
+pub const SYSTEM_SESSION_CREATE: u32 = 47;
+
+/// SystemSessionDetach (NtSetSystemInformation): the caller leaves the
+/// session it created.
+pub const SYSTEM_SESSION_DETACH: u32 = 48;
+
 /// PROCESSOR_ARCHITECTURE_INTEL: x86.
 pub const PROCESSOR_ARCHITECTURE_INTEL: u16 = 0;
 
