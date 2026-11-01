@@ -148,11 +148,14 @@ fn page_align_up(addr: u64) -> Option<u64> {
 }
 
 /// Les pages qui couvrent `[base, base + size)`, non vide et dans l'espace
-/// utilisateur.
+/// utilisateur. Une plage désignée peut commencer sous [`USER_VA_START`],
+/// jusqu'à la page 0, comme sous XP : `RtlpInitEnvironment` réserve ainsi le
+/// premier Mio d'un sous-système (à partir de l'adresse 4). Une plage sans
+/// base n'y est jamais placée.
 fn user_range(base: u64, size: u64) -> Result<(u64, u64), NtStatus> {
     let start = base & !(PAGE_SIZE - 1);
     let end = base.checked_add(size).and_then(page_align_up).ok_or(STATUS_INVALID_PARAMETER)?;
-    if size == 0 || start < USER_VA_START || end > USER_VA_END {
+    if size == 0 || end > USER_VA_END {
         return Err(STATUS_INVALID_PARAMETER);
     }
     Ok((start, end))
@@ -931,13 +934,27 @@ mod tests {
         let mut vad = VadTree::new();
         let bad = PageProtect::READWRITE | PageProtect::EXECUTE_READ;
         assert_eq!(allocate(&mut vad, None, 0, P, RESERVE, bad), Err(STATUS_INVALID_PAGE_PROTECTION));
-        assert_eq!(allocate(&mut vad, None, P, P, RESERVE, rw()), Err(STATUS_INVALID_PARAMETER), "below 64 KiB");
         let over_the_top = allocate(&mut vad, None, USER_VA_END - P, 2 * P, RESERVE, rw());
         assert_eq!(over_the_top, Err(STATUS_INVALID_PARAMETER));
         assert_eq!(allocate(&mut vad, None, u64::MAX - P, 2 * P, RESERVE, rw()), Err(STATUS_INVALID_PARAMETER));
         assert_eq!(allocate(&mut vad, None, 0, P, AllocType::MEM_RESET, rw()), Err(STATUS_INVALID_PARAMETER));
         assert_eq!(allocate(&mut vad, None, 0, USER_VA_END, RESERVE, rw()), Err(STATUS_NO_MEMORY), "too big");
         assert!(vad.is_empty());
+    }
+
+    #[test]
+    fn a_given_base_may_be_below_64_kib_but_a_free_range_never_is() {
+        // RtlpInitEnvironment: the first MiB of a subsystem, from address 4.
+        const MIB: u64 = 0x10_0000;
+        let mut vad = VadTree::new();
+        assert_eq!(allocate(&mut vad, None, 4, MIB - 256, RESERVE, rw()), Ok(0));
+        let node = vad.find(0).unwrap();
+        assert_eq!((node.start, node.end), (0, MIB), "pages 0 to 255");
+        assert_eq!(allocate(&mut vad, None, 0, P, RESERVE, rw()), Ok(MIB), "a free range above it");
+        assert_eq!(allocate(&mut vad, None, P, P, RESERVE, rw()), Err(STATUS_CONFLICTING_ADDRESSES));
+        assert_eq!(free(&mut vad, None, 0, 0, FreeType::MEM_RELEASE), Ok((0, MIB)));
+        let mut empty = VadTree::new();
+        assert_eq!(allocate(&mut empty, None, 0, P, RESERVE, rw()), Ok(USER_VA_START), "never below 64 KiB");
     }
 
     #[test]
