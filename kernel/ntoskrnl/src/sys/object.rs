@@ -84,9 +84,10 @@ pub(super) fn open_by_name(out: u32, desired: u32, attributes: u32, expected: &o
 }
 
 /// Nomme `object` d'après les attributs en `attributes` (`OBJ_PERMANENT`,
-/// `OBJ_OPENIF`) et met son handle en `out`, 0 d'abord. Rend le statut
-/// d'ObInsertObject : `STATUS_OBJECT_NAME_EXISTS` avec `OBJ_OPENIF` et un nom
-/// déjà pris par un objet du même type.
+/// `OBJ_OPENIF`), qui peuvent manquer (adresse nulle : un objet sans nom,
+/// comme ObCreateObject le permet), et met son handle en `out`, 0 d'abord.
+/// Rend le statut d'ObInsertObject : `STATUS_OBJECT_NAME_EXISTS` avec
+/// `OBJ_OPENIF` et un nom déjà pris par un objet du même type.
 pub(super) fn create_named(
     out: u32,
     desired: u32,
@@ -95,7 +96,10 @@ pub(super) fn create_named(
 ) -> Result<NtStatus, NtStatus> {
     let out = ke::usermem::UserPtr::<u32>::new(out);
     out.write(&0)?;
-    let captured = capture_attributes(attributes)?;
+    let captured = match attributes {
+        0 => Attributes { root: None, name: None, attributes: 0 },
+        at => capture_attributes(at)?,
+    };
     let process = super::current_process();
     let (handle, status) = ob::insert_object(
         ob::namespace(),

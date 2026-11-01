@@ -21,6 +21,7 @@
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
 pub mod apc;
+mod event;
 pub mod exceptions;
 mod file;
 pub mod gates;
@@ -73,9 +74,11 @@ pub enum Completion {
 /// `(services::NtNom, Handler::…(module::handler)),`.
 pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
+    (services::NtClearEvent, Handler::Status(event::nt_clear_event)),
     (services::NtClose, Handler::Status(object::nt_close)),
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
     (services::NtCreateDirectoryObject, Handler::Status(object::nt_create_directory_object)),
+    (services::NtCreateEvent, Handler::Status(event::nt_create_event)),
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
     (services::NtCreateKey, Handler::Status(registry::nt_create_key)),
     (services::NtCreateSection, Handler::Status(section::nt_create_section)),
@@ -89,12 +92,15 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
+    (services::NtOpenEvent, Handler::Status(event::nt_open_event)),
     (services::NtOpenFile, Handler::Status(file::nt_open_file)),
     (services::NtOpenKey, Handler::Status(registry::nt_open_key)),
     (services::NtOpenSection, Handler::Status(section::nt_open_section)),
     (services::NtOpenSymbolicLinkObject, Handler::Status(object::nt_open_symbolic_link_object)),
     (services::NtProtectVirtualMemory, Handler::Status(memory::nt_protect_virtual_memory)),
+    (services::NtPulseEvent, Handler::Status(event::nt_pulse_event)),
     (services::NtQueryAttributesFile, Handler::Status(file::nt_query_attributes_file)),
+    (services::NtQueryEvent, Handler::Status(event::nt_query_event)),
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),
     (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
@@ -105,11 +111,15 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtReadFile, Handler::Status(file::nt_read_file)),
+    (services::NtResetEvent, Handler::Status(event::nt_reset_event)),
+    (services::NtSetEvent, Handler::Status(event::nt_set_event)),
     (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
     (services::NtSetValueKey, Handler::Status(registry::nt_set_value_key)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
+    (services::NtWaitForMultipleObjects, Handler::Status(wait::nt_wait_for_multiple_objects)),
+    (services::NtWaitForSingleObject, Handler::Status(wait::nt_wait_for_single_object)),
     (services::NtWriteFile, Handler::Status(file::nt_write_file)),
 ];
 

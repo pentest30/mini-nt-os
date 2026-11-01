@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 39 | 296 |
+| ntoskrnl | 48 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -41,7 +41,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0017` | `NtCancelDeviceWakeupRequest` | 1 |  |
 | `0x0018` | `NtCancelIoFile` | 2 |  |
 | `0x0019` | `NtCancelTimer` | 2 |  |
-| `0x001a` | `NtClearEvent` | 1 |  |
+| `0x001a` | `NtClearEvent` | 1 | ✅ |
 | `0x001b` | `NtClose` | 1 | ✅ |
 | `0x001c` | `NtCloseObjectAuditAlarm` | 3 |  |
 | `0x001d` | `NtCompactKeys` | 2 |  |
@@ -52,7 +52,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0022` | `NtContinue` | 2 | ✅ |
 | `0x0023` | `NtCreateDebugObject` | 4 |  |
 | `0x0024` | `NtCreateDirectoryObject` | 3 | ✅ |
-| `0x0025` | `NtCreateEvent` | 5 |  |
+| `0x0025` | `NtCreateEvent` | 5 | ✅ |
 | `0x0026` | `NtCreateEventPair` | 3 |  |
 | `0x0027` | `NtCreateFile` | 11 | ✅ |
 | `0x0028` | `NtCreateIoCompletion` | 4 |  |
@@ -135,7 +135,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0075` | `NtNotifyChangeKey` | 10 |  |
 | `0x0076` | `NtNotifyChangeMultipleKeys` | 12 |  |
 | `0x0077` | `NtOpenDirectoryObject` | 3 | ✅ |
-| `0x0078` | `NtOpenEvent` | 3 |  |
+| `0x0078` | `NtOpenEvent` | 3 | ✅ |
 | `0x0079` | `NtOpenEventPair` | 3 |  |
 | `0x007a` | `NtOpenFile` | 6 | ✅ |
 | `0x007b` | `NtOpenIoCompletion` | 3 |  |
@@ -159,7 +159,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x008d` | `NtPrivilegeObjectAuditAlarm` | 6 |  |
 | `0x008e` | `NtPrivilegedServiceAuditAlarm` | 5 |  |
 | `0x008f` | `NtProtectVirtualMemory` | 5 | ✅ |
-| `0x0090` | `NtPulseEvent` | 2 |  |
+| `0x0090` | `NtPulseEvent` | 2 | ✅ |
 | `0x0091` | `NtQueryAttributesFile` | 2 | ✅ |
 | `0x0092` | `NtQueryBootEntryOrder` | 2 |  |
 | `0x0093` | `NtQueryBootOptions` | 2 |  |
@@ -170,7 +170,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0098` | `NtQueryDirectoryObject` | 7 |  |
 | `0x0099` | `NtQueryDriverEntryOrder` | 2 |  |
 | `0x009a` | `NtQueryEaFile` | 9 |  |
-| `0x009b` | `NtQueryEvent` | 5 |  |
+| `0x009b` | `NtQueryEvent` | 5 | ✅ |
 | `0x009c` | `NtQueryFullAttributesFile` | 2 | ✅ |
 | `0x009d` | `NtQueryInformationAtom` | 5 |  |
 | `0x009e` | `NtQueryInformationFile` | 5 | ✅ |
@@ -225,7 +225,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00cf` | `NtRequestPort` | 2 |  |
 | `0x00d0` | `NtRequestWaitReplyPort` | 3 |  |
 | `0x00d1` | `NtRequestWakeupLatency` | 1 |  |
-| `0x00d2` | `NtResetEvent` | 2 |  |
+| `0x00d2` | `NtResetEvent` | 2 | ✅ |
 | `0x00d3` | `NtResetWriteWatch` | 3 |  |
 | `0x00d4` | `NtRestoreKey` | 3 |  |
 | `0x00d5` | `NtResumeProcess` | 1 |  |
@@ -243,7 +243,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00e1` | `NtSetDefaultUILanguage` | 1 |  |
 | `0x00e2` | `NtSetDriverEntryOrder` | 2 |  |
 | `0x00e3` | `NtSetEaFile` | 4 |  |
-| `0x00e4` | `NtSetEvent` | 2 |  |
+| `0x00e4` | `NtSetEvent` | 2 | ✅ |
 | `0x00e5` | `NtSetEventBoostPriority` | 1 |  |
 | `0x00e6` | `NtSetHighEventPair` | 1 |  |
 | `0x00e7` | `NtSetHighWaitLowEventPair` | 1 |  |
@@ -295,8 +295,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0115` | `NtUnmapViewOfSection` | 2 | ✅ |
 | `0x0116` | `NtVdmControl` | 2 |  |
 | `0x0117` | `NtWaitForDebugEvent` | 4 |  |
-| `0x0118` | `NtWaitForMultipleObjects` | 5 |  |
-| `0x0119` | `NtWaitForSingleObject` | 3 |  |
+| `0x0118` | `NtWaitForMultipleObjects` | 5 | ✅ |
+| `0x0119` | `NtWaitForSingleObject` | 3 | ✅ |
 | `0x011a` | `NtWaitHighEventPair` | 1 |  |
 | `0x011b` | `NtWaitLowEventPair` | 1 |  |
 | `0x011c` | `NtWriteFile` | 9 | ✅ |

@@ -282,6 +282,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &io_manager::FILE_TYPE,
         &io_manager::DEVICE_TYPE,
         &cm::KEY_TYPE,
+        &ex::EVENT_TYPE,
     ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
@@ -342,6 +343,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     file_self_test();
     file_write_self_test();
     section_service_self_test();
+    event_service_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -3162,6 +3164,177 @@ fn file_write_self_test() {
     );
 }
 
+/// The events of Ex and the waits from user mode (`sys::event`, `sys::wait`,
+/// M5): a notification event without attributes and a named
+/// synchronization event, set, reset, pulsed and queried, with the state
+/// before; a wait that a synchronization event satisfies once; WaitAny on
+/// two events, WaitAll on one event twice; the named event opened again
+/// without the right to query or wait; a bad handle, no object, the process
+/// itself. Then a wait without timeout, which the kernel ends by setting the
+/// event by its name.
+fn event_service_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_1,
+        STATUS_INVALID_PARAMETER_MIX, STATUS_SUCCESS, STATUS_TIMEOUT, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 24 statuses
+    const HANDLE: u32 = DATA + 0x60; // 8 handles
+    const PREVIOUS: u32 = DATA + 0x80; // 4 states
+    const QUERY: u32 = DATA + 0x90; // EVENT_BASIC_INFORMATION
+    const QUERY_LENGTH: u32 = DATA + 0x98;
+    const ZERO: u32 = DATA + 0xA0; // a timeout of 0
+    const ANY: u32 = DATA + 0xB0; // 2 handles
+    const ALL: u32 = DATA + 0xB8; // 2 handles
+    const OA: u32 = DATA + 0xC0;
+    const US: u32 = DATA + 0xD8;
+    const NAME: u32 = DATA + 0xE0;
+    const READY: u32 = DATA + 0x1F4;
+    const WAITED: u32 = DATA + 0x1F8;
+    const DONE: u32 = DATA + 0x1FC;
+    const EVENT_NAME: &str = "\\BaseNamedObjects\\MinoEvent";
+    const ALL_ACCESS: u32 = 0x001F_0003;
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let units: alloc::vec::Vec<u8> = EVENT_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    data[(NAME - DATA) as usize..][..units.len()].copy_from_slice(&units);
+    let length = units.len() as u16;
+    let us = (US - DATA) as usize;
+    data[us..us + 2].copy_from_slice(&length.to_le_bytes());
+    data[us + 2..us + 4].copy_from_slice(&length.to_le_bytes());
+    data[us + 4..us + 8].copy_from_slice(&NAME.to_le_bytes());
+    let oa = (OA - DATA) as usize;
+    data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+    data[oa + 8..oa + 12].copy_from_slice(&US.to_le_bytes());
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let handle = |i: u32| HANDLE + 4 * i;
+    let status = |i: u32| STATUS + 4 * i;
+    let mut code = Code::new();
+    let wait = services::NtWaitForSingleObject;
+    let wait_many = services::NtWaitForMultipleObjects;
+    code.call_args(services::NtCreateEvent, &[v(handle(0)), v(ALL_ACCESS), v(0), v(0), v(0)]).store_eax(status(0));
+    code.call_args(services::NtCreateEvent, &[v(handle(1)), v(ALL_ACCESS), v(OA), v(1), v(1)]).store_eax(status(1));
+    code.call_args(services::NtCreateEvent, &[v(handle(2)), v(ALL_ACCESS), v(0), v(2), v(0)]).store_eax(status(2));
+    code.call_args(wait, &[m(handle(1)), v(0), v(ZERO)]).store_eax(status(3));
+    code.call_args(wait, &[m(handle(1)), v(0), v(ZERO)]).store_eax(status(4));
+    code.call_args(services::NtSetEvent, &[m(handle(0)), v(PREVIOUS)]).store_eax(status(5));
+    code.call_args(services::NtQueryEvent, &[m(handle(0)), v(0), v(QUERY), v(8), v(QUERY_LENGTH)]).store_eax(status(6));
+    code.call_args(wait, &[m(handle(0)), v(0), v(ZERO)]).store_eax(status(7));
+    code.call_args(wait, &[m(handle(0)), v(0), v(ZERO)]).store_eax(status(8));
+    code.call_args(services::NtResetEvent, &[m(handle(0)), v(PREVIOUS + 4)]).store_eax(status(9));
+    code.call_args(services::NtPulseEvent, &[m(handle(0)), v(PREVIOUS + 8)]).store_eax(status(10));
+    code.call_args(services::NtSetEvent, &[m(handle(1)), v(0)]).store_eax(status(11));
+    code.word(&[0xA1], handle(0)).store_eax(ANY).store_eax(ALL).store_eax(ALL + 4);
+    code.word(&[0xA1], handle(1)).store_eax(ANY + 4);
+    code.call_args(wait_many, &[v(2), v(ANY), v(1), v(0), v(ZERO)]).store_eax(status(12));
+    code.call_args(wait_many, &[v(2), v(ALL), v(0), v(0), v(ZERO)]).store_eax(status(13));
+    code.call_args(services::NtOpenEvent, &[v(handle(3)), v(2), v(OA)]).store_eax(status(14));
+    code.call_args(services::NtQueryEvent, &[m(handle(3)), v(0), v(QUERY), v(8), v(0)]).store_eax(status(15));
+    code.call_args(wait, &[m(handle(3)), v(0), v(ZERO)]).store_eax(status(16));
+    code.call_args(wait, &[v(0x1234), v(0), v(ZERO)]).store_eax(status(17));
+    code.call_args(wait_many, &[v(0), v(ANY), v(1), v(0), v(ZERO)]).store_eax(status(18));
+    code.call_args(wait, &[v(u32::MAX), v(0), v(ZERO)]).store_eax(status(19));
+    code.call_args(services::NtClearEvent, &[m(handle(3))]).store_eax(status(20));
+    // Then a wait without timeout on the named event, which the kernel sets.
+    code.word(&[0xC7, 0x05], READY).bytes(&1u32.to_le_bytes());
+    code.call_args(wait, &[m(handle(1)), v(0), v(0)]).store_eax(WAITED);
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "events.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the event test program did not {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(READY, "reach its last wait");
+    // SAFETY: as above. The program has time to block in its wait.
+    unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -50 * MS) };
+    assert_eq!(read(DONE), 0, "the wait without timeout returned before the event was set");
+    let object = ob::namespace().open(EVENT_NAME, None, Some(&ex::EVENT_TYPE), 0).expect("the named event");
+    let event = ob::downcast::<ex::Event>(&object).expect("an event");
+    assert_eq!(event.set(), 0, "the kernel sets the named event");
+    wait_for(DONE, "wake from its wait");
+    assert_eq!(event.state(), 0, "the wait it satisfied reset the synchronization event");
+    drop(event);
+    drop(object);
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..21).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!((statuses[0], statuses[1]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtCreateEvent, then named");
+    assert_eq!(statuses[2], STATUS_INVALID_PARAMETER, "no third kind of event");
+    assert_eq!((statuses[3], statuses[4]), (STATUS_WAIT_0, STATUS_TIMEOUT), "a synchronization event, once");
+    assert_eq!((statuses[5], read(PREVIOUS)), (STATUS_SUCCESS, 0), "NtSetEvent: it was not signaled");
+    assert_eq!(
+        (statuses[6], read(QUERY), read(QUERY + 4), read(QUERY_LENGTH)),
+        (STATUS_SUCCESS, 0, 1, 8),
+        "NtQueryEvent"
+    );
+    assert_eq!((statuses[7], statuses[8]), (STATUS_WAIT_0, STATUS_WAIT_0), "a notification event stays signaled");
+    assert_eq!((statuses[9], read(PREVIOUS + 4)), (STATUS_SUCCESS, 1), "NtResetEvent: it was");
+    assert_eq!((statuses[10], read(PREVIOUS + 8)), (STATUS_SUCCESS, 0), "NtPulseEvent");
+    assert_eq!(statuses[11], STATUS_SUCCESS, "NtSetEvent without the state before");
+    assert_eq!(statuses[12], NtStatus::wait(1), "WaitAny: the second, signaled");
+    assert_eq!(statuses[13], STATUS_INVALID_PARAMETER_MIX, "WaitAll: one object twice");
+    assert_eq!(statuses[14], STATUS_SUCCESS, "NtOpenEvent by its name");
+    assert_eq!((statuses[15], statuses[16]), (STATUS_ACCESS_DENIED, STATUS_ACCESS_DENIED), "neither query nor wait");
+    assert_eq!(statuses[17], STATUS_INVALID_HANDLE, "a bad handle");
+    assert_eq!(statuses[18], STATUS_INVALID_PARAMETER_1, "no object");
+    assert_eq!(statuses[19], STATUS_TIMEOUT, "the process itself, not ended");
+    assert_eq!(statuses[20], STATUS_SUCCESS, "NtClearEvent with EVENT_MODIFY_STATE");
+    assert_eq!(NtStatus(read(WAITED)), STATUS_WAIT_0, "the wait without timeout, ended by the kernel");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(
+        ob::namespace().open(EVENT_NAME, None, None, 0).is_err(),
+        "the named event goes with the process's handles"
+    );
+    log::info!(
+        "[smoke] Ex: events from user mode: NtCreateEvent, NtOpenEvent, NtSetEvent, NtResetEvent, NtClearEvent, \
+         NtPulseEvent, NtQueryEvent; waits: NtWaitForSingleObject, NtWaitForMultipleObjects, one woken by the kernel"
+    );
+}
+
 /// The section services from user mode (`sys::section`, M4), on files of
 /// the boot volume: a data section of `KERNEL.BIN`, mapped, read ("ABCD")
 /// and unmapped; the image `TEST.EXE` as a named section, opened again by its
@@ -4956,7 +5129,10 @@ fn object_manager_self_test() {
         .expect("a directory")
         .entries();
     let names: alloc::vec::Vec<_> = types.iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["Device", "Directory", "File", "Key", "Process", "Section", "SymbolicLink", "Thread", "Type"]);
+    assert_eq!(
+        names,
+        ["Device", "Directory", "Event", "File", "Key", "Process", "Section", "SymbolicLink", "Thread", "Type"]
+    );
 
     // A named section, two handle tables.
     let (first, second) = (HandleTable::new(), HandleTable::new());

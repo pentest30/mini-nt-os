@@ -12,6 +12,7 @@ members = [
     "kernel/ps",
     "kernel/io",
     "kernel/cm",
+    "kernel/ex",
     "libs/pe",
     "libs/regf",
     "tools/pe-inspect",

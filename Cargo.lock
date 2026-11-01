@@ -58,6 +58,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2ea6706d74fca54e15f1d40b5cf7fe7f764aaec61352a9fcec58fe27e042fc8"
 
 [[package]]
+name = "ex"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "ke",
+ "ob",
+]
+
+[[package]]
 name = "hal"
 version = "0.1.0"
 dependencies = [
@@ -144,6 +153,7 @@ version = "0.1.0"
 dependencies = [
  "abi",
  "cm",
+ "ex",
  "hal",
  "io-manager",
  "ke",
