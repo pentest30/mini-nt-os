@@ -6,8 +6,12 @@
 //! - [`file`] : le type `File`, les fichiers ouverts, et ce que NtCreateFile
 //!   vérifie une fois le fichier trouvé.
 //!
-//! Au démarrage, [`mount_boot_volume`] fait du disque RAM le volume système :
-//! `\Device\Ramdisk0`, avec `\??\C:` et `\SystemRoot` qui y mènent.
+//! - [`disk`] : un disque ATA (`hal::ata`), comme périphérique de blocs.
+//!
+//! Au démarrage, [`mount_boot_volumes`] monte le disque RAM
+//! (`\Device\Ramdisk0`) et le disque système ATA, s'il y en a un
+//! (`\Device\HarddiskVolume1`, le maître du canal secondaire) : `\??\C:` et
+//! `\SystemRoot` mènent au disque ATA, ou sans lui au disque RAM.
 //!
 //! Pas encore : IRP et piles de périphériques, pilotes de disque, écriture,
 //! E/S asynchrones, ports de complétion.
@@ -27,6 +31,7 @@ use core::mem::ManuallyDrop;
 use hal::sync::KSpinLock;
 
 pub mod device;
+pub mod disk;
 pub mod driver;
 pub mod fat;
 pub mod file;
@@ -36,36 +41,69 @@ pub mod volume;
 pub use device::{Device, DEVICE_TYPE};
 pub use driver::{DeviceObject, DriverObject};
 pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
-pub use file::{check_open, File, FileObject, FILE_TYPE};
+pub use file::{check_disposition, check_open, creates, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
 pub use volume::{Node, Volume};
 
-/// Le volume de démarrage.
-pub const BOOT_VOLUME: &str = "\\Device\\Ramdisk0";
-/// Les liens qui y mènent : la lettre `C:`, et `\SystemRoot`, le
-/// répertoire du système.
-pub const BOOT_LINKS: [(&str, &str); 2] =
-    [("\\GLOBAL??\\C:", BOOT_VOLUME), ("\\SystemRoot", "\\Device\\Ramdisk0\\WINDOWS")];
+/// Le disque RAM de démarrage, comme volume.
+pub const RAMDISK_VOLUME: &str = "\\Device\\Ramdisk0";
+/// Le volume du disque système ATA.
+pub const DISK_VOLUME: &str = "\\Device\\HarddiskVolume1";
+/// Le disque système ATA : le maître du canal secondaire (sous QEMU, le
+/// canal primaire tient l'ESP).
+pub const SYSTEM_DISK: hal::ata::AtaDrive = hal::ata::AtaDrive::new(hal::ata::SECONDARY, false);
 
-/// Fait du disque RAM de démarrage le volume système, en attendant les
-/// pilotes de disque (ADR-017) : son système de fichiers monté sur le
-/// périphérique [`BOOT_VOLUME`], et les liens [`BOOT_LINKS`], permanents.
-/// Rend sa taille, ou `None` sans disque RAM.
+/// Ce que [`mount_boot_volumes`] a monté.
+#[derive(Debug, Default)]
+pub struct BootVolumes {
+    /// La taille du disque RAM, s'il y en a un.
+    pub ramdisk: Option<u64>,
+    /// Les secteurs du disque système ATA, s'il y en a un, ou pourquoi son
+    /// volume a été refusé.
+    pub disk: Option<Result<u64, abi::ntstatus::NtStatus>>,
+    /// Le volume que désignent `\??\C:` et `\SystemRoot`.
+    pub system: Option<&'static str>,
+}
+
+/// Monte le disque RAM de démarrage ([`RAMDISK_VOLUME`]) et le disque système
+/// ATA ([`DISK_VOLUME`]), s'ils sont là, puis fait mener `\GLOBAL??\C:` et
+/// `\SystemRoot` (son répertoire `WINDOWS`) au disque ATA, ou sans lui au
+/// disque RAM ; tout est permanent. Un disque ATA qui ne porte pas de FAT32
+/// reste sans volume.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, une fois, après [`init`] et `ob::init`.
-pub fn mount_boot_volume() -> Result<Option<u64>, abi::ntstatus::NtStatus> {
-    let Some(disk) = ramdisk_device() else { return Ok(None) };
-    let size = disk.total_size as u64;
-    let volume = Volume::mount(alloc::boxed::Box::new(disk))?;
+pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
     let namespace = ob::namespace();
-    let device: ob::ObjectRef = Device::with_volume(volume);
-    namespace.insert(&device, BOOT_VOLUME, None, abi::object::OBJ_PERMANENT)?;
-    for (name, target) in BOOT_LINKS {
-        let link: ob::ObjectRef = ob::SymbolicLink::create(target);
-        namespace.insert(&link, name, None, abi::object::OBJ_PERMANENT)?;
+    let permanent = abi::object::OBJ_PERMANENT;
+    let mut volumes = BootVolumes::default();
+    if let Some(disk) = ramdisk_device() {
+        let size = disk.total_size as u64;
+        let device: ob::ObjectRef = Device::with_volume(Volume::mount(alloc::boxed::Box::new(disk))?);
+        namespace.insert(&device, RAMDISK_VOLUME, None, permanent)?;
+        volumes.ramdisk = Some(size);
+        volumes.system = Some(RAMDISK_VOLUME);
     }
-    Ok(Some(size))
+    if let Some(disk) = disk::AtaDisk::probe(SYSTEM_DISK) {
+        let sectors = disk.sectors();
+        match Volume::mount(alloc::boxed::Box::new(disk)) {
+            Ok(volume) => {
+                let device: ob::ObjectRef = Device::with_volume(volume);
+                namespace.insert(&device, DISK_VOLUME, None, permanent)?;
+                volumes.disk = Some(Ok(sectors));
+                volumes.system = Some(DISK_VOLUME);
+            }
+            Err(status) => volumes.disk = Some(Err(status)),
+        }
+    }
+    if let Some(system) = volumes.system {
+        let windows = alloc::format!("{system}\\WINDOWS");
+        for (name, target) in [("\\GLOBAL??\\C:", system), ("\\SystemRoot", windows.as_str())] {
+            let link: ob::ObjectRef = ob::SymbolicLink::create(target);
+            namespace.insert(&link, name, None, permanent)?;
+        }
+    }
+    Ok(volumes)
 }
 
 struct RamBlockDevice {
@@ -107,6 +145,24 @@ impl BlockDevice for RamBlockDevice {
 impl BlockDevice for PhysRamBlockDevice {
     fn sector_size(&self) -> u32 {
         self.sector_size
+    }
+
+    fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        let s = self.sector_size as usize;
+        let off = lba as usize * s;
+        if data.len() != s || off + s > self.total_size {
+            return Err(FatError::Io);
+        }
+        // SAFETY: the HHDM maps all physical RAM writable; phys_base..+total_size
+        // is the ramdisk, which only the volume's lock-holder writes.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                (self.hhdm_offset + self.phys_base + off as u64) as *mut u8,
+                s,
+            );
+        }
+        Ok(())
     }
 
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
@@ -419,3 +475,5 @@ fn build_demo_fat32_disk() -> Vec<u8> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_tests;

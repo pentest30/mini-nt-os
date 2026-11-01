@@ -20,6 +20,10 @@ use super::{
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyNode {
     pub name: String,
+    /// Its class; empty for none.
+    pub class: String,
+    /// When it was last written, as a FILETIME; 0 if unknown.
+    pub last_written: u64,
     pub values: Vec<ValueNode>,
     pub subkeys: Vec<KeyNode>,
 }
@@ -147,6 +151,7 @@ impl Bin {
         let mut children: Vec<&KeyNode> = node.subkeys.iter().collect();
         children.sort_by_key(|k| k.name.encode_utf16().map(upcase).collect::<Vec<u16>>());
         let largest_subkey = children.iter().map(|k| k.name.encode_utf16().count() * 2).max().unwrap_or(0);
+        let largest_class = children.iter().map(|k| k.class.encode_utf16().count() * 2).max().unwrap_or(0);
         let child_offsets: Vec<(u32, u32)> =
             children.iter().map(|child| (self.key(child, nk, security, false), name_hash(&child.name))).collect();
         let subkeys = if child_offsets.is_empty() {
@@ -162,12 +167,23 @@ impl Bin {
             list
         };
 
+        // Its class, in UTF-16.
+        let class: Vec<u8> = node.class.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let class_cell = if class.is_empty() {
+            NO_CELL
+        } else {
+            let cell = self.alloc(class.len());
+            self.field(cell, 0, &class);
+            cell
+        };
+
         let mut flags = if compressed { KEY_COMP_NAME } else { 0 };
         if root {
             flags |= KEY_HIVE_ENTRY | KEY_NO_DELETE;
         }
         self.field(nk, 0, b"nk");
         self.field(nk, 2, &flags.to_le_bytes());
+        self.field(nk, 4, &node.last_written.to_le_bytes());
         self.field(nk, 16, &parent.to_le_bytes());
         self.field(nk, 20, &(child_offsets.len() as u32).to_le_bytes());
         self.field(nk, 28, &subkeys.to_le_bytes());
@@ -175,11 +191,13 @@ impl Bin {
         self.field(nk, 36, &(value_offsets.len() as u32).to_le_bytes());
         self.field(nk, 40, &values.to_le_bytes());
         self.field(nk, 44, &security.to_le_bytes());
-        self.field(nk, 48, &NO_CELL.to_le_bytes());
+        self.field(nk, 48, &class_cell.to_le_bytes());
         self.field(nk, 52, &(largest_subkey as u32).to_le_bytes());
+        self.field(nk, 56, &(largest_class as u32).to_le_bytes());
         self.field(nk, 60, &(largest_name as u32).to_le_bytes());
         self.field(nk, 64, &(largest_data as u32).to_le_bytes());
         self.field(nk, 72, &(name.len() as u16).to_le_bytes());
+        self.field(nk, 74, &(class.len() as u16).to_le_bytes());
         self.field(nk, 76, &name);
         nk
     }

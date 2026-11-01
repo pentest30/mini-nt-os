@@ -157,6 +157,9 @@ pub struct Machine {
     pub memory_mb: u32,
     /// Host directory exposed as a FAT disk on the secondary IDE channel.
     pub data_dir: Option<PathBuf>,
+    /// The image of the system disk `C:`, master of the secondary IDE
+    /// channel.
+    pub system_disk: Option<PathBuf>,
 }
 
 impl Machine {
@@ -177,10 +180,20 @@ impl Machine {
         }
         // Virtual FAT disks, read-write: the firmware stores NvVars on the ESP.
         cmd.arg("-drive").arg(drive("format=raw", &self.esp, "fat:rw:"));
-        if let Some(dir) = &self.data_dir {
-            // Secondary IDE master: ports 0x170-0x177.
-            cmd.arg("-drive").arg(drive("if=none,id=data,format=raw", dir, "fat:rw:"));
-            cmd.args(["-device", "ide-hd,drive=data,bus=ide.1"]);
+        match (&self.data_dir, &self.system_disk) {
+            (Some(_), Some(_)) => {
+                return Err("the data directory and the system disk both want the secondary IDE master".into())
+            }
+            (Some(dir), None) => {
+                // Secondary IDE master: ports 0x170-0x177.
+                cmd.arg("-drive").arg(drive("if=none,id=data,format=raw", dir, "fat:rw:"));
+                cmd.args(["-device", "ide-hd,drive=data,bus=ide.1"]);
+            }
+            (None, Some(image)) => {
+                cmd.arg("-drive").arg(drive("if=none,id=system,format=raw", image, ""));
+                cmd.args(["-device", "ide-hd,drive=system,bus=ide.1"]);
+            }
+            (None, None) => {}
         }
         cmd.args(["-m", &format!("{}M", self.memory_mb), "-no-reboot"]);
         Ok(cmd)
@@ -232,12 +245,40 @@ pub fn boot_and_watch(
     timeout: Duration,
     run_dir: &Path,
 ) -> Result<Outcome> {
+    let start = Instant::now();
+    let mut earlier = String::new();
+    for boot in 1..scenario.boots {
+        let serial_log = run_dir.join(format!("serial-{boot}.log"));
+        let outcome = boot_once(machine, opts, scenario, timeout, run_dir, &serial_log, &earlier, true)?;
+        if !outcome.passed {
+            return Ok(Outcome { reason: format!("boot {boot}: {}", outcome.reason), ..outcome });
+        }
+        earlier.push_str(&read_lossy(&serial_log));
+    }
     let serial_log = run_dir.join("serial.log");
+    let outcome = boot_once(machine, opts, scenario, timeout, run_dir, &serial_log, &earlier, false)?;
+    Ok(Outcome { elapsed: start.elapsed(), ..outcome })
+}
+
+/// One boot. With `until_exit`, it passes when QEMU exits (the kernel reset
+/// the machine) without a forbidden marker; otherwise when the scenario's
+/// markers are all in `earlier` and this boot's serial log.
+#[expect(clippy::too_many_arguments, reason = "the parts of one boot, used once")]
+fn boot_once(
+    machine: &Machine,
+    opts: &Options,
+    scenario: &Scenario,
+    timeout: Duration,
+    run_dir: &Path,
+    serial_log: &Path,
+    earlier: &str,
+    until_exit: bool,
+) -> Result<Outcome> {
     let qemu_log = run_dir.join("qemu.log");
     let stdout = fs::File::create(&qemu_log).map_err(io_error(&qemu_log))?;
     let stderr = stdout.try_clone().map_err(io_error(&qemu_log))?;
     let mut serial = OsString::from("file:");
-    serial.push(&serial_log);
+    serial.push(serial_log);
 
     let mut child = machine
         .command(opts)?
@@ -255,7 +296,20 @@ pub fn boot_and_watch(
         std::thread::sleep(POLL);
         // Read the log after checking for exit, so that it is complete.
         let exited = child.try_wait().map_err(|e| format!("QEMU: {e}"))?;
-        match scenario.check(&read_lossy(&serial_log)) {
+        let log = format!("{earlier}{}", read_lossy(serial_log));
+        if until_exit {
+            if let Some(why) = scenario.forbidden(&log) {
+                break (false, why);
+            }
+            if exited.is_some() {
+                break (true, String::new());
+            }
+            if start.elapsed() >= timeout {
+                break (false, format!("timeout ({} s) before the machine reset", timeout.as_secs()));
+            }
+            continue;
+        }
+        match scenario.check(&log) {
             Verdict::Pass => break (true, String::new()),
             Verdict::Fail(why) => break (false, why),
             Verdict::Pending(missing) => {
@@ -278,7 +332,21 @@ pub fn boot_and_watch(
         reason.push_str("\nQEMU output:\n");
         reason.push_str(qemu_output.trim_end());
     }
-    Ok(Outcome { passed, reason, elapsed, serial_log })
+    Ok(Outcome { passed, reason, elapsed, serial_log: serial_log.to_path_buf() })
+}
+
+/// `fsck.vfat -n` on the disk image `image`: `None` without dosfstools,
+/// otherwise `Err` with its report if it finds an error.
+pub fn fsck(image: &Path) -> Option<std::result::Result<(), String>> {
+    let program = ["/usr/sbin/fsck.vfat", "/sbin/fsck.vfat", "fsck.vfat"]
+        .into_iter()
+        .find(|p| Command::new(p).arg("--help").output().is_ok())?;
+    let output = match Command::new(program).arg("-n").arg(image).output() {
+        Ok(output) => output,
+        Err(e) => return Some(Err(format!("cannot run {program}: {e}"))),
+    };
+    let report = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    Some(if output.status.success() { Ok(()) } else { Err(report) })
 }
 
 /// The file as text, invalid UTF-8 replaced; empty if it cannot be read.

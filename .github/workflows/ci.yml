@@ -6,7 +6,9 @@
 # four threads, a starved thread raised by the balance set manager, and the
 # symbolized STOP screen of a failed assertion; and the ReactOS userland
 # (`cargo xtask fetch-userland`, its archive cached by its pinned SHA-256),
-# with the native test programs of tests/native/ compiled by MinGW and clang.
+# with the native test programs of tests/native/ compiled by MinGW and clang;
+# and two boots on an ATA system disk, a file and a registry value kept,
+# checked by fsck.vfat.
 name: CI
 
 on:
@@ -65,6 +67,8 @@ jobs:
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-ke-starvation 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-irql 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-access-violation 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-smss 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-persistence 2>&1 | tee -a build.log
           if grep -E '^warning' build.log; then
             echo "::error::bare-metal build emitted warnings"
             exit 1
@@ -105,6 +109,13 @@ jobs:
           - name: ReactOS smss.exe under the probe, where it stops (M4)
             args: --scenario smss
             userland: true
+          - name: a file on C, the ATA system disk, after a reboot; fsck.vfat (M4)
+            args: --scenario persistence
+            fsck: true
+          - name: a registry value on C after a reboot, the SYSTEM hive flushed; fsck.vfat (M4)
+            args: --scenario registry-persistence
+            userland: true
+            fsck: true
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain (rust-toolchain.toml)
@@ -129,6 +140,10 @@ jobs:
         run: |
           sudo apt-get install -y -qq gcc-mingw-w64-i686 clang lld llvm
           i686-w64-mingw32-gcc --version && clang --version && lld-link --version && command -v llvm-dlltool
+      # fsck.vfat checks the system disk after the boots (a warning without it).
+      - name: Install dosfstools (fsck.vfat)
+        if: matrix.fsck
+        run: sudo apt-get install -y -qq dosfstools && (command -v fsck.vfat || ls /usr/sbin/fsck.vfat)
       # Scenarios of tests/boot/; the firmware is found in /usr/share/OVMF.
       - name: Boot and check serial markers
         run: cargo xtask test --boot ${{ matrix.args }}
@@ -138,6 +153,6 @@ jobs:
         with:
           name: boot-logs-${{ strategy.job-index }}
           path: |
-            target/xtask/boot/*/serial.log
+            target/xtask/boot/*/serial*.log
             target/xtask/boot/*/qemu.log
           if-no-files-found: ignore

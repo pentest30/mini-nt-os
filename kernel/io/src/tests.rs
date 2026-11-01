@@ -19,7 +19,7 @@ use abi::ntstatus::*;
 use ob::{downcast, Namespace, ObjectRef, SymbolicLink};
 
 use crate::fat::{BlockDevice, FatError};
-use crate::{check_open, Device, File, Volume, DEVICE_TYPE, FILE_TYPE};
+use crate::{check_open, creates, Device, File, Volume, DEVICE_TYPE, FILE_TYPE};
 
 struct Disk(Vec<u8>);
 
@@ -153,17 +153,18 @@ fn a_file_describes_itself() {
     let volume = volume();
     let file = File::open(&volume, "\\WINDOWS\\SYSTEM32\\NTDLL.DLL").unwrap();
     assert_eq!(file.path(), "\\WINDOWS\\SYSTEM32\\NTDLL.DLL");
-    let standard = file.standard_information();
+    let standard = file.standard_information().unwrap();
     assert_eq!((standard.allocation_size, standard.end_of_file, standard.directory), (1024, 600, 0));
     assert_eq!(standard.number_of_links, 1);
-    let basic = file.basic_information();
+    let basic = file.basic_information().unwrap();
     assert_eq!(basic.file_attributes, FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE);
-    assert_eq!((basic.last_write_time, basic.change_time), (file.node().last_write_time, file.node().last_write_time));
-    let open = file.network_open_information();
+    let node = file.node().unwrap();
+    assert_eq!((basic.last_write_time, basic.change_time), (node.last_write_time, node.last_write_time));
+    let open = file.network_open_information().unwrap();
     assert_eq!((open.allocation_size, open.end_of_file, open.file_attributes), (1024, 600, basic.file_attributes));
     let root = File::open(&volume, "\\").unwrap();
     assert_eq!((root.path(), root.is_directory()), ("\\", true));
-    assert_eq!(root.standard_information().directory, 1);
+    assert_eq!(root.standard_information().unwrap().directory, 1);
 }
 
 #[test]
@@ -172,7 +173,7 @@ fn a_name_relative_to_a_directory() {
     let system32 = File::open(&volume, "\\WINDOWS\\SYSTEM32\\").unwrap();
     assert_eq!(system32.path(), "\\WINDOWS\\SYSTEM32");
     let ntdll = system32.open_relative("ntdll.dll").unwrap();
-    assert_eq!((ntdll.path(), ntdll.node().size), ("\\WINDOWS\\SYSTEM32\\ntdll.dll", 600));
+    assert_eq!((ntdll.path(), ntdll.node().unwrap().size), ("\\WINDOWS\\SYSTEM32\\ntdll.dll", 600));
     assert_eq!(ntdll.open_relative("x").err(), Some(STATUS_OBJECT_PATH_NOT_FOUND), "relative to a file");
     let root = File::open(&volume, "\\").unwrap();
     assert_eq!(root.open_relative("BOOT.INI").map(|f| String::from(f.path())), Ok(String::from("\\BOOT.INI")));
@@ -182,19 +183,24 @@ fn a_name_relative_to_a_directory() {
 fn check_open_follows_the_disposition_and_the_options() {
     let volume = volume();
     let file = File::open(&volume, "\\BOOT.INI").unwrap();
+    let ntdll = File::open(&volume, "\\WINDOWS\\SYSTEM32\\NTDLL.DLL").unwrap();
     let directory = File::open(&volume, "\\WINDOWS").unwrap();
-    assert_eq!(check_open(&file, FILE_OPEN, 0), Ok(FILE_OPENED));
-    assert_eq!(check_open(&file, FILE_OPEN_IF, FILE_NON_DIRECTORY_FILE), Ok(FILE_OPENED));
-    assert_eq!(check_open(&directory, FILE_OPEN, FILE_DIRECTORY_FILE), Ok(FILE_OPENED));
-    assert_eq!(check_open(&file, FILE_OPEN, FILE_DIRECTORY_FILE), Err(STATUS_NOT_A_DIRECTORY));
-    assert_eq!(check_open(&directory, FILE_OPEN, FILE_NON_DIRECTORY_FILE), Err(STATUS_FILE_IS_A_DIRECTORY));
-    assert_eq!(check_open(&file, FILE_CREATE, 0), Err(STATUS_OBJECT_NAME_COLLISION));
-    assert_eq!(check_open(&file, FILE_OVERWRITE_IF, 0), Err(STATUS_MEDIA_WRITE_PROTECTED));
-    assert_eq!(check_open(&file, FILE_SUPERSEDE, 0), Err(STATUS_MEDIA_WRITE_PROTECTED));
+    let none = ob::AccessMask::NONE;
+    assert_eq!(check_open(&file, FILE_OPEN, 0, none), Ok(FILE_OPENED));
+    assert_eq!(check_open(&file, FILE_OPEN_IF, FILE_NON_DIRECTORY_FILE, none), Ok(FILE_OPENED));
+    assert_eq!(check_open(&directory, FILE_OPEN, FILE_DIRECTORY_FILE, none), Ok(FILE_OPENED));
+    assert_eq!(check_open(&file, FILE_OPEN, FILE_DIRECTORY_FILE, none), Err(STATUS_NOT_A_DIRECTORY));
+    assert_eq!(check_open(&directory, FILE_OPEN, FILE_NON_DIRECTORY_FILE, none), Err(STATUS_FILE_IS_A_DIRECTORY));
+    assert_eq!(check_open(&directory, FILE_OVERWRITE_IF, 0, none), Err(STATUS_FILE_IS_A_DIRECTORY));
+    assert_eq!(check_open(&file, FILE_CREATE, 0, none), Err(STATUS_OBJECT_NAME_COLLISION));
     let both = FILE_DIRECTORY_FILE | FILE_NON_DIRECTORY_FILE;
-    assert_eq!(check_open(&directory, FILE_OPEN, both), Err(STATUS_INVALID_PARAMETER));
-    assert_eq!(check_open(&directory, FILE_OVERWRITE, FILE_DIRECTORY_FILE), Err(STATUS_INVALID_PARAMETER));
-    assert_eq!(check_open(&file, 6, 0), Err(STATUS_INVALID_PARAMETER));
+    assert_eq!(check_open(&directory, FILE_OPEN, both, none), Err(STATUS_INVALID_PARAMETER));
+    assert_eq!(check_open(&directory, FILE_OVERWRITE, FILE_DIRECTORY_FILE, none), Err(STATUS_INVALID_PARAMETER));
+    assert_eq!(check_open(&file, 6, 0, none), Err(STATUS_INVALID_PARAMETER));
+    let write = ob::AccessMask(FILE_WRITE_DATA);
+    assert_eq!(check_open(&ntdll, FILE_OPEN, 0, write), Err(STATUS_ACCESS_DENIED), "NTDLL.DLL is read-only");
+    assert_eq!(check_open(&ntdll, FILE_OVERWRITE, 0, none), Err(STATUS_ACCESS_DENIED));
+    assert!(creates(FILE_OPEN_IF) && creates(FILE_SUPERSEDE) && !creates(FILE_OPEN) && !creates(FILE_OVERWRITE));
 }
 
 #[test]
@@ -211,7 +217,7 @@ fn the_namespace_reaches_files_through_the_drive_letter() {
     let system32 = ns.open("\\??\\C:\\WINDOWS\\system32", None, Some(&FILE_TYPE), 0).unwrap();
     assert_eq!(file(system32.clone()).path(), "\\WINDOWS\\system32");
     let ntdll = ns.open("ntdll.dll", Some(&system32), Some(&FILE_TYPE), 0).unwrap();
-    assert_eq!(file(ntdll).node().size, 600);
+    assert_eq!(file(ntdll).node().unwrap().size, 600);
     let through_root = ns.open("\\SystemRoot\\System32\\NTDLL.DLL", None, Some(&FILE_TYPE), 0).unwrap();
     assert_eq!(file(through_root).path(), "\\WINDOWS\\System32\\NTDLL.DLL");
     let root = ns.open("\\??\\C:\\", None, Some(&FILE_TYPE), 0).unwrap();

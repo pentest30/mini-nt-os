@@ -30,6 +30,19 @@ pub const KEY_CREATE_LINK: u32 = 0x0020;
 /// KEY_ALL_ACCESS.
 pub const KEY_ALL_ACCESS: u32 = 0x000F_003F;
 
+/// Create options (NtCreateKey).
+pub const REG_OPTION_NON_VOLATILE: u32 = 0x0000_0000;
+pub const REG_OPTION_VOLATILE: u32 = 0x0000_0001;
+pub const REG_OPTION_CREATE_LINK: u32 = 0x0000_0002;
+pub const REG_OPTION_BACKUP_RESTORE: u32 = 0x0000_0004;
+pub const REG_OPTION_OPEN_LINK: u32 = 0x0000_0008;
+/// The options NtCreateKey accepts.
+pub const REG_LEGAL_OPTION: u32 = 0x0000_000F;
+
+/// Dispositions (NtCreateKey).
+pub const REG_CREATED_NEW_KEY: u32 = 1;
+pub const REG_OPENED_EXISTING_KEY: u32 = 2;
+
 /// Value types.
 pub const REG_NONE: u32 = 0;
 pub const REG_SZ: u32 = 1;

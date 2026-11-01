@@ -1,17 +1,27 @@
-//! Cm — le registre (02 §5.7, ADR-012), en lecture pour l'instant.
+//! Cm — le registre (02 §5.7, ADR-012).
 //!
 //! `\REGISTRY` est un objet `Key` de l'espace de noms d'Ob, dont la
 //! procédure *parse* résout la suite du nom : chaque clé ouverte est un objet
 //! `Key` qui désigne un nœud, une clé virtuelle (`\REGISTRY`,
-//! `\REGISTRY\MACHINE`, `\REGISTRY\USER`) ou une cellule d'une ruche montée
-//! (`regf`). Une ruche est gardée en mémoire telle que le fichier, sans copie
-//! de ses cellules ; une clé de sa racine peut être un lien
-//! (`CurrentControlSet`), que la recherche suit en reprenant depuis la racine
-//! de l'espace de noms.
+//! `\REGISTRY\MACHINE`, `\REGISTRY\USER`) ou une clé d'une ruche montée.
 //!
-//! Les noms se comparent sans casse. Pas encore : l'écriture (création de
-//! clés, valeurs), les clés volatiles, les notifications, la sécurité des
-//! clés (ADR-011), l'écriture des ruches sur disque.
+//! Une ruche montée est un arbre de clés en mémoire ([`HiveKey`]), lu du
+//! fichier `regf` à son montage : ses valeurs s'écrivent et s'effacent, des
+//! clés s'y créent ([`Key::set_value`], [`Key::delete_value`],
+//! [`Key::create_subkey`]), chacune sous son verrou. Les sous-clés restent
+//! triées par nom en majuscules, comme dans les listes d'un fichier `regf`.
+//! Une clé de sa racine peut être un lien (`CurrentControlSet`), que la
+//! recherche suit en reprenant depuis la racine de l'espace de noms.
+//!
+//! Une ruche lue d'un fichier ([`HiveFile::with_file`]) s'y réécrit
+//! ([`HiveFile::flush`], NtFlushKey) : en entier, sans ses clés volatiles,
+//! par `regf::builder`, puis par Io, et le cache du disque est vidé.
+//!
+//! Les noms se comparent sans casse. Pas encore : l'écriture différée (sans
+//! NtFlushKey, rien ne va sur disque), le journal `.LOG` (une coupure
+//! pendant l'écriture abîme la ruche), une ruche de plus de [`MAX_SAVED_DEPTH`]
+//! niveaux sur disque, la suppression de clés, les clés liens, les
+//! notifications, la sécurité des clés (ADR-011 : tout est accordé).
 //!
 //! [`info`] encode les classes d'information des services.
 
@@ -27,10 +37,12 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use abi::ntstatus::{
-    NtStatus, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND,
-    STATUS_OBJECT_PATH_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_REGISTRY_CORRUPT,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_CHILD_MUST_BE_VOLATILE, STATUS_INVALID_PARAMETER,
+    STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND,
+    STATUS_OBJECT_PATH_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_REGISTRY_CORRUPT, STATUS_REGISTRY_IO_FAILED,
 };
 use abi::registry::{KEY_ALL_ACCESS, KEY_ENUMERATE_SUB_KEYS, KEY_NOTIFY, KEY_QUERY_VALUE};
+use core::sync::atomic::{AtomicBool, Ordering};
 use hal::sync::{KSpinLock, Once};
 use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef, ObjectType, Parsed};
 use regf::Hive;
@@ -55,20 +67,159 @@ pub static KEY_TYPE: ObjectType = ObjectType::new(
 )
 .with_parse(parse_key);
 
-/// Une ruche montée : le fichier en mémoire, et les liens de sa racine.
+/// La profondeur d'une ruche, au plus : 512 niveaux, comme XP.
+pub const MAX_DEPTH: usize = 512;
+/// La longueur d'un nom de clé, au plus, en caractères.
+pub const MAX_KEY_NAME: usize = 255;
+
+/// Une clé d'une ruche montée.
+pub struct HiveKey {
+    /// Son nom, en UTF-16.
+    name: Vec<u16>,
+    /// Créée volatile (`REG_OPTION_VOLATILE`) : elle n'ira pas sur disque.
+    volatile: bool,
+    /// Son niveau dans la ruche, la racine au niveau 1.
+    depth: usize,
+    state: KSpinLock<HiveKeyState>,
+}
+
+struct HiveKeyState {
+    class: Vec<u16>,
+    /// FILETIME de sa dernière écriture.
+    last_written: u64,
+    /// Dans l'ordre de l'énumération : celui du fichier, puis de l'écriture.
+    values: Vec<ValueFacts>,
+    /// Triées par nom en majuscules.
+    subkeys: Vec<Arc<HiveKey>>,
+}
+
+fn upcased(units: &[u16]) -> impl Iterator<Item = u16> + '_ {
+    units.iter().map(|&u| regf::upcase(u))
+}
+
+fn units_eq_ignore_case(a: &[u16], b: &[u16]) -> bool {
+    a.len() == b.len() && upcased(a).eq(upcased(b))
+}
+
+impl HiveKey {
+    fn new(name: Vec<u16>, class: Vec<u16>, last_written: u64, volatile: bool, depth: usize) -> Arc<Self> {
+        Arc::new(Self {
+            name,
+            volatile,
+            depth,
+            state: KSpinLock::new(HiveKeyState { class, last_written, values: Vec::new(), subkeys: Vec::new() }),
+        })
+    }
+
+    fn name_string(&self) -> String {
+        String::from_utf16_lossy(&self.name)
+    }
+
+    /// Sa sous-clé `name`, sans casse.
+    fn child(&self, name: &[u16]) -> Option<Arc<HiveKey>> {
+        self.state.lock().subkeys.iter().find(|key| units_eq_ignore_case(&key.name, name)).cloned()
+    }
+
+    /// Range `child` parmi ses sous-clés, à sa place dans l'ordre des noms.
+    fn insert_sorted(subkeys: &mut Vec<Arc<HiveKey>>, child: Arc<HiveKey>) {
+        let at = subkeys.partition_point(|key| upcased(&key.name).lt(upcased(&child.name)));
+        subkeys.insert(at, child);
+    }
+}
+
+/// La profondeur, au plus, d'une ruche qui s'écrit sur disque : le
+/// constructeur de `regf` est récursif, et la pile du noyau est petite.
+pub const MAX_SAVED_DEPTH: usize = 64;
+
+/// Une ruche montée : l'arbre de ses clés, les liens de sa racine, et le
+/// fichier où elle s'écrit.
 pub struct HiveFile {
-    data: Arc<[u8]>,
+    root: Arc<HiveKey>,
     /// (nom, chemin absolu de la cible) : des clés de sa racine qui sont des
     /// liens, comme `CurrentControlSet`.
     links: Vec<(String, String)>,
+    /// Son fichier, un nom NT ; `None` pour une ruche qui ne va pas sur disque.
+    file: Option<String>,
+    /// Elle a changé depuis sa lecture ou son dernier écrit.
+    dirty: AtomicBool,
 }
 
 impl HiveFile {
-    /// La ruche du fichier `data`, sans lien ; `STATUS_REGISTRY_CORRUPT` si
-    /// elle ne se lit pas.
+    /// La ruche du fichier `data`, lue en entier, sans lien ;
+    /// `STATUS_REGISTRY_CORRUPT` si elle ne se lit pas, ou dépasse
+    /// [`MAX_DEPTH`] niveaux (une boucle de cellules aussi).
     pub fn new(data: Arc<[u8]>) -> Result<Self, NtStatus> {
-        Hive::parse(&data).and_then(|hive| hive.root()).map_err(|_| STATUS_REGISTRY_CORRUPT)?;
-        Ok(Self { data, links: Vec::new() })
+        let hive = Hive::parse(&data).map_err(corrupt)?;
+        Ok(Self { root: load(&hive).map_err(corrupt)?, links: Vec::new(), file: None, dirty: AtomicBool::new(false) })
+    }
+
+    /// Fait du fichier `path` (un nom NT, comme
+    /// `\SystemRoot\System32\config\SYSTEM`) celui où elle s'écrit.
+    pub fn with_file(mut self, path: &str) -> Self {
+        self.file = Some(path.into());
+        self
+    }
+
+    /// Le fichier où elle s'écrit.
+    pub fn file(&self) -> Option<&str> {
+        self.file.as_deref()
+    }
+
+    /// Elle a changé depuis sa lecture ou son dernier écrit.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty.load(Ordering::Acquire)
+    }
+
+    fn touch(&self) {
+        self.dirty.store(true, Ordering::Release);
+    }
+
+    /// La ruche au format `regf`, sans ses clés volatiles, nommée `name` dans
+    /// son bloc de base ; `STATUS_REGISTRY_IO_FAILED` au-delà de
+    /// [`MAX_SAVED_DEPTH`] niveaux.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn to_regf(&self, name: &str) -> Result<Vec<u8>, NtStatus> {
+        let mut deepest = 0;
+        let mut pending = alloc::vec![self.root.clone()];
+        while let Some(key) = pending.pop() {
+            deepest = deepest.max(key.depth);
+            pending.extend(key.state.lock().subkeys.iter().filter(|k| !k.volatile).cloned());
+        }
+        if deepest > MAX_SAVED_DEPTH {
+            return Err(STATUS_REGISTRY_IO_FAILED);
+        }
+        Ok(regf::builder::build(&export(&self.root), name))
+    }
+
+    /// NtFlushKey : réécrit la ruche dans son fichier si elle a changé
+    /// ([`to_regf`](Self::to_regf), puis Io : le fichier est récrit en
+    /// entier, et le cache du disque vidé). Sans fichier, rien à faire.
+    /// Erreurs : celles d'Io ; celles de `to_regf`. Elle reste à écrire si
+    /// l'écriture échoue.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn flush(&self) -> Result<(), NtStatus> {
+        let Some(path) = &self.file else { return Ok(()) };
+        if !self.dirty.swap(false, Ordering::AcqRel) {
+            return Ok(());
+        }
+        let written = (|| {
+            let name = path.rsplit('\\').next().unwrap_or(path);
+            let bytes = self.to_regf(name)?;
+            let object =
+                ob::namespace().open(path, None, Some(&io_manager::FILE_TYPE), abi::object::OBJ_CASE_INSENSITIVE)?;
+            let file = downcast::<io_manager::File>(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
+            file.write(0, &bytes)?;
+            file.set_size(u32::try_from(bytes.len()).map_err(|_| STATUS_REGISTRY_IO_FAILED)?)?;
+            file.flush()
+        })();
+        if written.is_err() {
+            self.touch();
+        }
+        written
     }
 
     /// Fait de `name`, à sa racine, un lien vers la clé `target` (chemin
@@ -78,24 +229,69 @@ impl HiveFile {
         self
     }
 
-    /// La ruche, vérifiée à la création.
-    fn hive(&self) -> Hive<'_> {
-        Hive::parse(&self.data).expect("a hive checked when created")
-    }
-
-    /// La clé à la cellule `cell`, atteinte par ses parents.
-    fn key(&self, cell: u32) -> Result<regf::Key<'_>, NtStatus> {
-        self.hive().key_at(cell).map_err(corrupt)
-    }
-
-    fn root_cell(&self) -> u32 {
-        self.hive().root().map(|root| root.offset()).unwrap_or(0)
-    }
-
     /// Le lien `name` de sa racine.
     fn link(&self, name: &str) -> Option<&str> {
         self.links.iter().find(|(link, _)| eq_ignore_case(link, name)).map(|(_, target)| target.as_str())
     }
+}
+
+/// La clé `key` et ce qui est sous elle, sans les clés volatiles, pour le
+/// constructeur ; de profondeur bornée par l'appelant.
+fn export(key: &HiveKey) -> regf::builder::KeyNode {
+    let (class, last_written, values, subkeys) = {
+        let state = key.state.lock();
+        (state.class.clone(), state.last_written, state.values.clone(), state.subkeys.clone())
+    };
+    regf::builder::KeyNode {
+        name: String::from_utf16_lossy(&key.name),
+        class: String::from_utf16_lossy(&class),
+        last_written,
+        values: values
+            .into_iter()
+            .map(|v| regf::builder::ValueNode {
+                name: String::from_utf16_lossy(&v.name),
+                data_type: v.data_type,
+                data: v.data,
+            })
+            .collect(),
+        subkeys: subkeys.iter().filter(|k| !k.volatile).map(|k| export(k)).collect(),
+    }
+}
+
+/// L'arbre des clés de `hive`, parcouru sans récursion.
+fn load(hive: &Hive<'_>) -> Result<Arc<HiveKey>, regf::Error> {
+    let read = |key: &regf::Key<'_>, depth: usize| -> Result<Arc<HiveKey>, regf::Error> {
+        let class = key.class()?.map(|c| c.units().collect()).unwrap_or_default();
+        let node = HiveKey::new(key.name().units().collect(), class, key.last_written(), false, depth);
+        let values = key
+            .values()?
+            .iter()
+            .map(|value| {
+                Ok(ValueFacts {
+                    name: value.name().units().collect(),
+                    data_type: value.data_type(),
+                    data: value.data()?.into_owned(),
+                })
+            })
+            .collect::<Result<Vec<_>, regf::Error>>()?;
+        node.state.lock().values = values;
+        Ok(node)
+    };
+    let root_cell = hive.root()?;
+    let root = read(&root_cell, 1)?;
+    let mut pending: Vec<(regf::Key<'_>, Arc<HiveKey>)> = alloc::vec![(root_cell, root.clone())];
+    while let Some((cell, node)) = pending.pop() {
+        let subkeys = cell.subkeys()?;
+        if !subkeys.is_empty() && node.depth >= MAX_DEPTH {
+            return Err(regf::Error::Unsupported("a hive deeper than 512 levels"));
+        }
+        for subkey in subkeys {
+            let child = read(&subkey, node.depth + 1)?;
+            HiveKey::insert_sorted(&mut node.state.lock().subkeys, child.clone());
+            pending.push((subkey, child));
+        }
+    }
+    Ok(root)
 }
 
 fn corrupt(_: regf::Error) -> NtStatus {
@@ -132,7 +328,7 @@ impl VirtualKey {
 #[derive(Clone)]
 pub enum Node {
     Virtual(Arc<VirtualKey>),
-    Hive { file: Arc<HiveFile>, cell: u32 },
+    Hive { file: Arc<HiveFile>, key: Arc<HiveKey> },
 }
 
 /// Le corps d'un objet `Key`.
@@ -149,6 +345,11 @@ enum Step {
     Link(String),
 }
 
+/// Le temps système, en FILETIME, pour la date d'écriture d'une clé.
+fn now() -> u64 {
+    hal::timer::interrupt_time()
+}
+
 impl Key {
     /// Son nom de clé, le dernier composant de son chemin (l'objet, lui,
     /// n'est nommé dans l'espace d'Ob que pour `\REGISTRY`).
@@ -162,19 +363,20 @@ impl Key {
             Node::Virtual(key) => Ok(key.child(name).map(|(stored, child)| match child {
                 Child::Virtual(child) => Step::Key(Node::Virtual(child), stored),
                 Child::Hive(file) => {
-                    let cell = file.root_cell();
-                    Step::Key(Node::Hive { file, cell }, stored)
+                    let key = file.root.clone();
+                    Step::Key(Node::Hive { file, key }, stored)
                 }
             })),
-            Node::Hive { file, cell } => {
-                if *cell == file.root_cell() {
+            Node::Hive { file, key } => {
+                if Arc::ptr_eq(key, &file.root) {
                     if let Some(target) = file.link(name) {
                         return Ok(Some(Step::Link(target.into())));
                     }
                 }
-                let subkey = file.key(*cell)?.subkey(name).map_err(corrupt)?;
-                Ok(subkey.map(|key| {
-                    Step::Key(Node::Hive { file: file.clone(), cell: key.offset() }, key.name().to_string_lossy())
+                let units: Vec<u16> = name.encode_utf16().collect();
+                Ok(key.child(&units).map(|child| {
+                    let name = child.name_string();
+                    Step::Key(Node::Hive { file: file.clone(), key: child }, name)
                 }))
             }
         }
@@ -189,18 +391,21 @@ impl Key {
                 let max_name = children.iter().map(|(n, _)| n.encode_utf16().count() * 2).max().unwrap_or(0);
                 Ok(KeyFacts { name, subkeys: children.len() as u32, max_name: max_name as u32, ..KeyFacts::default() })
             }
-            Node::Hive { file, cell } => {
-                let key = file.key(*cell)?;
-                let (max_name, max_class, max_value_name, max_value_data) = key.maxima();
-                let class = key.class().map_err(corrupt)?.map(|c| c.units().collect()).unwrap_or_default();
+            Node::Hive { key, .. } => {
+                let state = key.state.lock();
+                let bytes = |units: usize| (units * 2) as u32;
+                let max_name = state.subkeys.iter().map(|k| bytes(k.name.len())).max().unwrap_or(0);
+                let max_class = state.subkeys.iter().map(|k| bytes(k.state.lock().class.len())).max().unwrap_or(0);
+                let max_value_name = state.values.iter().map(|v| bytes(v.name.len())).max().unwrap_or(0);
+                let max_value_data = state.values.iter().map(|v| v.data.len() as u32).max().unwrap_or(0);
                 Ok(KeyFacts {
                     name,
-                    class,
-                    last_written: key.last_written(),
-                    subkeys: key.subkey_count(),
+                    class: state.class.clone(),
+                    last_written: state.last_written,
+                    subkeys: state.subkeys.len() as u32,
                     max_name,
                     max_class,
-                    values: key.value_count(),
+                    values: state.values.len() as u32,
                     max_value_name,
                     max_value_data,
                 })
@@ -217,16 +422,16 @@ impl Key {
                 Ok(children.get(index as usize).map(|(name, child)| {
                     let node = match child {
                         Child::Virtual(child) => Node::Virtual(child.clone()),
-                        Child::Hive(file) => Node::Hive { file: file.clone(), cell: file.root_cell() },
+                        Child::Hive(file) => Node::Hive { file: file.clone(), key: file.root.clone() },
                     };
                     Key { node, name: name.clone() }
                 }))
             }
-            Node::Hive { file, cell } => {
-                let subkeys = file.key(*cell)?.subkeys().map_err(corrupt)?;
-                Ok(subkeys.get(index as usize).map(|key| Key {
-                    node: Node::Hive { file: file.clone(), cell: key.offset() },
-                    name: key.name().to_string_lossy(),
+            Node::Hive { file, key } => {
+                let child = key.state.lock().subkeys.get(index as usize).cloned();
+                Ok(child.map(|child| {
+                    let name = child.name_string();
+                    Key { node: Node::Hive { file: file.clone(), key: child }, name }
                 }))
             }
         }
@@ -236,19 +441,7 @@ impl Key {
     pub fn values(&self) -> Result<Vec<ValueFacts>, NtStatus> {
         match &self.node {
             Node::Virtual(_) => Ok(Vec::new()),
-            Node::Hive { file, cell } => {
-                let values = file.key(*cell)?.values().map_err(corrupt)?;
-                values
-                    .iter()
-                    .map(|value| {
-                        Ok(ValueFacts {
-                            name: value.name().units().collect(),
-                            data_type: value.data_type(),
-                            data: value.data().map_err(corrupt)?.into_owned(),
-                        })
-                    })
-                    .collect()
-            }
+            Node::Hive { key, .. } => Ok(key.state.lock().values.clone()),
         }
     }
 
@@ -256,20 +449,204 @@ impl Key {
     pub fn value(&self, name: &[u16]) -> Result<Option<ValueFacts>, NtStatus> {
         match &self.node {
             Node::Virtual(_) => Ok(None),
-            Node::Hive { file, cell } => {
-                let value = file.key(*cell)?.value_units(name).map_err(corrupt)?;
-                value
-                    .map(|value| {
-                        Ok(ValueFacts {
-                            name: value.name().units().collect(),
-                            data_type: value.data_type(),
-                            data: value.data().map_err(corrupt)?.into_owned(),
-                        })
-                    })
-                    .transpose()
+            Node::Hive { key, .. } => {
+                Ok(key.state.lock().values.iter().find(|v| units_eq_ignore_case(&v.name, name)).cloned())
             }
         }
     }
+
+    /// La clé d'une ruche qu'il désigne ; `STATUS_ACCESS_DENIED` pour une clé
+    /// virtuelle, que rien n'écrit.
+    fn hive_key(&self) -> Result<(&Arc<HiveFile>, &Arc<HiveKey>), NtStatus> {
+        match &self.node {
+            Node::Hive { file, key } => Ok((file, key)),
+            Node::Virtual(_) => Err(STATUS_ACCESS_DENIED),
+        }
+    }
+
+    /// NtSetValueKey : donne à sa valeur `name` (vide pour la valeur par
+    /// défaut) le type `data_type` et les données `data`, la crée sinon (à la
+    /// fin de l'énumération) ; la clé prend la date de l'écriture.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_value(&self, name: &[u16], data_type: u32, data: Vec<u8>) -> Result<(), NtStatus> {
+        let (file, key) = self.hive_key()?;
+        file.touch();
+        let mut state = key.state.lock();
+        match state.values.iter_mut().find(|v| units_eq_ignore_case(&v.name, name)) {
+            Some(value) => {
+                value.data_type = data_type;
+                value.data = data;
+            }
+            None => state.values.push(ValueFacts { name: name.to_vec(), data_type, data }),
+        }
+        state.last_written = now();
+        Ok(())
+    }
+
+    /// NtDeleteValueKey : efface sa valeur `name` ;
+    /// `STATUS_OBJECT_NAME_NOT_FOUND` sans elle.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn delete_value(&self, name: &[u16]) -> Result<(), NtStatus> {
+        let (file, key) = self.hive_key()?;
+        let mut state = key.state.lock();
+        let index = state
+            .values
+            .iter()
+            .position(|v| units_eq_ignore_case(&v.name, name))
+            .ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
+        state.values.remove(index);
+        state.last_written = now();
+        file.touch();
+        Ok(())
+    }
+
+    /// NtCreateKey, une fois le parent trouvé : sa sous-clé `name`, créée de
+    /// la classe `class` (volatile avec `volatile`) si elle n'existe pas.
+    /// Rend la clé, et si elle vient d'être créée. Erreurs : nom vide ou avec
+    /// `\\` (`STATUS_OBJECT_NAME_INVALID`), de plus de [`MAX_KEY_NAME`]
+    /// caractères (`STATUS_INVALID_PARAMETER`), un lien de la racine de la
+    /// ruche (`STATUS_OBJECT_NAME_COLLISION`), une clé durable sous une clé
+    /// volatile (`STATUS_CHILD_MUST_BE_VOLATILE`), une clé virtuelle
+    /// (`STATUS_ACCESS_DENIED`), au-delà de [`MAX_DEPTH`] niveaux
+    /// (`STATUS_INVALID_PARAMETER`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn create_subkey(&self, name: &str, class: &[u16], volatile: bool) -> Result<(Key, bool), NtStatus> {
+        let (file, key) = self.hive_key()?;
+        let units: Vec<u16> = name.encode_utf16().collect();
+        if units.is_empty() || name.contains('\\') {
+            return Err(STATUS_OBJECT_NAME_INVALID);
+        }
+        if units.len() > MAX_KEY_NAME {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        if Arc::ptr_eq(key, &file.root) && file.link(name).is_some() {
+            return Err(STATUS_OBJECT_NAME_COLLISION);
+        }
+        let opened = |child: Arc<HiveKey>| {
+            let name = child.name_string();
+            Key { node: Node::Hive { file: file.clone(), key: child }, name }
+        };
+        let mut state = key.state.lock();
+        if let Some(child) = state.subkeys.iter().find(|k| units_eq_ignore_case(&k.name, &units)) {
+            return Ok((opened(child.clone()), false));
+        }
+        if key.volatile && !volatile {
+            return Err(STATUS_CHILD_MUST_BE_VOLATILE);
+        }
+        if key.depth >= MAX_DEPTH {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        let time = now();
+        let child = HiveKey::new(units, class.to_vec(), time, volatile, key.depth + 1);
+        HiveKey::insert_sorted(&mut state.subkeys, child.clone());
+        state.last_written = time;
+        file.touch();
+        Ok((opened(child), true))
+    }
+
+    /// La ruche de la clé ; `None` pour une clé virtuelle.
+    pub fn hive_file(&self) -> Option<Arc<HiveFile>> {
+        match &self.node {
+            Node::Hive { file, .. } => Some(file.clone()),
+            Node::Virtual(_) => None,
+        }
+    }
+
+    /// NtFlushKey : réécrit dans son fichier la ruche de la clé
+    /// ([`HiveFile::flush`]) ; pour une clé virtuelle, chaque ruche montée
+    /// sous elle.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn flush(&self) -> Result<(), NtStatus> {
+        match &self.node {
+            Node::Hive { file, .. } => file.flush(),
+            Node::Virtual(key) => flush_under(key),
+        }
+    }
+
+    /// Une empreinte (FNV-1a sur 64 bits) de la clé et de ce qui est sous
+    /// elle, sans les clés volatiles ni ses sous-clés nommées dans `skip` :
+    /// les noms, les classes, les valeurs (nom, type, données), dans l'ordre
+    /// de l'énumération ; pas les dates. Deux arbres qui la partagent ont le
+    /// même contenu. 0 pour une clé virtuelle.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn digest(&self, skip: &[&str]) -> u64 {
+        let Node::Hive { key, .. } = &self.node else { return 0 };
+        let mut hash = Fnv::new();
+        let skipped = |child: &HiveKey| {
+            skip.iter().any(|name| units_eq_ignore_case(&child.name, &name.encode_utf16().collect::<Vec<_>>()))
+        };
+        let mut pending: Vec<(Arc<HiveKey>, bool)> = alloc::vec![(key.clone(), true)];
+        while let Some((node, top)) = pending.pop() {
+            let state = node.state.lock();
+            hash.units(&node.name);
+            hash.word(node.depth as u64);
+            hash.units(&state.class);
+            hash.word(state.values.len() as u64);
+            for value in &state.values {
+                hash.units(&value.name);
+                hash.word(u64::from(value.data_type));
+                hash.bytes(&value.data);
+            }
+            let children: Vec<Arc<HiveKey>> =
+                state.subkeys.iter().filter(|k| !(k.volatile || top && skipped(k))).cloned().collect();
+            hash.word(children.len() as u64);
+            pending.extend(children.into_iter().rev().map(|child| (child, false)));
+        }
+        hash.0
+    }
+
+    /// La clé est volatile.
+    pub fn is_volatile(&self) -> bool {
+        matches!(&self.node, Node::Hive { key, .. } if key.volatile)
+    }
+}
+
+/// FNV-1a sur 64 bits.
+struct Fnv(u64);
+
+impl Fnv {
+    fn new() -> Self {
+        Self(0xCBF2_9CE4_8422_2325)
+    }
+    fn bytes(&mut self, bytes: &[u8]) {
+        self.word(bytes.len() as u64);
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3);
+        }
+    }
+    fn word(&mut self, word: u64) {
+        for byte in word.to_le_bytes() {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3);
+        }
+    }
+    fn units(&mut self, units: &[u16]) {
+        self.word(units.len() as u64);
+        for unit in units {
+            self.bytes(&unit.to_le_bytes());
+        }
+    }
+}
+
+/// Réécrit chaque ruche montée sous la clé virtuelle `key`.
+fn flush_under(key: &VirtualKey) -> Result<(), NtStatus> {
+    let children: Vec<Child> = key.children.lock().iter().map(|(_, child)| child.clone()).collect();
+    for child in children {
+        match child {
+            Child::Virtual(child) => flush_under(&child)?,
+            Child::Hive(file) => file.flush()?,
+        }
+    }
+    Ok(())
 }
 
 /// La procédure *parse* des clés : la clé que désigne la suite du nom.
@@ -385,11 +762,12 @@ pub fn registry() -> Option<Arc<Object<Key>>> {
 
 /// Monte la ruche SYSTEM du fichier `data` en `\REGISTRY\MACHINE\SYSTEM`,
 /// avec le lien `CurrentControlSet` vers le jeu de contrôle que désigne
-/// `Select\Current` (1 sans lui). Rend ce numéro.
+/// `Select\Current` (1 sans lui), et `file` (un nom NT) pour y réécrire la
+/// ruche (NtFlushKey). Rend ce numéro.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-pub fn mount_system_hive(data: Arc<[u8]>) -> Result<u32, NtStatus> {
+pub fn mount_system_hive(data: Arc<[u8]>, file: Option<&str>) -> Result<u32, NtStatus> {
     let registry = registry().expect("Cm not initialised");
     let current = {
         let hive = Hive::parse(&data).map_err(corrupt)?;
@@ -401,7 +779,11 @@ pub fn mount_system_hive(data: Arc<[u8]>) -> Result<u32, NtStatus> {
             .unwrap_or(1)
     };
     let target = format!("\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet{current:03}");
-    mount(&registry, "MACHINE", "SYSTEM", HiveFile::new(data)?.with_link("CurrentControlSet", &target))?;
+    let mut hive = HiveFile::new(data)?.with_link("CurrentControlSet", &target);
+    if let Some(file) = file {
+        hive = hive.with_file(file);
+    }
+    mount(&registry, "MACHINE", "SYSTEM", hive)?;
     Ok(current)
 }
 
@@ -411,6 +793,7 @@ mod tests {
     use abi::registry::REG_SZ;
     use alloc::vec;
     use ob::namespace::{Lookup, Namespace};
+    extern crate std;
     use regf::builder::{build, KeyNode};
 
     fn sz(text: &str) -> Vec<u8> {
@@ -511,5 +894,147 @@ mod tests {
         assert_eq!(open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
         assert!(kept.value(&units("Current")).unwrap().is_some(), "an open key keeps its hive");
         assert_eq!(HiveFile::new(Arc::from(&b"regf"[..])).err(), Some(STATUS_REGISTRY_CORRUPT));
+    }
+
+    #[test]
+    fn values_are_set_replaced_and_deleted() {
+        let (ns, _) = registry();
+        let select = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM\\Select").unwrap();
+        select.set_value(&units("Text"), REG_SZ, sz("one")).unwrap();
+        select.set_value(&units(""), 4, vec![7, 0, 0, 0]).unwrap();
+        select.set_value(&units("CURRENT"), 4, vec![2, 0, 0, 0]).unwrap();
+        let names: Vec<_> =
+            select.values().unwrap().into_iter().map(|v| String::from_utf16(&v.name).unwrap()).collect();
+        assert_eq!(names, ["Current", "Text", ""], "replaced in place, new ones at the end");
+        assert_eq!(select.value(&units("current")).unwrap().unwrap().data, vec![2, 0, 0, 0]);
+        let again = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM\\Select").unwrap();
+        assert_eq!(again.value(&units("text")).unwrap().unwrap().data, sz("one"), "seen through another open");
+        assert_eq!(again.facts().unwrap().values, 3);
+        select.delete_value(&units("TEXT")).unwrap();
+        assert_eq!(select.delete_value(&units("Text")).err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+        assert!(again.value(&units("Text")).unwrap().is_none());
+        assert_eq!(again.facts().unwrap().max_value_data, 4);
+    }
+
+    #[test]
+    fn subkeys_are_created_once_and_stay_sorted() {
+        let (ns, _) = registry();
+        let set = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001").unwrap();
+        let (zeta, created) = set.create_subkey("Zeta", &units("Cls"), false).unwrap();
+        assert!(created);
+        assert_eq!(zeta.facts().unwrap().class, units("Cls"));
+        let (alpha, _) = set.create_subkey("alpha", &[], false).unwrap();
+        alpha.set_value(&units("V"), 4, vec![1, 0, 0, 0]).unwrap();
+        let (same, created) = set.create_subkey("ALPHA", &units("ignored"), false).unwrap();
+        assert!(!created, "an existing key opens");
+        assert_eq!((same.key_name(), same.values().unwrap().len()), ("alpha", 1));
+        let names: Vec<_> =
+            (0..).map_while(|i| set.subkey_at(i).unwrap()).map(|k| String::from(k.key_name())).collect();
+        assert_eq!(names, ["alpha", "Control", "Services", "Zeta"]);
+        let found = open(&ns, "\\Registry\\Machine\\System\\CurrentControlSet\\ZETA").unwrap();
+        assert_eq!(found.key_name(), "Zeta", "reached by name, through the link");
+        assert_eq!(set.facts().unwrap().max_class, 6);
+    }
+
+    #[test]
+    fn what_cannot_be_created() {
+        let (ns, registry) = registry();
+        let machine = open(&ns, "\\REGISTRY\\MACHINE").unwrap();
+        assert_eq!(machine.create_subkey("New", &[], false).err(), Some(STATUS_ACCESS_DENIED), "a virtual key");
+        assert_eq!(registry.set_value(&units("V"), 4, vec![0; 4]).err(), Some(STATUS_ACCESS_DENIED));
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        assert_eq!(system.create_subkey("currentcontrolset", &[], false).err(), Some(STATUS_OBJECT_NAME_COLLISION));
+        assert_eq!(system.create_subkey("", &[], false).err(), Some(STATUS_OBJECT_NAME_INVALID));
+        assert_eq!(system.create_subkey("a\\b", &[], false).err(), Some(STATUS_OBJECT_NAME_INVALID));
+        let long = "k".repeat(MAX_KEY_NAME + 1);
+        assert_eq!(system.create_subkey(&long, &[], false).err(), Some(STATUS_INVALID_PARAMETER));
+        assert!(system.create_subkey(&long[1..], &[], false).is_ok(), "255 characters");
+    }
+
+    #[test]
+    fn a_volatile_key_holds_only_volatile_keys() {
+        let (ns, _) = registry();
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        let (volatile, _) = system.create_subkey("Volatile", &[], true).unwrap();
+        assert!(volatile.is_volatile() && !system.is_volatile());
+        assert_eq!(volatile.create_subkey("Durable", &[], false).err(), Some(STATUS_CHILD_MUST_BE_VOLATILE));
+        assert!(volatile.create_subkey("Also", &[], true).unwrap().0.is_volatile());
+    }
+
+    #[test]
+    fn a_hive_holds_512_levels() {
+        let path = |levels: usize| (1..levels).map(|i| format!("K{i}")).collect::<Vec<_>>().join("\\");
+        let mut deep = KeyNode::new("ROOT");
+        deep.key_mut(&path(MAX_DEPTH));
+        let file = HiveFile::new(Arc::from(build(&deep, "DEEP"))).expect("512 levels load");
+        let ns = Namespace::new();
+        let registry = new_registry();
+        let object: ObjectRef = registry.clone();
+        ns.insert(&object, "\\REGISTRY", None, 0).unwrap();
+        mount(&registry, "MACHINE", "DEEP", file).unwrap();
+        let bottom = open(&ns, &format!("\\REGISTRY\\MACHINE\\DEEP\\{}", path(MAX_DEPTH))).unwrap();
+        assert_eq!(bottom.create_subkey("Deeper", &[], false).err(), Some(STATUS_INVALID_PARAMETER));
+        let mut deeper = KeyNode::new("ROOT");
+        deeper.key_mut(&path(MAX_DEPTH + 1));
+        assert_eq!(HiveFile::new(Arc::from(build(&deeper, "DEEP"))).err(), Some(STATUS_REGISTRY_CORRUPT));
+    }
+
+    #[test]
+    fn a_hive_saves_without_its_volatile_keys_and_reads_back() {
+        let (ns, registry) = registry();
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        let hive = system.hive_file().expect("a hive");
+        assert!(!hive.is_dirty(), "as read");
+        let (saved, _) = system.create_subkey("MinoSaved", &units("Cls"), false).unwrap();
+        saved.set_value(&units("Text"), REG_SZ, sz("kept")).unwrap();
+        system.create_subkey("Gone", &[], true).unwrap().0.set_value(&units("V"), 4, vec![1, 0, 0, 0]).unwrap();
+        assert!(hive.is_dirty(), "written");
+        let before = system.digest(&[]);
+
+        let bytes = hive.to_regf("SYSTEM").unwrap();
+        mount(&registry, "MACHINE", "SAVED", HiveFile::new(Arc::from(bytes)).unwrap()).unwrap();
+        let again = open(&ns, "\\REGISTRY\\MACHINE\\SAVED").unwrap();
+        assert_eq!(again.digest(&[]), before, "the same keys, classes and values");
+        assert_eq!(open(&ns, "\\REGISTRY\\MACHINE\\SAVED\\Gone").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND), "volatile");
+        let kept = open(&ns, "\\REGISTRY\\MACHINE\\SAVED\\minosaved").unwrap();
+        assert_eq!(kept.facts().unwrap().class, units("Cls"));
+        assert_eq!(kept.value(&units("TEXT")).unwrap().unwrap().data, sz("kept"));
+        assert!(!again.hive_file().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn the_digest_sees_every_value_and_skips_what_it_is_told() {
+        let (ns, _) = registry();
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        let (base, all) = (system.digest(&["Select"]), system.digest(&[]));
+        assert_ne!(base, all, "Select counts");
+        let select = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM\\Select").unwrap();
+        select.set_value(&units("Current"), 4, vec![2, 0, 0, 0]).unwrap();
+        assert_eq!(system.digest(&["select"]), base, "skipped, without case");
+        assert_ne!(system.digest(&[]), all, "a value changed");
+        assert_eq!(open(&ns, "\\REGISTRY\\MACHINE").unwrap().digest(&[]), 0, "a virtual key");
+    }
+
+    #[test]
+    fn reactos_system_hive_saves_as_it_was() {
+        const SYSTEM: &str =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../third_party/reactos/0.4.16/reactos/system32/config/system");
+        let Ok(file) = std::fs::read(SYSTEM) else {
+            std::eprintln!("skipped: no {SYSTEM} (cargo xtask fetch-userland)");
+            return;
+        };
+        let ns = Namespace::new();
+        let registry = new_registry();
+        let object: ObjectRef = registry.clone();
+        ns.insert(&object, "\\REGISTRY", None, 0).unwrap();
+        let first = HiveFile::new(Arc::from(file)).unwrap();
+        let bytes = first.to_regf("SYSTEM").unwrap();
+        mount(&registry, "MACHINE", "SYSTEM", first).unwrap();
+        mount(&registry, "MACHINE", "SAVED", HiveFile::new(Arc::from(bytes)).unwrap()).unwrap();
+        let (a, b) =
+            (open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap(), open(&ns, "\\REGISTRY\\MACHINE\\SAVED").unwrap());
+        assert_eq!(a.digest(&[]), b.digest(&[]));
+        let known = "\\REGISTRY\\MACHINE\\SAVED\\ControlSet001\\Control\\Session Manager\\KnownDLLs";
+        assert_eq!(open(&ns, known).unwrap().value(&units("kernel32")).unwrap().unwrap().data, sz("kernel32.dll"));
     }
 }

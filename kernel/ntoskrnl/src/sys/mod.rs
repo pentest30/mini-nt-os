@@ -32,6 +32,8 @@ mod section;
 mod system;
 mod wait;
 
+pub(crate) use system::processor_information;
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -75,11 +77,15 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
     (services::NtCreateDirectoryObject, Handler::Status(object::nt_create_directory_object)),
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
+    (services::NtCreateKey, Handler::Status(registry::nt_create_key)),
     (services::NtCreateSection, Handler::Status(section::nt_create_section)),
     (services::NtCreateSymbolicLinkObject, Handler::Status(object::nt_create_symbolic_link_object)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
+    (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
+    (services::NtFlushBuffersFile, Handler::Status(file::nt_flush_buffers_file)),
+    (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
@@ -98,9 +104,13 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryVolumeInformationFile, Handler::Status(file::nt_query_volume_information_file)),
     (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
+    (services::NtReadFile, Handler::Status(file::nt_read_file)),
+    (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
+    (services::NtSetValueKey, Handler::Status(registry::nt_set_value_key)),
     (services::NtTerminateProcess, Handler::Status(process::nt_terminate_process)),
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
+    (services::NtWriteFile, Handler::Status(file::nt_write_file)),
 ];
 
 /// Au plus 63 arguments par service (`tools/syscall-gen`).

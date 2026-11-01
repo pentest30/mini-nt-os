@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 31 | 296 |
+| ntoskrnl | 39 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -58,7 +58,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0028` | `NtCreateIoCompletion` | 4 |  |
 | `0x0029` | `NtCreateJobObject` | 3 |  |
 | `0x002a` | `NtCreateJobSet` | 3 |  |
-| `0x002b` | `NtCreateKey` | 7 |  |
+| `0x002b` | `NtCreateKey` | 7 | ✅ |
 | `0x002c` | `NtCreateMailslotFile` | 8 |  |
 | `0x002d` | `NtCreateMutant` | 4 |  |
 | `0x002e` | `NtCreateNamedPipeFile` | 14 |  |
@@ -83,7 +83,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0041` | `NtDeleteFile` | 1 |  |
 | `0x0042` | `NtDeleteKey` | 1 |  |
 | `0x0043` | `NtDeleteObjectAuditAlarm` | 3 |  |
-| `0x0044` | `NtDeleteValueKey` | 2 |  |
+| `0x0044` | `NtDeleteValueKey` | 2 | ✅ |
 | `0x0045` | `NtDeviceIoControlFile` | 10 |  |
 | `0x0046` | `NtDisplayString` | 1 |  |
 | `0x0047` | `NtDuplicateObject` | 7 |  |
@@ -96,9 +96,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x004e` | `NtExtendSection` | 2 |  |
 | `0x004f` | `NtFilterToken` | 6 |  |
 | `0x0050` | `NtFindAtom` | 3 |  |
-| `0x0051` | `NtFlushBuffersFile` | 2 |  |
+| `0x0051` | `NtFlushBuffersFile` | 2 | ✅ |
 | `0x0052` | `NtFlushInstructionCache` | 3 |  |
-| `0x0053` | `NtFlushKey` | 1 |  |
+| `0x0053` | `NtFlushKey` | 1 | ✅ |
 | `0x0054` | `NtFlushVirtualMemory` | 4 |  |
 | `0x0055` | `NtFlushWriteBuffer` | 0 |  |
 | `0x0056` | `NtFreeUserPhysicalPages` | 3 |  |
@@ -206,7 +206,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00bc` | `NtQueueApcThread` | 5 | ✅ |
 | `0x00bd` | `NtRaiseException` | 3 | ✅ |
 | `0x00be` | `NtRaiseHardError` | 6 |  |
-| `0x00bf` | `NtReadFile` | 9 |  |
+| `0x00bf` | `NtReadFile` | 9 | ✅ |
 | `0x00c0` | `NtReadFileScatter` | 9 |  |
 | `0x00c1` | `NtReadRequestData` | 6 |  |
 | `0x00c2` | `NtReadVirtualMemory` | 5 |  |
@@ -248,7 +248,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00e6` | `NtSetHighEventPair` | 1 |  |
 | `0x00e7` | `NtSetHighWaitLowEventPair` | 1 |  |
 | `0x00e8` | `NtSetInformationDebugObject` | 5 |  |
-| `0x00e9` | `NtSetInformationFile` | 5 |  |
+| `0x00e9` | `NtSetInformationFile` | 5 | ✅ |
 | `0x00ea` | `NtSetInformationJobObject` | 4 |  |
 | `0x00eb` | `NtSetInformationKey` | 4 |  |
 | `0x00ec` | `NtSetInformationObject` | 4 |  |
@@ -271,7 +271,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00fd` | `NtSetTimer` | 7 |  |
 | `0x00fe` | `NtSetTimerResolution` | 3 |  |
 | `0x00ff` | `NtSetUuidSeed` | 1 |  |
-| `0x0100` | `NtSetValueKey` | 6 |  |
+| `0x0100` | `NtSetValueKey` | 6 | ✅ |
 | `0x0101` | `NtSetVolumeInformationFile` | 5 |  |
 | `0x0102` | `NtShutdownSystem` | 1 |  |
 | `0x0103` | `NtSignalAndWaitForSingleObject` | 4 |  |
@@ -299,7 +299,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0119` | `NtWaitForSingleObject` | 3 |  |
 | `0x011a` | `NtWaitHighEventPair` | 1 |  |
 | `0x011b` | `NtWaitLowEventPair` | 1 |  |
-| `0x011c` | `NtWriteFile` | 9 |  |
+| `0x011c` | `NtWriteFile` | 9 | ✅ |
 | `0x011d` | `NtWriteFileGather` | 9 |  |
 | `0x011e` | `NtWriteRequestData` | 6 |  |
 | `0x011f` | `NtWriteVirtualMemory` | 5 |  |

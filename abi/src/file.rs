@@ -47,6 +47,12 @@ pub const FILE_OPEN_BY_FILE_ID: u32 = 0x0000_2000;
 /// The options a caller may give.
 pub const FILE_VALID_OPTION_FLAGS: u32 = 0x00FF_FFFF;
 
+/// The special byte offsets of NtReadFile and NtWriteFile, as LARGE_INTEGER.
+/// FILE_WRITE_TO_END_OF_FILE: append.
+pub const FILE_WRITE_TO_END_OF_FILE: i64 = -1;
+/// FILE_USE_FILE_POINTER_POSITION: the current position.
+pub const FILE_USE_FILE_POINTER_POSITION: i64 = -2;
+
 /// Share access.
 pub const FILE_SHARE_READ: u32 = 0x0000_0001;
 pub const FILE_SHARE_WRITE: u32 = 0x0000_0002;
@@ -85,7 +91,9 @@ pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x0080;
 /// `FILE_INFORMATION_CLASS`.
 pub const FILE_BASIC_INFORMATION: u32 = 4;
 pub const FILE_STANDARD_INFORMATION: u32 = 5;
+pub const FILE_DISPOSITION_INFORMATION: u32 = 13;
 pub const FILE_POSITION_INFORMATION: u32 = 14;
+pub const FILE_END_OF_FILE_INFORMATION: u32 = 20;
 pub const FILE_NETWORK_OPEN_INFORMATION: u32 = 34;
 
 /// `FS_INFORMATION_CLASS`, and FileFsMaximumInformation of XP.

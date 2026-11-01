@@ -46,8 +46,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
-- **Jalon courant : M4 — E/S, registre, systèmes de fichiers** ([05](docs/05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)).
-  M0 à M3 sont terminés (spike S1 réussi ; l'ADR-002 attend S2 et S3). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
+- **Jalon courant : M5 — Mode console, puis spike S2** ([05](docs/05-feuille-de-route.md#m5--mode-console-puis-spike-s2)).
+  M0 à M4 sont terminés (spike S1 réussi ; l'ADR-002 attend S2 et S3). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
   `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
   thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
@@ -158,7 +158,20 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtCreateFile (ouverture), NtOpenFile, NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryInformationFile,
   NtQueryVolumeInformationFile (FileFsDeviceInformation) ; sections (`sys::section`) : NtCreateSection (fichier
   d'échange, données, image d'un fichier ouvert), NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection. `smss` met
-  21 sections d'image dans `\KnownDlls`, puis s'arrête à `SystemProcessorInformation`, puis à l'écriture du registre.
+  21 sections d'image dans `\KnownDlls`. NtQuerySystemInformation(`SystemProcessorInformation`) fait (décodage de
+  CPUID dans `hal::cpuid`). Registre en écriture fait, en mémoire : une ruche montée est un arbre de clés
+  (`cm::HiveKey`) ; NtCreateKey, NtSetValueKey, NtDeleteValueKey ; la ruche HARDWARE, volatile, bâtie au démarrage
+  (`ntoskrnl::hardware`). `smss` écrit ses variables d'environnement, puis ne trouve pas `csrss.exe` (M5) : le premier
+  critère du M4 est coché. FAT32 en écriture fait, sur le disque RAM : `tools/mkfat` écrit un vrai volume FAT32
+  (`fsck.vfat` l'accepte) ; `FatVolume` écrit, `Volume` et `File` créent et écrivent ; NtCreateFile crée, NtReadFile,
+  NtWriteFile, NtSetInformationFile, NtFlushBuffersFile. Disque système ATA fait : `hal::ata` (PIO, lecture,
+  écriture, FLUSH CACHE), `io::disk::AtaDisk` ; un disque FAT32 au maître du canal secondaire devient
+  `\Device\HarddiskVolume1`, et `C:` (sans lui, le disque RAM). Scénario `persistence` (`disk = system`, `boots = 2`,
+  `fsck.vfat` sur l'image) : le critère 3 du M4 est coché. Ruches réécrites sur disque : une ruche
+  lue d'un fichier s'y réécrit en entier, sans ses clés volatiles (`cm::HiveFile::flush`, `regf::builder` avec
+  classes et dates), NtFlushKey ; scénario `registry-persistence` (une valeur et l'empreinte de la ruche SYSTEM
+  relues au second démarrage) : les trois critères sont cochés, **le M4 est terminé**. Ses dettes sont dans la
+  passation.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -195,6 +208,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 - Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW
   (`i686-w64-mingw32-gcc`, paquet `gcc-mingw-w64-i686`), clang, `lld-link` et `llvm-dlltool` (paquets `clang`, `lld`,
   `llvm`). Sans eux, ils sont sautés.
+- `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
+  elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
 - Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.

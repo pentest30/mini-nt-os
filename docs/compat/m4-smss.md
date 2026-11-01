@@ -134,3 +134,42 @@ Ensuite :
 Le prochain mur est donc `SystemProcessorInformation` (architecture, niveau, révision et fonctions du processeur), puis,
 dans la même fonction (`SmpCreateDynamicEnvironmentVariables`), l'écriture du registre : NtOpenKey en `GENERIC_WRITE`
 sur `Session Manager\Environment` et NtSetValueKey (`OS`, `PROCESSOR_ARCHITECTURE`, `PROCESSOR_LEVEL`…), l'étape 4.
+
+## Étape 4 : le processeur
+
+NtQuerySystemInformation(`SystemProcessorInformation`) : x86, le niveau et la révision du processeur tels qu'XP SP2 les
+tire de CPUID (famille, plus la famille étendue pour la famille 15 ; modèle et pas, avec le modèle étendu pour la
+famille 15 et pour la famille 6 sur Intel), et `KeFeatureBits` (`KF_*` d'XP SP2 ; `KF_FAST_SYSCALL` seulement là où le
+noyau prend SYSENTER, ADR-004 ; NX selon EFER). `smss` en tire `PROCESSOR_ARCHITECTURE`, `PROCESSOR_LEVEL` et
+`PROCESSOR_REVISION`, ouvre `Session Manager\Environment` en `GENERIC_WRITE` (accordé : pas encore de Se), puis :
+
+| Service | Arguments | Ce qu'en fait `smss` | Composant |
+|---|---|---|---|
+| `NtSetValueKey` | `Environment`, `OS`, `REG_SZ`, 22 octets | « SMSS: Failed writing OS environment variable » : **`SmpInit` échoue** | **Cm** |
+
+Le prochain mur est l'écriture dans le registre (étape 4 de la passation) : NtSetValueKey, puis NtDeleteValueKey
+(déjà demandé plus tôt, toléré) et NtCreateKey, en mémoire d'abord ; la persistance (critère 2 du M4) ensuite.
+
+## Étape 5 : l'écriture dans le registre et la ruche HARDWARE
+
+- **Cm en écriture** : une ruche montée est désormais un arbre de clés en mémoire, lu du fichier à son montage (borné à
+  512 niveaux) ; on y écrit et efface des valeurs et on y crée des clés (volatiles ou non). Services : NtCreateKey,
+  NtSetValueKey, NtDeleteValueKey. Rien ne va encore sur disque (critère 2 du M4).
+- **La ruche HARDWARE**, volatile, bâtie au démarrage (`ntoskrnl::hardware`) : `DESCRIPTION\System\CentralProcessor\0`
+  avec `Identifier`, `VendorIdentifier`, `ProcessorNameString`, `FeatureSet`, et `FloatingPointProcessor\0`.
+
+`smss` écrit alors ses variables d'environnement dans `Session Manager\Environment` (journal `[m4] Environment: 6 of 6
+variables written` : `OS=Windows_NT`, `PROCESSOR_ARCHITECTURE=x86`, `PROCESSOR_LEVEL`, `PROCESSOR_IDENTIFIER`,
+`PROCESSOR_REVISION`, `NUMBER_OF_PROCESSORS=1`), puis :
+
+| Service | Arguments | Ce qu'en fait `smss` | Composant |
+|---|---|---|---|
+| `NtDeleteValueKey` | une valeur absente | `STATUS_OBJECT_NAME_NOT_FOUND`, toléré | Cm |
+| `NtInitializeRegistry` | 0 | les ruches restantes ; échec toléré | Cm |
+| `NtQueryValueKey` | `Setup\SystemPartition`, absent de la ruche de ReactOS | « SMSS: Cannot query SystemPartition value » ; toléré | |
+| `NtQueryAttributesFile` | `csrss.exe` cherché par `RtlDosSearchPath_U` (dans `Path`, puis le chemin des DLL), absent du disque | « SMSS: Unable to find subsystem », « Subsystem execute failed » : **`SmpInit` échoue** | Ps, Lpc (M5) |
+
+Le premier critère de sortie du M4 est atteint : `smss` démarre, lit `Session Manager`, crée les variables
+d'environnement et `\KnownDlls`. La suite de `smss` est le lancement de `csrss.exe`, le sous-système Win32 : création
+de processus depuis le mode utilisateur (NtCreateProcess, NtCreateThread), LPC, le travail du M5. Les deux autres
+critères du M4 (la persistance du registre et des fichiers) restent à faire.

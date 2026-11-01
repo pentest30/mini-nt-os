@@ -12,6 +12,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
+mod hardware;
 mod launcher;
 mod shared_data;
 mod sys;
@@ -285,9 +286,16 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
     cm::init();
+    match hardware::mount_hardware_hive() {
+        Ok(identifier) => log::info!(
+            "[boot] HARDWARE hive mounted at \\REGISTRY\\MACHINE\\HARDWARE: CentralProcessor\\0 = {identifier}, {}",
+            core::str::from_utf8(&hal::cpuid::vendor()).unwrap_or("?")
+        ),
+        Err(status) => log::error!("[boot] HARDWARE hive refused: {status}"),
+    }
     ps::init();
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
-    mount_boot_volume();
+    mount_boot_volumes();
     fat_smoke_probe();
 
     // Wire preemptive round-robin: each clock tick ends the quantum, and the
@@ -329,8 +337,10 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     early_exit_self_test();
     loader_services_self_test();
     registry_self_test();
+    registry_write_self_test();
     object_directory_self_test();
     file_self_test();
+    file_write_self_test();
     section_service_self_test();
     trap_gate_self_test();
     exception_self_test();
@@ -363,6 +373,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     userland::install_system_dll();
     userland::install_nls_tables();
     userland::mount_system_hive();
+    if cfg!(feature = "test-persistence") {
+        persistence_test();
+    }
     userland::run_native_probe();
     userland::run_boot_programs();
     if cfg!(feature = "test-smss") {
@@ -1947,7 +1960,9 @@ fn early_exit_self_test() {
 /// NtQuerySystemInformation(SystemBasicInformation) with its exact size,
 /// then with a size one byte short and one too large
 /// (`STATUS_INFO_LENGTH_MISMATCH`, the size still returned), an unmapped and
-/// a misaligned buffer, and a class without a handler; NtProtectVirtualMemory
+/// a misaligned buffer, and a class without a handler;
+/// NtQuerySystemInformation(SystemProcessorInformation), exact size only, with
+/// what CPUID and EFER say; NtProtectVirtualMemory
 /// on part of a page (the whole page changes, the range comes back rounded,
 /// with the old protection), on two pages, on a reserved page
 /// (`STATUS_NOT_COMMITTED`) and with an invalid protection;
@@ -1961,7 +1976,7 @@ fn loader_services_self_test() {
     };
     use abi::process::NT_CURRENT_PROCESS;
     use abi::services;
-    use abi::system_information::SYSTEM_BASIC_INFORMATION;
+    use abi::system_information::{SYSTEM_BASIC_INFORMATION, SYSTEM_PROCESSOR_INFORMATION};
     use alloc::sync::Arc;
     use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
@@ -2011,6 +2026,11 @@ fn loader_services_self_test() {
     const RESERVE: u32 = 0x2000;
     const READONLY: u32 = 0x02;
     const READWRITE: u32 = 0x04;
+    // SystemProcessorInformation, the length returned, two statuses.
+    const PROCESSOR: u32 = DATA + 0x1A0;
+    const PROCESSOR_LENGTH: u32 = DATA + 0x1B0;
+    const PROCESSOR_STATUS: u32 = DATA + 0x1B4;
+    const PROCESSOR_SHORT: u32 = DATA + 0x1B8;
     // SystemProcessInformation: not implemented.
     const PROCESS_INFORMATION: u32 = 5;
     const SCRATCH: u32 = DATA + 0x100;
@@ -2028,7 +2048,11 @@ fn loader_services_self_test() {
         .call(query, &[SYSTEM_BASIC_INFORMATION, SCRATCH + 2, 0x2C, 0])
         .store_eax(MISALIGNED)
         .call(query, &[PROCESS_INFORMATION, SCRATCH, 0x100, 0])
-        .store_eax(UNKNOWN_CLASS);
+        .store_eax(UNKNOWN_CLASS)
+        .call(query, &[SYSTEM_PROCESSOR_INFORMATION, PROCESSOR, 12, PROCESSOR_LENGTH])
+        .store_eax(PROCESSOR_STATUS)
+        .call(query, &[SYSTEM_PROCESSOR_INFORMATION, SCRATCH, 11, 0])
+        .store_eax(PROCESSOR_SHORT);
     let set = |code: &mut Code, at: u32, value: u32| {
         code.word(&[0xC7, 0x05], at).bytes(&value.to_le_bytes());
     };
@@ -2123,6 +2147,25 @@ fn loader_services_self_test() {
     assert_eq!((status(LONG), read(SCRATCH)), (STATUS_INFO_LENGTH_MISMATCH, 0), "the size must be exact");
     assert_eq!(status(UNMAPPED), STATUS_ACCESS_VIOLATION, "an unmapped buffer");
     assert_eq!(status(MISALIGNED), STATUS_DATATYPE_MISALIGNMENT, "a misaligned buffer");
+    assert_eq!((status(PROCESSOR_STATUS), read(PROCESSOR_LENGTH)), (STATUS_SUCCESS, 12), "SystemProcessorInformation");
+    assert_eq!(status(PROCESSOR_SHORT), STATUS_INFO_LENGTH_MISMATCH, "its size must be exact");
+    {
+        use abi::system_information::*;
+        use x86_64::registers::model_specific::{Efer, EferFlags};
+
+        let (signature, leaf1, extended) = hal::cpuid::signature_and_features();
+        let intel = hal::cpuid::is_intel();
+        let (level, revision) = hal::cpuid::level_and_revision(signature, intel);
+        let nx = Efer::read().contains(EferFlags::NO_EXECUTE_ENABLE);
+        let (word0, word1, bits) = (read(PROCESSOR), read(PROCESSOR + 4), read(PROCESSOR + 8));
+        assert_eq!(word0 & 0xFFFF, u32::from(PROCESSOR_ARCHITECTURE_INTEL), "x86");
+        assert_eq!((word0 >> 16, word1 & 0xFFFF), (u32::from(level), u32::from(revision)), "level and revision");
+        assert_eq!(bits, hal::cpuid::feature_bits(leaf1, extended, intel, nx), "KeFeatureBits");
+        let x86_64 = KF_CMPXCHG8B | KF_FXSR | KF_XMMI | KF_XMMI64 | KF_RDTSC | KF_CMOV;
+        assert_eq!(bits & x86_64, x86_64, "what every x86-64 processor has: {bits:#x}");
+        assert_eq!(bits & KF_FAST_SYSCALL != 0, intel, "SYSENTER on Intel only (ADR-004)");
+        assert_eq!(bits & KF_NX_ENABLED != 0, nx, "NX as EFER has it");
+    }
     assert_eq!(status(UNKNOWN_CLASS), STATUS_NOT_IMPLEMENTED, "SystemProcessInformation");
     let pages = read(PAGES);
     assert_ne!(pages, 0, "NtAllocateVirtualMemory");
@@ -2170,8 +2213,8 @@ fn loader_services_self_test() {
     drop(process);
     ps::wait_for_reaper();
     log::info!(
-        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation), NtProtectVirtualMemory, \
-         NtQueryVirtualMemory"
+        "[smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation, \
+         SystemProcessorInformation), NtProtectVirtualMemory, NtQueryVirtualMemory"
     );
 }
 
@@ -2807,6 +2850,318 @@ fn file_self_test() {
     );
 }
 
+/// M4, exit criteria 3 and 2 (scenarios `persistence` and
+/// `registry-persistence`, feature `test-persistence`): a file created on
+/// `C:`, the ATA system disk, and a value written in the registry are still
+/// there after a reboot. It runs once the SYSTEM hive is mounted (from
+/// `C:`). The first boot (no `C:\PERSIST`) writes, in the SYSTEM hive if
+/// there is one, the key `MinoPersist` with a value and the digest of the
+/// rest of the hive, and flushes it to its file (NtFlushKey); then
+/// `C:\PERSIST\DATA.TXT`, several clusters long, and twenty more files, so
+/// that the directory grows past a cluster; flushes the disk's cache and
+/// resets the machine. The next boot reads them back and compares them (the
+/// hive by its digest: every key and value, read from the file the first
+/// boot wrote), then writes again, so that `fsck.vfat` also checks what it
+/// wrote.
+fn persistence_test() {
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use io_manager::File;
+
+    const MORE: usize = 20;
+    let content: Vec<u8> =
+        (0..120).flat_map(|line| format!("Mino persistence test, line {line:04}\r\n").into_bytes()).collect();
+    let more = |i: usize| format!("file {i:02}, written by the first boot\r\n").into_bytes();
+    let fail = |why: String| log::error!("[m4] persistence: failed: {why}");
+    let ns = ob::namespace();
+    if ns.open(io_manager::DISK_VOLUME, None, Some(&io_manager::DEVICE_TYPE), 0).is_err() {
+        return fail(format!("no ATA system disk ({})", io_manager::DISK_VOLUME));
+    }
+    let open = |name: &str| -> Option<alloc::sync::Arc<ob::Object<File>>> {
+        let object = ns.open(name, None, Some(&io_manager::FILE_TYPE), abi::object::OBJ_CASE_INSENSITIVE).ok()?;
+        ob::downcast::<File>(&object)
+    };
+    let system = ns
+        .open("\\REGISTRY\\MACHINE\\SYSTEM", None, Some(&cm::KEY_TYPE), 0)
+        .ok()
+        .and_then(|object| ob::downcast::<cm::Key>(&object));
+    let units = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+    let sz = |text: &str| text.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+    const REG_QWORD: u32 = 11;
+    let Some(file) = open("\\??\\C:\\PERSIST\\DATA.TXT") else {
+        if let Some(system) = &system {
+            let digest = system.digest(&["MinoPersist"]);
+            let written = system.create_subkey("MinoPersist", &[], false).and_then(|(key, _)| {
+                key.set_value(&units("Boot"), abi::registry::REG_SZ, sz("written by the first boot"))?;
+                key.set_value(&units("Digest"), REG_QWORD, digest.to_le_bytes().to_vec())?;
+                system.flush()
+            });
+            if let Err(status) = written {
+                return fail(format!("first boot: the SYSTEM hive: {status}"));
+            }
+            log::info!(
+                "[m4] persistence: first boot: \\Registry\\Machine\\System\\MinoPersist written, the SYSTEM \
+                 hive flushed to {} (digest {digest:#018x})",
+                system.hive_file().and_then(|hive| hive.file().map(String::from)).unwrap_or_default()
+            );
+        } else {
+            log::info!("[m4] persistence: no SYSTEM hive (cargo xtask fetch-userland): the registry is not checked");
+        }
+        let written = (|| {
+            let root = open("\\??\\C:\\").ok_or(abi::ntstatus::STATUS_OBJECT_PATH_NOT_FOUND)?;
+            let directory = root.create_child("PERSIST", true, 0)?;
+            directory.create_child("DATA.TXT", false, 0)?.write(0, &content)?;
+            for i in 0..MORE {
+                directory.create_child(&format!("F{i:02}.TXT"), false, 0)?.write(0, &more(i))?;
+            }
+            root.flush()
+        })();
+        if let Err(status) = written {
+            return fail(format!("first boot: {status}"));
+        }
+        log::info!(
+            "[m4] persistence: first boot: C:\\PERSIST\\DATA.TXT written, {} bytes, and {MORE} more files; resetting",
+            content.len()
+        );
+        hal::power::reset();
+    };
+    let read = |name: &str| open(name).ok_or(abi::ntstatus::STATUS_OBJECT_NAME_NOT_FOUND).and_then(|f| f.read_all());
+    match file.read_all() {
+        Ok(back) if back == content => {}
+        Ok(back) => {
+            return fail(format!("second boot: DATA.TXT differs ({} bytes, {} written)", back.len(), content.len()))
+        }
+        Err(status) => return fail(format!("second boot: DATA.TXT: {status}")),
+    }
+    for i in 0..MORE {
+        match read(&format!("\\??\\C:\\PERSIST\\F{i:02}.TXT")) {
+            Ok(back) if back == more(i) => {}
+            Ok(_) => return fail(format!("second boot: F{i:02}.TXT differs")),
+            Err(status) => return fail(format!("second boot: F{i:02}.TXT: {status}")),
+        }
+    }
+    if let Some(system) = &system {
+        let Some(key) = ns
+            .open("\\REGISTRY\\MACHINE\\SYSTEM\\MinoPersist", None, Some(&cm::KEY_TYPE), 0)
+            .ok()
+            .and_then(|object| ob::downcast::<cm::Key>(&object))
+        else {
+            return fail(String::from("second boot: no MinoPersist key in the SYSTEM hive"));
+        };
+        let value = |name: &str| key.value(&units(name)).ok().flatten().map(|v| v.data);
+        if value("Boot") != Some(sz("written by the first boot")) {
+            return fail(format!("second boot: MinoPersist\\Boot is {:?}", value("Boot")));
+        }
+        let digest = system.digest(&["MinoPersist"]);
+        if value("Digest") != Some(digest.to_le_bytes().to_vec()) {
+            return fail(format!(
+                "second boot: the SYSTEM hive changed (digest {digest:#018x}, {:x?} written)",
+                value("Digest")
+            ));
+        }
+        let rewritten = key
+            .set_value(&units("Boot"), abi::registry::REG_SZ, sz("written again by the second boot"))
+            .and_then(|()| system.flush());
+        if let Err(status) = rewritten {
+            return fail(format!("second boot: the SYSTEM hive: {status}"));
+        }
+        log::info!(
+            "[m4] persistence: second boot: \\Registry\\Machine\\System\\MinoPersist read back, the rest of the \
+             SYSTEM hive as it was (digest {digest:#018x}); written again"
+        );
+    }
+    let appended = file.write(content.len() as u64, b"appended by the second boot\r\n").and_then(|()| file.flush());
+    if let Err(status) = appended {
+        return fail(format!("second boot: append: {status}"));
+    }
+    log::info!(
+        "[m4] persistence: second boot: C:\\PERSIST\\DATA.TXT read back, {} bytes, as written, and {MORE} more \
+         files; a line appended",
+        content.len()
+    );
+}
+
+/// Writing files from user mode (`sys::file`, `io_manager`, M4), on the boot
+/// RAM disk, which every boot starts afresh (`C:` may be a disk that keeps
+/// what boots write): NtCreateFile makes `\Device\Ramdisk0\MINOTEST.TXT`; NtWriteFile writes at
+/// the current position, then past the end (the gap reads as zeros);
+/// NtSetInformationFile moves the position back; NtReadFile reads it all,
+/// then meets the end; a second open overwrites it, which the first handle
+/// sees. A directory, and a file created in it by FILE_OPEN_IF. Then what
+/// must fail: a name taken, a missing directory, a long name, a write
+/// through a read-only handle.
+fn file_write_self_test() {
+    use abi::file::*;
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_END_OF_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
+        STATUS_OBJECT_PATH_NOT_FOUND, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_CASE_INSENSITIVE;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const HANDLE: u32 = DATA + 0x40; // 16 handles
+    const IOSB: u32 = DATA + 0x80; // 16 IO_STATUS_BLOCKs
+    const OFFSET: u32 = DATA + 0x100; // a LARGE_INTEGER: 20; then one at 0
+    const STANDARD: u32 = DATA + 0x110; // 24 bytes
+    const STANDARD_AFTER: u32 = DATA + 0x3D0; // 24 bytes, after the overwrite
+    const READ: u32 = DATA + 0x130; // 64 bytes
+    const OA: u32 = DATA + 0x170; // 6 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0x200; // 6 UNICODE_STRING
+    const TEXT: u32 = DATA + 0x230; // "hello, disk!"
+    const DONE: u32 = DATA + 0x3FC;
+    const READ_WRITE: u32 = 0xC000_0000 | 0x0010_0000; // GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x240usize;
+    let names = [
+        "\\Device\\Ramdisk0\\MINOTEST.TXT",
+        "\\Device\\Ramdisk0\\MINODIR",
+        "\\Device\\Ramdisk0\\MINODIR\\INNER.TXT",
+        "\\Device\\Ramdisk0\\NODIR\\X.TXT",
+        "\\Device\\Ramdisk0\\A long name.txt",
+        "\\Device\\Ramdisk0\\KERNEL.BIN",
+    ];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+        let oa = (OA - DATA) as usize + 24 * i;
+        data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+        data[oa + 8..oa + 12].copy_from_slice(&(DATA + at as u32).to_le_bytes());
+        data[oa + 12..oa + 16].copy_from_slice(&OBJ_CASE_INSENSITIVE.to_le_bytes());
+    }
+    assert!(strings <= 0x3D0, "the strings outgrew the data");
+    data[(OFFSET - DATA) as usize..][..8].copy_from_slice(&20u64.to_le_bytes());
+    data[(TEXT - DATA) as usize..][..12].copy_from_slice(b"hello, disk!");
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let iosb = |i: u32| Arg::Value(IOSB + 8 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let (create, write, read) = (services::NtCreateFile, services::NtWriteFile, services::NtReadFile);
+    let file_options = FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
+    let new_file = |h: u32, access: u32, name: u32, disposition: u32, options: u32| {
+        [handle(h), v(access), oa(name), iosb(h), v(0), v(FILE_ATTRIBUTE_NORMAL), v(0), v(disposition), v(options)]
+            .into_iter()
+            .chain([v(0), v(0)])
+            .collect::<alloc::vec::Vec<_>>()
+    };
+    let h0 = m(HANDLE);
+    let mut code = Code::new();
+    code.call_args(create, &new_file(0, READ_WRITE, 0, FILE_CREATE, file_options)).store_eax(status(0));
+    code.call_args(write, &[h0, v(0), v(0), v(0), iosb(1), v(TEXT), v(11), v(0), v(0)]).store_eax(status(1));
+    code.call_args(write, &[h0, v(0), v(0), v(0), iosb(2), v(TEXT + 11), v(1), v(OFFSET), v(0)]).store_eax(status(2));
+    let query = services::NtQueryInformationFile;
+    code.call_args(query, &[h0, iosb(3), v(STANDARD), v(24), v(FILE_STANDARD_INFORMATION)]).store_eax(status(3));
+    let set = services::NtSetInformationFile;
+    code.call_args(set, &[h0, iosb(4), v(OFFSET + 8), v(8), v(FILE_POSITION_INFORMATION)]).store_eax(status(4));
+    code.call_args(read, &[h0, v(0), v(0), v(0), iosb(5), v(READ), v(64), v(0), v(0)]).store_eax(status(5));
+    code.call_args(read, &[h0, v(0), v(0), v(0), iosb(6), v(READ), v(64), v(0), v(0)]).store_eax(status(6));
+    code.call_args(create, &new_file(7, READ_WRITE, 0, FILE_CREATE, file_options)).store_eax(status(7));
+    code.call_args(create, &new_file(8, READ_WRITE, 0, FILE_OVERWRITE_IF, file_options)).store_eax(status(8));
+    code.call_args(query, &[h0, iosb(9), v(STANDARD_AFTER), v(24), v(FILE_STANDARD_INFORMATION)]).store_eax(status(9));
+    let directory_options = FILE_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT;
+    code.call_args(create, &new_file(10, FILE_LIST_DIRECTORY | 0x0010_0000, 1, FILE_CREATE, directory_options))
+        .store_eax(status(10));
+    code.call_args(create, &new_file(11, READ_WRITE, 2, FILE_OPEN_IF, file_options)).store_eax(status(11));
+    code.call_args(create, &new_file(12, READ_WRITE, 3, FILE_CREATE, file_options)).store_eax(status(12));
+    code.call_args(create, &new_file(13, READ_WRITE, 4, FILE_CREATE, file_options)).store_eax(status(13));
+    code.call_args(
+        services::NtOpenFile,
+        &[handle(14), v(FILE_READ_DATA | 0x0010_0000), oa(5), iosb(14), v(1), v(file_options)],
+    )
+    .store_eax(status(14));
+    code.call_args(write, &[m(HANDLE + 56), v(0), v(0), v(0), iosb(15), v(TEXT), v(4), v(OFFSET), v(0)])
+        .store_eax(status(15));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "writes.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_u32 = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read_u32(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the file write test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..16).map(|i| NtStatus(read_u32(status(i)))).collect();
+    let iosb_at = |i: u32| (read_u32(IOSB + 8 * i), read_u32(IOSB + 8 * i + 4));
+    assert_eq!((statuses[0], iosb_at(0)), (STATUS_SUCCESS, (0, FILE_CREATED)), "NtCreateFile makes MINOTEST.TXT");
+    assert_eq!((statuses[1], iosb_at(1)), (STATUS_SUCCESS, (0, 11)), "NtWriteFile at the position");
+    assert_eq!((statuses[2], iosb_at(2)), (STATUS_SUCCESS, (0, 1)), "NtWriteFile past the end");
+    assert_eq!((statuses[3], read_u32(STANDARD + 8)), (STATUS_SUCCESS, 21), "21 bytes now");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "NtSetInformationFile(FilePositionInformation)");
+    assert_eq!((statuses[5], iosb_at(5)), (STATUS_SUCCESS, (0, 21)), "NtReadFile from the start");
+    let mut back = [0u8; 21];
+    process.read_memory(u64::from(READ), &mut back).expect("read the process");
+    assert_eq!(&back, b"hello, disk\0\0\0\0\0\0\0\0\0!", "written, a gap of zeros, then the last byte");
+    assert_eq!((statuses[6], iosb_at(6).0), (STATUS_END_OF_FILE, STATUS_END_OF_FILE.0), "then the end");
+    assert_eq!(statuses[7], STATUS_OBJECT_NAME_COLLISION, "FILE_CREATE on a name taken");
+    assert_eq!((statuses[8], iosb_at(8)), (STATUS_SUCCESS, (0, FILE_OVERWRITTEN)), "FILE_OVERWRITE_IF");
+    assert_eq!((statuses[9], read_u32(STANDARD_AFTER + 8)), (STATUS_SUCCESS, 0), "the first handle sees it empty");
+    assert_eq!((statuses[10], iosb_at(10)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a directory");
+    assert_eq!((statuses[11], iosb_at(11)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a file in it, by FILE_OPEN_IF");
+    assert_eq!(statuses[12], STATUS_OBJECT_PATH_NOT_FOUND, "a missing directory");
+    assert_eq!(statuses[13], STATUS_OBJECT_NAME_INVALID, "a long name, not yet");
+    assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_ACCESS_DENIED), "a read-only handle");
+
+    let ns = ob::namespace();
+    let size = |name: &str| {
+        let object = ns.open(name, None, Some(&io_manager::FILE_TYPE), 0).expect(name);
+        ob::downcast::<io_manager::File>(&object).expect("a file").node().expect("its entry").size
+    };
+    assert_eq!((size("\\Device\\Ramdisk0\\minotest.txt"), size("\\Device\\Ramdisk0\\MinoDir\\Inner.txt")), (0, 0));
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Io: files written from user mode on the boot RAM disk: NtCreateFile (create, overwrite, directory), \
+         NtWriteFile, NtReadFile, NtSetInformationFile"
+    );
+}
+
 /// The section services from user mode (`sys::section`, M4), on files of
 /// the boot volume: a data section of `KERNEL.BIN`, mapped, read ("ABCD")
 /// and unmapped; the image `TEST.EXE` as a named section, opened again by its
@@ -2989,6 +3344,227 @@ fn section_service_self_test() {
     log::info!(
         "[smoke] Mm: sections from user mode on files of \\??\\C:: NtCreateSection (data, image, paging file), \
          NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection"
+    );
+}
+
+/// The registry write services from user mode (`cm`, `sys::registry`, M4),
+/// on a hive mounted at `\REGISTRY\MACHINE\MinoWrite`: NtCreateKey makes a
+/// key with a class, then opens it again; a volatile key relative to it, and
+/// a durable one under that (refused); a key whose parent is missing, one
+/// under a virtual key, bad options. NtSetValueKey writes a value, then
+/// replaces it, read back through another handle; NtDeleteValueKey removes
+/// it, then finds nothing; a handle without KEY_SET_VALUE writes nothing; an
+/// unmapped buffer faults.
+fn registry_write_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_ACCESS_VIOLATION, STATUS_CHILD_MUST_BE_VOLATILE,
+        STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::OBJ_CASE_INSENSITIVE;
+    use abi::registry::{
+        KEY_ALL_ACCESS, KEY_VALUE_PARTIAL_INFORMATION, REG_CREATED_NEW_KEY, REG_DWORD, REG_OPENED_EXISTING_KEY,
+        REG_OPTION_VOLATILE, REG_SZ,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use regf::builder::{build, KeyNode};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const KEY_READ: u32 = 0x0002_0019;
+    const STATUS: u32 = DATA; // 16 statuses
+    const HANDLE: u32 = DATA + 0x40; // 16 handles
+    const DISPOSITION: u32 = DATA + 0x80; // 8 dispositions
+    const DWORD_DATA: u32 = DATA + 0xA0;
+    const TEXT_DATA: u32 = DATA + 0xA4; // "hi"
+    const QUERY: u32 = DATA + 0xB0; // 0x20 bytes
+    const QUERY_LENGTH: u32 = DATA + 0xD0;
+    const OA: u32 = DATA + 0xD8; // 6 OBJECT_ATTRIBUTES of 24 bytes
+    const US: usize = 0x168; // 8 UNICODE_STRING
+    const FLUSHED: u32 = DATA + 0x3F8; // NtFlushKey's status
+    const DONE: u32 = DATA + 0x3FC;
+
+    // The hive comes from a file of the boot RAM disk, where NtFlushKey
+    // writes it back.
+    const HIVE_FILE: &str = "\\Device\\Ramdisk0\\MINOWRIT.HIV";
+    let mut root = KeyNode::new("MINOWRITE");
+    root.key_mut("Sub").set_value("Old", REG_DWORD, alloc::vec![1, 0, 0, 0]);
+    let bytes = build(&root, "MINOWRIT.HIV");
+    let open_file = |name: &str| {
+        let object = ob::namespace().open(name, None, Some(&io_manager::FILE_TYPE), 0).expect(name);
+        ob::downcast::<io_manager::File>(&object).expect("a file")
+    };
+    let file = open_file("\\Device\\Ramdisk0\\").create_child("MINOWRIT.HIV", false, 0).expect("the hive file");
+    file.write(0, &bytes).expect("write the hive file");
+    drop(file);
+    let registry = cm::registry().expect("Cm initialised");
+    let hive = cm::HiveFile::new(Arc::from(bytes)).expect("a hive").with_file(HIVE_FILE);
+    cm::mount(&registry, "MACHINE", "MinoWrite", hive).expect("mount the test hive");
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let mut strings = 0x1A8usize;
+    let names = [
+        "\\Registry\\Machine\\MinoWrite\\New",
+        "Volatile",
+        "Volatile\\Durable",
+        "\\Registry\\Machine\\MinoWrite\\Missing\\X",
+        "\\Registry\\Machine\\Direct",
+        "\\Registry\\Machine\\MinoWrite\\Sub",
+        "Value",
+        "Old",
+    ];
+    for (i, text) in names.iter().enumerate() {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        data[strings..strings + units.len()].copy_from_slice(&units);
+        let at = US + 8 * i;
+        let length = units.len() as u16;
+        data[at..at + 2].copy_from_slice(&length.to_le_bytes());
+        data[at + 2..at + 4].copy_from_slice(&length.to_le_bytes());
+        data[at + 4..at + 8].copy_from_slice(&(DATA + strings as u32).to_le_bytes());
+        strings += units.len().next_multiple_of(4);
+        if i < 6 {
+            let oa = (OA - DATA) as usize + 24 * i;
+            data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+            data[oa + 8..oa + 12].copy_from_slice(&(DATA + at as u32).to_le_bytes());
+            data[oa + 12..oa + 16].copy_from_slice(&OBJ_CASE_INSENSITIVE.to_le_bytes());
+        }
+    }
+    assert!(strings <= 0x3F8, "the strings outgrew the data");
+    data[(DWORD_DATA - DATA) as usize..][..4].copy_from_slice(&0x1234u32.to_le_bytes());
+    data[(TEXT_DATA - DATA) as usize..][..6].copy_from_slice(&[b'h', 0, b'i', 0, 0, 0]);
+    // Handle 4 starts non-zero: a failed create must zero it.
+    data[(HANDLE - DATA) as usize + 16..][..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let oa = |i: u32| Arg::Value(OA + 24 * i);
+    let handle = |i: u32| Arg::Value(HANDLE + 4 * i);
+    let disposition = |i: u32| Arg::Value(DISPOSITION + 4 * i);
+    let us = |i: u32| Arg::Value(DATA + (US as u32) + 8 * i);
+    let status = |i: u32| STATUS + 4 * i;
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let (create, set, delete) = (services::NtCreateKey, services::NtSetValueKey, services::NtDeleteValueKey);
+    let mut code = Code::new();
+    code.call_args(create, &[handle(0), v(KEY_ALL_ACCESS), oa(0), v(0), us(6), v(0), disposition(0)])
+        .store_eax(status(0));
+    code.call_args(create, &[handle(1), v(KEY_ALL_ACCESS), oa(0), v(0), v(0), v(0), disposition(1)])
+        .store_eax(status(1));
+    code.word(&[0xA1], HANDLE) // mov eax, [handle 0]
+        .store_eax(OA + 24 + 4) // OA 1's RootDirectory
+        .store_eax(OA + 48 + 4); // OA 2's
+    code.call_args(create, &[handle(2), v(KEY_ALL_ACCESS), oa(1), v(0), v(0), v(REG_OPTION_VOLATILE), disposition(2)])
+        .store_eax(status(2));
+    code.call_args(create, &[handle(3), v(KEY_ALL_ACCESS), oa(2), v(0), v(0), v(0), disposition(3)])
+        .store_eax(status(3));
+    code.call_args(create, &[handle(4), v(KEY_ALL_ACCESS), oa(3), v(0), v(0), v(0), v(0)]).store_eax(status(4));
+    code.call_args(create, &[handle(5), v(KEY_ALL_ACCESS), oa(4), v(0), v(0), v(0), disposition(5)])
+        .store_eax(status(5));
+    code.call_args(set, &[m(HANDLE), us(6), v(0), v(REG_SZ), v(TEXT_DATA), v(6)]).store_eax(status(6));
+    code.call_args(set, &[m(HANDLE), us(6), v(0), v(REG_DWORD), v(DWORD_DATA), v(4)]).store_eax(status(7));
+    let query = services::NtQueryValueKey;
+    code.call_args(
+        query,
+        &[m(HANDLE + 4), us(6), v(KEY_VALUE_PARTIAL_INFORMATION), v(QUERY), v(0x20), v(QUERY_LENGTH)],
+    )
+    .store_eax(status(8));
+    code.call_args(services::NtOpenKey, &[handle(9), v(KEY_READ), oa(5)]).store_eax(status(9));
+    code.call_args(set, &[m(HANDLE + 36), us(7), v(0), v(REG_DWORD), v(DWORD_DATA), v(4)]).store_eax(status(10));
+    code.call_args(delete, &[m(HANDLE + 36), us(7)]).store_eax(status(11));
+    code.call_args(delete, &[m(HANDLE), us(6)]).store_eax(status(12));
+    code.call_args(delete, &[m(HANDLE), us(6)]).store_eax(status(13));
+    code.call_args(create, &[handle(14), v(KEY_ALL_ACCESS), oa(0), v(0), v(0), v(0x10), v(0)]).store_eax(status(14));
+    code.call_args(set, &[m(HANDLE), us(7), v(0), v(REG_DWORD), v(0x10), v(4)]).store_eax(status(15));
+    code.call_args(services::NtFlushKey, &[m(HANDLE)]).store_eax(FLUSHED);
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "regwrite.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the registry write test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let statuses: alloc::vec::Vec<NtStatus> = (0..16).map(|i| NtStatus(read(status(i)))).collect();
+    let disposition_at = |i: u32| read(DISPOSITION + 4 * i);
+    assert_eq!((statuses[0], disposition_at(0)), (STATUS_SUCCESS, REG_CREATED_NEW_KEY), "NtCreateKey makes New");
+    assert_eq!((statuses[1], disposition_at(1)), (STATUS_SUCCESS, REG_OPENED_EXISTING_KEY), "then opens it");
+    assert_eq!((statuses[2], disposition_at(2)), (STATUS_SUCCESS, REG_CREATED_NEW_KEY), "a volatile key under it");
+    assert_eq!(statuses[3], STATUS_CHILD_MUST_BE_VOLATILE, "a durable key under a volatile one");
+    assert_eq!((statuses[4], read(HANDLE + 16)), (STATUS_OBJECT_NAME_NOT_FOUND, 0), "no parent, handle zeroed");
+    assert_eq!(statuses[5], STATUS_ACCESS_DENIED, "a key under a virtual key");
+    assert_eq!((statuses[6], statuses[7]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtSetValueKey, then again");
+    assert_eq!(statuses[8], STATUS_SUCCESS, "the value read through the other handle");
+    assert_eq!((read(QUERY + 4), read(QUERY + 8), read(QUERY + 12)), (REG_DWORD, 4, 0x1234), "replaced: a DWORD");
+    assert_eq!(statuses[9], STATUS_SUCCESS, "Sub opened for reading");
+    assert_eq!((statuses[10], statuses[11]), (STATUS_ACCESS_DENIED, STATUS_ACCESS_DENIED), "without KEY_SET_VALUE");
+    assert_eq!((statuses[12], statuses[13]), (STATUS_SUCCESS, STATUS_OBJECT_NAME_NOT_FOUND), "deleted once");
+    assert_eq!(statuses[14], STATUS_INVALID_PARAMETER, "an unknown create option");
+    assert_eq!(statuses[15], STATUS_ACCESS_VIOLATION, "data at an unmapped address");
+    assert_eq!(NtStatus(read(FLUSHED)), STATUS_SUCCESS, "NtFlushKey");
+    {
+        // What NtFlushKey wrote: New with its class, its volatile key left
+        // out, Value deleted, Sub untouched.
+        let written = open_file(HIVE_FILE).read_all().expect("read the hive file back");
+        let hive = regf::Hive::parse(&written).expect("a hive");
+        let root = hive.root().expect("its root");
+        let new = root.open("New").expect("read").expect("New, written");
+        let class: alloc::vec::Vec<u16> = new.class().expect("read").expect("a class").units().collect();
+        assert_eq!(class, "Value".encode_utf16().collect::<alloc::vec::Vec<_>>(), "its class");
+        assert!(new.open("Volatile").expect("read").is_none(), "a volatile key is not written");
+        assert!(new.value("Value").expect("read").is_none(), "deleted before the flush");
+        let old = root.open("Sub").expect("read").expect("Sub").value("Old").expect("read").expect("Old");
+        assert_eq!(&*old.data().expect("read"), &[1, 0, 0, 0]);
+    }
+
+    let ns = ob::namespace();
+    let open = |name: &str| {
+        let object = ns.open(name, None, Some(&cm::KEY_TYPE), 0).expect(name);
+        ob::downcast::<cm::Key>(&object).expect("a key")
+    };
+    let new = open("\\REGISTRY\\MACHINE\\MinoWrite\\New");
+    let facts = new.facts().expect("facts");
+    assert_eq!((facts.class.as_slice(), facts.values, facts.subkeys), (&[86u16, 97, 108, 117, 101][..], 0, 1));
+    assert!(open("\\REGISTRY\\MACHINE\\MinoWrite\\New\\Volatile").is_volatile());
+    let old = open("\\REGISTRY\\MACHINE\\MinoWrite\\Sub").value(&[79, 108, 100]).expect("read").expect("Old");
+    assert_eq!(old.data, [1, 0, 0, 0], "untouched");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    cm::unmount(&registry, "MACHINE", "MinoWrite").expect("unmount the test hive");
+    log::info!(
+        "[smoke] Cm: registry writes from user mode: NtCreateKey (new, existing, volatile), NtSetValueKey, \
+         NtDeleteValueKey, NtFlushKey (the hive written back to its file)"
     );
 }
 
@@ -4225,7 +4801,9 @@ fn process_round() -> ([u32; 2], [u32; 2]) {
         assert_eq!(wait(process.dispatcher_object(), 3000), STATUS_WAIT_0, "{} did not end", process.image_file_name());
     }
 
-    let (c, tc) = start(&faulty, "faulty.exe", &[0x1000, 0x1020]);
+    // The spinner first: once the faulting thread exists it may run, and its
+    // fault ends the process, before a thread created after it gets a stack.
+    let (c, tc) = start(&faulty, "faulty.exe", &[0x1020, 0x1000]);
     assert_eq!(wait(c.dispatcher_object(), 3000), STATUS_WAIT_0, "a faulting process did not end");
     // Created and terminated at once: at the boot thread's priority, its
     // thread has not run yet. Alone, nothing but its exit APC stops it.
@@ -4957,17 +5535,28 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
 }
 
 #[allow(dead_code)]
-/// The boot RAM disk as the system volume (`io_manager::mount_boot_volume`):
-/// `\Device\Ramdisk0`, with `\??\C:` and `\SystemRoot` leading to it.
-fn mount_boot_volume() {
-    match io_manager::mount_boot_volume() {
-        Ok(Some(size)) => log::info!(
-            "[boot] Io: boot volume {} (FAT32, {size} bytes), {}",
-            io_manager::BOOT_VOLUME,
-            io_manager::BOOT_LINKS.map(|(name, target)| alloc::format!("{name} -> {target}")).join(", ")
+/// The boot volumes (`io_manager::mount_boot_volumes`): the boot RAM disk,
+/// and the ATA system disk if there is one, which `\??\C:` and `\SystemRoot`
+/// then lead to.
+fn mount_boot_volumes() {
+    let volumes = match io_manager::mount_boot_volumes() {
+        Ok(volumes) => volumes,
+        Err(status) => return log::error!("[boot] Io: the boot volume refused: {status}"),
+    };
+    if let Some(size) = volumes.ramdisk {
+        log::info!("[boot] Io: boot volume {} (FAT32, {size} bytes)", io_manager::RAMDISK_VOLUME);
+    }
+    match volumes.disk {
+        Some(Ok(sectors)) => log::info!(
+            "[boot] Io: system disk {} (ATA, secondary master, FAT32, {sectors} sectors)",
+            io_manager::DISK_VOLUME
         ),
-        Ok(None) => log::info!("[boot] Io: no boot RAM disk, no system volume"),
-        Err(status) => log::error!("[boot] Io: the boot volume refused: {status}"),
+        Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no FAT32 volume: {status}"),
+        None => {}
+    }
+    match volumes.system {
+        Some(system) => log::info!("[boot] Io: \\GLOBAL??\\C: -> {system}, \\SystemRoot -> {system}\\WINDOWS"),
+        None => log::info!("[boot] Io: no boot RAM disk nor system disk, no system volume"),
     }
 }
 

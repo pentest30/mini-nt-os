@@ -1,0 +1,28 @@
+# M4, exit criterion 2: a value written in the registry is still there
+# after a reboot. As `persistence`, two boots on the ATA system disk C:, with
+# the ReactOS userland on it, its SYSTEM hive included. The first boot writes
+# \Registry\Machine\System\MinoPersist, with a value and the digest of the
+# rest of the hive, and flushes the hive to C:\WINDOWS\system32\config\SYSTEM
+# (NtFlushKey); the second mounts the hive from that file, finds the value,
+# and the same digest: every other key and value came back as it was. Then
+# fsck.vfat -n on the image.
+features = test-persistence
+requires = userland
+disk     = system
+boots    = 2
+cpus     = default
+timeout  = 240
+
+expect = [boot] Io: \GLOBAL??\C: -> \Device\HarddiskVolume1
+expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
+expect = [m4] persistence: first boot: \Registry\Machine\System\MinoPersist written, the SYSTEM hive flushed to \SystemRoot\System32\config\SYSTEM
+expect = [m4] persistence: second boot: \Registry\Machine\System\MinoPersist read back, the rest of the SYSTEM hive as it was
+expect = [m4] persistence: second boot: C:\PERSIST\DATA.TXT read back
+expect = kernel: phase 1 done
+
+# A fatal error ends the run at once.
+forbid = *** STOP:
+forbid = [m4] persistence: failed
+forbid = [m4] persistence: no SYSTEM hive
+forbid = [boot] SYSTEM hive refused
+forbid = [boot] Io: the ATA system disk holds no FAT32 volume
