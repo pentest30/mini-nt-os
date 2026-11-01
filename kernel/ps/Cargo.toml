@@ -13,6 +13,7 @@ ob       = { path = "../ob" }
 mm       = { path = "../mm" }
 pe       = { path = "../../libs/pe" }
 ke       = { path = "../ke" }
+se       = { path = "../se" }
 log      = { workspace = true }
 
 [dev-dependencies]
