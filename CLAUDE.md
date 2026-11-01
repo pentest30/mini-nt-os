@@ -164,8 +164,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`ntoskrnl::hardware`). `smss` écrit ses variables d'environnement, puis ne trouve pas `csrss.exe` (M5) : le premier
   critère du M4 est coché. FAT32 en écriture fait, sur le disque RAM : `tools/mkfat` écrit un vrai volume FAT32
   (`fsck.vfat` l'accepte) ; `FatVolume` écrit, `Volume` et `File` créent et écrivent ; NtCreateFile crée, NtReadFile,
-  NtWriteFile, NtSetInformationFile, NtFlushBuffersFile. Restent la persistance (un vrai disque pour `C:`) et les
-  ruches réécrites.
+  NtWriteFile, NtSetInformationFile, NtFlushBuffersFile. Disque système ATA fait : `hal::ata` (PIO, lecture,
+  écriture, FLUSH CACHE), `io::disk::AtaDisk` ; un disque FAT32 au maître du canal secondaire devient
+  `\Device\HarddiskVolume1`, et `C:` (sans lui, le disque RAM). Scénario `persistence` (`disk = system`, `boots = 2`,
+  `fsck.vfat` sur l'image) : le critère 3 du M4 est coché. Reste le critère 2 : les ruches réécrites sur `C:`.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -202,6 +204,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 - Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW
   (`i686-w64-mingw32-gcc`, paquet `gcc-mingw-w64-i686`), clang, `lld-link` et `llvm-dlltool` (paquets `clang`, `lld`,
   `llvm`). Sans eux, ils sont sautés.
+- `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
+  elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
   `--cpu intel` exerce le chemin SYSENTER.
 - Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.

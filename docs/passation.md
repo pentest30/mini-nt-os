@@ -9,10 +9,10 @@ jour à chaque commit qui change l'état.
 - Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
   (spike S1 réussi). Étapes 0, 1, 2, 4 (en mémoire), 5 et 6 du M4 faites : la sonde `smss`, le registre en lecture
   puis en écriture, les répertoires d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`),
-  `SystemProcessorInformation`, la ruche HARDWARE, le FAT32 en écriture (sur le disque RAM). **Le premier critère
-  de sortie du M4 est coché** : `smss` crée ses variables d'environnement et `\KnownDlls`, puis s'arrête au lancement
-  de `csrss.exe` (M5). Restent les critères 2 et 3 : la persistance du registre et des fichiers, donc un vrai disque
-  pour `C:` (étape 8).
+  `SystemProcessorInformation`, la ruche HARDWARE, le FAT32 en écriture, un disque ATA pour `C:`. **Les critères 1
+  et 3 du M4 sont cochés** : `smss` crée ses variables d'environnement et `\KnownDlls`, puis s'arrête au lancement de
+  `csrss.exe` (M5) ; un fichier écrit sur `C:` se relit après un redémarrage, et `fsck.vfat` trouve l'image propre
+  (scénario `persistence`). Reste le critère 2 : une valeur du registre après un redémarrage (étape 9).
 - Branche de travail : `claude/m4-io`, partie d'`origin/main` après la fusion de #32. Les PR se fusionnent dans
   `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
   `git merge-base --is-ancestor HEAD origin/main`).
@@ -146,12 +146,24 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    avec `fsck.vfat` sur ce que le pilote écrit), `file_write_self_test` (mode utilisateur), vérifiés par mutation.
    **Pas encore** : noms longs (un nom que le 8.3 ne tient pas : `STATUS_OBJECT_NAME_INVALID`), suppression et
    renommage, dates, partage, E/S asynchrones ; le compte de FSInfo reste « inconnu ».
-8. [ ] **La persistance** (critères 2 et 3) : le disque RAM est en mémoire, ce qu'on y écrit disparaît à l'arrêt. Il
-   faut un vrai disque pour `C:` : un pilote ATA (en PIO, `hal::ata` ne sait que lire, sur le canal secondaire) ou
-   virtio-blk, l'image passée à QEMU en `-drive`, et un scénario en deux démarrages sur la même image (`xtask`), puis
-   `fsck.vfat` sur l'image. Ensuite les ruches modifiées réécrites sur `C:` (la ruche entière par `regf::builder`,
-   NtFlushKey, écriture différée).
-9. [ ] **LPC**, et la création de processus depuis le mode utilisateur, seulement pour aller plus loin avec `smss`
+8. [x] **Un vrai disque pour `C:`, le critère 3 coché**. `hal::ata` : `AtaDrive` (un disque d'un canal IDE, PIO sans
+   interruption : IDENTIFY, READ et WRITE SECTORS, FLUSH CACHE) ; `hal::power::reset`. `io::disk::AtaDisk` ;
+   `BlockDevice::flush` jusqu'à `File::flush` et NtFlushBuffersFile. `io_manager::mount_boot_volumes` : le disque RAM
+   reste `\Device\Ramdisk0` ; un disque FAT32 au maître du canal secondaire devient `\Device\HarddiskVolume1`, et
+   `\??\C:` et `\SystemRoot` y mènent (sans lui, au disque RAM, comme avant). `xtask` : `disk = system` (l'image du disque
+   RAM devient aussi `c.img`, attachée au canal secondaire), `boots = N` (les démarrages sauf le dernier finissent par
+   l'arrêt de QEMU, `-no-reboot`), puis `fsck.vfat -n` sur l'image. Scénario `persistence` (feature
+   `test-persistence`) : le premier démarrage écrit `C:\PERSIST` et redémarre, le second relit et ajoute ; `fsck.vfat`
+   propre. Le test d'écriture depuis le mode utilisateur (`file_write_self_test`) écrit sur le disque RAM, que chaque
+   démarrage refait. **Pas encore** : table de partitions (le disque porte un seul volume), LBA 48 bits, DMA et
+   interruptions, virtio-blk ; le verrou du volume est tournant (attentes actives à DISPATCH_LEVEL : un mutex avec les
+   interruptions) ; un cache de secteurs (chaque cluster d'une chaîne relit un secteur de la FAT, lent en PIO).
+9. [ ] **Le critère 2 : une valeur du registre après un redémarrage.** Écrire la ruche modifiée sur `C:` : Cm la rend
+   en entier (`regf::builder`, sans les clés volatiles), le noyau l'écrit par Io sur son fichier
+   (`\SystemRoot\System32\config\SYSTEM`) ; NtFlushKey, puis l'écriture différée. Un scénario comme `persistence`, avec
+   `requires = userland` (la ruche SYSTEM sur le disque) : le premier démarrage écrit une valeur et la vide sur le
+   disque, le second la relit.
+10. [ ] **LPC**, et la création de processus depuis le mode utilisateur, seulement pour aller plus loin avec `smss`
    (`csrss.exe`) : c'est le M5.
    Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
    mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
