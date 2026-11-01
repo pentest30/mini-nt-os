@@ -1,0 +1,22 @@
+# M4, exit criterion 3: a file created on C: is still readable after a
+# reboot, and fsck.vfat finds no error on the image. C: is the ATA system
+# disk, the image of the ramdisk attached as the secondary IDE master; QEMU
+# boots twice on it. The first boot writes C:\PERSIST and resets the machine
+# (-no-reboot ends QEMU); the second reads it back and appends to it. Then
+# xtask runs fsck.vfat -n on the image (a warning without dosfstools).
+features = test-persistence
+disk     = system
+boots    = 2
+cpus     = default
+timeout  = 180
+
+expect = [boot] Io: system disk \Device\HarddiskVolume1 (ATA, secondary master, FAT32
+expect = [boot] Io: \GLOBAL??\C: -> \Device\HarddiskVolume1
+expect = [m4] persistence: first boot: C:\PERSIST\DATA.TXT written
+expect = [m4] persistence: second boot: C:\PERSIST\DATA.TXT read back
+expect = kernel: phase 1 done
+
+# A fatal error ends the run at once.
+forbid = *** STOP:
+forbid = [m4] persistence: failed
+forbid = [boot] Io: the ATA system disk holds no FAT32 volume

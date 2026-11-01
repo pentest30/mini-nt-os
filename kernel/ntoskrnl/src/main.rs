@@ -367,6 +367,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     if cfg!(feature = "test-page-fault-access-violation") {
         page_fault_access_violation_test();
     }
+    if cfg!(feature = "test-persistence") {
+        persistence_test();
+    }
 
     // ReactOS's ntdll, if the boot disk has it: the system DLL from now on,
     // and a native program under it (spike S1).
@@ -2844,6 +2847,77 @@ fn file_self_test() {
     log::info!(
         "[smoke] Io: files from user mode through \\??\\C:: NtOpenFile, NtCreateFile, NtQueryInformationFile, \
          NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryVolumeInformationFile"
+    );
+}
+
+/// M4, exit criterion 3 (scenario `persistence`, feature `test-persistence`):
+/// a file created on `C:`, the ATA system disk, is still there after a
+/// reboot. The first boot (no `C:\PERSIST`) writes `C:\PERSIST\DATA.TXT`,
+/// several clusters long, and twenty more files, so that the directory grows
+/// past a cluster; flushes the disk's cache and resets the machine. The next
+/// boot reads them back and compares them, then appends a line, so that
+/// `fsck.vfat` also checks what it wrote.
+fn persistence_test() {
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use io_manager::File;
+
+    const MORE: usize = 20;
+    let content: Vec<u8> =
+        (0..120).flat_map(|line| format!("Mino persistence test, line {line:04}\r\n").into_bytes()).collect();
+    let more = |i: usize| format!("file {i:02}, written by the first boot\r\n").into_bytes();
+    let fail = |why: String| log::error!("[m4] persistence: failed: {why}");
+    let ns = ob::namespace();
+    if ns.open(io_manager::DISK_VOLUME, None, Some(&io_manager::DEVICE_TYPE), 0).is_err() {
+        return fail(format!("no ATA system disk ({})", io_manager::DISK_VOLUME));
+    }
+    let open = |name: &str| -> Option<alloc::sync::Arc<ob::Object<File>>> {
+        let object = ns.open(name, None, Some(&io_manager::FILE_TYPE), abi::object::OBJ_CASE_INSENSITIVE).ok()?;
+        ob::downcast::<File>(&object)
+    };
+    let Some(file) = open("\\??\\C:\\PERSIST\\DATA.TXT") else {
+        let written = (|| {
+            let root = open("\\??\\C:\\").ok_or(abi::ntstatus::STATUS_OBJECT_PATH_NOT_FOUND)?;
+            let directory = root.create_child("PERSIST", true, 0)?;
+            directory.create_child("DATA.TXT", false, 0)?.write(0, &content)?;
+            for i in 0..MORE {
+                directory.create_child(&format!("F{i:02}.TXT"), false, 0)?.write(0, &more(i))?;
+            }
+            root.flush()
+        })();
+        if let Err(status) = written {
+            return fail(format!("first boot: {status}"));
+        }
+        log::info!(
+            "[m4] persistence: first boot: C:\\PERSIST\\DATA.TXT written, {} bytes, and {MORE} more files; resetting",
+            content.len()
+        );
+        hal::power::reset();
+    };
+    let read = |name: &str| open(name).ok_or(abi::ntstatus::STATUS_OBJECT_NAME_NOT_FOUND).and_then(|f| f.read_all());
+    match file.read_all() {
+        Ok(back) if back == content => {}
+        Ok(back) => {
+            return fail(format!("second boot: DATA.TXT differs ({} bytes, {} written)", back.len(), content.len()))
+        }
+        Err(status) => return fail(format!("second boot: DATA.TXT: {status}")),
+    }
+    for i in 0..MORE {
+        match read(&format!("\\??\\C:\\PERSIST\\F{i:02}.TXT")) {
+            Ok(back) if back == more(i) => {}
+            Ok(_) => return fail(format!("second boot: F{i:02}.TXT differs")),
+            Err(status) => return fail(format!("second boot: F{i:02}.TXT: {status}")),
+        }
+    }
+    let appended = file.write(content.len() as u64, b"appended by the second boot\r\n").and_then(|()| file.flush());
+    if let Err(status) = appended {
+        return fail(format!("second boot: append: {status}"));
+    }
+    log::info!(
+        "[m4] persistence: second boot: C:\\PERSIST\\DATA.TXT read back, {} bytes, as written, and {MORE} more \
+         files; a line appended",
+        content.len()
     );
 }
 

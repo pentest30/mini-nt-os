@@ -44,6 +44,10 @@ test-page-fault-access-violation = []
 # logs the system services it calls and how it ends (M4 discovery probe;
 # scenario tests/boot/smss, which needs the userland).
 test-smss = []
+# Writes files on C:, the ATA system disk, and resets the machine; the next
+# boot reads them back (M4, exit criterion 3; scenario tests/boot/persistence,
+# two boots on the same disk image).
+test-persistence = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 

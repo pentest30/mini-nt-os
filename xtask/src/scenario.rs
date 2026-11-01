@@ -13,6 +13,8 @@
 //! forbid   = marker
 //! forbid-line-start = prefix
 //! requires = userland, native
+//! disk     = system
+//! boots    = 2
 //! ```
 //!
 //! - `features`: ntoskrnl features, comma-separated (default: none).
@@ -28,6 +30,14 @@
 //!     and the NLS tables);
 //!   - `native`: the ramdisk gets the native test programs of
 //!     `tests/native/`, compiled with MinGW or clang (`xtask/src/native.rs`).
+//! - `disk = system`: the image of the ramdisk is also the system disk `C:`,
+//!   a file attached as the master of the secondary IDE channel, which the
+//!   boots share; after the last one, `fsck.vfat -n` must find it clean
+//!   (skipped, with a warning, without dosfstools).
+//! - `boots`: how many times QEMU boots (default 1). Every boot but the last
+//!   must end with QEMU (the kernel resets the machine, and `-no-reboot`
+//!   makes QEMU exit); the `expect` markers are looked for in all the serial
+//!   logs, the last boot's included.
 
 use std::fs;
 use std::path::Path;
@@ -43,6 +53,9 @@ pub struct Scenario {
     pub timeout: Duration,
     pub requires_userland: bool,
     pub requires_native: bool,
+    /// The ramdisk image is also the system disk `C:`.
+    pub system_disk: bool,
+    pub boots: u32,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
@@ -66,6 +79,8 @@ impl Scenario {
             timeout: Duration::from_secs(120),
             requires_userland: false,
             requires_native: false,
+            system_disk: false,
+            boots: 1,
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -91,6 +106,17 @@ impl Scenario {
                 "expect" => sc.expect.push(value.split('|').map(|m| m.trim().to_string()).collect()),
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
+                "disk" => match value {
+                    "system" => sc.system_disk = true,
+                    _ => return Err(format!("{}: unknown disk `{value}`", at())),
+                },
+                "boots" => {
+                    sc.boots = value
+                        .parse()
+                        .ok()
+                        .filter(|&boots| boots >= 1)
+                        .ok_or_else(|| format!("{}: boots `{value}` is not a number from 1", at()))?;
+                }
                 "requires" => {
                     for requirement in list() {
                         match requirement {
@@ -113,6 +139,14 @@ impl Scenario {
             return Err(format!("{name}/{SCENARIO_FILE}: empty `cpus`"));
         }
         Ok(sc)
+    }
+
+    /// A forbidden marker in `log`, during a boot that must end with QEMU.
+    pub fn forbidden(&self, log: &str) -> Option<String> {
+        match self.check(log) {
+            Verdict::Fail(why) => Some(why),
+            _ => None,
+        }
     }
 
     pub fn check(&self, log: &str) -> Verdict {
@@ -191,6 +225,9 @@ requires = userland
         let both = Scenario::parse("x", "expect = a\nrequires = userland, native").unwrap();
         assert!(both.requires_userland && both.requires_native);
         assert!(!sc.requires_native);
+        assert!((!sc.system_disk, sc.boots) == (true, 1), "one boot on the ramdisk by default");
+        let twice = Scenario::parse("x", "expect = a\ndisk = system\nboots = 2").unwrap();
+        assert!(twice.system_disk && twice.boots == 2);
     }
 
     #[test]
@@ -218,5 +255,7 @@ requires = userland
         assert!(Scenario::parse("x", "cpus = default").is_err(), "no expect");
         assert!(Scenario::parse("x", "expect =").is_err());
         assert!(Scenario::parse("x", "expect = a\nrequires = network").is_err());
+        assert!(Scenario::parse("x", "expect = a\ndisk = floppy").is_err());
+        assert!(Scenario::parse("x", "expect = a\nboots = 0").is_err());
     }
 }

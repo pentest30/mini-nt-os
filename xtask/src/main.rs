@@ -182,6 +182,7 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
         cpu,
         memory_mb: memory_mb.unwrap_or(qemu::DEFAULT_MEMORY_MB),
         data_dir,
+        system_disk: None,
     };
     if gdb {
         println!("xtask: QEMU waits for gdb: target remote :1234");
@@ -261,14 +262,33 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             println!("xtask: boot {label}");
             let run_dir = ws.target.join("xtask").join("boot").join(format!("{}-{}", sc.name, cpu.name()));
             let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &extra_files)?;
+            // The system disk starts as a copy of the ramdisk's image.
+            let system_disk = sc.system_disk.then(|| run_dir.join("c.img"));
+            if let Some(image) = &system_disk {
+                std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
+            }
             let machine = Machine {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
                 esp,
                 cpu,
                 memory_mb: qemu::DEFAULT_MEMORY_MB,
                 data_dir: None,
+                system_disk,
             };
-            let outcome = qemu::boot_and_watch(&machine, &options, sc, timeout.unwrap_or(sc.timeout), &run_dir)?;
+            let mut outcome = qemu::boot_and_watch(&machine, &options, sc, timeout.unwrap_or(sc.timeout), &run_dir)?;
+            if let (true, Some(image)) = (outcome.passed, &machine.system_disk) {
+                match qemu::fsck(image) {
+                    None => println!(
+                        "xtask: WARNING {label}: fsck.vfat not found, {} not checked (dosfstools)",
+                        image.display()
+                    ),
+                    Some(Ok(())) => println!("xtask: {label}: fsck.vfat finds {} clean", image.display()),
+                    Some(Err(report)) => {
+                        outcome.passed = false;
+                        outcome.reason = format!("fsck.vfat finds errors on {}:\n{report}", image.display());
+                    }
+                }
+            }
             if outcome.passed {
                 println!("xtask: PASS {label} in {:.1} s", outcome.elapsed.as_secs_f64());
             } else {
