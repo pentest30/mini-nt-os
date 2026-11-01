@@ -322,6 +322,36 @@ impl AddressSpace {
         size: u64,
         protect: PageProtect,
     ) -> Result<MappedView, NtStatus> {
+        self.map(section, base, offset, size, protect, false)
+    }
+
+    /// Comme [`map_view`](Self::map_view), mais en `base` 0, là où il y a la
+    /// place le plus haut (`MEM_TOP_DOWN`) : sous `KUSER_SHARED_DATA` et le
+    /// PEB, comme les tables NLS d'XP. Une image va d'abord à sa base
+    /// préférée.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn map_view_top_down(
+        &self,
+        section: &Arc<Section>,
+        base: u64,
+        offset: u64,
+        size: u64,
+        protect: PageProtect,
+    ) -> Result<MappedView, NtStatus> {
+        self.map(section, base, offset, size, protect, true)
+    }
+
+    fn map(
+        &self,
+        section: &Arc<Section>,
+        base: u64,
+        offset: u64,
+        size: u64,
+        protect: PageProtect,
+        top_down: bool,
+    ) -> Result<MappedView, NtStatus> {
         if !protect.is_valid() {
             return Err(STATUS_INVALID_PAGE_PROTECTION);
         }
@@ -365,6 +395,9 @@ impl AddressSpace {
             let preferred = image.map(|info| info.image_base).filter(|&at| at.is_multiple_of(ALLOC_GRANULARITY));
             match preferred.filter(|&at| fits(&vad, at)) {
                 Some(at) => at,
+                None if top_down => vad
+                    .find_free_gap_top_down(USER_VA_START, USER_VA_END, size, ALLOC_GRANULARITY)
+                    .ok_or(STATUS_NO_MEMORY)?,
                 None => vad.find_free_gap(USER_VA_START, size, ALLOC_GRANULARITY).ok_or(STATUS_NO_MEMORY)?,
             }
         };

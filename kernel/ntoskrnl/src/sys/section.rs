@@ -33,8 +33,10 @@ use super::object::{create_named, open_by_name};
 
 /// Au plus 21 bits du haut à zéro (ZeroBits).
 const MAX_ZERO_BITS: u32 = 21;
+/// MEM_TOP_DOWN : la vue va le plus haut où il y a la place.
+const MEM_TOP_DOWN: u32 = 0x0010_0000;
 /// MEM_TOP_DOWN et MEM_RESERVE, les seuls types d'allocation d'une vue.
-const VIEW_ALLOCATION_TYPES: u32 = 0x0010_0000 | 0x0000_2000;
+const VIEW_ALLOCATION_TYPES: u32 = MEM_TOP_DOWN | 0x0000_2000;
 
 fn status(result: Result<NtStatus, NtStatus>) -> NtStatus {
     result.unwrap_or_else(|status| status)
@@ -203,7 +205,11 @@ fn map_view(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         0 => 0,
         at => UserPtr::<u64>::new(at).read()?,
     };
-    let view = process.with_space(|space| space.map_view(&section, base, offset, size, protect))??;
+    let view = if allocation & MEM_TOP_DOWN != 0 {
+        process.with_space(|space| space.map_view_top_down(&section, base, offset, size, protect))??
+    } else {
+        process.with_space(|space| space.map_view(&section, base, offset, size, protect))??
+    };
     let written = base_address.write(&(view.base as u32)).and_then(|()| view_size.write(&(view.size as u32)));
     if let Err(fault) = written {
         let _ = process.with_space(|space| space.unmap_view(view.base));

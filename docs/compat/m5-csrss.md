@@ -58,3 +58,38 @@ puis :
 | Service | Arguments | Ce qu'en fait `smss` | Composant |
 |---|---|---|---|
 | `NtCreateProcess` | `PROCESS_ALL_ACCESS`, parent `NtCurrentProcess()`, sans héritage, la section de `csrss.exe` | « Failed load of \??\C:\WINDOWS\system32\csrss.exe » ; NtSetEvent sur l'événement du sous-système (le chemin d'échec), **`SmpInit` échoue** | **Ps** |
+
+## Étape 3 : un processus créé depuis le mode utilisateur
+
+Ce que `RtlCreateUserProcess` demande au noyau, fait et testé par des programmes du mode utilisateur
+(`process_memory_self_test`, `suspend_self_test`, `process_creation_self_test`) :
+
+- **Mm** : une plage désignée peut commencer sous 64 Kio, jusqu'à la page 0, comme sous XP (le premier Mio réservé
+  depuis l'adresse 4) ; NtReadVirtualMemory et NtWriteVirtualMemory, page par page du processus visé
+  (`STATUS_PARTIAL_COPY` et le compte de ce qui précède quand une page échoue) ; NtQuerySection
+  (`SectionImageInformation` à la disposition d'XP SP2, `SectionBasicInformation`). Les tables NLS se projettent
+  désormais le plus haut possible, sous `KUSER_SHARED_DATA` (en `0x7FFB0000`, comme XP) : en bas, elles occupaient le
+  premier Mio et la réservation de `RtlpInitEnvironment` échouait (`STATUS_CONFLICTING_ADDRESSES`).
+  NtMapViewOfSection honore `MEM_TOP_DOWN`.
+- **Ke et Ps** : un thread suspendu (KeSuspendThread : un APC noyau qui attend l'événement de la reprise), créé
+  suspendu sans exécuter une instruction du mode utilisateur (Ke le crée sans le rendre prêt, et le trampoline de
+  `hal::ring3` livre ses APC noyau avant le mode utilisateur, où ils attendaient la première interruption) ; un
+  thread démarré d'un contexte du mode utilisateur, assaini.
+- **Services** : NtCreateProcess(Ex), NtCreateThread, NtSuspendThread, NtResumeThread, NtTerminateThread,
+  NtQueryInformationProcess (`ProcessBasicInformation`, `ProcessSessionInformation`), NtSetInformationProcess
+  (`ProcessSessionInformation`). `ProcessExecuteFlags` reste à faire : le `ntdll` de ReactOS y passe 0 sous `OptIn`
+  (« LDR: Could not set process execute flags 0x0 »), que la règle du M3 (exactement `DISABLE` ou `ENABLE`) refuse ;
+  à trancher avec l'ADR-020.
+
+`smss` crée alors `csrss.exe` (NtCreateProcess, NtQuerySection, ProcessBasicInformation, le premier Mio, ses
+paramètres et sa pile par NtWriteVirtualMemory, son thread suspendu, sa session), le reprend (NtResumeThread) et
+attend son événement. Ses deux threads d'API (`SmpApiLoop`) tournent désormais : sans port (NtCreatePort échoue),
+NtReplyWaitReceivePort rend `STATUS_NOT_IMPLEMENTED` et la boucle recommence sans fin (des millions d'appels en
+10 s). `csrss` démarre sous `ntdll` (son TEB en `0x7FFDE000`) :
+
+| Service | Arguments | Ce qu'en fait `csrss` (son chargeur) | Composant |
+|---|---|---|---|
+| `NtQueryInformationProcess` | `ProcessCookie` | « Failed to receive the process cookie » ; toléré | Ps |
+| `NtQuerySymbolicLinkObject` | `\KnownDlls\KnownDllPath` | « LDR: Process initialization failure for \??\C:\WINDOWS\system32\csrss.exe » (`STATUS_APP_INIT_FAILURE` par NtRaiseHardError), **`csrss` se termine** | **Ob** |
+
+`smss`, qui attend toujours, est terminé par la sonde au bout de 10 s.

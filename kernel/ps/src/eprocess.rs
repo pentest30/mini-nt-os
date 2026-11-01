@@ -478,8 +478,9 @@ pub fn create_process(
 }
 
 /// Projette l'image, `KUSER_SHARED_DATA`, la DLL système (à sa base, sinon
-/// `STATUS_CONFLICTING_ADDRESSES`) et les tables NLS (en lecture seule, où il
-/// y a la place), et écrit le PEB dans `space` ; rend la base de l'image.
+/// `STATUS_CONFLICTING_ADDRESSES`) et les tables NLS (en lecture seule, le
+/// plus haut où il y a la place), et écrit le PEB dans `space` ; rend la base
+/// de l'image.
 fn build_address_space(
     space: &AddressSpace,
     section: &Arc<Section>,
@@ -494,7 +495,9 @@ fn build_address_space(
     }
     let nls = match crate::nls::current() {
         Some(tables) => {
-            let view = space.map_view(tables.section(), 0, 0, 0, PageProtect::READONLY)?;
+            // Top-down, as XP: under the shared page, out of the way of the
+            // first MiB a subsystem reserves (RtlpInitEnvironment).
+            let view = space.map_view_top_down(tables.section(), 0, 0, 0, PageProtect::READONLY)?;
             tables.addresses(view.base as u32)
         }
         None => (0, 0, 0),
