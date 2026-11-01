@@ -598,7 +598,7 @@ impl Key {
                 hash.bytes(&value.data);
             }
             let children: Vec<Arc<HiveKey>> =
-                state.subkeys.iter().filter(|k| !k.volatile && !(top && skipped(k))).cloned().collect();
+                state.subkeys.iter().filter(|k| !(k.volatile || top && skipped(k))).cloned().collect();
             hash.word(children.len() as u64);
             pending.extend(children.into_iter().rev().map(|child| (child, false)));
         }
