@@ -128,3 +128,69 @@ qu'un datagramme du noyau termine). Pas encore : la connexion, les ports de comm
 
 `smss` crée `\SmApiPort` et ses deux threads d'API y attendent, au lieu de tourner (l'étape 3) : rien ne s'y
 connecte encore, `csrss` s'arrêtant avant (Se).
+
+## Étape 6 : Se, les jetons
+
+Le crate `se` (02 §5.8, ADR-011) donne les SID, les ACL (vérifiées comme RtlValidAcl), les descripteurs de
+sécurité (capturés sous forme absolue ou relative, gardés sous forme relative) et le type `Token`. Chaque processus a
+son jeton primaire : System celui de LocalSystem, un processus créé une copie de celui de son créateur
+(SeSubProcessToken). Le jeton de System :
+
+| Partie | Valeur |
+|---|---|
+| Utilisateur | S-1-5-18 (LocalSystem) |
+| Groupes | Administrators (S-1-5-32-544, `SE_GROUP_OWNER`, propriétaire par défaut), Everyone (S-1-1-0), Authenticated Users (S-1-5-11) |
+| Groupe principal | LocalSystem |
+| DACL par défaut | `GENERIC_ALL` à LocalSystem ; `GENERIC_READ`, `GENERIC_EXECUTE`, `READ_CONTROL` à Administrators |
+| Privilèges | 24 ; actifs par défaut : Tcb, CreatePagefile, LockMemory, IncreaseBasePriority, CreatePermanent, Debug, Audit, ChangeNotify, ProfileSingleProcess, Impersonate, CreateGlobal |
+| Session d'ouverture, source | `SYSTEM_LUID` (0x3E7), `*SYSTEM*` |
+
+Les objets ont un descripteur dans leur en-tête (Ob le garde sans le lire). Services :
+
+| Service | Ce qu'il fait |
+|---|---|
+| NtOpenProcessToken(Ex) | un handle sur le jeton primaire (`PROCESS_QUERY_INFORMATION`) |
+| NtOpenThreadToken(Ex) | `STATUS_NO_TOKEN` : aucun thread n'emprunte d'identité |
+| NtQueryInformationToken | User, Groups, Privileges, Owner, PrimaryGroup, DefaultDacl, Source, Type, ImpersonationLevel (`STATUS_INVALID_INFO_CLASS` pour un jeton primaire), Statistics, RestrictedSids, SessionId, SandBoxInert ; la taille toujours rendue, `STATUS_BUFFER_TOO_SMALL` si le tampon est plus petit |
+| NtAdjustPrivilegesToken | l'état d'avant des privilèges qui changent ; rien ne change sans la place de le rendre ; `STATUS_NOT_ALL_ASSIGNED` pour un privilège absent |
+| NtSetSecurityObject, NtQuerySecurityObject | le descripteur d'un objet (parties remplacées et lues, `NtCurrentProcess()` compris) |
+
+Contrôle permissif (ADR-011) : Ob accorde les droits demandés, un descripteur ne refuse encore rien. Le contrôle
+des **privilèges** s'applique (SeSinglePrivilegeCheck sur le jeton primaire) : les appelants activent d'abord celui
+qu'il leur faut, comme `smss`. Test : `security_self_test`.
+
+`csrss` passe `CsrSetProcessSecurity` : NtOpenProcessToken, la taille de `TokenUser` puis `TokenUser`, une DACL qui
+donne à son utilisateur la lecture, l'écriture et la fin de son processus (NtSetSecurityObject). Mais `smss`, qui
+obtient désormais `SeLoadDriverPrivilege` (SmpAcquirePrivilege, qui échouait jusque-là), prend un chemin qu'il sautait :
+
+| Service | Arguments | Ce qu'en fait `smss` | Composant |
+|---|---|---|---|
+| `NtSetSystemInformation` | `SystemSessionCreate` (47), 4 octets | « SMSS: Session space creation failed », **`SmpInit` échoue** avant de lancer `csrss` | Mm, Ex |
+
+## Étape 7 : la session de `smss` et win32k
+
+`SmpLoadSubSystemsForMuSession`, pour la valeur `Kmode` de `Session Manager\SubSystems`, sous
+`SeLoadDriverPrivilege` : crée la session (`ASSERT(MuSessionId == 0)` ensuite), charge win32k, et s'en détachera
+après avoir lancé `winlogon`. NtSetSystemInformation, chaque classe sous ce privilège
+(`STATUS_PRIVILEGE_NOT_HELD`) :
+
+| Classe | Ce qu'elle fait ici |
+|---|---|
+| `SystemSessionCreate` (47) | une session neuve (le plus petit identifiant libre, 0 d'abord), où entre l'appelant, qui devient le meneur des sessions ; `ps::session` en tient le compte, sans espace de session (Mm) encore |
+| `SystemSessionDetach` (48) | le meneur quitte sa session (`STATUS_UNABLE_TO_FREE_VM` sinon) |
+| `SystemExtendServiceTableInformation` (38) | win32k fait partie du noyau (02 §7) : sa table de services est déjà là, rien n'est chargé ; un autre nom que `\SystemRoot\System32\win32k.sys` est refusé, comme ReactOS. Ses services rendent encore `STATUS_NOT_IMPLEMENTED` |
+
+`smss` lance alors `csrss`, qui passe `CsrSetProcessSecurity`, initialise ses sessions et son processus racine, puis
+lit sa ligne de commande (`CsrParseServerCommandLine`) :
+
+| Service | Arguments | Ce qu'en fait `csrss` | Composant |
+|---|---|---|---|
+| `NtCreateSection` | sans fichier, 1 Mio (`SharedSection=1024`), `PAGE_EXECUTE_READWRITE`, `SEC_BASED \| SEC_RESERVE` | « CSRSS: *** Invalid syntax for SharedSection=1024 », `CsrParseServerCommandLine` échoue, **`csrss` se termine** | **Mm** |
+
+La section partagée de `csrss` (CsrSrvCreateSharedSection) : une section du fichier d'échange dont les pages sont
+réservées (`SEC_RESERVE` : commitées à la demande par NtAllocateVirtualMemory dans la vue, ici par le tas que
+`RtlCreateHeap` y crée) et dont la base est fixée par sa première vue (`SEC_BASED` : chaque processus la projette à
+la même adresse) ; projetée par `csrss` en `MEM_TOP_DOWN`, `PAGE_EXECUTE_READWRITE`, puis son adresse et son tas
+écrits dans le PEB (`ReadOnlySharedMemoryBase`, `ReadOnlySharedMemoryHeap`, `ReadOnlyStaticServerData`). Chaque
+client la projette ensuite à la connexion (CsrSrvAttachSharedSection). C'est le prochain mur, avant le port d'API de
+`csrss` (LPC) et `SmConnectToSm`.

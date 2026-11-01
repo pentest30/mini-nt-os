@@ -177,7 +177,15 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtReplyWaitReceivePort qui attend), processus et threads créés depuis le mode utilisateur (NtCreateProcess(Ex),
   NtCreateThread avec un contexte assaini, threads suspendus par un APC noyau livré avant le mode utilisateur),
   NtRead/WriteVirtualMemory, NtQuerySection, tables NLS au plus haut, NtQuerySymbolicLinkObject. `csrss` charge
-  ses DLL et s'arrête au jeton de son processus : Se est le prochain composant.
+  ses DLL et s'arrête au jeton de son processus.
+  M5, étape 2 (Se, ADR-011) : `abi::security` ; crate `se` (`Sid`, `Acl` vérifiée, `SecurityDescriptor` capturé,
+  fusionné, sous forme relative, `Token` : jeton de System, copie pour un processus créé, privilèges, classes
+  d'information) ; descripteur dans l'en-tête des objets (Ob), jeton primaire par processus (Ps) ; services
+  NtOpenProcessToken(Ex), NtOpenThreadToken(Ex) (`STATUS_NO_TOKEN`), NtQueryInformationToken,
+  NtAdjustPrivilegesToken, NtSetSecurityObject, NtQuerySecurityObject ; NtSetSystemInformation (session de `smss`,
+  `ps::session` ; win32k « chargé », il fait partie du noyau) sous `SeLoadDriverPrivilege`. Contrôle d'accès
+  permissif, contrôle des privilèges appliqué. `csrss` protège son processus, puis s'arrête à sa section partagée
+  (`SEC_BASED | SEC_RESERVE`) : Mm est le prochain composant.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
