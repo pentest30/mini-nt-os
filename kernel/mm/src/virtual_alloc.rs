@@ -175,7 +175,10 @@ fn user_range(base: u64, size: u64) -> Result<(u64, u64), NtStatus> {
 ///   l'ancien chargeur (`setup_process`) place le PEB et le TEB dans le même
 ///   granule de 64 Kio.
 /// - `base_addr != 0` avec `MEM_COMMIT` seul : la plage doit tenir dans une
-///   réservation (`STATUS_CONFLICTING_ADDRESSES` sinon).
+///   réservation (`STATUS_CONFLICTING_ADDRESSES` sinon). Dans une vue de
+///   section, ce sont les pages de la section qui se commitent
+///   (`Section::commit`), pour toutes ses vues, sans changer la protection
+///   de la vue ni rien projeter ; une page s'y projette à sa première faute.
 ///
 /// `MEM_COMMIT` commite les pages réservées de la plage et donne `protect` à ses
 /// pages déjà commitées. Avec `mapper`, les premières sont projetées et les
@@ -212,8 +215,14 @@ pub fn allocate(
     if reserve {
         vad.insert(VadNode::reserved(start, end, protect, VadKind::Private))
             .map_err(|_| STATUS_CONFLICTING_ADDRESSES)?;
-    } else if vad.find(start).is_none_or(|node| end > node.end || node.kind != VadKind::Private) {
-        return Err(STATUS_CONFLICTING_ADDRESSES);
+    } else {
+        let node = vad.find(start).filter(|node| end <= node.end).ok_or(STATUS_CONFLICTING_ADDRESSES)?;
+        if let VadKind::View { section, offset } = &node.kind {
+            if alloc_type.contains(AllocType::MEM_COMMIT) {
+                section.commit((offset + start - node.start) / PAGE_SIZE, (end - start) / PAGE_SIZE);
+            }
+            return Ok(start);
+        }
     }
     if !alloc_type.contains(AllocType::MEM_COMMIT) {
         return Ok(start);
@@ -385,15 +394,15 @@ pub fn query(vad: &VadTree, addr: u64) -> Result<RegionInfo, NtStatus> {
             kind: None,
         });
     };
-    let (run_start, run) = node.run_at(page).expect("a page of the reservation");
-    let committed = run.state == PageState::Committed;
+    let (state, protect, end) = node.page_state(page).expect("a page of the reservation");
+    let committed = state == PageState::Committed;
     Ok(RegionInfo {
         base_address: page,
         allocation_base: node.start,
         allocation_protect: node.protect,
-        region_size: run_start + run.pages * PAGE_SIZE - page,
+        region_size: end - page,
         state: if committed { MemState::Commit } else { MemState::Reserve },
-        protect: if committed { run.protect } else { PageProtect::empty() },
+        protect: if committed { protect } else { PageProtect::empty() },
         kind: Some(match &node.kind {
             VadKind::Private => MemType::Private,
             VadKind::View { section, .. } if section.kind() == SectionKind::Image => MemType::Image,
@@ -1001,12 +1010,45 @@ mod tests {
     }
 
     #[test]
-    fn a_view_is_neither_committed_nor_freed_through_virtual_memory() {
+    fn a_view_is_not_freed_through_virtual_memory() {
         let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
         view(&mut vad, Section::create_pagefile(4 * P, rw()).unwrap(), 4, rw());
-        assert_eq!(allocate(&mut vad, None, BASE, P, COMMIT, rw()), Err(STATUS_CONFLICTING_ADDRESSES));
+        assert_eq!(allocate(&mut vad, Some(&mut m), BASE, P, COMMIT, rw()), Ok(BASE), "committed already");
+        assert!(m.committed.is_empty(), "nothing mapped: the page comes from the section at its fault");
+        assert_eq!(allocate(&mut vad, None, BASE, 5 * P, COMMIT, rw()), Err(STATUS_CONFLICTING_ADDRESSES), "past it");
+        assert_eq!(allocate(&mut vad, None, BASE, P, RESERVE, rw()), Err(STATUS_CONFLICTING_ADDRESSES));
         assert_eq!(free(&mut vad, None, BASE, P, FreeType::MEM_DECOMMIT), Err(STATUS_UNABLE_TO_DELETE_SECTION));
         assert_eq!(vad.len(), 1);
+    }
+
+    #[test]
+    fn a_reserved_section_is_committed_through_any_of_its_views() {
+        // Two processes map the same SEC_RESERVE section, at different
+        // offsets; a commit in one shows in the other.
+        let section = Section::create_shared(8 * P, rw(), true, false).unwrap();
+        let (mut first, mut second) = (VadTree::new(), VadTree::new());
+        view(&mut first, section.clone(), 8, rw());
+        let node = VadNode::view(BASE, BASE + 4 * P, rw(), VadKind::View { section, offset: 4 * P }, &[(4, rw())]);
+        second.insert(node).unwrap();
+        let region = query(&first, BASE).unwrap();
+        assert_eq!((region.state, region.region_size, region.kind), (MemState::Reserve, 8 * P, Some(MemType::Mapped)));
+        assert_eq!(region.protect, PageProtect::empty());
+        let mut m = MockMapper::new();
+        assert_eq!(allocate(&mut first, Some(&mut m), BASE + 5 * P, 2 * P, COMMIT, rw()), Ok(BASE + 5 * P));
+        assert!(m.committed.is_empty(), "the section's pages, mapped at their faults");
+        let state = |vad: &VadTree, at: u64| {
+            let region = query(vad, at).unwrap();
+            (region.state, region.region_size, region.protect)
+        };
+        assert_eq!(state(&first, BASE), (MemState::Reserve, 5 * P, PageProtect::empty()));
+        assert_eq!(state(&first, BASE + 5 * P), (MemState::Commit, 2 * P, rw()));
+        assert_eq!(state(&first, BASE + 7 * P), (MemState::Reserve, P, PageProtect::empty()));
+        assert_eq!(state(&second, BASE), (MemState::Reserve, P, PageProtect::empty()), "page 4 of the section");
+        assert_eq!(state(&second, BASE + P), (MemState::Commit, 2 * P, rw()), "pages 5 and 6, from the other view");
+        let node = second.find(BASE).unwrap();
+        assert_eq!(node.page_state(BASE + 2 * P), Some((PageState::Committed, rw(), BASE + 3 * P)));
+        assert_eq!(node.page_state(BASE + 3 * P), Some((PageState::Reserved, rw(), BASE + 4 * P)));
     }
 
     #[test]
