@@ -367,15 +367,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     if cfg!(feature = "test-page-fault-access-violation") {
         page_fault_access_violation_test();
     }
-    if cfg!(feature = "test-persistence") {
-        persistence_test();
-    }
 
     // ReactOS's ntdll, if the boot disk has it: the system DLL from now on,
     // and a native program under it (spike S1).
     userland::install_system_dll();
     userland::install_nls_tables();
     userland::mount_system_hive();
+    if cfg!(feature = "test-persistence") {
+        persistence_test();
+    }
     userland::run_native_probe();
     userland::run_boot_programs();
     if cfg!(feature = "test-smss") {
@@ -2850,13 +2850,19 @@ fn file_self_test() {
     );
 }
 
-/// M4, exit criterion 3 (scenario `persistence`, feature `test-persistence`):
-/// a file created on `C:`, the ATA system disk, is still there after a
-/// reboot. The first boot (no `C:\PERSIST`) writes `C:\PERSIST\DATA.TXT`,
-/// several clusters long, and twenty more files, so that the directory grows
-/// past a cluster; flushes the disk's cache and resets the machine. The next
-/// boot reads them back and compares them, then appends a line, so that
-/// `fsck.vfat` also checks what it wrote.
+/// M4, exit criteria 3 and 2 (scenarios `persistence` and
+/// `registry-persistence`, feature `test-persistence`): a file created on
+/// `C:`, the ATA system disk, and a value written in the registry are still
+/// there after a reboot. It runs once the SYSTEM hive is mounted (from
+/// `C:`). The first boot (no `C:\PERSIST`) writes, in the SYSTEM hive if
+/// there is one, the key `MinoPersist` with a value and the digest of the
+/// rest of the hive, and flushes it to its file (NtFlushKey); then
+/// `C:\PERSIST\DATA.TXT`, several clusters long, and twenty more files, so
+/// that the directory grows past a cluster; flushes the disk's cache and
+/// resets the machine. The next boot reads them back and compares them (the
+/// hive by its digest: every key and value, read from the file the first
+/// boot wrote), then writes again, so that `fsck.vfat` also checks what it
+/// wrote.
 fn persistence_test() {
     use alloc::format;
     use alloc::string::String;
@@ -2876,7 +2882,32 @@ fn persistence_test() {
         let object = ns.open(name, None, Some(&io_manager::FILE_TYPE), abi::object::OBJ_CASE_INSENSITIVE).ok()?;
         ob::downcast::<File>(&object)
     };
+    let system = ns
+        .open("\\REGISTRY\\MACHINE\\SYSTEM", None, Some(&cm::KEY_TYPE), 0)
+        .ok()
+        .and_then(|object| ob::downcast::<cm::Key>(&object));
+    let units = |text: &str| text.encode_utf16().collect::<Vec<u16>>();
+    let sz = |text: &str| text.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
+    const REG_QWORD: u32 = 11;
     let Some(file) = open("\\??\\C:\\PERSIST\\DATA.TXT") else {
+        if let Some(system) = &system {
+            let digest = system.digest(&["MinoPersist"]);
+            let written = system.create_subkey("MinoPersist", &[], false).and_then(|(key, _)| {
+                key.set_value(&units("Boot"), abi::registry::REG_SZ, sz("written by the first boot"))?;
+                key.set_value(&units("Digest"), REG_QWORD, digest.to_le_bytes().to_vec())?;
+                system.flush()
+            });
+            if let Err(status) = written {
+                return fail(format!("first boot: the SYSTEM hive: {status}"));
+            }
+            log::info!(
+                "[m4] persistence: first boot: \\Registry\\Machine\\System\\MinoPersist written, the SYSTEM \
+                 hive flushed to {} (digest {digest:#018x})",
+                system.hive_file().and_then(|hive| hive.file().map(String::from)).unwrap_or_default()
+            );
+        } else {
+            log::info!("[m4] persistence: no SYSTEM hive (cargo xtask fetch-userland): the registry is not checked");
+        }
         let written = (|| {
             let root = open("\\??\\C:\\").ok_or(abi::ntstatus::STATUS_OBJECT_PATH_NOT_FOUND)?;
             let directory = root.create_child("PERSIST", true, 0)?;
@@ -2909,6 +2940,36 @@ fn persistence_test() {
             Ok(_) => return fail(format!("second boot: F{i:02}.TXT differs")),
             Err(status) => return fail(format!("second boot: F{i:02}.TXT: {status}")),
         }
+    }
+    if let Some(system) = &system {
+        let Some(key) = ns
+            .open("\\REGISTRY\\MACHINE\\SYSTEM\\MinoPersist", None, Some(&cm::KEY_TYPE), 0)
+            .ok()
+            .and_then(|object| ob::downcast::<cm::Key>(&object))
+        else {
+            return fail(String::from("second boot: no MinoPersist key in the SYSTEM hive"));
+        };
+        let value = |name: &str| key.value(&units(name)).ok().flatten().map(|v| v.data);
+        if value("Boot") != Some(sz("written by the first boot")) {
+            return fail(format!("second boot: MinoPersist\\Boot is {:?}", value("Boot")));
+        }
+        let digest = system.digest(&["MinoPersist"]);
+        if value("Digest") != Some(digest.to_le_bytes().to_vec()) {
+            return fail(format!(
+                "second boot: the SYSTEM hive changed (digest {digest:#018x}, {:x?} written)",
+                value("Digest")
+            ));
+        }
+        let rewritten = key
+            .set_value(&units("Boot"), abi::registry::REG_SZ, sz("written again by the second boot"))
+            .and_then(|()| system.flush());
+        if let Err(status) = rewritten {
+            return fail(format!("second boot: the SYSTEM hive: {status}"));
+        }
+        log::info!(
+            "[m4] persistence: second boot: \\Registry\\Machine\\System\\MinoPersist read back, the rest of the \
+             SYSTEM hive as it was (digest {digest:#018x}); written again"
+        );
     }
     let appended = file.write(content.len() as u64, b"appended by the second boot\r\n").and_then(|()| file.flush());
     if let Err(status) = appended {

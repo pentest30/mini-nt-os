@@ -7,7 +7,8 @@
 # symbolized STOP screen of a failed assertion; and the ReactOS userland
 # (`cargo xtask fetch-userland`, its archive cached by its pinned SHA-256),
 # with the native test programs of tests/native/ compiled by MinGW and clang;
-# and two boots on an ATA system disk, checked by fsck.vfat.
+# and two boots on an ATA system disk, a file and a registry value kept,
+# checked by fsck.vfat.
 name: CI
 
 on:
@@ -110,6 +111,10 @@ jobs:
             userland: true
           - name: a file on C, the ATA system disk, after a reboot; fsck.vfat (M4)
             args: --scenario persistence
+            fsck: true
+          - name: a registry value on C after a reboot, the SYSTEM hive flushed; fsck.vfat (M4)
+            args: --scenario registry-persistence
+            userland: true
             fsck: true
     steps:
       - uses: actions/checkout@v4
