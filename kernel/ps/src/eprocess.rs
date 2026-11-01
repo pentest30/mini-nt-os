@@ -15,6 +15,10 @@
 //!
 //! Le processus System (PID 4) et ceux de l'ancien chargeur n'ont pas
 //! d'espace d'adresses à eux : ils vivent dans celui du système.
+//!
+//! Chaque processus a son jeton primaire (Se) : System celui de LocalSystem
+//! (`se::Token::system`), un processus créé une copie de celui de son
+//! créateur (SeSubProcessToken).
 
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -36,6 +40,7 @@ use mm::section::Section;
 use mm::vad::PageProtect;
 use mm::virtual_alloc::{AllocType, PAGE_SIZE};
 use ob::{create_object, AccessMask, GenericMapping, HandleTable, Object, ObjectType};
+use se::Token;
 
 use crate::ethread::EThread;
 use crate::rundown::RundownRef;
@@ -196,19 +201,25 @@ pub struct EProcess {
     /// SessionId : sa session (Terminal Services), celle de son créateur au
     /// départ.
     session_id: AtomicU32,
+    /// Son jeton primaire.
+    token: KSpinLock<Arc<Object<Token>>>,
 }
 
 impl EProcess {
-    /// Un processus sans thread, avec son PID.
+    /// Un processus sans thread, avec son PID, fils de `parent` (System
+    /// sans parent) : de lui viennent sa session et une copie de son jeton.
     fn create(
-        parent_pid: ProcessId,
+        parent: Option<&EProcess>,
         image_file_name: &str,
         space: Option<Arc<AddressSpace>>,
         handle_table: HandleTable,
         peb: u32,
         image_base: u32,
-        session_id: u32,
     ) -> Result<Arc<Object<Self>>, NtStatus> {
+        let (parent_pid, session_id, token) = match parent {
+            Some(parent) => (parent.pid(), parent.session_id(), parent.primary_token().duplicate_primary()),
+            None => (0, 0, Token::system()),
+        };
         let pid = CID_TABLE.lock().insert(CidEntry::Process(Weak::new())).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
         let directory_table_base = space
             .as_ref()
@@ -231,6 +242,7 @@ impl EProcess {
                 exited: DispatcherEvent::new(KObjectType::NotificationEvent),
                 execute_options: KSpinLock::new(DEP_POLICY.initial_options()),
                 session_id: AtomicU32::new(session_id),
+                token: KSpinLock::new(token),
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
@@ -388,6 +400,14 @@ impl EProcess {
         self.session_id.store(session_id, Ordering::Release);
         Ok(())
     }
+
+    /// PsReferencePrimaryToken : son jeton primaire.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn primary_token(&self) -> Arc<Object<Token>> {
+        self.token.lock().clone()
+    }
 }
 
 impl Drop for EProcess {
@@ -402,7 +422,7 @@ static SYSTEM_PROCESS: Once<Arc<Object<EProcess>>> = Once::new();
 /// Crée le processus System, dans l'espace d'adresses du système.
 pub(crate) fn init_system_process() {
     SYSTEM_PROCESS.call_once(|| {
-        let system = EProcess::create(0, "System", None, HandleTable::new(), 0, 0, 0).expect("no PID for System");
+        let system = EProcess::create(None, "System", None, HandleTable::new(), 0, 0).expect("no PID for System");
         assert_eq!(system.pid(), 4, "System is not the first process");
         system
     });
@@ -452,12 +472,12 @@ pub fn child_processes(parent: ProcessId) -> Vec<Arc<Object<EProcess>>> {
 /// # IRQL
 /// <= DISPATCH_LEVEL.
 pub fn create_legacy(image_file_name: &str) -> Result<Arc<Object<EProcess>>, NtStatus> {
-    EProcess::create(system_process().pid(), image_file_name, None, HandleTable::new(), 0, 0, 0)
+    EProcess::create(Some(&system_process()), image_file_name, None, HandleTable::new(), 0, 0)
 }
 
 /// PspCreateProcess : un processus sans thread pour l'image `section`, fils
-/// de `parent`, dont il hérite la session, et les handles héritables avec
-/// `inherit_handles`.
+/// de `parent`, dont il hérite la session, une copie du jeton, et les
+/// handles héritables avec `inherit_handles`.
 ///
 /// Son espace d'adresses est neuf ; l'image y est projetée à sa base
 /// préférée, ou ailleurs si elle a des relocations (`ntdll` la relogera), et
@@ -490,10 +510,11 @@ pub fn create_process(
         }
     };
     let handle_table = if inherit_handles { parent.handle_table.inherit() } else { HandleTable::new() };
-    EProcess::create(parent.pid(), image_file_name, Some(space.clone()), handle_table, PEB_VA, image_base, session_id)
-        .inspect_err(|_| {
+    EProcess::create(Some(parent), image_file_name, Some(space.clone()), handle_table, PEB_VA, image_base).inspect_err(
+        |_| {
             space.destroy();
-        })
+        },
+    )
 }
 
 /// Projette l'image, `KUSER_SHARED_DATA`, la DLL système (à sa base, sinon

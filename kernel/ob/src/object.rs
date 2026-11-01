@@ -11,8 +11,14 @@
 //! droits valides, sa correspondance générique, ses procédures (*parse*,
 //! fermeture) et ses compteurs.
 //!
-//! Pas encore : descripteur de sécurité (avec Se ; ADR-011 : accès accordés),
-//! quotas, objets exclusifs (`OBJ_EXCLUSIVE`).
+//! L'en-tête garde aussi le descripteur de sécurité de l'objet, sous sa forme
+//! relative, sans le lire : c'est Se qui le lit et le fabrique
+//! (NtSetSecurityObject, NtQuerySecurityObject). Un objet naît sans
+//! descripteur.
+//!
+//! Pas encore : le descripteur qu'un objet reçoit à sa création
+//! (SeAssignSecurity, d'après le jeton de son créateur), le contrôle d'accès
+//! (ADR-011 : tout est accordé), quotas, objets exclusifs (`OBJ_EXCLUSIVE`).
 
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
@@ -130,6 +136,8 @@ pub struct ObjectHeader {
     handles: AtomicU32,
     permanent: AtomicBool,
     pub(crate) name: KSpinLock<Option<NameInfo>>,
+    /// Son descripteur de sécurité, sous sa forme relative.
+    security: KSpinLock<Option<Arc<[u8]>>>,
 }
 
 /// Un objet : son en-tête, puis son corps, auquel il donne accès (`Deref`).
@@ -147,8 +155,13 @@ pub type ObjectRef = Arc<Object<dyn Any + Send + Sync>>;
 /// <= DISPATCH_LEVEL.
 pub fn create_object<T: Any + Send + Sync>(ty: &'static ObjectType, body: T) -> Arc<Object<T>> {
     ty.objects.fetch_add(1, Ordering::Relaxed);
-    let header =
-        ObjectHeader { ty, handles: AtomicU32::new(0), permanent: AtomicBool::new(false), name: KSpinLock::new(None) };
+    let header = ObjectHeader {
+        ty,
+        handles: AtomicU32::new(0),
+        permanent: AtomicBool::new(false),
+        name: KSpinLock::new(None),
+        security: KSpinLock::new(None),
+    };
     Arc::new(Object { header, body })
 }
 
@@ -196,6 +209,44 @@ impl<T: ?Sized> Object<T> {
 
     pub(crate) fn header(&self) -> &ObjectHeader {
         &self.header
+    }
+
+    /// Son descripteur de sécurité, sous sa forme relative ; aucun s'il n'en
+    /// a pas reçu.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn security_descriptor(&self) -> Option<Arc<[u8]>> {
+        self.header.security.lock().clone()
+    }
+
+    /// ObSetSecurityDescriptorInfo : remplace son descripteur par ce que
+    /// `update` fait de l'actuel. Si un autre appel l'a changé entre-temps,
+    /// `update` recommence sur le nouveau : aucun changement ne se perd.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn update_security_descriptor(
+        &self,
+        mut update: impl FnMut(Option<&[u8]>) -> Result<Arc<[u8]>, NtStatus>,
+    ) -> Result<(), NtStatus> {
+        loop {
+            let current = self.security_descriptor();
+            let new = update(current.as_deref())?;
+            let mut slot = self.header.security.lock();
+            let unchanged = match (&*slot, &current) {
+                (Some(slot), Some(current)) => Arc::ptr_eq(slot, current),
+                (None, None) => true,
+                _ => false,
+            };
+            if unchanged {
+                let old = slot.replace(new);
+                drop(slot);
+                // Freed once the lock is released.
+                drop(old);
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -302,6 +353,47 @@ mod tests {
         assert_eq!(COUNTED.object_count(), 3);
         drop(objects);
         assert_eq!(COUNTED.object_count(), 0);
+    }
+
+    #[test]
+    fn an_object_keeps_the_descriptor_it_is_given() {
+        let thing = create_object(&THING, Thing(1));
+        assert_eq!(thing.security_descriptor(), None, "none at its creation");
+        thing
+            .update_security_descriptor(|current| {
+                assert_eq!(current, None);
+                Ok(Arc::from(&[1u8, 0, 0, 0x80][..]))
+            })
+            .unwrap();
+        let refused = thing.update_security_descriptor(|_| Err(abi::ntstatus::STATUS_INVALID_ACL));
+        assert_eq!(refused, Err(abi::ntstatus::STATUS_INVALID_ACL));
+        let mut seen = alloc::vec::Vec::new();
+        thing
+            .update_security_descriptor(|current| {
+                seen.push(current.map(<[u8]>::to_vec));
+                Ok(Arc::from(&[1u8, 0, 4, 0x80][..]))
+            })
+            .unwrap();
+        assert_eq!(seen, [Some(alloc::vec![1, 0, 0, 0x80])], "a refused change leaves it as it was");
+        assert_eq!(thing.security_descriptor().as_deref(), Some(&[1u8, 0, 4, 0x80][..]));
+    }
+
+    #[test]
+    fn a_concurrent_change_is_not_lost() {
+        let thing = create_object(&THING, Thing(2));
+        let mut calls = 0;
+        thing
+            .update_security_descriptor(|current| {
+                calls += 1;
+                if calls == 1 {
+                    // Another change lands while this one is computed.
+                    thing.update_security_descriptor(|_| Ok(Arc::from(&[7u8][..]))).unwrap();
+                }
+                Ok(Arc::from([current.map_or(0, |bytes| bytes[0]) + 1]))
+            })
+            .unwrap();
+        assert_eq!(calls, 2, "computed again on the newer descriptor");
+        assert_eq!(thing.security_descriptor().as_deref(), Some(&[8u8][..]));
     }
 
     #[test]

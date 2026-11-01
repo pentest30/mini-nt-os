@@ -1,14 +1,24 @@
 //! Les services d'information du système (Ex).
 
-use abi::ntstatus::NtStatus;
+use abi::ntstatus::{NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS};
+use abi::security::SE_LOAD_DRIVER_PRIVILEGE;
 use abi::system_information::{
     SystemBasicInformation32, SystemProcessorInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS,
-    PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
+    PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION, SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION,
+    SYSTEM_PROCESSOR_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
 };
+use ke::usermem::UserPtr;
 use mm::virtual_alloc::{ALLOC_GRANULARITY, PAGE_SIZE};
 
 /// Les classes demandées sans être implémentées.
 static UNSUPPORTED: super::ClassReport = super::ClassReport::new("NtQuerySystemInformation");
+/// Les classes de NtSetSystemInformation demandées sans être implémentées.
+static UNSUPPORTED_SET: super::ClassReport = super::ClassReport::new("NtSetSystemInformation");
+
+/// Le seul module qu'un appelant du mode utilisateur peut faire charger.
+const WIN32K: &str = "\\SystemRoot\\System32\\win32k.sys";
+/// La taille d'un UNICODE_STRING i386.
+const UNICODE_STRING_SIZE: u32 = 8;
 
 /// NtQuerySystemInformation(SystemInformationClass, SystemInformation,
 /// SystemInformationLength, ReturnLength) : l'information de la classe,
@@ -32,6 +42,54 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         }
         _ => UNSUPPORTED.report(class),
     }
+}
+
+/// NtSetSystemInformation(SystemInformationClass, SystemInformation,
+/// SystemInformationLength) : ce que `smss` demande pour sa session, chaque
+/// classe sous `SeLoadDriverPrivilege` (`STATUS_PRIVILEGE_NOT_HELD`) :
+///
+/// | Classe | Effet |
+/// |---|---|
+/// | `SystemExtendServiceTableInformation` (38) | « charge » win32k, qui fait partie du noyau : sa table de services est déjà là, rien n'est chargé ; tout autre module est refusé, comme ReactOS (`STATUS_PRIVILEGE_NOT_HELD`) |
+/// | `SystemSessionCreate` (47) | une session neuve où l'appelant entre (`ps::create_session`), son identifiant rendu dans le tampon |
+/// | `SystemSessionDetach` (48) | l'appelant quitte sa session (`ps::detach_session`) |
+///
+/// Une taille autre que celle de la classe (un ULONG, un UNICODE_STRING)
+/// rend `STATUS_INFO_LENGTH_MISMATCH`. Les autres classes rendent
+/// `STATUS_NOT_IMPLEMENTED`, journalisé à leur premier appel.
+pub(super) fn nt_set_system_information(arguments: &[u32]) -> NtStatus {
+    let (class, buffer, length) = (arguments[0], arguments[1], arguments[2]);
+    let set = || {
+        let size = match class {
+            SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION => UNICODE_STRING_SIZE,
+            SYSTEM_SESSION_CREATE | SYSTEM_SESSION_DETACH => 4,
+            _ => return Err(UNSUPPORTED_SET.report(class)),
+        };
+        if length != size {
+            return Err(STATUS_INFO_LENGTH_MISMATCH);
+        }
+        if !super::security::privilege_enabled(SE_LOAD_DRIVER_PRIVILEGE) {
+            return Err(STATUS_PRIVILEGE_NOT_HELD);
+        }
+        let process = super::current_process();
+        match class {
+            SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION => {
+                let name = super::object::capture_unicode_string(buffer)?;
+                if !name.iter().copied().eq(WIN32K.encode_utf16()) {
+                    return Err(STATUS_PRIVILEGE_NOT_HELD);
+                }
+            }
+            SYSTEM_SESSION_CREATE => {
+                let out = UserPtr::<u32>::new(buffer);
+                ke::usermem::probe_for_write(u64::from(buffer), 4, 4)?;
+                let id = ps::create_session(&process)?;
+                out.write(&id)?;
+            }
+            _ => ps::detach_session(&process)?,
+        }
+        Ok(STATUS_SUCCESS)
+    };
+    set().unwrap_or_else(|status| status)
 }
 
 /// SYSTEM_PROCESSOR_INFORMATION : x86, la famille et le modèle comme XP SP2

@@ -12,6 +12,7 @@
 //! - [`object`]: access masks, generic mapping, object attributes.
 //! - [`peb32`], [`teb32`]: the PEB and TEB of an i386 process, as on XP SP2.
 //! - [`process`]: values about processes, such as their execute options.
+//! - [`security`]: SIDs, ACLs, security descriptors and tokens (Se).
 //! - [`service`], [`services`]: the system service tables, generated from the
 //!   pinned ReactOS version by `tools/syscall-gen` (ADR-002).
 //! - [`shared_data`]: `KUSER_SHARED_DATA`, as on XP SP2.
@@ -35,6 +36,7 @@ pub mod peb32;
 pub mod process;
 pub mod process_parameters;
 pub mod registry;
+pub mod security;
 pub mod service;
 pub mod services;
 pub mod shared_data;

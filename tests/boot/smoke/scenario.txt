@@ -38,6 +38,7 @@ expect = [smoke] Ex: events from user mode: NtCreateEvent, NtOpenEvent, NtSetEve
 expect = [smoke] Mm: another process's memory from user mode: the first MiB reserved from address 4, NtWriteVirtualMemory, NtReadVirtualMemory (partial copies), NtQuerySection (image, basic)
 expect = [smoke] Ps: a process made from user mode: NtCreateProcess, NtQueryInformationProcess, NtSetInformationProcess, NtCreateThread (suspended), NtSuspendThread, NtResumeThread, its end awaited
 expect = [smoke] Lpc: ports from user mode: NtCreatePort, NtReplyWaitReceivePort waits until the kernel sends a datagram (LpcRequestPort)
+expect = [smoke] Se: tokens from user mode: NtOpenProcessToken(Ex), NtQueryInformationToken, NtAdjustPrivilegesToken, NtOpenThreadToken(Ex) (no token); NtSetSecurityObject and NtQuerySecurityObject on a process; NtSetSystemInformation under SeLoadDriverPrivilege
 expect = hello from Mino user mode
 expect = [smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them, DbgPrompt answered
 expect = [smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher

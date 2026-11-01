@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 62 | 296 |
+| ntoskrnl | 71 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -27,7 +27,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0009` | `NtAddBootEntry` | 2 |  |
 | `0x000a` | `NtAddDriverEntry` | 2 |  |
 | `0x000b` | `NtAdjustGroupsToken` | 6 |  |
-| `0x000c` | `NtAdjustPrivilegesToken` | 6 |  |
+| `0x000c` | `NtAdjustPrivilegesToken` | 6 | ✅ |
 | `0x000d` | `NtAlertResumeThread` | 2 |  |
 | `0x000e` | `NtAlertThread` | 1 |  |
 | `0x000f` | `NtAllocateLocallyUniqueId` | 1 |  |
@@ -144,14 +144,14 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x007e` | `NtOpenMutant` | 3 |  |
 | `0x007f` | `NtOpenObjectAuditAlarm` | 12 |  |
 | `0x0080` | `NtOpenProcess` | 4 |  |
-| `0x0081` | `NtOpenProcessToken` | 3 |  |
-| `0x0082` | `NtOpenProcessTokenEx` | 4 |  |
+| `0x0081` | `NtOpenProcessToken` | 3 | ✅ |
+| `0x0082` | `NtOpenProcessTokenEx` | 4 | ✅ |
 | `0x0083` | `NtOpenSection` | 3 | ✅ |
 | `0x0084` | `NtOpenSemaphore` | 3 |  |
 | `0x0085` | `NtOpenSymbolicLinkObject` | 3 | ✅ |
 | `0x0086` | `NtOpenThread` | 4 |  |
-| `0x0087` | `NtOpenThreadToken` | 4 |  |
-| `0x0088` | `NtOpenThreadTokenEx` | 5 |  |
+| `0x0087` | `NtOpenThreadToken` | 4 | ✅ |
+| `0x0088` | `NtOpenThreadTokenEx` | 5 | ✅ |
 | `0x0089` | `NtOpenTimer` | 3 |  |
 | `0x008a` | `NtPlugPlayControl` | 3 |  |
 | `0x008b` | `NtPowerInformation` | 5 |  |
@@ -178,7 +178,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00a0` | `NtQueryInformationPort` | 5 |  |
 | `0x00a1` | `NtQueryInformationProcess` | 5 | ✅ |
 | `0x00a2` | `NtQueryInformationThread` | 5 |  |
-| `0x00a3` | `NtQueryInformationToken` | 5 |  |
+| `0x00a3` | `NtQueryInformationToken` | 5 | ✅ |
 | `0x00a4` | `NtQueryInstallUILanguage` | 1 |  |
 | `0x00a5` | `NtQueryIntervalProfile` | 2 |  |
 | `0x00a6` | `NtQueryIoCompletion` | 5 |  |
@@ -191,7 +191,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00ad` | `NtQueryPerformanceCounter` | 2 |  |
 | `0x00ae` | `NtQueryQuotaInformationFile` | 9 |  |
 | `0x00af` | `NtQuerySection` | 5 | ✅ |
-| `0x00b0` | `NtQuerySecurityObject` | 5 |  |
+| `0x00b0` | `NtQuerySecurityObject` | 5 | ✅ |
 | `0x00b1` | `NtQuerySemaphore` | 5 |  |
 | `0x00b2` | `NtQuerySymbolicLinkObject` | 3 | ✅ |
 | `0x00b3` | `NtQuerySystemEnvironmentValue` | 4 |  |
@@ -261,10 +261,10 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00f3` | `NtSetLowEventPair` | 1 |  |
 | `0x00f4` | `NtSetLowWaitHighEventPair` | 1 |  |
 | `0x00f5` | `NtSetQuotaInformationFile` | 4 |  |
-| `0x00f6` | `NtSetSecurityObject` | 3 |  |
+| `0x00f6` | `NtSetSecurityObject` | 3 | ✅ |
 | `0x00f7` | `NtSetSystemEnvironmentValue` | 2 |  |
 | `0x00f8` | `NtSetSystemEnvironmentValueEx` | 5 |  |
-| `0x00f9` | `NtSetSystemInformation` | 3 |  |
+| `0x00f9` | `NtSetSystemInformation` | 3 | ✅ |
 | `0x00fa` | `NtSetSystemPowerState` | 3 |  |
 | `0x00fb` | `NtSetSystemTime` | 2 |  |
 | `0x00fc` | `NtSetThreadExecutionState` | 2 |  |

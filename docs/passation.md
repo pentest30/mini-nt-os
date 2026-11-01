@@ -9,13 +9,15 @@ jour à chaque commit qui change l'état.
 - Jalon courant : **M5** ([05](05-feuille-de-route.md#m5--mode-console-puis-spike-s2)) ; **M4 terminé** : ses trois
   critères de sortie sont cochés (`smss` crée ses variables d'environnement et `\KnownDlls` ; un fichier de `C:` et une
   valeur du registre se relisent après un redémarrage, scénarios `persistence` et `registry-persistence`, `fsck.vfat`
-  propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée et lance
-  `csrss.exe`, qui charge ses DLL puis s'arrête au jeton de son processus (Se) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
-- Branches de travail : `claude/m4-io` (les étapes 4 à 9 du M4, PR à ouvrir), puis `claude/m5-csrss` par-dessus
-  (l'étape 1 du M5). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si
-  la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
-- PR fusionnées : #29, #30, #31 (spike S1) et #32 (étapes 0 à 2 du M4). Après chaque fusion, repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`,
-  ou `git merge origin/main` si la branche a des commits non fusionnés : jamais de réécriture).
+  propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée sa session et
+  lance `csrss.exe`, qui protège son processus (Se) puis s'arrête à sa section partagée (`SharedSection=`, une section
+  basée : Mm) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
+- Branche de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35. Les PR
+  se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà
+  incluse : `git merge-base --is-ancestor HEAD origin/main`).
+- PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
+  `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
+  des commits non fusionnés : jamais de réécriture).
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
 ## Spike S1 : les étapes
@@ -200,15 +202,29 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    `port_self_test`, `object_directory_self_test` étendu, tests hôte (ex, lpc, VAD, contexte) ; vérifiés par
    mutation. `csrss` démarre, charge `csrsrv`, entre dans `main`, puis `CsrServerInitialization` échoue à
    `CsrSetProcessSecurity` (NtOpenProcessToken).
-2. [ ] **Se : les jetons** (02 §5.8, ADR-011), le mur de `csrss` : un jeton par processus, hérité du créateur
-   (celui de System : SID `LocalSystem`, groupes, privilèges), NtOpenProcessToken(Ex), NtOpenThreadToken(Ex)
-   (`STATUS_NO_TOKEN` sans emprunt d'identité), NtQueryInformationToken (`TokenUser` d'abord, puis ce que `csrss` et
-   `smss` demandent), NtSetSecurityObject sur un processus (le descripteur gardé ; contrôle permissif, ADR-011),
-   NtAdjustPrivilegesToken (le privilège `SeLoadDriverPrivilege` que `smss` demande pour `Kmode`).
-3. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
+2. [x] **Se : les jetons** (02 §5.8, ADR-011 ; `compat/m5-csrss.md`, étapes 6 et 7). `abi::security` (SID, ACL,
+   descripteurs, enregistrements des jetons). Crate `se` : `Sid`, `Acl` (RtlValidAcl), `SecurityDescriptor` (capture
+   absolue ou relative sur une fonction de lecture, forme relative, `select`, `merge`), `Token` (type `Token`, jeton
+   de System, `duplicate_primary`, `adjust_privileges`, `query` des classes d'XP), `allocate_luid`. Ob : le
+   descripteur (forme relative) dans l'en-tête, `update_security_descriptor`. Ps : un jeton primaire par processus
+   (`EProcess::primary_token`, copie de celui du créateur), `ps::session` (SystemSessionCreate et Detach, le meneur
+   `smss`). Services (`sys::security`, `sys::system`) : NtOpenProcessToken(Ex), NtOpenThreadToken(Ex)
+   (`STATUS_NO_TOKEN`), NtQueryInformationToken, NtAdjustPrivilegesToken, NtSetSecurityObject,
+   NtQuerySecurityObject ; NtSetSystemInformation (`SystemSessionCreate`, `SystemSessionDetach`,
+   `SystemExtendServiceTableInformation` : win32k fait partie du noyau, rien n'est chargé), sous
+   `SeLoadDriverPrivilege` (SeSinglePrivilegeCheck, appliqué). Tests : hôte (`se`, `ob`, `ps::session`),
+   `security_self_test` ; vérifiés par mutation. `smss` obtient `SeLoadDriverPrivilege`, crée la session 0, lance
+   `csrss`, qui passe `CsrSetProcessSecurity` et s'arrête à `CsrParseServerCommandLine`.
+3. [ ] **Mm : la section partagée de `csrss`** (`CsrSrvCreateSharedSection`, `compat/m5-csrss.md`, étape 7) :
+   NtCreateSection sans fichier avec `SEC_RESERVE` (pages réservées, commitées à la demande dans une vue par
+   NtAllocateVirtualMemory, `RtlCreateHeap` y bâtit son tas) et `SEC_BASED` (la base fixée par la première vue, la
+   même dans chaque processus) ; la vue en `MEM_TOP_DOWN`, `PAGE_EXECUTE_READWRITE`. Aujourd'hui « NtCreateSection
+   with SEC_RESERVE or SEC_BASED is not implemented » (`sys::section`).
+4. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
    NtRequestWaitReplyPort, NtReplyPort, NtReplyWaitReceivePort avec réponse, NtListenPort ; puis les sections de
-   port (messages volumineux). `csrss` se connecte à `\SmApiPort` (`SmConnectToSm`) et `smss` signale son événement.
-4. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
+   port (messages volumineux). `csrss` crée son port d'API (`CsrApiPortInitialize`), puis se connecte à `\SmApiPort`
+   (`SmConnectToSm`) et `smss` signale son événement.
+5. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
    `ntdll`), `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer
    `smss`), NtSetInformationProcess(`ProcessBasePriority`, `ProcessDefaultHardErrorMode`).
 
@@ -216,6 +232,11 @@ Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --b
 `[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 
 Questions ouvertes du M5 :
+- Le contrôle des privilèges s'applique (SeSinglePrivilegeCheck), alors que l'ADR-011 laisse permissif le contrôle
+  d'accès : à confirmer avec le mainteneur (une ADR si l'on veut aussi journaliser sans refuser).
+- `SystemExtendServiceTableInformation` réussit sans rien charger (win32k fait partie du noyau, ses services rendent
+  `STATUS_NOT_IMPLEMENTED`) : à revoir quand win32k sera un module à part (spike S3).
+- `ProcessSessionInformation` demande `SeTcbPrivilege` dans ReactOS (NtSetInformationProcess) ; ici, pas encore.
 - `ProcessExecuteFlags` : le `ntdll` de ReactOS y passe 0 sous `OptIn` ; la règle du M3
   (`ps::eprocess::changed_execute_options`, exactement `DISABLE` ou `ENABLE`) le refuse. Le service reste à faire,
   après avoir tranché (ADR-020).
@@ -226,6 +247,18 @@ Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `
 classes `ProcessCookie` de NtQueryInformationProcess et `ProcessExecuteFlags` de NtSetInformationProcess (les deux
 services sont faits pour d'autres classes), `NtFlushInstructionCache`, `NtQueryDefaultLocale` ; `NtCreateKeyedEvent`
 (Ex). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
+
+## Dettes de Se (l'étape 2 du M5)
+
+- SeAccessCheck et le mode permissif qui journalise les refus (ADR-011) ; le descripteur qu'un objet reçoit à sa
+  création (SeAssignSecurity, d'après le jeton de son créateur : propriétaire, groupe, DACL par défaut) ; le
+  propriétaire donné à NtSetSecurityObject n'est pas comparé au jeton ; les SACL (aucun handle n'a
+  `ACCESS_SYSTEM_SECURITY`).
+- L'emprunt d'identité (jetons de thread, NtImpersonate*, NtSetInformationThread(`ThreadImpersonationToken`)),
+  NtDuplicateToken, NtAdjustGroupsToken, NtSetInformationToken, NtAccessCheck, NtPrivilegeCheck ; les classes
+  `TokenGroupsAndPrivileges`, `TokenAuditPolicy`, `TokenOrigin` (journalisées). Le jeton garde la session de son
+  créateur quand celle du processus change.
+- Sessions : pas d'espace de session (Mm), ni de compte des processus d'une session ; un identifiant créé reste pris.
 
 ## Ensuite (hors jalon)
 
@@ -257,10 +290,10 @@ cargo xtask lint && cargo xtask test                        # avant chaque commi
   temporairement dans `raise` (`kernel/ntoskrnl/src/sys/exceptions.rs`) un
   `log::warn!("TEMP exception {code} at {:#x} esp {:#x} {parameters:x?}", frame.rip, frame.rsp);`, à retirer avant
   de committer.
-- ReactOS sert de spécification (ses sources `ntdll`, `smss`, en lecture) ; on ne porte pas son code noyau. Jamais
-  de code Microsoft. Les sources, hors du dépôt, par le proxy Git (sans l'API de GitHub) :
+- ReactOS sert de spécification (ses sources `ntdll`, `smss`, `csrsrv`, en lecture) ; on ne porte pas son code noyau.
+  Jamais de code Microsoft. Les sources, hors du dépôt, par le proxy Git (sans l'API de GitHub) :
   `git clone --filter=blob:none --no-checkout --depth 1 --branch 0.4.16 https://github.com/reactos/reactos ../reactos-src`,
-  puis `git sparse-checkout set --no-cone base/system/smss dll/ntdll sdk/lib/rtl` et `git checkout`.
+  puis `git sparse-checkout set --no-cone base/system/smss dll/ntdll sdk/lib/rtl subsystems/csr` et `git checkout`.
 - Réseau : SourceForge et les clones Git de GitHub passent ; les pages de publication et l'API de GitHub, et
   reactos.org, sont bloquées.
 - Le scénario `smss` : `cargo xtask test --boot --scenario smss --cpu intel`, journal `[m4]` dans
