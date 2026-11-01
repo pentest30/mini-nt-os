@@ -83,7 +83,7 @@ pub fn mount_system_hive() {
         return log::info!("[boot] no SYSTEM hive on the boot disk (cargo xtask fetch-userland)");
     };
     let size = hive.len();
-    match cm::mount_system_hive(Arc::from(hive)) {
+    match cm::mount_system_hive(Arc::from(hive), Some(SYSTEM_HIVE)) {
         Ok(current) => log::info!(
             "[boot] SYSTEM hive mounted at \\REGISTRY\\MACHINE\\SYSTEM: {size} bytes, CurrentControlSet = ControlSet{current:03}"
         ),

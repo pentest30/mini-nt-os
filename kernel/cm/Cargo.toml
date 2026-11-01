@@ -10,8 +10,7 @@ name = "cm"
 abi  = { path = "../../abi" }
 hal  = { path = "../hal" }
 ob   = { path = "../ob" }
-regf = { path = "../../libs/regf" }
-log  = { workspace = true }
-
-[dev-dependencies]
+# The builder writes a hive back to its file.
 regf = { path = "../../libs/regf", features = ["builder"] }
+io-manager = { path = "../io" }
+log  = { workspace = true }
