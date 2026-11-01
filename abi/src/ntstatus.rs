@@ -86,6 +86,7 @@ pub const STATUS_INVALID_FILE_FOR_SECTION: NtStatus = NtStatus(0xC000_0020);
 pub const STATUS_ACCESS_DENIED: NtStatus = NtStatus(0xC000_0022);
 pub const STATUS_OBJECT_TYPE_MISMATCH: NtStatus = NtStatus(0xC000_0024);
 pub const STATUS_NOT_COMMITTED: NtStatus = NtStatus(0xC000_002D);
+pub const STATUS_PORT_MESSAGE_TOO_LONG: NtStatus = NtStatus(0xC000_002F);
 pub const STATUS_INVALID_PARAMETER_MIX: NtStatus = NtStatus(0xC000_0030);
 pub const STATUS_EAS_NOT_SUPPORTED: NtStatus = NtStatus(0xC000_004F);
 pub const STATUS_OBJECT_NAME_INVALID: NtStatus = NtStatus(0xC000_0033);

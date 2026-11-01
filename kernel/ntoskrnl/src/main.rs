@@ -283,6 +283,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &io_manager::DEVICE_TYPE,
         &cm::KEY_TYPE,
         &ex::EVENT_TYPE,
+        &lpc::PORT_TYPE,
     ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
@@ -347,6 +348,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     event_service_self_test();
     process_memory_self_test();
     process_creation_self_test();
+    port_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -3489,6 +3491,139 @@ fn process_creation_self_test() {
     );
 }
 
+/// The ports of Lpc from user mode (`sys::port`, M5), as `smss` uses its API
+/// port before any client: NtCreatePort (named), then NtReplyWaitReceivePort
+/// blocks until a message comes; the kernel sends one (LpcRequestPort, a
+/// datagram), which arrives whole. What must fail: a message length past
+/// the limit, a reply (no connection yet), a bad handle, an event.
+fn port_self_test() {
+    use abi::lpc::{LPC_DATAGRAM, LPC_KERNELMODE_MESSAGE};
+    use abi::ntstatus::{
+        NtStatus, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER_4, STATUS_NOT_IMPLEMENTED,
+        STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 8 statuses
+    const PORT: u32 = DATA + 0x20;
+    const OTHER: u32 = DATA + 0x24;
+    const EVENT: u32 = DATA + 0x28;
+    const CONTEXT: u32 = DATA + 0x2C;
+    const OA: u32 = DATA + 0x30;
+    const US: u32 = DATA + 0x48;
+    const NAME: u32 = DATA + 0x50;
+    const MESSAGE: u32 = DATA + 0x100; // 0x130 bytes
+    const READY: u32 = DATA + 0x3F4;
+    const RECEIVED: u32 = DATA + 0x3F8;
+    const DONE: u32 = DATA + 0x3FC;
+    const PORT_NAME: &str = "\\MinoPort";
+    const TEXT: &[u8] = b"hello, port";
+
+    let mut data = alloc::vec![0u8; 0x400];
+    let units: alloc::vec::Vec<u8> = PORT_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    data[(NAME - DATA) as usize..][..units.len()].copy_from_slice(&units);
+    let us = (US - DATA) as usize;
+    data[us..us + 2].copy_from_slice(&(units.len() as u16).to_le_bytes());
+    data[us + 2..us + 4].copy_from_slice(&(units.len() as u16).to_le_bytes());
+    data[us + 4..us + 8].copy_from_slice(&NAME.to_le_bytes());
+    let oa = (OA - DATA) as usize;
+    data[oa..oa + 4].copy_from_slice(&24u32.to_le_bytes());
+    data[oa + 8..oa + 12].copy_from_slice(&US.to_le_bytes());
+    data[(CONTEXT - DATA) as usize..][..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let receive = services::NtReplyWaitReceivePort;
+    let mut code = Code::new();
+    code.call_args(services::NtCreatePort, &[v(PORT), v(OA), v(0x28), v(0x130), v(0)]).store_eax(status(0));
+    code.call_args(services::NtCreatePort, &[v(OTHER), v(0), v(0x28), v(0x149), v(0)]).store_eax(status(1));
+    code.call_args(receive, &[m(PORT), v(0), v(MESSAGE), v(MESSAGE)]).store_eax(status(2));
+    code.call_args(receive, &[v(0x1234), v(0), v(0), v(MESSAGE)]).store_eax(status(3));
+    code.call_args(services::NtCreateEvent, &[v(EVENT), v(0x001F_0003), v(0), v(0), v(0)]);
+    code.call_args(receive, &[m(EVENT), v(0), v(0), v(MESSAGE)]).store_eax(status(4));
+    code.word(&[0xC7, 0x05], READY).bytes(&1u32.to_le_bytes());
+    code.call_args(receive, &[m(PORT), v(CONTEXT), v(0), v(MESSAGE)]).store_eax(RECEIVED);
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x400];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x400, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x400, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "port.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the port test program did not {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(READY, "reach its wait");
+    // SAFETY: as above. The program has time to block in its wait.
+    unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -50 * MS) };
+    assert_eq!(read(DONE), 0, "NtReplyWaitReceivePort returned before any message");
+    let object = ob::namespace().open(PORT_NAME, None, Some(&lpc::PORT_TYPE), 0).expect("the named port");
+    let port = ob::downcast::<lpc::Port>(&object).expect("a port");
+    let id = port.request(TEXT).expect("a datagram from the kernel");
+    wait_for(DONE, "receive the datagram");
+    drop((port, object));
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..5).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtCreatePort");
+    assert_eq!(statuses[1], STATUS_INVALID_PARAMETER_4, "messages past the limit");
+    assert_eq!(statuses[2], STATUS_NOT_IMPLEMENTED, "a reply: no connection yet");
+    assert_eq!(statuses[3], STATUS_INVALID_HANDLE, "a bad handle");
+    assert_eq!(statuses[4], STATUS_OBJECT_TYPE_MISMATCH, "an event is not a port");
+    assert_eq!(NtStatus(read(RECEIVED)), STATUS_SUCCESS, "NtReplyWaitReceivePort");
+    let header = (read(MESSAGE), read(MESSAGE + 4), read(MESSAGE + 0x10));
+    let length = (0x18 + TEXT.len() as u32) << 16 | TEXT.len() as u32;
+    assert_eq!(header, (length, u32::from(LPC_DATAGRAM | LPC_KERNELMODE_MESSAGE), id), "its header");
+    let mut received = [0u8; TEXT.len()];
+    process.read_memory(u64::from(MESSAGE + 0x18), &mut received).expect("read the data");
+    assert_eq!(&received, TEXT, "its data");
+    assert_eq!(read(CONTEXT), 0, "no client, no context");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ob::namespace().open(PORT_NAME, None, None, 0).is_err(), "the port goes with its handle");
+    log::info!(
+        "[smoke] Lpc: ports from user mode: NtCreatePort, NtReplyWaitReceivePort waits until the kernel sends a \
+         datagram (LpcRequestPort)"
+    );
+}
+
 /// Another process's memory from user mode (`sys::memory`, `sys::section`,
 /// M5), as `RtlCreateUserProcess` uses it: in a second process, without a
 /// thread, the first MiB reserved from address 4 and a page committed, then
@@ -5636,7 +5771,7 @@ fn object_manager_self_test() {
     let names: alloc::vec::Vec<_> = types.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
         names,
-        ["Device", "Directory", "Event", "File", "Key", "Process", "Section", "SymbolicLink", "Thread", "Type"]
+        ["Device", "Directory", "Event", "File", "Key", "Port", "Process", "Section", "SymbolicLink", "Thread", "Type"]
     );
 
     // A named section, two handle tables.

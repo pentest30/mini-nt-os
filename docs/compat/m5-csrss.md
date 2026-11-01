@@ -112,3 +112,16 @@ NtOpenSection rend `STATUS_OBJECT_NAME_NOT_FOUND`, puis NtOpenFile, NtCreateSect
 
 Le prochain mur de `csrss` est donc Se (02 §5.8, ADR-011) : un jeton par processus (NtOpenProcessToken,
 NtQueryInformationToken), les descripteurs de sécurité des objets (NtSetSecurityObject).
+
+## Étape 5 : le port d'API de `smss` (Lpc)
+
+Le crate `lpc` (02 §5.9) commence par ce que `smss` demande avant tout client : le type `Port`, un port de
+connexion nommé dans l'espace de noms, et sa file de messages, que compte un sémaphore de Ke. Services :
+NtCreatePort (`STATUS_INVALID_PARAMETER_3` ou `_4` au-delà de `PORT_MAXIMUM_MESSAGE_LENGTH`, 0x148 octets) et
+NtReplyWaitReceivePort, qui attend le prochain message et le copie, en-tête `PORT_MESSAGE` (abi) puis données. Le
+noyau peut envoyer un datagramme à un port (`Port::request`, LpcRequestPort). Test : `port_self_test` (une attente
+qu'un datagramme du noyau termine). Pas encore : la connexion, les ports de communication, les réponses
+(NtReplyWaitReceivePort avec un message de réponse rend `STATUS_NOT_IMPLEMENTED`), les messages volumineux.
+
+`smss` crée `\SmApiPort` et ses deux threads d'API y attendent, au lieu de tourner (l'étape 3) : rien ne s'y
+connecte encore, `csrss` s'arrêtant avant (Se).

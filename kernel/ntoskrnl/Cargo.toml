@@ -60,6 +60,7 @@ pe               = { path = "../../libs/pe", features = ["builder"] }
 ob               = { path = "../ob" }
 cm               = { path = "../cm" }
 ex               = { path = "../ex" }
+lpc              = { path = "../lpc" }
 regf             = { path = "../../libs/regf", features = ["builder"] }
 ps               = { path = "../ps" }
 io-manager       = { path = "../io" }

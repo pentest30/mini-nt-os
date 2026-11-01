@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 60 | 296 |
+| ntoskrnl | 62 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -63,7 +63,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x002d` | `NtCreateMutant` | 4 |  |
 | `0x002e` | `NtCreateNamedPipeFile` | 14 |  |
 | `0x002f` | `NtCreatePagingFile` | 4 |  |
-| `0x0030` | `NtCreatePort` | 5 |  |
+| `0x0030` | `NtCreatePort` | 5 | ✅ |
 | `0x0031` | `NtCreateProcess` | 8 | ✅ |
 | `0x0032` | `NtCreateProcessEx` | 9 | ✅ |
 | `0x0033` | `NtCreateProfile` | 9 |  |
@@ -218,7 +218,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00c8` | `NtRenameKey` | 2 |  |
 | `0x00c9` | `NtReplaceKey` | 3 |  |
 | `0x00ca` | `NtReplyPort` | 2 |  |
-| `0x00cb` | `NtReplyWaitReceivePort` | 4 |  |
+| `0x00cb` | `NtReplyWaitReceivePort` | 4 | ✅ |
 | `0x00cc` | `NtReplyWaitReceivePortEx` | 5 |  |
 | `0x00cd` | `NtReplyWaitReplyPort` | 2 |  |
 | `0x00ce` | `NtRequestDeviceWakeup` | 1 |  |

@@ -27,6 +27,7 @@ mod file;
 pub mod gates;
 mod memory;
 mod object;
+mod port;
 mod process;
 mod registry;
 mod section;
@@ -81,6 +82,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateEvent, Handler::Status(event::nt_create_event)),
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
     (services::NtCreateKey, Handler::Status(registry::nt_create_key)),
+    (services::NtCreatePort, Handler::Status(port::nt_create_port)),
     (services::NtCreateProcess, Handler::Status(process::nt_create_process)),
     (services::NtCreateProcessEx, Handler::Status(process::nt_create_process_ex)),
     (services::NtCreateSection, Handler::Status(section::nt_create_section)),
@@ -118,6 +120,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtReadFile, Handler::Status(file::nt_read_file)),
     (services::NtReadVirtualMemory, Handler::Status(memory::nt_read_virtual_memory)),
+    (services::NtReplyWaitReceivePort, Handler::Status(port::nt_reply_wait_receive_port)),
     (services::NtResetEvent, Handler::Status(event::nt_reset_event)),
     (services::NtResumeThread, Handler::Status(process::nt_resume_thread)),
     (services::NtSetEvent, Handler::Status(event::nt_set_event)),
