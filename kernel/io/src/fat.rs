@@ -25,6 +25,11 @@ pub trait BlockDevice {
     fn write_sector(&self, _lba: u64, _data: &[u8]) -> Result<(), FatError> {
         Err(FatError::ReadOnly)
     }
+    /// Makes what was written reach the medium; nothing to do for a device
+    /// without a cache.
+    fn flush(&self) -> Result<(), FatError> {
+        Ok(())
+    }
 }
 
 impl<D: BlockDevice + ?Sized> BlockDevice for alloc::boxed::Box<D> {
@@ -36,6 +41,9 @@ impl<D: BlockDevice + ?Sized> BlockDevice for alloc::boxed::Box<D> {
     }
     fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
         (**self).write_sector(lba, data)
+    }
+    fn flush(&self) -> Result<(), FatError> {
+        (**self).flush()
     }
 }
 
@@ -229,6 +237,11 @@ impl<D: BlockDevice> FatVolume<D> {
     /// The device it is mounted on.
     pub fn device(&self) -> &D {
         &self.device
+    }
+
+    /// Makes what was written reach the medium.
+    pub fn flush(&self) -> Result<(), FatError> {
+        self.device.flush()
     }
 
     /// Mount and open a file in a single stack frame, avoiding cross-frame copy of FatVolume.

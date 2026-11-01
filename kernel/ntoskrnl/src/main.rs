@@ -295,7 +295,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     }
     ps::init();
     io_manager::init(boot_info.ramdisk_phys_base, boot_info.ramdisk_size, boot_info.hhdm_offset);
-    mount_boot_volume();
+    mount_boot_volumes();
     fat_smoke_probe();
 
     // Wire preemptive round-robin: each clock tick ends the quantum, and the
@@ -2848,7 +2848,8 @@ fn file_self_test() {
 }
 
 /// Writing files from user mode (`sys::file`, `io_manager`, M4), on the boot
-/// volume: NtCreateFile makes `\??\C:\MINOTEST.TXT`; NtWriteFile writes at
+/// RAM disk, which every boot starts afresh (`C:` may be a disk that keeps
+/// what boots write): NtCreateFile makes `\Device\Ramdisk0\MINOTEST.TXT`; NtWriteFile writes at
 /// the current position, then past the end (the gap reads as zeros);
 /// NtSetInformationFile moves the position back; NtReadFile reads it all,
 /// then meets the end; a second open overwrites it, which the first handle
@@ -2888,12 +2889,12 @@ fn file_write_self_test() {
     let mut data = alloc::vec![0u8; 0x400];
     let mut strings = 0x240usize;
     let names = [
-        "\\??\\C:\\MINOTEST.TXT",
-        "\\??\\C:\\MINODIR",
-        "\\??\\C:\\MINODIR\\INNER.TXT",
-        "\\??\\C:\\NODIR\\X.TXT",
-        "\\??\\C:\\A long name.txt",
-        "\\??\\C:\\KERNEL.BIN",
+        "\\Device\\Ramdisk0\\MINOTEST.TXT",
+        "\\Device\\Ramdisk0\\MINODIR",
+        "\\Device\\Ramdisk0\\MINODIR\\INNER.TXT",
+        "\\Device\\Ramdisk0\\NODIR\\X.TXT",
+        "\\Device\\Ramdisk0\\A long name.txt",
+        "\\Device\\Ramdisk0\\KERNEL.BIN",
     ];
     for (i, text) in names.iter().enumerate() {
         let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
@@ -3005,7 +3006,7 @@ fn file_write_self_test() {
         let object = ns.open(name, None, Some(&io_manager::FILE_TYPE), 0).expect(name);
         ob::downcast::<io_manager::File>(&object).expect("a file").node().expect("its entry").size
     };
-    assert_eq!((size("\\??\\C:\\minotest.txt"), size("\\??\\C:\\MinoDir\\Inner.txt")), (0, 0));
+    assert_eq!((size("\\Device\\Ramdisk0\\minotest.txt"), size("\\Device\\Ramdisk0\\MinoDir\\Inner.txt")), (0, 0));
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
@@ -3021,7 +3022,7 @@ fn file_write_self_test() {
     drop(process);
     ps::wait_for_reaper();
     log::info!(
-        "[smoke] Io: files written from user mode on \\??\\C:: NtCreateFile (create, overwrite, directory), \
+        "[smoke] Io: files written from user mode on the boot RAM disk: NtCreateFile (create, overwrite, directory), \
          NtWriteFile, NtReadFile, NtSetInformationFile"
     );
 }
@@ -5371,17 +5372,28 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
 }
 
 #[allow(dead_code)]
-/// The boot RAM disk as the system volume (`io_manager::mount_boot_volume`):
-/// `\Device\Ramdisk0`, with `\??\C:` and `\SystemRoot` leading to it.
-fn mount_boot_volume() {
-    match io_manager::mount_boot_volume() {
-        Ok(Some(size)) => log::info!(
-            "[boot] Io: boot volume {} (FAT32, {size} bytes), {}",
-            io_manager::BOOT_VOLUME,
-            io_manager::BOOT_LINKS.map(|(name, target)| alloc::format!("{name} -> {target}")).join(", ")
+/// The boot volumes (`io_manager::mount_boot_volumes`): the boot RAM disk,
+/// and the ATA system disk if there is one, which `\??\C:` and `\SystemRoot`
+/// then lead to.
+fn mount_boot_volumes() {
+    let volumes = match io_manager::mount_boot_volumes() {
+        Ok(volumes) => volumes,
+        Err(status) => return log::error!("[boot] Io: the boot volume refused: {status}"),
+    };
+    if let Some(size) = volumes.ramdisk {
+        log::info!("[boot] Io: boot volume {} (FAT32, {size} bytes)", io_manager::RAMDISK_VOLUME);
+    }
+    match volumes.disk {
+        Some(Ok(sectors)) => log::info!(
+            "[boot] Io: system disk {} (ATA, secondary master, FAT32, {sectors} sectors)",
+            io_manager::DISK_VOLUME
         ),
-        Ok(None) => log::info!("[boot] Io: no boot RAM disk, no system volume"),
-        Err(status) => log::error!("[boot] Io: the boot volume refused: {status}"),
+        Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no FAT32 volume: {status}"),
+        None => {}
+    }
+    match volumes.system {
+        Some(system) => log::info!("[boot] Io: \\GLOBAL??\\C: -> {system}, \\SystemRoot -> {system}\\WINDOWS"),
+        None => log::info!("[boot] Io: no boot RAM disk nor system disk, no system volume"),
     }
 }
 

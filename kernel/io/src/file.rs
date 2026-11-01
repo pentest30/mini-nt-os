@@ -248,6 +248,14 @@ impl File {
         self.volume.write(&self.opened, offset, data).map(|_| ())
     }
 
+    /// Fait atteindre le support à ce qui est écrit sur son volume.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn flush(&self) -> Result<(), NtStatus> {
+        self.volume.flush()
+    }
+
     /// Donne au fichier la taille `size`.
     ///
     /// # IRQL

@@ -1,7 +1,8 @@
 //! Les services d'Io sur les fichiers : ouvrir ou créer un fichier ou un
 //! répertoire par son nom (NtCreateFile, NtOpenFile), lire ses attributs sans
 //! l'ouvrir (NtQueryAttributesFile, NtQueryFullAttributesFile), le lire et
-//! l'écrire (NtReadFile, NtWriteFile, NtFlushBuffersFile), le décrire et le
+//! l'écrire (NtReadFile, NtWriteFile ; NtFlushBuffersFile vide le cache du
+//! disque), le décrire et le
 //! changer (NtQueryInformationFile, NtSetInformationFile), décrire son volume
 //! (NtQueryVolumeInformationFile).
 //!
@@ -362,16 +363,18 @@ pub(super) fn nt_write_file(arguments: &[u32]) -> NtStatus {
     status(transfer(arguments, true))
 }
 
-/// NtFlushBuffersFile(FileHandle, IoStatusBlock) : rien à vider, chaque
-/// écriture va droit au périphérique ; le bloc d'état est écrit.
+/// NtFlushBuffersFile(FileHandle, IoStatusBlock) : chaque écriture va droit
+/// au périphérique, qui vide son cache (FLUSH CACHE d'un disque ATA) ; le
+/// bloc d'état est écrit.
 pub(super) fn nt_flush_buffers_file(arguments: &[u32]) -> NtStatus {
     status((|| {
-        super::current_process().handle_table.reference_as::<File>(
+        let file = super::current_process().handle_table.reference_as::<File>(
             Handle(arguments[0]),
             &FILE_TYPE,
             AccessMask::NONE,
         )?;
         ke::usermem::probe_for_write(u64::from(arguments[1]), size_of::<IoStatusBlock32>(), 4)?;
+        file.flush()?;
         write_iosb(arguments[1], STATUS_SUCCESS, 0)
     })())
 }

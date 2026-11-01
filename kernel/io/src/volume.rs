@@ -243,6 +243,15 @@ impl Volume {
         self.current_locked(&node)
     }
 
+    /// Fait atteindre le support à ce qui est écrit (le cache du disque).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn flush(&self) -> Result<(), NtStatus> {
+        let _guard = self.lock.lock();
+        self.fat.flush().map_err(device_error)
+    }
+
     /// Crée dans le répertoire `directory` le fichier vide (ou, avec
     /// `as_directory`, le répertoire) `name`, avec les attributs
     /// `attributes` (lecture seule, caché, système ; archive pour un
