@@ -6,18 +6,16 @@ jour à chaque commit qui change l'état.
 
 ## État
 
-- Jalon courant : **M4** ([05](05-feuille-de-route.md#m4--es-registre-systèmes-de-fichiers)) ; M3 terminé
-  (spike S1 réussi). Étapes 0, 1, 2, 4 (en mémoire), 5 et 6 du M4 faites : la sonde `smss`, le registre en lecture
-  puis en écriture, les répertoires d'Ob, Io (le volume système, les fichiers, les sections de `\KnownDlls`),
-  `SystemProcessorInformation`, la ruche HARDWARE, le FAT32 en écriture, un disque ATA pour `C:`. **Les critères 1
-  et 3 du M4 sont cochés** : `smss` crée ses variables d'environnement et `\KnownDlls`, puis s'arrête au lancement de
-  `csrss.exe` (M5) ; un fichier écrit sur `C:` se relit après un redémarrage, et `fsck.vfat` trouve l'image propre
-  (scénario `persistence`). Reste le critère 2 : une valeur du registre après un redémarrage (étape 9).
+- Jalon courant : **M5** ([05](05-feuille-de-route.md#m5--mode-console-puis-spike-s2)) ; **M4 terminé** : ses trois
+  critères de sortie sont cochés (`smss` crée ses variables d'environnement et `\KnownDlls` ; un fichier de `C:` et une
+  valeur du registre se relisent après un redémarrage, scénarios `persistence` et `registry-persistence`, `fsck.vfat`
+  propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). `smss` s'arrête au lancement de
+  `csrss.exe`, le premier mur du M5.
 - Branche de travail : `claude/m4-io`, partie d'`origin/main` après la fusion de #32. Les PR se fusionnent dans
   `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
   `git merge-base --is-ancestor HEAD origin/main`).
-- PR fusionnées : #29, #30, #31 (spike S1) et #32 (étapes 0 à 2 du M4). L'étape 5 (Io) est sur `claude/m4-io`, PR à
-  ouvrir. Après chaque fusion, repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`,
+- PR fusionnées : #29, #30, #31 (spike S1) et #32 (étapes 0 à 2 du M4). Les étapes 4 à 9 du M4 sont sur
+  `claude/m4-io`, PR à ouvrir. Après chaque fusion, repartir de `origin/main` (`git fetch origin main && git merge --ff-only origin/main`,
   ou `git merge origin/main` si la branche a des commits non fusionnés : jamais de réécriture).
 - Observations du spike : [`compat/s1-ntdll.md`](compat/s1-ntdll.md).
 
@@ -72,7 +70,7 @@ rencontrés est publiée.
 6. [x] Critères cochés dans 05 : **le M3 est terminé**. L'ADR-002 reste « Proposée » (S1 réussi, S2 et S3 à
    faire). CLAUDE.md : jalon courant M4.
 
-## Jalon courant : M4 (E/S, registre, systèmes de fichiers)
+## M4 (terminé) : E/S, registre, systèmes de fichiers
 
 But (05) : lancer `smss.exe`. Critères : `smss` démarre, lit `Session Manager`, crée les variables d'environnement
 et `\KnownDlls` ; une valeur du registre persiste après un redémarrage ; un fichier créé sur `C:` reste lisible après
@@ -101,7 +99,7 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    un lien ouvert comme lien n'est pas suivi). Test : `object_directory_self_test`. Résultat : `smss` crée ses
    répertoires et ses liens de `DOS Devices`, puis s'arrête à `NtOpenFile` sur `C:\WINDOWS\system32` (KnownDlls) :
    **Io est le prochain mur**.
-3. [ ] **Ex et Ps** que `smss` demande : `NtCreateEvent`, `NtCreateThread` et `NtWriteVirtualMemory`,
+3. [ ] (reporté au M5, étapes 1 et 2) **Ex et Ps** que `smss` demande : `NtCreateEvent`, `NtCreateThread` et `NtWriteVirtualMemory`,
    `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer `smss`).
 4. [x] **Écriture dans le registre, en mémoire** (`docs/compat/m4-smss.md`, étape 5) : une ruche montée est un arbre de
    clés en mémoire (`cm::HiveKey`, chacune sous son verrou), lu du fichier regf à son montage, sans récursion, borné à
@@ -158,15 +156,39 @@ lecture et écriture, ADR-017), Cm et `libs/regf`, `tools/mkhive` (ADR-012), `\?
    démarrage refait. **Pas encore** : table de partitions (le disque porte un seul volume), LBA 48 bits, DMA et
    interruptions, virtio-blk ; le verrou du volume est tournant (attentes actives à DISPATCH_LEVEL : un mutex avec les
    interruptions) ; un cache de secteurs (chaque cluster d'une chaîne relit un secteur de la FAT, lent en PIO).
-9. [ ] **Le critère 2 : une valeur du registre après un redémarrage.** Écrire la ruche modifiée sur `C:` : Cm la rend
-   en entier (`regf::builder`, sans les clés volatiles), le noyau l'écrit par Io sur son fichier
-   (`\SystemRoot\System32\config\SYSTEM`) ; NtFlushKey, puis l'écriture différée. Un scénario comme `persistence`, avec
-   `requires = userland` (la ruche SYSTEM sur le disque) : le premier démarrage écrit une valeur et la vide sur le
-   disque, le second la relit.
-10. [ ] **LPC**, et la création de processus depuis le mode utilisateur, seulement pour aller plus loin avec `smss`
-   (`csrss.exe`) : c'est le M5.
-   Méthode : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal `[m4]`,
-   mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
+9. [x] **Le critère 2 : une valeur du registre après un redémarrage.** `regf::builder` écrit les classes et les dates
+   des clés. `cm::HiveFile` retient son fichier (`with_file`) et s'il a changé ; `to_regf` rend la ruche en entier, sans
+   ses clés volatiles (au-delà de 64 niveaux : STATUS_REGISTRY_IO_FAILED, le constructeur est récursif) ; `flush` la
+   récrit par Io et vide le cache du disque ; `Key::flush`, `Key::digest` (FNV-1a des noms, classes et valeurs).
+   NtFlushKey. La ruche SYSTEM se récrit dans `\SystemRoot\System32\config\SYSTEM`. Tests : hôte (réécriture et relecture,
+   la ruche SYSTEM de ReactOS comprise), `registry_write_self_test` (NtFlushKey sur une ruche du disque RAM, relue),
+   scénario `registry-persistence` (`requires = userland`) ; vérifiés par mutation. Critère coché : le M4 est terminé.
+## Dettes du M4
+
+Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela comptera :
+
+- Io : IRP, piles de périphériques, E/S asynchrones (un événement ou une APC de fin : `STATUS_NOT_IMPLEMENTED`), ports
+  de complétion, partage (IoCheckShareAccess), suppression et renommage de fichiers, énumération de répertoires
+  (NtQueryDirectoryFile, que `cmd.exe` demandera), noms longs FAT, dates des fichiers.
+- Disques : virtio-blk, gestionnaire de partitions (le disque système porte un seul volume, sans table), LBA 48 bits,
+  DMA et interruptions ; le verrou d'un volume est tournant (attentes actives à DISPATCH_LEVEL : un mutex quand Ke en
+  aura un) ; un cache de secteurs (en PIO, chaque pas d'une chaîne relit un secteur de la FAT).
+- Registre : `tools/mkhive` (ADR-012 ; la ruche SYSTEM vient encore de ReactOS), écriture différée (rien ne va sur
+  disque sans NtFlushKey), journal `.LOG`, NtDeleteKey, clés liens, notifications, ruches SOFTWARE et DEFAULT.
+
+## Jalon suivant : M5 (mode console, spike S2)
+
+Premières étapes proposées, dans l'ordre où `smss` les demandera :
+
+1. [ ] Mettre `csrss.exe` et ses DLL (`csrsrv`, `basesrv`, `winsrv`) sur le disque, relancer la sonde `smss` et lire le
+   mur suivant : sans doute `RtlCreateUserProcess`, donc NtCreateProcess(Ex) et NtCreateThread depuis le mode
+   utilisateur (Ps), NtWriteVirtualMemory (Mm), puis le port d'API de `smss` (LPC).
+2. [ ] Les objets d'Ex que `smss` demande déjà : NtCreateEvent (`\Device\VolumesSafeForWriteAccess`), les événements à
+   clé (NtCreateKeyedEvent, pour les sections critiques de ntdll), et `ThreadBreakOnTermination` (avec l'arrêt
+   `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer `smss`).
+
+Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal
+`[m4]`, mettre à jour `docs/compat/m4-smss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 
 Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) :
 `NtQueryInformationProcess(ProcessCookie)`, `NtSetInformationProcess(ProcessExecuteFlags)`,

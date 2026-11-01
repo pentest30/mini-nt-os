@@ -89,7 +89,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 
 **Critères de sortie**
 - [x] `smss.exe` (ReactOS) démarre, lit `Session Manager`, crée les variables d'environnement et `\KnownDlls`.
-- [ ] Une valeur écrite dans le registre persiste après un redémarrage.
+- [x] Une valeur écrite dans le registre persiste après un redémarrage.
 - [x] Un fichier créé sur `C:` reste lisible après un redémarrage, et `fsck.vfat` ne signale aucune erreur sur l'image.
 
 ## M5 — Mode console, puis spike S2
