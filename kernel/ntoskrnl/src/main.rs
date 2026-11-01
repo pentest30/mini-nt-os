@@ -3325,12 +3325,24 @@ fn registry_write_self_test() {
     const QUERY_LENGTH: u32 = DATA + 0xD0;
     const OA: u32 = DATA + 0xD8; // 6 OBJECT_ATTRIBUTES of 24 bytes
     const US: usize = 0x168; // 8 UNICODE_STRING
+    const FLUSHED: u32 = DATA + 0x3F8; // NtFlushKey's status
     const DONE: u32 = DATA + 0x3FC;
 
+    // The hive comes from a file of the boot RAM disk, where NtFlushKey
+    // writes it back.
+    const HIVE_FILE: &str = "\\Device\\Ramdisk0\\MINOWRIT.HIV";
     let mut root = KeyNode::new("MINOWRITE");
     root.key_mut("Sub").set_value("Old", REG_DWORD, alloc::vec![1, 0, 0, 0]);
+    let bytes = build(&root, "MINOWRIT.HIV");
+    let open_file = |name: &str| {
+        let object = ob::namespace().open(name, None, Some(&io_manager::FILE_TYPE), 0).expect(name);
+        ob::downcast::<io_manager::File>(&object).expect("a file")
+    };
+    let file = open_file("\\Device\\Ramdisk0\\").create_child("MINOWRIT.HIV", false, 0).expect("the hive file");
+    file.write(0, &bytes).expect("write the hive file");
+    drop(file);
     let registry = cm::registry().expect("Cm initialised");
-    let hive = cm::HiveFile::new(Arc::from(build(&root, "MINOWRITE"))).expect("a hive");
+    let hive = cm::HiveFile::new(Arc::from(bytes)).expect("a hive").with_file(HIVE_FILE);
     cm::mount(&registry, "MACHINE", "MinoWrite", hive).expect("mount the test hive");
 
     let mut data = alloc::vec![0u8; 0x400];
@@ -3361,7 +3373,7 @@ fn registry_write_self_test() {
             data[oa + 12..oa + 16].copy_from_slice(&OBJ_CASE_INSENSITIVE.to_le_bytes());
         }
     }
-    assert!(strings <= 0x3FC, "the strings outgrew the data");
+    assert!(strings <= 0x3F8, "the strings outgrew the data");
     data[(DWORD_DATA - DATA) as usize..][..4].copy_from_slice(&0x1234u32.to_le_bytes());
     data[(TEXT_DATA - DATA) as usize..][..6].copy_from_slice(&[b'h', 0, b'i', 0, 0, 0]);
     // Handle 4 starts non-zero: a failed create must zero it.
@@ -3403,6 +3415,7 @@ fn registry_write_self_test() {
     code.call_args(delete, &[m(HANDLE), us(6)]).store_eax(status(13));
     code.call_args(create, &[handle(14), v(KEY_ALL_ACCESS), oa(0), v(0), v(0), v(0x10), v(0)]).store_eax(status(14));
     code.call_args(set, &[m(HANDLE), us(7), v(0), v(REG_DWORD), v(0x10), v(4)]).store_eax(status(15));
+    code.call_args(services::NtFlushKey, &[m(HANDLE)]).store_eax(FLUSHED);
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x800];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -3446,6 +3459,21 @@ fn registry_write_self_test() {
     assert_eq!((statuses[12], statuses[13]), (STATUS_SUCCESS, STATUS_OBJECT_NAME_NOT_FOUND), "deleted once");
     assert_eq!(statuses[14], STATUS_INVALID_PARAMETER, "an unknown create option");
     assert_eq!(statuses[15], STATUS_ACCESS_VIOLATION, "data at an unmapped address");
+    assert_eq!(NtStatus(read(FLUSHED)), STATUS_SUCCESS, "NtFlushKey");
+    {
+        // What NtFlushKey wrote: New with its class, its volatile key left
+        // out, Value deleted, Sub untouched.
+        let written = open_file(HIVE_FILE).read_all().expect("read the hive file back");
+        let hive = regf::Hive::parse(&written).expect("a hive");
+        let root = hive.root().expect("its root");
+        let new = root.open("New").expect("read").expect("New, written");
+        let class: alloc::vec::Vec<u16> = new.class().expect("read").expect("a class").units().collect();
+        assert_eq!(class, "Value".encode_utf16().collect::<alloc::vec::Vec<_>>(), "its class");
+        assert!(new.open("Volatile").expect("read").is_none(), "a volatile key is not written");
+        assert!(new.value("Value").expect("read").is_none(), "deleted before the flush");
+        let old = root.open("Sub").expect("read").expect("Sub").value("Old").expect("read").expect("Old");
+        assert_eq!(&*old.data().expect("read"), &[1, 0, 0, 0]);
+    }
 
     let ns = ob::namespace();
     let open = |name: &str| {
@@ -3475,7 +3503,7 @@ fn registry_write_self_test() {
     cm::unmount(&registry, "MACHINE", "MinoWrite").expect("unmount the test hive");
     log::info!(
         "[smoke] Cm: registry writes from user mode: NtCreateKey (new, existing, volatile), NtSetValueKey, \
-         NtDeleteValueKey"
+         NtDeleteValueKey, NtFlushKey (the hive written back to its file)"
     );
 }
 

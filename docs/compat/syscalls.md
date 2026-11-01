@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 38 | 296 |
+| ntoskrnl | 39 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -98,7 +98,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0050` | `NtFindAtom` | 3 |  |
 | `0x0051` | `NtFlushBuffersFile` | 2 | ✅ |
 | `0x0052` | `NtFlushInstructionCache` | 3 |  |
-| `0x0053` | `NtFlushKey` | 1 |  |
+| `0x0053` | `NtFlushKey` | 1 | ✅ |
 | `0x0054` | `NtFlushVirtualMemory` | 4 |  |
 | `0x0055` | `NtFlushWriteBuffer` | 0 |  |
 | `0x0056` | `NtFreeUserPhysicalPages` | 3 |  |

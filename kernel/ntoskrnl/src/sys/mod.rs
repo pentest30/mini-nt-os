@@ -85,6 +85,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
     (services::NtFlushBuffersFile, Handler::Status(file::nt_flush_buffers_file)),
+    (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),

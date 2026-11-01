@@ -3,8 +3,10 @@
 //! d'information viennent de `cm::info` ; ce qui ne tient pas dans le tampon
 //! de l'appelant suit la règle d'XP ([`return_variable`]).
 //!
+//! NtFlushKey réécrit la ruche de la clé dans son fichier (`cm`).
+//!
 //! Pas encore : les clés liens (`REG_OPTION_CREATE_LINK`,
-//! `STATUS_NOT_IMPLEMENTED`, journalisé une fois), NtDeleteKey, NtFlushKey.
+//! `STATUS_NOT_IMPLEMENTED`, journalisé une fois), NtDeleteKey.
 
 use abi::ntstatus::{
     NtStatus, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL, STATUS_NO_MORE_ENTRIES, STATUS_OBJECT_NAME_NOT_FOUND,
@@ -242,4 +244,10 @@ pub(super) fn nt_delete_value_key(arguments: &[u32]) -> NtStatus {
         let name = capture_unicode_string(arguments[1])?;
         key.delete_value(&name)
     }))
+}
+
+/// NtFlushKey(KeyHandle) : réécrit dans son fichier la ruche de la clé, si
+/// elle a changé (`cm::Key::flush`) ; rien pour une ruche sans fichier.
+pub(super) fn nt_flush_key(arguments: &[u32]) -> NtStatus {
+    status(reference_key(arguments[0], 0).and_then(|key| key.flush()))
 }
