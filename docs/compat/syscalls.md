@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 48 | 296 |
+| ntoskrnl | 51 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -190,7 +190,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00ac` | `NtQueryOpenSubKeysEx` | 4 |  |
 | `0x00ad` | `NtQueryPerformanceCounter` | 2 |  |
 | `0x00ae` | `NtQueryQuotaInformationFile` | 9 |  |
-| `0x00af` | `NtQuerySection` | 5 |  |
+| `0x00af` | `NtQuerySection` | 5 | ✅ |
 | `0x00b0` | `NtQuerySecurityObject` | 5 |  |
 | `0x00b1` | `NtQuerySemaphore` | 5 |  |
 | `0x00b2` | `NtQuerySymbolicLinkObject` | 3 |  |
@@ -209,7 +209,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00bf` | `NtReadFile` | 9 | ✅ |
 | `0x00c0` | `NtReadFileScatter` | 9 |  |
 | `0x00c1` | `NtReadRequestData` | 6 |  |
-| `0x00c2` | `NtReadVirtualMemory` | 5 |  |
+| `0x00c2` | `NtReadVirtualMemory` | 5 | ✅ |
 | `0x00c3` | `NtRegisterThreadTerminatePort` | 1 |  |
 | `0x00c4` | `NtReleaseMutant` | 2 |  |
 | `0x00c5` | `NtReleaseSemaphore` | 3 |  |
@@ -302,7 +302,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x011c` | `NtWriteFile` | 9 | ✅ |
 | `0x011d` | `NtWriteFileGather` | 9 |  |
 | `0x011e` | `NtWriteRequestData` | 6 |  |
-| `0x011f` | `NtWriteVirtualMemory` | 5 |  |
+| `0x011f` | `NtWriteVirtualMemory` | 5 | ✅ |
 | `0x0120` | `NtYieldExecution` | 0 |  |
 | `0x0121` | `NtCreateKeyedEvent` | 4 |  |
 | `0x0122` | `NtOpenKeyedEvent` | 3 |  |

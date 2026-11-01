@@ -104,6 +104,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),
     (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
+    (services::NtQuerySection, Handler::Status(section::nt_query_section)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
     (services::NtQueryValueKey, Handler::Status(registry::nt_query_value_key)),
     (services::NtQueryVirtualMemory, Handler::Status(memory::nt_query_virtual_memory)),
@@ -111,6 +112,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueueApcThread, Handler::Status(apc::nt_queue_apc_thread)),
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtReadFile, Handler::Status(file::nt_read_file)),
+    (services::NtReadVirtualMemory, Handler::Status(memory::nt_read_virtual_memory)),
     (services::NtResetEvent, Handler::Status(event::nt_reset_event)),
     (services::NtSetEvent, Handler::Status(event::nt_set_event)),
     (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
@@ -121,6 +123,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtWaitForMultipleObjects, Handler::Status(wait::nt_wait_for_multiple_objects)),
     (services::NtWaitForSingleObject, Handler::Status(wait::nt_wait_for_single_object)),
     (services::NtWriteFile, Handler::Status(file::nt_write_file)),
+    (services::NtWriteVirtualMemory, Handler::Status(memory::nt_write_virtual_memory)),
 ];
 
 /// Au plus 63 arguments par service (`tools/syscall-gen`).

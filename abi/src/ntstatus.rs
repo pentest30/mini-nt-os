@@ -61,6 +61,7 @@ pub const STATUS_GUARD_PAGE_VIOLATION: NtStatus = NtStatus(0x8000_0001);
 pub const STATUS_DATATYPE_MISALIGNMENT: NtStatus = NtStatus(0x8000_0002);
 pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
 pub const STATUS_BUFFER_OVERFLOW: NtStatus = NtStatus(0x8000_0005);
+pub const STATUS_PARTIAL_COPY: NtStatus = NtStatus(0x8000_000D);
 pub const STATUS_NO_MORE_ENTRIES: NtStatus = NtStatus(0x8000_001A);
 pub const STATUS_UNSUCCESSFUL: NtStatus = NtStatus(0xC000_0001);
 pub const STATUS_NOT_IMPLEMENTED: NtStatus = NtStatus(0xC000_0002);
