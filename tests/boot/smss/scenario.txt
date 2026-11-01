@@ -14,8 +14,9 @@ expect = [m4] SMSS.EXE under the system DLL: exit status
 # KnownDlls directory on C: through Io, checks each KnownDLL in a view of a
 # data section and makes its image section in \KnownDlls (Mm), writes its
 # environment variables in the registry from the processor (Ex) and the
-# HARDWARE hive (Cm), then cannot find csrss.exe, the Win32 subsystem it
-# starts next (M5). Update with each step of M4.
+# HARDWARE hive (Cm), then finds csrss.exe, the Win32 subsystem it starts
+# next, and cannot create the event csrss signals once connected (Ex, M5).
+# Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
 expect = [m4]   NtEnumerateValueKey (0x004d)
@@ -25,7 +26,7 @@ expect = [m4]   NtMapViewOfSection (0x0071): 21 calls
 expect = [boot] HARDWARE hive mounted at \REGISTRY\MACHINE\HARDWARE
 expect = [m4]   NtQuerySystemInformation (0x00b5)
 expect = [m4]   NtSetValueKey (0x0100)
-expect = SMSS: Unable to find subsystem - C:\WINDOWS\system32\csrss.exe
+expect = SMSS: Command 'C:\WINDOWS\system32\csrss.exe ObjectDirectory=\Windows
 expect = [m4] Environment: 6 of 6 variables written
 expect = [m4] \KnownDlls: 21 sections
 expect = KnownDllPath -> C:\WINDOWS\system32
@@ -43,4 +44,5 @@ forbid = NtCreateSection() failed
 forbid = SMSS: Unable to query system processor information
 forbid = SMSS: Failed writing
 forbid = SMSS: Unable to open \Registry\Machine\Hardware
+forbid = SMSS: Unable to find subsystem
 forbid = [boot] HARDWARE hive refused
