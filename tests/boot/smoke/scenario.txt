@@ -38,6 +38,7 @@ expect = [smoke] Ex: events from user mode: NtCreateEvent, NtOpenEvent, NtSetEve
 expect = [smoke] Ex: keyed events from user mode: NtCreateKeyedEvent, NtOpenKeyedEvent, NtWaitForKeyedEvent, NtReleaseKeyedEvent; two threads meet in both orders
 expect = [smoke] Ps: process settings from user mode: ProcessDefaultHardErrorMode, ProcessBasePriority, ProcessBreakOnTermination, ThreadBreakOnTermination
 expect = [smoke] win32k: a GUI thread and process, NtGdiInit, NtUserProcessConnect (the USER shared section, read only); Ex: semaphores from user mode; Ob: NtQueryObject
+expect = [smoke] Lpc: a connection from user mode: NtListenPort, NtSecureConnectPort (server SID, the client's section), NtAcceptConnectPort (refused, then accepted), NtCompleteConnectPort, NtRequestWaitReplyPort, NtReplyPort, NtRequestPort; Ps: NtOpenProcess, NtOpenThread
 expect = [smoke] Mm: another process's memory from user mode: the first MiB reserved from address 4, NtWriteVirtualMemory, NtReadVirtualMemory (partial copies), NtQuerySection (image, basic)
 expect = [smoke] Mm: a shared section from user mode: SEC_BASED | SEC_RESERVE, NtQuerySection, its view at its address, a page committed by NtAllocateVirtualMemory and seen from another process
 expect = [smoke] Ps: a process made from user mode: NtCreateProcess, NtQueryInformationProcess, NtSetInformationProcess, NtCreateThread (suspended), NtSuspendThread, NtResumeThread, its end awaited
