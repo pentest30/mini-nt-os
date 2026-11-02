@@ -318,3 +318,48 @@ L'assertion de `smss` (ligne 472) et les classes 5, 12 et 29 disparaissent du jo
 NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessUserModeIOPL`), NtInitializeRegistry, NtRaiseHardError
 (`csrss` : `STATUS_IO_PRIVILEGE_FAILED`, faute d'IOPL), et NtSetInformationThread(`ThreadZeroTlsCell`, 10), que
 `kernel32` appelle quand `csrss` décharge ses DLL après l'échec de `winsrv`.
+
+## Étape 12 : win32k minimal ; `csrss` charge `winsrv` et va jusqu'à `smss`
+
+Le mainteneur a choisi de faire entrer dans le M5 la partie minimale de win32k (05 : « sinon ce jalon dépend de la
+partie minimale de M6 ») : l'initialisation de `user32`, premier critère du spike S3. Crate `win32k` (02 §7.2) :
+
+- **La section partagée de USER** (`win32k::shared`) : 64 Kio du fichier d'échange, le `SERVERINFO` sur la première
+  page, puis la table des handles (sa tête `USER_HANDLE_TABLE` et 4096 entrées vides, comme `UserCreateHandleTable`).
+  Le noyau l'écrit par l'alias de ses pages (`Section::write_kernel`, Mm) ; chaque processus GUI la voit en lecture
+  seule. Ses pointeurs sont des adresses du serveur sur 32 bits, la section étant en `0xBC000000` (ADR-021).
+- **Les threads et processus GUI** (`win32k::gui`) : le premier appel d'un thread à win32k en fait un thread GUI
+  (PsConvertToGuiThread, dans `sys::dispatch`) ; son processus reçoit sa vue de la section et, dans son PEB, la limite
+  des lots de GDI (`GdiDCAttributeList`, 20) ; son TEB reçoit son `THREADINFO` (`Win32ThreadInfo`) et son
+  `CLIENTINFO` (`Win32ClientInfo` : le `PROCESSINFO`, les `TIF_*`, la version qu'attend l'image). Ps garde pour
+  win32k un emplacement par processus et par thread (`EProcess::win32_process`, `EThread::win32_thread`).
+- `abi::user` : `USERCONNECT` (0x124 octets), `SHAREDINFO`, le début du `SERVERINFO`, la table des handles,
+  `CLIENTINFO`, d'après `win32ss/include/ntuser.h`.
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserProcessConnect | le processus (`PROCESS_VM_OPERATION`) devient un processus GUI ; le `USERCONNECT` reçoit le `SERVERINFO` et la table des handles dans sa vue, l'écart des adresses du serveur ; `STATUS_UNSUCCESSFUL` pour un tampon nul ou d'une autre taille | `user32` (`Init`), `winsrv` |
+| NtUserInitializeClientPfnArrays | une fois : les procédures de fenêtre de `user32` dans le `SERVERINFO` (et, comme ReactOS, `aStoCidPfn`) | `user32` (`RegisterClientPFN`) |
+| NtGdiInit | TRUE | `gdi32` (`GdiDllInitialize`) |
+| NtUserInitialize | une fois, dans `csrss` : USER retient `csrss` (ses threads sont des threads de `csrss`), l'événement des demandes d'alimentation, et crée `\Windows\WindowStations` ; une autre version de USER arrête le système (`WIN32K_INIT_OR_RIT_FAILURE`) | `winsrv` (`UserServerDllInitialization`) |
+| NtCreateSemaphore, NtOpenSemaphore, NtReleaseSemaphore, NtQuerySemaphore | les sémaphores d'Ex (`ex::semaphore`, sur le KSEMAPHORE de Ke), attendables | `consrv` (`ConServerDllInitialization`) |
+| NtQueryObject(`ObjectHandleFlagInformation`, 4) | les attributs d'un handle, deux BOOLEAN alignés sur un octet | `csrsrv` |
+
+`gdi32` charge aussi `lpk.dll` au démarrage (`GdiInitializeLanguagePack`) : `xtask` la met sur le disque, avec ses
+imports.
+
+Ce qui manque encore à USER, et que NtUserInitialize ne fait pas (M6) : la vidéo (InitVideo), GDI (DirectX,
+polices), les paramètres système, le pinceau gris ; la pile noyau agrandie des threads GUI, les files de messages,
+les bureaux, les dispositions du clavier (`hKL` et `CodePage` restent nuls), la table des handles de GDI
+(`PEB.GdiSharedHandleTable` reste nul).
+
+Tests : hôte (`abi::user`, `win32k`, `ex::semaphore`), `win32k_self_test` (conversion, NtUserProcessConnect et ses
+refus, lecture de la table dans la vue, sémaphores, NtQueryObject), et dans le scénario `smss` le résumé que journalise
+la sonde : `[m4] USER: started by csrss (PID 20), \Windows\WindowStations created; 23 of 23 client procedures of
+user32 (at 0x77a20000) in SERVERINFO` ; vérifiés par mutation.
+
+`csrss` charge désormais `winsrv` en entier : USER, puis la console (`consrv`). `csrsrv` crée son port d'API et son
+port pour `smss`, puis se connecte à `smss` (`SmConnectToSm`) : **NtConnectPort**, pas encore implémenté (étape 7 de
+la passation, la connexion LPC). Restent tolérés : NtQueryDefaultLocale (`winsrv`, `harderror.c`),
+NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessUserModeIOPL`), NtInitializeRegistry, NtRaiseHardError.
+

@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 81 | 296 |
-| win32k | 0 | 732 |
+| ntoskrnl | 86 | 296 |
+| win32k | 4 | 732 |
 
 ## ntoskrnl
 
@@ -68,7 +68,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0032` | `NtCreateProcessEx` | 9 | ✅ |
 | `0x0033` | `NtCreateProfile` | 9 |  |
 | `0x0034` | `NtCreateSection` | 7 | ✅ |
-| `0x0035` | `NtCreateSemaphore` | 5 |  |
+| `0x0035` | `NtCreateSemaphore` | 5 | ✅ |
 | `0x0036` | `NtCreateSymbolicLinkObject` | 4 | ✅ |
 | `0x0037` | `NtCreateThread` | 8 | ✅ |
 | `0x0038` | `NtCreateTimer` | 4 |  |
@@ -147,7 +147,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0081` | `NtOpenProcessToken` | 3 | ✅ |
 | `0x0082` | `NtOpenProcessTokenEx` | 4 | ✅ |
 | `0x0083` | `NtOpenSection` | 3 | ✅ |
-| `0x0084` | `NtOpenSemaphore` | 3 |  |
+| `0x0084` | `NtOpenSemaphore` | 3 | ✅ |
 | `0x0085` | `NtOpenSymbolicLinkObject` | 3 | ✅ |
 | `0x0086` | `NtOpenThread` | 4 |  |
 | `0x0087` | `NtOpenThreadToken` | 4 | ✅ |
@@ -185,14 +185,14 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00a7` | `NtQueryKey` | 5 | ✅ |
 | `0x00a8` | `NtQueryMultipleValueKey` | 6 |  |
 | `0x00a9` | `NtQueryMutant` | 5 |  |
-| `0x00aa` | `NtQueryObject` | 5 |  |
+| `0x00aa` | `NtQueryObject` | 5 | ✅ |
 | `0x00ab` | `NtQueryOpenSubKeys` | 2 |  |
 | `0x00ac` | `NtQueryOpenSubKeysEx` | 4 |  |
 | `0x00ad` | `NtQueryPerformanceCounter` | 2 | ✅ |
 | `0x00ae` | `NtQueryQuotaInformationFile` | 9 |  |
 | `0x00af` | `NtQuerySection` | 5 | ✅ |
 | `0x00b0` | `NtQuerySecurityObject` | 5 | ✅ |
-| `0x00b1` | `NtQuerySemaphore` | 5 |  |
+| `0x00b1` | `NtQuerySemaphore` | 5 | ✅ |
 | `0x00b2` | `NtQuerySymbolicLinkObject` | 3 | ✅ |
 | `0x00b3` | `NtQuerySystemEnvironmentValue` | 4 |  |
 | `0x00b4` | `NtQuerySystemEnvironmentValueEx` | 5 |  |
@@ -212,7 +212,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00c2` | `NtReadVirtualMemory` | 5 | ✅ |
 | `0x00c3` | `NtRegisterThreadTerminatePort` | 1 |  |
 | `0x00c4` | `NtReleaseMutant` | 2 |  |
-| `0x00c5` | `NtReleaseSemaphore` | 3 |  |
+| `0x00c5` | `NtReleaseSemaphore` | 3 | ✅ |
 | `0x00c6` | `NtRemoveIoCompletion` | 5 |  |
 | `0x00c7` | `NtRemoveProcessDebug` | 2 |  |
 | `0x00c8` | `NtRenameKey` | 2 |  |
@@ -535,7 +535,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10d8` | `NtGdiGradientFill` | 6 |  |
 | `0x10d9` | `NtGdiHfontCreate` | 5 |  |
 | `0x10da` | `NtGdiIcmBrushInfo` | 8 |  |
-| `0x10db` | `NtGdiInit` | 0 |  |
+| `0x10db` | `NtGdiInit` | 0 | ✅ |
 | `0x10dc` | `NtGdiInitSpool` | 0 |  |
 | `0x10dd` | `NtGdiIntersectClipRect` | 5 |  |
 | `0x10de` | `NtGdiInvertRgn` | 2 |  |
@@ -761,8 +761,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ba` | `NtUserHideCaret` | 1 |  |
 | `0x11bb` | `NtUserHiliteMenuItem` | 4 |  |
 | `0x11bc` | `NtUserImpersonateDdeClientWindow` | 2 |  |
-| `0x11bd` | `NtUserInitialize` | 3 |  |
-| `0x11be` | `NtUserInitializeClientPfnArrays` | 4 |  |
+| `0x11bd` | `NtUserInitialize` | 3 | ✅ |
+| `0x11be` | `NtUserInitializeClientPfnArrays` | 4 | ✅ |
 | `0x11bf` | `NtUserInitTask` | 12 |  |
 | `0x11c0` | `NtUserInternalGetWindowText` | 3 |  |
 | `0x11c1` | `NtUserInvalidateRect` | 3 |  |
@@ -793,7 +793,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11da` | `NtUserPostMessage` | 4 |  |
 | `0x11db` | `NtUserPostThreadMessage` | 4 |  |
 | `0x11dc` | `NtUserPrintWindow` | 3 |  |
-| `0x11dd` | `NtUserProcessConnect` | 3 |  |
+| `0x11dd` | `NtUserProcessConnect` | 3 | ✅ |
 | `0x11de` | `NtUserQueryInformationThread` | 4 |  |
 | `0x11df` | `NtUserQueryInputContext` | 2 |  |
 | `0x11e0` | `NtUserQuerySendMessage` | 1 |  |

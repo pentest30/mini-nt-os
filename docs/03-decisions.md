@@ -31,6 +31,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 018 | Conformance : `rostests` et scénarios QEMU | Acceptée |
 | 019 | Décisions de l'ancien `CLAUDE.md` | Remplacées |
 | 020 | DEP : règle OptIn d'XP SP2, exécution permise par défaut | Acceptée |
+| 021 | win32k : ce que USER partage avec ses clients, à des adresses du serveur sur 32 bits | **Proposée** (spike S3) |
 
 ---
 
@@ -309,3 +310,20 @@ Sous `OptIn`, un programme qui ne l'a pas demandé tourne sans DEP. Or beaucoup 
 - Les programmes qui exécutent leurs données tournent par défaut, comme sur XP SP2.
 - Pas encore : l'émulation des thunks ATL d'XP SP2 pour les processus sous DEP (`MEM_EXECUTE_OPTION_DISABLE_THUNK_EMULATION` est accepté, sans effet), ni la liste d'exceptions d'`OptOut`.
 
+---
+
+## ADR-021 — win32k : ce que USER partage avec ses clients, à des adresses du serveur sur 32 bits
+
+**Contexte.** Le `user32` de ReactOS épinglé (ADR-002) lit en lecture seule ce que win32k partage avec lui : le `SERVERINFO`, la table des handles USER, plus tard les tas de bureau et le `DISPLAYINFO`. Sur un noyau 32 bits, ces structures contiennent des pointeurs du noyau : le client y retrouve un octet en ôtant un écart (`ulSharedDelta` pour la section partagée, `ulClientDelta` pour un tas de bureau : `SharedPtrToUser`, `DesktopPtrToUser`), et il compare sans les suivre ceux d'un `PROCESSINFO` ou d'un `THREADINFO` (`CLIENTINFO.ppi`, propriétaires des handles). Le noyau de Mino est en 64 bits (ADR-001) : ses adresses n'entrent pas dans ces champs de 32 bits, dont le format est imposé par `user32`.
+
+**Décision.**
+- Tout pointeur que win32k met dans une structure vue d'un client est une **adresse du serveur** sur 32 bits, dans la moitié haute des 4 Gio, où un client 32 bits ne peut rien lire : un client qui suit un tel pointeur sans l'écart fait une faute, comme sur XP.
+- La section partagée de USER est en `0xBC000000` dans cet espace (`win32k::shared::SERVER_BASE`) ; l'écart d'un client est cette adresse moins celle de sa vue, modulo 2^32. `NtUserProcessConnect` rend le `SERVERINFO` et la table des handles déjà dans la vue du client, comme ReactOS (`SERVER_TO_CLIENT`) ; les pointeurs rangés *dans* la section restent des adresses du serveur.
+- Un `PROCESSINFO` ou un `THREADINFO` a pour adresse du serveur une valeur tirée de son PID ou de son TID (`0x80000000 | (PID / 4) << 4`, `0x90000000 | (TID / 4) << 4`), unique tant que l'objet vit, jamais suivie par un client.
+- Le noyau n'emploie pas ces adresses pour lui-même : il écrit la section par l'alias de ses pages (`mm::section::Section::write_kernel`). Chaque zone partagée à venir (tas de bureau, `DISPLAYINFO`) aura sa plage d'adresses du serveur, documentée avec le module qui la crée, entre `0xA0000000` et `0xFFFFFFFF` hors de celles déjà prises.
+
+**Conséquences.**
+- ✅ Les structures partagées gardent le format exact de la version épinglée (ADR-002), sans couche de traduction côté client.
+- ✅ Un pointeur du serveur suivi par erreur fait une faute au lieu de lire n'importe quoi.
+- ❌ win32k traduit lui-même ses adresses du serveur en positions dans ses zones partagées ; les plages limitent la taille de chaque zone.
+- La décision suit le spike S3 : si `user32` de ReactOS s'avère trop couplé à win32k (repli de l'ADR-002, `user32` de Wine), elle ne vaudra que pour ce que ce repli partagera encore.
