@@ -281,3 +281,40 @@ Test : `information_services_self_test`. Les assertions de `basesrv` et les mess
 NtCreateKeyedEvent, NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessBreakOnTermination`,
 `ProcessBasePriority`, `ProcessDefaultHardErrorMode`, `ProcessUserModeIOPL`),
 NtSetInformationThread(`ThreadBreakOnTermination`), NtInitializeRegistry et NtRaiseHardError.
+
+## Étape 11 : les événements à clé, les processus critiques
+
+Ce que `smss` règle à son début (`smss.c`), et ce dont les sections critiques de `ntdll` se servent sous contention.
+
+Les événements à clé (`ex::keyed_event`, le type `KeyedEvent`) : un rendez-vous, dans un même processus, entre un
+thread qui attend une clé et un thread qui la libère ; le premier arrivé attend l'autre (alertable, avec échéance), le
+second le réveille et repart. Une clé est paire (`ntdll` y met des adresses). Un handle nul désigne l'événement de
+`\KernelObjects\CritSecOutOfMemoryEvent`, créé au démarrage. Puis la priorité de base d'un thread dans Ke
+(KeSetBasePriorityThread, `ke::sched::set_base_priority` : le boost reste, plafonné à 15 pour la classe variable ; un
+thread prêt change de file) et, dans Ps, ce que le processus et ses threads gardent : critique, priorité de base (les
+threads créés ensuite la prennent), mode d'erreur grave (`SEM_*`, hérité du créateur ; System :
+`SEM_FAILCRITICALERRORS`).
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtCreateKeyedEvent, NtOpenKeyedEvent | un événement à clé (drapeaux nuls), ou celui d'un nom | `ntdll` (`RtlpInitializeKeyedEvent`) |
+| NtWaitForKeyedEvent, NtReleaseKeyedEvent | le rendez-vous ; `KEYEDEVENT_WAIT`, `KEYEDEVENT_WAKE` ; une clé impaire refusée | `ntdll` (sections critiques, variables de condition) |
+| NtSetInformationProcess(`ProcessBasePriority`, 5) | de 1 à 31, le bit du premier plan ignoré ; la relever demande `SeIncreaseBasePriorityPrivilege` | `smss` (11, `smss.c` ligne 472), `csrss` (13) |
+| NtSetInformationProcess(`ProcessDefaultHardErrorMode`, 12), NtQueryInformationProcess | ses `SEM_*` | `smss`, `csrss` |
+| NtSetInformationProcess(`ProcessBreakOnTermination`, 29), NtQueryInformationProcess | critique ou non, sous `SeDebugPrivilege` | `smss` (`RtlSetProcessIsCritical`), `csrss` après son initialisation |
+| NtSetInformationThread(`ThreadBreakOnTermination`, 18) | critique ou non, sous `SeDebugPrivilege` | `smss` (`RtlSetThreadIsCritical`) |
+
+La fin d'un processus ou d'un thread critique arrête le système : `CRITICAL_OBJECT_TERMINATION` (`0xF4` ; le type de
+l'objet, 3 pour un processus et 6 pour un thread, l'objet, le nom de l'image, le message), quand on le termine
+(« Terminating critical process ») et quand il finit de lui-même (« Critical thread exited », « Critical process
+exited ») ; sans débogueur, rien ne demande s'il faut l'ignorer. La sonde, qui termine `smss` après 10 s, lui retire
+d'abord ces drapeaux, à lui et à ses threads (`EProcess::clear_critical`), comme un débogueur qui répondrait « ignorer ».
+
+Tests : hôte (`ex::keyed_event`, `ke::sched`), `keyed_event_self_test` (deux threads se rencontrent dans les deux
+ordres), `process_settings_self_test`, et deux scénarios qui finissent sur l'écran STOP, `critical-process` (le
+processus se termine) et `critical-thread` (le processus d'un thread critique se termine) ; vérifiés par mutation.
+L'assertion de `smss` (ligne 472) et les classes 5, 12 et 29 disparaissent du journal ; `smss` se déclare critique, et
+`csrss` s'arrête toujours à `NtUserProcessConnect`. Restent tolérés : NtQueryDefaultLocale,
+NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessUserModeIOPL`), NtInitializeRegistry, NtRaiseHardError
+(`csrss` : `STATUS_IO_PRIVILEGE_FAILED`, faute d'IOPL), et NtSetInformationThread(`ThreadZeroTlsCell`, 10), que
+`kernel32` appelle quand `csrss` décharge ses DLL après l'échec de `winsrv`.

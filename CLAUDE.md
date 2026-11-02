@@ -197,6 +197,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `KUSER_SHARED_DATA`), compteur de performance sur le TSC calibré ; NtQuerySystemTime, NtQueryPerformanceCounter,
   `SystemTimeOfDayInformation`, `SystemRangeStartInformation`, NtQueryDebugFilterState, NtSetInformationObject,
   `ProcessLUIDDeviceMapsEnabled`, `ProcessCookie`, NtFlushInstructionCache.
+  M5, étape 8 (Ex, Ps) : les événements à clé (`ex::keyed_event`, NtCreateKeyedEvent, NtOpenKeyedEvent,
+  NtWaitForKeyedEvent, NtReleaseKeyedEvent) ; processus et threads critiques (`ProcessBreakOnTermination`,
+  `ThreadBreakOnTermination`) dont la fin arrête le système (`CRITICAL_OBJECT_TERMINATION`, scénarios
+  `critical-process`, `critical-thread`) ; `ProcessBasePriority`
+  (`ke::sched::set_base_priority`) et `ProcessDefaultHardErrorMode`. La sonde retire ses drapeaux à `smss`, critique
+  dès son début, avant de le terminer.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

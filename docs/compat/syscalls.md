@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 76 | 296 |
+| ntoskrnl | 81 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -253,7 +253,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00eb` | `NtSetInformationKey` | 4 |  |
 | `0x00ec` | `NtSetInformationObject` | 4 | ✅ |
 | `0x00ed` | `NtSetInformationProcess` | 4 | ✅ |
-| `0x00ee` | `NtSetInformationThread` | 4 |  |
+| `0x00ee` | `NtSetInformationThread` | 4 | ✅ |
 | `0x00ef` | `NtSetInformationToken` | 4 |  |
 | `0x00f0` | `NtSetIntervalProfile` | 2 |  |
 | `0x00f1` | `NtSetIoCompletion` | 5 |  |
@@ -304,10 +304,10 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x011e` | `NtWriteRequestData` | 6 |  |
 | `0x011f` | `NtWriteVirtualMemory` | 5 | ✅ |
 | `0x0120` | `NtYieldExecution` | 0 |  |
-| `0x0121` | `NtCreateKeyedEvent` | 4 |  |
-| `0x0122` | `NtOpenKeyedEvent` | 3 |  |
-| `0x0123` | `NtReleaseKeyedEvent` | 4 |  |
-| `0x0124` | `NtWaitForKeyedEvent` | 4 |  |
+| `0x0121` | `NtCreateKeyedEvent` | 4 | ✅ |
+| `0x0122` | `NtOpenKeyedEvent` | 3 | ✅ |
+| `0x0123` | `NtReleaseKeyedEvent` | 4 | ✅ |
+| `0x0124` | `NtWaitForKeyedEvent` | 4 | ✅ |
 | `0x0125` | `NtQueryPortInformationProcess` | 0 |  |
 | `0x0126` | `NtGetCurrentProcessorNumber` | 0 |  |
 | `0x0127` | `NtWaitForMultipleObjects32` | 5 |  |
