@@ -351,6 +351,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     process_creation_self_test();
     port_self_test();
     security_self_test();
+    information_services_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -4100,6 +4101,199 @@ fn shared_section_self_test() {
 /// The little-endian words of `bytes`.
 fn words_of(bytes: &[u8]) -> alloc::vec::Vec<u32> {
     bytes.chunks_exact(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect()
+}
+
+/// The small services csrss and basesrv ask for (`sys::time`, `sys::system`,
+/// `sys::object`, `sys::process`, M5), from user mode: the system time,
+/// between two readings of the kernel's; the performance counter twice, its
+/// frequency once, a counter address that faults; SystemTimeOfDayInformation
+/// whole and in part, too long; SystemRangeStartInformation;
+/// NtQueryDebugFilterState; NtSetInformationObject on a handle's flags (a
+/// handle protected from NtClose, then not), with a bad size, on a directory
+/// for the caller's session, on an event (not a directory), with an unknown
+/// class; ProcessLUIDDeviceMapsEnabled; ProcessCookie twice, the same, and
+/// refused for another handle; NtFlushInstructionCache; a session directory
+/// refused once the token's privileges are all disabled.
+fn information_services_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_HANDLE_NOT_CLOSABLE, STATUS_INFO_LENGTH_MISMATCH,
+        STATUS_INVALID_HANDLE, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER, STATUS_OBJECT_TYPE_MISMATCH,
+        STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::process::NT_CURRENT_PROCESS;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 32 statuses
+    const TIME: u32 = DATA + 0x80;
+    const COUNTER: u32 = DATA + 0x88;
+    const FREQUENCY: u32 = DATA + 0x90;
+    const COUNTER2: u32 = DATA + 0x98;
+    const TIME_OF_DAY: u32 = DATA + 0xA0; // 48 bytes
+    const TIME_OF_DAY_LENGTH: u32 = DATA + 0xD0;
+    const PART: u32 = DATA + 0xD8; // 32 bytes, then a word left alone
+    const PART_LENGTH: u32 = DATA + 0x124;
+    const RANGE: u32 = DATA + 0xFC;
+    const RANGE_LENGTH: u32 = DATA + 0x100;
+    const EVENT: u32 = DATA + 0x104;
+    const DIRECTORY: u32 = DATA + 0x108;
+    const OTHER_EVENT: u32 = DATA + 0x10C;
+    const FLAGS_ON: u32 = DATA + 0x110; // inherit, protect from close
+    const FLAGS_OFF: u32 = DATA + 0x114;
+    const LUID_MAPS: u32 = DATA + 0x118;
+    const COOKIE: u32 = DATA + 0x11C;
+    const COOKIE2: u32 = DATA + 0x120;
+    const TOKEN: u32 = DATA + 0x1F0;
+    const OA: u32 = DATA + 0x128;
+    const US: u32 = DATA + 0x140;
+    const NAME: u32 = DATA + 0x148;
+    const DONE: u32 = DATA + 0x1FC;
+    const DIRECTORY_NAME: &str = "\\MinoSessionDirectory";
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    put(FLAGS_ON, &[1, 1]);
+    put(PART + 32, &0xAAAA_AAAAu32.to_le_bytes());
+    let units: alloc::vec::Vec<u8> = DIRECTORY_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(NAME, &units);
+    let length = (units.len() as u16).to_le_bytes();
+    put(US, &[length[0], length[1], length[0], length[1]]);
+    put(US + 4, &NAME.to_le_bytes());
+    put(OA, &24u32.to_le_bytes());
+    put(OA + 8, &US.to_le_bytes());
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let me = NT_CURRENT_PROCESS;
+    let (query_system, set_object) = (services::NtQuerySystemInformation, services::NtSetInformationObject);
+    let (counter, query_process) = (services::NtQueryPerformanceCounter, services::NtQueryInformationProcess);
+    let mut code = Code::new();
+    code.call_args(services::NtQuerySystemTime, &[v(TIME)]).store_eax(status(0));
+    code.call_args(counter, &[v(COUNTER), v(FREQUENCY)]).store_eax(status(1));
+    code.call_args(counter, &[v(COUNTER2), v(0)]).store_eax(status(2));
+    code.call_args(query_system, &[v(3), v(TIME_OF_DAY), v(48), v(TIME_OF_DAY_LENGTH)]).store_eax(status(3));
+    code.call_args(query_system, &[v(3), v(PART), v(32), v(PART_LENGTH)]).store_eax(status(4));
+    code.call_args(query_system, &[v(3), v(TIME_OF_DAY), v(49), v(0)]).store_eax(status(5));
+    code.call_args(query_system, &[v(50), v(RANGE), v(4), v(RANGE_LENGTH)]).store_eax(status(6));
+    code.call_args(services::NtQueryDebugFilterState, &[v(0xC8), v(2)]).store_eax(status(7));
+    code.call_args(services::NtCreateEvent, &[v(EVENT), v(0x001F_0003), v(0), v(0), v(0)]).store_eax(status(8));
+    code.call_args(set_object, &[m(EVENT), v(4), v(FLAGS_ON), v(2)]).store_eax(status(9));
+    code.call_args(services::NtClose, &[m(EVENT)]).store_eax(status(10));
+    code.call_args(set_object, &[m(EVENT), v(4), v(FLAGS_ON), v(3)]).store_eax(status(11));
+    code.call_args(set_object, &[m(EVENT), v(4), v(FLAGS_OFF), v(2)]).store_eax(status(12));
+    code.call_args(services::NtClose, &[m(EVENT)]).store_eax(status(13));
+    code.call_args(services::NtCreateDirectoryObject, &[v(DIRECTORY), v(0x000F_000F), v(OA)]).store_eax(status(14));
+    code.call_args(set_object, &[m(DIRECTORY), v(5), v(0), v(0)]).store_eax(status(15));
+    code.call_args(set_object, &[m(DIRECTORY), v(99), v(0), v(0)]).store_eax(status(16));
+    code.call_args(services::NtCreateEvent, &[v(OTHER_EVENT), v(0x001F_0003), v(0), v(0), v(0)]);
+    code.call_args(set_object, &[m(OTHER_EVENT), v(5), v(0), v(0)]).store_eax(status(17));
+    code.call_args(query_process, &[v(me), v(0x1C), v(LUID_MAPS), v(4), v(0)]).store_eax(status(18));
+    code.call_args(query_process, &[v(me), v(0x24), v(COOKIE), v(4), v(0)]).store_eax(status(19));
+    code.call_args(query_process, &[v(me), v(0x24), v(COOKIE2), v(4), v(0)]).store_eax(status(20));
+    code.call_args(query_process, &[v(0x1234), v(0x24), v(COOKIE2), v(4), v(0)]).store_eax(status(21));
+    code.call_args(services::NtFlushInstructionCache, &[v(me), v(IMAGE_BASE), v(0x1000)]).store_eax(status(22));
+    code.call_args(services::NtFlushInstructionCache, &[v(0x1234), v(0), v(0)]).store_eax(status(23));
+    code.call_args(counter, &[v(0), v(FREQUENCY)]).store_eax(status(24));
+    // Without SeTcbPrivilege: every privilege disabled first.
+    code.call_args(services::NtOpenProcessToken, &[v(me), v(0x28), v(TOKEN)]).store_eax(status(25));
+    code.call_args(services::NtAdjustPrivilegesToken, &[m(TOKEN), v(1), v(0), v(0), v(0), v(0)]).store_eax(status(26));
+    code.call_args(set_object, &[m(DIRECTORY), v(5), v(0), v(0)]).store_eax(status(27));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "services.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let before = hal::rtc::system_time();
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_bytes = |addr: u32, length: usize| {
+        let mut bytes = alloc::vec![0u8; length];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        bytes
+    };
+    let read = |addr: u32| u32::from_le_bytes(read_bytes(addr, 4).try_into().unwrap());
+    let read64 = |addr: u32| u64::from_le_bytes(read_bytes(addr, 8).try_into().unwrap());
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the services test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let after = hal::rtc::system_time();
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..28).map(|i| NtStatus(read(status(i)))).collect();
+    // 2020-01-01: the real-time clock gives a date, not 1601.
+    const YEAR_2020: u64 = 132_223_104_000_000_000;
+    assert!(hal::rtc::boot_time() > YEAR_2020, "the boot time comes from the real-time clock");
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtQuerySystemTime");
+    assert!((before..=after).contains(&read64(TIME)), "the system time, between the kernel's two readings");
+    assert_eq!((statuses[1], statuses[2]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtQueryPerformanceCounter");
+    assert!(read64(COUNTER2) >= read64(COUNTER), "the counter does not go back");
+    assert_eq!(read64(FREQUENCY), hal::timer::performance_counter().1, "its frequency");
+    assert_eq!((statuses[3], read(TIME_OF_DAY_LENGTH)), (STATUS_SUCCESS, 48), "SystemTimeOfDayInformation");
+    assert_eq!(read64(TIME_OF_DAY), hal::rtc::boot_time(), "BootTime");
+    assert!((before..=after).contains(&read64(TIME_OF_DAY + 8)), "CurrentTime");
+    assert_eq!((read64(TIME_OF_DAY + 16), read(TIME_OF_DAY + 24)), (0, 0), "no time zone bias yet");
+    assert_eq!((statuses[4], read(PART_LENGTH), read64(PART)), (STATUS_SUCCESS, 32, hal::rtc::boot_time()), "a part");
+    assert_eq!(read(PART + 32), 0xAAAA_AAAA, "no more than the part asked for");
+    assert_eq!(statuses[5], STATUS_INFO_LENGTH_MISMATCH, "more than the information");
+    assert_eq!((statuses[6], read(RANGE), read(RANGE_LENGTH)), (STATUS_SUCCESS, 0x8000_0000, 4), "range start");
+    assert_eq!(statuses[7], NtStatus(1), "NtQueryDebugFilterState: TRUE, everything is printed");
+    assert_eq!((statuses[8], statuses[9]), (STATUS_SUCCESS, STATUS_SUCCESS), "a handle protected from close");
+    assert_eq!(statuses[10], STATUS_HANDLE_NOT_CLOSABLE, "NtClose refuses it");
+    assert_eq!(statuses[11], STATUS_INFO_LENGTH_MISMATCH, "two BOOLEANs, no more");
+    assert_eq!((statuses[12], statuses[13]), (STATUS_SUCCESS, STATUS_SUCCESS), "unprotected, then closed");
+    assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_SUCCESS), "a directory for the session");
+    let object = ob::namespace().open(DIRECTORY_NAME, None, Some(&ob::DIRECTORY_TYPE), 0).expect("the directory");
+    let directory = ob::downcast::<ob::Directory>(&object).expect("a directory");
+    assert_eq!(directory.session_id(), Some(process.session_id()), "the caller's session");
+    drop((directory, object));
+    assert_eq!(statuses[16], STATUS_INVALID_INFO_CLASS, "an unknown class");
+    assert_eq!(statuses[17], STATUS_OBJECT_TYPE_MISMATCH, "an event is no directory");
+    assert_eq!((statuses[18], read(LUID_MAPS)), (STATUS_SUCCESS, 0), "ProcessLUIDDeviceMapsEnabled");
+    let cookie = process.cookie(|| panic!("the cookie was drawn by the program"));
+    assert_eq!((statuses[19], statuses[20]), (STATUS_SUCCESS, STATUS_SUCCESS), "ProcessCookie");
+    assert_eq!((read(COOKIE), read(COOKIE2)), (cookie, cookie), "drawn once, then the same");
+    assert_eq!(statuses[21], STATUS_INVALID_PARAMETER, "the caller's own cookie only");
+    assert_eq!((statuses[22], statuses[23]), (STATUS_SUCCESS, STATUS_INVALID_HANDLE), "NtFlushInstructionCache");
+    assert_eq!(statuses[24], STATUS_ACCESS_VIOLATION, "a counter at address 0");
+    assert_eq!((statuses[25], statuses[26]), (STATUS_SUCCESS, STATUS_SUCCESS), "every privilege disabled");
+    assert_eq!(statuses[27], abi::ntstatus::STATUS_PRIVILEGE_NOT_HELD, "a session directory needs SeTcbPrivilege");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] sys: time and information from user mode: NtQuerySystemTime, NtQueryPerformanceCounter, \
+         SystemTimeOfDayInformation, SystemRangeStartInformation, NtQueryDebugFilterState, NtSetInformationObject, \
+         ProcessLUIDDeviceMapsEnabled, ProcessCookie, NtFlushInstructionCache"
+    );
 }
 
 /// Another process's memory from user mode (`sys::memory`, `sys::section`,

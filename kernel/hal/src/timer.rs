@@ -14,6 +14,10 @@
 //! milliseconds since boot, feeding `kernel32!GetTickCount` and
 //! `winmm!timeGetTime`.
 //!
+//! The same 10 ms of PIT also calibrate the time-stamp counter, which gives
+//! the performance counter ([`performance_counter`],
+//! KeQueryPerformanceCounter).
+//!
 //! WI7e Ch.3 "Clock Intervals and Timer Resolution"
 
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -85,6 +89,13 @@ static TICK_INTERVAL_100NS: AtomicU64 = AtomicU64::new(TICK_INTERVAL_MS * 10_000
 /// APIC timer ticks per millisecond, stored after calibration.
 /// Zero means the timer has not been calibrated yet.
 static APIC_TICKS_PER_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Time-stamp counter ticks per second, stored after calibration; zero
+/// before.
+static TSC_FREQUENCY: AtomicU64 = AtomicU64::new(0);
+/// The time-stamp counter at the end of the calibration: the performance
+/// counter's 0.
+static TSC_BASE: AtomicU64 = AtomicU64::new(0);
 
 /// The legacy loader's KUSER_SHARED_DATA, in the system address space.
 static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
@@ -184,6 +195,7 @@ pub unsafe fn init() {
         // Poll until PIT channel 2 output goes high (port 0x61 bit 5).
         // Output in mode 0 transitions LOW→HIGH when the counter reaches 0.
         // Timeout after ~10M reads to survive broken firmware.
+        let tsc_before = core::arch::x86_64::_rdtsc();
         let mut i = 0u32;
         while pcspkr.read() & 0x20 == 0 && i < 10_000_000 {
             i += 1;
@@ -191,7 +203,11 @@ pub unsafe fn init() {
 
         // Read remaining APIC count; compute elapsed ticks.
         let apic_after = apic_read(APIC_TIMER_CURRENT);
+        let tsc_after = core::arch::x86_64::_rdtsc();
         let ticks_10ms = 0xFFFF_FFFFu32.wrapping_sub(apic_after);
+        // The same 10 ms in time-stamp counter ticks: × 100 per second.
+        TSC_FREQUENCY.store(tsc_after.wrapping_sub(tsc_before).saturating_mul(100), Ordering::Relaxed);
+        TSC_BASE.store(tsc_after, Ordering::Relaxed);
 
         // Restore PC speaker control register.
         pcspkr.write(ctrl);
@@ -205,10 +221,11 @@ pub unsafe fn init() {
     APIC_TICKS_PER_MS.store(ticks_per_ms, Ordering::Relaxed);
 
     log::info!(
-        "HAL timer: calibrated — {} ticks/ms  initial_count={}  ({} Hz)",
+        "HAL timer: calibrated — {} ticks/ms  initial_count={}  ({} Hz); TSC at {} Hz",
         ticks_per_ms,
         ticks_per_ms * TICK_INTERVAL_MS,
         1000 / TICK_INTERVAL_MS,
+        TSC_FREQUENCY.load(Ordering::Relaxed),
     );
 
     // ── 5. Program APIC timer: periodic mode ─────────────────────────────────
@@ -244,8 +261,8 @@ pub fn tick() {
 }
 
 /// Writes the times of the KUSER_SHARED_DATA page at `sud`: InterruptTime
-/// (0x008), SystemTime (0x014, the interrupt time until the kernel keeps an
-/// absolute time), TickCount in milliseconds (0x320, `TickCountMultiplier`
+/// (0x008), SystemTime (0x014, the boot time of the real-time clock plus the
+/// interrupt time, `rtc::system_time`), TickCount in milliseconds (0x320, `TickCountMultiplier`
 /// 1 << 24) and its deprecated low part (0x000). Each KSYSTEM_TIME is
 /// written High2Time, LowPart, then High1Time: a lock-free reader retries
 /// until High1Time equals High2Time.
@@ -265,7 +282,7 @@ unsafe fn write_times(sud: u64, interrupt_time_100ns: u64) {
     // SAFETY: as above.
     unsafe { core::ptr::write_volatile(sud as *mut u32, tick_ms as u32) };
     write_time(0x008, interrupt_time_100ns);
-    write_time(0x014, interrupt_time_100ns);
+    write_time(0x014, crate::rtc::boot_time() + interrupt_time_100ns);
     write_time(0x320, tick_ms);
 }
 
@@ -287,6 +304,23 @@ pub fn get_tick_count() -> u64 {
 #[inline]
 pub fn interrupt_time() -> u64 {
     INTERRUPT_TIME.load(Ordering::Relaxed)
+}
+
+/// KeQueryPerformanceCounter: the performance counter and its frequency
+/// (ticks per second): the time-stamp counter since the calibration; before
+/// it (or without it, on the host), the interrupt time at 10 MHz.
+///
+/// # IRQL
+/// Any level.
+pub fn performance_counter() -> (u64, u64) {
+    match TSC_FREQUENCY.load(Ordering::Relaxed) {
+        0 => (interrupt_time(), 10_000_000),
+        frequency => {
+            // SAFETY: RDTSC has no effect beyond reading the counter.
+            let now = unsafe { core::arch::x86_64::_rdtsc() };
+            (now.wrapping_sub(TSC_BASE.load(Ordering::Relaxed)), frequency)
+        }
+    }
 }
 
 /// Reprogram the APIC timer to the requested resolution.

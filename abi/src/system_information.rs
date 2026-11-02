@@ -13,6 +13,17 @@ pub const SYSTEM_BASIC_INFORMATION: u32 = 0;
 /// feature bits of the processors.
 pub const SYSTEM_PROCESSOR_INFORMATION: u32 = 1;
 
+/// SystemTimeOfDayInformation: the boot time, the current time and the time
+/// zone ([`SystemTimeOfDayInformation32`]).
+pub const SYSTEM_TIME_OF_DAY_INFORMATION: u32 = 3;
+
+/// SystemRangeStartInformation: where the system half of the address space
+/// starts (MmSystemRangeStart), a ULONG_PTR.
+pub const SYSTEM_RANGE_START_INFORMATION: u32 = 50;
+
+/// MmSystemRangeStart as an i386 process sees it: 2 GiB.
+pub const SYSTEM_RANGE_START: u32 = 0x8000_0000;
+
 /// SystemExtendServiceTableInformation (NtSetSystemInformation): load
 /// win32k, whose UNICODE_STRING name it is given.
 pub const SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION: u32 = 38;
@@ -124,6 +135,38 @@ impl SystemBasicInformation32 {
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: integer fields and explicit padding (size checked above):
         // every byte is initialised.
+        unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
+}
+
+/// SYSTEM_TIMEOFDAY_INFORMATION: times in 100 ns since 1601 (UTC), the time
+/// zone's bias from UTC in 100 ns, and its identifier.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemTimeOfDayInformation32 {
+    pub boot_time: i64,
+    pub current_time: i64,
+    pub time_zone_bias: i64,
+    pub time_zone_id: u32,
+    pub reserved: u32,
+    pub boot_time_bias: u64,
+    pub sleep_time_bias: u64,
+}
+
+const _: () = {
+    assert!(size_of::<SystemTimeOfDayInformation32>() == 0x30);
+    assert!(offset_of!(SystemTimeOfDayInformation32, current_time) == 0x08);
+    assert!(offset_of!(SystemTimeOfDayInformation32, time_zone_bias) == 0x10);
+    assert!(offset_of!(SystemTimeOfDayInformation32, time_zone_id) == 0x18);
+    assert!(offset_of!(SystemTimeOfDayInformation32, boot_time_bias) == 0x20);
+    assert!(offset_of!(SystemTimeOfDayInformation32, sleep_time_bias) == 0x28);
+};
+
+impl SystemTimeOfDayInformation32 {
+    /// Its bytes, as they go to the caller.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: integer fields without padding (size checked above): every
+        // byte is initialised.
         unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
     }
 }

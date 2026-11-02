@@ -13,10 +13,10 @@ jour à chaque commit qui change l'état.
   lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis `winsrv` et
   ses imports, jusqu'au premier appel à win32k (`NtUserProcessConnect`, depuis `user32`) :
   [`compat/m5-csrss.md`](compat/m5-csrss.md).
-- Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis
-  `claude/m5-mm` par-dessus (l'étape 3), puis `claude/m5-boot` par-dessus (l'étape 4). Les PR se fusionnent dans
-  `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
-  `git merge-base --is-ancestor HEAD origin/main`).
+- Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
+  chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4) et `claude/m5-services`
+  (l'étape 5). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
+  branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
@@ -231,10 +231,14 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    `BASIS~N.EXT`), `io::fat` les lit (`find_entry` par nom long ou alias, sans casse ; pas encore de création). Tests :
    hôte (`io`, `mkfat` avec `fsck.vfat`, la fermeture) ; vérifiés par mutation. `smss` met 37 sections dans
    `\KnownDlls` ; `csrss` charge `winsrv` et ses imports, puis `user32` appelle `NtUserProcessConnect` (win32k).
-5. [ ] **Les services simples que `csrss` tolère** : NtQuerySystemTime, NtQueryPerformanceCounter (Ke, Hal),
-   NtQuerySystemInformation(`SystemTimeOfDayInformation` 3, `SystemRangeStartInformation` 0x32),
-   NtQueryDebugFilterState, et ceux de `basesrv` (NtSetInformationObject(`ObjectSessionInformation`),
-   `ProcessLUIDDeviceMapsEnabled`) : rapides, à faire avant qu'ils ne cachent un vrai mur.
+5. [x] **Les services simples que `csrss` tolérait** (`compat/m5-csrss.md`, étape 10). `hal::rtc` (l'heure du
+   démarrage, lue au CMOS ; le temps système, aussi dans `KUSER_SHARED_DATA`), le compteur de temps du processeur
+   calibré (`hal::timer::performance_counter`). Services : NtQuerySystemTime, NtQueryPerformanceCounter,
+   NtQuerySystemInformation(`SystemTimeOfDayInformation`, `SystemRangeStartInformation`), NtQueryDebugFilterState
+   (tout passe), NtSetInformationObject (attributs d'un handle ; session d'un répertoire, `ob::Directory`, sous
+   `SeTcbPrivilege`), NtQueryInformationProcess(`ProcessLUIDDeviceMapsEnabled`, `ProcessCookie`, `EProcess::cookie`),
+   NtFlushInstructionCache. Tests : hôte (`hal::rtc`), `information_services_self_test` ; vérifiés par mutation.
+   Les assertions de `basesrv` disparaissent ; `csrss` s'arrête toujours à `NtUserProcessConnect`.
 6. [ ] **win32k : `NtUserProcessConnect`** (02 §7.2), le mur de `csrss` : `user32` s'y connecte dès son chargement
    (DllMain), et `winsrv` (donc `consrv`, la console) l'importe. Le M5 dépend donc de la partie minimale du M6 (05),
    à décider avec le mainteneur : ce que rend la connexion (`USERCONNECT` : version, `SHAREDINFO`, tables partagées
@@ -265,10 +269,10 @@ Questions ouvertes du M5 :
 - `ProcessUserModeIOPL` : `csrss` demande l'IOPL 3 pour les registres VGA ; le noyau garde IOPL 0 (`hal::ring3`).
   À décider avec la console (frontal texte de `consrv`).
 
-Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) : les
-classes `ProcessCookie` de NtQueryInformationProcess et `ProcessExecuteFlags` de NtSetInformationProcess (les deux
-services sont faits pour d'autres classes), `NtFlushInstructionCache`, `NtQueryDefaultLocale` ; `NtCreateKeyedEvent`
-(Ex). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
+Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) : la
+classe `ProcessExecuteFlags` de NtSetInformationProcess (le service est fait pour d'autres classes),
+`NtQueryDefaultLocale` ; `NtCreateKeyedEvent` (Ex). `ProcessCookie` et `NtFlushInstructionCache` sont faits (M5,
+étape 5). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
 
 ## Dettes de Se (l'étape 2 du M5)
 
@@ -281,6 +285,12 @@ services sont faits pour d'autres classes), `NtFlushInstructionCache`, `NtQueryD
   `TokenGroupsAndPrivileges`, `TokenAuditPolicy`, `TokenOrigin` (journalisées). Le jeton garde la session de son
   créateur quand celle du processus change.
 - Sessions : pas d'espace de session (Mm), ni de compte des processus d'une session ; un identifiant créé reste pris.
+
+## Dettes de l'étape 5 du M5
+
+- Le temps : pas de fuseau horaire (le RTC est lu comme UTC, biais nul ; XP le tire du registre,
+  `Control\TimeZoneInformation`), pas de NtSetSystemTime ni de NtQueryTimerResolution. NtQueryDebugFilterState laisse
+  tout passer ; NtSetDebugFilterState manque. La session d'un répertoire n'est encore lue par rien.
 
 ## Dettes de l'étape 4 du M5
 

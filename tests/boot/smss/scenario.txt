@@ -87,3 +87,8 @@ forbid = Failed loading ServerDll=basesrv
 forbid = LdrpMapDll failed
 forbid = Invalid CP!
 forbid = DLL_PROCESS_ATTACH for dll "msvcrt.dll"
+# Tolerated until M5 step 5: the process cookie, basesrv's assertions, time.
+forbid = Failed to receive the process cookie
+forbid = subsystems/win/basesrv/init.c
+forbid = sys: NtQuerySystemTime (0x00b6) is not implemented
+forbid = sys: NtQueryPerformanceCounter (0x00ad) is not implemented

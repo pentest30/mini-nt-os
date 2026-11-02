@@ -22,6 +22,7 @@ pub mod pcr;
 pub mod power;
 pub mod ps2;
 pub mod ring3;
+pub mod rtc;
 pub mod serial;
 pub mod symbols;
 pub mod sync;
@@ -62,6 +63,9 @@ pub unsafe fn init() {
         sysenter::init();
         idt::init(); // exception + timer + syscall handlers (needs GDT/TSS)
         irql::init(); // IRQL = PASSIVE: CR8, the APIC task priority, at 0
+        if rtc::init().is_none() {
+            log::warn!("HAL: the real-time clock gives no valid date: the system time starts in 1601");
+        }
         timer::init(); // APIC timer calibration + periodic tick (needs IDT)
         ps2::init(); // flush PS/2 output buffer left by UEFI firmware
     }

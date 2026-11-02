@@ -5,7 +5,8 @@ use abi::security::SE_LOAD_DRIVER_PRIVILEGE;
 use abi::system_information::{
     SystemBasicInformation32, SystemProcessorInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS,
     PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION, SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION,
-    SYSTEM_PROCESSOR_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
+    SYSTEM_PROCESSOR_INFORMATION, SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE,
+    SYSTEM_SESSION_DETACH, SYSTEM_TIME_OF_DAY_INFORMATION,
 };
 use ke::usermem::UserPtr;
 use mm::virtual_alloc::{ALLOC_GRANULARITY, PAGE_SIZE};
@@ -28,6 +29,8 @@ const UNICODE_STRING_SIZE: u32 = 8;
 /// |---|---|
 /// | `SystemBasicInformation` (0) | page, pages physiques, plage du mode utilisateur, processeurs |
 /// | `SystemProcessorInformation` (1) | architecture, niveau, révision et fonctions du processeur |
+/// | `SystemTimeOfDayInformation` (3) | l'heure du démarrage, l'heure, le fuseau (nul) ; les premiers octets que demande l'appelant, 48 au plus |
+/// | `SystemRangeStartInformation` (50) | le début de la moitié système, `0x80000000` |
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
@@ -39,6 +42,10 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         }
         SYSTEM_PROCESSOR_INFORMATION => {
             super::return_information(processor_information().as_bytes(), buffer, length, return_length)
+        }
+        SYSTEM_TIME_OF_DAY_INFORMATION => time_of_day(buffer, length, return_length),
+        SYSTEM_RANGE_START_INFORMATION => {
+            super::return_information(&SYSTEM_RANGE_START.to_le_bytes(), buffer, length, return_length)
         }
         _ => UNSUPPORTED.report(class),
     }
@@ -90,6 +97,35 @@ pub(super) fn nt_set_system_information(arguments: &[u32]) -> NtStatus {
         Ok(STATUS_SUCCESS)
     };
     set().unwrap_or_else(|status| status)
+}
+
+/// SystemTimeOfDayInformation : les `length` premiers octets de
+/// SYSTEM_TIMEOFDAY_INFORMATION (48 au plus, `STATUS_INFO_LENGTH_MISMATCH`
+/// au-delà), et leur nombre en `return_length` s'il n'est pas nul : l'heure
+/// du démarrage et l'heure du RTC (`hal::rtc`), un fuseau horaire de biais
+/// nul (UTC) en attendant le registre.
+fn time_of_day(buffer: u32, length: u32, return_length: u32) -> NtStatus {
+    use abi::system_information::SystemTimeOfDayInformation32;
+
+    let information = SystemTimeOfDayInformation32 {
+        boot_time: hal::rtc::boot_time() as i64,
+        current_time: hal::rtc::system_time() as i64,
+        ..Default::default()
+    };
+    let bytes = information.as_bytes();
+    let give = || {
+        let length = length as usize;
+        if length > bytes.len() {
+            return Err(STATUS_INFO_LENGTH_MISMATCH);
+        }
+        ke::usermem::probe_for_write(u64::from(buffer), length, 4)?;
+        ke::usermem::copy_to_user(u64::from(buffer), &bytes[..length])?;
+        if return_length != 0 {
+            UserPtr::<u32>::new(return_length).write(&(length as u32))?;
+        }
+        Ok(STATUS_SUCCESS)
+    };
+    give().unwrap_or_else(|status| status)
 }
 
 /// SYSTEM_PROCESSOR_INFORMATION : x86, la famille et le modèle comme XP SP2

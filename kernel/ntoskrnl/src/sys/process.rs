@@ -17,8 +17,9 @@ use abi::ntstatus::{
     STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
 };
 use abi::process::{
-    InitialTeb32, ProcessBasicInformation32, PROCESS_BASIC_INFORMATION, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
-    PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_SESSION_INFORMATION,
+    InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_BASIC_INFORMATION, PROCESS_COOKIE,
+    PROCESS_CREATE_FLAGS_INHERIT_HANDLES, PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_LUID_DEVICE_MAPS_ENABLED,
+    PROCESS_SESSION_INFORMATION,
 };
 use abi::teb32::ClientId32;
 use ke::usermem::UserPtr;
@@ -244,15 +245,34 @@ pub(super) fn nt_terminate_thread(arguments: &[u32]) -> NtStatus {
 /// le processus (`PROCESS_QUERY_INFORMATION`) :
 /// - `ProcessBasicInformation` : son statut de sortie, son PEB, son masque
 ///   d'affinité, sa priorité de base, son PID et celui de son créateur ;
-/// - `ProcessSessionInformation` : sa session.
+/// - `ProcessSessionInformation` : sa session ;
+/// - `ProcessLUIDDeviceMapsEnabled` : 0, les périphériques DOS sont ceux de
+///   tous (le défaut d'XP) ;
+/// - `ProcessCookie` : son cookie, tiré à la première demande, pour le
+///   processus de l'appelant seulement (`NtCurrentProcess()`,
+///   `STATUS_INVALID_PARAMETER` sinon).
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
 pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length, return_length) =
         (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
-    if class != PROCESS_BASIC_INFORMATION && class != PROCESS_SESSION_INFORMATION {
-        return UNSUPPORTED_QUERY_CLASSES.report(class);
+    match class {
+        PROCESS_BASIC_INFORMATION | PROCESS_SESSION_INFORMATION => {}
+        PROCESS_LUID_DEVICE_MAPS_ENABLED => {
+            return super::return_information(&0u32.to_le_bytes(), buffer, length, return_length)
+        }
+        PROCESS_COOKIE if handle != NT_CURRENT_PROCESS => return STATUS_INVALID_PARAMETER,
+        PROCESS_COOKIE => {
+            // KeSystemCalls ^ InterruptTime ^ SystemTime for XP: the time
+            // and the cycle counter here.
+            let cookie = super::current_process().cookie(|| {
+                let time = hal::rtc::system_time() ^ hal::timer::performance_counter().0;
+                (time ^ (time >> 32)) as u32
+            });
+            return super::return_information(&cookie.to_le_bytes(), buffer, length, return_length);
+        }
+        _ => return UNSUPPORTED_QUERY_CLASSES.report(class),
     }
     let process = match super::reference_process(handle, PROCESS_QUERY_INFORMATION) {
         Ok(process) => process,
@@ -304,4 +324,11 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
         Ok(STATUS_SUCCESS)
     };
     status(set())
+}
+
+/// NtFlushInstructionCache(ProcessHandle, BaseAddress, Length) : rien à
+/// vider, le cache d'instructions d'x86 suit les écritures ; le processus est
+/// vérifié (`PROCESS_VM_WRITE`, ou `NtCurrentProcess()`).
+pub(super) fn nt_flush_instruction_cache(arguments: &[u32]) -> NtStatus {
+    status(super::reference_process(arguments[0], ps::eprocess::PROCESS_VM_WRITE).map(|_| STATUS_SUCCESS))
 }

@@ -255,3 +255,29 @@ charge `winsrv` et ses imports, `msvcrt` s'initialise, puis :
 `NtUserProcessConnect` est le premier service de win32k qu'appelle l'espace utilisateur : `user32`, que `winsrv`
 importe, s'y connecte dès son chargement dans `csrss`. Même la console de `csrss` (`consrv`, dans `winsrv`) en dépend :
 le M5 rejoint ici la partie minimale du M6 (05 : « sinon ce jalon dépend de la partie minimale de M6 »).
+
+## Étape 10 : les services simples que `csrss` tolérait
+
+Le temps d'abord (`hal`) : l'horloge temps réel du CMOS, lue au démarrage (`hal::rtc`), donne l'heure du démarrage, et
+le temps système est elle plus le temps d'interruption ; `KUSER_SHARED_DATA.SystemTime` le donne désormais. Le RTC
+est lu comme UTC (biais de fuseau nul). Le compteur de temps du processeur, calibré sur les 10 ms de PIT qui calibrent
+le timer de l'APIC, donne le compteur de performance. Puis les services :
+
+| Service | Ce qu'il rend | Demandé par |
+|---|---|---|
+| NtQuerySystemTime | le temps système, en 100 ns depuis 1601 | `msvcrt`, `kernel32` |
+| NtQueryPerformanceCounter | le compteur de temps du processeur depuis la calibration, sa fréquence | `kernel32` |
+| NtQuerySystemInformation(`SystemTimeOfDayInformation`, 3) | l'heure du démarrage, l'heure, un fuseau nul ; les premiers octets demandés, 48 au plus | `basesrv` (`init.c`, ligne 449) |
+| NtQuerySystemInformation(`SystemRangeStartInformation`, 50) | `0x80000000` | `kernel32` |
+| NtQueryDebugFilterState | `TRUE` : tout va au port série | `ntdll` (`DbgPrintEx`) |
+| NtSetInformationObject(`ObjectHandleFlagInformation`, 4) | les attributs d'un handle (héritable, protégé contre la fermeture) | — |
+| NtSetInformationObject(`ObjectSessionInformation`, 5) | le répertoire devient celui de la session de l'appelant, sous `SeTcbPrivilege` | `basesrv` (`\BaseNamedObjects`, ligne 572) |
+| NtQueryInformationProcess(`ProcessLUIDDeviceMapsEnabled`, 0x1C) | 0 | `basesrv` (ligne 581) |
+| NtQueryInformationProcess(`ProcessCookie`, 0x24) | le cookie du processus, tiré à la première demande ; le processus de l'appelant seulement | `ntdll` (« Failed to receive the process cookie ») |
+| NtFlushInstructionCache | rien à vider sur x86 ; le processus vérifié | `ntdll` (le chargeur) |
+
+Test : `information_services_self_test`. Les assertions de `basesrv` et les messages du cookie disparaissent ;
+`csrss` s'arrête toujours à `NtUserProcessConnect` (win32k, étape 9). Restent tolérés : NtQueryDefaultLocale,
+NtCreateKeyedEvent, NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessBreakOnTermination`,
+`ProcessBasePriority`, `ProcessDefaultHardErrorMode`, `ProcessUserModeIOPL`),
+NtSetInformationThread(`ThreadBreakOnTermination`), NtInitializeRegistry et NtRaiseHardError.

@@ -32,6 +32,12 @@ pub const MEM_EXECUTE_OPTION_VALID_FLAGS: u32 = 0x0F;
 pub const PROCESS_BASIC_INFORMATION: u32 = 0;
 /// ProcessSessionInformation: the process's session.
 pub const PROCESS_SESSION_INFORMATION: u32 = 24;
+/// ProcessLUIDDeviceMapsEnabled: a ULONG, non-zero when each logon session
+/// has its own DOS devices.
+pub const PROCESS_LUID_DEVICE_MAPS_ENABLED: u32 = 28;
+/// ProcessCookie: a ULONG, the process's random cookie (pointer encoding),
+/// for the calling process only.
+pub const PROCESS_COOKIE: u32 = 36;
 
 /// NtCreateProcessEx: the new process inherits the inheritable handles of
 /// its parent (NtCreateProcess's InheritObjectTable).
