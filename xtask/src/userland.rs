@@ -45,30 +45,82 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// The files of `system32` that every boot with the userland gets, with
 /// their paths on the boot disk, under `WINDOWS/SYSTEM32` as on the system
 /// volume (02 §9.1): ntdll, then the NLS tables (ANSI and OEM code pages,
-/// Unicode case table) that each process maps, then `smss.exe`, which the
+/// Unicode case table) that each process maps, and that of code page 20127
+/// (US-ASCII), which the C locale of `msvcrt` asks for (`GetCPInfo`, through
+/// the file the SYSTEM hive names in `Nls\CodePage`), then `smss.exe`, which the
 /// kernel starts with its `test-smss` feature (M4), the SYSTEM hive that
 /// ReactOS generated, which the kernel mounts (until `tools/mkhive`,
 /// ADR-012), the Win32 subsystem that `smss` starts (`csrss.exe` and its
-/// server DLLs, M5), and the [`KNOWN_DLLS`]. `None` until `fetch-userland`
-/// ran.
+/// server DLLs, M5), the [`KNOWN_DLLS`], and then every DLL these programs
+/// and DLLs import, directly or not ([`import_closure`]): the loader of ntdll
+/// maps each import, and some of these have long names
+/// (`advapi32_vista.dll`). `None` until `fetch-userland` ran.
 pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
-    [
-        ("ntdll.dll", "NTDLL.DLL"),
-        ("c_1252.nls", "C_1252.NLS"),
-        ("c_437.nls", "C_437.NLS"),
-        ("l_intl.nls", "L_INTL.NLS"),
-        ("smss.exe", "SMSS.EXE"),
-        ("config/system", "CONFIG/SYSTEM"),
-        ("csrss.exe", "CSRSS.EXE"),
-        ("csrsrv.dll", "CSRSRV.DLL"),
-        ("basesrv.dll", "BASESRV.DLL"),
-        ("winsrv.dll", "WINSRV.DLL"),
+    let mut files: Vec<String> = [
+        "ntdll.dll",
+        "c_1252.nls",
+        "c_437.nls",
+        "l_intl.nls",
+        "c_20127.nls",
+        "smss.exe",
+        "config/system",
+        "csrss.exe",
+        "csrsrv.dll",
+        "basesrv.dll",
+        "winsrv.dll",
     ]
     .into_iter()
-    .map(|(file, name)| (file.to_string(), name.to_ascii_uppercase()))
-    .chain(KNOWN_DLLS.iter().map(|dll| (format!("{dll}.dll"), format!("{}.DLL", dll.to_ascii_uppercase()))))
-    .map(|(file, name)| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{name}"))))
-    .collect()
+    .map(String::from)
+    .chain(KNOWN_DLLS.iter().map(|dll| format!("{dll}.dll")))
+    .collect();
+    let (imported, missing) = import_closure(&files, |file| {
+        let path = system32_file(ws, file)?;
+        let bytes = fs::read(&path).ok()?;
+        let pe = pe::Pe32::parse(&bytes).ok()?;
+        Some(pe.imports().map(|import| import.dll_name().to_ascii_lowercase()).collect())
+    });
+    for dll in &missing {
+        eprintln!("xtask: {dll}, imported on the boot disk, is not in the userland's system32");
+    }
+    files.extend(imported);
+    files
+        .into_iter()
+        .map(|file| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{}", file.to_ascii_uppercase()))))
+        .collect()
+}
+
+/// The DLLs that the programs and DLLs among `files` (`.exe`, `.dll`)
+/// import, directly or not, and that are not among them, in the order they
+/// are found; then those of them `imports_of` cannot read (missing). Names
+/// compare without case; `imports_of(name)` gives the imports of a file of
+/// `system32`. Delay-load imports are not followed: the loader maps them
+/// only when they are called (none is in this closure).
+pub fn import_closure(
+    files: &[String],
+    imports_of: impl Fn(&str) -> Option<Vec<String>>,
+) -> (Vec<String>, Vec<String>) {
+    let is_image = |file: &str| file.ends_with(".exe") || file.ends_with(".dll");
+    let mut known: std::collections::BTreeSet<String> = files.iter().map(|file| file.to_ascii_lowercase()).collect();
+    let mut pending: Vec<String> = files.iter().filter(|file| is_image(file)).cloned().collect();
+    let (mut added, mut missing) = (Vec::new(), Vec::new());
+    let mut at = 0;
+    while at < pending.len() {
+        let file = pending[at].clone();
+        at += 1;
+        let Some(imports) = imports_of(&file) else {
+            missing.push(file);
+            continue;
+        };
+        for dll in imports {
+            let dll = dll.to_ascii_lowercase();
+            if known.insert(dll.clone()) {
+                added.push(dll.clone());
+                pending.push(dll);
+            }
+        }
+    }
+    added.retain(|dll| !missing.contains(dll));
+    (added, missing)
 }
 
 /// The system directory on the boot disk.
@@ -183,4 +235,42 @@ fn download(url: &str, to: &Path) -> Result<()> {
         return Err(format!("curl failed ({status}) on {url}"));
     }
     fs::rename(&part, to).map_err(|e| format!("{}: {e}", to.display()))
+}
+
+#[cfg(test)]
+mod closure_tests {
+    use super::import_closure;
+
+    fn imports(file: &str) -> Option<Vec<String>> {
+        let list: &[&str] = match file {
+            "csrss.exe" => &["ntdll.dll", "CSRSRV.dll"],
+            "csrsrv.dll" => &["ntdll.dll"],
+            "winsrv.dll" => &["user32.dll", "kernel32.dll"],
+            "user32.dll" => &["advapi32.dll", "gdi32.dll"],
+            "advapi32.dll" => &["rpcrt4.dll"],
+            "rpcrt4.dll" => &["advapi32_vista.dll", "ws2_32.dll", "advapi32.dll"],
+            "ws2_32.dll" => &["gone.dll"],
+            "gone.dll" => return None,
+            _ => &[],
+        };
+        Some(list.iter().map(|dll| dll.to_string()).collect())
+    }
+
+    #[test]
+    fn the_closure_follows_imports_to_the_end() {
+        let files: Vec<String> =
+            ["ntdll.dll", "c_1252.nls", "csrss.exe", "csrsrv.dll", "winsrv.dll", "user32.dll", "kernel32.dll"]
+                .iter()
+                .map(|f| f.to_string())
+                .collect();
+        let (added, missing) = import_closure(&files, imports);
+        assert_eq!(added, ["advapi32.dll", "gdi32.dll", "rpcrt4.dll", "advapi32_vista.dll", "ws2_32.dll"]);
+        assert_eq!(missing, ["gone.dll"], "imported but not in system32");
+    }
+
+    #[test]
+    fn a_file_without_imports_adds_nothing() {
+        let (added, missing) = import_closure(&["config/system".to_string()], |_| panic!("not an image"));
+        assert!(added.is_empty() && missing.is_empty());
+    }
 }

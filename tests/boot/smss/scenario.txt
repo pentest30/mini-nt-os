@@ -20,8 +20,10 @@ expect = [m4] SMSS.EXE under the system DLL: exit status
 # signals once connected (Ex), creates and resumes its process (Ps, Mm),
 # and waits; csrss loads its DLLs, protects its process with a DACL for its
 # token's user (Se), creates its shared section (SharedSection=, based and
-# reserved: Mm) and its heap, loads basesrv, then fails to load winsrv: a
-# DLL of its imports is not on the disk (advapi32_vista.dll, for rpcrt4).
+# reserved: Mm) and its heap, loads basesrv, then winsrv and its imports,
+# all on the disk (their import closure, some with long names); msvcrt
+# reads code page 20127; user32 makes its first win32k call
+# (NtUserProcessConnect), not implemented, and winsrv fails to load.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -45,11 +47,14 @@ expect = [m4]   NtReplyWaitReceivePort (0x00cb): 2 calls, the first did not retu
 # csrss: the size of TokenUser, then TokenUser, and the DACL of its process.
 expect = [m4]   NtQueryInformationToken (0x00a3): 2 calls, the first returned 0xc0000023
 expect = [m4]   NtSetSecurityObject (0x00f6): 1 calls, the first returned 0x00000000
-expect = CSRSS: *** Failed loading ServerDll=winsrv (Status == 0xc0000135)
-expect = LdrpMapDll failed  with status c0000135 for dll advapi32_vista.dll
+expect = sys: NtUserProcessConnect (0x11dd) is not implemented
+expect = LDR: DLL_PROCESS_ATTACH for dll "user32.dll"
+expect = CSRSS: *** Failed loading ServerDll=winsrv (Status == 0xc0000142)
 expect = [m4] SMSS.EXE created csrss.exe (PID
 expect = [m4] Environment: 6 of 6 variables written
-expect = [m4] \KnownDlls: 21 sections
+# The KnownDLLs and their imports (smss maps both), long names included.
+expect = [m4] \KnownDlls: 37 sections
+expect = advapi32_vista.dll, combase.dll
 expect = KnownDllPath -> C:\WINDOWS\system32
 expect = kernel: phase 1 done
 
@@ -77,3 +82,6 @@ forbid = SMSS: Load of WIN32K failed
 forbid = CsrSetProcessSecurity failed
 forbid = Invalid syntax for SharedSection
 forbid = Failed loading ServerDll=basesrv
+forbid = LdrpMapDll failed
+forbid = Invalid CP!
+forbid = DLL_PROCESS_ATTACH for dll "msvcrt.dll"
