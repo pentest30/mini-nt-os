@@ -18,6 +18,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_PROCESS_IS_TERMINATING, STATUS_THREAD_IS_TERMINATING};
 use hal::sync::{KSpinLock, Once};
@@ -116,11 +117,30 @@ pub fn wait_for_reaper() {
     reaper().idle.wait();
 }
 
+/// La fin d'un objet critique est laissée passer, comme le ferait un
+/// débogueur qui répond « ignorer » ([`set_critical_breaks_ignored`]).
+static CRITICAL_BREAKS_IGNORED: AtomicBool = AtomicBool::new(false);
+
+/// Avec `ignored`, la fin d'un processus ou d'un thread critique est
+/// journalisée et laissée passer, comme le ferait un débogueur qui répond
+/// « ignorer » à PspCatchCriticalBreak ; sans, elle arrête le système. Pour
+/// la sonde du noyau, qui lance `smss` et veut voir où il s'arrête.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn set_critical_breaks_ignored(ignored: bool) {
+    CRITICAL_BREAKS_IGNORED.store(ignored, Ordering::Release);
+}
+
 /// PspCatchCriticalBreak : la fin d'un processus (`kind` 3) ou d'un thread
-/// (`kind` 6) critique arrête le système (CRITICAL_OBJECT_TERMINATION) ; il
-/// n'y a pas de débogueur pour la laisser passer. `image` : le nom de l'image
-/// de son processus.
-fn critical_break(message: &str, kind: u64, object: *const u8, image: &str) -> ! {
+/// (`kind` 6) critique arrête le système (CRITICAL_OBJECT_TERMINATION), sauf
+/// si elle est laissée passer ([`set_critical_breaks_ignored`]). `image` :
+/// le nom de l'image de son processus.
+fn critical_break(message: &str, kind: u64, object: *const u8, image: &str) {
+    if CRITICAL_BREAKS_IGNORED.load(Ordering::Acquire) {
+        log::warn!("ps: {message} {object:p} ({image}): ignored, as a debugger would");
+        return;
+    }
     ke::bugcheck::ke_bug_check_with_reason(
         ke::bugcheck::BugCheckCode::CRITICAL_OBJECT_TERMINATION,
         [kind, object as u64, image.as_ptr() as u64, message.as_ptr() as u64],
