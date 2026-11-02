@@ -203,6 +203,8 @@ pub struct EProcess {
     session_id: AtomicU32,
     /// Son jeton primaire.
     token: KSpinLock<Arc<Object<Token>>>,
+    /// Cookie : tiré à la première demande ; 0 avant.
+    cookie: AtomicU32,
 }
 
 impl EProcess {
@@ -243,6 +245,7 @@ impl EProcess {
                 execute_options: KSpinLock::new(DEP_POLICY.initial_options()),
                 session_id: AtomicU32::new(session_id),
                 token: KSpinLock::new(token),
+                cookie: AtomicU32::new(0),
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
@@ -399,6 +402,25 @@ impl EProcess {
         }
         self.session_id.store(session_id, Ordering::Release);
         Ok(())
+    }
+
+    /// NtQueryInformationProcess(`ProcessCookie`) : son cookie, tiré par
+    /// `draw` à la première demande ; le premier tirage gagne si deux se
+    /// croisent. Un tirage de 0 laisse le prochain tirer encore, comme XP.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn cookie(&self, draw: impl FnOnce() -> u32) -> u32 {
+        match self.cookie.load(Ordering::Acquire) {
+            0 => {
+                let new = draw();
+                match self.cookie.compare_exchange(0, new, Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(_) => new,
+                    Err(existing) => existing,
+                }
+            }
+            cookie => cookie,
+        }
     }
 
     /// PsReferencePrimaryToken : son jeton primaire.
