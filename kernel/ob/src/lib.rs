@@ -26,7 +26,7 @@ pub mod symlink;
 
 pub use abi::object::{AccessMask, GenericMapping};
 pub use directory::{Directory, DIRECTORY_TYPE};
-pub use handle::{duplicate, Handle, HandleAttributes, HandleTable};
+pub use handle::{duplicate, DuplicateSource, Handle, HandleAttributes, HandleTable};
 pub use namespace::{Lookup, Namespace};
 pub use object::{create_object, downcast, make_temporary, Object, ObjectRef, ObjectType, Parsed, TYPE_TYPE};
 pub use symlink::{SymbolicLink, SYMBOLIC_LINK_TYPE};
