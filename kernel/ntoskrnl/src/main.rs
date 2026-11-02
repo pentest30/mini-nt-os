@@ -3919,9 +3919,12 @@ fn security_self_test() {
 /// page not committed stays out of reach. Once nothing holds the section,
 /// its address is free for the next based section.
 fn shared_section_self_test() {
-    use abi::memory::{MemoryBasicInformation32, SectionBasicInformation32, SEC_BASED, SEC_RESERVE, VIEW_UNMAP};
+    use abi::memory::{
+        MemoryBasicInformation32, SectionBasicInformation32, SEC_BASED, SEC_NO_CHANGE, SEC_RESERVE, VIEW_UNMAP,
+    };
     use abi::ntstatus::{
-        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_SUCCESS, STATUS_WAIT_0,
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_INVALID_PAGE_PROTECTION,
+        STATUS_INVALID_PARAMETER_9, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::services;
     use alloc::sync::Arc;
@@ -3952,6 +3955,12 @@ fn shared_section_self_test() {
     const OA: u32 = DATA + 0xE0;
     const US: u32 = DATA + 0xF8;
     const NAME: u32 = DATA + 0x100;
+    const FIXED_BASE: u32 = DATA + 0x140; // a SEC_NO_CHANGE view of the plain section
+    const FIXED_SIZE: u32 = DATA + 0x144;
+    const PROTECT_SIZE: u32 = DATA + 0x148;
+    const OLD_PROTECT: u32 = DATA + 0x14C;
+    const REFUSED_BASE: u32 = DATA + 0x150;
+    const REFUSED_SIZE: u32 = DATA + 0x154;
     const DONE: u32 = DATA + 0x1FC;
     const SECTION_NAME: &str = "\\BaseNamedObjects\\MinoShared";
     const SECTION_BYTES: u32 = 0x2_0000;
@@ -3976,6 +3985,7 @@ fn shared_section_self_test() {
     put(SECTION_SIZE, &u64::from(SECTION_BYTES).to_le_bytes());
     put(PLAIN_SECTION_SIZE, &0x3000u64.to_le_bytes());
     put(COMMIT_SIZE, &0x1000u32.to_le_bytes());
+    put(PROTECT_SIZE, &0x1000u32.to_le_bytes());
 
     let (v, m) = (Arg::Value, Arg::Memory);
     let status = |i: u32| STATUS + 4 * i;
@@ -4023,6 +4033,36 @@ fn shared_section_self_test() {
     )
     .store_eax(status(8));
     code.call_args(services::NtQuerySection, &[m(HANDLE + 4), v(0), v(PLAIN_INFO), v(16), v(0)]).store_eax(status(9));
+    // As csrsrv maps its shared section in each client
+    // (CsrSrvAttachSharedSection): SEC_NO_CHANGE, read only; at the top.
+    let (ro, fixed_type) = (0x02, SEC_NO_CHANGE | MEM_TOP_DOWN);
+    code.call_args(
+        map,
+        &[m(HANDLE + 4), v(me), v(FIXED_BASE), v(0), v(0), v(0), v(FIXED_SIZE), v(VIEW_UNMAP), v(fixed_type), v(ro)],
+    )
+    .store_eax(status(10));
+    code.call_args(
+        services::NtProtectVirtualMemory,
+        &[v(me), v(FIXED_BASE), v(PROTECT_SIZE), v(PAGE_READWRITE), v(OLD_PROTECT)],
+    )
+    .store_eax(status(11));
+    code.call_args(services::NtUnmapViewOfSection, &[v(me), m(FIXED_BASE)]).store_eax(status(12));
+    code.call_args(
+        map,
+        &[
+            m(HANDLE + 4),
+            v(me),
+            v(REFUSED_BASE),
+            v(0),
+            v(0),
+            v(0),
+            v(REFUSED_SIZE),
+            v(VIEW_UNMAP),
+            v(MEM_COMMIT),
+            v(ro),
+        ],
+    )
+    .store_eax(status(13));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x400];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -4052,7 +4092,7 @@ fn shared_section_self_test() {
     }
     let words = |at: u32, count: u32| (0..count).map(|i| read(at + 4 * i)).collect::<alloc::vec::Vec<u32>>();
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..10).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..14).map(|i| NtStatus(read(status(i)))).collect();
     let object = ob::namespace().open(SECTION_NAME, None, Some(&SECTION_TYPE), 0).expect("the named section");
     let section: Arc<Section> = Arc::clone(&ob::downcast::<Arc<Section>>(&object).expect("a section"));
     drop(object);
@@ -4083,6 +4123,14 @@ fn shared_section_self_test() {
     assert_eq!((statuses[7], statuses[8], statuses[9]), (STATUS_SUCCESS, STATUS_SUCCESS, STATUS_SUCCESS));
     assert_ne!(read(PLAIN_BASE), 0, "a section without a base maps anywhere");
     assert_eq!(words(PLAIN_INFO, 2), [0, SEC_RESERVE], "NtQuerySection: no address, SEC_RESERVE");
+    let fixed = read(FIXED_BASE);
+    assert_eq!((statuses[10], read(FIXED_SIZE)), (STATUS_SUCCESS, 0x3000), "a SEC_NO_CHANGE view");
+    assert!(fixed > 0x7000_0000 && fixed > read(PLAIN_BASE), "MEM_TOP_DOWN: at the top, {fixed:#x}");
+    assert_eq!(statuses[11], STATUS_INVALID_PAGE_PROTECTION, "its protection does not change");
+    assert_eq!(read(OLD_PROTECT), 0, "nothing returned");
+    assert_eq!(statuses[12], STATUS_SUCCESS, "it is unmapped all the same");
+    assert!(read_from(&process, fixed).is_err(), "no view left there");
+    assert_eq!(statuses[13], STATUS_INVALID_PARAMETER_9, "MEM_COMMIT is no allocation type of a view");
 
     // Another process sees the page committed, and only that one.
     let other = ps::create_process(&ps::system_process(), &image, "shared2.exe", false).expect("a second process");
@@ -4115,7 +4163,8 @@ fn shared_section_self_test() {
     drop(again);
     log::info!(
         "[smoke] Mm: a shared section from user mode: SEC_BASED | SEC_RESERVE, NtQuerySection, its view at its \
-         address, a page committed by NtAllocateVirtualMemory and seen from another process"
+         address, a page committed by NtAllocateVirtualMemory and seen from another process; a SEC_NO_CHANGE view \
+         at the top, whose protection does not change"
     );
 }
 
@@ -4486,8 +4535,9 @@ fn duplicate_object_self_test() {
 /// THREAD_BASIC_INFORMATION (TEB, CLIENT_ID, one processor, its priority
 /// and its base relative to its process's) and KERNEL_USER_TIMES (created
 /// between the kernel's two readings, not ended), then the second thread's
-/// (its exit status, an end after its creation); a short buffer, a bad
-/// handle and a handle without THREAD_QUERY_INFORMATION are refused.
+/// (its exit status, an end after its creation); ThreadIsTerminated, 0 for
+/// itself and 1 for the second thread; a short buffer, a bad handle and a
+/// handle without THREAD_QUERY_INFORMATION are refused.
 fn thread_information_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_ACCESS_DENIED, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE, STATUS_SUCCESS,
@@ -4507,14 +4557,16 @@ fn thread_information_self_test() {
     const IMAGE_BASE: u32 = 0x40_0000;
     const ENDING: u32 = IMAGE_BASE + 0x1800;
     const DATA: u32 = IMAGE_BASE + 0x2000;
-    const STATUS: u32 = DATA; // 8 statuses
-    const OTHER: u32 = DATA + 0x20;
-    const WEAK: u32 = DATA + 0x24;
-    const RETURNED: u32 = DATA + 0x28;
+    const STATUS: u32 = DATA; // 10 statuses
     const BASIC: u32 = DATA + 0x30; // 28 bytes
     const TIMES: u32 = DATA + 0x50; // 32 bytes
     const OTHER_BASIC: u32 = DATA + 0x70;
     const OTHER_TIMES: u32 = DATA + 0x90;
+    const OTHER: u32 = DATA + 0xB0;
+    const WEAK: u32 = DATA + 0xB4;
+    const RETURNED: u32 = DATA + 0xB8;
+    const TERMINATED: u32 = DATA + 0xBC;
+    const OTHER_TERMINATED: u32 = DATA + 0xC0;
     const DONE: u32 = DATA + 0xFC;
     const SYNCHRONIZE: AccessMask = AccessMask(0x0010_0000);
 
@@ -4533,6 +4585,9 @@ fn thread_information_self_test() {
     code.call_args(query, &[v(me), v(0), v(BASIC), v(27), v(0)]).store_eax(status(5));
     code.call_args(query, &[v(0x1234), v(1), v(TIMES), v(32), v(0)]).store_eax(status(6));
     code.call_args(query, &[m(WEAK), v(1), v(TIMES), v(32), v(0)]).store_eax(status(7));
+    let is_terminated = abi::process::THREAD_IS_TERMINATED;
+    code.call_args(query, &[v(me), v(is_terminated), v(TERMINATED), v(4), v(0)]).store_eax(status(8));
+    code.call_args(query, &[m(OTHER), v(is_terminated), v(OTHER_TERMINATED), v(4), v(0)]).store_eax(status(9));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut ending = Code::new();
     ending.call(services::NtTerminateThread, &[NT_CURRENT_THREAD, 0x55]).bytes(&[0xEB, 0xFE]);
@@ -4575,7 +4630,7 @@ fn thread_information_self_test() {
     }
     let after = hal::rtc::system_time();
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..8).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..10).map(|i| NtStatus(read(status(i)))).collect();
     assert_eq!(statuses[0], STATUS_WAIT_0, "the second thread ended");
     assert_eq!((statuses[1], read(RETURNED)), (STATUS_SUCCESS, 28), "THREAD_BASIC_INFORMATION");
     assert_eq!(read(BASIC), abi::ntstatus::STATUS_PENDING.0, "alive");
@@ -4597,6 +4652,8 @@ fn thread_information_self_test() {
     assert_eq!(statuses[5], STATUS_INFO_LENGTH_MISMATCH, "28 bytes exactly");
     assert_eq!(statuses[6], STATUS_INVALID_HANDLE);
     assert_eq!(statuses[7], STATUS_ACCESS_DENIED, "THREAD_QUERY_INFORMATION");
+    assert_eq!((statuses[8], read(TERMINATED)), (STATUS_SUCCESS, 0), "ThreadIsTerminated: not itself");
+    assert_eq!((statuses[9], read(OTHER_TERMINATED)), (STATUS_SUCCESS, 1), "the second thread");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
@@ -4612,7 +4669,8 @@ fn thread_information_self_test() {
     drop((thread, other, process));
     ps::wait_for_reaper();
     log::info!(
-        "[smoke] Ps: NtQueryInformationThread from user mode: ThreadBasicInformation, ThreadTimes (creation and end)"
+        "[smoke] Ps: NtQueryInformationThread from user mode: ThreadBasicInformation, ThreadTimes (creation and end), \
+         ThreadIsTerminated"
     );
 }
 
