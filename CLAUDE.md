@@ -209,6 +209,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `CLIENTINFO` dans le TEB, vue en lecture seule), NtUserProcessConnect, NtUserInitializeClientPfnArrays, NtGdiInit,
   NtUserInitialize (sans vidéo ni GDI) ; `abi::user` ; sémaphores d'Ex ; NtQueryObject (attributs d'un handle).
   `csrss` charge `winsrv` (USER, puis `consrv`) et s'arrête à `SmConnectToSm` (NtConnectPort, l'étape 7).
+  M5, étape 7 (Lpc) : ports de connexion, clients et de communication du serveur (`lpc::port`), connexion, requêtes,
+  réponses et datagrammes (`lpc::conversation`), section partagée du client ; NtConnectPort, NtSecureConnectPort,
+  NtAcceptConnectPort, NtCompleteConnectPort, NtListenPort, NtRequestWaitReplyPort, NtRequestPort, NtReplyPort,
+  NtReplyWaitReceivePort(Ex), NtSetDefaultHardErrorPort ; NtOpenProcess, NtOpenThread ; `SystemFlagsInformation`.
+  La sonde laisse passer la fin d'un objet critique, comme un débogueur (`ps::set_critical_breaks_ignored`). L'IRQL des
+  tests hôte est propre à chaque thread (`hal::irql`). `csrss` et `smss` se connectent : `csrss` est démarré ; `smss`
+  s'arrête à `winlogon.exe`, absent du disque.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

@@ -8,14 +8,14 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 86 | 296 |
+| ntoskrnl | 98 | 296 |
 | win32k | 4 | 732 |
 
 ## ntoskrnl
 
 | Numéro | Service | Arguments | Implémenté |
 |---|---|---:|:---:|
-| `0x0000` | `NtAcceptConnectPort` | 6 |  |
+| `0x0000` | `NtAcceptConnectPort` | 6 | ✅ |
 | `0x0001` | `NtAccessCheck` | 8 |  |
 | `0x0002` | `NtAccessCheckAndAuditAlarm` | 11 |  |
 | `0x0003` | `NtAccessCheckByType` | 11 |  |
@@ -46,9 +46,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x001c` | `NtCloseObjectAuditAlarm` | 3 |  |
 | `0x001d` | `NtCompactKeys` | 2 |  |
 | `0x001e` | `NtCompareTokens` | 3 |  |
-| `0x001f` | `NtCompleteConnectPort` | 1 |  |
+| `0x001f` | `NtCompleteConnectPort` | 1 | ✅ |
 | `0x0020` | `NtCompressKey` | 1 |  |
-| `0x0021` | `NtConnectPort` | 8 |  |
+| `0x0021` | `NtConnectPort` | 8 | ✅ |
 | `0x0022` | `NtContinue` | 2 | ✅ |
 | `0x0023` | `NtCreateDebugObject` | 4 |  |
 | `0x0024` | `NtCreateDirectoryObject` | 3 | ✅ |
@@ -115,7 +115,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0061` | `NtInitiatePowerAction` | 4 |  |
 | `0x0062` | `NtIsProcessInJob` | 2 |  |
 | `0x0063` | `NtIsSystemResumeAutomatic` | 0 |  |
-| `0x0064` | `NtListenPort` | 2 |  |
+| `0x0064` | `NtListenPort` | 2 | ✅ |
 | `0x0065` | `NtLoadDriver` | 1 |  |
 | `0x0066` | `NtLoadKey` | 2 |  |
 | `0x0067` | `NtLoadKey2` | 3 |  |
@@ -143,13 +143,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x007d` | `NtOpenKey` | 3 | ✅ |
 | `0x007e` | `NtOpenMutant` | 3 |  |
 | `0x007f` | `NtOpenObjectAuditAlarm` | 12 |  |
-| `0x0080` | `NtOpenProcess` | 4 |  |
+| `0x0080` | `NtOpenProcess` | 4 | ✅ |
 | `0x0081` | `NtOpenProcessToken` | 3 | ✅ |
 | `0x0082` | `NtOpenProcessTokenEx` | 4 | ✅ |
 | `0x0083` | `NtOpenSection` | 3 | ✅ |
 | `0x0084` | `NtOpenSemaphore` | 3 | ✅ |
 | `0x0085` | `NtOpenSymbolicLinkObject` | 3 | ✅ |
-| `0x0086` | `NtOpenThread` | 4 |  |
+| `0x0086` | `NtOpenThread` | 4 | ✅ |
 | `0x0087` | `NtOpenThreadToken` | 4 | ✅ |
 | `0x0088` | `NtOpenThreadTokenEx` | 5 | ✅ |
 | `0x0089` | `NtOpenTimer` | 3 |  |
@@ -217,13 +217,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00c7` | `NtRemoveProcessDebug` | 2 |  |
 | `0x00c8` | `NtRenameKey` | 2 |  |
 | `0x00c9` | `NtReplaceKey` | 3 |  |
-| `0x00ca` | `NtReplyPort` | 2 |  |
+| `0x00ca` | `NtReplyPort` | 2 | ✅ |
 | `0x00cb` | `NtReplyWaitReceivePort` | 4 | ✅ |
-| `0x00cc` | `NtReplyWaitReceivePortEx` | 5 |  |
+| `0x00cc` | `NtReplyWaitReceivePortEx` | 5 | ✅ |
 | `0x00cd` | `NtReplyWaitReplyPort` | 2 |  |
 | `0x00ce` | `NtRequestDeviceWakeup` | 1 |  |
-| `0x00cf` | `NtRequestPort` | 2 |  |
-| `0x00d0` | `NtRequestWaitReplyPort` | 3 |  |
+| `0x00cf` | `NtRequestPort` | 2 | ✅ |
+| `0x00d0` | `NtRequestWaitReplyPort` | 3 | ✅ |
 | `0x00d1` | `NtRequestWakeupLatency` | 1 |  |
 | `0x00d2` | `NtResetEvent` | 2 | ✅ |
 | `0x00d3` | `NtResetWriteWatch` | 3 |  |
@@ -233,12 +233,12 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00d7` | `NtSaveKey` | 2 |  |
 | `0x00d8` | `NtSaveKeyEx` | 3 |  |
 | `0x00d9` | `NtSaveMergedKeys` | 3 |  |
-| `0x00da` | `NtSecureConnectPort` | 9 |  |
+| `0x00da` | `NtSecureConnectPort` | 9 | ✅ |
 | `0x00db` | `NtSetBootEntryOrder` | 2 |  |
 | `0x00dc` | `NtSetBootOptions` | 2 |  |
 | `0x00dd` | `NtSetContextThread` | 2 |  |
 | `0x00de` | `NtSetDebugFilterState` | 3 |  |
-| `0x00df` | `NtSetDefaultHardErrorPort` | 1 |  |
+| `0x00df` | `NtSetDefaultHardErrorPort` | 1 | ✅ |
 | `0x00e0` | `NtSetDefaultLocale` | 2 |  |
 | `0x00e1` | `NtSetDefaultUILanguage` | 1 |  |
 | `0x00e2` | `NtSetDriverEntryOrder` | 2 |  |

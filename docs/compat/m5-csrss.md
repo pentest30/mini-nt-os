@@ -363,3 +363,45 @@ port pour `smss`, puis se connecte à `smss` (`SmConnectToSm`) : **NtConnectPort
 la passation, la connexion LPC). Restent tolérés : NtQueryDefaultLocale (`winsrv`, `harderror.c`),
 NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessUserModeIOPL`), NtInitializeRegistry, NtRaiseHardError.
 
+## Étape 13 : la connexion LPC ; `csrss` et `smss` se connectent
+
+Le crate `lpc` connaît maintenant trois sortes de ports (`lpc::port`) : le port de connexion, nommé, d'un serveur ; le
+port client d'un client connecté ; le port de communication du serveur. Ce qu'un client envoie va dans la file du port
+de connexion, avec le contexte du port du serveur (PortContext) ; ce que le serveur envoie, dans la file du port
+client. Les deux extrémités se désignent sans se garder en vie : l'une partie, l'autre est déconnectée. Un thread qui
+attend sa connexion ou une réponse est inscrit par son TID, avec l'identifiant du message, et attend son propre
+événement (`lpc::conversation`). Un client peut partager une section : projetée chez lui à la connexion, chez le
+serveur quand il accepte, chacun apprend où l'autre la voit.
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtConnectPort, NtSecureConnectPort | la demande de connexion (`LPC_CONNECTION_REQUEST`) au port nommé, avec ses données (tronquées à ce que le port admet) et sa section ; attend l'acceptation (`STATUS_PORT_CONNECTION_REFUSED` sinon) ; le SID de l'utilisateur du serveur, s'il est donné (`STATUS_SERVER_SID_MISMATCH`) | `csrsrv` (`SmConnectToSm`), `smss` (vers le port SB de `csrss`), plus tard `kernel32` (`CsrClientConnectToServer`) |
+| NtListenPort | attend une demande de connexion, en laissant passer le reste | — |
+| NtAcceptConnectPort | refuse (le client se réveille), ou accepte : le port de communication du serveur, son contexte (le handle s'il est nul), la section du client projetée chez lui ; `STATUS_INVALID_CID`, `STATUS_REPLY_MESSAGE_MISMATCH` | `smss` (`SmpHandleConnectionRequest`), `csrsrv` |
+| NtCompleteConnectPort | réveille le client accepté | idem |
+| NtRequestWaitReplyPort, NtRequestPort, NtReplyPort | une requête et sa réponse, un datagramme, une réponse ; les longueurs vérifiées, un type choisi par l'appelant refusé | `smss`, `csrsrv`, `smlib` |
+| NtReplyWaitReceivePort, NtReplyWaitReceivePortEx | répondre puis recevoir, avec le contexte ; une demande de connexion arrive avec ses seules données ; un port du serveur lit la file de son port de connexion ; avec un délai pour l'Ex | `smss` (`SmpApiLoop`), `csrsrv` |
+| NtSetDefaultHardErrorPort | une fois, sous `SeTcbPrivilege` : le port des erreurs graves (rien ne l'emploie encore) | `csrsrv` |
+| NtOpenProcess, NtOpenThread | un handle par le CLIENT_ID (ou un nom) ; `STATUS_INVALID_PARAMETER_MIX`, `STATUS_INVALID_CID` | `smss` (le processus d'un client qui se connecte) |
+| NtQuerySystemInformation(`SystemFlagsInformation`, 9) | les drapeaux globaux, aucun | `smss` (`smss.c`, son assertion) |
+
+Les tests hôte de `hal` tenaient l'IRQL pour un seul processeur : des tests lancés en même temps se changeaient
+l'IRQL l'un de l'autre en prenant un verrou. L'IRQL de l'hôte est maintenant propre à chaque thread (`#[thread_local]`).
+
+La sonde, pendant qu'elle tourne, laisse passer la fin d'un processus ou d'un thread critique en la journalisant, comme
+un débogueur qui répondrait « ignorer » (`ps::set_critical_breaks_ignored`) : `smss` peut maintenant finir de
+lui-même, critique, et la sonde montre où.
+
+Tests : hôte (`lpc` : routage, acceptation et refus, réponses, longueurs ; `hal` : un IRQL par thread),
+`lpc_connection_self_test` (un serveur et un client dans un processus : refus par le SID et par le serveur, section
+partagée vue des deux côtés, données de connexion récrites et tronquées, contexte, requête et réponse, datagramme,
+refus ; NtOpenProcess, NtOpenThread, `SystemFlagsInformation`, le port des erreurs graves sans privilège) ; vérifiés
+par mutation.
+
+`csrss` se connecte à `smss` (`SmConnectToSm`) : `smss` ouvre son processus, accepte et complète la connexion, puis se
+connecte au port SB de `csrss`, qui l'accepte ; `smss` signale l'événement de `csrss`. `csrss` donne son port des
+erreurs graves, se déclare critique et termine son premier thread : **`csrss` est démarré**. `smss` lance ensuite sa
+commande initiale, `winlogon.exe`, qui n'est pas sur le disque (« Initial command image (winlogon.exe) not found ») :
+il abandonne (`SmpTerminate`) et finit. Restent tolérés : NtQueryDefaultLocale, NtRaiseHardError,
+NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessUserModeIOPL`), NtInitializeRegistry.
+

@@ -11,11 +11,12 @@ jour à chaque commit qui change l'état.
   valeur du registre se relisent après un redémarrage, scénarios `persistence` et `registry-persistence`, `fsck.vfat`
   propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée sa session et
   lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis `winsrv`
-  (USER sur le win32k minimal, puis la console `consrv`), crée ses ports et s'arrête à sa connexion à `smss`
-  (`NtConnectPort`) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
+  (USER sur le win32k minimal, puis la console `consrv`), se connecte à `smss` par LPC (et `smss` à lui) : **`csrss`
+  est démarré**. `smss` s'arrête ensuite à sa commande initiale, `winlogon.exe`, absent du disque :
+  [`compat/m5-csrss.md`](compat/m5-csrss.md).
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
-  (l'étape 5), `claude/m5-ex` (l'étape 8) et `claude/m5-win32k` (l'étape 6). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
+  (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
   branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
@@ -251,10 +252,15 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    `lpk.dll` sur le disque. Tests : hôte (`abi`, `win32k`, `ex`), `win32k_self_test`, le résumé `[m4] USER:` de la
    sonde ; vérifiés par mutation. `csrss` charge `winsrv` (USER, puis `consrv`) et s'arrête à `SmConnectToSm`
    (`NtConnectPort`).
-7. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
-   NtRequestWaitReplyPort, NtReplyPort, NtReplyWaitReceivePort avec réponse, NtListenPort ; puis les sections de
-   port (messages volumineux). `csrss` crée son port d'API (`CsrApiPortInitialize`), puis se connecte à `\SmApiPort`
-   (`SmConnectToSm`) et `smss` signale son événement.
+7. [x] **La connexion LPC** (`compat/m5-csrss.md`, étape 13). `lpc` : trois sortes de ports (connexion, client,
+   communication du serveur), routage des messages et contexte, threads en attente inscrits par TID
+   (`lpc::conversation`), section partagée du client (projetée des deux côtés). Services : NtConnectPort,
+   NtSecureConnectPort (SID du serveur), NtAcceptConnectPort, NtCompleteConnectPort, NtListenPort,
+   NtRequestWaitReplyPort, NtRequestPort, NtReplyPort, NtReplyWaitReceivePort (avec réponse) et son Ex,
+   NtSetDefaultHardErrorPort ; NtOpenProcess, NtOpenThread ; `SystemFlagsInformation`. La sonde laisse passer la fin
+   d'un objet critique (`ps::set_critical_breaks_ignored`). `hal` : l'IRQL des tests hôte est propre à chaque thread.
+   Tests : hôte (`lpc`, `hal`), `lpc_connection_self_test` ; vérifiés par mutation. `csrss` et `smss` se connectent
+   dans les deux sens, `csrss` est démarré ; `smss` s'arrête à `winlogon.exe`, absent du disque.
 8. [x] **Les événements à clé, les processus critiques** (`compat/m5-csrss.md`, étape 11). `ex::keyed_event` (le
    type `KeyedEvent`, le rendez-vous d'une clé dans un processus, `\KernelObjects\CritSecOutOfMemoryEvent` pour un
    handle nul) ; `ke::sched::set_base_priority` (KeSetBasePriorityThread) ; Ps : processus et threads critiques
@@ -302,6 +308,17 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   `TokenGroupsAndPrivileges`, `TokenAuditPolicy`, `TokenOrigin` (journalisées). Le jeton garde la session de son
   créateur quand celle du processus change.
 - Sessions : pas d'espace de session (Mm), ni de compte des processus d'une session ; un identifiant créé reste pris.
+
+## Dettes de l'étape 7 du M5 (LPC)
+
+- Pas encore : la section d'un serveur (`ServerView` de NtAcceptConnectPort, que ReactOS n'a pas non plus), les
+  rappels (une requête envoyée en réponse), les données décrites par `DataInfoOffset` (NtReadRequestData,
+  NtWriteRequestData), les messages `LPC_PORT_CLOSED` et `LPC_CLIENT_DIED`, les ports attendables
+  (NtCreateWaitablePort), les quotas. Un thread qui se termine pendant qu'il attend une réponse laisse son inscription,
+  qu'écrase la suivante de son TID ; un serveur qui accepte sans compléter laisse son client en attente.
+- NtRaiseHardError manque : le port des erreurs graves est retenu, rien ne l'emploie.
+- La sonde rétablit l'arrêt sur la fin d'un objet critique à sa fin ; aucun scénario ne peut le voir (rien de critique
+  ne finit après elle).
 
 ## Dettes de l'étape 6 du M5 (win32k minimal)
 
