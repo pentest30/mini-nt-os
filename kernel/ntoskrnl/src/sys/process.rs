@@ -421,3 +421,82 @@ pub(super) fn nt_set_information_thread(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_flush_instruction_cache(arguments: &[u32]) -> NtStatus {
     status(super::reference_process(arguments[0], ps::eprocess::PROCESS_VM_WRITE).map(|_| STATUS_SUCCESS))
 }
+
+/// Ce qu'ouvrent NtOpenProcess et NtOpenThread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Opened {
+    Process,
+    Thread,
+}
+
+/// NtOpenProcess et NtOpenThread(*Handle, DesiredAccess, ObjectAttributes,
+/// ClientId) : un handle sur le processus ou le thread que désigne le
+/// CLIENT_ID (un thread et son processus, ou un processus seul pour
+/// NtOpenProcess ; un thread seul ou dans son processus pour NtOpenThread),
+/// ou le nom des attributs, avec les droits demandés et l'héritage des
+/// attributs (`OBJ_INHERIT`). `STATUS_INVALID_PARAMETER_MIX` pour un nom et
+/// un CLIENT_ID, ou ni l'un ni l'autre ; `STATUS_INVALID_CID` pour un
+/// CLIENT_ID qui ne désigne rien. Le contrôle d'accès est permissif
+/// (ADR-011).
+fn open(arguments: &[u32], opened: Opened) -> Result<NtStatus, NtStatus> {
+    use abi::ntstatus::{STATUS_INVALID_CID, STATUS_INVALID_PARAMETER_MIX};
+
+    let (out, desired, attributes, client_id) = (arguments[0], arguments[1], arguments[2], arguments[3]);
+    let out = UserPtr::<u32>::new(out);
+    out.write(&0)?;
+    let captured = super::object::capture_attributes(attributes)?;
+    let client = match client_id {
+        0 => None,
+        at => Some(UserPtr::<ClientId32>::new(at).read()?),
+    };
+    let expected: &ob::ObjectType = match opened {
+        Opened::Process => &ps::PROCESS_TYPE,
+        Opened::Thread => &ps::THREAD_TYPE,
+    };
+    let process = super::current_process();
+    let handle = match (captured.name, client) {
+        (Some(_), Some(_)) | (None, None) => return Err(STATUS_INVALID_PARAMETER_MIX),
+        (Some(name), None) => ob::open_object_by_name(
+            ob::namespace(),
+            &name,
+            captured.root.as_ref(),
+            Some(expected),
+            captured.attributes,
+            &process.handle_table,
+            ob::AccessMask(desired),
+        )?,
+        (None, Some(client)) => {
+            let thread = match (opened, client.unique_thread, client.unique_process) {
+                (_, 0, _) | (Opened::Thread, _, 0) => None,
+                (_, tid, _) => Some(ps::ethread::lookup_thread(tid)?),
+            };
+            let checked = opened == Opened::Process || client.unique_process != 0;
+            if thread.as_ref().is_some_and(|thread| checked && thread.pid() != client.unique_process) {
+                return Err(STATUS_INVALID_CID);
+            }
+            let object: ObjectRef = match (opened, thread) {
+                (Opened::Process, Some(thread)) => thread.process().clone(),
+                (Opened::Process, None) => ps::lookup_process(client.unique_process)?,
+                (Opened::Thread, Some(thread)) => thread,
+                (Opened::Thread, None) => ps::ethread::lookup_thread(client.unique_thread)?,
+            };
+            let inherit = captured.attributes & abi::object::OBJ_INHERIT != 0;
+            let attributes = ob::HandleAttributes { inherit, protect_from_close: false };
+            process.handle_table.insert(object, ob::AccessMask(desired), attributes)?
+        }
+    };
+    super::object::give_handle(&out, handle)?;
+    Ok(STATUS_SUCCESS)
+}
+
+/// NtOpenProcess(*ProcessHandle, DesiredAccess, ObjectAttributes, ClientId) :
+/// voir [`open`].
+pub(super) fn nt_open_process(arguments: &[u32]) -> NtStatus {
+    status(open(arguments, Opened::Process))
+}
+
+/// NtOpenThread(*ThreadHandle, DesiredAccess, ObjectAttributes, ClientId) :
+/// voir [`open`].
+pub(super) fn nt_open_thread(arguments: &[u32]) -> NtStatus {
+    status(open(arguments, Opened::Thread))
+}
