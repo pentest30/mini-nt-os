@@ -1,8 +1,8 @@
 # M4, discovery: ReactOS's smss.exe starts under the system DLL with the
 # parameters of the first process; the kernel logs the system services it
 # calls and how it stops (docs/compat/m4-smss.md). It starts csrss, then
-# winlogon, not on the disk yet: it gives up and ends. It is critical: the
-# probe lets its end pass, as a debugger answering "ignore" would.
+# winlogon, which it hands to csrss (SmExecPgm), and waits for them: the
+# probe ends it after 10 s, its critical flags cleared first.
 # Skipped until the userland is fetched.
 features = test-smss
 requires = userland
@@ -10,10 +10,9 @@ cpus     = default, intel
 timeout  = 180
 
 expect = [m4] SMSS.EXE under the system DLL: exit status
+expect = [m4] SMSS.EXE is a critical process: no longer, before it is terminated
 # At its start it makes its process and its thread critical (Ps, M5), sets
 # its base priority, its hard-error mode, and creates keyed events (Ex).
-expect = ps: Terminating critical process 0x
-expect = (SMSS.EXE): ignored, as a debugger would
 expect = [m4]   NtCreateKeyedEvent (0x0121):
 expect = [m4]   NtSetInformationThread (0x00ee):
 forbid = sys: NtCreateKeyedEvent (0x0121) is not implemented
@@ -43,8 +42,11 @@ forbid = Source File: ../base/system/smss/smss.c
 # (SmConnectToSm: NtConnectPort, Lpc), which opens its process
 # (NtOpenProcess), accepts and completes the connection, and connects back
 # to csrss's SB port; csrss gives its hard error port and ends its first
-# thread; smss runs its initial command, winlogon.exe, not on the disk, and
-# ends (SmpTerminate). The probe ends csrss after 2 s.
+# thread; smss runs its initial command, winlogon.exe, keeps a handle on
+# its process (NtDuplicateObject, Ob) and hands it to csrss (SmExecPgm),
+# which makes it a CSR process and sets its exception port: not yet
+# (NtSetInformationProcess, ProcessExceptionPort). The probe ends csrss and
+# winlogon after 2 s each.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -61,8 +63,8 @@ expect = [m4]   NtCreateEvent (0x0025):
 # Its token (Se): privileges adjusted, then its session and win32k.
 expect = [m4]   NtOpenProcessToken (0x0081)
 expect = [m4]   NtAdjustPrivilegesToken (0x000c)
-expect = [m4]   NtSetSystemInformation (0x00f9): 2 calls, the first returned 0x00000000
-expect = [m4]   NtCreateProcess (0x0031): 1 calls, the first returned 0x00000000
+expect = [m4]   NtSetSystemInformation (0x00f9): 3 calls, the first returned 0x00000000
+expect = [m4]   NtCreateProcess (0x0031): 2 calls, the first returned 0x00000000
 # smss resumes csrss's first thread, csrss its server threads.
 expect = [m4]   NtResumeThread (0x00d6): 3 calls, the first returned 0x00000000
 # smss's API port (Lpc), on which two threads wait; then csrss's API port
@@ -84,11 +86,19 @@ expect = \Windows\WindowStations created; 23 of 23 client procedures of user32 (
 # The LPC connections (M5, step 7): csrss to smss (SmConnectToSm), smss
 # back to csrss's SB port, each accepted and completed.
 expect = [m4]   NtConnectPort (0x0021): 3 calls, the first returned 0x00000000
-expect = [m4]   NtOpenProcess (0x0080): 1 calls, the first returned 0x00000000
+expect = [m4]   NtOpenProcess (0x0080): 2 calls, the first returned 0x00000000
 expect = [m4]   NtAcceptConnectPort (0x0000): 3 calls, the first returned 0x00000000
 expect = [m4]   NtCompleteConnectPort (0x001f): 3 calls, the first returned 0x00000000
 expect = [m4]   NtSetDefaultHardErrorPort (0x00df): 1 calls, the first returned 0x00000000
-expect = SMSS: Initial command image (winlogon.exe) not found
+# winlogon (M5, step 9): on the disk, its process handle duplicated, then
+# handed to csrss, which stops at its exception port.
+expect = [m4] SMSS.EXE created winlogon.exe (PID
+expect = [m4]   NtDuplicateObject (0x0047):
+expect = sys: NtSetInformationProcess class 0x8 is not implemented
+forbid = SMSS: Initial command image (winlogon.exe) not found
+forbid = SMSS: DupObject Failed
+forbid = SMSS: Execute Initial Command failed
+forbid = sys: NtDuplicateObject (0x0047) is not implemented
 forbid = SmConnectToSm: Connect to Sm failed
 forbid = Accept failed or rejected
 forbid = Connect back to Sb
