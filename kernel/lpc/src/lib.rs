@@ -1,12 +1,13 @@
 //! Lpc — les ports d'XP (02 §5.9).
 //!
-//! - [`port`] : le type `Port`, un port de connexion d'un serveur, nommé
-//!   dans l'espace de noms, et sa file de messages.
+//! - [`port`] : le type `Port`, de trois sortes (port de connexion nommé
+//!   d'un serveur, port client, port de communication du serveur), et sa
+//!   file de messages.
+//! - [`conversation`] : la connexion (demande, acceptation ou refus,
+//!   réveil du client), les requêtes avec réponse, les datagrammes.
 //!
-//! Pas encore : la connexion (NtConnectPort, NtSecureConnectPort,
-//! NtAcceptConnectPort, NtCompleteConnectPort), les ports de communication,
-//! les requêtes avec réponse (NtRequestWaitReplyPort, NtReplyPort), les
-//! messages volumineux par sections partagées (M5).
+//! Pas encore : la section d'un serveur, les rappels, les messages de
+//! fermeture (M5).
 //!
 //! WI7e Ch.3 §Advanced Local Procedure Call (l'ancêtre)
 
@@ -14,6 +15,10 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 
+pub mod conversation;
 pub mod port;
 
-pub use port::{Message, Port, PORT_ALL_ACCESS, PORT_CONNECT, PORT_TYPE};
+pub use conversation::{
+    accept, check_message, complete, connect, reply, request_wait_reply, send, Accepted, ClientView, Connected,
+};
+pub use port::{Message, Port, PortKind, HEADER_LENGTH, PORT_ALL_ACCESS, PORT_CONNECT, PORT_TYPE};

@@ -1,14 +1,23 @@
-//! Les ports (LpcPortObjectType).
+//! Les ports (LpcPortObjectType), de trois sortes.
 //!
-//! Un serveur crée un port de connexion (NtCreatePort), puis attend ses
-//! messages (NtReplyWaitReceivePort) : ils arrivent dans la file du port,
-//! que compte un sémaphore. Le noyau peut y envoyer un datagramme
-//! ([`Port::request`], LpcRequestPort) ; les clients viendront avec la
-//! connexion.
+//! - Un **port de connexion**, nommé, que crée un serveur (NtCreatePort) :
+//!   les demandes de connexion et les messages de ses clients arrivent dans
+//!   sa file, que le serveur lit (NtReplyWaitReceivePort).
+//! - Un **port client**, que reçoit un client connecté (NtConnectPort) : ce
+//!   qu'il envoie va dans la file du port de connexion, avec le contexte du
+//!   port du serveur ; il a sa propre file, pour ce que le serveur lui envoie.
+//! - Un **port de communication du serveur**, que reçoit le serveur en
+//!   acceptant une connexion (NtAcceptConnectPort) : il en a le contexte, et
+//!   lit par lui la file de son port de connexion.
+//!
+//! Les deux extrémités d'une connexion se désignent sans se garder en vie :
+//! quand l'une disparaît, l'autre est déconnectée (`STATUS_PORT_DISCONNECTED`).
+//! La file compte ses messages dans un sémaphore ; le noyau peut y mettre un
+//! datagramme ([`Port::request`], LpcRequestPort).
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
-use alloc::sync::Arc;
+use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::ptr;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -16,7 +25,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use abi::lpc::{PortMessage32, LPC_DATAGRAM, LPC_KERNELMODE_MESSAGE, PORT_MAXIMUM_MESSAGE_LENGTH};
 use abi::ntstatus::{
     NtStatus, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_PARAMETER_3, STATUS_INVALID_PARAMETER_4,
-    STATUS_PORT_MESSAGE_TOO_LONG,
+    STATUS_PORT_DISCONNECTED, STATUS_PORT_MESSAGE_TOO_LONG, STATUS_WAIT_0,
 };
 use abi::teb32::ClientId32;
 use hal::sync::KSpinLock;
@@ -52,7 +61,8 @@ const MAXIMUM_QUEUED: i32 = i32::MAX;
 /// LpcpNextMessageId : l'identifiant du prochain message, jamais 0.
 static NEXT_MESSAGE_ID: AtomicU32 = AtomicU32::new(1);
 
-fn next_message_id() -> u32 {
+/// Un identifiant de message neuf, jamais 0.
+pub(crate) fn next_message_id() -> u32 {
     loop {
         let id = NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed);
         if id != 0 {
@@ -61,29 +71,55 @@ fn next_message_id() -> u32 {
     }
 }
 
-/// Un message en file : son en-tête, puis ses données.
+/// La taille de l'en-tête d'un message.
+pub const HEADER_LENGTH: u32 = core::mem::size_of::<PortMessage32>() as u32;
+
+/// Un message en file : son en-tête, ses données, et le contexte du port du
+/// serveur par lequel il est venu (PortContext ; 0 pour une demande de
+/// connexion ou un message du noyau).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub header: PortMessage32,
     pub data: Vec<u8>,
+    pub context: u32,
 }
 
 impl Message {
     /// Ses octets, en-tête puis données, tels qu'ils vont au destinataire.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(usize::from(self.header.total_length));
+        let mut bytes = Vec::with_capacity(HEADER_LENGTH as usize + self.data.len());
         bytes.extend_from_slice(self.header.as_bytes());
         bytes.extend_from_slice(&self.data);
         bytes
     }
 }
 
+/// Les sortes de ports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PortKind {
+    /// LPCP_CONNECTION_PORT : nommé, créé par un serveur.
+    Connection,
+    /// LPCP_COMMUNICATION_PORT : le côté serveur d'une connexion.
+    ServerCommunication,
+    /// LPCP_CLIENT_PORT : le côté client d'une connexion.
+    Client,
+}
+
 /// Le corps d'un objet port.
 pub struct Port {
+    kind: PortKind,
     /// La taille au plus des données de connexion.
     max_connection_info_length: u32,
     /// La taille au plus d'un message, en-tête compris.
     max_message_length: u32,
+    /// Le PID du serveur : le créateur du port de connexion.
+    server_pid: u32,
+    /// Le port de connexion d'un port de communication, client ou serveur.
+    connection: Option<Arc<Object<Port>>>,
+    /// L'autre extrémité d'une connexion, sans la garder en vie.
+    connected: KSpinLock<Weak<Object<Port>>>,
+    /// PortContext d'un port de communication du serveur.
+    context: AtomicU32,
     /// Les messages qui attendent d'être reçus.
     queue: KSpinLock<VecDeque<Message>>,
     /// Compte les messages en file ; qui reçoit l'attend.
@@ -91,32 +127,74 @@ pub struct Port {
 }
 
 // SAFETY: Ke ne touche au sémaphore que sous le verrou dispatcher ; le
-// pointeur ne change pas ; la file est sous son verrou.
+// pointeur ne change pas ; la file et les liens sont sous leurs verrous.
 unsafe impl Send for Port {}
 // SAFETY: voir `Send`.
 unsafe impl Sync for Port {}
 
 impl Port {
-    /// NtCreatePort : un port de connexion, dont les données de connexion
-    /// font au plus `max_connection_info_length` octets et les messages
-    /// `max_message_length` ; `STATUS_INVALID_PARAMETER_3` ou `_4` au-delà de
-    /// `PORT_MAXIMUM_MESSAGE_LENGTH`.
+    fn new(
+        kind: PortKind,
+        max_connection_info_length: u32,
+        max_message_length: u32,
+        server_pid: u32,
+        connection: Option<Arc<Object<Port>>>,
+    ) -> Arc<Object<Self>> {
+        let semaphore = Box::into_raw(Box::<KSemaphore>::new_uninit()).cast::<KSemaphore>();
+        // SAFETY: mémoire neuve, à adresse fixe ; personne ne l'attend.
+        unsafe { ke_initialize_semaphore(semaphore, 0, MAXIMUM_QUEUED) };
+        create_object(
+            &PORT_TYPE,
+            Port {
+                kind,
+                max_connection_info_length,
+                max_message_length,
+                server_pid,
+                connection,
+                connected: KSpinLock::new(Weak::new()),
+                context: AtomicU32::new(0),
+                queue: KSpinLock::new(VecDeque::new()),
+                semaphore,
+            },
+        )
+    }
+
+    /// NtCreatePort : un port de connexion du serveur `server_pid`, dont les
+    /// données de connexion font au plus `max_connection_info_length` octets
+    /// et les messages `max_message_length` ; `STATUS_INVALID_PARAMETER_3`
+    /// ou `_4` au-delà de `PORT_MAXIMUM_MESSAGE_LENGTH`.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
-    pub fn create(max_connection_info_length: u32, max_message_length: u32) -> Result<Arc<Object<Self>>, NtStatus> {
+    pub fn create(
+        max_connection_info_length: u32,
+        max_message_length: u32,
+        server_pid: u32,
+    ) -> Result<Arc<Object<Self>>, NtStatus> {
         if max_connection_info_length > PORT_MAXIMUM_MESSAGE_LENGTH {
             return Err(STATUS_INVALID_PARAMETER_3);
         }
         if max_message_length > PORT_MAXIMUM_MESSAGE_LENGTH {
             return Err(STATUS_INVALID_PARAMETER_4);
         }
-        let semaphore = Box::into_raw(Box::<KSemaphore>::new_uninit()).cast::<KSemaphore>();
-        // SAFETY: mémoire neuve, à adresse fixe ; personne ne l'attend.
-        unsafe { ke_initialize_semaphore(semaphore, 0, MAXIMUM_QUEUED) };
-        let port =
-            Port { max_connection_info_length, max_message_length, queue: KSpinLock::new(VecDeque::new()), semaphore };
-        Ok(create_object(&PORT_TYPE, port))
+        Ok(Self::new(PortKind::Connection, max_connection_info_length, max_message_length, server_pid, None))
+    }
+
+    /// Un port de communication de sorte `kind` sur le port de connexion
+    /// `connection` : il en a les tailles et le serveur.
+    pub(crate) fn communication(kind: PortKind, connection: &Arc<Object<Port>>) -> Arc<Object<Self>> {
+        Self::new(
+            kind,
+            connection.max_connection_info_length,
+            connection.max_message_length,
+            connection.server_pid,
+            Some(connection.clone()),
+        )
+    }
+
+    /// Sa sorte.
+    pub fn kind(&self) -> PortKind {
+        self.kind
     }
 
     /// MaxConnectionInfoLength.
@@ -129,10 +207,76 @@ impl Port {
         self.max_message_length
     }
 
+    /// Le PID du serveur.
+    pub fn server_pid(&self) -> u32 {
+        self.server_pid
+    }
+
+    /// Le port de connexion d'un port de communication.
+    pub fn connection(&self) -> Option<&Arc<Object<Port>>> {
+        self.connection.as_ref()
+    }
+
+    /// L'autre extrémité d'une connexion, si elle vit.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn connected(&self) -> Option<Arc<Object<Port>>> {
+        self.connected.lock().upgrade()
+    }
+
+    /// Relie `self` à l'autre extrémité `other`.
+    pub(crate) fn connect_to(&self, other: &Arc<Object<Port>>) {
+        *self.connected.lock() = Arc::downgrade(other);
+    }
+
+    /// PortContext d'un port de communication du serveur.
+    pub fn context(&self) -> u32 {
+        self.context.load(Ordering::Acquire)
+    }
+
+    /// Fixe son PortContext (le handle du port quand le serveur n'en donne
+    /// pas).
+    pub fn set_context(&self, context: u32) {
+        self.context.store(context, Ordering::Release);
+    }
+
+    /// Le port dont la file reçoit ce qu'on lit par lui : le port de
+    /// connexion pour un port de communication du serveur, lui-même sinon.
+    pub fn receive_port(port: &Arc<Object<Self>>) -> &Arc<Object<Self>> {
+        match (port.kind, &port.connection) {
+            (PortKind::ServerCommunication, Some(connection)) => connection,
+            _ => port,
+        }
+    }
+
+    /// Le port dont la file reçoit ce qu'on envoie par lui, et le contexte
+    /// du message : le port de connexion et le contexte du port du serveur
+    /// pour un port client ; le port client pour un port du serveur ; le
+    /// port lui-même pour un port de connexion. `STATUS_PORT_DISCONNECTED`
+    /// si l'autre extrémité n'est plus.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn send_port(port: &Arc<Object<Self>>) -> Result<(Arc<Object<Self>>, u32), NtStatus> {
+        match port.kind {
+            PortKind::Connection => Ok((port.clone(), 0)),
+            PortKind::ServerCommunication => Ok((port.connected().ok_or(STATUS_PORT_DISCONNECTED)?, 0)),
+            PortKind::Client => {
+                let server = port.connected().ok_or(STATUS_PORT_DISCONNECTED)?;
+                let connection = port.connection.clone().ok_or(STATUS_PORT_DISCONNECTED)?;
+                Ok((connection, server.context()))
+            }
+        }
+    }
+
     /// Met `message` en file et réveille un receveur.
-    fn queue(&self, message: Message) -> Result<(), NtStatus> {
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub(crate) fn queue(&self, message: Message) -> Result<(), NtStatus> {
         self.queue.lock().push_back(message);
-        // SAFETY: initialisé par `create`, vivant autant que `self`.
+        // SAFETY: initialisé par `new`, vivant autant que `self`.
         unsafe { ke_release_semaphore::<KePlatform>(self.semaphore, SEMAPHORE_INCREMENT, 1) }.map(drop).map_err(|_| {
             self.queue.lock().pop_back();
             STATUS_INSUFFICIENT_RESOURCES
@@ -147,9 +291,8 @@ impl Port {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn request(&self, data: &[u8]) -> Result<u32, NtStatus> {
-        let header_length = core::mem::size_of::<PortMessage32>() as u32;
-        let total = header_length + data.len() as u32;
-        if total > self.max_message_length.max(header_length) {
+        let total = HEADER_LENGTH + data.len() as u32;
+        if total > self.max_message_length.max(HEADER_LENGTH) {
             return Err(STATUS_PORT_MESSAGE_TOO_LONG);
         }
         let message_id = next_message_id();
@@ -162,22 +305,23 @@ impl Port {
             message_id,
             client_view_size: 0,
         };
-        self.queue(Message { header, data: data.to_vec() })?;
+        self.queue(Message { header, data: data.to_vec(), context: 0 })?;
         Ok(message_id)
     }
 
-    /// Attend le prochain message du port (NtReplyWaitReceivePort), en mode
-    /// utilisateur ou noyau, et le rend ; `Err` avec le statut de l'attente
-    /// si elle finit sans lui.
+    /// Attend le prochain message de la file du port, en mode `mode`,
+    /// jusqu'à `timeout` (format NT) s'il y en a une, et le rend ; `Err` avec
+    /// le statut de l'attente si elle finit sans lui (`STATUS_TIMEOUT`).
     ///
     /// # IRQL
     /// PASSIVE_LEVEL. Peut attendre.
-    pub fn receive(&self, mode: ProcessorMode) -> Result<Message, NtStatus> {
+    pub fn receive(&self, mode: ProcessorMode, timeout: Option<i64>) -> Result<Message, NtStatus> {
         loop {
-            // SAFETY: initialisé par `create`, vivant autant que `self`, que
+            // SAFETY: initialisé par `new`, vivant autant que `self`, que
             // l'appelant tient pendant l'attente.
-            let waited = unsafe { ke_wait_for_single_object::<KePlatform>(self.semaphore_header(), mode, false, None) };
-            if waited != abi::ntstatus::STATUS_WAIT_0 {
+            let waited =
+                unsafe { ke_wait_for_single_object::<KePlatform>(self.semaphore_header(), mode, false, timeout) };
+            if waited != STATUS_WAIT_0 {
                 return Err(waited);
             }
             // The semaphore counts the queued messages: one is there.
@@ -200,7 +344,7 @@ impl Port {
 
 impl Drop for Port {
     fn drop(&mut self) {
-        // SAFETY: alloué par `create` ; l'objet meurt, et qui l'attendait le
+        // SAFETY: alloué par `new` ; l'objet meurt, et qui l'attendait le
         // tenait.
         drop(unsafe { Box::from_raw(self.semaphore) });
     }
@@ -212,15 +356,16 @@ mod tests {
 
     #[test]
     fn a_port_keeps_its_limits() {
-        let port = Port::create(0x28, 0x130).expect("a port");
+        let port = Port::create(0x28, 0x130, 16).expect("a port");
         assert_eq!((port.max_connection_info_length(), port.max_message_length()), (0x28, 0x130));
-        assert_eq!(Port::create(0x149, 0x130).err(), Some(STATUS_INVALID_PARAMETER_3));
-        assert_eq!(Port::create(0x28, 0x149).err(), Some(STATUS_INVALID_PARAMETER_4));
+        assert_eq!((port.kind(), port.server_pid()), (PortKind::Connection, 16));
+        assert_eq!(Port::create(0x149, 0x130, 16).err(), Some(STATUS_INVALID_PARAMETER_3));
+        assert_eq!(Port::create(0x28, 0x149, 16).err(), Some(STATUS_INVALID_PARAMETER_4));
     }
 
     #[test]
     fn a_kernel_datagram_waits_in_the_queue() {
-        let port = Port::create(0, 0x20).expect("a port");
+        let port = Port::create(0, 0x20, 16).expect("a port");
         let first = port.request(b"Mino").expect("a datagram");
         let second = port.request(&[7; 8]).expect("another");
         assert_ne!(first, second, "each message has its id");
@@ -230,5 +375,25 @@ mod tests {
         assert_eq!((message.header.data_length, message.header.total_length), (4, 0x1C));
         assert_eq!(message.header.kind, LPC_DATAGRAM | LPC_KERNELMODE_MESSAGE);
         assert_eq!(&message.to_bytes()[0x18..], b"Mino");
+    }
+
+    #[test]
+    fn messages_go_where_the_kind_of_port_says() {
+        let connection = Port::create(0x10, 0x100, 16).expect("a port");
+        let client = Port::communication(PortKind::Client, &connection);
+        let server = Port::communication(PortKind::ServerCommunication, &connection);
+        assert_eq!((client.max_message_length(), server.server_pid()), (0x100, 16), "the connection's sizes");
+        assert_eq!(Port::send_port(&client).err(), Some(STATUS_PORT_DISCONNECTED), "not connected yet");
+        client.connect_to(&server);
+        server.connect_to(&client);
+        server.set_context(0x1234);
+        let (to, context) = Port::send_port(&client).expect("connected");
+        assert!(Arc::ptr_eq(&to, &connection) && context == 0x1234, "a client sends to the connection port");
+        assert!(Arc::ptr_eq(&Port::send_port(&server).expect("connected").0, &client), "a server to its client");
+        assert!(Arc::ptr_eq(&Port::send_port(&connection).expect("itself").0, &connection));
+        assert!(Arc::ptr_eq(Port::receive_port(&server), &connection), "a server reads its connection port");
+        assert!(Arc::ptr_eq(Port::receive_port(&client), &client));
+        drop(server);
+        assert_eq!(Port::send_port(&client).err(), Some(STATUS_PORT_DISCONNECTED), "the server is gone");
     }
 }
