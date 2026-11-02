@@ -116,8 +116,22 @@ pub fn wait_for_reaper() {
     reaper().idle.wait();
 }
 
+/// PspCatchCriticalBreak : la fin d'un processus (`kind` 3) ou d'un thread
+/// (`kind` 6) critique arrête le système (CRITICAL_OBJECT_TERMINATION) ; il
+/// n'y a pas de débogueur pour la laisser passer. `image` : le nom de l'image
+/// de son processus.
+fn critical_break(message: &str, kind: u64, object: *const u8, image: &str) -> ! {
+    ke::bugcheck::ke_bug_check_with_reason(
+        ke::bugcheck::BugCheckCode::CRITICAL_OBJECT_TERMINATION,
+        [kind, object as u64, image.as_ptr() as u64, message.as_ptr() as u64],
+        &format_args!("{message} {object:p} ({image})"),
+    )
+}
+
 /// PspExitThread : termine le thread courant avec `status`. Un thread noyau
-/// ou de l'ancien chargeur se termine directement dans Ke.
+/// ou de l'ancien chargeur se termine directement dans Ke. La fin d'un thread
+/// critique, ou du dernier thread d'un processus critique, arrête le système
+/// (CRITICAL_OBJECT_TERMINATION).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
@@ -135,6 +149,9 @@ pub fn exit_thread(status: NtStatus) -> ! {
     thread.set_exit_status(status);
 
     let process = thread.process().clone();
+    if thread.is_critical() {
+        critical_break("Critical thread exited:", 6, Arc::as_ptr(&thread).cast(), process.image_file_name());
+    }
     let last = {
         let mut threads = process.threads.lock();
         let index = threads.list.iter().position(|t| Arc::ptr_eq(t, &thread)).expect("a thread out of its process");
@@ -147,6 +164,9 @@ pub fn exit_thread(status: NtStatus) -> ! {
         }
         last
     };
+    if last && process.is_critical() {
+        critical_break("Critical process exited:", 3, Arc::as_ptr(&process).cast(), process.image_file_name());
+    }
     if last {
         process.set_exit_status(status);
         run_down_process(&process);
@@ -180,12 +200,18 @@ fn run_down_process(process: &EProcess) {
 /// ne revient pas. C'est pourquoi il prend la référence de l'appelant, qui
 /// ne doit rien tenir d'autre qui possède de la mémoire.
 ///
+/// Terminer un processus critique arrête le système
+/// (CRITICAL_OBJECT_TERMINATION).
+///
 /// # Errors
 /// `STATUS_PROCESS_IS_TERMINATING` s'il a déjà rendu ses ressources.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn terminate_process(process: Arc<Object<EProcess>>, status: NtStatus) -> Result<(), NtStatus> {
+    if process.is_critical() {
+        critical_break("Terminating critical process", 3, Arc::as_ptr(&process).cast(), process.image_file_name());
+    }
     let (threads, rundown) = {
         let mut threads = process.threads.lock();
         if threads.exited {
@@ -249,7 +275,8 @@ pub fn terminate_current_process(status: NtStatus) -> ! {
 }
 
 /// NtTerminateThread : termine `thread` avec `status`. S'il s'agit du thread
-/// appelant, l'appel ne revient pas (voir [`terminate_process`]).
+/// appelant, l'appel ne revient pas (voir [`terminate_process`]). Terminer un
+/// thread critique arrête le système (CRITICAL_OBJECT_TERMINATION).
 ///
 /// # Errors
 /// `STATUS_THREAD_IS_TERMINATING` si sa fin est déjà demandée.
@@ -257,6 +284,14 @@ pub fn terminate_current_process(status: NtStatus) -> ! {
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn terminate_thread(thread: Arc<Object<EThread>>, status: NtStatus) -> Result<(), NtStatus> {
+    if thread.is_critical() {
+        critical_break(
+            "Terminating critical thread",
+            6,
+            Arc::as_ptr(&thread).cast(),
+            thread.process().image_file_name(),
+        );
+    }
     if ethread::current_thread().is_some_and(|current| Arc::ptr_eq(&current, &thread)) {
         drop(thread);
         exit_thread(status);

@@ -2,7 +2,7 @@
 //! NtCreateProcessEx) et un thread (NtCreateThread), comme
 //! `RtlCreateUserProcess` les demande ; suspendre et reprendre un thread ;
 //! terminer un processus ou un thread ; dire et changer ce que sait un
-//! processus.
+//! processus, et rendre un thread critique.
 //!
 //! Pas encore : le clonage d'un espace d'adresses (une section nulle, le
 //! `fork` de POSIX), les ports de débogage et d'exception, les jobs ; ils
@@ -14,29 +14,37 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::context::Context32;
 use abi::ntstatus::{
     NtStatus, STATUS_CANT_TERMINATE_SELF, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER,
-    STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
+    STATUS_NOT_IMPLEMENTED, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
 };
 use abi::process::{
-    InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_BASIC_INFORMATION, PROCESS_COOKIE,
-    PROCESS_CREATE_FLAGS_INHERIT_HANDLES, PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_LUID_DEVICE_MAPS_ENABLED,
-    PROCESS_SESSION_INFORMATION,
+    InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_BASE_PRIORITY, PROCESS_BASIC_INFORMATION,
+    PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
+    PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_DEFAULT_HARD_ERROR_MODE, PROCESS_LUID_DEVICE_MAPS_ENABLED,
+    PROCESS_SESSION_INFORMATION, THREAD_BREAK_ON_TERMINATION,
 };
+use abi::security::{SE_DEBUG_PRIVILEGE, SE_INC_BASE_PRIORITY_PRIVILEGE};
 use abi::teb32::ClientId32;
 use ke::usermem::UserPtr;
 use mm::section::{Section, SECTION_MAP_EXECUTE, SECTION_TYPE};
 use ob::{Handle, ObjectRef};
 use ps::eprocess::{
-    PROCESS_CREATE_PROCESS, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION, PROCESS_SET_SESSIONID, PROCESS_TERMINATE,
+    PROCESS_CREATE_PROCESS, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
+    PROCESS_SET_SESSIONID, PROCESS_TERMINATE,
 };
-use ps::ethread::{THREAD_SUSPEND_RESUME, THREAD_TERMINATE};
+use ps::ethread::{THREAD_SET_INFORMATION, THREAD_SUSPEND_RESUME, THREAD_TERMINATE};
 
 /// Les classes de NtQueryInformationProcess demandées sans être implémentées.
 static UNSUPPORTED_QUERY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationProcess");
 /// Les classes de NtSetInformationProcess demandées sans être implémentées.
 static UNSUPPORTED_SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformationProcess");
+/// Les classes de NtSetInformationThread demandées sans être implémentées.
+static UNSUPPORTED_THREAD_SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformationThread");
 
-/// La priorité de base d'un processus de la classe normale.
-const NORMAL_BASE_PRIORITY: i32 = 8;
+/// HIGH_PRIORITY : la plus haute priorité de base d'un processus.
+const HIGH_PRIORITY: u32 = 31;
+/// Le bit de ProcessBasePriority qui demande la priorité mémoire du premier
+/// plan (MEMORY_PRIORITY_FOREGROUND).
+const FOREGROUND_MEMORY_PRIORITY: u32 = 0x8000_0000;
 
 fn status(result: Result<NtStatus, NtStatus>) -> NtStatus {
     result.unwrap_or_else(|status| status)
@@ -246,6 +254,8 @@ pub(super) fn nt_terminate_thread(arguments: &[u32]) -> NtStatus {
 /// - `ProcessBasicInformation` : son statut de sortie, son PEB, son masque
 ///   d'affinité, sa priorité de base, son PID et celui de son créateur ;
 /// - `ProcessSessionInformation` : sa session ;
+/// - `ProcessDefaultHardErrorMode` : ses `SEM_*` ;
+/// - `ProcessBreakOnTermination` : 1 s'il est critique, 0 sinon ;
 /// - `ProcessLUIDDeviceMapsEnabled` : 0, les périphériques DOS sont ceux de
 ///   tous (le défaut d'XP) ;
 /// - `ProcessCookie` : son cookie, tiré à la première demande, pour le
@@ -258,7 +268,10 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length, return_length) =
         (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
     match class {
-        PROCESS_BASIC_INFORMATION | PROCESS_SESSION_INFORMATION => {}
+        PROCESS_BASIC_INFORMATION
+        | PROCESS_SESSION_INFORMATION
+        | PROCESS_DEFAULT_HARD_ERROR_MODE
+        | PROCESS_BREAK_ON_TERMINATION => {}
         PROCESS_LUID_DEVICE_MAPS_ENABLED => {
             return super::return_information(&0u32.to_le_bytes(), buffer, length, return_length)
         }
@@ -286,14 +299,19 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
                 exit_status: process.exit_status().0,
                 peb_base_address: process.peb(),
                 affinity_mask: 1,
-                base_priority: NORMAL_BASE_PRIORITY,
+                base_priority: i32::from(process.base_priority()),
                 unique_process_id: process.pid(),
                 inherited_from_unique_process_id: process.parent_pid(),
             };
             basic.as_bytes()
         }
         _ => {
-            word = process.session_id().to_le_bytes();
+            word = match class {
+                PROCESS_SESSION_INFORMATION => process.session_id(),
+                PROCESS_DEFAULT_HARD_ERROR_MODE => process.hard_error_mode(),
+                _ => u32::from(process.is_critical()),
+            }
+            .to_le_bytes();
             &word
         }
     };
@@ -302,9 +320,20 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
 
 /// NtSetInformationProcess(ProcessHandle, ProcessInformationClass,
 /// ProcessInformation, ProcessInformationLength) : change ce que sait le
-/// processus : `ProcessSessionInformation` (`PROCESS_SET_SESSIONID`), sa
-/// session, que son PEB dit aussi ; `STATUS_INFO_LENGTH_MISMATCH` pour une
-/// autre taille que 4 octets.
+/// processus, une valeur de 4 octets (`STATUS_INFO_LENGTH_MISMATCH` pour une
+/// autre taille) :
+/// - `ProcessSessionInformation` (`PROCESS_SET_SESSIONID`) : sa session, que
+///   son PEB dit aussi ;
+/// - `ProcessBasePriority` (`PROCESS_SET_INFORMATION`) : la priorité de base
+///   de ses threads, de 1 à 31 (`STATUS_INVALID_PARAMETER` sinon) ; la
+///   relever demande `SeIncreaseBasePriorityPrivilege`
+///   (`STATUS_PRIVILEGE_NOT_HELD`). Le bit de poids fort, la priorité mémoire
+///   du premier plan, est ignoré : pas de pagination ;
+/// - `ProcessDefaultHardErrorMode` (`PROCESS_SET_INFORMATION`) : ses
+///   `SEM_*`, que ses enfants héritent ;
+/// - `ProcessBreakOnTermination` (`PROCESS_SET_INFORMATION`,
+///   `SeDebugPrivilege`) : non nul, il devient critique, et sa fin arrête le
+///   système ; nul, il ne l'est plus.
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel. `ProcessExecuteFlags` en est encore : le `ntdll` de
@@ -313,14 +342,74 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
     let set = || {
-        if class != PROCESS_SESSION_INFORMATION {
+        if !matches!(
+            class,
+            PROCESS_SESSION_INFORMATION
+                | PROCESS_BASE_PRIORITY
+                | PROCESS_DEFAULT_HARD_ERROR_MODE
+                | PROCESS_BREAK_ON_TERMINATION
+        ) {
             return Err(UNSUPPORTED_SET_CLASSES.report(class));
         }
         if length != 4 {
             return Err(STATUS_INFO_LENGTH_MISMATCH);
         }
-        let session_id = UserPtr::<u32>::new(buffer).read()?;
-        super::reference_process(handle, PROCESS_SET_SESSIONID)?.set_session_id(session_id)?;
+        let value = UserPtr::<u32>::new(buffer).read()?;
+        if class == PROCESS_SESSION_INFORMATION {
+            super::reference_process(handle, PROCESS_SET_SESSIONID)?.set_session_id(value)?;
+            return Ok(STATUS_SUCCESS);
+        }
+        let process = super::reference_process(handle, PROCESS_SET_INFORMATION)?;
+        match class {
+            PROCESS_BASE_PRIORITY => {
+                let base = value & !FOREGROUND_MEMORY_PRIORITY;
+                if base == 0 || base > HIGH_PRIORITY {
+                    return Err(STATUS_INVALID_PARAMETER);
+                }
+                let base = base as u8;
+                if base > process.base_priority() && !super::security::privilege_enabled(SE_INC_BASE_PRIORITY_PRIVILEGE)
+                {
+                    return Err(STATUS_PRIVILEGE_NOT_HELD);
+                }
+                process.set_base_priority(base);
+            }
+            PROCESS_DEFAULT_HARD_ERROR_MODE => process.set_hard_error_mode(value),
+            _ => {
+                if !super::security::privilege_enabled(SE_DEBUG_PRIVILEGE) {
+                    return Err(STATUS_PRIVILEGE_NOT_HELD);
+                }
+                process.set_critical(value != 0);
+            }
+        }
+        Ok(STATUS_SUCCESS)
+    };
+    status(set())
+}
+
+/// NtSetInformationThread(ThreadHandle, ThreadInformationClass,
+/// ThreadInformation, ThreadInformationLength) : change ce que sait le
+/// thread : `ThreadBreakOnTermination` (`THREAD_SET_INFORMATION`,
+/// `SeDebugPrivilege`), 4 octets : non nul, il devient critique, et sa fin
+/// arrête le système ; nul, il ne l'est plus. `STATUS_INFO_LENGTH_MISMATCH`
+/// pour une autre taille.
+///
+/// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
+/// premier appel.
+pub(super) fn nt_set_information_thread(arguments: &[u32]) -> NtStatus {
+    let (handle, class, buffer, length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
+    let set = || {
+        if class != THREAD_BREAK_ON_TERMINATION {
+            return Err(UNSUPPORTED_THREAD_SET_CLASSES.report(class));
+        }
+        if length != 4 {
+            return Err(STATUS_INFO_LENGTH_MISMATCH);
+        }
+        let critical = UserPtr::<u32>::new(buffer).read()? != 0;
+        let thread = super::reference_thread(handle, THREAD_SET_INFORMATION)?;
+        if !super::security::privilege_enabled(SE_DEBUG_PRIVILEGE) {
+            return Err(STATUS_PRIVILEGE_NOT_HELD);
+        }
+        thread.set_critical(critical);
         Ok(STATUS_SUCCESS)
     };
     status(set())

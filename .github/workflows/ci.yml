@@ -67,6 +67,8 @@ jobs:
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-ke-starvation 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-irql 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-access-violation 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-critical-process 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-critical-thread 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-smss 2>&1 | tee -a build.log
           cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-persistence 2>&1 | tee -a build.log
           if grep -E '^warning' build.log; then
@@ -99,6 +101,10 @@ jobs:
             args: --scenario page-fault-irql
           - name: kernel read of a reserved user page, STOP screen (M2)
             args: --scenario page-fault-access-violation
+          - name: a critical process ends, CRITICAL_OBJECT_TERMINATION (M5)
+            args: --scenario critical-process
+          - name: a critical thread ends, CRITICAL_OBJECT_TERMINATION (M5)
+            args: --scenario critical-thread
           - name: ReactOS userland, NTDLL.DLL installed as the system DLL (M3)
             args: --scenario userland
             userland: true

@@ -195,7 +195,8 @@ pub struct Thread {
     pub tcb: KThread,
     ctx: KContext,
     tid: usize,
-    /// Priorité de base, fixée à la création.
+    /// Priorité de base : à la création, puis
+    /// [`set_base_priority`](Scheduler::set_base_priority).
     base_priority: u8,
     /// Priorité courante : la base, ou plus pendant un boost. Elle choisit la
     /// file prête du thread ; elle ne change pas tant qu'il y est.
@@ -394,6 +395,39 @@ impl Scheduler {
                 }
             }
             self.ready(thread, false)
+        }
+    }
+
+    /// KeSetBasePriorityThread : la priorité de base de `thread` devient
+    /// `base`. Sa priorité courante la suit, avec le relèvement qu'il avait
+    /// au-dessus de l'ancienne (sans dépasser 15 pour une base variable, et
+    /// sans relèvement pour une base temps réel) ; un thread prêt change de
+    /// file. `true` s'il faut examiner une commutation : le thread prêt passe
+    /// devant le courant, ou le courant passe sous un thread prêt.
+    ///
+    /// # Safety
+    /// `thread` est un thread de l'ordonnanceur ; `base` < [`PRIORITY_LEVELS`].
+    pub unsafe fn set_base_priority(&mut self, thread: *mut Thread, base: u8) -> bool {
+        // SAFETY: guaranteed by the caller.
+        unsafe {
+            let (old_base, current) = ((*thread).base_priority, (*thread).priority);
+            let priority = if base >= LOW_REALTIME_PRIORITY {
+                base
+            } else {
+                (base + current.saturating_sub(old_base)).min(LOW_REALTIME_PRIORITY - 1)
+            };
+            (*thread).base_priority = base;
+            if priority == current {
+                return false;
+            }
+            if (*thread).tcb.state == ThreadState::Ready {
+                self.unready(thread);
+                (*thread).priority = priority;
+                self.ready(thread, false)
+            } else {
+                (*thread).priority = priority;
+                thread == self.current && self.highest().is_some_and(|best| best > priority)
+            }
         }
     }
 
@@ -1119,6 +1153,28 @@ pub fn thread_priority(tid: usize) -> Option<u8> {
     }
 }
 
+/// KeSetBasePriorityThread : la priorité de base du thread `tid` devient
+/// `base` ([`Scheduler::set_base_priority`]) ; une commutation est examinée
+/// s'il le faut. Rien pour un thread qui n'existe pas.
+///
+/// # Panics
+/// Pour une priorité hors des [`PRIORITY_LEVELS`] niveaux.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn set_base_priority(tid: usize, base: u8) {
+    assert!(usize::from(base) < PRIORITY_LEVELS, "a priority of {base}");
+    // SAFETY: lock held from acquire to release; a registered thread is valid.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        if !t.is_null() && (*sched()).set_base_priority(t, base) {
+            request_reschedule();
+        }
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+    }
+}
+
 /// Examine les files prêtes de ce processeur et relève les threads affamés
 /// ([`Scheduler::scan_starved`]) ; appelé chaque seconde par le balance set
 /// manager (`ke::balance`).
@@ -1411,6 +1467,46 @@ mod tests {
         assert_eq!(s.current, high);
         assert_eq!(state(high), ThreadState::Running);
         assert_eq!(state(boot), ThreadState::Ready, "the preempted thread is queued");
+    }
+
+    #[test]
+    fn a_new_base_priority_moves_a_ready_thread_and_keeps_its_boost() {
+        let (mut s, boot) = scheduler();
+        let t = thread(NORMAL_PRIORITY);
+        ready(&mut s, t, false);
+        // SAFETY: test threads, valid; `waiting` is in no queue.
+        unsafe {
+            assert!(s.set_base_priority(t, 11), "now above the boot thread");
+            assert_eq!(((*t).base_priority, (*t).priority), (11, 11));
+            assert_eq!(s.dispatch(0), Some(t), "queued at its new priority");
+            assert_eq!(state(boot), ThreadState::Ready);
+            assert!(s.set_base_priority(boot, 12), "the preempted thread, raised above the current one");
+            assert_eq!(s.dispatch(0), Some(boot));
+            // A thread that waits, boosted 2 over its base: the boost is
+            // kept, under 15.
+            let waiting = thread(NORMAL_PRIORITY);
+            (*waiting).priority = NORMAL_PRIORITY + 2;
+            assert!(!s.set_base_priority(waiting, 12), "neither ready nor current: no switch to examine");
+            assert_eq!(((*waiting).base_priority, (*waiting).priority), (12, 14));
+            assert!(!s.set_base_priority(waiting, 14));
+            assert_eq!((*waiting).priority, 15, "a variable priority stays under 16");
+            assert!(!s.set_base_priority(boot, 12), "the same: nothing changes");
+        }
+    }
+
+    #[test]
+    fn the_current_thread_lowered_under_a_ready_one_yields() {
+        let (mut s, boot) = scheduler();
+        let peer = thread(NORMAL_PRIORITY);
+        ready(&mut s, peer, false);
+        // SAFETY: test threads, valid.
+        unsafe {
+            assert!(!s.set_base_priority(boot, 9), "raised: still the best");
+            assert!(s.set_base_priority(boot, 7), "lowered under the ready one");
+            assert_eq!(s.dispatch(0), Some(peer));
+            assert!(!s.set_base_priority(peer, LOW_REALTIME_PRIORITY + 2), "the current one, raised");
+            assert_eq!((*peer).priority, LOW_REALTIME_PRIORITY + 2, "real time: no boost carried");
+        }
     }
 
     #[test]

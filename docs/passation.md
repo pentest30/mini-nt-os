@@ -14,8 +14,8 @@ jour à chaque commit qui change l'état.
   ses imports, jusqu'au premier appel à win32k (`NtUserProcessConnect`, depuis `user32`) :
   [`compat/m5-csrss.md`](compat/m5-csrss.md).
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
-  chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4) et `claude/m5-services`
-  (l'étape 5). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
+  chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
+  (l'étape 5) et `claude/m5-ex` (l'étape 8). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
   branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
@@ -247,9 +247,17 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    NtRequestWaitReplyPort, NtReplyPort, NtReplyWaitReceivePort avec réponse, NtListenPort ; puis les sections de
    port (messages volumineux). `csrss` crée son port d'API (`CsrApiPortInitialize`), puis se connecte à `\SmApiPort`
    (`SmConnectToSm`) et `smss` signale son événement.
-8. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
-   `ntdll`), `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer
-   `smss`), NtSetInformationProcess(`ProcessBasePriority`, `ProcessDefaultHardErrorMode`).
+8. [x] **Les événements à clé, les processus critiques** (`compat/m5-csrss.md`, étape 11). `ex::keyed_event` (le
+   type `KeyedEvent`, le rendez-vous d'une clé dans un processus, `\KernelObjects\CritSecOutOfMemoryEvent` pour un
+   handle nul) ; `ke::sched::set_base_priority` (KeSetBasePriorityThread) ; Ps : processus et threads critiques
+   (`EProcess::set_critical`, `clear_critical`, `EThread::set_critical`), dont la fin arrête le système
+   (`CRITICAL_OBJECT_TERMINATION`, `ps::exit`), la priorité de base du processus (ses threads, et ceux créés
+   ensuite), le mode d'erreur grave (hérité). Services : NtCreateKeyedEvent, NtOpenKeyedEvent, NtWaitForKeyedEvent,
+   NtReleaseKeyedEvent ; NtSetInformationProcess et NtQueryInformationProcess (`ProcessBasePriority`,
+   `ProcessDefaultHardErrorMode`, `ProcessBreakOnTermination`) ; NtSetInformationThread
+   (`ThreadBreakOnTermination`). La sonde retire ses drapeaux à `smss` avant de le terminer. Tests : hôte (`ex`,
+   `ke`), `keyed_event_self_test`, `process_settings_self_test`, scénarios `critical-process` et `critical-thread` ;
+   vérifiés par mutation. L'assertion de `smss` disparaît ; `csrss` s'arrête toujours à `NtUserProcessConnect`.
 
 Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal
 `[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
@@ -271,8 +279,8 @@ Questions ouvertes du M5 :
 
 Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `compat/s1-ntdll.md`, étape 3) : la
 classe `ProcessExecuteFlags` de NtSetInformationProcess (le service est fait pour d'autres classes),
-`NtQueryDefaultLocale` ; `NtCreateKeyedEvent` (Ex). `ProcessCookie` et `NtFlushInstructionCache` sont faits (M5,
-étape 5). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
+`NtQueryDefaultLocale`. `ProcessCookie` et `NtFlushInstructionCache` sont faits (M5, étape 5), `NtCreateKeyedEvent`
+aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
 
 ## Dettes de Se (l'étape 2 du M5)
 
@@ -285,6 +293,18 @@ classe `ProcessExecuteFlags` de NtSetInformationProcess (le service est fait pou
   `TokenGroupsAndPrivileges`, `TokenAuditPolicy`, `TokenOrigin` (journalisées). Le jeton garde la session de son
   créateur quand celle du processus change.
 - Sessions : pas d'espace de session (Mm), ni de compte des processus d'une session ; un identifiant créé reste pris.
+
+## Dettes de l'étape 8 du M5
+
+- Les événements à clé : pas d'alerte par NtAlertThread pendant un rendez-vous (pas encore de service), pas de
+  « Waiters » visibles (NtQueryKeyedEvent n'existe pas dans XP). NtSetInformationThread : seule
+  `ThreadBreakOnTermination` ; `ThreadZeroTlsCell` (10, `kernel32`, `TlsFree`) est journalisée ;
+  NtQueryInformationThread manque. `ProcessBasePriority` ignore la priorité mémoire (pas de pagination) et le quantum
+  (KeSetPriorityAndQuantumProcess) ; `SEM_NOALIGNMENTFAULTEXCEPT` ne change pas le contrôle d'alignement.
+- Deux chemins de l'arrêt n'ont pas de scénario à eux : NtTerminateThread sur un thread critique (« Terminating
+  critical thread ») et la fin du dernier thread d'un processus critique (« Critical process exited ») ; leur code
+  est celui des deux autres.
+- NtRaiseHardError manque : `csrss` en lève une (`STATUS_IO_PRIVILEGE_FAILED`) et continue.
 
 ## Dettes de l'étape 5 du M5
 

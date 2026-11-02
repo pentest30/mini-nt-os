@@ -1,0 +1,19 @@
+# Critical processes (M5): a user-mode process makes itself critical
+# (ProcessBreakOnTermination), as smss does at its start, then terminates
+# itself; the system stops with CRITICAL_OBJECT_TERMINATION, the object type
+# (3, a process) first, and the message names the process.
+features = test-critical-process
+cpus     = default
+timeout  = 120
+
+expect = [smoke] a critical process terminates itself (test-critical-process)
+expect = *** STOP: 0x000000f4 (0x0000000000000003, 0x
+expect = CRITICAL_OBJECT_TERMINATION
+expect = Terminating critical process 0x
+expect = (critical.exe)
+expect = System halted.
+
+forbid = without stopping the system
+forbid = BreakOnTermination: 0x
+forbid = STOP while printing the STOP screen
+forbid = [NESTED #PF]
