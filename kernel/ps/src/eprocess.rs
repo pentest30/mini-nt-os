@@ -23,7 +23,7 @@
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_CID, STATUS_INVALID_PARAMETER,
@@ -31,7 +31,8 @@ use abi::ntstatus::{
 };
 use abi::peb32::Peb32;
 use abi::process::{
-    MEM_EXECUTE_OPTION_DISABLE, MEM_EXECUTE_OPTION_ENABLE, MEM_EXECUTE_OPTION_PERMANENT, MEM_EXECUTE_OPTION_VALID_FLAGS,
+    MEM_EXECUTE_OPTION_DISABLE, MEM_EXECUTE_OPTION_ENABLE, MEM_EXECUTE_OPTION_PERMANENT,
+    MEM_EXECUTE_OPTION_VALID_FLAGS, SEM_FAILCRITICALERRORS,
 };
 use hal::sync::{KSpinLock, Once};
 use ke::dispatcher::{DispatcherHeader, ObjectType as KObjectType};
@@ -205,6 +206,14 @@ pub struct EProcess {
     token: KSpinLock<Arc<Object<Token>>>,
     /// Cookie : tiré à la première demande ; 0 avant.
     cookie: AtomicU32,
+    /// BreakOnTermination : un processus critique, dont la fin arrête le
+    /// système (`crate::exit`).
+    critical: AtomicBool,
+    /// La priorité de base de ses threads (ProcessBasePriority).
+    base_priority: AtomicU8,
+    /// DefaultHardErrorProcessing : les `SEM_*` du processus, ceux de son
+    /// créateur au départ.
+    hard_error_mode: AtomicU32,
 }
 
 impl EProcess {
@@ -218,9 +227,14 @@ impl EProcess {
         peb: u32,
         image_base: u32,
     ) -> Result<Arc<Object<Self>>, NtStatus> {
-        let (parent_pid, session_id, token) = match parent {
-            Some(parent) => (parent.pid(), parent.session_id(), parent.primary_token().duplicate_primary()),
-            None => (0, 0, Token::system()),
+        let (parent_pid, session_id, token, hard_error_mode) = match parent {
+            Some(parent) => (
+                parent.pid(),
+                parent.session_id(),
+                parent.primary_token().duplicate_primary(),
+                parent.hard_error_mode(),
+            ),
+            None => (0, 0, Token::system(), SEM_FAILCRITICALERRORS),
         };
         let pid = CID_TABLE.lock().insert(CidEntry::Process(Weak::new())).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
         let directory_table_base = space
@@ -246,6 +260,9 @@ impl EProcess {
                 session_id: AtomicU32::new(session_id),
                 token: KSpinLock::new(token),
                 cookie: AtomicU32::new(0),
+                critical: AtomicBool::new(false),
+                base_priority: AtomicU8::new(ke::sched::NORMAL_PRIORITY),
+                hard_error_mode: AtomicU32::new(hard_error_mode),
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
@@ -421,6 +438,81 @@ impl EProcess {
             }
             cookie => cookie,
         }
+    }
+
+    /// BreakOnTermination : un processus critique, dont la fin arrête le
+    /// système.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn is_critical(&self) -> bool {
+        self.critical.load(Ordering::Acquire)
+    }
+
+    /// NtSetInformationProcess(`ProcessBreakOnTermination`) : le rend
+    /// critique, ou ne l'est plus.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn set_critical(&self, critical: bool) {
+        self.critical.store(critical, Ordering::Release);
+    }
+
+    /// Ni lui ni ses threads ne sont plus critiques : ce que ferait un
+    /// débogueur qui répond « ignorer » (la sonde du noyau, avant de terminer
+    /// un processus qu'elle a lancé).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn clear_critical(&self) {
+        self.set_critical(false);
+        for thread in self.threads.lock().list.iter() {
+            thread.set_critical(false);
+        }
+    }
+
+    /// La priorité de base de ses threads.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn base_priority(&self) -> u8 {
+        self.base_priority.load(Ordering::Acquire)
+    }
+
+    /// NtSetInformationProcess(`ProcessBasePriority`, KeSetPriorityProcess) :
+    /// la priorité de base de ses threads, ceux qui vivent et ceux qui
+    /// viendront.
+    ///
+    /// # Panics
+    /// Pour une priorité hors des 32 niveaux.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_base_priority(&self, base: u8) {
+        // Stored first: a thread created meanwhile reads it once started.
+        self.base_priority.store(base, Ordering::Release);
+        let threads = self.threads.lock().list.clone();
+        for thread in threads {
+            if let Some(tid) = thread.ke_tid() {
+                ke::sched::set_base_priority(tid, base);
+            }
+        }
+    }
+
+    /// DefaultHardErrorProcessing : ses `SEM_*`.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn hard_error_mode(&self) -> u32 {
+        self.hard_error_mode.load(Ordering::Relaxed)
+    }
+
+    /// NtSetInformationProcess(`ProcessDefaultHardErrorMode`).
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn set_hard_error_mode(&self, mode: u32) {
+        self.hard_error_mode.store(mode, Ordering::Relaxed);
     }
 
     /// PsReferencePrimaryToken : son jeton primaire.

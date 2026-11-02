@@ -140,6 +140,9 @@ pub struct EThread {
     resume_event: DispatcherEvent,
     /// L'APC de suspension, écrit une fois, avant que le thread soit prêt.
     suspend_apc: UnsafeCell<MaybeUninit<KApc>>,
+    /// BreakOnTermination : un thread critique, dont la fin arrête le système
+    /// (`crate::exit`).
+    critical: AtomicBool,
 }
 
 // SAFETY: `exit_apc` n'est écrit qu'une fois, par qui fait passer
@@ -380,6 +383,32 @@ impl EThread {
     /// <= DISPATCH_LEVEL.
     pub fn suspend_count(&self) -> u32 {
         self.suspension.lock().count
+    }
+
+    /// BreakOnTermination : un thread critique, dont la fin arrête le système.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn is_critical(&self) -> bool {
+        self.critical.load(Ordering::Acquire)
+    }
+
+    /// NtSetInformationThread(`ThreadBreakOnTermination`) : le rend critique,
+    /// ou ne l'est plus.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn set_critical(&self, critical: bool) {
+        self.critical.store(critical, Ordering::Release);
+    }
+
+    /// KeQueryPriorityThread : sa priorité courante, boost compris, tant qu'il
+    /// ne s'est pas terminé ; `None` avant que Ke ne l'ordonnance.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn priority(&self) -> Option<u8> {
+        ke::sched::thread_priority(self.ke_tid()?)
     }
 }
 
@@ -628,6 +657,7 @@ fn start_thread(
             suspension: KSpinLock::new(Suspension { count: 0, apc_ready: false }),
             resume_event: DispatcherEvent::new(KObjectType::SynchronizationEvent),
             suspend_apc: UnsafeCell::new(MaybeUninit::uninit()),
+            critical: AtomicBool::new(false),
         },
     );
     CID_TABLE.lock().set(tid, CidEntry::Thread(Arc::downgrade(&thread)));
@@ -668,6 +698,12 @@ fn start_thread(
     debug_assert_eq!(thread.ke_tid(), Some(ke_tid), "Ke did not publish the thread's TID");
     // Its suspension is ready, or queued, before it can run.
     thread.prepare_suspension(ke::sched::kernel_thread(ke_tid).expect("the Ke thread just created"), suspended);
+    // The process's base priority: one changed meanwhile is read here, or
+    // reaches the thread through its TID, published above.
+    let base = process.base_priority();
+    if base != ke::sched::NORMAL_PRIORITY {
+        ke::sched::set_base_priority(ke_tid, base);
+    }
     // Une fin du processus demandée avant que le thread Ke existe n'a pas pu
     // lui envoyer son APC.
     let terminating = process.threads.lock().terminating;
