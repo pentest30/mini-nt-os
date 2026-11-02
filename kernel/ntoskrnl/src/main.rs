@@ -354,6 +354,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     section_service_self_test();
     event_service_self_test();
     keyed_event_self_test();
+    process_settings_self_test();
     process_memory_self_test();
     shared_section_self_test();
     process_creation_self_test();
@@ -4451,6 +4452,171 @@ fn keyed_event_self_test() {
     log::info!(
         "[smoke] Ex: keyed events from user mode: NtCreateKeyedEvent, NtOpenKeyedEvent, NtWaitForKeyedEvent, \
          NtReleaseKeyedEvent; two threads meet in both orders"
+    );
+}
+
+/// What smss sets on its process and thread at its start (`ps`, `sys::process`,
+/// M5): its hard-error mode, inherited from System, changed and read back;
+/// its base priority raised with SeIncreaseBasePriorityPrivilege, lowered
+/// with the foreground bit, which is ignored, and refused out of 1..=31 or
+/// on a short buffer; the process and its thread made critical with
+/// SeDebugPrivilege, the process read as critical only then. Then, every
+/// privilege disabled: raising the priority and changing either critical
+/// flag are refused, lowering is not. A thread created afterwards runs at
+/// the process's base priority. The kernel clears both flags, as the smss
+/// probe does, before it ends the program: ending it critical would stop the
+/// system (the `critical-process` scenario).
+fn process_settings_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER,
+        STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD, SEM_FAILCRITICALERRORS};
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 21 statuses
+    const HARD_ERROR: u32 = DATA + 0x60;
+    const HARD_ERROR2: u32 = DATA + 0x64;
+    const BASIC: u32 = DATA + 0x68; // 24 bytes
+    const CRITICAL: u32 = DATA + 0x80;
+    const TOKEN: u32 = DATA + 0x84;
+    const ONE: u32 = DATA + 0x88;
+    const ZERO: u32 = DATA + 0x8C;
+    const MODE: u32 = DATA + 0x90;
+    const BASE_11: u32 = DATA + 0x94;
+    const FOREGROUND_10: u32 = DATA + 0x98;
+    const BASE_32: u32 = DATA + 0x9C;
+    const BASE_12: u32 = DATA + 0xA0;
+    const BASE_6: u32 = DATA + 0xA4;
+    const NOT_CRITICAL: u32 = DATA + 0xA8;
+    const DONE: u32 = DATA + 0xFC;
+    const NEW_MODE: u32 = 0x8001; // SEM_NOOPENFILEERRORBOX | SEM_FAILCRITICALERRORS
+
+    let mut data = alloc::vec![0u8; 0x100];
+    let mut put = |at: u32, value: u32| data[(at - DATA) as usize..][..4].copy_from_slice(&value.to_le_bytes());
+    put(HARD_ERROR, 0xAAAA_AAAA);
+    put(NOT_CRITICAL, 0xAAAA_AAAA);
+    put(ONE, 1);
+    put(MODE, NEW_MODE);
+    put(BASE_11, 11);
+    put(FOREGROUND_10, 0x8000_000A);
+    put(BASE_32, 32);
+    put(BASE_12, 12);
+    put(BASE_6, 6);
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (me, this_thread) = (NT_CURRENT_PROCESS, NT_CURRENT_THREAD);
+    let (query, set) = (services::NtQueryInformationProcess, services::NtSetInformationProcess);
+    let set_thread = services::NtSetInformationThread;
+    let mut code = Code::new();
+    code.call_args(query, &[v(me), v(12), v(HARD_ERROR), v(4), v(0)]).store_eax(status(0));
+    code.call_args(set, &[v(me), v(12), v(MODE), v(4)]).store_eax(status(1));
+    code.call_args(query, &[v(me), v(12), v(HARD_ERROR2), v(4), v(0)]).store_eax(status(2));
+    code.call_args(set, &[v(me), v(5), v(BASE_11), v(4)]).store_eax(status(3));
+    code.call_args(set, &[v(me), v(5), v(FOREGROUND_10), v(4)]).store_eax(status(4));
+    code.call_args(query, &[v(me), v(0), v(BASIC), v(24), v(0)]).store_eax(status(5));
+    code.call_args(set, &[v(me), v(5), v(ZERO), v(4)]).store_eax(status(6));
+    code.call_args(set, &[v(me), v(5), v(BASE_32), v(4)]).store_eax(status(7));
+    code.call_args(set, &[v(me), v(5), v(BASE_11), v(2)]).store_eax(status(8));
+    code.call_args(query, &[v(me), v(29), v(NOT_CRITICAL), v(4), v(0)]).store_eax(status(20));
+    code.call_args(set, &[v(me), v(29), v(ONE), v(4)]).store_eax(status(9));
+    code.call_args(query, &[v(me), v(29), v(CRITICAL), v(4), v(0)]).store_eax(status(10));
+    code.call_args(set_thread, &[v(this_thread), v(18), v(ONE), v(4)]).store_eax(status(11));
+    code.call_args(set_thread, &[v(this_thread), v(18), v(ONE), v(2)]).store_eax(status(12));
+    code.call_args(set_thread, &[v(0x1234), v(18), v(ONE), v(4)]).store_eax(status(13));
+    // Every privilege disabled.
+    code.call_args(services::NtOpenProcessToken, &[v(me), v(0x28), v(TOKEN)]).store_eax(status(14));
+    code.call_args(services::NtAdjustPrivilegesToken, &[m(TOKEN), v(1), v(0), v(0), v(0), v(0)]).store_eax(status(15));
+    code.call_args(set, &[v(me), v(5), v(BASE_12), v(4)]).store_eax(status(16));
+    code.call_args(set, &[v(me), v(29), v(ZERO), v(4)]).store_eax(status(17));
+    code.call_args(set_thread, &[v(this_thread), v(18), v(ZERO), v(4)]).store_eax(status(18));
+    // Below the boot thread before it spins.
+    code.call_args(set, &[v(me), v(5), v(BASE_6), v(4)]).store_eax(status(19));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes());
+    let spin = IMAGE_BASE + 0x1000 + code.0.len() as u32;
+    code.bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x100, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "smss.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the process settings test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..21).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!((statuses[0], read(HARD_ERROR)), (STATUS_SUCCESS, SEM_FAILCRITICALERRORS), "System's mode, inherited");
+    assert_eq!((statuses[1], statuses[2], read(HARD_ERROR2)), (STATUS_SUCCESS, STATUS_SUCCESS, NEW_MODE), "changed");
+    assert_eq!(process.hard_error_mode(), NEW_MODE);
+    assert_eq!((statuses[3], statuses[4]), (STATUS_SUCCESS, STATUS_SUCCESS), "raised to 11, then 10 in the foreground");
+    assert_eq!((statuses[5], read(BASIC + 12)), (STATUS_SUCCESS, 10), "ProcessBasicInformation's base priority");
+    assert_eq!((statuses[6], statuses[7]), (STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER), "0 and 32");
+    assert_eq!(statuses[8], STATUS_INFO_LENGTH_MISMATCH, "a KPRIORITY is 4 bytes");
+    assert_eq!((statuses[20], read(NOT_CRITICAL)), (STATUS_SUCCESS, 0), "not critical at first");
+    assert_eq!((statuses[9], statuses[10], read(CRITICAL)), (STATUS_SUCCESS, STATUS_SUCCESS, 1), "a critical process");
+    assert_eq!(statuses[11], STATUS_SUCCESS, "a critical thread");
+    assert_eq!(statuses[12], STATUS_INFO_LENGTH_MISMATCH, "a ULONG");
+    assert_eq!(statuses[13], STATUS_INVALID_HANDLE, "no such thread");
+    assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_SUCCESS), "every privilege disabled");
+    assert_eq!(statuses[16], STATUS_PRIVILEGE_NOT_HELD, "raising needs SeIncreaseBasePriorityPrivilege");
+    assert_eq!(
+        (statuses[17], statuses[18]),
+        (STATUS_PRIVILEGE_NOT_HELD, STATUS_PRIVILEGE_NOT_HELD),
+        "SeDebugPrivilege"
+    );
+    assert!(process.is_critical() && thread.is_critical(), "still critical");
+    assert_eq!(statuses[19], STATUS_SUCCESS, "lowering needs no privilege");
+    assert_eq!((process.base_priority(), thread.priority()), (6, Some(6)), "its thread follows");
+    let other_stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let other = ps::create_thread(&process, spin, &other_stack).expect("a second thread");
+    assert_eq!(other.priority(), Some(6), "a new thread starts at the process's base priority");
+    assert!(!other.is_critical(), "only the thread that asked is critical");
+
+    process.clear_critical();
+    assert!(!process.is_critical() && !thread.is_critical(), "no longer critical");
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((thread, other, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Ps: process settings from user mode: ProcessDefaultHardErrorMode, ProcessBasePriority, \
+         ProcessBreakOnTermination, ThreadBreakOnTermination"
     );
 }
 

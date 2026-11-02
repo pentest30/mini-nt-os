@@ -1,7 +1,8 @@
 # M4, discovery: ReactOS's smss.exe starts under the system DLL with the
 # parameters of the first process; the kernel logs the system services it
 # calls and how it stops (docs/compat/m4-smss.md). It waits for csrss and
-# winlogon, which it cannot start yet: the kernel ends it after 10 s.
+# winlogon, which it cannot start yet: the kernel ends it after 10 s, once
+# it is no longer critical.
 # Skipped until the userland is fetched.
 features = test-smss
 requires = userland
@@ -9,6 +10,17 @@ cpus     = default, intel
 timeout  = 180
 
 expect = [m4] SMSS.EXE under the system DLL: exit status
+# At its start it makes its process and its thread critical (Ps, M5), sets
+# its base priority, its hard-error mode, and creates keyed events (Ex).
+expect = [m4] SMSS.EXE is a critical process: no longer, before it is terminated
+expect = [m4]   NtCreateKeyedEvent (0x0121):
+expect = [m4]   NtSetInformationThread (0x00ee):
+forbid = sys: NtCreateKeyedEvent (0x0121) is not implemented
+forbid = sys: NtSetInformationThread (0x00ee) is not implemented
+forbid = sys: NtSetInformationProcess class 0x5 is not implemented
+forbid = sys: NtSetInformationProcess class 0xc is not implemented
+forbid = sys: NtSetInformationProcess class 0x1d is not implemented
+forbid = Source File: ../base/system/smss/smss.c
 # Where it stops today: it reads Session Manager from the SYSTEM hive (Cm),
 # creates its object directories and DOS device links (Ob), opens its
 # KnownDlls directory on C: through Io, checks each KnownDLL in a view of a
@@ -34,8 +46,8 @@ expect = [m4]   NtMapViewOfSection (0x0071):
 expect = [boot] HARDWARE hive mounted at \REGISTRY\MACHINE\HARDWARE
 expect = [m4]   NtQuerySystemInformation (0x00b5)
 expect = [m4]   NtSetValueKey (0x0100)
-# smss's events, then those of csrss's critical sections under contention
-# (no keyed events yet, M5): how many depends on timing.
+# smss's events, then those of csrss's critical sections under contention:
+# how many depends on timing.
 expect = [m4]   NtCreateEvent (0x0025):
 # Its token (Se): privileges adjusted, then its session and win32k.
 expect = [m4]   NtOpenProcessToken (0x0081)

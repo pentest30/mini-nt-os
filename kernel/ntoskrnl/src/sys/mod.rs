@@ -143,6 +143,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
     (services::NtSetInformationObject, Handler::Status(object::nt_set_information_object)),
     (services::NtSetInformationProcess, Handler::Status(process::nt_set_information_process)),
+    (services::NtSetInformationThread, Handler::Status(process::nt_set_information_thread)),
     (services::NtSetSecurityObject, Handler::Status(security::nt_set_security_object)),
     (services::NtSetSystemInformation, Handler::Status(system::nt_set_system_information)),
     (services::NtSetValueKey, Handler::Status(registry::nt_set_value_key)),

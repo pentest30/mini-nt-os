@@ -227,6 +227,11 @@ fn log_known_dlls() {
 /// chaque processus qu'il a créé (attendu 2 s, puis terminé), et les appels
 /// système faits par eux tous, dans l'ordre de leur premier appel.
 ///
+/// Un processus qu'elle termine ne reste pas critique, ni ses threads
+/// (`smss` l'est dès son début) : elle fait ce que ferait un débogueur à qui
+/// le système demanderait s'il faut s'arrêter, répondre « non ». Qu'il finisse
+/// de lui-même en restant critique arrête bien le système.
+///
 /// Sans DLL système, ne fait rien.
 ///
 /// # IRQL
@@ -281,6 +286,10 @@ fn run_native(
     let children = ps::child_processes(process.pid());
     if waited == STATUS_TIMEOUT {
         log::warn!("[{tag}] {name}: the process did not end within 10 s: terminated");
+        if process.is_critical() {
+            log::info!("[{tag}] {name} is a critical process: no longer, before it is terminated");
+        }
+        process.clear_critical();
         let _ = ps::terminate_process(process.clone(), STATUS_TIMEOUT);
         // SAFETY: as above.
         unsafe {
@@ -306,6 +315,7 @@ fn run_native(
         };
         if waited == STATUS_TIMEOUT {
             log::warn!("[{tag}] {name}: its process {child_name} (PID {pid}) did not end within 2 s: terminated");
+            child.clear_critical();
             let _ = ps::terminate_process(child.clone(), STATUS_TIMEOUT);
             // SAFETY: as above.
             unsafe {
