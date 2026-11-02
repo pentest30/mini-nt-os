@@ -13,8 +13,10 @@ jour à chaque commit qui change l'état.
   lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis `winsrv`
   (USER sur le win32k minimal, puis la console `consrv`), se connecte à `smss` par LPC (et `smss` à lui) : **`csrss`
   est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
-  sur son processus (NtDuplicateObject) et le confie à `csrss`, qui s'arrête à son port d'exception
-  (NtSetInformationProcess, `ProcessExceptionPort`) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
+  sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
+  connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, puis s'arrête à sa station de
+  fenêtres (NtUserCreateWindowStation, USER du M6) et faute dans `user32` : [`compat/m5-csrss.md`](compat/m5-csrss.md),
+  étape 15.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -279,21 +281,28 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    (`ob::duplicate` : `DuplicateSource::Pseudo` pour `NtCurrentProcess()` et `NtCurrentThread()`, résolus par Ps ;
    sans cible, la source se ferme seulement ; `DUPLICATE_CLOSE_SOURCE` quel que soit le résultat), `OBJ_PROTECT_CLOSE`.
    Tests : hôte (`ob`), `duplicate_object_self_test`. `smss` confie `winlogon` à `csrss` (`SmExecPgm`) et attend ;
-   `csrss` (`CsrSbCreateSession`) s'arrête à NtSetInformationProcess(`ProcessExceptionPort`). Reste, dans l'ordre :
+   `csrss` (`CsrSbCreateSession`) s'arrêtait à NtSetInformationProcess(`ProcessExceptionPort`). Fait ensuite :
    - [x] `ProcessExceptionPort` (8) : sous `SeTcbPrivilege`, un port LPC, une fois (`STATUS_PORT_ALREADY_SET`),
      `EProcess::set_exception_port` ; le noyau ne s'en sert pas encore (une exception non traitée en seconde chance
      devrait y aller, au lieu de terminer le processus) : dette ;
    - [x] NtQueryInformationThread : `ThreadBasicInformation`, `ThreadTimes` (`EThread::create_time`, `exit_time` ;
-     les temps noyau et utilisateur restent nuls, Ke ne les compte pas encore : dette) ;
-   - **À vérifier d'abord en reprenant** : ces deux points (commit « sys: le port d'exception d'un processus et
-     NtQueryInformationThread ») compilent sans warning mais n'ont pas encore tourné dans QEMU ; tests écrits :
-     `process_settings_self_test` étendu (port d'exception), `thread_information_self_test`. Lancer
-     `cargo xtask test --boot --scenario smoke` puis `--scenario smss`, mettre à jour les marqueurs du scénario
-     `smss` (là où `csrss` s'arrête ensuite) et `compat/m5-csrss.md` (étape 15), vérifier par mutation ;
+     les temps noyau et utilisateur restent nuls, Ke ne les compte pas encore : dette), `ThreadIsTerminated`
+     (`EThread::is_terminating`, pour `CsrInsertThread`) ; vérifiés dans QEMU (`smoke`, `smss`) ;
+   - [x] la connexion de `kernel32` à `csrss` : `csrss` la refusait (« CSRSS: Rejecting Connection Request »), car
+     NtMapViewOfSection refusait `SEC_NO_CHANGE` (`CsrSrvAttachSharedSection`) ; une vue `SEC_NO_CHANGE` garde
+     maintenant sa protection (`VadNode::no_change`, `AddressSpace::map_view_with`) ; `MEM_LARGE_PAGES` et
+     `MEM_DOS_LIM` rendent `STATUS_NOT_IMPLEMENTED` (journalisé). Tests : hôte (`mm`), `shared_section_self_test`.
    - `ProcessForegroundInformation` (25, toléré par `csrss`) : le quantum de premier plan (PsPrioritySeparation)
      demande un quantum par thread dans Ke ;
-   - puis `winlogon` démarre : `kernel32` se connecte à `csrss` (`CsrClientConnectToServer`, `\Windows\ApiPort`,
-     avec la section partagée), puis ce que `winlogon` demande (bureaux, `msgina`, SAS…).
+   - **la suite, à décider avec le mainteneur** : `winlogon` demande maintenant USER (M6) : `RegisterLogonProcess`
+     (NtUserCallTwoParam `0x69`, NtUserSetInformationThread dans `winsrv`), la station de fenêtres et les bureaux
+     (NtUserCreateWindowStation, NtUserCreateDesktop, NtUserSetThreadDesktop, NtUserSwitchDesktop…), le clavier
+     (NtUserLoadKeyboardLayoutEx, NtUserGetKeyboardLayoutList), et NtImpersonateThread (Se). Leurs
+     `STATUS_NOT_IMPLEMENTED` sont lus comme un handle ou un compte, et `user32` faute. Deux voies : avancer USER
+     dans le win32k minimal (stations, bureaux, clavier : le début du M6 et du spike S3), ou, pour le critère du M5
+     (`cmd.exe` interactif), faire lancer à `smss` une autre commande initiale que `winlogon` (la console de
+     `consrv` sans bureau ?). Dans les deux cas, rendre 0 (et non `STATUS_NOT_IMPLEMENTED`) pour un service de
+     win32k sans handler qui rend un BOOL, un handle ou un compte (dette de l'étape 6).
 
 Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal
 `[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).

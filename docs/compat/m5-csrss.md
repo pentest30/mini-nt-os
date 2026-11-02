@@ -431,3 +431,49 @@ Tests : hôte (`ob` : sans cible, pseudo-handle, source fermée quel que soit le
 (un programme duplique un événement dans son processus et dans un autre, ses pseudo-handles, et chaque refus : sans
 `PROCESS_DUP_HANDLE`, sans cible, processus source ou cible invalide, `*TargetHandle` à une adresse invalide ; les
 handles fermés se voient au compte de handles de leur objet, une entrée libérée étant la suivante reprise).
+
+## Étape 15 : `winlogon` devient un processus CSR et se connecte à `csrss`
+
+`csrss` fait de `winlogon` un processus CSR (`CsrSbCreateSession`, `csrsrv/session.c`), puis reprend son thread :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtSetInformationProcess(`ProcessExceptionPort`, 8) | sous `SeTcbPrivilege`, un port LPC, une seule fois (`STATUS_PORT_ALREADY_SET`) ; gardé dans l'EPROCESS, le noyau ne s'en sert pas encore | `csrsrv` (`CsrSbCreateSession`) |
+| NtQueryInformationThread(`ThreadBasicInformation` 0, `ThreadTimes` 1, `ThreadIsTerminated` 20) | le TEB, le CLIENT_ID, le statut de fin, la priorité ; la création et la fin (les temps noyau et utilisateur restent nuls) ; 1 si la fin du thread est demandée ou en cours (PsIsThreadTerminating) | `csrsrv` (`CsrSbCreateSession` : la création du premier thread ; `CsrInsertThread` : ce thread ne doit pas être déjà en fin) |
+
+`winlogon` démarre. Son `kernel32` se connecte à `csrss` (`CsrClientConnectToServer`, NtSecureConnectPort sur
+`\Windows\ApiPort`, avec une section) : `csrss` **refusait la connexion** (« CSRSS: Rejecting Connection Request from
+ClientId: 1c.30 », puis « Failed to connect to CSR (Status c0000041) ») et `winlogon` finissait avec
+`STATUS_PORT_CONNECTION_REFUSED`. Le CLIENT_ID n'y était pour rien (`CsrLocateThreadByClientId` trouvait le thread
+inscrit par `CsrSbCreateSession`) : `CsrApiHandleConnectionRequest` projette sa section partagée chez le client
+(`CsrSrvAttachSharedSection`, `csrsrv/server.c`), avec NtMapViewOfSection(…, `ViewUnmap`, **`SEC_NO_CHANGE`**,
+`PAGE_EXECUTE_READ`), et NtMapViewOfSection refusait ce type d'allocation (`STATUS_INVALID_PARAMETER_9`) ; `csrsrv`
+refuse alors la connexion sans journaliser le statut.
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtMapViewOfSection, `AllocationType` | ceux de ReactOS (MmMapViewOfSection) : `MEM_TOP_DOWN`, `MEM_RESERVE`, `SEC_NO_CHANGE`, `MEM_LARGE_PAGES`, `MEM_DOS_LIM` ; une vue `SEC_NO_CHANGE` garde sa protection (le nœud de la VAD est marqué : `VadNode::no_change`, `AddressSpace::map_view_with`, `ViewOptions`), NtProtectVirtualMemory y rend `STATUS_INVALID_PAGE_PROTECTION`, la retirer reste permis ; `MEM_LARGE_PAGES` et `MEM_DOS_LIM` rendent `STATUS_NOT_IMPLEMENTED`, journalisé une fois (le refus d'un type valide cachait l'échec) | `csrsrv` (`CsrSrvAttachSharedSection`) |
+
+`kernel32` se connecte ; `winlogon` charge ses DLL (tolérés : contextes d'activation absents,
+manifeste de `mpr.dll`, `ProcessExecuteFlags`, `nfs41_np.dll` absent, la clé `Tcpip\Parameters` absente), `user32`
+se connecte à win32k (NtUserProcessConnect, son second client) et NtRegisterThreadTerminatePort manque (toléré).
+Puis **USER**, que le win32k minimal n'a pas encore (M6) :
+
+- `RegisterLogonProcess` (`user32/misc/logon.c`) : NtUserCallTwoParam (PID de `winlogon`, TRUE, `0x69`) manque ; dans
+  `csrss`, `winsrv` appelle NtUserSetInformationThread, absent : « Failed to register logon process with CSRSS » ;
+- la station de fenêtres et les bureaux : NtUserCreateWindowStation, NtUserSetProcessWindowStation,
+  NtUserGetProcessWindowStation, NtUserCreateDesktop, NtUserSetThreadDesktop, NtUserSwitchDesktop,
+  NtUserSetWindowStationUser ; `csrss` répond « We are logged off » (`winsrv/usersrv/init.c`) ; NtImpersonateThread
+  manque (« CSRSS: Can't impersonate client thread », `csrsrv/procsup.c`) ;
+- le clavier : NtUserLoadKeyboardLayoutEx, NtUserSetImeHotKey, NtUserGetKeyboardLayoutList.
+
+Chacun de ces services rend `STATUS_NOT_IMPLEMENTED`, que `user32` lit comme un handle (la station de fenêtres
+`0xC0000002`, passée ensuite à NtUserSetProcessWindowStation) ou comme un compte (NtUserGetKeyboardLayoutList) :
+`user32` lit au-delà de son tas et faute (`0xC0000005` en `0x77A71C23`, lecture en `0x233000`). `winlogon` finit ;
+`smss` (« Initial command 'winlogon.exe' terminated when it wasn't supposed to ») abandonne (`SmpTerminate`) et finit
+de lui-même, critique : la sonde le laisse passer.
+
+Tests : hôte (`mm` : une vue `SEC_NO_CHANGE` refuse toute protection, une vue sans lui l'accepte),
+`shared_section_self_test` (une vue `SEC_NO_CHANGE` depuis le mode utilisateur : NtProtectVirtualMemory refusé,
+NtUnmapViewOfSection permis ; `MEM_COMMIT` refusé comme type d'une vue), `thread_information_self_test`
+(`ThreadIsTerminated` : 0 pour lui-même, 1 pour un thread fini).

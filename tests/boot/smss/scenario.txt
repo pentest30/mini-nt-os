@@ -1,8 +1,9 @@
 # M4, discovery: ReactOS's smss.exe starts under the system DLL with the
 # parameters of the first process; the kernel logs the system services it
 # calls and how it stops (docs/compat/m4-smss.md). It starts csrss, then
-# winlogon, which it hands to csrss (SmExecPgm), and waits for them: the
-# probe ends it after 10 s, its critical flags cleared first.
+# winlogon, which it hands to csrss (SmExecPgm); once winlogon has ended, it
+# ends too (SmpTerminate), critical: the probe lets it pass, as a debugger
+# would.
 # Skipped until the userland is fetched.
 features = test-smss
 requires = userland
@@ -10,7 +11,7 @@ cpus     = default, intel
 timeout  = 180
 
 expect = [m4] SMSS.EXE under the system DLL: exit status
-expect = [m4] SMSS.EXE is a critical process: no longer, before it is terminated
+expect = (SMSS.EXE): ignored, as a debugger would
 # At its start it makes its process and its thread critical (Ps, M5), sets
 # its base priority, its hard-error mode, and creates keyed events (Ex).
 expect = [m4]   NtCreateKeyedEvent (0x0121):
@@ -44,9 +45,12 @@ forbid = Source File: ../base/system/smss/smss.c
 # to csrss's SB port; csrss gives its hard error port and ends its first
 # thread; smss runs its initial command, winlogon.exe, keeps a handle on
 # its process (NtDuplicateObject, Ob) and hands it to csrss (SmExecPgm),
-# which makes it a CSR process and sets its exception port: not yet
-# (NtSetInformationProcess, ProcessExceptionPort). The probe ends csrss and
-# winlogon after 2 s each.
+# which makes it a CSR process (its exception port, its first thread's
+# times, whether that thread is ending) and resumes it; winlogon's kernel32
+# connects to csrss (NtSecureConnectPort, with csrss's shared section mapped
+# SEC_NO_CHANGE), user32 to win32k, then winlogon creates its window
+# station: not yet (NtUserCreateWindowStation, M6). It faults in user32 and
+# ends; smss ends with it. The probe ends csrss after 2 s.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -65,36 +69,48 @@ expect = [m4]   NtOpenProcessToken (0x0081)
 expect = [m4]   NtAdjustPrivilegesToken (0x000c)
 expect = [m4]   NtSetSystemInformation (0x00f9): 3 calls, the first returned 0x00000000
 expect = [m4]   NtCreateProcess (0x0031): 2 calls, the first returned 0x00000000
-# smss resumes csrss's first thread, csrss its server threads.
-expect = [m4]   NtResumeThread (0x00d6): 3 calls, the first returned 0x00000000
+# smss resumes csrss's first thread, csrss its server threads and
+# winlogon's.
+expect = [m4]   NtResumeThread (0x00d6): 5 calls, the first returned 0x00000000
 # smss's API port (Lpc), on which two threads wait; then csrss's API port
 # and its port for smss (SB API).
 expect = [m4]   NtCreatePort (0x0030): 3 calls, the first returned 0x00000000
 expect = [m4]   NtReplyWaitReceivePort (0x00cb):
 # csrss: the size of TokenUser, then TokenUser, and the DACL of its process.
-expect = [m4]   NtQueryInformationToken (0x00a3): 2 calls, the first returned 0xc0000023
+expect = [m4]   NtQueryInformationToken (0x00a3): 6 calls, the first returned 0xc0000023
 expect = [m4]   NtSetSecurityObject (0x00f6): 1 calls, the first returned 0x00000000
-# win32k (M5, step 6): user32 in csrss, then USER started by winsrv.
-expect = [m4]   NtUserProcessConnect (0x11dd): 1 calls, the first returned 0x00000000
-expect = [m4]   NtUserInitializeClientPfnArrays (0x11be): 1 calls, the first returned 0x00000000
-expect = [m4]   NtGdiInit (0x10db): 1 calls, the first returned 0x00000001
+# win32k (M5, step 6): user32 in csrss, then USER started by winsrv; user32
+# in winlogon.
+expect = [m4]   NtUserProcessConnect (0x11dd): 2 calls, the first returned 0x00000000
+expect = [m4]   NtUserInitializeClientPfnArrays (0x11be): 2 calls, the first returned 0x00000000
+expect = [m4]   NtGdiInit (0x10db): 2 calls, the first returned 0x00000001
 expect = [m4]   NtUserInitialize (0x11bd): 1 calls, the first returned 0x00000000
 expect = [m4]   NtCreateSemaphore (0x0035):
-expect = [m4]   NtQueryObject (0x00aa): 2 calls, the first returned 0x00000000
+expect = [m4]   NtQueryObject (0x00aa): 4 calls, the first returned 0x00000000
 expect = [m4] USER: started by csrss (PID
 expect = \Windows\WindowStations created; 23 of 23 client procedures of user32 (at 0x77a20000) in SERVERINFO
 # The LPC connections (M5, step 7): csrss to smss (SmConnectToSm), smss
-# back to csrss's SB port, each accepted and completed.
+# back to csrss's SB port, winlogon to csrss's API port, each accepted and
+# completed.
 expect = [m4]   NtConnectPort (0x0021): 3 calls, the first returned 0x00000000
+expect = [m4]   NtSecureConnectPort (0x00da): 1 calls, the first returned 0x00000000
 expect = [m4]   NtOpenProcess (0x0080): 2 calls, the first returned 0x00000000
-expect = [m4]   NtAcceptConnectPort (0x0000): 3 calls, the first returned 0x00000000
-expect = [m4]   NtCompleteConnectPort (0x001f): 3 calls, the first returned 0x00000000
+expect = [m4]   NtAcceptConnectPort (0x0000): 4 calls, the first returned 0x00000000
+expect = [m4]   NtCompleteConnectPort (0x001f): 4 calls, the first returned 0x00000000
 expect = [m4]   NtSetDefaultHardErrorPort (0x00df): 1 calls, the first returned 0x00000000
 # winlogon (M5, step 9): on the disk, its process handle duplicated, then
-# handed to csrss, which stops at its exception port.
+# handed to csrss, which makes it a CSR process; it connects to csrss and
+# stops at its window station (M6).
 expect = [m4] SMSS.EXE created winlogon.exe (PID
 expect = [m4]   NtDuplicateObject (0x0047):
-expect = sys: NtSetInformationProcess class 0x8 is not implemented
+expect = [m4]   NtQueryInformationThread (0x00a2): 2 calls, the first returned 0x00000000
+expect = sys: NtUserCreateWindowStation (0x1157) is not implemented
+expect = SMSS: Initial command 'winlogon.exe' terminated when it wasn't supposed to.
+forbid = sys: NtSetInformationProcess class 0x8 is not implemented
+forbid = sys: NtQueryInformationThread class
+forbid = CSRSS: Rejecting Connection Request
+forbid = Failed to connect to CSR
+forbid = Failure to connect to CSR
 forbid = SMSS: Initial command image (winlogon.exe) not found
 forbid = SMSS: DupObject Failed
 forbid = SMSS: Execute Initial Command failed
