@@ -280,11 +280,16 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    sans cible, la source se ferme seulement ; `DUPLICATE_CLOSE_SOURCE` quel que soit le résultat), `OBJ_PROTECT_CLOSE`.
    Tests : hôte (`ob`), `duplicate_object_self_test`. `smss` confie `winlogon` à `csrss` (`SmExecPgm`) et attend ;
    `csrss` (`CsrSbCreateSession`) s'arrête à NtSetInformationProcess(`ProcessExceptionPort`). Reste, dans l'ordre :
-   - `ProcessExceptionPort` (8) : sous `SeTcbPrivilege`, un port LPC, une fois (`STATUS_PORT_ALREADY_SET`) ; le
-     noyau ne s'en sert pas encore (une exception non traitée en seconde chance devrait y aller, au lieu de terminer
-     le processus) : à noter dans les dettes ;
-   - NtQueryInformationThread (absent) : `ThreadTimes` (le temps de création du thread, à garder dans `EThread` ;
-     les temps noyau et utilisateur, que Ke ne compte pas encore), puis `ThreadBasicInformation` ;
+   - [x] `ProcessExceptionPort` (8) : sous `SeTcbPrivilege`, un port LPC, une fois (`STATUS_PORT_ALREADY_SET`),
+     `EProcess::set_exception_port` ; le noyau ne s'en sert pas encore (une exception non traitée en seconde chance
+     devrait y aller, au lieu de terminer le processus) : dette ;
+   - [x] NtQueryInformationThread : `ThreadBasicInformation`, `ThreadTimes` (`EThread::create_time`, `exit_time` ;
+     les temps noyau et utilisateur restent nuls, Ke ne les compte pas encore : dette) ;
+   - **À vérifier d'abord en reprenant** : ces deux points (commit « sys: le port d'exception d'un processus et
+     NtQueryInformationThread ») compilent sans warning mais n'ont pas encore tourné dans QEMU ; tests écrits :
+     `process_settings_self_test` étendu (port d'exception), `thread_information_self_test`. Lancer
+     `cargo xtask test --boot --scenario smoke` puis `--scenario smss`, mettre à jour les marqueurs du scénario
+     `smss` (là où `csrss` s'arrête ensuite) et `compat/m5-csrss.md` (étape 15), vérifier par mutation ;
    - `ProcessForegroundInformation` (25, toléré par `csrss`) : le quantum de premier plan (PsPrioritySeparation)
      demande un quantum par thread dans Ke ;
    - puis `winlogon` démarre : `kernel32` se connecte à `csrss` (`CsrClientConnectToServer`, `\Windows\ApiPort`,

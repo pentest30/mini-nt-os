@@ -19,24 +19,26 @@ use abi::ntstatus::{
 use abi::process::{
     InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_BASE_PRIORITY, PROCESS_BASIC_INFORMATION,
     PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
-    PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_DEFAULT_HARD_ERROR_MODE, PROCESS_LUID_DEVICE_MAPS_ENABLED,
-    PROCESS_SESSION_INFORMATION, THREAD_BREAK_ON_TERMINATION,
+    PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_DEFAULT_HARD_ERROR_MODE, PROCESS_EXCEPTION_PORT,
+    PROCESS_LUID_DEVICE_MAPS_ENABLED, PROCESS_SESSION_INFORMATION, THREAD_BREAK_ON_TERMINATION,
 };
-use abi::security::{SE_DEBUG_PRIVILEGE, SE_INC_BASE_PRIORITY_PRIVILEGE};
+use abi::security::{SE_DEBUG_PRIVILEGE, SE_INC_BASE_PRIORITY_PRIVILEGE, SE_TCB_PRIVILEGE};
 use abi::teb32::ClientId32;
 use ke::usermem::UserPtr;
 use mm::section::{Section, SECTION_MAP_EXECUTE, SECTION_TYPE};
-use ob::{Handle, ObjectRef};
+use ob::{AccessMask, Handle, ObjectRef};
 use ps::eprocess::{
     PROCESS_CREATE_PROCESS, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
-    PROCESS_SET_SESSIONID, PROCESS_TERMINATE,
+    PROCESS_SET_SESSIONID, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
 };
-use ps::ethread::{THREAD_SET_INFORMATION, THREAD_SUSPEND_RESUME, THREAD_TERMINATE};
+use ps::ethread::{THREAD_QUERY_INFORMATION, THREAD_SET_INFORMATION, THREAD_SUSPEND_RESUME, THREAD_TERMINATE};
 
 /// Les classes de NtQueryInformationProcess demandées sans être implémentées.
 static UNSUPPORTED_QUERY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationProcess");
 /// Les classes de NtSetInformationProcess demandées sans être implémentées.
 static UNSUPPORTED_SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformationProcess");
+/// Les classes de NtQueryInformationThread demandées sans être implémentées.
+static UNSUPPORTED_THREAD_QUERY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationThread");
 /// Les classes de NtSetInformationThread demandées sans être implémentées.
 static UNSUPPORTED_THREAD_SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformationThread");
 
@@ -318,6 +320,58 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
     super::return_information(information, buffer, length, return_length)
 }
 
+/// NtQueryInformationThread(ThreadHandle, ThreadInformationClass,
+/// ThreadInformation, ThreadInformationLength, ReturnLength) : ce que sait le
+/// thread (`THREAD_QUERY_INFORMATION`), à la taille exacte de la classe
+/// (`STATUS_INFO_LENGTH_MISMATCH` sinon) :
+/// - `ThreadBasicInformation` : son statut de sortie, son TEB, son
+///   CLIENT_ID, son masque d'affinité (un processeur), sa priorité courante
+///   et sa priorité de base relative à celle de son processus ;
+/// - `ThreadTimes` : ses heures de création et de fin (0 tant qu'il vit).
+///   Ses temps passés en mode noyau et en mode utilisateur sont nuls : Ke ne
+///   les compte pas encore.
+///
+/// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
+/// premier appel.
+pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
+    use abi::process::{KernelUserTimes, ThreadBasicInformation32, THREAD_BASIC_INFORMATION, THREAD_TIMES};
+
+    let (handle, class, buffer, length, return_length) =
+        (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
+    if !matches!(class, THREAD_BASIC_INFORMATION | THREAD_TIMES) {
+        return UNSUPPORTED_THREAD_QUERY_CLASSES.report(class);
+    }
+    let thread = match super::reference_thread(handle, THREAD_QUERY_INFORMATION) {
+        Ok(thread) => thread,
+        Err(status) => return status,
+    };
+    let basic: ThreadBasicInformation32;
+    let times: KernelUserTimes;
+    let information = if class == THREAD_BASIC_INFORMATION {
+        let process_base = thread.process().base_priority();
+        let priority = thread.priority().unwrap_or(process_base);
+        let base = thread.base_priority().unwrap_or(process_base);
+        basic = ThreadBasicInformation32 {
+            exit_status: thread.exit_status().0,
+            teb_base_address: thread.teb(),
+            client_id: ClientId32 { unique_process: thread.pid(), unique_thread: thread.tid() },
+            affinity_mask: 1,
+            priority: i32::from(priority),
+            base_priority: i32::from(base) - i32::from(process_base),
+        };
+        basic.as_bytes()
+    } else {
+        times = KernelUserTimes {
+            create_time: thread.create_time(),
+            exit_time: thread.exit_time().unwrap_or(0),
+            kernel_time: 0,
+            user_time: 0,
+        };
+        times.as_bytes()
+    };
+    super::return_information(information, buffer, length, return_length)
+}
+
 /// NtSetInformationProcess(ProcessHandle, ProcessInformationClass,
 /// ProcessInformation, ProcessInformationLength) : change ce que sait le
 /// processus, une valeur de 4 octets (`STATUS_INFO_LENGTH_MISMATCH` pour une
@@ -333,7 +387,12 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
 ///   `SEM_*`, que ses enfants héritent ;
 /// - `ProcessBreakOnTermination` (`PROCESS_SET_INFORMATION`,
 ///   `SeDebugPrivilege`) : non nul, il devient critique, et sa fin arrête le
-///   système ; nul, il ne l'est plus.
+///   système ; nul, il ne l'est plus ;
+/// - `ProcessExceptionPort` (`PROCESS_SET_INFORMATION`,
+///   `PROCESS_SUSPEND_RESUME`, `SeTcbPrivilege`) : le handle d'un port LPC
+///   (`STATUS_OBJECT_TYPE_MISMATCH` pour un autre objet), où iraient ses
+///   exceptions non traitées ; une fois (`STATUS_PORT_ALREADY_SET`). Le
+///   noyau ne s'en sert pas encore.
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel. `ProcessExecuteFlags` en est encore : le `ntdll` de
@@ -348,6 +407,7 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
                 | PROCESS_BASE_PRIORITY
                 | PROCESS_DEFAULT_HARD_ERROR_MODE
                 | PROCESS_BREAK_ON_TERMINATION
+                | PROCESS_EXCEPTION_PORT
         ) {
             return Err(UNSUPPORTED_SET_CLASSES.report(class));
         }
@@ -357,6 +417,19 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
         let value = UserPtr::<u32>::new(buffer).read()?;
         if class == PROCESS_SESSION_INFORMATION {
             super::reference_process(handle, PROCESS_SET_SESSIONID)?.set_session_id(value)?;
+            return Ok(STATUS_SUCCESS);
+        }
+        if class == PROCESS_EXCEPTION_PORT {
+            let process = super::reference_process(handle, PROCESS_SET_INFORMATION | PROCESS_SUSPEND_RESUME)?;
+            if !super::security::privilege_enabled(SE_TCB_PRIVILEGE) {
+                return Err(STATUS_PRIVILEGE_NOT_HELD);
+            }
+            let port = super::current_process().handle_table.reference(
+                Handle(value),
+                Some(&lpc::PORT_TYPE),
+                AccessMask::NONE,
+            )?;
+            process.set_exception_port(port)?;
             return Ok(STATUS_SUCCESS);
         }
         let process = super::reference_process(handle, PROCESS_SET_INFORMATION)?;

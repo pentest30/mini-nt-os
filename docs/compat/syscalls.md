@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 99 | 296 |
+| ntoskrnl | 100 | 296 |
 | win32k | 4 | 732 |
 
 ## ntoskrnl
@@ -177,7 +177,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x009f` | `NtQueryInformationJobObject` | 5 |  |
 | `0x00a0` | `NtQueryInformationPort` | 5 |  |
 | `0x00a1` | `NtQueryInformationProcess` | 5 | ✅ |
-| `0x00a2` | `NtQueryInformationThread` | 5 |  |
+| `0x00a2` | `NtQueryInformationThread` | 5 | ✅ |
 | `0x00a3` | `NtQueryInformationToken` | 5 | ✅ |
 | `0x00a4` | `NtQueryInstallUILanguage` | 1 |  |
 | `0x00a5` | `NtQueryIntervalProfile` | 2 |  |

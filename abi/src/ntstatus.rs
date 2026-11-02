@@ -121,6 +121,8 @@ pub const STATUS_UNKNOWN_REVISION: NtStatus = NtStatus(0xC000_0058);
 pub const STATUS_INVALID_OWNER: NtStatus = NtStatus(0xC000_005A);
 pub const STATUS_INVALID_PRIMARY_GROUP: NtStatus = NtStatus(0xC000_005B);
 pub const STATUS_PRIVILEGE_NOT_HELD: NtStatus = NtStatus(0xC000_0061);
+/// A process's exception port is set once.
+pub const STATUS_PORT_ALREADY_SET: NtStatus = NtStatus(0xC000_0048);
 pub const STATUS_INVALID_ACL: NtStatus = NtStatus(0xC000_0077);
 pub const STATUS_INVALID_SID: NtStatus = NtStatus(0xC000_0078);
 pub const STATUS_INVALID_SECURITY_DESCR: NtStatus = NtStatus(0xC000_0079);

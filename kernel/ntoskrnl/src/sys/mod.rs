@@ -135,6 +135,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),
     (services::NtQueryInformationProcess, Handler::Status(process::nt_query_information_process)),
+    (services::NtQueryInformationThread, Handler::Status(process::nt_query_information_thread)),
     (services::NtQueryInformationToken, Handler::Status(security::nt_query_information_token)),
     (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
     (services::NtQueryObject, Handler::Status(object::nt_query_object)),

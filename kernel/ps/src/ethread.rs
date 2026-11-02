@@ -25,7 +25,7 @@ use core::any::Any;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use abi::context::Context32;
 use abi::ntstatus::{
@@ -130,6 +130,10 @@ pub struct EThread {
     pub(crate) kernel_stack: KSpinLock<Option<KernelStack>>,
     /// ExitStatus : `STATUS_PENDING` tant qu'il vit.
     exit_status: AtomicU32,
+    /// CreateTime : l'heure système (FILETIME) de sa création.
+    create_time: u64,
+    /// ExitTime : celle de sa fin, posée avec son statut de sortie ; 0 avant.
+    exit_time: AtomicU64,
     /// Sa fin est demandée : l'APC de fin est en file, ou il se termine.
     terminating: AtomicBool,
     /// L'APC qui le termine, écrit une fois par qui pose `terminating`.
@@ -190,7 +194,26 @@ impl EThread {
     }
 
     pub(crate) fn set_exit_status(&self, status: NtStatus) {
-        let _ = self.exit_status.compare_exchange(STATUS_PENDING.0, status.0, Ordering::AcqRel, Ordering::Acquire);
+        let set = self.exit_status.compare_exchange(STATUS_PENDING.0, status.0, Ordering::AcqRel, Ordering::Acquire);
+        if set.is_ok() {
+            self.exit_time.store(hal::rtc::system_time(), Ordering::Release);
+        }
+    }
+
+    /// CreateTime : l'heure système de sa création.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn create_time(&self) -> u64 {
+        self.create_time
+    }
+
+    /// ExitTime : l'heure système de sa fin ; `None` tant qu'il vit.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn exit_time(&self) -> Option<u64> {
+        Some(self.exit_time.load(Ordering::Acquire)).filter(|&time| time != 0)
     }
 
     /// Son thread Ke ; `None` avant son lancement.
@@ -431,6 +454,14 @@ impl EThread {
     /// <= DISPATCH_LEVEL.
     pub fn priority(&self) -> Option<u8> {
         ke::sched::thread_priority(self.ke_tid()?)
+    }
+
+    /// Sa priorité de base, sans boost ; `None` avant que Ke ne l'ordonnance.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn base_priority(&self) -> Option<u8> {
+        ke::sched::thread_base_priority(self.ke_tid()?)
     }
 }
 
@@ -674,6 +705,8 @@ fn start_thread(
             start_address,
             kernel_stack: KSpinLock::new(Some(kernel_stack)),
             exit_status: AtomicU32::new(STATUS_PENDING.0),
+            create_time: hal::rtc::system_time(),
+            exit_time: AtomicU64::new(0),
             terminating: AtomicBool::new(false),
             exit_apc: UnsafeCell::new(MaybeUninit::uninit()),
             suspension: KSpinLock::new(Suspension { count: 0, apc_ready: false }),
