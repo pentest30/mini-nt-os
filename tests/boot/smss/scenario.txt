@@ -34,7 +34,9 @@ expect = [m4]   NtMapViewOfSection (0x0071):
 expect = [boot] HARDWARE hive mounted at \REGISTRY\MACHINE\HARDWARE
 expect = [m4]   NtQuerySystemInformation (0x00b5)
 expect = [m4]   NtSetValueKey (0x0100)
-expect = [m4]   NtCreateEvent (0x0025): 2 calls, the first returned 0x00000000
+# smss's events, then those of csrss's critical sections under contention
+# (no keyed events yet, M5): how many depends on timing.
+expect = [m4]   NtCreateEvent (0x0025):
 # Its token (Se): privileges adjusted, then its session and win32k.
 expect = [m4]   NtOpenProcessToken (0x0081)
 expect = [m4]   NtAdjustPrivilegesToken (0x000c)
