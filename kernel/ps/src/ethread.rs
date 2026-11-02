@@ -299,6 +299,14 @@ impl EThread {
         }
     }
 
+    /// PsIsThreadTerminating : sa fin est demandée, ou en cours.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn is_terminating(&self) -> bool {
+        self.terminating.load(Ordering::Acquire)
+    }
+
     /// Le thread s'est terminé lui-même : plus d'APC de fin à mettre en file.
     pub(crate) fn mark_terminating(&self) {
         self.terminating.store(true, Ordering::Release);

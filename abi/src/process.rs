@@ -100,6 +100,9 @@ impl ProcessBasicInformation32 {
 pub const THREAD_BASIC_INFORMATION: u32 = 0;
 /// ThreadTimes (NtQueryInformationThread): KERNEL_USER_TIMES.
 pub const THREAD_TIMES: u32 = 1;
+/// ThreadIsTerminated (NtQueryInformationThread): a ULONG, 1 once the
+/// thread's end is asked for or under way.
+pub const THREAD_IS_TERMINATED: u32 = 20;
 
 /// THREAD_BASIC_INFORMATION.
 #[repr(C)]
