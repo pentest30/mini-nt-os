@@ -347,6 +347,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     section_service_self_test();
     event_service_self_test();
     process_memory_self_test();
+    shared_section_self_test();
     process_creation_self_test();
     port_self_test();
     security_self_test();
@@ -3883,6 +3884,222 @@ fn security_self_test() {
          NtAdjustPrivilegesToken, NtOpenThreadToken(Ex) (no token); NtSetSecurityObject and NtQuerySecurityObject \
          on a process; NtSetSystemInformation under SeLoadDriverPrivilege"
     );
+}
+
+/// A shared section like csrss's (`sys::section`, `mm::section`, M5): a
+/// named pagefile section, `SEC_BASED | SEC_RESERVE`; NtQuerySection gives
+/// its address and attributes; its view goes to that address (even asked
+/// `MEM_TOP_DOWN`), its pages reserved (NtQueryVirtualMemory); a page
+/// committed in the view (NtAllocateVirtualMemory) is written; a second view
+/// in the same process cannot have the address; a `SEC_RESERVE` section
+/// without a base maps anywhere. From another process, the kernel maps the
+/// section at the same address and reads what the first wrote, while the
+/// page not committed stays out of reach. Once nothing holds the section,
+/// its address is free for the next based section.
+fn shared_section_self_test() {
+    use abi::memory::{MemoryBasicInformation32, SectionBasicInformation32, SEC_BASED, SEC_RESERVE, VIEW_UNMAP};
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::{Section, SECTION_TYPE};
+    use mm::vad::PageProtect;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const HANDLE: u32 = DATA + 0x40; // 2 handles
+    const BASE: u32 = DATA + 0x48; // the based view
+    const SIZE: u32 = DATA + 0x4C;
+    const OTHER_BASE: u32 = DATA + 0x50; // the second view, refused
+    const OTHER_SIZE: u32 = DATA + 0x54;
+    const PLAIN_BASE: u32 = DATA + 0x58; // the view of the section without a base
+    const PLAIN_SIZE: u32 = DATA + 0x5C;
+    const COMMIT_SIZE: u32 = DATA + 0x60;
+    const SECTION_SIZE: u32 = DATA + 0x68; // a LARGE_INTEGER
+    const PLAIN_SECTION_SIZE: u32 = DATA + 0x70;
+    const INFO: u32 = DATA + 0x80; // SECTION_BASIC_INFORMATION
+    const PLAIN_INFO: u32 = DATA + 0x90;
+    const RESERVED: u32 = DATA + 0xA0; // MEMORY_BASIC_INFORMATION
+    const COMMITTED: u32 = DATA + 0xC0;
+    const OA: u32 = DATA + 0xE0;
+    const US: u32 = DATA + 0xF8;
+    const NAME: u32 = DATA + 0x100;
+    const DONE: u32 = DATA + 0x1FC;
+    const SECTION_NAME: &str = "\\BaseNamedObjects\\MinoShared";
+    const SECTION_BYTES: u32 = 0x2_0000;
+    const MARK: u32 = 0x5EC7_E5ED;
+    const ALL_ACCESS: u32 = 0x000F_001F;
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_RESERVE: u32 = 0x2000;
+    const MEM_TOP_DOWN: u32 = 0x10_0000;
+    const MEM_MAPPED: u32 = 0x4_0000;
+    const PAGE_READWRITE: u32 = 0x04;
+    const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    let units: alloc::vec::Vec<u8> = SECTION_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(NAME, &units);
+    let length = (units.len() as u16).to_le_bytes();
+    put(US, &[length[0], length[1], length[0], length[1]]);
+    put(US + 4, &NAME.to_le_bytes());
+    put(OA, &24u32.to_le_bytes());
+    put(OA + 8, &US.to_le_bytes());
+    put(SECTION_SIZE, &u64::from(SECTION_BYTES).to_le_bytes());
+    put(PLAIN_SECTION_SIZE, &0x3000u64.to_le_bytes());
+    put(COMMIT_SIZE, &0x1000u32.to_le_bytes());
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let me = abi::process::NT_CURRENT_PROCESS;
+    let (create, map) = (services::NtCreateSection, services::NtMapViewOfSection);
+    let based = SEC_BASED | SEC_RESERVE;
+    let mut code = Code::new();
+    code.call_args(
+        create,
+        &[v(HANDLE), v(ALL_ACCESS), v(OA), v(SECTION_SIZE), v(PAGE_EXECUTE_READWRITE), v(based), v(0)],
+    )
+    .store_eax(status(0));
+    code.call_args(services::NtQuerySection, &[m(HANDLE), v(0), v(INFO), v(16), v(0)]).store_eax(status(1));
+    let erw = PAGE_EXECUTE_READWRITE;
+    code.call_args(
+        map,
+        &[m(HANDLE), v(me), v(BASE), v(0), v(0), v(0), v(SIZE), v(VIEW_UNMAP), v(MEM_TOP_DOWN), v(erw)],
+    )
+    .store_eax(status(2));
+    code.call_args(services::NtQueryVirtualMemory, &[v(me), m(BASE), v(0), v(RESERVED), v(28), v(0)])
+        .store_eax(status(3));
+    code.call_args(
+        services::NtAllocateVirtualMemory,
+        &[v(me), v(BASE), v(0), v(COMMIT_SIZE), v(MEM_COMMIT), v(PAGE_READWRITE)],
+    )
+    .store_eax(status(4));
+    // mov eax, [BASE]; mov dword [eax + 0x10], MARK
+    code.word(&[0xA1], BASE).bytes(&[0xC7, 0x40, 0x10]).bytes(&MARK.to_le_bytes());
+    code.call_args(services::NtQueryVirtualMemory, &[v(me), m(BASE), v(0), v(COMMITTED), v(28), v(0)])
+        .store_eax(status(5));
+    code.call_args(
+        map,
+        &[m(HANDLE), v(me), v(OTHER_BASE), v(0), v(0), v(0), v(OTHER_SIZE), v(VIEW_UNMAP), v(0), v(erw)],
+    )
+    .store_eax(status(6));
+    code.call_args(
+        create,
+        &[v(HANDLE + 4), v(ALL_ACCESS), v(0), v(PLAIN_SECTION_SIZE), v(PAGE_READWRITE), v(SEC_RESERVE), v(0)],
+    )
+    .store_eax(status(7));
+    let rw = PAGE_READWRITE;
+    code.call_args(
+        map,
+        &[m(HANDLE + 4), v(me), v(PLAIN_BASE), v(0), v(0), v(0), v(PLAIN_SIZE), v(VIEW_UNMAP), v(0), v(rw)],
+    )
+    .store_eax(status(8));
+    code.call_args(services::NtQuerySection, &[m(HANDLE + 4), v(0), v(PLAIN_INFO), v(16), v(0)]).store_eax(status(9));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x400];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x400, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let image = Section::create_image(Arc::from(file)).expect("image section");
+    let info = image.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &image, "shared.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_from = |process: &ps::EProcess, addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).map(|()| u32::from_le_bytes(bytes))
+    };
+    let read = |addr: u32| read_from(&process, addr).expect("read the process");
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the shared section test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let words = |at: u32, count: u32| (0..count).map(|i| read(at + 4 * i)).collect::<alloc::vec::Vec<u32>>();
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..10).map(|i| NtStatus(read(status(i)))).collect();
+    let object = ob::namespace().open(SECTION_NAME, None, Some(&SECTION_TYPE), 0).expect("the named section");
+    let section: Arc<Section> = Arc::clone(&ob::downcast::<Arc<Section>>(&object).expect("a section"));
+    drop(object);
+    let address = section.based_address().expect("a based section") as u32;
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtCreateSection, SEC_BASED | SEC_RESERVE");
+    let basic = SectionBasicInformation32 { base_address: address, attributes: based, size: i64::from(SECTION_BYTES) };
+    assert_eq!((statuses[1], words(INFO, 4)), (STATUS_SUCCESS, words_of(basic.as_bytes())), "NtQuerySection");
+    assert_eq!((statuses[2], read(BASE), read(SIZE)), (STATUS_SUCCESS, address, SECTION_BYTES), "at its address");
+    let reserved = MemoryBasicInformation32 {
+        base_address: address,
+        allocation_base: address,
+        allocation_protect: PAGE_EXECUTE_READWRITE,
+        region_size: SECTION_BYTES,
+        state: MEM_RESERVE,
+        protect: 0,
+        kind: MEM_MAPPED,
+    };
+    assert_eq!((statuses[3], words(RESERVED, 7)), (STATUS_SUCCESS, words_of(reserved.as_bytes())), "reserved");
+    assert_eq!((statuses[4], read(BASE), read(COMMIT_SIZE)), (STATUS_SUCCESS, address, 0x1000), "one page committed");
+    let committed = MemoryBasicInformation32 {
+        region_size: 0x1000,
+        state: MEM_COMMIT,
+        protect: PAGE_EXECUTE_READWRITE,
+        ..reserved
+    };
+    assert_eq!((statuses[5], words(COMMITTED, 7)), (STATUS_SUCCESS, words_of(committed.as_bytes())), "committed");
+    assert_eq!(statuses[6], STATUS_CONFLICTING_ADDRESSES, "its address is taken in this process");
+    assert_eq!((statuses[7], statuses[8], statuses[9]), (STATUS_SUCCESS, STATUS_SUCCESS, STATUS_SUCCESS));
+    assert_ne!(read(PLAIN_BASE), 0, "a section without a base maps anywhere");
+    assert_eq!(words(PLAIN_INFO, 2), [0, SEC_RESERVE], "NtQuerySection: no address, SEC_RESERVE");
+
+    // Another process sees the page committed, and only that one.
+    let other = ps::create_process(&ps::system_process(), &image, "shared2.exe", false).expect("a second process");
+    let view = other
+        .with_space(|space| space.map_view(&section, 0, 0, 0, PageProtect::READONLY))
+        .expect("its address space")
+        .expect("a view in the second process");
+    assert_eq!(view.base, u64::from(address), "the same address in every process");
+    assert_eq!(read_from(&other, address + 0x10), Ok(MARK), "what the first process wrote");
+    assert_eq!(read_from(&other, address + 0x1000), Err(STATUS_ACCESS_VIOLATION), "a page not committed");
+    drop(section);
+
+    for process in [process, other] {
+        ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test process");
+        // SAFETY: the object of a process held here.
+        let ended = unsafe {
+            ke_wait_for_single_object::<KePlatform>(
+                process.dispatcher_object(),
+                ProcessorMode::Kernel,
+                false,
+                Some(-3000 * MS),
+            )
+        };
+        assert_eq!(ended, STATUS_WAIT_0, "a test process did not end");
+    }
+    ps::wait_for_reaper();
+    let again =
+        Section::create_shared(u64::from(SECTION_BYTES), PageProtect::READWRITE, true, true).expect("a section");
+    assert_eq!(again.based_address(), Some(u64::from(address)), "its address is free once the section is gone");
+    drop(again);
+    log::info!(
+        "[smoke] Mm: a shared section from user mode: SEC_BASED | SEC_RESERVE, NtQuerySection, its view at its \
+         address, a page committed by NtAllocateVirtualMemory and seen from another process"
+    );
+}
+
+/// The little-endian words of `bytes`.
+fn words_of(bytes: &[u8]) -> alloc::vec::Vec<u32> {
+    bytes.chunks_exact(4).map(|word| u32::from_le_bytes([word[0], word[1], word[2], word[3]])).collect()
 }
 
 /// Another process's memory from user mode (`sys::memory`, `sys::section`,

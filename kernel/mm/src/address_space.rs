@@ -311,6 +311,9 @@ impl AddressSpace {
     ///   (`STATUS_CONFLICTING_ADDRESSES`).
     /// - `base` explicite : alignée sur 64 Kio (`STATUS_MAPPED_ALIGNMENT`),
     ///   la plage libre (`STATUS_CONFLICTING_ADDRESSES`).
+    /// - Section basée (`SEC_BASED`), `base` 0 : à l'adresse de la section
+    ///   (plus `offset`), la même dans chaque processus, ou nulle part
+    ///   (`STATUS_CONFLICTING_ADDRESSES`) ; `MEM_TOP_DOWN` n'y change rien.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
@@ -391,6 +394,14 @@ impl AddressSpace {
                 return Err(STATUS_CONFLICTING_ADDRESSES);
             }
             base
+        } else if let Some(based) = section.based_address() {
+            // SEC_BASED: at the section's own address, the same in every
+            // process, or nowhere.
+            let at = based + offset;
+            if !fits(&vad, at) {
+                return Err(STATUS_CONFLICTING_ADDRESSES);
+            }
+            at
         } else {
             let preferred = image.map(|info| info.image_base).filter(|&at| at.is_multiple_of(ALLOC_GRANULARITY));
             match preferred.filter(|&at| fits(&vad, at)) {
@@ -521,7 +532,8 @@ impl AddressSpace {
         let node = vad.find(page);
         // Faults go by the rights of the page: those of the VAD's protection,
         // with execute if DEP is off.
-        let state = node.and_then(|node| node.run_at(page)).map(|(_, run)| (run.state, self.effective(run.protect)));
+        let state =
+            node.and_then(|node| node.page_state(page)).map(|(state, protect, _)| (state, self.effective(protect)));
         let backing =
             if node.and_then(|node| node.section_page(page)).is_some() { Backing::Section } else { Backing::Private };
         match fault::resolve(state, backing, pte_state(&mut tables, page), access) {

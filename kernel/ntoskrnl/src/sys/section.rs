@@ -7,8 +7,13 @@
 //! (`io_manager::File::read_all`, `mm::section`) : ce qui s'écrit dans une
 //! vue n'y retourne pas.
 //!
-//! Pas encore : `SEC_RESERVE` (`STATUS_NOT_IMPLEMENTED`, journalisé une
-//! fois), `SEC_BASED`, `ZeroBits` d'une vue, NtExtendSection.
+//! Une section du fichier d'échange peut être réservée (`SEC_RESERVE` : ses
+//! pages se commitent par NtAllocateVirtualMemory dans une vue) et basée
+//! (`SEC_BASED` : à la même adresse dans chaque processus), comme la section
+//! partagée de `csrss`.
+//!
+//! Pas encore : `SEC_BASED` pour un fichier (`STATUS_NOT_IMPLEMENTED`,
+//! journalisé une fois), `ZeroBits` d'une vue, NtExtendSection.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -86,14 +91,16 @@ fn section_access(protect: PageProtect) -> AccessMask {
     access
 }
 
-/// `SEC_RESERVE` a déjà été demandé.
-static RESERVE_REPORTED: AtomicBool = AtomicBool::new(false);
+/// `SEC_BASED` pour un fichier a déjà été demandé.
+static BASED_FILE_REPORTED: AtomicBool = AtomicBool::new(false);
 
 /// NtCreateSection(*SectionHandle, DesiredAccess, ObjectAttributes,
 /// MaximumSize, SectionPageProtection, AllocationAttributes, FileHandle) :
 /// une section adossée au fichier d'échange (sans fichier, `MaximumSize`
-/// requis), de données (`SEC_COMMIT` avec un fichier) ou d'image
-/// (`SEC_IMAGE`), nommée ou non d'après les attributs (qui peuvent manquer).
+/// requis ; ses pages réservées avec `SEC_RESERVE`, basée avec `SEC_BASED`),
+/// de données (`SEC_COMMIT` avec un fichier, `SEC_RESERVE` n'y change rien)
+/// ou d'image (`SEC_IMAGE`), nommée ou non d'après les attributs (qui peuvent
+/// manquer).
 /// Le fichier doit permettre la protection (`FILE_EXECUTE`, `FILE_READ_DATA`,
 /// `FILE_WRITE_DATA`) ; un répertoire rend `STATUS_INVALID_FILE_FOR_SECTION`.
 pub(super) fn nt_create_section(arguments: &[u32]) -> NtStatus {
@@ -112,9 +119,9 @@ fn create_section(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
     {
         return Err(STATUS_INVALID_PARAMETER_6);
     }
-    if allocation & (SEC_RESERVE | SEC_BASED) != 0 {
-        if !RESERVE_REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("sys: NtCreateSection with SEC_RESERVE or SEC_BASED ({allocation:#x}) is not implemented");
+    if allocation & SEC_BASED != 0 && file_handle != 0 {
+        if !BASED_FILE_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtCreateSection with SEC_BASED for a file ({allocation:#x}) is not implemented");
         }
         return Err(STATUS_NOT_IMPLEMENTED);
     }
@@ -129,7 +136,7 @@ fn create_section(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
     let section = match file_handle {
         0 if allocation & SEC_IMAGE != 0 => return Err(STATUS_INVALID_FILE_FOR_SECTION),
         0 if size == 0 => return Err(STATUS_INVALID_PARAMETER_4),
-        0 => Section::create_pagefile(size, protect)?,
+        0 => Section::create_shared(size, protect, allocation & SEC_RESERVE != 0, allocation & SEC_BASED != 0)?,
         handle => {
             let file = super::current_process().handle_table.reference_as::<File>(
                 Handle(handle),
@@ -232,9 +239,10 @@ static UNSUPPORTED_SECTION_CLASSES: super::ClassReport = super::ClassReport::new
 
 /// NtQuerySection(SectionHandle, SectionInformationClass, SectionInformation,
 /// SectionInformationLength, ResultLength) : ce que sait la section
-/// (`SECTION_QUERY`). `SectionBasicInformation` : ses attributs (`SEC_IMAGE`
-/// et `SEC_FILE` pour une image, `SEC_FILE` pour un fichier de données,
-/// `SEC_COMMIT` pour le fichier d'échange) et sa taille ;
+/// (`SECTION_QUERY`). `SectionBasicInformation` : son adresse si elle est
+/// basée, ses attributs (`SEC_IMAGE` et `SEC_FILE` pour une image, `SEC_FILE`
+/// pour un fichier de données, `SEC_COMMIT` ou `SEC_RESERVE` pour le fichier
+/// d'échange, avec `SEC_BASED`) et sa taille ;
 /// `SectionImageInformation`, pour une image seulement
 /// (`STATUS_SECTION_NOT_IMAGE` sinon) : son point d'entrée à sa base
 /// préférée, sa pile, son sous-système et les champs de son PE. Les autres
@@ -260,12 +268,17 @@ pub(super) fn nt_query_section(arguments: &[u32]) -> NtStatus {
         Err(status) => return status,
     };
     if class == SECTION_BASIC_INFORMATION {
-        let attributes = match section.kind() {
+        let mut attributes = match section.kind() {
             SectionKind::Image => SEC_IMAGE | SEC_FILE,
             SectionKind::DataFile => SEC_FILE,
+            SectionKind::Pagefile if section.is_reserve() => SEC_RESERVE,
             SectionKind::Pagefile => SEC_COMMIT,
         };
-        let information = SectionBasicInformation32 { base_address: 0, attributes, size: section.size() as i64 };
+        if section.based_address().is_some() {
+            attributes |= SEC_BASED;
+        }
+        let base_address = section.based_address().unwrap_or(0) as u32;
+        let information = SectionBasicInformation32 { base_address, attributes, size: section.size() as i64 };
         return super::return_information(information.as_bytes(), buffer, length, return_length);
     }
     let Some(image) = section.image() else { return abi::ntstatus::STATUS_SECTION_NOT_IMAGE };

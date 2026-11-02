@@ -194,3 +194,37 @@ la même adresse) ; projetée par `csrss` en `MEM_TOP_DOWN`, `PAGE_EXECUTE_READW
 écrits dans le PEB (`ReadOnlySharedMemoryBase`, `ReadOnlySharedMemoryHeap`, `ReadOnlyStaticServerData`). Chaque
 client la projette ensuite à la connexion (CsrSrvAttachSharedSection). C'est le prochain mur, avant le port d'API de
 `csrss` (LPC) et `SmConnectToSm`.
+
+## Étape 8 : la section partagée de `csrss` (Mm)
+
+Une section du fichier d'échange peut naître réservée (`SEC_RESERVE`) et basée (`SEC_BASED`) :
+
+| Attribut | Ce qu'il fait ici |
+|---|---|
+| `SEC_RESERVE` | les pages de la section sont réservées ; NtAllocateVirtualMemory(`MEM_COMMIT`) dans une vue commite les pages **de la section** (un bit par page), donc dans toutes ses vues, dans chaque processus, comme les pages prototypes d'XP ; la faute de page et NtQueryVirtualMemory voient une page que la section n'a pas commitée comme réservée (`VadNode::page_state`) |
+| `SEC_BASED` | la création donne à la section une adresse, la même dans chaque processus, cherchée du haut vers le bas sous MmHighSectionBase (`0x7F7F0000`, 8 Mio sous le haut du mode utilisateur) parmi les autres sections basées ; une vue sans adresse demandée y va (`MEM_TOP_DOWN` n'y change rien), ou nulle part (`STATUS_CONFLICTING_ADDRESSES`) ; l'adresse est rendue avec la section |
+
+NtQuerySection(`SectionBasicInformation`) donne l'adresse d'une section basée et `SEC_RESERVE` ou `SEC_COMMIT`, avec
+`SEC_BASED`. `SEC_RESERVE` ne change rien pour une section de fichier ; `SEC_BASED` pour un fichier rend
+`STATUS_NOT_IMPLEMENTED`. Test : `shared_section_self_test`.
+
+`csrss` crée sa section partagée de 1 Mio, la projette en `0x7F6F0000` (l'adresse d'XP), y bâtit son tas
+(`RtlCreateHeap` : NtQueryVirtualMemory la voit réservée, puis NtAllocateVirtualMemory commite la première page),
+écrit son adresse dans son PEB, puis charge ses DLL serveur (`ServerDll=`) : `basesrv` s'initialise, avec trois
+assertions tolérées (`DbgPrompt` répond `i`) :
+
+| Ligne de `basesrv/init.c` | Service | Composant |
+|---|---|---|
+| 449 | NtQuerySystemInformation(`SystemTimeOfDayInformation`, 3) | Ex |
+| 572 | NtSetInformationObject(`ObjectSessionInformation`, 5) sur `\BaseNamedObjects` | Ob |
+| 581 | NtQueryInformationProcess(`ProcessLUIDDeviceMapsEnabled`, 0x1C) | Ps |
+
+puis `winsrv` ne se charge pas :
+
+| Ce qui manque | Ce qu'en fait `csrss` | Composant |
+|---|---|---|
+| `advapi32_vista.dll`, importée par `rpcrt4.dll` (que `user32` atteint par `advapi32`) : « LdrpMapDll failed with status c0000135 » | « CSRSS: *** Failed loading ServerDll=winsrv (Status == 0xc0000135) », `CsrParseServerCommandLine` échoue, **`csrss` se termine** | **xtask** (le disque de démarrage) |
+
+Les imports de `winsrv` : `basesrv`, `csrsrv`, `gdi32`, `kernel32`, `ntdll`, `user32` ; `user32` importe `advapi32`,
+qui importe `rpcrt4`, qui importe `advapi32_vista`, `kernel32_vista`, `msvcrt` et `ws2_32`. Le disque de démarrage
+n'a que `csrss` et ses trois DLL serveur, plus les KnownDLLs : il lui faut la fermeture de leurs imports.

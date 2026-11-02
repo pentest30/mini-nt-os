@@ -10,11 +10,11 @@ jour à chaque commit qui change l'état.
   critères de sortie sont cochés (`smss` crée ses variables d'environnement et `\KnownDlls` ; un fichier de `C:` et une
   valeur du registre se relisent après un redémarrage, scénarios `persistence` et `registry-persistence`, `fsck.vfat`
   propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée sa session et
-  lance `csrss.exe`, qui protège son processus (Se) puis s'arrête à sa section partagée (`SharedSection=`, une section
-  basée : Mm) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
-- Branche de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35. Les PR
-  se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà
-  incluse : `git merge-base --is-ancestor HEAD origin/main`).
+  lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis ne trouve
+  pas une DLL des imports de `winsrv` (`advapi32_vista.dll`) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
+- Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis
+  `claude/m5-mm` par-dessus (l'étape 3). Les PR se fusionnent dans `main` ; après une fusion, repartir de
+  `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
@@ -215,16 +215,25 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    `SeLoadDriverPrivilege` (SeSinglePrivilegeCheck, appliqué). Tests : hôte (`se`, `ob`, `ps::session`),
    `security_self_test` ; vérifiés par mutation. `smss` obtient `SeLoadDriverPrivilege`, crée la session 0, lance
    `csrss`, qui passe `CsrSetProcessSecurity` et s'arrête à `CsrParseServerCommandLine`.
-3. [ ] **Mm : la section partagée de `csrss`** (`CsrSrvCreateSharedSection`, `compat/m5-csrss.md`, étape 7) :
-   NtCreateSection sans fichier avec `SEC_RESERVE` (pages réservées, commitées à la demande dans une vue par
-   NtAllocateVirtualMemory, `RtlCreateHeap` y bâtit son tas) et `SEC_BASED` (la base fixée par la première vue, la
-   même dans chaque processus) ; la vue en `MEM_TOP_DOWN`, `PAGE_EXECUTE_READWRITE`. Aujourd'hui « NtCreateSection
-   with SEC_RESERVE or SEC_BASED is not implemented » (`sys::section`).
-4. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
+3. [x] **Mm : la section partagée de `csrss`** (`compat/m5-csrss.md`, étape 8). `mm::section` : `SEC_RESERVE`
+   (`Section::create_shared`, l'engagement par page dans la section, `Section::commit`, `committed_run`) et
+   `SEC_BASED` (une adresse prise à la création sous `HIGH_SECTION_BASE`, `0x7F7F0000`, parmi les sections basées,
+   rendue à leur destruction) ; `VadNode::page_state` (la suite de la vue et l'engagement de la section), dont se
+   servent la faute de page et NtQueryVirtualMemory ; MEM_COMMIT dans une vue commite la section ; une vue d'une
+   section basée va à son adresse. `sys::section` : NtCreateSection avec ces attributs, NtQuerySection (adresse,
+   `SEC_RESERVE`, `SEC_BASED`). Tests : hôte (`mm`), `shared_section_self_test` ; vérifiés par mutation. `csrss` met
+   sa section en `0x7F6F0000`, y bâtit son tas, charge `basesrv`, puis échoue à charger `winsrv`.
+4. [ ] **Le disque de démarrage : la fermeture des imports de `csrss`** (`xtask/src/userland.rs`) : `rpcrt4.dll`
+   (atteinte par `user32` puis `advapi32`) importe `advapi32_vista.dll`, `kernel32_vista.dll` et `ws2_32.dll`, absentes.
+   Mettre sur le disque la fermeture des imports de `csrss` et de ses DLL serveur (lue dans les PE par `libs/pe`,
+   plutôt qu'une liste à la main), puis relancer la sonde. Ensuite, `basesrv` : ses trois assertions tolérées
+   (`SystemTimeOfDayInformation`, NtSetInformationObject(`ObjectSessionInformation`),
+   `ProcessLUIDDeviceMapsEnabled`), à faire quand elles comptent.
+5. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
    NtRequestWaitReplyPort, NtReplyPort, NtReplyWaitReceivePort avec réponse, NtListenPort ; puis les sections de
    port (messages volumineux). `csrss` crée son port d'API (`CsrApiPortInitialize`), puis se connecte à `\SmApiPort`
    (`SmConnectToSm`) et `smss` signale son événement.
-5. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
+6. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
    `ntdll`), `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer
    `smss`), NtSetInformationProcess(`ProcessBasePriority`, `ProcessDefaultHardErrorMode`).
 
@@ -259,6 +268,11 @@ services sont faits pour d'autres classes), `NtFlushInstructionCache`, `NtQueryD
   `TokenGroupsAndPrivileges`, `TokenAuditPolicy`, `TokenOrigin` (journalisées). Le jeton garde la session de son
   créateur quand celle du processus change.
 - Sessions : pas d'espace de session (Mm), ni de compte des processus d'une session ; un identifiant créé reste pris.
+
+## Dettes de Mm (l'étape 3 du M5)
+
+- Les pages d'une section `SEC_RESERVE` ne se décommitent pas (NtFreeVirtualMemory sur une vue :
+  `STATUS_UNABLE_TO_DELETE_SECTION`) ; pas de compte d'engagement (quota) ; `SEC_BASED` pour un fichier.
 
 ## Ensuite (hors jalon)
 
