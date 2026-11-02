@@ -200,6 +200,35 @@ pub(super) fn nt_query_symbolic_link_object(arguments: &[u32]) -> NtStatus {
     result(query())
 }
 
+/// Les classes de NtQueryObject demandées sans être implémentées.
+static UNSUPPORTED_QUERY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryObject");
+
+/// NtQueryObject(Handle, ObjectInformationClass, ObjectInformation, Length,
+/// ReturnLength) : ce que l'on sait d'un handle ou de son objet.
+/// `ObjectHandleFlagInformation` (4) : les attributs du handle, héritable et
+/// protégé contre la fermeture (deux BOOLEAN, `STATUS_INFO_LENGTH_MISMATCH`
+/// pour une autre taille, alignés sur un octet). Les autres classes rendent
+/// `STATUS_NOT_IMPLEMENTED`, journalisé à leur premier appel.
+pub(super) fn nt_query_object(arguments: &[u32]) -> NtStatus {
+    use abi::object::OBJECT_HANDLE_FLAG_INFORMATION;
+
+    let (handle, class, information, length, return_length) =
+        (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
+    if class != OBJECT_HANDLE_FLAG_INFORMATION {
+        return UNSUPPORTED_QUERY_CLASSES.report(class);
+    }
+    match super::current_process().handle_table.query(ob::Handle(handle)) {
+        Ok((_, attributes)) => super::return_aligned_information(
+            &[u8::from(attributes.inherit), u8::from(attributes.protect_from_close)],
+            information,
+            length,
+            return_length,
+            1,
+        ),
+        Err(status) => status,
+    }
+}
+
 /// NtSetInformationObject(Handle, ObjectInformationClass, ObjectInformation,
 /// Length) : ce qu'on change d'un handle ou de son objet.
 ///

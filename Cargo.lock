@@ -176,6 +176,7 @@ dependencies = [
  "ps",
  "regf",
  "se",
+ "win32k",
  "x86_64",
 ]
 

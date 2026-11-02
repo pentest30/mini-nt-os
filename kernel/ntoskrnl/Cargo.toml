@@ -70,6 +70,7 @@ cm               = { path = "../cm" }
 ex               = { path = "../ex" }
 lpc              = { path = "../lpc" }
 se               = { path = "../se" }
+win32k           = { path = "../win32k" }
 regf             = { path = "../../libs/regf", features = ["builder"] }
 ps               = { path = "../ps" }
 io-manager       = { path = "../io" }

@@ -34,8 +34,12 @@ forbid = Source File: ../base/system/smss/smss.c
 # token's user (Se), creates its shared section (SharedSection=, based and
 # reserved: Mm) and its heap, loads basesrv, then winsrv and its imports,
 # all on the disk (their import closure, some with long names); msvcrt
-# reads code page 20127; user32 makes its first win32k call
-# (NtUserProcessConnect), not implemented, and winsrv fails to load.
+# reads code page 20127; user32 connects to win32k (its thread becomes a
+# GUI thread, its process maps the USER shared section) and registers its
+# window procedures, gdi32 loads lpk; winsrv starts USER
+# (NtUserInitialize), then the console (consrv, its semaphores); csrsrv
+# reads a handle's flags (NtQueryObject), then connects to smss
+# (SmConnectToSm: NtConnectPort), not implemented.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -54,16 +58,31 @@ expect = [m4]   NtOpenProcessToken (0x0081)
 expect = [m4]   NtAdjustPrivilegesToken (0x000c)
 expect = [m4]   NtSetSystemInformation (0x00f9): 2 calls, the first returned 0x00000000
 expect = [m4]   NtCreateProcess (0x0031): 1 calls, the first returned 0x00000000
-expect = [m4]   NtResumeThread (0x00d6): 1 calls, the first returned 0x00000000
-# Its API port (Lpc): two threads wait on it, which nothing reaches yet.
-expect = [m4]   NtCreatePort (0x0030): 1 calls, the first returned 0x00000000
+# smss resumes csrss's first thread, csrss its server threads.
+expect = [m4]   NtResumeThread (0x00d6): 3 calls, the first returned 0x00000000
+# smss's API port (Lpc): two threads wait on it, which nothing reaches yet;
+# then csrss's API port and its port for smss (SB API).
+expect = [m4]   NtCreatePort (0x0030): 3 calls, the first returned 0x00000000
 expect = [m4]   NtReplyWaitReceivePort (0x00cb): 2 calls, the first did not return
 # csrss: the size of TokenUser, then TokenUser, and the DACL of its process.
 expect = [m4]   NtQueryInformationToken (0x00a3): 2 calls, the first returned 0xc0000023
 expect = [m4]   NtSetSecurityObject (0x00f6): 1 calls, the first returned 0x00000000
-expect = sys: NtUserProcessConnect (0x11dd) is not implemented
-expect = LDR: DLL_PROCESS_ATTACH for dll "user32.dll"
-expect = CSRSS: *** Failed loading ServerDll=winsrv (Status == 0xc0000142)
+# win32k (M5, step 6): user32 in csrss, then USER started by winsrv.
+expect = [m4]   NtUserProcessConnect (0x11dd): 1 calls, the first returned 0x00000000
+expect = [m4]   NtUserInitializeClientPfnArrays (0x11be): 1 calls, the first returned 0x00000000
+expect = [m4]   NtGdiInit (0x10db): 1 calls, the first returned 0x00000001
+expect = [m4]   NtUserInitialize (0x11bd): 1 calls, the first returned 0x00000000
+expect = [m4]   NtCreateSemaphore (0x0035):
+expect = [m4]   NtQueryObject (0x00aa): 2 calls, the first returned 0x00000000
+expect = [m4] USER: started by csrss (PID
+expect = \Windows\WindowStations created; 23 of 23 client procedures of user32 (at 0x77a20000) in SERVERINFO
+expect = sys: NtConnectPort (0x0021) is not implemented
+expect = SmConnectToSm: Connect to Sm failed c0000002
+forbid = LDR: DLL_PROCESS_ATTACH for dll "user32.dll"
+forbid = Failed loading ServerDll=winsrv
+forbid = LoadLibraryExW(lpk.dll) failing
+forbid = sys: NtUserProcessConnect (0x11dd) is not implemented
+forbid = sys: NtCreateSemaphore (0x0035) is not implemented
 expect = [m4] SMSS.EXE created csrss.exe (PID
 expect = [m4] Environment: 6 of 6 variables written
 # The KnownDLLs and their imports (smss maps both), long names included.

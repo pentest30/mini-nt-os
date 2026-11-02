@@ -12,6 +12,10 @@
 //! Un service peut aussi donner au thread un nouveau contexte, dans sa trame
 //! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException).
 //!
+//! Le premier appel d'un thread à win32k en fait un thread GUI
+//! (PsConvertToGuiThread, `win32k::convert_current_thread`) ; s'il échoue,
+//! l'appel rend son statut.
+//!
 //! Chaque appel est compté, par service ; [`service_calls`] rend les
 //! services appelés depuis [`reset_service_calls`], dans l'ordre de leur
 //! premier appel, avec ce qu'il a rendu (spike S1 : les appels système que
@@ -34,6 +38,7 @@ mod section;
 mod security;
 mod system;
 mod time;
+mod user;
 mod wait;
 
 pub(crate) use system::processor_information;
@@ -90,6 +95,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateProcess, Handler::Status(process::nt_create_process)),
     (services::NtCreateProcessEx, Handler::Status(process::nt_create_process_ex)),
     (services::NtCreateSection, Handler::Status(section::nt_create_section)),
+    (services::NtCreateSemaphore, Handler::Status(event::nt_create_semaphore)),
     (services::NtCreateSymbolicLinkObject, Handler::Status(object::nt_create_symbolic_link_object)),
     (services::NtCreateThread, Handler::Status(process::nt_create_thread)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
@@ -100,6 +106,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtFlushInstructionCache, Handler::Status(process::nt_flush_instruction_cache)),
     (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtGdiInit, Handler::Status(user::nt_gdi_init)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
     (services::NtOpenEvent, Handler::Status(event::nt_open_event)),
@@ -109,6 +116,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtOpenProcessToken, Handler::Status(security::nt_open_process_token)),
     (services::NtOpenProcessTokenEx, Handler::Status(security::nt_open_process_token_ex)),
     (services::NtOpenSection, Handler::Status(section::nt_open_section)),
+    (services::NtOpenSemaphore, Handler::Status(event::nt_open_semaphore)),
     (services::NtOpenSymbolicLinkObject, Handler::Status(object::nt_open_symbolic_link_object)),
     (services::NtOpenThreadToken, Handler::Status(security::nt_open_thread_token)),
     (services::NtOpenThreadTokenEx, Handler::Status(security::nt_open_thread_token_ex)),
@@ -122,9 +130,11 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryInformationProcess, Handler::Status(process::nt_query_information_process)),
     (services::NtQueryInformationToken, Handler::Status(security::nt_query_information_token)),
     (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
+    (services::NtQueryObject, Handler::Status(object::nt_query_object)),
     (services::NtQueryPerformanceCounter, Handler::Status(time::nt_query_performance_counter)),
     (services::NtQuerySection, Handler::Status(section::nt_query_section)),
     (services::NtQuerySecurityObject, Handler::Status(security::nt_query_security_object)),
+    (services::NtQuerySemaphore, Handler::Status(event::nt_query_semaphore)),
     (services::NtQuerySymbolicLinkObject, Handler::Status(object::nt_query_symbolic_link_object)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
     (services::NtQuerySystemTime, Handler::Status(time::nt_query_system_time)),
@@ -136,6 +146,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtReadFile, Handler::Status(file::nt_read_file)),
     (services::NtReadVirtualMemory, Handler::Status(memory::nt_read_virtual_memory)),
     (services::NtReleaseKeyedEvent, Handler::Status(event::nt_release_keyed_event)),
+    (services::NtReleaseSemaphore, Handler::Status(event::nt_release_semaphore)),
     (services::NtReplyWaitReceivePort, Handler::Status(port::nt_reply_wait_receive_port)),
     (services::NtResetEvent, Handler::Status(event::nt_reset_event)),
     (services::NtResumeThread, Handler::Status(process::nt_resume_thread)),
@@ -152,6 +163,9 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtTerminateThread, Handler::Status(process::nt_terminate_thread)),
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
+    (services::NtUserInitialize, Handler::Status(user::nt_user_initialize)),
+    (services::NtUserInitializeClientPfnArrays, Handler::Status(user::nt_user_initialize_client_pfn_arrays)),
+    (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),
     (services::NtWaitForMultipleObjects, Handler::Status(wait::nt_wait_for_multiple_objects)),
     (services::NtWaitForSingleObject, Handler::Status(wait::nt_wait_for_single_object)),
@@ -163,24 +177,40 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
 const MAX_ARGUMENTS: usize = 63;
 
 /// Le handler de chaque service de ntoskrnl, par numéro.
-static HANDLERS: [Option<Handler>; NTOSKRNL.len()] = handlers();
+static HANDLERS: [Option<Handler>; NTOSKRNL.len()] = handlers(0);
+/// Le handler de chaque service de win32k, par numéro moins `0x1000`.
+static WIN32K_HANDLERS: [Option<Handler>; WIN32K.len()] = handlers(WIN32K_BASE);
 
-const fn handlers() -> [Option<Handler>; NTOSKRNL.len()] {
-    let mut table: [Option<Handler>; NTOSKRNL.len()] = [None; NTOSKRNL.len()];
+/// La table des handlers des services de [`IMPLEMENTED`] dont le numéro est
+/// `base` plus leur indice.
+const fn handlers<const N: usize>(base: u32) -> [Option<Handler>; N] {
+    let mut table: [Option<Handler>; N] = [None; N];
     let mut i = 0;
     while i < IMPLEMENTED.len() {
         let (number, handler) = IMPLEMENTED[i];
-        assert!((number as usize) < NTOSKRNL.len(), "an implemented service outside the ntoskrnl table");
-        assert!(table[number as usize].is_none(), "a service implemented twice");
-        table[number as usize] = Some(handler);
+        let index = (number & abi::service::INDEX_MASK) as usize;
+        assert!(number >> abi::service::TABLE_SHIFT <= 1, "an implemented service outside the tables");
+        if number & !abi::service::INDEX_MASK == base {
+            assert!(index < N, "an implemented service outside its table");
+            assert!(table[index].is_none(), "a service implemented twice");
+            table[index] = Some(handler);
+        }
         i += 1;
     }
     table
 }
 
+/// Le handler du service d'indice `index` de `table`.
+fn handler(table: Table, index: usize) -> Option<Handler> {
+    match table {
+        Table::Ntoskrnl => HANDLERS.get(index).copied().flatten(),
+        Table::Win32k => WIN32K_HANDLERS.get(index).copied().flatten(),
+    }
+}
+
 /// Le service `number` a un handler.
 pub fn is_implemented(number: u32) -> bool {
-    matches!(lookup(number), Some((Table::Ntoskrnl, _))) && HANDLERS[number as usize].is_some()
+    lookup(number).is_some_and(|(table, _)| handler(table, (number & abi::service::INDEX_MASK) as usize).is_some())
 }
 
 /// Les services sans handler déjà appelés : un bit par service, ntoskrnl
@@ -295,17 +325,21 @@ pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completi
         *word = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
     }
     let index = (number & abi::service::INDEX_MASK) as usize;
-    let handler = match table {
-        Table::Ntoskrnl => HANDLERS[index],
-        Table::Win32k => None,
-    };
     let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
     let first = count_call(bit);
     let words = &words[..count];
-    let completion = match handler {
-        Some(Handler::Status(handler)) => Completion::Status(handler(words)),
-        Some(Handler::Frame(handler)) => handler(words, frame).map_or_else(Completion::Status, |()| Completion::Frame),
-        None => {
+    // A first call to win32k makes a GUI thread (PsConvertToGuiThread).
+    let converted = match table {
+        Table::Win32k => win32k::convert_current_thread().map(drop),
+        Table::Ntoskrnl => Ok(()),
+    };
+    let completion = match (converted, handler(table, index)) {
+        (Err(status), _) => Completion::Status(status),
+        (Ok(()), Some(Handler::Status(handler))) => Completion::Status(handler(words)),
+        (Ok(()), Some(Handler::Frame(handler))) => {
+            handler(words, frame).map_or_else(Completion::Status, |()| Completion::Frame)
+        }
+        (Ok(()), None) => {
             let mask = 1 << (bit % 32);
             if REPORTED[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
                 // In both ABIs, the return address into the caller of the
@@ -359,11 +393,22 @@ impl ClassReport {
 /// `STATUS_DATATYPE_MISALIGNMENT` pour un tampon qui n'est pas aligné sur 4
 /// octets ; `STATUS_ACCESS_VIOLATION` si l'écriture faute.
 fn return_information(information: &[u8], buffer: u32, length: u32, return_length: u32) -> NtStatus {
+    return_aligned_information(information, buffer, length, return_length, 4)
+}
+
+/// [`return_information`], pour un tampon aligné sur `alignment` octets.
+fn return_aligned_information(
+    information: &[u8],
+    buffer: u32,
+    length: u32,
+    return_length: u32,
+    alignment: usize,
+) -> NtStatus {
     let size = information.len() as u32;
     let status = if length != size {
         STATUS_INFO_LENGTH_MISMATCH
     } else {
-        match ke::usermem::probe_for_write(u64::from(buffer), information.len(), 4)
+        match ke::usermem::probe_for_write(u64::from(buffer), information.len(), alignment)
             .and_then(|()| ke::usermem::copy_to_user(u64::from(buffer), information))
         {
             Ok(()) => STATUS_SUCCESS,
