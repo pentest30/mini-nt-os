@@ -134,6 +134,15 @@ pub struct MappedView {
     pub status: NtStatus,
 }
 
+/// Les options d'une vue (NtMapViewOfSection).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ViewOptions {
+    /// MEM_TOP_DOWN : au plus haut, quand l'adresse est libre.
+    pub top_down: bool,
+    /// SEC_NO_CHANGE : la protection de la vue ne changera plus.
+    pub no_change: bool,
+}
+
 /// L'espace d'adresses d'un processus : sa PML4 et sa VAD.
 pub struct AddressSpace {
     pml4: Pfn,
@@ -325,7 +334,7 @@ impl AddressSpace {
         size: u64,
         protect: PageProtect,
     ) -> Result<MappedView, NtStatus> {
-        self.map(section, base, offset, size, protect, false)
+        self.map(section, base, offset, size, protect, ViewOptions::default())
     }
 
     /// Comme [`map_view`](Self::map_view), mais en `base` 0, là où il y a la
@@ -343,7 +352,25 @@ impl AddressSpace {
         size: u64,
         protect: PageProtect,
     ) -> Result<MappedView, NtStatus> {
-        self.map(section, base, offset, size, protect, true)
+        self.map(section, base, offset, size, protect, ViewOptions { top_down: true, ..ViewOptions::default() })
+    }
+
+    /// Comme [`map_view`](Self::map_view), avec les `options` de
+    /// NtMapViewOfSection : au plus haut (`MEM_TOP_DOWN`), et une protection
+    /// qui ne changera plus (`SEC_NO_CHANGE`).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn map_view_with(
+        &self,
+        section: &Arc<Section>,
+        base: u64,
+        offset: u64,
+        size: u64,
+        protect: PageProtect,
+        options: ViewOptions,
+    ) -> Result<MappedView, NtStatus> {
+        self.map(section, base, offset, size, protect, options)
     }
 
     fn map(
@@ -353,8 +380,9 @@ impl AddressSpace {
         offset: u64,
         size: u64,
         protect: PageProtect,
-        top_down: bool,
+        options: ViewOptions,
     ) -> Result<MappedView, NtStatus> {
+        let top_down = options.top_down;
         if !protect.is_valid() {
             return Err(STATUS_INVALID_PAGE_PROTECTION);
         }
@@ -419,7 +447,9 @@ impl AddressSpace {
         };
         let protect = if image.is_some() { section.protect() } else { protects[0].1 };
         let kind = VadKind::View { section: section.clone(), offset };
-        vad.insert(VadNode::view(base, base + size, protect, kind, &protects)).expect("a free range");
+        let mut node = VadNode::view(base, base + size, protect, kind, &protects);
+        node.no_change = options.no_change;
+        vad.insert(node).expect("a free range");
         Ok(MappedView { base, size, status })
     }
 

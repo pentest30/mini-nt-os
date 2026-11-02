@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_HANDLE_NOT_CLOSABLE, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_HANDLE,
-    STATUS_OBJECT_TYPE_MISMATCH,
+    STATUS_INVALID_PARAMETER, STATUS_OBJECT_TYPE_MISMATCH,
 };
 use abi::object::{AccessMask, DUPLICATE_CLOSE_SOURCE, DUPLICATE_SAME_ACCESS, DUPLICATE_SAME_ATTRIBUTES};
 use core::any::Any;
@@ -156,12 +156,7 @@ impl HandleTable {
         expected: Option<&ObjectType>,
         desired: AccessMask,
     ) -> Result<ObjectRef, NtStatus> {
-        let (object, granted) = {
-            let slots = self.slots.lock();
-            let entry =
-                handle.slot().and_then(|slot| slots.entries.get(slot)?.as_ref()).ok_or(STATUS_INVALID_HANDLE)?;
-            (entry.object.clone(), entry.access)
-        };
+        let (object, granted, _) = self.entry(handle)?;
         if expected.is_some_and(|ty| !object.is_type(ty)) {
             return Err(STATUS_OBJECT_TYPE_MISMATCH);
         }
@@ -189,9 +184,16 @@ impl HandleTable {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn query(&self, handle: Handle) -> Result<(AccessMask, HandleAttributes), NtStatus> {
+        let (_, access, attributes) = self.entry(handle)?;
+        Ok((access, attributes))
+    }
+
+    /// L'objet, les droits et les attributs de `handle`, lus ensemble ;
+    /// `STATUS_INVALID_HANDLE` sans entrée.
+    fn entry(&self, handle: Handle) -> Result<(ObjectRef, AccessMask, HandleAttributes), NtStatus> {
         let slots = self.slots.lock();
         let entry = handle.slot().and_then(|slot| slots.entries.get(slot)?.as_ref()).ok_or(STATUS_INVALID_HANDLE)?;
-        Ok((entry.access, entry.attributes))
+        Ok((entry.object.clone(), entry.access, entry.attributes))
     }
 
     /// NtSetInformationObject (`ObjectHandleFlagInformation`) : les attributs
@@ -273,35 +275,55 @@ impl Drop for HandleTable {
     }
 }
 
-/// NtDuplicateObject : un handle dans `target` sur l'objet de `handle` dans
-/// `source`. Avec `DUPLICATE_SAME_ACCESS`, les droits du handle source, sinon
-/// ceux que le type accorde pour `desired` ; avec `DUPLICATE_SAME_ATTRIBUTES`,
-/// ses attributs, sinon `attributes`. Avec `DUPLICATE_CLOSE_SOURCE`, le handle
-/// source se ferme, que la copie réussisse ou non.
+/// Ce que NtDuplicateObject duplique.
+#[derive(Clone)]
+pub enum DuplicateSource {
+    /// Un handle de la table source.
+    Handle(Handle),
+    /// Un pseudo-handle, que Ps résout (`NtCurrentProcess()`,
+    /// `NtCurrentThread()`) : son objet, avec les droits `access`, sans
+    /// attributs ; il n'y a rien à fermer.
+    Pseudo { object: ObjectRef, access: AccessMask },
+}
+
+/// ObDuplicateObject : un handle dans `target` sur l'objet de `source` (un
+/// handle de la table `table`, ou un pseudo-handle résolu). Avec
+/// `DUPLICATE_SAME_ACCESS`, les droits de la source, sinon ceux que le type
+/// accorde pour `desired` ; avec `DUPLICATE_SAME_ATTRIBUTES`, ses attributs,
+/// sinon `attributes`. Sans table cible, rien n'est copié : la source doit
+/// alors se fermer (`DUPLICATE_CLOSE_SOURCE`, sinon
+/// `STATUS_INVALID_PARAMETER`), et le résultat est `None`. Avec
+/// `DUPLICATE_CLOSE_SOURCE`, le handle source se ferme, que la copie
+/// réussisse ou non (un handle protégé reste).
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
 pub fn duplicate(
-    source: &HandleTable,
-    handle: Handle,
-    target: &HandleTable,
+    table: &HandleTable,
+    source: DuplicateSource,
+    target: Option<&HandleTable>,
     desired: AccessMask,
     attributes: HandleAttributes,
     options: u32,
-) -> Result<Handle, NtStatus> {
-    let copied = (|| {
-        let (granted, source_attributes) = source.query(handle)?;
-        let object = source.reference(handle, None, AccessMask::NONE)?;
+) -> Result<Option<Handle>, NtStatus> {
+    let found = match &source {
+        DuplicateSource::Handle(handle) => table.entry(*handle),
+        DuplicateSource::Pseudo { object, access } => Ok((object.clone(), *access, HandleAttributes::default())),
+    };
+    let copied = found.and_then(|(object, granted, source_attributes)| {
+        let Some(target) = target else {
+            return if options & DUPLICATE_CLOSE_SOURCE != 0 { Ok(None) } else { Err(STATUS_INVALID_PARAMETER) };
+        };
         let attributes = if options & DUPLICATE_SAME_ATTRIBUTES != 0 { source_attributes } else { attributes };
         if options & DUPLICATE_SAME_ACCESS != 0 {
-            target.insert_granted(object, granted, attributes)
+            target.insert_granted(object, granted, attributes).map(Some)
         } else {
-            target.insert(object, desired, attributes)
+            target.insert(object, desired, attributes).map(Some)
         }
-    })();
-    if options & DUPLICATE_CLOSE_SOURCE != 0 {
+    });
+    if let (DuplicateSource::Handle(handle), true) = (source, options & DUPLICATE_CLOSE_SOURCE != 0) {
         // The source goes whatever happened; a protected one stays.
-        let _ = source.close(handle);
+        let _ = table.close(handle);
     }
     copied
 }
@@ -326,6 +348,7 @@ mod tests {
     }
 
     const NONE: HandleAttributes = HandleAttributes { inherit: false, protect_from_close: false };
+    const ALL_ATTRIBUTES: HandleAttributes = HandleAttributes { inherit: true, protect_from_close: true };
     const ALL: AccessMask = AccessMask::GENERIC_ALL;
 
     #[test]
@@ -434,23 +457,18 @@ mod tests {
         let object = event();
         let inherit = HandleAttributes { inherit: true, protect_from_close: false };
         let handle = source.insert(object.clone(), AccessMask::GENERIC_READ, inherit).unwrap();
-        let same = duplicate(
-            &source,
-            handle,
-            &target,
-            AccessMask::NONE,
-            NONE,
-            DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES,
-        );
+        let from = DuplicateSource::Handle(handle);
+        let options = DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES;
+        let same = duplicate(&source, from.clone(), Some(&target), AccessMask::NONE, NONE, options).unwrap();
         assert_eq!(target.query(same.unwrap()), source.query(handle));
-        let narrower = duplicate(&source, handle, &target, AccessMask(1), NONE, 0).unwrap();
+        let narrower = duplicate(&source, from.clone(), Some(&target), AccessMask(1), NONE, 0).unwrap().unwrap();
         assert_eq!(target.query(narrower), Ok((AccessMask(1), NONE)));
-        let moved =
-            duplicate(&source, handle, &target, AccessMask::NONE, NONE, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE);
-        assert!(moved.is_ok());
+        let options = DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE;
+        let moved = duplicate(&source, from.clone(), Some(&target), AccessMask::NONE, NONE, options);
+        assert!(moved.is_ok_and(|handle| handle.is_some()));
         assert_eq!(source.count(), 0, "the source closed");
         assert_eq!(object.handle_count(), 3);
-        let failed = duplicate(&source, handle, &target, ALL, NONE, DUPLICATE_CLOSE_SOURCE);
+        let failed = duplicate(&source, from, Some(&target), ALL, NONE, DUPLICATE_CLOSE_SOURCE);
         assert_eq!(failed, Err(STATUS_INVALID_HANDLE));
     }
 
@@ -459,9 +477,44 @@ mod tests {
         let source = HandleTable::new();
         let handle = source.insert(event(), ALL, NONE).unwrap();
         let full = HandleTable::with_limit(0);
-        let result = duplicate(&source, handle, &full, ALL, NONE, DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE);
+        let options = DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE;
+        let result = duplicate(&source, DuplicateSource::Handle(handle), Some(&full), ALL, NONE, options);
         assert_eq!(result, Err(STATUS_INSUFFICIENT_RESOURCES));
         assert_eq!(source.count(), 0);
+    }
+
+    #[test]
+    fn without_a_target_duplicate_only_closes_the_source() {
+        let source = HandleTable::new();
+        let protect = HandleAttributes { inherit: false, protect_from_close: true };
+        let (open, protected) =
+            (source.insert(event(), ALL, NONE).unwrap(), source.insert(event(), ALL, protect).unwrap());
+        let refused = duplicate(&source, DuplicateSource::Handle(open), None, ALL, NONE, DUPLICATE_SAME_ACCESS);
+        assert_eq!(refused, Err(STATUS_INVALID_PARAMETER), "a copy needs a target");
+        assert_eq!(source.count(), 2, "nothing closed without DUPLICATE_CLOSE_SOURCE");
+        let closed = duplicate(&source, DuplicateSource::Handle(open), None, ALL, NONE, DUPLICATE_CLOSE_SOURCE);
+        assert_eq!(closed, Ok(None));
+        assert_eq!(source.query(open), Err(STATUS_INVALID_HANDLE));
+        let kept = duplicate(&source, DuplicateSource::Handle(protected), None, ALL, NONE, DUPLICATE_CLOSE_SOURCE);
+        assert_eq!(kept, Ok(None));
+        assert!(source.query(protected).is_ok(), "a protected handle stays");
+        let invalid =
+            duplicate(&source, DuplicateSource::Handle(Handle(0x400)), None, ALL, NONE, DUPLICATE_CLOSE_SOURCE);
+        assert_eq!(invalid, Err(STATUS_INVALID_HANDLE), "the source is checked first");
+    }
+
+    #[test]
+    fn a_pseudo_handle_is_duplicated_with_its_access_and_never_closed() {
+        let (source, target) = (HandleTable::new(), HandleTable::new());
+        let object = event();
+        let pseudo = DuplicateSource::Pseudo { object: object.clone(), access: AccessMask(0x000F_0003) };
+        let options = DUPLICATE_SAME_ACCESS | DUPLICATE_SAME_ATTRIBUTES | DUPLICATE_CLOSE_SOURCE;
+        let handle = duplicate(&source, pseudo.clone(), Some(&target), AccessMask::NONE, ALL_ATTRIBUTES, options);
+        let handle = handle.unwrap().unwrap();
+        assert_eq!(target.query(handle), Ok((AccessMask(0x000F_0003), NONE)), "its access, no attributes");
+        assert!(Arc::ptr_eq(&target.reference(handle, None, AccessMask::NONE).unwrap(), &object));
+        let asked = duplicate(&source, pseudo, Some(&target), AccessMask::GENERIC_READ, ALL_ATTRIBUTES, 0);
+        assert_eq!(target.query(asked.unwrap().unwrap()), Ok((AccessMask(0x0002_0001), ALL_ATTRIBUTES)));
     }
 
     #[test]

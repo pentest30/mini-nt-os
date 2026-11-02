@@ -28,7 +28,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_CID, STATUS_INVALID_PARAMETER,
-    STATUS_PENDING, STATUS_PROCESS_IS_TERMINATING, STATUS_SECTION_NOT_IMAGE,
+    STATUS_PENDING, STATUS_PORT_ALREADY_SET, STATUS_PROCESS_IS_TERMINATING, STATUS_SECTION_NOT_IMAGE,
 };
 use abi::peb32::Peb32;
 use abi::process::{
@@ -41,7 +41,7 @@ use mm::address_space::AddressSpace;
 use mm::section::Section;
 use mm::vad::PageProtect;
 use mm::virtual_alloc::{AllocType, PAGE_SIZE};
-use ob::{create_object, AccessMask, GenericMapping, HandleTable, Object, ObjectType};
+use ob::{create_object, AccessMask, GenericMapping, HandleTable, Object, ObjectRef, ObjectType};
 use se::Token;
 
 use crate::ethread::EThread;
@@ -218,6 +218,11 @@ pub struct EProcess {
     /// Win32Process : ce que win32k garde de lui, une fois qu'un de ses
     /// threads est devenu un thread GUI ; rendu avec lui.
     win32_process: KSpinLock<Option<Arc<dyn Any + Send + Sync>>>,
+    /// ExceptionPort : le port LPC (celui de `csrss`) où iraient ses
+    /// exceptions non traitées, posé une fois. Le noyau ne s'en sert pas
+    /// encore : une exception non traitée en seconde chance termine le
+    /// processus.
+    exception_port: KSpinLock<Option<ObjectRef>>,
 }
 
 impl EProcess {
@@ -268,6 +273,7 @@ impl EProcess {
                 base_priority: AtomicU8::new(ke::sched::NORMAL_PRIORITY),
                 hard_error_mode: AtomicU32::new(hard_error_mode),
                 win32_process: KSpinLock::new(None),
+                exception_port: KSpinLock::new(None),
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
@@ -518,6 +524,28 @@ impl EProcess {
     /// Tout niveau.
     pub fn set_hard_error_mode(&self, mode: u32) {
         self.hard_error_mode.store(mode, Ordering::Relaxed);
+    }
+
+    /// NtSetInformationProcess(`ProcessExceptionPort`) : son port
+    /// d'exception, une fois ; `STATUS_PORT_ALREADY_SET` ensuite.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_exception_port(&self, port: ObjectRef) -> Result<(), NtStatus> {
+        let mut slot = self.exception_port.lock();
+        if slot.is_some() {
+            return Err(STATUS_PORT_ALREADY_SET);
+        }
+        *slot = Some(port);
+        Ok(())
+    }
+
+    /// Son port d'exception, s'il en a un.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn exception_port(&self) -> Option<ObjectRef> {
+        self.exception_port.lock().clone()
     }
 
     /// PsGetProcessWin32Process : ce que win32k garde de lui ; `None` avant

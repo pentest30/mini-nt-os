@@ -216,6 +216,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   La sonde laisse passer la fin d'un objet critique, comme un débogueur (`ps::set_critical_breaks_ignored`). L'IRQL des
   tests hôte est propre à chaque thread (`hal::irql`). `csrss` et `smss` se connectent : `csrss` est démarré ; `smss`
   s'arrête à `winlogon.exe`, absent du disque.
+  M5, étape 9 (`winlogon`, en cours) : `winlogon.exe` sur le disque ; NtDuplicateObject (`ob::duplicate` : pseudo-handles
+  résolus par Ps, sans cible, source fermée quel que soit le résultat). `smss` confie `winlogon` à `csrss`
+  (`SmExecPgm`), qui en fait un processus CSR (`ProcessExceptionPort` ; NtQueryInformationThread :
+  `ThreadBasicInformation`, `ThreadTimes`, `ThreadIsTerminated`). Vues `SEC_NO_CHANGE` (`VadNode::no_change`,
+  `AddressSpace::map_view_with` : NtProtectVirtualMemory refusé) : `kernel32` se connecte à `csrss`. `winlogon`
+  s'arrête à sa station de fenêtres (USER, M6) et faute dans `user32`.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

@@ -160,6 +160,9 @@ pub struct VadNode {
     /// Protection donnée à la réservation (AllocationProtect).
     pub protect: PageProtect,
     pub kind: VadKind,
+    /// NoChange : une vue projetée avec `SEC_NO_CHANGE`, dont la protection
+    /// ne change plus (NtProtectVirtualMemory la refuse).
+    pub no_change: bool,
     /// Les pages de `start` à `end`, dans l'ordre ; deux suites voisines
     /// diffèrent toujours.
     runs: Vec<PageRun>,
@@ -205,7 +208,7 @@ impl VadNode {
     pub fn reserved(start: u64, end: u64, protect: PageProtect, kind: VadKind) -> Self {
         assert!(start.is_multiple_of(PAGE) && end.is_multiple_of(PAGE) && start < end, "VAD [{start:#x}, {end:#x})");
         let runs = alloc::vec![PageRun { pages: (end - start) / PAGE, state: PageState::Reserved, protect }];
-        Self { start, end, protect, kind, runs }
+        Self { start, end, protect, kind, no_change: false, runs }
     }
 
     /// L'état de la page `addr` et sa protection, et la fin (exclue) des

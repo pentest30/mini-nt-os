@@ -365,6 +365,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     port_self_test();
     security_self_test();
     information_services_self_test();
+    duplicate_object_self_test();
+    thread_information_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -3917,9 +3919,12 @@ fn security_self_test() {
 /// page not committed stays out of reach. Once nothing holds the section,
 /// its address is free for the next based section.
 fn shared_section_self_test() {
-    use abi::memory::{MemoryBasicInformation32, SectionBasicInformation32, SEC_BASED, SEC_RESERVE, VIEW_UNMAP};
+    use abi::memory::{
+        MemoryBasicInformation32, SectionBasicInformation32, SEC_BASED, SEC_NO_CHANGE, SEC_RESERVE, VIEW_UNMAP,
+    };
     use abi::ntstatus::{
-        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_SUCCESS, STATUS_WAIT_0,
+        NtStatus, STATUS_ACCESS_VIOLATION, STATUS_CONFLICTING_ADDRESSES, STATUS_INVALID_PAGE_PROTECTION,
+        STATUS_INVALID_PARAMETER_9, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::services;
     use alloc::sync::Arc;
@@ -3950,6 +3955,12 @@ fn shared_section_self_test() {
     const OA: u32 = DATA + 0xE0;
     const US: u32 = DATA + 0xF8;
     const NAME: u32 = DATA + 0x100;
+    const FIXED_BASE: u32 = DATA + 0x140; // a SEC_NO_CHANGE view of the plain section
+    const FIXED_SIZE: u32 = DATA + 0x144;
+    const PROTECT_SIZE: u32 = DATA + 0x148;
+    const OLD_PROTECT: u32 = DATA + 0x14C;
+    const REFUSED_BASE: u32 = DATA + 0x150;
+    const REFUSED_SIZE: u32 = DATA + 0x154;
     const DONE: u32 = DATA + 0x1FC;
     const SECTION_NAME: &str = "\\BaseNamedObjects\\MinoShared";
     const SECTION_BYTES: u32 = 0x2_0000;
@@ -3974,6 +3985,7 @@ fn shared_section_self_test() {
     put(SECTION_SIZE, &u64::from(SECTION_BYTES).to_le_bytes());
     put(PLAIN_SECTION_SIZE, &0x3000u64.to_le_bytes());
     put(COMMIT_SIZE, &0x1000u32.to_le_bytes());
+    put(PROTECT_SIZE, &0x1000u32.to_le_bytes());
 
     let (v, m) = (Arg::Value, Arg::Memory);
     let status = |i: u32| STATUS + 4 * i;
@@ -4021,6 +4033,36 @@ fn shared_section_self_test() {
     )
     .store_eax(status(8));
     code.call_args(services::NtQuerySection, &[m(HANDLE + 4), v(0), v(PLAIN_INFO), v(16), v(0)]).store_eax(status(9));
+    // As csrsrv maps its shared section in each client
+    // (CsrSrvAttachSharedSection): SEC_NO_CHANGE, read only; at the top.
+    let (ro, fixed_type) = (0x02, SEC_NO_CHANGE | MEM_TOP_DOWN);
+    code.call_args(
+        map,
+        &[m(HANDLE + 4), v(me), v(FIXED_BASE), v(0), v(0), v(0), v(FIXED_SIZE), v(VIEW_UNMAP), v(fixed_type), v(ro)],
+    )
+    .store_eax(status(10));
+    code.call_args(
+        services::NtProtectVirtualMemory,
+        &[v(me), v(FIXED_BASE), v(PROTECT_SIZE), v(PAGE_READWRITE), v(OLD_PROTECT)],
+    )
+    .store_eax(status(11));
+    code.call_args(services::NtUnmapViewOfSection, &[v(me), m(FIXED_BASE)]).store_eax(status(12));
+    code.call_args(
+        map,
+        &[
+            m(HANDLE + 4),
+            v(me),
+            v(REFUSED_BASE),
+            v(0),
+            v(0),
+            v(0),
+            v(REFUSED_SIZE),
+            v(VIEW_UNMAP),
+            v(MEM_COMMIT),
+            v(ro),
+        ],
+    )
+    .store_eax(status(13));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x400];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -4050,7 +4092,7 @@ fn shared_section_self_test() {
     }
     let words = |at: u32, count: u32| (0..count).map(|i| read(at + 4 * i)).collect::<alloc::vec::Vec<u32>>();
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..10).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..14).map(|i| NtStatus(read(status(i)))).collect();
     let object = ob::namespace().open(SECTION_NAME, None, Some(&SECTION_TYPE), 0).expect("the named section");
     let section: Arc<Section> = Arc::clone(&ob::downcast::<Arc<Section>>(&object).expect("a section"));
     drop(object);
@@ -4081,6 +4123,14 @@ fn shared_section_self_test() {
     assert_eq!((statuses[7], statuses[8], statuses[9]), (STATUS_SUCCESS, STATUS_SUCCESS, STATUS_SUCCESS));
     assert_ne!(read(PLAIN_BASE), 0, "a section without a base maps anywhere");
     assert_eq!(words(PLAIN_INFO, 2), [0, SEC_RESERVE], "NtQuerySection: no address, SEC_RESERVE");
+    let fixed = read(FIXED_BASE);
+    assert_eq!((statuses[10], read(FIXED_SIZE)), (STATUS_SUCCESS, 0x3000), "a SEC_NO_CHANGE view");
+    assert!(fixed > 0x7000_0000 && fixed > read(PLAIN_BASE), "MEM_TOP_DOWN: at the top, {fixed:#x}");
+    assert_eq!(statuses[11], STATUS_INVALID_PAGE_PROTECTION, "its protection does not change");
+    assert_eq!(read(OLD_PROTECT), 0, "nothing returned");
+    assert_eq!(statuses[12], STATUS_SUCCESS, "it is unmapped all the same");
+    assert!(read_from(&process, fixed).is_err(), "no view left there");
+    assert_eq!(statuses[13], STATUS_INVALID_PARAMETER_9, "MEM_COMMIT is no allocation type of a view");
 
     // Another process sees the page committed, and only that one.
     let other = ps::create_process(&ps::system_process(), &image, "shared2.exe", false).expect("a second process");
@@ -4113,7 +4163,8 @@ fn shared_section_self_test() {
     drop(again);
     log::info!(
         "[smoke] Mm: a shared section from user mode: SEC_BASED | SEC_RESERVE, NtQuerySection, its view at its \
-         address, a page committed by NtAllocateVirtualMemory and seen from another process"
+         address, a page committed by NtAllocateVirtualMemory and seen from another process; a SEC_NO_CHANGE view \
+         at the top, whose protection does not change"
     );
 }
 
@@ -4312,6 +4363,314 @@ fn information_services_self_test() {
         "[smoke] sys: time and information from user mode: NtQuerySystemTime, NtQueryPerformanceCounter, \
          SystemTimeOfDayInformation, SystemRangeStartInformation, NtQueryDebugFilterState, NtSetInformationObject, \
          ProcessLUIDDeviceMapsEnabled, ProcessCookie, NtFlushInstructionCache"
+    );
+}
+
+/// NtDuplicateObject from user mode (`sys::object`, Ob, M5): an event's
+/// handle copied with its access and attributes, then with less access and
+/// new attributes; `NtCurrentProcess()` and `NtCurrentThread()` turned into
+/// handles with the access asked for or all of their type's; a source
+/// process opened without `PROCESS_DUP_HANDLE` refused, and `*TargetHandle`
+/// zeroed first; no target: refused without `DUPLICATE_CLOSE_SOURCE`, else the
+/// source closed; a bad source process; `*TargetHandle` at a bad address
+/// (nothing created); a handle copied into another process; a bad target
+/// process, the source closed all the same; a protected source handle kept
+/// by `DUPLICATE_CLOSE_SOURCE`.
+fn duplicate_object_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_ACCESS_VIOLATION, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER,
+        STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::{DUPLICATE_CLOSE_SOURCE, DUPLICATE_SAME_ACCESS, DUPLICATE_SAME_ATTRIBUTES};
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use ob::{AccessMask, Handle, HandleAttributes};
+    use pe::builder::Pe32Builder;
+    use ps::eprocess::{PROCESS_ALL_ACCESS, PROCESS_DUP_HANDLE};
+    use ps::ethread::THREAD_ALL_ACCESS;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const EVENT: u32 = DATA + 0x40;
+    const SAME: u32 = DATA + 0x44;
+    const NARROW: u32 = DATA + 0x48;
+    const SELF: u32 = DATA + 0x4C;
+    const THREAD: u32 = DATA + 0x50;
+    const OTHER: u32 = DATA + 0x54;
+    const REMOTE: u32 = DATA + 0x58;
+    const MOVED: u32 = DATA + 0x5C;
+    const ALL: u32 = DATA + 0x60;
+    const REFUSED: u32 = DATA + 0x64;
+    const COPY: u32 = DATA + 0x68;
+    const DONE: u32 = DATA + 0x7C;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const BOTH: HandleAttributes = HandleAttributes { inherit: true, protect_from_close: true };
+
+    let mut data = alloc::vec![0u8; 0x80];
+    data[(REFUSED - DATA) as usize..][..4].copy_from_slice(&0xAAAA_AAAAu32.to_le_bytes());
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (me, dup) = (NT_CURRENT_PROCESS, services::NtDuplicateObject);
+    let (same, close) = (DUPLICATE_SAME_ACCESS, DUPLICATE_CLOSE_SOURCE);
+    let mut code = Code::new();
+    code.call_args(services::NtCreateEvent, &[v(EVENT), v(0x001F_0003), v(0), v(0), v(0)]).store_eax(status(0));
+    code.call_args(dup, &[v(me), m(EVENT), v(me), v(SAME), v(0), v(0), v(same | DUPLICATE_SAME_ATTRIBUTES)]);
+    code.store_eax(status(1));
+    code.call_args(dup, &[v(me), m(EVENT), v(me), v(NARROW), v(SYNCHRONIZE), v(3), v(0)]).store_eax(status(2));
+    code.call_args(dup, &[v(me), v(me), v(me), v(SELF), v(0x400), v(0), v(0)]).store_eax(status(3));
+    code.call_args(dup, &[v(me), v(NT_CURRENT_THREAD), v(me), v(THREAD), v(0), v(0), v(same)]).store_eax(status(4));
+    code.call_args(dup, &[m(SELF), m(EVENT), v(me), v(REFUSED), v(0), v(0), v(same)]).store_eax(status(5));
+    code.call_args(dup, &[v(me), m(EVENT), v(0), v(0), v(0), v(0), v(0)]).store_eax(status(6));
+    code.call_args(dup, &[v(me), m(SAME), v(0), v(0), v(0), v(0), v(close)]).store_eax(status(7));
+    code.call_args(dup, &[v(0x1234), m(EVENT), v(me), v(MOVED), v(0), v(0), v(same)]).store_eax(status(8));
+    code.call_args(dup, &[v(me), m(EVENT), v(me), v(0x10), v(0), v(0), v(same)]).store_eax(status(9));
+    code.call_args(dup, &[v(me), m(EVENT), m(OTHER), v(REMOTE), v(0), v(0), v(same)]).store_eax(status(10));
+    code.call_args(dup, &[v(me), m(THREAD), v(me), v(COPY), v(0), v(0), v(same)]).store_eax(status(11));
+    code.call_args(dup, &[v(me), m(COPY), v(0x1234), v(MOVED), v(0), v(0), v(same | close)]).store_eax(status(12));
+    code.call_args(dup, &[v(me), v(me), v(me), v(ALL), v(0), v(0), v(same)]).store_eax(status(13));
+    let options = same | DUPLICATE_SAME_ATTRIBUTES | close;
+    code.call_args(dup, &[v(me), m(NARROW), v(me), v(MOVED), v(0), v(0), v(options)]).store_eax(status(14));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x400];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x400, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x80, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let system = ps::system_process();
+    let process = ps::create_process(&system, &section, "duplicate.exe", false).expect("a process");
+    let other = ps::create_process(&system, &section, "dupother.exe", false).expect("the other process");
+    let handle = process.handle_table.insert(other.clone(), PROCESS_DUP_HANDLE, HandleAttributes::default());
+    let handle = handle.expect("a handle on the other process");
+    process.write_memory(u64::from(OTHER), &handle.0.to_le_bytes()).expect("write the handle");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the duplication test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..15).map(|i| NtStatus(read(status(i)))).collect();
+    let table = &process.handle_table;
+    let object = |handle: u32| table.reference(Handle(handle), None, AccessMask::NONE).expect("a handle");
+    let event = object(read(EVENT));
+    assert_eq!((statuses[0], statuses[1]), (STATUS_SUCCESS, STATUS_SUCCESS), "an event, its handle copied");
+    assert_eq!(statuses[2], STATUS_SUCCESS, "less access, other attributes");
+    assert_eq!(table.query(Handle(read(NARROW))), Ok((AccessMask(SYNCHRONIZE), BOTH)), "SYNCHRONIZE, both attributes");
+    assert!(Arc::ptr_eq(&object(read(NARROW)), &event), "the same event");
+    assert_eq!(statuses[3], STATUS_SUCCESS, "NtCurrentProcess() as a handle");
+    assert_eq!(table.query(Handle(read(SELF))), Ok((AccessMask(0x400), HandleAttributes::default())));
+    let me_object: ob::ObjectRef = process.clone();
+    assert!(Arc::ptr_eq(&object(read(SELF)), &me_object), "the process itself");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "NtCurrentThread() as a handle");
+    let thread_object: ob::ObjectRef = thread.clone();
+    assert!(Arc::ptr_eq(&object(read(THREAD)), &thread_object), "the thread itself");
+    assert_eq!(table.query(Handle(read(THREAD))).map(|(access, _)| access), Ok(THREAD_ALL_ACCESS), "all its access");
+    assert_eq!((statuses[5], read(REFUSED)), (STATUS_ACCESS_DENIED, 0), "PROCESS_DUP_HANDLE; *TargetHandle zeroed");
+    assert_eq!(statuses[6], STATUS_INVALID_PARAMETER, "no target, no DUPLICATE_CLOSE_SOURCE");
+    assert_eq!(statuses[7], STATUS_SUCCESS, "no target: the source closed");
+    assert_eq!(statuses[8], STATUS_INVALID_HANDLE, "a bad source process");
+    assert_eq!(statuses[9], STATUS_ACCESS_VIOLATION, "*TargetHandle at a bad address");
+    assert_eq!(statuses[10], STATUS_SUCCESS, "into the other process");
+    let remote = other.handle_table.reference(Handle(read(REMOTE)), None, AccessMask::NONE).expect("its handle");
+    assert!(Arc::ptr_eq(&remote, &event), "the same event in the other process");
+    let access = |table: &ob::HandleTable, at: u32| table.query(Handle(read(at))).map(|(access, _)| access);
+    assert_eq!(access(&other.handle_table, REMOTE), access(table, EVENT), "with the same access");
+    drop(remote);
+    assert_eq!((statuses[11], statuses[12]), (STATUS_SUCCESS, STATUS_INVALID_HANDLE), "a bad target process");
+    assert_eq!(statuses[13], STATUS_SUCCESS, "NtCurrentProcess() with the same access");
+    assert_eq!(access(table, ALL), Ok(PROCESS_ALL_ACCESS));
+    assert_eq!(statuses[14], STATUS_SUCCESS, "a protected source");
+    assert_eq!(table.query(Handle(read(MOVED))), Ok((AccessMask(SYNCHRONIZE), BOTH)), "its access and attributes");
+    assert!(table.query(Handle(read(NARROW))).is_ok(), "a protected source stays");
+    // A closed handle's entry is the next one taken: the closed copies are
+    // seen in their objects' handle counts.
+    assert_eq!(event.handle_count(), 4, "EVENT, NARROW, MOVED and REMOTE: the copy closed without a target is gone");
+    assert_eq!(thread_object.handle_count(), 1, "THREAD: the source closed in spite of the bad target is gone");
+    // EVENT, NARROW, SELF, THREAD, ALL, MOVED and the other process.
+    assert_eq!(table.count(), 7, "no handle left behind by a failure");
+    drop((event, me_object, thread_object));
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((process, other, thread));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Ob: NtDuplicateObject from user mode: same or less access, attributes, pseudo-handles, no target, \
+         into another process, DUPLICATE_CLOSE_SOURCE whatever the outcome"
+    );
+}
+
+/// NtQueryInformationThread from user mode (`sys::process`, Ps, M5): a
+/// thread waits for a second one, which ended with 0x55, then reads its own
+/// THREAD_BASIC_INFORMATION (TEB, CLIENT_ID, one processor, its priority
+/// and its base relative to its process's) and KERNEL_USER_TIMES (created
+/// between the kernel's two readings, not ended), then the second thread's
+/// (its exit status, an end after its creation); ThreadIsTerminated, 0 for
+/// itself and 1 for the second thread; a short buffer, a bad handle and a
+/// handle without THREAD_QUERY_INFORMATION are refused.
+fn thread_information_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE, STATUS_SUCCESS,
+        STATUS_WAIT_0,
+    };
+    use abi::process::NT_CURRENT_THREAD;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use ob::{AccessMask, HandleAttributes};
+    use pe::builder::Pe32Builder;
+    use ps::ethread::THREAD_QUERY_INFORMATION;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const ENDING: u32 = IMAGE_BASE + 0x1800;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 10 statuses
+    const BASIC: u32 = DATA + 0x30; // 28 bytes
+    const TIMES: u32 = DATA + 0x50; // 32 bytes
+    const OTHER_BASIC: u32 = DATA + 0x70;
+    const OTHER_TIMES: u32 = DATA + 0x90;
+    const OTHER: u32 = DATA + 0xB0;
+    const WEAK: u32 = DATA + 0xB4;
+    const RETURNED: u32 = DATA + 0xB8;
+    const TERMINATED: u32 = DATA + 0xBC;
+    const OTHER_TERMINATED: u32 = DATA + 0xC0;
+    const DONE: u32 = DATA + 0xFC;
+    const SYNCHRONIZE: AccessMask = AccessMask(0x0010_0000);
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (me, query) = (NT_CURRENT_THREAD, services::NtQueryInformationThread);
+    let mut code = Code::new();
+    // cmp dword [OTHER], 0; je back: the kernel writes the handle once the
+    // second thread exists (an ending thread alone would end the process).
+    code.word(&[0x83, 0x3D], OTHER).bytes(&[0x00, 0x74, 0xF7]);
+    code.call_args(services::NtWaitForSingleObject, &[m(OTHER), v(0), v(0)]).store_eax(status(0));
+    code.call_args(query, &[v(me), v(0), v(BASIC), v(28), v(RETURNED)]).store_eax(status(1));
+    code.call_args(query, &[v(me), v(1), v(TIMES), v(32), v(0)]).store_eax(status(2));
+    code.call_args(query, &[m(OTHER), v(0), v(OTHER_BASIC), v(28), v(0)]).store_eax(status(3));
+    code.call_args(query, &[m(OTHER), v(1), v(OTHER_TIMES), v(32), v(0)]).store_eax(status(4));
+    code.call_args(query, &[v(me), v(0), v(BASIC), v(27), v(0)]).store_eax(status(5));
+    code.call_args(query, &[v(0x1234), v(1), v(TIMES), v(32), v(0)]).store_eax(status(6));
+    code.call_args(query, &[m(WEAK), v(1), v(TIMES), v(32), v(0)]).store_eax(status(7));
+    let is_terminated = abi::process::THREAD_IS_TERMINATED;
+    code.call_args(query, &[v(me), v(is_terminated), v(TERMINATED), v(4), v(0)]).store_eax(status(8));
+    code.call_args(query, &[m(OTHER), v(is_terminated), v(OTHER_TERMINATED), v(4), v(0)]).store_eax(status(9));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut ending = Code::new();
+    ending.call(services::NtTerminateThread, &[NT_CURRENT_THREAD, 0x55]).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x1000];
+    assert!(code.0.len() <= 0x800, "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    text[0x800..0x800 + ending.0.len()].copy_from_slice(&ending.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x1000, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x100, &[0u8; 0x100], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "threadinfo.exe", false).expect("a process");
+    let new_stack = || ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let before = hal::rtc::system_time();
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &new_stack()).expect("a thread");
+    let other = ps::create_thread(&process, ENDING, &new_stack()).expect("the thread that ends");
+    let none = HandleAttributes::default();
+    // WEAK first: the program starts once OTHER is written.
+    for (at, access) in [(WEAK, SYNCHRONIZE), (OTHER, THREAD_QUERY_INFORMATION | SYNCHRONIZE)] {
+        let handle = process.handle_table.insert(other.clone(), access, none).expect("a handle on the thread");
+        process.write_memory(u64::from(at), &handle.0.to_le_bytes()).expect("write the handle");
+    }
+    let read_bytes = |addr: u32, length: usize| {
+        let mut bytes = alloc::vec![0u8; length];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        bytes
+    };
+    let read = |addr: u32| u32::from_le_bytes(read_bytes(addr, 4).try_into().unwrap());
+    let read64 = |addr: u32| u64::from_le_bytes(read_bytes(addr, 8).try_into().unwrap());
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the thread information test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let after = hal::rtc::system_time();
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..10).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_WAIT_0, "the second thread ended");
+    assert_eq!((statuses[1], read(RETURNED)), (STATUS_SUCCESS, 28), "THREAD_BASIC_INFORMATION");
+    assert_eq!(read(BASIC), abi::ntstatus::STATUS_PENDING.0, "alive");
+    assert_eq!((read(BASIC + 4), read(BASIC + 8), read(BASIC + 12)), (thread.teb(), process.pid(), thread.tid()));
+    assert_eq!(read(BASIC + 16), 1, "one processor");
+    let base = u32::from(process.base_priority());
+    assert!(read(BASIC + 20) >= base, "its priority, at least its process's");
+    assert_eq!(read(BASIC + 24), 0, "its base, its process's");
+    assert_eq!(statuses[2], STATUS_SUCCESS, "KERNEL_USER_TIMES");
+    assert!((before..=after).contains(&read64(TIMES)), "created between the kernel's readings");
+    assert_eq!(read64(TIMES), thread.create_time());
+    assert_eq!((read64(TIMES + 8), read64(TIMES + 16), read64(TIMES + 24)), (0, 0, 0), "not ended; no times counted");
+    assert_eq!((statuses[3], read(OTHER_BASIC)), (STATUS_SUCCESS, 0x55), "the second thread's exit status");
+    assert_eq!(read(OTHER_BASIC + 12), other.tid());
+    assert_eq!(statuses[4], STATUS_SUCCESS);
+    let (created, ended) = (read64(OTHER_TIMES), read64(OTHER_TIMES + 8));
+    assert!(created != 0 && ended >= created, "ended after its creation");
+    assert_eq!(Some(ended), other.exit_time());
+    assert_eq!(statuses[5], STATUS_INFO_LENGTH_MISMATCH, "28 bytes exactly");
+    assert_eq!(statuses[6], STATUS_INVALID_HANDLE);
+    assert_eq!(statuses[7], STATUS_ACCESS_DENIED, "THREAD_QUERY_INFORMATION");
+    assert_eq!((statuses[8], read(TERMINATED)), (STATUS_SUCCESS, 0), "ThreadIsTerminated: not itself");
+    assert_eq!((statuses[9], read(OTHER_TERMINATED)), (STATUS_SUCCESS, 1), "the second thread");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((thread, other, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Ps: NtQueryInformationThread from user mode: ThreadBasicInformation, ThreadTimes (creation and end), \
+         ThreadIsTerminated"
     );
 }
 
@@ -5018,13 +5377,16 @@ fn keyed_event_self_test() {
 /// SeDebugPrivilege, the process read as critical only then. Then, every
 /// privilege disabled: raising the priority and changing either critical
 /// flag are refused, lowering is not. A thread created afterwards runs at
-/// the process's base priority. The kernel clears both flags, as the smss
-/// probe does, before it ends the program: ending it critical would stop the
-/// system (the `critical-process` scenario).
+/// the process's base priority. Its exception port, as csrss sets it on its
+/// clients: a token refused (not a port), an LPC port set, then refused once
+/// set, a short buffer refused, and without SeTcbPrivilege. The kernel
+/// clears both flags, as the smss probe does, before it ends the program:
+/// ending it critical would stop the system (the `critical-process`
+/// scenario).
 fn process_settings_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER,
-        STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS, STATUS_WAIT_0,
+        STATUS_OBJECT_TYPE_MISMATCH, STATUS_PORT_ALREADY_SET, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD, SEM_FAILCRITICALERRORS};
     use abi::services;
@@ -5052,6 +5414,8 @@ fn process_settings_self_test() {
     const BASE_12: u32 = DATA + 0xA0;
     const BASE_6: u32 = DATA + 0xA4;
     const NOT_CRITICAL: u32 = DATA + 0xA8;
+    const PORT_STATUS: u32 = DATA + 0xB0; // 6 statuses
+    const PORT: u32 = DATA + 0xC8;
     const DONE: u32 = DATA + 0xFC;
     const NEW_MODE: u32 = 0x8001; // SEM_NOOPENFILEERRORBOX | SEM_FAILCRITICALERRORS
 
@@ -5088,9 +5452,17 @@ fn process_settings_self_test() {
     code.call_args(set_thread, &[v(this_thread), v(18), v(ONE), v(4)]).store_eax(status(11));
     code.call_args(set_thread, &[v(this_thread), v(18), v(ONE), v(2)]).store_eax(status(12));
     code.call_args(set_thread, &[v(0x1234), v(18), v(ONE), v(4)]).store_eax(status(13));
-    // Every privilege disabled.
     code.call_args(services::NtOpenProcessToken, &[v(me), v(0x28), v(TOKEN)]).store_eax(status(14));
+    // The exception port: a token is not a port.
+    let port_status = |i: u32| PORT_STATUS + 4 * i;
+    code.call_args(services::NtCreatePort, &[v(PORT), v(0), v(0x28), v(0x130), v(0)]).store_eax(port_status(0));
+    code.call_args(set, &[v(me), v(8), v(TOKEN), v(4)]).store_eax(port_status(1));
+    code.call_args(set, &[v(me), v(8), v(PORT), v(4)]).store_eax(port_status(2));
+    code.call_args(set, &[v(me), v(8), v(PORT), v(4)]).store_eax(port_status(3));
+    code.call_args(set, &[v(me), v(8), v(PORT), v(2)]).store_eax(port_status(4));
+    // Every privilege disabled.
     code.call_args(services::NtAdjustPrivilegesToken, &[m(TOKEN), v(1), v(0), v(0), v(0), v(0)]).store_eax(status(15));
+    code.call_args(set, &[v(me), v(8), v(PORT), v(4)]).store_eax(port_status(5));
     code.call_args(set, &[v(me), v(5), v(BASE_12), v(4)]).store_eax(status(16));
     code.call_args(set, &[v(me), v(29), v(ZERO), v(4)]).store_eax(status(17));
     code.call_args(set_thread, &[v(this_thread), v(18), v(ZERO), v(4)]).store_eax(status(18));
@@ -5140,6 +5512,16 @@ fn process_settings_self_test() {
     assert_eq!(statuses[12], STATUS_INFO_LENGTH_MISMATCH, "a ULONG");
     assert_eq!(statuses[13], STATUS_INVALID_HANDLE, "no such thread");
     assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_SUCCESS), "every privilege disabled");
+    let port_statuses: alloc::vec::Vec<NtStatus> = (0..6).map(|i| NtStatus(read(PORT_STATUS + 4 * i))).collect();
+    assert_eq!(port_statuses[0], STATUS_SUCCESS, "an unnamed port");
+    assert_eq!(port_statuses[1], STATUS_OBJECT_TYPE_MISMATCH, "a token is not an exception port");
+    assert_eq!(port_statuses[2], STATUS_SUCCESS, "the exception port set");
+    let port = process.handle_table.reference(ob::Handle(read(PORT)), None, ob::AccessMask::NONE).expect("the port");
+    assert!(process.exception_port().is_some_and(|set| Arc::ptr_eq(&set, &port)), "that port");
+    drop(port);
+    assert_eq!(port_statuses[3], STATUS_PORT_ALREADY_SET, "set once");
+    assert_eq!(port_statuses[4], STATUS_INFO_LENGTH_MISMATCH, "a HANDLE");
+    assert_eq!(port_statuses[5], STATUS_PRIVILEGE_NOT_HELD, "SeTcbPrivilege");
     assert_eq!(statuses[16], STATUS_PRIVILEGE_NOT_HELD, "raising needs SeIncreaseBasePriorityPrivilege");
     assert_eq!(
         (statuses[17], statuses[18]),
@@ -5171,7 +5553,7 @@ fn process_settings_self_test() {
     ps::wait_for_reaper();
     log::info!(
         "[smoke] Ps: process settings from user mode: ProcessDefaultHardErrorMode, ProcessBasePriority, \
-         ProcessBreakOnTermination, ThreadBreakOnTermination"
+         ProcessBreakOnTermination, ThreadBreakOnTermination, ProcessExceptionPort"
     );
 }
 

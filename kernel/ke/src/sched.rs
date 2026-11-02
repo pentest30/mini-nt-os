@@ -1153,6 +1153,21 @@ pub fn thread_priority(tid: usize) -> Option<u8> {
     }
 }
 
+/// Priorité de base du thread `tid`, sans boost ; `None` s'il n'existe pas.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn thread_base_priority(tid: usize) -> Option<u8> {
+    // SAFETY: verrou tenu de acquire à release ; un thread enregistré est valide.
+    unsafe {
+        let old_irql = DISPATCHER_LOCK.acquire::<KePlatform>();
+        let t = (*threads()).get(tid);
+        let base = (!t.is_null()).then(|| (*t).base_priority);
+        DISPATCHER_LOCK.release::<KePlatform>(old_irql);
+        base
+    }
+}
+
 /// KeSetBasePriorityThread : la priorité de base du thread `tid` devient
 /// `base` ([`Scheduler::set_base_priority`]) ; une commutation est examinée
 /// s'il le faut. Rien pour un thread qui n'existe pas.

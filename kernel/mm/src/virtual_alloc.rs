@@ -356,6 +356,9 @@ pub fn protect(
     }
     let (start, end) = user_range(base_addr, size)?;
     let node = vad.find_mut(start).filter(|node| end <= node.end).ok_or(STATUS_CONFLICTING_ADDRESSES)?;
+    if node.no_change {
+        return Err(STATUS_INVALID_PAGE_PROTECTION);
+    }
     let protect = match &node.kind {
         VadKind::Private if protect.copy_on_write() => return Err(STATUS_INVALID_PAGE_PROTECTION),
         VadKind::Private => protect,
@@ -1059,6 +1062,26 @@ mod tests {
         assert_eq!(protect(&mut vad, Some(&mut m), BASE, P, rw()), Err(STATUS_SECTION_PROTECTION));
         assert_eq!(protect(&mut vad, Some(&mut m), BASE, P, PageProtect::WRITECOPY), Ok(PageProtect::READONLY));
         assert_eq!(runs(&vad), [(1, C, PageProtect::WRITECOPY), (1, C, PageProtect::READONLY)]);
+    }
+
+    #[test]
+    fn a_no_change_view_keeps_its_protection() {
+        // SEC_NO_CHANGE, as csrsrv maps its shared section in each client
+        // (CsrSrvAttachSharedSection): the view can no longer be protected
+        // otherwise, even to what it is.
+        let mut vad = VadTree::new();
+        let mut m = MockMapper::new();
+        view(&mut vad, Section::create_pagefile(2 * P, rw()).unwrap(), 2, PageProtect::READONLY);
+        vad.find_mut(BASE).unwrap().no_change = true;
+        for to in [rw(), PageProtect::READONLY, PageProtect::NOACCESS] {
+            assert_eq!(protect(&mut vad, Some(&mut m), BASE + P, P, to), Err(STATUS_INVALID_PAGE_PROTECTION));
+        }
+        assert!(m.protected.is_empty(), "no page touched");
+        assert_eq!(runs(&vad), [(2, C, PageProtect::READONLY)]);
+        // A view mapped without it still can.
+        let mut other = VadTree::new();
+        view(&mut other, Section::create_pagefile(2 * P, rw()).unwrap(), 2, PageProtect::READONLY);
+        assert_eq!(protect(&mut other, None, BASE, P, rw()), Ok(PageProtect::READONLY));
     }
 
     #[test]

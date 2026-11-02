@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 98 | 296 |
+| ntoskrnl | 100 | 296 |
 | win32k | 4 | 732 |
 
 ## ntoskrnl
@@ -86,7 +86,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0044` | `NtDeleteValueKey` | 2 | ✅ |
 | `0x0045` | `NtDeviceIoControlFile` | 10 |  |
 | `0x0046` | `NtDisplayString` | 1 |  |
-| `0x0047` | `NtDuplicateObject` | 7 |  |
+| `0x0047` | `NtDuplicateObject` | 7 | ✅ |
 | `0x0048` | `NtDuplicateToken` | 6 |  |
 | `0x0049` | `NtEnumerateBootEntries` | 2 |  |
 | `0x004a` | `NtEnumerateDriverEntries` | 2 |  |
@@ -177,7 +177,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x009f` | `NtQueryInformationJobObject` | 5 |  |
 | `0x00a0` | `NtQueryInformationPort` | 5 |  |
 | `0x00a1` | `NtQueryInformationProcess` | 5 | ✅ |
-| `0x00a2` | `NtQueryInformationThread` | 5 |  |
+| `0x00a2` | `NtQueryInformationThread` | 5 | ✅ |
 | `0x00a3` | `NtQueryInformationToken` | 5 | ✅ |
 | `0x00a4` | `NtQueryInstallUILanguage` | 1 |  |
 | `0x00a5` | `NtQueryIntervalProfile` | 2 |  |
