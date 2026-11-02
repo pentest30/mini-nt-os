@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(nt_time(date(2000, 3, 1, 0, 0, 0)), Some(125_963_424_000_000_000), "after 2000-02-29");
         assert_eq!(nt_time(date(2026, 11, 2, 12, 34, 56)), Some(134_380_964_960_000_000));
         assert_eq!(nt_time(date(1900, 2, 29, 0, 0, 0)), None, "1900 is not a leap year");
-        assert!(nt_time(date(2000, 2, 29, 0, 0, 0)).is_some(), "2000 is");
+        assert_eq!(nt_time(date(2000, 2, 29, 23, 59, 59)), Some(125_963_423_990_000_000), "2000 is");
         assert_eq!(nt_time(date(2026, 13, 1, 0, 0, 0)), None);
         assert_eq!(nt_time(date(2026, 4, 31, 0, 0, 0)), None);
         assert_eq!(nt_time(date(1600, 12, 31, 0, 0, 0)), None);
