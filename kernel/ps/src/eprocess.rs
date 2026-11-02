@@ -23,6 +23,7 @@
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
 use abi::ntstatus::{
@@ -214,6 +215,9 @@ pub struct EProcess {
     /// DefaultHardErrorProcessing : les `SEM_*` du processus, ceux de son
     /// créateur au départ.
     hard_error_mode: AtomicU32,
+    /// Win32Process : ce que win32k garde de lui, une fois qu'un de ses
+    /// threads est devenu un thread GUI ; rendu avec lui.
+    win32_process: KSpinLock<Option<Arc<dyn Any + Send + Sync>>>,
 }
 
 impl EProcess {
@@ -263,6 +267,7 @@ impl EProcess {
                 critical: AtomicBool::new(false),
                 base_priority: AtomicU8::new(ke::sched::NORMAL_PRIORITY),
                 hard_error_mode: AtomicU32::new(hard_error_mode),
+                win32_process: KSpinLock::new(None),
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
@@ -513,6 +518,24 @@ impl EProcess {
     /// Tout niveau.
     pub fn set_hard_error_mode(&self, mode: u32) {
         self.hard_error_mode.store(mode, Ordering::Relaxed);
+    }
+
+    /// PsGetProcessWin32Process : ce que win32k garde de lui ; `None` avant
+    /// son premier thread GUI.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn win32_process(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.win32_process.lock().clone()
+    }
+
+    /// PsSetProcessWin32Process : `value` devient ce que win32k garde de lui,
+    /// s'il n'a rien encore ; rend ce qu'il garde, le premier venu.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_win32_process(&self, value: Arc<dyn Any + Send + Sync>) -> Arc<dyn Any + Send + Sync> {
+        self.win32_process.lock().get_or_insert(value).clone()
     }
 
     /// PsReferencePrimaryToken : son jeton primaire.
