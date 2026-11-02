@@ -25,6 +25,11 @@ impl BugCheckCode {
     /// A CPU trap that the kernel cannot handle (double fault, stack overflow
     /// into a guard page…). P1: the trap number.
     pub const UNEXPECTED_KERNEL_MODE_TRAP: Self = Self(0x7F);
+    /// A critical process or thread (`ProcessBreakOnTermination`,
+    /// `ThreadBreakOnTermination`: smss, csrss…) ended. P1: the object type
+    /// (3 for a process, 6 for a thread); P2: the object; P3: the image name
+    /// of its process; P4: the message.
+    pub const CRITICAL_OBJECT_TERMINATION: Self = Self(0xF4);
 
     /// The symbolic name of a known code, or `None`.
     pub const fn name(self) -> Option<&'static str> {
@@ -33,6 +38,7 @@ impl BugCheckCode {
             Self::KMODE_EXCEPTION_NOT_HANDLED => Some("KMODE_EXCEPTION_NOT_HANDLED"),
             Self::PAGE_FAULT_IN_NONPAGED_AREA => Some("PAGE_FAULT_IN_NONPAGED_AREA"),
             Self::UNEXPECTED_KERNEL_MODE_TRAP => Some("UNEXPECTED_KERNEL_MODE_TRAP"),
+            Self::CRITICAL_OBJECT_TERMINATION => Some("CRITICAL_OBJECT_TERMINATION"),
             _ => None,
         }
     }

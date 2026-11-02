@@ -30,8 +30,22 @@ pub const MEM_EXECUTE_OPTION_VALID_FLAGS: u32 = 0x0F;
 
 /// ProcessBasicInformation (NtQueryInformationProcess).
 pub const PROCESS_BASIC_INFORMATION: u32 = 0;
+/// ProcessBasePriority: a KPRIORITY, the base priority of the process's
+/// threads (NtSetInformationProcess).
+pub const PROCESS_BASE_PRIORITY: u32 = 5;
+/// ProcessDefaultHardErrorMode: a ULONG, `SEM_*` flags of the process.
+pub const PROCESS_DEFAULT_HARD_ERROR_MODE: u32 = 12;
 /// ProcessSessionInformation: the process's session.
 pub const PROCESS_SESSION_INFORMATION: u32 = 24;
+/// ProcessBreakOnTermination: a ULONG, non-zero for a critical process,
+/// whose end stops the system.
+pub const PROCESS_BREAK_ON_TERMINATION: u32 = 29;
+/// ThreadBreakOnTermination (NtSetInformationThread): a ULONG, non-zero for
+/// a critical thread.
+pub const THREAD_BREAK_ON_TERMINATION: u32 = 18;
+/// SEM_FAILCRITICALERRORS: the hard-error mode of System, which every process
+/// inherits from its creator.
+pub const SEM_FAILCRITICALERRORS: u32 = 0x0001;
 /// ProcessLUIDDeviceMapsEnabled: a ULONG, non-zero when each logon session
 /// has its own DOS devices.
 pub const PROCESS_LUID_DEVICE_MAPS_ENABLED: u32 = 28;
