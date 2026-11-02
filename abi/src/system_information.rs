@@ -17,6 +17,10 @@ pub const SYSTEM_PROCESSOR_INFORMATION: u32 = 1;
 /// zone ([`SystemTimeOfDayInformation32`]).
 pub const SYSTEM_TIME_OF_DAY_INFORMATION: u32 = 3;
 
+/// SystemFlagsInformation: the system's global flags (NtGlobalFlag,
+/// `FLG_*`), a ULONG.
+pub const SYSTEM_FLAGS_INFORMATION: u32 = 9;
+
 /// SystemRangeStartInformation: where the system half of the address space
 /// starts (MmSystemRangeStart), a ULONG_PTR.
 pub const SYSTEM_RANGE_START_INFORMATION: u32 = 50;
