@@ -10,12 +10,12 @@ jour à chaque commit qui change l'état.
   critères de sortie sont cochés (`smss` crée ses variables d'environnement et `\KnownDlls` ; un fichier de `C:` et une
   valeur du registre se relisent après un redémarrage, scénarios `persistence` et `registry-persistence`, `fsck.vfat`
   propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée sa session et
-  lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis `winsrv` et
-  ses imports, jusqu'au premier appel à win32k (`NtUserProcessConnect`, depuis `user32`) :
-  [`compat/m5-csrss.md`](compat/m5-csrss.md).
+  lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis `winsrv`
+  (USER sur le win32k minimal, puis la console `consrv`), crée ses ports et s'arrête à sa connexion à `smss`
+  (`NtConnectPort`) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
-  (l'étape 5) et `claude/m5-ex` (l'étape 8). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
+  (l'étape 5), `claude/m5-ex` (l'étape 8) et `claude/m5-win32k` (l'étape 6). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
   branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
@@ -239,10 +239,18 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    `SeTcbPrivilege`), NtQueryInformationProcess(`ProcessLUIDDeviceMapsEnabled`, `ProcessCookie`, `EProcess::cookie`),
    NtFlushInstructionCache. Tests : hôte (`hal::rtc`), `information_services_self_test` ; vérifiés par mutation.
    Les assertions de `basesrv` disparaissent ; `csrss` s'arrête toujours à `NtUserProcessConnect`.
-6. [ ] **win32k : `NtUserProcessConnect`** (02 §7.2), le mur de `csrss` : `user32` s'y connecte dès son chargement
-   (DllMain), et `winsrv` (donc `consrv`, la console) l'importe. Le M5 dépend donc de la partie minimale du M6 (05),
-   à décider avec le mainteneur : ce que rend la connexion (`USERCONNECT` : version, `SHAREDINFO`, tables partagées
-   en lecture seule), et l'ordre avec le spike S3 (ADR-002).
+6. [x] **win32k minimal** (02 §7.2, ADR-021 ; `compat/m5-csrss.md`, étape 12), décidé avec le mainteneur : le M5
+   prend la partie minimale du M6, l'initialisation de `user32` (premier critère du spike S3). Crate `win32k` : la
+   section partagée de USER (`shared` : `SERVERINFO`, table des handles, adresses du serveur en `0xBC000000`), les
+   threads et processus GUI (`gui` : conversion au premier appel à win32k dans `sys::dispatch`, `CLIENTINFO` et
+   `Win32ThreadInfo` dans le TEB, vue en lecture seule, `GdiDCAttributeList`), `client` (les procédures de `user32`),
+   `csrss` (NtUserInitialize). `abi::user` ; Mm : `Section::write_kernel`, `read_kernel` ; Ps : emplacements Win32
+   (`EProcess::win32_process`, `EThread::win32_thread`) ; Ex : les sémaphores (`ex::semaphore`). Services :
+   NtUserProcessConnect, NtUserInitializeClientPfnArrays, NtGdiInit, NtUserInitialize, NtCreateSemaphore,
+   NtOpenSemaphore, NtReleaseSemaphore, NtQuerySemaphore, NtQueryObject(`ObjectHandleFlagInformation`). `xtask` met
+   `lpk.dll` sur le disque. Tests : hôte (`abi`, `win32k`, `ex`), `win32k_self_test`, le résumé `[m4] USER:` de la
+   sonde ; vérifiés par mutation. `csrss` charge `winsrv` (USER, puis `consrv`) et s'arrête à `SmConnectToSm`
+   (`NtConnectPort`).
 7. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
    NtRequestWaitReplyPort, NtReplyPort, NtReplyWaitReceivePort avec réponse, NtListenPort ; puis les sections de
    port (messages volumineux). `csrss` crée son port d'API (`CsrApiPortInitialize`), puis se connecte à `\SmApiPort`
@@ -263,9 +271,10 @@ Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --b
 `[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 
 Questions ouvertes du M5 :
-- La console : `consrv` est dans `winsrv`, qui importe `user32` ; `user32` appelle win32k (`NtUserProcessConnect`)
-  dès son chargement. Le mode console dépend donc d'un win32k minimal (USER : connexion, stations et bureaux) avant le
-  spike S3 : à trancher avec le mainteneur (étape 6).
+- ADR-021 (adresses du serveur sur 32 bits pour ce que USER partage) est proposée : à accepter avec le mainteneur,
+  ou à revoir après le spike S3.
+- NtUserInitialize réussit sans vidéo ni GDI (M6) : la console de `consrv` devra dire si son frontal texte s'en
+  passe (ce que fait `consrv` sans `InitVideo`).
 - Le contrôle des privilèges s'applique (SeSinglePrivilegeCheck), alors que l'ADR-011 laisse permissif le contrôle
   d'accès : à confirmer avec le mainteneur (une ADR si l'on veut aussi journaliser sans refuser).
 - `SystemExtendServiceTableInformation` réussit sans rien charger (win32k fait partie du noyau, ses services rendent
@@ -293,6 +302,22 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   `TokenGroupsAndPrivileges`, `TokenAuditPolicy`, `TokenOrigin` (journalisées). Le jeton garde la session de son
   créateur quand celle du processus change.
 - Sessions : pas d'espace de session (Mm), ni de compte des processus d'une session ; un identifiant créé reste pris.
+
+## Dettes de l'étape 6 du M5 (win32k minimal)
+
+- USER : ni vidéo (InitVideo), ni GDI (`InitializeGreCSRSS`, `GdiSharedHandleTable` nul dans le PEB), ni paramètres
+  système, ni pinceau gris, ni stations de fenêtres ou bureaux (seul leur répertoire existe), ni files de messages,
+  ni pile noyau agrandie pour les threads GUI, ni disposition du clavier (`hKL`, `CodePage` nuls). Le `SERVERINFO`
+  n'est écrit que jusqu'à `cbHandleTable` (le reste reste à zéro). Rien n'est rendu à la fin d'un processus GUI au-delà
+  de ce que rend son objet (pas de rappel de sortie de win32k).
+- Les refus de NtUserInitialize (USER déjà démarré, autre version : STOP `WIN32K_INIT_OR_RIT_FAILURE`) n'ont pas de
+  test : un second appel ou un mauvais `csrss` changerait l'état global de USER pour le scénario `smss`.
+- Un service de win32k sans handler rend `STATUS_NOT_IMPLEMENTED`, qu'un service BOOL ou HANDLE lit comme un succès
+  (NtGdiInit le faisait) : le journal du premier appel reste le seul signal ; à revoir quand win32k grandira (rendre 0
+  pour ces services ?).
+- Vu une fois, non reproduit (huit lancements ensuite) : le test Ps `process_round` a vu NtReadVirtualMemory (côté
+  noyau, `read_memory`) rendre `STATUS_ACCESS_VIOLATION` en lisant `DATA + 8` de `grows.exe` (scénario `smss`, Intel),
+  STOP 0x1E. À diagnostiquer s'il revient (une course entre la croissance de la pile et la lecture ?).
 
 ## Dettes de l'étape 8 du M5
 

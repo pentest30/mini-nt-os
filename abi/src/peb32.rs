@@ -122,6 +122,8 @@ const _: () = {
     assert!(offset_of!(Peb32, heap_segment_reserve) == 0x78);
     assert!(offset_of!(Peb32, number_of_heaps) == 0x88);
     assert!(offset_of!(Peb32, process_heaps) == 0x90);
+    assert!(offset_of!(Peb32, gdi_shared_handle_table) == 0x94);
+    assert!(offset_of!(Peb32, gdi_dc_attribute_list) == 0x9C);
     assert!(offset_of!(Peb32, loader_lock) == 0xA0);
     assert!(offset_of!(Peb32, os_major_version) == 0xA4);
     assert!(offset_of!(Peb32, os_minor_version) == 0xA8);

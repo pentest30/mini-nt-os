@@ -284,6 +284,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &cm::KEY_TYPE,
         &ex::EVENT_TYPE,
         &ex::KEYED_EVENT_TYPE,
+        &ex::SEMAPHORE_TYPE,
         &lpc::PORT_TYPE,
         &se::TOKEN_OBJECT_TYPE,
     ] {
@@ -319,6 +320,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     sys::exceptions::install();
     sys::apc::install();
     shared_data::init();
+    win32k::init().expect("the USER shared section");
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -355,6 +357,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     event_service_self_test();
     keyed_event_self_test();
     process_settings_self_test();
+    win32k_self_test();
     process_memory_self_test();
     shared_section_self_test();
     process_creation_self_test();
@@ -4311,6 +4314,221 @@ fn information_services_self_test() {
     );
 }
 
+/// A process connects to USER (`win32k`, `sys::user`, M5) and uses the Ex
+/// objects consrv needs, from user mode. Its thread's first win32k call
+/// (NtGdiInit, TRUE) makes it a GUI thread: its TEB gets its THREADINFO and
+/// its CLIENTINFO (the PROCESSINFO, csrss's flags while csrss has not
+/// started USER, the version its image expects), its PEB the GDI batch
+/// limit. NtUserProcessConnect refuses a buffer of another size, none, a
+/// bad handle and a misaligned buffer, then gives the SERVERINFO and the
+/// handle table in the process's read-only view of the USER shared section,
+/// twice the same, and the delta that the program applies to the handle
+/// table's server pointer, reading the view. A semaphore is created (counts
+/// checked), opened by its name, released up to its limit, waited on and
+/// queried; NtQueryObject reads its handle's flags from an odd address,
+/// before and after NtSetInformationObject.
+fn win32k_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_DATATYPE_MISALIGNMENT, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE,
+        STATUS_INVALID_PARAMETER, STATUS_SEMAPHORE_LIMIT_EXCEEDED, STATUS_SUCCESS, STATUS_UNSUCCESSFUL, STATUS_WAIT_0,
+    };
+    use abi::process::NT_CURRENT_PROCESS;
+    use abi::services;
+    use abi::user::{ClientInfo32, UserConnect32, TIF_CSRSSTHREAD, TIF_DONTATTACHQUEUE};
+    use alloc::sync::Arc;
+    use core::mem::{offset_of, size_of};
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use mm::vad::PageProtect;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 28 statuses
+    const BEFORE: u32 = DATA + 0x70;
+    const AFTER: u32 = DATA + 0x74;
+    const HANDLES: u32 = DATA + 0x78; // the handle table's handles, less the delta
+    const ALLOCATED: u32 = DATA + 0x7C;
+    const SEMAPHORE: u32 = DATA + 0x80;
+    const OPENED: u32 = DATA + 0x84;
+    const PREVIOUS: u32 = DATA + 0x88;
+    const BASIC: u32 = DATA + 0x8C; // 8 bytes
+    const FLAGS: u32 = DATA + 0x95; // 2 bytes, at an odd address
+    const SET_FLAGS: u32 = DATA + 0x98; // protect, not inherit
+    const CLEAR_FLAGS: u32 = DATA + 0x9C;
+    const FLAGS_AFTER: u32 = DATA + 0xA1; // 2 bytes
+    const ZERO: u32 = DATA + 0xA4; // a zero timeout
+    const OA: u32 = DATA + 0xB0;
+    const US: u32 = DATA + 0xC8;
+    const NAME: u32 = DATA + 0xD0;
+    const CONNECT: u32 = DATA + 0x100; // a USERCONNECT
+    const CONNECT2: u32 = DATA + 0x300;
+    const DONE: u32 = DATA + 0x4FC;
+    const SEMAPHORE_NAME: &str = "\\MinoSemaphore";
+    const SENTINEL: u32 = 0xAAAA_AAAA;
+
+    let mut data = alloc::vec![0u8; 0x500];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    put(BEFORE, &SENTINEL.to_le_bytes());
+    put(SET_FLAGS, &[0, 1]);
+    for connect in [CONNECT, CONNECT2] {
+        put(connect, &abi::user::USER_VERSION.to_le_bytes());
+        put(connect + 4, &SENTINEL.to_le_bytes());
+    }
+    let units: alloc::vec::Vec<u8> = SEMAPHORE_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(NAME, &units);
+    let length = (units.len() as u16).to_le_bytes();
+    put(US, &[length[0], length[1], length[0], length[1]]);
+    put(US + 4, &NAME.to_le_bytes());
+    put(OA, &24u32.to_le_bytes());
+    put(OA + 8, &US.to_le_bytes());
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let me = NT_CURRENT_PROCESS;
+    let connect = services::NtUserProcessConnect;
+    let mut code = Code::new();
+    code.bytes(&[0x64, 0xA1, 0x40, 0, 0, 0]).store_eax(BEFORE); // mov eax, fs:[0x40]
+    code.call_args(services::NtGdiInit, &[]).store_eax(status(0));
+    code.bytes(&[0x64, 0xA1, 0x40, 0, 0, 0]).store_eax(AFTER);
+    code.call_args(connect, &[v(me), v(CONNECT), v(0x120)]).store_eax(status(1));
+    code.call_args(connect, &[v(me), v(0), v(0x124)]).store_eax(status(2));
+    code.call_args(connect, &[v(0x1234), v(CONNECT), v(0x124)]).store_eax(status(3));
+    code.call_args(connect, &[v(me), v(CONNECT + 2), v(0x124)]).store_eax(status(4));
+    code.call_args(connect, &[v(me), v(CONNECT), v(0x124)]).store_eax(status(5));
+    code.call_args(connect, &[v(me), v(CONNECT2), v(0x124)]).store_eax(status(6));
+    // The handle table, read in the view: handles less the delta, and the
+    // entries it has room for.
+    let si = offset_of!(UserConnect32, si_client) as u32;
+    code.word(&[0xA1], CONNECT + si + 4); // mov eax, [aheList]
+    code.bytes(&[0x8B, 0x08]); // mov ecx, [eax]
+    code.word(&[0x2B, 0x0D], CONNECT + si + 12); // sub ecx, [ulSharedDelta]
+    code.word(&[0x89, 0x0D], HANDLES); // mov [HANDLES], ecx
+    code.bytes(&[0x8B, 0x50, 0x0C]); // mov edx, [eax + 12]
+    code.word(&[0x89, 0x15], ALLOCATED); // mov [ALLOCATED], edx
+                                         // Semaphores.
+    let create = services::NtCreateSemaphore;
+    code.call_args(create, &[v(SEMAPHORE), v(0x001F_0003), v(0), v(0), v(0)]).store_eax(status(7));
+    code.call_args(create, &[v(SEMAPHORE), v(0x001F_0003), v(0), v(3), v(2)]).store_eax(status(8));
+    code.call_args(create, &[v(SEMAPHORE), v(0x001F_0003), v(OA), v(1), v(2)]).store_eax(status(9));
+    code.call_args(services::NtOpenSemaphore, &[v(OPENED), v(0x001F_0003), v(OA)]).store_eax(status(10));
+    let release = services::NtReleaseSemaphore;
+    code.call_args(release, &[m(OPENED), v(1), v(PREVIOUS)]).store_eax(status(11));
+    code.call_args(release, &[m(SEMAPHORE), v(1), v(0)]).store_eax(status(12));
+    code.call_args(release, &[m(SEMAPHORE), v(0), v(0)]).store_eax(status(13));
+    code.call_args(services::NtWaitForSingleObject, &[m(SEMAPHORE), v(0), v(ZERO)]).store_eax(status(14));
+    let query = services::NtQuerySemaphore;
+    code.call_args(query, &[m(SEMAPHORE), v(0), v(BASIC), v(8), v(0)]).store_eax(status(15));
+    // Its handle's flags.
+    let (query_object, set_object) = (services::NtQueryObject, services::NtSetInformationObject);
+    code.call_args(query_object, &[m(SEMAPHORE), v(4), v(FLAGS), v(2), v(0)]).store_eax(status(16));
+    code.call_args(set_object, &[m(SEMAPHORE), v(4), v(SET_FLAGS), v(2)]).store_eax(status(17));
+    code.call_args(query_object, &[m(SEMAPHORE), v(4), v(FLAGS_AFTER), v(2), v(0)]).store_eax(status(18));
+    code.call_args(query_object, &[m(SEMAPHORE), v(4), v(FLAGS), v(4), v(0)]).store_eax(status(19));
+    code.call_args(set_object, &[m(SEMAPHORE), v(4), v(CLEAR_FLAGS), v(2)]).store_eax(status(20));
+    code.call_args(services::NtClose, &[m(SEMAPHORE)]).store_eax(status(21));
+    code.call_args(services::NtClose, &[m(OPENED)]).store_eax(status(22));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x500, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "gui.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_bytes = |addr: u32, length: usize| {
+        let mut bytes = alloc::vec![0u8; length];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        bytes
+    };
+    let read = |addr: u32| u32::from_le_bytes(read_bytes(addr, 4).try_into().unwrap());
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the win32k test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..23).map(|i| NtStatus(read(status(i)))).collect();
+    // A GUI thread, of a GUI process.
+    assert_eq!(statuses[0], NtStatus(1), "NtGdiInit: TRUE");
+    let (pti, ppi) =
+        (win32k::gui::thread_server_address(thread.tid()), win32k::gui::process_server_address(process.pid()));
+    assert_eq!((read(BEFORE), read(AFTER)), (0, pti), "TEB.Win32ThreadInfo, before and after the first call");
+    let client = read_bytes(thread.teb() + offset_of!(abi::teb32::Teb32, win32_client_info) as u32, 0xF8);
+    let field = |at: usize| u32::from_le_bytes(client[at..at + 4].try_into().unwrap());
+    assert_eq!(field(offset_of!(ClientInfo32, ppi)), ppi, "CLIENTINFO.ppi");
+    assert_eq!(field(offset_of!(ClientInfo32, ti_flags)), TIF_CSRSSTHREAD | TIF_DONTATTACHQUEUE, "before csrss");
+    assert_eq!(field(offset_of!(ClientInfo32, exp_win_ver)), 0x0400, "a subsystem 4.0 image");
+    let peb_limit = process.peb() + offset_of!(abi::peb32::Peb32, gdi_dc_attribute_list) as u32;
+    assert_eq!(read(peb_limit), win32k::gui::GDI_BATCH_LIMIT, "PEB.GdiDCAttributeList");
+    let gui = win32k::process_info(&process).expect("a GUI process");
+    assert_eq!(gui.server, ppi);
+    let view = gui.shared_view;
+    let protect = process.with_space(|space| space.query(u64::from(view)).map(|region| region.protect));
+    assert_eq!(protect, Ok(Ok(PageProtect::READONLY)), "the USER shared section, read only");
+    // NtUserProcessConnect.
+    assert_eq!((statuses[1], statuses[2]), (STATUS_UNSUCCESSFUL, STATUS_UNSUCCESSFUL), "the size, no buffer");
+    assert_eq!((statuses[3], statuses[4]), (STATUS_INVALID_HANDLE, STATUS_DATATYPE_MISALIGNMENT));
+    assert_eq!((statuses[5], statuses[6]), (STATUS_SUCCESS, STATUS_SUCCESS), "connected twice");
+    let connected = read_bytes(CONNECT, size_of::<UserConnect32>());
+    assert_eq!(connected, read_bytes(CONNECT2, size_of::<UserConnect32>()), "the same each time");
+    let word = |at: usize| u32::from_le_bytes(connected[at..at + 4].try_into().unwrap());
+    let si = offset_of!(UserConnect32, si_client);
+    assert_eq!((word(0), word(4)), (abi::user::USER_VERSION, SENTINEL), "the client's fields left alone");
+    assert_eq!((word(si), word(si + 4), word(si + 8)), (view, view + 0x1000, 0), "psi, aheList, pDispInfo");
+    assert_eq!(word(si + 12), 0xBC00_0000u32.wrapping_sub(view), "ulSharedDelta");
+    assert!(connected[si + 16..].iter().all(|&byte| byte == 0), "no class messages yet");
+    assert_eq!((read(HANDLES), read(ALLOCATED)), (view + 0x1010, 4096), "the handle table, read in the view");
+    // Semaphores.
+    assert_eq!((statuses[7], statuses[8]), (STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER), "bad counts");
+    assert_eq!((statuses[9], statuses[10]), (STATUS_SUCCESS, STATUS_SUCCESS), "created, then opened by its name");
+    assert_eq!((statuses[11], read(PREVIOUS)), (STATUS_SUCCESS, 1), "released through the other handle");
+    assert_eq!(statuses[12], STATUS_SEMAPHORE_LIMIT_EXCEEDED, "3 is past 2");
+    assert_eq!(statuses[13], STATUS_INVALID_PARAMETER, "a release of 0");
+    assert_eq!(statuses[14], STATUS_WAIT_0, "a wait takes one");
+    assert_eq!((statuses[15], read(BASIC), read(BASIC + 4)), (STATUS_SUCCESS, 1, 2), "SemaphoreBasicInformation");
+    // Handle flags.
+    assert_eq!(
+        (statuses[16], read_bytes(FLAGS, 2)),
+        (STATUS_SUCCESS, alloc::vec![0, 0]),
+        "ObjectHandleFlagInformation"
+    );
+    assert_eq!((statuses[17], statuses[18]), (STATUS_SUCCESS, STATUS_SUCCESS));
+    assert_eq!(read_bytes(FLAGS_AFTER, 2), [0, 1], "protected, not inherited");
+    assert_eq!(statuses[19], STATUS_INFO_LENGTH_MISMATCH, "two BOOLEANs");
+    assert_eq!((statuses[20], statuses[21], statuses[22]), (STATUS_SUCCESS, STATUS_SUCCESS, STATUS_SUCCESS));
+    assert!(ob::namespace().open(SEMAPHORE_NAME, None, None, 0).is_err(), "its name gone with its last handle");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((gui, thread, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] win32k: a GUI thread and process, NtGdiInit, NtUserProcessConnect (the USER shared section, read \
+         only); Ex: semaphores from user mode; Ob: NtQueryObject"
+    );
+}
+
 /// Keyed events from user mode (`ex::keyed_event`, `sys::event`, M5), as
 /// ntdll's critical sections and condition variables use them: one created,
 /// non-zero flags refused; a wait and a release that time out with nobody to
@@ -6783,6 +7001,7 @@ fn object_manager_self_test() {
             "Port",
             "Process",
             "Section",
+            "Semaphore",
             "SymbolicLink",
             "Thread",
             "Token",

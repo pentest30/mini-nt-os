@@ -1,5 +1,5 @@
-//! Les services des événements d'Ex (`ex::event`) et des événements à clé
-//! (`ex::keyed_event`).
+//! Les services des événements d'Ex (`ex::event`), des événements à clé
+//! (`ex::keyed_event`) et des sémaphores (`ex::semaphore`).
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
 use alloc::sync::Arc;
@@ -9,6 +9,11 @@ use ob::{AccessMask, Handle, Object};
 
 /// Les classes de NtQueryEvent demandées sans être implémentées.
 static UNSUPPORTED_EVENT_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryEvent");
+/// Les classes de NtQuerySemaphore demandées sans être implémentées.
+static UNSUPPORTED_SEMAPHORE_CLASSES: super::ClassReport = super::ClassReport::new("NtQuerySemaphore");
+
+/// SemaphoreBasicInformation.
+const SEMAPHORE_BASIC_INFORMATION: u32 = 0;
 
 /// EventBasicInformation.
 const EVENT_BASIC_INFORMATION: u32 = 0;
@@ -165,4 +170,68 @@ pub(super) fn nt_wait_for_keyed_event(arguments: &[u32]) -> NtStatus {
 /// `KEYEDEVENT_WAKE` ; voir [`meet`].
 pub(super) fn nt_release_keyed_event(arguments: &[u32]) -> NtStatus {
     meet(arguments, true)
+}
+
+/// NtCreateSemaphore(*SemaphoreHandle, DesiredAccess, ObjectAttributes,
+/// InitialCount, MaximumCount) : un sémaphore neuf, nommé (ou non) d'après
+/// les attributs, qui peuvent manquer. `STATUS_INVALID_PARAMETER` sans
+/// `0 <= InitialCount <= MaximumCount` et `MaximumCount > 0`, avant tout le
+/// reste.
+pub(super) fn nt_create_semaphore(arguments: &[u32]) -> NtStatus {
+    match ex::Semaphore::create(arguments[3] as i32, arguments[4] as i32) {
+        Ok(semaphore) => status(super::object::create_named(arguments[0], arguments[1], arguments[2], semaphore)),
+        Err(status) => status,
+    }
+}
+
+/// NtOpenSemaphore(*SemaphoreHandle, DesiredAccess, ObjectAttributes) : un
+/// handle sur le sémaphore que désignent les attributs.
+pub(super) fn nt_open_semaphore(arguments: &[u32]) -> NtStatus {
+    status(
+        super::object::open_by_name(arguments[0], arguments[1], arguments[2], &ex::SEMAPHORE_TYPE)
+            .map(|()| STATUS_SUCCESS),
+    )
+}
+
+/// Le sémaphore que désigne `handle` dans le processus courant, avec les
+/// droits `access`.
+fn reference_semaphore(handle: u32, access: AccessMask) -> Result<Arc<Object<ex::Semaphore>>, NtStatus> {
+    super::current_process().handle_table.reference_as::<ex::Semaphore>(Handle(handle), &ex::SEMAPHORE_TYPE, access)
+}
+
+/// NtReleaseSemaphore(SemaphoreHandle, ReleaseCount, *PreviousCount) :
+/// ajoute `ReleaseCount` au compte du sémaphore (`SEMAPHORE_MODIFY_STATE`) ;
+/// rend le compte d'avant si on le demande. `STATUS_INVALID_PARAMETER` pour
+/// un `ReleaseCount` qui n'est pas positif, avant le handle ;
+/// `STATUS_SEMAPHORE_LIMIT_EXCEEDED` au-delà de la limite.
+pub(super) fn nt_release_semaphore(arguments: &[u32]) -> NtStatus {
+    let count = arguments[1] as i32;
+    if count <= 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    status(
+        reference_semaphore(arguments[0], ex::SEMAPHORE_MODIFY_STATE)
+            .and_then(|semaphore| semaphore.release(count))
+            .and_then(|previous| give_previous_state(arguments[2], previous)),
+    )
+}
+
+/// NtQuerySemaphore(SemaphoreHandle, SemaphoreInformationClass,
+/// SemaphoreInformation, SemaphoreInformationLength, ReturnLength) :
+/// `SemaphoreBasicInformation`, le compte et la limite du sémaphore
+/// (`SEMAPHORE_QUERY_STATE`). Les autres classes rendent
+/// `STATUS_NOT_IMPLEMENTED`, journalisé à leur premier appel.
+pub(super) fn nt_query_semaphore(arguments: &[u32]) -> NtStatus {
+    if arguments[1] != SEMAPHORE_BASIC_INFORMATION {
+        return UNSUPPORTED_SEMAPHORE_CLASSES.report(arguments[1]);
+    }
+    match reference_semaphore(arguments[0], ex::SEMAPHORE_QUERY_STATE) {
+        Ok(semaphore) => {
+            let mut information = [0u8; 8];
+            information[..4].copy_from_slice(&semaphore.count().to_le_bytes());
+            information[4..].copy_from_slice(&semaphore.limit().to_le_bytes());
+            super::return_information(&information, arguments[2], arguments[3], arguments[4])
+        }
+        Err(status) => status,
+    }
 }

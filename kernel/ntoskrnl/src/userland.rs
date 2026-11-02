@@ -163,6 +163,36 @@ pub fn run_smss_probe() {
     run_native("m4", "SMSS.EXE", image, &params, None);
     log_known_dlls();
     log_environment();
+    log_user();
+}
+
+/// Journalise ce que `csrss` a fait de USER (win32k) : s'il l'a démarré
+/// (NtUserInitialize), avec le répertoire des stations de fenêtres de sa
+/// session, et les procédures de fenêtre que `user32` a enregistrées dans le
+/// `SERVERINFO` partagé (NtUserInitializeClientPfnArrays).
+fn log_user() {
+    use abi::user::{PfnClient32, ServerInfoHead32};
+    use core::mem::{offset_of, size_of};
+
+    let csrss = win32k::csrss::csrss();
+    if csrss == 0 {
+        return log::info!("[m4] USER: not started by csrss");
+    }
+    let stations = ob::namespace().open("\\Windows\\WindowStations", None, Some(&ob::DIRECTORY_TYPE), 0).is_ok();
+    let mut procedures = [0u8; size_of::<PfnClient32>()];
+    let at = u64::from(win32k::shared::SERVER_INFO) + offset_of!(ServerInfoHead32, apfn_client_w) as u64;
+    let read = win32k::shared::section().map(|section| section.read_kernel(at, &mut procedures));
+    let registered = match read {
+        Some(Ok(())) => procedures.chunks_exact(4).filter(|word| *word != [0; 4]).count(),
+        _ => 0,
+    };
+    log::info!(
+        "[m4] USER: started by csrss (PID {csrss}), \\Windows\\WindowStations {}; {registered} of {} client \
+         procedures of user32 (at {:#x}) in SERVERINFO",
+        if stations { "created" } else { "missing" },
+        size_of::<PfnClient32>() / 4,
+        win32k::client::client_module(),
+    );
 }
 
 /// Journalise les variables que `smss` a écrites dans

@@ -531,6 +531,72 @@ impl Section {
         self.pages.lock().len()
     }
 
+    /// Écrit `data` dans la section en `offset`, par l'alias du noyau de ses
+    /// pages (le HHDM), allouées s'il le faut : toutes ses vues le voient
+    /// aussitôt. Pour une section du fichier d'échange que le noyau tient à
+    /// jour et que des processus lisent par une vue en lecture seule (la
+    /// section partagée de USER, `win32k`).
+    ///
+    /// # Errors
+    /// `STATUS_INVALID_PARAMETER` pour une autre section que du fichier
+    /// d'échange, ou au-delà de sa taille ; `STATUS_NO_MEMORY` sans page
+    /// libre.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn write_kernel(&self, offset: u64, data: &[u8]) -> Result<(), NtStatus> {
+        self.each_kernel_run(offset, data.len(), |page, at, done| {
+            let run = &data[done..][..(PAGE as usize - at).min(data.len() - done)];
+            // SAFETY: `page` is a page of the section, alive while it is, and
+            // `at + run.len()` stays in it; views in user mode may read it
+            // meanwhile, as they read KUSER_SHARED_DATA.
+            unsafe { core::ptr::copy_nonoverlapping(run.as_ptr(), page.add(at), run.len()) };
+            run.len()
+        })
+    }
+
+    /// Lit `buffer.len()` octets de la section en `offset`, par l'alias du
+    /// noyau de ses pages ; voir [`write_kernel`](Self::write_kernel).
+    ///
+    /// # Errors
+    /// Celles de [`write_kernel`](Self::write_kernel).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn read_kernel(&self, offset: u64, buffer: &mut [u8]) -> Result<(), NtStatus> {
+        let length = buffer.len();
+        self.each_kernel_run(offset, length, |page, at, done| {
+            let run = (PAGE as usize - at).min(length - done);
+            // SAFETY: as in `write_kernel`; `buffer[done..]` holds `run` bytes.
+            unsafe { core::ptr::copy_nonoverlapping(page.add(at), buffer[done..].as_mut_ptr(), run) };
+            run
+        })
+    }
+
+    /// Parcourt les `length` octets de la section en `offset`, page par page :
+    /// `f` reçoit le début de la page (par le HHDM), l'octet où commencer
+    /// dans la page et ce qui est déjà fait ; il rend ce qu'il a fait, jusqu'à
+    /// la fin de la page.
+    fn each_kernel_run(
+        &self,
+        offset: u64,
+        length: usize,
+        mut f: impl FnMut(*mut u8, usize, usize) -> usize,
+    ) -> Result<(), NtStatus> {
+        let end = offset.checked_add(length as u64).ok_or(STATUS_INVALID_PARAMETER)?;
+        if self.kind != SectionKind::Pagefile || end > self.size {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        let hhdm = crate::HHDM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+        let mut done = 0;
+        while done < length {
+            let at = offset + done as u64;
+            let page = self.page(at / PAGE)?;
+            done += f((hhdm + page.to_phys()) as *mut u8, (at % PAGE) as usize, done);
+        }
+        Ok(())
+    }
+
     /// La page `index`, créée et remplie au premier besoin ;
     /// `STATUS_NO_MEMORY` sans page libre.
     ///

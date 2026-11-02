@@ -51,7 +51,9 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// kernel starts with its `test-smss` feature (M4), the SYSTEM hive that
 /// ReactOS generated, which the kernel mounts (until `tools/mkhive`,
 /// ADR-012), the Win32 subsystem that `smss` starts (`csrss.exe` and its
-/// server DLLs, M5), the [`KNOWN_DLLS`], and then every DLL these programs
+/// server DLLs, M5), the language pack that `gdi32` loads when it starts
+/// (`lpk.dll`, GdiInitializeLanguagePack), the [`KNOWN_DLLS`], and then every
+/// DLL these programs
 /// and DLLs import, directly or not ([`import_closure`]): the loader of ntdll
 /// maps each import, and some of these have long names
 /// (`advapi32_vista.dll`). `None` until `fetch-userland` ran.
@@ -68,6 +70,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "csrsrv.dll",
         "basesrv.dll",
         "winsrv.dll",
+        "lpk.dll",
     ]
     .into_iter()
     .map(String::from)

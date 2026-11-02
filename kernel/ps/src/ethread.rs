@@ -21,6 +21,7 @@
 
 use alloc::boxed::Box;
 use alloc::sync::{Arc, Weak};
+use core::any::Any;
 use core::cell::UnsafeCell;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
@@ -143,6 +144,9 @@ pub struct EThread {
     /// BreakOnTermination : un thread critique, dont la fin arrête le système
     /// (`crate::exit`).
     critical: AtomicBool,
+    /// Win32Thread : ce que win32k garde de lui, une fois devenu un thread
+    /// GUI ; rendu avec lui.
+    win32_thread: KSpinLock<Option<Arc<dyn Any + Send + Sync>>>,
 }
 
 // SAFETY: `exit_apc` n'est écrit qu'une fois, par qui fait passer
@@ -402,6 +406,24 @@ impl EThread {
         self.critical.store(critical, Ordering::Release);
     }
 
+    /// PsGetThreadWin32Thread : ce que win32k garde de lui ; `None` tant qu'il
+    /// n'est pas un thread GUI.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn win32_thread(&self) -> Option<Arc<dyn Any + Send + Sync>> {
+        self.win32_thread.lock().clone()
+    }
+
+    /// PsSetThreadWin32Thread : `value` devient ce que win32k garde de lui,
+    /// s'il n'a rien encore ; rend ce qu'il garde, le premier venu.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_win32_thread(&self, value: Arc<dyn Any + Send + Sync>) -> Arc<dyn Any + Send + Sync> {
+        self.win32_thread.lock().get_or_insert(value).clone()
+    }
+
     /// KeQueryPriorityThread : sa priorité courante, boost compris, tant qu'il
     /// ne s'est pas terminé ; `None` avant que Ke ne l'ordonnance.
     ///
@@ -658,6 +680,7 @@ fn start_thread(
             resume_event: DispatcherEvent::new(KObjectType::SynchronizationEvent),
             suspend_apc: UnsafeCell::new(MaybeUninit::uninit()),
             critical: AtomicBool::new(false),
+            win32_thread: KSpinLock::new(None),
         },
     );
     CID_TABLE.lock().set(tid, CidEntry::Thread(Arc::downgrade(&thread)));

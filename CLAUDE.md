@@ -203,6 +203,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `critical-process`, `critical-thread`) ; `ProcessBasePriority`
   (`ke::sched::set_base_priority`) et `ProcessDefaultHardErrorMode`. La sonde retire ses drapeaux à `smss`, critique
   dès son début, avant de le terminer.
+  M5, étape 6 (win32k minimal, ADR-021 proposée) : crate `kernel/win32k` : la section partagée de USER
+  (`SERVERINFO`, table des handles ; adresses du serveur sur 32 bits, section en `0xBC000000` ; écrite par
+  `Section::write_kernel`), les threads et processus GUI (conversion au premier appel à win32k dans `sys::dispatch`,
+  `CLIENTINFO` dans le TEB, vue en lecture seule), NtUserProcessConnect, NtUserInitializeClientPfnArrays, NtGdiInit,
+  NtUserInitialize (sans vidéo ni GDI) ; `abi::user` ; sémaphores d'Ex ; NtQueryObject (attributs d'un handle).
+  `csrss` charge `winsrv` (USER, puis `consrv`) et s'arrête à `SmConnectToSm` (NtConnectPort, l'étape 7).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
