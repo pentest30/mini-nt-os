@@ -125,7 +125,8 @@ fn dispatch(mut args: Args) -> Result<()> {
 /// Every ntoskrnl feature, checked together by `lint`.
 const ALL_KERNEL_FEATURES: &str =
     "trace-syscalls,test-stack-overflow,test-ke-events,test-fpu,test-bugcheck,test-ke-starvation,\
-     test-page-fault-irql,test-page-fault-access-violation,heartbeat";
+     test-page-fault-irql,test-page-fault-access-violation,test-critical-process,\
+     test-critical-thread,heartbeat";
 
 /// `cargo fmt --check`, the service tables generated from the pinned ReactOS
 /// lists up to date (`syscall-gen --check`), then clippy with warnings

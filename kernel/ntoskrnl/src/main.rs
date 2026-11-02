@@ -386,6 +386,12 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     if cfg!(feature = "test-page-fault-access-violation") {
         page_fault_access_violation_test();
     }
+    if cfg!(feature = "test-critical-process") {
+        critical_object_test(false);
+    }
+    if cfg!(feature = "test-critical-thread") {
+        critical_object_test(true);
+    }
 
     // ReactOS's ntdll, if the boot disk has it: the system DLL from now on,
     // and a native program under it (spike S1).
@@ -6856,6 +6862,76 @@ fn attach_stop_test_space(alloc: mm::virtual_alloc::AllocType) -> u64 {
     // boot thread never detaches.
     let _attached_for_good = unsafe { ke::sched::ke_stack_attach(space.directory_table_base()) };
     VA
+}
+
+/// A process that makes itself critical (ProcessBreakOnTermination), or
+/// makes its thread critical (ThreadBreakOnTermination, with `thread`), then
+/// terminates itself, as smss would if it failed, must stop the system with
+/// CRITICAL_OBJECT_TERMINATION: its termination for a critical process, its
+/// thread's end for a critical thread (features `test-critical-process`,
+/// `test-critical-thread`).
+fn critical_object_test(thread: bool) {
+    use abi::ntstatus::{NtStatus, STATUS_SUCCESS, STATUS_TIMEOUT};
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA;
+    const ONE: u32 = DATA + 4;
+
+    let mut data = alloc::vec![0u8; 0x100];
+    data[4..8].copy_from_slice(&1u32.to_le_bytes());
+    let v = Arg::Value;
+    let mut code = Code::new();
+    if thread {
+        code.call_args(services::NtSetInformationThread, &[v(NT_CURRENT_THREAD), v(18), v(ONE), v(4)]);
+    } else {
+        code.call_args(services::NtSetInformationProcess, &[v(NT_CURRENT_PROCESS), v(29), v(ONE), v(4)]);
+    }
+    code.store_eax(STATUS);
+    code.call_args(services::NtTerminateProcess, &[v(NT_CURRENT_PROCESS), v(0x1234)]);
+    code.bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x200];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x100, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "critical.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    if thread {
+        log::info!("[smoke] a process with a critical thread terminates itself (test-critical-thread)");
+    } else {
+        log::info!("[smoke] a critical process terminates itself (test-critical-process)");
+    }
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
+    let waited = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * 10_000),
+        )
+    };
+    let mut status = [0u8; 4];
+    let _ = process.read_memory(u64::from(STATUS), &mut status);
+    let status = NtStatus(u32::from_le_bytes(status));
+    assert!(status == STATUS_SUCCESS, "BreakOnTermination: {status}");
+    panic!(
+        "the critical {} {} without stopping the system",
+        if thread { "thread's process" } else { "process" },
+        if waited == STATUS_TIMEOUT { "did not end" } else { "ended" }
+    );
 }
 
 /// A fault on a user page at DISPATCH_LEVEL must stop the system with

@@ -1,0 +1,20 @@
+# Critical threads (M5): a user-mode thread makes itself critical
+# (ThreadBreakOnTermination), as smss does at its start, in a process that is
+# not; the process terminates itself, and the end of the thread stops the
+# system with CRITICAL_OBJECT_TERMINATION, the object type (6, a thread)
+# first; the message names its process.
+features = test-critical-thread
+cpus     = default
+timeout  = 120
+
+expect = [smoke] a process with a critical thread terminates itself (test-critical-thread)
+expect = *** STOP: 0x000000f4 (0x0000000000000006, 0x
+expect = CRITICAL_OBJECT_TERMINATION
+expect = Critical thread exited: 0x
+expect = (critical.exe)
+expect = System halted.
+
+forbid = without stopping the system
+forbid = BreakOnTermination: 0x
+forbid = STOP while printing the STOP screen
+forbid = [NESTED #PF]

@@ -40,6 +40,14 @@ test-page-fault-irql = []
 # must end on KMODE_EXCEPTION_NOT_HANDLED, STATUS_ACCESS_VIOLATION (M2, demand
 # paging; scenario tests/boot/page-fault-access-violation).
 test-page-fault-access-violation = []
+# A user-mode process makes itself critical (ProcessBreakOnTermination) and
+# terminates itself after the boot self-tests: the boot must end on
+# CRITICAL_OBJECT_TERMINATION (M5; scenario tests/boot/critical-process).
+test-critical-process = []
+# The same with a critical thread (ThreadBreakOnTermination) in a process
+# that is not: the thread's end stops the system (M5; scenario
+# tests/boot/critical-thread).
+test-critical-thread = []
 # Starts ReactOS's smss.exe under the system DLL after the S1 programs and
 # logs the system services it calls and how it ends (M4 discovery probe;
 # scenario tests/boot/smss, which needs the userland).
