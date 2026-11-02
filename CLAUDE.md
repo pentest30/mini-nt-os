@@ -193,6 +193,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`userland::import_closure`, par `libs/pe`) et la page de code 20127 ; noms longs de FAT (VFAT) écrits par
   `tools/mkfat`, lus par `io::fat` (pas encore créés). `smss` met 37 sections dans `\KnownDlls` ; `csrss` charge
   `winsrv` et ses imports, puis `user32` appelle win32k (`NtUserProcessConnect`) : le M5 rejoint le win32k minimal.
+  M5, étape 5 (les services simples) : `hal::rtc` (l'heure du démarrage, le temps système, aussi dans
+  `KUSER_SHARED_DATA`), compteur de performance sur le TSC calibré ; NtQuerySystemTime, NtQueryPerformanceCounter,
+  `SystemTimeOfDayInformation`, `SystemRangeStartInformation`, NtQueryDebugFilterState, NtSetInformationObject,
+  `ProcessLUIDDeviceMapsEnabled`, `ProcessCookie`, NtFlushInstructionCache.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

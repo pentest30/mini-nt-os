@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 71 | 296 |
+| ntoskrnl | 76 | 296 |
 | win32k | 0 | 732 |
 
 ## ntoskrnl
@@ -97,7 +97,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x004f` | `NtFilterToken` | 6 |  |
 | `0x0050` | `NtFindAtom` | 3 |  |
 | `0x0051` | `NtFlushBuffersFile` | 2 | ✅ |
-| `0x0052` | `NtFlushInstructionCache` | 3 |  |
+| `0x0052` | `NtFlushInstructionCache` | 3 | ✅ |
 | `0x0053` | `NtFlushKey` | 1 | ✅ |
 | `0x0054` | `NtFlushVirtualMemory` | 4 |  |
 | `0x0055` | `NtFlushWriteBuffer` | 0 |  |
@@ -163,7 +163,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0091` | `NtQueryAttributesFile` | 2 | ✅ |
 | `0x0092` | `NtQueryBootEntryOrder` | 2 |  |
 | `0x0093` | `NtQueryBootOptions` | 2 |  |
-| `0x0094` | `NtQueryDebugFilterState` | 2 |  |
+| `0x0094` | `NtQueryDebugFilterState` | 2 | ✅ |
 | `0x0095` | `NtQueryDefaultLocale` | 2 |  |
 | `0x0096` | `NtQueryDefaultUILanguage` | 1 |  |
 | `0x0097` | `NtQueryDirectoryFile` | 11 |  |
@@ -188,7 +188,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00aa` | `NtQueryObject` | 5 |  |
 | `0x00ab` | `NtQueryOpenSubKeys` | 2 |  |
 | `0x00ac` | `NtQueryOpenSubKeysEx` | 4 |  |
-| `0x00ad` | `NtQueryPerformanceCounter` | 2 |  |
+| `0x00ad` | `NtQueryPerformanceCounter` | 2 | ✅ |
 | `0x00ae` | `NtQueryQuotaInformationFile` | 9 |  |
 | `0x00af` | `NtQuerySection` | 5 | ✅ |
 | `0x00b0` | `NtQuerySecurityObject` | 5 | ✅ |
@@ -197,7 +197,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00b3` | `NtQuerySystemEnvironmentValue` | 4 |  |
 | `0x00b4` | `NtQuerySystemEnvironmentValueEx` | 5 |  |
 | `0x00b5` | `NtQuerySystemInformation` | 4 | ✅ |
-| `0x00b6` | `NtQuerySystemTime` | 1 |  |
+| `0x00b6` | `NtQuerySystemTime` | 1 | ✅ |
 | `0x00b7` | `NtQueryTimer` | 5 |  |
 | `0x00b8` | `NtQueryTimerResolution` | 3 |  |
 | `0x00b9` | `NtQueryValueKey` | 6 | ✅ |
@@ -251,7 +251,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00e9` | `NtSetInformationFile` | 5 | ✅ |
 | `0x00ea` | `NtSetInformationJobObject` | 4 |  |
 | `0x00eb` | `NtSetInformationKey` | 4 |  |
-| `0x00ec` | `NtSetInformationObject` | 4 |  |
+| `0x00ec` | `NtSetInformationObject` | 4 | ✅ |
 | `0x00ed` | `NtSetInformationProcess` | 4 | ✅ |
 | `0x00ee` | `NtSetInformationThread` | 4 |  |
 | `0x00ef` | `NtSetInformationToken` | 4 |  |
