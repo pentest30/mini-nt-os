@@ -10,11 +10,13 @@ jour à chaque commit qui change l'état.
   critères de sortie sont cochés (`smss` crée ses variables d'environnement et `\KnownDlls` ; un fichier de `C:` et une
   valeur du registre se relisent après un redémarrage, scénarios `persistence` et `registry-persistence`, `fsck.vfat`
   propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée sa session et
-  lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis ne trouve
-  pas une DLL des imports de `winsrv` (`advapi32_vista.dll`) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
+  lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis `winsrv` et
+  ses imports, jusqu'au premier appel à win32k (`NtUserProcessConnect`, depuis `user32`) :
+  [`compat/m5-csrss.md`](compat/m5-csrss.md).
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis
-  `claude/m5-mm` par-dessus (l'étape 3). Les PR se fusionnent dans `main` ; après une fusion, repartir de
-  `origin/main` (avance rapide si la branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
+  `claude/m5-mm` par-dessus (l'étape 3), puis `claude/m5-boot` par-dessus (l'étape 4). Les PR se fusionnent dans
+  `main` ; après une fusion, repartir de `origin/main` (avance rapide si la branche y est déjà incluse :
+  `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
@@ -223,17 +225,25 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    section basée va à son adresse. `sys::section` : NtCreateSection avec ces attributs, NtQuerySection (adresse,
    `SEC_RESERVE`, `SEC_BASED`). Tests : hôte (`mm`), `shared_section_self_test` ; vérifiés par mutation. `csrss` met
    sa section en `0x7F6F0000`, y bâtit son tas, charge `basesrv`, puis échoue à charger `winsrv`.
-4. [ ] **Le disque de démarrage : la fermeture des imports de `csrss`** (`xtask/src/userland.rs`) : `rpcrt4.dll`
-   (atteinte par `user32` puis `advapi32`) importe `advapi32_vista.dll`, `kernel32_vista.dll` et `ws2_32.dll`, absentes.
-   Mettre sur le disque la fermeture des imports de `csrss` et de ses DLL serveur (lue dans les PE par `libs/pe`,
-   plutôt qu'une liste à la main), puis relancer la sonde. Ensuite, `basesrv` : ses trois assertions tolérées
-   (`SystemTimeOfDayInformation`, NtSetInformationObject(`ObjectSessionInformation`),
-   `ProcessLUIDDeviceMapsEnabled`), à faire quand elles comptent.
-5. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
+4. [x] **Le disque de démarrage, fermé pour les imports** (`compat/m5-csrss.md`, étape 9). `xtask` :
+   `userland::import_closure`, la fermeture des imports des programmes et DLL du disque, lue par `libs/pe` (16 DLL de
+   plus), et la page de code 20127 (la locale C de `msvcrt`). Noms longs (VFAT) : `tools/mkfat` les écrit (alias
+   `BASIS~N.EXT`), `io::fat` les lit (`find_entry` par nom long ou alias, sans casse ; pas encore de création). Tests :
+   hôte (`io`, `mkfat` avec `fsck.vfat`, la fermeture) ; vérifiés par mutation. `smss` met 37 sections dans
+   `\KnownDlls` ; `csrss` charge `winsrv` et ses imports, puis `user32` appelle `NtUserProcessConnect` (win32k).
+5. [ ] **Les services simples que `csrss` tolère** : NtQuerySystemTime, NtQueryPerformanceCounter (Ke, Hal),
+   NtQuerySystemInformation(`SystemTimeOfDayInformation` 3, `SystemRangeStartInformation` 0x32),
+   NtQueryDebugFilterState, et ceux de `basesrv` (NtSetInformationObject(`ObjectSessionInformation`),
+   `ProcessLUIDDeviceMapsEnabled`) : rapides, à faire avant qu'ils ne cachent un vrai mur.
+6. [ ] **win32k : `NtUserProcessConnect`** (02 §7.2), le mur de `csrss` : `user32` s'y connecte dès son chargement
+   (DllMain), et `winsrv` (donc `consrv`, la console) l'importe. Le M5 dépend donc de la partie minimale du M6 (05),
+   à décider avec le mainteneur : ce que rend la connexion (`USERCONNECT` : version, `SHAREDINFO`, tables partagées
+   en lecture seule), et l'ordre avec le spike S3 (ADR-002).
+7. [ ] **La connexion LPC** : NtConnectPort et NtSecureConnectPort, NtAcceptConnectPort, NtCompleteConnectPort,
    NtRequestWaitReplyPort, NtReplyPort, NtReplyWaitReceivePort avec réponse, NtListenPort ; puis les sections de
    port (messages volumineux). `csrss` crée son port d'API (`CsrApiPortInitialize`), puis se connecte à `\SmApiPort`
    (`SmConnectToSm`) et `smss` signale son événement.
-6. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
+8. [ ] Les objets d'Ex qui restent : les événements à clé (NtCreateKeyedEvent, pour les sections critiques de
    `ntdll`), `ThreadBreakOnTermination` (avec l'arrêt `CRITICAL_OBJECT_TERMINATION` : la sonde ne devra plus terminer
    `smss`), NtSetInformationProcess(`ProcessBasePriority`, `ProcessDefaultHardErrorMode`).
 
@@ -241,6 +251,9 @@ Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --b
 `[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
 
 Questions ouvertes du M5 :
+- La console : `consrv` est dans `winsrv`, qui importe `user32` ; `user32` appelle win32k (`NtUserProcessConnect`)
+  dès son chargement. Le mode console dépend donc d'un win32k minimal (USER : connexion, stations et bureaux) avant le
+  spike S3 : à trancher avec le mainteneur (étape 6).
 - Le contrôle des privilèges s'applique (SeSinglePrivilegeCheck), alors que l'ADR-011 laisse permissif le contrôle
   d'accès : à confirmer avec le mainteneur (une ADR si l'on veut aussi journaliser sans refuser).
 - `SystemExtendServiceTableInformation` réussit sans rien charger (win32k fait partie du noyau, ses services rendent
@@ -268,6 +281,11 @@ services sont faits pour d'autres classes), `NtFlushInstructionCache`, `NtQueryD
   `TokenGroupsAndPrivileges`, `TokenAuditPolicy`, `TokenOrigin` (journalisées). Le jeton garde la session de son
   créateur quand celle du processus change.
 - Sessions : pas d'espace de session (Mm), ni de compte des processus d'une session ; un identifiant créé reste pris.
+
+## Dettes de l'étape 4 du M5
+
+- Io : créer un nom long (aujourd'hui `STATUS_OBJECT_NAME_INVALID`). Le disque n'a qu'une page de code de plus (20127) :
+  les autres tables NLS (118 dans la version épinglée) viendront quand un programme les demandera.
 
 ## Dettes de Mm (l'étape 3 du M5)
 

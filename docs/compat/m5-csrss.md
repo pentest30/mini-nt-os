@@ -228,3 +228,30 @@ puis `winsrv` ne se charge pas :
 Les imports de `winsrv` : `basesrv`, `csrsrv`, `gdi32`, `kernel32`, `ntdll`, `user32` ; `user32` importe `advapi32`,
 qui importe `rpcrt4`, qui importe `advapi32_vista`, `kernel32_vista`, `msvcrt` et `ws2_32`. Le disque de démarrage
 n'a que `csrss` et ses trois DLL serveur, plus les KnownDLLs : il lui faut la fermeture de leurs imports.
+
+## Étape 9 : le disque de démarrage, fermé pour les imports
+
+Le disque de démarrage reçoit désormais la fermeture des imports de ses programmes et de ses DLL (`smss`, `csrss`,
+`csrsrv`, `basesrv`, `winsrv`, les KnownDLLs), lue dans leurs tables d'imports par `libs/pe`
+(`xtask/src/userland.rs`, `import_closure`) : `advapi32_vista.dll`, `kernel32_vista.dll`, `ntdll_vista.dll`,
+`ws2_32.dll`, `ws2help.dll`, et les imports des KnownDLLs (`combase`, `comctl32`, `coml2`, `dbghelp`, `imm32`, `mpr`,
+`normaliz`, `psapi`, `shlwapi`, `usp10`, `winspool.drv`). Aucune n'est absente de la version épinglée, et aucune n'est
+importée en différé. Trois ont un nom que le format 8.3 ne tient pas : `tools/mkfat` écrit les noms longs (VFAT, avec
+un alias `BASIS~N.EXT`), que le pilote FAT du noyau lit (par le nom long ou l'alias, sans casse). Le disque reçoit
+aussi la table de la page de code 20127 (US-ASCII), que demande la locale C de `msvcrt` (`GetCPInfo` : le fichier que
+la ruche SYSTEM nomme dans `Nls\CodePage`, ouvert par NtCreateFile, puis une section nommée `\Nls\NlsSectionCP20127`).
+
+`smss` met alors 37 sections dans `\KnownDlls` : les KnownDLLs et leurs imports, qu'il projette aussi. `csrss`
+charge `winsrv` et ses imports, `msvcrt` s'initialise, puis :
+
+| Service | Arguments | Ce qu'en fait `csrss` | Composant |
+|---|---|---|---|
+| NtQuerySystemInformation | `SystemRangeStartInformation` (0x32) | toléré | Ex |
+| NtQueryDebugFilterState | `0xC8`, 2 | toléré (`ntdll`, `DbgPrint` filtré) | Kd |
+| NtQuerySystemTime | — | toléré | Ke, Ex |
+| NtQueryPerformanceCounter | — | toléré | Ke, Hal |
+| **NtUserProcessConnect** | `NtCurrentProcess()`, un tampon de 0x124 octets | `user32` (DllMain) échoue : « LDR: DLL_PROCESS_ATTACH for dll "user32.dll" failed », « CSRSS: *** Failed loading ServerDll=winsrv (Status == 0xc0000142) », **`csrss` se termine** | **win32k** |
+
+`NtUserProcessConnect` est le premier service de win32k qu'appelle l'espace utilisateur : `user32`, que `winsrv`
+importe, s'y connecte dès son chargement dans `csrss`. Même la console de `csrss` (`consrv`, dans `winsrv`) en dépend :
+le M5 rejoint ici la partie minimale du M6 (05 : « sinon ce jalon dépend de la partie minimale de M6 »).

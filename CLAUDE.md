@@ -188,8 +188,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M5, étape 3 (Mm) : sections `SEC_RESERVE` (l'engagement est celui de la section, vu de toutes ses vues :
   `Section::commit`, `VadNode::page_state`, MEM_COMMIT dans une vue) et `SEC_BASED` (une adresse prise à la
   création sous `0x7F7F0000`, la même dans chaque processus) ; NtCreateSection et NtQuerySection les acceptent.
-  `csrss` met sa section partagée en `0x7F6F0000`, charge `basesrv`, puis ne trouve pas `advapi32_vista.dll` (imports
-  de `winsrv`) : le disque de démarrage est le prochain point.
+  `csrss` met sa section partagée en `0x7F6F0000`, charge `basesrv`, puis ne trouve pas `advapi32_vista.dll`.
+  M5, étape 4 (le disque de démarrage) : `xtask` y met la fermeture des imports de ses programmes et DLL
+  (`userland::import_closure`, par `libs/pe`) et la page de code 20127 ; noms longs de FAT (VFAT) écrits par
+  `tools/mkfat`, lus par `io::fat` (pas encore créés). `smss` met 37 sections dans `\KnownDlls` ; `csrss` charge
+  `winsrv` et ses imports, puis `user32` appelle win32k (`NtUserProcessConnect`) : le M5 rejoint le win32k minimal.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
