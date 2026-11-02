@@ -10,6 +10,77 @@ pub(super) fn nt_close(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtDuplicateObject(SourceProcessHandle, SourceHandle, TargetProcessHandle,
+/// *TargetHandle, DesiredAccess, HandleAttributes, Options) : un handle dans
+/// le processus cible sur l'objet d'un handle du processus source (Ob,
+/// [`ob::duplicate`]). Les deux processus se désignent dans le processus
+/// courant, avec `PROCESS_DUP_HANDLE`. `NtCurrentProcess()` comme handle
+/// source désigne le processus source, `NtCurrentThread()` le thread courant,
+/// avec tous les droits de leur type. Sans processus cible, le handle source
+/// se ferme seulement (`DUPLICATE_CLOSE_SOURCE`, sinon
+/// `STATUS_INVALID_PARAMETER`). Les attributs du handle neuf : `OBJ_INHERIT`
+/// et `OBJ_PROTECT_CLOSE`. `*TargetHandle`, s'il est donné, est sondé et mis
+/// à zéro d'abord, puis reçoit le handle ; s'il faute alors, le handle neuf
+/// se referme.
+///
+/// Un processus cible qui ne s'ouvre pas rend son statut, après avoir fermé
+/// le handle source avec `DUPLICATE_CLOSE_SOURCE` (que DuplicateHandle
+/// promet « quel que soit le résultat ») ; ReactOS rend alors le résultat
+/// d'une duplication sans cible.
+pub(super) fn nt_duplicate_object(arguments: &[u32]) -> NtStatus {
+    use abi::object::{DUPLICATE_CLOSE_SOURCE, OBJ_INHERIT, OBJ_PROTECT_CLOSE};
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use ob::DuplicateSource;
+    use ps::eprocess::{PROCESS_DUP_HANDLE, PROCESS_TYPE};
+    use ps::ethread::THREAD_TYPE;
+
+    let (source_process, source_handle, target_process) = (arguments[0], arguments[1], arguments[2]);
+    let out = ke::usermem::UserPtr::<u32>::new(arguments[3]);
+    let (desired, attributes, options) = (ob::AccessMask(arguments[4]), arguments[5], arguments[6]);
+    let duplicate = || {
+        if !out.is_null() {
+            out.write(&0)?;
+        }
+        let source = super::reference_process(source_process, PROCESS_DUP_HANDLE)?;
+        let from = match source_handle {
+            NT_CURRENT_PROCESS => {
+                DuplicateSource::Pseudo { object: source.clone(), access: PROCESS_TYPE.generic_mapping.all }
+            }
+            NT_CURRENT_THREAD => DuplicateSource::Pseudo {
+                object: ps::ethread::current_thread().expect("a system service outside a Ps thread"),
+                access: THREAD_TYPE.generic_mapping.all,
+            },
+            handle => DuplicateSource::Handle(ob::Handle(handle)),
+        };
+        let target = match target_process {
+            0 => None,
+            handle => match super::reference_process(handle, PROCESS_DUP_HANDLE) {
+                Ok(target) => Some(target),
+                Err(status) => {
+                    if let (DuplicateSource::Handle(handle), true) = (from, options & DUPLICATE_CLOSE_SOURCE != 0) {
+                        let _ = source.handle_table.close(handle);
+                    }
+                    return Err(status);
+                }
+            },
+        };
+        let attributes = ob::HandleAttributes {
+            inherit: attributes & OBJ_INHERIT != 0,
+            protect_from_close: attributes & OBJ_PROTECT_CLOSE != 0,
+        };
+        let table = target.as_ref().map(|target| &target.handle_table);
+        let handle = ob::duplicate(&source.handle_table, from, table, desired, attributes, options)?;
+        if let (Some(handle), Some(table), false) = (handle, table, out.is_null()) {
+            if let Err(fault) = out.write(&handle.0) {
+                let _ = table.close(handle);
+                return Err(fault);
+            }
+        }
+        Ok(STATUS_SUCCESS)
+    };
+    result(duplicate())
+}
+
 /// OBJECT_ATTRIBUTES, capturés une fois.
 pub(super) struct Attributes {
     /// L'objet auquel le nom est relatif.

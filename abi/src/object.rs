@@ -116,7 +116,9 @@ const _: () = assert!(core::mem::size_of::<ObjectAttributes32>() == 24);
 const _: () = assert!(core::mem::offset_of!(ObjectAttributes32, object_name) == 8);
 const _: () = assert!(core::mem::offset_of!(ObjectAttributes32, attributes) == 12);
 
-// `OBJECT_ATTRIBUTES.Attributes`.
+// `OBJECT_ATTRIBUTES.Attributes`, and NtDuplicateObject's HandleAttributes.
+/// A handle that NtClose refuses (NtDuplicateObject's attributes only).
+pub const OBJ_PROTECT_CLOSE: u32 = 0x0000_0001;
 pub const OBJ_INHERIT: u32 = 0x0000_0002;
 pub const OBJ_PERMANENT: u32 = 0x0000_0010;
 pub const OBJ_EXCLUSIVE: u32 = 0x0000_0020;

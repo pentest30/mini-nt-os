@@ -365,6 +365,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     port_self_test();
     security_self_test();
     information_services_self_test();
+    duplicate_object_self_test();
     trap_gate_self_test();
     exception_self_test();
     user_apc_self_test();
@@ -4312,6 +4313,170 @@ fn information_services_self_test() {
         "[smoke] sys: time and information from user mode: NtQuerySystemTime, NtQueryPerformanceCounter, \
          SystemTimeOfDayInformation, SystemRangeStartInformation, NtQueryDebugFilterState, NtSetInformationObject, \
          ProcessLUIDDeviceMapsEnabled, ProcessCookie, NtFlushInstructionCache"
+    );
+}
+
+/// NtDuplicateObject from user mode (`sys::object`, Ob, M5): an event's
+/// handle copied with its access and attributes, then with less access and
+/// new attributes; `NtCurrentProcess()` and `NtCurrentThread()` turned into
+/// handles with the access asked for or all of their type's; a source
+/// process opened without `PROCESS_DUP_HANDLE` refused, and `*TargetHandle`
+/// zeroed first; no target: refused without `DUPLICATE_CLOSE_SOURCE`, else the
+/// source closed; a bad source process; `*TargetHandle` at a bad address
+/// (nothing created); a handle copied into another process; a bad target
+/// process, the source closed all the same; a protected source handle kept
+/// by `DUPLICATE_CLOSE_SOURCE`.
+fn duplicate_object_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_ACCESS_VIOLATION, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER,
+        STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::object::{DUPLICATE_CLOSE_SOURCE, DUPLICATE_SAME_ACCESS, DUPLICATE_SAME_ATTRIBUTES};
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use ob::{AccessMask, Handle, HandleAttributes};
+    use pe::builder::Pe32Builder;
+    use ps::eprocess::{PROCESS_ALL_ACCESS, PROCESS_DUP_HANDLE};
+    use ps::ethread::THREAD_ALL_ACCESS;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const EVENT: u32 = DATA + 0x40;
+    const SAME: u32 = DATA + 0x44;
+    const NARROW: u32 = DATA + 0x48;
+    const SELF: u32 = DATA + 0x4C;
+    const THREAD: u32 = DATA + 0x50;
+    const OTHER: u32 = DATA + 0x54;
+    const REMOTE: u32 = DATA + 0x58;
+    const MOVED: u32 = DATA + 0x5C;
+    const ALL: u32 = DATA + 0x60;
+    const REFUSED: u32 = DATA + 0x64;
+    const COPY: u32 = DATA + 0x68;
+    const DONE: u32 = DATA + 0x7C;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const BOTH: HandleAttributes = HandleAttributes { inherit: true, protect_from_close: true };
+
+    let mut data = alloc::vec![0u8; 0x80];
+    data[(REFUSED - DATA) as usize..][..4].copy_from_slice(&0xAAAA_AAAAu32.to_le_bytes());
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (me, dup) = (NT_CURRENT_PROCESS, services::NtDuplicateObject);
+    let (same, close) = (DUPLICATE_SAME_ACCESS, DUPLICATE_CLOSE_SOURCE);
+    let mut code = Code::new();
+    code.call_args(services::NtCreateEvent, &[v(EVENT), v(0x001F_0003), v(0), v(0), v(0)]).store_eax(status(0));
+    code.call_args(dup, &[v(me), m(EVENT), v(me), v(SAME), v(0), v(0), v(same | DUPLICATE_SAME_ATTRIBUTES)]);
+    code.store_eax(status(1));
+    code.call_args(dup, &[v(me), m(EVENT), v(me), v(NARROW), v(SYNCHRONIZE), v(3), v(0)]).store_eax(status(2));
+    code.call_args(dup, &[v(me), v(me), v(me), v(SELF), v(0x400), v(0), v(0)]).store_eax(status(3));
+    code.call_args(dup, &[v(me), v(NT_CURRENT_THREAD), v(me), v(THREAD), v(0), v(0), v(same)]).store_eax(status(4));
+    code.call_args(dup, &[m(SELF), m(EVENT), v(me), v(REFUSED), v(0), v(0), v(same)]).store_eax(status(5));
+    code.call_args(dup, &[v(me), m(EVENT), v(0), v(0), v(0), v(0), v(0)]).store_eax(status(6));
+    code.call_args(dup, &[v(me), m(SAME), v(0), v(0), v(0), v(0), v(close)]).store_eax(status(7));
+    code.call_args(dup, &[v(0x1234), m(EVENT), v(me), v(MOVED), v(0), v(0), v(same)]).store_eax(status(8));
+    code.call_args(dup, &[v(me), m(EVENT), v(me), v(0x10), v(0), v(0), v(same)]).store_eax(status(9));
+    code.call_args(dup, &[v(me), m(EVENT), m(OTHER), v(REMOTE), v(0), v(0), v(same)]).store_eax(status(10));
+    code.call_args(dup, &[v(me), m(THREAD), v(me), v(COPY), v(0), v(0), v(same)]).store_eax(status(11));
+    code.call_args(dup, &[v(me), m(COPY), v(0x1234), v(MOVED), v(0), v(0), v(same | close)]).store_eax(status(12));
+    code.call_args(dup, &[v(me), v(me), v(me), v(ALL), v(0), v(0), v(same)]).store_eax(status(13));
+    let options = same | DUPLICATE_SAME_ATTRIBUTES | close;
+    code.call_args(dup, &[v(me), m(NARROW), v(me), v(MOVED), v(0), v(0), v(options)]).store_eax(status(14));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x400];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x400, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x80, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let system = ps::system_process();
+    let process = ps::create_process(&system, &section, "duplicate.exe", false).expect("a process");
+    let other = ps::create_process(&system, &section, "dupother.exe", false).expect("the other process");
+    let handle = process.handle_table.insert(other.clone(), PROCESS_DUP_HANDLE, HandleAttributes::default());
+    let handle = handle.expect("a handle on the other process");
+    process.write_memory(u64::from(OTHER), &handle.0.to_le_bytes()).expect("write the handle");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the duplication test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..15).map(|i| NtStatus(read(status(i)))).collect();
+    let table = &process.handle_table;
+    let object = |handle: u32| table.reference(Handle(handle), None, AccessMask::NONE).expect("a handle");
+    let event = object(read(EVENT));
+    assert_eq!((statuses[0], statuses[1]), (STATUS_SUCCESS, STATUS_SUCCESS), "an event, its handle copied");
+    assert_eq!(statuses[2], STATUS_SUCCESS, "less access, other attributes");
+    assert_eq!(table.query(Handle(read(NARROW))), Ok((AccessMask(SYNCHRONIZE), BOTH)), "SYNCHRONIZE, both attributes");
+    assert!(Arc::ptr_eq(&object(read(NARROW)), &event), "the same event");
+    assert_eq!(statuses[3], STATUS_SUCCESS, "NtCurrentProcess() as a handle");
+    assert_eq!(table.query(Handle(read(SELF))), Ok((AccessMask(0x400), HandleAttributes::default())));
+    let me_object: ob::ObjectRef = process.clone();
+    assert!(Arc::ptr_eq(&object(read(SELF)), &me_object), "the process itself");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "NtCurrentThread() as a handle");
+    let thread_object: ob::ObjectRef = thread.clone();
+    assert!(Arc::ptr_eq(&object(read(THREAD)), &thread_object), "the thread itself");
+    assert_eq!(table.query(Handle(read(THREAD))).map(|(access, _)| access), Ok(THREAD_ALL_ACCESS), "all its access");
+    assert_eq!((statuses[5], read(REFUSED)), (STATUS_ACCESS_DENIED, 0), "PROCESS_DUP_HANDLE; *TargetHandle zeroed");
+    assert_eq!(statuses[6], STATUS_INVALID_PARAMETER, "no target, no DUPLICATE_CLOSE_SOURCE");
+    assert_eq!(statuses[7], STATUS_SUCCESS, "no target: the source closed");
+    assert_eq!(statuses[8], STATUS_INVALID_HANDLE, "a bad source process");
+    assert_eq!(statuses[9], STATUS_ACCESS_VIOLATION, "*TargetHandle at a bad address");
+    assert_eq!(statuses[10], STATUS_SUCCESS, "into the other process");
+    let remote = other.handle_table.reference(Handle(read(REMOTE)), None, AccessMask::NONE).expect("its handle");
+    assert!(Arc::ptr_eq(&remote, &event), "the same event in the other process");
+    let access = |table: &ob::HandleTable, at: u32| table.query(Handle(read(at))).map(|(access, _)| access);
+    assert_eq!(access(&other.handle_table, REMOTE), access(table, EVENT), "with the same access");
+    drop(remote);
+    assert_eq!((statuses[11], statuses[12]), (STATUS_SUCCESS, STATUS_INVALID_HANDLE), "a bad target process");
+    assert_eq!(statuses[13], STATUS_SUCCESS, "NtCurrentProcess() with the same access");
+    assert_eq!(access(table, ALL), Ok(PROCESS_ALL_ACCESS));
+    assert_eq!(statuses[14], STATUS_SUCCESS, "a protected source");
+    assert_eq!(table.query(Handle(read(MOVED))), Ok((AccessMask(SYNCHRONIZE), BOTH)), "its access and attributes");
+    assert!(table.query(Handle(read(NARROW))).is_ok(), "a protected source stays");
+    // A closed handle's entry is the next one taken: the closed copies are
+    // seen in their objects' handle counts.
+    assert_eq!(event.handle_count(), 4, "EVENT, NARROW, MOVED and REMOTE: the copy closed without a target is gone");
+    assert_eq!(thread_object.handle_count(), 1, "THREAD: the source closed in spite of the bad target is gone");
+    // EVENT, NARROW, SELF, THREAD, ALL, MOVED and the other process.
+    assert_eq!(table.count(), 7, "no handle left behind by a failure");
+    drop((event, me_object, thread_object));
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((process, other, thread));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Ob: NtDuplicateObject from user mode: same or less access, attributes, pseudo-handles, no target, \
+         into another process, DUPLICATE_CLOSE_SOURCE whatever the outcome"
     );
 }
 
