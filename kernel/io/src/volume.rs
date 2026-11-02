@@ -21,9 +21,12 @@
 //! les données passent par des tampons du noyau, jamais par la mémoire
 //! utilisateur sous le verrou.
 //!
-//! Pas encore : les noms longs (VFAT) ; un nom valide que le format 8.3 ne
-//! peut pas tenir n'existe donc pas sur le volume, et ne s'y crée pas
-//! (`STATUS_OBJECT_NAME_INVALID`). La suppression, le renommage, les dates
+//! Un composant se trouve par son nom 8.3 ou par son nom long (VFAT), sans
+//! casse (`fat::FatVolume::find_entry`).
+//!
+//! Pas encore : créer un nom long ; un nom valide que le format 8.3 ne peut
+//! pas tenir ne se crée pas (`STATUS_OBJECT_NAME_INVALID`). La suppression,
+//! le renommage, les dates
 //! (les dates de FAT sont en heure locale ; sans fuseau horaire, elles
 //! passent pour de l'UTC, et rien ne les écrit encore).
 

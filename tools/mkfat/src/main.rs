@@ -9,8 +9,8 @@
 //! Usage:  mkfat <output.img> [HOST_PATH:FAT_PATH ...]
 //!   e.g.: mkfat fat.img /path/to/ntdll.dll:WINDOWS/SYSTEM32/NTDLL.DLL
 //!
-//! Each component of a FAT path is an 8.3 name (no long names); the
-//! directories on the way are created.
+//! Each component of a FAT path is an 8.3 name or a long name (VFAT, with an
+//! 8.3 alias); the directories on the way are created.
 //! `cargo xtask` runs it to build the ramdisk of each ESP it lays out.
 
 mod image;
@@ -27,14 +27,17 @@ fn main() -> ExitCode {
     let cmd = build_cmd_pe32(0x0210_0000, 0x1000);
 
     // Standard files always present.
-    let mut files: Vec<(Vec<image::ShortName>, Vec<u8>)> =
-        vec![(vec![*b"KERNEL  BIN"], b"ABCD".to_vec()), (vec![*b"TEST    EXE"], pe32), (vec![*b"CMD     EXE"], cmd)];
+    let mut files: Vec<(Vec<String>, Vec<u8>)> = vec![
+        (vec!["KERNEL.BIN".into()], b"ABCD".to_vec()),
+        (vec!["TEST.EXE".into()], pe32),
+        (vec!["CMD.EXE".into()], cmd),
+    ];
 
     // Extra files from HOST_PATH:FAT_PATH pairs.
     // We split on the LAST ':' so Windows drive letters (C:\...) are handled correctly.
     for arg in args.iter().skip(2) {
         if let Some((host, fat_path)) = arg.rsplit_once(':') {
-            match image::short_path(fat_path) {
+            match image::path(fat_path) {
                 Ok(path) => match fs::read(host) {
                     Ok(data) => files.push((path, data)),
                     Err(e) => eprintln!("[mkfat] skipping {arg}: {e}"),
@@ -57,7 +60,6 @@ fn main() -> ExitCode {
 
     eprint!("[mkfat] {} bytes → {out} ", img.len());
     for (path, data) in &files {
-        let path: Vec<String> = path.iter().map(image::display).collect();
         eprint!(" {}={}", path.join("/"), data.len());
     }
     eprintln!();
