@@ -9,8 +9,11 @@
 //! | `int 2Dh` | KiDebugService : `DbgPrint` vers le port série ; `DbgPrompt`, faute de débogueur, reçoit `i` |
 //! | `int 2Eh` | KiSystemService ([`super::dispatch`]) |
 //! | SYSENTER | KiFastCallEntry, vers le même KiSystemService |
+//!
+//! Et le service qui dit ce que `DbgPrintEx` laisse passer
+//! ([`nt_query_debug_filter_state`]) : tout.
 
-use abi::ntstatus::{STATUS_ASSERTION_FAILURE, STATUS_NO_CALLBACK_ACTIVE, STATUS_SUCCESS};
+use abi::ntstatus::{NtStatus, STATUS_ASSERTION_FAILURE, STATUS_NO_CALLBACK_ACTIVE, STATUS_SUCCESS};
 use hal::trap::{set_trap_hook, KTrapFrame, SYSENTER};
 
 /// Le service de débogage qui affiche une chaîne (BREAKPOINT_PRINT).
@@ -156,4 +159,13 @@ fn service(frame: &mut KTrapFrame, number: u32, arguments: u32) {
         frame.rax = u64::from(status.0);
     }
     x86_64::instructions::interrupts::disable();
+}
+
+/// NtQueryDebugFilterState(ComponentId, Level) : un message de `DbgPrintEx`
+/// de ce composant et de ce niveau va-t-il au débogueur ? Le noyau de Mino
+/// envoie tout au port série (`DbgPrint`, ci-dessus) : `TRUE` pour tous, comme un
+/// noyau dont chaque masque de composant serait plein. Le service rend ce
+/// booléen comme NTSTATUS, comme XP.
+pub(super) fn nt_query_debug_filter_state(_arguments: &[u32]) -> NtStatus {
+    NtStatus(1)
 }

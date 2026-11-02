@@ -33,6 +33,7 @@ mod registry;
 mod section;
 mod security;
 mod system;
+mod time;
 mod wait;
 
 pub(crate) use system::processor_information;
@@ -95,6 +96,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
     (services::NtFlushBuffersFile, Handler::Status(file::nt_flush_buffers_file)),
+    (services::NtFlushInstructionCache, Handler::Status(process::nt_flush_instruction_cache)),
     (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
@@ -111,16 +113,19 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtProtectVirtualMemory, Handler::Status(memory::nt_protect_virtual_memory)),
     (services::NtPulseEvent, Handler::Status(event::nt_pulse_event)),
     (services::NtQueryAttributesFile, Handler::Status(file::nt_query_attributes_file)),
+    (services::NtQueryDebugFilterState, Handler::Status(gates::nt_query_debug_filter_state)),
     (services::NtQueryEvent, Handler::Status(event::nt_query_event)),
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),
     (services::NtQueryInformationProcess, Handler::Status(process::nt_query_information_process)),
     (services::NtQueryInformationToken, Handler::Status(security::nt_query_information_token)),
     (services::NtQueryKey, Handler::Status(registry::nt_query_key)),
+    (services::NtQueryPerformanceCounter, Handler::Status(time::nt_query_performance_counter)),
     (services::NtQuerySection, Handler::Status(section::nt_query_section)),
     (services::NtQuerySecurityObject, Handler::Status(security::nt_query_security_object)),
     (services::NtQuerySymbolicLinkObject, Handler::Status(object::nt_query_symbolic_link_object)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
+    (services::NtQuerySystemTime, Handler::Status(time::nt_query_system_time)),
     (services::NtQueryValueKey, Handler::Status(registry::nt_query_value_key)),
     (services::NtQueryVirtualMemory, Handler::Status(memory::nt_query_virtual_memory)),
     (services::NtQueryVolumeInformationFile, Handler::Status(file::nt_query_volume_information_file)),
@@ -133,6 +138,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtResumeThread, Handler::Status(process::nt_resume_thread)),
     (services::NtSetEvent, Handler::Status(event::nt_set_event)),
     (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
+    (services::NtSetInformationObject, Handler::Status(object::nt_set_information_object)),
     (services::NtSetInformationProcess, Handler::Status(process::nt_set_information_process)),
     (services::NtSetSecurityObject, Handler::Status(security::nt_set_security_object)),
     (services::NtSetSystemInformation, Handler::Status(system::nt_set_system_information)),

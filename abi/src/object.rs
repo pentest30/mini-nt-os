@@ -125,6 +125,14 @@ pub const OBJ_OPENIF: u32 = 0x0000_0080;
 pub const OBJ_OPENLINK: u32 = 0x0000_0100;
 pub const OBJ_KERNEL_HANDLE: u32 = 0x0000_0200;
 
+// NtSetInformationObject's classes.
+/// OBJECT_HANDLE_FLAG_INFORMATION: two BOOLEANs, Inherit and
+/// ProtectFromClose.
+pub const OBJECT_HANDLE_FLAG_INFORMATION: u32 = 4;
+/// ObjectSessionInformation: a directory becomes that of the caller's
+/// session; no buffer.
+pub const OBJECT_SESSION_INFORMATION: u32 = 5;
+
 // `NtDuplicateObject` options.
 pub const DUPLICATE_CLOSE_SOURCE: u32 = 0x0000_0001;
 pub const DUPLICATE_SAME_ACCESS: u32 = 0x0000_0002;

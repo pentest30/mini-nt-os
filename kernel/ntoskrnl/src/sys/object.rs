@@ -199,3 +199,46 @@ pub(super) fn nt_query_symbolic_link_object(arguments: &[u32]) -> NtStatus {
     };
     result(query())
 }
+
+/// NtSetInformationObject(Handle, ObjectInformationClass, ObjectInformation,
+/// Length) : ce qu'on change d'un handle ou de son objet.
+///
+/// | Classe | Effet |
+/// |---|---|
+/// | `ObjectHandleFlagInformation` (4) | les attributs du handle : héritable, protégé contre la fermeture (deux BOOLEAN, `STATUS_INFO_LENGTH_MISMATCH` pour une autre taille) |
+/// | `ObjectSessionInformation` (5) | le répertoire devient celui de la session de l'appelant, sous `SeTcbPrivilege` (`STATUS_PRIVILEGE_NOT_HELD`) ; un autre objet rend `STATUS_OBJECT_TYPE_MISMATCH` |
+///
+/// Les autres classes rendent `STATUS_INVALID_INFO_CLASS`.
+pub(super) fn nt_set_information_object(arguments: &[u32]) -> NtStatus {
+    use abi::ntstatus::{STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_INFO_CLASS, STATUS_PRIVILEGE_NOT_HELD};
+    use abi::object::{OBJECT_HANDLE_FLAG_INFORMATION, OBJECT_SESSION_INFORMATION};
+
+    let (handle, class, information, length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
+    let process = super::current_process();
+    let set = || match class {
+        OBJECT_HANDLE_FLAG_INFORMATION => {
+            if length != 2 {
+                return Err(STATUS_INFO_LENGTH_MISMATCH);
+            }
+            let mut flags = [0u8; 2];
+            ke::usermem::copy_from_user(&mut flags, u64::from(information))?;
+            let attributes = ob::HandleAttributes { inherit: flags[0] != 0, protect_from_close: flags[1] != 0 };
+            process.handle_table.set_attributes(ob::Handle(handle), attributes)?;
+            Ok(STATUS_SUCCESS)
+        }
+        OBJECT_SESSION_INFORMATION => {
+            if !super::security::privilege_enabled(abi::security::SE_TCB_PRIVILEGE) {
+                return Err(STATUS_PRIVILEGE_NOT_HELD);
+            }
+            let directory = process.handle_table.reference_as::<ob::Directory>(
+                ob::Handle(handle),
+                &ob::DIRECTORY_TYPE,
+                ob::AccessMask::NONE,
+            )?;
+            directory.set_session_id(process.session_id());
+            Ok(STATUS_SUCCESS)
+        }
+        _ => Err(STATUS_INVALID_INFO_CLASS),
+    };
+    set().unwrap_or_else(|status| status)
+}
