@@ -9,6 +9,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID};
 use abi::object::{AccessMask, GenericMapping};
@@ -42,10 +43,16 @@ struct Entry {
     object: ObjectRef,
 }
 
-/// Un répertoire : ses entrées, par nom mis en majuscules.
+/// Un répertoire : ses entrées, par nom mis en majuscules, et sa session.
 pub struct Directory {
     entries: KSpinLock<BTreeMap<String, Entry>>,
+    /// La session dont il est le répertoire (ObjectSessionInformation) ;
+    /// `NO_SESSION` sinon.
+    session_id: AtomicU32,
 }
+
+/// Un répertoire d'aucune session.
+const NO_SESSION: u32 = u32::MAX;
 
 /// `name` en majuscules, caractère pour caractère.
 pub fn fold(name: &str) -> String {
@@ -71,7 +78,10 @@ impl Directory {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn create() -> Arc<Object<Directory>> {
-        create_object(&DIRECTORY_TYPE, Directory { entries: KSpinLock::new(BTreeMap::new()) })
+        create_object(
+            &DIRECTORY_TYPE,
+            Directory { entries: KSpinLock::new(BTreeMap::new()), session_id: AtomicU32::new(NO_SESSION) },
+        )
     }
 
     /// L'objet qui porte le nom `name`, sans regarder la casse.
@@ -80,6 +90,19 @@ impl Directory {
     /// <= DISPATCH_LEVEL.
     pub fn lookup(&self, name: &str) -> Option<ObjectRef> {
         self.entries.lock().get(&fold(name)).map(|entry| entry.object.clone())
+    }
+
+    /// NtSetInformationObject (`ObjectSessionInformation`) : il devient le
+    /// répertoire de la session `session_id` (Directory->SessionId). Rien ne
+    /// s'en sert encore : les noms des sessions (`\Sessions\N`) viendront
+    /// avec les sessions de Terminal Services.
+    pub fn set_session_id(&self, session_id: u32) {
+        self.session_id.store(session_id, Ordering::Relaxed);
+    }
+
+    /// La session dont il est le répertoire, s'il en a une.
+    pub fn session_id(&self) -> Option<u32> {
+        Some(self.session_id.load(Ordering::Relaxed)).filter(|&id| id != NO_SESSION)
     }
 
     /// Le nombre d'entrées.
