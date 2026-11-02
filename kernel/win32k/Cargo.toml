@@ -1,0 +1,17 @@
+[package]
+name    = "win32k"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "win32k"
+
+[dependencies]
+abi      = { path = "../../abi" }
+ex       = { path = "../ex" }
+hal      = { path = "../hal" }
+ke       = { path = "../ke" }
+mm       = { path = "../mm" }
+ob       = { path = "../ob" }
+ps       = { path = "../ps" }
+log      = { workspace = true }

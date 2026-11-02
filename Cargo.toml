@@ -15,6 +15,7 @@ members = [
     "kernel/ex",
     "kernel/lpc",
     "kernel/se",
+    "kernel/win32k",
     "libs/pe",
     "libs/regf",
     "tools/pe-inspect",
