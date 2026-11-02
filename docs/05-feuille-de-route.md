@@ -155,6 +155,38 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - [ ] Démarrage sur au moins deux machines physiques UEFI de référence (listées dans `docs/compat/materiel.md`).
 - [ ] Navigation HTTP avec un navigateur de l'époque, et téléchargement d'un fichier de 100 Mio avec vérification de son SHA-256.
 
+**Spike S4, optionnel : pilotes d'un autre système sous une couche d'émulation** (idée tracée, rien n'est décidé)
+
+Pour le matériel qu'on n'écrira pas raisonnablement en Rust (Wi-Fi, accélération graphique moderne, longue traîne des
+cartes réseau), réutiliser des pilotes de Linux ou d'un BSD derrière une réimplémentation de leur API interne, comme le
+font LinuxKPI dans FreeBSD, DDE Linux dans Genode ou la couche BSD de Haiku. Les pilotes du stockage, de l'affichage de
+base, de l'entrée et les systèmes de fichiers restent en Rust (ADR-008) : leurs spécifications sont publiques, et un
+système de fichiers d'XP a une sémantique (modes de partage, verrous de plages, noms sans casse, oplocks) que la VFS de
+Linux n'a pas. Ce spike ne conditionne pas la sortie du M9.
+
+- Préalables :
+  - l'ADR-007 (licence) est tranchée ;
+  - une ADR remplace l'ADR-008 pour cette classe de pilotes. Elle traite le C en ring 0, écarté par l'ADR-013 pour
+    FreeType, et les dépendances hors de l'ADR-016 ;
+  - une version du système source est épinglée (une LTS pour Linux), comme ReactOS, car son API interne change à
+    chaque version.
+- Préférer les sources permissives ou sous double licence : pilotes BSD, `iwlwifi`, DRM i915 et amdgpu (MIT pour
+  l'essentiel). Un pilote GPL-2.0-only lié statiquement met tout le binaire du noyau sous GPL-2.0-only.
+- La couche traduit vers ce que le noyau a déjà :
+  - mémoire : pools et base PFN ;
+  - verrous : `KSpinLock`, `KGuardedMutex` ;
+  - travail différé : contexte processus à PASSIVE_LEVEL, softirq en DPC, roue de timers, threads de travail ;
+  - attentes : événements Ke.
+
+  Le bas (bus PCI, MSI, DMA, MMIO, IRQL) est celui des pilotes Rust du M9. Les blobs de firmware se chargent depuis
+  le disque.
+
+**Critères du spike S4**
+- [ ] Une carte réseau émulée par QEMU, servie par le pilote importé, détecte son lien et échange une trame Ethernet brute
+  (ARP) avec l'hôte, sur les deux chemins de la CI (AMD et Intel).
+- [ ] La taille de la couche d'émulation et le coût d'une montée de version du système source sont mesurés et consignés
+  dans `docs/compat/` ; l'ADR est alors acceptée ou rejetée.
+
 ## M10 — Maturité
 
 - SMP : démarrage des processeurs secondaires, IPI, *TLB shootdown*, verrous par objet si les mesures l'exigent.

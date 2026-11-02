@@ -355,6 +355,10 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   l'exception d'origine (XP lèverait plutôt l'exception de l'écriture sur la pile).
 - Avant de supprimer l'ancien code (Win32 dans `syscall.rs`, stubs de `loader.rs`, `launcher.rs`, `win32/*`,
   `directx/*`), extraire la connaissance utile dans `docs/compat/` (audit §5).
+- Idée tracée, pas une décision : réutiliser des pilotes de Linux ou d'un BSD sous une couche d'émulation, pour le
+  matériel qu'on n'écrira pas en Rust (Wi-Fi, GPU moderne). Spike S4, optionnel, au M9
+  ([05](05-feuille-de-route.md#m9--matériel-réel-et-réseau)) : préalables (ADR-007 tranchée, ADR qui remplace
+  l'ADR-008 pour ces pilotes), licence, critères. Rien à faire avant le M9.
 
 ## Reprendre
 
