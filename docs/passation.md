@@ -12,11 +12,13 @@ jour à chaque commit qui change l'état.
   propre). Ce que le M4 laisse à faire est listé ci-dessous (« Dettes du M4 »). Au M5, `smss` crée sa session et
   lance `csrss.exe`, qui protège son processus (Se), crée sa section partagée (Mm), charge `basesrv`, puis `winsrv`
   (USER sur le win32k minimal, puis la console `consrv`), se connecte à `smss` par LPC (et `smss` à lui) : **`csrss`
-  est démarré**. `smss` s'arrête ensuite à sa commande initiale, `winlogon.exe`, absent du disque :
-  [`compat/m5-csrss.md`](compat/m5-csrss.md).
+  est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
+  sur son processus (NtDuplicateObject) et le confie à `csrss`, qui s'arrête à son port d'exception
+  (NtSetInformationProcess, `ProcessExceptionPort`) : [`compat/m5-csrss.md`](compat/m5-csrss.md).
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
-  (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7). Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
+  (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
+  l'étape 9 sur `claude/new-session-696xfc`, partie de `main` après la fusion de #43. Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
   branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
@@ -272,6 +274,21 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    (`ThreadBreakOnTermination`). La sonde retire ses drapeaux à `smss` avant de le terminer. Tests : hôte (`ex`,
    `ke`), `keyed_event_self_test`, `process_settings_self_test`, scénarios `critical-process` et `critical-thread` ;
    vérifiés par mutation. L'assertion de `smss` disparaît ; `csrss` s'arrête toujours à `NtUserProcessConnect`.
+
+9. [ ] **`winlogon`** (`compat/m5-csrss.md`, étape 14). Fait : `winlogon.exe` sur le disque ; NtDuplicateObject
+   (`ob::duplicate` : `DuplicateSource::Pseudo` pour `NtCurrentProcess()` et `NtCurrentThread()`, résolus par Ps ;
+   sans cible, la source se ferme seulement ; `DUPLICATE_CLOSE_SOURCE` quel que soit le résultat), `OBJ_PROTECT_CLOSE`.
+   Tests : hôte (`ob`), `duplicate_object_self_test`. `smss` confie `winlogon` à `csrss` (`SmExecPgm`) et attend ;
+   `csrss` (`CsrSbCreateSession`) s'arrête à NtSetInformationProcess(`ProcessExceptionPort`). Reste, dans l'ordre :
+   - `ProcessExceptionPort` (8) : sous `SeTcbPrivilege`, un port LPC, une fois (`STATUS_PORT_ALREADY_SET`) ; le
+     noyau ne s'en sert pas encore (une exception non traitée en seconde chance devrait y aller, au lieu de terminer
+     le processus) : à noter dans les dettes ;
+   - NtQueryInformationThread (absent) : `ThreadTimes` (le temps de création du thread, à garder dans `EThread` ;
+     les temps noyau et utilisateur, que Ke ne compte pas encore), puis `ThreadBasicInformation` ;
+   - `ProcessForegroundInformation` (25, toléré par `csrss`) : le quantum de premier plan (PsPrioritySeparation)
+     demande un quantum par thread dans Ke ;
+   - puis `winlogon` démarre : `kernel32` se connecte à `csrss` (`CsrClientConnectToServer`, `\Windows\ApiPort`,
+     avec la section partagée), puis ce que `winlogon` demande (bureaux, `msgina`, SAS…).
 
 Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal
 `[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).

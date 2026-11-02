@@ -405,3 +405,29 @@ commande initiale, `winlogon.exe`, qui n'est pas sur le disque (« Initial comma
 il abandonne (`SmpTerminate`) et finit. Restent tolérés : NtQueryDefaultLocale, NtRaiseHardError,
 NtSetInformationProcess(`ProcessExecuteFlags`, `ProcessUserModeIOPL`), NtInitializeRegistry.
 
+## Étape 14 : `winlogon.exe` sur le disque ; NtDuplicateObject
+
+`cargo xtask` met `winlogon.exe` dans `WINDOWS\SYSTEM32`, avec la fermeture de ses imports (aucune DLL de plus :
+celles qu'il importe sont déjà sur le disque). `smss` trouve sa commande initiale et crée son processus
+(`SmpExecuteImage`), puis garde un handle sur lui (`SmpExecuteInitialCommand`, `smss.c`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtDuplicateObject | un handle dans le processus cible sur l'objet d'un handle du processus source (`ob::duplicate`) ; les deux processus désignés dans le processus courant, avec `PROCESS_DUP_HANDLE` ; `NtCurrentProcess()` et `NtCurrentThread()` comme handle source, avec tous les droits de leur type ; les droits et les attributs de la source (`DUPLICATE_SAME_ACCESS`, `DUPLICATE_SAME_ATTRIBUTES`) ou ceux demandés (`OBJ_INHERIT`, `OBJ_PROTECT_CLOSE`) ; sans processus cible, la source se ferme seulement (`DUPLICATE_CLOSE_SOURCE`, sinon `STATUS_INVALID_PARAMETER`) ; avec `DUPLICATE_CLOSE_SOURCE`, la source se ferme quel que soit le résultat (un handle protégé reste) ; `*TargetHandle` mis à zéro d'abord | `smss` (le processus de `winlogon`, `PROCESS_ALL_ACCESS`), `csrss` |
+
+Un processus cible qui ne s'ouvre pas rend son statut (après la fermeture de la source, avec
+`DUPLICATE_CLOSE_SOURCE`) ; ReactOS rend dans ce cas le résultat d'une duplication sans cible.
+
+Sans NtDuplicateObject, `smss` terminait `winlogon` (« SMSS: DupObject Failed », « Execute Initial Command
+failed »), puis finissait. Désormais il le confie à `csrss` (`SmExecPgm` sur son propre port d'API, puis
+`CsrSbCreateSession` par le port SB de `csrss`), et attend `csrss` et `winlogon` : la sonde le termine au bout de
+10 s. `csrss` fait de `winlogon` un processus CSR et s'arrête à son port d'exception :
+**NtSetInformationProcess(`ProcessExceptionPort`)**, pas encore implémenté (`CsrSbCreateSession`,
+`csrsrv/session.c`) ; il demandera ensuite les temps de son premier thread (NtQueryInformationThread,
+`ThreadTimes`), sa priorité d'arrière-plan (`ProcessForegroundInformation`, dont l'échec est toléré), puis
+reprendra le thread : `winlogon` démarrera.
+
+Tests : hôte (`ob` : sans cible, pseudo-handle, source fermée quel que soit le résultat), `duplicate_object_self_test`
+(un programme duplique un événement dans son processus et dans un autre, ses pseudo-handles, et chaque refus : sans
+`PROCESS_DUP_HANDLE`, sans cible, processus source ou cible invalide, `*TargetHandle` à une adresse invalide ; les
+handles fermés se voient au compte de handles de leur objet, une entrée libérée étant la suivante reprise).
