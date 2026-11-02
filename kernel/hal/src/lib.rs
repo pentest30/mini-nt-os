@@ -8,6 +8,8 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![feature(abi_x86_interrupt)]
+// The host tests' stand-in for CR8, one per thread (`irql`).
+#![cfg_attr(not(target_os = "none"), feature(thread_local))]
 
 pub mod ata;
 pub mod bugcheck;

@@ -111,7 +111,7 @@ fn read_raw() -> u8 {
     }
     #[cfg(not(target_os = "none"))]
     {
-        HOST_IRQL.load(Ordering::Relaxed)
+        HOST_IRQL.get()
     }
 }
 
@@ -127,13 +127,16 @@ fn write_raw(irql: u8) {
     }
     #[cfg(not(target_os = "none"))]
     {
-        HOST_IRQL.store(irql, Ordering::Relaxed);
+        HOST_IRQL.set(irql);
     }
 }
 
-/// CR8 of the host tests.
+/// CR8 of the host tests, one per thread as each CPU has its own: tests that
+/// run at once (each in its thread) take spin locks without changing each
+/// other's IRQL.
 #[cfg(not(target_os = "none"))]
-static HOST_IRQL: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+#[thread_local]
+static HOST_IRQL: core::cell::Cell<u8> = core::cell::Cell::new(0);
 
 /// The DISPATCH interrupt handler: `fn()` stored as `usize`, 0 until Ke
 /// registers it.
@@ -404,7 +407,16 @@ mod tests {
         assert_eq!(crate::timer::CLOCK_VECTOR >> 4, Irql::Clock.as_u8());
     }
 
-    /// The only test that changes the IRQL: the host's stand-in CR8 is global.
+    #[test]
+    fn each_host_thread_has_its_own_irql() {
+        extern crate std;
+
+        let raised = raise(Irql::Dispatch);
+        let other = std::thread::spawn(current).join().expect("a thread");
+        assert_eq!((other, current()), (Irql::Passive, Irql::Dispatch), "a thread is a CPU of its own");
+        lower(raised);
+    }
+
     #[test]
     fn an_isr_runs_at_its_level_and_restores_the_one_it_interrupted() {
         assert_eq!(current(), Irql::Passive);

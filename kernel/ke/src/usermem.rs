@@ -133,6 +133,27 @@ unsafe impl UserValue for abi::peb32::UnicodeString32 {
     const ALIGNMENT: usize = 4;
 }
 
+// SAFETY: integers back to back, any bit pattern valid, no padding (the
+// layouts are asserted in abi::lpc).
+unsafe impl UserValue for abi::lpc::PortMessage32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: six u32, any bit pattern valid.
+unsafe impl UserValue for abi::lpc::PortView32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: three u32, any bit pattern valid.
+unsafe impl UserValue for abi::lpc::RemotePortView32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: two u32 and four u8, any bit pattern valid, no padding.
+unsafe impl UserValue for abi::lpc::SecurityQualityOfService32 {
+    const ALIGNMENT: usize = 4;
+}
+
 // SAFETY: an array of values valid for any bit pattern, without padding,
 // is one too.
 unsafe impl<T: UserValue, const N: usize> UserValue for [T; N] {

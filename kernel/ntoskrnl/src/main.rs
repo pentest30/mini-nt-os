@@ -358,6 +358,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     keyed_event_self_test();
     process_settings_self_test();
     win32k_self_test();
+    lpc_connection_self_test();
     process_memory_self_test();
     shared_section_self_test();
     process_creation_self_test();
@@ -3516,11 +3517,11 @@ fn process_creation_self_test() {
 /// port before any client: NtCreatePort (named), then NtReplyWaitReceivePort
 /// blocks until a message comes; the kernel sends one (LpcRequestPort, a
 /// datagram), which arrives whole. What must fail: a message length past
-/// the limit, a reply (no connection yet), a bad handle, an event.
+/// the limit, a reply too short for its header, a bad handle, an event.
 fn port_self_test() {
     use abi::lpc::{LPC_DATAGRAM, LPC_KERNELMODE_MESSAGE};
     use abi::ntstatus::{
-        NtStatus, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER_4, STATUS_NOT_IMPLEMENTED,
+        NtStatus, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_4,
         STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::services;
@@ -3613,7 +3614,7 @@ fn port_self_test() {
     let statuses: alloc::vec::Vec<NtStatus> = (0..5).map(|i| NtStatus(read(status(i)))).collect();
     assert_eq!(statuses[0], STATUS_SUCCESS, "NtCreatePort");
     assert_eq!(statuses[1], STATUS_INVALID_PARAMETER_4, "messages past the limit");
-    assert_eq!(statuses[2], STATUS_NOT_IMPLEMENTED, "a reply: no connection yet");
+    assert_eq!(statuses[2], STATUS_INVALID_PARAMETER, "a reply of no length, not even its header's");
     assert_eq!(statuses[3], STATUS_INVALID_HANDLE, "a bad handle");
     assert_eq!(statuses[4], STATUS_OBJECT_TYPE_MISMATCH, "an event is not a port");
     assert_eq!(NtStatus(read(RECEIVED)), STATUS_SUCCESS, "NtReplyWaitReceivePort");
@@ -4526,6 +4527,336 @@ fn win32k_self_test() {
     log::info!(
         "[smoke] win32k: a GUI thread and process, NtGdiInit, NtUserProcessConnect (the USER shared section, read \
          only); Ex: semaphores from user mode; Ob: NtQueryObject"
+    );
+}
+
+/// LPC connections from user mode (`lpc`, `sys::port`, M5), as csrss and
+/// smss use them, in one process: a server thread creates a named port and
+/// listens, passing by a datagram from the kernel; a client thread is refused for a server SID that is not the
+/// server's, then refused by the server; it connects again with a section of
+/// its own and more connection data than the port takes, which the server
+/// accepts (rewriting the connection data, its port's handle as context)
+/// and completes. Both see the section, at their own addresses,
+/// and what the client writes there the server reads. The client sends a
+/// request, which arrives with its context, and gets the server's reply
+/// (a second reply to it is refused, and a reply to no thread); then a
+/// datagram; a request whose data pass its length, past the port's
+/// messages, or with a type of the caller's, is refused. The client
+/// also opens its process and its thread by their CLIENT_ID (NtOpenProcess,
+/// NtOpenThread, and what they refuse), reads the global flags
+/// (SystemFlagsInformation), and is refused the hard error port without
+/// SeTcbPrivilege.
+fn lpc_connection_self_test() {
+    use abi::lpc::{LPC_CONNECTION_REQUEST, LPC_DATAGRAM, LPC_REPLY, LPC_REQUEST};
+    use abi::ntstatus::{
+        NtStatus, STATUS_INVALID_CID, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_MIX,
+        STATUS_INVALID_PORT_HANDLE, STATUS_PORT_CONNECTION_REFUSED, STATUS_PORT_MESSAGE_TOO_LONG,
+        STATUS_PRIVILEGE_NOT_HELD, STATUS_REPLY_MESSAGE_MISMATCH, STATUS_SERVER_SID_MISMATCH, STATUS_SUCCESS,
+        STATUS_WAIT_0,
+    };
+    use abi::process::NT_CURRENT_PROCESS;
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 31 statuses
+    const PORT: u32 = DATA + 0x80;
+    const SERVER: u32 = DATA + 0x84;
+    const CLIENT: u32 = DATA + 0x88;
+    const SECTION: u32 = DATA + 0x90;
+    const MAX_LENGTH: u32 = DATA + 0x94;
+    const INFO_LENGTH: u32 = DATA + 0x98;
+    const CONTEXT: u32 = DATA + 0x9C;
+    const CONTEXT2: u32 = DATA + 0xA0;
+    const SEEN: u32 = DATA + 0xA4;
+    const OPENED_PROCESS: u32 = DATA + 0xA8;
+    const OPENED_THREAD: u32 = DATA + 0xAC;
+    const FLAGS: u32 = DATA + 0xB0;
+    const TOKEN: u32 = DATA + 0xB4;
+    const SERVER_READY: u32 = DATA + 0xB8;
+    const DONE_SERVER: u32 = DATA + 0xBC;
+    const DONE_CLIENT: u32 = DATA + 0xC0;
+    const REFUSED_HANDLE: u32 = DATA + 0xC4;
+    const CID: u32 = DATA + 0xC8; // 8 bytes
+    const SIZE: u32 = DATA + 0xD0; // a LARGE_INTEGER
+    const INFO: u32 = DATA + 0xD8; // 8 bytes
+    const VIEW: u32 = DATA + 0xE0; // a PORT_VIEW
+    const REMOTE_VIEW: u32 = DATA + 0x100; // a REMOTE_PORT_VIEW
+    const QOS: u32 = DATA + 0x110;
+    const SID_SYSTEM: u32 = DATA + 0x120; // S-1-5-18
+    const SID_ADMINS: u32 = DATA + 0x130; // S-1-5-32-544
+    const OA: u32 = DATA + 0x140;
+    const OA_EMPTY: u32 = DATA + 0x160;
+    const US: u32 = DATA + 0x180;
+    const NAME: u32 = DATA + 0x188;
+    const BAD_CID: u32 = DATA + 0x1B0;
+    const OTHER: u32 = DATA + 0x1B8;
+    const CONNECTION_CONTEXT: u32 = DATA + 0x1C0;
+    const BAD_CID2: u32 = DATA + 0x1C8; // System and the client's TID
+    const KINDED: u32 = DATA + 0x7C0; // a message with a type
+    const NO_THREAD: u32 = DATA + 0x7E0; // a reply to a TID of no thread
+    const CONNECTION: u32 = DATA + 0x200; // the messages, 0x100 each
+    const CONNECTION2: u32 = DATA + 0x300;
+    const REQUEST: u32 = DATA + 0x400;
+    const DATAGRAM: u32 = DATA + 0x500;
+    const SENT: u32 = DATA + 0x600;
+    const REPLY: u32 = DATA + 0x640;
+    const BAD: u32 = DATA + 0x740;
+    const LONG: u32 = DATA + 0x760;
+    const SENT_DATAGRAM: u32 = DATA + 0x780;
+    const PORT_NAME: &str = "\\MinoLpcPort";
+    const SENTINEL: u32 = 0xAAAA_AAAA;
+
+    let header = |data: u16, total: u16| {
+        let mut bytes = [0u8; 0x18];
+        bytes[..2].copy_from_slice(&data.to_le_bytes());
+        bytes[2..4].copy_from_slice(&total.to_le_bytes());
+        bytes
+    };
+    let mut data = alloc::vec![0u8; 0x800];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    put(SENT, &header(8, 0x20));
+    put(SENT + 0x18, b"QUESTION");
+    put(SENT_DATAGRAM, &header(4, 0x1C));
+    put(SENT_DATAGRAM + 0x18, b"DGRM");
+    put(BAD, &header(0x200, 0x20));
+    put(LONG, &header(0xF0, 0x108));
+    put(INFO_LENGTH, &8u32.to_le_bytes());
+    put(INFO, b"INFOXXXX");
+    put(SIZE, &0x2000u32.to_le_bytes());
+    put(VIEW, &24u32.to_le_bytes());
+    put(VIEW + 0x0C, &0x2000u32.to_le_bytes());
+    put(REMOTE_VIEW, &12u32.to_le_bytes());
+    put(QOS, &[12, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]);
+    put(SID_SYSTEM, &[1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0]);
+    put(SID_ADMINS, &[1, 2, 0, 0, 0, 0, 0, 5, 32, 0, 0, 0, 0x20, 2, 0, 0]);
+    let units: alloc::vec::Vec<u8> = PORT_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(NAME, &units);
+    let length = (units.len() as u16).to_le_bytes();
+    put(US, &[length[0], length[1], length[0], length[1]]);
+    put(US + 4, &NAME.to_le_bytes());
+    put(OA, &24u32.to_le_bytes());
+    put(OA + 8, &US.to_le_bytes());
+    put(OA_EMPTY, &24u32.to_le_bytes());
+    put(BAD_CID + 4, &0xFFFCu32.to_le_bytes());
+    put(FLAGS, &SENTINEL.to_le_bytes());
+    put(CONNECTION_CONTEXT, &SENTINEL.to_le_bytes());
+    put(BAD_CID2, &4u32.to_le_bytes());
+    let mut kinded = header(4, 0x1C);
+    kinded[4] = LPC_DATAGRAM as u8;
+    put(KINDED, &kinded);
+    let mut no_thread = header(0, 0x18);
+    no_thread[0x0C..0x10].copy_from_slice(&0xFFFCu32.to_le_bytes());
+    no_thread[0x10..0x14].copy_from_slice(&1u32.to_le_bytes());
+    put(NO_THREAD, &no_thread);
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (accept, complete) = (services::NtAcceptConnectPort, services::NtCompleteConnectPort);
+    let (receive, reply) = (services::NtReplyWaitReceivePort, services::NtReplyPort);
+    // The server.
+    let mut server = Code::new();
+    // Connection data of 4 bytes at most.
+    server.call_args(services::NtCreatePort, &[v(PORT), v(OA), v(4), v(0x100), v(0)]).store_eax(status(0));
+    server.word(&[0xC7, 0x05], SERVER_READY).bytes(&1u32.to_le_bytes());
+    server.call_args(services::NtListenPort, &[m(PORT), v(CONNECTION)]).store_eax(status(1));
+    server.call_args(accept, &[v(REFUSED_HANDLE), v(0), v(CONNECTION), v(0), v(0), v(0)]).store_eax(status(2));
+    server.call_args(receive, &[m(PORT), v(CONNECTION_CONTEXT), v(0), v(CONNECTION2)]).store_eax(status(3));
+    server.word(&[0xC6, 0x05], CONNECTION2 + 0x18).bytes(b"S"); // the data, rewritten
+                                                                // No context: the server port's handle becomes it.
+    server.call_args(accept, &[v(SERVER), v(0), v(CONNECTION2), v(1), v(0), v(REMOTE_VIEW)]).store_eax(status(4));
+    server.call_args(complete, &[m(SERVER)]).store_eax(status(5));
+    server.call_args(complete, &[m(PORT)]).store_eax(status(6));
+    server.call_args(receive, &[m(PORT), v(CONTEXT), v(0), v(REQUEST)]).store_eax(status(7));
+    server.word(&[0xA1], REMOTE_VIEW + 8); // mov eax, [ViewBase]
+    server.bytes(&[0x8B, 0x08]); // mov ecx, [eax]
+    server.word(&[0x89, 0x0D], SEEN); // mov [SEEN], ecx
+    server.word(&[0xC6, 0x05], REQUEST + 0x18).bytes(b"R");
+    server.call_args(reply, &[m(PORT), v(REQUEST)]).store_eax(status(8));
+    server.call_args(reply, &[m(PORT), v(REQUEST)]).store_eax(status(9));
+    server.call_args(reply, &[m(PORT), v(NO_THREAD)]).store_eax(status(28));
+    server.call_args(receive, &[m(SERVER), v(CONTEXT2), v(0), v(DATAGRAM)]).store_eax(status(10));
+    server.word(&[0xC7, 0x05], DONE_SERVER).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    // The client.
+    let (connect, secure) = (services::NtConnectPort, services::NtSecureConnectPort);
+    let request = services::NtRequestWaitReplyPort;
+    let open_process = services::NtOpenProcess;
+    let mut client = Code::new();
+    client.bytes(&[0x64, 0xA1, 0x20, 0, 0, 0]).store_eax(CID); // mov eax, fs:[0x20]: its PID
+    client.bytes(&[0x64, 0xA1, 0x24, 0, 0, 0]).store_eax(CID + 4); // its TID
+    client.word(&[0xA1], CID).store_eax(BAD_CID);
+    client.bytes(&[0x64, 0xA1, 0x24, 0, 0, 0]).store_eax(BAD_CID2 + 4);
+    client
+        .call_args(secure, &[v(CLIENT), v(US), v(QOS), v(0), v(SID_ADMINS), v(0), v(0), v(0), v(0)])
+        .store_eax(status(11));
+    client
+        .call_args(connect, &[v(CLIENT), v(US), v(QOS), v(0), v(0), v(MAX_LENGTH), v(INFO), v(INFO_LENGTH)])
+        .store_eax(status(12));
+    client
+        .call_args(services::NtCreateSection, &[v(SECTION), v(0x000F_001F), v(0), v(SIZE), v(4), v(0x0800_0000), v(0)])
+        .store_eax(status(13));
+    client.word(&[0xA1], SECTION).store_eax(VIEW + 4);
+    let arguments = [v(CLIENT), v(US), v(QOS), v(VIEW), v(SID_SYSTEM), v(0), v(MAX_LENGTH), v(INFO), v(INFO_LENGTH)];
+    client.call_args(secure, &arguments).store_eax(status(14));
+    client.word(&[0xA1], VIEW + 0x10); // mov eax, [ViewBase]
+    client.bytes(&[0xC7, 0x00]).bytes(&0x1234_5678u32.to_le_bytes()); // mov dword [eax], ...
+    client.call_args(request, &[m(CLIENT), v(SENT), v(REPLY)]).store_eax(status(15));
+    client.call_args(services::NtRequestPort, &[m(CLIENT), v(SENT_DATAGRAM)]).store_eax(status(16));
+    client.call_args(request, &[m(CLIENT), v(BAD), v(REPLY + 0x80)]).store_eax(status(17));
+    client.call_args(request, &[m(CLIENT), v(LONG), v(REPLY + 0x80)]).store_eax(status(18));
+    client.call_args(request, &[m(CLIENT), v(KINDED), v(REPLY + 0x80)]).store_eax(status(29));
+    client.call_args(open_process, &[v(OPENED_PROCESS), v(0x400), v(OA_EMPTY), v(CID)]).store_eax(status(19));
+    client.call_args(services::NtOpenThread, &[v(OPENED_THREAD), v(0x40), v(OA_EMPTY), v(CID)]).store_eax(status(20));
+    client.call_args(open_process, &[v(OTHER), v(0x400), v(OA), v(CID)]).store_eax(status(21));
+    client.call_args(open_process, &[v(OTHER), v(0x400), v(OA_EMPTY), v(0)]).store_eax(status(22));
+    client.call_args(open_process, &[v(OTHER), v(0x400), v(OA_EMPTY), v(BAD_CID)]).store_eax(status(23));
+    client.call_args(open_process, &[v(OTHER), v(0x400), v(OA_EMPTY), v(BAD_CID2)]).store_eax(status(30));
+    client.call_args(services::NtQuerySystemInformation, &[v(9), v(FLAGS), v(4), v(0)]).store_eax(status(24));
+    // Every privilege disabled: no hard error port.
+    client.call_args(services::NtOpenProcessToken, &[v(NT_CURRENT_PROCESS), v(0x28), v(TOKEN)]).store_eax(status(25));
+    client
+        .call_args(services::NtAdjustPrivilegesToken, &[m(TOKEN), v(1), v(0), v(0), v(0), v(0)])
+        .store_eax(status(26));
+    client.call_args(services::NtSetDefaultHardErrorPort, &[m(PORT)]).store_eax(status(27));
+    client.word(&[0xC7, 0x05], DONE_CLIENT).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x1000];
+    assert!(server.0.len() <= 0x800 && client.0.len() <= 0x800, "the test program outgrew its slots");
+    text[..server.0.len()].copy_from_slice(&server.0);
+    text[0x800..0x800 + client.0.len()].copy_from_slice(&client.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x1000, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x800, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "lpc.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("the server thread");
+    let read_bytes = |addr: u32, length: usize| {
+        let mut bytes = alloc::vec![0u8; length];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        bytes
+    };
+    let read = |addr: u32| u32::from_le_bytes(read_bytes(addr, 4).try_into().unwrap());
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the LPC test program did not {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(SERVER_READY, "create its port");
+    // A datagram before any connection request: NtListenPort passes it by.
+    let object = ob::namespace().open(PORT_NAME, None, Some(&lpc::PORT_TYPE), 0).expect("the named port");
+    ob::downcast::<lpc::Port>(&object).expect("a port").request(b"skip").expect("a datagram");
+    drop(object);
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let client_thread = ps::create_thread(&process, IMAGE_BASE + 0x1800, &stack).expect("the client thread");
+    wait_for(DONE_SERVER, "serve its client");
+    wait_for(DONE_CLIENT, "end as a client");
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..31).map(|i| NtStatus(read(status(i)))).collect();
+    let me = (process.pid(), client_thread.tid());
+    // A connection refused, by the server SID, then by the server.
+    assert_eq!(statuses[11], STATUS_SERVER_SID_MISMATCH, "the server is not Administrators");
+    assert_eq!((statuses[0], statuses[1]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtCreatePort, NtListenPort");
+    let message = |at: u32| {
+        let bytes = read_bytes(at, 0x18);
+        let word = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap());
+        // Lengths, type, client, message ID, view size.
+        ((word(0) & 0xFFFF, word(0) >> 16), word(4) & 0xFFFF, (word(8), word(12)), word(16), word(20))
+    };
+    let (lengths, kind, from, id, _) = message(CONNECTION);
+    assert_eq!((lengths, kind, from), ((4, 0x1C), u32::from(LPC_CONNECTION_REQUEST), me), "the request");
+    assert!(id != 0);
+    assert_eq!(read_bytes(CONNECTION + 0x18, 4), b"INFO", "with its connection data, cut to the port's 4 bytes");
+    assert_eq!((statuses[2], read(REFUSED_HANDLE)), (STATUS_SUCCESS, 0), "refused: no port");
+    assert_eq!(statuses[12], STATUS_PORT_CONNECTION_REFUSED);
+    // Accepted, with the client's section.
+    let (_, kind, _, _, view_size) = message(CONNECTION2);
+    assert_eq!((statuses[3], kind, view_size), (STATUS_SUCCESS, u32::from(LPC_CONNECTION_REQUEST), 0x2000));
+    assert_eq!(read(CONNECTION_CONTEXT), 0, "no context for a connection request");
+    assert_eq!(statuses[13], STATUS_SUCCESS, "the client's section");
+    assert_eq!((statuses[4], statuses[5]), (STATUS_SUCCESS, STATUS_SUCCESS), "accepted, then completed");
+    assert_eq!(statuses[6], STATUS_INVALID_PORT_HANDLE, "a connection port completes nothing");
+    assert!(read(SERVER) != 0 && read(CLIENT) != 0, "a port on each side");
+    assert_eq!((statuses[14], read(MAX_LENGTH)), (STATUS_SUCCESS, 0x100), "connected");
+    assert_eq!((read_bytes(INFO, 8), read(INFO_LENGTH)), (b"SNFOXXXX".to_vec(), 4), "the data, as the server left it");
+    let (server_view, client_view) = (read(REMOTE_VIEW + 8), read(VIEW + 0x10));
+    assert_eq!((read(REMOTE_VIEW + 4), read(VIEW + 0x0C)), (0x2000, 0x2000), "the view sizes");
+    assert!(server_view != 0 && client_view != 0, "a view on each side");
+    assert_eq!(read(VIEW + 0x14), server_view, "the client knows where the server sees it");
+    assert_eq!(read(SEEN), 0x1234_5678, "what the client wrote in its view, the server read in its own");
+    // A request and its reply.
+    let (lengths, kind, from, request_id, _) = message(REQUEST);
+    assert_eq!((statuses[7], lengths, kind, from), (STATUS_SUCCESS, (8, 0x20), u32::from(LPC_REQUEST), me));
+    // The server rewrote its first byte to reply.
+    let server_handle = read(SERVER);
+    assert_eq!(
+        (read_bytes(REQUEST + 0x19, 7), read(CONTEXT)),
+        (b"UESTION".to_vec(), server_handle),
+        "with its context"
+    );
+    assert_eq!((statuses[8], statuses[9]), (STATUS_SUCCESS, STATUS_REPLY_MESSAGE_MISMATCH), "replied once");
+    assert_eq!(statuses[28], STATUS_INVALID_CID, "a reply to no thread");
+    let (lengths, kind, _, reply_id, _) = message(REPLY);
+    assert_eq!((statuses[15], lengths, kind, reply_id), (STATUS_SUCCESS, (8, 0x20), u32::from(LPC_REPLY), request_id));
+    assert_eq!(read_bytes(REPLY + 0x18, 8), b"RUESTION", "the server's reply");
+    // A datagram, received by the server's communication port.
+    let (lengths, kind, _, _, _) = message(DATAGRAM);
+    assert_eq!(
+        (statuses[16], statuses[10], lengths, kind),
+        (STATUS_SUCCESS, STATUS_SUCCESS, (4, 0x1C), u32::from(LPC_DATAGRAM))
+    );
+    assert_eq!((read_bytes(DATAGRAM + 0x18, 4), read(CONTEXT2)), (b"DGRM".to_vec(), server_handle));
+    assert_eq!((statuses[17], statuses[18]), (STATUS_INVALID_PARAMETER, STATUS_PORT_MESSAGE_TOO_LONG), "refused");
+    assert_eq!(statuses[29], STATUS_INVALID_PARAMETER, "a message whose type the caller chose");
+    // NtOpenProcess, NtOpenThread.
+    assert_eq!((statuses[19], statuses[20]), (STATUS_SUCCESS, STATUS_SUCCESS), "opened by its CLIENT_ID");
+    let table = &process.handle_table;
+    let opened =
+        table.reference_as::<ps::EProcess>(ob::Handle(read(OPENED_PROCESS)), &ps::PROCESS_TYPE, ob::AccessMask(0x400));
+    assert!(opened.is_ok_and(|opened| Arc::ptr_eq(&opened, &process)), "its own process");
+    let opened =
+        table.reference_as::<ps::EThread>(ob::Handle(read(OPENED_THREAD)), &ps::THREAD_TYPE, ob::AccessMask(0x40));
+    assert!(opened.is_ok_and(|opened| Arc::ptr_eq(&opened, &client_thread)), "its own thread");
+    assert_eq!(
+        (statuses[21], statuses[22]),
+        (STATUS_INVALID_PARAMETER_MIX, STATUS_INVALID_PARAMETER_MIX),
+        "a name and a CID, or none"
+    );
+    assert_eq!(statuses[23], STATUS_INVALID_CID, "no such thread in it");
+    assert_eq!(statuses[30], STATUS_INVALID_CID, "its thread is not System's");
+    assert_eq!((statuses[24], read(FLAGS)), (STATUS_SUCCESS, 0), "SystemFlagsInformation");
+    assert_eq!((statuses[25], statuses[26], statuses[27]), (STATUS_SUCCESS, STATUS_SUCCESS, STATUS_PRIVILEGE_NOT_HELD));
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((client_thread, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Lpc: a connection from user mode: NtListenPort, NtSecureConnectPort (server SID, the client's \
+         section), NtAcceptConnectPort (refused, then accepted), NtCompleteConnectPort, NtRequestWaitReplyPort, \
+         NtReplyPort, NtRequestPort; Ps: NtOpenProcess, NtOpenThread"
     );
 }
 

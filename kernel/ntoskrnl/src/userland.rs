@@ -257,10 +257,11 @@ fn log_known_dlls() {
 /// chaque processus qu'il a créé (attendu 2 s, puis terminé), et les appels
 /// système faits par eux tous, dans l'ordre de leur premier appel.
 ///
-/// Un processus qu'elle termine ne reste pas critique, ni ses threads
-/// (`smss` l'est dès son début) : elle fait ce que ferait un débogueur à qui
-/// le système demanderait s'il faut s'arrêter, répondre « non ». Qu'il finisse
-/// de lui-même en restant critique arrête bien le système.
+/// Pendant qu'elle tourne, la fin d'un processus ou d'un thread critique
+/// (`smss` l'est dès son début) est journalisée et laissée passer, comme le
+/// ferait un débogueur qui répond « ignorer » (`ps::set_critical_breaks_ignored`) :
+/// on voit où `smss` s'arrête au lieu d'un écran STOP. Un processus qu'elle
+/// termine ne reste pas critique, ni ses threads.
 ///
 /// Sans DLL système, ne fait rien.
 ///
@@ -291,6 +292,7 @@ fn run_native(
     };
     let info = section.image().expect("an image section").info;
     crate::sys::reset_service_calls();
+    ps::set_critical_breaks_ignored(true);
     let started = ps::create_process(&ps::system_process(), &section, name, false).and_then(|process| {
         ps::process_parameters::write(&process, params)?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
@@ -366,6 +368,7 @@ fn run_native(
     }
     drop(process);
     ps::wait_for_reaper();
+    ps::set_critical_breaks_ignored(false);
 }
 
 /// L'image du programme natif : `.text` à 0x1000, le message à 0x2000, les

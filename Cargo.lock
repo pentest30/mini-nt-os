@@ -119,6 +119,7 @@ dependencies = [
  "abi",
  "hal",
  "ke",
+ "mm",
  "ob",
 ]
 

@@ -5,8 +5,8 @@ use abi::security::SE_LOAD_DRIVER_PRIVILEGE;
 use abi::system_information::{
     SystemBasicInformation32, SystemProcessorInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS,
     PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION, SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION,
-    SYSTEM_PROCESSOR_INFORMATION, SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE,
-    SYSTEM_SESSION_DETACH, SYSTEM_TIME_OF_DAY_INFORMATION,
+    SYSTEM_FLAGS_INFORMATION, SYSTEM_PROCESSOR_INFORMATION, SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION,
+    SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH, SYSTEM_TIME_OF_DAY_INFORMATION,
 };
 use ke::usermem::UserPtr;
 use mm::virtual_alloc::{ALLOC_GRANULARITY, PAGE_SIZE};
@@ -21,6 +21,11 @@ const WIN32K: &str = "\\SystemRoot\\System32\\win32k.sys";
 /// La taille d'un UNICODE_STRING i386.
 const UNICODE_STRING_SIZE: u32 = 8;
 
+/// NtGlobalFlag : aucun drapeau `FLG_*` (XP les lit dans
+/// `Session Manager\GlobalFlag` au démarrage ; pas encore), comme le
+/// `NtGlobalFlag` du PEB de chaque processus.
+const NT_GLOBAL_FLAG: u32 = 0;
+
 /// NtQuerySystemInformation(SystemInformationClass, SystemInformation,
 /// SystemInformationLength, ReturnLength) : l'information de la classe,
 /// d'une taille exacte ([`super::return_information`]).
@@ -30,6 +35,7 @@ const UNICODE_STRING_SIZE: u32 = 8;
 /// | `SystemBasicInformation` (0) | page, pages physiques, plage du mode utilisateur, processeurs |
 /// | `SystemProcessorInformation` (1) | architecture, niveau, révision et fonctions du processeur |
 /// | `SystemTimeOfDayInformation` (3) | l'heure du démarrage, l'heure, le fuseau (nul) ; les premiers octets que demande l'appelant, 48 au plus |
+/// | `SystemFlagsInformation` (9) | les drapeaux globaux (`NtGlobalFlag`), aucun |
 /// | `SystemRangeStartInformation` (50) | le début de la moitié système, `0x80000000` |
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
@@ -46,6 +52,9 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         SYSTEM_TIME_OF_DAY_INFORMATION => time_of_day(buffer, length, return_length),
         SYSTEM_RANGE_START_INFORMATION => {
             super::return_information(&SYSTEM_RANGE_START.to_le_bytes(), buffer, length, return_length)
+        }
+        SYSTEM_FLAGS_INFORMATION => {
+            super::return_information(&NT_GLOBAL_FLAG.to_le_bytes(), buffer, length, return_length)
         }
         _ => UNSUPPORTED.report(class),
     }

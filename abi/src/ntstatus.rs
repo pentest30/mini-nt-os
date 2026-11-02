@@ -95,9 +95,12 @@ pub const STATUS_EAS_NOT_SUPPORTED: NtStatus = NtStatus(0xC000_004F);
 pub const STATUS_OBJECT_NAME_INVALID: NtStatus = NtStatus(0xC000_0033);
 pub const STATUS_OBJECT_NAME_NOT_FOUND: NtStatus = NtStatus(0xC000_0034);
 pub const STATUS_OBJECT_NAME_COLLISION: NtStatus = NtStatus(0xC000_0035);
+pub const STATUS_PORT_DISCONNECTED: NtStatus = NtStatus(0xC000_0037);
 pub const STATUS_OBJECT_PATH_INVALID: NtStatus = NtStatus(0xC000_0039);
 pub const STATUS_OBJECT_PATH_NOT_FOUND: NtStatus = NtStatus(0xC000_003A);
 pub const STATUS_OBJECT_PATH_SYNTAX_BAD: NtStatus = NtStatus(0xC000_003B);
+pub const STATUS_PORT_CONNECTION_REFUSED: NtStatus = NtStatus(0xC000_0041);
+pub const STATUS_INVALID_PORT_HANDLE: NtStatus = NtStatus(0xC000_0042);
 pub const STATUS_DISK_CORRUPT_ERROR: NtStatus = NtStatus(0xC000_0032);
 pub const STATUS_MEDIA_WRITE_PROTECTED: NtStatus = NtStatus(0xC000_00A2);
 pub const STATUS_FILE_IS_A_DIRECTORY: NtStatus = NtStatus(0xC000_00BA);
@@ -144,9 +147,12 @@ pub const STATUS_INVALID_PARAMETER_8: NtStatus = NtStatus(0xC000_00F6);
 pub const STATUS_INVALID_PARAMETER_9: NtStatus = NtStatus(0xC000_00F7);
 pub const STATUS_PROCESS_IS_TERMINATING: NtStatus = NtStatus(0xC000_010A);
 pub const STATUS_MAPPED_FILE_SIZE_ZERO: NtStatus = NtStatus(0xC000_011E);
+pub const STATUS_REPLY_MESSAGE_MISMATCH: NtStatus = NtStatus(0xC000_021F);
 pub const STATUS_MAPPED_ALIGNMENT: NtStatus = NtStatus(0xC000_0220);
 pub const STATUS_HANDLE_NOT_CLOSABLE: NtStatus = NtStatus(0xC000_0235);
+pub const STATUS_LPC_REPLY_LOST: NtStatus = NtStatus(0xC000_0253);
 pub const STATUS_NO_CALLBACK_ACTIVE: NtStatus = NtStatus(0xC000_0258);
+pub const STATUS_SERVER_SID_MISMATCH: NtStatus = NtStatus(0xC000_02A0);
 pub const STATUS_ASSERTION_FAILURE: NtStatus = NtStatus(0xC000_0420);
 
 #[cfg(test)]

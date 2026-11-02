@@ -44,8 +44,8 @@ pub use ethread::{
     InitialTeb, THREAD_TYPE,
 };
 pub use exit::{
-    exit_thread, terminate_current_process, terminate_other_threads, terminate_process, terminate_thread,
-    wait_for_reaper,
+    exit_thread, set_critical_breaks_ignored, terminate_current_process, terminate_other_threads, terminate_process,
+    terminate_thread, wait_for_reaper,
 };
 pub use process_parameters::ProcessParameters;
 pub use session::{create_session, detach_session};

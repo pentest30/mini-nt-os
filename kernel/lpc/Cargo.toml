@@ -10,4 +10,5 @@ name = "lpc"
 abi      = { path = "../../abi" }
 hal      = { path = "../hal" }
 ke       = { path = "../ke" }
+mm       = { path = "../mm" }
 ob       = { path = "../ob" }
