@@ -27,6 +27,7 @@ use abi::ntstatus::{
 };
 use io_manager::{File, FILE_TYPE};
 use ke::usermem::UserPtr;
+use mm::address_space::ViewOptions;
 use mm::section::{
     create_section_object, Section, SECTION_MAP_EXECUTE, SECTION_MAP_READ, SECTION_MAP_WRITE, SECTION_TYPE,
 };
@@ -40,8 +41,14 @@ use super::object::{create_named, open_by_name};
 const MAX_ZERO_BITS: u32 = 21;
 /// MEM_TOP_DOWN : la vue va le plus haut où il y a la place.
 const MEM_TOP_DOWN: u32 = 0x0010_0000;
-/// MEM_TOP_DOWN et MEM_RESERVE, les seuls types d'allocation d'une vue.
-const VIEW_ALLOCATION_TYPES: u32 = MEM_TOP_DOWN | 0x0000_2000;
+/// MEM_LARGE_PAGES : des grandes pages pour la vue.
+const MEM_LARGE_PAGES: u32 = 0x2000_0000;
+/// MEM_DOS_LIM : une base alignée sur une page, pas sur 64 Kio.
+const MEM_DOS_LIM: u32 = 0x4000_0000;
+/// Les types d'allocation d'une vue (ceux de ReactOS : MmMapViewOfSection).
+const VIEW_ALLOCATION_TYPES: u32 = MEM_TOP_DOWN | 0x0000_2000 | SEC_NO_CHANGE | MEM_LARGE_PAGES | MEM_DOS_LIM;
+/// Ceux qui ne sont pas encore implémentés.
+const VIEW_ALLOCATION_TYPES_NOT_IMPLEMENTED: u32 = MEM_LARGE_PAGES | MEM_DOS_LIM;
 
 fn status(result: Result<NtStatus, NtStatus>) -> NtStatus {
     result.unwrap_or_else(|status| status)
@@ -93,6 +100,9 @@ fn section_access(protect: PageProtect) -> AccessMask {
 
 /// `SEC_BASED` pour un fichier a déjà été demandé.
 static BASED_FILE_REPORTED: AtomicBool = AtomicBool::new(false);
+/// Une vue demandée avec un type d'allocation pas encore implémenté a été
+/// journalisée.
+static VIEW_ALLOCATION_REPORTED: AtomicBool = AtomicBool::new(false);
 
 /// NtCreateSection(*SectionHandle, DesiredAccess, ObjectAttributes,
 /// MaximumSize, SectionPageProtection, AllocationAttributes, FileHandle) :
@@ -178,7 +188,10 @@ pub(super) fn nt_open_section(arguments: &[u32]) -> NtStatus {
 /// base pour une image), de `*ViewSize` octets (0 : jusqu'au bout) depuis
 /// `*SectionOffset` ; rend la base et la taille de la vue.
 /// `STATUS_IMAGE_NOT_AT_BASE` pour une image projetée ailleurs, que `ntdll`
-/// reloge.
+/// reloge. Avec `SEC_NO_CHANGE`, la protection de la vue ne change plus
+/// (NtProtectVirtualMemory : `STATUS_INVALID_PAGE_PROTECTION`) ; la retirer
+/// reste permis. `MEM_LARGE_PAGES` et `MEM_DOS_LIM` rendent
+/// `STATUS_NOT_IMPLEMENTED` (journalisé une fois).
 pub(super) fn nt_map_view_of_section(arguments: &[u32]) -> NtStatus {
     status(map_view(arguments))
 }
@@ -198,6 +211,12 @@ fn map_view(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
     if allocation & !VIEW_ALLOCATION_TYPES != 0 {
         return Err(STATUS_INVALID_PARAMETER_9);
     }
+    if allocation & VIEW_ALLOCATION_TYPES_NOT_IMPLEMENTED != 0 {
+        if !VIEW_ALLOCATION_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtMapViewOfSection with allocation type {allocation:#x} is not implemented");
+        }
+        return Err(STATUS_NOT_IMPLEMENTED);
+    }
     let protect = base_protection(protect)?;
     let section = super::current_process().handle_table.reference_as::<Arc<Section>>(
         Handle(section_handle),
@@ -212,11 +231,8 @@ fn map_view(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         0 => 0,
         at => UserPtr::<u64>::new(at).read()?,
     };
-    let view = if allocation & MEM_TOP_DOWN != 0 {
-        process.with_space(|space| space.map_view_top_down(&section, base, offset, size, protect))??
-    } else {
-        process.with_space(|space| space.map_view(&section, base, offset, size, protect))??
-    };
+    let options = ViewOptions { top_down: allocation & MEM_TOP_DOWN != 0, no_change: allocation & SEC_NO_CHANGE != 0 };
+    let view = process.with_space(|space| space.map_view_with(&section, base, offset, size, protect, options))??;
     let written = base_address.write(&(view.base as u32)).and_then(|()| view_size.write(&(view.size as u32)));
     if let Err(fault) = written {
         let _ = process.with_space(|space| space.unmap_view(view.base));

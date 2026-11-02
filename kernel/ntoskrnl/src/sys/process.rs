@@ -329,16 +329,20 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
 ///   et sa priorité de base relative à celle de son processus ;
 /// - `ThreadTimes` : ses heures de création et de fin (0 tant qu'il vit).
 ///   Ses temps passés en mode noyau et en mode utilisateur sont nuls : Ke ne
-///   les compte pas encore.
+///   les compte pas encore ;
+/// - `ThreadIsTerminated` : 1 si sa fin est demandée ou en cours
+///   (PsIsThreadTerminating), 0 sinon.
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
 pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
-    use abi::process::{KernelUserTimes, ThreadBasicInformation32, THREAD_BASIC_INFORMATION, THREAD_TIMES};
+    use abi::process::{
+        KernelUserTimes, ThreadBasicInformation32, THREAD_BASIC_INFORMATION, THREAD_IS_TERMINATED, THREAD_TIMES,
+    };
 
     let (handle, class, buffer, length, return_length) =
         (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
-    if !matches!(class, THREAD_BASIC_INFORMATION | THREAD_TIMES) {
+    if !matches!(class, THREAD_BASIC_INFORMATION | THREAD_TIMES | THREAD_IS_TERMINATED) {
         return UNSUPPORTED_THREAD_QUERY_CLASSES.report(class);
     }
     let thread = match super::reference_thread(handle, THREAD_QUERY_INFORMATION) {
@@ -347,7 +351,11 @@ pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
     };
     let basic: ThreadBasicInformation32;
     let times: KernelUserTimes;
-    let information = if class == THREAD_BASIC_INFORMATION {
+    let terminated: [u8; 4];
+    let information = if class == THREAD_IS_TERMINATED {
+        terminated = u32::from(thread.is_terminating()).to_le_bytes();
+        &terminated[..]
+    } else if class == THREAD_BASIC_INFORMATION {
         let process_base = thread.process().base_priority();
         let priority = thread.priority().unwrap_or(process_base);
         let base = thread.base_priority().unwrap_or(process_base);
