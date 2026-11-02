@@ -16,6 +16,8 @@
 //! - [`service`], [`services`]: the system service tables, generated from the
 //!   pinned ReactOS version by `tools/syscall-gen` (ADR-002).
 //! - [`shared_data`]: `KUSER_SHARED_DATA`, as on XP SP2.
+//! - [`user`]: what USER (win32k) shares with its i386 clients:
+//!   `USERCONNECT`, `SHAREDINFO`, the handle table, `CLIENTINFO`.
 //!
 //! `no_std`, without dependencies.
 
@@ -42,5 +44,6 @@ pub mod services;
 pub mod shared_data;
 pub mod system_information;
 pub mod teb32;
+pub mod user;
 
 pub use loader_block::*;

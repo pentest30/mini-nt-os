@@ -30,6 +30,9 @@ impl BugCheckCode {
     /// (3 for a process, 6 for a thread); P2: the object; P3: the image name
     /// of its process; P4: the message.
     pub const CRITICAL_OBJECT_TERMINATION: Self = Self(0xF4);
+    /// win32k cannot start: `csrss` asked for another version of USER
+    /// (NtUserInitialize). P3: the version asked for; P4: USER's.
+    pub const WIN32K_INIT_OR_RIT_FAILURE: Self = Self(0xFF);
 
     /// The symbolic name of a known code, or `None`.
     pub const fn name(self) -> Option<&'static str> {
@@ -39,6 +42,7 @@ impl BugCheckCode {
             Self::PAGE_FAULT_IN_NONPAGED_AREA => Some("PAGE_FAULT_IN_NONPAGED_AREA"),
             Self::UNEXPECTED_KERNEL_MODE_TRAP => Some("UNEXPECTED_KERNEL_MODE_TRAP"),
             Self::CRITICAL_OBJECT_TERMINATION => Some("CRITICAL_OBJECT_TERMINATION"),
+            Self::WIN32K_INIT_OR_RIT_FAILURE => Some("WIN32K_INIT_OR_RIT_FAILURE"),
             _ => None,
         }
     }
