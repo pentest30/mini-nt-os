@@ -119,6 +119,83 @@ pub fn nt_time(date: u16, time: u16, tenths: u8) -> u64 {
     seconds * 10_000_000 + u64::from(tenths) * 100_000
 }
 
+/// The attributes of an entry that holds a part of a long name (VFAT).
+const ATTR_LONG_NAME: u8 = 0x0F;
+/// In the order byte of a long-name entry: the last part, which comes first.
+const LONG_NAME_LAST: u8 = 0x40;
+/// The UTF-16 units of a long name each of its entries holds.
+const LONG_NAME_UNITS: usize = 13;
+/// Where those units are in the entry: 5, then 6, then 2.
+const LONG_NAME_SPANS: [(usize, usize); 3] = [(1, 5), (14, 6), (28, 2)];
+
+/// The checksum of an 8.3 name, which each entry of its long name carries.
+pub fn short_name_checksum(name: &[u8; 11]) -> u8 {
+    name.iter().fold(0u8, |sum, &byte| sum.rotate_right(1).wrapping_add(byte))
+}
+
+/// The long name (VFAT) of the next 8.3 entry of a directory, gathered from
+/// the long-name entries before it: the last part first (`LONG_NAME_LAST`
+/// with the count of parts), then each part down to the first, all with the
+/// checksum of the 8.3 name. A sequence that breaks these rules is no name.
+#[derive(Default)]
+struct LongName {
+    units: Vec<u16>,
+    /// The order of the part expected next; 0 once complete.
+    next: u8,
+    checksum: u8,
+    broken: bool,
+}
+
+impl LongName {
+    /// Takes in the long-name entry `ent`.
+    fn take(&mut self, ent: &[u8]) {
+        let order = ent[0] & !LONG_NAME_LAST;
+        if ent[0] & LONG_NAME_LAST != 0 {
+            *self = Self {
+                units: vec![0; usize::from(order) * LONG_NAME_UNITS],
+                next: order,
+                checksum: ent[13],
+                broken: order == 0 || order > 20,
+            };
+        } else if order != self.next || ent[13] != self.checksum || self.units.is_empty() {
+            self.broken = true;
+        }
+        if self.broken {
+            return;
+        }
+        let at = usize::from(order - 1) * LONG_NAME_UNITS;
+        let mut units = LONG_NAME_SPANS.iter().flat_map(|&(start, count)| {
+            (0..count).map(move |i| u16::from_le_bytes([ent[start + 2 * i], ent[start + 2 * i + 1]]))
+        });
+        for unit in &mut self.units[at..at + LONG_NAME_UNITS] {
+            *unit = units.next().unwrap_or(0);
+        }
+        self.next = order - 1;
+    }
+
+    /// The long name of the 8.3 entry `ent`, if the entries before it make
+    /// one for it; and forgets them.
+    fn finish(&mut self, ent: &[u8]) -> Option<String> {
+        let gathered = core::mem::take(self);
+        let mut short = [0u8; 11];
+        short.copy_from_slice(&ent[..11]);
+        if gathered.broken
+            || gathered.units.is_empty()
+            || gathered.next != 0
+            || gathered.checksum != short_name_checksum(&short)
+        {
+            return None;
+        }
+        let end = gathered.units.iter().position(|&unit| unit == 0).unwrap_or(gathered.units.len());
+        char::decode_utf16(gathered.units[..end].iter().copied()).collect::<Result<String, _>>().ok()
+    }
+}
+
+/// `long` and `name` are the same name, case aside.
+fn same_name(long: &str, name: &str) -> bool {
+    long.chars().flat_map(char::to_uppercase).eq(name.chars().flat_map(char::to_uppercase))
+}
+
 #[derive(Debug, Clone)]
 pub struct DirEntryInfo {
     pub name: String,
@@ -351,15 +428,19 @@ impl<D: BlockDevice> FatVolume<D> {
         u32::from(self.bpb.bytes_per_sector) * u32::from(self.bpb.sectors_per_cluster)
     }
 
-    /// The entry `name` (8.3, any case) of the directory at `dir_cluster`;
-    /// `NotFound` without it, `Unsupported` for a name 8.3 cannot hold.
+    /// The entry `name` (its 8.3 name or its long name, any case) of the
+    /// directory at `dir_cluster`; `NotFound` without it.
     pub fn find_in_dir(&self, dir_cluster: u32, name: &str) -> Result<DirEntry, FatError> {
         self.find_entry(dir_cluster, name).map(|(entry, _)| entry)
     }
 
     /// [`find_in_dir`](Self::find_in_dir), with where the entry is.
     pub fn find_entry(&self, dir_cluster: u32, name: &str) -> Result<(DirEntry, EntryRef), FatError> {
-        let target = short_name_11(name)?;
+        if name.is_empty() {
+            return Err(FatError::PathFormat);
+        }
+        // A name 8.3 cannot hold may still be a long name.
+        let target = short_name_11(name).ok();
         let bps = self.bpb.bytes_per_sector as usize;
         let spc = self.bpb.sectors_per_cluster as usize;
         if !(512..=4096).contains(&bps) || spc == 0 {
@@ -371,19 +452,24 @@ impl<D: BlockDevice> FatVolume<D> {
         }
         let mut cluster = dir_cluster;
         let mut buf = vec![0u8; bytes_per_cluster];
+        let mut long = LongName::default();
         loop {
             self.read_cluster(cluster, &mut buf)?;
             let mut i = 0usize;
             while i + 32 <= buf.len() {
                 let ent = &buf[i..i + 32];
-                let first = ent[0];
-                if first == 0x00 {
-                    return Err(FatError::NotFound);
-                }
-                if first != 0xE5 {
-                    // Neither a long-name part nor the volume label.
-                    if ent[11] != 0x0F && ent[11] & 0x08 == 0 && ent[0..11] == target {
-                        return Ok((DirEntry::parse(ent), EntryRef { cluster, index: (i / 32) as u32 }));
+                match (ent[0], ent[11]) {
+                    (0x00, _) => return Err(FatError::NotFound),
+                    (0xE5, _) => long = LongName::default(),
+                    (_, ATTR_LONG_NAME) => long.take(ent),
+                    // The volume label.
+                    (_, attr) if attr & 0x08 != 0 => long = LongName::default(),
+                    _ => {
+                        let long_name = long.finish(ent);
+                        let short = target.is_some_and(|target| ent[0..11] == target);
+                        if short || long_name.is_some_and(|long_name| same_name(&long_name, name)) {
+                            return Ok((DirEntry::parse(ent), EntryRef { cluster, index: (i / 32) as u32 }));
+                        }
                     }
                 }
                 i += 32;
@@ -405,23 +491,23 @@ impl<D: BlockDevice> FatVolume<D> {
         let mut out = Vec::new();
         let mut cluster = dir_cluster;
         let mut buf = vec![0u8; bytes_per_cluster];
+        let mut long = LongName::default();
         loop {
             self.read_cluster(cluster, &mut buf)?;
             let mut i = 0usize;
             while i + 32 <= buf.len() {
                 let ent = &buf[i..i + 32];
-                let first = ent[0];
-                if first == 0x00 {
-                    return Ok(out);
-                }
-                if first != 0xE5 {
-                    let attr = ent[11];
-                    if attr != 0x0F {
+                match (ent[0], ent[11]) {
+                    (0x00, _) => return Ok(out),
+                    (0xE5, _) => long = LongName::default(),
+                    (_, ATTR_LONG_NAME) => long.take(ent),
+                    (_, attr) => {
                         let hi = u16::from_le_bytes([ent[20], ent[21]]) as u32;
                         let lo = u16::from_le_bytes([ent[26], ent[27]]) as u32;
                         let first_cluster = (hi << 16) | lo;
                         let file_size = u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]);
-                        let name = short_name_from_entry(ent);
+                        // Its long name if it has one.
+                        let name = long.finish(ent).unwrap_or_else(|| short_name_from_entry(ent));
                         out.push(DirEntryInfo { name, attr, first_cluster, file_size });
                     }
                 }
@@ -1010,6 +1096,114 @@ mod tests {
         assert_eq!((entry.write_date, entry.write_time), (12548, 25692));
         assert_eq!(vol.find_in_dir(vol.root_cluster(), "other.bin"), Err(FatError::NotFound));
         assert_eq!(vol.cluster_bytes(), 512);
+    }
+
+    /// The entries of the long name `name` for the 8.3 name `short`, in
+    /// the order a directory holds them (last part first), as VFAT writes
+    /// them: a 0 unit after the name, then 0xFFFF.
+    fn long_name_entries(name: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
+        let mut units: Vec<u16> = name.encode_utf16().collect();
+        let parts = units.len().div_ceil(LONG_NAME_UNITS);
+        if units.len() < parts * LONG_NAME_UNITS {
+            units.push(0);
+        }
+        units.resize(parts * LONG_NAME_UNITS, 0xFFFF);
+        (1..=parts)
+            .rev()
+            .map(|order| {
+                let mut ent = [0u8; 32];
+                ent[0] = order as u8 | if order == parts { LONG_NAME_LAST } else { 0 };
+                ent[11] = ATTR_LONG_NAME;
+                ent[13] = short_name_checksum(short);
+                let mut chunk = units[(order - 1) * LONG_NAME_UNITS..order * LONG_NAME_UNITS].iter();
+                for &(start, count) in &LONG_NAME_SPANS {
+                    for i in 0..count {
+                        ent[start + 2 * i..start + 2 * i + 2].copy_from_slice(&chunk.next().unwrap().to_le_bytes());
+                    }
+                }
+                ent
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_checksum_of_an_8_3_name() {
+        // ((sum & 1) << 7) + (sum >> 1) + byte, for each byte of the name.
+        assert_eq!(short_name_checksum(b"ADVAPI~1DLL"), 0x43);
+        assert_eq!(short_name_checksum(b"           "), 0xF7);
+    }
+
+    #[test]
+    fn a_file_is_found_by_its_long_name_too() {
+        let disk = make_test_disk();
+        let short = *b"ADVAPI~1DLL";
+        let mut root = [0u8; 512];
+        let entries = long_name_entries("advapi32_vista.dll", &short);
+        assert_eq!(entries.len(), 2, "18 units: two parts");
+        for (i, ent) in entries.iter().enumerate() {
+            root[32 * i..32 * i + 32].copy_from_slice(ent);
+        }
+        root[64..96].copy_from_slice(&make_entry(&short, 0x20, 3, 4));
+        // A long name whose checksum is another name's: not this entry's.
+        let stale = long_name_entries("other_long_name.dll", b"OTHER~1 DLL");
+        root[96..128].copy_from_slice(&stale[1]);
+        root[128..160].copy_from_slice(&make_entry(b"KERNEL  BIN", 0x20, 3, 4));
+        disk.write_sector(2, &root);
+        let vol = FatVolume::mount(disk).expect("mount");
+        let root_cluster = vol.root_cluster();
+        for name in ["advapi32_vista.dll", "ADVAPI32_VISTA.DLL", "Advapi32_Vista.Dll", "advapi~1.dll"] {
+            assert_eq!(vol.find_entry(root_cluster, name).map(|(e, at)| (e.file_size, at.index)), Ok((4, 2)), "{name}");
+        }
+        assert_eq!(vol.find_in_dir(root_cluster, "advapi32_vista.dl").err(), Some(FatError::NotFound));
+        assert_eq!(vol.find_in_dir(root_cluster, "other_long_name.dll").err(), Some(FatError::NotFound));
+        assert!(vol.find_in_dir(root_cluster, "kernel.bin").is_ok());
+        let names: Vec<String> = vol.list_dir("/").unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["advapi32_vista.dll", "KERNEL.BIN"], "the long name when there is one");
+    }
+
+    #[test]
+    fn a_broken_long_name_is_no_name() {
+        let short = *b"ADVAPI~1DLL";
+        let entries = long_name_entries("advapi32_vista.dll", &short);
+        let find = |root: &[u8; 512]| {
+            let disk = make_test_disk();
+            disk.write_sector(2, root);
+            let vol = FatVolume::mount(disk).expect("mount");
+            vol.find_in_dir(vol.root_cluster(), "advapi32_vista.dll").map(|e| e.file_size)
+        };
+        let mut root = [0u8; 512];
+        root[..32].copy_from_slice(&entries[0]);
+        root[32..64].copy_from_slice(&entries[1]);
+        root[64..96].copy_from_slice(&make_entry(&short, 0x20, 3, 4));
+        assert_eq!(find(&root), Ok(4));
+        let mut missing_part = root;
+        missing_part[32..64].copy_from_slice(&entries[0]);
+        assert_eq!(find(&missing_part), Err(FatError::NotFound), "the last part twice, the first never");
+        let mut checksum = root;
+        checksum[32 + 13] ^= 1;
+        assert_eq!(find(&checksum), Err(FatError::NotFound), "a part of another name");
+        let mut deleted = root;
+        deleted[32] = 0xE5;
+        assert_eq!(find(&deleted), Err(FatError::NotFound), "a deleted part");
+        let mut other_short = root;
+        other_short[64..75].copy_from_slice(b"ADVAPI~2DLL");
+        assert_eq!(find(&other_short), Err(FatError::NotFound), "not the name of this 8.3 entry");
+        let mut repeated = [0u8; 512];
+        let mut again = entries[0];
+        again[0] &= !LONG_NAME_LAST;
+        for (i, ent) in [entries[0], again, entries[1], make_entry(&short, 0x20, 3, 4)].iter().enumerate() {
+            repeated[32 * i..32 * i + 32].copy_from_slice(ent);
+        }
+        assert_eq!(find(&repeated), Err(FatError::NotFound), "part 2 twice, out of order");
+        // Without its first part, an entry is listed by its 8.3 name.
+        let mut incomplete = [0u8; 512];
+        incomplete[..32].copy_from_slice(&entries[0]);
+        incomplete[32..64].copy_from_slice(&make_entry(&short, 0x20, 3, 4));
+        let disk = make_test_disk();
+        disk.write_sector(2, &incomplete);
+        let vol = FatVolume::mount(disk).expect("mount");
+        let names: Vec<String> = vol.list_dir("/").unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["ADVAPI~1.DLL"]);
     }
 
     #[test]
