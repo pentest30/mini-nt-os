@@ -283,10 +283,17 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &io_manager::DEVICE_TYPE,
         &cm::KEY_TYPE,
         &ex::EVENT_TYPE,
+        &ex::KEYED_EVENT_TYPE,
         &lpc::PORT_TYPE,
+        &se::TOKEN_OBJECT_TYPE,
     ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
+    // The keyed event a null handle stands for (ntdll's critical sections).
+    let global: ob::ObjectRef = ex::keyed_event::global();
+    ob::namespace()
+        .insert(&global, ex::keyed_event::GLOBAL_NAME, None, abi::object::OBJ_PERMANENT)
+        .expect("the keyed event of critical sections");
     cm::init();
     match hardware::mount_hardware_hive() {
         Ok(identifier) => log::info!(
@@ -346,6 +353,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     file_write_self_test();
     section_service_self_test();
     event_service_self_test();
+    keyed_event_self_test();
     process_memory_self_test();
     shared_section_self_test();
     process_creation_self_test();
@@ -4296,6 +4304,156 @@ fn information_services_self_test() {
     );
 }
 
+/// Keyed events from user mode (`ex::keyed_event`, `sys::event`, M5), as
+/// ntdll's critical sections and condition variables use them: one created,
+/// non-zero flags refused; a wait and a release that time out with nobody to
+/// meet; an odd key refused; the global keyed event opened by its name for
+/// waiting only, so a release through it is refused; a null handle for the
+/// global one. Then two threads of one process meet, in both orders: thread A
+/// waits on a key before thread B releases it; B releases a second key before
+/// A waits on it.
+fn keyed_event_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_INVALID_PARAMETER, STATUS_INVALID_PARAMETER_1, STATUS_SUCCESS,
+        STATUS_TIMEOUT, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 16 statuses
+    const KEYED: u32 = DATA + 0x40;
+    const OTHER: u32 = DATA + 0x44;
+    const GLOBAL: u32 = DATA + 0x48;
+    const ZERO: u32 = DATA + 0x50; // a timeout of 0
+    const OA: u32 = DATA + 0x60;
+    const US: u32 = DATA + 0x78;
+    const NAME: u32 = DATA + 0x80;
+    const READY: u32 = DATA + 0x1E8;
+    const WAITED: u32 = DATA + 0x1EC;
+    const WAITED2: u32 = DATA + 0x1F0;
+    const RELEASED: u32 = DATA + 0x1F4;
+    const RELEASED2: u32 = DATA + 0x1F8;
+    const DONE_A: u32 = DATA + 0x1FC;
+    const DONE_B: u32 = DATA + 0x1E4;
+    const ALL_ACCESS: u32 = 0x000F_0003;
+    const KEYEDEVENT_WAIT: u32 = 1;
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    let units: alloc::vec::Vec<u8> = ex::keyed_event::GLOBAL_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(NAME, &units);
+    let length = (units.len() as u16).to_le_bytes();
+    put(US, &[length[0], length[1], length[0], length[1]]);
+    put(US + 4, &NAME.to_le_bytes());
+    put(OA, &24u32.to_le_bytes());
+    put(OA + 8, &US.to_le_bytes());
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (wait, release) = (services::NtWaitForKeyedEvent, services::NtReleaseKeyedEvent);
+    let mut a = Code::new();
+    a.call_args(services::NtCreateKeyedEvent, &[v(KEYED), v(ALL_ACCESS), v(0), v(0)]).store_eax(status(0));
+    a.call_args(services::NtCreateKeyedEvent, &[v(OTHER), v(ALL_ACCESS), v(0), v(1)]).store_eax(status(1));
+    a.call_args(wait, &[m(KEYED), v(6), v(0), v(ZERO)]).store_eax(status(2));
+    a.call_args(release, &[m(KEYED), v(7), v(0), v(ZERO)]).store_eax(status(3));
+    a.call_args(release, &[m(KEYED), v(8), v(0), v(ZERO)]).store_eax(status(4));
+    a.call_args(services::NtOpenKeyedEvent, &[v(GLOBAL), v(KEYEDEVENT_WAIT), v(OA)]).store_eax(status(5));
+    a.call_args(release, &[m(GLOBAL), v(8), v(0), v(ZERO)]).store_eax(status(6));
+    a.call_args(wait, &[v(0), v(8), v(0), v(ZERO)]).store_eax(status(7));
+    a.word(&[0xC7, 0x05], READY).bytes(&1u32.to_le_bytes());
+    a.call_args(wait, &[m(KEYED), v(0x10), v(0), v(0)]).store_eax(WAITED);
+    a.call_args(wait, &[m(KEYED), v(0x20), v(0), v(0)]).store_eax(WAITED2);
+    a.word(&[0xC7, 0x05], DONE_A).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut b = Code::new();
+    b.call_args(release, &[m(KEYED), v(0x10), v(0), v(0)]).store_eax(RELEASED);
+    b.call_args(release, &[m(KEYED), v(0x20), v(0), v(0)]).store_eax(RELEASED2);
+    b.word(&[0xC7, 0x05], DONE_B).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(a.0.len() <= 0x400 && b.0.len() <= 0x400, "the test program outgrew its slots");
+    text[..a.0.len()].copy_from_slice(&a.0);
+    text[0x400..0x400 + b.0.len()].copy_from_slice(&b.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "keyed.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("thread A");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    let wait_for = |addr: u32, what: &str| {
+        for waited in 0.. {
+            if read(addr) != 0 {
+                break;
+            }
+            assert!(waited < 300, "the keyed event test program did not {what}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    wait_for(READY, "reach its wait");
+    // SAFETY: as above. Thread A has time to block in its wait.
+    unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -50 * MS) };
+    let keyed = process
+        .handle_table
+        .reference_as::<ex::KeyedEvent>(ob::Handle(read(KEYED)), &ex::KEYED_EVENT_TYPE, ob::AccessMask::NONE)
+        .expect("the keyed event");
+    assert_eq!((read(DONE_A), keyed.waiting()), (0, 1), "thread A waits for its partner");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a second stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1400, &stack).expect("thread B");
+    wait_for(DONE_A, "meet thread B");
+    wait_for(DONE_B, "end thread B");
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..8).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtCreateKeyedEvent");
+    assert_eq!(statuses[1], STATUS_INVALID_PARAMETER, "flags");
+    assert_eq!((statuses[2], statuses[4]), (STATUS_TIMEOUT, STATUS_TIMEOUT), "nobody to meet");
+    assert_eq!(statuses[3], STATUS_INVALID_PARAMETER_1, "an odd key");
+    assert_eq!(statuses[5], STATUS_SUCCESS, "NtOpenKeyedEvent, the global one by its name");
+    assert_eq!(statuses[6], STATUS_ACCESS_DENIED, "a release needs KEYEDEVENT_WAKE");
+    assert_eq!(statuses[7], STATUS_TIMEOUT, "a null handle: the global one");
+    assert_eq!((NtStatus(read(WAITED)), NtStatus(read(RELEASED))), (STATUS_SUCCESS, STATUS_SUCCESS), "A waited first");
+    assert_eq!(
+        (NtStatus(read(WAITED2)), NtStatus(read(RELEASED2))),
+        (STATUS_SUCCESS, STATUS_SUCCESS),
+        "B released first"
+    );
+    assert_eq!(keyed.waiting(), 0, "nobody left waiting");
+    assert_eq!(ex::keyed_event::global().waiting(), 0, "nor on the global one");
+    drop(keyed);
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Ex: keyed events from user mode: NtCreateKeyedEvent, NtOpenKeyedEvent, NtWaitForKeyedEvent, \
+         NtReleaseKeyedEvent; two threads meet in both orders"
+    );
+}
+
 /// Another process's memory from user mode (`sys::memory`, `sys::section`,
 /// M5), as `RtlCreateUserProcess` uses it: in a second process, without a
 /// thread, the first MiB reserved from address 4 and a page committed, then
@@ -6443,7 +6601,21 @@ fn object_manager_self_test() {
     let names: alloc::vec::Vec<_> = types.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
         names,
-        ["Device", "Directory", "Event", "File", "Key", "Port", "Process", "Section", "SymbolicLink", "Thread", "Type"]
+        [
+            "Device",
+            "Directory",
+            "Event",
+            "File",
+            "Key",
+            "KeyedEvent",
+            "Port",
+            "Process",
+            "Section",
+            "SymbolicLink",
+            "Thread",
+            "Token",
+            "Type"
+        ]
     );
 
     // A named section, two handle tables.

@@ -1,4 +1,5 @@
-//! Les services des événements d'Ex (`ex::event`).
+//! Les services des événements d'Ex (`ex::event`) et des événements à clé
+//! (`ex::keyed_event`).
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
 use alloc::sync::Arc;
@@ -101,4 +102,67 @@ pub(super) fn nt_query_event(arguments: &[u32]) -> NtStatus {
         }
         Err(status) => status,
     }
+}
+
+/// NtCreateKeyedEvent(*KeyedEventHandle, DesiredAccess, ObjectAttributes,
+/// Flags) : un événement à clé neuf, nommé (ou non) d'après les attributs,
+/// qui peuvent manquer. `STATUS_INVALID_PARAMETER` pour des drapeaux non nuls.
+pub(super) fn nt_create_keyed_event(arguments: &[u32]) -> NtStatus {
+    if arguments[3] != 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    status(super::object::create_named(arguments[0], arguments[1], arguments[2], ex::KeyedEvent::create()))
+}
+
+/// NtOpenKeyedEvent(*KeyedEventHandle, DesiredAccess, ObjectAttributes) : un
+/// handle sur l'événement à clé que désignent les attributs.
+pub(super) fn nt_open_keyed_event(arguments: &[u32]) -> NtStatus {
+    status(
+        super::object::open_by_name(arguments[0], arguments[1], arguments[2], &ex::KEYED_EVENT_TYPE)
+            .map(|()| STATUS_SUCCESS),
+    )
+}
+
+/// NtWaitForKeyedEvent et NtReleaseKeyedEvent(KeyedEventHandle, Key,
+/// Alertable, Timeout) : le rendez-vous sur la clé (`ex::KeyedEvent::meet`)
+/// avec un thread du même processus qui fait l'inverse ; un handle nul
+/// désigne l'événement de `\KernelObjects\CritSecOutOfMemoryEvent`.
+fn meet(arguments: &[u32], releasing: bool) -> NtStatus {
+    let (handle, key, timeout) = (arguments[0], arguments[1], arguments[3]);
+    // A BOOLEAN, in the low byte of its argument.
+    let alertable = arguments[2] as u8 != 0;
+    let meet = || {
+        if key & 1 != 0 {
+            return Err(abi::ntstatus::STATUS_INVALID_PARAMETER_1);
+        }
+        let timeout = match timeout {
+            0 => None,
+            at => Some(UserPtr::<i64>::new(at).read()?),
+        };
+        let event = match handle {
+            0 => ex::keyed_event::global(),
+            _ => {
+                let access = if releasing { ex::KEYEDEVENT_WAKE } else { ex::KEYEDEVENT_WAIT };
+                super::current_process().handle_table.reference_as::<ex::KeyedEvent>(
+                    Handle(handle),
+                    &ex::KEYED_EVENT_TYPE,
+                    access,
+                )?
+            }
+        };
+        Ok(event.meet(super::current_process().pid(), key, releasing, alertable, timeout))
+    };
+    status(meet())
+}
+
+/// NtWaitForKeyedEvent(KeyedEventHandle, Key, Alertable, Timeout) :
+/// `KEYEDEVENT_WAIT` ; voir [`meet`].
+pub(super) fn nt_wait_for_keyed_event(arguments: &[u32]) -> NtStatus {
+    meet(arguments, false)
+}
+
+/// NtReleaseKeyedEvent(KeyedEventHandle, Key, Alertable, Timeout) :
+/// `KEYEDEVENT_WAKE` ; voir [`meet`].
+pub(super) fn nt_release_keyed_event(arguments: &[u32]) -> NtStatus {
+    meet(arguments, true)
 }

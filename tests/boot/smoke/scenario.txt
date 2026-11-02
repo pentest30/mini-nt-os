@@ -35,6 +35,7 @@ expect = [smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasi
 expect = [smoke] Cm: a mounted hive read from user mode: NtOpenKey, NtQueryValueKey, NtEnumerateKey, NtQueryKey, NtEnumerateValueKey
 expect = [smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject, NtQuerySymbolicLinkObject
 expect = [smoke] Ex: events from user mode: NtCreateEvent, NtOpenEvent, NtSetEvent, NtResetEvent, NtClearEvent, NtPulseEvent, NtQueryEvent; waits: NtWaitForSingleObject, NtWaitForMultipleObjects, one woken by the kernel
+expect = [smoke] Ex: keyed events from user mode: NtCreateKeyedEvent, NtOpenKeyedEvent, NtWaitForKeyedEvent, NtReleaseKeyedEvent; two threads meet in both orders
 expect = [smoke] Mm: another process's memory from user mode: the first MiB reserved from address 4, NtWriteVirtualMemory, NtReadVirtualMemory (partial copies), NtQuerySection (image, basic)
 expect = [smoke] Mm: a shared section from user mode: SEC_BASED | SEC_RESERVE, NtQuerySection, its view at its address, a page committed by NtAllocateVirtualMemory and seen from another process
 expect = [smoke] Ps: a process made from user mode: NtCreateProcess, NtQueryInformationProcess, NtSetInformationProcess, NtCreateThread (suspended), NtSuspendThread, NtResumeThread, its end awaited
