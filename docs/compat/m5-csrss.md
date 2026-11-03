@@ -538,3 +538,33 @@ seul objet, pas interactif ; la station du processus, que NtUserCloseWindowStati
 fois ; NtUserSetWindowStationUser refusé hors du processus de logon, puis accepté, un SID trop long refusé ; le processus
 de logon qui ouvre une station existante ne la rend pas interactive) ; le scénario `smoke` interdit la station
 interactive (pas de processus de logon).
+
+## Étape 18 : les bureaux ; `winlogon` crée les siens et s'y place
+
+`winlogon` crée ses trois bureaux, se place sur `Winlogon` et en fait le bureau d'entrée
+(`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserCreateDesktop | le bureau que nomment les attributs, sur sa station (la racine, celle du processus pour `user32`, ou le chemin qui précède son nom), ouvert s'il existe (`OBJ_OPENIF`, sinon `ERROR_ALREADY_EXISTS`), créé sinon : type d'Ob `Desktop` (`win32k::desktop`), tenu et nommé par sa station (procédure *parse* : `WinSta0\Default`), un tas de 3 Mio (128 Kio pour `Winlogon` et hors de la station interactive) dans une section, avec une adresse du serveur sur 32 bits (`0xA0000000`–`0xBBFFFFFF`, ADR-021), et son `DESKTOPINFO` en tête (`abi::user::DeskInfoHead32` : bornes du tas, chaînes de crochets vides, nom) ; rend son handle | `winlogon` (`Default`, `Winlogon`, `Screen-Saver`) |
+| NtUserOpenDesktop | un handle sur le bureau nommé | — |
+| NtUserSetThreadDesktop | le thread passe sur le bureau : son processus voit le tas en lecture seule (`SEC_NO_CHANGE`, une vue par bureau, retirée avec le dernier thread), un `CLIENTTHREADINFO` y est pris pour lui, son `CLIENTINFO` les désigne (`pDeskInfo`, `ulClientDelta`, `pClientThreadInfo`) ; le premier bureau d'un thread client (ni de `csrss` ni du système) devient le bureau de démarrage du processus ; sans bureau : `csrss` seul | `winlogon` |
+| NtUserSwitchDesktop | le bureau (`DESKTOP_SWITCHDESKTOP`) devient le bureau d'entrée, s'il est sur la station interactive de la session de l'appelant (sinon `ERROR_ACCESS_DENIED`) ; rien n'est dessiné | `winlogon` |
+| NtUserCloseDesktop | ferme le handle d'un bureau ; FALSE (`ERROR_BUSY`) pour celui du bureau du thread ou du bureau de démarrage | — |
+
+`winlogon` donne ensuite l'utilisateur de la station (NtUserSetWindowStationUser) ; `winsrv` le note (« We are logged
+off ») et `csrsrv` ne peut emprunter son identité (NtImpersonateThread manque, toléré). Puis `winlogon` charge ses
+dispositions de clavier (`InitKeyboardLayouts`, `winlogon.c`) : NtUserLoadKeyboardLayoutEx manque (« WL: Could not
+preload keyboard layouts »), et `winlogon` finit.
+
+Pas encore : la fenêtre du bureau et la fenêtre des messages (ReactOS les crée avec le bureau : `spwnd` reste nul), les
+crochets, le dessin du bureau d'entrée, NtUserGetThreadDesktop, ce qui est rendu à la fin d'un thread ou d'un
+processus GUI (son bureau, ses vues : rendus quand ses objets partent).
+
+Tests : hôte (`win32k::desktop` : plages libres prises et fusionnées, chaînes de crochets vides, tailles des tas ;
+`win32k::gui` : qui donne un bureau de démarrage), `desktop_self_test` (un bureau créé sur sa station, recréé (ouvert),
+refusé sans `OBJ_OPENIF`, un second ouvert par son nom complet, trouvé par l'espace de noms à travers sa station ;
+NtUserSetThreadDesktop : `DESKTOPINFO` et `CLIENTTHREADINFO` lus par le `CLIENTINFO` dans une vue en lecture seule, le
+même bureau deux fois ne change rien, l'ancienne vue retirée au changement ; le bureau du thread gardé par
+NtUserCloseDesktop ; NtUserSwitchDesktop refusé hors de la station interactive ; NtUserSetThreadDesktop refuse
+l'absence de bureau hors de `csrss` et le handle d'une station).

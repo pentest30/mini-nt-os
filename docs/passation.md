@@ -15,9 +15,9 @@ jour à chaque commit qui change l'état.
   est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
   sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
-  crée la station interactive `WinSta0` et la prend, puis s'arrête à son premier bureau (NtUserCreateDesktop rend
-  NULL : USER du M6, option 1 choisie avec le mainteneur) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à
-  17.
+  crée la station interactive `WinSta0` et ses bureaux, s'y place, puis s'arrête à ses dispositions de clavier
+  (NtUserLoadKeyboardLayoutEx : USER du M6, option 1 choisie avec le mainteneur) :
+  [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 18.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -303,13 +303,14 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] les stations de fenêtres (`win32k::winsta`, `sys::winsta`) : NtUserCreateWindowStation (la première du
      processus de logon est la station interactive), NtUserOpenWindowStation, NtUserCloseWindowStation,
      NtUserGetProcessWindowStation, NtUserSetProcessWindowStation, NtUserSetWindowStationUser ;
+   - [x] les bureaux (`win32k::desktop`, `win32k::gui`, `sys::desktop`) : NtUserCreateDesktop (un tas par bureau,
+     son `DESKTOPINFO`, adresses du serveur sur 32 bits), NtUserOpenDesktop, NtUserCloseDesktop,
+     NtUserSetThreadDesktop (vue du tas, `CLIENTTHREADINFO`, `CLIENTINFO`), NtUserSwitchDesktop ;
    - **la suite (option 1, choisie avec le mainteneur : USER dans le win32k minimal, début du M6 et du spike S3)** :
      le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
      lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande
-     (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) : les bureaux `Default`, `Winlogon` et `Screen-Saver`
-     (la procédure *parse* de la station ouvre ou crée ses bureaux ; NtUserCreateDesktop, un tas du bureau dans une
-     section, son `DESKTOPINFO` ; NtUserSetThreadDesktop projette le tas en `SEC_NO_CHANGE` et écrit `pDeskInfo`,
-     `ulClientDelta` et `pClientThreadInfo` du `CLIENTINFO` ; NtUserSwitchDesktop), puis le clavier (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
+     (`winlogon.c`) : le clavier (NtUserLoadKeyboardLayoutEx : le fichier de disposition, `kbdus.dll`, chargé par
+     win32k ; NtUserGetKeyboardLayoutList ; NtUserSetImeHotKey) (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
      `lsass.exe`, `msgina`. ReactOS crée aussi la fenêtre du bureau et la fenêtre des messages de chaque bureau
      (classes, fenêtres : plus tard) et, à la première station, le thread du bureau et le thread d'entrée (RIT).
 
@@ -343,6 +344,12 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   `csrss` gardé par win32k ne sert encore à rien (CsrClientCallServer du noyau : plus tard).
 - NtUserSetInformationThread ne se teste que depuis `csrss` : le refus d'une longueur autre que 4
   (`STATUS_INFO_LENGTH_MISMATCH`) n'a pas de test (une mutation qui le retire survit).
+- Bureaux : NtUserSwitchDesktop vérifie la session du bureau, que rien ne teste (une seule session) ; un bloc du tas
+  rendu puis repris est remis à zéro, ce que rien n'observe encore (aucun bloc rendu ne tient autre chose que des
+  zéros) ; le bureau de démarrage n'est donné que par un thread client, absent du scénario `smoke` (sans `csrss`,
+  tout thread GUI est un thread de `csrss`) : sa règle a un test hôte. Un thread ou un processus GUI qui finit ne
+  quitte pas son bureau (pas de rappel de sortie) : ses vues et son `CLIENTTHREADINFO` partent avec ses objets ;
+  les adresses du serveur d'un tas reviennent à sa fin.
 - Le port d'exception d'un processus est gardé sans servir (une exception non traitée en seconde chance devrait y
   aller) ; les temps noyau et utilisateur d'un thread restent nuls (Ke ne les compte pas).
 

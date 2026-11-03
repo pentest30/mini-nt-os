@@ -225,8 +225,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   des prototypes de ReactOS par `tools/syscall-gen`). `winlogon` s'inscrit comme processus de logon
   (NtUserCallTwoParam, `win32k::logon` ; NtUserSetInformationThread : le port d'API de `csrss`). Stations de
   fenêtres faites (`win32k::winsta`, `sys::winsta`, type d'Ob `WindowStation` ; la première du processus de logon est
-  la station interactive) : `winlogon` crée `WinSta0`, puis s'arrête à son bureau `Default` : la suite est USER dans
-  le win32k minimal (option 1, début du M6).
+  la station interactive) et bureaux (`win32k::desktop`, `sys::desktop`, type d'Ob `Desktop` nommé par sa station :
+  un tas par bureau dans une section, adresses du serveur sur 32 bits, `DESKTOPINFO` ; NtUserSetThreadDesktop projette
+  le tas et remplit le `CLIENTINFO`) : `winlogon` crée `WinSta0` et ses bureaux, s'y place, puis s'arrête à ses
+  dispositions de clavier : la suite est USER dans le win32k minimal (option 1, début du M6).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
