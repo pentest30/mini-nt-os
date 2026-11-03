@@ -14,9 +14,9 @@ jour à chaque commit qui change l'état.
   (USER sur le win32k minimal, puis la console `consrv`), se connecte à `smss` par LPC (et `smss` à lui) : **`csrss`
   est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
   sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
-  connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, puis s'arrête à sa station de
-  fenêtres (NtUserCreateWindowStation, USER du M6) et faute dans `user32` : [`compat/m5-csrss.md`](compat/m5-csrss.md),
-  étape 15.
+  connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
+  puis s'arrête à sa station de fenêtres (NtUserCreateWindowStation rend NULL : USER du M6, option 1 choisie avec le
+  mainteneur) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 et 16.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -294,15 +294,23 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      `MEM_DOS_LIM` rendent `STATUS_NOT_IMPLEMENTED` (journalisé). Tests : hôte (`mm`), `shared_section_self_test`.
    - `ProcessForegroundInformation` (25, toléré par `csrss`) : le quantum de premier plan (PsPrioritySeparation)
      demande un quantum par thread dans Ke ;
-   - **la suite, à décider avec le mainteneur** : `winlogon` demande maintenant USER (M6) : `RegisterLogonProcess`
-     (NtUserCallTwoParam `0x69`, NtUserSetInformationThread dans `winsrv`), la station de fenêtres et les bureaux
-     (NtUserCreateWindowStation, NtUserCreateDesktop, NtUserSetThreadDesktop, NtUserSwitchDesktop…), le clavier
-     (NtUserLoadKeyboardLayoutEx, NtUserGetKeyboardLayoutList), et NtImpersonateThread (Se). Leurs
-     `STATUS_NOT_IMPLEMENTED` sont lus comme un handle ou un compte, et `user32` faute. Deux voies : avancer USER
-     dans le win32k minimal (stations, bureaux, clavier : le début du M6 et du spike S3), ou, pour le critère du M5
-     (`cmd.exe` interactif), faire lancer à `smss` une autre commande initiale que `winlogon` (la console de
-     `consrv` sans bureau ?). Dans les deux cas, rendre 0 (et non `STATUS_NOT_IMPLEMENTED`) pour un service de
-     win32k sans handler qui rend un BOOL, un handle ou un compte (dette de l'étape 6).
+   - [x] un service de win32k sans handler rend 0 et `ERROR_CALL_NOT_IMPLEMENTED` s'il rend une valeur
+     (`Service::returns_status`, tiré des prototypes de ReactOS : `w32k-ntstatus.lst`) ; la dette de l'étape 6 est
+     levée ;
+   - [x] `RegisterLogonProcess` : NtUserCallTwoParam (`0x69`, `win32k::logon`), NtUserSetInformationThread
+     (`UserThreadCsrApiPort`, le port d'API de `csrss` gardé par win32k) ;
+   - **la suite (option 1, choisie avec le mainteneur : USER dans le win32k minimal, début du M6 et du spike S3)** :
+     le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
+     lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande
+     (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) : la station de fenêtres (un type d'Ob dont la procédure
+     *parse* ouvre ou crée ses bureaux ; NtUserCreateWindowStation, NtUserSetProcessWindowStation,
+     NtUserGetProcessWindowStation, NtUserCloseWindowStation ; la première créée, par le processus de logon, est la
+     station interactive), les bureaux (`Default`, `Winlogon`, `Screen-Saver` : NtUserCreateDesktop, un tas du bureau
+     dans une section, son `DESKTOPINFO` ; NtUserSetThreadDesktop projette le tas en `SEC_NO_CHANGE` et écrit
+     `pDeskInfo`, `ulClientDelta` et `pClientThreadInfo` du `CLIENTINFO` ; NtUserSwitchDesktop ;
+     NtUserSetWindowStationUser), puis le clavier (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
+     `lsass.exe`, `msgina`. ReactOS crée aussi la fenêtre du bureau et la fenêtre des messages de chaque bureau
+     (classes, fenêtres : plus tard) et, à la première station, le thread du bureau et le thread d'entrée (RIT).
 
 Méthode (celle du M4) : après chaque composant, relancer `cargo xtask test --boot --scenario smss`, lire le journal
 `[m4]`, mettre à jour `docs/compat/m5-csrss.md` et les marqueurs du scénario (`expect` de l'endroit où il s'arrête).
@@ -327,6 +335,15 @@ Services vus pendant S1 et encore absents (tolérés par `ntdll`, détail dans `
 classe `ProcessExecuteFlags` de NtSetInformationProcess (le service est fait pour d'autres classes),
 `NtQueryDefaultLocale`. `ProcessCookie` et `NtFlushInstructionCache` sont faits (M5, étape 5), `NtCreateKeyedEvent`
 aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
+
+## Dettes de l'étape 9 du M5 (`winlogon`)
+
+- Le processus de logon n'est pas oublié à sa fin (pas de rappel de sortie d'un processus GUI) ; le port d'API de
+  `csrss` gardé par win32k ne sert encore à rien (CsrClientCallServer du noyau : plus tard).
+- NtUserSetInformationThread ne se teste que depuis `csrss` : le refus d'une longueur autre que 4
+  (`STATUS_INFO_LENGTH_MISMATCH`) n'a pas de test (une mutation qui le retire survit).
+- Le port d'exception d'un processus est gardé sans servir (une exception non traitée en seconde chance devrait y
+  aller) ; les temps noyau et utilisateur d'un thread restent nuls (Ke ne les compte pas).
 
 ## Dettes de Se (l'étape 2 du M5)
 
@@ -360,9 +377,7 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   de ce que rend son objet (pas de rappel de sortie de win32k).
 - Les refus de NtUserInitialize (USER déjà démarré, autre version : STOP `WIN32K_INIT_OR_RIT_FAILURE`) n'ont pas de
   test : un second appel ou un mauvais `csrss` changerait l'état global de USER pour le scénario `smss`.
-- Un service de win32k sans handler rend `STATUS_NOT_IMPLEMENTED`, qu'un service BOOL ou HANDLE lit comme un succès
-  (NtGdiInit le faisait) : le journal du premier appel reste le seul signal ; à revoir quand win32k grandira (rendre 0
-  pour ces services ?).
+- (Levée à l'étape 9 : un service de win32k sans handler qui rend une valeur rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`.)
 - Vu une fois, non reproduit (huit lancements ensuite) : le test Ps `process_round` a vu NtReadVirtualMemory (côté
   noyau, `read_memory`) rendre `STATUS_ACCESS_VIOLATION` en lisant `DATA + 8` de `grows.exe` (scénario `smss`, Intel),
   STOP 0x1E. À diagnostiquer s'il revient (une course entre la croissance de la pile et la lecture ?).

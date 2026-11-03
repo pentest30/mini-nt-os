@@ -477,3 +477,35 @@ Tests : hôte (`mm` : une vue `SEC_NO_CHANGE` refuse toute protection, une vue s
 `shared_section_self_test` (une vue `SEC_NO_CHANGE` depuis le mode utilisateur : NtProtectVirtualMemory refusé,
 NtUnmapViewOfSection permis ; `MEM_COMMIT` refusé comme type d'une vue), `thread_information_self_test`
 (`ThreadIsTerminated` : 0 pour lui-même, 1 pour un thread fini).
+
+## Étape 16 : les services de win32k qui manquent échouent proprement ; `winlogon` s'inscrit
+
+Un service de win32k sans handler rendait `STATUS_NOT_IMPLEMENTED` (`0xC0000002`), que `user32` lisait comme un
+handle de station de fenêtres ou comme un compte, puis faute. Il rend maintenant ce que rend win32k quand il échoue :
+
+| Ce que rend le service | Sans handler |
+|---|---|
+| un `NTSTATUS` (78 services : NtUserProcessConnect, NtUserSetInformationThread, NtGdiFlush, les D3DKMT…) | `STATUS_NOT_IMPLEMENTED` |
+| une valeur (BOOL, HANDLE, DWORD, compte…) | 0, et `ERROR_CALL_NOT_IMPLEMENTED` (120) comme dernière erreur du thread (`TEB.LastErrorValue`, `win32k::set_last_error`) |
+
+Le type rendu vient des prototypes de ReactOS épinglé : `tools/syscall-gen/reactos/0.4.16/w32k-ntstatus.lst`
+(origine et méthode dans le `README.md` du dossier), que `tools/syscall-gen` porte dans les tables
+(`Service::returns_status`, `Service::value`). Le premier appel reste journalisé, suivi de « 0 returned ».
+
+`winlogon` s'inscrit alors comme processus de logon (`RegisterLogonProcess`, `user32/misc/logon.c`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserCallTwoParam(`TWOPARAM_ROUTINE_REGISTERLOGONPROCESS`, `0x69`) | inscrit le processus de logon (un seul ; TRUE), ou le désinscrit (lui seul) ; FALSE et `ERROR_INVALID_PARAMETER` pour un PID sans processus (`win32k::logon`) ; une autre routine rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois | `user32` de `winlogon` |
+| NtUserSetInformationThread(`UserThreadCsrApiPort`, 10) | pour `csrss` seul (`STATUS_ACCESS_DENIED`), sur un thread ouvert avec `THREAD_SET_INFORMATION` : le handle d'un port LPC (4 octets, `STATUS_INFO_LENGTH_MISMATCH`) devient le port d'API de `csrss` pour win32k (`win32k::csrss::set_api_port`) ; les autres classes rendent `STATUS_NOT_IMPLEMENTED` | `winsrv` (`SrvRegisterLogonProcess`, `usersrv/register.c`), quand `winlogon` s'inscrit |
+
+Puis `winlogon` crée sa station de fenêtres (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) :
+NtUserCreateWindowStation rend NULL, « WL: Failed to create window station (120) », et `winlogon` finit (NtRaiseHardError
+manque, puis `ExitProcess(1)`) ; `smss` finit avec lui. Le dernier processus de logon n'est pas oublié à sa fin (pas
+encore de rappel de sortie pour un processus GUI).
+
+Tests : hôte (`syscall-gen` : la liste lue, chaque nom un service de win32k ; `win32k::logon` : un seul processus de
+logon), `win32k_self_test` (NtGdiAbortDoc sans handler rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, NtGdiGetStats
+`STATUS_NOT_IMPLEMENTED` sans toucher la dernière erreur ; RegisterLogonProcess depuis le mode utilisateur : une fois, pas
+deux, désinscription par un autre refusée, PID sans processus, routine inconnue ; NtUserSetInformationThread refusé hors
+de `csrss`).
