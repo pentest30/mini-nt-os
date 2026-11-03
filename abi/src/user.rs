@@ -20,6 +20,15 @@ use core::mem::{offset_of, size_of};
 /// (`MAKELONG(0x0000, 0x0005)`), that `user32` puts in `ulVersion`.
 pub const USER_VERSION: u32 = 0x0005_0000;
 
+/// TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: the routine of NtUserCallTwoParam
+/// that registers the logon process (its PID, TRUE) or unregisters it
+/// (`SIMPLECALLROUTINES` of ReactOS's `ntuser.h`, before Vista).
+pub const TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: u32 = 0x69;
+
+/// UserThreadCsrApiPort: the class of NtUserSetInformationThread by which
+/// csrss gives win32k its API port (`USERTHREADINFOCLASS`).
+pub const USER_THREAD_CSR_API_PORT: u32 = 10;
+
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
 pub const FNID_FIRST: u32 = 0x029A;
 /// FNID_NUM: the window function identifiers, `FNID_SCROLLBAR` to
