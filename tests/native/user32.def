@@ -9,7 +9,10 @@ CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
 GetClassInfoExW@12
+GetClientRect@8
 GetParent@4
+GetSysColor@4
+GetSystemMetrics@4
 GetWindow@8
 GetWindowLongW@8
 GetWindowRect@8

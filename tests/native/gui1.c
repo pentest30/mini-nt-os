@@ -8,7 +8,9 @@
  * Like winlogon, it registers as the logon process, creates the interactive
  * window station WinSta0 and a desktop, and goes on it. Then it registers a
  * class and creates a window of it: win32k sends the window procedure
- * WM_NCCREATE, WM_CREATE... through KeUserModeCallback. Each step and each
+ * WM_NCCREATE, WM_CREATE... through KeUserModeCallback. An overlapped
+ * window gets WM_GETMINMAXINFO and its frame from the system metrics, by
+ * DefWindowProc in win32k (NtUserMessageCall). Each step and each
  * message goes to the debug port (DbgPrint), where the scenario looks for
  * them; the program ends with EXIT_STATUS.
  *
@@ -58,6 +60,19 @@ typedef struct {
 } RECT;
 
 typedef struct {
+    LONG x;
+    LONG y;
+} POINT;
+
+typedef struct {
+    POINT ptReserved;
+    POINT ptMaxSize;
+    POINT ptMaxPosition;
+    POINT ptMinTrackSize;
+    POINT ptMaxTrackSize;
+} MINMAXINFO;
+
+typedef struct {
     void *lpCreateParams;
     HINSTANCE hInstance;
     HMENU hMenu;
@@ -79,6 +94,10 @@ typedef struct {
 #define WS_POPUP 0x80000000
 #define WS_CHILD 0x40000000
 #define WS_CLIPSIBLINGS 0x04000000
+#define WS_OVERLAPPEDWINDOW 0x00CF0000
+#define WS_CAPTION 0x00C00000
+#define WS_THICKFRAME 0x00040000
+#define CW_USEDEFAULT ((int)0x80000000)
 #define GWL_STYLE (-16)
 #define GW_CHILD 5
 #define WM_PARENTNOTIFY 0x0210
@@ -86,6 +105,8 @@ typedef struct {
 #define ERROR_CANNOT_FIND_WND_CLASS 1407
 #define COLOR_WINDOW 5
 #define WM_CREATE 0x0001
+#define WM_GETMINMAXINFO 0x0024
+#define WM_NCCALCSIZE 0x0083
 #define WM_NCCREATE 0x0081
 
 /* What the scenario expects when the program runs to its end. */
@@ -108,7 +129,10 @@ __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, 
                                                              void *attributes);
 __declspec(dllimport) LRESULT __stdcall DefWindowProcW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) BOOL __stdcall GetClassInfoExW(HINSTANCE instance, const WCHAR *name, WNDCLASSEXW *class_info);
+__declspec(dllimport) BOOL __stdcall GetClientRect(HWND window, RECT *rect);
 __declspec(dllimport) HWND __stdcall GetParent(HWND window);
+__declspec(dllimport) DWORD __stdcall GetSysColor(int index);
+__declspec(dllimport) int __stdcall GetSystemMetrics(int index);
 __declspec(dllimport) HWND __stdcall GetWindow(HWND window, UINT command);
 __declspec(dllimport) LONG __stdcall GetWindowLongW(HWND window, int index);
 __declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
@@ -159,6 +183,10 @@ static unsigned int received_count;
 /* What WM_PARENTNOTIFY gave. */
 static WPARAM notified_w;
 static LPARAM notified_l;
+/* What WM_GETMINMAXINFO gave, and the minimum size to answer (0: none). */
+static MINMAXINFO limits;
+static LONG minimum_width;
+static LONG minimum_height;
 
 /* Prints the messages received since the last time. */
 static void print_messages(const char *what)
@@ -180,6 +208,7 @@ static void print_messages(const char *what)
 }
 
 static void check_callback_window(HWND window);
+static void check_caption_state(void);
 
 static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
 {
@@ -188,6 +217,15 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
     if (message == WM_PARENTNOTIFY) {
         notified_w = w;
         notified_l = l;
+    }
+    if (message == WM_GETMINMAXINFO) {
+        MINMAXINFO *info = (MINMAXINFO *)l;
+        limits = *info;
+        if (minimum_width) {
+            info->ptMinTrackSize.x = minimum_width;
+            info->ptMinTrackSize.y = minimum_height;
+            return 0;
+        }
     }
     if ((message == WM_NCCREATE || message == WM_CREATE) && ((const CREATESTRUCTW *)l)->style == (LONG)WS_POPUP) {
         const CREATESTRUCTW *create = (const CREATESTRUCTW *)l;
@@ -199,6 +237,8 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
         if (message == WM_CREATE)
             check_callback_window(window);
     }
+    if (message == WM_CREATE && ((const CREATESTRUCTW *)l)->style == (LONG)WS_OVERLAPPEDWINDOW)
+        check_caption_state();
     return DefWindowProcW(window, message, w, l);
 }
 
@@ -218,6 +258,15 @@ static void check_callback_window(HWND window)
     const DWORD *callback = (const DWORD *)(current_teb() + 0x6CC + 0x28);
     BOOL right = callback[0] == (DWORD)window && callback[1] && *(const DWORD *)callback[1] == (DWORD)window;
     DbgPrint("[gui] CallbackWnd: %s\n", right ? "the window and its WND" : "WRONG");
+}
+
+/* After WM_NCCALCSIZE (DefWindowProc in win32k), the WND of a window with a
+   caption has WNDS_HASCAPTION in its state, after its THRDESKHEAD. */
+static void check_caption_state(void)
+{
+    const DWORD *callback = (const DWORD *)(current_teb() + 0x6CC + 0x28);
+    const DWORD *wnd = (const DWORD *)callback[1];
+    DbgPrint("[gui] WM_CREATE: WNDS_HASCAPTION %s\n", wnd && (wnd[5] & 8) ? "set" : "WRONG");
 }
 
 /* A window procedure that refuses WM_NCCREATE. */
@@ -331,6 +380,85 @@ static void check_window(HWND window, HINSTANCE instance)
     DbgPrint("[gui] window refusing WM_NCCREATE: %p\n", child);
 }
 
+/* Fills the stack below the caller with ones. user32 sets the length of a
+   class name's LARGE_STRING but not its bAnsi bit, which keeps what was on
+   its stack: then a one, which win32k must not read as ANSI. */
+static void __attribute__((noinline)) dirty_stack(void)
+{
+    volatile unsigned char ones[3072]; /* under a page: no stack probe */
+    unsigned int i;
+
+    for (i = 0; i < sizeof ones; i++)
+        ones[i] = 0xFF;
+}
+
+/* A sizing popup window with a caption, and its rectangle. */
+static void print_sized(HINSTANCE instance, const char *what, int x, int y, int width, int height)
+{
+    RECT rect;
+    HWND window;
+
+    dirty_stack();
+    window = CreateWindowExW(0, CLASS_NAME, L"Sized", WS_POPUP | WS_CAPTION | WS_THICKFRAME, x, y, width, height, 0,
+                             0, instance, 0);
+    if (!window) {
+        DbgPrint("[gui] %s: none (%lu)\n", what, GetLastError());
+        return;
+    }
+    GetWindowRect(window, &rect);
+    DbgPrint("[gui] %s: %ld %ld %ld %ld\n", what, rect.left, rect.top, rect.right, rect.bottom);
+    received_count = 0;
+}
+
+/* An overlapped window: WM_GETMINMAXINFO first, the place and size of
+   ReactOS without a monitor, its client area without the frame and the
+   caption (WM_NCCALCSIZE in DefWindowProc). Then sizing windows, kept
+   within the limits WM_GETMINMAXINFO gives. */
+static void check_overlapped(HINSTANCE instance)
+{
+    RECT rect;
+    HWND window;
+
+    window = CreateWindowExW(0, CLASS_NAME, L"Overlapped", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0,
+                             0, instance, 0);
+    DbgPrint("[gui] overlapped: %s (%lu)\n", window ? "a window" : "none", GetLastError());
+    if (!window)
+        return;
+    print_messages("the overlapped window");
+    DbgPrint("[gui] WM_GETMINMAXINFO: maximized %ldx%ld at %ld,%ld, tracking %ldx%ld to %ldx%ld\n",
+             limits.ptMaxSize.x, limits.ptMaxSize.y, limits.ptMaxPosition.x, limits.ptMaxPosition.y,
+             limits.ptMinTrackSize.x, limits.ptMinTrackSize.y, limits.ptMaxTrackSize.x, limits.ptMaxTrackSize.y);
+    GetWindowRect(window, &rect);
+    DbgPrint("[gui] overlapped GetWindowRect: %ld %ld %ld %ld\n", rect.left, rect.top, rect.right, rect.bottom);
+    GetClientRect(window, &rect);
+    DbgPrint("[gui] overlapped GetClientRect: %ld %ld %ld %ld\n", rect.left, rect.top, rect.right, rect.bottom);
+    DbgPrint("[gui] DefWindowProcW(WM_USER + 1): %ld\n", DefWindowProcW(window, 0x401, 0, 0));
+    /* NCCALCSIZE_PARAMS: valid rectangles; the class has no CS_*REDRAW. */
+    {
+        struct {
+            RECT rgrc[3];
+            void *lppos;
+        } calc;
+        LRESULT result;
+
+        memset(&calc, 0, sizeof calc);
+        calc.rgrc[0].left = 100;
+        calc.rgrc[0].top = 100;
+        calc.rgrc[0].right = 400;
+        calc.rgrc[0].bottom = 300;
+        result = DefWindowProcW(window, WM_NCCALCSIZE, 1, (LPARAM)&calc);
+        DbgPrint("[gui] DefWindowProcW(WM_NCCALCSIZE, TRUE): %lx, %ld %ld %ld %ld\n", result, calc.rgrc[0].left,
+                 calc.rgrc[0].top, calc.rgrc[0].right, calc.rgrc[0].bottom);
+    }
+
+    print_sized(instance, "sizing, too small", 10, 20, 50, 10);
+    print_sized(instance, "sizing, too large", 0, 0, 5000, 5000);
+    minimum_width = 300;
+    minimum_height = 200;
+    print_sized(instance, "sizing, larger minimum", 0, 0, 100, 100);
+    minimum_width = 0;
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -340,6 +468,11 @@ DWORD __stdcall GuiStartup(void)
 
     if (!take_a_desktop())
         ExitProcess(1);
+    /* SM_CXSCREEN, SM_CYSCREEN, SM_CYCAPTION, SM_CXFRAME, SM_CXMINTRACK;
+       COLOR_BACKGROUND, COLOR_WINDOW, COLOR_BTNFACE. */
+    DbgPrint("[gui] GetSystemMetrics: screen %dx%d, caption %d, frame %d, minimum width %d\n", GetSystemMetrics(0),
+             GetSystemMetrics(1), GetSystemMetrics(4), GetSystemMetrics(32), GetSystemMetrics(34));
+    DbgPrint("[gui] GetSysColor: %06lx %06lx %06lx\n", GetSysColor(1), GetSysColor(5), GetSysColor(15));
 
     memset(&class_info, 0, sizeof class_info);
     class_info.cbSize = sizeof class_info;
@@ -361,6 +494,7 @@ DWORD __stdcall GuiStartup(void)
         ExitProcess(3);
     print_messages("the window");
     check_window(window, instance);
+    check_overlapped(instance);
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);
