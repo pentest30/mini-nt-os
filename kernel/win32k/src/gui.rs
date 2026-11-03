@@ -26,20 +26,58 @@ use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
 use abi::peb32::Peb32;
 use abi::teb32::Teb32;
 use abi::user::{ClientInfo32, TIF_CSRSSTHREAD, TIF_DONTATTACHQUEUE};
-use ob::Object;
+use hal::sync::KSpinLock;
+use ob::{AccessMask, Object};
 use ps::{EProcess, EThread};
+
+use crate::winsta::WindowStation;
 
 /// GDI_BATCH_LIMIT : les appels de GDI qu'un client met en lot au plus
 /// (`PEB.GdiDCAttributeList`).
 pub const GDI_BATCH_LIMIT: u32 = 20;
 
 /// Ce que win32k garde d'un processus GUI (`PROCESSINFO`).
-#[derive(Debug)]
 pub struct ProcessInfo {
     /// Son adresse du serveur, que voient les clients (`CLIENTINFO.ppi`).
     pub server: u32,
     /// L'adresse de sa vue de la section partagée de USER.
     pub shared_view: u32,
+    /// Sa station de fenêtres (`hwinsta`, `prpwinsta`, `amwinsta`).
+    window_station: KSpinLock<Option<ProcessWindowStation>>,
+}
+
+/// La station de fenêtres d'un processus : le handle qu'il a donné, la
+/// station, et les droits de ce handle.
+#[derive(Clone)]
+pub struct ProcessWindowStation {
+    pub handle: u32,
+    pub station: Arc<Object<WindowStation>>,
+    pub access: AccessMask,
+}
+
+impl ProcessInfo {
+    /// Un processus GUI sans station.
+    pub fn new(server: u32, shared_view: u32) -> Self {
+        Self { server, shared_view, window_station: KSpinLock::new(None) }
+    }
+
+    /// Sa station de fenêtres, s'il en a une.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn window_station(&self) -> Option<ProcessWindowStation> {
+        self.window_station.lock().clone()
+    }
+
+    /// UserSetProcessWindowStation : `station` devient sa station (ou plus
+    /// aucune) ; la précédente part une fois le verrou rendu.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn set_window_station(&self, station: Option<ProcessWindowStation>) {
+        let previous = core::mem::replace(&mut *self.window_station.lock(), station);
+        drop(previous);
+    }
 }
 
 /// Ce que win32k garde d'un thread GUI (`THREADINFO`).
@@ -110,7 +148,7 @@ pub fn process_info(process: &Arc<Object<EProcess>>) -> Result<Arc<ProcessInfo>,
         unmap();
         return Err(status);
     }
-    let created = Arc::new(ProcessInfo { server: process_server_address(process.pid()), shared_view: view });
+    let created = Arc::new(ProcessInfo::new(process_server_address(process.pid()), view));
     let kept = downcast(process.set_win32_process(created.clone()));
     if !Arc::ptr_eq(&kept, &created) {
         // Another thread of the process converted it first: its view is

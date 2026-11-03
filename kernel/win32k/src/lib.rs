@@ -14,7 +14,8 @@
 //!   (NtUserInitializeClientPfnArrays) ;
 //! - [`csrss`] : le démarrage de USER par `csrss` (NtUserInitialize), son
 //!   port d'API ;
-//! - [`logon`] : le processus de logon (RegisterLogonProcess).
+//! - [`logon`] : le processus de logon (RegisterLogonProcess) ;
+//! - [`winsta`] : les stations de fenêtres.
 //!
 //! Le reste (stations et bureaux, fenêtres, messages, GDI) viendra avec le
 //! spike S3 et le M6 (05).
@@ -28,6 +29,7 @@ pub mod csrss;
 pub mod gui;
 pub mod logon;
 pub mod shared;
+pub mod winsta;
 
 use alloc::sync::Arc;
 use core::mem::{offset_of, size_of};
