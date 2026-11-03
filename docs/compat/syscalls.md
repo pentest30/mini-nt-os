@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 29 | 732 |
+| win32k | 30 | 732 |
 
 ## ntoskrnl
 
@@ -775,7 +775,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c8` | `NtUserLockWorkStation` | 0 |  |
 | `0x11c9` | `NtUserMapVirtualKeyEx` | 4 |  |
 | `0x11ca` | `NtUserMenuItemFromPoint` | 4 |  |
-| `0x11cb` | `NtUserMessageCall` | 7 |  |
+| `0x11cb` | `NtUserMessageCall` | 7 | ✅ |
 | `0x11cc` | `NtUserMinMaximize` | 3 |  |
 | `0x11cd` | `NtUserMNDragLeave` | 0 |  |
 | `0x11ce` | `NtUserMNDragOver` | 2 |  |

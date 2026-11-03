@@ -26,8 +26,7 @@
 //!
 //! Pas encore : DestroyWindow (les fenêtres d'un thread vivent autant que
 //! lui), ShowWindow et SetWindowPos (une fenêtre créée visible reste
-//! cachée, journalisé), WM_GETMINMAXINFO (sans métriques du système,
-//! journalisé), les menus, les messages envoyés à un autre thread, la
+//! cachée, journalisé), les menus, les messages envoyés à un autre thread, la
 //! fenêtre des messages (`HWND_MESSAGE`), les crochets, les régions (la
 //! région à mettre à jour est un rectangle), les contextes de périphérique
 //! (WM_ERASEBKGND reçoit 0), le fond d'écran, les fenêtres au premier plan
@@ -46,9 +45,9 @@ use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, Rect32,
     WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
     FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HWND_MESSAGE, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
-    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE,
-    WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS_ANSICREATOR,
-    WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS,
+    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT,
+    WM_PARENTNOTIFY, WM_SIZE, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED,
+    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS,
     WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
     WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_WINDOWEDGE, WS_MAXIMIZE,
     WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
@@ -276,6 +275,14 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
 fn write(window: &Window) -> Result<(), NtStatus> {
     let state = window.state();
     window.heap.section.write_kernel(u64::from(window.wnd), wnd(window, &state).as_bytes())
+}
+
+/// Change ce qui change de `window` par `change`, puis réécrit son `WND`.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn change(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowState {
+    update(window, change)
 }
 
 /// Change ce qui change de `window` par `change`, puis réécrit son `WND`.
@@ -892,14 +899,27 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         report_missing("the menu of a class (co_IntCallLoadMenu)", &REPORTED);
     }
 
-    // The window's rectangle.
-    if params.style & WS_THICKFRAME != 0 || kind == 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("WM_GETMINMAXINFO (no system metrics)", &REPORTED);
-    }
-    let rect = Rect::new(params.x, params.y, params.x.wrapping_add(params.cx), params.y.wrapping_add(params.cy));
-    update(&window, |state| (state.window, state.client) = (rect, rect));
     drop((thread, desktop, process_info));
+
+    // The window's rectangle, its size within what WM_GETMINMAXINFO allows
+    // a sizing or overlapped window.
+    let (mut cx, mut cy) = (params.cx, params.cy);
+    if params.style & WS_THICKFRAME != 0 || kind == 0 {
+        let parent_client = parent.state().client;
+        let origin =
+            Rect::new(0, 0, parent_client.right - parent_client.left, parent_client.bottom - parent_client.top);
+        let state = window.state();
+        let info = crate::defwnd::min_max_info(state.style, state.ex_style, (0, 0), origin, &crate::metrics::get);
+        // What the procedure leaves; the minimum wins over the maximum.
+        let mut bytes = info.as_bytes().to_vec();
+        let _ = send_message(&window, WM_GETMINMAXINFO, 0, LParam::Buffer { bytes: &mut bytes, write_back: true });
+        let word = |i: usize| i32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+        let ([min_cx, min_cy], [max_cx, max_cy]) = ([word(6), word(7)], [word(8), word(9)]);
+        cx = cx.min(max_cx).max(min_cx);
+        cy = cy.min(max_cy).max(min_cy);
+    }
+    let rect = Rect::new(params.x, params.y, params.x.wrapping_add(cx), params.y.wrapping_add(cy));
+    update(&window, |state| (state.window, state.client) = (rect, rect));
 
     // WM_NCCREATE, with the window's and the class's names.
     let create = CreateStructW32 {

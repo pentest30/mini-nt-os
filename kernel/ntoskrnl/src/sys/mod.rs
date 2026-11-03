@@ -202,6 +202,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserInitialize, Handler::Status(user::nt_user_initialize)),
     (services::NtUserInitializeClientPfnArrays, Handler::Status(user::nt_user_initialize_client_pfn_arrays)),
     (services::NtUserLoadKeyboardLayoutEx, Handler::Status(user::nt_user_load_keyboard_layout_ex)),
+    (services::NtUserMessageCall, Handler::Status(message::nt_user_message_call)),
     (services::NtUserOpenDesktop, Handler::Status(desktop::nt_user_open_desktop)),
     (services::NtUserOpenWindowStation, Handler::Status(winsta::nt_user_open_window_station)),
     (services::NtUserPeekMessage, Handler::Status(message::nt_user_peek_message)),
