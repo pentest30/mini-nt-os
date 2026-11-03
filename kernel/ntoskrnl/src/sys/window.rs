@@ -20,13 +20,28 @@ fn is_atom(address: u32) -> bool {
 /// Le bit `bAnsi` d'un `LARGE_STRING` : sa chaîne est en ANSI.
 const LARGE_STRING_ANSI: u32 = 0x8000_0000;
 
-/// ProbeAndCaptureLargeString : la chaîne d'un `LARGE_STRING`, en Unicode.
-/// Une chaîne ANSI (`bAnsi`, de DefWindowProcA) garde ses caractères ASCII ;
-/// un autre devient `?` (pas encore de page de code ici, journalisé une
-/// fois).
+/// ProbeAndCaptureLargeString : la chaîne Unicode d'un `LARGE_STRING`,
+/// sans regarder son bit `bAnsi`, comme ReactOS : user32 ne pose que
+/// `MaximumLength` dans celui d'un nom de classe (le bit est ce qui restait
+/// sur sa pile), et CreateWindowExA lui laisse le nom de la fenêtre déjà
+/// converti en Unicode.
 fn capture_large_string(address: u32) -> Result<Vec<u16>, NtStatus> {
+    capture(address, false)
+}
+
+/// Le texte d'un `LARGE_STRING` de NtUserDefSetText, en Unicode : là,
+/// `bAnsi` dit s'il est en ANSI (DefWindowProcA, RtlLargeStringToUnicodeString).
+/// Un texte ANSI garde ses caractères ASCII ; un autre devient `?` (pas
+/// encore de page de code ici, journalisé une fois).
+fn capture_text(address: u32) -> Result<Vec<u16>, NtStatus> {
+    capture(address, true)
+}
+
+/// La chaîne d'un `LARGE_STRING`, en ANSI si `honor_ansi` et son `bAnsi`
+/// le disent.
+fn capture(address: u32, honor_ansi: bool) -> Result<Vec<u16>, NtStatus> {
     let string = UserPtr::<LargeUnicodeString32>::new(address).read()?;
-    let ansi = string.maximum_length_ansi & LARGE_STRING_ANSI != 0;
+    let ansi = honor_ansi && string.maximum_length_ansi & LARGE_STRING_ANSI != 0;
     let length = if ansi { string.length } else { string.length & !1 };
     let mut bytes = alloc::vec![0u8; length as usize];
     if !bytes.is_empty() {
@@ -121,7 +136,7 @@ pub(super) fn nt_user_def_set_text(arguments: &[u32]) -> NtStatus {
     if text == 0 {
         return NtStatus(1);
     }
-    let text = match capture_large_string(text) {
+    let text = match capture_text(text) {
         Ok(text) => text,
         Err(status) => return fail(dos_error(status)),
     };
