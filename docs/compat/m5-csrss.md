@@ -568,3 +568,30 @@ NtUserSetThreadDesktop : `DESKTOPINFO` et `CLIENTTHREADINFO` lus par le `CLIENTI
 même bureau deux fois ne change rien, l'ancienne vue retirée au changement ; le bureau du thread gardé par
 NtUserCloseDesktop ; NtUserSwitchDesktop refusé hors de la station interactive ; NtUserSetThreadDesktop refuse
 l'absence de bureau hors de `csrss` et le handle d'une station).
+
+## Étape 19 : les dispositions de clavier ; `winlogon` charge `00000409`
+
+`winlogon` charge ses dispositions de clavier (`InitKeyboardLayouts`, `winlogon.c`) : sans `Keyboard Layout\Preload`
+dans `HKCU` (pas encore de ruche de l'utilisateur), il charge `00000409` (`LoadKeyboardLayoutW`, `KLF_ACTIVATE |
+KLF_SUBSTITUTE_OK | KLF_REPLACELANG | KLF_SETFORPROCESS`), puis `user32` prépare les raccourcis de l'IME
+(`CliImmInitializeHotKeys`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserLoadKeyboardLayoutEx | la disposition du HKL (`0x04090409`), chargée si elle ne l'est pas : le noyau lit `Layout File` sous `HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layouts\<KLID>` (un nom de fichier seul) et le fichier de `\SystemRoot\System32` (`kbdus.dll`, mis sur le disque par `xtask`) ; win32k n'exécute pas `KbdLayerDescriptor` (ReactOS le fait, et le note comme dangereux) : il lit son code, `mov eax, offset ; ret`, d'où la RVA des tables (`0x1000`) ; puis l'active (`KLF_ACTIVATE`) pour le thread ou chaque thread GUI du processus (`KLF_SETFORPROCESS`) : `hKL` et `CodePage` de leur `CLIENTINFO` (la page ANSI du système). NULL pour un HKL nul, sans station ou hors de la station interactive ; `ERROR_INVALID_FLAGS` pour un drapeau inconnu | `winlogon` (`LoadKeyboardLayoutW`) |
+| NtUserGetKeyboardLayoutList | le nombre des dispositions chargées, ou leurs HKL dans la limite du tampon | `user32` (`CliImmInitializeHotKeys`) |
+
+NtUserSetImeHotKey manque (rend 0, toléré : pas d'IME). `winlogon` démarre ensuite son serveur RPC (`StartRpcServer`,
+`rpcserver.c`) : `RpcServerUseProtseqEpW` sur le tube nommé `\pipe\winreg` (`CreateNamedPipe` de `kernel32`) demande
+**NtCreateNamedPipeFile**, le système de fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe`), pas encore fait :
+« WL: Could not start the RPC server », et `winlogon` finit.
+
+Pas encore : la traduction des touches par les tables (avec la file d'entrée, M6), la page de code d'une langue autre
+que celle du système, l'IME, le déchargement d'une disposition (`hOldKL`, NtUserUnloadKeyboardLayout), le
+réordonnancement (`KLF_REORDER`), la notification du shell, le fichier donné par `hFile`.
+
+Tests : hôte (`libs/pe` : octets lus à une RVA ; `win32k::keyboard` : les tables lues et non exécutées, et chaque refus ;
+une disposition chargée une fois, listée, pas relue ; un fichier illisible ou invalide pas listé ; rien sans HKL ni hors
+de la station interactive ; le nom du fichier de disposition), `desktop_self_test` (NtUserLoadKeyboardLayoutEx refuse un
+drapeau inconnu et ne lit rien hors de la station interactive ; NtUserGetKeyboardLayoutList compte les dispositions) ; le
+scénario `smss` attend la disposition chargée, ses tables et ses HKL listés.

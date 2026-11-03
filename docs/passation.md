@@ -15,9 +15,9 @@ jour à chaque commit qui change l'état.
   est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
   sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
-  crée la station interactive `WinSta0` et ses bureaux, s'y place, puis s'arrête à ses dispositions de clavier
-  (NtUserLoadKeyboardLayoutEx : USER du M6, option 1 choisie avec le mainteneur) :
-  [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 18.
+  crée la station interactive `WinSta0` et ses bureaux, s'y place, charge sa disposition de clavier, puis s'arrête à
+  son serveur RPC (un tube nommé : NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15
+  à 19.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -306,11 +306,15 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] les bureaux (`win32k::desktop`, `win32k::gui`, `sys::desktop`) : NtUserCreateDesktop (un tas par bureau,
      son `DESKTOPINFO`, adresses du serveur sur 32 bits), NtUserOpenDesktop, NtUserCloseDesktop,
      NtUserSetThreadDesktop (vue du tas, `CLIENTTHREADINFO`, `CLIENTINFO`), NtUserSwitchDesktop ;
-   - **la suite (option 1, choisie avec le mainteneur : USER dans le win32k minimal, début du M6 et du spike S3)** :
+   - [x] les dispositions de clavier (`win32k::keyboard`) : NtUserLoadKeyboardLayoutEx (le fichier lu par le noyau
+     d'après le registre, les tables trouvées sans exécuter `KbdLayerDescriptor`), NtUserGetKeyboardLayoutList ;
+   - **la suite** : `winlogon` démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
+     fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
+     FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
+   - **USER (option 1, choisie avec le mainteneur : le win32k minimal, début du M6 et du spike S3)** :
      le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
      lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande
-     (`winlogon.c`) : le clavier (NtUserLoadKeyboardLayoutEx : le fichier de disposition, `kbdus.dll`, chargé par
-     win32k ; NtUserGetKeyboardLayoutList ; NtUserSetImeHotKey) (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
+     (`winlogon.c`) : après le clavier (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
      `lsass.exe`, `msgina`. ReactOS crée aussi la fenêtre du bureau et la fenêtre des messages de chaque bureau
      (classes, fenêtres : plus tard) et, à la première station, le thread du bureau et le thread d'entrée (RIT).
 
@@ -344,6 +348,9 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   `csrss` gardé par win32k ne sert encore à rien (CsrClientCallServer du noyau : plus tard).
 - NtUserSetInformationThread ne se teste que depuis `csrss` : le refus d'une longueur autre que 4
   (`STATUS_INFO_LENGTH_MISMATCH`) n'a pas de test (une mutation qui le retire survit).
+- Clavier : l'activation d'une disposition (`hKL` et `CodePage` du `CLIENTINFO`) n'a pas de test (une mutation qui
+  la retire survit) : il faudrait une station interactive et une vraie disposition, que seul le scénario `smss` a, sans
+  rien qui lise ces champs avant le serveur RPC.
 - Bureaux : NtUserSwitchDesktop vérifie la session du bureau, que rien ne teste (une seule session) ; un bloc du tas
   rendu puis repris est remis à zéro, ce que rien n'observe encore (aucun bloc rendu ne tient autre chose que des
   zéros) ; le bureau de démarrage n'est donné que par un thread client, absent du scénario `smoke` (sans `csrss`,
