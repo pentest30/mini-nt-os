@@ -193,6 +193,12 @@ fn log_user() {
         size_of::<PfnClient32>() / 4,
         win32k::client::client_module(),
     );
+    let layouts: alloc::vec::Vec<alloc::string::String> = win32k::keyboard::layouts()
+        .into_iter()
+        .filter_map(win32k::keyboard::layout)
+        .map(|layout| alloc::format!("{:08x} ({}, tables at {:#x})", layout.hkl, layout.file.name, layout.file.tables))
+        .collect();
+    log::info!("[m4] USER: keyboard layouts loaded: [{}]", layouts.join(", "));
 }
 
 /// Journalise les variables que `smss` a écrites dans

@@ -5126,7 +5126,9 @@ fn window_station_self_test() {
 /// desktop does not close (ERROR_BUSY), other handles do (no startup
 /// desktop: until csrss starts, a GUI thread is a csrss thread); SwitchDesktop is refused off the interactive station, and
 /// NtUserSetThreadDesktop refuses no desktop (csrss only) and a station's
-/// handle.
+/// handle. NtUserLoadKeyboardLayoutEx refuses an unknown flag and loads
+/// nothing off the interactive station; NtUserGetKeyboardLayoutList counts
+/// the loaded layouts.
 fn desktop_self_test() {
     use abi::ntstatus::{NtStatus, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_INVALID, STATUS_WAIT_0};
     use abi::services;
@@ -5159,6 +5161,9 @@ fn desktop_self_test() {
     const DEFAULT_NAME_AT: u32 = DATA + 0x180;
     const SECOND_NAME_AT: u32 = DATA + 0x190;
     const FULL_NAME_AT: u32 = DATA + 0x1A0;
+    const KLID_US: u32 = DATA + 0x200; // "00000409"
+    const KLID_AT: u32 = DATA + 0x208;
+    const LIST: u32 = DATA + 0x220; // 4 HKLs
     const CTI_FIRST: u32 = DATA + 0x2F0; // pClientThreadInfo after the first NtUserSetThreadDesktop
     const CTI_AGAIN: u32 = DATA + 0x2F4; // and after the same desktop again
     const DONE: u32 = DATA + 0x2FC;
@@ -5184,6 +5189,10 @@ fn desktop_self_test() {
     name(DEFAULT_OA, DEFAULT_US, DEFAULT_NAME_AT, "Default", 0, OPENIF);
     name(SECOND_OA, SECOND_US, SECOND_NAME_AT, "Second", 0, OPENIF);
     name(FULL_OA, FULL_US, FULL_NAME_AT, FULL_NAME, 0, 0x40);
+    let klid: alloc::vec::Vec<u8> = "00000409".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(KLID_AT, &klid);
+    put(KLID_US, &[16, 0, 18, 0]);
+    put(KLID_US + 4, &KLID_AT.to_le_bytes());
 
     let (v, m) = (Arg::Value, Arg::Memory);
     let result = |i: u32| RESULT + 4 * i;
@@ -5227,6 +5236,13 @@ fn desktop_self_test() {
     call(&mut code, switch, &[m(result(5))]); // 12
     call(&mut code, set, &[v(0)]); // 13
     call(&mut code, set, &[m(result(0))]); // 14
+                                           // Keyboard layouts: an unknown flag; no window station, so no input.
+    let (load, list) = (services::NtUserLoadKeyboardLayoutEx, services::NtUserGetKeyboardLayoutList);
+    let us = 0x0409_0409;
+    call(&mut code, load, &[v(0), v(0), v(0), v(0), v(KLID_US), v(us), v(0x8000_0000)]); // 15
+    call(&mut code, load, &[v(0), v(0), v(0), v(0), v(KLID_US), v(us), v(abi::user::KLF_ACTIVATE)]); // 16
+    call(&mut code, list, &[v(0), v(0)]); // 17
+    call(&mut code, list, &[v(4), v(LIST)]); // 18
     code.word(&[0xC7, 0x05], DONE).bytes(&3u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x800];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -5314,6 +5330,11 @@ fn desktop_self_test() {
     assert_eq!((r(12), e(12)), (0, ERROR_ACCESS_DENIED), "SwitchDesktop off the interactive station");
     assert_eq!((r(13), e(13)), (0, ERROR_ACCESS_DENIED), "no desktop: csrss only");
     assert_eq!((r(14), e(14)), (0, ERROR_INVALID_HANDLE), "a station is no desktop");
+    assert_eq!((r(15), e(15)), (0, abi::winerror::ERROR_INVALID_FLAGS), "NtUserLoadKeyboardLayoutEx: a bad flag");
+    assert_eq!((r(16), e(16)), (0, 0), "no layout off the interactive station, and nothing read");
+    let loaded = win32k::keyboard::layouts();
+    assert!(!loaded.contains(&0x0409_0409), "nothing loaded");
+    assert_eq!((r(17), r(18)), (loaded.len() as u32, loaded.len().min(4) as u32), "NtUserGetKeyboardLayoutList");
     drop((default, second, found, gui));
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
@@ -5333,7 +5354,8 @@ fn desktop_self_test() {
     log::info!(
         "[smoke] win32k: desktops from user mode: created on their station (again: opened), found through it, \
          NtUserSetThreadDesktop (DESKTOPINFO and CLIENTTHREADINFO in a read-only view of the heap), the thread's \
-         desktop kept from NtUserCloseDesktop, SwitchDesktop off the interactive station refused"
+         desktop kept from NtUserCloseDesktop, SwitchDesktop off the interactive station refused; no keyboard \
+         layout off it"
     );
 }
 
