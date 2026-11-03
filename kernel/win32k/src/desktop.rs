@@ -12,9 +12,12 @@
 //! cette adresse et celle de sa vue. Le tas commence par le `DESKTOPINFO` du
 //! bureau ; le `CLIENTTHREADINFO` de chaque thread sur le bureau y est pris.
 //!
+//! Le bureau d'entrée a son fond peint sur l'écran ([`switch_to`]), de la
+//! couleur système du fond.
+//!
 //! Pas encore : la fenêtre du bureau et la fenêtre des messages (ReactOS les
-//! crée avec le bureau ; `spwnd` reste nul), les crochets, le dessin du
-//! bureau à NtUserSwitchDesktop, le descripteur de sécurité d'un bureau créé,
+//! crée avec le bureau, la montre et la peint ; `spwnd` reste nul), le fond
+//! d'écran (une image), les crochets, le descripteur de sécurité d'un bureau créé,
 //! les droits de la station sur la création (`WINSTA_CREATEDESKTOP`).
 
 use alloc::string::String;
@@ -314,11 +317,12 @@ pub fn input_desktop() -> Option<Arc<Object<Desktop>>> {
 
 /// NtUserSwitchDesktop, une fois le handle validé : `desktop` devient le
 /// bureau d'entrée, s'il est sur la station interactive, de la session
-/// `session` ; rend s'il l'est. Le processus de logon passe outre au
-/// verrouillage de la station (pas encore de verrouillage).
+/// `session`, et son fond est peint sur l'écran ; rend s'il l'est. Le
+/// processus de logon passe outre au verrouillage de la station (pas encore
+/// de verrouillage).
 ///
 /// # IRQL
-/// <= DISPATCH_LEVEL.
+/// PASSIVE_LEVEL.
 pub fn switch_to(desktop: &Arc<Object<Desktop>>, session: u32) -> bool {
     if desktop.station.session != session {
         return false;
@@ -329,7 +333,19 @@ pub fn switch_to(desktop: &Arc<Object<Desktop>>, session: u32) -> bool {
     }
     let previous = INPUT_DESKTOP.lock().replace(Arc::downgrade(desktop));
     drop(previous);
+    paint_background(desktop);
     true
+}
+
+/// Peint le fond du bureau d'entrée `desktop` sur tout l'écran, de la
+/// couleur système `COLOR_BACKGROUND` ; journalisé (un changement de bureau
+/// est rare). En attendant la fenêtre du bureau, que ReactOS montre
+/// (co_IntShowDesktop) et peint (IntPaintDesktop, à son WM_PAINT).
+fn paint_background(desktop: &Desktop) {
+    let painted = crate::display::draw(|screen| screen.fill_rect(screen.bounds(), crate::gdi::syscolor::BACKGROUND));
+    if let (true, Some(mode)) = (painted, crate::display::mode()) {
+        log::info!("win32k: the input desktop {} painted, {}x{}", desktop.name, mode.width, mode.height);
+    }
 }
 
 #[cfg(test)]
