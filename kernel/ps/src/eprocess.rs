@@ -328,6 +328,14 @@ impl EProcess {
         self.threads.lock().list.len()
     }
 
+    /// Ses threads vivants.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn threads(&self) -> Vec<Arc<Object<EThread>>> {
+        self.threads.lock().list.clone()
+    }
+
     /// L'objet du dispatcher signalé à sa fin, à attendre.
     pub fn dispatcher_object(&self) -> *mut DispatcherHeader {
         self.exited.header()
