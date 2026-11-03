@@ -323,6 +323,13 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     sys::apc::install();
     shared_data::init();
     win32k::init().expect("the USER shared section");
+    // The display driver: the UEFI framebuffer, if the loader found one.
+    // SAFETY: the HHDM maps [0, 4 GiB) for good and the framebuffer lies
+    // below 4 GiB; only gopfb and the boot console write to it.
+    match unsafe { gopfb::GopFramebuffer::new(&boot_info.framebuffer, boot_info.hhdm_offset) } {
+        Some(driver) => win32k::display::install(alloc::boxed::Box::new(driver)),
+        None => log::info!("[boot] no display: no GOP framebuffer of a known format"),
+    }
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -362,6 +369,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     win32k_self_test();
     window_station_self_test();
     desktop_self_test();
+    message_queue_self_test();
     lpc_connection_self_test();
     process_memory_self_test();
     shared_section_self_test();
@@ -462,6 +470,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 
     log::info!("kernel_main: user thread TID={} spawned — launching Mino UI", user_tid);
 
+    // win32k owns the screen once it has drawn on it (an input desktop):
+    // the old launcher and kernel shell, which draw on the whole screen,
+    // stay away; the boot thread idles.
+    if win32k::display::acquired() {
+        log::info!("kernel_main: win32k owns the display: no launcher");
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
     // Show the game launcher immediately. CMD.EXE (user thread) continues
     // running in the background; its framebuffer output is suppressed by
     // EXCLUSIVE=true inside launcher::run(). When the user presses D we
@@ -5119,14 +5136,18 @@ fn window_station_self_test() {
 /// process creates a window station, then its `Default` desktop (again:
 /// opened, the same object; without OBJ_OPENIF: ERROR_ALREADY_EXISTS) and a
 /// `Second` one, opened by its full name; the namespace finds a desktop
-/// through its station (its parse procedure). The thread goes on `Default`:
+/// through its station (its parse procedure). Each has its window: user32
+/// finds it through `spwnd` (its WND, its class `#32769`, its handle's
+/// entry in the shared section). The thread goes on `Default`:
 /// its CLIENTINFO gives the DESKTOPINFO (the heap's server addresses, the
 /// name, empty hook lists) and the CLIENTTHREADINFO in the process's read
 /// only view of the heap. On `Second`, the old view is gone. The thread's
 /// desktop does not close (ERROR_BUSY), other handles do (no startup
 /// desktop: until csrss starts, a GUI thread is a csrss thread); SwitchDesktop is refused off the interactive station, and
 /// NtUserSetThreadDesktop refuses no desktop (csrss only) and a station's
-/// handle.
+/// handle. NtUserLoadKeyboardLayoutEx refuses an unknown flag and loads
+/// nothing off the interactive station; NtUserGetKeyboardLayoutList counts
+/// the loaded layouts.
 fn desktop_self_test() {
     use abi::ntstatus::{NtStatus, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_INVALID, STATUS_WAIT_0};
     use abi::services;
@@ -5159,6 +5180,11 @@ fn desktop_self_test() {
     const DEFAULT_NAME_AT: u32 = DATA + 0x180;
     const SECOND_NAME_AT: u32 = DATA + 0x190;
     const FULL_NAME_AT: u32 = DATA + 0x1A0;
+    const KLID_US: u32 = DATA + 0x200; // "00000409"
+    const KLID_AT: u32 = DATA + 0x208;
+    const LIST: u32 = DATA + 0x220; // 4 HKLs
+    const OWN_TID: u32 = DATA + 0x240;
+    const MSG_BUFFER: u32 = DATA + 0x260; // a MSG
     const CTI_FIRST: u32 = DATA + 0x2F0; // pClientThreadInfo after the first NtUserSetThreadDesktop
     const CTI_AGAIN: u32 = DATA + 0x2F4; // and after the same desktop again
     const DONE: u32 = DATA + 0x2FC;
@@ -5184,6 +5210,10 @@ fn desktop_self_test() {
     name(DEFAULT_OA, DEFAULT_US, DEFAULT_NAME_AT, "Default", 0, OPENIF);
     name(SECOND_OA, SECOND_US, SECOND_NAME_AT, "Second", 0, OPENIF);
     name(FULL_OA, FULL_US, FULL_NAME_AT, FULL_NAME, 0, 0x40);
+    let klid: alloc::vec::Vec<u8> = "00000409".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(KLID_AT, &klid);
+    put(KLID_US, &[16, 0, 18, 0]);
+    put(KLID_US + 4, &KLID_AT.to_le_bytes());
 
     let (v, m) = (Arg::Value, Arg::Memory);
     let result = |i: u32| RESULT + 4 * i;
@@ -5213,6 +5243,10 @@ fn desktop_self_test() {
     call(&mut code, services::NtUserOpenDesktop, &[v(FULL_OA), v(0), v(any)]); // 5
     let (set, close, switch) =
         (services::NtUserSetThreadDesktop, services::NtUserCloseDesktop, services::NtUserSwitchDesktop);
+    // A message in the queue before the thread has a desktop: its bits go to
+    // each CLIENTTHREADINFO the thread gets.
+    code.bytes(&[0x64, 0xA1, 0x24, 0, 0, 0]).store_eax(OWN_TID); // mov eax, fs:[0x24]: ClientId.UniqueThread
+    code.call_args(services::NtUserPostThreadMessage, &[m(OWN_TID), v(0x401), v(0), v(0)]);
     call(&mut code, set, &[m(result(1))]); // 6
     code.bytes(&[0x64, 0xA1, 0x08, 0x07, 0, 0]).store_eax(CTI_FIRST); // mov eax, fs:[0x6CC + 0x3C]
     call(&mut code, set, &[m(result(1))]); // 7: the same desktop again
@@ -5227,7 +5261,20 @@ fn desktop_self_test() {
     call(&mut code, switch, &[m(result(5))]); // 12
     call(&mut code, set, &[v(0)]); // 13
     call(&mut code, set, &[m(result(0))]); // 14
-    code.word(&[0xC7, 0x05], DONE).bytes(&3u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+                                           // Keyboard layouts: an unknown flag; no window station, so no input.
+    let (load, list) = (services::NtUserLoadKeyboardLayoutEx, services::NtUserGetKeyboardLayoutList);
+    let us = 0x0409_0409;
+    call(&mut code, load, &[v(0), v(0), v(0), v(0), v(KLID_US), v(us), v(0x8000_0000)]); // 15
+    call(&mut code, load, &[v(0), v(0), v(0), v(0), v(KLID_US), v(us), v(abi::user::KLF_ACTIVATE)]); // 16
+    call(&mut code, list, &[v(0), v(0)]); // 17
+    call(&mut code, list, &[v(4), v(LIST)]); // 18
+                                             // The message out: the CLIENTTHREADINFO of `Second` is cleared (DONE =
+                                             // 3); once the kernel has seen it (4), another one in (5).
+    code.call_args(services::NtUserPeekMessage, &[v(MSG_BUFFER), v(0), v(0), v(0), v(1)]);
+    code.word(&[0xC7, 0x05], DONE).bytes(&3u32.to_le_bytes());
+    code.word(&[0x83, 0x3D], DONE).bytes(&[0x03, 0x74, 0xF7]); // cmp dword [DONE], 3; je back
+    code.call_args(services::NtUserPostThreadMessage, &[m(OWN_TID), v(0x402), v(0), v(0)]);
+    code.word(&[0xC7, 0x05], DONE).bytes(&5u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x800];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
     text[..code.0.len()].copy_from_slice(&code.0);
@@ -5294,9 +5341,42 @@ fn desktop_self_test() {
     let cti = field(offset_of!(ClientInfo32, client_thread_info));
     assert!(cti >= view && cti < view + heap.size && cti != desk_info, "pClientThreadInfo, in the view");
     assert_eq!((read(CTI_FIRST), read(CTI_AGAIN)), (cti, cti), "the same desktop again changes nothing");
+    let posted = 0x0108; // QS_POSTMESSAGE | QS_ALLPOSTMESSAGE
+    assert_eq!(read(cti + 4), posted | posted << 16, "fsChangeBits, fsWakeBits: the message in the queue");
     let info_bytes = read_bytes(desk_info, size_of::<DeskInfoHead32>() + 16).expect("the DESKTOPINFO");
     let word = |at: usize| u32::from_le_bytes(info_bytes[at..at + 4].try_into().unwrap());
-    assert_eq!((word(0), word(4), word(8)), (heap.server_base, heap.server_base + heap.size, 0), "base, limit, spwnd");
+    assert_eq!((word(0), word(4)), (heap.server_base, heap.server_base + heap.size), "pvDesktopBase, pvDesktopLimit");
+    // The desktop window, as user32 sees it: spwnd, its WND in the view,
+    // its class, its handle's entry in the USER shared section.
+    let spwnd = word(8);
+    assert_eq!(spwnd, heap.server_address(default.window.wnd), "spwnd: the desktop window, a server address");
+    let delta = field(offset_of!(ClientInfo32, client_delta));
+    let wnd = read_bytes(spwnd.wrapping_sub(delta), size_of::<abi::user::Wnd32>()).expect("the WND, in the view");
+    let wnd_word = |at: usize| u32::from_le_bytes(wnd[at..at + 4].try_into().unwrap());
+    let handle = wnd_word(0);
+    assert_eq!((handle, wnd_word(0x10)), (default.window.handle, spwnd), "head.h, head.pSelf");
+    let not_shown = abi::user::WS_POPUP | abi::user::WS_CLIPCHILDREN;
+    assert_eq!((wnd_word(0x20), wnd_word(0x28)), (not_shown, abi::user::FNID_DESKTOP), "style (hidden), fnid");
+    assert_ne!(wnd_word(0x14) & abi::user::WNDS_SERVERSIDEWINDOWPROC, 0, "a window procedure in win32k");
+    let class = read_bytes(wnd_word(0x64).wrapping_sub(delta), 8).expect("the CLS, in the view");
+    assert_eq!(u16::from_le_bytes([class[4], class[5]]), abi::user::WC_DESKTOP, "the class #32769");
+    let index = win32k::handles::index(handle).expect("a USER handle");
+    let entry_at = gui.shared_view + win32k::shared::HANDLE_ENTRIES + 12 * index;
+    let entry = read_bytes(entry_at, 12).expect("the handle's entry, in the shared view");
+    assert_eq!(u32::from_le_bytes(entry[0..4].try_into().unwrap()), spwnd, "the entry points to the WND");
+    assert_eq!((entry[8], u16::from_le_bytes([entry[10], entry[11]])), (abi::user::TYPE_WINDOW, (handle >> 16) as u16));
+    // Shown, then hidden (no size: nothing to paint).
+    let style = |desktop: &Desktop| {
+        let at = (heap.server_address(desktop.window.wnd).wrapping_sub(delta)) + 0x20;
+        read(at)
+    };
+    win32k::window::show_desktop_window(&default, 0, 0);
+    assert_eq!(style(&default), not_shown | abi::user::WS_VISIBLE, "shown");
+    win32k::window::hide_desktop_window(&default);
+    assert_eq!(style(&default), not_shown, "hidden");
+    let head = gui.shared_view + win32k::shared::HANDLE_TABLE;
+    assert!(read(head + 8) > index, "nb_handles covers the entry (user32 checks it)");
+    let window_entry = win32k::shared::HANDLE_ENTRIES + 12 * index;
     let first_hook = heap.server_base + default.desk_info + 0x10;
     assert_eq!((word(0x10), word(0x14)), (first_hook, first_hook), "an empty hook list");
     let units: alloc::vec::Vec<u16> =
@@ -5308,12 +5388,22 @@ fn desktop_self_test() {
     wait_for(3);
     assert_eq!(r(8), 1, "NtUserSetThreadDesktop(Second)");
     assert!(gui.desktop_view(&default).is_none() && gui.desktop_view(&second).is_some(), "one view, of Second");
+    let second_cti = field(offset_of!(ClientInfo32, client_thread_info));
+    assert_eq!(read(second_cti + 4), 0, "the message out: no bits left in the new CLIENTTHREADINFO");
+    process.write_memory(u64::from(DONE), &4u32.to_le_bytes()).expect("let the program post again");
+    wait_for(5);
+    assert_eq!(read(second_cti + 4), posted | posted << 16, "posted on a desktop: the bits in its CLIENTTHREADINFO");
     assert_eq!((r(9), e(9)), (0, ERROR_BUSY), "the thread's desktop");
     assert!(gui.startup_desktop().is_none(), "a csrss thread, csrss not started: no startup desktop");
     assert_eq!((r(10), r(11)), (1, 1), "other handles close");
     assert_eq!((r(12), e(12)), (0, ERROR_ACCESS_DENIED), "SwitchDesktop off the interactive station");
     assert_eq!((r(13), e(13)), (0, ERROR_ACCESS_DENIED), "no desktop: csrss only");
     assert_eq!((r(14), e(14)), (0, ERROR_INVALID_HANDLE), "a station is no desktop");
+    assert_eq!((r(15), e(15)), (0, abi::winerror::ERROR_INVALID_FLAGS), "NtUserLoadKeyboardLayoutEx: a bad flag");
+    assert_eq!((r(16), e(16)), (0, 0), "no layout off the interactive station, and nothing read");
+    let loaded = win32k::keyboard::layouts();
+    assert!(!loaded.contains(&0x0409_0409), "nothing loaded");
+    assert_eq!((r(17), r(18)), (loaded.len() as u32, loaded.len().min(4) as u32), "NtUserGetKeyboardLayoutList");
     drop((default, second, found, gui));
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
@@ -5330,10 +5420,177 @@ fn desktop_self_test() {
     drop((thread, process));
     ps::wait_for_reaper();
     assert!(ns.open(STATION_NAME, None, None, 0).is_err(), "the station gone with its handles");
+    let mut entry = [0u8; 12];
+    let section = win32k::shared::section().expect("the USER shared section");
+    section.read_kernel(u64::from(window_entry), &mut entry).expect("read the shared section");
+    assert_eq!(entry[8], 0, "the desktop window's handle freed with its desktop");
     log::info!(
         "[smoke] win32k: desktops from user mode: created on their station (again: opened), found through it, \
          NtUserSetThreadDesktop (DESKTOPINFO and CLIENTTHREADINFO in a read-only view of the heap), the thread's \
-         desktop kept from NtUserCloseDesktop, SwitchDesktop off the interactive station refused"
+         desktop kept from NtUserCloseDesktop, SwitchDesktop off the interactive station refused; no keyboard \
+         layout off it"
+    );
+}
+
+/// Message queues from user mode (`win32k::queue`, `sys::message`, M5): a
+/// GUI thread finds its queue empty, posts to itself (by its TID and
+/// without a window), sees the queue's status (changed, then not), is
+/// refused a message with a pointer (ERROR_MESSAGE_SYNC_ONLY), a TID of no
+/// thread and a window (not yet); it peeks at the second message (left),
+/// gets both in order, then WM_QUIT (FALSE) after PostQuitMessage, once;
+/// PeekMessage refuses a bad flag, GetMessage a range past WM_MAXIMUM.
+/// Then it waits in GetMessage until a second thread posts to it.
+fn message_queue_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_WAIT_0};
+    use abi::services;
+    use abi::user::{ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE};
+    use abi::winerror::{
+        ERROR_INVALID_FLAGS, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_MESSAGE_SYNC_ONLY,
+    };
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const POSTER: u32 = IMAGE_BASE + 0x1800;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const RESULT: u32 = DATA; // 24 results
+    const ERROR: u32 = DATA + 0x60; // 24 last errors
+    const MSGS: u32 = DATA + 0xC0; // 7 MSG of 28 bytes, 0x20 apart
+    const DELAY: u32 = DATA + 0x1E0; // -100 ms
+    const MAIN_TID: u32 = DATA + 0x1F0;
+    const OWN_TID: u32 = DATA + 0x1F4;
+    const DONE: u32 = DATA + 0x1FC;
+    const WM_USER: u32 = 0x400;
+
+    let mut data = alloc::vec![0u8; 0x200];
+    data[(DELAY - DATA) as usize..][..8].copy_from_slice(&(-100 * MS).to_le_bytes());
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let result = |i: u32| RESULT + 4 * i;
+    let error = |i: u32| ERROR + 4 * i;
+    let msg = |i: u32| MSGS + 0x20 * i;
+    let set_last_error = [0x64, 0xC7, 0x05, 0x34, 0, 0, 0, 0, 0, 0, 0];
+    let read_last_error = [0x64, 0xA1, 0x34, 0, 0, 0];
+    let mut code = Code::new();
+    let mut step = 0;
+    let mut call = |code: &mut Code, number: u32, arguments: &[Arg]| {
+        code.bytes(&set_last_error);
+        code.call_args(number, arguments).store_eax(result(step));
+        code.bytes(&read_last_error).store_eax(error(step));
+        step += 1;
+    };
+    let (peek, get, post, post_thread, one) = (
+        services::NtUserPeekMessage,
+        services::NtUserGetMessage,
+        services::NtUserPostMessage,
+        services::NtUserPostThreadMessage,
+        services::NtUserCallOneParam,
+    );
+    let (status, quit) = (ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE);
+    code.bytes(&[0x64, 0xA1, 0x24, 0, 0, 0]).store_eax(OWN_TID); // mov eax, fs:[0x24]: ClientId.UniqueThread
+    call(&mut code, peek, &[v(msg(0)), v(0), v(0), v(0), v(1)]); // 0
+    call(&mut code, one, &[v(0x04FF), v(status)]); // 1
+    call(&mut code, post_thread, &[m(OWN_TID), v(WM_USER + 1), v(11), v(22)]); // 2
+    call(&mut code, one, &[v(0x04FF), v(status)]); // 3
+    call(&mut code, one, &[v(0x04FF), v(status)]); // 4
+    call(&mut code, post, &[v(0), v(WM_USER + 2), v(33), v(44)]); // 5
+    call(&mut code, post_thread, &[m(OWN_TID), v(0x0001), v(0), v(0)]); // 6: WM_CREATE
+    call(&mut code, post_thread, &[v(0x7FF0), v(WM_USER + 1), v(0), v(0)]); // 7
+    call(&mut code, post, &[v(0x0002_0020), v(WM_USER + 1), v(0), v(0)]); // 8
+    call(&mut code, peek, &[v(msg(0)), v(0), v(WM_USER + 2), v(WM_USER + 2), v(0)]); // 9
+    call(&mut code, get, &[v(msg(1)), v(0), v(0), v(0)]); // 10
+    call(&mut code, get, &[v(msg(2)), v(0), v(0), v(0)]); // 11
+    call(&mut code, one, &[v(7), v(quit)]); // 12
+    call(&mut code, get, &[v(msg(3)), v(0), v(0), v(0)]); // 13
+    call(&mut code, peek, &[v(msg(4)), v(0), v(0), v(0), v(1)]); // 14
+    call(&mut code, peek, &[v(msg(4)), v(0), v(0), v(0), v(4)]); // 15
+    call(&mut code, get, &[v(msg(4)), v(0), v(0), v(0x2_0000)]); // 16
+    call(&mut code, get, &[v(msg(5)), v(0), v(0), v(0)]); // 17: waits for the poster
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    // The poster: waits 100 ms, then posts to the main thread.
+    let mut poster = Code::new();
+    poster.call_args(services::NtDelayExecution, &[v(0), v(DELAY)]);
+    poster.call_args(post_thread, &[m(MAIN_TID), v(WM_USER + 3), v(55), v(66)]);
+    poster.bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x1000];
+    assert!(code.0.len() <= 0x800, "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    text[0x800..0x800 + poster.0.len()].copy_from_slice(&poster.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x1000, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "queue.exe", false).expect("a process");
+    let new_stack = || ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let main = ps::create_thread(&process, IMAGE_BASE + 0x1000, &new_stack()).expect("a thread");
+    process.write_memory(u64::from(MAIN_TID), &main.tid().to_le_bytes()).expect("the main thread's TID");
+    ps::create_thread(&process, POSTER, &new_stack()).expect("the poster");
+    let read_bytes = |addr: u32, length: usize| {
+        let mut bytes = alloc::vec![0u8; length];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        bytes
+    };
+    let read = |addr: u32| u32::from_le_bytes(read_bytes(addr, 4).try_into().unwrap());
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the message queue test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let (r, e) = (|i: u32| read(result(i)), |i: u32| read(error(i)));
+    // MSG: hwnd, message, wParam, lParam, time.
+    let message = |i: u32| {
+        let bytes = read_bytes(msg(i), 20);
+        let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        (word(0), word(4), word(8), word(12), word(16))
+    };
+
+    assert_eq!((r(0), r(1)), (0, 0), "an empty queue");
+    assert_eq!(r(2), 1, "posted to itself, by its TID");
+    assert_eq!((r(3), r(4)), (0x0008_0008, 0x0008_0000), "GetQueueStatus: changed and present, then present");
+    assert_eq!(r(5), 1, "posted without a window: to itself");
+    assert_eq!((r(6), e(6)), (0, ERROR_MESSAGE_SYNC_ONLY), "a message with a pointer");
+    assert_eq!((r(7), e(7)), (0, ERROR_INVALID_PARAMETER), "a TID of no thread");
+    assert_eq!((r(8), e(8)), (0, ERROR_INVALID_WINDOW_HANDLE), "to a window: not yet");
+    let (_, second, w, l, _) = message(0);
+    assert_eq!((r(9), second, w, l), (1, WM_USER + 2, 33, 44), "peeked at by its range, left");
+    let (hwnd, first, w, l, time) = message(1);
+    assert_eq!((r(10), hwnd, first, w, l), (1, 0, WM_USER + 1, 11, 22), "got first");
+    assert!(time != 0, "dated");
+    assert_eq!((r(11), message(2).1), (1, WM_USER + 2), "then the second");
+    let (_, quit_message, code_of_quit, _, _) = message(3);
+    assert_eq!((r(12), r(13), quit_message, code_of_quit), (1, 0, 0x12, 7), "WM_QUIT: FALSE, its code");
+    assert_eq!(r(14), 0, "WM_QUIT once");
+    assert_eq!((r(15), e(15)), (0, ERROR_INVALID_FLAGS), "PeekMessage: a bad flag");
+    assert_eq!((r(16), e(16)), (0, ERROR_INVALID_PARAMETER), "GetMessage: past WM_MAXIMUM");
+    let (_, waited_for, w, l, _) = message(5);
+    assert_eq!((r(17), waited_for, w, l), (1, WM_USER + 3, 55, 66), "waited for the other thread's message");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((main, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] win32k: message queues from user mode: PostThreadMessage, PostMessage without a window, \
+         GetQueueStatus, PeekMessage with a range, GetMessage in order, WM_QUIT once, refusals, a wait woken by \
+         another thread"
     );
 }
 

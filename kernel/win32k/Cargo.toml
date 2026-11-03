@@ -13,5 +13,9 @@ hal      = { path = "../hal" }
 ke       = { path = "../ke" }
 mm       = { path = "../mm" }
 ob       = { path = "../ob" }
+pe       = { path = "../../libs/pe" }
 ps       = { path = "../ps" }
 log      = { workspace = true }
+
+[dev-dependencies]
+pe       = { path = "../../libs/pe", features = ["builder"] }

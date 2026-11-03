@@ -280,8 +280,16 @@ fn boot_once(
     let mut serial = OsString::from("file:");
     serial.push(serial_log);
 
-    let mut child = machine
-        .command(opts)?
+    let monitor = run_dir.join("monitor.sock");
+    let mut command = machine.command(opts)?;
+    if !scenario.screen.is_empty() {
+        let _ = fs::remove_file(&monitor);
+        let mut socket = OsString::from("unix:");
+        socket.push(&monitor);
+        socket.push(",server=on,wait=off");
+        command.arg("-monitor").arg(socket);
+    }
+    let mut child = command
         .arg("-serial")
         .arg(serial)
         .args(["-display", "none"])
@@ -310,6 +318,14 @@ fn boot_once(
             continue;
         }
         match scenario.check(&log) {
+            // The screen, once the markers are found (the last boot).
+            Verdict::Pass if !scenario.screen.is_empty() => {
+                let dump = run_dir.join("screen.ppm");
+                match crate::screen::capture(&monitor, &dump).and_then(|image| image.check(&scenario.screen)) {
+                    Ok(()) => break (true, String::new()),
+                    Err(why) => break (false, why),
+                }
+            }
             Verdict::Pass => break (true, String::new()),
             Verdict::Fail(why) => break (false, why),
             Verdict::Pending(missing) => {

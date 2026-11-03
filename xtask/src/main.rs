@@ -25,6 +25,7 @@ mod iso9660;
 mod native;
 mod qemu;
 mod scenario;
+mod screen;
 mod sha256;
 mod userland;
 mod zip;

@@ -53,8 +53,9 @@ forbid = Source File: ../base/system/smss/smss.c
 # API port), then creates its window station (WinSta0, the interactive
 # one) and takes it, creates its desktops (Default, Winlogon,
 # Screen-Saver), goes on Winlogon and switches to it, gives the station its
-# user (csrss logs it off), then loads its keyboard layouts: not yet
-# (NtUserLoadKeyboardLayoutEx, M6, returns NULL). It ends; smss ends with
+# user (csrss logs it off), loads its keyboard layout (00000409: kbdus.dll,
+# its tables read, not run), then starts its RPC server: not yet (a named
+# pipe, \pipe\winreg: NtCreateNamedPipeFile, Io). It ends; smss ends with
 # it. The probe ends csrss after 2 s.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
@@ -106,8 +107,8 @@ expect = [m4]   NtCompleteConnectPort (0x001f): 4 calls, the first returned 0x00
 expect = [m4]   NtSetDefaultHardErrorPort (0x00df): 1 calls, the first returned 0x00000000
 # winlogon (M5, step 9): on the disk, its process handle duplicated, then
 # handed to csrss, which makes it a CSR process; it connects to csrss,
-# registers as the logon process, creates WinSta0 and its desktops, and
-# stops at its keyboard layouts (M6).
+# registers as the logon process, creates WinSta0 and its desktops, loads
+# its keyboard layout and stops at its RPC server (a named pipe).
 expect = [m4] SMSS.EXE created winlogon.exe (PID
 expect = [m4]   NtDuplicateObject (0x0047):
 expect = [m4]   NtQueryInformationThread (0x00a2): 2 calls, the first returned 0x00000000
@@ -119,9 +120,23 @@ expect = [m4]   NtUserSetProcessWindowStation (0x120f): 1 calls, the first retur
 expect = [m4]   NtUserCreateDesktop (0x1153): 3 calls
 expect = [m4]   NtUserSetThreadDesktop (0x1217): 1 calls, the first returned 0x00000001
 expect = [m4]   NtUserSwitchDesktop (0x122a): 1 calls, the first returned 0x00000001
+# The input desktop's window, shown and painted (WM_PAINT, then
+# WM_ERASEBKGND: the background) by win32k (GDI) on the GOP framebuffer
+# (gopfb): the screen dump shows it.
+expect = win32k: display 1280x800 (Bgrx)
+expect = win32k: the desktop window of Winlogon erased (WM_ERASEBKGND), 1280x800
+expect = kernel_main: win32k owns the display: no launcher
+screen = 640 400 3A6EA5
+screen = 0 0 3A6EA5
+screen = 1279 799 3A6EA5
 expect = [m4]   NtUserSetWindowStationUser (0x1222): 1 calls, the first returned 0x00000001
-expect = sys: NtUserLoadKeyboardLayoutEx (0x11c5) is not implemented
-expect = WL: Could not preload keyboard layouts
+expect = [m4]   NtUserLoadKeyboardLayoutEx (0x11c5): 1 calls, the first returned 0x04090409
+expect = [m4] USER: keyboard layouts loaded: [04090409 (00000409, tables at 0x1000)]
+expect = [m4]   NtUserGetKeyboardLayoutList (0x119b): 2 calls, the first returned 0x00000001
+expect = sys: NtCreateNamedPipeFile (0x002e) is not implemented
+expect = WL: Could not start the RPC server
+forbid = WL: Could not preload keyboard layouts
+forbid = LoadKeyboardLayoutW(
 forbid = WL: Failed to create Default desktop
 forbid = WL: Failed to create Winlogon desktop
 forbid = WL: Failed to create Screen-Saver desktop

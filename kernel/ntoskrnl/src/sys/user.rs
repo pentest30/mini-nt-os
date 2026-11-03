@@ -1,7 +1,8 @@
 //! Les services de win32k (la seconde table) : NtUserProcessConnect,
 //! NtUserInitializeClientPfnArrays, NtUserInitialize, NtGdiInit,
 //! NtUserCallTwoParam (RegisterLogonProcess), NtUserSetInformationThread
-//! (le port d'API de `csrss`).
+//! (le port d'API de `csrss`), NtUserLoadKeyboardLayoutEx,
+//! NtUserGetKeyboardLayoutList.
 //!
 //! Le thread qui les appelle est déjà un thread GUI (`super::dispatch`).
 
@@ -99,6 +100,90 @@ pub(super) fn nt_user_set_information_thread(arguments: &[u32]) -> NtStatus {
         Ok(())
     };
     set().map_or_else(|status| status, |()| STATUS_SUCCESS)
+}
+
+/// Les drapeaux qu'accepte NtUserLoadKeyboardLayoutEx.
+const KLF_VALID: u32 = abi::user::KLF_ACTIVATE
+    | abi::user::KLF_NOTELLSHELL
+    | abi::user::KLF_REORDER
+    | abi::user::KLF_REPLACELANG
+    | abi::user::KLF_SUBSTITUTE_OK
+    | abi::user::KLF_SETFORPROCESS
+    | abi::user::KLF_UNLOADPREVIOUS
+    | abi::user::KLF_RESET
+    | abi::user::KLF_SHIFTLOCK;
+
+/// La clé du registre des dispositions de clavier.
+const KEYBOARD_LAYOUTS: &str = "\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Keyboard Layouts";
+
+/// Le fichier de la disposition `klid` (UserLoadKbdFile) : sa valeur
+/// `Layout File` sous `Keyboard Layouts\<KLID>`, un nom de fichier de
+/// `\SystemRoot\System32` (`STATUS_OBJECT_NAME_INVALID` s'il désigne
+/// autre chose), lu en entier.
+fn read_layout_file(klid: &str) -> Result<alloc::vec::Vec<u8>, NtStatus> {
+    use abi::object::OBJ_CASE_INSENSITIVE;
+    let path = alloc::format!("{KEYBOARD_LAYOUTS}\\{klid}");
+    let key = ob::namespace().open(&path, None, Some(&cm::KEY_TYPE), OBJ_CASE_INSENSITIVE)?;
+    let key = ob::downcast::<cm::Key>(&key).ok_or(abi::ntstatus::STATUS_OBJECT_TYPE_MISMATCH)?;
+    let name: alloc::vec::Vec<u16> = "Layout File".encode_utf16().collect();
+    let value = key.value(&name)?.ok_or(abi::ntstatus::STATUS_OBJECT_NAME_NOT_FOUND)?;
+    let file = win32k::keyboard::layout_file_name(value.data_type, &value.data)?;
+    let path = alloc::format!("\\SystemRoot\\System32\\{file}");
+    let object = ob::namespace().open(&path, None, Some(&io_manager::FILE_TYPE), OBJ_CASE_INSENSITIVE)?;
+    ob::downcast::<io_manager::File>(&object).ok_or(abi::ntstatus::STATUS_OBJECT_TYPE_MISMATCH)?.read_all()
+}
+
+/// NtUserLoadKeyboardLayoutEx(hFile, offTable, pTables, hOldKL, puszKLID,
+/// dwNewKL, Flags) : la disposition `dwNewKL` du KLID (8 caractères au
+/// plus), chargée si besoin depuis son fichier (`read_layout_file`), puis
+/// activée selon les drapeaux (`win32k::keyboard::load`) ; rend son HKL.
+/// NULL pour un HKL nul, sans station ou hors de la station interactive ;
+/// `ERROR_INVALID_FLAGS` pour un drapeau inconnu. Le fichier donné
+/// (`hFile`, que ReactOS vérifie puis ignore) et la disposition à décharger
+/// (`hOldKL`) sont ignorés.
+pub(super) fn nt_user_load_keyboard_layout_ex(arguments: &[u32]) -> NtStatus {
+    let (klid, hkl, flags) = (arguments[4], arguments[5], arguments[6]);
+    if flags & !KLF_VALID != 0 {
+        let _ = win32k::set_last_error(abi::winerror::ERROR_INVALID_FLAGS);
+        return NtStatus(0);
+    }
+    let load = || {
+        let units = super::object::capture_unicode_string(klid)?;
+        let units = &units[..units.len().min(abi::user::KL_NAMELENGTH - 1)];
+        let klid = alloc::string::String::from_utf16(units).map_err(|_| abi::ntstatus::STATUS_OBJECT_NAME_INVALID)?;
+        let process = super::current_process();
+        let info = win32k::process_info(&process)?;
+        let no_io = info.window_station().is_none_or(|station| station.station.no_io());
+        let code_page = ps::nls::current().map_or(0, |tables| tables.ansi_code_page);
+        let loaded = win32k::keyboard::load(no_io, &klid, hkl, flags, code_page, read_layout_file)?;
+        Ok(loaded.unwrap_or(0))
+    };
+    load().map_or_else(
+        |status| {
+            let _ = win32k::set_last_error(abi::winerror::dos_error(status));
+            NtStatus(0)
+        },
+        NtStatus,
+    )
+}
+
+/// NtUserGetKeyboardLayoutList(nBuff, pHklBuff) : le nombre des
+/// dispositions chargées pour un tampon vide (ou nul) ; sinon leurs HKL,
+/// `nBuff` au plus, et leur nombre. 0 et l'erreur Win32 si l'écriture faute.
+pub(super) fn nt_user_get_keyboard_layout_list(arguments: &[u32]) -> NtStatus {
+    let (count, buffer) = (arguments[0], arguments[1]);
+    let layouts = win32k::keyboard::layouts();
+    if count == 0 || buffer == 0 {
+        return NtStatus(layouts.len() as u32);
+    }
+    let copied: alloc::vec::Vec<u8> = layouts.iter().take(count as usize).flat_map(|hkl| hkl.to_le_bytes()).collect();
+    match ke::usermem::copy_to_user(u64::from(buffer), &copied) {
+        Ok(()) => NtStatus((copied.len() / 4) as u32),
+        Err(status) => {
+            let _ = win32k::set_last_error(abi::winerror::dos_error(status));
+            NtStatus(0)
+        }
+    }
 }
 
 /// NtGdiInit() : TRUE, GDI n'a rien à préparer pour le client (ReactOS non

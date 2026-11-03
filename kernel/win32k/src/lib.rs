@@ -17,7 +17,8 @@
 //! - [`logon`] : le processus de logon (RegisterLogonProcess) ;
 //! - [`winsta`] : les stations de fenêtres ;
 //! - [`desktop`] : les bureaux et leurs tas ; le bureau d'un thread GUI
-//!   ([`gui`]).
+//!   ([`gui`]) ;
+//! - [`keyboard`] : les dispositions de clavier.
 //!
 //! Le reste (stations et bureaux, fenêtres, messages, GDI) viendra avec le
 //! spike S3 et le M6 (05).
@@ -29,9 +30,15 @@ extern crate alloc;
 pub mod client;
 pub mod csrss;
 pub mod desktop;
+pub mod display;
+pub mod gdi;
 pub mod gui;
+pub mod handles;
+pub mod keyboard;
 pub mod logon;
+pub mod queue;
 pub mod shared;
+pub mod window;
 pub mod winsta;
 
 use alloc::sync::Arc;

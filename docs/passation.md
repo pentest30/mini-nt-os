@@ -15,9 +15,9 @@ jour à chaque commit qui change l'état.
   est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
   sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
-  crée la station interactive `WinSta0` et ses bureaux, s'y place, puis s'arrête à ses dispositions de clavier
-  (NtUserLoadKeyboardLayoutEx : USER du M6, option 1 choisie avec le mainteneur) :
-  [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 18.
+  crée la station interactive `WinSta0` et ses bureaux, s'y place (la fenêtre du bureau d'entrée est montrée et peinte
+  par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier, puis s'arrête à son serveur RPC
+  (un tube nommé : NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 21.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -306,11 +306,32 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] les bureaux (`win32k::desktop`, `win32k::gui`, `sys::desktop`) : NtUserCreateDesktop (un tas par bureau,
      son `DESKTOPINFO`, adresses du serveur sur 32 bits), NtUserOpenDesktop, NtUserCloseDesktop,
      NtUserSetThreadDesktop (vue du tas, `CLIENTTHREADINFO`, `CLIENTINFO`), NtUserSwitchDesktop ;
-   - **la suite (option 1, choisie avec le mainteneur : USER dans le win32k minimal, début du M6 et du spike S3)** :
+   - [x] les dispositions de clavier (`win32k::keyboard`) : NtUserLoadKeyboardLayoutEx (le fichier lu par le noyau
+     d'après le registre, les tables trouvées sans exécuter `KbdLayerDescriptor`), NtUserGetKeyboardLayoutList ;
+   - [x] premier affichage (choisi avec le mainteneur avant les tubes nommés) : le pilote d'affichage
+     (`win32k::display`, trait `DisplayDriver` ; `drivers/video/gopfb` sur le framebuffer UEFI), le moteur DIB
+     (`win32k::gdi::dib` : surface de 32 bits, couleurs, `fill_rect`), `COLOR_BACKGROUND` ; NtUserSwitchDesktop peint
+     le fond du bureau d'entrée ; l'ancien lanceur ne dessine plus sur un écran que win32k a pris ; `xtask` vérifie des
+     pixels d'une capture de l'écran (`screen = X Y RRGGBB`) ;
+   - [x] la fenêtre du bureau (`win32k::window`, `win32k::handles`) : la table des handles USER dans la section
+     partagée, `WND` et `CLS` dans le tas du bureau, `spwnd` ; DesktopWindowProc côté serveur (WM_PAINT, BeginPaint,
+     WM_ERASEBKGND, EndPaint) ; NtUserSwitchDesktop montre la fenêtre et la met à jour ;
+   - [x] les files de messages (`win32k::queue`, `sys::message`) : NtUserPostThreadMessage, NtUserPostMessage (sans
+     fenêtre), NtUserPeekMessage, NtUserGetMessage (attente), NtUserWaitMessage, NtUserCallOneParam
+     (PostQuitMessage, GetQueueStatus), bits de réveil dans le `CLIENTTHREADINFO` ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : **KeUserModeCallback d'abord** (le noyau
+     appelle `user32` par `KiUserCallbackDispatcher`, retour par NtCallbackReturn : sans lui, NtUserCreateWindowEx ne
+     peut envoyer WM_NCCREATE ni WM_CREATE à une procédure du client), puis NtUserRegisterClassExWOW (table des
+     atomes) et NtUserCreateWindowEx, les messages envoyés et postés aux fenêtres, le thread du bureau, les régions, les rappels du mode
+     utilisateur (KeUserModeCallback, `int 2Bh`), les contextes de périphérique et les objets GDI (table des handles
+     partagée), BitBlt, le texte (ADR-013), le curseur et l'entrée (i8042, thread d'entrée) ;
+   - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
+     fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
+     FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
+   - **USER (option 1, choisie avec le mainteneur : le win32k minimal, début du M6 et du spike S3)** :
      le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
      lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande
-     (`winlogon.c`) : le clavier (NtUserLoadKeyboardLayoutEx : le fichier de disposition, `kbdus.dll`, chargé par
-     win32k ; NtUserGetKeyboardLayoutList ; NtUserSetImeHotKey) (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
+     (`winlogon.c`) : après le clavier (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
      `lsass.exe`, `msgina`. ReactOS crée aussi la fenêtre du bureau et la fenêtre des messages de chaque bureau
      (classes, fenêtres : plus tard) et, à la première station, le thread du bureau et le thread d'entrée (RIT).
 
@@ -344,6 +365,15 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   `csrss` gardé par win32k ne sert encore à rien (CsrClientCallServer du noyau : plus tard).
 - NtUserSetInformationThread ne se teste que depuis `csrss` : le refus d'une longueur autre que 4
   (`STATUS_INFO_LENGTH_MISMATCH`) n'a pas de test (une mutation qui le retire survit).
+- Clavier : l'activation d'une disposition (`hKL` et `CodePage` du `CLIENTINFO`) n'a pas de test (une mutation qui
+  la retire survit) : il faudrait une station interactive et une vraie disposition, que seul le scénario `smss` a, sans
+  rien qui lise ces champs avant le serveur RPC.
+- Files de messages : le masque de GetQueueStatus (`QS_ALLINPUT | QS_ALLPOSTMESSAGE | QS_SMRESULT`) ne filtre que des
+  bits que la file ne produit pas encore (une mutation qui le retire survit).
+- Fenêtres : NtUserSwitchDesktop cache la fenêtre du bureau d'entrée d'avant, ce que rien ne voit (`winlogon` ne
+  change de bureau qu'une fois, le scénario `smoke` n'a pas de station interactive) : montrer et cacher ont un test
+  direct ; WM_PAINT est envoyé directement (pas de file de messages), la région à mettre à jour est un rectangle,
+  WM_ERASEBKGND n'a pas de contexte de périphérique.
 - Bureaux : NtUserSwitchDesktop vérifie la session du bureau, que rien ne teste (une seule session) ; un bloc du tas
   rendu puis repris est remis à zéro, ce que rien n'observe encore (aucun bloc rendu ne tient autre chose que des
   zéros) ; le bureau de démarrage n'est donné que par un thread client, absent du scénario `smoke` (sans `csrss`,

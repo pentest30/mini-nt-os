@@ -1,0 +1,164 @@
+//! Les services des files de messages (`win32k::queue`) :
+//! NtUserPostThreadMessage, NtUserPostMessage, NtUserPeekMessage,
+//! NtUserGetMessage, NtUserWaitMessage, NtUserCallOneParam
+//! (PostQuitMessage, GetQueueStatus).
+//!
+//! Ils rendent une valeur (un BOOL, un état) : un échec rend 0, avec
+//! l'erreur Win32 comme dernière erreur.
+
+use abi::ntstatus::NtStatus;
+use abi::user::{
+    Msg32, ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE, PM_REMOVE, PM_VALID_FLAGS, QS_ALLINPUT,
+    QS_ALLPOSTMESSAGE, QS_SMRESULT, WM_MAXIMUM, WM_QUIT,
+};
+use abi::winerror::{
+    dos_error, ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_FLAGS, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
+    ERROR_MESSAGE_SYNC_ONLY,
+};
+use alloc::sync::Arc;
+use win32k::gui::ThreadInfo;
+use win32k::queue::{self, Filter};
+
+/// HWND_BROADCAST : un message pour toutes les fenêtres de premier niveau.
+const HWND_BROADCAST: u32 = 0xFFFF;
+
+/// Les routines de NtUserCallOneParam demandées sans être implémentées.
+static UNSUPPORTED_ONE_PARAM_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallOneParam");
+/// Un message posté à une fenêtre a déjà été demandé.
+static WINDOW_POST_REPORTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// 0 avec `error` comme dernière erreur.
+fn fail(error: u32) -> NtStatus {
+    let _ = win32k::set_last_error(error);
+    NtStatus(0)
+}
+
+/// Le `THREADINFO` du thread courant (déjà un thread GUI : `super::dispatch`).
+fn current() -> Arc<ThreadInfo> {
+    win32k::convert_current_thread().expect("a GUI thread at a win32k service")
+}
+
+/// Le message `message` (`wparam`, `lparam`) pour `hwnd`, daté de maintenant.
+fn message(hwnd: u32, message: u32, wparam: u32, lparam: u32) -> Msg32 {
+    let time = hal::timer::get_tick_count() as u32;
+    Msg32 { hwnd, message, w_param: wparam, l_param: lparam, time, ..Msg32::default() }
+}
+
+/// NtUserPostThreadMessage(idThread, Msg, wParam, lParam) : le message, posté
+/// à la file du thread `idThread` (un thread GUI) ; FALSE pour un message qui
+/// porte un pointeur (`ERROR_MESSAGE_SYNC_ONLY`), un thread inconnu
+/// (`ERROR_INVALID_PARAMETER`) ou qui n'est pas un thread GUI.
+pub(super) fn nt_user_post_thread_message(arguments: &[u32]) -> NtStatus {
+    let [tid, msg, wparam, lparam] = arguments[..4] else { unreachable!("4 arguments") };
+    let thread = match ps::ethread::lookup_thread(tid) {
+        Ok(thread) => thread,
+        Err(status) => return fail(dos_error(status)),
+    };
+    let Some(info) = thread.win32_thread() else { return NtStatus(0) };
+    if queue::is_pointer_message(msg, wparam) {
+        return fail(ERROR_MESSAGE_SYNC_ONLY);
+    }
+    queue::post(&win32k::gui::thread_info(info), message(0, msg, wparam, lparam));
+    NtStatus(1)
+}
+
+/// NtUserPostMessage(hWnd, Msg, wParam, lParam) : sans fenêtre, le message
+/// est posté au thread courant ; à toutes les fenêtres (`HWND_BROADCAST`),
+/// à aucune encore (aucune fenêtre n'a de thread, faute du thread du
+/// bureau) ; à une fenêtre : pas encore (`ERROR_INVALID_WINDOW_HANDLE`,
+/// journalisé une fois). FALSE pour un message qui porte un pointeur.
+pub(super) fn nt_user_post_message(arguments: &[u32]) -> NtStatus {
+    let [hwnd, msg, wparam, lparam] = arguments[..4] else { unreachable!("4 arguments") };
+    if queue::is_pointer_message(msg, wparam) {
+        return fail(ERROR_MESSAGE_SYNC_ONLY);
+    }
+    match hwnd {
+        0 => {
+            queue::post(&current(), message(0, msg, wparam, lparam));
+            NtStatus(1)
+        }
+        HWND_BROADCAST => NtStatus(1),
+        _ => {
+            if !WINDOW_POST_REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                log::warn!("sys: NtUserPostMessage to a window ({hwnd:#x}) is not implemented");
+            }
+            fail(ERROR_INVALID_WINDOW_HANDLE)
+        }
+    }
+}
+
+/// Écrit `message` en `address`.
+fn give(address: u32, message: &Msg32) -> Result<(), NtStatus> {
+    ke::usermem::copy_to_user(u64::from(address), message.as_bytes())
+}
+
+/// NtUserPeekMessage(pMsg, hWnd, MsgFilterMin, MsgFilterMax, RemoveMsg) :
+/// le premier message de la file du thread que demandent la fenêtre et
+/// l'intervalle, sorti avec `PM_REMOVE` ; FALSE sans message, ou pour un
+/// drapeau inconnu (`ERROR_INVALID_FLAGS`).
+pub(super) fn nt_user_peek_message(arguments: &[u32]) -> NtStatus {
+    let [msg, hwnd, min, max, remove] = arguments[..5] else { unreachable!("5 arguments") };
+    if remove & !PM_VALID_FLAGS != 0 {
+        return fail(ERROR_INVALID_FLAGS);
+    }
+    let filter = Filter { hwnd, min, max };
+    match queue::peek(&current(), &filter, remove & PM_REMOVE != 0) {
+        None => NtStatus(0),
+        Some(found) => match give(msg, &found) {
+            Ok(()) => NtStatus(1),
+            Err(status) => fail(dos_error(status)),
+        },
+    }
+}
+
+/// NtUserGetMessage(pMsg, hWnd, MsgFilterMin, MsgFilterMax) : le premier
+/// message demandé de la file du thread, sorti ; attend qu'il en arrive un.
+/// TRUE, ou FALSE pour WM_QUIT ; FALSE pour un intervalle au-delà de
+/// `WM_MAXIMUM` (`ERROR_INVALID_PARAMETER`).
+pub(super) fn nt_user_get_message(arguments: &[u32]) -> NtStatus {
+    let [msg, hwnd, min, max] = arguments[..4] else { unreachable!("4 arguments") };
+    if (min | max) & !WM_MAXIMUM != 0 {
+        return fail(ERROR_INVALID_PARAMETER);
+    }
+    let found = match queue::get(&current(), &Filter { hwnd, min, max }) {
+        Ok(found) => found,
+        Err(status) => return fail(dos_error(status)),
+    };
+    match give(msg, &found) {
+        Ok(()) => NtStatus(u32::from(found.message != WM_QUIT)),
+        Err(status) => fail(dos_error(status)),
+    }
+}
+
+/// NtUserWaitMessage() : attend qu'un message arrive dans la file du thread,
+/// s'il n'y en a pas ; TRUE.
+pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
+    match queue::wait_message(&current()) {
+        Ok(()) => NtStatus(1),
+        Err(status) => fail(dos_error(status)),
+    }
+}
+
+/// NtUserCallOneParam(Param, Routine) : la routine, qui rend une valeur.
+/// `ONEPARAM_ROUTINE_POSTQUITMESSAGE` : WM_QUIT de code `Param` pour le
+/// thread (TRUE) ; `ONEPARAM_ROUTINE_GETQUEUESTATUS` : l'état de sa file
+/// pour les bits `Param` (dans `QS_ALLINPUT | QS_ALLPOSTMESSAGE |
+/// QS_SMRESULT`). Une autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`,
+/// journalisée une fois.
+pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
+    let (param, routine) = (arguments[0], arguments[1]);
+    match routine {
+        ONEPARAM_ROUTINE_POSTQUITMESSAGE => {
+            queue::post_quit(&current(), param);
+            NtStatus(1)
+        }
+        ONEPARAM_ROUTINE_GETQUEUESTATUS => {
+            let flags = param as u16 & (QS_ALLINPUT | QS_ALLPOSTMESSAGE | QS_SMRESULT);
+            NtStatus(queue::status(&current(), flags))
+        }
+        _ => {
+            UNSUPPORTED_ONE_PARAM_ROUTINES.report(routine);
+            fail(ERROR_CALL_NOT_IMPLEMENTED)
+        }
+    }
+}

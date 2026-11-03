@@ -568,3 +568,133 @@ NtUserSetThreadDesktop : `DESKTOPINFO` et `CLIENTTHREADINFO` lus par le `CLIENTI
 même bureau deux fois ne change rien, l'ancienne vue retirée au changement ; le bureau du thread gardé par
 NtUserCloseDesktop ; NtUserSwitchDesktop refusé hors de la station interactive ; NtUserSetThreadDesktop refuse
 l'absence de bureau hors de `csrss` et le handle d'une station).
+
+## Étape 19 : les dispositions de clavier ; `winlogon` charge `00000409`
+
+`winlogon` charge ses dispositions de clavier (`InitKeyboardLayouts`, `winlogon.c`) : sans `Keyboard Layout\Preload`
+dans `HKCU` (pas encore de ruche de l'utilisateur), il charge `00000409` (`LoadKeyboardLayoutW`, `KLF_ACTIVATE |
+KLF_SUBSTITUTE_OK | KLF_REPLACELANG | KLF_SETFORPROCESS`), puis `user32` prépare les raccourcis de l'IME
+(`CliImmInitializeHotKeys`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserLoadKeyboardLayoutEx | la disposition du HKL (`0x04090409`), chargée si elle ne l'est pas : le noyau lit `Layout File` sous `HKLM\SYSTEM\CurrentControlSet\Control\Keyboard Layouts\<KLID>` (un nom de fichier seul) et le fichier de `\SystemRoot\System32` (`kbdus.dll`, mis sur le disque par `xtask`) ; win32k n'exécute pas `KbdLayerDescriptor` (ReactOS le fait, et le note comme dangereux) : il lit son code, `mov eax, offset ; ret`, d'où la RVA des tables (`0x1000`) ; puis l'active (`KLF_ACTIVATE`) pour le thread ou chaque thread GUI du processus (`KLF_SETFORPROCESS`) : `hKL` et `CodePage` de leur `CLIENTINFO` (la page ANSI du système). NULL pour un HKL nul, sans station ou hors de la station interactive ; `ERROR_INVALID_FLAGS` pour un drapeau inconnu | `winlogon` (`LoadKeyboardLayoutW`) |
+| NtUserGetKeyboardLayoutList | le nombre des dispositions chargées, ou leurs HKL dans la limite du tampon | `user32` (`CliImmInitializeHotKeys`) |
+
+NtUserSetImeHotKey manque (rend 0, toléré : pas d'IME). `winlogon` démarre ensuite son serveur RPC (`StartRpcServer`,
+`rpcserver.c`) : `RpcServerUseProtseqEpW` sur le tube nommé `\pipe\winreg` (`CreateNamedPipe` de `kernel32`) demande
+**NtCreateNamedPipeFile**, le système de fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe`), pas encore fait :
+« WL: Could not start the RPC server », et `winlogon` finit.
+
+Pas encore : la traduction des touches par les tables (avec la file d'entrée, M6), la page de code d'une langue autre
+que celle du système, l'IME, le déchargement d'une disposition (`hOldKL`, NtUserUnloadKeyboardLayout), le
+réordonnancement (`KLF_REORDER`), la notification du shell, le fichier donné par `hFile`.
+
+Tests : hôte (`libs/pe` : octets lus à une RVA ; `win32k::keyboard` : les tables lues et non exécutées, et chaque refus ;
+une disposition chargée une fois, listée, pas relue ; un fichier illisible ou invalide pas listé ; rien sans HKL ni hors
+de la station interactive ; le nom du fichier de disposition), `desktop_self_test` (NtUserLoadKeyboardLayoutEx refuse un
+drapeau inconnu et ne lit rien hors de la station interactive ; NtUserGetKeyboardLayoutList compte les dispositions) ; le
+scénario `smss` attend la disposition chargée, ses tables et ses HKL listés.
+
+## Étape 20 : premier affichage ; le fond du bureau d'entrée
+
+Premier pas de GDI et du pilote d'affichage (M6, choisi avec le mainteneur avant les tubes nommés) : quand `winlogon`
+fait de `Winlogon` le bureau d'entrée (NtUserSwitchDesktop), win32k en peint le fond sur l'écran.
+
+- **Pilote d'affichage** (`win32k::display`) : un trait interne, `DisplayDriver` (mode, surface, prise de l'écran),
+  implémenté par `drivers/video/gopfb` sur le framebuffer UEFI que décrit le chargeur (GOP, 1280×800, BGR sous QEMU ;
+  vu par le HHDM). Le noyau l'installe au démarrage. win32k dessine directement dans le framebuffer, comme un pilote
+  d'XP associe sa surface à GDI ; la première fois, le pilote prend l'écran à la console de démarrage (`hal::fb`), qui
+  cesse d'y écrire. Les dessins passent un à un sous un `KSpinLock` (en attendant un mutex à PASSIVE_LEVEL).
+- **Moteur DIB** (`win32k::gdi::dib`) : surface de 32 bits par pixel (`Bitmap` : largeur, hauteur, pas, ordre des
+  octets `Bgrx` ou `Rgbx`), couleurs COLORREF converties en pixels, PatBlt d'un pinceau plein (`fill_rect`, coupé
+  aux bords).
+- **Couleur système** (`win32k::gdi::syscolor`) : `COLOR_BACKGROUND`, RGB(58, 110, 165) (la table par défaut de
+  ReactOS, `win32ss/gdi/ntgdi/stockobj.c`).
+- **Le fond du bureau** : NtUserSwitchDesktop peint tout l'écran de cette couleur (journalisé : « win32k: the input
+  desktop Winlogon painted, 1280x800 »), en attendant la fenêtre du bureau, que ReactOS montre (co_IntShowDesktop)
+  et peint à son WM_PAINT (IntPaintDesktop).
+- **L'ancien lanceur** (`launcher.rs`, ancienne architecture) dessinait sur tout l'écran après la phase 1 : il ne le
+  fait plus quand win32k a pris l'écran (le thread de démarrage reste au repos) ; sinon, rien ne change.
+- **Le banc d'essai** (`xtask/src/screen.rs`) : un scénario peut demander des pixels (`screen = X Y RRGGBB`) ; une
+  fois ses marqueurs trouvés, le moniteur de QEMU (sur un socket Unix du répertoire du run) fait une capture
+  (`screendump`, `screen.ppm`) où chacun doit avoir sa couleur.
+
+Le scénario `smss` attend le fond `3A6EA5` au centre et aux deux coins de l'écran.
+
+Pas encore : la fenêtre du bureau (classes, fenêtres, WM_PAINT), le fond d'écran (une image), les contextes de
+périphérique et les objets GDI, le texte (ADR-013), les autres profondeurs et ROP, le changement de mode
+(`bochs-dispi`), le curseur, l'entrée (i8042, thread d'entrée).
+
+Tests : hôte (`win32k::gdi::dib` : couleurs et ordres des octets, rectangle rempli dans la surface, coupé, vide ou
+dehors, surface trop courte ; `xtask` : pixels attendus lus, PPM lu et vérifié), scénario `smss` (la capture de
+l'écran).
+
+## Étape 21 : la fenêtre du bureau et son WM_PAINT
+
+Chaque bureau a maintenant sa fenêtre, comme dans ReactOS (IntCreateDesktop, par IntCreateWindow), et le fond du
+bureau d'entrée est peint par le chemin d'une fenêtre (WM_PAINT) au lieu de l'être directement à NtUserSwitchDesktop :
+
+- **La table des handles USER** (`win32k::handles`), dans la section partagée, où `user32` la lit (ValidateHandle) :
+  l'entrée `i` a le handle `0x20 + 2 i`, sa génération dans le mot haut (2 pour une entrée neuve, la suivante pour
+  une entrée reprise, comme UserAllocHandle) ; la tête de la table dit combien d'entrées ont servi (`nb_handles`, la
+  borne de `user32`), le `SERVERINFO` combien sont prises (`cHandleEntries`).
+- **`WND` et `CLS`** (`abi::user::Wnd32`, 0xEC octets ; `Cls32`, 0x60 octets ; assertions de layout) : la fenêtre du
+  bureau a son `WND` dans le tas du bureau (et 8 octets de plus : le PID et le TID que DesktopWindowProc y range), sa
+  classe aussi (atome `#32769`, `FNID_DESKTOP`, procédure côté serveur, pinceau `COLOR_BACKGROUND + 1`) ; son handle
+  est dans la table (`TYPE_WINDOW`), et le `DESKTOPINFO` la désigne (`spwnd`). Ses pointeurs sont des adresses du
+  serveur ; `rpdesk` est l'adresse du serveur du tas du bureau (le bureau n'en a pas d'autre sur 32 bits).
+- **Sa procédure** (`win32k::window`, comme DesktopWindowProc) tourne dans win32k (`WNDS_SERVERSIDEWINDOWPROC`) :
+  WM_PAINT valide la région à mettre à jour (BeginPaint : un rectangle), envoie d'abord WM_ERASEBKGND s'il faut
+  effacer le fond, puis finit (EndPaint) ; WM_ERASEBKGND peint le fond (IntPaintDesktop) dans le rectangle de la
+  peinture.
+- **NtUserSwitchDesktop** cache la fenêtre du bureau d'entrée d'avant et montre la sienne (co_IntShowDesktop) : à la
+  taille de l'écran, visible, invalidée entière (fond compris), puis mise à jour aussitôt (UpdateWindow : WM_PAINT
+  envoyé directement, en attendant le thread du bureau et les files de messages).
+
+Le scénario `smss` attend « win32k: the desktop window of Winlogon erased (WM_ERASEBKGND), 1280x800 » et le fond
+`3A6EA5` sur la capture de l'écran.
+
+Pas encore : les autres fenêtres (NtUserCreateWindowEx), les classes de `user32` et la table des atomes, la fenêtre
+des messages du bureau, les files de messages et le thread du bureau, les régions, les contextes de périphérique
+(WM_ERASEBKGND reçoit 0), les verrous d'objets USER, la classe du bureau dans le tas partagé (ReactOS l'y met ; elle est
+ici dans le tas du bureau, où `user32` la trouve aussi).
+
+Tests : hôte (`win32k::handles` : handles, index et générations, entrées reprises, génération qui reboucle ;
+`win32k::window` : rectangles invalidés réunis dans la zone cliente, BeginPaint qui valide et dit s'il faut effacer ;
+`Rect::union`), `desktop_self_test` (la fenêtre du bureau vue comme `user32` la voit : `spwnd`, son `WND` dans la vue
+du processus avec son handle, son style, son fnid et sa classe `#32769`, l'entrée de son handle dans la section
+partagée et `nb_handles` ; montrée puis cachée ; son handle rendu avec son bureau), scénario `smss` (la capture).
+
+## Étape 22 : les files de messages
+
+Chaque thread GUI a sa file de messages (`win32k::queue`, dans son `THREADINFO`), comme dans ReactOS
+(MsqCreateMessageQueue à la création du thread GUI) :
+
+| Service | Ce qu'il fait |
+|---|---|
+| NtUserPostThreadMessage | le message, à la fin de la file du thread nommé par son TID (un thread GUI), daté du compte de ticks ; FALSE pour un message qui porte un pointeur (`ERROR_MESSAGE_SYNC_ONLY` : la table `message_pointer_flags` de ReactOS, ses valeurs tirées de `winuser.h` et `undocuser.h`) ou un TID sans thread (`ERROR_INVALID_PARAMETER`) |
+| NtUserPostMessage | sans fenêtre : au thread courant ; à toutes les fenêtres (`HWND_BROADCAST`) : à aucune encore (aucune fenêtre n'a de thread) ; à une fenêtre : pas encore (`ERROR_INVALID_WINDOW_HANDLE`, journalisé une fois) |
+| NtUserPeekMessage | le premier message que demandent la fenêtre (0 : tous ; -1 : ceux du thread ; sinon cette fenêtre seule) et l'intervalle, sorti avec `PM_REMOVE` ; WM_QUIT une fois les messages postés sortis ; `ERROR_INVALID_FLAGS` pour un drapeau inconnu (PM_BADMSGFLAGS) |
+| NtUserGetMessage | de même, sorti ; attend sinon qu'il en arrive un (un événement de synchronisation par file, une attente du mode utilisateur que la fin du thread interrompt) ; FALSE pour WM_QUIT, et pour un intervalle au-delà de `WM_MAXIMUM` (`ERROR_INVALID_PARAMETER`) |
+| NtUserWaitMessage | attend un message s'il n'y en a pas |
+| NtUserCallOneParam | `ONEPARAM_ROUTINE_POSTQUITMESSAGE` (`0x33`) : WM_QUIT avec son code ; `ONEPARAM_ROUTINE_GETQUEUESTATUS` (`0x2b`) : `(fsChangeBits & flags) \| (fsWakeBits & flags) << 16`, les bits de changement demandés effacés ; une autre routine rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois |
+
+Les bits de réveil et de changement d'une file (`QS_POSTMESSAGE | QS_ALLPOSTMESSAGE` tant qu'un message posté ou WM_QUIT
+attend) sont reportés dans le `CLIENTTHREADINFO` du thread, dans le tas de son bureau, où `user32` les lit ; un thread
+qui change de bureau y retrouve ceux de sa file.
+
+Pas encore : les messages envoyés (SendMessage entre threads, et vers une procédure du client : KeUserModeCallback),
+les messages postés à une fenêtre, les entrées (clavier, souris, thread d'entrée), WM_PAINT et WM_TIMER synthétisés,
+les crochets, le filtre par fenêtre fille, la position du curseur (`pt` est nul), MsgWaitForMultipleObjects.
+
+**NtUserCreateWindowEx** attend deux préalables : la création d'une fenêtre envoie WM_GETMINMAXINFO, WM_NCCREATE,
+WM_NCCALCSIZE, WM_CREATE… à sa procédure, qui est dans `user32` pour les classes du client (il faut KeUserModeCallback :
+le noyau appelle `user32` par `KiUserCallbackDispatcher`, qui revient par NtCallbackReturn) ; et la classe doit être
+enregistrée (NtUserRegisterClassExWOW, la table des atomes d'une station).
+
+Tests : hôte (`win32k::queue` : messages à pointeur, filtres par fenêtre et intervalle, ordre puis WM_QUIT, WM_QUIT
+après les messages postés même filtrés, bits de réveil et de changement), `message_queue_self_test` (file vide, messages
+postés à soi par TID et sans fenêtre, GetQueueStatus, refus, PeekMessage par intervalle, GetMessage dans l'ordre, WM_QUIT
+une fois, une attente réveillée par un autre thread), `desktop_self_test` (les bits de la file dans le
+`CLIENTTHREADINFO`, recopiés au changement de bureau, effacés quand le message sort, reportés à un nouveau message).
