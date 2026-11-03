@@ -629,3 +629,39 @@ périphérique et les objets GDI, le texte (ADR-013), les autres profondeurs et 
 Tests : hôte (`win32k::gdi::dib` : couleurs et ordres des octets, rectangle rempli dans la surface, coupé, vide ou
 dehors, surface trop courte ; `xtask` : pixels attendus lus, PPM lu et vérifié), scénario `smss` (la capture de
 l'écran).
+
+## Étape 21 : la fenêtre du bureau et son WM_PAINT
+
+Chaque bureau a maintenant sa fenêtre, comme dans ReactOS (IntCreateDesktop, par IntCreateWindow), et le fond du
+bureau d'entrée est peint par le chemin d'une fenêtre (WM_PAINT) au lieu de l'être directement à NtUserSwitchDesktop :
+
+- **La table des handles USER** (`win32k::handles`), dans la section partagée, où `user32` la lit (ValidateHandle) :
+  l'entrée `i` a le handle `0x20 + 2 i`, sa génération dans le mot haut (2 pour une entrée neuve, la suivante pour
+  une entrée reprise, comme UserAllocHandle) ; la tête de la table dit combien d'entrées ont servi (`nb_handles`, la
+  borne de `user32`), le `SERVERINFO` combien sont prises (`cHandleEntries`).
+- **`WND` et `CLS`** (`abi::user::Wnd32`, 0xEC octets ; `Cls32`, 0x60 octets ; assertions de layout) : la fenêtre du
+  bureau a son `WND` dans le tas du bureau (et 8 octets de plus : le PID et le TID que DesktopWindowProc y range), sa
+  classe aussi (atome `#32769`, `FNID_DESKTOP`, procédure côté serveur, pinceau `COLOR_BACKGROUND + 1`) ; son handle
+  est dans la table (`TYPE_WINDOW`), et le `DESKTOPINFO` la désigne (`spwnd`). Ses pointeurs sont des adresses du
+  serveur ; `rpdesk` est l'adresse du serveur du tas du bureau (le bureau n'en a pas d'autre sur 32 bits).
+- **Sa procédure** (`win32k::window`, comme DesktopWindowProc) tourne dans win32k (`WNDS_SERVERSIDEWINDOWPROC`) :
+  WM_PAINT valide la région à mettre à jour (BeginPaint : un rectangle), envoie d'abord WM_ERASEBKGND s'il faut
+  effacer le fond, puis finit (EndPaint) ; WM_ERASEBKGND peint le fond (IntPaintDesktop) dans le rectangle de la
+  peinture.
+- **NtUserSwitchDesktop** cache la fenêtre du bureau d'entrée d'avant et montre la sienne (co_IntShowDesktop) : à la
+  taille de l'écran, visible, invalidée entière (fond compris), puis mise à jour aussitôt (UpdateWindow : WM_PAINT
+  envoyé directement, en attendant le thread du bureau et les files de messages).
+
+Le scénario `smss` attend « win32k: the desktop window of Winlogon erased (WM_ERASEBKGND), 1280x800 » et le fond
+`3A6EA5` sur la capture de l'écran.
+
+Pas encore : les autres fenêtres (NtUserCreateWindowEx), les classes de `user32` et la table des atomes, la fenêtre
+des messages du bureau, les files de messages et le thread du bureau, les régions, les contextes de périphérique
+(WM_ERASEBKGND reçoit 0), les verrous d'objets USER, la classe du bureau dans le tas partagé (ReactOS l'y met ; elle est
+ici dans le tas du bureau, où `user32` la trouve aussi).
+
+Tests : hôte (`win32k::handles` : handles, index et générations, entrées reprises, génération qui reboucle ;
+`win32k::window` : rectangles invalidés réunis dans la zone cliente, BeginPaint qui valide et dit s'il faut effacer ;
+`Rect::union`), `desktop_self_test` (la fenêtre du bureau vue comme `user32` la voit : `spwnd`, son `WND` dans la vue
+du processus avec son handle, son style, son fnid et sa classe `#32769`, l'entrée de son handle dans la section
+partagée et `nb_handles` ; montrée puis cachée ; son handle rendu avec son bureau), scénario `smss` (la capture).

@@ -120,10 +120,11 @@ expect = [m4]   NtUserSetProcessWindowStation (0x120f): 1 calls, the first retur
 expect = [m4]   NtUserCreateDesktop (0x1153): 3 calls
 expect = [m4]   NtUserSetThreadDesktop (0x1217): 1 calls, the first returned 0x00000001
 expect = [m4]   NtUserSwitchDesktop (0x122a): 1 calls, the first returned 0x00000001
-# The input desktop's background, painted by win32k (GDI) on the GOP
-# framebuffer (gopfb): the screen dump shows it.
+# The input desktop's window, shown and painted (WM_PAINT, then
+# WM_ERASEBKGND: the background) by win32k (GDI) on the GOP framebuffer
+# (gopfb): the screen dump shows it.
 expect = win32k: display 1280x800 (Bgrx)
-expect = win32k: the input desktop Winlogon painted, 1280x800
+expect = win32k: the desktop window of Winlogon erased (WM_ERASEBKGND), 1280x800
 expect = kernel_main: win32k owns the display: no launcher
 screen = 640 400 3A6EA5
 screen = 0 0 3A6EA5

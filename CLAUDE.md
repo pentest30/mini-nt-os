@@ -231,8 +231,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   d'après le registre, ses tables trouvées sans exécuter `KbdLayerDescriptor`) : `winlogon` crée `WinSta0` et ses
   bureaux, s'y place, charge `00000409`, puis s'arrête à son serveur RPC (tube nommé : NPFS d'Io, à faire).
   Premier affichage : pilote d'affichage (`win32k::display`, trait `DisplayDriver`, `drivers/video/gopfb` sur le
-  framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; NtUserSwitchDesktop peint le fond du bureau d'entrée
-  (`COLOR_BACKGROUND`) ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
+  framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; la fenêtre du bureau (`win32k::window` : `WND` et `CLS` dans
+  le tas du bureau, handle dans la table USER de la section partagée, `win32k::handles` ; DesktopWindowProc côté
+  serveur : WM_PAINT, WM_ERASEBKGND), montrée et peinte à NtUserSwitchDesktop ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
   pixels d'une capture de QEMU (`xtask/src/screen.rs`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
