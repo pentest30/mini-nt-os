@@ -323,6 +323,13 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     sys::apc::install();
     shared_data::init();
     win32k::init().expect("the USER shared section");
+    // The display driver: the UEFI framebuffer, if the loader found one.
+    // SAFETY: the HHDM maps [0, 4 GiB) for good and the framebuffer lies
+    // below 4 GiB; only gopfb and the boot console write to it.
+    match unsafe { gopfb::GopFramebuffer::new(&boot_info.framebuffer, boot_info.hhdm_offset) } {
+        Some(driver) => win32k::display::install(alloc::boxed::Box::new(driver)),
+        None => log::info!("[boot] no display: no GOP framebuffer of a known format"),
+    }
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
@@ -462,6 +469,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
 
     log::info!("kernel_main: user thread TID={} spawned — launching Mino UI", user_tid);
 
+    // win32k owns the screen once it has drawn on it (an input desktop):
+    // the old launcher and kernel shell, which draw on the whole screen,
+    // stay away; the boot thread idles.
+    if win32k::display::acquired() {
+        log::info!("kernel_main: win32k owns the display: no launcher");
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
     // Show the game launcher immediately. CMD.EXE (user thread) continues
     // running in the background; its framebuffer output is suppressed by
     // EXCLUSIVE=true inside launcher::run(). When the user presses D we

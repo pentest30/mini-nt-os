@@ -68,6 +68,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gopfb"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "hal",
+ "win32k",
+]
+
+[[package]]
 name = "hal"
 version = "0.1.0"
 dependencies = [
@@ -166,6 +175,7 @@ dependencies = [
  "abi",
  "cm",
  "ex",
+ "gopfb",
  "hal",
  "io-manager",
  "ke",
