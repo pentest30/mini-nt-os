@@ -8,18 +8,28 @@
 
 use crate::services::{NTOSKRNL, WIN32K};
 
-/// A system service: its NT name, and the size of the arguments the
-/// dispatcher copies from the user stack (32-bit each).
+/// A system service: its NT name, the size of the arguments the dispatcher
+/// copies from the user stack (32-bit each), and whether it returns an
+/// NTSTATUS. The other services, some of win32k's, return a value (BOOL,
+/// HANDLE, a count...), 0 when they fail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Service {
     pub name: &'static str,
     pub argument_bytes: u32,
+    pub returns_status: bool,
 }
 
 impl Service {
-    /// A service taking `argument_count` 32-bit arguments.
+    /// A service taking `argument_count` 32-bit arguments that returns an
+    /// NTSTATUS.
     pub const fn new(name: &'static str, argument_count: u32) -> Self {
-        Self { name, argument_bytes: argument_count * 4 }
+        Self { name, argument_bytes: argument_count * 4, returns_status: true }
+    }
+
+    /// A service taking `argument_count` 32-bit arguments that returns a
+    /// value.
+    pub const fn value(name: &'static str, argument_count: u32) -> Self {
+        Self { name, argument_bytes: argument_count * 4, returns_status: false }
     }
 }
 
@@ -53,7 +63,8 @@ mod tests {
 
     #[test]
     fn a_number_finds_its_service() {
-        assert_eq!(lookup(NtClose), Some((Table::Ntoskrnl, &Service { name: "NtClose", argument_bytes: 4 })));
+        let close = Service { name: "NtClose", argument_bytes: 4, returns_status: true };
+        assert_eq!(lookup(NtClose), Some((Table::Ntoskrnl, &close)));
         assert_eq!(lookup(NtGdiAbortDoc).map(|(table, s)| (table, s.name)), Some((Table::Win32k, "NtGdiAbortDoc")));
         assert_eq!(lookup(NtUserGetDC).map(|(_, s)| s.name), Some("NtUserGetDC"));
     }

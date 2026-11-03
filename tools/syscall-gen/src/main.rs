@@ -9,7 +9,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use syscall_gen::{parse_implemented, parse_sysfuncs, parse_w32ksvc, render, render_coverage, validate, Pin};
+use syscall_gen::{
+    mark_status, parse_implemented, parse_names, parse_sysfuncs, parse_w32ksvc, render, render_coverage, validate, Pin,
+};
 
 /// La version épinglée de ReactOS (ADR-002) : `reactos/0.4.16/README.md`.
 const PIN: Pin = Pin { version: "0.4.16", commit: "51bfc7037359b594876a349b46b992e363e79838" };
@@ -48,8 +50,12 @@ fn generate(check: bool) -> Result<String, String> {
     let lists = Path::new(env!("CARGO_MANIFEST_DIR")).join("reactos").join(PIN.version);
     let read = |path: &Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
     let ntoskrnl = parse_sysfuncs(&read(&lists.join("sysfuncs.lst"))?).map_err(|e| format!("sysfuncs.lst: {e}"))?;
-    let win32k = parse_w32ksvc(&read(&lists.join("w32ksvc32.h"))?, DEFINED).map_err(|e| format!("w32ksvc32.h: {e}"))?;
+    let mut win32k =
+        parse_w32ksvc(&read(&lists.join("w32ksvc32.h"))?, DEFINED).map_err(|e| format!("w32ksvc32.h: {e}"))?;
     validate(&ntoskrnl, &win32k)?;
+    let status =
+        parse_names(&read(&lists.join("w32k-ntstatus.lst"))?).map_err(|e| format!("w32k-ntstatus.lst: {e}"))?;
+    mark_status(&mut win32k, &status).map_err(|e| format!("w32k-ntstatus.lst: {e}"))?;
     let implemented = parse_implemented(&read(&root.join(DISPATCHER))?).map_err(|e| format!("{DISPATCHER}: {e}"))?;
     let outputs = [
         (TABLES, rustfmt(&root, &render(&PIN, &ntoskrnl, &win32k))?),
