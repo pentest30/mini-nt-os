@@ -210,7 +210,14 @@ pub struct Thread {
     starvation_boost: bool,
     /// Thread utilisateur : TSS.RSP0 doit pointer sur sa pile noyau.
     user_mode: bool,
+    /// Pile initiale (InitialStack) : où les entrées depuis le mode
+    /// utilisateur empilent leur trame (TSS.RSP0, SYSENTER_ESP). Le haut de
+    /// sa pile noyau, sauf pendant un rappel en mode utilisateur, qui la
+    /// met sous ses trames (`ke::callout`).
     kernel_stack_top: u64,
+    /// Le rappel en mode utilisateur le plus interne en cours
+    /// (`ke::callout::Callout`, dans la pile noyau du thread), ou nul.
+    callout: *mut c_void,
     /// Routine d'un thread noyau, lancée par [`ki_thread_startup`].
     start: Option<(ThreadRoutine, *mut c_void)>,
     /// État x87/SSE, sauvegardé et restauré à chaque commutation (ADR-009).
@@ -253,6 +260,7 @@ impl Thread {
             ptr::addr_of_mut!((*t).starvation_boost).write(false);
             ptr::addr_of_mut!((*t).user_mode).write(user_mode);
             ptr::addr_of_mut!((*t).kernel_stack_top).write(kernel_stack_top);
+            ptr::addr_of_mut!((*t).callout).write(ptr::null_mut());
             ptr::addr_of_mut!((*t).start).write(start);
             ptr::addr_of_mut!((*t).fpu).write(FxSaveArea::initial());
             ptr::addr_of_mut!((*t).directory_table_base).write(SYSTEM_DIRECTORY.load(Ordering::Relaxed));
@@ -1083,6 +1091,40 @@ pub fn current_thread_owner() -> *const c_void {
     // SAFETY: le thread courant vit tant qu'il s'exécute ; `owner` ne change
     // plus après sa création.
     unsafe { (*current_thread()).owner }
+}
+
+/// La pile initiale du thread courant et son rappel en mode utilisateur le
+/// plus interne (`ke::callout`).
+///
+/// # IRQL
+/// Tout niveau.
+pub(crate) fn current_callout_state() -> (u64, *mut c_void) {
+    // SAFETY: le thread courant vit tant qu'il s'exécute ; seul lui-même
+    // change ces champs, interruptions masquées.
+    unsafe {
+        let thread = current_thread();
+        ((*thread).kernel_stack_top, (*thread).callout)
+    }
+}
+
+/// Donne au thread courant, un thread utilisateur, sa pile initiale
+/// `initial_stack`, qui devient celle des entrées depuis le mode
+/// utilisateur (TSS.RSP0, SYSENTER_ESP), et son rappel le plus interne.
+///
+/// # Safety
+/// Interruptions masquées ; `initial_stack` est alignée sur 16 octets, dans
+/// la pile noyau du thread, sous toute trame encore utile.
+pub(crate) unsafe fn set_current_callout_state(initial_stack: u64, callout: *mut c_void) {
+    let thread = current_thread();
+    // SAFETY: garanti par l'appelant ; le thread courant vit tant qu'il
+    // s'exécute, et rien d'autre ne s'exécute, interruptions masquées.
+    unsafe {
+        debug_assert!((*thread).user_mode, "a callout in a kernel thread");
+        (*thread).kernel_stack_top = initial_stack;
+        (*thread).callout = callout;
+        hal::gdt::set_kernel_stack_top(initial_stack);
+        hal::sysenter::set_entry_stack(initial_stack);
+    }
 }
 
 /// Supprime le thread `tid`, terminé : il quitte la table, qui pourra donner

@@ -13,6 +13,7 @@
 
 pub mod ata;
 pub mod bugcheck;
+pub mod callout;
 pub mod cpuid;
 pub mod fb;
 pub mod fpu;

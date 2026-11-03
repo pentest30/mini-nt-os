@@ -156,6 +156,7 @@ pub const STATUS_LPC_REPLY_LOST: NtStatus = NtStatus(0xC000_0253);
 pub const STATUS_NO_CALLBACK_ACTIVE: NtStatus = NtStatus(0xC000_0258);
 pub const STATUS_SERVER_SID_MISMATCH: NtStatus = NtStatus(0xC000_02A0);
 pub const STATUS_ASSERTION_FAILURE: NtStatus = NtStatus(0xC000_0420);
+pub const STATUS_CALLBACK_POP_STACK: NtStatus = NtStatus(0xC000_0423);
 
 #[cfg(test)]
 mod tests {
