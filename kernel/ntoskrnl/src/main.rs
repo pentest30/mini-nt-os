@@ -1482,11 +1482,44 @@ fn kernel_stack_self_test() {
         unsafe { mm::kstack::free(stack) };
     }
     assert_eq!(stack_pages(), before, "freed stacks kept their pages");
-    let again = mm::kstack::allocate().expect("a kernel stack");
+    let mut again = mm::kstack::allocate().expect("a kernel stack");
     assert_eq!(again, stacks[2], "the last slot freed comes back first");
-    // SAFETY: allocated just above, never used.
+    // MmGrowKernelStack: in place, zeroed, down to its limit and no further.
+    let top = again.top;
+    let low = again.bottom - 2 * 4096 + 100;
+    mm::kstack::grow(&mut again, low).expect("two more pages");
+    assert_eq!((again.bottom, again.top), (low & !0xFFF, top), "grown in place, by whole pages");
+    assert_eq!(stack_pages() - before, per_stack + 2);
+    // SAFETY: the two pages were just mapped, writable, for this stack, which
+    // nothing runs on.
+    unsafe {
+        let word = again.bottom as *mut u64;
+        assert_eq!(word.read_volatile(), 0, "a grown page is zeroed");
+        word.write_volatile(0x5A5A);
+    }
+    let limit = again.limit();
+    assert_eq!(mm::kstack::grow(&mut again, limit - 1), Err(abi::ntstatus::STATUS_STACK_OVERFLOW));
+    mm::kstack::grow(&mut again, limit).expect("down to the limit");
+    let large = stack_pages() - before;
+    // Dirty, then freed: the frames come back to the next stack, which must
+    // find them zeroed, grown pages included.
+    let length = (again.top - again.bottom) as usize;
+    // SAFETY: the whole stack is mapped, writable, and nothing runs on it.
+    unsafe { core::ptr::write_bytes(again.bottom as *mut u8, 0xA5, length) };
+    // SAFETY: allocated just above, never run on.
     unsafe { mm::kstack::free(again) };
-    log::info!("[smoke] Mm: kernel stacks freed and their slots reused ({per_stack} pages each)");
+    assert_eq!(stack_pages(), before, "a grown stack gave all its pages back");
+    let mut clean = mm::kstack::allocate().expect("a kernel stack");
+    mm::kstack::grow(&mut clean, limit).expect("down to the limit");
+    // SAFETY: as above.
+    let bytes = unsafe { core::slice::from_raw_parts(clean.bottom as *const u8, length) };
+    assert!(bytes.iter().all(|&b| b == 0), "a kernel stack holds what a previous one left");
+    // SAFETY: allocated just above, never run on.
+    unsafe { mm::kstack::free(clean) };
+    log::info!(
+        "[smoke] Mm: kernel stacks freed and their slots reused ({per_stack} pages each); grown in place up to \
+         {large} pages"
+    );
 }
 
 /// A demand-zero fault that gets its page but no page table returns
