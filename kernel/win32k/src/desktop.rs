@@ -234,7 +234,8 @@ pub struct Desktop {
     pub name: String,
     /// Sa station (rpwinstaParent).
     pub station: Arc<Object<WindowStation>>,
-    pub heap: DesktopHeap,
+    /// Son tas, que ses fenêtres et les images des classes tiennent aussi.
+    pub heap: Arc<DesktopHeap>,
     /// La position de son `DESKTOPINFO` dans son tas.
     pub desk_info: u32,
     /// Sa fenêtre (`DesktopWindow`, `pDeskInfo->spwnd`).
@@ -263,7 +264,7 @@ pub fn initial_desk_info(base: u32, limit: u32, at: u32) -> DeskInfoHead32 {
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Object<Desktop>>, NtStatus> {
-    let heap = DesktopHeap::create(heap_size(name, !station.no_io()))?;
+    let heap = Arc::new(DesktopHeap::create(heap_size(name, !station.no_io()))?);
     let units: Vec<u16> = name.encode_utf16().chain(core::iter::once(0)).collect();
     // sizeof(DESKTOPINFO) + the name's length + its NUL.
     let size = size_of::<DeskInfoHead32>() as u32 + 4 + 2 * units.len() as u32;
@@ -274,7 +275,7 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
     heap.section.write_kernel(u64::from(at) + size_of::<DeskInfoHead32>() as u64, &name_bytes)?;
     // The window of the desktop, the size of the screen (SM_CXVIRTUALSCREEN).
     let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width, mode.height));
-    let window = crate::window::create_desktop_window(&heap, at, width, height)?;
+    let window = crate::window::create_desktop_window(&heap, name, at, width, height)?;
     let desktop = ob::create_object(
         &DESKTOP_TYPE,
         Desktop { name: String::from(name), station: station.clone(), heap, desk_info: at, window },

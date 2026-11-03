@@ -9,8 +9,15 @@ CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
 GetClassInfoExW@12
+GetParent@4
+GetWindow@8
+GetWindowLongW@8
+GetWindowRect@8
+GetWindowTextW@12
+IsWindow@4
 RegisterClassExW@4
 RegisterLogonProcess@8
+SetWindowTextW@8
 SetProcessWindowStation@4
 SetThreadDesktop@4
 SwitchDesktop@4

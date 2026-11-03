@@ -18,7 +18,8 @@
 //! `user32` lit une classe par le `CLS` qu'une fenêtre désigne : il est dans
 //! le tas du bureau de la fenêtre ([`Class::image_on`], comme le clone que
 //! fait IntGetClassForDesktop), écrit à la première fenêtre de la classe sur
-//! ce bureau, ses octets de plus à la suite.
+//! ce bureau, ses octets de plus à la suite ; il vit autant que la classe et
+//! le tas.
 //!
 //! Écarts : pas d'objets curseur ni icône (les handles sont gardés, `spicn`
 //! et `spcur` restent nuls), ni de pinceaux (un pinceau du système vaut sa
@@ -42,10 +43,9 @@ use abi::user::{
 };
 use abi::winerror::{dos_error, ERROR_CLASS_ALREADY_EXISTS};
 use hal::sync::KSpinLock;
-use ob::Object;
 
 use crate::atom::{self, AtomName};
-use crate::desktop::Desktop;
+use crate::desktop::DesktopHeap;
 
 /// CS_* que les classes du système emploient.
 const CS_VREDRAW: u32 = 0x0001;
@@ -124,7 +124,7 @@ pub struct Class {
     /// Trouvée quelle que soit l'instance (`CS_GLOBALCLASS`).
     pub global: bool,
     /// Son `CLS` dans le tas de chaque bureau où elle a eu une fenêtre.
-    images: KSpinLock<Vec<(Weak<Object<Desktop>>, u32)>>,
+    images: KSpinLock<Vec<(Weak<DesktopHeap>, u32)>>,
 }
 
 impl Class {
@@ -134,8 +134,7 @@ impl Class {
     }
 
     /// Son `CLS`, en `at` du tas `heap`.
-    fn cls(&self, desktop: &Desktop, at: u32) -> Cls32 {
-        let heap = &desktop.heap;
+    fn cls(&self, heap: &DesktopHeap, at: u32) -> Cls32 {
         let mut bits = 0;
         if self.unicode() {
             bits |= CLS_UNICODE;
@@ -167,8 +166,8 @@ impl Class {
         }
     }
 
-    /// IntGetClassForDesktop : la position de son `CLS` dans le tas de
-    /// `desktop`, écrit (suivi de ses octets de plus, à zéro) la première
+    /// IntGetClassForDesktop : la position de son `CLS` dans le tas `heap`
+    /// d'un bureau, écrit (suivi de ses octets de plus, à zéro) la première
     /// fois.
     ///
     /// # Errors
@@ -176,20 +175,25 @@ impl Class {
     ///
     /// # IRQL
     /// PASSIVE_LEVEL.
-    pub fn image_on(&self, desktop: &Arc<Object<Desktop>>) -> Result<u32, NtStatus> {
+    pub fn image_on(&self, heap: &Arc<DesktopHeap>) -> Result<u32, NtStatus> {
         let mut images = self.images.lock();
         images.retain(|(other, _)| other.strong_count() > 0);
-        if let Some((_, at)) = images.iter().find(|(other, _)| core::ptr::eq(other.as_ptr(), Arc::as_ptr(desktop))) {
+        if let Some((_, at)) = images.iter().find(|(other, _)| core::ptr::eq(other.as_ptr(), Arc::as_ptr(heap))) {
             return Ok(*at);
         }
-        let size = size_of::<Cls32>() as u32 + self.info.cls_extra.max(0) as u32;
-        let at = desktop.heap.alloc(size)?;
-        if let Err(status) = desktop.heap.section.write_kernel(u64::from(at), self.cls(desktop, at).as_bytes()) {
-            desktop.heap.free(at, size);
+        let size = self.image_size();
+        let at = heap.alloc(size)?;
+        if let Err(status) = heap.section.write_kernel(u64::from(at), self.cls(heap, at).as_bytes()) {
+            heap.free(at, size);
             return Err(status);
         }
-        images.push((Arc::downgrade(desktop), at));
+        images.push((Arc::downgrade(heap), at));
         Ok(at)
+    }
+
+    /// La taille de son `CLS` et de ses octets de plus.
+    fn image_size(&self) -> u32 {
+        size_of::<Cls32>() as u32 + self.info.cls_extra.max(0) as u32
     }
 
     /// IntGetClassWndProc : la procédure que le client voit, ANSI ou non
@@ -220,9 +224,9 @@ impl Class {
 impl Drop for Class {
     fn drop(&mut self) {
         let images = core::mem::take(&mut *self.images.lock());
-        for (desktop, at) in images {
-            if let Some(desktop) = desktop.upgrade() {
-                desktop.heap.free(at, size_of::<Cls32>() as u32 + self.info.cls_extra.max(0) as u32);
+        for (heap, at) in images {
+            if let Some(heap) = heap.upgrade() {
+                heap.free(at, self.image_size());
             }
         }
         let _ = atom::delete(self.atom);

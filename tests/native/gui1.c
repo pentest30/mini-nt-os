@@ -51,6 +51,13 @@ typedef struct {
 } WNDCLASSEXW;
 
 typedef struct {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+
+typedef struct {
     void *lpCreateParams;
     HINSTANCE hInstance;
     HMENU hMenu;
@@ -70,6 +77,13 @@ typedef struct {
 #define ERROR_CLASS_ALREADY_EXISTS 1410
 #define ERROR_CLASS_DOES_NOT_EXIST 1411
 #define WS_POPUP 0x80000000
+#define WS_CHILD 0x40000000
+#define WS_CLIPSIBLINGS 0x04000000
+#define GWL_STYLE (-16)
+#define GW_CHILD 5
+#define WM_PARENTNOTIFY 0x0210
+#define ERROR_TLW_WITH_WSCHILD 1406
+#define ERROR_CANNOT_FIND_WND_CLASS 1407
 #define COLOR_WINDOW 5
 #define WM_CREATE 0x0001
 #define WM_NCCREATE 0x0081
@@ -94,6 +108,13 @@ __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, 
                                                              void *attributes);
 __declspec(dllimport) LRESULT __stdcall DefWindowProcW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) BOOL __stdcall GetClassInfoExW(HINSTANCE instance, const WCHAR *name, WNDCLASSEXW *class_info);
+__declspec(dllimport) HWND __stdcall GetParent(HWND window);
+__declspec(dllimport) HWND __stdcall GetWindow(HWND window, UINT command);
+__declspec(dllimport) LONG __stdcall GetWindowLongW(HWND window, int index);
+__declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
+__declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int size);
+__declspec(dllimport) BOOL __stdcall IsWindow(HWND window);
+__declspec(dllimport) BOOL __stdcall SetWindowTextW(HWND window, const WCHAR *text);
 __declspec(dllimport) ATOM __stdcall RegisterClassExW(const WNDCLASSEXW *class_info);
 __declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
 __declspec(dllimport) BOOL __stdcall SetProcessWindowStation(HWINSTA station);
@@ -132,17 +153,78 @@ static BOOL same(const WCHAR *a, const WCHAR *b)
     return *a == *b;
 }
 
+/* The messages the window procedure received, in order, until printed. */
+static UINT received[32];
+static unsigned int received_count;
+/* What WM_PARENTNOTIFY gave. */
+static WPARAM notified_w;
+static LPARAM notified_l;
+
+/* Prints the messages received since the last time. */
+static void print_messages(const char *what)
+{
+    char text[32 * 5 + 1];
+    char *at = text;
+    unsigned int i;
+    static const char digits[] = "0123456789abcdef";
+
+    for (i = 0; i < received_count; i++) {
+        int shift;
+        for (shift = 12; shift >= 0; shift -= 4)
+            *at++ = digits[(received[i] >> shift) & 15];
+        *at++ = ' ';
+    }
+    *at = 0;
+    DbgPrint("[gui] %s received: %s\n", what, text);
+    received_count = 0;
+}
+
+static void check_callback_window(HWND window);
+
 static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
 {
-    DbgPrint("[gui] message %04x to %p\n", message, window);
-    if (message == WM_NCCREATE || message == WM_CREATE) {
+    if (received_count < 32)
+        received[received_count++] = message;
+    if (message == WM_PARENTNOTIFY) {
+        notified_w = w;
+        notified_l = l;
+    }
+    if ((message == WM_NCCREATE || message == WM_CREATE) && ((const CREATESTRUCTW *)l)->style == (LONG)WS_POPUP) {
         const CREATESTRUCTW *create = (const CREATESTRUCTW *)l;
         BOOL expected = create->lpCreateParams == CREATE_PARAMETER && same(create->lpszName, WINDOW_NAME)
                         && same(create->lpszClass, CLASS_NAME) && create->x == 100 && create->y == 50
-                        && create->cx == 400 && create->cy == 300 && (DWORD)create->style == WS_POPUP;
+                        && create->cx == 400 && create->cy == 300;
         DbgPrint("[gui] %s: CREATESTRUCT %s\n", message == WM_NCCREATE ? "WM_NCCREATE" : "WM_CREATE",
                  expected ? "as given" : "WRONG");
+        if (message == WM_CREATE)
+            check_callback_window(window);
     }
+    return DefWindowProcW(window, message, w, l);
+}
+
+/* The TEB of the current thread. */
+static const unsigned char *current_teb(void)
+{
+    const unsigned char *teb;
+    __asm__("movl %%fs:0x18, %0" : "=r"(teb));
+    return teb;
+}
+
+/* TEB.Win32ClientInfo, CLIENTINFO.CallbackWnd: during a call from win32k,
+   the window and its WND (in this process's view of the desktop's heap),
+   whose first word is its handle. */
+static void check_callback_window(HWND window)
+{
+    const DWORD *callback = (const DWORD *)(current_teb() + 0x6CC + 0x28);
+    BOOL right = callback[0] == (DWORD)window && callback[1] && *(const DWORD *)callback[1] == (DWORD)window;
+    DbgPrint("[gui] CallbackWnd: %s\n", right ? "the window and its WND" : "WRONG");
+}
+
+/* A window procedure that refuses WM_NCCREATE. */
+static LRESULT __stdcall refusing_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
+{
+    if (message == WM_NCCREATE)
+        return 0;
     return DefWindowProcW(window, message, w, l);
 }
 
@@ -199,6 +281,56 @@ static void check_classes(HINSTANCE instance, ATOM atom, const WNDCLASSEXW *regi
     DbgPrint("[gui] RegisterClassExW again: %04x (%lu)\n", again, GetLastError());
 }
 
+/* What user32 reads of the window by itself (its WND, in the desktop's
+   heap), a child window, and windows that cannot be created. */
+static void check_window(HWND window, HINSTANCE instance)
+{
+    WCHAR text[16];
+    RECT rect;
+    HWND child;
+    WNDCLASSEXW refusing;
+
+    DbgPrint("[gui] IsWindow: %d\n", IsWindow(window));
+    GetWindowTextW(window, text, 16);
+    DbgPrint("[gui] GetWindowTextW: %s\n", same(text, WINDOW_NAME) ? "Mino" : "WRONG");
+    print_messages("GetWindowTextW");
+    SetWindowTextW(window, L"Mino, longer");
+    GetWindowTextW(window, text, 16);
+    DbgPrint("[gui] SetWindowTextW, longer: %s\n", same(text, L"Mino, longer") ? "as set" : "WRONG");
+    SetWindowTextW(window, L"M");
+    GetWindowTextW(window, text, 16);
+    DbgPrint("[gui] SetWindowTextW, shorter: %s\n", same(text, L"M") ? "as set" : "WRONG");
+    print_messages("SetWindowTextW and GetWindowTextW");
+    DbgPrint("[gui] GetWindowLongW(GWL_STYLE): %08lx\n", (DWORD)GetWindowLongW(window, GWL_STYLE));
+    GetWindowRect(window, &rect);
+    DbgPrint("[gui] GetWindowRect: %ld %ld %ld %ld\n", rect.left, rect.top, rect.right, rect.bottom);
+
+    SetLastError(0);
+    child = CreateWindowExW(0, CLASS_NAME, L"Child", WS_CHILD, 10, 20, 100, 50, window, (HMENU)7, instance, 0);
+    DbgPrint("[gui] child: %s (%lu)\n", child ? "a window" : "none", GetLastError());
+    print_messages("the child and its parent");
+    DbgPrint("[gui] WM_PARENTNOTIFY: %s\n", notified_w == (7 << 16 | WM_CREATE) && (HWND)notified_l == child ? "WM_CREATE, 7, the child" : "WRONG");
+    DbgPrint("[gui] GetParent: %s\n", GetParent(child) == window ? "the window" : "WRONG");
+    DbgPrint("[gui] GetWindow(GW_CHILD): %s\n", GetWindow(window, GW_CHILD) == child ? "the child" : "WRONG");
+    GetWindowRect(child, &rect);
+    DbgPrint("[gui] child GetWindowRect: %ld %ld %ld %ld\n", rect.left, rect.top, rect.right, rect.bottom);
+
+    SetLastError(0);
+    child = CreateWindowExW(0, CLASS_NAME, L"Orphan", WS_CHILD, 0, 0, 10, 10, 0, 0, instance, 0);
+    DbgPrint("[gui] child without a parent: %p (%lu)\n", child, GetLastError());
+    SetLastError(0);
+    child = CreateWindowExW(0, L"NoSuchClass", L"None", WS_POPUP, 0, 0, 10, 10, 0, 0, instance, 0);
+    DbgPrint("[gui] window of no class: %p (%lu)\n", child, GetLastError());
+    memset(&refusing, 0, sizeof refusing);
+    refusing.cbSize = sizeof refusing;
+    refusing.lpfnWndProc = refusing_procedure;
+    refusing.hInstance = instance;
+    refusing.lpszClassName = L"MinoRefusing";
+    RegisterClassExW(&refusing);
+    child = CreateWindowExW(0, L"MinoRefusing", L"Refused", WS_POPUP, 0, 0, 10, 10, 0, 0, instance, 0);
+    DbgPrint("[gui] window refusing WM_NCCREATE: %p\n", child);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -224,9 +356,11 @@ DWORD __stdcall GuiStartup(void)
     SetLastError(0);
     window = CreateWindowExW(0, CLASS_NAME, WINDOW_NAME, WS_POPUP, 100, 50, 400, 300, 0, 0, instance,
                              CREATE_PARAMETER);
-    DbgPrint("[gui] CreateWindowExW: %p (%lu)\n", window, window ? 0 : GetLastError());
+    DbgPrint("[gui] CreateWindowExW: %s (%lu)\n", window ? "a window" : "none", GetLastError());
     if (!window)
         ExitProcess(3);
+    print_messages("the window");
+    check_window(window, instance);
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);

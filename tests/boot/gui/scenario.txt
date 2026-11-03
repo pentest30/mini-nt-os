@@ -4,8 +4,17 @@
 # logon process, creates WinSta0 and a desktop and goes on it; then it
 # registers a window class (user32 registers its system controls first),
 # finds it and user32's Button again (GetClassInfoExW), cannot find a class
-# never registered nor register its own twice, and creates a window of its
-# class: not yet (NtUserCreateWindowEx). It ends with status 3.
+# never registered nor register its own twice. It creates a window of its
+# class: its procedure receives WM_NCCREATE and WM_CREATE (the CREATESTRUCT
+# as given; meanwhile the TEB's CLIENTINFO names the window and its WND),
+# WM_NCCALCSIZE, WM_SIZE and WM_MOVE, through KeUserModeCallback;
+# user32 reads by itself its name, style and rectangle in its WND; its name
+# changes (SetWindowTextW: WM_SETTEXT, NtUserDefSetText). A child window
+# tells its parent (WM_PARENTNOTIFY), which user32 finds through the WNDs'
+# links. A child without a parent, a window of no class and one whose
+# procedure refuses WM_NCCREATE are not created. The kernel part of
+# DefWindowProc (NtUserMessageCall) is not there yet. It ends with status
+# 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
 requires = userland, native
@@ -19,8 +28,30 @@ expect = [gui] GetClassInfoExW: the class as registered
 expect = [gui] GetClassInfoExW(Button): user32's class
 expect = [gui] GetClassInfoExW(NoSuchClass): 0 (1411)
 expect = [gui] RegisterClassExW again: 0000 (1410)
-expect = sys: NtUserCreateWindowEx (0x1156) is not implemented
-expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x00000003
+expect = [gui] CreateWindowExW: a window (0)
+expect = [gui] WM_NCCREATE: CREATESTRUCT as given
+expect = [gui] WM_CREATE: CREATESTRUCT as given
+expect = [gui] CallbackWnd: the window and its WND
+expect = [gui] the window received: 0081 0083 0001 0005 0003
+expect = [gui] IsWindow: 1
+expect = [gui] GetWindowTextW: Mino
+expect = [gui] SetWindowTextW, longer: as set
+expect = [gui] SetWindowTextW, shorter: as set
+expect = [gui] SetWindowTextW and GetWindowTextW received: 000c 000d 000c 000d
+expect = [gui] GetWindowLongW(GWL_STYLE): 84000000
+expect = [gui] GetWindowRect: 100 50 500 350
+expect = [gui] child: a window (0)
+expect = [gui] the child and its parent received: 0081 0083 0001 0005 0003 0210
+expect = [gui] WM_PARENTNOTIFY: WM_CREATE, 7, the child
+expect = [gui] GetParent: the window
+expect = [gui] GetWindow(GW_CHILD): the child
+expect = [gui] child GetWindowRect: 110 70 210 120
+expect = [gui] child without a parent: 00000000 (1406)
+expect = [gui] window of no class: 00000000 (1407)
+expect = [gui] window refusing WM_NCCREATE: 00000000
+expect = [gui] done
+expect = sys: NtUserMessageCall (0x11cb) is not implemented
+expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 
 forbid = WRONG
 forbid = *** STOP:

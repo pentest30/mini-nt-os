@@ -47,6 +47,7 @@ mod system;
 mod time;
 mod user;
 mod wait;
+mod window;
 mod winsta;
 
 pub(crate) use system::processor_information;
@@ -191,7 +192,9 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
     (services::NtUserCreateDesktop, Handler::Status(desktop::nt_user_create_desktop)),
+    (services::NtUserCreateWindowEx, Handler::Status(window::nt_user_create_window_ex)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
+    (services::NtUserDefSetText, Handler::Status(window::nt_user_def_set_text)),
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),

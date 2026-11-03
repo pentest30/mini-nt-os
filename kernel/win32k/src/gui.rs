@@ -111,6 +111,15 @@ impl ProcessInfo {
         views.iter().find(|view| Arc::ptr_eq(&view.desktop, desktop)).map(|view| view.view)
     }
 
+    /// Sa vue du tas `heap` d'un bureau, s'il le voit.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn heap_view(&self, heap: &crate::desktop::DesktopHeap) -> Option<u32> {
+        let views = self.desktop_views.lock();
+        views.iter().find(|view| core::ptr::eq(&*view.desktop.heap, heap)).map(|view| view.view)
+    }
+
     /// IntMapDesktopView : sa vue du tas de `desktop`, projetée au premier de
     /// ses threads sur ce bureau (lecture seule, `SEC_NO_CHANGE`).
     fn map_desktop(&self, process: &EProcess, desktop: &Arc<Object<Desktop>>) -> Result<u32, NtStatus> {
@@ -189,6 +198,9 @@ pub struct ThreadInfo {
     keyboard_layout: KSpinLock<Option<Arc<KeyboardLayout>>>,
     /// Sa file de messages (`MessageQueue`).
     pub queue: MessageQueue,
+    /// Ses fenêtres (`WindowListHead`) : elles vivent autant que lui, en
+    /// attendant DestroyWindow.
+    pub windows: KSpinLock<Vec<Arc<crate::window::Window>>>,
 }
 
 /// Le bureau d'un thread : le handle qu'il a donné, le bureau, et la
@@ -209,6 +221,7 @@ impl ThreadInfo {
             desktop: KSpinLock::new(None),
             keyboard_layout: KSpinLock::new(None),
             queue: MessageQueue::new(),
+            windows: KSpinLock::new(Vec::new()),
         }
     }
 

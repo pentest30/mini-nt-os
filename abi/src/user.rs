@@ -205,16 +205,103 @@ pub const CLS_UNICODE: u32 = 0x1;
 pub const CLS_GLOBAL: u32 = 0x2;
 pub const CLS_MENU_NAME_IS_STRING: u32 = 0x4;
 
+/// WNDS_SENDSIZEMOVEMSGS: WM_SIZE and WM_MOVE wait for the window to be
+/// shown (an overlapped window).
+pub const WNDS_SENDSIZEMOVEMSGS: u32 = 0x0000_0010;
+/// WNDS_ANSIWINDOWPROC: its procedure takes ANSI messages.
+pub const WNDS_ANSIWINDOWPROC: u32 = 0x0008_0000;
+/// WNDS_ANSICREATOR: created by CreateWindowExA.
+pub const WNDS_ANSICREATOR: u32 = 0x2000_0000;
+/// WNDS2_*, `WND.state2`: the version its module expects, and WM_CREATE
+/// processed.
+pub const WNDS2_WIN31COMPAT: u32 = 0x0000_0100;
+pub const WNDS2_WIN40COMPAT: u32 = 0x0000_0200;
+pub const WNDS2_WIN50COMPAT: u32 = 0x0000_0400;
+pub const WNDS2_WMCREATEMSGPROCESSED: u32 = 0x8000_0000;
+/// The `WND.bits` of a Unicode window.
+pub const WND_UNICODE: u32 = 0x1;
+
 /// WS_*, window styles.
 pub const WS_POPUP: u32 = 0x8000_0000;
+pub const WS_CHILD: u32 = 0x4000_0000;
+pub const WS_MINIMIZE: u32 = 0x2000_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
+pub const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
 pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
+pub const WS_MAXIMIZE: u32 = 0x0100_0000;
+pub const WS_CAPTION: u32 = 0x00C0_0000;
+pub const WS_DLGFRAME: u32 = 0x0040_0000;
+pub const WS_THICKFRAME: u32 = 0x0004_0000;
+/// WS_EX_*, extended window styles; WS_EX_SETANSICREATOR (ReactOS) marks
+/// a window CreateWindowExA creates.
+pub const WS_EX_DLGMODALFRAME: u32 = 0x0000_0001;
+pub const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
+pub const WS_EX_WINDOWEDGE: u32 = 0x0000_0100;
+pub const WS_EX_STATICEDGE: u32 = 0x0002_0000;
+pub const WS_EX_SETANSICREATOR: u32 = 0x8000_0000;
+/// CW_USEDEFAULT: a default position or size.
+pub const CW_USEDEFAULT: u32 = 0x8000_0000;
+/// HWND_MESSAGE: the parent of message-only windows.
+pub const HWND_MESSAGE: u32 = 0xFFFF_FFFD;
+/// The expected Windows versions of a module (`WINVER`): 3.1, NT 4, 2000.
+pub const WINVER_WIN31: u32 = 0x030A;
+pub const WINVER_WINNT4: u32 = 0x0400;
+pub const WINVER_WIN2K: u32 = 0x0500;
+/// USER32_CALLBACK_WINDOWPROC: a window procedure of the client.
+pub const USER32_CALLBACK_WINDOWPROC: u32 = 0;
+
+/// CREATESTRUCTW, 32-bit; packed for WM_NCCREATE and WM_CREATE, its two
+/// strings follow it and `name` and `class` are their offsets.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CreateStructW32 {
+    pub create_params: u32,
+    pub instance: u32,
+    pub menu: u32,
+    pub parent: u32,
+    pub cy: i32,
+    pub cx: i32,
+    pub y: i32,
+    pub x: i32,
+    pub style: u32,
+    pub name: u32,
+    pub class: u32,
+    pub ex_style: u32,
+}
+
+/// WINDOWPROC_CALLBACK_ARGUMENTS: what win32k gives `user32` to call a
+/// window procedure (USER32_CALLBACK_WINDOWPROC), followed by the
+/// `lparam_buffer_size` bytes `lparam` designates (-1: none).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowProcArguments32 {
+    pub proc: u32,
+    pub is_ansi_proc: u32,
+    pub wnd: u32,
+    pub msg: u32,
+    pub w_param: u32,
+    pub l_param: u32,
+    pub l_param_buffer_size: i32,
+    pub result: u32,
+}
+
+const _: () = {
+    assert!(size_of::<CreateStructW32>() == 0x30);
+    assert!(offset_of!(CreateStructW32, name) == 0x24);
+    assert!(size_of::<WindowProcArguments32>() == 0x20);
+    assert!(offset_of!(WindowProcArguments32, result) == 0x1C);
+};
 
 /// WM_*, window messages.
 pub const WM_CREATE: u32 = 0x0001;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_NCCREATE: u32 = 0x0081;
+pub const WM_MOVE: u32 = 0x0003;
+pub const WM_SIZE: u32 = 0x0005;
+pub const WM_GETMINMAXINFO: u32 = 0x0024;
+pub const WM_NCCALCSIZE: u32 = 0x0083;
+pub const WM_PARENTNOTIFY: u32 = 0x0210;
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_DEVICECHANGE: u32 = 0x0219;
 /// WM_MAXIMUM (ReactOS): the highest message a filter can name.
@@ -663,7 +750,10 @@ as_bytes!(
     Wnd32,
     Cls32,
     GetCharsetInfo32,
-    WndClassExW32
+    WndClassExW32,
+    CreateStructW32,
+    WindowProcArguments32,
+    CallbackWnd32
 );
 
 #[cfg(test)]

@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 27 | 732 |
+| win32k | 29 | 732 |
 
 ## ntoskrnl
 
@@ -658,13 +658,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1153` | `NtUserCreateDesktop` | 5 | ✅ |
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
 | `0x1155` | `NtUserCreateLocalMemHandle` | 4 |  |
-| `0x1156` | `NtUserCreateWindowEx` | 15 |  |
+| `0x1156` | `NtUserCreateWindowEx` | 15 | ✅ |
 | `0x1157` | `NtUserCreateWindowStation` | 7 | ✅ |
 | `0x1158` | `NtUserDdeGetQualityOfService` | 3 |  |
 | `0x1159` | `NtUserDdeInitialize` | 5 |  |
 | `0x115a` | `NtUserDdeSetQualityOfService` | 3 |  |
 | `0x115b` | `NtUserDeferWindowPos` | 8 |  |
-| `0x115c` | `NtUserDefSetText` | 2 |  |
+| `0x115c` | `NtUserDefSetText` | 2 | ✅ |
 | `0x115d` | `NtUserDeleteMenu` | 3 |  |
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
 | `0x115f` | `NtUserDestroyCursor` | 2 |  |
