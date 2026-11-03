@@ -42,6 +42,64 @@ pub const KLF_RESET: u32 = 0x4000_0000;
 /// KL_NAMELENGTH: a layout's name (KLID, 8 hexadecimal digits) and its NUL.
 pub const KL_NAMELENGTH: usize = 9;
 
+/// The routines of `user32`'s `PEB.KernelCallbackTable` that win32k calls
+/// back (USER32_CALLBACK_*, `u32cb.h` of ReactOS): ClientThreadSetup.
+pub const USER32_CALLBACK_CLIENTTHREADSTARTUP: u32 = 7;
+/// GetCharsetInfo: TranslateCharsetInfo(`TCI_SRCLOCALE`) for a locale.
+pub const USER32_CALLBACK_GETCHARSETINFO: u32 = 9;
+/// ANSI_CHARSET.
+pub const ANSI_CHARSET: u32 = 0;
+/// FS_LATIN1: the font signature of code page 1252.
+pub const FS_LATIN1: u32 = 0x0000_0001;
+/// CP_ACP: the system's ANSI code page.
+pub const CP_ACP: u32 = 0;
+
+/// CHARSETINFO: a character set, its ANSI code page, its font signature
+/// (FONTSIGNATURE: `fsUsb[4]`, `fsCsb[2]`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CharsetInfo32 {
+    pub charset: u32,
+    pub ansi_code_page: u32,
+    pub unicode_subset: [u32; 4],
+    pub code_page_bits: [u32; 2],
+}
+
+/// GET_CHARSET_INFO: the argument and the result of the GetCharsetInfo
+/// callback.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GetCharsetInfo32 {
+    pub locale: u32,
+    pub charset_info: CharsetInfo32,
+}
+
+const _: () = {
+    assert!(size_of::<CharsetInfo32>() == 0x20);
+    assert!(offset_of!(CharsetInfo32, code_page_bits) == 0x18);
+    assert!(size_of::<GetCharsetInfo32>() == 0x24);
+    assert!(offset_of!(GetCharsetInfo32, charset_info) == 4);
+};
+
+impl GetCharsetInfo32 {
+    /// The record in `bytes`, as the callback leaves it; `None` if they are
+    /// too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let words: [u32; 9] = core::array::from_fn(|i| {
+            bytes.get(4 * i..4 * i + 4).map_or(0, |w| u32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        });
+        (bytes.len() >= size_of::<Self>()).then_some(Self {
+            locale: words[0],
+            charset_info: CharsetInfo32 {
+                charset: words[1],
+                ansi_code_page: words[2],
+                unicode_subset: [words[3], words[4], words[5], words[6]],
+                code_page_bits: [words[7], words[8]],
+            },
+        })
+    }
+}
+
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
 pub const FNID_FIRST: u32 = 0x029A;
 /// FNID_NUM: the window function identifiers, `FNID_SCROLLBAR` to
@@ -541,12 +599,28 @@ as_bytes!(
     DeskInfoHead32,
     ClientThreadInfo32,
     Wnd32,
-    Cls32
+    Cls32,
+    GetCharsetInfo32
 );
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_charset_record_reads_back_from_its_bytes() {
+        let record = GetCharsetInfo32 {
+            locale: 0x409,
+            charset_info: CharsetInfo32 {
+                charset: 0,
+                ansi_code_page: 1252,
+                unicode_subset: [1, 2, 3, 4],
+                code_page_bits: [FS_LATIN1, 6],
+            },
+        };
+        assert_eq!(GetCharsetInfo32::from_bytes(record.as_bytes()), Some(record));
+        assert_eq!(GetCharsetInfo32::from_bytes(&record.as_bytes()[..0x23]), None, "one byte short");
+    }
 
     #[test]
     fn a_client_info_is_its_bytes() {

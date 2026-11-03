@@ -18,7 +18,8 @@
 //! - [`winsta`] : les stations de fenêtres ;
 //! - [`desktop`] : les bureaux et leurs tas ; le bureau d'un thread GUI
 //!   ([`gui`]) ;
-//! - [`keyboard`] : les dispositions de clavier.
+//! - [`keyboard`] : les dispositions de clavier ;
+//! - [`callback`] : les rappels vers `user32` (KeUserModeCallback).
 //!
 //! Le reste (stations et bureaux, fenêtres, messages, GDI) viendra avec le
 //! spike S3 et le M6 (05).
@@ -27,6 +28,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 
+pub mod callback;
 pub mod client;
 pub mod csrss;
 pub mod desktop;

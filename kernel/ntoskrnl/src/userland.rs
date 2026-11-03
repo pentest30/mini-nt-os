@@ -196,7 +196,15 @@ fn log_user() {
     let layouts: alloc::vec::Vec<alloc::string::String> = win32k::keyboard::layouts()
         .into_iter()
         .filter_map(win32k::keyboard::layout)
-        .map(|layout| alloc::format!("{:08x} ({}, tables at {:#x})", layout.hkl, layout.file.name, layout.file.tables))
+        .map(|layout| {
+            alloc::format!(
+                "{:08x} ({}, tables at {:#x}, code page {})",
+                layout.hkl,
+                layout.file.name,
+                layout.file.tables,
+                layout.code_page
+            )
+        })
         .collect();
     log::info!("[m4] USER: keyboard layouts loaded: [{}]", layouts.join(", "));
 }
