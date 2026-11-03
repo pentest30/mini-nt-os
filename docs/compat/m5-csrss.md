@@ -665,3 +665,36 @@ Tests : hôte (`win32k::handles` : handles, index et générations, entrées rep
 `Rect::union`), `desktop_self_test` (la fenêtre du bureau vue comme `user32` la voit : `spwnd`, son `WND` dans la vue
 du processus avec son handle, son style, son fnid et sa classe `#32769`, l'entrée de son handle dans la section
 partagée et `nb_handles` ; montrée puis cachée ; son handle rendu avec son bureau), scénario `smss` (la capture).
+
+## Étape 22 : les files de messages
+
+Chaque thread GUI a sa file de messages (`win32k::queue`, dans son `THREADINFO`), comme dans ReactOS
+(MsqCreateMessageQueue à la création du thread GUI) :
+
+| Service | Ce qu'il fait |
+|---|---|
+| NtUserPostThreadMessage | le message, à la fin de la file du thread nommé par son TID (un thread GUI), daté du compte de ticks ; FALSE pour un message qui porte un pointeur (`ERROR_MESSAGE_SYNC_ONLY` : la table `message_pointer_flags` de ReactOS, ses valeurs tirées de `winuser.h` et `undocuser.h`) ou un TID sans thread (`ERROR_INVALID_PARAMETER`) |
+| NtUserPostMessage | sans fenêtre : au thread courant ; à toutes les fenêtres (`HWND_BROADCAST`) : à aucune encore (aucune fenêtre n'a de thread) ; à une fenêtre : pas encore (`ERROR_INVALID_WINDOW_HANDLE`, journalisé une fois) |
+| NtUserPeekMessage | le premier message que demandent la fenêtre (0 : tous ; -1 : ceux du thread ; sinon cette fenêtre seule) et l'intervalle, sorti avec `PM_REMOVE` ; WM_QUIT une fois les messages postés sortis ; `ERROR_INVALID_FLAGS` pour un drapeau inconnu (PM_BADMSGFLAGS) |
+| NtUserGetMessage | de même, sorti ; attend sinon qu'il en arrive un (un événement de synchronisation par file, une attente du mode utilisateur que la fin du thread interrompt) ; FALSE pour WM_QUIT, et pour un intervalle au-delà de `WM_MAXIMUM` (`ERROR_INVALID_PARAMETER`) |
+| NtUserWaitMessage | attend un message s'il n'y en a pas |
+| NtUserCallOneParam | `ONEPARAM_ROUTINE_POSTQUITMESSAGE` (`0x33`) : WM_QUIT avec son code ; `ONEPARAM_ROUTINE_GETQUEUESTATUS` (`0x2b`) : `(fsChangeBits & flags) \| (fsWakeBits & flags) << 16`, les bits de changement demandés effacés ; une autre routine rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois |
+
+Les bits de réveil et de changement d'une file (`QS_POSTMESSAGE | QS_ALLPOSTMESSAGE` tant qu'un message posté ou WM_QUIT
+attend) sont reportés dans le `CLIENTTHREADINFO` du thread, dans le tas de son bureau, où `user32` les lit ; un thread
+qui change de bureau y retrouve ceux de sa file.
+
+Pas encore : les messages envoyés (SendMessage entre threads, et vers une procédure du client : KeUserModeCallback),
+les messages postés à une fenêtre, les entrées (clavier, souris, thread d'entrée), WM_PAINT et WM_TIMER synthétisés,
+les crochets, le filtre par fenêtre fille, la position du curseur (`pt` est nul), MsgWaitForMultipleObjects.
+
+**NtUserCreateWindowEx** attend deux préalables : la création d'une fenêtre envoie WM_GETMINMAXINFO, WM_NCCREATE,
+WM_NCCALCSIZE, WM_CREATE… à sa procédure, qui est dans `user32` pour les classes du client (il faut KeUserModeCallback :
+le noyau appelle `user32` par `KiUserCallbackDispatcher`, qui revient par NtCallbackReturn) ; et la classe doit être
+enregistrée (NtUserRegisterClassExWOW, la table des atomes d'une station).
+
+Tests : hôte (`win32k::queue` : messages à pointeur, filtres par fenêtre et intervalle, ordre puis WM_QUIT, WM_QUIT
+après les messages postés même filtrés, bits de réveil et de changement), `message_queue_self_test` (file vide, messages
+postés à soi par TID et sans fenêtre, GetQueueStatus, refus, PeekMessage par intervalle, GetMessage dans l'ordre, WM_QUIT
+une fois, une attente réveillée par un autre thread), `desktop_self_test` (les bits de la file dans le
+`CLIENTTHREADINFO`, recopiés au changement de bureau, effacés quand le message sort, reportés à un nouveau message).

@@ -316,8 +316,13 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] la fenêtre du bureau (`win32k::window`, `win32k::handles`) : la table des handles USER dans la section
      partagée, `WND` et `CLS` dans le tas du bureau, `spwnd` ; DesktopWindowProc côté serveur (WM_PAINT, BeginPaint,
      WM_ERASEBKGND, EndPaint) ; NtUserSwitchDesktop montre la fenêtre et la met à jour ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les autres fenêtres (NtUserCreateWindowEx,
-     classes de `user32`, table des atomes, files de messages et thread du bureau, régions), les rappels du mode
+   - [x] les files de messages (`win32k::queue`, `sys::message`) : NtUserPostThreadMessage, NtUserPostMessage (sans
+     fenêtre), NtUserPeekMessage, NtUserGetMessage (attente), NtUserWaitMessage, NtUserCallOneParam
+     (PostQuitMessage, GetQueueStatus), bits de réveil dans le `CLIENTTHREADINFO` ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : **KeUserModeCallback d'abord** (le noyau
+     appelle `user32` par `KiUserCallbackDispatcher`, retour par NtCallbackReturn : sans lui, NtUserCreateWindowEx ne
+     peut envoyer WM_NCCREATE ni WM_CREATE à une procédure du client), puis NtUserRegisterClassExWOW (table des
+     atomes) et NtUserCreateWindowEx, les messages envoyés et postés aux fenêtres, le thread du bureau, les régions, les rappels du mode
      utilisateur (KeUserModeCallback, `int 2Bh`), les contextes de périphérique et les objets GDI (table des handles
      partagée), BitBlt, le texte (ADR-013), le curseur et l'entrée (i8042, thread d'entrée) ;
    - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
@@ -363,6 +368,8 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 - Clavier : l'activation d'une disposition (`hKL` et `CodePage` du `CLIENTINFO`) n'a pas de test (une mutation qui
   la retire survit) : il faudrait une station interactive et une vraie disposition, que seul le scénario `smss` a, sans
   rien qui lise ces champs avant le serveur RPC.
+- Files de messages : le masque de GetQueueStatus (`QS_ALLINPUT | QS_ALLPOSTMESSAGE | QS_SMRESULT`) ne filtre que des
+  bits que la file ne produit pas encore (une mutation qui le retire survit).
 - Fenêtres : NtUserSwitchDesktop cache la fenêtre du bureau d'entrée d'avant, ce que rien ne voit (`winlogon` ne
   change de bureau qu'une fois, le scénario `smoke` n'a pas de station interactive) : montrer et cacher ont un test
   direct ; WM_PAINT est envoyé directement (pas de file de messages), la région à mettre à jour est un rectangle,

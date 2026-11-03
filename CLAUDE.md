@@ -233,7 +233,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   Premier affichage : pilote d'affichage (`win32k::display`, trait `DisplayDriver`, `drivers/video/gopfb` sur le
   framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; la fenêtre du bureau (`win32k::window` : `WND` et `CLS` dans
   le tas du bureau, handle dans la table USER de la section partagée, `win32k::handles` ; DesktopWindowProc côté
-  serveur : WM_PAINT, WM_ERASEBKGND), montrée et peinte à NtUserSwitchDesktop ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
+  serveur : WM_PAINT, WM_ERASEBKGND), montrée et peinte à NtUserSwitchDesktop ; files de messages (`win32k::queue`,
+  `sys::message` : PostThreadMessage, PeekMessage, GetMessage qui attend, WM_QUIT, GetQueueStatus, bits de réveil dans
+  le `CLIENTTHREADINFO`) ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
   pixels d'une capture de QEMU (`xtask/src/screen.rs`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
