@@ -67,6 +67,16 @@ impl Rect {
         self.right <= self.left || self.bottom <= self.top
     }
 
+    /// Le plus petit rectangle qui tient les deux.
+    pub fn union(&self, other: &Rect) -> Rect {
+        Rect::new(
+            self.left.min(other.left),
+            self.top.min(other.top),
+            self.right.max(other.right),
+            self.bottom.max(other.bottom),
+        )
+    }
+
     /// Son intersection avec `other`, vide s'ils ne se touchent pas.
     pub fn intersect(&self, other: &Rect) -> Rect {
         Rect::new(

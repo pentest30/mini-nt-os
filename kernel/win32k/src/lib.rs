@@ -33,9 +33,11 @@ pub mod desktop;
 pub mod display;
 pub mod gdi;
 pub mod gui;
+pub mod handles;
 pub mod keyboard;
 pub mod logon;
 pub mod shared;
+pub mod window;
 pub mod winsta;
 
 use alloc::sync::Arc;

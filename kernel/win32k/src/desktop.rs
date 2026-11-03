@@ -12,12 +12,11 @@
 //! cette adresse et celle de sa vue. Le tas commence par le `DESKTOPINFO` du
 //! bureau ; le `CLIENTTHREADINFO` de chaque thread sur le bureau y est pris.
 //!
-//! Le bureau d'entrée a son fond peint sur l'écran ([`switch_to`]), de la
-//! couleur système du fond.
+//! Chaque bureau a sa fenêtre ([`crate::window`]), créée avec lui ; celle
+//! du bureau d'entrée est montrée et peinte ([`switch_to`]).
 //!
-//! Pas encore : la fenêtre du bureau et la fenêtre des messages (ReactOS les
-//! crée avec le bureau, la montre et la peint ; `spwnd` reste nul), le fond
-//! d'écran (une image), les crochets, le descripteur de sécurité d'un bureau créé,
+//! Pas encore : la fenêtre des messages (ReactOS la crée avec le bureau),
+//! le fond d'écran (une image), les crochets, le descripteur de sécurité d'un bureau créé,
 //! les droits de la station sur la création (`WINSTA_CREATEDESKTOP`).
 
 use alloc::string::String;
@@ -238,6 +237,8 @@ pub struct Desktop {
     pub heap: DesktopHeap,
     /// La position de son `DESKTOPINFO` dans son tas.
     pub desk_info: u32,
+    /// Sa fenêtre (`DesktopWindow`, `pDeskInfo->spwnd`).
+    pub window: Arc<crate::window::Window>,
 }
 
 /// Le `DESKTOPINFO` d'un bureau dont le tas va de `base` à `limit`
@@ -271,9 +272,12 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
     heap.section.write_kernel(u64::from(at), info.as_bytes())?;
     let name_bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
     heap.section.write_kernel(u64::from(at) + size_of::<DeskInfoHead32>() as u64, &name_bytes)?;
+    // The window of the desktop, the size of the screen (SM_CXVIRTUALSCREEN).
+    let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width, mode.height));
+    let window = crate::window::create_desktop_window(&heap, at, width, height)?;
     let desktop = ob::create_object(
         &DESKTOP_TYPE,
-        Desktop { name: String::from(name), station: station.clone(), heap, desk_info: at },
+        Desktop { name: String::from(name), station: station.clone(), heap, desk_info: at, window },
     );
     station.add_desktop(Arc::downgrade(&desktop));
     Ok(desktop)
@@ -317,7 +321,8 @@ pub fn input_desktop() -> Option<Arc<Object<Desktop>>> {
 
 /// NtUserSwitchDesktop, une fois le handle validé : `desktop` devient le
 /// bureau d'entrée, s'il est sur la station interactive, de la session
-/// `session`, et son fond est peint sur l'écran ; rend s'il l'est. Le
+/// `session` ; la fenêtre du bureau d'avant est cachée, la sienne montrée et
+/// peinte (WM_PAINT) ; rend s'il l'est. Le
 /// processus de logon passe outre au verrouillage de la station (pas encore
 /// de verrouillage).
 ///
@@ -331,21 +336,13 @@ pub fn switch_to(desktop: &Arc<Object<Desktop>>, session: u32) -> bool {
     if !interactive.is_some_and(|station| Arc::ptr_eq(&station, &desktop.station)) {
         return false;
     }
-    let previous = INPUT_DESKTOP.lock().replace(Arc::downgrade(desktop));
-    drop(previous);
-    paint_background(desktop);
-    true
-}
-
-/// Peint le fond du bureau d'entrée `desktop` sur tout l'écran, de la
-/// couleur système `COLOR_BACKGROUND` ; journalisé (un changement de bureau
-/// est rare). En attendant la fenêtre du bureau, que ReactOS montre
-/// (co_IntShowDesktop) et peint (IntPaintDesktop, à son WM_PAINT).
-fn paint_background(desktop: &Desktop) {
-    let painted = crate::display::draw(|screen| screen.fill_rect(screen.bounds(), crate::gdi::syscolor::BACKGROUND));
-    if let (true, Some(mode)) = (painted, crate::display::mode()) {
-        log::info!("win32k: the input desktop {} painted, {}x{}", desktop.name, mode.width, mode.height);
+    let previous = INPUT_DESKTOP.lock().replace(Arc::downgrade(desktop)).and_then(|previous| previous.upgrade());
+    if let Some(previous) = previous.filter(|previous| !Arc::ptr_eq(previous, desktop)) {
+        crate::window::hide_desktop_window(&previous);
     }
+    let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width, mode.height));
+    crate::window::show_desktop_window(desktop, width, height);
+    true
 }
 
 #[cfg(test)]
