@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 100 | 296 |
-| win32k | 4 | 732 |
+| win32k | 6 | 732 |
 
 ## ntoskrnl
 
@@ -639,7 +639,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1140` | `NtUserCallNextHookEx` | 4 |  |
 | `0x1141` | `NtUserCallNoParam` | 1 |  |
 | `0x1142` | `NtUserCallOneParam` | 2 |  |
-| `0x1143` | `NtUserCallTwoParam` | 3 |  |
+| `0x1143` | `NtUserCallTwoParam` | 3 | ✅ |
 | `0x1144` | `NtUserChangeClipboardChain` | 2 |  |
 | `0x1145` | `NtUserChangeDisplaySettings` | 4 |  |
 | `0x1146` | `NtUserCheckImeHotKey` | 2 |  |
@@ -833,7 +833,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1202` | `NtUserSetImeInfoEx` | 1 |  |
 | `0x1203` | `NtUserSetImeOwnerWindow` | 2 |  |
 | `0x1204` | `NtUserSetInformationProcess` | 4 |  |
-| `0x1205` | `NtUserSetInformationThread` | 4 |  |
+| `0x1205` | `NtUserSetInformationThread` | 4 | ✅ |
 | `0x1206` | `NtUserSetInternalWindowPos` | 4 |  |
 | `0x1207` | `NtUserSetKeyboardState` | 1 |  |
 | `0x1208` | `NtUserSetLogonNotifyWindow` | 1 |  |
