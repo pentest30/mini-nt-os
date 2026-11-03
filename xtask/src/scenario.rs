@@ -15,6 +15,7 @@
 //! requires = userland, native
 //! disk     = system
 //! boots    = 2
+//! screen   = 640 400 3A6EA5
 //! ```
 //!
 //! - `features`: ntoskrnl features, comma-separated (default: none).
@@ -38,6 +39,9 @@
 //!   must end with QEMU (the kernel resets the machine, and `-no-reboot`
 //!   makes QEMU exit); the `expect` markers are looked for in all the serial
 //!   logs, the last boot's included.
+//! - `screen = X Y RRGGBB`: once the markers are found, the screen of the
+//!   last boot is dumped (`screen.ppm` in the run directory) and the pixel
+//!   at column X, row Y must have this colour (`xtask/src/screen.rs`).
 
 use std::fs;
 use std::path::Path;
@@ -56,6 +60,8 @@ pub struct Scenario {
     /// The ramdisk image is also the system disk `C:`.
     pub system_disk: bool,
     pub boots: u32,
+    /// Pixels the screen must show once the markers are found.
+    pub screen: Vec<crate::screen::Pixel>,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
@@ -81,6 +87,7 @@ impl Scenario {
             requires_native: false,
             system_disk: false,
             boots: 1,
+            screen: Vec::new(),
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -106,6 +113,7 @@ impl Scenario {
                 "expect" => sc.expect.push(value.split('|').map(|m| m.trim().to_string()).collect()),
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
+                "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
                     _ => return Err(format!("{}: unknown disk `{value}`", at())),
@@ -228,6 +236,9 @@ requires = userland
         assert!((!sc.system_disk, sc.boots) == (true, 1), "one boot on the ramdisk by default");
         let twice = Scenario::parse("x", "expect = a\ndisk = system\nboots = 2").unwrap();
         assert!(twice.system_disk && twice.boots == 2);
+        let screen = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5").unwrap();
+        assert_eq!(screen.screen, [crate::screen::Pixel { x: 1, y: 2, rgb: [0x3A, 0x6E, 0xA5] }]);
+        assert!(sc.screen.is_empty());
     }
 
     #[test]
@@ -257,5 +268,6 @@ requires = userland
         assert!(Scenario::parse("x", "expect = a\nrequires = network").is_err());
         assert!(Scenario::parse("x", "expect = a\ndisk = floppy").is_err());
         assert!(Scenario::parse("x", "expect = a\nboots = 0").is_err());
+        assert!(Scenario::parse("x", "expect = a\nscreen = 1 2").is_err());
     }
 }
