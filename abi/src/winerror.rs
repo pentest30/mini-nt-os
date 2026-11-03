@@ -26,6 +26,8 @@ pub const ERROR_ALREADY_EXISTS: u32 = 183;
 /// ERROR_MR_MID_NOT_FOUND: what RtlNtStatusToDosError gives a status it
 /// does not know.
 pub const ERROR_MR_MID_NOT_FOUND: u32 = 317;
+/// ERROR_INVALID_FLAGS.
+pub const ERROR_INVALID_FLAGS: u32 = 1004;
 /// ERROR_NOACCESS.
 pub const ERROR_NOACCESS: u32 = 998;
 

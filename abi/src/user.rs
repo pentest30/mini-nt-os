@@ -29,6 +29,19 @@ pub const TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: u32 = 0x69;
 /// csrss gives win32k its API port (`USERTHREADINFOCLASS`).
 pub const USER_THREAD_CSR_API_PORT: u32 = 10;
 
+/// KLF_*: how LoadKeyboardLayout loads a layout.
+pub const KLF_ACTIVATE: u32 = 0x0001;
+pub const KLF_SUBSTITUTE_OK: u32 = 0x0002;
+pub const KLF_UNLOADPREVIOUS: u32 = 0x0004;
+pub const KLF_REORDER: u32 = 0x0008;
+pub const KLF_REPLACELANG: u32 = 0x0010;
+pub const KLF_NOTELLSHELL: u32 = 0x0080;
+pub const KLF_SETFORPROCESS: u32 = 0x0100;
+pub const KLF_SHIFTLOCK: u32 = 0x0001_0000;
+pub const KLF_RESET: u32 = 0x4000_0000;
+/// KL_NAMELENGTH: a layout's name (KLID, 8 hexadecimal digits) and its NUL.
+pub const KL_NAMELENGTH: usize = 9;
+
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
 pub const FNID_FIRST: u32 = 0x029A;
 /// FNID_NUM: the window function identifiers, `FNID_SCROLLBAR` to
