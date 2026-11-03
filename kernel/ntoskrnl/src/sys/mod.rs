@@ -34,6 +34,7 @@ pub mod exceptions;
 mod file;
 pub mod gates;
 mod memory;
+mod message;
 mod object;
 mod port;
 mod process;
@@ -182,24 +183,30 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtTerminateThread, Handler::Status(process::nt_terminate_thread)),
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
+    (services::NtUserCallOneParam, Handler::Status(message::nt_user_call_one_param)),
     (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
     (services::NtUserCreateDesktop, Handler::Status(desktop::nt_user_create_desktop)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
+    (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
     (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
     (services::NtUserInitialize, Handler::Status(user::nt_user_initialize)),
     (services::NtUserInitializeClientPfnArrays, Handler::Status(user::nt_user_initialize_client_pfn_arrays)),
     (services::NtUserLoadKeyboardLayoutEx, Handler::Status(user::nt_user_load_keyboard_layout_ex)),
     (services::NtUserOpenDesktop, Handler::Status(desktop::nt_user_open_desktop)),
     (services::NtUserOpenWindowStation, Handler::Status(winsta::nt_user_open_window_station)),
+    (services::NtUserPeekMessage, Handler::Status(message::nt_user_peek_message)),
+    (services::NtUserPostMessage, Handler::Status(message::nt_user_post_message)),
+    (services::NtUserPostThreadMessage, Handler::Status(message::nt_user_post_thread_message)),
     (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
     (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
+    (services::NtUserWaitMessage, Handler::Status(message::nt_user_wait_message)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),
     (services::NtWaitForMultipleObjects, Handler::Status(wait::nt_wait_for_multiple_objects)),
     (services::NtWaitForSingleObject, Handler::Status(wait::nt_wait_for_single_object)),

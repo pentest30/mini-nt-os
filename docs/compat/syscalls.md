@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 100 | 296 |
-| win32k | 19 | 732 |
+| win32k | 25 | 732 |
 
 ## ntoskrnl
 
@@ -638,7 +638,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x113f` | `NtUserCallMsgFilter` | 2 |  |
 | `0x1140` | `NtUserCallNextHookEx` | 4 |  |
 | `0x1141` | `NtUserCallNoParam` | 1 |  |
-| `0x1142` | `NtUserCallOneParam` | 2 |  |
+| `0x1142` | `NtUserCallOneParam` | 2 | ✅ |
 | `0x1143` | `NtUserCallTwoParam` | 3 | ✅ |
 | `0x1144` | `NtUserChangeClipboardChain` | 2 |  |
 | `0x1145` | `NtUserChangeDisplaySettings` | 4 |  |
@@ -736,7 +736,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11a1` | `NtUserGetMenuBarInfo` | 4 |  |
 | `0x11a2` | `NtUserGetMenuIndex` | 2 |  |
 | `0x11a3` | `NtUserGetMenuItemRect` | 4 |  |
-| `0x11a4` | `NtUserGetMessage` | 4 |  |
+| `0x11a4` | `NtUserGetMessage` | 4 | ✅ |
 | `0x11a5` | `NtUserGetMouseMovePointsEx` | 5 |  |
 | `0x11a6` | `NtUserGetObjectInformation` | 5 |  |
 | `0x11a7` | `NtUserGetOpenClipboardWindow` | 0 |  |
@@ -789,9 +789,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11d6` | `NtUserOpenInputDesktop` | 3 |  |
 | `0x11d7` | `NtUserOpenWindowStation` | 2 | ✅ |
 | `0x11d8` | `NtUserPaintDesktop` | 1 |  |
-| `0x11d9` | `NtUserPeekMessage` | 5 |  |
-| `0x11da` | `NtUserPostMessage` | 4 |  |
-| `0x11db` | `NtUserPostThreadMessage` | 4 |  |
+| `0x11d9` | `NtUserPeekMessage` | 5 | ✅ |
+| `0x11da` | `NtUserPostMessage` | 4 | ✅ |
+| `0x11db` | `NtUserPostThreadMessage` | 4 | ✅ |
 | `0x11dc` | `NtUserPrintWindow` | 3 |  |
 | `0x11dd` | `NtUserProcessConnect` | 3 | ✅ |
 | `0x11de` | `NtUserQueryInformationThread` | 4 |  |
@@ -902,7 +902,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1247` | `NtUserVkKeyScanEx` | 3 |  |
 | `0x1248` | `NtUserWaitForInputIdle` | 3 |  |
 | `0x1249` | `NtUserWaitForMsgAndEvent` | 1 |  |
-| `0x124a` | `NtUserWaitMessage` | 0 |  |
+| `0x124a` | `NtUserWaitMessage` | 0 | ✅ |
 | `0x124b` | `NtUserWin32PoolAllocationStats` | 6 |  |
 | `0x124c` | `NtUserWindowFromPoint` | 2 |  |
 | `0x124d` | `NtUserYieldTask` | 0 |  |
