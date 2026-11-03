@@ -253,6 +253,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 }
             }
         }
+        if let Some(program) = &sc.initial_command {
+            put_initial_command(&mut extra_files, program)?;
+        }
         let cpus = match &cpu {
             Some(cpu) => vec![cpu.clone()],
             None => sc.cpus.clone(),
@@ -311,6 +314,23 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
     } else {
         Err(format!("{} of {runs} boot run(s) failed: {}", failures.len(), failures.join(", ")))
     }
+}
+
+/// The path of `winlogon.exe` on the ramdisk, which `smss` starts.
+const INITIAL_COMMAND: &str = "WINDOWS/SYSTEM32/WINLOGON.EXE";
+
+/// Among the ramdisk's `files` (`HOST:FAT_PATH`), the test program
+/// `program` (built from `tests/native/`) takes the place of `winlogon.exe`.
+fn put_initial_command(files: &mut Vec<String>, program: &str) -> Result<()> {
+    let suffix = format!(":{program}");
+    let host = files
+        .iter()
+        .find_map(|file| file.strip_suffix(suffix.as_str()))
+        .ok_or_else(|| format!("initial-command: no test program {program} in tests/native"))?
+        .to_string();
+    files.retain(|file| !file.ends_with(&format!(":{INITIAL_COMMAND}")));
+    files.push(format!("{host}:{INITIAL_COMMAND}"));
+    Ok(())
 }
 
 /// The files of the fetched userland for the FAT ramdisk (`HOST:FAT_PATH`),
@@ -427,4 +447,28 @@ impl Args {
 
 fn parse_number(s: &str, option: &str) -> Result<u32> {
     s.parse().map_err(|_| format!("{option}: `{s}` is not a number"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_test_program_takes_the_place_of_winlogon() {
+        let mut files = vec![
+            "/u/winlogon.exe:WINDOWS/SYSTEM32/WINLOGON.EXE".to_string(),
+            "/n/GUI1.EXE:GUI1.EXE".to_string(),
+            "/u/user32.dll:WINDOWS/SYSTEM32/USER32.DLL".to_string(),
+        ];
+        put_initial_command(&mut files, "GUI1.EXE").unwrap();
+        assert_eq!(
+            files,
+            [
+                "/n/GUI1.EXE:GUI1.EXE",
+                "/u/user32.dll:WINDOWS/SYSTEM32/USER32.DLL",
+                "/n/GUI1.EXE:WINDOWS/SYSTEM32/WINLOGON.EXE"
+            ]
+        );
+        assert!(put_initial_command(&mut files, "NONE.EXE").is_err());
+    }
 }

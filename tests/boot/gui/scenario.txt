@@ -1,0 +1,20 @@
+# M6, windows: GUI1.EXE (tests/native/gui1.c, MinGW, linked to ReactOS's
+# kernel32 and user32) takes the place of winlogon.exe, which smss starts as
+# its initial command once csrss runs. Like winlogon, it registers as the
+# logon process, creates WinSta0 and a desktop and goes on it; then it
+# registers a window class: not yet (NtUserRegisterClassExWOW). It ends with
+# status 2.
+# Update with each step (docs/compat/m6-fenetres.md).
+features = test-smss
+requires = userland, native
+initial-command = GUI1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [gui] on WinSta0\Default
+expect = sys: NtUserRegisterClassExWOW (0x11e6) is not implemented
+expect = [gui] RegisterClassExW: atom 0000 (120)
+expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x00000002
+
+forbid = WRONG
+forbid = *** STOP:

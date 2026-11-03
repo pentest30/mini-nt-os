@@ -42,6 +42,10 @@
 //! - `screen = X Y RRGGBB`: once the markers are found, the screen of the
 //!   last boot is dumped (`screen.ppm` in the run directory) and the pixel
 //!   at column X, row Y must have this colour (`xtask/src/screen.rs`).
+//! - `initial-command = PROGRAM.EXE`: this Win32 test program of
+//!   `tests/native/` takes the place of `winlogon.exe` on the ramdisk, so
+//!   that `smss` starts it as its initial command (with `requires =
+//!   userland, native`).
 
 use std::fs;
 use std::path::Path;
@@ -62,6 +66,8 @@ pub struct Scenario {
     pub boots: u32,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
+    /// The test program that takes the place of `winlogon.exe`.
+    pub initial_command: Option<String>,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
@@ -88,6 +94,7 @@ impl Scenario {
             system_disk: false,
             boots: 1,
             screen: Vec::new(),
+            initial_command: None,
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -113,6 +120,7 @@ impl Scenario {
                 "expect" => sc.expect.push(value.split('|').map(|m| m.trim().to_string()).collect()),
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
+                "initial-command" => sc.initial_command = Some(value.to_string()),
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
@@ -145,6 +153,9 @@ impl Scenario {
         }
         if sc.cpus.is_empty() {
             return Err(format!("{name}/{SCENARIO_FILE}: empty `cpus`"));
+        }
+        if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
+            return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
         }
         Ok(sc)
     }
@@ -239,6 +250,10 @@ requires = userland
         let screen = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5").unwrap();
         assert_eq!(screen.screen, [crate::screen::Pixel { x: 1, y: 2, rgb: [0x3A, 0x6E, 0xA5] }]);
         assert!(sc.screen.is_empty());
+        let gui = Scenario::parse("x", "expect = a\nrequires = userland, native\ninitial-command = GUI1.EXE").unwrap();
+        assert_eq!(gui.initial_command.as_deref(), Some("GUI1.EXE"));
+        assert_eq!(sc.initial_command, None);
+        assert!(Scenario::parse("x", "expect = a\ninitial-command = GUI1.EXE").is_err(), "without the userland");
     }
 
     #[test]

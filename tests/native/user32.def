@@ -1,0 +1,16 @@
+; The exports of user32.dll (ReactOS 0.4.16, i386) that the Win32 test
+; programs call, for their import library (`cargo xtask` builds it with
+; dlltool --kill-at). stdcall functions carry their argument bytes (@N); the
+; DLL exports them undecorated.
+LIBRARY user32.dll
+EXPORTS
+CreateDesktopW@24
+CreateWindowExW@48
+CreateWindowStationW@16
+DefWindowProcW@16
+GetClassInfoExW@12
+RegisterClassExW@4
+RegisterLogonProcess@8
+SetProcessWindowStation@4
+SetThreadDesktop@4
+SwitchDesktop@4

@@ -1,8 +1,11 @@
-//! The native test programs of `tests/native/` (spike S1, M3): C programs of
-//! the NATIVE subsystem, linked to the pinned ReactOS's ntdll only, through an
-//! import library made from `tests/native/ntdll.def`. They go to the boot
-//! disk of the scenarios that `require = native`, where the kernel runs them
-//! (`ntoskrnl::userland::run_boot_programs`).
+//! The test programs of `tests/native/`, C programs linked to the pinned
+//! ReactOS's DLLs through import libraries made from the `.def` files there.
+//! They go to the boot disk of the scenarios that `require = native`:
+//! - those of the NATIVE subsystem (spike S1, M3), linked to ntdll only,
+//!   which the kernel runs (`ntoskrnl::userland::run_boot_programs`);
+//! - those of the WINDOWS subsystem (M6), linked to ntdll, kernel32 and
+//!   user32, which a scenario puts in the place of `winlogon.exe`
+//!   (`initial-command`), for `smss` to start.
 //!
 //! Two toolchains build them:
 //! - MinGW (`i686-w64-mingw32-gcc`, its `dlltool`), the roadmap's;
@@ -25,17 +28,26 @@ const TOOLS: &[&str] = &["i686-w64-mingw32-gcc", "i686-w64-mingw32-dlltool", "cl
 
 #[derive(Clone, Copy)]
 enum Toolchain {
+    /// MinGW, NATIVE subsystem.
     MinGw,
+    /// MinGW, WINDOWS subsystem.
+    MinGwWin32,
     ClangMsvc,
 }
 
 /// Each program: its sources in `tests/native/`, its name on the boot disk
-/// (which the kernel looks for), and its toolchain.
-const PROGRAMS: &[(&[&str], &str, Toolchain)] =
-    &[(&["s1hello.c"], "S1HELLO.EXE", Toolchain::MinGw), (&["s1seh.c", "seh3.c"], "S1SEH.EXE", Toolchain::ClangMsvc)];
+/// (which the kernel or a scenario looks for), and its toolchain.
+const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
+    (&["s1hello.c"], "S1HELLO.EXE", Toolchain::MinGw),
+    (&["s1seh.c", "seh3.c"], "S1SEH.EXE", Toolchain::ClangMsvc),
+    (&["gui1.c"], "GUI1.EXE", Toolchain::MinGwWin32),
+];
 
-/// MinGW: no C runtime, no stack protector, no unwind tables; entered at
-/// `NtProcessStartup(PPEB)` (stdcall, 4 bytes).
+/// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
+/// every program, kernel32 and user32 for the Win32 ones.
+const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32"];
+
+/// MinGW: no C runtime, no stack protector, no unwind tables.
 const GCC_FLAGS: &[&str] = &[
     "-O2",
     "-Wall",
@@ -46,9 +58,14 @@ const GCC_FLAGS: &[&str] = &[
     "-fno-stack-protector",
     "-fno-asynchronous-unwind-tables",
     "-s",
-    "-Wl,--subsystem,native",
-    "-Wl,-e,_NtProcessStartup@4",
 ];
+
+/// NATIVE subsystem: entered at `NtProcessStartup(PPEB)` (stdcall, 4 bytes).
+const GCC_NATIVE_FLAGS: &[&str] = &["-Wl,--subsystem,native", "-Wl,-e,_NtProcessStartup@4"];
+
+/// WINDOWS subsystem of XP (5.1): entered at `GuiStartup()` (stdcall, no
+/// argument), which kernel32's BaseProcessStartup calls.
+const GCC_WIN32_FLAGS: &[&str] = &["-Wl,--subsystem,windows:5.1", "-Wl,-e,_GuiStartup@0"];
 
 /// clang: frame-based SEH, a faulting instruction counting as an exception
 /// in a `__try` block (`-fasync-exceptions`).
@@ -84,25 +101,36 @@ pub fn build(ws: &Workspace) -> Result<Option<Vec<String>>> {
     let sources = ws.root.join("tests").join("native");
     let out = ws.target.join("xtask").join("native");
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let definitions = sources.join("ntdll.def");
-    let gnu_library = out.join("libntdll.a");
-    run(Command::new("i686-w64-mingw32-dlltool")
-        .arg("--kill-at")
-        .arg("-d")
-        .arg(&definitions)
-        .arg("-l")
-        .arg(&gnu_library))?;
+    let mut gnu_libraries = Vec::new();
+    for library in LIBRARIES {
+        let gnu_library = out.join(format!("lib{library}.a"));
+        run(Command::new("i686-w64-mingw32-dlltool")
+            .arg("--kill-at")
+            .arg("-d")
+            .arg(sources.join(format!("{library}.def")))
+            .arg("-l")
+            .arg(&gnu_library))?;
+        gnu_libraries.push(gnu_library);
+    }
     let msvc_library = out.join("ntdll.lib");
-    run(Command::new("llvm-dlltool").args(["-m", "i386", "-k", "-d"]).arg(&definitions).arg("-l").arg(&msvc_library))?;
+    run(Command::new("llvm-dlltool")
+        .args(["-m", "i386", "-k", "-d"])
+        .arg(sources.join("ntdll.def"))
+        .arg("-l")
+        .arg(&msvc_library))?;
 
     let mut files = Vec::new();
     for &(program_sources, name, toolchain) in PROGRAMS {
         let image = out.join(name);
         match toolchain {
-            Toolchain::MinGw => {
+            Toolchain::MinGw | Toolchain::MinGwWin32 => {
+                let (subsystem, libraries) = match toolchain {
+                    Toolchain::MinGw => (GCC_NATIVE_FLAGS, &gnu_libraries[..1]),
+                    _ => (GCC_WIN32_FLAGS, &gnu_libraries[..]),
+                };
                 let mut gcc = Command::new("i686-w64-mingw32-gcc");
-                gcc.args(GCC_FLAGS).arg("-o").arg(&image);
-                gcc.args(program_sources.iter().map(|s| sources.join(s))).arg(&gnu_library);
+                gcc.args(GCC_FLAGS).args(subsystem).arg("-o").arg(&image);
+                gcc.args(program_sources.iter().map(|s| sources.join(s))).args(libraries);
                 run(&mut gcc)?;
             }
             Toolchain::ClangMsvc => {
