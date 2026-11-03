@@ -332,9 +332,13 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      WM_MOVE, WM_PARENTNOTIFY envoyés à la procédure du client par KeUserModeCallback
      (`USER32_CALLBACK_WINDOWPROC`, `lParam` emballé comme PackParam) ; le `WND` complet (liens, nom, procédure),
      que `user32` lit lui-même ; NtUserDefSetText ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : la partie noyau de DefWindowProc
-     (NtUserMessageCall, FNID_DEFWINDOWPROC) et les métriques du système (`aiSysMet` du `SERVERINFO` : bordures,
-     WM_NCCALCSIZE, WM_GETMINMAXINFO), le gestionnaire de fenêtres (ordre Z, SetWindowPos, ShowWindow), DestroyWindow,
+   - [x] les métriques et les couleurs du système (`win32k::metrics` : `aiSysMet` et `argbSystem` du `SERVERINFO`)
+     et la partie noyau de DefWindowProc (`win32k::defwnd`, NtUserMessageCall avec FNID_DEFWINDOWPROC :
+     WM_NCCALCSIZE, la zone cliente sans le cadre ni le titre) ; WM_GETMINMAXINFO à la création ; la capture d'un
+     `LARGE_STRING` de NtUserCreateWindowEx ignore `bAnsi` (corrigé : une classe n'était parfois pas trouvée) ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : le gestionnaire de fenêtres (ordre Z,
+     SetWindowPos, ShowWindow : WM_SIZE et WM_MOVE d'une fenêtre recouvrante), un moniteur (place par défaut,
+     zone de travail), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : contextes de périphérique et table des handles GDI partagée, régions et découpage, BitBlt, texte et
      polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
@@ -378,9 +382,13 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   NtUserRegisterClassExWOW n'a pas de test (`user32` n'en passe jamais ; une mutation qui le retire survit) ; ni
   curseurs, ni icônes, ni pinceaux, ni désenregistrement, ni procédures d'appel, ni `atomSysClass`.
 - Fenêtres (M6, étape 2) : ni DestroyWindow (les fenêtres d'un thread vivent autant que lui), ni ShowWindow à la
-  création, ni WM_GETMINMAXINFO, ni menus, ni `HWND_MESSAGE`, ni messages à un autre thread, ni crochets ; la partie
-  noyau de DefWindowProc manque (la zone cliente reste le rectangle de la fenêtre) ; un texte ANSI n'est pas converti
-  par la page de code (ASCII seul).
+  création, ni menus, ni `HWND_MESSAGE`, ni messages à un autre thread, ni crochets ; un texte ANSI n'est pas
+  converti par la page de code (ASCII seul).
+- DefWindowProc du noyau (M6, étape 3) : WM_NCCALCSIZE seul (les autres messages attendent les contextes de
+  périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
+  rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
+  moniteur (une fenêtre recouvrante est en 0, 0, 800 × 600 comme ReactOS sans moniteur), ni profil d'utilisateur
+  pour les métriques, ni SystemParametersInfo.
 
 - Rappels en mode utilisateur (étape 23) : un thread qui se termine pendant un rappel abandonne les trames des rappels
   en cours (comme NT), sans rendre ce qu'elles possèdent, et rien ne le teste ; `STATUS_CALLBACK_POP_STACK` n'a qu'un

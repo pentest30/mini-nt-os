@@ -91,12 +91,52 @@ WM_PARENTNOTIFY (WM_CREATE, 7, la fille) ; `GetParent` et `GetWindow(GW_CHILD)` 
 fille est en (110, 70). Une fille sans parent (1406), une fenêtre d'une classe inconnue (1407) et une fenêtre dont la
 procédure refuse WM_NCCREATE ne sont pas créées. Le programme va au bout (statut `0x600D`).
 
-Ce qui manque, journalisé une fois : la partie noyau de DefWindowProc (NtUserMessageCall avec FNID_DEFWINDOWPROC,
-que `user32` appelle pour WM_NCCALCSIZE : la zone cliente reste le rectangle de la fenêtre), WM_GETMINMAXINFO (les
-métriques du système manquent), montrer une fenêtre créée visible (ShowWindow, SetWindowPos), les menus (une fenêtre
+Ce qui manque, journalisé une fois : la partie noyau de DefWindowProc et WM_GETMINMAXINFO (étape 3), montrer une
+fenêtre créée visible (ShowWindow, SetWindowPos), les menus (une fenêtre
 qui n'est pas fille ne peut pas en recevoir : `ERROR_INVALID_MENU_HANDLE`), les fenêtres de messages (`HWND_MESSAGE`),
 les messages envoyés à un autre thread, DestroyWindow (les fenêtres d'un thread vivent autant que lui ; une création
 qui échoue ne reçoit ni WM_DESTROY ni WM_NCDESTROY), les crochets (`WH_CBT`), une fenêtre créée réduite ou agrandie.
 
 Tests : hôte (`win32k::window` : `CREATESTRUCT` emballé, styles d'une fenêtre neuve, place par défaut, compatibilité,
 zone cliente ramenée dans la fenêtre) ; le scénario `gui`, sur les deux CPU.
+
+Correction (étape 3) : NtUserCreateWindowEx lisait le bit `bAnsi` des `LARGE_STRING` de la classe et de sa version.
+`user32` n'y pose que `MaximumLength` : le bit est ce qui restait sur sa pile, et une classe pouvait ne pas être
+trouvée (1407), selon les appels précédents. Comme ProbeAndCaptureLargeString, la capture l'ignore maintenant (le nom
+de la fenêtre aussi : CreateWindowExA le convertit en Unicode sans ôter le bit) ; seul NtUserDefSetText le lit.
+
+## Étape 3 : les métriques du système et DefWindowProc du noyau
+
+`user32` lit lui-même les métriques du système (`GetSystemMetrics`) et les couleurs système (`GetSysColor`) dans le
+`SERVERINFO` de la section partagée, `aiSysMet` (en `0x5CC`) et `argbSystem` (en `0x7BC`) : les positions viennent du
+`user32` épinglé. Pour les messages qu'il ne traite pas lui-même (WM_NCCALCSIZE, WM_NCPAINT, WM_SETCURSOR,
+WM_SYSCOMMAND…), son DefWindowProc appelle NtUserMessageCall avec `FNID_DEFWINDOWPROC`. Comme ReactOS (`metric.c`,
+`stockobj.c`, `defwnd.c`, `nonclient.c`, `winpos.c`, `message.c`, comme spécification) :
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `win32k::metrics` | InitMetrics avec les valeurs par défaut de ReactOS sans profil d'utilisateur (titre de 19 + 1, bordure de 1, barres de défilement de 16, menus de 18…) et le mode de l'écran (640 × 480 sans affichage) ; les 31 couleurs système de ReactOS ; écrites dans le `SERVERINFO` quand `csrss` initialise win32k (InitVideo), gardées pour les calculs du noyau (UserGetSystemMetrics) |
+| `win32k::defwnd` | IntDefWindowProc : WM_NCCALCSIZE (NC_HandleNCCalcSize : bordures d'après UserHasWindowEdge et UserGetWindowBorders, titre ou petit titre, bord client, barres de défilement, à gauche aussi ; avec des rectangles valides, `WVR_VALIDRECTS` et les `WVR_*REDRAW` de la classe ; les `WNDS_HAS*` gardés dans le `WND`) ; WM_DEVICECHANGE rend TRUE, un message au-delà de WM_USER 0 ; les valeurs par défaut de WM_GETMINMAXINFO (co_WinPosGetMinMaxInfo : IntGetWindowBorders, taille et place agrandies, suivi entre SM_CXMINTRACK et SM_CXMAXTRACK) |
+| NtUserMessageCall (`sys::message`) | `FNID_DEFWINDOWPROC` : la fenêtre (`hWnd` nul permis ; inconnue : FALSE, `ERROR_INVALID_WINDOW_HANDLE`), le résultat dans `ResultInfo`, TRUE ; une structure illisible ou un `ResultInfo` où l'on ne peut écrire : FALSE (ReactOS n'a pas de garde autour de ce traitement) ; les autres types : FALSE et `ERROR_CALL_NOT_IMPLEMENTED`, journalisés une fois chacun |
+| `win32k::window::create_window` | WM_GETMINMAXINFO avant WM_NCCREATE, à une fenêtre recouvrante ou à cadre épais ; sa taille est ramenée entre le suivi minimal et maximal que laisse la procédure (le minimum l'emporte) |
+
+Le programme lit l'écran (1280 × 800), le titre (20), le cadre (4), la largeur minimale (112) et trois couleurs
+(fond du bureau `a56e3a`, fenêtre `ffffff`, boutons `c8d0d4`). Une fenêtre `WS_OVERLAPPEDWINDOW` (`CW_USEDEFAULT`)
+reçoit `0024 0081 0083 0001` (pas encore WM_SIZE ni WM_MOVE : elle attend d'être montrée) ; WM_GETMINMAXINFO lui
+donne 1288 × 808 en (−4, −4) agrandie, un suivi de 112 × 28 à 1292 × 812 ; elle est en 0, 0, 800 × 600 (ReactOS
+sans moniteur), sa zone cliente fait 792 × 572 (4 de bordure, 20 de titre) et son `WND` a `WNDS_HASCAPTION` pendant
+WM_CREATE. DefWindowProcW de WM_NCCALCSIZE avec des rectangles valides rend `0x400` et la zone cliente du premier.
+Des fenêtres `WS_POPUP | WS_CAPTION | WS_THICKFRAME` créées trop petites, trop grandes, ou avec un minimum que leur
+procédure relève (300 × 200), ont la taille permise ; elles sont créées avec des uns sur la pile, que `user32` laisse
+dans le bit `bAnsi` du nom de la classe.
+
+Ce qui manque, journalisé une fois : les autres messages de DefWindowProc (peinture du cadre, WM_NCHITTEST,
+WM_SETCURSOR, WM_SYSCOMMAND, WM_CLOSE, les touches… : ils attendent les contextes de périphérique, le
+positionnement et l'entrée), le texte ANSI de DefWindowProcA, les autres types de NtUserMessageCall (SendMessage et
+ses variantes, la barre de défilement, le bureau, les menus) ; ni moniteur (place par défaut d'une fenêtre
+recouvrante, valeurs de WM_GETMINMAXINFO non adaptées à la zone de travail), ni profil d'utilisateur pour les
+métriques (`HKCU\Control Panel\Desktop\WindowMetrics`), ni SystemParametersInfo, ni menus (`WNDS_HASMENU`).
+
+Tests : hôte (`win32k::metrics` : les métriques d'un écran 1280 × 800, le fond du bureau ; `win32k::defwnd` :
+bords en relief, zone cliente d'une fenêtre recouvrante, bordure fine, bord client, barres de défilement, titre
+d'outil, fenêtre réduite, WM_GETMINMAXINFO de cadres divers) ; le scénario `gui`, sur les deux CPU.
