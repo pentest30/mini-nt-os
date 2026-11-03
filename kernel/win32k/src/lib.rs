@@ -30,6 +30,8 @@ extern crate alloc;
 pub mod client;
 pub mod csrss;
 pub mod desktop;
+pub mod display;
+pub mod gdi;
 pub mod gui;
 pub mod keyboard;
 pub mod logon;
