@@ -65,6 +65,37 @@ pub const TIF_CSRSSTHREAD: u32 = 0x0000_0008;
 /// TIF_DONTATTACHQUEUE: its input queue is never attached to another's.
 pub const TIF_DONTATTACHQUEUE: u32 = 0x0000_0040;
 
+/// FIRST_USER_HANDLE: the low word of the handle of entry 0; entry `i` is
+/// `FIRST_USER_HANDLE + 2 i`, its generation in the high word.
+pub const FIRST_USER_HANDLE: u32 = 0x0020;
+/// TYPE_WINDOW: a handle entry of a window (`HANDLE_TYPE`).
+pub const TYPE_WINDOW: u8 = 1;
+
+/// FNID_DESKTOP: the function identifier of the desktop window.
+pub const FNID_DESKTOP: u32 = 0x029D;
+/// The desktop window's class, an integer atom (`WC_DESKTOP`, `#32769`).
+pub const WC_DESKTOP: u16 = 0x8001;
+
+/// WNDS_*, `WND.state`.
+pub const WNDS_SENDERASEBACKGROUND: u32 = 0x0000_0200;
+pub const WNDS_ERASEBACKGROUND: u32 = 0x0000_0400;
+/// WNDS_SERVERSIDEWINDOWPROC: its window procedure runs in win32k.
+pub const WNDS_SERVERSIDEWINDOWPROC: u32 = 0x0004_0000;
+/// CSF_*, `CLS.CSF_flags`.
+pub const CSF_SERVERSIDEPROC: u32 = 0x0001;
+pub const CSF_SYSTEMCLASS: u32 = 0x0008;
+
+/// WS_*, window styles.
+pub const WS_POPUP: u32 = 0x8000_0000;
+pub const WS_VISIBLE: u32 = 0x1000_0000;
+pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
+
+/// WM_*, window messages.
+pub const WM_CREATE: u32 = 0x0001;
+pub const WM_PAINT: u32 = 0x000F;
+pub const WM_ERASEBKGND: u32 = 0x0014;
+pub const WM_NCCREATE: u32 = 0x0081;
+
 /// USER_HANDLE_ENTRY: an entry of the USER handle table.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -231,6 +262,118 @@ pub struct ClientInfo32 {
     pub ppi: u32,
 }
 
+/// RECT, in pixels.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rect32 {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+/// LARGE_UNICODE_STRING: a length, a maximum length and `bAnsi` (bit 31),
+/// a buffer (a server address).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LargeUnicodeString32 {
+    pub length: u32,
+    pub maximum_length_ansi: u32,
+    pub buffer: u32,
+}
+
+/// WND: a window, in its desktop's heap, which `user32` reads. Its
+/// pointers are server addresses (`head.pSelf`: its own).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Wnd32 {
+    /// THRDESKHEAD: its handle, its lock count, its thread (`THREADINFO`),
+    /// its desktop, itself.
+    pub handle: u32,
+    pub lock_count: u32,
+    pub pti: u32,
+    pub rpdesk: u32,
+    pub self_address: u32,
+    /// WNDS_*, WNDS2_*.
+    pub state: u32,
+    pub state2: u32,
+    pub ex_style: u32,
+    pub style: u32,
+    pub module: u32,
+    pub fnid: u32,
+    pub spwnd_next: u32,
+    pub spwnd_prev: u32,
+    pub spwnd_parent: u32,
+    pub spwnd_child: u32,
+    pub spwnd_owner: u32,
+    pub rc_window: Rect32,
+    pub rc_client: Rect32,
+    pub wnd_proc: u32,
+    /// Its class (`CLS`).
+    pub pcls: u32,
+    pub hrgn_update: u32,
+    pub prop_list_head: ListEntry32,
+    pub prop_list_items: u32,
+    pub sb_info: u32,
+    pub system_menu: u32,
+    pub id_menu: u32,
+    pub hrgn_clip: u32,
+    pub hrgn_new_frame: u32,
+    pub name: LargeUnicodeString32,
+    pub cb_wnd_extra: u32,
+    pub spwnd_last_active: u32,
+    pub imc: u32,
+    pub user_data: u32,
+    pub act_ctx: u32,
+    pub spwnd_clipboard_listener: u32,
+    pub ex_style2: u32,
+    /// InternalPos (ReactOS): NormalRect, IconPos, MaxPos, flags.
+    pub normal_rect: Rect32,
+    pub icon_pos: [i32; 2],
+    pub max_pos: [i32; 2],
+    pub internal_pos_flags: u32,
+    /// Unicode, InternalPosInitialized, HideFocus, HideAccel.
+    pub bits: u32,
+    pub sb_info_ex: u32,
+    pub thread_list_entry: ListEntry32,
+    pub dialog_pointer: u32,
+}
+
+/// CLS: a window class, which `user32` reads. Its pointers are server
+/// addresses.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cls32 {
+    pub next: u32,
+    pub atom_class_name: u16,
+    pub atom_nv_class_name: u16,
+    pub fnid: u32,
+    pub rpdesk_parent: u32,
+    pub pdce: u32,
+    /// CSF_*.
+    pub csf_flags: u32,
+    pub client_ansi_menu_name: u32,
+    pub client_unicode_menu_name: u32,
+    pub spcpd_first: u32,
+    pub base: u32,
+    pub clone: u32,
+    pub wnd_reference_count: u32,
+    pub style: u32,
+    pub wnd_proc: u32,
+    pub cb_cls_extra: i32,
+    pub cb_wnd_extra: i32,
+    pub module: u32,
+    pub spicn: u32,
+    pub spcur: u32,
+    /// hbrBackground: a brush, or a system colour plus one.
+    pub background: u32,
+    pub menu_name: u32,
+    pub ansi_class_name: u32,
+    pub spicn_sm: u32,
+    /// Unicode, Global, MenuNameIsString.
+    pub bits: u32,
+}
+
 /// NB_HOOKS: the hook types, `WH_MSGFILTER` (-1) to `WH_MOUSE_LL` (14).
 pub const NB_HOOKS: usize = 16;
 
@@ -282,6 +425,25 @@ pub struct ClientThreadInfo32 {
 }
 
 const _: () = {
+    assert!(offset_of!(Wnd32, state) == 0x14);
+    assert!(offset_of!(Wnd32, fnid) == 0x28);
+    assert!(offset_of!(Wnd32, spwnd_next) == 0x2C);
+    assert!(offset_of!(Wnd32, rc_window) == 0x40);
+    assert!(offset_of!(Wnd32, rc_client) == 0x50);
+    assert!(offset_of!(Wnd32, wnd_proc) == 0x60);
+    assert!(offset_of!(Wnd32, pcls) == 0x64);
+    assert!(offset_of!(Wnd32, name) == 0x8C);
+    assert!(offset_of!(Wnd32, cb_wnd_extra) == 0x98);
+    assert!(offset_of!(Wnd32, ex_style2) == 0xB0);
+    assert!(offset_of!(Wnd32, bits) == 0xD8);
+    assert!(offset_of!(Wnd32, dialog_pointer) == 0xE8);
+    assert!(size_of::<Wnd32>() == 0xEC);
+    assert!(offset_of!(Cls32, fnid) == 0x08);
+    assert!(offset_of!(Cls32, csf_flags) == 0x14);
+    assert!(offset_of!(Cls32, style) == 0x30);
+    assert!(offset_of!(Cls32, wnd_proc) == 0x34);
+    assert!(offset_of!(Cls32, background) == 0x4C);
+    assert!(size_of::<Cls32>() == 0x60);
     assert!(offset_of!(DeskInfoHead32, aphk_start) == 0x10);
     assert!(offset_of!(DeskInfoHead32, task_man_window) == 0x90);
     assert!(offset_of!(DeskInfoHead32, ppi_shell_process) == 0xA4);
@@ -345,7 +507,9 @@ as_bytes!(
     ServerInfoHead32,
     ClientInfo32,
     DeskInfoHead32,
-    ClientThreadInfo32
+    ClientThreadInfo32,
+    Wnd32,
+    Cls32
 );
 
 #[cfg(test)]
