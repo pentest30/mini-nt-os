@@ -275,6 +275,13 @@ pub enum ExportTarget<'a> {
 }
 
 impl<'a> Pe32<'a> {
+    /// The `length` bytes of the file at `rva`, in one section ; `None`
+    /// outside the file's sections or past their raw data.
+    pub fn read_rva(&self, rva: u32, length: usize) -> Option<&'a [u8]> {
+        let start = rva_to_file_offset(self.data, rva)?;
+        self.data.get(start..start.checked_add(length)?)
+    }
+
     /// The export named `name`; `None` without it or without an export
     /// directory. The name table is sorted, as the loader expects, and
     /// searched by halves, names compared byte by byte.

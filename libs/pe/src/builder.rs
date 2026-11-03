@@ -434,6 +434,17 @@ mod tests {
         let no_exports =
             Pe32Builder::new(0x40_0000).section(".text", 0x1000, 0x10, &[0xC3; 0x10], SCN_MEM_EXECUTE).build();
         assert_eq!(Pe32::parse(&no_exports).unwrap().export("NtClose"), None);
+    }
+
+    #[test]
+    fn bytes_are_read_at_an_rva() {
+        let mut code = [0x90u8; 0x20];
+        code[0x10..0x16].copy_from_slice(&[0xB8, 1, 2, 3, 4, 0xC3]);
+        let file = Pe32Builder::new(0x40_0000).section(".text", 0x1000, 0x20, &code, SCN_MEM_EXECUTE).build();
+        let pe = Pe32::parse(&file).unwrap();
+        assert_eq!(pe.read_rva(0x1010, 6), Some(&[0xB8, 1, 2, 3, 4, 0xC3][..]));
+        assert_eq!(pe.read_rva(0x0F00, 4), None, "before the sections");
+        assert_eq!(pe.read_rva(0x5000, 4), None, "past them");
         // A target inside the export directory is a forwarder string.
         let edata = 0x2000;
         let forwarded = Pe32Builder::new(0x7C80_0000)
