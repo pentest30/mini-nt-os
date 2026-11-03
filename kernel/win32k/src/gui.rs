@@ -41,6 +41,7 @@ use mm::vad::PageProtect;
 
 use crate::desktop::Desktop;
 use crate::keyboard::KeyboardLayout;
+use crate::queue::MessageQueue;
 use crate::winsta::WindowStation;
 
 /// GDI_BATCH_LIMIT : les appels de GDI qu'un client met en lot au plus
@@ -183,6 +184,8 @@ pub struct ThreadInfo {
     desktop: KSpinLock<Option<ThreadDesktop>>,
     /// Sa disposition de clavier (`KeyboardLayout`), s'il en a une.
     keyboard_layout: KSpinLock<Option<Arc<KeyboardLayout>>>,
+    /// Sa file de messages (`MessageQueue`).
+    pub queue: MessageQueue,
 }
 
 /// Le bureau d'un thread : le handle qu'il a donné, le bureau, et la
@@ -197,7 +200,27 @@ pub struct ThreadDesktop {
 impl ThreadInfo {
     /// Un thread GUI sans bureau.
     pub fn new(server: u32, ti_flags: u32) -> Self {
-        Self { server, ti_flags, desktop: KSpinLock::new(None), keyboard_layout: KSpinLock::new(None) }
+        Self {
+            server,
+            ti_flags,
+            desktop: KSpinLock::new(None),
+            keyboard_layout: KSpinLock::new(None),
+            queue: MessageQueue::new(),
+        }
+    }
+
+    /// Reporte les bits de réveil et de changement de sa file dans son
+    /// `CLIENTTHREADINFO` (`fsChangeBits`, `fsWakeBits`), s'il est sur un
+    /// bureau : `user32` les y lit.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn mirror_queue_bits(&self, wake: u16, change: u16) {
+        let Some(desktop) = self.desktop() else { return };
+        let at = u64::from(desktop.client_thread_info) + offset_of!(ClientThreadInfo32, fs_change_bits) as u64;
+        let [c0, c1] = change.to_le_bytes();
+        let [w0, w1] = wake.to_le_bytes();
+        let _ = desktop.desktop.heap.section.write_kernel(at, &[c0, c1, w0, w1]);
     }
 
     /// Sa disposition de clavier, s'il en a une.
@@ -293,6 +316,10 @@ pub fn set_thread_desktop(handle: u32, desktop: Option<Arc<Object<Desktop>>>) ->
         previous.desktop.heap.free(previous.client_thread_info, size_of::<ClientThreadInfo32>() as u32);
         process_info.unmap_desktop(&process, &previous.desktop);
     }
+    // The new CLIENTTHREADINFO gets the queue's bits (ReactOS copies the old
+    // one).
+    let ((), wake, change) = info.queue.with(|_| ());
+    info.mirror_queue_bits(wake, change);
     Ok(())
 }
 
