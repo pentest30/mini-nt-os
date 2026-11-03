@@ -9,8 +9,10 @@
 //! ni entrée ni sortie (`WSS_NOIO`). Chaque processus GUI a sa station
 //! ([`set_process_window_station`]), par un handle à lui.
 //!
-//! Pas encore : les bureaux d'une station (sa procédure *parse*), la table
-//! des atomes, le nom tiré de la session de logon pour une station sans nom,
+//! Une station tient ses bureaux ([`crate::desktop`]) et les nomme (sa
+//! procédure *parse*).
+//!
+//! Pas encore : la table des atomes, le nom tiré de la session de logon pour une station sans nom,
 //! le thread du bureau et le thread d'entrée (RIT) qu'ReactOS crée avec la
 //! station interactive, le handle de station que garde l'EPROCESS (hérité
 //! par les processus créés), le verrouillage (NtUserLockWindowStation).
@@ -23,6 +25,8 @@ use abi::object::{AccessMask, GenericMapping};
 use abi::security::Luid32;
 use hal::sync::KSpinLock;
 use ob::{Object, ObjectType};
+
+use crate::desktop::Desktop;
 
 /// WINSTA_ENUMDESKTOPS.
 pub const WINSTA_ENUMDESKTOPS: u32 = 0x0001;
@@ -79,7 +83,8 @@ pub static WINDOW_STATION_TYPE: ObjectType = ObjectType::new(
         execute: AccessMask(AccessMask::STANDARD_RIGHTS_EXECUTE.0 | WINSTA_ACCESSGLOBALATOMS | WINSTA_EXITWINDOWS),
         all: WINSTA_ACCESS_ALL,
     },
-);
+)
+.with_parse(crate::desktop::parse_station);
 
 /// L'utilisateur d'une station (NtUserSetWindowStationUser) : la LUID de sa
 /// session de logon, et son SID tel que le processus de logon l'a donné.
@@ -97,12 +102,37 @@ pub struct WindowStation {
     /// l'interactive.
     no_io: AtomicBool,
     user: KSpinLock<StationUser>,
+    /// Ses bureaux (DesktopListHead), qui la tiennent.
+    desktops: KSpinLock<Vec<Weak<Object<Desktop>>>>,
 }
 
 impl WindowStation {
     /// Une station de la session `session`, sans entrée ni sortie.
     pub fn new(session: u32) -> Self {
-        Self { session, no_io: AtomicBool::new(true), user: KSpinLock::new(StationUser::default()) }
+        Self {
+            session,
+            no_io: AtomicBool::new(true),
+            user: KSpinLock::new(StationUser::default()),
+            desktops: KSpinLock::new(Vec::new()),
+        }
+    }
+
+    /// Ses bureaux vivants.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn desktops(&self) -> Vec<Arc<Object<Desktop>>> {
+        self.desktops.lock().iter().filter_map(Weak::upgrade).collect()
+    }
+
+    /// Ajoute un bureau à ses bureaux, et oublie ceux qui ne sont plus.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn add_desktop(&self, desktop: Weak<Object<Desktop>>) {
+        let mut desktops = self.desktops.lock();
+        desktops.retain(|other| other.strong_count() > 0);
+        desktops.push(desktop);
     }
 
     /// Sans entrée ni sortie (`WSS_NOIO`) : ce n'est pas la station

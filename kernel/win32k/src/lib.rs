@@ -15,7 +15,9 @@
 //! - [`csrss`] : le démarrage de USER par `csrss` (NtUserInitialize), son
 //!   port d'API ;
 //! - [`logon`] : le processus de logon (RegisterLogonProcess) ;
-//! - [`winsta`] : les stations de fenêtres.
+//! - [`winsta`] : les stations de fenêtres ;
+//! - [`desktop`] : les bureaux et leurs tas ; le bureau d'un thread GUI
+//!   ([`gui`]).
 //!
 //! Le reste (stations et bureaux, fenêtres, messages, GDI) viendra avec le
 //! spike S3 et le M6 (05).
@@ -26,6 +28,7 @@ extern crate alloc;
 
 pub mod client;
 pub mod csrss;
+pub mod desktop;
 pub mod gui;
 pub mod logon;
 pub mod shared;
