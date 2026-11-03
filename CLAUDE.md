@@ -102,7 +102,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   adresse utilisateur reprend à sa correction (table des exceptions) au lieu du STOP 0x1E ; une faute du noyau sur la
   garde de la pile du thread l'étend aussi. SYSENTER_ESP suit la pile noyau du thread. Les threads de l'ancien
   chargeur gardent `syscall.rs` et ses numéros. Trame de trap faite (`hal::trap::KTrapFrame`) : les portes `int 2Ah`
-  à `2Eh` l'empilent et appellent un handler par vecteur (`sys::gates` : tick count, `STATUS_NO_CALLBACK_ACTIVE`,
+  à `2Eh` l'empilent et appellent un handler par vecteur (`sys::gates` : tick count, KiCallbackReturn,
   assertion qui termine le processus, `DbgPrint` vers le port série avec le PID et le TID en sautant l'`int 3`,
   KiSystemService) ; GS n'est pas rechargé au retour. `abi::context` (CONTEXT x86) et `ke::context` (conversion,
   assainissement d'EFLAGS et des sélecteurs). Exceptions du mode utilisateur faites (`ke::exception`, `sys::exceptions`) :
@@ -236,7 +236,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   serveur : WM_PAINT, WM_ERASEBKGND), montrée et peinte à NtUserSwitchDesktop ; files de messages (`win32k::queue`,
   `sys::message` : PostThreadMessage, PeekMessage, GetMessage qui attend, WM_QUIT, GetQueueStatus, bits de réveil dans
   le `CLIENTTHREADINFO`) ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
-  pixels d'une capture de QEMU (`xtask/src/screen.rs`).
+  pixels d'une capture de QEMU (`xtask/src/screen.rs`). Rappels en mode utilisateur (KeUserModeCallback :
+  `ps::callback`, `ke::callout`, `hal::callout` ; NtCallbackReturn, `int 2Bh`) : la pile initiale du thread descend
+  sous ses trames, les rappels s'emboîtent, la pile noyau grandit en place jusqu'à 72 Kio (`mm::kstack::grow`) ;
+  win32k rappelle `user32` (`win32k::callback` : ClientThreadSetup, GetCharsetInfo pour la page de code d'une
+  disposition de clavier).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
