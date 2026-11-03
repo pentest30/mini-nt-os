@@ -52,6 +52,7 @@ expect = [smoke] Ob: NtDuplicateObject from user mode: same or less access, attr
 expect = [smoke] Ps: NtQueryInformationThread from user mode: ThreadBasicInformation, ThreadTimes (creation and end), ThreadIsTerminated
 expect = hello from Mino user mode
 expect = [smoke] gates: int 2Ah to 2Eh from user mode, registers kept across them, DbgPrompt answered
+expect = [smoke] callbacks: 8 nested user-mode callbacks, preempted and calling services, back by int 2Bh and NtCallbackReturn
 expect = [smoke] exceptions: faults, int 3 and NtRaiseException reach a user-mode dispatcher
 expect = [smoke] user APCs: queued, then run by alertable waits and NtTestAlert
 expect = [smoke] ntdll: mapped at its base, threads start in LdrInitializeThunk

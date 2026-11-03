@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 100 | 296 |
+| ntoskrnl | 101 | 296 |
 | win32k | 25 | 732 |
 
 ## ntoskrnl
@@ -37,7 +37,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0013` | `NtApphelpCacheControl` | 2 |  |
 | `0x0014` | `NtAreMappedFilesTheSame` | 2 |  |
 | `0x0015` | `NtAssignProcessToJobObject` | 2 |  |
-| `0x0016` | `NtCallbackReturn` | 3 |  |
+| `0x0016` | `NtCallbackReturn` | 3 | ✅ |
 | `0x0017` | `NtCancelDeviceWakeupRequest` | 1 |  |
 | `0x0018` | `NtCancelIoFile` | 2 |  |
 | `0x0019` | `NtCancelTimer` | 2 |  |

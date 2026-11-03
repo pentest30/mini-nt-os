@@ -28,6 +28,7 @@
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
 pub mod apc;
+mod callback;
 mod desktop;
 mod event;
 pub mod exceptions;
@@ -90,6 +91,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAcceptConnectPort, Handler::Status(port::nt_accept_connect_port)),
     (services::NtAdjustPrivilegesToken, Handler::Status(security::nt_adjust_privileges_token)),
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
+    (services::NtCallbackReturn, Handler::Status(callback::nt_callback_return)),
     (services::NtClearEvent, Handler::Status(event::nt_clear_event)),
     (services::NtClose, Handler::Status(object::nt_close)),
     (services::NtCompleteConnectPort, Handler::Status(port::nt_complete_connect_port)),

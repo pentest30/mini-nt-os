@@ -135,6 +135,7 @@ pub const STATUS_INSUFFICIENT_RESOURCES: NtStatus = NtStatus(0xC000_009A);
 pub const STATUS_FREE_VM_NOT_AT_BASE: NtStatus = NtStatus(0xC000_009F);
 pub const STATUS_MEMORY_NOT_ALLOCATED: NtStatus = NtStatus(0xC000_00A0);
 pub const STATUS_STACK_OVERFLOW: NtStatus = NtStatus(0xC000_00FD);
+pub const STATUS_ENTRYPOINT_NOT_FOUND: NtStatus = NtStatus(0xC000_0139);
 pub const STATUS_REGISTRY_CORRUPT: NtStatus = NtStatus(0xC000_014C);
 pub const STATUS_REGISTRY_IO_FAILED: NtStatus = NtStatus(0xC000_014D);
 pub const STATUS_CHILD_MUST_BE_VOLATILE: NtStatus = NtStatus(0xC000_0181);
