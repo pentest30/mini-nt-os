@@ -40,6 +40,7 @@ use mm::address_space::ViewOptions;
 use mm::vad::PageProtect;
 
 use crate::desktop::Desktop;
+use crate::keyboard::KeyboardLayout;
 use crate::winsta::WindowStation;
 
 /// GDI_BATCH_LIMIT : les appels de GDI qu'un client met en lot au plus
@@ -180,6 +181,8 @@ pub struct ThreadInfo {
     pub ti_flags: u32,
     /// Son bureau (`rpdesk`, `hdesk`, `pcti`), s'il en a un.
     desktop: KSpinLock<Option<ThreadDesktop>>,
+    /// Sa disposition de clavier (`KeyboardLayout`), s'il en a une.
+    keyboard_layout: KSpinLock<Option<Arc<KeyboardLayout>>>,
 }
 
 /// Le bureau d'un thread : le handle qu'il a donné, le bureau, et la
@@ -194,7 +197,25 @@ pub struct ThreadDesktop {
 impl ThreadInfo {
     /// Un thread GUI sans bureau.
     pub fn new(server: u32, ti_flags: u32) -> Self {
-        Self { server, ti_flags, desktop: KSpinLock::new(None) }
+        Self { server, ti_flags, desktop: KSpinLock::new(None), keyboard_layout: KSpinLock::new(None) }
+    }
+
+    /// Sa disposition de clavier, s'il en a une.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn keyboard_layout(&self) -> Option<Arc<KeyboardLayout>> {
+        self.keyboard_layout.lock().clone()
+    }
+
+    /// `layout` devient sa disposition de clavier ; l'ancienne part une fois
+    /// le verrou rendu.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn set_keyboard_layout(&self, layout: Arc<KeyboardLayout>) {
+        let previous = self.keyboard_layout.lock().replace(layout);
+        drop(previous);
     }
 
     /// Son bureau, s'il en a un.
@@ -430,6 +451,11 @@ fn write_teb(
     let teb = u64::from(thread.teb());
     process.write_memory(teb + offset_of!(Teb32, win32_thread_info) as u64, &info.server.to_le_bytes())?;
     process.write_memory(teb + offset_of!(Teb32, win32_client_info) as u64, client.as_bytes())
+}
+
+/// Le `THREADINFO` que Ps garde pour un thread GUI (`EThread::win32_thread`).
+pub fn thread_info(any: Arc<dyn core::any::Any + Send + Sync>) -> Arc<ThreadInfo> {
+    downcast(any)
 }
 
 /// Ce que Ps garde pour win32k est toujours de ses types.
