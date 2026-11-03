@@ -4725,6 +4725,13 @@ fn win32k_self_test() {
     const NAME: u32 = DATA + 0xD0;
     const CONNECT: u32 = DATA + 0x100; // a USERCONNECT
     const CONNECT2: u32 = DATA + 0x300;
+    const LOGON: u32 = DATA + 0x4C0; // 7 results of RegisterLogonProcess and NtUserSetInformationThread
+    const MY_PID: u32 = DATA + 0x4E0;
+    const BAD_PID_ERROR: u32 = DATA + 0x4E4;
+    const ROUTINE_ERROR: u32 = DATA + 0x4E8;
+    const PORT_HANDLE: u32 = DATA + 0x4EC;
+    const VALUE_ERROR: u32 = DATA + 0x4F0; // the last error after a service that returns a value
+    const STATUS_ERROR: u32 = DATA + 0x4F4; // and after one that returns an NTSTATUS
     const DONE: u32 = DATA + 0x4FC;
     const SEMAPHORE_NAME: &str = "\\MinoSemaphore";
     const SENTINEL: u32 = 0xAAAA_AAAA;
@@ -4790,6 +4797,34 @@ fn win32k_self_test() {
     code.call_args(set_object, &[m(SEMAPHORE), v(4), v(CLEAR_FLAGS), v(2)]).store_eax(status(20));
     code.call_args(services::NtClose, &[m(SEMAPHORE)]).store_eax(status(21));
     code.call_args(services::NtClose, &[m(OPENED)]).store_eax(status(22));
+    // Services without a handler: one returns a BOOL, one an NTSTATUS. The
+    // last error (TEB.LastErrorValue, fs:[0x34]) is set to SENTINEL first.
+    let set_last_error = [0x64, 0xC7, 0x05, 0x34, 0, 0, 0];
+    let read_last_error = [0x64, 0xA1, 0x34, 0, 0, 0];
+    code.bytes(&set_last_error).bytes(&SENTINEL.to_le_bytes());
+    code.call_args(services::NtGdiAbortDoc, &[v(0)]).store_eax(status(23));
+    code.bytes(&read_last_error).store_eax(VALUE_ERROR);
+    code.bytes(&set_last_error).bytes(&SENTINEL.to_le_bytes());
+    code.call_args(services::NtGdiGetStats, &[v(0), v(0), v(0), v(0), v(0)]).store_eax(status(24));
+    code.bytes(&read_last_error).store_eax(STATUS_ERROR);
+    // RegisterLogonProcess (NtUserCallTwoParam): itself, twice; System
+    // leaving; itself leaving; a PID of no process; another routine.
+    let logon = |i: u32| LOGON + 4 * i;
+    let (two, register) = (services::NtUserCallTwoParam, abi::user::TWOPARAM_ROUTINE_REGISTERLOGONPROCESS);
+    code.bytes(&[0x64, 0xA1, 0x20, 0, 0, 0]).store_eax(MY_PID); // mov eax, fs:[0x20]: ClientId.UniqueProcess
+    code.call_args(two, &[m(MY_PID), v(1), v(register)]).store_eax(logon(0));
+    code.call_args(two, &[m(MY_PID), v(1), v(register)]).store_eax(logon(1));
+    code.call_args(two, &[v(4), v(0), v(register)]).store_eax(logon(2));
+    code.call_args(two, &[m(MY_PID), v(0), v(register)]).store_eax(logon(3));
+    code.call_args(two, &[v(0x7FF0), v(1), v(register)]).store_eax(logon(4));
+    code.bytes(&read_last_error).store_eax(BAD_PID_ERROR);
+    code.bytes(&set_last_error).bytes(&SENTINEL.to_le_bytes());
+    code.call_args(two, &[v(0), v(0), v(0x7F)]).store_eax(logon(5));
+    code.bytes(&read_last_error).store_eax(ROUTINE_ERROR);
+    // NtUserSetInformationThread(UserThreadCsrApiPort): csrss only.
+    let csr_port = abi::user::USER_THREAD_CSR_API_PORT;
+    let set_thread = services::NtUserSetInformationThread;
+    code.call_args(set_thread, &[v(0xFFFF_FFFE), v(csr_port), v(PORT_HANDLE), v(4)]).store_eax(logon(6));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x800];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -4819,7 +4854,7 @@ fn win32k_self_test() {
         unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
     }
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..23).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..25).map(|i| NtStatus(read(status(i)))).collect();
     // A GUI thread, of a GUI process.
     assert_eq!(statuses[0], NtStatus(1), "NtGdiInit: TRUE");
     let (pti, ppi) =
@@ -4869,6 +4904,22 @@ fn win32k_self_test() {
     assert_eq!(statuses[19], STATUS_INFO_LENGTH_MISMATCH, "two BOOLEANs");
     assert_eq!((statuses[20], statuses[21], statuses[22]), (STATUS_SUCCESS, STATUS_SUCCESS, STATUS_SUCCESS));
     assert!(ob::namespace().open(SEMAPHORE_NAME, None, None, 0).is_err(), "its name gone with its last handle");
+    // Services without a handler.
+    let not_implemented = abi::winerror::ERROR_CALL_NOT_IMPLEMENTED;
+    assert_eq!((statuses[23], read(VALUE_ERROR)), (NtStatus(0), not_implemented), "NtGdiAbortDoc: FALSE");
+    let status_error = (statuses[24], read(STATUS_ERROR));
+    assert_eq!(status_error, (abi::ntstatus::STATUS_NOT_IMPLEMENTED, SENTINEL), "NtGdiGetStats: an NTSTATUS");
+    // RegisterLogonProcess.
+    let logon = |i: u32| read(LOGON + 4 * i);
+    assert_eq!(read(MY_PID), process.pid());
+    assert_eq!((logon(0), logon(1)), (1, 0), "registered once, not twice");
+    assert_eq!((logon(2), logon(3)), (0, 1), "only the logon process leaves");
+    assert_eq!(win32k::logon::logon_process(), 0, "none left for winlogon");
+    let invalid = abi::winerror::ERROR_INVALID_PARAMETER;
+    assert_eq!((logon(4), read(BAD_PID_ERROR)), (0, invalid), "a PID of no process");
+    let routine = (logon(5), read(ROUTINE_ERROR));
+    assert_eq!(routine, (0, abi::winerror::ERROR_CALL_NOT_IMPLEMENTED), "another routine");
+    assert_eq!(NtStatus(logon(6)), abi::ntstatus::STATUS_ACCESS_DENIED, "NtUserSetInformationThread: csrss only");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
@@ -4885,7 +4936,9 @@ fn win32k_self_test() {
     ps::wait_for_reaper();
     log::info!(
         "[smoke] win32k: a GUI thread and process, NtGdiInit, NtUserProcessConnect (the USER shared section, read \
-         only); Ex: semaphores from user mode; Ob: NtQueryObject"
+         only), services without a handler (0 and ERROR_CALL_NOT_IMPLEMENTED, or STATUS_NOT_IMPLEMENTED), \
+         RegisterLogonProcess, NtUserSetInformationThread for csrss only; Ex: semaphores from user mode; Ob: \
+         NtQueryObject"
     );
 }
 
