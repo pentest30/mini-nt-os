@@ -100,6 +100,143 @@ impl GetCharsetInfo32 {
     }
 }
 
+/// SM_CMETRICS: the system metrics in `SERVERINFO.aiSysMet` (those of
+/// `_WIN32_WINNT` 0x0600, as the pinned `user32` was built: its
+/// GetSystemMetrics answers indices up to 92).
+pub const SM_CMETRICS: usize = 93;
+/// NUM_SYSCOLORS: the system colours, `COLOR_SCROLLBAR` to `COLOR_MENUBAR`.
+pub const NUM_SYSCOLORS: usize = 31;
+/// ICLS_NOTUSED: the window classes of `SERVERINFO.atomSysClass` (one more
+/// slot follows them).
+pub const ICLS_NOTUSED: usize = 25;
+/// MAX_MB_STRINGS: the message box button strings in `SERVERINFO`.
+pub const MAX_MB_STRINGS: usize = 11;
+
+/// SM_*, indices in `aiSysMet` (GetSystemMetrics).
+pub mod sm {
+    pub const CXSCREEN: usize = 0;
+    pub const CYSCREEN: usize = 1;
+    pub const CXVSCROLL: usize = 2;
+    pub const CYHSCROLL: usize = 3;
+    pub const CYCAPTION: usize = 4;
+    pub const CXBORDER: usize = 5;
+    pub const CYBORDER: usize = 6;
+    pub const CXDLGFRAME: usize = 7;
+    pub const CYDLGFRAME: usize = 8;
+    pub const CYVTHUMB: usize = 9;
+    pub const CXHTHUMB: usize = 10;
+    pub const CXICON: usize = 11;
+    pub const CYICON: usize = 12;
+    pub const CXCURSOR: usize = 13;
+    pub const CYCURSOR: usize = 14;
+    pub const CYMENU: usize = 15;
+    pub const CXFULLSCREEN: usize = 16;
+    pub const CYFULLSCREEN: usize = 17;
+    pub const CYKANJIWINDOW: usize = 18;
+    pub const MOUSEPRESENT: usize = 19;
+    pub const CYVSCROLL: usize = 20;
+    pub const CXHSCROLL: usize = 21;
+    pub const DEBUG: usize = 22;
+    pub const SWAPBUTTON: usize = 23;
+    pub const CXMIN: usize = 28;
+    pub const CYMIN: usize = 29;
+    pub const CXSIZE: usize = 30;
+    pub const CYSIZE: usize = 31;
+    pub const CXFRAME: usize = 32;
+    pub const CYFRAME: usize = 33;
+    pub const CXMINTRACK: usize = 34;
+    pub const CYMINTRACK: usize = 35;
+    pub const CXDOUBLECLK: usize = 36;
+    pub const CYDOUBLECLK: usize = 37;
+    pub const CXICONSPACING: usize = 38;
+    pub const CYICONSPACING: usize = 39;
+    pub const MENUDROPALIGNMENT: usize = 40;
+    pub const PENWINDOWS: usize = 41;
+    pub const DBCSENABLED: usize = 42;
+    pub const CMOUSEBUTTONS: usize = 43;
+    pub const SECURE: usize = 44;
+    pub const CXEDGE: usize = 45;
+    pub const CYEDGE: usize = 46;
+    pub const CXMINSPACING: usize = 47;
+    pub const CYMINSPACING: usize = 48;
+    pub const CXSMICON: usize = 49;
+    pub const CYSMICON: usize = 50;
+    pub const CYSMCAPTION: usize = 51;
+    pub const CXSMSIZE: usize = 52;
+    pub const CYSMSIZE: usize = 53;
+    pub const CXMENUSIZE: usize = 54;
+    pub const CYMENUSIZE: usize = 55;
+    pub const ARRANGE: usize = 56;
+    pub const CXMINIMIZED: usize = 57;
+    pub const CYMINIMIZED: usize = 58;
+    pub const CXMAXTRACK: usize = 59;
+    pub const CYMAXTRACK: usize = 60;
+    pub const CXMAXIMIZED: usize = 61;
+    pub const CYMAXIMIZED: usize = 62;
+    pub const NETWORK: usize = 63;
+    pub const CLEANBOOT: usize = 67;
+    pub const CXDRAG: usize = 68;
+    pub const CYDRAG: usize = 69;
+    pub const SHOWSOUNDS: usize = 70;
+    pub const CXMENUCHECK: usize = 71;
+    pub const CYMENUCHECK: usize = 72;
+    pub const SLOWMACHINE: usize = 73;
+    pub const MIDEASTENABLED: usize = 74;
+    pub const MOUSEWHEELPRESENT: usize = 75;
+    pub const XVIRTUALSCREEN: usize = 76;
+    pub const YVIRTUALSCREEN: usize = 77;
+    pub const CXVIRTUALSCREEN: usize = 78;
+    pub const CYVIRTUALSCREEN: usize = 79;
+    pub const CMONITORS: usize = 80;
+    pub const SAMEDISPLAYFORMAT: usize = 81;
+    pub const IMMENABLED: usize = 82;
+    pub const CXFOCUSBORDER: usize = 83;
+    pub const CYFOCUSBORDER: usize = 84;
+    pub const TABLETPC: usize = 86;
+    pub const MEDIACENTER: usize = 87;
+    pub const STARTER: usize = 88;
+    pub const SERVERR2: usize = 89;
+    pub const MOUSEHORIZONTALWHEELPRESENT: usize = 91;
+    pub const CXPADDEDBORDER: usize = 92;
+}
+
+/// MBSTRING: a message box button's string, its identifier and its
+/// string resource.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MbString32 {
+    pub name: [u16; 16],
+    pub id: u32,
+    pub string: u32,
+}
+
+/// SERVERINFO up to `argbSystem` of `PERUSERSERVERINFO` (the rest follows,
+/// zero until written): what [`ServerInfoHead32`] holds, the system
+/// classes' atoms, … then the system metrics (`aiSysMet`) and colours. The
+/// offsets of `aiSysMet` and `argbSystem` are those the pinned `user32`
+/// reads (GetSystemMetrics, GetSysColor).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServerInfo32 {
+    pub head: ServerInfoHead32,
+    pub atom_sys_class: [u16; ICLS_NOTUSED + 1],
+    pub default_heap_base: u32,
+    pub default_heap_size: u32,
+    pub shell_msg: u32,
+    pub mb_strings: [MbString32; MAX_MB_STRINGS],
+    pub atom_icon_sm_prop: u16,
+    pub atom_icon_prop: u16,
+    pub atom_context_help_id_prop: u16,
+    pub atom_frosted_window_prop: u16,
+    pub oem_to_ansi: [u8; 256],
+    pub ansi_to_oem: [u8; 256],
+    pub installed_event_hooks: u32,
+    /// PERUSERSERVERINFO from here.
+    pub sys_met: [i32; SM_CMETRICS],
+    pub argb_system_unmatched: [u32; NUM_SYSCOLORS],
+    pub argb_system: [u32; NUM_SYSCOLORS],
+}
+
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
 pub const FNID_FIRST: u32 = 0x029A;
 /// FNID_NUM: the window function identifiers, `FNID_SCROLLBAR` to
@@ -205,6 +342,37 @@ pub const CLS_UNICODE: u32 = 0x1;
 pub const CLS_GLOBAL: u32 = 0x2;
 pub const CLS_MENU_NAME_IS_STRING: u32 = 0x4;
 
+/// WNDS_HAS*: what WM_NCCALCSIZE found in the non-client area.
+pub const WNDS_HASMENU: u32 = 0x0000_0001;
+pub const WNDS_HASVERTICALSCROOLLBAR: u32 = 0x0000_0002;
+pub const WNDS_HASHORIZONTALSCROLLBAR: u32 = 0x0000_0004;
+pub const WNDS_HASCAPTION: u32 = 0x0000_0008;
+/// WVR_*: what WM_NCCALCSIZE with valid rectangles answers.
+pub const WVR_HREDRAW: u32 = 0x0100;
+pub const WVR_VREDRAW: u32 = 0x0200;
+pub const WVR_VALIDRECTS: u32 = 0x0400;
+/// CS_VREDRAW, CS_HREDRAW: redraw the whole window when its height (width)
+/// changes.
+pub const CS_VREDRAW: u32 = 0x0001;
+pub const CS_HREDRAW: u32 = 0x0002;
+/// FNID_DEFWINDOWPROC: NtUserMessageCall's DefWindowProc.
+pub const FNID_DEFWINDOWPROC: u32 = 0x029E;
+/// WM_USER: the first message of an application.
+pub const WM_USER: u32 = 0x0400;
+
+/// MINMAXINFO, 32-bit: five points (x, y), `ptReserved` first.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MinMaxInfo32 {
+    pub reserved: [i32; 2],
+    pub max_size: [i32; 2],
+    pub max_position: [i32; 2],
+    pub min_track_size: [i32; 2],
+    pub max_track_size: [i32; 2],
+}
+
+const _: () = assert!(size_of::<MinMaxInfo32>() == 40);
+
 /// WNDS_SENDSIZEMOVEMSGS: WM_SIZE and WM_MOVE wait for the window to be
 /// shown (an overlapped window).
 pub const WNDS_SENDSIZEMOVEMSGS: u32 = 0x0000_0010;
@@ -230,12 +398,25 @@ pub const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
 pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
 pub const WS_MAXIMIZE: u32 = 0x0100_0000;
 pub const WS_CAPTION: u32 = 0x00C0_0000;
+pub const WS_BORDER: u32 = 0x0080_0000;
 pub const WS_DLGFRAME: u32 = 0x0040_0000;
+pub const WS_VSCROLL: u32 = 0x0020_0000;
+pub const WS_HSCROLL: u32 = 0x0010_0000;
+pub const WS_SYSMENU: u32 = 0x0008_0000;
 pub const WS_THICKFRAME: u32 = 0x0004_0000;
+pub const WS_MINIMIZEBOX: u32 = 0x0002_0000;
+pub const WS_MAXIMIZEBOX: u32 = 0x0001_0000;
+/// WS_OVERLAPPEDWINDOW: a caption, a system menu, a sizing border and both
+/// boxes.
+pub const WS_OVERLAPPEDWINDOW: u32 = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 /// WS_EX_*, extended window styles; WS_EX_SETANSICREATOR (ReactOS) marks
 /// a window CreateWindowExA creates.
 pub const WS_EX_DLGMODALFRAME: u32 = 0x0000_0001;
 pub const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
+pub const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+pub const WS_EX_CLIENTEDGE: u32 = 0x0000_0200;
+pub const WS_EX_LEFTSCROLLBAR: u32 = 0x0000_4000;
+pub const WS_EX_LAYOUTRTL: u32 = 0x0040_0000;
 pub const WS_EX_WINDOWEDGE: u32 = 0x0000_0100;
 pub const WS_EX_STATICEDGE: u32 = 0x0002_0000;
 pub const WS_EX_SETANSICREATOR: u32 = 0x8000_0000;
@@ -708,6 +889,15 @@ const _: () = {
     assert!(offset_of!(ServerInfoHead32, apfn_client_worker) == 0x198);
     assert!(offset_of!(ServerInfoHead32, cb_handle_table) == 0x1C4);
     assert!(size_of::<ServerInfoHead32>() == 0x1C8);
+    assert!(size_of::<MbString32>() == 40);
+    assert!(offset_of!(ServerInfo32, default_heap_base) == 0x1FC);
+    assert!(offset_of!(ServerInfo32, mb_strings) == 0x208);
+    assert!(offset_of!(ServerInfo32, oem_to_ansi) == 0x3C8);
+    assert!(offset_of!(ServerInfo32, installed_event_hooks) == 0x5C8);
+    // user32!RealGetSystemMetrics: mov eax, [gpsi + 0x5CC + 4 * index].
+    assert!(offset_of!(ServerInfo32, sys_met) == 0x5CC);
+    // user32!GetSysColor: mov eax, [gpsi + 0x7BC + 4 * index].
+    assert!(offset_of!(ServerInfo32, argb_system) == 0x7BC);
     assert!(size_of::<Msg32>() == 28);
     assert!(offset_of!(ClientInfo32, ti_flags) == 0x14);
     assert!(offset_of!(ClientInfo32, desk_info) == 0x18);
@@ -753,7 +943,8 @@ as_bytes!(
     WndClassExW32,
     CreateStructW32,
     WindowProcArguments32,
-    CallbackWnd32
+    CallbackWnd32,
+    MinMaxInfo32
 );
 
 #[cfg(test)]
