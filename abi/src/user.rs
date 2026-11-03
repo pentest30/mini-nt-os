@@ -95,6 +95,37 @@ pub const WM_CREATE: u32 = 0x0001;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_NCCREATE: u32 = 0x0081;
+pub const WM_QUIT: u32 = 0x0012;
+pub const WM_DEVICECHANGE: u32 = 0x0219;
+/// WM_MAXIMUM (ReactOS): the highest message a filter can name.
+pub const WM_MAXIMUM: u32 = 0x0001_FFFF;
+
+/// The messages that carry a pointer, which cannot be posted (WM_DEVICECHANGE
+/// only when bit 15 of its wParam is set): the `message_pointer_flags` table
+/// of ReactOS (`win32ss/user/ntuser/message.c`, from Wine), its values from
+/// `winuser.h` and `undocuser.h`.
+pub const POINTER_MESSAGES: [u32; 63] = [
+    0x001, 0x00C, 0x00D, 0x01A, 0x01B, 0x024, 0x02B, 0x02C, 0x02D, 0x039, 0x046, 0x047, 0x049, 0x04A, 0x053, 0x07C,
+    0x07D, 0x081, 0x083, 0x087, 0x0B0, 0x0B2, 0x0B3, 0x0B4, 0x0C2, 0x0C4, 0x0CB, 0x0E3, 0x0E9, 0x0EA, 0x0EB, 0x140,
+    0x143, 0x145, 0x148, 0x14A, 0x14C, 0x14D, 0x152, 0x158, 0x180, 0x181, 0x189, 0x18C, 0x18D, 0x18F, 0x191, 0x192,
+    0x196, 0x198, 0x1A2, 0x213, 0x214, 0x216, 0x219, 0x220, 0x229, 0x22A, 0x22B, 0x22D, 0x22E, 0x22F, 0x30C,
+];
+
+/// QS_*, the kinds of messages in a queue (`fsWakeBits`, `fsChangeBits`).
+pub const QS_POSTMESSAGE: u16 = 0x0008;
+pub const QS_ALLPOSTMESSAGE: u16 = 0x0100;
+/// QS_ALLINPUT, QS_SMRESULT: what GetQueueStatus can ask.
+pub const QS_ALLINPUT: u16 = 0x04FF;
+pub const QS_SMRESULT: u16 = 0x8000;
+/// PM_REMOVE, and the flags PeekMessage accepts (PM_BADMSGFLAGS refuses
+/// the others).
+pub const PM_REMOVE: u32 = 0x0001;
+pub const PM_VALID_FLAGS: u32 = 0x0001 | 0x0002 | (0x0407 | 0x0040 | 0x0020 | 0x0098 | 0x0400) << 16;
+
+/// ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE: the
+/// routines of NtUserCallOneParam (`SIMPLECALLROUTINES`, before Vista).
+pub const ONEPARAM_ROUTINE_GETQUEUESTATUS: u32 = 0x2B;
+pub const ONEPARAM_ROUTINE_POSTQUITMESSAGE: u32 = 0x33;
 
 /// USER_HANDLE_ENTRY: an entry of the USER handle table.
 #[repr(C)]
@@ -500,6 +531,7 @@ macro_rules! as_bytes {
 }
 
 as_bytes!(
+    Msg32,
     UserHandleEntry32,
     UserHandleTable32,
     SharedInfo32,
