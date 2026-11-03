@@ -43,6 +43,7 @@ mod system;
 mod time;
 mod user;
 mod wait;
+mod winsta;
 
 pub(crate) use system::processor_information;
 
@@ -181,10 +182,16 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
     (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
+    (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
+    (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
+    (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
     (services::NtUserInitialize, Handler::Status(user::nt_user_initialize)),
     (services::NtUserInitializeClientPfnArrays, Handler::Status(user::nt_user_initialize_client_pfn_arrays)),
+    (services::NtUserOpenWindowStation, Handler::Status(winsta::nt_user_open_window_station)),
     (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
+    (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
+    (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),
     (services::NtWaitForMultipleObjects, Handler::Status(wait::nt_wait_for_multiple_objects)),
     (services::NtWaitForSingleObject, Handler::Status(wait::nt_wait_for_single_object)),

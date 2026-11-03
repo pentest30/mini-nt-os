@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 100 | 296 |
-| win32k | 6 | 732 |
+| win32k | 12 | 732 |
 
 ## ntoskrnl
 
@@ -648,7 +648,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1149` | `NtUserClipCursor` | 1 |  |
 | `0x114a` | `NtUserCloseClipboard` | 0 |  |
 | `0x114b` | `NtUserCloseDesktop` | 1 |  |
-| `0x114c` | `NtUserCloseWindowStation` | 1 |  |
+| `0x114c` | `NtUserCloseWindowStation` | 1 | ✅ |
 | `0x114d` | `NtUserConsoleControl` | 3 |  |
 | `0x114e` | `NtUserConvertMemHandle` | 2 |  |
 | `0x114f` | `NtUserCopyAcceleratorTable` | 3 |  |
@@ -659,7 +659,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
 | `0x1155` | `NtUserCreateLocalMemHandle` | 4 |  |
 | `0x1156` | `NtUserCreateWindowEx` | 15 |  |
-| `0x1157` | `NtUserCreateWindowStation` | 7 |  |
+| `0x1157` | `NtUserCreateWindowStation` | 7 | ✅ |
 | `0x1158` | `NtUserDdeGetQualityOfService` | 3 |  |
 | `0x1159` | `NtUserDdeInitialize` | 5 |  |
 | `0x115a` | `NtUserDdeSetQualityOfService` | 3 |  |
@@ -741,7 +741,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11a6` | `NtUserGetObjectInformation` | 5 |  |
 | `0x11a7` | `NtUserGetOpenClipboardWindow` | 0 |  |
 | `0x11a8` | `NtUserGetPriorityClipboardFormat` | 2 |  |
-| `0x11a9` | `NtUserGetProcessWindowStation` | 0 |  |
+| `0x11a9` | `NtUserGetProcessWindowStation` | 0 | ✅ |
 | `0x11aa` | `NtUserGetRawInputBuffer` | 3 |  |
 | `0x11ab` | `NtUserGetRawInputData` | 5 |  |
 | `0x11ac` | `NtUserGetRawInputDeviceInfo` | 4 |  |
@@ -787,7 +787,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11d4` | `NtUserOpenClipboard` | 2 |  |
 | `0x11d5` | `NtUserOpenDesktop` | 3 |  |
 | `0x11d6` | `NtUserOpenInputDesktop` | 3 |  |
-| `0x11d7` | `NtUserOpenWindowStation` | 2 |  |
+| `0x11d7` | `NtUserOpenWindowStation` | 2 | ✅ |
 | `0x11d8` | `NtUserPaintDesktop` | 1 |  |
 | `0x11d9` | `NtUserPeekMessage` | 5 |  |
 | `0x11da` | `NtUserPostMessage` | 4 |  |
@@ -843,7 +843,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x120c` | `NtUserSetMenuFlagRtoL` | 1 |  |
 | `0x120d` | `NtUserSetObjectInformation` | 4 |  |
 | `0x120e` | `NtUserSetParent` | 2 |  |
-| `0x120f` | `NtUserSetProcessWindowStation` | 1 |  |
+| `0x120f` | `NtUserSetProcessWindowStation` | 1 | ✅ |
 | `0x1210` | `NtUserSetProp` | 3 |  |
 | `0x1211` | `NtUserSetScrollInfo` | 4 |  |
 | `0x1212` | `NtUserSetShellWindowEx` | 2 |  |
@@ -862,7 +862,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x121f` | `NtUserSetWindowRgn` | 3 |  |
 | `0x1220` | `NtUserSetWindowsHookAW` | 3 |  |
 | `0x1221` | `NtUserSetWindowsHookEx` | 6 |  |
-| `0x1222` | `NtUserSetWindowStationUser` | 4 |  |
+| `0x1222` | `NtUserSetWindowStationUser` | 4 | ✅ |
 | `0x1223` | `NtUserSetWindowWord` | 3 |  |
 | `0x1224` | `NtUserSetWinEventHook` | 8 |  |
 | `0x1225` | `NtUserShowCaret` | 1 |  |
