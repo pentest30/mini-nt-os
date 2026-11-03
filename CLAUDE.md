@@ -230,6 +230,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   le tas et remplit le `CLIENTINFO`) ; dispositions de clavier (`win32k::keyboard` : le fichier lu par le noyau
   d'après le registre, ses tables trouvées sans exécuter `KbdLayerDescriptor`) : `winlogon` crée `WinSta0` et ses
   bureaux, s'y place, charge `00000409`, puis s'arrête à son serveur RPC (tube nommé : NPFS d'Io, à faire).
+  Premier affichage : pilote d'affichage (`win32k::display`, trait `DisplayDriver`, `drivers/video/gopfb` sur le
+  framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; NtUserSwitchDesktop peint le fond du bureau d'entrée
+  (`COLOR_BACKGROUND`) ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
+  pixels d'une capture de QEMU (`xtask/src/screen.rs`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -266,6 +270,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 - Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW
   (`i686-w64-mingw32-gcc`, paquet `gcc-mingw-w64-i686`), clang, `lld-link` et `llvm-dlltool` (paquets `clang`, `lld`,
   `llvm`). Sans eux, ils sont sautés.
+- `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
+  (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
   elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;

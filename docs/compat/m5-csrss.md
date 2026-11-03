@@ -595,3 +595,37 @@ une disposition chargée une fois, listée, pas relue ; un fichier illisible ou 
 de la station interactive ; le nom du fichier de disposition), `desktop_self_test` (NtUserLoadKeyboardLayoutEx refuse un
 drapeau inconnu et ne lit rien hors de la station interactive ; NtUserGetKeyboardLayoutList compte les dispositions) ; le
 scénario `smss` attend la disposition chargée, ses tables et ses HKL listés.
+
+## Étape 20 : premier affichage ; le fond du bureau d'entrée
+
+Premier pas de GDI et du pilote d'affichage (M6, choisi avec le mainteneur avant les tubes nommés) : quand `winlogon`
+fait de `Winlogon` le bureau d'entrée (NtUserSwitchDesktop), win32k en peint le fond sur l'écran.
+
+- **Pilote d'affichage** (`win32k::display`) : un trait interne, `DisplayDriver` (mode, surface, prise de l'écran),
+  implémenté par `drivers/video/gopfb` sur le framebuffer UEFI que décrit le chargeur (GOP, 1280×800, BGR sous QEMU ;
+  vu par le HHDM). Le noyau l'installe au démarrage. win32k dessine directement dans le framebuffer, comme un pilote
+  d'XP associe sa surface à GDI ; la première fois, le pilote prend l'écran à la console de démarrage (`hal::fb`), qui
+  cesse d'y écrire. Les dessins passent un à un sous un `KSpinLock` (en attendant un mutex à PASSIVE_LEVEL).
+- **Moteur DIB** (`win32k::gdi::dib`) : surface de 32 bits par pixel (`Bitmap` : largeur, hauteur, pas, ordre des
+  octets `Bgrx` ou `Rgbx`), couleurs COLORREF converties en pixels, PatBlt d'un pinceau plein (`fill_rect`, coupé
+  aux bords).
+- **Couleur système** (`win32k::gdi::syscolor`) : `COLOR_BACKGROUND`, RGB(58, 110, 165) (la table par défaut de
+  ReactOS, `win32ss/gdi/ntgdi/stockobj.c`).
+- **Le fond du bureau** : NtUserSwitchDesktop peint tout l'écran de cette couleur (journalisé : « win32k: the input
+  desktop Winlogon painted, 1280x800 »), en attendant la fenêtre du bureau, que ReactOS montre (co_IntShowDesktop)
+  et peint à son WM_PAINT (IntPaintDesktop).
+- **L'ancien lanceur** (`launcher.rs`, ancienne architecture) dessinait sur tout l'écran après la phase 1 : il ne le
+  fait plus quand win32k a pris l'écran (le thread de démarrage reste au repos) ; sinon, rien ne change.
+- **Le banc d'essai** (`xtask/src/screen.rs`) : un scénario peut demander des pixels (`screen = X Y RRGGBB`) ; une
+  fois ses marqueurs trouvés, le moniteur de QEMU (sur un socket Unix du répertoire du run) fait une capture
+  (`screendump`, `screen.ppm`) où chacun doit avoir sa couleur.
+
+Le scénario `smss` attend le fond `3A6EA5` au centre et aux deux coins de l'écran.
+
+Pas encore : la fenêtre du bureau (classes, fenêtres, WM_PAINT), le fond d'écran (une image), les contextes de
+périphérique et les objets GDI, le texte (ADR-013), les autres profondeurs et ROP, le changement de mode
+(`bochs-dispi`), le curseur, l'entrée (i8042, thread d'entrée).
+
+Tests : hôte (`win32k::gdi::dib` : couleurs et ordres des octets, rectangle rempli dans la surface, coupé, vide ou
+dehors, surface trop courte ; `xtask` : pixels attendus lus, PPM lu et vérifié), scénario `smss` (la capture de
+l'écran).

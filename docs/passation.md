@@ -15,9 +15,9 @@ jour à chaque commit qui change l'état.
   est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
   sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
-  crée la station interactive `WinSta0` et ses bureaux, s'y place, charge sa disposition de clavier, puis s'arrête à
-  son serveur RPC (un tube nommé : NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15
-  à 19.
+  crée la station interactive `WinSta0` et ses bureaux, s'y place (win32k peint le fond du bureau d'entrée sur
+  l'écran : premier affichage, GDI et `gopfb`), charge sa disposition de clavier, puis s'arrête à son serveur RPC (un
+  tube nommé : NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 20.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -308,7 +308,16 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      NtUserSetThreadDesktop (vue du tas, `CLIENTTHREADINFO`, `CLIENTINFO`), NtUserSwitchDesktop ;
    - [x] les dispositions de clavier (`win32k::keyboard`) : NtUserLoadKeyboardLayoutEx (le fichier lu par le noyau
      d'après le registre, les tables trouvées sans exécuter `KbdLayerDescriptor`), NtUserGetKeyboardLayoutList ;
-   - **la suite** : `winlogon` démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
+   - [x] premier affichage (choisi avec le mainteneur avant les tubes nommés) : le pilote d'affichage
+     (`win32k::display`, trait `DisplayDriver` ; `drivers/video/gopfb` sur le framebuffer UEFI), le moteur DIB
+     (`win32k::gdi::dib` : surface de 32 bits, couleurs, `fill_rect`), `COLOR_BACKGROUND` ; NtUserSwitchDesktop peint
+     le fond du bureau d'entrée ; l'ancien lanceur ne dessine plus sur un écran que win32k a pris ; `xtask` vérifie des
+     pixels d'une capture de l'écran (`screen = X Y RRGGBB`) ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les fenêtres (classes, `WND` dans le tas du
+     bureau, la fenêtre du bureau et son WM_PAINT au lieu du fond peint à NtUserSwitchDesktop), les rappels du mode
+     utilisateur (KeUserModeCallback, `int 2Bh`), les contextes de périphérique et les objets GDI (table des handles
+     partagée), BitBlt, le texte (ADR-013), le curseur et l'entrée (i8042, thread d'entrée) ;
+   - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
      fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
      FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
    - **USER (option 1, choisie avec le mainteneur : le win32k minimal, début du M6 et du spike S3)** :
