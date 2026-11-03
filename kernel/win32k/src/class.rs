@@ -38,8 +38,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::ntstatus::NtStatus;
 use abi::user::{
     Cls32, CLS_GLOBAL, CLS_MENU_NAME_IS_STRING, CLS_UNICODE, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_WOWDEFERDESTROY,
-    CS_DBLCLKS, CS_GLOBALCLASS, FNID_DESKTOP, FNID_ICONTITLE, FNID_MENU, FNID_MESSAGEWND, FNID_SCROLLBAR, FNID_SWITCH,
-    WC_DESKTOP, WC_ICONTITLE, WC_MENU, WC_SWITCH,
+    CS_DBLCLKS, CS_GLOBALCLASS, CS_HREDRAW, CS_VREDRAW, FNID_DESKTOP, FNID_ICONTITLE, FNID_MENU, FNID_MESSAGEWND,
+    FNID_SCROLLBAR, FNID_SWITCH, WC_DESKTOP, WC_ICONTITLE, WC_MENU, WC_SWITCH,
 };
 use abi::winerror::{dos_error, ERROR_CLASS_ALREADY_EXISTS};
 use hal::sync::KSpinLock;
@@ -48,8 +48,6 @@ use crate::atom::{self, AtomName};
 use crate::desktop::DesktopHeap;
 
 /// CS_* que les classes du système emploient.
-const CS_VREDRAW: u32 = 0x0001;
-const CS_HREDRAW: u32 = 0x0002;
 const CS_PARENTDC: u32 = 0x0080;
 const CS_SAVEBITS: u32 = 0x0800;
 const CS_DROPSHADOW: u32 = 0x0002_0000;

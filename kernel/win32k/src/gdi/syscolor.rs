@@ -1,9 +1,9 @@
-//! Les couleurs système (GetSysColor) : celles que GDI connaît avant que
-//! `winlogon` ou le panneau de configuration ne les change. Pour l'instant
-//! le seul fond du bureau.
+//! Les couleurs système que GDI emploie : pour l'instant le seul fond du
+//! bureau. La table entière, que GetSysColor lit (`SERVERINFO.argbSystem`),
+//! est `crate::metrics::SYSTEM_COLORS`.
 //!
-//! Pas encore : la table entière (`SERVERINFO.argbSystem`, les pinceaux
-//! système), lue du registre de l'utilisateur (`Control Panel\Colors`).
+//! Pas encore : les pinceaux système, les couleurs lues du registre de
+//! l'utilisateur (`Control Panel\Colors`).
 
 use super::dib::ColorRef;
 

@@ -40,6 +40,7 @@ pub mod gui;
 pub mod handles;
 pub mod keyboard;
 pub mod logon;
+pub mod metrics;
 pub mod queue;
 pub mod shared;
 pub mod window;
