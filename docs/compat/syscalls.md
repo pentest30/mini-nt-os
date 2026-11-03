@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 100 | 296 |
-| win32k | 17 | 732 |
+| win32k | 19 | 732 |
 
 ## ntoskrnl
 
@@ -727,7 +727,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1198` | `NtUserGetImeHotKey` | 4 |  |
 | `0x1199` | `NtUserGetImeInfoEx` | 2 |  |
 | `0x119a` | `NtUserGetInternalWindowPos` | 3 |  |
-| `0x119b` | `NtUserGetKeyboardLayoutList` | 2 |  |
+| `0x119b` | `NtUserGetKeyboardLayoutList` | 2 | ✅ |
 | `0x119c` | `NtUserGetKeyboardLayoutName` | 1 |  |
 | `0x119d` | `NtUserGetKeyboardState` | 1 |  |
 | `0x119e` | `NtUserGetKeyNameText` | 3 |  |
@@ -769,7 +769,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c2` | `NtUserInvalidateRgn` | 3 |  |
 | `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 |  |
 | `0x11c4` | `NtUserKillTimer` | 2 |  |
-| `0x11c5` | `NtUserLoadKeyboardLayoutEx` | 7 |  |
+| `0x11c5` | `NtUserLoadKeyboardLayoutEx` | 7 | ✅ |
 | `0x11c6` | `NtUserLockWindowStation` | 1 |  |
 | `0x11c7` | `NtUserLockWindowUpdate` | 1 |  |
 | `0x11c8` | `NtUserLockWorkStation` | 0 |  |
