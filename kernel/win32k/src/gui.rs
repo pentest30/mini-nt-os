@@ -61,6 +61,8 @@ pub struct ProcessInfo {
     desktop_views: KSpinLock<Vec<DesktopView>>,
     /// Son bureau de démarrage (`hdeskStartup`, `rpdeskStartup`).
     startup_desktop: KSpinLock<Option<(u32, Arc<Object<Desktop>>)>>,
+    /// Ses classes de fenêtres (`pclsPrivateList`, `pclsPublicList`).
+    pub classes: KSpinLock<crate::class::ClassLists>,
 }
 
 /// La vue d'un tas de bureau dans un processus.
@@ -88,6 +90,7 @@ impl ProcessInfo {
             window_station: KSpinLock::new(None),
             desktop_views: KSpinLock::new(Vec::new()),
             startup_desktop: KSpinLock::new(None),
+            classes: KSpinLock::new(crate::class::ClassLists::default()),
         }
     }
 

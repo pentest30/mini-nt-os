@@ -25,8 +25,8 @@ use core::mem::{offset_of, size_of};
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    Cls32, DeskInfoHead32, Rect32, Wnd32, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, FNID_DESKTOP, TYPE_WINDOW, WC_DESKTOP,
-    WM_ERASEBKGND, WM_PAINT, WNDS_ERASEBACKGROUND, WNDS_SENDERASEBACKGROUND, WNDS_SERVERSIDEWINDOWPROC,
+    Cls32, DeskInfoHead32, Rect32, Wnd32, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, FNID_DESKTOP, TYPE_WINDOW,
+    WC_DESKTOP, WM_ERASEBKGND, WM_PAINT, WNDS_ERASEBACKGROUND, WNDS_SENDERASEBACKGROUND, WNDS_SERVERSIDEWINDOWPROC,
     WS_CLIPCHILDREN, WS_POPUP, WS_VISIBLE,
 };
 use hal::sync::KSpinLock;
@@ -34,8 +34,6 @@ use hal::sync::KSpinLock;
 use crate::desktop::{Desktop, DesktopHeap};
 use crate::gdi::dib::Rect;
 
-/// CS_DBLCLKS, le style de la classe du bureau.
-const CS_DBLCLKS: u32 = 0x0008;
 /// COLOR_BACKGROUND : le pinceau de la classe du bureau, une couleur système
 /// plus un.
 const COLOR_BACKGROUND: u32 = 1;

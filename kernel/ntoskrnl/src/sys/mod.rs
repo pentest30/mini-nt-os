@@ -29,6 +29,7 @@
 
 pub mod apc;
 mod callback;
+mod class;
 mod desktop;
 mod event;
 pub mod exceptions;
@@ -191,6 +192,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
     (services::NtUserCreateDesktop, Handler::Status(desktop::nt_user_create_desktop)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
+    (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
     (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
@@ -203,6 +205,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserPostMessage, Handler::Status(message::nt_user_post_message)),
     (services::NtUserPostThreadMessage, Handler::Status(message::nt_user_post_thread_message)),
     (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
+    (services::NtUserRegisterClassExWOW, Handler::Status(class::nt_user_register_class_ex_wow)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),

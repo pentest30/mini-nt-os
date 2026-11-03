@@ -28,7 +28,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 
+pub mod atom;
 pub mod callback;
+pub mod class;
 pub mod client;
 pub mod csrss;
 pub mod desktop;

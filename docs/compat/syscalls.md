@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 25 | 732 |
+| win32k | 27 | 732 |
 
 ## ntoskrnl
 
@@ -702,7 +702,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x117f` | `NtUserGetAtomName` | 2 |  |
 | `0x1180` | `NtUserGetCaretBlinkTime` | 0 |  |
 | `0x1181` | `NtUserGetCaretPos` | 1 |  |
-| `0x1182` | `NtUserGetClassInfo` | 5 |  |
+| `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |
 | `0x1183` | `NtUserGetClassName` | 3 |  |
 | `0x1184` | `NtUserGetClipboardData` | 2 |  |
 | `0x1185` | `NtUserGetClipboardFormatName` | 3 |  |
@@ -802,7 +802,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e3` | `NtUserRealInternalGetMessage` | 6 |  |
 | `0x11e4` | `NtUserRealWaitMessageEx` | 2 |  |
 | `0x11e5` | `NtUserRedrawWindow` | 4 |  |
-| `0x11e6` | `NtUserRegisterClassExWOW` | 7 |  |
+| `0x11e6` | `NtUserRegisterClassExWOW` | 7 | ✅ |
 | `0x11e7` | `NtUserRegisterUserApiHook` | 4 |  |
 | `0x11e8` | `NtUserRegisterHotKey` | 4 |  |
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |

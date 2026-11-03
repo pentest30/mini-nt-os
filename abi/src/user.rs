@@ -129,10 +129,68 @@ pub const FIRST_USER_HANDLE: u32 = 0x0020;
 /// TYPE_WINDOW: a handle entry of a window (`HANDLE_TYPE`).
 pub const TYPE_WINDOW: u8 = 1;
 
+/// FNID_*: the window function identifiers of the system classes; those
+/// up to `FNID_SWITCH` have a server procedure.
+pub const FNID_SCROLLBAR: u32 = 0x029A;
+pub const FNID_ICONTITLE: u32 = 0x029B;
+pub const FNID_MENU: u32 = 0x029C;
 /// FNID_DESKTOP: the function identifier of the desktop window.
 pub const FNID_DESKTOP: u32 = 0x029D;
+pub const FNID_MESSAGEWND: u32 = 0x029F;
+pub const FNID_SWITCH: u32 = 0x02A0;
+pub const FNID_BUTTON: u32 = 0x02A1;
+pub const FNID_GHOST: u32 = 0x02AA;
+/// FNID_DESTROY: set on a window being destroyed.
+pub const FNID_DESTROY: u32 = 0x4000;
 /// The desktop window's class, an integer atom (`WC_DESKTOP`, `#32769`).
 pub const WC_DESKTOP: u16 = 0x8001;
+/// The other system classes named by an integer atom: menus (`#32768`),
+/// the task switch window (`#32771`), icon titles (`#32772`).
+pub const WC_MENU: u16 = 0x8000;
+pub const WC_SWITCH: u16 = 0x8003;
+pub const WC_ICONTITLE: u16 = 0x8004;
+/// CS_*, class styles: CS_DBLCLKS, and CS_GLOBALCLASS (an application
+/// global class, found whatever the instance).
+pub const CS_DBLCLKS: u32 = 0x0008;
+pub const CS_GLOBALCLASS: u32 = 0x4000;
+/// CSF_ANSIPROC: the class procedure takes ANSI messages.
+pub const CSF_ANSIPROC: u32 = 0x0002;
+/// CSF_WOWDEFERDESTROY: a class whose destruction waits for its windows.
+pub const CSF_WOWDEFERDESTROY: u32 = 0x0004;
+
+/// WNDCLASSEXW, 32-bit: what RegisterClassEx gives win32k.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WndClassExW32 {
+    pub size: u32,
+    pub style: u32,
+    pub wnd_proc: u32,
+    pub cls_extra: i32,
+    pub wnd_extra: i32,
+    pub instance: u32,
+    pub icon: u32,
+    pub cursor: u32,
+    pub background: u32,
+    pub menu_name: u32,
+    pub class_name: u32,
+    pub icon_sm: u32,
+}
+
+/// CLSMENUNAME, 32-bit: a class's menu name, as `user32` keeps it (ANSI and
+/// Unicode, in the client), and its `UNICODE_STRING`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClsMenuName32 {
+    pub client_ansi: u32,
+    pub client_unicode: u32,
+    pub us_menu_name: u32,
+}
+
+const _: () = {
+    assert!(size_of::<WndClassExW32>() == 0x30);
+    assert!(offset_of!(WndClassExW32, menu_name) == 0x24);
+    assert!(size_of::<ClsMenuName32>() == 12);
+};
 
 /// WNDS_*, `WND.state`.
 pub const WNDS_SENDERASEBACKGROUND: u32 = 0x0000_0200;
@@ -142,6 +200,10 @@ pub const WNDS_SERVERSIDEWINDOWPROC: u32 = 0x0004_0000;
 /// CSF_*, `CLS.CSF_flags`.
 pub const CSF_SERVERSIDEPROC: u32 = 0x0001;
 pub const CSF_SYSTEMCLASS: u32 = 0x0008;
+/// CLS bits: Unicode, Global, MenuNameIsString.
+pub const CLS_UNICODE: u32 = 0x1;
+pub const CLS_GLOBAL: u32 = 0x2;
+pub const CLS_MENU_NAME_IS_STRING: u32 = 0x4;
 
 /// WS_*, window styles.
 pub const WS_POPUP: u32 = 0x8000_0000;
@@ -600,7 +662,8 @@ as_bytes!(
     ClientThreadInfo32,
     Wnd32,
     Cls32,
-    GetCharsetInfo32
+    GetCharsetInfo32,
+    WndClassExW32
 );
 
 #[cfg(test)]

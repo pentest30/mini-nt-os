@@ -2,8 +2,10 @@
 # kernel32 and user32) takes the place of winlogon.exe, which smss starts as
 # its initial command once csrss runs. Like winlogon, it registers as the
 # logon process, creates WinSta0 and a desktop and goes on it; then it
-# registers a window class: not yet (NtUserRegisterClassExWOW). It ends with
-# status 2.
+# registers a window class (user32 registers its system controls first),
+# finds it and user32's Button again (GetClassInfoExW), cannot find a class
+# never registered nor register its own twice, and creates a window of its
+# class: not yet (NtUserCreateWindowEx). It ends with status 3.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
 requires = userland, native
@@ -12,9 +14,13 @@ cpus     = default, intel
 timeout  = 120
 
 expect = [gui] on WinSta0\Default
-expect = sys: NtUserRegisterClassExWOW (0x11e6) is not implemented
-expect = [gui] RegisterClassExW: atom 0000 (120)
-expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x00000002
+expect = [gui] RegisterClassExW: atom c00a (0)
+expect = [gui] GetClassInfoExW: the class as registered
+expect = [gui] GetClassInfoExW(Button): user32's class
+expect = [gui] GetClassInfoExW(NoSuchClass): 0 (1411)
+expect = [gui] RegisterClassExW again: 0000 (1410)
+expect = sys: NtUserCreateWindowEx (0x1156) is not implemented
+expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x00000003
 
 forbid = WRONG
 forbid = *** STOP:

@@ -134,6 +134,17 @@ unsafe impl UserValue for abi::peb32::UnicodeString32 {
 }
 
 // SAFETY: integers back to back, any bit pattern valid, no padding (the
+// layout is asserted in abi::user).
+unsafe impl UserValue for abi::user::WndClassExW32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: three u32, any bit pattern valid.
+unsafe impl UserValue for abi::user::ClsMenuName32 {
+    const ALIGNMENT: usize = 4;
+}
+
+// SAFETY: integers back to back, any bit pattern valid, no padding (the
 // layouts are asserted in abi::lpc).
 unsafe impl UserValue for abi::lpc::PortMessage32 {
     const ALIGNMENT: usize = 4;
