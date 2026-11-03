@@ -287,6 +287,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &ex::SEMAPHORE_TYPE,
         &lpc::PORT_TYPE,
         &se::TOKEN_OBJECT_TYPE,
+        &win32k::winsta::WINDOW_STATION_TYPE,
     ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
@@ -358,6 +359,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     keyed_event_self_test();
     process_settings_self_test();
     win32k_self_test();
+    window_station_self_test();
     lpc_connection_self_test();
     process_memory_self_test();
     shared_section_self_test();
@@ -4942,6 +4944,175 @@ fn win32k_self_test() {
     );
 }
 
+/// Window stations from user mode (`win32k::winsta`, `sys::winsta`, M5): a
+/// GUI process creates a station by its name, creates it again (opened, the
+/// same object) and opens it; it is no interactive station, its creator
+/// not being the logon process. The process takes it as its station
+/// (NtUserGetProcessWindowStation before and after), cannot close that
+/// handle (ERROR_BUSY), closes another one, then not again
+/// (ERROR_INVALID_HANDLE). NtUserSetWindowStationUser is refused to it
+/// (ERROR_ACCESS_DENIED), then, the process registered as the logon
+/// process, gives the station a LUID and a SID, and refuses a SID too long
+/// (ERROR_INVALID_PARAMETER). The process leaves its station and
+/// unregisters; registered again, it creates the station again, which
+/// stays no interactive station (it existed).
+fn window_station_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_WAIT_0};
+    use abi::services;
+    use abi::winerror::{ERROR_ACCESS_DENIED, ERROR_BUSY, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER};
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use win32k::winsta::{WindowStation, WINDOW_STATION_TYPE};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const RESULT: u32 = DATA; // 20 results
+    const ERROR: u32 = DATA + 0x50; // 20 last errors
+    const PID: u32 = DATA + 0xA0;
+    const LUID: u32 = DATA + 0xA8;
+    const SID: u32 = DATA + 0xB0; // S-1-5-18, 12 bytes
+    const OA: u32 = DATA + 0xC0;
+    const US: u32 = DATA + 0xD8;
+    const NAME: u32 = DATA + 0xE0;
+    const DONE: u32 = DATA + 0x1FC;
+    const STATION_NAME: &str = "\\BaseNamedObjects\\MinoWinSta";
+    const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+    const SYSTEM_SID: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    let units: alloc::vec::Vec<u8> = STATION_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(NAME, &units);
+    let length = (units.len() as u16).to_le_bytes();
+    put(US, &[length[0], length[1], length[0], length[1]]);
+    put(US + 4, &NAME.to_le_bytes());
+    put(OA, &24u32.to_le_bytes());
+    put(OA + 8, &US.to_le_bytes());
+    put(LUID, &0x3E7u64.to_le_bytes());
+    put(SID, &SYSTEM_SID);
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let result = |i: u32| RESULT + 4 * i;
+    let error = |i: u32| ERROR + 4 * i;
+    let set_last_error = [0x64, 0xC7, 0x05, 0x34, 0, 0, 0, 0, 0, 0, 0];
+    let read_last_error = [0x64, 0xA1, 0x34, 0, 0, 0];
+    let mut code = Code::new();
+    let mut step = 0;
+    let mut call = |code: &mut Code, number: u32, arguments: &[Arg]| {
+        code.bytes(&set_last_error);
+        code.call_args(number, arguments).store_eax(result(step));
+        code.bytes(&read_last_error).store_eax(error(step));
+        step += 1;
+    };
+    let (create, open, close) =
+        (services::NtUserCreateWindowStation, services::NtUserOpenWindowStation, services::NtUserCloseWindowStation);
+    let (get, set) = (services::NtUserGetProcessWindowStation, services::NtUserSetProcessWindowStation);
+    let (user, two) = (services::NtUserSetWindowStationUser, services::NtUserCallTwoParam);
+    let register = abi::user::TWOPARAM_ROUTINE_REGISTERLOGONPROCESS;
+    let any = MAXIMUM_ALLOWED;
+    call(&mut code, create, &[v(OA), v(any), v(0), v(0), v(0), v(0), v(0)]); // 0
+    call(&mut code, create, &[v(OA), v(any), v(0), v(0), v(0), v(0), v(0)]); // 1
+    call(&mut code, open, &[v(OA), v(any)]); // 2
+    call(&mut code, get, &[]); // 3
+    call(&mut code, set, &[m(result(0))]); // 4
+    call(&mut code, get, &[]); // 5
+    call(&mut code, close, &[m(result(0))]); // 6
+    call(&mut code, close, &[m(result(1))]); // 7
+    call(&mut code, close, &[m(result(1))]); // 8
+    call(&mut code, user, &[m(result(0)), v(LUID), v(SID), v(12)]); // 9
+    code.bytes(&[0x64, 0xA1, 0x20, 0, 0, 0]).store_eax(PID); // mov eax, fs:[0x20]
+    call(&mut code, two, &[m(PID), v(1), v(register)]); // 10
+    call(&mut code, user, &[m(result(0)), v(LUID), v(SID), v(12)]); // 11
+    call(&mut code, user, &[m(result(2)), v(LUID), v(SID), v(100)]); // 12
+    call(&mut code, two, &[m(PID), v(0), v(register)]); // 13
+    call(&mut code, set, &[v(0)]); // 14
+    call(&mut code, get, &[]); // 15
+    call(&mut code, two, &[m(PID), v(1), v(register)]); // 16
+    call(&mut code, create, &[v(OA), v(any), v(0), v(0), v(0), v(0), v(0)]); // 17
+    call(&mut code, two, &[m(PID), v(0), v(register)]); // 18
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "winsta.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the window station test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let (r, e) = (|i: u32| read(result(i)), |i: u32| read(error(i)));
+
+    let (first, again, opened) = (r(0), r(1), r(2));
+    assert!(
+        first != 0 && again != 0 && opened != 0,
+        "created, created again, opened: {first:#x} {again:#x} {opened:#x}"
+    );
+    assert!(first != again && again != opened, "three handles");
+    let station = |handle: u32| {
+        process
+            .handle_table
+            .reference_as::<WindowStation>(ob::Handle(handle), &WINDOW_STATION_TYPE, ob::AccessMask::NONE)
+            .expect("a window station")
+    };
+    let object = station(first);
+    assert!(Arc::ptr_eq(&object, &station(opened)), "the same station");
+    assert!(object.no_io(), "not the interactive station: its creator is not the logon process");
+    assert_eq!((r(3), r(4), r(5)), (0, 1, first), "the process's station, before and after");
+    assert_eq!((r(6), e(6)), (0, ERROR_BUSY), "the process's station is not closed");
+    assert_eq!((r(7), r(8), e(8)), (1, 0, ERROR_INVALID_HANDLE), "another handle closed once");
+    assert_eq!((r(9), e(9)), (0, ERROR_ACCESS_DENIED), "NtUserSetWindowStationUser: the logon process only");
+    assert_eq!((r(10), r(11), r(12), e(12)), (1, 1, 0, ERROR_INVALID_PARAMETER), "as the logon process");
+    let user = object.user();
+    assert_eq!((user.luid.low_part, user.sid.as_deref()), (0x3E7, Some(&SYSTEM_SID[..])), "the station's user");
+    assert_eq!((r(13), r(14), r(15)), (1, 1, 0), "unregistered; no station left");
+    assert_eq!((r(16), r(18)), (1, 1), "registered again, then not");
+    assert!(Arc::ptr_eq(&object, &station(r(17))), "the logon process opens the station");
+    assert!(object.no_io(), "an existing station does not become the interactive one");
+    assert_eq!(win32k::logon::logon_process(), 0);
+    drop(object);
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ob::namespace().open(STATION_NAME, None, None, 0).is_err(), "the station gone with its handles");
+    log::info!(
+        "[smoke] win32k: window stations from user mode: created, created again and opened (one object, not \
+         interactive), the process's station (kept from NtUserCloseWindowStation), NtUserSetWindowStationUser for \
+         the logon process only"
+    );
+}
+
 /// LPC connections from user mode (`lpc`, `sys::port`, M5), as csrss and
 /// smss use them, in one process: a server thread creates a named port and
 /// listens, passing by a datagram from the kernel; a client thread is refused for a server SID that is not the
@@ -7771,7 +7942,8 @@ fn object_manager_self_test() {
             "SymbolicLink",
             "Thread",
             "Token",
-            "Type"
+            "Type",
+            "WindowStation"
         ]
     );
 
