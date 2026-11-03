@@ -50,9 +50,10 @@ forbid = Source File: ../base/system/smss/smss.c
 # connects to csrss (NtSecureConnectPort, with csrss's shared section mapped
 # SEC_NO_CHANGE), user32 to win32k; winlogon registers as the logon
 # process (RegisterLogonProcess: win32k, then csrss, which gives win32k its
-# API port), then creates its window station: not yet
-# (NtUserCreateWindowStation, M6, returns NULL). It ends; smss ends with
-# it. The probe ends csrss after 2 s.
+# API port), then creates its window station (WinSta0, the interactive
+# one) and takes it, then creates its Default desktop: not yet
+# (NtUserCreateDesktop, M6, returns NULL). It ends; smss ends with it. The
+# probe ends csrss after 2 s.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -102,14 +103,20 @@ expect = [m4]   NtCompleteConnectPort (0x001f): 4 calls, the first returned 0x00
 expect = [m4]   NtSetDefaultHardErrorPort (0x00df): 1 calls, the first returned 0x00000000
 # winlogon (M5, step 9): on the disk, its process handle duplicated, then
 # handed to csrss, which makes it a CSR process; it connects to csrss,
-# registers as the logon process and stops at its window station (M6).
+# registers as the logon process, creates WinSta0 and stops at its first
+# desktop (M6).
 expect = [m4] SMSS.EXE created winlogon.exe (PID
 expect = [m4]   NtDuplicateObject (0x0047):
 expect = [m4]   NtQueryInformationThread (0x00a2): 2 calls, the first returned 0x00000000
 expect = [m4]   NtUserCallTwoParam (0x1143): 1 calls, the first returned 0x00000001
 expect = [m4]   NtUserSetInformationThread (0x1205): 1 calls, the first returned 0x00000000
-expect = sys: NtUserCreateWindowStation (0x1157) is not implemented
-expect = WL: Failed to create window station (120)
+expect = [m4]   NtUserCreateWindowStation (0x1157): 1 calls
+expect = win32k: the interactive window station, created by the logon process (PID
+expect = [m4]   NtUserSetProcessWindowStation (0x120f): 1 calls, the first returned 0x00000001
+expect = sys: NtUserCreateDesktop (0x1153) is not implemented
+expect = WL: Failed to create Default desktop (120)
+forbid = WL: Failed to create window station
+forbid = WL: SetProcessWindowStation() failed
 forbid = WL: Could not register logon process
 forbid = Failed to register logon process with CSRSS
 forbid = sys: NtUserCallTwoParam class 0x69 

@@ -509,3 +509,32 @@ logon), `win32k_self_test` (NtGdiAbortDoc sans handler rend 0 et `ERROR_CALL_NOT
 `STATUS_NOT_IMPLEMENTED` sans toucher la dernière erreur ; RegisterLogonProcess depuis le mode utilisateur : une fois, pas
 deux, désinscription par un autre refusée, PID sans processus, routine inconnue ; NtUserSetInformationThread refusé hors
 de `csrss`).
+
+## Étape 17 : les stations de fenêtres ; `winlogon` crée `WinSta0`
+
+`winlogon` crée la station interactive et la prend (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserCreateWindowStation | la station que nomment les attributs (`WinSta0`, sous `\Windows\WindowStations` ouvert par `user32`), ouverte si elle existe, créée sinon (type d'Ob `WindowStation`, `win32k::winsta`) ; la première que crée le processus de logon devient la station interactive (`InputWindowStation`, journalisé), les autres n'ont ni entrée ni sortie (`WSS_NOIO`) ; rend son handle. Sans nom (nommée d'après la session de logon) : pas encore (`STATUS_NOT_IMPLEMENTED`, journalisé une fois) | `winlogon` (`CreateWindowStationW`) |
+| NtUserOpenWindowStation | un handle sur la station nommée | — |
+| NtUserSetProcessWindowStation, NtUserGetProcessWindowStation | la station du processus (`PROCESSINFO` : handle, station, droits du handle ; 0 : plus aucune) | `winlogon`, `user32` (`CreateDesktopW`) |
+| NtUserCloseWindowStation | ferme le handle d'une station ; FALSE (`ERROR_BUSY`) pour celui de la station du processus | — |
+| NtUserSetWindowStationUser | pour le processus de logon seul (`ERROR_ACCESS_DENIED`) : la LUID de l'utilisateur de la station, et son SID (au plus 68 octets, une limite que ReactOS n'a pas) | `winlogon` |
+
+Ces services rendent une valeur : un échec rend 0, avec l'erreur Win32 du statut comme dernière erreur
+(SetLastNtError, `abi::winerror::dos_error`, pour les statuts que le noyau rend).
+
+`winlogon` crée ensuite son bureau `Default` : NtUserCreateDesktop manque (« WL: Failed to create Default desktop
+(120) »), et `winlogon` finit.
+
+Pas encore : les bureaux d'une station (sa procédure *parse*), la table des atomes, le thread du bureau et le thread
+d'entrée que ReactOS crée avec la station interactive, le handle de station gardé dans l'EPROCESS (hérité par un
+processus créé), NtUserLockWindowStation.
+
+Tests : hôte (`win32k::winsta` : une seule station interactive, celle du processus de logon ; la correspondance
+générique ; l'utilisateur d'une station ; `abi::winerror`), `window_station_self_test` (créée, recréée et ouverte : un
+seul objet, pas interactif ; la station du processus, que NtUserCloseWindowStation garde ; un autre handle fermé une
+fois ; NtUserSetWindowStationUser refusé hors du processus de logon, puis accepté, un SID trop long refusé ; le processus
+de logon qui ouvre une station existante ne la rend pas interactive) ; le scénario `smoke` interdit la station
+interactive (pas de processus de logon).

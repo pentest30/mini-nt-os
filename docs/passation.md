@@ -15,8 +15,9 @@ jour à chaque commit qui change l'état.
   est démarré**. `smss` lance ensuite sa commande initiale, `winlogon.exe` (étape 9, en cours), garde un handle
   sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
-  puis s'arrête à sa station de fenêtres (NtUserCreateWindowStation rend NULL : USER du M6, option 1 choisie avec le
-  mainteneur) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 et 16.
+  crée la station interactive `WinSta0` et la prend, puis s'arrête à son premier bureau (NtUserCreateDesktop rend
+  NULL : USER du M6, option 1 choisie avec le mainteneur) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à
+  17.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -299,16 +300,16 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      levée ;
    - [x] `RegisterLogonProcess` : NtUserCallTwoParam (`0x69`, `win32k::logon`), NtUserSetInformationThread
      (`UserThreadCsrApiPort`, le port d'API de `csrss` gardé par win32k) ;
+   - [x] les stations de fenêtres (`win32k::winsta`, `sys::winsta`) : NtUserCreateWindowStation (la première du
+     processus de logon est la station interactive), NtUserOpenWindowStation, NtUserCloseWindowStation,
+     NtUserGetProcessWindowStation, NtUserSetProcessWindowStation, NtUserSetWindowStationUser ;
    - **la suite (option 1, choisie avec le mainteneur : USER dans le win32k minimal, début du M6 et du spike S3)** :
      le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
      lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande
-     (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) : la station de fenêtres (un type d'Ob dont la procédure
-     *parse* ouvre ou crée ses bureaux ; NtUserCreateWindowStation, NtUserSetProcessWindowStation,
-     NtUserGetProcessWindowStation, NtUserCloseWindowStation ; la première créée, par le processus de logon, est la
-     station interactive), les bureaux (`Default`, `Winlogon`, `Screen-Saver` : NtUserCreateDesktop, un tas du bureau
-     dans une section, son `DESKTOPINFO` ; NtUserSetThreadDesktop projette le tas en `SEC_NO_CHANGE` et écrit
-     `pDeskInfo`, `ulClientDelta` et `pClientThreadInfo` du `CLIENTINFO` ; NtUserSwitchDesktop ;
-     NtUserSetWindowStationUser), puis le clavier (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
+     (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) : les bureaux `Default`, `Winlogon` et `Screen-Saver`
+     (la procédure *parse* de la station ouvre ou crée ses bureaux ; NtUserCreateDesktop, un tas du bureau dans une
+     section, son `DESKTOPINFO` ; NtUserSetThreadDesktop projette le tas en `SEC_NO_CHANGE` et écrit `pDeskInfo`,
+     `ulClientDelta` et `pClientThreadInfo` du `CLIENTINFO` ; NtUserSwitchDesktop), puis le clavier (NtUserLoadKeyboardLayoutEx), le serveur RPC, `services.exe`,
      `lsass.exe`, `msgina`. ReactOS crée aussi la fenêtre du bureau et la fenêtre des messages de chaque bureau
      (classes, fenêtres : plus tard) et, à la première station, le thread du bureau et le thread d'entrée (RIT).
 

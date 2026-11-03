@@ -223,8 +223,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `AddressSpace::map_view_with` : NtProtectVirtualMemory refusé) : `kernel32` se connecte à `csrss`. Un service de
   win32k sans handler rend 0 et `ERROR_CALL_NOT_IMPLEMENTED` s'il rend une valeur (`Service::returns_status`, tiré
   des prototypes de ReactOS par `tools/syscall-gen`). `winlogon` s'inscrit comme processus de logon
-  (NtUserCallTwoParam, `win32k::logon` ; NtUserSetInformationThread : le port d'API de `csrss`), puis s'arrête à sa
-  station de fenêtres : la suite est USER dans le win32k minimal (option 1, début du M6).
+  (NtUserCallTwoParam, `win32k::logon` ; NtUserSetInformationThread : le port d'API de `csrss`). Stations de
+  fenêtres faites (`win32k::winsta`, `sys::winsta`, type d'Ob `WindowStation` ; la première du processus de logon est
+  la station interactive) : `winlogon` crée `WinSta0`, puis s'arrête à son bureau `Default` : la suite est USER dans
+  le win32k minimal (option 1, début du M6).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
