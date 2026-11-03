@@ -243,7 +243,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   disposition de clavier). M6 commencé ([`docs/compat/m6-fenetres.md`](docs/compat/m6-fenetres.md)) : le scénario
   `gui` lance `tests/native/gui1.c` (MinGW, vrais `kernel32` et `user32`) à la place de `winlogon.exe` ; la table
   des atomes de USER (`win32k::atom`) et les classes de fenêtres (`win32k::class` : NtUserRegisterClassExWOW,
-  NtUserGetClassInfo).
+  NtUserGetClassInfo) ; les fenêtres (`win32k::window::create_window` : NtUserCreateWindowEx, WM_NCCREATE,
+  WM_NCCALCSIZE, WM_CREATE, WM_SIZE, WM_MOVE, WM_PARENTNOTIFY envoyés à la procédure du client par rappel, le
+  `WND` complet que `user32` lit lui-même ; NtUserDefSetText).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

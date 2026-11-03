@@ -37,7 +37,7 @@ ces services manquent, la classe n'a pas de curseur, et l'enregistrement continu
 Le programme enregistre sa classe (atome `0xC00A`, après celles des contrôles), la retrouve telle qu'il l'a donnée
 (`GetClassInfoExW`), retrouve la classe Button de `user32` (globale, mais sans `CS_GLOBALCLASS` puisqu'elle a un
 FNID), ne trouve pas une classe jamais enregistrée (1411) et ne peut pas enregistrer la sienne deux fois (1410). Il
-s'arrête à NtUserCreateWindowEx (statut 3).
+s'arrêtait ensuite à NtUserCreateWindowEx (étape 2).
 
 Écarts : ni objets curseur et icône (les handles sont gardés, `spicn` et `spcur` restent nuls), ni pinceaux (un
 pinceau du système vaut sa couleur plus un, comme pour la classe du bureau) ; le nom de menu reste dans le client
@@ -48,3 +48,55 @@ classe Unicode demandée en ANSI rend sa procédure, journalisé une fois).
 Tests : hôte (`win32k::atom` : casse, atomes entiers, longueurs, références et réutilisation ; `win32k::class` :
 recherche par nom et par atome, instance, classes globales, celles de `user32` en dernier, refus d'un double,
 atomes rendus, classes du système une fois, procédure du serveur reprise) ; le scénario `gui`, sur les deux CPU.
+
+## Étape 2 : NtUserCreateWindowEx, et les messages de la création
+
+`CreateWindowExW` de `user32` cherche d'abord la classe (`GetClassInfoExW`, pour son menu), puis appelle
+NtUserCreateWindowEx. Comme `co_UserCreateWindowEx` de ReactOS (`window.c`, `message.c`, `callback.c`, comme
+spécification), win32k (`win32k::window::create_window`) :
+
+1. trouve la classe par le nom de sa version (`ERROR_CANNOT_FIND_WND_CLASS`), le parent (la fenêtre du bureau, ou
+   celle que donne une fenêtre fille ; une fenêtre fille sans parent : `ERROR_TLW_WITH_WSCHILD`) et le propriétaire
+   (d'une fenêtre qui n'est pas fille : la fenêtre de premier niveau du parent donné) ;
+2. corrige la place (IntFixWindowCoordinates : `CW_USEDEFAULT` d'une fenêtre qui n'est pas recouvrante vaut 0 ; une
+   recouvrante, sans moniteur, prend 0, 0, 800 × 600, comme ReactOS sans moniteur) ; une fenêtre fille se place dans
+   la zone cliente de son parent ;
+3. crée le `WND` dans le tas du bureau (octets de plus de la classe compris), son handle (`TYPE_WINDOW`, le
+   `THREADINFO` du thread), le `CLS` de la classe sur ce bureau, le nom dans le tas ; corrige les styles
+   (`WS_VISIBLE` ôté, `WS_CLIPSIBLINGS` pour une fenêtre qui n'est pas fille, `WS_CAPTION` pour une recouvrante,
+   `WS_EX_WINDOWEDGE` d'après le cadre, `WNDS_SENDSIZEMOVEMSGS` pour une recouvrante) ; les `WNDS2_*` de
+   compatibilité d'après la version qu'attend le module ; la procédure de la classe (celle d'un contrôle, dans le jeu
+   de caractères de la fenêtre) ;
+4. envoie WM_NCCREATE (refusé : pas de fenêtre), lie la fenêtre parmi les enfants de son parent (en haut de l'ordre
+   Z, une fille en bas), envoie WM_NCCALCSIZE (la zone cliente, ramenée dans la fenêtre), WM_CREATE (-1 : pas de
+   fenêtre), puis WM_SIZE et WM_MOVE à une fenêtre qui n'attend pas d'être montrée, et WM_PARENTNOTIFY au parent
+   d'une fenêtre fille (sauf `WS_EX_NOPARENTNOTIFY`) ;
+5. donne la fenêtre à son thread (elle vit autant que lui) ; rend son handle, l'erreur Win32 remise à 0.
+
+Un message envoyé à une fenêtre du thread courant dont la procédure est dans le client va à `user32` par
+KeUserModeCallback (USER32_CALLBACK_WINDOWPROC, `WINDOWPROC_CALLBACK_ARGUMENTS` suivi du `lParam` emballé, repris
+pour un message qui y écrit) ; pendant le rappel, le `CLIENTINFO` du thread désigne la fenêtre (`CallbackWnd` : son
+handle, son `WND` dans la vue du processus). Le `CREATESTRUCT` de WM_NCCREATE et WM_CREATE est emballé comme
+PackParam : ses chaînes à la suite, leurs positions à la place des pointeurs, `A` et l'atome ou `S` et le nom de la
+classe ; `user32` le déballe (MsgiKMToUMMessage). NtUserDefSetText (DefWindowProc sur WM_NCCREATE et WM_SETTEXT)
+change le nom, à sa place s'il y tient ; un texte ANSI garde son ASCII (le reste devient `?`, journalisé).
+
+Le programme crée une fenêtre `WS_POPUP` de 400 × 300 en (100, 50) : sa procédure reçoit WM_NCCREATE et WM_CREATE
+avec le `CREATESTRUCT` donné (paramètre, nom, classe, place, style), et, pendant WM_CREATE, son `CLIENTINFO` désigne
+la fenêtre et son `WND` (dont le premier mot est le handle) ; elle reçoit, dans l'ordre, `0081 0083 0001 0005 0003`.
+`user32` lit lui-même dans son `WND` son nom (`GetWindowTextW`, par WM_GETTEXT à DefWindowProc), son style corrigé
+(`84000000`) et son rectangle ; `SetWindowTextW` change le nom (plus long : un bloc neuf ; plus court : à sa place).
+Une fenêtre fille (`WS_CHILD`, identifiant 7, en (10, 20) dans la fenêtre) reçoit les mêmes messages, et son parent
+WM_PARENTNOTIFY (WM_CREATE, 7, la fille) ; `GetParent` et `GetWindow(GW_CHILD)` suivent les liens des `WND`, et la
+fille est en (110, 70). Une fille sans parent (1406), une fenêtre d'une classe inconnue (1407) et une fenêtre dont la
+procédure refuse WM_NCCREATE ne sont pas créées. Le programme va au bout (statut `0x600D`).
+
+Ce qui manque, journalisé une fois : la partie noyau de DefWindowProc (NtUserMessageCall avec FNID_DEFWINDOWPROC,
+que `user32` appelle pour WM_NCCALCSIZE : la zone cliente reste le rectangle de la fenêtre), WM_GETMINMAXINFO (les
+métriques du système manquent), montrer une fenêtre créée visible (ShowWindow, SetWindowPos), les menus (une fenêtre
+qui n'est pas fille ne peut pas en recevoir : `ERROR_INVALID_MENU_HANDLE`), les fenêtres de messages (`HWND_MESSAGE`),
+les messages envoyés à un autre thread, DestroyWindow (les fenêtres d'un thread vivent autant que lui ; une création
+qui échoue ne reçoit ni WM_DESTROY ni WM_NCDESTROY), les crochets (`WH_CBT`), une fenêtre créée réduite ou agrandie.
+
+Tests : hôte (`win32k::window` : `CREATESTRUCT` emballé, styles d'une fenêtre neuve, place par défaut, compatibilité,
+zone cliente ramenée dans la fenêtre) ; le scénario `gui`, sur les deux CPU.
