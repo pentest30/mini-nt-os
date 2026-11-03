@@ -20,6 +20,15 @@ use core::mem::{offset_of, size_of};
 /// (`MAKELONG(0x0000, 0x0005)`), that `user32` puts in `ulVersion`.
 pub const USER_VERSION: u32 = 0x0005_0000;
 
+/// TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: the routine of NtUserCallTwoParam
+/// that registers the logon process (its PID, TRUE) or unregisters it
+/// (`SIMPLECALLROUTINES` of ReactOS's `ntuser.h`, before Vista).
+pub const TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: u32 = 0x69;
+
+/// UserThreadCsrApiPort: the class of NtUserSetInformationThread by which
+/// csrss gives win32k its API port (`USERTHREADINFOCLASS`).
+pub const USER_THREAD_CSR_API_PORT: u32 = 10;
+
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
 pub const FNID_FIRST: u32 = 0x029A;
 /// FNID_NUM: the window function identifiers, `FNID_SCROLLBAR` to
@@ -35,6 +44,8 @@ pub const SRVINFO_IMM32: u32 = 0x0004;
 /// CI_INITTHREAD (`CLIENTINFO.CI_flags`): `user32` has set the thread up.
 pub const CI_INITTHREAD: u32 = 0x0008;
 
+/// TIF_SYSTEMTHREAD (`THREADINFO` flags): a system thread of win32k.
+pub const TIF_SYSTEMTHREAD: u32 = 0x0000_0004;
 /// TIF_CSRSSTHREAD (`THREADINFO` flags, `CLIENTINFO.dwTIFlags`): a thread
 /// of `csrss`.
 pub const TIF_CSRSSTHREAD: u32 = 0x0000_0008;
@@ -176,7 +187,8 @@ pub struct ClientInfo32 {
     pub compat_flags2: u32,
     /// The thread's `TIF_*`.
     pub ti_flags: u32,
-    /// Its desktop's `DESKTOPINFO`, a server address; 0 without a desktop.
+    /// Its desktop's `DESKTOPINFO`, in its process's view of the desktop
+    /// heap (the server address less `client_delta`); 0 without a desktop.
     pub desk_info: u32,
     /// ulClientDelta: its desktop heap's server address less its view's.
     pub client_delta: u32,
@@ -185,6 +197,7 @@ pub struct ClientInfo32 {
     pub callback_wnd: CallbackWnd32,
     pub hook_current: u32,
     pub in_ddeml_callback: i32,
+    /// Its `CLIENTTHREADINFO`, in the view of its desktop heap.
     pub client_thread_info: u32,
     pub hook_data: u32,
     pub key_cache: u32,
@@ -205,7 +218,64 @@ pub struct ClientInfo32 {
     pub ppi: u32,
 }
 
+/// NB_HOOKS: the hook types, `WH_MSGFILTER` (-1) to `WH_MOUSE_LL` (14).
+pub const NB_HOOKS: usize = 16;
+
+/// LIST_ENTRY, 32-bit: two server addresses in the desktop heap.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ListEntry32 {
+    pub flink: u32,
+    pub blink: u32,
+}
+
+/// DESKTOPINFO up to its name (`szDesktopName`, at its end): what a
+/// desktop shares with the GUI threads on it, at the start of its desktop
+/// heap. Its pointers are server addresses.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeskInfoHead32 {
+    /// pvDesktopBase, pvDesktopLimit: the desktop heap's server addresses,
+    /// by which `user32` tells a pointer into it (DesktopPtrToUser).
+    pub desktop_base: u32,
+    pub desktop_limit: u32,
+    /// spwnd: the desktop window.
+    pub spwnd: u32,
+    pub fs_hooks: u32,
+    /// aphkStart: the hook chains, one per hook type, empty lists.
+    pub aphk_start: [ListEntry32; NB_HOOKS],
+    pub task_man_window: u32,
+    pub progman_window: u32,
+    pub shell_window: u32,
+    pub spwnd_shell: u32,
+    pub spwnd_bk_gnd: u32,
+    pub ppi_shell_process: u32,
+    /// LastInputWasKbd, bit 0.
+    pub flags: u32,
+}
+
+/// CLIENTTHREADINFO: a GUI thread's queue state that `user32` reads, in
+/// its desktop's heap.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClientThreadInfo32 {
+    pub cti_flags: u32,
+    pub fs_change_bits: u16,
+    pub fs_wake_bits: u16,
+    pub fs_wake_bits_journal: u16,
+    pub fs_wake_mask: u16,
+    pub time_last_read: u32,
+    pub dwc_pump_hook: u32,
+}
+
 const _: () = {
+    assert!(offset_of!(DeskInfoHead32, aphk_start) == 0x10);
+    assert!(offset_of!(DeskInfoHead32, task_man_window) == 0x90);
+    assert!(offset_of!(DeskInfoHead32, ppi_shell_process) == 0xA4);
+    // szDesktopName follows, at 0xAC; sizeof(DESKTOPINFO) is 0xB0.
+    assert!(size_of::<DeskInfoHead32>() == 0xAC);
+    assert!(offset_of!(ClientThreadInfo32, time_last_read) == 0x0C);
+    assert!(size_of::<ClientThreadInfo32>() == 0x14);
     assert!(size_of::<UserHandleEntry32>() == 12);
     assert!(size_of::<UserHandleTable32>() == 16);
     assert!(size_of::<WndMsg32>() == 8);
@@ -254,7 +324,16 @@ macro_rules! as_bytes {
     )*};
 }
 
-as_bytes!(UserHandleEntry32, UserHandleTable32, SharedInfo32, UserConnect32, ServerInfoHead32, ClientInfo32);
+as_bytes!(
+    UserHandleEntry32,
+    UserHandleTable32,
+    SharedInfo32,
+    UserConnect32,
+    ServerInfoHead32,
+    ClientInfo32,
+    DeskInfoHead32,
+    ClientThreadInfo32
+);
 
 #[cfg(test)]
 mod tests {

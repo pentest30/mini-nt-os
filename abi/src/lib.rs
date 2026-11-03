@@ -45,5 +45,6 @@ pub mod shared_data;
 pub mod system_information;
 pub mod teb32;
 pub mod user;
+pub mod winerror;
 
 pub use loader_block::*;

@@ -477,3 +477,94 @@ Tests : hôte (`mm` : une vue `SEC_NO_CHANGE` refuse toute protection, une vue s
 `shared_section_self_test` (une vue `SEC_NO_CHANGE` depuis le mode utilisateur : NtProtectVirtualMemory refusé,
 NtUnmapViewOfSection permis ; `MEM_COMMIT` refusé comme type d'une vue), `thread_information_self_test`
 (`ThreadIsTerminated` : 0 pour lui-même, 1 pour un thread fini).
+
+## Étape 16 : les services de win32k qui manquent échouent proprement ; `winlogon` s'inscrit
+
+Un service de win32k sans handler rendait `STATUS_NOT_IMPLEMENTED` (`0xC0000002`), que `user32` lisait comme un
+handle de station de fenêtres ou comme un compte, puis faute. Il rend maintenant ce que rend win32k quand il échoue :
+
+| Ce que rend le service | Sans handler |
+|---|---|
+| un `NTSTATUS` (78 services : NtUserProcessConnect, NtUserSetInformationThread, NtGdiFlush, les D3DKMT…) | `STATUS_NOT_IMPLEMENTED` |
+| une valeur (BOOL, HANDLE, DWORD, compte…) | 0, et `ERROR_CALL_NOT_IMPLEMENTED` (120) comme dernière erreur du thread (`TEB.LastErrorValue`, `win32k::set_last_error`) |
+
+Le type rendu vient des prototypes de ReactOS épinglé : `tools/syscall-gen/reactos/0.4.16/w32k-ntstatus.lst`
+(origine et méthode dans le `README.md` du dossier), que `tools/syscall-gen` porte dans les tables
+(`Service::returns_status`, `Service::value`). Le premier appel reste journalisé, suivi de « 0 returned ».
+
+`winlogon` s'inscrit alors comme processus de logon (`RegisterLogonProcess`, `user32/misc/logon.c`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserCallTwoParam(`TWOPARAM_ROUTINE_REGISTERLOGONPROCESS`, `0x69`) | inscrit le processus de logon (un seul ; TRUE), ou le désinscrit (lui seul) ; FALSE et `ERROR_INVALID_PARAMETER` pour un PID sans processus (`win32k::logon`) ; une autre routine rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois | `user32` de `winlogon` |
+| NtUserSetInformationThread(`UserThreadCsrApiPort`, 10) | pour `csrss` seul (`STATUS_ACCESS_DENIED`), sur un thread ouvert avec `THREAD_SET_INFORMATION` : le handle d'un port LPC (4 octets, `STATUS_INFO_LENGTH_MISMATCH`) devient le port d'API de `csrss` pour win32k (`win32k::csrss::set_api_port`) ; les autres classes rendent `STATUS_NOT_IMPLEMENTED` | `winsrv` (`SrvRegisterLogonProcess`, `usersrv/register.c`), quand `winlogon` s'inscrit |
+
+Puis `winlogon` crée sa station de fenêtres (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) :
+NtUserCreateWindowStation rend NULL, « WL: Failed to create window station (120) », et `winlogon` finit (NtRaiseHardError
+manque, puis `ExitProcess(1)`) ; `smss` finit avec lui. Le dernier processus de logon n'est pas oublié à sa fin (pas
+encore de rappel de sortie pour un processus GUI).
+
+Tests : hôte (`syscall-gen` : la liste lue, chaque nom un service de win32k ; `win32k::logon` : un seul processus de
+logon), `win32k_self_test` (NtGdiAbortDoc sans handler rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, NtGdiGetStats
+`STATUS_NOT_IMPLEMENTED` sans toucher la dernière erreur ; RegisterLogonProcess depuis le mode utilisateur : une fois, pas
+deux, désinscription par un autre refusée, PID sans processus, routine inconnue ; NtUserSetInformationThread refusé hors
+de `csrss`).
+
+## Étape 17 : les stations de fenêtres ; `winlogon` crée `WinSta0`
+
+`winlogon` crée la station interactive et la prend (`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserCreateWindowStation | la station que nomment les attributs (`WinSta0`, sous `\Windows\WindowStations` ouvert par `user32`), ouverte si elle existe, créée sinon (type d'Ob `WindowStation`, `win32k::winsta`) ; la première que crée le processus de logon devient la station interactive (`InputWindowStation`, journalisé), les autres n'ont ni entrée ni sortie (`WSS_NOIO`) ; rend son handle. Sans nom (nommée d'après la session de logon) : pas encore (`STATUS_NOT_IMPLEMENTED`, journalisé une fois) | `winlogon` (`CreateWindowStationW`) |
+| NtUserOpenWindowStation | un handle sur la station nommée | — |
+| NtUserSetProcessWindowStation, NtUserGetProcessWindowStation | la station du processus (`PROCESSINFO` : handle, station, droits du handle ; 0 : plus aucune) | `winlogon`, `user32` (`CreateDesktopW`) |
+| NtUserCloseWindowStation | ferme le handle d'une station ; FALSE (`ERROR_BUSY`) pour celui de la station du processus | — |
+| NtUserSetWindowStationUser | pour le processus de logon seul (`ERROR_ACCESS_DENIED`) : la LUID de l'utilisateur de la station, et son SID (au plus 68 octets, une limite que ReactOS n'a pas) | `winlogon` |
+
+Ces services rendent une valeur : un échec rend 0, avec l'erreur Win32 du statut comme dernière erreur
+(SetLastNtError, `abi::winerror::dos_error`, pour les statuts que le noyau rend).
+
+`winlogon` crée ensuite son bureau `Default` : NtUserCreateDesktop manque (« WL: Failed to create Default desktop
+(120) »), et `winlogon` finit.
+
+Pas encore : les bureaux d'une station (sa procédure *parse*), la table des atomes, le thread du bureau et le thread
+d'entrée que ReactOS crée avec la station interactive, le handle de station gardé dans l'EPROCESS (hérité par un
+processus créé), NtUserLockWindowStation.
+
+Tests : hôte (`win32k::winsta` : une seule station interactive, celle du processus de logon ; la correspondance
+générique ; l'utilisateur d'une station ; `abi::winerror`), `window_station_self_test` (créée, recréée et ouverte : un
+seul objet, pas interactif ; la station du processus, que NtUserCloseWindowStation garde ; un autre handle fermé une
+fois ; NtUserSetWindowStationUser refusé hors du processus de logon, puis accepté, un SID trop long refusé ; le processus
+de logon qui ouvre une station existante ne la rend pas interactive) ; le scénario `smoke` interdit la station
+interactive (pas de processus de logon).
+
+## Étape 18 : les bureaux ; `winlogon` crée les siens et s'y place
+
+`winlogon` crée ses trois bureaux, se place sur `Winlogon` et en fait le bureau d'entrée
+(`CreateWindowStationAndDesktops`, `winlogon/wlx.c`) :
+
+| Service | Ce qu'il fait | Demandé par |
+|---|---|---|
+| NtUserCreateDesktop | le bureau que nomment les attributs, sur sa station (la racine, celle du processus pour `user32`, ou le chemin qui précède son nom), ouvert s'il existe (`OBJ_OPENIF`, sinon `ERROR_ALREADY_EXISTS`), créé sinon : type d'Ob `Desktop` (`win32k::desktop`), tenu et nommé par sa station (procédure *parse* : `WinSta0\Default`), un tas de 3 Mio (128 Kio pour `Winlogon` et hors de la station interactive) dans une section, avec une adresse du serveur sur 32 bits (`0xA0000000`–`0xBBFFFFFF`, ADR-021), et son `DESKTOPINFO` en tête (`abi::user::DeskInfoHead32` : bornes du tas, chaînes de crochets vides, nom) ; rend son handle | `winlogon` (`Default`, `Winlogon`, `Screen-Saver`) |
+| NtUserOpenDesktop | un handle sur le bureau nommé | — |
+| NtUserSetThreadDesktop | le thread passe sur le bureau : son processus voit le tas en lecture seule (`SEC_NO_CHANGE`, une vue par bureau, retirée avec le dernier thread), un `CLIENTTHREADINFO` y est pris pour lui, son `CLIENTINFO` les désigne (`pDeskInfo`, `ulClientDelta`, `pClientThreadInfo`) ; le premier bureau d'un thread client (ni de `csrss` ni du système) devient le bureau de démarrage du processus ; sans bureau : `csrss` seul | `winlogon` |
+| NtUserSwitchDesktop | le bureau (`DESKTOP_SWITCHDESKTOP`) devient le bureau d'entrée, s'il est sur la station interactive de la session de l'appelant (sinon `ERROR_ACCESS_DENIED`) ; rien n'est dessiné | `winlogon` |
+| NtUserCloseDesktop | ferme le handle d'un bureau ; FALSE (`ERROR_BUSY`) pour celui du bureau du thread ou du bureau de démarrage | — |
+
+`winlogon` donne ensuite l'utilisateur de la station (NtUserSetWindowStationUser) ; `winsrv` le note (« We are logged
+off ») et `csrsrv` ne peut emprunter son identité (NtImpersonateThread manque, toléré). Puis `winlogon` charge ses
+dispositions de clavier (`InitKeyboardLayouts`, `winlogon.c`) : NtUserLoadKeyboardLayoutEx manque (« WL: Could not
+preload keyboard layouts »), et `winlogon` finit.
+
+Pas encore : la fenêtre du bureau et la fenêtre des messages (ReactOS les crée avec le bureau : `spwnd` reste nul), les
+crochets, le dessin du bureau d'entrée, NtUserGetThreadDesktop, ce qui est rendu à la fin d'un thread ou d'un
+processus GUI (son bureau, ses vues : rendus quand ses objets partent).
+
+Tests : hôte (`win32k::desktop` : plages libres prises et fusionnées, chaînes de crochets vides, tailles des tas ;
+`win32k::gui` : qui donne un bureau de démarrage), `desktop_self_test` (un bureau créé sur sa station, recréé (ouvert),
+refusé sans `OBJ_OPENIF`, un second ouvert par son nom complet, trouvé par l'espace de noms à travers sa station ;
+NtUserSetThreadDesktop : `DESKTOPINFO` et `CLIENTTHREADINFO` lus par le `CLIENTINFO` dans une vue en lecture seule, le
+même bureau deux fois ne change rien, l'ancienne vue retirée au changement ; le bureau du thread gardé par
+NtUserCloseDesktop ; NtUserSwitchDesktop refusé hors de la station interactive ; NtUserSetThreadDesktop refuse
+l'absence de bureau hors de `csrss` et le handle d'une station).

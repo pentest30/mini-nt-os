@@ -220,8 +220,15 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   résolus par Ps, sans cible, source fermée quel que soit le résultat). `smss` confie `winlogon` à `csrss`
   (`SmExecPgm`), qui en fait un processus CSR (`ProcessExceptionPort` ; NtQueryInformationThread :
   `ThreadBasicInformation`, `ThreadTimes`, `ThreadIsTerminated`). Vues `SEC_NO_CHANGE` (`VadNode::no_change`,
-  `AddressSpace::map_view_with` : NtProtectVirtualMemory refusé) : `kernel32` se connecte à `csrss`. `winlogon`
-  s'arrête à sa station de fenêtres (USER, M6) et faute dans `user32`.
+  `AddressSpace::map_view_with` : NtProtectVirtualMemory refusé) : `kernel32` se connecte à `csrss`. Un service de
+  win32k sans handler rend 0 et `ERROR_CALL_NOT_IMPLEMENTED` s'il rend une valeur (`Service::returns_status`, tiré
+  des prototypes de ReactOS par `tools/syscall-gen`). `winlogon` s'inscrit comme processus de logon
+  (NtUserCallTwoParam, `win32k::logon` ; NtUserSetInformationThread : le port d'API de `csrss`). Stations de
+  fenêtres faites (`win32k::winsta`, `sys::winsta`, type d'Ob `WindowStation` ; la première du processus de logon est
+  la station interactive) et bureaux (`win32k::desktop`, `sys::desktop`, type d'Ob `Desktop` nommé par sa station :
+  un tas par bureau dans une section, adresses du serveur sur 32 bits, `DESKTOPINFO` ; NtUserSetThreadDesktop projette
+  le tas et remplit le `CLIENTINFO`) : `winlogon` crée `WinSta0` et ses bureaux, s'y place, puis s'arrête à ses
+  dispositions de clavier : la suite est USER dans le win32k minimal (option 1, début du M6).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

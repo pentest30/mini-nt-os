@@ -287,6 +287,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &ex::SEMAPHORE_TYPE,
         &lpc::PORT_TYPE,
         &se::TOKEN_OBJECT_TYPE,
+        &win32k::winsta::WINDOW_STATION_TYPE,
+        &win32k::desktop::DESKTOP_TYPE,
     ] {
         ob::namespace().register_type(ty).expect("an object type registered twice");
     }
@@ -358,6 +360,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     keyed_event_self_test();
     process_settings_self_test();
     win32k_self_test();
+    window_station_self_test();
+    desktop_self_test();
     lpc_connection_self_test();
     process_memory_self_test();
     shared_section_self_test();
@@ -4725,6 +4729,13 @@ fn win32k_self_test() {
     const NAME: u32 = DATA + 0xD0;
     const CONNECT: u32 = DATA + 0x100; // a USERCONNECT
     const CONNECT2: u32 = DATA + 0x300;
+    const LOGON: u32 = DATA + 0x4C0; // 7 results of RegisterLogonProcess and NtUserSetInformationThread
+    const MY_PID: u32 = DATA + 0x4E0;
+    const BAD_PID_ERROR: u32 = DATA + 0x4E4;
+    const ROUTINE_ERROR: u32 = DATA + 0x4E8;
+    const PORT_HANDLE: u32 = DATA + 0x4EC;
+    const VALUE_ERROR: u32 = DATA + 0x4F0; // the last error after a service that returns a value
+    const STATUS_ERROR: u32 = DATA + 0x4F4; // and after one that returns an NTSTATUS
     const DONE: u32 = DATA + 0x4FC;
     const SEMAPHORE_NAME: &str = "\\MinoSemaphore";
     const SENTINEL: u32 = 0xAAAA_AAAA;
@@ -4790,6 +4801,34 @@ fn win32k_self_test() {
     code.call_args(set_object, &[m(SEMAPHORE), v(4), v(CLEAR_FLAGS), v(2)]).store_eax(status(20));
     code.call_args(services::NtClose, &[m(SEMAPHORE)]).store_eax(status(21));
     code.call_args(services::NtClose, &[m(OPENED)]).store_eax(status(22));
+    // Services without a handler: one returns a BOOL, one an NTSTATUS. The
+    // last error (TEB.LastErrorValue, fs:[0x34]) is set to SENTINEL first.
+    let set_last_error = [0x64, 0xC7, 0x05, 0x34, 0, 0, 0];
+    let read_last_error = [0x64, 0xA1, 0x34, 0, 0, 0];
+    code.bytes(&set_last_error).bytes(&SENTINEL.to_le_bytes());
+    code.call_args(services::NtGdiAbortDoc, &[v(0)]).store_eax(status(23));
+    code.bytes(&read_last_error).store_eax(VALUE_ERROR);
+    code.bytes(&set_last_error).bytes(&SENTINEL.to_le_bytes());
+    code.call_args(services::NtGdiGetStats, &[v(0), v(0), v(0), v(0), v(0)]).store_eax(status(24));
+    code.bytes(&read_last_error).store_eax(STATUS_ERROR);
+    // RegisterLogonProcess (NtUserCallTwoParam): itself, twice; System
+    // leaving; itself leaving; a PID of no process; another routine.
+    let logon = |i: u32| LOGON + 4 * i;
+    let (two, register) = (services::NtUserCallTwoParam, abi::user::TWOPARAM_ROUTINE_REGISTERLOGONPROCESS);
+    code.bytes(&[0x64, 0xA1, 0x20, 0, 0, 0]).store_eax(MY_PID); // mov eax, fs:[0x20]: ClientId.UniqueProcess
+    code.call_args(two, &[m(MY_PID), v(1), v(register)]).store_eax(logon(0));
+    code.call_args(two, &[m(MY_PID), v(1), v(register)]).store_eax(logon(1));
+    code.call_args(two, &[v(4), v(0), v(register)]).store_eax(logon(2));
+    code.call_args(two, &[m(MY_PID), v(0), v(register)]).store_eax(logon(3));
+    code.call_args(two, &[v(0x7FF0), v(1), v(register)]).store_eax(logon(4));
+    code.bytes(&read_last_error).store_eax(BAD_PID_ERROR);
+    code.bytes(&set_last_error).bytes(&SENTINEL.to_le_bytes());
+    code.call_args(two, &[v(0), v(0), v(0x7F)]).store_eax(logon(5));
+    code.bytes(&read_last_error).store_eax(ROUTINE_ERROR);
+    // NtUserSetInformationThread(UserThreadCsrApiPort): csrss only.
+    let csr_port = abi::user::USER_THREAD_CSR_API_PORT;
+    let set_thread = services::NtUserSetInformationThread;
+    code.call_args(set_thread, &[v(0xFFFF_FFFE), v(csr_port), v(PORT_HANDLE), v(4)]).store_eax(logon(6));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x800];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -4819,7 +4858,7 @@ fn win32k_self_test() {
         unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
     }
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..23).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..25).map(|i| NtStatus(read(status(i)))).collect();
     // A GUI thread, of a GUI process.
     assert_eq!(statuses[0], NtStatus(1), "NtGdiInit: TRUE");
     let (pti, ppi) =
@@ -4869,6 +4908,22 @@ fn win32k_self_test() {
     assert_eq!(statuses[19], STATUS_INFO_LENGTH_MISMATCH, "two BOOLEANs");
     assert_eq!((statuses[20], statuses[21], statuses[22]), (STATUS_SUCCESS, STATUS_SUCCESS, STATUS_SUCCESS));
     assert!(ob::namespace().open(SEMAPHORE_NAME, None, None, 0).is_err(), "its name gone with its last handle");
+    // Services without a handler.
+    let not_implemented = abi::winerror::ERROR_CALL_NOT_IMPLEMENTED;
+    assert_eq!((statuses[23], read(VALUE_ERROR)), (NtStatus(0), not_implemented), "NtGdiAbortDoc: FALSE");
+    let status_error = (statuses[24], read(STATUS_ERROR));
+    assert_eq!(status_error, (abi::ntstatus::STATUS_NOT_IMPLEMENTED, SENTINEL), "NtGdiGetStats: an NTSTATUS");
+    // RegisterLogonProcess.
+    let logon = |i: u32| read(LOGON + 4 * i);
+    assert_eq!(read(MY_PID), process.pid());
+    assert_eq!((logon(0), logon(1)), (1, 0), "registered once, not twice");
+    assert_eq!((logon(2), logon(3)), (0, 1), "only the logon process leaves");
+    assert_eq!(win32k::logon::logon_process(), 0, "none left for winlogon");
+    let invalid = abi::winerror::ERROR_INVALID_PARAMETER;
+    assert_eq!((logon(4), read(BAD_PID_ERROR)), (0, invalid), "a PID of no process");
+    let routine = (logon(5), read(ROUTINE_ERROR));
+    assert_eq!(routine, (0, abi::winerror::ERROR_CALL_NOT_IMPLEMENTED), "another routine");
+    assert_eq!(NtStatus(logon(6)), abi::ntstatus::STATUS_ACCESS_DENIED, "NtUserSetInformationThread: csrss only");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
@@ -4885,7 +4940,400 @@ fn win32k_self_test() {
     ps::wait_for_reaper();
     log::info!(
         "[smoke] win32k: a GUI thread and process, NtGdiInit, NtUserProcessConnect (the USER shared section, read \
-         only); Ex: semaphores from user mode; Ob: NtQueryObject"
+         only), services without a handler (0 and ERROR_CALL_NOT_IMPLEMENTED, or STATUS_NOT_IMPLEMENTED), \
+         RegisterLogonProcess, NtUserSetInformationThread for csrss only; Ex: semaphores from user mode; Ob: \
+         NtQueryObject"
+    );
+}
+
+/// Window stations from user mode (`win32k::winsta`, `sys::winsta`, M5): a
+/// GUI process creates a station by its name, creates it again (opened, the
+/// same object) and opens it; it is no interactive station, its creator
+/// not being the logon process. The process takes it as its station
+/// (NtUserGetProcessWindowStation before and after), cannot close that
+/// handle (ERROR_BUSY), closes another one, then not again
+/// (ERROR_INVALID_HANDLE). NtUserSetWindowStationUser is refused to it
+/// (ERROR_ACCESS_DENIED), then, the process registered as the logon
+/// process, gives the station a LUID and a SID, and refuses a SID too long
+/// (ERROR_INVALID_PARAMETER). The process leaves its station and
+/// unregisters; registered again, it creates the station again, which
+/// stays no interactive station (it existed).
+fn window_station_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_WAIT_0};
+    use abi::services;
+    use abi::winerror::{ERROR_ACCESS_DENIED, ERROR_BUSY, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER};
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+    use win32k::winsta::{WindowStation, WINDOW_STATION_TYPE};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const RESULT: u32 = DATA; // 20 results
+    const ERROR: u32 = DATA + 0x50; // 20 last errors
+    const PID: u32 = DATA + 0xA0;
+    const LUID: u32 = DATA + 0xA8;
+    const SID: u32 = DATA + 0xB0; // S-1-5-18, 12 bytes
+    const OA: u32 = DATA + 0xC0;
+    const US: u32 = DATA + 0xD8;
+    const NAME: u32 = DATA + 0xE0;
+    const DONE: u32 = DATA + 0x1FC;
+    const STATION_NAME: &str = "\\BaseNamedObjects\\MinoWinSta";
+    const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+    const SYSTEM_SID: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 5, 18, 0, 0, 0];
+
+    let mut data = alloc::vec![0u8; 0x200];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    let units: alloc::vec::Vec<u8> = STATION_NAME.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    put(NAME, &units);
+    let length = (units.len() as u16).to_le_bytes();
+    put(US, &[length[0], length[1], length[0], length[1]]);
+    put(US + 4, &NAME.to_le_bytes());
+    put(OA, &24u32.to_le_bytes());
+    put(OA + 8, &US.to_le_bytes());
+    put(LUID, &0x3E7u64.to_le_bytes());
+    put(SID, &SYSTEM_SID);
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let result = |i: u32| RESULT + 4 * i;
+    let error = |i: u32| ERROR + 4 * i;
+    let set_last_error = [0x64, 0xC7, 0x05, 0x34, 0, 0, 0, 0, 0, 0, 0];
+    let read_last_error = [0x64, 0xA1, 0x34, 0, 0, 0];
+    let mut code = Code::new();
+    let mut step = 0;
+    let mut call = |code: &mut Code, number: u32, arguments: &[Arg]| {
+        code.bytes(&set_last_error);
+        code.call_args(number, arguments).store_eax(result(step));
+        code.bytes(&read_last_error).store_eax(error(step));
+        step += 1;
+    };
+    let (create, open, close) =
+        (services::NtUserCreateWindowStation, services::NtUserOpenWindowStation, services::NtUserCloseWindowStation);
+    let (get, set) = (services::NtUserGetProcessWindowStation, services::NtUserSetProcessWindowStation);
+    let (user, two) = (services::NtUserSetWindowStationUser, services::NtUserCallTwoParam);
+    let register = abi::user::TWOPARAM_ROUTINE_REGISTERLOGONPROCESS;
+    let any = MAXIMUM_ALLOWED;
+    call(&mut code, create, &[v(OA), v(any), v(0), v(0), v(0), v(0), v(0)]); // 0
+    call(&mut code, create, &[v(OA), v(any), v(0), v(0), v(0), v(0), v(0)]); // 1
+    call(&mut code, open, &[v(OA), v(any)]); // 2
+    call(&mut code, get, &[]); // 3
+    call(&mut code, set, &[m(result(0))]); // 4
+    call(&mut code, get, &[]); // 5
+    call(&mut code, close, &[m(result(0))]); // 6
+    call(&mut code, close, &[m(result(1))]); // 7
+    call(&mut code, close, &[m(result(1))]); // 8
+    call(&mut code, user, &[m(result(0)), v(LUID), v(SID), v(12)]); // 9
+    code.bytes(&[0x64, 0xA1, 0x20, 0, 0, 0]).store_eax(PID); // mov eax, fs:[0x20]
+    call(&mut code, two, &[m(PID), v(1), v(register)]); // 10
+    call(&mut code, user, &[m(result(0)), v(LUID), v(SID), v(12)]); // 11
+    call(&mut code, user, &[m(result(2)), v(LUID), v(SID), v(100)]); // 12
+    call(&mut code, two, &[m(PID), v(0), v(register)]); // 13
+    call(&mut code, set, &[v(0)]); // 14
+    call(&mut code, get, &[]); // 15
+    call(&mut code, two, &[m(PID), v(1), v(register)]); // 16
+    call(&mut code, create, &[v(OA), v(any), v(0), v(0), v(0), v(0), v(0)]); // 17
+    call(&mut code, two, &[m(PID), v(0), v(register)]); // 18
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x200, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "winsta.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the window station test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    let (r, e) = (|i: u32| read(result(i)), |i: u32| read(error(i)));
+
+    let (first, again, opened) = (r(0), r(1), r(2));
+    assert!(
+        first != 0 && again != 0 && opened != 0,
+        "created, created again, opened: {first:#x} {again:#x} {opened:#x}"
+    );
+    assert!(first != again && again != opened, "three handles");
+    let station = |handle: u32| {
+        process
+            .handle_table
+            .reference_as::<WindowStation>(ob::Handle(handle), &WINDOW_STATION_TYPE, ob::AccessMask::NONE)
+            .expect("a window station")
+    };
+    let object = station(first);
+    assert!(Arc::ptr_eq(&object, &station(opened)), "the same station");
+    assert!(object.no_io(), "not the interactive station: its creator is not the logon process");
+    assert_eq!((r(3), r(4), r(5)), (0, 1, first), "the process's station, before and after");
+    assert_eq!((r(6), e(6)), (0, ERROR_BUSY), "the process's station is not closed");
+    assert_eq!((r(7), r(8), e(8)), (1, 0, ERROR_INVALID_HANDLE), "another handle closed once");
+    assert_eq!((r(9), e(9)), (0, ERROR_ACCESS_DENIED), "NtUserSetWindowStationUser: the logon process only");
+    assert_eq!((r(10), r(11), r(12), e(12)), (1, 1, 0, ERROR_INVALID_PARAMETER), "as the logon process");
+    let user = object.user();
+    assert_eq!((user.luid.low_part, user.sid.as_deref()), (0x3E7, Some(&SYSTEM_SID[..])), "the station's user");
+    assert_eq!((r(13), r(14), r(15)), (1, 1, 0), "unregistered; no station left");
+    assert_eq!((r(16), r(18)), (1, 1), "registered again, then not");
+    assert!(Arc::ptr_eq(&object, &station(r(17))), "the logon process opens the station");
+    assert!(object.no_io(), "an existing station does not become the interactive one");
+    assert_eq!(win32k::logon::logon_process(), 0);
+    drop(object);
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop(process);
+    ps::wait_for_reaper();
+    assert!(ob::namespace().open(STATION_NAME, None, None, 0).is_err(), "the station gone with its handles");
+    log::info!(
+        "[smoke] win32k: window stations from user mode: created, created again and opened (one object, not \
+         interactive), the process's station (kept from NtUserCloseWindowStation), NtUserSetWindowStationUser for \
+         the logon process only"
+    );
+}
+
+/// Desktops from user mode (`win32k::desktop`, `sys::desktop`, M5): a GUI
+/// process creates a window station, then its `Default` desktop (again:
+/// opened, the same object; without OBJ_OPENIF: ERROR_ALREADY_EXISTS) and a
+/// `Second` one, opened by its full name; the namespace finds a desktop
+/// through its station (its parse procedure). The thread goes on `Default`:
+/// its CLIENTINFO gives the DESKTOPINFO (the heap's server addresses, the
+/// name, empty hook lists) and the CLIENTTHREADINFO in the process's read
+/// only view of the heap. On `Second`, the old view is gone. The thread's
+/// desktop does not close (ERROR_BUSY), other handles do (no startup
+/// desktop: until csrss starts, a GUI thread is a csrss thread); SwitchDesktop is refused off the interactive station, and
+/// NtUserSetThreadDesktop refuses no desktop (csrss only) and a station's
+/// handle.
+fn desktop_self_test() {
+    use abi::ntstatus::{NtStatus, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_INVALID, STATUS_WAIT_0};
+    use abi::services;
+    use abi::teb32::Teb32;
+    use abi::user::{ClientInfo32, DeskInfoHead32};
+    use abi::winerror::{ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_BUSY, ERROR_INVALID_HANDLE};
+    use alloc::sync::Arc;
+    use core::mem::{offset_of, size_of};
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use mm::vad::PageProtect;
+    use pe::builder::Pe32Builder;
+    use win32k::desktop::{Desktop, DESKTOP_TYPE};
+
+    const MS: i64 = 10_000;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const RESULT: u32 = DATA; // 24 results
+    const ERROR: u32 = DATA + 0x60; // 24 last errors
+    const STATION_OA: u32 = DATA + 0xC0;
+    const DEFAULT_OA: u32 = DATA + 0xD8; // relative to the station
+    const SECOND_OA: u32 = DATA + 0xF0;
+    const FULL_OA: u32 = DATA + 0x108; // the full name of `Second`
+    const STATION_US: u32 = DATA + 0x120;
+    const DEFAULT_US: u32 = DATA + 0x128;
+    const SECOND_US: u32 = DATA + 0x130;
+    const FULL_US: u32 = DATA + 0x138;
+    const STATION_NAME_AT: u32 = DATA + 0x140;
+    const DEFAULT_NAME_AT: u32 = DATA + 0x180;
+    const SECOND_NAME_AT: u32 = DATA + 0x190;
+    const FULL_NAME_AT: u32 = DATA + 0x1A0;
+    const CTI_FIRST: u32 = DATA + 0x2F0; // pClientThreadInfo after the first NtUserSetThreadDesktop
+    const CTI_AGAIN: u32 = DATA + 0x2F4; // and after the same desktop again
+    const DONE: u32 = DATA + 0x2FC;
+    const STATION_NAME: &str = "\\BaseNamedObjects\\MinoDeskSta";
+    const FULL_NAME: &str = "\\BaseNamedObjects\\MinoDeskSta\\Second";
+    const MAXIMUM_ALLOWED: u32 = 0x0200_0000;
+    const OPENIF: u32 = 0x80 | 0x40; // OBJ_OPENIF | OBJ_CASE_INSENSITIVE
+
+    let mut data = alloc::vec![0u8; 0x300];
+    let mut put = |at: u32, bytes: &[u8]| data[(at - DATA) as usize..][..bytes.len()].copy_from_slice(bytes);
+    let mut name = |oa: u32, us: u32, at: u32, text: &str, root_field: u32, attributes: u32| {
+        let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        put(at, &units);
+        let length = (units.len() as u16).to_le_bytes();
+        put(us, &[length[0], length[1], length[0], length[1]]);
+        put(us + 4, &at.to_le_bytes());
+        put(oa, &24u32.to_le_bytes());
+        put(oa + 4, &root_field.to_le_bytes()); // RootDirectory: patched by the program
+        put(oa + 8, &us.to_le_bytes());
+        put(oa + 12, &attributes.to_le_bytes());
+    };
+    name(STATION_OA, STATION_US, STATION_NAME_AT, STATION_NAME, 0, 0);
+    name(DEFAULT_OA, DEFAULT_US, DEFAULT_NAME_AT, "Default", 0, OPENIF);
+    name(SECOND_OA, SECOND_US, SECOND_NAME_AT, "Second", 0, OPENIF);
+    name(FULL_OA, FULL_US, FULL_NAME_AT, FULL_NAME, 0, 0x40);
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let result = |i: u32| RESULT + 4 * i;
+    let error = |i: u32| ERROR + 4 * i;
+    let set_last_error = [0x64, 0xC7, 0x05, 0x34, 0, 0, 0, 0, 0, 0, 0];
+    let read_last_error = [0x64, 0xA1, 0x34, 0, 0, 0];
+    let mut code = Code::new();
+    let mut step = 0;
+    let mut call = |code: &mut Code, number: u32, arguments: &[Arg]| {
+        code.bytes(&set_last_error);
+        code.call_args(number, arguments).store_eax(result(step));
+        code.bytes(&read_last_error).store_eax(error(step));
+        step += 1;
+    };
+    let any = MAXIMUM_ALLOWED;
+    let create = services::NtUserCreateDesktop;
+    call(&mut code, services::NtUserCreateWindowStation, &[v(STATION_OA), v(any), v(0), v(0), v(0), v(0), v(0)]); // 0
+                                                                                                                  // The station is the root of the desktops' names.
+    for oa in [DEFAULT_OA, SECOND_OA] {
+        code.word(&[0xA1], result(0)).word(&[0xA3], oa + 4); // mov eax, [station]; mov [oa + 4], eax
+    }
+    call(&mut code, create, &[v(DEFAULT_OA), v(0), v(0), v(0), v(any)]); // 1
+    call(&mut code, create, &[v(DEFAULT_OA), v(0), v(0), v(0), v(any)]); // 2
+    code.word(&[0xC7, 0x05], DEFAULT_OA + 12).bytes(&0x40u32.to_le_bytes()); // no OBJ_OPENIF
+    call(&mut code, create, &[v(DEFAULT_OA), v(0), v(0), v(0), v(any)]); // 3
+    call(&mut code, create, &[v(SECOND_OA), v(0), v(0), v(0), v(any)]); // 4
+    call(&mut code, services::NtUserOpenDesktop, &[v(FULL_OA), v(0), v(any)]); // 5
+    let (set, close, switch) =
+        (services::NtUserSetThreadDesktop, services::NtUserCloseDesktop, services::NtUserSwitchDesktop);
+    call(&mut code, set, &[m(result(1))]); // 6
+    code.bytes(&[0x64, 0xA1, 0x08, 0x07, 0, 0]).store_eax(CTI_FIRST); // mov eax, fs:[0x6CC + 0x3C]
+    call(&mut code, set, &[m(result(1))]); // 7: the same desktop again
+    code.bytes(&[0x64, 0xA1, 0x08, 0x07, 0, 0]).store_eax(CTI_AGAIN);
+    // Wait for the kernel to read the CLIENTINFO: DONE = 1, then 2.
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes());
+    code.word(&[0x83, 0x3D], DONE).bytes(&[0x01, 0x74, 0xF7]); // cmp dword [DONE], 1; je back
+    call(&mut code, set, &[m(result(4))]); // 8
+    call(&mut code, close, &[m(result(4))]); // 9: the thread's
+    call(&mut code, close, &[m(result(1))]); // 10: no startup desktop (a csrss thread until csrss starts)
+    call(&mut code, close, &[m(result(2))]); // 11
+    call(&mut code, switch, &[m(result(5))]); // 12
+    call(&mut code, set, &[v(0)]); // 13
+    call(&mut code, set, &[m(result(0))]); // 14
+    code.word(&[0xC7, 0x05], DONE).bytes(&3u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x800];
+    assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x800, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x300, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "desktop.exe", false).expect("a process");
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read_bytes = |addr: u32, length: usize| {
+        let mut bytes = alloc::vec![0u8; length];
+        process.read_memory(u64::from(addr), &mut bytes).map(|()| bytes)
+    };
+    let read = |addr: u32| u32::from_le_bytes(read_bytes(addr, 4).expect("read the process").try_into().unwrap());
+    let wait_for = |value: u32| {
+        for waited in 0.. {
+            if read(DONE) == value {
+                break;
+            }
+            assert!(waited < 300, "the desktop test program did not reach {value}");
+            // SAFETY: the boot thread, at PASSIVE_LEVEL.
+            unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+        }
+    };
+    let (r, e) = (|i: u32| read(result(i)), |i: u32| read(error(i)));
+    let desktop = |handle: u32| {
+        process
+            .handle_table
+            .reference_as::<Desktop>(ob::Handle(handle), &DESKTOP_TYPE, ob::AccessMask::NONE)
+            .expect("a desktop")
+    };
+
+    // On `Default`.
+    wait_for(1);
+    assert!(r(0) != 0 && r(1) != 0 && r(2) != 0 && r(4) != 0 && r(5) != 0, "a station and four desktop handles");
+    let (default, second) = (desktop(r(1)), desktop(r(4)));
+    assert!(Arc::ptr_eq(&default, &desktop(r(2))), "created again: the same desktop");
+    assert_eq!((r(3), e(3)), (0, ERROR_ALREADY_EXISTS), "without OBJ_OPENIF");
+    assert!(Arc::ptr_eq(&second, &desktop(r(5))), "opened by its full name");
+    assert_eq!((default.name.as_str(), second.name.as_str()), ("Default", "Second"));
+    let ns = ob::namespace();
+    let found = ns.open(FULL_NAME, None, Some(&DESKTOP_TYPE), 0).expect("the desktop through its station");
+    assert!(Arc::ptr_eq(&ob::downcast::<Desktop>(&found).expect("a desktop"), &second));
+    let under = alloc::format!("{FULL_NAME}\\Below");
+    assert_eq!(ns.open(&under, None, None, 0).err(), Some(STATUS_OBJECT_PATH_INVALID), "nothing under a desktop");
+    let missing = alloc::format!("{STATION_NAME}\\Missing");
+    assert_eq!(ns.open(&missing, None, None, 0).err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+    assert_eq!((r(6), r(7)), (1, 1), "NtUserSetThreadDesktop(Default), twice");
+    let gui = win32k::process_info(&process).expect("a GUI process");
+    let view = gui.desktop_view(&default).expect("a view of the heap");
+    let protect = process.with_space(|space| space.query(u64::from(view)).map(|region| region.protect));
+    assert_eq!(protect, Ok(Ok(PageProtect::READONLY)), "the desktop heap, read only");
+    let client_info = thread.teb() + offset_of!(Teb32, win32_client_info) as u32;
+    let field = |at: usize| read(client_info + at as u32);
+    let heap = &default.heap;
+    assert_eq!(heap.size, win32k::desktop::SMALL_DESKTOP_HEAP_SIZE, "no interactive station");
+    assert_eq!(field(offset_of!(ClientInfo32, client_delta)), heap.server_base.wrapping_sub(view), "ulClientDelta");
+    let desk_info = field(offset_of!(ClientInfo32, desk_info));
+    assert_eq!(desk_info, view + default.desk_info, "pDeskInfo, in the view");
+    let cti = field(offset_of!(ClientInfo32, client_thread_info));
+    assert!(cti >= view && cti < view + heap.size && cti != desk_info, "pClientThreadInfo, in the view");
+    assert_eq!((read(CTI_FIRST), read(CTI_AGAIN)), (cti, cti), "the same desktop again changes nothing");
+    let info_bytes = read_bytes(desk_info, size_of::<DeskInfoHead32>() + 16).expect("the DESKTOPINFO");
+    let word = |at: usize| u32::from_le_bytes(info_bytes[at..at + 4].try_into().unwrap());
+    assert_eq!((word(0), word(4), word(8)), (heap.server_base, heap.server_base + heap.size, 0), "base, limit, spwnd");
+    let first_hook = heap.server_base + default.desk_info + 0x10;
+    assert_eq!((word(0x10), word(0x14)), (first_hook, first_hook), "an empty hook list");
+    let units: alloc::vec::Vec<u16> =
+        info_bytes[0xAC..0xBC].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    assert_eq!(&units[..8], &[68, 101, 102, 97, 117, 108, 116, 0], "szDesktopName: Default");
+    process.write_memory(u64::from(DONE), &2u32.to_le_bytes()).expect("let the program go on");
+
+    // On `Second`, and the refusals.
+    wait_for(3);
+    assert_eq!(r(8), 1, "NtUserSetThreadDesktop(Second)");
+    assert!(gui.desktop_view(&default).is_none() && gui.desktop_view(&second).is_some(), "one view, of Second");
+    assert_eq!((r(9), e(9)), (0, ERROR_BUSY), "the thread's desktop");
+    assert!(gui.startup_desktop().is_none(), "a csrss thread, csrss not started: no startup desktop");
+    assert_eq!((r(10), r(11)), (1, 1), "other handles close");
+    assert_eq!((r(12), e(12)), (0, ERROR_ACCESS_DENIED), "SwitchDesktop off the interactive station");
+    assert_eq!((r(13), e(13)), (0, ERROR_ACCESS_DENIED), "no desktop: csrss only");
+    assert_eq!((r(14), e(14)), (0, ERROR_INVALID_HANDLE), "a station is no desktop");
+    drop((default, second, found, gui));
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((thread, process));
+    ps::wait_for_reaper();
+    assert!(ns.open(STATION_NAME, None, None, 0).is_err(), "the station gone with its handles");
+    log::info!(
+        "[smoke] win32k: desktops from user mode: created on their station (again: opened), found through it, \
+         NtUserSetThreadDesktop (DESKTOPINFO and CLIENTTHREADINFO in a read-only view of the heap), the thread's \
+         desktop kept from NtUserCloseDesktop, SwitchDesktop off the interactive station refused"
     );
 }
 
@@ -7705,6 +8153,7 @@ fn object_manager_self_test() {
     assert_eq!(
         names,
         [
+            "Desktop",
             "Device",
             "Directory",
             "Event",
@@ -7718,7 +8167,8 @@ fn object_manager_self_test() {
             "SymbolicLink",
             "Thread",
             "Token",
-            "Type"
+            "Type",
+            "WindowStation"
         ]
     );
 

@@ -12,7 +12,12 @@
 //! - [`process_connect`] : NtUserProcessConnect ;
 //! - [`client`] : les procédures de fenêtre du client
 //!   (NtUserInitializeClientPfnArrays) ;
-//! - [`csrss`] : le démarrage de USER par `csrss` (NtUserInitialize).
+//! - [`csrss`] : le démarrage de USER par `csrss` (NtUserInitialize), son
+//!   port d'API ;
+//! - [`logon`] : le processus de logon (RegisterLogonProcess) ;
+//! - [`winsta`] : les stations de fenêtres ;
+//! - [`desktop`] : les bureaux et leurs tas ; le bureau d'un thread GUI
+//!   ([`gui`]).
 //!
 //! Le reste (stations et bureaux, fenêtres, messages, GDI) viendra avec le
 //! spike S3 et le M6 (05).
@@ -23,8 +28,11 @@ extern crate alloc;
 
 pub mod client;
 pub mod csrss;
+pub mod desktop;
 pub mod gui;
+pub mod logon;
 pub mod shared;
+pub mod winsta;
 
 use alloc::sync::Arc;
 use core::mem::{offset_of, size_of};
@@ -86,6 +94,21 @@ pub fn check_connect_buffer(buffer: u32, size: u32) -> Result<(), NtStatus> {
         return Err(STATUS_UNSUCCESSFUL);
     }
     Ok(())
+}
+
+/// UserSetLastError (EngSetLastError) : la dernière erreur Win32 du thread
+/// courant, dans son TEB (`LastErrorValue`, que lit GetLastError).
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` hors d'un thread de Ps ;
+/// `STATUS_ACCESS_VIOLATION` si l'écriture faute.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le thread.
+pub fn set_last_error(error: u32) -> Result<(), NtStatus> {
+    let thread = ps::ethread::current_thread().ok_or(abi::ntstatus::STATUS_INVALID_PARAMETER)?;
+    let at = u64::from(thread.teb()) + offset_of!(abi::teb32::Teb32, last_error_value) as u64;
+    ke::usermem::copy_to_user(at, &error.to_le_bytes())
 }
 
 /// Crée la section partagée de USER.

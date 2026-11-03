@@ -13,42 +13,306 @@
 //! adresse du serveur, qu'ils comparent sans la suivre (ADR-021) :
 //! [`process_server_address`], [`thread_server_address`].
 //!
+//! Un thread GUI peut être sur un bureau ([`set_thread_desktop`]) : son
+//! processus voit alors le tas du bureau, et son `CLIENTINFO` y désigne le
+//! `DESKTOPINFO` et son `CLIENTTHREADINFO`.
+//!
 //! Pas encore : la pile noyau agrandie d'un thread GUI (pour les rappels du
-//! mode utilisateur), la file de messages, le bureau et la disposition du
+//! mode utilisateur), la file de messages, ce qui est rendu à la fin d'un
+//! thread ou d'un processus GUI (son bureau, ses vues), la disposition du
 //! clavier (`hKL` et `CodePage` restent nuls, comme sous ReactOS sans
 //! disposition chargée), la table des handles de GDI
 //! (`GdiSharedHandleTable` reste nul).
 
 use alloc::sync::Arc;
-use core::mem::offset_of;
+use alloc::vec::Vec;
+use core::mem::{offset_of, size_of};
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
 use abi::peb32::Peb32;
 use abi::teb32::Teb32;
-use abi::user::{ClientInfo32, TIF_CSRSSTHREAD, TIF_DONTATTACHQUEUE};
-use ob::Object;
+use abi::user::{ClientInfo32, ClientThreadInfo32, TIF_CSRSSTHREAD, TIF_DONTATTACHQUEUE, TIF_SYSTEMTHREAD};
+use hal::sync::KSpinLock;
+use ob::{AccessMask, Object};
 use ps::{EProcess, EThread};
+
+use mm::address_space::ViewOptions;
+use mm::vad::PageProtect;
+
+use crate::desktop::Desktop;
+use crate::winsta::WindowStation;
 
 /// GDI_BATCH_LIMIT : les appels de GDI qu'un client met en lot au plus
 /// (`PEB.GdiDCAttributeList`).
 pub const GDI_BATCH_LIMIT: u32 = 20;
 
 /// Ce que win32k garde d'un processus GUI (`PROCESSINFO`).
-#[derive(Debug)]
 pub struct ProcessInfo {
     /// Son adresse du serveur, que voient les clients (`CLIENTINFO.ppi`).
     pub server: u32,
     /// L'adresse de sa vue de la section partagée de USER.
     pub shared_view: u32,
+    /// Sa station de fenêtres (`hwinsta`, `prpwinsta`, `amwinsta`).
+    window_station: KSpinLock<Option<ProcessWindowStation>>,
+    /// Ses vues des tas de bureau (HeapMappings), une par bureau, avec le
+    /// nombre de ses threads sur lui.
+    desktop_views: KSpinLock<Vec<DesktopView>>,
+    /// Son bureau de démarrage (`hdeskStartup`, `rpdeskStartup`).
+    startup_desktop: KSpinLock<Option<(u32, Arc<Object<Desktop>>)>>,
+}
+
+/// La vue d'un tas de bureau dans un processus.
+struct DesktopView {
+    desktop: Arc<Object<Desktop>>,
+    view: u32,
+    threads: u32,
+}
+
+/// La station de fenêtres d'un processus : le handle qu'il a donné, la
+/// station, et les droits de ce handle.
+#[derive(Clone)]
+pub struct ProcessWindowStation {
+    pub handle: u32,
+    pub station: Arc<Object<WindowStation>>,
+    pub access: AccessMask,
+}
+
+impl ProcessInfo {
+    /// Un processus GUI sans station.
+    pub fn new(server: u32, shared_view: u32) -> Self {
+        Self {
+            server,
+            shared_view,
+            window_station: KSpinLock::new(None),
+            desktop_views: KSpinLock::new(Vec::new()),
+            startup_desktop: KSpinLock::new(None),
+        }
+    }
+
+    /// Son bureau de démarrage : le handle, et le bureau.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn startup_desktop(&self) -> Option<(u32, Arc<Object<Desktop>>)> {
+        self.startup_desktop.lock().clone()
+    }
+
+    /// L'adresse de sa vue du tas de `desktop`, s'il en a une.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn desktop_view(&self, desktop: &Arc<Object<Desktop>>) -> Option<u32> {
+        let views = self.desktop_views.lock();
+        views.iter().find(|view| Arc::ptr_eq(&view.desktop, desktop)).map(|view| view.view)
+    }
+
+    /// IntMapDesktopView : sa vue du tas de `desktop`, projetée au premier de
+    /// ses threads sur ce bureau (lecture seule, `SEC_NO_CHANGE`).
+    fn map_desktop(&self, process: &EProcess, desktop: &Arc<Object<Desktop>>) -> Result<u32, NtStatus> {
+        if let Some(view) = self.count_view(desktop) {
+            return Ok(view);
+        }
+        let heap = &desktop.heap;
+        let options = ViewOptions { top_down: false, no_change: true };
+        let size = u64::from(heap.size);
+        let view = process
+            .with_space(|space| space.map_view_with(&heap.section, 0, 0, size, PageProtect::READONLY, options))??
+            .base as u32;
+        let mut views = self.desktop_views.lock();
+        if let Some(other) = views.iter_mut().find(|other| Arc::ptr_eq(&other.desktop, desktop)) {
+            // Another thread of the process mapped it meanwhile.
+            other.threads += 1;
+            let kept = other.view;
+            drop(views);
+            let _ = process.with_space(|space| space.unmap_view(u64::from(view)));
+            return Ok(kept);
+        }
+        views.push(DesktopView { desktop: desktop.clone(), view, threads: 1 });
+        Ok(view)
+    }
+
+    /// Un thread de plus sur `desktop`, si sa vue existe : rend l'adresse.
+    fn count_view(&self, desktop: &Arc<Object<Desktop>>) -> Option<u32> {
+        let mut views = self.desktop_views.lock();
+        let view = views.iter_mut().find(|view| Arc::ptr_eq(&view.desktop, desktop))?;
+        view.threads += 1;
+        Some(view.view)
+    }
+
+    /// IntUnmapDesktopView : un thread de moins sur `desktop` ; la vue part
+    /// avec le dernier.
+    fn unmap_desktop(&self, process: &EProcess, desktop: &Arc<Object<Desktop>>) {
+        let mut views = self.desktop_views.lock();
+        let Some(index) = views.iter().position(|view| Arc::ptr_eq(&view.desktop, desktop)) else { return };
+        views[index].threads -= 1;
+        if views[index].threads > 0 {
+            return;
+        }
+        let gone = views.remove(index);
+        drop(views);
+        let _ = process.with_space(|space| space.unmap_view(u64::from(gone.view)));
+    }
+
+    /// Sa station de fenêtres, s'il en a une.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn window_station(&self) -> Option<ProcessWindowStation> {
+        self.window_station.lock().clone()
+    }
+
+    /// UserSetProcessWindowStation : `station` devient sa station (ou plus
+    /// aucune) ; la précédente part une fois le verrou rendu.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn set_window_station(&self, station: Option<ProcessWindowStation>) {
+        let previous = core::mem::replace(&mut *self.window_station.lock(), station);
+        drop(previous);
+    }
 }
 
 /// Ce que win32k garde d'un thread GUI (`THREADINFO`).
-#[derive(Debug)]
 pub struct ThreadInfo {
     /// Son adresse du serveur (`TEB.Win32ThreadInfo`).
     pub server: u32,
     /// Ses `TIF_*`.
     pub ti_flags: u32,
+    /// Son bureau (`rpdesk`, `hdesk`, `pcti`), s'il en a un.
+    desktop: KSpinLock<Option<ThreadDesktop>>,
+}
+
+/// Le bureau d'un thread : le handle qu'il a donné, le bureau, et la
+/// position de son `CLIENTTHREADINFO` dans le tas du bureau.
+#[derive(Clone)]
+pub struct ThreadDesktop {
+    pub handle: u32,
+    pub desktop: Arc<Object<Desktop>>,
+    pub client_thread_info: u32,
+}
+
+impl ThreadInfo {
+    /// Un thread GUI sans bureau.
+    pub fn new(server: u32, ti_flags: u32) -> Self {
+        Self { server, ti_flags, desktop: KSpinLock::new(None) }
+    }
+
+    /// Son bureau, s'il en a un.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn desktop(&self) -> Option<ThreadDesktop> {
+        self.desktop.lock().clone()
+    }
+}
+
+/// IntSetThreadDesktop : le thread courant passe sur le bureau `desktop`
+/// (de handle `handle` ; `None` : plus aucun, pour `csrss`). Son processus
+/// voit le tas du bureau, un `CLIENTTHREADINFO` y est pris pour lui, son
+/// `CLIENTINFO` les désigne (`pDeskInfo`, `ulClientDelta`,
+/// `pClientThreadInfo`) ; l'ancien bureau est quitté (son
+/// `CLIENTTHREADINFO` rendu, la vue retirée avec le dernier thread). Un
+/// thread qui n'est ni de `csrss` ni du système donne à son processus son
+/// bureau de démarrage, s'il n'en a pas.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` hors d'un thread de Ps ; celles de la
+/// projection, du tas et de l'écriture du TEB.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le thread.
+pub fn set_thread_desktop(handle: u32, desktop: Option<Arc<Object<Desktop>>>) -> Result<(), NtStatus> {
+    let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
+    let info = convert_current_thread()?;
+    let process = thread.process().clone();
+    let process_info = process_info(&process)?;
+    let current = info.desktop();
+    if let (Some(current), Some(desktop)) = (&current, &desktop) {
+        if Arc::ptr_eq(&current.desktop, desktop) {
+            return Ok(());
+        }
+    }
+    let next = match desktop {
+        None => None,
+        Some(desktop) => {
+            let view = process_info.map_desktop(&process, &desktop)?;
+            let cti = match desktop.heap.alloc(size_of::<ClientThreadInfo32>() as u32) {
+                Ok(cti) => cti,
+                Err(status) => {
+                    process_info.unmap_desktop(&process, &desktop);
+                    return Err(status);
+                }
+            };
+            Some((ThreadDesktop { handle, desktop, client_thread_info: cti }, view))
+        }
+    };
+    let client = match &next {
+        None => DesktopClient::default(),
+        Some((thread_desktop, view)) => DesktopClient::new(thread_desktop, *view),
+    };
+    if let Err(status) = write_desktop_client(&thread, &process, &client) {
+        if let Some((thread_desktop, _)) = next {
+            let size = size_of::<ClientThreadInfo32>() as u32;
+            thread_desktop.desktop.heap.free(thread_desktop.client_thread_info, size);
+            process_info.unmap_desktop(&process, &thread_desktop.desktop);
+        }
+        return Err(status);
+    }
+    let next = next.map(|(thread_desktop, _)| thread_desktop);
+    if gives_startup_desktop(info.ti_flags) {
+        if let Some(next) = &next {
+            let mut startup = process_info.startup_desktop.lock();
+            if startup.is_none() {
+                *startup = Some((next.handle, next.desktop.clone()));
+            }
+        }
+    }
+    let previous = core::mem::replace(&mut *info.desktop.lock(), next);
+    if let Some(previous) = previous {
+        previous.desktop.heap.free(previous.client_thread_info, size_of::<ClientThreadInfo32>() as u32);
+        process_info.unmap_desktop(&process, &previous.desktop);
+    }
+    Ok(())
+}
+
+/// Si un thread de `TIF_*` `ti_flags` donne son bureau à son processus
+/// comme bureau de démarrage : pas un thread du système ni de `csrss`.
+pub const fn gives_startup_desktop(ti_flags: u32) -> bool {
+    ti_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD) == 0
+}
+
+/// Ce que le `CLIENTINFO` d'un thread dit de son bureau.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DesktopClient {
+    /// pDeskInfo, dans la vue du processus.
+    pub desk_info: u32,
+    /// ulClientDelta.
+    pub client_delta: u32,
+    /// pClientThreadInfo, dans la vue du processus.
+    pub client_thread_info: u32,
+}
+
+impl DesktopClient {
+    /// Pour un thread sur `thread_desktop`, dont le processus voit le tas en
+    /// `view`.
+    pub fn new(thread_desktop: &ThreadDesktop, view: u32) -> Self {
+        let delta = thread_desktop.desktop.heap.server_base.wrapping_sub(view);
+        Self {
+            desk_info: view + thread_desktop.desktop.desk_info,
+            client_delta: delta,
+            client_thread_info: view + thread_desktop.client_thread_info,
+        }
+    }
+}
+
+/// Écrit dans le `CLIENTINFO` du TEB de `thread` ce que dit `client`.
+fn write_desktop_client(thread: &EThread, process: &EProcess, client: &DesktopClient) -> Result<(), NtStatus> {
+    let info = u64::from(thread.teb()) + offset_of!(Teb32, win32_client_info) as u64;
+    let words = [client.desk_info, client.client_delta];
+    let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    process.write_memory(info + offset_of!(ClientInfo32, desk_info) as u64, &bytes)?;
+    let cti = info + offset_of!(ClientInfo32, client_thread_info) as u64;
+    process.write_memory(cti, &client.client_thread_info.to_le_bytes())
 }
 
 /// L'adresse du serveur du `PROCESSINFO` du processus `pid` : une adresse
@@ -110,7 +374,7 @@ pub fn process_info(process: &Arc<Object<EProcess>>) -> Result<Arc<ProcessInfo>,
         unmap();
         return Err(status);
     }
-    let created = Arc::new(ProcessInfo { server: process_server_address(process.pid()), shared_view: view });
+    let created = Arc::new(ProcessInfo::new(process_server_address(process.pid()), view));
     let kept = downcast(process.set_win32_process(created.clone()));
     if !Arc::ptr_eq(&kept, &created) {
         // Another thread of the process converted it first: its view is
@@ -137,10 +401,10 @@ pub fn convert_current_thread() -> Result<Arc<ThreadInfo>, NtStatus> {
     }
     let process = thread.process().clone();
     let process_info = process_info(&process)?;
-    let info = Arc::new(ThreadInfo {
-        server: thread_server_address(thread.tid()),
-        ti_flags: thread_flags(crate::csrss::csrss(), process.pid()),
-    });
+    let info = Arc::new(ThreadInfo::new(
+        thread_server_address(thread.tid()),
+        thread_flags(crate::csrss::csrss(), process.pid()),
+    ));
     write_teb(&thread, &process, &process_info, &info)?;
     Ok(downcast(thread.set_win32_thread(info)))
 }
@@ -190,6 +454,14 @@ mod tests {
         assert_eq!(exp_win_ver(4, 0), 0x0400);
         assert_eq!(exp_win_ver(5, 1), 0x0501);
         assert_eq!(exp_win_ver(1, 0), 0x030A, "1.x is Windows 3.1");
+    }
+
+    #[test]
+    fn only_client_threads_give_a_startup_desktop() {
+        assert!(gives_startup_desktop(0), "winlogon's thread");
+        assert!(gives_startup_desktop(TIF_DONTATTACHQUEUE));
+        assert!(!gives_startup_desktop(TIF_CSRSSTHREAD | TIF_DONTATTACHQUEUE), "a csrss thread");
+        assert!(!gives_startup_desktop(TIF_SYSTEMTHREAD), "a system thread");
     }
 
     #[test]

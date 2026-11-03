@@ -2,7 +2,9 @@
 //! une fois dans `csrss` (UserServerDllInitialization). USER retient alors
 //! `csrss` (gpepCSRSS : ses threads GUI sont des threads de `csrss`), garde
 //! l'événement des demandes d'alimentation que `csrss` attend, et crée le
-//! répertoire des stations de fenêtres de sa session.
+//! répertoire des stations de fenêtres de sa session. `csrss` lui donne
+//! ensuite son port d'API (NtUserSetInformationThread,
+//! `UserThreadCsrApiPort`), par lequel win32k l'appellera (pas encore).
 //!
 //! Pas encore (M6, 05) : la vidéo (InitVideo, le pilote d'affichage), GDI
 //! (DirectX, polices, `InitializeGreCSRSS`), les paramètres système de
@@ -18,13 +20,15 @@ use abi::bugcheck::BugCheckCode;
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_UNSUCCESSFUL};
 use abi::user::USER_VERSION;
 use ex::Event;
-use hal::sync::Once;
-use ob::Object;
+use hal::sync::{KSpinLock, Once};
+use ob::{Object, ObjectRef};
 
 /// Le PID de `csrss`, une fois qu'il a démarré USER ; 0 avant.
 static CSRSS: AtomicU32 = AtomicU32::new(0);
 /// L'événement des demandes d'alimentation (gpPowerRequestCalloutEvent).
 static POWER_EVENT: Once<Arc<Object<Event>>> = Once::new();
+/// Le port d'API de `csrss` (CsrApiPort), une fois donné.
+static API_PORT: KSpinLock<Option<ObjectRef>> = KSpinLock::new(None);
 
 /// Le PID de `csrss`, une fois qu'il a démarré USER ; 0 avant.
 ///
@@ -83,6 +87,25 @@ pub fn initialize(
     let name = window_stations_directory(process.session_id());
     ob::namespace().insert(&directory, &name, None, abi::object::OBJ_PERMANENT)?;
     Ok(())
+}
+
+/// InitCsrApiPort : `port`, un port LPC référencé par `csrss`, devient le
+/// port d'API de `csrss` pour win32k ; il remplace le précédent.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_api_port(port: ObjectRef) {
+    // The previous port goes once the lock is released.
+    let previous = API_PORT.lock().replace(port);
+    drop(previous);
+}
+
+/// Le port d'API de `csrss`, s'il l'a donné.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn api_port() -> Option<ObjectRef> {
+    API_PORT.lock().clone()
 }
 
 #[cfg(test)]

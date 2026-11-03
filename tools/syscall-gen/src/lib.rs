@@ -4,8 +4,11 @@
 //! - [`parse_sysfuncs`] lit `ntoskrnl/sysfuncs.lst` ;
 //! - [`parse_w32ksvc`] lit `win32ss/w32ksvc32.h`, avec ses blocs
 //!   conditionnels ;
+//! - [`parse_names`] lit `w32k-ntstatus.lst`, les services de win32k qui
+//!   rendent un `NTSTATUS`, que [`mark_status`] marque dans leur table ;
 //! - [`render`] écrit `abi/src/services.rs` : le numéro de chaque service par
-//!   son nom NT, et les deux tables (nom, octets d'arguments) ;
+//!   son nom NT, et les deux tables (nom, octets d'arguments, ce qu'il
+//!   rend) ;
 //! - [`parse_implemented`] lit la liste des handlers du dispatcher, et
 //!   [`render_coverage`] écrit le rapport de couverture
 //!   (`docs/compat/syscalls.md`).
@@ -16,11 +19,13 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
-/// Un service d'une liste : son nom NT et son nombre d'arguments de 32 bits.
+/// Un service d'une liste : son nom NT, son nombre d'arguments de 32 bits,
+/// et s'il rend un `NTSTATUS` (sinon une valeur : BOOL, HANDLE, DWORD…).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub name: String,
     pub argument_count: u32,
+    pub returns_status: bool,
 }
 
 /// La version de ReactOS dont viennent les listes.
@@ -50,7 +55,7 @@ fn entry(name: &str, count: &str, line: usize) -> Result<Entry, String> {
     if argument_count > MAX_ARGUMENTS {
         return Err(format!("line {line}: {name} has {argument_count} arguments (at most {MAX_ARGUMENTS})"));
     }
-    Ok(Entry { name: name.to_owned(), argument_count })
+    Ok(Entry { name: name.to_owned(), argument_count, returns_status: true })
 }
 
 /// `ntoskrnl/sysfuncs.lst` : une ligne `NtNom N` par service, dans l'ordre
@@ -163,6 +168,43 @@ fn strip_comments(line: &str) -> String {
     }
 }
 
+/// Une liste de noms de services : un par ligne ; les lignes vides et celles
+/// qui commencent par `#` sont ignorées.
+pub fn parse_names(text: &str) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if !is_identifier(line) {
+            return Err(format!("line {}: invalid service name `{line}`", i + 1));
+        }
+        names.push(line.to_owned());
+    }
+    Ok(names)
+}
+
+/// Les services de `win32k` nommés dans `names` rendent un `NTSTATUS`, les
+/// autres une valeur. Chaque nom doit être un service de la table, une
+/// seule fois.
+pub fn mark_status(win32k: &mut [Entry], names: &[String]) -> Result<(), String> {
+    for entry in win32k.iter_mut() {
+        entry.returns_status = false;
+    }
+    for name in names {
+        let entry = win32k
+            .iter_mut()
+            .find(|entry| entry.name == *name)
+            .ok_or_else(|| format!("`{name}` returns NTSTATUS but is not a win32k service"))?;
+        if entry.returns_status {
+            return Err(format!("`{name}` listed twice"));
+        }
+        entry.returns_status = true;
+    }
+    Ok(())
+}
+
 /// Vérifie les deux tables : pas trop de services, aucun nom en double, ni
 /// dans une table ni entre les deux.
 pub fn validate(ntoskrnl: &[Entry], win32k: &[Entry]) -> Result<(), String> {
@@ -208,7 +250,8 @@ pub fn render(pin: &Pin, ntoskrnl: &[Entry], win32k: &[Entry]) -> String {
     ] {
         let _ = writeln!(out, "/// {doc}\npub static {name}: [Service; {}] = [", entries.len());
         for entry in entries {
-            let _ = writeln!(out, "    Service::new(\"{}\", {}),", entry.name, entry.argument_count);
+            let constructor = if entry.returns_status { "new" } else { "value" };
+            let _ = writeln!(out, "    Service::{constructor}(\"{}\", {}),", entry.name, entry.argument_count);
         }
         out.push_str("];\n\n");
     }
@@ -289,7 +332,7 @@ mod tests {
     use super::*;
 
     fn e(name: &str, argument_count: u32) -> Entry {
-        Entry { name: name.to_owned(), argument_count }
+        Entry { name: name.to_owned(), argument_count, returns_status: true }
     }
 
     #[test]
@@ -376,6 +419,31 @@ mod tests {
     }
 
     #[test]
+    fn listed_win32k_services_return_a_status_and_the_others_a_value() {
+        let mut win32k = [e("NtUserA", 1), e("NtUserB", 2), e("NtGdiC", 0)];
+        let names = parse_names("# a comment\n\nNtUserB\n  NtGdiC  \n").unwrap();
+        assert_eq!(names, ["NtUserB", "NtGdiC"]);
+        mark_status(&mut win32k, &names).unwrap();
+        assert_eq!(win32k.each_ref().map(|entry| entry.returns_status), [false, true, true]);
+        assert!(mark_status(&mut win32k, &["NtUserZ".to_owned()]).unwrap_err().contains("not a win32k service"));
+        let twice = ["NtUserA".to_owned(), "NtUserA".to_owned()];
+        assert!(mark_status(&mut win32k, &twice).unwrap_err().contains("twice"));
+        assert!(parse_names("NtUser A\n").unwrap_err().contains("line 1"));
+    }
+
+    #[test]
+    fn the_pinned_status_list_names_win32k_services() {
+        let mut win32k = parse_w32ksvc(include_str!("../reactos/0.4.16/w32ksvc32.h"), &[]).unwrap();
+        let names = parse_names(include_str!("../reactos/0.4.16/w32k-ntstatus.lst")).unwrap();
+        mark_status(&mut win32k, &names).unwrap();
+        let returns_status = |name: &str| win32k.iter().find(|e| e.name == name).unwrap().returns_status;
+        assert!(returns_status("NtUserProcessConnect") && returns_status("NtUserSetInformationThread"));
+        assert!(!returns_status("NtUserCreateWindowStation"), "a handle");
+        assert!(!returns_status("NtGdiInit") && !returns_status("NtUserGetKeyboardLayoutList"), "BOOL, a count");
+        assert_eq!(names.len(), 78);
+    }
+
+    #[test]
     fn names_are_unique_across_both_tables() {
         assert!(validate(&[e("NtA", 1)], &[e("NtB", 1)]).is_ok());
         assert!(validate(&[e("NtA", 1), e("NtA", 2)], &[e("NtB", 1)]).unwrap_err().contains("twice"));
@@ -386,12 +454,15 @@ mod tests {
     #[test]
     fn numbers_follow_the_order_of_each_list() {
         let pin = Pin { version: "0.4.16", commit: "51bfc7037359b594876a349b46b992e363e79838" };
-        let text = render(&pin, &[e("NtA", 1), e("NtB", 3)], &[e("NtGdiC", 0)]);
+        let value = Entry { returns_status: false, ..e("NtGdiD", 2) };
+        let text = render(&pin, &[e("NtA", 1), e("NtB", 3)], &[e("NtGdiC", 0), value]);
         assert!(text.contains("ReactOS 0.4.16 (commit 51bfc7037359)"));
         assert!(text.contains("pub const NtA: u32 = 0x0000;\npub const NtB: u32 = 0x0001;\n"));
         assert!(text.contains("pub const NtGdiC: u32 = 0x1000;\n"));
         assert!(text.contains("pub static NTOSKRNL: [Service; 2] = [\n    Service::new(\"NtA\", 1),\n"));
-        assert!(text.contains("pub static WIN32K: [Service; 1] = [\n    Service::new(\"NtGdiC\", 0),\n];\n"));
+        assert!(text.contains(
+            "pub static WIN32K: [Service; 2] = [\n    Service::new(\"NtGdiC\", 0),\n    Service::value(\"NtGdiD\", 2),\n];\n"
+        ));
         assert!(text.ends_with("];\n"));
     }
 }

@@ -7,7 +7,10 @@
 //! ses arguments (`ke::usermem`) et appelle son handler, interruptions
 //! actives, à PASSIVE_LEVEL : il peut attendre ou être préempté. Un numéro
 //! hors des tables rend `STATUS_INVALID_SYSTEM_SERVICE` ; un service sans
-//! handler, `STATUS_NOT_IMPLEMENTED`, journalisé à son premier appel.
+//! handler, journalisé à son premier appel, rend `STATUS_NOT_IMPLEMENTED`
+//! s'il rend un `NTSTATUS`, et sinon (un BOOL, un HANDLE, un compte… de
+//! win32k) 0, son échec, avec `ERROR_CALL_NOT_IMPLEMENTED` comme dernière
+//! erreur du thread, comme le ferait win32k (`Service::returns_status`).
 //!
 //! Un service peut aussi donner au thread un nouveau contexte, dans sa trame
 //! de trap ([`Handler::Frame`] : NtContinue, NtRaiseException).
@@ -25,6 +28,7 @@
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
 pub mod apc;
+mod desktop;
 mod event;
 pub mod exceptions;
 mod file;
@@ -40,6 +44,7 @@ mod system;
 mod time;
 mod user;
 mod wait;
+mod winsta;
 
 pub(crate) use system::processor_information;
 
@@ -51,7 +56,7 @@ use abi::ntstatus::{
     NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
 };
 use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
-use abi::service::{lookup, Table};
+use abi::service::{lookup, Service, Table};
 use abi::services::{self, NTOSKRNL, WIN32K};
 use hal::trap::KTrapFrame;
 use ob::{AccessMask, Handle, Object};
@@ -177,9 +182,22 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtTerminateThread, Handler::Status(process::nt_terminate_thread)),
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
+    (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
+    (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
+    (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
+    (services::NtUserCreateDesktop, Handler::Status(desktop::nt_user_create_desktop)),
+    (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
+    (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
     (services::NtUserInitialize, Handler::Status(user::nt_user_initialize)),
     (services::NtUserInitializeClientPfnArrays, Handler::Status(user::nt_user_initialize_client_pfn_arrays)),
+    (services::NtUserOpenDesktop, Handler::Status(desktop::nt_user_open_desktop)),
+    (services::NtUserOpenWindowStation, Handler::Status(winsta::nt_user_open_window_station)),
     (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
+    (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
+    (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
+    (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
+    (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
+    (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),
     (services::NtWaitForMultipleObjects, Handler::Status(wait::nt_wait_for_multiple_objects)),
     (services::NtWaitForSingleObject, Handler::Status(wait::nt_wait_for_single_object)),
@@ -360,19 +378,32 @@ pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completi
                 // `Zw` stub sits just under the arguments.
                 let caller = arguments.checked_sub(4).and_then(|at| ke::usermem::UserPtr::<u32>::new(at).read().ok());
                 log::warn!(
-                    "sys: {} ({number:#06x}) is not implemented; called from {:#x?} with {:x?}",
+                    "sys: {} ({number:#06x}) is not implemented; called from {:#x?} with {:x?}{}",
                     service.name,
                     caller.unwrap_or(0),
-                    words
+                    words,
+                    if service.returns_status { "" } else { "; 0 returned" }
                 );
             }
-            Completion::Status(STATUS_NOT_IMPLEMENTED)
+            not_implemented(service)
         }
     };
     if first {
         note_first(bit, completion);
     }
     completion
+}
+
+/// Ce que rend un service sans handler : `STATUS_NOT_IMPLEMENTED` s'il rend
+/// un `NTSTATUS` ; sinon 0, son échec (FALSE, NULL, un compte nul), et
+/// `ERROR_CALL_NOT_IMPLEMENTED` comme dernière erreur du thread.
+fn not_implemented(service: &Service) -> Completion {
+    if service.returns_status {
+        return Completion::Status(STATUS_NOT_IMPLEMENTED);
+    }
+    // A TEB that cannot be written: the caller's GetLastError is stale.
+    let _ = win32k::set_last_error(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+    Completion::Status(NtStatus(0))
 }
 
 /// Les classes d'information d'un service demandées sans être
