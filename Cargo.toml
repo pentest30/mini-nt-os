@@ -16,6 +16,7 @@ members = [
     "kernel/lpc",
     "kernel/se",
     "kernel/win32k",
+    "drivers/video/gopfb",
     "libs/pe",
     "libs/regf",
     "tools/pe-inspect",
