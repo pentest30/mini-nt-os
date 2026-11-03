@@ -324,8 +324,11 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      `hal::callout`), NtCallbackReturn et `int 2Bh`, la pile noyau qui grandit en place jusqu'à 72 Kio
      (`mm::kstack::grow`) ; win32k rappelle `user32` : ClientThreadSetup (conversion d'un thread client),
      GetCharsetInfo (la page de code d'une disposition de clavier, que `winlogon` obtient de `gdi32`) ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : NtUserRegisterClassExWOW (la table des
-     atomes de la station, les classes du client et du système), puis NtUserCreateWindowEx (WM_GETMINMAXINFO,
+   - [x] le banc d'essai des fenêtres ([`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : le scénario `gui`
+     met `tests/native/gui1.c` (MinGW, lié aux vrais `kernel32` et `user32`) à la place de `winlogon.exe`
+     (`initial-command`) ; les classes de fenêtres (`win32k::atom`, `win32k::class`) : NtUserRegisterClassExWOW,
+     NtUserGetClassInfo ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : NtUserCreateWindowEx (WM_GETMINMAXINFO,
      WM_NCCREATE, WM_NCCALCSIZE, WM_CREATE envoyés à la procédure du client par KeUserModeCallback :
      `USER32_CALLBACK_WINDOWPROC`), le gestionnaire de fenêtres (ordre Z, SetWindowPos, ShowWindow, DefWindowProc
      côté serveur), les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
@@ -366,6 +369,10 @@ classe `ProcessExecuteFlags` de NtSetInformationProcess (le service est fait pou
 aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
 
 ## Dettes de l'étape 9 du M5 (`winlogon`)
+
+- Classes de fenêtres (M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : le refus d'un drapeau inconnu par
+  NtUserRegisterClassExWOW n'a pas de test (`user32` n'en passe jamais ; une mutation qui le retire survit) ; ni
+  curseurs, ni icônes, ni pinceaux, ni désenregistrement, ni procédures d'appel, ni `atomSysClass`.
 
 - Rappels en mode utilisateur (étape 23) : un thread qui se termine pendant un rappel abandonne les trames des rappels
   en cours (comme NT), sans rendre ce qu'elles possèdent, et rien ne le teste ; `STATUS_CALLBACK_POP_STACK` n'a qu'un

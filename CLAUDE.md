@@ -240,7 +240,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `ps::callback`, `ke::callout`, `hal::callout` ; NtCallbackReturn, `int 2Bh`) : la pile initiale du thread descend
   sous ses trames, les rappels s'emboîtent, la pile noyau grandit en place jusqu'à 72 Kio (`mm::kstack::grow`) ;
   win32k rappelle `user32` (`win32k::callback` : ClientThreadSetup, GetCharsetInfo pour la page de code d'une
-  disposition de clavier).
+  disposition de clavier). M6 commencé ([`docs/compat/m6-fenetres.md`](docs/compat/m6-fenetres.md)) : le scénario
+  `gui` lance `tests/native/gui1.c` (MinGW, vrais `kernel32` et `user32`) à la place de `winlogon.exe` ; la table
+  des atomes de USER (`win32k::atom`) et les classes de fenêtres (`win32k::class` : NtUserRegisterClassExWOW,
+  NtUserGetClassInfo).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -279,6 +282,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   `llvm`). Sans eux, ils sont sautés.
 - `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
+- `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
+  disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
   elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
