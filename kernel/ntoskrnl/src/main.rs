@@ -5135,7 +5135,9 @@ fn window_station_self_test() {
 /// process creates a window station, then its `Default` desktop (again:
 /// opened, the same object; without OBJ_OPENIF: ERROR_ALREADY_EXISTS) and a
 /// `Second` one, opened by its full name; the namespace finds a desktop
-/// through its station (its parse procedure). The thread goes on `Default`:
+/// through its station (its parse procedure). Each has its window: user32
+/// finds it through `spwnd` (its WND, its class `#32769`, its handle's
+/// entry in the shared section). The thread goes on `Default`:
 /// its CLIENTINFO gives the DESKTOPINFO (the heap's server addresses, the
 /// name, empty hook lists) and the CLIENTTHREADINFO in the process's read
 /// only view of the heap. On `Second`, the old view is gone. The thread's
@@ -5328,7 +5330,38 @@ fn desktop_self_test() {
     assert_eq!((read(CTI_FIRST), read(CTI_AGAIN)), (cti, cti), "the same desktop again changes nothing");
     let info_bytes = read_bytes(desk_info, size_of::<DeskInfoHead32>() + 16).expect("the DESKTOPINFO");
     let word = |at: usize| u32::from_le_bytes(info_bytes[at..at + 4].try_into().unwrap());
-    assert_eq!((word(0), word(4), word(8)), (heap.server_base, heap.server_base + heap.size, 0), "base, limit, spwnd");
+    assert_eq!((word(0), word(4)), (heap.server_base, heap.server_base + heap.size), "pvDesktopBase, pvDesktopLimit");
+    // The desktop window, as user32 sees it: spwnd, its WND in the view,
+    // its class, its handle's entry in the USER shared section.
+    let spwnd = word(8);
+    assert_eq!(spwnd, heap.server_address(default.window.wnd), "spwnd: the desktop window, a server address");
+    let delta = field(offset_of!(ClientInfo32, client_delta));
+    let wnd = read_bytes(spwnd.wrapping_sub(delta), size_of::<abi::user::Wnd32>()).expect("the WND, in the view");
+    let wnd_word = |at: usize| u32::from_le_bytes(wnd[at..at + 4].try_into().unwrap());
+    let handle = wnd_word(0);
+    assert_eq!((handle, wnd_word(0x10)), (default.window.handle, spwnd), "head.h, head.pSelf");
+    let not_shown = abi::user::WS_POPUP | abi::user::WS_CLIPCHILDREN;
+    assert_eq!((wnd_word(0x20), wnd_word(0x28)), (not_shown, abi::user::FNID_DESKTOP), "style (hidden), fnid");
+    assert_ne!(wnd_word(0x14) & abi::user::WNDS_SERVERSIDEWINDOWPROC, 0, "a window procedure in win32k");
+    let class = read_bytes(wnd_word(0x64).wrapping_sub(delta), 8).expect("the CLS, in the view");
+    assert_eq!(u16::from_le_bytes([class[4], class[5]]), abi::user::WC_DESKTOP, "the class #32769");
+    let index = win32k::handles::index(handle).expect("a USER handle");
+    let entry_at = gui.shared_view + win32k::shared::HANDLE_ENTRIES + 12 * index;
+    let entry = read_bytes(entry_at, 12).expect("the handle's entry, in the shared view");
+    assert_eq!(u32::from_le_bytes(entry[0..4].try_into().unwrap()), spwnd, "the entry points to the WND");
+    assert_eq!((entry[8], u16::from_le_bytes([entry[10], entry[11]])), (abi::user::TYPE_WINDOW, (handle >> 16) as u16));
+    // Shown, then hidden (no size: nothing to paint).
+    let style = |desktop: &Desktop| {
+        let at = (heap.server_address(desktop.window.wnd).wrapping_sub(delta)) + 0x20;
+        read(at)
+    };
+    win32k::window::show_desktop_window(&default, 0, 0);
+    assert_eq!(style(&default), not_shown | abi::user::WS_VISIBLE, "shown");
+    win32k::window::hide_desktop_window(&default);
+    assert_eq!(style(&default), not_shown, "hidden");
+    let head = gui.shared_view + win32k::shared::HANDLE_TABLE;
+    assert!(read(head + 8) > index, "nb_handles covers the entry (user32 checks it)");
+    let window_entry = win32k::shared::HANDLE_ENTRIES + 12 * index;
     let first_hook = heap.server_base + default.desk_info + 0x10;
     assert_eq!((word(0x10), word(0x14)), (first_hook, first_hook), "an empty hook list");
     let units: alloc::vec::Vec<u16> =
@@ -5367,6 +5400,10 @@ fn desktop_self_test() {
     drop((thread, process));
     ps::wait_for_reaper();
     assert!(ns.open(STATION_NAME, None, None, 0).is_err(), "the station gone with its handles");
+    let mut entry = [0u8; 12];
+    let section = win32k::shared::section().expect("the USER shared section");
+    section.read_kernel(u64::from(window_entry), &mut entry).expect("read the shared section");
+    assert_eq!(entry[8], 0, "the desktop window's handle freed with its desktop");
     log::info!(
         "[smoke] win32k: desktops from user mode: created on their station (again: opened), found through it, \
          NtUserSetThreadDesktop (DESKTOPINFO and CLIENTTHREADINFO in a read-only view of the heap), the thread's \
