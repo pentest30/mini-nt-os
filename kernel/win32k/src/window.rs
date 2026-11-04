@@ -51,17 +51,17 @@ use abi::peb32::Peb32;
 use abi::process_parameters::RtlUserProcessParameters32;
 use abi::teb32::Teb32;
 use abi::user::{
-    CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Rect32,
-    WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
+    CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
+    Rect32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
     FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
     SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED,
     TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO,
-    WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT,
-    WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND,
-    WNDS_MAXIMIZESTOMONITOR, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY,
-    WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP,
-    WS_THICKFRAME, WS_VISIBLE,
+    WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT,
+    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR,
+    WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED,
+    WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD,
+    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR,
+    WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_TLW_WITH_WSCHILD,
@@ -292,12 +292,18 @@ pub fn change(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowS
 }
 
 /// Change ce qui change de `window` par `change`, puis réécrit son `WND`.
+/// Une fenêtre qui se met à avoir quelque chose à peindre, ou cesse de
+/// l'avoir, compte pour son thread (`cPaintsReady`, [`crate::paint::is_dirty`]).
 fn update(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowState {
-    let state = {
+    let (dirty, state) = {
         let mut state = window.state.lock();
+        let dirty = crate::paint::is_dirty(&state);
         change(&mut state);
-        *state
+        (dirty, *state)
     };
+    if crate::paint::is_dirty(&state) != dirty {
+        crate::paint::count_paint(window, !dirty);
+    }
     let _ = write(window);
     state
 }
@@ -467,6 +473,38 @@ fn paint_desktop(window: &Window, rect: Rect) {
 pub enum LParam<'a> {
     Value(u32),
     Buffer { bytes: &'a mut [u8], write_back: bool },
+}
+
+/// IntDispatchMessage : `message`, sorti de la file, à la procédure de sa
+/// fenêtre (`user32` n'en passe ici que WM_PAINT et ceux d'une procédure
+/// dans win32k) ; rend ce qu'elle rend, 0 sans fenêtre. Une fenêtre qui n'a
+/// pas appelé BeginPaint pour WM_PAINT repeint son cadre et son fond
+/// (IntPaintWindow).
+///
+/// # Errors
+/// Ceux de [`send_message`].
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
+    if matches!(message.message, WM_TIMER | WM_SYSTIMER) && message.l_param != 0 {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("win32k: DispatchMessage of a timer's procedure: not yet");
+        }
+        return Ok(0);
+    }
+    let Some(window) = get(message.hwnd) else { return Ok(0) };
+    let paint = message.message == WM_PAINT;
+    if paint {
+        update(&window, |state| state.state |= WNDS_PAINTNOTPROCESSED);
+    }
+    let result = send_message(&window, message.message, message.w_param, LParam::Value(message.l_param))?;
+    if paint && get(window.handle).is_some() && window.state().state & WNDS_PAINTNOTPROCESSED != 0 {
+        update(&window, |state| state.state2 &= !WNDS2_WMPAINTSENT);
+        crate::paint::paint_window(&window);
+    }
+    Ok(result)
 }
 
 /// co_IntSendMessage : `message` à la procédure de `window`, une fenêtre du

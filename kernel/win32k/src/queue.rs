@@ -10,16 +10,22 @@
 //! de synchronisation, signalé à chaque message, sur lequel GetMessage
 //! attend.
 //!
+//! WM_PAINT n'est pas dans la file : un compte des fenêtres du thread qui ont
+//! à se peindre (`cPaintsReady`, et `QS_PAINT` tant qu'il n'est pas nul)
+//! dit d'en chercher une ([`crate::paint::paint_message`]) quand aucun
+//! message posté ne sort (co_IntPeekMessage : messages postés, WM_QUIT, puis
+//! WM_PAINT).
+//!
 //! Pas encore : les messages envoyés (SendMessage entre threads), les
-//! entrées (clavier, souris : le thread d'entrée), WM_PAINT et WM_TIMER
-//! synthétisés, les crochets, le filtre par fenêtre fille (seule la fenêtre
-//! nommée), la position du curseur (`pt` est nul).
+//! entrées (clavier, souris : le thread d'entrée), WM_TIMER synthétisé, les
+//! crochets, le filtre par fenêtre fille des messages postés (seule la
+//! fenêtre nommée), la position du curseur (`pt` est nul).
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
 use abi::ntstatus::NtStatus;
-use abi::user::{Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_POSTMESSAGE, WM_DEVICECHANGE, WM_QUIT};
+use abi::user::{Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_PAINT, QS_POSTMESSAGE, WM_DEVICECHANGE, WM_QUIT};
 use ex::{Event, EventType};
 use hal::sync::KSpinLock;
 use ob::Object;
@@ -65,6 +71,8 @@ pub struct QueueState {
     posted: VecDeque<Msg32>,
     /// WM_QUIT demandé, avec son code de sortie.
     quit: Option<u32>,
+    /// `cPaintsReady` : les fenêtres du thread qui ont à se peindre.
+    paints: u32,
     /// QS_* : ce qu'il y a dans la file (fsWakeBits), et ce qui y est
     /// arrivé depuis la dernière fois qu'on a regardé (fsChangeBits).
     pub wake: u16,
@@ -87,6 +95,41 @@ impl QueueState {
         self.posted.push_back(message);
         self.change |= QS_POSTMESSAGE | QS_ALLPOSTMESSAGE;
         self.refresh();
+    }
+
+    /// MsqIncPaintCountQueue : une fenêtre de plus a à se peindre
+    /// (`QS_PAINT`).
+    pub fn inc_paint(&mut self) {
+        self.paints += 1;
+        self.wake |= QS_PAINT;
+        self.change |= QS_PAINT;
+    }
+
+    /// MsqDecPaintCountQueue : une de moins ; `QS_PAINT` s'éteint avec la
+    /// dernière.
+    pub fn dec_paint(&mut self) {
+        if self.paints == 0 {
+            return;
+        }
+        self.paints -= 1;
+        if self.paints == 0 {
+            self.wake &= !QS_PAINT;
+            self.change &= !QS_PAINT;
+        }
+    }
+
+    /// Plus aucune fenêtre n'a à se peindre (IntGetPaintMessage, quand le
+    /// compte ne trouve aucune fenêtre : une fenêtre cachée ou détruite avec
+    /// sa région à mettre à jour).
+    pub fn clear_paints(&mut self) {
+        self.paints = 0;
+        self.wake &= !QS_PAINT;
+        self.change &= !QS_PAINT;
+    }
+
+    /// `cPaintsReady`.
+    pub fn paints(&self) -> u32 {
+        self.paints
     }
 
     /// MsqPostQuitMessage : WM_QUIT, de code `code`, sortira une fois les
@@ -196,14 +239,47 @@ pub fn post_quit(thread: &ThreadInfo, code: u32) {
 }
 
 /// PeekMessage : le premier message de la file de `thread` que demande
-/// `filter`, sorti si `remove`.
+/// `filter`, sorti si `remove` ; sinon WM_PAINT pour une de ses fenêtres
+/// qui a à se peindre, s'il en a (il ne sort pas : il revient tant que la
+/// fenêtre n'est pas peinte).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn peek(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<Msg32> {
+    let ((found, paints), wake, change) = thread.queue.with(|queue| (queue.peek(filter, remove), queue.paints()));
+    thread.mirror_queue_bits(wake, change);
+    if found.is_some() || paints == 0 {
+        return found;
+    }
+    crate::paint::paint_message(thread, filter)
+}
+
+/// MsqIncPaintCountQueue pour `thread`, qui est réveillé.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub fn peek(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<Msg32> {
-    let (found, wake, change) = thread.queue.with(|queue| queue.peek(filter, remove));
+pub fn inc_paint(thread: &ThreadInfo) {
+    let ((), wake, change) = thread.queue.with(QueueState::inc_paint);
     thread.mirror_queue_bits(wake, change);
-    found
+    thread.queue.wake();
+}
+
+/// MsqDecPaintCountQueue pour `thread`.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn dec_paint(thread: &ThreadInfo) {
+    let ((), wake, change) = thread.queue.with(QueueState::dec_paint);
+    thread.mirror_queue_bits(wake, change);
+}
+
+/// Le compte de `thread` sans fenêtre à peindre : remis à zéro.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn clear_paints(thread: &ThreadInfo) {
+    let ((), wake, change) = thread.queue.with(QueueState::clear_paints);
+    thread.mirror_queue_bits(wake, change);
 }
 
 /// IntGetQueueStatus pour `thread`.
@@ -235,7 +311,7 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 }
 
 /// WaitMessage : attend qu'un message arrive dans la file du thread courant
-/// `thread`, s'il n'y en a pas.
+/// `thread`, s'il n'y en a pas (ni message posté, ni fenêtre à peindre).
 ///
 /// # Errors
 /// Le statut d'une attente qui finit autrement.
@@ -244,7 +320,7 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 /// PASSIVE_LEVEL, dans le thread.
 pub fn wait_message(thread: &ThreadInfo) -> Result<(), NtStatus> {
     let ((), wake, _) = thread.queue.with(|_| ());
-    if wake & QS_POSTMESSAGE != 0 {
+    if wake & (QS_POSTMESSAGE | QS_PAINT) != 0 {
         return Ok(());
     }
     wait(thread)
@@ -314,6 +390,24 @@ mod tests {
         let quit = queue.peek(&all, true).unwrap();
         assert_eq!((quit.message, quit.w_param), (WM_QUIT, 7), "WM_QUIT once the posted ones are out");
         assert_eq!(queue.peek(&all, true), None, "once");
+    }
+
+    #[test]
+    fn qs_paint_lasts_while_windows_have_to_paint() {
+        let mut queue = QueueState::default();
+        queue.inc_paint();
+        queue.inc_paint();
+        assert_eq!((queue.paints(), queue.wake & QS_PAINT, queue.change & QS_PAINT), (2, QS_PAINT, QS_PAINT));
+        assert_eq!(queue.status(QS_PAINT), 0x0020_0020, "changed and present");
+        queue.dec_paint();
+        assert_eq!((queue.paints(), queue.wake & QS_PAINT), (1, QS_PAINT), "one window left");
+        queue.dec_paint();
+        assert_eq!((queue.paints(), queue.wake & QS_PAINT), (0, 0));
+        queue.dec_paint();
+        assert_eq!(queue.paints(), 0, "never below zero");
+        queue.inc_paint();
+        queue.clear_paints();
+        assert_eq!((queue.paints(), queue.status(QS_PAINT)), (0, 0));
     }
 
     #[test]

@@ -406,6 +406,25 @@ pub const fn thread_server_address(tid: u32) -> u32 {
     0x9000_0000 | ((tid >> 2) << 4)
 }
 
+/// Le TID du thread d'adresse du serveur `pti` ([`thread_server_address`]),
+/// si elle en est une.
+pub const fn thread_of_server_address(pti: u32) -> Option<u32> {
+    if pti & 0xF000_0000 != 0x9000_0000 || pti & 0xF != 0 {
+        return None;
+    }
+    Some((pti & 0x0FFF_FFFF) >> 2)
+}
+
+/// Le `THREADINFO` du thread GUI d'adresse du serveur `pti`, s'il vit.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn thread_info_of(pti: u32) -> Option<Arc<ThreadInfo>> {
+    let thread = ps::ethread::lookup_thread(thread_of_server_address(pti)?).ok()?;
+    let info: Arc<ThreadInfo> = downcast(thread.win32_thread()?);
+    (info.server == pti).then_some(info)
+}
+
 /// RtlGetExpWinVer : la version du système qu'attend une image de
 /// sous-système `major.minor`, `MAKEWORD(minor, major)` ; une version 1
 /// compte pour 3.10 (Windows 3.1).
@@ -554,6 +573,11 @@ mod tests {
         assert_eq!(process_server_address(4), 0x8000_0010);
         assert_eq!(process_server_address(0x03FF_FFFC), 0x8FFF_FFF0, "the last PID");
         assert_eq!(thread_server_address(8), 0x9000_0020);
+        assert_eq!(thread_of_server_address(thread_server_address(8)), Some(8));
+        assert_eq!(thread_of_server_address(thread_server_address(0x03FF_FFFC)), Some(0x03FF_FFFC), "the last TID");
+        assert_eq!(thread_of_server_address(process_server_address(8)), None, "a process");
+        assert_eq!(thread_of_server_address(0x9000_0024), None, "not a THREADINFO");
+        assert_eq!(thread_of_server_address(0), None, "the desktop window's");
         assert_ne!(process_server_address(8), process_server_address(12));
     }
 

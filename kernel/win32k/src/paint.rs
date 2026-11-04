@@ -16,33 +16,43 @@
 //!   ([`crate::nonclient`]) dans sa région visible, à l'écran ;
 //! - [`expose`] : ce qu'une fenêtre découvre en se cachant ou en bougeant ;
 //!   le bureau s'y repeint aussitôt, ses sœurs y sont invalidées
-//!   (co_VIS_WindowLayoutChanged).
+//!   (co_VIS_WindowLayoutChanged) ;
+//! - WM_PAINT : une fenêtre visible qui a une région à mettre à jour compte
+//!   pour son thread ([`count_paint`], `QS_PAINT`) ; PeekMessage et
+//!   GetMessage lui donnent WM_PAINT ([`paint_message`]) tant qu'elle n'est
+//!   pas validée, par BeginPaint ([`begin_paint`] : cadre, DC coupé à la
+//!   région, WM_ERASEBKGND) et EndPaint ([`end_paint`]), que fait
+//!   DefWindowProc ([`def_paint`]).
 //!
 //! La région à mettre à jour d'une fenêtre est un rectangle (celui qui
 //! tient tout ce qui a été invalidé), non une région.
 //!
-//! Pas encore, journalisé une fois : WM_PAINT des fenêtres du client (pas
-//! encore de WM_PAINT tiré de la file, ni BeginPaint : la région à mettre à
-//! jour reste, effacée), les sœurs découvertes ne se repeignent qu'à leur
-//! prochaine invalidation, la fenêtre active (tout cadre est inactif), les
-//! fenêtres d'un autre thread (WM_NCPAINT et WM_ERASEBKGND ne leur sont pas
-//! envoyés), les régions de fenêtre (SetWindowRgn) et `WS_EX_TRANSPARENT`
-//! (ignoré). Le bureau n'a pas de thread : il se repeint dans le thread qui
-//! le découvre.
+//! Pas encore, journalisé une fois : la fenêtre active (tout cadre est
+//! inactif), les fenêtres d'un autre thread (WM_NCPAINT et WM_ERASEBKGND ne
+//! leur sont pas envoyés aussitôt ; WM_PAINT leur vient de leur file), les
+//! régions de fenêtre (SetWindowRgn), et sans journal : `WS_EX_TRANSPARENT`
+//! (ignoré, sauf pour l'ordre de WM_PAINT), InvalidateRect, ValidateRect,
+//! RedrawWindow, UpdateWindow et GetUpdateRect du client, le curseur caché
+//! pendant BeginPaint. Le bureau n'a pas de thread : il se repeint dans le
+//! thread qui le découvre.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use abi::gdi::NULLREGION;
 use abi::user::{
-    color, DCX_CACHE, DCX_INTERSECTRGN, DCX_KEEPCLIPRGN, DCX_USESTYLE, HRGN_WINDOW, WM_ERASEBKGND, WM_NCPAINT,
-    WNDS_ERASEBACKGROUND, WNDS_NONCPAINT, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_TRANSPARENT, WS_MINIMIZE, WS_VISIBLE,
+    color, Msg32, PaintStruct32, Rect32, CS_PARENTDC, DCX_CACHE, DCX_INTERSECTRGN, DCX_KEEPCLIPRGN, DCX_USESTYLE,
+    HRGN_WINDOW, WM_ERASEBKGND, WM_NCPAINT, WM_PAINT, WNDS2_STARTPAINT, WNDS2_WMPAINTSENT, WNDS_ERASEBACKGROUND,
+    WNDS_INTERNALPAINT, WNDS_NONCPAINT, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT,
+    WNDS_UPDATEDIRTY, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_MINIMIZE, WS_VISIBLE,
 };
 
 use crate::gdi::dib::{ColorRef, Rect};
 use crate::gdi::region::Region;
-use crate::window::{self, LParam, Window};
+use crate::gui::ThreadInfo;
+use crate::queue::Filter;
+use crate::window::{self, LParam, Window, WindowState};
 
 /// Une fois, journalise ce que la peinture ne fait pas encore.
 fn report_missing(what: &str, reported: &AtomicBool) {
@@ -131,6 +141,37 @@ pub fn invalidate(window: &Window) {
     }
 }
 
+/// IntIsWindowDirty : la fenêtre a quelque chose à peindre (visible, avec
+/// une région à mettre à jour ou WM_PAINT demandé, `WNDS_INTERNALPAINT`).
+pub fn is_dirty(state: &WindowState) -> bool {
+    state.style & WS_VISIBLE != 0 && (!state.update.is_empty() || state.state & WNDS_INTERNALPAINT != 0)
+}
+
+/// MsqIncPaintCountQueue (`dirty`) ou MsqDecPaintCountQueue : `window` a
+/// désormais quelque chose à peindre, ou ne l'a plus, pour le compte de son
+/// thread. [`window::change`] l'appelle à chaque changement : le compte
+/// reste celui des fenêtres à peindre (ReactOS le tient aux mêmes endroits
+/// qu'ici, sauf quand une fenêtre se cache, et le remet à zéro quand il ne
+/// trouve plus de fenêtre). Rien pour la fenêtre du bureau, sans thread.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn count_paint(window: &Window, dirty: bool) {
+    let Some(thread) = crate::gui::thread_info_of(window.pti) else { return };
+    if dirty {
+        crate::queue::inc_paint(&thread);
+    } else {
+        crate::queue::dec_paint(&thread);
+    }
+}
+
+/// IntSendNCPaint (`HRGN_WINDOW`) : le cadre entier de `window` se repeint
+/// (WM_NCPAINT).
+fn send_nc_paint(window: &Arc<Window>) {
+    window::change(window, |state| state.state &= !WNDS_SENDNCPAINT);
+    let _ = window::send_message(window, WM_NCPAINT, HRGN_WINDOW, LParam::Value(0));
+}
+
 /// co_IntPaintWindows(`RDW_ERASENOW`) pour `window` seule : un cadre à
 /// repeindre l'est (WM_NCPAINT, dans le thread de la fenêtre), puis le fond
 /// à effacer ([`erase_background`]).
@@ -155,13 +196,211 @@ fn paint_windows(window: &Arc<Window>) {
         return;
     }
     if state.state & WNDS_SENDNCPAINT != 0 {
-        // IntSendNCPaint: the whole frame.
-        window::change(window, |state| state.state &= !WNDS_SENDNCPAINT);
-        let _ = window::send_message(window, WM_NCPAINT, HRGN_WINDOW, LParam::Value(0));
+        send_nc_paint(window);
     }
     if window.state().state & WNDS_SENDERASEBACKGROUND != 0 {
         erase_background(window);
     }
+}
+
+/// IntPaintWindow : WM_PAINT n'a pas appelé BeginPaint
+/// (`WNDS_PAINTNOTPROCESSED` après IntDispatchMessage) : le cadre et le
+/// fond se repeignent s'il le faut ; rien n'est validé.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn paint_window(window: &Arc<Window>) {
+    paint_windows(window);
+}
+
+/// La région à mettre à jour de `state`, à l'écran ; `None` s'il n'y en a pas.
+fn update_on_screen(state: &WindowState) -> Option<Region> {
+    let (dx, dy) = (state.client.left, state.client.top);
+    let update = state.update;
+    (!update.is_empty())
+        .then(|| Region::from_rect(Rect::new(update.left + dx, update.top + dy, update.right + dx, update.bottom + dy)))
+}
+
+/// IntBeginPaint : `window` se peint. Son cadre se repeint s'il le faut
+/// (WM_NCPAINT) ; un DC du cache coupé à sa région à mettre à jour est
+/// pris, et cette région validée (rien à peindre : un DC qui ne peint
+/// rien) ; le fond s'efface s'il le faut (WM_ERASEBKGND : `fErase` dit
+/// qu'il reste à effacer), puis le cadre de ses enfants qui n'ont rien
+/// d'autre à repeindre. Rend le `PAINTSTRUCT` (`hdc` nul sans DC).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn begin_paint(window: &Arc<Window>) -> PaintStruct32 {
+    let state = window::change(window, |state| {
+        state.state2 |= WNDS2_STARTPAINT;
+        state.state &= !(WNDS_PAINTNOTPROCESSED | WNDS_UPDATEDIRTY);
+    });
+    if state.state & WNDS_SENDNCPAINT != 0 {
+        send_nc_paint(window);
+    }
+    let state = window.state();
+    let mut ps = PaintStruct32::default();
+    let Ok(hdc) = crate::dce::get_dc_ex(window, update_on_screen(&state).as_ref(), DCX_INTERSECTRGN | DCX_USESTYLE)
+    else {
+        return ps;
+    };
+    ps.hdc = hdc;
+    let mut erase = false;
+    window::change(window, |state| {
+        if state.state & WNDS_SENDERASEBACKGROUND != 0 {
+            state.state &= !(WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND);
+            erase = true;
+        }
+        // Validated: the region is the DC's now.
+        state.update = Rect::default();
+        state.state &= !WNDS_INTERNALPAINT;
+    });
+    let (complexity, paint) =
+        crate::gdi::dc::lock(hdc).map_or((NULLREGION, Rect::default()), |dc| crate::gdi::dc::clip_box(&dc.state()));
+    ps.paint = Rect32 { left: paint.left, top: paint.top, right: paint.right, bottom: paint.bottom };
+    let class_style = window.class.as_ref().map_or(0, |class| class.info.style);
+    let client = state.client;
+    let client = Rect::new(0, 0, client.right - client.left, client.bottom - client.top);
+    if erase && complexity != NULLREGION && (class_style & CS_PARENTDC == 0 || !client.intersect(&paint).is_empty()) {
+        let erased = window::send_message(window, WM_ERASEBKGND, hdc, LParam::Value(0));
+        if !matches!(erased, Ok(result) if result != 0) {
+            ps.erase = 1;
+            window::change(window, |state| state.state |= WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND);
+        }
+    }
+    send_child_nc_paint(window);
+    ps
+}
+
+/// IntSendChildNCPaint : les enfants de `window` dont seul le cadre est à
+/// repeindre le repeignent (ceux de son thread).
+fn send_child_nc_paint(window: &Window) {
+    let mut child = window::get(window.state().child);
+    while let Some(current) = child {
+        let state = current.state();
+        if state.update.is_empty() && state.state & WNDS_SENDNCPAINT != 0 && same_thread(&current) {
+            send_nc_paint(&current);
+        }
+        child = window::get(state.next);
+    }
+}
+
+/// `window` est du thread courant.
+fn same_thread(window: &Window) -> bool {
+    crate::convert_current_thread().is_ok_and(|thread| thread.server == window.pti)
+}
+
+/// IntEndPaint : le DC de BeginPaint `hdc` est rendu ; `window` a fini de se
+/// peindre.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn end_paint(window: &Window, hdc: u32) {
+    crate::dce::release_dc(hdc);
+    window::change(window, |state| state.state2 &= !(WNDS2_WMPAINTSENT | WNDS2_STARTPAINT));
+}
+
+/// DefWindowProc de WM_PAINT : BeginPaint puis EndPaint, ce qui valide la
+/// fenêtre (son fond effacé s'il le faut) ; rien entre BeginPaint et
+/// EndPaint d'une fenêtre qui a une zone cliente.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn def_paint(window: &Arc<Window>) {
+    let state = window.state();
+    if state.state2 & WNDS2_STARTPAINT != 0 && !state.client.is_empty() {
+        return;
+    }
+    let ps = begin_paint(window);
+    if ps.hdc != 0 {
+        end_paint(window, ps.hdc);
+    }
+}
+
+/// IntFindWindowToRepaint : la première fenêtre du thread `pti` qui a
+/// quelque chose à peindre, de `first` et des sœurs qui la suivent dans
+/// l'ordre Z, puis de leurs enfants ; une fenêtre `WS_EX_TRANSPARENT` passe
+/// après ses sœurs opaques à peindre.
+pub fn find_window_to_repaint(first: Option<Arc<Window>>, pti: u32) -> Option<Arc<Window>> {
+    let mut current = first;
+    while let Some(window) = current {
+        let state = window.state();
+        if window.pti == pti && is_dirty(&state) {
+            if state.ex_style & WS_EX_TRANSPARENT != 0 {
+                let mut sibling = window::get(state.next);
+                while let Some(other) = sibling {
+                    let other_state = other.state();
+                    if other_state.ex_style & WS_EX_TRANSPARENT == 0 && other.pti == pti && is_dirty(&other_state) {
+                        return Some(other);
+                    }
+                    sibling = window::get(other_state.next);
+                }
+            }
+            return Some(window);
+        }
+        if let Some(found) = find_window_to_repaint(window::get(state.child), pti) {
+            return Some(found);
+        }
+        current = window::get(state.next);
+    }
+    None
+}
+
+/// `ancestor` est `window` ou l'un de ses parents.
+fn is_or_has_parent(window: &Window, ancestor: u32) -> bool {
+    if window.handle == ancestor {
+        return true;
+    }
+    let mut parent = window::get(window.state().parent);
+    while let Some(current) = parent {
+        if current.handle == ancestor {
+            return true;
+        }
+        parent = window::get(current.state().parent);
+    }
+    false
+}
+
+/// `filter` demande WM_PAINT : tous les messages, ou un intervalle qui le
+/// tient ; pas les messages du seul thread (`hWnd` à -1).
+pub fn wants_paint(filter: &Filter) -> bool {
+    filter.hwnd != u32::MAX && ((filter.min == 0 && filter.max == 0) || (filter.min..=filter.max).contains(&WM_PAINT))
+}
+
+/// IntGetPaintMessage : WM_PAINT pour la première fenêtre du thread
+/// `thread` qui a quelque chose à peindre, si `filter` le demande (sa
+/// fenêtre ou l'un de ses parents ; pas les messages du seul thread). Il ne
+/// sort pas de la file : la fenêtre en reçoit un tant qu'elle n'est pas
+/// validée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn paint_message(thread: &ThreadInfo, filter: &Filter) -> Option<Msg32> {
+    if !wants_paint(filter) {
+        return None;
+    }
+    let desktop = thread.desktop()?.desktop.window.clone();
+    let found = find_window_to_repaint(Some(desktop), thread.server)?;
+    if filter.hwnd != 0 && !is_or_has_parent(&found, filter.hwnd) {
+        return None;
+    }
+    window::change(&found, |state| {
+        state.state &= !(WNDS_INTERNALPAINT | WNDS_UPDATEDIRTY);
+        state.state2 &= !WNDS2_STARTPAINT;
+    });
+    // WNDS2_WMPAINTSENT unless every parent clips its children.
+    let mut parent = window::get(found.state().parent);
+    while let Some(current) = parent {
+        if current.is_desktop_window() {
+            break;
+        }
+        let state = current.state();
+        if state.style & WS_CLIPCHILDREN == 0 {
+            window::change(&found, |state| state.state2 |= WNDS2_WMPAINTSENT);
+        }
+        parent = window::get(state.parent);
+    }
+    Some(Msg32 { hwnd: found.handle, message: WM_PAINT, ..Msg32::default() })
 }
 
 /// co_IntPaintWindows : le fond de la région à mettre à jour de `window`
@@ -170,13 +409,7 @@ fn paint_windows(window: &Arc<Window>) {
 /// garde son fond à effacer. Les appels de GDI qu'elle met en lot sont
 /// exécutés au retour du rappel, avant que le DC soit rendu.
 fn erase_background(window: &Arc<Window>) {
-    let state = window.state();
-    if state.update.is_empty() {
-        return;
-    }
-    let (dx, dy) = (state.client.left, state.client.top);
-    let update = state.update;
-    let update = Region::from_rect(Rect::new(update.left + dx, update.top + dy, update.right + dx, update.bottom + dy));
+    let Some(update) = update_on_screen(&window.state()) else { return };
     let flags = DCX_CACHE | DCX_USESTYLE | DCX_INTERSECTRGN | DCX_KEEPCLIPRGN;
     let hdc = match crate::dce::get_dc_ex(window, Some(&update), flags) {
         Ok(hdc) => hdc,
@@ -298,4 +531,36 @@ pub fn expose(window: &Window, exposed: &Region) {
             screen.fill_rect(rect, background);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_visible_window_with_something_to_paint_is_dirty() {
+        let mut state = WindowState { style: WS_VISIBLE, ..WindowState::default() };
+        assert!(!is_dirty(&state), "nothing to paint");
+        state.invalidate(Rect::new(0, 0, 10, 10), false);
+        assert!(!is_dirty(&state), "no client area: nothing invalidated");
+        state.client = Rect::new(100, 100, 200, 150);
+        state.invalidate(Rect::new(0, 0, 10, 10), false);
+        assert!(is_dirty(&state), "an update region");
+        state.style = 0;
+        assert!(!is_dirty(&state), "hidden");
+        state = WindowState { style: WS_VISIBLE, state: WNDS_INTERNALPAINT, ..WindowState::default() };
+        assert!(is_dirty(&state), "WM_PAINT asked (RDW_INTERNALPAINT)");
+    }
+
+    #[test]
+    fn wm_paint_comes_to_filters_that_hold_it() {
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        assert!(wants_paint(&all));
+        assert!(wants_paint(&Filter { hwnd: 0x0002_0020, ..all }), "a window: it or a child of it");
+        assert!(!wants_paint(&Filter { hwnd: u32::MAX, ..all }), "the thread's messages only");
+        assert!(wants_paint(&Filter { min: WM_PAINT, max: WM_PAINT, ..all }));
+        assert!(wants_paint(&Filter { min: 0, max: WM_PAINT, ..all }));
+        assert!(!wants_paint(&Filter { min: WM_PAINT + 1, max: 0x400, ..all }), "above");
+        assert!(!wants_paint(&Filter { min: 1, max: WM_PAINT - 1, ..all }), "below");
+    }
 }
