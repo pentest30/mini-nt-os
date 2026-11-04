@@ -358,7 +358,9 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      mettre à jour est une région ; NtUserRedrawWindow, NtUserInvalidateRect, NtUserValidateRect,
      NtUserGetUpdateRect, NtUserCallHwndLock (UpdateWindow) ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : NtUserGetDCEx et NtUserReleaseDC (GetDC),
-     les objets région de GDI (InvalidateRgn, GetUpdateRgn), puis le texte (polices, ADR-013), les contrôles et
+     les objets région de GDI (InvalidateRgn, GetUpdateRgn), puis le texte (polices, ADR-013 acceptée : `ttf-parser`,
+     rastériseur maison en virgule fixe, niveaux de gris, polices libres de ReactOS ; d'abord le titre des fenêtres
+     dessiné par le noyau et les symboles de Marlett), les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
