@@ -17,7 +17,9 @@
 //!
 //! Le premier appel d'un thread à win32k en fait un thread GUI
 //! (PsConvertToGuiThread, `win32k::convert_current_thread`) ; s'il échoue,
-//! l'appel rend son statut.
+//! l'appel rend son statut. Avant chaque appel à win32k, les appels de GDI
+//! que le thread a mis en lot dans son TEB sont exécutés
+//! (KeGdiFlushUserBatch, `win32k::gdi::batch::flush`).
 //!
 //! Chaque appel est compté, par service ; [`service_calls`] rend les
 //! services appelés depuis [`reset_service_calls`], dans l'ordre de leur
@@ -35,6 +37,7 @@ mod event;
 pub mod exceptions;
 mod file;
 pub mod gates;
+mod gdi;
 mod memory;
 mod message;
 mod monitor;
@@ -121,7 +124,10 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtFlushInstructionCache, Handler::Status(process::nt_flush_instruction_cache)),
     (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtGdiFlush, Handler::Status(gdi::nt_gdi_flush)),
+    (services::NtGdiGetAppClipBox, Handler::Status(gdi::nt_gdi_get_app_clip_box)),
     (services::NtGdiInit, Handler::Status(user::nt_gdi_init)),
+    (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtListenPort, Handler::Status(port::nt_listen_port)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
@@ -386,9 +392,11 @@ pub fn dispatch(number: u32, arguments: u32, frame: &mut KTrapFrame) -> Completi
     let bit = if table == Table::Ntoskrnl { index } else { NTOSKRNL.len() + index };
     let first = count_call(bit);
     let words = &words[..count];
-    // A first call to win32k makes a GUI thread (PsConvertToGuiThread).
+    // A first call to win32k makes a GUI thread (PsConvertToGuiThread);
+    // GDI calls batched in the TEB run before any call to win32k
+    // (KeGdiFlushUserBatch).
     let converted = match table {
-        Table::Win32k => win32k::convert_current_thread().map(drop),
+        Table::Win32k => win32k::convert_current_thread().map(|_| win32k::gdi::batch::flush()),
         Table::Ntoskrnl => Ok(()),
     };
     let completion = match (converted, handler(table, index)) {
