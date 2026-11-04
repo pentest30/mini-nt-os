@@ -247,7 +247,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   WM_NCCALCSIZE, WM_CREATE, WM_SIZE, WM_MOVE, WM_PARENTNOTIFY envoyés à la procédure du client par rappel, le
   `WND` complet que `user32` lit lui-même ; NtUserDefSetText) ; les métriques et couleurs du système
   (`win32k::metrics`, dans le `SERVERINFO`) et la partie noyau de DefWindowProc (`win32k::defwnd`,
-  NtUserMessageCall : WM_NCCALCSIZE ; WM_GETMINMAXINFO à la création).
+  NtUserMessageCall : WM_NCCALCSIZE ; WM_GETMINMAXINFO à la création) ; le moniteur principal (`win32k::monitor` :
+  place par défaut en cascade, NtUserMonitorFrom*, NtUserGetMonitorInfo) et SetWindowPos (`win32k::winpos`,
+  NtUserSetWindowPos, NtUserMoveWindow : ordre Z, WM_WINDOWPOS*, WM_MOVE, WM_SIZE). `syscall-gen` suit la variante
+  publiée de ReactOS (`DBG` défini) et vérifie les stubs de `ntdll`, `user32`, `gdi32` quand l'espace utilisateur est
+  là.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

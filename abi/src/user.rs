@@ -373,9 +373,96 @@ pub struct MinMaxInfo32 {
 
 const _: () = assert!(size_of::<MinMaxInfo32>() == 40);
 
+/// WINDOWPOS, 32-bit: what WM_WINDOWPOSCHANGING and WM_WINDOWPOSCHANGED
+/// carry.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowPos32 {
+    pub hwnd: u32,
+    pub insert_after: u32,
+    pub x: i32,
+    pub y: i32,
+    pub cx: i32,
+    pub cy: i32,
+    pub flags: u32,
+}
+
+/// NCCALCSIZE_PARAMS, 32-bit: three rectangles (left, top, right, bottom),
+/// then the address of a WINDOWPOS (packed after it in a message).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NcCalcSizeParams32 {
+    pub rects: [[i32; 4]; 3],
+    pub pos: u32,
+}
+
+/// MONITORINFO, 32-bit; MONITORINFOEXW adds the device name
+/// (`CCHDEVICENAME` characters).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MonitorInfo32 {
+    pub size: u32,
+    pub monitor: [i32; 4],
+    pub work: [i32; 4],
+    pub flags: u32,
+}
+
+/// CCHDEVICENAME: the characters of a display device name.
+pub const CCHDEVICENAME: usize = 32;
+/// The size of MONITORINFOEXW.
+pub const MONITORINFOEXW_SIZE: u32 = size_of::<MonitorInfo32>() as u32 + 2 * CCHDEVICENAME as u32;
+/// MONITORINFOF_PRIMARY: the primary monitor.
+pub const MONITORINFOF_PRIMARY: u32 = 1;
+/// MONITOR_DEFAULTTO*: what MonitorFromWindow gives outside the monitors.
+pub const MONITOR_DEFAULTTONULL: u32 = 0;
+pub const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
+pub const MONITOR_DEFAULTTONEAREST: u32 = 2;
+/// TYPE_MONITOR: a handle entry of a monitor (`HANDLE_TYPE`).
+pub const TYPE_MONITOR: u8 = 12;
+
+const _: () = {
+    assert!(size_of::<WindowPos32>() == 28);
+    assert!(size_of::<NcCalcSizeParams32>() == 52);
+    assert!(offset_of!(NcCalcSizeParams32, pos) == 48);
+    assert!(size_of::<MonitorInfo32>() == 40);
+    assert!(MONITORINFOEXW_SIZE == 104);
+};
+
+/// SWP_*, SetWindowPos flags; SWP_NOCLIENTSIZE, SWP_NOCLIENTMOVE and
+/// SWP_STATECHANGED are win32k's own (ReactOS `undocuser.h`).
+pub const SWP_NOSIZE: u32 = 0x0001;
+pub const SWP_NOMOVE: u32 = 0x0002;
+pub const SWP_NOZORDER: u32 = 0x0004;
+pub const SWP_NOREDRAW: u32 = 0x0008;
+pub const SWP_NOACTIVATE: u32 = 0x0010;
+pub const SWP_FRAMECHANGED: u32 = 0x0020;
+pub const SWP_SHOWWINDOW: u32 = 0x0040;
+pub const SWP_HIDEWINDOW: u32 = 0x0080;
+pub const SWP_NOCOPYBITS: u32 = 0x0100;
+pub const SWP_NOOWNERZORDER: u32 = 0x0200;
+pub const SWP_NOSENDCHANGING: u32 = 0x0400;
+pub const SWP_NOCLIENTSIZE: u32 = 0x0800;
+pub const SWP_NOCLIENTMOVE: u32 = 0x1000;
+pub const SWP_DEFERERASE: u32 = 0x2000;
+pub const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
+pub const SWP_STATECHANGED: u32 = 0x8000;
+/// HWND_*, the places SetWindowPos takes in the Z order besides a sibling.
+pub const HWND_TOP: u32 = 0;
+pub const HWND_BOTTOM: u32 = 1;
+pub const HWND_TOPMOST: u32 = 0xFFFF_FFFF;
+pub const HWND_NOTOPMOST: u32 = 0xFFFF_FFFE;
+/// STARTF_*, the `WindowFlags` of the process parameters that give the
+/// first overlapped window its place and size.
+pub const STARTF_USESIZE: u32 = 0x0000_0002;
+pub const STARTF_USEPOSITION: u32 = 0x0000_0004;
+
 /// WNDS_SENDSIZEMOVEMSGS: WM_SIZE and WM_MOVE wait for the window to be
 /// shown (an overlapped window).
 pub const WNDS_SENDSIZEMOVEMSGS: u32 = 0x0000_0010;
+/// WNDS_SENDNCPAINT: the frame is to be painted (WM_NCPAINT).
+pub const WNDS_SENDNCPAINT: u32 = 0x0000_0800;
+/// WNDS_MAXIMIZESTOMONITOR: maximized, it covers its monitor.
+pub const WNDS_MAXIMIZESTOMONITOR: u32 = 0x4000_0000;
 /// WNDS_ANSIWINDOWPROC: its procedure takes ANSI messages.
 pub const WNDS_ANSIWINDOWPROC: u32 = 0x0008_0000;
 /// WNDS_ANSICREATOR: created by CreateWindowExA.
@@ -413,6 +500,7 @@ pub const WS_OVERLAPPEDWINDOW: u32 = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | W
 /// a window CreateWindowExA creates.
 pub const WS_EX_DLGMODALFRAME: u32 = 0x0000_0001;
 pub const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
+pub const WS_EX_TOPMOST: u32 = 0x0000_0008;
 pub const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 pub const WS_EX_CLIENTEDGE: u32 = 0x0000_0200;
 pub const WS_EX_LEFTSCROLLBAR: u32 = 0x0000_4000;
@@ -480,7 +568,14 @@ pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_NCCREATE: u32 = 0x0081;
 pub const WM_MOVE: u32 = 0x0003;
 pub const WM_SIZE: u32 = 0x0005;
+pub const WM_CHILDACTIVATE: u32 = 0x0022;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
+pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
+pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+/// SIZE_*, the `wParam` of WM_SIZE: restored, minimized, maximized.
+pub const SIZE_RESTORED: u32 = 0;
+pub const SIZE_MINIMIZED: u32 = 1;
+pub const SIZE_MAXIMIZED: u32 = 2;
 pub const WM_NCCALCSIZE: u32 = 0x0083;
 pub const WM_PARENTNOTIFY: u32 = 0x0210;
 pub const WM_QUIT: u32 = 0x0012;
@@ -944,7 +1039,10 @@ as_bytes!(
     CreateStructW32,
     WindowProcArguments32,
     CallbackWnd32,
-    MinMaxInfo32
+    MinMaxInfo32,
+    WindowPos32,
+    NcCalcSizeParams32,
+    MonitorInfo32
 );
 
 #[cfg(test)]

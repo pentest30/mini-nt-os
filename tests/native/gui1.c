@@ -10,7 +10,9 @@
  * class and creates a window of it: win32k sends the window procedure
  * WM_NCCREATE, WM_CREATE... through KeUserModeCallback. An overlapped
  * window gets WM_GETMINMAXINFO and its frame from the system metrics, by
- * DefWindowProc in win32k (NtUserMessageCall). Each step and each
+ * DefWindowProc in win32k (NtUserMessageCall), and its default place from
+ * the monitor. SetWindowPos moves, sizes, orders, shows and hides windows.
+ * Each step and each
  * message goes to the debug port (DbgPrint), where the scenario looks for
  * them; the program ends with EXIT_STATUS.
  *
@@ -73,6 +75,26 @@ typedef struct {
 } MINMAXINFO;
 
 typedef struct {
+    HWND hwnd;
+    HWND hwndInsertAfter;
+    int x;
+    int y;
+    int cx;
+    int cy;
+    UINT flags;
+} WINDOWPOS;
+
+typedef struct {
+    DWORD cbSize;
+    RECT rcMonitor;
+    RECT rcWork;
+    DWORD dwFlags;
+    WCHAR szDevice[32];
+} MONITORINFOEXW;
+
+typedef void *HMONITOR;
+
+typedef struct {
     void *lpCreateParams;
     HINSTANCE hInstance;
     HMENU hMenu;
@@ -99,6 +121,25 @@ typedef struct {
 #define WS_THICKFRAME 0x00040000
 #define CW_USEDEFAULT ((int)0x80000000)
 #define GWL_STYLE (-16)
+#define GWL_EXSTYLE (-20)
+#define WS_EX_TOPMOST 0x00000008
+#define GW_HWNDFIRST 0
+#define GW_HWNDNEXT 2
+#define HWND_TOP ((HWND)0)
+#define HWND_BOTTOM ((HWND)1)
+#define HWND_TOPMOST ((HWND)-1)
+#define HWND_NOTOPMOST ((HWND)-2)
+#define SWP_NOSIZE 0x0001
+#define SWP_NOMOVE 0x0002
+#define SWP_NOZORDER 0x0004
+#define SWP_NOACTIVATE 0x0010
+#define SWP_SHOWWINDOW 0x0040
+#define SWP_HIDEWINDOW 0x0080
+#define MONITOR_DEFAULTTONULL 0
+#define MONITOR_DEFAULTTONEAREST 2
+#define WM_MOVE 0x0003
+#define WM_SIZE 0x0005
+#define WM_WINDOWPOSCHANGED 0x0047
 #define GW_CHILD 5
 #define WM_PARENTNOTIFY 0x0210
 #define ERROR_TLW_WITH_WSCHILD 1406
@@ -135,6 +176,12 @@ __declspec(dllimport) DWORD __stdcall GetSysColor(int index);
 __declspec(dllimport) int __stdcall GetSystemMetrics(int index);
 __declspec(dllimport) HWND __stdcall GetWindow(HWND window, UINT command);
 __declspec(dllimport) LONG __stdcall GetWindowLongW(HWND window, int index);
+__declspec(dllimport) BOOL __stdcall GetMonitorInfoW(HMONITOR monitor, MONITORINFOEXW *info);
+__declspec(dllimport) BOOL __stdcall IsWindowVisible(HWND window);
+__declspec(dllimport) HMONITOR __stdcall MonitorFromPoint(POINT point, DWORD flags);
+__declspec(dllimport) HMONITOR __stdcall MonitorFromWindow(HWND window, DWORD flags);
+__declspec(dllimport) BOOL __stdcall MoveWindow(HWND window, int x, int y, int width, int height, BOOL repaint);
+__declspec(dllimport) BOOL __stdcall SetWindowPos(HWND window, HWND after, int x, int y, int cx, int cy, UINT flags);
 __declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int size);
 __declspec(dllimport) BOOL __stdcall IsWindow(HWND window);
@@ -187,6 +234,10 @@ static LPARAM notified_l;
 static MINMAXINFO limits;
 static LONG minimum_width;
 static LONG minimum_height;
+/* What the last WM_MOVE, WM_SIZE and WM_WINDOWPOSCHANGED gave. */
+static LPARAM moved_l;
+static LPARAM sized_l;
+static WINDOWPOS changed;
 
 /* Prints the messages received since the last time. */
 static void print_messages(const char *what)
@@ -203,7 +254,7 @@ static void print_messages(const char *what)
         *at++ = ' ';
     }
     *at = 0;
-    DbgPrint("[gui] %s received: %s\n", what, text);
+    DbgPrint("[gui] %s received %u: %s\n", what, received_count, text);
     received_count = 0;
 }
 
@@ -218,6 +269,12 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
         notified_w = w;
         notified_l = l;
     }
+    if (message == WM_MOVE)
+        moved_l = l;
+    if (message == WM_SIZE)
+        sized_l = l;
+    if (message == WM_WINDOWPOSCHANGED)
+        changed = *(const WINDOWPOS *)l;
     if (message == WM_GETMINMAXINFO) {
         MINMAXINFO *info = (MINMAXINFO *)l;
         limits = *info;
@@ -227,7 +284,8 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
             return 0;
         }
     }
-    if ((message == WM_NCCREATE || message == WM_CREATE) && ((const CREATESTRUCTW *)l)->style == (LONG)WS_POPUP) {
+    if ((message == WM_NCCREATE || message == WM_CREATE) && ((const CREATESTRUCTW *)l)->style == (LONG)WS_POPUP
+        && ((const CREATESTRUCTW *)l)->lpCreateParams == CREATE_PARAMETER) {
         const CREATESTRUCTW *create = (const CREATESTRUCTW *)l;
         BOOL expected = create->lpCreateParams == CREATE_PARAMETER && same(create->lpszName, WINDOW_NAME)
                         && same(create->lpszClass, CLASS_NAME) && create->x == 100 && create->y == 50
@@ -267,6 +325,8 @@ static void check_caption_state(void)
     const DWORD *callback = (const DWORD *)(current_teb() + 0x6CC + 0x28);
     const DWORD *wnd = (const DWORD *)callback[1];
     DbgPrint("[gui] WM_CREATE: WNDS_HASCAPTION %s\n", wnd && (wnd[5] & 8) ? "set" : "WRONG");
+    /* WM_GETMINMAXINFO: maximized, it covers its monitor. */
+    DbgPrint("[gui] WM_CREATE: WNDS_MAXIMIZESTOMONITOR %s\n", wnd && (wnd[5] & 0x40000000) ? "set" : "WRONG");
 }
 
 /* A window procedure that refuses WM_NCCREATE. */
@@ -413,8 +473,8 @@ static void print_sized(HINSTANCE instance, const char *what, int x, int y, int 
 /* An overlapped window: WM_GETMINMAXINFO first, the place and size of
    ReactOS without a monitor, its client area without the frame and the
    caption (WM_NCCALCSIZE in DefWindowProc). Then sizing windows, kept
-   within the limits WM_GETMINMAXINFO gives. */
-static void check_overlapped(HINSTANCE instance)
+   within the limits WM_GETMINMAXINFO gives. Returns the overlapped window. */
+static HWND check_overlapped(HINSTANCE instance)
 {
     RECT rect;
     HWND window;
@@ -423,7 +483,7 @@ static void check_overlapped(HINSTANCE instance)
                              0, instance, 0);
     DbgPrint("[gui] overlapped: %s (%lu)\n", window ? "a window" : "none", GetLastError());
     if (!window)
-        return;
+        return 0;
     print_messages("the overlapped window");
     DbgPrint("[gui] WM_GETMINMAXINFO: maximized %ldx%ld at %ld,%ld, tracking %ldx%ld to %ldx%ld\n",
              limits.ptMaxSize.x, limits.ptMaxSize.y, limits.ptMaxPosition.x, limits.ptMaxPosition.y,
@@ -457,6 +517,141 @@ static void check_overlapped(HINSTANCE instance)
     minimum_height = 200;
     print_sized(instance, "sizing, larger minimum", 0, 0, 100, 100);
     minimum_width = 0;
+    return window;
+}
+
+/* Prints the rectangle of a window. */
+static void print_rect(const char *what, HWND window)
+{
+    RECT rect;
+
+    GetWindowRect(window, &rect);
+    DbgPrint("[gui] %s: %ld %ld %ld %ld\n", what, rect.left, rect.top, rect.right, rect.bottom);
+}
+
+/* The monitor: MonitorFromWindow, MonitorFromPoint, GetMonitorInfoW. */
+static void check_monitor(HWND window)
+{
+    MONITORINFOEXW info;
+    POINT far;
+    BOOL got;
+    HMONITOR monitor = MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
+
+    memset(&info, 0, sizeof info);
+    info.cbSize = sizeof info;
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) {
+        DbgPrint("[gui] monitor: none (%lu)\n", GetLastError());
+        return;
+    }
+    DbgPrint("[gui] monitor: %ld %ld %ld %ld, work %ld %ld %ld %ld, flags %lu, %s\n", info.rcMonitor.left,
+             info.rcMonitor.top, info.rcMonitor.right, info.rcMonitor.bottom, info.rcWork.left, info.rcWork.top,
+             info.rcWork.right, info.rcWork.bottom, info.dwFlags,
+             same(info.szDevice, L"\\\\.\\DISPLAY1") ? "\\\\.\\DISPLAY1" : "WRONG");
+    info.cbSize = 40; /* MONITORINFO */
+    info.rcWork.right = 0;
+    got = GetMonitorInfoW(monitor, &info);
+    DbgPrint("[gui] GetMonitorInfoW, MONITORINFO: %d, work right %ld\n", got, info.rcWork.right);
+    info.cbSize = 12;
+    SetLastError(0);
+    if (GetMonitorInfoW(monitor, &info))
+        DbgPrint("[gui] GetMonitorInfoW of 12 bytes: WRONG\n");
+    else
+        DbgPrint("[gui] GetMonitorInfoW of 12 bytes: refused (%lu)\n", GetLastError());
+    far.x = 5000;
+    far.y = 5000;
+    DbgPrint("[gui] MonitorFromPoint far away: %s, nearest %s\n", MonitorFromPoint(far, MONITOR_DEFAULTTONULL) ? "WRONG" : "none",
+             MonitorFromPoint(far, MONITOR_DEFAULTTONEAREST) == monitor ? "the monitor" : "WRONG");
+    SetLastError(0);
+    monitor = MonitorFromWindow(window, 3);
+    DbgPrint("[gui] MonitorFromWindow, bad flags: %p (%lu)\n", monitor, GetLastError());
+}
+
+/* SetWindowPos: moving and sizing a window (WM_WINDOWPOSCHANGING, its size
+   within WM_GETMINMAXINFO's limits, WM_NCCALCSIZE, WM_WINDOWPOSCHANGED and
+   its WM_MOVE and WM_SIZE), MoveWindow, a child moving with its parent. */
+static void check_set_window_pos(HWND window, HWND popup)
+{
+    HWND child = GetWindow(popup, GW_CHILD);
+    HWND next;
+    BOOL done;
+
+    received_count = 0;
+    SetWindowPos(window, 0, 50, 60, 400, 300, SWP_NOZORDER | SWP_NOACTIVATE);
+    print_messages("SetWindowPos");
+    DbgPrint("[gui] WM_WINDOWPOSCHANGED: %d %d %d %d, flags %04x; WM_MOVE %d %d, WM_SIZE %d %d\n", changed.x,
+             changed.y, changed.cx, changed.cy, changed.flags, (short)(moved_l & 0xFFFF), (short)(moved_l >> 16),
+             (short)(sized_l & 0xFFFF), (short)(sized_l >> 16));
+    print_rect("SetWindowPos", window);
+    SetWindowPos(window, 0, 0, 0, 10, 10, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    print_rect("SetWindowPos, too small", window);
+    received_count = 0;
+    SetWindowPos(window, 0, 70, 80, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    print_messages("SetWindowPos, moved");
+    print_rect("SetWindowPos, moved", window);
+    next = GetWindow(window, GW_HWNDNEXT);
+    MoveWindow(window, 100, 100, 300, 200, 1);
+    print_rect("MoveWindow", window);
+    DbgPrint("[gui] MoveWindow: same rank %s\n", GetWindow(window, GW_HWNDNEXT) == next ? "yes" : "WRONG");
+
+    SetWindowPos(popup, 0, 200, 150, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    print_rect("the child of a moved window", child);
+    received_count = 0;
+    SetWindowPos(child, 0, 20, 30, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    print_messages("SetWindowPos of a child");
+    DbgPrint("[gui] child WM_MOVE: %d %d, WINDOWPOS %d %d\n", (short)(moved_l & 0xFFFF), (short)(moved_l >> 16),
+             changed.x, changed.y);
+    print_rect("SetWindowPos of a child", child);
+
+    SetLastError(0);
+    done = SetWindowPos((HWND)0x1234, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
+    DbgPrint("[gui] SetWindowPos of no window: %d (%lu)\n", done, GetLastError());
+    SetLastError(0);
+    done = SetWindowPos(window, (HWND)0x1234, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
+    DbgPrint("[gui] SetWindowPos after no window: %d (%lu)\n", done, GetLastError());
+}
+
+/* The Z order of two windows, and showing and hiding one. */
+static void check_z_order(HINSTANCE instance)
+{
+    const UINT keep = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+    HWND a = CreateWindowExW(0, CLASS_NAME, L"A", WS_POPUP, 0, 0, 10, 10, 0, 0, instance, 0);
+    HWND b = CreateWindowExW(0, CLASS_NAME, L"B", WS_POPUP, 0, 0, 10, 10, 0, 0, instance, 0);
+
+    DbgPrint("[gui] created: B above A %s\n", GetWindow(b, GW_HWNDNEXT) == a ? "yes" : "WRONG");
+    received_count = 0;
+    SetWindowPos(a, HWND_TOP, 0, 0, 0, 0, keep);
+    print_messages("HWND_TOP, hidden");
+    DbgPrint("[gui] HWND_TOP: A above B %s\n", GetWindow(a, GW_HWNDNEXT) == b ? "yes" : "WRONG");
+    SetWindowPos(a, HWND_BOTTOM, 0, 0, 0, 0, keep);
+    DbgPrint("[gui] HWND_BOTTOM: A last %s\n", GetWindow(a, GW_HWNDNEXT) ? "WRONG" : "yes");
+    SetWindowPos(a, HWND_TOP, 0, 0, 0, 0, keep);
+    SetWindowPos(a, b, 0, 0, 0, 0, keep);
+    DbgPrint("[gui] after B: A next to B %s\n", GetWindow(b, GW_HWNDNEXT) == a ? "yes" : "WRONG");
+    SetWindowPos(a, HWND_TOPMOST, 0, 0, 0, 0, keep);
+    DbgPrint("[gui] HWND_TOPMOST: A first %s, WS_EX_TOPMOST %s\n", GetWindow(b, GW_HWNDFIRST) == a ? "yes" : "WRONG",
+             GetWindowLongW(a, GWL_EXSTYLE) & WS_EX_TOPMOST ? "set" : "WRONG");
+    SetWindowPos(b, HWND_TOP, 0, 0, 0, 0, keep);
+    DbgPrint("[gui] HWND_TOP under a topmost window: B after A %s\n", GetWindow(a, GW_HWNDNEXT) == b ? "yes" : "WRONG");
+    SetWindowPos(a, HWND_NOTOPMOST, 0, 0, 0, 0, keep);
+    DbgPrint("[gui] HWND_NOTOPMOST: WS_EX_TOPMOST %s, A above B %s\n",
+             GetWindowLongW(a, GWL_EXSTYLE) & WS_EX_TOPMOST ? "WRONG" : "clear",
+             GetWindow(a, GW_HWNDNEXT) == b ? "yes" : "WRONG");
+
+    received_count = 0;
+    SetWindowPos(a, 0, 0, 0, 0, 0, keep | SWP_NOZORDER | SWP_SHOWWINDOW);
+    print_messages("SWP_SHOWWINDOW");
+    DbgPrint("[gui] SWP_SHOWWINDOW: visible %d\n", IsWindowVisible(a));
+    SetWindowPos(a, 0, 0, 0, 0, 0, keep | SWP_NOZORDER | SWP_HIDEWINDOW);
+    DbgPrint("[gui] SWP_HIDEWINDOW: visible %d\n", IsWindowVisible(a));
+}
+
+/* Another overlapped window placed by default: the next of the cascade. */
+static void check_default_place(HINSTANCE instance)
+{
+    HWND window = CreateWindowExW(0, CLASS_NAME, L"Cascade", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0,
+                                  0, 0, instance, 0);
+    print_rect("the next default place", window);
+    received_count = 0;
 }
 
 DWORD __stdcall GuiStartup(void)
@@ -465,6 +660,7 @@ DWORD __stdcall GuiStartup(void)
     HINSTANCE instance = GetModuleHandleW(0);
     ATOM atom;
     HWND window;
+    HWND overlapped;
 
     if (!take_a_desktop())
         ExitProcess(1);
@@ -494,7 +690,13 @@ DWORD __stdcall GuiStartup(void)
         ExitProcess(3);
     print_messages("the window");
     check_window(window, instance);
-    check_overlapped(instance);
+    overlapped = check_overlapped(instance);
+    if (overlapped) {
+        check_monitor(overlapped);
+        check_default_place(instance);
+        check_set_window_pos(overlapped, window);
+    }
+    check_z_order(instance);
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);

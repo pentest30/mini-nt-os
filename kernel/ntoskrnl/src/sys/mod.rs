@@ -37,6 +37,7 @@ mod file;
 pub mod gates;
 mod memory;
 mod message;
+mod monitor;
 mod object;
 mod port;
 mod process;
@@ -198,11 +199,16 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
+    (services::NtUserGetMonitorInfo, Handler::Status(monitor::nt_user_get_monitor_info)),
     (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
     (services::NtUserInitialize, Handler::Status(user::nt_user_initialize)),
     (services::NtUserInitializeClientPfnArrays, Handler::Status(user::nt_user_initialize_client_pfn_arrays)),
     (services::NtUserLoadKeyboardLayoutEx, Handler::Status(user::nt_user_load_keyboard_layout_ex)),
     (services::NtUserMessageCall, Handler::Status(message::nt_user_message_call)),
+    (services::NtUserMonitorFromPoint, Handler::Status(monitor::nt_user_monitor_from_point)),
+    (services::NtUserMonitorFromRect, Handler::Status(monitor::nt_user_monitor_from_rect)),
+    (services::NtUserMonitorFromWindow, Handler::Status(monitor::nt_user_monitor_from_window)),
+    (services::NtUserMoveWindow, Handler::Status(window::nt_user_move_window)),
     (services::NtUserOpenDesktop, Handler::Status(desktop::nt_user_open_desktop)),
     (services::NtUserOpenWindowStation, Handler::Status(winsta::nt_user_open_window_station)),
     (services::NtUserPeekMessage, Handler::Status(message::nt_user_peek_message)),
@@ -213,6 +219,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
+    (services::NtUserSetWindowPos, Handler::Status(window::nt_user_set_window_pos)),
     (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
     (services::NtUserWaitMessage, Handler::Status(message::nt_user_wait_message)),

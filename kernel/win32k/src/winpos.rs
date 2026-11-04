@@ -1,0 +1,503 @@
+//! Le positionnement des fenêtres : SetWindowPos ([`set_window_pos`]).
+//!
+//! Comme co_WinPosSetWindowPos de ReactOS (`winpos.c`, comme
+//! spécification) : WM_WINDOWPOSCHANGING (la procédure peut changer la
+//! demande ; DefWindowProc la ramène dans les limites de WM_GETMINMAXINFO),
+//! les nouveaux rectangles ([`new_rects`]), les drapeaux corrigés
+//! ([`fixup_flags`] : ce qui ne change pas, la fenêtre amenée en haut de
+//! l'ordre Z quand elle s'active), WM_NCCALCSIZE avec des rectangles
+//! valides (la zone cliente), sa place dans l'ordre Z
+//! (`window::link`), ses enfants déplacés avec sa zone cliente, montrée ou
+//! cachée (`WS_VISIBLE`), WM_CHILDACTIVATE à une fenêtre fille qui
+//! s'active, puis WM_WINDOWPOSCHANGED (DefWindowProc en tire WM_MOVE et
+//! WM_SIZE).
+//!
+//! Le `WINDOWPOS` de WM_WINDOWPOSCHANGED donne la place de la fenêtre dans
+//! la zone cliente de son parent, comme le dit l'API ; ReactOS y met ses
+//! coordonnées d'écran (les mêmes pour une fenêtre de premier niveau).
+//!
+//! Pas encore, journalisé une fois : les régions visibles (la fenêtre est
+//! visible avant si elle et ses parents le sont et qu'elle n'est pas vide),
+//! repeindre ce que le déplacement découvre ou abîme, la copie des bits
+//! valides, l'activation et le premier plan d'une fenêtre de premier niveau
+//! (aucune n'est au premier plan), garder les fenêtres possédées au-dessus
+//! de leur propriétaire (WinPosDoOwnedPopups), `SWP_ASYNCWINDOWPOS` (fait
+//! tout de suite), les messages à la fenêtre d'un autre thread.
+
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use abi::user::{
+    sm, NcCalcSizeParams32, WindowPos32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_ASYNCWINDOWPOS,
+    SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE, SWP_NOMOVE, SWP_NOREDRAW,
+    SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SWP_STATECHANGED, WM_CHILDACTIVATE, WM_NCCALCSIZE,
+    WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS2_WIN31COMPAT, WNDS_SENDNCPAINT, WS_CHILD, WS_EX_TOPMOST,
+    WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
+};
+
+use crate::gdi::dib::Rect;
+use crate::window::{self, LParam, Window};
+
+/// SWP_AGG_*, des drapeaux ensemble : rien ne bouge, ce qui dit ce qui a
+/// changé, la zone cliente ne change pas.
+pub const SWP_AGG_NOPOSCHANGE: u32 = SWP_NOSIZE | SWP_NOMOVE | SWP_NOCLIENTSIZE | SWP_NOCLIENTMOVE | SWP_NOZORDER;
+pub const SWP_AGG_STATUSFLAGS: u32 = SWP_AGG_NOPOSCHANGE | SWP_FRAMECHANGED | SWP_HIDEWINDOW | SWP_SHOWWINDOW;
+pub const SWP_AGG_NOCLIENTCHANGE: u32 = SWP_NOCLIENTSIZE | SWP_NOCLIENTMOVE;
+
+/// Ce que WinPosFixupFlags sait de la fenêtre avant de la placer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Situation {
+    pub style: u32,
+    pub ex_style: u32,
+    /// Son rectangle, à l'écran.
+    pub window: Rect,
+    /// Son parent est visible.
+    pub parent_visible: bool,
+    /// L'origine de la zone cliente du parent, à l'écran.
+    pub parent_origin: (i32, i32),
+    /// Elle est la première, la dernière de ses sœurs dans l'ordre Z.
+    pub first: bool,
+    pub last: bool,
+    /// Elle est au premier plan (la fenêtre active de l'utilisateur).
+    pub foreground: bool,
+}
+
+/// La fenêtre `hwndInsertAfter` d'un SetWindowPos : inconnue, d'un autre
+/// parent, ou sœur (que la fenêtre suit déjà, ou non).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InsertAfter {
+    Missing,
+    Stranger,
+    Sibling { followed_by_window: bool },
+}
+
+/// WinPosFixupFlags : `pos` corrigé. Les coordonnées sur 16 bits, les
+/// tailles positives ; `SWP_NOREDRAW` sous un parent caché quand rien ne
+/// bouge, ou pour une fenêtre cachée qui le reste ; `SWP_SHOWWINDOW` d'une
+/// fenêtre visible et `SWP_HIDEWINDOW` d'une cachée ôtés ; `SWP_NOSIZE` et
+/// `SWP_NOMOVE` quand la taille et la place ne changent pas ; une fenêtre de
+/// premier niveau qui s'active monte en haut de l'ordre Z ; `SWP_NOZORDER`
+/// quand sa place dans l'ordre Z ne change pas. `after` dit ce qu'est une
+/// sœur donnée. Rend `false` pour une sœur d'un autre parent (rien ne se
+/// fait, SetWindowPos rend TRUE).
+pub fn fixup_flags(pos: &mut WindowPos32, at: &Situation, after: impl FnOnce(u32) -> InsertAfter) -> bool {
+    pos.x = pos.x.clamp(-32768, 32767);
+    pos.y = pos.y.clamp(-32768, 32767);
+    pos.cx = pos.cx.max(0);
+    pos.cy = pos.cy.max(0);
+    if !at.parent_visible && pos.flags & SWP_AGG_STATUSFLAGS == SWP_AGG_NOPOSCHANGE {
+        pos.flags |= SWP_NOREDRAW;
+    }
+    if at.style & WS_VISIBLE != 0 {
+        pos.flags &= !SWP_SHOWWINDOW;
+    } else {
+        pos.flags &= !SWP_HIDEWINDOW;
+        if pos.flags & SWP_SHOWWINDOW == 0 {
+            pos.flags |= SWP_NOREDRAW;
+        }
+    }
+    if at.window.right - at.window.left == pos.cx && at.window.bottom - at.window.top == pos.cy {
+        pos.flags |= SWP_NOSIZE;
+    }
+    if at.window.left == pos.x + at.parent_origin.0 && at.window.top == pos.y + at.parent_origin.1 {
+        pos.flags |= SWP_NOMOVE;
+    }
+    let topmost = at.ex_style & WS_EX_TOPMOST != 0;
+    if !at.foreground
+        && at.style & (WS_POPUP | WS_CHILD) != WS_CHILD
+        && pos.flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0
+        && (pos.flags & SWP_NOZORDER != 0 || (pos.insert_after != HWND_TOPMOST && pos.insert_after != HWND_NOTOPMOST))
+    {
+        // Brought to the top when activating.
+        pos.flags &= !SWP_NOZORDER;
+        pos.insert_after = if topmost { HWND_TOPMOST } else { HWND_TOP };
+    }
+    if pos.flags & SWP_NOZORDER != 0 {
+        return true;
+    }
+    // 16-bit HWND_TOPMOST and HWND_NOTOPMOST.
+    match pos.insert_after {
+        0xFFFF => pos.insert_after = HWND_TOPMOST,
+        0xFFFE => pos.insert_after = HWND_NOTOPMOST,
+        _ => {}
+    }
+    let unchanged = match pos.insert_after {
+        HWND_TOP => {
+            if topmost {
+                pos.insert_after = HWND_TOPMOST;
+            }
+            at.first
+        }
+        HWND_BOTTOM => !topmost && at.last,
+        HWND_TOPMOST => topmost && at.first,
+        HWND_NOTOPMOST => !topmost,
+        sibling => match after(sibling) {
+            InsertAfter::Missing => return true,
+            InsertAfter::Stranger => return false,
+            InsertAfter::Sibling { followed_by_window } => sibling == pos.hwnd || followed_by_window,
+        },
+    };
+    if unchanged {
+        pos.flags |= SWP_NOZORDER;
+    }
+    true
+}
+
+fn offset(rect: Rect, dx: i32, dy: i32) -> Rect {
+    Rect::new(rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy)
+}
+
+/// co_WinPosDoWinPosChanging, sans le message : les rectangles de la
+/// fenêtre et de sa zone cliente (à l'écran) après `pos`, depuis `window`
+/// et `client` ; `origin` est celle de la zone cliente du parent (0, 0 pour
+/// le bureau). Une fenêtre réduite prend la taille d'une icône réduite
+/// (métriques `m`), sa zone cliente est sa fenêtre.
+pub fn new_rects(
+    window: Rect,
+    client: Rect,
+    minimized: bool,
+    pos: &WindowPos32,
+    origin: (i32, i32),
+    m: &impl Fn(usize) -> i32,
+) -> (Rect, Rect) {
+    let mut new_window = window;
+    let mut new_client = if minimized { window } else { client };
+    if pos.flags & SWP_NOSIZE == 0 {
+        let (cx, cy) = if minimized { (m(sm::CXMINIMIZED), m(sm::CYMINIMIZED)) } else { (pos.cx, pos.cy) };
+        new_window.right = new_window.left + cx;
+        new_window.bottom = new_window.top + cy;
+    }
+    if pos.flags & SWP_NOMOVE == 0 {
+        let (x, y) = (pos.x + origin.0, pos.y + origin.1);
+        new_window = offset(new_window, x - window.left, y - window.top);
+        new_client = offset(new_client, x - window.left, y - window.top);
+    }
+    (new_window, new_client)
+}
+
+/// Une fois, journalise ce qui manque encore à SetWindowPos.
+fn report_missing(what: &str, reported: &AtomicBool) {
+    if !reported.swap(true, Ordering::Relaxed) {
+        log::warn!("win32k: SetWindowPos: {what}: not yet");
+    }
+}
+
+/// Un `WINDOWPOS` lu dans les octets d'un message.
+pub fn window_pos_of(bytes: &[u8]) -> WindowPos32 {
+    let word = |i: usize| u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+    WindowPos32 {
+        hwnd: word(0),
+        insert_after: word(1),
+        x: word(2) as i32,
+        y: word(3) as i32,
+        cx: word(4) as i32,
+        cy: word(5) as i32,
+        flags: word(6),
+    }
+}
+
+/// L'origine de la zone cliente du parent de `window` à l'écran (0, 0 pour
+/// le bureau ou sans parent).
+fn parent_origin(parent: Option<&Arc<Window>>) -> (i32, i32) {
+    match parent {
+        Some(parent) if !parent.is_desktop_window() => {
+            let client = parent.state().client;
+            (client.left, client.top)
+        }
+        _ => (0, 0),
+    }
+}
+
+/// co_WinPosDoNCCALCSize : WM_NCCALCSIZE avec des rectangles valides (la
+/// nouvelle place de la fenêtre, l'ancienne, l'ancienne zone cliente, dans
+/// la zone cliente du parent d'une fenêtre fille) quand la taille ou le
+/// cadre changent ; rend la nouvelle zone cliente et ôte de `pos`
+/// `SWP_NOCLIENTMOVE` et `SWP_NOCLIENTSIZE` si elle bouge ou change.
+fn nc_calc_size(window: &Arc<Window>, pos: &mut WindowPos32, new_window: Rect, new_client: Rect) -> Rect {
+    let state = window.state();
+    let mut client = new_client;
+    if pos.flags & (SWP_FRAMECHANGED | SWP_NOSIZE) != SWP_NOSIZE {
+        let origin = if state.style & WS_CHILD != 0 {
+            window::get(state.parent).map_or((0, 0), |parent| (parent.state().client.left, parent.state().client.top))
+        } else {
+            (0, 0)
+        };
+        let relative = |rect: Rect| {
+            let rect = offset(rect, -origin.0, -origin.1);
+            [rect.left, rect.top, rect.right, rect.bottom]
+        };
+        let params = NcCalcSizeParams32 {
+            rects: [relative(new_window), relative(state.window), relative(state.client)],
+            pos: 0,
+        };
+        let mut bytes: Vec<u8> = params.as_bytes().to_vec();
+        bytes.extend_from_slice(pos.as_bytes());
+        let _ = window::send_message(window, WM_NCCALCSIZE, 1, LParam::Buffer { bytes: &mut bytes, write_back: true });
+        let word = |i: usize| i32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+        let given = Rect::new(word(0), word(1), word(2), word(3));
+        // Garbage from the procedure is ignored.
+        if given.left <= given.right && given.top <= given.bottom {
+            client = window::fix_client_rect(offset(given, origin.0, origin.1), new_window);
+        }
+        if client.left != state.client.left || client.top != state.client.top {
+            pos.flags &= !SWP_NOCLIENTMOVE;
+        }
+        if client.right - client.left != state.client.right - state.client.left
+            || client.bottom - client.top != state.client.bottom - state.client.top
+        {
+            pos.flags &= !SWP_NOCLIENTSIZE;
+        }
+    } else if pos.flags & SWP_NOMOVE == 0 && (client.left != state.client.left || client.top != state.client.top) {
+        pos.flags &= !SWP_NOCLIENTMOVE;
+    }
+    client
+}
+
+/// co_WinPosSetWindowPos : place `window` en `x`, `y` (dans la zone cliente
+/// de son parent), de `cx` × `cy`, sous `insert_after` dans l'ordre Z
+/// (`HWND_*` ou une sœur), selon `flags` (`SWP_*`). Rend TRUE, même quand
+/// rien ne se fait (une sœur d'un autre parent).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur.
+pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> bool {
+    let mut pos = WindowPos32 { hwnd: window.handle, insert_after, x, y, cx, cy, flags };
+    if pos.flags & SWP_ASYNCWINDOWPOS != 0 {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_missing("SWP_ASYNCWINDOWPOS (done at once)", &REPORTED);
+        pos.flags &= !SWP_ASYNCWINDOWPOS;
+    }
+
+    // WM_WINDOWPOSCHANGING: the procedure may change the request.
+    if pos.flags & SWP_NOSENDCHANGING == 0
+        && !(pos.flags & SWP_AGG_NOCLIENTCHANGE != 0 && pos.flags & SWP_SHOWWINDOW != 0)
+    {
+        let mut bytes = pos.as_bytes().to_vec();
+        let changing = LParam::Buffer { bytes: &mut bytes, write_back: true };
+        if window::send_message(window, WM_WINDOWPOSCHANGING, 0, changing).is_ok() {
+            pos = WindowPos32 { hwnd: window.handle, ..window_pos_of(&bytes) };
+        }
+    }
+    let state = window.state();
+    let parent = window::get(state.parent);
+    let origin = parent_origin(parent.as_ref());
+    let minimized = state.style & WS_MINIMIZE != 0;
+    let (new_window, new_client) = new_rects(state.window, state.client, minimized, &pos, origin, &crate::metrics::get);
+    pos.flags |= SWP_NOCLIENTMOVE | SWP_NOCLIENTSIZE;
+
+    let situation = Situation {
+        style: state.style,
+        ex_style: state.ex_style,
+        window: state.window,
+        parent_visible: parent.as_ref().is_none_or(|parent| window::is_visible(parent)),
+        parent_origin: origin,
+        first: parent.as_ref().is_some_and(|parent| parent.state().child == window.handle),
+        last: state.next == 0,
+        foreground: false,
+    };
+    let sibling = |after: u32| match window::get(after) {
+        None => InsertAfter::Missing,
+        Some(after) if after.state().parent != state.parent => InsertAfter::Stranger,
+        Some(after) => InsertAfter::Sibling { followed_by_window: after.state().next == window.handle },
+    };
+    if !fixup_flags(&mut pos, &situation, sibling) {
+        return true;
+    }
+    if pos.flags & (SWP_NOZORDER | SWP_HIDEWINDOW | SWP_SHOWWINDOW) != SWP_NOZORDER
+        && parent.as_ref().is_some_and(|parent| parent.is_desktop_window())
+        && (state.owner != 0 || crate::window::owns_windows(window))
+    {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_missing("owned windows kept above their owner (WinPosDoOwnedPopups)", &REPORTED);
+    }
+
+    // Visible before: its region would not be empty (no regions yet).
+    let visible_before = pos.flags & (SWP_NOREDRAW | SWP_SHOWWINDOW) == 0
+        && pos.flags & (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_HIDEWINDOW | SWP_FRAMECHANGED)
+            != (SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER)
+        && window::is_visible(window)
+        && !state.window.is_empty();
+
+    let new_client = nc_calc_size(window, &mut pos, new_window, new_client);
+    if pos.flags & SWP_NOZORDER == 0 {
+        window::link(window, pos.insert_after);
+    }
+    let old = window.state();
+    if new_client.left != old.client.left || new_client.top != old.client.top {
+        // The children keep their place in the client area.
+        window::move_tree(window, new_client.left - old.client.left, new_client.top - old.client.top);
+    }
+    let state = window::change(window, |state| {
+        (state.window, state.client) = (new_window, new_client);
+        if pos.flags & SWP_HIDEWINDOW != 0 {
+            state.style &= !WS_VISIBLE;
+        } else if pos.flags & SWP_SHOWWINDOW != 0 {
+            state.style |= WS_VISIBLE;
+        }
+        if state.style & WS_VISIBLE != 0
+            && (pos.flags & SWP_STATECHANGED != 0
+                || (state.state2 & WNDS2_WIN31COMPAT == 0 && pos.flags & SWP_NOREDRAW != 0))
+        {
+            state.state |= WNDS_SENDNCPAINT;
+        }
+    });
+    if pos.flags & SWP_NOREDRAW == 0 && pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_missing("repainting what moved (regions)", &REPORTED);
+    }
+
+    if pos.flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0 {
+        if state.style & (WS_CHILD | WS_POPUP) == WS_CHILD {
+            let _ = window::send_message(window, WM_CHILDACTIVATE, 0, LParam::Value(0));
+        } else {
+            static REPORTED: AtomicBool = AtomicBool::new(false);
+            report_missing("activating a top-level window (foreground)", &REPORTED);
+        }
+    }
+
+    // Invisible, only its place in the Z order: no WM_WINDOWPOSCHANGED.
+    if !visible_before
+        && state.ex_style & WS_EX_TOPMOST == 0
+        && pos.flags & SWP_AGG_STATUSFLAGS == SWP_AGG_NOPOSCHANGE & !SWP_NOZORDER
+    {
+        pos.flags |= SWP_NOZORDER | SWP_NOREDRAW;
+    }
+
+    if pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE
+        && !(flags & SWP_AGG_NOCLIENTCHANGE != 0 && flags & SWP_SHOWWINDOW != 0)
+    {
+        // The final place, in the parent's client area.
+        let origin = parent_origin(window::get(state.parent).as_ref());
+        pos.x = new_window.left - origin.0;
+        pos.y = new_window.top - origin.1;
+        pos.cx = new_window.right - new_window.left;
+        pos.cy = new_window.bottom - new_window.top;
+        let mut bytes = pos.as_bytes().to_vec();
+        let _ = window::send_message(
+            window,
+            WM_WINDOWPOSCHANGED,
+            0,
+            LParam::Buffer { bytes: &mut bytes, write_back: false },
+        );
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metric(index: usize) -> i32 {
+        crate::metrics::system_metrics(1280, 800, &crate::metrics::Parameters::DEFAULT)[index]
+    }
+
+    fn situation() -> Situation {
+        Situation {
+            style: WS_POPUP | WS_VISIBLE,
+            window: Rect::new(10, 20, 110, 70),
+            parent_visible: true,
+            ..Situation::default()
+        }
+    }
+
+    fn pos(x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> WindowPos32 {
+        WindowPos32 { hwnd: 0x10, insert_after: HWND_TOP, x, y, cx, cy, flags }
+    }
+
+    const NOTHING: fn(u32) -> InsertAfter = |_| InsertAfter::Missing;
+
+    #[test]
+    fn what_does_not_change_is_flagged() {
+        let mut same = pos(10, 20, 100, 50, SWP_NOZORDER | SWP_NOACTIVATE);
+        assert!(fixup_flags(&mut same, &situation(), NOTHING));
+        assert_eq!(same.flags & (SWP_NOSIZE | SWP_NOMOVE), SWP_NOSIZE | SWP_NOMOVE, "same place, same size");
+        let mut moved = pos(11, 20, 100, 51, SWP_NOZORDER | SWP_NOACTIVATE);
+        fixup_flags(&mut moved, &situation(), NOTHING);
+        assert_eq!(moved.flags & (SWP_NOSIZE | SWP_NOMOVE), 0);
+        let child = Situation { parent_origin: (5, 5), ..situation() };
+        let mut inside = pos(5, 15, 1, 1, SWP_NOZORDER | SWP_NOACTIVATE);
+        fixup_flags(&mut inside, &child, NOTHING);
+        assert_ne!(inside.flags & SWP_NOMOVE, 0, "in its parent's client area");
+        let mut far = pos(100_000, -100_000, -5, 3, SWP_NOZORDER | SWP_NOACTIVATE);
+        fixup_flags(&mut far, &situation(), NOTHING);
+        assert_eq!((far.x, far.y, far.cx, far.cy), (32767, -32768, 0, 3), "16-bit places, sizes not negative");
+    }
+
+    #[test]
+    fn showing_and_hiding_follow_the_visibility() {
+        let mut show = pos(0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOZORDER | SWP_NOACTIVATE);
+        fixup_flags(&mut show, &situation(), NOTHING);
+        assert_eq!(show.flags & SWP_SHOWWINDOW, 0, "already visible");
+        let hidden = Situation { style: WS_POPUP, ..situation() };
+        let mut stay = pos(0, 0, 0, 0, SWP_HIDEWINDOW | SWP_NOZORDER | SWP_NOACTIVATE);
+        fixup_flags(&mut stay, &hidden, NOTHING);
+        assert_eq!(stay.flags & (SWP_HIDEWINDOW | SWP_NOREDRAW), SWP_NOREDRAW, "hidden: nothing to draw");
+        let mut shown = pos(0, 0, 0, 0, SWP_SHOWWINDOW | SWP_NOZORDER | SWP_NOACTIVATE);
+        fixup_flags(&mut shown, &hidden, NOTHING);
+        assert_eq!(shown.flags & (SWP_SHOWWINDOW | SWP_NOREDRAW), SWP_SHOWWINDOW);
+        let under_hidden = Situation { parent_visible: false, ..situation() };
+        let mut still = pos(10, 20, 100, 50, SWP_NOZORDER | SWP_NOACTIVATE);
+        still.flags |= SWP_NOSIZE | SWP_NOMOVE | SWP_AGG_NOCLIENTCHANGE;
+        fixup_flags(&mut still, &under_hidden, NOTHING);
+        assert_ne!(still.flags & SWP_NOREDRAW, 0, "a hidden parent, nothing moves");
+    }
+
+    #[test]
+    fn activating_brings_a_top_level_window_to_the_top() {
+        let mut activated = pos(0, 0, 0, 0, SWP_NOZORDER);
+        fixup_flags(&mut activated, &situation(), NOTHING);
+        assert_eq!((activated.flags & SWP_NOZORDER, activated.insert_after), (0, HWND_TOP));
+        let topmost = Situation { ex_style: WS_EX_TOPMOST, ..situation() };
+        let mut above = pos(0, 0, 0, 0, SWP_NOZORDER);
+        fixup_flags(&mut above, &topmost, NOTHING);
+        assert_eq!(above.insert_after, HWND_TOPMOST);
+        let child = Situation { style: WS_CHILD, ..situation() };
+        let mut not_a_child = pos(0, 0, 0, 0, SWP_NOZORDER);
+        fixup_flags(&mut not_a_child, &child, NOTHING);
+        assert_ne!(not_a_child.flags & SWP_NOZORDER, 0, "a child is not");
+        let foreground = Situation { foreground: true, ..situation() };
+        let mut already = pos(0, 0, 0, 0, SWP_NOZORDER);
+        fixup_flags(&mut already, &foreground, NOTHING);
+        assert_ne!(already.flags & SWP_NOZORDER, 0, "nor the foreground window");
+    }
+
+    #[test]
+    fn a_place_already_held_is_no_z_order_change() {
+        let first = Situation { first: true, ..situation() };
+        let mut top = pos(0, 0, 0, 0, SWP_NOACTIVATE);
+        fixup_flags(&mut top, &first, NOTHING);
+        assert_ne!(top.flags & SWP_NOZORDER, 0, "already first");
+        let last = Situation { last: true, ..situation() };
+        let mut bottom = WindowPos32 { insert_after: HWND_BOTTOM, ..pos(0, 0, 0, 0, SWP_NOACTIVATE) };
+        fixup_flags(&mut bottom, &last, NOTHING);
+        assert_ne!(bottom.flags & SWP_NOZORDER, 0, "already last");
+        let mut not_topmost = WindowPos32 { insert_after: 0xFFFE, ..pos(0, 0, 0, 0, SWP_NOACTIVATE) };
+        fixup_flags(&mut not_topmost, &situation(), NOTHING);
+        assert_eq!((not_topmost.insert_after, not_topmost.flags & SWP_NOZORDER), (HWND_NOTOPMOST, SWP_NOZORDER));
+        let mut behind = WindowPos32 { insert_after: 0x20, ..pos(0, 0, 0, 0, SWP_NOACTIVATE) };
+        fixup_flags(&mut behind, &situation(), |_| InsertAfter::Sibling { followed_by_window: true });
+        assert_ne!(behind.flags & SWP_NOZORDER, 0, "already after it");
+        let mut moving = WindowPos32 { insert_after: 0x20, ..pos(0, 0, 0, 0, SWP_NOACTIVATE) };
+        fixup_flags(&mut moving, &situation(), |_| InsertAfter::Sibling { followed_by_window: false });
+        assert_eq!(moving.flags & SWP_NOZORDER, 0);
+        let mut stranger = WindowPos32 { insert_after: 0x20, ..pos(0, 0, 0, 0, SWP_NOACTIVATE) };
+        assert!(!fixup_flags(&mut stranger, &situation(), |_| InsertAfter::Stranger), "nothing is done");
+    }
+
+    #[test]
+    fn new_rectangles_move_and_size() {
+        let (window, client) = (Rect::new(10, 20, 110, 70), Rect::new(14, 44, 106, 66));
+        let both = pos(50, 60, 200, 100, 0);
+        assert_eq!(
+            new_rects(window, client, false, &both, (0, 0), &metric),
+            (Rect::new(50, 60, 250, 160), Rect::new(54, 84, 146, 106)),
+            "the client area follows the window, its size waits for WM_NCCALCSIZE"
+        );
+        let in_parent = pos(5, 5, 0, 0, SWP_NOSIZE);
+        assert_eq!(new_rects(window, client, false, &in_parent, (100, 200), &metric).0, Rect::new(105, 205, 205, 255));
+        let minimized = new_rects(window, client, true, &pos(0, 0, 500, 500, SWP_NOMOVE), (0, 0), &metric);
+        assert_eq!(minimized, (Rect::new(10, 20, 176, 45), window), "an icon's size; its client area is the window");
+    }
+}

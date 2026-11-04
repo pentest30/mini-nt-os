@@ -7,7 +7,7 @@
 //! sans MDEV) et les paramètres du système (`sysparams.c`) : la ruche de
 //! l'utilisateur (`Control Panel\Desktop\WindowMetrics`) n'est pas chargée,
 //! ce sont donc leurs valeurs par défaut ([`Parameters::DEFAULT`]). Écrites
-//! à NtUserInitialize ([`write`]), comme InitVideo et CreateSysColorObjects.
+//! à NtUserInitialize ([`write()`]), comme InitVideo et CreateSysColorObjects.
 //!
 //! Pas encore : les pinceaux système (`ahbrSystem`, GDI), les polices
 //! (`tmSysFont`), le reste de `PERUSERSERVERINFO`.
@@ -194,7 +194,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> u32 {
 /// win32k : bordures, zone cliente).
 static METRICS: hal::sync::KSpinLock<Option<[i32; SM_CMETRICS]>> = hal::sync::KSpinLock::new(None);
 
-/// UserGetSystemMetrics : la métrique `index` ; 0 avant [`write`] ou hors
+/// UserGetSystemMetrics : la métrique `index` ; 0 avant [`write()`] ou hors
 /// de la table.
 ///
 /// # IRQL
@@ -204,15 +204,18 @@ pub fn get(index: usize) -> i32 {
 }
 
 /// InitMetrics et les couleurs système : les écrit dans le `SERVERINFO`,
-/// d'après le mode de l'écran.
+/// d'après le mode de l'écran ; avec un affichage, attache son moniteur
+/// ([`crate::monitor::attach`]).
 ///
 /// # Errors
-/// `STATUS_UNSUCCESSFUL` avant la section partagée ; celles de son écriture.
+/// `STATUS_UNSUCCESSFUL` avant la section partagée ; celles de son écriture
+/// et de la table des handles.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn write() -> Result<(), NtStatus> {
-    let (width, height) = crate::display::mode().map_or((640, 480), |mode| (mode.width as i32, mode.height as i32));
+    let mode = crate::display::mode();
+    let (width, height) = mode.map_or((640, 480), |mode| (mode.width as i32, mode.height as i32));
     let metrics = system_metrics(width, height, &Parameters::DEFAULT);
     let section = crate::shared::section().ok_or(STATUS_UNSUCCESSFUL)?;
     let at = |field: usize| u64::from(crate::shared::SERVER_INFO) + field as u64;
@@ -222,6 +225,10 @@ pub fn write() -> Result<(), NtStatus> {
     section.write_kernel(at(offset_of!(ServerInfo32, argb_system)), &colors)?;
     const _: () = assert!(size_of::<ServerInfo32>() <= 4096, "SERVERINFO fits in its page");
     *METRICS.lock() = Some(metrics);
+    // co_IntInitializeDesktopGraphics attaches the monitor of the display.
+    if mode.is_some() {
+        crate::monitor::attach(width, height)?;
+    }
     Ok(())
 }
 

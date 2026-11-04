@@ -3,6 +3,9 @@
 //! en forme par rustfmt, et le rapport de couverture `docs/compat/syscalls.md`
 //! d'après les handlers du dispatcher (`kernel/ntoskrnl/src/sys/mod.rs`).
 //! Avec `--check`, échoue si l'un d'eux n'est pas à jour, sans rien écrire.
+//! Quand l'espace utilisateur épinglé a été téléchargé (`cargo xtask
+//! fetch-userland`), les stubs de `ntdll`, `user32` et `gdi32` doivent
+//! s'accorder avec les tables (`check_stubs`).
 //! Lancé par `cargo xtask syscall-gen` et `cargo xtask lint`.
 
 use std::io::Write;
@@ -10,15 +13,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
 use syscall_gen::{
-    mark_status, parse_implemented, parse_names, parse_sysfuncs, parse_w32ksvc, render, render_coverage, validate, Pin,
+    check_stubs, mark_status, parse_implemented, parse_names, parse_sysfuncs, parse_w32ksvc, render, render_coverage,
+    validate, Pin, W32KSVC_DEFINED,
 };
 
 /// La version épinglée de ReactOS (ADR-002) : `reactos/0.4.16/README.md`.
 const PIN: Pin = Pin { version: "0.4.16", commit: "51bfc7037359b594876a349b46b992e363e79838" };
 
-/// Les symboles définis pour `w32ksvc32.h` : i386, version de publication,
-/// donc ni `DBG` ni `_WIN64`.
-const DEFINED: &[&str] = &[];
+/// Les DLL de l'espace utilisateur épinglé dont les stubs sont vérifiés.
+const STUB_DLLS: [&str; 3] = ["ntdll.dll", "user32.dll", "gdi32.dll"];
 
 const TABLES: &str = "abi/src/services.rs";
 const DISPATCHER: &str = "kernel/ntoskrnl/src/sys/mod.rs";
@@ -51,11 +54,17 @@ fn generate(check: bool) -> Result<String, String> {
     let read = |path: &Path| std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()));
     let ntoskrnl = parse_sysfuncs(&read(&lists.join("sysfuncs.lst"))?).map_err(|e| format!("sysfuncs.lst: {e}"))?;
     let mut win32k =
-        parse_w32ksvc(&read(&lists.join("w32ksvc32.h"))?, DEFINED).map_err(|e| format!("w32ksvc32.h: {e}"))?;
+        parse_w32ksvc(&read(&lists.join("w32ksvc32.h"))?, W32KSVC_DEFINED).map_err(|e| format!("w32ksvc32.h: {e}"))?;
     validate(&ntoskrnl, &win32k)?;
     let status =
         parse_names(&read(&lists.join("w32k-ntstatus.lst"))?).map_err(|e| format!("w32k-ntstatus.lst: {e}"))?;
     mark_status(&mut win32k, &status).map_err(|e| format!("w32k-ntstatus.lst: {e}"))?;
+    let system32 = root.join("third_party/reactos").join(PIN.version).join("reactos/system32");
+    let mut stubs = 0;
+    for dll in STUB_DLLS {
+        let Ok(image) = std::fs::read(system32.join(dll)) else { continue };
+        stubs += check_stubs(&image, &ntoskrnl, &win32k).map_err(|e| format!("{dll}: {e}"))?;
+    }
     let implemented = parse_implemented(&read(&root.join(DISPATCHER))?).map_err(|e| format!("{DISPATCHER}: {e}"))?;
     let outputs = [
         (TABLES, rustfmt(&root, &render(&PIN, &ntoskrnl, &win32k))?),
@@ -73,8 +82,12 @@ fn generate(check: bool) -> Result<String, String> {
         std::fs::write(&output, text).map_err(|e| format!("{}: {e}", output.display()))?;
         written.push(*path);
     }
-    let summary =
-        format!("{} ntoskrnl and {} win32k services, {} implemented", ntoskrnl.len(), win32k.len(), implemented.len());
+    let summary = format!(
+        "{} ntoskrnl and {} win32k services, {} implemented, {stubs} stubs of the userland checked",
+        ntoskrnl.len(),
+        win32k.len(),
+        implemented.len()
+    );
     Ok(if written.is_empty() {
         format!("{TABLES} and {COVERAGE} are up to date ({summary})")
     } else {

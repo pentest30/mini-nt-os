@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 30 | 732 |
+| win32k | 36 | 737 |
 
 ## ntoskrnl
 
@@ -780,7 +780,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11cd` | `NtUserMNDragLeave` | 0 |  |
 | `0x11ce` | `NtUserMNDragOver` | 2 |  |
 | `0x11cf` | `NtUserModifyUserStartupInfoFlags` | 2 |  |
-| `0x11d0` | `NtUserMoveWindow` | 6 |  |
+| `0x11d0` | `NtUserMoveWindow` | 6 | ✅ |
 | `0x11d1` | `NtUserNotifyIMEStatus` | 3 |  |
 | `0x11d2` | `NtUserNotifyProcessCreate` | 4 |  |
 | `0x11d3` | `NtUserNotifyWinEvent` | 4 |  |
@@ -858,7 +858,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x121b` | `NtUserSetWindowFNID` | 2 |  |
 | `0x121c` | `NtUserSetWindowLong` | 4 |  |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
-| `0x121e` | `NtUserSetWindowPos` | 7 |  |
+| `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
 | `0x121f` | `NtUserSetWindowRgn` | 3 |  |
 | `0x1220` | `NtUserSetWindowsHookAW` | 3 |  |
 | `0x1221` | `NtUserSetWindowsHookEx` | 6 |  |
@@ -979,72 +979,77 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1294` | `NtGdiBRUSHOBJ_DeleteRbrush` | 2 |  |
 | `0x1295` | `NtGdiUMPDEngFreeUserMem` | 1 |  |
 | `0x1296` | `NtGdiDrawStream` | 3 |  |
-| `0x1297` | `NtGdiMakeObjectXferable` | 2 |  |
-| `0x1298` | `NtDxEngGetRedirectionBitmap` | 1 |  |
-| `0x1299` | `NtGdiSetViewportOrgEx` | 4 |  |
-| `0x129a` | `NtGdiSetWindowOrgEx` | 4 |  |
-| `0x129b` | `NtGdiGetFontFamilyInfo` | 4 |  |
-| `0x129c` | `NtGdiOffsetViewportOrgEx` | 4 |  |
-| `0x129d` | `NtGdiOffsetWindowOrgEx` | 4 |  |
-| `0x129e` | `NtUserGetMonitorInfo` | 2 |  |
-| `0x129f` | `NtUserMonitorFromPoint` | 3 |  |
-| `0x12a0` | `NtUserMonitorFromRect` | 2 |  |
-| `0x12a1` | `NtUserMonitorFromWindow` | 2 |  |
-| `0x12a2` | `NtUserSetScrollBarInfo` | 3 |  |
-| `0x12a3` | `NtGdiDdDDICreateDCFromMemory` | 1 |  |
-| `0x12a4` | `NtGdiDdDDIDestroyDCFromMemory` | 1 |  |
-| `0x12a5` | `NtGdiDdDDICheckExclusiveOwnership` | 0 |  |
-| `0x12a6` | `NtGdiDdDDICreateAllocation` | 1 |  |
-| `0x12a7` | `NtGdiDdDDICheckMonitorPowerState` | 1 |  |
-| `0x12a8` | `NtGdiDdDDICheckOcclusion` | 1 |  |
-| `0x12a9` | `NtGdiDdDDICloseAdapter` | 1 |  |
-| `0x12aa` | `NtGdiDdDDICreateContext` | 1 |  |
-| `0x12ab` | `NtGdiDdDDICreateDevice` | 1 |  |
-| `0x12ac` | `NtGdiDdDDICreateOverlay` | 1 |  |
-| `0x12ad` | `NtGdiDdDDICreateSynchronizationObject` | 1 |  |
-| `0x12ae` | `NtGdiDdDDIWaitForVerticalBlankEvent` | 1 |  |
-| `0x12af` | `NtGdiDdDDIWaitForIdle` | 1 |  |
-| `0x12b0` | `NtGdiDdDDIUpdateOverlay` | 1 |  |
-| `0x12b1` | `NtGdiDdDDIUnlock` | 1 |  |
-| `0x12b2` | `NtGdiDdDDIDestroyAllocation` | 1 |  |
-| `0x12b3` | `NtGdiDdDDIDestroyContext` | 1 |  |
-| `0x12b4` | `NtGdiDdDDIDestroyDevice` | 1 |  |
-| `0x12b5` | `NtGdiDdDDIDestroyOverlay` | 1 |  |
-| `0x12b6` | `NtGdiDdDDIDestroySynchronizationObject` | 1 |  |
-| `0x12b7` | `NtGdiDdDDIEscape` | 1 |  |
-| `0x12b8` | `NtGdiDdDDIFlipOverlay` | 1 |  |
-| `0x12b9` | `NtGdiDdDDIGetContextSchedulingPriority` | 1 |  |
-| `0x12ba` | `NtGdiDdDDIGetDeviceState` | 1 |  |
-| `0x12bb` | `NtGdiDdDDIGetDisplayModeList` | 1 |  |
-| `0x12bc` | `NtGdiDdDDIGetMultisampleMethodList` | 1 |  |
-| `0x12bd` | `NtGdiDdDDIGetPresentHistory` | 1 |  |
-| `0x12be` | `NtGdiDdDDIGetProcessSchedulingPriorityClass` | 2 |  |
-| `0x12bf` | `NtGdiDdDDIGetRuntimeData` | 1 |  |
-| `0x12c0` | `NtGdiDdDDIGetScanLine` | 1 |  |
-| `0x12c1` | `NtGdiDdDDIGetSharedPrimaryHandle` | 1 |  |
-| `0x12c2` | `NtGdiDdDDIInvalidateActiveVidPn` | 1 |  |
-| `0x12c3` | `NtGdiDdDDILock` | 1 |  |
-| `0x12c4` | `NtGdiDdDDIOpenAdapterFromDeviceName` | 1 |  |
-| `0x12c5` | `NtGdiDdDDIOpenAdapterFromGdiDisplayName` | 1 |  |
-| `0x12c6` | `NtGdiDdDDIOpenAdapterFromHdc` | 1 |  |
-| `0x12c7` | `NtGdiDdDDIOpenResource` | 1 |  |
-| `0x12c8` | `NtGdiDdDDIPollDisplayChildren` | 1 |  |
-| `0x12c9` | `NtGdiDdDDIPresent` | 1 |  |
-| `0x12ca` | `NtGdiDdDDIQueryAdapterInfo` | 1 |  |
-| `0x12cb` | `NtGdiDdDDIQueryAllocationResidency` | 1 |  |
-| `0x12cc` | `NtGdiDdDDIQueryResourceInfo` | 1 |  |
-| `0x12cd` | `NtGdiDdDDIQueryStatistics` | 1 |  |
-| `0x12ce` | `NtGdiDdDDIReleaseProcessVidPnSourceOwners` | 1 |  |
-| `0x12cf` | `NtGdiDdDDIRender` | 1 |  |
-| `0x12d0` | `NtGdiDdDDISetAllocationPriority` | 1 |  |
-| `0x12d1` | `NtGdiDdDDISetContextSchedulingPriority` | 1 |  |
-| `0x12d2` | `NtGdiDdDDISetDisplayMode` | 1 |  |
-| `0x12d3` | `NtGdiDdDDISetDisplayPrivateDriverFormat` | 1 |  |
-| `0x12d4` | `NtGdiDdDDISetGammaRamp` | 1 |  |
-| `0x12d5` | `NtGdiDdDDISetProcessSchedulingPriorityClass` | 2 |  |
-| `0x12d6` | `NtGdiDdDDISetQueuedLimit` | 1 |  |
-| `0x12d7` | `NtGdiDdDDISetVidPnSourceOwner` | 1 |  |
-| `0x12d8` | `NtGdiDdDDISharedPrimaryLockNotification` | 1 |  |
-| `0x12d9` | `NtGdiDdDDISharedPrimaryUnLockNotification` | 1 |  |
-| `0x12da` | `NtGdiDdDDISignalSynchronizationObject` | 1 |  |
-| `0x12db` | `NtGdiDdDDIWaitForSynchronizationObject` | 1 |  |
+| `0x1297` | `NtUserDbgWin32HeapFail` | 2 |  |
+| `0x1298` | `NtUserDbgWin32HeapStat` | 2 |  |
+| `0x1299` | `NtUserSetDbgTag` | 2 |  |
+| `0x129a` | `NtUserSetDbgTagCount` | 1 |  |
+| `0x129b` | `NtUserSetRipFlags` | 1 |  |
+| `0x129c` | `NtGdiMakeObjectXferable` | 2 |  |
+| `0x129d` | `NtDxEngGetRedirectionBitmap` | 1 |  |
+| `0x129e` | `NtGdiSetViewportOrgEx` | 4 |  |
+| `0x129f` | `NtGdiSetWindowOrgEx` | 4 |  |
+| `0x12a0` | `NtGdiGetFontFamilyInfo` | 4 |  |
+| `0x12a1` | `NtGdiOffsetViewportOrgEx` | 4 |  |
+| `0x12a2` | `NtGdiOffsetWindowOrgEx` | 4 |  |
+| `0x12a3` | `NtUserGetMonitorInfo` | 2 | ✅ |
+| `0x12a4` | `NtUserMonitorFromPoint` | 3 | ✅ |
+| `0x12a5` | `NtUserMonitorFromRect` | 2 | ✅ |
+| `0x12a6` | `NtUserMonitorFromWindow` | 2 | ✅ |
+| `0x12a7` | `NtUserSetScrollBarInfo` | 3 |  |
+| `0x12a8` | `NtGdiDdDDICreateDCFromMemory` | 1 |  |
+| `0x12a9` | `NtGdiDdDDIDestroyDCFromMemory` | 1 |  |
+| `0x12aa` | `NtGdiDdDDICheckExclusiveOwnership` | 0 |  |
+| `0x12ab` | `NtGdiDdDDICreateAllocation` | 1 |  |
+| `0x12ac` | `NtGdiDdDDICheckMonitorPowerState` | 1 |  |
+| `0x12ad` | `NtGdiDdDDICheckOcclusion` | 1 |  |
+| `0x12ae` | `NtGdiDdDDICloseAdapter` | 1 |  |
+| `0x12af` | `NtGdiDdDDICreateContext` | 1 |  |
+| `0x12b0` | `NtGdiDdDDICreateDevice` | 1 |  |
+| `0x12b1` | `NtGdiDdDDICreateOverlay` | 1 |  |
+| `0x12b2` | `NtGdiDdDDICreateSynchronizationObject` | 1 |  |
+| `0x12b3` | `NtGdiDdDDIWaitForVerticalBlankEvent` | 1 |  |
+| `0x12b4` | `NtGdiDdDDIWaitForIdle` | 1 |  |
+| `0x12b5` | `NtGdiDdDDIUpdateOverlay` | 1 |  |
+| `0x12b6` | `NtGdiDdDDIUnlock` | 1 |  |
+| `0x12b7` | `NtGdiDdDDIDestroyAllocation` | 1 |  |
+| `0x12b8` | `NtGdiDdDDIDestroyContext` | 1 |  |
+| `0x12b9` | `NtGdiDdDDIDestroyDevice` | 1 |  |
+| `0x12ba` | `NtGdiDdDDIDestroyOverlay` | 1 |  |
+| `0x12bb` | `NtGdiDdDDIDestroySynchronizationObject` | 1 |  |
+| `0x12bc` | `NtGdiDdDDIEscape` | 1 |  |
+| `0x12bd` | `NtGdiDdDDIFlipOverlay` | 1 |  |
+| `0x12be` | `NtGdiDdDDIGetContextSchedulingPriority` | 1 |  |
+| `0x12bf` | `NtGdiDdDDIGetDeviceState` | 1 |  |
+| `0x12c0` | `NtGdiDdDDIGetDisplayModeList` | 1 |  |
+| `0x12c1` | `NtGdiDdDDIGetMultisampleMethodList` | 1 |  |
+| `0x12c2` | `NtGdiDdDDIGetPresentHistory` | 1 |  |
+| `0x12c3` | `NtGdiDdDDIGetProcessSchedulingPriorityClass` | 2 |  |
+| `0x12c4` | `NtGdiDdDDIGetRuntimeData` | 1 |  |
+| `0x12c5` | `NtGdiDdDDIGetScanLine` | 1 |  |
+| `0x12c6` | `NtGdiDdDDIGetSharedPrimaryHandle` | 1 |  |
+| `0x12c7` | `NtGdiDdDDIInvalidateActiveVidPn` | 1 |  |
+| `0x12c8` | `NtGdiDdDDILock` | 1 |  |
+| `0x12c9` | `NtGdiDdDDIOpenAdapterFromDeviceName` | 1 |  |
+| `0x12ca` | `NtGdiDdDDIOpenAdapterFromGdiDisplayName` | 1 |  |
+| `0x12cb` | `NtGdiDdDDIOpenAdapterFromHdc` | 1 |  |
+| `0x12cc` | `NtGdiDdDDIOpenResource` | 1 |  |
+| `0x12cd` | `NtGdiDdDDIPollDisplayChildren` | 1 |  |
+| `0x12ce` | `NtGdiDdDDIPresent` | 1 |  |
+| `0x12cf` | `NtGdiDdDDIQueryAdapterInfo` | 1 |  |
+| `0x12d0` | `NtGdiDdDDIQueryAllocationResidency` | 1 |  |
+| `0x12d1` | `NtGdiDdDDIQueryResourceInfo` | 1 |  |
+| `0x12d2` | `NtGdiDdDDIQueryStatistics` | 1 |  |
+| `0x12d3` | `NtGdiDdDDIReleaseProcessVidPnSourceOwners` | 1 |  |
+| `0x12d4` | `NtGdiDdDDIRender` | 1 |  |
+| `0x12d5` | `NtGdiDdDDISetAllocationPriority` | 1 |  |
+| `0x12d6` | `NtGdiDdDDISetContextSchedulingPriority` | 1 |  |
+| `0x12d7` | `NtGdiDdDDISetDisplayMode` | 1 |  |
+| `0x12d8` | `NtGdiDdDDISetDisplayPrivateDriverFormat` | 1 |  |
+| `0x12d9` | `NtGdiDdDDISetGammaRamp` | 1 |  |
+| `0x12da` | `NtGdiDdDDISetProcessSchedulingPriorityClass` | 2 |  |
+| `0x12db` | `NtGdiDdDDISetQueuedLimit` | 1 |  |
+| `0x12dc` | `NtGdiDdDDISetVidPnSourceOwner` | 1 |  |
+| `0x12dd` | `NtGdiDdDDISharedPrimaryLockNotification` | 1 |  |
+| `0x12de` | `NtGdiDdDDISharedPrimaryUnLockNotification` | 1 |  |
+| `0x12df` | `NtGdiDdDDISignalSynchronizationObject` | 1 |  |
+| `0x12e0` | `NtGdiDdDDIWaitForSynchronizationObject` | 1 |  |

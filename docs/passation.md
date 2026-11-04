@@ -336,9 +336,13 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      et la partie noyau de DefWindowProc (`win32k::defwnd`, NtUserMessageCall avec FNID_DEFWINDOWPROC :
      WM_NCCALCSIZE, la zone cliente sans le cadre ni le titre) ; WM_GETMINMAXINFO à la création ; la capture d'un
      `LARGE_STRING` de NtUserCreateWindowEx ignore `bAnsi` (corrigé : une classe n'était parfois pas trouvée) ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : le gestionnaire de fenêtres (ordre Z,
-     SetWindowPos, ShowWindow : WM_SIZE et WM_MOVE d'une fenêtre recouvrante), un moniteur (place par défaut,
-     zone de travail), DestroyWindow,
+   - [x] le moniteur principal (`win32k::monitor`, NtUserMonitorFrom*, NtUserGetMonitorInfo : place par défaut en
+     cascade, WM_GETMINMAXINFO adapté) et SetWindowPos (`win32k::winpos`, NtUserSetWindowPos, NtUserMoveWindow :
+     WM_WINDOWPOSCHANGING, WM_NCCALCSIZE, ordre Z avec le premier plan, enfants déplacés, WM_WINDOWPOSCHANGED,
+     WM_MOVE et WM_SIZE de DefWindowProc) ; `syscall-gen` suit la variante publiée (`DBG`) et vérifie les stubs
+     de `ntdll`, `user32` et `gdi32` (corrigé : 26 numéros de win32k décalés) ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : ShowWindow (WM_SHOWWINDOW, WM_SIZE et
+     WM_MOVE d'une fenêtre recouvrante, activation et premier plan), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : contextes de périphérique et table des handles GDI partagée, régions et découpage, BitBlt, texte et
      polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
@@ -387,8 +391,11 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 - DefWindowProc du noyau (M6, étape 3) : WM_NCCALCSIZE seul (les autres messages attendent les contextes de
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
-  moniteur (une fenêtre recouvrante est en 0, 0, 800 × 600 comme ReactOS sans moniteur), ni profil d'utilisateur
-  pour les métriques, ni SystemParametersInfo.
+  profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- SetWindowPos (M6, étape 4) : sans régions, une fenêtre est visible avant si elle et ses parents le sont ; rien
+  n'est repeint ; ni activation ni premier plan ; les fenêtres possédées ne sont pas gardées au-dessus de leur
+  propriétaire ; `SWP_ASYNCWINDOWPOS` est fait tout de suite ; un seul moniteur, sa zone de travail entière ; le
+  `STARTUPINFO` d'une fenêtre recouvrante n'a qu'un test hôte.
 
 - Rappels en mode utilisateur (étape 23) : un thread qui se termine pendant un rappel abandonne les trames des rappels
   en cours (comme NT), sans rendre ce qu'elles possèdent, et rien ne le teste ; `STATUS_CALLBACK_POP_STACK` n'a qu'un
