@@ -4927,6 +4927,21 @@ fn win32k_self_test() {
     let view = gui.shared_view;
     let protect = process.with_space(|space| space.query(u64::from(view)).map(|region| region.protect));
     assert_eq!(protect, Ok(Ok(PageProtect::READONLY)), "the USER shared section, read only");
+    // The GDI handle table, read only, in the PEB; the stock WHITE_BRUSH and
+    // the brush of COLOR_WINDOW (SERVERINFO.ahbrSystem) public in it, as
+    // gdi32 checks them (GdiValidateHandle).
+    let gdi = read(process.peb() + offset_of!(abi::peb32::Peb32, gdi_shared_handle_table) as u32);
+    assert_eq!(gdi, gui.gdi_view, "PEB.GdiSharedHandleTable");
+    let protect = process.with_space(|space| space.query(u64::from(gdi)).map(|region| region.protect));
+    assert_eq!(protect, Ok(Ok(PageProtect::READONLY)), "the GDI handle table, read only");
+    let window_brush =
+        read(view + (offset_of!(abi::user::ServerInfo32, ahbr_system) + 4 * abi::user::color::WINDOW) as u32);
+    for brush in [win32k::gdi::brush::stock_object(abi::gdi::stock::WHITE_BRUSH), window_brush] {
+        let entry = read_bytes(gdi + abi::gdi::gdi_entry_offset(brush & abi::gdi::GDI_HANDLE_INDEX_MASK), 16);
+        let word = |at: usize| u32::from_le_bytes(entry[at..at + 4].try_into().unwrap());
+        assert_eq!(brush >> 16, 0x0090, "a stock brush: {brush:#x}");
+        assert_eq!((word(4), word(8)), (0, 0x0010_0090), "public, FullUnique and Objt of {brush:#x}");
+    }
     // NtUserProcessConnect.
     assert_eq!((statuses[1], statuses[2]), (STATUS_UNSUCCESSFUL, STATUS_UNSUCCESSFUL), "the size, no buffer");
     assert_eq!((statuses[3], statuses[4]), (STATUS_INVALID_HANDLE, STATUS_DATATYPE_MISALIGNMENT));
@@ -4991,7 +5006,7 @@ fn win32k_self_test() {
     ps::wait_for_reaper();
     log::info!(
         "[smoke] win32k: a GUI thread and process, NtGdiInit, NtUserProcessConnect (the USER shared section, read \
-         only), services without a handler (0 and ERROR_CALL_NOT_IMPLEMENTED, or STATUS_NOT_IMPLEMENTED), \
+         only), the GDI handle table (read only, stock and system brushes public), services without a handler (0 and ERROR_CALL_NOT_IMPLEMENTED, or STATUS_NOT_IMPLEMENTED), \
          RegisterLogonProcess, NtUserSetInformationThread for csrss only; Ex: semaphores from user mode; Ob: \
          NtQueryObject"
     );

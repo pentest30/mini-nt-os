@@ -1,8 +1,9 @@
 # M6, windows: GUI1.EXE (tests/native/gui1.c, MinGW, linked to ReactOS's
-# kernel32 and user32) takes the place of winlogon.exe, which smss starts as
+# kernel32, user32 and gdi32) takes the place of winlogon.exe, which smss starts as
 # its initial command once csrss runs. Like winlogon, it registers as the
 # logon process, creates WinSta0 and a desktop and goes on it; user32 reads
-# the system metrics and colours in the shared section. Then it
+# the system metrics and colours in the shared section, gdi32 the brush of
+# a system colour in the GDI handle table. Then it
 # registers a window class (user32 registers its system controls first),
 # finds it and user32's Button again (GetClassInfoExW), cannot find a class
 # never registered nor register its own twice. It creates a window of its
@@ -31,7 +32,11 @@
 # ShowWindow shows (WM_SHOWWINDOW, SetWindowPos, then the WM_SIZE and WM_MOVE
 # an overlapped window waited for) and hides windows; a child of a hidden
 # window only gets WS_VISIBLE; windows created visible are shown, with the
-# command in y for an overlapped window placed by default.
+# command in y for an overlapped window placed by default. A window shown
+# or changed paints its frame (WM_NCPAINT) then erases its client area
+# (WM_ERASEBKGND, with a cache DC of the kernel cut to what shows of it:
+# GetClipBox gives a simple or a complex region) at once; the DC given back,
+# GetClipBox and PatBlt refuse it.
 # It ends with status 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
@@ -43,6 +48,7 @@ timeout  = 120
 expect = [gui] on WinSta0\Default
 expect = [gui] GetSystemMetrics: screen 1280x800, caption 20, frame 4, minimum width 112
 expect = [gui] GetSysColor: a56e3a ffffff c8d0d4
+expect = [gui] GetSysColorBrush(COLOR_WINDOW): a stock brush, GetObjectType 2; of no brush 0
 expect = [gui] RegisterClassExW: atom c00a (0)
 expect = [gui] GetClassInfoExW: the class as registered
 expect = [gui] GetClassInfoExW(Button): user32's class
@@ -109,10 +115,10 @@ expect = [gui] after B: A next to B yes
 expect = [gui] HWND_TOPMOST: A first yes, WS_EX_TOPMOST set
 expect = [gui] HWND_TOP under a topmost window: B after A yes
 expect = [gui] HWND_NOTOPMOST: WS_EX_TOPMOST clear, A above B yes
-expect = [gui] SWP_SHOWWINDOW received 3: 0046 0085 0047
+expect = [gui] SWP_SHOWWINDOW received 4: 0046 0085 0014 0047
 expect = [gui] SWP_SHOWWINDOW: visible 1
 expect = [gui] SWP_HIDEWINDOW: visible 0
-expect = [gui] ShowWindow(SW_SHOWNORMAL) received 6: 0018 0046 0085 0047 0005 0003
+expect = [gui] ShowWindow(SW_SHOWNORMAL) received 7: 0018 0046 0085 0014 0047 0005 0003
 expect = [gui] ShowWindow(SW_SHOWNORMAL): was 0, visible 1, WM_SHOWWINDOW 1, WM_SIZE 952 572, WM_MOVE 50 70
 expect = [gui] ShowWindow(SW_SHOW), visible received 0:
 expect = [gui] ShowWindow(SW_SHOW), visible: was 1
@@ -123,45 +129,73 @@ expect = [gui] ShowWindow(SW_HIDE), hidden: was 0
 expect = [gui] ShowWindow of a child of a hidden window received 1: 0018
 expect = [gui] ShowWindow of a child of a hidden window: was 0, WS_VISIBLE set, visible 0
 expect = [gui] ShowWindow(SW_HIDE) before WM_SIZE received 3: 0018 0046 0047
-expect = [gui] ShowWindow(SW_SHOWNOACTIVATE) at last received 6: 0018 0046 0085 0047 0005 0003
+expect = [gui] ShowWindow(SW_SHOWNOACTIVATE) at last received 7: 0018 0046 0085 0014 0047 0005 0003
 expect = [gui] ShowWindow(12): 0 (87)
 expect = [gui] ShowWindow of no window: 0 (1400)
-expect = [gui] created visible, SW_SHOWNOACTIVATE received 10: 0024 0081 0083 0001 0018 0046 0085 0047 0005 0003
+expect = [gui] created visible, SW_SHOWNOACTIVATE received 11: 0024 0081 0083 0001 0018 0046 0085 0014 0047 0005 0003
 expect = [gui] created visible: visible 1, WINDOWPOS flags 1857
 expect = [gui] created visible: 69 69 1029 669
-expect = [gui] SWP_FRAMECHANGED under another window received 4: 0046 0083 0085 0047
-expect = [gui] popup created visible received 9: 0081 0083 0001 0005 0003 0018 0046 0085 0047
+expect = [gui] WM_ERASEBKGND of "Visible": a DC, GetClipBox 2: 0 0 952 572; after: 0, PatBlt 0 (6)
+expect = [gui] SWP_FRAMECHANGED under another window received 5: 0046 0083 0085 0014 0047
+expect = [gui] WM_ERASEBKGND under another window: a DC, GetClipBox 3: 0 0 192 72; after: 0, PatBlt 0 (6)
+expect = [gui] popup created visible received 10: 0081 0083 0001 0005 0003 0018 0046 0085 0014 0047
 expect = [gui] popup created visible: visible 1, WINDOWPOS flags 1847
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 
-# The frames of the windows left visible, drawn by the kernel's
-# DefWindowProc (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under
-# "Visible" at 69, 69 (960 x 600): the raised edge, the caption's gradient
-# from COLOR_INACTIVECAPTION, the line under it, the close button. Their
-# client areas are not erased yet (WM_ERASEBKGND): the desktop shows
-# through. "Pending", painted again (SWP_FRAMECHANGED), is clipped by
-# "Visible" above it: its right edge at 199, 60, the caption of "Visible"
-# at 199, 80. The child "Framed" of "Clipper" (WS_CLIPCHILDREN) sticks out
-# of its parent's client area: its border is clipped there (1044, 140) and
-# drawn inside (1093, 140). "Cover", shown then hidden inside "Visible",
-# leaves its frame (400, 300): the desktop does not paint over "Visible",
-# which is not painted again yet. Where "Shown" was before it was hidden, the desktop is painted
-# again.
+# The windows left visible, drawn by the kernel's DefWindowProc
+# (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under "Visible" at
+# 69, 69 (960 x 600): the raised edge, the caption's gradient from
+# COLOR_INACTIVECAPTION, the line under it, the close button. Their client
+# areas are erased by user32's DefWindowProc (WM_ERASEBKGND: GetClipBox,
+# then FillRect with the class brush, COLOR_WINDOW + 1, batched in the TEB
+# and run when the callback returns): white from 73, 93 in "Visible".
+# "Pending", painted again (SWP_FRAMECHANGED), is clipped by "Visible"
+# above it: its right edge at 199, 60, the caption of "Visible" at 199, 80
+# and over the client area of "Pending" at 150, 85. The popup at 10, 10
+# (50 x 50) covers the caption of "Pending" up to 59, white (20, 12: no
+# call of an earlier batch runs again in it). The child "Framed" of
+# "Clipper" (WS_CLIPCHILDREN) sticks out of its parent's client area: its
+# border is clipped there (1044, 140) and drawn inside (1093, 140), its
+# client area erased (1070, 140) like its parent's (1150, 200), which,
+# erased again (SWP_FRAMECHANGED), leaves the child's border alone. "Cover",
+# of another class (COLOR_HIGHLIGHT + 1), shown then hidden inside
+# "Visible", leaves its frame (400, 300) and its client area (500, 350):
+# the desktop does not paint over "Visible", which is not painted again
+# yet. Its procedure drew 24 black lines of 1 x 5 pixels at the top of its
+# client area (from 404, 324 to 450, 328), one PatBlt each, more than a
+# batch holds, then a line with the DC's own brush, white (404 to 451, 330). Where "Shown" was before it was hidden, the desktop is
+# painted again.
 screen = 0 0 D4D0C8
 screen = 73 73 808080
 screen = 73 92 D4D0C8
+screen = 73 93 FFFFFF
 screen = 1006 75 FFFFFF
 screen = 1014 82 D4D0C8
 screen = 1028 668 404040
 screen = 1027 667 808080
 screen = 199 60 404040
 screen = 199 80 888888
+screen = 150 85 858585
+screen = 100 55 FFFFFF
+screen = 30 15 FFFFFF
+screen = 20 12 FFFFFF
+screen = 60 15 929292
 screen = 1044 140 3A6EA5
 screen = 1093 140 000000
+screen = 1070 140 FFFFFF
+screen = 1150 200 FFFFFF
 screen = 400 300 D4D0C8
-screen = 640 400 3A6EA5
-screen = 100 55 3A6EA5
+screen = 500 350 0A246A
+screen = 404 324 000000
+screen = 405 324 0A246A
+screen = 450 328 000000
+screen = 452 324 0A246A
+screen = 450 329 0A246A
+screen = 420 330 FFFFFF
+screen = 420 331 0A246A
+screen = 452 330 0A246A
+screen = 640 400 FFFFFF
 screen = 46 300 3A6EA5
 screen = 1279 799 3A6EA5
 

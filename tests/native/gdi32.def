@@ -1,0 +1,9 @@
+; The exports of gdi32.dll (ReactOS 0.4.16, i386) that the Win32 test
+; programs call, for their import library (`cargo xtask` builds it with
+; dlltool --kill-at). stdcall functions carry their argument bytes (@N); the
+; DLL exports them undecorated.
+LIBRARY gdi32.dll
+EXPORTS
+GetClipBox@8
+GetObjectType@4
+PatBlt@24

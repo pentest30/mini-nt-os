@@ -44,8 +44,8 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
 ];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
-/// every program, kernel32 and user32 for the Win32 ones.
-const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32"];
+/// every program, kernel32, user32 and gdi32 for the Win32 ones.
+const LIBRARIES: &[&str] = &["ntdll", "kernel32", "user32", "gdi32"];
 
 /// MinGW: no C runtime, no stack protector, no unwind tables.
 const GCC_FLAGS: &[&str] = &[
