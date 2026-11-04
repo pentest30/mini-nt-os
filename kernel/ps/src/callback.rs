@@ -24,6 +24,7 @@ use abi::ntstatus::{
     STATUS_THREAD_IS_TERMINATING,
 };
 use abi::teb32::Teb32;
+use hal::sync::Once;
 use ke::callout::CallbackReturn;
 use ke::usermem::{copy_from_user, copy_to_user, UserPtr};
 
@@ -134,7 +135,10 @@ pub fn user_mode_callback_through(
     }
     let batch = UserPtr::<u32>::new(teb + core::mem::offset_of!(Teb32, gdi_batch_count) as u32).read()?;
     if batch != 0 {
-        report_unflushed_batch(batch);
+        match GDI_BATCH_FLUSH.get() {
+            Some(flush) => flush(),
+            None => report_unflushed_batch(batch),
+        }
     }
     if !status.is_success() {
         return Err(status);
@@ -172,12 +176,26 @@ fn grow_kernel_stack(thread: &ethread::EThread) -> Result<(), NtStatus> {
     Ok(())
 }
 
-/// Le TEB compte des appels GDI en lot après un rappel : KeGdiFlushUserBatch
-/// les exécuterait, mais GDI n'a pas encore de lots. Journalisé une fois.
+/// KeGdiFlushUserBatch : ce qui exécute les appels GDI en lot du thread
+/// courant (win32k, PsEstablishWin32Callouts).
+static GDI_BATCH_FLUSH: Once<fn()> = Once::new();
+
+/// `flush` exécutera les appels GDI qu'un thread a mis en lot pendant un
+/// rappel, à son retour (`BatchFlushRoutine` de PsEstablishWin32Callouts).
+/// Un second appel ne change rien.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_gdi_batch_flush(flush: fn()) {
+    GDI_BATCH_FLUSH.call_once(|| flush);
+}
+
+/// Le TEB compte des appels GDI en lot après un rappel, sans rien pour les
+/// exécuter (win32k pas encore là). Journalisé une fois.
 fn report_unflushed_batch(count: u32) {
     static REPORTED: AtomicBool = AtomicBool::new(false);
     if !REPORTED.swap(true, Ordering::Relaxed) {
-        log::warn!("ps: {count} batched GDI calls not flushed after a user-mode callback (no GDI batches yet)");
+        log::warn!("ps: {count} batched GDI calls not flushed after a user-mode callback (no GDI yet)");
     }
 }
 
