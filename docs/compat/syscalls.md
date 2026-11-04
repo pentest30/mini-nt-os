@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 34 | 737 |
+| win32k | 36 | 737 |
 
 ## ntoskrnl
 
@@ -780,7 +780,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11cd` | `NtUserMNDragLeave` | 0 |  |
 | `0x11ce` | `NtUserMNDragOver` | 2 |  |
 | `0x11cf` | `NtUserModifyUserStartupInfoFlags` | 2 |  |
-| `0x11d0` | `NtUserMoveWindow` | 6 |  |
+| `0x11d0` | `NtUserMoveWindow` | 6 | ✅ |
 | `0x11d1` | `NtUserNotifyIMEStatus` | 3 |  |
 | `0x11d2` | `NtUserNotifyProcessCreate` | 4 |  |
 | `0x11d3` | `NtUserNotifyWinEvent` | 4 |  |
@@ -858,7 +858,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x121b` | `NtUserSetWindowFNID` | 2 |  |
 | `0x121c` | `NtUserSetWindowLong` | 4 |  |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
-| `0x121e` | `NtUserSetWindowPos` | 7 |  |
+| `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
 | `0x121f` | `NtUserSetWindowRgn` | 3 |  |
 | `0x1220` | `NtUserSetWindowsHookAW` | 3 |  |
 | `0x1221` | `NtUserSetWindowsHookEx` | 6 |  |

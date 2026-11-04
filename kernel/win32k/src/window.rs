@@ -24,16 +24,18 @@
 //! `RECT` pour WM_NCCALCSIZE. Pendant le rappel, le `CLIENTINFO` du thread
 //! désigne la fenêtre (`CallbackWnd`, IntSetTebWndCallback).
 //!
-//! Une fenêtre recouvrante placée par défaut prend sa place et sa taille sur
-//! le moniteur ([`fix_coordinates`], [`crate::monitor`]).
+//! Les fenêtres sœurs sont dans l'ordre Z ([`link`] : en haut, en bas, au
+//! premier plan avec `WS_EX_TOPMOST`, après une sœur) ; SetWindowPos les
+//! déplace ([`crate::winpos`]). Une fenêtre recouvrante placée par défaut
+//! prend sa place et sa taille sur le moniteur ([`fix_coordinates`],
+//! [`crate::monitor`]).
 //!
 //! Pas encore : DestroyWindow (les fenêtres d'un thread vivent autant que
-//! lui), ShowWindow et SetWindowPos (une fenêtre créée visible reste
-//! cachée, journalisé), les menus, les messages envoyés à un autre thread, la fenêtre des
+//! lui), ShowWindow (une fenêtre créée visible reste cachée, journalisé),
+//! les menus, les messages envoyés à un autre thread, la fenêtre des
 //! messages (`HWND_MESSAGE`), les crochets, les régions (la région à mettre
 //! à jour est un rectangle), les contextes de périphérique (WM_ERASEBKGND
-//! reçoit 0), le fond d'écran, les fenêtres au premier plan
-//! (`WS_EX_TOPMOST`), la mise en page de droite à gauche.
+//! reçoit 0), le fond d'écran, la mise en page de droite à gauche.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -49,14 +51,14 @@ use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Rect32,
     WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
-    FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HWND_BOTTOM, HWND_MESSAGE, HWND_TOP, SIZE_RESTORED, STARTF_USEPOSITION,
-    STARTF_USESIZE, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WNDS2_WIN31COMPAT,
-    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC,
-    WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS,
-    WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
-    WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_WINDOWEDGE, WS_MAXIMIZE,
-    WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+    FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
+    SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
+    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT,
+    WM_PARENTNOTIFY, WM_SIZE, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED,
+    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_SENDERASEBACKGROUND,
+    WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE,
+    WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_TLW_WITH_WSCHILD,
@@ -796,26 +798,142 @@ fn report_missing(what: &str, reported: &AtomicBool) {
     }
 }
 
-/// IntLinkHwnd : `window` entre parmi les enfants de `parent`, en haut de
-/// l'ordre Z (`HWND_TOP`) ou en bas (`HWND_BOTTOM`).
-fn link(window: &Arc<Window>, parent: &Arc<Window>, after: u32) {
-    let first = parent.state().child;
-    if after == HWND_BOTTOM && first != 0 {
-        let mut last = first;
-        while let Some(next) = get(last).map(|sibling| sibling.state().next).filter(|&next| next != 0) {
-            last = next;
+/// IntLinkWindow : `window` entre parmi les enfants de `parent`, juste
+/// après `after` dans l'ordre Z, ou en tête.
+fn link_window(window: &Arc<Window>, parent: &Arc<Window>, after: Option<&Arc<Window>>) {
+    let next = match after {
+        Some(after) => {
+            let next = after.state().next;
+            update(after, |state| state.next = window.handle);
+            next
         }
-        update(window, |state| (state.prev, state.next) = (last, 0));
-        if let Some(last) = get(last) {
-            update(&last, |state| state.next = window.handle);
+        None => {
+            let first = parent.state().child;
+            update(parent, |state| state.child = window.handle);
+            first
         }
-        return;
+    };
+    update(window, |state| (state.prev, state.next) = (after.map_or(0, |after| after.handle), next));
+    if let Some(next) = get(next) {
+        update(&next, |state| state.prev = window.handle);
     }
-    update(window, |state| (state.prev, state.next) = (0, first));
-    if let Some(first) = get(first) {
-        update(&first, |state| state.prev = window.handle);
+}
+
+/// Elle est au premier plan (`WS_EX_TOPMOST`).
+fn is_topmost(window: &Window) -> bool {
+    window.state().ex_style & WS_EX_TOPMOST != 0
+}
+
+/// IntLinkHwnd : `window` prend sa place parmi les enfants de son parent :
+/// en bas (`HWND_BOTTOM`), tout en haut et au premier plan
+/// (`HWND_TOPMOST`), en haut sous les fenêtres au premier plan
+/// (`HWND_TOP` ; au-dessus de son propriétaire, elle y passe), au même
+/// rang hors du premier plan (`HWND_NOTOPMOST`), ou juste sous la sœur
+/// `after` (inconnue : `HWND_TOP`), dont elle prend le premier plan.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn link(window: &Arc<Window>, after: u32) {
+    let mut after = after;
+    if after == HWND_NOTOPMOST {
+        if !is_topmost(window) {
+            return;
+        }
+        update(window, |state| state.ex_style &= !WS_EX_TOPMOST);
+        after = HWND_TOP;
     }
-    update(parent, |state| state.child = window.handle);
+    unlink(window);
+    let Some(parent) = get(window.state().parent) else { return };
+    match after {
+        HWND_BOTTOM => {
+            let mut last = get(parent.state().child);
+            while let Some(next) = last.as_ref().and_then(|sibling| get(sibling.state().next)) {
+                last = Some(next);
+            }
+            link_window(window, &parent, last.as_ref());
+            update(window, |state| state.ex_style &= !WS_EX_TOPMOST);
+        }
+        HWND_TOPMOST => {
+            link_window(window, &parent, None);
+            update(window, |state| state.ex_style |= WS_EX_TOPMOST);
+        }
+        HWND_TOP => {
+            let mut before = get(parent.state().child);
+            if !is_topmost(window) {
+                let owner = window.state().owner;
+                while let Some(sibling) = before.clone() {
+                    let next = sibling.state().next;
+                    if next == 0 || !is_topmost(&sibling) {
+                        break;
+                    }
+                    if sibling.handle == owner {
+                        update(window, |state| state.ex_style |= WS_EX_TOPMOST);
+                        break;
+                    }
+                    before = get(next);
+                }
+            }
+            let previous = before.and_then(|before| get(before.state().prev));
+            link_window(window, &parent, previous.as_ref());
+        }
+        _ => {
+            let Some(sibling) = get(after) else { return link(window, HWND_TOP) };
+            if sibling.handle == window.handle {
+                return;
+            }
+            link_window(window, &parent, Some(&sibling));
+            if !is_topmost(&sibling) {
+                update(window, |state| state.ex_style &= !WS_EX_TOPMOST);
+            } else if get(sibling.state().next).is_some_and(|next| is_topmost(&next)) {
+                update(window, |state| state.ex_style |= WS_EX_TOPMOST);
+            }
+        }
+    }
+}
+
+/// IntIsWindowVisible : elle et ses parents jusqu'au bureau sont visibles,
+/// aucun parent réduit.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn is_visible(window: &Window) -> bool {
+    let mut state = window.state();
+    let mut current = window.handle;
+    loop {
+        if state.style & WS_VISIBLE == 0 || (state.style & WS_MINIMIZE != 0 && current != window.handle) {
+            return false;
+        }
+        if state.fnid == FNID_DESKTOP {
+            return true;
+        }
+        let Some(parent) = get(state.parent) else { return true };
+        (current, state) = (parent.handle, parent.state());
+    }
+}
+
+/// Elle possède une autre fenêtre (une fenêtre contextuelle, par exemple).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn owns_windows(window: &Window) -> bool {
+    let windows: Vec<Arc<Window>> = WINDOWS.lock().values().filter_map(Weak::upgrade).collect();
+    windows.iter().any(|other| other.state().owner == window.handle)
+}
+
+/// WinPosInternalMoveWindow : `window` et ses enfants, à toute profondeur,
+/// se déplacent de `dx`, `dy` (rectangles de la fenêtre et de la zone
+/// cliente).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn move_tree(window: &Window, dx: i32, dy: i32) {
+    let moved = |rect: Rect| Rect::new(rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy);
+    let state = update(window, |state| (state.window, state.client) = (moved(state.window), moved(state.client)));
+    let mut child = get(state.child);
+    while let Some(current) = child {
+        move_tree(&current, dx, dy);
+        child = get(current.state().next);
+    }
 }
 
 /// IntUnlinkWindow : `window` quitte les enfants de son parent.
@@ -995,7 +1113,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     if !accepted.is_ok_and(|accepted| accepted != 0) {
         return Err(None);
     }
-    link(&window, &parent, if style & (WS_CHILD | WS_MAXIMIZE) == WS_CHILD { HWND_BOTTOM } else { HWND_TOP });
+    link(&window, if style & (WS_CHILD | WS_MAXIMIZE) == WS_CHILD { HWND_BOTTOM } else { HWND_TOP });
 
     // WM_NCCALCSIZE: the client area.
     let mut calc = rect_bytes(rect);

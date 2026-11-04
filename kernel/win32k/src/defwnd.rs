@@ -1,7 +1,7 @@
 //! DefWindowProc côté noyau (IntDefWindowProc), que `user32` appelle par
 //! NtUserMessageCall (`FNID_DEFWINDOWPROC`) pour les messages qu'il ne
 //! traite pas lui-même, et les mesures du cadre d'une fenêtre que
-//! CreateWindowEx emploie (co_WinPosGetMinMaxInfo).
+//! CreateWindowEx et SetWindowPos emploient (co_WinPosGetMinMaxInfo).
 //!
 //! Comme ReactOS (`defwnd.c`, `nonclient.c`, `winpos.c`, comme
 //! spécification), d'après les styles de la fenêtre et les métriques du
@@ -12,25 +12,31 @@
 //!   rectangles valides (`wParam`), les `WVR_*` de sa classe ;
 //! - WM_GETMINMAXINFO, ses valeurs par défaut ([`min_max_info`]), adaptées
 //!   à la zone de travail du moniteur ([`adapt_to_monitor`]) ;
+//! - WM_WINDOWPOSCHANGING : la taille demandée, ramenée dans les limites de
+//!   WM_GETMINMAXINFO ([`limit_size`]) ; WM_WINDOWPOSCHANGED : WM_MOVE et
+//!   WM_SIZE si la zone cliente a bougé ou changé ;
 //! - WM_DEVICECHANGE rend TRUE ; un message de l'application (au-delà de
 //!   WM_USER) rend 0.
 //!
 //! Les autres messages que ReactOS traite ici (WM_PAINT, WM_ERASEBKGND,
 //! WM_NCPAINT, WM_NCACTIVATE, WM_NCHITTEST, WM_SETCURSOR, WM_ACTIVATE,
-//! WM_SHOWWINDOW, WM_WINDOWPOSCHANGING et CHANGED, WM_SYSCOMMAND, WM_CLOSE,
-//! les touches et les boutons…) attendent la peinture, les contextes de
-//! périphérique, le positionnement et l'entrée : ils rendent 0, journalisés une fois chacun. Pas encore de
+//! WM_SHOWWINDOW, WM_SYSCOMMAND, WM_CLOSE, les touches et les boutons…)
+//! attendent la peinture, les contextes de périphérique, l'activation et
+//! l'entrée : ils rendent 0, journalisés une fois chacun. Pas encore de
 //! menus (`WNDS_HASMENU`).
 
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
+use core::mem::size_of;
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    sm, MinMaxInfo32, WM_DEVICECHANGE, WM_NCCALCSIZE, WM_USER, WNDS_HASCAPTION, WNDS_HASHORIZONTALSCROLLBAR,
-    WNDS_HASVERTICALSCROOLLBAR, WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
-    WS_EX_LAYOUTRTL, WS_EX_LEFTSCROLLBAR, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_HSCROLL,
-    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VSCROLL, WVR_HREDRAW, WVR_VALIDRECTS, WVR_VREDRAW,
+    sm, MinMaxInfo32, WindowPos32, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE,
+    SWP_NOSIZE, SWP_STATECHANGED, WM_DEVICECHANGE, WM_MOVE, WM_NCCALCSIZE, WM_SIZE, WM_USER, WM_WINDOWPOSCHANGED,
+    WM_WINDOWPOSCHANGING, WNDS_HASCAPTION, WNDS_HASHORIZONTALSCROLLBAR, WNDS_HASVERTICALSCROOLLBAR, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYOUTRTL, WS_EX_LEFTSCROLLBAR,
+    WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_HSCROLL, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
+    WS_POPUP, WS_THICKFRAME, WS_VSCROLL, WVR_HREDRAW, WVR_VALIDRECTS, WVR_VREDRAW,
 };
 use abi::user::{CS_HREDRAW, CS_VREDRAW};
 use hal::sync::KSpinLock;
@@ -38,7 +44,7 @@ use ke::usermem::{copy_from_user, copy_to_user};
 
 use crate::gdi::dib::Rect;
 use crate::metrics;
-use crate::window::Window;
+use crate::window::{LParam, Window};
 
 /// UserHasWindowEdge : la fenêtre a un bord extérieur en relief.
 pub fn has_window_edge(style: u32, ex_style: u32) -> bool {
@@ -238,6 +244,50 @@ pub fn adapt_to_monitor(
     info.max_size[0] >= screen.0 && info.max_size[1] >= screen.1
 }
 
+/// DefWndHandleWindowPosChanging : la taille demandée `size`, d'une fenêtre
+/// de style `style`, ramenée sous le suivi maximal puis (sauf réduite) au
+/// moins au suivi minimal de `limits` (une fenêtre à cadre épais ou
+/// recouvrante) ; sans limites, positive.
+pub fn limit_size(size: (i32, i32), style: u32, limits: Option<([i32; 2], [i32; 2])>) -> (i32, i32) {
+    let Some((min, max)) = limits else { return (size.0.max(0), size.1.max(0)) };
+    let (mut cx, mut cy) = (size.0.min(max[0]), size.1.min(max[1]));
+    if style & WS_MINIMIZE == 0 {
+        (cx, cy) = (cx.max(min[0]), cy.max(min[1]));
+    }
+    (cx, cy)
+}
+
+/// MAKELONG(`low`, `high`) de deux valeurs sur 16 bits.
+fn make_long(low: i32, high: i32) -> u32 {
+    (low as u32 & 0xFFFF) | ((high as u32 & 0xFFFF) << 16)
+}
+
+/// DefWndHandleWindowPosChanged : WM_MOVE (la zone cliente, dans celle du
+/// parent d'une fenêtre fille, sinon à l'écran) si elle a bougé, WM_SIZE
+/// (sa taille) si elle a changé (`SWP_NOCLIENTMOVE`, `SWP_NOCLIENTSIZE` de
+/// `flags`).
+fn window_pos_changed(window: &Arc<Window>, flags: u32) {
+    let state = window.state();
+    let origin = match crate::window::get(state.parent) {
+        Some(parent) if state.style & WS_CHILD != 0 => (parent.state().client.left, parent.state().client.top),
+        _ => (0, 0),
+    };
+    let client = state.client;
+    if flags & SWP_NOCLIENTMOVE == 0 {
+        let at = make_long(client.left - origin.0, client.top - origin.1);
+        let _ = crate::window::send_message(window, WM_MOVE, 0, LParam::Value(at));
+    }
+    if flags & SWP_NOCLIENTSIZE == 0 || flags & SWP_STATECHANGED != 0 {
+        let (kind, size) = if state.style & WS_MINIMIZE != 0 {
+            (SIZE_MINIMIZED, 0)
+        } else {
+            let kind = if state.style & WS_MAXIMIZE != 0 { SIZE_MAXIMIZED } else { SIZE_RESTORED };
+            (kind, make_long(client.right - client.left, client.bottom - client.top))
+        };
+        let _ = crate::window::send_message(window, WM_SIZE, kind, LParam::Value(size));
+    }
+}
+
 /// Les messages que ReactOS traite ici et que DefWindowProc ne traite pas
 /// encore, déjà journalisés.
 static REPORTED: KSpinLock<BTreeSet<u32>> = KSpinLock::new(BTreeSet::new());
@@ -276,6 +326,31 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             Ok(calc.result)
         }
         (WM_NCCALCSIZE, _) => Ok(0),
+        (WM_WINDOWPOSCHANGING, Some(window)) if lparam != 0 => {
+            let mut bytes = [0u8; size_of::<WindowPos32>()];
+            copy_from_user(&mut bytes, u64::from(lparam))?;
+            let mut pos = crate::winpos::window_pos_of(&bytes);
+            if pos.flags & SWP_NOSIZE != 0 {
+                return Ok(0);
+            }
+            let style = window.state().style;
+            let limits = if style & WS_THICKFRAME != 0 || style & (WS_POPUP | WS_CHILD) == 0 {
+                let info = crate::window::min_max_info(window);
+                Some((info.min_track_size, info.max_track_size))
+            } else {
+                None
+            };
+            (pos.cx, pos.cy) = limit_size((pos.cx, pos.cy), style, limits);
+            copy_to_user(u64::from(lparam), pos.as_bytes())?;
+            Ok(0)
+        }
+        (WM_WINDOWPOSCHANGED, Some(window)) if lparam != 0 => {
+            let mut bytes = [0u8; size_of::<WindowPos32>()];
+            copy_from_user(&mut bytes, u64::from(lparam))?;
+            let pos = crate::winpos::window_pos_of(&bytes);
+            window_pos_changed(window, pos.flags);
+            Ok(0)
+        }
         _ => {
             if REPORTED.lock().insert(message) {
                 log::warn!("win32k: DefWindowProc: message {message:#06x} not yet (0)");
@@ -357,6 +432,17 @@ mod tests {
         let child =
             min_max_info(WS_CHILD | WS_THICKFRAME, WS_EX_WINDOWEDGE, (0, 0), Rect::new(0, 0, 400, 300), &metric);
         assert_eq!(child.max_position, [-3, -3], "2 of edge, and the frame beyond a dialog frame");
+    }
+
+    #[test]
+    fn a_requested_size_stays_within_the_limits() {
+        let limits = Some(([112, 28], [1292, 812]));
+        assert_eq!(limit_size((10, 10), WS_OVERLAPPEDWINDOW, limits), (112, 28), "the minimum");
+        assert_eq!(limit_size((5000, 900), WS_OVERLAPPEDWINDOW, limits), (1292, 812), "the maximum");
+        assert_eq!(limit_size((400, 300), WS_OVERLAPPEDWINDOW, limits), (400, 300));
+        assert_eq!(limit_size((10, 10), WS_OVERLAPPEDWINDOW | WS_MINIMIZE, limits), (10, 10), "minimized");
+        assert_eq!(limit_size((10, 10), 0, Some(([300, 200], [100, 100]))), (300, 200), "the minimum wins");
+        assert_eq!(limit_size((-3, 7), WS_POPUP, None), (0, 7), "no limits, not negative");
     }
 
     #[test]

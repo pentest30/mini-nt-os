@@ -46,6 +46,7 @@ pub mod monitor;
 pub mod queue;
 pub mod shared;
 pub mod window;
+pub mod winpos;
 pub mod winsta;
 
 use alloc::sync::Arc;

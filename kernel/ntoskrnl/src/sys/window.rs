@@ -1,4 +1,5 @@
-//! Les fenêtres (`win32k::window`) : NtUserCreateWindowEx, NtUserDefSetText.
+//! Les fenêtres (`win32k::window`, `win32k::winpos`) : NtUserCreateWindowEx,
+//! NtUserDefSetText, NtUserSetWindowPos, NtUserMoveWindow.
 //! Comme dans win32k, un échec rend 0 et met l'erreur Win32 dans le TEB du
 //! thread.
 
@@ -6,7 +7,10 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::NtStatus;
-use abi::user::{LargeUnicodeString32, WS_CHILD, WS_POPUP};
+use abi::user::{
+    LargeUnicodeString32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, WS_CHILD, WS_POPUP,
+};
 use abi::winerror::{dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_SUCCESS};
 use ke::usermem::{copy_from_user, probe_for_read, UserPtr};
 use win32k::class::ClassName;
@@ -147,4 +151,47 @@ pub(super) fn nt_user_def_set_text(arguments: &[u32]) -> NtStatus {
         Ok(()) => NtStatus(1),
         Err(status) => fail(dos_error(status)),
     }
+}
+
+/// NtUserSetWindowPos(hWnd, hWndInsertAfter, X, Y, cx, cy, uFlags) : place
+/// la fenêtre (`win32k::winpos::set_window_pos`), ses coordonnées ramenées
+/// sur 16 bits, sa taille entre 0 et 32767. FALSE pour une fenêtre ou une
+/// sœur `hWndInsertAfter` qui n'existe pas (`ERROR_INVALID_WINDOW_HANDLE`),
+/// ou qui est la fenêtre du bureau.
+pub(super) fn nt_user_set_window_pos(arguments: &[u32]) -> NtStatus {
+    let (handle, after, flags) = (arguments[0], arguments[1], arguments[6]);
+    let (mut x, mut y, mut cx, mut cy) =
+        (arguments[2] as i32, arguments[3] as i32, arguments[4] as i32, arguments[5] as i32);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    if window.is_desktop_window() {
+        return NtStatus(0);
+    }
+    if !matches!(after, HWND_TOP | HWND_BOTTOM | HWND_TOPMOST | HWND_NOTOPMOST) {
+        match win32k::window::get(after) {
+            None => return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE),
+            Some(sibling) if sibling.is_desktop_window() => return NtStatus(0),
+            Some(_) => {}
+        }
+    }
+    if flags & SWP_NOMOVE == 0 {
+        (x, y) = (x.clamp(-32768, 32767), y.clamp(-32768, 32767));
+    }
+    if flags & SWP_NOSIZE == 0 {
+        (cx, cy) = (cx.clamp(0, 32767), cy.clamp(0, 32767));
+    }
+    NtStatus(u32::from(win32k::winpos::set_window_pos(&window, after, x, y, cx, cy, flags)))
+}
+
+/// NtUserMoveWindow(hWnd, X, Y, nWidth, nHeight, bRepaint) :
+/// NtUserSetWindowPos sans ordre Z ni activation (`SWP_NOREDRAW` sans
+/// `bRepaint`).
+pub(super) fn nt_user_move_window(arguments: &[u32]) -> NtStatus {
+    let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    if arguments[5] == 0 {
+        flags |= SWP_NOREDRAW;
+    }
+    let forwarded = [arguments[0], 0, arguments[1], arguments[2], arguments[3], arguments[4], flags];
+    nt_user_set_window_pos(&forwarded)
 }
