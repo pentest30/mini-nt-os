@@ -205,7 +205,7 @@ inconnue : 1400. Une fenêtre recouvrante créée visible avec `SW_SHOWNOACTIVAT
 `0024 0081 0083 0001 0018 0046 0047 0005 0003` (drapeaux de son `WINDOWPOS` : `0x1857`, sans activation ni ordre Z), une
 fenêtre contextuelle créée visible `0081 0083 0001 0005 0003 0018 0046 0047`.
 
-Les fenêtres montrées ne sont pas peintes : l'écran (capture de QEMU, `screen` du scénario) reste le fond du bureau.
+Les fenêtres montrées n'étaient pas encore peintes à cette étape : l'écran restait le fond du bureau (étape 6).
 
 Ce qui manque, journalisé une fois : réduire et agrandir (co_WinPosMinMaximize : les commandes qui le demandent, ou
 montrer une fenêtre réduite ou agrandie, ne font rien et rendent FALSE ; le placement des fenêtres, WINDOWPLACEMENT),
@@ -214,3 +214,41 @@ possédées montrées et cachées avec leur propriétaire, ShowWindowAsync, la p
 
 Tests : hôte (`win32k::winpos` : les commandes et leurs drapeaux, le `STARTUPINFO` pour la première fenêtre
 recouvrante seulement, une fois ; `win32k::window` : la commande en `y`) ; le scénario `gui`, sur les deux CPU.
+
+## Étape 6 : peindre le cadre des fenêtres
+
+Dans ReactOS, le cadre d'une fenêtre se dessine dans le noyau : `user32` passe WM_NCPAINT à NtUserMessageCall, et
+DefWindowProc (NC_DoNCPaint) dessine avec GDI sans repasser par le mode utilisateur. Le fond de la zone cliente, lui,
+passe par `user32` et `gdi32` (WM_ERASEBKGND : `GetClipBox`, `FillRect`, donc SelectObject et PatBlt sur un HDC du
+client) : il attend la table des handles GDI partagée et les attributs des contextes de périphérique. Comme ReactOS
+(`painting.c`, `vis.c`, `nonclient.c`, `draw.c`, `winpos.c`, comme spécification) :
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `win32k::gdi::region` | des régions, unions de rectangles disjoints : coupe à un rectangle, retrait d'un rectangle, intersection |
+| `win32k::gdi::draw` | des opérations de dessin (remplissage, dégradé horizontal), faites sur une surface, décalées à l'origine d'une fenêtre et coupées à une région ; DrawEdge (bords en relief et creux, normaux ou doux, milieu, ajustement) |
+| `win32k::nonclient` | NC_DoNCPaint en opérations : bord en relief (ou statique), cadre épais (`COLOR_INACTIVEBORDER`) et fin, barre de titre en dégradé (SPI_GETGRADIENTCAPTIONS, vrai par défaut : `UPM_DEFAULT`), boutons fermer, réduire et agrandir (DrawFrameControl : relief doux et face), trait sous le titre, bord client creux ; ce qu'il ne dessine pas encore |
+| `win32k::paint` | VIS_ComputeVisibleRegion (coupée aux zones clientes des parents, sans les sœurs visibles au-dessus) ; IntInvalidateWindows (cadre et fond à repeindre, avec les enfants visibles) ; co_IntPaintWindows et UserSyncAndPaintWindows (WM_NCPAINT aussitôt) ; DefWindowProc de WM_NCPAINT (le cadre, dans la région visible) ; ce qu'une fenêtre découvre : le fond du bureau s'y repeint, ses sœurs sont invalidées |
+| `win32k::winpos::set_window_pos` | après le déplacement : la fenêtre visible est invalidée entière (pas de copie des bits valides), ce qu'elle découvre est exposé ; une fenêtre montrée, déplacée, redimensionnée ou dont le cadre change se repeint aussitôt (WM_NCPAINT avant WM_WINDOWPOSCHANGED) |
+
+Une fenêtre montrée reçoit maintenant `0018 0046 0085 0047 0005 0003` (WM_NCPAINT entre WM_WINDOWPOSCHANGING et
+WM_WINDOWPOSCHANGED). Sur la capture de l'écran, les fenêtres « Pending » (0, 0, 200 × 100) et « Visible » (69, 69,
+960 × 600) ont leur cadre : bord en relief, titre en dégradé de `808080` vers `C0C0C0` (inactives : il n'y a pas
+encore de fenêtre active), trait sous le titre, boutons ; « Pending », repeinte sous « Visible » (`SWP_FRAMECHANGED` :
+`0046 0083 0085 0047`), est coupée par elle. Là où était « Shown » avant d'être cachée, le bureau est repeint. La
+fille encadrée d'une fenêtre à `WS_CLIPCHILDREN` est coupée à la zone cliente de son parent. « Cover », montrée puis
+cachée dans « Visible », y laisse son cadre : le bureau ne repeint pas par-dessus « Visible », qui n'est pas encore
+repeinte. Les zones clientes ne sont pas effacées : on voit au travers ce qui était dessous.
+
+Ce qui manque, journalisé une fois : WM_ERASEBKGND et WM_PAINT des fenêtres du client (contextes de périphérique),
+le texte du titre et les symboles des boutons (polices, ADR-013), l'icône du titre, les barres de défilement, la
+fenêtre active (tout cadre est dessiné inactif), une sœur découverte ne se repeint qu'à sa prochaine invalidation (pas
+encore de WM_PAINT tiré de la file des messages), les fenêtres d'un autre thread, une partie seulement du cadre
+(WM_NCPAINT avec une région), les régions de fenêtre, `WS_EX_TRANSPARENT`. Le dégradé interpole chaque composante
+en ligne (le moteur de ReactOS, absent des sources épinglées, peut arrondir autrement) ; le bureau, sans thread à lui,
+se repeint dans le thread qui le découvre.
+
+Tests : hôte (`gdi::region` : bandes, intersection ; `gdi::draw` : bords en relief, creux, doux, milieu, un bord
+intérieur seul, dégradés, origine et coupe ; `nonclient` : cadre d'une fenêtre recouvrante, boutons, titre actif et
+inactif, cadres sans titre, bords statique et client, fenêtre d'outil, couleurs de chaque partie sur une palette
+codée) ; le scénario `gui`, sur les deux CPU, avec seize pixels de la capture de l'écran.

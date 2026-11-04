@@ -251,7 +251,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   place par défaut en cascade, NtUserMonitorFrom*, NtUserGetMonitorInfo) et SetWindowPos (`win32k::winpos`,
   NtUserSetWindowPos, NtUserMoveWindow : ordre Z, WM_WINDOWPOS*, WM_MOVE, WM_SIZE) ; ShowWindow
   (`win32k::winpos::show_window`, NtUserShowWindow : WM_SHOWWINDOW, WM_SIZE et WM_MOVE différés, fenêtres créées
-  visibles ; pas encore réduire ni agrandir, ni la peinture des fenêtres). `syscall-gen` suit la variante
+  visibles ; pas encore réduire ni agrandir) ; le cadre des fenêtres peint par le noyau (`win32k::paint`,
+  `win32k::nonclient`, `gdi::draw`, `gdi::region` : régions visibles, WM_NCPAINT, bords, titre en dégradé, boutons ;
+  pas encore la zone cliente ni le texte). `syscall-gen` suit la variante
   publiée de ReactOS (`DBG` défini) et vérifie les stubs de `ntdll`, `user32`, `gdi32` quand l'espace utilisateur est
   là.
   Suite : [`docs/passation.md`](docs/passation.md).

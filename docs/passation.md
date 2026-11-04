@@ -343,9 +343,13 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      de `ntdll`, `user32` et `gdi32` (corrigé : 26 numéros de win32k décalés) ;
    - [x] ShowWindow (`win32k::winpos::show_window`, NtUserShowWindow : WM_SHOWWINDOW, SetWindowPos, WM_SIZE et
      WM_MOVE différés, commande du `STARTUPINFO`, fenêtres créées visibles) ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : la peinture des fenêtres (contextes de
-     périphérique, WM_NCPAINT, WM_ERASEBKGND, WM_PAINT des fenêtres du client : ce qui rend une fenêtre visible à
-     l'écran), réduire et agrandir (WINDOWPLACEMENT), l'activation et le premier plan, DestroyWindow,
+   - [x] le cadre des fenêtres peint par le noyau (`win32k::paint`, `win32k::nonclient`, `gdi::draw`,
+     `gdi::region` : régions visibles, invalidation, WM_NCPAINT, bords, titre en dégradé, boutons ; le bureau
+     repeint là où une fenêtre le découvre) : des fenêtres apparaissent à l'écran ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : la zone cliente (table des handles GDI
+     partagée, attributs des contextes de périphérique, pinceaux système, NtUserGetDCEx, BeginPaint et EndPaint,
+     WM_ERASEBKGND, PatBlt, WM_PAINT tiré de la file), puis le texte (polices, ADR-013) ; la fenêtre active et le
+     premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : contextes de périphérique et table des handles GDI partagée, régions et découpage, BitBlt, texte et
      polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
@@ -395,6 +399,11 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Peinture du cadre (M6, étape 6) : pas de zone cliente (WM_ERASEBKGND, WM_PAINT du client), ni texte, ni icône,
+  ni barres de défilement ; tout cadre est inactif ; une sœur découverte attend sa prochaine invalidation ; pas de
+  copie des bits valides (une fenêtre déplacée est repeinte entière) ; le dégradé n'a de spécification que ses
+  bouts (le moteur de ReactOS n'est pas dans les sources épinglées) ; ôter le test de visibilité de WM_NCPAINT ne
+  change rien (la région visible d'une fenêtre cachée est vide : mutation équivalente).
 - ShowWindow (M6, étape 5) : ni réduire ni agrandir (FALSE, journalisé) ; ni fenêtre active ni focus ; les
   fenêtres possédées ne suivent pas leur propriétaire ; pas de ShowWindowAsync ; le `STARTUPINFO` n'a qu'un test
   hôte.
