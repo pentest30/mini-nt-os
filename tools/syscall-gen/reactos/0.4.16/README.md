@@ -25,9 +25,12 @@ nom, commentaires ôtés, au premier prototype trouvé dans cet ordre :
   `51bfc7037359b594876a349b46b992e363e79838`.
 - **Licence** : celle de ReactOS, GNU GPL version 2 (`COPYING` de ce commit). Ces fichiers ne décrivent que l'interface
   (noms des services, nombre d'arguments, ordre) ; aucun code de ReactOS n'en est tiré.
-- **Variante** : i386, version de publication (`DBG` à 0, `_WIN64` non défini). Les services de `w32ksvc32.h` sous
-  `#if DBG` ou `#ifdef _WIN64` n'en font donc pas partie, et les suivants prennent leurs numéros. Le spike S3 le
-  vérifiera sur les stubs de `user32`.
+- **Variante** : i386, comme les binaires publiés : `DBG` défini, `_WIN64` non défini. Les cinq services de
+  `w32ksvc32.h` sous `#if DBG` font donc partie de la table (les suivants, de `NtGdiMakeObjectXferable` à la fin, en
+  dépendent), pas celui sous `#ifdef _WIN64`. Les stubs de `ntdll`, `user32` et `gdi32` de la version publiée le
+  montrent : avec `DBG` à 0, 26 stubs de `user32` appelaient le mauvais service (MonitorFromWindow tombait sur
+  `NtGdiDdDDICreateAllocation`). `syscall-gen --check` (`cargo xtask lint`) vérifie ces stubs quand l'espace
+  utilisateur a été téléchargé.
 - Les listes `ntoskrnl` de 0.4.15 et 0.4.16 sont identiques ; 0.4.16 ajoute 55 services D3DKMT à la fin de celle de
   win32k.
 
