@@ -21,7 +21,14 @@
 # rectangles, WVR_VALIDRECTS). Sizing windows stay within WM_GETMINMAXINFO's
 # limits, those the system gives or a larger minimum from their procedure;
 # they are created with ones on the stack, which user32 leaves in the bAnsi
-# bit of the class name's LARGE_STRING. It ends with status 0x600D.
+# bit of the class name's LARGE_STRING. The monitor (MonitorFromWindow,
+# MonitorFromPoint, GetMonitorInfoW) gives overlapped windows their default
+# place, in cascade, and size (3/4 of the screen). SetWindowPos and
+# MoveWindow move and size windows (WM_WINDOWPOSCHANGING, WM_GETMINMAXINFO's
+# limits, WM_NCCALCSIZE, WM_WINDOWPOSCHANGED, WM_MOVE, WM_SIZE), move a
+# child with its parent (WM_CHILDACTIVATE to an activated child), order
+# windows (top, bottom, after a sibling, topmost) and show or hide them.
+# It ends with status 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
 requires = userland, native
@@ -41,16 +48,16 @@ expect = [gui] CreateWindowExW: a window (0)
 expect = [gui] WM_NCCREATE: CREATESTRUCT as given
 expect = [gui] WM_CREATE: CREATESTRUCT as given
 expect = [gui] CallbackWnd: the window and its WND
-expect = [gui] the window received: 0081 0083 0001 0005 0003
+expect = [gui] the window received 5: 0081 0083 0001 0005 0003
 expect = [gui] IsWindow: 1
 expect = [gui] GetWindowTextW: Mino
 expect = [gui] SetWindowTextW, longer: as set
 expect = [gui] SetWindowTextW, shorter: as set
-expect = [gui] SetWindowTextW and GetWindowTextW received: 000c 000d 000c 000d
+expect = [gui] SetWindowTextW and GetWindowTextW received 4: 000c 000d 000c 000d
 expect = [gui] GetWindowLongW(GWL_STYLE): 84000000
 expect = [gui] GetWindowRect: 100 50 500 350
 expect = [gui] child: a window (0)
-expect = [gui] the child and its parent received: 0081 0083 0001 0005 0003 0210
+expect = [gui] the child and its parent received 6: 0081 0083 0001 0005 0003 0210
 expect = [gui] WM_PARENTNOTIFY: WM_CREATE, 7, the child
 expect = [gui] GetParent: the window
 expect = [gui] GetWindow(GW_CHILD): the child
@@ -60,15 +67,47 @@ expect = [gui] window of no class: 00000000 (1407)
 expect = [gui] window refusing WM_NCCREATE: 00000000
 expect = [gui] overlapped: a window (0)
 expect = [gui] WM_CREATE: WNDS_HASCAPTION set
-expect = [gui] the overlapped window received: 0024 0081 0083 0001
+expect = [gui] WM_CREATE: WNDS_MAXIMIZESTOMONITOR set
+expect = [gui] the overlapped window received 4: 0024 0081 0083 0001
 expect = [gui] WM_GETMINMAXINFO: maximized 1288x808 at -4,-4, tracking 112x28 to 1292x812
-expect = [gui] overlapped GetWindowRect: 0 0 800 600
-expect = [gui] overlapped GetClientRect: 0 0 792 572
+expect = [gui] overlapped GetWindowRect: 0 0 960 600
+expect = [gui] overlapped GetClientRect: 0 0 952 572
 expect = [gui] DefWindowProcW(WM_USER + 1): 0
 expect = [gui] DefWindowProcW(WM_NCCALCSIZE, TRUE): 400, 104 124 396 296
 expect = [gui] sizing, too small: 10 20 122 48
 expect = [gui] sizing, too large: 0 0 1292 812
 expect = [gui] sizing, larger minimum: 0 0 300 200
+expect = [gui] monitor: 0 0 1280 800, work 0 0 1280 800, flags 1, \\.\DISPLAY1
+expect = [gui] GetMonitorInfoW, MONITORINFO: 1, work right 1280
+expect = [gui] GetMonitorInfoW of 12 bytes: refused (87)
+expect = [gui] MonitorFromPoint far away: none, nearest the monitor
+expect = [gui] MonitorFromWindow, bad flags: 00000000 (1004)
+expect = [gui] the next default place: 23 23 983 623
+expect = [gui] SetWindowPos received 6: 0046 0024 0083 0047 0003 0005
+expect = [gui] WM_WINDOWPOSCHANGED: 50 60 400 300, flags 001c; WM_MOVE 54 84, WM_SIZE 392 272
+expect = [gui] SetWindowPos: 50 60 450 360
+expect = [gui] SetWindowPos, too small: 50 60 162 88
+expect = [gui] SetWindowPos, moved received 3: 0046 0047 0003
+expect = [gui] SetWindowPos, moved: 70 80 182 108
+expect = [gui] MoveWindow: 100 100 400 300
+expect = [gui] MoveWindow: same rank yes
+expect = [gui] the child of a moved window: 210 170 310 220
+expect = [gui] SetWindowPos of a child received 4: 0046 0022 0047 0003
+expect = [gui] child WM_MOVE: 20 30, WINDOWPOS 20 30
+expect = [gui] SetWindowPos of a child: 220 180 320 230
+expect = [gui] SetWindowPos of no window: 0 (1400)
+expect = [gui] SetWindowPos after no window: 0 (1400)
+expect = [gui] created: B above A yes
+expect = [gui] HWND_TOP, hidden received 1: 0046
+expect = [gui] HWND_TOP: A above B yes
+expect = [gui] HWND_BOTTOM: A last yes
+expect = [gui] after B: A next to B yes
+expect = [gui] HWND_TOPMOST: A first yes, WS_EX_TOPMOST set
+expect = [gui] HWND_TOP under a topmost window: B after A yes
+expect = [gui] HWND_NOTOPMOST: WS_EX_TOPMOST clear, A above B yes
+expect = [gui] SWP_SHOWWINDOW received 2: 0046 0047
+expect = [gui] SWP_SHOWWINDOW: visible 1
+expect = [gui] SWP_HIDEWINDOW: visible 0
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 

@@ -10,6 +10,7 @@ CreateWindowStationW@16
 DefWindowProcW@16
 GetClassInfoExW@12
 GetClientRect@8
+GetMonitorInfoW@8
 GetParent@4
 GetSysColor@4
 GetSystemMetrics@4
@@ -18,9 +19,14 @@ GetWindowLongW@8
 GetWindowRect@8
 GetWindowTextW@12
 IsWindow@4
+IsWindowVisible@4
+MonitorFromPoint@12
+MonitorFromWindow@8
+MoveWindow@24
 RegisterClassExW@4
 RegisterLogonProcess@8
-SetWindowTextW@8
 SetProcessWindowStation@4
 SetThreadDesktop@4
+SetWindowPos@28
+SetWindowTextW@8
 SwitchDesktop@4
