@@ -487,6 +487,12 @@ pub const STARTF_USEPOSITION: u32 = 0x0000_0004;
 pub const WNDS_SENDSIZEMOVEMSGS: u32 = 0x0000_0010;
 /// WNDS_SENDNCPAINT: the frame is to be painted (WM_NCPAINT).
 pub const WNDS_SENDNCPAINT: u32 = 0x0000_0800;
+/// WNDS_INTERNALPAINT: WM_PAINT asked without anything to paint
+/// (RDW_INTERNALPAINT); WNDS_UPDATEDIRTY: invalidated again while painting.
+pub const WNDS_INTERNALPAINT: u32 = 0x0000_1000;
+pub const WNDS_UPDATEDIRTY: u32 = 0x0000_2000;
+/// WNDS_PAINTNOTPROCESSED: WM_PAINT dispatched, BeginPaint not called yet.
+pub const WNDS_PAINTNOTPROCESSED: u32 = 0x0040_0000;
 /// WNDS_MAXIMIZESTOMONITOR: maximized, it covers its monitor.
 pub const WNDS_MAXIMIZESTOMONITOR: u32 = 0x4000_0000;
 /// WNDS_ANSIWINDOWPROC: its procedure takes ANSI messages.
@@ -499,6 +505,12 @@ pub const WNDS2_WIN31COMPAT: u32 = 0x0000_0100;
 pub const WNDS2_WIN40COMPAT: u32 = 0x0000_0200;
 pub const WNDS2_WIN50COMPAT: u32 = 0x0000_0400;
 pub const WNDS2_WMCREATEMSGPROCESSED: u32 = 0x8000_0000;
+/// WNDS2_WMPAINTSENT: WM_PAINT given to the window; WNDS2_ENDPAINTINVALIDATE:
+/// invalidated by another thread while painting; WNDS2_STARTPAINT: between
+/// BeginPaint and EndPaint.
+pub const WNDS2_WMPAINTSENT: u32 = 0x0000_0001;
+pub const WNDS2_ENDPAINTINVALIDATE: u32 = 0x0000_0002;
+pub const WNDS2_STARTPAINT: u32 = 0x0000_0004;
 /// The `WND.bits` of a Unicode window.
 pub const WND_UNICODE: u32 = 0x1;
 
@@ -591,6 +603,11 @@ const _: () = {
 /// WM_*, window messages.
 pub const WM_CREATE: u32 = 0x0001;
 pub const WM_PAINT: u32 = 0x000F;
+/// WM_PAINTICON: WM_PAINT of a minimised window of a 3.x module.
+pub const WM_PAINTICON: u32 = 0x0026;
+/// WM_TIMER, WM_SYSTIMER: a timer's message, its procedure in `lParam`.
+pub const WM_TIMER: u32 = 0x0113;
+pub const WM_SYSTIMER: u32 = 0x0118;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_NCCREATE: u32 = 0x0081;
 pub const WM_MOVE: u32 = 0x0003;
@@ -680,6 +697,8 @@ pub const POINTER_MESSAGES: [u32; 63] = [
 
 /// QS_*, the kinds of messages in a queue (`fsWakeBits`, `fsChangeBits`).
 pub const QS_POSTMESSAGE: u16 = 0x0008;
+/// QS_PAINT: a window of the thread has something to paint (`cPaintsReady`).
+pub const QS_PAINT: u16 = 0x0020;
 pub const QS_ALLPOSTMESSAGE: u16 = 0x0100;
 /// QS_ALLINPUT, QS_SMRESULT: what GetQueueStatus can ask.
 pub const QS_ALLINPUT: u16 = 0x04FF;
@@ -868,6 +887,46 @@ pub struct Rect32 {
     pub top: i32,
     pub right: i32,
     pub bottom: i32,
+}
+
+/// PAINTSTRUCT: what BeginPaint gives (NtUserBeginPaint writes it whole) and
+/// EndPaint takes back.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PaintStruct32 {
+    pub hdc: u32,
+    /// The background is still to erase (WM_ERASEBKGND returned 0).
+    pub erase: i32,
+    /// What to paint, in client coordinates.
+    pub paint: Rect32,
+    pub restore: i32,
+    pub inc_update: i32,
+    pub reserved: [u8; 32],
+}
+
+impl PaintStruct32 {
+    /// The structure in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let mut reserved = [0u8; 32];
+        reserved.copy_from_slice(&bytes[0x20..0x40]);
+        Some(Self {
+            hdc: word(0),
+            erase: word(4) as i32,
+            paint: Rect32 {
+                left: word(8) as i32,
+                top: word(0xC) as i32,
+                right: word(0x10) as i32,
+                bottom: word(0x14) as i32,
+            },
+            restore: word(0x18) as i32,
+            inc_update: word(0x1C) as i32,
+            reserved,
+        })
+    }
 }
 
 /// LARGE_UNICODE_STRING: a length, a maximum length and `bAnsi` (bit 31),
@@ -1080,6 +1139,9 @@ const _: () = {
     // user32!GetSysColorBrush: mov eax, [gpsi + 0x838 + 4 * index].
     assert!(offset_of!(ServerInfo32, ahbr_system) == 0x838);
     assert!(size_of::<Msg32>() == 28);
+    assert!(size_of::<PaintStruct32>() == 64);
+    assert!(offset_of!(PaintStruct32, paint) == 8);
+    assert!(offset_of!(PaintStruct32, reserved) == 0x20);
     assert!(offset_of!(ClientInfo32, ti_flags) == 0x14);
     assert!(offset_of!(ClientInfo32, desk_info) == 0x18);
     assert!(offset_of!(ClientInfo32, callback_wnd) == 0x28);
@@ -1128,7 +1190,8 @@ as_bytes!(
     MinMaxInfo32,
     WindowPos32,
     NcCalcSizeParams32,
-    MonitorInfo32
+    MonitorInfo32,
+    PaintStruct32
 );
 
 #[cfg(test)]
@@ -1148,6 +1211,20 @@ mod tests {
         };
         assert_eq!(GetCharsetInfo32::from_bytes(record.as_bytes()), Some(record));
         assert_eq!(GetCharsetInfo32::from_bytes(&record.as_bytes()[..0x23]), None, "one byte short");
+    }
+
+    #[test]
+    fn a_paint_struct_reads_back_from_its_bytes() {
+        let ps = PaintStruct32 {
+            hdc: 0x0001_000B,
+            erase: 1,
+            paint: Rect32 { left: -1, top: 2, right: 952, bottom: 572 },
+            restore: 3,
+            inc_update: 4,
+            reserved: [7; 32],
+        };
+        assert_eq!(PaintStruct32::from_bytes(ps.as_bytes()), Some(ps));
+        assert_eq!(PaintStruct32::from_bytes(&ps.as_bytes()[..63]), None, "one byte short");
     }
 
     #[test]
