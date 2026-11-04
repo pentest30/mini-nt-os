@@ -70,7 +70,7 @@ pub struct Teb32 {
     pub exception_code: u32,
     pub activation_context_stack: [u32; 5],
     pub spare_bytes1: [u8; 24],
-    pub gdi_teb_batch: [u8; 0x4E0],
+    pub gdi_teb_batch: crate::gdi::GdiTebBatch32,
     pub real_client_id: ClientId32,
     pub gdi_cached_process_handle: u32,
     pub gdi_client_pid: u32,
