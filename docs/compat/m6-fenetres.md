@@ -133,10 +133,56 @@ dans le bit `bAnsi` du nom de la classe.
 Ce qui manque, journalisé une fois : les autres messages de DefWindowProc (peinture du cadre, WM_NCHITTEST,
 WM_SETCURSOR, WM_SYSCOMMAND, WM_CLOSE, les touches… : ils attendent les contextes de périphérique, le
 positionnement et l'entrée), le texte ANSI de DefWindowProcA, les autres types de NtUserMessageCall (SendMessage et
-ses variantes, la barre de défilement, le bureau, les menus) ; ni moniteur (place par défaut d'une fenêtre
-recouvrante, valeurs de WM_GETMINMAXINFO non adaptées à la zone de travail), ni profil d'utilisateur pour les
-métriques (`HKCU\Control Panel\Desktop\WindowMetrics`), ni SystemParametersInfo, ni menus (`WNDS_HASMENU`).
+ses variantes, la barre de défilement, le bureau, les menus) ; ni moniteur (étape 4), ni profil d'utilisateur pour
+les métriques (`HKCU\Control Panel\Desktop\WindowMetrics`), ni SystemParametersInfo, ni menus (`WNDS_HASMENU`).
 
 Tests : hôte (`win32k::metrics` : les métriques d'un écran 1280 × 800, le fond du bureau ; `win32k::defwnd` :
 bords en relief, zone cliente d'une fenêtre recouvrante, bordure fine, bord client, barres de défilement, titre
 d'outil, fenêtre réduite, WM_GETMINMAXINFO de cadres divers) ; le scénario `gui`, sur les deux CPU.
+
+## Étape 4 : le moniteur, et SetWindowPos
+
+Comme ReactOS (`monitor.c`, `window.c`, `winpos.c`, `defwnd.c`, comme spécification) :
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `win32k::monitor` | un moniteur principal, de la taille de l'écran, attaché avec les métriques quand il y a un affichage (co_IntInitializeDesktopGraphics) : handle USER (`TYPE_MONITOR`), rectangle et zone de travail, le compte des fenêtres placées en cascade (`cWndStack`) ; le moniteur d'un rectangle (`MONITOR_DEFAULTTONULL`, `…TOPRIMARY`, `…TONEAREST`) |
+| NtUserMonitorFromWindow, NtUserMonitorFromRect, NtUserMonitorFromPoint, NtUserGetMonitorInfo (`sys::monitor`) | `dwFlags` inconnu : `ERROR_INVALID_FLAGS` ; un rectangle vide compte pour son coin ; `MONITORINFO` ou `MONITORINFOEXW` (nom `\\.\DISPLAY1`), une autre taille : `ERROR_INVALID_PARAMETER` ; un moniteur inconnu : `ERROR_INVALID_MONITOR_HANDLE` |
+| `win32k::window::fix_coordinates` | IntFixWindowCoordinates sur un moniteur : `CW_USEDEFAULT` donne à une fenêtre recouvrante la place du `STARTUPINFO` (`STARTF_USEPOSITION`) ou la suivante d'une cascade (un bouton de titre et un cadre plus loin, recommencée au-delà du quart de la zone de travail), et sa taille (`STARTF_USESIZE`) ou les trois quarts de la zone ; `CW_USEDEFAULT` sur 16 bits vaut -32768 (corrigé : 32768 l'était aussi) |
+| `win32k::window::min_max_info` | co_WinPosGetMinMaxInfo, pour la création et SetWindowPos : valeurs par défaut, WM_GETMINMAXINFO, puis ce que la procédure a laissé s'adapte à la zone de travail (`WNDS_MAXIMIZESTOMONITOR`) |
+| `win32k::winpos` | co_WinPosSetWindowPos : WM_WINDOWPOSCHANGING (la procédure peut changer la demande), les nouveaux rectangles, WinPosFixupFlags (ce qui ne change pas, une fenêtre de premier niveau qui s'active monte en haut), WM_NCCALCSIZE avec des rectangles valides, l'ordre Z, les enfants déplacés avec la zone cliente, `WS_VISIBLE` (`SWP_SHOWWINDOW`, `SWP_HIDEWINDOW`), WM_CHILDACTIVATE à une fenêtre fille qui s'active, WM_WINDOWPOSCHANGED (sauf pour une fenêtre invisible dont seul le rang change) |
+| `win32k::window::link` | IntLinkHwnd : en haut sous les fenêtres au premier plan, en bas, au premier plan (`HWND_TOPMOST`, `WS_EX_TOPMOST`), hors du premier plan (`HWND_NOTOPMOST`), après une sœur |
+| `win32k::defwnd` | WM_WINDOWPOSCHANGING : la taille demandée ramenée dans les limites de WM_GETMINMAXINFO ; WM_WINDOWPOSCHANGED : WM_MOVE (zone cliente dans celle du parent d'une fenêtre fille, sinon à l'écran) et WM_SIZE si elle a bougé ou changé |
+| NtUserSetWindowPos, NtUserMoveWindow (`sys::window`) | une fenêtre, ou une sœur `hWndInsertAfter`, qui n'existe pas : `ERROR_INVALID_WINDOW_HANDLE` ; la fenêtre du bureau : FALSE ; coordonnées sur 16 bits, tailles de 0 à 32767 ; MoveWindow : sans ordre Z ni activation |
+
+Le `WINDOWPOS` de WM_WINDOWPOSCHANGED donne la place dans la zone cliente du parent, comme le dit l'API (ReactOS y met
+des coordonnées d'écran, les mêmes pour une fenêtre de premier niveau).
+
+Le programme trouve le moniteur de sa fenêtre (0, 0, 1280 × 800, zone de travail identique, principal,
+`\\.\DISPLAY1`), aucun loin de l'écran sauf le plus proche, et `ERROR_INVALID_FLAGS`. Sa fenêtre recouvrante
+(`CW_USEDEFAULT`) est en 0, 0, 960 × 600 (zone cliente 952 × 572, `WNDS_MAXIMIZESTOMONITOR`), la suivante en 23, 23.
+SetWindowPos la déplace en (50, 60) en 400 × 300 : `0046 0024 0083 0047 0003 0005`, le `WINDOWPOS` final (drapeaux
+`0x1c`), WM_MOVE (54, 84), WM_SIZE 392 × 272 ; trop petite, elle prend 112 × 28 ; déplacée seulement,
+`0046 0047 0003` ; MoveWindow la place en (100, 100), 300 × 200. Une fenêtre déplacée emmène sa fille ; la fille
+déplacée reçoit `0046 0022 0047 0003` et WM_MOVE (20, 30) dans son parent. Deux fenêtres cachées changent de rang
+(en haut, en bas, après l'autre, au premier plan puis hors de lui ; une seule reçoit `0046`), sont montrées et
+cachées (`IsWindowVisible`). SetWindowPos d'une fenêtre inconnue, ou après elle : FALSE, 1400.
+
+Correction : la numérotation des services de win32k. `tools/syscall-gen` suivait `w32ksvc32.h` sans `DBG` ; les
+binaires publiés de ReactOS sont construits avec : cinq services de plus avant `NtGdiMakeObjectXferable`, et les 26
+derniers numéros décalés (MonitorFromWindow de `user32` tombait sur `NtGdiDdDDICreateAllocation`). Les 1770 stubs
+de `ntdll`, `user32` et `gdi32` s'accordent maintenant avec les tables, et `syscall-gen --check` (`cargo xtask lint`)
+les vérifie quand l'espace utilisateur a été téléchargé.
+
+Ce qui manque, journalisé une fois : les régions visibles (une fenêtre est visible avant si elle et ses parents le
+sont et qu'elle n'est pas vide), repeindre ce qui a bougé et la copie des bits valides, l'activation et le premier
+plan (aucune fenêtre n'y est ; une fenêtre de premier niveau qui s'active monte seulement en haut), garder les
+fenêtres possédées au-dessus de leur propriétaire (WinPosDoOwnedPopups), `SWP_ASYNCWINDOWPOS` (fait tout de suite),
+plusieurs moniteurs et la zone de travail réduite, ShowWindow (WM_SIZE et WM_MOVE d'une fenêtre recouvrante y
+attendent), DeferWindowPos, une fenêtre réduite ou agrandie.
+
+Tests : hôte (`win32k::monitor` : le moniteur d'un rectangle, la cascade ; `win32k::window` : places par défaut sans
+moniteur et sur un moniteur, `STARTUPINFO`, `CW_USEDEFAULT` sur 16 bits ; `win32k::defwnd` : limites de
+WM_WINDOWPOSCHANGING, adaptation à la zone de travail ; `win32k::winpos` : drapeaux corrigés, rang déjà tenu,
+activation, nouveaux rectangles ; `syscall-gen` : les stubs trouvés et vérifiés, les stubs du moniteur qui demandent
+`DBG`) ; le scénario `gui`, sur les deux CPU.
