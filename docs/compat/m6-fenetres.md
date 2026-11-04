@@ -252,3 +252,60 @@ Tests : hôte (`gdi::region` : bandes, intersection ; `gdi::draw` : bords en rel
 intérieur seul, dégradés, origine et coupe ; `nonclient` : cadre d'une fenêtre recouvrante, boutons, titre actif et
 inactif, cadres sans titre, bords statique et client, fenêtre d'outil, couleurs de chaque partie sur une palette
 codée) ; le scénario `gui`, sur les deux CPU, avec seize pixels de la capture de l'écran.
+
+## Étape 7 : effacer la zone cliente (la table des handles GDI, les DC, PatBlt en lot)
+
+Le fond de la zone cliente s'efface en mode utilisateur : win32k envoie WM_ERASEBKGND avec un HDC qu'il prête,
+`user32` (DefWindowProc) lit le pinceau de la classe (`GetClassLongPtrW(GCL_HBRBACKGROUND)`), demande la boîte de
+découpage (`GetClipBox` : NtGdiGetAppClipBox) et la remplit (`FillRect` : `GetSysColorBrush` pour une couleur du
+système plus un, `SelectObject`, `PatBlt`, `SelectObject`). `gdi32` ne fait presque rien par le noyau : il vérifie
+chaque handle dans la table des handles GDI que win32k lui montre en lecture seule (`PEB.GdiSharedHandleTable`),
+change le pinceau du DC dans les attributs du DC (`DC_ATTR`, dans la mémoire du processus, trouvés par l'entrée de la
+table) et met PatBlt en lot dans le TEB (`GdiTebBatch`), que win32k exécute au retour du rappel (KeUserModeCallback,
+`BatchFlushRoutine`) ou au service suivant du thread chez lui. Comme ReactOS (`gdiobj.c`, `stockobj.c`, `dclife.c`,
+`dcattr.c`, `dcobjs.c`, `bitblt.c`, `cliprgn.c`, `gdibatch.c`, `windc.c`, `painting.c`, comme spécification ; les
+décalages lus dans `gdi32` et `user32` épinglés) :
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `abi::gdi` | l'entrée de la table (`GDI_TABLE_ENTRY`, 16 octets), `DEVCAPS`, `DC_ATTR` (0x1D0 octets), `GDI_TEB_BATCH` (dans le TEB en 0x1D4), `GDIBSPATBLT` (0x40 octets), les types de handles, les bits de `ulDirty_`, les ROP ; `SERVERINFO.ahbrSystem` (0x838) dans `abi::user` |
+| `win32k::gdi::handles` | la table : une section du fichier d'échange (les entrées, puis les capacités de l'écran), projetée en lecture seule (`SEC_NO_CHANGE`) dans chaque processus GUI ; handle = `FullUnique << 16 \| index`, dix entrées réservées ; propriétaire (PID, public ou personne) et attributs de chaque objet ; objets de stock |
+| `win32k::gdi::brush` | les pinceaux pleins et nul ; ceux de stock (WHITE_BRUSH à NULL_BRUSH) et des 31 couleurs du système, publics, ces derniers dans `ahbrSystem` |
+| `win32k::gdi::dc` | les DC de l'écran : région visible, origine, pinceau ; pris par un processus, ils reçoivent des attributs neufs dans des blocs de 64 Kio de sa mémoire (GdiPoolAllocate), rendus au repos ; DC_vUpdateFillBrush (`DC_BRUSH_DIRTY`), PatBlt (tout ROP3 sans source, étendues négatives), GetClipBox (complexité de la région) |
+| `win32k::gdi::batch` | les appels en lot du TEB : PatBlt exécuté avec le pinceau qu'il apporte, les autres sautés (journalisés une fois) ; le lot vidé |
+| `win32k::dce` | le cache des DC de fenêtres (UserGetDCEx : `DCX_USESTYLE`, coupe aux enfants et aux sœurs, `DCX_INTERSECTRGN` et `DCX_EXCLUDERGN`, origine de la zone cliente ou de la fenêtre ; UserReleaseDC) |
+| `win32k::paint` | co_IntPaintWindows : après WM_NCPAINT, WM_ERASEBKGND avec un DC du cache coupé à la région à mettre à jour ; une fenêtre qui rend 0 garde son fond à effacer |
+| `sys::gdi` | NtGdiPatBlt, NtGdiGetAppClipBox, NtGdiFlush ; `sys::dispatch` exécute le lot avant chaque service de win32k, Ps après chaque rappel (`ps::callback::set_gdi_batch_flush`) |
+| `win32k::gdi::dib` | PatBlt d'un pinceau plein par un ROP3 sans source quelconque (PATCOPY, PATINVERT, DSTINVERT, BLACKNESS…) |
+
+Une fenêtre montrée reçoit maintenant `0018 0046 0085 0014 0047 0005 0003` (WM_ERASEBKGND après WM_NCPAINT). Le DC
+de WM_ERASEBKGND de « Visible » donne `GetClipBox` 2 (une région simple : toute la zone cliente, 952 × 572) ; celui
+de « Pending », repeinte sous « Visible », 3 (un L : une région complexe, de 192 × 72) ; rendu, il ne sert plus
+(`GetClipBox` 0, `PatBlt` FALSE et `ERROR_INVALID_HANDLE` par NtGdiPatBlt, `gdi32` n'y trouvant plus d'attributs).
+`GetSysColorBrush(COLOR_WINDOW)` est un pinceau de stock que `GetObjectType` reconnaît par la table seule. Sur la
+capture, les zones clientes sont blanches (`COLOR_WINDOW + 1`) et coupées comme les cadres : le titre de « Visible »
+reste au-dessus de la zone cliente de « Pending » ; « Clipper » (`WS_CLIPCHILDREN`), effacée de nouveau
+(`SWP_FRAMECHANGED`), laisse le bord de sa fille. « Cover », d'une autre classe (`COLOR_HIGHLIGHT + 1`), trace 24
+traits noirs (un PatBlt chacun : plus qu'un lot n'en tient, `gdi32` appelle NtGdiFlush au vingt et unième) puis un
+trait du pinceau propre du DC, blanc.
+
+La région à mettre à jour d'une fenêtre reste un rectangle (celui qui tient ce qui a été invalidé). Une région du
+noyau n'est pas normalisée en bandes : la complexité de GetClipBox se tire de son aire (un seul rectangle exactement
+quand ses rectangles disjoints remplissent leur boîte), ce qui donne le résultat de ReactOS. Un appel en lot plus court
+que son enregistrement finit le lot (ReactOS lirait les octets suivants). Les attributs d'un DC repris sont toujours
+neufs (IntGdiCleanDC ; `DCX_NORESETATTRS` n'est pas suivi).
+
+Ce qui manque, journalisé une fois : WM_PAINT des fenêtres du client (tiré de la file, BeginPaint, EndPaint : la
+région à mettre à jour reste, effacée), NtUserGetDCEx et NtUserReleaseDC, les DC d'une fenêtre ou d'une classe
+(`CS_OWNDC`, `CS_CLASSDC` : un DC du cache), le DC du parent (`CS_PARENTDC`), les autres appels en lot (PolyPatBlt,
+TextOut, SelectClipRgn, suppression d'objets…), et sans journal : les DC en mémoire, les pinceaux et autres objets
+créés par un client (CreateSolidBrush, NtGdiGetStockObject), les stylos (`hpen` nul), les transformations (matrices à
+zéro, `MM_TEXT`), les capacités de l'écran (`DevCaps` à zéro), la suppression des objets et les objets d'un processus
+rendus à sa fin, les DC dont la fenêtre bouge pendant qu'ils sont pris.
+
+Tests : hôte (`abi::gdi` : appel en lot relu, attributs d'un DC neuf ; `gdi::handles` : types, reprises, bit de stock,
+propriétaires, table pleine, ce que vérifie GdiValidateHandle ; `gdi::dc` : ROP avec source, rectangle de PatBlt,
+DC_vUpdateFillBrush, boîte de découpage, blocs d'attributs ; `gdi::batch` : appels suivis, lot coupé ; `gdi::dib` :
+les ROP3 sans source ; `dce` : `DCX_USESTYLE`) ; l'auto-test du noyau (scénario `smoke` : la table en lecture seule
+dans le PEB, WHITE_BRUSH et le pinceau de `COLOR_WINDOW` publics) ; le scénario `gui`, sur les deux CPU, avec 32 pixels
+de la capture de l'écran.
