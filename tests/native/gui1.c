@@ -136,6 +136,7 @@ typedef struct {
 #define SWP_NOACTIVATE 0x0010
 #define SWP_SHOWWINDOW 0x0040
 #define SWP_HIDEWINDOW 0x0080
+#define SWP_FRAMECHANGED 0x0020
 #define MONITOR_DEFAULTTONULL 0
 #define MONITOR_DEFAULTTONEAREST 2
 #define WM_MOVE 0x0003
@@ -143,6 +144,8 @@ typedef struct {
 #define WM_WINDOWPOSCHANGED 0x0047
 #define WM_SHOWWINDOW 0x0018
 #define WS_VISIBLE 0x10000000
+#define WS_CLIPCHILDREN 0x02000000
+#define WS_BORDER 0x00800000
 #define SW_HIDE 0
 #define SW_SHOWNORMAL 1
 #define SW_SHOWNOACTIVATE 4
@@ -673,6 +676,9 @@ static void check_default_place(HINSTANCE instance)
 static void check_show_window(HINSTANCE instance, HWND popup)
 {
     HWND child = GetWindow(popup, GW_CHILD);
+    HWND pending;
+    HWND clipper;
+    HWND cover;
     HWND window = CreateWindowExW(0, CLASS_NAME, L"Shown", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0,
                                   0, instance, 0);
     BOOL was;
@@ -707,6 +713,7 @@ static void check_show_window(HINSTANCE instance, HWND popup)
     /* Shown by SetWindowPos: its WM_SIZE and WM_MOVE still wait, through
        hiding, for ShowWindow to show it. */
     window = CreateWindowExW(0, CLASS_NAME, L"Pending", WS_OVERLAPPEDWINDOW, 0, 0, 200, 100, 0, 0, instance, 0);
+    pending = window;
     SetWindowPos(window, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     received_count = 0;
     ShowWindow(window, SW_HIDE);
@@ -728,6 +735,21 @@ static void check_show_window(HINSTANCE instance, HWND popup)
     print_messages("created visible, SW_SHOWNOACTIVATE");
     DbgPrint("[gui] created visible: visible %d, WINDOWPOS flags %04x\n", visible, changed.flags);
     print_rect("created visible", window);
+    /* Its frame painted again under "Visible": clipped by the window above. */
+    received_count = 0;
+    SetWindowPos(pending, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    print_messages("SWP_FRAMECHANGED under another window");
+    /* A framed child sticking out of its parent's client area: clipped to it.
+       The parent clips its children, so the child paints at once. */
+    clipper = CreateWindowExW(0, CLASS_NAME, L"Clipper", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE, 1050, 100,
+                              200, 150, 0, 0, instance, 0);
+    CreateWindowExW(0, CLASS_NAME, L"Framed", WS_CHILD | WS_VISIBLE | WS_BORDER, -10, -10, 50, 50, clipper, 0,
+                    instance, 0);
+    /* Shown over "Visible", then hidden: the desktop does not paint over
+       "Visible" (which is not painted again yet). */
+    cover = CreateWindowExW(0, CLASS_NAME, L"Cover", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 400, 300, 200, 100, 0, 0,
+                            instance, 0);
+    ShowWindow(cover, SW_HIDE);
     received_count = 0;
     window = CreateWindowExW(0, CLASS_NAME, L"Popup", WS_POPUP | WS_VISIBLE, 10, 10, 50, 50, 0, 0, instance, 0);
     visible = IsWindowVisible(window);

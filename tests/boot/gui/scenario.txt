@@ -109,10 +109,10 @@ expect = [gui] after B: A next to B yes
 expect = [gui] HWND_TOPMOST: A first yes, WS_EX_TOPMOST set
 expect = [gui] HWND_TOP under a topmost window: B after A yes
 expect = [gui] HWND_NOTOPMOST: WS_EX_TOPMOST clear, A above B yes
-expect = [gui] SWP_SHOWWINDOW received 2: 0046 0047
+expect = [gui] SWP_SHOWWINDOW received 3: 0046 0085 0047
 expect = [gui] SWP_SHOWWINDOW: visible 1
 expect = [gui] SWP_HIDEWINDOW: visible 0
-expect = [gui] ShowWindow(SW_SHOWNORMAL) received 5: 0018 0046 0047 0005 0003
+expect = [gui] ShowWindow(SW_SHOWNORMAL) received 6: 0018 0046 0085 0047 0005 0003
 expect = [gui] ShowWindow(SW_SHOWNORMAL): was 0, visible 1, WM_SHOWWINDOW 1, WM_SIZE 952 572, WM_MOVE 50 70
 expect = [gui] ShowWindow(SW_SHOW), visible received 0:
 expect = [gui] ShowWindow(SW_SHOW), visible: was 1
@@ -123,21 +123,46 @@ expect = [gui] ShowWindow(SW_HIDE), hidden: was 0
 expect = [gui] ShowWindow of a child of a hidden window received 1: 0018
 expect = [gui] ShowWindow of a child of a hidden window: was 0, WS_VISIBLE set, visible 0
 expect = [gui] ShowWindow(SW_HIDE) before WM_SIZE received 3: 0018 0046 0047
-expect = [gui] ShowWindow(SW_SHOWNOACTIVATE) at last received 5: 0018 0046 0047 0005 0003
+expect = [gui] ShowWindow(SW_SHOWNOACTIVATE) at last received 6: 0018 0046 0085 0047 0005 0003
 expect = [gui] ShowWindow(12): 0 (87)
 expect = [gui] ShowWindow of no window: 0 (1400)
-expect = [gui] created visible, SW_SHOWNOACTIVATE received 9: 0024 0081 0083 0001 0018 0046 0047 0005 0003
+expect = [gui] created visible, SW_SHOWNOACTIVATE received 10: 0024 0081 0083 0001 0018 0046 0085 0047 0005 0003
 expect = [gui] created visible: visible 1, WINDOWPOS flags 1857
 expect = [gui] created visible: 69 69 1029 669
-expect = [gui] popup created visible received 8: 0081 0083 0001 0005 0003 0018 0046 0047
+expect = [gui] SWP_FRAMECHANGED under another window received 4: 0046 0083 0085 0047
+expect = [gui] popup created visible received 9: 0081 0083 0001 0005 0003 0018 0046 0085 0047
 expect = [gui] popup created visible: visible 1, WINDOWPOS flags 1847
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 
-# The desktop's background, painted when the program switches to it; the
-# windows, shown or not, are not painted yet (no device contexts).
+# The frames of the windows left visible, drawn by the kernel's
+# DefWindowProc (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under
+# "Visible" at 69, 69 (960 x 600): the raised edge, the caption's gradient
+# from COLOR_INACTIVECAPTION, the line under it, the close button. Their
+# client areas are not erased yet (WM_ERASEBKGND): the desktop shows
+# through. "Pending", painted again (SWP_FRAMECHANGED), is clipped by
+# "Visible" above it: its right edge at 199, 60, the caption of "Visible"
+# at 199, 80. The child "Framed" of "Clipper" (WS_CLIPCHILDREN) sticks out
+# of its parent's client area: its border is clipped there (1044, 140) and
+# drawn inside (1093, 140). "Cover", shown then hidden inside "Visible",
+# leaves its frame (400, 300): the desktop does not paint over "Visible",
+# which is not painted again yet. Where "Shown" was before it was hidden, the desktop is painted
+# again.
+screen = 0 0 D4D0C8
+screen = 73 73 808080
+screen = 73 92 D4D0C8
+screen = 1006 75 FFFFFF
+screen = 1014 82 D4D0C8
+screen = 1028 668 404040
+screen = 1027 667 808080
+screen = 199 60 404040
+screen = 199 80 888888
+screen = 1044 140 3A6EA5
+screen = 1093 140 000000
+screen = 400 300 D4D0C8
 screen = 640 400 3A6EA5
-screen = 0 0 3A6EA5
+screen = 100 55 3A6EA5
+screen = 46 300 3A6EA5
 screen = 1279 799 3A6EA5
 
 forbid = WRONG
