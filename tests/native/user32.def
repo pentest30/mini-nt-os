@@ -4,14 +4,18 @@
 ; DLL exports them undecorated.
 LIBRARY user32.dll
 EXPORTS
+BeginPaint@8
 CreateDesktopW@24
 CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
+DispatchMessageW@4
+EndPaint@8
 GetClassInfoExW@12
 GetClientRect@8
 GetMonitorInfoW@8
 GetParent@4
+GetQueueStatus@4
 GetSysColor@4
 GetSysColorBrush@4
 GetSystemMetrics@4
@@ -24,6 +28,7 @@ IsWindowVisible@4
 MonitorFromPoint@12
 MonitorFromWindow@8
 MoveWindow@24
+PeekMessageW@20
 RegisterClassExW@4
 RegisterLogonProcess@8
 SetProcessWindowStation@4
