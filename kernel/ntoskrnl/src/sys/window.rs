@@ -215,3 +215,36 @@ pub(super) fn nt_user_show_window(arguments: &[u32]) -> NtStatus {
     }
     NtStatus(u32::from(win32k::winpos::show_window(&window, command)))
 }
+
+/// NtUserBeginPaint(hWnd, lpPaint) : `hWnd` se peint (IntBeginPaint) ; le
+/// `PAINTSTRUCT` écrit, rend son DC, NULL sans DC. NULL pour une fenêtre
+/// inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` qu'on ne peut
+/// écrire (le DC reste pris, comme dans ReactOS).
+pub(super) fn nt_user_begin_paint(arguments: &[u32]) -> NtStatus {
+    let (handle, paint) = (arguments[0], arguments[1]);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let ps = win32k::paint::begin_paint(&window);
+    match ke::usermem::copy_to_user(u64::from(paint), ps.as_bytes()) {
+        Ok(()) => NtStatus(ps.hdc),
+        Err(status) => fail(dos_error(status)),
+    }
+}
+
+/// NtUserEndPaint(hWnd, lpPaint) : le DC de BeginPaint (`lpPaint->hdc`) est
+/// rendu ; TRUE. FALSE pour une fenêtre inconnue
+/// (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` illisible.
+pub(super) fn nt_user_end_paint(arguments: &[u32]) -> NtStatus {
+    let (handle, paint) = (arguments[0], arguments[1]);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let mut bytes = [0u8; core::mem::size_of::<abi::user::PaintStruct32>()];
+    if copy_from_user(&mut bytes, u64::from(paint)).is_err() {
+        return NtStatus(0);
+    }
+    let ps = abi::user::PaintStruct32::from_bytes(&bytes).expect("the size of a PAINTSTRUCT");
+    win32k::paint::end_paint(&window, ps.hdc);
+    NtStatus(1)
+}

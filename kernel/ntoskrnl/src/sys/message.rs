@@ -136,6 +136,22 @@ pub(super) fn nt_user_get_message(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtUserDispatchMessage(pMsg) : le message à la procédure de sa fenêtre
+/// (IntDispatchMessage) ; rend ce qu'elle rend, 0 sans fenêtre ou pour un
+/// `pMsg` illisible (l'erreur de Win32 de la faute).
+pub(super) fn nt_user_dispatch_message(arguments: &[u32]) -> NtStatus {
+    let mut bytes = [0u8; core::mem::size_of::<Msg32>()];
+    if let Err(status) = ke::usermem::copy_from_user(&mut bytes, u64::from(arguments[0])) {
+        return fail(dos_error(status));
+    }
+    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let message = Msg32 { hwnd: word(0), message: word(4), w_param: word(8), l_param: word(12), ..Msg32::default() };
+    match win32k::window::dispatch_message(&message) {
+        Ok(result) => NtStatus(result),
+        Err(status) => fail(dos_error(status)),
+    }
+}
+
 /// NtUserWaitMessage() : attend qu'un message arrive dans la file du thread,
 /// s'il n'y en a pas ; TRUE.
 pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
