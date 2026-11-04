@@ -83,6 +83,8 @@ pub fn initialize(
     }
     let event = power_event()?;
     POWER_EVENT.call_once(|| event);
+    // InitVideo: the system metrics and colours.
+    crate::metrics::write()?;
     let directory: ob::ObjectRef = ob::Directory::create();
     let name = window_stations_directory(process.session_id());
     ob::namespace().insert(&directory, &name, None, abi::object::OBJ_PERMANENT)?;

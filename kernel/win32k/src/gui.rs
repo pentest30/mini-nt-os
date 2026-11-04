@@ -61,6 +61,8 @@ pub struct ProcessInfo {
     desktop_views: KSpinLock<Vec<DesktopView>>,
     /// Son bureau de démarrage (`hdeskStartup`, `rpdeskStartup`).
     startup_desktop: KSpinLock<Option<(u32, Arc<Object<Desktop>>)>>,
+    /// Ses classes de fenêtres (`pclsPrivateList`, `pclsPublicList`).
+    pub classes: KSpinLock<crate::class::ClassLists>,
 }
 
 /// La vue d'un tas de bureau dans un processus.
@@ -88,6 +90,7 @@ impl ProcessInfo {
             window_station: KSpinLock::new(None),
             desktop_views: KSpinLock::new(Vec::new()),
             startup_desktop: KSpinLock::new(None),
+            classes: KSpinLock::new(crate::class::ClassLists::default()),
         }
     }
 
@@ -106,6 +109,15 @@ impl ProcessInfo {
     pub fn desktop_view(&self, desktop: &Arc<Object<Desktop>>) -> Option<u32> {
         let views = self.desktop_views.lock();
         views.iter().find(|view| Arc::ptr_eq(&view.desktop, desktop)).map(|view| view.view)
+    }
+
+    /// Sa vue du tas `heap` d'un bureau, s'il le voit.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn heap_view(&self, heap: &crate::desktop::DesktopHeap) -> Option<u32> {
+        let views = self.desktop_views.lock();
+        views.iter().find(|view| core::ptr::eq(&*view.desktop.heap, heap)).map(|view| view.view)
     }
 
     /// IntMapDesktopView : sa vue du tas de `desktop`, projetée au premier de
@@ -186,6 +198,9 @@ pub struct ThreadInfo {
     keyboard_layout: KSpinLock<Option<Arc<KeyboardLayout>>>,
     /// Sa file de messages (`MessageQueue`).
     pub queue: MessageQueue,
+    /// Ses fenêtres (`WindowListHead`) : elles vivent autant que lui, en
+    /// attendant DestroyWindow.
+    pub windows: KSpinLock<Vec<Arc<crate::window::Window>>>,
 }
 
 /// Le bureau d'un thread : le handle qu'il a donné, le bureau, et la
@@ -206,6 +221,7 @@ impl ThreadInfo {
             desktop: KSpinLock::new(None),
             keyboard_layout: KSpinLock::new(None),
             queue: MessageQueue::new(),
+            windows: KSpinLock::new(Vec::new()),
         }
     }
 
@@ -303,7 +319,7 @@ pub fn set_thread_desktop(handle: u32, desktop: Option<Arc<Object<Desktop>>>) ->
         return Err(status);
     }
     let next = next.map(|(thread_desktop, _)| thread_desktop);
-    if gives_startup_desktop(info.ti_flags) {
+    if is_client_thread(info.ti_flags) {
         if let Some(next) = &next {
             let mut startup = process_info.startup_desktop.lock();
             if startup.is_none() {
@@ -323,9 +339,10 @@ pub fn set_thread_desktop(handle: u32, desktop: Option<Arc<Object<Desktop>>>) ->
     Ok(())
 }
 
-/// Si un thread de `TIF_*` `ti_flags` donne son bureau à son processus
-/// comme bureau de démarrage : pas un thread du système ni de `csrss`.
-pub const fn gives_startup_desktop(ti_flags: u32) -> bool {
+/// Un thread de `TIF_*` `ti_flags` est un thread client : ni du système ni
+/// de `csrss`. Il donne son bureau à son processus comme bureau de
+/// démarrage, et `user32` le prépare à sa conversion (ClientThreadSetup).
+pub const fn is_client_thread(ti_flags: u32) -> bool {
     ti_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD) == 0
 }
 
@@ -434,14 +451,20 @@ pub fn process_info(process: &Arc<Object<EProcess>>) -> Result<Arc<ProcessInfo>,
 
 /// PsConvertToGuiThread : le thread courant devient un thread GUI, s'il ne
 /// l'est pas, et son processus un processus GUI ; rend son `THREADINFO`.
-/// Son TEB reçoit son `THREADINFO` et son `CLIENTINFO`.
+/// Son TEB reçoit son `THREADINFO` et son `CLIENTINFO`. Un thread client
+/// (ni du système ni de `csrss`) est ensuite préparé par `user32`
+/// (ClientThreadSetup, [`crate::callback`]), comme à la fin
+/// d'InitThreadCallback.
 ///
 /// # Errors
 /// `STATUS_INVALID_PARAMETER` hors d'un thread de Ps ; celles de
-/// [`process_info`] et de l'écriture du TEB.
+/// [`process_info`], de l'écriture du TEB et du rappel. Un rappel qui échoue
+/// laisse le thread converti, contrairement à ReactOS, qui défait la
+/// conversion : l'appel suivant ne le refait pas.
 ///
 /// # IRQL
-/// PASSIVE_LEVEL, dans le thread, à son appel système.
+/// PASSIVE_LEVEL, dans le thread, à son appel système. Rappelle le mode
+/// utilisateur à la conversion d'un thread client.
 pub fn convert_current_thread() -> Result<Arc<ThreadInfo>, NtStatus> {
     let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
     if let Some(info) = thread.win32_thread() {
@@ -454,7 +477,17 @@ pub fn convert_current_thread() -> Result<Arc<ThreadInfo>, NtStatus> {
         thread_flags(crate::csrss::csrss(), process.pid()),
     ));
     write_teb(&thread, &process, &process_info, &info)?;
-    Ok(downcast(thread.set_win32_thread(info)))
+    let info: Arc<ThreadInfo> = downcast(thread.set_win32_thread(info));
+    if !is_client_thread(info.ti_flags) {
+        return Ok(info);
+    }
+    log::info!("win32k: ClientThreadSetup for thread {} of {}", thread.tid(), process.image_file_name());
+    // Nothing held across the callback: a thread that ends in it drops
+    // this frame.
+    drop((thread, process, process_info, info));
+    crate::callback::client_thread_setup()?;
+    let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
+    Ok(downcast(thread.win32_thread().expect("a GUI thread stays one")))
 }
 
 /// Écrit dans le TEB de `thread` son `THREADINFO` et son `CLIENTINFO`.
@@ -510,11 +543,11 @@ mod tests {
     }
 
     #[test]
-    fn only_client_threads_give_a_startup_desktop() {
-        assert!(gives_startup_desktop(0), "winlogon's thread");
-        assert!(gives_startup_desktop(TIF_DONTATTACHQUEUE));
-        assert!(!gives_startup_desktop(TIF_CSRSSTHREAD | TIF_DONTATTACHQUEUE), "a csrss thread");
-        assert!(!gives_startup_desktop(TIF_SYSTEMTHREAD), "a system thread");
+    fn only_client_threads_are_client_threads() {
+        assert!(is_client_thread(0), "winlogon's thread");
+        assert!(is_client_thread(TIF_DONTATTACHQUEUE));
+        assert!(!is_client_thread(TIF_CSRSSTHREAD | TIF_DONTATTACHQUEUE), "a csrss thread");
+        assert!(!is_client_thread(TIF_SYSTEMTHREAD), "a system thread");
     }
 
     #[test]

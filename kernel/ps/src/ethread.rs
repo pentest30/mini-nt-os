@@ -183,6 +183,14 @@ impl EThread {
         self.teb
     }
 
+    /// Sa pile noyau, jusqu'à ce que le reaper la rende.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn kernel_stack(&self) -> Option<KernelStack> {
+        *self.kernel_stack.lock()
+    }
+
     /// Adresse de départ (StartAddress).
     pub fn start_address(&self) -> u32 {
         self.start_address

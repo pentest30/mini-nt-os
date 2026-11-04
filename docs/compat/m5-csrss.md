@@ -691,10 +691,62 @@ les crochets, le filtre par fenêtre fille, la position du curseur (`pt` est nul
 **NtUserCreateWindowEx** attend deux préalables : la création d'une fenêtre envoie WM_GETMINMAXINFO, WM_NCCREATE,
 WM_NCCALCSIZE, WM_CREATE… à sa procédure, qui est dans `user32` pour les classes du client (il faut KeUserModeCallback :
 le noyau appelle `user32` par `KiUserCallbackDispatcher`, qui revient par NtCallbackReturn) ; et la classe doit être
-enregistrée (NtUserRegisterClassExWOW, la table des atomes d'une station).
+enregistrée (NtUserRegisterClassExWOW, la table des atomes d'une station). Le premier est fait à l'étape 23.
 
 Tests : hôte (`win32k::queue` : messages à pointeur, filtres par fenêtre et intervalle, ordre puis WM_QUIT, WM_QUIT
 après les messages postés même filtrés, bits de réveil et de changement), `message_queue_self_test` (file vide, messages
 postés à soi par TID et sans fenêtre, GetQueueStatus, refus, PeekMessage par intervalle, GetMessage dans l'ordre, WM_QUIT
 une fois, une attente réveillée par un autre thread), `desktop_self_test` (les bits de la file dans le
 `CLIENTTHREADINFO`, recopiés au changement de bureau, effacés quand le message sort, reportés à un nouveau message).
+
+## Étape 23 : les rappels en mode utilisateur (KeUserModeCallback)
+
+win32k appelle `user32` dans le thread qui lui fait un appel système : c'est ainsi qu'il atteint les procédures de
+fenêtre du client, ses crochets, ses chargements de ressources. `user32` met sa table de routines dans
+`PEB.KernelCallbackTable` (`apfnDispatch`, à son initialisation, avant son premier appel à win32k), et le noyau passe
+par `ntdll!KiUserCallbackDispatcher`, qui appelle la routine de l'index donné ; elle finit par NtCallbackReturn.
+La spécification suivie est celle de ReactOS : `ntoskrnl/ke/i386/usercall.c`, `usercall_asm.S`,
+`dll/ntdll/dispatch/i386/dispatch.S`.
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `ps::callback::user_mode_callback` (KeUserModeCallback) | copie l'argument sous l'ESP de la trame du service (aligné sur 4 octets), puis le cadre du répartiteur : `[0, index, &argument, longueur]` et 8 octets pour son enregistrement SEH ; garde la tête de la liste SEH du TEB (`ExceptionList`) et la remet au retour, sauf après `STATUS_CALLBACK_POP_STACK` ; rend le résultat copié dans le noyau (au plus ce que l'appelant attend), ou le statut d'échec du rappel ; refuse un thread dont la fin est demandée (`STATUS_THREAD_IS_TERMINATING`) |
+| `ke::callout::call_user_mode` (KiCallUserMode) | garde le contexte du noyau (`Callout`, dans sa trame) ; la pile initiale du thread (TSS.RSP0, SYSENTER_ESP, et ce que reprend chaque commutation) descend sous ses trames ; le thread part en mode utilisateur par le retour des portes (`hal::callout`, `hal_trap_exit`), avec la trame du service, EIP au répartiteur et ESP sur son cadre |
+| NtCallbackReturn, `int 2Bh` (`sys::callback`, `sys::gates`) | `ke::callout::callback_return` : la pile initiale et le rappel englobant redeviennent ceux d'avant, et le thread reprend dans `call_user_mode` ; les trames de l'appel sont abandonnées ; sans rappel en cours, `STATUS_NO_CALLBACK_ACTIVE` ; avec `STATUS_CALLBACK_POP_STACK` (une exception déroulée au-delà du répartiteur), la trame du service reprend l'état utilisateur de l'appel (FS, EDI, ESI, EBX, EBP, EIP, CS, EFLAGS, ESP, SS) |
+| `mm::kstack::grow` (MmGrowKernelStack) | la pile noyau grandit en place, dans la réserve de son emplacement, pour garder 16 Kio libres sous chaque rappel, jusqu'à 72 Kio (`STATUS_STACK_OVERFLOW` au-delà) ; ses pages sont rendues à la fin du thread |
+
+Les rappels s'emboîtent : un rappel peut faire des appels système, et un appel système un autre rappel. Le thread
+peut être préempté en mode utilisateur pendant un rappel : les interruptions arrivent sur la pile initiale du rappel.
+
+Deux rappels de win32k (`win32k::callback`, index de `u32cb.h`) :
+
+| Rappel | Quand |
+|---|---|
+| ClientThreadSetup (7) | un thread client (ni du système ni de `csrss`) devient un thread GUI, comme à la fin d'InitThreadCallback |
+| GetCharsetInfo (9) | une disposition de clavier est chargée : `TranslateCharsetInfo(TCI_SRCLOCALE)` de `gdi32` donne le jeu de caractères, la page de code et la signature de police de sa langue (le KLID) ; s'il échoue, ANSI_CHARSET, FS_LATIN1 et CP_ACP, journalisé |
+
+Dans le scénario `smss`, `winlogon` fait les deux, avec les vrais `ntdll`, `user32`, `gdi32` et `kernel32` de
+ReactOS : son thread est préparé par ClientThreadSetup, et `00000409` reçoit le jeu 0, la page de code 1252 et la
+signature 0x1 (FS_LATIN1) ; NtCallbackReturn est appelé deux fois (par SYSENTER sur Intel). `winlogon` s'arrête
+toujours à son serveur RPC.
+
+Écarts et limites :
+- Un thread qui se termine pendant un rappel le fait sur la pile du rappel, comme NT : les trames des rappels en cours
+  sont abandonnées, sans que ce qu'elles possèdent soit rendu. Les appelants ne tiennent ni verrou ni objet à rendre
+  pendant un rappel (NtUserLoadKeyboardLayoutEx lâche son processus et son `PROCESSINFO` avant).
+- Un APC utilisateur en attente n'est pas livré à l'entrée du rappel, mais au retour suivant vers le mode utilisateur.
+- Les appels GDI en lot du TEB (`GdiBatchCount`) ne sont pas exécutés après un rappel (GDI n'a pas de lots) :
+  journalisé une fois.
+- Un ClientThreadSetup qui échoue laisse le thread converti (ReactOS défait la conversion).
+- La pile noyau ne rapetisse pas après un rappel.
+
+Tests : hôte (`ke::callout` : la trame sous la pile initiale, ce que prend `STATUS_CALLBACK_POP_STACK` ;
+`ps::callback` : la pile utilisateur du rappel, le cadre du répartiteur ; `mm::kstack` : croissance en place jusqu'à
+la limite ; `win32k::keyboard` : le KLID en LCID, la réponse de GetCharsetInfo et ses valeurs par défaut ;
+`abi::user` : `GET_CHARSET_INFO`) ; `user_callback_self_test` (smoke, sur les deux CPU : 8 rappels emboîtés, par un
+répartiteur du programme, qui reçoivent leur argument, restent 50 ms en mode utilisateur, font un appel système,
+reviennent par `int 2Bh` et NtCallbackReturn, le dernier en échec ; ESP, EBX, ESI, EDI, EBP et la liste SEH du
+programme retrouvés ; la pile noyau agrandie) ; `kernel_stack_self_test` (croissance, pages remises à zéro et
+rendues) ; le scénario `smss` (les deux rappels de `winlogon`). Mutations : RSP0 ou SYSENTER_ESP non déplacés, pile
+initiale non gardée par le thread, liste SEH non remise, pile agrandie oubliée, pages non remises à zéro,
+résultat non copié, statut ignoré, rappel ClientThreadSetup absent, mauvais index : toutes détectées.

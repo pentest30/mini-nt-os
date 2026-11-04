@@ -22,6 +22,7 @@ extern crate alloc;
 pub mod apc;
 pub mod balance;
 pub mod bugcheck;
+pub mod callout;
 pub mod clock;
 pub mod context;
 pub mod dispatcher;

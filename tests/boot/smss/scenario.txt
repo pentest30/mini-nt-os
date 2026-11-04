@@ -48,13 +48,15 @@ forbid = Source File: ../base/system/smss/smss.c
 # which makes it a CSR process (its exception port, its first thread's
 # times, whether that thread is ending) and resumes it; winlogon's kernel32
 # connects to csrss (NtSecureConnectPort, with csrss's shared section mapped
-# SEC_NO_CHANGE), user32 to win32k; winlogon registers as the logon
+# SEC_NO_CHANGE), user32 to win32k (which calls user32 back to prepare
+# the thread: ClientThreadSetup); winlogon registers as the logon
 # process (RegisterLogonProcess: win32k, then csrss, which gives win32k its
 # API port), then creates its window station (WinSta0, the interactive
 # one) and takes it, creates its desktops (Default, Winlogon,
 # Screen-Saver), goes on Winlogon and switches to it, gives the station its
 # user (csrss logs it off), loads its keyboard layout (00000409: kbdus.dll,
-# its tables read, not run), then starts its RPC server: not yet (a named
+# its tables read, not run; its code page from user32's GetCharsetInfo
+# callback), then starts its RPC server: not yet (a named
 # pipe, \pipe\winreg: NtCreateNamedPipeFile, Io). It ends; smss ends with
 # it. The probe ends csrss after 2 s.
 # Update with each step (docs/compat/m5-csrss.md).
@@ -131,7 +133,14 @@ screen = 0 0 3A6EA5
 screen = 1279 799 3A6EA5
 expect = [m4]   NtUserSetWindowStationUser (0x1222): 1 calls, the first returned 0x00000001
 expect = [m4]   NtUserLoadKeyboardLayoutEx (0x11c5): 1 calls, the first returned 0x04090409
-expect = [m4] USER: keyboard layouts loaded: [04090409 (00000409, tables at 0x1000)]
+expect = [m4] USER: keyboard layouts loaded: [04090409 (00000409, tables at 0x1000, code page 1252)]
+# user32's callbacks (KeUserModeCallback, M5 step 23), each back by
+# NtCallbackReturn: ClientThreadSetup when winlogon's thread becomes a GUI
+# thread, GetCharsetInfo (gdi32's TranslateCharsetInfo) for its layout.
+expect = win32k: ClientThreadSetup for thread
+expect = win32k: keyboard layout 00000409: charset 0, code page 1252, font signature 0x1 (GetCharsetInfo)
+expect = [m4]   NtCallbackReturn (0x0016): 2 calls, the first did not return
+forbid = win32k: GetCharsetInfo for keyboard layout
 expect = [m4]   NtUserGetKeyboardLayoutList (0x119b): 2 calls, the first returned 0x00000001
 expect = sys: NtCreateNamedPipeFile (0x002e) is not implemented
 expect = WL: Could not start the RPC server

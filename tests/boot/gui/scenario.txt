@@ -1,0 +1,77 @@
+# M6, windows: GUI1.EXE (tests/native/gui1.c, MinGW, linked to ReactOS's
+# kernel32 and user32) takes the place of winlogon.exe, which smss starts as
+# its initial command once csrss runs. Like winlogon, it registers as the
+# logon process, creates WinSta0 and a desktop and goes on it; user32 reads
+# the system metrics and colours in the shared section. Then it
+# registers a window class (user32 registers its system controls first),
+# finds it and user32's Button again (GetClassInfoExW), cannot find a class
+# never registered nor register its own twice. It creates a window of its
+# class: its procedure receives WM_NCCREATE and WM_CREATE (the CREATESTRUCT
+# as given; meanwhile the TEB's CLIENTINFO names the window and its WND),
+# WM_NCCALCSIZE, WM_SIZE and WM_MOVE, through KeUserModeCallback;
+# user32 reads by itself its name, style and rectangle in its WND; its name
+# changes (SetWindowTextW: WM_SETTEXT, NtUserDefSetText). A child window
+# tells its parent (WM_PARENTNOTIFY), which user32 finds through the WNDs'
+# links. A child without a parent, a window of no class and one whose
+# procedure refuses WM_NCCREATE are not created. An overlapped window gets
+# WM_GETMINMAXINFO first (the limits from the system metrics), the place
+# and size of ReactOS without a monitor, and its client area from the
+# kernel's DefWindowProc (NtUserMessageCall, WM_NCCALCSIZE: without the
+# frame and the caption, and WNDS_HASCAPTION in its WND; with valid
+# rectangles, WVR_VALIDRECTS). Sizing windows stay within WM_GETMINMAXINFO's
+# limits, those the system gives or a larger minimum from their procedure;
+# they are created with ones on the stack, which user32 leaves in the bAnsi
+# bit of the class name's LARGE_STRING. It ends with status 0x600D.
+# Update with each step (docs/compat/m6-fenetres.md).
+features = test-smss
+requires = userland, native
+initial-command = GUI1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [gui] on WinSta0\Default
+expect = [gui] GetSystemMetrics: screen 1280x800, caption 20, frame 4, minimum width 112
+expect = [gui] GetSysColor: a56e3a ffffff c8d0d4
+expect = [gui] RegisterClassExW: atom c00a (0)
+expect = [gui] GetClassInfoExW: the class as registered
+expect = [gui] GetClassInfoExW(Button): user32's class
+expect = [gui] GetClassInfoExW(NoSuchClass): 0 (1411)
+expect = [gui] RegisterClassExW again: 0000 (1410)
+expect = [gui] CreateWindowExW: a window (0)
+expect = [gui] WM_NCCREATE: CREATESTRUCT as given
+expect = [gui] WM_CREATE: CREATESTRUCT as given
+expect = [gui] CallbackWnd: the window and its WND
+expect = [gui] the window received: 0081 0083 0001 0005 0003
+expect = [gui] IsWindow: 1
+expect = [gui] GetWindowTextW: Mino
+expect = [gui] SetWindowTextW, longer: as set
+expect = [gui] SetWindowTextW, shorter: as set
+expect = [gui] SetWindowTextW and GetWindowTextW received: 000c 000d 000c 000d
+expect = [gui] GetWindowLongW(GWL_STYLE): 84000000
+expect = [gui] GetWindowRect: 100 50 500 350
+expect = [gui] child: a window (0)
+expect = [gui] the child and its parent received: 0081 0083 0001 0005 0003 0210
+expect = [gui] WM_PARENTNOTIFY: WM_CREATE, 7, the child
+expect = [gui] GetParent: the window
+expect = [gui] GetWindow(GW_CHILD): the child
+expect = [gui] child GetWindowRect: 110 70 210 120
+expect = [gui] child without a parent: 00000000 (1406)
+expect = [gui] window of no class: 00000000 (1407)
+expect = [gui] window refusing WM_NCCREATE: 00000000
+expect = [gui] overlapped: a window (0)
+expect = [gui] WM_CREATE: WNDS_HASCAPTION set
+expect = [gui] the overlapped window received: 0024 0081 0083 0001
+expect = [gui] WM_GETMINMAXINFO: maximized 1288x808 at -4,-4, tracking 112x28 to 1292x812
+expect = [gui] overlapped GetWindowRect: 0 0 800 600
+expect = [gui] overlapped GetClientRect: 0 0 792 572
+expect = [gui] DefWindowProcW(WM_USER + 1): 0
+expect = [gui] DefWindowProcW(WM_NCCALCSIZE, TRUE): 400, 104 124 396 296
+expect = [gui] sizing, too small: 10 20 122 48
+expect = [gui] sizing, too large: 0 0 1292 812
+expect = [gui] sizing, larger minimum: 0 0 300 200
+expect = [gui] done
+expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
+
+forbid = WRONG
+forbid = NtUserMessageCall (0x11cb) is not implemented
+forbid = *** STOP:

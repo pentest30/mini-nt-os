@@ -14,11 +14,13 @@
 //! thread (son `CLIENTINFO` : `hKL`, `CodePage`), ou de chaque thread GUI du
 //! processus (`KLF_SETFORPROCESS`).
 //!
+//! Le jeu de caractères, la page de code et la signature de police d'une
+//! disposition viennent de sa langue (le KLID), par le rappel GetCharsetInfo
+//! de `user32` (co_IntGetCharsetInfo, [`crate::callback`]).
+//!
 //! Pas encore : la traduction des touches par les tables (avec la file
-//! d'entrée, M6), la page de code d'une langue autre que celle du système
-//! (co_IntGetCharsetInfo : toutes ont la page ANSI du système), l'IME, le
-//! déchargement (NtUserUnloadKeyboardLayout), le réordonnancement
-//! (`KLF_REORDER`), la notification du shell.
+//! d'entrée, M6), l'IME, le déchargement (NtUserUnloadKeyboardLayout), le
+//! réordonnancement (`KLF_REORDER`), la notification du shell.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -27,7 +29,7 @@ use core::mem::offset_of;
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_IMAGE_FORMAT, STATUS_OBJECT_NAME_INVALID};
 use abi::teb32::Teb32;
-use abi::user::{ClientInfo32, KLF_ACTIVATE, KLF_SETFORPROCESS};
+use abi::user::{CharsetInfo32, ClientInfo32, ANSI_CHARSET, CP_ACP, FS_LATIN1, KLF_ACTIVATE, KLF_SETFORPROCESS};
 use hal::sync::KSpinLock;
 
 /// Un fichier de disposition (KBDFILE) : son nom (le KLID), son image, et
@@ -42,8 +44,30 @@ pub struct KeyboardFile {
 pub struct KeyboardLayout {
     pub hkl: u32,
     pub file: Arc<KeyboardFile>,
-    /// La page de code ANSI de sa langue.
+    /// Le jeu de caractères de sa langue (iBaseCharset).
+    pub charset: u32,
+    /// Les pages de code de sa langue, en bits (dwFontSigs : `fsCsb[0]`).
+    pub font_signature: u32,
+    /// La page de code ANSI de sa langue (CodePage) ; `CP_ACP` sans
+    /// GetCharsetInfo.
     pub code_page: u16,
+}
+
+/// La langue (LCID) d'un KLID, en hexadécimal comme
+/// RtlUnicodeStringToInteger en base 16 ; `STATUS_OBJECT_NAME_INVALID`
+/// sinon.
+pub fn klid_locale(klid: &str) -> Result<u32, NtStatus> {
+    u32::from_str_radix(klid, 16).map_err(|_| STATUS_OBJECT_NAME_INVALID)
+}
+
+/// Ce qu'une disposition retient de la réponse de GetCharsetInfo, ou, s'il
+/// échoue, ANSI_CHARSET, FS_LATIN1 et CP_ACP (UserLoadKbdLayout) : son jeu
+/// de caractères, sa signature de police, sa page de code.
+pub fn layout_charset(answer: Result<CharsetInfo32, NtStatus>) -> (u32, u32, u16) {
+    match answer {
+        Ok(info) => (info.charset, info.code_page_bits[0], info.ansi_code_page as u16),
+        Err(_) => (ANSI_CHARSET, FS_LATIN1, CP_ACP as u16),
+    }
 }
 
 /// La RVA des tables d'une DLL de disposition : `KbdLayerDescriptor` est
@@ -105,23 +129,27 @@ pub fn layouts() -> Vec<u32> {
 
 /// co_IntLoadKeyboardLayoutEx : la disposition `hkl` (du KLID `klid`),
 /// chargée si elle ne l'est pas — `read` rend alors le fichier de
-/// disposition, dont la page de code est `code_page` —, puis activée
-/// (`KLF_ACTIVATE`) pour le thread courant, ou chaque thread GUI de son
-/// processus (`KLF_SETFORPROCESS`). Rend le HKL ; `None` pour un HKL nul ou
-/// une station sans entrée ni sortie (`no_io`).
+/// disposition, et `charset` (GetCharsetInfo) ce que dit la langue du KLID
+/// —, puis activée (`KLF_ACTIVATE`) pour le thread courant, ou chaque thread
+/// GUI de son processus (`KLF_SETFORPROCESS`). Rend le HKL ; `None` pour un
+/// HKL nul ou une station sans entrée ni sortie (`no_io`).
 ///
 /// # Errors
 /// Celles de `read`, de la lecture des tables
-/// ([`layer_descriptor_tables`]) et de l'activation.
+/// ([`layer_descriptor_tables`]) et de l'activation ;
+/// `STATUS_OBJECT_NAME_INVALID` pour un KLID qui n'est pas hexadécimal.
+/// Un échec de `charset` est journalisé, et la disposition prend les
+/// valeurs par défaut ([`layout_charset`]).
 ///
 /// # IRQL
-/// PASSIVE_LEVEL, dans un thread GUI.
+/// PASSIVE_LEVEL, dans un thread GUI. `charset` peut rappeler le mode
+/// utilisateur : rien n'est tenu pendant son appel.
 pub fn load(
     no_io: bool,
     klid: &str,
     hkl: u32,
     flags: u32,
-    code_page: u16,
+    charset: impl FnOnce(u32) -> Result<CharsetInfo32, NtStatus>,
     read: impl FnOnce(&str) -> Result<Vec<u8>, NtStatus>,
 ) -> Result<Option<u32>, NtStatus> {
     if hkl == 0 || no_io {
@@ -132,8 +160,21 @@ pub fn load(
         None => {
             let image = read(klid)?;
             let tables = layer_descriptor_tables(&image)?;
+            let answer = charset(klid_locale(klid)?);
+            match &answer {
+                Ok(info) => log::info!(
+                    "win32k: keyboard layout {klid}: charset {}, code page {}, font signature {:#x} (GetCharsetInfo)",
+                    info.charset,
+                    info.ansi_code_page,
+                    info.code_page_bits[0]
+                ),
+                Err(status) => {
+                    log::warn!("win32k: GetCharsetInfo for keyboard layout {klid} failed ({status:?}): the defaults")
+                }
+            }
+            let (charset, font_signature, code_page) = layout_charset(answer);
             let file = Arc::new(KeyboardFile { name: String::from(klid), image, tables });
-            let created = Arc::new(KeyboardLayout { hkl, file, code_page });
+            let created = Arc::new(KeyboardLayout { hkl, file, charset, font_signature, code_page });
             let mut layouts = LAYOUTS.lock();
             // Another thread may have loaded it meanwhile.
             match layouts.iter().find(|other| other.hkl == hkl) {
@@ -227,29 +268,57 @@ mod tests {
             assert_eq!(klid, "0000040C");
             Ok(layout_dll([0xB8, 0x00, 0x10, 0xFF, 0x5F, 0xC3]))
         };
-        assert_eq!(load(false, "0000040C", hkl, 0, 1252, read), Ok(Some(hkl)));
+        let charset = |locale: u32| {
+            assert_eq!(locale, 0x40C, "the language of the KLID");
+            Ok(CharsetInfo32 { charset: 0, ansi_code_page: 1252, code_page_bits: [FS_LATIN1, 0], ..Default::default() })
+        };
+        assert_eq!(load(false, "0000040C", hkl, 0, charset, read), Ok(Some(hkl)));
         let loaded = layout(hkl).expect("loaded");
         assert_eq!((loaded.file.name.as_str(), loaded.file.tables, loaded.code_page), ("0000040C", 0x1000, 1252));
+        assert_eq!((loaded.charset, loaded.font_signature), (ANSI_CHARSET, FS_LATIN1));
         assert!(layouts().contains(&hkl));
         let again = |_: &str| -> Result<Vec<u8>, NtStatus> { panic!("loaded already") };
-        assert_eq!(load(false, "0000040C", hkl, 0, 1252, again), Ok(Some(hkl)), "not read again");
+        let asked = |_: u32| -> Result<CharsetInfo32, NtStatus> { panic!("loaded already") };
+        assert_eq!(load(false, "0000040C", hkl, 0, asked, again), Ok(Some(hkl)), "not read again");
         assert_eq!(layouts().iter().filter(|&&other| other == hkl).count(), 1, "listed once");
     }
 
     #[test]
     fn a_layout_that_cannot_be_read_is_not_listed() {
         let hkl = 0x0407_0407;
+        let asked = |_: u32| -> Result<CharsetInfo32, NtStatus> { panic!("not asked for a layout not read") };
         let missing = |_: &str| Err(abi::ntstatus::STATUS_OBJECT_NAME_NOT_FOUND);
-        assert_eq!(load(false, "00000407", hkl, 0, 1252, missing), Err(abi::ntstatus::STATUS_OBJECT_NAME_NOT_FOUND));
+        assert_eq!(load(false, "00000407", hkl, 0, asked, missing), Err(abi::ntstatus::STATUS_OBJECT_NAME_NOT_FOUND));
         let bad = |_: &str| Ok(alloc::vec![0u8; 16]);
-        assert_eq!(load(false, "00000407", hkl, 0, 1252, bad), Err(STATUS_INVALID_IMAGE_FORMAT));
+        assert_eq!(load(false, "00000407", hkl, 0, asked, bad), Err(STATUS_INVALID_IMAGE_FORMAT));
+        let read = |_: &str| Ok(layout_dll([0xB8, 0x00, 0x10, 0xFF, 0x5F, 0xC3]));
+        assert_eq!(load(false, "0000040G", hkl, 0, asked, read), Err(STATUS_OBJECT_NAME_INVALID), "not hexadecimal");
         assert!(layout(hkl).is_none() && !layouts().contains(&hkl));
+    }
+
+    #[test]
+    fn a_layout_without_its_charset_takes_the_defaults() {
+        let hkl = 0x0411_0411;
+        let read = |_: &str| Ok(layout_dll([0xB8, 0x00, 0x10, 0xFF, 0x5F, 0xC3]));
+        let failed = |_: u32| Err(abi::ntstatus::STATUS_UNSUCCESSFUL);
+        assert_eq!(load(false, "00000411", hkl, 0, failed, read), Ok(Some(hkl)), "loaded all the same");
+        let loaded = layout(hkl).expect("loaded");
+        assert_eq!((loaded.charset, loaded.font_signature, loaded.code_page), (ANSI_CHARSET, FS_LATIN1, 0));
+    }
+
+    #[test]
+    fn a_klid_is_its_language_in_hexadecimal() {
+        assert_eq!(klid_locale("00000409"), Ok(0x409));
+        assert_eq!(klid_locale("00010409"), Ok(0x1_0409));
+        assert_eq!(klid_locale(""), Err(STATUS_OBJECT_NAME_INVALID));
+        assert_eq!(klid_locale("0409 "), Err(STATUS_OBJECT_NAME_INVALID));
     }
 
     #[test]
     fn nothing_loads_without_a_hkl_or_off_the_interactive_station() {
         let read = |_: &str| -> Result<Vec<u8>, NtStatus> { panic!("nothing to read") };
-        assert_eq!(load(false, "00000409", 0, 0, 1252, read), Ok(None), "no HKL");
-        assert_eq!(load(true, "00000409", 0x0409_0409, 0, 1252, read), Ok(None), "no input or output");
+        let asked = |_: u32| -> Result<CharsetInfo32, NtStatus> { panic!("nothing to ask") };
+        assert_eq!(load(false, "00000409", 0, 0, asked, read), Ok(None), "no HKL");
+        assert_eq!(load(true, "00000409", 0x0409_0409, 0, asked, read), Ok(None), "no input or output");
     }
 }

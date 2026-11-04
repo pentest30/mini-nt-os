@@ -16,8 +16,9 @@ jour à chaque commit qui change l'état.
   sur son processus (NtDuplicateObject) et le confie à `csrss`, qui en fait un processus CSR ; `winlogon` se
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
   crée la station interactive `WinSta0` et ses bureaux, s'y place (la fenêtre du bureau d'entrée est montrée et peinte
-  par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier, puis s'arrête à son serveur RPC
-  (un tube nommé : NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 21.
+  par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
+  d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
+  NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -319,12 +320,28 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] les files de messages (`win32k::queue`, `sys::message`) : NtUserPostThreadMessage, NtUserPostMessage (sans
      fenêtre), NtUserPeekMessage, NtUserGetMessage (attente), NtUserWaitMessage, NtUserCallOneParam
      (PostQuitMessage, GetQueueStatus), bits de réveil dans le `CLIENTTHREADINFO` ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : **KeUserModeCallback d'abord** (le noyau
-     appelle `user32` par `KiUserCallbackDispatcher`, retour par NtCallbackReturn : sans lui, NtUserCreateWindowEx ne
-     peut envoyer WM_NCCREATE ni WM_CREATE à une procédure du client), puis NtUserRegisterClassExWOW (table des
-     atomes) et NtUserCreateWindowEx, les messages envoyés et postés aux fenêtres, le thread du bureau, les régions, les rappels du mode
-     utilisateur (KeUserModeCallback, `int 2Bh`), les contextes de périphérique et les objets GDI (table des handles
-     partagée), BitBlt, le texte (ADR-013), le curseur et l'entrée (i8042, thread d'entrée) ;
+   - [x] les rappels en mode utilisateur (étape 23) : KeUserModeCallback (`ps::callback`, `ke::callout`,
+     `hal::callout`), NtCallbackReturn et `int 2Bh`, la pile noyau qui grandit en place jusqu'à 72 Kio
+     (`mm::kstack::grow`) ; win32k rappelle `user32` : ClientThreadSetup (conversion d'un thread client),
+     GetCharsetInfo (la page de code d'une disposition de clavier, que `winlogon` obtient de `gdi32`) ;
+   - [x] le banc d'essai des fenêtres ([`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : le scénario `gui`
+     met `tests/native/gui1.c` (MinGW, lié aux vrais `kernel32` et `user32`) à la place de `winlogon.exe`
+     (`initial-command`) ; les classes de fenêtres (`win32k::atom`, `win32k::class`) : NtUserRegisterClassExWOW,
+     NtUserGetClassInfo ;
+   - [x] NtUserCreateWindowEx (`win32k::window::create_window`) : WM_NCCREATE, WM_NCCALCSIZE, WM_CREATE, WM_SIZE,
+     WM_MOVE, WM_PARENTNOTIFY envoyés à la procédure du client par KeUserModeCallback
+     (`USER32_CALLBACK_WINDOWPROC`, `lParam` emballé comme PackParam) ; le `WND` complet (liens, nom, procédure),
+     que `user32` lit lui-même ; NtUserDefSetText ;
+   - [x] les métriques et les couleurs du système (`win32k::metrics` : `aiSysMet` et `argbSystem` du `SERVERINFO`)
+     et la partie noyau de DefWindowProc (`win32k::defwnd`, NtUserMessageCall avec FNID_DEFWINDOWPROC :
+     WM_NCCALCSIZE, la zone cliente sans le cadre ni le titre) ; WM_GETMINMAXINFO à la création ; la capture d'un
+     `LARGE_STRING` de NtUserCreateWindowEx ignore `bAnsi` (corrigé : une classe n'était parfois pas trouvée) ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : le gestionnaire de fenêtres (ordre Z,
+     SetWindowPos, ShowWindow : WM_SIZE et WM_MOVE d'une fenêtre recouvrante), un moniteur (place par défaut,
+     zone de travail), DestroyWindow,
+     les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
+     GDI : contextes de périphérique et table des handles GDI partagée, régions et découpage, BitBlt, texte et
+     polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
    - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
      fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
      FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
@@ -360,6 +377,25 @@ classe `ProcessExecuteFlags` de NtSetInformationProcess (le service est fait pou
 aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOpenFile` et `NtQueryAttributesFile` sont faits.
 
 ## Dettes de l'étape 9 du M5 (`winlogon`)
+
+- Classes de fenêtres (M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : le refus d'un drapeau inconnu par
+  NtUserRegisterClassExWOW n'a pas de test (`user32` n'en passe jamais ; une mutation qui le retire survit) ; ni
+  curseurs, ni icônes, ni pinceaux, ni désenregistrement, ni procédures d'appel, ni `atomSysClass`.
+- Fenêtres (M6, étape 2) : ni DestroyWindow (les fenêtres d'un thread vivent autant que lui), ni ShowWindow à la
+  création, ni menus, ni `HWND_MESSAGE`, ni messages à un autre thread, ni crochets ; un texte ANSI n'est pas
+  converti par la page de code (ASCII seul).
+- DefWindowProc du noyau (M6, étape 3) : WM_NCCALCSIZE seul (les autres messages attendent les contextes de
+  périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
+  rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
+  moniteur (une fenêtre recouvrante est en 0, 0, 800 × 600 comme ReactOS sans moniteur), ni profil d'utilisateur
+  pour les métriques, ni SystemParametersInfo.
+
+- Rappels en mode utilisateur (étape 23) : un thread qui se termine pendant un rappel abandonne les trames des rappels
+  en cours (comme NT), sans rendre ce qu'elles possèdent, et rien ne le teste ; `STATUS_CALLBACK_POP_STACK` n'a qu'un
+  test hôte (ce que la trame reprend), pas de test de bout en bout ; un APC utilisateur n'est pas livré à l'entrée
+  d'un rappel ; les appels GDI en lot du TEB ne sont pas exécutés après un rappel (journalisé une fois) ; un
+  ClientThreadSetup qui échoue laisse le thread converti ; la pile noyau ne rapetisse pas. L'auto-test des rappels
+  remplace le temps de l'essai le handler de l'`int 2Ah` (sans ntdll, aucun service ne rappelle le mode utilisateur).
 
 - Le processus de logon n'est pas oublié à sa fin (pas de rappel de sortie d'un processus GUI) ; le port d'API de
   `csrss` gardé par win32k ne sert encore à rien (CsrClientCallServer du noyau : plus tard).

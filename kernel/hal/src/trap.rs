@@ -375,6 +375,9 @@ core::arch::global_asm!(
     "   mov rdi, rsp",
     "   call hal_trap_dispatch",
     // Back to user mode (CS at +176): the user's GS base, from its selector.
+    // `hal::callout` leaves for a callback from here, with its own frame.
+    ".global hal_trap_exit",
+    "hal_trap_exit:",
     "   test byte ptr [rsp + 176], 3",
     "   jz 2f",
     "   pop rax",

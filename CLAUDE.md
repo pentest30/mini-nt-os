@@ -102,7 +102,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   adresse utilisateur reprend à sa correction (table des exceptions) au lieu du STOP 0x1E ; une faute du noyau sur la
   garde de la pile du thread l'étend aussi. SYSENTER_ESP suit la pile noyau du thread. Les threads de l'ancien
   chargeur gardent `syscall.rs` et ses numéros. Trame de trap faite (`hal::trap::KTrapFrame`) : les portes `int 2Ah`
-  à `2Eh` l'empilent et appellent un handler par vecteur (`sys::gates` : tick count, `STATUS_NO_CALLBACK_ACTIVE`,
+  à `2Eh` l'empilent et appellent un handler par vecteur (`sys::gates` : tick count, KiCallbackReturn,
   assertion qui termine le processus, `DbgPrint` vers le port série avec le PID et le TID en sautant l'`int 3`,
   KiSystemService) ; GS n'est pas rechargé au retour. `abi::context` (CONTEXT x86) et `ke::context` (conversion,
   assainissement d'EFLAGS et des sélecteurs). Exceptions du mode utilisateur faites (`ke::exception`, `sys::exceptions`) :
@@ -236,7 +236,18 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   serveur : WM_PAINT, WM_ERASEBKGND), montrée et peinte à NtUserSwitchDesktop ; files de messages (`win32k::queue`,
   `sys::message` : PostThreadMessage, PeekMessage, GetMessage qui attend, WM_QUIT, GetQueueStatus, bits de réveil dans
   le `CLIENTTHREADINFO`) ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
-  pixels d'une capture de QEMU (`xtask/src/screen.rs`).
+  pixels d'une capture de QEMU (`xtask/src/screen.rs`). Rappels en mode utilisateur (KeUserModeCallback :
+  `ps::callback`, `ke::callout`, `hal::callout` ; NtCallbackReturn, `int 2Bh`) : la pile initiale du thread descend
+  sous ses trames, les rappels s'emboîtent, la pile noyau grandit en place jusqu'à 72 Kio (`mm::kstack::grow`) ;
+  win32k rappelle `user32` (`win32k::callback` : ClientThreadSetup, GetCharsetInfo pour la page de code d'une
+  disposition de clavier). M6 commencé ([`docs/compat/m6-fenetres.md`](docs/compat/m6-fenetres.md)) : le scénario
+  `gui` lance `tests/native/gui1.c` (MinGW, vrais `kernel32` et `user32`) à la place de `winlogon.exe` ; la table
+  des atomes de USER (`win32k::atom`) et les classes de fenêtres (`win32k::class` : NtUserRegisterClassExWOW,
+  NtUserGetClassInfo) ; les fenêtres (`win32k::window::create_window` : NtUserCreateWindowEx, WM_NCCREATE,
+  WM_NCCALCSIZE, WM_CREATE, WM_SIZE, WM_MOVE, WM_PARENTNOTIFY envoyés à la procédure du client par rappel, le
+  `WND` complet que `user32` lit lui-même ; NtUserDefSetText) ; les métriques et couleurs du système
+  (`win32k::metrics`, dans le `SERVERINFO`) et la partie noyau de DefWindowProc (`win32k::defwnd`,
+  NtUserMessageCall : WM_NCCALCSIZE ; WM_GETMINMAXINFO à la création).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -275,6 +286,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   `llvm`). Sans eux, ils sont sautés.
 - `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
+- `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
+  disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
   elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
 - `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;

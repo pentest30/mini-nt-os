@@ -1,21 +1,24 @@
 //! Les services des files de messages (`win32k::queue`) :
 //! NtUserPostThreadMessage, NtUserPostMessage, NtUserPeekMessage,
 //! NtUserGetMessage, NtUserWaitMessage, NtUserCallOneParam
-//! (PostQuitMessage, GetQueueStatus).
+//! (PostQuitMessage, GetQueueStatus), et NtUserMessageCall
+//! (DefWindowProc du noyau, `win32k::defwnd`).
 //!
 //! Ils rendent une valeur (un BOOL, un état) : un échec rend 0, avec
 //! l'erreur Win32 comme dernière erreur.
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    Msg32, ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE, PM_REMOVE, PM_VALID_FLAGS, QS_ALLINPUT,
-    QS_ALLPOSTMESSAGE, QS_SMRESULT, WM_MAXIMUM, WM_QUIT,
+    Msg32, FNID_DEFWINDOWPROC, FNID_FIRST, ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE,
+    PM_REMOVE, PM_VALID_FLAGS, QS_ALLINPUT, QS_ALLPOSTMESSAGE, QS_SMRESULT, WM_MAXIMUM, WM_QUIT,
 };
 use abi::winerror::{
     dos_error, ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_FLAGS, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
     ERROR_MESSAGE_SYNC_ONLY,
 };
 use alloc::sync::Arc;
+use core::sync::atomic::{AtomicU32, Ordering};
+use ke::usermem::copy_to_user;
 use win32k::gui::ThreadInfo;
 use win32k::queue::{self, Filter};
 
@@ -24,6 +27,9 @@ const HWND_BROADCAST: u32 = 0xFFFF;
 
 /// Les routines de NtUserCallOneParam demandées sans être implémentées.
 static UNSUPPORTED_ONE_PARAM_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallOneParam");
+/// Les types de NtUserMessageCall demandés sans être implémentés : un bit
+/// par FNID depuis `FNID_FIRST` (le dernier vaut pour tous les autres).
+static UNSUPPORTED_MESSAGE_CALLS: AtomicU32 = AtomicU32::new(0);
 /// Un message posté à une fenêtre a déjà été demandé.
 static WINDOW_POST_REPORTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
@@ -161,4 +167,41 @@ pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
             fail(ERROR_CALL_NOT_IMPLEMENTED)
         }
     }
+}
+
+/// NtUserMessageCall(hWnd, Msg, wParam, lParam, ResultInfo, dwType, Ansi).
+/// `FNID_DEFWINDOWPROC` : le traitement par défaut du message
+/// (`win32k::defwnd::def_window_proc`), dont le résultat va en `ResultInfo`
+/// s'il n'est pas nul ; TRUE. FALSE pour une fenêtre qui n'existe pas
+/// (`ERROR_INVALID_WINDOW_HANDLE`, sans fenêtre : `hWnd` nul est permis),
+/// une structure du message illisible ou un `ResultInfo` où l'on ne peut
+/// pas écrire (ReactOS n'a pas de garde autour du traitement : une faute y
+/// arrêterait le système). Les autres types (la barre de défilement, le
+/// bureau, les menus, SendMessage et ses variantes…) rendent FALSE et
+/// `ERROR_CALL_NOT_IMPLEMENTED`, journalisés une fois chacun. `Ansi` ne
+/// sert pas encore : aucun des messages traités n'a de texte.
+pub(super) fn nt_user_message_call(arguments: &[u32]) -> NtStatus {
+    let (handle, message, wparam, lparam, result_info, kind) =
+        (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5]);
+    if kind != FNID_DEFWINDOWPROC {
+        let bit = 1 << kind.wrapping_sub(FNID_FIRST).min(31);
+        if UNSUPPORTED_MESSAGE_CALLS.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+            log::warn!("sys: NtUserMessageCall type {kind:#x} is not implemented");
+        }
+        return fail(ERROR_CALL_NOT_IMPLEMENTED);
+    }
+    let window = match handle {
+        0 => None,
+        _ => match win32k::window::get(handle) {
+            Some(window) => Some(window),
+            None => return fail(ERROR_INVALID_WINDOW_HANDLE),
+        },
+    };
+    let Ok(result) = win32k::defwnd::def_window_proc(window.as_ref(), message, wparam, lparam) else {
+        return NtStatus(0);
+    };
+    if result_info != 0 && copy_to_user(u64::from(result_info), &result.to_le_bytes()).is_err() {
+        return NtStatus(0);
+    }
+    NtStatus(1)
 }

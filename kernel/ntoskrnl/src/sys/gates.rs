@@ -4,7 +4,7 @@
 //! | Porte | Service |
 //! |---|---|
 //! | `int 2Ah` | KiGetTickCount : EAX reçoit les millisecondes depuis le démarrage |
-//! | `int 2Bh` | KiCallbackReturn : `STATUS_NO_CALLBACK_ACTIVE`, en attendant `KeUserModeCallback` (M6) |
+//! | `int 2Bh` | KiCallbackReturn : NtCallbackReturn(ECX, EDX, EAX) ([`super::callback`]) ; sans rappel en cours, EAX reçoit `STATUS_NO_CALLBACK_ACTIVE` |
 //! | `int 2Ch` | KiRaiseAssertion : l'exception `STATUS_ASSERTION_FAILURE`, à l'adresse de l'`int 2Ch` ([`super::exceptions`]) |
 //! | `int 2Dh` | KiDebugService : `DbgPrint` vers le port série ; `DbgPrompt`, faute de débogueur, reçoit `i` |
 //! | `int 2Eh` | KiSystemService ([`super::dispatch`]) |
@@ -13,7 +13,7 @@
 //! Et le service qui dit ce que `DbgPrintEx` laisse passer
 //! ([`nt_query_debug_filter_state`]) : tout.
 
-use abi::ntstatus::{NtStatus, STATUS_ASSERTION_FAILURE, STATUS_NO_CALLBACK_ACTIVE, STATUS_SUCCESS};
+use abi::ntstatus::{NtStatus, STATUS_ASSERTION_FAILURE, STATUS_SUCCESS};
 use hal::trap::{set_trap_hook, KTrapFrame, SYSENTER};
 
 /// Le service de débogage qui affiche une chaîne (BREAKPOINT_PRINT).
@@ -47,9 +47,11 @@ fn get_tick_count(frame: &mut KTrapFrame) {
     frame.rax = u64::from(hal::timer::get_tick_count() as u32);
 }
 
-/// `int 2Bh` : pas de rappel en mode utilisateur en cours.
+/// `int 2Bh` : NtCallbackReturn, le résultat en ECX, sa longueur en EDX, le
+/// statut en EAX ; ne revient que sans rappel en cours.
 fn callback_return(frame: &mut KTrapFrame) {
-    frame.rax = u64::from(STATUS_NO_CALLBACK_ACTIVE.0);
+    let status = ps::callback::callback_return(frame.rcx as u32, frame.rdx as u32, NtStatus(frame.rax as u32));
+    frame.rax = u64::from(status.0);
 }
 
 /// `int 2Ch` : une assertion a échoué en mode utilisateur ; l'exception est

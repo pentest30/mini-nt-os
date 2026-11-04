@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 100 | 296 |
-| win32k | 25 | 732 |
+| ntoskrnl | 101 | 296 |
+| win32k | 30 | 732 |
 
 ## ntoskrnl
 
@@ -37,7 +37,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0013` | `NtApphelpCacheControl` | 2 |  |
 | `0x0014` | `NtAreMappedFilesTheSame` | 2 |  |
 | `0x0015` | `NtAssignProcessToJobObject` | 2 |  |
-| `0x0016` | `NtCallbackReturn` | 3 |  |
+| `0x0016` | `NtCallbackReturn` | 3 | ✅ |
 | `0x0017` | `NtCancelDeviceWakeupRequest` | 1 |  |
 | `0x0018` | `NtCancelIoFile` | 2 |  |
 | `0x0019` | `NtCancelTimer` | 2 |  |
@@ -658,13 +658,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1153` | `NtUserCreateDesktop` | 5 | ✅ |
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
 | `0x1155` | `NtUserCreateLocalMemHandle` | 4 |  |
-| `0x1156` | `NtUserCreateWindowEx` | 15 |  |
+| `0x1156` | `NtUserCreateWindowEx` | 15 | ✅ |
 | `0x1157` | `NtUserCreateWindowStation` | 7 | ✅ |
 | `0x1158` | `NtUserDdeGetQualityOfService` | 3 |  |
 | `0x1159` | `NtUserDdeInitialize` | 5 |  |
 | `0x115a` | `NtUserDdeSetQualityOfService` | 3 |  |
 | `0x115b` | `NtUserDeferWindowPos` | 8 |  |
-| `0x115c` | `NtUserDefSetText` | 2 |  |
+| `0x115c` | `NtUserDefSetText` | 2 | ✅ |
 | `0x115d` | `NtUserDeleteMenu` | 3 |  |
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
 | `0x115f` | `NtUserDestroyCursor` | 2 |  |
@@ -702,7 +702,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x117f` | `NtUserGetAtomName` | 2 |  |
 | `0x1180` | `NtUserGetCaretBlinkTime` | 0 |  |
 | `0x1181` | `NtUserGetCaretPos` | 1 |  |
-| `0x1182` | `NtUserGetClassInfo` | 5 |  |
+| `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |
 | `0x1183` | `NtUserGetClassName` | 3 |  |
 | `0x1184` | `NtUserGetClipboardData` | 2 |  |
 | `0x1185` | `NtUserGetClipboardFormatName` | 3 |  |
@@ -775,7 +775,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c8` | `NtUserLockWorkStation` | 0 |  |
 | `0x11c9` | `NtUserMapVirtualKeyEx` | 4 |  |
 | `0x11ca` | `NtUserMenuItemFromPoint` | 4 |  |
-| `0x11cb` | `NtUserMessageCall` | 7 |  |
+| `0x11cb` | `NtUserMessageCall` | 7 | ✅ |
 | `0x11cc` | `NtUserMinMaximize` | 3 |  |
 | `0x11cd` | `NtUserMNDragLeave` | 0 |  |
 | `0x11ce` | `NtUserMNDragOver` | 2 |  |
@@ -802,7 +802,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e3` | `NtUserRealInternalGetMessage` | 6 |  |
 | `0x11e4` | `NtUserRealWaitMessageEx` | 2 |  |
 | `0x11e5` | `NtUserRedrawWindow` | 4 |  |
-| `0x11e6` | `NtUserRegisterClassExWOW` | 7 |  |
+| `0x11e6` | `NtUserRegisterClassExWOW` | 7 | ✅ |
 | `0x11e7` | `NtUserRegisterUserApiHook` | 4 |  |
 | `0x11e8` | `NtUserRegisterHotKey` | 4 |  |
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |

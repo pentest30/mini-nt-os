@@ -380,6 +380,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     duplicate_object_self_test();
     thread_information_self_test();
     trap_gate_self_test();
+    user_callback_self_test();
     exception_self_test();
     user_apc_self_test();
     system_dll_self_test();
@@ -1482,11 +1483,44 @@ fn kernel_stack_self_test() {
         unsafe { mm::kstack::free(stack) };
     }
     assert_eq!(stack_pages(), before, "freed stacks kept their pages");
-    let again = mm::kstack::allocate().expect("a kernel stack");
+    let mut again = mm::kstack::allocate().expect("a kernel stack");
     assert_eq!(again, stacks[2], "the last slot freed comes back first");
-    // SAFETY: allocated just above, never used.
+    // MmGrowKernelStack: in place, zeroed, down to its limit and no further.
+    let top = again.top;
+    let low = again.bottom - 2 * 4096 + 100;
+    mm::kstack::grow(&mut again, low).expect("two more pages");
+    assert_eq!((again.bottom, again.top), (low & !0xFFF, top), "grown in place, by whole pages");
+    assert_eq!(stack_pages() - before, per_stack + 2);
+    // SAFETY: the two pages were just mapped, writable, for this stack, which
+    // nothing runs on.
+    unsafe {
+        let word = again.bottom as *mut u64;
+        assert_eq!(word.read_volatile(), 0, "a grown page is zeroed");
+        word.write_volatile(0x5A5A);
+    }
+    let limit = again.limit();
+    assert_eq!(mm::kstack::grow(&mut again, limit - 1), Err(abi::ntstatus::STATUS_STACK_OVERFLOW));
+    mm::kstack::grow(&mut again, limit).expect("down to the limit");
+    let large = stack_pages() - before;
+    // Dirty, then freed: the frames come back to the next stack, which must
+    // find them zeroed, grown pages included.
+    let length = (again.top - again.bottom) as usize;
+    // SAFETY: the whole stack is mapped, writable, and nothing runs on it.
+    unsafe { core::ptr::write_bytes(again.bottom as *mut u8, 0xA5, length) };
+    // SAFETY: allocated just above, never run on.
     unsafe { mm::kstack::free(again) };
-    log::info!("[smoke] Mm: kernel stacks freed and their slots reused ({per_stack} pages each)");
+    assert_eq!(stack_pages(), before, "a grown stack gave all its pages back");
+    let mut clean = mm::kstack::allocate().expect("a kernel stack");
+    mm::kstack::grow(&mut clean, limit).expect("down to the limit");
+    // SAFETY: as above.
+    let bytes = unsafe { core::slice::from_raw_parts(clean.bottom as *const u8, length) };
+    assert!(bytes.iter().all(|&b| b == 0), "a kernel stack holds what a previous one left");
+    // SAFETY: allocated just above, never run on.
+    unsafe { mm::kstack::free(clean) };
+    log::info!(
+        "[smoke] Mm: kernel stacks freed and their slots reused ({per_stack} pages each); grown in place up to \
+         {large} pages"
+    );
 }
 
 /// A demand-zero fault that gets its page but no page table returns
@@ -7016,6 +7050,216 @@ fn registry_write_self_test() {
     log::info!(
         "[smoke] Cm: registry writes from user mode: NtCreateKey (new, existing, volatile), NtSetValueKey, \
          NtDeleteValueKey, NtFlushKey (the hive written back to its file)"
+    );
+}
+
+/// User-mode callbacks (`ps::callback`, `ke::callout`, `hal::callout`):
+/// for this test, `int 2Ah` makes the callback `3 + level` through the
+/// program's own dispatcher (no ntdll here), which mimics ntdll's. Each
+/// callback checks its argument, stays 50 ms in user mode (clock interrupts
+/// land on its initial stack), makes a system service, calls back one level
+/// deeper, then returns its output through `int 2Bh` (even levels) or
+/// NtCallbackReturn (odd levels); the deepest returns STATUS_UNSUCCESSFUL.
+/// The first level leaves 10 KiB of kernel stack in use, so the kernel
+/// stack grows; the program finds its stack, its registers and its SEH
+/// list as they were.
+fn user_callback_self_test() {
+    use abi::ntstatus::{
+        NtStatus, STATUS_INVALID_HANDLE, STATUS_NO_CALLBACK_ACTIVE, STATUS_UNSUCCESSFUL, STATUS_WAIT_0,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    use hal::trap::KTrapFrame;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const DEPTH: u32 = 8;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DISPATCH: u32 = IMAGE_BASE + 0x1100;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const DONE: u32 = DATA;
+    const MAIN_RESULT: u32 = DATA + 0x04;
+    const ESP_BEFORE: u32 = DATA + 0x08;
+    const ESP_AFTER: u32 = DATA + 0x0C;
+    const KEPT: u32 = DATA + 0x10; // EBX, ESI, EDI, EBP
+    const SEH_BEFORE: u32 = DATA + 0x20;
+    const SEH_AFTER: u32 = DATA + 0x24;
+    const NO_CALLBACK: u32 = DATA + 0x28;
+    const SEEN_ARGUMENT: u32 = DATA + 0x40;
+    const SEEN_LENGTH: u32 = DATA + 0x60;
+    const CLOSED: u32 = DATA + 0x80;
+    const INNER: u32 = DATA + 0xA0;
+    const OUTPUT: u32 = DATA + 0xC0;
+    const INTERRUPT_TIME: u32 = 0x7FFE_0008;
+    const KEPT_VALUES: [u32; 4] = [0x1111_1111, 0x2222_2222, 0x3333_3333, 0x4444_4444];
+    const ARGUMENT: u32 = 0x4D49_4E00;
+    const OUTPUT_TAG: u32 = 0xC0DE_0000;
+
+    static LEVEL: AtomicU32 = AtomicU32::new(0);
+    static LOWEST_BOTTOM: AtomicU64 = AtomicU64::new(u64::MAX);
+
+    /// `f`, with 10 KiB more of the kernel stack in use: the callbacks need
+    /// it to grow. In a frame of its own, which only the first level has.
+    #[inline(never)]
+    fn with_ballast<T>(f: impl FnOnce() -> T) -> T {
+        let ballast = core::hint::black_box([0u8; 10 * 1024]);
+        let result = f();
+        core::hint::black_box(&ballast);
+        result
+    }
+
+    /// `int 2Ah`, for this test: the callback of the next level.
+    fn callback_gate(frame: &mut KTrapFrame) {
+        x86_64::instructions::interrupts::enable();
+        let level = LEVEL.fetch_add(1, Ordering::Relaxed);
+        let argument = (ARGUMENT | level).to_le_bytes();
+        let result = if level == 0 {
+            with_ballast(|| ps::callback::user_mode_callback_through(DISPATCH, 3, &argument, 16))
+        } else {
+            ps::callback::user_mode_callback_through(DISPATCH, 3 + level, &argument, 16)
+        };
+        LEVEL.fetch_sub(1, Ordering::Relaxed);
+        if let Some(stack) = ps::ethread::current_thread().and_then(|thread| thread.kernel_stack()) {
+            LOWEST_BOTTOM.fetch_min(stack.bottom, Ordering::Relaxed);
+        }
+        frame.rax = u64::from(match result {
+            Ok(output) if output.len() == 4 => u32::from_le_bytes([output[0], output[1], output[2], output[3]]),
+            Ok(_) => u32::MAX,
+            Err(status) => status.0,
+        });
+        x86_64::instructions::interrupts::disable();
+    }
+
+    let mut main = Code::new();
+    main.bytes(&[0x64, 0xA1, 0, 0, 0, 0]) // mov eax, fs:[0]
+        .store_eax(SEH_BEFORE)
+        .word(&[0xBB], KEPT_VALUES[0]) // mov ebx, …
+        .word(&[0xBE], KEPT_VALUES[1]) // mov esi, …
+        .word(&[0xBF], KEPT_VALUES[2]) // mov edi, …
+        .word(&[0xBD], KEPT_VALUES[3]) // mov ebp, …
+        .word(&[0x89, 0x25], ESP_BEFORE) // mov [ESP_BEFORE], esp
+        .bytes(&[0xCD, 0x2A])
+        .word(&[0x89, 0x25], ESP_AFTER)
+        .store_eax(MAIN_RESULT)
+        .word(&[0x89, 0x1D], KEPT)
+        .word(&[0x89, 0x35], KEPT + 4)
+        .word(&[0x89, 0x3D], KEPT + 8)
+        .word(&[0x89, 0x2D], KEPT + 12)
+        .bytes(&[0x64, 0xA1, 0, 0, 0, 0])
+        .store_eax(SEH_AFTER)
+        .call(services::NtCallbackReturn, &[0, 0, 0])
+        .store_eax(NO_CALLBACK)
+        .word(&[0xC7, 0x05], DONE)
+        .bytes(&1u32.to_le_bytes())
+        .bytes(&[0xEB, 0xFE]);
+    // The dispatcher, at [ESP]: 0, the index, the argument and its length.
+    let mut dispatch = Code::new();
+    dispatch
+        .bytes(&[0x83, 0xC4, 0x04]) // add esp, 4
+        .bytes(&[0x5A]) // pop edx: the index
+        .bytes(&[0x8B, 0x04, 0x24, 0x8B, 0x00]) // mov eax, [esp]; mov eax, [eax]
+        .bytes(&[0x8D, 0x4A, 0xFD]) // lea ecx, [edx - 3]: the level
+        .word(&[0x89, 0x04, 0x8D], SEEN_ARGUMENT) // mov [SEEN_ARGUMENT + ecx * 4], eax
+        .bytes(&[0x8B, 0x44, 0x24, 0x04]) // mov eax, [esp + 4]
+        .word(&[0x89, 0x04, 0x8D], SEEN_LENGTH)
+        // A new head for the SEH list, which the kernel puts back.
+        .word(&[0x64, 0xC7, 0x05], 0)
+        .bytes(&0x0BAD_C0DEu32.to_le_bytes())
+        // 50 ms of interrupt time in user mode.
+        .word(&[0x8B, 0x1D], INTERRUPT_TIME) // mov ebx, [INTERRUPT_TIME]
+        .word(&[0x81, 0xC3], 50 * MS as u32) // add ebx, …
+        .word(&[0xA1], INTERRUPT_TIME) // mov eax, [INTERRUPT_TIME]
+        .bytes(&[0x29, 0xD8, 0x78, 0xF7]) // sub eax, ebx; js back
+        .bytes(&[0x51]) // push ecx
+        .call(services::NtClose, &[0x1234])
+        .bytes(&[0x59]) // pop ecx
+        .word(&[0x89, 0x04, 0x8D], CLOSED)
+        .bytes(&[0x83, 0xF9, (DEPTH - 1) as u8, 0x73, 0x0B]) // cmp ecx, DEPTH - 1; jae over the next 11 bytes
+        .bytes(&[0x51, 0xCD, 0x2A, 0x59]) // push ecx; int 2Ah; pop ecx
+        .word(&[0x89, 0x04, 0x8D], INNER)
+        .bytes(&[0x89, 0xC8]) // mov eax, ecx
+        .word(&[0x0D], OUTPUT_TAG) // or eax, …
+        .word(&[0x89, 0x04, 0x8D], OUTPUT)
+        .bytes(&[0x31, 0xDB]) // xor ebx, ebx: the status
+        .bytes(&[0x83, 0xF9, (DEPTH - 1) as u8, 0x75, 0x05]) // cmp ecx, DEPTH - 1; jne over the next 5 bytes
+        .word(&[0xBB], STATUS_UNSUCCESSFUL.0)
+        .word(&[0x8D, 0x04, 0x8D], OUTPUT) // lea eax, [OUTPUT + ecx * 4]
+        .bytes(&[0xF6, 0xC1, 0x01, 0x75, 0x0D]) // test cl, 1; jnz over the next 13 bytes
+        // int 2Bh: the output in ECX, its length in EDX, the status in EAX.
+        .bytes(&[0x89, 0xC1]) // mov ecx, eax
+        .word(&[0xBA], 4)
+        .bytes(&[0x89, 0xD8, 0xCD, 0x2B, 0xEB, 0xFE]) // mov eax, ebx; int 2Bh; jmp $
+        // NtCallbackReturn(output, 4, status).
+        .bytes(&[0x53, 0x6A, 0x04, 0x50, 0x89, 0xE2]) // push ebx; push 4; push eax; mov edx, esp
+        .word(&[0xB8], services::NtCallbackReturn)
+        .bytes(&[0xCD, 0x2E, 0xEB, 0xFE]);
+    let mut text = [0xCC; 0x200];
+    text[..main.0.len()].copy_from_slice(&main.0);
+    text[0x100..0x100 + dispatch.0.len()].copy_from_slice(&dispatch.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x200, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x100, &[0u8; 0x100], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "callback.exe", false).expect("a process");
+    hal::trap::set_trap_hook(0x2A, Some(callback_gate));
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let initial = thread.kernel_stack().expect("a kernel stack");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 500, "the callback program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+    sys::gates::install();
+    for level in 0..DEPTH {
+        let at = 4 * level;
+        assert_eq!(read(SEEN_ARGUMENT + at), ARGUMENT | level, "the argument of level {level}");
+        assert_eq!(read(SEEN_LENGTH + at), 4, "the argument length of level {level}");
+        assert_eq!(NtStatus(read(CLOSED + at)), STATUS_INVALID_HANDLE, "a service in the callback of level {level}");
+    }
+    for level in 0..DEPTH - 1 {
+        let expected = if level + 1 == DEPTH - 1 { STATUS_UNSUCCESSFUL.0 } else { OUTPUT_TAG | (level + 1) };
+        assert_eq!(read(INNER + 4 * level), expected, "what the callback of level {} gave", level + 1);
+    }
+    assert_eq!(read(MAIN_RESULT), OUTPUT_TAG, "what the first callback gave");
+    assert_eq!(read(ESP_AFTER), read(ESP_BEFORE), "the user stack moved across the callbacks");
+    let kept = [read(KEPT), read(KEPT + 4), read(KEPT + 8), read(KEPT + 12)];
+    assert_eq!(kept, KEPT_VALUES, "EBX, ESI, EDI or EBP changed across the callbacks");
+    assert_eq!(read(SEH_AFTER), read(SEH_BEFORE), "the SEH list was not put back");
+    assert_eq!(NtStatus(read(NO_CALLBACK)), STATUS_NO_CALLBACK_ACTIVE, "NtCallbackReturn without a callback");
+    let lowest = LOWEST_BOTTOM.load(Ordering::Relaxed);
+    assert!(lowest < initial.bottom, "the kernel stack did not grow for the callbacks");
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the callback program did not end");
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] callbacks: {DEPTH} nested user-mode callbacks, preempted and calling services, back by int 2Bh and \
+         NtCallbackReturn; kernel stack grown in place to {} KiB",
+        (initial.top - lowest) / 1024
     );
 }
 

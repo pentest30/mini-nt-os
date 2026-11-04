@@ -1,0 +1,11 @@
+; The exports of kernel32.dll (ReactOS 0.4.16, i386) that the Win32 test
+; programs call, for their import library (`cargo xtask` builds it with
+; dlltool --kill-at). stdcall functions carry their argument bytes (@N); the
+; DLL exports them undecorated.
+LIBRARY kernel32.dll
+EXPORTS
+ExitProcess@4
+GetCurrentProcessId@0
+GetLastError@0
+GetModuleHandleW@4
+SetLastError@4

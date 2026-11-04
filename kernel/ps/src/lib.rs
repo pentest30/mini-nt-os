@@ -26,6 +26,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 extern crate alloc;
 
+pub mod callback;
 pub mod cid;
 pub mod eprocess;
 pub mod ethread;

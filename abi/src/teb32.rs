@@ -134,6 +134,7 @@ const _: () = {
     assert!(offset_of!(Teb32, tls_slots) == 0xE10);
     assert!(offset_of!(Teb32, tls_links) == 0xF10);
     assert!(offset_of!(Teb32, vdm) == 0xF18);
+    assert!(offset_of!(Teb32, gdi_batch_count) == 0xF70);
     assert!(offset_of!(Teb32, hard_errors_are_disabled) == 0xF28);
     assert!(offset_of!(Teb32, in_dbg_print) == 0xF74);
     assert!(offset_of!(Teb32, tls_expansion_slots) == 0xF94);

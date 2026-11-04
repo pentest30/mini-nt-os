@@ -151,11 +151,15 @@ pub(super) fn nt_user_load_keyboard_layout_ex(arguments: &[u32]) -> NtStatus {
         let units = super::object::capture_unicode_string(klid)?;
         let units = &units[..units.len().min(abi::user::KL_NAMELENGTH - 1)];
         let klid = alloc::string::String::from_utf16(units).map_err(|_| abi::ntstatus::STATUS_OBJECT_NAME_INVALID)?;
-        let process = super::current_process();
-        let info = win32k::process_info(&process)?;
-        let no_io = info.window_station().is_none_or(|station| station.station.no_io());
-        let code_page = ps::nls::current().map_or(0, |tables| tables.ansi_code_page);
-        let loaded = win32k::keyboard::load(no_io, &klid, hkl, flags, code_page, read_layout_file)?;
+        let no_io = {
+            let process = super::current_process();
+            let info = win32k::process_info(&process)?;
+            info.window_station().is_none_or(|station| station.station.no_io())
+        };
+        // GetCharsetInfo calls back into user mode: nothing held but the
+        // name.
+        let charset = win32k::callback::get_charset_info;
+        let loaded = win32k::keyboard::load(no_io, &klid, hkl, flags, charset, read_layout_file)?;
         Ok(loaded.unwrap_or(0))
     };
     load().map_or_else(
