@@ -309,3 +309,49 @@ DC_vUpdateFillBrush, boîte de découpage, blocs d'attributs ; `gdi::batch` : ap
 les ROP3 sans source ; `dce` : `DCX_USESTYLE`) ; l'auto-test du noyau (scénario `smoke` : la table en lecture seule
 dans le PEB, WHITE_BRUSH et le pinceau de `COLOR_WINDOW` publics) ; le scénario `gui`, sur les deux CPU, avec 32 pixels
 de la capture de l'écran.
+
+## Étape 8 : WM_PAINT, BeginPaint et EndPaint
+
+Une fenêtre peinte jusqu'ici l'était aussitôt (cadre et fond, étape 7), mais jamais validée : sa région à mettre à
+jour restait. WM_PAINT n'est pas posté dans la file : comme dans ReactOS (`painting.c`, `message.c`, `msgqueue.c`,
+`defwnd.c`, comme spécification), un compte des fenêtres à peindre de chaque thread (`cPaintsReady`, `QS_PAINT` tant
+qu'il n'est pas nul) dit à PeekMessage et GetMessage, une fois les messages postés et WM_QUIT sortis, de chercher la
+première fenêtre du thread qui a quelque chose à peindre (IntFindWindowToRepaint : dans l'ordre Z, un parent avant
+ses enfants) et de lui donner WM_PAINT, tant qu'elle n'est pas validée. `user32` passe WM_PAINT par
+NtUserDispatchMessage, qui appelle la procédure ; DefWindowProc (NtUserMessageCall) fait BeginPaint et EndPaint.
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `abi::user` | `PAINTSTRUCT` (64 octets), `QS_PAINT`, `WNDS_INTERNALPAINT`, `WNDS_UPDATEDIRTY`, `WNDS_PAINTNOTPROCESSED`, `WNDS2_WMPAINTSENT`, `WNDS2_STARTPAINT`, WM_PAINTICON, WM_TIMER |
+| `win32k::queue` | le compte des fenêtres à peindre et `QS_PAINT` (MsqIncPaintCountQueue, MsqDecPaintCountQueue) ; PeekMessage cherche WM_PAINT quand il n'y a plus de message posté ; WaitMessage revient aussi pour `QS_PAINT` |
+| `win32k::window` | chaque changement d'une fenêtre compte pour son thread si elle se met à avoir quelque chose à peindre (visible, région à mettre à jour ou `WNDS_INTERNALPAINT`) ou cesse de l'avoir ; IntDispatchMessage : WM_PAINT à la procédure, puis cadre et fond repeints si elle n'a pas appelé BeginPaint |
+| `win32k::paint` | IntGetPaintMessage (filtre : la fenêtre ou l'un de ses parents, l'intervalle ; pas les messages du seul thread), IntFindWindowToRepaint, IntBeginPaint (cadre, DC du cache coupé à la région à mettre à jour, région validée, `rcPaint` par GetClipBox, WM_ERASEBKGND, cadre des enfants), IntEndPaint, DefWindowProc de WM_PAINT |
+| `win32k::dce` | `DCX_INTERSECTRGN` sans région : un DC qui ne peint rien (DceUpdateVisRgn) |
+| `win32k::gui` | le `THREADINFO` d'une fenêtre, par l'adresse du serveur de son thread (`pti`) |
+| `sys` | NtUserBeginPaint, NtUserEndPaint, NtUserDispatchMessage |
+
+Dans `gui`, une boucle de messages (PeekMessage, DispatchMessage) suit les fenêtres créées : `GetQueueStatus(QS_PAINT)`
+vaut `00200020` avant, 0 après ; WM_PAINT va six fois, dans l'ordre Z, à « Popup », « Striped », « Clipper », sa fille
+« Framed » (dont le cadre et le fond, invalidés avec ceux de son parent, se repeignent dans BeginPaint), « Visible »
+(découverte par « Cover » : son cadre et son fond se repeignent, et les restes de « Cover » disparaissent de la
+capture), puis « Pending ». Le popup se peint lui-même entre BeginPaint et EndPaint (un carré noir) : `rcPaint` est sa
+zone cliente, `fErase` 0 (son fond déjà effacé) ; le DC rendu par EndPaint, PatBlt le refuse. PeekMessage ne donne
+WM_PAINT qu'au filtre qui le demande : la fenêtre ou un de ses parents (une autre fenêtre : rien tant que le popup, au
+premier plan, est à peindre), pas les messages du seul thread, pas un intervalle au-delà de WM_PAINT.
+
+Un écart avec ReactOS : le compte des fenêtres à peindre est tenu à chaque changement d'une fenêtre (`window::change`),
+y compris quand elle se cache ou se montre ; il reste exact, et IntGetPaintMessage n'a pas à le remettre à zéro quand
+il ne trouve plus de fenêtre (ReactOS le fait, avec un message d'erreur, une fenêtre cachée gardant sa région).
+
+Ce qui manque : InvalidateRect, ValidateRect, RedrawWindow, UpdateWindow, GetUpdateRect et GetUpdateRgn (les régions
+à mettre à jour ne viennent que du noyau), WM_SYNCPAINT, WM_TIMER et les procédures de minuterie de DispatchMessage
+(journalisé une fois), le curseur caché pendant BeginPaint, le dessin de l'icône d'une fenêtre réduite. Sans test (des
+mutations qui les retirent survivent) : une procédure qui ne fait pas BeginPaint pour WM_PAINT (son cadre et son fond
+repeints par IntDispatchMessage ; elle reçoit WM_PAINT de nouveau, comme dans ReactOS), le cadre des enfants repeint
+par BeginPaint (aucun enfant de `gui` n'a son seul cadre à repeindre), le DC de BeginPaint coupé à la région à mettre
+à jour (elle couvre toujours toute la zone cliente), WM_PAINT réservé aux fenêtres du thread (`gui` n'a qu'un thread
+GUI).
+
+Tests : hôte (`queue` : compte et `QS_PAINT` ; `paint` : fenêtre à peindre, filtre de WM_PAINT ; `dce` : coupe d'un
+DC ; `gui` : thread d'une adresse du serveur ; `abi::user` : `PAINTSTRUCT`) ; le scénario `gui`, sur les deux CPU, avec
+les fenêtres peintes par la boucle de messages et 36 pixels de la capture.

@@ -351,10 +351,12 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      l'écran et leurs attributs dans la mémoire du client (`gdi::dc`), le cache des DC de fenêtres (`win32k::dce`),
      les appels de GDI en lot exécutés au retour d'un rappel et avant chaque service de win32k (`gdi::batch`) ;
      WM_ERASEBKGND après WM_NCPAINT, NtGdiPatBlt, NtGdiGetAppClipBox, NtGdiFlush ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : WM_PAINT tiré de la file (les fenêtres à
-     mettre à jour, `QS_PAINT`), BeginPaint et EndPaint (NtUserBeginPaint, NtUserEndPaint : `PAINTSTRUCT`, le DC
-     coupé à la région, WM_ERASEBKGND à ce moment), NtUserGetDCEx et NtUserReleaseDC, puis le texte (polices,
-     ADR-013) ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
+   - [x] WM_PAINT (M6, étape 8) : le compte des fenêtres à peindre de chaque thread (`QS_PAINT`, tenu à chaque
+     changement d'une fenêtre), WM_PAINT tiré par PeekMessage et GetMessage, NtUserDispatchMessage, BeginPaint et
+     EndPaint (NtUserBeginPaint, NtUserEndPaint ; DefWindowProc de WM_PAINT) : une fenêtre se peint et se valide ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : InvalidateRect, ValidateRect, RedrawWindow,
+     UpdateWindow et GetUpdateRect (NtUserRedrawWindow, NtUserCallHwndParamLock…), NtUserGetDCEx et
+     NtUserReleaseDC, puis le texte (polices, ADR-013) ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject, DeleteObject), DC en mémoire, régions de
      GDI et découpage, BitBlt, texte et polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread
@@ -410,8 +412,12 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   copie des bits valides (une fenêtre déplacée est repeinte entière) ; le dégradé n'a de spécification que ses
   bouts (le moteur de ReactOS n'est pas dans les sources épinglées) ; ôter le test de visibilité de WM_NCPAINT ne
   change rien (la région visible d'une fenêtre cachée est vide : mutation équivalente).
-- Zone cliente (M6, étape 7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : pas de WM_PAINT du client
-  (ni file, ni BeginPaint/EndPaint), ni NtUserGetDCEx/NtUserReleaseDC, ni DC d'une fenêtre ou d'une classe
+- WM_PAINT (M6, étape 8) : ni InvalidateRect, ni ValidateRect, ni RedrawWindow, ni UpdateWindow, ni
+  GetUpdateRect/GetUpdateRgn, ni WM_SYNCPAINT ; DispatchMessage d'une procédure de minuterie (WM_TIMER) journalisé ;
+  sans test (mutations qui survivent) : une procédure qui ne fait pas BeginPaint (repeinte par IntDispatchMessage),
+  le cadre des enfants repeint par BeginPaint, le DC de BeginPaint coupé à la région à mettre à jour (toujours toute
+  la zone cliente), WM_PAINT réservé aux fenêtres du thread (un seul thread GUI dans `gui`).
+- Zone cliente (M6, étape 7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : ni NtUserGetDCEx/NtUserReleaseDC, ni DC d'une fenêtre ou d'une classe
   (`CS_OWNDC`, `CS_CLASSDC`), ni DC du parent (`CS_PARENTDC`) ; seul PatBlt s'exécute en lot (les autres appels sont
   sautés, journalisés) ; pas d'objets créés par un client, de DC en mémoire, de stylos, de transformations, de
   `DevCaps` (à zéro), de suppression d'objets ni de ménage à la fin d'un processus (un DC pris par un processus

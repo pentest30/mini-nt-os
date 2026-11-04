@@ -257,7 +257,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `win32k::gdi::handles`, dans le PEB ; pinceaux de stock et des couleurs du système ; DC de l'écran et leurs
   `DC_ATTR` chez le client, `gdi::dc` ; cache des DC de fenêtres, `win32k::dce` ; PatBlt en lot dans le TEB, exécuté
   au retour d'un rappel et avant chaque service de win32k, `gdi::batch` ; NtGdiPatBlt, NtGdiGetAppClipBox,
-  NtGdiFlush ; pas encore WM_PAINT du client ni le texte). `syscall-gen` suit la variante
+  NtGdiFlush) ; WM_PAINT (le compte des fenêtres à peindre et `QS_PAINT`, WM_PAINT tiré de la file,
+  NtUserDispatchMessage, BeginPaint et EndPaint, DefWindowProc de WM_PAINT ; pas encore InvalidateRect et
+  RedrawWindow du client, ni le texte). `syscall-gen` suit la variante
   publiée de ReactOS (`DBG` défini) et vérifie les stubs de `ntdll`, `user32`, `gdi32` quand l'espace utilisateur est
   là.
   Suite : [`docs/passation.md`](docs/passation.md).
