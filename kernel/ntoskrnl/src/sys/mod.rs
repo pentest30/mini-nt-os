@@ -37,6 +37,7 @@ mod file;
 pub mod gates;
 mod memory;
 mod message;
+mod monitor;
 mod object;
 mod port;
 mod process;
@@ -198,11 +199,15 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
+    (services::NtUserGetMonitorInfo, Handler::Status(monitor::nt_user_get_monitor_info)),
     (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
     (services::NtUserInitialize, Handler::Status(user::nt_user_initialize)),
     (services::NtUserInitializeClientPfnArrays, Handler::Status(user::nt_user_initialize_client_pfn_arrays)),
     (services::NtUserLoadKeyboardLayoutEx, Handler::Status(user::nt_user_load_keyboard_layout_ex)),
     (services::NtUserMessageCall, Handler::Status(message::nt_user_message_call)),
+    (services::NtUserMonitorFromPoint, Handler::Status(monitor::nt_user_monitor_from_point)),
+    (services::NtUserMonitorFromRect, Handler::Status(monitor::nt_user_monitor_from_rect)),
+    (services::NtUserMonitorFromWindow, Handler::Status(monitor::nt_user_monitor_from_window)),
     (services::NtUserOpenDesktop, Handler::Status(desktop::nt_user_open_desktop)),
     (services::NtUserOpenWindowStation, Handler::Status(winsta::nt_user_open_window_station)),
     (services::NtUserPeekMessage, Handler::Status(message::nt_user_peek_message)),

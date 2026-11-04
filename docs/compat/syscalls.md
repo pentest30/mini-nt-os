@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 30 | 737 |
+| win32k | 34 | 737 |
 
 ## ntoskrnl
 
@@ -991,10 +991,10 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x12a0` | `NtGdiGetFontFamilyInfo` | 4 |  |
 | `0x12a1` | `NtGdiOffsetViewportOrgEx` | 4 |  |
 | `0x12a2` | `NtGdiOffsetWindowOrgEx` | 4 |  |
-| `0x12a3` | `NtUserGetMonitorInfo` | 2 |  |
-| `0x12a4` | `NtUserMonitorFromPoint` | 3 |  |
-| `0x12a5` | `NtUserMonitorFromRect` | 2 |  |
-| `0x12a6` | `NtUserMonitorFromWindow` | 2 |  |
+| `0x12a3` | `NtUserGetMonitorInfo` | 2 | ✅ |
+| `0x12a4` | `NtUserMonitorFromPoint` | 3 | ✅ |
+| `0x12a5` | `NtUserMonitorFromRect` | 2 | ✅ |
+| `0x12a6` | `NtUserMonitorFromWindow` | 2 | ✅ |
 | `0x12a7` | `NtUserSetScrollBarInfo` | 3 |  |
 | `0x12a8` | `NtGdiDdDDICreateDCFromMemory` | 1 |  |
 | `0x12a9` | `NtGdiDdDDIDestroyDCFromMemory` | 1 |  |

@@ -10,7 +10,8 @@
 //!   la fenêtre sans ses bordures (`UserGetWindowBorders`), sa barre de
 //!   titre, son bord client et ses barres de défilement ; avec des
 //!   rectangles valides (`wParam`), les `WVR_*` de sa classe ;
-//! - WM_GETMINMAXINFO, ses valeurs par défaut ([`min_max_info`]) ;
+//! - WM_GETMINMAXINFO, ses valeurs par défaut ([`min_max_info`]), adaptées
+//!   à la zone de travail du moniteur ([`adapt_to_monitor`]) ;
 //! - WM_DEVICECHANGE rend TRUE ; un message de l'application (au-delà de
 //!   WM_USER) rend 0.
 //!
@@ -18,10 +19,8 @@
 //! WM_NCPAINT, WM_NCACTIVATE, WM_NCHITTEST, WM_SETCURSOR, WM_ACTIVATE,
 //! WM_SHOWWINDOW, WM_WINDOWPOSCHANGING et CHANGED, WM_SYSCOMMAND, WM_CLOSE,
 //! les touches et les boutons…) attendent la peinture, les contextes de
-//! périphérique, le positionnement et l'entrée : ils rendent 0, journalisés
-//! une fois chacun. Pas encore de menus (`WNDS_HASMENU`), ni de moniteur
-//! (les valeurs de WM_GETMINMAXINFO ne sont pas adaptées au moniteur,
-//! comme ReactOS sans moniteur).
+//! périphérique, le positionnement et l'entrée : ils rendent 0, journalisés une fois chacun. Pas encore de
+//! menus (`WNDS_HASMENU`).
 
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
@@ -31,7 +30,7 @@ use abi::user::{
     sm, MinMaxInfo32, WM_DEVICECHANGE, WM_NCCALCSIZE, WM_USER, WNDS_HASCAPTION, WNDS_HASHORIZONTALSCROLLBAR,
     WNDS_HASVERTICALSCROOLLBAR, WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
     WS_EX_LAYOUTRTL, WS_EX_LEFTSCROLLBAR, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_HSCROLL,
-    WS_MINIMIZE, WS_THICKFRAME, WS_VSCROLL, WVR_HREDRAW, WVR_VALIDRECTS, WVR_VREDRAW,
+    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VSCROLL, WVR_HREDRAW, WVR_VALIDRECTS, WVR_VREDRAW,
 };
 use abi::user::{CS_HREDRAW, CS_VREDRAW};
 use hal::sync::KSpinLock;
@@ -209,6 +208,36 @@ pub fn min_max_info(
     }
 }
 
+/// co_WinPosGetMinMaxInfo, après WM_GETMINMAXINFO : ce que la procédure a
+/// laissé à sa valeur par défaut (`defaults`) s'adapte à la zone de travail
+/// `work` du moniteur de rectangle `monitor` (à son rectangle pour une
+/// fenêtre sans bouton d'agrandissement, ou contextuelle sans titre). Rend
+/// si la fenêtre agrandie couvre le moniteur (`WNDS_MAXIMIZESTOMONITOR`).
+pub fn adapt_to_monitor(
+    info: &mut MinMaxInfo32,
+    defaults: &MinMaxInfo32,
+    style: u32,
+    monitor: Rect,
+    work: Rect,
+) -> bool {
+    let area =
+        if style & WS_MAXIMIZEBOX != 0 && (style & WS_CAPTION == WS_CAPTION || style & (WS_CHILD | WS_POPUP) == 0) {
+            work
+        } else {
+            monitor
+        };
+    // The borders around the parent's client area: -ptMaxPosition by default.
+    let (xinc, yinc) = (-defaults.max_position[0], -defaults.max_position[1]);
+    let screen = (monitor.right - monitor.left, monitor.bottom - monitor.top);
+    if info.max_size == [screen.0 + 2 * xinc, screen.1 + 2 * yinc] {
+        info.max_size = [area.right - area.left + 2 * xinc, area.bottom - area.top + 2 * yinc];
+    }
+    if info.max_position == [-xinc, -yinc] {
+        info.max_position = [area.left - xinc, area.top - yinc];
+    }
+    info.max_size[0] >= screen.0 && info.max_size[1] >= screen.1
+}
+
 /// Les messages que ReactOS traite ici et que DefWindowProc ne traite pas
 /// encore, déjà journalisés.
 static REPORTED: KSpinLock<BTreeSet<u32>> = KSpinLock::new(BTreeSet::new());
@@ -259,7 +288,7 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use abi::user::{WS_EX_WINDOWEDGE, WS_OVERLAPPEDWINDOW, WS_POPUP};
+    use abi::user::{WS_EX_WINDOWEDGE, WS_OVERLAPPEDWINDOW};
 
     fn metric(index: usize) -> i32 {
         metrics::system_metrics(1280, 800, &metrics::Parameters::DEFAULT)[index]
@@ -328,5 +357,28 @@ mod tests {
         let child =
             min_max_info(WS_CHILD | WS_THICKFRAME, WS_EX_WINDOWEDGE, (0, 0), Rect::new(0, 0, 400, 300), &metric);
         assert_eq!(child.max_position, [-3, -3], "2 of edge, and the frame beyond a dialog frame");
+    }
+
+    #[test]
+    fn default_limits_adapt_to_the_work_area() {
+        let screen = Rect::new(0, 0, 1280, 800);
+        let work = Rect::new(0, 30, 1280, 770);
+        let defaults = min_max_info(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, (0, 0), screen, &metric);
+        let mut whole = defaults;
+        assert!(adapt_to_monitor(&mut whole, &defaults, WS_OVERLAPPEDWINDOW, screen, screen), "it covers the monitor");
+        assert_eq!(whole, defaults, "the work area is the monitor");
+        let mut info = defaults;
+        assert!(!adapt_to_monitor(&mut info, &defaults, WS_OVERLAPPEDWINDOW, screen, work), "not the whole height");
+        assert_eq!((info.max_size, info.max_position), ([1288, 748], [-4, 26]), "the work area and its borders");
+        let dialog_style = WS_POPUP | WS_CAPTION | WS_THICKFRAME;
+        let mut dialog = defaults;
+        adapt_to_monitor(&mut dialog, &defaults, dialog_style, screen, work);
+        assert_eq!(dialog.max_size, [1288, 808], "no maximize box: the whole monitor");
+        let mut popup = defaults;
+        adapt_to_monitor(&mut popup, &defaults, WS_POPUP | WS_MAXIMIZEBOX, screen, work);
+        assert_eq!((popup.max_size, popup.max_position), ([1288, 808], [-4, -4]), "a popup without a caption");
+        let mut chosen = MinMaxInfo32 { max_size: [500, 400], max_position: [10, 20], ..defaults };
+        assert!(!adapt_to_monitor(&mut chosen, &defaults, WS_OVERLAPPEDWINDOW, screen, work), "smaller");
+        assert_eq!((chosen.max_size, chosen.max_position), ([500, 400], [10, 20]), "what the procedure chose");
     }
 }
