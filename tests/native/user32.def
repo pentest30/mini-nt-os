@@ -29,4 +29,5 @@ SetProcessWindowStation@4
 SetThreadDesktop@4
 SetWindowPos@28
 SetWindowTextW@8
+ShowWindow@8
 SwitchDesktop@4

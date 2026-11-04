@@ -11,7 +11,8 @@
  * WM_NCCREATE, WM_CREATE... through KeUserModeCallback. An overlapped
  * window gets WM_GETMINMAXINFO and its frame from the system metrics, by
  * DefWindowProc in win32k (NtUserMessageCall), and its default place from
- * the monitor. SetWindowPos moves, sizes, orders, shows and hides windows.
+ * the monitor. SetWindowPos moves, sizes, orders, shows and hides windows;
+ * ShowWindow shows and hides them.
  * Each step and each
  * message goes to the debug port (DbgPrint), where the scenario looks for
  * them; the program ends with EXIT_STATUS.
@@ -140,6 +141,13 @@ typedef struct {
 #define WM_MOVE 0x0003
 #define WM_SIZE 0x0005
 #define WM_WINDOWPOSCHANGED 0x0047
+#define WM_SHOWWINDOW 0x0018
+#define WS_VISIBLE 0x10000000
+#define SW_HIDE 0
+#define SW_SHOWNORMAL 1
+#define SW_SHOWNOACTIVATE 4
+#define SW_SHOW 5
+#define ERROR_INVALID_PARAMETER 87
 #define GW_CHILD 5
 #define WM_PARENTNOTIFY 0x0210
 #define ERROR_TLW_WITH_WSCHILD 1406
@@ -181,6 +189,7 @@ __declspec(dllimport) BOOL __stdcall IsWindowVisible(HWND window);
 __declspec(dllimport) HMONITOR __stdcall MonitorFromPoint(POINT point, DWORD flags);
 __declspec(dllimport) HMONITOR __stdcall MonitorFromWindow(HWND window, DWORD flags);
 __declspec(dllimport) BOOL __stdcall MoveWindow(HWND window, int x, int y, int width, int height, BOOL repaint);
+__declspec(dllimport) BOOL __stdcall ShowWindow(HWND window, int command);
 __declspec(dllimport) BOOL __stdcall SetWindowPos(HWND window, HWND after, int x, int y, int cx, int cy, UINT flags);
 __declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int size);
@@ -238,6 +247,8 @@ static LONG minimum_height;
 static LPARAM moved_l;
 static LPARAM sized_l;
 static WINDOWPOS changed;
+/* What the last WM_SHOWWINDOW gave. */
+static WPARAM shown_w;
 
 /* Prints the messages received since the last time. */
 static void print_messages(const char *what)
@@ -275,6 +286,8 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
         sized_l = l;
     if (message == WM_WINDOWPOSCHANGED)
         changed = *(const WINDOWPOS *)l;
+    if (message == WM_SHOWWINDOW)
+        shown_w = w;
     if (message == WM_GETMINMAXINFO) {
         MINMAXINFO *info = (MINMAXINFO *)l;
         limits = *info;
@@ -654,6 +667,74 @@ static void check_default_place(HINSTANCE instance)
     received_count = 0;
 }
 
+/* ShowWindow: WM_SHOWWINDOW, SetWindowPos, then the WM_SIZE and WM_MOVE an
+   overlapped window waited for; hiding; a child under a hidden parent; a
+   command beyond SW_MAX; windows created visible. */
+static void check_show_window(HINSTANCE instance, HWND popup)
+{
+    HWND child = GetWindow(popup, GW_CHILD);
+    HWND window = CreateWindowExW(0, CLASS_NAME, L"Shown", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0,
+                                  0, instance, 0);
+    BOOL was;
+    BOOL visible;
+    LONG style;
+
+    received_count = 0;
+    was = ShowWindow(window, SW_SHOWNORMAL);
+    visible = IsWindowVisible(window);
+    print_messages("ShowWindow(SW_SHOWNORMAL)");
+    DbgPrint("[gui] ShowWindow(SW_SHOWNORMAL): was %d, visible %d, WM_SHOWWINDOW %u, WM_SIZE %d %d, WM_MOVE %d %d\n",
+             was, visible, shown_w, (short)(sized_l & 0xFFFF), (short)(sized_l >> 16), (short)(moved_l & 0xFFFF),
+             (short)(moved_l >> 16));
+    was = ShowWindow(window, SW_SHOW);
+    print_messages("ShowWindow(SW_SHOW), visible");
+    DbgPrint("[gui] ShowWindow(SW_SHOW), visible: was %d\n", was);
+    was = ShowWindow(window, SW_HIDE);
+    visible = IsWindowVisible(window);
+    print_messages("ShowWindow(SW_HIDE)");
+    DbgPrint("[gui] ShowWindow(SW_HIDE): was %d, visible %d, WM_SHOWWINDOW %u\n", was, visible, shown_w);
+    was = ShowWindow(window, SW_HIDE);
+    print_messages("ShowWindow(SW_HIDE), hidden");
+    DbgPrint("[gui] ShowWindow(SW_HIDE), hidden: was %d\n", was);
+
+    was = ShowWindow(child, SW_SHOW);
+    style = GetWindowLongW(child, GWL_STYLE);
+    visible = IsWindowVisible(child);
+    print_messages("ShowWindow of a child of a hidden window");
+    DbgPrint("[gui] ShowWindow of a child of a hidden window: was %d, WS_VISIBLE %s, visible %d\n", was,
+             style & WS_VISIBLE ? "set" : "clear", visible);
+
+    /* Shown by SetWindowPos: its WM_SIZE and WM_MOVE still wait, through
+       hiding, for ShowWindow to show it. */
+    window = CreateWindowExW(0, CLASS_NAME, L"Pending", WS_OVERLAPPEDWINDOW, 0, 0, 200, 100, 0, 0, instance, 0);
+    SetWindowPos(window, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    received_count = 0;
+    ShowWindow(window, SW_HIDE);
+    print_messages("ShowWindow(SW_HIDE) before WM_SIZE");
+    ShowWindow(window, SW_SHOWNOACTIVATE);
+    print_messages("ShowWindow(SW_SHOWNOACTIVATE) at last");
+
+    SetLastError(0);
+    was = ShowWindow(window, 12);
+    DbgPrint("[gui] ShowWindow(12): %d (%lu)\n", was, GetLastError());
+    SetLastError(0);
+    was = ShowWindow((HWND)0x1234, SW_SHOW);
+    DbgPrint("[gui] ShowWindow of no window: %d (%lu)\n", was, GetLastError());
+
+    received_count = 0;
+    window = CreateWindowExW(0, CLASS_NAME, L"Visible", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT,
+                             SW_SHOWNOACTIVATE, CW_USEDEFAULT, 0, 0, 0, instance, 0);
+    visible = IsWindowVisible(window);
+    print_messages("created visible, SW_SHOWNOACTIVATE");
+    DbgPrint("[gui] created visible: visible %d, WINDOWPOS flags %04x\n", visible, changed.flags);
+    print_rect("created visible", window);
+    received_count = 0;
+    window = CreateWindowExW(0, CLASS_NAME, L"Popup", WS_POPUP | WS_VISIBLE, 10, 10, 50, 50, 0, 0, instance, 0);
+    visible = IsWindowVisible(window);
+    print_messages("popup created visible");
+    DbgPrint("[gui] popup created visible: visible %d, WINDOWPOS flags %04x\n", visible, changed.flags);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -697,6 +778,7 @@ DWORD __stdcall GuiStartup(void)
         check_set_window_pos(overlapped, window);
     }
     check_z_order(instance);
+    check_show_window(instance, window);
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);

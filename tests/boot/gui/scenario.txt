@@ -28,6 +28,10 @@
 # limits, WM_NCCALCSIZE, WM_WINDOWPOSCHANGED, WM_MOVE, WM_SIZE), move a
 # child with its parent (WM_CHILDACTIVATE to an activated child), order
 # windows (top, bottom, after a sibling, topmost) and show or hide them.
+# ShowWindow shows (WM_SHOWWINDOW, SetWindowPos, then the WM_SIZE and WM_MOVE
+# an overlapped window waited for) and hides windows; a child of a hidden
+# window only gets WS_VISIBLE; windows created visible are shown, with the
+# command in y for an overlapped window placed by default.
 # It ends with status 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
@@ -108,8 +112,33 @@ expect = [gui] HWND_NOTOPMOST: WS_EX_TOPMOST clear, A above B yes
 expect = [gui] SWP_SHOWWINDOW received 2: 0046 0047
 expect = [gui] SWP_SHOWWINDOW: visible 1
 expect = [gui] SWP_HIDEWINDOW: visible 0
+expect = [gui] ShowWindow(SW_SHOWNORMAL) received 5: 0018 0046 0047 0005 0003
+expect = [gui] ShowWindow(SW_SHOWNORMAL): was 0, visible 1, WM_SHOWWINDOW 1, WM_SIZE 952 572, WM_MOVE 50 70
+expect = [gui] ShowWindow(SW_SHOW), visible received 0:
+expect = [gui] ShowWindow(SW_SHOW), visible: was 1
+expect = [gui] ShowWindow(SW_HIDE) received 3: 0018 0046 0047
+expect = [gui] ShowWindow(SW_HIDE): was 1, visible 0, WM_SHOWWINDOW 0
+expect = [gui] ShowWindow(SW_HIDE), hidden received 0:
+expect = [gui] ShowWindow(SW_HIDE), hidden: was 0
+expect = [gui] ShowWindow of a child of a hidden window received 1: 0018
+expect = [gui] ShowWindow of a child of a hidden window: was 0, WS_VISIBLE set, visible 0
+expect = [gui] ShowWindow(SW_HIDE) before WM_SIZE received 3: 0018 0046 0047
+expect = [gui] ShowWindow(SW_SHOWNOACTIVATE) at last received 5: 0018 0046 0047 0005 0003
+expect = [gui] ShowWindow(12): 0 (87)
+expect = [gui] ShowWindow of no window: 0 (1400)
+expect = [gui] created visible, SW_SHOWNOACTIVATE received 9: 0024 0081 0083 0001 0018 0046 0047 0005 0003
+expect = [gui] created visible: visible 1, WINDOWPOS flags 1857
+expect = [gui] created visible: 69 69 1029 669
+expect = [gui] popup created visible received 8: 0081 0083 0001 0005 0003 0018 0046 0047
+expect = [gui] popup created visible: visible 1, WINDOWPOS flags 1847
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
+
+# The desktop's background, painted when the program switches to it; the
+# windows, shown or not, are not painted yet (no device contexts).
+screen = 640 400 3A6EA5
+screen = 0 0 3A6EA5
+screen = 1279 799 3A6EA5
 
 forbid = WRONG
 forbid = NtUserMessageCall (0x11cb) is not implemented
