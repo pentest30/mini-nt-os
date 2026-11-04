@@ -187,6 +187,15 @@ typedef struct {
 #define PM_REMOVE 0x0001
 #define PM_NOREMOVE 0x0000
 #define QS_PAINT 0x0020
+#define FALSE 0
+#define TRUE 1
+#define RDW_INVALIDATE 0x0001
+#define RDW_INTERNALPAINT 0x0002
+#define RDW_ERASE 0x0004
+#define RDW_ALLCHILDREN 0x0080
+#define RDW_UPDATENOW 0x0100
+#define RDW_ERASENOW 0x0200
+#define RDW_FRAME 0x0400
 #define COLOR_HIGHLIGHT 13
 #define WM_CREATE 0x0001
 #define WM_GETMINMAXINFO 0x0024
@@ -222,6 +231,11 @@ __declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *pa
 __declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
 __declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT min, UINT max, UINT remove);
 __declspec(dllimport) DWORD __stdcall GetQueueStatus(UINT flags);
+__declspec(dllimport) BOOL __stdcall InvalidateRect(HWND window, const RECT *rect, BOOL erase);
+__declspec(dllimport) BOOL __stdcall ValidateRect(HWND window, const RECT *rect);
+__declspec(dllimport) BOOL __stdcall GetUpdateRect(HWND window, RECT *rect, BOOL erase);
+__declspec(dllimport) BOOL __stdcall UpdateWindow(HWND window);
+__declspec(dllimport) BOOL __stdcall RedrawWindow(HWND window, const RECT *rect, void *region, UINT flags);
 __declspec(dllimport) int __stdcall GetClipBox(HDC dc, RECT *rect);
 __declspec(dllimport) DWORD __stdcall GetObjectType(HGDIOBJ object);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int height, DWORD rop);
@@ -298,6 +312,11 @@ static WPARAM shown_w;
 /* The window that paints itself in WM_PAINT, and what BeginPaint gave it. */
 static HWND painter;
 static PAINTSTRUCT painted;
+static unsigned int painter_paints;
+/* The overlapped window "Visible". */
+static HWND visible_window;
+/* A window whose procedure does not call BeginPaint for WM_PAINT. */
+static HWND lazy_window;
 /* A window with WS_CLIPCHILDREN and a child. */
 static HWND clipper_window;
 /* The DC of the last WM_ERASEBKGND, and GetClipBox of it then. */
@@ -356,11 +375,13 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
             return 0;
         }
     }
+    if (message == WM_PAINT && window == lazy_window)
+        return 0;
     if (message == WM_PAINT && window == painter) {
-        /* A black square at the top left of its client area, between
-           BeginPaint and EndPaint. */
+        /* A black square at the top of its client area, between BeginPaint
+           and EndPaint, further right each time. */
         HDC dc = BeginPaint(window, &painted);
-        PatBlt(dc, 0, 0, 10, 10, BLACKNESS);
+        PatBlt(dc, 12 * painter_paints++, 0, 10, 10, BLACKNESS);
         EndPaint(window, &painted);
         return 0;
     }
@@ -832,6 +853,7 @@ static void check_show_window(HINSTANCE instance, HWND popup)
     received_count = 0;
     window = CreateWindowExW(0, CLASS_NAME, L"Visible", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT,
                              SW_SHOWNOACTIVATE, CW_USEDEFAULT, 0, 0, 0, instance, 0);
+    visible_window = window;
     visible = IsWindowVisible(window);
     print_messages("created visible, SW_SHOWNOACTIVATE");
     DbgPrint("[gui] created visible: visible %d, WINDOWPOS flags %04x\n", visible, changed.flags);
@@ -921,6 +943,149 @@ static void check_paint_messages(void)
              painted.rcPaint.top, painted.rcPaint.right, painted.rcPaint.bottom, i, GetLastError());
 }
 
+static void set_rect(RECT *rect, LONG left, LONG top, LONG right, LONG bottom)
+{
+    rect->left = left;
+    rect->top = top;
+    rect->right = right;
+    rect->bottom = bottom;
+}
+
+/* QS_PAINT among the kinds of messages in the queue. */
+static int paint_pending(void)
+{
+    return (GetQueueStatus(QS_PAINT) >> 16 & QS_PAINT) != 0;
+}
+
+/* InvalidateRect, ValidateRect and GetUpdateRect on an update region of
+   two pieces; UpdateWindow; RedrawWindow and its flags. */
+static void check_redraw(void)
+{
+    RECT r, update;
+    BOOL got, other;
+    int pending;
+    HWND framed = GetWindow(clipper_window, GW_CHILD);
+    HWND hidden;
+    HWND plain;
+    MSG message;
+
+    set_rect(&r, 10, 10, 20, 20);
+    InvalidateRect(visible_window, &r, FALSE);
+    set_rect(&r, 100, 50, 120, 60);
+    InvalidateRect(visible_window, &r, FALSE);
+    got = GetUpdateRect(visible_window, &update, FALSE);
+    DbgPrint("[gui] InvalidateRect twice: %d %ld %ld %ld %ld\n", got, update.left, update.top, update.right,
+             update.bottom);
+    set_rect(&r, 10, 10, 20, 20);
+    ValidateRect(visible_window, &r);
+    got = GetUpdateRect(visible_window, &update, FALSE);
+    DbgPrint("[gui] ValidateRect of one piece: %d %ld %ld %ld %ld\n", got, update.left, update.top, update.right,
+             update.bottom);
+    set_rect(&r, 100, 50, 120, 60);
+    ValidateRect(visible_window, &r);
+    got = GetUpdateRect(visible_window, &update, FALSE);
+    pending = paint_pending();
+    DbgPrint("[gui] ValidateRect of the other: %d %ld %ld %ld %ld, QS_PAINT %d\n", got, update.left, update.top,
+             update.right, update.bottom, pending);
+
+    /* WM_PAINT at once: the popup erased, its square further right. */
+    InvalidateRect(painter, 0, TRUE);
+    received_count = 0;
+    UpdateWindow(painter);
+    print_messages("UpdateWindow");
+    got = GetUpdateRect(painter, &update, FALSE);
+    DbgPrint("[gui] UpdateWindow, then: %d\n", got);
+
+    /* The background of a part of the popup erased at once; still to paint
+       until validated. */
+    set_rect(&r, 12, 0, 17, 5);
+    received_count = 0;
+    RedrawWindow(painter, &r, 0, RDW_INVALIDATE | RDW_ERASE | RDW_ERASENOW);
+    print_messages("RDW_ERASENOW");
+    got = GetUpdateRect(painter, &update, FALSE);
+    pending = paint_pending();
+    DbgPrint("[gui] RDW_ERASENOW: %d %ld %ld %ld %ld, QS_PAINT %d\n", got, update.left, update.top, update.right,
+             update.bottom, pending);
+    /* GetUpdateRect erasing first: the corner again. */
+    InvalidateRect(painter, &r, TRUE);
+    received_count = 0;
+    got = GetUpdateRect(painter, &update, TRUE);
+    print_messages("GetUpdateRect(TRUE)");
+    ValidateRect(painter, 0);
+    other = GetUpdateRect(painter, &update, FALSE);
+    DbgPrint("[gui] GetUpdateRect(TRUE): %d; ValidateRect of the popup: %d\n", got, other);
+
+    /* Nothing for a window never shown. */
+    hidden = CreateWindowExW(0, CLASS_NAME, L"Hidden", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, 0, 0,
+                             GetModuleHandleW(0), 0);
+    got = RedrawWindow(hidden, 0, 0, RDW_INVALIDATE | RDW_ERASE);
+    other = GetUpdateRect(hidden, &update, FALSE);
+    DbgPrint("[gui] RedrawWindow of a hidden window: %d, update %d\n", got, other);
+
+    /* WM_PAINT at once, in which BeginPaint paints the frame and erases. */
+    received_count = 0;
+    RedrawWindow(visible_window, 0, 0, RDW_INVALIDATE | RDW_FRAME | RDW_ERASE | RDW_UPDATENOW);
+    print_messages("RDW_UPDATENOW");
+    got = GetUpdateRect(visible_window, &update, FALSE);
+    DbgPrint("[gui] RDW_UPDATENOW, then: %d\n", got);
+
+    /* WM_PAINT with nothing to update. */
+    RedrawWindow(visible_window, 0, 0, RDW_INTERNALPAINT);
+    got = GetUpdateRect(visible_window, &update, FALSE);
+    pending = paint_pending();
+    other = PeekMessageW(&message, visible_window, WM_PAINT, WM_PAINT, PM_REMOVE);
+    if (other)
+        DispatchMessageW(&message);
+    DbgPrint("[gui] RDW_INTERNALPAINT: update %d, QS_PAINT %d, WM_PAINT %d, then QS_PAINT %d\n", got, pending, other,
+             paint_pending());
+
+    /* A parent clipping its children invalidates them with RDW_ALLCHILDREN
+       only; UpdateWindow paints it, then its child. */
+    RedrawWindow(clipper_window, 0, 0, RDW_INVALIDATE | RDW_ERASE);
+    got = GetUpdateRect(framed, &update, FALSE);
+    RedrawWindow(clipper_window, 0, 0, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    other = GetUpdateRect(framed, &update, FALSE);
+    received_count = 0;
+    UpdateWindow(clipper_window);
+    print_messages("UpdateWindow of a parent");
+    pending = GetUpdateRect(clipper_window, &update, FALSE) || GetUpdateRect(framed, &update, FALSE);
+    DbgPrint("[gui] RDW_ALLCHILDREN: the child %d, then %d; after UpdateWindow %d\n", got, other, pending);
+
+    SetLastError(0);
+    got = RedrawWindow(visible_window, 0, 0, 0x10000);
+    DbgPrint("[gui] RedrawWindow, unknown flag: %d (%lu)\n", got, GetLastError());
+
+    /* InvalidateRect without erasing: WM_PAINT does not erase; validated,
+       a background to erase is not erased either. */
+    set_rect(&r, 10, 10, 20, 20);
+    InvalidateRect(visible_window, &r, FALSE);
+    received_count = 0;
+    UpdateWindow(visible_window);
+    print_messages("UpdateWindow without erasing");
+    InvalidateRect(visible_window, &r, TRUE);
+    ValidateRect(visible_window, 0);
+    received_count = 0;
+    RedrawWindow(visible_window, 0, 0, RDW_INTERNALPAINT | RDW_UPDATENOW);
+    print_messages("RDW_INTERNALPAINT after ValidateRect");
+
+    /* A parent that does not clip its children invalidates them; its child
+       painted at once leaves the rest of the parent to paint (here, below
+       it). A procedure that does not call BeginPaint gets its frame and
+       background painted all the same, and stays to paint. */
+    plain = CreateWindowExW(0, CLASS_NAME, L"Plain", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 1050, 450, 200, 100, 0, 0,
+                            GetModuleHandleW(0), 0);
+    lazy_window = CreateWindowExW(0, CLASS_NAME, L"Lazy", WS_CHILD | WS_VISIBLE, 0, 0, 192, 20, plain, 0,
+                                  GetModuleHandleW(0), 0);
+    RedrawWindow(plain, 0, 0, RDW_INVALIDATE | RDW_ERASE);
+    received_count = 0;
+    UpdateWindow(lazy_window);
+    print_messages("UpdateWindow of a child that does not paint");
+    got = GetUpdateRect(lazy_window, &update, FALSE);
+    other = GetUpdateRect(plain, &update, FALSE);
+    DbgPrint("[gui] the child still to paint %d; its parent %d %ld %ld %ld %ld\n", got, other, update.left, update.top,
+             update.right, update.bottom);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -976,6 +1141,7 @@ DWORD __stdcall GuiStartup(void)
     check_z_order(instance);
     check_show_window(instance, window);
     check_paint_messages();
+    check_redraw();
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);
