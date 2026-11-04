@@ -257,11 +257,6 @@ pub fn limit_size(size: (i32, i32), style: u32, limits: Option<([i32; 2], [i32; 
     (cx, cy)
 }
 
-/// MAKELONG(`low`, `high`) de deux valeurs sur 16 bits.
-fn make_long(low: i32, high: i32) -> u32 {
-    (low as u32 & 0xFFFF) | ((high as u32 & 0xFFFF) << 16)
-}
-
 /// DefWndHandleWindowPosChanged : WM_MOVE (la zone cliente, dans celle du
 /// parent d'une fenêtre fille, sinon à l'écran) si elle a bougé, WM_SIZE
 /// (sa taille) si elle a changé (`SWP_NOCLIENTMOVE`, `SWP_NOCLIENTSIZE` de
@@ -274,7 +269,7 @@ fn window_pos_changed(window: &Arc<Window>, flags: u32) {
     };
     let client = state.client;
     if flags & SWP_NOCLIENTMOVE == 0 {
-        let at = make_long(client.left - origin.0, client.top - origin.1);
+        let at = crate::window::make_long(client.left - origin.0, client.top - origin.1);
         let _ = crate::window::send_message(window, WM_MOVE, 0, LParam::Value(at));
     }
     if flags & SWP_NOCLIENTSIZE == 0 || flags & SWP_STATECHANGED != 0 {
@@ -282,7 +277,7 @@ fn window_pos_changed(window: &Arc<Window>, flags: u32) {
             (SIZE_MINIMIZED, 0)
         } else {
             let kind = if state.style & WS_MAXIMIZE != 0 { SIZE_MAXIMIZED } else { SIZE_RESTORED };
-            (kind, make_long(client.right - client.left, client.bottom - client.top))
+            (kind, crate::window::make_long(client.right - client.left, client.bottom - client.top))
         };
         let _ = crate::window::send_message(window, WM_SIZE, kind, LParam::Value(size));
     }

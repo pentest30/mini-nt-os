@@ -1,5 +1,5 @@
 //! Les fenêtres (`win32k::window`, `win32k::winpos`) : NtUserCreateWindowEx,
-//! NtUserDefSetText, NtUserSetWindowPos, NtUserMoveWindow.
+//! NtUserDefSetText, NtUserSetWindowPos, NtUserMoveWindow, NtUserShowWindow.
 //! Comme dans win32k, un échec rend 0 et met l'erreur Win32 dans le TEB du
 //! thread.
 
@@ -9,7 +9,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::ntstatus::NtStatus;
 use abi::user::{
     LargeUnicodeString32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, WS_CHILD, WS_POPUP,
+    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_MAX, WS_CHILD, WS_POPUP,
 };
 use abi::winerror::{dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_SUCCESS};
 use ke::usermem::{copy_from_user, probe_for_read, UserPtr};
@@ -194,4 +194,24 @@ pub(super) fn nt_user_move_window(arguments: &[u32]) -> NtStatus {
     }
     let forwarded = [arguments[0], 0, arguments[1], arguments[2], arguments[3], arguments[4], flags];
     nt_user_set_window_pos(&forwarded)
+}
+
+/// NtUserShowWindow(hWnd, nCmdShow) : montre ou cache la fenêtre
+/// (`win32k::winpos::show_window`) ; rend si elle était visible. FALSE pour
+/// une fenêtre qui n'existe pas (`ERROR_INVALID_WINDOW_HANDLE`) ou celle du
+/// bureau ; une commande au-delà de `SW_MAX` : `ERROR_INVALID_PARAMETER`
+/// (une commande négative ne fait rien, comme ReactOS, qui compare avec
+/// signe).
+pub(super) fn nt_user_show_window(arguments: &[u32]) -> NtStatus {
+    let (handle, command) = (arguments[0], arguments[1]);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    if window.is_desktop_window() {
+        return NtStatus(0);
+    }
+    if command as i32 > SW_MAX as i32 {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    NtStatus(u32::from(win32k::winpos::show_window(&window, command)))
 }

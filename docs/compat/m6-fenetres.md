@@ -178,11 +178,39 @@ Ce qui manque, journalisé une fois : les régions visibles (une fenêtre est vi
 sont et qu'elle n'est pas vide), repeindre ce qui a bougé et la copie des bits valides, l'activation et le premier
 plan (aucune fenêtre n'y est ; une fenêtre de premier niveau qui s'active monte seulement en haut), garder les
 fenêtres possédées au-dessus de leur propriétaire (WinPosDoOwnedPopups), `SWP_ASYNCWINDOWPOS` (fait tout de suite),
-plusieurs moniteurs et la zone de travail réduite, ShowWindow (WM_SIZE et WM_MOVE d'une fenêtre recouvrante y
-attendent), DeferWindowPos, une fenêtre réduite ou agrandie.
+plusieurs moniteurs et la zone de travail réduite, DeferWindowPos, une fenêtre réduite ou agrandie.
 
 Tests : hôte (`win32k::monitor` : le moniteur d'un rectangle, la cascade ; `win32k::window` : places par défaut sans
 moniteur et sur un moniteur, `STARTUPINFO`, `CW_USEDEFAULT` sur 16 bits ; `win32k::defwnd` : limites de
 WM_WINDOWPOSCHANGING, adaptation à la zone de travail ; `win32k::winpos` : drapeaux corrigés, rang déjà tenu,
 activation, nouveaux rectangles ; `syscall-gen` : les stubs trouvés et vérifiés, les stubs du moniteur qui demandent
 `DBG`) ; le scénario `gui`, sur les deux CPU.
+
+## Étape 5 : ShowWindow
+
+`ShowWindow` de `user32` appelle directement NtUserShowWindow. Comme co_WinPosShowWindow de ReactOS (`winpos.c`,
+`window.c`, `main.c`, comme spécification) :
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `win32k::winpos::show_window` | la commande du `STARTUPINFO` du processus (`STARTF_USESHOWWINDOW`, lu de ses paramètres au premier besoin) pour sa première fenêtre recouvrante à titre et sans propriétaire, et pour `SW_SHOWDEFAULT`, une seule fois ; les drapeaux de SetWindowPos de la commande (`show_command`) ; WM_SHOWWINDOW si la visibilité change (ou `SW_SHOWNA`) ; SetWindowPos (en haut, ou au premier plan) si ses parents sont visibles, sinon `WS_VISIBLE` seul ; puis WM_SIZE et WM_MOVE qui attendaient (`WNDS_SENDSIZEMOVEMSGS`, co_WinPosSendSizeMove) ; rend si elle était visible |
+| `win32k::window::create_window` | une fenêtre créée avec `WS_VISIBLE` est montrée à la fin de sa création, avec `SW_SHOW` ou, pour une fenêtre recouvrante placée par défaut, la commande passée en `y` (IntFixWindowCoordinates) |
+| NtUserShowWindow (`sys::window`) | une fenêtre qui n'existe pas : `ERROR_INVALID_WINDOW_HANDLE` ; la fenêtre du bureau : FALSE ; une commande au-delà de `SW_MAX` : `ERROR_INVALID_PARAMETER` |
+
+Le programme montre une fenêtre recouvrante (`SW_SHOWNORMAL`) : `0018 0046 0047 0005 0003` (WM_SHOWWINDOW, SetWindowPos,
+puis WM_SIZE 952 × 572 et WM_MOVE en (50, 70) qu'elle attendait), elle était cachée et devient visible ; `SW_SHOW`
+d'une fenêtre visible ne fait rien et rend TRUE ; `SW_HIDE` la cache (`0018 0046 0047`), puis ne fait rien. La fille
+d'une fenêtre cachée reçoit WM_SHOWWINDOW et `WS_VISIBLE`, sans être visible. Une commande de 12 : 87 ; une fenêtre
+inconnue : 1400. Une fenêtre recouvrante créée visible avec `SW_SHOWNOACTIVATE` en `y` reçoit
+`0024 0081 0083 0001 0018 0046 0047 0005 0003` (drapeaux de son `WINDOWPOS` : `0x1857`, sans activation ni ordre Z), une
+fenêtre contextuelle créée visible `0081 0083 0001 0005 0003 0018 0046 0047`.
+
+Les fenêtres montrées ne sont pas peintes : l'écran (capture de QEMU, `screen` du scénario) reste le fond du bureau.
+
+Ce qui manque, journalisé une fois : réduire et agrandir (co_WinPosMinMaximize : les commandes qui le demandent, ou
+montrer une fenêtre réduite ou agrandie, ne font rien et rendent FALSE ; le placement des fenêtres, WINDOWPLACEMENT),
+la fenêtre active, le premier plan et le focus (à cacher la fenêtre active, une autre devrait l'être), les fenêtres
+possédées montrées et cachées avec leur propriétaire, ShowWindowAsync, la peinture.
+
+Tests : hôte (`win32k::winpos` : les commandes et leurs drapeaux, le `STARTUPINFO` pour la première fenêtre
+recouvrante seulement, une fois ; `win32k::window` : la commande en `y`) ; le scénario `gui`, sur les deux CPU.

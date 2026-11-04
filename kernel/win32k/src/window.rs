@@ -30,9 +30,10 @@
 //! prend sa place et sa taille sur le moniteur ([`fix_coordinates`],
 //! [`crate::monitor`]).
 //!
+//! Une fenêtre créée visible est montrée (`crate::winpos::show_window`).
+//!
 //! Pas encore : DestroyWindow (les fenêtres d'un thread vivent autant que
-//! lui), ShowWindow (une fenêtre créée visible reste cachée, journalisé),
-//! les menus, les messages envoyés à un autre thread, la fenêtre des
+//! lui), une fenêtre créée réduite ou agrandie (journalisé), les menus, les messages envoyés à un autre thread, la fenêtre des
 //! messages (`HWND_MESSAGE`), les crochets, les régions (la région à mettre
 //! à jour est un rectangle), les contextes de périphérique (WM_ERASEBKGND
 //! reçoit 0), le fond d'écran, la mise en page de droite à gauche.
@@ -52,13 +53,14 @@ use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Rect32,
     WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
     FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-    SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
-    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT,
-    WM_PARENTNOTIFY, WM_SIZE, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED,
-    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_SENDERASEBACKGROUND,
-    WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE,
-    WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED,
+    TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO,
+    WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT,
+    WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND,
+    WNDS_MAXIMIZESTOMONITOR, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY,
+    WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP,
+    WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_TLW_WITH_WSCHILD,
@@ -617,9 +619,10 @@ pub struct CreateParams {
     pub expected_version: u32,
 }
 
-/// Ce que les paramètres du processus (STARTUPINFO) disent de la place et
-/// de la taille d'une fenêtre recouvrante : `WindowFlags` (`STARTF_*`),
-/// `StartingX`, `StartingY`, `CountX`, `CountY`.
+/// Ce que les paramètres du processus (STARTUPINFO) disent de la place, de
+/// la taille et de la commande de ShowWindow d'une fenêtre recouvrante :
+/// `WindowFlags` (`STARTF_*`), `StartingX`, `StartingY`, `CountX`,
+/// `CountY`, `ShowWindowFlags`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StartupPlace {
     pub flags: u32,
@@ -627,9 +630,12 @@ pub struct StartupPlace {
     pub y: i32,
     pub cx: i32,
     pub cy: i32,
+    pub show: u32,
 }
 
-/// IntFixWindowCoordinates. Une fenêtre recouvrante sans moniteur (`work`
+/// IntFixWindowCoordinates ; rend la commande de ShowWindow d'une fenêtre
+/// créée visible (`SW_SHOW`, ou le `y` d'une fenêtre recouvrante placée par
+/// défaut sur un moniteur). Une fenêtre recouvrante sans moniteur (`work`
 /// nul) prend la place et la taille de ReactOS sans moniteur (0, 0,
 /// 800 × 600). Avec la zone de travail `work` de son moniteur,
 /// `CW_USEDEFAULT` en `x` lui donne la place de `startup`
@@ -646,15 +652,19 @@ pub fn fix_coordinates(
     work: Option<Rect>,
     startup: &StartupPlace,
     cascade: impl FnOnce() -> (i32, i32),
-) {
+) -> u32 {
     let default = |value: i32| value as u32 == CW_USEDEFAULT || value == i32::from(i16::MIN);
+    let mut show = SW_SHOW;
     if params.style & (WS_POPUP | WS_CHILD) == 0 {
         let Some(work) = work else {
             (params.x, params.y, params.cx, params.cy) = (0, 0, 800, 600);
-            return;
+            return show;
         };
         let (width, height) = (work.right - work.left, work.bottom - work.top);
         if default(params.x) {
+            if !default(params.y) {
+                show = params.y as u32;
+            }
             (params.x, params.y) =
                 if startup.flags & STARTF_USEPOSITION != 0 { (startup.x, startup.y) } else { cascade() };
         }
@@ -667,7 +677,7 @@ pub fn fix_coordinates(
         } else if default(params.cy) {
             params.cy = height * 3 / 4;
         }
-        return;
+        return show;
     }
     if default(params.x) {
         (params.x, params.y) = (0, 0);
@@ -675,11 +685,15 @@ pub fn fix_coordinates(
     if default(params.cx) {
         (params.cx, params.cy) = (0, 0);
     }
+    show
 }
 
 /// Le `STARTUPINFO` du processus courant, dans ses paramètres
 /// (`Peb->ProcessParameters`) ; rien s'ils sont illisibles.
-fn startup_place() -> StartupPlace {
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système (lit la mémoire utilisateur).
+pub fn startup_place() -> StartupPlace {
     let Some(process) = ps::ethread::current_thread().map(|thread| thread.process().clone()) else {
         return StartupPlace::default();
     };
@@ -692,6 +706,7 @@ fn startup_place() -> StartupPlace {
         y: field(offset_of!(RtlUserProcessParameters32, starting_y)) as i32,
         cx: field(offset_of!(RtlUserProcessParameters32, count_x)) as i32,
         cy: field(offset_of!(RtlUserProcessParameters32, count_y)) as i32,
+        show: field(offset_of!(RtlUserProcessParameters32, show_window_flags)),
     }
 }
 
@@ -1010,7 +1025,8 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     }
     let startup = if params.style & (WS_POPUP | WS_CHILD) == 0 { startup_place() } else { StartupPlace::default() };
     let work = crate::monitor::primary().map(|monitor| monitor.work);
-    fix_coordinates(&mut params, work, &startup, || crate::monitor::next_cascade_place().unwrap_or((0, 0)));
+    let mut show =
+        fix_coordinates(&mut params, work, &startup, || crate::monitor::next_cascade_place().unwrap_or((0, 0)));
     if kind == WS_CHILD && !parent.is_desktop_window() {
         let client = parent.state().client;
         params.x += client.left;
@@ -1130,7 +1146,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     }
     update(&window, |state| state.state2 |= WNDS2_WMCREATEMSGPROCESSED);
     if window.state().state & WNDS_SENDSIZEMOVEMSGS == 0 {
-        send_size_move(&window, &parent);
+        send_size_move(&window);
     }
     if params.style & (WS_MINIMIZE | WS_MAXIMIZE) != 0 {
         static REPORTED: AtomicBool = AtomicBool::new(false);
@@ -1141,8 +1157,13 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         let _ = send_message(&parent, WM_PARENTNOTIFY, (id << 16) | WM_CREATE, LParam::Value(handle));
     }
     if params.style & WS_VISIBLE != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("showing a window created visible (co_WinPosShowWindow)", &REPORTED);
+        let style = window.state().style;
+        if style & WS_MAXIMIZE != 0 {
+            show = SW_SHOW;
+        } else if style & WS_MINIMIZE != 0 {
+            show = SW_SHOWMINIMIZED;
+        }
+        crate::winpos::show_window(&window, show);
     }
     let thread = crate::convert_current_thread().map_err(|_| None)?;
     thread.windows.lock().push(window.clone());
@@ -1194,16 +1215,36 @@ pub fn min_max_info(window: &Arc<Window>) -> MinMaxInfo32 {
     info
 }
 
-/// co_WinPosSendSizeMove : WM_SIZE (la taille de la zone cliente), puis
-/// WM_MOVE (sa position, dans la zone cliente du parent).
-fn send_size_move(window: &Arc<Window>, parent: &Arc<Window>) {
+/// co_WinPosSendSizeMove : WM_SIZE (la taille de la zone cliente ;
+/// `SIZE_MAXIMIZED`, ou `SIZE_MINIMIZED` sans taille), puis WM_MOVE (sa
+/// place, dans la zone cliente du parent) ; ils n'attendent plus
+/// (`WNDS_SENDSIZEMOVEMSGS`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur.
+pub fn send_size_move(window: &Arc<Window>) {
     let state = update(window, |state| state.state &= !WNDS_SENDSIZEMOVEMSGS);
     let client = state.client;
-    let size = (((client.bottom - client.top) as u32 & 0xFFFF) << 16) | ((client.right - client.left) as u32 & 0xFFFF);
-    let _ = send_message(window, WM_SIZE, SIZE_RESTORED, LParam::Value(size));
-    let origin = if parent.is_desktop_window() { Rect::default() } else { parent.state().client };
-    let (x, y) = (client.left - origin.left, client.top - origin.top);
-    let _ = send_message(window, WM_MOVE, 0, LParam::Value(((y as u32 & 0xFFFF) << 16) | (x as u32 & 0xFFFF)));
+    let (kind, size) = if state.style & WS_MAXIMIZE != 0 {
+        (SIZE_MAXIMIZED, make_long(client.right - client.left, client.bottom - client.top))
+    } else if state.style & WS_MINIMIZE != 0 {
+        (SIZE_MINIMIZED, 0)
+    } else {
+        (SIZE_RESTORED, make_long(client.right - client.left, client.bottom - client.top))
+    };
+    let _ = send_message(window, WM_SIZE, kind, LParam::Value(size));
+    let origin = match get(state.parent) {
+        Some(parent) if !parent.is_desktop_window() => parent.state().client,
+        _ => Rect::default(),
+    };
+    let _ =
+        send_message(window, WM_MOVE, 0, LParam::Value(make_long(client.left - origin.left, client.top - origin.top)));
+}
+
+/// MAKELONG(`low`, `high`) de deux valeurs sur 16 bits.
+pub fn make_long(low: i32, high: i32) -> u32 {
+    (low as u32 & 0xFFFF) | ((high as u32 & 0xFFFF) << 16)
 }
 
 #[cfg(test)]
@@ -1296,15 +1337,19 @@ mod tests {
         let work = Some(Rect::new(0, 0, 1280, 800));
         let none = StartupPlace::default();
         let default = CW_USEDEFAULT as i32;
-        let mut overlapped = CreateParams { x: default, y: 5, cx: default, cy: 7, ..CreateParams::default() };
-        fix_coordinates(&mut overlapped, work, &none, || (23, 23));
+        let mut overlapped = CreateParams { x: default, y: 4, cx: default, cy: 7, ..CreateParams::default() };
+        let show = fix_coordinates(&mut overlapped, work, &none, || (23, 23));
         assert_eq!((overlapped.x, overlapped.y, overlapped.cx, overlapped.cy), (23, 23, 960, 600), "cascade, 3/4");
+        assert_eq!(show, 4, "its y: the command of ShowWindow (SW_SHOWNOACTIVATE)");
         let mut given = CreateParams { x: 10, y: 20, cx: 300, cy: default, ..CreateParams::default() };
-        fix_coordinates(&mut given, work, &none, || unreachable!("no cascade for a given place"));
+        let show = fix_coordinates(&mut given, work, &none, || unreachable!("no cascade for a given place"));
+        assert_eq!(show, SW_SHOW);
         assert_eq!((given.x, given.y, given.cx, given.cy), (10, 20, 300, 600), "3/4 of the height alone");
-        let startup = StartupPlace { flags: STARTF_USEPOSITION | STARTF_USESIZE, x: 40, y: 50, cx: 640, cy: 480 };
-        let mut started = CreateParams { x: default, cx: default, ..CreateParams::default() };
-        fix_coordinates(&mut started, work, &startup, || unreachable!("STARTF_USEPOSITION"));
+        let startup =
+            StartupPlace { flags: STARTF_USEPOSITION | STARTF_USESIZE, x: 40, y: 50, cx: 640, cy: 480, show: 0 };
+        let mut started = CreateParams { x: default, y: default, cx: default, ..CreateParams::default() };
+        let show = fix_coordinates(&mut started, work, &startup, || unreachable!("STARTF_USEPOSITION"));
+        assert_eq!(show, SW_SHOW, "y is CW_USEDEFAULT too");
         assert_eq!((started.x, started.y, started.cx, started.cy), (40, 50, 640, 480));
         let place_only = StartupPlace { flags: STARTF_USEPOSITION, ..startup };
         let mut placed = CreateParams { x: default, cx: default, ..CreateParams::default() };

@@ -341,8 +341,11 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      WM_WINDOWPOSCHANGING, WM_NCCALCSIZE, ordre Z avec le premier plan, enfants déplacés, WM_WINDOWPOSCHANGED,
      WM_MOVE et WM_SIZE de DefWindowProc) ; `syscall-gen` suit la variante publiée (`DBG`) et vérifie les stubs
      de `ntdll`, `user32` et `gdi32` (corrigé : 26 numéros de win32k décalés) ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : ShowWindow (WM_SHOWWINDOW, WM_SIZE et
-     WM_MOVE d'une fenêtre recouvrante, activation et premier plan), DestroyWindow,
+   - [x] ShowWindow (`win32k::winpos::show_window`, NtUserShowWindow : WM_SHOWWINDOW, SetWindowPos, WM_SIZE et
+     WM_MOVE différés, commande du `STARTUPINFO`, fenêtres créées visibles) ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : la peinture des fenêtres (contextes de
+     périphérique, WM_NCPAINT, WM_ERASEBKGND, WM_PAINT des fenêtres du client : ce qui rend une fenêtre visible à
+     l'écran), réduire et agrandir (WINDOWPLACEMENT), l'activation et le premier plan, DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : contextes de périphérique et table des handles GDI partagée, régions et découpage, BitBlt, texte et
      polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
@@ -392,6 +395,9 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- ShowWindow (M6, étape 5) : ni réduire ni agrandir (FALSE, journalisé) ; ni fenêtre active ni focus ; les
+  fenêtres possédées ne suivent pas leur propriétaire ; pas de ShowWindowAsync ; le `STARTUPINFO` n'a qu'un test
+  hôte.
 - SetWindowPos (M6, étape 4) : sans régions, une fenêtre est visible avant si elle et ses parents le sont ; rien
   n'est repeint ; ni activation ni premier plan ; les fenêtres possédées ne sont pas gardées au-dessus de leur
   propriétaire ; `SWP_ASYNCWINDOWPOS` est fait tout de suite ; un seul moniteur, sa zone de travail entière ; le

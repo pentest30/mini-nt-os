@@ -63,6 +63,10 @@ pub struct ProcessInfo {
     startup_desktop: KSpinLock<Option<(u32, Arc<Object<Desktop>>)>>,
     /// Ses classes de fenêtres (`pclsPrivateList`, `pclsPublicList`).
     pub classes: KSpinLock<crate::class::ClassLists>,
+    /// Son `STARTUPINFO` (`usi`), lu de ses paramètres au premier besoin :
+    /// la première fenêtre recouvrante montrée en prend la commande
+    /// (`STARTF_USESHOWWINDOW`), une seule fois.
+    pub startup: KSpinLock<Option<crate::window::StartupPlace>>,
 }
 
 /// La vue d'un tas de bureau dans un processus.
@@ -91,6 +95,7 @@ impl ProcessInfo {
             desktop_views: KSpinLock::new(Vec::new()),
             startup_desktop: KSpinLock::new(None),
             classes: KSpinLock::new(crate::class::ClassLists::default()),
+            startup: KSpinLock::new(None),
         }
     }
 

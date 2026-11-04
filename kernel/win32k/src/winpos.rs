@@ -1,4 +1,5 @@
-//! Le positionnement des fenêtres : SetWindowPos ([`set_window_pos`]).
+//! Le positionnement des fenêtres : SetWindowPos ([`set_window_pos`]) et
+//! ShowWindow ([`show_window`]).
 //!
 //! Comme co_WinPosSetWindowPos de ReactOS (`winpos.c`, comme
 //! spécification) : WM_WINDOWPOSCHANGING (la procédure peut changer la
@@ -16,7 +17,16 @@
 //! la zone cliente de son parent, comme le dit l'API ; ReactOS y met ses
 //! coordonnées d'écran (les mêmes pour une fenêtre de premier niveau).
 //!
-//! Pas encore, journalisé une fois : les régions visibles (la fenêtre est
+//! ShowWindow, comme co_WinPosShowWindow : la commande du `STARTUPINFO` du
+//! processus pour sa première fenêtre recouvrante (`STARTF_USESHOWWINDOW`,
+//! une fois), les drapeaux de SetWindowPos de la commande
+//! ([`show_command`]), WM_SHOWWINDOW, SetWindowPos (si ses parents sont
+//! visibles, sinon `WS_VISIBLE` seul), puis WM_SIZE et WM_MOVE qui
+//! attendaient qu'elle soit montrée (`WNDS_SENDSIZEMOVEMSGS`).
+//!
+//! Pas encore, journalisé une fois : réduire et agrandir (les commandes qui
+//! le demandent, ou montrer une fenêtre réduite ou agrandie, ne font rien et
+//! rendent FALSE), la fenêtre active et le focus ; les régions visibles (la fenêtre est
 //! visible avant si elle et ses parents le sont et qu'elle n'est pas vide),
 //! repeindre ce que le déplacement découvre ou abîme, la copie des bits
 //! valides, l'activation et le premier plan d'une fenêtre de premier niveau
@@ -35,9 +45,14 @@ use abi::user::{
     WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS2_WIN31COMPAT, WNDS_SENDNCPAINT, WS_CHILD, WS_EX_TOPMOST,
     WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
 };
+use abi::user::{
+    STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, SW_FORCEMINIMIZE, SW_HIDE, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOW, SW_SHOWDEFAULT, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNA, SW_SHOWNOACTIVATE,
+    SW_SHOWNORMAL, WM_SHOWWINDOW, WNDS_SENDSIZEMOVEMSGS, WS_CAPTION, WS_EX_MDICHILD, WS_MAXIMIZE,
+};
 
 use crate::gdi::dib::Rect;
-use crate::window::{self, LParam, Window};
+use crate::window::{self, LParam, StartupPlace, Window};
 
 /// SWP_AGG_*, des drapeaux ensemble : rien ne bouge, ce qui dit ce qui a
 /// changé, la zone cliente ne change pas.
@@ -385,9 +400,185 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
     true
 }
 
+/// Ce que fait une commande de ShowWindow ([`show_command`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShowCommand {
+    /// Rien à faire : rend cette valeur.
+    Done(bool),
+    /// Les drapeaux de SetWindowPos.
+    Place(u32),
+    /// Réduire, agrandir ou rétablir (co_WinPosMinMaximize).
+    MinMax,
+}
+
+/// co_WinPosShowWindow, son `switch` : ce que fait la commande `cmd` à une
+/// fenêtre de style `style` et de style étendu `ex_style`, visible ou non
+/// (`was_visible`). Une fenêtre fille (hors MDI) ne prend ni l'activation
+/// ni le haut de l'ordre Z ; aucune fenêtre n'est active, une fenêtre
+/// cachée garde donc son rang (`SWP_NOACTIVATE | SWP_NOZORDER`). ReactOS
+/// le vérifie de nouveau après WM_SHOWWINDOW, pour un style que la
+/// procédure aurait changé : pas encore.
+pub fn show_command(cmd: u32, style: u32, ex_style: u32, was_visible: bool) -> ShowCommand {
+    let child = style & WS_CHILD != 0 && ex_style & WS_EX_MDICHILD == 0;
+    let mut swp = 0;
+    match cmd {
+        SW_HIDE => {
+            if !was_visible {
+                return ShowCommand::Done(false);
+            }
+            swp |= SWP_HIDEWINDOW | SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER;
+        }
+        SW_FORCEMINIMIZE | SW_SHOWMINNOACTIVE | SW_SHOWMINIMIZED | SW_MINIMIZE | SW_SHOWMAXIMIZED => {
+            return ShowCommand::MinMax;
+        }
+        SW_SHOWNA => {
+            swp |= SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
+            if child {
+                swp |= SWP_NOZORDER;
+            }
+        }
+        SW_SHOW => {
+            if was_visible {
+                return ShowCommand::Done(true);
+            }
+            swp |= SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
+            if child {
+                swp |= SWP_NOACTIVATE | SWP_NOZORDER;
+            }
+        }
+        SW_SHOWNOACTIVATE | SW_SHOWNORMAL | SW_SHOWDEFAULT | SW_RESTORE => {
+            if cmd == SW_SHOWNOACTIVATE {
+                swp |= SWP_NOACTIVATE | SWP_NOZORDER;
+            }
+            if !was_visible {
+                swp |= SWP_SHOWWINDOW;
+            }
+            if style & (WS_MINIMIZE | WS_MAXIMIZE) != 0 {
+                return ShowCommand::MinMax;
+            }
+            if was_visible {
+                return ShowCommand::Done(true);
+            }
+            swp |= SWP_NOSIZE | SWP_NOMOVE;
+            if child {
+                swp |= SWP_NOACTIVATE | SWP_NOZORDER;
+            }
+        }
+        _ => return ShowCommand::Done(false),
+    }
+    ShowCommand::Place(swp)
+}
+
+/// La commande de ShowWindow que prend une fenêtre de style `style` (avec
+/// un propriétaire : `owned`) d'après le `STARTUPINFO` du processus
+/// (`startup`) : sa première fenêtre recouvrante à titre et sans
+/// propriétaire y prend sa commande (`SW_SHOWNORMAL` et `SW_SHOW` y
+/// deviennent `SW_SHOWDEFAULT`), comme `SW_SHOWDEFAULT` ; le `STARTUPINFO`
+/// sert alors une seule fois.
+pub fn startup_command(cmd: u32, style: u32, owned: bool, startup: &mut StartupPlace) -> u32 {
+    let mut cmd = cmd;
+    let mut first_time = false;
+    if startup.flags & STARTF_USESHOWWINDOW != 0
+        && style & (WS_POPUP | WS_CHILD) != WS_CHILD
+        && style & WS_CAPTION == WS_CAPTION
+        && !owned
+    {
+        if cmd == SW_SHOWNORMAL || cmd == SW_SHOW {
+            cmd = SW_SHOWDEFAULT;
+        }
+        first_time = true;
+    }
+    if cmd == SW_SHOWDEFAULT && startup.flags & STARTF_USESHOWWINDOW != 0 {
+        cmd = startup.show;
+        first_time = true;
+    }
+    if first_time {
+        startup.flags &= !(STARTF_USEPOSITION | STARTF_USESIZE | STARTF_USESHOWWINDOW);
+    }
+    cmd
+}
+
+/// [`startup_command`] avec le `STARTUPINFO` du processus courant, lu de
+/// ses paramètres la première fois.
+fn process_startup_command(window: &Window, cmd: u32) -> u32 {
+    let Some(process) = ps::ethread::current_thread().map(|thread| thread.process().clone()) else { return cmd };
+    let Ok(info) = crate::process_info(&process) else { return cmd };
+    if info.startup.lock().is_none() {
+        let startup = window::startup_place();
+        info.startup.lock().get_or_insert(startup);
+    }
+    let state = window.state();
+    let mut startup = info.startup.lock();
+    match startup.as_mut() {
+        Some(startup) => startup_command(cmd, state.style, state.owner != 0, startup),
+        None => cmd,
+    }
+}
+
+/// IsChildVisible : les parents d'une fenêtre fille, jusqu'au premier qui ne
+/// l'est pas, sont visibles.
+fn is_child_visible(window: &Window) -> bool {
+    let mut state = window.state();
+    loop {
+        if state.style & (WS_POPUP | WS_CHILD) != WS_CHILD {
+            return true;
+        }
+        let Some(parent) = window::get(state.parent) else { return true };
+        state = parent.state();
+        if state.style & WS_VISIBLE == 0 {
+            return false;
+        }
+    }
+}
+
+/// co_WinPosShowWindow : montre ou cache `window` selon `cmd` (`SW_*`) ;
+/// rend si elle était visible.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur.
+pub fn show_window(window: &Arc<Window>, cmd: u32) -> bool {
+    let state = window.state();
+    let was_visible = state.style & WS_VISIBLE != 0;
+    let cmd = process_startup_command(window, cmd);
+    let swp = match show_command(cmd, state.style, state.ex_style, was_visible) {
+        ShowCommand::Done(result) => return result,
+        ShowCommand::MinMax => {
+            static REPORTED: AtomicBool = AtomicBool::new(false);
+            if !REPORTED.swap(true, Ordering::Relaxed) {
+                log::warn!("win32k: ShowWindow: minimizing and maximizing (co_WinPosMinMaximize): not yet");
+            }
+            return false;
+        }
+        ShowCommand::Place(swp) => swp,
+    };
+    let show = cmd != SW_HIDE;
+    if show != was_visible || cmd == SW_SHOWNA {
+        let _ = window::send_message(window, WM_SHOWWINDOW, u32::from(show), LParam::Value(0));
+    }
+    let state = window.state();
+    if is_child_visible(window) {
+        let after = if state.ex_style & WS_EX_TOPMOST != 0 { HWND_TOPMOST } else { HWND_TOP };
+        set_window_pos(window, after, 0, 0, 0, 0, swp & 0xFFFF);
+    } else {
+        // Under a hidden parent: WS_VISIBLE alone.
+        window::change(window, |state| {
+            state.style = if show { state.style | WS_VISIBLE } else { state.style & !WS_VISIBLE };
+        });
+    }
+    if cmd == SW_HIDE {
+        return was_visible;
+    }
+    if window.state().state & WNDS_SENDSIZEMOVEMSGS != 0 {
+        window::send_size_move(window);
+    }
+    was_visible
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use abi::user::WS_THICKFRAME;
 
     fn metric(index: usize) -> i32 {
         crate::metrics::system_metrics(1280, 800, &crate::metrics::Parameters::DEFAULT)[index]
@@ -499,5 +690,60 @@ mod tests {
         assert_eq!(new_rects(window, client, false, &in_parent, (100, 200), &metric).0, Rect::new(105, 205, 205, 255));
         let minimized = new_rects(window, client, true, &pos(0, 0, 500, 500, SWP_NOMOVE), (0, 0), &metric);
         assert_eq!(minimized, (Rect::new(10, 20, 176, 45), window), "an icon's size; its client area is the window");
+    }
+
+    #[test]
+    fn show_commands_become_set_window_pos_flags() {
+        use ShowCommand::{Done, MinMax, Place};
+        let shown = SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
+        assert_eq!(show_command(SW_SHOWNORMAL, WS_POPUP, 0, false), Place(shown), "activated, brought up");
+        assert_eq!(show_command(SW_SHOWNORMAL, WS_POPUP, 0, true), Done(true), "already visible");
+        assert_eq!(show_command(SW_SHOW, WS_POPUP, 0, false), Place(shown));
+        assert_eq!(show_command(SW_SHOW, WS_POPUP, 0, true), Done(true));
+        let child = shown | SWP_NOACTIVATE | SWP_NOZORDER;
+        assert_eq!(show_command(SW_SHOW, WS_CHILD, 0, false), Place(child), "a child is not activated");
+        assert_eq!(show_command(SW_SHOW, WS_CHILD, WS_EX_MDICHILD, false), Place(shown), "an MDI child is");
+        assert_eq!(show_command(SW_SHOWNOACTIVATE, WS_POPUP, 0, false), Place(child));
+        assert_eq!(show_command(SW_RESTORE, WS_POPUP, 0, false), Place(shown));
+        let na = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOSIZE | SWP_NOMOVE;
+        assert_eq!(show_command(SW_SHOWNA, WS_POPUP, 0, true), Place(na), "even visible");
+        assert_eq!(show_command(SW_SHOWNA, WS_CHILD, 0, true), Place(na | SWP_NOZORDER));
+        let hide = SWP_HIDEWINDOW | SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER;
+        assert_eq!(show_command(SW_HIDE, WS_POPUP, 0, true), Place(hide), "not active: it keeps its rank");
+        assert_eq!(show_command(SW_HIDE, WS_POPUP, 0, false), Done(false), "already hidden");
+        assert_eq!(show_command(SW_MINIMIZE, WS_POPUP, 0, false), MinMax);
+        assert_eq!(show_command(SW_SHOWMAXIMIZED, WS_POPUP, 0, true), MinMax);
+        assert_eq!(show_command(SW_SHOWNORMAL, WS_POPUP | WS_MAXIMIZE, 0, true), MinMax, "restoring");
+        assert_eq!(show_command(12, WS_POPUP, 0, false), Done(false), "beyond SW_MAX");
+    }
+
+    #[test]
+    fn the_startup_info_shows_the_first_overlapped_window_once() {
+        let given = |show: u32| StartupPlace {
+            flags: STARTF_USESHOWWINDOW | STARTF_USEPOSITION,
+            show,
+            ..StartupPlace::default()
+        };
+        let mut startup = given(SW_SHOWMINNOACTIVE);
+        let overlapped = WS_CAPTION | WS_THICKFRAME;
+        assert_eq!(startup_command(SW_SHOWNORMAL, overlapped, false, &mut startup), SW_SHOWMINNOACTIVE);
+        assert_eq!(startup.flags, 0, "once");
+        assert_eq!(startup_command(SW_SHOWNORMAL, overlapped, false, &mut startup), SW_SHOWNORMAL, "then no more");
+        let mut kept = given(SW_HIDE);
+        assert_eq!(
+            startup_command(SW_SHOWNA, overlapped, false, &mut kept),
+            SW_SHOWNA,
+            "only SW_SHOW and SW_SHOWNORMAL"
+        );
+        assert_eq!(kept.flags, 0, "but it is used up");
+        for (style, owned) in [(WS_POPUP, false), (overlapped, true), (WS_CHILD | WS_CAPTION, false)] {
+            let mut other = given(SW_HIDE);
+            assert_eq!(startup_command(SW_SHOW, style, owned, &mut other), SW_SHOW, "{style:#x} {owned}");
+            assert_ne!(other.flags, 0, "kept for the first overlapped window");
+        }
+        let mut default = given(SW_SHOWMAXIMIZED);
+        assert_eq!(startup_command(SW_SHOWDEFAULT, WS_POPUP, false, &mut default), SW_SHOWMAXIMIZED, "SW_SHOWDEFAULT");
+        let mut none = StartupPlace::default();
+        assert_eq!(startup_command(SW_SHOWDEFAULT, overlapped, false, &mut none), SW_SHOWDEFAULT, "no STARTUPINFO");
     }
 }
