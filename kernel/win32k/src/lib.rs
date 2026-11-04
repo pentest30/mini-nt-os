@@ -33,6 +33,7 @@ pub mod callback;
 pub mod class;
 pub mod client;
 pub mod csrss;
+pub mod dce;
 pub mod defwnd;
 pub mod desktop;
 pub mod display;

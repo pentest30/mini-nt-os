@@ -8,29 +8,36 @@
 //! - [`invalidate`] (IntInvalidateWindows) : la fenêtre entière, cadre et
 //!   fond, est à repeindre, et ses enfants visibles ;
 //! - [`sync_and_paint`] (UserSyncAndPaintWindows, `RDW_ERASENOW`) : son cadre
-//!   se repeint aussitôt (WM_NCPAINT), si aucun parent n'attend de l'être ;
+//!   se repeint aussitôt (WM_NCPAINT), puis le fond de sa région à mettre à
+//!   jour s'efface (WM_ERASEBKGND, avec un DC du cache coupé à elle :
+//!   `DefWindowProc` de `user32` la remplit du pinceau de la classe), si
+//!   aucun parent n'attend de l'être ;
 //! - [`nc_paint`] (DefWindowProc de WM_NCPAINT) : le cadre se dessine
 //!   ([`crate::nonclient`]) dans sa région visible, à l'écran ;
 //! - [`expose`] : ce qu'une fenêtre découvre en se cachant ou en bougeant ;
 //!   le bureau s'y repeint aussitôt, ses sœurs y sont invalidées
 //!   (co_VIS_WindowLayoutChanged).
 //!
-//! Pas encore, journalisé une fois : WM_ERASEBKGND et WM_PAINT des fenêtres du
-//! client (leurs contextes de périphérique viennent avec la table des handles
-//! GDI : le fond reste ce qui était dessous), les sœurs découvertes ne se
-//! repeignent qu'à leur prochaine invalidation (pas encore de WM_PAINT tiré
-//! de la file), la fenêtre active (tout cadre est inactif), les fenêtres
-//! d'un autre thread (WM_NCPAINT ne leur est pas envoyé), les régions de
-//! fenêtre (SetWindowRgn) et `WS_EX_TRANSPARENT` (ignoré). Le bureau n'a pas
-//! de thread : il se repeint dans le thread qui le découvre.
+//! La région à mettre à jour d'une fenêtre est un rectangle (celui qui
+//! tient tout ce qui a été invalidé), non une région.
+//!
+//! Pas encore, journalisé une fois : WM_PAINT des fenêtres du client (pas
+//! encore de WM_PAINT tiré de la file, ni BeginPaint : la région à mettre à
+//! jour reste, effacée), les sœurs découvertes ne se repeignent qu'à leur
+//! prochaine invalidation, la fenêtre active (tout cadre est inactif), les
+//! fenêtres d'un autre thread (WM_NCPAINT et WM_ERASEBKGND ne leur sont pas
+//! envoyés), les régions de fenêtre (SetWindowRgn) et `WS_EX_TRANSPARENT`
+//! (ignoré). Le bureau n'a pas de thread : il se repeint dans le thread qui
+//! le découvre.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::user::{
-    color, HRGN_WINDOW, WM_NCPAINT, WNDS_ERASEBACKGROUND, WNDS_NONCPAINT, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_MINIMIZE, WS_VISIBLE,
+    color, DCX_CACHE, DCX_INTERSECTRGN, DCX_KEEPCLIPRGN, DCX_USESTYLE, HRGN_WINDOW, WM_ERASEBKGND, WM_NCPAINT,
+    WNDS_ERASEBACKGROUND, WNDS_NONCPAINT, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
+    WS_EX_TRANSPARENT, WS_MINIMIZE, WS_VISIBLE,
 };
 
 use crate::gdi::dib::{ColorRef, Rect};
@@ -125,8 +132,8 @@ pub fn invalidate(window: &Window) {
 }
 
 /// co_IntPaintWindows(`RDW_ERASENOW`) pour `window` seule : un cadre à
-/// repeindre l'est (WM_NCPAINT, dans le thread de la fenêtre) ; un fond à
-/// effacer attend (WM_ERASEBKGND : pas encore).
+/// repeindre l'est (WM_NCPAINT, dans le thread de la fenêtre), puis le fond
+/// à effacer ([`erase_background`]).
 fn paint_windows(window: &Arc<Window>) {
     let state = window.state();
     if state.state & (WNDS_SENDNCPAINT | WNDS_SENDERASEBACKGROUND) == 0 {
@@ -153,9 +160,40 @@ fn paint_windows(window: &Arc<Window>) {
         let _ = window::send_message(window, WM_NCPAINT, HRGN_WINDOW, LParam::Value(0));
     }
     if window.state().state & WNDS_SENDERASEBACKGROUND != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("WM_ERASEBKGND (device contexts of the client)", &REPORTED);
+        erase_background(window);
     }
+}
+
+/// co_IntPaintWindows : le fond de la région à mettre à jour de `window`
+/// s'efface (WM_ERASEBKGND, avec un DC du cache coupé à elle,
+/// `DCX_INTERSECTRGN`) ; une fenêtre qui ne l'efface pas (elle rend 0)
+/// garde son fond à effacer. Les appels de GDI qu'elle met en lot sont
+/// exécutés au retour du rappel, avant que le DC soit rendu.
+fn erase_background(window: &Arc<Window>) {
+    let state = window.state();
+    if state.update.is_empty() {
+        return;
+    }
+    let (dx, dy) = (state.client.left, state.client.top);
+    let update = state.update;
+    let update = Region::from_rect(Rect::new(update.left + dx, update.top + dy, update.right + dx, update.bottom + dy));
+    let flags = DCX_CACHE | DCX_USESTYLE | DCX_INTERSECTRGN | DCX_KEEPCLIPRGN;
+    let hdc = match crate::dce::get_dc_ex(window, Some(&update), flags) {
+        Ok(hdc) => hdc,
+        Err(status) => {
+            static REPORTED: AtomicBool = AtomicBool::new(false);
+            if !REPORTED.swap(true, Ordering::Relaxed) {
+                log::warn!("win32k: no DC to erase a window's background ({status:?})");
+            }
+            return;
+        }
+    };
+    window::change(window, |state| state.state &= !(WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND));
+    let erased = window::send_message(window, WM_ERASEBKGND, hdc, LParam::Value(0));
+    if !matches!(erased, Ok(result) if result != 0) {
+        window::change(window, |state| state.state |= WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND);
+    }
+    crate::dce::release_dc(hdc);
 }
 
 /// UserSyncAndPaintWindows(`RDW_ERASENOW`) : si aucun parent (jusqu'au
