@@ -53,12 +53,12 @@ use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
     Rect32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
-    FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED,
-    TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO,
-    WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT,
-    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR,
-    WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED,
+    FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP,
+    HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW,
+    SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND,
+    WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER,
+    WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT,
+    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED,
     WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD,
     WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR,
     WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
@@ -73,6 +73,7 @@ use ob::Object;
 use crate::class::{Class, ClassName};
 use crate::desktop::{Desktop, DesktopHeap};
 use crate::gdi::dib::Rect;
+use crate::gdi::region::Region;
 
 /// COLOR_BACKGROUND : le pinceau de la classe du bureau, une couleur système
 /// plus un.
@@ -82,7 +83,7 @@ const COLOR_BACKGROUND: u32 = 1;
 const DESKTOP_WND_EXTRA: u32 = 8;
 
 /// Ce qui change d'une fenêtre.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WindowState {
     pub style: u32,
     pub ex_style: u32,
@@ -106,8 +107,9 @@ pub struct WindowState {
     pub name: Option<Name>,
     pub window: Rect,
     pub client: Rect,
-    /// La région à mettre à jour, un rectangle (vide : rien).
-    pub update: Rect,
+    /// La région à mettre à jour, dans la zone cliente, depuis son coin
+    /// (vide : rien).
+    pub update: Region,
     /// Le rectangle de la peinture en cours (BeginPaint, EndPaint).
     pub painting: Rect,
 }
@@ -116,25 +118,25 @@ impl WindowState {
     /// InvalidateRect(…, `rect`, `erase`) : la région à mettre à jour
     /// s'étend à `rect` (dans la zone cliente), et le fond sera effacé.
     pub fn invalidate(&mut self, rect: Rect, erase: bool) {
-        let rect = rect.intersect(&Rect::new(
-            0,
-            0,
-            self.client.right - self.client.left,
-            self.client.bottom - self.client.top,
-        ));
+        let rect = rect.intersect(&self.client_area());
         if rect.is_empty() {
             return;
         }
-        self.update = if self.update.is_empty() { rect } else { self.update.union(&rect) };
+        self.update.union_rect(rect);
         if erase {
             self.state |= WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND;
         }
     }
 
+    /// Sa zone cliente, depuis son coin.
+    pub fn client_area(&self) -> Rect {
+        Rect::new(0, 0, self.client.right - self.client.left, self.client.bottom - self.client.top)
+    }
+
     /// BeginPaint : la région à mettre à jour est validée et devient le
     /// rectangle de la peinture ; rend s'il faut d'abord effacer le fond.
     pub fn begin_paint(&mut self) -> bool {
-        self.painting = core::mem::take(&mut self.update);
+        self.painting = core::mem::take(&mut self.update).bounds();
         let erase = self.state & WNDS_SENDERASEBACKGROUND != 0;
         self.state &= !(WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND);
         erase
@@ -178,7 +180,7 @@ impl Window {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn state(&self) -> WindowState {
-        *self.state.lock()
+        self.state.lock().clone()
     }
 
     /// L'adresse du serveur de son `WND`.
@@ -273,6 +275,9 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
         icon_pos: [-1, -1],
         max_pos: [-1, -1],
         bits: if state.unicode { WND_UNICODE } else { 0 },
+        // No GDI region objects yet: HRGN_WINDOW says there is an update
+        // region, which is all user32 asks (GetUpdateRect, UpdateWindow).
+        hrgn_update: if state.update.is_empty() { 0 } else { HRGN_WINDOW },
         ..Wnd32::default()
     }
 }
@@ -299,7 +304,7 @@ fn update(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowState
         let mut state = window.state.lock();
         let dirty = crate::paint::is_dirty(&state);
         change(&mut state);
-        (dirty, *state)
+        (dirty, state.clone())
     };
     if crate::paint::is_dirty(&state) != dirty {
         crate::paint::count_paint(window, !dirty);
@@ -1300,10 +1305,11 @@ mod tests {
         let mut state = window(100, 50);
         state.invalidate(Rect::new(10, 10, 20, 20), false);
         state.invalidate(Rect::new(80, 40, 200, 90), false);
-        assert_eq!(state.update, Rect::new(10, 10, 100, 50), "their union, cut to the client area");
+        assert_eq!(state.update.bounds(), Rect::new(10, 10, 100, 50), "their union, cut to the client area");
+        assert_eq!(state.update.area(), 10 * 10 + 20 * 10, "two pieces, not their bounds");
         assert_eq!(state.state & WNDS_SENDERASEBACKGROUND, 0, "no erase asked");
         state.invalidate(Rect::new(200, 200, 300, 300), true);
-        assert_eq!(state.update, Rect::new(10, 10, 100, 50), "outside: nothing");
+        assert_eq!(state.update.bounds(), Rect::new(10, 10, 100, 50), "outside: nothing");
         assert_eq!(state.state & WNDS_SENDERASEBACKGROUND, 0, "nor an erase");
     }
 
@@ -1313,7 +1319,7 @@ mod tests {
         state.invalidate(Rect::new(0, 0, 100, 50), true);
         assert_ne!(state.state & WNDS_ERASEBACKGROUND, 0);
         assert!(state.begin_paint(), "erase first");
-        assert_eq!((state.update, state.painting), (Rect::default(), Rect::new(0, 0, 100, 50)));
+        assert_eq!((state.update.clone(), state.painting), (Region::default(), Rect::new(0, 0, 100, 50)));
         assert_eq!(state.state & (WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND), 0);
         assert!(!state.begin_paint(), "nothing more to erase");
         assert!(state.painting.is_empty(), "nor to paint");

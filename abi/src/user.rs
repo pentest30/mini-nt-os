@@ -380,6 +380,38 @@ pub const DCX_LOCKWINDOWUPDATE: u32 = 0x0000_0400;
 pub const DCX_USESTYLE: u32 = 0x0001_0000;
 /// DCX_KEEPCLIPRGN: the clip region stays the caller's.
 pub const DCX_KEEPCLIPRGN: u32 = 0x0004_0000;
+/// RDW_*: what RedrawWindow does. RDW_CLIPCHILDREN and RDW_NOUPDATEDIRTY are
+/// win32k's own.
+pub const RDW_INVALIDATE: u32 = 0x0001;
+pub const RDW_INTERNALPAINT: u32 = 0x0002;
+pub const RDW_ERASE: u32 = 0x0004;
+pub const RDW_VALIDATE: u32 = 0x0008;
+pub const RDW_NOINTERNALPAINT: u32 = 0x0010;
+pub const RDW_NOERASE: u32 = 0x0020;
+pub const RDW_NOCHILDREN: u32 = 0x0040;
+pub const RDW_ALLCHILDREN: u32 = 0x0080;
+pub const RDW_UPDATENOW: u32 = 0x0100;
+pub const RDW_ERASENOW: u32 = 0x0200;
+pub const RDW_FRAME: u32 = 0x0400;
+pub const RDW_NOFRAME: u32 = 0x0800;
+pub const RDW_CLIPCHILDREN: u32 = 0x1000;
+pub const RDW_NOUPDATEDIRTY: u32 = 0x8000;
+/// The flags RedrawWindow accepts (the others: ERROR_INVALID_FLAGS).
+pub const RDW_VALID_FLAGS: u32 = RDW_ERASE
+    | RDW_FRAME
+    | RDW_INTERNALPAINT
+    | RDW_INVALIDATE
+    | RDW_NOERASE
+    | RDW_NOFRAME
+    | RDW_NOINTERNALPAINT
+    | RDW_VALIDATE
+    | RDW_ERASENOW
+    | RDW_UPDATENOW
+    | RDW_ALLCHILDREN
+    | RDW_NOCHILDREN;
+/// HWNDLOCK_ROUTINE_UPDATEWINDOW: the routine of NtUserCallHwndLock behind
+/// UpdateWindow (user32!UpdateWindow pushes 0x5E).
+pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
 /// FNID_DEFWINDOWPROC: NtUserMessageCall's DefWindowProc.
 pub const FNID_DEFWINDOWPROC: u32 = 0x029E;
 /// WM_USER: the first message of an application.
@@ -1083,6 +1115,10 @@ pub struct ClientThreadInfo32 {
 
 const _: () = {
     assert!(offset_of!(Wnd32, state) == 0x14);
+    // user32!UpdateWindow: `cmp [pwnd + 0x68], 0` (hrgnUpdate), then
+    // `cmp [pwnd + 0x38], 0` (spwndChild).
+    assert!(offset_of!(Wnd32, spwnd_child) == 0x38);
+    assert!(offset_of!(Wnd32, hrgn_update) == 0x68);
     assert!(offset_of!(Wnd32, fnid) == 0x28);
     assert!(offset_of!(Wnd32, spwnd_next) == 0x2C);
     assert!(offset_of!(Wnd32, rc_window) == 0x40);

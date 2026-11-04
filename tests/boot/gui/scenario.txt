@@ -144,6 +144,26 @@ expect = [gui] PeekMessage of WM_PAINT: the popup 1, another window 0, the threa
 expect = [gui] the message loop received 10: 000f 000f 000f 000f 0085 0014 000f 0085 0014 000f
 expect = [gui] WM_PAINT 6 times: Popup Striped Clipper Framed Visible Pending ; GetQueueStatus(QS_PAINT) 00200020, then 00000000
 expect = [gui] BeginPaint of the popup: a DC, fErase 0, rcPaint 0 0 50 50; after EndPaint, PatBlt 0 (6)
+expect = [gui] InvalidateRect twice: 1 10 10 120 60
+expect = [gui] ValidateRect of one piece: 1 100 50 120 60
+expect = [gui] ValidateRect of the other: 0 0 0 0 0, QS_PAINT 0
+expect = [gui] UpdateWindow received 2: 000f 0014
+expect = [gui] UpdateWindow, then: 0
+expect = [gui] RDW_ERASENOW received 1: 0014
+expect = [gui] RDW_ERASENOW: 1 12 0 17 5, QS_PAINT 1
+expect = [gui] GetUpdateRect(TRUE) received 1: 0014
+expect = [gui] GetUpdateRect(TRUE): 1; ValidateRect of the popup: 0
+expect = [gui] RedrawWindow of a hidden window: 1, update 0
+expect = [gui] RDW_UPDATENOW received 3: 000f 0085 0014
+expect = [gui] RDW_UPDATENOW, then: 0
+expect = [gui] RDW_INTERNALPAINT: update 0, QS_PAINT 1, WM_PAINT 1, then QS_PAINT 0
+expect = [gui] UpdateWindow of a parent received 5: 000f 0014 000f 0085 0014
+expect = [gui] RDW_ALLCHILDREN: the child 0, then 1; after UpdateWindow 0
+expect = [gui] RedrawWindow, unknown flag: 0 (1004)
+expect = [gui] UpdateWindow without erasing received 1: 000f
+expect = [gui] RDW_INTERNALPAINT after ValidateRect received 1: 000f
+expect = [gui] UpdateWindow of a child that does not paint received 3: 000f 0085 0014
+expect = [gui] the child still to paint 1; its parent 1 0 20 192 72
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 
@@ -158,7 +178,7 @@ expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 # above it: its right edge at 199, 60, the caption of "Visible" at 199, 80
 # and over the client area of "Pending" at 150, 85. The popup at 10, 10
 # (50 x 50) covers the caption of "Pending" up to 59, white (20, 12: no
-# call of an earlier batch runs again in it). The child "Framed" of
+# call of an earlier batch runs again in it) but for its square (30, 15). The child "Framed" of
 # "Clipper" (WS_CLIPCHILDREN) sticks out of its parent's client area: its
 # border is clipped there (1044, 140) and drawn inside (1093, 140), its
 # client area erased (1070, 140) like its parent's (1150, 200), which,
@@ -171,9 +191,13 @@ expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 # (COLOR_HIGHLIGHT + 1), drew 24 black lines of 1 x 5 pixels at the top of
 # its client area (from 1054, 324 to 1100, 328), one PatBlt each, more than
 # a batch holds, then a line with the DC's own brush, white (1054 to 1101,
-# 330). The popup painted a black square of 10 x 10 pixels itself, between
-# BeginPaint and EndPaint (10, 10 to 19, 19). Where "Shown" was before it
-# was hidden, the desktop is painted again.
+# 330). The popup paints a black square of 10 x 10 pixels itself, between
+# BeginPaint and EndPaint, 12 pixels further right each time: invalidated
+# and erased whole, then painted by UpdateWindow, its first square is gone
+# (10, 10; 19, 19) and the second drawn (22, 10 to 31, 19), whose top left
+# corner of 5 x 5 pixels is erased again by RedrawWindow(RDW_ERASENOW)
+# (22, 10 to 26, 14 white; 27, 14 and 22, 15 black). Where "Shown" was
+# before it was hidden, the desktop is painted again.
 screen = 0 0 D4D0C8
 screen = 73 73 808080
 screen = 73 92 D4D0C8
@@ -186,7 +210,7 @@ screen = 199 60 404040
 screen = 199 80 888888
 screen = 150 85 858585
 screen = 100 55 FFFFFF
-screen = 30 15 FFFFFF
+screen = 30 15 000000
 screen = 20 12 FFFFFF
 screen = 60 15 929292
 screen = 1044 140 3A6EA5
@@ -204,9 +228,15 @@ screen = 1070 330 FFFFFF
 screen = 1070 331 0A246A
 screen = 1102 330 0A246A
 screen = 1150 350 0A246A
-screen = 10 10 000000
-screen = 19 19 000000
+screen = 10 10 FFFFFF
+screen = 19 19 FFFFFF
 screen = 20 19 FFFFFF
+screen = 22 10 FFFFFF
+screen = 26 14 FFFFFF
+screen = 27 14 000000
+screen = 22 15 000000
+screen = 31 19 000000
+screen = 32 19 FFFFFF
 screen = 640 400 FFFFFF
 screen = 46 300 3A6EA5
 screen = 1279 799 3A6EA5

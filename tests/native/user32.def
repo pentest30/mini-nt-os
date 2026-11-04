@@ -19,16 +19,19 @@ GetQueueStatus@4
 GetSysColor@4
 GetSysColorBrush@4
 GetSystemMetrics@4
+GetUpdateRect@12
 GetWindow@8
 GetWindowLongW@8
 GetWindowRect@8
 GetWindowTextW@12
+InvalidateRect@12
 IsWindow@4
 IsWindowVisible@4
 MonitorFromPoint@12
 MonitorFromWindow@8
 MoveWindow@24
 PeekMessageW@20
+RedrawWindow@16
 RegisterClassExW@4
 RegisterLogonProcess@8
 SetProcessWindowStation@4
@@ -37,3 +40,5 @@ SetWindowPos@28
 SetWindowTextW@8
 ShowWindow@8
 SwitchDesktop@4
+UpdateWindow@4
+ValidateRect@8

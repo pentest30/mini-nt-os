@@ -248,3 +248,125 @@ pub(super) fn nt_user_end_paint(arguments: &[u32]) -> NtStatus {
     win32k::paint::end_paint(&window, ps.hdc);
     NtStatus(1)
 }
+
+/// Les routines de NtUserCallHwndLock demandées sans être implémentées.
+static UNSUPPORTED_HWND_LOCK_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallHwndLock");
+
+/// Le RECT en `address` ; `None` pour une adresse nulle.
+fn read_rect(address: u32) -> Result<Option<win32k::gdi::dib::Rect>, NtStatus> {
+    if address == 0 {
+        return Ok(None);
+    }
+    let mut bytes = [0u8; 16];
+    copy_from_user(&mut bytes, u64::from(address))?;
+    let word = |i: usize| i32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+    Ok(Some(win32k::gdi::dib::Rect::new(word(0), word(1), word(2), word(3))))
+}
+
+/// La fenêtre `handle`, ou celle du bureau du thread pour 0.
+fn window_or_desktop(handle: u32) -> Option<alloc::sync::Arc<win32k::window::Window>> {
+    if handle != 0 {
+        return win32k::window::get(handle);
+    }
+    let thread = win32k::convert_current_thread().ok()?;
+    Some(thread.desktop()?.desktop.window.clone())
+}
+
+/// NtUserRedrawWindow(hWnd, lprcUpdate, hrgnUpdate, flags) : TRUE, après
+/// co_UserRedrawWindow (hWnd nul : la fenêtre du bureau). FALSE pour une
+/// fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`), un rectangle illisible
+/// (l'erreur de la faute), un drapeau inconnu (`ERROR_INVALID_FLAGS`) ou
+/// une région (pas encore d'objets région de GDI : comme une région
+/// introuvable, `ERROR_NOT_ENOUGH_MEMORY`, journalisé une fois).
+pub(super) fn nt_user_redraw_window(arguments: &[u32]) -> NtStatus {
+    let [handle, rect, region, flags] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(window) = window_or_desktop(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let rect = match read_rect(rect) {
+        Ok(rect) => rect,
+        Err(status) => return fail(dos_error(status)),
+    };
+    if flags & !abi::user::RDW_VALID_FLAGS != 0 {
+        return fail(abi::winerror::ERROR_INVALID_FLAGS);
+    }
+    if region > abi::user::HRGN_WINDOW {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtUserRedrawWindow with a region (GDI region objects): not yet");
+        }
+        return fail(abi::winerror::ERROR_NOT_ENOUGH_MEMORY);
+    }
+    win32k::paint::redraw_window(&window, rect, flags);
+    NtStatus(1)
+}
+
+/// NtUserInvalidateRect(hWnd, lpRect, bErase) : RedrawWindow avec
+/// `RDW_INVALIDATE` (et `RDW_ERASE`) ; hWnd nul : tout le bureau, ses
+/// fenêtres et leur cadre, effacés aussitôt.
+pub(super) fn nt_user_invalidate_rect(arguments: &[u32]) -> NtStatus {
+    let [handle, rect, erase] = arguments[..3] else { unreachable!("3 arguments") };
+    use abi::user::{RDW_ALLCHILDREN, RDW_ERASE, RDW_ERASENOW, RDW_FRAME, RDW_INVALIDATE};
+    let (rect, flags) = match handle {
+        0 => (0, RDW_ALLCHILDREN | RDW_INVALIDATE | RDW_FRAME | RDW_ERASE | RDW_ERASENOW),
+        _ => (rect, RDW_INVALIDATE | if erase != 0 { RDW_ERASE } else { 0 }),
+    };
+    nt_user_redraw_window(&[handle, rect, 0, flags])
+}
+
+/// NtUserValidateRect(hWnd, lpRect) : RedrawWindow avec `RDW_VALIDATE` ;
+/// hWnd nul : comme InvalidateRect de tout le bureau.
+pub(super) fn nt_user_validate_rect(arguments: &[u32]) -> NtStatus {
+    let [handle, rect] = arguments[..2] else { unreachable!("2 arguments") };
+    use abi::user::{RDW_ALLCHILDREN, RDW_ERASE, RDW_ERASENOW, RDW_FRAME, RDW_INVALIDATE, RDW_VALIDATE};
+    let (rect, flags) = match handle {
+        0 => (0, RDW_ALLCHILDREN | RDW_INVALIDATE | RDW_FRAME | RDW_ERASE | RDW_ERASENOW),
+        _ => (rect, RDW_VALIDATE),
+    };
+    nt_user_redraw_window(&[handle, rect, 0, flags])
+}
+
+/// NtUserGetUpdateRect(hWnd, lpRect, bErase) : TRUE si la fenêtre a une
+/// région à mettre à jour, dont le rectangle (dans sa zone cliente) va en
+/// `lpRect` s'il n'est pas nul (sinon 0, 0, 0, 0). FALSE pour une fenêtre
+/// inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpRect` qu'on ne peut
+/// écrire (`ERROR_INVALID_PARAMETER`).
+pub(super) fn nt_user_get_update_rect(arguments: &[u32]) -> NtStatus {
+    let [handle, rect, erase] = arguments[..3] else { unreachable!("3 arguments") };
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let update = win32k::paint::get_update_rect(&window, erase != 0);
+    if rect != 0 {
+        let r = update.unwrap_or_default();
+        let mut bytes = [0u8; 16];
+        for (slot, value) in bytes.chunks_exact_mut(4).zip([r.left, r.top, r.right, r.bottom]) {
+            slot.copy_from_slice(&value.to_le_bytes());
+        }
+        if ke::usermem::copy_to_user(u64::from(rect), &bytes).is_err() {
+            return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+        }
+    }
+    NtStatus(u32::from(update.is_some()))
+}
+
+/// NtUserCallHwndLock(hWnd, Routine) : `HWNDLOCK_ROUTINE_UPDATEWINDOW`
+/// (UpdateWindow : la fenêtre et ses enfants se peignent aussitôt) ; TRUE.
+/// FALSE pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou une
+/// autre routine (journalisée à son premier appel).
+pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
+    let [handle, routine] = arguments[..2] else { unreachable!("2 arguments") };
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    match routine {
+        abi::user::HWNDLOCK_ROUTINE_UPDATEWINDOW => {
+            win32k::paint::update_window(&window, abi::user::RDW_ALLCHILDREN);
+            NtStatus(1)
+        }
+        _ => {
+            let _ = UNSUPPORTED_HWND_LOCK_ROUTINES.report(routine);
+            NtStatus(0)
+        }
+    }
+}
