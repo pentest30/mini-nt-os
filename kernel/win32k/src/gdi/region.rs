@@ -6,6 +6,9 @@
 //! retire ([`Region::subtract_rect`]) : chacun de ses rectangles perd la
 //! partie commune, et ce qui en reste tient en quatre bandes au plus.
 //!
+//! Elle s'étend à un rectangle ([`Region::union_rect`]) : ce qu'elle en a
+//! déjà s'ôte du rectangle avant qu'il s'ajoute.
+//!
 //! Pas encore : les objets région de GDI (handles, CombineRgn, les régions
 //! d'une fenêtre, SetWindowRgn), une forme normalisée en bandes comme celle
 //! de ReactOS (deux régions égales peuvent avoir des rectangles
@@ -85,6 +88,21 @@ impl Region {
         Region { rects }
     }
 
+    /// Elle s'étend à `rect` (RGN_OR) : ses rectangles restent disjoints.
+    pub fn union_rect(&mut self, rect: Rect) {
+        if rect.is_empty() {
+            return;
+        }
+        self.subtract_rect(rect);
+        self.rects.push(rect);
+    }
+
+    /// Le plus petit rectangle qui la tient (vide pour une région vide).
+    pub fn bounds(&self) -> Rect {
+        let Some(first) = self.rects.first() else { return Rect::default() };
+        self.rects.iter().fold(*first, |bounds, rect| bounds.union(rect))
+    }
+
     /// Elle se déplace de `dx`, `dy`.
     pub fn offset(&mut self, dx: i32, dy: i32) {
         for r in &mut self.rects {
@@ -150,6 +168,28 @@ mod tests {
         let b = Region::from_rect(Rect::new(5, 0, 20, 8));
         assert_eq!(a.intersect(&b).rects(), [Rect::new(5, 5, 10, 8)]);
         assert!(a.intersect(&Region::default()).is_empty());
+    }
+
+    #[test]
+    fn a_union_stays_disjoint_and_bounded() {
+        let mut region = Region::default();
+        assert_eq!(region.bounds(), Rect::default());
+        region.union_rect(Rect::new(0, 0, 10, 10));
+        region.union_rect(Rect::new(5, 5, 15, 15));
+        assert_eq!(region.area(), 100 + 100 - 25, "the common part counted once");
+        assert_eq!(region.bounds(), Rect::new(0, 0, 15, 15));
+        region.union_rect(Rect::new(20, 0, 20, 30));
+        assert_eq!(region.bounds(), Rect::new(0, 0, 15, 15), "an empty rectangle adds nothing");
+        region.union_rect(Rect::new(30, 30, 40, 40));
+        assert_eq!(region.bounds(), Rect::new(0, 0, 40, 40));
+        for (i, a) in region.rects().iter().enumerate() {
+            for b in &region.rects()[i + 1..] {
+                assert!(a.intersect(b).is_empty(), "disjoint: {a:?} {b:?}");
+            }
+        }
+        region.subtract_rect(Rect::new(0, 0, 15, 15));
+        region.subtract_rect(Rect::new(30, 30, 40, 40));
+        assert!(region.is_empty(), "two pieces, taken away one after the other");
     }
 
     #[test]

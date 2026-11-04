@@ -43,9 +43,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::gdi::NULLREGION;
 use abi::user::{
     color, Msg32, PaintStruct32, Rect32, CS_PARENTDC, DCX_CACHE, DCX_INTERSECTRGN, DCX_KEEPCLIPRGN, DCX_USESTYLE,
-    HRGN_WINDOW, WM_ERASEBKGND, WM_NCPAINT, WM_PAINT, WNDS2_STARTPAINT, WNDS2_WMPAINTSENT, WNDS_ERASEBACKGROUND,
-    WNDS_INTERNALPAINT, WNDS_NONCPAINT, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT,
-    WNDS_UPDATEDIRTY, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_MINIMIZE, WS_VISIBLE,
+    HRGN_WINDOW, RDW_ALLCHILDREN, RDW_ERASE, RDW_ERASENOW, RDW_FRAME, RDW_INTERNALPAINT, RDW_INVALIDATE,
+    RDW_NOCHILDREN, RDW_NOERASE, RDW_NOFRAME, RDW_NOINTERNALPAINT, RDW_NOUPDATEDIRTY, RDW_UPDATENOW, RDW_VALIDATE,
+    WM_ERASEBKGND, WM_NCPAINT, WM_PAINT, WNDS2_ENDPAINTINVALIDATE, WNDS2_STARTPAINT, WNDS2_WMPAINTSENT,
+    WNDS_ERASEBACKGROUND, WNDS_INTERNALPAINT, WNDS_NONCPAINT, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
+    WNDS_SENDNCPAINT, WNDS_UPDATEDIRTY, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_MINIMIZE, WS_VISIBLE,
 };
 
 use crate::gdi::dib::{ColorRef, Rect};
@@ -122,23 +124,310 @@ pub fn visible_region(window: &Window, client: bool, clip_children: bool, clip_s
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn invalidate(window: &Window) {
-    let state = window::change(window, |state| {
-        state.state &= !WNDS_NONCPAINT;
-        state.state |= WNDS_SENDNCPAINT;
-        let client = state.client;
-        state.invalidate(Rect::new(0, 0, client.right - client.left, client.bottom - client.top), true);
+    let whole = Region::from_rect(window.state().window);
+    invalidate_windows(window, Some(&whole), RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
+}
+
+/// La partie de `region` (à l'écran) dans la zone cliente de `state`, depuis
+/// son coin.
+fn client_part(state: &WindowState, region: &Region) -> Region {
+    let mut part = region.clone();
+    part.intersect_rect(state.client);
+    part.offset(-state.client.left, -state.client.top);
+    part
+}
+
+/// IntInvalidateWindows : `region` (à l'écran ; `None` : aucune, pour les
+/// seuls drapeaux) est à repeindre (`RDW_INVALIDATE`, avec `RDW_FRAME` le
+/// cadre, `RDW_ERASE` le fond ; `RDW_INTERNALPAINT` : WM_PAINT sans rien à
+/// peindre) ou ne l'est plus (`RDW_VALIDATE`, `RDW_NOFRAME`, `RDW_NOERASE`,
+/// `RDW_NOINTERNALPAINT`), coupée à la fenêtre (et à sa zone cliente sans
+/// `RDW_FRAME`). Ses enfants visibles suivent, sauf `RDW_NOCHILDREN`, et
+/// sauf ceux d'une fenêtre à `WS_CLIPCHILDREN` sans `RDW_ALLCHILDREN`. Une
+/// fenêtre invalidée par un autre thread que le sien l'est
+/// « salement » (`WNDS_UPDATEDIRTY`) : sans `RDW_NOUPDATEDIRTY`, une
+/// validation ne la touche pas.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn invalidate_windows(window: &Window, region: Option<&Region>, flags: u32) {
+    let mut flags = flags;
+    let state = window.state();
+    let region = region.map(|region| {
+        let mut region = region.clone();
+        if flags & RDW_INVALIDATE != 0 && flags & RDW_FRAME == 0 {
+            region.intersect_rect(state.client);
+        }
+        region.intersect_rect(state.window);
+        region
     });
-    if state.style & WS_MINIMIZE != 0 {
+    if flags & RDW_INVALIDATE != 0 && region.as_ref().is_none_or(Region::is_empty) {
+        return;
+    }
+    if flags & (RDW_INVALIDATE | RDW_INTERNALPAINT | RDW_ERASE | RDW_FRAME) != 0 {
+        let other_thread = !same_thread(window);
+        window::change(window, |state| {
+            if flags & RDW_INTERNALPAINT != 0 {
+                state.state |= WNDS_INTERNALPAINT;
+            }
+            if flags & RDW_INVALIDATE != 0 {
+                state.state &= !WNDS_NONCPAINT;
+                if other_thread {
+                    state.state |= WNDS_UPDATEDIRTY;
+                    if state.state2 & WNDS2_WMPAINTSENT != 0 {
+                        state.state2 |= WNDS2_ENDPAINTINVALIDATE;
+                    }
+                }
+                if flags & RDW_FRAME != 0 {
+                    state.state |= WNDS_SENDNCPAINT;
+                }
+                if flags & RDW_ERASE != 0 {
+                    state.state |= WNDS_SENDERASEBACKGROUND;
+                }
+                if let Some(region) = &region {
+                    for &rect in client_part(state, region).rects() {
+                        state.update.union_rect(rect);
+                    }
+                }
+            }
+        });
+        // For the children.
+        flags |= RDW_ERASE | RDW_FRAME;
+    } else if flags & (RDW_VALIDATE | RDW_NOINTERNALPAINT | RDW_NOERASE | RDW_NOFRAME) != 0 {
+        if state.state & WNDS_UPDATEDIRTY != 0 && flags & RDW_NOUPDATEDIRTY == 0 {
+            return;
+        }
+        window::change(window, |state| {
+            if flags & RDW_NOINTERNALPAINT != 0 {
+                state.state &= !WNDS_INTERNALPAINT;
+            }
+            if flags & RDW_VALIDATE != 0 {
+                if flags & RDW_NOFRAME != 0 {
+                    state.state &= !WNDS_SENDNCPAINT;
+                }
+                if flags & RDW_NOERASE != 0 {
+                    state.state &= !(WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND);
+                }
+                if let Some(region) = &region {
+                    let validated = client_part(state, region);
+                    state.update.subtract(&validated);
+                }
+                if state.update.is_empty() {
+                    state.state &= !(WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND);
+                }
+            }
+        });
+    }
+    let state = window.state();
+    if flags & RDW_NOCHILDREN != 0
+        || state.style & WS_MINIMIZE != 0
+        || (flags & RDW_ALLCHILDREN == 0 && state.style & WS_CLIPCHILDREN != 0)
+    {
         return;
     }
     let mut child = window::get(state.child);
     while let Some(current) = child {
         let child_state = current.state();
         if child_state.style & WS_VISIBLE != 0 {
-            invalidate(&current);
+            invalidate_windows(&current, region.as_ref(), flags);
         }
         child = window::get(child_state.next);
     }
+}
+
+/// IntIsWindowDrawable : `window` et ses parents sont visibles, et aucun
+/// parent n'est réduit.
+fn is_drawable(window: &Window) -> bool {
+    let state = window.state();
+    if state.style & WS_VISIBLE == 0 {
+        return false;
+    }
+    let mut parent = window::get(state.parent);
+    while let Some(current) = parent {
+        let state = current.state();
+        if state.style & WS_VISIBLE == 0 || state.style & WS_MINIMIZE != 0 {
+            return false;
+        }
+        parent = window::get(state.parent);
+    }
+    true
+}
+
+/// co_UserRedrawWindow : `rect` (dans la zone cliente ; `None` : la zone
+/// cliente, ou la fenêtre avec `RDW_INVALIDATE | RDW_FRAME` ou
+/// `RDW_VALIDATE | RDW_NOFRAME`) de `window` est invalidé ou validé selon
+/// `flags` ([`invalidate_windows`]), puis la fenêtre se peint aussitôt
+/// (`RDW_UPDATENOW` : WM_PAINT envoyé, [`update_windows`]) ou seulement son
+/// cadre et son fond (`RDW_ERASENOW`). Rien pour une fenêtre qu'on ne voit
+/// pas.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn redraw_window(window: &Arc<Window>, rect: Option<Rect>, flags: u32) {
+    if !is_drawable(window) {
+        return;
+    }
+    let state = window.state();
+    let region = if flags & (RDW_INVALIDATE | RDW_VALIDATE) == 0 {
+        None
+    } else if let Some(rect) = rect {
+        let (dx, dy) = if window.is_desktop_window() { (0, 0) } else { (state.client.left, state.client.top) };
+        Some(Region::from_rect(Rect::new(rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy)))
+    } else if flags & (RDW_INVALIDATE | RDW_FRAME) == RDW_INVALIDATE | RDW_FRAME
+        || flags & (RDW_VALIDATE | RDW_NOFRAME) == RDW_VALIDATE | RDW_NOFRAME
+    {
+        Some(Region::from_rect(state.window))
+    } else {
+        Some(Region::from_rect(state.client))
+    };
+    if flags & (RDW_INVALIDATE | RDW_VALIDATE | RDW_INTERNALPAINT | RDW_NOINTERNALPAINT) != 0 {
+        invalidate_windows(window, region.as_ref(), flags);
+    }
+    if flags & RDW_UPDATENOW != 0 {
+        update_windows(window, flags);
+    } else if flags & RDW_ERASENOW != 0 {
+        sync_and_paint(window);
+    }
+}
+
+/// UserUpdateWindows : `window` se peint (WM_PAINT envoyé, [`update_window`]),
+/// sauf une fenêtre `WS_EX_TRANSPARENT` dont une sœur suivante du même thread
+/// a à se peindre.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn update_windows(window: &Arc<Window>, flags: u32) {
+    let state = window.state();
+    if state.ex_style & WS_EX_TRANSPARENT != 0 {
+        let mut next = window::get(state.next);
+        while let Some(current) = next {
+            let next_state = current.state();
+            if current.pti == window.pti
+                && (!next_state.update.is_empty() || next_state.state & WNDS_INTERNALPAINT != 0)
+            {
+                return;
+            }
+            next = window::get(next_state.next);
+        }
+    }
+    update_window(window, flags);
+}
+
+/// co_IntUpdateWindows (UpdateWindow : `RDW_ALLCHILDREN`) : une fenêtre qui
+/// a quelque chose à peindre reçoit WM_PAINT aussitôt (sa partie dans la
+/// région à mettre à jour de ses parents qui ne coupent pas leurs enfants y
+/// est validée, IntValidateParents) ; une procédure qui n'appelle pas
+/// BeginPaint voit son cadre et son fond repeints. Puis ses enfants
+/// visibles, sauf `RDW_NOCHILDREN`.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn update_window(window: &Arc<Window>, flags: u32) {
+    let state = window.state();
+    if !state.update.is_empty() || state.state & WNDS_INTERNALPAINT != 0 {
+        if !state.update.is_empty() {
+            validate_parents(window);
+        }
+        window::change(window, |state| {
+            state.state &= !(WNDS_INTERNALPAINT | WNDS_UPDATEDIRTY);
+            state.state |= WNDS_PAINTNOTPROCESSED;
+            state.state2 |= WNDS2_WMPAINTSENT;
+        });
+        let _ = window::send_message(window, WM_PAINT, 0, LParam::Value(0));
+        if window.state().state & WNDS_PAINTNOTPROCESSED != 0 {
+            paint_windows(window);
+        }
+    }
+    if flags & RDW_NOCHILDREN != 0 || window.is_desktop_window() {
+        return;
+    }
+    let mut child = window::get(window.state().child);
+    while let Some(current) = child {
+        let child_state = current.state();
+        let dirty = |state: &WindowState| !state.update.is_empty() || state.state & WNDS_INTERNALPAINT != 0;
+        // A transparent child waits for an opaque sibling after it to paint.
+        let skip = child_state.ex_style & WS_EX_TRANSPARENT != 0 && dirty(&child_state) && {
+            let mut next = window::get(child_state.next);
+            let mut found = false;
+            while let Some(other) = next {
+                let other_state = other.state();
+                if dirty(&other_state) {
+                    found = true;
+                    break;
+                }
+                next = window::get(other_state.next);
+            }
+            found
+        };
+        if !skip && child_state.style & WS_VISIBLE != 0 {
+            update_window(&current, RDW_ALLCHILDREN);
+        }
+        child = window::get(child_state.next);
+    }
+}
+
+/// IntIntersectWithParents : `rect` (à l'écran) coupé aux zones clientes
+/// des parents de `window` ; `None` si un parent est caché ou réduit, ou
+/// si rien n'en reste.
+fn intersect_with_parents(window: &Window, rect: Rect) -> Option<Rect> {
+    let mut rect = rect;
+    let mut parent = window::get(window.state().parent);
+    while let Some(current) = parent {
+        let state = current.state();
+        rect = rect.intersect(&state.client);
+        if state.style & WS_VISIBLE == 0 || state.style & WS_MINIMIZE != 0 || rect.is_empty() {
+            return None;
+        }
+        parent = window::get(state.parent);
+    }
+    Some(rect)
+}
+
+/// IntValidateParents : la partie de `window` qu'on voit dans ses parents
+/// est validée dans la région à mettre à jour de ceux qui ne coupent pas
+/// leurs enfants (jusqu'au premier à `WS_CLIPCHILDREN`). Sans
+/// `WNDS_SYNCPAINTPENDING` (pas encore), toujours.
+fn validate_parents(window: &Window) {
+    let Some(rect) = intersect_with_parents(window, window.state().window) else { return };
+    let region = Region::from_rect(rect);
+    let mut parent = window::get(window.state().parent);
+    while let Some(current) = parent {
+        let state = current.state();
+        if state.style & WS_CLIPCHILDREN != 0 {
+            break;
+        }
+        if !state.update.is_empty() {
+            invalidate_windows(&current, Some(&region), RDW_VALIDATE | RDW_NOCHILDREN | RDW_NOUPDATEDIRTY);
+        }
+        parent = window::get(state.parent);
+    }
+}
+
+/// co_UserGetUpdateRect : le rectangle qui tient la région à mettre à jour
+/// de `window` (dans sa zone cliente, coupé à elle et à ses parents ; vide
+/// si un parent la cache), ou `None` sans région. `erase` : son cadre et
+/// son fond se repeignent d'abord s'il le faut.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn get_update_rect(window: &Arc<Window>, erase: bool) -> Option<Rect> {
+    if erase {
+        paint_windows(window);
+    }
+    let state = window::change(window, |state| state.state &= !WNDS_UPDATEDIRTY);
+    if state.update.is_empty() {
+        return None;
+    }
+    let bounds = state.update.bounds();
+    let (dx, dy) = (state.client.left, state.client.top);
+    let on_screen = Rect::new(bounds.left + dx, bounds.top + dy, bounds.right + dx, bounds.bottom + dy);
+    let Some(rect) = intersect_with_parents(window, on_screen.intersect(&state.client)) else {
+        return Some(Rect::default());
+    };
+    if window.is_desktop_window() {
+        return Some(rect);
+    }
+    Some(Rect::new(rect.left - dx, rect.top - dy, rect.right - dx, rect.bottom - dy))
 }
 
 /// IntIsWindowDirty : la fenêtre a quelque chose à peindre (visible, avec
@@ -189,6 +478,11 @@ fn paint_windows(window: &Arc<Window>) {
     if state.update.is_empty() {
         window::change(window, |state| state.state &= !(WNDS_SENDERASEBACKGROUND | WNDS_ERASEBACKGROUND));
     }
+    if window.is_desktop_window() {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_missing("the desktop window's background on request (RedrawWindow, InvalidateRect of NULL)", &REPORTED);
+        return;
+    }
     let Ok(thread) = crate::convert_current_thread() else { return };
     if thread.server != window.pti {
         static REPORTED: AtomicBool = AtomicBool::new(false);
@@ -215,10 +509,9 @@ pub fn paint_window(window: &Arc<Window>) {
 
 /// La région à mettre à jour de `state`, à l'écran ; `None` s'il n'y en a pas.
 fn update_on_screen(state: &WindowState) -> Option<Region> {
-    let (dx, dy) = (state.client.left, state.client.top);
-    let update = state.update;
-    (!update.is_empty())
-        .then(|| Region::from_rect(Rect::new(update.left + dx, update.top + dy, update.right + dx, update.bottom + dy)))
+    let mut update = state.update.clone();
+    update.offset(state.client.left, state.client.top);
+    (!update.is_empty()).then_some(update)
 }
 
 /// IntBeginPaint : `window` se peint. Son cadre se repeint s'il le faut
@@ -252,7 +545,7 @@ pub fn begin_paint(window: &Arc<Window>) -> PaintStruct32 {
             erase = true;
         }
         // Validated: the region is the DC's now.
-        state.update = Rect::default();
+        state.update = Region::default();
         state.state &= !WNDS_INTERNALPAINT;
     });
     let (complexity, paint) =
@@ -550,6 +843,21 @@ mod tests {
         assert!(!is_dirty(&state), "hidden");
         state = WindowState { style: WS_VISIBLE, state: WNDS_INTERNALPAINT, ..WindowState::default() };
         assert!(is_dirty(&state), "WM_PAINT asked (RDW_INTERNALPAINT)");
+    }
+
+    #[test]
+    fn a_screen_region_becomes_client_coordinates() {
+        let state = WindowState {
+            window: Rect::new(96, 77, 304, 254),
+            client: Rect::new(100, 100, 300, 250),
+            ..WindowState::default()
+        };
+        let mut region = Region::from_rect(Rect::new(90, 90, 120, 110));
+        region.union_rect(Rect::new(290, 240, 400, 400));
+        let part = client_part(&state, &region);
+        assert_eq!(part.bounds(), Rect::new(0, 0, 200, 150), "the client area's corner at 0, 0");
+        assert_eq!(part.area(), 20 * 10 + 10 * 10, "only what lies in the client area");
+        assert!(client_part(&state, &Region::from_rect(Rect::new(96, 77, 304, 99))).is_empty(), "the caption");
     }
 
     #[test]
