@@ -249,7 +249,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`win32k::metrics`, dans le `SERVERINFO`) et la partie noyau de DefWindowProc (`win32k::defwnd`,
   NtUserMessageCall : WM_NCCALCSIZE ; WM_GETMINMAXINFO à la création) ; le moniteur principal (`win32k::monitor` :
   place par défaut en cascade, NtUserMonitorFrom*, NtUserGetMonitorInfo) et SetWindowPos (`win32k::winpos`,
-  NtUserSetWindowPos, NtUserMoveWindow : ordre Z, WM_WINDOWPOS*, WM_MOVE, WM_SIZE). `syscall-gen` suit la variante
+  NtUserSetWindowPos, NtUserMoveWindow : ordre Z, WM_WINDOWPOS*, WM_MOVE, WM_SIZE) ; ShowWindow
+  (`win32k::winpos::show_window`, NtUserShowWindow : WM_SHOWWINDOW, WM_SIZE et WM_MOVE différés, fenêtres créées
+  visibles ; pas encore réduire ni agrandir, ni la peinture des fenêtres). `syscall-gen` suit la variante
   publiée de ReactOS (`DBG` défini) et vérifie les stubs de `ntdll`, `user32`, `gdi32` quand l'espace utilisateur est
   là.
   Suite : [`docs/passation.md`](docs/passation.md).
