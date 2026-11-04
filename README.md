@@ -1,67 +1,85 @@
 
 # Mino (mini-nt-os)
 <img width="1280" height="800" alt="image-1793803234557" src="https://github.com/user-attachments/assets/eac90518-3542-43a1-8c78-4753d612cc12" />
-**Mino est un système d'exploitation libre, compatible XP, dont le noyau est écrit en Rust.**
+**Mino is a free, open-source, Windows XP-compatible operating system with a kernel written in Rust.**
 
-On démarre sur un bureau de style XP (barre des tâches, menu Démarrer, explorateur, panneau de configuration),
-puis on y lance des applications et des jeux 32 bits de l'ère XP (2001–2008) sans les modifier.
+The system boots into an XP-style desktop (taskbar, Start menu, file explorer, Control Panel), where users can run 32-bit applications and games from the Windows XP era (2001–2008) without modifying them.
 
-- **Écrit en Rust** : tout le code privilégié (noyau NT, partie noyau de Win32, pilotes).
-- **Réutilisé** : l'espace utilisateur de ReactOS (`ntdll`, `kernel32`, `user32`, `csrss`, `explorer`…), en binaires épinglés à une version.
+- **Written in Rust**: All privileged code (NT kernel, Win32 kernel subsystem, drivers).
+- **Reused components**: ReactOS user-mode components (`ntdll`, `kernel32`, `user32`, `csrss`, `explorer`, etc.), using version-pinned binaries.
 
 ## Architecture
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
-│ Applications PE32 i386 : explorer, notepad, jeux D3D8/9…     │
+│ PE32 i386 applications: explorer, notepad, D3D8/9 games…     │
 ├──────────────────────────────────────────────────────────────┤
-│ DLL Win32 et processus système (ReactOS, épinglés)           │
-│ d3d8/d3d9/ddraw → wined3d → opengl32 (Mesa, rendu logiciel)  │
-├══════════════════════════════════════════════════════════════┤  ← ring 3 / ring 0
-│ win32k (Rust) : USER · GDI · polices                         │
-│ Exécutif NT (Rust) : Ob · Ps · Mm · Io · Cm · Se · Lpc · Ex  │
-│ Ke (Rust) : dispatcher, ordonnanceur, IRQL, APC, DPC         │
-│ HAL et pilotes (Rust)                                        │
+│ Win32 DLLs and system processes (ReactOS, version-pinned)    │
+│ d3d8/d3d9/ddraw → wined3d → opengl32 (Mesa, software render) │
+├══════════════════════════════════════════════════════════════┤ ← ring 3 / ring 0
+│ win32k (Rust): USER · GDI · fonts                             │
+│ NT Executive (Rust): Ob · Ps · Mm · Io · Cm · Se · Lpc · Ex      │
+│ Ke (Rust): dispatcher, scheduler, IRQL, APC, DPC              │
+│ HAL and drivers (Rust)                                        │
 ├──────────────────────────────────────────────────────────────┤
-│ Chargeur UEFI (Rust) → ntoskrnl ELF64                        │
+│ UEFI bootloader (Rust) → ntoskrnl ELF64                       │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ## Documentation
 
-| Document | Contenu |
-|---|---|
-| [01 — Vision et périmètre](docs/01-vision.md) | Objectif, périmètre, jalons visibles |
-| [02 — Architecture](docs/02-architecture.md) | Architecture cible, composant par composant |
-| [03 — Décisions](docs/03-decisions.md) | Décisions d'architecture (ADR) |
-| [04 — Audit et réutilisation](docs/04-audit-reutilisation.md) | État du code existant et plan de migration |
-| [05 — Feuille de route](docs/05-feuille-de-route.md) | Jalons M0 à M10 et critères de sortie |
-| [06 — Conventions](docs/06-conventions.md) | Règles de développement (hygiène juridique, `unsafe`, IRQL, tests, Git) |
+| **Document** | **Description** |
+| --- | --- |
+| [01 — Vision and Scope](https://github.com/pentest30/mini-nt-os/blob/main/docs/01-vision.md) | Goals, scope, and observable milestones |
+| [02 — Architecture](https://github.com/pentest30/mini-nt-os/blob/main/docs/02-architecture.md) | Target architecture, component by component |
+| [03 — Decisions](https://github.com/pentest30/mini-nt-os/blob/main/docs/03-decisions.md) | Architecture Decision Records (ADRs) |
+| [04 — Audit and Reuse](https://github.com/pentest30/mini-nt-os/blob/main/docs/04-audit-reutilisation.md) | Existing codebase assessment and migration plan |
+| [05 — Roadmap](https://github.com/pentest30/mini-nt-os/blob/main/docs/05-feuille-de-route.md) | Milestones M0–M10 and completion criteria |
+| [06 — Conventions](https://github.com/pentest30/mini-nt-os/blob/main/docs/06-conventions.md) | Development guidelines (legal compliance, `unsafe`, IRQL, testing, Git) |
 
-**Jalon en cours : M1 — Noyau Ke** (M0 est terminé). Le code actuel suit encore l'ancienne architecture (Win32 réimplémenté dans le noyau) ;
-sa migration est décrite dans l'audit.
+**Current milestone: M1 — Ke Kernel** (M0 is complete).
 
-## Démarrage rapide
+The current codebase still follows the previous architecture, in which Win32 functionality was reimplemented inside the kernel. The migration to the target architecture is described in the audit document.
+
+## Quick Start
 
 ```bash
-rustup toolchain install        # installe le nightly épinglé de rust-toolchain.toml
-cargo xtask test                # tests hôte, puis démarrages QEMU sans affichage vérifiés par marqueurs série
-cargo xtask run                 # démarre dans QEMU, port série sur stdio
+# Install the pinned nightly toolchain specified in rust-toolchain.toml
+rustup toolchain install
+
+# Run host tests, followed by headless QEMU boot tests
+# validated using serial output markers
+cargo xtask test
+
+# Boot the OS in QEMU, with serial output redirected to stdio
+cargo xtask run
 ```
 
-QEMU et OVMF doivent être installés (Debian, Ubuntu : `qemu-system-x86 ovmf`). `cargo xtask help` liste les options.
+QEMU and OVMF must be installed.
 
-## Plateformes
+On Debian or Ubuntu:
 
-QEMU (OVMF, q35) est la plateforme de référence ; VirtualBox (EFI) sert de seconde plateforme.
-Les machines réelles x86-64 UEFI arrivent au jalon M9.
+```bash
+sudo apt install qemu-system-x86 ovmf
+```
 
-## Contribuer, avec ou sans Claude Code
+Run `cargo xtask help` to see all available options.
 
-Toute contribution suit [06 — Conventions](docs/06-conventions.md), à commencer par l'hygiène juridique : aucun code,
-binaire ou ressource Microsoft, et interdiction de consulter les sources fuitées d'XP ou de Server 2003.
-[`CLAUDE.md`](CLAUDE.md) résume le contexte et les règles non négociables pour les sessions Claude Code.
+## Supported Platforms
 
-## Licence
+**QEMU (OVMF, q35)** is the primary reference platform, while **VirtualBox (EFI)** serves as a secondary testing platform.
 
-MIT pour l'instant. Le choix définitif est ouvert (ADR-007).
+Support for real x86-64 UEFI hardware is planned for milestone M9.
+
+## Contributing — With or Without Claude Code
+
+All contributions must follow [06 — Conventions](https://github.com/pentest30/mini-nt-os/blob/main/docs/06-conventions.md), starting with strict legal compliance:
+
+- No Microsoft source code, binaries, or resources.
+- Consulting leaked Windows XP or Windows Server 2003 source code is strictly prohibited.
+
+The [`CLAUDE.md`](https://github.com/pentest30/mini-nt-os/blob/main/CLAUDE.md) file summarizes the project context and non-negotiable rules for Claude Code sessions.
+
+## License
+
+MIT for now. The final licensing decision remains open (ADR-007).
