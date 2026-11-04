@@ -136,6 +136,49 @@ impl<'a> Bitmap<'a> {
             self.pixels[row + rect.left as usize..row + rect.right as usize].fill(pixel);
         }
     }
+
+    /// PatBlt avec un pinceau plein : `rect`, coupé aux bords de la surface,
+    /// prend `color` par le ROP3 `rop3` ([`rop3_without_source`]).
+    pub fn pat_blt(&mut self, rect: Rect, color: ColorRef, rop3: u8) {
+        if rop3 == PATCOPY {
+            return self.fill_rect(rect, color);
+        }
+        let rect = rect.intersect(&self.bounds());
+        if rect.is_empty() {
+            return;
+        }
+        let pattern = self.layout.pixel(color);
+        for y in rect.top as u32..rect.bottom as u32 {
+            let row = (y * self.stride) as usize;
+            for pixel in &mut self.pixels[row + rect.left as usize..row + rect.right as usize] {
+                // The unused byte stays zero.
+                *pixel = rop3_without_source(rop3, pattern, *pixel) & 0x00FF_FFFF;
+            }
+        }
+    }
+}
+
+/// Le ROP3 de PATCOPY : le motif.
+pub const PATCOPY: u8 = 0xF0;
+
+/// Le ROP3 `rop3` sans source, bit à bit, du motif `pattern` et de la
+/// destination `dest` : chaque bit du résultat est le bit `4 P + D` de
+/// `rop3` (une source à 0 : `P·4 + S·2 + D`).
+pub const fn rop3_without_source(rop3: u8, pattern: u32, dest: u32) -> u32 {
+    let mut out = 0;
+    if rop3 & 0x01 != 0 {
+        out |= !pattern & !dest;
+    }
+    if rop3 & 0x02 != 0 {
+        out |= !pattern & dest;
+    }
+    if rop3 & 0x10 != 0 {
+        out |= pattern & !dest;
+    }
+    if rop3 & 0x20 != 0 {
+        out |= pattern & dest;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -169,6 +212,31 @@ mod tests {
         bitmap.fill_rect(Rect::new(-5, -5, 0, 2), ColorRef::rgb(1, 2, 3));
         bitmap.fill_rect(Rect::new(4, 0, 8, 4), ColorRef::rgb(1, 2, 3));
         assert!(pixels.iter().all(|&pixel| pixel == 0));
+    }
+
+    #[test]
+    fn the_raster_operations_of_pat_blt() {
+        let (p, d) = (0b1100, 0b1010);
+        assert_eq!(rop3_without_source(0xF0, p, d) & 0xF, p, "PATCOPY");
+        assert_eq!(rop3_without_source(0x5A, p, d) & 0xF, p ^ d, "PATINVERT");
+        assert_eq!(rop3_without_source(0x55, p, d) & 0xF, !d & 0xF, "DSTINVERT");
+        assert_eq!(rop3_without_source(0x00, p, d), 0, "BLACKNESS");
+        assert_eq!(rop3_without_source(0xFF, p, d), u32::MAX, "WHITENESS");
+        assert_eq!(rop3_without_source(0x0A, p, d) & 0xF, !p & d & 0xF, "PDna");
+        assert_eq!(rop3_without_source(0xA0, p, d) & 0xF, p & d, "DPa");
+    }
+
+    #[test]
+    fn pat_blt_combines_the_brush_with_the_screen() {
+        let mut pixels = [0x0012_3456u32; 4];
+        let mut bitmap = Bitmap::new(&mut pixels, 2, 2, 2, PixelLayout::Bgrx).unwrap();
+        bitmap.pat_blt(Rect::new(1, 0, 5, 2), ColorRef::rgb(0xFF, 0, 0), 0x5A);
+        assert_eq!(bitmap.pixel(0, 0), Some(0x0012_3456), "outside");
+        assert_eq!(bitmap.pixel(1, 1), Some(0x00ED_3456), "PATINVERT: red flips 0x12");
+        bitmap.pat_blt(Rect::new(0, 0, 1, 1), ColorRef(0), 0xFF);
+        assert_eq!(bitmap.pixel(0, 0), Some(0x00FF_FFFF), "WHITENESS leaves the unused byte zero");
+        bitmap.pat_blt(Rect::new(0, 1, 2, 2), ColorRef::rgb(0, 0, 0xFF), PATCOPY);
+        assert_eq!((bitmap.pixel(0, 1), bitmap.pixel(1, 1)), (Some(0xFF), Some(0xFF)));
     }
 
     #[test]

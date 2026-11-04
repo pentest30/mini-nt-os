@@ -24,12 +24,15 @@
 //! visibles, sinon `WS_VISIBLE` seul), puis WM_SIZE et WM_MOVE qui
 //! attendaient qu'elle soit montrée (`WNDS_SENDSIZEMOVEMSGS`).
 //!
+//! Après le déplacement ([`crate::paint`]) : une fenêtre visible est
+//! invalidée entière, ce qu'elle découvre est exposé (le bureau s'y
+//! repeint), et une fenêtre montrée, déplacée ou redimensionnée repeint
+//! aussitôt son cadre (WM_NCPAINT), avant WM_WINDOWPOSCHANGED.
+//!
 //! Pas encore, journalisé une fois : réduire et agrandir (les commandes qui
 //! le demandent, ou montrer une fenêtre réduite ou agrandie, ne font rien et
-//! rendent FALSE), la fenêtre active et le focus ; les régions visibles (la fenêtre est
-//! visible avant si elle et ses parents le sont et qu'elle n'est pas vide),
-//! repeindre ce que le déplacement découvre ou abîme, la copie des bits
-//! valides, l'activation et le premier plan d'une fenêtre de premier niveau
+//! rendent FALSE), la fenêtre active et le focus ; la copie des bits valides
+//! (tout est repeint), l'activation et le premier plan d'une fenêtre de premier niveau
 //! (aucune n'est au premier plan), garder les fenêtres possédées au-dessus
 //! de leur propriétaire (WinPosDoOwnedPopups), `SWP_ASYNCWINDOWPOS` (fait
 //! tout de suite), les messages à la fenêtre d'un autre thread.
@@ -40,10 +43,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::user::{
     sm, NcCalcSizeParams32, WindowPos32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_ASYNCWINDOWPOS,
-    SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE, SWP_NOMOVE, SWP_NOREDRAW,
-    SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SWP_STATECHANGED, WM_CHILDACTIVATE, WM_NCCALCSIZE,
-    WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS2_WIN31COMPAT, WNDS_SENDNCPAINT, WS_CHILD, WS_EX_TOPMOST,
-    WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
+    SWP_DEFERERASE, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE, SWP_NOMOVE,
+    SWP_NOOWNERZORDER, SWP_NOREDRAW, SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SWP_STATECHANGED,
+    WM_CHILDACTIVATE, WM_NCCALCSIZE, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS2_WIN31COMPAT, WNDS_SENDNCPAINT,
+    WS_CHILD, WS_EX_TOPMOST, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
 };
 use abi::user::{
     STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, SW_FORCEMINIMIZE, SW_HIDE, SW_MINIMIZE, SW_RESTORE,
@@ -52,13 +55,17 @@ use abi::user::{
 };
 
 use crate::gdi::dib::Rect;
+use crate::gdi::region::Region;
+use crate::paint;
 use crate::window::{self, LParam, StartupPlace, Window};
 
 /// SWP_AGG_*, des drapeaux ensemble : rien ne bouge, ce qui dit ce qui a
-/// changé, la zone cliente ne change pas.
+/// changé, la zone cliente ne change pas ; la géométrie ne change pas
+/// (comme ReactOS : ni la taille, ni celle de la zone cliente, ni l'ordre Z).
 pub const SWP_AGG_NOPOSCHANGE: u32 = SWP_NOSIZE | SWP_NOMOVE | SWP_NOCLIENTSIZE | SWP_NOCLIENTMOVE | SWP_NOZORDER;
 pub const SWP_AGG_STATUSFLAGS: u32 = SWP_AGG_NOPOSCHANGE | SWP_FRAMECHANGED | SWP_HIDEWINDOW | SWP_SHOWWINDOW;
 pub const SWP_AGG_NOCLIENTCHANGE: u32 = SWP_NOCLIENTSIZE | SWP_NOCLIENTMOVE;
+pub const SWP_AGG_NOGEOMETRYCHANGE: u32 = SWP_NOSIZE | SWP_NOCLIENTSIZE | SWP_NOZORDER;
 
 /// Ce que WinPosFixupFlags sait de la fenêtre avant de la placer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -358,9 +365,20 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
             state.state |= WNDS_SENDNCPAINT;
         }
     });
-    if pos.flags & SWP_NOREDRAW == 0 && pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("repainting what moved (regions)", &REPORTED);
+    let redraw = pos.flags & SWP_NOREDRAW == 0 && pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE;
+    if redraw || (pos.flags & SWP_NOZORDER != 0 && pos.flags & SWP_NOOWNERZORDER != 0) {
+        let visible_after = window::is_visible(window) && !new_window.is_empty();
+        if visible_after {
+            // No bits are copied: all of it is to be painted again.
+            paint::invalidate(window);
+        }
+        if visible_before {
+            let mut exposed = Region::from_rect(old.window);
+            if visible_after {
+                exposed.subtract_rect(new_window);
+            }
+            paint::expose(window, &exposed);
+        }
     }
 
     if pos.flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0 {
@@ -378,6 +396,26 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
         && pos.flags & SWP_AGG_STATUSFLAGS == SWP_AGG_NOPOSCHANGE & !SWP_NOZORDER
     {
         pos.flags |= SWP_NOZORDER | SWP_NOREDRAW;
+    }
+
+    if flags & SWP_DEFERERASE == 0 {
+        // Erase the parent when hiding or resizing a child; a top-level
+        // window repaints itself.
+        if flags & SWP_HIDEWINDOW != 0
+            || (flags & SWP_SHOWWINDOW == 0 && pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOGEOMETRYCHANGE)
+        {
+            match window::get(state.parent).filter(|parent| !parent.is_desktop_window()) {
+                Some(parent) => paint::sync_and_paint(&parent),
+                None => paint::sync_and_paint(window),
+            }
+        }
+        // Newly shown windows get their chance to paint.
+        if pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE
+            && flags & SWP_AGG_NOCLIENTCHANGE == 0
+            && flags & SWP_SHOWWINDOW != 0
+        {
+            paint::sync_and_paint(window);
+        }
     }
 
     if pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE

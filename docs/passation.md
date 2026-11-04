@@ -343,12 +343,22 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      de `ntdll`, `user32` et `gdi32` (corrigé : 26 numéros de win32k décalés) ;
    - [x] ShowWindow (`win32k::winpos::show_window`, NtUserShowWindow : WM_SHOWWINDOW, SetWindowPos, WM_SIZE et
      WM_MOVE différés, commande du `STARTUPINFO`, fenêtres créées visibles) ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : la peinture des fenêtres (contextes de
-     périphérique, WM_NCPAINT, WM_ERASEBKGND, WM_PAINT des fenêtres du client : ce qui rend une fenêtre visible à
-     l'écran), réduire et agrandir (WINDOWPLACEMENT), l'activation et le premier plan, DestroyWindow,
+   - [x] le cadre des fenêtres peint par le noyau (`win32k::paint`, `win32k::nonclient`, `gdi::draw`,
+     `gdi::region` : régions visibles, invalidation, WM_NCPAINT, bords, titre en dégradé, boutons ; le bureau
+     repeint là où une fenêtre le découvre) : des fenêtres apparaissent à l'écran ;
+   - [x] la zone cliente effacée (M6, étape 7) : la table des handles GDI partagée (`win32k::gdi::handles`,
+     `PEB.GdiSharedHandleTable`), les pinceaux de stock et des couleurs du système (`ahbrSystem`), les DC de
+     l'écran et leurs attributs dans la mémoire du client (`gdi::dc`), le cache des DC de fenêtres (`win32k::dce`),
+     les appels de GDI en lot exécutés au retour d'un rappel et avant chaque service de win32k (`gdi::batch`) ;
+     WM_ERASEBKGND après WM_NCPAINT, NtGdiPatBlt, NtGdiGetAppClipBox, NtGdiFlush ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : WM_PAINT tiré de la file (les fenêtres à
+     mettre à jour, `QS_PAINT`), BeginPaint et EndPaint (NtUserBeginPaint, NtUserEndPaint : `PAINTSTRUCT`, le DC
+     coupé à la région, WM_ERASEBKGND à ce moment), NtUserGetDCEx et NtUserReleaseDC, puis le texte (polices,
+     ADR-013) ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
-     GDI : contextes de périphérique et table des handles GDI partagée, régions et découpage, BitBlt, texte et
-     polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
+     GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject, DeleteObject), DC en mémoire, régions de
+     GDI et découpage, BitBlt, texte et polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread
+     d'entrée) ;
    - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
      fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
      FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
@@ -395,6 +405,20 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Peinture du cadre (M6, étape 6) : pas de WM_PAINT du client (la zone cliente est effacée : étape 7), ni texte, ni icône,
+  ni barres de défilement ; tout cadre est inactif ; une sœur découverte attend sa prochaine invalidation ; pas de
+  copie des bits valides (une fenêtre déplacée est repeinte entière) ; le dégradé n'a de spécification que ses
+  bouts (le moteur de ReactOS n'est pas dans les sources épinglées) ; ôter le test de visibilité de WM_NCPAINT ne
+  change rien (la région visible d'une fenêtre cachée est vide : mutation équivalente).
+- Zone cliente (M6, étape 7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : pas de WM_PAINT du client
+  (ni file, ni BeginPaint/EndPaint), ni NtUserGetDCEx/NtUserReleaseDC, ni DC d'une fenêtre ou d'une classe
+  (`CS_OWNDC`, `CS_CLASSDC`), ni DC du parent (`CS_PARENTDC`) ; seul PatBlt s'exécute en lot (les autres appels sont
+  sautés, journalisés) ; pas d'objets créés par un client, de DC en mémoire, de stylos, de transformations, de
+  `DevCaps` (à zéro), de suppression d'objets ni de ménage à la fin d'un processus (un DC pris par un processus
+  qui finit pendant un rappel reste pris) ; la région à mettre à jour reste un rectangle. Mutation équivalente :
+  ôter `DCX_CLIPSIBLINGS` de la région d'un DC ne change rien tant que `DCX_CLIPSIBLINGS` ne vient que du style
+  (VIS_ComputeVisibleRegion coupe déjà les sœurs d'une fenêtre à `WS_CLIPSIBLINGS`) ; le chemin de NtGdiPatBlt qui
+  peint n'est pas atteint par `gdi32` (il met PatBlt en lot sauf sur une DIB section) : seul son refus a un test.
 - ShowWindow (M6, étape 5) : ni réduire ni agrandir (FALSE, journalisé) ; ni fenêtre active ni focus ; les
   fenêtres possédées ne suivent pas leur propriétaire ; pas de ShowWindowAsync ; le `STARTUPINFO` n'a qu'un test
   hôte.

@@ -13,6 +13,7 @@ GetClientRect@8
 GetMonitorInfoW@8
 GetParent@4
 GetSysColor@4
+GetSysColorBrush@4
 GetSystemMetrics@4
 GetWindow@8
 GetWindowLongW@8

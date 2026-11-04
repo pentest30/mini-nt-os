@@ -46,7 +46,7 @@ use crate::winsta::WindowStation;
 
 /// GDI_BATCH_LIMIT : les appels de GDI qu'un client met en lot au plus
 /// (`PEB.GdiDCAttributeList`).
-pub const GDI_BATCH_LIMIT: u32 = 20;
+pub const GDI_BATCH_LIMIT: u32 = abi::gdi::GDI_BATCH_LIMIT;
 
 /// Ce que win32k garde d'un processus GUI (`PROCESSINFO`).
 pub struct ProcessInfo {
@@ -54,6 +54,11 @@ pub struct ProcessInfo {
     pub server: u32,
     /// L'adresse de sa vue de la section partagée de USER.
     pub shared_view: u32,
+    /// L'adresse de sa vue de la table des handles GDI
+    /// (`PEB.GdiSharedHandleTable`).
+    pub gdi_view: u32,
+    /// Les places libres pour les attributs de ses DC (`pPoolDcAttr`).
+    pub dc_attrs: KSpinLock<crate::gdi::dc::AttrPool>,
     /// Sa station de fenêtres (`hwinsta`, `prpwinsta`, `amwinsta`).
     window_station: KSpinLock<Option<ProcessWindowStation>>,
     /// Ses vues des tas de bureau (HeapMappings), une par bureau, avec le
@@ -87,10 +92,12 @@ pub struct ProcessWindowStation {
 
 impl ProcessInfo {
     /// Un processus GUI sans station.
-    pub fn new(server: u32, shared_view: u32) -> Self {
+    pub fn new(server: u32, shared_view: u32, gdi_view: u32) -> Self {
         Self {
             server,
             shared_view,
+            gdi_view,
+            dc_attrs: KSpinLock::new(crate::gdi::dc::AttrPool::default()),
             window_station: KSpinLock::new(None),
             desktop_views: KSpinLock::new(Vec::new()),
             startup_desktop: KSpinLock::new(None),
@@ -422,12 +429,16 @@ pub const fn thread_flags(csrss: u32, pid: u32) -> u32 {
     }
 }
 
-/// Le `PROCESSINFO` de `process`, créé s'il n'en a pas : sa vue de la
-/// section partagée, la limite des lots de GDI dans son PEB.
+/// Le `PROCESSINFO` de `process`, créé s'il n'en a pas (InitProcessCallback,
+/// GdiProcessCreate) : ses vues de la section partagée de USER et de la
+/// table des handles GDI ; son PEB reçoit l'adresse de la seconde
+/// (`GdiSharedHandleTable`) et la limite des lots de GDI.
 ///
 /// # Errors
-/// Celles de la projection de la section ; `STATUS_PROCESS_IS_TERMINATING`
-/// pour un processus sans espace d'adresses.
+/// Celles des projections et de l'écriture du PEB (le processus reste
+/// alors GUI, sans table de GDI dans son PEB) ;
+/// `STATUS_PROCESS_IS_TERMINATING` pour un processus sans espace
+/// d'adresses.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
@@ -436,21 +447,27 @@ pub fn process_info(process: &Arc<Object<EProcess>>) -> Result<Arc<ProcessInfo>,
         return Ok(downcast(info));
     }
     let view = process.with_space(crate::shared::map_into)??;
-    let unmap = || {
-        let _ = process.with_space(|space| space.unmap_view(u64::from(view)));
+    let gdi_view = match process.with_space(crate::gdi::handles::map_into) {
+        Ok(Ok(gdi_view)) => gdi_view,
+        Ok(Err(status)) | Err(status) => {
+            let _ = process.with_space(|space| space.unmap_view(u64::from(view)));
+            return Err(status);
+        }
     };
-    let peb = u64::from(process.peb()) + offset_of!(Peb32, gdi_dc_attribute_list) as u64;
-    if let Err(status) = process.write_memory(peb, &GDI_BATCH_LIMIT.to_le_bytes()) {
-        unmap();
-        return Err(status);
-    }
-    let created = Arc::new(ProcessInfo::new(process_server_address(process.pid()), view));
-    let kept = downcast(process.set_win32_process(created.clone()));
+    let created = Arc::new(ProcessInfo::new(process_server_address(process.pid()), view, gdi_view));
+    let kept: Arc<ProcessInfo> = downcast(process.set_win32_process(created.clone()));
     if !Arc::ptr_eq(&kept, &created) {
-        // Another thread of the process converted it first: its view is
-        // the process's, not this one.
-        unmap();
+        // Another thread of the process converted it first: its views are
+        // the process's, not these.
+        let _ = process.with_space(|space| {
+            let _ = space.unmap_view(u64::from(view));
+            let _ = space.unmap_view(u64::from(gdi_view));
+        });
+        return Ok(kept);
     }
+    let peb = u64::from(process.peb());
+    process.write_memory(peb + offset_of!(Peb32, gdi_shared_handle_table) as u64, &gdi_view.to_le_bytes())?;
+    process.write_memory(peb + offset_of!(Peb32, gdi_dc_attribute_list) as u64, &GDI_BATCH_LIMIT.to_le_bytes())?;
     Ok(kept)
 }
 

@@ -33,6 +33,7 @@ pub mod callback;
 pub mod class;
 pub mod client;
 pub mod csrss;
+pub mod dce;
 pub mod defwnd;
 pub mod desktop;
 pub mod display;
@@ -43,6 +44,8 @@ pub mod keyboard;
 pub mod logon;
 pub mod metrics;
 pub mod monitor;
+pub mod nonclient;
+pub mod paint;
 pub mod queue;
 pub mod shared;
 pub mod window;
@@ -126,7 +129,10 @@ pub fn set_last_error(error: u32) -> Result<(), NtStatus> {
     ke::usermem::copy_to_user(at, &error.to_le_bytes())
 }
 
-/// Crée la section partagée de USER.
+/// Crée la section partagée de USER, la table des handles GDI et ses
+/// objets de stock (les pinceaux, dont ceux des couleurs du système, dans
+/// le `SERVERINFO`) ; Ps exécutera les lots de GDI d'un thread au retour de
+/// ses rappels (PsEstablishWin32Callouts, `BatchFlushRoutine`).
 ///
 /// # Panics
 /// Au second appel.
@@ -134,7 +140,11 @@ pub fn set_last_error(error: u32) -> Result<(), NtStatus> {
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage, Mm prêt.
 pub fn init() -> Result<(), NtStatus> {
-    shared::init()
+    shared::init()?;
+    gdi::handles::init()?;
+    gdi::brush::init(&metrics::SYSTEM_COLORS)?;
+    ps::callback::set_gdi_batch_flush(gdi::batch::flush);
+    Ok(())
 }
 
 #[cfg(test)]

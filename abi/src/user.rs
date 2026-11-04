@@ -210,11 +210,12 @@ pub struct MbString32 {
     pub string: u32,
 }
 
-/// SERVERINFO up to `argbSystem` of `PERUSERSERVERINFO` (the rest follows,
+/// SERVERINFO up to `ahbrSystem` of `PERUSERSERVERINFO` (the rest follows,
 /// zero until written): what [`ServerInfoHead32`] holds, the system
-/// classes' atoms, … then the system metrics (`aiSysMet`) and colours. The
-/// offsets of `aiSysMet` and `argbSystem` are those the pinned `user32`
-/// reads (GetSystemMetrics, GetSysColor).
+/// classes' atoms, … then the system metrics (`aiSysMet`), colours and
+/// their brushes. The offsets of `aiSysMet`, `argbSystem` and `ahbrSystem`
+/// are those the pinned `user32` reads (GetSystemMetrics, GetSysColor,
+/// GetSysColorBrush).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServerInfo32 {
@@ -235,6 +236,8 @@ pub struct ServerInfo32 {
     pub sys_met: [i32; SM_CMETRICS],
     pub argb_system_unmatched: [u32; NUM_SYSCOLORS],
     pub argb_system: [u32; NUM_SYSCOLORS],
+    /// The system colours' brushes (GetSysColorBrush), stock objects.
+    pub ahbr_system: [u32; NUM_SYSCOLORS],
 }
 
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
@@ -355,6 +358,28 @@ pub const WVR_VALIDRECTS: u32 = 0x0400;
 /// changes.
 pub const CS_VREDRAW: u32 = 0x0001;
 pub const CS_HREDRAW: u32 = 0x0002;
+/// CS_OWNDC, CS_CLASSDC: each window (the class) has a DC of its own;
+/// CS_PARENTDC: a child draws with its parent's DC.
+pub const CS_OWNDC: u32 = 0x0020;
+pub const CS_CLASSDC: u32 = 0x0040;
+pub const CS_PARENTDC: u32 = 0x0080;
+/// DCX_*: what GetDCEx gives (the window or its client area) and how it
+/// clips it.
+pub const DCX_WINDOW: u32 = 0x0000_0001;
+pub const DCX_CACHE: u32 = 0x0000_0002;
+pub const DCX_NORESETATTRS: u32 = 0x0000_0004;
+pub const DCX_CLIPCHILDREN: u32 = 0x0000_0008;
+pub const DCX_CLIPSIBLINGS: u32 = 0x0000_0010;
+pub const DCX_PARENTCLIP: u32 = 0x0000_0020;
+pub const DCX_EXCLUDERGN: u32 = 0x0000_0040;
+pub const DCX_INTERSECTRGN: u32 = 0x0000_0080;
+pub const DCX_EXCLUDEUPDATE: u32 = 0x0000_0100;
+pub const DCX_INTERSECTUPDATE: u32 = 0x0000_0200;
+pub const DCX_LOCKWINDOWUPDATE: u32 = 0x0000_0400;
+/// DCX_USESTYLE: clip by the window's and its class's styles.
+pub const DCX_USESTYLE: u32 = 0x0001_0000;
+/// DCX_KEEPCLIPRGN: the clip region stays the caller's.
+pub const DCX_KEEPCLIPRGN: u32 = 0x0004_0000;
 /// FNID_DEFWINDOWPROC: NtUserMessageCall's DefWindowProc.
 pub const FNID_DEFWINDOWPROC: u32 = 0x029E;
 /// WM_USER: the first message of an application.
@@ -575,6 +600,48 @@ pub const WM_CHILDACTIVATE: u32 = 0x0022;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
 pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+/// COLOR_*, the indices of the system colours (GetSysColor): `LIGHT_3D` is
+/// COLOR_3DLIGHT, `DKSHADOW_3D` COLOR_3DDKSHADOW; COLOR_3DFACE is `BTNFACE`.
+pub mod color {
+    pub const SCROLLBAR: usize = 0;
+    pub const BACKGROUND: usize = 1;
+    pub const ACTIVECAPTION: usize = 2;
+    pub const INACTIVECAPTION: usize = 3;
+    pub const MENU: usize = 4;
+    pub const WINDOW: usize = 5;
+    pub const WINDOWFRAME: usize = 6;
+    pub const MENUTEXT: usize = 7;
+    pub const WINDOWTEXT: usize = 8;
+    pub const CAPTIONTEXT: usize = 9;
+    pub const ACTIVEBORDER: usize = 10;
+    pub const INACTIVEBORDER: usize = 11;
+    pub const APPWORKSPACE: usize = 12;
+    pub const HIGHLIGHT: usize = 13;
+    pub const HIGHLIGHTTEXT: usize = 14;
+    pub const BTNFACE: usize = 15;
+    pub const BTNSHADOW: usize = 16;
+    pub const GRAYTEXT: usize = 17;
+    pub const BTNTEXT: usize = 18;
+    pub const INACTIVECAPTIONTEXT: usize = 19;
+    pub const BTNHIGHLIGHT: usize = 20;
+    pub const DKSHADOW_3D: usize = 21;
+    pub const LIGHT_3D: usize = 22;
+    pub const INFOTEXT: usize = 23;
+    pub const INFOBK: usize = 24;
+    pub const HOTLIGHT: usize = 26;
+    pub const GRADIENTACTIVECAPTION: usize = 27;
+    pub const GRADIENTINACTIVECAPTION: usize = 28;
+    pub const MENUHILIGHT: usize = 29;
+    pub const MENUBAR: usize = 30;
+}
+
+/// HRGN_WINDOW: the whole window, the `wParam` of WM_NCPAINT.
+pub const HRGN_WINDOW: u32 = 1;
+pub const WM_NCPAINT: u32 = 0x0085;
+pub const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+/// WNDS_NONCPAINT: no WM_NCPAINT until the frame is invalidated again.
+pub const WNDS_NONCPAINT: u32 = 0x0000_0100;
+
 /// SW_*, the commands of ShowWindow; SW_MAX the last one.
 pub const SW_HIDE: u32 = 0;
 pub const SW_SHOWNORMAL: u32 = 1;
@@ -1010,6 +1077,8 @@ const _: () = {
     assert!(offset_of!(ServerInfo32, sys_met) == 0x5CC);
     // user32!GetSysColor: mov eax, [gpsi + 0x7BC + 4 * index].
     assert!(offset_of!(ServerInfo32, argb_system) == 0x7BC);
+    // user32!GetSysColorBrush: mov eax, [gpsi + 0x838 + 4 * index].
+    assert!(offset_of!(ServerInfo32, ahbr_system) == 0x838);
     assert!(size_of::<Msg32>() == 28);
     assert!(offset_of!(ClientInfo32, ti_flags) == 0x14);
     assert!(offset_of!(ClientInfo32, desk_info) == 0x18);

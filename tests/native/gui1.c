@@ -1,6 +1,6 @@
 /*
  * M6, windows: a Win32 program (subsystem WINDOWS), compiled with MinGW and
- * linked to ReactOS's kernel32 and user32. The scenario `gui` puts it on the
+ * linked to ReactOS's kernel32, user32 and gdi32. The scenario `gui` puts it on the
  * boot disk in the place of winlogon.exe, which smss starts as its initial
  * command (csrss makes it a CSR process): it gets a real user32, connected
  * to csrss and win32k, without winlogon's RPC server, services and GINA.
@@ -12,7 +12,10 @@
  * window gets WM_GETMINMAXINFO and its frame from the system metrics, by
  * DefWindowProc in win32k (NtUserMessageCall), and its default place from
  * the monitor. SetWindowPos moves, sizes, orders, shows and hides windows;
- * ShowWindow shows and hides them.
+ * ShowWindow shows and hides them. A window shown paints its frame in the
+ * kernel and erases its client area with a DC the kernel lends it
+ * (WM_ERASEBKGND: user32's DefWindowProc fills it with the class brush,
+ * through gdi32 and the GDI handle table it shares with win32k).
  * Each step and each
  * message goes to the debug port (DbgPrint), where the scenario looks for
  * them; the program ends with EXIT_STATUS.
@@ -33,6 +36,8 @@ typedef void *HINSTANCE;
 typedef void *HMENU;
 typedef void *HICON;
 typedef void *HBRUSH;
+typedef void *HDC;
+typedef void *HGDIOBJ;
 typedef void *HWINSTA;
 typedef void *HDESK;
 typedef unsigned int WPARAM;
@@ -136,6 +141,7 @@ typedef struct {
 #define SWP_NOACTIVATE 0x0010
 #define SWP_SHOWWINDOW 0x0040
 #define SWP_HIDEWINDOW 0x0080
+#define SWP_FRAMECHANGED 0x0020
 #define MONITOR_DEFAULTTONULL 0
 #define MONITOR_DEFAULTTONEAREST 2
 #define WM_MOVE 0x0003
@@ -143,6 +149,8 @@ typedef struct {
 #define WM_WINDOWPOSCHANGED 0x0047
 #define WM_SHOWWINDOW 0x0018
 #define WS_VISIBLE 0x10000000
+#define WS_CLIPCHILDREN 0x02000000
+#define WS_BORDER 0x00800000
 #define SW_HIDE 0
 #define SW_SHOWNORMAL 1
 #define SW_SHOWNOACTIVATE 4
@@ -153,6 +161,11 @@ typedef struct {
 #define ERROR_TLW_WITH_WSCHILD 1406
 #define ERROR_CANNOT_FIND_WND_CLASS 1407
 #define COLOR_WINDOW 5
+#define WM_ERASEBKGND 0x0014
+#define OBJ_BRUSH 2
+#define PATCOPY 0x00F00021
+#define BLACKNESS 0x00000042
+#define COLOR_HIGHLIGHT 13
 #define WM_CREATE 0x0001
 #define WM_GETMINMAXINFO 0x0024
 #define WM_NCCALCSIZE 0x0083
@@ -181,6 +194,10 @@ __declspec(dllimport) BOOL __stdcall GetClassInfoExW(HINSTANCE instance, const W
 __declspec(dllimport) BOOL __stdcall GetClientRect(HWND window, RECT *rect);
 __declspec(dllimport) HWND __stdcall GetParent(HWND window);
 __declspec(dllimport) DWORD __stdcall GetSysColor(int index);
+__declspec(dllimport) HBRUSH __stdcall GetSysColorBrush(int index);
+__declspec(dllimport) int __stdcall GetClipBox(HDC dc, RECT *rect);
+__declspec(dllimport) DWORD __stdcall GetObjectType(HGDIOBJ object);
+__declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int height, DWORD rop);
 __declspec(dllimport) int __stdcall GetSystemMetrics(int index);
 __declspec(dllimport) HWND __stdcall GetWindow(HWND window, UINT command);
 __declspec(dllimport) LONG __stdcall GetWindowLongW(HWND window, int index);
@@ -220,6 +237,8 @@ void *memcpy(void *destination, const void *source, unsigned int count)
 }
 
 static const WCHAR CLASS_NAME[] = L"MinoTestWindow";
+/* A class whose windows draw stripes on their background. */
+static const WCHAR STRIPED_CLASS[] = L"MinoStriped";
 static const WCHAR WINDOW_NAME[] = L"Mino";
 #define CREATE_PARAMETER ((void *)0x1234)
 
@@ -249,6 +268,10 @@ static LPARAM sized_l;
 static WINDOWPOS changed;
 /* What the last WM_SHOWWINDOW gave. */
 static WPARAM shown_w;
+/* The DC of the last WM_ERASEBKGND, and GetClipBox of it then. */
+static HDC erased_dc;
+static int erased_region;
+static RECT erased_box;
 
 /* Prints the messages received since the last time. */
 static void print_messages(const char *what)
@@ -288,6 +311,10 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
         changed = *(const WINDOWPOS *)l;
     if (message == WM_SHOWWINDOW)
         shown_w = w;
+    if (message == WM_ERASEBKGND) {
+        erased_dc = (HDC)w;
+        erased_region = GetClipBox(erased_dc, &erased_box);
+    }
     if (message == WM_GETMINMAXINFO) {
         MINMAXINFO *info = (MINMAXINFO *)l;
         limits = *info;
@@ -311,6 +338,25 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
     if (message == WM_CREATE && ((const CREATESTRUCTW *)l)->style == (LONG)WS_OVERLAPPEDWINDOW)
         check_caption_state();
     return DefWindowProcW(window, message, w, l);
+}
+
+/* A window of the striped class erases its client area like the others,
+   with its class brush, then draws 24 black lines at its top, one PatBlt
+   each: more than a batch holds (GDI_BATCH_LIMIT, 20), so that gdi32 asks
+   win32k to run the batch (NtGdiFlush) before queuing again; then a line
+   under them with the DC's own brush (WHITE_BRUSH, FillRect having put it
+   back). */
+static LRESULT __stdcall striped_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
+{
+    LRESULT result = window_procedure(window, message, w, l);
+    int i;
+
+    if (message == WM_ERASEBKGND) {
+        for (i = 0; i < 24; i++)
+            PatBlt((HDC)w, 2 * i, 0, 1, 5, BLACKNESS);
+        PatBlt((HDC)w, 0, 6, 48, 1, PATCOPY);
+    }
+    return result;
 }
 
 /* The TEB of the current thread. */
@@ -623,6 +669,24 @@ static void check_set_window_pos(HWND window, HWND popup)
     DbgPrint("[gui] SetWindowPos after no window: %d (%lu)\n", done, GetLastError());
 }
 
+/* What GetClipBox gave of the DC of the last WM_ERASEBKGND, then of the
+   same DC once given back, which PatBlt cannot use either (gdi32 finds no
+   attributes and asks NtGdiPatBlt). */
+static void print_erased(const char *what)
+{
+    RECT after;
+    int region = GetClipBox(erased_dc, &after);
+    BOOL painted;
+    DWORD error;
+
+    SetLastError(0);
+    painted = PatBlt(erased_dc, 0, 0, 10, 10, PATCOPY);
+    error = GetLastError();
+    DbgPrint("[gui] %s: %s, GetClipBox %d: %ld %ld %ld %ld; after: %d, PatBlt %d (%lu)\n", what,
+             ((DWORD)erased_dc & 0x7F0000) == 0x10000 ? "a DC" : "WRONG", erased_region, erased_box.left,
+             erased_box.top, erased_box.right, erased_box.bottom, region, painted, error);
+}
+
 /* The Z order of two windows, and showing and hiding one. */
 static void check_z_order(HINSTANCE instance)
 {
@@ -673,6 +737,9 @@ static void check_default_place(HINSTANCE instance)
 static void check_show_window(HINSTANCE instance, HWND popup)
 {
     HWND child = GetWindow(popup, GW_CHILD);
+    HWND pending;
+    HWND clipper;
+    HWND cover;
     HWND window = CreateWindowExW(0, CLASS_NAME, L"Shown", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, 0,
                                   0, instance, 0);
     BOOL was;
@@ -707,6 +774,7 @@ static void check_show_window(HINSTANCE instance, HWND popup)
     /* Shown by SetWindowPos: its WM_SIZE and WM_MOVE still wait, through
        hiding, for ShowWindow to show it. */
     window = CreateWindowExW(0, CLASS_NAME, L"Pending", WS_OVERLAPPEDWINDOW, 0, 0, 200, 100, 0, 0, instance, 0);
+    pending = window;
     SetWindowPos(window, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     received_count = 0;
     ShowWindow(window, SW_HIDE);
@@ -728,6 +796,29 @@ static void check_show_window(HINSTANCE instance, HWND popup)
     print_messages("created visible, SW_SHOWNOACTIVATE");
     DbgPrint("[gui] created visible: visible %d, WINDOWPOS flags %04x\n", visible, changed.flags);
     print_rect("created visible", window);
+    /* Its client area erased with a DC of the client area, a simple region,
+       given back after. */
+    print_erased("WM_ERASEBKGND of \"Visible\"");
+    /* Its frame painted again under "Visible": clipped by the window above,
+       its client area too (an L: a complex region). */
+    received_count = 0;
+    SetWindowPos(pending, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    print_messages("SWP_FRAMECHANGED under another window");
+    print_erased("WM_ERASEBKGND under another window");
+    /* A framed child sticking out of its parent's client area: clipped to it.
+       The parent clips its children, so the child paints at once. */
+    clipper = CreateWindowExW(0, CLASS_NAME, L"Clipper", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE, 1050, 100,
+                              200, 150, 0, 0, instance, 0);
+    CreateWindowExW(0, CLASS_NAME, L"Framed", WS_CHILD | WS_VISIBLE | WS_BORDER, -10, -10, 50, 50, clipper, 0,
+                    instance, 0);
+    /* Its frame changed, the parent erases its client area again around its
+       child, which keeps its border. */
+    SetWindowPos(clipper, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    /* Shown over "Visible", then hidden: the desktop does not paint over
+       "Visible" (which is not painted again yet). */
+    cover = CreateWindowExW(0, STRIPED_CLASS, L"Cover", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 400, 300, 200, 100, 0, 0,
+                            instance, 0);
+    ShowWindow(cover, SW_HIDE);
     received_count = 0;
     window = CreateWindowExW(0, CLASS_NAME, L"Popup", WS_POPUP | WS_VISIBLE, 10, 10, 50, 50, 0, 0, instance, 0);
     visible = IsWindowVisible(window);
@@ -750,6 +841,11 @@ DWORD __stdcall GuiStartup(void)
     DbgPrint("[gui] GetSystemMetrics: screen %dx%d, caption %d, frame %d, minimum width %d\n", GetSystemMetrics(0),
              GetSystemMetrics(1), GetSystemMetrics(4), GetSystemMetrics(32), GetSystemMetrics(34));
     DbgPrint("[gui] GetSysColor: %06lx %06lx %06lx\n", GetSysColor(1), GetSysColor(5), GetSysColor(15));
+    /* A stock brush, public in the GDI handle table that gdi32 reads; an
+       entry never given out, nothing. */
+    DbgPrint("[gui] GetSysColorBrush(COLOR_WINDOW): %s, GetObjectType %lu; of no brush %lu\n",
+             ((DWORD)GetSysColorBrush(COLOR_WINDOW) >> 16) == 0x90 ? "a stock brush" : "WRONG",
+             GetObjectType(GetSysColorBrush(COLOR_WINDOW)), GetObjectType((HGDIOBJ)0x00100FFF));
 
     memset(&class_info, 0, sizeof class_info);
     class_info.cbSize = sizeof class_info;
@@ -762,6 +858,11 @@ DWORD __stdcall GuiStartup(void)
     if (!atom)
         ExitProcess(2);
     check_classes(instance, atom, &class_info);
+    class_info.lpfnWndProc = striped_procedure;
+    class_info.hbrBackground = (HBRUSH)(COLOR_HIGHLIGHT + 1);
+    class_info.lpszClassName = STRIPED_CLASS;
+    if (!RegisterClassExW(&class_info))
+        ExitProcess(2);
 
     SetLastError(0);
     window = CreateWindowExW(0, CLASS_NAME, WINDOW_NAME, WS_POPUP, 100, 50, 400, 300, 0, 0, instance,

@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 37 | 737 |
+| win32k | 40 | 737 |
 
 ## ntoskrnl
 
@@ -466,12 +466,12 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1093` | `NtGdiFillPath` | 1 |  |
 | `0x1094` | `NtGdiFillRgn` | 3 |  |
 | `0x1095` | `NtGdiFlattenPath` | 1 |  |
-| `0x1096` | `NtGdiFlush` | 0 |  |
+| `0x1096` | `NtGdiFlush` | 0 | ✅ |
 | `0x1097` | `NtGdiForceUFIMapping` | 2 |  |
 | `0x1098` | `NtGdiFrameRgn` | 5 |  |
 | `0x1099` | `NtGdiFullscreenControl` | 5 |  |
 | `0x109a` | `NtGdiGetAndSetDCDword` | 4 |  |
-| `0x109b` | `NtGdiGetAppClipBox` | 2 |  |
+| `0x109b` | `NtGdiGetAppClipBox` | 2 | ✅ |
 | `0x109c` | `NtGdiGetBitmapBits` | 3 |  |
 | `0x109d` | `NtGdiGetBitmapDimension` | 2 |  |
 | `0x109e` | `NtGdiGetBoundsRect` | 3 |  |
@@ -549,7 +549,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10e6` | `NtGdiOffsetClipRgn` | 3 |  |
 | `0x10e7` | `NtGdiOffsetRgn` | 3 |  |
 | `0x10e8` | `NtGdiOpenDCW` | 7 |  |
-| `0x10e9` | `NtGdiPatBlt` | 6 |  |
+| `0x10e9` | `NtGdiPatBlt` | 6 | ✅ |
 | `0x10ea` | `NtGdiPolyPatBlt` | 5 |  |
 | `0x10eb` | `NtGdiPathToRegion` | 1 |  |
 | `0x10ec` | `NtGdiPlgBlt` | 11 |  |
