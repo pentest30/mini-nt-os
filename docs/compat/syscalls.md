@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 36 | 737 |
+| win32k | 37 | 737 |
 
 ## ntoskrnl
 
@@ -867,7 +867,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1224` | `NtUserSetWinEventHook` | 8 |  |
 | `0x1225` | `NtUserShowCaret` | 1 |  |
 | `0x1226` | `NtUserShowScrollBar` | 3 |  |
-| `0x1227` | `NtUserShowWindow` | 2 |  |
+| `0x1227` | `NtUserShowWindow` | 2 | ✅ |
 | `0x1228` | `NtUserShowWindowAsync` | 2 |  |
 | `0x1229` | `NtUserSoundSentry` | 0 |  |
 | `0x122a` | `NtUserSwitchDesktop` | 1 | ✅ |

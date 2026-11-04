@@ -221,6 +221,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
     (services::NtUserSetWindowPos, Handler::Status(window::nt_user_set_window_pos)),
     (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
+    (services::NtUserShowWindow, Handler::Status(window::nt_user_show_window)),
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
     (services::NtUserWaitMessage, Handler::Status(message::nt_user_wait_message)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),
