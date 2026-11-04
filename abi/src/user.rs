@@ -452,7 +452,8 @@ pub const HWND_BOTTOM: u32 = 1;
 pub const HWND_TOPMOST: u32 = 0xFFFF_FFFF;
 pub const HWND_NOTOPMOST: u32 = 0xFFFF_FFFE;
 /// STARTF_*, the `WindowFlags` of the process parameters that give the
-/// first overlapped window its place and size.
+/// first overlapped window its show command, place and size.
+pub const STARTF_USESHOWWINDOW: u32 = 0x0000_0001;
 pub const STARTF_USESIZE: u32 = 0x0000_0002;
 pub const STARTF_USEPOSITION: u32 = 0x0000_0004;
 
@@ -501,6 +502,7 @@ pub const WS_OVERLAPPEDWINDOW: u32 = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | W
 pub const WS_EX_DLGMODALFRAME: u32 = 0x0000_0001;
 pub const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
 pub const WS_EX_TOPMOST: u32 = 0x0000_0008;
+pub const WS_EX_MDICHILD: u32 = 0x0000_0040;
 pub const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 pub const WS_EX_CLIENTEDGE: u32 = 0x0000_0200;
 pub const WS_EX_LEFTSCROLLBAR: u32 = 0x0000_4000;
@@ -568,10 +570,25 @@ pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_NCCREATE: u32 = 0x0081;
 pub const WM_MOVE: u32 = 0x0003;
 pub const WM_SIZE: u32 = 0x0005;
+pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_CHILDACTIVATE: u32 = 0x0022;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
 pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+/// SW_*, the commands of ShowWindow; SW_MAX the last one.
+pub const SW_HIDE: u32 = 0;
+pub const SW_SHOWNORMAL: u32 = 1;
+pub const SW_SHOWMINIMIZED: u32 = 2;
+pub const SW_SHOWMAXIMIZED: u32 = 3;
+pub const SW_SHOWNOACTIVATE: u32 = 4;
+pub const SW_SHOW: u32 = 5;
+pub const SW_MINIMIZE: u32 = 6;
+pub const SW_SHOWMINNOACTIVE: u32 = 7;
+pub const SW_SHOWNA: u32 = 8;
+pub const SW_RESTORE: u32 = 9;
+pub const SW_SHOWDEFAULT: u32 = 10;
+pub const SW_FORCEMINIMIZE: u32 = 11;
+pub const SW_MAX: u32 = 11;
 /// SIZE_*, the `wParam` of WM_SIZE: restored, minimized, maximized.
 pub const SIZE_RESTORED: u32 = 0;
 pub const SIZE_MINIMIZED: u32 = 1;
