@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 43 | 737 |
+| win32k | 48 | 737 |
 
 ## ntoskrnl
 
@@ -631,7 +631,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1138` | `NtUserBuildNameList` | 4 |  |
 | `0x1139` | `NtUserBuildPropList` | 4 |  |
 | `0x113a` | `NtUserCallHwnd` | 2 |  |
-| `0x113b` | `NtUserCallHwndLock` | 2 |  |
+| `0x113b` | `NtUserCallHwndLock` | 2 | ✅ |
 | `0x113c` | `NtUserCallHwndOpt` | 2 |  |
 | `0x113d` | `NtUserCallHwndParam` | 3 |  |
 | `0x113e` | `NtUserCallHwndParamLock` | 3 |  |
@@ -752,7 +752,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11b1` | `NtUserGetThreadDesktop` | 2 |  |
 | `0x11b2` | `NtUserGetThreadState` | 1 |  |
 | `0x11b3` | `NtUserGetTitleBarInfo` | 2 |  |
-| `0x11b4` | `NtUserGetUpdateRect` | 3 |  |
+| `0x11b4` | `NtUserGetUpdateRect` | 3 | ✅ |
 | `0x11b5` | `NtUserGetUpdateRgn` | 3 |  |
 | `0x11b6` | `NtUserGetWindowDC` | 1 |  |
 | `0x11b7` | `NtUserGetWindowPlacement` | 2 |  |
@@ -765,7 +765,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11be` | `NtUserInitializeClientPfnArrays` | 4 | ✅ |
 | `0x11bf` | `NtUserInitTask` | 12 |  |
 | `0x11c0` | `NtUserInternalGetWindowText` | 3 |  |
-| `0x11c1` | `NtUserInvalidateRect` | 3 |  |
+| `0x11c1` | `NtUserInvalidateRect` | 3 | ✅ |
 | `0x11c2` | `NtUserInvalidateRgn` | 3 |  |
 | `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 |  |
 | `0x11c4` | `NtUserKillTimer` | 2 |  |
@@ -801,7 +801,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e2` | `NtUserRealChildWindowFromPoint` | 3 |  |
 | `0x11e3` | `NtUserRealInternalGetMessage` | 6 |  |
 | `0x11e4` | `NtUserRealWaitMessageEx` | 2 |  |
-| `0x11e5` | `NtUserRedrawWindow` | 4 |  |
+| `0x11e5` | `NtUserRedrawWindow` | 4 | ✅ |
 | `0x11e6` | `NtUserRegisterClassExWOW` | 7 | ✅ |
 | `0x11e7` | `NtUserRegisterUserApiHook` | 4 |  |
 | `0x11e8` | `NtUserRegisterHotKey` | 4 |  |
@@ -897,7 +897,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1242` | `NtUserUpdatePerUserSystemParameters` | 2 |  |
 | `0x1243` | `NtUserUserHandleGrantAccess` | 3 |  |
 | `0x1244` | `NtUserValidateHandleSecure` | 1 |  |
-| `0x1245` | `NtUserValidateRect` | 2 |  |
+| `0x1245` | `NtUserValidateRect` | 2 | ✅ |
 | `0x1246` | `NtUserValidateTimerCallback` | 1 |  |
 | `0x1247` | `NtUserVkKeyScanEx` | 3 |  |
 | `0x1248` | `NtUserWaitForInputIdle` | 3 |  |
