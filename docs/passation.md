@@ -354,9 +354,13 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] WM_PAINT (M6, étape 8) : le compte des fenêtres à peindre de chaque thread (`QS_PAINT`, tenu à chaque
      changement d'une fenêtre), WM_PAINT tiré par PeekMessage et GetMessage, NtUserDispatchMessage, BeginPaint et
      EndPaint (NtUserBeginPaint, NtUserEndPaint ; DefWindowProc de WM_PAINT) : une fenêtre se peint et se valide ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : InvalidateRect, ValidateRect, RedrawWindow,
-     UpdateWindow et GetUpdateRect (NtUserRedrawWindow, NtUserCallHwndParamLock…), NtUserGetDCEx et
-     NtUserReleaseDC, puis le texte (polices, ADR-013) ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
+   - [x] InvalidateRect, ValidateRect, RedrawWindow, UpdateWindow, GetUpdateRect (M6, étape 9) : la région à
+     mettre à jour est une région ; NtUserRedrawWindow, NtUserInvalidateRect, NtUserValidateRect,
+     NtUserGetUpdateRect, NtUserCallHwndLock (UpdateWindow) ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : NtUserGetDCEx et NtUserReleaseDC (GetDC),
+     les objets région de GDI (InvalidateRgn, GetUpdateRgn), puis le texte (polices, ADR-013), les contrôles et
+     l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
+     nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject, DeleteObject), DC en mémoire, régions de
      GDI et découpage, BitBlt, texte et polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread
@@ -412,8 +416,11 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   copie des bits valides (une fenêtre déplacée est repeinte entière) ; le dégradé n'a de spécification que ses
   bouts (le moteur de ReactOS n'est pas dans les sources épinglées) ; ôter le test de visibilité de WM_NCPAINT ne
   change rien (la région visible d'une fenêtre cachée est vide : mutation équivalente).
-- WM_PAINT (M6, étape 8) : ni InvalidateRect, ni ValidateRect, ni RedrawWindow, ni UpdateWindow, ni
-  GetUpdateRect/GetUpdateRgn, ni WM_SYNCPAINT ; DispatchMessage d'une procédure de minuterie (WM_TIMER) journalisé ;
+- InvalidateRect et RedrawWindow (M6, étape 9) : pas de régions de GDI (InvalidateRgn, ValidateRgn, GetUpdateRgn,
+  RedrawWindow avec une région : refusés, journalisés), pas de fond du bureau repeint à la demande (journalisé), ni
+  WM_SYNCPAINT, ni `WNDS_SYNCPAINTPENDING` ; sans test : `WNDS_UPDATEDIRTY` (un seul thread GUI dans `gui`) ;
+  mutation équivalente : l'effacement oublié quand la validation vide la région.
+- WM_PAINT (M6, étape 8) : ni GetUpdateRgn, ni WM_SYNCPAINT ; DispatchMessage d'une procédure de minuterie (WM_TIMER) journalisé ;
   sans test (mutations qui survivent) : une procédure qui ne fait pas BeginPaint (repeinte par IntDispatchMessage),
   le cadre des enfants repeint par BeginPaint, le DC de BeginPaint coupé à la région à mettre à jour (toujours toute
   la zone cliente), WM_PAINT réservé aux fenêtres du thread (un seul thread GUI dans `gui`).

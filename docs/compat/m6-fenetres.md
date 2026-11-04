@@ -355,3 +355,44 @@ GUI).
 Tests : hôte (`queue` : compte et `QS_PAINT` ; `paint` : fenêtre à peindre, filtre de WM_PAINT ; `dce` : coupe d'un
 DC ; `gui` : thread d'une adresse du serveur ; `abi::user` : `PAINTSTRUCT`) ; le scénario `gui`, sur les deux CPU, avec
 les fenêtres peintes par la boucle de messages et 36 pixels de la capture.
+
+## Étape 9 : InvalidateRect, ValidateRect, RedrawWindow, UpdateWindow, GetUpdateRect
+
+Le client demande lui-même à repeindre : `user32` passe InvalidateRect, ValidateRect et RedrawWindow à
+NtUserInvalidateRect, NtUserValidateRect et NtUserRedrawWindow, UpdateWindow à NtUserCallHwndLock
+(`HWNDLOCK_ROUTINE_UPDATEWINDOW`, 0x5E), GetUpdateRect à NtUserGetUpdateRect ; il lit d'abord lui-même `WND.hrgnUpdate`
+(0x68) et l'enfant (`spwndChild`, 0x38) pour ne pas appeler le noyau sans rien à faire. Comme ReactOS (`painting.c`,
+`simplecall.c`, comme spécification) :
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `win32k::gdi::region` | l'union d'une région et d'un rectangle (ses rectangles restent disjoints), son rectangle englobant |
+| `win32k::window` | la région à mettre à jour devient une région (dans la zone cliente, depuis son coin) ; `WND.hrgnUpdate` vaut `HRGN_WINDOW` tant qu'elle n'est pas vide, faute d'objets région de GDI (`user32` ne fait que le comparer à NULL) |
+| `win32k::paint` | IntInvalidateWindows (`RDW_INVALIDATE`, `RDW_FRAME`, `RDW_ERASE`, `RDW_INTERNALPAINT` ; `RDW_VALIDATE`, `RDW_NOFRAME`, `RDW_NOERASE`, `RDW_NOINTERNALPAINT` ; les enfants visibles, sauf `RDW_NOCHILDREN` ou ceux d'un parent à `WS_CLIPCHILDREN` sans `RDW_ALLCHILDREN` ; `WNDS_UPDATEDIRTY` pour une fenêtre d'un autre thread), co_UserRedrawWindow (le rectangle ou la fenêtre, puis `RDW_UPDATENOW` ou `RDW_ERASENOW` ; rien pour une fenêtre qu'on ne voit pas), co_IntUpdateWindows (WM_PAINT envoyé aussitôt, puis aux enfants ; IntValidateParents), co_UserGetUpdateRect (le rectangle englobant, coupé à la zone cliente et aux parents ; `bErase` : cadre et fond d'abord) ; l'invalidation d'une fenêtre montrée ou déplacée y passe aussi |
+| `sys::window` | NtUserRedrawWindow (drapeaux vérifiés : `ERROR_INVALID_FLAGS`), NtUserInvalidateRect, NtUserValidateRect (hWnd nul : tout le bureau), NtUserGetUpdateRect, NtUserCallHwndLock (`UPDATEWINDOW` ; les autres routines journalisées) |
+
+Dans `gui`, après la boucle de messages : deux rectangles disjoints invalidés dans « Visible » donnent un rectangle
+englobant de 10, 10 à 120, 60 ; validés l'un après l'autre, il ne reste rien (une région, non un rectangle) et
+`QS_PAINT` s'éteint. UpdateWindow du popup invalidé et à effacer lui envoie WM_PAINT aussitôt (`000f 0014`) : son
+premier carré disparaît, le second est dessiné 12 pixels plus loin. RedrawWindow(`RDW_ERASENOW`) d'un coin de 5 × 5
+pixels l'efface aussitôt (`0014`, visible sur la capture) sans le valider (GetUpdateRect : 12, 0, 17, 5 ; `QS_PAINT`) ;
+GetUpdateRect(`TRUE`) l'efface de nouveau ; ValidateRect le valide. `RDW_UPDATENOW` avec `RDW_FRAME` : WM_PAINT, où
+BeginPaint repeint le cadre et efface (`000f 0085 0014`). `RDW_INTERNALPAINT` : pas de région, mais `QS_PAINT` et
+WM_PAINT, puis plus rien. « Clipper » (`WS_CLIPCHILDREN`) n'invalide sa fille qu'avec `RDW_ALLCHILDREN`, et
+UpdateWindow les peint l'un puis l'autre (`000f 0014 000f 0085 0014` : la fille invalidée avec son cadre). Une
+fenêtre jamais montrée n'est pas invalidée ; un drapeau inconnu est refusé (1004). InvalidateRect sans effacer :
+WM_PAINT n'efface pas (`000f`) ; un fond à effacer, validé, ne l'est plus. Un parent sans `WS_CLIPCHILDREN`
+invalide sa fille ; UpdateWindow de la fille valide sa part dans la région du parent (il lui reste 0, 20, 192, 72) ;
+sa procédure ne faisant pas BeginPaint, son cadre et son fond sont repeints quand même (`000f 0085 0014`), et elle
+reste à peindre.
+
+Ce qui manque : InvalidateRgn, ValidateRgn, GetUpdateRgn et RedrawWindow avec une région (pas encore d'objets région
+de GDI : `ERROR_NOT_ENOUGH_MEMORY`, journalisé une fois), le fond du bureau repeint à la demande (RedrawWindow,
+InvalidateRect de NULL : journalisé une fois ; ses fenêtres le sont), WM_SYNCPAINT et `WNDS_SYNCPAINTPENDING`, la
+région de fenêtre (SetWindowRgn), le passage en coordonnées logiques d'une fenêtre `CS_OWNDC` dans GetUpdateRect.
+Sans test : la validation refusée d'une fenêtre invalidée par un autre thread (`WNDS_UPDATEDIRTY` : `gui` n'a qu'un
+thread GUI). Mutation équivalente : ôter l'effacement oublié quand la validation vide la région (BeginPaint n'efface
+pas une région vide, et le cadre et le fond repeints aussitôt oublient eux-mêmes un fond sans région).
+
+Tests : hôte (`gdi::region` : union disjointe, rectangle englobant ; `window` : région à mettre à jour ;
+`paint` : région de l'écran dans la zone cliente) ; le scénario `gui`, sur les deux CPU, avec 42 pixels de la capture.
