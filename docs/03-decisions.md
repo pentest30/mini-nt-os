@@ -23,7 +23,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 010 | Pas de fichier d'échange au début | Acceptée |
 | 011 | Sécurité : structures complètes, application permissive au début | Acceptée |
 | 012 | Registre au format `regf`, ruches générées par `mkhive` | Acceptée |
-| 013 | Polices : rastériseur TrueType en Rust dans win32k | Proposée |
+| 013 | Polices : rastériseur TrueType en Rust dans win32k | Acceptée |
 | 014 | Noyau en ELF lié dans les 2 Gio supérieurs, sans mapping identité | Acceptée |
 | 015 | Un seul CPU d'abord, mais conçu pour le SMP | Acceptée |
 | 016 | Chaîne Rust : nightly épinglé, dépendances `no_std` auditées | Acceptée |
@@ -210,13 +210,29 @@ ReactOS fournit tout cet espace utilisateur, écrit contre l'ABI d'un noyau NT. 
 
 ---
 
-## ADR-013 — Polices : rastériseur TrueType en Rust dans win32k (proposée)
+## ADR-013 — Polices : rastériseur TrueType en Rust dans win32k
 
-**Décision.** On parse les polices avec `ttf-parser` (`no_std`) et on les rastérise avec un rastériseur Rust (`ab_glyph_rasterizer` ou un rastériseur maison), avec mise en cache des glyphes. Le hinting est remplacé par un antialiasing en niveaux de gris, puis ClearType si nécessaire.
+**Statut.** Acceptée par le mainteneur le 2026-11-04, avec les précisions ci-dessous.
 
-**Alternative.** FreeType en C lié au noyau, comme ReactOS. On l'écarte : c'est du C non sûr en ring 0.
+**Décision.**
+- On parse les polices avec `ttf-parser` (`no_std`, déjà autorisée par l'ADR-016).
+- On les rastérise avec un rastériseur maison, en virgule fixe, avec antialiasing en niveaux de gris et mise en cache
+  des glyphes. Il ne demande aucune nouvelle dépendance. La cible du noyau calcule les flottants en logiciel : les
+  coordonnées `f32` que donne `ttf-parser` sont converties une fois, et le cache évite d'y revenir. Le rastériseur vit
+  dans une bibliothèque `no_std` testée sur l'hôte (rendus de référence).
+- Pas de hinting TrueType au début : son interpréteur de bytecode est un projet à lui seul. L'antialiasing en niveaux de
+  gris le remplace. ClearType et un rendu monochrome (`NONANTIALIASED_QUALITY`) viendront si nécessaire.
+- Les polices sont celles de ReactOS épinglé (`\SystemRoot\Fonts`). Ce sont des substituts libres qui portent les noms
+  d'XP, vérifiés un par un : Tahoma de Wine (LGPL) ; Arial et Times New Roman de Liberation (OFL) ; Courier New de
+  GNU FreeFont ; Verdana et Lucida Console de DejaVu ; Marlett de Wine et ReactOS. Aucune ressource Microsoft.
 
-**À valider :** le rendu de Tahoma et de ses substituts libres, ainsi que la métrique exacte de `GetTextExtentPoint32` (des boîtes de dialogue en dépendent).
+**Alternatives écartées.**
+- FreeType en C lié au noyau, comme ReactOS : c'est du C non sûr en ring 0.
+- `ab_glyph_rasterizer` : une dépendance de plus (ADR-016), en flottants, pour quelques centaines de lignes.
+
+**À valider** à l'étape du texte, par des tests et des scénarios : le rendu de Tahoma et de ses substituts libres aux
+petites tailles, sans hinting ; la métrique exacte de `GetTextExtentPoint32` et de `GetTextMetrics` (les unités des
+boîtes de dialogue en dépendent).
 
 ---
 
