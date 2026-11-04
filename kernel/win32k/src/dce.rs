@@ -75,19 +75,27 @@ pub fn effective_flags(flags: u32, style: u32, class_style: u32) -> u32 {
     flags
 }
 
+/// DceUpdateVisRgn : `visible` coupé à `clip` (`DCX_INTERSECTRGN` : rien
+/// sans région) ou privé de lui (`DCX_EXCLUDERGN`).
+pub fn cut(visible: Region, flags: u32, clip: Option<&Region>) -> Region {
+    if flags & DCX_INTERSECTRGN != 0 {
+        return clip.map_or_else(Region::default, |clip| visible.intersect(clip));
+    }
+    let mut visible = visible;
+    if let Some(clip) = clip.filter(|_| flags & DCX_EXCLUDERGN != 0) {
+        visible.subtract(clip);
+    }
+    visible
+}
+
 /// La région d'un DC de `window` pris avec `flags` (`DCX_*` déjà
 /// effectifs) : ce qu'on en voit, sa zone cliente sans `DCX_WINDOW`, coupé
-/// à `clip` (à l'écran) par `DCX_INTERSECTRGN` ou privé de lui par
-/// `DCX_EXCLUDERGN`. Rend aussi l'origine du DC.
+/// par `clip` (à l'écran, [`cut`]). Rend aussi l'origine du DC.
 fn visible(window: &Window, flags: u32, clip: Option<&Region>) -> (Region, (i32, i32)) {
     let client = flags & DCX_WINDOW == 0;
-    let mut region =
+    let region =
         crate::paint::visible_region(window, client, flags & DCX_CLIPCHILDREN != 0, flags & DCX_CLIPSIBLINGS != 0);
-    match clip {
-        Some(clip) if flags & DCX_INTERSECTRGN != 0 => region = region.intersect(clip),
-        Some(clip) if flags & DCX_EXCLUDERGN != 0 => region.subtract(clip),
-        _ => {}
-    }
+    let region = cut(region, flags, clip);
     let state = window.state();
     let corner = if client { state.client } else { state.window };
     (region, (corner.left, corner.top))
@@ -187,6 +195,18 @@ mod tests {
         let flags = DCX_WINDOW | DCX_USESTYLE;
         assert_eq!(effective_flags(flags, WS_CLIPCHILDREN, CS_PARENTDC | CS_OWNDC), flags | DCX_CACHE);
         assert_eq!(effective_flags(flags, WS_CLIPSIBLINGS, 0), flags | DCX_CACHE | DCX_CLIPSIBLINGS);
+    }
+
+    #[test]
+    fn a_dc_is_cut_to_a_region_or_without_it() {
+        use crate::gdi::dib::Rect;
+        let visible = || Region::from_rect(Rect::new(0, 0, 100, 100));
+        let clip = Region::from_rect(Rect::new(50, 50, 200, 200));
+        assert_eq!(cut(visible(), DCX_INTERSECTRGN, Some(&clip)).rects(), [Rect::new(50, 50, 100, 100)]);
+        assert!(cut(visible(), DCX_INTERSECTRGN, None).is_empty(), "nothing to intersect with: nothing");
+        assert_eq!(cut(visible(), DCX_EXCLUDERGN, Some(&clip)).area(), 100 * 100 - 50 * 50);
+        assert_eq!(cut(visible(), DCX_EXCLUDERGN, None), visible(), "nothing to exclude");
+        assert_eq!(cut(visible(), 0, Some(&clip)), visible(), "the region unused");
     }
 
     #[test]

@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 40 | 737 |
+| win32k | 43 | 737 |
 
 ## ntoskrnl
 
@@ -623,7 +623,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1130` | `NtUserAlterWindowStyle` | 3 |  |
 | `0x1131` | `NtUserAssociateInputContext` | 3 |  |
 | `0x1132` | `NtUserAttachThreadInput` | 3 |  |
-| `0x1133` | `NtUserBeginPaint` | 2 |  |
+| `0x1133` | `NtUserBeginPaint` | 2 | ✅ |
 | `0x1134` | `NtUserBitBltSysBmp` | 8 |  |
 | `0x1135` | `NtUserBlockInput` | 1 |  |
 | `0x1136` | `NtUserBuildHimcList` | 4 |  |
@@ -672,7 +672,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1161` | `NtUserDestroyMenu` | 1 |  |
 | `0x1162` | `NtUserDestroyWindow` | 1 |  |
 | `0x1163` | `NtUserDisableThreadIme` | 1 |  |
-| `0x1164` | `NtUserDispatchMessage` | 1 |  |
+| `0x1164` | `NtUserDispatchMessage` | 1 | ✅ |
 | `0x1165` | `NtUserDragDetect` | 3 |  |
 | `0x1166` | `NtUserDragObject` | 5 |  |
 | `0x1167` | `NtUserDrawAnimatedRects` | 4 |  |
@@ -685,7 +685,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116e` | `NtUserEnableScrollBar` | 3 |  |
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
 | `0x1170` | `NtUserEndMenu` | 0 |  |
-| `0x1171` | `NtUserEndPaint` | 2 |  |
+| `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 |  |
 | `0x1173` | `NtUserEnumDisplayMonitors` | 5 |  |
 | `0x1174` | `NtUserEnumDisplaySettings` | 4 |  |

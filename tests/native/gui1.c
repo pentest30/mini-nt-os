@@ -73,6 +73,24 @@ typedef struct {
 } POINT;
 
 typedef struct {
+    HWND hwnd;
+    UINT message;
+    WPARAM wParam;
+    LPARAM lParam;
+    DWORD time;
+    POINT pt;
+} MSG;
+
+typedef struct {
+    HDC hdc;
+    BOOL fErase;
+    RECT rcPaint;
+    BOOL fRestore;
+    BOOL fIncUpdate;
+    unsigned char rgbReserved[32];
+} PAINTSTRUCT;
+
+typedef struct {
     POINT ptReserved;
     POINT ptMaxSize;
     POINT ptMaxPosition;
@@ -165,6 +183,10 @@ typedef struct {
 #define OBJ_BRUSH 2
 #define PATCOPY 0x00F00021
 #define BLACKNESS 0x00000042
+#define WM_PAINT 0x000F
+#define PM_REMOVE 0x0001
+#define PM_NOREMOVE 0x0000
+#define QS_PAINT 0x0020
 #define COLOR_HIGHLIGHT 13
 #define WM_CREATE 0x0001
 #define WM_GETMINMAXINFO 0x0024
@@ -195,6 +217,11 @@ __declspec(dllimport) BOOL __stdcall GetClientRect(HWND window, RECT *rect);
 __declspec(dllimport) HWND __stdcall GetParent(HWND window);
 __declspec(dllimport) DWORD __stdcall GetSysColor(int index);
 __declspec(dllimport) HBRUSH __stdcall GetSysColorBrush(int index);
+__declspec(dllimport) HDC __stdcall BeginPaint(HWND window, PAINTSTRUCT *paint);
+__declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *paint);
+__declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
+__declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT min, UINT max, UINT remove);
+__declspec(dllimport) DWORD __stdcall GetQueueStatus(UINT flags);
 __declspec(dllimport) int __stdcall GetClipBox(HDC dc, RECT *rect);
 __declspec(dllimport) DWORD __stdcall GetObjectType(HGDIOBJ object);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int height, DWORD rop);
@@ -268,6 +295,11 @@ static LPARAM sized_l;
 static WINDOWPOS changed;
 /* What the last WM_SHOWWINDOW gave. */
 static WPARAM shown_w;
+/* The window that paints itself in WM_PAINT, and what BeginPaint gave it. */
+static HWND painter;
+static PAINTSTRUCT painted;
+/* A window with WS_CLIPCHILDREN and a child. */
+static HWND clipper_window;
 /* The DC of the last WM_ERASEBKGND, and GetClipBox of it then. */
 static HDC erased_dc;
 static int erased_region;
@@ -323,6 +355,14 @@ static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, L
             info->ptMinTrackSize.y = minimum_height;
             return 0;
         }
+    }
+    if (message == WM_PAINT && window == painter) {
+        /* A black square at the top left of its client area, between
+           BeginPaint and EndPaint. */
+        HDC dc = BeginPaint(window, &painted);
+        PatBlt(dc, 0, 0, 10, 10, BLACKNESS);
+        EndPaint(window, &painted);
+        return 0;
     }
     if ((message == WM_NCCREATE || message == WM_CREATE) && ((const CREATESTRUCTW *)l)->style == (LONG)WS_POPUP
         && ((const CREATESTRUCTW *)l)->lpCreateParams == CREATE_PARAMETER) {
@@ -809,6 +849,7 @@ static void check_show_window(HINSTANCE instance, HWND popup)
        The parent clips its children, so the child paints at once. */
     clipper = CreateWindowExW(0, CLASS_NAME, L"Clipper", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_VISIBLE, 1050, 100,
                               200, 150, 0, 0, instance, 0);
+    clipper_window = clipper;
     CreateWindowExW(0, CLASS_NAME, L"Framed", WS_CHILD | WS_VISIBLE | WS_BORDER, -10, -10, 50, 50, clipper, 0,
                     instance, 0);
     /* Its frame changed, the parent erases its client area again around its
@@ -816,14 +857,68 @@ static void check_show_window(HINSTANCE instance, HWND popup)
     SetWindowPos(clipper, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     /* Shown over "Visible", then hidden: the desktop does not paint over
        "Visible" (which is not painted again yet). */
-    cover = CreateWindowExW(0, STRIPED_CLASS, L"Cover", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 400, 300, 200, 100, 0, 0,
+    cover = CreateWindowExW(0, CLASS_NAME, L"Cover", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 400, 300, 200, 100, 0, 0,
                             instance, 0);
     ShowWindow(cover, SW_HIDE);
+    CreateWindowExW(0, STRIPED_CLASS, L"Striped", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 1050, 300, 200, 100, 0, 0,
+                    instance, 0);
     received_count = 0;
     window = CreateWindowExW(0, CLASS_NAME, L"Popup", WS_POPUP | WS_VISIBLE, 10, 10, 50, 50, 0, 0, instance, 0);
     visible = IsWindowVisible(window);
     print_messages("popup created visible");
     DbgPrint("[gui] popup created visible: visible %d, WINDOWPOS flags %04x\n", visible, changed.flags);
+    painter = window;
+}
+
+/* The windows left to paint get WM_PAINT from the message loop, one after
+   the other, until all are validated (DefWindowProc: BeginPaint and
+   EndPaint); "Visible", in which "Cover" left its remains, has its frame
+   painted again and its background erased. The popup paints itself. */
+static void check_paint_messages(void)
+{
+    MSG message;
+    unsigned int paints = 0;
+    DWORD before = GetQueueStatus(QS_PAINT);
+    DWORD after;
+    HWND painted_windows[16];
+    char names[160];
+    char *at = names;
+    unsigned int i;
+
+    /* WM_PAINT goes to the first window to paint (the popup, on top), for a
+       filter that asks for it, its window or a parent of it. */
+    BOOL popup = PeekMessageW(&message, painter, 0, 0, PM_NOREMOVE) && message.hwnd == painter;
+    BOOL other = PeekMessageW(&message, clipper_window, 0, 0, PM_NOREMOVE);
+    BOOL thread = PeekMessageW(&message, (HWND)-1, 0, 0, PM_NOREMOVE);
+    BOOL above = PeekMessageW(&message, 0, WM_PAINT + 1, 0x400, PM_NOREMOVE);
+    BOOL range = PeekMessageW(&message, 0, WM_PAINT, WM_PAINT, PM_NOREMOVE) && message.message == WM_PAINT;
+
+    DbgPrint("[gui] PeekMessage of WM_PAINT: the popup %d, another window %d, the thread %d, above %d, WM_PAINT %d\n",
+             popup, other, thread, above, range);
+    received_count = 0;
+    while (paints < 16 && PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {
+        if (message.message == WM_PAINT)
+            painted_windows[paints++] = message.hwnd;
+        DispatchMessageW(&message);
+    }
+    after = GetQueueStatus(QS_PAINT);
+    print_messages("the message loop");
+    /* Their names, in ASCII, once the messages are printed. */
+    for (i = 0; i < paints; i++) {
+        WCHAR name[16];
+        int j, length = GetWindowTextW(painted_windows[i], name, 16);
+        for (j = 0; j < length && at < names + sizeof names - 2; j++)
+            *at++ = (char)name[j];
+        *at++ = ' ';
+    }
+    *at = 0;
+    DbgPrint("[gui] WM_PAINT %u times: %s; GetQueueStatus(QS_PAINT) %08lx, then %08lx\n", paints, names, before,
+             after);
+    SetLastError(0);
+    i = PatBlt(painted.hdc, 0, 0, 1, 1, BLACKNESS);
+    DbgPrint("[gui] BeginPaint of the popup: %s, fErase %d, rcPaint %ld %ld %ld %ld; after EndPaint, PatBlt %u (%lu)\n",
+             ((DWORD)painted.hdc & 0x7F0000) == 0x10000 ? "a DC" : "WRONG", painted.fErase, painted.rcPaint.left,
+             painted.rcPaint.top, painted.rcPaint.right, painted.rcPaint.bottom, i, GetLastError());
 }
 
 DWORD __stdcall GuiStartup(void)
@@ -880,6 +975,7 @@ DWORD __stdcall GuiStartup(void)
     }
     check_z_order(instance);
     check_show_window(instance, window);
+    check_paint_messages();
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);
