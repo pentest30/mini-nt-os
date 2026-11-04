@@ -1,3 +1,4 @@
+<img width="1280" height="800" alt="image-1793803234557" src="https://github.com/user-attachments/assets/eac90518-3542-43a1-8c78-4753d612cc12" />
 # Mino (mini-nt-os)
 
 **Mino est un système d'exploitation libre, compatible XP, dont le noyau est écrit en Rust.**
