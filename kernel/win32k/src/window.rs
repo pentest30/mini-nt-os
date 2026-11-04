@@ -30,7 +30,8 @@
 //! prend sa place et sa taille sur le moniteur ([`fix_coordinates`],
 //! [`crate::monitor`]).
 //!
-//! Une fenêtre créée visible est montrée (`crate::winpos::show_window`).
+//! Une fenêtre créée visible est montrée (`crate::winpos::show_window`) ; son
+//! cadre se peint dans le noyau (`crate::paint`), pas encore sa zone cliente.
 //!
 //! Pas encore : DestroyWindow (les fenêtres d'un thread vivent autant que
 //! lui), une fenêtre créée réduite ou agrandie (journalisé), les menus, les messages envoyés à un autre thread, la fenêtre des
