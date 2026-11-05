@@ -33,6 +33,11 @@ use ps::eprocess::{
 };
 use ps::ethread::{THREAD_QUERY_INFORMATION, THREAD_SET_INFORMATION, THREAD_SUSPEND_RESUME, THREAD_TERMINATE};
 
+/// `NtTib.ArbitraryUserPointer` dans un TEB.
+const TEB_ARBITRARY_USER_POINTER: u32 = (core::mem::offset_of!(abi::teb32::Teb32, nt_tib)
+    + core::mem::offset_of!(abi::teb32::NtTib32, arbitrary_user_pointer))
+    as u32;
+
 /// Les classes de NtQueryInformationProcess demandées sans être implémentées.
 static UNSUPPORTED_QUERY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationProcess");
 /// Les classes de NtSetInformationProcess demandées sans être implémentées.
@@ -94,7 +99,14 @@ pub(super) fn nt_terminate_process(arguments: &[u32]) -> NtStatus {
 /// `ParentProcess` (`PROCESS_CREATE_PROCESS`, obligatoire), dont il hérite les
 /// handles héritables avec `PROCESS_CREATE_FLAGS_INHERIT_HANDLES` ; son handle
 /// en `ProcessHandle`, nommé (ou non) d'après les attributs. Son PEB n'a pas
-/// encore de paramètres : le créateur les écrit (`RtlpInitEnvironment`).
+/// encore de paramètres : le créateur les écrit (`RtlpInitEnvironment`,
+/// BasePushProcessParameters).
+///
+/// Comme le noyau de ReactOS (PspCreateProcess), l'adresse de ce PEB va
+/// aussi dans le TEB du thread créateur, en `NtTib.ArbitraryUserPointer` :
+/// c'est là que le CreateProcessInternalW de `kernel32` la prend, sans la
+/// demander (ProcessBasicInformation). Une faute en l'écrivant rend son code,
+/// le handle restant dans la table, comme chez ReactOS.
 fn create_process(arguments: &[u32], flags: u32, job_level: u32) -> Result<NtStatus, NtStatus> {
     static FORK: AtomicBool = AtomicBool::new(false);
     static PORTS: AtomicBool = AtomicBool::new(false);
@@ -123,10 +135,24 @@ fn create_process(arguments: &[u32], flags: u32, job_level: u32) -> Result<NtSta
     let process = ps::create_process(&parent, &section, image_file_name(&section), inherit)?;
     drop(parent);
     let object: ObjectRef = process.clone();
-    super::object::create_named(out, desired, attributes, object).inspect_err(|&failure| {
+    let status = super::object::create_named(out, desired, attributes, object).inspect_err(|&failure| {
         // Without a handle, nobody will end it: give back what it holds.
-        let _ = ps::terminate_process(process, failure);
-    })
+        let _ = ps::terminate_process(process.clone(), failure);
+    })?;
+    give_peb_to_creator(process.peb())?;
+    Ok(status)
+}
+
+/// Écrit `peb` en `NtTib.ArbitraryUserPointer` du TEB du thread courant,
+/// s'il en a un (ce que kernel32 lit après NtCreateProcessEx).
+fn give_peb_to_creator(peb: u32) -> Result<(), NtStatus> {
+    let Some(teb) = ps::ethread::current_thread().map(|thread| thread.teb()).filter(|&teb| teb != 0) else {
+        return Ok(());
+    };
+    if peb == 0 {
+        return Ok(());
+    }
+    UserPtr::<u32>::new(teb + TEB_ARBITRARY_USER_POINTER).write(&peb)
 }
 
 /// NtCreateProcess(*ProcessHandle, DesiredAccess, ObjectAttributes,
