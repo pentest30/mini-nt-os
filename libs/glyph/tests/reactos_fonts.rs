@@ -81,7 +81,7 @@ fn marlett_maps_its_symbols_and_draws_the_close_button() {
     let font = Font::parse(&file).expect("Marlett");
     // The caption buttons: minimize '0', maximize '1', restore '2', close 'r'.
     let glyphs: Vec<_> = ['0', '1', '2', 'r'].iter().map(|&c| font.glyph_index(c)).collect();
-    assert!(glyphs.iter().all(Option::is_some), "Marlett's symbol map: {glyphs:?}");
+    assert!(glyphs.iter().all(Option::is_some), "Marlett's symbols: {glyphs:?}");
     let close = font.render(glyphs[3].unwrap(), 9 * ONE).expect("the close cross");
     assert!(close.width >= 5 && close.height >= 5, "{}×{}", close.width, close.height);
     // A cross: its centre is covered, its edges' middles are not.
@@ -97,4 +97,28 @@ fn marlett_maps_its_symbols_and_draws_the_close_button() {
 #[test]
 fn malformed_data_is_refused() {
     assert_eq!(Font::parse(b"not a font").err(), Some(glyph::Error::Malformed));
+}
+
+#[test]
+fn tahoma_and_marlett_have_the_text_metrics_gdi_gives_them() {
+    let (Some(tahoma), Some(bold), Some(marlett)) = (read("tahoma.ttf"), read("tahomabd.ttf"), read("Marlett.ttf"))
+    else {
+        return;
+    };
+    let tahoma = Font::parse(&tahoma).unwrap();
+    let metrics = tahoma.text_metrics(11 * ONE);
+    assert_eq!((metrics.metrics.height(), metrics.internal_leading), (13, 2), "13 pixels, an em of 11");
+    assert_eq!(metrics.weight, 400);
+    assert_eq!((metrics.first_char, metrics.break_char, metrics.default_char), (0x20, 0x20, 0x1F));
+    assert!(metrics.last_char > 0xFF, "a Unicode font: {:#x}", metrics.last_char);
+    assert_eq!(metrics.pitch_and_family, 0x27, "variable pitch, vector, TrueType, Swiss");
+    assert!(metrics.max_width > metrics.metrics.average_width);
+    assert!(!metrics.symbol);
+    assert_eq!(Font::parse(&bold).unwrap().text_metrics(11 * ONE).weight, 700);
+    // This Marlett (Wine's) maps its symbols by Unicode, from 0 to y: not a
+    // symbol font for GDI.
+    let symbols = Font::parse(&marlett).unwrap().text_metrics(12 * ONE);
+    assert!(!symbols.symbol);
+    assert_eq!((symbols.first_char, symbols.last_char), (0x30, 0x79));
+    assert_eq!((symbols.break_char, symbols.default_char), (0x30, 0x2F), "its first character, and the one before");
 }
