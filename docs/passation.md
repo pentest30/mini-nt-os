@@ -19,8 +19,10 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- DrawText (M6, étape 13) : sur `claude/new-session-696xfc`, partie de `main` après la fusion de #56
-  (étape 12). Une branche
+- La sonde console (M5, [`compat/m5-console.md`](compat/m5-console.md)) : sur `claude/new-session-696xfc`, partie
+  de `main` après la fusion de #57 (DrawText, M6 étape 13). `CONSOLE1.EXE` lance par CreateProcessW un programme
+  console, `THREADS1.EXE` (le critère des 8 threads) ; `csrss` emprunte son identité, résout son bureau et crée la
+  fenêtre de sa console, qui s'arrête aux polices (« VGA », « Terminal »). Une branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
@@ -380,6 +382,14 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] DrawText (M6, étape 13) : NtGdiGetTextExtentExW (`win32k::font::advances`, `fontobj::text_extents`),
      NtGdiGetRandomRgn, NtGdiIntersectClipRect ; le `DrawTextW` de `user32` coupe des mots, centre, calcule son
      rectangle et rend la région de découpage du DC ;
+   - [x] la sonde console, étape 1 (M5, `compat/m5-console.md`) : le PEB d'un processus créé rendu dans le TEB de
+     son créateur (comme le noyau de ReactOS) ; l'emprunt d'identité (`ps::EThread::impersonate`,
+     `se::client::client_security`, NtImpersonateThread, ThreadImpersonationToken, NtOpenThreadToken) ;
+     NtUserConsoleControl et NtUserResolveDesktop (`win32k::console`, `sys::console`) ;
+   - **la suite, côté console** (le chemin des critères du M5) : les polices que demande `consrv` (« VGA » pour la page
+     de code 437, « Terminal » en repli, NtGdiGetFontFamilyInfo, une police à chasse fixe), donc les autres polices du
+     disque et leur correspondance par nom (`FontSubstitutes`) ; les icônes de `consrv` ; la fenêtre console et son
+     texte ; puis l'entrée au clavier pour `cmd.exe` ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les autres polices du disque et leur
      correspondance par nom (`FontSubstitutes`), puis les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
@@ -433,6 +443,11 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Sonde console (M5, étape 1) : SeTokenCanImpersonate absent (tout jeton s'emprunte), pas de DACL pour la copie à
+  l'ouverture, OpenAsSelf sans effet, `IsImpersonating` du TEB non écrit ; NtUserResolveDesktop sans la station par
+  défaut (`Service-0x0-3e7$`) d'un chemin qui n'en nomme pas ; ConsoleMakePalettePublic et
+  ConsoleAcquireDisplayOwnership non faits ; l'assertion des icônes de `consrv` passée (« i ») ; le thread d'entrée
+  retrouvé par une seconde console non testé.
 - DrawText (M6, étape 13) : GTEF_INDICES (GetTextExtentExPointI) refusé ; ni préfixes soulignés vérifiés (le test
   met DT_NOPREFIX), ni DT_END_ELLIPSIS ou DT_PATH_ELLIPSIS côté client, ni région de méta (METARGN : 0).
 - Texte des clients (M6, étape 12) : toute police autre que Marlett donne Tahoma ou Tahoma gras (nom, largeur,
