@@ -430,7 +430,8 @@ mini-nt-os/
 │   └── misc/{serial,acpi,pci,rtc}
 ├── libs/
 │   ├── pe/              # parseur PE32/PE32+ no_std (hôte + noyau)
-│   └── regf/            # format de ruche (hôte + noyau)
+│   ├── regf/            # format de ruche (hôte + noyau)
+│   └── glyph/           # polices TrueType (ttf-parser) et rastériseur en virgule fixe (ADR-013)
 ├── userland/            # remplacements Rust de DLL (plus tard), cible i686-pc-windows-*
 ├── tools/
 │   ├── syscall-gen/  mkhive/  mkimage/  pe-inspect/

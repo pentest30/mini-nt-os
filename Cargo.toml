@@ -19,6 +19,7 @@ members = [
     "drivers/video/gopfb",
     "libs/pe",
     "libs/regf",
+    "libs/glyph",
     "tools/pe-inspect",
     "tools/syscall-gen",
     "tools/mkfat",
@@ -71,3 +72,7 @@ uefi            = { version = "0.26", features = ["alloc", "global_allocator", "
 pelite          = { version = "0.10" }
 # Logging (no_std)
 log             = { version = "0.4", default-features = false }
+# Fonts (ADR-013, ADR-016): no_std, without std, layout tables, variable fonts
+# or glyph names. 0.21: from 0.24 on, a build without std needs core_maths and
+# libm (`no-std-float`), outside ADR-016's list.
+ttf-parser      = { version = "0.21", default-features = false }

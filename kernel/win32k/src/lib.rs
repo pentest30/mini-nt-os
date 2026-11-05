@@ -37,6 +37,7 @@ pub mod dce;
 pub mod defwnd;
 pub mod desktop;
 pub mod display;
+pub mod font;
 pub mod gdi;
 pub mod gui;
 pub mod handles;

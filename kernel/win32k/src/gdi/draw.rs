@@ -6,10 +6,12 @@
 //! Une opération est en coordonnées de son contexte (une fenêtre) : [`paint`]
 //! la décale de son origine avant de la couper.
 //!
+//! Le texte y est une suite de glyphes rendus ([`Op::Glyph`], `crate::font`).
+//!
 //! Pas encore : les bords plats et monochromes (`BF_FLAT`, `BF_MONO`) et
-//! diagonaux (`BF_DIAGONAL`), les lignes quelconques, le texte (ADR-013), les
-//! icônes.
+//! diagonaux (`BF_DIAGONAL`), les lignes quelconques, les icônes.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use super::dib::{Bitmap, ColorRef, Rect};
@@ -17,13 +19,16 @@ use super::region::Region;
 use abi::user::color;
 
 /// Une opération de dessin.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Op {
     /// PatBlt d'un pinceau plein (PATCOPY).
     Fill(Rect, ColorRef),
     /// GradientFill horizontal (GRADIENT_FILL_RECT_H) : de la première
     /// couleur, à gauche, vers la seconde, à droite.
     GradientH(Rect, ColorRef, ColorRef),
+    /// Un glyphe rendu en `color` (ExtTextOut, fond transparent), son coin en
+    /// `at`, coupé à `clip` (ETO_CLIPPED).
+    Glyph { at: (i32, i32), bitmap: Arc<glyph::Bitmap>, color: ColorRef, clip: Rect },
 }
 
 /// La couleur de la colonne `x` d'un dégradé de `from` à `to` entre `left`
@@ -43,9 +48,14 @@ pub fn paint(surface: &mut Bitmap<'_>, ops: &[Op], origin: (i32, i32), clip: &Re
     let moved = |r: Rect| Rect::new(r.left + origin.0, r.top + origin.1, r.right + origin.0, r.bottom + origin.1);
     for op in ops {
         for &visible in clip.rects() {
-            match *op {
-                Op::Fill(rect, color) => surface.fill_rect(moved(rect).intersect(&visible), color),
-                Op::GradientH(rect, from, to) => {
+            match op {
+                &Op::Fill(rect, color) => surface.fill_rect(moved(rect).intersect(&visible), color),
+                Op::Glyph { at, bitmap, color, clip } => {
+                    let at = (at.0 + origin.0, at.1 + origin.1);
+                    let clip = moved(*clip).intersect(&visible);
+                    surface.blend_coverage(at, bitmap.width, &bitmap.coverage, *color, clip);
+                }
+                &Op::GradientH(rect, from, to) => {
                     let rect = moved(rect);
                     let part = rect.intersect(&visible);
                     for x in part.left..part.right {

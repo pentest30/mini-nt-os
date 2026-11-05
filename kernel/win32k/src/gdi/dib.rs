@@ -37,6 +37,15 @@ pub enum PixelLayout {
 }
 
 impl PixelLayout {
+    /// La couleur du pixel `pixel` : l'inverse de [`pixel`](Self::pixel).
+    pub const fn color(self, pixel: u32) -> ColorRef {
+        let (high, middle, low) = ((pixel >> 16) as u8, (pixel >> 8) as u8, pixel as u8);
+        match self {
+            PixelLayout::Bgrx => ColorRef::rgb(high, middle, low),
+            PixelLayout::Rgbx => ColorRef::rgb(low, middle, high),
+        }
+    }
+
     /// Le pixel de `color`, tel qu'il s'écrit en mémoire (un mot petit-boutiste).
     pub const fn pixel(self, color: ColorRef) -> u32 {
         let (r, g, b) = color.components();
@@ -137,6 +146,40 @@ impl<'a> Bitmap<'a> {
         }
     }
 
+    /// Un masque de couverture de `width` colonnes (de 0, rien, à 255, tout)
+    /// en `color`, son coin en (`x`, `y`) : chaque pixel va vers `color` à
+    /// proportion de sa couverture, dans `clip` et les bords de la surface.
+    pub fn blend_coverage(&mut self, (x, y): (i32, i32), width: usize, coverage: &[u8], color: ColorRef, clip: Rect) {
+        if width == 0 {
+            return;
+        }
+        let height = (coverage.len() / width) as i32;
+        let area = Rect::new(x, y, x + width as i32, y + height).intersect(&clip).intersect(&self.bounds());
+        if area.is_empty() {
+            return;
+        }
+        let full = self.layout.pixel(color);
+        let (r, g, b) = color.components();
+        for py in area.top..area.bottom {
+            let row = (py as u32 * self.stride) as usize;
+            let line = (py - y) as usize * width;
+            for px in area.left..area.right {
+                let alpha = u32::from(coverage[line + (px - x) as usize]);
+                let pixel = &mut self.pixels[row + px as usize];
+                *pixel = match alpha {
+                    0 => continue,
+                    255 => full,
+                    _ => {
+                        let (dr, dg, db) = self.layout.color(*pixel).components();
+                        let mix =
+                            |d: u8, s: u8| ((u32::from(d) * (255 - alpha) + u32::from(s) * alpha + 127) / 255) as u8;
+                        self.layout.pixel(ColorRef::rgb(mix(dr, r), mix(dg, g), mix(db, b)))
+                    }
+                };
+            }
+        }
+    }
+
     /// PatBlt avec un pinceau plein : `rect`, coupé aux bords de la surface,
     /// prend `color` par le ROP3 `rop3` ([`rop3_without_source`]).
     pub fn pat_blt(&mut self, rect: Rect, color: ColorRef, rop3: u8) {
@@ -191,6 +234,29 @@ mod tests {
         assert_eq!(blue, ColorRef(0x00A5_6E3A), "COLORREF is 0x00BBGGRR");
         assert_eq!(PixelLayout::Bgrx.pixel(blue), 0x003A_6EA5, "bytes A5 6E 3A: blue, green, red");
         assert_eq!(PixelLayout::Rgbx.pixel(blue), 0x00A5_6E3A, "bytes 3A 6E A5: red, green, blue");
+    }
+
+    #[test]
+    fn a_pixel_gives_back_its_colour() {
+        let color = ColorRef::rgb(1, 2, 3);
+        for layout in [PixelLayout::Bgrx, PixelLayout::Rgbx] {
+            assert_eq!(layout.color(layout.pixel(color)), color, "{layout:?}");
+        }
+    }
+
+    #[test]
+    fn coverage_blends_toward_its_colour_within_the_clip() {
+        let mut pixels = [PixelLayout::Rgbx.pixel(ColorRef::rgb(0, 0, 0)); 4 * 2];
+        let mut bitmap = Bitmap::new(&mut pixels, 4, 2, 4, PixelLayout::Rgbx).unwrap();
+        let white = ColorRef::rgb(255, 255, 255);
+        // A 3 × 2 mask at (1, 0), cut at x = 3.
+        bitmap.blend_coverage((1, 0), 3, &[255, 128, 255, 0, 64, 255], white, Rect::new(0, 0, 3, 2));
+        let at = |x: u32, y: u32| PixelLayout::Rgbx.color(bitmap.pixel(x, y).unwrap());
+        assert_eq!(at(0, 0), ColorRef::rgb(0, 0, 0), "outside the mask");
+        assert_eq!(at(1, 0), white, "covered");
+        assert_eq!(at(2, 0), ColorRef::rgb(128, 128, 128), "half covered");
+        assert_eq!(at(3, 0), ColorRef::rgb(0, 0, 0), "clipped");
+        assert_eq!((at(1, 1), at(2, 1)), (ColorRef::rgb(0, 0, 0), ColorRef::rgb(64, 64, 64)));
     }
 
     #[test]

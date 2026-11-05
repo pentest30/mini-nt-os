@@ -9,6 +9,7 @@ name = "win32k"
 [dependencies]
 abi      = { path = "../../abi" }
 ex       = { path = "../ex" }
+glyph    = { path = "../../libs/glyph" }
 hal      = { path = "../hal" }
 ke       = { path = "../ke" }
 mm       = { path = "../mm" }
