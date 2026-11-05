@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 101 | 296 |
+| ntoskrnl | 102 | 296 |
 | win32k | 68 | 737 |
 
 ## ntoskrnl
@@ -110,7 +110,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x005c` | `NtGetWriteWatch` | 7 |  |
 | `0x005d` | `NtImpersonateAnonymousToken` | 1 |  |
 | `0x005e` | `NtImpersonateClientOfPort` | 2 |  |
-| `0x005f` | `NtImpersonateThread` | 3 |  |
+| `0x005f` | `NtImpersonateThread` | 3 | ✅ |
 | `0x0060` | `NtInitializeRegistry` | 1 |  |
 | `0x0061` | `NtInitiatePowerAction` | 4 |  |
 | `0x0062` | `NtIsProcessInJob` | 2 |  |

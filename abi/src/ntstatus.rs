@@ -133,6 +133,12 @@ pub const STATUS_INTEGER_DIVIDE_BY_ZERO: NtStatus = NtStatus(0xC000_0094);
 pub const STATUS_PRIVILEGED_INSTRUCTION: NtStatus = NtStatus(0xC000_0096);
 pub const STATUS_INSUFFICIENT_RESOURCES: NtStatus = NtStatus(0xC000_009A);
 pub const STATUS_FREE_VM_NOT_AT_BASE: NtStatus = NtStatus(0xC000_009F);
+/// An impersonation level that the token or the client does not allow.
+pub const STATUS_BAD_IMPERSONATION_LEVEL: NtStatus = NtStatus(0xC000_00A5);
+/// A thread token at SecurityAnonymous, which cannot be opened.
+pub const STATUS_CANT_OPEN_ANONYMOUS: NtStatus = NtStatus(0xC000_00A6);
+/// A primary token where an impersonation token is needed, or the reverse.
+pub const STATUS_BAD_TOKEN_TYPE: NtStatus = NtStatus(0xC000_00A8);
 pub const STATUS_MEMORY_NOT_ALLOCATED: NtStatus = NtStatus(0xC000_00A0);
 pub const STATUS_STACK_OVERFLOW: NtStatus = NtStatus(0xC000_00FD);
 pub const STATUS_ENTRYPOINT_NOT_FOUND: NtStatus = NtStatus(0xC000_0139);

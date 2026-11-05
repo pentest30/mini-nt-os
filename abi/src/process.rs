@@ -45,6 +45,10 @@ pub const PROCESS_SESSION_INFORMATION: u32 = 24;
 /// ProcessBreakOnTermination: a ULONG, non-zero for a critical process,
 /// whose end stops the system.
 pub const PROCESS_BREAK_ON_TERMINATION: u32 = 29;
+/// ThreadImpersonationToken (NtSetInformationThread): the HANDLE of an
+/// impersonation token for the thread to impersonate, or NULL to revert to
+/// itself.
+pub const THREAD_IMPERSONATION_TOKEN: u32 = 5;
 /// ThreadBreakOnTermination (NtSetInformationThread): a ULONG, non-zero for
 /// a critical thread.
 pub const THREAD_BREAK_ON_TERMINATION: u32 = 18;

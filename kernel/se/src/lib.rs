@@ -5,7 +5,10 @@
 //! - [`descriptor`] : les descripteurs de sécurité ; capture du mode
 //!   utilisateur, forme relative, requête et changement de leurs parties.
 //! - [`token`] : les jetons (type `Token`), le jeton de System, sa copie pour
-//!   un processus créé, leurs privilèges et leurs classes d'information.
+//!   un processus créé ou pour un emprunt d'identité, leurs privilèges et
+//!   leurs classes d'information.
+//! - [`client`] : ce qu'emprunte un serveur qui prend l'identité d'un client
+//!   (SeCreateClientSecurity).
 //!
 //! Les LUID viennent de [`allocate_luid`] (ExAllocateLocallyUniqueId).
 //!
@@ -19,6 +22,7 @@
 extern crate alloc;
 
 pub mod acl;
+pub mod client;
 pub mod descriptor;
 pub mod sid;
 pub mod token;

@@ -21,6 +21,7 @@ use abi::process::{
     PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
     PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_DEFAULT_HARD_ERROR_MODE, PROCESS_EXCEPTION_PORT,
     PROCESS_LUID_DEVICE_MAPS_ENABLED, PROCESS_SESSION_INFORMATION, THREAD_BREAK_ON_TERMINATION,
+    THREAD_IMPERSONATION_TOKEN,
 };
 use abi::security::{SE_DEBUG_PRIVILEGE, SE_INC_BASE_PRIORITY_PRIVILEGE, SE_TCB_PRIVILEGE};
 use abi::teb32::ClientId32;
@@ -31,7 +32,9 @@ use ps::eprocess::{
     PROCESS_CREATE_PROCESS, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION, PROCESS_SET_INFORMATION,
     PROCESS_SET_SESSIONID, PROCESS_SUSPEND_RESUME, PROCESS_TERMINATE,
 };
-use ps::ethread::{THREAD_QUERY_INFORMATION, THREAD_SET_INFORMATION, THREAD_SUSPEND_RESUME, THREAD_TERMINATE};
+use ps::ethread::{
+    THREAD_QUERY_INFORMATION, THREAD_SET_INFORMATION, THREAD_SET_THREAD_TOKEN, THREAD_SUSPEND_RESUME, THREAD_TERMINATE,
+};
 
 /// `NtTib.ArbitraryUserPointer` dans un TEB.
 const TEB_ARBITRARY_USER_POINTER: u32 = (core::mem::offset_of!(abi::teb32::Teb32, nt_tib)
@@ -495,21 +498,29 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
 
 /// NtSetInformationThread(ThreadHandle, ThreadInformationClass,
 /// ThreadInformation, ThreadInformationLength) : change ce que sait le
-/// thread : `ThreadBreakOnTermination` (`THREAD_SET_INFORMATION`,
-/// `SeDebugPrivilege`), 4 octets : non nul, il devient critique, et sa fin
-/// arrête le système ; nul, il ne l'est plus. `STATUS_INFO_LENGTH_MISMATCH`
-/// pour une autre taille.
+/// thread, 4 octets (`STATUS_INFO_LENGTH_MISMATCH` pour une autre taille) :
+/// - `ThreadImpersonationToken` (`THREAD_SET_THREAD_TOKEN`) : le handle d'un
+///   jeton d'emprunt d'identité, dont le thread prend l'identité, ou NULL :
+///   il reprend la sienne (`super::security::assign_impersonation_token`) ;
+/// - `ThreadBreakOnTermination` (`THREAD_SET_INFORMATION`,
+///   `SeDebugPrivilege`) : non nul, il devient critique, et sa fin arrête le
+///   système ; nul, il ne l'est plus.
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
 pub(super) fn nt_set_information_thread(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
     let set = || {
-        if class != THREAD_BREAK_ON_TERMINATION {
+        if class != THREAD_BREAK_ON_TERMINATION && class != THREAD_IMPERSONATION_TOKEN {
             return Err(UNSUPPORTED_THREAD_SET_CLASSES.report(class));
         }
         if length != 4 {
             return Err(STATUS_INFO_LENGTH_MISMATCH);
+        }
+        if class == THREAD_IMPERSONATION_TOKEN {
+            let token = UserPtr::<u32>::new(buffer).read()?;
+            let thread = super::reference_thread(handle, THREAD_SET_THREAD_TOKEN)?;
+            return super::security::assign_impersonation_token(&thread, token);
         }
         let critical = UserPtr::<u32>::new(buffer).read()? != 0;
         let thread = super::reference_thread(handle, THREAD_SET_INFORMATION)?;
