@@ -798,19 +798,26 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
         report_missing("WM_NCPAINT for a part of the frame (region handles)", &REPORTED);
     }
     let size = (state.window.right - state.window.left, state.window.bottom - state.window.top);
+    let text = window::text(window).unwrap_or_default();
     // No active window yet: every frame is inactive.
     let (ops, unpainted) = crate::nonclient::frame_ops(
         state.style,
         state.ex_style,
         size,
+        &text,
         false,
         true,
         &crate::metrics::get,
         &system_color,
+        &crate::font::text_run,
     );
-    if unpainted.text || unpainted.icon {
+    if unpainted.text {
         static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("the caption's text, icon and button symbols (fonts, icons)", &REPORTED);
+        report_missing("the caption's text and button symbols without their fonts", &REPORTED);
+    }
+    if unpainted.icon {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        report_missing("the caption's icon (icons)", &REPORTED);
     }
     if unpainted.scroll_bars {
         static REPORTED: AtomicBool = AtomicBool::new(false);
