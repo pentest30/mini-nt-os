@@ -1,0 +1,13 @@
+[package]
+name    = "fatfs"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "fatfs"
+
+[dependencies]
+
+[dev-dependencies]
+# The kernel's FAT reader mounts the images built in the tests.
+io-manager = { path = "../../kernel/io" }

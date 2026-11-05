@@ -68,6 +68,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fatfs"
+version = "0.1.0"
+dependencies = [
+ "io-manager",
+]
+
+[[package]]
 name = "glyph"
 version = "0.1.0"
 dependencies = [
@@ -153,7 +160,7 @@ dependencies = [
 name = "mkfat"
 version = "0.1.0"
 dependencies = [
- "io-manager",
+ "fatfs",
 ]
 
 [[package]]

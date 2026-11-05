@@ -32,6 +32,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 019 | Décisions de l'ancien `CLAUDE.md` | Remplacées |
 | 020 | DEP : règle OptIn d'XP SP2, exécution permise par défaut | Acceptée |
 | 021 | win32k : ce que USER partage avec ses clients, à des adresses du serveur sur 32 bits | **Proposée** (spike S3) |
+| 022 | FAT32 : crate partagée `fatfs` ; formatage et partitions servis par le noyau | **Proposée** (chantier d'installation) |
 
 ---
 
@@ -343,3 +344,22 @@ Sous `OptIn`, un programme qui ne l'a pas demandé tourne sans DEP. Or beaucoup 
 - ✅ Un pointeur du serveur suivi par erreur fait une faute au lieu de lire n'importe quoi.
 - ❌ win32k traduit lui-même ses adresses du serveur en positions dans ses zones partagées ; les plages limitent la taille de chaque zone.
 - La décision suit le spike S3 : si `user32` de ReactOS s'avère trop couplé à win32k (repli de l'ADR-002, `user32` de Wine), elle ne vaudra que pour ce que ce repli partagera encore.
+
+---
+
+## ADR-022 — FAT32 : la crate partagée `fatfs` ; formatage et partitions servis par le noyau
+
+**Contexte.** Le volume système est en FAT32 (ADR-017), construit à l'avance par `tools/mkfat` : le noyau monte et écrit du FAT32 (`kernel/io`), mais ne sait ni lire une table de partitions (le disque de test porte un volume brut) ni formater un volume. Le chantier « installation et formatage » doit partitionner un disque vierge, le formater et y copier le système. Sous XP, la création de partitions passe par un IOCTL du noyau (`IOCTL_DISK_SET_DRIVE_LAYOUT`, ce qu'emploie `diskpart`) ; le formatage, lui, se fait en mode utilisateur : `format.com` délègue à `fmifs.dll`, qui écrit les secteurs bruts du volume démonté.
+
+**Décision.**
+- Une crate `libs/fatfs`, `no_std` avec `alloc`, sur le pattern de `regf` (ADR-012) : la **seule source de vérité** de l'écriture FAT32. Elle tient aujourd'hui la construction d'une image entière, déplacée de `tools/mkfat` sans un changement d'octet (l'image produite est la même, test de non-régression à l'appui) ; le formatage incrémental d'un volume monté (un trait `WriteSectors`, secteur par secteur, sans tampon de la taille du disque) s'y ajoutera, partageant la géométrie et les entrées de répertoires. `tools/mkfat` ne garde que ses arguments et ses programmes de test.
+- Le formatage et les partitions sont **servis par le noyau**, derrière `NtDeviceIoControlFile` (numéro déjà généré par `syscall-gen`, ADR-002) : la création de partitions par `IOCTL_DISK_SET_DRIVE_LAYOUT`, comme `diskpart` ; le formatage par un IOCTL propre à Mino (`IOCTL_MINO_FORMAT_VOLUME`, un `CTL_CODE` de la plage privée de `FILE_DEVICE_DISK_FILE_SYSTEM`, documenté dans `docs/compat/io-install.md`). Le programme d'installation (natif, lié à `ntdll`) ne fait qu'appeler ces IOCTL : aucune logique de formatage en mode utilisateur.
+- Les tables de partitions : **GPT d'abord**, avec son MBR protecteur — l'image cible est GPT (02 §9.1) ; le MBR réel des disques d'XP attend le matériel (M9).
+- Les tests croisés suivent l'image : `fatfs` construit, `io-manager` (le lecteur FAT du noyau) relit, `fsck.vfat` valide. Les images de test et les volumes formatés sont identiques par construction.
+
+**Conséquences.**
+- ✅ Une seule implémentation de l'écriture FAT32, partagée par l'outil hôte, le noyau et les tests : `mkfat` et le formatage ne peuvent pas diverger.
+- ✅ L'énumération (`NtQueryDirectoryFile`) et le formatage ne dépendent pas du sous-système graphique : le chantier se mène en parallèle de la ligne win32k, crates disjointes.
+- ❌ Un IOCTL de formatage est un écart avec XP, où `fmifs` formate côté utilisateur ; le repli (un `fmifs` en mode utilisateur au-dessus de la même crate) reste ouvert, la crate s'y prêtant.
+- ❌ Un code d'IOCTL hors des numéros ReactOS : les codes d'IOCTL ne sont pas des appels système — la règle des numéros générés (06 §2) ne s'y applique pas — mais la plage privée reste à documenter là où elle sert.
+- **Statut proposé** : la partie crate est acquise par construction (le repli `fmifs` l'emploierait aussi) ; c'est le service par le noyau que le mainteneur tranche.

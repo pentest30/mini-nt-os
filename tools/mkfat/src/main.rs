@@ -1,6 +1,6 @@
 //! mkfat — build the FAT32 ramdisk image for micro-nt-os QEMU tests.
 //!
-//! Outputs a raw FAT32 image ([`image`]) containing:
+//! Outputs a raw FAT32 image (built by `fatfs`, ADR-022) containing:
 //!   KERNEL.BIN  — 4-byte sentinel "ABCD" for the in-kernel FAT smoke probe
 //!   TEST.EXE    — hand-crafted PE32 that exercises all smoke-test syscalls
 //!   CMD.EXE     — hand-crafted PE32 that exercises the Win32 message pump
@@ -13,11 +13,11 @@
 //! 8.3 alias); the directories on the way are created.
 //! `cargo xtask` runs it to build the ramdisk of each ESP it lays out.
 
-mod image;
-
 use std::env;
 use std::fs;
 use std::process::ExitCode;
+
+use fatfs::{build, path};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -37,7 +37,7 @@ fn main() -> ExitCode {
     // We split on the LAST ':' so Windows drive letters (C:\...) are handled correctly.
     for arg in args.iter().skip(2) {
         if let Some((host, fat_path)) = arg.rsplit_once(':') {
-            match image::path(fat_path) {
+            match path(fat_path) {
                 Ok(path) => match fs::read(host) {
                     Ok(data) => files.push((path, data)),
                     Err(e) => eprintln!("[mkfat] skipping {arg}: {e}"),
@@ -49,7 +49,7 @@ fn main() -> ExitCode {
         }
     }
 
-    let img = match image::build(&files) {
+    let img = match build(&files) {
         Ok(img) => img,
         Err(e) => {
             eprintln!("[mkfat] {e}");

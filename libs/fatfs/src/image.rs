@@ -29,6 +29,10 @@
 //! 13 UTF-16 units at [1..11], [14..26] and [28..32], [13] the checksum of
 //! the 8.3 name.
 
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
+
 /// An 8.3 name, padded with spaces: 8 bytes of base name, 3 of extension.
 pub type ShortName = [u8; 11];
 
