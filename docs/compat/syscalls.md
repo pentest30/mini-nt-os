@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 65 | 737 |
+| win32k | 68 | 737 |
 
 ## ntoskrnl
 
@@ -507,7 +507,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10bc` | `NtGdiGetOutlineTextMetricsInternalW` | 4 |  |
 | `0x10bd` | `NtGdiGetPath` | 4 |  |
 | `0x10be` | `NtGdiGetPixel` | 3 |  |
-| `0x10bf` | `NtGdiGetRandomRgn` | 3 |  |
+| `0x10bf` | `NtGdiGetRandomRgn` | 3 | ✅ |
 | `0x10c0` | `NtGdiGetRasterizerCaps` | 2 |  |
 | `0x10c1` | `NtGdiGetRealizationInfo` | 3 |  |
 | `0x10c2` | `NtGdiGetRegionData` | 3 |  |
@@ -520,7 +520,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10c9` | `NtGdiGetSystemPaletteUse` | 1 |  |
 | `0x10ca` | `NtGdiGetTextCharsetInfo` | 3 |  |
 | `0x10cb` | `NtGdiGetTextExtent` | 5 | ✅ |
-| `0x10cc` | `NtGdiGetTextExtentExW` | 8 |  |
+| `0x10cc` | `NtGdiGetTextExtentExW` | 8 | ✅ |
 | `0x10cd` | `NtGdiGetTextFaceW` | 4 |  |
 | `0x10ce` | `NtGdiGetTextMetricsW` | 3 | ✅ |
 | `0x10cf` | `NtGdiGetTransform` | 3 |  |
@@ -537,7 +537,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10da` | `NtGdiIcmBrushInfo` | 8 |  |
 | `0x10db` | `NtGdiInit` | 0 | ✅ |
 | `0x10dc` | `NtGdiInitSpool` | 0 |  |
-| `0x10dd` | `NtGdiIntersectClipRect` | 5 |  |
+| `0x10dd` | `NtGdiIntersectClipRect` | 5 | ✅ |
 | `0x10de` | `NtGdiInvertRgn` | 2 |  |
 | `0x10df` | `NtGdiLineTo` | 3 |  |
 | `0x10e0` | `NtGdiMakeFontDir` | 5 |  |

@@ -19,8 +19,8 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- Le texte des clients (M6, étape 12) : sur `claude/new-session-696xfc`, partie de `main` après la fusion de #55
-  (étape 11). Une branche
+- DrawText (M6, étape 13) : sur `claude/new-session-696xfc`, partie de `main` après la fusion de #56
+  (étape 12). Une branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
@@ -377,9 +377,11 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      alignement, fond, ETO_OPAQUE, ETO_CLIPPED, `lpDx`), le lot (GdiBCTextOut, GdiBCExtTextOut, GdiBCSelObj),
      NtGdiGetStockObject, NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent,
      NtGdiExtTextOutW ; le programme `tests/native/text1.c` et son scénario `text` ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : DrawText (`user32`, qui demande
-     GetTextExtentExPoint : NtGdiGetTextExtentExW), les autres polices du disque et leur correspondance par nom
-     (`FontSubstitutes`), puis les contrôles et
+   - [x] DrawText (M6, étape 13) : NtGdiGetTextExtentExW (`win32k::font::advances`, `fontobj::text_extents`),
+     NtGdiGetRandomRgn, NtGdiIntersectClipRect ; le `DrawTextW` de `user32` coupe des mots, centre, calcule son
+     rectangle et rend la région de découpage du DC ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les autres polices du disque et leur
+     correspondance par nom (`FontSubstitutes`), puis les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
@@ -431,6 +433,8 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- DrawText (M6, étape 13) : GTEF_INDICES (GetTextExtentExPointI) refusé ; ni préfixes soulignés vérifiés (le test
+  met DT_NOPREFIX), ni DT_END_ELLIPSIS ou DT_PATH_ELLIPSIS côté client, ni région de méta (METARGN : 0).
 - Texte des clients (M6, étape 12) : toute police autre que Marlett donne Tahoma ou Tahoma gras (nom, largeur,
   italique, soulignement et barré ignorés au dessin) ; TA_UPDATECP, ETO_GLYPH_INDEX, ETO_RTLREADING non suivis ;
   NtGdiSelectFont et NtGdiExtTextOutW appelés directement sans test de bout en bout ; NtGdiOpenDCW (`user32`, à la

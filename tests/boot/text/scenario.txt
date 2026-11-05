@@ -13,7 +13,19 @@
 #   SelectObject are queued in the TEB, GdiBCTextOut and GdiBCSelObj): "Mino"
 #   in navy, transparent, at 10, 10 of its client area (303, 223 on the
 #   screen); "Opaque text" on yellow (OPAQUE, ETO_OPAQUE | ETO_CLIPPED) cut
-#   to its rectangle from 10, 40 to 60, 60; "Bold" in a font of its own.
+#   to its rectangle from 10, 40 to 60, 60; "Bold" in a font of its own;
+# - user32's DrawTextW (M6, step 13), which measures with
+#   GetTextExtentExPointW (NtGdiGetTextExtentExW: how many characters fit,
+#   their cumulative extents) and cuts to its rectangle
+#   (NtGdiIntersectClipRect) after keeping the DC's clip region
+#   (NtGdiGetRandomRgn: none here), which it gives back: words wrapped on two
+#   lines in 100 pixels from 10, 100; a line centred from 150, 100 to 250,
+#   140; the rectangle a text needs (DT_CALCRECT, 145 x 13); a line cut at
+#   300; "After", drawn at 10, 150 once the clip region is back;
+# - IntersectClipRect alone (DrawTextW also cuts with ETO_CLIPPED), twice,
+#   the second crossing the first: the clip region from 100, 150 to 140, 163
+#   (GetClipBox), which cuts a TextOutW, then SelectClipRgn(NULL), which gives
+#   back the client area.
 # It ends with status 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
@@ -28,11 +40,18 @@ expect = [text] GetStockObject: DEFAULT_GUI_FONT a font (type 6), SYSTEM_FONT a 
 expect = [text] TextOutW: 1
 expect = [text] ExtTextOutW, opaque and clipped: 1
 expect = [text] TextOutW, bold: 1
+expect = [text] DrawTextW, wrapped: 26
+expect = [text] DrawTextW, centred: 26
+expect = [text] DrawTextW(DT_CALCRECT): 13, 145 x 13
+expect = [text] DrawTextW, cut: 13; TextOutW after it: 1
+expect = [text] IntersectClipRect: 2, 2, box 100 150 140 163; TextOutW: 1
+expect = [text] SelectClipRgn(NULL): 2, box 0 0 354 174
 expect = [text] painted: yes
 expect = [text] SelectObject: the old font is the system font
 expect = [text] GetTextMetricsW: height 13, ascent 11, descent 2, internal 2, external 0, average 5, maximum 15, weight 400, chars 0020-fefc, pitch 27, charset 0
 expect = [text] CreateFontW: a font (type 6)
 expect = [text] GetTextExtentPoint32W(Mino): 23 x 13, bold 27 x 13
+expect = [text] GetTextExtentExPointW(Mino, 12): 1, fit 2, dx 8 11 17 23, 23 x 13
 expect = [text] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 forbid = *** STOP:
@@ -42,6 +61,9 @@ forbid = sys: NtGdiGetStockObject (0x10c7) is not implemented
 forbid = sys: NtGdiHfontCreate (0x10d9) is not implemented
 forbid = sys: NtGdiGetTextMetricsW (0x10ce) is not implemented
 forbid = sys: NtGdiGetTextExtent (0x10cb) is not implemented
+forbid = sys: NtGdiGetTextExtentExW (0x10cc) is not implemented
+forbid = sys: NtGdiIntersectClipRect (0x10dd) is not implemented
+forbid = sys: NtGdiGetRandomRgn (0x10bf) is not implemented
 
 # The desktop; "Mino" (a stem of its M, antialiased toward navy); "Opaque
 # text" on its yellow rectangle, cut at its right; "Bold".
@@ -53,3 +75,14 @@ screen = 333 274 000080
 screen = 363 273 FFFFFF
 screen = 312 268 FFFFFF
 screen = 329 299 000080
+# DrawTextW: the two wrapped lines, the centred one, nothing right of the
+# cut (where the stem of the t of "text" would be), "After".
+screen = 363 332 000080
+screen = 348 342 030381
+screen = 497 342 030381
+screen = 604 328 FFFFFF
+screen = 316 376 030381
+# IntersectClipRect: "Clipped text" inked up to the clip region's right
+# (the d), not beyond it (the stem of the t).
+screen = 438 378 3C3C9E
+screen = 444 378 FFFFFF

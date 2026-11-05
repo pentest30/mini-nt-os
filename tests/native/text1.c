@@ -5,8 +5,11 @@
  * gui1.c). It takes a desktop like winlogon, then works with the text of
  * GDI: stock fonts (GetStockObject), a font of its own (CreateFontW),
  * SelectObject, the text metrics and extents (GetTextMetricsW,
- * GetTextExtentPoint32W), and text drawn in a window (TextOutW transparent,
- * ExtTextOutW opaque and clipped, in a bold font). Each result goes to the
+ * GetTextExtentPoint32W, GetTextExtentExPointW), text drawn in a window
+ * (TextOutW transparent, ExtTextOutW opaque and clipped, in a bold font) and
+ * user32's DrawTextW (words wrapped in a rectangle, a line centred in one,
+ * the rectangle a text needs, a line cut to its rectangle) and the clip
+ * region (IntersectClipRect, GetClipBox, SelectClipRgn). Each result goes to the
  * debug port (DbgPrint), where the scenario looks for it, and the drawing to
  * the screen, where it checks pixels; the program ends with EXIT_STATUS.
  *
@@ -129,6 +132,12 @@ typedef struct {
 #define OPAQUE 2
 #define ETO_OPAQUE 0x0002
 #define ETO_CLIPPED 0x0004
+#define DT_CENTER 0x0001
+#define DT_VCENTER 0x0004
+#define DT_WORDBREAK 0x0010
+#define DT_SINGLELINE 0x0020
+#define DT_CALCRECT 0x0400
+#define DT_NOPREFIX 0x0800
 #define RGB(r, g, b) ((COLORREF)((r) | ((g) << 8) | ((b) << 16)))
 #define EXIT_STATUS 0x600D
 
@@ -151,6 +160,7 @@ __declspec(dllimport) HDC __stdcall BeginPaint(HWND window, PAINTSTRUCT *paint);
 __declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *paint);
 __declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
 __declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT min, UINT max, UINT remove);
+__declspec(dllimport) int __stdcall DrawTextW(HDC dc, const WCHAR *text, int count, RECT *rect, UINT format);
 __declspec(dllimport) HDC __stdcall GetDC(HWND window);
 __declspec(dllimport) int __stdcall ReleaseDC(HWND window, HDC dc);
 __declspec(dllimport) ATOM __stdcall RegisterClassExW(const WNDCLASSEXW *class_info);
@@ -167,10 +177,15 @@ __declspec(dllimport) BOOL __stdcall DeleteObject(HGDIOBJ object);
 __declspec(dllimport) BOOL __stdcall ExtTextOutW(HDC dc, int x, int y, UINT options, const RECT *rect,
                                                  const WCHAR *string, UINT count, const int *dx);
 __declspec(dllimport) BOOL __stdcall GdiFlush(void);
+__declspec(dllimport) int __stdcall GetClipBox(HDC dc, RECT *rect);
 __declspec(dllimport) DWORD __stdcall GetObjectType(HGDIOBJ object);
 __declspec(dllimport) HGDIOBJ __stdcall GetStockObject(int index);
+__declspec(dllimport) BOOL __stdcall GetTextExtentExPointW(HDC dc, const WCHAR *string, int count, int max_extent,
+                                                           int *fit, int *dx, SIZE *size);
 __declspec(dllimport) BOOL __stdcall GetTextExtentPoint32W(HDC dc, const WCHAR *string, int count, SIZE *size);
 __declspec(dllimport) BOOL __stdcall GetTextMetricsW(HDC dc, TEXTMETRICW *metrics);
+__declspec(dllimport) int __stdcall IntersectClipRect(HDC dc, int left, int top, int right, int bottom);
+__declspec(dllimport) int __stdcall SelectClipRgn(HDC dc, void *region);
 __declspec(dllimport) HGDIOBJ __stdcall SelectObject(HDC dc, HGDIOBJ object);
 __declspec(dllimport) COLORREF __stdcall SetBkColor(HDC dc, COLORREF color);
 __declspec(dllimport) int __stdcall SetBkMode(HDC dc, int mode);
@@ -221,6 +236,47 @@ static HFONT bold_font(void)
     return CreateFontW(-11, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, L"Tahoma");
 }
 
+/* DrawTextW: words wrapped in a rectangle of 100 x 40 pixels from 10, 100
+   (navy, transparent), a line centred in a rectangle from 150, 100 to
+   250, 140, the rectangle a text needs (DT_CALCRECT), a line cut to a
+   rectangle from 260, 100 to 300, 113; then "After" at 10, 150, which shows
+   only if DrawTextW gave the DC its clip region back. */
+static void draw_text(HDC dc)
+{
+    RECT wrapped = {10, 100, 110, 140};
+    RECT centred = {150, 100, 250, 140};
+    RECT needed = {0, 0, 0, 0};
+    RECT cut = {260, 100, 300, 113};
+    int height;
+
+    height = DrawTextW(dc, L"Words wrapped on more lines", -1, &wrapped, DT_WORDBREAK | DT_NOPREFIX);
+    DbgPrint("[text] DrawTextW, wrapped: %d\n", height);
+    height = DrawTextW(dc, L"Centred", -1, &centred, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    DbgPrint("[text] DrawTextW, centred: %d\n", height);
+    height = DrawTextW(dc, L"Words wrapped on more lines", -1, &needed, DT_CALCRECT | DT_NOPREFIX);
+    DbgPrint("[text] DrawTextW(DT_CALCRECT): %d, %ld x %ld\n", height, needed.right, needed.bottom);
+    height = DrawTextW(dc, L"Clipped text", -1, &cut, DT_SINGLELINE | DT_NOPREFIX);
+    DbgPrint("[text] DrawTextW, cut: %d; TextOutW after it: %d\n", height, TextOutW(dc, 10, 150, L"After", 5));
+}
+
+/* IntersectClipRect alone, twice: the second rectangle crosses the clip
+   region the first one made, which (seen by GetClipBox) is then from 100, 150
+   to 140, 163 and cuts at 140 a text that TextOutW does not clip;
+   SelectClipRgn(NULL) takes it back. */
+static void clip_rect(HDC dc)
+{
+    RECT box;
+    int first = IntersectClipRect(dc, 100, 140, 300, 163);
+    int kind = IntersectClipRect(dc, 50, 150, 140, 170);
+
+    GetClipBox(dc, &box);
+    DbgPrint("[text] IntersectClipRect: %d, %d, box %ld %ld %ld %ld; TextOutW: %d\n", first, kind, box.left, box.top,
+             box.right, box.bottom, TextOutW(dc, 100, 150, L"Clipped text", 12));
+    kind = SelectClipRgn(dc, 0);
+    GetClipBox(dc, &box);
+    DbgPrint("[text] SelectClipRgn(NULL): %d, box %ld %ld %ld %ld\n", kind, box.left, box.top, box.right, box.bottom);
+}
+
 /* What the window paints: "Mino" in navy on its white background
    (transparent), "Opaque" on yellow cut to its rectangle, "Bold" in Tahoma
    Bold. */
@@ -242,6 +298,9 @@ static void draw_texts(HDC dc)
     SelectObject(dc, bold);
     SetBkMode(dc, TRANSPARENT);
     DbgPrint("[text] TextOutW, bold: %d\n", TextOutW(dc, 10, 70, L"Bold", 4));
+    SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+    draw_text(dc);
+    clip_rect(dc);
     SelectObject(dc, old);
     DeleteObject(bold);
     GdiFlush();
@@ -302,6 +361,13 @@ static void check_metrics(HWND window)
     GetTextExtentPoint32W(dc, L"Mino", 4, &bold_size);
     DbgPrint("[text] GetTextExtentPoint32W(Mino): %ld x %ld, bold %ld x %ld\n", size.cx, size.cy, bold_size.cx,
              bold_size.cy);
+    SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+    {
+        int fit = -1, dx[4] = {0, 0, 0, 0};
+        BOOL got = GetTextExtentExPointW(dc, L"Mino", 4, 12, &fit, dx, &size);
+        DbgPrint("[text] GetTextExtentExPointW(Mino, 12): %d, fit %d, dx %d %d %d %d, %ld x %ld\n", got, fit, dx[0],
+                 dx[1], dx[2], dx[3], size.cx, size.cy);
+    }
     SelectObject(dc, old);
     DeleteObject(bold);
     ReleaseDC(window, dc);
@@ -327,7 +393,7 @@ DWORD __stdcall GuiStartup(void)
     if (!RegisterClassExW(&class_info))
         ExitProcess(2);
     window = CreateWindowExW(0, CLASS_NAME, L"Text", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE, 300, 200,
-                             360, 160, 0, 0, instance, 0);
+                             360, 200, 0, 0, instance, 0);
     if (!window)
         ExitProcess(3);
     for (round = 0; round < 100 && !painted; round++)

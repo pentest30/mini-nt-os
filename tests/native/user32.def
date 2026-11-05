@@ -10,6 +10,7 @@ CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
 DispatchMessageW@4
+DrawTextW@20
 EndPaint@8
 GetClassInfoExW@12
 GetClientRect@8

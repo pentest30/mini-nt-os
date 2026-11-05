@@ -16,8 +16,10 @@ GetClipBox@8
 GetObjectType@4
 GetRgnBox@8
 GetStockObject@4
+GetTextExtentExPointW@28
 GetTextExtentPoint32W@16
 GetTextMetricsW@8
+IntersectClipRect@20
 PatBlt@24
 SelectClipRgn@8
 SelectObject@8

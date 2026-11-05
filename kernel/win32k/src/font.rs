@@ -137,6 +137,29 @@ pub fn text_metrics(face: Face, height: i32) -> Option<glyph::TextMetrics> {
     Some(font.text_metrics(em_of(&font, height)))
 }
 
+/// Les avances, arrondies au pixel, de chaque unité UTF-16 de `text` dans la
+/// police `face` à la hauteur de LOGFONT `height` (une paire de substitution
+/// a son avance sur sa première unité, rien sur la seconde), et les
+/// métriques de la police ; `None` si elle n'est pas installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn advances(face: Face, height: i32, text: &[u16]) -> Option<(Vec<i32>, Metrics)> {
+    let data = file(face)?;
+    let font = Font::parse(&data).ok()?;
+    let em = em_of(&font, height);
+    let mut advances = Vec::with_capacity(text.len());
+    for c in char::decode_utf16(text.iter().copied()) {
+        let c = c.unwrap_or(char::REPLACEMENT_CHARACTER);
+        let glyph = font.glyph_index(c).unwrap_or(0);
+        advances.push(((font.advance(glyph, em) + ONE / 2) >> 16) as i32);
+        if c.len_utf16() == 2 {
+            advances.push(0);
+        }
+    }
+    Some((advances, font.metrics(em)))
+}
+
 /// Le glyphe `glyph` de `font` (la police `face`) à l'em `em`, du cache ou
 /// rendu ; `None` sans contour.
 fn rendered(face: Face, font: &Font, em: i64, glyph: u16, quality: Quality) -> Option<Arc<Bitmap>> {
