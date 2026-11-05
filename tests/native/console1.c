@@ -54,6 +54,7 @@ typedef struct {
 #define MAXIMUM_ALLOWED 0x02000000
 #define WAIT_OBJECT_0 0
 #define CHILD_WAIT 60000
+#define INFINITE 0xFFFFFFFF
 #define EXIT_STATUS 0x600D
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
@@ -128,12 +129,31 @@ static void start_the_console_program(void)
     CloseHandle(process.hProcess);
 }
 
+/* CONSHOW1.EXE, started on this desktop, which stays with its console
+   shown: this program waits for it, so that the screen capture shows it. */
+static void start_the_console_window(void)
+{
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+
+    memset(&startup, 0, sizeof startup);
+    startup.cb = sizeof startup;
+    startup.lpDesktop = L"WinSta0\\Default";
+    if (!CreateProcessW(L"C:\\CONSHOW1.EXE", 0, 0, 0, 0, 0, 0, 0, &startup, &process)) {
+        DbgPrint("[console] CreateProcessW(CONSHOW1.EXE): error %lu\n", GetLastError());
+        return;
+    }
+    DbgPrint("[console] CONSHOW1.EXE started\n");
+    DbgPrint("[console] done\n");
+    WaitForSingleObject(process.hProcess, INFINITE);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     if (!take_a_desktop())
         ExitProcess(1);
     start_the_console_program();
-    DbgPrint("[console] done\n");
+    start_the_console_window();
     ExitProcess(EXIT_STATUS);
     return 0;
 }

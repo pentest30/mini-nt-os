@@ -21,6 +21,14 @@
 #   of its priority), so that the others wait for it ("contended: yes");
 #   then it writes to its console (WriteConsoleW) and ends with 0x600D,
 #   which CONSOLE1.EXE reads: the M5's exit criterion of the 8 threads.
+# Then CONSOLE1.EXE starts CONSHOW1.EXE (tests/native/conshow1.c, CONSOLE
+# subsystem) and waits for it, which stays: its thread, converted to a GUI
+# thread by its first call to user32, goes on the desktop of its
+# lpDesktop (InitThreadCallback); consrv stores its console in its window
+# (SetWindowLongPtr: GWLP_USERDATA; the console's leader, this process and
+# its thread, in the extra bytes, which user32 reads), and its input thread
+# shows the window (ShowWindowAsync), which CONSHOW1.EXE finds visible
+# (GetConsoleWindow, IsWindowVisible).
 # Update with each step (docs/compat/m5-console.md).
 features = test-smss
 requires = userland, native
@@ -35,8 +43,15 @@ expect = [threads] EnterCriticalSection twice: recursion 2
 expect = [threads] 8 threads: wait 0, counter 16000 of 16000, overlaps 0, contended: yes
 expect = [threads] WriteConsoleW: 1 (0), 17 characters
 expect = [console] THREADS1.EXE: wait 0, exit code 600d
+expect = [console] CONSHOW1.EXE started
 expect = [console] done
+expect = [conshow] WriteConsoleW: 1 (0), 14 characters
+expect = [conshow] the console window: visible
+expect = [conshow] GetWindowRect: 23 23 691 455, GetClientRect: 0 0 656 400
+expect = [conshow] the leader in the window: this process, this thread
+expect = [conshow] waiting
 expect = [boot] SOFTWARE hive mounted at \REGISTRY\MACHINE\SOFTWARE
+forbid = no startup desktop for thread
 forbid = Failure to create process parameters
 forbid = Can't impersonate client thread
 forbid = sys: NtImpersonateThread (0x005f) is not implemented
@@ -45,3 +60,16 @@ forbid = sys: NtUserResolveDesktop (0x11ee) is not implemented
 forbid = Loading GUI frontend failed
 forbid = CreateConsoleFont('VGA') failed
 forbid = sys: NtGdiGetFontFamilyInfo (0x12a0) is not implemented
+
+# CONSHOW1.EXE's console window, shown by consrv's input thread
+# (ShowWindowAsync) where the cascade puts it, below THREADS1.EXE's (which
+# stays: DestroyWindow is not yet done): its raised edge (23, 23; 24, 24;
+# 689, 454), its inactive caption (300, 36) and its close button (676, 36);
+# the desktop to its right. Its client area is not painted yet (memory DCs,
+# BitBlt).
+screen = 23 23 D4D0C8
+screen = 24 24 FFFFFF
+screen = 300 36 9A9A9A
+screen = 676 36 000000
+screen = 689 454 404040
+screen = 700 100 3A6EA5

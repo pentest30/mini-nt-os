@@ -10,7 +10,9 @@ CreateThread@24
 DeleteCriticalSection@4
 EnterCriticalSection@4
 ExitProcess@4
+GetConsoleWindow@0
 GetCurrentProcessId@0
+GetCurrentThreadId@0
 GetExitCodeProcess@8
 GetLastError@0
 GetModuleHandleW@4

@@ -37,6 +37,7 @@ MonitorFromPoint@12
 MonitorFromWindow@8
 MoveWindow@24
 PeekMessageW@20
+PostMessageW@16
 RedrawWindow@16
 RegisterClassExW@4
 RegisterLogonProcess@8
