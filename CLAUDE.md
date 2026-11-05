@@ -273,6 +273,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 12 (le texte des clients) : polices de GDI (`win32k::gdi::fontobj` : objet police, polices de stock,
   correspondance d'un LOGFONT, TEXTMETRIC), ExtTextOut (`win32k::gdi::text`) et ses appels en lot, NtGdiGetStockObject,
   NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent, NtGdiExtTextOutW ; scénario `text`.
+  M6, étape 13 (DrawText de `user32`) : NtGdiGetTextExtentExW (étendues cumulées, `win32k::font::advances`),
+  NtGdiGetRandomRgn (la région de découpage gardée), NtGdiIntersectClipRect.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

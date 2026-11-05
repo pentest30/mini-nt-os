@@ -568,3 +568,41 @@ lus) ; 10 mutations de l'alignement, du fond, de la coupure, des avances, de la 
 toutes tuées sur l'hôte, et 3 dans le scénario (police initiale d'un DC, hauteur d'une étendue, TextOut en lot) ; le
 scénario `text` sur les deux CPU, avec 8 pixels de la capture.
 
+## Étape 13 : DrawText (GetTextExtentExPoint, IntersectClipRect, GetRandomRgn)
+
+`tests/native/text1.c` appelle maintenant le DrawTextW de `user32` (son `rtl/text.c`), qui fait tout chez le client
+au-dessus de trois services qui manquaient, que la sonde montre l'un après l'autre :
+
+- NtGdiGetTextExtentExW (GetTextExtentExPointW) : DrawText mesure chaque ligne, et cherche où couper un mot, par
+  combien de caractères tiennent dans une largeur (`pcCh`) et l'étendue cumulée de chacun (`pdxOut`, toutes, comme
+  ReactOS). `win32k::font::advances` rend les avances par unité UTF-16, arrondies au pixel par glyphe comme celles de
+  `text_run` (la dernière étendue est la largeur de GetTextExtentPoint32) ; `fontobj::text_extents` les cumule.
+  `dxMax` est non signé (-1 : tout tient). GTEF_INDICES (GetTextExtentExPointI) est refusé : pas encore.
+- NtGdiGetRandomRgn (GetRandomRgn) : avant de se couper à son rectangle, DrawText garde la région de découpage du DC
+  dans une région à lui (CLIPRGN : 1 et la région, depuis l'origine du DC ; 0 sans région de découpage, le cas ici).
+  APIRGN donne la même chose faute de région de méta, SYSRGN la région visible à l'écran, METARGN 0.
+- NtGdiIntersectClipRect (IntersectClipRect) : la région de découpage coupée par le rectangle (sans elle, elle devient
+  le rectangle), sur `dc::select_clip_rect` de l'étape 10 ; rend la complexité de la région où le DC peint.
+
+À la fin, DrawText rend au DC la région gardée (SelectClipRgn, que `gdi32` met en lot ; ici, aucune région). Il
+dessine chaque ligne par ExtTextOutW avec ETO_CLIPPED : son texte est donc coupé deux fois.
+
+Ce que lit le programme : « Words wrapped on more lines » coupé en deux lignes dans 100 pixels (DT_WORDBREAK : 26) ;
+« Centred » centré dans un rectangle de 100 × 40 (DT_CENTER | DT_VCENTER | DT_SINGLELINE : 26, le décalage compris) ;
+le rectangle qu'il faut au texte (DT_CALCRECT : 145 × 13) ; « Clipped text » coupé à 40 pixels (13), puis « After »
+dessiné : la région de découpage est rendue. GetTextExtentExPointW de « Mino » dans 12 pixels : 2 caractères, étendues
+8, 11, 17, 23. IntersectClipRect appelé deux fois, le second rectangle croisant le premier : une région de 100, 150 à
+140, 163 (GetClipBox), qui coupe un TextOutW (qui, lui, ne coupe pas) ; SelectClipRgn(NULL) rend la zone cliente.
+
+Le premier pixel choisi pour la coupure de DrawText tombait entre deux lettres : blanc même sans coupure, il ne
+vérifiait rien. Il est remplacé par la hampe du « t » de « text », relevée sur une capture faite sans
+IntersectClipRect.
+
+Ce qui manque : les préfixes (`&`, que DrawText souligne ; le test met DT_NOPREFIX), DT_END_ELLIPSIS et
+DT_PATH_ELLIPSIS non vérifiés, les DC transformés, GetTextExtentExPointI, la région de méta (SetMetaRgn).
+
+Tests : hôte (`fontobj` : étendues cumulées croissantes, la dernière est la largeur) ; 6 mutations, toutes tuées dans
+le scénario : `pcCh` qui compte tout, `pdxOut` non écrit, GetRandomRgn qui dit une région absente ou qui rend la région
+visible, IntersectClipRect sans effet ou qui remplace la région. Les deux dernières survivaient à la première version
+du test : DrawText coupe aussi par ETO_CLIPPED, et sans région préalable, AND et COPY donnent la même chose. Le
+scénario `text` passe sur les deux CPU, avec 7 pixels de plus.
