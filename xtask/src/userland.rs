@@ -52,7 +52,8 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// ReactOS generated, which the kernel mounts (until `tools/mkhive`,
 /// ADR-012), the Win32 subsystem that `smss` starts (`csrss.exe` and its
 /// server DLLs, M5), the language pack that `gdi32` loads when it starts
-/// (`lpk.dll`, GdiInitializeLanguagePack), the [`KNOWN_DLLS`], and then every
+/// (`lpk.dll`, GdiInitializeLanguagePack), the [`KNOWN_DLLS`], the [`FONTS`]
+/// of win32k in `WINDOWS/FONTS`, and then every
 /// DLL these programs
 /// and DLLs import, directly or not ([`import_closure`]): the loader of ntdll
 /// maps each import, and some of these have long names
@@ -88,10 +89,27 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         eprintln!("xtask: {dll}, imported on the boot disk, is not in the userland's system32");
     }
     files.extend(imported);
-    files
+    let system32 = files
         .into_iter()
-        .map(|file| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{}", file.to_ascii_uppercase()))))
-        .collect()
+        .map(|file| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{}", file.to_ascii_uppercase()))));
+    let fonts = FONTS
+        .iter()
+        .map(|font| fonts_file(ws, font).map(|path| (path, format!("{FONTS_DIR}/{}", font.to_ascii_uppercase()))));
+    system32.chain(fonts).collect()
+}
+
+/// The fonts directory on the boot disk (`\SystemRoot\Fonts`).
+const FONTS_DIR: &str = "WINDOWS/FONTS";
+
+/// The fonts win32k draws the window frames with (ADR-013, `win32k::font`):
+/// Tahoma and Tahoma Bold for the captions, Marlett for the caption buttons.
+const FONTS: [&str; 3] = ["tahoma.ttf", "tahomabd.ttf", "Marlett.ttf"];
+
+/// The font `name` of the fetched userland's `Fonts`; `None` until
+/// `fetch-userland` ran, or without it.
+fn fonts_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
+    let file = system32_file(ws, "ntdll.dll")?.parent()?.parent()?.join("Fonts").join(name);
+    file.is_file().then_some(file)
 }
 
 /// The DLLs that the programs and DLLs among `files` (`.exe`, `.dll`)

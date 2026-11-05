@@ -70,6 +70,30 @@ pub fn install_nls_tables() {
     }
 }
 
+/// Installe dans win32k les polices du cadre des fenêtres (ADR-013,
+/// `win32k::font`), lues dans `\SystemRoot\Fonts` : Tahoma, Tahoma gras,
+/// Marlett. Sans elles, le titre et les symboles des boutons ne se dessinent
+/// pas (journalisé par win32k).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn install_fonts() {
+    let mut installed = alloc::vec::Vec::new();
+    for face in win32k::font::Face::ALL {
+        let path = alloc::format!("\\SystemRoot\\Fonts\\{}", face.file_name());
+        let Some(data) = read_boot_file(&path) else { continue };
+        match win32k::font::install(face, Arc::from(data)) {
+            Ok(()) => installed.push(face.file_name()),
+            Err(error) => log::error!("[boot] {path}: not a font ({error:?})"),
+        }
+    }
+    if installed.is_empty() {
+        log::info!("[boot] no fonts on the boot disk (cargo xtask fetch-userland)");
+    } else {
+        log::info!("[boot] fonts installed: {}", installed.join(", "));
+    }
+}
+
 /// Monte la ruche SYSTEM du disque RAM de démarrage en
 /// `\REGISTRY\MACHINE\SYSTEM` (`cm::mount_system_hive`), si le disque la tient :
 /// en attendant `tools/mkhive` (ADR-012), celle que la version épinglée de

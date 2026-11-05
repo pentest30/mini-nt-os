@@ -60,6 +60,8 @@ initial-command = GUI1.EXE
 cpus     = default, intel
 timeout  = 120
 
+expect = [boot] fonts installed: tahoma.ttf, tahomabd.ttf, Marlett.ttf
+forbid = the caption's text and button symbols without their fonts
 expect = [gui] on WinSta0\Default
 expect = [gui] GetSystemMetrics: screen 1280x800, caption 20, frame 4, minimum width 112
 expect = [gui] GetSysColor: a56e3a ffffff c8d0d4
@@ -208,7 +210,11 @@ expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 # The windows left visible, drawn by the kernel's DefWindowProc
 # (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under "Visible" at
 # 69, 69 (960 x 600): the raised edge, the caption's gradient from
-# COLOR_INACTIVECAPTION, the line under it, the close button. Their client
+# COLOR_INACTIVECAPTION, the line under it, the close button. The caption's
+# text is in Tahoma Bold (win32k's fonts, ADR-013), in
+# COLOR_INACTIVECAPTIONTEXT: the l of "Visible" at 95, 82, its baseline at
+# 87; the close button's cross is Marlett's r, in COLOR_BTNTEXT (its centre
+# at 1014, 82, its face beside it at 1010, 82). Their client
 # areas are erased by user32's DefWindowProc (WM_ERASEBKGND: GetClipBox,
 # then FillRect with the class brush, COLOR_WINDOW + 1, batched in the TEB
 # and run when the callback returns): white from 73, 93 in "Visible".
@@ -250,7 +256,10 @@ screen = 73 73 808080
 screen = 73 92 D4D0C8
 screen = 73 93 FFFFFF
 screen = 1006 75 FFFFFF
-screen = 1014 82 D4D0C8
+screen = 1014 82 000000
+screen = 1010 82 D4D0C8
+screen = 95 82 D4D0C8
+screen = 95 87 818181
 screen = 1028 668 404040
 screen = 1027 667 808080
 screen = 199 60 404040
