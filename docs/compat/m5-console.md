@@ -126,5 +126,34 @@ son jeu de caractères, les substituts suivis et arrêtés sur une boucle ; la c
 par nom et par substitut) ; 10 mutations, toutes tuées (8 sur l'hôte ; une énumération vide et sans ruche SOFTWARE,
 dans le scénario) ; le scénario `console` sur les deux CPU, qui va au bout.
 
-La suite : Sleep(0) qui cède le processeur (Ke), puis la fenêtre console montrée (ShowWindowAsync) et son texte
-peint, les icônes de `consrv`, et l'entrée au clavier pour `cmd.exe`.
+La suite : Sleep(0) qui cède le processeur (étape 3).
+
+## Étape 3 : Sleep(0) cède le processeur, le critère des 8 threads
+
+Sleep(0) passe par NtDelayExecution avec un intervalle nul. Ke revenait aussitôt
+(`ke::dispatcher::ke_delay_execution_thread` : « un intervalle nul ou déjà échu retourne aussitôt, sans céder le
+processeur »), alors que XP donne le reste du quantum à un thread prêt de même priorité, et revient aussitôt s'il n'y
+en a pas (le comportement que documente Sleep). Les 8 threads de `THREADS1.EXE`, qui appellent Sleep(0) en tenant la
+section critique, ne laissaient donc jamais un autre thread la demander.
+
+- `ke::sched::Scheduler::yield_to_equal` : s'il y a un thread prêt de la priorité du thread courant, celui-ci passe en
+  queue de sa file avec un quantum neuf, et le premier de la file s'exécute ; sinon rien ne change. Un thread de
+  priorité plus basse n'a pas le processeur.
+- `ke::dispatcher::Platform::yield_execution` (le noyau : la commutation de `ke::sched` ; les tests hôte : le
+  simulateur) ; KeDelayExecutionThread d'un intervalle nul l'appelle, après l'attente sans objet qui livre d'abord un
+  APC utilisateur à une attente alertable (STATUS_USER_APC, sans céder). Un intervalle déjà échu revient toujours
+  aussitôt.
+
+La sonde : « contended: yes ». Les threads attendent la section critique (son événement est créé, attendu, signalé),
+le compteur reste juste (16000, jamais deux threads dedans), et `THREADS1.EXE` se termine avec 0x600D : **le critère
+« 8 threads synchronisés par des sections critiques » du M5 est coché** (scénario `console`).
+
+Pas encore : NtYieldExecution (SwitchToThread), qui cède aussi à un thread de priorité plus basse ; la décroissance
+de priorité d'un thread qui cède (le sien garde sa priorité et reçoit un quantum neuf).
+
+Tests : hôte (`ke::sched` : céder seulement à un thread prêt de même priorité, dans l'ordre de la file, avec un quantum
+neuf ; le dispatcher : un intervalle nul cède, une échéance passée non, un APC utilisateur d'abord) ; 2 mutations
+(ne pas céder ; ne céder à personne), tuées sur l'hôte et dans le scénario `console`, qui exige « contended: yes ».
+
+La suite : la fenêtre console montrée (NtUserShowWindowAsync) et son texte peint, les icônes de `consrv`, puis
+l'entrée au clavier pour `cmd.exe` (le critère de `cmd.exe` interactif).

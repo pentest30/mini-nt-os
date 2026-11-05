@@ -399,14 +399,18 @@ mod tests {
         if !crate::font::tests::install_reactos_fonts() {
             return;
         }
-        let file = |logfont: &LogFontW32| realize(logfont).and_then(|(face, _)| font::info(face)).unwrap().file_name;
+        // Without case: a test of `crate::font` reinstalls Tahoma under
+        // another case, in the table shared by the tests running at once.
+        let file = |logfont: &LogFontW32| {
+            realize(logfont).and_then(|(face, _)| font::info(face)).unwrap().file_name.to_ascii_lowercase()
+        };
         assert_eq!(file(&named("MS Shell Dlg", FW_NORMAL)), "tahoma.ttf", "a substitute");
         assert_eq!(realize(&named("MS Shell Dlg", FW_NORMAL)).map(|(_, height)| height), Some(-11));
         assert_eq!(file(&named("Tahoma", FW_BOLD)), "tahomabd.ttf", "bold");
         assert_eq!(file(&named("Tahoma", 600)), "tahomabd.ttf", "semibold (600) is nearer to bold");
         assert_eq!(file(&named("Tahoma", 549)), "tahoma.ttf", "549 is nearer to regular");
-        assert_eq!(file(&named("MARLETT", FW_NORMAL)), "Marlett.ttf", "without case");
-        assert_eq!(file(&named("vga", FW_NORMAL)), "UniVGA16.ttf", "the console's font, by its family");
+        assert_eq!(file(&named("MARLETT", FW_NORMAL)), "marlett.ttf", "without case");
+        assert_eq!(file(&named("vga", FW_NORMAL)), "univga16.ttf", "the console's font, by its family");
         assert_eq!(file(&named("Terminal", FW_NORMAL)), "lucon.ttf", "Terminal is Lucida Console");
         assert_eq!(file(&named("", 0)), "tahoma.ttf", "the default");
         assert_eq!(file(&named("No Such Font", FW_NORMAL)), "tahoma.ttf", "an unknown name");

@@ -16,10 +16,11 @@
 #   EnumFontFamiliesExW finds (NtGdiGetFontFamilyInfo) fixed-pitch and
 #   FF_MODERN, as IsValidConsoleFont2 asks;
 # - THREADS1.EXE runs: 8 threads add to a counter under a critical section
-#   (16000 in all, never two in it at once), then it writes to its console
-#   (WriteConsoleW) and ends with 0x600D, which CONSOLE1.EXE reads.
-# Sleep(0) does not yet give the processor up (Ke): the threads do not wait
-# for the critical section ("contended: no"), see docs/compat/m5-console.md.
+#   (16000 in all, never two in it at once), each giving the processor up
+#   while it holds it (Sleep(0): the rest of its quantum to a ready thread
+#   of its priority), so that the others wait for it ("contended: yes");
+#   then it writes to its console (WriteConsoleW) and ends with 0x600D,
+#   which CONSOLE1.EXE reads: the M5's exit criterion of the 8 threads.
 # Update with each step (docs/compat/m5-console.md).
 features = test-smss
 requires = userland, native
@@ -31,7 +32,7 @@ expect = [console] on WinSta0\Default
 expect = [console] CreateProcessW: a process and its thread
 expect = [threads] started
 expect = [threads] EnterCriticalSection twice: recursion 2
-expect = [threads] 8 threads: wait 0, counter 16000 of 16000, overlaps 0
+expect = [threads] 8 threads: wait 0, counter 16000 of 16000, overlaps 0, contended: yes
 expect = [threads] WriteConsoleW: 1 (0), 17 characters
 expect = [console] THREADS1.EXE: wait 0, exit code 600d
 expect = [console] done

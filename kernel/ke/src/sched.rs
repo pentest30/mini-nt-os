@@ -480,6 +480,30 @@ impl Scheduler {
         self.make_current(next)
     }
 
+    /// Le thread courant cède le reste de son quantum (Sleep(0) :
+    /// KeDelayExecutionThread d'un intervalle nul) à un thread prêt de sa
+    /// priorité : s'il y en a un, le courant passe en queue de sa file avec
+    /// un quantum neuf, et le premier de la file devient courant ; sinon rien
+    /// ne change (`None`).
+    pub fn yield_to_equal(&mut self) -> Option<*mut Thread> {
+        let cur = self.current;
+        if cur == self.idle {
+            return None;
+        }
+        let p = priority(cur);
+        if self.ready[usize::from(p)].is_empty() {
+            return None;
+        }
+        // SAFETY: l'ordonnanceur ne tient que des threads valides ; le thread
+        // courant n'est dans aucune file.
+        unsafe {
+            (*cur).quantum = QUANTUM;
+            self.ready(cur, false);
+        }
+        let next = self.pop_highest()?;
+        Some(self.make_current(next))
+    }
+
     /// Interruption DISPATCH, `ticks` d'horloge après la précédente : le
     /// prochain thread s'il faut commuter, le courant étant remis en file.
     pub fn dispatch(&mut self, ticks: u32) -> Option<*mut Thread> {
@@ -778,6 +802,22 @@ unsafe impl Platform for KePlatform {
         // SAFETY: le thread repris est valide ; son statut a été fixé par qui l'a
         // réveillé.
         unsafe { (*old).tcb.wait_status }
+    }
+
+    unsafe fn yield_execution(old_irql: Irql) {
+        let old = current_thread();
+        // SAFETY: verrou tenu (contrat du trait) ; le thread courant s'exécute,
+        // il n'est dans aucune file : le suivant, s'il y en a un, est un autre
+        // thread.
+        unsafe {
+            match (*sched()).yield_to_equal() {
+                Some(next) => {
+                    switch_to(old, next);
+                    hal::irql::lower(old_irql);
+                }
+                None => DISPATCHER_LOCK.release::<KePlatform>(old_irql),
+            }
+        }
     }
 
     unsafe fn insert_timer(timer: *mut KTimer, due_time: i64) -> bool {
@@ -1564,6 +1604,27 @@ mod tests {
             assert!(!s.set_base_priority(peer, LOW_REALTIME_PRIORITY + 2), "the current one, raised");
             assert_eq!((*peer).priority, LOW_REALTIME_PRIORITY + 2, "real time: no boost carried");
         }
+    }
+
+    #[test]
+    fn a_yield_goes_to_a_ready_peer_only() {
+        let (mut s, boot) = scheduler();
+        assert_eq!(s.yield_to_equal(), None, "nobody ready: the thread goes on");
+        let low = thread(NORMAL_PRIORITY - 1);
+        ready(&mut s, low, false);
+        assert_eq!(s.yield_to_equal(), None, "a lower thread does not get the processor");
+        let peer = thread(NORMAL_PRIORITY);
+        let other = thread(NORMAL_PRIORITY);
+        ready(&mut s, peer, false);
+        ready(&mut s, other, false);
+        // SAFETY: test threads, valid.
+        unsafe { (*boot).quantum = 1 };
+        assert_eq!(s.yield_to_equal(), Some(peer), "the first of its peers");
+        // SAFETY: as above.
+        assert_eq!(unsafe { (*boot).quantum }, QUANTUM, "a fresh quantum for the one that yielded");
+        assert_eq!(s.yield_to_equal(), Some(other));
+        assert_eq!(s.yield_to_equal(), Some(boot), "behind its peers, then its turn");
+        assert_eq!(s.select_next(), peer, "the queue goes on in order");
     }
 
     #[test]

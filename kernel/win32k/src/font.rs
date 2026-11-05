@@ -533,16 +533,18 @@ pub(crate) mod tests {
         if !install_reactos_fonts() {
             return;
         }
-        let file = |face: Option<Face>| face.and_then(info).map(|info| info.file_name);
+        // Without case: the reinstall below changes the case of Tahoma's name
+        // in the table that the other tests, running at the same time, read.
+        let file = |face: Option<Face>| face.and_then(info).map(|info| info.file_name.to_ascii_lowercase());
         assert_eq!(file(find("tahoma", 400, false)).as_deref(), Some("tahoma.ttf"), "without case");
         assert_eq!(file(find("Tahoma", 700, false)).as_deref(), Some("tahomabd.ttf"), "bold");
         assert_eq!(file(find("Tahoma", 550, false)).as_deref(), Some("tahomabd.ttf"), "nearer to 700 than to 400");
         assert_eq!(file(find("Tahoma", 500, true)).as_deref(), Some("tahoma.ttf"), "no italic Tahoma: the nearest");
         assert_eq!(file(find("Courier New", 400, true)).as_deref(), Some("couri.ttf"), "the italic face");
         assert_eq!(file(find("Courier New", 400, false)).as_deref(), Some("cour.ttf"), "the upright one");
-        assert_eq!(file(find("VGA", 400, false)).as_deref(), Some("UniVGA16.ttf"), "its family, not its file");
+        assert_eq!(file(find("VGA", 400, false)).as_deref(), Some("univga16.ttf"), "its family, not its file");
         assert_eq!(find("Arial", 400, false), None, "not installed");
-        assert_eq!(file(named(MARLETT)).as_deref(), Some("Marlett.ttf"));
+        assert_eq!(file(named(MARLETT)).as_deref(), Some("marlett.ttf"));
         let reinstalled = install(
             "Tahoma.TTF",
             Arc::from(
