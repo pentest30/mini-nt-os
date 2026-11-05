@@ -351,6 +351,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     kernel_stack_self_test();
     out_of_page_tables_self_test();
     section_self_test();
+    system_view_self_test();
     object_manager_self_test();
     process_self_test();
     system_service_self_test();
@@ -1708,6 +1709,84 @@ fn section_self_test() {
     log::info!(
         "[smoke] Mm: sections: shared memory seen by two spaces, a different image at 0x400000 in each, \
          copy-on-write, a data file; {resident} section pages, all back"
+    );
+}
+
+/// Mm: system views (`mm::system_view`). A section mapped in the kernel half
+/// is the same memory as its views in a process, reached from any space; its
+/// guard page stays unmapped, its addresses come back for the next view, and
+/// its pages stay the section's.
+fn system_view_self_test() {
+    use abi::ntstatus::STATUS_INVALID_PARAMETER;
+    use alloc::sync::Arc;
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::pfn::{self, PageUsage};
+    use mm::section::Section;
+    use mm::system_view;
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::PAGE_SIZE as P;
+
+    const MARK: u64 = 0x5359_5354_454D_0001;
+    let rw = PageProtect::READWRITE;
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::Section), s.active(PageUsage::UserPrivate))
+    };
+    let before = counts();
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // SAFETY (the three closures): the addresses are pages of a system view,
+    // mapped while they are used, or of a view in the attached space.
+    let mapped = |va| unsafe { mm::MmPageTables::new(hhdm) }.translate(VirtAddr::new(va)).is_some();
+    let read = |va: u64| unsafe { core::ptr::read_volatile(va as *const u64) };
+    let write = |va: u64, value: u64| unsafe { core::ptr::write_volatile(va as *mut u64, value) };
+
+    let section = Section::create_pagefile(3 * P, rw).expect("pagefile section");
+    section.write_kernel(P, &MARK.to_le_bytes()).expect("write_kernel");
+    let view = system_view::map(&section, 0, 3 * P).expect("a system view");
+    assert!(view.base() >= system_view::REGION_BASE && view.size() == 3 * P, "{:x} {:x}", view.base(), view.size());
+    assert_eq!(section.resident_pages(), 3, "the view creates the section's pages");
+    assert_eq!(read(view.base() + P), MARK, "the view does not see the section");
+    write(view.base() + 2 * P, MARK + 1);
+    let mut bytes = [0u8; 8];
+    section.read_kernel(2 * P, &mut bytes).expect("read_kernel");
+    assert_eq!(u64::from_le_bytes(bytes), MARK + 1, "the section does not see the view");
+    assert!(!mapped(view.base() + 3 * P), "the guard page is mapped");
+
+    // A process's view and the kernel's: one memory, from any space.
+    let space = AddressSpace::new().expect("no PML4");
+    let user = space.map_view(&section, 0, 0, 0, rw).expect("map");
+    in_space(&space, || {
+        assert_eq!(read(user.base + 2 * P), MARK + 1, "the process does not see the kernel's write");
+        write(user.base, MARK + 2);
+        assert_eq!(read(view.base()), MARK + 2, "the system view, attached");
+    });
+    assert_eq!(read(view.base()), MARK + 2, "the system view, from the system's space");
+    assert_eq!(counts().1, before.1, "a shared write took a private page");
+
+    // Refusals; a second view after the guard page; addresses reused.
+    let file = Section::create_data_file(Arc::from(alloc::vec![0u8; 100]), 0, PageProtect::READONLY).expect("file");
+    let reserved = Section::create_shared(P, rw, true, false).expect("reserved section");
+    for (refused, offset, size) in [(&section, 1, P), (&section, 0, 4 * P), (&section, P, 0), (&file, 0, P)] {
+        assert_eq!(system_view::map(refused, offset, size).err(), Some(STATUS_INVALID_PARAMETER));
+    }
+    assert_eq!(system_view::map(&reserved, 0, P).err(), Some(STATUS_INVALID_PARAMETER), "SEC_RESERVE");
+    let second = system_view::map(&section, P, P).expect("a second view");
+    assert_eq!(second.base(), view.base() + 4 * P, "not after the first view and its guard page");
+    assert_eq!(read(second.base()), MARK, "the second view's offset");
+    let first_base = view.base();
+    drop(view);
+    assert!(!mapped(first_base), "a dropped view stays mapped");
+    let third = system_view::map(&section, 0, 2 * P).expect("a third view");
+    assert_eq!(third.base(), first_base, "the first view's addresses not reused");
+    assert_eq!(read(third.base()), MARK + 2, "the pages left with the view");
+    drop((second, third));
+    space.destroy();
+    drop((section, file, reserved));
+    assert_eq!(counts(), before, "the views or the section kept pages");
+    log::info!(
+        "[smoke] Mm: system views: a section in the kernel half, the same memory as a process's view from any \
+         space, a guard page after it, its addresses reused, its pages the section's"
     );
 }
 
