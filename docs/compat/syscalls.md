@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 53 | 737 |
+| win32k | 59 | 737 |
 
 ## ntoskrnl
 
@@ -634,7 +634,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x113b` | `NtUserCallHwndLock` | 2 | ✅ |
 | `0x113c` | `NtUserCallHwndOpt` | 2 |  |
 | `0x113d` | `NtUserCallHwndParam` | 3 |  |
-| `0x113e` | `NtUserCallHwndParamLock` | 3 |  |
+| `0x113e` | `NtUserCallHwndParamLock` | 3 | ✅ |
 | `0x113f` | `NtUserCallMsgFilter` | 2 |  |
 | `0x1140` | `NtUserCallNextHookEx` | 4 |  |
 | `0x1141` | `NtUserCallNoParam` | 1 |  |
@@ -716,8 +716,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x118d` | `NtUserGetCPD` | 3 |  |
 | `0x118e` | `NtUserGetCursorFrameInfo` | 4 |  |
 | `0x118f` | `NtUserGetCursorInfo` | 1 |  |
-| `0x1190` | `NtUserGetDC` | 1 |  |
-| `0x1191` | `NtUserGetDCEx` | 3 |  |
+| `0x1190` | `NtUserGetDC` | 1 | ✅ |
+| `0x1191` | `NtUserGetDCEx` | 3 | ✅ |
 | `0x1192` | `NtUserGetDoubleClickTime` | 0 |  |
 | `0x1193` | `NtUserGetForegroundWindow` | 0 |  |
 | `0x1194` | `NtUserGetGuiResources` | 2 |  |
@@ -753,8 +753,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11b2` | `NtUserGetThreadState` | 1 |  |
 | `0x11b3` | `NtUserGetTitleBarInfo` | 2 |  |
 | `0x11b4` | `NtUserGetUpdateRect` | 3 | ✅ |
-| `0x11b5` | `NtUserGetUpdateRgn` | 3 |  |
-| `0x11b6` | `NtUserGetWindowDC` | 1 |  |
+| `0x11b5` | `NtUserGetUpdateRgn` | 3 | ✅ |
+| `0x11b6` | `NtUserGetWindowDC` | 1 | ✅ |
 | `0x11b7` | `NtUserGetWindowPlacement` | 2 |  |
 | `0x11b8` | `NtUserGetWOWClass` | 2 |  |
 | `0x11b9` | `NtUserHardErrorControl` | 3 |  |
@@ -766,7 +766,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11bf` | `NtUserInitTask` | 12 |  |
 | `0x11c0` | `NtUserInternalGetWindowText` | 3 |  |
 | `0x11c1` | `NtUserInvalidateRect` | 3 | ✅ |
-| `0x11c2` | `NtUserInvalidateRgn` | 3 |  |
+| `0x11c2` | `NtUserInvalidateRgn` | 3 | ✅ |
 | `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 |  |
 | `0x11c4` | `NtUserKillTimer` | 2 |  |
 | `0x11c5` | `NtUserLoadKeyboardLayoutEx` | 7 | ✅ |

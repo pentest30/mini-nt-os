@@ -165,11 +165,14 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// `ONEPARAM_ROUTINE_POSTQUITMESSAGE` : WM_QUIT de code `Param` pour le
 /// thread (TRUE) ; `ONEPARAM_ROUTINE_GETQUEUESTATUS` : l'état de sa file
 /// pour les bits `Param` (dans `QS_ALLINPUT | QS_ALLPOSTMESSAGE |
-/// QS_SMRESULT`). Une autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`,
+/// QS_SMRESULT`) ; `ONEPARAM_ROUTINE_RELEASEDC` : le DC `Param` retourne au
+/// cache (UserReleaseDC : 1, ou 0 pour un DC qui n'en est pas un pris par
+/// le processus). Une autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`,
 /// journalisée une fois.
 pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
     let (param, routine) = (arguments[0], arguments[1]);
     match routine {
+        abi::user::ONEPARAM_ROUTINE_RELEASEDC => NtStatus(u32::from(win32k::dce::release_dc(param))),
         ONEPARAM_ROUTINE_POSTQUITMESSAGE => {
             queue::post_quit(&current(), param);
             NtStatus(1)
