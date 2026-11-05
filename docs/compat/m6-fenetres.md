@@ -387,7 +387,7 @@ sa procédure ne faisant pas BeginPaint, son cadre et son fond sont repeints qua
 reste à peindre.
 
 Ce qui manque : InvalidateRgn, ValidateRgn, GetUpdateRgn et RedrawWindow avec une région (pas encore d'objets région
-de GDI : `ERROR_NOT_ENOUGH_MEMORY`, journalisé une fois), le fond du bureau repeint à la demande (RedrawWindow,
+de GDI : `ERROR_NOT_ENOUGH_MEMORY`, journalisé une fois ; faits à l'étape 10), le fond du bureau repeint à la demande (RedrawWindow,
 InvalidateRect de NULL : journalisé une fois ; ses fenêtres le sont), WM_SYNCPAINT et `WNDS_SYNCPAINTPENDING`, la
 région de fenêtre (SetWindowRgn), le passage en coordonnées logiques d'une fenêtre `CS_OWNDC` dans GetUpdateRect.
 Sans test : la validation refusée d'une fenêtre invalidée par un autre thread (`WNDS_UPDATEDIRTY` : `gui` n'a qu'un
@@ -396,3 +396,77 @@ pas une région vide, et le cadre et le fond repeints aussitôt oublient eux-mê
 
 Tests : hôte (`gdi::region` : union disjointe, rectangle englobant ; `window` : région à mettre à jour ;
 `paint` : région de l'écran dans la zone cliente) ; le scénario `gui`, sur les deux CPU, avec 42 pixels de la capture.
+
+## Étape 10 : GetDC et ReleaseDC, les régions de GDI, InvalidateRgn, ValidateRgn, GetUpdateRgn
+
+Le client prend lui-même un DC pour peindre hors de WM_PAINT, et se sert de régions. `user32` passe GetDC, GetDCEx et
+GetWindowDC à NtUserGetDC, NtUserGetDCEx et NtUserGetWindowDC, ReleaseDC à NtUserCallOneParam
+(`ONEPARAM_ROUTINE_RELEASEDC`, 0x39 : `user32!ReleaseDC` le pousse), ValidateRgn à NtUserCallHwndParamLock
+(`TWOPARAM_ROUTINE_VALIDATERGN`, 0x65), InvalidateRgn et GetUpdateRgn à NtUserInvalidateRgn et NtUserGetUpdateRgn.
+`gdi32` crée une région par NtGdiCreateRectRgn, puis la tient lui-même tant qu'elle est vide ou rectangulaire : il en
+lit et en écrit les attributs (`RGN_ATTR`, dans la mémoire du processus, nommés par l'entrée de la table des handles),
+en les marquant `ATTR_RGN_DIRTY` (SetRectRgn, CombineRgn de deux rectangles quand le résultat en est un) ; pour le
+reste, il appelle NtGdiCombineRgn et NtGdiGetRgnBox. DeleteObject d'une région et SelectClipRgn (`RGN_COPY` d'un
+rectangle ou d'aucune région) vont dans le lot du TEB ; DeleteDC appelle NtGdiDeleteObjectApp. Comme ReactOS
+(`region.c`, `cliprgn.c`, `gdiobj.c`, `gdibatch.c`, `windc.c`, `painting.c`, comme spécification) :
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `abi::gdi` | `RGN_ATTR` et ses drapeaux (`ATTR_RGN_VALID`, `ATTR_RGN_DIRTY`), `RGN_AND` … `RGN_COPY`, les appels en lot `GDIBSEXTSELCLPRGN` (24 octets, `GDIBS_NORECT`) et `GDIBSOBJECT` (8 octets) |
+| `abi::user` | `ONEPARAM_ROUTINE_RELEASEDC`, `TWOPARAM_ROUTINE_VALIDATERGN`, `DCX_NOCLIPCHILDREN` |
+| `win32k::gdi::region` | IntGdiCombineRgn (`RGN_AND`, `RGN_OR`, `RGN_XOR`, `RGN_DIFF`, `RGN_COPY`), REGION_Complexity (une région est un rectangle quand ses morceaux remplissent le rectangle qui les tient), REGION_SetRectRgn (coins dans n'importe quel ordre), un déplacement qui ne dépasse pas les entiers |
+| `win32k::gdi::handles` | une entrée rendue (ENTRY_vPushFreeEntry) perd type, propriétaire et attributs et compte une reprise de plus ; les entrées rendues sont reprises les premières (la dernière d'abord) ; GreDeleteObject (ni de stock, ni publique, au processus) |
+| `win32k::gdi::rgnobj` | les régions d'un client : leurs attributs pris dans des blocs de sa mémoire (`pPoolRgnAttr`), repris avant chaque usage (REGION_vSyncRegion) et réécrits après (REGION_UnlockRgn) ; NtGdiCreateRectRgn ; la suppression rend les attributs |
+| `win32k::gdi::dc` | la région de découpage d'un DC (`dclevel.prgnClip`, depuis son origine) et là où il peint (`prgnRao`) ; IntGdiExtSelectClipRgn et IntSelectClipRgn (sans région de découpage, un mode la combine au rectangle qui tient la région visible ; `RGN_AND` la prend telle quelle), IntGdiExtSelectClipRect (le SelectClipRgn en lot) ; `VisRectRegion` des attributs écrit à la prise du DC (`gdi32` en tire ce que rend un SelectClipRgn en lot) ; GetClipBox et PatBlt sur `prgnRao` |
+| `win32k::gdi::batch` | SelectClipRgn et DeleteObject (d'une région ou d'un objet) en lot |
+| `win32k::dce` | les règles des `DCX_*` de UserGetDCEx au complet (sans fenêtre : tout l'écran, du cache ; une fenêtre qui n'est pas un enfant coupe toujours ses sœurs ; `DCX_NOCLIPCHILDREN` ; le DC du parent seulement pour qui ne coupe ni sœurs ni enfants) ; la région d'un client donnée à GetDCEx, à l'écran, au DC jusqu'à sa remise où elle est supprimée sauf `DCX_KEEPCLIPRGN` ; `HRGN_WINDOW` ; seul le processus qui a pris un DC le rend |
+| `win32k::paint` | co_UserRedrawWindow avec une région (dans la zone cliente, elle l'emporte sur le rectangle), co_UserGetUpdateRgn (la région à mettre à jour coupée à la zone cliente et aux parents, dans la zone cliente) |
+| `sys::gdi` | NtGdiCreateRectRgn, NtGdiCombineRgn, NtGdiGetRgnBox, NtGdiDeleteObjectApp, NtGdiExtSelectClipRgn |
+| `sys::window` | NtUserGetDC, NtUserGetDCEx, NtUserGetWindowDC, NtUserInvalidateRgn, NtUserGetUpdateRgn, NtUserCallHwndParamLock (`VALIDATERGN` ; les autres routines journalisées), NtUserRedrawWindow avec une région |
+| `sys::message` | `ONEPARAM_ROUTINE_RELEASEDC` |
+
+Dans `gui`, après les tests de l'étape 9, un popup « Regions » de 200 × 150 pixels en 1050, 600 :
+
+- Régions : une région créée aux coins inversés tient de 0, 0 à 100, 100 (GetRgnBox, lu par `gdi32` dans ses
+  attributs) ; avec une autre de 50, 50 à 150, 150, `RGN_OR` (dans le noyau) donne une région complexe de 0, 0 à
+  150, 150, `RGN_AND` (dans `gdi32`) le rectangle commun, `RGN_DIFF` (dans le noyau) un L ; SetRectRgn (dans `gdi32`)
+  puis `RGN_OR` : le noyau reprend le rectangle changé (10, 10 à 150, 150) ; sans seconde région, CombineRgn rend
+  ERROR (6). DeleteObject, en lot : GetObjectType et GetRgnBox ne trouvent plus rien, et la région suivante reprend
+  l'entrée, avec un compte de reprises de plus.
+- DC : GetDC donne la zone cliente (GetClipBox 0, 0, 200, 150), où PatBlt noircit le coin ; ReleaseDC le rend une
+  fois (1, puis 0 ; PatBlt le refuse ensuite) ; DeleteDC aussi (1, puis ReleaseDC 0 et DeleteDC 0 avec l'erreur 6).
+  GetWindowDC de « Plain » : toute la fenêtre (200 × 100), dont le coin du cadre noircit ; GetDC(NULL) : tout l'écran
+  (1280 × 800), sur le bureau. GetDCEx(`DCX_INTERSECTRGN`) d'une région de l'écran : GetClipBox 50, 50, 70, 70, seul ce
+  carré noircit, et la région est supprimée à la remise ; avec `DCX_EXCLUDERGN | DCX_KEEPCLIPRGN`, un DC complexe, et
+  la région reste.
+- Découpage : SelectClipRgn d'un carré (en lot ; 2, d'après `VisRectRegion`) puis GetClipBox (120, 0, 140, 20) ;
+  PatBlt de toute la zone cliente ne noircit que le carré ; ExtSelectClipRgn(`RGN_OR`) d'un autre (dans le noyau) rend
+  3 ; SelectClipRgn d'une région hors de la fenêtre rend 1, d'aucune région 2 (GetClipBox : toute la zone cliente).
+- Région à mettre à jour : deux InvalidateRgn, GetUpdateRgn rend 3 (10, 10 à 60, 60) ; ValidateRgn de l'une, 2 (l'autre
+  seule) ; ValidateRgn(NULL), 1 (rien). InvalidateRgn(NULL) : 0 (1400). InvalidateRgn sans effacer, puis UpdateWindow :
+  WM_PAINT seul. RedrawWindow(`RDW_ERASENOW`) d'une région de 10, 10 à 30, 30 efface aussitôt ce carré (`0014`, et le
+  coin noir coupé sur la capture) sans le valider (GetUpdateRgn : 2). « Plain » validé puis invalidé dans sa seule
+  barre de titre (`RDW_FRAME`) : `user32`, qui voit `WNDS_SENDNCPAINT`, demande au noyau, qui vide la région donnée
+  (GetUpdateRgn : 1).
+
+Écarts avec ReactOS : sans `DCX_CACHE`, une fenêtre sans DC à elle a un DC du cache, comme dans XP (`DCX_CACHE` ne fait
+que passer outre `CS_OWNDC` et `CS_CLASSDC`) et Wine (ReactOS rend NULL) ; seul le processus qui a pris un DC le rend
+(ReactOS ne vérifie pas, et rendrait les attributs au mauvais processus) ; `VisRectRegion` est écrit à la prise du DC
+(ReactOS l'écrit au premier dessin, CLIPPING_UpdateGCRegion). `WND.hrgnUpdate` reste `HRGN_WINDOW` tant que la région à
+mettre à jour n'est pas vide : `user32` ne fait que le comparer à NULL.
+
+Ce qui manque : NtGdiSetRectRgn (`gdi32` change lui-même une région qui a ses attributs), les autres formes de région
+(ellipses, polygones, ExtCreateRegion), OffsetRgn, EqualRgn, PtInRegion, RectInRegion, GetRegionData, GetClipRgn,
+ExcludeClipRect, IntersectClipRect, OffsetClipRgn, SetMetaRgn, `DCX_INTERSECTUPDATE` (journalisé une fois), les DC
+d'une fenêtre ou d'une classe (`CS_OWNDC`, `CS_CLASSDC` : un DC du cache, journalisé une fois), les régions et les DC
+d'un processus rendus à sa fin, le cache de handles du PEB. Sans test : NtGdiDeleteObjectApp d'un autre objet qu'un DC
+(`gdi32` met en lot la suppression d'une région), le refus de rendre le DC d'un autre processus (`gui` n'a qu'un
+processus GUI), le libre des attributs d'une région supprimée (une fuite n'a pas d'effet visible). Les 27 mutations
+des autres parties sont tuées ; un `|` dans un marqueur `expect` en fait deux marqueurs au choix (`xtask`) : le
+message de `DCX_EXCLUDERGN, DCX_KEEPCLIPRGN` n'en a plus.
+
+Tests : hôte (`abi::gdi` : appels en lot et attributs relus ; `gdi::region` : CombineRgn, complexité, coins,
+déplacement ; `gdi::handles` : entrée rendue puis reprise ; `gdi::rgnobj` : attributs repris et réécrits ;
+`gdi::dc` : région de découpage, modes, rectangle en lot, `VisRectRegion`, place des attributs d'une région ;
+`gdi::batch` : appels lus ; `dce` : règles des `DCX_*`) ; le scénario `gui`, sur les deux CPU, avec 57 pixels de la
+capture.

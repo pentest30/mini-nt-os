@@ -260,7 +260,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtGdiFlush) ; WM_PAINT (le compte des fenêtres à peindre et `QS_PAINT`, WM_PAINT tiré de la file,
   NtUserDispatchMessage, BeginPaint et EndPaint, DefWindowProc de WM_PAINT) ; InvalidateRect, ValidateRect,
   RedrawWindow, UpdateWindow et GetUpdateRect (la région à mettre à jour est une région, `win32k::paint` :
-  IntInvalidateWindows, co_UserRedrawWindow, co_IntUpdateWindows ; pas encore les régions de GDI, ni le texte). `syscall-gen` suit la variante
+  IntInvalidateWindows, co_UserRedrawWindow, co_IntUpdateWindows) ; GetDC, GetDCEx, GetWindowDC, ReleaseDC et les
+  régions de GDI (`win32k::gdi::rgnobj` : leurs attributs `RGN_ATTR` chez le client, que `gdi32` change lui-même ;
+  entrées de la table rendues et reprises ; région de découpage d'un DC, SelectClipRgn et DeleteObject en lot ;
+  InvalidateRgn, ValidateRgn, GetUpdateRgn ; pas encore le texte). `syscall-gen` suit la variante
   publiée de ReactOS (`DBG` défini) et vérifie les stubs de `ntdll`, `user32`, `gdi32` quand l'espace utilisateur est
   là.
   Suite : [`docs/passation.md`](docs/passation.md).
