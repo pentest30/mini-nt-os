@@ -3,7 +3,9 @@
 //! NtGdiGetRgnBox), NtGdiDeleteObjectApp et la région de découpage d'un DC
 //! (NtGdiExtSelectClipRgn). `gdi32` change lui-même une région qui a ses
 //! attributs (SetRectRgn) : NtGdiSetRectRgn, pour une région sans eux,
-//! attend. Les appels que `gdi32` met en
+//! attend. Le texte : NtGdiGetStockObject, NtGdiHfontCreate,
+//! NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent,
+//! NtGdiExtTextOutW (`win32k::gdi::fontobj`, `win32k::gdi::text`). Les appels que `gdi32` met en
 //! lot dans le TEB sont exécutés avant chaque service de win32k
 //! ([`super::dispatch`]) : NtGdiFlush n'a plus rien à faire.
 
@@ -52,6 +54,142 @@ pub(super) fn nt_gdi_get_app_clip_box(arguments: &[u32]) -> NtStatus {
         Ok(()) => NtStatus(complexity as u32),
         Err(_) => NtStatus(ERROR as u32),
     }
+}
+
+/// Les caractères d'un texte que le noyau accepte en un appel.
+const MAX_TEXT: u32 = 0x1_0000;
+
+/// Les `count` caractères en `at`, chez le processus courant.
+fn read_text(at: u32, count: u32) -> Result<alloc::vec::Vec<u16>, NtStatus> {
+    if count > MAX_TEXT {
+        return Err(abi::ntstatus::STATUS_INVALID_PARAMETER);
+    }
+    let mut bytes = alloc::vec![0u8; 2 * count as usize];
+    ke::usermem::copy_from_user(&mut bytes, u64::from(at))?;
+    Ok(bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect())
+}
+
+/// NtGdiGetStockObject(iObject) : le handle de l'objet de stock `iObject`
+/// (pinceaux, polices) ; NULL pour un autre.
+pub(super) fn nt_gdi_get_stock_object(arguments: &[u32]) -> NtStatus {
+    NtStatus(win32k::gdi::brush::stock_object(arguments[0] as usize))
+}
+
+/// NtGdiHfontCreate(pelfw, cjElfw, lft, fl, pvCliData) : HFONT, une police
+/// du processus d'après le LOGFONTW au début de `pelfw` (`gdi32` donne un
+/// ENUMLOGFONTEXDVW sans dire sa taille : seul son LOGFONTW compte) ; NULL
+/// pour un LOGFONTW qu'on ne peut lire.
+pub(super) fn nt_gdi_hfont_create(arguments: &[u32]) -> NtStatus {
+    let mut bytes = [0u8; core::mem::size_of::<abi::gdi::LogFontW32>()];
+    if ke::usermem::copy_from_user(&mut bytes, u64::from(arguments[0])).is_err() {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER, 0);
+    }
+    let Some(logfont) = abi::gdi::LogFontW32::from_bytes(&bytes) else { return NtStatus(0) };
+    match win32k::gdi::fontobj::create(logfont, win32k::gdi::dc::current_pid()) {
+        Ok(handle) => NtStatus(handle),
+        Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
+    }
+}
+
+/// NtGdiSelectFont(hdc, hfont) : HFONT, l'ancienne police du DC ; NULL pour
+/// un DC qui n'est pas au processus ou un `hfont` qui n'est pas une police.
+pub(super) fn nt_gdi_select_font(arguments: &[u32]) -> NtStatus {
+    let [hdc, hfont] = arguments[..2] else { unreachable!("2 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return NtStatus(0) };
+    NtStatus(win32k::gdi::dc::select_font(&dc, hfont).unwrap_or(0))
+}
+
+/// La police du DC `hdc` et ses attributs de texte ; `None` pour un DC qui
+/// n'est pas au processus.
+fn dc_font(
+    hdc: u32,
+) -> Option<(alloc::sync::Arc<win32k::gdi::dc::Dc>, win32k::gdi::text::TextAttrs, abi::gdi::LogFontW32)> {
+    let dc = win32k::gdi::dc::lock(hdc)?;
+    let attrs = win32k::gdi::dc::text_attrs(&dc)?;
+    let logfont = win32k::gdi::fontobj::get_or_system(attrs.font, win32k::gdi::dc::current_pid());
+    Some((dc, attrs, logfont))
+}
+
+/// NtGdiGetTextMetricsW(hdc, pUnsafeTmwi, cj) : BOOL ; écrit le
+/// TMW_INTERNAL de la police du DC (`cj` octets au plus). FALSE et
+/// `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus, FALSE sans
+/// la police installée ou pour un tampon qu'on ne peut écrire.
+pub(super) fn nt_gdi_get_text_metrics_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, out, size] = arguments[..3] else { unreachable!("3 arguments") };
+    let Some((_, _, logfont)) = dc_font(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let Some(metrics) = win32k::gdi::fontobj::text_metrics(&logfont) else { return NtStatus(0) };
+    let bytes = metrics.as_bytes();
+    let bytes = &bytes[..bytes.len().min(size as usize)];
+    NtStatus(u32::from(copy_to_user(u64::from(out), bytes).is_ok()))
+}
+
+/// NtGdiGetTextExtent(hdc, lpwsz, cwc, psize, flOpts) : BOOL ; écrit en
+/// `psize` la largeur des `cwc` caractères dans la police du DC et la hauteur
+/// de celle-ci. FALSE et `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au
+/// processus ; FALSE sans la police installée ou pour un texte ou un SIZE
+/// inaccessible.
+pub(super) fn nt_gdi_get_text_extent(arguments: &[u32]) -> NtStatus {
+    let [hdc, text, count, out, _options] = arguments[..5] else { unreachable!("5 arguments") };
+    let Some((_, _, logfont)) = dc_font(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let Ok(text) = read_text(text, count) else { return NtStatus(0) };
+    let (width, height) = if text.is_empty() {
+        (0, 0)
+    } else {
+        match win32k::gdi::fontobj::text_extent(&logfont, &text) {
+            Some(extent) => extent,
+            None => return NtStatus(0),
+        }
+    };
+    let mut size = [0u8; 8];
+    size[..4].copy_from_slice(&width.to_le_bytes());
+    size[4..].copy_from_slice(&height.to_le_bytes());
+    NtStatus(u32::from(copy_to_user(u64::from(out), &size).is_ok()))
+}
+
+/// NtGdiExtTextOutW(hdc, x, y, flOpts, prcl, pwsz, cwc, pdx, dwCodePage) :
+/// BOOL ; le texte dans la police et les attributs du DC
+/// (`win32k::gdi::text::ext_text_out`), avec le rectangle `prcl` s'il est
+/// donné (ETO_OPAQUE, ETO_CLIPPED) et les avances `pdx` (des paires avec
+/// ETO_PDY, dont seules les horizontales comptent). FALSE et
+/// `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus ; FALSE pour
+/// un texte, un rectangle ou des avances inaccessibles, ou sans la police.
+pub(super) fn nt_gdi_ext_text_out_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, options, rect, text, count, dx, _code_page] = arguments[..9] else { unreachable!("9 arguments") };
+    let Some((dc, attrs, _)) = dc_font(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let read = || -> Result<_, NtStatus> {
+        let rect = if rect == 0 {
+            None
+        } else {
+            let mut bytes = [0u8; 16];
+            ke::usermem::copy_from_user(&mut bytes, u64::from(rect))?;
+            let word = |at: usize| i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+            Some(Rect::new(word(0), word(4), word(8), word(12)))
+        };
+        let text = read_text(text, count)?;
+        let dx = if dx == 0 {
+            None
+        } else {
+            let pairs = if options & abi::gdi::eto::PDY != 0 { 2 } else { 1 };
+            let mut bytes = alloc::vec![0u8; 4 * pairs * count as usize];
+            ke::usermem::copy_from_user(&mut bytes, u64::from(dx))?;
+            let all = bytes.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+            Some(all.step_by(pairs).collect::<alloc::vec::Vec<_>>())
+        };
+        Ok((rect, text, dx))
+    };
+    let Ok((rect, text, dx)) = read() else { return NtStatus(0) };
+    let pid = win32k::gdi::dc::current_pid();
+    let done = win32k::gdi::text::ext_text_out(
+        &dc.state(),
+        pid,
+        (x as i32, y as i32),
+        options,
+        rect,
+        &text,
+        dx.as_deref(),
+        &attrs,
+    );
+    NtStatus(u32::from(done))
 }
 
 /// NtGdiCreateRectRgn(x1, y1, x2, y2) : HRGN, une région du processus,
