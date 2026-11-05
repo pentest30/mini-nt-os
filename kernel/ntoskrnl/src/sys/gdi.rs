@@ -5,7 +5,9 @@
 //! attributs (SetRectRgn) : NtGdiSetRectRgn, pour une région sans eux,
 //! attend. Le texte : NtGdiGetStockObject, NtGdiHfontCreate,
 //! NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent,
-//! NtGdiExtTextOutW (`win32k::gdi::fontobj`, `win32k::gdi::text`). Les appels que `gdi32` met en
+//! NtGdiGetTextExtentExW, NtGdiExtTextOutW (`win32k::gdi::fontobj`,
+//! `win32k::gdi::text`) ; pour DrawText, NtGdiIntersectClipRect et
+//! NtGdiGetRandomRgn. Les appels que `gdi32` met en
 //! lot dans le TEB sont exécutés avant chaque service de win32k
 //! ([`super::dispatch`]) : NtGdiFlush n'a plus rien à faire.
 
@@ -144,6 +146,95 @@ pub(super) fn nt_gdi_get_text_extent(arguments: &[u32]) -> NtStatus {
     size[..4].copy_from_slice(&width.to_le_bytes());
     size[4..].copy_from_slice(&height.to_le_bytes());
     NtStatus(u32::from(copy_to_user(u64::from(out), &size).is_ok()))
+}
+
+/// GTEF_INDICES : des index de glyphes à la place des caractères.
+const GTEF_INDICES: u32 = 1;
+
+/// NtGdiGetTextExtentExW(hdc, lpwsz, cwc, dxMax, pcCh, pdxOut, psize,
+/// flOpts) : BOOL ; écrit en `psize` l'étendue des `cwc` caractères dans la
+/// police du DC, en `pdxOut` (s'il est donné) l'étendue cumulée de chacun, en
+/// `pcCh` (s'il est donné) combien d'entre eux tiennent dans `dxMax` (non
+/// signé : -1, tous). Sans caractère, une étendue nulle. FALSE et
+/// `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus ; FALSE sans
+/// la police installée, pour une mémoire inaccessible, et pour des index de
+/// glyphes (GTEF_INDICES, GetTextExtentExPointI : pas encore).
+pub(super) fn nt_gdi_get_text_extent_ex_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, text, count, max, fit, dx, out, options] = arguments[..8] else { unreachable!("8 arguments") };
+    if options & GTEF_INDICES != 0 {
+        return NtStatus(0);
+    }
+    let write_size = |width: i32, height: i32| {
+        let mut size = [0u8; 8];
+        size[..4].copy_from_slice(&width.to_le_bytes());
+        size[4..].copy_from_slice(&height.to_le_bytes());
+        copy_to_user(u64::from(out), &size)
+    };
+    if count as i32 <= 0 {
+        return NtStatus(u32::from(count == 0 && write_size(0, 0).is_ok()));
+    }
+    let Some((_, _, logfont)) = dc_font(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let Ok(text) = read_text(text, count) else { return NtStatus(0) };
+    let Some((extents, height)) = win32k::gdi::fontobj::text_extents(&logfont, &text) else { return NtStatus(0) };
+    let width = extents.last().copied().unwrap_or(0);
+    let write = || -> Result<(), NtStatus> {
+        if fit != 0 {
+            let fitting = extents.iter().take_while(|&&extent| extent as u32 <= max).count() as u32;
+            ke::usermem::UserPtr::<u32>::new(fit).write(&fitting)?;
+        }
+        if dx != 0 {
+            let bytes: alloc::vec::Vec<u8> = extents.iter().flat_map(|extent| extent.to_le_bytes()).collect();
+            copy_to_user(u64::from(dx), &bytes)?;
+        }
+        write_size(width, height)
+    };
+    NtStatus(u32::from(write().is_ok()))
+}
+
+/// NtGdiIntersectClipRect(hdc, xLeft, yTop, xRight, yBottom) : la complexité
+/// de la région où le DC peint, sa région de découpage coupée par ce
+/// rectangle (sans région de découpage, elle devient ce rectangle) ; ERROR
+/// pour un DC qui n'est pas au processus.
+pub(super) fn nt_gdi_intersect_clip_rect(arguments: &[u32]) -> NtStatus {
+    let [hdc, left, top, right, bottom] = arguments[..5] else { unreachable!("5 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return NtStatus(ERROR as u32) };
+    let rect = Rect::new(left as i32, top as i32, right as i32, bottom as i32);
+    NtStatus(dc.change(|state| win32k::gdi::dc::select_clip_rect(state, Some(rect), rgn::AND)) as u32)
+}
+
+/// GetRandomRgn : CLIPRGN.
+const CLIPRGN: u32 = 1;
+/// METARGN.
+const METARGN: u32 = 2;
+/// APIRGN : la région de découpage et celle de méta.
+const APIRGN: u32 = 3;
+/// SYSRGN : la région visible, à l'écran.
+const SYSRGN: u32 = 4;
+
+/// NtGdiGetRandomRgn(hdc, hrgn, iCode) : 1 et la région `hrgn` devient la
+/// région demandée du DC (CLIPRGN et APIRGN : sa région de découpage, depuis
+/// son origine, faute de région de méta ; SYSRGN : sa région visible, à
+/// l'écran) ; 0 sans elle (pas de région de découpage, ni de méta) ; -1 pour
+/// un DC ou une région qui ne sont pas au processus, ou un code inconnu.
+pub(super) fn nt_gdi_get_random_rgn(arguments: &[u32]) -> NtStatus {
+    let [hdc, hrgn, code] = arguments[..3] else { unreachable!("3 arguments") };
+    let (Some(dc), Some(region)) = (win32k::gdi::dc::lock(hdc), rgnobj::lock(hrgn)) else {
+        return NtStatus(-1i32 as u32);
+    };
+    let state = dc.state();
+    let wanted = match code {
+        CLIPRGN | APIRGN => state.clip,
+        METARGN => None,
+        SYSRGN => Some(state.vis),
+        _ => return NtStatus(-1i32 as u32),
+    };
+    match wanted {
+        Some(wanted) => {
+            region.set(wanted);
+            NtStatus(1)
+        }
+        None => NtStatus(0),
+    }
 }
 
 /// NtGdiExtTextOutW(hdc, x, y, flOpts, prcl, pwsz, cwc, pdx, dwCodePage) :
