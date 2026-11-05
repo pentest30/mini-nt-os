@@ -18,7 +18,8 @@
 //! Pas encore : la largeur, l'italique, le soulignement et le barré au dessin
 //! (les métriques les disent), l'orientation, les autres polices du disque et
 //! leur énumération (EnumFontFamilies), GetObject d'une police,
-//! GetCharWidth, GetTextExtentExPoint, OUTLINETEXTMETRIC.
+//! GetCharWidth, les index de glyphes (GetTextExtentExPointI),
+//! OUTLINETEXTMETRIC.
 
 use alloc::sync::Arc;
 
@@ -135,6 +136,26 @@ pub fn text_extent(logfont: &LogFontW32, text: &[u16]) -> Option<(i32, i32)> {
     Some((run.width, run.metrics.height()))
 }
 
+/// TextIntGetTextExtentPoint : les étendues cumulées de `text` (la largeur
+/// de chaque préfixe, une par unité UTF-16) et la hauteur de la police ;
+/// `None` sans la police installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn text_extents(logfont: &LogFontW32, text: &[u16]) -> Option<(alloc::vec::Vec<i32>, i32)> {
+    let (face, height) = realize(logfont);
+    let (advances, metrics) = font::advances(face, height, text)?;
+    let mut sum = 0;
+    let cumulative = advances
+        .iter()
+        .map(|advance| {
+            sum += advance;
+            sum
+        })
+        .collect();
+    Some((cumulative, metrics.height()))
+}
+
 /// ftGdiGetTextMetricsW : le TMW_INTERNAL de `logfont` (FillTM) ; l'italique,
 /// le soulignement et le barré sont ceux demandés. `None` sans la police
 /// installée.
@@ -218,5 +239,8 @@ mod tests {
         let (bold, _) =
             text_extent(&named("Tahoma", FW_BOLD), &"Mino".encode_utf16().collect::<alloc::vec::Vec<_>>()).unwrap();
         assert!(bold > width, "bold is wider");
+        let (extents, height) = text_extents(&gui, &"Mino".encode_utf16().collect::<alloc::vec::Vec<_>>()).unwrap();
+        assert_eq!((extents.len(), extents[3], height), (4, width, 13), "the last extent is the width");
+        assert!(extents.windows(2).all(|pair| pair[0] < pair[1]), "growing: {extents:?}");
     }
 }
