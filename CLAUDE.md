@@ -10,7 +10,7 @@ de ReactOS : appels système `ntoskrnl` et `win32k`, structures en mode utilisat
 |---|---|
 | [`docs/01-vision.md`](docs/01-vision.md) | Périmètre, ce qui est exclu |
 | [`docs/02-architecture.md`](docs/02-architecture.md) | Architecture cible, organisation du dépôt (§10) |
-| [`docs/03-decisions.md`](docs/03-decisions.md) | ADR. Une ADR acceptée ne se modifie pas : une nouvelle ADR la remplace. |
+| [`docs/03-decisions.md`](docs/03-decisions.md) | ADR. Une ADR acceptée ne se modifie pas : une nouvelle ADR la remplace. Pour en écrire une : la skill [`mino-adr`](.claude/skills/mino-adr/SKILL.md). |
 | [`docs/04-audit-reutilisation.md`](docs/04-audit-reutilisation.md) | Verdict par fichier du code existant, défauts connus, corrections immédiates (§7) |
 | [`docs/05-feuille-de-route.md`](docs/05-feuille-de-route.md) | Jalons et critères de sortie ; l'état réel s'y suit (cases cochées) |
 | [`docs/06-conventions.md`](docs/06-conventions.md) | **Conventions de développement, à appliquer à tout le code** |
