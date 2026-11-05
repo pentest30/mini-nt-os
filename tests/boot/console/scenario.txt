@@ -12,8 +12,14 @@
 #   NtSetInformationThread(ThreadImpersonationToken, NULL)), consrv
 #   resolves its desktop (NtUserResolveDesktop), starts the console input
 #   thread of that desktop (NtUserConsoleControl) and creates the console
-#   window, whose WM_NCCREATE fails: no font answers to "VGA" nor
-#   "Terminal" (where the probe stops: the console is never given).
+#   window, with the console's font: VGA (UniVGA16.ttf), which
+#   EnumFontFamiliesExW finds (NtGdiGetFontFamilyInfo) fixed-pitch and
+#   FF_MODERN, as IsValidConsoleFont2 asks;
+# - THREADS1.EXE runs: 8 threads add to a counter under a critical section
+#   (16000 in all, never two in it at once), then it writes to its console
+#   (WriteConsoleW) and ends with 0x600D, which CONSOLE1.EXE reads.
+# Sleep(0) does not yet give the processor up (Ke): the threads do not wait
+# for the critical section ("contended: no"), see docs/compat/m5-console.md.
 # Update with each step (docs/compat/m5-console.md).
 features = test-smss
 requires = userland, native
@@ -23,10 +29,18 @@ timeout  = 120
 
 expect = [console] on WinSta0\Default
 expect = [console] CreateProcessW: a process and its thread
-expect = InitFonts: CreateConsoleFontEx('Terminal') failed
+expect = [threads] started
+expect = [threads] EnterCriticalSection twice: recursion 2
+expect = [threads] 8 threads: wait 0, counter 16000 of 16000, overlaps 0
+expect = [threads] WriteConsoleW: 1 (0), 17 characters
+expect = [console] THREADS1.EXE: wait 0, exit code 600d
+expect = [console] done
+expect = [boot] SOFTWARE hive mounted at \REGISTRY\MACHINE\SOFTWARE
 forbid = Failure to create process parameters
 forbid = Can't impersonate client thread
 forbid = sys: NtImpersonateThread (0x005f) is not implemented
 forbid = sys: NtUserConsoleControl (0x114d) is not implemented
 forbid = sys: NtUserResolveDesktop (0x11ee) is not implemented
 forbid = Loading GUI frontend failed
+forbid = CreateConsoleFont('VGA') failed
+forbid = sys: NtGdiGetFontFamilyInfo (0x12a0) is not implemented
