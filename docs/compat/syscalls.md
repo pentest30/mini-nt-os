@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 102 | 296 |
-| win32k | 71 | 737 |
+| win32k | 73 | 737 |
 
 ## ntoskrnl
 
@@ -856,7 +856,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1219` | `NtUserSetThreadState` | 2 |  |
 | `0x121a` | `NtUserSetTimer` | 4 |  |
 | `0x121b` | `NtUserSetWindowFNID` | 2 |  |
-| `0x121c` | `NtUserSetWindowLong` | 4 |  |
+| `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
 | `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
 | `0x121f` | `NtUserSetWindowRgn` | 3 |  |
@@ -868,7 +868,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1225` | `NtUserShowCaret` | 1 |  |
 | `0x1226` | `NtUserShowScrollBar` | 3 |  |
 | `0x1227` | `NtUserShowWindow` | 2 | ✅ |
-| `0x1228` | `NtUserShowWindowAsync` | 2 |  |
+| `0x1228` | `NtUserShowWindowAsync` | 2 | ✅ |
 | `0x1229` | `NtUserSoundSentry` | 0 |  |
 | `0x122a` | `NtUserSwitchDesktop` | 1 | ✅ |
 | `0x122b` | `NtUserSystemParametersInfo` | 4 |  |
