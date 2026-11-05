@@ -451,6 +451,15 @@ pub const fn thread_flags(csrss: u32, pid: u32) -> u32 {
     }
 }
 
+/// Le `PROCESSINFO` de `process`, s'il est déjà un processus GUI (sans le
+/// convertir, à la différence de [`process_info`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn existing_process_info(process: &Arc<Object<EProcess>>) -> Option<Arc<ProcessInfo>> {
+    process.win32_process().map(downcast)
+}
+
 /// Le `PROCESSINFO` de `process`, créé s'il n'en a pas (InitProcessCallback,
 /// GdiProcessCreate) : ses vues de la section partagée de USER et de la
 /// table des handles GDI ; son PEB reçoit l'adresse de la seconde

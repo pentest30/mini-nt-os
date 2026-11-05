@@ -32,6 +32,7 @@ pub mod atom;
 pub mod callback;
 pub mod class;
 pub mod client;
+pub mod console;
 pub mod csrss;
 pub mod dce;
 pub mod defwnd;
@@ -61,7 +62,7 @@ use abi::user::{SharedInfo32, UserConnect32, WndMsg32, FNID_NUM};
 use ob::Object;
 use ps::EProcess;
 
-pub use gui::{convert_current_thread, process_info, ProcessInfo, ThreadInfo};
+pub use gui::{convert_current_thread, existing_process_info, process_info, ProcessInfo, ThreadInfo};
 
 /// Le `SHAREDINFO` d'un client dont la vue de la section partagée est en
 /// `view` : le `SERVERINFO` et la table des handles dans sa vue (comme
