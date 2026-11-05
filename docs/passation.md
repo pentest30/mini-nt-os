@@ -19,7 +19,8 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- Le texte (M6, étape 11) : sur `claude/new-session-696xfc`, partie de `main` après la fusion de #54. Une branche
+- Le texte des clients (M6, étape 12) : sur `claude/new-session-696xfc`, partie de `main` après la fusion de #55
+  (étape 11). Une branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
@@ -371,9 +372,14 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      (`WINDOWS\FONTS` : Tahoma, Tahoma gras, Marlett ; `userland::install_fonts`), `win32k::font` (texte mis en
      glyphes, « ... », monochrome, cache), `Op::Glyph` et `Bitmap::blend_coverage`, le titre (UserDrawCaptionText) et
      les symboles Marlett des boutons (UITOOLS95_DrawFrameCaption, grisés sans leur style) dans `nonclient` ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : le texte des clients (polices d'un LOGFONT et
-     correspondance des noms, `FontSubstitutes` ; objets police de GDI, NtGdiHfontCreate, SelectObject ; ExtTextOut,
-     GetTextExtentPoint32, GetTextMetrics ; DrawText est dans `user32`), puis les contrôles et
+   - [x] le texte des clients (M6, étape 12) : `win32k::gdi::fontobj` (objet police, polices de stock, correspondance
+     d'un LOGFONT avec Tahoma, Tahoma gras ou Marlett, TMW_INTERNAL, étendue), `win32k::gdi::text` (ExtTextOut :
+     alignement, fond, ETO_OPAQUE, ETO_CLIPPED, `lpDx`), le lot (GdiBCTextOut, GdiBCExtTextOut, GdiBCSelObj),
+     NtGdiGetStockObject, NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent,
+     NtGdiExtTextOutW ; le programme `tests/native/text1.c` et son scénario `text` ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : DrawText (`user32`, qui demande
+     GetTextExtentExPoint : NtGdiGetTextExtentExW), les autres polices du disque et leur correspondance par nom
+     (`FontSubstitutes`), puis les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
@@ -425,6 +431,10 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Texte des clients (M6, étape 12) : toute police autre que Marlett donne Tahoma ou Tahoma gras (nom, largeur,
+  italique, soulignement et barré ignorés au dessin) ; TA_UPDATECP, ETO_GLYPH_INDEX, ETO_RTLREADING non suivis ;
+  NtGdiSelectFont et NtGdiExtTextOutW appelés directement sans test de bout en bout ; NtGdiOpenDCW (`user32`, à la
+  création d'une fenêtre) toujours absent.
 - Texte du titre (M6, étape 11) : sans hinting (ADR-013 : niveaux de gris à la place) ; avances arrondies au pixel
   par glyphe, sans crénage ; le cache des glyphes se vide en entier au-delà de 1024 ; une police installée est lue
   (`Font::parse`) à chaque texte ; `DFCS_INACTIVE` du bouton fermer (`CS_NOCLOSE`, menu système) non suivi ; le titre

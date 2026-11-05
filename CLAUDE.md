@@ -270,6 +270,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   métriques de GDI), polices de ReactOS dans `WINDOWS\FONTS` installées au démarrage (`userland::install_fonts`),
   `win32k::font` (texte en glyphes, « ... », cache), `Op::Glyph` ; le titre des fenêtres en Tahoma gras et les symboles
   Marlett des boutons (`nonclient`).
+  M6, étape 12 (le texte des clients) : polices de GDI (`win32k::gdi::fontobj` : objet police, polices de stock,
+  correspondance d'un LOGFONT, TEXTMETRIC), ExtTextOut (`win32k::gdi::text`) et ses appels en lot, NtGdiGetStockObject,
+  NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent, NtGdiExtTextOutW ; scénario `text`.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
