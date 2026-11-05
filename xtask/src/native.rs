@@ -41,6 +41,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["s1hello.c"], "S1HELLO.EXE", Toolchain::MinGw),
     (&["s1seh.c", "seh3.c"], "S1SEH.EXE", Toolchain::ClangMsvc),
     (&["gui1.c"], "GUI1.EXE", Toolchain::MinGwWin32),
+    (&["text1.c"], "TEXT1.EXE", Toolchain::MinGwWin32),
 ];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for

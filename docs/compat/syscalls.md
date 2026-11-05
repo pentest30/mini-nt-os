@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 101 | 296 |
-| win32k | 59 | 737 |
+| win32k | 65 | 737 |
 
 ## ntoskrnl
 
@@ -462,7 +462,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x108f` | `NtGdiExtFloodFill` | 5 |  |
 | `0x1090` | `NtGdiExtGetObjectW` | 3 |  |
 | `0x1091` | `NtGdiExtSelectClipRgn` | 3 | ✅ |
-| `0x1092` | `NtGdiExtTextOutW` | 9 |  |
+| `0x1092` | `NtGdiExtTextOutW` | 9 | ✅ |
 | `0x1093` | `NtGdiFillPath` | 1 |  |
 | `0x1094` | `NtGdiFillRgn` | 3 |  |
 | `0x1095` | `NtGdiFlattenPath` | 1 |  |
@@ -515,14 +515,14 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10c4` | `NtGdiGetServerMetaFileBits` | 7 |  |
 | `0x10c5` | `NtGdiGetSpoolMessage` | 4 |  |
 | `0x10c6` | `NtGdiGetStats` | 5 |  |
-| `0x10c7` | `NtGdiGetStockObject` | 1 |  |
+| `0x10c7` | `NtGdiGetStockObject` | 1 | ✅ |
 | `0x10c8` | `NtGdiGetStringBitmapW` | 5 |  |
 | `0x10c9` | `NtGdiGetSystemPaletteUse` | 1 |  |
 | `0x10ca` | `NtGdiGetTextCharsetInfo` | 3 |  |
-| `0x10cb` | `NtGdiGetTextExtent` | 5 |  |
+| `0x10cb` | `NtGdiGetTextExtent` | 5 | ✅ |
 | `0x10cc` | `NtGdiGetTextExtentExW` | 8 |  |
 | `0x10cd` | `NtGdiGetTextFaceW` | 4 |  |
-| `0x10ce` | `NtGdiGetTextMetricsW` | 3 |  |
+| `0x10ce` | `NtGdiGetTextMetricsW` | 3 | ✅ |
 | `0x10cf` | `NtGdiGetTransform` | 3 |  |
 | `0x10d0` | `NtGdiGetUFI` | 6 |  |
 | `0x10d1` | `NtGdiGetEmbUFI` | 7 |  |
@@ -533,7 +533,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10d6` | `NtGdiGetFontUnicodeRanges` | 2 |  |
 | `0x10d7` | `NtGdiGetWidthTable` | 7 |  |
 | `0x10d8` | `NtGdiGradientFill` | 6 |  |
-| `0x10d9` | `NtGdiHfontCreate` | 5 |  |
+| `0x10d9` | `NtGdiHfontCreate` | 5 | ✅ |
 | `0x10da` | `NtGdiIcmBrushInfo` | 8 |  |
 | `0x10db` | `NtGdiInit` | 0 | ✅ |
 | `0x10dc` | `NtGdiInitSpool` | 0 |  |
@@ -575,7 +575,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1100` | `NtGdiSelectBitmap` | 2 |  |
 | `0x1101` | `NtGdiSelectBrush` | 2 |  |
 | `0x1102` | `NtGdiSelectClipPath` | 2 |  |
-| `0x1103` | `NtGdiSelectFont` | 2 |  |
+| `0x1103` | `NtGdiSelectFont` | 2 | ✅ |
 | `0x1104` | `NtGdiSelectPen` | 2 |  |
 | `0x1105` | `NtGdiSetBitmapAttributes` | 2 |  |
 | `0x1106` | `NtGdiSetBitmapBits` | 3 |  |

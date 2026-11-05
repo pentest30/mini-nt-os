@@ -98,6 +98,8 @@ pub fn installed(face: Face) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlacedGlyph {
     pub x: i32,
+    /// L'index de son caractère dans le texte.
+    pub index: usize,
     pub bitmap: Arc<Bitmap>,
 }
 
@@ -122,6 +124,17 @@ fn em_of(font: &Font, height: i32) -> i64 {
         0 => font.em_for_cell(12),
         h => font.em_for_cell(h as u32),
     }
+}
+
+/// Les métriques de TEXTMETRIC (FillTM) de la police `face` à la hauteur de
+/// LOGFONT `height` ; `None` si elle n'est pas installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn text_metrics(face: Face, height: i32) -> Option<glyph::TextMetrics> {
+    let data = file(face)?;
+    let font = Font::parse(&data).ok()?;
+    Some(font.text_metrics(em_of(&font, height)))
 }
 
 /// Le glyphe `glyph` de `font` (la police `face`) à l'em `em`, du cache ou
@@ -183,9 +196,9 @@ pub fn text_run(face: Face, height: i32, text: &[u16], max_width: Option<i32>, q
     let shown = glyphs[..kept].iter().copied().chain(core::iter::repeat_n(dot, if truncated { 3 } else { 0 }));
     let mut x = 0;
     let mut placed = Vec::new();
-    for glyph in shown {
+    for (index, glyph) in shown.enumerate() {
         if let Some(bitmap) = rendered(face, &font, em, glyph, quality) {
-            placed.push(PlacedGlyph { x, bitmap });
+            placed.push(PlacedGlyph { x, index, bitmap });
         }
         x += advance(glyph);
     }

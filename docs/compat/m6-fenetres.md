@@ -480,8 +480,8 @@ dessinés avec les polices de ReactOS épinglé, sans FreeType :
   `core_maths` et `libm` sans `std`, hors de l'ADR-016) ; un rastériseur maison accumule l'aire signée de chaque pixel
   en virgule fixe 16.16 (niveaux de gris, courbes aplaties à un dixième de pixel près, sans hinting). Les métriques
   sont celles que GDI lit : ascent et descent Windows de la table `OS/2`, `xAvgCharWidth`. Tahoma à 8 points
-  (hauteur -11) a celles d'XP : ascent 11, descent 2, largeur moyenne 5. Marlett, police symbole, se lit par sa table
-  symbole (U+F000 à U+F0FF).
+  (hauteur -11) a celles d'XP : ascent 11, descent 2, largeur moyenne 5. Le Marlett épinglé (celui de Wine) place ses
+  symboles par Unicode (de `0` à `y`) ; une vraie police symbole se lit par sa table symbole (U+F000 à U+F0FF).
 - `xtask` met `tahoma.ttf`, `tahomabd.ttf` et `Marlett.ttf` dans `WINDOWS\FONTS` ; le noyau les lit par Io au
   démarrage et les installe dans win32k (`userland::install_fonts`, « [boot] fonts installed: … »).
 - `win32k::font` : les fichiers installés, un texte mis en glyphes à une hauteur de LOGFONT (négative : l'em ;
@@ -513,4 +513,58 @@ sous la ligne de base, couleurs active et inactive, titre long fini par des poin
 trois boutons, bouton grisé) ; 7 mutations du placement, des couleurs, du grisé, du mélange et des points, toutes
 tuées ; le scénario `gui` sur les deux CPU, avec 3 pixels de plus sur la capture (le `l` de « Visible », sous sa
 ligne de base, le centre de la croix) et le pixel de la face du bouton fermer déplacé à côté de la croix.
+
+## Étape 12 : le texte des clients (polices de GDI, TextOut, GetTextMetrics, GetTextExtentPoint32)
+
+Un nouveau programme de test, `tests/native/text1.c` (scénario `text`, à la place de `winlogon.exe` comme `gui`),
+prend un bureau puis fait du texte par `gdi32`. Sa première sonde : NtGdiGetStockObject, NtGdiHfontCreate (que
+`gdi32` appelle sans dire la taille de l'ENUMLOGFONTEXDVW), NtGdiGetTextMetricsW (68 octets, TMW_INTERNAL) et
+NtGdiGetTextExtent manquaient ; TextOutW et SelectObject d'une police passent par le lot du TEB (`gdi32` met en lot
+le texte que `lpk` lui rend : GdiBCTextOut, avec les attributs du DC pris à ce moment ; GdiBCSelObj, après avoir
+changé `hlfntNew` des attributs lui-même), que le noyau sautait.
+
+- `glyph` : les champs de TEXTMETRIC d'une police TrueType (FillTM de ReactOS comme spécification) :
+  l'interligne interne (WinAscent + WinDescent - unitsPerEm), la largeur maximale (`hhea`), la graisse
+  (`usWeightClass`), les premier, dernier, défaut et coupure des caractères (`OS/2`), le pas et la famille (PANOSE,
+  `post` : `TMPF_FIXED_PITCH` pour un pas variable, `TMPF_VECTOR`, `TMPF_TRUETYPE`, `FF_SWISS`), police symbole
+  (une table symbole, comme FreeType).
+- `abi::gdi` : LOGFONTW, TEXTMETRICW, TMDIFF, TMW_INTERNAL, GDIBSTEXTOUT, GDIBSEXTTEXTOUT, `LO_FONT_TYPE`, les
+  polices de stock, ETO_*, TA_*.
+- `win32k::gdi::fontobj` : l'objet police (LFONT) dans la table des handles, au processus ou public ; les sept
+  polices de stock (CreateStockFonts : SYSTEM_FONT « System » 16 gras, DEFAULT_GUI_FONT « MS Shell Dlg » -11…) ; la
+  correspondance d'un LOGFONT : une graisse de 600 ou plus donne Tahoma gras, « Marlett » Marlett, tout autre nom
+  Tahoma ; le TMW_INTERNAL d'une police (l'italique, le soulignement et le barré demandés) ; l'étendue d'un texte.
+- La police d'un DC est celle de ses attributs (`hlfntNew`), lus par le noyau au moment voulu ; un DC neuf a la police
+  du système.
+- `win32k::gdi::text` (GreExtTextOutW comme spécification) : le texte placé selon l'alignement (TA_LEFT, TA_RIGHT,
+  TA_CENTER ; TA_TOP, TA_BASELINE, TA_BOTTOM), sur sa cellule remplie de la couleur de fond en mode OPAQUE, sur le
+  rectangle rempli avec ETO_OPAQUE, coupé à lui avec ETO_CLIPPED et à la région où peint le DC ; les avances d'un
+  client (`lpDx`, les horizontales d'ETO_PDY).
+- Lot (`gdi::batch`) : GdiBCTextOut (ses avances puis ses caractères, depuis l'octet 0x50), GdiBCExtTextOut (un
+  rectangle rempli), GdiBCSelObj (rien à faire : le noyau lit `hlfntNew`).
+- Services : NtGdiGetStockObject, NtGdiHfontCreate (le LOGFONTW au début de ce qu'il reçoit), NtGdiSelectFont,
+  NtGdiGetTextMetricsW, NtGdiGetTextExtent, NtGdiExtTextOutW.
+
+Ce que lit le programme : les polices de stock sont des polices (`OBJ_FONT`), l'ancienne police d'un DC neuf est celle
+du système ; DEFAULT_GUI_FONT a les métriques de Tahoma 8 points d'XP (hauteur 13, ascent 11, descent 2, interligne
+interne 2, externe 0, largeur moyenne 5, graisse 400, pas et famille `0x27`, ANSI_CHARSET) ; « Mino » fait 23 × 13,
+27 × 13 en gras. Sur la capture : « Mino » en bleu marine, « Opaque te » sur son rectangle jaune coupé, « Bold » en
+gras.
+
+Sans hinting (ADR-013), un fût d'un pixel de Tahoma normal tombe souvent sur deux colonnes : les pixels du texte
+tirent vers sa couleur sans toujours l'atteindre.
+
+Ce qui manque : les autres polices du disque et leur correspondance par nom, `FontSubstitutes`, l'énumération des
+polices, GetObject d'une police, la largeur, l'italique, le soulignement et le barré au dessin, l'orientation,
+TA_UPDATECP, ETO_GLYPH_INDEX, ETO_RTLREADING, les DC transformés, GetTextExtentExPoint (NtGdiGetTextExtentExW : DrawText
+en a besoin), GetCharWidth, GetTextFace, OUTLINETEXTMETRIC, NtGdiOpenDCW (que `user32` appelle à la création d'une
+fenêtre, sans effet visible). Sans test de bout en bout : NtGdiSelectFont et NtGdiExtTextOutW appelés directement
+(`gdi32` met en lot SelectObject et TextOut ; ils servent quand le lot est plein ou un DC a une section DIB) ; leurs
+parties communes passent par les tests hôte.
+
+Tests : hôte (`glyph` : TEXTMETRIC de Tahoma, Tahoma gras et Marlett ; `fontobj` : correspondance, métriques, étendue ;
+`text` : alignements, fond de cellule et rectangle, coupure, avances ; `batch` : TextOut, ExtTextOut et SelectObject
+lus) ; 10 mutations de l'alignement, du fond, de la coupure, des avances, de la graisse, des métriques et du lot,
+toutes tuées sur l'hôte, et 3 dans le scénario (police initiale d'un DC, hauteur d'une étendue, TextOut en lot) ; le
+scénario `text` sur les deux CPU, avec 8 pixels de la capture.
 

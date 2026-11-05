@@ -5,14 +5,24 @@
 LIBRARY gdi32.dll
 EXPORTS
 CombineRgn@16
+CreateFontW@56
 CreateRectRgn@16
 DeleteDC@4
 DeleteObject@4
 ExtSelectClipRgn@12
+ExtTextOutW@32
 GdiFlush@0
 GetClipBox@8
 GetObjectType@4
 GetRgnBox@8
+GetStockObject@4
+GetTextExtentPoint32W@16
+GetTextMetricsW@8
 PatBlt@24
 SelectClipRgn@8
+SelectObject@8
+SetBkColor@8
+SetBkMode@8
 SetRectRgn@20
+SetTextColor@8
+TextOutW@20

@@ -3,10 +3,12 @@
 //! et ceux des couleurs du système (GetSysColorBrush, `ahbrSystem` du
 //! `SERVERINFO`, où `user32` les lit) sont créés au démarrage, publics.
 //!
+//! Les polices de stock sont créées avec eux (`super::fontobj`).
+//!
 //! Pas encore : les pinceaux d'un client (CreateSolidBrush, leur
 //! `BRUSH_ATTR`), hachurés et à motif, le pinceau du DC (`DC_BRUSH`), les
-//! autres objets de stock (stylos, polices, palette), un changement des
-//! couleurs du système (SetSysColors).
+//! autres objets de stock (stylos, palette), un changement des couleurs du
+//! système (SetSysColors).
 
 use alloc::sync::Arc;
 use core::mem::offset_of;
@@ -76,6 +78,9 @@ pub fn init(colors: &[u32; NUM_SYSCOLORS]) -> Result<(), NtStatus> {
     let mut objects = [0; stock::COUNT];
     for (slot, brush) in objects.iter_mut().zip(STOCK_BRUSHES) {
         *slot = create_stock(brush)?;
+    }
+    for (index, logfont) in super::fontobj::stock_fonts() {
+        objects[index] = super::fontobj::create_stock(logfont)?;
     }
     STOCK.call_once(|| objects);
     let mut system = [0u8; NUM_SYSCOLORS * 4];
