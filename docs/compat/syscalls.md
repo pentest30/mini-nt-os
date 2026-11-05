@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 102 | 296 |
-| win32k | 70 | 737 |
+| win32k | 71 | 737 |
 
 ## ntoskrnl
 
@@ -988,7 +988,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x129d` | `NtDxEngGetRedirectionBitmap` | 1 |  |
 | `0x129e` | `NtGdiSetViewportOrgEx` | 4 |  |
 | `0x129f` | `NtGdiSetWindowOrgEx` | 4 |  |
-| `0x12a0` | `NtGdiGetFontFamilyInfo` | 4 |  |
+| `0x12a0` | `NtGdiGetFontFamilyInfo` | 4 | ✅ |
 | `0x12a1` | `NtGdiOffsetViewportOrgEx` | 4 |  |
 | `0x12a2` | `NtGdiOffsetWindowOrgEx` | 4 |  |
 | `0x12a3` | `NtUserGetMonitorInfo` | 2 | ✅ |
