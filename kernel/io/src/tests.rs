@@ -230,3 +230,16 @@ fn the_namespace_reaches_files_through_the_drive_letter() {
     );
     assert_eq!(ns.open("\\??\\D:\\X", None, None, 0).err(), Some(STATUS_OBJECT_PATH_NOT_FOUND), "no D:");
 }
+
+#[test]
+fn a_directory_lists_its_names() {
+    let volume = volume();
+    let root = volume.root();
+    assert_eq!(volume.list(&root).unwrap(), ["WINDOWS", "BOOT.INI"]);
+    let system32 = volume.lookup(&root, "WINDOWS\\SYSTEM32").unwrap();
+    assert_eq!(volume.list(&system32).unwrap(), ["NTDLL.DLL", "CONFIG"], "neither . nor ..");
+    let config = volume.lookup(&system32, "CONFIG").unwrap();
+    assert!(volume.list(&config).unwrap().is_empty(), "an empty directory");
+    let ntdll = volume.lookup(&system32, "NTDLL.DLL").unwrap();
+    assert_eq!(volume.list(&ntdll), Err(abi::ntstatus::STATUS_NOT_A_DIRECTORY));
+}

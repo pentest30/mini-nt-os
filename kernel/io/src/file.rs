@@ -227,6 +227,15 @@ impl File {
         self.volume.read(&self.opened, offset, out)
     }
 
+    /// Les noms de ce que tient ce répertoire (`Volume::list`) ;
+    /// `STATUS_NOT_A_DIRECTORY` pour un fichier.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn list(&self) -> Result<Vec<String>, NtStatus> {
+        self.volume.list(&self.opened)
+    }
+
     /// Le fichier en entier.
     ///
     /// # IRQL

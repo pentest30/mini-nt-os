@@ -31,6 +31,8 @@
 //! passent pour de l'UTC, et rien ne les écrit encore).
 
 use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use abi::file::{
     FileFsDeviceInformation, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
@@ -38,8 +40,8 @@ use abi::file::{
 };
 use abi::ntstatus::{
     NtStatus, STATUS_DISK_CORRUPT_ERROR, STATUS_DISK_FULL, STATUS_FILE_CORRUPT_ERROR, STATUS_INVALID_DEVICE_REQUEST,
-    STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
-    STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
+    STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY, STATUS_OBJECT_NAME_COLLISION,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
 };
 use hal::sync::KSpinLock;
 
@@ -166,6 +168,26 @@ impl Volume {
             return Err(STATUS_OBJECT_NAME_INVALID);
         }
         Ok(node)
+    }
+
+    /// Les noms des fichiers et des répertoires du répertoire `directory`,
+    /// dans l'ordre de leurs entrées : leur nom long s'ils en ont un, sinon
+    /// leur nom 8.3 ; ni `.`, ni `..`, ni le nom du volume.
+    /// `STATUS_NOT_A_DIRECTORY` pour un fichier.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn list(&self, directory: &Node) -> Result<Vec<String>, NtStatus> {
+        if !directory.directory {
+            return Err(STATUS_NOT_A_DIRECTORY);
+        }
+        let _guard = self.lock.lock();
+        let entries = self.fat.dir_entries(directory.first_cluster).map_err(device_error)?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| entry.attr & 0x08 == 0 && entry.name != "." && entry.name != "..")
+            .map(|entry| entry.name)
+            .collect())
     }
 
     /// Ce que dit maintenant l'entrée de `node`.
