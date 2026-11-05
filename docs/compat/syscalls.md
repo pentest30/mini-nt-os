@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 102 | 296 |
-| win32k | 73 | 737 |
+| win32k | 78 | 737 |
 
 ## ntoskrnl
 
@@ -329,7 +329,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x100a` | `NtGdiFontIsLinked` | 1 |  |
 | `0x100b` | `NtGdiArcInternal` | 10 |  |
 | `0x100c` | `NtGdiBeginPath` | 1 |  |
-| `0x100d` | `NtGdiBitBlt` | 11 |  |
+| `0x100d` | `NtGdiBitBlt` | 11 | ✅ |
 | `0x100e` | `NtGdiCancelDC` | 1 |  |
 | `0x100f` | `NtGdiCheckBitmapBits` | 8 |  |
 | `0x1010` | `NtGdiCloseFigure` | 1 |  |
@@ -346,10 +346,10 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x101b` | `NtGdiCreateColorSpace` | 1 |  |
 | `0x101c` | `NtGdiCreateColorTransform` | 8 |  |
 | `0x101d` | `NtGdiCreateCompatibleBitmap` | 3 |  |
-| `0x101e` | `NtGdiCreateCompatibleDC` | 1 |  |
+| `0x101e` | `NtGdiCreateCompatibleDC` | 1 | ✅ |
 | `0x101f` | `NtGdiCreateDIBBrush` | 6 |  |
 | `0x1020` | `NtGdiCreateDIBitmapInternal` | 11 |  |
-| `0x1021` | `NtGdiCreateDIBSection` | 9 |  |
+| `0x1021` | `NtGdiCreateDIBSection` | 9 | ✅ |
 | `0x1022` | `NtGdiCreateEllipticRgn` | 4 |  |
 | `0x1023` | `NtGdiCreateHalftonePalette` | 1 |  |
 | `0x1024` | `NtGdiCreateHatchBrushInternal` | 3 |  |
@@ -360,7 +360,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1029` | `NtGdiCreateRectRgn` | 4 | ✅ |
 | `0x102a` | `NtGdiCreateRoundRectRgn` | 6 |  |
 | `0x102b` | `NtGdiCreateServerMetaFile` | 6 |  |
-| `0x102c` | `NtGdiCreateSolidBrush` | 2 |  |
+| `0x102c` | `NtGdiCreateSolidBrush` | 2 | ✅ |
 | `0x102d` | `NtGdiD3dContextCreate` | 4 |  |
 | `0x102e` | `NtGdiD3dContextDestroy` | 1 |  |
 | `0x102f` | `NtGdiD3dContextDestroyAll` | 1 |  |
@@ -572,7 +572,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10fd` | `NtGdiSaveDC` | 1 |  |
 | `0x10fe` | `NtGdiScaleViewportExtEx` | 6 |  |
 | `0x10ff` | `NtGdiScaleWindowExtEx` | 6 |  |
-| `0x1100` | `NtGdiSelectBitmap` | 2 |  |
+| `0x1100` | `NtGdiSelectBitmap` | 2 | ✅ |
 | `0x1101` | `NtGdiSelectBrush` | 2 |  |
 | `0x1102` | `NtGdiSelectClipPath` | 2 |  |
 | `0x1103` | `NtGdiSelectFont` | 2 | ✅ |

@@ -8,7 +8,7 @@
 //!
 //! Les appels exécutés : PatBlt, SelectClipRgn (`RGN_COPY`, d'un rectangle
 //! ou d'aucune région : [`dc::select_clip_rect`]), DeleteObject (d'une
-//! région, d'un pinceau ou d'une police : [`rgnobj::delete_object`]),
+//! région, d'un pinceau ou d'une police : [`super::delete_object`]),
 //! TextOut et ExtTextOut (GdiBCTextOut, avec les attributs de texte pris
 //! par `gdi32` ; GdiBCExtTextOut, un rectangle rempli : [`text`]) et
 //! SelectObject d'une police (GdiBCSelObj : `gdi32` a déjà changé `hlfntNew`
@@ -34,7 +34,6 @@ use ke::usermem::{copy_from_user, copy_to_user, UserPtr};
 
 use super::dc::{self, Dc};
 use super::dib::{ColorRef, Rect};
-use super::rgnobj;
 use super::text::{self, TextAttrs};
 
 /// Un appel du lot.
@@ -122,7 +121,7 @@ fn run(call: &Call, dc: Option<&Dc>) {
             }
         }
         Call::Delete(handle) => {
-            rgnobj::delete_object(*handle);
+            super::delete_object(*handle);
         }
         Call::Select(_) => {}
         Call::TextOut(call, string, dx) => {

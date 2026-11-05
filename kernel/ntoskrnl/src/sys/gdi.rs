@@ -7,16 +7,23 @@
 //! NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent,
 //! NtGdiGetTextExtentExW, NtGdiExtTextOutW (`win32k::gdi::fontobj`,
 //! `win32k::gdi::text`) ; pour DrawText, NtGdiIntersectClipRect et
-//! NtGdiGetRandomRgn. Les appels que `gdi32` met en
-//! lot dans le TEB sont exécutés avant chaque service de win32k
-//! ([`super::dispatch`]) : NtGdiFlush n'a plus rien à faire.
+//! NtGdiGetRandomRgn. Les DC en mémoire et les bitmaps : NtGdiCreateCompatibleDC,
+//! NtGdiCreateDIBSection, NtGdiSelectBitmap, NtGdiBitBlt
+//! (`win32k::gdi::surface`, `win32k::gdi::bitblt`) ; NtGdiCreateSolidBrush.
+//! Les appels que `gdi32` met en lot dans le TEB sont exécutés avant chaque
+//! service de win32k ([`super::dispatch`]) : NtGdiFlush n'a plus rien à
+//! faire.
 
-use abi::gdi::{rgn, ERROR, GDI_HANDLE_STOCK_MASK, GDI_HANDLE_TYPE_MASK, LO_DC_TYPE};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use abi::gdi::{rgn, BitmapInfoHeader32, BI_BITFIELDS, ERROR, GDI_HANDLE_STOCK_MASK, GDI_HANDLE_TYPE_MASK, LO_DC_TYPE};
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
-use abi::winerror::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY};
-use ke::usermem::copy_to_user;
+use abi::winerror::{
+    ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_NO_SYSTEM_RESOURCES,
+};
+use ke::usermem::{copy_from_user, copy_to_user};
 use win32k::gdi::dib::Rect;
-use win32k::gdi::{region, rgnobj};
+use win32k::gdi::{region, rgnobj, surface};
 
 /// Met l'erreur de Win32 `error` du thread et rend `value`.
 fn fail(error: u32, value: u32) -> NtStatus {
@@ -366,9 +373,9 @@ pub(super) fn nt_gdi_get_rgn_box(arguments: &[u32]) -> NtStatus {
 
 /// NtGdiDeleteObjectApp(hobj) : BOOL. Un objet de stock reste (TRUE) ; un
 /// objet qui n'est pas au processus met `ERROR_INVALID_HANDLE` ; un DC de
-/// fenêtre est rendu au cache (DeleteDC, IntGdiDeleteDC : UserReleaseDC) ;
-/// les autres objets quittent la table (GreDeleteObject : `gdi32` ne
-/// l'appelle pas encore, il met en lot la suppression d'une région).
+/// fenêtre est rendu au cache (DeleteDC, IntGdiDeleteDC : UserReleaseDC),
+/// un DC en mémoire supprimé ; les autres objets quittent la table
+/// (GreDeleteObject ; FALSE pour un bitmap choisi dans un DC).
 pub(super) fn nt_gdi_delete_object_app(arguments: &[u32]) -> NtStatus {
     let handle = arguments[0];
     if handle & GDI_HANDLE_STOCK_MASK != 0 {
@@ -380,9 +387,9 @@ pub(super) fn nt_gdi_delete_object_app(arguments: &[u32]) -> NtStatus {
         return fail(ERROR_INVALID_HANDLE, 0);
     }
     let deleted = if handle & GDI_HANDLE_TYPE_MASK == LO_DC_TYPE {
-        win32k::dce::release_dc(handle)
+        win32k::dce::release_dc(handle) || win32k::gdi::dc::delete_memory_dc(handle)
     } else {
-        rgnobj::delete_object(handle)
+        win32k::gdi::delete_object(handle)
     };
     NtStatus(u32::from(deleted))
 }
@@ -397,6 +404,102 @@ pub(super) fn nt_gdi_ext_select_clip_rgn(arguments: &[u32]) -> NtStatus {
         Ok(complexity) => NtStatus(complexity as u32),
         Err(error) => fail(error, ERROR as u32),
     }
+}
+
+/// NtGdiCreateCompatibleDC(hdc) : HDC, un DC en mémoire du processus
+/// (`win32k::gdi::dc::create_memory_dc`), compatible avec l'écran ; NULL
+/// pour un `hdc` qui n'est pas au processus (sans erreur, comme ReactOS) ou
+/// sans place.
+pub(super) fn nt_gdi_create_compatible_dc(arguments: &[u32]) -> NtStatus {
+    let hdc = arguments[0];
+    if hdc != 0 && win32k::gdi::dc::lock(hdc).is_none() {
+        return NtStatus(0);
+    }
+    NtStatus(win32k::gdi::dc::create_memory_dc().unwrap_or(0))
+}
+
+/// NtGdiCreateDIBSection(hdc, hSection, dwOffset, pbmi, iUsage, cjHeader,
+/// fl, dwColorSpace, ppvBits) : HBITMAP, une DIB section du processus
+/// (`win32k::gdi::surface`), dont l'adresse des pixels chez lui va en
+/// `*ppvBits`. NULL sans `pbmi` ; `ERROR_INVALID_HANDLE` pour un `hdc` qui
+/// n'est pas au processus ; l'erreur de `dib_geometry` pour un en-tête
+/// refusé ; `ERROR_NO_SYSTEM_RESOURCES` sans mémoire. Une section de
+/// l'application (`hSection`) : pas encore (`ERROR_INVALID_PARAMETER`,
+/// journalisé une fois).
+pub(super) fn nt_gdi_create_dib_section(arguments: &[u32]) -> NtStatus {
+    let [hdc, section, _offset, info, _usage, _header_size, _fl, _color_space, bits] = arguments[..9] else {
+        unreachable!("9 arguments")
+    };
+    if info == 0 {
+        return NtStatus(0);
+    }
+    if hdc != 0 && win32k::gdi::dc::lock(hdc).is_none() {
+        return fail(ERROR_INVALID_HANDLE, 0);
+    }
+    if section != 0 {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtGdiCreateDIBSection on an application's section: not yet");
+        }
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let read = || -> Result<_, NtStatus> {
+        let mut bytes = [0u8; core::mem::size_of::<BitmapInfoHeader32>()];
+        copy_from_user(&mut bytes, u64::from(info))?;
+        let header = BitmapInfoHeader32::from_bytes(&bytes).ok_or(STATUS_INVALID_PARAMETER)?;
+        // The masks follow a BITMAPINFOHEADER, and are where a V4 or V5
+        // header has them: from byte 40 either way.
+        let masks = if header.compression == BI_BITFIELDS {
+            let mut masks = [0u8; 12];
+            copy_from_user(&mut masks, u64::from(info) + bytes.len() as u64)?;
+            let word = |at: usize| u32::from_le_bytes([masks[at], masks[at + 1], masks[at + 2], masks[at + 3]]);
+            Some([word(0), word(4), word(8)])
+        } else {
+            None
+        };
+        Ok((header, masks))
+    };
+    let Ok((header, masks)) = read() else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    let geometry = match surface::dib_geometry(&header, masks) {
+        Ok(geometry) => geometry,
+        Err(error) => return fail(error, 0),
+    };
+    let Ok((hbitmap, base)) = surface::create_dib_section(geometry) else {
+        return fail(ERROR_NO_SYSTEM_RESOURCES, 0);
+    };
+    if bits != 0 {
+        // As ReactOS: a `ppvBits` that cannot be written leaves the bitmap.
+        let _ = copy_to_user(u64::from(bits), &base.to_le_bytes());
+    }
+    NtStatus(hbitmap)
+}
+
+/// NtGdiSelectBitmap(hdc, hbmp) : HBITMAP, l'ancien bitmap du DC en mémoire
+/// (`win32k::gdi::dc::select_bitmap`) ; NULL sinon.
+pub(super) fn nt_gdi_select_bitmap(arguments: &[u32]) -> NtStatus {
+    let [hdc, hbmp] = arguments[..2] else { unreachable!("2 arguments") };
+    NtStatus(win32k::gdi::dc::select_bitmap(hdc, hbmp).unwrap_or(0))
+}
+
+/// NtGdiBitBlt(hdcDst, x, y, cx, cy, hdcSrc, xSrc, ySrc, rop4, crBackColor,
+/// fl) : BOOL (`win32k::gdi::bitblt`). `crBackColor` ne sert qu'à une source
+/// monochrome (pas encore).
+pub(super) fn nt_gdi_bit_blt(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, width, height, hdc_src, x_src, y_src, rop, _back, _fl] = arguments[..11] else {
+        unreachable!("11 arguments")
+    };
+    let rect = (x as i32, y as i32, width as i32, height as i32);
+    match win32k::gdi::bitblt::bit_blt(hdc, rect, hdc_src, (x_src as i32, y_src as i32), rop) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiCreateSolidBrush(cr, hbr) : HBRUSH, un pinceau plein du processus
+/// (`win32k::gdi::brush::create_solid`) ; NULL sans place. `hbr` (un
+/// pinceau à reprendre) est ignoré, comme dans ReactOS.
+pub(super) fn nt_gdi_create_solid_brush(arguments: &[u32]) -> NtStatus {
+    NtStatus(win32k::gdi::brush::create_solid(arguments[0]).unwrap_or(0))
 }
 
 /// NtGdiFlush() : STATUS_SUCCESS ; le lot du thread est déjà exécuté.

@@ -23,15 +23,16 @@
 //!
 //! Pas encore : les objets d'un processus rendus à sa fin ; les verrous
 //! partagés et exclusifs ; le cache de handles du PEB (`GdiHandleBuffer`) ;
-//! les capacités de l'écran (`DevCaps`, à zéro) et les polices publiques
-//! (`cfPublic`, hors de la vue : `gdi32` ne les lit pas).
+//! les polices publiques (`cfPublic`, hors de la vue : `gdi32` ne les lit
+//! pas). Les capacités de l'écran (`DevCaps`) suivent les entrées
+//! ([`set_device_caps`], `super::devcaps`).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
 
 use abi::gdi::{
-    gdi_entry_offset, GdiSharedTail32, GdiTableEntry32, GDI_ENTRY_REUSE_INCREMENT, GDI_ENTRY_STOCK_MASK,
+    gdi_entry_offset, DevCaps32, GdiSharedTail32, GdiTableEntry32, GDI_ENTRY_REUSE_INCREMENT, GDI_ENTRY_STOCK_MASK,
     GDI_HANDLE_COUNT, GDI_HANDLE_INDEX_MASK, GDI_HANDLE_STOCK_MASK, GDI_HANDLE_TYPE_MASK, GDI_SHARED_TAIL,
     RESERVE_ENTRIES_COUNT,
 };
@@ -68,6 +69,7 @@ pub enum Object {
     Brush(Arc<Brush>),
     Region(Arc<RegionObject>),
     Font(Arc<super::fontobj::FontObject>),
+    Bitmap(Arc<super::surface::Surface>),
 }
 
 /// Une entrée prise ou rendue : l'objet (aucun pour une entrée rendue),
@@ -221,6 +223,17 @@ pub fn map_into(space: &AddressSpace) -> Result<u32, NtStatus> {
     let options = ViewOptions { top_down: true, no_change: true };
     let view = space.map_view_with(section, 0, 0, u64::from(VIEW_SIZE), PageProtect::READONLY, options)?;
     Ok(view.base as u32)
+}
+
+/// Écrit `caps`, les capacités de l'écran, après les entrées de la section.
+/// `STATUS_UNSUCCESSFUL` avant [`init`].
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn set_device_caps(caps: &DevCaps32) -> Result<(), NtStatus> {
+    let section = SECTION.get().ok_or(STATUS_UNSUCCESSFUL)?;
+    let tail = GdiSharedTail32 { dev_caps: *caps, ..GdiSharedTail32::default() };
+    section.write_kernel(u64::from(GDI_SHARED_TAIL), &tail.as_bytes()[..size_of::<DevCaps32>()])
 }
 
 /// Écrit l'entrée `entry` du handle `handle` dans la section, si elle

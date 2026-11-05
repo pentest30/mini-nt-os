@@ -529,6 +529,102 @@ pub mod rop {
     pub const BLACKNESS: u32 = 0x0000_0042;
     /// White.
     pub const WHITENESS: u32 = 0x00FF_0062;
+    /// The source.
+    pub const SRCCOPY: u32 = 0x00CC_0020;
+    /// BitBlt: include the windows layered on the source (no such windows
+    /// yet).
+    pub const CAPTUREBLT: u32 = 0x4000_0000;
+    /// BitBlt: no mirroring of the source (no mirrored DCs yet).
+    pub const NOMIRRORBITMAP: u32 = 0x8000_0000;
+}
+
+/// What a display's GDIINFO says, as DEVCAPS (and GetDeviceCaps) give it.
+pub mod caps {
+    /// GDI_DRIVER_VERSION: `ulVersion`.
+    pub const GDI_DRIVER_VERSION: u32 = 0x4000;
+    /// DT_RASDISPLAY: `ulTechnology`.
+    pub const DT_RASDISPLAY: u32 = 1;
+    /// RC_*: `ulRasterCaps`.
+    pub const RC_BITBLT: u32 = 0x0001;
+    pub const RC_BITMAP64: u32 = 0x0008;
+    pub const RC_GDI20_OUTPUT: u32 = 0x0010;
+    pub const RC_DI_BITMAP: u32 = 0x0080;
+    pub const RC_DIBTODEV: u32 = 0x0200;
+    pub const RC_BIGFONT: u32 = 0x0400;
+    pub const RC_STRETCHBLT: u32 = 0x0800;
+    pub const RC_FLOODFILL: u32 = 0x1000;
+    pub const RC_STRETCHDIB: u32 = 0x2000;
+    pub const RC_OP_DX_OUTPUT: u32 = 0x4000;
+    /// TC_*: `ulTextCaps`.
+    pub const TC_OP_CHARACTER: u32 = 0x0001;
+    pub const TC_OP_STROKE: u32 = 0x0002;
+    pub const TC_CP_STROKE: u32 = 0x0004;
+    pub const TC_UA_ABLE: u32 = 0x0800;
+    pub const TC_SO_ABLE: u32 = 0x1000;
+    pub const TC_RA_ABLE: u32 = 0x2000;
+    pub const TC_VA_ABLE: u32 = 0x4000;
+}
+
+/// BI_RGB, BI_BITFIELDS: a DIB's `biCompression`.
+pub const BI_RGB: u32 = 0;
+pub const BI_BITFIELDS: u32 = 3;
+/// DIB_RGB_COLORS, DIB_PAL_COLORS: what a DIB's colour table holds.
+pub const DIB_RGB_COLORS: u32 = 0;
+pub const DIB_PAL_COLORS: u32 = 1;
+
+/// BITMAPINFOHEADER: what a DIB is (`bmiHeader` of a BITMAPINFO, which
+/// `gdi32` gives in this form: ConvertBitmapInfo).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BitmapInfoHeader32 {
+    /// Its own size: at least 40 (a BITMAPV4HEADER or V5 is longer).
+    pub size: u32,
+    pub width: i32,
+    /// Positive: the rows go up from the bottom one; negative: down from
+    /// the top one.
+    pub height: i32,
+    pub planes: u16,
+    pub bit_count: u16,
+    pub compression: u32,
+    pub size_image: u32,
+    pub x_pels_per_meter: i32,
+    pub y_pels_per_meter: i32,
+    pub clr_used: u32,
+    pub clr_important: u32,
+}
+
+impl BitmapInfoHeader32 {
+    /// The header in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let half = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        Some(Self {
+            size: word(0),
+            width: word(4) as i32,
+            height: word(8) as i32,
+            planes: half(0xC),
+            bit_count: half(0xE),
+            compression: word(0x10),
+            size_image: word(0x14),
+            x_pels_per_meter: word(0x18) as i32,
+            y_pels_per_meter: word(0x1C) as i32,
+            clr_used: word(0x20),
+            clr_important: word(0x24),
+        })
+    }
+}
+
+/// BRUSH_ATTR: a client brush's attributes, in its process (`gdi32` reads
+/// its colour; it deletes a brush that has them by a batched call).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BrushAttr32 {
+    pub attr_flags: u32,
+    /// COLORREF.
+    pub color: u32,
 }
 
 /// What GetClipBox (and a region's `iComplexity`) returns.
@@ -552,8 +648,11 @@ pub mod stock {
     pub const DEVICE_DEFAULT_FONT: usize = 14;
     pub const SYSTEM_FIXED_FONT: usize = 16;
     pub const DEFAULT_GUI_FONT: usize = 17;
-    /// The stock objects (`STOCK_LAST + 1`).
-    pub const COUNT: usize = 21;
+    /// The bitmap of a new memory DC: 1 × 1, monochrome (outside
+    /// `STOCK_LAST`, as ReactOS has it; 20 is not used).
+    pub const DEFAULT_BITMAP: usize = 21;
+    /// The stock objects (`NB_STOCK_OBJECTS`).
+    pub const COUNT: usize = 22;
 }
 
 const _: () = {
@@ -600,6 +699,11 @@ const _: () = {
     assert!(size_of::<GdiBsObject32>() == 8);
     // gdi32!GetRgnBox: `mov eax, [attr + 4]`, the rectangle from 8.
     assert!(size_of::<RgnAttr32>() == 0x18);
+    assert!(size_of::<BitmapInfoHeader32>() == 40);
+    assert!(offset_of!(BitmapInfoHeader32, bit_count) == 0xE);
+    assert!(offset_of!(BitmapInfoHeader32, clr_important) == 0x24);
+    assert!(size_of::<BrushAttr32>() == 8);
+    assert!(offset_of!(BrushAttr32, color) == 4);
     assert!(offset_of!(RgnAttr32, complexity) == 4);
     assert!(offset_of!(RgnAttr32, rect) == 8);
 };
@@ -619,7 +723,17 @@ macro_rules! as_bytes {
     )*};
 }
 
-as_bytes!(GdiTableEntry32, GdiSharedTail32, DcAttr32, GdiBsPatBlt32, GdiBsExtSelClipRgn32, GdiBsObject32, RgnAttr32);
+as_bytes!(
+    GdiTableEntry32,
+    GdiSharedTail32,
+    DcAttr32,
+    GdiBsPatBlt32,
+    GdiBsExtSelClipRgn32,
+    GdiBsObject32,
+    RgnAttr32,
+    BitmapInfoHeader32,
+    BrushAttr32
+);
 
 /// LF_FACESIZE: the characters of a face name, its NUL included.
 pub const LF_FACESIZE: usize = 32;

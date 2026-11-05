@@ -15,6 +15,9 @@ pub const ERROR_PATH_NOT_FOUND: u32 = 3;
 pub const ERROR_ACCESS_DENIED: u32 = 5;
 /// ERROR_INVALID_INDEX.
 pub const ERROR_INVALID_INDEX: u32 = 1413;
+/// ERROR_NO_SYSTEM_RESOURCES: not enough memory for what was asked
+/// (a bitmap, for GDI).
+pub const ERROR_NO_SYSTEM_RESOURCES: u32 = 1450;
 /// ERROR_INVALID_HANDLE.
 pub const ERROR_INVALID_HANDLE: u32 = 6;
 /// ERROR_NOT_ENOUGH_MEMORY.

@@ -6,8 +6,17 @@
 //! couleur ([`ColorRef`], `0x00BBGGRR`) y devient un pixel par
 //! [`PixelLayout::pixel`].
 //!
-//! Pas encore : les autres profondeurs (1, 4, 8, 16, 24 bits), BitBlt et
-//! StretchBlt entre surfaces, les ROP, les motifs, l'alpha, les lignes.
+//! Les lignes d'une DIB dont `biHeight` est positif montent depuis celle du
+//! bas ([`Bitmap::bottom_up`]) : la ligne `y` de la surface est la ligne
+//! `height - 1 - y` en mémoire.
+//!
+//! BitBlt ([`Bitmap::blt_from`], [`Bitmap::blt_within`]) combine la source,
+//! le motif d'un pinceau plein et la destination par un ROP3 quelconque
+//! ([`rop3`]) ; une copie entre surfaces de même ordre d'octets passe ligne
+//! par ligne.
+//!
+//! Pas encore : les autres profondeurs (1, 4, 8, 16, 24 bits), StretchBlt,
+//! les motifs, l'alpha, les lignes.
 
 /// COLORREF : une couleur, `0x00BBGGRR`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,6 +114,8 @@ pub struct Bitmap<'a> {
     height: u32,
     stride: u32,
     layout: PixelLayout,
+    /// La ligne du haut est la dernière en mémoire.
+    bottom_up: bool,
 }
 
 impl<'a> Bitmap<'a> {
@@ -115,7 +126,20 @@ impl<'a> Bitmap<'a> {
         if stride < width || (height > 0 && pixels.len() < needed) {
             return None;
         }
-        Some(Self { pixels, width, height, stride, layout })
+        Some(Self { pixels, width, height, stride, layout, bottom_up: false })
+    }
+
+    /// La même surface, ses lignes montant depuis celle du bas (une DIB de
+    /// `biHeight` positif).
+    pub fn bottom_up(self) -> Self {
+        Self { bottom_up: true, ..self }
+    }
+
+    /// L'indice, dans `pixels`, du premier pixel de la ligne `y` (sur la
+    /// surface).
+    fn row(&self, y: u32) -> usize {
+        let line = if self.bottom_up { self.height - 1 - y } else { y };
+        line as usize * self.stride as usize
     }
 
     /// Son rectangle entier.
@@ -129,7 +153,7 @@ impl<'a> Bitmap<'a> {
 
     /// Le pixel en (`x`, `y`), s'il est sur la surface.
     pub fn pixel(&self, x: u32, y: u32) -> Option<u32> {
-        (x < self.width && y < self.height).then(|| self.pixels[(y * self.stride + x) as usize])
+        (x < self.width && y < self.height).then(|| self.pixels[self.row(y) + x as usize])
     }
 
     /// PatBlt avec un pinceau plein (PATCOPY) : `rect`, coupé aux bords de
@@ -141,7 +165,7 @@ impl<'a> Bitmap<'a> {
         }
         let pixel = self.layout.pixel(color);
         for y in rect.top as u32..rect.bottom as u32 {
-            let row = (y * self.stride) as usize;
+            let row = self.row(y);
             self.pixels[row + rect.left as usize..row + rect.right as usize].fill(pixel);
         }
     }
@@ -161,7 +185,7 @@ impl<'a> Bitmap<'a> {
         let full = self.layout.pixel(color);
         let (r, g, b) = color.components();
         for py in area.top..area.bottom {
-            let row = (py as u32 * self.stride) as usize;
+            let row = self.row(py as u32);
             let line = (py - y) as usize * width;
             for px in area.left..area.right {
                 let alpha = u32::from(coverage[line + (px - x) as usize]);
@@ -192,13 +216,115 @@ impl<'a> Bitmap<'a> {
         }
         let pattern = self.layout.pixel(color);
         for y in rect.top as u32..rect.bottom as u32 {
-            let row = (y * self.stride) as usize;
+            let row = self.row(y);
             for pixel in &mut self.pixels[row + rect.left as usize..row + rect.right as usize] {
                 // The unused byte stays zero.
                 *pixel = rop3_without_source(rop3, pattern, *pixel) & 0x00FF_FFFF;
             }
         }
     }
+}
+
+impl Bitmap<'_> {
+    /// `rect` coupé à cette surface et à `source` dont le pixel `from`
+    /// répond à son coin ; le décalage de `source` à cette surface.
+    fn blt_area(&self, rect: Rect, source: Rect, from: (i32, i32)) -> (Rect, (i32, i32)) {
+        let (dx, dy) = (from.0.saturating_sub(rect.left), from.1.saturating_sub(rect.top));
+        let seen = Rect::new(
+            source.left.saturating_sub(dx),
+            source.top.saturating_sub(dy),
+            source.right.saturating_sub(dx),
+            source.bottom.saturating_sub(dy),
+        );
+        (rect.intersect(&self.bounds()).intersect(&seen), (dx, dy))
+    }
+
+    /// Le pixel `pixel` de l'ordre d'octets `from` dans celui de cette
+    /// surface.
+    fn converted(&self, pixel: u32, from: PixelLayout) -> u32 {
+        if from == self.layout {
+            pixel
+        } else {
+            self.layout.pixel(from.color(pixel))
+        }
+    }
+
+    /// BitBlt d'une autre surface (EngBitBlt) : `rect` reçoit les pixels de
+    /// `source` à partir de `from` (le pixel qui répond à son coin), par le
+    /// ROP3 `rop3` avec le motif plein `pattern` ; coupé aux deux surfaces.
+    pub fn blt_from(&mut self, rect: Rect, source: &Bitmap<'_>, from: (i32, i32), rop3: u8, pattern: ColorRef) {
+        let (area, (dx, dy)) = self.blt_area(rect, source.bounds(), from);
+        if area.is_empty() {
+            return;
+        }
+        let pattern = self.layout.pixel(pattern);
+        let (left, width) = (area.left as usize, (area.right - area.left) as usize);
+        let source_left = (area.left + dx) as usize;
+        for y in area.top..area.bottom {
+            let (to, at) = (self.row(y as u32) + left, source.row((y + dy) as u32) + source_left);
+            let from = &source.pixels[at..at + width];
+            if rop3 == SRCCOPY && source.layout == self.layout {
+                self.pixels[to..to + width].copy_from_slice(from);
+                continue;
+            }
+            for (x, &pixel) in from.iter().enumerate() {
+                let pixel = self.converted(pixel, source.layout);
+                let dest = &mut self.pixels[to + x];
+                // The unused byte stays zero.
+                *dest = self::rop3(rop3, pattern, pixel, *dest) & 0x00FF_FFFF;
+            }
+        }
+    }
+
+    /// BitBlt dans la même surface (un défilement) : comme
+    /// [`blt_from`](Self::blt_from), la source et la destination pouvant se
+    /// chevaucher. Chaque pixel de la source est lu avant d'être écrit : les
+    /// lignes vont vers la source, et les colonnes aussi sur une même ligne.
+    pub fn blt_within(&mut self, rect: Rect, from: (i32, i32), rop3: u8, pattern: ColorRef) {
+        let (area, (dx, dy)) = self.blt_area(rect, self.bounds(), from);
+        if area.is_empty() {
+            return;
+        }
+        let pattern = self.layout.pixel(pattern);
+        let (left, width) = (area.left as usize, (area.right - area.left) as usize);
+        let source_left = (area.left + dx) as usize;
+        let rows: &mut dyn Iterator<Item = i32> =
+            if dy > 0 { &mut (area.top..area.bottom) } else { &mut (area.top..area.bottom).rev() };
+        for y in rows {
+            let (to, at) = (self.row(y as u32) + left, self.row((y + dy) as u32) + source_left);
+            if rop3 == SRCCOPY {
+                self.pixels.copy_within(at..at + width, to);
+                continue;
+            }
+            let columns: &mut dyn Iterator<Item = usize> = if dx > 0 { &mut (0..width) } else { &mut (0..width).rev() };
+            for x in columns {
+                let pixel = self.pixels[at + x];
+                let dest = &mut self.pixels[to + x];
+                *dest = self::rop3(rop3, pattern, pixel, *dest) & 0x00FF_FFFF;
+            }
+        }
+    }
+}
+
+/// Le ROP3 de SRCCOPY : la source.
+pub const SRCCOPY: u8 = 0xCC;
+
+/// Le ROP3 `rop3`, bit à bit, du motif `pattern`, de la source `source` et
+/// de la destination `dest` : chaque bit du résultat est le bit
+/// `4 P + 2 S + D` de `rop3`.
+pub const fn rop3(rop3: u8, pattern: u32, source: u32, dest: u32) -> u32 {
+    let mut out = 0;
+    let mut index = 0;
+    while index < 8 {
+        if rop3 & (1 << index) != 0 {
+            let p = if index & 4 != 0 { pattern } else { !pattern };
+            let s = if index & 2 != 0 { source } else { !source };
+            let d = if index & 1 != 0 { dest } else { !dest };
+            out |= p & s & d;
+        }
+        index += 1;
+    }
+    out
 }
 
 /// Le ROP3 de PATCOPY : le motif.
@@ -303,6 +429,93 @@ mod tests {
         assert_eq!(bitmap.pixel(0, 0), Some(0x00FF_FFFF), "WHITENESS leaves the unused byte zero");
         bitmap.pat_blt(Rect::new(0, 1, 2, 2), ColorRef::rgb(0, 0, 0xFF), PATCOPY);
         assert_eq!((bitmap.pixel(0, 1), bitmap.pixel(1, 1)), (Some(0xFF), Some(0xFF)));
+    }
+
+    #[test]
+    fn the_rows_of_a_bottom_up_dib_go_up_from_the_last() {
+        let mut pixels = [0u32; 3 * 2];
+        let mut bitmap = Bitmap::new(&mut pixels, 3, 2, 3, PixelLayout::Bgrx).unwrap().bottom_up();
+        bitmap.fill_rect(Rect::new(0, 0, 2, 1), ColorRef::rgb(0, 0, 0xFF));
+        bitmap.pat_blt(Rect::new(2, 1, 3, 2), ColorRef::rgb(0, 0xFF, 0), PATCOPY);
+        bitmap.blend_coverage((0, 1), 1, &[255], ColorRef::rgb(0xFF, 0, 0), Rect::new(0, 0, 3, 2));
+        assert_eq!((bitmap.pixel(0, 0), bitmap.pixel(0, 1)), (Some(0xFF), Some(0x00FF_0000)));
+        assert_eq!(pixels, [0x00FF_0000, 0, 0x0000_FF00, 0xFF, 0xFF, 0], "the top row is the last in memory");
+    }
+
+    #[test]
+    fn the_raster_operations_with_a_source() {
+        let (p, s, d) = (0b1111_0000, 0b1100_1100, 0b1010_1010);
+        assert_eq!(rop3(0xCC, p, s, d) & 0xFF, s, "SRCCOPY");
+        assert_eq!(rop3(0x66, p, s, d) & 0xFF, s ^ d, "SRCINVERT");
+        assert_eq!(rop3(0x88, p, s, d) & 0xFF, s & d, "SRCAND");
+        assert_eq!(rop3(0xEE, p, s, d) & 0xFF, s | d, "SRCPAINT");
+        assert_eq!(rop3(0xC0, p, s, d) & 0xFF, p & s, "MERGECOPY");
+        assert_eq!(rop3(0x33, p, s, d) & 0xFF, !s & 0xFF, "NOTSRCCOPY");
+        for rop in 0..=255u8 {
+            assert_eq!(rop3(rop, p, s, d) & 0xFF, u32::from(rop), "a ROP3 code is its result on 0xF0, 0xCC, 0xAA");
+        }
+        for rop in [0x00u8, 0x5A, 0xA0, 0xF0, 0xFF] {
+            assert_eq!(rop3(rop, p, s, d), rop3_without_source(rop, p, d), "{rop:#x} does not use the source");
+        }
+    }
+
+    #[test]
+    fn blt_copies_from_another_surface_within_both() {
+        let mut source = [0u32; 4 * 3];
+        for (i, pixel) in source.iter_mut().enumerate() {
+            *pixel = i as u32 + 1;
+        }
+        let source = Bitmap::new(&mut source, 4, 3, 4, PixelLayout::Bgrx).unwrap().bottom_up();
+        let mut pixels = [0u32; 5 * 2];
+        let mut dest = Bitmap::new(&mut pixels, 5, 2, 5, PixelLayout::Bgrx).unwrap();
+        // The source's (2, 1) at (0, 0): two columns are left of the source,
+        // past (4, y), cut.
+        dest.blt_from(Rect::new(0, 0, 5, 2), &source, (2, 1), SRCCOPY, ColorRef(0));
+        // Bottom-up: the source's row 1 is its second row in memory (5..8),
+        // row 2 its first (1..4).
+        assert_eq!(pixels, [7, 8, 0, 0, 0, 3, 4, 0, 0, 0]);
+    }
+
+    #[test]
+    fn blt_converts_between_layouts_and_combines() {
+        let red = ColorRef::rgb(0xFF, 0, 0);
+        let mut source = [PixelLayout::Bgrx.pixel(red)];
+        let source = Bitmap::new(&mut source, 1, 1, 1, PixelLayout::Bgrx).unwrap();
+        let mut pixels = [PixelLayout::Rgbx.pixel(ColorRef::rgb(0, 0, 0xFF)); 2];
+        let mut dest = Bitmap::new(&mut pixels, 2, 1, 2, PixelLayout::Rgbx).unwrap();
+        dest.blt_from(Rect::new(0, 0, 1, 1), &source, (0, 0), SRCCOPY, ColorRef(0));
+        assert_eq!(PixelLayout::Rgbx.color(pixels[0]), red, "converted");
+        let mut dest = Bitmap::new(&mut pixels, 2, 1, 2, PixelLayout::Rgbx).unwrap();
+        dest.blt_from(Rect::new(1, 0, 2, 1), &source, (0, 0), 0xEE, ColorRef(0));
+        assert_eq!(PixelLayout::Rgbx.color(pixels[1]), ColorRef::rgb(0xFF, 0, 0xFF), "SRCPAINT");
+    }
+
+    #[test]
+    fn blt_within_reads_each_pixel_before_writing_it() {
+        let numbered = || core::array::from_fn::<u32, 16, _>(|i| i as u32);
+        for (from, rop) in [((0, 1), SRCCOPY), ((0, 1), 0x66), ((1, 0), 0x66), ((0, 0), SRCCOPY)] {
+            // Down by one row (a scroll up), left by one column, or onto itself.
+            let mut pixels = numbered();
+            let mut bitmap = Bitmap::new(&mut pixels, 4, 4, 4, PixelLayout::Bgrx).unwrap();
+            bitmap.blt_within(Rect::new(0, 0, 4, 4), from, rop, ColorRef(0));
+            let mut expected = numbered();
+            for y in 0..4 {
+                for x in 0..4 {
+                    let (sx, sy) = (x + from.0 as usize, y + from.1 as usize);
+                    if sx < 4 && sy < 4 {
+                        let (s, d) = (numbered()[sy * 4 + sx], numbered()[y * 4 + x]);
+                        expected[y * 4 + x] = rop3(rop, 0, s, d) & 0x00FF_FFFF;
+                    }
+                }
+            }
+            assert_eq!(pixels, expected, "from {from:?}, ROP {rop:#x}");
+        }
+        // Up by one row (a scroll down), right by one column.
+        let mut pixels = numbered();
+        let mut bitmap = Bitmap::new(&mut pixels, 4, 4, 4, PixelLayout::Bgrx).unwrap().bottom_up();
+        bitmap.blt_within(Rect::new(1, 1, 4, 4), (0, 0), SRCCOPY, ColorRef(0));
+        let at = |bitmap: &Bitmap<'_>, x, y| bitmap.pixel(x, y).unwrap();
+        assert_eq!((at(&bitmap, 1, 1), at(&bitmap, 3, 3), at(&bitmap, 0, 3)), (12, 6, 0));
     }
 
     #[test]
