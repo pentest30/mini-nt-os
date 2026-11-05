@@ -379,6 +379,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     information_services_self_test();
     duplicate_object_self_test();
     thread_information_self_test();
+    impersonation_self_test();
     trap_gate_self_test();
     user_callback_self_test();
     exception_self_test();
@@ -4727,6 +4728,134 @@ fn thread_information_self_test() {
     log::info!(
         "[smoke] Ps: NtQueryInformationThread from user mode: ThreadBasicInformation, ThreadTimes (creation and end), \
          ThreadIsTerminated"
+    );
+}
+
+/// Impersonation from user mode (`sys::security`, Se, M5), as csrsrv does
+/// it (CsrImpersonateClient, CsrRevertToSelf): a thread impersonates itself
+/// (NtImpersonateThread, SecurityImpersonation, static tracking), and
+/// NtOpenThreadToken gives it a copy of type impersonation, at that level
+/// (copy on open), which it then impersonates; NtSetInformationThread
+/// (ThreadImpersonationToken, NULL) reverts it, after which it has no token.
+/// A primary token, a handle without TOKEN_IMPERSONATE and an unknown level
+/// are refused.
+fn impersonation_self_test() {
+    use abi::lpc::SecurityQualityOfService32;
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_BAD_TOKEN_TYPE, STATUS_INVALID_PARAMETER, STATUS_NO_TOKEN,
+        STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD, THREAD_IMPERSONATION_TOKEN};
+    use abi::security::{
+        SECURITY_IMPERSONATION, SECURITY_STATIC_TRACKING, TOKEN_IMPERSONATION_LEVEL, TOKEN_TYPE,
+        TOKEN_TYPE_IMPERSONATION,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_IMPERSONATE: u32 = 0x0004;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 10 statuses
+    const QOS: u32 = DATA + 0x30;
+    const BAD_QOS: u32 = DATA + 0x40;
+    const TOKEN: u32 = DATA + 0x50;
+    const AFTER: u32 = DATA + 0x54;
+    const PRIMARY: u32 = DATA + 0x58;
+    const NULL_HANDLE: u32 = DATA + 0x5C;
+    const KIND: u32 = DATA + 0x60;
+    const LEVEL: u32 = DATA + 0x64;
+    const RETURNED: u32 = DATA + 0x68;
+    const DONE: u32 = DATA + 0xFC;
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (me, set) = (NT_CURRENT_THREAD, services::NtSetInformationThread);
+    let class = THREAD_IMPERSONATION_TOKEN;
+    let mut code = Code::new();
+    code.call_args(services::NtImpersonateThread, &[v(me), v(me), v(QOS)]).store_eax(status(0));
+    code.call_args(services::NtOpenThreadToken, &[v(me), v(TOKEN_QUERY), v(0), v(TOKEN)]).store_eax(status(1));
+    let query = services::NtQueryInformationToken;
+    code.call_args(query, &[m(TOKEN), v(TOKEN_TYPE), v(KIND), v(4), v(RETURNED)]).store_eax(status(2));
+    code.call_args(query, &[m(TOKEN), v(TOKEN_IMPERSONATION_LEVEL), v(LEVEL), v(4), v(RETURNED)]).store_eax(status(3));
+    code.call_args(set, &[v(me), v(class), v(NULL_HANDLE), v(4)]).store_eax(status(4));
+    code.call_args(services::NtOpenThreadToken, &[v(me), v(TOKEN_QUERY), v(0), v(AFTER)]).store_eax(status(5));
+    let process_token = services::NtOpenProcessToken;
+    code.call_args(process_token, &[v(NT_CURRENT_PROCESS), v(TOKEN_IMPERSONATE), v(PRIMARY)]).store_eax(status(6));
+    code.call_args(set, &[v(me), v(class), v(PRIMARY), v(4)]).store_eax(status(7));
+    code.call_args(set, &[v(me), v(class), v(TOKEN), v(4)]).store_eax(status(8));
+    code.call_args(services::NtImpersonateThread, &[v(me), v(me), v(BAD_QOS)]).store_eax(status(9));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x1000];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x1000, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x100, &[0u8; 0x100], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "impersonate.exe", false).expect("a process");
+    // SECURITY_QUALITY_OF_SERVICE: Length, ImpersonationLevel,
+    // ContextTrackingMode, EffectiveOnly.
+    for (at, level) in [(QOS, SECURITY_IMPERSONATION), (BAD_QOS, 4)] {
+        let mut qos = [0u8; core::mem::size_of::<SecurityQualityOfService32>()];
+        qos[..4].copy_from_slice(&12u32.to_le_bytes());
+        qos[4..8].copy_from_slice(&level.to_le_bytes());
+        qos[8] = SECURITY_STATIC_TRACKING;
+        process.write_memory(u64::from(at), &qos).expect("write a QoS");
+    }
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the impersonation test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..10).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtImpersonateThread");
+    assert_eq!(statuses[1], STATUS_SUCCESS, "NtOpenThreadToken while impersonating");
+    assert_eq!((statuses[2], read(KIND)), (STATUS_SUCCESS, TOKEN_TYPE_IMPERSONATION), "an impersonation token");
+    assert_eq!((statuses[3], read(LEVEL)), (STATUS_SUCCESS, SECURITY_IMPERSONATION), "at the level asked");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "reverted");
+    assert_eq!(statuses[5], STATUS_NO_TOKEN, "no token once reverted");
+    assert_eq!(statuses[6], STATUS_SUCCESS, "the process token");
+    assert_eq!(statuses[7], STATUS_BAD_TOKEN_TYPE, "a primary token");
+    assert_eq!(statuses[8], STATUS_ACCESS_DENIED, "a handle without TOKEN_IMPERSONATE");
+    assert_eq!(statuses[9], STATUS_INVALID_PARAMETER, "an unknown level");
+    assert!(thread.impersonation().is_none(), "the thread impersonates nothing");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((thread, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Se: impersonation from user mode: NtImpersonateThread, a copy from NtOpenThreadToken, \
+         ThreadImpersonationToken reverts; primary tokens and unknown levels refused"
     );
 }
 

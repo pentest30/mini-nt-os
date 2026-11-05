@@ -123,6 +123,11 @@ unsafe impl UserValue for abi::teb32::ClientId32 {
     const ALIGNMENT: usize = 4;
 }
 
+// SAFETY: two u32, any bit pattern valid.
+unsafe impl UserValue for abi::user::DesktopConsoleThread32 {
+    const ALIGNMENT: usize = 4;
+}
+
 // SAFETY: five u32, any bit pattern valid.
 unsafe impl UserValue for abi::process::InitialTeb32 {
     const ALIGNMENT: usize = 4;

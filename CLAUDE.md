@@ -275,6 +275,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent, NtGdiExtTextOutW ; scénario `text`.
   M6, étape 13 (DrawText de `user32`) : NtGdiGetTextExtentExW (étendues cumulées, `win32k::font::advances`),
   NtGdiGetRandomRgn (la région de découpage gardée), NtGdiIntersectClipRect.
+  M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
+  lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
+  PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
+  (`ps::ethread::Impersonation`, `se::client`, NtImpersonateThread, ThreadImpersonationToken, NtOpenThreadToken) ;
+  NtUserConsoleControl, NtUserResolveDesktop (`sys::console`). `consrv` crée la fenêtre console, qui s'arrête aux
+  polices.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

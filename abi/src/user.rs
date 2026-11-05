@@ -29,6 +29,26 @@ pub const TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: u32 = 0x69;
 /// csrss gives win32k its API port (`USERTHREADINFOCLASS`).
 pub const USER_THREAD_CSR_API_PORT: u32 = 10;
 
+// CONSOLECONTROL: what consrv asks of NtUserConsoleControl.
+/// The console input thread of a desktop (DESKTOP_CONSOLE_THREAD).
+pub const CONSOLE_CTRL_DESKTOP_CONSOLE_THREAD: u32 = 0;
+/// The atom of the console window class (an ATOM).
+pub const GUI_CONSOLE_WND_CLASS_ATOM: u32 = 1;
+/// A palette of consrv made public (an HPALETTE).
+pub const CONSOLE_MAKE_PALETTE_PUBLIC: u32 = 5;
+/// The display taken for a full-screen console.
+pub const CONSOLE_ACQUIRE_DISPLAY_OWNERSHIP: u32 = 6;
+
+/// DESKTOP_CONSOLE_THREAD: a desktop and the ID of its console input thread
+/// (`INVALID_HANDLE_VALUE` to only read it); win32k gives back the previous
+/// one.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DesktopConsoleThread32 {
+    pub desktop_handle: u32,
+    pub thread_id: u32,
+}
+
 /// KLF_*: how LoadKeyboardLayout loads a layout.
 pub const KLF_ACTIVATE: u32 = 0x0001;
 pub const KLF_SUBSTITUTE_OK: u32 = 0x0002;
@@ -1121,6 +1141,8 @@ pub struct ClientThreadInfo32 {
 }
 
 const _: () = {
+    assert!(size_of::<DesktopConsoleThread32>() == 8);
+    assert!(offset_of!(DesktopConsoleThread32, thread_id) == 4);
     assert!(offset_of!(Wnd32, state) == 0x14);
     // user32!UpdateWindow: `cmp [pwnd + 0x68], 0` (hrgnUpdate), then
     // `cmp [pwnd + 0x38], 0` (spwndChild).

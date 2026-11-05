@@ -44,6 +44,8 @@ use mm::vad::PageProtect;
 use mm::virtual_alloc::{AllocType, FreeType, ALLOC_GRANULARITY, PAGE_SIZE};
 use ob::{create_object, AccessMask, GenericMapping, Object, ObjectType};
 
+use se::Token;
+
 use crate::eprocess::{EProcess, ProcessId};
 use crate::{CidEntry, DispatcherEvent, CID_TABLE};
 
@@ -151,6 +153,24 @@ pub struct EThread {
     /// Win32Thread : ce que win32k garde de lui, une fois devenu un thread
     /// GUI ; rendu avec lui.
     win32_thread: KSpinLock<Option<Arc<dyn Any + Send + Sync>>>,
+    /// ImpersonationInfo, tant que ActiveImpersonationInfo : le jeton dont
+    /// il emprunte l'identité.
+    impersonation: KSpinLock<Option<Impersonation>>,
+}
+
+/// L'emprunt d'identité d'un thread (PS_IMPERSONATION_INFORMATION) : il agit
+/// avec `token` plutôt qu'avec le jeton primaire de son processus.
+#[derive(Clone)]
+pub struct Impersonation {
+    /// Un jeton d'emprunt d'identité, ou le jeton primaire d'un client pris
+    /// tel quel (suivi dynamique).
+    pub token: Arc<Object<Token>>,
+    /// SECURITY_* : ce que le thread peut faire de ce jeton.
+    pub level: u32,
+    /// NtOpenThreadToken en donne une copie, que le thread prend à la place.
+    pub copy_on_open: bool,
+    /// Seuls comptent les groupes et privilèges actifs du jeton.
+    pub effective_only: bool,
 }
 
 // SAFETY: `exit_apc` n'est écrit qu'une fois, par qui fait passer
@@ -189,6 +209,25 @@ impl EThread {
     /// <= DISPATCH_LEVEL.
     pub fn kernel_stack(&self) -> Option<KernelStack> {
         *self.kernel_stack.lock()
+    }
+
+    /// Son emprunt d'identité, s'il en a un (PsReferenceImpersonationToken).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn impersonation(&self) -> Option<Impersonation> {
+        self.impersonation.lock().clone()
+    }
+
+    /// PsImpersonateClient, ou PsRevertThreadToSelf avec `None` : le thread
+    /// emprunte désormais l'identité que dit `impersonation`, ou reprend la
+    /// sienne. L'emprunt d'avant est rendu.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL (le jeton d'avant peut être rendu).
+    pub fn impersonate(&self, impersonation: Option<Impersonation>) {
+        let previous = core::mem::replace(&mut *self.impersonation.lock(), impersonation);
+        drop(previous);
     }
 
     /// Adresse de départ (StartAddress).
@@ -730,6 +769,7 @@ fn start_thread(
             suspend_apc: UnsafeCell::new(MaybeUninit::uninit()),
             critical: AtomicBool::new(false),
             win32_thread: KSpinLock::new(None),
+            impersonation: KSpinLock::new(None),
         },
     );
     CID_TABLE.lock().set(tid, CidEntry::Thread(Arc::downgrade(&thread)));

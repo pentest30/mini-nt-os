@@ -180,6 +180,11 @@ pub const SECURITY_IDENTIFICATION: u32 = 1;
 pub const SECURITY_IMPERSONATION: u32 = 2;
 pub const SECURITY_DELEGATION: u32 = 3;
 
+// SECURITY_CONTEXT_TRACKING_MODE (SECURITY_QUALITY_OF_SERVICE): a copy of
+// the client's token, or the token itself.
+pub const SECURITY_STATIC_TRACKING: u8 = 0;
+pub const SECURITY_DYNAMIC_TRACKING: u8 = 1;
+
 // The attributes of a group in a token.
 pub const SE_GROUP_MANDATORY: u32 = 0x0000_0001;
 pub const SE_GROUP_ENABLED_BY_DEFAULT: u32 = 0x0000_0002;

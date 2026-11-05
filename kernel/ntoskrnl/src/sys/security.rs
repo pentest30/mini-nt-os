@@ -2,31 +2,40 @@
 //! leurs classes d'information, l'état de leurs privilèges ; les
 //! descripteurs de sécurité des objets.
 //!
+//! L'emprunt d'identité : un serveur prend celle d'un thread client
+//! (NtImpersonateThread, comme CsrImpersonateClient), un thread prend celle
+//! d'un jeton d'emprunt d'identité ou reprend la sienne (NtSetInformationThread,
+//! ThreadImpersonationToken) ; NtOpenThreadToken rend alors son jeton.
+//!
 //! Contrôle permissif (ADR-011) : Ob accorde les droits demandés, et un
 //! descripteur gardé ne refuse encore rien ; le propriétaire qu'un appelant
-//! donne n'est pas comparé à son jeton. Pas encore : l'emprunt d'identité
-//! (un thread n'a jamais de jeton à lui), NtDuplicateToken,
-//! NtAdjustGroupsToken, NtSetInformationToken, les SACL (aucun handle n'a
-//! `ACCESS_SYSTEM_SECURITY`).
+//! donne n'est pas comparé à son jeton. Pas encore : SeTokenCanImpersonate
+//! (un thread peut emprunter tout jeton : ils viennent tous de celui de
+//! System), le DACL d'une copie à l'ouverture, OpenAsSelf (sans contrôle
+//! d'accès, il ne change rien), `IsImpersonating` dans le TEB,
+//! NtDuplicateToken, NtAdjustGroupsToken, NtSetInformationToken, les SACL
+//! (aucun handle n'a `ACCESS_SYSTEM_SECURITY`).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use abi::lpc::SecurityQualityOfService32;
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED,
-    STATUS_NOT_IMPLEMENTED, STATUS_NO_TOKEN, STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BAD_TOKEN_TYPE, STATUS_BUFFER_TOO_SMALL, STATUS_CANT_OPEN_ANONYMOUS,
+    STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED, STATUS_NOT_IMPLEMENTED, STATUS_NO_TOKEN, STATUS_SUCCESS,
 };
 use abi::object::{AccessMask, OBJ_INHERIT};
 use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
 use abi::security::{
     LuidAndAttributes32, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
-    SACL_SECURITY_INFORMATION,
+    SACL_SECURITY_INFORMATION, SECURITY_ANONYMOUS, TOKEN_TYPE_IMPERSONATION,
 };
 use ke::usermem::UserPtr;
 use ob::{Handle, Object, ObjectRef};
 use ps::eprocess::PROCESS_QUERY_INFORMATION;
-use ps::ethread::THREAD_QUERY_INFORMATION;
-use se::token::{TOKEN_ADJUST_PRIVILEGES, TOKEN_QUERY};
+use ps::ethread::{Impersonation, THREAD_DIRECT_IMPERSONATION, THREAD_IMPERSONATE, THREAD_QUERY_INFORMATION};
+use se::client::ClientToken;
+use se::token::{TOKEN_ADJUST_PRIVILEGES, TOKEN_IMPERSONATE, TOKEN_QUERY};
 use se::{Luid, Privilege, PrivilegeChange, SecurityDescriptor, Token, TOKEN_OBJECT_TYPE};
 
 /// Les classes de NtQueryInformationToken demandées sans être implémentées.
@@ -106,28 +115,98 @@ pub(super) fn nt_open_process_token_ex(arguments: &[u32]) -> NtStatus {
     open_process_token(arguments[0], arguments[1], arguments[2], arguments[3])
 }
 
-/// NtOpenThreadTokenEx : le jeton d'emprunt d'identité du thread
-/// (`THREAD_QUERY_INFORMATION`). Aucun thread n'en a encore :
-/// `STATUS_NO_TOKEN`, d'après quoi l'appelant prend le jeton de son
-/// processus.
-fn open_thread_token(thread: u32, out: u32) -> NtStatus {
+/// NtOpenThreadTokenEx : un handle sur le jeton dont le thread
+/// (`THREAD_QUERY_INFORMATION`) emprunte l'identité, avec les droits
+/// `desired` et l'attribut `OBJ_INHERIT` de `attributes`. Avec CopyOnOpen
+/// (l'emprunt d'un serveur), le handle est celui d'une copie, au même niveau,
+/// que le thread emprunte désormais (SepOpenThreadToken).
+/// `STATUS_NO_TOKEN` pour un thread qui n'emprunte rien, d'après quoi
+/// l'appelant prend le jeton de son processus ; `STATUS_CANT_OPEN_ANONYMOUS`
+/// au niveau SecurityAnonymous.
+fn open_thread_token(thread: u32, desired: u32, attributes: u32, out: u32) -> NtStatus {
     let open = || {
         ke::usermem::probe_for_write(u64::from(out), 4, 4)?;
-        super::reference_thread(thread, THREAD_QUERY_INFORMATION)?;
-        Err(STATUS_NO_TOKEN)
+        let thread = super::reference_thread(thread, THREAD_QUERY_INFORMATION)?;
+        let impersonation = thread.impersonation().ok_or(STATUS_NO_TOKEN)?;
+        if impersonation.level == SECURITY_ANONYMOUS {
+            return Err(STATUS_CANT_OPEN_ANONYMOUS);
+        }
+        let token = if impersonation.copy_on_open {
+            let copy = impersonation.token.duplicate(TOKEN_TYPE_IMPERSONATION, impersonation.level);
+            thread.impersonate(Some(Impersonation { token: copy.clone(), copy_on_open: false, ..impersonation }));
+            copy
+        } else {
+            impersonation.token
+        };
+        give_new_handle(out, token, desired, attributes)
     };
     status(open())
 }
 
 /// NtOpenThreadToken(ThreadHandle, DesiredAccess, OpenAsSelf, *TokenHandle).
 pub(super) fn nt_open_thread_token(arguments: &[u32]) -> NtStatus {
-    open_thread_token(arguments[0], arguments[3])
+    open_thread_token(arguments[0], arguments[1], 0, arguments[3])
 }
 
 /// NtOpenThreadTokenEx(ThreadHandle, DesiredAccess, OpenAsSelf,
 /// HandleAttributes, *TokenHandle).
 pub(super) fn nt_open_thread_token_ex(arguments: &[u32]) -> NtStatus {
-    open_thread_token(arguments[0], arguments[4])
+    open_thread_token(arguments[0], arguments[1], arguments[3], arguments[4])
+}
+
+/// NtImpersonateThread(ThreadHandle, ThreadToImpersonateHandle,
+/// SecurityQualityOfService) : le thread serveur
+/// (`THREAD_DIRECT_IMPERSONATION`) emprunte l'identité du thread client
+/// (`THREAD_IMPERSONATE`), selon la qualité de service
+/// (SeCreateClientSecurity puis SeImpersonateClient).
+pub(super) fn nt_impersonate_thread(arguments: &[u32]) -> NtStatus {
+    let [server, client, qos] = arguments[..3] else { unreachable!("3 arguments") };
+    let impersonate = || {
+        let qos = UserPtr::<SecurityQualityOfService32>::new(qos).read()?;
+        let server = super::reference_thread(server, THREAD_DIRECT_IMPERSONATION)?;
+        let client = super::reference_thread(client, THREAD_IMPERSONATE)?;
+        server.impersonate(Some(client_security(&client, &qos)?));
+        Ok(STATUS_SUCCESS)
+    };
+    status(impersonate())
+}
+
+/// L'emprunt d'identité d'un serveur qui prend celle du thread `client`,
+/// selon `qos` (`se::client::client_security`, sur le jeton effectif du
+/// client : celui qu'il emprunte, ou le jeton primaire de son processus) ;
+/// NtOpenThreadToken en donnera une copie (CopyOnOpen).
+fn client_security(client: &ps::EThread, qos: &SecurityQualityOfService32) -> Result<Impersonation, NtStatus> {
+    let effective = match client.impersonation() {
+        Some(own) => ClientToken { token: own.token, impersonating: Some((own.level, own.effective_only)) },
+        None => ClientToken { token: client.process().primary_token(), impersonating: None },
+    };
+    let security = se::client::client_security(effective, qos)?;
+    Ok(Impersonation {
+        token: security.token,
+        level: security.level,
+        copy_on_open: true,
+        effective_only: security.effective_only,
+    })
+}
+
+/// PsAssignImpersonationToken : `thread` emprunte l'identité du jeton
+/// `handle` (`TOKEN_IMPERSONATE`, un jeton d'emprunt d'identité, à son
+/// niveau), ou reprend la sienne si `handle` est nul.
+///
+/// # Errors
+/// `STATUS_BAD_TOKEN_TYPE` pour un jeton primaire.
+pub(super) fn assign_impersonation_token(thread: &ps::EThread, handle: u32) -> Result<NtStatus, NtStatus> {
+    if handle == 0 {
+        thread.impersonate(None);
+        return Ok(STATUS_SUCCESS);
+    }
+    let token = reference_token(handle, TOKEN_IMPERSONATE)?;
+    if token.token_type() != TOKEN_TYPE_IMPERSONATION {
+        return Err(STATUS_BAD_TOKEN_TYPE);
+    }
+    let level = token.impersonation_level();
+    thread.impersonate(Some(Impersonation { token, level, copy_on_open: false, effective_only: false }));
+    Ok(STATUS_SUCCESS)
 }
 
 /// NtQueryInformationToken(TokenHandle, TokenInformationClass,

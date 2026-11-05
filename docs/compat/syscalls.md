@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 101 | 296 |
-| win32k | 68 | 737 |
+| ntoskrnl | 102 | 296 |
+| win32k | 70 | 737 |
 
 ## ntoskrnl
 
@@ -110,7 +110,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x005c` | `NtGetWriteWatch` | 7 |  |
 | `0x005d` | `NtImpersonateAnonymousToken` | 1 |  |
 | `0x005e` | `NtImpersonateClientOfPort` | 2 |  |
-| `0x005f` | `NtImpersonateThread` | 3 |  |
+| `0x005f` | `NtImpersonateThread` | 3 | ✅ |
 | `0x0060` | `NtInitializeRegistry` | 1 |  |
 | `0x0061` | `NtInitiatePowerAction` | 4 |  |
 | `0x0062` | `NtIsProcessInJob` | 2 |  |
@@ -649,7 +649,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x114a` | `NtUserCloseClipboard` | 0 |  |
 | `0x114b` | `NtUserCloseDesktop` | 1 | ✅ |
 | `0x114c` | `NtUserCloseWindowStation` | 1 | ✅ |
-| `0x114d` | `NtUserConsoleControl` | 3 |  |
+| `0x114d` | `NtUserConsoleControl` | 3 | ✅ |
 | `0x114e` | `NtUserConvertMemHandle` | 2 |  |
 | `0x114f` | `NtUserCopyAcceleratorTable` | 3 |  |
 | `0x1150` | `NtUserCountClipboardFormats` | 0 |  |
@@ -810,7 +810,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11eb` | `NtUserRegisterWindowMessage` | 1 |  |
 | `0x11ec` | `NtUserRemoveMenu` | 3 |  |
 | `0x11ed` | `NtUserRemoveProp` | 2 |  |
-| `0x11ee` | `NtUserResolveDesktop` | 4 |  |
+| `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
 | `0x11f0` | `NtUserSBGetParms` | 4 |  |
 | `0x11f1` | `NtUserScrollDC` | 7 |  |

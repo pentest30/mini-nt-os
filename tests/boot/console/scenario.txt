@@ -1,0 +1,32 @@
+# M5, console (docs/compat/m5-console.md): CONSOLE1.EXE
+# (tests/native/console1.c, MinGW, linked to ReactOS's kernel32 and user32)
+# takes the place of winlogon.exe, which smss starts as its initial command
+# once csrss runs. Like winlogon, it takes WinSta0\Default; then it starts
+# THREADS1.EXE (tests/native/threads1.c), a program of the CONSOLE
+# subsystem, by CreateProcessW, and waits for it:
+# - kernel32 creates the process (NtCreateProcessEx, which gives the new PEB
+#   in the creator's TEB, NtTib.ArbitraryUserPointer, as ReactOS's kernel
+#   does), writes its parameters, creates its thread and tells basesrv;
+# - in the new process, kernel32 asks consrv for a console: csrsrv
+#   impersonates the client thread (NtImpersonateThread, then
+#   NtSetInformationThread(ThreadImpersonationToken, NULL)), consrv
+#   resolves its desktop (NtUserResolveDesktop), starts the console input
+#   thread of that desktop (NtUserConsoleControl) and creates the console
+#   window, whose WM_NCCREATE fails: no font answers to "VGA" nor
+#   "Terminal" (where the probe stops: the console is never given).
+# Update with each step (docs/compat/m5-console.md).
+features = test-smss
+requires = userland, native
+initial-command = CONSOLE1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [console] on WinSta0\Default
+expect = [console] CreateProcessW: a process and its thread
+expect = InitFonts: CreateConsoleFontEx('Terminal') failed
+forbid = Failure to create process parameters
+forbid = Can't impersonate client thread
+forbid = sys: NtImpersonateThread (0x005f) is not implemented
+forbid = sys: NtUserConsoleControl (0x114d) is not implemented
+forbid = sys: NtUserResolveDesktop (0x11ee) is not implemented
+forbid = Loading GUI frontend failed

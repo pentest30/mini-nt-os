@@ -32,6 +32,7 @@
 pub mod apc;
 mod callback;
 mod class;
+mod console;
 mod desktop;
 mod event;
 pub mod exceptions;
@@ -142,6 +143,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiInit, Handler::Status(user::nt_gdi_init)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),
+    (services::NtImpersonateThread, Handler::Status(security::nt_impersonate_thread)),
     (services::NtListenPort, Handler::Status(port::nt_listen_port)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
@@ -215,6 +217,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
+    (services::NtUserConsoleControl, Handler::Status(console::nt_user_console_control)),
     (services::NtUserCreateDesktop, Handler::Status(desktop::nt_user_create_desktop)),
     (services::NtUserCreateWindowEx, Handler::Status(window::nt_user_create_window_ex)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
@@ -249,6 +252,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
     (services::NtUserRedrawWindow, Handler::Status(window::nt_user_redraw_window)),
     (services::NtUserRegisterClassExWOW, Handler::Status(class::nt_user_register_class_ex_wow)),
+    (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
