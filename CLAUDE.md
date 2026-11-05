@@ -279,8 +279,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
   (`ps::ethread::Impersonation`, `se::client`, NtImpersonateThread, ThreadImpersonationToken, NtOpenThreadToken) ;
-  NtUserConsoleControl, NtUserResolveDesktop (`sys::console`). `consrv` crée la fenêtre console, qui s'arrête aux
-  polices.
+  NtUserConsoleControl, NtUserResolveDesktop (`sys::console`). Étape 2 (les polices) : la ruche SOFTWARE montée
+  (`userland::mount_software_hive`), les polices de `\SystemRoot\Fonts` installées (`io::Volume::list` ;
+  `win32k::font` : table de polices, `glyph::Names`), la correspondance d'un LOGFONT par `FontSubstitutes`, famille,
+  graisse, italique et pas (`fontobj::realize`), NtGdiGetFontFamilyInfo (`fontobj::family_info`) : la console de
+  `consrv` est créée (police VGA), `THREADS1.EXE` va au bout ; Sleep(0) ne cède pas encore le processeur (Ke).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
