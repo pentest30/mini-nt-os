@@ -60,7 +60,7 @@ initial-command = GUI1.EXE
 cpus     = default, intel
 timeout  = 120
 
-expect = [boot] fonts installed: tahoma.ttf, tahomabd.ttf, Marlett.ttf
+expect = [boot] fonts installed: TAHOMA.TTF, TAHOMABD.TTF, MARLETT.TTF, UNIVGA16.TTF, LUCON.TTF, COUR.TTF
 forbid = the caption's text and button symbols without their fonts
 expect = [gui] on WinSta0\Default
 expect = [gui] GetSystemMetrics: screen 1280x800, caption 20, frame 4, minimum width 112

@@ -809,7 +809,7 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
         true,
         &crate::metrics::get,
         &system_color,
-        &crate::font::text_run,
+        &crate::font::text_run_named,
     );
     if unpainted.text {
         static REPORTED: AtomicBool = AtomicBool::new(false);
