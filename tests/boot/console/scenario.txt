@@ -28,7 +28,9 @@
 # (SetWindowLongPtr: GWLP_USERDATA; the console's leader, this process and
 # its thread, in the extra bytes, which user32 reads), and its input thread
 # shows the window (ShowWindowAsync), which CONSHOW1.EXE finds visible
-# (GetConsoleWindow, IsWindowVisible).
+# (GetConsoleWindow, IsWindowVisible); consrv composes its text in a memory
+# DC (CreateCompatibleDC, a DIB section that GetDeviceCaps sizes, its
+# console font) and copies it into the window (BitBlt).
 # Update with each step (docs/compat/m5-console.md).
 features = test-smss
 requires = userland, native
@@ -60,16 +62,27 @@ forbid = sys: NtUserResolveDesktop (0x11ee) is not implemented
 forbid = Loading GUI frontend failed
 forbid = CreateConsoleFont('VGA') failed
 forbid = sys: NtGdiGetFontFamilyInfo (0x12a0) is not implemented
+forbid = sys: NtGdiCreateCompatibleDC (0x101e) is not implemented
+forbid = sys: NtGdiCreateDIBSection (0x1021) is not implemented
+forbid = sys: NtGdiSelectBitmap (0x1100) is not implemented
+forbid = sys: NtGdiBitBlt (0x100d) is not implemented
+forbid = sys: NtGdiCreateSolidBrush (0x102c) is not implemented
+forbid = win32k: a DIB section of
 
 # CONSHOW1.EXE's console window, shown by consrv's input thread
 # (ShowWindowAsync) where the cascade puts it, below THREADS1.EXE's (which
 # stays: DestroyWindow is not yet done): its raised edge (23, 23; 24, 24;
 # 689, 454), its inactive caption (300, 36) and its close button (676, 36);
-# the desktop to its right. Its client area is not painted yet (memory DCs,
-# BitBlt).
+# the desktop to its right. Its client area, inside its sunken edge from
+# (29, 49), holds what consrv painted: "Mino console", grey (attribute 07)
+# on black, the stem of its "M" at (29, 51), and the black of the console
+# below it.
 screen = 23 23 D4D0C8
 screen = 24 24 FFFFFF
 screen = 300 36 9A9A9A
 screen = 676 36 000000
 screen = 689 454 404040
 screen = 700 100 3A6EA5
+screen = 29 51 C0C0C0
+screen = 31 51 000000
+screen = 300 300 000000
