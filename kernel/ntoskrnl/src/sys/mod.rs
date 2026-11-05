@@ -132,6 +132,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiExtTextOutW, Handler::Status(gdi::nt_gdi_ext_text_out_w)),
     (services::NtGdiFlush, Handler::Status(gdi::nt_gdi_flush)),
     (services::NtGdiGetAppClipBox, Handler::Status(gdi::nt_gdi_get_app_clip_box)),
+    (services::NtGdiGetFontFamilyInfo, Handler::Status(gdi::nt_gdi_get_font_family_info)),
     (services::NtGdiGetRandomRgn, Handler::Status(gdi::nt_gdi_get_random_rgn)),
     (services::NtGdiGetRgnBox, Handler::Status(gdi::nt_gdi_get_rgn_box)),
     (services::NtGdiGetStockObject, Handler::Status(gdi::nt_gdi_get_stock_object)),

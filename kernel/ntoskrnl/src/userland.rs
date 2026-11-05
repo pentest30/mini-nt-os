@@ -16,6 +16,8 @@ const NLS_FILES: [&str; 3] =
     ["\\SystemRoot\\System32\\c_1252.nls", "\\SystemRoot\\System32\\c_437.nls", "\\SystemRoot\\System32\\l_intl.nls"];
 /// La ruche SYSTEM.
 const SYSTEM_HIVE: &str = "\\SystemRoot\\System32\\config\\SYSTEM";
+/// La ruche SOFTWARE.
+const SOFTWARE_HIVE: &str = "\\SystemRoot\\System32\\config\\SOFTWARE";
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -70,20 +72,28 @@ pub fn install_nls_tables() {
     }
 }
 
-/// Installe dans win32k les polices du cadre des fenêtres (ADR-013,
-/// `win32k::font`), lues dans `\SystemRoot\Fonts` : Tahoma, Tahoma gras,
-/// Marlett. Sans elles, le titre et les symboles des boutons ne se dessinent
-/// pas (journalisé par win32k).
+/// Le répertoire des polices.
+const FONTS_DIRECTORY: &str = "\\SystemRoot\\Fonts";
+/// Les substituts des noms de polices, dans la ruche SOFTWARE.
+const FONT_SUBSTITUTES: &str = "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes";
+
+/// Installe dans win32k (ADR-013, `win32k::font`) chaque police TrueType
+/// (`.ttf`) de `\SystemRoot\Fonts`, comme IntLoadSystemFonts, et les
+/// substituts de `FontSubstitutes` (la ruche SOFTWARE doit être montée).
+/// Sans Tahoma ni Marlett, le titre et les symboles des boutons ne se
+/// dessinent pas (journalisé par win32k).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage.
 pub fn install_fonts() {
+    install_font_substitutes();
+    let names = list_boot_directory(FONTS_DIRECTORY).unwrap_or_default();
     let mut installed = alloc::vec::Vec::new();
-    for face in win32k::font::Face::ALL {
-        let path = alloc::format!("\\SystemRoot\\Fonts\\{}", face.file_name());
+    for name in names.iter().filter(|name| name.to_ascii_lowercase().ends_with(".ttf")) {
+        let path = alloc::format!("{FONTS_DIRECTORY}\\{name}");
         let Some(data) = read_boot_file(&path) else { continue };
-        match win32k::font::install(face, Arc::from(data)) {
-            Ok(()) => installed.push(face.file_name()),
+        match win32k::font::install(name, Arc::from(data)) {
+            Ok(_) => installed.push(name.as_str()),
             Err(error) => log::error!("[boot] {path}: not a font ({error:?})"),
         }
     }
@@ -91,6 +101,66 @@ pub fn install_fonts() {
         log::info!("[boot] no fonts on the boot disk (cargo xtask fetch-userland)");
     } else {
         log::info!("[boot] fonts installed: {}", installed.join(", "));
+    }
+}
+
+/// Donne à win32k les substituts de `FontSubstitutes` (IntLoadFontSubstList) :
+/// chaque valeur REG_SZ, son nom et son texte sans le jeu de caractères qui
+/// peut les suivre (`Nom,jeu`, que ReactOS compare aussi ; ici, ignoré).
+fn install_font_substitutes() {
+    let key = ob::namespace()
+        .open(FONT_SUBSTITUTES, None, Some(&cm::KEY_TYPE), abi::object::OBJ_CASE_INSENSITIVE)
+        .ok()
+        .and_then(|object| ob::downcast::<cm::Key>(&object));
+    let Some(values) = key.and_then(|key| key.values().ok()) else {
+        return log::info!("[boot] no FontSubstitutes (no SOFTWARE hive)");
+    };
+    let name = |units: &[u16]| {
+        let text = alloc::string::String::from_utf16_lossy(units);
+        let text = text.split('\0').next().unwrap_or_default();
+        alloc::string::String::from(text.split(',').next().unwrap_or_default().trim())
+    };
+    let substitutes: alloc::vec::Vec<_> = values
+        .iter()
+        .filter(|value| value.data_type == abi::registry::REG_SZ)
+        .map(|value| {
+            let data: alloc::vec::Vec<u16> =
+                value.data.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+            (name(&value.name), name(&data))
+        })
+        .filter(|(from, to)| !from.is_empty() && !to.is_empty())
+        .collect();
+    log::info!("[boot] font substitutes: {}", substitutes.len());
+    win32k::font::set_substitutes(substitutes);
+}
+
+/// Les noms de ce que tient le répertoire `path` du disque de démarrage ;
+/// `None` sans lui.
+fn list_boot_directory(path: &str) -> Option<alloc::vec::Vec<alloc::string::String>> {
+    let object =
+        ob::namespace().open(path, None, Some(&io_manager::FILE_TYPE), abi::object::OBJ_CASE_INSENSITIVE).ok()?;
+    ob::downcast::<io_manager::File>(&object)?.list().ok()
+}
+
+/// Monte la ruche SOFTWARE du disque RAM de démarrage en
+/// `\REGISTRY\MACHINE\SOFTWARE`, si le disque la tient : comme SYSTEM, celle de
+/// la version épinglée de ReactOS (les substituts des polices, les réglages
+/// de la console…), réécrite dans son fichier par NtFlushKey.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn mount_software_hive() {
+    let Some(hive) = read_boot_file(SOFTWARE_HIVE) else {
+        return log::info!("[boot] no SOFTWARE hive on the boot disk (cargo xtask fetch-userland)");
+    };
+    let size = hive.len();
+    let registry = cm::registry().expect("Cm not initialised");
+    let mounted = cm::HiveFile::new(Arc::from(hive))
+        .map(|file| file.with_file(SOFTWARE_HIVE))
+        .and_then(|file| cm::mount(&registry, "MACHINE", "SOFTWARE", file));
+    match mounted {
+        Ok(()) => log::info!("[boot] SOFTWARE hive mounted at \\REGISTRY\\MACHINE\\SOFTWARE: {size} bytes"),
+        Err(status) => log::error!("[boot] SOFTWARE hive not mounted: {status}"),
     }
 }
 

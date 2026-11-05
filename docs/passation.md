@@ -19,10 +19,11 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- La sonde console (M5, [`compat/m5-console.md`](compat/m5-console.md)) : sur `claude/new-session-696xfc`, partie
-  de `main` après la fusion de #57 (DrawText, M6 étape 13). `CONSOLE1.EXE` lance par CreateProcessW un programme
-  console, `THREADS1.EXE` (le critère des 8 threads) ; `csrss` emprunte son identité, résout son bureau et crée la
-  fenêtre de sa console, qui s'arrête aux polices (« VGA », « Terminal »). Une branche
+- La sonde console, étape 2 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : sur `claude/new-session-696xfc`,
+  partie de `main` après la fusion de #59 (étape 1). Les polices du disque, la ruche SOFTWARE, la correspondance par nom
+  et l'énumération : la console est créée, `THREADS1.EXE` va au bout (8 threads, 16000, 0x600D). Ses threads
+  n'attendent pas la section critique (Sleep(0) ne cède pas le processeur) : le critère attend ce correctif. Une
+  branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
@@ -386,12 +387,16 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      son créateur (comme le noyau de ReactOS) ; l'emprunt d'identité (`ps::EThread::impersonate`,
      `se::client::client_security`, NtImpersonateThread, ThreadImpersonationToken, NtOpenThreadToken) ;
      NtUserConsoleControl et NtUserResolveDesktop (`win32k::console`, `sys::console`) ;
-   - **la suite, côté console** (le chemin des critères du M5) : les polices que demande `consrv` (« VGA » pour la page
-     de code 437, « Terminal » en repli, NtGdiGetFontFamilyInfo, une police à chasse fixe), donc les autres polices du
-     disque et leur correspondance par nom (`FontSubstitutes`) ; les icônes de `consrv` ; la fenêtre console et son
-     texte ; puis l'entrée au clavier pour `cmd.exe` ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les autres polices du disque et leur
-     correspondance par nom (`FontSubstitutes`), puis les contrôles et
+   - [x] la sonde console, étape 2 (les polices) : la ruche SOFTWARE montée (`userland::mount_software_hive`) ; les
+     polices de `\SystemRoot\Fonts` installées (`io::Volume::list`, `win32k::font` : table de polices, noms, graisse,
+     italique, pas, jeu de caractères ; `glyph::Names`) ; la correspondance d'un LOGFONT par substitut, famille,
+     graisse, italique et pas (`fontobj::realize`) ; NtGdiGetFontFamilyInfo (`fontobj::family_info`) ;
+   - **la suite, côté console** (le chemin des critères du M5) : **Sleep(0) qui cède le processeur** à un thread prêt de
+     même priorité (`ke::dispatcher::ke_delay_execution_thread` revient aussitôt pour un intervalle nul ; XP cède le
+     reste du quantum), pour que le test des 8 threads attende vraiment la section critique et coche le critère ; puis
+     la fenêtre console montrée (NtUserShowWindowAsync) et son texte peint ; les icônes de `consrv` ; l'entrée au
+     clavier pour `cmd.exe` ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
@@ -443,6 +448,9 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Sonde console (M5, étape 2) : polices bitmap (`.fon`), collections et polices privées absentes ; le jeu de caractères
+  d'un substitut (`Nom,jeu`) ignoré ; la correspondance décide par le nom, sans les pénalités de GetFontPenalty ; ni
+  gras ni italique synthétiques ; l'énumération donne le LOGFONT de la hauteur par défaut (cellule de 12 pixels).
 - Sonde console (M5, étape 1) : SeTokenCanImpersonate absent (tout jeton s'emprunte), pas de DACL pour la copie à
   l'ouverture, OpenAsSelf sans effet, `IsImpersonating` du TEB non écrit ; NtUserResolveDesktop sans la station par
   défaut (`Service-0x0-3e7$`) d'un chemin qui n'en nomme pas ; ConsoleMakePalettePublic et

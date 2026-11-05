@@ -122,3 +122,35 @@ fn tahoma_and_marlett_have_the_text_metrics_gdi_gives_them() {
     assert_eq!((symbols.first_char, symbols.last_char), (0x30, 0x79));
     assert_eq!((symbols.break_char, symbols.default_char), (0x30, 0x2F), "its first character, and the one before");
 }
+
+#[test]
+fn names_italics_and_code_pages_are_those_gdi_reads() {
+    let fonts = [
+        ("tahoma.ttf", "Tahoma", "Regular", "Tahoma", false),
+        ("tahomabd.ttf", "Tahoma", "Bold", "Tahoma Bold", false),
+        ("UniVGA16.ttf", "VGA", "Medium", "VGA Medium", false),
+        ("lucon.ttf", "Lucida Console", "Book", "Lucida Console", false),
+        ("couri.ttf", "Courier New", "Italic", "Courier New Italic", true),
+    ];
+    for (file_name, family, style, full_name, italic) in fonts {
+        let Some(file) = read(file_name) else { return };
+        let font = Font::parse(&file).expect(file_name);
+        let names = font.names();
+        assert_eq!((names.family.as_str(), names.style.as_str()), (family, style), "{file_name}");
+        assert_eq!(names.full_name, full_name, "{file_name}");
+        assert_eq!(font.is_italic(), italic, "{file_name}");
+    }
+    let Some(file) = read("tahoma.ttf") else { return };
+    let (latin, _) = Font::parse(&file).unwrap().code_page_ranges().expect("OS/2 of version 1 or later");
+    assert_ne!(latin & 1, 0, "Latin 1 (code page 1252)");
+}
+
+#[test]
+fn vga_is_a_fixed_pitch_modern_font() {
+    let Some(file) = read("UniVGA16.ttf") else { return };
+    let tm = Font::parse(&file).expect("VGA").text_metrics(16 * ONE);
+    // Its `post` says proportional, its PANOSE monospaced: GDI takes it as
+    // fixed (TMPF_FIXED_PITCH clear), FF_MODERN.
+    assert_eq!(tm.pitch_and_family & 0x01, 0, "fixed pitch");
+    assert_eq!(tm.pitch_and_family & 0xF0, glyph::font::FF_MODERN);
+}

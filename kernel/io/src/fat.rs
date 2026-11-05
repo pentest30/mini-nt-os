@@ -380,7 +380,7 @@ impl<D: BlockDevice> FatVolume<D> {
                 cluster = entry.first_cluster;
             }
         }
-        self.read_dir_entries(cluster)
+        self.dir_entries(cluster)
     }
 
     pub fn read(&self, file: &mut FatFile, out: &mut [u8]) -> Result<usize, FatError> {
@@ -478,7 +478,10 @@ impl<D: BlockDevice> FatVolume<D> {
         }
     }
 
-    fn read_dir_entries(&self, dir_cluster: u32) -> Result<Vec<DirEntryInfo>, FatError> {
+    /// The entries of the directory at `dir_cluster`, each with its long
+    /// name if it has one, else its 8.3 name (`.` and `..` and the volume
+    /// label among them).
+    pub fn dir_entries(&self, dir_cluster: u32) -> Result<Vec<DirEntryInfo>, FatError> {
         let bps = self.bpb.bytes_per_sector as usize;
         let spc = self.bpb.sectors_per_cluster as usize;
         if !(512..=4096).contains(&bps) || spc == 0 {

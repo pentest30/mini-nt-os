@@ -899,6 +899,126 @@ const _: () = {
 
 as_bytes!(TmwInternal32, GdiBsTextOut32, GdiBsExtTextOut32);
 
+// The other character sets of a LOGFONT: those of the code pages of a
+// TrueType font (`OS/2` ulCodePageRange1), and OEM.
+pub const SHIFTJIS_CHARSET: u8 = 128;
+pub const HANGEUL_CHARSET: u8 = 129;
+pub const JOHAB_CHARSET: u8 = 130;
+pub const GB2312_CHARSET: u8 = 134;
+pub const CHINESEBIG5_CHARSET: u8 = 136;
+pub const GREEK_CHARSET: u8 = 161;
+pub const TURKISH_CHARSET: u8 = 162;
+pub const VIETNAMESE_CHARSET: u8 = 163;
+pub const HEBREW_CHARSET: u8 = 177;
+pub const ARABIC_CHARSET: u8 = 178;
+pub const BALTIC_CHARSET: u8 = 186;
+pub const RUSSIAN_CHARSET: u8 = 204;
+pub const THAI_CHARSET: u8 = 222;
+pub const EASTEUROPE_CHARSET: u8 = 238;
+pub const OEM_CHARSET: u8 = 255;
+
+// lfPitchAndFamily: the pitch (low bits) and the family (high bits).
+pub const FIXED_PITCH: u8 = 1;
+pub const VARIABLE_PITCH: u8 = 2;
+pub const FF_MODERN: u8 = 0x30;
+
+// The precisions and quality of an enumerated TrueType font.
+pub const OUT_OUTLINE_PRECIS: u8 = 8;
+pub const CLIP_DEFAULT_PRECIS: u8 = 0;
+pub const PROOF_QUALITY: u8 = 2;
+
+// The FontType of an enumerated font.
+pub const RASTER_FONTTYPE: u32 = 0x0001;
+pub const TRUETYPE_FONTTYPE: u32 = 0x0004;
+
+// ntmFlags.
+pub const NTM_ITALIC: u32 = 0x01;
+pub const NTM_BOLD: u32 = 0x20;
+pub const NTM_REGULAR: u32 = 0x40;
+
+/// LF_FULLFACESIZE: the characters of a full name, its NUL included.
+pub const LF_FULLFACESIZE: usize = 64;
+
+/// ENUMLOGFONTEXW: a LOGFONTW, the full name, the style and the script of an
+/// enumerated font.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnumLogFontExW32 {
+    pub log_font: LogFontW32,
+    pub full_name: [u16; LF_FULLFACESIZE],
+    pub style: [u16; LF_FACESIZE],
+    pub script: [u16; LF_FACESIZE],
+}
+
+impl Default for EnumLogFontExW32 {
+    fn default() -> Self {
+        Self {
+            log_font: LogFontW32::default(),
+            full_name: [0; LF_FULLFACESIZE],
+            style: [0; LF_FACESIZE],
+            script: [0; LF_FACESIZE],
+        }
+    }
+}
+
+/// NEWTEXTMETRICW: a TEXTMETRICW and what an enumeration adds to it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NewTextMetricW32 {
+    pub text_metric: TextMetricW32,
+    /// NTM_*.
+    pub flags: u32,
+    /// ntmSizeEM: the em square, in font units.
+    pub size_em: u32,
+    /// ntmCellHeight: the cell, in font units.
+    pub cell_height: u32,
+    pub avg_width: u32,
+}
+
+/// FONTSIGNATURE: the Unicode ranges and the code pages of a font.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FontSignature32 {
+    pub usb: [u32; 4],
+    pub csb: [u32; 2],
+}
+
+/// NEWTEXTMETRICEXW.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NewTextMetricExW32 {
+    pub ntm: NewTextMetricW32,
+    pub signature: FontSignature32,
+}
+
+/// FONTFAMILYINFO (ReactOS's `ntgdibad.h`): one font of
+/// NtGdiGetFontFamilyInfo, which gdi32's EnumFontFamiliesEx hands to its
+/// callback.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FontFamilyInfo32 {
+    pub enum_log_font: EnumLogFontExW32,
+    pub new_text_metric: NewTextMetricExW32,
+    /// RASTER_FONTTYPE, TRUETYPE_FONTTYPE.
+    pub font_type: u32,
+}
+
+const _: () = {
+    assert!(size_of::<EnumLogFontExW32>() == 348);
+    assert!(offset_of!(EnumLogFontExW32, full_name) == 92);
+    assert!(offset_of!(EnumLogFontExW32, style) == 220);
+    assert!(offset_of!(EnumLogFontExW32, script) == 284);
+    assert!(size_of::<NewTextMetricW32>() == 76);
+    assert!(offset_of!(NewTextMetricW32, flags) == 60);
+    assert!(size_of::<FontSignature32>() == 24);
+    assert!(size_of::<NewTextMetricExW32>() == 100);
+    assert!(size_of::<FontFamilyInfo32>() == 452);
+    assert!(offset_of!(FontFamilyInfo32, new_text_metric) == 348);
+    assert!(offset_of!(FontFamilyInfo32, font_type) == 448);
+};
+
+as_bytes!(FontFamilyInfo32);
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -72,5 +72,59 @@ scénario `console` sur les deux CPU. 4 mutations tuées : sans PEB rendu au cr�
 `console`), un retour à soi ignoré, un jeton primaire accepté (`smoke`). Sans test : le thread d'entrée d'un bureau
 retrouvé par une seconde console (il n'y en a qu'une).
 
-La suite : les polices de la console (« VGA », « Terminal », NtGdiGetFontFamilyInfo, et les autres polices du disque
-avec leur correspondance par nom, `FontSubstitutes`), les icônes de `consrv`, puis la fenêtre console elle-même.
+La suite : les polices de la console (étape 2).
+
+## Étape 2 : les polices de la console
+
+`consrv` crée la fenêtre de sa console avec la police de sa page de code : « VGA » pour la 437, « Terminal » en
+repli (`concfg/font.c`). Il la vérifie d'abord par EnumFontFamiliesExW (IsValidConsoleFont2) : une police TrueType
+doit être à pas fixe et FF_MODERN, sauf si elle est dans la liste `Console\TrueTypeFont` de la ruche SOFTWARE (Lucida
+Console seulement). Tout donnait Tahoma, et NtGdiGetFontFamilyInfo manquait.
+
+- **La ruche SOFTWARE** de ReactOS épinglé est sur le disque de démarrage et montée en `\REGISTRY\MACHINE\SOFTWARE`
+  (`userland::mount_software_hive`, réécrite par NtFlushKey comme SYSTEM) : `FontSubstitutes` (34 substituts : « MS
+  Shell Dlg » donne Tahoma, « Terminal » Lucida Console, « Courier » Courier New…), `Console\TrueTypeFont`.
+- **Les polices du disque** : `win32k::font` tient une table de polices installées (plus l'énumération fermée de
+  Tahoma, Tahoma gras et Marlett) ; le noyau installe chaque `.ttf` de `\SystemRoot\Fonts` (IntLoadSystemFonts ; Io sait
+  lister un répertoire : `Volume::list`, `File::list`). Pour chacune : sa famille, son style et son nom complet (table
+  `name`, `glyph::Names`), sa graisse, son italique, son pas et sa famille, son jeu de caractères (le premier de ses
+  pages de code, comme ReactOS). `xtask` met sur le disque, en plus des polices du cadre, VGA (`UniVGA16.ttf`, famille
+  « VGA » : sa table `post` la dit proportionnelle, son PANOSE à chasse fixe, ce qui suffit à FillTM), Lucida Console
+  et Courier New.
+- **La correspondance d'un LOGFONT** (TextIntRealizeFont) : son nom à travers les substituts (SubstituteFontRecurse,
+  10 fois au plus), puis la police de cette famille la plus proche de sa graisse et de son italique ; sans elle, une
+  police à pas fixe (Courier New d'abord) si le LOGFONT en demande une, sinon Tahoma. ReactOS pèse chaque écart
+  (GetFontPenalty) ; ici, le nom décide.
+- **L'énumération** (NtGdiGetFontFamilyInfo, `fontobj::family_info`, FONTFAMILYINFO dans `abi::gdi`) : les polices
+  de ce nom (famille ou nom complet) et de ce jeu de caractères, puis celles des substituts de ce nom, sous le nom du
+  substitut ; le LOGFONT et le NEWTEXTMETRIC de la hauteur par défaut, `lfPitchAndFamily` comme FontFamilyFillInfo
+  (FIXED_PITCH pour VGA), TRUETYPE_FONTTYPE, la FONTSIGNATURE et l'écriture de la dernière page de code.
+  `gdi32` rappelle le service quand son tampon est trop petit : le compte écrit est celui de toutes les polices.
+
+**La sonde va au bout.** `consrv` crée la console ; `THREADS1.EXE` démarre, ses 8 threads comptent 16000 sans jamais
+être deux dans la section critique, WriteConsoleW écrit ses 17 caractères, et il se termine avec 0x600D, que
+`CONSOLE1.EXE` lit.
+
+Mais les threads n'attendent jamais la section critique (« contended: no ») : Sleep(0) ne cède pas le processeur.
+`ke::dispatcher::ke_delay_execution_thread` le dit (un intervalle nul revient aussitôt) ; XP donne le reste du quantum
+à un thread prêt de même priorité. Le critère du M5 (8 threads synchronisés) attend ce correctif de Ke, pour que le
+test exerce vraiment l'attente (la création de l'événement de la section critique, l'attente, le réveil).
+
+En passant, toujours tolérés : l'assertion des icônes de `consrv` ; NtUserSetWindowLong, NtUserSetTimer,
+NtUserShowWindowAsync (la fenêtre console n'est pas montrée), NtUserDestroyWindow, NtGdiCreateCompatibleDC,
+NtGdiExtGetObjectW, NtGdiCreateBitmap, NtGdiCreatePatternBrushInternal, NtAddAtom manquent (0 rendu) ; `comctl32`
+ne trouve pas son manifeste (contextes d'activation) ; NtQueryInformationThread(ThreadAmILastThread) et
+NtSetInformationThread(ThreadQuerySetWin32StartAddress) manquent.
+
+Ce qui manque : les polices bitmap (`.fon` : « Terminal » n'existe que par son substitut), les collections, les
+polices privées (AddFontResource), le jeu de caractères d'un substitut (`Nom,jeu`, ignoré), les pénalités de
+GetFontPenalty, le gras et l'italique synthétiques.
+
+Tests : hôte (`glyph` : noms, italique, pages de code des polices épinglées, VGA à pas fixe et FF_MODERN ; `io` : un
+répertoire liste ses noms ; `win32k` : une police par famille, graisse et italique, réinstallée à son rang, son pas et
+son jeu de caractères, les substituts suivis et arrêtés sur une boucle ; la correspondance d'un LOGFONT ; l'énumération
+par nom et par substitut) ; 10 mutations, toutes tuées (8 sur l'hôte ; une énumération vide et sans ruche SOFTWARE,
+dans le scénario) ; le scénario `console` sur les deux CPU, qui va au bout.
+
+La suite : Sleep(0) qui cède le processeur (Ke), puis la fenêtre console montrée (ShowWindowAsync) et son texte
+peint, les icônes de `consrv`, et l'entrée au clavier pour `cmd.exe`.

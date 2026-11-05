@@ -15,5 +15,5 @@ extern crate alloc;
 pub mod font;
 pub mod raster;
 
-pub use font::{Bitmap, Error, Font, Metrics, TextMetrics};
+pub use font::{Bitmap, Error, Font, Metrics, Names, TextMetrics};
 pub use raster::{Point, Rasterizer, ONE};

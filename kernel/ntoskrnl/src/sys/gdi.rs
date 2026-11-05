@@ -12,8 +12,8 @@
 //! ([`super::dispatch`]) : NtGdiFlush n'a plus rien à faire.
 
 use abi::gdi::{rgn, ERROR, GDI_HANDLE_STOCK_MASK, GDI_HANDLE_TYPE_MASK, LO_DC_TYPE};
-use abi::ntstatus::{NtStatus, STATUS_SUCCESS};
-use abi::winerror::{ERROR_INVALID_HANDLE, ERROR_NOT_ENOUGH_MEMORY};
+use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_SUCCESS};
+use abi::winerror::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY};
 use ke::usermem::copy_to_user;
 use win32k::gdi::dib::Rect;
 use win32k::gdi::{region, rgnobj};
@@ -123,6 +123,39 @@ pub(super) fn nt_gdi_get_text_metrics_w(arguments: &[u32]) -> NtStatus {
     let bytes = metrics.as_bytes();
     let bytes = &bytes[..bytes.len().min(size as usize)];
     NtStatus(u32::from(copy_to_user(u64::from(out), bytes).is_ok()))
+}
+
+/// NtGdiGetFontFamilyInfo(Dc, LogFont, Info, *InfoCount) : les polices
+/// qu'énumère EnumFontFamiliesEx pour le LOGFONTW `LogFont`
+/// (`win32k::gdi::fontobj::family_info`) : autant de FONTFAMILYINFO que
+/// `Info` en tient (`*InfoCount` en entrée) ; rend leur nombre et, s'il y en
+/// a, écrit en `*InfoCount` combien il y en a en tout (0 d'abord). -1 et
+/// `ERROR_INVALID_PARAMETER` pour un pointeur nul, un compte qui n'est pas
+/// positif ou une mémoire inaccessible. Le DC n'est pas lu.
+pub(super) fn nt_gdi_get_font_family_info(arguments: &[u32]) -> NtStatus {
+    let [_dc, logfont, info, count] = arguments[..4] else { unreachable!("4 arguments") };
+    let failed = || fail(ERROR_INVALID_PARAMETER, -1i32 as u32);
+    if logfont == 0 || info == 0 || count == 0 {
+        return failed();
+    }
+    let enumerate = || -> Result<u32, NtStatus> {
+        let room = ke::usermem::UserPtr::<i32>::new(count).read()?;
+        ke::usermem::UserPtr::<i32>::new(count).write(&0)?;
+        let mut bytes = [0u8; core::mem::size_of::<abi::gdi::LogFontW32>()];
+        ke::usermem::copy_from_user(&mut bytes, u64::from(logfont))?;
+        let logfont = abi::gdi::LogFontW32::from_bytes(&bytes).ok_or(STATUS_INVALID_PARAMETER)?;
+        let room = usize::try_from(room).ok().filter(|&room| room > 0).ok_or(STATUS_INVALID_PARAMETER)?;
+        let entries = win32k::gdi::fontobj::family_info(&logfont);
+        let given = entries.len().min(room);
+        if given > 0 {
+            let bytes: alloc::vec::Vec<u8> =
+                entries[..given].iter().flat_map(|entry| entry.as_bytes()).copied().collect();
+            copy_to_user(u64::from(info), &bytes)?;
+            ke::usermem::UserPtr::<i32>::new(count).write(&(entries.len() as i32))?;
+        }
+        Ok(given as u32)
+    };
+    enumerate().map_or_else(|_| failed(), NtStatus)
 }
 
 /// NtGdiGetTextExtent(hdc, lpwsz, cwc, psize, flOpts) : BOOL ; écrit en
