@@ -5,6 +5,9 @@
 LIBRARY kernel32.dll
 EXPORTS
 ExitProcess@4
+FindClose@4
+FindFirstFileW@8
+FindNextFileW@8
 GetCurrentProcessId@0
 GetLastError@0
 GetModuleHandleW@4

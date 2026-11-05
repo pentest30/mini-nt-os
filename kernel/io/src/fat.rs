@@ -196,12 +196,22 @@ fn same_name(long: &str, name: &str) -> bool {
     long.chars().flat_map(char::to_uppercase).eq(name.chars().flat_map(char::to_uppercase))
 }
 
+/// One entry of a directory, as an enumeration sees it.
 #[derive(Debug, Clone)]
 pub struct DirEntryInfo {
     pub name: String,
+    /// Its 8.3 name as a directory holds it ("NTDLL.DLL"); its long name
+    /// up-cased when 8.3 can hold it, the entry's own name otherwise.
+    pub short: String,
+    /// Where the entry is: its byte offset in the directory's stream, the
+    /// index an enumeration resumes after.
+    pub index: u64,
     pub attr: u8,
     pub first_cluster: u32,
     pub file_size: u32,
+    /// Its dates and times, as FAT keeps them (local time, a date of 0 when
+    /// unknown).
+    pub entry: DirEntry,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -478,7 +488,9 @@ impl<D: BlockDevice> FatVolume<D> {
         }
     }
 
-    fn read_dir_entries(&self, dir_cluster: u32) -> Result<Vec<DirEntryInfo>, FatError> {
+    /// The entries of the directory at `cluster`, in the order it holds
+    /// them, `.` and `..` of a subdirectory included.
+    pub fn read_dir_entries(&self, dir_cluster: u32) -> Result<Vec<DirEntryInfo>, FatError> {
         let bps = self.bpb.bytes_per_sector as usize;
         let spc = self.bpb.sectors_per_cluster as usize;
         if !(512..=4096).contains(&bps) || spc == 0 {
@@ -492,6 +504,9 @@ impl<D: BlockDevice> FatVolume<D> {
         let mut cluster = dir_cluster;
         let mut buf = vec![0u8; bytes_per_cluster];
         let mut long = LongName::default();
+        // Where the entries are: the offset in the directory's stream, an
+        // index an enumeration resumes after.
+        let mut offset = 0u64;
         loop {
             self.read_cluster(cluster, &mut buf)?;
             let mut i = 0usize;
@@ -501,18 +516,26 @@ impl<D: BlockDevice> FatVolume<D> {
                     (0x00, _) => return Ok(out),
                     (0xE5, _) => long = LongName::default(),
                     (_, ATTR_LONG_NAME) => long.take(ent),
+                    // The volume label, which an enumeration never returns.
+                    (_, attr) if attr & 0x08 != 0 => long = LongName::default(),
                     (_, attr) => {
-                        let hi = u16::from_le_bytes([ent[20], ent[21]]) as u32;
-                        let lo = u16::from_le_bytes([ent[26], ent[27]]) as u32;
-                        let first_cluster = (hi << 16) | lo;
-                        let file_size = u32::from_le_bytes([ent[28], ent[29], ent[30], ent[31]]);
+                        let entry = DirEntry::parse(ent);
                         // Its long name if it has one.
                         let name = long.finish(ent).unwrap_or_else(|| short_name_from_entry(ent));
-                        out.push(DirEntryInfo { name, attr, first_cluster, file_size });
+                        out.push(DirEntryInfo {
+                            name,
+                            short: short_name_from_entry(ent),
+                            index: offset + i as u64,
+                            attr,
+                            first_cluster: entry.first_cluster,
+                            file_size: entry.file_size,
+                            entry,
+                        });
                     }
                 }
                 i += 32;
             }
+            offset += buf.len() as u64;
             cluster = self.next_cluster(cluster)?;
         }
     }

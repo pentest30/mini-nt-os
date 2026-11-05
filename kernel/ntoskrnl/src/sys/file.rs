@@ -19,21 +19,22 @@
 //! `STATUS_NOT_IMPLEMENTED`, journalisé une fois), la suppression.
 
 use abi::file::{
-    FileBasicInformation, FileFsDeviceInformation, FileNetworkOpenInformation, FilePositionInformation,
-    FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE, FILE_FS_DEVICE_INFORMATION,
-    FILE_FS_MAXIMUM_INFORMATION, FILE_MAXIMUM_DISPOSITION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE,
-    FILE_OPEN, FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
+    FileBasicInformation, FileBothDirectoryInformation, FileFsDeviceInformation, FileNetworkOpenInformation,
+    FilePositionInformation, FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION,
+    FILE_BOTH_DIRECTORY_INFORMATION, FILE_DIRECTORY_FILE, FILE_FS_DEVICE_INFORMATION, FILE_FS_MAXIMUM_INFORMATION,
+    FILE_MAXIMUM_DISPOSITION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+    FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
     FILE_VALID_OPTION_FLAGS,
 };
 use abi::file::{
-    FILE_APPEND_DATA, FILE_CREATED, FILE_END_OF_FILE_INFORMATION, FILE_READ_DATA, FILE_USE_FILE_POINTER_POSITION,
-    FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
+    FILE_APPEND_DATA, FILE_CREATED, FILE_END_OF_FILE_INFORMATION, FILE_LIST_DIRECTORY, FILE_READ_DATA,
+    FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE,
-    STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER,
-    STATUS_NOT_IMPLEMENTED, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH,
-    STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED,
+    STATUS_END_OF_FILE, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS,
+    STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_NO_SUCH_FILE,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
 use alloc::sync::Arc;
@@ -49,6 +50,7 @@ use super::object::{capture_attributes, give_handle};
 /// Les classes demandées sans être implémentées.
 static FILE_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationFile");
 static VOLUME_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryVolumeInformationFile");
+static DIRECTORY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryDirectoryFile");
 
 /// FileMaximumInformation d'XP : les classes vont de 1 à 40.
 const FILE_MAXIMUM_INFORMATION: u32 = 41;
@@ -230,6 +232,125 @@ fn query_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
         FILE_POSITION_INFORMATION => FilePositionInformation { current_byte_offset: file.position() }.to_bytes().into(),
         _ => file.network_open_information()?.to_bytes().into(),
     };
+    let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information: information.len() as u32 };
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    write_information(&information, buffer)?;
+    ke::usermem::copy_to_user(u64::from(iosb), &block.to_bytes())
+}
+
+/// NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext,
+/// IoStatusBlock, FileInformation, Length, FileInformationClass,
+/// ReturnSingleEntry, FileName, RestartScan) — the pinned ReactOS's order,
+/// `ReturnSingleEntry` before the pattern and `RestartScan` last, which XP
+/// orders otherwise — : FileBothDirectoryInformation, as the FindFirstFile
+/// of kernel32 asks it. `FileName` is the pattern (`?` and `*`, without
+/// case) the entries match, given again at each call; an enumeration
+/// resumes where its file object's scan stopped, `RestartScan` starts it
+/// over. One entry follows the last at `NextEntryOffset` (8-aligned), the
+/// last one has 0 there. An empty result (STATUS_NO_MORE_FILES) ends the
+/// scan; a first entry that does not fit gives STATUS_BUFFER_OVERFLOW. The
+/// event and the callbacks wait for the asynchronous E/S, which does not
+/// exist.
+pub(super) fn nt_query_directory_file(arguments: &[u32]) -> NtStatus {
+    status(query_directory_file(arguments))
+}
+
+fn query_directory_file(arguments: &[u32]) -> Result<(), NtStatus> {
+    let [handle, _event, _apc_routine, _apc_context, iosb, buffer, length, class, single, pattern, restart] =
+        arguments[..11] else { unreachable!("11 arguments") };
+    if class != FILE_BOTH_DIRECTORY_INFORMATION {
+        return Err(DIRECTORY_CLASSES.report(class));
+    }
+    let file = super::current_process().handle_table.reference_as::<File>(
+        Handle(handle),
+        &FILE_TYPE,
+        AccessMask(FILE_LIST_DIRECTORY),
+    )?;
+    // The pattern, without case, as XP's callers give it at each call.
+    let pattern = if pattern != 0 {
+        let units = super::object::capture_unicode_string(pattern)?;
+        Some(alloc::string::String::from_utf16_lossy(&units))
+    } else {
+        None
+    };
+    if restart != 0 {
+        file.restart_scan();
+    }
+    // A first call that finds nothing is a name nothing matches
+    // (STATUS_NO_SUCH_FILE, the ERROR_FILE_NOT_FOUND of FindFirstFile);
+    // later ones end the scan (STATUS_NO_MORE_FILES).
+    let first_query = file.scan() == 0;
+    let fixed = core::mem::offset_of!(FileBothDirectoryInformation, file_name);
+    let mut information: Vec<u8> = Vec::new();
+    let mut last_at = 0usize;
+    loop {
+        // Room for one more entry: its fixed part and a first character.
+        let room = (length as usize).checked_sub(information.len()).unwrap_or(0);
+        if room < fixed + 2 {
+            break;
+        }
+        let Some(entry) = file.next_entry(pattern.as_deref())? else { break };
+        let name: Vec<u16> = entry.name.encode_utf16().collect();
+        let short: Vec<u16> = entry.short.encode_utf16().collect();
+        let padded = (fixed + name.len() * 2).div_ceil(8) * 8;
+        if padded > room {
+            if information.is_empty() {
+                return Err(STATUS_BUFFER_OVERFLOW);
+            }
+            break;
+        }
+        // The entry before this one points to it.
+        if !information.is_empty() {
+            let offset = (information.len() - last_at) as u32;
+            information[last_at..last_at + 4].copy_from_slice(&offset.to_le_bytes());
+        }
+        last_at = information.len();
+        let cluster = file.cluster_bytes() as u64;
+        let allocation = if entry.attr & 0x10 != 0 {
+            cluster
+        } else {
+            (entry.file_size as u64).div_ceil(cluster) * cluster
+        };
+        let short_name = {
+            let mut units = [0u16; 12];
+            let kept = short.len().min(12);
+            units[..kept].copy_from_slice(&short[..kept]);
+            units
+        };
+        let record = FileBothDirectoryInformation {
+            next_entry_offset: 0,
+            file_index: entry.index as u32,
+            creation_time: io_manager::nt_time(entry.entry.creation_date, entry.entry.creation_time, entry.entry.creation_tenths),
+            last_access_time: io_manager::nt_time(entry.entry.access_date, 0, 0),
+            // FAT keeps no change time: XP puts the write time there.
+            last_write_time: io_manager::nt_time(entry.entry.write_date, entry.entry.write_time, 0),
+            change_time: io_manager::nt_time(entry.entry.write_date, entry.entry.write_time, 0),
+            end_of_file: entry.file_size as u64,
+            allocation_size: allocation,
+            // FAT's attribute bits are FILE_ATTRIBUTE_*.
+            file_attributes: entry.attr as u32,
+            file_name_length: (name.len() * 2) as u32,
+            ea_size: 0,
+            // In bytes, as the kernel32 of the pinned ReactOS copies it
+            // (`NTDL` for `NTDLL.DLL` when it counts characters).
+            short_name_length: (short.len() * 2) as u8,
+            short_name,
+            file_name: [name[0]],
+        };
+        let bytes = record.to_bytes();
+        information.extend_from_slice(&bytes[..fixed + 2]);
+        information.extend(name[1..].iter().flat_map(|unit| unit.to_le_bytes()));
+        information.resize(last_at + padded, 0);
+        if single != 0 {
+            break;
+        }
+    }
+    if information.is_empty() {
+        if (length as usize) < fixed + 2 {
+            return Err(STATUS_INFO_LENGTH_MISMATCH);
+        }
+        return Err(if first_query { STATUS_NO_SUCH_FILE } else { STATUS_NO_MORE_FILES });
+    }
     let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information: information.len() as u32 };
     ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
     write_information(&information, buffer)?;

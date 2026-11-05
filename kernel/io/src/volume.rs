@@ -38,8 +38,9 @@ use abi::file::{
 };
 use abi::ntstatus::{
     NtStatus, STATUS_DISK_CORRUPT_ERROR, STATUS_DISK_FULL, STATUS_FILE_CORRUPT_ERROR, STATUS_INVALID_DEVICE_REQUEST,
-    STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
-    STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
+    STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY, STATUS_OBJECT_NAME_COLLISION,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
+    STATUS_UNRECOGNIZED_VOLUME,
 };
 use hal::sync::KSpinLock;
 
@@ -183,6 +184,42 @@ impl Volume {
     pub fn current(&self, node: &Node) -> Result<Node, NtStatus> {
         let _guard = self.lock.lock();
         self.current_locked(node)
+    }
+
+    /// The first entry of the directory `from` at or past `index` (a byte
+    /// offset in the directory's stream, 0 for the first) that `pattern`
+    /// keeps (`?` and `*`, without case, [`name`]; `None` keeps all):
+    /// `None` past the last. `.` and `..` never come, as XP's enumeration
+    /// never returns them. `STATUS_NOT_A_DIRECTORY` for a file.
+    ///
+    /// Each call reads the directory again from its start: a scan that
+    /// serves many entries from one read comes later.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn enumerate(
+        &self,
+        from: &Node,
+        index: u64,
+        pattern: Option<&str>,
+    ) -> Result<Option<crate::fat::DirEntryInfo>, NtStatus> {
+        let _guard = self.lock.lock();
+        let node = self.current_locked(from)?;
+        if !node.directory {
+            return Err(STATUS_NOT_A_DIRECTORY);
+        }
+        let entries = self
+            .fat
+            .read_dir_entries(node.first_cluster)
+            .map_err(|error| match error {
+                FatError::NotFound | FatError::InvalidBpb => STATUS_FILE_CORRUPT_ERROR,
+                error => device_error(error),
+            })?;
+        Ok(entries.into_iter().find(|entry| {
+            entry.index >= index
+                && !matches!(entry.name.as_str(), "." | "..")
+                && pattern.is_none_or(|pattern| crate::name::is_name_in_expression(pattern, &entry.name))
+        }))
     }
 
     /// Lit le fichier `node` à partir de l'octet `offset` dans `out` ; rend

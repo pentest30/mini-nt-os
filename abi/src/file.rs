@@ -89,6 +89,9 @@ pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0020;
 pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x0080;
 
 /// `FILE_INFORMATION_CLASS`.
+pub const FILE_DIRECTORY_INFORMATION: u32 = 1;
+pub const FILE_FULL_DIRECTORY_INFORMATION: u32 = 2;
+pub const FILE_BOTH_DIRECTORY_INFORMATION: u32 = 3;
 pub const FILE_BASIC_INFORMATION: u32 = 4;
 pub const FILE_STANDARD_INFORMATION: u32 = 5;
 pub const FILE_DISPOSITION_INFORMATION: u32 = 13;
@@ -122,6 +125,32 @@ pub struct FileBasicInformation {
     pub last_write_time: u64,
     pub change_time: u64,
     pub file_attributes: u32,
+}
+
+/// FILE_BOTH_DIR_INFORMATION of XP x86: one entry of a directory
+/// enumeration, `file_name` last; the next entry follows at
+/// `next_entry_offset` from this one's start (8-aligned), the last has 0
+/// there. `file_name_length` counts bytes, `short_name_length` characters.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct FileBothDirectoryInformation {
+    pub next_entry_offset: u32,
+    pub file_index: u32,
+    pub creation_time: u64,
+    pub last_access_time: u64,
+    pub last_write_time: u64,
+    pub change_time: u64,
+    pub end_of_file: u64,
+    pub allocation_size: u64,
+    pub file_attributes: u32,
+    pub file_name_length: u32,
+    pub ea_size: u32,
+    pub short_name_length: u8,
+    // 1 byte of padding before `short_name`, as the layout of XP wants.
+    pub short_name: [u16; 12],
+    // 2 bytes of padding before `file_name` (4-aligned after `short_name`).
+    /// The first character of the name; the rest follows the structure.
+    pub file_name: [u16; 1],
 }
 
 /// FILE_STANDARD_INFORMATION.
@@ -169,6 +198,10 @@ impl<const N: usize> Encoder<N> {
     }
     fn u8(mut self, at: usize, value: u8) -> Self {
         self.0[at] = value;
+        self
+    }
+    fn u16(mut self, at: usize, value: u16) -> Self {
+        self.0[at..at + 2].copy_from_slice(&value.to_le_bytes());
         self
     }
 }
@@ -220,6 +253,33 @@ impl FilePositionInformation {
     }
 }
 
+impl FileBothDirectoryInformation {
+    /// Its bytes, as they go to the caller, padding zeroed; only the fixed
+    /// part and the first character of the name, the rest of the name
+    /// follows the structure.
+    pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
+        let mut encoder = Encoder([0; size_of::<Self>()]);
+        for (at, unit) in self.short_name.iter().enumerate() {
+            encoder = encoder.u16(offset_of!(Self, short_name) + 2 * at, *unit);
+        }
+        encoder
+            .u32(offset_of!(Self, next_entry_offset), self.next_entry_offset)
+            .u32(offset_of!(Self, file_index), self.file_index)
+            .u64(offset_of!(Self, creation_time), self.creation_time)
+            .u64(offset_of!(Self, last_access_time), self.last_access_time)
+            .u64(offset_of!(Self, last_write_time), self.last_write_time)
+            .u64(offset_of!(Self, change_time), self.change_time)
+            .u64(offset_of!(Self, end_of_file), self.end_of_file)
+            .u64(offset_of!(Self, allocation_size), self.allocation_size)
+            .u32(offset_of!(Self, file_attributes), self.file_attributes)
+            .u32(offset_of!(Self, file_name_length), self.file_name_length)
+            .u32(offset_of!(Self, ea_size), self.ea_size)
+            .u8(offset_of!(Self, short_name_length), self.short_name_length)
+            .u16(offset_of!(Self, file_name), self.file_name[0])
+            .0
+    }
+}
+
 impl FileNetworkOpenInformation {
     /// Its bytes, as they go to the caller, padding zeroed.
     pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
@@ -247,6 +307,13 @@ const _: () = {
     assert!(size_of::<FileNetworkOpenInformation>() == 56);
     assert!(offset_of!(FileNetworkOpenInformation, allocation_size) == 32);
     assert!(offset_of!(FileNetworkOpenInformation, file_attributes) == 48);
+    // The layout of XP x86: 1 byte of padding before `short_name` (after
+    // its length, at 0x44), the 2-aligned name right after `short_name`.
+    assert!(offset_of!(FileBothDirectoryInformation, file_attributes) == 0x38);
+    assert!(offset_of!(FileBothDirectoryInformation, short_name_length) == 0x44);
+    assert!(offset_of!(FileBothDirectoryInformation, short_name) == 0x46);
+    assert!(offset_of!(FileBothDirectoryInformation, file_name) == 0x5E);
+    assert!(size_of::<FileBothDirectoryInformation>() == 0x60);
 };
 
 #[cfg(test)]

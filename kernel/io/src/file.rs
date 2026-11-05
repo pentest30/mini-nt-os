@@ -28,6 +28,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use hal::sync::KSpinLock;
 
 use abi::file::{
     FileBasicInformation, FileNetworkOpenInformation, FileStandardInformation, FILE_ALL_ACCESS, FILE_APPEND_DATA,
@@ -73,6 +74,12 @@ pub struct File {
     synchronous: AtomicBool,
     /// CurrentByteOffset.
     position: AtomicU64,
+    /// Where its directory enumeration resumes: the index (a byte offset in
+    /// the directory's stream) of the last entry it returned.
+    scan: AtomicU64,
+    /// The pattern its enumeration keeps when a call sends none (the
+    /// FindNextFile of kernel32).
+    pattern: KSpinLock<Option<String>>,
 }
 
 impl File {
@@ -123,7 +130,15 @@ impl File {
     }
 
     fn create(volume: Arc<Volume>, path: String, opened: Node) -> Arc<Object<File>> {
-        let file = File { volume, path, opened, synchronous: AtomicBool::new(false), position: AtomicU64::new(0) };
+        let file = File {
+            volume,
+            path,
+            opened,
+            synchronous: AtomicBool::new(false),
+            position: AtomicU64::new(0),
+            scan: AtomicU64::new(0),
+            pattern: KSpinLock::new(None),
+        };
         create_object(&FILE_TYPE, file)
     }
 
@@ -162,6 +177,52 @@ impl File {
 
     pub fn set_position(&self, position: u64) {
         self.position.store(position, Ordering::Relaxed);
+    }
+
+    /// The first entry of this directory at or past where its enumeration
+    /// resumes, kept by `pattern` (`?` `*` and the DOS `<` `>`, without
+    /// case): a given pattern replaces the one the file object keeps, and
+    /// `None` keeps it (the FindNextFile of kernel32 sends none): `None`
+    /// past the last entry, and the scan moves past what it returns.
+    /// `STATUS_NOT_A_DIRECTORY` for a file.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn next_entry(&self, pattern: Option<&str>) -> Result<Option<crate::fat::DirEntryInfo>, NtStatus> {
+        let node = self.node()?;
+        // A given pattern replaces the kept one; without one, the kept one
+        // stands.
+        let pattern = match pattern {
+            Some(pattern) => {
+                *self.pattern.lock() = Some(String::from(pattern));
+                Some(String::from(pattern))
+            }
+            None => self.pattern.lock().clone(),
+        };
+        let entry = self.volume.enumerate(&node, self.scan.load(Ordering::Relaxed), pattern.as_deref())?;
+        if let Some(entry) = &entry {
+            // One past the entry: entries sit on 32-byte offsets, so the
+            // next one is never caught by the resume.
+            self.scan.store(entry.index + 1, Ordering::Relaxed);
+        }
+        Ok(entry)
+    }
+
+    /// Where this file's directory enumeration resumes: 0 before its first
+    /// call, one past the last entry it returned.
+    pub fn scan(&self) -> u64 {
+        self.scan.load(Ordering::Relaxed)
+    }
+
+    /// Restarts this file's directory enumeration at its first entry.
+    pub fn restart_scan(&self) {
+        self.scan.store(0, Ordering::Relaxed);
+    }
+
+    /// La taille d'un cluster de son volume : la taille allouée d'un
+    /// fichier s'en arrondit.
+    pub fn cluster_bytes(&self) -> u32 {
+        self.volume.cluster_bytes()
     }
 
     /// FILE_FS_DEVICE_INFORMATION de son volume.

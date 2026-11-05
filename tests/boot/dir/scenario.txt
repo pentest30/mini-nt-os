@@ -1,0 +1,41 @@
+# The installation wave, F1: DIR1.EXE (tests/native/dir1.c, MinGW, linked
+# to ReactOS's kernel32 and user32) takes the place of winlogon.exe, like
+# GUI1.EXE in `gui`. Like winlogon it registers as the logon process and
+# takes a desktop, then enumerates directories through the FindFirstFile of
+# kernel32 (NtQueryDirectoryFile, FileBothDirectoryInformation):
+# - C:\* gives every entry but `.` and `..` (KERNEL.BIN seen among them,
+#   and at least four entries: KERNEL.BIN, TEST.EXE, CMD.EXE, WINDOWS);
+# - C:\*.EXE gives exactly the two .EXE files of the root (the DOS case of
+#   a star: a star before a dot names only the extension-less, *.* all);
+# - an exact name, C:\KERNEL.BIN, gives the file and its size (4 bytes);
+# - C:\WINDOWS\SYSTEM32\NT* gives at least NTDLL.DLL, whose 8.3 name
+#   (NTDLL.DLL) and size an exact name gives back;
+# - a name nothing matches, C:\ZZ*, fails with ERROR_FILE_NOT_FOUND (a
+#   first query without a match is STATUS_NO_SUCH_FILE, not
+#   STATUS_NO_MORE_FILES);
+# - the whole enumeration again gives the same entries (a new handle scans
+#   from the start).
+# It ends with status 0x600D.
+# Update with each step (docs/compat/io-install.md).
+features = test-smss
+requires = userland, native
+initial-command = DIR1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
+expect = [boot] Io: boot volume \Device\Ramdisk0
+expect = [dir] on WinSta0\Default
+expect = [dir] KERNEL.BIN: seen
+expect = [dir] TEST.EXE: seen
+expect = [dir] KERNEL.BIN: 4 bytes
+expect = [dir] NTDLL.DLL: seen
+expect = [dir] NTDLL.DLL: 1404928 bytes, alternate NTDLL.DLL
+expect = [dir] C:\ZZ*: error 2
+expect = [dir] WINDOWS: seen
+expect = [dir] done
+
+# The enumeration itself, and what FindFirstFile needs of it.
+forbid = sys: NtQueryDirectoryFile (0x0097) is not implemented
+forbid = [dir] a dot entry came back
+forbid = *** STOP:

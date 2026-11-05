@@ -162,6 +162,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtPulseEvent, Handler::Status(event::nt_pulse_event)),
     (services::NtQueryAttributesFile, Handler::Status(file::nt_query_attributes_file)),
     (services::NtQueryDebugFilterState, Handler::Status(gates::nt_query_debug_filter_state)),
+    (services::NtQueryDirectoryFile, Handler::Status(file::nt_query_directory_file)),
     (services::NtQueryEvent, Handler::Status(event::nt_query_event)),
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),

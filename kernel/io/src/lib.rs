@@ -36,11 +36,12 @@ pub mod driver;
 pub mod fat;
 pub mod file;
 pub mod irp;
+pub mod name;
 pub mod volume;
 
 pub use device::{Device, DEVICE_TYPE};
 pub use driver::{DeviceObject, DriverObject};
-pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
+pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume, nt_time};
 pub use file::{check_disposition, check_open, creates, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
 pub use volume::{Node, Volume};

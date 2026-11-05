@@ -29,10 +29,14 @@ jour à chaque commit qui change l'état.
   l'étape 9 sur `claude/new-session-696xfc`, partie de `main` après la fusion de #43. Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
   branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
 - Chantier « installation et formatage » (parallèle à la ligne GUI, crates disjointes ; plan en F1–F7, ADR-022) :
-  `claude/libs-fatfs`, par-dessus `claude/new-session-696xfc`, en fait l'étape F2 — la crate `libs/fatfs` (`no_std`,
-  avec `alloc`) tient la construction d'image FAT32 déplacée de `tools/mkfat` sans un changement d'octet (seul
-  changement : les `use` de `alloc`, le `no_std` l'exigeant) ; `mkfat` ne garde que ses arguments et ses programmes
-  de test, et les tests croisés (`fatfs` construit, `io-manager` relit, `fsck.vfat` valide) ont suivi la crate.
+  `claude/libs-fatfs`, par-dessus `claude/new-session-696xfc` puis `main` (après la fusion de #57), en fait les
+  étapes F2 et F1 — la crate `libs/fatfs` (`no_std`, avec `alloc`) tient la construction d'image FAT32 déplacée de
+  `tools/mkfat` sans un changement d'octet (seul changement : les `use` de `alloc`, le `no_std` l'exigeant) ;
+  `mkfat` ne garde que ses arguments et ses programmes de test, et les tests croisés (`fatfs` construit,
+  `io-manager` relit, `fsck.vfat` valide) ont suivi la crate ; **F1, `NtQueryDirectoryFile`** (le `FindFirstFile`
+  du vrai kernel32, scénario `dir` : motif `?`/`*` et méta-caractères de DOS, reprise du scan, motif que le file
+  object garde, ordre des arguments de ReactOS, `ShortNameLength` en octets — détails dans
+  [`compat/io-install.md`](compat/io-install.md)).
   Vérifié sur un hôte **Windows** (rustup, nightly épinglé, Build Tools VS, QEMU 11, MSYS2) : **tous les scénarios
   boot passent**, `gui` compris (22 boot runs) ; `cargo check -p fatfs -p mkfat` et `cargo test --release -p fatfs
   -p mkfat` verts (10/10 ; `fsck.vfat` absent de l'hôte : sauté, comme prévu) ; le noyau et le chargeur y compilent
