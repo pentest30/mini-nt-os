@@ -14,10 +14,19 @@
 //! Les attributs d'un processus sont pris dans des blocs de sa mémoire de
 //! 64 Kio ([`AttrPool`], GdiPoolAllocate), rendus à sa fin avec elle.
 //!
-//! Pas encore : les DC en mémoire et leurs bitmaps, les régions de
-//! découpage d'un client (SelectClipRgn), les transformations (le DC est en
-//! MM_TEXT, ses matrices à zéro), les stylos (`hpen` reste nul), les DC
-//! d'un autre propriétaire que le processus courant.
+//! Un client coupe encore où le DC peint par une région de découpage
+//! (SelectClipRgn, ExtSelectClipRgn : `dclevel.prgnClip`, depuis l'origine
+//! du DC ; [`select_clip`]) : le DC peint dans sa région visible coupée par
+//! elle (`prgnRao`, [`DcState::rao`]). Les attributs disent la région
+//! visible (`VisRectRegion` : sa complexité, le rectangle qui la tient,
+//! depuis l'origine), dont `gdi32` tire ce que rend un SelectClipRgn qu'il
+//! met en lot.
+//!
+//! Pas encore : les DC en mémoire et leurs bitmaps, les régions de méta
+//! (SetMetaRgn), ExcludeClipRect, IntersectClipRect, OffsetClipRgn,
+//! GetClipRgn, les transformations (le DC est en MM_TEXT, ses matrices à
+//! zéro), les stylos (`hpen` reste nul), les DC d'un autre propriétaire
+//! que le processus courant.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -25,8 +34,9 @@ use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::gdi::dirty::{DC_BRUSH_DIRTY, DIRTY_FILL};
-use abi::gdi::{objt, stock, DcAttr32, COMPLEXREGION, LO_DC_TYPE, NULLREGION, SIMPLEREGION};
+use abi::gdi::{objt, rgn, stock, DcAttr32, RgnAttr32, ATTR_RGN_VALID, ERROR, LO_DC_TYPE, SIMPLEREGION};
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
+use abi::user::Rect32;
 use hal::sync::KSpinLock;
 use ke::usermem::{copy_from_user, copy_to_user};
 use mm::vad::PageProtect;
@@ -35,7 +45,7 @@ use mm::virtual_alloc::AllocType;
 use super::brush::{Brush, STOCK_BRUSHES};
 use super::dib::Rect;
 use super::handles::{self, Object, OWNER_NONE};
-use super::region::Region;
+use super::region::{combine, Region};
 
 /// L'état d'un DC.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -44,10 +54,98 @@ pub struct DcState {
     pub owner: Option<(u32, u32)>,
     /// L'origine de ses coordonnées, à l'écran (`ptlDCOrig`).
     pub origin: (i32, i32),
-    /// Ce qu'il peut peindre, à l'écran (`prgnVis`, `prgnRao`).
+    /// Ce qu'il peut peindre, à l'écran (`prgnVis`).
     pub vis: Region,
+    /// Sa région de découpage, depuis son origine (`dclevel.prgnClip`).
+    pub clip: Option<Region>,
     /// Son pinceau de remplissage (`dclevel.pbrFill`) : son handle, et lui.
     pub fill: Option<(u32, Brush)>,
+}
+
+impl DcState {
+    /// Où il peint, à l'écran (`prgnRao`) : sa région visible, coupée par sa
+    /// région de découpage.
+    pub fn rao(&self) -> Region {
+        match &self.clip {
+            Some(clip) => self.vis.intersect(&clip.offset_by(self.origin.0, self.origin.1)),
+            None => self.vis.clone(),
+        }
+    }
+
+    /// Le rectangle qui tient sa région visible, depuis son origine.
+    fn vis_bounds(&self) -> Rect {
+        let bounds = self.vis.bounds();
+        let (dx, dy) = self.origin;
+        if bounds.is_empty() {
+            return bounds;
+        }
+        Rect::new(bounds.left - dx, bounds.top - dy, bounds.right - dx, bounds.bottom - dy)
+    }
+
+    /// `VisRectRegion` (UpdateVisRgn) : la complexité de sa région visible
+    /// et le rectangle qui la tient, depuis son origine.
+    pub fn vis_rect_region(&self) -> RgnAttr32 {
+        let bounds = self.vis_bounds();
+        RgnAttr32 {
+            attr_flags: ATTR_RGN_VALID,
+            complexity: self.vis.complexity() as u32,
+            rect: Rect32 { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom },
+        }
+    }
+}
+
+/// IntGdiExtSelectClipRgn : la région de découpage de `state` devient
+/// `region` (`RGN_COPY` ; aucune : plus de région), ou sa combinaison avec
+/// elle selon `mode` (sans région de découpage, avec le rectangle qui tient
+/// la région visible ; `RGN_AND` la prend telle quelle). Rend la complexité
+/// de là où le DC peint désormais (de sa région visible sans région de
+/// découpage), ou ERROR (un autre mode sans région, un mode inconnu).
+pub fn select_clip(state: &mut DcState, region: Option<&Region>, mode: i32) -> i32 {
+    let Some(region) = region else {
+        if mode != rgn::COPY {
+            return ERROR;
+        }
+        state.clip = None;
+        return state.vis.complexity();
+    };
+    if mode != rgn::COPY && (mode != rgn::AND || state.clip.is_some()) {
+        let base = state.clip.clone().unwrap_or_else(|| Region::from_rect(state.vis_bounds()));
+        let Some(combined) = combine(&base, Some(region), mode) else { return ERROR };
+        state.clip = Some(combined);
+    } else {
+        state.clip = Some(region.clone());
+    }
+    state.rao().complexity()
+}
+
+/// IntGdiExtSelectClipRect, un SelectClipRgn mis en lot : la région de
+/// découpage devient le rectangle `rect` (aucun : plus de région) ; rien ne
+/// change si elle est déjà ce rectangle.
+pub fn select_clip_rect(state: &mut DcState, rect: Option<Rect>, mode: i32) -> i32 {
+    let Some(rect) = rect else { return select_clip(state, None, mode) };
+    let region = Region::from_corners(rect.left, rect.top, rect.right, rect.bottom);
+    if state.clip.as_ref().is_some_and(|clip| clip.complexity() == SIMPLEREGION && clip.bounds() == region.bounds()) {
+        return state.rao().complexity();
+    }
+    select_clip(state, Some(&region), mode)
+}
+
+/// NtGdiExtSelectClipRgn, une fois la région lue : sur le DC `hdc`, voir
+/// [`select_clip`]. `Err` : l'erreur de Win32 (`ERROR_INVALID_PARAMETER`
+/// pour un mode inconnu, `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au
+/// processus).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn ext_select_clip_rgn(hdc: u32, region: Option<&Region>, mode: i32) -> Result<i32, u32> {
+    if !(rgn::AND..=rgn::COPY).contains(&mode) {
+        return Err(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    let dc = lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    if region.is_none() && mode != rgn::COPY {
+        return Ok(ERROR);
+    }
+    Ok(dc.change(|state| select_clip(state, region, mode)))
 }
 
 /// Un DC.
@@ -82,8 +180,6 @@ impl Dc {
 
 /// Les octets d'un bloc d'attributs.
 pub const ATTR_BLOCK: u32 = 0x1_0000;
-/// La place des attributs d'un DC dans un bloc.
-const ATTR_SIZE: u32 = size_of::<DcAttr32>() as u32;
 
 /// Les attributs libres d'un processus, dans ses blocs.
 #[derive(Debug, Default)]
@@ -97,10 +193,10 @@ impl AttrPool {
         self.free.pop()
     }
 
-    /// Les places d'un bloc neuf, en `base` : la plus basse sera prise la
-    /// première.
-    pub fn add_block(&mut self, base: u32) {
-        self.free.extend((0..ATTR_BLOCK / ATTR_SIZE).rev().map(|i| base + i * ATTR_SIZE));
+    /// Les places de `size` octets d'un bloc neuf, en `base` : la plus basse
+    /// sera prise la première.
+    pub fn add_block(&mut self, base: u32, size: u32) {
+        self.free.extend((0..ATTR_BLOCK / size).rev().map(|i| base + i * size));
     }
 
     /// Rend une place.
@@ -109,34 +205,73 @@ impl AttrPool {
     }
 }
 
-/// GdiPoolAllocate : une place pour les attributs d'un DC dans la mémoire du
-/// processus courant, dans un bloc neuf s'il le faut.
-fn allocate_attr() -> Result<(u32, u32), NtStatus> {
+/// Ce dont les attributs sont chez le propriétaire : un DC (`DC_ATTR`,
+/// `pPoolDcAttr`) ou une région (`RGN_ATTR`, `pPoolRgnAttr`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttrKind {
+    Dc,
+    Region,
+}
+
+impl AttrKind {
+    /// La place de ses attributs dans un bloc.
+    pub const fn size(self) -> u32 {
+        match self {
+            Self::Dc => size_of::<DcAttr32>() as u32,
+            Self::Region => size_of::<RgnAttr32>() as u32,
+        }
+    }
+
+    fn pool(self, info: &crate::gui::ProcessInfo) -> &KSpinLock<AttrPool> {
+        match self {
+            Self::Dc => &info.dc_attrs,
+            Self::Region => &info.rgn_attrs,
+        }
+    }
+}
+
+/// GdiPoolAllocate : une place pour des attributs `kind` dans la mémoire du
+/// processus courant, dans un bloc neuf s'il le faut. Rend le PID et
+/// l'adresse.
+///
+/// # Errors
+/// Hors d'un thread de Ps ou d'un processus GUI ; celles de l'allocation.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn allocate_attr(kind: AttrKind) -> Result<(u32, u32), NtStatus> {
     let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
     let process = thread.process().clone();
     let info = crate::gui::process_info(&process)?;
-    if let Some(attr) = info.dc_attrs.lock().take() {
+    if let Some(attr) = kind.pool(&info).lock().take() {
         return Ok((process.pid(), attr));
     }
     let alloc_type = AllocType::MEM_RESERVE | AllocType::MEM_COMMIT;
     let base =
         process.with_space(|space| space.allocate(0, u64::from(ATTR_BLOCK), alloc_type, PageProtect::READWRITE))??;
-    let mut pool = info.dc_attrs.lock();
-    pool.add_block(base as u32);
+    let mut pool = kind.pool(&info).lock();
+    pool.add_block(base as u32, kind.size());
     let attr = pool.take().expect("a new block has room");
     Ok((process.pid(), attr))
 }
 
-/// GdiPoolFree : rend la place `attr` au processus courant.
-fn free_attr(attr: u32) {
+/// GdiPoolFree : rend la place `attr` des attributs `kind` au processus
+/// courant.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn free_attr(kind: AttrKind, attr: u32) {
     let Some(thread) = ps::ethread::current_thread() else { return };
     if let Ok(info) = crate::gui::process_info(thread.process()) {
-        info.dc_attrs.lock().give_back(attr);
+        kind.pool(&info).lock().give_back(attr);
     }
 }
 
 /// Le PID du processus courant (0 hors d'un thread de Ps).
-fn current_pid() -> u32 {
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn current_pid() -> u32 {
     ps::ethread::current_thread().map_or(0, |thread| thread.pid())
 }
 
@@ -163,19 +298,23 @@ pub fn create_display_dc() -> Result<(u32, Arc<Dc>), NtStatus> {
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
 pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(), NtStatus> {
-    let (pid, attr) = allocate_attr()?;
+    let (pid, attr) = allocate_attr(AttrKind::Dc)?;
     let white = super::brush::stock_object(stock::WHITE_BRUSH);
     let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width as i32, mode.height as i32));
-    let written = copy_to_user(u64::from(attr), DcAttr32::initial(white, 0, width, height).as_bytes())
-        .and_then(|()| handles::set_owner(handle, pid, attr));
+    let state = DcState {
+        owner: Some((pid, attr)),
+        origin,
+        vis,
+        clip: None,
+        fill: Some((white, STOCK_BRUSHES[stock::WHITE_BRUSH])),
+    };
+    let attrs = DcAttr32 { vis_rect_region: state.vis_rect_region(), ..DcAttr32::initial(white, 0, width, height) };
+    let written = copy_to_user(u64::from(attr), attrs.as_bytes()).and_then(|()| handles::set_owner(handle, pid, attr));
     if let Err(status) = written {
-        free_attr(attr);
+        free_attr(AttrKind::Dc, attr);
         return Err(status);
     }
-    dc.change(|state| {
-        *state =
-            DcState { owner: Some((pid, attr)), origin, vis, fill: Some((white, STOCK_BRUSHES[stock::WHITE_BRUSH])) }
-    });
+    dc.change(|current| *current = state);
     Ok(())
 }
 
@@ -188,7 +327,7 @@ pub fn give_back(handle: u32, dc: &Dc) {
     let old = dc.change(core::mem::take);
     let _ = handles::set_owner(handle, OWNER_NONE, 0);
     if let Some((_, attr)) = old.owner {
-        free_attr(attr);
+        free_attr(AttrKind::Dc, attr);
     }
 }
 
@@ -199,7 +338,7 @@ pub fn give_back(handle: u32, dc: &Dc) {
 pub fn lock(hdc: u32) -> Option<Arc<Dc>> {
     match handles::get(hdc, current_pid())? {
         Object::Dc(dc) => Some(dc),
-        Object::Brush(_) => None,
+        _ => None,
     }
 }
 
@@ -314,7 +453,7 @@ pub fn pat_blt(hdc: u32, x: i32, y: i32, width: i32, height: i32, rop: u32) -> R
     let Some((_, attr)) = dc.state().owner else { return Ok(false) };
     let Ok(Some(brush)) = fill_brush(&dc, attr, None, false) else { return Ok(false) };
     let state = dc.state();
-    paint(&state.vis, pat_rect(x, y, width, height, state.origin), rop, &brush);
+    paint(&state.rao(), pat_rect(x, y, width, height, state.origin), rop, &brush);
     Ok(true)
 }
 
@@ -336,28 +475,27 @@ pub fn batched_pat_blt(dc: &Dc, x: i32, y: i32, width: i32, height: i32, rop: u3
         return;
     };
     let state = dc.state();
-    paint(&state.vis, pat_rect(x, y, width, height, state.origin), rop, &brush);
+    paint(&state.rao(), pat_rect(x, y, width, height, state.origin), rop, &brush);
 }
 
-/// GdiGetClipBox : le rectangle qui tient la région visible, depuis
-/// l'origine, et sa complexité (NULLREGION, SIMPLEREGION : un seul
+/// GdiGetClipBox : le rectangle qui tient là où le DC peint (`prgnRao`),
+/// depuis l'origine, et sa complexité (NULLREGION, SIMPLEREGION : un seul
 /// rectangle, COMPLEXREGION).
 pub fn clip_box(state: &DcState) -> (i32, Rect) {
-    let rects = state.vis.rects();
-    let Some(first) = rects.first() else { return (NULLREGION, Rect::default()) };
-    let bounds = rects.iter().fold(*first, |bounds, rect| bounds.union(rect));
-    let area = i64::from(bounds.right - bounds.left) * i64::from(bounds.bottom - bounds.top);
-    // Disjoint rectangles: one rectangle exactly when they fill their bounds.
-    let complexity = if area == state.vis.area() { SIMPLEREGION } else { COMPLEXREGION };
+    let rao = state.rao();
+    if rao.is_empty() {
+        return (rao.complexity(), Rect::default());
+    }
+    let bounds = rao.bounds();
     let (dx, dy) = state.origin;
-    (complexity, Rect::new(bounds.left - dx, bounds.top - dy, bounds.right - dx, bounds.bottom - dy))
+    (rao.complexity(), Rect::new(bounds.left - dx, bounds.top - dy, bounds.right - dx, bounds.bottom - dy))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::gdi::dib::ColorRef;
-    use abi::gdi::rop;
+    use abi::gdi::{rop, COMPLEXREGION, NULLREGION};
 
     const RED: Brush = Brush::solid(ColorRef(0xFF));
 
@@ -421,11 +559,81 @@ mod tests {
         assert_eq!(clip_box(&state), (SIMPLEREGION, Rect::new(0, 0, 3, 10)), "pieces that fill their bounds");
     }
 
+    /// A DC at (100, 50) that sees (110, 60)-(210, 160).
+    fn seeing() -> DcState {
+        DcState { origin: (100, 50), vis: Region::from_rect(Rect::new(110, 60, 210, 160)), ..DcState::default() }
+    }
+
+    #[test]
+    fn a_clip_region_cuts_where_the_dc_paints_from_its_origin() {
+        let mut state = seeing();
+        assert_eq!(state.rao(), state.vis, "no clip region");
+        let clip = Region::from_rect(Rect::new(0, 0, 50, 200));
+        assert_eq!(select_clip(&mut state, Some(&clip), rgn::COPY), SIMPLEREGION);
+        assert_eq!(state.rao().rects(), [Rect::new(110, 60, 150, 160)]);
+        assert_eq!(clip_box(&state), (SIMPLEREGION, Rect::new(10, 10, 50, 110)));
+        assert_eq!(state.clip.as_ref(), Some(&clip), "kept from the origin");
+        let outside = Region::from_rect(Rect::new(500, 500, 600, 600));
+        assert_eq!(select_clip(&mut state, Some(&outside), rgn::COPY), NULLREGION);
+        assert_eq!(clip_box(&state), (NULLREGION, Rect::default()));
+        assert_eq!(select_clip(&mut state, None, rgn::COPY), SIMPLEREGION, "the visible region's");
+        assert_eq!(state.clip, None);
+    }
+
+    #[test]
+    fn modes_combine_with_the_clip_region_or_the_visible_bounds() {
+        let mut state = seeing();
+        let left = Region::from_rect(Rect::new(0, 0, 50, 200));
+        assert_eq!(select_clip(&mut state, Some(&left), rgn::AND), SIMPLEREGION, "AND without a clip: a copy");
+        assert_eq!(state.clip.as_ref(), Some(&left));
+        let top = Region::from_rect(Rect::new(0, 0, 200, 30));
+        assert_eq!(select_clip(&mut state, Some(&top), rgn::AND), SIMPLEREGION);
+        assert_eq!(state.clip.as_ref().map(Region::rects), Some(&[Rect::new(0, 0, 50, 30)][..]));
+        let strip = Region::from_rect(Rect::new(0, 0, 200, 20));
+        assert_eq!(select_clip(&mut state, Some(&strip), rgn::OR), COMPLEXREGION, "an L");
+        state.clip = None;
+        assert_eq!(select_clip(&mut state, Some(&top), rgn::DIFF), SIMPLEREGION);
+        assert_eq!(
+            state.clip.as_ref().map(Region::bounds),
+            Some(Rect::new(10, 30, 110, 110)),
+            "from the visible bounds"
+        );
+        assert_eq!(select_clip(&mut state, None, rgn::AND), ERROR, "no region to combine");
+        assert_eq!(select_clip(&mut state, Some(&top), 9), ERROR);
+    }
+
+    #[test]
+    fn a_batched_clip_rectangle_already_there_changes_nothing() {
+        let mut state = seeing();
+        assert_eq!(select_clip_rect(&mut state, Some(Rect::new(50, 200, 0, 0)), rgn::COPY), SIMPLEREGION);
+        assert_eq!(state.clip.as_ref().map(Region::rects), Some(&[Rect::new(0, 0, 50, 200)][..]), "corners in order");
+        state.vis.subtract_rect(Rect::new(110, 60, 120, 70));
+        assert_eq!(select_clip_rect(&mut state, Some(Rect::new(0, 0, 50, 200)), rgn::COPY), COMPLEXREGION);
+        assert_eq!(select_clip_rect(&mut state, None, rgn::COPY), COMPLEXREGION);
+        assert_eq!(state.clip, None);
+        assert_eq!(select_clip_rect(&mut state, None, rgn::OR), ERROR);
+    }
+
+    #[test]
+    fn the_attributes_say_the_visible_region_from_the_origin() {
+        let attr = seeing().vis_rect_region();
+        assert_eq!((attr.attr_flags, attr.complexity), (ATTR_RGN_VALID, SIMPLEREGION as u32));
+        assert_eq!(attr.rect, Rect32 { left: 10, top: 10, right: 110, bottom: 110 });
+        let nothing = DcState { origin: (100, 50), ..DcState::default() }.vis_rect_region();
+        assert_eq!((nothing.complexity, nothing.rect), (NULLREGION as u32, Rect32::default()));
+    }
+
+    #[test]
+    fn an_unknown_mode_is_refused_before_the_dc() {
+        assert_eq!(ext_select_clip_rgn(0x1234, None, 0), Err(abi::winerror::ERROR_INVALID_PARAMETER));
+        assert_eq!(ext_select_clip_rgn(0x1234, None, 6), Err(abi::winerror::ERROR_INVALID_PARAMETER));
+    }
+
     #[test]
     fn a_pool_hands_out_a_block_from_its_start() {
         let mut pool = AttrPool::default();
         assert_eq!(pool.take(), None);
-        pool.add_block(0x0040_0000);
+        pool.add_block(0x0040_0000, AttrKind::Dc.size());
         assert_eq!(pool.take(), Some(0x0040_0000));
         assert_eq!(pool.take(), Some(0x0040_01D0));
         pool.give_back(0x0040_0000);
@@ -435,5 +643,17 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 0x1_0000 / 0x1D0, "141 places in a block");
+    }
+
+    #[test]
+    fn region_attributes_take_less_room() {
+        let mut pool = AttrPool::default();
+        pool.add_block(0x0050_0000, AttrKind::Region.size());
+        assert_eq!((pool.take(), pool.take()), (Some(0x0050_0000), Some(0x0050_0018)));
+        let mut count = 2;
+        while pool.take().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, 0x1_0000 / 0x18, "2730 places in a block");
     }
 }
