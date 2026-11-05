@@ -4,8 +4,21 @@
 ; DLL exports them undecorated.
 LIBRARY kernel32.dll
 EXPORTS
+CloseHandle@4
+CreateProcessW@40
+CreateThread@24
+DeleteCriticalSection@4
+EnterCriticalSection@4
 ExitProcess@4
 GetCurrentProcessId@0
+GetExitCodeProcess@8
 GetLastError@0
 GetModuleHandleW@4
+GetStdHandle@4
+InitializeCriticalSection@4
+LeaveCriticalSection@4
 SetLastError@4
+Sleep@4
+WaitForMultipleObjects@16
+WaitForSingleObject@8
+WriteConsoleW@20
