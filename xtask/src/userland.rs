@@ -67,6 +67,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "c_20127.nls",
         "smss.exe",
         "config/system",
+        "config/software",
         "csrss.exe",
         "csrsrv.dll",
         "basesrv.dll",

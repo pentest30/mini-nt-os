@@ -419,6 +419,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     userland::install_nls_tables();
     userland::install_fonts();
     userland::mount_system_hive();
+    userland::mount_software_hive();
     if cfg!(feature = "test-persistence") {
         persistence_test();
     }

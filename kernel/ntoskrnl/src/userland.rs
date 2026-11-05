@@ -16,6 +16,8 @@ const NLS_FILES: [&str; 3] =
     ["\\SystemRoot\\System32\\c_1252.nls", "\\SystemRoot\\System32\\c_437.nls", "\\SystemRoot\\System32\\l_intl.nls"];
 /// La ruche SYSTEM.
 const SYSTEM_HIVE: &str = "\\SystemRoot\\System32\\config\\SYSTEM";
+/// La ruche SOFTWARE.
+const SOFTWARE_HIVE: &str = "\\SystemRoot\\System32\\config\\SOFTWARE";
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -91,6 +93,28 @@ pub fn install_fonts() {
         log::info!("[boot] no fonts on the boot disk (cargo xtask fetch-userland)");
     } else {
         log::info!("[boot] fonts installed: {}", installed.join(", "));
+    }
+}
+
+/// Monte la ruche SOFTWARE du disque RAM de démarrage en
+/// `\REGISTRY\MACHINE\SOFTWARE`, si le disque la tient : comme SYSTEM, celle de
+/// la version épinglée de ReactOS (les substituts des polices, les réglages
+/// de la console…), réécrite dans son fichier par NtFlushKey.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn mount_software_hive() {
+    let Some(hive) = read_boot_file(SOFTWARE_HIVE) else {
+        return log::info!("[boot] no SOFTWARE hive on the boot disk (cargo xtask fetch-userland)");
+    };
+    let size = hive.len();
+    let registry = cm::registry().expect("Cm not initialised");
+    let mounted = cm::HiveFile::new(Arc::from(hive))
+        .map(|file| file.with_file(SOFTWARE_HIVE))
+        .and_then(|file| cm::mount(&registry, "MACHINE", "SOFTWARE", file));
+    match mounted {
+        Ok(()) => log::info!("[boot] SOFTWARE hive mounted at \\REGISTRY\\MACHINE\\SOFTWARE: {size} bytes"),
+        Err(status) => log::error!("[boot] SOFTWARE hive not mounted: {status}"),
     }
 }
 
