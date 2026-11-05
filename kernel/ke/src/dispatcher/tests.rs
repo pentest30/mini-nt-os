@@ -37,6 +37,8 @@ std::thread_local! {
     static TABLE: Cell<*const TimerTable> = const { Cell::new(ptr::null()) };
     /// L'interruption APC est demandée.
     static APC_PENDING: Cell<bool> = const { Cell::new(false) };
+    /// Les fois où le thread courant a cédé le reste de son quantum.
+    static YIELDS: Cell<u32> = const { Cell::new(0) };
 }
 
 /// L'interruption APC, comme la HAL : à APC_LEVEL, tant qu'elle est demandée,
@@ -81,6 +83,12 @@ unsafe impl Platform for Sim {
             }
             (*me).wait_status
         }
+    }
+
+    unsafe fn yield_execution(old_irql: Irql) {
+        YIELDS.set(YIELDS.get() + 1);
+        // SAFETY: verrou tenu par l'appelant, pris depuis `old_irql`.
+        unsafe { DISPATCHER_LOCK.release::<Sim>(old_irql) };
     }
 
     unsafe fn insert_timer(timer: *mut KTimer, due_time: i64) -> bool {
@@ -189,6 +197,7 @@ fn setup() -> *mut KThread {
     ACTIONS.with_borrow_mut(VecDeque::clear);
     READIED.with_borrow_mut(Vec::clear);
     APC_PENDING.set(false);
+    YIELDS.set(0);
     TABLE.set(Box::leak(Box::new(TimerTable::new())));
     IRQL.set(Irql::Passive);
     let t = new_thread();
@@ -641,8 +650,20 @@ fn delay_execution_returns_success_once_the_interval_is_over() {
 fn a_zero_or_past_delay_returns_at_once() {
     setup();
     assert_eq!(delay(ProcessorMode::Kernel, false, 0), STATUS_SUCCESS);
+    assert_eq!(YIELDS.get(), 1, "Sleep(0) gives the rest of its quantum up");
     assert_eq!(delay(ProcessorMode::Kernel, false, NOW), STATUS_SUCCESS, "absolute, already reached");
+    assert_eq!(YIELDS.get(), 1, "a deadline already reached does not");
     assert!(table().is_empty());
+    finish();
+}
+
+#[test]
+fn an_alertable_zero_delay_with_a_user_apc_returns_without_yielding() {
+    let t = setup();
+    // SAFETY: le thread du test, initialisé ; il ne tient pas le verrou.
+    unsafe { (*t).user_apc_pending = true };
+    assert_eq!(delay(ProcessorMode::User, true, 0), STATUS_USER_APC);
+    assert_eq!(YIELDS.get(), 0, "the APC first");
     finish();
 }
 
