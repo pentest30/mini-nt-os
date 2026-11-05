@@ -505,9 +505,11 @@ pub fn process_info(process: &Arc<Object<EProcess>>) -> Result<Arc<ProcessInfo>,
 /// PsConvertToGuiThread : le thread courant devient un thread GUI, s'il ne
 /// l'est pas, et son processus un processus GUI ; rend son `THREADINFO`.
 /// Son TEB reçoit son `THREADINFO` et son `CLIENTINFO`. Un thread client
-/// (ni du système ni de `csrss`) est ensuite préparé par `user32`
-/// (ClientThreadSetup, [`crate::callback`]), comme à la fin
-/// d'InitThreadCallback.
+/// (ni du système ni de `csrss`) va sur le bureau de démarrage de son
+/// processus, pris de ses paramètres s'il n'en a pas encore
+/// ([`crate::startup::assign_startup_desktop`] ; sans lui, il reste sans
+/// bureau, journalisé), puis il est préparé par `user32` (ClientThreadSetup,
+/// [`crate::callback`]), comme à la fin d'InitThreadCallback.
 ///
 /// # Errors
 /// `STATUS_INVALID_PARAMETER` hors d'un thread de Ps ; celles de
@@ -533,6 +535,13 @@ pub fn convert_current_thread() -> Result<Arc<ThreadInfo>, NtStatus> {
     let info: Arc<ThreadInfo> = downcast(thread.set_win32_thread(info));
     if !is_client_thread(info.ti_flags) {
         return Ok(info);
+    }
+    if let Err(status) = crate::startup::assign_startup_desktop(&process, &process_info) {
+        log::warn!(
+            "win32k: no startup desktop for thread {} of {} ({status:?})",
+            thread.tid(),
+            process.image_file_name()
+        );
     }
     log::info!("win32k: ClientThreadSetup for thread {} of {}", thread.tid(), process.image_file_name());
     // Nothing held across the callback: a thread that ends in it drops

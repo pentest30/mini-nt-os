@@ -392,9 +392,12 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      graisse, italique et pas (`fontobj::realize`) ; NtGdiGetFontFamilyInfo (`fontobj::family_info`) ;
    - [x] la sonde console, étape 3 : Sleep(0) cède le reste du quantum à un thread prêt de même priorité
      (`Scheduler::yield_to_equal`, `Platform::yield_execution`) ; le critère des 8 threads est coché ;
-   - **la suite, côté console** (le critère de `cmd.exe` interactif) : la fenêtre console montrée
-     (NtUserShowWindowAsync) et son texte peint ; les icônes de `consrv` ; l'entrée au clavier ; puis `cmd.exe` (et
-     NtQueryDirectoryFile pour `dir`, sur `io::Volume::list`) ;
+   - [x] la sonde console, étape 4 : la fenêtre console montrée (NtUserSetWindowLong : octets de plus, USERDATA ;
+     NtUserShowWindowAsync ; NtUserPostMessage à une fenêtre ; le bureau de démarrage d'un thread converti,
+     `win32k::startup`) ; `CONSHOW1.EXE` garde sa console à l'écran ;
+   - **la suite, côté console** (le critère de `cmd.exe` interactif) : le texte de la console peint (`DevCaps`, DC en
+     mémoire, DIB sections vues aussi du noyau, BitBlt) ; les icônes de `consrv` ; l'entrée au clavier ; puis
+     `cmd.exe` (et NtQueryDirectoryFile pour `dir`, PR #58) ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
@@ -447,6 +450,10 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Sonde console (M5, étape 4) : SetWindowLong de GWL_STYLE, GWL_EXSTYLE, GWLP_WNDPROC, GWLP_HWNDPARENT absent
+  (journalisé) ; ShowWindowAsync d'une fenêtre d'un autre thread absent (messages envoyés entre threads) ; un message
+  posté à la fenêtre du bureau perdu (pas de thread du bureau) ; un chemin de bureau sans station laisse le thread
+  converti sans bureau (journalisé) ; DestroyWindow, SetTimer, barres de défilement absents.
 - Sonde console (M5, étape 3) : NtYieldExecution (SwitchToThread) absent ; un thread qui cède garde sa priorité et
   reçoit un quantum neuf (pas de décroissance).
 - Sonde console (M5, étape 2) : polices bitmap (`.fon`), collections et polices privées absentes ; le jeu de caractères

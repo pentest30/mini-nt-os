@@ -45,6 +45,7 @@ typedef unsigned int WPARAM;
 typedef long LPARAM;
 typedef long LRESULT;
 typedef LRESULT(__stdcall *WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+typedef DWORD(__stdcall *THREAD_START)(void *);
 
 typedef struct {
     UINT cbSize;
@@ -212,13 +213,19 @@ typedef struct {
 #define DCX_INTERSECTRGN 0x00000080
 #define DCX_KEEPCLIPRGN 0x00040000
 #define OBJ_REGION 8
+#define WM_USER 0x0400
+#define INFINITE 0xFFFFFFFF
 
 /* What the scenario expects when the program runs to its end. */
 #define EXIT_STATUS 0x600D
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
 
+__declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE handle);
+__declspec(dllimport) HANDLE __stdcall CreateThread(void *attributes, DWORD stack_size, THREAD_START start,
+                                                    void *parameter, DWORD flags, DWORD *thread_id);
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
+__declspec(dllimport) DWORD __stdcall WaitForSingleObject(HANDLE handle, DWORD milliseconds);
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
 __declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) HINSTANCE __stdcall GetModuleHandleW(const WCHAR *name);
@@ -241,6 +248,7 @@ __declspec(dllimport) HDC __stdcall BeginPaint(HWND window, PAINTSTRUCT *paint);
 __declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *paint);
 __declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
 __declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT min, UINT max, UINT remove);
+__declspec(dllimport) BOOL __stdcall PostMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) DWORD __stdcall GetQueueStatus(UINT flags);
 __declspec(dllimport) BOOL __stdcall InvalidateRect(HWND window, const RECT *rect, BOOL erase);
 __declspec(dllimport) BOOL __stdcall ValidateRect(HWND window, const RECT *rect);
@@ -1279,6 +1287,38 @@ static void check_dc_and_regions(void)
     DeleteObject(other);
 }
 
+/* What the second thread saw and did. */
+static BOOL second_thread_sees;
+static BOOL second_thread_posted;
+
+/* A second GUI thread: its first call to user32 needs it on the process's
+   desktop; then it posts to a window of the first thread. */
+static DWORD __stdcall second_thread(void *parameter)
+{
+    (void)parameter;
+    second_thread_sees = IsWindowVisible(visible_window);
+    second_thread_posted = PostMessageW(visible_window, WM_USER + 7, 1, 2);
+    return 0;
+}
+
+/* Another thread of this process: on its startup desktop, and posting to a
+   window of this thread, whose queue gets the message for the window. */
+static void check_second_thread(void)
+{
+    MSG message;
+    HANDLE thread;
+    DWORD id;
+    BOOL found;
+
+    thread = CreateThread(0, 0, second_thread, 0, 0, &id);
+    WaitForSingleObject(thread, INFINITE);
+    CloseHandle(thread);
+    found = PeekMessageW(&message, visible_window, WM_USER + 7, WM_USER + 7, PM_REMOVE);
+    DbgPrint("[gui] a second thread: IsWindowVisible %d, PostMessageW %d; here: %d, %s, %u %ld\n", second_thread_sees,
+             second_thread_posted, found, found && message.hwnd == visible_window ? "for the window" : "WRONG",
+             found ? message.wParam : 0, found ? message.lParam : 0);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -1336,6 +1376,7 @@ DWORD __stdcall GuiStartup(void)
     check_paint_messages();
     check_redraw();
     check_dc_and_regions();
+    check_second_thread();
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);

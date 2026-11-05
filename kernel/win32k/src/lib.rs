@@ -50,6 +50,7 @@ pub mod nonclient;
 pub mod paint;
 pub mod queue;
 pub mod shared;
+pub mod startup;
 pub mod window;
 pub mod winpos;
 pub mod winsta;

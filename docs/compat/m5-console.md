@@ -157,3 +157,55 @@ neuf ; le dispatcher : un intervalle nul cède, une échéance passée non, un A
 
 La suite : la fenêtre console montrée (NtUserShowWindowAsync) et son texte peint, les icônes de `consrv`, puis
 l'entrée au clavier pour `cmd.exe` (le critère de `cmd.exe` interactif).
+
+## Étape 4 : la fenêtre console montrée
+
+La sonde allait au bout, mais la fenêtre de la console ne se montrait jamais. `consrv` range ses données dans sa
+fenêtre (SetWindowLongPtr : GWLP_USERDATA pour sa procédure ; le PID et le TID du chef de la console dans les octets de
+plus, `GWLP_CONSOLE_LEADER_PID`, `GWLP_CONSOLE_LEADER_TID`), puis son thread d'entrée la montre (ShowWindowAsync) et lui
+poste des messages (PostMessage) : NtUserSetWindowLong, NtUserShowWindowAsync et NtUserPostMessage à une fenêtre
+manquaient. Comme ReactOS (`window.c`, `winpos.c`, `message.c`, `main.c`, comme spécification) :
+
+- `win32k::window::set_long` (co_IntSetWindowLongPtr) : un index positif est une place dans les octets de plus de la
+  fenêtre (`cbWndExtra`, après le `WND`, où `user32` les lit lui-même ; `ERROR_INVALID_INDEX` au-delà) ; GWLP_USERDATA
+  (`dwUserData` du `WND`), GWLP_ID, GWLP_HINSTANCE. GWL_STYLE, GWL_EXSTYLE, GWLP_WNDPROC et GWLP_HWNDPARENT : pas encore
+  (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois ; `consrv` change GWL_EXSTYLE en passant). La fenêtre du bureau :
+  `ERROR_ACCESS_DENIED` (ReactOS met à tort le statut NT comme erreur).
+- NtUserShowWindowAsync : pour une fenêtre du thread courant, WM_ASYNC_SHOWWINDOW est traité aussitôt
+  (co_WinPosShowWindow : rend si elle était visible) ; pour celle d'un autre thread, pas encore (les messages envoyés
+  entre threads : `ERROR_CALL_NOT_IMPLEMENTED`, journalisé).
+- NtUserPostMessage à une fenêtre (UserPostMessage) : le message va à la file du thread qui l'a créée ; la fenêtre du
+  bureau n'a pas de thread (pas encore de thread du bureau) : il est perdu, journalisé une fois.
+- InitThreadCallback (`win32k::startup`) : un thread client qui devient un thread GUI va sur le bureau de démarrage de
+  son processus ; un processus qui n'en a pas encore le prend de ses paramètres (`DesktopInfo`, ce que CreateProcess
+  tient de `lpDesktop` ; `STARTF_INHERITDESKTOP`) par IntResolveDesktop, une fois la station interactive créée, et
+  cette station devient la sienne. Sans cela, le premier appel à `user32` d'un programme console (IsWindowVisible)
+  trouvait `pDeskInfo` nul : assertion `pdi != NULL`, puis faute en 0. IntResolveDesktop quitte `sys::console` pour
+  `win32k::startup`, que la conversion appelle aussi ; un chemin sans station (pas encore) laisse le thread sans
+  bureau, journalisé (ReactOS fait échouer la conversion).
+
+Le banc : `CONSOLE1.EXE` lance ensuite `CONSHOW1.EXE` (`tests/native/conshow1.c`, sous-système CONSOLE), qu'il attend
+sans fin : il écrit « Mino console », attend sa fenêtre visible (GetConsoleWindow, IsWindowVisible), dit son
+rectangle (23, 23 à 691, 455 ; zone cliente de 656 × 400 : 80 colonnes de 8 pixels et la barre de défilement, 25
+lignes de 16) et lit dans ses octets de plus le chef de sa console (son processus et son thread), puis reste : la
+capture montre sa fenêtre (bord, titre « C:\CONSHOW1.EXE » en gris, bouton de fermeture), sous celle de
+`THREADS1.EXE`, qui reste aussi (NtUserDestroyWindow manque). Dans `gui`, un second thread va, à son premier appel à
+`user32`, sur le bureau de démarrage du processus, et poste à une fenêtre du premier, dont la file reçoit le message
+pour la fenêtre.
+
+En passant, tolérés : l'assertion des icônes de `consrv` ; NtUserSetScrollInfo, NtUserShowScrollBar,
+NtUserWindowFromPoint, NtUserCallOneParam(0x26), NtGdiCreateSolidBrush, NtUserSetTimer (le curseur ne clignote pas),
+NtUserDestroyWindow manquent (0 rendu) ; DefWindowProc ignore WM_SETCURSOR.
+
+Ce qui manque : la zone cliente n'est pas peinte. `consrv` compose le texte dans un DC en mémoire (CreateCompatibleDC,
+une DIB section que GetDeviceCaps dimensionne : `DevCaps` est encore à zéro) puis le copie dans la fenêtre par BitBlt ;
+c'est la partie suivante. Puis DestroyWindow, SetTimer, les barres de défilement.
+
+Tests : hôte (`window` : place d'un LONG dans les octets de plus, USERDATA, ID et instance) ; les scénarios `console` (la
+fenêtre de `CONSHOW1.EXE` visible, son rectangle, le chef de sa console, 6 pixels de la capture) et `gui` (le second
+thread), sur les deux CPU, qui interdisent « no startup desktop for thread ». 10 mutations, toutes tuées (5 après
+ajout de ces tests : les octets de plus, le message posté au mauvais thread ou sans sa fenêtre, le second thread sans
+bureau, la conversion avant la station interactive).
+
+La suite : le texte de la console peint (DC en mémoire, DIB sections, BitBlt), les icônes de `consrv`, puis l'entrée
+au clavier pour `cmd.exe`.

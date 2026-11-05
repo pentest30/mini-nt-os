@@ -68,11 +68,14 @@ pub(super) fn nt_user_post_thread_message(arguments: &[u32]) -> NtStatus {
     NtStatus(1)
 }
 
-/// NtUserPostMessage(hWnd, Msg, wParam, lParam) : sans fenêtre, le message
-/// est posté au thread courant ; à toutes les fenêtres (`HWND_BROADCAST`),
-/// à aucune encore (aucune fenêtre n'a de thread, faute du thread du
-/// bureau) ; à une fenêtre : pas encore (`ERROR_INVALID_WINDOW_HANDLE`,
-/// journalisé une fois). FALSE pour un message qui porte un pointeur.
+/// NtUserPostMessage(hWnd, Msg, wParam, lParam) (UserPostMessage) : sans
+/// fenêtre, le message est posté au thread courant ; à une fenêtre, à la
+/// file du thread qui l'a créée ; à toutes les fenêtres (`HWND_BROADCAST`),
+/// à aucune encore. FALSE pour un message qui porte un pointeur
+/// (`ERROR_MESSAGE_SYNC_ONLY`) ou une fenêtre inconnue
+/// (`ERROR_INVALID_WINDOW_HANDLE`). La fenêtre du bureau n'a pas de thread
+/// (pas encore de thread du bureau) : le message est perdu, journalisé une
+/// fois.
 pub(super) fn nt_user_post_message(arguments: &[u32]) -> NtStatus {
     let [hwnd, msg, wparam, lparam] = arguments[..4] else { unreachable!("4 arguments") };
     if queue::is_pointer_message(msg, wparam) {
@@ -85,10 +88,16 @@ pub(super) fn nt_user_post_message(arguments: &[u32]) -> NtStatus {
         }
         HWND_BROADCAST => NtStatus(1),
         _ => {
-            if !WINDOW_POST_REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
-                log::warn!("sys: NtUserPostMessage to a window ({hwnd:#x}) is not implemented");
+            let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE) };
+            match win32k::gui::thread_info_of(window.pti) {
+                Some(thread) => queue::post(&thread, message(window.handle, msg, wparam, lparam)),
+                None => {
+                    if !WINDOW_POST_REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                        log::warn!("sys: NtUserPostMessage to a window without a thread ({hwnd:#x}): dropped");
+                    }
+                }
             }
-            fail(ERROR_INVALID_WINDOW_HANDLE)
+            NtStatus(1)
         }
     }
 }

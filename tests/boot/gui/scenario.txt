@@ -51,7 +51,10 @@
 # VisRectRegion), and ExtSelectClipRgn(RGN_OR) cut where a DC paints.
 # InvalidateRgn, ValidateRgn and GetUpdateRgn work on the update region,
 # RedrawWindow(RDW_ERASENOW) erases a region of it at once; with only the
-# caption to paint, GetUpdateRgn empties the region.
+# caption to paint, GetUpdateRgn empties the region. A second thread goes,
+# at its first call to user32, on the process's startup desktop
+# (IsWindowVisible) and posts to a window of the first thread, whose queue
+# gets the message for the window (PostMessageW, PeekMessageW).
 # It ends with status 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
@@ -61,6 +64,7 @@ cpus     = default, intel
 timeout  = 120
 
 expect = [boot] fonts installed: TAHOMA.TTF, TAHOMABD.TTF, MARLETT.TTF, UNIVGA16.TTF, LUCON.TTF, COUR.TTF
+forbid = no startup desktop for thread
 forbid = the caption's text and button symbols without their fonts
 expect = [gui] on WinSta0\Default
 expect = [gui] GetSystemMetrics: screen 1280x800, caption 20, frame 4, minimum width 112
@@ -204,6 +208,7 @@ expect = [gui] UpdateWindow after InvalidateRgn(FALSE) received 1: 000f
 expect = [gui] RedrawWindow of a region received 1: 0014
 expect = [gui] then GetUpdateRgn: 2, box 2: 10 10 30 30
 expect = [gui] only the frame to paint, GetUpdateRgn: 1, box 1: 0 0 0 0
+expect = [gui] a second thread: IsWindowVisible 1, PostMessageW 1; here: 1, for the window, 1 2
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 

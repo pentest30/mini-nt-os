@@ -727,6 +727,16 @@ pub const SW_RESTORE: u32 = 9;
 pub const SW_SHOWDEFAULT: u32 = 10;
 pub const SW_FORCEMINIMIZE: u32 = 11;
 pub const SW_MAX: u32 = 11;
+
+/// GWL_* and GWLP_*: the negative indices of SetWindowLong (a non-negative
+/// index is an offset in the window's extra bytes).
+pub const GWLP_WNDPROC: i32 = -4;
+pub const GWLP_HINSTANCE: i32 = -6;
+pub const GWLP_HWNDPARENT: i32 = -8;
+pub const GWLP_ID: i32 = -12;
+pub const GWL_STYLE: i32 = -16;
+pub const GWL_EXSTYLE: i32 = -20;
+pub const GWLP_USERDATA: i32 = -21;
 /// SIZE_*, the `wParam` of WM_SIZE: restored, minimized, maximized.
 pub const SIZE_RESTORED: u32 = 0;
 pub const SIZE_MINIMIZED: u32 = 1;
