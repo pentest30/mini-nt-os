@@ -19,11 +19,10 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- La sonde console, étape 2 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : sur `claude/new-session-696xfc`,
-  partie de `main` après la fusion de #59 (étape 1). Les polices du disque, la ruche SOFTWARE, la correspondance par nom
-  et l'énumération : la console est créée, `THREADS1.EXE` va au bout (8 threads, 16000, 0x600D). Ses threads
-  n'attendent pas la section critique (Sleep(0) ne cède pas le processeur) : le critère attend ce correctif. Une
-  branche
+- La sonde console, étape 3 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : Sleep(0) cède le processeur
+  (`ke::sched::Scheduler::yield_to_equal`) ; les 8 threads de `THREADS1.EXE` attendent la section critique : **le
+  critère des 8 threads du M5 est coché**. L'étape 2 (les polices) est la PR #61 ; cette étape la suit, sur
+  `claude/new-session-696xfc`. Une branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
@@ -391,11 +390,11 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      polices de `\SystemRoot\Fonts` installées (`io::Volume::list`, `win32k::font` : table de polices, noms, graisse,
      italique, pas, jeu de caractères ; `glyph::Names`) ; la correspondance d'un LOGFONT par substitut, famille,
      graisse, italique et pas (`fontobj::realize`) ; NtGdiGetFontFamilyInfo (`fontobj::family_info`) ;
-   - **la suite, côté console** (le chemin des critères du M5) : **Sleep(0) qui cède le processeur** à un thread prêt de
-     même priorité (`ke::dispatcher::ke_delay_execution_thread` revient aussitôt pour un intervalle nul ; XP cède le
-     reste du quantum), pour que le test des 8 threads attende vraiment la section critique et coche le critère ; puis
-     la fenêtre console montrée (NtUserShowWindowAsync) et son texte peint ; les icônes de `consrv` ; l'entrée au
-     clavier pour `cmd.exe` ;
+   - [x] la sonde console, étape 3 : Sleep(0) cède le reste du quantum à un thread prêt de même priorité
+     (`Scheduler::yield_to_equal`, `Platform::yield_execution`) ; le critère des 8 threads est coché ;
+   - **la suite, côté console** (le critère de `cmd.exe` interactif) : la fenêtre console montrée
+     (NtUserShowWindowAsync) et son texte peint ; les icônes de `consrv` ; l'entrée au clavier ; puis `cmd.exe` (et
+     NtQueryDirectoryFile pour `dir`, sur `io::Volume::list`) ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
@@ -448,6 +447,8 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Sonde console (M5, étape 3) : NtYieldExecution (SwitchToThread) absent ; un thread qui cède garde sa priorité et
+  reçoit un quantum neuf (pas de décroissance).
 - Sonde console (M5, étape 2) : polices bitmap (`.fon`), collections et polices privées absentes ; le jeu de caractères
   d'un substitut (`Nom,jeu`) ignoré ; la correspondance décide par le nom, sans les pénalités de GetFontPenalty ; ni
   gras ni italique synthétiques ; l'énumération donne le LOGFONT de la hauteur par défaut (cellule de 12 pixels).
