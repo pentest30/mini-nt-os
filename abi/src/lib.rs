@@ -30,6 +30,7 @@ pub mod exception;
 pub mod file;
 pub mod fpu;
 pub mod gdi;
+pub mod kbd;
 pub mod loader_block;
 pub mod lpc;
 pub mod memory;

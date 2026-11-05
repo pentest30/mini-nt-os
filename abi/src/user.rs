@@ -745,6 +745,59 @@ pub const WM_NCCALCSIZE: u32 = 0x0083;
 pub const WM_PARENTNOTIFY: u32 = 0x0210;
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_DEVICECHANGE: u32 = 0x0219;
+/// The keyboard messages: a key down or up, the character it gives
+/// (TranslateMessage), and their system variants (Alt down, F10).
+pub const WM_KEYDOWN: u32 = 0x0100;
+pub const WM_KEYUP: u32 = 0x0101;
+pub const WM_CHAR: u32 = 0x0102;
+pub const WM_DEADCHAR: u32 = 0x0103;
+pub const WM_SYSKEYDOWN: u32 = 0x0104;
+pub const WM_SYSKEYUP: u32 = 0x0105;
+pub const WM_SYSCHAR: u32 = 0x0106;
+pub const WM_SYSDEADCHAR: u32 = 0x0107;
+/// WM_ACTIVATE, WM_SETFOCUS, WM_KILLFOCUS: a window activated or not,
+/// taking or losing the keyboard.
+pub const WM_ACTIVATE: u32 = 0x0006;
+pub const WM_SETFOCUS: u32 = 0x0007;
+pub const WM_KILLFOCUS: u32 = 0x0008;
+/// WA_INACTIVE, WA_ACTIVE: the `wParam` of WM_ACTIVATE.
+pub const WA_INACTIVE: u32 = 0;
+pub const WA_ACTIVE: u32 = 1;
+/// KF_*: the bits of the high word of a keyboard message's `lParam`.
+pub const KF_EXTENDED: u32 = 0x0100;
+pub const KF_ALTDOWN: u32 = 0x2000;
+pub const KF_REPEAT: u32 = 0x4000;
+pub const KF_UP: u32 = 0x8000;
+
+/// The virtual keys (VK_*) that win32k looks at.
+pub mod vk {
+    pub const VK_CLEAR: u8 = 0x0C;
+    pub const VK_SHIFT: u8 = 0x10;
+    pub const VK_CONTROL: u8 = 0x11;
+    pub const VK_MENU: u8 = 0x12;
+    pub const VK_CAPITAL: u8 = 0x14;
+    pub const VK_PRIOR: u8 = 0x21;
+    pub const VK_NEXT: u8 = 0x22;
+    pub const VK_END: u8 = 0x23;
+    pub const VK_HOME: u8 = 0x24;
+    pub const VK_LEFT: u8 = 0x25;
+    pub const VK_UP: u8 = 0x26;
+    pub const VK_RIGHT: u8 = 0x27;
+    pub const VK_DOWN: u8 = 0x28;
+    pub const VK_INSERT: u8 = 0x2D;
+    pub const VK_DELETE: u8 = 0x2E;
+    pub const VK_NUMPAD0: u8 = 0x60;
+    pub const VK_DECIMAL: u8 = 0x6E;
+    pub const VK_F10: u8 = 0x79;
+    pub const VK_NUMLOCK: u8 = 0x90;
+    pub const VK_LSHIFT: u8 = 0xA0;
+    pub const VK_RSHIFT: u8 = 0xA1;
+    pub const VK_LCONTROL: u8 = 0xA2;
+    pub const VK_RCONTROL: u8 = 0xA3;
+    pub const VK_LMENU: u8 = 0xA4;
+    pub const VK_RMENU: u8 = 0xA5;
+}
+
 /// WM_MAXIMUM (ReactOS): the highest message a filter can name.
 pub const WM_MAXIMUM: u32 = 0x0001_FFFF;
 
@@ -760,6 +813,8 @@ pub const POINTER_MESSAGES: [u32; 63] = [
 ];
 
 /// QS_*, the kinds of messages in a queue (`fsWakeBits`, `fsChangeBits`).
+/// QS_KEY: a keyboard message (WM_KEYDOWN, WM_CHAR...).
+pub const QS_KEY: u16 = 0x0001;
 pub const QS_POSTMESSAGE: u16 = 0x0008;
 /// QS_PAINT: a window of the thread has something to paint (`cPaintsReady`).
 pub const QS_PAINT: u16 = 0x0020;
