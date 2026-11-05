@@ -285,7 +285,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   graisse, italique et pas (`fontobj::realize`), NtGdiGetFontFamilyInfo (`fontobj::family_info`) : la console de
   `consrv` est créée (police VGA), `THREADS1.EXE` va au bout. Étape 3 : Sleep(0) cède le reste du quantum à un
   thread prêt de même priorité (`ke::sched::Scheduler::yield_to_equal`, `Platform::yield_execution`) ; les 8 threads
-  attendent la section critique : le critère des 8 threads du M5 est coché.
+  attendent la section critique : le critère des 8 threads du M5 est coché. Étape 4 : la fenêtre console montrée
+  (NtUserSetWindowLong : octets de plus et GWLP_USERDATA ; NtUserShowWindowAsync ; NtUserPostMessage à une fenêtre ;
+  un thread client converti va sur le bureau de démarrage de son processus, pris de `lpDesktop`,
+  `win32k::startup`) ; `CONSHOW1.EXE` garde sa console à l'écran.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
