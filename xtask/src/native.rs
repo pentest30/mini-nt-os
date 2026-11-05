@@ -5,7 +5,9 @@
 //!   which the kernel runs (`ntoskrnl::userland::run_boot_programs`);
 //! - those of the WINDOWS subsystem (M6), linked to ntdll, kernel32 and
 //!   user32, which a scenario puts in the place of `winlogon.exe`
-//!   (`initial-command`), for `smss` to start.
+//!   (`initial-command`), for `smss` to start;
+//! - those of the CONSOLE subsystem (M5), linked like them, which a program
+//!   of the WINDOWS subsystem starts (CreateProcessW).
 //!
 //! Two toolchains build them:
 //! - MinGW (`i686-w64-mingw32-gcc`, its `dlltool`), the roadmap's;
@@ -32,6 +34,8 @@ enum Toolchain {
     MinGw,
     /// MinGW, WINDOWS subsystem.
     MinGwWin32,
+    /// MinGW, CONSOLE subsystem.
+    MinGwConsole,
     ClangMsvc,
 }
 
@@ -42,6 +46,8 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["s1seh.c", "seh3.c"], "S1SEH.EXE", Toolchain::ClangMsvc),
     (&["gui1.c"], "GUI1.EXE", Toolchain::MinGwWin32),
     (&["text1.c"], "TEXT1.EXE", Toolchain::MinGwWin32),
+    (&["console1.c"], "CONSOLE1.EXE", Toolchain::MinGwWin32),
+    (&["threads1.c"], "THREADS1.EXE", Toolchain::MinGwConsole),
 ];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
@@ -67,6 +73,10 @@ const GCC_NATIVE_FLAGS: &[&str] = &["-Wl,--subsystem,native", "-Wl,-e,_NtProcess
 /// WINDOWS subsystem of XP (5.1): entered at `GuiStartup()` (stdcall, no
 /// argument), which kernel32's BaseProcessStartup calls.
 const GCC_WIN32_FLAGS: &[&str] = &["-Wl,--subsystem,windows:5.1", "-Wl,-e,_GuiStartup@0"];
+
+/// CONSOLE subsystem of XP (5.1): entered at `ConsoleStartup()`, like
+/// `GuiStartup`.
+const GCC_CONSOLE_FLAGS: &[&str] = &["-Wl,--subsystem,console:5.1", "-Wl,-e,_ConsoleStartup@0"];
 
 /// clang: frame-based SEH, a faulting instruction counting as an exception
 /// in a `__try` block (`-fasync-exceptions`).
@@ -124,9 +134,10 @@ pub fn build(ws: &Workspace) -> Result<Option<Vec<String>>> {
     for &(program_sources, name, toolchain) in PROGRAMS {
         let image = out.join(name);
         match toolchain {
-            Toolchain::MinGw | Toolchain::MinGwWin32 => {
+            Toolchain::MinGw | Toolchain::MinGwWin32 | Toolchain::MinGwConsole => {
                 let (subsystem, libraries) = match toolchain {
                     Toolchain::MinGw => (GCC_NATIVE_FLAGS, &gnu_libraries[..1]),
+                    Toolchain::MinGwConsole => (GCC_CONSOLE_FLAGS, &gnu_libraries[..]),
                     _ => (GCC_WIN32_FLAGS, &gnu_libraries[..]),
                 };
                 let mut gcc = Command::new("i686-w64-mingw32-gcc");
