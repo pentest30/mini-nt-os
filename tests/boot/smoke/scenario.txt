@@ -22,6 +22,7 @@ expect = [smoke] Mm: demand paging:
 expect = [smoke] Mm: kernel stacks freed and their slots reused (6 pages each); grown in place up to 18 pages
 expect = [smoke] Mm: a fault without a page table returns STATUS_NO_MEMORY
 expect = [smoke] Mm: sections:
+expect = [smoke] Mm: system views: a section in the kernel half, the same memory as a process's view from any space, a guard page after it, its addresses reused, its pages the section's
 expect = [smoke] Ob:
 expect = [smoke] Ps: two processes ran at once
 expect = [smoke] Ps: a process reserved 256 MiB and committed it page by page

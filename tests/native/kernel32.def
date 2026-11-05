@@ -21,6 +21,7 @@ InitializeCriticalSection@4
 LeaveCriticalSection@4
 SetLastError@4
 Sleep@4
+VirtualQuery@12
 WaitForMultipleObjects@16
 WaitForSingleObject@8
 WriteConsoleW@20

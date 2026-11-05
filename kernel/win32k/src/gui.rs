@@ -61,6 +61,9 @@ pub struct ProcessInfo {
     pub dc_attrs: KSpinLock<crate::gdi::dc::AttrPool>,
     /// Les places libres pour les attributs de ses régions (`pPoolRgnAttr`).
     pub rgn_attrs: KSpinLock<crate::gdi::dc::AttrPool>,
+    /// Les places libres pour les attributs de ses pinceaux
+    /// (`pPoolBrushAttr`).
+    pub brush_attrs: KSpinLock<crate::gdi::dc::AttrPool>,
     /// Sa station de fenêtres (`hwinsta`, `prpwinsta`, `amwinsta`).
     window_station: KSpinLock<Option<ProcessWindowStation>>,
     /// Ses vues des tas de bureau (HeapMappings), une par bureau, avec le
@@ -101,6 +104,7 @@ impl ProcessInfo {
             gdi_view,
             dc_attrs: KSpinLock::new(crate::gdi::dc::AttrPool::default()),
             rgn_attrs: KSpinLock::new(crate::gdi::dc::AttrPool::default()),
+            brush_attrs: KSpinLock::new(crate::gdi::dc::AttrPool::default()),
             window_station: KSpinLock::new(None),
             desktop_views: KSpinLock::new(Vec::new()),
             startup_desktop: KSpinLock::new(None),

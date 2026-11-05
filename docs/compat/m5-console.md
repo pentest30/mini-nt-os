@@ -209,3 +209,66 @@ bureau, la conversion avant la station interactive).
 
 La suite : le texte de la console peint (DC en mémoire, DIB sections, BitBlt), les icônes de `consrv`, puis l'entrée
 au clavier pour `cmd.exe`.
+
+## Étape 5 : le texte de la console peint
+
+`consrv` compose sa console dans un DC en mémoire et la copie dans sa fenêtre (`conwnd.c`, `guitext.c` de ReactOS,
+comme spécification) : à la création de la fenêtre, CreateCompatibleDC(NULL) ; à PM_RESIZE_TERMINAL, une DIB section
+de la taille du tampon de l'écran (80 × 300 cellules de 8 × 16 pixels), de la profondeur de l'écran
+(GetDeviceCaps(BITSPIXEL)), choisie dans le DC ; à WM_PAINT, le texte de chaque ligne (TextOutW, couleurs des
+attributs, sa police VGA) et le curseur (un pinceau plein, PatBlt) dans le DC en mémoire, puis BitBlt dans le DC de la
+fenêtre. NtGdiCreateCompatibleDC rendait 0 ; GetDeviceCaps, qui lit les capacités de l'écran dans la table des handles
+partagée (un DC dit `DC_PRIMARY_DISPLAY`), y trouvait des zéros : `CreateDIBSection` n'arrivait pas au noyau.
+
+- Mm : les **vues système** (`mm::system_view`, MmMapViewInSystemSpace) : une section du fichier d'échange projetée
+  dans la région de 02 §4.2 (`0xFFFF_C000_0000_0000`), sous la moitié haute partagée par tous les espaces, ses pages
+  créées à la projection (rien n'y fait de faute : DISPATCH_LEVEL), une page jamais projetée après chaque vue ; ses
+  adresses reviennent à la région, ses pages restent à la section.
+- Les capacités de l'écran (`win32k::gdi::devcaps`, PDEVOBJ_vGetDeviceCaps et le GDIINFO de `framebuf`) : 32 bits par
+  pixel, sans palette, 96 points par pouce, écrites dans la table des handles quand le pilote d'affichage est
+  installé.
+- Les bitmaps (`win32k::gdi::surface`, SURFACE ; `dibobj.c`, `bitmaps.c`) : le bitmap par défaut (1 × 1, de stock,
+  DEFAULT_BITMAP = 21 : `NB_STOCK_OBJECTS` passe à 22) ; les **DIB sections** de 32 bits (BI_RGB ou BI_BITFIELDS aux
+  masques de BI_RGB) : leurs pixels dans une section que le processus voit à l'adresse rendue (`ppvBits`) et le noyau
+  par une vue système, sans copie ; lignes de bas en haut si `biHeight` est positif ; un bitmap dans un seul DC à la
+  fois, qu'on ne supprime pas tant qu'il y est choisi (ce que dit la documentation de DeleteObject ; ReactOS en diffère
+  la suppression) ; supprimée, une DIB section quitte la mémoire du processus.
+- Les DC en mémoire (`win32k::gdi::dc` : NtGdiCreateCompatibleDC, NtGdiSelectBitmap) : leur origine en (0, 0), leur
+  région visible le bitmap choisi ; `DC_DIBSECTION` dans leurs attributs quand une DIB section y est choisie
+  (`gdi32` n'y met plus en lot PatBlt et ExtTextOut) ; DeleteDC les supprime. PatBlt et le texte peignent sur la
+  surface du DC (`DcState::draw` : l'écran ou son bitmap).
+- BitBlt (`win32k::gdi::bitblt`, NtGdiBitBlt et NtGdiMaskBlt sans masque) : la destination coupée là où son DC peint,
+  la source lue dans la surface de son DC, un ROP3 quelconque avec le motif d'un pinceau plein
+  (`win32k::gdi::dib::rop3`), une étendue négative qui ne retourne pas l'image ; d'un bitmap à l'écran, de l'écran à
+  un bitmap, dans l'écran (un défilement : chaque pixel lu avant d'être écrit) ; les bitmaps verrouillés avant
+  l'écran, deux bitmaps dans l'ordre de leurs adresses.
+- Les pinceaux d'un client (NtGdiCreateSolidBrush) : avec leurs attributs (`BRUSH_ATTR`) chez lui ; `gdi32` met leur
+  suppression en lot (GdiBCDelObj).
+
+`consrv` peint « Mino console » en gris sur noir dans la fenêtre de `CONSHOW1.EXE` (sa zone cliente, dans son bord
+creusé, à partir de (29, 49)).
+
+Le banc : `BITMAP1.EXE` (`tests/native/bitmap1.c`, scénario `bitmap`) met à l'épreuve ce que `consrv` emploie :
+GetDeviceCaps d'un DC de fenêtre et d'un DC en mémoire, une DIB section où le noyau peint (PatBlt du pinceau du
+programme) et où le programme lit, un pixel que le programme écrit et que BitBlt copie dans la fenêtre, puis dans la
+fenêtre (un défilement), puis de la fenêtre dans une seconde DIB section, une DIB de bas en haut, un bitmap refusé par
+un second DC, DeleteObject refusé pour un bitmap choisi, puis les suppressions (les pixels quittent la mémoire du
+programme, VirtualQuery).
+
+En passant : en C, l'ordre d'évaluation des arguments d'un appel n'est pas défini (GCC les évalue ici de droite à
+gauche) ; le banc fait ses appels un par un avant de les journaliser.
+
+Tests : hôte (Mm : les plages de la région ; win32k : les lignes de bas en haut, le ROP3 avec une source, BitBlt entre
+surfaces et dans une surface, la géométrie et le découpage de BitBlt, les capacités de l'écran, l'en-tête d'une DIB
+section, la sélection d'un bitmap) ; `system_view_self_test` (scénario `smoke`) ; les scénarios `bitmap` (12 marqueurs,
+5 pixels) et `console` (3 pixels du texte de `consrv` ; les services qui manquaient y sont interdits), sur les deux
+CPU. Mutations : 5 de Mm, 11 de l'hôte, 3 de la console, 10 du banc, toutes tuées.
+
+Pas encore : les bitmaps compatibles (CreateBitmap, CreateCompatibleBitmap), les profondeurs autres que 32 bits, la
+section d'une application (`hSection` de CreateDIBSection), les palettes, GetObject, GetDIBits, SetDIBits,
+StretchBlt, MaskBlt avec un masque, NtGdiGetDeviceCaps ; les objets GDI d'un processus rendus à sa fin ; plusieurs
+processeurs (la TLB des vues système). `consrv` demande encore les icônes (NtUserFindExistingCursorIcon), un motif
+8 × 8 (NtGdiCreateBitmap, NtGdiCreatePatternBrushInternal), SetTimer (le curseur ne clignote pas), les barres de
+défilement et DestroyWindow.
+
+La suite : l'entrée au clavier pour `cmd.exe` (le thread d'entrée, i8042), puis `cmd.exe` et NtQueryDirectoryFile.

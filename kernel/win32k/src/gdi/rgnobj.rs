@@ -147,21 +147,6 @@ pub fn lock(hrgn: u32) -> Option<Arc<RegionObject>> {
     }
 }
 
-/// GreDeleteObject : l'objet `handle` du processus courant (ni de stock, ni
-/// public, ni un DC) quitte la table ; une région rend ses attributs.
-/// `false` si rien n'a été supprimé.
-///
-/// # IRQL
-/// PASSIVE_LEVEL, sans rien tenir.
-pub fn delete_object(handle: u32) -> bool {
-    let deletable = |object: &Object| !matches!(object, Object::Dc(_));
-    let Some((object, user_data)) = handles::delete(handle, current_pid(), deletable) else { return false };
-    if matches!(object, Object::Region(_)) && user_data != 0 {
-        free_attr(AttrKind::Region, user_data);
-    }
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

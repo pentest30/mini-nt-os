@@ -51,7 +51,8 @@ static DRAWING: KSpinLock<()> = KSpinLock::new(());
 /// Le pilote a pris l'écran.
 static ACQUIRED: AtomicBool = AtomicBool::new(false);
 
-/// Installe le pilote d'affichage.
+/// Installe le pilote d'affichage ; ses capacités vont dans la table des
+/// handles GDI (`crate::gdi::devcaps`).
 ///
 /// # Panics
 /// Au second appel.
@@ -63,6 +64,9 @@ pub fn install(driver: Box<dyn DisplayDriver>) {
     let mode = driver.mode();
     DRIVER.call_once(|| driver);
     log::info!("win32k: display {}x{} ({:?})", mode.width, mode.height, mode.layout);
+    if let Err(status) = crate::gdi::devcaps::publish(&mode) {
+        log::warn!("win32k: the display's capabilities not published: {status:?}");
+    }
 }
 
 /// Le mode de l'écran ; `None` sans pilote.

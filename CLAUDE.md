@@ -288,7 +288,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   attendent la section critique : le critère des 8 threads du M5 est coché. Étape 4 : la fenêtre console montrée
   (NtUserSetWindowLong : octets de plus et GWLP_USERDATA ; NtUserShowWindowAsync ; NtUserPostMessage à une fenêtre ;
   un thread client converti va sur le bureau de démarrage de son processus, pris de `lpDesktop`,
-  `win32k::startup`) ; `CONSHOW1.EXE` garde sa console à l'écran.
+  `win32k::startup`) ; `CONSHOW1.EXE` garde sa console à l'écran. Étape 5 : le texte de la console peint ; Mm projette
+  une section dans le noyau (`mm::system_view`, MmMapViewInSystemSpace, région de 02 §4.2) ; les capacités de l'écran
+  dans la table des handles (`win32k::gdi::devcaps`) ; les DIB sections de 32 bits, vues du processus et du noyau
+  (`win32k::gdi::surface`, NtGdiCreateDIBSection), les DC en mémoire (NtGdiCreateCompatibleDC, NtGdiSelectBitmap ;
+  `DcState::draw` peint sur l'écran ou le bitmap), BitBlt (`win32k::gdi::bitblt`, ROP3 avec source), les pinceaux
+  d'un client (NtGdiCreateSolidBrush) ; `consrv` peint « Mino console » ; scénario `bitmap` (`tests/native/bitmap1.c`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
