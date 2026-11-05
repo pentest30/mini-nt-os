@@ -28,6 +28,27 @@ jour à chaque commit qui change l'état.
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
   l'étape 9 sur `claude/new-session-696xfc`, partie de `main` après la fusion de #43. Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
   branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
+- Chantier « installation et formatage » (parallèle à la ligne GUI, crates disjointes ; plan en F1–F7, ADR-022) :
+  `claude/libs-fatfs`, par-dessus `claude/new-session-696xfc`, en fait l'étape F2 — la crate `libs/fatfs` (`no_std`,
+  avec `alloc`) tient la construction d'image FAT32 déplacée de `tools/mkfat` sans un changement d'octet (seul
+  changement : les `use` de `alloc`, le `no_std` l'exigeant) ; `mkfat` ne garde que ses arguments et ses programmes
+  de test, et les tests croisés (`fatfs` construit, `io-manager` relit, `fsck.vfat` valide) ont suivi la crate.
+  Vérifié sur un hôte **Windows** (rustup, nightly épinglé, Build Tools VS, QEMU 11, MSYS2) : **tous les scénarios
+  boot passent**, `gui` compris (22 boot runs) ; `cargo check -p fatfs -p mkfat` et `cargo test --release -p fatfs
+  -p mkfat` verts (10/10 ; `fsck.vfat` absent de l'hôte : sauté, comme prévu) ; le noyau et le chargeur y compilent
+  (`cargo build -p ntoskrnl -p mino-loader --profile kernel`) ; l'userland ReactOS 0.4.16 y est en place
+  (`third_party/reactos/0.4.16` : l'ISO vient de l'archive au SHA-256 épinglé, le tampon `.fetched` écrit à la
+  main). Pour cela, `xtask` tourne sous Windows : son monitor HMP passe par un port TCP de localhost (`Monitor`,
+  `screen.rs`) là où les sockets Unix n'existent pas, et le chemin du `screendump` est quoté (un répertoire du run
+  peut tenir un espace, sur tout hôte) ; les compilateurs natifs viennent de MSYS2 (`mingw-w64-i686-gcc`, et
+  `clang`/`lld`/`llvm` en x86_64 — les paquets i686 ont disparu ; des copies `i686-w64-mingw32-dlltool` et
+  `-as` sont posées à côté de `dlltool` et `as`, que le préfixe d'`argv[0]` fait chercher), et QEMU par la variable
+  `QEMU`. Reste la limite de l'hôte : le profil dev de `hal` n'y compile pas (le
+  `#[thread_local]` d'`irql.rs` et le codegen COFF/TLS du nightly : « offset is not a multiple of 16 » ; le profil
+  release passe ; même racine que le commentaire de `.cargo/config.toml` pour le noyau). Reste avant la PR, sur
+  l'hôte Linux : `cargo check --workspace`, `cargo test --workspace`, et le
+  test de non-régression — l'image du `mkfat` avant/après est identique. La suite : F3 (`format.rs`, le trait
+  `WriteSectors`), F1 (`NtQueryDirectoryFile`), F4 (GPT).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).

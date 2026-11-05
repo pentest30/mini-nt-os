@@ -228,6 +228,29 @@ pub fn assemble_esp(ws: &Workspace, run_dir: &Path, artifacts: &Artifacts, extra
     Ok(esp)
 }
 
+/// Adds QEMU's monitor to `command` for the screen checks, and where to
+/// reach it: a Unix socket of the run directory where they exist, a TCP
+/// port of localhost reserved for the machine on Windows.
+#[cfg(unix)]
+fn monitor(command: &mut Command, run_dir: &Path) -> Result<crate::screen::Monitor> {
+    let endpoint = crate::screen::Monitor::Unix(run_dir.join("monitor.sock"));
+    command.arg("-monitor").arg(endpoint.qemu_argument());
+    Ok(endpoint)
+}
+
+/// The port is reserved by binding and letting it go: QEMU takes it as its
+/// server. A race another process could win, as with any port the runner
+/// picks itself.
+#[cfg(windows)]
+fn monitor(command: &mut Command, _run_dir: &Path) -> Result<crate::screen::Monitor> {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map_err(|e| format!("cannot reserve a monitor port: {e}"))?;
+    let endpoint = crate::screen::Monitor::Tcp(address);
+    command.arg("-monitor").arg(endpoint.qemu_argument());
+    Ok(endpoint)
+}
+
 /// Result of a watched boot.
 pub struct Outcome {
     pub passed: bool,
@@ -280,15 +303,9 @@ fn boot_once(
     let mut serial = OsString::from("file:");
     serial.push(serial_log);
 
-    let monitor = run_dir.join("monitor.sock");
     let mut command = machine.command(opts)?;
-    if !scenario.screen.is_empty() {
-        let _ = fs::remove_file(&monitor);
-        let mut socket = OsString::from("unix:");
-        socket.push(&monitor);
-        socket.push(",server=on,wait=off");
-        command.arg("-monitor").arg(socket);
-    }
+    // The monitor of the screen checks (screen.rs), where it exists only.
+    let monitor = if scenario.screen.is_empty() { None } else { Some(monitor(&mut command, run_dir)?) };
     let mut child = command
         .arg("-serial")
         .arg(serial)
@@ -321,7 +338,8 @@ fn boot_once(
             // The screen, once the markers are found (the last boot).
             Verdict::Pass if !scenario.screen.is_empty() => {
                 let dump = run_dir.join("screen.ppm");
-                match crate::screen::capture(&monitor, &dump).and_then(|image| image.check(&scenario.screen)) {
+                let monitor = monitor.as_ref().expect("built when the screen is checked");
+                match crate::screen::capture(monitor, &dump).and_then(|image| image.check(&scenario.screen)) {
                     Ok(()) => break (true, String::new()),
                     Err(why) => break (false, why),
                 }
