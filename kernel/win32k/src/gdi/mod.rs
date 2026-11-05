@@ -4,18 +4,21 @@
 //! dans le noyau, bords en relief et dégradés ([`draw`]) ; les couleurs
 //! système ([`syscolor`]) ; la table des handles GDI que voient les clients
 //! ([`handles`]), les pinceaux ([`brush`]), les régions d'un client
-//! ([`rgnobj`]), les contextes de périphérique de l'écran ([`dc`]) et les
-//! appels qu'un client met en lot ([`batch`]).
+//! ([`rgnobj`]), les polices ([`fontobj`]), les contextes de périphérique de
+//! l'écran ([`dc`]), le texte ([`text`], ADR-013) et les appels qu'un client
+//! met en lot ([`batch`]).
 //!
-//! Pas encore : DC en mémoire, stylos, palettes et polices comme objets
-//! GDI, transformations, texte (ADR-013), lignes et courbes, BitBlt.
+//! Pas encore : DC en mémoire, stylos et palettes comme objets GDI,
+//! transformations, lignes et courbes, BitBlt.
 
 pub mod batch;
 pub mod brush;
 pub mod dc;
 pub mod dib;
 pub mod draw;
+pub mod fontobj;
 pub mod handles;
 pub mod region;
 pub mod rgnobj;
 pub mod syscolor;
+pub mod text;

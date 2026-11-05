@@ -67,6 +67,7 @@ pub enum Object {
     Dc(Arc<Dc>),
     Brush(Arc<Brush>),
     Region(Arc<RegionObject>),
+    Font(Arc<super::fontobj::FontObject>),
 }
 
 /// Une entrée prise ou rendue : l'objet (aucun pour une entrée rendue),

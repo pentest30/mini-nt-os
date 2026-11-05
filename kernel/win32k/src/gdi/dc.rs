@@ -43,7 +43,7 @@ use mm::vad::PageProtect;
 use mm::virtual_alloc::AllocType;
 
 use super::brush::{Brush, STOCK_BRUSHES};
-use super::dib::Rect;
+use super::dib::{ColorRef, Rect};
 use super::handles::{self, Object, OWNER_NONE};
 use super::region::{combine, Region};
 
@@ -308,7 +308,11 @@ pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(),
         clip: None,
         fill: Some((white, STOCK_BRUSHES[stock::WHITE_BRUSH])),
     };
-    let attrs = DcAttr32 { vis_rect_region: state.vis_rect_region(), ..DcAttr32::initial(white, 0, width, height) };
+    let attrs = DcAttr32 {
+        vis_rect_region: state.vis_rect_region(),
+        lfnt_new: super::brush::stock_object(stock::SYSTEM_FONT),
+        ..DcAttr32::initial(white, 0, width, height)
+    };
     let written = copy_to_user(u64::from(attr), attrs.as_bytes()).and_then(|()| handles::set_owner(handle, pid, attr));
     if let Err(status) = written {
         free_attr(AttrKind::Dc, attr);
@@ -404,6 +408,43 @@ fn fill_brush(dc: &Dc, attr: u32, hbrush: Option<u32>, restore: bool) -> Result<
         }
     }
     Ok(dc.state().fill.map(|(_, brush)| brush))
+}
+
+/// Les attributs de texte du DC (`crForegroundClr`, `crBackgroundClr`,
+/// `lBkMode`, `flTextAlign`, `hlfntNew`), lus dans ses attributs chez son
+/// propriétaire ; `None` pour un DC sans propriétaire ou des attributs
+/// illisibles.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn text_attrs(dc: &Dc) -> Option<super::text::TextAttrs> {
+    let (_, attr) = dc.state().owner?;
+    let mut bytes = [0u8; offset_of!(DcAttr32, lfnt_new) + 4];
+    copy_from_user(&mut bytes, u64::from(attr)).ok()?;
+    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    Some(super::text::TextAttrs {
+        font: word(offset_of!(DcAttr32, lfnt_new)),
+        color: ColorRef(word(offset_of!(DcAttr32, cr_foreground_clr))),
+        background: ColorRef(word(offset_of!(DcAttr32, cr_background_clr))),
+        bk_mode: word(offset_of!(DcAttr32, bk_mode)) as i32,
+        align: word(offset_of!(DcAttr32, fl_text_align)),
+    })
+}
+
+/// DC_hSelectFont (NtGdiSelectFont) : la police `hfont` devient celle du DC
+/// (`hlfntNew` de ses attributs) ; rend l'ancienne, ou `None` si `hfont`
+/// n'est pas une police du processus ou publique, ou sans attributs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn select_font(dc: &Dc, hfont: u32) -> Option<u32> {
+    let (pid, attr) = dc.state().owner?;
+    super::fontobj::get(hfont, pid)?;
+    let at = u64::from(attr) + offset_of!(DcAttr32, lfnt_new) as u64;
+    let mut old = [0u8; 4];
+    copy_from_user(&mut old, at).ok()?;
+    copy_to_user(at, &hfont.to_le_bytes()).ok()?;
+    Some(u32::from_le_bytes(old))
 }
 
 /// ROP3 qui se sert d'une source (WIN32_ROP4_USES_SOURCE) : PatBlt n'en a
