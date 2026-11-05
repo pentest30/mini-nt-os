@@ -38,6 +38,7 @@ typedef void *HICON;
 typedef void *HBRUSH;
 typedef void *HDC;
 typedef void *HGDIOBJ;
+typedef void *HRGN;
 typedef void *HWINSTA;
 typedef void *HDESK;
 typedef unsigned int WPARAM;
@@ -201,6 +202,16 @@ typedef struct {
 #define WM_GETMINMAXINFO 0x0024
 #define WM_NCCALCSIZE 0x0083
 #define WM_NCCREATE 0x0081
+#define RGN_AND 1
+#define RGN_OR 2
+#define RGN_DIFF 4
+#define NULLREGION 1
+#define SIMPLEREGION 2
+#define COMPLEXREGION 3
+#define DCX_EXCLUDERGN 0x00000040
+#define DCX_INTERSECTRGN 0x00000080
+#define DCX_KEEPCLIPRGN 0x00040000
+#define OBJ_REGION 8
 
 /* What the scenario expects when the program runs to its end. */
 #define EXIT_STATUS 0x600D
@@ -236,7 +247,23 @@ __declspec(dllimport) BOOL __stdcall ValidateRect(HWND window, const RECT *rect)
 __declspec(dllimport) BOOL __stdcall GetUpdateRect(HWND window, RECT *rect, BOOL erase);
 __declspec(dllimport) BOOL __stdcall UpdateWindow(HWND window);
 __declspec(dllimport) BOOL __stdcall RedrawWindow(HWND window, const RECT *rect, void *region, UINT flags);
+__declspec(dllimport) HDC __stdcall GetDC(HWND window);
+__declspec(dllimport) HDC __stdcall GetDCEx(HWND window, HRGN clip, DWORD flags);
+__declspec(dllimport) HDC __stdcall GetWindowDC(HWND window);
+__declspec(dllimport) int __stdcall ReleaseDC(HWND window, HDC dc);
+__declspec(dllimport) BOOL __stdcall InvalidateRgn(HWND window, HRGN region, BOOL erase);
+__declspec(dllimport) BOOL __stdcall ValidateRgn(HWND window, HRGN region);
+__declspec(dllimport) int __stdcall GetUpdateRgn(HWND window, HRGN region, BOOL erase);
 __declspec(dllimport) int __stdcall GetClipBox(HDC dc, RECT *rect);
+__declspec(dllimport) int __stdcall CombineRgn(HRGN destination, HRGN first, HRGN second, int mode);
+__declspec(dllimport) HRGN __stdcall CreateRectRgn(int left, int top, int right, int bottom);
+__declspec(dllimport) BOOL __stdcall DeleteDC(HDC dc);
+__declspec(dllimport) BOOL __stdcall DeleteObject(HGDIOBJ object);
+__declspec(dllimport) int __stdcall ExtSelectClipRgn(HDC dc, HRGN region, int mode);
+__declspec(dllimport) BOOL __stdcall GdiFlush(void);
+__declspec(dllimport) int __stdcall GetRgnBox(HRGN region, RECT *rect);
+__declspec(dllimport) int __stdcall SelectClipRgn(HDC dc, HRGN region);
+__declspec(dllimport) BOOL __stdcall SetRectRgn(HRGN region, int left, int top, int right, int bottom);
 __declspec(dllimport) DWORD __stdcall GetObjectType(HGDIOBJ object);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int height, DWORD rop);
 __declspec(dllimport) int __stdcall GetSystemMetrics(int index);
@@ -1086,6 +1113,172 @@ static void check_redraw(void)
              update.right, update.bottom);
 }
 
+/* GetRgnBox of a region, printed after `what`. */
+static void print_region(const char *what, int result, HRGN region)
+{
+    RECT box;
+    int complexity = GetRgnBox(region, &box);
+    DbgPrint("[gui] %s: %d, box %d: %ld %ld %ld %ld\n", what, result, complexity, box.left, box.top, box.right,
+             box.bottom);
+}
+
+/* GetClipBox of a DC, in `box`; its complexity. */
+static int clip_box(HDC dc, RECT *box)
+{
+    set_rect(box, -1, -1, -1, -1);
+    return GetClipBox(dc, box);
+}
+
+/* Regions of GDI, which gdi32 changes itself when they stay rectangles;
+   the DCs of GetDC, GetWindowDC and GetDCEx, cut by a region, and by a
+   clip region; InvalidateRgn, ValidateRgn and GetUpdateRgn. */
+static void check_dc_and_regions(void)
+{
+    HWND window = CreateWindowExW(0, CLASS_NAME, L"Regions", WS_POPUP | WS_VISIBLE, 1050, 600, 200, 150, 0, 0,
+                                  GetModuleHandleW(0), 0);
+    HWND plain = GetParent(lazy_window);
+    HRGN first = CreateRectRgn(100, 100, 0, 0);
+    HRGN second = CreateRectRgn(50, 50, 150, 150);
+    HRGN result = CreateRectRgn(0, 0, 0, 0);
+    HRGN clip, other, gone;
+    HDC dc;
+    RECT box;
+    int complexity, again, released, twice;
+    DWORD type;
+
+    ValidateRect(window, 0);
+    print_region("CreateRectRgn, corners swapped", 0, first);
+    print_region("CombineRgn(RGN_OR)", CombineRgn(result, first, second, RGN_OR), result);
+    print_region("CombineRgn(RGN_AND), in gdi32", CombineRgn(result, first, second, RGN_AND), result);
+    print_region("CombineRgn(RGN_DIFF)", CombineRgn(result, first, second, RGN_DIFF), result);
+    /* Changed by gdi32 alone, then taken back by the kernel. */
+    SetRectRgn(first, 10, 10, 20, 20);
+    print_region("SetRectRgn, then RGN_OR", CombineRgn(result, first, second, RGN_OR), result);
+    SetLastError(0);
+    complexity = CombineRgn(result, first, 0, RGN_OR);
+    DbgPrint("[gui] CombineRgn without a second region: %d (%lu)\n", complexity, GetLastError());
+
+    /* DeleteObject, queued in the TEB: the entry goes back, then serves
+       again with one more reuse. */
+    DeleteObject(result);
+    GdiFlush();
+    type = GetObjectType(result);
+    complexity = GetRgnBox(result, &box);
+    gone = result;
+    result = CreateRectRgn(0, 0, 0, 0);
+    DbgPrint("[gui] DeleteObject: GetObjectType %lu, GetRgnBox %d; a new region in its entry %s, GetObjectType %lu\n",
+             type, complexity,
+             ((DWORD)result & 0xFFFF) == ((DWORD)gone & 0xFFFF) && result != gone ? "reused" : "WRONG",
+             GetObjectType(result));
+
+    /* A DC of the client area: black in its top left corner. */
+    dc = GetDC(window);
+    complexity = clip_box(dc, &box);
+    PatBlt(dc, 0, 0, 20, 20, BLACKNESS);
+    released = ReleaseDC(window, dc);
+    twice = ReleaseDC(window, dc);
+    SetLastError(0);
+    again = PatBlt(dc, 0, 0, 20, 20, BLACKNESS);
+    DbgPrint("[gui] GetDC: clip %d: %ld %ld %ld %ld; ReleaseDC %d, again %d; PatBlt after %d (%lu)\n", complexity,
+             box.left, box.top, box.right, box.bottom, released, twice, again, GetLastError());
+    /* DeleteDC gives a window DC back, once. */
+    dc = GetDC(window);
+    released = DeleteDC(dc);
+    twice = ReleaseDC(window, dc);
+    SetLastError(0);
+    again = DeleteDC(dc);
+    DbgPrint("[gui] DeleteDC of a window DC: %d, then ReleaseDC %d, DeleteDC %d (%lu)\n", released, twice, again,
+             GetLastError());
+
+    /* The whole window, its frame included: its top left corner black. */
+    dc = GetWindowDC(plain);
+    complexity = clip_box(dc, &box);
+    PatBlt(dc, 0, 0, 4, 4, BLACKNESS);
+    ReleaseDC(plain, dc);
+    DbgPrint("[gui] GetWindowDC: clip %d: %ld %ld %ld %ld\n", complexity, box.left, box.top, box.right, box.bottom);
+
+    /* The whole screen, over every window. */
+    dc = GetDC(0);
+    complexity = clip_box(dc, &box);
+    PatBlt(dc, 1260, 780, 5, 5, BLACKNESS);
+    ReleaseDC(0, dc);
+    DbgPrint("[gui] GetDC(NULL): clip %d: %ld %ld %ld %ld\n", complexity, box.left, box.top, box.right, box.bottom);
+
+    /* Cut by a region on the screen, which the DC deletes when given back;
+       or keeps, without it. */
+    clip = CreateRectRgn(1100, 650, 1120, 670);
+    dc = GetDCEx(window, clip, DCX_INTERSECTRGN);
+    complexity = clip_box(dc, &box);
+    PatBlt(dc, 0, 0, 200, 150, BLACKNESS);
+    ReleaseDC(window, dc);
+    DbgPrint("[gui] GetDCEx(DCX_INTERSECTRGN): clip %d: %ld %ld %ld %ld; the region after ReleaseDC %lu\n",
+             complexity, box.left, box.top, box.right, box.bottom, GetObjectType(clip));
+    clip = CreateRectRgn(1060, 610, 1250, 750);
+    dc = GetDCEx(window, clip, DCX_EXCLUDERGN | DCX_KEEPCLIPRGN);
+    complexity = clip_box(dc, &box);
+    ReleaseDC(window, dc);
+    DbgPrint("[gui] GetDCEx(DCX_EXCLUDERGN, DCX_KEEPCLIPRGN): clip %d: %ld %ld %ld %ld; the region after "
+             "ReleaseDC %lu\n",
+             complexity, box.left, box.top, box.right, box.bottom, GetObjectType(clip));
+    DeleteObject(clip);
+
+    /* A clip region from the DC's origin, selected in the TEB's batch: only
+       its square gets black; combined in the kernel; outside the window;
+       none. */
+    dc = GetDC(window);
+    clip = CreateRectRgn(120, 0, 140, 20);
+    other = CreateRectRgn(150, 0, 160, 10);
+    complexity = SelectClipRgn(dc, clip);
+    again = clip_box(dc, &box);
+    DbgPrint("[gui] SelectClipRgn: %d, GetClipBox %d: %ld %ld %ld %ld\n", complexity, again, box.left, box.top,
+             box.right, box.bottom);
+    PatBlt(dc, 0, 0, 200, 150, BLACKNESS);
+    complexity = ExtSelectClipRgn(dc, other, RGN_OR);
+    SetRectRgn(other, 300, 300, 400, 400);
+    again = SelectClipRgn(dc, other);
+    released = SelectClipRgn(dc, 0);
+    twice = clip_box(dc, &box);
+    DbgPrint("[gui] ExtSelectClipRgn(RGN_OR): %d; outside: %d; none: %d, GetClipBox %d: %ld %ld %ld %ld\n",
+             complexity, again, released, twice, box.left, box.top, box.right, box.bottom);
+    ReleaseDC(window, dc);
+
+    /* The update region: two pieces, one validated, then none. */
+    SetRectRgn(first, 10, 10, 30, 30);
+    SetRectRgn(second, 50, 50, 60, 60);
+    InvalidateRgn(window, first, FALSE);
+    InvalidateRgn(window, second, FALSE);
+    print_region("InvalidateRgn twice, GetUpdateRgn", GetUpdateRgn(window, result, FALSE), result);
+    ValidateRgn(window, first);
+    print_region("ValidateRgn of one, GetUpdateRgn", GetUpdateRgn(window, result, FALSE), result);
+    ValidateRgn(window, 0);
+    print_region("ValidateRgn(NULL), GetUpdateRgn", GetUpdateRgn(window, result, FALSE), result);
+    SetLastError(0);
+    complexity = InvalidateRgn(0, first, FALSE);
+    DbgPrint("[gui] InvalidateRgn(NULL): %d (%lu)\n", complexity, GetLastError());
+    /* Without erasing: WM_PAINT alone. */
+    InvalidateRgn(window, second, FALSE);
+    received_count = 0;
+    UpdateWindow(window);
+    print_messages("UpdateWindow after InvalidateRgn(FALSE)");
+    /* Its background erased at once in a region: the black corner cut. */
+    received_count = 0;
+    RedrawWindow(window, 0, first, RDW_INVALIDATE | RDW_ERASE | RDW_ERASENOW);
+    print_messages("RedrawWindow of a region");
+    print_region("then GetUpdateRgn", GetUpdateRgn(window, result, FALSE), result);
+    ValidateRgn(window, 0);
+    /* Only the caption to paint: user32 asks the kernel (WNDS_SENDNCPAINT),
+       which empties the region. */
+    ValidateRect(plain, 0);
+    set_rect(&box, -4, -20, 10, -10);
+    RedrawWindow(plain, &box, 0, RDW_INVALIDATE | RDW_FRAME);
+    print_region("only the frame to paint, GetUpdateRgn", GetUpdateRgn(plain, result, FALSE), result);
+    DeleteObject(first);
+    DeleteObject(second);
+    DeleteObject(result);
+    DeleteObject(clip);
+    DeleteObject(other);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -1142,6 +1335,7 @@ DWORD __stdcall GuiStartup(void)
     check_show_window(instance, window);
     check_paint_messages();
     check_redraw();
+    check_dc_and_regions();
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);

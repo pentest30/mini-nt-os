@@ -253,9 +253,9 @@ fn is_drawable(window: &Window) -> bool {
     true
 }
 
-/// co_UserRedrawWindow : `rect` (dans la zone cliente ; `None` : la zone
-/// cliente, ou la fenêtre avec `RDW_INVALIDATE | RDW_FRAME` ou
-/// `RDW_VALIDATE | RDW_NOFRAME`) de `window` est invalidé ou validé selon
+/// co_UserRedrawWindow : `region`, sinon `rect` (dans la zone cliente ;
+/// aucun : la zone cliente, ou la fenêtre avec `RDW_INVALIDATE | RDW_FRAME`
+/// ou `RDW_VALIDATE | RDW_NOFRAME`) de `window` est invalidé ou validé selon
 /// `flags` ([`invalidate_windows`]), puis la fenêtre se peint aussitôt
 /// (`RDW_UPDATENOW` : WM_PAINT envoyé, [`update_windows`]) ou seulement son
 /// cadre et son fond (`RDW_ERASENOW`). Rien pour une fenêtre qu'on ne voit
@@ -263,16 +263,23 @@ fn is_drawable(window: &Window) -> bool {
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
-pub fn redraw_window(window: &Arc<Window>, rect: Option<Rect>, flags: u32) {
+pub fn redraw_window(window: &Arc<Window>, rect: Option<Rect>, region: Option<&Region>, flags: u32) {
     if !is_drawable(window) {
         return;
     }
     let state = window.state();
+    let (dx, dy) = if window.is_desktop_window() { (0, 0) } else { (state.client.left, state.client.top) };
     let region = if flags & (RDW_INVALIDATE | RDW_VALIDATE) == 0 {
         None
+    } else if let Some(region) = region {
+        Some(region.offset_by(dx, dy))
     } else if let Some(rect) = rect {
-        let (dx, dy) = if window.is_desktop_window() { (0, 0) } else { (state.client.left, state.client.top) };
-        Some(Region::from_rect(Rect::new(rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy)))
+        Some(Region::from_rect(Rect::new(
+            rect.left.saturating_add(dx),
+            rect.top.saturating_add(dy),
+            rect.right.saturating_add(dx),
+            rect.bottom.saturating_add(dy),
+        )))
     } else if flags & (RDW_INVALIDATE | RDW_FRAME) == RDW_INVALIDATE | RDW_FRAME
         || flags & (RDW_VALIDATE | RDW_NOFRAME) == RDW_VALIDATE | RDW_NOFRAME
     {
@@ -428,6 +435,31 @@ pub fn get_update_rect(window: &Arc<Window>, erase: bool) -> Option<Rect> {
         return Some(rect);
     }
     Some(Rect::new(rect.left - dx, rect.top - dy, rect.right - dx, rect.bottom - dy))
+}
+
+/// co_UserGetUpdateRgn : la région à mettre à jour de `window` (dans sa
+/// zone cliente, coupée à elle et à ses parents ; vide si un parent la
+/// cache), ou `None` sans région. `erase` : son cadre et son fond se
+/// repeignent d'abord s'il le faut.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn get_update_region(window: &Arc<Window>, erase: bool) -> Option<Region> {
+    if erase {
+        paint_windows(window);
+    }
+    let state = window::change(window, |state| state.state &= !WNDS_UPDATEDIRTY);
+    if state.update.is_empty() {
+        return None;
+    }
+    let (dx, dy) = (state.client.left, state.client.top);
+    let Some(visible) = intersect_with_parents(window, state.client) else { return Some(Region::default()) };
+    let mut region = state.update.offset_by(dx, dy);
+    region.intersect_rect(visible);
+    if !window.is_desktop_window() {
+        region.offset(-dx, -dy);
+    }
+    Some(region)
 }
 
 /// IntIsWindowDirty : la fenêtre a quelque chose à peindre (visible, avec

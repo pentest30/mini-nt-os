@@ -380,6 +380,8 @@ pub const DCX_LOCKWINDOWUPDATE: u32 = 0x0000_0400;
 pub const DCX_USESTYLE: u32 = 0x0001_0000;
 /// DCX_KEEPCLIPRGN: the clip region stays the caller's.
 pub const DCX_KEEPCLIPRGN: u32 = 0x0004_0000;
+/// DCX_NOCLIPCHILDREN: from the cache, without clipping the children.
+pub const DCX_NOCLIPCHILDREN: u32 = 0x0008_0000;
 /// RDW_*: what RedrawWindow does. RDW_CLIPCHILDREN and RDW_NOUPDATEDIRTY are
 /// win32k's own.
 pub const RDW_INVALIDATE: u32 = 0x0001;
@@ -744,6 +746,11 @@ pub const PM_VALID_FLAGS: u32 = 0x0001 | 0x0002 | (0x0407 | 0x0040 | 0x0020 | 0x
 /// routines of NtUserCallOneParam (`SIMPLECALLROUTINES`, before Vista).
 pub const ONEPARAM_ROUTINE_GETQUEUESTATUS: u32 = 0x2B;
 pub const ONEPARAM_ROUTINE_POSTQUITMESSAGE: u32 = 0x33;
+/// ONEPARAM_ROUTINE_RELEASEDC: ReleaseDC (user32!ReleaseDC pushes 0x39).
+pub const ONEPARAM_ROUTINE_RELEASEDC: u32 = 0x39;
+/// TWOPARAM_ROUTINE_VALIDATERGN: ValidateRgn, by NtUserCallHwndParamLock
+/// (user32!ValidateRgn pushes 0x65).
+pub const TWOPARAM_ROUTINE_VALIDATERGN: u32 = 0x65;
 
 /// USER_HANDLE_ENTRY: an entry of the USER handle table.
 #[repr(C)]

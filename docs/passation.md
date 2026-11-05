@@ -357,16 +357,20 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - [x] InvalidateRect, ValidateRect, RedrawWindow, UpdateWindow, GetUpdateRect (M6, étape 9) : la région à
      mettre à jour est une région ; NtUserRedrawWindow, NtUserInvalidateRect, NtUserValidateRect,
      NtUserGetUpdateRect, NtUserCallHwndLock (UpdateWindow) ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : NtUserGetDCEx et NtUserReleaseDC (GetDC),
-     les objets région de GDI (InvalidateRgn, GetUpdateRgn), puis le texte (polices, ADR-013 acceptée : `ttf-parser`,
+   - [x] GetDC et ReleaseDC, les régions de GDI (M6, étape 10) : les entrées de la table des handles rendues et
+     reprises, les régions d'un client et leurs attributs (`RGN_ATTR`, `win32k::gdi::rgnobj`), la région de
+     découpage d'un DC (SelectClipRgn, en lot ou non), DeleteObject en lot ; NtUserGetDC, NtUserGetDCEx,
+     NtUserGetWindowDC, ReleaseDC (`ONEPARAM_ROUTINE_RELEASEDC`), DeleteDC, NtGdiCreateRectRgn, NtGdiCombineRgn,
+     NtGdiGetRgnBox, NtGdiExtSelectClipRgn, NtUserInvalidateRgn, ValidateRgn (NtUserCallHwndParamLock),
+     NtUserGetUpdateRgn, NtUserRedrawWindow avec une région ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : le texte (polices, ADR-013 acceptée : `ttf-parser`,
      rastériseur maison en virgule fixe, niveaux de gris, polices libres de ReactOS ; d'abord le titre des fenêtres
      dessiné par le noyau et les symboles de Marlett), les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
-     GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject, DeleteObject), DC en mémoire, régions de
-     GDI et découpage, BitBlt, texte et polices (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread
-     d'entrée) ;
+     GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject), DC en mémoire, BitBlt, texte et polices
+     (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
    - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
      fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
      FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
@@ -418,19 +422,27 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   copie des bits valides (une fenêtre déplacée est repeinte entière) ; le dégradé n'a de spécification que ses
   bouts (le moteur de ReactOS n'est pas dans les sources épinglées) ; ôter le test de visibilité de WM_NCPAINT ne
   change rien (la région visible d'une fenêtre cachée est vide : mutation équivalente).
-- InvalidateRect et RedrawWindow (M6, étape 9) : pas de régions de GDI (InvalidateRgn, ValidateRgn, GetUpdateRgn,
-  RedrawWindow avec une région : refusés, journalisés), pas de fond du bureau repeint à la demande (journalisé), ni
+- GetDC et les régions de GDI (M6, étape 10) : ni NtGdiSetRectRgn (`gdi32` change lui-même une région qui a ses
+  attributs), ni autres formes de région, OffsetRgn, EqualRgn, PtInRegion, RectInRegion, GetRegionData, GetClipRgn,
+  ExcludeClipRect, IntersectClipRect, OffsetClipRgn, SetMetaRgn, `DCX_INTERSECTUPDATE` (journalisé) ; ni régions ni
+  DC d'un processus rendus à sa fin, ni cache de handles du PEB ; sans test : NtGdiDeleteObjectApp d'un autre objet
+  qu'un DC, le refus de rendre le DC d'un autre processus (un seul processus GUI dans `gui`), le libre des attributs
+  d'une région supprimée. Écarts voulus avec ReactOS : un DC du cache sans `DCX_CACHE` pour une fenêtre sans DC à
+  elle (XP, Wine ; ReactOS rend NULL), seul le preneur d'un DC le rend, `VisRectRegion` écrit à la prise du DC.
+  Un `|` dans un marqueur `expect` en fait deux au choix : le marqueur `SEC_BASED | SEC_RESERVE` du scénario
+  `smoke` ne vérifie que son début (tâche proposée à part).
+- InvalidateRect et RedrawWindow (M6, étape 9) : pas de fond du bureau repeint à la demande (journalisé), ni
   WM_SYNCPAINT, ni `WNDS_SYNCPAINTPENDING` ; sans test : `WNDS_UPDATEDIRTY` (un seul thread GUI dans `gui`) ;
   mutation équivalente : l'effacement oublié quand la validation vide la région.
-- WM_PAINT (M6, étape 8) : ni GetUpdateRgn, ni WM_SYNCPAINT ; DispatchMessage d'une procédure de minuterie (WM_TIMER) journalisé ;
+- WM_PAINT (M6, étape 8) : ni WM_SYNCPAINT ; DispatchMessage d'une procédure de minuterie (WM_TIMER) journalisé ;
   sans test (mutations qui survivent) : une procédure qui ne fait pas BeginPaint (repeinte par IntDispatchMessage),
   le cadre des enfants repeint par BeginPaint, le DC de BeginPaint coupé à la région à mettre à jour (toujours toute
   la zone cliente), WM_PAINT réservé aux fenêtres du thread (un seul thread GUI dans `gui`).
-- Zone cliente (M6, étape 7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : ni NtUserGetDCEx/NtUserReleaseDC, ni DC d'une fenêtre ou d'une classe
-  (`CS_OWNDC`, `CS_CLASSDC`), ni DC du parent (`CS_PARENTDC`) ; seul PatBlt s'exécute en lot (les autres appels sont
-  sautés, journalisés) ; pas d'objets créés par un client, de DC en mémoire, de stylos, de transformations, de
-  `DevCaps` (à zéro), de suppression d'objets ni de ménage à la fin d'un processus (un DC pris par un processus
-  qui finit pendant un rappel reste pris) ; la région à mettre à jour reste un rectangle. Mutation équivalente :
+- Zone cliente (M6, étape 7, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : ni DC d'une fenêtre ou d'une classe
+  (`CS_OWNDC`, `CS_CLASSDC`), ni DC du parent (`CS_PARENTDC`) ; en lot, seuls PatBlt, SelectClipRgn et DeleteObject
+  s'exécutent (les autres appels sont sautés, journalisés) ; pas de pinceaux créés par un client, de DC en mémoire,
+  de stylos, de transformations, de `DevCaps` (à zéro) ni de ménage à la fin d'un processus (un DC pris par un
+  processus qui finit pendant un rappel reste pris). Mutation équivalente :
   ôter `DCX_CLIPSIBLINGS` de la région d'un DC ne change rien tant que `DCX_CLIPSIBLINGS` ne vient que du style
   (VIS_ComputeVisibleRegion coupe déjà les sœurs d'une fenêtre à `WS_CLIPSIBLINGS`) ; le chemin de NtGdiPatBlt qui
   peint n'est pas atteint par `gdi32` (il met PatBlt en lot sauf sur une DIB section) : seul son refus a un test.

@@ -173,14 +173,54 @@ pub struct PointL32 {
     pub y: i32,
 }
 
-/// RGN_ATTR: a region's complexity and bounding rectangle.
+/// RGN_ATTR: a region's complexity and bounding rectangle. A region of a
+/// client has one in the client's memory (the `UserData` of its entry),
+/// where `gdi32` reads it and, for an empty or rectangular region, changes
+/// it (CombineRgn, SetRectRgn) without calling the kernel, marking it
+/// [`ATTR_RGN_DIRTY`].
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RgnAttr32 {
+    /// [`ATTR_RGN_VALID`], [`ATTR_RGN_DIRTY`].
     pub attr_flags: u32,
     /// NULLREGION, SIMPLEREGION or COMPLEXREGION.
     pub complexity: u32,
     pub rect: Rect32,
+}
+
+/// The kernel wrote the attributes of the region.
+pub const ATTR_RGN_VALID: u32 = 0x0000_0010;
+/// `gdi32` changed the region in its attributes: the kernel takes it back
+/// before using the region (REGION_vSyncRegion).
+pub const ATTR_RGN_DIRTY: u32 = 0x0000_0020;
+
+impl RgnAttr32 {
+    /// The attributes in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        Some(Self {
+            attr_flags: word(0),
+            complexity: word(4),
+            rect: Rect32 {
+                left: word(8) as i32,
+                top: word(0xC) as i32,
+                right: word(0x10) as i32,
+                bottom: word(0x14) as i32,
+            },
+        })
+    }
+}
+
+/// RGN_AND … RGN_COPY: how CombineRgn and ExtSelectClipRgn combine.
+pub mod rgn {
+    pub const AND: i32 = 1;
+    pub const OR: i32 = 2;
+    pub const XOR: i32 = 3;
+    pub const DIFF: i32 = 4;
+    pub const COPY: i32 = 5;
 }
 
 /// DC_ATTR: the attributes of a DC that its owner's `gdi32` reads and
@@ -422,6 +462,60 @@ impl GdiBsPatBlt32 {
     }
 }
 
+/// GDIBS_NORECT: in the mode of a queued ExtSelectClipRgn, no region (its
+/// rectangle unused).
+pub const GDIBS_NORECT: u32 = 0x8000_0000;
+
+/// GDIBSEXTSELCLPRGN: a queued ExtSelectClipRgn (RGN_COPY only), with the
+/// bounds of its region (a rectangle, or none: [`GDIBS_NORECT`]).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GdiBsExtSelClipRgn32 {
+    pub header: GdiBatchHeader32,
+    pub mode: u32,
+    pub rect: Rect32,
+}
+
+/// GDIBSOBJECT: a queued call on an object (DeleteObject of a region or of
+/// a brush, SelectObject of a font).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GdiBsObject32 {
+    pub header: GdiBatchHeader32,
+    pub handle: u32,
+}
+
+/// The header and the words after it in `bytes`, if they hold `size`
+/// bytes.
+fn words(bytes: &[u8], size: usize) -> Option<(GdiBatchHeader32, impl Fn(usize) -> u32 + '_)> {
+    if bytes.len() < size {
+        return None;
+    }
+    let header = GdiBatchHeader32 {
+        size: u16::from_le_bytes([bytes[0], bytes[1]]),
+        cmd: u16::from_le_bytes([bytes[2], bytes[3]]),
+    };
+    Some((header, move |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])))
+}
+
+impl GdiBsExtSelClipRgn32 {
+    /// The call in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let (header, word) = words(bytes, size_of::<Self>())?;
+        let rect =
+            Rect32 { left: word(8) as i32, top: word(0xC) as i32, right: word(0x10) as i32, bottom: word(0x14) as i32 };
+        Some(Self { header, mode: word(4), rect })
+    }
+}
+
+impl GdiBsObject32 {
+    /// The call in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let (header, word) = words(bytes, size_of::<Self>())?;
+        Some(Self { header, handle: word(4) })
+    }
+}
+
 /// Raster operations of PatBlt (ROP3, with their legacy low word).
 pub mod rop {
     /// The brush.
@@ -492,6 +586,14 @@ const _: () = {
     assert!(offset_of!(GdiBsPatBlt32, hbrush) == 0x14);
     assert!(offset_of!(GdiBsPatBlt32, rop) == 0x18);
     assert!(offset_of!(GdiBsPatBlt32, ul_foreground_clr) == 0x34);
+    // GdiAllocBatchCommand: sizeof(GDIBSEXTSELCLPRGN), sizeof(GDIBSOBJECT).
+    assert!(size_of::<GdiBsExtSelClipRgn32>() == 24);
+    assert!(offset_of!(GdiBsExtSelClipRgn32, rect) == 8);
+    assert!(size_of::<GdiBsObject32>() == 8);
+    // gdi32!GetRgnBox: `mov eax, [attr + 4]`, the rectangle from 8.
+    assert!(size_of::<RgnAttr32>() == 0x18);
+    assert!(offset_of!(RgnAttr32, complexity) == 4);
+    assert!(offset_of!(RgnAttr32, rect) == 8);
 };
 
 /// `as_bytes` for records of integers whose sizes, checked above, leave no
@@ -509,7 +611,7 @@ macro_rules! as_bytes {
     )*};
 }
 
-as_bytes!(GdiTableEntry32, GdiSharedTail32, DcAttr32, GdiBsPatBlt32);
+as_bytes!(GdiTableEntry32, GdiSharedTail32, DcAttr32, GdiBsPatBlt32, GdiBsExtSelClipRgn32, GdiBsObject32, RgnAttr32);
 
 #[cfg(test)]
 mod tests {
@@ -532,6 +634,27 @@ mod tests {
         };
         assert_eq!(GdiBsPatBlt32::from_bytes(call.as_bytes()), Some(call));
         assert_eq!(GdiBsPatBlt32::from_bytes(&call.as_bytes()[..0x3F]), None, "one byte short");
+    }
+
+    #[test]
+    fn queued_clips_and_deletions_and_region_attributes_read_back() {
+        let clip = GdiBsExtSelClipRgn32 {
+            header: GdiBatchHeader32 { size: 24, cmd: batch::EXT_SEL_CLIP_RGN },
+            mode: rgn::COPY as u32 | GDIBS_NORECT,
+            rect: Rect32 { left: -1, top: 2, right: 30, bottom: 40 },
+        };
+        assert_eq!(GdiBsExtSelClipRgn32::from_bytes(clip.as_bytes()), Some(clip));
+        assert_eq!(GdiBsExtSelClipRgn32::from_bytes(&clip.as_bytes()[..23]), None);
+        let delete = GdiBsObject32 { header: GdiBatchHeader32 { size: 8, cmd: batch::DEL_RGN }, handle: 0x0104_0123 };
+        assert_eq!(GdiBsObject32::from_bytes(delete.as_bytes()), Some(delete));
+        assert_eq!(GdiBsObject32::from_bytes(&delete.as_bytes()[..7]), None);
+        let attr = RgnAttr32 {
+            attr_flags: ATTR_RGN_DIRTY,
+            complexity: 2,
+            rect: Rect32 { left: 1, top: 2, right: 3, bottom: 4 },
+        };
+        assert_eq!(RgnAttr32::from_bytes(attr.as_bytes()), Some(attr));
+        assert_eq!(RgnAttr32::from_bytes(&attr.as_bytes()[..0x17]), None);
     }
 
     #[test]

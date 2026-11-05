@@ -13,6 +13,8 @@ DispatchMessageW@4
 EndPaint@8
 GetClassInfoExW@12
 GetClientRect@8
+GetDC@4
+GetDCEx@12
 GetMonitorInfoW@8
 GetParent@4
 GetQueueStatus@4
@@ -20,11 +22,14 @@ GetSysColor@4
 GetSysColorBrush@4
 GetSystemMetrics@4
 GetUpdateRect@12
+GetUpdateRgn@12
 GetWindow@8
+GetWindowDC@4
 GetWindowLongW@8
 GetWindowRect@8
 GetWindowTextW@12
 InvalidateRect@12
+InvalidateRgn@12
 IsWindow@4
 IsWindowVisible@4
 MonitorFromPoint@12
@@ -34,6 +39,7 @@ PeekMessageW@20
 RedrawWindow@16
 RegisterClassExW@4
 RegisterLogonProcess@8
+ReleaseDC@8
 SetProcessWindowStation@4
 SetThreadDesktop@4
 SetWindowPos@28
@@ -42,3 +48,4 @@ ShowWindow@8
 SwitchDesktop@4
 UpdateWindow@4
 ValidateRect@8
+ValidateRgn@8

@@ -37,6 +37,21 @@
 # (WM_ERASEBKGND, with a cache DC of the kernel cut to what shows of it:
 # GetClipBox gives a simple or a complex region) at once; the DC given back,
 # GetClipBox and PatBlt refuse it.
+# Regions of GDI live in the GDI handle table with their attributes in the
+# process (RGN_ATTR), which gdi32 reads (GetRgnBox) and changes itself for
+# a rectangle (CombineRgn(RGN_AND), SetRectRgn), the kernel taking them back
+# (CombineRgn(RGN_OR) after SetRectRgn); DeleteObject, queued in the TEB,
+# gives the entry back, which a new region takes again, once more reused.
+# GetDC, GetWindowDC and GetDC(NULL) give DCs of the client area, of the
+# whole window and of the whole screen, which ReleaseDC (or DeleteDC) gives
+# back once;
+# GetDCEx cuts one by a region on the screen (DCX_INTERSECTRGN), deleted
+# when it is given back, or without it (DCX_EXCLUDERGN | DCX_KEEPCLIPRGN),
+# kept. SelectClipRgn, queued in the TEB (its result from the DC's
+# VisRectRegion), and ExtSelectClipRgn(RGN_OR) cut where a DC paints.
+# InvalidateRgn, ValidateRgn and GetUpdateRgn work on the update region,
+# RedrawWindow(RDW_ERASENOW) erases a region of it at once; with only the
+# caption to paint, GetUpdateRgn empties the region.
 # It ends with status 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
@@ -164,6 +179,29 @@ expect = [gui] UpdateWindow without erasing received 1: 000f
 expect = [gui] RDW_INTERNALPAINT after ValidateRect received 1: 000f
 expect = [gui] UpdateWindow of a child that does not paint received 3: 000f 0085 0014
 expect = [gui] the child still to paint 1; its parent 1 0 20 192 72
+expect = [gui] CreateRectRgn, corners swapped: 0, box 2: 0 0 100 100
+expect = [gui] CombineRgn(RGN_OR): 3, box 3: 0 0 150 150
+expect = [gui] CombineRgn(RGN_AND), in gdi32: 2, box 2: 50 50 100 100
+expect = [gui] CombineRgn(RGN_DIFF): 3, box 3: 0 0 100 100
+expect = [gui] SetRectRgn, then RGN_OR: 3, box 3: 10 10 150 150
+expect = [gui] CombineRgn without a second region: 0 (6)
+expect = [gui] DeleteObject: GetObjectType 0, GetRgnBox 0; a new region in its entry reused, GetObjectType 8
+expect = [gui] GetDC: clip 2: 0 0 200 150; ReleaseDC 1, again 0; PatBlt after 0 (6)
+expect = [gui] DeleteDC of a window DC: 1, then ReleaseDC 0, DeleteDC 0 (6)
+expect = [gui] GetWindowDC: clip 2: 0 0 200 100
+expect = [gui] GetDC(NULL): clip 2: 0 0 1280 800
+expect = [gui] GetDCEx(DCX_INTERSECTRGN): clip 2: 50 50 70 70; the region after ReleaseDC 0
+expect = [gui] GetDCEx(DCX_EXCLUDERGN, DCX_KEEPCLIPRGN): clip 3: 0 0 200 150; the region after ReleaseDC 8
+expect = [gui] SelectClipRgn: 2, GetClipBox 2: 120 0 140 20
+expect = [gui] ExtSelectClipRgn(RGN_OR): 3; outside: 1; none: 2, GetClipBox 2: 0 0 200 150
+expect = [gui] InvalidateRgn twice, GetUpdateRgn: 3, box 3: 10 10 60 60
+expect = [gui] ValidateRgn of one, GetUpdateRgn: 2, box 2: 50 50 60 60
+expect = [gui] ValidateRgn(NULL), GetUpdateRgn: 1, box 1: 0 0 0 0
+expect = [gui] InvalidateRgn(NULL): 0 (1400)
+expect = [gui] UpdateWindow after InvalidateRgn(FALSE) received 1: 000f
+expect = [gui] RedrawWindow of a region received 1: 0014
+expect = [gui] then GetUpdateRgn: 2, box 2: 10 10 30 30
+expect = [gui] only the frame to paint, GetUpdateRgn: 1, box 1: 0 0 0 0
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 
@@ -197,7 +235,16 @@ expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 # (10, 10; 19, 19) and the second drawn (22, 10 to 31, 19), whose top left
 # corner of 5 x 5 pixels is erased again by RedrawWindow(RDW_ERASENOW)
 # (22, 10 to 26, 14 white; 27, 14 and 22, 15 black). Where "Shown" was
-# before it was hidden, the desktop is painted again.
+# before it was hidden, the desktop is painted again. The popup "Regions"
+# at 1050, 600 (200 x 150): its top left corner of 20 x 20 pixels black
+# through GetDC, then erased in a square from 10, 10 by RedrawWindow
+# (1055, 605 and 1068, 608 black; 1062, 612 white); black only in the
+# region of GetDCEx (1110, 660; not 1099, 660 nor 1120, 660) and in the
+# clip region of SelectClipRgn (1180, 610; not 1169, 610, 1190, 610 nor
+# 1180, 620), drawn before ExtSelectClipRgn(RGN_OR) adds to it (1150, 605
+# white). GetWindowDC blackens the top left corner of the frame of "Plain"
+# (1051, 451 black, 1054, 454 its edge), GetDC(NULL) the desktop (1262,
+# 782 black; 1259, 779 not).
 screen = 0 0 D4D0C8
 screen = 73 73 808080
 screen = 73 92 D4D0C8
@@ -240,6 +287,21 @@ screen = 32 19 FFFFFF
 screen = 640 400 FFFFFF
 screen = 46 300 3A6EA5
 screen = 1279 799 3A6EA5
+screen = 1055 605 000000
+screen = 1068 608 000000
+screen = 1062 612 FFFFFF
+screen = 1110 660 000000
+screen = 1099 660 FFFFFF
+screen = 1120 660 FFFFFF
+screen = 1180 610 000000
+screen = 1169 610 FFFFFF
+screen = 1190 610 FFFFFF
+screen = 1180 620 FFFFFF
+screen = 1150 605 FFFFFF
+screen = 1051 451 000000
+screen = 1054 454 808080
+screen = 1262 782 000000
+screen = 1259 779 3A6EA5
 
 forbid = WRONG
 forbid = NtUserMessageCall (0x11cb) is not implemented

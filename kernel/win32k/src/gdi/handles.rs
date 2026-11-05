@@ -16,8 +16,12 @@
 //! adresse du serveur fictive ([`kernel_data`]), qu'il ne suit jamais : un
 //! objet du noyau 64 bits n'a pas d'adresse sur 32 bits.
 //!
-//! Pas encore : la suppression des objets (DeleteObject), donc la reprise
-//! des entrées ; les objets d'un processus rendus à sa fin ; les verrous
+//! Une entrée rendue ([`delete`], ENTRY_vPushFreeEntry) perd son type, son
+//! propriétaire et ses attributs, et compte une reprise de plus : ses
+//! anciens handles ne trouvent plus rien. Les entrées rendues sont reprises
+//! les premières, la dernière rendue d'abord.
+//!
+//! Pas encore : les objets d'un processus rendus à sa fin ; les verrous
 //! partagés et exclusifs ; le cache de handles du PEB (`GdiHandleBuffer`) ;
 //! les capacités de l'écran (`DevCaps`, à zéro) et les polices publiques
 //! (`cfPublic`, hors de la vue : `gdi32` ne les lit pas).
@@ -27,8 +31,9 @@ use alloc::vec::Vec;
 use core::mem::size_of;
 
 use abi::gdi::{
-    gdi_entry_offset, GdiSharedTail32, GdiTableEntry32, GDI_ENTRY_STOCK_MASK, GDI_HANDLE_COUNT, GDI_HANDLE_INDEX_MASK,
-    GDI_HANDLE_STOCK_MASK, GDI_HANDLE_TYPE_MASK, GDI_SHARED_TAIL, RESERVE_ENTRIES_COUNT,
+    gdi_entry_offset, GdiSharedTail32, GdiTableEntry32, GDI_ENTRY_REUSE_INCREMENT, GDI_ENTRY_STOCK_MASK,
+    GDI_HANDLE_COUNT, GDI_HANDLE_INDEX_MASK, GDI_HANDLE_STOCK_MASK, GDI_HANDLE_TYPE_MASK, GDI_SHARED_TAIL,
+    RESERVE_ENTRIES_COUNT,
 };
 use abi::ntstatus::{NtStatus, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_HANDLE, STATUS_UNSUCCESSFUL};
 use hal::sync::{KSpinLock, Once};
@@ -39,6 +44,7 @@ use mm::vad::PageProtect;
 
 use super::brush::Brush;
 use super::dc::Dc;
+use super::rgnobj::RegionObject;
 
 /// GDI_OBJ_HMGR_PUBLIC : un objet de tous (les objets de stock).
 pub const OWNER_PUBLIC: u32 = 0;
@@ -60,57 +66,88 @@ pub const fn kernel_data(index: u32) -> u32 {
 pub enum Object {
     Dc(Arc<Dc>),
     Brush(Arc<Brush>),
+    Region(Arc<RegionObject>),
 }
 
-/// Une entrée prise : l'objet, l'entrée telle que la voit un client.
+/// Une entrée prise ou rendue : l'objet (aucun pour une entrée rendue),
+/// l'entrée telle que la voit un client.
 struct Slot {
-    object: Object,
+    object: Option<Object>,
     entry: GdiTableEntry32,
 }
 
-/// Les entrées prises, à partir de `RESERVE_ENTRIES_COUNT`.
+/// Les entrées déjà prises, à partir de `RESERVE_ENTRIES_COUNT`, et celles
+/// d'entre elles qui sont rendues.
 #[derive(Default)]
 pub struct Table {
     slots: Vec<Slot>,
+    free: Vec<u32>,
 }
 
 impl Table {
     /// GDIOBJ_hInsertObject : `object`, d'un handle de type `handle_type`
-    /// (`GDILoObjType`) et du type de base `objt`, entre dans la première
-    /// entrée jamais prise, à `owner`. Rend son handle et l'entrée du
-    /// client ; `None` si la table est pleine.
+    /// (`GDILoObjType`) et du type de base `objt`, entre à `owner` dans la
+    /// dernière entrée rendue, sinon dans la première jamais prise. Rend son
+    /// handle et l'entrée du client ; `None` si la table est pleine.
     pub fn insert(&mut self, object: Object, handle_type: u32, objt: u8, owner: u32) -> Option<(u32, GdiTableEntry32)> {
-        let index = RESERVE_ENTRIES_COUNT + self.slots.len() as u32;
-        if index >= GDI_HANDLE_COUNT {
-            return None;
-        }
-        let entry = GdiTableEntry32 {
+        let index = match self.free.pop() {
+            Some(index) => index,
+            None => {
+                let index = RESERVE_ENTRIES_COUNT + self.slots.len() as u32;
+                if index >= GDI_HANDLE_COUNT {
+                    return None;
+                }
+                self.slots.push(Slot { object: None, entry: GdiTableEntry32::default() });
+                index
+            }
+        };
+        let slot = &mut self.slots[(index - RESERVE_ENTRIES_COUNT) as usize];
+        let reuse = slot.entry.full_unique & 0xFF00;
+        slot.entry = GdiTableEntry32 {
             kernel_data: kernel_data(index),
             process_id: owner,
-            full_unique: ((handle_type & GDI_HANDLE_TYPE_MASK) >> 16) as u16,
+            full_unique: reuse | ((handle_type & GDI_HANDLE_TYPE_MASK) >> 16) as u16,
             object_type: objt & 0x1F,
             flags: 0,
             user_data: 0,
         };
-        self.slots.push(Slot { object, entry });
-        Some((handle_of(index, &entry), entry))
+        slot.object = Some(object);
+        Some((handle_of(index, &slot.entry), slot.entry))
     }
 
-    /// L'entrée de `handle`, si elle est prise et a son type, son bit de
+    /// L'entrée de `handle`, si elle a un objet et a son type, son bit de
     /// stock et son compte de reprises.
     fn slot(&self, handle: u32) -> Option<&Slot> {
         let index = (handle & GDI_HANDLE_INDEX_MASK).checked_sub(RESERVE_ENTRIES_COUNT)?;
-        self.slots.get(index as usize).filter(|slot| u32::from(slot.entry.full_unique) == handle >> 16)
+        self.slots
+            .get(index as usize)
+            .filter(|slot| slot.object.is_some() && u32::from(slot.entry.full_unique) == handle >> 16)
     }
 
     fn slot_mut(&mut self, handle: u32) -> Option<&mut Slot> {
         let index = (handle & GDI_HANDLE_INDEX_MASK).checked_sub(RESERVE_ENTRIES_COUNT)?;
-        self.slots.get_mut(index as usize).filter(|slot| u32::from(slot.entry.full_unique) == handle >> 16)
+        self.slots
+            .get_mut(index as usize)
+            .filter(|slot| slot.object.is_some() && u32::from(slot.entry.full_unique) == handle >> 16)
     }
 
     /// L'objet de `handle` et son propriétaire.
     pub fn get(&self, handle: u32) -> Option<(Object, u32)> {
-        self.slot(handle).map(|slot| (slot.object.clone(), slot.entry.process_id))
+        let slot = self.slot(handle)?;
+        Some((slot.object.clone()?, slot.entry.process_id))
+    }
+
+    /// ENTRY_vPushFreeEntry : l'entrée de `handle` est rendue ; rend son
+    /// objet et l'entrée du client, sans type ni propriétaire, une reprise
+    /// de plus.
+    pub fn remove(&mut self, handle: u32) -> Option<(Object, GdiTableEntry32)> {
+        let slot = self.slot_mut(handle)?;
+        let object = slot.object.take()?;
+        let reuse = (slot.entry.full_unique & 0xFF00).wrapping_add(GDI_ENTRY_REUSE_INCREMENT);
+        slot.entry = GdiTableEntry32 { full_unique: reuse, ..GdiTableEntry32::default() };
+        let entry = slot.entry;
+        self.free.push(handle & GDI_HANDLE_INDEX_MASK);
+        Some((object, entry))
     }
 
     /// L'objet de `handle`, s'il est au processus `pid` ou public
@@ -152,7 +189,7 @@ fn handle_of(index: u32, entry: &GdiTableEntry32) -> u32 {
 }
 
 /// La table.
-static TABLE: KSpinLock<Table> = KSpinLock::new(Table { slots: Vec::new() });
+static TABLE: KSpinLock<Table> = KSpinLock::new(Table { slots: Vec::new(), free: Vec::new() });
 
 /// La section des entrées, une fois créée.
 static SECTION: Once<Arc<Section>> = Once::new();
@@ -211,6 +248,33 @@ pub fn insert(object: Object, handle_type: u32, objt: u8, owner: u32) -> Result<
     Ok(handle)
 }
 
+/// Une entrée de plus : `object`, à `owner`, ses attributs en `user_data`
+/// chez lui (GDIOBJ_vSetObjectAttr) ; rend son handle.
+///
+/// # Errors
+/// Comme [`insert`].
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn insert_with_user_data(
+    object: Object,
+    handle_type: u32,
+    objt: u8,
+    owner: u32,
+    user_data: u32,
+) -> Result<u32, NtStatus> {
+    let mut table = TABLE.lock();
+    let (handle, _) = table.insert(object, handle_type, objt, owner).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    let entry = table.set_user_data(handle, user_data).ok_or(STATUS_INVALID_HANDLE)?;
+    if let Err(status) = publish(handle, &entry) {
+        if let Some((_, entry)) = table.remove(handle) {
+            let _ = publish(handle, &entry);
+        }
+        return Err(status);
+    }
+    Ok(handle)
+}
+
 /// L'objet de `handle`, s'il est au processus `pid` ou public
 /// (GDIOBJ_ReferenceObjectByHandle).
 ///
@@ -227,8 +291,42 @@ pub fn get(handle: u32, pid: u32) -> Option<Object> {
 pub fn brush(handle: u32, pid: u32) -> Option<Arc<Brush>> {
     match get(handle, pid)? {
         Object::Brush(brush) => Some(brush),
-        Object::Dc(_) => None,
+        _ => None,
     }
+}
+
+/// L'objet de `handle` et son propriétaire, quel qu'il soit
+/// (GreGetObjectOwner).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn get_with_owner(handle: u32) -> Option<(Object, u32)> {
+    TABLE.lock().get(handle)
+}
+
+/// GreDeleteObject : l'objet de `handle`, au processus `pid` (ni de stock,
+/// ni public), quitte la table, si `deletable` l'accepte ; rend l'objet et
+/// les attributs qu'il avait chez `pid`.
+///
+/// # Errors
+/// Celles de l'écriture de la section (l'objet a quand même quitté la
+/// table).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn delete(handle: u32, pid: u32, deletable: impl FnOnce(&Object) -> bool) -> Option<(Object, u32)> {
+    if handle & GDI_HANDLE_STOCK_MASK != 0 {
+        return None;
+    }
+    let mut table = TABLE.lock();
+    let slot = table.slot(handle)?;
+    if slot.entry.process_id != pid || pid == OWNER_PUBLIC || !deletable(slot.object.as_ref()?) {
+        return None;
+    }
+    let user_data = slot.entry.user_data;
+    let (object, entry) = table.remove(handle)?;
+    let _ = publish(handle, &entry);
+    Some((object, user_data))
 }
 
 /// `handle` est désormais à `owner`, ses attributs en `user_data` chez lui.
@@ -346,6 +444,33 @@ mod tests {
         let (brush_handle, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x48).unwrap();
         let (stock, _) = table.make_stock(brush_handle).unwrap();
         assert!(table.get_for(stock, 0x44).is_some() && table.get_for(stock, 0x48).is_some(), "public");
+    }
+
+    #[test]
+    fn a_removed_entry_comes_back_once_more_reused() {
+        let mut table = Table::default();
+        let (first, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).unwrap();
+        let (second, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).unwrap();
+        let (_, entry) = table.remove(first).expect("taken");
+        assert_eq!(
+            (entry.full_unique, entry.object_type, entry.process_id, entry.user_data, entry.kernel_data),
+            (0x0100, 0, 0, 0, 0)
+        );
+        assert!(!gdi32_validates(&entry, first, 0), "no type any more");
+        assert!(table.get(first).is_none() && table.remove(first).is_none(), "gone");
+        assert!(table.get(second).is_some(), "the other stays");
+        let (again, entry) = table.insert(brush(), LO_DC_TYPE, objt::DC, 0x48).unwrap();
+        assert_eq!(again, 0x0101_000A, "the entry given back, with its reuse count");
+        assert_eq!((entry.full_unique, entry.object_type), (0x0101, objt::DC));
+        assert!(table.get(first).is_none(), "the old handle finds nothing");
+        table.remove(second);
+        table.remove(again);
+        let (last_given_back, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).unwrap();
+        assert_eq!(last_given_back & GDI_HANDLE_INDEX_MASK, 0xA, "the last given back first");
+        let (stock, _) = table.make_stock(last_given_back).unwrap();
+        table.remove(stock);
+        let (after_stock, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).unwrap();
+        assert_eq!(after_stock, 0x0310_000A, "the stock bit does not stay");
     }
 
     #[test]

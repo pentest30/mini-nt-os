@@ -4,6 +4,15 @@
 ; DLL exports them undecorated.
 LIBRARY gdi32.dll
 EXPORTS
+CombineRgn@16
+CreateRectRgn@16
+DeleteDC@4
+DeleteObject@4
+ExtSelectClipRgn@12
+GdiFlush@0
 GetClipBox@8
 GetObjectType@4
+GetRgnBox@8
 PatBlt@24
+SelectClipRgn@8
+SetRectRgn@20
