@@ -257,7 +257,10 @@ pub(super) fn nt_query_directory_file(arguments: &[u32]) -> NtStatus {
 
 fn query_directory_file(arguments: &[u32]) -> Result<(), NtStatus> {
     let [handle, _event, _apc_routine, _apc_context, iosb, buffer, length, class, single, pattern, restart] =
-        arguments[..11] else { unreachable!("11 arguments") };
+        arguments[..11]
+    else {
+        unreachable!("11 arguments")
+    };
     if class != FILE_BOTH_DIRECTORY_INFORMATION {
         return Err(DIRECTORY_CLASSES.report(class));
     }
@@ -306,11 +309,8 @@ fn query_directory_file(arguments: &[u32]) -> Result<(), NtStatus> {
         }
         last_at = information.len();
         let cluster = file.cluster_bytes() as u64;
-        let allocation = if entry.attr & 0x10 != 0 {
-            cluster
-        } else {
-            (entry.file_size as u64).div_ceil(cluster) * cluster
-        };
+        let allocation =
+            if entry.attr & 0x10 != 0 { cluster } else { (entry.file_size as u64).div_ceil(cluster) * cluster };
         let short_name = {
             let mut units = [0u16; 12];
             let kept = short.len().min(12);
@@ -320,7 +320,11 @@ fn query_directory_file(arguments: &[u32]) -> Result<(), NtStatus> {
         let record = FileBothDirectoryInformation {
             next_entry_offset: 0,
             file_index: entry.index as u32,
-            creation_time: io_manager::nt_time(entry.entry.creation_date, entry.entry.creation_time, entry.entry.creation_tenths),
+            creation_time: io_manager::nt_time(
+                entry.entry.creation_date,
+                entry.entry.creation_time,
+                entry.entry.creation_tenths,
+            ),
             last_access_time: io_manager::nt_time(entry.entry.access_date, 0, 0),
             // FAT keeps no change time: XP puts the write time there.
             last_write_time: io_manager::nt_time(entry.entry.write_date, entry.entry.write_time, 0),

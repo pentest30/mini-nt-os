@@ -39,8 +39,7 @@ use abi::file::{
 use abi::ntstatus::{
     NtStatus, STATUS_DISK_CORRUPT_ERROR, STATUS_DISK_FULL, STATUS_FILE_CORRUPT_ERROR, STATUS_INVALID_DEVICE_REQUEST,
     STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY, STATUS_OBJECT_NAME_COLLISION,
-    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND,
-    STATUS_UNRECOGNIZED_VOLUME,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
 };
 use hal::sync::KSpinLock;
 
@@ -208,13 +207,10 @@ impl Volume {
         if !node.directory {
             return Err(STATUS_NOT_A_DIRECTORY);
         }
-        let entries = self
-            .fat
-            .read_dir_entries(node.first_cluster)
-            .map_err(|error| match error {
-                FatError::NotFound | FatError::InvalidBpb => STATUS_FILE_CORRUPT_ERROR,
-                error => device_error(error),
-            })?;
+        let entries = self.fat.read_dir_entries(node.first_cluster).map_err(|error| match error {
+            FatError::NotFound | FatError::InvalidBpb => STATUS_FILE_CORRUPT_ERROR,
+            error => device_error(error),
+        })?;
         Ok(entries.into_iter().find(|entry| {
             entry.index >= index
                 && !matches!(entry.name.as_str(), "." | "..")
