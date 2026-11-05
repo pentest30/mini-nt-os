@@ -55,6 +55,7 @@ pub const LO_DC_TYPE: u32 = 0x0001_0000;
 pub const LO_REGION_TYPE: u32 = 0x0004_0000;
 pub const LO_BITMAP_TYPE: u32 = 0x0005_0000;
 pub const LO_BRUSH_TYPE: u32 = 0x0010_0000;
+pub const LO_FONT_TYPE: u32 = 0x000A_0000;
 /// A pen: a brush object, of an extended handle type.
 pub const LO_PEN_TYPE: u32 = 0x0030_0000;
 /// A DC of another kind (a printer's, a metafile's).
@@ -544,6 +545,13 @@ pub mod stock {
     pub const DKGRAY_BRUSH: usize = 3;
     pub const BLACK_BRUSH: usize = 4;
     pub const NULL_BRUSH: usize = 5;
+    pub const OEM_FIXED_FONT: usize = 10;
+    pub const ANSI_FIXED_FONT: usize = 11;
+    pub const ANSI_VAR_FONT: usize = 12;
+    pub const SYSTEM_FONT: usize = 13;
+    pub const DEVICE_DEFAULT_FONT: usize = 14;
+    pub const SYSTEM_FIXED_FONT: usize = 16;
+    pub const DEFAULT_GUI_FONT: usize = 17;
     /// The stock objects (`STOCK_LAST + 1`).
     pub const COUNT: usize = 21;
 }
@@ -612,6 +620,284 @@ macro_rules! as_bytes {
 }
 
 as_bytes!(GdiTableEntry32, GdiSharedTail32, DcAttr32, GdiBsPatBlt32, GdiBsExtSelClipRgn32, GdiBsObject32, RgnAttr32);
+
+/// LF_FACESIZE: the characters of a face name, its NUL included.
+pub const LF_FACESIZE: usize = 32;
+
+/// LOGFONTW: a font as a client asks for it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LogFontW32 {
+    /// Negative: the em height; positive: the cell height; 0: the default.
+    pub height: i32,
+    pub width: i32,
+    pub escapement: i32,
+    pub orientation: i32,
+    /// FW_*: 0 is the default, 400 normal, 700 bold.
+    pub weight: i32,
+    pub italic: u8,
+    pub underline: u8,
+    pub strike_out: u8,
+    pub char_set: u8,
+    pub out_precision: u8,
+    pub clip_precision: u8,
+    pub quality: u8,
+    pub pitch_and_family: u8,
+    pub face_name: [u16; LF_FACESIZE],
+}
+
+impl Default for LogFontW32 {
+    fn default() -> Self {
+        Self {
+            height: 0,
+            width: 0,
+            escapement: 0,
+            orientation: 0,
+            weight: 0,
+            italic: 0,
+            underline: 0,
+            strike_out: 0,
+            char_set: 0,
+            out_precision: 0,
+            clip_precision: 0,
+            quality: 0,
+            pitch_and_family: 0,
+            face_name: [0; LF_FACESIZE],
+        }
+    }
+}
+
+impl LogFontW32 {
+    /// The font in `bytes`, as a client wrote it; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let bytes = bytes.get(..size_of::<Self>())?;
+        let word = |at: usize| i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let mut face_name = [0u16; LF_FACESIZE];
+        for (i, unit) in face_name.iter_mut().enumerate() {
+            *unit = u16::from_le_bytes([bytes[28 + 2 * i], bytes[29 + 2 * i]]);
+        }
+        Some(Self {
+            height: word(0),
+            width: word(4),
+            escapement: word(8),
+            orientation: word(12),
+            weight: word(16),
+            italic: bytes[20],
+            underline: bytes[21],
+            strike_out: bytes[22],
+            char_set: bytes[23],
+            out_precision: bytes[24],
+            clip_precision: bytes[25],
+            quality: bytes[26],
+            pitch_and_family: bytes[27],
+            face_name,
+        })
+    }
+
+    /// Its face name, up to its NUL.
+    pub fn face(&self) -> &[u16] {
+        let end = self.face_name.iter().position(|&unit| unit == 0).unwrap_or(LF_FACESIZE);
+        &self.face_name[..end]
+    }
+}
+
+/// ENUMLOGFONTEXDVW, what NtGdiHfontCreate is given (`gdi32` passes no size):
+/// a LOGFONTW, its full name, style and script (64, 32 and 32 characters),
+/// then a DESIGNVECTOR (two words and 16 values).
+pub const ENUM_LOG_FONT_EX_DV_SIZE: usize = size_of::<LogFontW32>() + 2 * (64 + 32 + 32) + 4 * (2 + 16);
+
+/// TEXTMETRICW.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TextMetricW32 {
+    pub height: i32,
+    pub ascent: i32,
+    pub descent: i32,
+    pub internal_leading: i32,
+    pub external_leading: i32,
+    pub ave_char_width: i32,
+    pub max_char_width: i32,
+    pub weight: i32,
+    pub overhang: i32,
+    pub digitized_aspect_x: i32,
+    pub digitized_aspect_y: i32,
+    pub first_char: u16,
+    pub last_char: u16,
+    pub default_char: u16,
+    pub break_char: u16,
+    pub italic: u8,
+    pub underlined: u8,
+    pub struck_out: u8,
+    pub pitch_and_family: u8,
+    pub char_set: u8,
+    /// The padding of the structure to 4 bytes.
+    pub reserved: [u8; 3],
+}
+
+/// TMDIFF: the ANSI characters of a TEXTMETRICA, and the size of an
+/// OUTLINETEXTMETRIC (0: not asked).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TmDiff32 {
+    pub cjotma: u32,
+    pub ch_first: u8,
+    pub ch_last: u8,
+    pub ch_default: u8,
+    pub ch_break: u8,
+}
+
+/// TMW_INTERNAL: what NtGdiGetTextMetricsW writes (68 bytes, the size
+/// `gdi32` passes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TmwInternal32 {
+    pub text_metric: TextMetricW32,
+    pub diff: TmDiff32,
+}
+
+/// GDIBSTEXTOUT: a TextOut or ExtTextOut that `gdi32` queued (GdiBCTextOut),
+/// with the DC's text attributes taken when it was queued; from offset 0x50,
+/// the `lpDx` values (`size` bytes) then the characters (the C structure ends
+/// with a union of two characters, which its size counts).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GdiBsTextOut32 {
+    pub header: GdiBatchHeader32,
+    pub cr_foreground_clr: u32,
+    pub cr_background_clr: u32,
+    pub bk_mode: i32,
+    pub ul_foreground_clr: u32,
+    pub ul_background_clr: u32,
+    pub x: i32,
+    pub y: i32,
+    /// ETO_*, and [`GDIBS_NORECT`] without a rectangle.
+    pub options: u32,
+    pub rect: Rect32,
+    pub cs_cp: u32,
+    /// The characters.
+    pub count: u32,
+    /// The bytes of the `lpDx` values before them.
+    pub size: u32,
+    pub hlfnt_new: u32,
+    pub fl_text_align: u32,
+    pub viewport_org: PointL32,
+}
+
+impl GdiBsTextOut32 {
+    /// The call in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let (header, word) = words(bytes, size_of::<Self>())?;
+        Some(Self {
+            header,
+            cr_foreground_clr: word(4),
+            cr_background_clr: word(8),
+            bk_mode: word(0xC) as i32,
+            ul_foreground_clr: word(0x10),
+            ul_background_clr: word(0x14),
+            x: word(0x18) as i32,
+            y: word(0x1C) as i32,
+            options: word(0x20),
+            rect: Rect32 {
+                left: word(0x24) as i32,
+                top: word(0x28) as i32,
+                right: word(0x2C) as i32,
+                bottom: word(0x30) as i32,
+            },
+            cs_cp: word(0x34),
+            count: word(0x38),
+            size: word(0x3C),
+            hlfnt_new: word(0x40),
+            fl_text_align: word(0x44),
+            viewport_org: PointL32 { x: word(0x48) as i32, y: word(0x4C) as i32 },
+        })
+    }
+}
+
+/// GDIBSEXTTEXTOUT: an ExtTextOut without characters that only fills its
+/// rectangle (ETO_OPAQUE), with the background colour taken when queued.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GdiBsExtTextOut32 {
+    pub header: GdiBatchHeader32,
+    pub count: u32,
+    pub options: u32,
+    pub rect: Rect32,
+    pub viewport_org: PointL32,
+    pub ul_background_clr: u32,
+}
+
+impl GdiBsExtTextOut32 {
+    /// The call in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let (header, word) = words(bytes, size_of::<Self>())?;
+        Some(Self {
+            header,
+            count: word(4),
+            options: word(8),
+            rect: Rect32 {
+                left: word(0xC) as i32,
+                top: word(0x10) as i32,
+                right: word(0x14) as i32,
+                bottom: word(0x18) as i32,
+            },
+            viewport_org: PointL32 { x: word(0x1C) as i32, y: word(0x20) as i32 },
+            ul_background_clr: word(0x24),
+        })
+    }
+}
+
+/// ETO_*: options of ExtTextOut.
+pub mod eto {
+    pub const OPAQUE: u32 = 0x0002;
+    pub const CLIPPED: u32 = 0x0004;
+    pub const GLYPH_INDEX: u32 = 0x0010;
+    pub const RTLREADING: u32 = 0x0080;
+    pub const IGNORELANGUAGE: u32 = 0x1000;
+    pub const PDY: u32 = 0x2000;
+}
+
+/// TA_*: the text alignment of a DC.
+pub mod ta {
+    pub const UPDATECP: u32 = 0x0001;
+    pub const RIGHT: u32 = 0x0002;
+    pub const CENTER: u32 = 0x0006;
+    pub const BOTTOM: u32 = 0x0008;
+    pub const BASELINE: u32 = 0x0018;
+    /// The horizontal part: TA_LEFT (0), TA_RIGHT or TA_CENTER.
+    pub const HORIZONTAL: u32 = 0x0006;
+    /// The vertical part: TA_TOP (0), TA_BOTTOM or TA_BASELINE.
+    pub const VERTICAL: u32 = 0x0018;
+}
+
+/// TRANSPARENT: a background mode where text leaves what is under it.
+pub const TRANSPARENT: i32 = 1;
+/// ANSI_CHARSET, DEFAULT_CHARSET and SYMBOL_CHARSET.
+pub const ANSI_CHARSET: u8 = 0;
+pub const DEFAULT_CHARSET: u8 = 1;
+pub const SYMBOL_CHARSET: u8 = 2;
+
+const _: () = {
+    assert!(size_of::<LogFontW32>() == 92);
+    assert!(offset_of!(LogFontW32, weight) == 16);
+    assert!(offset_of!(LogFontW32, italic) == 20);
+    assert!(offset_of!(LogFontW32, pitch_and_family) == 27);
+    assert!(offset_of!(LogFontW32, face_name) == 28);
+    assert!(ENUM_LOG_FONT_EX_DV_SIZE == 420);
+    assert!(size_of::<TextMetricW32>() == 60);
+    assert!(offset_of!(TextMetricW32, first_char) == 44);
+    assert!(offset_of!(TextMetricW32, italic) == 52);
+    assert!(offset_of!(TextMetricW32, char_set) == 56);
+    assert!(size_of::<TmwInternal32>() == 0x44);
+    assert!(size_of::<GdiBsTextOut32>() == 0x50);
+    assert!(offset_of!(GdiBsTextOut32, options) == 0x20);
+    assert!(offset_of!(GdiBsTextOut32, count) == 0x38);
+    assert!(offset_of!(GdiBsTextOut32, hlfnt_new) == 0x40);
+    assert!(offset_of!(GdiBsTextOut32, viewport_org) == 0x48);
+    assert!(size_of::<GdiBsExtTextOut32>() == 0x28);
+    assert!(offset_of!(GdiBsExtTextOut32, ul_background_clr) == 0x24);
+};
+
+as_bytes!(TmwInternal32, GdiBsTextOut32, GdiBsExtTextOut32);
 
 #[cfg(test)]
 mod tests {
