@@ -288,7 +288,7 @@ fn query_directory_file(arguments: &[u32]) -> Result<(), NtStatus> {
     let mut last_at = 0usize;
     loop {
         // Room for one more entry: its fixed part and a first character.
-        let room = (length as usize).checked_sub(information.len()).unwrap_or(0);
+        let room = (length as usize).saturating_sub(information.len());
         if room < fixed + 2 {
             break;
         }
