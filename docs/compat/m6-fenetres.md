@@ -470,3 +470,47 @@ déplacement ; `gdi::handles` : entrée rendue puis reprise ; `gdi::rgnobj` : at
 `gdi::dc` : région de découpage, modes, rectangle en lot, `VisRectRegion`, place des attributs d'une région ;
 `gdi::batch` : appels lus ; `dce` : règles des `DCX_*`) ; le scénario `gui`, sur les deux CPU, avec 57 pixels de la
 capture.
+
+## Étape 11 : le texte du titre et les symboles des boutons (polices, ADR-013)
+
+Le cadre peint par le noyau (étape 6) n'avait ni le texte du titre ni les symboles des boutons. Il les a maintenant,
+dessinés avec les polices de ReactOS épinglé, sans FreeType :
+
+- `libs/glyph` (no_std, testée sur l'hôte) : `ttf-parser` 0.21 lit la police (les versions suivantes demandent
+  `core_maths` et `libm` sans `std`, hors de l'ADR-016) ; un rastériseur maison accumule l'aire signée de chaque pixel
+  en virgule fixe 16.16 (niveaux de gris, courbes aplaties à un dixième de pixel près, sans hinting). Les métriques
+  sont celles que GDI lit : ascent et descent Windows de la table `OS/2`, `xAvgCharWidth`. Tahoma à 8 points
+  (hauteur -11) a celles d'XP : ascent 11, descent 2, largeur moyenne 5. Marlett, police symbole, se lit par sa table
+  symbole (U+F000 à U+F0FF).
+- `xtask` met `tahoma.ttf`, `tahomabd.ttf` et `Marlett.ttf` dans `WINDOWS\FONTS` ; le noyau les lit par Io au
+  démarrage et les installe dans win32k (`userland::install_fonts`, « [boot] fonts installed: … »).
+- `win32k::font` : les fichiers installés, un texte mis en glyphes à une hauteur de LOGFONT (négative : l'em ;
+  positive : la cellule), avances arrondies au pixel, coupé et fini par « ... » s'il ne tient pas (DT_END_ELLIPSIS),
+  glyphes en niveaux de gris ou monochromes (`NONANTIALIASED_QUALITY`), et le cache des glyphes rendus.
+- Dessin (`gdi::draw`, `Op::Glyph`) : un glyphe va vers sa couleur à proportion de sa couverture
+  (`Bitmap::blend_coverage`), coupé à son rectangle et à la région visible.
+- `nonclient` (UserDrawCaptionText, UITOOLS95_DrawFrameCaption de ReactOS comme spécification) : le titre en Tahoma
+  gras (lfCaptionFont par défaut : -11, gras ; Tahoma normal pour une fenêtre d'outils), en `COLOR_CAPTIONTEXT` ou
+  `COLOR_INACTIVECAPTIONTEXT`, à deux pixels du bord (pas encore d'icône), centré dans les 19 lignes du titre (ligne de
+  base à 11 pixels sous le haut de la cellule), jusqu'aux boutons ; chaque bouton a son caractère de Marlett (`r`
+  fermer, `0` réduire, `1` agrandir, `2` restaurer), monochrome, dans son carré moins un pixel, d'une cellule de sa
+  hauteur, en `COLOR_BTNTEXT` ; réduire ou agrandir sans le style qui le permet est grisé (une ombre en
+  `COLOR_BTNHIGHLIGHT` décalée d'un pixel, puis `COLOR_BTNSHADOW`).
+
+Sur la capture du scénario `gui` : « Visible », « Clipper », « Striped », « Plain » dans leur titre, les trois
+boutons avec leur symbole. `GetSystemMetrics` n'a pas changé : les métriques de l'étape 2 supposaient déjà ces
+polices (largeur moyenne du titre 6).
+
+Ce qui manque : les polices d'un LOGFONT quelconque (correspondance des noms et des graisses, `FontSubstitutes`), les
+objets police de GDI (NtGdiHfontCreate, SelectObject), ExtTextOut, DrawText, GetTextExtentPoint32, GetTextMetrics,
+GetCharWidth, le crénage, le hinting, ClearType ; l'icône du titre (icônes) ; le titre d'une fenêtre active (pas de
+fenêtre active : tous les cadres sont inactifs, étape 6). `DFCS_INACTIVE` du bouton fermer (`CS_NOCLOSE`, menu
+système) n'est pas suivi.
+
+Tests : hôte (`glyph` : formes de couverture connue, polices de ReactOS si présentes ; `win32k::font` : métriques,
+« ... », Marlett monochrome ; `gdi::dib` : mélange coupé ; `nonclient` : texte placé, rien au-dessus des capitales ni
+sous la ligne de base, couleurs active et inactive, titre long fini par des points avant les boutons, symboles des
+trois boutons, bouton grisé) ; 7 mutations du placement, des couleurs, du grisé, du mélange et des points, toutes
+tuées ; le scénario `gui` sur les deux CPU, avec 3 pixels de plus sur la capture (le `l` de « Visible », sous sa
+ligne de base, le centre de la croix) et le pixel de la face du bouton fermer déplacé à côté de la croix.
+

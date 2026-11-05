@@ -266,6 +266,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   InvalidateRgn, ValidateRgn, GetUpdateRgn ; pas encore le texte). `syscall-gen` suit la variante
   publiée de ReactOS (`DBG` défini) et vérifie les stubs de `ntdll`, `user32`, `gdi32` quand l'espace utilisateur est
   là.
+  M6, étape 11 (le texte, ADR-013) : `libs/glyph` (`ttf-parser` 0.21, rastériseur en virgule fixe, niveaux de gris,
+  métriques de GDI), polices de ReactOS dans `WINDOWS\FONTS` installées au démarrage (`userland::install_fonts`),
+  `win32k::font` (texte en glyphes, « ... », cache), `Op::Glyph` ; le titre des fenêtres en Tahoma gras et les symboles
+  Marlett des boutons (`nonclient`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

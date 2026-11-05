@@ -19,6 +19,9 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
+- Le texte (M6, étape 11) : sur `claude/new-session-696xfc`, partie de `main` après la fusion de #54. Une branche
+  locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
+  à supprimer.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
   chacune par-dessus la précédente, `claude/m5-mm` (l'étape 3), `claude/m5-boot` (l'étape 4), `claude/m5-services`
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
@@ -363,9 +366,14 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      NtUserGetWindowDC, ReleaseDC (`ONEPARAM_ROUTINE_RELEASEDC`), DeleteDC, NtGdiCreateRectRgn, NtGdiCombineRgn,
      NtGdiGetRgnBox, NtGdiExtSelectClipRgn, NtUserInvalidateRgn, ValidateRgn (NtUserCallHwndParamLock),
      NtUserGetUpdateRgn, NtUserRedrawWindow avec une région ;
-   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : le texte (polices, ADR-013 acceptée : `ttf-parser`,
-     rastériseur maison en virgule fixe, niveaux de gris, polices libres de ReactOS ; d'abord le titre des fenêtres
-     dessiné par le noyau et les symboles de Marlett), les contrôles et
+   - [x] le texte du titre et les symboles des boutons (M6, étape 11, ADR-013) : `libs/glyph` (`ttf-parser` 0.21,
+     rastériseur en virgule fixe 16.16, niveaux de gris, sans hinting ; métriques de GDI), les polices sur le disque
+     (`WINDOWS\FONTS` : Tahoma, Tahoma gras, Marlett ; `userland::install_fonts`), `win32k::font` (texte mis en
+     glyphes, « ... », monochrome, cache), `Op::Glyph` et `Bitmap::blend_coverage`, le titre (UserDrawCaptionText) et
+     les symboles Marlett des boutons (UITOOLS95_DrawFrameCaption, grisés sans leur style) dans `nonclient` ;
+   - **la suite, côté affichage** (le chemin critique du M5 et du M6) : le texte des clients (polices d'un LOGFONT et
+     correspondance des noms, `FontSubstitutes` ; objets police de GDI, NtGdiHfontCreate, SelectObject ; ExtTextOut,
+     GetTextExtentPoint32, GetTextMetrics ; DrawText est dans `user32`), puis les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
@@ -417,7 +425,11 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
-- Peinture du cadre (M6, étape 6) : pas de WM_PAINT du client (la zone cliente est effacée : étape 7), ni texte, ni icône,
+- Texte du titre (M6, étape 11) : sans hinting (ADR-013 : niveaux de gris à la place) ; avances arrondies au pixel
+  par glyphe, sans crénage ; le cache des glyphes se vide en entier au-delà de 1024 ; une police installée est lue
+  (`Font::parse`) à chaque texte ; `DFCS_INACTIVE` du bouton fermer (`CS_NOCLOSE`, menu système) non suivi ; le titre
+  n'a pas encore d'icône devant lui (il commencera plus à droite avec elle).
+- Peinture du cadre (M6, étape 6) : pas de WM_PAINT du client (la zone cliente est effacée : étape 7), ni icône,
   ni barres de défilement ; tout cadre est inactif ; une sœur découverte attend sa prochaine invalidation ; pas de
   copie des bits valides (une fenêtre déplacée est repeinte entière) ; le dégradé n'a de spécification que ses
   bouts (le moteur de ReactOS n'est pas dans les sources épinglées) ; ôter le test de visibilité de WM_NCPAINT ne
