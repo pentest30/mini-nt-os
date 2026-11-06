@@ -211,13 +211,16 @@ notre chargeur depuis sa vraie ESP, et le noyau monte la partition Basic
 Data sur le même disque. Deux démarrages vérifient la persistance d'un
 fichier, les deux GPT et le volume système avec `fsck.vfat`, sur AMD et Intel.
 
-Il s'agit d'un constructeur d'image côté hôte, pas encore d'un installateur
-en mode utilisateur capable de choisir et d'effacer un disque dans Mino.
-L'écriture sur un périphérique existant, les interfaces NT de disque et les
-IOCTL, puis la copie avec progression et reprise restent à faire. La première
-interface native, volontairement simulée et incapable d'écrire un disque,
-est décrite dans [`install-ui.md`](install-ui.md). Le brief visuel réutilisable
-se trouve dans [`design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
+Il s'agit d'un constructeur d'image côté hôte. Le premier contrat noyau de
+l'installateur en mode utilisateur existe maintenant :
+`IOCTL_MINO_SETUP_QUERY` rend en lecture seule un disque ATA secondaire sûr,
+sa capacité et un plan GPT/FAT immuable. Le média primaire et le disque qui
+porte le système courant sont exclus ; la géométrie de chaque volume est
+validée par `fatfs::format`. Aucune commande d'écriture, de verrouillage ou
+de démontage n'est encore exposée. La copie avec progression et reprise reste
+à faire. L'interface native est décrite dans
+[`install-ui.md`](install-ui.md) et le brief visuel réutilisable dans
+[`design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
 
 
 Validation de cette étape : `cargo xtask lint` propre, 740 tests hôte et

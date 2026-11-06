@@ -40,6 +40,9 @@
 //!   a file attached as the master of the secondary IDE channel, which the
 //!   boots share; after the last one, `fsck.vfat -n` must find it clean
 //!   (skipped, with a warning, without dosfstools).
+//! - `disk = target`: attaches a new, blank 96 MiB secondary ATA disk. It is
+//!   never copied from the ramdisk and is not checked as a FAT volume; setup
+//!   scenarios use it as a non-system installation candidate.
 //! - `boots`: how many times QEMU boots (default 1). Every boot but the last
 //!   must end with QEMU (the kernel resets the machine, and `-no-reboot`
 //!   makes QEMU exit); the `expect` markers are looked for in all the serial
@@ -78,6 +81,8 @@ pub struct Scenario {
     pub gpt_disk: bool,
     /// One real GPT image holds the ESP and system volume.
     pub installed_disk: bool,
+    /// Un disque ATA secondaire vide, distinct du système courant.
+    pub target_disk: bool,
     pub boots: u32,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
@@ -198,6 +203,7 @@ impl Scenario {
             system_disk: false,
             gpt_disk: false,
             installed_disk: false,
+            target_disk: false,
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
@@ -232,6 +238,7 @@ impl Scenario {
                 "keys" => sc.keys.push(Keys::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
+                    "target" => sc.target_disk = true,
                     "installed" => {
                         sc.system_disk = true;
                         sc.gpt_disk = true;
@@ -273,6 +280,9 @@ impl Scenario {
         }
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
+        }
+        if sc.system_disk && sc.target_disk {
+            return Err(format!("{name}/{SCENARIO_FILE}: a disk cannot be both system and target"));
         }
         Ok(sc)
     }
@@ -368,6 +378,8 @@ requires = userland
         assert!(gpt.system_disk && gpt.gpt_disk);
         let installed = Scenario::parse("x", "expect = a\ndisk = installed").unwrap();
         assert!(installed.system_disk && installed.gpt_disk && installed.installed_disk);
+        let target = Scenario::parse("x", "expect = a\ndisk = target").unwrap();
+        assert!(target.target_disk && !target.system_disk);
         let keys = Scenario::parse("x", "expect = a\nkeys = [x] ready => shift-h i ret\nkeys = b => a").unwrap();
         let first = Keys { after: "[x] ready".into(), keys: vec!["shift-h".into(), "i".into(), "ret".into()] };
         assert_eq!(keys.keys, [first, Keys { after: "b".into(), keys: vec!["a".into()] }]);

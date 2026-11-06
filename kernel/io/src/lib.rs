@@ -36,6 +36,7 @@ pub mod disk;
 pub mod driver;
 pub mod fat;
 pub mod file;
+pub mod install;
 pub mod irp;
 pub mod name;
 pub mod partition;
@@ -123,6 +124,9 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
             namespace.insert(&link, name, None, permanent)?;
         }
     }
+    install::record_system_disk(
+        volumes.disk.as_ref().and_then(|disk| disk.as_ref().ok()).map(|_| volumes.disk_primary),
+    );
     Ok(volumes)
 }
 

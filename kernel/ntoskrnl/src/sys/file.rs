@@ -5,7 +5,8 @@
 //! disque), le décrire et le
 //! changer (NtQueryInformationFile, NtSetInformationFile), décrire son volume
 //! (NtQueryVolumeInformationFile), énumérer un répertoire
-//! (NtQueryDirectoryFile).
+//! (NtQueryDirectoryFile), et demander l'aperçu en lecture seule du plan
+//! d'installation (NtDeviceIoControlFile).
 //!
 //! Ob trouve le fichier (la procédure *parse* du volume, `io_manager`), puis
 //! `io_manager::check_open` fait ce que ferait le pilote du système de
@@ -41,6 +42,7 @@ use abi::ntstatus::{
     STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
+use abi::setup::{IOCTL_MINO_SETUP_QUERY, SETUP_PREVIEW_SIZE};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -464,6 +466,43 @@ pub(super) fn nt_flush_buffers_file(arguments: &[u32]) -> NtStatus {
         file.flush()?;
         write_iosb(arguments[1], STATUS_SUCCESS, 0)
     })())
+}
+
+/// NtDeviceIoControlFile(FileHandle, Event, ApcRoutine, ApcContext,
+/// IoStatusBlock, IoControlCode, InputBuffer, InputBufferLength,
+/// OutputBuffer, OutputBufferLength). Le premier contrôle privé de Mino
+/// rend uniquement l'inventaire sûr et le plan GPT/FAT de l'installateur ;
+/// il ne possède aucun chemin d'écriture. Le handle d'un répertoire du
+/// volume courant sert d'ancrage avec `FILE_READ_ATTRIBUTES`.
+pub(super) fn nt_device_io_control_file(arguments: &[u32]) -> NtStatus {
+    status(device_io_control_file(arguments))
+}
+
+fn device_io_control_file(arguments: &[u32]) -> Result<(), NtStatus> {
+    let [handle, event, apc_routine, _apc_context, iosb, code, input, input_length, output, output_length] =
+        arguments[..10]
+    else {
+        unreachable!("10 arguments")
+    };
+    if event != 0 || apc_routine != 0 {
+        return Err(STATUS_NOT_IMPLEMENTED);
+    }
+    if code != IOCTL_MINO_SETUP_QUERY || input != 0 || input_length != 0 {
+        return Err(STATUS_INVALID_DEVICE_REQUEST);
+    }
+    if (output_length as usize) < SETUP_PREVIEW_SIZE {
+        return Err(abi::ntstatus::STATUS_BUFFER_TOO_SMALL);
+    }
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    ke::usermem::probe_for_write(u64::from(output), SETUP_PREVIEW_SIZE, 4)?;
+    let _file = super::current_process().handle_table.reference_as::<File>(
+        Handle(handle),
+        &FILE_TYPE,
+        AccessMask(FILE_READ_ATTRIBUTES),
+    )?;
+    let bytes = io_manager::install::preview().to_bytes();
+    ke::usermem::copy_to_user(u64::from(output), &bytes)?;
+    write_iosb(iosb, STATUS_SUCCESS, bytes.len() as u32)
 }
 
 /// Les classes de NtSetInformationFile demandées sans être implémentées.

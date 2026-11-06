@@ -1,15 +1,18 @@
 # First native installer UI milestone: SETUP1.EXE takes the interactive
 # desktop, renders the five-screen flow with custom GDI controls, and uses
-# the keyboard path from main. It deliberately simulates installation: no
-# disk writes are issued. The path exercises Tab/Back, Escape, confirmation,
-# the five reported stages and the verified completion screen.
+# the keyboard path from main. A blank secondary ATA disk feeds the real
+# read-only kernel plan; execution remains simulated and issues no disk
+# writes. The path exercises Tab/Back, Escape, confirmation, the five
+# reported stages and the verified completion screen.
 features = test-smss
 requires = userland, native
 initial-command = SETUP1.EXE
+disk = target
 cpus = default, intel
 timeout = 120
 
 expect = [setup] screen welcome
+expect = [setup] backend target 2: 96 MiB; plan EFI 40 MiB, system 54 MiB; token
 expect = [setup] focus back
 expect = [setup] back to welcome
 expect = [setup] screen disk 2

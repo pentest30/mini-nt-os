@@ -321,10 +321,19 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             println!("xtask: boot {label}");
             let run_dir = ws.target.join("xtask").join("boot").join(format!("{}-{}", sc.name, cpu.name()));
             let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &extra_files)?;
-            // The system disk starts as a copy of the ramdisk's image.
-            let system_disk = sc.system_disk.then(|| run_dir.join("c.img"));
-            if let Some(image) = &system_disk {
-                if sc.installed_disk {
+            // A system disk starts as the ramdisk (or an installed image). A
+            // setup target is a distinct blank secondary ATA disk.
+            let attached_disk = (sc.system_disk || sc.target_disk).then(|| run_dir.join("c.img"));
+            if let Some(image) = &attached_disk {
+                if sc.target_disk {
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(image)
+                        .map_err(|e| format!("{}: {e}", image.display()))?;
+                    file.set_len(96 * 1024 * 1024).map_err(|e| format!("{}: {e}", image.display()))?;
+                } else if sc.installed_disk {
                     install::create(&esp, image)?;
                 } else if sc.gpt_disk {
                     partition::create(&esp.join("fat.img"), image)?;
@@ -338,11 +347,11 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 cpu,
                 memory_mb: qemu::DEFAULT_MEMORY_MB,
                 data_dir: None,
-                boot_disk: if sc.installed_disk { system_disk.clone() } else { None },
-                system_disk: if sc.installed_disk { None } else { system_disk.clone() },
+                boot_disk: if sc.installed_disk { attached_disk.clone() } else { None },
+                system_disk: if sc.installed_disk { None } else { attached_disk.clone() },
             };
             let mut outcome = qemu::boot_and_watch(&machine, &options, sc, timeout.unwrap_or(sc.timeout), &run_dir)?;
-            if let (true, Some(image)) = (outcome.passed, &system_disk) {
+            if let (true, true, Some(image)) = (outcome.passed, sc.system_disk, &attached_disk) {
                 let check_image = if sc.gpt_disk { Some(partition::extract(image)?) } else { None };
                 match qemu::fsck(check_image.as_deref().unwrap_or(image)) {
                     None => println!(

@@ -119,6 +119,7 @@ name = "io-manager"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "fatfs",
  "gpt",
  "hal",
  "ke",

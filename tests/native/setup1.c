@@ -5,10 +5,9 @@
  * Mino's win32k and implements the five-screen installer flow with custom
  * GDI controls and keyboard navigation.
  *
- * Installation is deliberately simulated here: the first real write is a
- * separate privileged-backend milestone. The review screen is therefore
- * the last confirmation, and the serial log identifies the boundary where
- * destructive writes will begin. No disk is modified by this program.
+ * The read-only privileged backend now supplies a real ATA target and an
+ * immutable GPT/FAT plan through NtDeviceIoControlFile. Execution remains
+ * deliberately disabled: no disk is modified by this program.
  *
  * Built by `cargo xtask` without a C runtime: -nostdlib, entry point
  * GuiStartup.
@@ -16,6 +15,7 @@
 
 typedef unsigned short WCHAR;
 typedef unsigned short ATOM;
+typedef unsigned short USHORT;
 typedef unsigned char BYTE;
 typedef unsigned int UINT;
 typedef unsigned long DWORD;
@@ -31,11 +31,53 @@ typedef void *HGDIOBJ;
 typedef void *HWINSTA;
 typedef void *HDESK;
 typedef void *HKL;
+typedef void *HANDLE;
 typedef unsigned int WPARAM;
 typedef long LPARAM;
 typedef long LRESULT;
 typedef DWORD COLORREF;
 typedef LRESULT(__stdcall *WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+
+typedef struct {
+    USHORT length;
+    USHORT maximum_length;
+    WCHAR *buffer;
+} UNICODE_STRING;
+
+typedef struct {
+    DWORD length;
+    HANDLE root_directory;
+    UNICODE_STRING *object_name;
+    DWORD attributes;
+    void *security_descriptor;
+    void *security_quality_of_service;
+} OBJECT_ATTRIBUTES;
+
+typedef struct {
+    LONG status;
+    DWORD information;
+} IO_STATUS_BLOCK;
+
+/* abi::setup::SetupPreview: only 32-bit words, including split u64 values. */
+typedef struct {
+    DWORD version;
+    DWORD state;
+    DWORD disk_number;
+    DWORD disk_flags;
+    DWORD sector_size;
+    DWORD total_low;
+    DWORD total_high;
+    DWORD token_low;
+    DWORD token_high;
+    DWORD esp_first_low;
+    DWORD esp_first_high;
+    DWORD esp_sectors_low;
+    DWORD esp_sectors_high;
+    DWORD system_first_low;
+    DWORD system_first_high;
+    DWORD system_sectors_low;
+    DWORD system_sectors_high;
+} SETUP_PREVIEW;
 
 typedef struct {
     UINT cbSize;
@@ -85,6 +127,13 @@ typedef struct {
 #define TRUE 1
 #define FALSE 0
 #define MAXIMUM_ALLOWED 0x02000000
+#define FILE_READ_ATTRIBUTES 0x00000080
+#define FILE_SHARE_ALL 0x00000007
+#define FILE_DIRECTORY_FILE 0x00000001
+#define OBJ_CASE_INSENSITIVE 0x00000040
+#define IOCTL_MINO_SETUP_QUERY 0x80006000
+#define SETUP_READY 0
+#define SETUP_DISK_CANDIDATE 1
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
 #define WS_VISIBLE 0x10000000
 #define COLOR_WINDOW 5
@@ -121,8 +170,21 @@ static int focused_action = 1;
 static int disk_visits;
 static int review_visits;
 static int progress;
+static BOOL backend_ready;
+static DWORD target_mib;
+static DWORD esp_mib;
+static DWORD system_mib;
+static WCHAR target_size_text[32] = L"Unavailable";
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+
+__declspec(dllimport) LONG __stdcall NtClose(HANDLE handle);
+__declspec(dllimport) LONG __stdcall NtDeviceIoControlFile(HANDLE file, HANDLE event, void *apc_routine,
+                                                           void *apc_context, IO_STATUS_BLOCK *iosb, DWORD code,
+                                                           void *input, DWORD input_length, void *output,
+                                                           DWORD output_length);
+__declspec(dllimport) LONG __stdcall NtOpenFile(HANDLE *file, DWORD access, OBJECT_ATTRIBUTES *attributes,
+                                                IO_STATUS_BLOCK *iosb, DWORD share, DWORD options);
 
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
@@ -177,6 +239,81 @@ void *memcpy(void *destination, const void *source, unsigned int count)
     while (count--)
         *to++ = *from++;
     return destination;
+}
+
+static void format_mib(WCHAR *out, DWORD value, const WCHAR *suffix)
+{
+    WCHAR reverse[10];
+    unsigned int count = 0;
+    unsigned int index;
+
+    do {
+        reverse[count++] = (WCHAR)(L'0' + value % 10);
+        value /= 10;
+    } while (value && count < 10);
+    index = 0;
+    while (count)
+        out[index++] = reverse[--count];
+    while (*suffix)
+        out[index++] = *suffix++;
+    out[index] = 0;
+}
+
+static unsigned int wide_length(const WCHAR *text)
+{
+    unsigned int length = 0;
+    while (text[length])
+        ++length;
+    return length;
+}
+
+static void query_install_backend(void)
+{
+    static WCHAR root_name[] = L"\\GLOBAL??\\C:\\";
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES attributes;
+    IO_STATUS_BLOCK iosb;
+    SETUP_PREVIEW preview;
+    HANDLE root = 0;
+    LONG status;
+
+    memset(&name, 0, sizeof name);
+    memset(&attributes, 0, sizeof attributes);
+    memset(&iosb, 0, sizeof iosb);
+    memset(&preview, 0, sizeof preview);
+    name.length = (USHORT)(wide_length(root_name) * sizeof(WCHAR));
+    name.maximum_length = name.length + sizeof(WCHAR);
+    name.buffer = root_name;
+    attributes.length = sizeof attributes;
+    attributes.object_name = &name;
+    attributes.attributes = OBJ_CASE_INSENSITIVE;
+    status = NtOpenFile(&root, FILE_READ_ATTRIBUTES, &attributes, &iosb, FILE_SHARE_ALL, FILE_DIRECTORY_FILE);
+    if (status < 0) {
+        DbgPrint("[setup] backend open failed: %08lx\n", status);
+        return;
+    }
+    status = NtDeviceIoControlFile(root, 0, 0, 0, &iosb, IOCTL_MINO_SETUP_QUERY,
+                                   0, 0, &preview, sizeof preview);
+    NtClose(root);
+    if (status < 0) {
+        DbgPrint("[setup] backend query failed: %08lx\n", status);
+        return;
+    }
+    if (preview.version != 1 || preview.state != SETUP_READY ||
+        !(preview.disk_flags & SETUP_DISK_CANDIDATE) || preview.total_high ||
+        preview.esp_sectors_high || preview.system_sectors_high) {
+        DbgPrint("[setup] backend no safe target: state %lu flags %08lx\n",
+                 preview.state, preview.disk_flags);
+        return;
+    }
+    target_mib = preview.total_low / 2048;
+    esp_mib = preview.esp_sectors_low / 2048;
+    system_mib = preview.system_sectors_low / 2048;
+    format_mib(target_size_text, target_mib, L" MiB   Selected");
+    backend_ready = TRUE;
+    DbgPrint("[setup] backend target %lu: %lu MiB; plan EFI %lu MiB, system %lu MiB; token %08lx%08lx\n",
+             preview.disk_number, target_mib, esp_mib, system_mib,
+             preview.token_high, preview.token_low);
 }
 
 static RECT rect(LONG left, LONG top, LONG right, LONG bottom)
@@ -272,17 +409,21 @@ static void draw_welcome(HDC dc)
 static void draw_disk(HDC dc)
 {
     heading(dc, L"Select the installation disk",
-            L"Guided setup will use the whole disk. The selected disk is a development target exposed by QEMU.");
+            L"Guided setup will use the whole disk. The kernel excludes the running system and boot media.");
     fill(dc, rect(218, 190, 724, 272), RGB(248, 248, 246));
     border(dc, rect(218, 190, 724, 272), RGB(46, 96, 166));
     fill(dc, rect(218, 190, 224, 272), RGB(46, 96, 166));
-    text(dc, L"ATA Disk 0", rect(244, 204, 520, 228), RGB(24, 31, 40), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"84 MiB   Selected", rect(540, 204, 700, 228), RGB(46, 96, 166), DT_LEFT | DT_SINGLELINE);
+    text(dc, backend_ready ? L"ATA secondary master" : L"No safe target", rect(244, 204, 520, 228),
+         RGB(24, 31, 40), DT_LEFT | DT_SINGLELINE);
+    text(dc, target_size_text, rect(540, 204, 700, 228),
+         backend_ready ? RGB(46, 96, 166) : RGB(145, 42, 42), DT_LEFT | DT_SINGLELINE);
     fill(dc, rect(244, 240, 332, 254), RGB(103, 147, 203));
     fill(dc, rect(332, 240, 692, 254), RGB(74, 116, 174));
     text(dc, L"EFI System", rect(244, 278, 360, 302), RGB(65, 70, 76), DT_LEFT | DT_SINGLELINE);
     text(dc, L"Mino System", rect(390, 278, 530, 302), RGB(65, 70, 76), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"No write occurs on this screen.", rect(218, 336, 724, 364), RGB(84, 89, 95), DT_LEFT | DT_SINGLELINE);
+    text(dc, backend_ready ? L"Read-only kernel plan ready; no write occurs on this screen."
+                           : L"Connect an unmounted secondary ATA target to continue.",
+         rect(218, 336, 724, 364), RGB(84, 89, 95), DT_LEFT | DT_SINGLELINE);
     draw_navigation(dc, TRUE, L"Continue");
 }
 
@@ -292,7 +433,7 @@ static void draw_review(HDC dc)
             L"Confirm the target and partition plan. Installation begins only when you activate Install.");
     fill(dc, rect(218, 190, 724, 264), RGB(255, 246, 218));
     border(dc, rect(218, 190, 724, 264), RGB(181, 137, 38));
-    text(dc, L"All existing data on ATA Disk 0 will be removed.", rect(238, 208, 704, 244),
+    text(dc, L"All existing data on the secondary ATA target will be removed.", rect(238, 208, 704, 244),
          RGB(91, 61, 8), DT_LEFT | DT_WORDBREAK);
     text(dc, L"Before", rect(218, 286, 320, 310), RGB(73, 78, 84), DT_LEFT | DT_SINGLELINE);
     text(dc, L"Existing disk contents", rect(344, 286, 704, 310), RGB(24, 31, 40), DT_LEFT | DT_SINGLELINE);
@@ -323,12 +464,12 @@ static void draw_install(HDC dc)
 static void draw_complete(HDC dc)
 {
     heading(dc, L"Mino is ready",
-            L"Setup verified the partition layout and installed files. The development simulation completed successfully.");
+            L"Setup verified the immutable kernel plan. The write engine remains disabled in this development milestone.");
     fill(dc, rect(218, 196, 724, 300), RGB(229, 244, 234));
     border(dc, rect(218, 196, 724, 300), RGB(63, 132, 86));
     fill(dc, rect(240, 220, 268, 248), RGB(46, 129, 82));
     text(dc, L"Verified", rect(286, 218, 690, 244), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"No physical disk was modified by this UI milestone.", rect(286, 250, 690, 280),
+    text(dc, L"No physical disk was modified; only the target and plan were queried.", rect(286, 250, 690, 280),
          RGB(53, 72, 59), DT_LEFT | DT_SINGLELINE);
     draw_navigation(dc, FALSE, L"Restart");
 }
@@ -417,8 +558,10 @@ static void activate(HWND window)
             focused_action = 1;
             DbgPrint("[setup] back to welcome\n");
             repaint(window);
-        } else {
+        } else if (backend_ready) {
             set_screen(window, SCREEN_REVIEW);
+        } else {
+            DbgPrint("[setup] continue blocked: no safe target\n");
         }
         break;
     case SCREEN_REVIEW:
@@ -502,6 +645,7 @@ DWORD __stdcall GuiStartup(void)
 
     if (!take_desktop())
         ExitProcess(1);
+    query_install_backend();
     if (!LoadKeyboardLayoutW(L"00000409", KLF_ACTIVATE))
         ExitProcess(2);
 

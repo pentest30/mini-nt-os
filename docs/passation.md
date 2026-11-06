@@ -101,11 +101,17 @@ jour à chaque commit qui change l'état.
   revue avant la limite d'écriture, cinq étapes de progression et écran de
   fin vérifié. Le scénario `installer-ui` exerce les retours et la progression
   au clavier et vérifie l'écran ; l'installation est explicitement simulée et
-  le programme n'ouvre aucun disque. Détails et plan dans
+  le programme n'écrit aucun disque. **Premier contrat noyau branché** :
+  `NtDeviceIoControlFile` et `IOCTL_MINO_SETUP_QUERY` rendent à l'UI la cible
+  ATA secondaire de 96 Mio, un plan immuable (ESP 40 Mio, système 54 Mio) et
+  son jeton. `io_manager::install` refuse le disque système et le média de
+  démarrage, valide les deux géométries avec `fatfs::format`, et ne contient
+  aucune commande d'écriture. Le scénario `disk = target` fournit un disque
+  vierge distinct ; `installer-ui` passe sur AMD et Intel. Détails et plan dans
   [`compat/install-ui.md`](compat/install-ui.md).
-  Restent les interfaces NT de disque, verrouillage/démontage, IOCTL,
-  progression et reprise du moteur (partie proposée de l'ADR-022), son
-  branchement à l'interface, puis la souris.
+  Restent le verrouillage/démontage, l'IOCTL d'exécution avec revalidation du
+  jeton, la progression et la reprise du moteur (partie proposée de
+  l'ADR-022), puis la souris.
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
