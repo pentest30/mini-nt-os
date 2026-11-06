@@ -75,7 +75,9 @@ pub struct Node {
 }
 
 impl Node {
-    fn from_entry(entry: &DirEntry, at: EntryRef) -> Self {
+    /// Ce que dit `entry`, dont l'entrée est en `at` (`None` : une description seule,
+    /// qui ne relit rien).
+    fn from_entry(entry: &DirEntry, at: Option<EntryRef>) -> Self {
         let directory = entry.attr & 0x10 != 0;
         let attributes = u32::from(entry.attr & 0x37);
         Self {
@@ -86,9 +88,30 @@ impl Node {
             last_access_time: nt_time(entry.access_date, 0, 0),
             last_write_time: nt_time(entry.write_date, entry.write_time, 0),
             first_cluster: entry.first_cluster,
-            entry: Some(at),
+            entry: at,
         }
     }
+}
+
+/// Une entrée d'un répertoire, telle que la décrit NtQueryDirectoryFile
+/// ([`Volume::entries`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listed {
+    /// Son nom long s'il en a un, sinon son nom 8.3.
+    pub name: String,
+    /// Son nom 8.3, s'il a aussi un nom long.
+    pub short_name: Option<String>,
+    /// La place de son entrée dans le répertoire, en octets (`FileIndex`).
+    pub offset: u32,
+    pub directory: bool,
+    /// `FILE_ATTRIBUTE_*`.
+    pub attributes: u32,
+    /// En octets ; 0 pour un répertoire.
+    pub size: u32,
+    /// En 100 ns depuis 1601 ; 0 si FAT ne la connaît pas.
+    pub creation_time: u64,
+    pub last_access_time: u64,
+    pub last_write_time: u64,
 }
 
 /// Les caractères qu'aucun nom de fichier ne peut tenir.
@@ -159,7 +182,7 @@ impl Volume {
                 return Err(STATUS_OBJECT_PATH_NOT_FOUND);
             }
             node = match self.fat.find_entry(node.first_cluster, name) {
-                Ok((entry, at)) => Node::from_entry(&entry, at),
+                Ok((entry, at)) => Node::from_entry(&entry, Some(at)),
                 Err(FatError::NotFound | FatError::Unsupported | FatError::PathFormat) => return Err(missing),
                 Err(error) => return Err(device_error(error)),
             };
@@ -190,11 +213,47 @@ impl Volume {
             .collect())
     }
 
+    /// Ce que tient le répertoire `directory`, dans l'ordre de ses entrées,
+    /// décrit pour NtQueryDirectoryFile : `.` et `..` compris (un
+    /// sous-répertoire de FAT les tient ; la racine, non), sans le nom du
+    /// volume. `STATUS_NOT_A_DIRECTORY` pour un fichier.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn entries(&self, directory: &Node) -> Result<Vec<Listed>, NtStatus> {
+        if !directory.directory {
+            return Err(STATUS_NOT_A_DIRECTORY);
+        }
+        let entries = {
+            let _guard = self.lock.lock();
+            self.fat.dir_entries(directory.first_cluster).map_err(device_error)?
+        };
+        Ok(entries
+            .into_iter()
+            .filter(|listed| listed.attr & 0x08 == 0)
+            .map(|listed| {
+                // What its entry says, as `lookup` would give it.
+                let node = Node::from_entry(&listed.entry, None);
+                Listed {
+                    name: listed.name,
+                    short_name: listed.short_name,
+                    offset: listed.offset,
+                    directory: node.directory,
+                    attributes: node.attributes,
+                    size: node.size,
+                    creation_time: node.creation_time,
+                    last_access_time: node.last_access_time,
+                    last_write_time: node.last_write_time,
+                }
+            })
+            .collect())
+    }
+
     /// Ce que dit maintenant l'entrée de `node`.
     fn current_locked(&self, node: &Node) -> Result<Node, NtStatus> {
         let Some(at) = node.entry else { return Ok(*node) };
         let entry = self.fat.read_entry(at).map_err(device_error)?;
-        Ok(Node::from_entry(&DirEntry::parse(&entry), at))
+        Ok(Node::from_entry(&DirEntry::parse(&entry), Some(at)))
     }
 
     /// Ce que dit maintenant l'entrée de `node` : sa taille après des
@@ -311,7 +370,7 @@ impl Volume {
             self.fat.add_entry(directory.first_cluster, &make_entry(&short, attr, 0, 0), *hint).map_err(device_error)?
         };
         let entry = self.fat.read_entry(at).map_err(device_error)?;
-        Ok(Node::from_entry(&DirEntry::parse(&entry), at))
+        Ok(Node::from_entry(&DirEntry::parse(&entry), Some(at)))
     }
 }
 

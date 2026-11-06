@@ -15,6 +15,10 @@
 //! redemande au volume sa taille (`Volume::current`) : tous les fichiers
 //! ouverts sur lui la voient pareil.
 //!
+//! Un répertoire ouvert garde aussi où en est son énumération
+//! ([`File::query_directory`], NtQueryDirectoryFile) : l'expression de sa
+//! première requête et la place de la prochaine entrée.
+//!
 //! Pas encore : les IRP (les lectures et les écritures vont droit au volume,
 //! synchrones), le partage (IoCheckShareAccess), la suppression,
 //! l'ouverture d'un volume comme fichier.
@@ -29,6 +33,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use abi::file::DirectoryEntry;
 use abi::file::{
     FileBasicInformation, FileNetworkOpenInformation, FileStandardInformation, FILE_ALL_ACCESS, FILE_APPEND_DATA,
     FILE_ATTRIBUTE_READONLY, FILE_CREATE, FILE_DIRECTORY_FILE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
@@ -37,13 +42,16 @@ use abi::file::{
     FILE_SYNCHRONOUS_IO_NONALERT, FILE_WRITE_DATA,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_FILE_CORRUPT_ERROR, STATUS_FILE_IS_A_DIRECTORY,
-    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_NOT_A_DIRECTORY, STATUS_OBJECT_NAME_COLLISION,
-    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_TYPE_MISMATCH,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_FILE_CORRUPT_ERROR, STATUS_FILE_IS_A_DIRECTORY,
+    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_PARAMETER, STATUS_NOT_A_DIRECTORY, STATUS_NO_MORE_FILES,
+    STATUS_NO_SUCH_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_TYPE_MISMATCH,
+    STATUS_SUCCESS,
 };
+use hal::sync::KSpinLock;
 use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef, ObjectType, Parsed};
 
-use crate::volume::{Node, Volume};
+use crate::directory;
+use crate::volume::{Listed, Node, Volume};
 
 /// FILE_ALL_ACCESS.
 pub const FILE_ALL_ACCESS_MASK: AccessMask = AccessMask(FILE_ALL_ACCESS);
@@ -73,6 +81,19 @@ pub struct File {
     synchronous: AtomicBool,
     /// CurrentByteOffset.
     position: AtomicU64,
+    /// Où en est l'énumération d'un répertoire ouvert.
+    search: KSpinLock<Search>,
+}
+
+/// Où en est l'énumération d'un répertoire ouvert (ce que le CCB d'un pilote
+/// de système de fichiers en garde).
+#[derive(Default)]
+struct Search {
+    /// Son expression, en majuscules : celle de la première requête, `*`
+    /// sans nom ; `None` avant la première.
+    expression: Option<Vec<u16>>,
+    /// La place, dans le répertoire, de la première entrée à considérer.
+    resume: u32,
 }
 
 impl File {
@@ -123,7 +144,14 @@ impl File {
     }
 
     fn create(volume: Arc<Volume>, path: String, opened: Node) -> Arc<Object<File>> {
-        let file = File { volume, path, opened, synchronous: AtomicBool::new(false), position: AtomicU64::new(0) };
+        let file = File {
+            volume,
+            path,
+            opened,
+            synchronous: AtomicBool::new(false),
+            position: AtomicU64::new(0),
+            search: KSpinLock::new(Search::default()),
+        };
         create_object(&FILE_TYPE, file)
     }
 
@@ -234,6 +262,86 @@ impl File {
     /// <= DISPATCH_LEVEL.
     pub fn list(&self) -> Result<Vec<String>, NtStatus> {
         self.volume.list(&self.opened)
+    }
+
+    /// Énumère ce répertoire (NtQueryDirectoryFile) : les entrées suivantes
+    /// qui répondent à son expression, dans un tampon de `length` octets de
+    /// la classe `class` (`abi::file::directory_entry_layout`), une seule si
+    /// `single`, depuis la première si `restart`. L'expression est
+    /// `expression` à la première requête (`*` sans elle, ou vide), et reste
+    /// celle-là ensuite ; un nom y répond par son nom long ou par son nom
+    /// 8.3. Rend les octets et `STATUS_SUCCESS`, ou `STATUS_BUFFER_OVERFLOW`
+    /// si la première entrée est coupée.
+    ///
+    /// Erreurs : `STATUS_INVALID_PARAMETER` pour un fichier ;
+    /// `STATUS_NO_SUCH_FILE` si la première requête ne trouve rien,
+    /// `STATUS_NO_MORE_FILES` (un avertissement) si une autre ne trouve plus
+    /// rien ; celles du volume.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn query_directory(
+        &self,
+        class: u32,
+        length: usize,
+        single: bool,
+        expression: Option<&[u16]>,
+        restart: bool,
+    ) -> Result<(Vec<u8>, NtStatus), NtStatus> {
+        if !self.opened.directory {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        let (expression, resume, first) = {
+            let mut search = self.search.lock();
+            let first = search.expression.is_none();
+            if first {
+                search.expression = Some(match expression {
+                    Some(expression) if !expression.is_empty() => directory::upcase(expression),
+                    _ => vec![u16::from(b'*')],
+                });
+            }
+            if restart {
+                search.resume = 0;
+            }
+            (search.expression.clone().unwrap_or_default(), search.resume, first)
+        };
+        let cluster = u64::from(self.volume.cluster_bytes());
+        let entries = self.volume.entries(&self.opened)?;
+        let matching: Vec<(&Listed, Vec<u16>, Vec<u16>)> = entries
+            .iter()
+            .filter(|listed| listed.offset >= resume)
+            .map(|listed| {
+                let name: Vec<u16> = listed.name.encode_utf16().collect();
+                let short: Vec<u16> = listed.short_name.as_deref().unwrap_or("").encode_utf16().collect();
+                (listed, name, short)
+            })
+            .filter(|(_, name, short)| {
+                directory::is_name_in_expression(&expression, name)
+                    || (!short.is_empty() && directory::is_name_in_expression(&expression, short))
+            })
+            .collect();
+        let described = matching.iter().map(|(listed, name, short)| {
+            let entry = DirectoryEntry {
+                file_index: listed.offset,
+                creation_time: listed.creation_time,
+                last_access_time: listed.last_access_time,
+                last_write_time: listed.last_write_time,
+                // FAT has no change time: the last write stands for it.
+                change_time: listed.last_write_time,
+                end_of_file: u64::from(listed.size),
+                allocation_size: u64::from(listed.size).next_multiple_of(cluster),
+                file_attributes: listed.attributes,
+                name,
+                short_name: short,
+            };
+            (listed.offset, entry)
+        });
+        let filled = directory::fill(class, length, single, described, resume);
+        if filled.count == 0 {
+            return Err(if first { STATUS_NO_SUCH_FILE } else { STATUS_NO_MORE_FILES });
+        }
+        self.search.lock().resume = filled.resume;
+        Ok((filled.bytes, if filled.overflow { STATUS_BUFFER_OVERFLOW } else { STATUS_SUCCESS }))
     }
 
     /// Le fichier en entier.

@@ -2,9 +2,11 @@
 //! memory:
 //!
 //! ```text
+//! (volume label MINO)
 //! \BOOT.INI                      "hello"
 //! \WINDOWS\SYSTEM32\NTDLL.DLL    600 bytes, two clusters, written 2004-08-04 12:34:56
 //! \WINDOWS\SYSTEM32\CONFIG\      empty
+//! \WINDOWS\SYSTEM32\advapi32_vista.dll (ADVAPI~1.DLL)   empty
 //! ```
 
 extern crate std;
@@ -12,6 +14,7 @@ extern crate std;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use abi::file::*;
@@ -73,7 +76,11 @@ fn disk() -> Disk {
             d[at + 32 * i..at + 32 * (i + 1)].copy_from_slice(e);
         }
     };
-    cluster(2, &[entry(b"WINDOWS    ", 0x10, 3, 0), entry(b"BOOT    INI", 0x20, 7, 5)]);
+    // The volume label, then the root's files.
+    cluster(
+        2,
+        &[entry(b"MINO       ", 0x08, 0, 0), entry(b"WINDOWS    ", 0x10, 3, 0), entry(b"BOOT    INI", 0x20, 7, 5)],
+    );
     cluster(
         3,
         &[entry(b".          ", 0x10, 3, 0), entry(b"..         ", 0x10, 0, 0), entry(b"SYSTEM32   ", 0x10, 4, 0)],
@@ -81,6 +88,7 @@ fn disk() -> Disk {
     let mut ntdll = entry(b"NTDLL   DLL", 0x21, 5, NTDLL_SIZE as u32);
     ntdll[22..24].copy_from_slice(&WRITE_TIME.to_le_bytes());
     ntdll[24..26].copy_from_slice(&WRITE_DATE.to_le_bytes());
+    let long_name = crate::fat::long_name_entries("advapi32_vista.dll", b"ADVAPI~1DLL");
     cluster(
         4,
         &[
@@ -88,6 +96,9 @@ fn disk() -> Disk {
             entry(b"..         ", 0x10, 3, 0),
             ntdll,
             entry(b"CONFIG     ", 0x10, 8, 0),
+            long_name[0],
+            long_name[1],
+            entry(b"ADVAPI~1DLL", 0x20, 0, 0),
         ],
     );
     cluster(8, &[entry(b".          ", 0x10, 8, 0), entry(b"..         ", 0x10, 4, 0)]);
@@ -237,9 +248,98 @@ fn a_directory_lists_its_names() {
     let root = volume.root();
     assert_eq!(volume.list(&root).unwrap(), ["WINDOWS", "BOOT.INI"]);
     let system32 = volume.lookup(&root, "WINDOWS\\SYSTEM32").unwrap();
-    assert_eq!(volume.list(&system32).unwrap(), ["NTDLL.DLL", "CONFIG"], "neither . nor ..");
+    assert_eq!(volume.list(&system32).unwrap(), ["NTDLL.DLL", "CONFIG", "advapi32_vista.dll"], "neither . nor ..");
     let config = volume.lookup(&system32, "CONFIG").unwrap();
     assert!(volume.list(&config).unwrap().is_empty(), "an empty directory");
     let ntdll = volume.lookup(&system32, "NTDLL.DLL").unwrap();
     assert_eq!(volume.list(&ntdll), Err(abi::ntstatus::STATUS_NOT_A_DIRECTORY));
+}
+
+/// What an entry of FILE_BOTH_DIR_INFORMATION says: its FileIndex, its
+/// name, its 8.3 name, its attributes, its size and the place it takes.
+type Both = (u32, String, String, u32, u64, u64);
+
+/// The FILE_BOTH_DIR_INFORMATION entries in `bytes`, by their
+/// `NextEntryOffset`.
+fn both_entries(bytes: &[u8]) -> Vec<Both> {
+    let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let long = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+    let text = |at: usize, length: usize| {
+        let units: Vec<u16> =
+            bytes[at..at + length].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        String::from_utf16(&units).unwrap()
+    };
+    let mut found = Vec::new();
+    let mut at = 0usize;
+    loop {
+        let name = text(at + 94, word(at + 60) as usize);
+        let short = text(at + 70, usize::from(bytes[at + 68]));
+        found.push((word(at + 4), name, short, word(at + 56), long(at + 40), long(at + 48)));
+        match word(at) {
+            0 => return found,
+            next => {
+                assert_eq!(next % 8, 0, "entries at multiples of 8");
+                at += next as usize;
+            }
+        }
+    }
+}
+
+/// `pattern` as FindFirstFileExW gives it to the file system.
+fn pattern(text: &str) -> Vec<u16> {
+    text.encode_utf16().collect()
+}
+
+#[test]
+fn a_directory_is_enumerated() {
+    let volume = volume();
+    let query = |file: &File, single, expression: Option<&str>, restart| {
+        let expression = expression.map(pattern);
+        file.query_directory(FILE_BOTH_DIRECTORY_INFORMATION, 4096, single, expression.as_deref(), restart)
+            .map(|(bytes, status)| (both_entries(&bytes), status))
+    };
+    let names = |file: &File, single, expression, restart| {
+        query(file, single, expression, restart)
+            .map(|(entries, _)| entries.into_iter().map(|e| e.1).collect::<Vec<_>>())
+    };
+    let directory = |path| File::open(&volume, path).unwrap();
+
+    // All of it: `.` and `..`, the attributes, the sizes, the 8.3 name of a
+    // long name; then nothing more.
+    let system32 = directory("\\WINDOWS\\SYSTEM32");
+    let (entries, status) = query(&system32, false, None, false).unwrap();
+    assert_eq!(status, STATUS_SUCCESS);
+    let dir = FILE_ATTRIBUTE_DIRECTORY;
+    let expected: [Both; 5] = [
+        (0, ".".into(), "".into(), dir, 0, 0),
+        (32, "..".into(), "".into(), dir, 0, 0),
+        (64, "NTDLL.DLL".into(), "".into(), FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE, 600, 1024),
+        (96, "CONFIG".into(), "".into(), dir, 0, 0),
+        (192, "advapi32_vista.dll".into(), "ADVAPI~1.DLL".into(), FILE_ATTRIBUTE_ARCHIVE, 0, 0),
+    ];
+    assert_eq!(entries, expected);
+    assert_eq!(query(&system32, false, None, false).err(), Some(STATUS_NO_MORE_FILES));
+
+    // One at a time, from the start again.
+    assert_eq!(names(&system32, true, None, true), Ok(vec![".".into()]));
+    assert_eq!(names(&system32, true, None, false), Ok(vec!["..".into()]));
+
+    // `*.dll`: by its long name; `advapi~1.*` by its 8.3 name alone.
+    let dlls = directory("\\WINDOWS\\SYSTEM32");
+    assert_eq!(names(&dlls, true, Some("<.DLL"), true), Ok(vec!["NTDLL.DLL".into()]));
+    assert_eq!(names(&dlls, false, None, false), Ok(vec!["advapi32_vista.dll".into()]));
+    assert_eq!(names(&dlls, false, None, false).err(), Some(STATUS_NO_MORE_FILES));
+    let short = directory("\\WINDOWS\\SYSTEM32");
+    assert_eq!(names(&short, false, Some("advapi~1\"*"), true), Ok(vec!["advapi32_vista.dll".into()]));
+
+    // The expression of the first query stays: a later one is ignored.
+    let ntdll = directory("\\WINDOWS\\SYSTEM32");
+    assert_eq!(names(&ntdll, false, Some("ntdll.dll"), true), Ok(vec!["NTDLL.DLL".into()]));
+    assert_eq!(names(&ntdll, false, Some("CONFIG"), true), Ok(vec!["NTDLL.DLL".into()]));
+
+    // Nothing at the first query; the root, without `.` nor `..`; a file.
+    assert_eq!(query(&directory("\\WINDOWS\\SYSTEM32"), false, Some("nope\"*"), true).err(), Some(STATUS_NO_SUCH_FILE));
+    assert_eq!(names(&directory("\\"), false, Some("*"), true), Ok(vec!["WINDOWS".into(), "BOOT.INI".into()]));
+    let file = directory("\\BOOT.INI");
+    assert_eq!(query(&file, false, None, true).err(), Some(STATUS_INVALID_PARAMETER));
 }

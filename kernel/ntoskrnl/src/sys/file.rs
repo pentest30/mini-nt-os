@@ -4,7 +4,8 @@
 //! l'écrire (NtReadFile, NtWriteFile ; NtFlushBuffersFile vide le cache du
 //! disque), le décrire et le
 //! changer (NtQueryInformationFile, NtSetInformationFile), décrire son volume
-//! (NtQueryVolumeInformationFile).
+//! (NtQueryVolumeInformationFile), énumérer un répertoire
+//! (NtQueryDirectoryFile).
 //!
 //! Ob trouve le fichier (la procédure *parse* du volume, `io_manager`), puis
 //! `io_manager::check_open` fait ce que ferait le pilote du système de
@@ -19,21 +20,22 @@
 //! `STATUS_NOT_IMPLEMENTED`, journalisé une fois), la suppression.
 
 use abi::file::{
+    directory_entry_layout, FILE_APPEND_DATA, FILE_CREATED, FILE_END_OF_FILE_INFORMATION,
+    FILE_ID_BOTH_DIRECTORY_INFORMATION, FILE_ID_FULL_DIRECTORY_INFORMATION, FILE_LIST_DIRECTORY, FILE_READ_DATA,
+    FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
+};
+use abi::file::{
     FileBasicInformation, FileFsDeviceInformation, FileNetworkOpenInformation, FilePositionInformation,
     FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE, FILE_FS_DEVICE_INFORMATION,
     FILE_FS_MAXIMUM_INFORMATION, FILE_MAXIMUM_DISPOSITION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE,
     FILE_OPEN, FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
     FILE_VALID_OPTION_FLAGS,
 };
-use abi::file::{
-    FILE_APPEND_DATA, FILE_CREATED, FILE_END_OF_FILE_INFORMATION, FILE_READ_DATA, FILE_USE_FILE_POINTER_POSITION,
-    FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
-};
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE,
     STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER,
-    STATUS_NOT_IMPLEMENTED, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH,
-    STATUS_SUCCESS,
+    STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND,
+    STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
 use alloc::sync::Arc;
@@ -44,7 +46,7 @@ use io_manager::{File, FILE_TYPE};
 use ke::usermem::UserPtr;
 use ob::{AccessMask, Handle, HandleAttributes, Object};
 
-use super::object::{capture_attributes, give_handle};
+use super::object::{capture_attributes, capture_unicode_string, give_handle};
 
 /// Les classes demandées sans être implémentées.
 static FILE_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationFile");
@@ -416,4 +418,76 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
         }
     }
     write_iosb(iosb, STATUS_SUCCESS, 0)
+}
+
+/// Les classes de NtQueryDirectoryFile demandées sans être implémentées.
+static DIRECTORY_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryDirectoryFile");
+
+/// NtQueryDirectoryFile(FileHandle, Event, ApcRoutine, ApcContext,
+/// IoStatusBlock, FileInformation, Length, FileInformationClass,
+/// ReturnSingleEntry, FileName, RestartScan) : les entrées suivantes du
+/// répertoire ouvert (`FILE_LIST_DIRECTORY`) qui répondent à l'expression de
+/// sa première requête (`io_manager::File::query_directory`), en
+/// FileDirectory, FileFullDirectory, FileBothDirectory ou FileNamesInformation.
+///
+/// Comme le gestionnaire d'E/S d'XP : le bloc d'état et le tampon sondés et
+/// le nom capturé d'abord, puis `STATUS_INFO_LENGTH_MISMATCH` sous la taille
+/// de la classe, puis le handle. Le bloc d'état est écrit pour un succès et
+/// pour les avertissements (`STATUS_BUFFER_OVERFLOW`, la première entrée
+/// coupée ; `STATUS_NO_MORE_FILES`) ; `STATUS_NO_SUCH_FILE` quand la première
+/// requête ne trouve rien, `STATUS_INVALID_PARAMETER` pour un fichier.
+/// FileIdBothDirectory et FileIdFullDirectoryInformation (sans identifiants
+/// de fichiers sur FAT) : `STATUS_NOT_IMPLEMENTED`, journalisé une fois ;
+/// une autre classe : `STATUS_INVALID_INFO_CLASS`. Un événement ou une APC
+/// de fin : `STATUS_NOT_IMPLEMENTED`, comme NtReadFile.
+pub(super) fn nt_query_directory_file(arguments: &[u32]) -> NtStatus {
+    query_directory_file(arguments).unwrap_or_else(|status| status)
+}
+
+fn query_directory_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
+    let [handle, event, apc_routine, _apc_context, iosb, buffer, length, class, single, name, restart] =
+        arguments[..11]
+    else {
+        unreachable!("11 arguments")
+    };
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    ke::usermem::probe_for_write(u64::from(buffer), length as usize, 4)?;
+    let expression = match name {
+        0 => None,
+        address => Some(capture_unicode_string(address)?),
+    };
+    if directory_entry_layout(class).is_some_and(|(_, size)| (length as usize) < size) {
+        return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    let file = super::current_process().handle_table.reference_as::<File>(
+        Handle(handle),
+        &FILE_TYPE,
+        AccessMask(FILE_LIST_DIRECTORY),
+    )?;
+    if event != 0 || apc_routine != 0 {
+        if !ASYNC_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtQueryDirectoryFile with an event or an APC is not implemented");
+        }
+        return Err(STATUS_NOT_IMPLEMENTED);
+    }
+    if directory_entry_layout(class).is_none() {
+        return Err(match class {
+            FILE_ID_BOTH_DIRECTORY_INFORMATION | FILE_ID_FULL_DIRECTORY_INFORMATION => DIRECTORY_CLASSES.report(class),
+            _ => STATUS_INVALID_INFO_CLASS,
+        });
+    }
+    // BOOLEANs: their low byte.
+    let (single, restart) = (single & 0xFF != 0, restart & 0xFF != 0);
+    match file.query_directory(class, length as usize, single, expression.as_deref(), restart) {
+        Ok((bytes, status)) => {
+            ke::usermem::copy_to_user(u64::from(buffer), &bytes)?;
+            write_iosb(iosb, status, bytes.len() as u32)?;
+            Ok(status)
+        }
+        Err(STATUS_NO_MORE_FILES) => {
+            write_iosb(iosb, STATUS_NO_MORE_FILES, 0)?;
+            Err(STATUS_NO_MORE_FILES)
+        }
+        Err(status) => Err(status),
+    }
 }
