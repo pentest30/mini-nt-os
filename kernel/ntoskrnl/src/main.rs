@@ -7105,6 +7105,16 @@ fn install_prepare_self_test() {
     // Le disque ne l'est plus : une seconde préparation est refusée.
     assert_eq!(io_manager::install::prepare(preview.disk_number, preview.plan_token), Err(PrepareError::NotBlank));
     log::info!("[m4] install: prepare: a second pass is refused (not blank)");
+    // Le formatage : les deux volumes du plan en FAT32, vérifiés par le
+    // montage du lecteur FAT du noyau sur chaque vue bornée. Reformatage
+    // toléré : les volumes sont vides à ce stade.
+    let (esp, system) =
+        io_manager::install::format(preview.disk_number, preview.plan_token).expect("the volumes format");
+    log::info!(
+        "[m4] install: format: ESP {} sectors, system {} sectors, FAT32 mounted by the kernel",
+        esp.total_sectors,
+        system.total_sectors
+    );
 }
 
 /// The registry write services from user mode (`cm`, `sys::registry`, M4),

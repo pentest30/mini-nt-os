@@ -146,6 +146,9 @@ typedef struct {
 /* CTL_CODE(0x8000, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS): writes the
  * plan's GPT tables on the target, after the token revalidates it. */
 #define IOCTL_MINO_SETUP_PREPARE 0x8000A004
+/* CTL_CODE(0x8000, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS): formats the
+ * plan's two volumes FAT32, after the prepare — same token. */
+#define IOCTL_MINO_SETUP_FORMAT 0x8000A008
 #define SETUP_READY 0
 #define SETUP_DISK_CANDIDATE 1
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
@@ -511,13 +514,13 @@ static void draw_install(HDC dc)
 
 static void draw_complete(HDC dc)
 {
-    heading(dc, L"GPT partitioning is complete",
-            L"Setup wrote and verified the protective MBR and both GPT copies. Formatting and file copy come next.");
+    heading(dc, L"GPT partitioning and formatting are complete",
+            L"Setup wrote the protective MBR, both GPT copies and the two FAT32 volumes. File copy comes next.");
     fill(dc, rect(218, 150, 724, 266), RGB(235, 247, 238));
     border(dc, rect(218, 150, 724, 266), RGB(63, 132, 86));
     fill(dc, rect(240, 180, 270, 210), RGB(46, 129, 82));
     text(dc, L"Partition table verified", rect(290, 176, 690, 202), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"Partition contents are still untouched; no filesystem was formatted.", rect(290, 214, 690, 248),
+    text(dc, L"Both volumes are FAT32, mounted by the kernel; file copy comes next.", rect(290, 214, 690, 248),
          RGB(53, 72, 59), DT_LEFT | DT_SINGLELINE);
     draw_navigation(dc, FALSE, L"Finish");
 }
@@ -576,7 +579,7 @@ static void set_screen(HWND window, enum Screen screen)
     } else if (screen == SCREEN_INSTALL) {
         DbgPrint("[setup] screen install; GPT write boundary\n");
     } else if (screen == SCREEN_COMPLETE) {
-        DbgPrint("[setup] screen complete; verified GPT\n");
+        DbgPrint("[setup] screen complete; verified GPT and FAT32\n");
     }
 }
 
@@ -624,6 +627,31 @@ static void run_install(HWND window)
         return;
     }
     DbgPrint("[setup] prepare: GPT written and reread by the kernel\n");
+    /* Stage format: the two FAT32 volumes of the plan, written by the
+     * kernel and verified by its own FAT driver's mount on each view. */
+    progress = 40;
+    DbgPrint("[setup] stage format: %d%%\n", progress);
+    repaint(window);
+    memset(&attributes, 0, sizeof attributes);
+    memset(&iosb, 0, sizeof iosb);
+    name.length = (USHORT)(wide_length(root_name) * sizeof(WCHAR));
+    name.maximum_length = name.length + sizeof(WCHAR);
+    name.buffer = root_name;
+    attributes.length = sizeof attributes;
+    attributes.object_name = &name;
+    attributes.attributes = OBJ_CASE_INSENSITIVE;
+    status = NtOpenFile(&root, FILE_WRITE_ATTRIBUTES, &attributes, &iosb, FILE_SHARE_ALL, FILE_DIRECTORY_FILE);
+    if (status >= 0) {
+        status = NtDeviceIoControlFile(root, 0, 0, 0, &iosb, IOCTL_MINO_SETUP_FORMAT,
+                                       &request, sizeof request, 0, 0);
+        NtClose(root);
+    }
+    if (status < 0) {
+        DbgPrint("[setup] format failed: %08lx\n", status);
+        DbgPrint("[setup] install stopped on the install screen\n");
+        return;
+    }
+    DbgPrint("[setup] format: ESP and system volumes FAT32, mounted by the kernel\n");
     progress = 100;
     DbgPrint("[setup] stage partition: 100%%\n");
     repaint(window);

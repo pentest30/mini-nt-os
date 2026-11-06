@@ -312,3 +312,42 @@ sans avance.
   paint de l'écran qu'il nomme — sur le chemin SYSENTER, plus rapide, le
   screendump du scénario prenait une fenêtre à moitié peinte (vu et
   corrigé).
+
+## Lot 4, étape 1 : le formatage FAT32 des deux volumes
+
+Après la préparation, `IOCTL_MINO_SETUP_FORMAT`
+(CTL_CODE(0x8000, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS), la demande
+`SetupPrepare` de la préparation) formate les deux volumes du plan en
+FAT32 :
+
+- `io::install::format` : les mêmes refus que la préparation (média de
+  démarrage, disque système, verrou exclusif du moteur), la même
+  revalidation (plan recalculé, jeton reverifié), puis les tables GPT
+  relues — les deux copies valides et les deux volumes du plan (ESP
+  EFI System, système Basic Data), sinon `PrepareError::NotPrepared` →
+  `STATUS_DEVICE_NOT_READY` ;
+- chaque volume : la vue bornée (`io::partition::PartitionDevice` sur le
+  disque, implémentée aussi pour `&mut D`), le formatage par
+  `fatfs::format::format` (l'adaptateur `VolumeSectors`, les LBAs
+  relatifs au volume), puis **la vérification : le lecteur FAT du noyau
+  monte chaque volume fraîchement formaté** (`FatVolume::mount` sur la
+  même vue) ;
+- le self-test noyau (`test-install`) enchaîne préparation puis
+  formatage : `[m4] install: format: ESP 81920 sectors, system 112607
+  sectors, FAT32 mounted by the kernel` ; l'UI (`SETUP1.EXE`) enchaîne
+  l'IOCTL à l'étape format (`[setup] stage format: 40%`), l'écran final
+  dit « Both volumes are FAT32, mounted by the kernel; file copy comes
+  next » ;
+- `xtask verify_setup_target` : les secteurs de boot des deux volumes
+  portent la signature FAT32 de Mino (`MINO    ` + 55 AA), les zones
+  écrites (réservée, FATs, racine) couvertes par la géométrie, et tous
+  les clusters libres restent à zéro ;
+- tests hôte : le formatage suivi du **montage croisé** — `fatfs::format`
+  écrit, le lecteur FAT de `io` monte la même vue (`format_writes_both_
+volumes_the_kernel_mounts`), formatage sans préparation refusé,
+  mauvais jeton refusé sans toucher un octet.
+
+Scénarios : `installer-prepare` ajoute le marqueur de formatage (les deux
+CPU), `installer-ui` enchaîne préparation puis formatage réels avant
+l'écran final (les deux CPU). Restent : la copie des fichiers, la
+progression réelle par étape, puis le redémarrage sur le disque installé.

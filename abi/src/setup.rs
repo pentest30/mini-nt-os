@@ -15,6 +15,13 @@ pub const IOCTL_MINO_SETUP_QUERY: u32 = 0x8000_6000;
 /// formate pas et ne copie rien.
 pub const IOCTL_MINO_SETUP_PREPARE: u32 = 0x8000_A004;
 
+/// CTL_CODE(0x8000, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS).
+///
+/// Le formatage formate les deux volumes du plan (ESP et système) en FAT32,
+/// après la préparation — ses tables GPT doivent être là. Même demande et
+/// même jeton que la préparation ; il ne copie rien.
+pub const IOCTL_MINO_SETUP_FORMAT: u32 = 0x8000_A008;
+
 /// Version du contrat [`SetupPreview`].
 pub const SETUP_ABI_VERSION: u32 = 1;
 

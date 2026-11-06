@@ -91,8 +91,9 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
 }
 
 /// Checks the first writable installer milestone: a canonical two-partition
-/// GPT on the 96 MiB disposable target, with both copies valid and every
-/// sector outside GPT metadata still zero.
+/// GPT on the 96 MiB disposable target, with both copies valid, each volume
+/// carrying Mino's FAT32 boot sector over its written metadata prefix, and
+/// every free cluster still zero.
 pub fn verify_setup_target(image: &Path) -> Result<()> {
     let verify = || -> std::io::Result<()> {
         const EXPECTED_BYTES: u64 = 96 * 1024 * 1024;
@@ -132,11 +133,34 @@ pub fn verify_setup_target(image: &Path) -> Result<()> {
         disk.0.seek(SeekFrom::Start(34 * 512))?;
         let mut remaining = (sectors - 67) * 512;
         let mut buffer = [0u8; 64 * 1024];
+        // Le formatage rapide écrit la zone réservée, les deux FATs et le
+        // répertoire racine de chaque volume (leur secteur de boot porte la
+        // signature de Mino) ; les clusters libres d'un disque vierge
+        // restent à zéro.
+        let system_first = ESP_FIRST + ESP_SECTORS;
+        let system_sectors = sectors - 34 - system_first;
+        let esp_geometry = fatfs::format::Geometry::for_sectors(u32::try_from(ESP_SECTORS).unwrap())
+            .ok_or_else(|| std::io::Error::other("the ESP geometry"))?;
+        let system_geometry = fatfs::format::Geometry::for_sectors(u32::try_from(system_sectors).unwrap())
+            .ok_or_else(|| std::io::Error::other("the system geometry"))?;
+        let written_prefix = |lba: u64| -> bool {
+            (lba >= ESP_FIRST && lba < ESP_FIRST + u64::from(esp_geometry.data_start) + 1)
+                || (lba >= system_first && lba < system_first + u64::from(system_geometry.data_start) + 1)
+        };
+        let mut lba = 34u64;
         while remaining != 0 {
             let take = usize::try_from(remaining.min(buffer.len() as u64)).unwrap();
             disk.0.read_exact(&mut buffer[..take])?;
-            if buffer[..take].iter().any(|&byte| byte != 0) {
-                return Err(std::io::Error::other("a partition-content sector was modified"));
+            for at in 0..take / 512 {
+                let sector = &buffer[at * 512..(at + 1) * 512];
+                if lba == ESP_FIRST || lba == system_first {
+                    if sector[510..512] != [0x55, 0xAA] || &sector[3..11] != b"MINO    " {
+                        return Err(std::io::Error::other(format!("the FAT32 boot sector at LBA {lba} is not Mino's")));
+                    }
+                } else if !written_prefix(lba) && sector.iter().any(|&byte| byte != 0) {
+                    return Err(std::io::Error::other("a partition-content sector was modified"));
+                }
+                lba += 1;
             }
             remaining -= take as u64;
         }

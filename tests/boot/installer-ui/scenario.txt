@@ -25,8 +25,10 @@ expect = [setup] screen review 2
 expect = [setup] screen install; GPT write boundary
 expect = [setup] stage prepare: 20%
 expect = [setup] prepare: GPT written and reread by the kernel
+expect = [setup] stage format: 40%
+expect = [setup] format: ESP and system volumes FAT32, mounted by the kernel
 expect = [setup] stage partition: 100%
-expect = [setup] screen complete; verified GPT
+expect = [setup] screen complete; verified GPT and FAT32
 
 # Final screen: blue classic-wizard rail and green completion mark.
 screen = 130 90 17386F
@@ -44,3 +46,4 @@ keys = [setup] screen review 2 => ret
 # The engine refused nothing here: the target was blank and the token was
 # the preview's own.
 forbid = [setup] prepare failed:
+forbid = [setup] format failed:

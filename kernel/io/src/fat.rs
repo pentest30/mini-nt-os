@@ -47,6 +47,21 @@ impl<D: BlockDevice + ?Sized> BlockDevice for alloc::boxed::Box<D> {
     }
 }
 
+impl<D: BlockDevice + ?Sized> BlockDevice for &mut D {
+    fn sector_size(&self) -> u32 {
+        (**self).sector_size()
+    }
+    fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        (**self).read_sector(lba, out)
+    }
+    fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        (**self).write_sector(lba, data)
+    }
+    fn flush(&self) -> Result<(), FatError> {
+        (**self).flush()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Fat32Bpb {
     pub bytes_per_sector: u16,

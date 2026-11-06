@@ -36,15 +36,17 @@ use abi::file::{
     FILE_UNICODE_ON_DISK, FILE_VALID_OPTION_FLAGS, FILE_WRITE_ATTRIBUTES,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DEVICE_BUSY, STATUS_DISK_FULL,
-    STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST,
-    STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR, STATUS_NOT_IMPLEMENTED,
-    STATUS_NO_MORE_FILES, STATUS_NO_SUCH_DEVICE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
-    STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_REVISION_MISMATCH, STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DEVICE_BUSY, STATUS_DEVICE_NOT_READY,
+    STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE, STATUS_INFO_LENGTH_MISMATCH,
+    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR,
+    STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_NO_SUCH_DEVICE, STATUS_OBJECT_NAME_COLLISION,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_REVISION_MISMATCH,
+    STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
 use abi::setup::{
-    SetupPrepare, IOCTL_MINO_SETUP_PREPARE, IOCTL_MINO_SETUP_QUERY, SETUP_PREPARE_SIZE, SETUP_PREVIEW_SIZE,
+    SetupPrepare, IOCTL_MINO_SETUP_FORMAT, IOCTL_MINO_SETUP_PREPARE, IOCTL_MINO_SETUP_QUERY, SETUP_PREPARE_SIZE,
+    SETUP_PREVIEW_SIZE,
 };
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -544,6 +546,34 @@ fn device_io_control_file(arguments: &[u32]) -> Result<(), NtStatus> {
                 }
             }
         }
+        IOCTL_MINO_SETUP_FORMAT => {
+            if (input_length as usize) != SETUP_PREPARE_SIZE || output_length != 0 {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            ke::usermem::probe_for_read(u64::from(input), SETUP_PREPARE_SIZE, 4)?;
+            let mut request_bytes = [0u8; SETUP_PREPARE_SIZE];
+            ke::usermem::copy_from_user(&mut request_bytes, u64::from(input))?;
+            let request = SetupPrepare::from_bytes(request_bytes).ok_or(STATUS_REVISION_MISMATCH)?;
+            let _file = super::current_process().handle_table.reference_as::<File>(
+                Handle(handle),
+                &FILE_TYPE,
+                AccessMask(FILE_WRITE_ATTRIBUTES),
+            )?;
+            match io_manager::install::format(request.disk_number, request.plan_token) {
+                Ok((esp, system)) => {
+                    log::info!(
+                        "[m4] install: format: ESP {} sectors, system {} sectors, FAT32 mounted by the kernel",
+                        esp.total_sectors,
+                        system.total_sectors
+                    );
+                    write_iosb(iosb, STATUS_SUCCESS, 0)
+                }
+                Err(error) => {
+                    log::warn!("[m4] install: format refused: {error:?}");
+                    Err(prepare_status(error))
+                }
+            }
+        }
         _ => Err(STATUS_INVALID_DEVICE_REQUEST),
     }
 }
@@ -558,6 +588,7 @@ fn prepare_status(error: io_manager::install::PrepareError) -> NtStatus {
         Error::NotBlank => STATUS_OBJECT_NAME_COLLISION,
         Error::CapacityMismatch => STATUS_INVALID_PARAMETER,
         Error::Busy => STATUS_DEVICE_BUSY,
+        Error::NotPrepared => STATUS_DEVICE_NOT_READY,
         Error::Io => STATUS_IO_DEVICE_ERROR,
     }
 }

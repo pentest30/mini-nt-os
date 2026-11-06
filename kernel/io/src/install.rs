@@ -18,6 +18,7 @@ use abi::setup::{
 
 use crate::disk::AtaDisk;
 use crate::fat::{BlockDevice, FatError};
+use crate::partition::PartitionDevice;
 
 /// Alignement GPT des partitions : 1 Mio sur des secteurs de 512 octets.
 const ALIGNMENT: u64 = 2048;
@@ -204,6 +205,9 @@ pub enum PrepareError {
     /// Une autre préparation est en cours : le verrou exclusif du moteur
     /// tient une seule écriture de tables à la fois.
     Busy,
+    /// Les tables GPT de la préparation ne sont pas là : le formatage vient
+    /// après la préparation.
+    NotPrepared,
     /// Une écriture ou la relecture de vérification a échoué.
     Io,
 }
@@ -272,6 +276,22 @@ impl<B: BlockDevice> gpt::WriteSectors for BlockSectors<'_, B> {
     }
 }
 
+/// [`fatfs`] vu sur une vue bornée de partition : les LBAs relatifs au
+/// volume, la même erreur.
+struct VolumeSectors<'a, D: BlockDevice>(&'a mut PartitionDevice<D>);
+
+impl<D: BlockDevice> fatfs::format::WriteSectors for VolumeSectors<'_, D> {
+    type Error = FatError;
+
+    fn write_sector(&mut self, lba: u32, sector: &[u8; 512]) -> Result<(), FatError> {
+        self.0.write_sector(u64::from(lba), sector.as_slice())
+    }
+
+    fn flush(&mut self) -> Result<(), FatError> {
+        self.0.flush()
+    }
+}
+
 /// Vérifie une dernière fois le plan sur ce que le disque est maintenant
 /// (`flags`, capacité — qui entre dans l'empreinte du jeton), refuse un
 /// disque qui porte déjà des tables, écrit le MBR protecteur et les deux
@@ -289,13 +309,7 @@ pub fn prepare_disk<D: gpt::WriteSectors<Error = FatError>>(
     token: u64,
     nonce: u64,
 ) -> Result<gpt::Layout, PrepareError> {
-    let plan = Plan::guided(Disk { number, sectors, flags }).map_err(|error| match error {
-        PlanError::Protected => PrepareError::Protected,
-        PlanError::TooSmall => PrepareError::CapacityMismatch,
-    })?;
-    if plan.token != token {
-        return Err(PrepareError::TokenMismatch);
-    }
+    let plan = validated_plan(sectors, number, flags, token)?;
     let mut mbr = [0u8; gpt::SECTOR_SIZE];
     disk.read_sector(0, &mut mbr).map_err(|_| PrepareError::Io)?;
     if gpt::has_protective_partition(&mbr) {
@@ -367,6 +381,108 @@ fn prepare_locked(number: u32, token: u64) -> Result<gpt::Layout, PrepareError> 
     prepare_disk(&mut view, sectors, number, SETUP_DISK_CANDIDATE, token, nonce)
 }
 
+/// La revalidation partagée de la préparation et du formatage : le plan
+/// recalculé sur ce que le disque est maintenant, et le jeton reverifié.
+fn validated_plan(sectors: u64, number: u32, flags: u32, token: u64) -> Result<Plan, PrepareError> {
+    let plan = Plan::guided(Disk { number, sectors, flags }).map_err(|error| match error {
+        PlanError::Protected => PrepareError::Protected,
+        PlanError::TooSmall => PrepareError::CapacityMismatch,
+    })?;
+    if plan.token != token {
+        return Err(PrepareError::TokenMismatch);
+    }
+    Ok(plan)
+}
+
+/// Formate les deux volumes du plan en FAT32, après la préparation. La même
+/// revalidation que la préparation (plan recalculé, jeton reverifié), puis
+/// les tables GPT relues pour trouver les deux partitions — qui doivent
+/// être celles du plan —, et chaque partition formatée par
+/// [`fatfs::format`] sur sa vue bornée, **vérifiée par le montage du
+/// lecteur FAT du noyau**. Ne copie rien.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL ; le disque doit attendre la préemption (PIO).
+pub fn format_disk<D: BlockDevice>(
+    disk: &mut D,
+    sectors: u64,
+    number: u32,
+    flags: u32,
+    token: u64,
+) -> Result<(fatfs::format::Geometry, fatfs::format::Geometry), PrepareError> {
+    let plan = validated_plan(sectors, number, flags, token)?;
+    // Les tables GPT de la préparation doivent être là, les deux copies
+    // valides, et porter les deux volumes du plan.
+    let reader = BlockSectors(&*disk);
+    let (layout, source) = gpt::read(&reader, sectors).map_err(|_| PrepareError::NotPrepared)?;
+    if source != gpt::Source::Both {
+        return Err(PrepareError::NotPrepared);
+    }
+    let [esp, system] = [layout.partitions().first(), layout.partitions().get(1)].map(|partition| {
+        partition.filter(|partition| {
+            (partition.kind == gpt::EFI_SYSTEM || partition.kind == gpt::BASIC_DATA)
+                && partition.last_lba >= partition.first_lba
+        })
+    });
+    let (Some(esp), Some(system)) = (esp, system) else {
+        return Err(PrepareError::NotPrepared);
+    };
+    if esp.kind != gpt::EFI_SYSTEM
+        || system.kind != gpt::BASIC_DATA
+        || esp.first_lba != plan.esp_first
+        || system.first_lba != plan.system_first
+    {
+        return Err(PrepareError::NotPrepared);
+    }
+    let esp_sectors = esp.last_lba - esp.first_lba + 1;
+    let system_sectors = system.last_lba - system.first_lba + 1;
+    // L'ESP, puis le système : chaque volume formaté sur sa vue bornée, et
+    // vérifié par le montage du lecteur FAT du noyau sur la même vue.
+    let mut format_volume = |first: u64, count: u64| -> Result<fatfs::format::Geometry, PrepareError> {
+        let mut view = PartitionDevice::new(&mut *disk, sectors, first, count).map_err(|_| PrepareError::Io)?;
+        let geometry =
+            fatfs::format::format(&mut VolumeSectors(&mut view), count as u32).map_err(|error| match error {
+                fatfs::format::FormatError::InvalidSize => PrepareError::CapacityMismatch,
+                fatfs::format::FormatError::Io(_) => PrepareError::Io,
+            })?;
+        crate::fat::FatVolume::mount(view).map_err(|_| PrepareError::Io)?;
+        Ok(geometry)
+    };
+    let esp_geometry = format_volume(esp.first_lba, esp_sectors)?;
+    let system_geometry = format_volume(system.first_lba, system_sectors)?;
+    Ok((esp_geometry, system_geometry))
+}
+
+/// Formate les deux volumes du disque `number` d'après le jeton `token` de
+/// l'aperçu, après la préparation. Les mêmes refus que la préparation, le
+/// même verrou exclusif.
+///
+/// # IRQL
+/// PASSIVE_LEVEL (IDENTIFY DEVICE et les E/S PIO attendent le matériel).
+pub fn format(number: u32, token: u64) -> Result<(fatfs::format::Geometry, fatfs::format::Geometry), PrepareError> {
+    if number == PRIMARY_MASTER {
+        return Err(PrepareError::Protected);
+    }
+    if u32::from(SYSTEM_DISK_NUMBER.load(Ordering::Acquire)) == number {
+        return Err(PrepareError::Protected);
+    }
+    if number != SECONDARY_MASTER {
+        return Err(PrepareError::NoTarget);
+    }
+    if !PREPARE_LOCK.try_acquire() {
+        return Err(PrepareError::Busy);
+    }
+    let formatted = format_locked(number, token);
+    PREPARE_LOCK.release();
+    formatted
+}
+
+fn format_locked(number: u32, token: u64) -> Result<(fatfs::format::Geometry, fatfs::format::Geometry), PrepareError> {
+    let mut disk = AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::SECONDARY, false)).ok_or(PrepareError::NoTarget)?;
+    let sectors = disk.sectors();
+    format_disk(&mut disk, sectors, number, SETUP_DISK_CANDIDATE, token)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -405,23 +521,45 @@ mod tests {
 mod prepare_tests {
     use super::*;
     use crate::fat::FatError;
-    use alloc::vec::Vec;
 
     const NONCE: u64 = 0x1234_5678_9abc_def0;
 
-    /// Le disque de développement des scénarios : 96 Mio, en mémoire.
-    struct RamSectors(Vec<u8>);
+    /// Le disque de développement des scénarios : 96 Mio, en mémoire. Le
+    /// trait écrit à travers `&self` (comme les ports du vrai disque) : la
+    /// mutabilité intérieure du test.
+    #[derive(Clone)]
+    struct RamSectors(core::cell::RefCell<alloc::vec::Vec<u8>>);
 
     impl RamSectors {
         const SECTORS: u64 = 96 * 2048;
 
         fn new() -> Self {
-            Self(alloc::vec![0u8; Self::SECTORS as usize * 512])
+            Self(core::cell::RefCell::new(alloc::vec![0u8; Self::SECTORS as usize * 512]))
         }
 
-        fn sector(&self, lba: u64) -> &[u8] {
+        fn sector(&self, lba: u64) -> alloc::vec::Vec<u8> {
             let at = lba as usize * 512;
-            &self.0[at..at + 512]
+            self.0.borrow()[at..at + 512].to_vec()
+        }
+    }
+
+    impl BlockDevice for RamSectors {
+        fn sector_size(&self) -> u32 {
+            512
+        }
+
+        fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+            out.copy_from_slice(&self.sector(lba));
+            Ok(())
+        }
+
+        fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+            self.0.borrow_mut()[lba as usize * 512..(lba as usize + 1) * 512].copy_from_slice(data);
+            Ok(())
+        }
+
+        fn flush(&self) -> Result<(), FatError> {
+            Ok(())
         }
     }
 
@@ -429,14 +567,14 @@ mod prepare_tests {
         type Error = FatError;
 
         fn read_sector(&self, lba: u64, sector: &mut [u8; gpt::SECTOR_SIZE]) -> Result<(), FatError> {
-            sector.copy_from_slice(self.sector(lba));
+            sector.copy_from_slice(&self.sector(lba));
             Ok(())
         }
     }
 
     impl gpt::WriteSectors for RamSectors {
         fn write_sector(&mut self, lba: u64, sector: &[u8; gpt::SECTOR_SIZE]) -> Result<(), FatError> {
-            self.0[lba as usize * 512..(lba as usize + 1) * 512].copy_from_slice(sector);
+            self.0.borrow_mut()[lba as usize * 512..(lba as usize + 1) * 512].copy_from_slice(sector);
             Ok(())
         }
 
@@ -490,14 +628,14 @@ mod prepare_tests {
         let mut disk = RamSectors::new();
         prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE)
             .expect("the first pass");
-        let after_first = disk.0.clone();
+        let after_first = disk.0.borrow().clone();
         let error = prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE);
         assert_eq!(error, Err(PrepareError::NotBlank));
-        assert_eq!(disk.0, after_first, "the refusal writes nothing");
+        assert_eq!(*disk.0.borrow(), after_first, "the refusal writes nothing");
         // Un disque qui n'est pas vierge sans être à nous non plus : une
         // entrée protectrice dans son MBR suffit au refus.
         let mut foreign = RamSectors::new();
-        foreign.0[450] = 0xee;
+        foreign.0.borrow_mut()[450] = 0xee;
         assert_eq!(
             prepare_disk(&mut foreign, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE,),
             Err(PrepareError::NotBlank)
@@ -551,5 +689,55 @@ mod prepare_tests {
         lock.release();
         assert!(lock.try_acquire(), "the lock comes back once released");
         lock.release();
+    }
+
+    #[test]
+    fn format_writes_both_volumes_the_kernel_mounts() {
+        let token = token_of(candidate());
+        let mut disk = RamSectors::new();
+        prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE)
+            .expect("prepare");
+        let (esp, system) = format_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token)
+            .expect("the volumes format");
+        assert_eq!(esp.total_sectors as u64, 40 * 2048, "the ESP of the plan");
+        assert!(system.total_sectors as u64 >= 54 * 2048, "the system volume of the plan");
+        // Le secteur de boot de l'ESP : l'OEM de Mino et la signature, les
+        // deux FAT présentes, et le montage du lecteur du noyau a validé le
+        // reste (fait dans format_disk).
+        let mut bpb = [0u8; 512];
+        disk.read_sector(2048, &mut bpb).expect("the ESP boot sector");
+        assert_eq!(&bpb[3..11], b"MINO    ");
+        assert_eq!(&bpb[510..512], &[0x55, 0xAA]);
+        // Reformatage : idempotent, les volumes restent montables.
+        format_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token)
+            .expect("the second pass reformats");
+        let mounted = crate::fat::FatVolume::mount(
+            PartitionDevice::new(disk.clone(), RamSectors::SECTORS, 2048, 40 * 2048).expect("the ESP view"),
+        );
+        assert!(mounted.is_ok(), "the formatted ESP mounts");
+    }
+
+    #[test]
+    fn format_without_prepare_is_refused() {
+        let token = token_of(candidate());
+        let mut disk = RamSectors::new();
+        assert_eq!(
+            format_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token),
+            Err(PrepareError::NotPrepared)
+        );
+    }
+
+    #[test]
+    fn format_with_wrong_token_is_refused_untouched() {
+        let token = token_of(candidate());
+        let mut disk = RamSectors::new();
+        prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE)
+            .expect("prepare");
+        let before = disk.0.clone();
+        assert_eq!(
+            format_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token ^ 1),
+            Err(PrepareError::TokenMismatch)
+        );
+        assert_eq!(disk.0, before, "the refusal writes nothing");
     }
 }

@@ -1,7 +1,7 @@
-# Le moteur d'installation, lot 2 : la préparation. Le self-test du noyau
-# (install_prepare_self_test, phase 1) exerce le chemin réel sur le disque
-# cible (`disk = target` : un ATA secondaire vierge de 96 Mio, le système
-# étant en RAM) :
+# Le moteur d'installation, lots 2 et 3 : la préparation puis le formatage.
+# Le self-test du noyau (install_prepare_self_test, phase 1) exerce le
+# chemin réel sur le disque cible (`disk = target` : un ATA secondaire
+# vierge de 96 Mio, le système étant en RAM) :
 # - l'aperçu rend un plan (ESP de 40 Mio, système dans le reste) et son
 #   jeton ;
 # - un appel avec un jeton faux est refusé sans écrire un seul octet ;
@@ -9,11 +9,14 @@
 #   secours d'abord, via libs/gpt), puis les relit : les deux copies
 #   valides, les plages du plan (ESP 2048..83967, système 83968..196574) ;
 # - une seconde préparation tombe sur un disque qui ne l'est plus et est
-#   refusée sans rien toucher.
+#   refusée sans rien toucher ;
+# - le formatage écrit les deux volumes FAT32 du plan (`fatfs::format` sur
+#   les vues bornées), chacun vérifié par le montage du lecteur FAT du
+#   noyau (ESP 81920 secteurs, système 112607).
 # Sur les autres scénarios : sans disque secondaire, il ne fait que
 # constater ; sur le disque qui porte `C:` (les scénarios à disque
 # système), il vérifie le refus du disque protégé avant toute écriture.
-# La préparation ne formate pas et ne copie rien (ADR-022 ; lot suivant).
+# La copie des fichiers reste au lot suivant (ADR-022).
 # It ends with the boot going on (the self-test is fatal on failure).
 # Update with each step (docs/compat/io-install.md).
 features = test-smss, test-install
@@ -24,6 +27,7 @@ timeout  = 180
 expect = [m4] install: prepare: a wrong token wrote nothing
 expect = [m4] install: prepare: GPT written and re-read (ESP 2048..83967, system 83968..196574)
 expect = [m4] install: prepare: a second pass is refused (not blank)
+expect = [m4] install: format: ESP 81920 sectors, system 112607 sectors, FAT32 mounted by the kernel
 
 # Any bugcheck ends the run at once.
 forbid = *** STOP:
