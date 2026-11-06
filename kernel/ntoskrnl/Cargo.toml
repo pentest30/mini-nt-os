@@ -56,6 +56,11 @@ test-smss = []
 # boot reads them back (M4, exit criterion 3; scenario tests/boot/persistence,
 # two boots on the same disk image).
 test-persistence = []
+# Exercises the installer engine's prepare on the target disk: the token
+# refusals, the GPT write and its reread, the not-blank refusal (ADR-022,
+# installer engine lot 2; scenario tests/boot/installer-prepare). Gated so
+# that the other scenarios keep the target blank for the UI's own prepare.
+test-install = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 

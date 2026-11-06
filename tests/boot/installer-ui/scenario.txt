@@ -1,9 +1,14 @@
-# First native installer UI milestone: SETUP1.EXE takes the interactive
-# desktop, renders the five-screen flow with custom GDI controls, and uses
-# the keyboard path from main. A blank secondary ATA disk feeds the real
-# read-only kernel plan; execution remains simulated and issues no disk
-# writes. The path exercises Tab/Back, Escape, confirmation, the five
-# reported stages and the verified completion screen.
+# The native installer UI, wired to the real engine: SETUP1.EXE takes the
+# interactive desktop, renders the five-screen flow with custom GDI
+# controls, and uses the keyboard path from main. A blank secondary ATA
+# disk feeds the read-only kernel plan; activating Install sends the real
+# IOCTL_MINO_SETUP_PREPARE with the token of the preview: the kernel
+# revalidates the disk, writes the protective MBR and both GPT copies, and
+# rereads them (the boot's own self-test stays out, behind the
+# test-install feature, so the target is blank). Copying files and
+# configuring the system stay simulated; the completion screen says so.
+# The path exercises Tab/Back, Escape, confirmation, the five reported
+# stages and the completion screen.
 features = test-smss
 requires = userland, native
 initial-command = SETUP1.EXE
@@ -18,13 +23,14 @@ expect = [setup] back to welcome
 expect = [setup] screen disk 2
 expect = [setup] returned to disk
 expect = [setup] screen review 2
-expect = [setup] screen install; simulated write boundary
+expect = [setup] screen install; write boundary
 expect = [setup] stage prepare: 20%
+expect = [setup] prepare: GPT written and reread by the kernel
 expect = [setup] stage partition: 40%
 expect = [setup] stage copy: 60%
 expect = [setup] stage configure: 80%
 expect = [setup] stage verify: 100%
-expect = [setup] screen complete; verified simulation
+expect = [setup] screen complete; GPT written and reread; copy and configure still simulated
 
 # Final screen: blue classic-wizard rail and green completion mark.
 screen = 130 90 17386F
@@ -38,3 +44,7 @@ keys = [setup] screen disk 2 => ret
 keys = [setup] screen review 1 => esc
 keys = [setup] returned to disk => ret
 keys = [setup] screen review 2 => ret
+
+# The engine refused nothing here: the target was blank and the token was
+# the preview's own.
+forbid = [setup] prepare failed:

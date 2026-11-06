@@ -366,6 +366,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_directory_self_test();
     file_self_test();
     file_write_self_test();
+    #[cfg(feature = "test-install")]
     install_prepare_self_test();
     section_service_self_test();
     event_service_self_test();
@@ -7065,7 +7066,10 @@ fn section_service_self_test() {
 /// préparation du disque cible. Revalidation par le jeton, écriture des
 /// tables GPT, relecture des deux copies ; les refus, sans écrire. Sur un
 /// démarrage sans disque cible sain, il ne fait que constater ; sur le
-/// disque qui porte le système, il vérifie le refus.
+/// disque qui porte le système, il vérifie le refus. Derrière la feature
+/// `test-install` : les autres scénarios gardent le disque cible vierge
+/// pour la préparation réelle de l'interface.
+#[cfg(feature = "test-install")]
 fn install_prepare_self_test() {
     use io_manager::install::PrepareError;
     let preview = io_manager::install::preview();

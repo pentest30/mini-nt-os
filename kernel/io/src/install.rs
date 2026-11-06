@@ -201,9 +201,33 @@ pub enum PrepareError {
     NotBlank,
     /// La capacité ou la géométrie ne permettent plus le plan.
     CapacityMismatch,
+    /// Une autre préparation est en cours : le verrou exclusif du moteur
+    /// tient une seule écriture de tables à la fois.
+    Busy,
     /// Une écriture ou la relecture de vérification a échoué.
     Io,
 }
+
+/// Le verrou exclusif du moteur : une seule préparation à la fois, quel
+/// que soit l'appelant. La préparation bloque son thread le temps des E/S
+/// PIO ; le verrou empêche un second appelant d'écrire en même temps.
+#[derive(Default)]
+pub struct Exclusive(AtomicU8);
+
+impl Exclusive {
+    /// Prend le verrou ; `false` s'il est déjà pris.
+    pub fn try_acquire(&self) -> bool {
+        self.0.compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed).is_ok()
+    }
+
+    /// Le rend.
+    pub fn release(&self) {
+        self.0.store(0, Ordering::Release);
+    }
+}
+
+/// Le verrou du moteur, autour de chaque préparation réelle.
+static PREPARE_LOCK: Exclusive = Exclusive(AtomicU8::new(0));
 
 /// Un GUID déterministe tiré du jeton et d'un rôle (1 : le disque, 2 : l'ESP,
 /// 3 : le système). La bibliothèque GPT n'invente rien, et la même demande
@@ -308,7 +332,8 @@ pub fn prepare_disk<D: gpt::WriteSectors<Error = FatError>>(
 
 /// Prépare le disque `number` d'après le jeton `token` de l'aperçu. Le
 /// média de démarrage (le maître primaire) et le disque qui porte le
-/// système courant sont refusés avant toute écriture.
+/// système courant sont refusés avant toute écriture ; le verrou exclusif
+/// tient une seule préparation à la fois.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL (IDENTIFY DEVICE et les E/S PIO attendent le matériel).
@@ -322,6 +347,17 @@ pub fn prepare(number: u32, token: u64) -> Result<gpt::Layout, PrepareError> {
     if number != SECONDARY_MASTER {
         return Err(PrepareError::NoTarget);
     }
+    // Une seule écriture de tables à la fois : le verrou tient toute la
+    // préparation, de la sonde du disque à sa relecture.
+    if !PREPARE_LOCK.try_acquire() {
+        return Err(PrepareError::Busy);
+    }
+    let prepared = prepare_locked(number, token);
+    PREPARE_LOCK.release();
+    prepared
+}
+
+fn prepare_locked(number: u32, token: u64) -> Result<gpt::Layout, PrepareError> {
     let disk = AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::SECONDARY, false)).ok_or(PrepareError::NoTarget)?;
     let sectors = disk.sectors();
     let mut view = BlockSectors(&disk);
@@ -499,5 +535,15 @@ mod prepare_tests {
             assert_eq!(guid[7] >> 4, 0x4, "version 4");
             assert_eq!(guid[8] >> 6, 0b10, "RFC 4122 variant");
         }
+    }
+
+    #[test]
+    fn the_engine_lock_is_exclusive_and_comes_back() {
+        let lock = Exclusive::default();
+        assert!(lock.try_acquire());
+        assert!(!lock.try_acquire(), "a second caller waits, it does not write");
+        lock.release();
+        assert!(lock.try_acquire(), "the lock comes back once released");
+        lock.release();
     }
 }

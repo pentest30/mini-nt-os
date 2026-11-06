@@ -122,9 +122,20 @@ jour à chaque commit qui change l'état.
   scénario `installer-prepare`, AMD et Intel) ; cinq tests hôte de
   `prepare_disk` ; statuts NT de chaque refus. Détails dans
   [`compat/io-install.md`](compat/io-install.md), lot 2.
-  Restent le verrouillage/démontage pendant l'écriture, le branchement de
-  l'UI sur la préparation réelle, le formatage des deux vues bornées, la
-  copie des fichiers, la progression et la reprise du moteur (partie
+  **Lot 3 fait** : l'UI appelle la préparation réelle — `SETUP1.EXE`
+  renvoie le jeton de l'aperçu par `IOCTL_MINO_SETUP_PREPARE` à
+  l'activation d'« Install », journalise la réussite ou le refus, et
+  l'écran final dit ce qui reste simulé ; le self-test noyau passe derrière
+  la feature `test-install` (les autres scénarios gardent la cible vierge
+  pour l'UI) ; **verrou exclusif du moteur** (`Exclusive`, Busy →
+  `STATUS_DEVICE_BUSY`), une seule préparation à la fois ; chaque marqueur
+  `[setup] screen …` part après le paint (le screendump du scénario
+  prenait une fenêtre à moitié peinte sur SYSENTER). `installer-ui`,
+  `installer-prepare` et `persistence` verts sur AMD et Intel ; 106 tests
+  hôte ; lint propre. Détails dans [`compat/io-install.md`](compat/io-install.md),
+  lot 3, et [`compat/install-ui.md`](compat/install-ui.md).
+  Restent le formatage des deux vues bornées (`fatfs::format` est prêt),
+  la copie des fichiers, la progression et la reprise du moteur (partie
   proposée de l'ADR-022), puis la souris.
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a

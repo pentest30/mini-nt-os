@@ -66,26 +66,31 @@ couleurs contrastées et les cinq étapes dans un rail latéral.
 
 ## Limite de sécurité actuelle
 
-L'installation reste simulée dans l'UI. L'activation d'« Install » journalise
-`simulated write boundary`, montre les étapes préparer, partitionner,
-copier, configurer et vérifier, puis une réussite explicitement qualifiée de
-simulation. `SETUP1.EXE` ouvre seulement un répertoire de `C:` comme ancrage
-du contrôle en lecture ; il ne reçoit aucun handle de disque brut. Le
+La préparation est réelle dans l'UI. À l'activation d'« Install »,
+`SETUP1.EXE` renvoie le jeton de l'aperçu au noyau par
+`IOCTL_MINO_SETUP_PREPARE` : celui-ci revalide le disque, écrit le MBR
+protecteur et les deux copies GPT, puis les relit — et journalise le refus,
+le cas échéant (`[setup] prepare failed: …`, l'écran d'installation reste
+affiché, rien n'avance). Les étapes copier et configurer restent
+simulées ; l'écran final le dit (« Partition tables written and reread;
+file copy comes later »). Le handle d'ancrage reste un répertoire de `C:`
+ouvert avec `FILE_READ_ATTRIBUTES` ; l'autorité d'écrire vient du jeton. Le
 constructeur `cargo xtask image` reste le seul chemin qui crée une image
 complète.
 
-Le noyau, lui, possède maintenant sa première commande d'écriture :
-`IOCTL_MINO_SETUP_PREPARE` (`abi::setup`) écrit les tables GPT du plan sur
-le disque cible après avoir reverifié le jeton de l'aperçu, refuse les
-disques protégés et ceux qui portent déjà des tables, et relit les deux
-copies pour vérifier. Elle ne formate pas et ne copie rien ; l'UI ne l'appelle
-pas encore (le moteur est exercé par le self-test noyau et le scénario
-`installer-prepare`, voir [`io-install.md`](io-install.md), lot 2).
+Le self-test noyau de la préparation est derrière la feature `test-install`
+(scénarios `installer-prepare` et `persistence`) : les autres scénarios
+gardent le disque cible vierge pour la préparation réelle de l'UI. Le
+moteur tient en outre un **verrou exclusif** (`io_manager::install`) :
+une seule préparation à la fois, `STATUS_DEVICE_BUSY` sinon. Chaque
+marqueur `[setup] screen …` part **après** le paint de l'écran qu'il
+nomme : le screendump du scénario ne prend plus une fenêtre à moitié
+peinte (vu sur le chemin SYSENTER, où tout va plus vite).
 
 Le scénario `installer-ui` injecte les touches par le moniteur de QEMU,
-exerce Tab, Retour et Échap, attend les cinq progressions et vérifie des
-pixels de l'écran final. Il tourne avec les modèles de processeur AMD et
-Intel :
+exerce Tab, Retour et Échap, attend les cinq progressions, la préparation
+réelle et vérifie des pixels de l'écran final. Il tourne avec les modèles
+de processeur AMD et Intel :
 
 ```bash
 cargo xtask test --boot --scenario installer-ui
@@ -93,16 +98,14 @@ cargo xtask test --boot --scenario installer-ui
 
 ## Suite
 
-1. Brancher l'UI sur la préparation réelle (le jeton de l'aperçu, puis
-   `IOCTL_MINO_SETUP_PREPARE` à la place de la simulation), et ajouter au
-   contrat le verrou exclusif et le démontage de la cible pendant
-   l'écriture.
-2. Formater les deux vues bornées (`fatfs::format` est prêt), copier les
+1. Ajouter au contrat le démontage formel de la cible pendant l'écriture
+   (la cible n'est pas montée : le verrou exclusif la couvre déjà), puis
+   formater les deux vues bornées (`fatfs::format` est prêt), copier les
    fichiers et rendre des événements de progression ; la revue reste la
    dernière étape réversible.
-3. Ajouter la souris PS/2, le ciblage par fenêtre, les messages `WM_MOUSE*`
+2. Ajouter la souris PS/2, le ciblage par fenêtre, les messages `WM_MOUSE*`
    et le curseur dans `win32k`; la navigation clavier reste complète.
-4. Ajouter les erreurs récupérables, le journal détaillé, la reprise sûre et
+3. Ajouter les erreurs récupérables, le journal détaillé, la reprise sûre et
    le redémarrage seulement après relecture de GPT et vérification des
    fichiers copiés.
 

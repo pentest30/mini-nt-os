@@ -79,6 +79,16 @@ typedef struct {
     DWORD system_sectors_high;
 } SETUP_PREVIEW;
 
+/* abi::setup::SetupPrepare: the disk of the preview and its token, as the
+ * kernel recomputes the plan and refuses a token that no longer describes
+ * it. */
+typedef struct {
+    DWORD version;
+    DWORD disk_number;
+    DWORD token_low;
+    DWORD token_high;
+} SETUP_PREPARE;
+
 typedef struct {
     UINT cbSize;
     UINT style;
@@ -132,6 +142,9 @@ typedef struct {
 #define FILE_DIRECTORY_FILE 0x00000001
 #define OBJ_CASE_INSENSITIVE 0x00000040
 #define IOCTL_MINO_SETUP_QUERY 0x80006000
+/* CTL_CODE(0x8000, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS): writes the
+ * plan's GPT tables on the target, after the token revalidates it. */
+#define IOCTL_MINO_SETUP_PREPARE 0x8000A004
 #define SETUP_READY 0
 #define SETUP_DISK_CANDIDATE 1
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
@@ -174,6 +187,10 @@ static BOOL backend_ready;
 static DWORD target_mib;
 static DWORD esp_mib;
 static DWORD system_mib;
+/* The identity the preview gave: the prepare request carries it back. */
+static DWORD target_disk_number;
+static DWORD target_token_low;
+static DWORD target_token_high;
 static WCHAR target_size_text[32] = L"Unavailable";
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
@@ -310,6 +327,9 @@ static void query_install_backend(void)
     esp_mib = preview.esp_sectors_low / 2048;
     system_mib = preview.system_sectors_low / 2048;
     format_mib(target_size_text, target_mib, L" MiB   Selected");
+    target_disk_number = preview.disk_number;
+    target_token_low = preview.token_low;
+    target_token_high = preview.token_high;
     backend_ready = TRUE;
     DbgPrint("[setup] backend target %lu: %lu MiB; plan EFI %lu MiB, system %lu MiB; token %08lx%08lx\n",
              preview.disk_number, target_mib, esp_mib, system_mib,
@@ -491,12 +511,12 @@ static void draw_install(HDC dc)
 static void draw_complete(HDC dc)
 {
     heading(dc, L"Mino is ready",
-            L"Setup verified the immutable kernel plan. The write engine remains disabled in this development milestone.");
+            L"Setup wrote the partition tables through the kernel and reread them.");
     fill(dc, rect(218, 150, 724, 266), RGB(235, 247, 238));
     border(dc, rect(218, 150, 724, 266), RGB(63, 132, 86));
     fill(dc, rect(240, 180, 270, 210), RGB(46, 129, 82));
     text(dc, L"Setup completed", rect(290, 176, 690, 202), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"No physical disk was modified; only the target and plan were queried.", rect(290, 214, 690, 248),
+    text(dc, L"Partition tables written and reread; file copy comes later.", rect(290, 214, 690, 248),
          RGB(53, 72, 59), DT_LEFT | DT_SINGLELINE);
     draw_navigation(dc, FALSE, L"Finish");
 }
@@ -541,27 +561,73 @@ static void set_screen(HWND window, enum Screen screen)
 {
     current_screen = screen;
     focused_action = 1;
-    if (screen == SCREEN_DISK) {
+    if (screen == SCREEN_DISK)
         ++disk_visits;
+    else if (screen == SCREEN_REVIEW)
+        ++review_visits;
+    /* The paint goes first: a marker says the screen it names is showing,
+     * and the scenario's screendump never catches a half-painted window. */
+    repaint(window);
+    if (screen == SCREEN_DISK) {
         DbgPrint("[setup] screen disk %d\n", disk_visits);
     } else if (screen == SCREEN_REVIEW) {
-        ++review_visits;
         DbgPrint("[setup] screen review %d\n", review_visits);
     } else if (screen == SCREEN_INSTALL) {
-        DbgPrint("[setup] screen install; simulated write boundary\n");
+        DbgPrint("[setup] screen install; write boundary\n");
     } else if (screen == SCREEN_COMPLETE) {
-        DbgPrint("[setup] screen complete; verified simulation\n");
+        DbgPrint("[setup] screen complete; GPT written and reread; copy and configure still simulated\n");
     }
-    repaint(window);
 }
 
-static void simulate_install(HWND window)
+/* The write boundary. The prepare stage is the real kernel command: it
+ * revalidates the disk against the token of the preview, writes the
+ * protective MBR and both GPT copies, and rereads them. Copying files and
+ * configuring the system wait for the engine to grow; the complete screen
+ * says so. */
+static void run_install(HWND window)
 {
     static const char *stages[] = {"prepare", "partition", "copy", "configure", "verify"};
+    static WCHAR root_name[] = L"\\GLOBAL??\\C:\\";
+    SETUP_PREPARE request;
+    UNICODE_STRING name;
+    OBJECT_ATTRIBUTES attributes;
+    IO_STATUS_BLOCK iosb;
+    HANDLE root = 0;
+    LONG status;
     int index;
 
     set_screen(window, SCREEN_INSTALL);
-    for (index = 0; index < 5; ++index) {
+    progress = 20;
+    DbgPrint("[setup] stage prepare: %d%%\n", progress);
+    repaint(window);
+
+    memset(&request, 0, sizeof request);
+    request.version = 1;
+    request.disk_number = target_disk_number;
+    request.token_low = target_token_low;
+    request.token_high = target_token_high;
+    memset(&name, 0, sizeof name);
+    memset(&attributes, 0, sizeof attributes);
+    memset(&iosb, 0, sizeof iosb);
+    name.length = (USHORT)(wide_length(root_name) * sizeof(WCHAR));
+    name.maximum_length = name.length + sizeof(WCHAR);
+    name.buffer = root_name;
+    attributes.length = sizeof attributes;
+    attributes.object_name = &name;
+    attributes.attributes = OBJ_CASE_INSENSITIVE;
+    status = NtOpenFile(&root, FILE_READ_ATTRIBUTES, &attributes, &iosb, FILE_SHARE_ALL, FILE_DIRECTORY_FILE);
+    if (status >= 0) {
+        status = NtDeviceIoControlFile(root, 0, 0, 0, &iosb, IOCTL_MINO_SETUP_PREPARE,
+                                       &request, sizeof request, 0, 0);
+        NtClose(root);
+    }
+    if (status < 0) {
+        DbgPrint("[setup] prepare failed: %08lx\n", status);
+        DbgPrint("[setup] install stopped on the install screen\n");
+        return;
+    }
+    DbgPrint("[setup] prepare: GPT written and reread by the kernel\n");
+    for (index = 1; index < 5; ++index) {
         progress = (index + 1) * 20;
         DbgPrint("[setup] stage %s: %d%%\n", stages[index], progress);
         repaint(window);
@@ -592,7 +658,7 @@ static void activate(HWND window)
         if (focused_action == 0)
             set_screen(window, SCREEN_DISK);
         else
-            simulate_install(window);
+            run_install(window);
         break;
     case SCREEN_INSTALL:
         break;

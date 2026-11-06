@@ -279,3 +279,30 @@ Restent : le formatage des deux vues bornées (F3, `fatfs::format` est
 prêt), la copie des fichiers, les événements de progression vers l'UI, le
 verrou exclusif et le démontage de la cible pendant l'écriture, puis la
 souris.
+
+## Lot 3 : l'interface branchée sur la préparation réelle
+
+`SETUP1.EXE` n'installe plus « en simulation » : à l'activation
+d'« Install », il renvoie le jeton de l'aperçu au noyau par
+`IOCTL_MINO_SETUP_PREPARE` (la demande `SetupPrepare` de 16 octets). Le
+noyau revalide le disque, écrit les tables, les relit ; l'UI journalise
+`[setup] prepare: GPT written and reread by the kernel`, enchaîne ses cinq
+étapes, et l'écran final dit ce qui reste simulé (« Partition tables
+written and reread; file copy comes later »). Un refus du noyau
+(`[setup] prepare failed: …`) laisse l'écran d'installation en place,
+sans avance.
+
+- Le self-test noyau de la préparation passe derrière la **feature
+  `test-install`** (scénarios `installer-prepare` et `persistence`) :
+  les autres scénarios gardent le disque cible vierge pour la préparation
+  réelle de l'UI — sinon le self-test écrivait les tables avant elle, et
+  sa propre règle « pas de seconde préparation » la refusait.
+- **Verrou exclusif du moteur** (`io_manager::install::Exclusive`) : une
+  seule préparation à la fois, `PrepareError::Busy` →
+  `STATUS_DEVICE_BUSY` sinon ; le verrou tient de la sonde du disque à sa
+  relecture. La cible n'étant pas montée, pas de démontage à faire : le
+  verrou couvre l'accès exclusif.
+- Banc d'essai : chaque marqueur `[setup] screen …` part **après** le
+  paint de l'écran qu'il nomme — sur le chemin SYSENTER, plus rapide, le
+  screendump du scénario prenait une fenêtre à moitié peinte (vu et
+  corrigé).

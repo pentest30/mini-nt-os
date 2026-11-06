@@ -16,7 +16,7 @@
 # La préparation ne formate pas et ne copie rien (ADR-022 ; lot suivant).
 # It ends with the boot going on (the self-test is fatal on failure).
 # Update with each step (docs/compat/io-install.md).
-features = test-smss
+features = test-smss, test-install
 disk = target
 cpus     = default, intel
 timeout  = 180
