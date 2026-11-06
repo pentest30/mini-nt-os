@@ -1,9 +1,11 @@
 //! What the file services take and return to an i386 process (CLAUDE.md,
 //! rule 5), laid out as on XP SP2: `IO_STATUS_BLOCK`, the values of
-//! NtCreateFile and NtOpenFile, the `FILE_*_INFORMATION` structures
-//! that NtQueryInformationFile and NtQueryAttributesFile return, and the
-//! entries of NtQueryDirectoryFile ([`DirectoryEntry::encode`]). Values are
-//! those of the XP SDK and DDK headers; offsets are checked at compile time.
+//! NtCreateFile and NtOpenFile, the `FILE_*_INFORMATION` structures that
+//! NtQueryInformationFile and NtQueryAttributesFile return, the entries of
+//! NtQueryDirectoryFile ([`DirectoryEntry::encode`]) and the
+//! `FILE_FS_*_INFORMATION` structures of NtQueryVolumeInformationFile.
+//! Values are those of the XP SDK and DDK headers; offsets are checked at
+//! compile time.
 //!
 //! A `LARGE_INTEGER` is aligned to 8 bytes in these structures, in an i386
 //! process as here: each one ends padded to a multiple of 8.
@@ -88,6 +90,7 @@ pub const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0004;
 pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0010;
 pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0020;
 pub const FILE_ATTRIBUTE_NORMAL: u32 = 0x0080;
+pub const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x0100;
 
 /// `FILE_INFORMATION_CLASS`.
 pub const FILE_BASIC_INFORMATION: u32 = 4;
@@ -96,6 +99,8 @@ pub const FILE_DISPOSITION_INFORMATION: u32 = 13;
 pub const FILE_POSITION_INFORMATION: u32 = 14;
 pub const FILE_END_OF_FILE_INFORMATION: u32 = 20;
 pub const FILE_NETWORK_OPEN_INFORMATION: u32 = 34;
+/// FileNameInformation: the path of the file from the root of its volume.
+pub const FILE_NAME_INFORMATION: u32 = 9;
 
 /// The classes of NtQueryDirectoryFile (`FILE_INFORMATION_CLASS`).
 pub const FILE_DIRECTORY_INFORMATION: u32 = 1;
@@ -112,8 +117,17 @@ pub const FILE_ID_FULL_DIRECTORY_INFORMATION: u32 = 38;
 pub const DIRECTORY_ENTRY_ALIGNMENT: usize = 8;
 
 /// `FS_INFORMATION_CLASS`, and FileFsMaximumInformation of XP.
+pub const FILE_FS_VOLUME_INFORMATION: u32 = 1;
+pub const FILE_FS_SIZE_INFORMATION: u32 = 3;
 pub const FILE_FS_DEVICE_INFORMATION: u32 = 4;
+pub const FILE_FS_ATTRIBUTE_INFORMATION: u32 = 5;
+pub const FILE_FS_FULL_SIZE_INFORMATION: u32 = 7;
 pub const FILE_FS_MAXIMUM_INFORMATION: u32 = 10;
+
+/// `FileSystemAttributes` (FILE_FS_ATTRIBUTE_INFORMATION).
+pub const FILE_CASE_SENSITIVE_SEARCH: u32 = 0x0000_0001;
+pub const FILE_CASE_PRESERVED_NAMES: u32 = 0x0000_0002;
+pub const FILE_UNICODE_ON_DISK: u32 = 0x0000_0004;
 
 /// Device types and characteristics (FILE_FS_DEVICE_INFORMATION).
 pub const FILE_DEVICE_DISK: u32 = 0x0000_0007;
@@ -322,6 +336,139 @@ impl DirectoryEntry<'_> {
     }
 }
 
+/// FILE_NAME_INFORMATION, as in C: the name begins at `file_name`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileNameInformation {
+    pub file_name_length: u32,
+    pub file_name: [u16; 1],
+}
+
+/// FILE_FS_VOLUME_INFORMATION, as in C: the label begins at `volume_label`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileFsVolumeInformation {
+    pub volume_creation_time: u64,
+    pub volume_serial_number: u32,
+    pub volume_label_length: u32,
+    pub supports_objects: u8,
+    pub volume_label: [u16; 1],
+}
+
+/// FILE_FS_SIZE_INFORMATION.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileFsSizeInformation {
+    pub total_allocation_units: u64,
+    pub available_allocation_units: u64,
+    pub sectors_per_allocation_unit: u32,
+    pub bytes_per_sector: u32,
+}
+
+/// FILE_FS_FULL_SIZE_INFORMATION.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileFsFullSizeInformation {
+    pub total_allocation_units: u64,
+    pub caller_available_allocation_units: u64,
+    pub actual_available_allocation_units: u64,
+    pub sectors_per_allocation_unit: u32,
+    pub bytes_per_sector: u32,
+}
+
+/// FILE_FS_ATTRIBUTE_INFORMATION, as in C: the name of the file system
+/// begins at `file_system_name`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileFsAttributeInformation {
+    pub file_system_attributes: u32,
+    pub maximum_component_name_length: u32,
+    pub file_system_name_length: u32,
+    pub file_system_name: [u16; 1],
+}
+
+/// Writes `name` at `name_at` in `out`, as much of it as `out` holds
+/// (whole units); returns the bytes written up to its end, and whether it
+/// was cut (`STATUS_BUFFER_OVERFLOW`). `None` if `out` ends before
+/// `name_at`.
+fn put_name(out: &mut [u8], name_at: usize, name: &[u16]) -> Option<(usize, bool)> {
+    let room = out.len().checked_sub(name_at)? / 2;
+    let kept = name.len().min(room);
+    for (i, unit) in name[..kept].iter().enumerate() {
+        out[name_at + 2 * i..name_at + 2 * i + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+    Some((name_at + 2 * kept, kept < name.len()))
+}
+
+impl FileNameInformation {
+    /// The structure for the name `name` in `out` (`FileNameLength`: the
+    /// whole name, in bytes), the name cut to what `out` holds: the bytes
+    /// written and whether the name was cut. `None` for an `out` shorter
+    /// than the length field.
+    pub fn encode(name: &[u16], out: &mut [u8]) -> Option<(usize, bool)> {
+        let at = offset_of!(Self, file_name);
+        out.get_mut(..at)?.copy_from_slice(&((name.len() * 2) as u32).to_le_bytes());
+        put_name(out, at, name)
+    }
+}
+
+impl FileFsVolumeInformation {
+    /// This structure with the label `label` in `out` (`VolumeLabelLength`:
+    /// the whole label), cut to what `out` holds: the bytes written and
+    /// whether the label was cut. `None` for an `out` shorter than the
+    /// fixed part.
+    pub fn encode(&self, label: &[u16], out: &mut [u8]) -> Option<(usize, bool)> {
+        let at = offset_of!(Self, volume_label);
+        let fixed = out.get_mut(..at)?;
+        fixed.fill(0);
+        fixed[0..8].copy_from_slice(&self.volume_creation_time.to_le_bytes());
+        fixed[8..12].copy_from_slice(&self.volume_serial_number.to_le_bytes());
+        fixed[12..16].copy_from_slice(&((label.len() * 2) as u32).to_le_bytes());
+        fixed[16] = self.supports_objects;
+        put_name(out, at, label)
+    }
+}
+
+impl FileFsAttributeInformation {
+    /// This structure with the name `name` in `out` (`FileSystemNameLength`:
+    /// the whole name), cut to what `out` holds: the bytes written and
+    /// whether the name was cut. `None` for an `out` shorter than the fixed
+    /// part.
+    pub fn encode(&self, name: &[u16], out: &mut [u8]) -> Option<(usize, bool)> {
+        let at = offset_of!(Self, file_system_name);
+        let fixed = out.get_mut(..at)?;
+        fixed[0..4].copy_from_slice(&self.file_system_attributes.to_le_bytes());
+        fixed[4..8].copy_from_slice(&self.maximum_component_name_length.to_le_bytes());
+        fixed[8..12].copy_from_slice(&((name.len() * 2) as u32).to_le_bytes());
+        put_name(out, at, name)
+    }
+}
+
+impl FileFsSizeInformation {
+    /// Its bytes, as they go to the caller.
+    pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
+        Encoder([0; size_of::<Self>()])
+            .u64(offset_of!(Self, total_allocation_units), self.total_allocation_units)
+            .u64(offset_of!(Self, available_allocation_units), self.available_allocation_units)
+            .u32(offset_of!(Self, sectors_per_allocation_unit), self.sectors_per_allocation_unit)
+            .u32(offset_of!(Self, bytes_per_sector), self.bytes_per_sector)
+            .0
+    }
+}
+
+impl FileFsFullSizeInformation {
+    /// Its bytes, as they go to the caller.
+    pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
+        Encoder([0; size_of::<Self>()])
+            .u64(offset_of!(Self, total_allocation_units), self.total_allocation_units)
+            .u64(offset_of!(Self, caller_available_allocation_units), self.caller_available_allocation_units)
+            .u64(offset_of!(Self, actual_available_allocation_units), self.actual_available_allocation_units)
+            .u32(offset_of!(Self, sectors_per_allocation_unit), self.sectors_per_allocation_unit)
+            .u32(offset_of!(Self, bytes_per_sector), self.bytes_per_sector)
+            .0
+    }
+}
+
 /// Little-endian fields put at their offsets, the rest (padding) zero.
 struct Encoder<const N: usize>([u8; N]);
 
@@ -355,6 +502,22 @@ impl FileFsDeviceInformation {
 }
 
 impl FileBasicInformation {
+    /// The structure in `bytes`, as a caller gives it (NtSetInformationFile).
+    pub fn from_bytes(bytes: &[u8; size_of::<Self>()]) -> Self {
+        let long = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap_or([0; 8]));
+        Self {
+            creation_time: long(offset_of!(Self, creation_time)),
+            last_access_time: long(offset_of!(Self, last_access_time)),
+            last_write_time: long(offset_of!(Self, last_write_time)),
+            change_time: long(offset_of!(Self, change_time)),
+            file_attributes: u32::from_le_bytes(
+                bytes[offset_of!(Self, file_attributes)..offset_of!(Self, file_attributes) + 4]
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            ),
+        }
+    }
+
     /// Its bytes, as they go to the caller, padding zeroed.
     pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
         Encoder([0; size_of::<Self>()])
@@ -433,6 +596,18 @@ const _: () = {
     assert!(offset_of!(FileFullDirInformation, file_name_length) == 60);
     assert!(offset_of!(FileBothDirInformation, file_name_length) == 60);
     assert!(offset_of!(FileBothDirInformation, allocation_size) == 48);
+    assert!(size_of::<FileNameInformation>() == 8);
+    assert!(offset_of!(FileNameInformation, file_name) == 4);
+    assert!(size_of::<FileFsVolumeInformation>() == 24);
+    assert!(offset_of!(FileFsVolumeInformation, volume_serial_number) == 8);
+    assert!(offset_of!(FileFsVolumeInformation, supports_objects) == 16);
+    assert!(offset_of!(FileFsVolumeInformation, volume_label) == 18);
+    assert!(size_of::<FileFsSizeInformation>() == 24);
+    assert!(offset_of!(FileFsSizeInformation, sectors_per_allocation_unit) == 16);
+    assert!(size_of::<FileFsFullSizeInformation>() == 32);
+    assert!(offset_of!(FileFsFullSizeInformation, sectors_per_allocation_unit) == 24);
+    assert!(size_of::<FileFsAttributeInformation>() == 16);
+    assert!(offset_of!(FileFsAttributeInformation, file_system_name) == 12);
 };
 
 #[cfg(test)]
@@ -453,6 +628,8 @@ mod tests {
         assert_eq!(&bytes[22..], &[0, 0]);
         let iosb = IoStatusBlock32 { status: 0xC000_0034, information: 1 }.to_bytes();
         assert_eq!(iosb, [0x34, 0, 0, 0xC0, 1, 0, 0, 0]);
+        let back = FileBasicInformation::from_bytes(&basic.to_bytes());
+        assert_eq!(back, basic, "read back as a caller gives it");
     }
 
     /// `text` (ASCII) in UTF-16, in `out`.
@@ -496,5 +673,51 @@ mod tests {
         let mut odd = [0u8; 64 + 5];
         assert_eq!(entry.encode(FILE_DIRECTORY_INFORMATION, &mut odd), Some(64 + 4), "whole units only");
         assert_eq!(odd[60], 4);
+    }
+
+    #[test]
+    fn names_follow_their_structure_and_say_their_whole_length() {
+        let name = units::<9>("\\WINDOWS\\");
+        let mut out = [0xAAu8; 32];
+        assert_eq!(FileNameInformation::encode(&name, &mut out), Some((4 + 18, false)));
+        assert_eq!((out[0], out[4], out[6], out[22]), (18, b'\\', b'W', 0xAA));
+        // Cut: the length still says the whole name.
+        assert_eq!(FileNameInformation::encode(&name, &mut out[..9]), Some((8, true)));
+        assert_eq!(out[0], 18);
+        assert_eq!(FileNameInformation::encode(&name, &mut out[..3]), None);
+
+        let volume = FileFsVolumeInformation { volume_serial_number: 0x4D49_4E4F, ..Default::default() };
+        let label = units::<4>("MINO");
+        let mut out = [0xAAu8; 40];
+        assert_eq!(volume.encode(&label, &mut out), Some((18 + 8, false)));
+        assert_eq!(
+            (&out[8..12], out[12], out[16], out[18], out[24]),
+            (&[0x4F, 0x4E, 0x49, 0x4D][..], 8, 0, b'M', b'O')
+        );
+        assert_eq!(volume.encode(&[], &mut out[..24]), Some((18, false)), "no label");
+        assert_eq!(volume.encode(&label, &mut out[..17]), None);
+
+        let attributes = FileFsAttributeInformation {
+            file_system_attributes: FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK,
+            maximum_component_name_length: 255,
+            ..Default::default()
+        };
+        let fat32 = units::<5>("FAT32");
+        assert_eq!(attributes.encode(&fat32, &mut out), Some((12 + 10, false)));
+        assert_eq!((out[0], out[4], out[8], out[12], out[20]), (6, 255, 10, b'F', b'2'));
+        assert_eq!(attributes.encode(&fat32, &mut out[..16]), Some((16, true)));
+
+        let size = FileFsFullSizeInformation {
+            total_allocation_units: 0x1_0000_0002,
+            caller_available_allocation_units: 7,
+            actual_available_allocation_units: 7,
+            sectors_per_allocation_unit: 8,
+            bytes_per_sector: 512,
+        }
+        .to_bytes();
+        assert_eq!((size[0], size[4], size[8], size[16], size[24], &size[28..30]), (2, 1, 7, 7, 8, &[0, 2][..]));
+        let small =
+            FileFsSizeInformation { available_allocation_units: 3, bytes_per_sector: 512, ..Default::default() };
+        assert_eq!((small.to_bytes()[8], small.to_bytes()[21]), (3, 2));
     }
 }

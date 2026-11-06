@@ -44,7 +44,7 @@ pub use driver::{DeviceObject, DriverObject};
 pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
 pub use file::{check_disposition, check_open, creates, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
-pub use volume::{Listed, Node, Volume};
+pub use volume::{Listed, Node, Space, Volume, VolumeLabel};
 
 /// Le disque RAM de démarrage, comme volume.
 pub const RAMDISK_VOLUME: &str = "\\Device\\Ramdisk0";

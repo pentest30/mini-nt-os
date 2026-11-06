@@ -51,7 +51,7 @@ use hal::sync::KSpinLock;
 use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef, ObjectType, Parsed};
 
 use crate::directory;
-use crate::volume::{Listed, Node, Volume};
+use crate::volume::{Listed, Node, Space, Volume, VolumeLabel};
 
 /// FILE_ALL_ACCESS.
 pub const FILE_ALL_ACCESS_MASK: AccessMask = AccessMask(FILE_ALL_ACCESS);
@@ -197,6 +197,23 @@ impl File {
         self.volume.device_information()
     }
 
+    /// Le numéro de série et le nom de son volume (FileFsVolumeInformation).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn volume_label(&self) -> Result<VolumeLabel, NtStatus> {
+        self.volume.label()
+    }
+
+    /// La place de son volume (FileFsSizeInformation,
+    /// FileFsFullSizeInformation).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn space(&self) -> Result<Space, NtStatus> {
+        self.volume.space()
+    }
+
     /// FILE_BASIC_INFORMATION.
     pub fn basic_information(&self) -> Result<FileBasicInformation, NtStatus> {
         let node = self.node()?;
@@ -208,6 +225,15 @@ impl File {
             change_time: node.last_write_time,
             file_attributes: node.attributes,
         })
+    }
+
+    /// Change ses dates et ses attributs (NtSetInformationFile,
+    /// FileBasicInformation) : voir `Volume::set_basic`.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_basic_information(&self, basic: &FileBasicInformation) -> Result<(), NtStatus> {
+        self.volume.set_basic(&self.opened, basic).map(|_| ())
     }
 
     /// La place que `node` occupe : sa taille, au cluster supérieur.

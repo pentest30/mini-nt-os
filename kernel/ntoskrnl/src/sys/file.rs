@@ -25,17 +25,20 @@ use abi::file::{
     FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
 };
 use abi::file::{
-    FileBasicInformation, FileFsDeviceInformation, FileNetworkOpenInformation, FilePositionInformation,
-    FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE, FILE_FS_DEVICE_INFORMATION,
-    FILE_FS_MAXIMUM_INFORMATION, FILE_MAXIMUM_DISPOSITION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE,
-    FILE_OPEN, FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
-    FILE_VALID_OPTION_FLAGS,
+    FileBasicInformation, FileFsAttributeInformation, FileFsDeviceInformation, FileFsFullSizeInformation,
+    FileFsSizeInformation, FileFsVolumeInformation, FileNameInformation, FileNetworkOpenInformation,
+    FilePositionInformation, FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION,
+    FILE_CASE_PRESERVED_NAMES, FILE_DIRECTORY_FILE, FILE_FS_ATTRIBUTE_INFORMATION, FILE_FS_DEVICE_INFORMATION,
+    FILE_FS_FULL_SIZE_INFORMATION, FILE_FS_MAXIMUM_INFORMATION, FILE_FS_SIZE_INFORMATION, FILE_FS_VOLUME_INFORMATION,
+    FILE_MAXIMUM_DISPOSITION, FILE_NAME_INFORMATION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+    FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
+    FILE_UNICODE_ON_DISK, FILE_VALID_OPTION_FLAGS, FILE_WRITE_ATTRIBUTES,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE,
-    STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER,
-    STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND,
-    STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED,
+    STATUS_END_OF_FILE, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS,
+    STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_OBJECT_NAME_INVALID,
+    STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
 use alloc::sync::Arc;
@@ -201,14 +204,36 @@ pub(super) fn nt_query_full_attributes_file(arguments: &[u32]) -> NtStatus {
 
 /// NtQueryInformationFile(FileHandle, IoStatusBlock, FileInformation,
 /// Length, FileInformationClass) : FileBasic (`FILE_READ_ATTRIBUTES`),
-/// FileStandard, FilePosition ou FileNetworkOpenInformation
-/// (`FILE_READ_ATTRIBUTES`). `STATUS_INFO_LENGTH_MISMATCH` sous la taille
-/// de la classe.
+/// FileStandard, FileName (le chemin depuis la racine du volume),
+/// FilePosition ou FileNetworkOpenInformation (`FILE_READ_ATTRIBUTES`).
+/// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe ; un nom
+/// coupé : `STATUS_BUFFER_OVERFLOW`, sa longueur entière dans
+/// `FileNameLength`.
 pub(super) fn nt_query_information_file(arguments: &[u32]) -> NtStatus {
-    status(query_information_file(arguments))
+    query_information_file(arguments).unwrap_or_else(|status| status)
 }
 
-fn query_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
+/// Le plus grand tampon que remplit une classe de longueur variable : un
+/// chemin (`MAX_PATH`), un nom de volume.
+const VARIABLE_INFORMATION: usize = 4096;
+
+/// Écrit `information` en `buffer` et le bloc d'état en `iosb` : `status`
+/// (un succès ou `STATUS_BUFFER_OVERFLOW`) et la taille écrite.
+fn give_information(information: &[u8], status: NtStatus, iosb: u32, buffer: u32) -> Result<NtStatus, NtStatus> {
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    write_information(information, buffer)?;
+    write_iosb(iosb, status, information.len() as u32)?;
+    Ok(status)
+}
+
+/// Les octets de `encoded` (une structure suivie d'un nom, dans `out`), et
+/// `STATUS_BUFFER_OVERFLOW` si le nom est coupé.
+fn variable(out: &[u8], encoded: Option<(usize, bool)>) -> (Vec<u8>, NtStatus) {
+    let (written, cut) = encoded.unwrap_or((0, false));
+    (out[..written].to_vec(), if cut { STATUS_BUFFER_OVERFLOW } else { STATUS_SUCCESS })
+}
+
+fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
     let [handle, iosb, buffer, length, class] = arguments[..5] else { unreachable!("5 arguments") };
     if class == 0 || class >= FILE_MAXIMUM_INFORMATION {
         return Err(STATUS_INVALID_INFO_CLASS);
@@ -217,6 +242,7 @@ fn query_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     let (size, access) = match class {
         FILE_BASIC_INFORMATION => (size_of::<FileBasicInformation>(), FILE_READ_ATTRIBUTES),
         FILE_STANDARD_INFORMATION => (size_of::<FileStandardInformation>(), 0),
+        FILE_NAME_INFORMATION => (size_of::<FileNameInformation>(), 0),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
         FILE_NETWORK_OPEN_INFORMATION => (size_of::<FileNetworkOpenInformation>(), FILE_READ_ATTRIBUTES),
         _ => return Err(FILE_CLASSES.report(class)),
@@ -226,44 +252,103 @@ fn query_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     }
     let file =
         super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask(access))?;
-    let information: Vec<u8> = match class {
-        FILE_BASIC_INFORMATION => file.basic_information()?.to_bytes().into(),
-        FILE_STANDARD_INFORMATION => file.standard_information()?.to_bytes().into(),
-        FILE_POSITION_INFORMATION => FilePositionInformation { current_byte_offset: file.position() }.to_bytes().into(),
-        _ => file.network_open_information()?.to_bytes().into(),
+    let (information, status): (Vec<u8>, NtStatus) = match class {
+        FILE_BASIC_INFORMATION => (file.basic_information()?.to_bytes().into(), STATUS_SUCCESS),
+        FILE_STANDARD_INFORMATION => (file.standard_information()?.to_bytes().into(), STATUS_SUCCESS),
+        FILE_NAME_INFORMATION => {
+            let name: Vec<u16> = file.path().encode_utf16().collect();
+            let mut out = alloc::vec![0u8; (length as usize).min(VARIABLE_INFORMATION)];
+            let encoded = FileNameInformation::encode(&name, &mut out);
+            variable(&out, encoded)
+        }
+        FILE_POSITION_INFORMATION => {
+            (FilePositionInformation { current_byte_offset: file.position() }.to_bytes().into(), STATUS_SUCCESS)
+        }
+        _ => (file.network_open_information()?.to_bytes().into(), STATUS_SUCCESS),
     };
-    let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information: information.len() as u32 };
-    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
-    write_information(&information, buffer)?;
-    ke::usermem::copy_to_user(u64::from(iosb), &block.to_bytes())
+    give_information(&information, status, iosb, buffer)
 }
 
 /// NtQueryVolumeInformationFile(FileHandle, IoStatusBlock, FsInformation,
-/// Length, FsInformationClass) : FileFsDeviceInformation, que le
-/// gestionnaire d'E/S rend lui-même, sans droit particulier.
-/// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe.
+/// Length, FsInformationClass), sans droit particulier :
+/// FileFsVolumeInformation (le numéro de série et le nom du volume),
+/// FileFsSizeInformation et FileFsFullSizeInformation (ses clusters, dont
+/// les libres), FileFsDeviceInformation (que le gestionnaire d'E/S rend
+/// lui-même), FileFsAttributeInformation (FAT32 : noms gardés avec leur
+/// casse, en Unicode, de 255 caractères au plus).
+/// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe ; un nom coupé :
+/// `STATUS_BUFFER_OVERFLOW`, sa longueur entière dans la structure.
 pub(super) fn nt_query_volume_information_file(arguments: &[u32]) -> NtStatus {
-    status(query_volume_information_file(arguments))
+    query_volume_information_file(arguments).unwrap_or_else(|status| status)
 }
 
-fn query_volume_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
+/// Le nom du système de fichiers des volumes (FileFsAttributeInformation).
+const FILE_SYSTEM_NAME: &str = "FAT32";
+
+/// La longueur la plus grande d'un composant d'un chemin sur FAT (VFAT).
+const MAXIMUM_COMPONENT_LENGTH: u32 = 255;
+
+fn query_volume_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
     let [handle, iosb, buffer, length, class] = arguments[..5] else { unreachable!("5 arguments") };
     if class == 0 || class >= FILE_FS_MAXIMUM_INFORMATION {
         return Err(STATUS_INVALID_INFO_CLASS);
     }
-    if class != FILE_FS_DEVICE_INFORMATION {
-        return Err(VOLUME_CLASSES.report(class));
-    }
-    if (length as usize) < size_of::<FileFsDeviceInformation>() {
+    let size = match class {
+        FILE_FS_VOLUME_INFORMATION => size_of::<FileFsVolumeInformation>(),
+        FILE_FS_SIZE_INFORMATION => size_of::<FileFsSizeInformation>(),
+        FILE_FS_DEVICE_INFORMATION => size_of::<FileFsDeviceInformation>(),
+        FILE_FS_ATTRIBUTE_INFORMATION => size_of::<FileFsAttributeInformation>(),
+        FILE_FS_FULL_SIZE_INFORMATION => size_of::<FileFsFullSizeInformation>(),
+        _ => return Err(VOLUME_CLASSES.report(class)),
+    };
+    if (length as usize) < size {
         return Err(STATUS_INFO_LENGTH_MISMATCH);
     }
     let file =
         super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask::NONE)?;
-    let information = file.device_information().to_bytes();
-    let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information: information.len() as u32 };
-    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
-    write_information(&information, buffer)?;
-    ke::usermem::copy_to_user(u64::from(iosb), &block.to_bytes())
+    let mut out = alloc::vec![0u8; (length as usize).min(VARIABLE_INFORMATION)];
+    let (information, status): (Vec<u8>, NtStatus) = match class {
+        FILE_FS_VOLUME_INFORMATION => {
+            let volume = file.volume_label()?;
+            let label: Vec<u16> = volume.label.encode_utf16().collect();
+            let fixed = FileFsVolumeInformation { volume_serial_number: volume.serial, ..Default::default() };
+            let encoded = fixed.encode(&label, &mut out);
+            variable(&out, encoded)
+        }
+        FILE_FS_ATTRIBUTE_INFORMATION => {
+            let name: Vec<u16> = FILE_SYSTEM_NAME.encode_utf16().collect();
+            let fixed = FileFsAttributeInformation {
+                file_system_attributes: FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK,
+                maximum_component_name_length: MAXIMUM_COMPONENT_LENGTH,
+                ..Default::default()
+            };
+            let encoded = fixed.encode(&name, &mut out);
+            variable(&out, encoded)
+        }
+        FILE_FS_SIZE_INFORMATION => {
+            let space = file.space()?;
+            let information = FileFsSizeInformation {
+                total_allocation_units: u64::from(space.total_clusters),
+                available_allocation_units: u64::from(space.free_clusters),
+                sectors_per_allocation_unit: space.sectors_per_cluster,
+                bytes_per_sector: space.bytes_per_sector,
+            };
+            (information.to_bytes().into(), STATUS_SUCCESS)
+        }
+        FILE_FS_FULL_SIZE_INFORMATION => {
+            let space = file.space()?;
+            let information = FileFsFullSizeInformation {
+                total_allocation_units: u64::from(space.total_clusters),
+                caller_available_allocation_units: u64::from(space.free_clusters),
+                actual_available_allocation_units: u64::from(space.free_clusters),
+                sectors_per_allocation_unit: space.sectors_per_cluster,
+                bytes_per_sector: space.bytes_per_sector,
+            };
+            (information.to_bytes().into(), STATUS_SUCCESS)
+        }
+        _ => (file.device_information().to_bytes().into(), STATUS_SUCCESS),
+    };
+    give_information(&information, status, iosb, buffer)
 }
 
 /// Les données d'un appel passent par des tampons de cette taille.
@@ -385,8 +470,10 @@ pub(super) fn nt_flush_buffers_file(arguments: &[u32]) -> NtStatus {
 static SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformationFile");
 
 /// NtSetInformationFile(FileHandle, IoStatusBlock, FileInformation, Length,
-/// FileInformationClass) : FilePositionInformation (la position) et
-/// FileEndOfFileInformation (la taille, `FILE_WRITE_DATA`).
+/// FileInformationClass) : FileBasicInformation (les dates et les attributs,
+/// `FILE_WRITE_ATTRIBUTES` ; 0 laisse un champ comme il est),
+/// FilePositionInformation (la position) et FileEndOfFileInformation (la
+/// taille, `FILE_WRITE_DATA`).
 pub(super) fn nt_set_information_file(arguments: &[u32]) -> NtStatus {
     status(set_information_file(arguments))
 }
@@ -396,21 +483,28 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     if class == 0 || class >= FILE_MAXIMUM_INFORMATION {
         return Err(STATUS_INVALID_INFO_CLASS);
     }
-    let access = match class {
-        FILE_POSITION_INFORMATION => 0,
-        FILE_END_OF_FILE_INFORMATION => FILE_WRITE_DATA,
+    let (size, access) = match class {
+        FILE_BASIC_INFORMATION => (size_of::<FileBasicInformation>(), FILE_WRITE_ATTRIBUTES),
+        FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
+        FILE_END_OF_FILE_INFORMATION => (8, FILE_WRITE_DATA),
         _ => return Err(SET_CLASSES.report(class)),
     };
-    if length < 8 {
+    if (length as usize) < size {
         return Err(STATUS_INFO_LENGTH_MISMATCH);
     }
     let file =
         super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask(access))?;
     ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
-    let value = UserPtr::<u64>::new(buffer).read()?;
     match class {
-        FILE_POSITION_INFORMATION => file.set_position(value),
+        FILE_BASIC_INFORMATION => {
+            let mut bytes = [0u8; size_of::<FileBasicInformation>()];
+            ke::usermem::probe_for_read(u64::from(buffer), bytes.len(), 8)?;
+            ke::usermem::copy_from_user(&mut bytes, u64::from(buffer))?;
+            file.set_basic_information(&FileBasicInformation::from_bytes(&bytes))?;
+        }
+        FILE_POSITION_INFORMATION => file.set_position(UserPtr::<u64>::new(buffer).read()?),
         _ => {
+            let value = UserPtr::<u64>::new(buffer).read()?;
             if file.is_directory() {
                 return Err(STATUS_INVALID_PARAMETER);
             }
