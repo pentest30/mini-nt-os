@@ -16,21 +16,37 @@
 //! message posté ne sort (co_IntPeekMessage : messages postés, WM_QUIT, puis
 //! WM_PAINT).
 //!
-//! Pas encore : les messages envoyés (SendMessage entre threads), les
-//! entrées (clavier, souris : le thread d'entrée), WM_TIMER synthétisé, les
-//! crochets, le filtre par fenêtre fille des messages postés (seule la
-//! fenêtre nommée), la position du curseur (`pt` est nul).
+//! Les touches du clavier (`crate::input`) arrivent à part, dans l'ordre
+//! (les messages matériels, `QS_KEY`) : elles sortent après les messages
+//! postés et WM_QUIT, avant WM_PAINT. Une touche qui sort de la file change
+//! l'état du clavier du thread ([`QueueState::keys`],
+//! UpdateKeyStateFromMsg), que lisent GetKeyState, GetKeyboardState et
+//! TranslateMessage : celui des messages déjà traités, pas celui du
+//! clavier. La file garde aussi la fenêtre active du thread et celle qui a
+//! le clavier (`spwndActive`, `spwndFocus`).
+//!
+//! Pas encore : les messages envoyés (SendMessage entre threads), la
+//! souris, WM_TIMER synthétisé, les crochets, le filtre par fenêtre fille
+//! des messages postés (seule la fenêtre nommée), la position du curseur
+//! (`pt` est nul).
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
 use abi::ntstatus::NtStatus;
-use abi::user::{Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_PAINT, QS_POSTMESSAGE, WM_DEVICECHANGE, WM_QUIT};
+use abi::user::vk::{
+    VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_SHIFT,
+};
+use abi::user::{
+    Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_PAINT, QS_POSTMESSAGE, WM_DEVICECHANGE, WM_KEYDOWN,
+    WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+};
 use ex::{Event, EventType};
 use hal::sync::KSpinLock;
 use ob::Object;
 
 use crate::gui::ThreadInfo;
+use crate::kbdtables::{is_down, KeyState, DOWN, LOCKED};
 
 /// Un message porte un pointeur, et ne peut pas être posté
 /// (is_pointer_message : `ERROR_MESSAGE_SYNC_ONLY`).
@@ -66,9 +82,16 @@ impl Filter {
 }
 
 /// Ce que tient une file.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct QueueState {
     posted: VecDeque<Msg32>,
+    /// Les touches du clavier, dans l'ordre (`HardwareMessagesListHead`).
+    input: VecDeque<Msg32>,
+    /// L'état du clavier vu du thread (`afKeyState`).
+    pub keys: KeyState,
+    /// La fenêtre active du thread et celle qui a le clavier (0 : aucune).
+    pub active: u32,
+    pub focus: u32,
     /// WM_QUIT demandé, avec son code de sortie.
     quit: Option<u32>,
     /// `cPaintsReady` : les fenêtres du thread qui ont à se peindre.
@@ -79,8 +102,61 @@ pub struct QueueState {
     pub change: u16,
 }
 
+impl Default for QueueState {
+    fn default() -> Self {
+        Self {
+            posted: VecDeque::new(),
+            input: VecDeque::new(),
+            keys: [0; 256],
+            active: 0,
+            focus: 0,
+            quit: None,
+            paints: 0,
+            wake: 0,
+            change: 0,
+        }
+    }
+}
+
+/// UpdateKeyState : `vk` enfoncée ou relâchée dans `keys` ; une touche qui
+/// s'enfonce se bascule.
+fn update_key(keys: &mut KeyState, vk: u8, down: bool) {
+    let key = &mut keys[usize::from(vk)];
+    if down {
+        if *key & DOWN == 0 {
+            *key ^= LOCKED;
+        }
+        *key |= DOWN;
+    } else {
+        *key &= !DOWN;
+    }
+}
+
+/// UpdateKeyStateFromMsg : l'état `keys` après la touche de `message` ;
+/// une touche gauche ou droite change aussi la touche commune.
+pub fn update_keys_from_message(keys: &mut KeyState, message: &Msg32) {
+    let down = match message.message {
+        WM_KEYDOWN | WM_SYSKEYDOWN => true,
+        WM_KEYUP | WM_SYSKEYUP => false,
+        _ => return,
+    };
+    let vk = message.w_param as u8;
+    update_key(keys, vk, down);
+    let common = match vk {
+        VK_LCONTROL | VK_RCONTROL => Some((VK_CONTROL, VK_LCONTROL, VK_RCONTROL)),
+        VK_LMENU | VK_RMENU => Some((VK_MENU, VK_LMENU, VK_RMENU)),
+        VK_LSHIFT | VK_RSHIFT => Some((VK_SHIFT, VK_LSHIFT, VK_RSHIFT)),
+        _ => None,
+    };
+    if let Some((common, left, right)) = common {
+        let down = is_down(keys, left) || is_down(keys, right);
+        update_key(keys, common, down);
+    }
+}
+
 impl QueueState {
-    /// Les bits de ce qui est posté, s'il y a quelque chose.
+    /// Les bits de ce qui est posté, et des touches, s'il y a quelque
+    /// chose.
     fn refresh(&mut self) {
         let posted = QS_POSTMESSAGE | QS_ALLPOSTMESSAGE;
         if self.posted.is_empty() && self.quit.is_none() {
@@ -88,6 +164,19 @@ impl QueueState {
         } else {
             self.wake |= posted;
         }
+        if self.input.is_empty() {
+            self.wake &= !QS_KEY;
+        } else {
+            self.wake |= QS_KEY;
+        }
+    }
+
+    /// MsqPostMessage d'un message matériel : la touche `message` à la fin
+    /// des touches (`QS_KEY`).
+    pub fn post_input(&mut self, message: Msg32) {
+        self.input.push_back(message);
+        self.change |= QS_KEY;
+        self.refresh();
     }
 
     /// MsqPostMessage : `message` à la fin de la file.
@@ -142,23 +231,36 @@ impl QueueState {
 
     /// co_IntPeekMessage : le premier message posté que demande `filter`,
     /// sorti de la file si `remove` ; sinon WM_QUIT, s'il est demandé et
-    /// qu'aucun message posté ne reste. Les bits de changement des messages
-    /// postés sont effacés : on a regardé.
+    /// qu'aucun message posté ne reste ; sinon la première touche demandée
+    /// (co_MsqPeekHardwareMessage), dont l'état du clavier du thread prend
+    /// compte. Les bits de changement des messages postés et des touches
+    /// sont effacés : on a regardé.
     pub fn peek(&mut self, filter: &Filter, remove: bool) -> Option<Msg32> {
-        self.change &= !(QS_POSTMESSAGE | QS_ALLPOSTMESSAGE);
+        self.change &= !(QS_POSTMESSAGE | QS_ALLPOSTMESSAGE | QS_KEY);
         let found = match self.posted.iter().position(|message| filter.matches(message)) {
             Some(index) if remove => self.posted.remove(index),
             Some(index) => Some(self.posted[index]),
-            None if self.posted.is_empty() => self.quit.map(|code| {
+            None if self.posted.is_empty() && self.quit.is_some() => self.quit.map(|code| {
                 if remove {
                     self.quit = None;
                 }
                 Msg32 { message: WM_QUIT, w_param: code, ..Msg32::default() }
             }),
-            None => None,
+            None => self.peek_input(filter, remove),
         };
         self.refresh();
         found
+    }
+
+    /// La première touche que demande `filter`, sortie si `remove` ; l'état
+    /// du clavier du thread en prend compte, puis la touche gauche ou droite
+    /// du message devient la touche commune (co_IntProcessKeyboardMessage).
+    fn peek_input(&mut self, filter: &Filter, remove: bool) -> Option<Msg32> {
+        let index = self.input.iter().position(|message| filter.matches(message))?;
+        let mut message = if remove { self.input.remove(index)? } else { self.input[index] };
+        update_keys_from_message(&mut self.keys, &message);
+        message.w_param = u32::from(crate::input::simplify_vk(message.w_param as u8));
+        Some(message)
     }
 
     /// IntGetQueueStatus : `(fsChangeBits & flags) | (fsWakeBits & flags) << 16`
@@ -224,6 +326,16 @@ impl Default for MessageQueue {
 /// <= DISPATCH_LEVEL.
 pub fn post(thread: &ThreadInfo, message: Msg32) {
     let ((), wake, change) = thread.queue.with(|queue| queue.post(message));
+    thread.mirror_queue_bits(wake, change);
+    thread.queue.wake();
+}
+
+/// La touche `message` pour `thread` (`QS_KEY`), qui est réveillé.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn post_input(thread: &ThreadInfo, message: Msg32) {
+    let ((), wake, change) = thread.queue.with(|queue| queue.post_input(message));
     thread.mirror_queue_bits(wake, change);
     thread.queue.wake();
 }
@@ -320,7 +432,7 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 /// PASSIVE_LEVEL, dans le thread.
 pub fn wait_message(thread: &ThreadInfo) -> Result<(), NtStatus> {
     let ((), wake, _) = thread.queue.with(|_| ());
-    if wake & (QS_POSTMESSAGE | QS_PAINT) != 0 {
+    if wake & (QS_POSTMESSAGE | QS_KEY | QS_PAINT) != 0 {
         return Ok(());
     }
     wait(thread)
@@ -350,6 +462,35 @@ mod tests {
 
     fn message(hwnd: u32, message: u32, w_param: u32) -> Msg32 {
         Msg32 { hwnd, message, w_param, ..Msg32::default() }
+    }
+
+    #[test]
+    fn keys_come_after_posted_messages_and_change_the_thread_s_keys() {
+        let mut queue = QueueState::default();
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        queue.post_input(message(7, WM_KEYDOWN, u32::from(VK_LSHIFT)));
+        queue.post_input(message(7, WM_KEYDOWN, u32::from(b'A')));
+        queue.post(message(7, 0x0400, 1));
+        assert_eq!(queue.wake & (QS_KEY | QS_POSTMESSAGE), QS_KEY | QS_POSTMESSAGE);
+        assert_eq!(queue.peek(&all, true).map(|m| m.message), Some(0x0400), "posted first");
+        assert!(!is_down(&queue.keys, VK_SHIFT), "no key out yet");
+        let peeked = queue.peek(&all, false).unwrap();
+        assert_eq!((peeked.message, peeked.w_param), (WM_KEYDOWN, u32::from(VK_SHIFT)), "the common key");
+        assert!(is_down(&queue.keys, VK_LSHIFT) && is_down(&queue.keys, VK_SHIFT), "the common key too");
+        queue.peek(&all, true);
+        let only_window_8 = Filter { hwnd: 8, min: 0, max: 0 };
+        assert_eq!(queue.peek(&only_window_8, true), None, "the filter applies");
+        assert_eq!(queue.peek(&all, true).map(|m| m.w_param), Some(u32::from(b'A')));
+        assert_eq!(queue.wake & QS_KEY, 0, "no key left");
+        queue.post_input(message(7, WM_KEYUP, u32::from(VK_LSHIFT)));
+        queue.post_quit(0);
+        assert_eq!(queue.peek(&all, true).map(|m| m.message), Some(WM_QUIT), "WM_QUIT before the keys");
+        queue.peek(&all, true);
+        assert!(!is_down(&queue.keys, VK_SHIFT) && is_locked_key(&queue.keys, VK_LSHIFT), "up, toggled once");
+    }
+
+    fn is_locked_key(keys: &KeyState, vk: u8) -> bool {
+        crate::kbdtables::is_locked(keys, vk)
     }
 
     #[test]

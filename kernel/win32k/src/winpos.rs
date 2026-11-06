@@ -24,6 +24,9 @@
 //! visibles, sinon `WS_VISIBLE` seul), puis WM_SIZE et WM_MOVE qui
 //! attendaient qu'elle soit montrée (`WNDS_SENDSIZEMOVEMSGS`).
 //!
+//! Une fenêtre de premier niveau activée passe au premier plan
+//! ([`crate::input::activate`]) : sa file reçoit le clavier.
+//!
 //! Après le déplacement ([`crate::paint`]) : une fenêtre visible est
 //! invalidée entière, ce qu'elle découvre est exposé (le bureau s'y
 //! repeint), et une fenêtre montrée, déplacée ou redimensionnée repeint
@@ -31,9 +34,8 @@
 //!
 //! Pas encore, journalisé une fois : réduire et agrandir (les commandes qui
 //! le demandent, ou montrer une fenêtre réduite ou agrandie, ne font rien et
-//! rendent FALSE), la fenêtre active et le focus ; la copie des bits valides
-//! (tout est repeint), l'activation et le premier plan d'une fenêtre de premier niveau
-//! (aucune n'est au premier plan), garder les fenêtres possédées au-dessus
+//! rendent FALSE) ; la copie des bits valides (tout est repeint), garder
+//! les fenêtres possédées au-dessus
 //! de leur propriétaire (WinPosDoOwnedPopups), `SWP_ASYNCWINDOWPOS` (fait
 //! tout de suite), les messages à la fenêtre d'un autre thread.
 
@@ -385,8 +387,7 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
         if state.style & (WS_CHILD | WS_POPUP) == WS_CHILD {
             let _ = window::send_message(window, WM_CHILDACTIVATE, 0, LParam::Value(0));
         } else {
-            static REPORTED: AtomicBool = AtomicBool::new(false);
-            report_missing("activating a top-level window (foreground)", &REPORTED);
+            crate::input::activate(window);
         }
     }
 

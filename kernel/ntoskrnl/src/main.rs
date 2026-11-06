@@ -13,6 +13,7 @@
 
 extern crate alloc;
 mod hardware;
+mod input;
 mod launcher;
 mod shared_data;
 mod sys;
@@ -333,6 +334,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
+    // The keyboard to win32k (once it has the screen).
+    input::start();
     // Raises starved threads every second (ke::sched).
     spawn_kernel_thread(
         ke::balance::BALANCE_SET_MANAGER_PRIORITY,

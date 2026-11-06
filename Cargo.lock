@@ -192,6 +192,7 @@ dependencies = [
  "ex",
  "gopfb",
  "hal",
+ "i8042",
  "io-manager",
  "ke",
  "log",

@@ -572,6 +572,7 @@ pub const WND_UNICODE: u32 = 0x1;
 pub const WS_POPUP: u32 = 0x8000_0000;
 pub const WS_CHILD: u32 = 0x4000_0000;
 pub const WS_MINIMIZE: u32 = 0x2000_0000;
+pub const WS_DISABLED: u32 = 0x0800_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
 pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
