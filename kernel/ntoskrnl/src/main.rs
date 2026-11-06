@@ -8208,6 +8208,11 @@ fn system_dll_self_test() {
     const TWENTY_MS: u32 = DATA + 0x78;
     const MAGIC: u32 = 0x5C5C_0001;
     let shared = |offset: u32| KUSER_SHARED_DATA_VA + offset;
+    // A stable word of the read-only page. Offset zero is
+    // TickCountLowDeprecated, which the clock updates concurrently through
+    // the kernel alias and is therefore a poor write-protection probe.
+    const SHARED_WRITE: u32 =
+        KUSER_SHARED_DATA_VA + core::mem::offset_of!(abi::shared_data::KUserSharedData, nt_major_version) as u32;
 
     /// `call target`, from code that starts at `origin`.
     fn call_to(code: &mut Code, origin: u32, target: u32) {
@@ -8330,7 +8335,7 @@ fn system_dll_self_test() {
         .store_eax(GS_KEPT + 4)
         .bytes(&[0x65, 0xA1, 0x18, 0, 0, 0]) // mov eax, gs:[0x18]
         .store_eax(GS_KEPT + 8)
-        .word(&[0xA3], KUSER_SHARED_DATA_VA) // mov [0x7FFE0000], eax: read-only
+        .word(&[0xA3], SHARED_WRITE) // mov [SharedUserData->NtMajorVersion], eax: read-only
         .word(&[0xC7, 0x05], AFTER_WRITE)
         .bytes(&1u32.to_le_bytes())
         // NtClose(0x1234) with DF set, then EFLAGS.
@@ -8436,7 +8441,13 @@ fn system_dll_self_test() {
     assert_eq!((fields[5], fields[6]), (1 << 24, 2), "TickCountMultiplier, NXSupportPolicy (OptIn)");
     assert_ne!(fields[7], 0, "the clock does not update TickCount");
     let exception: [u32; 3] = core::array::from_fn(|i| read(N_EXCEPTION + 4 * i as u32));
-    assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, KUSER_SHARED_DATA_VA], "a write to KUSER_SHARED_DATA");
+    log::info!(
+        "[smoke] KUSER_SHARED_DATA write exception: code={:#010x}, access={}, address={:#010x}",
+        exception[0],
+        exception[1],
+        exception[2],
+    );
+    assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, SHARED_WRITE], "a write to KUSER_SHARED_DATA");
     assert_eq!(read(AFTER_WRITE), 1, "ntdll's dispatcher did not resume the program");
     let teb_selector = u32::from(ke::context::UserSelectors::current().teb);
     assert_eq!(read(GS_KEPT), thread.teb(), "GS does not reach the TEB");
