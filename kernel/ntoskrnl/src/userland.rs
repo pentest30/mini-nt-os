@@ -495,6 +495,10 @@ fn run_native(
         }
         log::info!("[{tag}] {name} created {child_name} (PID {pid}): exit status {}", child.exit_status());
     }
+    let dropped = hal::ps2::dropped();
+    if dropped != 0 {
+        log::warn!("[{tag}] keyboard: {dropped} scan codes dropped, the ring of hal::ps2 full");
+    }
     let calls = crate::sys::service_calls();
     log::info!("[{tag}] {name} and its processes: {} system services called", calls.len());
     for call in calls {
