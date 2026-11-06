@@ -166,3 +166,63 @@ et demande un disque démonté et exclusivement tenu. Le MBR traditionnel,
 les tables hybrides et les secteurs de 4 Kio restent hors de cette étape.
 La création de l'image d'installation complète (ESP et système) et le
 raccordement des opérations de disque aux interfaces NT viennent ensuite.
+
+
+## Image de développement unique (ESP + système)
+
+`cargo xtask image [--output FILE] [--features F]` construit une image GPT
+avec deux volumes FAT32 : une ESP et le système. Les deux débuts de partition
+sont alignés à 1 Mio. `xtask::install::Plan` calcule et vérifie les tailles
+avant de créer le fichier de destination ; la disposition est affichée et
+peut servir à une future page de revue. Cette fonction pure n'exécute aucune
+E/S. Le fichier doit être neuf ; un échec d'écriture tente de supprimer uniquement le
+fichier qui vient d'être créé par cette opération.
+
+L'ESP contient `EFI/BOOT/BOOTX64.EFI`, `kernel.elf` et `fat.img` (le disque
+RAM initial dont le chargeur existant a besoin). Le second volume contient
+les fichiers du système. Les GPT sont relues après écriture et comparées au
+plan. Les GUID sont fixes pour ces images de développement : un installateur
+réel devra en générer de nouveaux. Les clones ne sont pas des installations
+indépendantes identifiées de façon unique.
+
+La commande exige l'espace utilisateur ReactOS épinglé et utilise
+`test-smss` par défaut pour atteindre la sonde de démarrage actuelle ; cela
+ne promet pas encore un bureau complet. Exemple :
+
+```bash
+cargo xtask fetch-userland
+cargo xtask image --output target/mino.img
+cargo xtask run --image target/mino.img
+```
+
+`run --image` utilise cette image telle quelle, sans construire le noyau ou
+recréer ses volumes ; `--features`, `--add` et `--data-dir` ne se combinent
+pas avec ce mode. L'OVMF et le processeur se choisissent comme auparavant.
+
+Au démarrage, le noyau préfère toujours le disque système secondaire quand
+il est présent (anciens scénarios) ; sinon il cherche un GPT sur le disque
+primaire. Un disque primaire FAT brut, comme l'ESP virtuelle des anciens
+tests, n'est pas pris pour le volume système. Les journaux indiquent le
+canal réellement choisi.
+
+`installed-persistence` utilise `disk = installed` : le disque GPT remplace
+la FAT virtuelle de QEMU ; aucun second disque ne porte `C:`. OVMF démarre
+notre chargeur depuis sa vraie ESP, et le noyau monte la partition Basic
+Data sur le même disque. Deux démarrages vérifient la persistance d'un
+fichier, les deux GPT et le volume système avec `fsck.vfat`, sur AMD et Intel.
+
+Il s'agit d'un constructeur d'image côté hôte, pas encore d'un installateur
+en mode utilisateur capable de choisir et d'effacer un disque dans Mino.
+L'écriture sur un périphérique existant, les interfaces NT de disque et les
+IOCTL, la copie avec progression/reprise et l'interface restent à faire.
+Le brief visuel réutilisable se trouve dans
+[`design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
+
+
+Validation de cette étape : `cargo xtask lint` propre, 740 tests hôte et
+32 scénarios QEMU réussis (les scénarios restants ont été repris après
+nettoyage d'un espace temporaire saturé). Les deux commandes publiques
+`image` et `run --image` ont été exercées, cette dernière jusqu'au retour de
+la sonde SMSS sur un GPT primaire réel. Une destination déjà existante est
+refusée et ses octets restent intacts. `sgdisk` vérifie les GPT ;
+`fsck.vfat` vérifie l'ESP et le volume système des images de persistance.

@@ -9349,8 +9349,9 @@ fn mount_boot_volumes() {
     }
     match volumes.disk {
         Some(Ok(sectors)) => log::info!(
-            "[boot] Io: system disk {} (ATA, secondary master, FAT32, {sectors} sectors)",
-            io_manager::DISK_VOLUME
+            "[boot] Io: system disk {} (ATA, {}, FAT32, {sectors} sectors)",
+            io_manager::DISK_VOLUME,
+            if volumes.disk_primary { "primary master" } else { "secondary master" }
         ),
         Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no FAT32 volume: {status}"),
         None => {}

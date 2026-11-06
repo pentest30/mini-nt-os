@@ -76,8 +76,22 @@ jour à chaque commit qui change l'état.
   738 tests hôte et 30 scénarios QEMU réussis, aucun scénario sauté.
   Détails et limites dans
   `compat/io-install.md`. Aucun appel système ni IOCTL ajouté.
-  La suite : image d'installation complète (ESP + système), interfaces NT
-  de disque, verrouillage/démontage et IOCTL (partie proposée de l'ADR-022).
+  Étape suivante réalisée : image de développement unique ESP + système,
+  `cargo xtask image --output ...`, plan de disposition pur dans
+  `xtask::install::Plan`, écriture dans un fichier neuf, puis
+  `cargo xtask run --image ...`. Le noyau reconnaît aussi le GPT du disque
+  primaire (sans confondre l'ancienne ESP FAT virtuelle avec `C:`), et le
+  scénario `installed-persistence` démarre puis redémarre cette unique image.
+  Le prompt UI/UX réutilisable est dans `design/installer-ui-prompt.md`.
+  Validation Linux : lint propre, 740 tests hôte et 32 scénarios QEMU
+  réussis (suite reprise après saturation de l’espace temporaire, sans
+  scénario sauté). Les commandes publiques `image` et `run --image` ont
+  été exécutées ; la seconde atteint la sonde SMSS sur le disque primaire.
+  GPT vérifié par `sgdisk`, ESP et système par `fsck.vfat`, destination
+  existante refusée sans altération.
+  Ce n'est pas encore l'installateur en mode utilisateur : restent les
+  interfaces NT de disque, verrouillage/démontage, IOCTL, progression et
+  reprise d'installation (partie proposée de l'ADR-022), puis l'interface.
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).

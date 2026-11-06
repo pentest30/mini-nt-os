@@ -160,6 +160,8 @@ pub struct Machine {
     /// The image of the system disk `C:`, master of the secondary IDE
     /// channel.
     pub system_disk: Option<PathBuf>,
+    /// Real boot disk; replaces the virtual FAT ESP.
+    pub boot_disk: Option<PathBuf>,
 }
 
 impl Machine {
@@ -179,7 +181,11 @@ impl Machine {
             }
         }
         // Virtual FAT disks, read-write: the firmware stores NvVars on the ESP.
-        cmd.arg("-drive").arg(drive("format=raw", &self.esp, "fat:rw:"));
+        if let Some(image) = &self.boot_disk {
+            cmd.arg("-drive").arg(drive("format=raw", image, ""));
+        } else {
+            cmd.arg("-drive").arg(drive("format=raw", &self.esp, "fat:rw:"));
+        }
         match (&self.data_dir, &self.system_disk) {
             (Some(_), Some(_)) => {
                 return Err("the data directory and the system disk both want the secondary IDE master".into())

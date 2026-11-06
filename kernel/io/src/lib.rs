@@ -52,7 +52,7 @@ pub const RAMDISK_VOLUME: &str = "\\Device\\Ramdisk0";
 /// Le volume du disque système ATA.
 pub const DISK_VOLUME: &str = "\\Device\\HarddiskVolume1";
 /// Le disque système ATA : le maître du canal secondaire (sous QEMU, le
-/// canal primaire tient l'ESP).
+/// canal primaire tient l'ESP). Un GPT installé peut aussi être sur le primaire.
 pub const SYSTEM_DISK: hal::ata::AtaDrive = hal::ata::AtaDrive::new(hal::ata::SECONDARY, false);
 
 /// Ce que [`mount_boot_volumes`] a monté.
@@ -63,6 +63,8 @@ pub struct BootVolumes {
     /// Les secteurs du disque système ATA, s'il y en a un, ou pourquoi son
     /// volume a été refusé.
     pub disk: Option<Result<u64, abi::ntstatus::NtStatus>>,
+    /// The system volume was found on the primary boot disk.
+    pub disk_primary: bool,
     /// Le volume que désignent `\??\C:` et `\SystemRoot`.
     pub system: Option<&'static str>,
 }
@@ -87,7 +89,14 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
         volumes.ramdisk = Some(size);
         volumes.system = Some(RAMDISK_VOLUME);
     }
-    if let Some(disk) = disk::AtaDisk::probe(SYSTEM_DISK) {
+    // Installed images boot on primary master; the older test layout uses
+    // secondary master. Prefer the explicitly attached system disk.
+    if let Some((disk, primary)) = disk::AtaDisk::probe(SYSTEM_DISK).map(|disk| (disk, false)).or_else(|| {
+        disk::AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::PRIMARY, false))
+            .filter(|disk| partition::has_gpt(disk).unwrap_or(false))
+            .map(|disk| (disk, true))
+    }) {
+        volumes.disk_primary = primary;
         let sectors = disk.sectors();
         match partition::system_volume(disk, sectors)
             .map_err(|error| match error {

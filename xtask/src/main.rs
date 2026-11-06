@@ -21,6 +21,7 @@
 //! and `QEMU` environment variables.
 
 mod inflate;
+mod install;
 mod iso9660;
 mod native;
 mod partition;
@@ -50,9 +51,13 @@ usage: cargo xtask <command> [options]
 commands:
   build   build mino-loader and ntoskrnl
           --features F        ntoskrnl features (comma-separated)
+  image   create one bootable GPT image (ESP + system volume)
+          --output FILE       destination; must not exist (default target/mino.img)
+          --features F        ntoskrnl features (default test-smss)
   lint    rustfmt --check, the generated service tables up to date, then
           clippy -D warnings on the host and the bare-metal targets (06 §6)
   run     build, then boot in QEMU with the serial port on stdio
+          --image FILE        boot an existing image without rebuilding
           --cpu CPU           default | intel | QEMU -cpu model
           --features F        ntoskrnl features
           --memory MB         guest memory (default 256)
@@ -107,6 +112,7 @@ fn dispatch(mut args: Args) -> Result<()> {
             args.finish()?;
             lint(&ws)
         }
+        Some("image") => install_image(&ws, args),
         Some("run") => run(&ws, args),
         Some("test") => test(&ws, args),
         Some("syscall-gen") => {
@@ -156,8 +162,29 @@ fn lint(ws: &Workspace) -> Result<()> {
     Ok(())
 }
 
+/// Build a development disk image, without touching a host disk.
+fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
+    let output = args.value("--output")?.map(PathBuf::from).unwrap_or_else(|| ws.target.join("mino.img"));
+    let features = args.value("--features")?.unwrap_or_else(|| "test-smss".into());
+    args.finish()?;
+    if output.exists() {
+        return Err(format!("{} already exists; choose another --output", output.display()));
+    }
+    let files = userland_files(ws).ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
+    let artifacts = build(ws, Some(&features))?;
+    let run_dir = ws.target.join("xtask").join("image-source");
+    let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &files)?;
+    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    install::create(&esp, &output)?;
+    println!("Mino development image: {}", output.display());
+    Ok(())
+}
+
 /// Builds, then boots interactively: serial on stdio, until QEMU exits.
 fn run(ws: &Workspace, mut args: Args) -> Result<()> {
+    let image = args.value("--image")?.map(PathBuf::from);
     let cpu = args.value("--cpu")?.map(|c| Cpu::parse(&c)).unwrap_or(Cpu::Default);
     let features = args.value("--features")?;
     let memory_mb = args.value("--memory")?.map(|m| parse_number(&m, "--memory")).transpose()?;
@@ -167,6 +194,27 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
     let data_dir = args.value("--data-dir")?.map(PathBuf::from);
     let options = qemu::Options::from_args(&mut args)?;
     args.finish()?;
+
+    if let Some(image) = image {
+        if features.is_some() || !extra_files.is_empty() || data_dir.is_some() {
+            return Err("--image cannot be combined with --features, --add or --data-dir".into());
+        }
+        if !image.is_file() {
+            return Err(format!("{} is not an image file", image.display()));
+        }
+        let run_dir = ws.target.join("xtask").join("run-image");
+        std::fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
+        let machine = Machine {
+            firmware: qemu::find_firmware(&options, &run_dir)?,
+            esp: PathBuf::new(),
+            cpu,
+            memory_mb: memory_mb.unwrap_or(qemu::DEFAULT_MEMORY_MB),
+            data_dir: None,
+            system_disk: None,
+            boot_disk: Some(image),
+        };
+        return run_machine(&machine, &options, headless, gdb);
+    }
 
     let artifacts = build(ws, features.as_deref())?;
     match userland_files(ws) {
@@ -186,12 +234,17 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
         memory_mb: memory_mb.unwrap_or(qemu::DEFAULT_MEMORY_MB),
         data_dir,
         system_disk: None,
+        boot_disk: None,
     };
+    run_machine(&machine, &options, headless, gdb)
+}
+
+fn run_machine(machine: &Machine, options: &qemu::Options, headless: bool, gdb: bool) -> Result<()> {
     if gdb {
         println!("xtask: QEMU waits for gdb: target remote :1234");
     }
     let status = machine
-        .command(&options)?
+        .command(options)?
         .args(["-serial", "stdio"])
         .args(if headless { &["-display", "none"][..] } else { &[] })
         .args(if gdb { &["-s", "-S"][..] } else { &[] })
@@ -271,7 +324,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             // The system disk starts as a copy of the ramdisk's image.
             let system_disk = sc.system_disk.then(|| run_dir.join("c.img"));
             if let Some(image) = &system_disk {
-                if sc.gpt_disk {
+                if sc.installed_disk {
+                    install::create(&esp, image)?;
+                } else if sc.gpt_disk {
                     partition::create(&esp.join("fat.img"), image)?;
                 } else {
                     std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
@@ -283,10 +338,11 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 cpu,
                 memory_mb: qemu::DEFAULT_MEMORY_MB,
                 data_dir: None,
-                system_disk,
+                boot_disk: if sc.installed_disk { system_disk.clone() } else { None },
+                system_disk: if sc.installed_disk { None } else { system_disk.clone() },
             };
             let mut outcome = qemu::boot_and_watch(&machine, &options, sc, timeout.unwrap_or(sc.timeout), &run_dir)?;
-            if let (true, Some(image)) = (outcome.passed, &machine.system_disk) {
+            if let (true, Some(image)) = (outcome.passed, &system_disk) {
                 let check_image = if sc.gpt_disk { Some(partition::extract(image)?) } else { None };
                 match qemu::fsck(check_image.as_deref().unwrap_or(image)) {
                     None => println!(

@@ -31,6 +31,8 @@
 //!     and the NLS tables);
 //!   - `native`: the ramdisk gets the native test programs of
 //!     `tests/native/`, compiled with MinGW or clang (`xtask/src/native.rs`).
+//! - `disk = installed`: a single GPT disk holds the real ESP and system
+//!   partition, replacing the external virtual FAT boot disk.
 //! - `disk = system-gpt`: wraps the FAT image in a GPT Basic Data partition;
 //!   the two GPT copies are checked and the partition extracted for fsck.
 //! - `disk = system`: the image of the ramdisk is also the system disk `C:`,
@@ -67,6 +69,8 @@ pub struct Scenario {
     pub system_disk: bool,
     /// Wrap the system volume in GPT rather than using raw FAT.
     pub gpt_disk: bool,
+    /// One real GPT image holds the ESP and system volume.
+    pub installed_disk: bool,
     pub boots: u32,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
@@ -97,6 +101,7 @@ impl Scenario {
             requires_native: false,
             system_disk: false,
             gpt_disk: false,
+            installed_disk: false,
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
@@ -129,6 +134,11 @@ impl Scenario {
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
+                    "installed" => {
+                        sc.system_disk = true;
+                        sc.gpt_disk = true;
+                        sc.installed_disk = true;
+                    }
                     "system-gpt" => {
                         sc.system_disk = true;
                         sc.gpt_disk = true;
@@ -258,6 +268,8 @@ requires = userland
         assert!(twice.system_disk && twice.boots == 2);
         let gpt = Scenario::parse("x", "expect = a\ndisk = system-gpt").unwrap();
         assert!(gpt.system_disk && gpt.gpt_disk);
+        let installed = Scenario::parse("x", "expect = a\ndisk = installed").unwrap();
+        assert!(installed.system_disk && installed.gpt_disk && installed.installed_disk);
         let screen = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5").unwrap();
         assert_eq!(screen.screen, [crate::screen::Pixel { x: 1, y: 2, rgb: [0x3A, 0x6E, 0xA5] }]);
         assert!(sc.screen.is_empty());

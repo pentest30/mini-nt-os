@@ -53,6 +53,24 @@ impl<D: BlockDevice> gpt::ReadSectors for Reader<'_, D> {
     }
 }
 
+/// Whether a disk advertises GPT, including a damaged protective table.
+/// Used to distinguish an installed primary disk from the virtual FAT ESP.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL (device I/O may wait actively).
+pub fn has_gpt<D: BlockDevice>(disk: &D) -> Result<bool, FatError> {
+    if disk.sector_size() != 512 {
+        return Ok(false);
+    }
+    let mut sector = [0; 512];
+    disk.read_sector(0, &mut sector)?;
+    if gpt::has_protective_partition(&sector) {
+        return Ok(true);
+    }
+    disk.read_sector(1, &mut sector)?;
+    Ok(&sector[..8] == b"EFI PART")
+}
+
 /// Returns a Basic Data partition of a GPT disk, or the whole raw disk.
 /// GPT metadata is fully checked before a partition is exposed. The first
 /// Basic Data slot is the system partition; EFI partitions are skipped.

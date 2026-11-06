@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Result;
 
-struct Disk(File);
+pub(crate) struct Disk(pub(crate) File);
 impl gpt::ReadSectors for Disk {
     type Error = std::io::Error;
     fn read_sector(&self, lba: u64, out: &mut [u8; 512]) -> std::io::Result<()> {

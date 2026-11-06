@@ -10,3 +10,4 @@ publish = false
 [dependencies]
 pe = { path = "../libs/pe" }
 gpt = { path = "../libs/gpt" }
+fatfs = { path = "../libs/fatfs" }

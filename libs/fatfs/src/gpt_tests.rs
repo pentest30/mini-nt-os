@@ -77,6 +77,9 @@ fn disk() -> (Disk, u64, u32) {
 #[test]
 fn kernel_skips_efi_and_reads_fat_inside_basic_data_partition() {
     let (disk, sectors, _) = disk();
+    assert!(io_manager::partition::has_gpt(&disk).unwrap());
+    let raw = Disk(Rc::new(RefCell::new(crate::build(&[]).unwrap())));
+    assert!(!io_manager::partition::has_gpt(&raw).unwrap());
     let volume = FatVolume::mount(system_volume(disk, sectors).unwrap()).unwrap();
     let mut file = volume.open("/HELLO.TXT").unwrap();
     let mut out = [0; 11];
