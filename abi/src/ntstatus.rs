@@ -63,6 +63,8 @@ pub const STATUS_GUARD_PAGE_VIOLATION: NtStatus = NtStatus(0x8000_0001);
 pub const STATUS_DATATYPE_MISALIGNMENT: NtStatus = NtStatus(0x8000_0002);
 pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
 pub const STATUS_BUFFER_OVERFLOW: NtStatus = NtStatus(0x8000_0005);
+/// NtQueryDirectoryFile: no entry left to return.
+pub const STATUS_NO_MORE_FILES: NtStatus = NtStatus(0x8000_0006);
 pub const STATUS_PARTIAL_COPY: NtStatus = NtStatus(0x8000_000D);
 pub const STATUS_NO_MORE_ENTRIES: NtStatus = NtStatus(0x8000_001A);
 pub const STATUS_UNSUCCESSFUL: NtStatus = NtStatus(0xC000_0001);
@@ -73,6 +75,9 @@ pub const STATUS_ACCESS_VIOLATION: NtStatus = NtStatus(0xC000_0005);
 pub const STATUS_INVALID_HANDLE: NtStatus = NtStatus(0xC000_0008);
 pub const STATUS_INVALID_CID: NtStatus = NtStatus(0xC000_000B);
 pub const STATUS_INVALID_PARAMETER: NtStatus = NtStatus(0xC000_000D);
+/// NtQueryDirectoryFile: the first query of a handle found no entry that
+/// matches its expression.
+pub const STATUS_NO_SUCH_FILE: NtStatus = NtStatus(0xC000_000F);
 pub const STATUS_INVALID_DEVICE_REQUEST: NtStatus = NtStatus(0xC000_0010);
 pub const STATUS_END_OF_FILE: NtStatus = NtStatus(0xC000_0011);
 pub const STATUS_NO_MEMORY: NtStatus = NtStatus(0xC000_0017);

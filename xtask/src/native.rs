@@ -51,6 +51,8 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["console1.c"], "CONSOLE1.EXE", Toolchain::MinGwWin32),
     (&["threads1.c"], "THREADS1.EXE", Toolchain::MinGwConsole),
     (&["conshow1.c"], "CONSHOW1.EXE", Toolchain::MinGwConsole),
+    (&["read1.c"], "READ1.EXE", Toolchain::MinGwConsole),
+    (&["concmd1.c"], "CONCMD1.EXE", Toolchain::MinGwWin32),
 ];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for

@@ -1,0 +1,94 @@
+# M5, console (docs/compat/m5-console.md, step 7): ReactOS's cmd.exe,
+# interactive. CONCMD1.EXE (tests/native/concmd1.c) takes the place of
+# winlogon.exe; like winlogon, it takes WinSta0\Default and loads the US
+# keyboard layout, then starts cmd /K C:\READ1.EXE, which consrv gives a
+# console. cmd starts READ1.EXE (tests/native/read1.c) in it, which says
+# when the console window, shown and activated, waits for keys; QEMU's
+# monitor types a line, which consrv's window procedure (WM_KEYDOWN,
+# WM_CHAR) puts in the console's input buffer and READ1.EXE reads
+# (ReadConsoleW: consrv answers the waiting client later, by LPC). Then the
+# commands, typed ahead in the console, which cmd reads one line at a time:
+# echo and set, with redirections (> and >>: NtCreateFile, NtWriteFile at
+# the end); copy, which finds its source (FindFirstFile:
+# NtQueryDirectoryFile, by its name) and copies it; type; dir /b C:\*.TXT
+# (FindFirstFile turns *.TXT into <.TXT, DOS_STAR) and dir C:\; a batch file
+# written by echo, with a variable and if exist; exit. CONCMD1.EXE then
+# prints C:\OUT.TXT and C:\DIR.TXT, one numbered line at a time. The probe
+# waits for smss 10 s after the last key.
+#
+# dir shows its header (GetVolumeInformation: FileNameInformation on the
+# root, FileFsVolumeInformation: no label, the serial number mkfat writes),
+# the dates of the files (mkfat's, 2004-08-04 12:00, as en-US gives them:
+# NtQueryDefaultLocale), and the free space (GetDiskFreeSpaceEx:
+# FileFsFullSizeInformation). copy gives the copy the creation date of its
+# source (ReactOS's cmd sets only that one: NtSetInformationFile,
+# FileBasicInformation), which dir /TC shows; vol shows the label and the
+# serial number. QEMU types each key once the releases of the one before are
+# out (xtask: key_duration): its lost releases left Shift down.
+features = test-smss
+requires = userland, native
+initial-command = CONCMD1.EXE
+cpus     = default, intel
+timeout  = 180
+
+keys = [read] waiting => h i ret
+keys = [read] the line: => "echo hello> C:\OUT.TXT" ret
+keys = [read] the line: => "set MINO=xp" ret
+keys = [read] the line: => "set MINO>> C:\OUT.TXT" ret
+keys = [read] the line: => "copy C:\OUT.TXT C:\COPY.TXT> C:\LOG.TXT" ret
+keys = [read] the line: => "type C:\COPY.TXT>> C:\OUT.TXT" ret
+keys = [read] the line: => "type C:\LOG.TXT>> C:\OUT.TXT" ret
+keys = [read] the line: => "dir /b C:\*.TXT>> C:\OUT.TXT" ret
+keys = [read] the line: => "dir C:\> C:\DIR.TXT" ret
+keys = [read] the line: => "echo @echo off> C:\T.BAT" ret
+keys = [read] the line: => "echo echo batch: %MINO%>> C:\T.BAT" ret
+keys = [read] the line: => "echo if exist C:\COPY.TXT echo batch: copy found>> C:\T.BAT" ret
+keys = [read] the line: => "C:\T.BAT>> C:\OUT.TXT" ret
+keys = [read] the line: => "copy C:\KERNEL.BIN C:\K.BIN>> C:\LOG.TXT" ret
+keys = [read] the line: => "dir /TC C:\K.BIN>> C:\OUT.TXT" ret
+keys = [read] the line: => "vol>> C:\OUT.TXT" ret
+keys = [read] the line: => "exit" ret
+
+expect = [concmd] on WinSta0\Default
+expect = [concmd] CMD.EXE started
+expect = [read] started
+expect = [read] the console window: visible
+expect = [read] waiting
+expect = [read] ReadConsoleW: 1 (0), 4 characters
+expect = [read] the line: 68 69 0d 0a
+expect = [concmd] CMD.EXE: wait 0, exit code
+expect = [concmd] OUT.TXT 1: hello
+expect = [concmd] OUT.TXT 2: MINO=xp
+expect = [concmd] OUT.TXT 3: hello
+expect = [concmd] OUT.TXT 4: MINO=xp
+expect = [concmd] OUT.TXT 5:         1 file(s) copied
+expect = [concmd] OUT.TXT 6: MINOTEST.TXT
+expect = [concmd] OUT.TXT 7: OUT.TXT
+expect = [concmd] OUT.TXT 8: LOG.TXT
+expect = [concmd] OUT.TXT 9: COPY.TXT
+expect = [concmd] OUT.TXT 10: batch: xp
+expect = [concmd] OUT.TXT 11: batch: copy found
+expect = [concmd] DIR.TXT 1:  Volume in drive C has no label.
+expect = [concmd] DIR.TXT 2:  Volume Serial Number is 4D49-4E4F
+expect = [concmd] DIR.TXT 4:  Directory of C:\
+expect = 08/04/2004  12:00 PM    <DIR>          WINDOWS
+expect = 08/04/2004  12:00 PM            12,288 CMD.EXE
+expect = DIR.TXT 28:               20 File(s)
+expect = bytes free
+expect = [concmd] OUT.TXT 15:  Directory of C:\
+expect = [concmd] OUT.TXT 17: 08/04/2004  12:00 PM                 4 K.BIN
+expect = [concmd] OUT.TXT 20:  Volume in drive C has no label.
+expect = [concmd] OUT.TXT 21:  Volume Serial Number is 4D49-4E4F
+expect = [boot] default locale: 0x0409 (Nls\Language)
+forbid = sys: NtQueryDirectoryFile (0x0097) is not implemented
+forbid = sys: NtQueryDefaultLocale (0x0095) is not implemented
+forbid = NtQueryVolumeInformationFile class 0x1 is not implemented
+forbid = NtQueryVolumeInformationFile class 0x3 is not implemented
+forbid = NtQueryVolumeInformationFile class 0x7 is not implemented
+forbid = NtQueryInformationFile class 0x9 is not implemented
+forbid = NtSetInformationFile class 0x4 is not implemented
+forbid = Incorrect function.
+forbid = scan codes dropped
+forbid = Cannot pipe
+forbid = 0 bytes free
+forbid = 1601

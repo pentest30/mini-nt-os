@@ -23,8 +23,12 @@
 //!   DataStartLBA     = ReservedSectors + 2 × FAT sectors
 //!   lba(cluster)     = DataStartLBA + (cluster − 2)
 //!
-//! Directory entry (32 bytes): [0..11] name, [11] attributes,
-//! [20..22] first cluster (high), [26..28] first cluster (low), [28..32] size.
+//! Directory entry (32 bytes): [0..11] name, [11] attributes, [14..18]
+//! creation time and date, [18..20] last access date, [20..22] first
+//! cluster (high), [22..26] last write time and date, [26..28] first
+//! cluster (low), [28..32] size. Every entry carries the same date and
+//! time ([`IMAGE_DATE`], [`IMAGE_TIME`]): two builds of an image are the
+//! same.
 //! Long-name entry (attributes 0x0F): [0] order (0x40 on the last part),
 //! 13 UTF-16 units at [1..11], [14..26] and [28..32], [13] the checksum of
 //! the 8.3 name.
@@ -289,10 +293,22 @@ impl Dir {
     }
 }
 
+/// The date of every entry of the image, so that two builds of it are the
+/// same: 2004-08-04 (XP SP2, ADR-003), FAT's packed date.
+pub const IMAGE_DATE: u16 = ((2004 - 1980) << 9) | (8 << 5) | 4;
+/// Its time: 12:00:00, FAT's packed time (2 s steps).
+pub const IMAGE_TIME: u16 = 12 << 11;
+
 fn entry(name: &ShortName, attributes: u8, first: u32, size: u32) -> [u8; ENTRY] {
     let mut entry = [0u8; ENTRY];
     entry[..11].copy_from_slice(name);
     entry[11] = attributes;
+    // Created, last accessed and last written at the image's date.
+    entry[14..16].copy_from_slice(&IMAGE_TIME.to_le_bytes());
+    entry[16..18].copy_from_slice(&IMAGE_DATE.to_le_bytes());
+    entry[18..20].copy_from_slice(&IMAGE_DATE.to_le_bytes());
+    entry[22..24].copy_from_slice(&IMAGE_TIME.to_le_bytes());
+    entry[24..26].copy_from_slice(&IMAGE_DATE.to_le_bytes());
     entry[20..22].copy_from_slice(&((first >> 16) as u16).to_le_bytes());
     entry[26..28].copy_from_slice(&(first as u16).to_le_bytes());
     entry[28..32].copy_from_slice(&size.to_le_bytes());
@@ -500,6 +516,22 @@ mod tests {
         assert_eq!((a[0].first_cluster, a[1].first_cluster), (a_in_root, 0), "`..` under the root is cluster 0");
         assert_eq!(b[1].first_cluster, a_in_root);
         assert_eq!(b[0].first_cluster, a[2].first_cluster);
+    }
+
+    #[test]
+    fn every_entry_carries_the_date_of_the_image() {
+        let volume = FatVolume::mount(Disk(build(&[file("A/B.TXT", b"b"), file("C.TXT", b"c")]).unwrap())).unwrap();
+        for directory in ["/", "/A"] {
+            for listed in volume.list_dir(directory).unwrap() {
+                let entry = listed.entry;
+                assert_eq!((entry.creation_date, entry.creation_time), (IMAGE_DATE, IMAGE_TIME), "{}", listed.name);
+                assert_eq!(
+                    (entry.write_date, entry.write_time, entry.access_date),
+                    (IMAGE_DATE, IMAGE_TIME, IMAGE_DATE)
+                );
+            }
+        }
+        assert_eq!((IMAGE_DATE, IMAGE_TIME), (12548, 24576), "2004-08-04 12:00:00");
     }
 
     #[test]

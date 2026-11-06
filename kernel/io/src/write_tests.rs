@@ -294,3 +294,82 @@ fn a_full_volume_says_so() {
     assert_eq!(file.node().unwrap().size, 1024, "the size as it was");
     assert_eq!(file.read_all().unwrap(), vec![1u8; 1024]);
 }
+
+#[test]
+fn a_volume_describes_itself_and_dates_what_it_writes() {
+    use crate::fat::{nt_time, FatTime};
+    use crate::{File, Space, Volume, VolumeLabel};
+    use abi::file::*;
+    use abi::ntstatus::*;
+
+    // 2026-11-06 09:54:31.25 UTC, as KeQuerySystemTime gives it; then, for
+    // a write, 10:00:00.
+    const DATE: u16 = ((2026 - 1980) << 9) | (11 << 5) | 6;
+    const TIME: u16 = (9 << 11) | (54 << 5) | (30 / 2);
+    const LATER: u16 = 10 << 11;
+    static CLOCK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    fn now() -> u64 {
+        CLOCK.load(core::sync::atomic::Ordering::Relaxed)
+    }
+    CLOCK.store(nt_time(DATE, TIME, 125), core::sync::atomic::Ordering::Relaxed);
+    let clusters = 100;
+    let disk = alloc::sync::Arc::new(fat32(clusters));
+    {
+        let mut bytes = disk.0.lock();
+        bytes[67..71].copy_from_slice(&0x4D49_4E4Fu32.to_le_bytes());
+        // The volume label, the first entry of the root (cluster 2, after the
+        // reserved sectors and the two FATs of one sector each).
+        let root = (32 + 2) * 512;
+        bytes[root..root + 32].copy_from_slice(&make_entry(b"MINO DISK  ", 0x08, 0, 0));
+    }
+    let volume = Volume::mount(alloc::boxed::Box::new(Shared(disk.clone()))).unwrap().with_clock(now);
+    let volume = alloc::sync::Arc::new(volume);
+
+    assert_eq!(volume.label(), Ok(VolumeLabel { serial: 0x4D49_4E4F, label: "MINO DISK".into() }));
+    let empty =
+        Space { total_clusters: clusters, free_clusters: clusters - 1, sectors_per_cluster: 1, bytes_per_sector: 512 };
+    assert_eq!(volume.space(), Ok(empty), "the root takes a cluster");
+
+    // Created now: creation (to the hundredth), last write and access (to
+    // 2 s, and the day).
+    let root = File::open(&volume, "\\").unwrap();
+    let file = root.create_child("A.TXT", false, 0).unwrap();
+    let created = file.node().unwrap();
+    assert_eq!(created.creation_time, nt_time(DATE, TIME, 125));
+    assert_eq!((created.last_write_time, created.last_access_time), (nt_time(DATE, TIME, 0), nt_time(DATE, 0, 0)));
+    assert!(volume.list(&volume.root()).unwrap().contains(&String::from("A.TXT")), "beside the label");
+    CLOCK.store(nt_time(DATE, LATER, 0), core::sync::atomic::Ordering::Relaxed);
+    file.write(0, &[7u8; 1500]).unwrap();
+    assert_eq!(volume.space().unwrap().free_clusters, clusters - 1 - 3, "three clusters written");
+    let written = file.node().unwrap();
+    assert_eq!((written.creation_time, written.last_write_time), (created.creation_time, nt_time(DATE, LATER, 0)));
+
+    // FileBasicInformation: 0 leaves a field; FILE_ATTRIBUTE_NORMAL clears.
+    let image = nt_time(12548, 12 << 11, 0);
+    let basic = FileBasicInformation {
+        creation_time: image,
+        last_write_time: image,
+        file_attributes: FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_TEMPORARY,
+        ..Default::default()
+    };
+    file.set_basic_information(&basic).unwrap();
+    let changed = file.node().unwrap();
+    assert_eq!((changed.creation_time, changed.last_write_time), (image, image));
+    assert_eq!(changed.last_access_time, nt_time(DATE, 0, 0), "left as it was");
+    assert_eq!(changed.attributes, FILE_ATTRIBUTE_READONLY, "what FAT keeps of them");
+    let normal = FileBasicInformation { file_attributes: FILE_ATTRIBUTE_NORMAL, ..Default::default() };
+    file.set_basic_information(&normal).unwrap();
+    assert_eq!(file.node().unwrap().attributes, FILE_ATTRIBUTE_NORMAL);
+    assert_eq!(file.node().unwrap().creation_time, image, "the dates left");
+    let accessed = FileBasicInformation { last_access_time: nt_time(12549, 0, 0), ..Default::default() };
+    file.set_basic_information(&accessed).unwrap();
+    assert_eq!(file.node().unwrap().last_access_time, nt_time(12549, 0, 0), "the day after");
+    let before_fat = FileBasicInformation { creation_time: nt_time(0, 0, 0) + 1, ..Default::default() };
+    assert_eq!(file.set_basic_information(&before_fat).err(), Some(STATUS_INVALID_PARAMETER), "before 1980");
+    assert_eq!(root.set_basic_information(&basic).err(), Some(STATUS_INVALID_PARAMETER), "the root has no entry");
+    // A directory keeps its bit.
+    let directory = root.create_child("D", true, 0).unwrap();
+    directory.set_basic_information(&FileBasicInformation { file_attributes: FILE_ATTRIBUTE_HIDDEN, ..basic }).unwrap();
+    assert_eq!(directory.node().unwrap().attributes, FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN);
+    let _ = FatTime::default();
+}

@@ -101,7 +101,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - Une console texte : frontal texte de `consrv` si la version épinglée en a un, sinon ce jalon dépend de la partie minimale de M6.
 
 **Critères de sortie (spike S2)**
-- [ ] `cmd.exe` est interactif : `dir`, `copy`, `type`, `set`, et des scripts `.bat`.
+- [x] `cmd.exe` est interactif : `dir`, `copy`, `type`, `set`, et des scripts `.bat`.
 - [x] Un programme console C (MSVC ou MinGW) qui crée 8 threads synchronisés par des sections critiques se termine correctement.
 - [ ] Les `rostests` `ntdll` et `kernel32` (apitests) dépassent un seuil de réussite fixé au moment du jalon, puis suivi dans le temps.
 

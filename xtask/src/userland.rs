@@ -75,6 +75,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "lpk.dll",
         "winlogon.exe",
         "kbdus.dll",
+        "cmd.exe",
     ]
     .into_iter()
     .map(String::from)

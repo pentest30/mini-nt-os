@@ -332,3 +332,165 @@ fenêtre, ceux d'un autre thread) ; les crochets, les raccourcis, Alt + pavé nu
 disposition au clavier, les voyants, Impr. écran, SendInput ; les IRP (kbdclass) ; un premier plan qui garde le
 thread fini (il reçoit encore les touches). La console : `consrv` reçoit le clavier, mais son WM_CHAR mène à la
 lecture d'une ligne (ReadConsole), le pas suivant vers `cmd.exe`.
+
+## Étape 7 : `cmd.exe` interactif
+
+La lecture d'une ligne marchait déjà : une fois le clavier jusqu'aux fenêtres (étape 6), ReadConsoleW rend la ligne
+tapée dans la fenêtre console. La procédure de la fenêtre de `consrv` (OnKey, ConioProcessKey : GetKeyboardState,
+ToUnicodeEx) met chaque touche dans le tampon d'entrée de la console. La lecture en mode ligne, avec écho, attend
+Entrée. `csrsrv` répond plus tard au client qui attend (CsrNotifyWait, NtReplyPort sur un message reçu auparavant).
+Rien n'y manquait au noyau. Le vrai `cmd.exe` de ReactOS (mis dans `WINDOWS\SYSTEM32` par `xtask`) est donc lancé :
+
+- il lit ses commandes, une ligne à la fois, tapées d'avance dans la console ;
+- il lance un programme console dans sa console (`READ1.EXE`, qui lit la première ligne) ;
+- il redirige `>` et `>>` vers des fichiers de `C:` ;
+- il fait `set`, `type`, et un script `.bat` écrit par `echo`, avec une variable et `if exist`.
+
+Il manquait **NtQueryDirectoryFile**, sans lequel FindFirstFile échoue (`STATUS_NOT_IMPLEMENTED` : « Incorrect
+function. ») : `dir`, mais aussi `copy`, qui cherche ses sources par FindFirstFile. Le service suit
+`find.c` de `kernel32`, qui l'appelle ; `iofunc.c` de ReactOS et la documentation publique de
+ZwQueryDirectoryFile et de FsRtlIsNameInExpression ont servi de spécification :
+
+- **`abi::file`** : FILE_DIRECTORY_INFORMATION, FILE_FULL_DIR_INFORMATION, FILE_BOTH_DIR_INFORMATION et
+  FILE_NAMES_INFORMATION, comme en C (le nom à `FileName[1]`), avec leurs assertions ;
+  `DirectoryEntry::encode` écrit une entrée de l'une de ces classes.
+- **`io::directory`** :
+  - l'expression (FsRtlIsNameInExpression sans casse) : `*`, `?`, et les jokers DOS que `kernel32` met à la place
+    de certains (`<` pour `*` devant un `.`, `>` pour `?`, `"` pour un `.` devant eux) ;
+  - le tampon : chaque entrée à un multiple de 8 octets, la dernière avec un `NextEntryOffset` de 0. Une entrée
+    qui ne tient pas attend la requête suivante. La première, si elle ne tient pas, est coupée
+    (`STATUS_BUFFER_OVERFLOW`, `FileNameLength` dit ce qui est écrit).
+- **`io::File::query_directory`** :
+  - l'état de l'énumération est dans l'objet `File`, comme le CCB d'un pilote de système de fichiers ;
+  - l'expression est celle de la première requête (`*` sans nom), ignorée ensuite ;
+  - un nom y répond par son nom long ou par son nom 8.3 ;
+  - la reprise se fait à la place de l'entrée dans le répertoire (`FileIndex`), ou depuis le début avec
+    `RestartScan` ;
+  - `STATUS_NO_SUCH_FILE` si la première requête ne trouve rien, `STATUS_NO_MORE_FILES` ensuite.
+- **`io::Volume::entries`** décrit chaque entrée : `.` et `..` d'un sous-répertoire de FAT, sans le nom du volume.
+  `fat::dir_entries` donne aussi le nom 8.3 d'un nom long, la place de l'entrée et ses dates.
+- **`sys::file`** : NtQueryDirectoryFile.
+  - L'ordre des vérifications est celui du gestionnaire d'E/S : le bloc d'état et le tampon sondés, puis le nom
+    capturé, puis `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe, puis le handle (`FILE_LIST_DIRECTORY`).
+  - Le bloc d'état est écrit pour un succès et pour les avertissements.
+  - Les classes à identifiants de fichiers (37, 38) rendent `STATUS_NOT_IMPLEMENTED`, journalisé une fois.
+
+Pour taper des commandes, `xtask` accepte du texte entre guillemets dans `keys =` : `"dir C:\"` donne les touches de
+chaque caractère sur un clavier américain (`shift-semicolon` pour `:`…). Les touches vont plus vite : 30 ms enfoncées,
+60 ms entre deux. La sonde de `smss` attendait son processus 10 s, puis le terminait, même pendant qu'on tapait. Elle
+attend désormais 10 s après la dernière touche (`ntoskrnl::input::last_key_time`).
+
+Le banc : `CONCMD1.EXE` (`tests/native/concmd1.c`, scénario `cmd`) prend la place de `winlogon.exe` et lance
+`cmd /K C:\READ1.EXE`. Le scénario tape une ligne pour `READ1.EXE` (`tests/native/read1.c`), puis les commandes :
+`echo`, `set`, `copy`, `type`, `dir /b C:\*.TXT`, `dir C:\`, un `.bat`, `exit`. `CONCMD1.EXE` relit ensuite
+`C:\OUT.TXT` et `C:\DIR.TXT`, une ligne numérotée à la fois, sur le port de débogage.
+
+Tests :
+
+- hôte :
+  - les entrées de chaque classe (`abi`) ;
+  - l'expression avec les jokers DOS, le tampon : alignement, entrée unique, entrée qui attend, première coupée ;
+  - l'énumération d'un répertoire du disque de test : `.` et `..`, nom long et nom 8.3, attributs, tailles,
+    reprise, expression gardée, `STATUS_NO_SUCH_FILE`, `STATUS_NO_MORE_FILES`, fichier ;
+  - les places dans un répertoire de deux clusters, au-delà d'une entrée effacée ;
+- le scénario `cmd`, sur les deux CPU ;
+- 17 mutations, toutes tuées : l'expression, le tampon, l'état, le nom du volume, les places, ShortNameLength,
+  ReturnSingleEntry ignoré (ce dernier, par le scénario).
+
+Pas encore : ce que `dir` affiche autour des noms (l'étape 8) ; les classes à identifiants
+(FileIdBothDirectoryInformation) ; le partage et la suppression ; les noms longs créés ; les icônes de `consrv`,
+SetTimer, les barres de défilement ; DestroyWindow (la fenêtre d'une console finie reste à l'écran).
+
+## Étape 8 : ce que `dir` affiche autour des noms
+
+À l'étape 7, `dir` listait les noms sans rien autour : ni en-tête du volume, ni place libre (« 0 bytes free »), et
+des dates en « 01???01???1601 ». Chacun de ces manques avait sa cause, que `kernel32` de ReactOS épinglé
+(`volume.c`, `disk.c`) et `dir.c` de `cmd` ont désignée.
+
+**L'en-tête du volume.** GetVolumeInformationW ouvre la racine, puis la vérifie (IsThisARootDirectory) : son nom,
+FileNameInformation, doit finir par `\`, et `\??\C:` doit être un lien. Ensuite elle demande
+FileFsVolumeInformation. GetVolumePathNameW rend `C:\` sans le gestionnaire des points de montage : l'ouverture du
+volume comme fichier échoue, et `C:\` reste.
+
+- NtQueryInformationFile(**FileNameInformation**) : le chemin depuis la racine du volume (`\` pour la racine).
+  `FileNameLength` dit la longueur entière ; un nom coupé rend `STATUS_BUFFER_OVERFLOW`.
+- NtQueryVolumeInformationFile :
+  - **FileFsVolumeInformation** : le numéro de série du BPB (`BS_VolID`, `4D49-4E4F` que `tools/mkfat` écrit),
+    le nom de l'entrée de volume de la racine (aucun : « has no label »), sans date de création ;
+  - **FileFsAttributeInformation** : `FAT32`, noms gardés avec leur casse, en Unicode, 255 caractères au plus ;
+  - **FileFsSizeInformation** et **FileFsFullSizeInformation** : les clusters du volume, dont les libres, que
+    `FatVolume::free_clusters` compte dans la FAT (le compte du secteur FSInfo n'est pas cru).
+
+**Les dates.** Trois manques :
+
+- `tools/mkfat` n'en écrivait pas. Chaque entrée de l'image porte désormais la même date, le 4 août 2004 à 12 h
+  (XP SP2, ADR-003) : deux images construites sont identiques.
+- Io n'en écrivait pas non plus :
+  - un fichier créé prend le temps système (`hal::rtc::system_time`) pour création, dernier accès et dernière
+    écriture ;
+  - une écriture ou un changement de taille, pour dernier accès et dernière écriture ;
+  - les dates de FAT (`fat::FatTime`, `fat::fat_time`) sont en heure locale, ici l'UTC faute de fuseau horaire.
+- NtQueryDefaultLocale manquait. Sans lui, GetLocaleInfo recevait un identifiant indéfini, d'où les `???` des
+  séparateurs. Il rend celui de `Nls\Language\Default` (0x0409), lu une fois la ruche SYSTEM montée
+  (`ex::locale`). Celui de l'utilisateur est le même tant que NtSetDefaultLocale n'est pas là.
+
+**`copy` et les dates.** NtSetInformationFile(**FileBasicInformation**), avec `FILE_WRITE_ATTRIBUTES` :
+
+- les dates de création, de dernier accès et de dernière écriture (0 laisse un champ comme il est ; FAT n'a pas de
+  date de changement) ;
+- les attributs (lecture seule, caché, système, archive ; `FILE_ATTRIBUTE_NORMAL` les efface ; le bit de
+  répertoire reste) ;
+- une date que FAT ne tient pas, ou la racine, rendent `STATUS_INVALID_PARAMETER`.
+
+Le `copy` de ReactOS ne reporte que la date de **création** de la source (GetFileTime, puis SetFileTime sur la
+copie) : `dir /TC` la montre, `dir` montre la dernière écriture, celle de la copie.
+
+**Les touches perdues.** Le scénario tapait des commandes après le `.bat`, et `cmd` les recevait avec Maj enfoncée
+(`COPY C:|KERNEL>BIN`). La cause n'est pas le noyau :
+
+- le thread d'entrée brute recevait autant d'appuis que de touches tapées, mais moins de relâchements ;
+- l'anneau de `hal::ps2` n'avait rien perdu ;
+- l'horloge n'a jamais été retenue plus de 100 ms, donc les interruptions n'étaient pas masquées ;
+- les traces de QEMU (`input_event_key_qcode`, `ps2_keyboard_event`) montrent la perte en amont du clavier
+  émulé : 670 appuis, 568 relâchements.
+
+QEMU 8.2 tape un `sendkey` en appuyant ses touches, puis en les relâchant, une tenue d'écart entre deux, depuis une
+file d'événements différés. Un `sendkey` qui arrive pendant que des relâchements attendent encore dans cette file en perd.
+`xtask` attend désormais qu'une touche soit relâchée (deux tenues par touche de la combinaison, et une marge) avant la
+suivante : 670 relâchements sur 670. L'étape 7 ne le voyait pas, seul `exit` (`EXIT` marche aussi) venait après le
+moment où Maj restait enfoncée. En chemin, l'anneau de `hal::ps2` compte ce qu'il perd (`hal::ps2::dropped`), et la
+sonde le dit ; il perdait sans rien dire.
+
+Le banc : le scénario `cmd` vérifie l'en-tête de `dir` (sans nom, numéro de série), les dates des fichiers de l'image
+(« 08/04/2004  12:00 PM »), la place libre (pas « 0 bytes free », pas de « 1601 »), `copy C:\KERNEL.BIN C:\K.BIN`
+puis `dir /TC C:\K.BIN` (la date de création de la source), et `vol`.
+
+Tests :
+
+- hôte :
+  - les structures et leurs noms coupés (`abi`) ;
+  - les dates de FAT aller et retour, et hors de leurs années ;
+  - un volume qui se décrit : nom de l'entrée de volume, numéro de série, clusters libres avant et après une
+    écriture ;
+  - les dates d'un fichier créé puis écrit (une horloge qui avance) ;
+  - FileBasicInformation : dates, 0 qui laisse, `FILE_ATTRIBUTE_NORMAL`, le bit de répertoire, la date d'avant
+    1980, la racine ;
+  - les dates de `tools/mkfat` ;
+  - le LCID de `Nls\Language` ;
+  - la durée d'une touche dans `xtask` ;
+- le scénario `cmd`, sur les deux CPU ;
+- 17 mutations, toutes tuées (dont FileNameInformation sans `\` final, par le scénario) ; une autre, équivalente
+  (la locale de l'utilisateur), a fait réduire `ex::locale` à une valeur.
+
+**Le critère « `cmd.exe` est interactif » du M5 est coché** : `dir`, `copy`, `type`, `set` et un `.bat`, tapés dans
+la console, rendent ce qu'ils rendent sur XP.
+
+Pas encore :
+
+- la casse des noms 8.3 (octet 12), la date de dernier accès à la lecture, le fuseau horaire ;
+- NtSetDefaultLocale (la locale de l'utilisateur) ;
+- ProcessDeviceMap (NtQueryInformationProcess, classe 0x17, que GetDriveType demande ; `dir` s'en passe) ;
+- `del`, `ren`, `md`, `rd` (suppression et renommage d'Io) ;
+- les outils externes de ReactOS (`find`, `sort`, `more`, `xcopy`, `attrib`…), à mettre sur le disque ;
+- `format` et `chkdsk` (`fmifs.dll`, `ufat.dll` : l'ouverture d'un volume comme périphérique, les IRP) ;
+- le défilement de la fenêtre console (la vue reste sur les 25 premières lignes).

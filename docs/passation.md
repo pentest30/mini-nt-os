@@ -19,9 +19,11 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- La sonde console, étape 6 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : le clavier jusqu'aux fenêtres
-  (pilote i8042, thread d'entrée brute, tables de la disposition, premier plan et focus, TranslateMessage), sur
-  `claude/new-session-696xfc`. L'étape 5 (le texte de la console peint) est la PR #64 ; les étapes 3 (Sleep(0) :
+- La sonde console, étape 8 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : ce que `dir` affiche autour des
+  noms (en-tête du volume, dates, place libre ; NtQueryDefaultLocale, FileFsVolume/Size/FullSizeInformation,
+  FileNameInformation, FileBasicInformation en écriture ; dates de FAT) : **le critère de `cmd.exe` interactif du M5
+  est coché**. Sur `claude/new-session-696xfc`, par-dessus l'étape 7 (`claude/m5-cmd`, PR #66). L'étape 6 (le clavier
+  jusqu'aux fenêtres) est la PR #65, l'étape 5 (le texte de la console peint) la PR #64 ; les étapes 3 (Sleep(0) :
   **le critère des 8 threads du M5 est coché**) et 4 (la fenêtre console montrée) sont les PR #62 et #63. Une branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
@@ -406,9 +408,24 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      (`QS_KEY`, état du clavier du thread) ; NtUserGetKeyState, NtUserGetAsyncKeyState, NtUserGetKeyboardState,
      NtUserToUnicodeEx, NtUserTranslateMessage, NtUserSetFocus ; `keys =` dans les scénarios ; le banc
      `KEYS1.EXE` (scénario `keyboard`) ;
-   - **la suite, côté console** (le critère de `cmd.exe` interactif) : une ligne lue par ReadConsole (le clavier
-     dans la console de `consrv`) ; les icônes de `consrv`, SetTimer, les barres de défilement ; puis `cmd.exe` (et
-     NtQueryDirectoryFile pour `dir`, PR #58) ;
+   - [x] la sonde console, étape 7 : `cmd.exe` interactif : ReadConsoleW marchait déjà (rien ne manquait au noyau) ;
+     NtQueryDirectoryFile (`abi::file` : les entrées des classes 1, 2, 3 et 12 ; `io::directory` : l'expression
+     avec les jokers DOS, le tampon ; `io::File::query_directory` : l'état de l'énumération, l'expression de la
+     première requête, nom long ou 8.3 ; `io::Volume::entries`) : `dir` et `copy` (FindFirstFile) ; `cmd.exe` sur le
+     disque ; `keys =` accepte du texte entre guillemets ; la sonde attend 10 s après la dernière touche ; le banc
+     `CONCMD1.EXE` et `READ1.EXE` (scénario `cmd`) ;
+   - [x] la sonde console, étape 8 : ce que `dir` affiche autour des noms : FileNameInformation,
+     FileFsVolumeInformation, FileFsAttributeInformation, FileFsSizeInformation, FileFsFullSizeInformation (le
+     numéro de série du BPB, le nom de l'entrée de volume, les clusters libres comptés dans la FAT) ; les dates de FAT
+     (`fat::FatTime`) écrites par Io (création, écriture) et par `tools/mkfat` (2004-08-04 12:00) ;
+     NtSetInformationFile(FileBasicInformation) ; NtQueryDefaultLocale (`ex::locale`, `Nls\Language`) ; `xtask`
+     attend qu'une touche soit relâchée avant la suivante (QEMU 8.2 perdait des relâchements) ; `hal::ps2` compte ce
+     qu'il perd. **Le critère de `cmd.exe` interactif est coché** ;
+   - **la suite, côté console** : les outils externes de ReactOS sur le disque (`find`, `sort`, `more`, `tree`,
+     `fc`, `xcopy`, `attrib`) et un scénario qui les enchaîne par des tubes et des redirections ; `del`, `ren`, `md`,
+     `rd` (suppression et renommage d'Io) ; plus tard `format` et `chkdsk` (`fmifs.dll`, `ufat.dll` : un volume
+     ouvert comme périphérique, les IRP) ; les icônes de `consrv`, SetTimer, le défilement et les barres de
+     défilement de la console, DestroyWindow ; le dernier critère du M5 : les `rostests` `ntdll` et `kernel32` ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
@@ -461,6 +478,16 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Sonde console (M5, étape 8) : ni casse des noms 8.3 (octet 12), ni dernier accès à la lecture, ni fuseau horaire
+  (les dates de FAT passent pour de l'UTC) ; NtSetDefaultLocale absent (la locale de l'utilisateur est celle du
+  système) ; ProcessDeviceMap (NtQueryInformationProcess, classe 0x17) absent ; FileFsVolumeInformation sans date de
+  création du volume ; la place libre compte toute la FAT à chaque requête (le secteur FSInfo n'est ni cru ni tenu à
+  jour) ; le scénario `cmd` dure 66 s.
+- Sonde console (M5, étape 7) : NtQueryDirectoryFile sans les classes à identifiants (37, 38 :
+  `STATUS_NOT_IMPLEMENTED`), sans événement ni APC de fin ; une copie vers l'utilisateur qui faute laisse
+  l'énumération avancée ; ni noms longs créés ; `dir` sans en-tête du volume, sans place libre ni dates (faits à
+  l'étape 8) ; `copy` ne garde pas la date de la source (sa date de création, depuis l'étape 8, comme le `copy` de
+  ReactOS) ; le scénario `cmd` dure 45 s (les touches, une à une).
 - Sonde console (M5, étape 6) : ni souris, ni WM_NCACTIVATE, ni WM_ACTIVATE inactif à l'ancienne fenêtre active,
   ni messages d'activation à un autre thread (le focus est pris sans eux) ; ni crochets, raccourcis, Alt + pavé
   numérique, Alt + Tab, changement de disposition au clavier, voyants, Impr. écran, SendInput ; pas d'IRP
