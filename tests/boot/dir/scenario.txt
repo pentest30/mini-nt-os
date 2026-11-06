@@ -8,8 +8,8 @@
 # - C:\*.EXE gives exactly the two .EXE files of the root (the DOS case of
 #   a star: a star before a dot names only the extension-less, *.* all);
 # - an exact name, C:\KERNEL.BIN, gives the file and its size (4 bytes);
-# - C:\WINDOWS\SYSTEM32\NT* gives at least NTDLL.DLL, whose 8.3 name
-#   (NTDLL.DLL) and size an exact name gives back;
+# - C:\WINDOWS\SYSTEM32\NT* gives at least NTDLL.DLL; an exact name gives
+#   its size back and, because it is already 8.3, an empty alternate name;
 # - a name nothing matches, C:\ZZ*, fails with ERROR_FILE_NOT_FOUND (a
 #   first query without a match is STATUS_NO_SUCH_FILE, not
 #   STATUS_NO_MORE_FILES);
@@ -30,7 +30,7 @@ expect = [dir] KERNEL.BIN: seen
 expect = [dir] TEST.EXE: seen
 expect = [dir] KERNEL.BIN: 4 bytes
 expect = [dir] NTDLL.DLL: seen
-expect = [dir] NTDLL.DLL: 1404928 bytes, alternate NTDLL.DLL
+expect = [dir] NTDLL.DLL: 1404928 bytes, alternate
 expect = [dir] C:\ZZ*: error 2
 expect = [dir] WINDOWS: seen
 expect = [dir] done

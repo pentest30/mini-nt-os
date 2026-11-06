@@ -10,8 +10,8 @@
  *   CMD.EXE and the WINDOWS directory among them;
  * - C:\*.EXE gives only the .EXE files;
  * - C:\KERNEL.BIN, an exact name, gives the file and its size;
- * - C:\WINDOWS\SYSTEM32\NT* gives at least NTDLL.DLL, whose 8.3 name and
- *   size an exact name gives back;
+ * - C:\WINDOWS\SYSTEM32\NT* gives at least NTDLL.DLL; an exact name gives
+ *   its size back, with no alternate name because it is already 8.3;
  * - a name nothing matches fails with ERROR_FILE_NOT_FOUND;
  * - the whole enumeration again, restarted, gives the same entries.
  * Each result goes to the debug port (DbgPrint), where the scenario looks
@@ -199,7 +199,8 @@ DWORD __stdcall GuiStartup(void)
     if (data.size_low != 4)
         ExitProcess(5);
 
-    /* A directory of the system, and the 8.3 name of an entry. */
+    /* A directory of the system. An entry already named in 8.3 form has
+     * no distinct alternate name in FILE_BOTH_DIR_INFORMATION. */
     count = enumerate(L"C:\\WINDOWS\\SYSTEM32\\NT*", L"NTDLL.DLL");
     DbgPrint("[dir] SYSTEM32\\NT*: %d entries\n", count);
     if (count < 1)
@@ -209,7 +210,7 @@ DWORD __stdcall GuiStartup(void)
         ExitProcess(7);
     ascii(data.alternate_file_name, alternate, sizeof alternate);
     DbgPrint("[dir] NTDLL.DLL: %lu bytes, alternate %s\n", data.size_low, alternate);
-    if (!same_name(data.alternate_file_name, L"NTDLL.DLL") || data.size_low == 0)
+    if (data.alternate_file_name[0] != 0 || data.size_low == 0)
         ExitProcess(8);
 
     /* A name nothing matches fails as the callers expect. */
