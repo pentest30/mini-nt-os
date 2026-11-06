@@ -137,17 +137,21 @@ jour à chaque commit qui change l'état.
   Restent le formatage des deux vues bornées (`fatfs::format` est prêt),
   la copie des fichiers, la progression et la reprise du moteur (partie
   proposée de l'ADR-022), puis la souris.
-- **VirtualBox** ([`compat/vbox.md`](compat/vbox.md)) : le boot arrive loin
-  (GPT du disque primaire lu, `C:` monté, GOP 1024×768, smss, processus)
-  puis `process_round` bugchecke : le CPU voit des pages `.text` autres
-  que celles que les mêmes tables de pages rendent au noyau (faute de
-  lecture à `0xFFFFFFFF` sur un store, `.data` intacte à zéro, code lu
-  correct par le noyau, `rax` = le TID lu par `fs:[0x24]`). Bogue de
-  portabilité TLB/segment propre aux profils CPU de VBox, sans effet sur
-  QEMU. Analyse, instrumentation (à reposer : TEMP dans
-  `sys::exceptions::raise`) et pistes dans le document. La VM « Mino »
-  reste définie dans le VirtualBox de l'hôte Windows (VHD régénérable par
-  `cargo xtask image` + `convertfromraw`).
+- **VirtualBox** ([`compat/vbox.md`](compat/vbox.md)) : **le correctif DS/ES
+  (855ea5a) est vérifié sur VBox** — les threads de `process_round`
+  tournent, les seules terminaisons sont les fautes attendues des
+  self-tests, les threads démarrent dans le vrai `ntdll`, et la faute
+  volontaire d'écriture à `KUSER_SHARED_DATA` est capturée avec les bons
+  paramètres. Le boot s'arrête maintenant à l'assert suivant : **le
+  sélecteur GS de l'utilisateur revient à 0 après des interruptions
+  d'horloge et un service** (le programme l'avait chargé à 0x2b ; sur
+  QEMU le même test passe). La première analyse est corrigée : le «
+  0xffffffff » des paramètres venait du #GP de segment (le hook
+  `general_protection` rend des paramètres figés), pas d'un #PF. Faits,
+  instrumentation (SGDT + descripteurs, vue du hook de faute — à reposer)
+  et pistes dans le document. La VM « Mino » reste définie dans le
+  VirtualBox de l'hôte Windows (VHD régénérable par `cargo xtask image` +
+  `convertfromraw`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).

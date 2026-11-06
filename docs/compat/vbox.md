@@ -115,3 +115,58 @@ VBoxManage convertfromraw --format VHD mino.img mino.vhd
 Réproduit à l'identique sur trois runs (512 Mio : trois processus
 touchés ; 256 Mio : un seul, même signature). Les scénarios QEMU
 équivalents (smoke, installed-persistence) restent verts.
+
+## Le correctif DS/ES vérifié (855ea5a) — et le bogue GS suivant
+
+Le correctif du trampoline (charger DS et ES avec le sélecteur utilisateur
+avant `iretq`) **fonctionne** : les threads de `process_round` tournent sur
+VirtualBox, et les seules terminaisons journalisées sont les fautes
+**attendues** des self-tests (écriture à NULL → `0xC0000005 [1, 0]`,
+débordement de pile → `0xC00000FD`, garde → `0x80000001` à `0x500000`,
+DEP → exécution à `0x600000`, assertion, `#UD`). Les threads démarrent
+dans le vrai `ntdll` (`LdrInitializeThunk` à `0x7c901000`) et la faute
+volontaire d'écriture à `KUSER_SHARED_DATA` est capturée avec les bons
+paramètres (`[0xC0000005, 1, 0x7ffe0000]`).
+
+Le boot s'arrête maintenant à l'assert suivant
+(`main.rs`, « GS lost across clock interrupts and a system service ») :
+le programme charge GS avec le sélecteur du TEB (0x2b, base = TEB par
+`set_teb_base`), prend des interruptions d'horloge et un service
+(`NtDelayExecution`), puis relit **GS = 0 (sélecteur nul)** et
+`gs:[0x18] = 0`. Sur QEMU (TCG), le même test passe : la base et le
+sélecteur GS survivent.
+
+Faits établis par l'instrumentation (états des registres à la faute,
+marche matérielle des PTE, vue du hook de faute, descripteurs GDT par
+SGDT) :
+
+- le sélecteur GS de l'utilisateur vaut 0 **après** la séquence
+  horloge + service (le programme l'avait chargé à 0x2b) ;
+- `gs:[0x18]` renvoie 0 (via un sélecteur nul, l'accès #GP est attrapé par
+  le SEH du programme, qui saute la seconde sauvegarde — d'où le 0 lu) ;
+- CR3, les PTE et le contenu physique des pages `.text`/`.data` sont
+  sains au moment de chaque faute ; `CR4.PCIDE` est éteint ;
+- l'exception vue n'était **pas** un #PF mais le #GP du hook
+  (`general_protection` rend les paramètres figés
+  `[EXCEPTION_READ_FAULT, u32::MAX]` — d'où le « 0xffffffff » qui a
+  égaré la première analyse) ;
+- le descripteur CS utilisateur (entrée 3) est intact : `0x00cffb00...`,
+  L=0, D=1 — le mode de compatibilité 32 bits est bien en place.
+
+Pistes pour la prochaine session :
+
+1. **Qui met le sélecteur GS à zéro** : le trampoline charge GS nul à
+   l'entrée initiale (conforme à `pcr.rs` : « un programme peut charger
+   GS » — le programme le fait) ; les sorties de trap restaurent le
+   sélecteur sauvé à l'entrée (`mov gs, eax`). Journaliser `mov eax, gs`
+   à chaque entrée de trap (la valeur sauvée) et à chaque sortie — la
+   première qui rend 0 localise le chemin ;
+2. **le couplage SWAPGS/`mov gs`** : l'ordre `swapgs` puis `mov gs, eax`
+   recharge la base depuis le descripteur (le TEB, maintenu par
+   `set_teb_base`) — vérifier que `IA32_KERNEL_GS_BASE` porte bien le TEB
+   pendant le noyau après le premier passage (il ne semble jamais écrit :
+   `pcr.rs` l'initialise à 0 et rien d'autre ne l'écrit) ;
+3. **reproduire sur QEMU** : le bogue dépend du minutage des
+   interruptions ; injecter les interruptions d'horloge au niveau
+   utilisateur (QEMU `-icount` ou le moniteur) peut le rendre visible
+   sous QEMU et donc débogable au gdbstub.
