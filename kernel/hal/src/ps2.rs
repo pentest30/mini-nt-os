@@ -19,6 +19,7 @@ use x86_64::instructions::port::Port;
 
 const PS2_DATA: u16 = 0x60;
 const PS2_STATUS: u16 = 0x64;
+const PS2_COMMAND: u16 = 0x64;
 
 // ── ISR-safe key ring buffer ─────────────────────────────────────────────────
 // Lock-free SPSC ring: ISR writes (producer), message queue reads (consumer).
@@ -131,6 +132,67 @@ pub unsafe fn init() {
         }
     }
     log::trace!("HAL PS/2: controller flushed (polled, scancode set 1)");
+}
+
+/// Attend que l'entrée du contrôleur (port 0x64 bit 1) soit vide avant une
+/// écriture de commande ou de donnée. Borné : le contrôleur est émulé ou
+/// présent, il répond.
+fn wait_input_clear() {
+    // SAFETY: port 0x64 status reads are always safe at CPL 0.
+    for _ in 0..100_000 {
+        if unsafe { Port::<u8>::new(PS2_STATUS).read() } & 2 == 0 {
+            return;
+        }
+    }
+}
+
+/// Initialisation du contrôleur 8042 pour le clavier : vide la sortie, écrit
+/// l'octet de configuration (horloge du clavier rétablie, interruption sur
+/// tampon de sortie plein, souris toujours désactivée, la traduction vers le
+/// jeu 1 préservée), réactive le port du clavier et lui demande d'émettre
+/// ses codes (scan enable).
+///
+/// Sans cette séquence, les émulateurs stricts (VirtualBox) et le matériel
+/// réel n'émettent ni codes ni IRQ1 — QEMU tolère l'oubli.
+///
+/// # Safety
+/// Must be called with interrupts disabled (the IRQ1 handler would race the
+/// controller setup), at CPL 0.
+pub unsafe fn controller_enable_keyboard() {
+    // SAFETY: interrupts disabled (the caller's contract); every access is
+    // a port read/write of the i8042 controller, always safe at CPL 0.
+    unsafe {
+        let mut status = Port::<u8>::new(PS2_STATUS);
+        let mut data = Port::<u8>::new(PS2_DATA);
+        let mut command = Port::<u8>::new(PS2_COMMAND);
+        // Vide la sortie (les codes en attente partent).
+        for _ in 0..16 {
+            if status.read() & 1 == 0 {
+                break;
+            }
+            let _ = data.read();
+        }
+        // Lit l'octet de configuration (0x20 → sortie) et le réécrit (0x60) :
+        // horloge du clavier rétablie (bit 4 à 0), souris toujours désactivée
+        // (bit 5 à 1), interruption sur le tampon de sortie du clavier (bit 0
+        // à 1). Le bit 6 (traduction vers le jeu 1) est préservé.
+        command.write(0x20);
+        let mut config = data.read();
+        config &= !(1 << 4);
+        config |= 1;
+        config |= 1 << 5;
+        wait_input_clear();
+        command.write(0x60);
+        wait_input_clear();
+        data.write(config);
+        // Réactive le port du clavier (0xAE), puis lui demande d'émettre ses
+        // codes (0xF4). L'accusé 0xFA du clavier arrive par IRQ1 : le ring du
+        // pilote le jette.
+        wait_input_clear();
+        command.write(0xAE);
+        wait_input_clear();
+        data.write(0xF4);
+    }
 }
 
 /// Try to read one ASCII byte from the PS/2 keyboard output buffer.
