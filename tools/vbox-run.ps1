@@ -4,6 +4,7 @@ param(
     [string]$SerialLog = "",
     [int]$MemoryMb = 256,
     [int]$TimeoutSec = 60,
+    [string]$CpuProfile = "Intel Core i7-6700K",
     [switch]$CreateVmIfMissing
 )
 
@@ -78,20 +79,14 @@ function Test-VhdAttached {
         $ErrorActionPreference = $prev
     }
     if ($LASTEXITCODE -ne 0) { return $false }
-    $sata00 = $null
+    $expected = [System.IO.Path]::GetFullPath($ExpectedPath).ToLowerInvariant()
     foreach ($line in $lines) {
-        if ($line -match '^"SATA-0-0"="(.*)"$') {
-            $sata00 = $Matches[1]
-        }
         if ($line -notmatch '^"[^"]+-\d+-\d+"="(.*)"$') { continue }
         $raw = $Matches[1]
         if ($raw -eq "none") { continue }
         $norm = ($raw -replace '\\\\','\')
         try { $norm = [System.IO.Path]::GetFullPath($norm) } catch {}
-        if ($norm.ToLowerInvariant().EndsWith("\micro-nt-os.vhd")) { return $true }
-    }
-    if ($null -ne $sata00 -and $sata00 -ne "none") {
-        return $true
+        if ($norm.ToLowerInvariant() -eq $expected) { return $true }
     }
     return $false
 }
@@ -134,7 +129,7 @@ if (-not $vmExists) {
         Write-Host "VM '$VmName' not found; creating it automatically."
     }
     Invoke-VBoxManage -Args @("createvm", "--name", $VmName, "--ostype", "Other_64", "--register")
-    Invoke-VBoxManage -Args @("storagectl", $VmName, "--name", "SATA", "--add", "sata", "--controller", "IntelAhci")
+    Invoke-VBoxManage -Args @("storagectl", $VmName, "--name", "IDE", "--add", "ide", "--controller", "PIIX4")
 }
 for ($i = 0; $i -lt 10; $i++) {
     if ((Invoke-VBoxManageBestEffort -Args @("showvminfo", $VmName, "--machinereadable")) -eq 0) {
@@ -147,13 +142,20 @@ if ((Invoke-VBoxManageBestEffort -Args @("showvminfo", $VmName, "--machinereadab
 }
 
 Invoke-VBoxManage -Args @("modifyvm", $VmName, "--firmware", "efi", "--memory", "$MemoryMb", "--ioapic", "on")
+if (-not [string]::IsNullOrWhiteSpace($CpuProfile)) {
+    Invoke-VBoxManage -Args @("modifyvm", $VmName, "--cpu-profile", $CpuProfile)
+}
 Invoke-VBoxManage -Args @("modifyvm", $VmName, "--uart1", "0x3F8", "4")
 Invoke-VBoxManage -Args @("modifyvm", $VmName, "--uartmode1", "file", $SerialLog)
 
+# Mino currently has an ATA/IDE PIO driver, but no AHCI driver.  Migrate VMs
+# created by older revisions of this script away from their SATA attachment.
 $null = Invoke-VBoxManageBestEffort -Args @("storageattach", $VmName, "--storagectl", "SATA", "--port", "0", "--device", "0", "--type", "hdd", "--medium", "none")
-Invoke-VBoxManage -Args @("storageattach", $VmName, "--storagectl", "SATA", "--port", "0", "--device", "0", "--type", "hdd", "--medium", $VhdPath)
+$null = Invoke-VBoxManageBestEffort -Args @("storagectl", $VmName, "--name", "IDE", "--add", "ide", "--controller", "PIIX4")
+$null = Invoke-VBoxManageBestEffort -Args @("storageattach", $VmName, "--storagectl", "IDE", "--port", "0", "--device", "0", "--type", "hdd", "--medium", "none")
+Invoke-VBoxManage -Args @("storageattach", $VmName, "--storagectl", "IDE", "--port", "0", "--device", "0", "--type", "hdd", "--medium", $VhdPath)
 if (-not (Test-VhdAttached -Name $VmName -ExpectedPath $VhdPath)) {
-    Invoke-VBoxManage -Args @("storageattach", $VmName, "--storagectl", "SATA", "--port", "0", "--device", "0", "--type", "hdd", "--medium", $VhdPath)
+    Invoke-VBoxManage -Args @("storageattach", $VmName, "--storagectl", "IDE", "--port", "0", "--device", "0", "--type", "hdd", "--medium", $VhdPath)
 }
 if (-not (Test-VhdAttached -Name $VmName -ExpectedPath $VhdPath)) {
     throw "VHD not attached to VM '$VmName' after storageattach. Check controller name and VirtualBox VM settings."
