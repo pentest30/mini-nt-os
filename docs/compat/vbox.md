@@ -201,3 +201,18 @@ stricte. Sur QEMU (TCG), le même enchaînement conserve 0x2b.
 de sa ligne** « paging: PML4 at » (écran et série au même octet, CPU de la
 VM à 0 %, vCPU en HLT), sur la même image qui passe à d'autres boots —
 flakiness UEFI/UART de VBox, à rejouer plutôt qu'à déboguer.
+
+## Résolu : le boot complet sur VirtualBox (e0b0b73)
+
+La cause du « GS perdu » était **DS rendu nul** : une transition vers du
+code noyau 64 bits invalide les sélecteurs de données sauvegardés, et les
+stores du programme (via DS) #GPtaient — le SEH du programme sautait les
+sauvegardes, d'où les slots à zéro lus comme « GS = 0 ». Le correctif
+`e0b0b73` (recharger DS/ES depuis le SS utilisateur de la trame IRET à
+**tous** les retours utilisateur) ferme la famille ouverte par le
+correctif du trampoline (855ea5a).
+
+Vérifié sur l'image `mino-vbox3` : `kernel: phase 1 done`, tous les
+self-tests (y compris `process_round`, la sonde KUSER_SHARED_DATA et le
+test GS), smss (36 services), et le lanceur dessiné sur le framebuffer
+VBox. La fenêtre du launcher s'affiche et répond.
