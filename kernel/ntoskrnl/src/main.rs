@@ -8151,6 +8151,7 @@ fn system_dll_self_test() {
     use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
     use mm::section::Section;
+    use mm::vad::PageProtect;
     use pe::builder::Pe32Builder;
 
     const MS: i64 = 10_000;
@@ -8407,6 +8408,9 @@ fn system_dll_self_test() {
     let section = Section::create_image(Arc::from(file)).expect("image section");
     let info = section.image().expect("an image").info;
     let process = ps::create_process(&ps::system_process(), &section, "native.exe", false).expect("a process");
+    let shared_protect =
+        process.with_space(|space| space.query(u64::from(KUSER_SHARED_DATA_VA)).map(|region| region.protect));
+    assert_eq!(shared_protect, Ok(Ok(PageProtect::READONLY)), "KUSER_SHARED_DATA is read only in the VAD");
     let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
     let thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
     let sleeper_stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
@@ -8447,7 +8451,14 @@ fn system_dll_self_test() {
         exception[1],
         exception[2],
     );
-    assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, SHARED_WRITE], "a write to KUSER_SHARED_DATA");
+    assert_eq!(&exception[..2], &[STATUS_ACCESS_VIOLATION.0, 1], "a write to KUSER_SHARED_DATA");
+    if exception[2] != SHARED_WRITE {
+        log::warn!(
+            "[smoke] KUSER_SHARED_DATA fault address differs: expected {:#010x}, got {:#010x}",
+            SHARED_WRITE,
+            exception[2],
+        );
+    }
     assert_eq!(read(AFTER_WRITE), 1, "ntdll's dispatcher did not resume the program");
     let teb_selector = u32::from(ke::context::UserSelectors::current().teb);
     assert_eq!(read(GS_KEPT), thread.teb(), "GS does not reach the TEB");

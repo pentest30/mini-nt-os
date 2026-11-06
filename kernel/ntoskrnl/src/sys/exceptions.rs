@@ -143,7 +143,34 @@ fn page_fault(frame: &mut KTrapFrame) {
     } else {
         EXCEPTION_READ_FAULT
     };
+    log_shared_data_fault(frame, address, error);
     raise(frame, status, &[access, address as u32]);
+}
+
+/// Diagnostic de la sonde KUSER_SHARED_DATA. VirtualBox a déjà rendu une
+/// adresse décalée alors que le code et le type d'accès étaient corrects : les
+/// registres et les octets permettent de distinguer une base cachée de segment
+/// d'un flux d'instructions périmé.
+fn log_shared_data_fault(frame: &KTrapFrame, address: u64, error: PageFaultErrorCode) {
+    let base = u64::from(abi::shared_data::KUSER_SHARED_DATA_VA);
+    if !(base..base + 0x1_0000).contains(&address) {
+        return;
+    }
+    let mut bytes = [0u8; 8];
+    let instruction = ps::ethread::current_thread()
+        .and_then(|thread| thread.process().read_memory(frame.rip, &mut bytes).ok().map(|()| bytes));
+    log::warn!(
+        "[diag] shared-data #PF: rip={:#010x}, cr2={:#010x}, err={:#x}, eax={:#010x}, ebx={:#010x}, ds={:#x}, es={:#x}, fs={:#x}, bytes={:02x?}",
+        frame.rip,
+        address,
+        error.bits(),
+        frame.rax as u32,
+        frame.rbx as u32,
+        frame.ds,
+        frame.es,
+        frame.fs,
+        instruction.unwrap_or([0; 8]),
+    );
 }
 
 /// NtContinue(Context, TestAlert) : le thread reprend avec le contexte ;
