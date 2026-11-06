@@ -6,6 +6,11 @@ reste [`../design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
 
 ![Écran final de l'installateur Mino](../images/installer-ui-backend.png)
 
+La présentation suit le langage visuel des assistants ReactOS et Windows XP :
+rail bleu à cinq étapes, contenu blanc, barre d'actions beige et boutons en
+relief. Les couleurs, le nom et les éléments graphiques restent propres à
+Mino ; aucune ressource Microsoft n'est intégrée.
+
 ## Architecture retenue
 
 L'installateur est un programme Win32 natif, lié aux `user32`, `gdi32`,

@@ -26,10 +26,10 @@ expect = [setup] stage configure: 80%
 expect = [setup] stage verify: 100%
 expect = [setup] screen complete; verified simulation
 
-# Final screen: blue application header, active Complete step, green check.
-screen = 130 90 2B5289
-screen = 150 360 2E60A6
-screen = 374 314 2E8152
+# Final screen: blue classic-wizard rail and green completion mark.
+screen = 130 90 17386F
+screen = 150 360 173D78
+screen = 374 274 2E8152
 
 keys = [setup] ready => ret
 keys = [setup] screen disk 1 => tab ret
