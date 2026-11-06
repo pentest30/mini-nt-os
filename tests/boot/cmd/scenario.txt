@@ -1,0 +1,69 @@
+# M5, console (docs/compat/m5-console.md, step 7): ReactOS's cmd.exe,
+# interactive. CONCMD1.EXE (tests/native/concmd1.c) takes the place of
+# winlogon.exe; like winlogon, it takes WinSta0\Default and loads the US
+# keyboard layout, then starts cmd /K C:\READ1.EXE, which consrv gives a
+# console. cmd starts READ1.EXE (tests/native/read1.c) in it, which says
+# when the console window, shown and activated, waits for keys; QEMU's
+# monitor types a line, which consrv's window procedure (WM_KEYDOWN,
+# WM_CHAR) puts in the console's input buffer and READ1.EXE reads
+# (ReadConsoleW: consrv answers the waiting client later, by LPC). Then the
+# commands, typed ahead in the console, which cmd reads one line at a time:
+# echo and set, with redirections (> and >>: NtCreateFile, NtWriteFile at
+# the end); copy, which finds its source (FindFirstFile:
+# NtQueryDirectoryFile, by its name) and copies it; type; dir /b C:\*.TXT
+# (FindFirstFile turns *.TXT into <.TXT, DOS_STAR) and dir C:\; a batch file
+# written by echo, with a variable and if exist; exit. CONCMD1.EXE then
+# prints C:\OUT.TXT and C:\DIR.TXT, one numbered line at a time. The probe
+# waits for smss 10 s after the last key.
+#
+# Not yet (the next step): dir's volume header (FileNameInformation,
+# FileFsVolumeInformation), its free space (FileFsSizeInformation,
+# FileFsFullSizeInformation), the dates of the files (FAT dates and
+# NtQueryDefaultLocale): its dates read 01???01???1601.
+features = test-smss
+requires = userland, native
+initial-command = CONCMD1.EXE
+cpus     = default, intel
+timeout  = 180
+
+keys = [read] waiting => h i ret
+keys = [read] the line: => "echo hello> C:\OUT.TXT" ret
+keys = [read] the line: => "set MINO=xp" ret
+keys = [read] the line: => "set MINO>> C:\OUT.TXT" ret
+keys = [read] the line: => "copy C:\OUT.TXT C:\COPY.TXT> C:\LOG.TXT" ret
+keys = [read] the line: => "type C:\COPY.TXT>> C:\OUT.TXT" ret
+keys = [read] the line: => "type C:\LOG.TXT>> C:\OUT.TXT" ret
+keys = [read] the line: => "dir /b C:\*.TXT>> C:\OUT.TXT" ret
+keys = [read] the line: => "dir C:\> C:\DIR.TXT" ret
+keys = [read] the line: => "echo @echo off> C:\T.BAT" ret
+keys = [read] the line: => "echo echo batch: %MINO%>> C:\T.BAT" ret
+keys = [read] the line: => "echo if exist C:\COPY.TXT echo batch: copy found>> C:\T.BAT" ret
+keys = [read] the line: => "C:\T.BAT>> C:\OUT.TXT" ret
+keys = [read] the line: => "exit" ret
+
+expect = [concmd] on WinSta0\Default
+expect = [concmd] CMD.EXE started
+expect = [read] started
+expect = [read] the console window: visible
+expect = [read] waiting
+expect = [read] ReadConsoleW: 1 (0), 4 characters
+expect = [read] the line: 68 69 0d 0a
+expect = [concmd] CMD.EXE: wait 0, exit code 0
+expect = [concmd] OUT.TXT 1: hello
+expect = [concmd] OUT.TXT 2: MINO=xp
+expect = [concmd] OUT.TXT 3: hello
+expect = [concmd] OUT.TXT 4: MINO=xp
+expect = [concmd] OUT.TXT 5:         1 file(s) copied
+expect = [concmd] OUT.TXT 6: MINOTEST.TXT
+expect = [concmd] OUT.TXT 7: OUT.TXT
+expect = [concmd] OUT.TXT 8: LOG.TXT
+expect = [concmd] OUT.TXT 9: COPY.TXT
+expect = [concmd] OUT.TXT 10: batch: xp
+expect = [concmd] OUT.TXT 11: batch: copy found
+expect = [concmd] DIR.TXT 2:  Directory of C:\
+expect = <DIR>          WINDOWS
+expect = 0 DIR.TXT
+expect = File(s)
+expect = Dir(s)
+forbid = sys: NtQueryDirectoryFile (0x0097) is not implemented
+forbid = Incorrect function.
