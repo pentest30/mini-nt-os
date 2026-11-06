@@ -140,13 +140,25 @@ pub fn capture(socket: &Path, file: &Path) -> Result<Image> {
     Image::parse_ppm(&bytes)
 }
 
-/// How long a key stays down, and the pause after it (ms): longer than the
-/// hold, so that a key is up before the next one goes down.
+/// How long each key of a `sendkey` stays down (ms).
 const KEY_HOLD_MS: u32 = 30;
-const KEY_PAUSE: Duration = Duration::from_millis(60);
+/// The margin after the last release of a `sendkey` (ms).
+const KEY_SETTLE_MS: u32 = 30;
+
+/// How long QEMU takes to type `key` (`sendkey`, `shift-a` is two keys):
+/// it presses the keys one hold apart, then releases them one hold apart,
+/// from a queue of delayed events. The next `sendkey` must wait for the
+/// last release: with QEMU 8.2, one that comes while releases are still
+/// queued loses some of them (the step 8 of the console, `docs/compat/
+/// m5-console.md`: 670 keys pressed, 568 released, a Shift left down).
+fn key_duration(key: &str) -> Duration {
+    let keys = key.split('-').count() as u32;
+    Duration::from_millis(u64::from(2 * keys * KEY_HOLD_MS + KEY_SETTLE_MS))
+}
 
 /// Types `keys` on the QEMU whose monitor listens on `socket`, one after
-/// the other (`sendkey`), each answered by the monitor before the next.
+/// the other (`sendkey`), each answered by the monitor and released
+/// ([`key_duration`]) before the next.
 pub fn send_keys(socket: &Path, keys: &[String]) -> Result<()> {
     let stream = UnixStream::connect(socket).map_err(|e| format!("QEMU monitor {}: {e}", socket.display()))?;
     stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| format!("QEMU monitor: {e}"))?;
@@ -169,7 +181,7 @@ pub fn send_keys(socket: &Path, keys: &[String]) -> Result<()> {
                 Err(e) => return Err(format!("QEMU monitor: {e}")),
             }
         }
-        std::thread::sleep(KEY_PAUSE);
+        std::thread::sleep(key_duration(key));
     }
     Ok(())
 }
@@ -182,6 +194,14 @@ fn count(haystack: &[u8], needle: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_waits_for_its_releases() {
+        // Pressed then released, one hold apart each, and the margin.
+        assert_eq!(key_duration("a"), Duration::from_millis(2 * 30 + 30));
+        assert_eq!(key_duration("shift-semicolon"), Duration::from_millis(4 * 30 + 30));
+        assert_eq!(key_duration("ctrl-alt-delete"), Duration::from_millis(6 * 30 + 30));
+    }
 
     #[test]
     fn a_pixel_is_a_position_and_a_colour() {
