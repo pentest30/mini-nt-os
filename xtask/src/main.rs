@@ -54,6 +54,9 @@ commands:
   image   create one bootable GPT image (ESP + system volume)
           --output FILE       destination; must not exist (default target/mino.img)
           --features F        ntoskrnl features (default test-smss)
+          --initial-command P  the test program P (built from tests/native)
+                              boots as winlogon.exe — SETUP1.EXE runs the
+                              installer flow; needs MinGW
   lint    rustfmt --check, the generated service tables up to date, then
           clippy -D warnings on the host and the bare-metal targets (06 §6)
   run     build, then boot in QEMU with the serial port on stdio
@@ -166,12 +169,22 @@ fn lint(ws: &Workspace) -> Result<()> {
 fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
     let output = args.value("--output")?.map(PathBuf::from).unwrap_or_else(|| ws.target.join("mino.img"));
     let features = args.value("--features")?.unwrap_or_else(|| "test-smss".into());
+    let initial_command = args.value("--initial-command")?;
     args.finish()?;
     if output.exists() {
         return Err(format!("{} already exists; choose another --output", output.display()));
     }
-    let files = userland_files(ws).ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
+    let mut files = userland_files(ws).ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
     let artifacts = build(ws, Some(&features))?;
+    if let Some(program) = &initial_command {
+        // The installer flow: the program boots as winlogon.exe, smss's
+        // initial command (the `installer-ui` scenario's substitution).
+        let native = native::build(ws)?.ok_or_else(|| {
+            format!("initial-command: the native programs need {}", native::missing_tool().unwrap_or("a compiler"))
+        })?;
+        files.extend(native);
+        put_initial_command(&mut files, program)?;
+    }
     let run_dir = ws.target.join("xtask").join("image-source");
     let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &files)?;
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
