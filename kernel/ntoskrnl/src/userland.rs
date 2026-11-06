@@ -16,6 +16,8 @@ const NLS_FILES: [&str; 3] =
     ["\\SystemRoot\\System32\\c_1252.nls", "\\SystemRoot\\System32\\c_437.nls", "\\SystemRoot\\System32\\l_intl.nls"];
 /// La ruche SYSTEM.
 const SYSTEM_HIVE: &str = "\\SystemRoot\\System32\\config\\SYSTEM";
+/// La ruche SOFTWARE.
+const SOFTWARE_HIVE: &str = "\\SystemRoot\\System32\\config\\SOFTWARE";
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -70,20 +72,28 @@ pub fn install_nls_tables() {
     }
 }
 
-/// Installe dans win32k les polices du cadre des fenêtres (ADR-013,
-/// `win32k::font`), lues dans `\SystemRoot\Fonts` : Tahoma, Tahoma gras,
-/// Marlett. Sans elles, le titre et les symboles des boutons ne se dessinent
-/// pas (journalisé par win32k).
+/// Le répertoire des polices.
+const FONTS_DIRECTORY: &str = "\\SystemRoot\\Fonts";
+/// Les substituts des noms de polices, dans la ruche SOFTWARE.
+const FONT_SUBSTITUTES: &str = "\\REGISTRY\\MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes";
+
+/// Installe dans win32k (ADR-013, `win32k::font`) chaque police TrueType
+/// (`.ttf`) de `\SystemRoot\Fonts`, comme IntLoadSystemFonts, et les
+/// substituts de `FontSubstitutes` (la ruche SOFTWARE doit être montée).
+/// Sans Tahoma ni Marlett, le titre et les symboles des boutons ne se
+/// dessinent pas (journalisé par win32k).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage.
 pub fn install_fonts() {
+    install_font_substitutes();
+    let names = list_boot_directory(FONTS_DIRECTORY).unwrap_or_default();
     let mut installed = alloc::vec::Vec::new();
-    for face in win32k::font::Face::ALL {
-        let path = alloc::format!("\\SystemRoot\\Fonts\\{}", face.file_name());
+    for name in names.iter().filter(|name| name.to_ascii_lowercase().ends_with(".ttf")) {
+        let path = alloc::format!("{FONTS_DIRECTORY}\\{name}");
         let Some(data) = read_boot_file(&path) else { continue };
-        match win32k::font::install(face, Arc::from(data)) {
-            Ok(()) => installed.push(face.file_name()),
+        match win32k::font::install(name, Arc::from(data)) {
+            Ok(_) => installed.push(name.as_str()),
             Err(error) => log::error!("[boot] {path}: not a font ({error:?})"),
         }
     }
@@ -91,6 +101,66 @@ pub fn install_fonts() {
         log::info!("[boot] no fonts on the boot disk (cargo xtask fetch-userland)");
     } else {
         log::info!("[boot] fonts installed: {}", installed.join(", "));
+    }
+}
+
+/// Donne à win32k les substituts de `FontSubstitutes` (IntLoadFontSubstList) :
+/// chaque valeur REG_SZ, son nom et son texte sans le jeu de caractères qui
+/// peut les suivre (`Nom,jeu`, que ReactOS compare aussi ; ici, ignoré).
+fn install_font_substitutes() {
+    let key = ob::namespace()
+        .open(FONT_SUBSTITUTES, None, Some(&cm::KEY_TYPE), abi::object::OBJ_CASE_INSENSITIVE)
+        .ok()
+        .and_then(|object| ob::downcast::<cm::Key>(&object));
+    let Some(values) = key.and_then(|key| key.values().ok()) else {
+        return log::info!("[boot] no FontSubstitutes (no SOFTWARE hive)");
+    };
+    let name = |units: &[u16]| {
+        let text = alloc::string::String::from_utf16_lossy(units);
+        let text = text.split('\0').next().unwrap_or_default();
+        alloc::string::String::from(text.split(',').next().unwrap_or_default().trim())
+    };
+    let substitutes: alloc::vec::Vec<_> = values
+        .iter()
+        .filter(|value| value.data_type == abi::registry::REG_SZ)
+        .map(|value| {
+            let data: alloc::vec::Vec<u16> =
+                value.data.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+            (name(&value.name), name(&data))
+        })
+        .filter(|(from, to)| !from.is_empty() && !to.is_empty())
+        .collect();
+    log::info!("[boot] font substitutes: {}", substitutes.len());
+    win32k::font::set_substitutes(substitutes);
+}
+
+/// Les noms de ce que tient le répertoire `path` du disque de démarrage ;
+/// `None` sans lui.
+fn list_boot_directory(path: &str) -> Option<alloc::vec::Vec<alloc::string::String>> {
+    let object =
+        ob::namespace().open(path, None, Some(&io_manager::FILE_TYPE), abi::object::OBJ_CASE_INSENSITIVE).ok()?;
+    ob::downcast::<io_manager::File>(&object)?.list().ok()
+}
+
+/// Monte la ruche SOFTWARE du disque RAM de démarrage en
+/// `\REGISTRY\MACHINE\SOFTWARE`, si le disque la tient : comme SYSTEM, celle de
+/// la version épinglée de ReactOS (les substituts des polices, les réglages
+/// de la console…), réécrite dans son fichier par NtFlushKey.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage.
+pub fn mount_software_hive() {
+    let Some(hive) = read_boot_file(SOFTWARE_HIVE) else {
+        return log::info!("[boot] no SOFTWARE hive on the boot disk (cargo xtask fetch-userland)");
+    };
+    let size = hive.len();
+    let registry = cm::registry().expect("Cm not initialised");
+    let mounted = cm::HiveFile::new(Arc::from(hive))
+        .map(|file| file.with_file(SOFTWARE_HIVE))
+        .and_then(|file| cm::mount(&registry, "MACHINE", "SOFTWARE", file));
+    match mounted {
+        Ok(()) => log::info!("[boot] SOFTWARE hive mounted at \\REGISTRY\\MACHINE\\SOFTWARE: {size} bytes"),
+        Err(status) => log::error!("[boot] SOFTWARE hive not mounted: {status}"),
     }
 }
 
@@ -108,9 +178,12 @@ pub fn mount_system_hive() {
     };
     let size = hive.len();
     match cm::mount_system_hive(Arc::from(hive), Some(SYSTEM_HIVE)) {
-        Ok(current) => log::info!(
-            "[boot] SYSTEM hive mounted at \\REGISTRY\\MACHINE\\SYSTEM: {size} bytes, CurrentControlSet = ControlSet{current:03}"
-        ),
+        Ok(current) => {
+            log::info!(
+                "[boot] SYSTEM hive mounted at \\REGISTRY\\MACHINE\\SYSTEM: {size} bytes, CurrentControlSet = ControlSet{current:03}"
+            );
+            log::info!("[boot] default locale: {:#06x} (Nls\\Language)", crate::sys::locale::load_system_locale());
+        }
         Err(status) => log::error!("[boot] SYSTEM hive refused: {status}"),
     }
 }
@@ -286,8 +359,18 @@ fn log_known_dlls() {
     );
 }
 
+/// The processes created while a probe runs (`ps::set_create_process_notify`).
+static CREATED: hal::sync::KSpinLock<alloc::vec::Vec<Arc<ob::Object<ps::EProcess>>>> =
+    hal::sync::KSpinLock::new(alloc::vec::Vec::new());
+
+/// Keeps `process`, created while a probe runs.
+fn keep_created(process: &Arc<ob::Object<ps::EProcess>>) {
+    CREATED.lock().push(process.clone());
+}
+
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
-/// `params`, et attend sa fin (10 s au plus) : son thread démarre par
+/// `params`, et attend sa fin (10 s au plus, ou 10 s après la dernière touche
+/// tapée : un programme interactif, `keys =` dans un scénario) : son thread démarre par
 /// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
 /// entre dans son point d'entrée avec le PEB pour argument
 /// (`NtProcessStartup(PPEB)`). Journalise, avec le préfixe `[tag]` et sous le
@@ -316,8 +399,8 @@ fn run_native(
     use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
 
-    /// Dix secondes, en unités de 100 ns, relatives.
-    const TIMEOUT: i64 = -10 * 1000 * 10_000;
+    /// Dix secondes, en unités de 100 ns.
+    const QUIET: u64 = 10 * 1000 * 10_000;
     /// Deux secondes de plus pour chacun des processus qu'il a créés.
     const CHILD_TIMEOUT: i64 = -2 * 1000 * 10_000;
 
@@ -331,6 +414,8 @@ fn run_native(
     let info = section.image().expect("an image section").info;
     crate::sys::reset_service_calls();
     ps::set_critical_breaks_ignored(true);
+    CREATED.lock().clear();
+    ps::set_create_process_notify(Some(keep_created));
     let started = ps::create_process(&ps::system_process(), &section, name, false).and_then(|process| {
         ps::process_parameters::write(&process, params)?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
@@ -342,20 +427,39 @@ fn run_native(
         Ok(process) => process,
         Err(status) => return log::error!("[{tag}] {name}: the process did not start: {status}"),
     };
-    // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
-    let waited = unsafe {
-        ke_wait_for_single_object::<KePlatform>(
-            process.dispatcher_object(),
-            ProcessorMode::Kernel,
-            false,
-            Some(TIMEOUT),
-        )
+    // At most `timeout` (100 ns units) for the process to end.
+    let wait = |timeout: u64| {
+        let relative = -i64::try_from(timeout).unwrap_or(i64::MAX);
+        // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
+        unsafe {
+            ke_wait_for_single_object::<KePlatform>(
+                process.dispatcher_object(),
+                ProcessorMode::Kernel,
+                false,
+                Some(relative),
+            )
+        }
     };
-    // The processes it created, while its handles still hold those that
-    // ended.
-    let children = ps::child_processes(process.pid());
+    let mut waited = wait(QUIET);
+    // A program typed into (`keys =` in a scenario) is not stuck: 10 s more
+    // after each key.
+    while waited == STATUS_TIMEOUT {
+        let Some(last_key) = crate::input::last_key_time() else { break };
+        let idle = hal::timer::interrupt_time().saturating_sub(last_key);
+        if idle >= QUIET {
+            break;
+        }
+        waited = wait(QUIET - idle);
+    }
+    // The processes it created: kept since their creation, whoever still
+    // holds them.
+    ps::set_create_process_notify(None);
+    let children: alloc::vec::Vec<_> = core::mem::take(&mut *CREATED.lock())
+        .into_iter()
+        .filter(|created| created.parent_pid() == process.pid())
+        .collect();
     if waited == STATUS_TIMEOUT {
-        log::warn!("[{tag}] {name}: the process did not end within 10 s: terminated");
+        log::warn!("[{tag}] {name}: the process did not end within 10 s (of its start or the last key): terminated");
         if process.is_critical() {
             log::info!("[{tag}] {name} is a critical process: no longer, before it is terminated");
         }
@@ -393,6 +497,10 @@ fn run_native(
             };
         }
         log::info!("[{tag}] {name} created {child_name} (PID {pid}): exit status {}", child.exit_status());
+    }
+    let dropped = hal::ps2::dropped();
+    if dropped != 0 {
+        log::warn!("[{tag}] keyboard: {dropped} scan codes dropped, the ring of hal::ps2 full");
     }
     let calls = crate::sys::service_calls();
     log::info!("[{tag}] {name} and its processes: {} system services called", calls.len());

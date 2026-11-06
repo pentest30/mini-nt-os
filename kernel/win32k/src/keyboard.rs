@@ -18,8 +18,10 @@
 //! disposition viennent de sa langue (le KLID), par le rappel GetCharsetInfo
 //! de `user32` (co_IntGetCharsetInfo, [`crate::callback`]).
 //!
-//! Pas encore : la traduction des touches par les tables (avec la file
-//! d'entrée, M6), l'IME, le déchargement (NtUserUnloadKeyboardLayout), le
+//! Les tables de la disposition sont lues au chargement
+//! ([`crate::kbdtables`]) : elles traduisent les touches.
+//!
+//! Pas encore : l'IME, le déchargement (NtUserUnloadKeyboardLayout), le
 //! réordonnancement (`KLF_REORDER`), la notification du shell.
 
 use alloc::string::String;
@@ -32,12 +34,23 @@ use abi::teb32::Teb32;
 use abi::user::{CharsetInfo32, ClientInfo32, ANSI_CHARSET, CP_ACP, FS_LATIN1, KLF_ACTIVATE, KLF_SETFORPROCESS};
 use hal::sync::KSpinLock;
 
-/// Un fichier de disposition (KBDFILE) : son nom (le KLID), son image, et
-/// la RVA de ses tables.
+use crate::kbdtables::Tables;
+
+/// Un fichier de disposition (KBDFILE) : son nom (le KLID), son image, la
+/// RVA de ses tables, et ces tables lues (`crate::kbdtables`).
 pub struct KeyboardFile {
     pub name: String,
     pub image: Vec<u8>,
     pub tables: u32,
+    pub kbd: Tables,
+}
+
+/// Les tables (KBDTABLES) en `tables` de l'image `image` ;
+/// `STATUS_INVALID_IMAGE_FORMAT` pour des tables mal formées.
+pub fn read_tables(image: &[u8], tables: u32) -> Result<Tables, NtStatus> {
+    let pe = pe::Pe32::parse(image).map_err(|_| STATUS_INVALID_IMAGE_FORMAT)?;
+    let base = pe.optional_header().image_base;
+    Tables::parse(&|rva, count| pe.read_rva(rva, count), base, tables).ok_or(STATUS_INVALID_IMAGE_FORMAT)
 }
 
 /// Une disposition chargée (KL).
@@ -136,7 +149,7 @@ pub fn layouts() -> Vec<u32> {
 ///
 /// # Errors
 /// Celles de `read`, de la lecture des tables
-/// ([`layer_descriptor_tables`]) et de l'activation ;
+/// ([`layer_descriptor_tables`], [`read_tables`]) et de l'activation ;
 /// `STATUS_OBJECT_NAME_INVALID` pour un KLID qui n'est pas hexadécimal.
 /// Un échec de `charset` est journalisé, et la disposition prend les
 /// valeurs par défaut ([`layout_charset`]).
@@ -160,6 +173,7 @@ pub fn load(
         None => {
             let image = read(klid)?;
             let tables = layer_descriptor_tables(&image)?;
+            let kbd = read_tables(&image, tables)?;
             let answer = charset(klid_locale(klid)?);
             match &answer {
                 Ok(info) => log::info!(
@@ -173,7 +187,7 @@ pub fn load(
                 }
             }
             let (charset, font_signature, code_page) = layout_charset(answer);
-            let file = Arc::new(KeyboardFile { name: String::from(klid), image, tables });
+            let file = Arc::new(KeyboardFile { name: String::from(klid), image, tables, kbd });
             let created = Arc::new(KeyboardLayout { hkl, file, charset, font_signature, code_page });
             let mut layouts = LAYOUTS.lock();
             // Another thread may have loaded it meanwhile.
@@ -226,8 +240,16 @@ mod tests {
     use super::*;
     use pe::builder::Pe32Builder;
 
+    /// A layout DLL at 0x5FFF0000, its `KbdLayerDescriptor` at 0x1080 being
+    /// `code`; at 0x1000, the smallest tables: no modifiers, no characters,
+    /// no scan codes.
     fn layout_dll(code: [u8; 6]) -> Vec<u8> {
         let mut data = [0u8; 0x100];
+        // KBDTABLES: MODIFIERS at 0x1040 (VK_TO_BIT at 0x1050, ending at
+        // once), VK_TO_WCHAR_TABLE at 0x1060 (ending at once).
+        data[0..4].copy_from_slice(&0x5FFF_1040u32.to_le_bytes());
+        data[4..8].copy_from_slice(&0x5FFF_1060u32.to_le_bytes());
+        data[0x40..0x44].copy_from_slice(&0x5FFF_1050u32.to_le_bytes());
         data[0x80..0x86].copy_from_slice(&code);
         Pe32Builder::new(0x5FFF_0000)
             .section(".data", 0x1000, 0x100, &data, pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
@@ -249,6 +271,23 @@ mod tests {
         let no_export =
             Pe32Builder::new(0x5FFF_0000).section(".data", 0x1000, 0x10, &[0; 0x10], pe::SCN_MEM_READ).build();
         assert_eq!(layer_descriptor_tables(&no_export), Err(STATUS_INVALID_IMAGE_FORMAT), "no KbdLayerDescriptor");
+    }
+
+    // Its own HKL: the list of layouts is shared by the tests, which run at
+    // once.
+    #[test]
+    fn a_layout_whose_tables_cannot_be_read_is_refused() {
+        let image = layout_dll([0xB8, 0x00, 0x10, 0xFF, 0x5F, 0xC3]);
+        assert!(read_tables(&image, 0x1000).is_ok());
+        // KBDTABLES at 0x1080: its MODIFIERS pointer is the code, outside the image.
+        assert_eq!(read_tables(&image, 0x1080).err(), Some(STATUS_INVALID_IMAGE_FORMAT));
+        let charset = |_| Ok(CharsetInfo32::default());
+        let pointing_at_code = |_: &str| Ok(layout_dll([0xB8, 0x80, 0x10, 0xFF, 0x5F, 0xC3]));
+        assert_eq!(
+            load(false, "00000415", 0x0415_0415, 0, charset, pointing_at_code),
+            Err(STATUS_INVALID_IMAGE_FORMAT)
+        );
+        assert!(layout(0x0415_0415).is_none(), "not listed");
     }
 
     #[test]

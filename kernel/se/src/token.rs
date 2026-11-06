@@ -226,12 +226,23 @@ impl Token {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn duplicate_primary(&self) -> Arc<Object<Self>> {
+        self.duplicate(TOKEN_TYPE_PRIMARY, self.impersonation_level)
+    }
+
+    /// SepDuplicateToken : une copie de ce jeton (même session d'ouverture,
+    /// mêmes privilèges dans le même état), qui a son propre identifiant, du
+    /// type `token_type` (TOKEN_TYPE_*) et, pour un jeton d'emprunt
+    /// d'identité, du niveau `impersonation_level` (SECURITY_*).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn duplicate(&self, token_type: u32, impersonation_level: u32) -> Arc<Object<Self>> {
         let state = self.state.lock().clone();
         let token = Self {
             token_id: allocate_luid(),
             authentication_id: self.authentication_id,
-            token_type: TOKEN_TYPE_PRIMARY,
-            impersonation_level: self.impersonation_level,
+            token_type,
+            impersonation_level,
             source: self.source,
             expiration_time: self.expiration_time,
             user: self.user,
@@ -243,6 +254,17 @@ impl Token {
             state: KSpinLock::new(state),
         };
         create_object(&TOKEN_OBJECT_TYPE, token)
+    }
+
+    /// TokenType : TOKEN_TYPE_PRIMARY ou TOKEN_TYPE_IMPERSONATION.
+    pub fn token_type(&self) -> u32 {
+        self.token_type
+    }
+
+    /// Le niveau d'emprunt d'identité (SECURITY_*) d'un jeton d'emprunt
+    /// d'identité.
+    pub fn impersonation_level(&self) -> u32 {
+        self.impersonation_level
     }
 
     /// TokenId.
@@ -497,6 +519,19 @@ mod tests {
         assert_eq!(child.query(TOKEN_USER, AT), parent.query(TOKEN_USER, AT));
         child.adjust_privileges(PrivilegeChange::DisableAll, None).unwrap();
         assert!(parent.is_privilege_enabled(Luid(SE_SHUTDOWN_PRIVILEGE.into())), "the parent's own");
+    }
+
+    #[test]
+    fn an_impersonation_copy_has_its_type_and_level() {
+        let primary = Token::system();
+        let copy = primary.duplicate(TOKEN_TYPE_IMPERSONATION, SECURITY_IMPERSONATION);
+        assert_eq!((copy.token_type(), copy.impersonation_level()), (TOKEN_TYPE_IMPERSONATION, SECURITY_IMPERSONATION));
+        assert_ne!(copy.token_id(), primary.token_id());
+        assert_eq!(copy.authentication_id(), primary.authentication_id());
+        assert_eq!(copy.query(TOKEN_TYPE, AT), Ok(TOKEN_TYPE_IMPERSONATION.to_le_bytes().to_vec()));
+        assert_eq!(copy.query(TOKEN_IMPERSONATION_LEVEL, AT), Ok(SECURITY_IMPERSONATION.to_le_bytes().to_vec()));
+        assert_eq!(primary.query(TOKEN_IMPERSONATION_LEVEL, AT), Err(STATUS_INVALID_INFO_CLASS), "a primary token");
+        assert_eq!(primary.duplicate_primary().token_type(), TOKEN_TYPE_PRIMARY);
     }
 
     #[test]

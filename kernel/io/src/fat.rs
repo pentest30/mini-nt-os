@@ -55,6 +55,8 @@ pub struct Fat32Bpb {
     pub fat_count: u8,
     pub sectors_per_fat: u32,
     pub root_cluster: u32,
+    /// BS_VolID: the serial number of the volume (0 without a BPB).
+    pub volume_id: u32,
 }
 
 /// A directory entry (8.3), with its dates and times as FAT keeps them:
@@ -117,6 +119,43 @@ pub fn nt_time(date: u16, time: u16, tenths: u8) -> u64 {
     let days = (era * 146_097 + doe - 719_468 + 134_774) as u64;
     let seconds = days * 86_400 + hour * 3600 + minute * 60 + second;
     seconds * 10_000_000 + u64::from(tenths) * 100_000
+}
+
+/// A date and time as a FAT entry keeps them: local time (UTC here, without
+/// a time zone), the time in 2 s steps, and tenths of a second (0 to 199)
+/// for a creation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FatTime {
+    pub date: u16,
+    pub time: u16,
+    pub tenths: u8,
+}
+
+/// The NT time `nt` (100 ns since 1601) as a FAT date and time, the inverse
+/// of [`nt_time`]; `None` outside the years FAT can hold (1980 to 2107).
+pub fn fat_time(nt: u64) -> Option<FatTime> {
+    let seconds = nt / 10_000_000;
+    // Days from 1970-01-01 (H. Hinnant's civil_from_days), from 1601.
+    let days = i64::try_from(seconds / 86_400).ok()? - 134_774;
+    let in_day = seconds % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    if !(1980..=2107).contains(&year) {
+        return None;
+    }
+    let (hour, minute, second) = (in_day / 3600, in_day / 60 % 60, in_day % 60);
+    Some(FatTime {
+        date: (((year - 1980) as u16) << 9) | ((month as u16) << 5) | day as u16,
+        time: ((hour as u16) << 11) | ((minute as u16) << 5) | (second / 2) as u16,
+        tenths: ((second % 2) * 100 + nt % 10_000_000 / 100_000) as u8,
+    })
 }
 
 /// The attributes of an entry that holds a part of a long name (VFAT).
@@ -196,21 +235,21 @@ fn same_name(long: &str, name: &str) -> bool {
     long.chars().flat_map(char::to_uppercase).eq(name.chars().flat_map(char::to_uppercase))
 }
 
-/// One entry of a directory, as an enumeration sees it.
 #[derive(Debug, Clone)]
 pub struct DirEntryInfo {
+    /// Its long name if it has one, else its 8.3 name.
     pub name: String,
-    /// Its 8.3 name as a directory holds it ("NTDLL.DLL"); its long name
-    /// up-cased when 8.3 can hold it, the entry's own name otherwise.
-    pub short: String,
-    /// Where the entry is: its byte offset in the directory's stream, the
-    /// index an enumeration resumes after.
-    pub index: u64,
     pub attr: u8,
     pub first_cluster: u32,
     pub file_size: u32,
-    /// Its dates and times, as FAT keeps them (local time, a date of 0 when
-    /// unknown).
+    /// Its 8.3 name, when it also has a long name.
+    pub short_name: Option<String>,
+    /// The 11 bytes of its 8.3 name as the entry holds them (a volume
+    /// label's too).
+    pub raw_name: [u8; 11],
+    /// Where its (8.3) entry is in the directory, in bytes from its start.
+    pub offset: u32,
+    /// The entry, with its dates.
     pub entry: DirEntry,
 }
 
@@ -309,6 +348,11 @@ impl<D: BlockDevice> FatVolume<D> {
                 fat_count: fats,
                 sectors_per_fat: sectors_per_fat32,
                 root_cluster,
+                volume_id: if bpb_ok {
+                    u32::from_le_bytes([sector[67], sector[68], sector[69], sector[70]])
+                } else {
+                    0
+                },
             },
             fat_start_lba: rsvd as u64,
             data_start_lba: first_data_sector as u64,
@@ -390,7 +434,7 @@ impl<D: BlockDevice> FatVolume<D> {
                 cluster = entry.first_cluster;
             }
         }
-        self.read_dir_entries(cluster)
+        self.dir_entries(cluster)
     }
 
     pub fn read(&self, file: &mut FatFile, out: &mut [u8]) -> Result<usize, FatError> {
@@ -488,9 +532,10 @@ impl<D: BlockDevice> FatVolume<D> {
         }
     }
 
-    /// The entries of the directory at `cluster`, in the order it holds
-    /// them, `.` and `..` of a subdirectory included.
-    pub fn read_dir_entries(&self, dir_cluster: u32) -> Result<Vec<DirEntryInfo>, FatError> {
+    /// The entries of the directory at `dir_cluster`, each with its long
+    /// name if it has one, else its 8.3 name (`.` and `..` and the volume
+    /// label among them).
+    pub fn dir_entries(&self, dir_cluster: u32) -> Result<Vec<DirEntryInfo>, FatError> {
         let bps = self.bpb.bytes_per_sector as usize;
         let spc = self.bpb.sectors_per_cluster as usize;
         if !(512..=4096).contains(&bps) || spc == 0 {
@@ -504,9 +549,8 @@ impl<D: BlockDevice> FatVolume<D> {
         let mut cluster = dir_cluster;
         let mut buf = vec![0u8; bytes_per_cluster];
         let mut long = LongName::default();
-        // Where the entries are: the offset in the directory's stream, an
-        // index an enumeration resumes after.
-        let mut offset = 0u64;
+        // Where this cluster begins in the directory.
+        let mut base = 0u32;
         loop {
             self.read_cluster(cluster, &mut buf)?;
             let mut i = 0usize;
@@ -516,27 +560,32 @@ impl<D: BlockDevice> FatVolume<D> {
                     (0x00, _) => return Ok(out),
                     (0xE5, _) => long = LongName::default(),
                     (_, ATTR_LONG_NAME) => long.take(ent),
-                    // The volume label, which an enumeration never returns.
-                    (_, attr) if attr & 0x08 != 0 => long = LongName::default(),
                     (_, attr) => {
                         let entry = DirEntry::parse(ent);
+                        let short = short_name_from_entry(ent);
+                        let mut raw_name = [0u8; 11];
+                        raw_name.copy_from_slice(&ent[..11]);
                         // Its long name if it has one.
-                        let name = long.finish(ent).unwrap_or_else(|| short_name_from_entry(ent));
+                        let (name, short_name) = match long.finish(ent) {
+                            Some(long_name) => (long_name, Some(short)),
+                            None => (short, None),
+                        };
                         out.push(DirEntryInfo {
                             name,
-                            short: short_name_from_entry(ent),
-                            index: offset + i as u64,
                             attr,
                             first_cluster: entry.first_cluster,
                             file_size: entry.file_size,
+                            short_name,
+                            raw_name,
+                            offset: base + i as u32,
                             entry,
                         });
                     }
                 }
                 i += 32;
             }
-            offset += buf.len() as u64;
             cluster = self.next_cluster(cluster)?;
+            base += bytes_per_cluster as u32;
         }
     }
 
@@ -626,7 +675,7 @@ pub fn short_name(name: &str) -> Result<[u8; 11], FatError> {
 /// Writing (M4, ADR-017). The caller serialises the calls that write, and
 /// the reads that may see them. Every FAT copy is written; the FSInfo
 /// sector is left as it is (its free count stays "unknown"). New clusters
-/// are zeroed. Dates are not written yet.
+/// are zeroed. Dates are written by [`FatVolume::set_times`].
 impl<D: BlockDevice> FatVolume<D> {
     fn bytes_per_sector(&self) -> usize {
         usize::from(self.bpb.bytes_per_sector)
@@ -863,6 +912,79 @@ impl<D: BlockDevice> FatVolume<D> {
         self.write_entry(at, &entry)
     }
 
+    /// Writes the dates of the entry at `at`: its creation (and then its
+    /// last write and access too) if `created`, else its last write and
+    /// access if `written`.
+    pub fn set_times(&self, at: EntryRef, created: Option<FatTime>, written: Option<FatTime>) -> Result<(), FatError> {
+        let Some(written) = written.or(created) else { return Ok(()) };
+        let mut entry = self.read_entry(at)?;
+        if let Some(created) = created {
+            entry[13] = created.tenths;
+            entry[14..16].copy_from_slice(&created.time.to_le_bytes());
+            entry[16..18].copy_from_slice(&created.date.to_le_bytes());
+        }
+        entry[18..20].copy_from_slice(&written.date.to_le_bytes());
+        entry[22..24].copy_from_slice(&written.time.to_le_bytes());
+        entry[24..26].copy_from_slice(&written.date.to_le_bytes());
+        self.write_entry(at, &entry)
+    }
+
+    /// Changes what NtSetInformationFile(FileBasicInformation) changes in
+    /// the entry at `at`: its attributes (read-only, hidden, system,
+    /// archive; the directory bit stays), its creation, last access (the
+    /// date) and last write; `None` leaves one as it is.
+    pub fn set_basic(
+        &self,
+        at: EntryRef,
+        attributes: Option<u8>,
+        created: Option<FatTime>,
+        accessed: Option<FatTime>,
+        written: Option<FatTime>,
+    ) -> Result<(), FatError> {
+        let mut entry = self.read_entry(at)?;
+        if let Some(attributes) = attributes {
+            entry[11] = (entry[11] & 0x10) | (attributes & 0x27);
+        }
+        if let Some(created) = created {
+            entry[13] = created.tenths;
+            entry[14..16].copy_from_slice(&created.time.to_le_bytes());
+            entry[16..18].copy_from_slice(&created.date.to_le_bytes());
+        }
+        if let Some(accessed) = accessed {
+            entry[18..20].copy_from_slice(&accessed.date.to_le_bytes());
+        }
+        if let Some(written) = written {
+            entry[22..24].copy_from_slice(&written.time.to_le_bytes());
+            entry[24..26].copy_from_slice(&written.date.to_le_bytes());
+        }
+        self.write_entry(at, &entry)
+    }
+
+    /// The number of data clusters.
+    pub fn clusters(&self) -> u32 {
+        self.clusters
+    }
+
+    /// The free clusters: those whose FAT entry is 0 (the FSInfo sector's
+    /// count is not trusted). 0 for a volume whose size is unknown.
+    pub fn free_clusters(&self) -> Result<u32, FatError> {
+        let mut sector = vec![0u8; self.bytes_per_sector()];
+        let mut free = 0;
+        let mut loaded = None;
+        for cluster in 2..self.clusters + 2 {
+            let (lba, at) = self.fat_place(cluster);
+            if loaded != Some(lba) {
+                self.device.read_sector(lba, &mut sector)?;
+                loaded = Some(lba);
+            }
+            let entry = u32::from_le_bytes([sector[at], sector[at + 1], sector[at + 2], sector[at + 3]]);
+            if entry & 0x0FFF_FFFF == 0 {
+                free += 1;
+            }
+        }
+        Ok(free)
+    }
+
     fn entry_place(&self, at: EntryRef) -> Result<(u64, usize), FatError> {
         self.check_cluster(at.cluster)?;
         let offset = at.index as usize * 32;
@@ -1001,6 +1123,35 @@ fn short_name_from_entry(ent: &[u8]) -> String {
 }
 
 #[cfg(test)]
+/// The entries of the long name `name` for the 8.3 name `short`, in
+/// the order a directory holds them (last part first), as VFAT writes
+/// them: a 0 unit after the name, then 0xFFFF.
+pub(crate) fn long_name_entries(name: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
+    let mut units: Vec<u16> = name.encode_utf16().collect();
+    let parts = units.len().div_ceil(LONG_NAME_UNITS);
+    if units.len() < parts * LONG_NAME_UNITS {
+        units.push(0);
+    }
+    units.resize(parts * LONG_NAME_UNITS, 0xFFFF);
+    (1..=parts)
+        .rev()
+        .map(|order| {
+            let mut ent = [0u8; 32];
+            ent[0] = order as u8 | if order == parts { LONG_NAME_LAST } else { 0 };
+            ent[11] = ATTR_LONG_NAME;
+            ent[13] = short_name_checksum(short);
+            let mut chunk = units[(order - 1) * LONG_NAME_UNITS..order * LONG_NAME_UNITS].iter();
+            for &(start, count) in &LONG_NAME_SPANS {
+                for i in 0..count {
+                    ent[start + 2 * i..start + 2 * i + 2].copy_from_slice(&chunk.next().unwrap().to_le_bytes());
+                }
+            }
+            ent
+        })
+        .collect()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use alloc::vec;
@@ -1121,32 +1272,21 @@ mod tests {
         assert_eq!(vol.cluster_bytes(), 512);
     }
 
-    /// The entries of the long name `name` for the 8.3 name `short`, in
-    /// the order a directory holds them (last part first), as VFAT writes
-    /// them: a 0 unit after the name, then 0xFFFF.
-    fn long_name_entries(name: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
-        let mut units: Vec<u16> = name.encode_utf16().collect();
-        let parts = units.len().div_ceil(LONG_NAME_UNITS);
-        if units.len() < parts * LONG_NAME_UNITS {
-            units.push(0);
+    #[test]
+    fn fat_dates_round_trip_through_nt_time() {
+        // (date, time, hundredths): 1980-01-01 00:00:00, 2004-08-04 12:00:00,
+        // 2024-02-29 23:59:58.99, 2107-12-31 23:59:58.
+        for (date, time, hundredths) in
+            [(0x0021, 0, 0), (12548, 12 << 11, 0), (0x585D, 0xBF7D, 199), (0xFF9F, 0xBF7D, 0)]
+        {
+            let nt = nt_time(date, time, hundredths);
+            assert_ne!(nt, 0);
+            assert_eq!(fat_time(nt), Some(FatTime { date, time, tenths: hundredths }), "{date:#x} {time:#x}");
         }
-        units.resize(parts * LONG_NAME_UNITS, 0xFFFF);
-        (1..=parts)
-            .rev()
-            .map(|order| {
-                let mut ent = [0u8; 32];
-                ent[0] = order as u8 | if order == parts { LONG_NAME_LAST } else { 0 };
-                ent[11] = ATTR_LONG_NAME;
-                ent[13] = short_name_checksum(short);
-                let mut chunk = units[(order - 1) * LONG_NAME_UNITS..order * LONG_NAME_UNITS].iter();
-                for &(start, count) in &LONG_NAME_SPANS {
-                    for i in 0..count {
-                        ent[start + 2 * i..start + 2 * i + 2].copy_from_slice(&chunk.next().unwrap().to_le_bytes());
-                    }
-                }
-                ent
-            })
-            .collect()
+        // Out of FAT's years.
+        assert_eq!(fat_time(nt_time(0x0021, 0, 0) - 10_000_000), None, "1979-12-31 23:59:59");
+        assert_eq!(fat_time(nt_time(0xFF9F, 0xBF7D, 199) + 10_000_000), None, "2108");
+        assert_eq!(fat_time(0), None);
     }
 
     #[test]
@@ -1182,6 +1322,41 @@ mod tests {
         assert!(vol.find_in_dir(root_cluster, "kernel.bin").is_ok());
         let names: Vec<String> = vol.list_dir("/").unwrap().into_iter().map(|e| e.name).collect();
         assert_eq!(names, ["advapi32_vista.dll", "KERNEL.BIN"], "the long name when there is one");
+        // The 8.3 name too, and where each 8.3 entry is.
+        let listed: Vec<(String, Option<String>, u32)> =
+            vol.dir_entries(root_cluster).unwrap().into_iter().map(|e| (e.name, e.short_name, e.offset)).collect();
+        assert_eq!(
+            listed,
+            [("advapi32_vista.dll".into(), Some("ADVAPI~1.DLL".into()), 64), ("KERNEL.BIN".into(), None, 128)]
+        );
+    }
+
+    #[test]
+    fn a_directory_across_two_clusters_counts_its_places_from_its_start() {
+        let disk = make_test_disk();
+        // The root: cluster 2, full, then cluster 4.
+        let mut fat = [0u8; 512];
+        for (i, next) in [0x0FFF_FFF8u32, 0xFFFF_FFFF, 4, 0x0FFF_FFFF, 0x0FFF_FFFF].iter().enumerate() {
+            fat[4 * i..4 * i + 4].copy_from_slice(&next.to_le_bytes());
+        }
+        disk.write_sector(1, &fat);
+        let mut first = [0u8; 512];
+        for i in 0..16 {
+            let mut name = *b"FILE00  TXT";
+            name[4] = b'0' + (i / 10) as u8;
+            name[5] = b'0' + (i % 10) as u8;
+            first[32 * i..32 * i + 32].copy_from_slice(&make_entry(&name, 0x20, 0, 0));
+        }
+        disk.write_sector(2, &first);
+        let mut second = [0u8; 512];
+        second[32..64].copy_from_slice(&make_entry(b"LAST    TXT", 0x20, 0, 0));
+        second[0] = 0xE5;
+        disk.write_sector(4, &second);
+        let vol = FatVolume::mount(disk).expect("mount");
+        let listed = vol.dir_entries(vol.root_cluster()).unwrap();
+        assert_eq!(listed.len(), 17);
+        assert_eq!((listed[15].name.as_str(), listed[15].offset), ("FILE15.TXT", 15 * 32));
+        assert_eq!((listed[16].name.as_str(), listed[16].offset), ("LAST.TXT", 512 + 32), "past a deleted entry");
     }
 
     #[test]

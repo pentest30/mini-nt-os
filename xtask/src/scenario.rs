@@ -16,6 +16,7 @@
 //! disk     = system
 //! boots    = 2
 //! screen   = 640 400 3A6EA5
+//! keys     = marker => shift-h i ret
 //! ```
 //!
 //! - `features`: ntoskrnl features, comma-separated (default: none).
@@ -46,6 +47,12 @@
 //! - `screen = X Y RRGGBB`: once the markers are found, the screen of the
 //!   last boot is dumped (`screen.ppm` in the run directory) and the pixel
 //!   at column X, row Y must have this colour (`xtask/src/screen.rs`).
+//! - `keys = MARKER => KEY…`: once MARKER is in the serial log of the boot,
+//!   QEMU's monitor types the keys, one after the other (`sendkey`, with
+//!   QEMU's key names: `a`, `shift-a`, `ret`, `spc`…), once
+//!   (`xtask/src/screen.rs`). A KEY can be a quoted text, `"dir C:\"`: the
+//!   keys that type its characters on a US keyboard. The `keys` lines fire
+//!   in their order.
 //! - `initial-command = PROGRAM.EXE`: this Win32 test program of
 //!   `tests/native/` takes the place of `winlogon.exe` on the ramdisk, so
 //!   that `smss` starts it as its initial command (with `requires =
@@ -76,9 +83,98 @@ pub struct Scenario {
     pub screen: Vec<crate::screen::Pixel>,
     /// The test program that takes the place of `winlogon.exe`.
     pub initial_command: Option<String>,
+    /// Keys to type once a marker is in the serial log, in order.
+    pub keys: Vec<Keys>,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
+}
+
+/// Keys that QEMU's monitor types once `after` is in the serial log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Keys {
+    pub after: String,
+    pub keys: Vec<String>,
+}
+
+impl Keys {
+    /// `MARKER => KEY…`, where a KEY can also be `"TEXT"`: the keys that type
+    /// each character of TEXT on a US keyboard.
+    fn parse(value: &str) -> std::result::Result<Self, String> {
+        let (after, keys) = value.split_once("=>").ok_or("expected `MARKER => KEY…`")?;
+        let (after, keys) = (after.trim(), key_names(keys)?);
+        if after.is_empty() || keys.is_empty() {
+            return Err("expected `MARKER => KEY…`".into());
+        }
+        Ok(Self { after: after.to_string(), keys })
+    }
+}
+
+/// QEMU's key names in `text`: words separated by blanks, each one a key
+/// name, or `"TEXT"`, which gives the keys of its characters
+/// ([`key_of_char`]).
+fn key_names(text: &str) -> std::result::Result<Vec<String>, String> {
+    let mut keys = Vec::new();
+    let mut rest = text.trim_start();
+    while !rest.is_empty() {
+        if let Some(quoted) = rest.strip_prefix('"') {
+            let (inner, after) = quoted.split_once('"').ok_or("a `\"` without its end")?;
+            for c in inner.chars() {
+                keys.push(key_of_char(c).ok_or_else(|| format!("no key types `{c}`"))?);
+            }
+            rest = after.trim_start();
+        } else {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            keys.push(rest[..end].to_string());
+            rest = rest[end..].trim_start();
+        }
+    }
+    Ok(keys)
+}
+
+/// The QEMU key name (`sendkey`) that types `c` on a US keyboard, with
+/// `shift-` if it takes Shift; `None` for a character without a key (or
+/// `"`, which ends a quoted text).
+fn key_of_char(c: char) -> Option<String> {
+    let plain = |name: &str| Some(name.to_string());
+    let shifted = |name: &str| Some(format!("shift-{name}"));
+    match c {
+        'a'..='z' | '0'..='9' => Some(c.to_string()),
+        'A'..='Z' => shifted(&c.to_ascii_lowercase().to_string()),
+        ' ' => plain("spc"),
+        '.' => plain("dot"),
+        ',' => plain("comma"),
+        '/' => plain("slash"),
+        '\\' => plain("backslash"),
+        ';' => plain("semicolon"),
+        '\'' => plain("apostrophe"),
+        '-' => plain("minus"),
+        '=' => plain("equal"),
+        '[' => plain("bracket_left"),
+        ']' => plain("bracket_right"),
+        '`' => plain("grave_accent"),
+        ':' => shifted("semicolon"),
+        '>' => shifted("dot"),
+        '<' => shifted("comma"),
+        '?' => shifted("slash"),
+        '|' => shifted("backslash"),
+        '_' => shifted("minus"),
+        '+' => shifted("equal"),
+        '{' => shifted("bracket_left"),
+        '}' => shifted("bracket_right"),
+        '~' => shifted("grave_accent"),
+        '!' => shifted("1"),
+        '@' => shifted("2"),
+        '#' => shifted("3"),
+        '$' => shifted("4"),
+        '%' => shifted("5"),
+        '^' => shifted("6"),
+        '&' => shifted("7"),
+        '*' => shifted("8"),
+        '(' => shifted("9"),
+        ')' => shifted("0"),
+        _ => None,
+    }
 }
 
 /// State of a boot, judged from its serial log so far.
@@ -105,6 +201,7 @@ impl Scenario {
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
+            keys: Vec::new(),
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -132,6 +229,7 @@ impl Scenario {
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
+                "keys" => sc.keys.push(Keys::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
                     "installed" => {
@@ -270,6 +368,9 @@ requires = userland
         assert!(gpt.system_disk && gpt.gpt_disk);
         let installed = Scenario::parse("x", "expect = a\ndisk = installed").unwrap();
         assert!(installed.system_disk && installed.gpt_disk && installed.installed_disk);
+        let keys = Scenario::parse("x", "expect = a\nkeys = [x] ready => shift-h i ret\nkeys = b => a").unwrap();
+        let first = Keys { after: "[x] ready".into(), keys: vec!["shift-h".into(), "i".into(), "ret".into()] };
+        assert_eq!(keys.keys, [first, Keys { after: "b".into(), keys: vec!["a".into()] }]);
         let screen = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5").unwrap();
         assert_eq!(screen.screen, [crate::screen::Pixel { x: 1, y: 2, rgb: [0x3A, 0x6E, 0xA5] }]);
         assert!(sc.screen.is_empty());
@@ -307,5 +408,36 @@ requires = userland
         assert!(Scenario::parse("x", "expect = a\ndisk = floppy").is_err());
         assert!(Scenario::parse("x", "expect = a\nboots = 0").is_err());
         assert!(Scenario::parse("x", "expect = a\nscreen = 1 2").is_err());
+        assert!(Scenario::parse("x", "expect = a\nkeys = ready").is_err(), "no keys");
+        assert!(Scenario::parse("x", "expect = a\nkeys = => a").is_err(), "no marker");
+        assert!(Scenario::parse("x", "expect = a\nkeys = b => \"dir").is_err(), "an unended text");
+        assert!(Scenario::parse("x", "expect = a\nkeys = b => \"é\"").is_err(), "a character without a key");
+    }
+
+    #[test]
+    fn quoted_text_gives_the_keys_of_its_characters() {
+        let sc = Scenario::parse("x", "expect = a\nkeys = [x] ready => \"set A=b> C:\\X\" ret \"\" esc").unwrap();
+        let typed = [
+            "s",
+            "e",
+            "t",
+            "spc",
+            "shift-a",
+            "equal",
+            "b",
+            "shift-dot",
+            "spc",
+            "shift-c",
+            "shift-semicolon",
+            "backslash",
+            "shift-x",
+            "ret",
+            "esc",
+        ];
+        assert_eq!(sc.keys, [Keys { after: "[x] ready".into(), keys: typed.map(String::from).to_vec() }]);
+        assert_eq!(
+            key_names("\"@echo %X%|*\"").unwrap(),
+            ["shift-2", "e", "c", "h", "o", "spc", "shift-5", "shift-x", "shift-5", "shift-backslash", "shift-8"]
+        );
     }
 }

@@ -216,6 +216,53 @@ pub(super) fn nt_user_show_window(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(win32k::winpos::show_window(&window, command)))
 }
 
+/// NtUserShowWindowAsync(hWnd, nCmdShow) : comme NtUserShowWindow pour une
+/// fenêtre du thread courant (WM_ASYNC_SHOWWINDOW envoyé sans attendre, que
+/// traite aussitôt co_WinPosShowWindow) ; rend si elle était visible. Pour
+/// la fenêtre d'un autre thread : pas encore (les messages envoyés entre
+/// threads), FALSE et `ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois.
+pub(super) fn nt_user_show_window_async(arguments: &[u32]) -> NtStatus {
+    let (handle, command) = (arguments[0], arguments[1]);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    if window.is_desktop_window() {
+        return NtStatus(0);
+    }
+    if command as i32 > SW_MAX as i32 {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    let own = win32k::convert_current_thread().is_ok_and(|thread| thread.server == window.pti);
+    if !own {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: ShowWindowAsync of another thread's window (sent messages): not yet");
+        }
+        return fail(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+    }
+    NtStatus(u32::from(win32k::winpos::show_window(&window, command)))
+}
+
+/// NtUserSetWindowLong(hWnd, Index, NewValue, Ansi) : le LONG `Index` de la
+/// fenêtre devient `NewValue` (`win32k::window::set_long`) ; rend l'ancien.
+/// 0 et l'erreur de Win32 pour une fenêtre inconnue
+/// (`ERROR_INVALID_WINDOW_HANDLE`), la fenêtre du bureau
+/// (`ERROR_ACCESS_DENIED` ; ReactOS met à tort le statut NT
+/// `STATUS_ACCESS_DENIED` comme erreur) ou un index refusé.
+pub(super) fn nt_user_set_window_long(arguments: &[u32]) -> NtStatus {
+    let [handle, index, value] = arguments[..3] else { unreachable!("4 arguments, the last unused") };
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    if window.is_desktop_window() {
+        return fail(abi::winerror::ERROR_ACCESS_DENIED);
+    }
+    match win32k::window::set_long(&window, index as i32, value) {
+        Ok(old) => NtStatus(old),
+        Err(error) => fail(error),
+    }
+}
+
 /// NtUserBeginPaint(hWnd, lpPaint) : `hWnd` se peint (IntBeginPaint) ; le
 /// `PAINTSTRUCT` écrit, rend son DC, NULL sans DC. NULL pour une fenêtre
 /// inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` qu'on ne peut

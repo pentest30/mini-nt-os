@@ -2,7 +2,8 @@
 //! markers are all in the serial log, QEMU's monitor (HMP, on a Unix socket
 //! in the run directory, a TCP port of localhost on Windows) dumps the
 //! screen (`screendump`, a binary PPM), and each listed pixel must have its
-//! colour.
+//! colour. The monitor also types the keys
+//! of a scenario (`keys = MARKER => KEY…`, [`send_keys`]).
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -236,6 +237,50 @@ pub fn capture(monitor: &Monitor, file: &Path) -> Result<Image> {
     Image::parse_ppm(&bytes)
 }
 
+/// How long each key of a `sendkey` stays down (ms).
+const KEY_HOLD_MS: u32 = 30;
+/// The margin after the last release of a `sendkey` (ms).
+const KEY_SETTLE_MS: u32 = 30;
+
+/// How long QEMU takes to type `key` (`sendkey`, `shift-a` is two keys):
+/// it presses the keys one hold apart, then releases them one hold apart,
+/// from a queue of delayed events. The next `sendkey` must wait for the
+/// last release: with QEMU 8.2, one that comes while releases are still
+/// queued loses some of them (the step 8 of the console, `docs/compat/
+/// m5-console.md`: 670 keys pressed, 568 released, a Shift left down).
+fn key_duration(key: &str) -> Duration {
+    let keys = key.split('-').count() as u32;
+    Duration::from_millis(u64::from(2 * keys * KEY_HOLD_MS + KEY_SETTLE_MS))
+}
+
+/// Types `keys` on the QEMU whose monitor listens on `monitor`, one after
+/// the other (`sendkey`), each answered by the monitor and released
+/// ([`key_duration`]) before the next.
+pub fn send_keys(monitor: &Monitor, keys: &[String]) -> Result<()> {
+    let mut stream = monitor.connect().map_err(|e| format!("QEMU monitor {monitor:?}: {e}"))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| format!("QEMU monitor: {e}"))?;
+    let mut seen = Vec::new();
+    let mut prompts = 1;
+    for key in keys {
+        writeln!(stream, "sendkey {key} {KEY_HOLD_MS}").map_err(|e| format!("QEMU monitor: {e}"))?;
+        prompts += 1;
+        let mut chunk = [0u8; 256];
+        let start = Instant::now();
+        while count(&seen, b"(qemu) ") < prompts && start.elapsed() < Duration::from_secs(10) {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => seen.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                    break
+                }
+                Err(e) => return Err(format!("QEMU monitor: {e}")),
+            }
+        }
+        std::thread::sleep(key_duration(key));
+    }
+    Ok(())
+}
+
 /// How many times `needle` is in `haystack`.
 fn count(haystack: &[u8], needle: &[u8]) -> usize {
     haystack.windows(needle.len()).filter(|window| *window == needle).count()
@@ -244,6 +289,14 @@ fn count(haystack: &[u8], needle: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_key_waits_for_its_releases() {
+        // Pressed then released, one hold apart each, and the margin.
+        assert_eq!(key_duration("a"), Duration::from_millis(2 * 30 + 30));
+        assert_eq!(key_duration("shift-semicolon"), Duration::from_millis(4 * 30 + 30));
+        assert_eq!(key_duration("ctrl-alt-delete"), Duration::from_millis(6 * 30 + 30));
+    }
 
     #[test]
     fn a_pixel_is_a_position_and_a_colour() {

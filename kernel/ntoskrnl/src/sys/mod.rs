@@ -32,12 +32,15 @@
 pub mod apc;
 mod callback;
 mod class;
+mod console;
 mod desktop;
 mod event;
 pub mod exceptions;
 mod file;
 pub mod gates;
 mod gdi;
+mod input;
+pub mod locale;
 mod memory;
 mod message;
 mod monitor;
@@ -124,13 +127,18 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtFlushInstructionCache, Handler::Status(process::nt_flush_instruction_cache)),
     (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtGdiBitBlt, Handler::Status(gdi::nt_gdi_bit_blt)),
     (services::NtGdiCombineRgn, Handler::Status(gdi::nt_gdi_combine_rgn)),
+    (services::NtGdiCreateCompatibleDC, Handler::Status(gdi::nt_gdi_create_compatible_dc)),
+    (services::NtGdiCreateDIBSection, Handler::Status(gdi::nt_gdi_create_dib_section)),
     (services::NtGdiCreateRectRgn, Handler::Status(gdi::nt_gdi_create_rect_rgn)),
+    (services::NtGdiCreateSolidBrush, Handler::Status(gdi::nt_gdi_create_solid_brush)),
     (services::NtGdiDeleteObjectApp, Handler::Status(gdi::nt_gdi_delete_object_app)),
     (services::NtGdiExtSelectClipRgn, Handler::Status(gdi::nt_gdi_ext_select_clip_rgn)),
     (services::NtGdiExtTextOutW, Handler::Status(gdi::nt_gdi_ext_text_out_w)),
     (services::NtGdiFlush, Handler::Status(gdi::nt_gdi_flush)),
     (services::NtGdiGetAppClipBox, Handler::Status(gdi::nt_gdi_get_app_clip_box)),
+    (services::NtGdiGetFontFamilyInfo, Handler::Status(gdi::nt_gdi_get_font_family_info)),
     (services::NtGdiGetRandomRgn, Handler::Status(gdi::nt_gdi_get_random_rgn)),
     (services::NtGdiGetRgnBox, Handler::Status(gdi::nt_gdi_get_rgn_box)),
     (services::NtGdiGetStockObject, Handler::Status(gdi::nt_gdi_get_stock_object)),
@@ -138,10 +146,12 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiGetTextExtentExW, Handler::Status(gdi::nt_gdi_get_text_extent_ex_w)),
     (services::NtGdiGetTextMetricsW, Handler::Status(gdi::nt_gdi_get_text_metrics_w)),
     (services::NtGdiHfontCreate, Handler::Status(gdi::nt_gdi_hfont_create)),
-    (services::NtGdiIntersectClipRect, Handler::Status(gdi::nt_gdi_intersect_clip_rect)),
     (services::NtGdiInit, Handler::Status(user::nt_gdi_init)),
+    (services::NtGdiIntersectClipRect, Handler::Status(gdi::nt_gdi_intersect_clip_rect)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
+    (services::NtGdiSelectBitmap, Handler::Status(gdi::nt_gdi_select_bitmap)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),
+    (services::NtImpersonateThread, Handler::Status(security::nt_impersonate_thread)),
     (services::NtListenPort, Handler::Status(port::nt_listen_port)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
@@ -162,6 +172,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtPulseEvent, Handler::Status(event::nt_pulse_event)),
     (services::NtQueryAttributesFile, Handler::Status(file::nt_query_attributes_file)),
     (services::NtQueryDebugFilterState, Handler::Status(gates::nt_query_debug_filter_state)),
+    (services::NtQueryDefaultLocale, Handler::Status(locale::nt_query_default_locale)),
     (services::NtQueryDirectoryFile, Handler::Status(file::nt_query_directory_file)),
     (services::NtQueryEvent, Handler::Status(event::nt_query_event)),
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
@@ -216,16 +227,20 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
+    (services::NtUserConsoleControl, Handler::Status(console::nt_user_console_control)),
     (services::NtUserCreateDesktop, Handler::Status(desktop::nt_user_create_desktop)),
     (services::NtUserCreateWindowEx, Handler::Status(window::nt_user_create_window_ex)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
     (services::NtUserDefSetText, Handler::Status(window::nt_user_def_set_text)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
+    (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetDC, Handler::Status(window::nt_user_get_dc)),
     (services::NtUserGetDCEx, Handler::Status(window::nt_user_get_dc_ex)),
+    (services::NtUserGetKeyState, Handler::Status(input::nt_user_get_key_state)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
+    (services::NtUserGetKeyboardState, Handler::Status(input::nt_user_get_keyboard_state)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
     (services::NtUserGetMonitorInfo, Handler::Status(monitor::nt_user_get_monitor_info)),
     (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
@@ -250,13 +265,19 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
     (services::NtUserRedrawWindow, Handler::Status(window::nt_user_redraw_window)),
     (services::NtUserRegisterClassExWOW, Handler::Status(class::nt_user_register_class_ex_wow)),
+    (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
+    (services::NtUserSetFocus, Handler::Status(input::nt_user_set_focus)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
+    (services::NtUserSetWindowLong, Handler::Status(window::nt_user_set_window_long)),
     (services::NtUserSetWindowPos, Handler::Status(window::nt_user_set_window_pos)),
     (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
     (services::NtUserShowWindow, Handler::Status(window::nt_user_show_window)),
+    (services::NtUserShowWindowAsync, Handler::Status(window::nt_user_show_window_async)),
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
+    (services::NtUserToUnicodeEx, Handler::Status(input::nt_user_to_unicode_ex)),
+    (services::NtUserTranslateMessage, Handler::Status(input::nt_user_translate_message)),
     (services::NtUserValidateRect, Handler::Status(window::nt_user_validate_rect)),
     (services::NtUserWaitMessage, Handler::Status(message::nt_user_wait_message)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),

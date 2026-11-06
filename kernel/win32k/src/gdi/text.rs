@@ -129,7 +129,7 @@ pub fn ext_text_out(
         }
     };
     let rao = state.rao();
-    crate::display::draw(|screen| paint(screen, &ops, state.origin, &rao));
+    state.draw(|surface| paint(surface, &ops, state.origin, &rao));
     true
 }
 

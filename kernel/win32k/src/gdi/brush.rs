@@ -5,15 +5,21 @@
 //!
 //! Les polices de stock sont créées avec eux (`super::fontobj`).
 //!
-//! Pas encore : les pinceaux d'un client (CreateSolidBrush, leur
-//! `BRUSH_ATTR`), hachurés et à motif, le pinceau du DC (`DC_BRUSH`), les
-//! autres objets de stock (stylos, palette), un changement des couleurs du
-//! système (SetSysColors).
+//! Le bitmap par défaut des DC en mémoire (DEFAULT_BITMAP, `super::surface`)
+//! est créé avec eux.
+//!
+//! Un client crée ses pinceaux pleins (CreateSolidBrush, [`create_solid`]) :
+//! à lui, avec leurs attributs (`BRUSH_ATTR`) chez lui ; `gdi32` met alors
+//! leur suppression en lot.
+//!
+//! Pas encore : les pinceaux hachurés et à motif, le pinceau du DC
+//! (`DC_BRUSH`), le cache de pinceaux du PEB, les autres objets de stock
+//! (stylos, palette), un changement des couleurs du système (SetSysColors).
 
 use alloc::sync::Arc;
 use core::mem::offset_of;
 
-use abi::gdi::{objt, stock, LO_BRUSH_TYPE};
+use abi::gdi::{objt, stock, BrushAttr32, LO_BRUSH_TYPE};
 use abi::ntstatus::{NtStatus, STATUS_UNSUCCESSFUL};
 use abi::user::{ServerInfo32, NUM_SYSCOLORS};
 use hal::sync::Once;
@@ -82,6 +88,7 @@ pub fn init(colors: &[u32; NUM_SYSCOLORS]) -> Result<(), NtStatus> {
     for (index, logfont) in super::fontobj::stock_fonts() {
         objects[index] = super::fontobj::create_stock(logfont)?;
     }
+    objects[stock::DEFAULT_BITMAP] = handles::make_stock(super::surface::create_default_bitmap()?)?;
     STOCK.call_once(|| objects);
     let mut system = [0u8; NUM_SYSCOLORS * 4];
     for (slot, &color) in system.chunks_exact_mut(4).zip(colors) {
@@ -90,4 +97,26 @@ pub fn init(colors: &[u32; NUM_SYSCOLORS]) -> Result<(), NtStatus> {
     let section = crate::shared::section().ok_or(STATUS_UNSUCCESSFUL)?;
     let at = u64::from(crate::shared::SERVER_INFO) + offset_of!(ServerInfo32, ahbr_system) as u64;
     section.write_kernel(at, &system)
+}
+
+/// IntGdiCreateSolidBrush (CreateBrushInternal) : un pinceau plein de
+/// `color`, au processus courant, avec ses attributs chez lui ; rend son
+/// handle.
+///
+/// # Errors
+/// Celles de l'allocation et de l'écriture des attributs, de la table.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn create_solid(color: u32) -> Result<u32, NtStatus> {
+    use super::dc::{allocate_attr, free_attr, AttrKind};
+    let (pid, attr) = allocate_attr(AttrKind::Brush)?;
+    let attrs = BrushAttr32 { attr_flags: 0, color };
+    let brush = Object::Brush(Arc::new(Brush::solid(ColorRef(color & 0x00FF_FFFF))));
+    let inserted = ke::usermem::copy_to_user(u64::from(attr), attrs.as_bytes())
+        .and_then(|()| handles::insert_with_user_data(brush, LO_BRUSH_TYPE, objt::BRUSH, pid, attr));
+    if inserted.is_err() {
+        free_attr(AttrKind::Brush, attr);
+    }
+    inserted
 }

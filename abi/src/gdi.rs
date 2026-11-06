@@ -529,6 +529,102 @@ pub mod rop {
     pub const BLACKNESS: u32 = 0x0000_0042;
     /// White.
     pub const WHITENESS: u32 = 0x00FF_0062;
+    /// The source.
+    pub const SRCCOPY: u32 = 0x00CC_0020;
+    /// BitBlt: include the windows layered on the source (no such windows
+    /// yet).
+    pub const CAPTUREBLT: u32 = 0x4000_0000;
+    /// BitBlt: no mirroring of the source (no mirrored DCs yet).
+    pub const NOMIRRORBITMAP: u32 = 0x8000_0000;
+}
+
+/// What a display's GDIINFO says, as DEVCAPS (and GetDeviceCaps) give it.
+pub mod caps {
+    /// GDI_DRIVER_VERSION: `ulVersion`.
+    pub const GDI_DRIVER_VERSION: u32 = 0x4000;
+    /// DT_RASDISPLAY: `ulTechnology`.
+    pub const DT_RASDISPLAY: u32 = 1;
+    /// RC_*: `ulRasterCaps`.
+    pub const RC_BITBLT: u32 = 0x0001;
+    pub const RC_BITMAP64: u32 = 0x0008;
+    pub const RC_GDI20_OUTPUT: u32 = 0x0010;
+    pub const RC_DI_BITMAP: u32 = 0x0080;
+    pub const RC_DIBTODEV: u32 = 0x0200;
+    pub const RC_BIGFONT: u32 = 0x0400;
+    pub const RC_STRETCHBLT: u32 = 0x0800;
+    pub const RC_FLOODFILL: u32 = 0x1000;
+    pub const RC_STRETCHDIB: u32 = 0x2000;
+    pub const RC_OP_DX_OUTPUT: u32 = 0x4000;
+    /// TC_*: `ulTextCaps`.
+    pub const TC_OP_CHARACTER: u32 = 0x0001;
+    pub const TC_OP_STROKE: u32 = 0x0002;
+    pub const TC_CP_STROKE: u32 = 0x0004;
+    pub const TC_UA_ABLE: u32 = 0x0800;
+    pub const TC_SO_ABLE: u32 = 0x1000;
+    pub const TC_RA_ABLE: u32 = 0x2000;
+    pub const TC_VA_ABLE: u32 = 0x4000;
+}
+
+/// BI_RGB, BI_BITFIELDS: a DIB's `biCompression`.
+pub const BI_RGB: u32 = 0;
+pub const BI_BITFIELDS: u32 = 3;
+/// DIB_RGB_COLORS, DIB_PAL_COLORS: what a DIB's colour table holds.
+pub const DIB_RGB_COLORS: u32 = 0;
+pub const DIB_PAL_COLORS: u32 = 1;
+
+/// BITMAPINFOHEADER: what a DIB is (`bmiHeader` of a BITMAPINFO, which
+/// `gdi32` gives in this form: ConvertBitmapInfo).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BitmapInfoHeader32 {
+    /// Its own size: at least 40 (a BITMAPV4HEADER or V5 is longer).
+    pub size: u32,
+    pub width: i32,
+    /// Positive: the rows go up from the bottom one; negative: down from
+    /// the top one.
+    pub height: i32,
+    pub planes: u16,
+    pub bit_count: u16,
+    pub compression: u32,
+    pub size_image: u32,
+    pub x_pels_per_meter: i32,
+    pub y_pels_per_meter: i32,
+    pub clr_used: u32,
+    pub clr_important: u32,
+}
+
+impl BitmapInfoHeader32 {
+    /// The header in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let half = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        Some(Self {
+            size: word(0),
+            width: word(4) as i32,
+            height: word(8) as i32,
+            planes: half(0xC),
+            bit_count: half(0xE),
+            compression: word(0x10),
+            size_image: word(0x14),
+            x_pels_per_meter: word(0x18) as i32,
+            y_pels_per_meter: word(0x1C) as i32,
+            clr_used: word(0x20),
+            clr_important: word(0x24),
+        })
+    }
+}
+
+/// BRUSH_ATTR: a client brush's attributes, in its process (`gdi32` reads
+/// its colour; it deletes a brush that has them by a batched call).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BrushAttr32 {
+    pub attr_flags: u32,
+    /// COLORREF.
+    pub color: u32,
 }
 
 /// What GetClipBox (and a region's `iComplexity`) returns.
@@ -552,8 +648,11 @@ pub mod stock {
     pub const DEVICE_DEFAULT_FONT: usize = 14;
     pub const SYSTEM_FIXED_FONT: usize = 16;
     pub const DEFAULT_GUI_FONT: usize = 17;
-    /// The stock objects (`STOCK_LAST + 1`).
-    pub const COUNT: usize = 21;
+    /// The bitmap of a new memory DC: 1 × 1, monochrome (outside
+    /// `STOCK_LAST`, as ReactOS has it; 20 is not used).
+    pub const DEFAULT_BITMAP: usize = 21;
+    /// The stock objects (`NB_STOCK_OBJECTS`).
+    pub const COUNT: usize = 22;
 }
 
 const _: () = {
@@ -600,6 +699,11 @@ const _: () = {
     assert!(size_of::<GdiBsObject32>() == 8);
     // gdi32!GetRgnBox: `mov eax, [attr + 4]`, the rectangle from 8.
     assert!(size_of::<RgnAttr32>() == 0x18);
+    assert!(size_of::<BitmapInfoHeader32>() == 40);
+    assert!(offset_of!(BitmapInfoHeader32, bit_count) == 0xE);
+    assert!(offset_of!(BitmapInfoHeader32, clr_important) == 0x24);
+    assert!(size_of::<BrushAttr32>() == 8);
+    assert!(offset_of!(BrushAttr32, color) == 4);
     assert!(offset_of!(RgnAttr32, complexity) == 4);
     assert!(offset_of!(RgnAttr32, rect) == 8);
 };
@@ -619,7 +723,17 @@ macro_rules! as_bytes {
     )*};
 }
 
-as_bytes!(GdiTableEntry32, GdiSharedTail32, DcAttr32, GdiBsPatBlt32, GdiBsExtSelClipRgn32, GdiBsObject32, RgnAttr32);
+as_bytes!(
+    GdiTableEntry32,
+    GdiSharedTail32,
+    DcAttr32,
+    GdiBsPatBlt32,
+    GdiBsExtSelClipRgn32,
+    GdiBsObject32,
+    RgnAttr32,
+    BitmapInfoHeader32,
+    BrushAttr32
+);
 
 /// LF_FACESIZE: the characters of a face name, its NUL included.
 pub const LF_FACESIZE: usize = 32;
@@ -898,6 +1012,126 @@ const _: () = {
 };
 
 as_bytes!(TmwInternal32, GdiBsTextOut32, GdiBsExtTextOut32);
+
+// The other character sets of a LOGFONT: those of the code pages of a
+// TrueType font (`OS/2` ulCodePageRange1), and OEM.
+pub const SHIFTJIS_CHARSET: u8 = 128;
+pub const HANGEUL_CHARSET: u8 = 129;
+pub const JOHAB_CHARSET: u8 = 130;
+pub const GB2312_CHARSET: u8 = 134;
+pub const CHINESEBIG5_CHARSET: u8 = 136;
+pub const GREEK_CHARSET: u8 = 161;
+pub const TURKISH_CHARSET: u8 = 162;
+pub const VIETNAMESE_CHARSET: u8 = 163;
+pub const HEBREW_CHARSET: u8 = 177;
+pub const ARABIC_CHARSET: u8 = 178;
+pub const BALTIC_CHARSET: u8 = 186;
+pub const RUSSIAN_CHARSET: u8 = 204;
+pub const THAI_CHARSET: u8 = 222;
+pub const EASTEUROPE_CHARSET: u8 = 238;
+pub const OEM_CHARSET: u8 = 255;
+
+// lfPitchAndFamily: the pitch (low bits) and the family (high bits).
+pub const FIXED_PITCH: u8 = 1;
+pub const VARIABLE_PITCH: u8 = 2;
+pub const FF_MODERN: u8 = 0x30;
+
+// The precisions and quality of an enumerated TrueType font.
+pub const OUT_OUTLINE_PRECIS: u8 = 8;
+pub const CLIP_DEFAULT_PRECIS: u8 = 0;
+pub const PROOF_QUALITY: u8 = 2;
+
+// The FontType of an enumerated font.
+pub const RASTER_FONTTYPE: u32 = 0x0001;
+pub const TRUETYPE_FONTTYPE: u32 = 0x0004;
+
+// ntmFlags.
+pub const NTM_ITALIC: u32 = 0x01;
+pub const NTM_BOLD: u32 = 0x20;
+pub const NTM_REGULAR: u32 = 0x40;
+
+/// LF_FULLFACESIZE: the characters of a full name, its NUL included.
+pub const LF_FULLFACESIZE: usize = 64;
+
+/// ENUMLOGFONTEXW: a LOGFONTW, the full name, the style and the script of an
+/// enumerated font.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EnumLogFontExW32 {
+    pub log_font: LogFontW32,
+    pub full_name: [u16; LF_FULLFACESIZE],
+    pub style: [u16; LF_FACESIZE],
+    pub script: [u16; LF_FACESIZE],
+}
+
+impl Default for EnumLogFontExW32 {
+    fn default() -> Self {
+        Self {
+            log_font: LogFontW32::default(),
+            full_name: [0; LF_FULLFACESIZE],
+            style: [0; LF_FACESIZE],
+            script: [0; LF_FACESIZE],
+        }
+    }
+}
+
+/// NEWTEXTMETRICW: a TEXTMETRICW and what an enumeration adds to it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NewTextMetricW32 {
+    pub text_metric: TextMetricW32,
+    /// NTM_*.
+    pub flags: u32,
+    /// ntmSizeEM: the em square, in font units.
+    pub size_em: u32,
+    /// ntmCellHeight: the cell, in font units.
+    pub cell_height: u32,
+    pub avg_width: u32,
+}
+
+/// FONTSIGNATURE: the Unicode ranges and the code pages of a font.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FontSignature32 {
+    pub usb: [u32; 4],
+    pub csb: [u32; 2],
+}
+
+/// NEWTEXTMETRICEXW.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NewTextMetricExW32 {
+    pub ntm: NewTextMetricW32,
+    pub signature: FontSignature32,
+}
+
+/// FONTFAMILYINFO (ReactOS's `ntgdibad.h`): one font of
+/// NtGdiGetFontFamilyInfo, which gdi32's EnumFontFamiliesEx hands to its
+/// callback.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FontFamilyInfo32 {
+    pub enum_log_font: EnumLogFontExW32,
+    pub new_text_metric: NewTextMetricExW32,
+    /// RASTER_FONTTYPE, TRUETYPE_FONTTYPE.
+    pub font_type: u32,
+}
+
+const _: () = {
+    assert!(size_of::<EnumLogFontExW32>() == 348);
+    assert!(offset_of!(EnumLogFontExW32, full_name) == 92);
+    assert!(offset_of!(EnumLogFontExW32, style) == 220);
+    assert!(offset_of!(EnumLogFontExW32, script) == 284);
+    assert!(size_of::<NewTextMetricW32>() == 76);
+    assert!(offset_of!(NewTextMetricW32, flags) == 60);
+    assert!(size_of::<FontSignature32>() == 24);
+    assert!(size_of::<NewTextMetricExW32>() == 100);
+    assert!(size_of::<FontFamilyInfo32>() == 452);
+    assert!(offset_of!(FontFamilyInfo32, new_text_metric) == 348);
+    assert!(offset_of!(FontFamilyInfo32, font_type) == 448);
+};
+
+as_bytes!(FontFamilyInfo32);
 
 #[cfg(test)]
 mod tests {

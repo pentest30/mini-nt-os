@@ -68,11 +68,14 @@ pub(super) fn nt_user_post_thread_message(arguments: &[u32]) -> NtStatus {
     NtStatus(1)
 }
 
-/// NtUserPostMessage(hWnd, Msg, wParam, lParam) : sans fenêtre, le message
-/// est posté au thread courant ; à toutes les fenêtres (`HWND_BROADCAST`),
-/// à aucune encore (aucune fenêtre n'a de thread, faute du thread du
-/// bureau) ; à une fenêtre : pas encore (`ERROR_INVALID_WINDOW_HANDLE`,
-/// journalisé une fois). FALSE pour un message qui porte un pointeur.
+/// NtUserPostMessage(hWnd, Msg, wParam, lParam) (UserPostMessage) : sans
+/// fenêtre, le message est posté au thread courant ; à une fenêtre, à la
+/// file du thread qui l'a créée ; à toutes les fenêtres (`HWND_BROADCAST`),
+/// à aucune encore. FALSE pour un message qui porte un pointeur
+/// (`ERROR_MESSAGE_SYNC_ONLY`) ou une fenêtre inconnue
+/// (`ERROR_INVALID_WINDOW_HANDLE`). La fenêtre du bureau n'a pas de thread
+/// (pas encore de thread du bureau) : le message est perdu, journalisé une
+/// fois.
 pub(super) fn nt_user_post_message(arguments: &[u32]) -> NtStatus {
     let [hwnd, msg, wparam, lparam] = arguments[..4] else { unreachable!("4 arguments") };
     if queue::is_pointer_message(msg, wparam) {
@@ -85,10 +88,16 @@ pub(super) fn nt_user_post_message(arguments: &[u32]) -> NtStatus {
         }
         HWND_BROADCAST => NtStatus(1),
         _ => {
-            if !WINDOW_POST_REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
-                log::warn!("sys: NtUserPostMessage to a window ({hwnd:#x}) is not implemented");
+            let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE) };
+            match win32k::gui::thread_info_of(window.pti) {
+                Some(thread) => queue::post(&thread, message(window.handle, msg, wparam, lparam)),
+                None => {
+                    if !WINDOW_POST_REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+                        log::warn!("sys: NtUserPostMessage to a window without a thread ({hwnd:#x}): dropped");
+                    }
+                }
             }
-            fail(ERROR_INVALID_WINDOW_HANDLE)
+            NtStatus(1)
         }
     }
 }
@@ -140,16 +149,22 @@ pub(super) fn nt_user_get_message(arguments: &[u32]) -> NtStatus {
 /// (IntDispatchMessage) ; rend ce qu'elle rend, 0 sans fenêtre ou pour un
 /// `pMsg` illisible (l'erreur de Win32 de la faute).
 pub(super) fn nt_user_dispatch_message(arguments: &[u32]) -> NtStatus {
-    let mut bytes = [0u8; core::mem::size_of::<Msg32>()];
-    if let Err(status) = ke::usermem::copy_from_user(&mut bytes, u64::from(arguments[0])) {
-        return fail(dos_error(status));
-    }
-    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
-    let message = Msg32 { hwnd: word(0), message: word(4), w_param: word(8), l_param: word(12), ..Msg32::default() };
+    let message = match read_message(arguments[0]) {
+        Ok(message) => message,
+        Err(status) => return fail(dos_error(status)),
+    };
     match win32k::window::dispatch_message(&message) {
         Ok(result) => NtStatus(result),
         Err(status) => fail(dos_error(status)),
     }
+}
+
+/// Le MSG en `address`, chez le processus courant (sans `time` ni `pt`).
+pub(super) fn read_message(address: u32) -> Result<Msg32, NtStatus> {
+    let mut bytes = [0u8; core::mem::size_of::<Msg32>()];
+    ke::usermem::copy_from_user(&mut bytes, u64::from(address))?;
+    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    Ok(Msg32 { hwnd: word(0), message: word(4), w_param: word(8), l_param: word(12), ..Msg32::default() })
 }
 
 /// NtUserWaitMessage() : attend qu'un message arrive dans la file du thread,

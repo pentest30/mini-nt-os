@@ -24,26 +24,35 @@
 //! Un composant se trouve par son nom 8.3 ou par son nom long (VFAT), sans
 //! casse (`fat::FatVolume::find_entry`).
 //!
+//! Les dates : un fichier créé prend le temps système pour création,
+//! dernière écriture et dernier accès ; une écriture ou un changement de
+//! taille, pour dernière écriture et dernier accès. Les dates de FAT sont en
+//! heure locale ; sans fuseau horaire, elles passent pour de l'UTC.
+//!
 //! Pas encore : créer un nom long ; un nom valide que le format 8.3 ne peut
 //! pas tenir ne se crée pas (`STATUS_OBJECT_NAME_INVALID`). La suppression,
-//! le renommage, les dates
-//! (les dates de FAT sont en heure locale ; sans fuseau horaire, elles
-//! passent pour de l'UTC, et rien ne les écrit encore).
+//! le renommage ; le dernier accès à la lecture.
 
 use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use abi::file::{
-    FileFsDeviceInformation, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN,
-    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM, FILE_DEVICE_DISK, FILE_DEVICE_IS_MOUNTED,
+    FileBasicInformation, FileFsDeviceInformation, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY,
+    FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM, FILE_DEVICE_DISK,
+    FILE_DEVICE_IS_MOUNTED,
 };
 use abi::ntstatus::{
     NtStatus, STATUS_DISK_CORRUPT_ERROR, STATUS_DISK_FULL, STATUS_FILE_CORRUPT_ERROR, STATUS_INVALID_DEVICE_REQUEST,
-    STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY, STATUS_OBJECT_NAME_COLLISION,
-    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
+    STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR, STATUS_MEDIA_WRITE_PROTECTED, STATUS_NOT_A_DIRECTORY,
+    STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND,
+    STATUS_OBJECT_PATH_NOT_FOUND, STATUS_UNRECOGNIZED_VOLUME,
 };
 use hal::sync::KSpinLock;
 
-use crate::fat::{make_entry, nt_time, short_name, BlockDevice, DirEntry, EntryRef, FatError, FatFile, FatVolume};
+use crate::fat::{
+    fat_time, make_entry, nt_time, short_name, BlockDevice, DirEntry, EntryRef, FatError, FatFile, FatTime, FatVolume,
+};
 
 /// Un périphérique de blocs que plusieurs threads peuvent lire.
 pub type SharedBlockDevice = Box<dyn BlockDevice + Send + Sync>;
@@ -53,6 +62,27 @@ pub struct Volume {
     fat: FatVolume<SharedBlockDevice>,
     /// Le cluster d'où chercher un cluster libre ; sous lui, tout le volume.
     lock: KSpinLock<u32>,
+    /// Le temps système (KeQuerySystemTime) : la date d'un fichier créé ou
+    /// écrit.
+    clock: fn() -> u64,
+}
+
+/// Ce que dit un volume de lui-même (FileFsVolumeInformation).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct VolumeLabel {
+    /// Son numéro de série (BS_VolID).
+    pub serial: u32,
+    /// Le nom de son entrée de volume, à la racine ; vide sans elle.
+    pub label: String,
+}
+
+/// La place d'un volume, en clusters (FileFsSizeInformation).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Space {
+    pub total_clusters: u32,
+    pub free_clusters: u32,
+    pub sectors_per_cluster: u32,
+    pub bytes_per_sector: u32,
 }
 
 /// Ce que désigne un nom sur un volume : un fichier ou un répertoire.
@@ -73,7 +103,9 @@ pub struct Node {
 }
 
 impl Node {
-    fn from_entry(entry: &DirEntry, at: EntryRef) -> Self {
+    /// Ce que dit `entry`, dont l'entrée est en `at` (`None` : une description seule,
+    /// qui ne relit rien).
+    fn from_entry(entry: &DirEntry, at: Option<EntryRef>) -> Self {
         let directory = entry.attr & 0x10 != 0;
         let attributes = u32::from(entry.attr & 0x37);
         Self {
@@ -84,9 +116,30 @@ impl Node {
             last_access_time: nt_time(entry.access_date, 0, 0),
             last_write_time: nt_time(entry.write_date, entry.write_time, 0),
             first_cluster: entry.first_cluster,
-            entry: Some(at),
+            entry: at,
         }
     }
+}
+
+/// Une entrée d'un répertoire, telle que la décrit NtQueryDirectoryFile
+/// ([`Volume::entries`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listed {
+    /// Son nom long s'il en a un, sinon son nom 8.3.
+    pub name: String,
+    /// Son nom 8.3, s'il a aussi un nom long.
+    pub short_name: Option<String>,
+    /// La place de son entrée dans le répertoire, en octets (`FileIndex`).
+    pub offset: u32,
+    pub directory: bool,
+    /// `FILE_ATTRIBUTE_*`.
+    pub attributes: u32,
+    /// En octets ; 0 pour un répertoire.
+    pub size: u32,
+    /// En 100 ns depuis 1601 ; 0 si FAT ne la connaît pas.
+    pub creation_time: u64,
+    pub last_access_time: u64,
+    pub last_write_time: u64,
 }
 
 /// Les caractères qu'aucun nom de fichier ne peut tenir.
@@ -110,7 +163,53 @@ impl Volume {
     /// PASSIVE_LEVEL.
     pub fn mount(device: SharedBlockDevice) -> Result<Self, NtStatus> {
         let fat = FatVolume::mount(device).map_err(|_| STATUS_UNRECOGNIZED_VOLUME)?;
-        Ok(Self { fat, lock: KSpinLock::new(2) })
+        Ok(Self { fat, lock: KSpinLock::new(2), clock: hal::rtc::system_time })
+    }
+
+    /// Le même volume, dont `clock` donne le temps système (des tests).
+    pub fn with_clock(self, clock: fn() -> u64) -> Self {
+        Self { clock, ..self }
+    }
+
+    /// Maintenant, comme FAT le note ; `None` hors de ses années.
+    fn now(&self) -> Option<FatTime> {
+        fat_time((self.clock)())
+    }
+
+    /// Son numéro de série et son nom (l'entrée de volume de la racine,
+    /// sans les espaces de la fin).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn label(&self) -> Result<VolumeLabel, NtStatus> {
+        let entries = {
+            let _guard = self.lock.lock();
+            self.fat.dir_entries(self.fat.root_cluster()).map_err(device_error)?
+        };
+        let label = entries
+            .iter()
+            .find(|entry| entry.attr & 0x08 != 0)
+            .map(|entry| entry.raw_name.iter().map(|&byte| char::from(byte)).collect::<String>())
+            .unwrap_or_default();
+        Ok(VolumeLabel { serial: self.fat.bpb().volume_id, label: String::from(label.trim_end_matches(' ')) })
+    }
+
+    /// Sa place : ses clusters, dont ceux qui sont libres.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn space(&self) -> Result<Space, NtStatus> {
+        let free_clusters = {
+            let _guard = self.lock.lock();
+            self.fat.free_clusters().map_err(device_error)?
+        };
+        let bpb = self.fat.bpb();
+        Ok(Space {
+            total_clusters: self.fat.clusters(),
+            free_clusters,
+            sectors_per_cluster: u32::from(bpb.sectors_per_cluster),
+            bytes_per_sector: u32::from(bpb.bytes_per_sector),
+        })
     }
 
     /// Son répertoire racine.
@@ -157,7 +256,7 @@ impl Volume {
                 return Err(STATUS_OBJECT_PATH_NOT_FOUND);
             }
             node = match self.fat.find_entry(node.first_cluster, name) {
-                Ok((entry, at)) => Node::from_entry(&entry, at),
+                Ok((entry, at)) => Node::from_entry(&entry, Some(at)),
                 Err(FatError::NotFound | FatError::Unsupported | FatError::PathFormat) => return Err(missing),
                 Err(error) => return Err(device_error(error)),
             };
@@ -168,11 +267,67 @@ impl Volume {
         Ok(node)
     }
 
+    /// Les noms des fichiers et des répertoires du répertoire `directory`,
+    /// dans l'ordre de leurs entrées : leur nom long s'ils en ont un, sinon
+    /// leur nom 8.3 ; ni `.`, ni `..`, ni le nom du volume.
+    /// `STATUS_NOT_A_DIRECTORY` pour un fichier.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn list(&self, directory: &Node) -> Result<Vec<String>, NtStatus> {
+        if !directory.directory {
+            return Err(STATUS_NOT_A_DIRECTORY);
+        }
+        let _guard = self.lock.lock();
+        let entries = self.fat.dir_entries(directory.first_cluster).map_err(device_error)?;
+        Ok(entries
+            .into_iter()
+            .filter(|entry| entry.attr & 0x08 == 0 && entry.name != "." && entry.name != "..")
+            .map(|entry| entry.name)
+            .collect())
+    }
+
+    /// Ce que tient le répertoire `directory`, dans l'ordre de ses entrées,
+    /// décrit pour NtQueryDirectoryFile : `.` et `..` compris (un
+    /// sous-répertoire de FAT les tient ; la racine, non), sans le nom du
+    /// volume. `STATUS_NOT_A_DIRECTORY` pour un fichier.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn entries(&self, directory: &Node) -> Result<Vec<Listed>, NtStatus> {
+        if !directory.directory {
+            return Err(STATUS_NOT_A_DIRECTORY);
+        }
+        let entries = {
+            let _guard = self.lock.lock();
+            self.fat.dir_entries(directory.first_cluster).map_err(device_error)?
+        };
+        Ok(entries
+            .into_iter()
+            .filter(|listed| listed.attr & 0x08 == 0)
+            .map(|listed| {
+                // What its entry says, as `lookup` would give it.
+                let node = Node::from_entry(&listed.entry, None);
+                Listed {
+                    name: listed.name,
+                    short_name: listed.short_name,
+                    offset: listed.offset,
+                    directory: node.directory,
+                    attributes: node.attributes,
+                    size: node.size,
+                    creation_time: node.creation_time,
+                    last_access_time: node.last_access_time,
+                    last_write_time: node.last_write_time,
+                }
+            })
+            .collect())
+    }
+
     /// Ce que dit maintenant l'entrée de `node`.
     fn current_locked(&self, node: &Node) -> Result<Node, NtStatus> {
         let Some(at) = node.entry else { return Ok(*node) };
         let entry = self.fat.read_entry(at).map_err(device_error)?;
-        Ok(Node::from_entry(&DirEntry::parse(&entry), at))
+        Ok(Node::from_entry(&DirEntry::parse(&entry), Some(at)))
     }
 
     /// Ce que dit maintenant l'entrée de `node` : sa taille après des
@@ -183,39 +338,6 @@ impl Volume {
     pub fn current(&self, node: &Node) -> Result<Node, NtStatus> {
         let _guard = self.lock.lock();
         self.current_locked(node)
-    }
-
-    /// The first entry of the directory `from` at or past `index` (a byte
-    /// offset in the directory's stream, 0 for the first) that `pattern`
-    /// keeps (`?` and `*`, without case, [`name`]; `None` keeps all):
-    /// `None` past the last. `.` and `..` never come, as XP's enumeration
-    /// never returns them. `STATUS_NOT_A_DIRECTORY` for a file.
-    ///
-    /// Each call reads the directory again from its start: a scan that
-    /// serves many entries from one read comes later.
-    ///
-    /// # IRQL
-    /// <= DISPATCH_LEVEL.
-    pub fn enumerate(
-        &self,
-        from: &Node,
-        index: u64,
-        pattern: Option<&str>,
-    ) -> Result<Option<crate::fat::DirEntryInfo>, NtStatus> {
-        let _guard = self.lock.lock();
-        let node = self.current_locked(from)?;
-        if !node.directory {
-            return Err(STATUS_NOT_A_DIRECTORY);
-        }
-        let entries = self.fat.read_dir_entries(node.first_cluster).map_err(|error| match error {
-            FatError::NotFound | FatError::InvalidBpb => STATUS_FILE_CORRUPT_ERROR,
-            error => device_error(error),
-        })?;
-        Ok(entries.into_iter().find(|entry| {
-            entry.index >= index
-                && !matches!(entry.name.as_str(), "." | "..")
-                && pattern.is_none_or(|pattern| crate::name::is_name_in_expression(pattern, &entry.name))
-        }))
     }
 
     /// Lit le fichier `node` à partir de l'octet `offset` dans `out` ; rend
@@ -274,9 +396,39 @@ impl Volume {
         let changed = change(&self.fat, &mut first, &mut size, *hint);
         // What `change` did to the chain stays described, even if it failed.
         self.fat.update_entry(at, first, size).map_err(device_error)?;
+        self.fat.set_times(at, None, self.now()).map_err(device_error)?;
         changed.map_err(device_error)?;
         *hint = first.max(2);
         self.current_locked(&node)
+    }
+
+    /// Change ce que NtSetInformationFile(FileBasicInformation) change de
+    /// `node` : ses dates (en 100 ns depuis 1601 ; 0 la laisse) de création,
+    /// de dernier accès, de dernière écriture (FAT n'a pas de date de
+    /// changement), et ses attributs (0 les laisse ; `FILE_ATTRIBUTE_NORMAL`
+    /// les efface ; lecture seule, caché, système, archive). Rend ce que dit
+    /// ensuite son entrée. `STATUS_INVALID_PARAMETER` pour une date que FAT
+    /// ne tient pas (avant 1980, après 2107) ou pour la racine, qui n'a pas
+    /// d'entrée.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_basic(&self, node: &Node, basic: &FileBasicInformation) -> Result<Node, NtStatus> {
+        let time = |nt: u64| match nt {
+            0 => Ok(None),
+            nt => fat_time(nt).map(Some).ok_or(STATUS_INVALID_PARAMETER),
+        };
+        let (created, accessed, written) =
+            (time(basic.creation_time)?, time(basic.last_access_time)?, time(basic.last_write_time)?);
+        let attributes = match basic.file_attributes {
+            0 => None,
+            FILE_ATTRIBUTE_NORMAL => Some(0),
+            attributes => Some((attributes & (SETTABLE_ATTRIBUTES | FILE_ATTRIBUTE_ARCHIVE)) as u8),
+        };
+        let _guard = self.lock.lock();
+        let Some(at) = node.entry else { return Err(STATUS_INVALID_PARAMETER) };
+        self.fat.set_basic(at, attributes, created, accessed, written).map_err(device_error)?;
+        self.current_locked(node)
     }
 
     /// Fait atteindre le support à ce qui est écrit (le cache du disque).
@@ -321,8 +473,9 @@ impl Volume {
             let attr = (attributes & SETTABLE_ATTRIBUTES) as u8 | FILE_ATTRIBUTE_ARCHIVE as u8;
             self.fat.add_entry(directory.first_cluster, &make_entry(&short, attr, 0, 0), *hint).map_err(device_error)?
         };
+        self.fat.set_times(at, self.now(), None).map_err(device_error)?;
         let entry = self.fat.read_entry(at).map_err(device_error)?;
-        Ok(Node::from_entry(&DirEntry::parse(&entry), at))
+        Ok(Node::from_entry(&DirEntry::parse(&entry), Some(at)))
     }
 }
 

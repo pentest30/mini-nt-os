@@ -114,6 +114,7 @@ pub struct Teb32 {
 
 const _: () = {
     assert!(size_of::<NtTib32>() == 0x1C);
+    assert!(offset_of!(Teb32, nt_tib) + offset_of!(NtTib32, arbitrary_user_pointer) == 0x14);
     assert!(offset_of!(Teb32, nt_tib) + offset_of!(NtTib32, self_) == 0x18);
     assert!(offset_of!(Teb32, client_id) == 0x20);
     assert!(offset_of!(Teb32, thread_local_storage_pointer) == 0x2C);

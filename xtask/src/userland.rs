@@ -67,6 +67,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "c_20127.nls",
         "smss.exe",
         "config/system",
+        "config/software",
         "csrss.exe",
         "csrsrv.dll",
         "basesrv.dll",
@@ -74,6 +75,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "lpk.dll",
         "winlogon.exe",
         "kbdus.dll",
+        "cmd.exe",
     ]
     .into_iter()
     .map(String::from)
@@ -101,9 +103,12 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
 /// The fonts directory on the boot disk (`\SystemRoot\Fonts`).
 const FONTS_DIR: &str = "WINDOWS/FONTS";
 
-/// The fonts win32k draws the window frames with (ADR-013, `win32k::font`):
-/// Tahoma and Tahoma Bold for the captions, Marlett for the caption buttons.
-const FONTS: [&str; 3] = ["tahoma.ttf", "tahomabd.ttf", "Marlett.ttf"];
+/// The fonts of the boot disk, which win32k installs (ADR-013,
+/// `win32k::font`): Tahoma and Tahoma Bold for the captions, Marlett for the
+/// caption buttons; VGA (the default font of the console's code page 437),
+/// Lucida Console (FontSubstitutes' Terminal) and Courier New (Courier) for
+/// consrv.
+const FONTS: [&str; 6] = ["tahoma.ttf", "tahomabd.ttf", "Marlett.ttf", "UniVGA16.ttf", "lucon.ttf", "cour.ttf"];
 
 /// The font `name` of the fetched userland's `Fonts`; `None` until
 /// `fetch-userland` ran, or without it.

@@ -299,7 +299,7 @@ pub fn release_dc(hdc: u32) -> bool {
     }
     dc::give_back(hdc, &dc);
     if let Some(hrgn) = set_free(hdc) {
-        crate::gdi::rgnobj::delete_object(hrgn);
+        crate::gdi::delete_object(hrgn);
     }
     true
 }

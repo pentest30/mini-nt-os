@@ -53,12 +53,13 @@ use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
     Rect32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
-    FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP,
-    HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW,
-    SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER,
-    WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT,
-    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED,
+    FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC,
+    GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
+    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED,
+    TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO,
+    WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT,
+    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR,
+    WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED,
     WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD,
     WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR,
     WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
@@ -112,6 +113,8 @@ pub struct WindowState {
     pub update: Region,
     /// Le rectangle de la peinture en cours (BeginPaint, EndPaint).
     pub painting: Rect,
+    /// La valeur de l'application (`dwUserData`, GWLP_USERDATA).
+    pub user_data: u32,
 }
 
 impl WindowState {
@@ -278,6 +281,7 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
         // No GDI region objects yet: HRGN_WINDOW says there is an update
         // region, which is all user32 asks (GetUpdateRect, UpdateWindow).
         hrgn_update: if state.update.is_empty() { 0 } else { HRGN_WINDOW },
+        user_data: state.user_data,
         ..Wnd32::default()
     }
 }
@@ -286,6 +290,65 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
 fn write(window: &Window) -> Result<(), NtStatus> {
     let state = window.state();
     window.heap.section.write_kernel(u64::from(window.wnd), wnd(window, &state).as_bytes())
+}
+
+/// La place, dans les octets de plus d'une fenêtre qui en a `extra`, de
+/// l'index `index` de SetWindowLong (un LONG) ; `None` au-delà.
+pub fn extra_offset(extra: u32, index: i32) -> Option<u32> {
+    let index = u32::try_from(index).ok()?;
+    (index.checked_add(4)? <= extra).then_some(index)
+}
+
+/// co_IntSetWindowLongPtr, pour un index négatif que le noyau fait : la
+/// valeur de l'application (GWLP_USERDATA), l'identifiant (GWLP_ID) ou
+/// l'instance (GWLP_HINSTANCE) devient `value` ; rend l'ancienne. `None`
+/// pour un autre index.
+pub fn apply_long(state: &mut WindowState, index: i32, value: u32) -> Option<u32> {
+    let field = match index {
+        GWLP_USERDATA => &mut state.user_data,
+        GWLP_ID => &mut state.id_menu,
+        GWLP_HINSTANCE => &mut state.module,
+        _ => return None,
+    };
+    Some(core::mem::replace(field, value))
+}
+
+/// co_IntSetWindowLongPtr (NtUserSetWindowLong) : le LONG `index` de
+/// `window` devient `value` ; rend l'ancien. Un index positif est une place
+/// dans ses octets de plus (`cbWndExtra`, après le `WND`, où `user32` les lit
+/// lui-même) ; un index négatif, l'un de ceux de [`apply_long`].
+///
+/// # Errors
+/// L'erreur de Win32 : `ERROR_INVALID_INDEX` pour une place au-delà des
+/// octets de plus ou un index inconnu ; `ERROR_CALL_NOT_IMPLEMENTED` pour
+/// GWL_STYLE, GWL_EXSTYLE, GWLP_WNDPROC et GWLP_HWNDPARENT (pas encore,
+/// journalisé une fois).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_long(window: &Window, index: i32, value: u32) -> Result<u32, u32> {
+    if index >= 0 {
+        let extra = window.wnd_size - size_of::<Wnd32>() as u32;
+        let at = extra_offset(extra, index).ok_or(abi::winerror::ERROR_INVALID_INDEX)?;
+        let at = u64::from(window.wnd) + size_of::<Wnd32>() as u64 + u64::from(at);
+        let mut old = [0u8; 4];
+        let section = &window.heap.section;
+        section
+            .read_kernel(at, &mut old)
+            .and_then(|()| section.write_kernel(at, &value.to_le_bytes()))
+            .map_err(abi::winerror::dos_error)?;
+        return Ok(u32::from_le_bytes(old));
+    }
+    if matches!(index, GWL_STYLE | GWL_EXSTYLE | GWLP_WNDPROC | GWLP_HWNDPARENT) {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("win32k: SetWindowLong of the style, the procedure or the parent ({index}): not yet");
+        }
+        return Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+    }
+    let mut old = None;
+    change(window, |state| old = apply_long(state, index, value));
+    old.ok_or(abi::winerror::ERROR_INVALID_INDEX)
 }
 
 /// Change ce qui change de `window` par `change`, puis réécrit son `WND`.
@@ -1298,6 +1361,32 @@ mod tests {
     fn window(width: i32, height: i32) -> WindowState {
         let rect = Rect::new(0, 0, width, height);
         WindowState { window: rect, client: rect, ..WindowState::default() }
+    }
+
+    #[test]
+    fn a_long_of_the_extra_bytes_fits_in_them() {
+        assert_eq!(extra_offset(8, 0), Some(0));
+        assert_eq!(extra_offset(8, 4), Some(4));
+        assert_eq!(extra_offset(8, 5), None, "one byte past the end");
+        assert_eq!(extra_offset(0, 0), None, "no extra bytes");
+        assert_eq!(extra_offset(8, -1), None, "a negative index is not a place");
+        assert_eq!(extra_offset(u32::MAX, i32::MAX), Some(i32::MAX as u32));
+        assert_eq!(extra_offset(16, i32::MAX), None);
+    }
+
+    #[test]
+    fn the_kernel_sets_the_user_data_the_id_and_the_instance() {
+        let mut state = WindowState { id_menu: 3, module: 0x0040_0000, ..WindowState::default() };
+        assert_eq!(apply_long(&mut state, GWLP_USERDATA, 0x1234), Some(0));
+        assert_eq!(apply_long(&mut state, GWLP_USERDATA, 0x5678), Some(0x1234));
+        assert_eq!(state.user_data, 0x5678);
+        assert_eq!(apply_long(&mut state, GWLP_ID, 9), Some(3));
+        assert_eq!(apply_long(&mut state, GWLP_HINSTANCE, 0x0100_0000), Some(0x0040_0000));
+        assert_eq!((state.id_menu, state.module), (9, 0x0100_0000));
+        let before = state.clone();
+        assert_eq!(apply_long(&mut state, GWL_STYLE, 0), None);
+        assert_eq!(apply_long(&mut state, -100, 0), None);
+        assert_eq!(state, before, "unchanged");
     }
 
     #[test]

@@ -63,6 +63,7 @@ pub const STATUS_GUARD_PAGE_VIOLATION: NtStatus = NtStatus(0x8000_0001);
 pub const STATUS_DATATYPE_MISALIGNMENT: NtStatus = NtStatus(0x8000_0002);
 pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
 pub const STATUS_BUFFER_OVERFLOW: NtStatus = NtStatus(0x8000_0005);
+/// NtQueryDirectoryFile: no entry left to return.
 pub const STATUS_NO_MORE_FILES: NtStatus = NtStatus(0x8000_0006);
 pub const STATUS_PARTIAL_COPY: NtStatus = NtStatus(0x8000_000D);
 pub const STATUS_NO_MORE_ENTRIES: NtStatus = NtStatus(0x8000_001A);
@@ -74,6 +75,9 @@ pub const STATUS_ACCESS_VIOLATION: NtStatus = NtStatus(0xC000_0005);
 pub const STATUS_INVALID_HANDLE: NtStatus = NtStatus(0xC000_0008);
 pub const STATUS_INVALID_CID: NtStatus = NtStatus(0xC000_000B);
 pub const STATUS_INVALID_PARAMETER: NtStatus = NtStatus(0xC000_000D);
+/// NtQueryDirectoryFile: the first query of a handle found no entry that
+/// matches its expression.
+pub const STATUS_NO_SUCH_FILE: NtStatus = NtStatus(0xC000_000F);
 pub const STATUS_INVALID_DEVICE_REQUEST: NtStatus = NtStatus(0xC000_0010);
 pub const STATUS_END_OF_FILE: NtStatus = NtStatus(0xC000_0011);
 pub const STATUS_NO_MEMORY: NtStatus = NtStatus(0xC000_0017);
@@ -94,7 +98,6 @@ pub const STATUS_PORT_MESSAGE_TOO_LONG: NtStatus = NtStatus(0xC000_002F);
 pub const STATUS_INVALID_PARAMETER_MIX: NtStatus = NtStatus(0xC000_0030);
 pub const STATUS_EAS_NOT_SUPPORTED: NtStatus = NtStatus(0xC000_004F);
 pub const STATUS_OBJECT_NAME_INVALID: NtStatus = NtStatus(0xC000_0033);
-pub const STATUS_NO_SUCH_FILE: NtStatus = NtStatus(0xC000_000F);
 pub const STATUS_OBJECT_NAME_NOT_FOUND: NtStatus = NtStatus(0xC000_0034);
 pub const STATUS_OBJECT_NAME_COLLISION: NtStatus = NtStatus(0xC000_0035);
 pub const STATUS_PORT_DISCONNECTED: NtStatus = NtStatus(0xC000_0037);
@@ -135,6 +138,12 @@ pub const STATUS_INTEGER_DIVIDE_BY_ZERO: NtStatus = NtStatus(0xC000_0094);
 pub const STATUS_PRIVILEGED_INSTRUCTION: NtStatus = NtStatus(0xC000_0096);
 pub const STATUS_INSUFFICIENT_RESOURCES: NtStatus = NtStatus(0xC000_009A);
 pub const STATUS_FREE_VM_NOT_AT_BASE: NtStatus = NtStatus(0xC000_009F);
+/// An impersonation level that the token or the client does not allow.
+pub const STATUS_BAD_IMPERSONATION_LEVEL: NtStatus = NtStatus(0xC000_00A5);
+/// A thread token at SecurityAnonymous, which cannot be opened.
+pub const STATUS_CANT_OPEN_ANONYMOUS: NtStatus = NtStatus(0xC000_00A6);
+/// A primary token where an impersonation token is needed, or the reverse.
+pub const STATUS_BAD_TOKEN_TYPE: NtStatus = NtStatus(0xC000_00A8);
 pub const STATUS_MEMORY_NOT_ALLOCATED: NtStatus = NtStatus(0xC000_00A0);
 pub const STATUS_STACK_OVERFLOW: NtStatus = NtStatus(0xC000_00FD);
 pub const STATUS_ENTRYPOINT_NOT_FOUND: NtStatus = NtStatus(0xC000_0139);

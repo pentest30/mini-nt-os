@@ -23,6 +23,7 @@ use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::mem::size_of;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_NO_MEMORY, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_INVALID};
 use abi::object::{AccessMask, GenericMapping};
@@ -240,6 +241,23 @@ pub struct Desktop {
     pub desk_info: u32,
     /// Sa fenêtre (`DesktopWindow`, `pDeskInfo->spwnd`).
     pub window: Arc<crate::window::Window>,
+    /// dwConsoleThreadId : le thread d'entrée des consoles de `consrv` sur
+    /// ce bureau ; 0 sans lui.
+    console_thread: AtomicU32,
+}
+
+impl Desktop {
+    /// ConsoleCtrlDesktopConsoleThread : le thread d'entrée des consoles du
+    /// bureau devient `thread`, s'il est donné ; rend celui d'avant.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn exchange_console_thread(&self, thread: Option<u32>) -> u32 {
+        match thread {
+            Some(thread) => self.console_thread.swap(thread, Ordering::AcqRel),
+            None => self.console_thread.load(Ordering::Acquire),
+        }
+    }
 }
 
 /// Le `DESKTOPINFO` d'un bureau dont le tas va de `base` à `limit`
@@ -278,7 +296,14 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
     let window = crate::window::create_desktop_window(&heap, name, at, width, height)?;
     let desktop = ob::create_object(
         &DESKTOP_TYPE,
-        Desktop { name: String::from(name), station: station.clone(), heap, desk_info: at, window },
+        Desktop {
+            name: String::from(name),
+            station: station.clone(),
+            heap,
+            desk_info: at,
+            window,
+            console_thread: AtomicU32::new(0),
+        },
     );
     station.add_desktop(Arc::downgrade(&desktop));
     Ok(desktop)

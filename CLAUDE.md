@@ -275,6 +275,43 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent, NtGdiExtTextOutW ; scénario `text`.
   M6, étape 13 (DrawText de `user32`) : NtGdiGetTextExtentExW (étendues cumulées, `win32k::font::advances`),
   NtGdiGetRandomRgn (la région de découpage gardée), NtGdiIntersectClipRect.
+  M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
+  lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
+  PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
+  (`ps::ethread::Impersonation`, `se::client`, NtImpersonateThread, ThreadImpersonationToken, NtOpenThreadToken) ;
+  NtUserConsoleControl, NtUserResolveDesktop (`sys::console`). Étape 2 (les polices) : la ruche SOFTWARE montée
+  (`userland::mount_software_hive`), les polices de `\SystemRoot\Fonts` installées (`io::Volume::list` ;
+  `win32k::font` : table de polices, `glyph::Names`), la correspondance d'un LOGFONT par `FontSubstitutes`, famille,
+  graisse, italique et pas (`fontobj::realize`), NtGdiGetFontFamilyInfo (`fontobj::family_info`) : la console de
+  `consrv` est créée (police VGA), `THREADS1.EXE` va au bout. Étape 3 : Sleep(0) cède le reste du quantum à un
+  thread prêt de même priorité (`ke::sched::Scheduler::yield_to_equal`, `Platform::yield_execution`) ; les 8 threads
+  attendent la section critique : le critère des 8 threads du M5 est coché. Étape 4 : la fenêtre console montrée
+  (NtUserSetWindowLong : octets de plus et GWLP_USERDATA ; NtUserShowWindowAsync ; NtUserPostMessage à une fenêtre ;
+  un thread client converti va sur le bureau de démarrage de son processus, pris de `lpDesktop`,
+  `win32k::startup`) ; `CONSHOW1.EXE` garde sa console à l'écran. Étape 5 : le texte de la console peint ; Mm projette
+  une section dans le noyau (`mm::system_view`, MmMapViewInSystemSpace, région de 02 §4.2) ; les capacités de l'écran
+  dans la table des handles (`win32k::gdi::devcaps`) ; les DIB sections de 32 bits, vues du processus et du noyau
+  (`win32k::gdi::surface`, NtGdiCreateDIBSection), les DC en mémoire (NtGdiCreateCompatibleDC, NtGdiSelectBitmap ;
+  `DcState::draw` peint sur l'écran ou le bitmap), BitBlt (`win32k::gdi::bitblt`, ROP3 avec source), les pinceaux
+  d'un client (NtGdiCreateSolidBrush) ; `consrv` peint « Mino console » ; scénario `bitmap` (`tests/native/bitmap1.c`).
+  Étape 6 : le clavier jusqu'aux fenêtres ; le pilote `drivers/input/i8042` (IRQ1 → anneau de `hal::ps2` →
+  KEYBOARD_INPUT_DATA), le thread d'entrée brute (`ntoskrnl::input` : DPC, événement), les tables de la disposition
+  (`win32k::kbdtables` : VSC→VK, ToUnicode), `win32k::input` (ProcessKeyEvent, état du clavier, premier plan à
+  l'activation d'une fenêtre, SetFocus, TranslateMessage), les touches dans la file (`QS_KEY`, état du clavier du
+  thread) ; `keys = MARQUEUR => TOUCHES` fait taper des touches par le moniteur de QEMU ; scénario `keyboard`
+  (`tests/native/keys1.c`). La sonde garde les processus créés depuis leur création (`ps::set_create_process_notify`).
+  Étape 7 (`cmd.exe` interactif) : ReadConsoleW marchait déjà ; NtQueryDirectoryFile (`abi::file` : entrées des
+  classes 1, 2, 3, 12 ; `io::directory` : expression avec les jokers DOS de `kernel32`, tampon aligné ;
+  `io::File::query_directory` : état de l'énumération dans le `File`, expression de la première requête, nom long ou
+  8.3, reprise à la place de l'entrée) : `dir` et `copy` ; le vrai `cmd.exe` sur le disque lit ses commandes tapées
+  dans sa console (`echo`, `set`, `copy`, `type`, `dir`, un `.bat`) ; la sonde attend 10 s après la dernière touche
+  (`ntoskrnl::input::last_key_time`) ; scénario `cmd` (`tests/native/concmd1.c`, `read1.c`). Étape 8 (ce que
+  `dir` affiche autour des noms) : FileNameInformation, FileFsVolume/Attribute/Size/FullSizeInformation (numéro de
+  série du BPB, entrée de volume, clusters libres comptés dans la FAT) ; dates de FAT (`fat::FatTime`) écrites par Io
+  à la création et à l'écriture, et par `tools/mkfat` (2004-08-04 12:00, des images identiques) ;
+  NtSetInformationFile(FileBasicInformation) ; NtQueryDefaultLocale (`ex::locale`, `Nls\Language`) ; `xtask`
+  attend qu'une touche soit relâchée avant la suivante (QEMU 8.2 perd des relâchements sinon) ; `hal::ps2` compte
+  ce qu'il perd. **Le critère de `cmd.exe` interactif du M5 est coché.**
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -313,6 +350,9 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   `llvm`). Sans eux, ils sont sautés.
 - `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
+- `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
+  touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre ; `"dir C:\"` entre guillemets donne les
+  touches de chaque caractère (clavier américain).
 - `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
   disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur

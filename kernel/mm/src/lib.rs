@@ -7,6 +7,7 @@
 //!   - Sections: shared memory, data files, PE images, with copy-on-write (`section`)
 //!   - Page faults: demand-zero pages, guard pages (`fault`)
 //!   - KUSER_SHARED_DATA, shared read-only with every process (`shared_data`)
+//!   - System views: sections mapped in the kernel half (`system_view`)
 //!
 //! Address space layout (XP-compatible 2GB/2GB split):
 //!   User mode:   0x0000_0000_0000_1000 – 0x0000_0000_7FFF_FFFF
@@ -26,6 +27,7 @@ pub mod pfn;
 pub mod pool;
 pub mod section;
 pub mod shared_data;
+pub mod system_view;
 pub mod vad;
 pub mod virtual_alloc;
 

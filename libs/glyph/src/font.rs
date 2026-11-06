@@ -11,6 +11,7 @@
 //! No hinting (ADR-013): outlines are scaled, then rendered with grayscale
 //! antialiasing.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use ttf_parser::cmap::Subtable;
@@ -76,6 +77,16 @@ pub struct TextMetrics {
     pub symbol: bool,
 }
 
+/// The names GDI gives a font, from its `name` table: its family
+/// (lfFaceName, name 1), its style (elfStyle, name 2) and its full name
+/// (elfFullName, name 4).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Names {
+    pub family: String,
+    pub style: String,
+    pub full_name: String,
+}
+
 /// TMPF_FIXED_PITCH: set for a font of variable pitch (the name is the
 /// opposite of its meaning).
 pub const TMPF_VARIABLE_PITCH: u8 = 0x01;
@@ -130,6 +141,71 @@ impl<'a> Font<'a> {
     fn table_u16(&self, tag: &[u8; 4], offset: usize) -> Option<u16> {
         let table = self.face.raw_face().table(Tag::from_bytes(tag))?;
         Some(u16::from_be_bytes([*table.get(offset)?, *table.get(offset + 1)?]))
+    }
+
+    /// The 32-bit big-endian word at `offset` of the table `tag`.
+    fn table_u32(&self, tag: &[u8; 4], offset: usize) -> Option<u32> {
+        let high = self.table_u16(tag, offset)?;
+        let low = self.table_u16(tag, offset + 2)?;
+        Some(u32::from(high) << 16 | u32::from(low))
+    }
+
+    /// Its names: each from the record of the Windows platform in Unicode
+    /// for US English, else of the Windows platform in Unicode, else of the
+    /// Unicode platform, else of the Macintosh platform in Roman (read as
+    /// Latin-1); empty without one.
+    pub fn names(&self) -> Names {
+        let name = |id: u16| {
+            let records: Vec<_> = self.face.names().into_iter().filter(|name| name.name_id == id).collect();
+            let rank = |name: &ttf_parser::name::Name<'_>| match (name.platform_id, name.encoding_id, name.language_id)
+            {
+                (PlatformId::Windows, 1, 0x409) => 0,
+                (PlatformId::Windows, 0 | 1 | 10, _) => 1,
+                (PlatformId::Unicode, _, _) => 2,
+                (PlatformId::Macintosh, 0, _) => 3,
+                _ => 4,
+            };
+            let best = records.iter().filter(|name| rank(name) < 4).min_by_key(|name| rank(name));
+            match best {
+                Some(name) if name.platform_id == PlatformId::Macintosh => {
+                    name.name.iter().map(|&b| char::from(b)).collect()
+                }
+                Some(name) => {
+                    let units = name.name.chunks_exact(2).map(|pair| u16::from_be_bytes([pair[0], pair[1]]));
+                    char::decode_utf16(units).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)).collect()
+                }
+                None => String::new(),
+            }
+        };
+        Names { family: name(1), style: name(2), full_name: name(4) }
+    }
+
+    /// An italic or oblique face: `OS/2` fsSelection (offset 62), ITALIC
+    /// (bit 0) or OBLIQUE (bit 9), else `head` macStyle (offset 44), italic
+    /// (bit 1).
+    pub fn is_italic(&self) -> bool {
+        match self.table_u16(b"OS/2", 62) {
+            Some(selection) => selection & (1 << 0 | 1 << 9) != 0,
+            None => self.table_u16(b"head", 44).is_some_and(|style| style & 2 != 0),
+        }
+    }
+
+    /// The code pages of `OS/2` (ulCodePageRange1 and 2, offsets 78 and 82),
+    /// for a table of version 1 or later; `None` before.
+    pub fn code_page_ranges(&self) -> Option<(u32, u32)> {
+        if self.table_u16(b"OS/2", 0)? < 1 {
+            return None;
+        }
+        Some((self.table_u32(b"OS/2", 78)?, self.table_u32(b"OS/2", 82)?))
+    }
+
+    /// FONTSIGNATURE: the Unicode ranges of `OS/2` (ulUnicodeRange1 to 4,
+    /// offsets 42 to 54) and its code pages ([`code_page_ranges`](Self::code_page_ranges)) ;
+    /// zeros where the table has none.
+    pub fn signature(&self) -> ([u32; 4], [u32; 2]) {
+        let unicode = core::array::from_fn(|i| self.table_u32(b"OS/2", 42 + 4 * i).unwrap_or(0));
+        let (first, second) = self.code_page_ranges().unwrap_or((0, 0));
+        (unicode, [first, second])
     }
 
     /// xAvgCharWidth of the `OS/2` table, in font units: a 16-bit integer at

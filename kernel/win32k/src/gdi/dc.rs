@@ -22,7 +22,14 @@
 //! depuis l'origine), dont `gdi32` tire ce que rend un SelectClipRgn qu'il
 //! met en lot.
 //!
-//! Pas encore : les DC en mémoire et leurs bitmaps, les régions de méta
+//! Un DC en mémoire (CreateCompatibleDC, [`create_memory_dc`]) peint dans
+//! le bitmap qu'on y choisit (SelectObject, [`select_bitmap`] ; d'abord le
+//! bitmap par défaut, 1 × 1, où rien ne se dessine), son origine en (0, 0),
+//! sa région visible tout le bitmap ([`DcState::draw`]). Ses attributs
+//! disent `DC_DIBSECTION` quand une DIB section y est choisie : `gdi32` y
+//! dessine alors sans mettre en lot.
+//!
+//! Pas encore : les régions de méta
 //! (SetMetaRgn), ExcludeClipRect, IntersectClipRect, OffsetClipRgn,
 //! GetClipRgn, les transformations (le DC est en MM_TEXT, ses matrices à
 //! zéro), les stylos (`hpen` reste nul), les DC d'un autre propriétaire
@@ -33,9 +40,11 @@ use alloc::vec::Vec;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use abi::gdi::dirty::{DC_BRUSH_DIRTY, DIRTY_FILL};
-use abi::gdi::{objt, rgn, stock, DcAttr32, RgnAttr32, ATTR_RGN_VALID, ERROR, LO_DC_TYPE, SIMPLEREGION};
-use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
+use abi::gdi::dirty::{DC_BRUSH_DIRTY, DC_DIBSECTION, DIRTY_FILL, DIRTY_LINE};
+use abi::gdi::{
+    objt, rgn, stock, BrushAttr32, DcAttr32, RgnAttr32, ATTR_RGN_VALID, ERROR, LO_BITMAP_TYPE, LO_DC_TYPE, SIMPLEREGION,
+};
+use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_UNSUCCESSFUL};
 use abi::user::Rect32;
 use hal::sync::KSpinLock;
 use ke::usermem::{copy_from_user, copy_to_user};
@@ -43,9 +52,31 @@ use mm::vad::PageProtect;
 use mm::virtual_alloc::AllocType;
 
 use super::brush::{Brush, STOCK_BRUSHES};
-use super::dib::{ColorRef, Rect};
+use super::dib::{Bitmap, ColorRef, Rect};
 use super::handles::{self, Object, OWNER_NONE};
 use super::region::{combine, Region};
+use super::surface::{self, Surface};
+
+/// Le bitmap choisi dans un DC en mémoire : son handle, et lui.
+#[derive(Clone)]
+pub struct Selected {
+    pub handle: u32,
+    pub surface: Arc<Surface>,
+}
+
+impl PartialEq for Selected {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle && Arc::ptr_eq(&self.surface, &other.surface)
+    }
+}
+
+impl Eq for Selected {}
+
+impl core::fmt::Debug for Selected {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Selected({:#x}, {:?})", self.handle, self.surface)
+    }
+}
 
 /// L'état d'un DC.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -60,9 +91,24 @@ pub struct DcState {
     pub clip: Option<Region>,
     /// Son pinceau de remplissage (`dclevel.pbrFill`) : son handle, et lui.
     pub fill: Option<(u32, Brush)>,
+    /// Le bitmap où il peint (`dclevel.pSurface`) : aucun pour un DC de
+    /// l'écran, qui peint sur l'écran.
+    pub bitmap: Option<Selected>,
 }
 
 impl DcState {
+    /// Appelle `draw` avec la surface où il peint : l'écran ou son bitmap ;
+    /// faux sans pilote d'affichage, ou avec le bitmap par défaut.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL (`draw` y tourne).
+    pub fn draw(&self, draw: impl FnMut(&mut Bitmap<'_>)) -> bool {
+        match &self.bitmap {
+            None => crate::display::draw(draw),
+            Some(selected) => selected.surface.draw(draw),
+        }
+    }
+
     /// Où il peint, à l'écran (`prgnRao`) : sa région visible, coupée par sa
     /// région de découpage.
     pub fn rao(&self) -> Region {
@@ -151,12 +197,14 @@ pub fn ext_select_clip_rgn(hdc: u32, region: Option<&Region>, mode: i32) -> Resu
 /// Un DC.
 pub struct Dc {
     state: KSpinLock<DcState>,
+    /// Un DC en mémoire (DCTYPE_MEMORY).
+    memory: bool,
 }
 
 impl Default for Dc {
-    /// Un DC à personne, qui ne peint rien.
+    /// Un DC de l'écran à personne, qui ne peint rien.
     fn default() -> Self {
-        Self { state: KSpinLock::new(DcState::default()) }
+        Self { state: KSpinLock::new(DcState::default()), memory: false }
     }
 }
 
@@ -206,11 +254,13 @@ impl AttrPool {
 }
 
 /// Ce dont les attributs sont chez le propriétaire : un DC (`DC_ATTR`,
-/// `pPoolDcAttr`) ou une région (`RGN_ATTR`, `pPoolRgnAttr`).
+/// `pPoolDcAttr`), une région (`RGN_ATTR`, `pPoolRgnAttr`) ou un pinceau
+/// (`BRUSH_ATTR`, `pPoolBrushAttr`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttrKind {
     Dc,
     Region,
+    Brush,
 }
 
 impl AttrKind {
@@ -219,6 +269,7 @@ impl AttrKind {
         match self {
             Self::Dc => size_of::<DcAttr32>() as u32,
             Self::Region => size_of::<RgnAttr32>() as u32,
+            Self::Brush => size_of::<BrushAttr32>() as u32,
         }
     }
 
@@ -226,6 +277,7 @@ impl AttrKind {
         match self {
             Self::Dc => &info.dc_attrs,
             Self::Region => &info.rgn_attrs,
+            Self::Brush => &info.brush_attrs,
         }
     }
 }
@@ -307,6 +359,7 @@ pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(),
         vis,
         clip: None,
         fill: Some((white, STOCK_BRUSHES[stock::WHITE_BRUSH])),
+        bitmap: None,
     };
     let attrs = DcAttr32 {
         vis_rect_region: state.vis_rect_region(),
@@ -333,6 +386,119 @@ pub fn give_back(handle: u32, dc: &Dc) {
     if let Some((_, attr)) = old.owner {
         free_attr(AttrKind::Dc, attr);
     }
+}
+
+/// GreCreateCompatibleDC : un DC en mémoire, au processus courant, avec ses
+/// attributs chez lui (ceux d'un DC neuf : WHITE_BRUSH, SYSTEM_FONT) et le
+/// bitmap par défaut ; rend son handle.
+///
+/// # Errors
+/// `STATUS_UNSUCCESSFUL` avant les objets de stock ; celles de
+/// l'allocation et de l'écriture des attributs, de la table.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn create_memory_dc() -> Result<u32, NtStatus> {
+    let default = super::brush::stock_object(stock::DEFAULT_BITMAP);
+    let surface = surface::lock(default, handles::OWNER_PUBLIC).ok_or(STATUS_UNSUCCESSFUL)?;
+    let (pid, attr) = allocate_attr(AttrKind::Dc)?;
+    let white = super::brush::stock_object(stock::WHITE_BRUSH);
+    let state = DcState {
+        owner: Some((pid, attr)),
+        origin: (0, 0),
+        vis: Region::from_rect(Rect::new(0, 0, 1, 1)),
+        clip: None,
+        fill: Some((white, STOCK_BRUSHES[stock::WHITE_BRUSH])),
+        bitmap: Some(Selected { handle: default, surface }),
+    };
+    let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width as i32, mode.height as i32));
+    let attrs = DcAttr32 {
+        vis_rect_region: state.vis_rect_region(),
+        lfnt_new: super::brush::stock_object(stock::SYSTEM_FONT),
+        ..DcAttr32::initial(white, 0, width, height)
+    };
+    let dc = Arc::new(Dc { state: KSpinLock::new(state), memory: true });
+    let inserted = copy_to_user(u64::from(attr), attrs.as_bytes())
+        .and_then(|()| handles::insert_with_user_data(Object::Dc(dc), LO_DC_TYPE, objt::DC, pid, attr));
+    if inserted.is_err() {
+        free_attr(AttrKind::Dc, attr);
+    }
+    inserted
+}
+
+/// IntGdiDeleteDC d'un DC en mémoire : le DC `hdc` du processus courant
+/// quitte la table, rend ses attributs, et son bitmap le quitte. Faux pour
+/// un DC de l'écran ou d'un autre processus.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn delete_memory_dc(hdc: u32) -> bool {
+    let memory = |object: &Object| matches!(object, Object::Dc(dc) if dc.memory);
+    let Some((Object::Dc(dc), attr)) = handles::delete(hdc, current_pid(), memory) else { return false };
+    let old = dc.change(core::mem::take);
+    if let Some(selected) = &old.bitmap {
+        selected.surface.deselect(hdc);
+    }
+    if attr != 0 {
+        free_attr(AttrKind::Dc, attr);
+    }
+    true
+}
+
+/// NtGdiSelectBitmap : le bitmap `hbmp` (du processus courant, ou le bitmap
+/// par défaut) devient celui du DC en mémoire `hdc`, dont la région visible
+/// devient tout le bitmap ; ses attributs disent qu'il faut reprendre son
+/// pinceau et son stylo, et s'il peint dans une DIB section. Rend l'ancien
+/// bitmap ; `None` pour un handle nul, un DC de l'écran, un bitmap déjà
+/// choisi dans un autre DC.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn select_bitmap(hdc: u32, hbmp: u32) -> Option<u32> {
+    if hdc == 0 || hbmp & abi::gdi::GDI_HANDLE_TYPE_MASK != LO_BITMAP_TYPE {
+        return None;
+    }
+    let dc = lock(hdc).filter(|dc| dc.memory)?;
+    let surface = surface::lock(hbmp, current_pid())?;
+    let (width, height) = surface.size();
+    let dib = surface.is_dib_section();
+    let new = Selected { handle: hbmp, surface };
+    let old = dc.change(|state| {
+        let old = state.bitmap.clone()?;
+        if old.handle == hbmp {
+            return Some((old, false));
+        }
+        if !new.surface.select(hdc) {
+            return None;
+        }
+        state.vis = Region::from_rect(Rect::new(0, 0, width as i32, height as i32));
+        state.bitmap = Some(new.clone());
+        Some((old, true))
+    });
+    let (old, changed) = old?;
+    if !changed {
+        return Some(old.handle);
+    }
+    old.surface.deselect(hdc);
+    let state = dc.state();
+    if let Some((_, attr)) = state.owner {
+        let (set, clear) = if dib { (DC_DIBSECTION, 0) } else { (0, DC_DIBSECTION) };
+        let _ = change_dirty(attr, DIRTY_FILL | DIRTY_LINE | set, clear).and_then(|()| {
+            let at = u64::from(attr) + offset_of!(DcAttr32, vis_rect_region) as u64;
+            copy_to_user(at, state.vis_rect_region().as_bytes())
+        });
+    }
+    Some(old.handle)
+}
+
+/// Met les bits `set` et retire les bits `clear` de `ulDirty_` des
+/// attributs en `attr`, chez le processus courant.
+fn change_dirty(attr: u32, set: u32, clear: u32) -> Result<(), NtStatus> {
+    let at = u64::from(attr) + offset_of!(DcAttr32, dirty) as u64;
+    let mut dirty = [0u8; 4];
+    copy_from_user(&mut dirty, at)?;
+    let dirty = (u32::from_le_bytes(dirty) | set) & !clear;
+    copy_to_user(at, &dirty.to_le_bytes())
 }
 
 /// DC_LockDc : le DC de `hdc`, s'il est au processus courant.
@@ -397,7 +563,13 @@ fn resolve_brush(handle: u32) -> Option<Brush> {
 /// sans ces bits. `hbrush` remplace celui des attributs (un appel en lot
 /// apporte le sien) ; `restore` : les attributs restent ce qu'ils étaient
 /// (GdiFlushUserBatch les rétablit après l'appel).
-fn fill_brush(dc: &Dc, attr: u32, hbrush: Option<u32>, restore: bool) -> Result<Option<Brush>, NtStatus> {
+///
+/// # Errors
+/// Celles de la lecture et de l'écriture des attributs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn fill_brush(dc: &Dc, attr: u32, hbrush: Option<u32>, restore: bool) -> Result<Option<Brush>, NtStatus> {
     let (dirty, current) = read_attr(attr)?;
     if dirty & (DIRTY_FILL | DC_BRUSH_DIRTY) != 0 {
         let fill = dc.state().fill;
@@ -467,16 +639,20 @@ pub fn pat_rect(x: i32, y: i32, width: i32, height: i32, origin: (i32, i32)) -> 
     )
 }
 
-/// IntPatBlt : `rect` (à l'écran), dans la région visible `vis`, prend
-/// `brush` par le ROP3 `rop`. Un pinceau nul ne peint rien.
-pub fn paint(vis: &Region, rect: Rect, rop: u32, brush: &Brush) {
+/// IntPatBlt : `rect` (sur la surface du DC d'état `state`), là où il peint,
+/// prend `brush` par le ROP3 `rop`. Un pinceau nul ne peint rien.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn paint(state: &DcState, rect: Rect, rop: u32, brush: &Brush) {
     if brush.null {
         return;
     }
     let rop3 = (rop >> 16) as u8;
-    crate::display::draw(|screen| {
-        for part in vis.rects() {
-            screen.pat_blt(part.intersect(&rect), brush.color, rop3);
+    let rao = state.rao();
+    state.draw(|surface| {
+        for part in rao.rects() {
+            surface.pat_blt(part.intersect(&rect), brush.color, rop3);
         }
     });
 }
@@ -494,7 +670,7 @@ pub fn pat_blt(hdc: u32, x: i32, y: i32, width: i32, height: i32, rop: u32) -> R
     let Some((_, attr)) = dc.state().owner else { return Ok(false) };
     let Ok(Some(brush)) = fill_brush(&dc, attr, None, false) else { return Ok(false) };
     let state = dc.state();
-    paint(&state.rao(), pat_rect(x, y, width, height, state.origin), rop, &brush);
+    paint(&state, pat_rect(x, y, width, height, state.origin), rop, &brush);
     Ok(true)
 }
 
@@ -516,7 +692,7 @@ pub fn batched_pat_blt(dc: &Dc, x: i32, y: i32, width: i32, height: i32, rop: u3
         return;
     };
     let state = dc.state();
-    paint(&state.rao(), pat_rect(x, y, width, height, state.origin), rop, &brush);
+    paint(&state, pat_rect(x, y, width, height, state.origin), rop, &brush);
 }
 
 /// GdiGetClipBox : le rectangle qui tient là où le DC peint (`prgnRao`),

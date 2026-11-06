@@ -310,8 +310,12 @@ fn boot_once(
     serial.push(serial_log);
 
     let mut command = machine.command(opts)?;
-    // The monitor of the screen checks (screen.rs), where it exists only.
-    let monitor = if scenario.screen.is_empty() { None } else { Some(monitor(&mut command, run_dir)?) };
+    // Screen checks and injected keys share QEMU's monitor.
+    let monitor = if scenario.screen.is_empty() && scenario.keys.is_empty() {
+        None
+    } else {
+        Some(monitor(&mut command, run_dir)?)
+    };
     let mut child = command
         .arg("-serial")
         .arg(serial)
@@ -323,11 +327,21 @@ fn boot_once(
         .map_err(|e| format!("cannot start QEMU: {e}"))?;
 
     let start = Instant::now();
+    // The `keys` lines already typed, in order.
+    let mut typed = 0;
     let (passed, mut reason) = loop {
         std::thread::sleep(POLL);
         // Read the log after checking for exit, so that it is complete.
         let exited = child.try_wait().map_err(|e| format!("QEMU: {e}"))?;
-        let log = format!("{earlier}{}", read_lossy(serial_log));
+        let this_boot = read_lossy(serial_log);
+        while let Some(keys) = scenario.keys.get(typed).filter(|keys| this_boot.contains(&keys.after)) {
+            let monitor = monitor.as_ref().expect("built when keys are typed");
+            if let Err(why) = crate::screen::send_keys(monitor, &keys.keys) {
+                eprintln!("xtask: keys after `{}`: {why}", keys.after);
+            }
+            typed += 1;
+        }
+        let log = format!("{earlier}{this_boot}");
         if until_exit {
             if let Some(why) = scenario.forbidden(&log) {
                 break (false, why);

@@ -33,13 +33,13 @@ use abi::user::{
 };
 
 use crate::defwnd::has_window_edge;
-use crate::font::{Face, Quality, TextRun};
+use crate::font::{Named, Quality, TextRun, MARLETT, TAHOMA, TAHOMA_BOLD};
 use crate::gdi::dib::{ColorRef, Rect};
 use crate::gdi::draw::{draw_edge, Op, BF_ADJUST, BF_MIDDLE, BF_RECT, BF_SOFT, EDGE_RAISED, EDGE_SUNKEN};
 
-/// La mise en glyphes d'un texte (`crate::font::text_run`) : police,
+/// La mise en glyphes d'un texte (`crate::font::text_run_named`) : police,
 /// hauteur de LOGFONT, texte, largeur au plus, rendu.
-pub type Layout<'a> = &'a dyn Fn(Face, i32, &[u16], Option<i32>, Quality) -> Option<TextRun>;
+pub type Layout<'a> = &'a dyn Fn(Named, i32, &[u16], Option<i32>, Quality) -> Option<TextRun>;
 
 /// La hauteur de lfCaptionFont et de lfSmCaptionFont par défaut : un em de
 /// 11 pixels.
@@ -112,8 +112,7 @@ fn button_symbol(
     let side = width.min(height);
     let (left, top) = (button.left + (width - side) / 2, button.top + (height - side) / 2);
     let square = Rect::new(left + 1, top + 1, left + side - 1, top + side - 1);
-    let Some(run) = layout(Face::Marlett, square.bottom - square.top, &[symbol as u16], None, Quality::Monochrome)
-    else {
+    let Some(run) = layout(MARLETT, square.bottom - square.top, &[symbol as u16], None, Quality::Monochrome) else {
         return false;
     };
     let baseline = square.top + run.metrics.ascent;
@@ -199,7 +198,7 @@ fn caption_text(
             room.right -= 2 * (m(sm::CXSIZE) + 1);
         }
     }
-    let face = if small { Face::Tahoma } else { Face::TahomaBold };
+    let face = if small { TAHOMA } else { TAHOMA_BOLD };
     let width = (room.right - room.left).max(0);
     let Some(run) = layout(face, CAPTION_FONT_HEIGHT, text, Some(width), Quality::Antialiased) else {
         return false;
@@ -312,7 +311,7 @@ mod tests {
     }
 
     /// No fonts: the frame without its text and symbols.
-    fn no_fonts(_: Face, _: i32, _: &[u16], _: Option<i32>, _: Quality) -> Option<TextRun> {
+    fn no_fonts(_: Named, _: i32, _: &[u16], _: Option<i32>, _: Quality) -> Option<TextRun> {
         None
     }
 
@@ -445,7 +444,7 @@ mod tests {
     /// The caption of `text`, without the gradient: each pixel's colour code
     /// is that of one system colour.
     fn render_caption(style: u32, text: &str, active: bool) -> (impl Fn(i32, i32) -> u32, Unpainted) {
-        let layout: Layout = &crate::font::text_run;
+        let layout: Layout = &crate::font::text_run_named;
         render_text(style, WS_EX_WINDOWEDGE, (200, 100), &units(text), active, false, &coded, layout)
     }
 

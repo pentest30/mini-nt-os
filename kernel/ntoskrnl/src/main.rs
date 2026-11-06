@@ -13,6 +13,7 @@
 
 extern crate alloc;
 mod hardware;
+mod input;
 mod launcher;
 mod shared_data;
 mod sys;
@@ -333,6 +334,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     hal::idt::set_user_fault_hook(Some(user_fault));
 
     x86_64::instructions::interrupts::enable();
+    // The keyboard to win32k (once it has the screen).
+    input::start();
     // Raises starved threads every second (ke::sched).
     spawn_kernel_thread(
         ke::balance::BALANCE_SET_MANAGER_PRIORITY,
@@ -351,6 +354,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     kernel_stack_self_test();
     out_of_page_tables_self_test();
     section_self_test();
+    system_view_self_test();
     object_manager_self_test();
     process_self_test();
     system_service_self_test();
@@ -379,6 +383,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     information_services_self_test();
     duplicate_object_self_test();
     thread_information_self_test();
+    impersonation_self_test();
     trap_gate_self_test();
     user_callback_self_test();
     exception_self_test();
@@ -416,8 +421,9 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     // and a native program under it (spike S1).
     userland::install_system_dll();
     userland::install_nls_tables();
-    userland::install_fonts();
     userland::mount_system_hive();
+    userland::mount_software_hive();
+    userland::install_fonts();
     if cfg!(feature = "test-persistence") {
         persistence_test();
     }
@@ -1706,6 +1712,84 @@ fn section_self_test() {
     log::info!(
         "[smoke] Mm: sections: shared memory seen by two spaces, a different image at 0x400000 in each, \
          copy-on-write, a data file; {resident} section pages, all back"
+    );
+}
+
+/// Mm: system views (`mm::system_view`). A section mapped in the kernel half
+/// is the same memory as its views in a process, reached from any space; its
+/// guard page stays unmapped, its addresses come back for the next view, and
+/// its pages stay the section's.
+fn system_view_self_test() {
+    use abi::ntstatus::STATUS_INVALID_PARAMETER;
+    use alloc::sync::Arc;
+    use core::sync::atomic::Ordering;
+    use mm::address_space::AddressSpace;
+    use mm::pfn::{self, PageUsage};
+    use mm::section::Section;
+    use mm::system_view;
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::PAGE_SIZE as P;
+
+    const MARK: u64 = 0x5359_5354_454D_0001;
+    let rw = PageProtect::READWRITE;
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::Section), s.active(PageUsage::UserPrivate))
+    };
+    let before = counts();
+    let hhdm = hal::HHDM_OFFSET.load(Ordering::Acquire);
+    // SAFETY (the three closures): the addresses are pages of a system view,
+    // mapped while they are used, or of a view in the attached space.
+    let mapped = |va| unsafe { mm::MmPageTables::new(hhdm) }.translate(VirtAddr::new(va)).is_some();
+    let read = |va: u64| unsafe { core::ptr::read_volatile(va as *const u64) };
+    let write = |va: u64, value: u64| unsafe { core::ptr::write_volatile(va as *mut u64, value) };
+
+    let section = Section::create_pagefile(3 * P, rw).expect("pagefile section");
+    section.write_kernel(P, &MARK.to_le_bytes()).expect("write_kernel");
+    let view = system_view::map(&section, 0, 3 * P).expect("a system view");
+    assert!(view.base() >= system_view::REGION_BASE && view.size() == 3 * P, "{:x} {:x}", view.base(), view.size());
+    assert_eq!(section.resident_pages(), 3, "the view creates the section's pages");
+    assert_eq!(read(view.base() + P), MARK, "the view does not see the section");
+    write(view.base() + 2 * P, MARK + 1);
+    let mut bytes = [0u8; 8];
+    section.read_kernel(2 * P, &mut bytes).expect("read_kernel");
+    assert_eq!(u64::from_le_bytes(bytes), MARK + 1, "the section does not see the view");
+    assert!(!mapped(view.base() + 3 * P), "the guard page is mapped");
+
+    // A process's view and the kernel's: one memory, from any space.
+    let space = AddressSpace::new().expect("no PML4");
+    let user = space.map_view(&section, 0, 0, 0, rw).expect("map");
+    in_space(&space, || {
+        assert_eq!(read(user.base + 2 * P), MARK + 1, "the process does not see the kernel's write");
+        write(user.base, MARK + 2);
+        assert_eq!(read(view.base()), MARK + 2, "the system view, attached");
+    });
+    assert_eq!(read(view.base()), MARK + 2, "the system view, from the system's space");
+    assert_eq!(counts().1, before.1, "a shared write took a private page");
+
+    // Refusals; a second view after the guard page; addresses reused.
+    let file = Section::create_data_file(Arc::from(alloc::vec![0u8; 100]), 0, PageProtect::READONLY).expect("file");
+    let reserved = Section::create_shared(P, rw, true, false).expect("reserved section");
+    for (refused, offset, size) in [(&section, 1, P), (&section, 0, 4 * P), (&section, P, 0), (&file, 0, P)] {
+        assert_eq!(system_view::map(refused, offset, size).err(), Some(STATUS_INVALID_PARAMETER));
+    }
+    assert_eq!(system_view::map(&reserved, 0, P).err(), Some(STATUS_INVALID_PARAMETER), "SEC_RESERVE");
+    let second = system_view::map(&section, P, P).expect("a second view");
+    assert_eq!(second.base(), view.base() + 4 * P, "not after the first view and its guard page");
+    assert_eq!(read(second.base()), MARK, "the second view's offset");
+    let first_base = view.base();
+    drop(view);
+    assert!(!mapped(first_base), "a dropped view stays mapped");
+    let third = system_view::map(&section, 0, 2 * P).expect("a third view");
+    assert_eq!(third.base(), first_base, "the first view's addresses not reused");
+    assert_eq!(read(third.base()), MARK + 2, "the pages left with the view");
+    drop((second, third));
+    space.destroy();
+    drop((section, file, reserved));
+    assert_eq!(counts(), before, "the views or the section kept pages");
+    log::info!(
+        "[smoke] Mm: system views: a section in the kernel half, the same memory as a process's view from any \
+         space, a guard page after it, its addresses reused, its pages the section's"
     );
 }
 
@@ -4727,6 +4811,134 @@ fn thread_information_self_test() {
     log::info!(
         "[smoke] Ps: NtQueryInformationThread from user mode: ThreadBasicInformation, ThreadTimes (creation and end), \
          ThreadIsTerminated"
+    );
+}
+
+/// Impersonation from user mode (`sys::security`, Se, M5), as csrsrv does
+/// it (CsrImpersonateClient, CsrRevertToSelf): a thread impersonates itself
+/// (NtImpersonateThread, SecurityImpersonation, static tracking), and
+/// NtOpenThreadToken gives it a copy of type impersonation, at that level
+/// (copy on open), which it then impersonates; NtSetInformationThread
+/// (ThreadImpersonationToken, NULL) reverts it, after which it has no token.
+/// A primary token, a handle without TOKEN_IMPERSONATE and an unknown level
+/// are refused.
+fn impersonation_self_test() {
+    use abi::lpc::SecurityQualityOfService32;
+    use abi::ntstatus::{
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_BAD_TOKEN_TYPE, STATUS_INVALID_PARAMETER, STATUS_NO_TOKEN,
+        STATUS_SUCCESS, STATUS_WAIT_0,
+    };
+    use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD, THREAD_IMPERSONATION_TOKEN};
+    use abi::security::{
+        SECURITY_IMPERSONATION, SECURITY_STATIC_TRACKING, TOKEN_IMPERSONATION_LEVEL, TOKEN_TYPE,
+        TOKEN_TYPE_IMPERSONATION,
+    };
+    use abi::services;
+    use alloc::sync::Arc;
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::section::Section;
+    use pe::builder::Pe32Builder;
+
+    const MS: i64 = 10_000;
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_IMPERSONATE: u32 = 0x0004;
+    const IMAGE_BASE: u32 = 0x40_0000;
+    const DATA: u32 = IMAGE_BASE + 0x2000;
+    const STATUS: u32 = DATA; // 10 statuses
+    const QOS: u32 = DATA + 0x30;
+    const BAD_QOS: u32 = DATA + 0x40;
+    const TOKEN: u32 = DATA + 0x50;
+    const AFTER: u32 = DATA + 0x54;
+    const PRIMARY: u32 = DATA + 0x58;
+    const NULL_HANDLE: u32 = DATA + 0x5C;
+    const KIND: u32 = DATA + 0x60;
+    const LEVEL: u32 = DATA + 0x64;
+    const RETURNED: u32 = DATA + 0x68;
+    const DONE: u32 = DATA + 0xFC;
+
+    let (v, m) = (Arg::Value, Arg::Memory);
+    let status = |i: u32| STATUS + 4 * i;
+    let (me, set) = (NT_CURRENT_THREAD, services::NtSetInformationThread);
+    let class = THREAD_IMPERSONATION_TOKEN;
+    let mut code = Code::new();
+    code.call_args(services::NtImpersonateThread, &[v(me), v(me), v(QOS)]).store_eax(status(0));
+    code.call_args(services::NtOpenThreadToken, &[v(me), v(TOKEN_QUERY), v(0), v(TOKEN)]).store_eax(status(1));
+    let query = services::NtQueryInformationToken;
+    code.call_args(query, &[m(TOKEN), v(TOKEN_TYPE), v(KIND), v(4), v(RETURNED)]).store_eax(status(2));
+    code.call_args(query, &[m(TOKEN), v(TOKEN_IMPERSONATION_LEVEL), v(LEVEL), v(4), v(RETURNED)]).store_eax(status(3));
+    code.call_args(set, &[v(me), v(class), v(NULL_HANDLE), v(4)]).store_eax(status(4));
+    code.call_args(services::NtOpenThreadToken, &[v(me), v(TOKEN_QUERY), v(0), v(AFTER)]).store_eax(status(5));
+    let process_token = services::NtOpenProcessToken;
+    code.call_args(process_token, &[v(NT_CURRENT_PROCESS), v(TOKEN_IMPERSONATE), v(PRIMARY)]).store_eax(status(6));
+    code.call_args(set, &[v(me), v(class), v(PRIMARY), v(4)]).store_eax(status(7));
+    code.call_args(set, &[v(me), v(class), v(TOKEN), v(4)]).store_eax(status(8));
+    code.call_args(services::NtImpersonateThread, &[v(me), v(me), v(BAD_QOS)]).store_eax(status(9));
+    code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
+    let mut text = [0xCC; 0x1000];
+    text[..code.0.len()].copy_from_slice(&code.0);
+    let file = Pe32Builder::new(IMAGE_BASE)
+        .entry_point(0x1000)
+        .section(".text", 0x1000, 0x1000, &text, pe::SCN_CNT_CODE | pe::SCN_MEM_EXECUTE | pe::SCN_MEM_READ)
+        .section(".data", 0x2000, 0x100, &[0u8; 0x100], pe::SCN_MEM_READ | pe::SCN_MEM_WRITE)
+        .build();
+    let section = Section::create_image(Arc::from(file)).expect("image section");
+    let info = section.image().expect("an image").info;
+    let process = ps::create_process(&ps::system_process(), &section, "impersonate.exe", false).expect("a process");
+    // SECURITY_QUALITY_OF_SERVICE: Length, ImpersonationLevel,
+    // ContextTrackingMode, EffectiveOnly.
+    for (at, level) in [(QOS, SECURITY_IMPERSONATION), (BAD_QOS, 4)] {
+        let mut qos = [0u8; core::mem::size_of::<SecurityQualityOfService32>()];
+        qos[..4].copy_from_slice(&12u32.to_le_bytes());
+        qos[4..8].copy_from_slice(&level.to_le_bytes());
+        qos[8] = SECURITY_STATIC_TRACKING;
+        process.write_memory(u64::from(at), &qos).expect("write a QoS");
+    }
+    let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
+    let thread = ps::create_thread(&process, IMAGE_BASE + 0x1000, &stack).expect("a thread");
+    let read = |addr: u32| {
+        let mut bytes = [0u8; 4];
+        process.read_memory(u64::from(addr), &mut bytes).expect("read the process");
+        u32::from_le_bytes(bytes)
+    };
+    for waited in 0.. {
+        if read(DONE) != 0 {
+            break;
+        }
+        assert!(waited < 300, "the impersonation test program did not finish");
+        // SAFETY: the boot thread, at PASSIVE_LEVEL.
+        unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
+    }
+
+    let statuses: alloc::vec::Vec<NtStatus> = (0..10).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!(statuses[0], STATUS_SUCCESS, "NtImpersonateThread");
+    assert_eq!(statuses[1], STATUS_SUCCESS, "NtOpenThreadToken while impersonating");
+    assert_eq!((statuses[2], read(KIND)), (STATUS_SUCCESS, TOKEN_TYPE_IMPERSONATION), "an impersonation token");
+    assert_eq!((statuses[3], read(LEVEL)), (STATUS_SUCCESS, SECURITY_IMPERSONATION), "at the level asked");
+    assert_eq!(statuses[4], STATUS_SUCCESS, "reverted");
+    assert_eq!(statuses[5], STATUS_NO_TOKEN, "no token once reverted");
+    assert_eq!(statuses[6], STATUS_SUCCESS, "the process token");
+    assert_eq!(statuses[7], STATUS_BAD_TOKEN_TYPE, "a primary token");
+    assert_eq!(statuses[8], STATUS_ACCESS_DENIED, "a handle without TOKEN_IMPERSONATE");
+    assert_eq!(statuses[9], STATUS_INVALID_PARAMETER, "an unknown level");
+    assert!(thread.impersonation().is_none(), "the thread impersonates nothing");
+
+    ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
+    // SAFETY: the object of a process held here.
+    let ended = unsafe {
+        ke_wait_for_single_object::<KePlatform>(
+            process.dispatcher_object(),
+            ProcessorMode::Kernel,
+            false,
+            Some(-3000 * MS),
+        )
+    };
+    assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
+    drop((thread, process));
+    ps::wait_for_reaper();
+    log::info!(
+        "[smoke] Se: impersonation from user mode: NtImpersonateThread, a copy from NtOpenThreadToken, \
+         ThreadImpersonationToken reverts; primary tokens and unknown levels refused"
     );
 }
 

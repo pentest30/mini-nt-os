@@ -61,6 +61,9 @@ pub struct ProcessInfo {
     pub dc_attrs: KSpinLock<crate::gdi::dc::AttrPool>,
     /// Les places libres pour les attributs de ses régions (`pPoolRgnAttr`).
     pub rgn_attrs: KSpinLock<crate::gdi::dc::AttrPool>,
+    /// Les places libres pour les attributs de ses pinceaux
+    /// (`pPoolBrushAttr`).
+    pub brush_attrs: KSpinLock<crate::gdi::dc::AttrPool>,
     /// Sa station de fenêtres (`hwinsta`, `prpwinsta`, `amwinsta`).
     window_station: KSpinLock<Option<ProcessWindowStation>>,
     /// Ses vues des tas de bureau (HeapMappings), une par bureau, avec le
@@ -101,6 +104,7 @@ impl ProcessInfo {
             gdi_view,
             dc_attrs: KSpinLock::new(crate::gdi::dc::AttrPool::default()),
             rgn_attrs: KSpinLock::new(crate::gdi::dc::AttrPool::default()),
+            brush_attrs: KSpinLock::new(crate::gdi::dc::AttrPool::default()),
             window_station: KSpinLock::new(None),
             desktop_views: KSpinLock::new(Vec::new()),
             startup_desktop: KSpinLock::new(None),
@@ -451,6 +455,15 @@ pub const fn thread_flags(csrss: u32, pid: u32) -> u32 {
     }
 }
 
+/// Le `PROCESSINFO` de `process`, s'il est déjà un processus GUI (sans le
+/// convertir, à la différence de [`process_info`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn existing_process_info(process: &Arc<Object<EProcess>>) -> Option<Arc<ProcessInfo>> {
+    process.win32_process().map(downcast)
+}
+
 /// Le `PROCESSINFO` de `process`, créé s'il n'en a pas (InitProcessCallback,
 /// GdiProcessCreate) : ses vues de la section partagée de USER et de la
 /// table des handles GDI ; son PEB reçoit l'adresse de la seconde
@@ -496,9 +509,11 @@ pub fn process_info(process: &Arc<Object<EProcess>>) -> Result<Arc<ProcessInfo>,
 /// PsConvertToGuiThread : le thread courant devient un thread GUI, s'il ne
 /// l'est pas, et son processus un processus GUI ; rend son `THREADINFO`.
 /// Son TEB reçoit son `THREADINFO` et son `CLIENTINFO`. Un thread client
-/// (ni du système ni de `csrss`) est ensuite préparé par `user32`
-/// (ClientThreadSetup, [`crate::callback`]), comme à la fin
-/// d'InitThreadCallback.
+/// (ni du système ni de `csrss`) va sur le bureau de démarrage de son
+/// processus, pris de ses paramètres s'il n'en a pas encore
+/// ([`crate::startup::assign_startup_desktop`] ; sans lui, il reste sans
+/// bureau, journalisé), puis il est préparé par `user32` (ClientThreadSetup,
+/// [`crate::callback`]), comme à la fin d'InitThreadCallback.
 ///
 /// # Errors
 /// `STATUS_INVALID_PARAMETER` hors d'un thread de Ps ; celles de
@@ -524,6 +539,13 @@ pub fn convert_current_thread() -> Result<Arc<ThreadInfo>, NtStatus> {
     let info: Arc<ThreadInfo> = downcast(thread.set_win32_thread(info));
     if !is_client_thread(info.ti_flags) {
         return Ok(info);
+    }
+    if let Err(status) = crate::startup::assign_startup_desktop(&process, &process_info) {
+        log::warn!(
+            "win32k: no startup desktop for thread {} of {} ({status:?})",
+            thread.tid(),
+            process.image_file_name()
+        );
     }
     log::info!("win32k: ClientThreadSetup for thread {} of {}", thread.tid(), process.image_file_name());
     // Nothing held across the callback: a thread that ends in it drops

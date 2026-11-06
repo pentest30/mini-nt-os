@@ -76,6 +76,16 @@ pub unsafe trait Platform {
     /// dans les objets qu'il attend.
     unsafe fn swap_thread(old_irql: Irql) -> NtStatus;
 
+    /// Verrou dispatcher tenu, pris depuis `old_irql`. Le thread courant cède
+    /// le reste de son quantum à un thread prêt de sa priorité, s'il y en a
+    /// un (Sleep(0)) ; à sa reprise, ou aussitôt sans un tel thread, le verrou
+    /// a été relâché et l'IRQL rabaissé à `old_irql`.
+    ///
+    /// # Safety
+    /// Verrou dispatcher tenu, pris depuis `old_irql` ; le thread courant
+    /// s'exécute (il n'attend rien).
+    unsafe fn yield_execution(old_irql: Irql);
+
     /// Format NT : négatif = relatif (unités de 100 ns), positif = absolu.
     /// Retourne `false` si l'échéance est déjà passée (timer non inséré).
     /// Inséré, le timer a `header.inserted` à 1 ; `cancel_timer` et son
@@ -761,8 +771,9 @@ pub unsafe fn ke_wait_for_multiple_objects<P: Platform>(
 
 /// KeDelayExecutionThread : bloque le thread courant pendant `interval` (format NT
 /// des échéances) ; STATUS_SUCCESS à l'échéance. Une attente alertable peut finir
-/// plus tôt (STATUS_USER_APC). Un intervalle nul ou déjà échu retourne aussitôt,
-/// sans céder le processeur.
+/// plus tôt (STATUS_USER_APC). Un intervalle déjà échu retourne aussitôt ; un
+/// intervalle nul (Sleep(0)) cède d'abord le reste du quantum à un thread prêt
+/// de même priorité, s'il y en a un (`Platform::yield_execution`).
 ///
 /// # Safety
 /// Le thread courant a été initialisé par [`KThread::init`].
@@ -778,7 +789,16 @@ pub unsafe fn ke_delay_execution_thread<P: Platform>(
     match unsafe {
         ke_wait_for_multiple_objects::<P>(&[], WaitType::WaitAny, wait_mode, alertable, Some(interval), None)
     } {
-        STATUS_TIMEOUT => STATUS_SUCCESS,
+        STATUS_TIMEOUT => {
+            if interval == 0 {
+                // SAFETY: the current thread runs, waiting for nothing.
+                unsafe {
+                    let old_irql = DISPATCHER_LOCK.acquire::<P>();
+                    P::yield_execution(old_irql);
+                }
+            }
+            STATUS_SUCCESS
+        }
         status => status,
     }
 }

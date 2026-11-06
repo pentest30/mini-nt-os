@@ -27,18 +27,52 @@ static KEY_BUF: [core::sync::atomic::AtomicU8; KEY_BUF_SIZE] =
     [const { core::sync::atomic::AtomicU8::new(0) }; KEY_BUF_SIZE];
 static KEY_HEAD: AtomicUsize = AtomicUsize::new(0); // ISR writes here
 static KEY_TAIL: AtomicUsize = AtomicUsize::new(0); // consumer reads here
+/// The bytes the ISR could not keep, the ring being full.
+static DROPPED: AtomicUsize = AtomicUsize::new(0);
 
-/// Called from the IRQ1 ISR — push a scancode into the ring buffer.
+/// How many bytes the ISR could not keep since the boot, the ring being
+/// full (its reader too slow): each one is a key lost, or a release, which
+/// leaves a key down.
+///
+/// # IRQL
+/// Any level.
+pub fn dropped() -> usize {
+    DROPPED.load(Ordering::Relaxed)
+}
+
+/// What the IRQ1 ISR calls once a byte is in the ring (0: nothing).
+static NOTIFY: AtomicUsize = AtomicUsize::new(0);
+
+/// Sets what the IRQ1 ISR calls once a byte is in the ring: the keyboard
+/// driver's reader queues a DPC (`drivers/input/i8042`). `None`: nothing.
+///
+/// # IRQL
+/// Any level. `hook` runs in the ISR, at DEVICE_LEVEL: it must neither
+/// block nor allocate.
+pub fn set_notify(hook: Option<fn()>) {
+    NOTIFY.store(hook.map_or(0, |hook| hook as usize), Ordering::Release);
+}
+
+/// Called from the IRQ1 ISR — push a scancode into the ring buffer, then
+/// call the hook of [`set_notify`].
 /// No heap, no locks, ISR-safe.
 pub fn isr_push_scancode(scancode: u8) {
     let head = KEY_HEAD.load(Ordering::Relaxed);
     let next = (head + 1) % KEY_BUF_SIZE;
     let tail = KEY_TAIL.load(Ordering::Acquire);
     if next == tail {
+        // Full: counted (`dropped`), not logged from the ISR.
+        DROPPED.fetch_add(1, Ordering::Relaxed);
         return;
-    } // buffer full — drop key
+    }
     KEY_BUF[head].store(scancode, Ordering::Relaxed);
     KEY_HEAD.store(next, Ordering::Release);
+    let hook = NOTIFY.load(Ordering::Acquire);
+    if hook != 0 {
+        // SAFETY: only `set_notify` stores here, the address of a `fn()`.
+        let hook: fn() = unsafe { core::mem::transmute::<usize, fn()>(hook) };
+        hook();
+    }
 }
 
 /// Pop the next scancode from the ring buffer. Returns None if empty.

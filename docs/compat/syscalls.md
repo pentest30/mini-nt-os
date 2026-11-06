@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 102 | 296 |
-| win32k | 68 | 737 |
+| ntoskrnl | 104 | 296 |
+| win32k | 84 | 737 |
 
 ## ntoskrnl
 
@@ -110,7 +110,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x005c` | `NtGetWriteWatch` | 7 |  |
 | `0x005d` | `NtImpersonateAnonymousToken` | 1 |  |
 | `0x005e` | `NtImpersonateClientOfPort` | 2 |  |
-| `0x005f` | `NtImpersonateThread` | 3 |  |
+| `0x005f` | `NtImpersonateThread` | 3 | ✅ |
 | `0x0060` | `NtInitializeRegistry` | 1 |  |
 | `0x0061` | `NtInitiatePowerAction` | 4 |  |
 | `0x0062` | `NtIsProcessInJob` | 2 |  |
@@ -164,7 +164,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0092` | `NtQueryBootEntryOrder` | 2 |  |
 | `0x0093` | `NtQueryBootOptions` | 2 |  |
 | `0x0094` | `NtQueryDebugFilterState` | 2 | ✅ |
-| `0x0095` | `NtQueryDefaultLocale` | 2 |  |
+| `0x0095` | `NtQueryDefaultLocale` | 2 | ✅ |
 | `0x0096` | `NtQueryDefaultUILanguage` | 1 |  |
 | `0x0097` | `NtQueryDirectoryFile` | 11 | ✅ |
 | `0x0098` | `NtQueryDirectoryObject` | 7 |  |
@@ -329,7 +329,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x100a` | `NtGdiFontIsLinked` | 1 |  |
 | `0x100b` | `NtGdiArcInternal` | 10 |  |
 | `0x100c` | `NtGdiBeginPath` | 1 |  |
-| `0x100d` | `NtGdiBitBlt` | 11 |  |
+| `0x100d` | `NtGdiBitBlt` | 11 | ✅ |
 | `0x100e` | `NtGdiCancelDC` | 1 |  |
 | `0x100f` | `NtGdiCheckBitmapBits` | 8 |  |
 | `0x1010` | `NtGdiCloseFigure` | 1 |  |
@@ -346,10 +346,10 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x101b` | `NtGdiCreateColorSpace` | 1 |  |
 | `0x101c` | `NtGdiCreateColorTransform` | 8 |  |
 | `0x101d` | `NtGdiCreateCompatibleBitmap` | 3 |  |
-| `0x101e` | `NtGdiCreateCompatibleDC` | 1 |  |
+| `0x101e` | `NtGdiCreateCompatibleDC` | 1 | ✅ |
 | `0x101f` | `NtGdiCreateDIBBrush` | 6 |  |
 | `0x1020` | `NtGdiCreateDIBitmapInternal` | 11 |  |
-| `0x1021` | `NtGdiCreateDIBSection` | 9 |  |
+| `0x1021` | `NtGdiCreateDIBSection` | 9 | ✅ |
 | `0x1022` | `NtGdiCreateEllipticRgn` | 4 |  |
 | `0x1023` | `NtGdiCreateHalftonePalette` | 1 |  |
 | `0x1024` | `NtGdiCreateHatchBrushInternal` | 3 |  |
@@ -360,7 +360,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1029` | `NtGdiCreateRectRgn` | 4 | ✅ |
 | `0x102a` | `NtGdiCreateRoundRectRgn` | 6 |  |
 | `0x102b` | `NtGdiCreateServerMetaFile` | 6 |  |
-| `0x102c` | `NtGdiCreateSolidBrush` | 2 |  |
+| `0x102c` | `NtGdiCreateSolidBrush` | 2 | ✅ |
 | `0x102d` | `NtGdiD3dContextCreate` | 4 |  |
 | `0x102e` | `NtGdiD3dContextDestroy` | 1 |  |
 | `0x102f` | `NtGdiD3dContextDestroyAll` | 1 |  |
@@ -572,7 +572,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10fd` | `NtGdiSaveDC` | 1 |  |
 | `0x10fe` | `NtGdiScaleViewportExtEx` | 6 |  |
 | `0x10ff` | `NtGdiScaleWindowExtEx` | 6 |  |
-| `0x1100` | `NtGdiSelectBitmap` | 2 |  |
+| `0x1100` | `NtGdiSelectBitmap` | 2 | ✅ |
 | `0x1101` | `NtGdiSelectBrush` | 2 |  |
 | `0x1102` | `NtGdiSelectClipPath` | 2 |  |
 | `0x1103` | `NtGdiSelectFont` | 2 | ✅ |
@@ -649,7 +649,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x114a` | `NtUserCloseClipboard` | 0 |  |
 | `0x114b` | `NtUserCloseDesktop` | 1 | ✅ |
 | `0x114c` | `NtUserCloseWindowStation` | 1 | ✅ |
-| `0x114d` | `NtUserConsoleControl` | 3 |  |
+| `0x114d` | `NtUserConsoleControl` | 3 | ✅ |
 | `0x114e` | `NtUserConvertMemHandle` | 2 |  |
 | `0x114f` | `NtUserCopyAcceleratorTable` | 3 |  |
 | `0x1150` | `NtUserCountClipboardFormats` | 0 |  |
@@ -698,7 +698,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x117b` | `NtUserGetAltTabInfo` | 6 |  |
 | `0x117c` | `NtUserGetAncestor` | 2 |  |
 | `0x117d` | `NtUserGetAppImeLevel` | 1 |  |
-| `0x117e` | `NtUserGetAsyncKeyState` | 1 |  |
+| `0x117e` | `NtUserGetAsyncKeyState` | 1 | ✅ |
 | `0x117f` | `NtUserGetAtomName` | 2 |  |
 | `0x1180` | `NtUserGetCaretBlinkTime` | 0 |  |
 | `0x1181` | `NtUserGetCaretPos` | 1 |  |
@@ -729,9 +729,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x119a` | `NtUserGetInternalWindowPos` | 3 |  |
 | `0x119b` | `NtUserGetKeyboardLayoutList` | 2 | ✅ |
 | `0x119c` | `NtUserGetKeyboardLayoutName` | 1 |  |
-| `0x119d` | `NtUserGetKeyboardState` | 1 |  |
+| `0x119d` | `NtUserGetKeyboardState` | 1 | ✅ |
 | `0x119e` | `NtUserGetKeyNameText` | 3 |  |
-| `0x119f` | `NtUserGetKeyState` | 1 |  |
+| `0x119f` | `NtUserGetKeyState` | 1 | ✅ |
 | `0x11a0` | `NtUserGetListBoxInfo` | 1 |  |
 | `0x11a1` | `NtUserGetMenuBarInfo` | 4 |  |
 | `0x11a2` | `NtUserGetMenuIndex` | 2 |  |
@@ -810,7 +810,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11eb` | `NtUserRegisterWindowMessage` | 1 |  |
 | `0x11ec` | `NtUserRemoveMenu` | 3 |  |
 | `0x11ed` | `NtUserRemoveProp` | 2 |  |
-| `0x11ee` | `NtUserResolveDesktop` | 4 |  |
+| `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
 | `0x11f0` | `NtUserSBGetParms` | 4 |  |
 | `0x11f1` | `NtUserScrollDC` | 7 |  |
@@ -828,7 +828,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11fd` | `NtUserSetCursor` | 1 |  |
 | `0x11fe` | `NtUserSetCursorContents` | 2 |  |
 | `0x11ff` | `NtUserSetCursorIconData` | 4 |  |
-| `0x1200` | `NtUserSetFocus` | 1 |  |
+| `0x1200` | `NtUserSetFocus` | 1 | ✅ |
 | `0x1201` | `NtUserSetImeHotKey` | 5 |  |
 | `0x1202` | `NtUserSetImeInfoEx` | 1 |  |
 | `0x1203` | `NtUserSetImeOwnerWindow` | 2 |  |
@@ -856,7 +856,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1219` | `NtUserSetThreadState` | 2 |  |
 | `0x121a` | `NtUserSetTimer` | 4 |  |
 | `0x121b` | `NtUserSetWindowFNID` | 2 |  |
-| `0x121c` | `NtUserSetWindowLong` | 4 |  |
+| `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
 | `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
 | `0x121f` | `NtUserSetWindowRgn` | 3 |  |
@@ -868,20 +868,20 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1225` | `NtUserShowCaret` | 1 |  |
 | `0x1226` | `NtUserShowScrollBar` | 3 |  |
 | `0x1227` | `NtUserShowWindow` | 2 | ✅ |
-| `0x1228` | `NtUserShowWindowAsync` | 2 |  |
+| `0x1228` | `NtUserShowWindowAsync` | 2 | ✅ |
 | `0x1229` | `NtUserSoundSentry` | 0 |  |
 | `0x122a` | `NtUserSwitchDesktop` | 1 | ✅ |
 | `0x122b` | `NtUserSystemParametersInfo` | 4 |  |
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
 | `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
 | `0x122e` | `NtUserThunkedMenuItemInfo` | 6 |  |
-| `0x122f` | `NtUserToUnicodeEx` | 7 |  |
+| `0x122f` | `NtUserToUnicodeEx` | 7 | ✅ |
 | `0x1230` | `NtUserTrackMouseEvent` | 1 |  |
 | `0x1231` | `NtUserTrackPopupMenuEx` | 6 |  |
 | `0x1232` | `NtUserCalcMenuBar` | 5 |  |
 | `0x1233` | `NtUserPaintMenuBar` | 6 |  |
 | `0x1234` | `NtUserTranslateAccelerator` | 3 |  |
-| `0x1235` | `NtUserTranslateMessage` | 2 |  |
+| `0x1235` | `NtUserTranslateMessage` | 2 | ✅ |
 | `0x1236` | `NtUserUnhookWindowsHookEx` | 1 |  |
 | `0x1237` | `NtUserUnhookWinEvent` | 1 |  |
 | `0x1238` | `NtUserUnloadKeyboardLayout` | 1 |  |
@@ -988,7 +988,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x129d` | `NtDxEngGetRedirectionBitmap` | 1 |  |
 | `0x129e` | `NtGdiSetViewportOrgEx` | 4 |  |
 | `0x129f` | `NtGdiSetWindowOrgEx` | 4 |  |
-| `0x12a0` | `NtGdiGetFontFamilyInfo` | 4 |  |
+| `0x12a0` | `NtGdiGetFontFamilyInfo` | 4 | ✅ |
 | `0x12a1` | `NtGdiOffsetViewportOrgEx` | 4 |  |
 | `0x12a2` | `NtGdiOffsetWindowOrgEx` | 4 |  |
 | `0x12a3` | `NtUserGetMonitorInfo` | 2 | ✅ |

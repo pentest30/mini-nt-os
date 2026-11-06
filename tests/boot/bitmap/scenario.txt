@@ -1,0 +1,57 @@
+# M5, console (docs/compat/m5-console.md, step 5): BITMAP1.EXE
+# (tests/native/bitmap1.c, MinGW, linked to ReactOS's kernel32, user32 and
+# gdi32) takes the place of winlogon.exe, which smss starts as its initial
+# command once csrss runs. Like winlogon, it takes WinSta0\Default and opens
+# a window; in its WM_PAINT, what consrv paints its console with:
+# - GetDeviceCaps reads the display's capabilities in the shared GDI table
+#   (DC_PRIMARY_DISPLAY), for a window's DC and for a memory DC;
+# - CreateCompatibleDC, CreateSolidBrush, CreateDIBSection (32 bits per
+#   pixel, from the top row down): the pixels are in a section that the
+#   program sees at the address CreateDIBSection gives it, and the kernel
+#   by a system view;
+# - SelectObject of the DIB gives back the default bitmap; PatBlt with the
+#   brush into the DIB: the program reads the brush's pixel;
+# - the program writes a red pixel, BitBlt copies the DIB to the window (the
+#   kernel reads it), BitBlt copies that within the window (a scroll), then
+#   from the window into a second DIB, where the program reads it;
+# - a bottom-up DIB: its top row is the last in memory;
+# - a bitmap goes in one DC at a time; DeleteObject of a selected bitmap
+#   fails; once out of the DC, the bitmaps, the brush (whose deletion gdi32
+#   queues) and the memory DC go, and the DIB's pixels leave the program's
+#   memory.
+features = test-smss
+requires = userland, native
+initial-command = BITMAP1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [bitmap] on WinSta0\Default
+expect = [bitmap] GetDeviceCaps: 1280x800, 32 bits, 1 plane, -1 colours, 96 dpi, BitBlt yes; memory DC 32 bits
+expect = [bitmap] CreateCompatibleDC: a DC, CreateSolidBrush: a brush, CreateDIBSection: a bitmap, bits mapped
+expect = [bitmap] SelectObject: the old bitmap is the default bitmap
+expect = [bitmap] SelectObject in a second DC: refused; the pixels: mapped, type 7
+expect = [bitmap] PatBlt: 1, pixel 00123456
+expect = [bitmap] BitBlt to the window: 1; within it: 1
+expect = [bitmap] BitBlt from the window: 1, pixels 00123456 00ff0000
+expect = [bitmap] SelectObject again: the old bitmap is the first DIB; DeleteObject of the selected one: 0
+expect = [bitmap] bottom-up: the top row last, the first in memory untouched
+expect = [bitmap] DeleteObject: 1 1 1, DeleteDC: 1
+expect = [bitmap] deleted: the pixels free, types 0 0 0
+expect = [bitmap] painted: yes
+expect = [bitmap] done
+expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
+forbid = *** STOP:
+forbid = sys: NtGdiCreateCompatibleDC (0x101e) is not implemented
+forbid = sys: NtGdiCreateDIBSection (0x1021) is not implemented
+forbid = sys: NtGdiSelectBitmap (0x1100) is not implemented
+forbid = sys: NtGdiBitBlt (0x100d) is not implemented
+forbid = sys: NtGdiCreateSolidBrush (0x102c) is not implemented
+
+# The window's client area is at (303, 223): the DIB copied at (10, 10),
+# the brush's colour with the program's red pixel at (11, 11); the same
+# copied within the window at (100, 10); the window's colour between them.
+screen = 313 233 123456
+screen = 314 234 FF0000
+screen = 403 233 123456
+screen = 404 234 FF0000
+screen = 330 233 FFFFFF

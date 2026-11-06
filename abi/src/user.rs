@@ -29,6 +29,26 @@ pub const TWOPARAM_ROUTINE_REGISTERLOGONPROCESS: u32 = 0x69;
 /// csrss gives win32k its API port (`USERTHREADINFOCLASS`).
 pub const USER_THREAD_CSR_API_PORT: u32 = 10;
 
+// CONSOLECONTROL: what consrv asks of NtUserConsoleControl.
+/// The console input thread of a desktop (DESKTOP_CONSOLE_THREAD).
+pub const CONSOLE_CTRL_DESKTOP_CONSOLE_THREAD: u32 = 0;
+/// The atom of the console window class (an ATOM).
+pub const GUI_CONSOLE_WND_CLASS_ATOM: u32 = 1;
+/// A palette of consrv made public (an HPALETTE).
+pub const CONSOLE_MAKE_PALETTE_PUBLIC: u32 = 5;
+/// The display taken for a full-screen console.
+pub const CONSOLE_ACQUIRE_DISPLAY_OWNERSHIP: u32 = 6;
+
+/// DESKTOP_CONSOLE_THREAD: a desktop and the ID of its console input thread
+/// (`INVALID_HANDLE_VALUE` to only read it); win32k gives back the previous
+/// one.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DesktopConsoleThread32 {
+    pub desktop_handle: u32,
+    pub thread_id: u32,
+}
+
 /// KLF_*: how LoadKeyboardLayout loads a layout.
 pub const KLF_ACTIVATE: u32 = 0x0001;
 pub const KLF_SUBSTITUTE_OK: u32 = 0x0002;
@@ -552,6 +572,7 @@ pub const WND_UNICODE: u32 = 0x1;
 pub const WS_POPUP: u32 = 0x8000_0000;
 pub const WS_CHILD: u32 = 0x4000_0000;
 pub const WS_MINIMIZE: u32 = 0x2000_0000;
+pub const WS_DISABLED: u32 = 0x0800_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
 pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
@@ -707,6 +728,16 @@ pub const SW_RESTORE: u32 = 9;
 pub const SW_SHOWDEFAULT: u32 = 10;
 pub const SW_FORCEMINIMIZE: u32 = 11;
 pub const SW_MAX: u32 = 11;
+
+/// GWL_* and GWLP_*: the negative indices of SetWindowLong (a non-negative
+/// index is an offset in the window's extra bytes).
+pub const GWLP_WNDPROC: i32 = -4;
+pub const GWLP_HINSTANCE: i32 = -6;
+pub const GWLP_HWNDPARENT: i32 = -8;
+pub const GWLP_ID: i32 = -12;
+pub const GWL_STYLE: i32 = -16;
+pub const GWL_EXSTYLE: i32 = -20;
+pub const GWLP_USERDATA: i32 = -21;
 /// SIZE_*, the `wParam` of WM_SIZE: restored, minimized, maximized.
 pub const SIZE_RESTORED: u32 = 0;
 pub const SIZE_MINIMIZED: u32 = 1;
@@ -715,6 +746,59 @@ pub const WM_NCCALCSIZE: u32 = 0x0083;
 pub const WM_PARENTNOTIFY: u32 = 0x0210;
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_DEVICECHANGE: u32 = 0x0219;
+/// The keyboard messages: a key down or up, the character it gives
+/// (TranslateMessage), and their system variants (Alt down, F10).
+pub const WM_KEYDOWN: u32 = 0x0100;
+pub const WM_KEYUP: u32 = 0x0101;
+pub const WM_CHAR: u32 = 0x0102;
+pub const WM_DEADCHAR: u32 = 0x0103;
+pub const WM_SYSKEYDOWN: u32 = 0x0104;
+pub const WM_SYSKEYUP: u32 = 0x0105;
+pub const WM_SYSCHAR: u32 = 0x0106;
+pub const WM_SYSDEADCHAR: u32 = 0x0107;
+/// WM_ACTIVATE, WM_SETFOCUS, WM_KILLFOCUS: a window activated or not,
+/// taking or losing the keyboard.
+pub const WM_ACTIVATE: u32 = 0x0006;
+pub const WM_SETFOCUS: u32 = 0x0007;
+pub const WM_KILLFOCUS: u32 = 0x0008;
+/// WA_INACTIVE, WA_ACTIVE: the `wParam` of WM_ACTIVATE.
+pub const WA_INACTIVE: u32 = 0;
+pub const WA_ACTIVE: u32 = 1;
+/// KF_*: the bits of the high word of a keyboard message's `lParam`.
+pub const KF_EXTENDED: u32 = 0x0100;
+pub const KF_ALTDOWN: u32 = 0x2000;
+pub const KF_REPEAT: u32 = 0x4000;
+pub const KF_UP: u32 = 0x8000;
+
+/// The virtual keys (VK_*) that win32k looks at.
+pub mod vk {
+    pub const VK_CLEAR: u8 = 0x0C;
+    pub const VK_SHIFT: u8 = 0x10;
+    pub const VK_CONTROL: u8 = 0x11;
+    pub const VK_MENU: u8 = 0x12;
+    pub const VK_CAPITAL: u8 = 0x14;
+    pub const VK_PRIOR: u8 = 0x21;
+    pub const VK_NEXT: u8 = 0x22;
+    pub const VK_END: u8 = 0x23;
+    pub const VK_HOME: u8 = 0x24;
+    pub const VK_LEFT: u8 = 0x25;
+    pub const VK_UP: u8 = 0x26;
+    pub const VK_RIGHT: u8 = 0x27;
+    pub const VK_DOWN: u8 = 0x28;
+    pub const VK_INSERT: u8 = 0x2D;
+    pub const VK_DELETE: u8 = 0x2E;
+    pub const VK_NUMPAD0: u8 = 0x60;
+    pub const VK_DECIMAL: u8 = 0x6E;
+    pub const VK_F10: u8 = 0x79;
+    pub const VK_NUMLOCK: u8 = 0x90;
+    pub const VK_LSHIFT: u8 = 0xA0;
+    pub const VK_RSHIFT: u8 = 0xA1;
+    pub const VK_LCONTROL: u8 = 0xA2;
+    pub const VK_RCONTROL: u8 = 0xA3;
+    pub const VK_LMENU: u8 = 0xA4;
+    pub const VK_RMENU: u8 = 0xA5;
+}
+
 /// WM_MAXIMUM (ReactOS): the highest message a filter can name.
 pub const WM_MAXIMUM: u32 = 0x0001_FFFF;
 
@@ -730,6 +814,8 @@ pub const POINTER_MESSAGES: [u32; 63] = [
 ];
 
 /// QS_*, the kinds of messages in a queue (`fsWakeBits`, `fsChangeBits`).
+/// QS_KEY: a keyboard message (WM_KEYDOWN, WM_CHAR...).
+pub const QS_KEY: u16 = 0x0001;
 pub const QS_POSTMESSAGE: u16 = 0x0008;
 /// QS_PAINT: a window of the thread has something to paint (`cPaintsReady`).
 pub const QS_PAINT: u16 = 0x0020;
@@ -1121,6 +1207,8 @@ pub struct ClientThreadInfo32 {
 }
 
 const _: () = {
+    assert!(size_of::<DesktopConsoleThread32>() == 8);
+    assert!(offset_of!(DesktopConsoleThread32, thread_id) == 4);
     assert!(offset_of!(Wnd32, state) == 0x14);
     // user32!UpdateWindow: `cmp [pwnd + 0x68], 0` (hrgnUpdate), then
     // `cmp [pwnd + 0x38], 0` (spwndChild).
