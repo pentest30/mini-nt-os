@@ -214,9 +214,10 @@ fichier, les deux GPT et le volume système avec `fsck.vfat`, sur AMD et Intel.
 Il s'agit d'un constructeur d'image côté hôte, pas encore d'un installateur
 en mode utilisateur capable de choisir et d'effacer un disque dans Mino.
 L'écriture sur un périphérique existant, les interfaces NT de disque et les
-IOCTL, la copie avec progression/reprise et l'interface restent à faire.
-Le brief visuel réutilisable se trouve dans
-[`design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
+IOCTL, puis la copie avec progression et reprise restent à faire. La première
+interface native, volontairement simulée et incapable d'écrire un disque,
+est décrite dans [`install-ui.md`](install-ui.md). Le brief visuel réutilisable
+se trouve dans [`design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
 
 
 Validation de cette étape : `cargo xtask lint` propre, 740 tests hôte et

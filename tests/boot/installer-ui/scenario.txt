@@ -1,0 +1,37 @@
+# First native installer UI milestone: SETUP1.EXE takes the interactive
+# desktop, renders the five-screen flow with custom GDI controls, and uses
+# the keyboard path from main. It deliberately simulates installation: no
+# disk writes are issued. The path exercises Tab/Back, Escape, confirmation,
+# the five reported stages and the verified completion screen.
+features = test-smss
+requires = userland, native
+initial-command = SETUP1.EXE
+cpus = default, intel
+timeout = 120
+
+expect = [setup] screen welcome
+expect = [setup] focus back
+expect = [setup] back to welcome
+expect = [setup] screen disk 2
+expect = [setup] returned to disk
+expect = [setup] screen review 2
+expect = [setup] screen install; simulated write boundary
+expect = [setup] stage prepare: 20%
+expect = [setup] stage partition: 40%
+expect = [setup] stage copy: 60%
+expect = [setup] stage configure: 80%
+expect = [setup] stage verify: 100%
+expect = [setup] screen complete; verified simulation
+
+# Final screen: blue application header, active Complete step, green check.
+screen = 130 90 2B5289
+screen = 150 360 2E60A6
+screen = 374 314 2E8152
+
+keys = [setup] ready => ret
+keys = [setup] screen disk 1 => tab ret
+keys = [setup] back to welcome => ret
+keys = [setup] screen disk 2 => ret
+keys = [setup] screen review 1 => esc
+keys = [setup] returned to disk => ret
+keys = [setup] screen review 2 => ret

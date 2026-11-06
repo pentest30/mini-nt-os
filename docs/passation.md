@@ -93,9 +93,19 @@ jour à chaque commit qui change l'état.
   été exécutées ; la seconde atteint la sonde SMSS sur le disque primaire.
   GPT vérifié par `sgdisk`, ESP et système par `fsck.vfat`, destination
   existante refusée sans altération.
-  Ce n'est pas encore l'installateur en mode utilisateur : restent les
-  interfaces NT de disque, verrouillage/démontage, IOCTL, progression et
-  reprise d'installation (partie proposée de l'ADR-022), puis l'interface.
+  `main` est maintenant intégré à la branche : son pilote PS/2 et son chemin
+  clavier jusqu'aux fenêtres donnent à l'installateur le focus, WM_KEYDOWN,
+  WM_CHAR et la traduction de la disposition. La souris et les curseurs
+  restent absents. **Premier jalon UI réalisé** : `SETUP1.EXE`, sonde Win32
+  native à cinq écrans et contrôles GDI, navigation Tab/Retour/Espace/Échap,
+  revue avant la limite d'écriture, cinq étapes de progression et écran de
+  fin vérifié. Le scénario `installer-ui` exerce les retours et la progression
+  au clavier et vérifie l'écran ; l'installation est explicitement simulée et
+  le programme n'ouvre aucun disque. Détails et plan dans
+  [`compat/install-ui.md`](compat/install-ui.md).
+  Restent les interfaces NT de disque, verrouillage/démontage, IOCTL,
+  progression et reprise du moteur (partie proposée de l'ADR-022), son
+  branchement à l'interface, puis la souris.
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
