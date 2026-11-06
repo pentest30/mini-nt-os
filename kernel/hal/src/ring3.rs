@@ -3,9 +3,10 @@
 //! On XP x86, the kernel switches to user mode by pushing an IRET frame and
 //! executing IRETQ. When the target CS is a 32-bit code segment (L=0, D=1),
 //! the CPU enters IA-32e compatibility mode and begins executing 32-bit
-//! instructions at EIP. DS/ES/SS are loaded from the supplied selector.
-//! FS is pre-loaded before IRETQ so TEB self-pointer works from the first
-//! instruction; GS is swapped to the user's base (SWAPGS, `trap`) and null.
+//! instructions at EIP. IRETQ loads CS and SS, but not DS or ES: the trampoline
+//! loads both data registers explicitly before the privilege change. FS is
+//! pre-loaded too so the TEB self-pointer works from the first instruction; GS
+//! is swapped to the user's base (SWAPGS, `trap`) and null.
 //!
 //! WI7e Ch.3 "Trap Dispatching" §Kernel-to-User Mode Transition
 //! WI7e Ch.6 §User-Mode Stack and Entry Point
@@ -37,9 +38,10 @@ const _: () = assert!(USER_RFLAGS & (3 << 12) == 0, "user mode must run with IOP
 //      suspension, its end) before any user instruction
 //   1. `pop rax` — FS selector → rax; RSP advances to RIP slot
 //   2. `mov fs, ax` — load TEB segment into FS
-//   3. `swapgs`, then a null GS — the user's GS base, the KPCR's back in
+//   3. load DS and ES from the user SS selector in the IRET frame
+//   4. `swapgs`, then a null GS — the user's GS base, the KPCR's back in
 //      IA32_KERNEL_GS_BASE
-//   4. `iretq` — pops RIP/CS/RFLAGS/RSP/SS → enters ring-3
+//   5. `iretq` — pops RIP/CS/RFLAGS/RSP/SS → enters ring-3
 //
 // # IRQL: DISPATCH_LEVEL on entry (from ke_context_switch inside timer ISR).
 // After IRETQ the CPU restores RFLAGS (IF=1) and switches to ring-3.
@@ -51,6 +53,9 @@ core::arch::global_asm!(
     "   call {first_lower}",
     "   pop rax",      // rax = FS selector; RSP → RIP slot
     "   mov fs, ax",   // load TEB segment (DPL=3, base=this thread's TEB)
+    "   mov ax, word ptr [rsp + 32]", // SS in the IRET frame = user data selector
+    "   mov ds, ax",
+    "   mov es, ax",
     "   swapgs",       // the user's GS base; the KPCR's in IA32_KERNEL_GS_BASE
     "   xor eax, eax", // a null GS for user mode
     "   mov gs, eax",
