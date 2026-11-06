@@ -1,0 +1,11 @@
+[package]
+name    = "i8042"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "i8042"
+
+[dependencies]
+abi = { path = "../../../abi" }
+hal = { path = "../../../kernel/hal" }

@@ -95,6 +95,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "i8042"
+version = "0.1.0"
+dependencies = [
+ "abi",
+ "hal",
+]
+
+[[package]]
 name = "io-manager"
 version = "0.1.0"
 dependencies = [
