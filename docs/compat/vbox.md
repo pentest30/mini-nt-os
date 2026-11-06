@@ -170,3 +170,34 @@ Pistes pour la prochaine session :
    interruptions ; injecter les interruptions d'horloge au niveau
    utilisateur (QEMU `-icount` ou le moniteur) peut le rendre visible
    sous QEMU et donc débogable au gdbstub.
+
+## Retest avec le diagnostic intégré (7d8fab8) : la sonde passe, le bogue GS isolé
+
+Sur l'image `mino-vbox3` (branche à `7d8fab8`), boot VirtualBox propre :
+
+- **la sonde KUSER_SHARED_DATA passe intégralement** : le dump de
+  `log_shared_data_fault` montre `rip=0x0040109e, cr2=0x7ffe026c,
+  err=0x7 (utilisateur|écriture|protection)`, les octets à `rip` =
+  `a3 6c 02 fe 7f` (le store `mov [SharedUserData->NtMajorVersion], eax`
+  exact), `ds=0x23, es=0x23, fs=0x2b` — **base de segment cachée et flux
+  d'instructions sains** : la distinction vouloe par le diagnostic est
+  tranchée du côté « rien de périmé » ;
+- **l'assert GS échoue** : « GS lost across clock interrupts and a system
+  service » — le programme a chargé GS = 0x2b (sélecteur du TEB, base
+  maintenue par `set_teb_base`), la première lecture `gs:[0x18]` rend le
+  TEB, puis **après des interruptions d'horloge et `NtDelayExecution`**,
+  il relit **sélecteur GS = 0 (nul)** et `gs:[0x18] = 0` ;
+- les fautes attendues des self-tests (NULL, débordement, garde, DEP)
+  continuent d'arriver avec leurs signatures justes.
+
+Le mécanisme à chercher : quel chemin remet le **sélecteur** GS à nul
+entre les deux lectures — la paire `swapgs`/`mov gs, eax` de la sortie de
+trap (eax = la valeur sauvée à l'entrée), la porte de l'horloge (son
+entrée/sortie à elle), ou la sortie SYSEXIT (qui ne recharge pas les
+segments) — sur un profil CPU où l'émulation des registres de segment est
+stricte. Sur QEMU (TCG), le même enchaînement conserve 0x2b.
+
+À noter, indépendant du noyau : le chargeur gèle parfois **en plein milieu
+de sa ligne** « paging: PML4 at » (écran et série au même octet, CPU de la
+VM à 0 %, vCPU en HLT), sur la même image qui passe à d'autres boots —
+flakiness UEFI/UART de VBox, à rejouer plutôt qu'à déboguer.
