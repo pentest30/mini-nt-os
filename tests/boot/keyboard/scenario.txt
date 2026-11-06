@@ -1,0 +1,60 @@
+# M5, console (docs/compat/m5-console.md, step 6): KEYS1.EXE
+# (tests/native/keys1.c, MinGW, linked to ReactOS's kernel32 and user32)
+# takes the place of winlogon.exe, which smss starts as its initial command
+# once csrss runs. Like winlogon, it takes WinSta0\Default and loads the US
+# keyboard layout; its window, shown, is activated: it becomes the
+# foreground window and gets the keyboard (WM_ACTIVATE, WM_SETFOCUS). Once
+# it is painted, QEMU's monitor types Shift+H, I and Enter: the PS/2
+# controller interrupts, the i8042 driver decodes the bytes, the raw input
+# thread gives each key to win32k, whose layout tables make it a virtual
+# key, posted to the window's thread (WM_KEYDOWN, WM_KEYUP: Shift as
+# VK_SHIFT, the scan code, KF_REPEAT and KF_UP); TranslateMessage posts the
+# characters (WM_CHAR: H while Shift is down, then i, then Enter). A key's
+# state is down (0x80) and toggled at each press (1): Shift, pressed once,
+# stays toggled. On Enter, the thread's key state (GetKeyState,
+# GetKeyboardState: as of the messages processed), the keyboard's
+# (GetAsyncKeyState) and ToUnicodeEx. DefWindowProc gives the window the
+# keyboard on WM_ACTIVATE (SetFocus). Then the program takes the keyboard
+# from its window (SetFocus(NULL)), and A, typed, is a system key for the
+# active window (WM_SYSKEYDOWN, WM_SYSKEYUP), after which SetFocus gives it
+# back.
+features = test-smss
+requires = userland, native
+initial-command = KEYS1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [keys] waiting => shift-h i ret
+keys = [keys] unfocused => a
+
+expect = [keys] on WinSta0\Default
+expect = [keys] LoadKeyboardLayoutW: loaded
+expect = [keys] WM_ACTIVATE 1
+expect = [keys] WM_SETFOCUS
+expect = [keys] waiting
+expect = [keys] down 10 002a0001
+expect = [keys] down 48 00230001
+expect = [keys] char 48 00230001; Shift ff81
+expect = [keys] up 48 c0230001
+expect = [keys] up 10 c02a0001
+expect = [keys] down 49 00170001
+expect = [keys] char 69 00170001; Shift 0001
+expect = [keys] up 49 c0170001
+expect = [keys] down 0d 001c0001
+expect = [keys] char 0d 001c0001; Shift 0001
+expect = [keys] typed: Hi; GetKeyState: Shift 0001, Enter ff81; GetAsyncKeyState(I) 0001; GetKeyboardState: Shift 01, H 01
+expect = [keys] ToUnicodeEx(Q, Shift): 1, 0051
+expect = [keys] SetFocus(NULL): before it, the window
+expect = [keys] unfocused
+expect = [keys] sysdown 41 001e0001
+expect = [keys] sysup 41 c01e0001
+expect = [keys] SetFocus(window): before it, none
+expect = [keys] done
+expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
+forbid = *** STOP:
+forbid = sys: NtUserTranslateMessage (0x1235) is not implemented
+forbid = sys: NtUserGetKeyState (0x119f) is not implemented
+forbid = sys: NtUserGetKeyboardState (0x119d) is not implemented
+forbid = sys: NtUserToUnicodeEx (0x122f) is not implemented
+forbid = sys: NtUserGetAsyncKeyState (0x117e) is not implemented
+forbid = sys: NtUserSetFocus (0x1200) is not implemented

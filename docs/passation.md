@@ -19,10 +19,10 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- La sonde console, étape 5 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : le texte de la console peint
-  (vues système de Mm, capacités de l'écran, DIB sections, DC en mémoire, BitBlt) ; `consrv` peint « Mino console »,
-  sur `claude/new-session-696xfc`. Les étapes 3 (Sleep(0) : **le critère des 8 threads du M5 est coché**) et 4 (la
-  fenêtre console montrée) sont les PR #62 et #63. Une branche
+- La sonde console, étape 6 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : le clavier jusqu'aux fenêtres
+  (pilote i8042, thread d'entrée brute, tables de la disposition, premier plan et focus, TranslateMessage), sur
+  `claude/new-session-696xfc`. L'étape 5 (le texte de la console peint) est la PR #64 ; les étapes 3 (Sleep(0) :
+  **le critère des 8 threads du M5 est coché**) et 4 (la fenêtre console montrée) sont les PR #62 et #63. Une branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
 - Branches de travail : `claude/m5-se` (l'étape 2 du M5, PR à ouvrir), partie de `main` après la fusion de #35, puis,
@@ -400,8 +400,14 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      (`win32k::gdi::surface`), les DC en mémoire (NtGdiCreateCompatibleDC, NtGdiSelectBitmap), BitBlt
      (`win32k::gdi::bitblt`), les pinceaux d'un client (NtGdiCreateSolidBrush) ; `consrv` peint « Mino console » ;
      le banc `BITMAP1.EXE` (scénario `bitmap`) ;
-   - **la suite, côté console** (le critère de `cmd.exe` interactif) : l'entrée au clavier (i8042, le thread
-     d'entrée) ; les icônes de `consrv`, SetTimer, les barres de défilement ; puis `cmd.exe` (et
+   - [x] la sonde console, étape 6 : le clavier jusqu'aux fenêtres : le pilote `drivers/input/i8042`, le thread
+     d'entrée brute (`ntoskrnl::input`), les tables de la disposition (`win32k::kbdtables`), `win32k::input`
+     (ProcessKeyEvent, premier plan, activation, SetFocus, TranslateMessage), les touches dans la file
+     (`QS_KEY`, état du clavier du thread) ; NtUserGetKeyState, NtUserGetAsyncKeyState, NtUserGetKeyboardState,
+     NtUserToUnicodeEx, NtUserTranslateMessage, NtUserSetFocus ; `keys =` dans les scénarios ; le banc
+     `KEYS1.EXE` (scénario `keyboard`) ;
+   - **la suite, côté console** (le critère de `cmd.exe` interactif) : une ligne lue par ReadConsole (le clavier
+     dans la console de `consrv`) ; les icônes de `consrv`, SetTimer, les barres de défilement ; puis `cmd.exe` (et
      NtQueryDirectoryFile pour `dir`, PR #58) ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
@@ -455,6 +461,11 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Sonde console (M5, étape 6) : ni souris, ni WM_NCACTIVATE, ni WM_ACTIVATE inactif à l'ancienne fenêtre active,
+  ni messages d'activation à un autre thread (le focus est pris sans eux) ; ni crochets, raccourcis, Alt + pavé
+  numérique, Alt + Tab, changement de disposition au clavier, voyants, Impr. écran, SendInput ; pas d'IRP
+  (kbdclass : win32k lit le pilote) ; le premier plan garde le thread d'une fenêtre détruite ou d'un thread fini ;
+  ToUnicodeEx garde une touche morte pour tous les threads (`wchDead` global, comme ReactOS).
 - Sonde console (M5, étape 5) : ni bitmaps compatibles (CreateBitmap, CreateCompatibleBitmap : le motif 8 × 8 de
   `consrv`), ni profondeurs autres que 32 bits, ni section d'une application pour une DIB section, ni palettes,
   GetObject, GetDIBits, SetDIBits, StretchBlt, MaskBlt avec un masque, NtGdiGetDeviceCaps ; un bitmap choisi n'est pas

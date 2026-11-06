@@ -272,3 +272,63 @@ processeurs (la TLB des vues système). `consrv` demande encore les icônes (NtU
 défilement et DestroyWindow.
 
 La suite : l'entrée au clavier pour `cmd.exe` (le thread d'entrée, i8042), puis `cmd.exe` et NtQueryDirectoryFile.
+
+## Étape 6 : le clavier jusqu'aux fenêtres
+
+Une touche frappée va maintenant jusqu'à la fenêtre au premier plan (`i8042prt`, `keyboard.c`, `msgqueue.c`,
+`focus.c` et `input.c` de ReactOS, comme spécification) :
+
+- Le pilote **`drivers/input/i8042`** (comme le prévoit l'audit pour `hal/src/ps2.rs`) : l'interruption IRQ1
+  (`hal::idt`) met chaque octet du contrôleur dans l'anneau de `hal::ps2`, puis appelle un crochet
+  (`hal::ps2::set_notify`) ; le décodeur (i8042KbdInterruptService) fait des octets du jeu 1 des
+  KEYBOARD_INPUT_DATA (`abi::kbd`) : préfixes `E0` et `E1` (Pause), relâchement (`KEY_BREAK`).
+- Le **thread d'entrée brute** (RIT, `ntoskrnl::input`, à LOW_REALTIME_PRIORITY + 3 comme dans ReactOS) : le crochet
+  met un DPC dans la file, le DPC signale l'événement qu'attend le thread, qui vide le pilote vers win32k. Il ne le
+  vide qu'une fois que win32k a pris l'écran : avant, l'ancien lanceur et `syscall.rs` lisent l'anneau.
+- Les **tables de la disposition** (`win32k::kbdtables`, KBDTABLES) lues une fois au chargement, chaque liste bornée :
+  IntVscToVk (scan code → touche virtuelle, `KBDEXT`, `KBDNUMPAD`), IntTranslateChar (modificateurs de la
+  disposition, Caps Lock, AltGr, touches mortes, Ctrl + lettre), IntToUnicodeEx.
+- **`win32k::input`** : UserProcessKeyboardInput et ProcessKeyEvent (l'état du clavier, gafAsyncKeyState :
+  enfoncée, basculée à chaque appui ; la touche gauche ou droite et la touche commune ; WM_SYSKEYDOWN avec Alt sans
+  Ctrl, F10, ou sans fenêtre qui a le clavier ; `lParam` : répétition, scan code, KF_EXTENDED, KF_ALTDOWN,
+  KF_REPEAT, KF_UP ; Verr. Num. sur le pavé ; AltGr qui donne Ctrl), vers la file du premier plan.
+- **Le premier plan et le focus** : une fenêtre de premier niveau activée (SetWindowPos, ShowWindow ; jusqu'ici
+  « pas encore ») devient la fenêtre active de la file de son thread, qui passe au premier plan
+  (co_IntSetForegroundWindow, co_IntSetActiveWindow) ; elle reçoit WM_ACTIVATE, dont DefWindowProc lui donne le
+  clavier (SetFocus : NtUserSetFocus, co_UserSetFocus, WM_KILLFOCUS et WM_SETFOCUS).
+- **La file** (`win32k::queue`) : les touches arrivent à part (messages matériels, `QS_KEY`) et sortent après les
+  messages postés et WM_QUIT ; une touche qui sort change l'état du clavier du thread (UpdateKeyStateFromMsg), puis
+  sa touche gauche ou droite devient la touche commune (co_IntProcessKeyboardMessage : VK_LSHIFT → VK_SHIFT).
+- Services : NtUserGetKeyState et NtUserGetKeyboardState (l'état vu du thread), NtUserGetAsyncKeyState (celui du
+  clavier), NtUserToUnicodeEx, NtUserTranslateMessage (WM_CHAR, WM_DEADCHAR et leurs variantes système postés),
+  NtUserSetFocus.
+- `xtask` : `keys = MARQUEUR => TOUCHES…` dans un scénario fait taper des touches par le moniteur de QEMU
+  (`sendkey`) quand le marqueur paraît.
+
+Comme ReactOS : relâcher une touche sans côté (une lettre) la marque à nouveau « enfoncée récemment » pour
+GetAsyncKeyState (la touche commune, elle-même, est mise à jour comme encore enfoncée avant d'être relâchée) ; Alt
+relâchée après Alt + une touche donne WM_KEYUP, Alt seule WM_SYSKEYUP.
+
+Le banc : `KEYS1.EXE` (`tests/native/keys1.c`, scénario `keyboard`) charge la disposition US comme `winlogon`, ouvre
+une fenêtre (WM_ACTIVATE, WM_SETFOCUS) ; le scénario tape Maj + H, I, Entrée : WM_KEYDOWN et WM_KEYUP (Maj en
+VK_SHIFT, `lParam` exacts), WM_CHAR « H » Maj enfoncée puis « i » et Entrée ; GetKeyState, GetKeyboardState,
+GetAsyncKeyState et ToUnicodeEx ; puis SetFocus(NULL) : A est une touche système pour la fenêtre active
+(WM_SYSKEYDOWN, WM_SYSKEYUP), et SetFocus la lui rend.
+
+En passant, la sonde (`ntoskrnl::userland`) ne savait des processus créés par `smss` que ceux qu'un handle tenait
+encore à sa fin : un programme qui vit plus longtemps (ce banc) disparaissait de son rapport, une fois `csrss` séparé
+de lui. Elle les garde désormais depuis leur création (`ps::set_create_process_notify`, comme
+PsSetCreateProcessNotifyRoutine) ; `ps::child_processes` n'avait plus d'utilisateur.
+
+Tests : hôte (le décodeur d'i8042 ; les tables : construites, et `kbdus.dll` de ReactOS épinglé quand il est là ;
+ProcessKeyEvent, l'état asynchrone, UserProcessKeyboardInput ; la file : ordre, état du clavier, touche commune ; le
+format `keys` d'`xtask`) ; les scénarios `keyboard` (24 marqueurs) et `gui` (WM_ACTIVATE, WM_SETFOCUS, WM_KILLFOCUS
+dans ses suites de messages), sur les deux CPU. 10 mutations (l'état du clavier du thread, la touche commune, le
+premier plan, KF_REPEAT, WM_CHAR, le crochet de l'interruption, SetFocus(NULL), la touche système sans focus, le
+relâchement dans le décodeur, l'état passé à ToUnicodeEx), toutes tuées.
+
+Pas encore : la souris ; les messages au premier plan perdu (WM_NCACTIVATE, WM_ACTIVATE inactif à l'ancienne
+fenêtre, ceux d'un autre thread) ; les crochets, les raccourcis, Alt + pavé numérique, Alt + Tab, le changement de
+disposition au clavier, les voyants, Impr. écran, SendInput ; les IRP (kbdclass) ; un premier plan qui garde le
+thread fini (il reçoit encore les touches). La console : `consrv` reçoit le clavier, mais son WM_CHAR mène à la
+lecture d'une ligne (ReadConsole), le pas suivant vers `cmd.exe`.

@@ -42,6 +42,8 @@ pub mod font;
 pub mod gdi;
 pub mod gui;
 pub mod handles;
+pub mod input;
+pub mod kbdtables;
 pub mod keyboard;
 pub mod logon;
 pub mod metrics;

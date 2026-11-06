@@ -356,6 +356,15 @@ fn log_known_dlls() {
     );
 }
 
+/// The processes created while a probe runs (`ps::set_create_process_notify`).
+static CREATED: hal::sync::KSpinLock<alloc::vec::Vec<Arc<ob::Object<ps::EProcess>>>> =
+    hal::sync::KSpinLock::new(alloc::vec::Vec::new());
+
+/// Keeps `process`, created while a probe runs.
+fn keep_created(process: &Arc<ob::Object<ps::EProcess>>) {
+    CREATED.lock().push(process.clone());
+}
+
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
 /// `params`, et attend sa fin (10 s au plus) : son thread démarre par
 /// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
@@ -401,6 +410,8 @@ fn run_native(
     let info = section.image().expect("an image section").info;
     crate::sys::reset_service_calls();
     ps::set_critical_breaks_ignored(true);
+    CREATED.lock().clear();
+    ps::set_create_process_notify(Some(keep_created));
     let started = ps::create_process(&ps::system_process(), &section, name, false).and_then(|process| {
         ps::process_parameters::write(&process, params)?;
         let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit)?;
@@ -421,9 +432,13 @@ fn run_native(
             Some(TIMEOUT),
         )
     };
-    // The processes it created, while its handles still hold those that
-    // ended.
-    let children = ps::child_processes(process.pid());
+    // The processes it created: kept since their creation, whoever still
+    // holds them.
+    ps::set_create_process_notify(None);
+    let children: alloc::vec::Vec<_> = core::mem::take(&mut *CREATED.lock())
+        .into_iter()
+        .filter(|created| created.parent_pid() == process.pid())
+        .collect();
     if waited == STATUS_TIMEOUT {
         log::warn!("[{tag}] {name}: the process did not end within 10 s: terminated");
         if process.is_critical() {

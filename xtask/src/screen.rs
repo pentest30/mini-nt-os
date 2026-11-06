@@ -1,7 +1,8 @@
 //! Screen checks of a boot scenario (`screen = X Y RRGGBB`): once its
 //! markers are all in the serial log, QEMU's monitor (HMP, on a Unix socket
 //! in the run directory) dumps the screen (`screendump`, a binary PPM), and
-//! each listed pixel must have its colour.
+//! each listed pixel must have its colour. The monitor also types the keys
+//! of a scenario (`keys = MARKER => KEY…`, [`send_keys`]).
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
@@ -137,6 +138,39 @@ pub fn capture(socket: &Path, file: &Path) -> Result<Image> {
     }
     let bytes = std::fs::read(file).map_err(|e| format!("{}: {e}", file.display()))?;
     Image::parse_ppm(&bytes)
+}
+
+/// How long a key stays down, and the pause after it (ms).
+const KEY_HOLD_MS: u32 = 50;
+const KEY_PAUSE: Duration = Duration::from_millis(100);
+
+/// Types `keys` on the QEMU whose monitor listens on `socket`, one after
+/// the other (`sendkey`), each answered by the monitor before the next.
+pub fn send_keys(socket: &Path, keys: &[String]) -> Result<()> {
+    let stream = UnixStream::connect(socket).map_err(|e| format!("QEMU monitor {}: {e}", socket.display()))?;
+    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| format!("QEMU monitor: {e}"))?;
+    let mut writer = stream.try_clone().map_err(|e| format!("QEMU monitor: {e}"))?;
+    let mut reader = stream;
+    let mut seen = Vec::new();
+    let mut prompts = 1;
+    for key in keys {
+        writeln!(writer, "sendkey {key} {KEY_HOLD_MS}").map_err(|e| format!("QEMU monitor: {e}"))?;
+        prompts += 1;
+        let mut chunk = [0u8; 256];
+        let start = Instant::now();
+        while count(&seen, b"(qemu) ") < prompts && start.elapsed() < Duration::from_secs(10) {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => seen.extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+                    break
+                }
+                Err(e) => return Err(format!("QEMU monitor: {e}")),
+            }
+        }
+        std::thread::sleep(KEY_PAUSE);
+    }
+    Ok(())
 }
 
 /// How many times `needle` is in `haystack`.

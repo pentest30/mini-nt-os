@@ -16,6 +16,7 @@
 //! disk     = system
 //! boots    = 2
 //! screen   = 640 400 3A6EA5
+//! keys     = marker => shift-h i ret
 //! ```
 //!
 //! - `features`: ntoskrnl features, comma-separated (default: none).
@@ -42,6 +43,10 @@
 //! - `screen = X Y RRGGBB`: once the markers are found, the screen of the
 //!   last boot is dumped (`screen.ppm` in the run directory) and the pixel
 //!   at column X, row Y must have this colour (`xtask/src/screen.rs`).
+//! - `keys = MARKER => KEY…`: once MARKER is in the serial log of the boot,
+//!   QEMU's monitor types the keys, one after the other (`sendkey`, with
+//!   QEMU's key names: `a`, `shift-a`, `ret`, `spc`…), once
+//!   (`xtask/src/screen.rs`). The `keys` lines fire in their order.
 //! - `initial-command = PROGRAM.EXE`: this Win32 test program of
 //!   `tests/native/` takes the place of `winlogon.exe` on the ramdisk, so
 //!   that `smss` starts it as its initial command (with `requires =
@@ -68,9 +73,30 @@ pub struct Scenario {
     pub screen: Vec<crate::screen::Pixel>,
     /// The test program that takes the place of `winlogon.exe`.
     pub initial_command: Option<String>,
+    /// Keys to type once a marker is in the serial log, in order.
+    pub keys: Vec<Keys>,
     expect: Vec<Vec<String>>,
     forbid: Vec<String>,
     forbid_line_start: Vec<String>,
+}
+
+/// Keys that QEMU's monitor types once `after` is in the serial log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Keys {
+    pub after: String,
+    pub keys: Vec<String>,
+}
+
+impl Keys {
+    /// `MARKER => KEY…`.
+    fn parse(value: &str) -> std::result::Result<Self, String> {
+        let (after, keys) = value.split_once("=>").ok_or("expected `MARKER => KEY…`")?;
+        let (after, keys) = (after.trim(), keys.split_whitespace().map(String::from).collect::<Vec<_>>());
+        if after.is_empty() || keys.is_empty() {
+            return Err("expected `MARKER => KEY…`".into());
+        }
+        Ok(Self { after: after.to_string(), keys })
+    }
 }
 
 /// State of a boot, judged from its serial log so far.
@@ -95,6 +121,7 @@ impl Scenario {
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
+            keys: Vec::new(),
             expect: Vec::new(),
             forbid: Vec::new(),
             forbid_line_start: Vec::new(),
@@ -122,6 +149,7 @@ impl Scenario {
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
+                "keys" => sc.keys.push(Keys::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
                     _ => return Err(format!("{}: unknown disk `{value}`", at())),
@@ -247,6 +275,9 @@ requires = userland
         assert!((!sc.system_disk, sc.boots) == (true, 1), "one boot on the ramdisk by default");
         let twice = Scenario::parse("x", "expect = a\ndisk = system\nboots = 2").unwrap();
         assert!(twice.system_disk && twice.boots == 2);
+        let keys = Scenario::parse("x", "expect = a\nkeys = [x] ready => shift-h i ret\nkeys = b => a").unwrap();
+        let first = Keys { after: "[x] ready".into(), keys: vec!["shift-h".into(), "i".into(), "ret".into()] };
+        assert_eq!(keys.keys, [first, Keys { after: "b".into(), keys: vec!["a".into()] }]);
         let screen = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5").unwrap();
         assert_eq!(screen.screen, [crate::screen::Pixel { x: 1, y: 2, rgb: [0x3A, 0x6E, 0xA5] }]);
         assert!(sc.screen.is_empty());
@@ -284,5 +315,7 @@ requires = userland
         assert!(Scenario::parse("x", "expect = a\ndisk = floppy").is_err());
         assert!(Scenario::parse("x", "expect = a\nboots = 0").is_err());
         assert!(Scenario::parse("x", "expect = a\nscreen = 1 2").is_err());
+        assert!(Scenario::parse("x", "expect = a\nkeys = ready").is_err(), "no keys");
+        assert!(Scenario::parse("x", "expect = a\nkeys = => a").is_err(), "no marker");
     }
 }

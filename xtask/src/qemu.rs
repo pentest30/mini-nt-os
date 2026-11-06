@@ -282,7 +282,7 @@ fn boot_once(
 
     let monitor = run_dir.join("monitor.sock");
     let mut command = machine.command(opts)?;
-    if !scenario.screen.is_empty() {
+    if !scenario.screen.is_empty() || !scenario.keys.is_empty() {
         let _ = fs::remove_file(&monitor);
         let mut socket = OsString::from("unix:");
         socket.push(&monitor);
@@ -300,11 +300,20 @@ fn boot_once(
         .map_err(|e| format!("cannot start QEMU: {e}"))?;
 
     let start = Instant::now();
+    // The `keys` lines already typed, in order.
+    let mut typed = 0;
     let (passed, mut reason) = loop {
         std::thread::sleep(POLL);
         // Read the log after checking for exit, so that it is complete.
         let exited = child.try_wait().map_err(|e| format!("QEMU: {e}"))?;
-        let log = format!("{earlier}{}", read_lossy(serial_log));
+        let this_boot = read_lossy(serial_log);
+        while let Some(keys) = scenario.keys.get(typed).filter(|keys| this_boot.contains(&keys.after)) {
+            if let Err(why) = crate::screen::send_keys(&monitor, &keys.keys) {
+                eprintln!("xtask: keys after `{}`: {why}", keys.after);
+            }
+            typed += 1;
+        }
+        let log = format!("{earlier}{this_boot}");
         if until_exit {
             if let Some(why) = scenario.forbidden(&log) {
                 break (false, why);

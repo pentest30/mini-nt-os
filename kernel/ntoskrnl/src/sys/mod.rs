@@ -39,6 +39,7 @@ pub mod exceptions;
 mod file;
 pub mod gates;
 mod gdi;
+mod input;
 mod memory;
 mod message;
 mod monitor;
@@ -230,10 +231,13 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserDefSetText, Handler::Status(window::nt_user_def_set_text)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
+    (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetDC, Handler::Status(window::nt_user_get_dc)),
     (services::NtUserGetDCEx, Handler::Status(window::nt_user_get_dc_ex)),
+    (services::NtUserGetKeyState, Handler::Status(input::nt_user_get_key_state)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
+    (services::NtUserGetKeyboardState, Handler::Status(input::nt_user_get_keyboard_state)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
     (services::NtUserGetMonitorInfo, Handler::Status(monitor::nt_user_get_monitor_info)),
     (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
@@ -259,6 +263,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserRedrawWindow, Handler::Status(window::nt_user_redraw_window)),
     (services::NtUserRegisterClassExWOW, Handler::Status(class::nt_user_register_class_ex_wow)),
     (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
+    (services::NtUserSetFocus, Handler::Status(input::nt_user_set_focus)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
@@ -268,6 +273,8 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserShowWindow, Handler::Status(window::nt_user_show_window)),
     (services::NtUserShowWindowAsync, Handler::Status(window::nt_user_show_window_async)),
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
+    (services::NtUserToUnicodeEx, Handler::Status(input::nt_user_to_unicode_ex)),
+    (services::NtUserTranslateMessage, Handler::Status(input::nt_user_translate_message)),
     (services::NtUserValidateRect, Handler::Status(window::nt_user_validate_rect)),
     (services::NtUserWaitMessage, Handler::Status(message::nt_user_wait_message)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),

@@ -149,16 +149,22 @@ pub(super) fn nt_user_get_message(arguments: &[u32]) -> NtStatus {
 /// (IntDispatchMessage) ; rend ce qu'elle rend, 0 sans fenêtre ou pour un
 /// `pMsg` illisible (l'erreur de Win32 de la faute).
 pub(super) fn nt_user_dispatch_message(arguments: &[u32]) -> NtStatus {
-    let mut bytes = [0u8; core::mem::size_of::<Msg32>()];
-    if let Err(status) = ke::usermem::copy_from_user(&mut bytes, u64::from(arguments[0])) {
-        return fail(dos_error(status));
-    }
-    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
-    let message = Msg32 { hwnd: word(0), message: word(4), w_param: word(8), l_param: word(12), ..Msg32::default() };
+    let message = match read_message(arguments[0]) {
+        Ok(message) => message,
+        Err(status) => return fail(dos_error(status)),
+    };
     match win32k::window::dispatch_message(&message) {
         Ok(result) => NtStatus(result),
         Err(status) => fail(dos_error(status)),
     }
+}
+
+/// Le MSG en `address`, chez le processus courant (sans `time` ni `pt`).
+pub(super) fn read_message(address: u32) -> Result<Msg32, NtStatus> {
+    let mut bytes = [0u8; core::mem::size_of::<Msg32>()];
+    ke::usermem::copy_from_user(&mut bytes, u64::from(address))?;
+    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    Ok(Msg32 { hwnd: word(0), message: word(4), w_param: word(8), l_param: word(12), ..Msg32::default() })
 }
 
 /// NtUserWaitMessage() : attend qu'un message arrive dans la file du thread,

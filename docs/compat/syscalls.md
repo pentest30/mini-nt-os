@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 102 | 296 |
-| win32k | 78 | 737 |
+| win32k | 84 | 737 |
 
 ## ntoskrnl
 
@@ -698,7 +698,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x117b` | `NtUserGetAltTabInfo` | 6 |  |
 | `0x117c` | `NtUserGetAncestor` | 2 |  |
 | `0x117d` | `NtUserGetAppImeLevel` | 1 |  |
-| `0x117e` | `NtUserGetAsyncKeyState` | 1 |  |
+| `0x117e` | `NtUserGetAsyncKeyState` | 1 | ✅ |
 | `0x117f` | `NtUserGetAtomName` | 2 |  |
 | `0x1180` | `NtUserGetCaretBlinkTime` | 0 |  |
 | `0x1181` | `NtUserGetCaretPos` | 1 |  |
@@ -729,9 +729,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x119a` | `NtUserGetInternalWindowPos` | 3 |  |
 | `0x119b` | `NtUserGetKeyboardLayoutList` | 2 | ✅ |
 | `0x119c` | `NtUserGetKeyboardLayoutName` | 1 |  |
-| `0x119d` | `NtUserGetKeyboardState` | 1 |  |
+| `0x119d` | `NtUserGetKeyboardState` | 1 | ✅ |
 | `0x119e` | `NtUserGetKeyNameText` | 3 |  |
-| `0x119f` | `NtUserGetKeyState` | 1 |  |
+| `0x119f` | `NtUserGetKeyState` | 1 | ✅ |
 | `0x11a0` | `NtUserGetListBoxInfo` | 1 |  |
 | `0x11a1` | `NtUserGetMenuBarInfo` | 4 |  |
 | `0x11a2` | `NtUserGetMenuIndex` | 2 |  |
@@ -828,7 +828,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11fd` | `NtUserSetCursor` | 1 |  |
 | `0x11fe` | `NtUserSetCursorContents` | 2 |  |
 | `0x11ff` | `NtUserSetCursorIconData` | 4 |  |
-| `0x1200` | `NtUserSetFocus` | 1 |  |
+| `0x1200` | `NtUserSetFocus` | 1 | ✅ |
 | `0x1201` | `NtUserSetImeHotKey` | 5 |  |
 | `0x1202` | `NtUserSetImeInfoEx` | 1 |  |
 | `0x1203` | `NtUserSetImeOwnerWindow` | 2 |  |
@@ -875,13 +875,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
 | `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
 | `0x122e` | `NtUserThunkedMenuItemInfo` | 6 |  |
-| `0x122f` | `NtUserToUnicodeEx` | 7 |  |
+| `0x122f` | `NtUserToUnicodeEx` | 7 | ✅ |
 | `0x1230` | `NtUserTrackMouseEvent` | 1 |  |
 | `0x1231` | `NtUserTrackPopupMenuEx` | 6 |  |
 | `0x1232` | `NtUserCalcMenuBar` | 5 |  |
 | `0x1233` | `NtUserPaintMenuBar` | 6 |  |
 | `0x1234` | `NtUserTranslateAccelerator` | 3 |  |
-| `0x1235` | `NtUserTranslateMessage` | 2 |  |
+| `0x1235` | `NtUserTranslateMessage` | 2 | ✅ |
 | `0x1236` | `NtUserUnhookWindowsHookEx` | 1 |  |
 | `0x1237` | `NtUserUnhookWinEvent` | 1 |  |
 | `0x1238` | `NtUserUnloadKeyboardLayout` | 1 |  |
