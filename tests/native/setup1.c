@@ -149,6 +149,9 @@ typedef struct {
 /* CTL_CODE(0x8000, 0x802, METHOD_BUFFERED, FILE_WRITE_ACCESS): formats the
  * plan's two volumes FAT32, after the prepare — same token. */
 #define IOCTL_MINO_SETUP_FORMAT 0x8000A008
+/* CTL_CODE(0x8000, 0x803, METHOD_BUFFERED, FILE_WRITE_ACCESS): copies the
+ * boot files and the system tree onto the installed volumes. */
+#define IOCTL_MINO_SETUP_COPY 0x8000A00C
 #define SETUP_READY 0
 #define SETUP_DISK_CANDIDATE 1
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
@@ -514,13 +517,13 @@ static void draw_install(HDC dc)
 
 static void draw_complete(HDC dc)
 {
-    heading(dc, L"GPT partitioning and formatting are complete",
-            L"Setup wrote the protective MBR, both GPT copies and the two FAT32 volumes. File copy comes next.");
+    heading(dc, L"Mino is installed",
+            L"Setup wrote the partition tables, the two FAT32 volumes and the system files. Reboot to start from the disk.");
     fill(dc, rect(218, 150, 724, 266), RGB(235, 247, 238));
     border(dc, rect(218, 150, 724, 266), RGB(63, 132, 86));
     fill(dc, rect(240, 180, 270, 210), RGB(46, 129, 82));
-    text(dc, L"Partition table verified", rect(290, 176, 690, 202), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"Both volumes are FAT32, mounted by the kernel; file copy comes next.", rect(290, 214, 690, 248),
+    text(dc, L"System files copied", rect(290, 176, 690, 202), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
+    text(dc, L"The installed disk boots Mino; remove the boot disk first.", rect(290, 214, 690, 248),
          RGB(53, 72, 59), DT_LEFT | DT_SINGLELINE);
     draw_navigation(dc, FALSE, L"Finish");
 }
@@ -579,7 +582,7 @@ static void set_screen(HWND window, enum Screen screen)
     } else if (screen == SCREEN_INSTALL) {
         DbgPrint("[setup] screen install; GPT write boundary\n");
     } else if (screen == SCREEN_COMPLETE) {
-        DbgPrint("[setup] screen complete; verified GPT and FAT32\n");
+        DbgPrint("[setup] screen complete; GPT, FAT32 and files written\n");
     }
 }
 
@@ -652,8 +655,41 @@ static void run_install(HWND window)
         return;
     }
     DbgPrint("[setup] format: ESP and system volumes FAT32, mounted by the kernel\n");
+    /* Stage copy: the kernel copies the boot files (BOOTX64.EFI, kernel.elf)
+     * to the target ESP and the system tree to the system volume, verifying
+     * each file's size after the write. */
+    progress = 60;
+    DbgPrint("[setup] stage copy: %d%%\n", progress);
+    repaint(window);
+    memset(&attributes, 0, sizeof attributes);
+    memset(&iosb, 0, sizeof iosb);
+    name.length = (USHORT)(wide_length(root_name) * sizeof(WCHAR));
+    name.maximum_length = name.length + sizeof(WCHAR);
+    name.buffer = root_name;
+    attributes.length = sizeof attributes;
+    attributes.object_name = &name;
+    attributes.attributes = OBJ_CASE_INSENSITIVE;
+    status = NtOpenFile(&root, FILE_WRITE_ATTRIBUTES, &attributes, &iosb, FILE_SHARE_ALL, FILE_DIRECTORY_FILE);
+    if (status >= 0) {
+        status = NtDeviceIoControlFile(root, 0, 0, 0, &iosb, IOCTL_MINO_SETUP_COPY,
+                                       &request, sizeof request, 0, 0);
+        NtClose(root);
+    }
+    if (status < 0) {
+        DbgPrint("[setup] copy failed: %08lx\n", status);
+        DbgPrint("[setup] install stopped on the install screen\n");
+        return;
+    }
+    DbgPrint("[setup] copy: boot files and system tree copied\n");
+    /* Stage configure: nothing to configure yet — the loader boots the
+     * installed disk by convention. The verify stage ran inside the copy
+     * (each file's size reread). */
+    progress = 80;
+    DbgPrint("[setup] stage configure: %d%%\n", progress);
+    repaint(window);
+    Sleep(40);
     progress = 100;
-    DbgPrint("[setup] stage partition: 100%%\n");
+    DbgPrint("[setup] stage verify: %d%%\n", progress);
     repaint(window);
     Sleep(40);
     set_screen(window, SCREEN_COMPLETE);

@@ -180,7 +180,10 @@ impl Machine {
                 cmd.arg("-drive").arg(drive("if=pflash,format=raw", vars, ""));
             }
         }
-        // Virtual FAT disks, read-write: the firmware stores NvVars on the ESP.
+        // Virtual FAT disks, read-write: the firmware stores NvVars on the
+        // ESP. (The vvfat stays FAT16: a FAT32 volume this small is invalid
+        // and the firmware refuses it; the installer's boot-file copy skips
+        // it and the image boot carries its own FAT32 ESP.)
         if let Some(image) = &self.boot_disk {
             cmd.arg("-drive").arg(drive("format=raw", image, ""));
         } else {

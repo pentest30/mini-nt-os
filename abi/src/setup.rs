@@ -22,6 +22,14 @@ pub const IOCTL_MINO_SETUP_PREPARE: u32 = 0x8000_A004;
 /// même jeton que la préparation ; il ne copie rien.
 pub const IOCTL_MINO_SETUP_FORMAT: u32 = 0x8000_A008;
 
+/// CTL_CODE(0x8000, 0x803, METHOD_BUFFERED, FILE_WRITE_ACCESS).
+///
+/// La copie transfère les fichiers du système sur les volumes formatés :
+/// les deux fichiers de boot (BOOTX64.EFI, kernel.elf) de l'ESP de
+/// démarrage vers l'ESP cible, et l'arbre WINDOWS du volume de démarrage
+/// vers le volume système cible. Même demande et même jeton.
+pub const IOCTL_MINO_SETUP_COPY: u32 = 0x8000_A00C;
+
 /// Version du contrat [`SetupPreview`].
 pub const SETUP_ABI_VERSION: u32 = 1;
 

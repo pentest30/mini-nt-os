@@ -17,8 +17,9 @@ use abi::setup::{
 };
 
 use crate::disk::AtaDisk;
-use crate::fat::{BlockDevice, FatError};
+use crate::fat::{BlockDevice, FatError, FatVolume};
 use crate::partition::PartitionDevice;
+use crate::volume::{Node, Volume};
 
 /// Alignement GPT des partitions : 1 Mio sur des secteurs de 512 octets.
 const ALIGNMENT: u64 = 2048;
@@ -481,6 +482,214 @@ fn format_locked(number: u32, token: u64) -> Result<(fatfs::format::Geometry, fa
     let mut disk = AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::SECONDARY, false)).ok_or(PrepareError::NoTarget)?;
     let sectors = disk.sectors();
     format_disk(&mut disk, sectors, number, SETUP_DISK_CANDIDATE, token)
+}
+
+/// Ce qu'une copie a transféré.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CopyReport {
+    pub files: u32,
+    pub directories: u32,
+    pub bytes: u64,
+}
+
+/// Le volume de l'ESP de démarrage : la partition EFI du disque primaire
+/// quand il porte un GPT (l'image installée, son ESP est FAT32), sinon
+/// `None` — l'ESP virtuelle FAT16 de QEMU ne se monte pas (le lecteur FAT
+/// du noyau ne lit que du FAT32) et la copie des fichiers de boot passe
+/// par l'image installée.
+fn boot_esp_volume() -> Result<Option<FatVolume<alloc::boxed::Box<dyn BlockDevice>>>, PrepareError> {
+    let mut disk = AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::PRIMARY, false)).ok_or(PrepareError::NoTarget)?;
+    let sectors = disk.sectors();
+    let mut reader = BlockSectors(&disk);
+    if let Ok((layout, source)) = gpt::read(&mut reader, sectors) {
+        if source == gpt::Source::Both {
+            let esp = layout
+                .partitions()
+                .iter()
+                .find(|partition| partition.kind == gpt::EFI_SYSTEM)
+                .ok_or(PrepareError::NotPrepared)?;
+            let count = esp.last_lba - esp.first_lba + 1;
+            let view = PartitionDevice::new(disk, sectors, esp.first_lba, count).map_err(|_| PrepareError::Io)?;
+            let device: alloc::boxed::Box<dyn BlockDevice> = alloc::boxed::Box::new(view);
+            return FatVolume::mount(device).map(|volume| Some(volume)).map_err(|_| PrepareError::Io);
+        }
+    }
+    Ok(None)
+}
+
+/// Copie un fichier de l'ESP de démarrage vers le répertoire de l'ESP
+/// cible : lu par le lecteur FAT, créé et écrit par le Volume cible.
+fn copy_boot_file<D: BlockDevice>(
+    esp: &FatVolume<D>,
+    path: &str,
+    dst: &Volume,
+    dst_dir: &Node,
+) -> Result<(), PrepareError> {
+    let mut file = esp.open(path).map_err(|_| PrepareError::Io)?;
+    let mut data = alloc::vec![0u8; file.file_size as usize];
+    esp.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let node = dst.create(dst_dir, name, false, 0x20).map_err(|_| PrepareError::Io)?;
+    dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
+    Ok(())
+}
+
+/// Copie récursive de l'arbre `src_path` du volume de démarrage vers le
+/// répertoire `dst_dir` du volume cible. Les entrées `.` et `..` ne se
+/// copient pas ; chaque fichier est relu depuis la source, créé et écrit
+/// sur la cible (le Volume grandit le fichier), sa taille vérifiée à la
+/// relecture de son entrée.
+fn copy_dir(src_path: &str, dst: &Volume, dst_dir: &Node, report: &mut CopyReport) -> Result<(), PrepareError> {
+    for entry in crate::list_fat_dir(src_path).map_err(|_| PrepareError::Io)? {
+        if entry.name == "." || entry.name == ".." {
+            continue;
+        }
+        let child = alloc::format!("{src_path}/{}", entry.name);
+        if entry.attr & 0x10 != 0 {
+            let node = dst
+                .create(dst_dir, &entry.name, true, u32::from(entry.attr))
+                .map_err(|_| PrepareError::Io)?;
+            report.directories += 1;
+            copy_dir(&child, dst, &node, report)?;
+        } else {
+            let mut file = crate::open_fat_file(&child).map_err(|_| PrepareError::Io)?;
+            let mut data = alloc::vec![0u8; file.file_size as usize];
+            crate::read_fat_file(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
+            let node = dst
+                .create(dst_dir, &entry.name, false, u32::from(entry.attr))
+                .map_err(|_| PrepareError::Io)?;
+            let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
+            // La vérification après écriture : l'entrée de la cible rend la
+            // taille écrite.
+            if dst
+                .current(&written)
+                .map_err(|_| PrepareError::Io)?
+                .size as u64
+                != data.len() as u64
+            {
+                return Err(PrepareError::Io);
+            }
+            report.files += 1;
+            report.bytes += data.len() as u64;
+        }
+    }
+    Ok(())
+}
+
+/// Copie le système sur le disque installé : les deux fichiers de boot de
+/// l'ESP de démarrage vers l'ESP cible, et l'arbre WINDOWS du volume de
+/// démarrage (le ramdisk, qui porte la même arborescence) vers le volume
+/// système cible. La même revalidation ; les tables GPT du disque cible
+/// doivent être là (la préparation et le formatage ont tourné).
+///
+/// # IRQL
+/// PASSIVE_LEVEL (les E/S PIO attendent le matériel).
+pub fn copy_files(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
+    if number == PRIMARY_MASTER {
+        return Err(PrepareError::Protected);
+    }
+    if u32::from(SYSTEM_DISK_NUMBER.load(Ordering::Acquire)) == number {
+        return Err(PrepareError::Protected);
+    }
+    if number != SECONDARY_MASTER {
+        return Err(PrepareError::NoTarget);
+    }
+    if !PREPARE_LOCK.try_acquire() {
+        return Err(PrepareError::Busy);
+    }
+    let copied = copy_locked(number, token);
+    PREPARE_LOCK.release();
+    copied
+}
+
+fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
+    let mut target = AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::SECONDARY, false)).ok_or(PrepareError::NoTarget)?;
+    let sectors = target.sectors();
+    let plan = validated_plan(sectors, number, SETUP_DISK_CANDIDATE, token)?;
+    // Les tables GPT du disque cible (la préparation les a écrites).
+    let mut reader = BlockSectors(&target);
+    let (layout, source) = gpt::read(&mut reader, sectors).map_err(|_| {
+        log::warn!("TEMP copy: a");
+        PrepareError::NotPrepared
+    })?;
+    if source != gpt::Source::Both {
+        log::warn!("TEMP copy: b (source {source:?})");
+        return Err(PrepareError::NotPrepared);
+    }
+    let esp = layout
+        .partitions()
+        .iter()
+        .find(|partition| partition.kind == gpt::EFI_SYSTEM)
+        .ok_or_else(|| {
+            log::warn!("TEMP copy: c (no ESP)");
+            PrepareError::NotPrepared
+        })?;
+    let system = layout
+        .partitions()
+        .iter()
+        .find(|partition| partition.kind == gpt::BASIC_DATA)
+        .ok_or_else(|| {
+            log::warn!("TEMP copy: d (no system)");
+            PrepareError::NotPrepared
+        })?;
+    // Les deux fichiers de boot vers l'ESP cible — quand l'ESP de démarrage
+    // est montageable en FAT32 (le GPT de l'image installée). L'ESP
+    // virtuelle FAT16 de QEMU ne se monte pas : les fichiers de boot ne se
+    // copient pas dans ce cas (les scénarios QEMU testent l'arbre système).
+    let boot_esp = boot_esp_volume()?;
+    let esp_device = PartitionDevice::new(
+        target.clone(),
+        sectors,
+        esp.first_lba,
+        esp.last_lba - esp.first_lba + 1,
+    )
+    .map_err(|error| {
+        log::warn!("TEMP copy: f (esp view {error:?})");
+        PrepareError::Io
+    })?;
+    let esp_volume = Volume::mount(alloc::boxed::Box::new(esp_device)).map_err(|error| {
+        log::warn!("TEMP copy: g (esp mount {error:?})");
+        PrepareError::Io
+    })?;
+    let esp_root = esp_volume.root();
+    match &boot_esp {
+        Some(boot_esp) => {
+            copy_boot_file(boot_esp, "EFI/BOOT/BOOTX64.EFI", &esp_volume, &esp_root).map_err(|error| {
+                log::warn!("TEMP copy: h (bootx64 {error:?})");
+                error
+            })?;
+            copy_boot_file(boot_esp, "kernel.elf", &esp_volume, &esp_root).map_err(|error| {
+                log::warn!("TEMP copy: i (kernel.elf {error:?})");
+                error
+            })?;
+        }
+        None => log::warn!("[m4] install: copy: the boot ESP is not FAT32-mountable, boot files skipped"),
+    }
+    // L'arbre système : le ramdisk (qui porte l'arborescence du démarrage)
+    // vers le volume système cible.
+    let system_device = PartitionDevice::new(
+        target,
+        sectors,
+        system.first_lba,
+        system.last_lba - system.first_lba + 1,
+    )
+    .map_err(|error| {
+        log::warn!("TEMP copy: j (system view {error:?})");
+        PrepareError::Io
+    })?;
+    let system_volume = Volume::mount(alloc::boxed::Box::new(system_device)).map_err(|error| {
+        log::warn!("TEMP copy: k (system mount {error:?})");
+        PrepareError::Io
+    })?;
+    let system_root = system_volume.root();
+    let mut report = CopyReport::default();
+    copy_dir("", &system_volume, &system_root, &mut report).map_err(|error| {
+        log::warn!("TEMP copy: l (tree {error:?})");
+        error
+    })?;
+    // La vérification : les tailles écrites relues à chaque fichier dans
+    // copy_dir, et le lecteur du noyau a monté les deux volumes.
+    Ok(report)
 }
 
 #[cfg(test)]

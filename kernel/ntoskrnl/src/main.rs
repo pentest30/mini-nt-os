@@ -2965,7 +2965,10 @@ fn file_self_test() {
 
     let mut data = alloc::vec![0u8; 0x400];
     let mut strings = 0x280usize;
-    let names = ["\\??\\C:\\", "KERNEL.BIN", "\\??\\C:\\kernel.bin", "\\??\\C:\\NOPE.BIN", "\\??\\C:\\NoDir\\x.bin"];
+    // Le volume de test est le RAMDISK (le loader y charge l'arborescence à
+    // chaque boot) : sur un boot installé, C: est le volume installé, qui ne
+    // porte pas les fichiers de test.
+    let names = ["\\Device\\Ramdisk0\\", "KERNEL.BIN", "\\Device\\Ramdisk0\\kernel.bin", "\\Device\\Ramdisk0\\NOPE.BIN", "\\Device\\Ramdisk0\\NoDir\\x.bin"];
     for (i, text) in names.iter().enumerate() {
         let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         data[strings..strings + units.len()].copy_from_slice(&units);

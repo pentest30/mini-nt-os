@@ -9,6 +9,7 @@ use hal::ata::AtaDrive;
 use crate::fat::{BlockDevice, FatError};
 
 /// Un disque ATA et son nombre de secteurs.
+#[derive(Clone)]
 pub struct AtaDisk {
     drive: AtaDrive,
     sectors: u64,

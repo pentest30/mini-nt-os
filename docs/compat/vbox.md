@@ -216,3 +216,21 @@ Vérifié sur l'image `mino-vbox3` : `kernel: phase 1 done`, tous les
 self-tests (y compris `process_round`, la sonde KUSER_SHARED_DATA et le
 test GS), smss (36 services), et le lanceur dessiné sur le framebuffer
 VBox. La fenêtre du launcher s'affiche et répond.
+
+## Le boot sur le disque installé : la batterie smoke passe au ramdisk
+
+Sur un boot dont `C:` est le volume **installé** (le disque secondaire où
+l'installeur a écrit), la batterie smoke héritée bugcheckait : son programme
+`files.exe` ouvre `KERNEL.BIN` relatif à la racine de `C:`, qui ne porte pas
+les fichiers de test sur un volume installé. Le fixture déterministe est le
+**ramdisk** (le loader y charge `fat.img` à chaque boot, `KERNEL.BIN` y est
+toujours) : le programme ouvre désormais `\Device\Ramdisk0\` (le `\` final
+fait ouvrir la racine par le parse du périphérique — ouvrir le périphérique
+seul rend un Device, pas un File : OBJECT_TYPE_MISMATCH) et ses chemins
+relatifs. La batterie passe ainsi quel que soit ce que `C:` porte. De même,
+l'ESP virtuelle FAT16 de QEMU ne se monte pas (le lecteur FAT du noyau ne
+lit que du FAT32) : la copie des fichiers de boot la saute avec journal
+sous QEMU et les copie sur VBox (l'ESP GPT de l'image installée est
+FAT32). Dettes notées : un cache de secteurs FAT (la copie d'un arbre
+relit la FAT par cluster, lente en PIO) et l'affichage à l'écran des
+refus du moteur.
