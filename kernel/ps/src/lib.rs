@@ -39,7 +39,7 @@ pub mod rundown;
 pub mod session;
 pub mod system_dll;
 
-pub use eprocess::{child_processes, create_process, lookup_process, system_process, EProcess, PROCESS_TYPE};
+pub use eprocess::{create_process, lookup_process, set_create_process_notify, system_process, EProcess, PROCESS_TYPE};
 pub use ethread::{
     create_thread, create_thread_with_context, create_thread_with_parameter, create_user_stack, lookup_thread, EThread,
     InitialTeb, THREAD_TYPE,

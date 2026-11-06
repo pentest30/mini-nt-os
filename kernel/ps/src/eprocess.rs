@@ -24,7 +24,7 @@ use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_CID, STATUS_INVALID_PARAMETER,
@@ -277,6 +277,13 @@ impl EProcess {
             },
         );
         CID_TABLE.lock().set(pid, CidEntry::Process(Arc::downgrade(&process)));
+        let notify = CREATE_PROCESS_NOTIFY.load(Ordering::Acquire);
+        if notify != 0 {
+            // SAFETY: only `set_create_process_notify` stores here, the address
+            // of a `fn(&Arc<Object<EProcess>>)`.
+            let notify: fn(&Arc<Object<EProcess>>) = unsafe { core::mem::transmute::<usize, _>(notify) };
+            notify(&process);
+        }
         Ok(process)
     }
 
@@ -620,23 +627,18 @@ pub fn lookup_process(pid: ProcessId) -> Result<Arc<Object<EProcess>>, NtStatus>
     }
 }
 
-/// Les processus vivants que `parent` a créés (InheritedFromUniqueProcessId),
-/// dans l'ordre de leurs PID.
+/// Ce qu'appelle la création d'un processus (0 : rien).
+static CREATE_PROCESS_NOTIFY: AtomicUsize = AtomicUsize::new(0);
+
+/// PsSetCreateProcessNotifyRoutine (comme) : `notify` reçoit chaque
+/// processus créé, avec son PID, avant qu'il ait un thread. `None` : plus
+/// rien.
 ///
 /// # IRQL
-/// <= DISPATCH_LEVEL.
-pub fn child_processes(parent: ProcessId) -> Vec<Arc<Object<EProcess>>> {
-    let processes: Vec<Arc<Object<EProcess>>> = CID_TABLE
-        .lock()
-        .iter()
-        .filter_map(|(_, entry)| match entry {
-            CidEntry::Process(process) => process.upgrade(),
-            CidEntry::Thread(_) => None,
-        })
-        .collect();
-    // Filtered once the table is unlocked: dropping the last reference to a
-    // process takes its lock to give back the PID.
-    processes.into_iter().filter(|process| process.parent_pid() == parent).collect()
+/// Tout niveau. `notify` est appelé à PASSIVE_LEVEL, sans verrou de Ps
+/// tenu.
+pub fn set_create_process_notify(notify: Option<fn(&Arc<Object<EProcess>>)>) {
+    CREATE_PROCESS_NOTIFY.store(notify.map_or(0, |notify| notify as usize), Ordering::Release);
 }
 
 /// Un processus de l'ancien chargeur (`NtCreateProcess` de `syscall.rs`) :
