@@ -4,6 +4,8 @@
 d'image GPT/FAT décrit dans [`io-install.md`](io-install.md). Le brief visuel
 reste [`../design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
 
+![Écran final de l'installateur Mino](../images/installer-ui-backend.png)
+
 ## Architecture retenue
 
 L'installateur est un programme Win32 natif, lié aux `user32`, `gdi32`,
