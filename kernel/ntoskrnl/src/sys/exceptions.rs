@@ -153,7 +153,9 @@ fn page_fault(frame: &mut KTrapFrame) {
 /// d'un flux d'instructions périmé.
 fn log_shared_data_fault(frame: &KTrapFrame, address: u64, error: PageFaultErrorCode) {
     let base = u64::from(abi::shared_data::KUSER_SHARED_DATA_VA);
-    if !(base..base + 0x1_0000).contains(&address) {
+    // TEMP: l'adresse de la faute varie par boot (0x7ffd16c6, 0x7ffe1478) —
+    // élargir la fenêtre de capture aux deux observées. À resserrer.
+    if !(base - 0x3_0000..base + 0x1_0000).contains(&address) {
         return;
     }
     let mut bytes = [0u8; 8];
