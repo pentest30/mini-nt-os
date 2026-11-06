@@ -65,8 +65,19 @@ jour à chaque commit qui change l'état.
   relancés avec accès aux sockets locales du moniteur), aucun scénario sauté ;
   `cargo check -p fatfs --target x86_64-unknown-none` passe.
   F1 est déjà fait sur cette branche.
-  La suite : F4 (GPT) ; raccordement noyau et IOCTL après la décision sur la
-  partie proposée de l'ADR-022. Aucun service privé ajouté à cette étape.
+  **F4 est fait sur cette branche** : `libs/gpt` lit et écrit les tableaux,
+  leurs CRC et le MBR protecteur ; récupération par une copie valide,
+  conflits refusés. `io::partition` expose une vue bornée et monte la première
+  partition Basic Data (EFI ignorée) ; les volumes FAT32 bruts restent pris
+  en charge. `disk = system-gpt` et `gpt-persistence` testent la persistance
+  après redémarrage, sur AMD et Intel, les deux GPT et la FAT vérifiées ;
+  `sgdisk -v` indépendant valide les images. Tests unitaires et croisés
+  FAT/GPT/Io, cinq mutations détectées ; `cargo xtask lint` propre et
+  738 tests hôte et 30 scénarios QEMU réussis, aucun scénario sauté.
+  Détails et limites dans
+  `compat/io-install.md`. Aucun appel système ni IOCTL ajouté.
+  La suite : image d'installation complète (ESP + système), interfaces NT
+  de disque, verrouillage/démontage et IOCTL (partie proposée de l'ADR-022).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
@@ -223,7 +234,8 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
 - Io : IRP, piles de périphériques, E/S asynchrones (un événement ou une APC de fin : `STATUS_NOT_IMPLEMENTED`), ports
   de complétion, partage (IoCheckShareAccess), suppression et renommage de fichiers, énumération de répertoires
   (NtQueryDirectoryFile, que `cmd.exe` demandera), noms longs FAT, dates des fichiers.
-- Disques : virtio-blk, gestionnaire de partitions (le disque système porte un seul volume, sans table), LBA 48 bits,
+- Disques : virtio-blk, gestionnaire de partitions complet (GPT et vue bornée faits au F4 ;
+  une seule partition système montée, pas encore d’IOCTL), LBA 48 bits,
   DMA et interruptions ; le verrou d'un volume est tournant (attentes actives à DISPATCH_LEVEL : un mutex quand Ke en
   aura un) ; un cache de secteurs (en PIO, chaque pas d'une chaîne relit un secteur de la FAT).
 - Registre : `tools/mkhive` (ADR-012 ; la ruche SYSTEM vient encore de ReactOS), écriture différée (rien ne va sur

@@ -31,6 +31,8 @@
 //!     and the NLS tables);
 //!   - `native`: the ramdisk gets the native test programs of
 //!     `tests/native/`, compiled with MinGW or clang (`xtask/src/native.rs`).
+//! - `disk = system-gpt`: wraps the FAT image in a GPT Basic Data partition;
+//!   the two GPT copies are checked and the partition extracted for fsck.
 //! - `disk = system`: the image of the ramdisk is also the system disk `C:`,
 //!   a file attached as the master of the secondary IDE channel, which the
 //!   boots share; after the last one, `fsck.vfat -n` must find it clean
@@ -63,6 +65,8 @@ pub struct Scenario {
     pub requires_native: bool,
     /// The ramdisk image is also the system disk `C:`.
     pub system_disk: bool,
+    /// Wrap the system volume in GPT rather than using raw FAT.
+    pub gpt_disk: bool,
     pub boots: u32,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
@@ -92,6 +96,7 @@ impl Scenario {
             requires_userland: false,
             requires_native: false,
             system_disk: false,
+            gpt_disk: false,
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
@@ -124,6 +129,10 @@ impl Scenario {
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
+                    "system-gpt" => {
+                        sc.system_disk = true;
+                        sc.gpt_disk = true;
+                    }
                     _ => return Err(format!("{}: unknown disk `{value}`", at())),
                 },
                 "boots" => {
@@ -247,6 +256,8 @@ requires = userland
         assert!((!sc.system_disk, sc.boots) == (true, 1), "one boot on the ramdisk by default");
         let twice = Scenario::parse("x", "expect = a\ndisk = system\nboots = 2").unwrap();
         assert!(twice.system_disk && twice.boots == 2);
+        let gpt = Scenario::parse("x", "expect = a\ndisk = system-gpt").unwrap();
+        assert!(gpt.system_disk && gpt.gpt_disk);
         let screen = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5").unwrap();
         assert_eq!(screen.screen, [crate::screen::Pixel { x: 1, y: 2, rgb: [0x3A, 0x6E, 0xA5] }]);
         assert!(sc.screen.is_empty());

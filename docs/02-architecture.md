@@ -431,6 +431,7 @@ mini-nt-os/
 ├── libs/
 │   ├── pe/              # parseur PE32/PE32+ no_std (hôte + noyau)
 │   ├── fatfs/           # écriture FAT32 : image et formatage (hôte + noyau, ADR-022)
+│   ├── gpt/             # tables GPT, MBR protecteur et CRC (hôte + noyau)
 │   ├── regf/            # format de ruche (hôte + noyau)
 │   └── glyph/           # polices TrueType (ttf-parser) et rastériseur en virgule fixe (ADR-013)
 ├── userland/            # remplacements Rust de DLL (plus tard), cible i686-pc-windows-*

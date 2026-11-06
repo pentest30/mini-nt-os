@@ -11,3 +11,4 @@ name = "fatfs"
 [dev-dependencies]
 # The kernel's FAT reader mounts the images built in the tests.
 io-manager = { path = "../../kernel/io" }
+gpt = { path = "../gpt" }

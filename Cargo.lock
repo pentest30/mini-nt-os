@@ -71,6 +71,7 @@ dependencies = [
 name = "fatfs"
 version = "0.1.0"
 dependencies = [
+ "gpt",
  "io-manager",
 ]
 
@@ -91,6 +92,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpt"
+version = "0.1.0"
+
+[[package]]
 name = "hal"
 version = "0.1.0"
 dependencies = [
@@ -106,6 +111,7 @@ name = "io-manager"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "gpt",
  "hal",
  "ke",
  "log",
@@ -500,5 +506,6 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "gpt",
  "pe",
 ]

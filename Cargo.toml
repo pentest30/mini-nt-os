@@ -18,6 +18,7 @@ members = [
     "kernel/win32k",
     "drivers/video/gopfb",
     "libs/fatfs",
+    "libs/gpt",
     "libs/pe",
     "libs/regf",
     "libs/glyph",

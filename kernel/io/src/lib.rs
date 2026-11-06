@@ -37,6 +37,7 @@ pub mod fat;
 pub mod file;
 pub mod irp;
 pub mod name;
+pub mod partition;
 pub mod volume;
 
 pub use device::{Device, DEVICE_TYPE};
@@ -70,7 +71,8 @@ pub struct BootVolumes {
 /// ATA ([`DISK_VOLUME`]), s'ils sont là, puis fait mener `\GLOBAL??\C:` et
 /// `\SystemRoot` (son répertoire `WINDOWS`) au disque ATA, ou sans lui au
 /// disque RAM ; tout est permanent. Un disque ATA qui ne porte pas de FAT32
-/// reste sans volume.
+/// reste sans volume. Une table GPT valide expose sa première partition Basic
+/// Data ; sans GPT, le volume FAT32 brut reste pris en charge.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, une fois, après [`init`] et `ob::init`.
@@ -87,7 +89,14 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
     }
     if let Some(disk) = disk::AtaDisk::probe(SYSTEM_DISK) {
         let sectors = disk.sectors();
-        match Volume::mount(alloc::boxed::Box::new(disk)) {
+        match partition::system_volume(disk, sectors)
+            .map_err(|error| match error {
+                FatError::Io => abi::ntstatus::STATUS_IO_DEVICE_ERROR,
+                FatError::Corrupt => abi::ntstatus::STATUS_DISK_CORRUPT_ERROR,
+                _ => abi::ntstatus::STATUS_UNRECOGNIZED_VOLUME,
+            })
+            .and_then(|disk| Volume::mount(alloc::boxed::Box::new(disk)))
+        {
             Ok(volume) => {
                 let device: ob::ObjectRef = Device::with_volume(volume);
                 namespace.insert(&device, DISK_VOLUME, None, permanent)?;

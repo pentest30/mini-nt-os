@@ -20,3 +20,6 @@ pub mod format;
 pub mod image;
 
 pub use image::{build, path};
+
+#[cfg(test)]
+mod gpt_tests;

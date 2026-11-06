@@ -1,8 +1,8 @@
 //! Les disques (02 §8) : un disque ATA en PIO (`hal::ata`), vu comme
 //! périphérique de blocs de secteurs de 512 octets.
 //!
-//! Pas encore : piles de périphériques et IRP, partitions (le disque porte
-//! un seul volume, sans table de partitions), virtio-blk.
+//! Pas encore : piles de périphériques et IRP, virtio-blk. Les partitions GPT sont découvertes par
+//! `partition`, qui expose une vue bornée du volume système.
 
 use hal::ata::AtaDrive;
 

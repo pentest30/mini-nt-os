@@ -23,6 +23,7 @@
 mod inflate;
 mod iso9660;
 mod native;
+mod partition;
 mod qemu;
 mod scenario;
 mod screen;
@@ -270,7 +271,11 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             // The system disk starts as a copy of the ramdisk's image.
             let system_disk = sc.system_disk.then(|| run_dir.join("c.img"));
             if let Some(image) = &system_disk {
-                std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
+                if sc.gpt_disk {
+                    partition::create(&esp.join("fat.img"), image)?;
+                } else {
+                    std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
+                }
             }
             let machine = Machine {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
@@ -282,7 +287,8 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             };
             let mut outcome = qemu::boot_and_watch(&machine, &options, sc, timeout.unwrap_or(sc.timeout), &run_dir)?;
             if let (true, Some(image)) = (outcome.passed, &machine.system_disk) {
-                match qemu::fsck(image) {
+                let check_image = if sc.gpt_disk { Some(partition::extract(image)?) } else { None };
+                match qemu::fsck(check_image.as_deref().unwrap_or(image)) {
                     None => println!(
                         "xtask: WARNING {label}: fsck.vfat not found, {} not checked (dosfstools)",
                         image.display()

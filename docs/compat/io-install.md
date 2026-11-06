@@ -103,3 +103,66 @@ Pas encore : raccordement à un périphérique du noyau, démontage/exclusion,
 IOCTL de formatage (la partie noyau de l'ADR-022 reste proposée), tailles de
 clusters supérieures à 512 octets, label et identifiant de volume configurables,
 partitionnement GPT (F4).
+
+
+## F4 : GPT, MBR protecteur et volumes bornés
+
+`libs/gpt` est une crate `no_std` avec `alloc`, sans dépendance externe ni
+`unsafe`. Elle encode les champs explicitement (pas de structure Rust
+projetée sur le disque), suivant le format GPT 1.0 de la spécification UEFI,
+chapitre 5. Les GUID sont des octets dans l'ordre EFI ; les noms sont les
+36 unités UTF-16 du disque.
+
+- `Layout::new` valide le GUID du disque, les identifiants et indices des
+  partitions, leurs limites et leurs chevauchements avant toute écriture.
+  La géométrie canonique réserve 128 entrées de 128 octets, un en-tête et
+  un tableau à chaque bout du disque. Le lecteur accepte 128 à 4096 entrées
+  de 128 octets ; une autre taille d'entrée est refusée explicitement.
+- `gpt::write`, derrière `ReadSectors`/`WriteSectors`, écrit le tableau et
+  l'en-tête de secours, vide le périphérique, puis la copie principale,
+  puis le MBR protecteur et un dernier vidage. Chaque en-tête et chaque
+  tableau portent leur CRC-32 IEEE. Le MBR porte une unique partition 0xEE
+  couvrant le disque, avec saturation à `u32::MAX` pour les grands disques.
+  Le contenu des partitions et l'espace libre ne sont pas touchés.
+- `gpt::read` vérifie le MBR protecteur, signatures, révision, taille,
+  champs réservés, adresses des deux en-têtes, limites des tableaux, CRC et
+  entrées. Une copie valide permet de lire malgré la corruption ou l'erreur
+  de lecture de l'autre ; `Source` indique laquelle. Deux copies valides
+  mais différentes sont refusées. Aucune réparation automatique n'écrit sur
+  le disque. Les MBR hybrides sont refusés.
+- `io::partition::PartitionDevice` translate les LBA d'un volume et refuse
+  lectures et écritures hors de sa plage, ainsi que les tampons de mauvaise
+  taille. Les erreurs de vidage atteignent le périphérique sous-jacent.
+  Au démarrage, la première partition **Basic Data** d'un disque GPT devient
+  `\Device\HarddiskVolume1` et `C:` si elle porte du FAT32 ; les partitions
+  EFI sont ignorées. Un GPT reconnu mais invalide ne retombe jamais sur le
+  lecteur FAT brut. Les disques FAT32 sans table restent pris en charge.
+- `disk = system-gpt` dans un scénario fait placer le FAT de démarrage dans
+  une partition à LBA 2048 (alignement de début à 1 Mio). Les GUID fixes de
+  ces images sont réservés aux tests : un installateur doit en générer de
+  nouveaux. Après les démarrages, `xtask` valide **les deux** copies GPT et
+  extrait la partition pour `fsck.vfat`, sans modifier l'image testée.
+  `gpt-persistence` écrit puis relit `C:\PERSIST\DATA.TXT` après un
+  redémarrage, sur AMD (`int 2Eh`) et Intel (`SYSENTER`). L'ESP de QEMU reste
+  distincte : ce scénario ne prétend pas tester un disque d'installation
+  unique avec ESP et volume système.
+
+Validation : tests unitaires des CRC (dont le vecteur indépendant
+`123456789`), récupération de chaque copie, conflits, tailles et offsets
+malveillants, erreurs d'E/S, entrées invalides malgré des CRC recalculés,
+chevauchements et slots libres ; tests croisés GPT/FAT/Io (EFI ignorée,
+FAT relue, reformatage d'une partition sans toucher GPT ni sa voisine,
+corruption sans repli brut). Cinq mutations sont détectées : CRC d'en-tête
+ignoré, CRC de tableau ignoré, copie de secours omise, contrôle de
+chevauchement retiré et limite de partition retirée. `sgdisk -v` valide
+également les images de persistance GPT avec « No problems found ».
+
+Limites : secteurs logiques de 512 octets ; une seule partition système
+montée, pas encore de noms de périphériques pour toutes les partitions,
+ni IOCTL de création/modification de table, ni politique de montage fondée
+sur les attributs GPT, ni notification de changement
+ou verrouillage/démontage des volumes. Une réécriture GPT n'est pas atomique
+et demande un disque démonté et exclusivement tenu. Le MBR traditionnel,
+les tables hybrides et les secteurs de 4 Kio restent hors de cette étape.
+La création de l'image d'installation complète (ESP et système) et le
+raccordement des opérations de disque aux interfaces NT viennent ensuite.
