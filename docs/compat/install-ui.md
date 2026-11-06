@@ -66,14 +66,21 @@ couleurs contrastées et les cinq étapes dans un rail latéral.
 
 ## Limite de sécurité actuelle
 
-L'installation est simulée. L'activation d'« Install » journalise
+L'installation reste simulée dans l'UI. L'activation d'« Install » journalise
 `simulated write boundary`, montre les étapes préparer, partitionner,
 copier, configurer et vérifier, puis une réussite explicitement qualifiée de
 simulation. `SETUP1.EXE` ouvre seulement un répertoire de `C:` comme ancrage
-du contrôle en lecture ; il ne reçoit aucun handle de disque brut. Le noyau
-ne publie pas encore de contrôle de préparation ou d'exécution. Le
+du contrôle en lecture ; il ne reçoit aucun handle de disque brut. Le
 constructeur `cargo xtask image` reste le seul chemin qui crée une image
 complète.
+
+Le noyau, lui, possède maintenant sa première commande d'écriture :
+`IOCTL_MINO_SETUP_PREPARE` (`abi::setup`) écrit les tables GPT du plan sur
+le disque cible après avoir reverifié le jeton de l'aperçu, refuse les
+disques protégés et ceux qui portent déjà des tables, et relit les deux
+copies pour vérifier. Elle ne formate pas et ne copie rien ; l'UI ne l'appelle
+pas encore (le moteur est exercé par le self-test noyau et le scénario
+`installer-prepare`, voir [`io-install.md`](io-install.md), lot 2).
 
 Le scénario `installer-ui` injecte les touches par le moniteur de QEMU,
 exerce Tab, Retour et Échap, attend les cinq progressions et vérifie des
@@ -86,12 +93,13 @@ cargo xtask test --boot --scenario installer-ui
 
 ## Suite
 
-1. Ajouter au contrat privilégié le verrou exclusif et le démontage de la
-   cible, puis une commande d'exécution qui exige le jeton du plan et revalide
-   l'identité et la capacité avant la première écriture.
-2. Écrire GPT, formater les deux vues bornées, copier les fichiers et rendre
-   des événements de progression ; la revue reste la dernière étape
-   réversible.
+1. Brancher l'UI sur la préparation réelle (le jeton de l'aperçu, puis
+   `IOCTL_MINO_SETUP_PREPARE` à la place de la simulation), et ajouter au
+   contrat le verrou exclusif et le démontage de la cible pendant
+   l'écriture.
+2. Formater les deux vues bornées (`fatfs::format` est prêt), copier les
+   fichiers et rendre des événements de progression ; la revue reste la
+   dernière étape réversible.
 3. Ajouter la souris PS/2, le ciblage par fenêtre, les messages `WM_MOUSE*`
    et le curseur dans `win32k`; la navigation clavier reste complète.
 4. Ajouter les erreurs récupérables, le journal détaillé, la reprise sûre et

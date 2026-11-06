@@ -230,3 +230,52 @@ nettoyage d'un espace temporaire saturé). Les deux commandes publiques
 la sonde SMSS sur un GPT primaire réel. Une destination déjà existante est
 refusée et ses octets restent intacts. `sgdisk` vérifie les GPT ;
 `fsck.vfat` vérifie l'ESP et le volume système des images de persistance.
+
+## Lot 2 : `IOCTL_MINO_SETUP_PREPARE`, la préparation du disque cible
+
+La seconde commande du contrat privilégié (`abi::setup`) écrit, une fois
+revérifiée, les tables GPT du plan sur le disque cible — et rien d'autre :
+elle ne formate pas et ne copie rien.
+
+- `abi::setup` : `IOCTL_MINO_SETUP_PREPARE`
+  (CTL_CODE(0x8000, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS),
+  `0x8000A004`), la demande `SetupPrepare` de 16 octets encodés (version,
+  numéro de disque, jeton), refusée pour une autre version du contrat.
+- `io_manager::install::prepare` : le média de démarrage (maître primaire)
+  et le disque qui porte le système courant sont refusés avant toute
+  écriture ; le maître secondaire est reprové, le plan recalculé par le
+  même `Plan::guided` que l'aperçu, et le jeton reverifié — la capacité
+  entre dans son empreinte, un disque qui a changé rend le jeton faux.
+  Un disque qui porte déjà des tables (MBR protecteur) est refusé sans
+  être touché : la revue de l'interface reste la dernière étape
+  réversible. Puis `libs/gpt::write` écrit la copie de secours d'abord,
+  les deux en-têtes GPT et le MBR protecteur, avec un flush entre les
+  copies ; la relecture par `libs/gpt::read` exige les deux copies valides
+  (`Source::Both`) et les plages du plan.
+- Les GUID du disque et des partitions sont **déterministes**, tirés du
+  jeton (FNV-1a, rôles distincts, version 4, variante RFC 4122) : la même
+  demande écrit les mêmes octets, et une comparaison d'images s'y
+  retrouve. L'ESP porte le type EFI System (emplacement 1, « ESP »), le
+  volume système Basic Data (emplacement 2, « MINO »).
+- `sys::file` : la préparation rend `STATUS_ACCESS_DENIED` (disque
+  protégé), `STATUS_NO_SUCH_DEVICE`, `STATUS_REVISION_MISMATCH` (jeton),
+  `STATUS_OBJECT_NAME_COLLISION` (déjà des tables),
+  `STATUS_INVALID_PARAMETER` (capacité) ou `STATUS_IO_DEVICE_ERROR`,
+  chacune journalisée. Le handle d'ancrage reste `FILE_READ_ATTRIBUTES` ;
+  l'autorité d'écrire vient du jeton.
+
+Le self-test noyau `install_prepare_self_test` (phase 1) l'exerce sur
+chaque démarrage : refus du disque protégé (les scénarios à disque
+système, où le secondaire porte `C:`), constat sans cible, puis, sur le
+disque cible de 96 Mio (`disk = target`), jeton faux refusé sans un octet
+écrit, préparation réussie et relue (ESP 2048..83967, système
+83968..196574), seconde passe refusée (`NotBlank`). Le scénario
+`installer-prepare` attend ces marqueurs sur AMD et Intel. Tests hôte :
+cinq tests de `prepare_disk` (écriture et relecture, jeton faux sans un
+octet écrit, disque occupé intact, drapeaux protégés et capacité réduite,
+GUID déterministes).
+
+Restent : le formatage des deux vues bornées (F3, `fatfs::format` est
+prêt), la copie des fichiers, les événements de progression vers l'UI, le
+verrou exclusif et le démontage de la cible pendant l'écriture, puis la
+souris.

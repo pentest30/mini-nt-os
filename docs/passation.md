@@ -109,9 +109,23 @@ jour à chaque commit qui change l'état.
   aucune commande d'écriture. Le scénario `disk = target` fournit un disque
   vierge distinct ; `installer-ui` passe sur AMD et Intel. Détails et plan dans
   [`compat/install-ui.md`](compat/install-ui.md).
-  Restent le verrouillage/démontage, l'IOCTL d'exécution avec revalidation du
-  jeton, la progression et la reprise du moteur (partie proposée de
-  l'ADR-022), puis la souris.
+  **Lot 2 du moteur fait** : `IOCTL_MINO_SETUP_PREPARE` (`abi::setup`,
+  `SetupPrepare` de 16 octets) — le média de démarrage et le disque qui
+  porte `C:` refusés avant toute écriture, le plan recalculé et le jeton
+  reverifié (la capacité est dans son empreinte), un disque qui porte déjà
+  des tables refusé sans être touché, puis `libs/gpt::write` (secours
+  d'abord, flush entre copies) et la relecture `libs/gpt::read` exigeant
+  les deux copies valides et les plages du plan ; GUID déterministes tirés
+  du jeton (la même demande écrit les mêmes octets). Self-test noyau
+  `install_prepare_self_test` sur chaque boot (refus du disque système
+  vérifié dans les scénarios `disk = system`, chemin complet dans le
+  scénario `installer-prepare`, AMD et Intel) ; cinq tests hôte de
+  `prepare_disk` ; statuts NT de chaque refus. Détails dans
+  [`compat/io-install.md`](compat/io-install.md), lot 2.
+  Restent le verrouillage/démontage pendant l'écriture, le branchement de
+  l'UI sur la préparation réelle, le formatage des deux vues bornées, la
+  copie des fichiers, la progression et la reprise du moteur (partie
+  proposée de l'ADR-022), puis la souris.
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).

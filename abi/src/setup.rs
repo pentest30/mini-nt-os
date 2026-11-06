@@ -8,6 +8,13 @@
 /// CTL_CODE(0x8000, 0x800, METHOD_BUFFERED, FILE_READ_ACCESS).
 pub const IOCTL_MINO_SETUP_QUERY: u32 = 0x8000_6000;
 
+/// CTL_CODE(0x8000, 0x801, METHOD_BUFFERED, FILE_WRITE_ACCESS).
+///
+/// La préparation écrit les tables GPT du plan sur le disque choisi, puis
+/// les relit pour les vérifier. Elle exige le jeton de l'aperçu ; elle ne
+/// formate pas et ne copie rien.
+pub const IOCTL_MINO_SETUP_PREPARE: u32 = 0x8000_A004;
+
 /// Version du contrat [`SetupPreview`].
 pub const SETUP_ABI_VERSION: u32 = 1;
 
@@ -85,6 +92,50 @@ impl SetupPreview {
     }
 }
 
+/// Nombre de mots de 32 bits de [`SetupPrepare`].
+pub const SETUP_PREPARE_WORDS: usize = 4;
+/// Taille encodée de [`SetupPrepare`].
+pub const SETUP_PREPARE_SIZE: usize = SETUP_PREPARE_WORDS * 4;
+
+/// La demande de préparation : le disque de l'aperçu et son jeton. Le noyau
+/// recalcule le plan du disque et refuse tout jeton qui ne le décrit plus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetupPrepare {
+    pub version: u32,
+    /// Le numéro du disque que l'aperçu a rendu.
+    pub disk_number: u32,
+    /// Le `plan_token` de l'aperçu, tel quel.
+    pub plan_token: u64,
+}
+
+impl SetupPrepare {
+    /// Encodage explicite, symétrique de [`SetupPreview::to_bytes`].
+    pub fn to_bytes(self) -> [u8; SETUP_PREPARE_SIZE] {
+        let token = [self.plan_token as u32, (self.plan_token >> 32) as u32];
+        let mut bytes = [0; SETUP_PREPARE_SIZE];
+        for (index, word) in [self.version, self.disk_number, token[0], token[1]].iter().enumerate() {
+            bytes[index * 4..index * 4 + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+
+    /// Décode la demande ; `None` pour une version du contrat qui n'est pas
+    /// la sienne.
+    pub fn from_bytes(bytes: [u8; SETUP_PREPARE_SIZE]) -> Option<Self> {
+        let word = |at: usize| {
+            let mut buffer = [0u8; 4];
+            buffer.copy_from_slice(&bytes[at * 4..at * 4 + 4]);
+            u32::from_le_bytes(buffer)
+        };
+        let version = word(0);
+        (version == SETUP_ABI_VERSION).then(|| Self {
+            version,
+            disk_number: word(1),
+            plan_token: u64::from(word(2)) | (u64::from(word(3)) << 32),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +160,15 @@ mod tests {
         assert_eq!(&bytes[20..28], &preview.total_sectors.to_le_bytes());
         assert_eq!(&bytes[28..36], &preview.plan_token.to_le_bytes());
         assert_eq!(&bytes[60..68], &preview.system_sectors.to_le_bytes());
+    }
+
+    #[test]
+    fn prepare_request_round_trips_and_refuses_other_versions() {
+        let request = SetupPrepare { version: SETUP_ABI_VERSION, disk_number: 2, plan_token: 0x99aa_bbcc_ddee_ff00 };
+        let decoded = SetupPrepare::from_bytes(request.to_bytes()).unwrap();
+        assert_eq!(decoded, request);
+        let mut other = request.to_bytes();
+        other[..4].copy_from_slice(&7u32.to_le_bytes());
+        assert_eq!(SetupPrepare::from_bytes(other), None);
     }
 }

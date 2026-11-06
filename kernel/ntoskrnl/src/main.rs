@@ -366,6 +366,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_directory_self_test();
     file_self_test();
     file_write_self_test();
+    install_prepare_self_test();
     section_service_self_test();
     event_service_self_test();
     keyed_event_self_test();
@@ -7058,6 +7059,48 @@ fn section_service_self_test() {
         "[smoke] Mm: sections from user mode on files of \\??\\C:: NtCreateSection (data, image, paging file), \
          NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection"
     );
+}
+
+/// Le moteur d'installation (`io_manager::install`, ADR-022) : la
+/// préparation du disque cible. Revalidation par le jeton, écriture des
+/// tables GPT, relecture des deux copies ; les refus, sans écrire. Sur un
+/// démarrage sans disque cible sain, il ne fait que constater ; sur le
+/// disque qui porte le système, il vérifie le refus.
+fn install_prepare_self_test() {
+    use io_manager::install::PrepareError;
+    let preview = io_manager::install::preview();
+    // Un disque protégé (le média de démarrage, ou celui qui porte `C:`)
+    // est refusé avant toute écriture, même quand l'aperçu ne rend aucun
+    // plan.
+    if preview.disk_flags & (abi::setup::SETUP_DISK_SYSTEM | abi::setup::SETUP_DISK_BOOT) != 0 {
+        assert_eq!(io_manager::install::prepare(preview.disk_number, preview.plan_token), Err(PrepareError::Protected));
+        log::info!("[m4] install: prepare refused the protected disk {}", preview.disk_number);
+        return;
+    }
+    if preview.state != abi::setup::SETUP_READY {
+        log::info!("[m4] install: no usable target (state {}), prepare skipped", preview.state);
+        return;
+    }
+    // Un jeton qui ne décrit pas le plan n'écrit rien.
+    assert_eq!(
+        io_manager::install::prepare(preview.disk_number, preview.plan_token ^ 1),
+        Err(PrepareError::TokenMismatch)
+    );
+    log::info!("[m4] install: prepare: a wrong token wrote nothing");
+    let layout =
+        io_manager::install::prepare(preview.disk_number, preview.plan_token).expect("the target disk prepares");
+    let esp = &layout.partitions()[0];
+    let system = &layout.partitions()[1];
+    log::info!(
+        "[m4] install: prepare: GPT written and re-read (ESP {}..{}, system {}..{})",
+        esp.first_lba,
+        esp.last_lba,
+        system.first_lba,
+        system.last_lba
+    );
+    // Le disque ne l'est plus : une seconde préparation est refusée.
+    assert_eq!(io_manager::install::prepare(preview.disk_number, preview.plan_token), Err(PrepareError::NotBlank));
+    log::info!("[m4] install: prepare: a second pass is refused (not blank)");
 }
 
 /// The registry write services from user mode (`cm`, `sys::registry`, M4),
