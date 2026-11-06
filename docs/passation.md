@@ -137,6 +137,15 @@ jour à chaque commit qui change l'état.
   Restent le formatage des deux vues bornées (`fatfs::format` est prêt),
   la copie des fichiers, la progression et la reprise du moteur (partie
   proposée de l'ADR-022), puis la souris.
+- **Le flux d'installation tourne sur VirtualBox** : `cargo xtask image
+  --initial-command SETUP1.EXE` place le programme à la place de
+  winlogon.exe (la substitution du scénario `installer-ui`) ; avec un
+  disque cible vierge de 96 Mio attaché en maître secondaire, l'assistant
+  navigue et **la préparation réelle écrit le MBR protecteur et les deux
+  copies GPT** sur le disque cible (relues), l'écran final dit
+  « Partition table verified ». Capture dans l'hôte Windows :
+  `installateur-wizard-sur-vbox.png`. Le formatage et la copie des
+  fichiers restent au lot suivant.
 - **VirtualBox** ([`compat/vbox.md`](compat/vbox.md)) : **le correctif DS/ES
   (855ea5a) est vérifié sur VBox** — les threads de `process_round`
   tournent, les seules terminaisons sont les fautes attendues des
