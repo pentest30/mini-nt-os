@@ -49,10 +49,24 @@ jour à chaque commit qui change l'état.
   `-as` sont posées à côté de `dlltool` et `as`, que le préfixe d'`argv[0]` fait chercher), et QEMU par la variable
   `QEMU`. Reste la limite de l'hôte : le profil dev de `hal` n'y compile pas (le
   `#[thread_local]` d'`irql.rs` et le codegen COFF/TLS du nightly : « offset is not a multiple of 16 » ; le profil
-  release passe ; même racine que le commentaire de `.cargo/config.toml` pour le noyau). Reste avant la PR, sur
-  l'hôte Linux : `cargo check --workspace`, `cargo test --workspace`, et le
-  test de non-régression — l'image du `mkfat` avant/après est identique. La suite : F3 (`format.rs`, le trait
-  `WriteSectors`), F1 (`NtQueryDirectoryFile`), F4 (GPT).
+  release passe ; même racine que le commentaire de `.cargo/config.toml` pour le noyau).
+  Reprise Linux sur **`claude/libs-fatf`** :
+  `cargo check --workspace` et `cargo test --workspace` passent ; l'image du
+  `mkfat` avant l'extraction (parent de `834686a`) et celle de la branche sont
+  identiques octet par octet (SHA-256
+  `8bd13156c1b240a4c888e8bee7a68d9cf7c5b81b1960ff561efe3af7e2dab095`, fichiers
+  standard ; même comparaison réussie avec des sous-répertoires, noms longs,
+  fichier vide et fichier de plusieurs clusters). **F3, la bibliothèque de formatage, est faite** : `fatfs::format`,
+  `WriteSectors`, géométrie vérifiée avant écriture, formatage rapide en mémoire
+  constante, en-têtes communs à l'image, erreurs d'E/S propagées ; tests hôte,
+  relecture par Io et `fsck.vfat`, quatre mutations détectées (voir
+  `compat/io-install.md`). Validation Linux : `cargo xtask lint` sans warning,
+  721 tests hôte réussis et 28 démarrages QEMU réussis (les 6 avec captures
+  relancés avec accès aux sockets locales du moniteur), aucun scénario sauté ;
+  `cargo check -p fatfs --target x86_64-unknown-none` passe.
+  F1 est déjà fait sur cette branche.
+  La suite : F4 (GPT) ; raccordement noyau et IOCTL après la décision sur la
+  partie proposée de l'ADR-022. Aucun service privé ajouté à cette étape.
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).

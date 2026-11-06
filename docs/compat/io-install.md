@@ -71,3 +71,35 @@ Pas encore :
   zéro) ; `FileIndex` au-delà de 4 Gio de répertoire.
 - Le test de l'énumération d'un fichier ouvert (rend
   `STATUS_NOT_A_DIRECTORY`) : `user32` n'en demande pas.
+
+
+## F3 : formatage FAT32 incrémental
+
+`fatfs::format::format` formate un volume vide par le trait `WriteSectors`
+(écriture d'un secteur de 512 octets et `flush`, erreurs du périphérique
+conservées). Les LBA sont relatifs au volume : l'appelant devra fournir une
+vue bornée de la partition, démontée et exclusivement tenue.
+
+- `Geometry::for_sectors` calcule les deux FAT et les clusters avant toute
+  écriture, sans débordement même pour `u32::MAX`. Les volumes trop petits
+  pour FAT32 ou dont les numéros de clusters atteindraient les valeurs
+  réservées sont refusés. Un cluster fait un secteur, comme dans `image`.
+- Les secteurs réservés, les deux FAT et le répertoire racine sont remis à
+  zéro ; les entrées réservées de la FAT et le cluster racine sont alloués.
+  Les en-têtes de démarrage et FSInfo, avec leurs copies, viennent des mêmes
+  fonctions que `image::build`. Les compteurs FSInfo restent « inconnus ».
+- C'est un **formatage rapide**, avec une mémoire de travail constante : les
+  clusters libres ne sont ni lus ni effacés. Ce n'est pas un effacement des
+  anciennes données. Une erreur d'écriture ou de vidage échoue l'opération ;
+  le volume peut alors être partiellement formaté.
+- Tests : égalité octet par octet avec l'image vide de `image::build`, ancien
+  contenu des métadonnées effacé et données libres conservées, deux FAT et
+  copies des en-têtes identiques, montage par `io-manager`, `fsck.vfat`,
+  limites de géométrie et erreurs d'écriture/vidage. Quatre mutations
+  (racine non allouée, seconde FAT omise, erreur de vidage ignorée, validation
+  de taille retirée) sont détectées par les tests.
+
+Pas encore : raccordement à un périphérique du noyau, démontage/exclusion,
+IOCTL de formatage (la partie noyau de l'ADR-022 reste proposée), tailles de
+clusters supérieures à 512 octets, label et identifiant de volume configurables,
+partitionnement GPT (F4).
