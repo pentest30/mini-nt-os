@@ -137,6 +137,17 @@ jour à chaque commit qui change l'état.
   Restent le formatage des deux vues bornées (`fatfs::format` est prêt),
   la copie des fichiers, la progression et la reprise du moteur (partie
   proposée de l'ADR-022), puis la souris.
+- **VirtualBox** ([`compat/vbox.md`](compat/vbox.md)) : le boot arrive loin
+  (GPT du disque primaire lu, `C:` monté, GOP 1024×768, smss, processus)
+  puis `process_round` bugchecke : le CPU voit des pages `.text` autres
+  que celles que les mêmes tables de pages rendent au noyau (faute de
+  lecture à `0xFFFFFFFF` sur un store, `.data` intacte à zéro, code lu
+  correct par le noyau, `rax` = le TID lu par `fs:[0x24]`). Bogue de
+  portabilité TLB/segment propre aux profils CPU de VBox, sans effet sur
+  QEMU. Analyse, instrumentation (à reposer : TEMP dans
+  `sys::exceptions::raise`) et pistes dans le document. La VM « Mino »
+  reste définie dans le VirtualBox de l'hôte Windows (VHD régénérable par
+  `cargo xtask image` + `convertfromraw`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
