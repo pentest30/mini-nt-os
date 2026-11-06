@@ -300,6 +300,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   l'activation d'une fenêtre, SetFocus, TranslateMessage), les touches dans la file (`QS_KEY`, état du clavier du
   thread) ; `keys = MARQUEUR => TOUCHES` fait taper des touches par le moniteur de QEMU ; scénario `keyboard`
   (`tests/native/keys1.c`). La sonde garde les processus créés depuis leur création (`ps::set_create_process_notify`).
+  Étape 7 (`cmd.exe` interactif) : ReadConsoleW marchait déjà ; NtQueryDirectoryFile (`abi::file` : entrées des
+  classes 1, 2, 3, 12 ; `io::directory` : expression avec les jokers DOS de `kernel32`, tampon aligné ;
+  `io::File::query_directory` : état de l'énumération dans le `File`, expression de la première requête, nom long ou
+  8.3, reprise à la place de l'entrée) : `dir` et `copy` ; le vrai `cmd.exe` sur le disque lit ses commandes tapées
+  dans sa console (`echo`, `set`, `copy`, `type`, `dir`, un `.bat`) ; la sonde attend 10 s après la dernière touche
+  (`ntoskrnl::input::last_key_time`) ; scénario `cmd` (`tests/native/concmd1.c`, `read1.c`). Le critère attend
+  ce que `dir` affiche autour des noms (en-tête du volume, place libre, dates).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -339,7 +346,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 - `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
 - `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
-  touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre.
+  touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre ; `"dir C:\"` entre guillemets donne les
+  touches de chaque caractère (clavier américain).
 - `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
   disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur

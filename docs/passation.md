@@ -19,9 +19,12 @@ jour à chaque commit qui change l'état.
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
   NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
-- La sonde console, étape 6 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : le clavier jusqu'aux fenêtres
-  (pilote i8042, thread d'entrée brute, tables de la disposition, premier plan et focus, TranslateMessage), sur
-  `claude/new-session-696xfc`. L'étape 5 (le texte de la console peint) est la PR #64 ; les étapes 3 (Sleep(0) :
+- La sonde console, étape 7 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : **`cmd.exe` interactif** (le vrai
+  `cmd` de ReactOS lit ses commandes tapées dans sa console : `echo`, `set`, `copy`, `type`, `dir`, un `.bat` ;
+  NtQueryDirectoryFile), sur `claude/m5-cmd`, par-dessus `claude/new-session-696xfc` (PR #65) : sa PR vise cette
+  branche, puis `main` une fois #65 fusionnée. Le critère du M5 n'est pas encore coché : ce que `dir`
+  affiche autour des noms (en-tête du volume, place libre, dates) est l'étape suivante. L'étape 6 (le clavier jusqu'aux
+  fenêtres) est la PR #65, l'étape 5 (le texte de la console peint) la PR #64 ; les étapes 3 (Sleep(0) :
   **le critère des 8 threads du M5 est coché**) et 4 (la fenêtre console montrée) sont les PR #62 et #63. Une branche
   locale `backup/thread-is-terminated-stale` garde un travail périmé d'une session antérieure (remplacé par `main`) :
   à supprimer.
@@ -406,9 +409,18 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      (`QS_KEY`, état du clavier du thread) ; NtUserGetKeyState, NtUserGetAsyncKeyState, NtUserGetKeyboardState,
      NtUserToUnicodeEx, NtUserTranslateMessage, NtUserSetFocus ; `keys =` dans les scénarios ; le banc
      `KEYS1.EXE` (scénario `keyboard`) ;
-   - **la suite, côté console** (le critère de `cmd.exe` interactif) : une ligne lue par ReadConsole (le clavier
-     dans la console de `consrv`) ; les icônes de `consrv`, SetTimer, les barres de défilement ; puis `cmd.exe` (et
-     NtQueryDirectoryFile pour `dir`, PR #58) ;
+   - [x] la sonde console, étape 7 : `cmd.exe` interactif : ReadConsoleW marchait déjà (rien ne manquait au noyau) ;
+     NtQueryDirectoryFile (`abi::file` : les entrées des classes 1, 2, 3 et 12 ; `io::directory` : l'expression
+     avec les jokers DOS, le tampon ; `io::File::query_directory` : l'état de l'énumération, l'expression de la
+     première requête, nom long ou 8.3 ; `io::Volume::entries`) : `dir` et `copy` (FindFirstFile) ; `cmd.exe` sur le
+     disque ; `keys =` accepte du texte entre guillemets ; la sonde attend 10 s après la dernière touche ; le banc
+     `CONCMD1.EXE` et `READ1.EXE` (scénario `cmd`) ;
+   - **la suite, côté console** (le critère de `cmd.exe` interactif, à cocher ensuite) : ce que `dir` affiche autour
+     des noms : l'en-tête du volume (FileNameInformation, FileFsVolumeInformation, FileFsAttributeInformation), la
+     place libre (FileFsSizeInformation, FileFsFullSizeInformation), les dates (`tools/mkfat` et Io à l'écriture,
+     NtQueryDefaultLocale pour leur format) ; NtSetInformationFile(FileBasicInformation) pour `copy` ; puis `del`,
+     `ren`, `md`, `rd` (suppression et renommage d'Io) ; les icônes de `consrv`, SetTimer, les barres de défilement,
+     DestroyWindow ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
@@ -461,6 +473,11 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
+- Sonde console (M5, étape 7) : NtQueryDirectoryFile sans les classes à identifiants (37, 38 :
+  `STATUS_NOT_IMPLEMENTED`), sans événement ni APC de fin ; une copie vers l'utilisateur qui faute laisse
+  l'énumération avancée ; ni casse des noms 8.3 (octet 12), ni noms longs créés ; `dir` sans en-tête du volume, sans
+  place libre (« 0 bytes free ») ni dates (« 01???01???1601 ») ; `copy` ne garde pas la date de la source
+  (NtSetInformationFile(FileBasicInformation) journalisé) ; le scénario `cmd` dure 45 s (les touches, une à une).
 - Sonde console (M5, étape 6) : ni souris, ni WM_NCACTIVATE, ni WM_ACTIVATE inactif à l'ancienne fenêtre active,
   ni messages d'activation à un autre thread (le focus est pris sans eux) ; ni crochets, raccourcis, Alt + pavé
   numérique, Alt + Tab, changement de disposition au clavier, voyants, Impr. écran, SendInput ; pas d'IRP
