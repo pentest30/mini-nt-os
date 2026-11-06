@@ -178,9 +178,12 @@ pub fn mount_system_hive() {
     };
     let size = hive.len();
     match cm::mount_system_hive(Arc::from(hive), Some(SYSTEM_HIVE)) {
-        Ok(current) => log::info!(
-            "[boot] SYSTEM hive mounted at \\REGISTRY\\MACHINE\\SYSTEM: {size} bytes, CurrentControlSet = ControlSet{current:03}"
-        ),
+        Ok(current) => {
+            log::info!(
+                "[boot] SYSTEM hive mounted at \\REGISTRY\\MACHINE\\SYSTEM: {size} bytes, CurrentControlSet = ControlSet{current:03}"
+            );
+            log::info!("[boot] default locale: {:#06x} (Nls\\Language)", crate::sys::locale::load_system_locale());
+        }
         Err(status) => log::error!("[boot] SYSTEM hive refused: {status}"),
     }
 }

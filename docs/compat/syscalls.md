@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 103 | 296 |
+| ntoskrnl | 104 | 296 |
 | win32k | 84 | 737 |
 
 ## ntoskrnl
@@ -164,7 +164,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0092` | `NtQueryBootEntryOrder` | 2 |  |
 | `0x0093` | `NtQueryBootOptions` | 2 |  |
 | `0x0094` | `NtQueryDebugFilterState` | 2 | ✅ |
-| `0x0095` | `NtQueryDefaultLocale` | 2 |  |
+| `0x0095` | `NtQueryDefaultLocale` | 2 | ✅ |
 | `0x0096` | `NtQueryDefaultUILanguage` | 1 |  |
 | `0x0097` | `NtQueryDirectoryFile` | 11 | ✅ |
 | `0x0098` | `NtQueryDirectoryObject` | 7 |  |
