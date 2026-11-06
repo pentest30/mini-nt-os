@@ -284,7 +284,9 @@ pub(crate) fn gates() -> [(u8, u64); (LAST_GATE - FIRST_GATE + 1) as usize] {
 // part, which swaps GS (from user mode), pushes the rest of the frame (see
 // `KTrapFrame`), switches DS and ES to the kernel's data segment (kernel
 // code selector + 8), calls the hook, and returns to user mode from the
-// frame, GS swapped back and its selector loaded.
+// frame. GS is swapped back and its selector loaded; DS and ES are reloaded
+// from the user SS selector because a transition to 64-bit kernel code may
+// have made their saved selectors null.
 #[cfg(target_os = "none")]
 core::arch::global_asm!(
     ".macro HAL_TRAP_GATE vector",
@@ -383,15 +385,21 @@ core::arch::global_asm!(
     "   pop rax",
     "   swapgs",
     "   mov gs, eax",
+    "   pop rax",
+    "   mov fs, eax",
+    "   add rsp, 16",                    // discard ES and DS saved after the privilege change
+    "   mov eax, dword ptr [rsp + 168]", // user SS in the IRET frame
+    "   mov es, eax",
+    "   mov ds, eax",
     "   jmp 3f",
     "2: add rsp, 8",
-    "3: pop rax",
+    "   pop rax",
     "   mov fs, eax",
     "   pop rax",
     "   mov es, eax",
     "   pop rax",
     "   mov ds, eax",
-    "   pop r15",
+    "3: pop r15",
     "   pop r14",
     "   pop r13",
     "   pop r12",
@@ -433,6 +441,12 @@ core::arch::global_asm!(
     "   xchg rax, [rsp]",
     "   swapgs",
     "   mov gs, eax",
+    // The user SS is 40 bytes above the saved RAX. Reloading its flat data
+    // selector keeps compatibility-mode absolute addressing portable after
+    // an interrupt whose 64-bit entry made DS or ES null.
+    "   mov eax, dword ptr [rsp + 40]",
+    "   mov ds, eax",
+    "   mov es, eax",
     "   pop rax",
     "   iretq",
     "3: jmp qword ptr [rip + HAL_ENTRY_HANDLERS + 8 * \\index]",
