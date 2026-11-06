@@ -294,6 +294,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`win32k::gdi::surface`, NtGdiCreateDIBSection), les DC en mémoire (NtGdiCreateCompatibleDC, NtGdiSelectBitmap ;
   `DcState::draw` peint sur l'écran ou le bitmap), BitBlt (`win32k::gdi::bitblt`, ROP3 avec source), les pinceaux
   d'un client (NtGdiCreateSolidBrush) ; `consrv` peint « Mino console » ; scénario `bitmap` (`tests/native/bitmap1.c`).
+  Étape 6 : le clavier jusqu'aux fenêtres ; le pilote `drivers/input/i8042` (IRQ1 → anneau de `hal::ps2` →
+  KEYBOARD_INPUT_DATA), le thread d'entrée brute (`ntoskrnl::input` : DPC, événement), les tables de la disposition
+  (`win32k::kbdtables` : VSC→VK, ToUnicode), `win32k::input` (ProcessKeyEvent, état du clavier, premier plan à
+  l'activation d'une fenêtre, SetFocus, TranslateMessage), les touches dans la file (`QS_KEY`, état du clavier du
+  thread) ; `keys = MARQUEUR => TOUCHES` fait taper des touches par le moniteur de QEMU ; scénario `keyboard`
+  (`tests/native/keys1.c`). La sonde garde les processus créés depuis leur création (`ps::set_create_process_notify`).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -332,6 +338,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   `llvm`). Sans eux, ils sont sautés.
 - `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
+- `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
+  touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre.
 - `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
   disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
 - `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
