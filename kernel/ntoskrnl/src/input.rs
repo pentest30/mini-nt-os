@@ -13,7 +13,7 @@
 
 use core::ffi::c_void;
 use core::ptr;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 use ke::dispatcher::{ke_initialize_event, ke_set_event, ke_wait_for_single_object, KEvent, ObjectType, ProcessorMode};
 use ke::dpc::{ke_insert_queue_dpc, KDpc};
@@ -23,6 +23,19 @@ use ke::sched::KePlatform;
 static EVENT: AtomicPtr<KEvent> = AtomicPtr::new(ptr::null_mut());
 /// Le DPC de l'interruption du clavier.
 static DPC: KDpc = KDpc::new(signal, ptr::null_mut());
+/// Quand la dernière touche a été remise à win32k (`hal::timer::interrupt_time`,
+/// en 100 ns) ; 0 avant la première.
+static LAST_KEY: AtomicU64 = AtomicU64::new(0);
+
+/// Quand la dernière touche a été remise à win32k, en unités de 100 ns de
+/// `hal::timer::interrupt_time` ; `None` avant la première. La sonde de
+/// `smss` attend un programme interactif tant qu'on le tape.
+///
+/// # IRQL
+/// Tout niveau (une lecture atomique).
+pub fn last_key_time() -> Option<u64> {
+    Some(LAST_KEY.load(Ordering::Relaxed)).filter(|&time| time != 0)
+}
 
 /// Appelé par l'interruption du clavier : le DPC dans la file.
 fn notify() {
@@ -55,6 +68,7 @@ fn raw_input_thread(_context: *mut c_void) {
         }
         while let Some(data) = keyboard.read() {
             win32k::input::process_keyboard_input(&data);
+            LAST_KEY.store(hal::timer::interrupt_time().max(1), Ordering::Relaxed);
         }
     }
 }

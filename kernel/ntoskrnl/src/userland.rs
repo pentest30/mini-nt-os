@@ -366,7 +366,8 @@ fn keep_created(process: &Arc<ob::Object<ps::EProcess>>) {
 }
 
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
-/// `params`, et attend sa fin (10 s au plus) : son thread démarre par
+/// `params`, et attend sa fin (10 s au plus, ou 10 s après la dernière touche
+/// tapée : un programme interactif, `keys =` dans un scénario) : son thread démarre par
 /// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
 /// entre dans son point d'entrée avec le PEB pour argument
 /// (`NtProcessStartup(PPEB)`). Journalise, avec le préfixe `[tag]` et sous le
@@ -395,8 +396,8 @@ fn run_native(
     use ke::dispatcher::{ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
 
-    /// Dix secondes, en unités de 100 ns, relatives.
-    const TIMEOUT: i64 = -10 * 1000 * 10_000;
+    /// Dix secondes, en unités de 100 ns.
+    const QUIET: u64 = 10 * 1000 * 10_000;
     /// Deux secondes de plus pour chacun des processus qu'il a créés.
     const CHILD_TIMEOUT: i64 = -2 * 1000 * 10_000;
 
@@ -423,15 +424,30 @@ fn run_native(
         Ok(process) => process,
         Err(status) => return log::error!("[{tag}] {name}: the process did not start: {status}"),
     };
-    // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
-    let waited = unsafe {
-        ke_wait_for_single_object::<KePlatform>(
-            process.dispatcher_object(),
-            ProcessorMode::Kernel,
-            false,
-            Some(TIMEOUT),
-        )
+    // At most `timeout` (100 ns units) for the process to end.
+    let wait = |timeout: u64| {
+        let relative = -i64::try_from(timeout).unwrap_or(i64::MAX);
+        // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
+        unsafe {
+            ke_wait_for_single_object::<KePlatform>(
+                process.dispatcher_object(),
+                ProcessorMode::Kernel,
+                false,
+                Some(relative),
+            )
+        }
     };
+    let mut waited = wait(QUIET);
+    // A program typed into (`keys =` in a scenario) is not stuck: 10 s more
+    // after each key.
+    while waited == STATUS_TIMEOUT {
+        let Some(last_key) = crate::input::last_key_time() else { break };
+        let idle = hal::timer::interrupt_time().saturating_sub(last_key);
+        if idle >= QUIET {
+            break;
+        }
+        waited = wait(QUIET - idle);
+    }
     // The processes it created: kept since their creation, whoever still
     // holds them.
     ps::set_create_process_notify(None);
@@ -440,7 +456,7 @@ fn run_native(
         .filter(|created| created.parent_pid() == process.pid())
         .collect();
     if waited == STATUS_TIMEOUT {
-        log::warn!("[{tag}] {name}: the process did not end within 10 s: terminated");
+        log::warn!("[{tag}] {name}: the process did not end within 10 s (of its start or the last key): terminated");
         if process.is_critical() {
             log::info!("[{tag}] {name} is a critical process: no longer, before it is terminated");
         }
