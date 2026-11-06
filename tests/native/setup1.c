@@ -138,6 +138,7 @@ typedef struct {
 #define FALSE 0
 #define MAXIMUM_ALLOWED 0x02000000
 #define FILE_READ_ATTRIBUTES 0x00000080
+#define FILE_WRITE_ATTRIBUTES 0x00000100
 #define FILE_SHARE_ALL 0x00000007
 #define FILE_DIRECTORY_FILE 0x00000001
 #define OBJ_CASE_INSENSITIVE 0x00000040
@@ -491,8 +492,8 @@ static void draw_review(HDC dc)
 
 static void draw_install(HDC dc)
 {
-    static const WCHAR *stages[] = {L"Prepare disk", L"Create partitions", L"Copy files", L"Configure system",
-                                    L"Verify installation"};
+    static const WCHAR *stages[] = {L"Revalidate target", L"Write backup GPT", L"Write primary GPT",
+                                    L"Flush metadata", L"Verify both copies"};
     int index;
 
     heading(dc, L"Installing Mino", L"Keep the machine powered on while setup completes and verifies each stage.");
@@ -510,13 +511,13 @@ static void draw_install(HDC dc)
 
 static void draw_complete(HDC dc)
 {
-    heading(dc, L"Mino is ready",
-            L"Setup wrote the partition tables through the kernel and reread them.");
+    heading(dc, L"GPT partitioning is complete",
+            L"Setup wrote and verified the protective MBR and both GPT copies. Formatting and file copy come next.");
     fill(dc, rect(218, 150, 724, 266), RGB(235, 247, 238));
     border(dc, rect(218, 150, 724, 266), RGB(63, 132, 86));
     fill(dc, rect(240, 180, 270, 210), RGB(46, 129, 82));
-    text(dc, L"Setup completed", rect(290, 176, 690, 202), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"Partition tables written and reread; file copy comes later.", rect(290, 214, 690, 248),
+    text(dc, L"Partition table verified", rect(290, 176, 690, 202), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
+    text(dc, L"Partition contents are still untouched; no filesystem was formatted.", rect(290, 214, 690, 248),
          RGB(53, 72, 59), DT_LEFT | DT_SINGLELINE);
     draw_navigation(dc, FALSE, L"Finish");
 }
@@ -573,20 +574,17 @@ static void set_screen(HWND window, enum Screen screen)
     } else if (screen == SCREEN_REVIEW) {
         DbgPrint("[setup] screen review %d\n", review_visits);
     } else if (screen == SCREEN_INSTALL) {
-        DbgPrint("[setup] screen install; write boundary\n");
+        DbgPrint("[setup] screen install; GPT write boundary\n");
     } else if (screen == SCREEN_COMPLETE) {
-        DbgPrint("[setup] screen complete; GPT written and reread; copy and configure still simulated\n");
+        DbgPrint("[setup] screen complete; verified GPT\n");
     }
 }
 
-/* The write boundary. The prepare stage is the real kernel command: it
- * revalidates the disk against the token of the preview, writes the
- * protective MBR and both GPT copies, and rereads them. Copying files and
- * configuring the system wait for the engine to grow; the complete screen
- * says so. */
+/* The write boundary. The kernel revalidates the disk against the token of
+ * the preview, writes the protective MBR and both GPT copies, flushes them
+ * and rereads them. Formatting and file copy wait for the next milestone. */
 static void run_install(HWND window)
 {
-    static const char *stages[] = {"prepare", "partition", "copy", "configure", "verify"};
     static WCHAR root_name[] = L"\\GLOBAL??\\C:\\";
     SETUP_PREPARE request;
     UNICODE_STRING name;
@@ -594,7 +592,6 @@ static void run_install(HWND window)
     IO_STATUS_BLOCK iosb;
     HANDLE root = 0;
     LONG status;
-    int index;
 
     set_screen(window, SCREEN_INSTALL);
     progress = 20;
@@ -615,7 +612,7 @@ static void run_install(HWND window)
     attributes.length = sizeof attributes;
     attributes.object_name = &name;
     attributes.attributes = OBJ_CASE_INSENSITIVE;
-    status = NtOpenFile(&root, FILE_READ_ATTRIBUTES, &attributes, &iosb, FILE_SHARE_ALL, FILE_DIRECTORY_FILE);
+    status = NtOpenFile(&root, FILE_WRITE_ATTRIBUTES, &attributes, &iosb, FILE_SHARE_ALL, FILE_DIRECTORY_FILE);
     if (status >= 0) {
         status = NtDeviceIoControlFile(root, 0, 0, 0, &iosb, IOCTL_MINO_SETUP_PREPARE,
                                        &request, sizeof request, 0, 0);
@@ -627,12 +624,10 @@ static void run_install(HWND window)
         return;
     }
     DbgPrint("[setup] prepare: GPT written and reread by the kernel\n");
-    for (index = 1; index < 5; ++index) {
-        progress = (index + 1) * 20;
-        DbgPrint("[setup] stage %s: %d%%\n", stages[index], progress);
-        repaint(window);
-        Sleep(40);
-    }
+    progress = 100;
+    DbgPrint("[setup] stage partition: 100%%\n");
+    repaint(window);
+    Sleep(40);
     set_screen(window, SCREEN_COMPLETE);
 }
 
@@ -663,7 +658,7 @@ static void activate(HWND window)
     case SCREEN_INSTALL:
         break;
     case SCREEN_COMPLETE:
-        DbgPrint("[setup] restart requested (simulation stays open)\n");
+        DbgPrint("[setup] finish requested (milestone stays open)\n");
         break;
     }
 }

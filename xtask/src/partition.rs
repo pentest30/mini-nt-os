@@ -90,6 +90,61 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
     extract().map_err(|e| format!("{}: {e}", image.display()))
 }
 
+/// Checks the first writable installer milestone: a canonical two-partition
+/// GPT on the 96 MiB disposable target, with both copies valid and every
+/// sector outside GPT metadata still zero.
+pub fn verify_setup_target(image: &Path) -> Result<()> {
+    let verify = || -> std::io::Result<()> {
+        const EXPECTED_BYTES: u64 = 96 * 1024 * 1024;
+        const ESP_FIRST: u64 = 2048;
+        const ESP_SECTORS: u64 = 40 * 2048;
+
+        let mut disk = Disk(File::open(image)?);
+        let bytes = disk.0.metadata()?.len();
+        if bytes != EXPECTED_BYTES {
+            return Err(std::io::Error::other(format!("expected a 96 MiB target, got {bytes} bytes")));
+        }
+        let sectors = bytes / 512;
+        let (layout, source) =
+            gpt::read(&disk, sectors).map_err(|e| std::io::Error::other(format!("GPT read: {e:?}")))?;
+        if source != gpt::Source::Both {
+            return Err(std::io::Error::other("primary and backup GPT copies are not both valid"));
+        }
+        let partitions = layout.partitions();
+        let system_first = ESP_FIRST + ESP_SECTORS;
+        if layout.id() == [0; 16]
+            || partitions.len() != 2
+            || partitions[0].index != 1
+            || partitions[0].kind != gpt::EFI_SYSTEM
+            || partitions[0].id == [0; 16]
+            || partitions[0].first_lba != ESP_FIRST
+            || partitions[0].last_lba + 1 != system_first
+            || partitions[1].index != 2
+            || partitions[1].kind != gpt::BASIC_DATA
+            || partitions[1].id == [0; 16]
+            || partitions[1].id == partitions[0].id
+            || partitions[1].first_lba != system_first
+            || partitions[1].last_lba != sectors - 34
+        {
+            return Err(std::io::Error::other("installer GPT does not match its immutable two-partition plan"));
+        }
+
+        disk.0.seek(SeekFrom::Start(34 * 512))?;
+        let mut remaining = (sectors - 67) * 512;
+        let mut buffer = [0u8; 64 * 1024];
+        while remaining != 0 {
+            let take = usize::try_from(remaining.min(buffer.len() as u64)).unwrap();
+            disk.0.read_exact(&mut buffer[..take])?;
+            if buffer[..take].iter().any(|&byte| byte != 0) {
+                return Err(std::io::Error::other("a partition-content sector was modified"));
+            }
+            remaining -= take as u64;
+        }
+        Ok(())
+    };
+    verify().map_err(|e| format!("{}: {e}", image.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

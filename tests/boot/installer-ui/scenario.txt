@@ -4,11 +4,10 @@
 # disk feeds the read-only kernel plan; activating Install sends the real
 # IOCTL_MINO_SETUP_PREPARE with the token of the preview: the kernel
 # revalidates the disk, writes the protective MBR and both GPT copies, and
-# rereads them (the boot's own self-test stays out, behind the
-# test-install feature, so the target is blank). Copying files and
-# configuring the system stay simulated; the completion screen says so.
-# The path exercises Tab/Back, Escape, confirmation, the five reported
-# stages and the completion screen.
+# rereads them (the boot's own self-test stays out, behind the test-install
+# feature, so the target is blank). The host then validates both copies and
+# confirms that every partition-content sector stayed zero. Formatting and
+# file copy remain for the next milestone.
 features = test-smss
 requires = userland, native
 initial-command = SETUP1.EXE
@@ -23,14 +22,11 @@ expect = [setup] back to welcome
 expect = [setup] screen disk 2
 expect = [setup] returned to disk
 expect = [setup] screen review 2
-expect = [setup] screen install; write boundary
+expect = [setup] screen install; GPT write boundary
 expect = [setup] stage prepare: 20%
 expect = [setup] prepare: GPT written and reread by the kernel
-expect = [setup] stage partition: 40%
-expect = [setup] stage copy: 60%
-expect = [setup] stage configure: 80%
-expect = [setup] stage verify: 100%
-expect = [setup] screen complete; GPT written and reread; copy and configure still simulated
+expect = [setup] stage partition: 100%
+expect = [setup] screen complete; verified GPT
 
 # Final screen: blue classic-wizard rail and green completion mark.
 screen = 130 90 17386F

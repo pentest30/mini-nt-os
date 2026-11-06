@@ -99,10 +99,10 @@ vue bornée de la partition, démontée et exclusivement tenue.
   (racine non allouée, seconde FAT omise, erreur de vidage ignorée, validation
   de taille retirée) sont détectées par les tests.
 
-Pas encore : raccordement à un périphérique du noyau, démontage/exclusion,
-IOCTL de formatage (la partie noyau de l'ADR-022 reste proposée), tailles de
-clusters supérieures à 512 octets, label et identifiant de volume configurables,
-partitionnement GPT (F4).
+Pas encore : raccordement du formateur aux vues de partitions créées par
+l'installateur, démontage/exclusion génériques, IOCTL de formatage, tailles de
+clusters supérieures à 512 octets, label et identifiant de volume
+configurables. L'écriture GPT de F4 est maintenant raccordée au noyau.
 
 
 ## F4 : GPT, MBR protecteur et volumes bornés
@@ -159,11 +159,11 @@ chevauchement retiré et limite de partition retirée. `sgdisk -v` valide
 
 Limites : secteurs logiques de 512 octets ; une seule partition système
 montée, pas encore de noms de périphériques pour toutes les partitions,
-ni IOCTL de création/modification de table, ni politique de montage fondée
-sur les attributs GPT, ni notification de changement
-ou verrouillage/démontage des volumes. Une réécriture GPT n'est pas atomique
-et demande un disque démonté et exclusivement tenu. Le MBR traditionnel,
-les tables hybrides et les secteurs de 4 Kio restent hors de cette étape.
+ni politique de montage fondée sur les attributs GPT, ni notification de
+changement ou verrouillage/démontage générique des volumes. Une réécriture
+GPT n'est pas atomique et demande un disque démonté et exclusivement tenu.
+Le MBR traditionnel, les tables hybrides et les secteurs de 4 Kio restent
+hors de cette étape.
 La création de l'image d'installation complète (ESP et système) et le
 raccordement des opérations de disque aux interfaces NT viennent ensuite.
 
@@ -211,13 +211,19 @@ notre chargeur depuis sa vraie ESP, et le noyau monte la partition Basic
 Data sur le même disque. Deux démarrages vérifient la persistance d'un
 fichier, les deux GPT et le volume système avec `fsck.vfat`, sur AMD et Intel.
 
-Il s'agit d'un constructeur d'image côté hôte. Le premier contrat noyau de
-l'installateur en mode utilisateur existe maintenant :
-`IOCTL_MINO_SETUP_QUERY` rend en lecture seule un disque ATA secondaire sûr,
-sa capacité et un plan GPT/FAT immuable. Le média primaire et le disque qui
-porte le système courant sont exclus ; la géométrie de chaque volume est
-validée par `fatfs::format`. Aucune commande d'écriture, de verrouillage ou
-de démontage n'est encore exposée. La copie avec progression et reprise reste
+Il s'agit d'un constructeur d'image côté hôte. Le contrat noyau de
+l'installateur en mode utilisateur rend d'abord un disque ATA secondaire sûr,
+sa capacité et un plan GPT/FAT immuable par `IOCTL_MINO_SETUP_QUERY`. Le média
+primaire et le disque qui porte le système courant sont exclus ; la géométrie
+de chaque volume est validée par `fatfs::format`.
+
+`IOCTL_MINO_SETUP_PREPARE` exige ensuite le numéro et le jeton du plan,
+re-sonde le matériel et écrit seulement le MBR protecteur et les deux copies
+GPT. Des GUID propres à l'installation sont générés ; les deux copies sont
+relues et comparées avant le succès. Les scénarios `installer-ui` et
+`installer-prepare` vérifient ces copies depuis l'hôte sur AMD et Intel et
+confirment que le contenu des futures partitions reste entièrement nul. Le
+formatage, le démontage générique et la copie avec progression/reprise restent
 à faire. L'interface native est décrite dans
 [`install-ui.md`](install-ui.md) et le brief visuel réutilisable dans
 [`design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
@@ -252,17 +258,18 @@ elle ne formate pas et ne copie rien.
   les deux en-têtes GPT et le MBR protecteur, avec un flush entre les
   copies ; la relecture par `libs/gpt::read` exige les deux copies valides
   (`Source::Both`) et les plages du plan.
-- Les GUID du disque et des partitions sont **déterministes**, tirés du
-  jeton (FNV-1a, rôles distincts, version 4, variante RFC 4122) : la même
-  demande écrit les mêmes octets, et une comparaison d'images s'y
-  retrouve. L'ESP porte le type EFI System (emplacement 1, « ESP »), le
-  volume système Basic Data (emplacement 2, « MINO »).
+- Les GUID du disque et des partitions mêlent le jeton à un nonce propre à
+  l'exécution (temps système et compteur de performance), avec des rôles
+  distincts, la version 4 et la variante RFC 4122. Deux installations de
+  même capacité n'héritent donc pas des mêmes identifiants. L'ESP porte le
+  type EFI System (emplacement 1, « ESP »), le volume système Basic Data
+  (emplacement 2, « MINO »).
 - `sys::file` : la préparation rend `STATUS_ACCESS_DENIED` (disque
   protégé), `STATUS_NO_SUCH_DEVICE`, `STATUS_REVISION_MISMATCH` (jeton),
   `STATUS_OBJECT_NAME_COLLISION` (déjà des tables),
   `STATUS_INVALID_PARAMETER` (capacité) ou `STATUS_IO_DEVICE_ERROR`,
-  chacune journalisée. Le handle d'ancrage reste `FILE_READ_ATTRIBUTES` ;
-  l'autorité d'écrire vient du jeton.
+  chacune journalisée. Le handle d'ancrage exige
+  `FILE_WRITE_ATTRIBUTES`, en plus du jeton.
 
 Le self-test noyau `install_prepare_self_test` (phase 1) l'exerce sur
 chaque démarrage : refus du disque protégé (les scénarios à disque
@@ -271,14 +278,13 @@ disque cible de 96 Mio (`disk = target`), jeton faux refusé sans un octet
 écrit, préparation réussie et relue (ESP 2048..83967, système
 83968..196574), seconde passe refusée (`NotBlank`). Le scénario
 `installer-prepare` attend ces marqueurs sur AMD et Intel. Tests hôte :
-cinq tests de `prepare_disk` (écriture et relecture, jeton faux sans un
-octet écrit, disque occupé intact, drapeaux protégés et capacité réduite,
-GUID déterministes).
+écriture et relecture, jeton faux sans un octet écrit, disque occupé intact,
+drapeaux protégés et capacité réduite, GUID distincts par installation et
+verrou exclusif.
 
-Restent : le formatage des deux vues bornées (F3, `fatfs::format` est
-prêt), la copie des fichiers, les événements de progression vers l'UI, le
-verrou exclusif et le démontage de la cible pendant l'écriture, puis la
-souris.
+Restent : le formatage des deux vues bornées (F3, `fatfs::format` est prêt),
+la copie des fichiers, les événements de progression vers l'UI, le démontage
+générique de la cible pendant l'écriture, puis la souris.
 
 ## Lot 3 : l'interface branchée sur la préparation réelle
 
@@ -286,9 +292,9 @@ souris.
 d'« Install », il renvoie le jeton de l'aperçu au noyau par
 `IOCTL_MINO_SETUP_PREPARE` (la demande `SetupPrepare` de 16 octets). Le
 noyau revalide le disque, écrit les tables, les relit ; l'UI journalise
-`[setup] prepare: GPT written and reread by the kernel`, enchaîne ses cinq
-étapes, et l'écran final dit ce qui reste simulé (« Partition tables
-written and reread; file copy comes later »). Un refus du noyau
+`[setup] prepare: GPT written and reread by the kernel` et présente les cinq
+opérations GPT réellement couvertes. L'écran final précise que le formatage
+et la copie viennent ensuite. Un refus du noyau
 (`[setup] prepare failed: …`) laisse l'écran d'installation en place,
 sans avance.
 

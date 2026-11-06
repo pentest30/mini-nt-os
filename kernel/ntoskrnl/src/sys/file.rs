@@ -478,8 +478,9 @@ pub(super) fn nt_flush_buffers_file(arguments: &[u32]) -> NtStatus {
 /// GPT/FAT de l'installateur ; la préparation (`IOCTL_MINO_SETUP_PREPARE`)
 /// écrit les tables GPT du plan sur le disque que son jeton décrit, puis
 /// les relit pour les vérifier — elle ne formate pas et ne copie rien. Le
-/// handle d'un fichier du volume courant sert d'ancrage avec
-/// `FILE_READ_ATTRIBUTES` ; l'autorité d'écrire vient du jeton.
+/// handle d'un fichier du volume courant sert d'ancrage : l'aperçu exige
+/// `FILE_READ_ATTRIBUTES`, la préparation `FILE_WRITE_ATTRIBUTES`, en plus
+/// du jeton.
 pub(super) fn nt_device_io_control_file(arguments: &[u32]) -> NtStatus {
     status(device_io_control_file(arguments))
 }
@@ -524,7 +525,7 @@ fn device_io_control_file(arguments: &[u32]) -> Result<(), NtStatus> {
             let _file = super::current_process().handle_table.reference_as::<File>(
                 Handle(handle),
                 &FILE_TYPE,
-                AccessMask(FILE_READ_ATTRIBUTES),
+                AccessMask(FILE_WRITE_ATTRIBUTES),
             )?;
             match io_manager::install::prepare(request.disk_number, request.plan_token) {
                 Ok(layout) => {

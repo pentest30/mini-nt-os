@@ -229,13 +229,13 @@ impl Exclusive {
 /// Le verrou du moteur, autour de chaque préparation réelle.
 static PREPARE_LOCK: Exclusive = Exclusive(AtomicU8::new(0));
 
-/// Un GUID déterministe tiré du jeton et d'un rôle (1 : le disque, 2 : l'ESP,
-/// 3 : le système). La bibliothèque GPT n'invente rien, et la même demande
-/// écrit les mêmes octets : la relecture et une comparaison d'images s'y
-/// retrouvent.
-fn guid(token: u64, role: u64) -> gpt::Guid {
+/// Un GUID tiré du jeton, d'un nonce propre à cette exécution et d'un rôle
+/// (1 : le disque, 2 : l'ESP, 3 : le système). La bibliothèque GPT n'invente
+/// rien ; le nonce empêche deux installations de même capacité de partager
+/// leurs identifiants.
+fn guid(token: u64, nonce: u64, role: u64) -> gpt::Guid {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in token.to_le_bytes().iter().chain(role.to_le_bytes().iter()) {
+    for byte in token.to_le_bytes().iter().chain(nonce.to_le_bytes().iter()).chain(role.to_le_bytes().iter()) {
         hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
     }
     let low = hash;
@@ -287,6 +287,7 @@ pub fn prepare_disk<D: gpt::WriteSectors<Error = FatError>>(
     number: u32,
     flags: u32,
     token: u64,
+    nonce: u64,
 ) -> Result<gpt::Layout, PrepareError> {
     let plan = Plan::guided(Disk { number, sectors, flags }).map_err(|error| match error {
         PlanError::Protected => PrepareError::Protected,
@@ -303,7 +304,7 @@ pub fn prepare_disk<D: gpt::WriteSectors<Error = FatError>>(
     let partition = |index: u32, role: u64, kind: gpt::Guid, first: u64, last: u64, name: &str| gpt::Partition {
         index,
         kind,
-        id: guid(token, role),
+        id: guid(token, nonce, role),
         first_lba: first,
         last_lba: last,
         attributes: 0,
@@ -319,7 +320,8 @@ pub fn prepare_disk<D: gpt::WriteSectors<Error = FatError>>(
         partition(1, 2, gpt::EFI_SYSTEM, plan.esp_first, plan.esp_first + plan.esp_sectors - 1, "ESP"),
         partition(2, 3, gpt::BASIC_DATA, plan.system_first, plan.system_first + plan.system_sectors - 1, "MINO"),
     ];
-    let layout = gpt::Layout::new(sectors, guid(token, 1), partitions).map_err(|_| PrepareError::CapacityMismatch)?;
+    let layout =
+        gpt::Layout::new(sectors, guid(token, nonce, 1), partitions).map_err(|_| PrepareError::CapacityMismatch)?;
     gpt::write(disk, &layout).map_err(|_| PrepareError::Io)?;
     // La vérification après écriture : les deux copies valides, leur CRC,
     // et les plages que le plan décrivait.
@@ -361,7 +363,8 @@ fn prepare_locked(number: u32, token: u64) -> Result<gpt::Layout, PrepareError> 
     let disk = AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::SECONDARY, false)).ok_or(PrepareError::NoTarget)?;
     let sectors = disk.sectors();
     let mut view = BlockSectors(&disk);
-    prepare_disk(&mut view, sectors, number, SETUP_DISK_CANDIDATE, token)
+    let nonce = hal::rtc::system_time() ^ hal::timer::performance_counter().0 ^ token;
+    prepare_disk(&mut view, sectors, number, SETUP_DISK_CANDIDATE, token, nonce)
 }
 
 #[cfg(test)]
@@ -403,6 +406,8 @@ mod prepare_tests {
     use super::*;
     use crate::fat::FatError;
     use alloc::vec::Vec;
+
+    const NONCE: u64 = 0x1234_5678_9abc_def0;
 
     /// Le disque de développement des scénarios : 96 Mio, en mémoire.
     struct RamSectors(Vec<u8>);
@@ -452,7 +457,7 @@ mod prepare_tests {
     fn prepare_writes_the_plan_and_rereads_it() {
         let token = token_of(candidate());
         let mut disk = RamSectors::new();
-        let layout = prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token)
+        let layout = prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE)
             .expect("the disk prepares");
         // Les plages du plan, un MBR protecteur, et les deux copies que la
         // bibliothèque relit d'elle-même.
@@ -472,8 +477,9 @@ mod prepare_tests {
         let token = token_of(candidate());
         let mut disk = RamSectors::new();
         let before = disk.0.clone();
-        let error = prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token ^ 1)
-            .unwrap_err();
+        let error =
+            prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token ^ 1, NONCE)
+                .unwrap_err();
         assert_eq!(error, PrepareError::TokenMismatch);
         assert_eq!(disk.0, before, "not one byte written before the token passes");
     }
@@ -482,10 +488,10 @@ mod prepare_tests {
     fn a_disk_with_tables_is_refused_untouched() {
         let token = token_of(candidate());
         let mut disk = RamSectors::new();
-        prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token)
+        prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE)
             .expect("the first pass");
         let after_first = disk.0.clone();
-        let error = prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token);
+        let error = prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE);
         assert_eq!(error, Err(PrepareError::NotBlank));
         assert_eq!(disk.0, after_first, "the refusal writes nothing");
         // Un disque qui n'est pas vierge sans être à nous non plus : une
@@ -493,7 +499,7 @@ mod prepare_tests {
         let mut foreign = RamSectors::new();
         foreign.0[450] = 0xee;
         assert_eq!(
-            prepare_disk(&mut foreign, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token),
+            prepare_disk(&mut foreign, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE,),
             Err(PrepareError::NotBlank)
         );
     }
@@ -504,7 +510,7 @@ mod prepare_tests {
         let mut disk = RamSectors::new();
         for flags in [SETUP_DISK_SYSTEM, SETUP_DISK_BOOT, SETUP_DISK_SYSTEM | SETUP_DISK_BOOT] {
             assert_eq!(
-                prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, flags, token),
+                prepare_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, flags, token, NONCE),
                 Err(PrepareError::Protected)
             );
         }
@@ -513,24 +519,24 @@ mod prepare_tests {
         // disque trop petit pour le plan ne passe plus la revalidation.
         let shrunk = RamSectors::SECTORS - 2048;
         assert_eq!(
-            prepare_disk(&mut disk, shrunk, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token),
+            prepare_disk(&mut disk, shrunk, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE),
             Err(PrepareError::TokenMismatch)
         );
         let tiny = 72 * 2048;
         assert_eq!(
-            prepare_disk(&mut disk, tiny, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token),
+            prepare_disk(&mut disk, tiny, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token, NONCE),
             Err(PrepareError::CapacityMismatch)
         );
     }
 
     #[test]
-    fn guids_are_deterministic_distinct_and_well_formed() {
+    fn guids_are_unique_per_installation_distinct_and_well_formed() {
         let token = token_of(candidate());
-        assert_eq!(guid(token, 1), guid(token, 1), "the same request writes the same bytes");
-        assert_ne!(guid(token, 1), guid(token, 2));
-        assert_ne!(guid(token, 1), guid(token ^ 1, 1));
+        assert_eq!(guid(token, NONCE, 1), guid(token, NONCE, 1));
+        assert_ne!(guid(token, NONCE, 1), guid(token, NONCE, 2));
+        assert_ne!(guid(token, NONCE, 1), guid(token, NONCE ^ 1, 1));
         for role in 1..=3 {
-            let guid = guid(token, role);
+            let guid = guid(token, NONCE, role);
             assert_ne!(guid, [0; 16]);
             assert_eq!(guid[7] >> 4, 0x4, "version 4");
             assert_eq!(guid[8] >> 6, 0b10, "RFC 4122 variant");

@@ -365,6 +365,18 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     }
                 }
             }
+            if let (true, true, Some(image)) = (outcome.passed, sc.target_disk, &attached_disk) {
+                match partition::verify_setup_target(image) {
+                    Ok(()) => println!(
+                        "xtask: {label}: both GPT copies valid; partition contents remain zero in {}",
+                        image.display()
+                    ),
+                    Err(report) => {
+                        outcome.passed = false;
+                        outcome.reason = report;
+                    }
+                }
+            }
             if outcome.passed {
                 println!("xtask: PASS {label} in {:.1} s", outcome.elapsed.as_secs_f64());
             } else {
