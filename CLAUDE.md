@@ -305,8 +305,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `io::File::query_directory` : état de l'énumération dans le `File`, expression de la première requête, nom long ou
   8.3, reprise à la place de l'entrée) : `dir` et `copy` ; le vrai `cmd.exe` sur le disque lit ses commandes tapées
   dans sa console (`echo`, `set`, `copy`, `type`, `dir`, un `.bat`) ; la sonde attend 10 s après la dernière touche
-  (`ntoskrnl::input::last_key_time`) ; scénario `cmd` (`tests/native/concmd1.c`, `read1.c`). Le critère attend
-  ce que `dir` affiche autour des noms (en-tête du volume, place libre, dates).
+  (`ntoskrnl::input::last_key_time`) ; scénario `cmd` (`tests/native/concmd1.c`, `read1.c`). Étape 8 (ce que
+  `dir` affiche autour des noms) : FileNameInformation, FileFsVolume/Attribute/Size/FullSizeInformation (numéro de
+  série du BPB, entrée de volume, clusters libres comptés dans la FAT) ; dates de FAT (`fat::FatTime`) écrites par Io
+  à la création et à l'écriture, et par `tools/mkfat` (2004-08-04 12:00, des images identiques) ;
+  NtSetInformationFile(FileBasicInformation) ; NtQueryDefaultLocale (`ex::locale`, `Nls\Language`) ; `xtask`
+  attend qu'une touche soit relâchée avant la suivante (QEMU 8.2 perd des relâchements sinon) ; `hal::ps2` compte
+  ce qu'il perd. **Le critère de `cmd.exe` interactif du M5 est coché.**
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
