@@ -140,9 +140,10 @@ pub fn capture(socket: &Path, file: &Path) -> Result<Image> {
     Image::parse_ppm(&bytes)
 }
 
-/// How long a key stays down, and the pause after it (ms).
-const KEY_HOLD_MS: u32 = 50;
-const KEY_PAUSE: Duration = Duration::from_millis(100);
+/// How long a key stays down, and the pause after it (ms): longer than the
+/// hold, so that a key is up before the next one goes down.
+const KEY_HOLD_MS: u32 = 30;
+const KEY_PAUSE: Duration = Duration::from_millis(60);
 
 /// Types `keys` on the QEMU whose monitor listens on `socket`, one after
 /// the other (`sendkey`), each answered by the monitor before the next.
