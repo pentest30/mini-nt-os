@@ -137,9 +137,13 @@ jour à chaque commit qui change l'état.
   Restent le formatage des deux vues bornées (`fatfs::format` est prêt),
   la copie des fichiers, la progression et la reprise du moteur (partie
   proposée de l'ADR-022), puis la souris.
-- **Le flux d'installation tourne sur VirtualBox** : `cargo xtask image
-  --initial-command SETUP1.EXE` place le programme à la place de
-  winlogon.exe (la substitution du scénario `installer-ui`) ; avec un
+- **Le choix avant installation est branché** : `cargo xtask image` place
+  maintenant `BOOT1.EXE` à la place de `winlogon.exe`. Il propose
+  **Install MinoOS** (`SETUP1.EXE`) ou **Try MinoOS** (`DESKTOP1.EXE`) sans
+  appeler le moteur ni modifier les disques. Les scénarios
+  `boot-menu-install` et `boot-menu-live` passent sur AMD et Intel. Utiliser
+  `--initial-command system` pour conserver le `winlogon.exe` de ReactOS.
+- **Le flux d'installation tourne sur VirtualBox** : avec un
   disque cible vierge de 96 Mio attaché en maître secondaire, l'assistant
   navigue et **la préparation réelle écrit le MBR protecteur et les deux
   copies GPT** sur le disque cible (relues), l'écran final dit

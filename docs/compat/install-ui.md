@@ -35,6 +35,26 @@ retouche les pixels, pour garder l'ordre du peintre. C'est encore une sonde :
 le programme définitif quittera `tests/native/` quand le chemin d'exécution
 du moteur sera fixé.
 
+## Choix avant installation
+
+`BOOT1.EXE` est maintenant la commande initiale des images de développement.
+Avant toute sélection de disque, il présente deux actions dans le même thème
+bleu : **Install MinoOS** lance `SETUP1.EXE`, tandis que **Try MinoOS** lance
+`DESKTOP1.EXE` depuis le média de démarrage, sans demander de disque cible et
+sans appeler le moteur d'installation. Haut, Bas ou Tab changent le choix ;
+Retour ou Espace l'active. L'installation reste le choix par défaut.
+
+Le menu crée `WinSta0\\Default` une seule fois. Les deux programmes enfants
+réutilisent cette station et ce bureau via leur `STARTUPINFO`, ce qui évite de
+les enregistrer comme un second processus de logon. Le menu reste vivant et
+caché pendant l'exécution du choix ; si l'enfant se termine, il réapparaît.
+
+Les scénarios `boot-menu-install` et `boot-menu-live` vérifient les deux
+chemins sur les profils AMD et Intel. Le premier s'arrête à l'accueil de
+l'installateur ; le scénario `installer-ui` garde la responsabilité du test
+destructif complet. Le second vérifie le bureau et ses pixels sans attacher de
+disque cible.
+
 ## Aperçu et préparation GPT privilégiés
 
 `NtDeviceIoControlFile`, avec `IOCTL_MINO_SETUP_QUERY`, donne à l'UI une
@@ -142,6 +162,7 @@ couleur stables. Il tourne sur les mêmes profils CPU que l'installateur.
 
 ```bash
 cargo xtask test --boot --scenario installer-ui --scenario desktop-ui
+cargo xtask test --boot --scenario boot-menu-install --scenario boot-menu-live
 ```
 
 ## Suite
