@@ -434,6 +434,9 @@ pub const RDW_VALID_FLAGS: u32 = RDW_ERASE
 /// HWNDLOCK_ROUTINE_UPDATEWINDOW: the routine of NtUserCallHwndLock behind
 /// UpdateWindow (user32!UpdateWindow pushes 0x5E).
 pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
+/// HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: the routine of NtUserCallHwndParam
+/// behind KillSystemTimer (read from the pinned `user32`).
+pub const HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: u32 = 0x4E;
 /// FNID_DEFWINDOWPROC: NtUserMessageCall's DefWindowProc.
 pub const FNID_DEFWINDOWPROC: u32 = 0x029E;
 /// WM_USER: the first message of an application.
@@ -857,6 +860,8 @@ pub const QS_KEY: u16 = 0x0001;
 pub const QS_MOUSEMOVE: u16 = 0x0002;
 pub const QS_MOUSEBUTTON: u16 = 0x0004;
 pub const QS_POSTMESSAGE: u16 = 0x0008;
+/// QS_TIMER: a timer of the thread is due (WM_TIMER, WM_SYSTIMER).
+pub const QS_TIMER: u16 = 0x0010;
 /// QS_PAINT: a window of the thread has something to paint (`cPaintsReady`).
 pub const QS_PAINT: u16 = 0x0020;
 pub const QS_ALLPOSTMESSAGE: u16 = 0x0100;

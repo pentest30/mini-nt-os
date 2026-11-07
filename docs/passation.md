@@ -192,6 +192,16 @@ jour à chaque commit qui change l'état.
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
   de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
   VirtualBox, rien ne change.
+  Les minuteries de USER (branche `claude/win32k-timers`, partie de `main` ; ce que `taskmgr` de la vague
+  `claude/apps-wave` attendait pour relire ses processus chaque seconde) : `win32k::timer` (SetTimer,
+  SetSystemTimer, KillTimer, KillSystemTimer par NtUserCallHwndParam, NtUserValidateTimerCallback ; délai
+  borné comme XP, identifiants sans fenêtre de 32 768 vers 1, une minuterie de fenêtre au thread de sa
+  fenêtre et à son processus seulement) ; le thread d'entrée brute les fait expirer, comme le RIT de ReactOS
+  (attente jusqu'à l'échéance la plus proche, réveil à chaque SetTimer) : `QS_TIMER` et la file réveillée ;
+  PeekMessage fabrique WM_TIMER ou WM_SYSTIMER quand rien d'autre ne sort (un message par minuterie prête).
+  Scénario `timers` (`tests/native/timer1.c`). Pas encore : les minuteries du RIT (curseur, clavier),
+  TMRF_ONESHOT, un rappel de Ps à la fin d'un thread GUI (ses minuteries s'en vont à l'échéance suivante),
+  DestroyWindow (`timer::destroy_window_timers` est prêt).
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)

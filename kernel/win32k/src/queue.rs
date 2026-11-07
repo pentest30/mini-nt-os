@@ -14,7 +14,8 @@
 //! à se peindre (`cPaintsReady`, et `QS_PAINT` tant qu'il n'est pas nul)
 //! dit d'en chercher une ([`crate::paint::paint_message`]) quand aucun
 //! message posté ne sort (co_IntPeekMessage : messages postés, WM_QUIT, puis
-//! WM_PAINT).
+//! WM_PAINT). WM_TIMER non plus : il vient d'une minuterie prête
+//! ([`crate::timer::message`], `QS_TIMER`) quand rien d'autre ne sort.
 //!
 //! Les touches du clavier (`crate::input`) arrivent à part, dans l'ordre
 //! (les messages matériels, `QS_KEY`) : elles sortent après les messages
@@ -26,7 +27,7 @@
 //! le clavier (`spwndActive`, `spwndFocus`).
 //!
 //! Pas encore : les messages envoyés (SendMessage entre threads), la
-//! souris, WM_TIMER synthétisé, les crochets, le filtre par fenêtre fille
+//! souris, les crochets, le filtre par fenêtre fille
 //! des messages postés (seule la fenêtre nommée), la position du curseur
 //! (`pt` est nul).
 
@@ -39,7 +40,7 @@ use abi::user::vk::{
 };
 use abi::user::{
     Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_MOUSEBUTTON, QS_MOUSEMOVE, QS_PAINT, QS_POSTMESSAGE,
-    WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_QUIT,
+    QS_TIMER, WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_QUIT,
     WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
@@ -238,6 +239,20 @@ impl QueueState {
         self.paints
     }
 
+    /// Une minuterie du thread est prête (`QS_TIMER`, et son bit de
+    /// changement), ou plus aucune (`crate::timer`).
+    pub fn set_timers_ready(&mut self, ready: bool) {
+        if ready {
+            if self.wake & QS_TIMER == 0 {
+                self.change |= QS_TIMER;
+            }
+            self.wake |= QS_TIMER;
+        } else {
+            self.wake &= !QS_TIMER;
+            self.change &= !QS_TIMER;
+        }
+    }
+
     /// MsqPostQuitMessage : WM_QUIT, de code `code`, sortira une fois les
     /// messages postés sortis.
     pub fn post_quit(&mut self, code: u32) {
@@ -253,7 +268,7 @@ impl QueueState {
     /// compte. Les bits de changement des messages postés et des touches
     /// sont effacés : on a regardé.
     pub fn peek(&mut self, filter: &Filter, remove: bool) -> Option<Msg32> {
-        self.change &= !(QS_POSTMESSAGE | QS_ALLPOSTMESSAGE | QS_KEY | QS_MOUSEMOVE | QS_MOUSEBUTTON);
+        self.change &= !(QS_POSTMESSAGE | QS_ALLPOSTMESSAGE | QS_KEY | QS_MOUSEMOVE | QS_MOUSEBUTTON | QS_TIMER);
         let found = match self.posted.iter().position(|message| filter.matches(message)) {
             Some(index) if remove => self.posted.remove(index),
             Some(index) => Some(self.posted[index]),
@@ -374,17 +389,27 @@ pub fn post_quit(thread: &ThreadInfo, code: u32) {
 /// PeekMessage : le premier message de la file de `thread` que demande
 /// `filter`, sorti si `remove` ; sinon WM_PAINT pour une de ses fenêtres
 /// qui a à se peindre, s'il en a (il ne sort pas : il revient tant que la
-/// fenêtre n'est pas peinte).
+/// fenêtre n'est pas peinte) ; sinon WM_TIMER pour une de ses minuteries
+/// prêtes, qui ne l'est plus si `remove`.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn peek(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<Msg32> {
-    let ((found, paints), wake, change) = thread.queue.with(|queue| (queue.peek(filter, remove), queue.paints()));
+    let ((found, paints, timers), wake, change) =
+        thread.queue.with(|queue| (queue.peek(filter, remove), queue.paints(), queue.wake & QS_TIMER != 0));
     thread.mirror_queue_bits(wake, change);
-    if found.is_some() || paints == 0 {
+    if found.is_some() {
         return found;
     }
-    crate::paint::paint_message(thread, filter)
+    if paints != 0 {
+        if let Some(paint) = crate::paint::paint_message(thread, filter) {
+            return Some(paint);
+        }
+    }
+    if timers {
+        return crate::timer::message(thread, filter, remove);
+    }
+    None
 }
 
 /// MsqIncPaintCountQueue pour `thread`, qui est réveillé.
@@ -444,7 +469,8 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 }
 
 /// WaitMessage : attend qu'un message arrive dans la file du thread courant
-/// `thread`, s'il n'y en a pas (ni message posté, ni fenêtre à peindre).
+/// `thread`, s'il n'y en a pas (ni message posté, ni fenêtre à peindre, ni
+/// minuterie prête).
 ///
 /// # Errors
 /// Le statut d'une attente qui finit autrement.
@@ -453,7 +479,7 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 /// PASSIVE_LEVEL, dans le thread.
 pub fn wait_message(thread: &ThreadInfo) -> Result<(), NtStatus> {
     let ((), wake, _) = thread.queue.with(|_| ());
-    if wake & (QS_POSTMESSAGE | QS_KEY | QS_PAINT) != 0 {
+    if wake & (QS_POSTMESSAGE | QS_KEY | QS_PAINT | QS_TIMER) != 0 {
         return Ok(());
     }
     wait(thread)
@@ -570,6 +596,25 @@ mod tests {
         queue.inc_paint();
         queue.clear_paints();
         assert_eq!((queue.paints(), queue.status(QS_PAINT)), (0, 0));
+    }
+
+    #[test]
+    fn qs_timer_follows_the_ready_timers_and_is_looked_at_by_peek() {
+        let mut queue = QueueState::default();
+        queue.set_timers_ready(true);
+        assert_eq!(queue.status(QS_TIMER), 0x0010_0010, "changed and present");
+        queue.set_timers_ready(true);
+        assert_eq!(queue.status(QS_TIMER), 0x0010_0000, "no new change while still ready");
+        queue.set_timers_ready(false);
+        queue.set_timers_ready(true);
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        assert_eq!(queue.peek(&all, true), None, "WM_TIMER comes from crate::timer");
+        assert_eq!((queue.wake & QS_TIMER, queue.change & QS_TIMER), (QS_TIMER, 0), "looked at");
+        queue.post(message(0, 0x401, 1));
+        queue.peek(&all, true);
+        assert_eq!(queue.wake & QS_TIMER, QS_TIMER, "posted messages leave it");
+        queue.set_timers_ready(false);
+        assert_eq!(queue.status(QS_TIMER), 0);
     }
 
     #[test]
