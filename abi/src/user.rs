@@ -756,6 +756,42 @@ pub const WM_SYSKEYDOWN: u32 = 0x0104;
 pub const WM_SYSKEYUP: u32 = 0x0105;
 pub const WM_SYSCHAR: u32 = 0x0106;
 pub const WM_SYSDEADCHAR: u32 = 0x0107;
+/// The first and last keyboard messages (a range of PeekMessage).
+pub const WM_KEYFIRST: u32 = 0x0100;
+pub const WM_KEYLAST: u32 = 0x0109;
+/// The mouse messages in the client area: a move, a button down, up, a
+/// second click (CS_DBLCLKS), the wheel. `wParam` holds MK_*, `lParam` the
+/// point in the client area (the wheel: its amount in the high word of
+/// `wParam`, the point on the screen in `lParam`).
+pub const WM_MOUSEMOVE: u32 = 0x0200;
+pub const WM_LBUTTONDOWN: u32 = 0x0201;
+pub const WM_LBUTTONUP: u32 = 0x0202;
+pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
+pub const WM_RBUTTONDOWN: u32 = 0x0204;
+pub const WM_RBUTTONUP: u32 = 0x0205;
+pub const WM_RBUTTONDBLCLK: u32 = 0x0206;
+pub const WM_MBUTTONDOWN: u32 = 0x0207;
+pub const WM_MBUTTONUP: u32 = 0x0208;
+pub const WM_MBUTTONDBLCLK: u32 = 0x0209;
+pub const WM_MOUSEWHEEL: u32 = 0x020A;
+pub const WM_MOUSEFIRST: u32 = 0x0200;
+pub const WM_MOUSELAST: u32 = 0x020A;
+/// The same outside the client area: `wParam` holds the hit code (HT*),
+/// `lParam` the point on the screen. WM_NCLBUTTONDOWN is WM_LBUTTONDOWN
+/// less this offset.
+pub const WM_NCMOUSEMOVE: u32 = 0x00A0;
+pub const WM_NC_MOUSE_OFFSET: u32 = WM_MOUSEMOVE - WM_NCMOUSEMOVE;
+/// MK_*: the buttons and keys down, in `wParam`.
+pub const MK_LBUTTON: u32 = 0x0001;
+pub const MK_RBUTTON: u32 = 0x0002;
+pub const MK_SHIFT: u32 = 0x0004;
+pub const MK_CONTROL: u32 = 0x0008;
+pub const MK_MBUTTON: u32 = 0x0010;
+/// HT*: where a point falls in a window (WM_NCHITTEST).
+pub const HTNOWHERE: u32 = 0;
+pub const HTCLIENT: u32 = 1;
+pub const HTCAPTION: u32 = 2;
+pub const HTBORDER: u32 = 18;
 /// WM_ACTIVATE, WM_SETFOCUS, WM_KILLFOCUS: a window activated or not,
 /// taking or losing the keyboard.
 pub const WM_ACTIVATE: u32 = 0x0006;
@@ -816,6 +852,10 @@ pub const POINTER_MESSAGES: [u32; 63] = [
 /// QS_*, the kinds of messages in a queue (`fsWakeBits`, `fsChangeBits`).
 /// QS_KEY: a keyboard message (WM_KEYDOWN, WM_CHAR...).
 pub const QS_KEY: u16 = 0x0001;
+/// QS_MOUSEMOVE, QS_MOUSEBUTTON: a move, a button (WM_MOUSEMOVE,
+/// WM_LBUTTONDOWN...).
+pub const QS_MOUSEMOVE: u16 = 0x0002;
+pub const QS_MOUSEBUTTON: u16 = 0x0004;
 pub const QS_POSTMESSAGE: u16 = 0x0008;
 /// QS_PAINT: a window of the thread has something to paint (`cPaintsReady`).
 pub const QS_PAINT: u16 = 0x0020;
