@@ -2304,8 +2304,10 @@ fn loader_services_self_test() {
     const PROCESSOR_LENGTH: u32 = DATA + 0x1B0;
     const PROCESSOR_STATUS: u32 = DATA + 0x1B4;
     const PROCESSOR_SHORT: u32 = DATA + 0x1B8;
-    // SystemProcessInformation: not implemented.
-    const PROCESS_INFORMATION: u32 = 5;
+    // A class the noyau does not implement, for the NOT_IMPLEMENTED status:
+    // SystemProcessInformation (5) is implemented since the applications
+    // wave, the task managers read it.
+    const UNKNOWN_CLASS_VALUE: u32 = 0xFFFF;
     const SCRATCH: u32 = DATA + 0x100;
 
     let query = services::NtQuerySystemInformation;
@@ -2320,7 +2322,7 @@ fn loader_services_self_test() {
         .store_eax(UNMAPPED)
         .call(query, &[SYSTEM_BASIC_INFORMATION, SCRATCH + 2, 0x2C, 0])
         .store_eax(MISALIGNED)
-        .call(query, &[PROCESS_INFORMATION, SCRATCH, 0x100, 0])
+        .call(query, &[UNKNOWN_CLASS_VALUE, SCRATCH, 0x100, 0])
         .store_eax(UNKNOWN_CLASS)
         .call(query, &[SYSTEM_PROCESSOR_INFORMATION, PROCESSOR, 12, PROCESSOR_LENGTH])
         .store_eax(PROCESSOR_STATUS)
@@ -2439,7 +2441,7 @@ fn loader_services_self_test() {
         assert_eq!(bits & KF_FAST_SYSCALL != 0, intel, "SYSENTER on Intel only (ADR-004)");
         assert_eq!(bits & KF_NX_ENABLED != 0, nx, "NX as EFER has it");
     }
-    assert_eq!(status(UNKNOWN_CLASS), STATUS_NOT_IMPLEMENTED, "SystemProcessInformation");
+    assert_eq!(status(UNKNOWN_CLASS), STATUS_NOT_IMPLEMENTED, "a class without implementation");
     let pages = read(PAGES);
     assert_ne!(pages, 0, "NtAllocateVirtualMemory");
     assert_eq!(

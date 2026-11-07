@@ -527,6 +527,30 @@ fn return_information(information: &[u8], buffer: u32, length: u32, return_lengt
     return_aligned_information(information, buffer, length, return_length, 4)
 }
 
+/// [`return_information`], pour les listes dont le tampon du appelant peut
+/// dépasser les données : `STATUS_SUCCESS` dès qu'il les tient (seules les
+/// données se copient), `STATUS_INFO_LENGTH_MISMATCH` quand il est trop
+/// petit, la taille nécessaire rendue quand même.
+fn return_information_flexible(information: &[u8], buffer: u32, length: u32, return_length: u32) -> NtStatus {
+    let size = information.len() as u32;
+    let status = if length < size {
+        STATUS_INFO_LENGTH_MISMATCH
+    } else {
+        match ke::usermem::probe_for_write(u64::from(buffer), information.len(), 4)
+            .and_then(|()| ke::usermem::copy_to_user(u64::from(buffer), information))
+        {
+            Ok(()) => STATUS_SUCCESS,
+            Err(status) => return status,
+        }
+    };
+    if return_length != 0 {
+        if let Err(fault) = ke::usermem::UserPtr::<u32>::new(return_length).write(&size) {
+            return fault;
+        }
+    }
+    status
+}
+
 /// [`return_information`], pour un tampon aligné sur `alignment` octets.
 fn return_aligned_information(
     information: &[u8],

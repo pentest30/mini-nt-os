@@ -20,7 +20,7 @@
 //! (`se::Token::system`), un processus créé une copie de celui de son
 //! créateur (SeSubProcessToken).
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
@@ -736,6 +736,66 @@ fn build_address_space(
     peb.session_id = session_id;
     space.write_bytes(page, peb.as_bytes())?;
     Ok(image_base)
+}
+
+/// `SystemProcessInformation` : ce que l'énumération des processus rend
+/// pour l'un d'eux, les champs que le noyau sait déjà (les compteurs de
+/// mémoire et les temps restent à zéro tant que Ps ne les compte pas).
+#[derive(Debug)]
+pub struct ProcessSnapshot {
+    pub pid: u32,
+    pub parent_pid: u32,
+    /// ImageFileName : au plus 15 caractères.
+    pub name: String,
+    pub session_id: u32,
+    pub base_priority: i32,
+    pub directory_table_base: u64,
+    /// Ses threads, dans l'ordre de leur création.
+    pub threads: Vec<ThreadSnapshot>,
+}
+
+/// `SystemThreadInformation` : ce que l'énumération rend pour un thread.
+#[derive(Debug)]
+pub struct ThreadSnapshot {
+    pub tid: u32,
+    pub start_address: u32,
+    /// Sa priorité courante ; sa base sans elle.
+    pub priority: i32,
+}
+
+/// Tous les processus vivants, dans l'ordre de leurs identifiants : la
+/// table CID traversée, les objets encore vivants seulement.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn snapshots() -> Vec<ProcessSnapshot> {
+    let table = CID_TABLE.lock();
+    let mut out = Vec::new();
+    for (_id, entry) in table.iter() {
+        let CidEntry::Process(weak) = entry else { continue };
+        let Some(process) = weak.upgrade() else { continue };
+        let threads = process.threads.lock();
+        let threads = threads
+            .list
+            .iter()
+            .map(|thread| ThreadSnapshot {
+                tid: thread.tid(),
+                start_address: thread.start_address(),
+                priority: thread.priority().map(i32::from).unwrap_or(i32::from(process.base_priority())),
+            })
+            .collect();
+        out.push(ProcessSnapshot {
+            pid: process.pid(),
+            parent_pid: process.parent_pid(),
+            name: process.image_file_name().to_string(),
+            session_id: process.session_id(),
+            base_priority: i32::from(process.base_priority()),
+            directory_table_base: process.directory_table_base(),
+            threads,
+        });
+    }
+    out.sort_by_key(|snapshot| snapshot.pid);
+    out
 }
 
 #[cfg(test)]
