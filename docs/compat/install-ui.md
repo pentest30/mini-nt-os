@@ -46,7 +46,8 @@ d'écriture.
 `io_manager::install::Plan::guided` vérifie tout avant de rendre le plan :
 
 - partitions alignées à 1 Mio et bornées par la plage GPT utilisable ;
-- ESP FAT32 de 40 Mio et volume système FAT32 dans l'espace restant ;
+- ESP FAT32 de 48 Mio (le chargeur, le noyau et le ramdisk du disque
+  installé) et volume système FAT32 dans l'espace restant ;
 - géométries acceptées par le même `fatfs::format` que le futur moteur ;
 - média de démarrage primaire protégé ;
 - disque qui porte `C:` protégé ;
@@ -55,8 +56,8 @@ d'écriture.
 
 Le scénario `disk = target` crée un disque ATA secondaire vierge de 96 Mio.
 L'UI ouvre la racine courante avec `FILE_READ_ATTRIBUTES`, demande l'aperçu
-et affiche la capacité réelle. Pour ce disque, le plan rendu réserve 40 Mio
-à l'ESP et 54 Mio au système. Sans cible sûre, Continuer reste bloqué.
+et affiche la capacité réelle. Pour ce disque, le plan rendu réserve 48 Mio
+à l'ESP et 46 Mio au système. Sans cible sûre, Continuer reste bloqué.
 
 L'action « Install » ouvre ensuite l'ancrage avec `FILE_WRITE_ATTRIBUTES` et
 envoie un `SetupPrepare` de 16 octets à `IOCTL_MINO_SETUP_PREPARE`. Le noyau
@@ -114,11 +115,12 @@ peinte (vu sur le chemin SYSENTER, où tout va plus vite).
 
 Le scénario `installer-ui` injecte les touches par le moniteur de QEMU,
 exerce Tab, Retour et Échap, franchit la limite d'écriture et vérifie des
-pixels du nouvel écran final. Après chaque boot, l'hôte relit les deux copies
-GPT, compare les partitions au plan 40 Mio/54 Mio et contrôle les structures
-FAT32. Le scénario `installer-prepare` vérifie en plus le mauvais jeton et la
-seconde préparation refusés sans écriture. Les deux tournent avec les modèles
-de processeur AMD et Intel.
+pixels de l'écran final. Après chaque boot, l'hôte relit les CRC des deux GPT,
+compare les deux partitions au plan 48 Mio/46 Mio, relit les deux volumes
+FAT32 avec son propre lecteur et compare l'arbre copié au ramdisk, fichier
+par fichier (`io-install.md`, lot 4 étape 2). Le scénario `installer-prepare`
+vérifie en plus le mauvais jeton et la seconde préparation refusés sans
+écriture. Les deux tournent avec les modèles de processeur AMD et Intel.
 
 ## Prototype du bureau
 

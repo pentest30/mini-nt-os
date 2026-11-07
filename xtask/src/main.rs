@@ -20,6 +20,7 @@
 //! (pflash pair), `--qemu FILE`, or the `OVMF_PATH`, `OVMF_CODE`, `OVMF_VARS`
 //! and `QEMU` environment variables.
 
+mod fat32;
 mod inflate;
 mod install;
 mod iso9660;
@@ -168,7 +169,9 @@ fn lint(ws: &Workspace) -> Result<()> {
 /// Build a development disk image, without touching a host disk.
 fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
     let output = args.value("--output")?.map(PathBuf::from).unwrap_or_else(|| ws.target.join("mino.img"));
-    let features = args.value("--features")?.unwrap_or_else(|| "test-smss".into());
+    // A person drives an image (VirtualBox): `interactive`, or the probe ends
+    // its program 10 s after the last key, an installation mid-copy.
+    let features = args.value("--features")?.unwrap_or_else(|| "test-smss,interactive".into());
     let initial_command = args.value("--initial-command")?;
     args.finish()?;
     if output.exists() {
@@ -354,16 +357,53 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
                 }
             }
+            // An installed image beside a target: the image is a file of its
+            // own, the primary boot disk; the target stays the secondary
+            // master (c.img).
+            let boot_image = (sc.installed_disk && sc.target_disk).then(|| run_dir.join("boot.img"));
+            if let Some(image) = &boot_image {
+                install::create(&esp, image)?;
+            }
+            // The ramdisk image: the source the installer copies, which the
+            // check of a setup target compares the copy with.
+            let ramdisk_image = esp.join("fat.img");
+            // `reboot = target`: the boots after the first start from the
+            // target alone, the primary master, as a computer would once
+            // installed.
+            let installed_target = if sc.reboot_target {
+                Some(Machine {
+                    firmware: qemu::find_firmware(&options, &run_dir)?,
+                    esp: esp.clone(),
+                    cpu: cpu.clone(),
+                    memory_mb: qemu::DEFAULT_MEMORY_MB,
+                    data_dir: None,
+                    boot_disk: attached_disk.clone(),
+                    system_disk: None,
+                })
+            } else {
+                None
+            };
             let machine = Machine {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
                 esp,
                 cpu,
                 memory_mb: qemu::DEFAULT_MEMORY_MB,
                 data_dir: None,
-                boot_disk: if sc.installed_disk { attached_disk.clone() } else { None },
-                system_disk: if sc.installed_disk { None } else { attached_disk.clone() },
+                boot_disk: match &boot_image {
+                    Some(image) => Some(image.clone()),
+                    None if sc.installed_disk => attached_disk.clone(),
+                    None => None,
+                },
+                system_disk: if sc.installed_disk && boot_image.is_none() { None } else { attached_disk.clone() },
             };
-            let mut outcome = qemu::boot_and_watch(&machine, &options, sc, timeout.unwrap_or(sc.timeout), &run_dir)?;
+            let mut outcome = qemu::boot_and_watch(
+                &machine,
+                installed_target.as_ref(),
+                &options,
+                sc,
+                timeout.unwrap_or(sc.timeout),
+                &run_dir,
+            )?;
             if let (true, true, Some(image)) = (outcome.passed, sc.system_disk, &attached_disk) {
                 let check_image = if sc.gpt_disk { Some(partition::extract(image)?) } else { None };
                 match qemu::fsck(check_image.as_deref().unwrap_or(image)) {
@@ -379,9 +419,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 }
             }
             if let (true, true, Some(image)) = (outcome.passed, sc.target_disk, &attached_disk) {
-                match partition::verify_setup_target(image) {
+                match partition::verify_setup_target(image, &ramdisk_image) {
                     Ok(()) => println!(
-                        "xtask: {label}: both GPT copies and both FAT32 volumes are valid in {}",
+                        "xtask: {label}: both GPT copies, both FAT32 volumes and the copied tree are valid in {}",
                         image.display()
                     ),
                     Err(report) => {

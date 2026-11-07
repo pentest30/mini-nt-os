@@ -45,8 +45,8 @@ use abi::ntstatus::{
 };
 use abi::object::OBJ_INHERIT;
 use abi::setup::{
-    SetupPrepare, IOCTL_MINO_SETUP_FORMAT, IOCTL_MINO_SETUP_PREPARE, IOCTL_MINO_SETUP_QUERY, SETUP_PREPARE_SIZE,
-    SETUP_PREVIEW_SIZE,
+    SetupPrepare, IOCTL_MINO_SETUP_COPY, IOCTL_MINO_SETUP_FORMAT, IOCTL_MINO_SETUP_PREPARE, IOCTL_MINO_SETUP_QUERY,
+    SETUP_PREPARE_SIZE, SETUP_PREVIEW_SIZE,
 };
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -570,6 +570,36 @@ fn device_io_control_file(arguments: &[u32]) -> Result<(), NtStatus> {
                 }
                 Err(error) => {
                     log::warn!("[m4] install: format refused: {error:?}");
+                    Err(prepare_status(error))
+                }
+            }
+        }
+        IOCTL_MINO_SETUP_COPY => {
+            if (input_length as usize) != SETUP_PREPARE_SIZE || output_length != 0 {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            ke::usermem::probe_for_read(u64::from(input), SETUP_PREPARE_SIZE, 4)?;
+            let mut request_bytes = [0u8; SETUP_PREPARE_SIZE];
+            ke::usermem::copy_from_user(&mut request_bytes, u64::from(input))?;
+            let request = SetupPrepare::from_bytes(request_bytes).ok_or(STATUS_REVISION_MISMATCH)?;
+            let _file = super::current_process().handle_table.reference_as::<File>(
+                Handle(handle),
+                &FILE_TYPE,
+                AccessMask(FILE_WRITE_ATTRIBUTES),
+            )?;
+            match io_manager::install::copy_files(request.disk_number, request.plan_token) {
+                Ok(report) => {
+                    log::info!(
+                        "[m4] install: copy: {} files, {} directories, {} bytes to disk {}",
+                        report.files,
+                        report.directories,
+                        report.bytes,
+                        request.disk_number
+                    );
+                    write_iosb(iosb, STATUS_SUCCESS, 0)
+                }
+                Err(error) => {
+                    log::warn!("[m4] install: copy refused: {error:?}");
                     Err(prepare_status(error))
                 }
             }

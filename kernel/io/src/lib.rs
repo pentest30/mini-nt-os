@@ -436,7 +436,7 @@ pub fn init(ramdisk_phys_base: u64, ramdisk_size: u64, hhdm_offset: u64) {
     log::info!("Io: initialised");
 }
 
-fn ramdisk_device() -> Option<PhysRamBlockDevice> {
+pub(crate) fn ramdisk_device() -> Option<PhysRamBlockDevice> {
     let (phys, size, hhdm) = *RAMDISK_SOURCE.lock();
     if phys == 0 || size < 512 {
         return None;

@@ -13,10 +13,10 @@ requires = userland, native
 initial-command = SETUP1.EXE
 disk = target
 cpus = default, intel
-timeout = 120
+timeout = 900
 
 expect = [setup] screen welcome
-expect = [setup] backend target 2: 96 MiB; plan EFI 40 MiB, system 54 MiB; token
+expect = [setup] backend target 2: 96 MiB; plan EFI 48 MiB, system 46 MiB; token
 expect = [setup] focus back
 expect = [setup] back to welcome
 expect = [setup] screen disk 2
@@ -27,8 +27,11 @@ expect = [setup] stage prepare: 20%
 expect = [setup] prepare: GPT written and reread by the kernel
 expect = [setup] stage format: 40%
 expect = [setup] format: ESP and system volumes FAT32, mounted by the kernel
-expect = [setup] stage partition: 100%
-expect = [setup] screen complete; verified GPT and FAT32
+expect = [setup] stage copy: 60%
+expect = [setup] copy: boot files and system tree copied
+expect = [setup] stage configure: 80%
+expect = [setup] stage verify: 100%
+expect = [setup] screen complete; GPT, FAT32 and files written
 
 # Final screen, in Mino's blue theme: the dark blue top band, the target-disk
 # panel on the blue field, the pale-green completion card of the wizard.
@@ -48,3 +51,4 @@ keys = [setup] screen review 2 => ret
 # the preview's own.
 forbid = [setup] prepare failed:
 forbid = [setup] format failed:
+forbid = [setup] copy failed:

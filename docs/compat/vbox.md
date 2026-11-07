@@ -216,3 +216,93 @@ Vérifié sur l'image `mino-vbox3` : `kernel: phase 1 done`, tous les
 self-tests (y compris `process_round`, la sonde KUSER_SHARED_DATA et le
 test GS), smss (36 services), et le lanceur dessiné sur le framebuffer
 VBox. La fenêtre du launcher s'affiche et répond.
+
+## Le boot sur le disque installé : la batterie smoke passe au ramdisk
+
+Sur un boot dont `C:` est le volume **installé** (le disque secondaire où
+l'installeur a écrit), la batterie smoke héritée bugcheckait : son programme
+`files.exe` ouvre `KERNEL.BIN` relatif à la racine de `C:`, qui ne porte pas
+les fichiers de test sur un volume installé. Le fixture déterministe est le
+**ramdisk** (le loader y charge `fat.img` à chaque boot, `KERNEL.BIN` y est
+toujours) : le programme ouvre désormais `\Device\Ramdisk0\` (le `\` final
+fait ouvrir la racine par le parse du périphérique — ouvrir le périphérique
+seul rend un Device, pas un File : OBJECT_TYPE_MISMATCH) et ses chemins
+relatifs. La batterie passe ainsi quel que soit ce que `C:` porte. De même,
+l'ESP virtuelle FAT16 de QEMU ne se monte pas (le lecteur FAT du noyau ne
+lit que du FAT32) : la copie des fichiers de boot la saute avec journal
+sous QEMU et les copie sur VBox (l'ESP GPT de l'image installée est
+FAT32). Dettes notées : un cache de secteurs FAT (la copie d'un arbre
+relit la FAT par cluster, lente en PIO) et l'affichage à l'écran des
+refus du moteur.
+
+## La copie des fichiers (lot 4-2) : le moteur écrit, le blocage à déboguer
+
+Le moteur de copie est écrit : `io::install::copy_files(number, token)` —
+la même revalidation que la préparation, les tables GPT du disque cible
+relues (les volumes du plan), les deux fichiers de boot de l'ESP de
+démarrage vers l'ESP cible (quand elle est montageable en FAT32 — l'ESP
+virtuelle FAT16 de QEMU ne se monte pas : sautés avec journal), puis
+l'arbre WINDOWS du volume de démarrage vers le volume système cible, chaque
+fichier vérifié à la relecture de son entrée.
+
+**Le blocage restant** : `copy_dir` entre dans `/WINDOWS/SYSTEM32/CONFIG`
+et ne ressort pas — aucune sortie pendant des minutes (les deux CPU QEMU,
+900 s), la copie de l'arbre ne progresse pas au-delà. Le fixture: la liste
+du répertoire CONFIG passe (les entrées sont connues), le premier fichier
+est SYSTEM (212 Kio). L'analyse n'a pas identifié la boucle : les chemins
+de la copie sont bornés (le cache FAT en mémoire, les écritures
+périphériques par cluster). **L'outil : le gdbstub de QEMU (`-s -S`) sur le
+scénario installer-ui, point d'arrêt dans `copy_dir`** — la pile et le
+compteur de boucle diront quelle itération tourne. Le vCPU est-il en boucle
+ou bloqué : `VBoxManage metrics` sur la VM en état de copie a rendu 0 %
+(dans HLT?) — sous QEMU, le gdbstub tranchera.
+
+Le cache FAT de `FatVolume` (la dette M4) est en place : la première
+copie de la FAT en mémoire, les entrées lues/écrites dedans, les secteurs
+sales écrits à chaque copie de FAT au flush et à la drop (un remontage
+frais les voit). 48 tests io verts, clippy propre.
+
+## Résolu : la copie et le disque installé sous VirtualBox
+
+Deux causes, l'une derrière l'autre.
+
+**L'installateur tué en pleine copie.** Les échantillons de RIP
+(`VBoxManage debugvm Mino getregisters rip`, symbolisés avec le `kernel.elf`
+extrait de l'ESP de l'image) ne tombaient que dans des boucles `hlt` et
+l'interruption d'horloge : le thread de la copie ne tournait plus. Le
+journal série le disait : `[m4] SMSS.EXE: the process did not end within
+10 s (of its start or the last key): terminated`. `cargo xtask image`
+construisait le noyau avec `test-smss` seul ; la sonde qui lance `smss`
+termine `smss`, `csrss` et le programme initial (ici `SETUP1.EXE`) 10 s
+après la dernière touche — juste pour un scénario, fatal à une copie de
+plusieurs minutes sans touche. Sous QEMU, la copie finissait avant ces 10 s.
+La feature noyau `interactive` fait attendre la sonde sans délai ;
+`cargo xtask image` la met par défaut (`test-smss,interactive`). Le
+scénario `interactive` (`WAIT1.EXE`, 12 s sans touche) le vérifie ; sans la
+feature, il échoue (vérifié par mutation).
+
+**Le PIO lent.** Une fois la copie laissée vivre, elle prenait 260 s, et le
+démarrage du disque installé lisait `C:` pendant des minutes (tous les
+échantillons dans `hal::ata::AtaDrive::read_sectors`). Chaque mot passait
+par un `in`/`out` à lui : 256 sorties de VM par secteur sous VT-x. Un
+secteur passe maintenant par un seul `rep insw`/`rep outsw` (`hal::ata`).
+
+Mesuré sous VirtualBox (VM `Mino`, 256 Mo, IDE PIIX4, démarrage sans
+fenêtre, touches par `VBoxManage controlvm Mino keyboardputscancode 1c 9c`) :
+
+| | Avant | Après |
+|---|---|---|
+| Copie de l'installation (82 Mo : fichiers de boot 44 Mo, système 37,6 Mo) | tuée à 10 s, puis 260 s | 17 s |
+| Démarrage du disque installé jusqu'à `[setup] ready` | plus de 4 min, toujours en lecture | 21 s |
+
+Le disque installé démarre seul en maître primaire : le micrologiciel
+trouve `EFI/BOOT/BOOTX64.EFI` sur l'ESP de la cible, le chargeur y charge
+`kernel.elf` et `fat.img`, le noyau monte `C:` sur la partition système
+(`Io: GPT system partition 2: LBA 100352`).
+
+Restent : au premier démarrage, une cible vierge en maître secondaire
+laisse `C:` sur le ramdisk (le noyau essaie le secondaire d'abord, puis ne
+revient pas au GPT du primaire) ; après la phase 1, l'ancien `CMD.EXE`
+(`syscall.rs`, `nt_read_file`) lit lui-même le clavier PS/2 en boucle `hlt`
+et peut prendre des touches à win32k (sans effet avec `interactive`, qui
+retient la phase 1 tant que le programme initial tourne).

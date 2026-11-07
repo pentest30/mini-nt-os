@@ -144,11 +144,12 @@ pub unsafe fn init() {
         // ICW4: 8086 mode
         master_dat.write(0x01);
         slave_dat.write(0x01);
-        // OCW1: mask all except IRQ1 (keyboard) on master; mask all on slave.
-        master_dat.write(0xFD);
-        slave_dat.write(0xFF);
-        // Le contrôleur 8042 doit avoir son clavier activé avant que IRQ1 ne
-        // produise quoi que ce soit (VirtualBox et le matériel réel l'exigent).
+        // OCW1: mask all except IRQ1 (keyboard) on master; mask all on slave
+        master_dat.write(0xFD); // 1111_1101 = unmask IRQ1 only
+        slave_dat.write(0xFF); // mask all slave IRQs
+                               // Le contrôleur 8042 doit avoir son clavier activé avant que IRQ1
+                               // ne produise quoi que ce soit (les émulateurs stricts — VirtualBox
+                               // — et le matériel réel l'exigent ; QEMU tolère l'oubli).
         crate::ps2::controller_enable_keyboard();
     }
     log::info!("HAL timer: 8259 PIC remapped (IRQ1 unmasked for PS/2 keyboard, 8042 keyboard enabled)");

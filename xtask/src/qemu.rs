@@ -180,7 +180,10 @@ impl Machine {
                 cmd.arg("-drive").arg(drive("if=pflash,format=raw", vars, ""));
             }
         }
-        // Virtual FAT disks, read-write: the firmware stores NvVars on the ESP.
+        // Virtual FAT disks, read-write: the firmware stores NvVars on the
+        // ESP. (The vvfat stays FAT16: a FAT32 volume this small is invalid
+        // and the firmware refuses it; the installer's boot-file copy skips
+        // it and the image boot carries its own FAT32 ESP.)
         if let Some(image) = &self.boot_disk {
             cmd.arg("-drive").arg(drive("format=raw", image, ""));
         } else {
@@ -267,8 +270,11 @@ pub struct Outcome {
 
 /// Boots headless, with the serial port in `run_dir/serial.log`, and rereads
 /// the log until the scenario passes or fails, QEMU exits, or `timeout`.
+/// The boots after the first use `later` when there is one (`reboot =
+/// target`: the installed disk alone).
 pub fn boot_and_watch(
     machine: &Machine,
+    later: Option<&Machine>,
     opts: &Options,
     scenario: &Scenario,
     timeout: Duration,
@@ -276,16 +282,18 @@ pub fn boot_and_watch(
 ) -> Result<Outcome> {
     let start = Instant::now();
     let mut earlier = String::new();
+    let machine_of = |boot: u32| if boot > 1 { later.unwrap_or(machine) } else { machine };
     for boot in 1..scenario.boots {
         let serial_log = run_dir.join(format!("serial-{boot}.log"));
-        let outcome = boot_once(machine, opts, scenario, timeout, run_dir, &serial_log, &earlier, true)?;
+        let outcome = boot_once(machine_of(boot), opts, scenario, timeout, run_dir, &serial_log, &earlier, true)?;
         if !outcome.passed {
             return Ok(Outcome { reason: format!("boot {boot}: {}", outcome.reason), ..outcome });
         }
         earlier.push_str(&read_lossy(&serial_log));
     }
     let serial_log = run_dir.join("serial.log");
-    let outcome = boot_once(machine, opts, scenario, timeout, run_dir, &serial_log, &earlier, false)?;
+    let outcome =
+        boot_once(machine_of(scenario.boots), opts, scenario, timeout, run_dir, &serial_log, &earlier, false)?;
     Ok(Outcome { elapsed: start.elapsed(), ..outcome })
 }
 
