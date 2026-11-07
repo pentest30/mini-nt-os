@@ -177,6 +177,11 @@ jour à chaque commit qui change l'état.
   GetCursorPos, les clics dans l'installateur.
   Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la copie ou l'étape
   « configure ») et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
+  La souris absolue de VirtualBox (branche `claude/vbox-mouse`, `docs/compat/vbox.md`) : `hal::pci`
+  (mécanisme n° 1, recherche par fabricant et modèle, BAR d'E/S), `abi::vmmdev`, `hal::vmmdev`, pilote
+  `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
+  de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
+  VirtualBox, rien ne change.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)

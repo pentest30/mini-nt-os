@@ -17,6 +17,7 @@ members = [
     "kernel/se",
     "kernel/win32k",
     "drivers/input/i8042",
+    "drivers/input/vboxmouse",
     "drivers/video/gopfb",
     "libs/fatfs",
     "libs/gpt",
