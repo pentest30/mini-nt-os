@@ -7,11 +7,13 @@ brief visuel reste
 
 ![Écran final du nouvel installateur Mino](../images/installer-ui-redesign.png)
 
-La présentation reprend le langage visuel proposé dans la maquette HTML :
-rail bleu à cinq étapes, en-tête blanc, surface beige, cartes d'état et barre
-d'actions fixe. Elle garde la densité et la lisibilité des assistants
-ReactOS et Windows XP, avec les couleurs et les éléments graphiques propres à
-Mino ; aucune ressource Microsoft n'est intégrée.
+La présentation suit le thème bleu de Mino, dans le style de l'époque XP : un
+écran d'installation plein écran (bandeaux bleu nuit, champ bleu en dégradé),
+les cinq étapes et le disque cible à gauche, et l'assistant dans une fenêtre
+à barre de titre bleue arrondie, avec en-tête blanc, cartes d'état et boutons
+brillants. Tout est dessiné par le programme (`tests/native/theme.c`) : le
+thème est original, il n'intègre aucune ressource Microsoft, et le texte est
+la Tahoma de ReactOS épinglé.
 
 ## Architecture retenue
 
@@ -23,8 +25,13 @@ framebuffer.
 
 `tests/native/setup1.c` est la sonde exécutable de ce choix. Le scénario
 `installer-ui` la met à la place de `winlogon.exe`, comme les autres bancs
-d'essai de USER. Elle ouvre une surface cliente à 800 × 600 au centre du
-bureau 1280 × 800 et dessine ses contrôles avec GDI. C'est encore une sonde :
+d'essai de USER. Elle ouvre une fenêtre `WS_POPUP` de la taille de l'écran
+(1280 × 800 sous QEMU) et dessine chaque image dans une DIB section de
+32 bits sélectionnée dans un DC en mémoire : le programme écrit les formes
+(dégradés, coins arrondis et disques anticrénelés par suréchantillonnage),
+`win32k` écrit le texte (DrawText), puis un seul BitBlt copie l'image dans la
+fenêtre. Le lot de GDI est vidé (GdiFlush) avant que le programme ne
+retouche les pixels, pour garder l'ordre du peintre. C'est encore une sonde :
 le programme définitif quittera `tests/native/` quand le chemin d'exécution
 du moteur sera fixé.
 
@@ -78,7 +85,7 @@ compare au plan exact avant de rendre le succès.
 Tab déplace le choix entre Retour et l'action primaire ; Retour ou Espace
 l'active ; Échap revient en arrière tant qu'aucune écriture n'a commencé.
 La fenêtre garde une position des actions constante, un focus visible, des
-couleurs contrastées et les cinq étapes dans un rail latéral.
+couleurs contrastées et les cinq étapes dans la colonne de gauche de l'écran.
 
 ## Limite de sécurité actuelle
 
@@ -115,11 +122,16 @@ de processeur AMD et Intel.
 
 ## Prototype du bureau
 
-`DESKTOP1.EXE` est la première sonde du bureau assorti à l'installateur. Elle
-dessine le fond beige, la barre des tâches, le menu Démarrer ouvert et une
-fenêtre Files avec navigation latérale. Le menu accepte Haut, Bas, Entrée,
-Espace et Échap. Le contenu de Files est encore visuel : il ne parcourt pas
-le système de fichiers et ne remplace pas encore un shell de production.
+`DESKTOP1.EXE` est la première sonde du bureau assorti à l'installateur, dans
+le même thème bleu (`theme.c`). Elle dessine un fond de ciel bleu en dégradé
+avec les icônes Computer, Documents et Trash, une fenêtre Files (barre de
+titre bleue, barre d'outils, adresse, volet de tâches bleu, dossiers), le menu
+Démarrer ouvert en deux colonnes (en-tête bleu avec l'utilisateur, programmes
+sur blanc, emplacements sur bleu clair, Restart et Shut down en bas) et la
+barre des tâches bleue avec son bouton Start vert et sa zone de notification.
+Le menu accepte Haut, Bas, Entrée, Espace et Échap. Le contenu de Files est
+encore visuel : il ne parcourt pas le système de fichiers et ne remplace pas
+encore un shell de production.
 
 ![Prototype du bureau Mino](../images/desktop-ui-redesign.png)
 

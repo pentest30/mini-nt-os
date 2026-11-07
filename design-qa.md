@@ -1,20 +1,21 @@
-# Revue visuelle du redesign
+# Revue visuelle du redesign bleu
 
-Référence : `mino-installer-mockups.html`, fournie avec la demande de
-redesign. Les captures de référence ont été comparées aux rendus QEMU des
-scénarios `installer-ui` et `desktop-ui` en 1280 × 800.
+Demande : un design « totalement bleu XP » pour l'installateur et le bureau, à
+la place de la version beige. Les rendus QEMU des scénarios `installer-ui` et
+`desktop-ui` en 1280 × 800 ont été relus image par image.
 
 | Surface | Vérification | Résultat |
 |---|---|---|
-| Installateur | Rail bleu, cinq étapes, en-tête blanc, contenu beige, cartes d'état et barre d'actions fixe | Conforme |
-| Installateur | Hiérarchie des actions, focus clavier et texte honnête sur GPT, FAT32 et copie future | Conforme |
-| Bureau | Fond beige, barre des tâches, menu Démarrer et fenêtre Files | Conforme |
-| Bureau | Contraste, zones sélectionnées et alignement sur la grille compacte de la maquette | Conforme |
-| Tests | Rendu et marqueurs après paint sur CPU par défaut et Intel | Conforme |
+| Installateur | Plein écran bleu : bandeaux bleu nuit, champ en dégradé, étapes et disque cible à gauche | Conforme |
+| Installateur | Assistant dans une fenêtre à barre de titre bleue arrondie, en-tête blanc, cartes d'état, boutons brillants et focus visible | Conforme |
+| Installateur | Texte honnête sur GPT, FAT32 et la copie à venir ; navigation clavier inchangée | Conforme |
+| Bureau | Ciel bleu, icônes, barre des tâches bleue, bouton Start vert, zone de notification | Conforme |
+| Bureau | Menu Démarrer en deux colonnes, fenêtre Files avec volet de tâches bleu | Conforme |
+| Légal | Formes dessinées par le programme, police Tahoma de ReactOS, aucune ressource ni marque Microsoft | Conforme |
 
-Les pictogrammes utilisent encore des formes et glyphes GDI simples. Une
-bibliothèque d'icônes pourra les remplacer lorsque le shell et Files
-quitteront les sondes natives. Cela ne bloque ni la navigation ni la lecture
-des états.
-
-Final result: passed.
+Le thème vit dans `tests/native/theme.c` : un canevas (DIB section de
+32 bits), des primitives anticrénelées (dégradés, coins arrondis, disques,
+traits) et les widgets (cadre de fenêtre, boutons, barre de progression,
+cartes, icônes). Les pictogrammes restent des formes simples ; une
+bibliothèque d'icônes pourra les remplacer quand le shell quittera les sondes
+natives.
