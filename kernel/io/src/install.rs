@@ -17,7 +17,7 @@ use abi::setup::{
 };
 
 use crate::disk::AtaDisk;
-use crate::fat::{BlockDevice, FatError, FatVolume};
+use crate::fat::{BlockDevice, FatError, FatFile, FatVolume};
 use crate::partition::PartitionDevice;
 use crate::volume::{Node, Volume};
 
@@ -534,25 +534,33 @@ fn copy_boot_file<D: BlockDevice>(
     Ok(())
 }
 
-/// Copie récursive de l'arbre `src_path` du volume de démarrage vers le
+/// Copie récursive de l'arbre du répertoire `src_dir_cluster` du volume
+/// source — le ramdisk, **monté une seule fois pour toute la récursion** :
+/// chaque appel ne re-monte rien, la FAT reste en cache — vers le
 /// répertoire `dst_dir` du volume cible. Les entrées `.` et `..` ne se
 /// copient pas ; chaque fichier est relu depuis la source, créé et écrit
 /// sur la cible (le Volume grandit le fichier), sa taille vérifiée à la
-/// relecture de son entrée.
-fn copy_dir(src_path: &str, dst: &Volume, dst_dir: &Node, report: &mut CopyReport) -> Result<(), PrepareError> {
-    for entry in crate::list_fat_dir(src_path).map_err(|_| PrepareError::Io)? {
+/// relecture de son entrée. Les noms longs passent : le Volume cible écrit
+/// leurs entrées VFAT et l'alias 8.3.
+fn copy_dir(
+    src: &FatVolume<impl BlockDevice>,
+    src_dir_cluster: u32,
+    dst: &Volume,
+    dst_dir: &Node,
+    report: &mut CopyReport,
+) -> Result<(), PrepareError> {
+    for entry in src.dir_entries(src_dir_cluster).map_err(|_| PrepareError::Io)? {
         if entry.name == "." || entry.name == ".." {
             continue;
         }
-        let child = alloc::format!("{src_path}/{}", entry.name);
         if entry.attr & 0x10 != 0 {
             let node = dst.create(dst_dir, &entry.name, true, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
             report.directories += 1;
-            copy_dir(&child, dst, &node, report)?;
+            copy_dir(src, entry.first_cluster, dst, &node, report)?;
         } else {
-            let mut file = crate::open_fat_file(&child).map_err(|_| PrepareError::Io)?;
-            let mut data = alloc::vec![0u8; file.file_size as usize];
-            crate::read_fat_file(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
+            let mut file = FatFile { first_cluster: entry.first_cluster, file_size: entry.file_size, position: 0 };
+            let mut data = alloc::vec![0u8; entry.file_size as usize];
+            src.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
             let node = dst.create(dst_dir, &entry.name, false, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
             let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
             // La vérification après écriture : l'entrée de la cible rend la
@@ -594,8 +602,7 @@ pub fn copy_files(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
 }
 
 fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
-    let target =
-        AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::SECONDARY, false)).ok_or(PrepareError::NoTarget)?;
+    let target = AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::SECONDARY, false)).ok_or(PrepareError::NoTarget)?;
     let sectors = target.sectors();
     let _plan = validated_plan(sectors, number, SETUP_DISK_CANDIDATE, token)?;
     // Les tables GPT du disque cible (la préparation les a écrites).
@@ -625,23 +632,22 @@ fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
     let esp_root = esp_volume.root();
     match &boot_esp {
         Some(boot_esp) => {
-            copy_boot_file(boot_esp, "EFI/BOOT/BOOTX64.EFI", &esp_volume, &esp_root).inspect_err(|&error| {
-                log::warn!("TEMP copy: h (bootx64 {error:?})");
-            })?;
-            copy_boot_file(boot_esp, "kernel.elf", &esp_volume, &esp_root).inspect_err(|&error| {
-                log::warn!("TEMP copy: i (kernel.elf {error:?})");
-            })?;
+            copy_boot_file(boot_esp, "EFI/BOOT/BOOTX64.EFI", &esp_volume, &esp_root)?;
+            copy_boot_file(boot_esp, "kernel.elf", &esp_volume, &esp_root)?;
         }
-        None => log::warn!("[m4] install: copy: the boot ESP is not FAT32-mountable, boot files skipped"),
+        // Not "install: copy:": that prefix is the report of a finished copy,
+        // which the scenarios wait for.
+        None => log::warn!("[m4] install: boot files skipped: the boot ESP is not FAT32-mountable"),
     }
-    // L'arbre système : le ramdisk (qui porte l'arborescence du démarrage)
-    // vers le volume système cible.
+    // L'arbre système : le ramdisk (qui porte l'arborescence du démarrage),
+    // monté une fois pour toute la récursion, vers le volume système cible.
     let system_device = PartitionDevice::new(target, sectors, system.first_lba, system.last_lba - system.first_lba + 1)
         .map_err(|_| PrepareError::Io)?;
     let system_volume = Volume::mount(alloc::boxed::Box::new(system_device)).map_err(|_| PrepareError::Io)?;
     let system_root = system_volume.root();
+    let source = FatVolume::mount(crate::ramdisk_device().ok_or(PrepareError::Io)?).map_err(|_| PrepareError::Io)?;
     let mut report = CopyReport::default();
-    copy_dir("", &system_volume, &system_root, &mut report)?;
+    copy_dir(&source, source.root_cluster(), &system_volume, &system_root, &mut report)?;
     // La vérification : les tailles écrites relues à chaque fichier dans
     // copy_dir, et le lecteur du noyau a monté les deux volumes.
     Ok(report)

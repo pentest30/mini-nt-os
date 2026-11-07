@@ -7127,6 +7127,17 @@ fn install_prepare_self_test() {
         esp.total_sectors,
         system.total_sectors
     );
+    // La copie : l'arbre du ramdisk vers le volume système (les fichiers de
+    // boot passent par l'ESP de démarrage quand elle est FAT32 — sous QEMU,
+    // l'ESP virtuelle FAT16 ne se monte pas et ils sautent).
+    let report = io_manager::install::copy_files(preview.disk_number, preview.plan_token).expect("the copy");
+    log::info!(
+        "[m4] install: copy: {} files, {} directories, {} bytes to disk {}",
+        report.files,
+        report.directories,
+        report.bytes,
+        preview.disk_number
+    );
 }
 
 /// The registry write services from user mode (`cm`, `sys::registry`, M4),
