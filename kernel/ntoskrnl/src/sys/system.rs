@@ -1,6 +1,8 @@
 //! Les services d'information du système (Ex).
 
-use abi::ntstatus::{NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS};
+use abi::ntstatus::{
+    NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
+};
 use abi::security::SE_LOAD_DRIVER_PRIVILEGE;
 use abi::system_information::{
     SystemBasicInformation32, SystemProcessorInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS,
@@ -25,6 +27,20 @@ const UNICODE_STRING_SIZE: u32 = 8;
 /// `Session Manager\GlobalFlag` au démarrage ; pas encore), comme le
 /// `NtGlobalFlag` du PEB de chaque processus.
 const NT_GLOBAL_FLAG: u32 = 0;
+
+/// `SHUTDOWN_ACTION::ShutdownReboot` on XP.
+const SHUTDOWN_REBOOT: u32 = 1;
+
+/// NtShutdownSystem(ShutdownAction). The installer uses the reboot action
+/// after every target cache has been flushed. Other actions wait for power
+/// management and an orderly shutdown path.
+pub(super) fn nt_shutdown_system(arguments: &[u32]) -> NtStatus {
+    if arguments[0] != SHUTDOWN_REBOOT {
+        return STATUS_INVALID_PARAMETER;
+    }
+    log::info!("[power] NtShutdownSystem: reboot requested");
+    hal::power::reset()
+}
 
 /// NtQuerySystemInformation(SystemInformationClass, SystemInformation,
 /// SystemInformationLength, ReturnLength) : l'information de la classe,

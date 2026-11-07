@@ -87,6 +87,7 @@ typedef struct {
 #define IOCTL_MINO_SETUP_COPY 0x8000A00C
 #define SETUP_READY 0
 #define SETUP_DISK_CANDIDATE 1
+#define SHUTDOWN_REBOOT 1
 #define KLF_ACTIVATE 0x00000001
 
 enum Screen {
@@ -113,6 +114,8 @@ static DWORD target_disk_number;
 static DWORD target_token_low;
 static DWORD target_token_high;
 static WCHAR target_size_text[32] = L"Unavailable";
+static WCHAR esp_size_text[32] = L"Unavailable";
+static WCHAR system_size_text[32] = L"Unavailable";
 
 static CANVAS canvas;
 /* The wizard's content area: its origin and width, set by draw(). */
@@ -127,6 +130,7 @@ __declspec(dllimport) LONG __stdcall NtDeviceIoControlFile(HANDLE file, HANDLE e
                                                            DWORD output_length);
 __declspec(dllimport) LONG __stdcall NtOpenFile(HANDLE *file, DWORD access, OBJECT_ATTRIBUTES *attributes,
                                                 IO_STATUS_BLOCK *iosb, DWORD share, DWORD options);
+__declspec(dllimport) LONG __stdcall NtShutdownSystem(DWORD action);
 
 static void format_mib(WCHAR *out, DWORD value, const WCHAR *suffix)
 {
@@ -197,6 +201,8 @@ static void query_install_backend(void)
     esp_mib = preview.esp_sectors_low / 2048;
     system_mib = preview.system_sectors_low / 2048;
     format_mib(target_size_text, target_mib, L" MiB");
+    format_mib(esp_size_text, esp_mib, L" · FAT32 · verified");
+    format_mib(system_size_text, system_mib, L" · FAT32 · verified");
     target_disk_number = preview.disk_number;
     target_token_low = preview.token_low;
     target_token_high = preview.token_high;
@@ -464,8 +470,8 @@ static void draw_install(RECT client)
 
 static void draw_complete(RECT client)
 {
-    heading(client, L"Disk preparation is complete",
-            L"The partition table and both FAT32 volumes passed verification.");
+    heading(client, L"Mino installation is complete",
+            L"The boot files, system files and both FAT32 volumes passed verification.");
     card(&canvas, at(0, 0, content_width, 100), PX(236, 249, 236), PX(150, 204, 150), C_GREEN);
     disc(&canvas, content_x + 42, content_y + 50, 20, PX(132, 218, 118), PX(36, 136, 40));
     check_mark(&canvas, content_x + 32, content_y + 40, 20, C_WHITE);
@@ -479,12 +485,12 @@ static void draw_complete(RECT client)
     round_frame(&canvas, at(0, 120, content_width, 196), 4, CORNERS_ALL, C_FACE_LINE);
     fill(&canvas, at(1, 158, content_width - 1, 159), PX(226, 234, 248));
     line_text(L"EFI system", at(18, 120, 240, 158), C_INK_SOFT, 11, FALSE);
-    line_text(L"40 MiB · FAT32 · verified", at(240, 120, content_width - 16, 158), C_INK, 11, TRUE);
+    line_text(esp_size_text, at(240, 120, content_width - 16, 158), C_INK, 11, TRUE);
     line_text(L"Mino system", at(18, 158, 240, 196), C_INK_SOFT, 11, FALSE);
-    line_text(L"54 MiB · FAT32 · verified", at(240, 158, content_width - 16, 196), C_INK, 11, TRUE);
+    line_text(system_size_text, at(240, 158, content_width - 16, 196), C_INK, 11, TRUE);
 
     card(&canvas, at(0, 216, content_width, 262), PX(255, 249, 226), PX(230, 198, 112), PX(222, 158, 30));
-    line_text(L"Keep this target attached. The next installer lot copies the boot and system files.",
+    line_text(L"Keep the target attached. Finish restarts the computer into the installed system.",
               at(20, 216, content_width - 16, 262), PX(116, 76, 6), 11, FALSE);
     draw_navigation(client, FALSE, L"Finish", TRUE);
 }
@@ -693,7 +699,9 @@ static void activate(HWND window)
     case SCREEN_INSTALL:
         break;
     case SCREEN_COMPLETE:
-        DbgPrint("[setup] finish requested (milestone stays open)\n");
+        DbgPrint("[setup] finish requested; rebooting into the installed system\n");
+        if (NtShutdownSystem(SHUTDOWN_REBOOT) < 0)
+            DbgPrint("[setup] reboot request failed\n");
         break;
     }
 }

@@ -168,7 +168,9 @@ jour à chaque commit qui change l'état.
   démarre la cible seule) ; vérificateur hôte `xtask/src/fat32.rs` (arbre comparé au ramdisk, fichiers de
   boot à l'octet). Sous VirtualBox : feature `interactive` (la sonde de `test-smss` tuait l'installateur
   10 s après la dernière touche ; `cargo xtask image` la met par défaut, scénario `interactive`) et PIO
-  par `rep insw`/`rep outsw` : copie en 17 s, disque installé démarré jusqu'à l'installateur en 21 s.
+  par `rep insw`/`rep outsw` : copie en 17 s. Le média conserve maintenant le vrai Winlogon sous
+  `WINLOGON.ORG`, le restaure sur la cible, et Finish appelle `NtShutdownSystem(ShutdownReboot)` : le
+  redémarrage part du système installé au lieu de relancer l'assistant.
   VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
   ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
   phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).

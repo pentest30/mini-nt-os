@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 105 | 296 |
+| ntoskrnl | 106 | 296 |
 | win32k | 84 | 737 |
 
 ## ntoskrnl
@@ -273,7 +273,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00ff` | `NtSetUuidSeed` | 1 |  |
 | `0x0100` | `NtSetValueKey` | 6 | ✅ |
 | `0x0101` | `NtSetVolumeInformationFile` | 5 |  |
-| `0x0102` | `NtShutdownSystem` | 1 |  |
+| `0x0102` | `NtShutdownSystem` | 1 | ✅ |
 | `0x0103` | `NtSignalAndWaitForSingleObject` | 4 |  |
 | `0x0104` | `NtStartProfile` | 1 |  |
 | `0x0105` | `NtStopProfile` | 1 |  |
