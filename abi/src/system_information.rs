@@ -25,6 +25,24 @@ pub const SYSTEM_FLAGS_INFORMATION: u32 = 9;
 /// starts (MmSystemRangeStart), a ULONG_PTR.
 pub const SYSTEM_RANGE_START_INFORMATION: u32 = 50;
 
+/// SystemPerformanceInformation: the CPU, memory and IO counters, the ones
+/// taskmgr's header and graphs read ([`SystemPerformanceInformation32`]).
+pub const SYSTEM_PERFORMANCE_INFORMATION: u32 = 2;
+
+/// SystemProcessInformation: every process and its threads, what a task
+/// manager lists ([`SystemProcessInformation32`]).
+pub const SYSTEM_PROCESS_INFORMATION: u32 = 5;
+
+/// SystemProcessorPerformanceInformation: the kernel, user, idle, DPC and
+/// interrupt times of each processor.
+pub const SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION: u32 = 8;
+
+/// SystemHandleInformation: the number of open handles.
+pub const SYSTEM_HANDLE_INFORMATION: u32 = 16;
+
+/// SystemFileCacheInformation: the file cache's working sizes.
+pub const SYSTEM_FILECACHE_INFORMATION: u32 = 21;
+
 /// MmSystemRangeStart as an i386 process sees it: 2 GiB.
 pub const SYSTEM_RANGE_START: u32 = 0x8000_0000;
 
@@ -167,6 +185,130 @@ const _: () = {
 };
 
 impl SystemTimeOfDayInformation32 {
+    /// Its bytes, as they go to the caller.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: integer fields without padding (size checked above): every
+        // byte is initialised.
+        unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
+}
+
+/// SYSTEM_THREAD_INFORMATION of XP i386 (packed to 4): a thread of a
+/// [`SystemProcessInformation32`] entry, 0x40 bytes, the large integers at
+/// offsets the packing keeps to 4.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemThreadInformation32 {
+    /// The kernel time the thread consumed, in 100 ns (0: not counted yet).
+    pub kernel_time: u64,
+    pub user_time: u64,
+    /// Its creation time, in 100 ns since 1601 (0: not tracked yet).
+    pub create_time: u64,
+    /// How long it has waited, in ticks.
+    pub wait_time: u32,
+    /// Where its execution started (user or kernel, as it is).
+    pub start_address: u32,
+    /// CLIENT_ID: the process's id, then the thread's.
+    pub client_id_process: u32,
+    pub client_id_thread: u32,
+    /// Its current priority.
+    pub priority: i32,
+    /// Its process's base priority.
+    pub base_priority: i32,
+    pub context_switches: u32,
+    /// Its scheduler state (`THREAD_STATE_*`).
+    pub thread_state: u32,
+    /// Why it waits (`KWAIT_REASON`).
+    pub wait_reason: u32,
+    pub pad: u32,
+}
+
+const _: () = {
+    assert!(size_of::<SystemThreadInformation32>() == 0x40);
+    assert!(offset_of!(SystemThreadInformation32, create_time) == 0x10);
+    assert!(offset_of!(SystemThreadInformation32, client_id_process) == 0x20);
+    assert!(offset_of!(SystemThreadInformation32, thread_state) == 0x34);
+};
+
+impl SystemThreadInformation32 {
+    /// Its bytes, as they go to the caller.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: integer fields without padding (size checked above): every
+        // byte is initialised.
+        unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
+}
+
+/// The header of a `SystemProcessInformation` entry of XP i386 (packed to 4):
+/// 0xB8 bytes, then its [`SystemThreadInformation32`] threads, then its
+/// image name, UTF-16, that [`image_name_buffer`]
+/// points at, inside the caller's own buffer.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SystemProcessInformation32 {
+    /// The bytes to the next entry; 0 for the last one.
+    pub next_entry_offset: u32,
+    pub number_of_threads: u32,
+    pub working_set_private_size: u64,
+    pub hard_fault_count: u32,
+    pub number_of_threads_high_watermark: u32,
+    pub cycle_time: u64,
+    /// Its creation time, in 100 ns since 1601 (0: not tracked yet).
+    pub create_time: u64,
+    pub user_time: u64,
+    pub kernel_time: u64,
+    /// The image name's length, in bytes, without a terminator.
+    pub image_name_length: u16,
+    pub image_name_maximum_length: u16,
+    /// Where the name's units sit, inside the caller's buffer.
+    pub image_name_buffer: u32,
+    pub base_priority: i32,
+    /// UniqueProcessId.
+    pub unique_process_id: u32,
+    pub inherited_from_unique_process_id: u32,
+    pub handle_count: u32,
+    pub session_id: u32,
+    /// CR3 of its address space.
+    pub page_directory_base: u32,
+    pub peak_virtual_size: u32,
+    pub virtual_size: u32,
+    pub page_fault_count: u32,
+    pub peak_working_set_size: u32,
+    pub working_set_size: u32,
+    pub quota_peak_paged_pool_usage: u32,
+    pub quota_paged_pool_usage: u32,
+    pub quota_peak_non_paged_pool_usage: u32,
+    pub quota_non_paged_pool_usage: u32,
+    pub pagefile_usage: u32,
+    pub peak_pagefile_usage: u32,
+    pub private_page_count: u32,
+    pub read_operation_count: u64,
+    pub write_operation_count: u64,
+    pub other_operation_count: u64,
+    pub read_transfer_count: u64,
+    pub write_transfer_count: u64,
+    pub other_transfer_count: u64,
+}
+
+/// Where an entry's image name sits, from the entry's start: after its
+/// threads.
+pub const SYSTEM_PROCESS_INFORMATION_NAME_AT: u32 = 0xB8;
+/// The size of an entry's threads, each.
+pub const SYSTEM_THREAD_INFORMATION_SIZE: u32 = 0x40;
+
+const _: () = {
+    assert!(size_of::<SystemProcessInformation32>() == 0xB8);
+    assert!(offset_of!(SystemProcessInformation32, working_set_private_size) == 0x08);
+    assert!(offset_of!(SystemProcessInformation32, cycle_time) == 0x18);
+    assert!(offset_of!(SystemProcessInformation32, image_name_length) == 0x38);
+    assert!(offset_of!(SystemProcessInformation32, image_name_buffer) == 0x3C);
+    assert!(offset_of!(SystemProcessInformation32, unique_process_id) == 0x44);
+    assert!(offset_of!(SystemProcessInformation32, page_directory_base) == 0x54);
+    assert!(offset_of!(SystemProcessInformation32, read_operation_count) == 0x88);
+    assert!(offset_of!(SystemProcessInformation32, other_transfer_count) == 0xB0);
+};
+
+impl SystemProcessInformation32 {
     /// Its bytes, as they go to the caller.
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: integer fields without padding (size checked above): every

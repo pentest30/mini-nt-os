@@ -1,0 +1,21 @@
+# La liste des processus, la première application de la vague M7 :
+# TASKL.EXE (tests/native/taskl.c) démarre comme winlogon et relit
+# NtQuerySystemInformation(SystemProcessInformation) — la classe que
+# taskmgr de ReactOS demande à chaque rafraîchissement. Le noyau rend les
+# processus vivants avec leurs threads et leurs noms d'image, chacun dans
+# l'entrée que son NextEntryOffset chaîne ; le nom pointe dans le buffer
+# même de l'appelant. TASKL journalise chaque processus, où ce scénario
+# vérifie.
+features = test-smss
+requires = userland, native
+initial-command = TASKL.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [apps] status 00000000
+expect = [apps] process 4 "System"
+expect = "csrss.exe" threads=
+expect = processes listed
+
+# Any bugcheck ends the run at once.
+forbid = *** STOP:
