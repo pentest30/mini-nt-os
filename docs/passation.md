@@ -185,8 +185,9 @@ jour à chaque commit qui change l'état.
   boot à l'octet). Sous VirtualBox : feature `interactive` (la sonde de `test-smss` tuait l'installateur
   10 s après la dernière touche ; `cargo xtask image` la met par défaut, scénario `interactive`) et PIO
   par `rep insw`/`rep outsw` : copie en 17 s. Le média conserve maintenant le vrai Winlogon sous
-  `WINLOGON.ORG`, le restaure sur la cible, et Finish appelle `NtShutdownSystem(ShutdownReboot)` : le
-  redémarrage part du système installé au lieu de relancer l'assistant.
+  `WINLOGON.ORG`, le restaure sur la cible, et Finish appelle `NtShutdownSystem(ShutdownReboot)`. L'ESP cible reçoit
+  `MINO.TAG` ; même si VirtualBox relance `BOOTX64.EFI` du média primaire, ce chargeur prend `kernel.elf` et
+  `fat.img` sur l'ESP marquée et démarre le système installé au lieu de relancer l'assistant.
   VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
   ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
   phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).

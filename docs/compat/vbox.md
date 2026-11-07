@@ -300,6 +300,14 @@ trouve `EFI/BOOT/BOOTX64.EFI` sur l'ESP de la cible, le chargeur y charge
 `kernel.elf` et `fat.img`, le noyau monte `C:` sur la partition système
 (`Io: GPT system partition 2: LBA 100352`).
 
+Quand le média d'installation reste maître primaire et la cible maître
+secondaire, le reset de **Finish** peut encore lancer `BOOTX64.EFI` du média.
+La copie place désormais `MINO.TAG` sur l'ESP cible. Le chargeur du média
+préfère toute ESP qui porte ce marqueur et charge son `kernel.elf` et son
+`fat.img` : aucun détachement manuel ni changement d'ordre des disques n'est
+nécessaire. Le scénario `installer-finish` garde les deux disques attachés
+pendant les deux boots pour reproduire cette topologie VirtualBox.
+
 Restent : au premier démarrage, une cible vierge en maître secondaire
 laisse `C:` sur le ramdisk (le noyau essaie le secondaire d'abord, puis ne
 revient pas au GPT du primaire) ; après la phase 1, l'ancien `CMD.EXE`
