@@ -22,6 +22,7 @@ pub mod gdt;
 pub mod idt;
 pub mod irql;
 pub mod msr;
+pub mod pci;
 pub mod pcr;
 pub mod power;
 pub mod ps2;
@@ -35,6 +36,7 @@ pub mod sysenter;
 pub mod timer;
 pub mod trap;
 pub mod usermem;
+pub mod vmmdev;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

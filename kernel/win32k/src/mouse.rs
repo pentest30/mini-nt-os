@@ -2,7 +2,8 @@
 //! et `winpos.c` — co_WinPosWindowFromPoint — de ReactOS, comme
 //! spécification) : le thread d'entrée brute remet chaque mouvement du
 //! pilote ([`process_mouse_input`]) ; le curseur se déplace (borné à
-//! l'écran, dessiné par `display`), et la fenêtre sous lui reçoit, dans la
+//! l'écran, dessiné par `display`) ou va à une position absolue (la souris
+//! de VirtualBox, `vboxmouse`), et la fenêtre sous lui reçoit, dans la
 //! file de son thread, WM_MOUSEMOVE, les boutons (WM_LBUTTONDOWN…, un second
 //! clic proche et rapide en WM_LBUTTONDBLCLK pour une classe CS_DBLCLKS),
 //! leurs pendants hors de la zone cliente (WM_NCMOUSEMOVE…, avec le code de
@@ -19,7 +20,7 @@ use alloc::vec::Vec;
 
 use abi::mou::{
     MouseInputData, MOUSE_LEFT_BUTTON_DOWN, MOUSE_LEFT_BUTTON_UP, MOUSE_MIDDLE_BUTTON_DOWN, MOUSE_MIDDLE_BUTTON_UP,
-    MOUSE_RIGHT_BUTTON_DOWN, MOUSE_RIGHT_BUTTON_UP, MOUSE_WHEEL,
+    MOUSE_MOVE_ABSOLUTE, MOUSE_RIGHT_BUTTON_DOWN, MOUSE_RIGHT_BUTTON_UP, MOUSE_WHEEL,
 };
 use abi::user::vk::{VK_CONTROL, VK_SHIFT};
 use abi::user::{
@@ -83,6 +84,14 @@ pub fn cursor_position() -> Option<(i32, i32)> {
 pub fn moved((x, y): (i32, i32), dx: i32, dy: i32, width: u32, height: u32) -> (i32, i32) {
     let clamp = |value: i32, size: u32| value.clamp(0, (size as i32 - 1).max(0));
     (clamp(x.saturating_add(dx), width), clamp(y.saturating_add(dy), height))
+}
+
+/// La place du curseur pour une position absolue (`x`, `y`), de 0 à 0xFFFF
+/// sur chaque axe (MOUSE_MOVE_ABSOLUTE), sur un écran de `width` × `height`
+/// (comme UserSendMouseInput : `x * largeur >> 16`).
+pub fn absolute_position(x: i32, y: i32, width: u32, height: u32) -> (i32, i32) {
+    let scale = |value: i32, size: u32| ((i64::from(value.clamp(0, 0xFFFF)) * i64::from(size)) >> 16) as i32;
+    (scale(x, width), scale(y, height))
 }
 
 fn contains(rect: &Rect, x: i32, y: i32) -> bool {
@@ -208,7 +217,11 @@ pub fn process_mouse_input(data: &MouseInputData) {
             buttons: 0,
             last_click: None,
         });
-        let (x, y) = moved((state.x, state.y), data.last_x, data.last_y, mode.width, mode.height);
+        let (x, y) = if data.flags & MOUSE_MOVE_ABSOLUTE != 0 {
+            absolute_position(data.last_x, data.last_y, mode.width, mode.height)
+        } else {
+            moved((state.x, state.y), data.last_x, data.last_y, mode.width, mode.height)
+        };
         let moved_now = (x, y) != (state.x, state.y);
         (state.x, state.y) = (x, y);
         let mut transitions = Vec::new();
@@ -288,6 +301,14 @@ mod tests {
         assert_eq!(moved((640, 400), 12, -7, 1280, 800), (652, 393));
         assert_eq!(moved((5, 5), -20, -20, 1280, 800), (0, 0));
         assert_eq!(moved((1270, 790), 50, 50, 1280, 800), (1279, 799));
+    }
+
+    #[test]
+    fn an_absolute_position_spans_the_screen() {
+        assert_eq!(absolute_position(0, 0, 1024, 768), (0, 0));
+        assert_eq!(absolute_position(0xFFFF, 0xFFFF, 1024, 768), (1023, 767));
+        assert_eq!(absolute_position(0x8000, 0x4000, 1024, 768), (512, 192));
+        assert_eq!(absolute_position(-5, 0x1_0000, 1280, 800), (0, 799));
     }
 
     #[test]
