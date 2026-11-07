@@ -377,10 +377,6 @@ impl<D: BlockDevice> FatVolume<D> {
                 rsvd as u64 + i as u64,
                 &mut fat_bytes[i * bytes_per_sector as usize..(i + 1) * bytes_per_sector as usize],
             )?;
-            // TEMP: la charge du cache FAT — le boot installé gelait ici.
-            if i % 64 == 0 {
-                log::warn!("TEMP fat load: sector {i}/{} at lba {}", fat_sectors, rsvd as u64 + i as u64);
-            }
         }
         let vol = Self {
             device,

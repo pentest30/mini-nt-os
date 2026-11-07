@@ -50,6 +50,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["bitmap1.c"], "BITMAP1.EXE", Toolchain::MinGwWin32),
     (&["keys1.c"], "KEYS1.EXE", Toolchain::MinGwWin32),
     (&["setup1.c"], "SETUP1.EXE", Toolchain::MinGwWin32),
+    (&["wait1.c"], "WAIT1.EXE", Toolchain::MinGwWin32),
     (&["console1.c"], "CONSOLE1.EXE", Toolchain::MinGwWin32),
     (&["threads1.c"], "THREADS1.EXE", Toolchain::MinGwConsole),
     (&["conshow1.c"], "CONSHOW1.EXE", Toolchain::MinGwConsole),

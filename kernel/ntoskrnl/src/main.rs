@@ -7131,6 +7131,14 @@ fn install_prepare_self_test() {
     // boot passent par l'ESP de démarrage quand elle est FAT32 — sous QEMU,
     // l'ESP virtuelle FAT16 ne se monte pas et ils sautent).
     let report = io_manager::install::copy_files(preview.disk_number, preview.plan_token).expect("the copy");
+    if report.boot_files != 0 {
+        log::info!(
+            "[m4] install: boot files: {} files, {} bytes to the ESP of disk {}",
+            report.boot_files,
+            report.boot_bytes,
+            preview.disk_number
+        );
+    }
     log::info!(
         "[m4] install: copy: {} files, {} directories, {} bytes to disk {}",
         report.files,
@@ -7138,6 +7146,14 @@ fn install_prepare_self_test() {
         report.bytes,
         preview.disk_number
     );
+    // Le disque est installé : le démarrage suivant part de lui seul (le
+    // scénario installed-boot ne garde que lui). Sans les fichiers de boot,
+    // il ne démarrerait pas.
+    if cfg!(feature = "test-install-reboot") {
+        assert_ne!(report.boot_files, 0, "the boot files, for the next boot from the target");
+        log::info!("[m4] install: the target is installed; resetting to boot from it");
+        hal::power::reset();
+    }
 }
 
 /// The registry write services from user mode (`cm`, `sys::registry`, M4),

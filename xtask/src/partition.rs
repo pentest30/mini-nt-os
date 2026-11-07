@@ -97,12 +97,15 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
 /// hives of CONFIG with their regf, the long names with their checksums),
 /// free clusters left, and the system volume holding exactly the tree of
 /// `ramdisk`, the image the copy read: every file, by its long name, with
-/// its size and its bytes.
+/// its size and its bytes. When the ESP holds files (the installer booted
+/// from a real GPT disk), they are the three boot files of the run's ESP,
+/// `ramdisk`'s directory, byte for byte.
 pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
     let verify = || -> std::io::Result<()> {
         const EXPECTED_BYTES: u64 = 96 * 1024 * 1024;
         const ESP_FIRST: u64 = 2048;
-        const ESP_SECTORS: u64 = 40 * 2048;
+        // The plan of the kernel (io_manager::install): 48 MiB of ESP.
+        const ESP_SECTORS: u64 = 48 * 2048;
 
         let mut disk = Disk(File::open(image)?);
         let bytes = disk.0.metadata()?.len();
@@ -134,13 +137,37 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
             return Err(std::io::Error::other("installer GPT does not match its immutable two-partition plan"));
         }
 
-        // L'ESP : un volume FAT32 qui se lit et se marche (son contenu dépend
-        // du média de démarrage — sous QEMU, l'ESP virtuelle FAT16 ne se
-        // monte pas et les fichiers de boot ne se copient pas).
+        // L'ESP : un volume FAT32 qui se lit et se marche. Son contenu dépend
+        // du média de démarrage : sous QEMU, l'ESP virtuelle FAT16 ne se
+        // monte pas et les fichiers de boot ne se copient pas ; depuis une
+        // image GPT, l'ESP cible tient le chargeur, le noyau et le ramdisk
+        // du run, à l'octet près.
         let esp_sectors = partitions[0].last_lba - partitions[0].first_lba + 1;
         let esp = crate::fat32::Fat32::read(&mut disk.0, partitions[0].first_lba, esp_sectors)
             .map_err(std::io::Error::other)?;
-        esp.walk().map_err(std::io::Error::other)?;
+        let esp_tree = esp.walk().map_err(std::io::Error::other)?;
+        if esp_tree.files != 0 {
+            let run_esp = ramdisk.parent().ok_or_else(|| std::io::Error::other("the ramdisk has no directory"))?;
+            let boot_files = [
+                ("EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/BOOTX64.EFI"),
+                ("kernel.elf", "KERNEL.ELF"),
+                ("fat.img", "FAT.IMG"),
+            ];
+            if esp_tree.files != boot_files.len() as u32 {
+                return Err(std::io::Error::other(format!(
+                    "the ESP holds {} files, not the 3 boot files",
+                    esp_tree.files
+                )));
+            }
+            for (host, on_esp) in boot_files {
+                let bytes = std::fs::read(run_esp.join(host))?;
+                match esp_tree.contents.get(on_esp) {
+                    Some(&(size, hash)) if size as usize == bytes.len() && hash == crate::fat32::fnv1a(&bytes) => {}
+                    Some(_) => return Err(std::io::Error::other(format!("ESP {on_esp}: not the run's {host}"))),
+                    None => return Err(std::io::Error::other(format!("ESP {on_esp} is missing"))),
+                }
+            }
+        }
 
         // Le volume système : l'arbre copié, relu et vérifié en entier.
         let system_sectors = partitions[1].last_lba - partitions[1].first_lba + 1;

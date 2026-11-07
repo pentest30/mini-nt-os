@@ -370,7 +370,8 @@ fn keep_created(process: &Arc<ob::Object<ps::EProcess>>) {
 
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
 /// `params`, et attend sa fin (10 s au plus, ou 10 s après la dernière touche
-/// tapée : un programme interactif, `keys =` dans un scénario) : son thread démarre par
+/// tapée : un programme interactif, `keys =` dans un scénario ; sans limite
+/// avec la feature `interactive`, quand une personne le pilote) : son thread démarre par
 /// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
 /// entre dans son point d'entrée avec le PEB pour argument
 /// (`NtProcessStartup(PPEB)`). Journalise, avec le préfixe `[tag]` et sous le
@@ -440,7 +441,17 @@ fn run_native(
             )
         }
     };
-    let mut waited = wait(QUIET);
+    // A person drives the system (feature `interactive`): the program runs as
+    // long as it needs. The 10 s that end a scenario's program killed the
+    // installer on VirtualBox while it copied the system, between two keys.
+    let mut waited = if cfg!(feature = "interactive") {
+        // SAFETY: the object of a process held here, at PASSIVE_LEVEL.
+        unsafe {
+            ke_wait_for_single_object::<KePlatform>(process.dispatcher_object(), ProcessorMode::Kernel, false, None)
+        }
+    } else {
+        wait(QUIET)
+    };
     // A program typed into (`keys =` in a scenario) is not stuck: 10 s more
     // after each key.
     while waited == STATUS_TIMEOUT {

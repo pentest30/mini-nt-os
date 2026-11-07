@@ -241,7 +241,6 @@ impl Fat32 {
     /// the PE (`.DLL`, `.EXE`, `.EFI`), regf for the hives of a CONFIG
     /// directory. Rends the FNV-1a hash of its bytes.
     fn verify_file(&self, first: u32, size: u32, path: &str, short: &str) -> Result<u64, String> {
-        const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
         if size == 0 {
             // A file without bytes may hold no cluster.
             return Ok(FNV_OFFSET);
@@ -267,18 +266,28 @@ impl Fat32 {
         if in_config && extension != "LOG" && head[..size.min(4) as usize] != *b"regf" {
             return Err(format!("{}: a hive of CONFIG without regf", display(path)));
         }
+        // FNV-1a over the bytes of the chain, as `fnv1a` over the file.
         let mut hash = FNV_OFFSET;
         let mut left = size as usize;
         for &cluster in &chain {
             let take = left.min(self.cluster_bytes());
             for &byte in &self.cluster_slice(cluster)[..take] {
-                hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+                hash = (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME);
             }
             left -= take;
         }
         Ok(hash)
     }
 }
+
+/// The FNV-1a hash (64 bits) of `bytes`, as [`Stats::contents`] holds it for
+/// each file.
+pub fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(FNV_OFFSET, |hash, &byte| (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME))
+}
+
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0100_0000_01b3;
 
 /// `""` shows as the root.
 fn display(path: &str) -> &str {
@@ -314,6 +323,9 @@ mod tests {
         assert_eq!(stats.files, 5);
         assert_eq!(stats.directories, 4, "WINDOWS, SYSTEM32, CONFIG, FONTS");
         assert_eq!(stats.bytes, 4 + 2500 + 2500 + 15 + 100);
+        // The hash of a file read through its chain is the hash of its bytes.
+        assert_eq!(stats.contents.get("WINDOWS/SYSTEM32/NTDLL.DLL"), Some(&(2500, fnv1a(&payload))));
+        assert_eq!(stats.contents.get("KERNEL.BIN"), Some(&(4, fnv1a(b"ABCD"))));
         assert!(stats.free_clusters > 0);
         let upcased: HashSet<&str> = stats.paths.iter().map(String::as_str).collect();
         for path in [

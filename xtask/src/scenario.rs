@@ -42,7 +42,12 @@
 //!   (skipped, with a warning, without dosfstools).
 //! - `disk = target`: attaches a new, blank 96 MiB secondary ATA disk. It is
 //!   never copied from the ramdisk and is not checked as a FAT volume; setup
-//!   scenarios use it as a non-system installation candidate.
+//!   scenarios use it as a non-system installation candidate. With `disk =
+//!   installed` too, the installed image is the primary boot disk and the
+//!   target the secondary master.
+//! - `reboot = target` (with `disk = installed`, `disk = target` and `boots`
+//!   from 2): every boot after the first starts from the target disk alone,
+//!   as the primary master: what the first boot installed there must boot.
 //! - `boots`: how many times QEMU boots (default 1). Every boot but the last
 //!   must end with QEMU (the kernel resets the machine, and `-no-reboot`
 //!   makes QEMU exit); the `expect` markers are looked for in all the serial
@@ -83,6 +88,8 @@ pub struct Scenario {
     pub installed_disk: bool,
     /// Un disque ATA secondaire vide, distinct du système courant.
     pub target_disk: bool,
+    /// The boots after the first start from the target disk alone.
+    pub reboot_target: bool,
     pub boots: u32,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
@@ -204,6 +211,7 @@ impl Scenario {
             gpt_disk: false,
             installed_disk: false,
             target_disk: false,
+            reboot_target: false,
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
@@ -250,6 +258,10 @@ impl Scenario {
                     }
                     _ => return Err(format!("{}: unknown disk `{value}`", at())),
                 },
+                "reboot" => match value {
+                    "target" => sc.reboot_target = true,
+                    _ => return Err(format!("{}: unknown reboot `{value}`", at())),
+                },
                 "boots" => {
                     sc.boots = value
                         .parse()
@@ -281,8 +293,15 @@ impl Scenario {
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
         }
-        if sc.system_disk && sc.target_disk {
+        // An installed image is the primary boot disk: the target can be the
+        // secondary master beside it, not beside a system disk there.
+        if sc.system_disk && sc.target_disk && !sc.installed_disk {
             return Err(format!("{name}/{SCENARIO_FILE}: a disk cannot be both system and target"));
+        }
+        if sc.reboot_target && !(sc.installed_disk && sc.target_disk && sc.boots >= 2) {
+            return Err(format!(
+                "{name}/{SCENARIO_FILE}: `reboot = target` needs `disk = installed`, `disk = target` and `boots` from 2"
+            ));
         }
         Ok(sc)
     }
