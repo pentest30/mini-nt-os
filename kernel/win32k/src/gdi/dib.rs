@@ -156,6 +156,15 @@ impl<'a> Bitmap<'a> {
         (x < self.width && y < self.height).then(|| self.pixels[self.row(y) + x as usize])
     }
 
+    /// Le pixel en (`x`, `y`) prend la valeur `value` (dans le format de la
+    /// surface), s'il est sur elle.
+    pub fn set_pixel(&mut self, x: u32, y: u32, value: u32) {
+        if x < self.width && y < self.height {
+            let at = self.row(y) + x as usize;
+            self.pixels[at] = value;
+        }
+    }
+
     /// PatBlt avec un pinceau plein (PATCOPY) : `rect`, coupé aux bords de
     /// la surface, prend la couleur `color`.
     pub fn fill_rect(&mut self, rect: Rect, color: ColorRef) {

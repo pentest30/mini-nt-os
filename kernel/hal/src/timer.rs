@@ -144,15 +144,21 @@ pub unsafe fn init() {
         // ICW4: 8086 mode
         master_dat.write(0x01);
         slave_dat.write(0x01);
-        // OCW1: mask all except IRQ1 (keyboard) on master; mask all on slave
-        master_dat.write(0xFD); // 1111_1101 = unmask IRQ1 only
-        slave_dat.write(0xFF); // mask all slave IRQs
+        // OCW1: on the master, IRQ1 (keyboard) and IRQ2 (the slave's
+        // cascade); on the slave, IRQ12 (the mouse). All others masked.
+        master_dat.write(0xF9); // 1111_1001
+        slave_dat.write(0xEF); // 1110_1111
                                // Le contrôleur 8042 doit avoir son clavier activé avant que IRQ1
                                // ne produise quoi que ce soit (les émulateurs stricts — VirtualBox
-                               // — et le matériel réel l'exigent ; QEMU tolère l'oubli).
+                               // — et le matériel réel l'exigent ; QEMU tolère l'oubli) ; de même
+                               // la souris de son port auxiliaire pour IRQ12.
         crate::ps2::controller_enable_keyboard();
     }
-    log::info!("HAL timer: 8259 PIC remapped (IRQ1 unmasked for PS/2 keyboard, 8042 keyboard enabled)");
+    // SAFETY: interrupts are still disabled (init), after the keyboard.
+    match unsafe { crate::ps2::controller_enable_mouse() } {
+        Some(size) => log::info!("HAL PS/2: keyboard IRQ1 and mouse IRQ12 enabled ({size}-byte packets)"),
+        None => log::info!("HAL PS/2: keyboard IRQ1 enabled; no mouse on the 8042's auxiliary port"),
+    }
 
     // ── 1. Software-enable local APIC ────────────────────────────────────────
     // Spurious Interrupt Vector Register (SVR):

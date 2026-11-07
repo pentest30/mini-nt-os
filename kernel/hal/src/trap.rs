@@ -207,7 +207,8 @@ pub(crate) fn exception_stub(vector: u8, handler: u64) -> u64 {
 /// The handlers of `idt` that user mode reaches without a trap frame, in
 /// the order of their stubs: the interrupts, which come back, then the
 /// exceptions that stop the system or end the thread, without, then with,
-/// an error code.
+/// an error code; then the interrupts added since (`Mouse`), each with the
+/// stub of its index.
 #[cfg(target_os = "none")]
 #[derive(Clone, Copy)]
 pub(crate) enum Entry {
@@ -220,12 +221,13 @@ pub(crate) enum Entry {
     SegmentNotPresent,
     StackSegment,
     DoubleFault,
+    Mouse,
 }
 
 /// The `idt` handler of each [`Entry`], where its stub goes.
 #[cfg(target_os = "none")]
 #[unsafe(no_mangle)]
-static HAL_ENTRY_HANDLERS: [core::sync::atomic::AtomicU64; 9] = [const { core::sync::atomic::AtomicU64::new(0) }; 9];
+static HAL_ENTRY_HANDLERS: [core::sync::atomic::AtomicU64; 10] = [const { core::sync::atomic::AtomicU64::new(0) }; 10];
 
 /// Records `handler`, the `idt` handler of `entry`; returns the stub for its
 /// IDT entry. From kernel mode, the stub jumps to the handler, the stack as
@@ -245,6 +247,7 @@ pub(crate) fn entry_stub(entry: Entry, handler: u64) -> u64 {
         fn hal_entry_6();
         fn hal_entry_7();
         fn hal_entry_8();
+        fn hal_entry_9();
     }
     let stubs = [
         hal_entry_0 as *const () as u64,
@@ -256,6 +259,7 @@ pub(crate) fn entry_stub(entry: Entry, handler: u64) -> u64 {
         hal_entry_6 as *const () as u64,
         hal_entry_7 as *const () as u64,
         hal_entry_8 as *const () as u64,
+        hal_entry_9 as *const () as u64,
     ];
     HAL_ENTRY_HANDLERS[entry as usize].store(handler, Ordering::Release);
     stubs[entry as usize]
@@ -473,6 +477,7 @@ core::arch::global_asm!(
     "HAL_FATAL 6, 1",
     "HAL_FATAL 7, 1",
     "HAL_FATAL 8, 1",
+    "HAL_INTERRUPT 9",
 );
 
 #[cfg(test)]

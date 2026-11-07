@@ -48,6 +48,7 @@ pub mod keyboard;
 pub mod logon;
 pub mod metrics;
 pub mod monitor;
+pub mod mouse;
 pub mod nonclient;
 pub mod paint;
 pub mod queue;

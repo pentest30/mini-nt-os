@@ -76,6 +76,73 @@ pub fn isr_push_scancode(scancode: u8) {
     }
 }
 
+// ── The mouse: its own ring, filled by IRQ12 ─────────────────────────────────
+
+const MOUSE_BUF_SIZE: usize = 128;
+static MOUSE_BUF: [core::sync::atomic::AtomicU8; MOUSE_BUF_SIZE] =
+    [const { core::sync::atomic::AtomicU8::new(0) }; MOUSE_BUF_SIZE];
+static MOUSE_HEAD: AtomicUsize = AtomicUsize::new(0);
+static MOUSE_TAIL: AtomicUsize = AtomicUsize::new(0);
+static MOUSE_DROPPED: AtomicUsize = AtomicUsize::new(0);
+/// The size of the mouse's packets: 3, 4 with a wheel (IntelliMouse), 0
+/// without a mouse.
+static MOUSE_PACKET: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// The size of the mouse's packets: 3 bytes, 4 with a wheel; `None` without
+/// a mouse on the 8042's auxiliary port.
+///
+/// # IRQL
+/// Any level.
+pub fn mouse_packet_size() -> Option<usize> {
+    match MOUSE_PACKET.load(Ordering::Acquire) {
+        0 => None,
+        size => Some(usize::from(size)),
+    }
+}
+
+/// How many mouse bytes the IRQ12 ISR could not keep (the ring full): the
+/// decoder resynchronises on the next packet.
+///
+/// # IRQL
+/// Any level.
+pub fn mouse_dropped() -> usize {
+    MOUSE_DROPPED.load(Ordering::Relaxed)
+}
+
+/// Called from the IRQ12 ISR: a byte of the mouse into its ring, then the
+/// hook of [`set_notify`] (the raw input thread reads both rings).
+/// No heap, no locks, ISR-safe.
+pub fn isr_push_mouse(byte: u8) {
+    let head = MOUSE_HEAD.load(Ordering::Relaxed);
+    let next = (head + 1) % MOUSE_BUF_SIZE;
+    if next == MOUSE_TAIL.load(Ordering::Acquire) {
+        MOUSE_DROPPED.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    MOUSE_BUF[head].store(byte, Ordering::Relaxed);
+    MOUSE_HEAD.store(next, Ordering::Release);
+    let hook = NOTIFY.load(Ordering::Acquire);
+    if hook != 0 {
+        // SAFETY: only `set_notify` stores here, the address of a `fn()`.
+        let hook: fn() = unsafe { core::mem::transmute::<usize, fn()>(hook) };
+        hook();
+    }
+}
+
+/// The next byte of the mouse, if its ring holds one.
+///
+/// # IRQL
+/// Any level (one reader: the raw input thread).
+pub fn pop_mouse() -> Option<u8> {
+    let tail = MOUSE_TAIL.load(Ordering::Relaxed);
+    if tail == MOUSE_HEAD.load(Ordering::Acquire) {
+        return None;
+    }
+    let byte = MOUSE_BUF[tail].load(Ordering::Relaxed);
+    MOUSE_TAIL.store((tail + 1) % MOUSE_BUF_SIZE, Ordering::Release);
+    Some(byte)
+}
+
 /// Pop the next scancode from the ring buffer. Returns None if empty.
 /// Called from the message queue at PASSIVE_LEVEL.
 pub fn pop_scancode() -> Option<u8> {
@@ -146,11 +213,17 @@ fn wait_input_clear() {
     }
 }
 
-/// Initialisation du contrôleur 8042 pour le clavier : vide la sortie, écrit
-/// l'octet de configuration (horloge du clavier rétablie, interruption sur
-/// tampon de sortie plein, souris toujours désactivée, la traduction vers le
-/// jeu 1 préservée), réactive le port du clavier et lui demande d'émettre
-/// ses codes (scan enable).
+/// Initialisation du contrôleur 8042 pour le clavier et la souris : vide la
+/// sortie, active le port auxiliaire (0xA8), écrit l'octet de configuration
+/// (horloges du clavier et de la souris rétablies, interruptions sur tampon
+/// de sortie plein des deux ports — IRQ1, IRQ12 —, la traduction vers le jeu
+/// 1 préservée), réactive le port du clavier et lui demande d'émettre ses
+/// codes (scan enable). La souris elle-même se règle ensuite
+/// ([`controller_enable_mouse`]).
+///
+/// L'octet de configuration se lit ici seulement, la sortie vidée juste
+/// avant : relu plus tard, l'accusé du clavier (0xFA) pourrait passer pour
+/// lui, et l'écrire couperait le clavier.
 ///
 /// Sans cette séquence, les émulateurs stricts (VirtualBox) et le matériel
 /// réel n'émettent ni codes ni IRQ1 — QEMU tolère l'oubli.
@@ -172,15 +245,17 @@ pub unsafe fn controller_enable_keyboard() {
             }
             let _ = data.read();
         }
-        // Lit l'octet de configuration (0x20 → sortie) et le réécrit (0x60) :
-        // horloge du clavier rétablie (bit 4 à 0), souris toujours désactivée
-        // (bit 5 à 1), interruption sur le tampon de sortie du clavier (bit 0
-        // à 1). Le bit 6 (traduction vers le jeu 1) est préservé.
+        // Active le port de la souris (0xA8), puis lit l'octet de
+        // configuration (0x20 → sortie) et le réécrit (0x60) : horloges du
+        // clavier et de la souris rétablies (bits 4 et 5 à 0), interruptions
+        // sur le tampon de sortie du clavier et de la souris (bits 0 et 1 à
+        // 1). Le bit 6 (traduction vers le jeu 1) est préservé.
+        command.write(0xA8);
+        wait_input_clear();
         command.write(0x20);
         let mut config = data.read();
-        config &= !(1 << 4);
-        config |= 1;
-        config |= 1 << 5;
+        config &= !((1 << 4) | (1 << 5));
+        config |= 1 | (1 << 1);
         wait_input_clear();
         command.write(0x60);
         wait_input_clear();
@@ -193,6 +268,74 @@ pub unsafe fn controller_enable_keyboard() {
         wait_input_clear();
         data.write(0xF4);
     }
+}
+
+/// The next byte of the controller's output, when it comes within a bound:
+/// the byte and whether it is the mouse's (status bit 5). A keyboard byte
+/// met while the mouse is set up goes to the keyboard's ring.
+fn read_output() -> Option<(u8, bool)> {
+    for _ in 0..200_000 {
+        // SAFETY: reading the 8042's status and data ports, at CPL 0.
+        let status = unsafe { Port::<u8>::new(PS2_STATUS).read() };
+        if status & 1 != 0 {
+            // SAFETY: as above; the output buffer is full.
+            let byte = unsafe { Port::<u8>::new(PS2_DATA).read() };
+            return Some((byte, status & 0x20 != 0));
+        }
+    }
+    None
+}
+
+/// The mouse's next byte: a keyboard byte on the way goes to its ring.
+fn read_mouse_byte() -> Option<u8> {
+    for _ in 0..8 {
+        let (byte, from_mouse) = read_output()?;
+        if from_mouse {
+            return Some(byte);
+        }
+        isr_push_scancode(byte);
+    }
+    None
+}
+
+/// Sends `byte` to the mouse (through the 8042's 0xD4) and reads its
+/// acknowledgement: `true` for 0xFA.
+fn mouse_command(byte: u8) -> bool {
+    wait_input_clear();
+    // SAFETY: an 8042 command, then its data byte, at CPL 0.
+    unsafe { Port::<u8>::new(PS2_COMMAND).write(0xD4) };
+    wait_input_clear();
+    // SAFETY: as above.
+    unsafe { Port::<u8>::new(PS2_DATA).write(byte) };
+    read_mouse_byte() == Some(0xFA)
+}
+
+/// Initialisation de la souris du port auxiliaire du 8042 (i8042prt,
+/// `mouse.c`, comme spécification), le port déjà activé et son interruption
+/// (IRQ12) ouverte par [`controller_enable_keyboard`] : la souris remise à
+/// ses réglages (0xF6) ; la molette demandée par la séquence d'IntelliMouse
+/// (cadences 200, 100, 80, puis l'identifiant : 3 avec une molette, les
+/// paquets ont alors 4 octets) ; enfin l'émission des mouvements (0xF4).
+/// Rend la taille des paquets, `None` sans souris.
+///
+/// # Safety
+/// Interrupts disabled (IRQ1 and IRQ12 would race the setup), at CPL 0,
+/// after [`controller_enable_keyboard`].
+pub unsafe fn controller_enable_mouse() -> Option<usize> {
+    if !mouse_command(0xF6) {
+        return None;
+    }
+    let wheel = [200, 100, 80].iter().all(|&rate| mouse_command(0xF3) && mouse_command(rate))
+        && mouse_command(0xF2)
+        && read_mouse_byte() == Some(3);
+    // The default rate again, then the mouse reports.
+    let _ = mouse_command(0xF3) && mouse_command(100);
+    if !mouse_command(0xF4) {
+        return None;
+    }
+    let size = if wheel { 4 } else { 3 };
+    MOUSE_PACKET.store(size, Ordering::Release);
+    Some(usize::from(size))
 }
 
 /// Try to read one ASCII byte from the PS/2 keyboard output buffer.

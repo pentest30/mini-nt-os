@@ -260,8 +260,17 @@ fn layout_of(thread: Option<&ThreadInfo>) -> Option<Arc<KeyboardLayout>> {
 }
 
 /// Le temps d'un message : les millisecondes depuis le démarrage.
-fn message_time() -> u32 {
+pub(crate) fn message_time() -> u32 {
     hal::timer::get_tick_count() as u32
+}
+
+/// Un bouton de la souris (VK_LBUTTON, VK_RBUTTON, VK_MBUTTON) enfoncé ou
+/// relâché, dans l'état asynchrone du clavier (GetAsyncKeyState).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub(crate) fn update_async_button(vk: u8, down: bool) {
+    ASYNC.lock().update(vk, down);
 }
 
 /// UserProcessKeyboardInput : la touche `data` du clavier change l'état du
