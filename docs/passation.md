@@ -174,7 +174,13 @@ jour à chaque commit qui change l'état.
   `xtask` : `keys =` accepte `move:DX,DY`, `press:N`, `release`, `wheel:DZ` (la souris PS/2 de QEMU
   choisie, un mouvement nul d'amorce) ; scénario `mouse` (`MOUSE1.EXE`, les deux CPU). Pas encore : la
   capture, WM_NCHITTEST envoyé, l'activation par un clic, WM_SETCURSOR et les formes du curseur,
-  GetCursorPos, les clics dans l'installateur.
+  GetCursorPos.
+  Les clics dans l'assistant et le bureau (branche `claude/mouse-clicks`) : `SETUP1.EXE` fait de Back et
+  du bouton principal ce que fait Entrée (un appui et un relâchement sur le même bouton, `nav_at`) ;
+  `DESKTOP1.EXE` ouvre et ferme le menu Démarrer, le ferme par un appui hors de lui, en sélectionne une
+  entrée (`desktop_hit`). Scénarios `installer-click` et `desktop-click`. La file PS/2 de QEMU ne tient
+  que 16 octets : un `move:` de plus de 4 paquets (508 px) part en partie, le reste avec le clic
+  suivant ; les scénarios découpent leurs grands mouvements.
   Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la copie ou l'étape
   « configure ») et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
