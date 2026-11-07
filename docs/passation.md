@@ -192,6 +192,18 @@ jour à chaque commit qui change l'état.
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
   de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
   VirtualBox, rien ne change.
+  Les fenêtres et la souris (branche `claude/mouse-windows`) : le thread d'entrée poste un message brut
+  (le point à l'écran) à la fenêtre qui a la capture, sinon à celle sous le curseur ; le thread qui le
+  retire en fait le message final (`win32k::mouse::finish`, co_IntProcessMouseMessage) : WM_NCHITTEST
+  envoyé (HTTRANSPARENT passe au parent), WM_MOUSEACTIVATE à l'appui si la fenêtre de premier niveau n'est
+  pas active, activation et passage devant (`activate_by_mouse`), zone cliente ou cadre, double-clic
+  (CS_DBLCLKS, ou sur le cadre). Les filtres demandent un message brut sous toutes ses formes
+  (`Filter::matches_mouse`). DefWindowProc : WM_NCHITTEST (`defwnd::nc_hit_test`, GetNCHitEx : bords,
+  coins, titre, boutons), WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN sur le titre (activation). Services :
+  NtUserSetCapture, NtUserCallNoParam (RELEASECAPTURE, 0xD), NtUserGetThreadState (focus 0, active 1,
+  capture 2), GETCURSORPOS (0x26) de NtUserCallOneParam ; numéros lus dans `user32` épinglé. Scénario
+  `mouse-windows` (`MOUSE2.EXE`). Pas encore : déplacer et redimensionner (SC_MOVE, SC_SIZE), les boutons
+  du titre, WM_NCACTIVATE (le cadre reste peint inactif), WM_SETCURSOR.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)

@@ -1,19 +1,28 @@
-//! La souris (02 §7.2 ; `mouse.c`, `msgqueue.c` — co_MsqInsertMouseMessage —
-//! et `winpos.c` — co_WinPosWindowFromPoint — de ReactOS, comme
-//! spécification) : le thread d'entrée brute remet chaque mouvement du
-//! pilote ([`process_mouse_input`]) ; le curseur se déplace (borné à
-//! l'écran, dessiné par `display`) ou va à une position absolue (la souris
-//! de VirtualBox, `vboxmouse`), et la fenêtre sous lui reçoit, dans la
-//! file de son thread, WM_MOUSEMOVE, les boutons (WM_LBUTTONDOWN…, un second
-//! clic proche et rapide en WM_LBUTTONDBLCLK pour une classe CS_DBLCLKS),
-//! leurs pendants hors de la zone cliente (WM_NCMOUSEMOVE…, avec le code de
-//! l'endroit, HTCAPTION ou HTBORDER) ; la molette va à la fenêtre qui a le
-//! clavier (WM_MOUSEWHEEL).
+//! La souris (02 §7.2 ; `mouse.c`, `msgqueue.c` — co_MsqInsertMouseMessage,
+//! co_IntProcessMouseMessage — `focus.c` — co_UserSetCapture — et
+//! `winpos.c` — co_WinPosWindowFromPoint — de ReactOS, comme
+//! spécification).
 //!
-//! Pas encore : la capture (SetCapture), WM_NCHITTEST envoyé à la fenêtre
-//! (l'endroit est calculé ici, d'après ses rectangles), WM_MOUSEACTIVATE et
-//! l'activation par un clic, WM_SETCURSOR et les formes du curseur,
-//! les boutons X, ClipCursor, GetCursorPos (gpsi->ptCursor).
+//! Le thread d'entrée brute remet chaque mouvement du pilote
+//! ([`process_mouse_input`]) : le curseur se déplace (borné à l'écran,
+//! dessiné par `display`) ou va à une position absolue (la souris de
+//! VirtualBox, `vboxmouse`) ; un message brut (WM_MOUSEMOVE, WM_LBUTTONDOWN…,
+//! le point à l'écran) va à la file du thread de la fenêtre qui a la capture
+//! (SetCapture : toute la souris lui va), sinon de la fenêtre visible la plus
+//! haute sous le curseur. Le thread qui le retire de sa file en fait le
+//! message final ([`finish`]) : il demande à la fenêtre où tombe le point
+//! (WM_NCHITTEST, que DefWindowProc calcule d'après son cadre), lui envoie
+//! WM_MOUSEACTIVATE à l'appui d'un bouton si sa fenêtre de premier niveau
+//! n'est pas active, et l'active et la fait passer devant selon la réponse
+//! ([`activate_by_mouse`]) ; le message devient celui de la zone cliente
+//! (MK_*, la place depuis son coin) ou du cadre (WM_NCLBUTTONDOWN…, le code
+//! de l'endroit, la place à l'écran) ; un second clic proche et rapide
+//! devient WM_LBUTTONDBLCLK (pour une classe CS_DBLCLKS, ou sur le cadre).
+//! La molette va à la fenêtre qui a le clavier (WM_MOUSEWHEEL).
+//!
+//! Pas encore : WM_SETCURSOR et les formes du curseur (les objets curseur),
+//! les boutons X, ClipCursor, le suivi (TrackMouseEvent), la capture qui
+//! passe d'un thread à l'autre, WM_PARENTNOTIFY au clic.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -24,14 +33,17 @@ use abi::mou::{
 };
 use abi::user::vk::{VK_CONTROL, VK_SHIFT};
 use abi::user::{
-    Msg32, CS_DBLCLKS, HTBORDER, HTCAPTION, HTCLIENT, MK_CONTROL, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_SHIFT,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NC_MOUSE_OFFSET, WS_CAPTION,
+    Msg32, CS_DBLCLKS, HTBORDER, HTCAPTION, HTCLIENT, HTNOWHERE, HTTRANSPARENT, HWND_TOP, MA_ACTIVATEANDEAT,
+    MA_NOACTIVATE, MA_NOACTIVATEANDEAT, MK_CONTROL, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_SHIFT, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, WM_CAPTURECHANGED, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WS_CAPTION, WS_CHILD, WS_POPUP,
     WS_VISIBLE,
 };
 use hal::sync::KSpinLock;
 
 use crate::gdi::dib::Rect;
-use crate::window::Window;
+use crate::gui::ThreadInfo;
+use crate::window::{LParam, Window};
 
 /// GetDoubleClickTime : deux clics plus proches font un double-clic.
 pub const DOUBLE_CLICK_TIME: u32 = 500;
@@ -70,6 +82,8 @@ struct MouseState {
 
 /// `None` avant le premier mouvement : le curseur part du centre de l'écran.
 static STATE: KSpinLock<Option<MouseState>> = KSpinLock::new(None);
+/// La fenêtre qui a la capture (0 : aucune) : toute la souris va à sa file.
+static CAPTURE: KSpinLock<u32> = KSpinLock::new(0);
 
 /// La place du curseur, `None` avant le premier mouvement de la souris.
 ///
@@ -77,6 +91,17 @@ static STATE: KSpinLock<Option<MouseState>> = KSpinLock::new(None);
 /// <= DISPATCH_LEVEL.
 pub fn cursor_position() -> Option<(i32, i32)> {
     STATE.lock().as_ref().map(|state| (state.x, state.y))
+}
+
+/// GetCursorPos : la place du curseur ; avant le premier mouvement, le
+/// centre de l'écran, d'où il partira ((0, 0) sans écran).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn cursor_or_center() -> (i32, i32) {
+    cursor_position().unwrap_or_else(|| {
+        crate::display::mode().map_or((0, 0), |mode| (mode.width as i32 / 2, mode.height as i32 / 2))
+    })
 }
 
 /// La place du curseur après un mouvement de `dx`, `dy`, bornée à l'écran de
@@ -179,13 +204,13 @@ fn key_flags(buttons: u32) -> u32 {
     flags
 }
 
-/// Un message de la souris pour `window`, à la place (`x`, `y`) de l'écran.
-fn message_for(window: &Window, message: u32, buttons: u32, x: i32, y: i32, time: u32, client: Option<u32>) -> Msg32 {
+/// Un message de la souris pour `window`, à la place (`x`, `y`) de l'écran :
+/// dans la zone cliente (`hit` nul), `flags` (MK_*) et la place depuis son
+/// coin ; ailleurs, le code de l'endroit et la place à l'écran.
+fn message_for(window: &Window, message: u32, flags: u32, x: i32, y: i32, time: u32, hit: Option<u32>) -> Msg32 {
     let state = window.state();
-    let (w_param, l_param) = match client {
-        // Dans la zone cliente : MK_*, et la place depuis son coin.
-        None => (key_flags(buttons), make_lparam(x - state.client.left, y - state.client.top)),
-        // Ailleurs : le code de l'endroit, et la place sur l'écran.
+    let (w_param, l_param) = match hit {
+        None => (flags, make_lparam(x - state.client.left, y - state.client.top)),
         Some(hit) => (hit, make_lparam(x, y)),
     };
     Msg32 { hwnd: window.handle, message, w_param, l_param, time, pt_x: x, pt_y: y }
@@ -199,8 +224,9 @@ fn post(window: &Window, message: Msg32) {
 }
 
 /// UserProcessMouseInput : le mouvement `data` du pilote déplace le curseur
-/// et va, en messages, à la fenêtre sous lui (la molette, à celle qui a le
-/// clavier). Rien avant que win32k ait l'écran.
+/// et va, en messages bruts, à la fenêtre qui a la capture, sinon à la
+/// fenêtre sous le curseur (la molette, à celle qui a le clavier). Rien
+/// avant que win32k ait l'écran.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le thread d'entrée brute.
@@ -245,35 +271,185 @@ pub fn process_mouse_input(data: &MouseInputData) {
         crate::input::update_async_button(BUTTONS[index].3, down);
     }
 
-    let target = crate::desktop::input_desktop().and_then(|desktop| window_at(&desktop.window, x, y));
+    let captured = crate::window::get(*CAPTURE.lock());
+    let target =
+        captured.or_else(|| crate::desktop::input_desktop().and_then(|desktop| window_at(&desktop.window, x, y)));
     if let Some(window) = &target {
-        let state = window.state();
-        let hit = hit_code(&state.window, &state.client, state.style, x, y);
-        let client = hit == HTCLIENT;
-        let extra = (!client).then_some(hit);
+        let raw = |message| Msg32 {
+            hwnd: window.handle,
+            message,
+            w_param: key_flags(buttons),
+            l_param: make_lparam(x, y),
+            time,
+            pt_x: x,
+            pt_y: y,
+        };
         if moved_now {
-            let message = if client { WM_MOUSEMOVE } else { WM_MOUSEMOVE - WM_NC_MOUSE_OFFSET };
-            post(window, message_for(window, message, buttons, x, y, time, extra));
+            post(window, raw(WM_MOUSEMOVE));
         }
         for &(index, down) in &transitions {
-            let double = down && client && {
-                let click = Click { time, hwnd: window.handle, button: index, x, y };
-                let mut guard = STATE.lock();
-                let state = guard.as_mut().expect("set above");
-                let wants = window.class.as_ref().is_some_and(|class| class.info.style & CS_DBLCLKS != 0);
-                let double = wants && is_double_click(state.last_click.as_ref(), &click);
-                // Un double-clic n'en commence pas un autre.
-                state.last_click = (!double).then_some(click);
-                double
-            };
-            let message = button_message(index, down, double, client);
-            post(window, message_for(window, message, buttons, x, y, time, extra));
+            post(window, raw(button_message(index, down, false, true)));
         }
     }
 
     if data.button_flags & MOUSE_WHEEL != 0 {
         wheel(data.button_data as i16, buttons, x, y, time);
     }
+}
+
+/// Le bouton (0 gauche, 1 droit, 2 milieu) et l'appui d'un message brut de
+/// bouton ; `None` pour un mouvement.
+fn button_of(message: u32) -> Option<(usize, bool)> {
+    let offset = message.checked_sub(WM_LBUTTONDOWN).filter(|&offset| offset <= WM_MBUTTONDBLCLK - WM_LBUTTONDOWN)?;
+    Some(((offset / 3) as usize, offset % 3 != WM_LBUTTONUP - WM_LBUTTONDOWN))
+}
+
+/// La fenêtre de premier niveau de `window` : en remontant ses parents tant
+/// qu'elle est fille (IntGetNonChildAncestor).
+fn top_level(window: &Arc<Window>) -> Arc<Window> {
+    let mut top = window.clone();
+    loop {
+        let state = top.state();
+        if state.style & (WS_POPUP | WS_CHILD) != WS_CHILD {
+            return top;
+        }
+        match crate::window::get(state.parent) {
+            Some(parent) => top = parent,
+            None => return top,
+        }
+    }
+}
+
+/// Où tombe (`x`, `y`) dans `window`, d'après elle (WM_NCHITTEST) ; une
+/// fenêtre fille transparente au point (HTTRANSPARENT) le laisse à son
+/// parent, qui devient la fenêtre du message. Sans réponse (une fenêtre d'un
+/// autre thread, un rappel qui échoue), d'après ses rectangles.
+fn hit_test(window: &mut Arc<Window>, x: i32, y: i32) -> u32 {
+    for _ in 0..16 {
+        let hit = crate::window::send_message(window, WM_NCHITTEST, 0, LParam::Value(make_lparam(x, y)));
+        match hit {
+            Ok(HTTRANSPARENT) => {
+                let state = window.state();
+                match crate::window::get(state.parent).filter(|_| state.style & WS_CHILD != 0) {
+                    Some(parent) => *window = parent,
+                    None => return HTNOWHERE,
+                }
+            }
+            Ok(hit) => return hit,
+            Err(_) => {
+                let state = window.state();
+                return hit_code(&state.window, &state.client, state.style, x, y);
+            }
+        }
+    }
+    HTNOWHERE
+}
+
+/// co_IntMouseActivateWindow : la fenêtre de premier niveau `window` devient
+/// active, au premier plan, et passe devant ses sœurs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn activate_by_mouse(window: &Arc<Window>) {
+    let top = top_level(window);
+    crate::input::activate(&top);
+    crate::winpos::set_window_pos(&top, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+/// co_IntProcessMouseMessage : le message brut `raw` que `thread` sort de sa
+/// file (`remove`) ou regarde, en message final. Le point tombe dans la
+/// fenêtre qui a la capture (sa zone cliente, toujours) ou là où le dit
+/// WM_NCHITTEST ; à l'appui d'un bouton qui sort, WM_MOUSEACTIVATE si la
+/// fenêtre de premier niveau n'est pas active (MA_ACTIVATE l'active, un
+/// `…ANDEAT` mange le message) ; le second clic d'un double-clic (classe
+/// CS_DBLCLKS, ou sur le cadre). `None` : le message est mangé, ou sa
+/// fenêtre n'est plus. Un autre message (la molette) passe tel quel.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le thread, sans rien tenir (des rappels).
+pub fn finish(thread: &ThreadInfo, raw: Msg32, remove: bool) -> Option<Msg32> {
+    let button = button_of(raw.message);
+    if raw.message != WM_MOUSEMOVE && button.is_none() {
+        return Some(raw);
+    }
+    let (x, y) = (raw.pt_x, raw.pt_y);
+    let mut window = crate::window::get(raw.hwnd)?;
+    let capture = thread.queue.with(|queue| queue.capture).0;
+    let hit = if capture != 0 && capture == window.handle { HTCLIENT } else { hit_test(&mut window, x, y) };
+    let client = hit == HTCLIENT;
+    let extra = (!client).then_some(hit);
+    let Some((index, down)) = button else {
+        let message = if client { WM_MOUSEMOVE } else { WM_MOUSEMOVE - WM_NC_MOUSE_OFFSET };
+        return Some(message_for(&window, message, raw.w_param, x, y, raw.time, extra));
+    };
+
+    let mut eat = false;
+    if down && remove {
+        let top = top_level(&window);
+        let active = thread.queue.with(|queue| queue.active).0;
+        if top.handle != active {
+            let lparam = (hit & 0xFFFF) | raw.message << 16;
+            let answer = crate::window::send_message(&window, WM_MOUSEACTIVATE, top.handle, LParam::Value(lparam));
+            match answer.unwrap_or(0) {
+                MA_NOACTIVATEANDEAT => eat = true,
+                MA_NOACTIVATE => {}
+                MA_ACTIVATEANDEAT => {
+                    activate_by_mouse(&top);
+                    eat = true;
+                }
+                _ => activate_by_mouse(&top),
+            }
+        }
+    }
+
+    let double = down && {
+        let click = Click { time: raw.time, hwnd: window.handle, button: index, x, y };
+        let wants = !client || window.class.as_ref().is_some_and(|class| class.info.style & CS_DBLCLKS != 0);
+        let mut guard = STATE.lock();
+        match guard.as_mut() {
+            Some(state) => {
+                let double = wants && is_double_click(state.last_click.as_ref(), &click);
+                if remove {
+                    // Un double-clic n'en commence pas un autre.
+                    state.last_click = (!double).then_some(click);
+                }
+                double
+            }
+            None => false,
+        }
+    };
+    if eat {
+        return None;
+    }
+    let message = button_message(index, down, double, client);
+    Some(message_for(&window, message, raw.w_param, x, y, raw.time, extra))
+}
+
+/// co_UserSetCapture : `window` (aucune : personne) a la capture pour le
+/// thread courant `thread` ; toute la souris lui va. L'ancienne reçoit
+/// WM_CAPTURECHANGED. Rend l'ancienne ; 0 sans rien changer pour une
+/// fenêtre d'un autre thread.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn set_capture(thread: &ThreadInfo, window: Option<&Arc<Window>>) -> u32 {
+    if window.is_some_and(|window| window.pti != thread.server) {
+        return 0;
+    }
+    let hwnd = window.map_or(0, |window| window.handle);
+    let previous = thread.queue.with(|queue| core::mem::replace(&mut queue.capture, hwnd)).0;
+    {
+        let mut capture = CAPTURE.lock();
+        if hwnd != 0 || *capture == previous {
+            *capture = hwnd;
+        }
+    }
+    if previous != 0 && previous != hwnd {
+        if let Some(old) = crate::window::get(previous) {
+            let _ = crate::window::send_message(&old, WM_CAPTURECHANGED, 0, LParam::Value(hwnd));
+        }
+    }
+    previous
 }
 
 /// WM_MOUSEWHEEL à la fenêtre qui a le clavier du premier plan (sinon à sa
@@ -344,6 +520,16 @@ mod tests {
         assert!(!is_double_click(Some(&first), &Click { x: 54, ..soon }), "too far");
         assert!(!is_double_click(Some(&first), &Click { button: 1, ..soon }), "another button");
         assert!(!is_double_click(Some(&first), &Click { hwnd: 9, ..soon }), "another window");
+    }
+
+    #[test]
+    fn raw_button_messages() {
+        assert_eq!(button_of(WM_LBUTTONDOWN), Some((0, true)));
+        assert_eq!(button_of(WM_LBUTTONUP), Some((0, false)));
+        assert_eq!(button_of(WM_RBUTTONDOWN), Some((1, true)));
+        assert_eq!(button_of(WM_MBUTTONUP), Some((2, false)));
+        assert_eq!(button_of(WM_MOUSEMOVE), None);
+        assert_eq!(button_of(WM_MOUSEWHEEL), None);
     }
 
     #[test]
