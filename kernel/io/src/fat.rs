@@ -747,7 +747,7 @@ impl<D: BlockDevice> FatVolume<D> {
     /// The byte offset of the FAT entry of `cluster` in the cached copy.
     fn fat_offset(&self, cluster: u32) -> usize {
         let (lba, at) = self.fat_place(cluster);
-        (lba - self.fat_start_lba) as usize * self.bytes_per_sector() + at 
+        (lba - self.fat_start_lba) as usize * self.bytes_per_sector() + at
     }
 
     /// The FAT entry of `cluster`: 0 free, [`END_OF_CHAIN`] (or above
@@ -779,7 +779,7 @@ impl<D: BlockDevice> FatVolume<D> {
         ]);
         let new = (old & 0xF000_0000) | (value & 0x0FFF_FFFF);
         cache.bytes[offset..offset + 4].copy_from_slice(&new.to_le_bytes());
-        let sector = offset / self.bytes_per_sector() ;
+        let sector = offset / self.bytes_per_sector();
         cache.dirty[sector] = true;
         Ok(())
     }
