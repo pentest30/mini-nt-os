@@ -30,10 +30,11 @@ expect = [setup] format: ESP and system volumes FAT32, mounted by the kernel
 expect = [setup] stage partition: 100%
 expect = [setup] screen complete; verified GPT and FAT32
 
-# Final screen: beige desktop, blue wizard rail and pale-green completion card.
-screen = 50 50 DBD5C5
-screen = 150 360 326092
-screen = 374 274 F0F5F0
+# Final screen, in Mino's blue theme: the dark blue top band, the target-disk
+# panel on the blue field, the pale-green completion card of the wizard.
+screen = 900 30 062A87
+screen = 280 410 2356CA
+screen = 1100 320 ECF9EC
 
 keys = [setup] ready => ret
 keys = [setup] screen disk 1 => tab ret
