@@ -59,16 +59,16 @@ pub fn show() {
     let mark_y = cy - 120;
     rounded_square(mark_x, mark_y, MARK, MARK, 18, MARK_COLOR);
     fb::draw_text_at(mark_x + (MARK - 64) / 2, mark_y + 12, "M", WHITE, BG, 8);
-    // Le mot « Mino », à l'échelle 4 (32 px par lettre), sous la marque.
-    let word = "Mino";
+    // Le mot « MINO OS », à l'échelle 4 (32 px par lettre), sous la marque.
+    let word = "MINO OS";
     fb::draw_text_at(cx - word.len() as u32 * 16, mark_y + MARK + 20, word, WHITE, BG, 4);
     // La barre de progression, son cadre, et l'intérieur noir.
     let (bar_x, bar_y) = (cx - BAR.0 / 2, mark_y + MARK + 72);
     rounded_square(bar_x, bar_y, BAR.0, BAR.1, 8, PALE);
     rounded_square(bar_x + 2, bar_y + 2, BAR.0 - 4, BAR.1 - 4, 6, BG);
     // Les mentions du bas, comme il se doit.
-    fb::draw_text_at(24, height - 40, "Copyright (c) Mino Contributors", PALE, BG, 1);
-    fb::draw_text_at(width - 24 - 4 * 8, height - 40, "Mino", PALE, BG, 1);
+    fb::draw_text_at(24, height - 40, "Copyright (c) MINO OS", PALE, BG, 1);
+    fb::draw_text_at(width - 24 - 7 * 8, height - 40, "MINO OS", PALE, BG, 1);
     BEATS.store(0, Ordering::Relaxed);
     ACTIVE.store(true, Ordering::Release);
 }

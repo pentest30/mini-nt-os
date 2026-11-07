@@ -67,7 +67,7 @@ forbid = sys: NtGdiGetRandomRgn (0x10bf) is not implemented
 
 # The desktop; "Mino" (a stem of its M, antialiased toward navy); "Opaque
 # text" on its yellow rectangle, cut at its right; "Bold".
-screen = 1 1 3A6EA5
+screen = 1 1 5A7EDC
 screen = 314 236 010180
 screen = 313 263 FFFF00
 screen = 362 282 FFFF00

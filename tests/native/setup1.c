@@ -240,11 +240,11 @@ static void draw_background(int width, int height)
     gradient(&canvas, rect(0, height - 51, width, height), PX(10, 54, 160), PX(4, 34, 116));
 
     emblem(&canvas, 46, 35, 20);
-    text_shadow(&canvas, L"Mino Setup", rect(78, 6, 600, 64), C_WHITE, font(24, TRUE),
+    text_shadow(&canvas, L"MINO OS Setup", rect(78, 6, 600, 64), C_WHITE, font(24, TRUE),
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     line_text(L"Tab  next control      Enter  activate      Esc  go back", rect(24, height - 51, 700, height),
               PX(188, 214, 255), 11, FALSE);
-    say(L"Mino Setup 1.0", rect(width - 300, height - 51, width - 24, height), PX(188, 214, 255), 11, FALSE,
+    say(L"MINO OS Setup 1.0", rect(width - 300, height - 51, width - 24, height), PX(188, 214, 255), 11, FALSE,
         DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -282,7 +282,7 @@ static void draw_steps(int height)
               TRUE);
     line_text(backend_ready ? target_size_text : L"Attach a blank secondary disk", rect(56, 450, 290, 470),
               PX(208, 226, 255), 11, FALSE);
-    line_text(L"Mino uses the whole disk.", rect(56, 470, 290, 490), PX(208, 226, 255), 11, FALSE);
+    line_text(L"MINO OS uses the whole disk.", rect(56, 470, 290, 490), PX(208, 226, 255), 11, FALSE);
     (void)height;
 }
 
@@ -342,7 +342,7 @@ static void layout_bar(int top)
     fill(&canvas, at(split, top + 1, split + 1, top + 45), PX(72, 112, 182));
     line_text(L"EFI system", at(14, top + 4, split - 8, top + 24), C_INK, 11, TRUE);
     line_text(L"40 MiB · FAT32", at(14, top + 23, split - 8, top + 42), C_INK_SOFT, 11, FALSE);
-    line_text(L"Mino system", at(split + 14, top + 4, content_width - 8, top + 24), C_WHITE, 11, TRUE);
+    line_text(L"MINO OS system", at(split + 14, top + 4, content_width - 8, top + 24), C_WHITE, 11, TRUE);
     line_text(L"54 MiB · FAT32", at(split + 14, top + 23, content_width - 8, top + 42), PX(220, 234, 255), 11,
               FALSE);
 }
@@ -354,9 +354,9 @@ static void draw_welcome(RECT client)
                                    L"AC power connected for laptops"};
     int index;
 
-    heading(client, L"Welcome to Mino Setup",
-            L"This wizard prepares a GPT disk and installs Mino in one guided session.");
-    say(L"Mino will use one whole disk. Nothing is written until you confirm the changes in step 3.",
+    heading(client, L"Welcome to MINO OS Setup",
+            L"This wizard prepares a GPT disk and installs MINO OS in one guided session.");
+    say(L"MINO OS will use one whole disk. Nothing is written until you confirm the changes in step 3.",
         at(0, 0, content_width, 36), C_INK, 11, FALSE, DT_LEFT | DT_WORDBREAK);
     line_text(L"Language", at(0, 44, half - 16, 64), C_INK_SOFT, 11, FALSE);
     line_text(L"Keyboard layout", at(half + 16, 44, content_width, 64), C_INK_SOFT, 11, FALSE);
@@ -377,8 +377,8 @@ static void draw_welcome(RECT client)
 
 static void draw_disk(RECT client)
 {
-    heading(client, L"Select a disk for Mino",
-            L"Mino replaces everything on the selected disk. The running system and boot media are excluded.");
+    heading(client, L"Select a disk for MINO OS",
+            L"MINO OS replaces everything on the selected disk. The running system and boot media are excluded.");
     if (backend_ready)
         card(&canvas, at(0, 0, content_width, 68), PX(226, 238, 255), C_SELECT, C_SELECT);
     else
@@ -429,7 +429,7 @@ static void draw_review(RECT client)
               PX(150, 34, 24), 12, TRUE);
     numbered(66, L"1", L"Create a protective MBR and two verified GPT copies");
     numbered(108, L"2", L"Create an EFI system partition · 40 MiB · FAT32");
-    numbered(150, L"3", L"Create the Mino system partition · 54 MiB · FAT32");
+    numbered(150, L"3", L"Create the MINO OS system partition · 54 MiB · FAT32");
     layout_bar(204);
     line_text(L"Install starts disk writes. Back and Cancel are still safe on this screen.",
               at(0, 270, content_width, 292), C_INK_SOFT, 11, FALSE);
@@ -442,7 +442,7 @@ static void draw_install(RECT client)
                                     L"Verifying volumes", L"Ready for file copy"};
     int index;
 
-    heading(client, L"Installing Mino", L"Writing to ATA secondary master. Keep the computer connected to power.");
+    heading(client, L"Installing MINO OS", L"Writing to ATA secondary master. Keep the computer connected to power.");
     for (index = 0; index < 5; ++index) {
         int top = index * 46;
         int cx = content_x + 14, cy = content_y + top + 16;
@@ -470,7 +470,7 @@ static void draw_install(RECT client)
 
 static void draw_complete(RECT client)
 {
-    heading(client, L"Mino installation is complete",
+    heading(client, L"The MINO OS installation is complete",
             L"The boot files, system files and both FAT32 volumes passed verification.");
     card(&canvas, at(0, 0, content_width, 100), PX(236, 249, 236), PX(150, 204, 150), C_GREEN);
     disc(&canvas, content_x + 42, content_y + 50, 20, PX(132, 218, 118), PX(36, 136, 40));
@@ -478,7 +478,7 @@ static void draw_complete(RECT client)
     line_text(L"Partition table verified", at(80, 12, content_width - 16, 36), PX(30, 110, 40), 13, TRUE);
     line_text(L"Protective MBR, primary GPT and backup GPT are consistent.", at(80, 40, content_width - 16, 62),
               C_INK, 11, FALSE);
-    line_text(L"EFI and Mino volumes are FAT32 and mount successfully.", at(80, 64, content_width - 16, 86),
+    line_text(L"EFI and MINO OS volumes are FAT32 and mount successfully.", at(80, 64, content_width - 16, 86),
               C_INK_SOFT, 11, FALSE);
 
     round_fill(&canvas, at(0, 120, content_width, 196), 4, CORNERS_ALL, C_WHITE, C_WHITE);
@@ -486,7 +486,7 @@ static void draw_complete(RECT client)
     fill(&canvas, at(1, 158, content_width - 1, 159), PX(226, 234, 248));
     line_text(L"EFI system", at(18, 120, 240, 158), C_INK_SOFT, 11, FALSE);
     line_text(esp_size_text, at(240, 120, content_width - 16, 158), C_INK, 11, TRUE);
-    line_text(L"Mino system", at(18, 158, 240, 196), C_INK_SOFT, 11, FALSE);
+    line_text(L"MINO OS system", at(18, 158, 240, 196), C_INK_SOFT, 11, FALSE);
     line_text(system_size_text, at(240, 158, content_width - 16, 196), C_INK, 11, TRUE);
 
     card(&canvas, at(0, 216, content_width, 262), PX(255, 249, 226), PX(230, 198, 112), PX(222, 158, 30));
@@ -507,7 +507,7 @@ static void draw(HDC dc)
         window.bottom = height - 72;
     draw_background(width, height);
     draw_steps(height);
-    client = window_frame(&canvas, window, L"Mino Setup", FALSE);
+    client = window_frame(&canvas, window, L"MINO OS Setup", FALSE);
     emblem(&canvas, window.left + 17, window.top + 15, 9);
     fill(&canvas, client, C_FACE);
     content_x = client.left + 44;
@@ -778,7 +778,7 @@ DWORD __stdcall GuiStartup(void)
     height = GetSystemMetrics(SM_CYSCREEN);
     if (!canvas_create(&canvas, width, height))
         ExitProcess(5);
-    window = CreateWindowExW(0, CLASS_NAME, L"Mino Setup", WS_POPUP | WS_VISIBLE, 0, 0, width, height, 0, 0,
+    window = CreateWindowExW(0, CLASS_NAME, L"MINO OS Setup", WS_POPUP | WS_VISIBLE, 0, 0, width, height, 0, 0,
                              instance, 0);
     if (!window)
         ExitProcess(4);

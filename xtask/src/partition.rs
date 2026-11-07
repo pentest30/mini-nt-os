@@ -196,14 +196,19 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
         }
         const BOOTSTRAP_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.EXE";
         const REAL_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.ORG";
+        /// Le shell de session installé : le bureau du média, sous le nom
+        /// canonique, tant que le winlogon de ReactOS ne lance pas de shell.
+        const DESKTOP: &str = "DESKTOP1.EXE";
         let restores_winlogon = source_tree.contents.contains_key(REAL_WINLOGON);
+        let desktop = source_tree.contents.get(DESKTOP).copied();
         for (path, &(size, hash)) in &source_tree.contents {
-            if restores_winlogon && path == BOOTSTRAP_WINLOGON {
-                // SETUP1.EXE booted the installation medium under this name;
-                // it must not become the installed Winlogon.
+            if restores_winlogon && (path == BOOTSTRAP_WINLOGON || path == REAL_WINLOGON) {
+                // SETUP1.EXE booted the installation medium under this name,
+                // and the real Winlogon (WINLOGON.ORG) stops for lack of a
+                // session: neither is installed — the desktop takes the name.
                 continue;
             }
-            let installed_path = if restores_winlogon && path == REAL_WINLOGON { BOOTSTRAP_WINLOGON } else { path };
+            let installed_path = path;
             match stats.contents.get(installed_path) {
                 None => return Err(std::io::Error::other(format!("{installed_path} did not persist"))),
                 Some(&(copied, _)) if copied != size => {
@@ -216,6 +221,20 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
                 }
                 Some(_) => {}
             }
+        }
+        // The installed shell: the bytes of the medium's desktop.
+        if let Some((size, hash)) = desktop {
+            match stats.contents.get(BOOTSTRAP_WINLOGON) {
+                None => return Err(std::io::Error::other("the installed desktop shell is missing")),
+                Some(&(copied, copied_hash)) if copied == size && copied_hash == hash => {}
+                Some(_) => {
+                    return Err(std::io::Error::other(
+                        "WINDOWS/SYSTEM32/WINLOGON.EXE is not the media's desktop",
+                    ))
+                }
+            }
+        } else if restores_winlogon {
+            return Err(std::io::Error::other("the medium has no DESKTOP1.EXE for the installed shell"));
         }
         if restores_winlogon && stats.contents.contains_key(REAL_WINLOGON) {
             return Err(std::io::Error::other("the temporary WINLOGON.ORG reached the installed system"));
