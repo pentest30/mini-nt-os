@@ -165,9 +165,11 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     // ── 1.5. Framebuffer console ─────────────────────────────────────────────
     // Init before the first log::info! so kernel messages appear on screen.
     // The GOP framebuffer (always below 4 GiB on QEMU/VBox) is reachable at
-    // hhdm_offset + framebuffer.base.
+    // hhdm_offset + framebuffer.base. The boot splash takes the screen at
+    // once: the journal keeps going to COM1 alone until win32k, the launcher
+    // or a fatal screen takes over.
     hal::fb::init(&boot_info.framebuffer, boot_info.hhdm_offset);
-    hal::fb::write_str("[fb] boot banner enabled\n");
+    hal::splash::show();
 
     log::info!("micro-nt-os kernel_main — Phase 1");
     log::info!(
@@ -375,6 +377,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     win32k_self_test();
     window_station_self_test();
     desktop_self_test();
+    #[cfg(feature = "test-resolution")]
+    resolution_self_test();
     message_queue_self_test();
     lpc_connection_self_test();
     process_memory_self_test();
@@ -7079,6 +7083,29 @@ fn section_service_self_test() {
 /// tables GPT, relecture des deux copies ; les refus, sans écrire. Sur un
 /// démarrage sans disque cible sain, il ne fait que constater ; sur le
 /// disque qui porte le système, il vérifie le refus. Derrière la feature
+/// `test-resolution` : change le mode de l'écran à chaud (Bochs DISPI) et
+/// repeint le fond du bureau à la nouvelle taille. Le scénario vérifie les
+/// dimensions annoncées et les pixels du coin.
+#[cfg(feature = "test-resolution")]
+fn resolution_self_test() {
+    const WIDTH: u32 = 1280;
+    const HEIGHT: u32 = 1024;
+    if !win32k::display::change_mode(WIDTH, HEIGHT) {
+        log::warn!("[resolution] the display does not change mode (no DISPI)");
+        return;
+    }
+    // La surface a été réécrite au changement : le fond du bureau, la
+    // couleur système, à la nouvelle taille.
+    let mode = win32k::display::mode().expect("a driver that just changed mode");
+    let painted = win32k::display::draw(|screen| {
+        screen.fill_rect(
+            win32k::gdi::dib::Rect::new(0, 0, mode.width as i32, mode.height as i32),
+            win32k::gdi::syscolor::BACKGROUND,
+        );
+    });
+    log::info!("[resolution] {}x{}, the desktop repainted: {painted}", mode.width, mode.height);
+}
+
 /// `test-install` : les autres scénarios gardent le disque cible vierge
 /// pour la préparation réelle de l'interface.
 #[cfg(feature = "test-install")]

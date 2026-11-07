@@ -153,7 +153,7 @@ pub fn system_metrics(width: i32, height: i32, p: &Parameters) -> [i32; SM_CMETR
 /// COLORREF (0x00BBGGRR).
 pub const SYSTEM_COLORS: [u32; NUM_SYSCOLORS] = [
     rgb(212, 208, 200), // COLOR_SCROLLBAR
-    rgb(58, 110, 165),  // COLOR_BACKGROUND
+    rgb(90, 126, 220),  // COLOR_BACKGROUND
     rgb(10, 36, 106),   // COLOR_ACTIVECAPTION
     rgb(128, 128, 128), // COLOR_INACTIVECAPTION
     rgb(212, 208, 200), // COLOR_MENU
