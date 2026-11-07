@@ -247,6 +247,71 @@ pub fn create_dib_section(geometry: DibGeometry) -> Result<(u32, u32), NtStatus>
     }
 }
 
+/// `CreateBitmap` : un bitmap de `width` × `height`, ses pixels convertis
+/// de `bits` (le contenu que l'appelant donne pour `planes` × `bits_pixel`
+/// bits par pixel, les lignes du haut vers le bas, celles de la monochrome
+/// alignées sur 16 bits, 0 = noir et 1 = blanc) vers 32 bits BGRA, dans une
+/// section vue du noyau seul. Rend son handle GDI, au processus courant.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` pour des dimensions ou une profondeur que le
+/// moteur ne tient pas (la monochrome et le 32 bits, pour l'instant), hors
+/// d'un thread de Ps ; `STATUS_NO_MEMORY` sans place.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn create_from_bits(width: u32, height: u32, planes: u32, bits_pixel: u32, bits: &[u8]) -> Result<u32, NtStatus> {
+    if width == 0 || height == 0 || width > 4096 || height > 4096 {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let depth = planes * bits_pixel;
+    let count = width as usize * height as usize;
+    let mut pixels = alloc::vec![0u32; count];
+    match depth {
+        1 => {
+            let stride = ((width as usize + 15) / 16) * 2;
+            if bits.len() < stride * height as usize {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            for y in 0..height as usize {
+                for x in 0..width as usize {
+                    let bit = bits[y * stride + x / 8] >> (7 - x % 8) & 1;
+                    pixels[y * width as usize + x] = if bit == 0 { 0x0000_0000 } else { 0x00FF_FFFF };
+                }
+            }
+        }
+        32 => {
+            if bits.len() < count * 4 {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            for (pixel, at) in pixels.iter_mut().zip((0..count).map(|i| i * 4)) {
+                *pixel = u32::from_le_bytes([bits[at], bits[at + 1], bits[at + 2], 0]);
+            }
+        }
+        _ => return Err(STATUS_INVALID_PARAMETER),
+    }
+    let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
+    let process = thread.process().clone();
+    let size = u64::from(width * height * 4).next_multiple_of(0x1000);
+    let section = Section::create_pagefile(size, PageProtect::READWRITE)?;
+    let view = system_view::map(&section, 0, size)?;
+    for (at, pixel) in pixels.iter().enumerate() {
+        // SAFETY: la vue mappe `size` octets, les `count` pixels tiennent, à
+        // adresse fixe tant que la vue vit.
+        unsafe { (view.base() as *mut u32).add(at).write_volatile(*pixel) };
+    }
+    let surface = Surface {
+        width,
+        height,
+        bottom_up: false,
+        pixels: Pixels::Section { view, user: KSpinLock::new(None) },
+        selected: Selection::default(),
+        drawing: KSpinLock::new(()),
+    };
+    handles::insert(Object::Bitmap(Arc::new(surface)), LO_BITMAP_TYPE, objt::SURF, process.pid())
+        .map_err(|_| STATUS_INVALID_PARAMETER)
+}
+
 /// Le bitmap par défaut, public ; rend son handle (pas encore de stock).
 ///
 /// # IRQL
