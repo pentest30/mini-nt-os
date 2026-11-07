@@ -20,6 +20,7 @@
 //! (pflash pair), `--qemu FILE`, or the `OVMF_PATH`, `OVMF_CODE`, `OVMF_VARS`
 //! and `QEMU` environment variables.
 
+mod fat32;
 mod inflate;
 mod install;
 mod iso9660;
@@ -354,6 +355,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
                 }
             }
+            // The ramdisk image: the source the installer copies, which the
+            // check of a setup target compares the copy with.
+            let ramdisk_image = esp.join("fat.img");
             let machine = Machine {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
                 esp,
@@ -379,9 +383,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 }
             }
             if let (true, true, Some(image)) = (outcome.passed, sc.target_disk, &attached_disk) {
-                match partition::verify_setup_target(image) {
+                match partition::verify_setup_target(image, &ramdisk_image) {
                     Ok(()) => println!(
-                        "xtask: {label}: both GPT copies valid; partition contents remain zero in {}",
+                        "xtask: {label}: both GPT copies, both FAT32 volumes and the copied tree are valid in {}",
                         image.display()
                     ),
                     Err(report) => {

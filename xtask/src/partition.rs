@@ -90,11 +90,15 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
     extract().map_err(|e| format!("{}: {e}", image.display()))
 }
 
-/// Checks the first writable installer milestone: a canonical two-partition
-/// GPT on the 96 MiB disposable target, with both copies valid, each volume
-/// carrying Mino's FAT32 boot sector over its written metadata prefix, and
-/// every free cluster still zero.
-pub fn verify_setup_target(image: &Path) -> Result<()> {
+/// Checks the installer's result on the 96 MiB disposable target: a
+/// canonical two-partition GPT with both copies valid, and — read back by
+/// the host's own FAT32 reader, independent of the kernel's — each volume
+/// walking whole, every file's chain intact (the DLLs with their MZ, the
+/// hives of CONFIG with their regf, the long names with their checksums),
+/// free clusters left, and the system volume holding exactly the tree of
+/// `ramdisk`, the image the copy read: every file, by its long name, with
+/// its size and its bytes.
+pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
     let verify = || -> std::io::Result<()> {
         const EXPECTED_BYTES: u64 = 96 * 1024 * 1024;
         const ESP_FIRST: u64 = 2048;
@@ -130,39 +134,56 @@ pub fn verify_setup_target(image: &Path) -> Result<()> {
             return Err(std::io::Error::other("installer GPT does not match its immutable two-partition plan"));
         }
 
-        disk.0.seek(SeekFrom::Start(34 * 512))?;
-        let mut remaining = (sectors - 67) * 512;
-        let mut buffer = [0u8; 64 * 1024];
-        // Le formatage rapide écrit la zone réservée, les deux FATs et le
-        // répertoire racine de chaque volume (leur secteur de boot porte la
-        // signature de Mino) ; les clusters libres d'un disque vierge
-        // restent à zéro.
-        let system_first = ESP_FIRST + ESP_SECTORS;
-        let system_sectors = sectors - 34 - system_first;
-        let esp_geometry = fatfs::format::Geometry::for_sectors(u32::try_from(ESP_SECTORS).unwrap())
-            .ok_or_else(|| std::io::Error::other("the ESP geometry"))?;
-        let system_geometry = fatfs::format::Geometry::for_sectors(u32::try_from(system_sectors).unwrap())
-            .ok_or_else(|| std::io::Error::other("the system geometry"))?;
-        let written_prefix = |lba: u64| -> bool {
-            (lba >= ESP_FIRST && lba < ESP_FIRST + u64::from(esp_geometry.data_start) + 1)
-                || (lba >= system_first && lba < system_first + u64::from(system_geometry.data_start) + 1)
-        };
-        let mut lba = 34u64;
-        while remaining != 0 {
-            let take = usize::try_from(remaining.min(buffer.len() as u64)).unwrap();
-            disk.0.read_exact(&mut buffer[..take])?;
-            for at in 0..take / 512 {
-                let sector = &buffer[at * 512..(at + 1) * 512];
-                if lba == ESP_FIRST || lba == system_first {
-                    if sector[510..512] != [0x55, 0xAA] || &sector[3..11] != b"MINO    " {
-                        return Err(std::io::Error::other(format!("the FAT32 boot sector at LBA {lba} is not Mino's")));
-                    }
-                } else if !written_prefix(lba) && sector.iter().any(|&byte| byte != 0) {
-                    return Err(std::io::Error::other("a partition-content sector was modified"));
+        // L'ESP : un volume FAT32 qui se lit et se marche (son contenu dépend
+        // du média de démarrage — sous QEMU, l'ESP virtuelle FAT16 ne se
+        // monte pas et les fichiers de boot ne se copient pas).
+        let esp_sectors = partitions[0].last_lba - partitions[0].first_lba + 1;
+        let esp = crate::fat32::Fat32::read(&mut disk.0, partitions[0].first_lba, esp_sectors)
+            .map_err(std::io::Error::other)?;
+        esp.walk().map_err(std::io::Error::other)?;
+
+        // Le volume système : l'arbre copié, relu et vérifié en entier.
+        let system_sectors = partitions[1].last_lba - partitions[1].first_lba + 1;
+        let system = crate::fat32::Fat32::read(&mut disk.0, partitions[1].first_lba, system_sectors)
+            .map_err(std::io::Error::other)?;
+        let stats = system.walk().map_err(std::io::Error::other)?;
+        if stats.free_clusters == 0 {
+            return Err(std::io::Error::other("the system volume has no free cluster left"));
+        }
+
+        // La source de la copie : le ramdisk du démarrage (`fat.img`), relu
+        // par le même lecteur. La cible doit en tenir chaque fichier, sous
+        // son nom long, avec sa taille et ses octets. Elle peut en tenir
+        // plus : les self-tests du démarrage écrivent sur le ramdisk avant la
+        // copie (`minotest.txt`, `MinoDir`, un nom long…), que le noyau copie
+        // aussi ; leurs chaînes sont vérifiées par la marche. (Sans espace
+        // utilisateur, le ramdisk n'a que quelques fichiers : la comparaison
+        // vaut pour tous les scénarios.)
+        let mut source_file = File::open(ramdisk)?;
+        let source_sectors = source_file.metadata()?.len() / 512;
+        let source_tree = crate::fat32::Fat32::read(&mut source_file, 0, source_sectors)
+            .and_then(|volume| volume.walk())
+            .map_err(|e| std::io::Error::other(format!("{}: {e}", ramdisk.display())))?;
+        if source_tree.files == 0 {
+            return Err(std::io::Error::other(format!("{}: an empty source tree", ramdisk.display())));
+        }
+        for (path, &(size, hash)) in &source_tree.contents {
+            match stats.contents.get(path) {
+                None => return Err(std::io::Error::other(format!("{path} did not persist"))),
+                Some(&(copied, _)) if copied != size => {
+                    return Err(std::io::Error::other(format!("{path}: {copied} bytes copied, {size} in the source")));
                 }
-                lba += 1;
+                Some(&(_, copied)) if copied != hash => {
+                    return Err(std::io::Error::other(format!("{path}: the bytes differ from the source")));
+                }
+                Some(_) => {}
             }
-            remaining -= take as u64;
+        }
+        if stats.directories < source_tree.directories {
+            return Err(std::io::Error::other(format!(
+                "{} directories copied, {} in the source",
+                stats.directories, source_tree.directories
+            )));
         }
         Ok(())
     };
