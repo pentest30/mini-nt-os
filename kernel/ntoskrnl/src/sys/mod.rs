@@ -30,6 +30,7 @@
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
 pub mod apc;
+mod atom;
 mod callback;
 mod class;
 mod console;
@@ -99,6 +100,7 @@ pub enum Completion {
 pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAcceptConnectPort, Handler::Status(port::nt_accept_connect_port)),
     (services::NtAdjustPrivilegesToken, Handler::Status(security::nt_adjust_privileges_token)),
+    (services::NtAddAtom, Handler::Status(atom::nt_add_atom)),
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
     (services::NtCallbackReturn, Handler::Status(callback::nt_callback_return)),
     (services::NtClearEvent, Handler::Status(event::nt_clear_event)),
@@ -119,11 +121,13 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateSymbolicLinkObject, Handler::Status(object::nt_create_symbolic_link_object)),
     (services::NtCreateThread, Handler::Status(process::nt_create_thread)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
+    (services::NtDeleteAtom, Handler::Status(atom::nt_delete_atom)),
     (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
     (services::NtDeviceIoControlFile, Handler::Status(file::nt_device_io_control_file)),
     (services::NtDuplicateObject, Handler::Status(object::nt_duplicate_object)),
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
+    (services::NtFindAtom, Handler::Status(atom::nt_find_atom)),
     (services::NtFlushBuffersFile, Handler::Status(file::nt_flush_buffers_file)),
     (services::NtFlushInstructionCache, Handler::Status(process::nt_flush_instruction_cache)),
     (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
@@ -177,6 +181,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryDirectoryFile, Handler::Status(file::nt_query_directory_file)),
     (services::NtQueryEvent, Handler::Status(event::nt_query_event)),
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
+    (services::NtQueryInformationAtom, Handler::Status(atom::nt_query_information_atom)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),
     (services::NtQueryInformationProcess, Handler::Status(process::nt_query_information_process)),
     (services::NtQueryInformationThread, Handler::Status(process::nt_query_information_thread)),
