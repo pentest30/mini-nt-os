@@ -1,6 +1,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use hal::sync::KSpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FatError {
@@ -283,6 +284,17 @@ pub struct FatVolume<D: BlockDevice> {
     /// The data clusters, numbered from 2; 0 when the BPB does not say (the
     /// volume is then read only).
     clusters: u32,
+    /// The first FAT copy, cached whole: the allocations and the chain walks
+    /// read it in memory, the updates mark the dirty sectors and the flush
+    /// writes them back to every copy (one device write per dirty sector
+    /// instead of per entry).
+    fat_cache: KSpinLock<FatCache>,
+}
+
+/// The cached first FAT copy and its per-sector dirty marks.
+struct FatCache {
+    bytes: Vec<u8>,
+    dirty: Vec<bool>,
 }
 
 impl<D: BlockDevice> FatVolume<D> {
@@ -354,6 +366,22 @@ impl<D: BlockDevice> FatVolume<D> {
         } else {
             return Err(FatError::InvalidBpb);
         }
+        // The first FAT copy, cached whole: the allocations and the chain
+        // walks read it in memory (one device read per FAT sector here, at
+        // mount), the updates mark the dirty sectors and the flush writes
+        // them back to every copy.
+        let fat_sectors = sectors_per_fat32 as usize;
+        let mut fat_bytes = vec![0u8; fat_sectors * bytes_per_sector as usize];
+        for i in 0..fat_sectors {
+            device.read_sector(
+                rsvd as u64 + i as u64,
+                &mut fat_bytes[i * bytes_per_sector as usize..(i + 1) * bytes_per_sector as usize],
+            )?;
+            // TEMP: la charge du cache FAT — le boot installé gelait ici.
+            if i % 64 == 0 {
+                log::warn!("TEMP fat load: sector {i}/{} at lba {}", fat_sectors, rsvd as u64 + i as u64);
+            }
+        }
         let vol = Self {
             device,
             bpb: Fat32Bpb {
@@ -372,6 +400,7 @@ impl<D: BlockDevice> FatVolume<D> {
             fat_start_lba: rsvd as u64,
             data_start_lba: first_data_sector as u64,
             clusters: if bpb_ok { (total_sectors - first_data_sector) / u32::from(spc) } else { 0 },
+            fat_cache: KSpinLock::new(FatCache { bytes: fat_bytes, dirty: vec![false; fat_sectors] }),
         };
         Ok(vol)
     }
@@ -385,8 +414,34 @@ impl<D: BlockDevice> FatVolume<D> {
         &self.device
     }
 
-    /// Makes what was written reach the medium.
+    /// Writes every dirty FAT sector back to each copy. Called by the flush
+    /// and by the drop: a fresh mount must see the written chains.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL (device I/O may wait actively).
+    fn flush_fats(&self) -> Result<(), FatError> {
+        let cache = self.fat_cache.lock();
+        let bps = self.bytes_per_sector();
+        let fat_count = u64::from(self.bpb.fat_count);
+        let spf = u64::from(self.bpb.sectors_per_fat);
+        for (index, dirty) in cache.dirty.iter().enumerate() {
+            if *dirty {
+                let sector = &cache.bytes[index * bps..(index + 1) * bps];
+                for copy in 0..fat_count {
+                    self.device.write_sector(self.fat_start_lba + index as u64 + copy * spf, sector)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Makes what was written reach the medium: the dirty FAT sectors to
+    /// each copy, then the device flush.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL (device I/O may wait actively).
     pub fn flush(&self) -> Result<(), FatError> {
+        self.flush_fats()?;
         self.device.flush()
     }
 
@@ -628,33 +683,12 @@ impl<D: BlockDevice> FatVolume<D> {
     }
 
     fn next_cluster(&self, cluster: u32) -> Result<u32, FatError> {
-        let bytes_per_sector = self.bpb.bytes_per_sector as usize;
-        if bytes_per_sector == 0 {
-            return Err(FatError::InvalidBpb);
+        // La FAT est dans le cache : les chaînes se lisent en mémoire.
+        match self.fat_entry(cluster)? {
+            next if next >= 0x0FFF_FFF8 => Err(FatError::NotFound),
+            0 | 1 => Err(FatError::Corrupt),
+            next => Ok(next),
         }
-        let fat_offset = cluster as u64 * 4;
-        let fat_sector = self.fat_start_lba + (fat_offset / bytes_per_sector as u64);
-        let entry_offset = (fat_offset % bytes_per_sector as u64) as usize;
-        let mut sec0 = vec![0u8; bytes_per_sector];
-        self.device.read_sector(fat_sector, &mut sec0)?;
-        let mut raw = [0u8; 4];
-        if entry_offset <= bytes_per_sector - 4 {
-            raw.copy_from_slice(&sec0[entry_offset..entry_offset + 4]);
-        } else {
-            let mut sec1 = vec![0u8; bytes_per_sector];
-            self.device.read_sector(fat_sector + 1, &mut sec1)?;
-            let left = bytes_per_sector - entry_offset;
-            raw[..left].copy_from_slice(&sec0[entry_offset..]);
-            raw[left..].copy_from_slice(&sec1[..4 - left]);
-        }
-        let next = u32::from_le_bytes(raw) & 0x0FFF_FFFF;
-        if next >= 0x0FFF_FFF8 {
-            return Err(FatError::NotFound);
-        }
-        if next < 2 {
-            return Err(FatError::NotFound);
-        }
-        Ok(next)
     }
 }
 
@@ -710,29 +744,43 @@ impl<D: BlockDevice> FatVolume<D> {
         (self.fat_start_lba + offset / bps, (offset % bps) as usize)
     }
 
-    /// The FAT entry of `cluster`: 0 free, [`END_OF_CHAIN`] (or above
-    /// 0x0FFFFFF7) last, otherwise the next cluster.
-    pub fn fat_entry(&self, cluster: u32) -> Result<u32, FatError> {
+    /// The byte offset of the FAT entry of `cluster` in the cached copy.
+    fn fat_offset(&self, cluster: u32) -> usize {
         let (lba, at) = self.fat_place(cluster);
-        let mut sector = vec![0u8; self.bytes_per_sector()];
-        self.device.read_sector(lba, &mut sector)?;
-        Ok(u32::from_le_bytes([sector[at], sector[at + 1], sector[at + 2], sector[at + 3]]) & 0x0FFF_FFFF)
+        (lba - self.fat_start_lba) as usize * self.bytes_per_sector() + at 
     }
 
-    /// Sets the FAT entry of `cluster` in every copy, keeping its top four
-    /// bits.
+    /// The FAT entry of `cluster`: 0 free, [`END_OF_CHAIN`] (or above
+    /// 0x0FFFFFF7) last, otherwise the next cluster. Read from the cache.
+    pub fn fat_entry(&self, cluster: u32) -> Result<u32, FatError> {
+        self.check_cluster(cluster)?;
+        let offset = self.fat_offset(cluster);
+        let cache = self.fat_cache.lock();
+        Ok(u32::from_le_bytes([
+            cache.bytes[offset],
+            cache.bytes[offset + 1],
+            cache.bytes[offset + 2],
+            cache.bytes[offset + 3],
+        ]) & 0x0FFF_FFFF)
+    }
+
+    /// Sets the FAT entry of `cluster`, keeping its top four bits: in the
+    /// cache, with its sector marked dirty — the flush writes every dirty
+    /// sector to each copy.
     fn set_fat_entry(&self, cluster: u32, value: u32) -> Result<(), FatError> {
         self.check_cluster(cluster)?;
-        let (lba, at) = self.fat_place(cluster);
-        let mut sector = vec![0u8; self.bytes_per_sector()];
-        for copy in 0..u64::from(self.bpb.fat_count) {
-            let lba = lba + copy * u64::from(self.bpb.sectors_per_fat);
-            self.device.read_sector(lba, &mut sector)?;
-            let old = u32::from_le_bytes([sector[at], sector[at + 1], sector[at + 2], sector[at + 3]]);
-            let new = (old & 0xF000_0000) | (value & 0x0FFF_FFFF);
-            sector[at..at + 4].copy_from_slice(&new.to_le_bytes());
-            self.device.write_sector(lba, &sector)?;
-        }
+        let offset = self.fat_offset(cluster);
+        let mut cache = self.fat_cache.lock();
+        let old = u32::from_le_bytes([
+            cache.bytes[offset],
+            cache.bytes[offset + 1],
+            cache.bytes[offset + 2],
+            cache.bytes[offset + 3],
+        ]);
+        let new = (old & 0xF000_0000) | (value & 0x0FFF_FFFF);
+        cache.bytes[offset..offset + 4].copy_from_slice(&new.to_le_bytes());
+        let sector = offset / self.bytes_per_sector() ;
+        cache.dirty[sector] = true;
         Ok(())
     }
 
@@ -754,22 +802,30 @@ impl<D: BlockDevice> FatVolume<D> {
         }
         let end = self.clusters + 2;
         let start = if (2..end).contains(&hint) { hint } else { 2 };
-        let per_sector = (self.bytes_per_sector() / 4) as u32;
-        let mut sector = vec![0u8; self.bytes_per_sector()];
-        let mut loaded = None;
-        for cluster in (start..end).chain(2..start) {
-            let (lba, at) = self.fat_place(cluster);
-            if loaded != Some(lba) || cluster % per_sector == 0 {
-                self.device.read_sector(lba, &mut sector)?;
-                loaded = Some(lba);
-            }
-            if u32::from_le_bytes([sector[at], sector[at + 1], sector[at + 2], sector[at + 3]]) & 0x0FFF_FFFF == 0 {
+        // The scan reads the cached FAT; the found cluster's zeroing goes to
+        // the device, its FAT entry through the cache (the lock is dropped
+        // first: it is not reentrant).
+        let free = {
+            let cache = self.fat_cache.lock();
+            (start..end).chain(2..start).find(|cluster| {
+                let offset = self.fat_offset(*cluster);
+                u32::from_le_bytes([
+                    cache.bytes[offset],
+                    cache.bytes[offset + 1],
+                    cache.bytes[offset + 2],
+                    cache.bytes[offset + 3],
+                ]) & 0x0FFF_FFFF
+                    == 0
+            })
+        };
+        match free {
+            Some(cluster) => {
                 self.zero_cluster(cluster)?;
                 self.set_fat_entry(cluster, END_OF_CHAIN)?;
-                return Ok(cluster);
+                Ok(cluster)
             }
+            None => Err(FatError::Full),
         }
-        Err(FatError::Full)
     }
 
     /// The clusters of the chain from `first`, in order; `Corrupt` for a
@@ -983,16 +1039,17 @@ impl<D: BlockDevice> FatVolume<D> {
     /// The free clusters: those whose FAT entry is 0 (the FSInfo sector's
     /// count is not trusted). 0 for a volume whose size is unknown.
     pub fn free_clusters(&self) -> Result<u32, FatError> {
-        let mut sector = vec![0u8; self.bytes_per_sector()];
+        // The cached FAT: the pending (unflushed) allocations count as used.
+        let cache = self.fat_cache.lock();
         let mut free = 0;
-        let mut loaded = None;
         for cluster in 2..self.clusters + 2 {
-            let (lba, at) = self.fat_place(cluster);
-            if loaded != Some(lba) {
-                self.device.read_sector(lba, &mut sector)?;
-                loaded = Some(lba);
-            }
-            let entry = u32::from_le_bytes([sector[at], sector[at + 1], sector[at + 2], sector[at + 3]]);
+            let offset = self.fat_offset(cluster);
+            let entry = u32::from_le_bytes([
+                cache.bytes[offset],
+                cache.bytes[offset + 1],
+                cache.bytes[offset + 2],
+                cache.bytes[offset + 3],
+            ]);
             if entry & 0x0FFF_FFFF == 0 {
                 free += 1;
             }
@@ -1164,6 +1221,16 @@ pub(crate) fn long_name_entries(name: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
             ent
         })
         .collect()
+}
+
+impl<D: BlockDevice> Drop for FatVolume<D> {
+    fn drop(&mut self) {
+        // The dirty FAT sectors reach the device even without an explicit
+        // flush: a fresh mount over the same device must see the written
+        // chains. Errors are swallowed (the drop cannot report them); the
+        // explicit flush paths report theirs.
+        let _ = self.flush_fats();
+    }
 }
 
 #[cfg(test)]

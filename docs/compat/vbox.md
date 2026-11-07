@@ -234,3 +234,30 @@ sous QEMU et les copie sur VBox (l'ESP GPT de l'image installée est
 FAT32). Dettes notées : un cache de secteurs FAT (la copie d'un arbre
 relit la FAT par cluster, lente en PIO) et l'affichage à l'écran des
 refus du moteur.
+
+## La copie des fichiers (lot 4-2) : le moteur écrit, le blocage à déboguer
+
+Le moteur de copie est écrit : `io::install::copy_files(number, token)` —
+la même revalidation que la préparation, les tables GPT du disque cible
+relues (les volumes du plan), les deux fichiers de boot de l'ESP de
+démarrage vers l'ESP cible (quand elle est montageable en FAT32 — l'ESP
+virtuelle FAT16 de QEMU ne se monte pas : sautés avec journal), puis
+l'arbre WINDOWS du volume de démarrage vers le volume système cible, chaque
+fichier vérifié à la relecture de son entrée.
+
+**Le blocage restant** : `copy_dir` entre dans `/WINDOWS/SYSTEM32/CONFIG`
+et ne ressort pas — aucune sortie pendant des minutes (les deux CPU QEMU,
+900 s), la copie de l'arbre ne progresse pas au-delà. Le fixture: la liste
+du répertoire CONFIG passe (les entrées sont connues), le premier fichier
+est SYSTEM (212 Kio). L'analyse n'a pas identifié la boucle : les chemins
+de la copie sont bornés (le cache FAT en mémoire, les écritures
+périphériques par cluster). **L'outil : le gdbstub de QEMU (`-s -S`) sur le
+scénario installer-ui, point d'arrêt dans `copy_dir`** — la pile et le
+compteur de boucle diront quelle itération tourne. Le vCPU est-il en boucle
+ou bloqué : `VBoxManage metrics` sur la VM en état de copie a rendu 0 %
+(dans HLT?) — sous QEMU, le gdbstub tranchera.
+
+Le cache FAT de `FatVolume` (la dette M4) est en place : la première
+copie de la FAT en mémoire, les entrées lues/écrites dedans, les secteurs
+sales écrits à chaque copie de FAT au flush et à la drop (un remontage
+frais les voit). 48 tests io verts, clippy propre.
