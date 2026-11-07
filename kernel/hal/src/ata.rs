@@ -91,6 +91,43 @@ impl AtaDrive {
         unsafe { Port::<u8>::new(self.channel.base + offset).read() }
     }
 
+    /// Lit un secteur du registre de données : ses 256 mots en un seul
+    /// `rep insw`. Un hyperviseur traite la chaîne en une sortie de VM, là où
+    /// 256 `in` en font 256 (VirtualBox lisait `C:` à quelques Kio/s).
+    fn read_data(&self, sector: &mut [u8]) {
+        debug_assert_eq!(sector.len(), SECTOR);
+        // SAFETY: the drive offers a sector's words (DRQ, checked by the
+        // caller); `rep insw` stores `SECTOR / 2` words at RDI, inside
+        // `sector`, which is writable and that long. DF is clear (the ABI).
+        unsafe {
+            core::arch::asm!(
+                "rep insw",
+                in("dx") self.channel.base,
+                inout("rdi") sector.as_mut_ptr() => _,
+                inout("rcx") SECTOR / 2 => _,
+                options(nostack, preserves_flags),
+            );
+        }
+    }
+
+    /// Écrit un secteur dans le registre de données : ses 256 mots en un seul
+    /// `rep outsw` (voir [`read_data`](Self::read_data)).
+    fn write_data(&self, sector: &[u8]) {
+        debug_assert_eq!(sector.len(), SECTOR);
+        // SAFETY: the drive takes a sector's words (DRQ, checked by the
+        // caller); `rep outsw` loads `SECTOR / 2` words from RSI, inside
+        // `sector`, which is readable and that long. DF is clear (the ABI).
+        unsafe {
+            core::arch::asm!(
+                "rep outsw",
+                in("dx") self.channel.base,
+                inout("rsi") sector.as_ptr() => _,
+                inout("rcx") SECTOR / 2 => _,
+                options(nostack, preserves_flags, readonly),
+            );
+        }
+    }
+
     /// L'état, sans effet de bord (registre d'état alternatif).
     fn alternate_status(&self) -> u8 {
         // SAFETY: as in `outb`.
@@ -192,14 +229,9 @@ impl AtaDrive {
             return Err(AtaError::OutOfRange);
         }
         self.command(COMMAND_READ_SECTORS, lba, out.len() / SECTOR)?;
-        // The data register of this channel.
-        let mut data = Port::<u16>::new(self.channel.base);
         for sector in out.chunks_exact_mut(SECTOR) {
             self.wait_data()?;
-            for pair in sector.chunks_exact_mut(2) {
-                // SAFETY: the drive offers a sector's words (DRQ).
-                pair.copy_from_slice(&unsafe { data.read() }.to_le_bytes());
-            }
+            self.read_data(sector);
         }
         Ok(())
     }
@@ -216,14 +248,9 @@ impl AtaDrive {
             return Err(AtaError::OutOfRange);
         }
         self.command(COMMAND_WRITE_SECTORS, lba, data.len() / SECTOR)?;
-        // The data register of this channel.
-        let mut port = Port::<u16>::new(self.channel.base);
         for sector in data.chunks_exact(SECTOR) {
             self.wait_data()?;
-            for pair in sector.chunks_exact(2) {
-                // SAFETY: the drive takes a sector's words (DRQ).
-                unsafe { port.write(u16::from_le_bytes([pair[0], pair[1]])) };
-            }
+            self.write_data(sector);
         }
         self.wait_ready().map(drop)
     }
