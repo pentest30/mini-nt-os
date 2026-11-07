@@ -263,7 +263,11 @@ fn files_are_created_written_and_seen_by_every_open() {
     assert_eq!(file.node().unwrap().size, 0, "emptied for every open");
 
     assert_eq!(logs.create_child("TODAY.TXT", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
-    assert_eq!(logs.create_child("A long name.txt", false, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
+    // A long name is kept: VFAT entries and an 8.3 alias (see
+    // long_names_are_written_and_reread).
+    let long = logs.create_child("A long name.txt", false, 0).unwrap();
+    long.write(0, b"long").unwrap();
+    assert_eq!(File::open(&volume, "\\Logs\\A long name.txt").unwrap().read_all().unwrap(), b"long");
     assert_eq!(logs.create_child("bad*name", false, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
     assert_eq!(file.create_child("x", false, 0).err(), Some(STATUS_OBJECT_PATH_NOT_FOUND), "under a file");
     assert_eq!(logs.write(0, b"x").err(), Some(STATUS_INVALID_DEVICE_REQUEST), "writing a directory");
@@ -372,4 +376,60 @@ fn a_volume_describes_itself_and_dates_what_it_writes() {
     directory.set_basic_information(&FileBasicInformation { file_attributes: FILE_ATTRIBUTE_HIDDEN, ..basic }).unwrap();
     assert_eq!(directory.node().unwrap().attributes, FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN);
     let _ = FatTime::default();
+}
+
+#[test]
+fn long_names_are_written_and_reread() {
+    let volume = FatVolume::mount(fat32(FSCK_CLUSTERS)).unwrap();
+    let root = volume.root_cluster();
+    // KERNEL32_VISTA.DLL : the name that stopped the first installed copy.
+    let at = volume.add_entry_long(root, "KERNEL32_VISTA.DLL", 0x20, 3).unwrap();
+    let (mut first, mut size) = (0, 0);
+    let text: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+    volume.write_file(&mut first, &mut size, 0, &text, 3).unwrap();
+    volume.update_entry(at, first, size).unwrap();
+    // Found by its long name, any case; its 8.3 entry holds the alias.
+    let (entry, _) = volume.find_entry(root, "kernel32_vista.dll").unwrap();
+    assert_eq!((entry.first_cluster, entry.file_size), (first, 1000));
+    assert_eq!(read_all(&volume, first, size), text);
+    let kernel32 = volume.dir_entries(root).unwrap().into_iter().find(|e| e.name == "KERNEL32_VISTA.DLL").unwrap();
+    assert_eq!(kernel32.short_name.as_deref(), Some("KERNEL~1.DLL"));
+    assert_eq!(&kernel32.raw_name, b"KERNEL~1DLL");
+    // A second long name with the same base and extension gets the next
+    // alias; one with another extension keeps ~1 (the 8.3 name as a whole is
+    // unique, as XP makes it). All stay readable.
+    volume.add_entry_long(root, "KERNEL32_OTHER.DLL", 0x20, 3).unwrap();
+    volume.add_entry_long(root, "KERNEL32_VISTA.TXT", 0x20, 3).unwrap();
+    let aliases: Vec<[u8; 11]> = volume
+        .dir_entries(root)
+        .unwrap()
+        .iter()
+        .filter(|e| e.name.starts_with("KERNEL32_"))
+        .map(|e| e.raw_name)
+        .collect();
+    assert_eq!(aliases, [*b"KERNEL~1DLL", *b"KERNEL~2DLL", *b"KERNEL~1TXT"]);
+    for name in ["kernel32_vista.dll", "KERNEL32_OTHER.DLL", "KERNEL32_VISTA.TXT"] {
+        assert!(volume.find_entry(root, name).is_ok(), "{name} is found");
+    }
+    assert_clean(volume);
+}
+
+#[test]
+fn a_volume_creates_and_opens_long_names() {
+    use abi::ntstatus::STATUS_OBJECT_NAME_COLLISION;
+
+    let (volume, _disk) = mounted(FSCK_CLUSTERS);
+    let root = volume.root();
+    let node = volume.create(&root, "KERNEL32_VISTA.DLL", false, 0).unwrap();
+    volume.write(&node, 0, b"MZ").unwrap();
+    // Seen again by its long name, any case, and in the listing with its
+    // alias; the alias alone is not a second entry.
+    assert_eq!(volume.lookup(&root, "kernel32_vista.dll").unwrap().size, 2);
+    let listed = volume.entries(&root).unwrap();
+    let kernel32 = listed.iter().find(|e| e.name == "KERNEL32_VISTA.DLL").unwrap();
+    assert_eq!(kernel32.short_name.as_deref(), Some("KERNEL~1.DLL"));
+    assert_eq!(listed.iter().filter(|e| e.name == "KERNEL~1.DLL").count(), 0);
+    // The same long name twice is refused; a different one is not.
+    assert_eq!(volume.create(&root, "KERNEL32_VISTA.DLL", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
+    assert!(volume.create(&root, "KERNEL32_VISTA.TXT", false, 0).is_ok());
 }

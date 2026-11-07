@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
 use hal::sync::KSpinLock;
@@ -721,6 +721,72 @@ pub fn short_name(name: &str) -> Result<[u8; 11], FatError> {
     short_name_11(name)
 }
 
+/// The 8.3 alias of the long name `long`, as other systems make it: its base
+/// (before its last dot) and its extension in upper case, without spaces or
+/// dots, other characters 8.3 cannot hold as `_`; then `~N` after at most 6
+/// characters of the base, `N` the first that `taken` does not refuse.
+fn alias_11(long: &str, taken: impl Fn(&[u8; 11]) -> bool) -> [u8; 11] {
+    let clean = |part: &str| -> Vec<u8> {
+        part.chars()
+            .filter(|&c| c != ' ' && c != '.')
+            .map(|c| {
+                let c = c.to_ascii_uppercase();
+                if c.is_ascii() && short_name(&c.to_string()).is_ok() {
+                    c as u8
+                } else {
+                    b'_'
+                }
+            })
+            .collect()
+    };
+    let (base, ext) = match long.rsplit_once('.') {
+        Some((base, ext)) if !base.is_empty() => (clean(base), clean(ext)),
+        _ => (clean(long), Vec::new()),
+    };
+    let basis = &base[..base.len().min(6)];
+    for n in 1u32.. {
+        let tail = alloc::format!("~{n}");
+        let mut name = [b' '; 11];
+        let kept = basis.len().min(8 - tail.len());
+        name[..kept].copy_from_slice(&basis[..kept]);
+        name[kept..kept + tail.len()].copy_from_slice(tail.as_bytes());
+        name[8..8 + ext.len().min(3)].copy_from_slice(&ext[..ext.len().min(3)]);
+        if !taken(&name) {
+            return name;
+        }
+    }
+    unreachable!("a free alias among 2^32")
+}
+
+/// The entries of the long name `long` of the 8.3 name `short`, in the order
+/// a directory holds them: the last part first. A 0 unit ends a name that
+/// does not fill its last part, 0xFFFF fills the rest.
+pub(crate) fn long_name_entries(long: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
+    let mut units: Vec<u16> = long.encode_utf16().collect();
+    let parts = units.len().div_ceil(LONG_NAME_UNITS);
+    if units.len() < parts * LONG_NAME_UNITS {
+        units.push(0);
+    }
+    units.resize(parts * LONG_NAME_UNITS, 0xFFFF);
+    (1..=parts)
+        .rev()
+        .map(|order| {
+            let mut entry = [0u8; 32];
+            entry[0] = order as u8 | if order == parts { LONG_NAME_LAST } else { 0 };
+            entry[11] = ATTR_LONG_NAME;
+            entry[13] = short_name_checksum(short);
+            let mut part = units[(order - 1) * LONG_NAME_UNITS..order * LONG_NAME_UNITS].iter();
+            for (start, count) in LONG_NAME_SPANS {
+                for i in 0..count {
+                    let at = start + 2 * i;
+                    entry[at..at + 2].copy_from_slice(&part.next().expect("13 units").to_le_bytes());
+                }
+            }
+            entry
+        })
+        .collect()
+}
+
 /// Writing (M4, ADR-017). The caller serialises the calls that write, and
 /// the reads that may see them. Every FAT copy is written; the FSInfo
 /// sector is left as it is (its free count stays "unknown"). New clusters
@@ -1088,6 +1154,36 @@ impl<D: BlockDevice> FatVolume<D> {
         Ok(at)
     }
 
+    /// Adds the entry of `long` to the directory at `dir_cluster`: the
+    /// long-name (VFAT) entries of its 8.3 alias — the last part first, each
+    /// carrying the checksum of the alias — then that alias's 8.3 entry,
+    /// unique in the directory. A name 8.3 already holds gets a single
+    /// entry. Every entry lands in the first free slot; a full directory
+    /// grows by a zeroed cluster.
+    pub fn add_entry_long(
+        &self,
+        dir_cluster: u32,
+        long: &str,
+        attributes: u8,
+        hint: u32,
+    ) -> Result<EntryRef, FatError> {
+        if let Ok(short) = short_name(long) {
+            return self.add_entry(dir_cluster, &make_entry(&short, attributes, 0, 0), hint);
+        }
+        // The alias must not collide with the 8.3 names the directory holds,
+        // the aliases of its long names included.
+        let taken: Vec<[u8; 11]> = self
+            .dir_entries(dir_cluster)?
+            .iter()
+            .filter_map(|entry| short_name(entry.short_name.as_deref().unwrap_or(&entry.name)).ok())
+            .collect();
+        let alias = alias_11(long, |candidate| taken.contains(candidate));
+        for part in long_name_entries(long, &alias) {
+            self.add_entry(dir_cluster, &part, hint)?;
+        }
+        self.add_entry(dir_cluster, &make_entry(&alias, attributes, 0, 0), hint)
+    }
+
     /// Creates the subdirectory `name` (8.3, padded) of the directory at
     /// `parent` (the root's `..` names cluster 0): a zeroed cluster with its
     /// `.` and `..`, and its entry. Rends its cluster and its entry.
@@ -1192,35 +1288,6 @@ fn short_name_from_entry(ent: &[u8]) -> String {
         }
     }
     out
-}
-
-#[cfg(test)]
-/// The entries of the long name `name` for the 8.3 name `short`, in
-/// the order a directory holds them (last part first), as VFAT writes
-/// them: a 0 unit after the name, then 0xFFFF.
-pub(crate) fn long_name_entries(name: &str, short: &[u8; 11]) -> Vec<[u8; 32]> {
-    let mut units: Vec<u16> = name.encode_utf16().collect();
-    let parts = units.len().div_ceil(LONG_NAME_UNITS);
-    if units.len() < parts * LONG_NAME_UNITS {
-        units.push(0);
-    }
-    units.resize(parts * LONG_NAME_UNITS, 0xFFFF);
-    (1..=parts)
-        .rev()
-        .map(|order| {
-            let mut ent = [0u8; 32];
-            ent[0] = order as u8 | if order == parts { LONG_NAME_LAST } else { 0 };
-            ent[11] = ATTR_LONG_NAME;
-            ent[13] = short_name_checksum(short);
-            let mut chunk = units[(order - 1) * LONG_NAME_UNITS..order * LONG_NAME_UNITS].iter();
-            for &(start, count) in &LONG_NAME_SPANS {
-                for i in 0..count {
-                    ent[start + 2 * i..start + 2 * i + 2].copy_from_slice(&chunk.next().unwrap().to_le_bytes());
-                }
-            }
-            ent
-        })
-        .collect()
 }
 
 impl<D: BlockDevice> Drop for FatVolume<D> {

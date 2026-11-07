@@ -51,7 +51,7 @@ use abi::ntstatus::{
 use hal::sync::KSpinLock;
 
 use crate::fat::{
-    fat_time, make_entry, nt_time, short_name, BlockDevice, DirEntry, EntryRef, FatError, FatFile, FatTime, FatVolume,
+    fat_time, nt_time, short_name, BlockDevice, DirEntry, EntryRef, FatError, FatFile, FatTime, FatVolume,
 };
 
 /// Un périphérique de blocs que plusieurs threads peuvent lire.
@@ -454,7 +454,6 @@ impl Volume {
         if is_invalid_name(name) {
             return Err(STATUS_OBJECT_NAME_INVALID);
         }
-        let short = short_name(name).map_err(|_| STATUS_OBJECT_NAME_INVALID)?;
         if !directory.directory {
             return Err(STATUS_OBJECT_PATH_NOT_FOUND);
         }
@@ -465,13 +464,16 @@ impl Volume {
             Err(error) => return Err(device_error(error)),
         }
         let at = if as_directory {
+            let short = short_name(name).map_err(|_| STATUS_OBJECT_NAME_INVALID)?;
             let (cluster, at) =
                 self.fat.create_directory(directory.first_cluster, &short, *hint).map_err(device_error)?;
             *hint = cluster + 1;
             at
         } else {
+            // Le nom long tient dans une entrée 8.3 : elle seule ; sinon ses
+            // entrées de nom long (VFAT) et l'entrée 8.3 de son alias.
             let attr = (attributes & SETTABLE_ATTRIBUTES) as u8 | FILE_ATTRIBUTE_ARCHIVE as u8;
-            self.fat.add_entry(directory.first_cluster, &make_entry(&short, attr, 0, 0), *hint).map_err(device_error)?
+            self.fat.add_entry_long(directory.first_cluster, name, attr, *hint).map_err(device_error)?
         };
         self.fat.set_times(at, self.now(), None).map_err(device_error)?;
         let entry = self.fat.read_entry(at).map_err(device_error)?;

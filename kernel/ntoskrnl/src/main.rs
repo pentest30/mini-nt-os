@@ -3298,13 +3298,14 @@ fn persistence_test() {
 /// NtSetInformationFile moves the position back; NtReadFile reads it all,
 /// then meets the end; a second open overwrites it, which the first handle
 /// sees. A directory, and a file created in it by FILE_OPEN_IF. Then what
-/// must fail: a name taken, a missing directory, a long name, a write
-/// through a read-only handle.
+/// must fail: a name taken, a missing directory, a write through a
+/// read-only handle; and a long name, which now persists (its VFAT entries
+/// and its 8.3 alias) and opens again, case aside.
 fn file_write_self_test() {
     use abi::file::*;
     use abi::ntstatus::{
-        NtStatus, STATUS_ACCESS_DENIED, STATUS_END_OF_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
-        STATUS_OBJECT_PATH_NOT_FOUND, STATUS_SUCCESS, STATUS_WAIT_0,
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_END_OF_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_PATH_NOT_FOUND,
+        STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::object::OBJ_CASE_INSENSITIVE;
     use abi::services;
@@ -3442,7 +3443,8 @@ fn file_write_self_test() {
     assert_eq!((statuses[10], iosb_at(10)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a directory");
     assert_eq!((statuses[11], iosb_at(11)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a file in it, by FILE_OPEN_IF");
     assert_eq!(statuses[12], STATUS_OBJECT_PATH_NOT_FOUND, "a missing directory");
-    assert_eq!(statuses[13], STATUS_OBJECT_NAME_INVALID, "a long name, not yet");
+    // A long name persists: its VFAT entries and the 8.3 alias of its name.
+    assert_eq!((statuses[13], iosb_at(13)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a long name is kept");
     assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_ACCESS_DENIED), "a read-only handle");
 
     let ns = ob::namespace();
@@ -3451,6 +3453,7 @@ fn file_write_self_test() {
         ob::downcast::<io_manager::File>(&object).expect("a file").node().expect("its entry").size
     };
     assert_eq!((size("\\Device\\Ramdisk0\\minotest.txt"), size("\\Device\\Ramdisk0\\MinoDir\\Inner.txt")), (0, 0));
+    assert_eq!(size("\\Device\\Ramdisk0\\A LONG name.txt"), 0, "the long name opens again, case aside");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
