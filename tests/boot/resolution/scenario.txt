@@ -1,0 +1,19 @@
+# Le changement de résolution à chaud (M6) : le VGA standard de QEMU porte
+# l'interface Bochs DISPI (ports 0x1CE/0x1CF) — le self-test du noyau
+# (feature test-resolution) passe l'écran de 1024x768 à 1280x1024 par le
+# pilote gopfb (le pas suit la largeur, la base du framebuffer linéaire ne
+# bouge pas), puis repeint le fond du bureau à la nouvelle taille.
+# L'hôte vérifie le coin de l'écran aux nouvelles dimensions.
+features = test-resolution
+cpus     = default, intel
+timeout  = 120
+
+expect = win32k: display mode changed to 1280x1024
+expect = [resolution] 1280x1024, the desktop repainted: true
+
+# Le fond du bureau repeint, jusqu'au coin du nouveau mode.
+screen = 0 0 5A7EDC
+screen = 1279 1023 5A7EDC
+
+# Any bugcheck ends the run at once.
+forbid = *** STOP:

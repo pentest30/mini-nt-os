@@ -42,6 +42,14 @@ pub trait DisplayDriver: Send + Sync {
     /// Prend l'écran : ce qui y écrivait avant (la console de démarrage)
     /// cesse de le faire.
     fn acquire(&self);
+
+    /// Passe la surface à `width` × `height` ; `false` quand le pilote ne
+    /// sait pas changer de mode. L'appelant redessine ensuite, une seule
+    /// main à la fois ([`change_mode`]).
+    fn set_mode(&self, width: u32, height: u32) -> bool {
+        let _ = (width, height);
+        false
+    }
 }
 
 /// Le pilote installé.
@@ -94,8 +102,29 @@ pub fn draw(mut draw: impl FnMut(&mut Bitmap<'_>)) -> bool {
     let Some(driver) = DRIVER.get() else { return false };
     let _one = DRAWING.lock();
     if !ACQUIRED.swap(true, Ordering::AcqRel) {
+        // Le premier dessin de win32k prend l'écran : le rideau de démarrage
+        // se lève ici, avant que la surface ne soit touchée.
+        hal::splash::hide();
         driver.acquire();
     }
     driver.with_surface(&mut draw);
+    true
+}
+
+/// Change le mode de l'écran pour `width` × `height` ; `false` sans pilote
+/// ou quand le matériel ne suit pas. La surface est réécrite à la nouvelle
+/// taille (son contenu est perdu) : l'appelant redessine ensuite, par
+/// [`draw`].
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn change_mode(width: u32, height: u32) -> bool {
+    let Some(driver) = DRIVER.get() else { return false };
+    let _one = DRAWING.lock();
+    if !driver.set_mode(width, height) {
+        return false;
+    }
+    let mode = driver.mode();
+    log::info!("win32k: display mode changed to {}x{}", mode.width, mode.height);
     true
 }

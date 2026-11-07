@@ -12,6 +12,7 @@
 #![cfg_attr(not(target_os = "none"), feature(thread_local))]
 
 pub mod ata;
+pub mod bochs;
 pub mod bugcheck;
 pub mod callout;
 pub mod cpuid;
@@ -27,6 +28,7 @@ pub mod ps2;
 pub mod ring3;
 pub mod rtc;
 pub mod serial;
+pub mod splash;
 pub mod symbols;
 pub mod sync;
 pub mod sysenter;

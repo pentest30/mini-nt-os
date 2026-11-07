@@ -580,23 +580,37 @@ fn copy_dir(
     report: &mut CopyReport,
 ) -> Result<(), PrepareError> {
     let entries = src.dir_entries(src_dir_cluster).map_err(|_| PrepareError::Io)?;
-    // An installer medium boots SETUP1.EXE under the Winlogon name. The real
-    // userland Winlogon is kept beside it as WINLOGON.ORG; only the real one
-    // reaches the installed system, under its canonical name.
+    // An installer medium boots SETUP1.EXE under the Winlogon name, and keeps
+    // the real userland Winlogon beside it as WINLOGON.ORG. Neither reaches
+    // the installed system: SETUP1 is the medium's session, and the real
+    // Winlogon stops for lack of a session to start. The session shell of
+    // the installed system is the desktop of the medium, DESKTOP1.EXE, under
+    // the canonical name — until a Winlogon that starts a shell itself.
     let system32 = src_path.eq_ignore_ascii_case("WINDOWS/SYSTEM32");
     let has_real_winlogon = system32 && entries.iter().any(|entry| entry.name.eq_ignore_ascii_case("WINLOGON.ORG"));
+    if has_real_winlogon {
+        let shell = src.find_in_dir(src.root_cluster(), "DESKTOP1.EXE").map_err(|_| PrepareError::Io)?;
+        let mut file = FatFile { first_cluster: shell.first_cluster, file_size: shell.file_size, position: 0 };
+        let mut data = alloc::vec![0u8; shell.file_size as usize];
+        src.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
+        let node = dst.create(dst_dir, "WINLOGON.EXE", false, 0x20).map_err(|_| PrepareError::Io)?;
+        let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
+        if dst.current(&written).map_err(|_| PrepareError::Io)?.size as u64 != data.len() as u64 {
+            return Err(PrepareError::Io);
+        }
+        report.files += 1;
+        report.bytes += data.len() as u64;
+    }
     for entry in entries {
         if entry.name == "." || entry.name == ".." {
             continue;
         }
-        if has_real_winlogon && entry.name.eq_ignore_ascii_case("WINLOGON.EXE") {
+        if has_real_winlogon
+            && (entry.name.eq_ignore_ascii_case("WINLOGON.EXE") || entry.name.eq_ignore_ascii_case("WINLOGON.ORG"))
+        {
             continue;
         }
-        let installed_name = if has_real_winlogon && entry.name.eq_ignore_ascii_case("WINLOGON.ORG") {
-            "WINLOGON.EXE"
-        } else {
-            &entry.name
-        };
+        let installed_name = &entry.name;
         if entry.attr & 0x10 != 0 {
             let node =
                 dst.create(dst_dir, installed_name, true, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
