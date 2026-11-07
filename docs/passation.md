@@ -206,6 +206,25 @@ jour à chaque commit qui change l'état.
   VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
   ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
   phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).
+- **Le STOP 0x1E intermittent de l'auto-test de Ps est corrigé** (branche `claude/vibrant-bell-a62f96`) :
+  `read a process: NtStatus(0xc0000005)` dans `process_round`, vu sur Intel, sous charge, dans `keyboard` et
+  `gui`. Ce n'était pas un processus fini (le rundown de `EProcess::with_space` rend alors
+  `STATUS_PROCESS_IS_TERMINATING`) : `AddressSpace::copy` (MmCopyVirtualMemory : `read_memory`,
+  `write_memory`, NtRead/WriteVirtualMemory, le TEB, le `CONTEXT`) regardait la page sous le verrou de la VAD, le
+  relâchait, puis le reprenait pour la faute. La préemption différée tombe à ce relâchement (`hal::sync`) : le
+  thread du processus (`grows.exe`, qui écrit sa page de données) la projetait entre les deux, et
+  `fault::resolve`, trouvant une page présente qui permet déjà l'accès, rendait `STATUS_ACCESS_VIOLATION`.
+  Regard, faute et copie sont maintenant sous une seule prise du verrou (`AddressSpace::resolve_fault`). Test :
+  `copy_race_self_test` (marqueur `[smoke] Mm: copies against faults`, sur chaque démarrage, 100 ms) lit des pages
+  neuves pendant qu'un thread plus prioritaire, réveillé à chaque tick (1 ms le temps du test), écrit la page lue ;
+  l'ancien `copy` échoue à chaque démarrage (4 sur 4, AMD et Intel), dès les premières pages. Reste, pour le
+  multiprocesseur : deux fautes matérielles sur une même page se heurteraient de même dans `fault::resolve`
+  (commentaire de la branche `Present`). L'autre symptôme vu en même temps, QEMU sorti avec le code 1 sans message,
+  est revenu sur la suite complète (Windows, d'autres sessions lançant QEMU en même temps, aucune VirtualBox) : 4
+  runs sur 65 (`bitmap` AMD avant la première ligne série, `dir` Intel, `installed-persistence` Intel, `mouse` AMD en
+  pleine phase 1), `qemu.log` vide, l'autre CPU passant ; relancés seuls, les 4 passent. Le code 1 est celui d'un
+  processus terminé de l'extérieur (`TerminateProcess(…, 1)`, comme `taskkill /F`) : la piste est l'hôte, pas le
+  noyau.
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).

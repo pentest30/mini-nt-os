@@ -353,6 +353,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     address_space_self_test();
     vad_self_test();
     demand_paging_self_test();
+    copy_race_self_test();
     kernel_stack_self_test();
     out_of_page_tables_self_test();
     section_self_test();
@@ -1480,6 +1481,99 @@ fn demand_paging_self_test() {
         "[smoke] Mm: demand paging: 256 MiB reserved, {COMMITTED} pages committed, {} touched for as many \
          pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
         COMMITTED / 2
+    );
+}
+
+/// A copy from outside a space (`AddressSpace::read_bytes`, MmCopyVirtualMemory)
+/// against another thread that resolves the same page: the boot thread reads
+/// committed pages never touched, one after the other, while a thread above it,
+/// woken at each tick (1 ms for the test), writes the page being read. A tick
+/// that lands as the copy finds its page absent switches to that thread, which
+/// maps the page; the copy must then read it, not take the page now present
+/// for an access violation (the STOP 0x1E once seen in `process_round`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn copy_race_self_test() {
+    use abi::ntstatus::{STATUS_SUCCESS, STATUS_WAIT_0};
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::address_space::AddressSpace;
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{AllocType, FreeType, PAGE_SIZE};
+
+    const MS: i64 = 10_000;
+    const PAGES: u64 = 64;
+    const RUN_MS: u64 = 100;
+    /// The page the boot thread is reading, 0 between two reads.
+    static TARGET: AtomicU64 = AtomicU64::new(0);
+    static STOP: AtomicBool = AtomicBool::new(false);
+    /// The other thread's writes to a page while the boot thread read it.
+    static WRITES: AtomicU32 = AtomicU32::new(0);
+    fn competitor(space: *mut c_void) {
+        // SAFETY: the boot thread keeps the space until this thread has ended.
+        let space = unsafe { &*space.cast::<AddressSpace>() };
+        while !STOP.load(Ordering::Acquire) {
+            let target = TARGET.load(Ordering::Acquire);
+            if target != 0 {
+                space.write_bytes(target, &[1]).expect("write the page being read");
+                WRITES.fetch_add(1, Ordering::Relaxed);
+            }
+            // SAFETY: a kernel thread at PASSIVE_LEVEL.
+            let delay = unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -MS) };
+            assert_eq!(delay, STATUS_SUCCESS);
+        }
+    }
+
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::PageTable), s.active(PageUsage::UserPrivate))
+    };
+    let before = counts();
+    let space = AddressSpace::new().expect("no PML4");
+    let rw = PageProtect::READWRITE;
+    let size = PAGES * PAGE_SIZE;
+    let base = space.allocate(0, size, AllocType::MEM_RESERVE, rw).expect("reserve");
+    hal::timer::set_resolution(MS as u32);
+    // Above the boot thread, boost included.
+    let tid = spawn_kernel_thread(
+        ke::sched::current_priority() + 1,
+        competitor,
+        alloc::sync::Arc::as_ptr(&space).cast_mut().cast(),
+    );
+    let start = hal::timer::interrupt_time();
+    let mut reads = 0u64;
+    while hal::timer::interrupt_time() - start < RUN_MS * MS as u64 {
+        assert_eq!(space.allocate(base, size, AllocType::MEM_COMMIT, rw), Ok(base), "commit");
+        for page in (base..base + size).step_by(PAGE_SIZE as usize) {
+            TARGET.store(page, Ordering::Release);
+            let mut byte = [0xFFu8];
+            let read = space.read_bytes(page, &mut byte);
+            TARGET.store(0, Ordering::Release);
+            assert_eq!(read, Ok(()), "a page mapped by another thread during the copy, read at {page:#x}");
+            assert!(byte[0] <= 1, "neither zero nor the other thread's byte: {:#x}", byte[0]);
+            reads += 1;
+        }
+        assert_eq!(space.free(base, size, FreeType::MEM_DECOMMIT), Ok((base, size)), "decommit");
+    }
+    STOP.store(true, Ordering::Release);
+    let thread = ke::sched::thread_object(tid).expect("thread object");
+    // SAFETY: the object of a thread of the scheduler, never freed.
+    let ended =
+        unsafe { ke_wait_for_single_object::<KePlatform>(thread, ProcessorMode::Kernel, false, Some(-1000 * MS)) };
+    assert_eq!(ended, STATUS_WAIT_0, "the other thread did not end");
+    hal::timer::set_resolution((hal::timer::TICK_INTERVAL_MS * MS as u64) as u32);
+    assert_eq!(space.free(base, 0, FreeType::MEM_RELEASE), Ok((base, size)), "release");
+    space.destroy();
+    assert_eq!(counts(), before, "the pages read did not all go back");
+    let writes = WRITES.load(Ordering::Relaxed);
+    assert!(writes > 0, "the other thread never ran during a copy");
+    log::info!(
+        "[smoke] Mm: copies against faults: {reads} fresh pages read while a thread above, at each tick, wrote \
+         the page being read ({writes} times)"
     );
 }
 
