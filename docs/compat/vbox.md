@@ -261,3 +261,48 @@ Le cache FAT de `FatVolume` (la dette M4) est en place : la première
 copie de la FAT en mémoire, les entrées lues/écrites dedans, les secteurs
 sales écrits à chaque copie de FAT au flush et à la drop (un remontage
 frais les voit). 48 tests io verts, clippy propre.
+
+## Résolu : la copie et le disque installé sous VirtualBox
+
+Deux causes, l'une derrière l'autre.
+
+**L'installateur tué en pleine copie.** Les échantillons de RIP
+(`VBoxManage debugvm Mino getregisters rip`, symbolisés avec le `kernel.elf`
+extrait de l'ESP de l'image) ne tombaient que dans des boucles `hlt` et
+l'interruption d'horloge : le thread de la copie ne tournait plus. Le
+journal série le disait : `[m4] SMSS.EXE: the process did not end within
+10 s (of its start or the last key): terminated`. `cargo xtask image`
+construisait le noyau avec `test-smss` seul ; la sonde qui lance `smss`
+termine `smss`, `csrss` et le programme initial (ici `SETUP1.EXE`) 10 s
+après la dernière touche — juste pour un scénario, fatal à une copie de
+plusieurs minutes sans touche. Sous QEMU, la copie finissait avant ces 10 s.
+La feature noyau `interactive` fait attendre la sonde sans délai ;
+`cargo xtask image` la met par défaut (`test-smss,interactive`). Le
+scénario `interactive` (`WAIT1.EXE`, 12 s sans touche) le vérifie ; sans la
+feature, il échoue (vérifié par mutation).
+
+**Le PIO lent.** Une fois la copie laissée vivre, elle prenait 260 s, et le
+démarrage du disque installé lisait `C:` pendant des minutes (tous les
+échantillons dans `hal::ata::AtaDrive::read_sectors`). Chaque mot passait
+par un `in`/`out` à lui : 256 sorties de VM par secteur sous VT-x. Un
+secteur passe maintenant par un seul `rep insw`/`rep outsw` (`hal::ata`).
+
+Mesuré sous VirtualBox (VM `Mino`, 256 Mo, IDE PIIX4, démarrage sans
+fenêtre, touches par `VBoxManage controlvm Mino keyboardputscancode 1c 9c`) :
+
+| | Avant | Après |
+|---|---|---|
+| Copie de l'installation (82 Mo : fichiers de boot 44 Mo, système 37,6 Mo) | tuée à 10 s, puis 260 s | 17 s |
+| Démarrage du disque installé jusqu'à `[setup] ready` | plus de 4 min, toujours en lecture | 21 s |
+
+Le disque installé démarre seul en maître primaire : le micrologiciel
+trouve `EFI/BOOT/BOOTX64.EFI` sur l'ESP de la cible, le chargeur y charge
+`kernel.elf` et `fat.img`, le noyau monte `C:` sur la partition système
+(`Io: GPT system partition 2: LBA 100352`).
+
+Restent : au premier démarrage, une cible vierge en maître secondaire
+laisse `C:` sur le ramdisk (le noyau essaie le secondaire d'abord, puis ne
+revient pas au GPT du primaire) ; après la phase 1, l'ancien `CMD.EXE`
+(`syscall.rs`, `nt_read_file`) lit lui-même le clavier PS/2 en boucle `hlt`
+et peut prendre des touches à win32k (sans effet avec `interactive`, qui
+retient la phase 1 tant que le programme initial tourne).

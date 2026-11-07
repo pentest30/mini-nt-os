@@ -351,3 +351,62 @@ Scénarios : `installer-prepare` ajoute le marqueur de formatage (les deux
 CPU), `installer-ui` enchaîne préparation puis formatage réels avant
 l'écran final (les deux CPU). Restent : la copie des fichiers, la
 progression réelle par étape, puis le redémarrage sur le disque installé.
+
+## Lot 4, étape 2 : la copie, et le disque installé qui démarre seul
+
+`IOCTL_MINO_SETUP_COPY` (`io::install::copy_files`) copie le système sur la
+cible préparée et formatée, avec les mêmes refus et la même revalidation :
+
+- **l'arbre système** : le ramdisk de démarrage, monté **une fois** pour
+  toute la récursion (`copy_dir` lit chaque répertoire par `dir_entries`, chaque
+  fichier par un `FatFile` tiré de son entrée), vers le volume système de la
+  cible ; chaque taille relue à son entrée. Avant, la source était remontée
+  à chaque fichier (lent), et le premier nom long (`KERNEL32_VISTA.DLL`)
+  arrêtait la copie : `Volume::create` écrit maintenant les entrées VFAT et
+  l'alias 8.3 (`BASE~N.EXT`, unique dans le répertoire, extension comprise) ;
+- **les fichiers de boot** : quand l'ESP de démarrage est montable en FAT32
+  (une image GPT, VirtualBox), `EFI/BOOT/BOOTX64.EFI`, `kernel.elf` et
+  `fat.img` (le ramdisk, 42,5 Mo avec l'espace utilisateur) vont à leur place
+  sur l'ESP cible, les répertoires créés au besoin, par morceaux d'1 Mio ;
+  l'ESP virtuelle FAT16 de QEMU ne se monte pas : ils sautent, journalisés
+  (`[m4] install: boot files skipped: …`) ;
+- **l'ESP du plan passe à 48 Mio** (le chargeur, le noyau et le ramdisk n'y
+  tiennent pas en 40) : sur la cible de 96 Mio, ESP 2048..100351 (98304
+  secteurs), système 100352..196574 (96223 secteurs, 46 Mio) ;
+- les deux volumes sont vidés à la fin (`Volume::flush` : les FAT en cache,
+  puis le cache du disque) : le disque peut démarrer seul aussitôt ;
+- **l'écriture d'un fichier neuf ne passe qu'une fois** : `write_file` ne
+  met plus à zéro d'avance les clusters qu'il ajoute (ils commencent au-delà
+  de l'ancienne fin, que l'intervalle et les données couvrent), seulement le
+  reste du dernier ; si une écriture échoue, la chaîne reprend sa longueur.
+  NTDLL.DLL passait de 924 ms à 220 ms environ sous QEMU.
+
+Le self-test (`test-install`) journalise `[m4] install: boot files: N files,
+N bytes to the ESP of disk 2` puis `[m4] install: copy: N files, N
+directories, N bytes to disk 2`. Avec `test-install-reboot`, il redémarre
+ensuite la machine.
+
+`xtask verify_setup_target` relit la cible avec un lecteur FAT32 à part
+(`xtask/src/fat32.rs`, qui ne partage rien avec le pilote du noyau) : les
+deux GPT, chaque chaîne suivie jusqu'au bout, les signatures (MZ, regf), les
+noms longs et leur somme de contrôle ; puis **le volume système comparé au
+ramdisk du run** (chaque fichier de la source, sa taille et l'empreinte
+FNV-1a de ses octets ; la cible peut tenir en plus ce que les self-tests du
+démarrage écrivent sur le ramdisk) et, quand l'ESP tient des fichiers, **les
+trois fichiers de boot du run, à l'octet près**.
+
+Scénarios :
+
+- `installer-ui` et `installer-prepare` copient l'arbre (les deux CPU) ;
+- `installed-boot` (nouveau, `disk = installed`, `disk = target`, `reboot =
+  target`, `boots = 2`) : le premier démarrage part d'une vraie image GPT
+  avec une cible vierge en maître secondaire, installe (feature
+  `test-install-reboot`) et redémarre ; le second part **de la cible seule**,
+  en maître primaire : le micrologiciel y trouve le chargeur, le chargeur le
+  noyau et le ramdisk, le noyau monte `C:` sur sa partition système (LBA
+  100352) et va au bout de la phase 1 (les deux CPU, 50 s).
+
+Sous VirtualBox, voir [`vbox.md`](vbox.md) : l'installateur était tué en
+pleine copie (la sonde de `test-smss`), et le PIO lent ; les deux sont
+corrigés (copie en 17 s, disque installé démarré jusqu'à l'installateur en
+21 s).

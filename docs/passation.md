@@ -161,6 +161,17 @@ jour à chaque commit qui change l'état.
   et pistes dans le document. La VM « Mino » reste définie dans le
   VirtualBox de l'hôte Windows (VHD régénérable par `cargo xtask image` +
   `convertfromraw`).
+- **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
+  [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
+  fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)
+  vers l'ESP cible, ESP du plan à 48 Mio ; scénario `installed-boot` (`reboot = target` : installe, puis
+  démarre la cible seule) ; vérificateur hôte `xtask/src/fat32.rs` (arbre comparé au ramdisk, fichiers de
+  boot à l'octet). Sous VirtualBox : feature `interactive` (la sonde de `test-smss` tuait l'installateur
+  10 s après la dernière touche ; `cargo xtask image` la met par défaut, scénario `interactive`) et PIO
+  par `rep insw`/`rep outsw` : copie en 17 s, disque installé démarré jusqu'à l'installateur en 21 s.
+  VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
+  ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
+  phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
