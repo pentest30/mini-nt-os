@@ -574,23 +574,42 @@ fn copy_boot_file<D: BlockDevice>(
 fn copy_dir(
     src: &FatVolume<impl BlockDevice>,
     src_dir_cluster: u32,
+    src_path: &str,
     dst: &Volume,
     dst_dir: &Node,
     report: &mut CopyReport,
 ) -> Result<(), PrepareError> {
-    for entry in src.dir_entries(src_dir_cluster).map_err(|_| PrepareError::Io)? {
+    let entries = src.dir_entries(src_dir_cluster).map_err(|_| PrepareError::Io)?;
+    // An installer medium boots SETUP1.EXE under the Winlogon name. The real
+    // userland Winlogon is kept beside it as WINLOGON.ORG; only the real one
+    // reaches the installed system, under its canonical name.
+    let system32 = src_path.eq_ignore_ascii_case("WINDOWS/SYSTEM32");
+    let has_real_winlogon = system32 && entries.iter().any(|entry| entry.name.eq_ignore_ascii_case("WINLOGON.ORG"));
+    for entry in entries {
         if entry.name == "." || entry.name == ".." {
             continue;
         }
+        if has_real_winlogon && entry.name.eq_ignore_ascii_case("WINLOGON.EXE") {
+            continue;
+        }
+        let installed_name = if has_real_winlogon && entry.name.eq_ignore_ascii_case("WINLOGON.ORG") {
+            "WINLOGON.EXE"
+        } else {
+            &entry.name
+        };
         if entry.attr & 0x10 != 0 {
-            let node = dst.create(dst_dir, &entry.name, true, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
+            let node =
+                dst.create(dst_dir, installed_name, true, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
             report.directories += 1;
-            copy_dir(src, entry.first_cluster, dst, &node, report)?;
+            let child_path =
+                if src_path.is_empty() { entry.name.clone() } else { alloc::format!("{src_path}/{}", entry.name) };
+            copy_dir(src, entry.first_cluster, &child_path, dst, &node, report)?;
         } else {
             let mut file = FatFile { first_cluster: entry.first_cluster, file_size: entry.file_size, position: 0 };
             let mut data = alloc::vec![0u8; entry.file_size as usize];
             src.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
-            let node = dst.create(dst_dir, &entry.name, false, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
+            let node =
+                dst.create(dst_dir, installed_name, false, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
             let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
             // La vérification après écriture : l'entrée de la cible rend la
             // taille écrite.
@@ -680,7 +699,7 @@ fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
     let system_volume = Volume::mount(alloc::boxed::Box::new(system_device)).map_err(|_| PrepareError::Io)?;
     let system_root = system_volume.root();
     let source = FatVolume::mount(crate::ramdisk_device().ok_or(PrepareError::Io)?).map_err(|_| PrepareError::Io)?;
-    copy_dir(&source, source.root_cluster(), &system_volume, &system_root, &mut report)?;
+    copy_dir(&source, source.root_cluster(), "", &system_volume, &system_root, &mut report)?;
     // Tout atteint le support (les FAT en cache, puis le cache du disque) :
     // le disque peut démarrer seul juste après.
     system_volume.flush().map_err(|_| PrepareError::Io)?;

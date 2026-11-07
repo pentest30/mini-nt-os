@@ -93,6 +93,7 @@ pub(crate) fn fsck(bytes: &[u8]) -> Option<Result<(), String>> {
 
 /// The volume on `disk` passes `fsck.vfat`, when it is there.
 pub(crate) fn assert_clean(volume: FatVolume<RwDisk>) {
+    volume.flush().expect("flush the cached FAT before fsck");
     let bytes = core::mem::take(&mut *volume_disk(&volume).0.lock());
     if let Some(result) = fsck(&bytes) {
         result.unwrap_or_else(|report| panic!("fsck.vfat: {report}"));
@@ -349,6 +350,7 @@ fn files_are_created_written_and_seen_by_every_open() {
     assert_eq!(File::open(&volume, "\\Logs\\n29.log").unwrap().read_all().unwrap(), vec![9u8; 2000]);
     drop((root, logs, file, other, locked, many));
 
+    volume.flush().expect("flush the cached FAT before fsck");
     let bytes = core::mem::take(&mut *disk.0.lock());
     match fsck(&bytes) {
         Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat: {report}")),

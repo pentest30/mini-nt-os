@@ -6,8 +6,7 @@
 # revalidates the disk, writes the protective MBR and both GPT copies, and
 # rereads them (the boot's own self-test stays out, behind the test-install
 # feature, so the target is blank). The host then validates both copies and
-# confirms both FAT32 metadata prefixes while every free cluster stays zero.
-# File copy remains for the next milestone.
+# confirms the copied boot and system trees and every FAT32 cluster chain.
 features = test-smss
 requires = userland, native
 initial-command = SETUP1.EXE

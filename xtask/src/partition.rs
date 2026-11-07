@@ -194,17 +194,31 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
         if source_tree.files == 0 {
             return Err(std::io::Error::other(format!("{}: an empty source tree", ramdisk.display())));
         }
+        const BOOTSTRAP_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.EXE";
+        const REAL_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.ORG";
+        let restores_winlogon = source_tree.contents.contains_key(REAL_WINLOGON);
         for (path, &(size, hash)) in &source_tree.contents {
-            match stats.contents.get(path) {
-                None => return Err(std::io::Error::other(format!("{path} did not persist"))),
+            if restores_winlogon && path == BOOTSTRAP_WINLOGON {
+                // SETUP1.EXE booted the installation medium under this name;
+                // it must not become the installed Winlogon.
+                continue;
+            }
+            let installed_path = if restores_winlogon && path == REAL_WINLOGON { BOOTSTRAP_WINLOGON } else { path };
+            match stats.contents.get(installed_path) {
+                None => return Err(std::io::Error::other(format!("{installed_path} did not persist"))),
                 Some(&(copied, _)) if copied != size => {
-                    return Err(std::io::Error::other(format!("{path}: {copied} bytes copied, {size} in the source")));
+                    return Err(std::io::Error::other(format!(
+                        "{installed_path}: {copied} bytes copied, {size} in the source"
+                    )));
                 }
                 Some(&(_, copied)) if copied != hash => {
-                    return Err(std::io::Error::other(format!("{path}: the bytes differ from the source")));
+                    return Err(std::io::Error::other(format!("{installed_path}: the bytes differ from the source")));
                 }
                 Some(_) => {}
             }
+        }
+        if restores_winlogon && stats.contents.contains_key(REAL_WINLOGON) {
+            return Err(std::io::Error::other("the temporary WINLOGON.ORG reached the installed system"));
         }
         if stats.directories < source_tree.directories {
             return Err(std::io::Error::other(format!(

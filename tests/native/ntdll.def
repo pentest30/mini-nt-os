@@ -8,5 +8,6 @@ DbgPrint
 NtClose@4
 NtDeviceIoControlFile@40
 NtOpenFile@24
+NtShutdownSystem@4
 NtTerminateProcess@8
 RtlUnwind@16
