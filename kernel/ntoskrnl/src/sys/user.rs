@@ -190,6 +190,25 @@ pub(super) fn nt_user_get_keyboard_layout_list(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// Les routines de NtUserGetThreadState demandées sans être implémentées.
+static UNSUPPORTED_THREAD_STATE: super::ClassReport = super::ClassReport::new("NtUserGetThreadState");
+
+/// NtUserGetThreadState(Routine) : la routine 1
+/// (THREADSTATE_GETTHREADINFO) rend l'adresse du `Win32ThreadInfo` du
+/// thread courant (celle du TEB, posée à sa conversion) ; les autres
+/// routines rendent 0 avec l'erreur Win32, journalisées une fois.
+pub(super) fn nt_user_get_thread_state(arguments: &[u32]) -> NtStatus {
+    if arguments[0] == 1 {
+        return match win32k::gui::convert_current_thread() {
+            Ok(info) => NtStatus(info.server),
+            Err(status) => status,
+        };
+    }
+    UNSUPPORTED_THREAD_STATE.report(arguments[0]);
+    let _ = win32k::set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
+    NtStatus(0)
+}
+
 /// NtGdiInit() : TRUE, GDI n'a rien à préparer pour le client (ReactOS non
 /// plus).
 pub(super) fn nt_gdi_init(_arguments: &[u32]) -> NtStatus {

@@ -251,3 +251,14 @@ pub(super) fn nt_delete_value_key(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_flush_key(arguments: &[u32]) -> NtStatus {
     status(reference_key(arguments[0], 0).and_then(|key| key.flush()))
 }
+
+/// NtInitializeRegistry(RegistryAction) : le registre est déjà en mémoire
+/// et inscriptible (Cm) — le statut de succès, journalisé une fois. La
+/// première chose que smss demande après ses ruches.
+pub(super) fn nt_initialize_registry(arguments: &[u32]) -> NtStatus {
+    static REPORTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if !REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        log::info!("[registry] NtInitializeRegistry({}): the registry is already writable", arguments[0]);
+    }
+    STATUS_SUCCESS
+}

@@ -106,3 +106,25 @@ pub(super) fn nt_query_information_atom(arguments: &[u32]) -> NtStatus {
     };
     query().map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
+
+/// NtUserGetAtomName(Atom, Buffer) : le nom de l'atome, en WCHAR terminés
+/// par nul, dans le tampon de l'appelant ; le nombre d'unités écrites sans
+/// le nul. Les atomes entiers rendent leurs chiffres décimaux.
+pub(super) fn nt_user_get_atom_name(arguments: &[u32]) -> NtStatus {
+    let [atom, buffer] = arguments[..2] else { unreachable!("2 arguments") };
+    let get = || -> Result<u32, NtStatus> {
+        if buffer == 0 {
+            return Ok(0);
+        }
+        let name = name_of(atom as u16)?;
+        let mut units: Vec<u16> = name;
+        units.push(0);
+        let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
+        ke::usermem::copy_to_user(u64::from(buffer), &bytes)?;
+        Ok(units.len() as u32 - 1)
+    };
+    match get() {
+        Ok(count) => NtStatus(count),
+        Err(status) => status,
+    }
+}

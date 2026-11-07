@@ -446,12 +446,23 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
                 | PROCESS_BREAK_ON_TERMINATION
                 | PROCESS_EXCEPTION_PORT
                 | 0x10 /* ProcessUserModeIOPL : l'IOPL d'x86, sans effet */
+                | 0x12 /* ProcessPriorityClass : sans effet, la priorité du noyau ne suit pas encore les classes */
                 | 0x19 /* ProcessForegroundInformation : un BOOLEAN, sans effet */
                 | 0x22 /* la priorité hors bande, sans effet */
         ) {
             return Err(UNSUPPORTED_SET_CLASSES.report(class));
         }
+        if matches!(class, 0x10 | 0x19 | 0x22) {
+            // Tolérées sans effet : l'IOPL d'x86 (csrss l'appelle sans
+            // tampon ni longueur), le premier plan, la priorité hors bande.
+            return Ok(STATUS_SUCCESS);
+        }
         if length != 4 {
+            if matches!(class, 0x12) {
+                // ProcessPriorityClass : sa structure de 6 octets, sans
+                // effet.
+                return Ok(STATUS_SUCCESS);
+            }
             return Err(STATUS_INFO_LENGTH_MISMATCH);
         }
         let value = UserPtr::<u32>::new(buffer).read()?;
@@ -519,6 +530,11 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_set_information_thread(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
     let set = || {
+        if class == 0xa {
+            // ThreadQuerySetWin32StartAddress en SET : ignoré, ce que le CRT
+            // du démarrage demande sans y attendre rien.
+            return Ok(STATUS_SUCCESS);
+        }
         if class != THREAD_BREAK_ON_TERMINATION && class != THREAD_IMPERSONATION_TOKEN {
             return Err(UNSUPPORTED_THREAD_SET_CLASSES.report(class));
         }
