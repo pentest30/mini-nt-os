@@ -91,6 +91,7 @@ se               = { path = "../se" }
 win32k           = { path = "../win32k" }
 gopfb            = { path = "../../drivers/video/gopfb" }
 i8042            = { path = "../../drivers/input/i8042" }
+vboxmouse        = { path = "../../drivers/input/vboxmouse" }
 regf             = { path = "../../libs/regf", features = ["builder"] }
 ps               = { path = "../ps" }
 io-manager       = { path = "../io" }

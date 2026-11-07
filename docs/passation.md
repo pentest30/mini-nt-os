@@ -174,9 +174,20 @@ jour à chaque commit qui change l'état.
   `xtask` : `keys =` accepte `move:DX,DY`, `press:N`, `release`, `wheel:DZ` (la souris PS/2 de QEMU
   choisie, un mouvement nul d'amorce) ; scénario `mouse` (`MOUSE1.EXE`, les deux CPU). Pas encore : la
   capture, WM_NCHITTEST envoyé, l'activation par un clic, WM_SETCURSOR et les formes du curseur,
-  GetCursorPos, les clics dans l'installateur.
+  GetCursorPos.
+  Les clics dans l'assistant et le bureau (branche `claude/mouse-clicks`) : `SETUP1.EXE` fait de Back et
+  du bouton principal ce que fait Entrée (un appui et un relâchement sur le même bouton, `nav_at`) ;
+  `DESKTOP1.EXE` ouvre et ferme le menu Démarrer, le ferme par un appui hors de lui, en sélectionne une
+  entrée (`desktop_hit`). Scénarios `installer-click` et `desktop-click`. La file PS/2 de QEMU ne tient
+  que 16 octets : un `move:` de plus de 4 paquets (508 px) part en partie, le reste avec le clic
+  suivant ; les scénarios découpent leurs grands mouvements.
   Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la copie ou l'étape
   « configure ») et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
+  La souris absolue de VirtualBox (branche `claude/vbox-mouse`, `docs/compat/vbox.md`) : `hal::pci`
+  (mécanisme n° 1, recherche par fabricant et modèle, BAR d'E/S), `abi::vmmdev`, `hal::vmmdev`, pilote
+  `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
+  de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
+  VirtualBox, rien ne change.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)
@@ -185,8 +196,9 @@ jour à chaque commit qui change l'état.
   boot à l'octet). Sous VirtualBox : feature `interactive` (la sonde de `test-smss` tuait l'installateur
   10 s après la dernière touche ; `cargo xtask image` la met par défaut, scénario `interactive`) et PIO
   par `rep insw`/`rep outsw` : copie en 17 s. Le média conserve maintenant le vrai Winlogon sous
-  `WINLOGON.ORG`, le restaure sur la cible, et Finish appelle `NtShutdownSystem(ShutdownReboot)` : le
-  redémarrage part du système installé au lieu de relancer l'assistant.
+  `WINLOGON.ORG`, le restaure sur la cible, et Finish appelle `NtShutdownSystem(ShutdownReboot)`. L'ESP cible reçoit
+  `MINO.TAG` ; même si VirtualBox relance `BOOTX64.EFI` du média primaire, ce chargeur prend `kernel.elf` et
+  `fat.img` sur l'ESP marquée et démarre le système installé au lieu de relancer l'assistant.
   VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
   ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
   phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).

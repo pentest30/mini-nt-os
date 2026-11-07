@@ -12,6 +12,10 @@
 //!
 //! Les deux interruptions (IRQ1, IRQ12) appellent le même [`notify`].
 //!
+//! Sous VirtualBox, la souris est absolue (`vboxmouse`) : chaque paquet de la
+//! souris PS/2 prend la position du pointeur de l'hôte que donne VMMDev,
+//! tant que l'intégration de la souris de l'hôte est active.
+//!
 //! Pas encore : les IRP (kbdclass, mouclass), les bureaux d'entrée qui
 //! changent, l'arrêt du thread.
 
@@ -57,12 +61,38 @@ fn signal(_dpc: *const KDpc, _context: *mut c_void, _arg1: *mut c_void, _arg2: *
     }
 }
 
+/// La souris absolue de VirtualBox, si la machine en est une : sa page de
+/// requêtes vient de Mm et reste au pilote ; rendue sinon.
+fn absolute_mouse() -> Option<vboxmouse::VBoxMouse> {
+    let pfn = mm::pfn::allocate_page(mm::pfn::PageUsage::NonPagedPool)?;
+    let physical = pfn.to_phys();
+    let virt = (hal::HHDM_OFFSET.load(Ordering::Acquire) + physical) as *mut u8;
+    // SAFETY: a page just allocated, reached through the HHDM (which maps
+    // the first 4 GiB; the driver refuses a page above), given to the driver
+    // for good.
+    match unsafe { vboxmouse::VBoxMouse::new(vboxmouse::RequestPage { physical, virt }) } {
+        Ok(mouse) => {
+            log::info!("[boot] raw input thread: VirtualBox's absolute mouse (VMMDev)");
+            Some(mouse)
+        }
+        Err(reason) => {
+            mm::pfn::free_page(pfn);
+            if reason != vboxmouse::Unavailable::NoDevice {
+                log::warn!("[boot] raw input thread: no absolute mouse from VMMDev: {reason:?}");
+            }
+            None
+        }
+    }
+}
+
 /// Le thread d'entrée brute.
 fn raw_input_thread(_context: *mut c_void) {
     let event = EVENT.load(Ordering::Acquire);
     let mut keyboard = i8042::Keyboard::new();
     let mut mouse = i8042::Mouse::new();
+    let mut absolute = mouse.as_ref().and_then(|_| absolute_mouse());
     let mut first_packet = true;
+    let mut first_absolute = true;
     loop {
         // SAFETY: an event initialised by `start`, never freed; this kernel
         // thread waits at PASSIVE_LEVEL.
@@ -76,10 +106,15 @@ fn raw_input_thread(_context: *mut c_void) {
             win32k::input::process_keyboard_input(&data);
             LAST_KEY.store(hal::timer::interrupt_time().max(1), Ordering::Relaxed);
         }
-        while let Some(data) = mouse.as_mut().and_then(i8042::Mouse::read) {
-            // The first packet that does something, once (a boot scenario's
-            // marker); never one per packet.
-            if first_packet && (data.last_x, data.last_y, data.button_flags) != (0, 0, 0) {
+        while let Some(mut data) = mouse.as_mut().and_then(i8042::Mouse::read) {
+            if absolute.as_mut().is_some_and(|vbox| vbox.apply(&mut data)) {
+                if first_absolute {
+                    first_absolute = false;
+                    log::info!("[input] VirtualBox mouse: first absolute position: {}, {}", data.last_x, data.last_y);
+                }
+            } else if first_packet && (data.last_x, data.last_y, data.button_flags) != (0, 0, 0) {
+                // The first packet that does something, once (a boot
+                // scenario's marker); never one per packet.
                 first_packet = false;
                 log::info!(
                     "[input] PS/2 mouse: first packet: dx={}, dy={}, buttons={:#06x}",

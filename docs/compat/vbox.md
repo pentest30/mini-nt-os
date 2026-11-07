@@ -300,9 +300,50 @@ trouve `EFI/BOOT/BOOTX64.EFI` sur l'ESP de la cible, le chargeur y charge
 `kernel.elf` et `fat.img`, le noyau monte `C:` sur la partition système
 (`Io: GPT system partition 2: LBA 100352`).
 
+Quand le média d'installation reste maître primaire et la cible maître
+secondaire, le reset de **Finish** peut encore lancer `BOOTX64.EFI` du média.
+La copie place désormais `MINO.TAG` sur l'ESP cible. Le chargeur du média
+préfère toute ESP qui porte ce marqueur et charge son `kernel.elf` et son
+`fat.img` : aucun détachement manuel ni changement d'ordre des disques n'est
+nécessaire. Le scénario `installer-finish` garde les deux disques attachés
+pendant les deux boots pour reproduire cette topologie VirtualBox.
+
 Restent : au premier démarrage, une cible vierge en maître secondaire
 laisse `C:` sur le ramdisk (le noyau essaie le secondaire d'abord, puis ne
 revient pas au GPT du primaire) ; après la phase 1, l'ancien `CMD.EXE`
 (`syscall.rs`, `nt_read_file`) lit lui-même le clavier PS/2 en boucle `hlt`
 et peut prendre des touches à win32k (sans effet avec `interactive`, qui
 retient la phase 1 tant que le programme initial tourne).
+
+## Résolu : le curseur qui bute avant le haut de l'écran (la souris absolue)
+
+Avec la souris PS/2 seule, VirtualBox ne transmet que des déplacements. Le
+curseur de Mino part du centre de l'écran, le pointeur de l'hôte d'ailleurs :
+les deux se décalent, et quand le pointeur de l'hôte sort de la fenêtre de la
+VM, le curseur de Mino s'arrête avant le bord (« il ne peut pas aller au
+sommet »). Le noyau n'y était pour rien : 2000 px vers le haut envoyés par
+l'API (`IMouse::PutMouseEvent`) mènent bien le curseur en y = 0, et le
+scénario QEMU équivalent aussi.
+
+La correction est celle des additions invitées : la souris absolue de VMMDev
+(`abi::vmmdev`, `hal::pci`, `hal::vmmdev`, pilote `drivers/input/vboxmouse`).
+Au démarrage, le thread d'entrée brute trouve VMMDev (PCI 80EE:CAFE, BAR0),
+s'annonce (`ReportGuestInfo`, sans quoi VMMDev refuse le reste), puis dit
+qu'il lit des positions absolues (`SetMouseStatus`, `GUEST_CAN_ABSOLUTE`).
+L'hôte signale chaque position par un paquet PS/2 vide ; à chaque paquet, le
+pilote lit `GetMouseStatus` et, si l'intégration de la souris de l'hôte est
+active (`HOST_WANTS_ABSOLUTE`), en fait un `MOUSE_MOVE_ABSOLUTE`
+(0 à 0xFFFF), que win32k ramène à l'écran (`mouse::absolute_position`). Les
+boutons et la molette restent ceux du paquet. L'hôte cache son pointeur :
+c'est le curseur logiciel de win32k qui se voit.
+
+Vérifié sous VirtualBox 7.2 (VM `Mino`, souris `ps2mouse`) :
+`[boot] raw input thread: VirtualBox's absolute mouse (VMMDev)`,
+`IMouse.AbsoluteSupported` passe à 1 ; `PutMouseEventAbsolute(101, 51)` met
+la pointe de la flèche en (100, 50) ; un clic absolu sur Next de l'assistant
+donne `[setup] click primary`. Sous QEMU, pas de VMMDev : la souris reste
+relative (scénarios `mouse`, `keyboard`).
+
+Pas encore : `SetPointerShape` (la forme du curseur chez l'hôte), le nouveau
+protocole (l'interruption de VMMDev au lieu du paquet PS/2 vide),
+`ReportGuestInfo2`.

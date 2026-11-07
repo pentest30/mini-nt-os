@@ -12,27 +12,35 @@
 //! Les ports se lisent et s'écrivent à tout niveau ; le changement complet
 //! ([`set_mode`]) s'appelle à PASSIVE_LEVEL, une seule main à la fois.
 
-/// Le port d'index (écrit en 16 bits).
-const INDEX: u16 = 0x1CE;
-/// Le port de données.
-const DATA: u16 = 0x1CF;
+/// Les ports et les registres de l'interface, que seul le code bare-metal
+/// atteint : sur l'hôte, l'interface est absente ([`identify`] rend `false`,
+/// [`set_mode`] `None`).
+#[cfg(target_os = "none")]
+mod dispi {
+    /// Le port d'index (écrit en 16 bits).
+    pub const INDEX: u16 = 0x1CE;
+    /// Le port de données.
+    pub const DATA: u16 = 0x1CF;
 
-const ID: u16 = 0x0;
-const XRES: u16 = 0x1;
-const YRES: u16 = 0x2;
-const BPP: u16 = 0x3;
-const ENABLE: u16 = 0x4;
-const VIRT_W: u16 = 0x6;
-const VIRT_H: u16 = 0x7;
-const X_OFFSET: u16 = 0x8;
-const Y_OFFSET: u16 = 0x9;
-const ENABLED: u16 = 0x01;
-const LINEAR_FRAMEBUFFER: u16 = 0x40;
-/// Le plus petit identifiant que l'interface annonce (`B0C2` chez QEMU).
-const ID_MIN: u16 = 0xB0C0;
-const ID_MAX: u16 = 0xB0C5;
-/// La profondeur du framebuffer linéaire, en bits par pixel.
-const BITS_PER_PIXEL: u16 = 32;
+    pub const ID: u16 = 0x0;
+    pub const XRES: u16 = 0x1;
+    pub const YRES: u16 = 0x2;
+    pub const BPP: u16 = 0x3;
+    pub const ENABLE: u16 = 0x4;
+    pub const VIRT_W: u16 = 0x6;
+    pub const VIRT_H: u16 = 0x7;
+    pub const X_OFFSET: u16 = 0x8;
+    pub const Y_OFFSET: u16 = 0x9;
+    pub const ENABLED: u16 = 0x01;
+    pub const LINEAR_FRAMEBUFFER: u16 = 0x40;
+    /// Le plus petit identifiant que l'interface annonce (`B0C2` chez QEMU).
+    pub const ID_MIN: u16 = 0xB0C0;
+    pub const ID_MAX: u16 = 0xB0C5;
+    /// La profondeur du framebuffer linéaire, en bits par pixel.
+    pub const BITS_PER_PIXEL: u16 = 32;
+}
+#[cfg(target_os = "none")]
+use dispi::*;
 
 /// Le mot de 16 bits `value` vers le port `port` (out dx, ax).
 ///

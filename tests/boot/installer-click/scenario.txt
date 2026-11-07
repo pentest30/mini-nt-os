@@ -1,0 +1,29 @@
+# The installer with the mouse: a click on Next (the primary button) goes
+# from the welcome screen to the disk, a click on Back comes back. A click is
+# a press and a release on the same button (SETUP1.EXE, nav_at). The screen
+# is 1280x800 and the cursor starts at its centre, (640, 400): Next spans
+# x 1026-1113, y 619-644, Back x 938-1017. No target disk: Next on the
+# welcome screen and Back on the disk screen do not need one.
+# QEMU's PS/2 queue holds four packets of at most 127 pixels: a longer
+# move goes in several commands (see desktop-click).
+features = test-smss
+requires = userland, native
+initial-command = SETUP1.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [setup] ready => move:215,116 move:215,116 press:1 release
+keys = [setup] screen disk 1 => move:-92,0 press:1 release
+
+expect = [setup] ready
+expect = [setup] click primary
+expect = [setup] screen disk 1
+expect = [setup] click back
+expect = [setup] back to welcome
+
+# The arrow's tip on Back, where the last click was.
+screen = 978 632 000000
+screen = 979 634 FFFFFF
+
+forbid = *** STOP:
+forbid = [setup] screen install

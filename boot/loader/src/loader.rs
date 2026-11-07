@@ -29,6 +29,10 @@ const RAMDISK_MAX_SIZE: usize = 64 * 1024 * 1024;
 /// Filenames on the ESP (in the root directory).
 const KERNEL_FILENAME: &CStr16 = uefi::cstr16!("kernel.elf");
 const RAMDISK_FILENAME: &CStr16 = uefi::cstr16!("fat.img");
+/// Written to the target ESP after every installation file has reached the
+/// disk. When the installation medium stays attached, this lets its loader
+/// continue from the installed ESP instead of starting Setup again.
+const INSTALLED_MARKER: &CStr16 = uefi::cstr16!("MINO.TAG");
 
 /// Lowest address the kernel may be linked at: the top 2 GiB (`code-model=kernel`).
 const KERNEL_LINK_MIN: u64 = 0xFFFF_FFFF_8000_0000;
@@ -226,51 +230,65 @@ fn load_file(bt: &BootServices, filename: &CStr16, max_size: usize, require_pres
     // Look for handles that support SimpleFileSystem (ESP and other volumes).
     let handles = bt.find_handles::<SimpleFileSystem>().expect("loader: no SimpleFileSystem handles found");
 
-    // Try each volume until we find the file.
-    for handle in handles.iter() {
-        let mut fs = match bt.open_protocol_exclusive::<SimpleFileSystem>(*handle) {
-            Ok(fs) => fs,
-            Err(_) => continue,
-        };
+    // Prefer an installed ESP. Firmware commonly starts BOOTX64.EFI from the
+    // still-attached installation medium after a hardware reset; the marker
+    // makes both kernel.elf and fat.img come from the completed target.
+    for installed in [true, false] {
+        for handle in handles.iter() {
+            let mut fs = match bt.open_protocol_exclusive::<SimpleFileSystem>(*handle) {
+                Ok(fs) => fs,
+                Err(_) => continue,
+            };
 
-        let mut root = match fs.open_volume() {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
+            let mut root = match fs.open_volume() {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let is_installed = root.open(INSTALLED_MARKER, FileMode::Read, FileAttribute::empty()).is_ok();
+            if is_installed != installed {
+                continue;
+            }
 
-        let file_handle = match root.open(filename, FileMode::Read, FileAttribute::empty()) {
-            Ok(fh) => fh,
-            Err(_) => continue, // not on this volume
-        };
+            let file_handle = match root.open(filename, FileMode::Read, FileAttribute::empty()) {
+                Ok(fh) => fh,
+                Err(_) => continue, // not on this volume
+            };
 
-        // SAFETY: we opened it in read mode; it's a regular file.
-        let mut file = unsafe { RegularFile::new(file_handle) };
+            // SAFETY: we opened it in read mode; it's a regular file.
+            let mut file = unsafe { RegularFile::new(file_handle) };
 
-        // Query file size via FileInfo.
-        let mut info_buf = [0u8; 256];
-        let info: &FileInfo = file.get_info(&mut info_buf).expect("loader: failed to get file info");
-        let file_size = info.file_size() as usize;
+            // Query file size via FileInfo.
+            let mut info_buf = [0u8; 256];
+            let info: &FileInfo = file.get_info(&mut info_buf).expect("loader: failed to get file info");
+            let file_size = info.file_size() as usize;
 
-        assert!(file_size <= max_size, "loader: file too large ({} > {} bytes)", file_size, max_size);
-        assert!(file_size > 0, "loader: file is empty");
+            assert!(file_size <= max_size, "loader: file too large ({} > {} bytes)", file_size, max_size);
+            assert!(file_size > 0, "loader: file is empty");
 
-        // ── Allocate physical pages ───────────────────────────────────────────
-        let page_count = file_size.div_ceil(4096);
-        let phys_base = bt
-            .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, page_count)
-            .expect("loader: failed to allocate pages");
+            // ── Allocate physical pages ───────────────────────────────────────
+            let page_count = file_size.div_ceil(4096);
+            let phys_base = bt
+                .allocate_pages(AllocateType::AnyPages, MemoryType::LOADER_DATA, page_count)
+                .expect("loader: failed to allocate pages");
 
-        // ── Read the file directly into physical memory ───────────────────────
-        // UEFI identity-maps all physical RAM, so phys == virt here.
-        // SAFETY: phys_base is page-aligned and was just allocated for
-        //         file_size bytes.
-        let dst = unsafe { core::slice::from_raw_parts_mut(phys_base as *mut u8, file_size) };
+            // ── Read the file directly into physical memory ───────────────────
+            // UEFI identity-maps all physical RAM, so phys == virt here.
+            // SAFETY: phys_base is page-aligned and was just allocated for
+            //         file_size bytes.
+            let dst = unsafe { core::slice::from_raw_parts_mut(phys_base as *mut u8, file_size) };
 
-        let bytes_read = file.read(dst).expect("loader: file read failed");
-        assert_eq!(bytes_read, file_size, "loader: short read");
+            let bytes_read = file.read(dst).expect("loader: file read failed");
+            assert_eq!(bytes_read, file_size, "loader: short read");
 
-        log::info!("loader: file loaded at {:#x}, {} bytes ({} pages)", phys_base, file_size, page_count);
-        return Some((phys_base, file_size as u64));
+            log::info!(
+                "loader: file loaded from {} volume at {:#x}, {} bytes ({} pages)",
+                if installed { "installed" } else { "boot" },
+                phys_base,
+                file_size,
+                page_count
+            );
+            return Some((phys_base, file_size as u64));
+        }
     }
 
     if require_present {
