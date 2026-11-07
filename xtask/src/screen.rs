@@ -1,13 +1,18 @@
 //! Screen checks of a boot scenario (`screen = X Y RRGGBB`): once its
 //! markers are all in the serial log, QEMU's monitor (HMP, on a Unix socket
-//! in the run directory) dumps the screen (`screendump`, a binary PPM), and
-//! each listed pixel must have its colour. The monitor also types the keys
+//! in the run directory, a TCP port of localhost on Windows) dumps the
+//! screen (`screendump`, a binary PPM), and each listed pixel must have its
+//! colour. The monitor also types the keys
 //! of a scenario (`keys = MARKER => KEY…`, [`send_keys`]).
 
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 use crate::Result;
 
@@ -115,21 +120,113 @@ impl Image {
     }
 }
 
-/// Dumps the screen of the QEMU whose monitor listens on `socket` into
+/// Where QEMU's monitor listens: a Unix socket in the run directory where
+/// they exist (every host but Windows), a TCP port of localhost there.
+#[derive(Debug)]
+pub enum Monitor {
+    #[cfg(unix)]
+    Unix(PathBuf),
+    #[cfg(windows)]
+    Tcp(std::net::SocketAddr),
+}
+
+impl Monitor {
+    /// The `-monitor` argument that makes QEMU listen on it.
+    pub fn qemu_argument(&self) -> std::ffi::OsString {
+        let mut argument = std::ffi::OsString::new();
+        match self {
+            #[cfg(unix)]
+            Monitor::Unix(path) => {
+                let _ = std::fs::remove_file(path);
+                argument.push("unix:");
+                argument.push(path);
+                argument.push(",server=on,wait=off");
+            }
+            #[cfg(windows)]
+            Monitor::Tcp(address) => argument.push(format!("tcp:{address},server=on,wait=off")),
+        }
+        argument
+    }
+
+    /// Connects to it.
+    fn connect(&self) -> std::io::Result<Stream> {
+        match self {
+            #[cfg(unix)]
+            Monitor::Unix(path) => UnixStream::connect(path).map(Stream::Unix),
+            #[cfg(windows)]
+            Monitor::Tcp(address) => std::net::TcpStream::connect(address).map(Stream::Tcp),
+        }
+    }
+}
+
+/// A connected monitor: a Unix socket or a TCP stream, read and written
+/// the same way.
+enum Stream {
+    #[cfg(unix)]
+    Unix(std::os::unix::net::UnixStream),
+    #[cfg(windows)]
+    Tcp(std::net::TcpStream),
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            #[cfg(unix)]
+            Stream::Unix(stream) => stream.read(buf),
+            #[cfg(windows)]
+            Stream::Tcp(stream) => stream.read(buf),
+        }
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            #[cfg(unix)]
+            Stream::Unix(stream) => stream.write(buf),
+            #[cfg(windows)]
+            Stream::Tcp(stream) => stream.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            Stream::Unix(stream) => stream.flush(),
+            #[cfg(windows)]
+            Stream::Tcp(stream) => stream.flush(),
+        }
+    }
+}
+
+impl Stream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            #[cfg(unix)]
+            Stream::Unix(stream) => stream.set_read_timeout(timeout),
+            #[cfg(windows)]
+            Stream::Tcp(stream) => stream.set_read_timeout(timeout),
+        }
+    }
+}
+
+/// Dumps the screen of the QEMU whose monitor listens on `monitor` into
 /// `file`, and reads it back.
-pub fn capture(socket: &Path, file: &Path) -> Result<Image> {
-    let stream = UnixStream::connect(socket).map_err(|e| format!("QEMU monitor {}: {e}", socket.display()))?;
+pub fn capture(monitor: &Monitor, file: &Path) -> Result<Image> {
+    let mut stream = monitor.connect().map_err(|e| format!("QEMU monitor {monitor:?}: {e}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| format!("QEMU monitor: {e}"))?;
-    let mut writer = stream.try_clone().map_err(|e| format!("QEMU monitor: {e}"))?;
     let _ = std::fs::remove_file(file);
-    writeln!(writer, "screendump {}", file.display()).map_err(|e| format!("QEMU monitor: {e}"))?;
+    // A quoted path: a directory of the run may hold a space, which an
+    // unquoted HMP argument would cut. Forward slashes, which QEMU reads
+    // on Windows as well as its own backslashes.
+    let dump = file.display().to_string().replace('\\', "/");
+    writeln!(stream, "screendump \"{dump}\"").map_err(|e| format!("QEMU monitor: {e}"))?;
     // A prompt after the banner, then another once the command has run.
-    let mut reader = stream;
     let mut seen = Vec::new();
     let mut chunk = [0u8; 256];
     let start = Instant::now();
     while count(&seen, b"(qemu) ") < 2 && start.elapsed() < Duration::from_secs(10) {
-        match reader.read(&mut chunk) {
+        match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => seen.extend_from_slice(&chunk[..n]),
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => break,
@@ -156,23 +253,21 @@ fn key_duration(key: &str) -> Duration {
     Duration::from_millis(u64::from(2 * keys * KEY_HOLD_MS + KEY_SETTLE_MS))
 }
 
-/// Types `keys` on the QEMU whose monitor listens on `socket`, one after
+/// Types `keys` on the QEMU whose monitor listens on `monitor`, one after
 /// the other (`sendkey`), each answered by the monitor and released
 /// ([`key_duration`]) before the next.
-pub fn send_keys(socket: &Path, keys: &[String]) -> Result<()> {
-    let stream = UnixStream::connect(socket).map_err(|e| format!("QEMU monitor {}: {e}", socket.display()))?;
+pub fn send_keys(monitor: &Monitor, keys: &[String]) -> Result<()> {
+    let mut stream = monitor.connect().map_err(|e| format!("QEMU monitor {monitor:?}: {e}"))?;
     stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| format!("QEMU monitor: {e}"))?;
-    let mut writer = stream.try_clone().map_err(|e| format!("QEMU monitor: {e}"))?;
-    let mut reader = stream;
     let mut seen = Vec::new();
     let mut prompts = 1;
     for key in keys {
-        writeln!(writer, "sendkey {key} {KEY_HOLD_MS}").map_err(|e| format!("QEMU monitor: {e}"))?;
+        writeln!(stream, "sendkey {key} {KEY_HOLD_MS}").map_err(|e| format!("QEMU monitor: {e}"))?;
         prompts += 1;
         let mut chunk = [0u8; 256];
         let start = Instant::now();
         while count(&seen, b"(qemu) ") < prompts && start.elapsed() < Duration::from_secs(10) {
-            match reader.read(&mut chunk) {
+            match stream.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => seen.extend_from_slice(&chunk[..n]),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {

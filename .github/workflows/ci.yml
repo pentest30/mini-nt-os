@@ -118,6 +118,12 @@ jobs:
           - name: a file on C, the ATA system disk, after a reboot; fsck.vfat (M4)
             args: --scenario persistence
             fsck: true
+          - name: boot and reboot a single installed GPT disk (ESP + system)
+            args: --scenario installed-persistence
+            fsck: true
+          - name: GPT system partition, persistence, both tables and FAT checked (F4)
+            args: --scenario gpt-persistence
+            fsck: true
           - name: a registry value on C after a reboot, the SYSTEM hive flushed; fsck.vfat (M4)
             args: --scenario registry-persistence
             userland: true

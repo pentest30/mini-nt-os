@@ -36,12 +36,15 @@ pub mod disk;
 pub mod driver;
 pub mod fat;
 pub mod file;
+pub mod install;
 pub mod irp;
+pub mod name;
+pub mod partition;
 pub mod volume;
 
 pub use device::{Device, DEVICE_TYPE};
 pub use driver::{DeviceObject, DriverObject};
-pub use fat::{BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
+pub use fat::{nt_time, BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
 pub use file::{check_disposition, check_open, creates, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
 pub use volume::{Listed, Node, Space, Volume, VolumeLabel};
@@ -51,7 +54,7 @@ pub const RAMDISK_VOLUME: &str = "\\Device\\Ramdisk0";
 /// Le volume du disque système ATA.
 pub const DISK_VOLUME: &str = "\\Device\\HarddiskVolume1";
 /// Le disque système ATA : le maître du canal secondaire (sous QEMU, le
-/// canal primaire tient l'ESP).
+/// canal primaire tient l'ESP). Un GPT installé peut aussi être sur le primaire.
 pub const SYSTEM_DISK: hal::ata::AtaDrive = hal::ata::AtaDrive::new(hal::ata::SECONDARY, false);
 
 /// Ce que [`mount_boot_volumes`] a monté.
@@ -62,6 +65,8 @@ pub struct BootVolumes {
     /// Les secteurs du disque système ATA, s'il y en a un, ou pourquoi son
     /// volume a été refusé.
     pub disk: Option<Result<u64, abi::ntstatus::NtStatus>>,
+    /// The system volume was found on the primary boot disk.
+    pub disk_primary: bool,
     /// Le volume que désignent `\??\C:` et `\SystemRoot`.
     pub system: Option<&'static str>,
 }
@@ -70,7 +75,8 @@ pub struct BootVolumes {
 /// ATA ([`DISK_VOLUME`]), s'ils sont là, puis fait mener `\GLOBAL??\C:` et
 /// `\SystemRoot` (son répertoire `WINDOWS`) au disque ATA, ou sans lui au
 /// disque RAM ; tout est permanent. Un disque ATA qui ne porte pas de FAT32
-/// reste sans volume.
+/// reste sans volume. Une table GPT valide expose sa première partition Basic
+/// Data ; sans GPT, le volume FAT32 brut reste pris en charge.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, une fois, après [`init`] et `ob::init`.
@@ -85,9 +91,23 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
         volumes.ramdisk = Some(size);
         volumes.system = Some(RAMDISK_VOLUME);
     }
-    if let Some(disk) = disk::AtaDisk::probe(SYSTEM_DISK) {
+    // Installed images boot on primary master; the older test layout uses
+    // secondary master. Prefer the explicitly attached system disk.
+    if let Some((disk, primary)) = disk::AtaDisk::probe(SYSTEM_DISK).map(|disk| (disk, false)).or_else(|| {
+        disk::AtaDisk::probe(hal::ata::AtaDrive::new(hal::ata::PRIMARY, false))
+            .filter(|disk| partition::has_gpt(disk).unwrap_or(false))
+            .map(|disk| (disk, true))
+    }) {
+        volumes.disk_primary = primary;
         let sectors = disk.sectors();
-        match Volume::mount(alloc::boxed::Box::new(disk)) {
+        match partition::system_volume(disk, sectors)
+            .map_err(|error| match error {
+                FatError::Io => abi::ntstatus::STATUS_IO_DEVICE_ERROR,
+                FatError::Corrupt => abi::ntstatus::STATUS_DISK_CORRUPT_ERROR,
+                _ => abi::ntstatus::STATUS_UNRECOGNIZED_VOLUME,
+            })
+            .and_then(|disk| Volume::mount(alloc::boxed::Box::new(disk)))
+        {
             Ok(volume) => {
                 let device: ob::ObjectRef = Device::with_volume(volume);
                 namespace.insert(&device, DISK_VOLUME, None, permanent)?;
@@ -104,6 +124,9 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
             namespace.insert(&link, name, None, permanent)?;
         }
     }
+    install::record_system_disk(
+        volumes.disk.as_ref().and_then(|disk| disk.as_ref().ok()).map(|_| volumes.disk_primary),
+    );
     Ok(volumes)
 }
 
@@ -413,7 +436,7 @@ pub fn init(ramdisk_phys_base: u64, ramdisk_size: u64, hhdm_offset: u64) {
     log::info!("Io: initialised");
 }
 
-fn ramdisk_device() -> Option<PhysRamBlockDevice> {
+pub(crate) fn ramdisk_device() -> Option<PhysRamBlockDevice> {
     let (phys, size, hhdm) = *RAMDISK_SOURCE.lock();
     if phys == 0 || size < 512 {
         return None;

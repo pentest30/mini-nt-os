@@ -403,7 +403,7 @@ GPT
 |---|---|
 | `cargo xtask build` | Compile `mino-loader` (`x86_64-unknown-uefi`) et `ntoskrnl` (`x86_64-unknown-none`, ELF lié en haut de l'espace) |
 | `cargo xtask fetch-userland` | Télécharge l'archive de publication de ReactOS épinglé (`ReactOS-0.4.16-i386.zip`, sur SourceForge, qui publie son SHA-256) avec `curl`, **vérifie son SHA-256**, puis le CRC-32 de l'ISO qu'elle contient. Il extrait ensuite l'arborescence système de l'ISO (`/reactos` : binaires et `.inf`) dans `third_party/reactos/<version>/`, ignoré par Git. `--archive FICHIER` prend une copie déjà téléchargée. Les scénarios marqués `requires = userland` reçoivent `NTDLL.DLL` et les tables NLS sur le disque RAM, ou sont sautés sans elles ; ceux marqués `requires = native` reçoivent les programmes de `tests/native/`, compilés avec MinGW (`i686-w64-mingw32-gcc`), ou avec clang et `lld-link` pour ceux qui utilisent `__try`/`__except` (avec `tests/native/seh3.c`, le gestionnaire de cadre qu'appelle le code de clang), et liés à `ntdll` par une bibliothèque d'import tirée de `tests/native/ntdll.def` ; ils sont sautés sans ces compilateurs. |
-| `cargo xtask image` | `mkhive` + `mkimage` produisent `target/mino.img` (GPT, ESP, système) |
+| `cargo xtask image [--output FILE]` | Image de développement GPT avec ESP FAT32 (chargeur, noyau, disque RAM) et volume système FAT32 ; fichier neuf, espace utilisateur épinglé requis. `mkhive` et l’installateur en mode utilisateur restent à faire. |
 | `cargo xtask run [--gdb] [--smp N]` | Lance QEMU (OVMF, q35, sortie série sur stdio) |
 | `cargo xtask test` | Tests hôte, puis tests de démarrage dans QEMU sans affichage (marqueurs série), puis sous-ensemble `rostests` |
 
@@ -430,6 +430,8 @@ mini-nt-os/
 │   └── misc/{serial,acpi,pci,rtc}
 ├── libs/
 │   ├── pe/              # parseur PE32/PE32+ no_std (hôte + noyau)
+│   ├── fatfs/           # écriture FAT32 : image et formatage (hôte + noyau, ADR-022)
+│   ├── gpt/             # tables GPT, MBR protecteur et CRC (hôte + noyau)
 │   ├── regf/            # format de ruche (hôte + noyau)
 │   └── glyph/           # polices TrueType (ttf-parser) et rastériseur en virgule fixe (ADR-013)
 ├── userland/            # remplacements Rust de DLL (plus tard), cible i686-pc-windows-*

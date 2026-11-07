@@ -12,3 +12,5 @@ ob   = { path = "../ob" }
 ke   = { path = "../ke" }
 hal  = { path = "../hal" }
 log  = { workspace = true }
+gpt = { path = "../../libs/gpt" }
+fatfs = { path = "../../libs/fatfs" }

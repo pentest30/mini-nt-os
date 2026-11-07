@@ -32,10 +32,22 @@
 //!     and the NLS tables);
 //!   - `native`: the ramdisk gets the native test programs of
 //!     `tests/native/`, compiled with MinGW or clang (`xtask/src/native.rs`).
+//! - `disk = installed`: a single GPT disk holds the real ESP and system
+//!   partition, replacing the external virtual FAT boot disk.
+//! - `disk = system-gpt`: wraps the FAT image in a GPT Basic Data partition;
+//!   the two GPT copies are checked and the partition extracted for fsck.
 //! - `disk = system`: the image of the ramdisk is also the system disk `C:`,
 //!   a file attached as the master of the secondary IDE channel, which the
 //!   boots share; after the last one, `fsck.vfat -n` must find it clean
 //!   (skipped, with a warning, without dosfstools).
+//! - `disk = target`: attaches a new, blank 96 MiB secondary ATA disk. It is
+//!   never copied from the ramdisk and is not checked as a FAT volume; setup
+//!   scenarios use it as a non-system installation candidate. With `disk =
+//!   installed` too, the installed image is the primary boot disk and the
+//!   target the secondary master.
+//! - `reboot = target` (with `disk = installed`, `disk = target` and `boots`
+//!   from 2): every boot after the first starts from the target disk alone,
+//!   as the primary master: what the first boot installed there must boot.
 //! - `boots`: how many times QEMU boots (default 1). Every boot but the last
 //!   must end with QEMU (the kernel resets the machine, and `-no-reboot`
 //!   makes QEMU exit); the `expect` markers are looked for in all the serial
@@ -70,6 +82,14 @@ pub struct Scenario {
     pub requires_native: bool,
     /// The ramdisk image is also the system disk `C:`.
     pub system_disk: bool,
+    /// Wrap the system volume in GPT rather than using raw FAT.
+    pub gpt_disk: bool,
+    /// One real GPT image holds the ESP and system volume.
+    pub installed_disk: bool,
+    /// Un disque ATA secondaire vide, distinct du système courant.
+    pub target_disk: bool,
+    /// The boots after the first start from the target disk alone.
+    pub reboot_target: bool,
     pub boots: u32,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
@@ -188,6 +208,10 @@ impl Scenario {
             requires_userland: false,
             requires_native: false,
             system_disk: false,
+            gpt_disk: false,
+            installed_disk: false,
+            target_disk: false,
+            reboot_target: false,
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
@@ -222,7 +246,21 @@ impl Scenario {
                 "keys" => sc.keys.push(Keys::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
+                    "target" => sc.target_disk = true,
+                    "installed" => {
+                        sc.system_disk = true;
+                        sc.gpt_disk = true;
+                        sc.installed_disk = true;
+                    }
+                    "system-gpt" => {
+                        sc.system_disk = true;
+                        sc.gpt_disk = true;
+                    }
                     _ => return Err(format!("{}: unknown disk `{value}`", at())),
+                },
+                "reboot" => match value {
+                    "target" => sc.reboot_target = true,
+                    _ => return Err(format!("{}: unknown reboot `{value}`", at())),
                 },
                 "boots" => {
                     sc.boots = value
@@ -254,6 +292,16 @@ impl Scenario {
         }
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
+        }
+        // An installed image is the primary boot disk: the target can be the
+        // secondary master beside it, not beside a system disk there.
+        if sc.system_disk && sc.target_disk && !sc.installed_disk {
+            return Err(format!("{name}/{SCENARIO_FILE}: a disk cannot be both system and target"));
+        }
+        if sc.reboot_target && !(sc.installed_disk && sc.target_disk && sc.boots >= 2) {
+            return Err(format!(
+                "{name}/{SCENARIO_FILE}: `reboot = target` needs `disk = installed`, `disk = target` and `boots` from 2"
+            ));
         }
         Ok(sc)
     }
@@ -345,6 +393,12 @@ requires = userland
         assert!((!sc.system_disk, sc.boots) == (true, 1), "one boot on the ramdisk by default");
         let twice = Scenario::parse("x", "expect = a\ndisk = system\nboots = 2").unwrap();
         assert!(twice.system_disk && twice.boots == 2);
+        let gpt = Scenario::parse("x", "expect = a\ndisk = system-gpt").unwrap();
+        assert!(gpt.system_disk && gpt.gpt_disk);
+        let installed = Scenario::parse("x", "expect = a\ndisk = installed").unwrap();
+        assert!(installed.system_disk && installed.gpt_disk && installed.installed_disk);
+        let target = Scenario::parse("x", "expect = a\ndisk = target").unwrap();
+        assert!(target.target_disk && !target.system_disk);
         let keys = Scenario::parse("x", "expect = a\nkeys = [x] ready => shift-h i ret\nkeys = b => a").unwrap();
         let first = Keys { after: "[x] ready".into(), keys: vec!["shift-h".into(), "i".into(), "ret".into()] };
         assert_eq!(keys.keys, [first, Keys { after: "b".into(), keys: vec!["a".into()] }]);

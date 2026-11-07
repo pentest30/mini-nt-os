@@ -160,6 +160,8 @@ pub struct Machine {
     /// The image of the system disk `C:`, master of the secondary IDE
     /// channel.
     pub system_disk: Option<PathBuf>,
+    /// Real boot disk; replaces the virtual FAT ESP.
+    pub boot_disk: Option<PathBuf>,
 }
 
 impl Machine {
@@ -178,8 +180,15 @@ impl Machine {
                 cmd.arg("-drive").arg(drive("if=pflash,format=raw", vars, ""));
             }
         }
-        // Virtual FAT disks, read-write: the firmware stores NvVars on the ESP.
-        cmd.arg("-drive").arg(drive("format=raw", &self.esp, "fat:rw:"));
+        // Virtual FAT disks, read-write: the firmware stores NvVars on the
+        // ESP. (The vvfat stays FAT16: a FAT32 volume this small is invalid
+        // and the firmware refuses it; the installer's boot-file copy skips
+        // it and the image boot carries its own FAT32 ESP.)
+        if let Some(image) = &self.boot_disk {
+            cmd.arg("-drive").arg(drive("format=raw", image, ""));
+        } else {
+            cmd.arg("-drive").arg(drive("format=raw", &self.esp, "fat:rw:"));
+        }
         match (&self.data_dir, &self.system_disk) {
             (Some(_), Some(_)) => {
                 return Err("the data directory and the system disk both want the secondary IDE master".into())
@@ -228,6 +237,29 @@ pub fn assemble_esp(ws: &Workspace, run_dir: &Path, artifacts: &Artifacts, extra
     Ok(esp)
 }
 
+/// Adds QEMU's monitor to `command` for the screen checks, and where to
+/// reach it: a Unix socket of the run directory where they exist, a TCP
+/// port of localhost reserved for the machine on Windows.
+#[cfg(unix)]
+fn monitor(command: &mut Command, run_dir: &Path) -> Result<crate::screen::Monitor> {
+    let endpoint = crate::screen::Monitor::Unix(run_dir.join("monitor.sock"));
+    command.arg("-monitor").arg(endpoint.qemu_argument());
+    Ok(endpoint)
+}
+
+/// The port is reserved by binding and letting it go: QEMU takes it as its
+/// server. A race another process could win, as with any port the runner
+/// picks itself.
+#[cfg(windows)]
+fn monitor(command: &mut Command, _run_dir: &Path) -> Result<crate::screen::Monitor> {
+    let address = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .map_err(|e| format!("cannot reserve a monitor port: {e}"))?;
+    let endpoint = crate::screen::Monitor::Tcp(address);
+    command.arg("-monitor").arg(endpoint.qemu_argument());
+    Ok(endpoint)
+}
+
 /// Result of a watched boot.
 pub struct Outcome {
     pub passed: bool,
@@ -238,8 +270,11 @@ pub struct Outcome {
 
 /// Boots headless, with the serial port in `run_dir/serial.log`, and rereads
 /// the log until the scenario passes or fails, QEMU exits, or `timeout`.
+/// The boots after the first use `later` when there is one (`reboot =
+/// target`: the installed disk alone).
 pub fn boot_and_watch(
     machine: &Machine,
+    later: Option<&Machine>,
     opts: &Options,
     scenario: &Scenario,
     timeout: Duration,
@@ -247,16 +282,18 @@ pub fn boot_and_watch(
 ) -> Result<Outcome> {
     let start = Instant::now();
     let mut earlier = String::new();
+    let machine_of = |boot: u32| if boot > 1 { later.unwrap_or(machine) } else { machine };
     for boot in 1..scenario.boots {
         let serial_log = run_dir.join(format!("serial-{boot}.log"));
-        let outcome = boot_once(machine, opts, scenario, timeout, run_dir, &serial_log, &earlier, true)?;
+        let outcome = boot_once(machine_of(boot), opts, scenario, timeout, run_dir, &serial_log, &earlier, true)?;
         if !outcome.passed {
             return Ok(Outcome { reason: format!("boot {boot}: {}", outcome.reason), ..outcome });
         }
         earlier.push_str(&read_lossy(&serial_log));
     }
     let serial_log = run_dir.join("serial.log");
-    let outcome = boot_once(machine, opts, scenario, timeout, run_dir, &serial_log, &earlier, false)?;
+    let outcome =
+        boot_once(machine_of(scenario.boots), opts, scenario, timeout, run_dir, &serial_log, &earlier, false)?;
     Ok(Outcome { elapsed: start.elapsed(), ..outcome })
 }
 
@@ -280,15 +317,13 @@ fn boot_once(
     let mut serial = OsString::from("file:");
     serial.push(serial_log);
 
-    let monitor = run_dir.join("monitor.sock");
     let mut command = machine.command(opts)?;
-    if !scenario.screen.is_empty() || !scenario.keys.is_empty() {
-        let _ = fs::remove_file(&monitor);
-        let mut socket = OsString::from("unix:");
-        socket.push(&monitor);
-        socket.push(",server=on,wait=off");
-        command.arg("-monitor").arg(socket);
-    }
+    // Screen checks and injected keys share QEMU's monitor.
+    let monitor = if scenario.screen.is_empty() && scenario.keys.is_empty() {
+        None
+    } else {
+        Some(monitor(&mut command, run_dir)?)
+    };
     let mut child = command
         .arg("-serial")
         .arg(serial)
@@ -308,7 +343,8 @@ fn boot_once(
         let exited = child.try_wait().map_err(|e| format!("QEMU: {e}"))?;
         let this_boot = read_lossy(serial_log);
         while let Some(keys) = scenario.keys.get(typed).filter(|keys| this_boot.contains(&keys.after)) {
-            if let Err(why) = crate::screen::send_keys(&monitor, &keys.keys) {
+            let monitor = monitor.as_ref().expect("built when keys are typed");
+            if let Err(why) = crate::screen::send_keys(monitor, &keys.keys) {
                 eprintln!("xtask: keys after `{}`: {why}", keys.after);
             }
             typed += 1;
@@ -330,7 +366,8 @@ fn boot_once(
             // The screen, once the markers are found (the last boot).
             Verdict::Pass if !scenario.screen.is_empty() => {
                 let dump = run_dir.join("screen.ppm");
-                match crate::screen::capture(&monitor, &dump).and_then(|image| image.check(&scenario.screen)) {
+                let monitor = monitor.as_ref().expect("built when the screen is checked");
+                match crate::screen::capture(monitor, &dump).and_then(|image| image.check(&scenario.screen)) {
                     Ok(()) => break (true, String::new()),
                     Err(why) => break (false, why),
                 }

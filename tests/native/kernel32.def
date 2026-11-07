@@ -11,6 +11,9 @@ CreateThread@24
 DeleteCriticalSection@4
 EnterCriticalSection@4
 ExitProcess@4
+FindClose@4
+FindFirstFileW@8
+FindNextFileW@8
 GetConsoleMode@8
 GetConsoleWindow@0
 GetCurrentProcessId@0

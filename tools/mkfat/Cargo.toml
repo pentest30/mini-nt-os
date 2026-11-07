@@ -7,6 +7,7 @@ edition.workspace = true
 name = "mkfat"
 path = "src/main.rs"
 
-[dev-dependencies]
-# The kernel's FAT reader mounts the images built in the tests.
-io-manager = { path = "../../kernel/io" }
+[dependencies]
+# The FAT32 image itself (ADR-022); the tests that mount it with the
+# kernel's FAT reader moved with the crate.
+fatfs = { path = "../../libs/fatfs" }

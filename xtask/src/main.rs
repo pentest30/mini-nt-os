@@ -20,9 +20,12 @@
 //! (pflash pair), `--qemu FILE`, or the `OVMF_PATH`, `OVMF_CODE`, `OVMF_VARS`
 //! and `QEMU` environment variables.
 
+mod fat32;
 mod inflate;
+mod install;
 mod iso9660;
 mod native;
+mod partition;
 mod qemu;
 mod scenario;
 mod screen;
@@ -49,9 +52,16 @@ usage: cargo xtask <command> [options]
 commands:
   build   build mino-loader and ntoskrnl
           --features F        ntoskrnl features (comma-separated)
+  image   create one bootable GPT image (ESP + system volume)
+          --output FILE       destination; must not exist (default target/mino.img)
+          --features F        ntoskrnl features (default test-smss)
+          --initial-command P  the test program P (built from tests/native)
+                              boots as winlogon.exe — SETUP1.EXE runs the
+                              installer flow; needs MinGW
   lint    rustfmt --check, the generated service tables up to date, then
           clippy -D warnings on the host and the bare-metal targets (06 §6)
   run     build, then boot in QEMU with the serial port on stdio
+          --image FILE        boot an existing image without rebuilding
           --cpu CPU           default | intel | QEMU -cpu model
           --features F        ntoskrnl features
           --memory MB         guest memory (default 256)
@@ -106,6 +116,7 @@ fn dispatch(mut args: Args) -> Result<()> {
             args.finish()?;
             lint(&ws)
         }
+        Some("image") => install_image(&ws, args),
         Some("run") => run(&ws, args),
         Some("test") => test(&ws, args),
         Some("syscall-gen") => {
@@ -155,8 +166,41 @@ fn lint(ws: &Workspace) -> Result<()> {
     Ok(())
 }
 
+/// Build a development disk image, without touching a host disk.
+fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
+    let output = args.value("--output")?.map(PathBuf::from).unwrap_or_else(|| ws.target.join("mino.img"));
+    // A person drives an image (VirtualBox): `interactive`, or the probe ends
+    // its program 10 s after the last key, an installation mid-copy.
+    let features = args.value("--features")?.unwrap_or_else(|| "test-smss,interactive".into());
+    let initial_command = args.value("--initial-command")?;
+    args.finish()?;
+    if output.exists() {
+        return Err(format!("{} already exists; choose another --output", output.display()));
+    }
+    let mut files = userland_files(ws).ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
+    let artifacts = build(ws, Some(&features))?;
+    if let Some(program) = &initial_command {
+        // The installer flow: the program boots as winlogon.exe, smss's
+        // initial command (the `installer-ui` scenario's substitution).
+        let native = native::build(ws)?.ok_or_else(|| {
+            format!("initial-command: the native programs need {}", native::missing_tool().unwrap_or("a compiler"))
+        })?;
+        files.extend(native);
+        put_initial_command(&mut files, program)?;
+    }
+    let run_dir = ws.target.join("xtask").join("image-source");
+    let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &files)?;
+    if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    install::create(&esp, &output)?;
+    println!("Mino development image: {}", output.display());
+    Ok(())
+}
+
 /// Builds, then boots interactively: serial on stdio, until QEMU exits.
 fn run(ws: &Workspace, mut args: Args) -> Result<()> {
+    let image = args.value("--image")?.map(PathBuf::from);
     let cpu = args.value("--cpu")?.map(|c| Cpu::parse(&c)).unwrap_or(Cpu::Default);
     let features = args.value("--features")?;
     let memory_mb = args.value("--memory")?.map(|m| parse_number(&m, "--memory")).transpose()?;
@@ -166,6 +210,27 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
     let data_dir = args.value("--data-dir")?.map(PathBuf::from);
     let options = qemu::Options::from_args(&mut args)?;
     args.finish()?;
+
+    if let Some(image) = image {
+        if features.is_some() || !extra_files.is_empty() || data_dir.is_some() {
+            return Err("--image cannot be combined with --features, --add or --data-dir".into());
+        }
+        if !image.is_file() {
+            return Err(format!("{} is not an image file", image.display()));
+        }
+        let run_dir = ws.target.join("xtask").join("run-image");
+        std::fs::create_dir_all(&run_dir).map_err(|e| e.to_string())?;
+        let machine = Machine {
+            firmware: qemu::find_firmware(&options, &run_dir)?,
+            esp: PathBuf::new(),
+            cpu,
+            memory_mb: memory_mb.unwrap_or(qemu::DEFAULT_MEMORY_MB),
+            data_dir: None,
+            system_disk: None,
+            boot_disk: Some(image),
+        };
+        return run_machine(&machine, &options, headless, gdb);
+    }
 
     let artifacts = build(ws, features.as_deref())?;
     match userland_files(ws) {
@@ -185,12 +250,17 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
         memory_mb: memory_mb.unwrap_or(qemu::DEFAULT_MEMORY_MB),
         data_dir,
         system_disk: None,
+        boot_disk: None,
     };
+    run_machine(&machine, &options, headless, gdb)
+}
+
+fn run_machine(machine: &Machine, options: &qemu::Options, headless: bool, gdb: bool) -> Result<()> {
     if gdb {
         println!("xtask: QEMU waits for gdb: target remote :1234");
     }
     let status = machine
-        .command(&options)?
+        .command(options)?
         .args(["-serial", "stdio"])
         .args(if headless { &["-display", "none"][..] } else { &[] })
         .args(if gdb { &["-s", "-S"][..] } else { &[] })
@@ -267,22 +337,76 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             println!("xtask: boot {label}");
             let run_dir = ws.target.join("xtask").join("boot").join(format!("{}-{}", sc.name, cpu.name()));
             let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &extra_files)?;
-            // The system disk starts as a copy of the ramdisk's image.
-            let system_disk = sc.system_disk.then(|| run_dir.join("c.img"));
-            if let Some(image) = &system_disk {
-                std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
+            // A system disk starts as the ramdisk (or an installed image). A
+            // setup target is a distinct blank secondary ATA disk.
+            let attached_disk = (sc.system_disk || sc.target_disk).then(|| run_dir.join("c.img"));
+            if let Some(image) = &attached_disk {
+                if sc.target_disk {
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .open(image)
+                        .map_err(|e| format!("{}: {e}", image.display()))?;
+                    file.set_len(96 * 1024 * 1024).map_err(|e| format!("{}: {e}", image.display()))?;
+                } else if sc.installed_disk {
+                    install::create(&esp, image)?;
+                } else if sc.gpt_disk {
+                    partition::create(&esp.join("fat.img"), image)?;
+                } else {
+                    std::fs::copy(esp.join("fat.img"), image).map_err(|e| format!("{}: {e}", image.display()))?;
+                }
             }
+            // An installed image beside a target: the image is a file of its
+            // own, the primary boot disk; the target stays the secondary
+            // master (c.img).
+            let boot_image = (sc.installed_disk && sc.target_disk).then(|| run_dir.join("boot.img"));
+            if let Some(image) = &boot_image {
+                install::create(&esp, image)?;
+            }
+            // The ramdisk image: the source the installer copies, which the
+            // check of a setup target compares the copy with.
+            let ramdisk_image = esp.join("fat.img");
+            // `reboot = target`: the boots after the first start from the
+            // target alone, the primary master, as a computer would once
+            // installed.
+            let installed_target = if sc.reboot_target {
+                Some(Machine {
+                    firmware: qemu::find_firmware(&options, &run_dir)?,
+                    esp: esp.clone(),
+                    cpu: cpu.clone(),
+                    memory_mb: qemu::DEFAULT_MEMORY_MB,
+                    data_dir: None,
+                    boot_disk: attached_disk.clone(),
+                    system_disk: None,
+                })
+            } else {
+                None
+            };
             let machine = Machine {
                 firmware: qemu::find_firmware(&options, &run_dir)?,
                 esp,
                 cpu,
                 memory_mb: qemu::DEFAULT_MEMORY_MB,
                 data_dir: None,
-                system_disk,
+                boot_disk: match &boot_image {
+                    Some(image) => Some(image.clone()),
+                    None if sc.installed_disk => attached_disk.clone(),
+                    None => None,
+                },
+                system_disk: if sc.installed_disk && boot_image.is_none() { None } else { attached_disk.clone() },
             };
-            let mut outcome = qemu::boot_and_watch(&machine, &options, sc, timeout.unwrap_or(sc.timeout), &run_dir)?;
-            if let (true, Some(image)) = (outcome.passed, &machine.system_disk) {
-                match qemu::fsck(image) {
+            let mut outcome = qemu::boot_and_watch(
+                &machine,
+                installed_target.as_ref(),
+                &options,
+                sc,
+                timeout.unwrap_or(sc.timeout),
+                &run_dir,
+            )?;
+            if let (true, true, Some(image)) = (outcome.passed, sc.system_disk, &attached_disk) {
+                let check_image = if sc.gpt_disk { Some(partition::extract(image)?) } else { None };
+                match qemu::fsck(check_image.as_deref().unwrap_or(image)) {
                     None => println!(
                         "xtask: WARNING {label}: fsck.vfat not found, {} not checked (dosfstools)",
                         image.display()
@@ -291,6 +415,18 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     Some(Err(report)) => {
                         outcome.passed = false;
                         outcome.reason = format!("fsck.vfat finds errors on {}:\n{report}", image.display());
+                    }
+                }
+            }
+            if let (true, true, Some(image)) = (outcome.passed, sc.target_disk, &attached_disk) {
+                match partition::verify_setup_target(image, &ramdisk_image) {
+                    Ok(()) => println!(
+                        "xtask: {label}: both GPT copies, both FAT32 volumes and the copied tree are valid in {}",
+                        image.display()
+                    ),
+                    Err(report) => {
+                        outcome.passed = false;
+                        outcome.reason = report;
                     }
                 }
             }

@@ -120,6 +120,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateThread, Handler::Status(process::nt_create_thread)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
     (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
+    (services::NtDeviceIoControlFile, Handler::Status(file::nt_device_io_control_file)),
     (services::NtDuplicateObject, Handler::Status(object::nt_duplicate_object)),
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),

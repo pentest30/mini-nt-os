@@ -56,6 +56,20 @@ test-smss = []
 # boot reads them back (M4, exit criterion 3; scenario tests/boot/persistence,
 # two boots on the same disk image).
 test-persistence = []
+# Exercises the installer engine's prepare on the target disk: the token
+# refusals, the GPT write and its reread, the not-blank refusal (ADR-022,
+# installer engine lot 2; scenario tests/boot/installer-prepare). Gated so
+# that the other scenarios keep the target blank for the UI's own prepare.
+test-install = []
+# After the installer engine's self-test has installed the target disk, resets
+# the machine: the next boot starts from that disk alone (scenario
+# tests/boot/installed-boot, `reboot = target`).
+test-install-reboot = ["test-install"]
+# A person drives the system (`cargo xtask image`, VirtualBox), not a boot
+# scenario: the native-program probe (`test-smss`) waits for its program with
+# no deadline, instead of ending it 10 s after its last key. An installation
+# copies for minutes over PIO; the deadline killed the installer mid-copy.
+interactive = []
 # Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
 heartbeat = ["hal/heartbeat"]
 

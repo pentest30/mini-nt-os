@@ -18,6 +18,8 @@ members = [
     "kernel/win32k",
     "drivers/input/i8042",
     "drivers/video/gopfb",
+    "libs/fatfs",
+    "libs/gpt",
     "libs/pe",
     "libs/regf",
     "libs/glyph",

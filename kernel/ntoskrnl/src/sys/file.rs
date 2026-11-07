@@ -5,7 +5,8 @@
 //! disque), le décrire et le
 //! changer (NtQueryInformationFile, NtSetInformationFile), décrire son volume
 //! (NtQueryVolumeInformationFile), énumérer un répertoire
-//! (NtQueryDirectoryFile).
+//! (NtQueryDirectoryFile), et demander l'aperçu en lecture seule du plan
+//! d'installation (NtDeviceIoControlFile).
 //!
 //! Ob trouve le fichier (la procédure *parse* du volume, `io_manager`), puis
 //! `io_manager::check_open` fait ce que ferait le pilote du système de
@@ -35,12 +36,18 @@ use abi::file::{
     FILE_UNICODE_ON_DISK, FILE_VALID_OPTION_FLAGS, FILE_WRITE_ATTRIBUTES,
 };
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED,
-    STATUS_END_OF_FILE, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS,
-    STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_OBJECT_NAME_INVALID,
-    STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DEVICE_BUSY, STATUS_DEVICE_NOT_READY,
+    STATUS_DISK_FULL, STATUS_EAS_NOT_SUPPORTED, STATUS_END_OF_FILE, STATUS_INFO_LENGTH_MISMATCH,
+    STATUS_INVALID_DEVICE_REQUEST, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PARAMETER, STATUS_IO_DEVICE_ERROR,
+    STATUS_NOT_IMPLEMENTED, STATUS_NO_MORE_FILES, STATUS_NO_SUCH_DEVICE, STATUS_OBJECT_NAME_COLLISION,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_REVISION_MISMATCH,
+    STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
+use abi::setup::{
+    SetupPrepare, IOCTL_MINO_SETUP_COPY, IOCTL_MINO_SETUP_FORMAT, IOCTL_MINO_SETUP_PREPARE, IOCTL_MINO_SETUP_QUERY,
+    SETUP_PREPARE_SIZE, SETUP_PREVIEW_SIZE,
+};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
@@ -464,6 +471,156 @@ pub(super) fn nt_flush_buffers_file(arguments: &[u32]) -> NtStatus {
         file.flush()?;
         write_iosb(arguments[1], STATUS_SUCCESS, 0)
     })())
+}
+
+/// NtDeviceIoControlFile(FileHandle, Event, ApcRoutine, ApcContext,
+/// IoStatusBlock, IoControlCode, InputBuffer, InputBufferLength,
+/// OutputBuffer, OutputBufferLength). Les contrôles privés de Mino :
+/// l'aperçu (`IOCTL_MINO_SETUP_QUERY`) rend l'inventaire sûr et le plan
+/// GPT/FAT de l'installateur ; la préparation (`IOCTL_MINO_SETUP_PREPARE`)
+/// écrit les tables GPT du plan sur le disque que son jeton décrit, puis
+/// les relit pour les vérifier — elle ne formate pas et ne copie rien. Le
+/// handle d'un fichier du volume courant sert d'ancrage : l'aperçu exige
+/// `FILE_READ_ATTRIBUTES`, la préparation `FILE_WRITE_ATTRIBUTES`, en plus
+/// du jeton.
+pub(super) fn nt_device_io_control_file(arguments: &[u32]) -> NtStatus {
+    status(device_io_control_file(arguments))
+}
+
+fn device_io_control_file(arguments: &[u32]) -> Result<(), NtStatus> {
+    let [handle, event, apc_routine, _apc_context, iosb, code, input, input_length, output, output_length] =
+        arguments[..10]
+    else {
+        unreachable!("10 arguments")
+    };
+    if event != 0 || apc_routine != 0 {
+        return Err(STATUS_NOT_IMPLEMENTED);
+    }
+    ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+    match code {
+        IOCTL_MINO_SETUP_QUERY => {
+            if input != 0 || input_length != 0 {
+                return Err(STATUS_INVALID_DEVICE_REQUEST);
+            }
+            if (output_length as usize) < SETUP_PREVIEW_SIZE {
+                return Err(abi::ntstatus::STATUS_BUFFER_TOO_SMALL);
+            }
+            ke::usermem::probe_for_write(u64::from(output), SETUP_PREVIEW_SIZE, 4)?;
+            let _file = super::current_process().handle_table.reference_as::<File>(
+                Handle(handle),
+                &FILE_TYPE,
+                AccessMask(FILE_READ_ATTRIBUTES),
+            )?;
+            let bytes = io_manager::install::preview().to_bytes();
+            ke::usermem::copy_to_user(u64::from(output), &bytes)?;
+            write_iosb(iosb, STATUS_SUCCESS, bytes.len() as u32)
+        }
+        IOCTL_MINO_SETUP_PREPARE => {
+            if (input_length as usize) != SETUP_PREPARE_SIZE || output_length != 0 {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            ke::usermem::probe_for_read(u64::from(input), SETUP_PREPARE_SIZE, 4)?;
+            let mut request_bytes = [0u8; SETUP_PREPARE_SIZE];
+            ke::usermem::copy_from_user(&mut request_bytes, u64::from(input))?;
+            // Une autre version du contrat ne se discute pas.
+            let request = SetupPrepare::from_bytes(request_bytes).ok_or(STATUS_REVISION_MISMATCH)?;
+            let _file = super::current_process().handle_table.reference_as::<File>(
+                Handle(handle),
+                &FILE_TYPE,
+                AccessMask(FILE_WRITE_ATTRIBUTES),
+            )?;
+            match io_manager::install::prepare(request.disk_number, request.plan_token) {
+                Ok(layout) => {
+                    let [esp, system] = [layout.partitions().first(), layout.partitions().get(1)];
+                    log::info!(
+                        "[m4] install: prepare: GPT of disk {} written and re-read (ESP {:?}, system {:?})",
+                        request.disk_number,
+                        esp.map(|partition| partition.first_lba..=partition.last_lba),
+                        system.map(|partition| partition.first_lba..=partition.last_lba)
+                    );
+                    write_iosb(iosb, STATUS_SUCCESS, 0)
+                }
+                Err(error) => {
+                    log::warn!("[m4] install: prepare refused: {error:?}");
+                    Err(prepare_status(error))
+                }
+            }
+        }
+        IOCTL_MINO_SETUP_FORMAT => {
+            if (input_length as usize) != SETUP_PREPARE_SIZE || output_length != 0 {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            ke::usermem::probe_for_read(u64::from(input), SETUP_PREPARE_SIZE, 4)?;
+            let mut request_bytes = [0u8; SETUP_PREPARE_SIZE];
+            ke::usermem::copy_from_user(&mut request_bytes, u64::from(input))?;
+            let request = SetupPrepare::from_bytes(request_bytes).ok_or(STATUS_REVISION_MISMATCH)?;
+            let _file = super::current_process().handle_table.reference_as::<File>(
+                Handle(handle),
+                &FILE_TYPE,
+                AccessMask(FILE_WRITE_ATTRIBUTES),
+            )?;
+            match io_manager::install::format(request.disk_number, request.plan_token) {
+                Ok((esp, system)) => {
+                    log::info!(
+                        "[m4] install: format: ESP {} sectors, system {} sectors, FAT32 mounted by the kernel",
+                        esp.total_sectors,
+                        system.total_sectors
+                    );
+                    write_iosb(iosb, STATUS_SUCCESS, 0)
+                }
+                Err(error) => {
+                    log::warn!("[m4] install: format refused: {error:?}");
+                    Err(prepare_status(error))
+                }
+            }
+        }
+        IOCTL_MINO_SETUP_COPY => {
+            if (input_length as usize) != SETUP_PREPARE_SIZE || output_length != 0 {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            ke::usermem::probe_for_read(u64::from(input), SETUP_PREPARE_SIZE, 4)?;
+            let mut request_bytes = [0u8; SETUP_PREPARE_SIZE];
+            ke::usermem::copy_from_user(&mut request_bytes, u64::from(input))?;
+            let request = SetupPrepare::from_bytes(request_bytes).ok_or(STATUS_REVISION_MISMATCH)?;
+            let _file = super::current_process().handle_table.reference_as::<File>(
+                Handle(handle),
+                &FILE_TYPE,
+                AccessMask(FILE_WRITE_ATTRIBUTES),
+            )?;
+            match io_manager::install::copy_files(request.disk_number, request.plan_token) {
+                Ok(report) => {
+                    log::info!(
+                        "[m4] install: copy: {} files, {} directories, {} bytes to disk {}",
+                        report.files,
+                        report.directories,
+                        report.bytes,
+                        request.disk_number
+                    );
+                    write_iosb(iosb, STATUS_SUCCESS, 0)
+                }
+                Err(error) => {
+                    log::warn!("[m4] install: copy refused: {error:?}");
+                    Err(prepare_status(error))
+                }
+            }
+        }
+        _ => Err(STATUS_INVALID_DEVICE_REQUEST),
+    }
+}
+
+/// Le statut NT de chaque refus de la préparation.
+fn prepare_status(error: io_manager::install::PrepareError) -> NtStatus {
+    use io_manager::install::PrepareError as Error;
+    match error {
+        Error::Protected => STATUS_ACCESS_DENIED,
+        Error::NoTarget => STATUS_NO_SUCH_DEVICE,
+        Error::TokenMismatch => STATUS_REVISION_MISMATCH,
+        Error::NotBlank => STATUS_OBJECT_NAME_COLLISION,
+        Error::CapacityMismatch => STATUS_INVALID_PARAMETER,
+        Error::Busy => STATUS_DEVICE_BUSY,
+        Error::NotPrepared => STATUS_DEVICE_NOT_READY,
+        Error::Io => STATUS_IO_DEVICE_ERROR,
+    }
 }
 
 /// Les classes de NtSetInformationFile demandées sans être implémentées.

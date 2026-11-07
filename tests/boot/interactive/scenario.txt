@@ -1,0 +1,18 @@
+# The `interactive` feature: a person drives the system, so the probe that
+# starts smss (test-smss) waits for its program with no deadline. WAIT1.EXE,
+# in place of winlogon.exe, runs 12 s without a key, then says so. Without
+# the feature, the probe ends smss and its processes 10 s after their start
+# (or the last key): on VirtualBox, that killed the installer while it
+# copied the system, between two keys (`cargo xtask image` now builds with
+# `interactive`).
+features = test-smss, interactive
+requires = userland, native
+initial-command = WAIT1.EXE
+cpus     = default
+timeout  = 120
+
+expect = [wait] started; no key for 12 s
+expect = [wait] still running 12 s after its start
+
+forbid = did not end within 10 s
+forbid = *** STOP:

@@ -1,0 +1,24 @@
+# Boot and reboot one real GPT image, with no external virtual ESP.
+# OVMF loads EFI/BOOT/BOOTX64.EFI from partition 1 on primary IDE master;
+# the kernel mounts partition 2 on that same disk as C:. The second boot
+# must recover the file written during the first boot. Both GPT copies and
+# the extracted system FAT volume are checked afterward.
+features = test-persistence
+disk     = installed
+boots    = 2
+cpus     = default, intel
+timeout  = 180
+
+expect = [boot] Io: system disk \Device\HarddiskVolume1 (ATA, primary master, FAT32
+expect = [boot] Io: \GLOBAL??\C: -> \Device\HarddiskVolume1
+expect = [m4] persistence: first boot: C:\PERSIST\DATA.TXT written
+expect = [m4] persistence: second boot: C:\PERSIST\DATA.TXT read back
+expect = kernel: phase 1 done
+
+# A fatal error ends the run at once.
+forbid = *** STOP:
+forbid = [m4] persistence: failed
+forbid = [boot] Io: the ATA system disk holds no FAT32 volume
+
+expect = [INFO] Io: GPT system partition 2: LBA
+expect = (Both)

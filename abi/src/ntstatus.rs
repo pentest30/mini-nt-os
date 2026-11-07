@@ -65,6 +65,7 @@ pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
 pub const STATUS_BUFFER_OVERFLOW: NtStatus = NtStatus(0x8000_0005);
 /// NtQueryDirectoryFile: no entry left to return.
 pub const STATUS_NO_MORE_FILES: NtStatus = NtStatus(0x8000_0006);
+pub const STATUS_DEVICE_BUSY: NtStatus = NtStatus(0x8000_0011);
 pub const STATUS_PARTIAL_COPY: NtStatus = NtStatus(0x8000_000D);
 pub const STATUS_NO_MORE_ENTRIES: NtStatus = NtStatus(0x8000_001A);
 pub const STATUS_UNSUCCESSFUL: NtStatus = NtStatus(0xC000_0001);
@@ -113,6 +114,9 @@ pub const STATUS_FILE_CORRUPT_ERROR: NtStatus = NtStatus(0xC000_0102);
 pub const STATUS_NOT_A_DIRECTORY: NtStatus = NtStatus(0xC000_0103);
 pub const STATUS_UNRECOGNIZED_VOLUME: NtStatus = NtStatus(0xC000_014F);
 pub const STATUS_IO_DEVICE_ERROR: NtStatus = NtStatus(0xC000_0185);
+pub const STATUS_REVISION_MISMATCH: NtStatus = NtStatus(0xC000_0059);
+pub const STATUS_NO_SUCH_DEVICE: NtStatus = NtStatus(0xC000_00E0);
+pub const STATUS_DEVICE_NOT_READY: NtStatus = NtStatus(0xC000_00C0);
 pub const STATUS_INVALID_PAGE_PROTECTION: NtStatus = NtStatus(0xC000_0045);
 pub const STATUS_MUTANT_NOT_OWNED: NtStatus = NtStatus(0xC000_0046);
 pub const STATUS_SEMAPHORE_LIMIT_EXCEEDED: NtStatus = NtStatus(0xC000_0047);

@@ -33,16 +33,20 @@
 //! 13 UTF-16 units at [1..11], [14..26] and [28..32], [13] the checksum of
 //! the 8.3 name.
 
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use alloc::{format, vec};
+
 /// An 8.3 name, padded with spaces: 8 bytes of base name, 3 of extension.
 pub type ShortName = [u8; 11];
 
-const SECTOR: usize = 512;
+pub(crate) const SECTOR: usize = 512;
 const ENTRY: usize = 32;
 const ATTR_DIRECTORY: u8 = 0x10;
 const ATTR_ARCHIVE: u8 = 0x20;
-const END_OF_CHAIN: u32 = 0x0FFF_FFFF;
-const RESERVED_SECTORS: usize = 32;
-const FAT_COUNT: usize = 2;
+pub(crate) const END_OF_CHAIN: u32 = 0x0FFF_FFFF;
+pub(crate) const RESERVED_SECTORS: usize = 32;
+pub(crate) const FAT_COUNT: usize = 2;
 /// The fewest clusters of a FAT32 volume (below, it would be FAT16).
 pub const MIN_CLUSTERS: usize = 65_525;
 /// Free clusters left after the files, at least: 4 MiB.
@@ -378,7 +382,7 @@ pub fn build(files: &[(Vec<String>, Vec<u8>)]) -> Result<Vec<u8>, String> {
 
 /// The boot sector: a jump, the BPB of FAT32 and its extension, no label
 /// ("NO NAME"), the signature.
-fn boot_sector(total_sectors: u32, fat_sectors: u32) -> [u8; SECTOR] {
+pub(crate) fn boot_sector(total_sectors: u32, fat_sectors: u32) -> [u8; SECTOR] {
     let mut b = [0u8; SECTOR];
     b[0..3].copy_from_slice(&[0xEB, 0x58, 0x90]); // jmp short, nop
     b[3..11].copy_from_slice(b"MINO    ");
@@ -407,7 +411,7 @@ fn boot_sector(total_sectors: u32, fat_sectors: u32) -> [u8; SECTOR] {
 
 /// The FSInfo sector: its signatures, the free count and the next free
 /// cluster unknown (0xFFFFFFFF), as the kernel does not keep them.
-fn fs_info_sector() -> [u8; SECTOR] {
+pub(crate) fn fs_info_sector() -> [u8; SECTOR] {
     let mut s = [0u8; SECTOR];
     s[0..4].copy_from_slice(&0x4161_5252u32.to_le_bytes());
     s[484..488].copy_from_slice(&0x6141_7272u32.to_le_bytes());

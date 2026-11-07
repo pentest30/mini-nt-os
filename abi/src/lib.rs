@@ -43,6 +43,7 @@ pub mod registry;
 pub mod security;
 pub mod service;
 pub mod services;
+pub mod setup;
 pub mod shared_data;
 pub mod system_information;
 pub mod teb32;

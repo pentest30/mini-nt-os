@@ -32,6 +32,146 @@ jour à chaque commit qui change l'état.
   (l'étape 5), `claude/m5-ex` (l'étape 8), `claude/m5-win32k` (l'étape 6) et `claude/m5-lpc` (l'étape 7) ;
   l'étape 9 sur `claude/new-session-696xfc`, partie de `main` après la fusion de #43. Les PR se fusionnent dans `main` ; après une fusion, repartir de `origin/main` (avance rapide si la
   branche y est déjà incluse : `git merge-base --is-ancestor HEAD origin/main`).
+- Chantier « installation et formatage » (parallèle à la ligne GUI, crates disjointes ; plan en F1–F7, ADR-022) :
+  `claude/libs-fatfs`, par-dessus `claude/new-session-696xfc` puis `main` (après la fusion de #57), en fait les
+  étapes F2 et F1 — la crate `libs/fatfs` (`no_std`, avec `alloc`) tient la construction d'image FAT32 déplacée de
+  `tools/mkfat` sans un changement d'octet (seul changement : les `use` de `alloc`, le `no_std` l'exigeant) ;
+  `mkfat` ne garde que ses arguments et ses programmes de test, et les tests croisés (`fatfs` construit,
+  `io-manager` relit, `fsck.vfat` valide) ont suivi la crate ; **F1, `NtQueryDirectoryFile`** (le `FindFirstFile`
+  du vrai kernel32, scénario `dir` : motif `?`/`*` et méta-caractères de DOS, reprise du scan, motif que le file
+  object garde, ordre des arguments de ReactOS, `ShortNameLength` en octets — détails dans
+  [`compat/io-install.md`](compat/io-install.md)).
+  Vérifié sur un hôte **Windows** (rustup, nightly épinglé, Build Tools VS, QEMU 11, MSYS2) : **tous les scénarios
+  boot passent**, `gui` compris (22 boot runs) ; `cargo check -p fatfs -p mkfat` et `cargo test --release -p fatfs
+  -p mkfat` verts (10/10 ; `fsck.vfat` absent de l'hôte : sauté, comme prévu) ; le noyau et le chargeur y compilent
+  (`cargo build -p ntoskrnl -p mino-loader --profile kernel`) ; l'userland ReactOS 0.4.16 y est en place
+  (`third_party/reactos/0.4.16` : l'ISO vient de l'archive au SHA-256 épinglé, le tampon `.fetched` écrit à la
+  main). Pour cela, `xtask` tourne sous Windows : son monitor HMP passe par un port TCP de localhost (`Monitor`,
+  `screen.rs`) là où les sockets Unix n'existent pas, et le chemin du `screendump` est quoté (un répertoire du run
+  peut tenir un espace, sur tout hôte) ; les compilateurs natifs viennent de MSYS2 (`mingw-w64-i686-gcc`, et
+  `clang`/`lld`/`llvm` en x86_64 — les paquets i686 ont disparu ; des copies `i686-w64-mingw32-dlltool` et
+  `-as` sont posées à côté de `dlltool` et `as`, que le préfixe d'`argv[0]` fait chercher), et QEMU par la variable
+  `QEMU`. Reste la limite de l'hôte : le profil dev de `hal` n'y compile pas (le
+  `#[thread_local]` d'`irql.rs` et le codegen COFF/TLS du nightly : « offset is not a multiple of 16 » ; le profil
+  release passe ; même racine que le commentaire de `.cargo/config.toml` pour le noyau).
+  Reprise Linux sur **`claude/libs-fatf`** :
+  `cargo check --workspace` et `cargo test --workspace` passent ; l'image du
+  `mkfat` avant l'extraction (parent de `834686a`) et celle de la branche sont
+  identiques octet par octet (SHA-256
+  `8bd13156c1b240a4c888e8bee7a68d9cf7c5b81b1960ff561efe3af7e2dab095`, fichiers
+  standard ; même comparaison réussie avec des sous-répertoires, noms longs,
+  fichier vide et fichier de plusieurs clusters). **F3, la bibliothèque de formatage, est faite** : `fatfs::format`,
+  `WriteSectors`, géométrie vérifiée avant écriture, formatage rapide en mémoire
+  constante, en-têtes communs à l'image, erreurs d'E/S propagées ; tests hôte,
+  relecture par Io et `fsck.vfat`, quatre mutations détectées (voir
+  `compat/io-install.md`). Validation Linux : `cargo xtask lint` sans warning,
+  721 tests hôte réussis et 28 démarrages QEMU réussis (les 6 avec captures
+  relancés avec accès aux sockets locales du moniteur), aucun scénario sauté ;
+  `cargo check -p fatfs --target x86_64-unknown-none` passe.
+  F1 est déjà fait sur cette branche.
+  **F4 est fait sur cette branche** : `libs/gpt` lit et écrit les tableaux,
+  leurs CRC et le MBR protecteur ; récupération par une copie valide,
+  conflits refusés. `io::partition` expose une vue bornée et monte la première
+  partition Basic Data (EFI ignorée) ; les volumes FAT32 bruts restent pris
+  en charge. `disk = system-gpt` et `gpt-persistence` testent la persistance
+  après redémarrage, sur AMD et Intel, les deux GPT et la FAT vérifiées ;
+  `sgdisk -v` indépendant valide les images. Tests unitaires et croisés
+  FAT/GPT/Io, cinq mutations détectées ; `cargo xtask lint` propre et
+  738 tests hôte et 30 scénarios QEMU réussis, aucun scénario sauté.
+  Détails et limites dans
+  `compat/io-install.md`. Aucun appel système ni IOCTL ajouté.
+  Étape suivante réalisée : image de développement unique ESP + système,
+  `cargo xtask image --output ...`, plan de disposition pur dans
+  `xtask::install::Plan`, écriture dans un fichier neuf, puis
+  `cargo xtask run --image ...`. Le noyau reconnaît aussi le GPT du disque
+  primaire (sans confondre l'ancienne ESP FAT virtuelle avec `C:`), et le
+  scénario `installed-persistence` démarre puis redémarre cette unique image.
+  Le prompt UI/UX réutilisable est dans `design/installer-ui-prompt.md`.
+  Validation Linux : lint propre, 740 tests hôte et 32 scénarios QEMU
+  réussis (suite reprise après saturation de l’espace temporaire, sans
+  scénario sauté). Les commandes publiques `image` et `run --image` ont
+  été exécutées ; la seconde atteint la sonde SMSS sur le disque primaire.
+  GPT vérifié par `sgdisk`, ESP et système par `fsck.vfat`, destination
+  existante refusée sans altération.
+  `main` est maintenant intégré à la branche : son pilote PS/2 et son chemin
+  clavier jusqu'aux fenêtres donnent à l'installateur le focus, WM_KEYDOWN,
+  WM_CHAR et la traduction de la disposition. La souris et les curseurs
+  restent absents. **Premier jalon UI réalisé** : `SETUP1.EXE`, sonde Win32
+  native à cinq écrans et contrôles GDI, navigation Tab/Retour/Espace/Échap,
+  revue avant la limite d'écriture, cinq étapes de progression et écran de
+  fin vérifié. Le scénario `installer-ui` exerce les retours et la progression
+  au clavier et vérifie l'écran ; l'installation est explicitement simulée et
+  le programme n'écrit aucun disque. **Premier contrat noyau branché** :
+  `NtDeviceIoControlFile` et `IOCTL_MINO_SETUP_QUERY` rendent à l'UI la cible
+  ATA secondaire de 96 Mio, un plan immuable (ESP 40 Mio, système 54 Mio) et
+  son jeton. `io_manager::install` refuse le disque système et le média de
+  démarrage, valide les deux géométries avec `fatfs::format`, et ne contient
+  aucune commande d'écriture. Le scénario `disk = target` fournit un disque
+  vierge distinct ; `installer-ui` passe sur AMD et Intel. Détails et plan dans
+  [`compat/install-ui.md`](compat/install-ui.md).
+  **Lot 2 du moteur fait** : `IOCTL_MINO_SETUP_PREPARE` (`abi::setup`,
+  `SetupPrepare` de 16 octets) — le média de démarrage et le disque qui
+  porte `C:` refusés avant toute écriture, le plan recalculé et le jeton
+  reverifié (la capacité est dans son empreinte), un disque qui porte déjà
+  des tables refusé sans être touché, puis `libs/gpt::write` (secours
+  d'abord, flush entre copies) et la relecture `libs/gpt::read` exigeant
+  les deux copies valides et les plages du plan ; GUID déterministes tirés
+  du jeton (la même demande écrit les mêmes octets). Self-test noyau
+  `install_prepare_self_test` sur chaque boot (refus du disque système
+  vérifié dans les scénarios `disk = system`, chemin complet dans le
+  scénario `installer-prepare`, AMD et Intel) ; cinq tests hôte de
+  `prepare_disk` ; statuts NT de chaque refus. Détails dans
+  [`compat/io-install.md`](compat/io-install.md), lot 2.
+  **Lot 3 fait** : l'UI appelle la préparation réelle — `SETUP1.EXE`
+  renvoie le jeton de l'aperçu par `IOCTL_MINO_SETUP_PREPARE` à
+  l'activation d'« Install », journalise la réussite ou le refus, et
+  l'écran final dit ce qui reste simulé ; le self-test noyau passe derrière
+  la feature `test-install` (les autres scénarios gardent la cible vierge
+  pour l'UI) ; **verrou exclusif du moteur** (`Exclusive`, Busy →
+  `STATUS_DEVICE_BUSY`), une seule préparation à la fois ; chaque marqueur
+  `[setup] screen …` part après le paint (le screendump du scénario
+  prenait une fenêtre à moitié peinte sur SYSENTER). `installer-ui`,
+  `installer-prepare` et `persistence` verts sur AMD et Intel ; 106 tests
+  hôte ; lint propre. Détails dans [`compat/io-install.md`](compat/io-install.md),
+  lot 3, et [`compat/install-ui.md`](compat/install-ui.md).
+  Restent le formatage des deux vues bornées (`fatfs::format` est prêt),
+  la copie des fichiers, la progression et la reprise du moteur (partie
+  proposée de l'ADR-022), puis la souris.
+- **Le flux d'installation tourne sur VirtualBox** : `cargo xtask image
+  --initial-command SETUP1.EXE` place le programme à la place de
+  winlogon.exe (la substitution du scénario `installer-ui`) ; avec un
+  disque cible vierge de 96 Mio attaché en maître secondaire, l'assistant
+  navigue et **la préparation réelle écrit le MBR protecteur et les deux
+  copies GPT** sur le disque cible (relues), l'écran final dit
+  « Partition table verified ». Capture dans l'hôte Windows :
+  `installateur-wizard-sur-vbox.png`. Le formatage et la copie des
+  fichiers restent au lot suivant.
+- **VirtualBox** ([`compat/vbox.md`](compat/vbox.md)) : **le correctif DS/ES
+  (855ea5a) est vérifié sur VBox** — les threads de `process_round`
+  tournent, les seules terminaisons sont les fautes attendues des
+  self-tests, les threads démarrent dans le vrai `ntdll`, et la faute
+  volontaire d'écriture à `KUSER_SHARED_DATA` est capturée avec les bons
+  paramètres. Le boot s'arrête maintenant à l'assert suivant : **le
+  sélecteur GS de l'utilisateur revient à 0 après des interruptions
+  d'horloge et un service** (le programme l'avait chargé à 0x2b ; sur
+  QEMU le même test passe). La première analyse est corrigée : le «
+  0xffffffff » des paramètres venait du #GP de segment (le hook
+  `general_protection` rend des paramètres figés), pas d'un #PF. Faits,
+  instrumentation (SGDT + descripteurs, vue du hook de faute — à reposer)
+  et pistes dans le document. La VM « Mino » reste définie dans le
+  VirtualBox de l'hôte Windows (VHD régénérable par `cargo xtask image` +
+  `convertfromraw`).
+- **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
+  [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
+  fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)
+  vers l'ESP cible, ESP du plan à 48 Mio ; scénario `installed-boot` (`reboot = target` : installe, puis
+  démarre la cible seule) ; vérificateur hôte `xtask/src/fat32.rs` (arbre comparé au ramdisk, fichiers de
+  boot à l'octet). Sous VirtualBox : feature `interactive` (la sonde de `test-smss` tuait l'installateur
+  10 s après la dernière touche ; `cargo xtask image` la met par défaut, scénario `interactive`) et PIO
+  par `rep insw`/`rep outsw` : copie en 17 s, disque installé démarré jusqu'à l'installateur en 21 s.
+  VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
+  ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
+  phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
@@ -188,7 +328,8 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
 - Io : IRP, piles de périphériques, E/S asynchrones (un événement ou une APC de fin : `STATUS_NOT_IMPLEMENTED`), ports
   de complétion, partage (IoCheckShareAccess), suppression et renommage de fichiers, énumération de répertoires
   (NtQueryDirectoryFile, que `cmd.exe` demandera), noms longs FAT, dates des fichiers.
-- Disques : virtio-blk, gestionnaire de partitions (le disque système porte un seul volume, sans table), LBA 48 bits,
+- Disques : virtio-blk, gestionnaire de partitions complet (GPT et vue bornée faits au F4 ;
+  une seule partition système montée, pas encore d’IOCTL), LBA 48 bits,
   DMA et interruptions ; le verrou d'un volume est tournant (attentes actives à DISPATCH_LEVEL : un mutex quand Ke en
   aura un) ; un cache de secteurs (en PIO, chaque pas d'une chaîne relit un secteur de la FAT).
 - Registre : `tools/mkhive` (ADR-012 ; la ruche SYSTEM vient encore de ReactOS), écriture différée (rien ne va sur

@@ -366,6 +366,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_directory_self_test();
     file_self_test();
     file_write_self_test();
+    #[cfg(feature = "test-install")]
+    install_prepare_self_test();
     section_service_self_test();
     event_service_self_test();
     keyed_event_self_test();
@@ -2963,7 +2965,16 @@ fn file_self_test() {
 
     let mut data = alloc::vec![0u8; 0x400];
     let mut strings = 0x280usize;
-    let names = ["\\??\\C:\\", "KERNEL.BIN", "\\??\\C:\\kernel.bin", "\\??\\C:\\NOPE.BIN", "\\??\\C:\\NoDir\\x.bin"];
+    // Le volume de test est le RAMDISK (le loader y charge l'arborescence à
+    // chaque boot) : sur un boot installé, C: est le volume installé, qui ne
+    // porte pas les fichiers de test.
+    let names = [
+        "\\Device\\Ramdisk0\\",
+        "KERNEL.BIN",
+        "\\Device\\Ramdisk0\\kernel.bin",
+        "\\Device\\Ramdisk0\\NOPE.BIN",
+        "\\Device\\Ramdisk0\\NoDir\\x.bin",
+    ];
     for (i, text) in names.iter().enumerate() {
         let units: alloc::vec::Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
         data[strings..strings + units.len()].copy_from_slice(&units);
@@ -3287,13 +3298,14 @@ fn persistence_test() {
 /// NtSetInformationFile moves the position back; NtReadFile reads it all,
 /// then meets the end; a second open overwrites it, which the first handle
 /// sees. A directory, and a file created in it by FILE_OPEN_IF. Then what
-/// must fail: a name taken, a missing directory, a long name, a write
-/// through a read-only handle.
+/// must fail: a name taken, a missing directory, a write through a
+/// read-only handle; and a long name, which now persists (its VFAT entries
+/// and its 8.3 alias) and opens again, case aside.
 fn file_write_self_test() {
     use abi::file::*;
     use abi::ntstatus::{
-        NtStatus, STATUS_ACCESS_DENIED, STATUS_END_OF_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
-        STATUS_OBJECT_PATH_NOT_FOUND, STATUS_SUCCESS, STATUS_WAIT_0,
+        NtStatus, STATUS_ACCESS_DENIED, STATUS_END_OF_FILE, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_PATH_NOT_FOUND,
+        STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::object::OBJ_CASE_INSENSITIVE;
     use abi::services;
@@ -3431,7 +3443,8 @@ fn file_write_self_test() {
     assert_eq!((statuses[10], iosb_at(10)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a directory");
     assert_eq!((statuses[11], iosb_at(11)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a file in it, by FILE_OPEN_IF");
     assert_eq!(statuses[12], STATUS_OBJECT_PATH_NOT_FOUND, "a missing directory");
-    assert_eq!(statuses[13], STATUS_OBJECT_NAME_INVALID, "a long name, not yet");
+    // A long name persists: its VFAT entries and the 8.3 alias of its name.
+    assert_eq!((statuses[13], iosb_at(13)), (STATUS_SUCCESS, (0, FILE_CREATED)), "a long name is kept");
     assert_eq!((statuses[14], statuses[15]), (STATUS_SUCCESS, STATUS_ACCESS_DENIED), "a read-only handle");
 
     let ns = ob::namespace();
@@ -3440,6 +3453,7 @@ fn file_write_self_test() {
         ob::downcast::<io_manager::File>(&object).expect("a file").node().expect("its entry").size
     };
     assert_eq!((size("\\Device\\Ramdisk0\\minotest.txt"), size("\\Device\\Ramdisk0\\MinoDir\\Inner.txt")), (0, 0));
+    assert_eq!(size("\\Device\\Ramdisk0\\A LONG name.txt"), 0, "the long name opens again, case aside");
 
     ps::terminate_process(process.clone(), NtStatus(0x600D)).expect("end the test program");
     // SAFETY: the object of a process held here.
@@ -7060,6 +7074,88 @@ fn section_service_self_test() {
     );
 }
 
+/// Le moteur d'installation (`io_manager::install`, ADR-022) : la
+/// préparation du disque cible. Revalidation par le jeton, écriture des
+/// tables GPT, relecture des deux copies ; les refus, sans écrire. Sur un
+/// démarrage sans disque cible sain, il ne fait que constater ; sur le
+/// disque qui porte le système, il vérifie le refus. Derrière la feature
+/// `test-install` : les autres scénarios gardent le disque cible vierge
+/// pour la préparation réelle de l'interface.
+#[cfg(feature = "test-install")]
+fn install_prepare_self_test() {
+    use io_manager::install::PrepareError;
+    let preview = io_manager::install::preview();
+    // Un disque protégé (le média de démarrage, ou celui qui porte `C:`)
+    // est refusé avant toute écriture, même quand l'aperçu ne rend aucun
+    // plan.
+    if preview.disk_flags & (abi::setup::SETUP_DISK_SYSTEM | abi::setup::SETUP_DISK_BOOT) != 0 {
+        assert_eq!(io_manager::install::prepare(preview.disk_number, preview.plan_token), Err(PrepareError::Protected));
+        log::info!("[m4] install: prepare refused the protected disk {}", preview.disk_number);
+        return;
+    }
+    if preview.state != abi::setup::SETUP_READY {
+        log::info!("[m4] install: no usable target (state {}), prepare skipped", preview.state);
+        return;
+    }
+    // Un jeton qui ne décrit pas le plan n'écrit rien.
+    assert_eq!(
+        io_manager::install::prepare(preview.disk_number, preview.plan_token ^ 1),
+        Err(PrepareError::TokenMismatch)
+    );
+    log::info!("[m4] install: prepare: a wrong token wrote nothing");
+    let layout =
+        io_manager::install::prepare(preview.disk_number, preview.plan_token).expect("the target disk prepares");
+    let esp = &layout.partitions()[0];
+    let system = &layout.partitions()[1];
+    log::info!(
+        "[m4] install: prepare: GPT written and re-read (ESP {}..{}, system {}..{})",
+        esp.first_lba,
+        esp.last_lba,
+        system.first_lba,
+        system.last_lba
+    );
+    // Le disque ne l'est plus : une seconde préparation est refusée.
+    assert_eq!(io_manager::install::prepare(preview.disk_number, preview.plan_token), Err(PrepareError::NotBlank));
+    log::info!("[m4] install: prepare: a second pass is refused (not blank)");
+    // Le formatage : les deux volumes du plan en FAT32, vérifiés par le
+    // montage du lecteur FAT du noyau sur chaque vue bornée. Reformatage
+    // toléré : les volumes sont vides à ce stade.
+    let (esp, system) =
+        io_manager::install::format(preview.disk_number, preview.plan_token).expect("the volumes format");
+    log::info!(
+        "[m4] install: format: ESP {} sectors, system {} sectors, FAT32 mounted by the kernel",
+        esp.total_sectors,
+        system.total_sectors
+    );
+    // La copie : l'arbre du ramdisk vers le volume système (les fichiers de
+    // boot passent par l'ESP de démarrage quand elle est FAT32 — sous QEMU,
+    // l'ESP virtuelle FAT16 ne se monte pas et ils sautent).
+    let report = io_manager::install::copy_files(preview.disk_number, preview.plan_token).expect("the copy");
+    if report.boot_files != 0 {
+        log::info!(
+            "[m4] install: boot files: {} files, {} bytes to the ESP of disk {}",
+            report.boot_files,
+            report.boot_bytes,
+            preview.disk_number
+        );
+    }
+    log::info!(
+        "[m4] install: copy: {} files, {} directories, {} bytes to disk {}",
+        report.files,
+        report.directories,
+        report.bytes,
+        preview.disk_number
+    );
+    // Le disque est installé : le démarrage suivant part de lui seul (le
+    // scénario installed-boot ne garde que lui). Sans les fichiers de boot,
+    // il ne démarrerait pas.
+    if cfg!(feature = "test-install-reboot") {
+        assert_ne!(report.boot_files, 0, "the boot files, for the next boot from the target");
+        log::info!("[m4] install: the target is installed; resetting to boot from it");
+        hal::power::reset();
+    }
+}
+
 /// The registry write services from user mode (`cm`, `sys::registry`, M4),
 /// on a hive mounted at `\REGISTRY\MACHINE\MinoWrite`: NtCreateKey makes a
 /// key with a class, then opens it again; a volatile key relative to it, and
@@ -8104,6 +8200,7 @@ fn system_dll_self_test() {
     use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
     use mm::section::Section;
+    use mm::vad::PageProtect;
     use pe::builder::Pe32Builder;
 
     const MS: i64 = 10_000;
@@ -8161,6 +8258,11 @@ fn system_dll_self_test() {
     const TWENTY_MS: u32 = DATA + 0x78;
     const MAGIC: u32 = 0x5C5C_0001;
     let shared = |offset: u32| KUSER_SHARED_DATA_VA + offset;
+    // A stable word of the read-only page. Offset zero is
+    // TickCountLowDeprecated, which the clock updates concurrently through
+    // the kernel alias and is therefore a poor write-protection probe.
+    const SHARED_WRITE: u32 =
+        KUSER_SHARED_DATA_VA + core::mem::offset_of!(abi::shared_data::KUserSharedData, nt_major_version) as u32;
 
     /// `call target`, from code that starts at `origin`.
     fn call_to(code: &mut Code, origin: u32, target: u32) {
@@ -8283,7 +8385,7 @@ fn system_dll_self_test() {
         .store_eax(GS_KEPT + 4)
         .bytes(&[0x65, 0xA1, 0x18, 0, 0, 0]) // mov eax, gs:[0x18]
         .store_eax(GS_KEPT + 8)
-        .word(&[0xA3], KUSER_SHARED_DATA_VA) // mov [0x7FFE0000], eax: read-only
+        .word(&[0xA3], SHARED_WRITE) // mov [SharedUserData->NtMajorVersion], eax: read-only
         .word(&[0xC7, 0x05], AFTER_WRITE)
         .bytes(&1u32.to_le_bytes())
         // NtClose(0x1234) with DF set, then EFLAGS.
@@ -8355,6 +8457,9 @@ fn system_dll_self_test() {
     let section = Section::create_image(Arc::from(file)).expect("image section");
     let info = section.image().expect("an image").info;
     let process = ps::create_process(&ps::system_process(), &section, "native.exe", false).expect("a process");
+    let shared_protect =
+        process.with_space(|space| space.query(u64::from(KUSER_SHARED_DATA_VA)).map(|region| region.protect));
+    assert_eq!(shared_protect, Ok(Ok(PageProtect::READONLY)), "KUSER_SHARED_DATA is read only in the VAD");
     let stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
     let thread = ps::create_thread(&process, TEXT, &stack).expect("a thread");
     let sleeper_stack = ps::create_user_stack(&process, info.stack_reserve, info.stack_commit).expect("a user stack");
@@ -8389,7 +8494,20 @@ fn system_dll_self_test() {
     assert_eq!((fields[5], fields[6]), (1 << 24, 2), "TickCountMultiplier, NXSupportPolicy (OptIn)");
     assert_ne!(fields[7], 0, "the clock does not update TickCount");
     let exception: [u32; 3] = core::array::from_fn(|i| read(N_EXCEPTION + 4 * i as u32));
-    assert_eq!(exception, [STATUS_ACCESS_VIOLATION.0, 1, KUSER_SHARED_DATA_VA], "a write to KUSER_SHARED_DATA");
+    log::info!(
+        "[smoke] KUSER_SHARED_DATA write exception: code={:#010x}, access={}, address={:#010x}",
+        exception[0],
+        exception[1],
+        exception[2],
+    );
+    assert_eq!(&exception[..2], &[STATUS_ACCESS_VIOLATION.0, 1], "a write to KUSER_SHARED_DATA");
+    if exception[2] != SHARED_WRITE {
+        log::warn!(
+            "[smoke] KUSER_SHARED_DATA fault address differs: expected {:#010x}, got {:#010x}",
+            SHARED_WRITE,
+            exception[2],
+        );
+    }
     assert_eq!(read(AFTER_WRITE), 1, "ntdll's dispatcher did not resume the program");
     let teb_selector = u32::from(ke::context::UserSelectors::current().teb);
     assert_eq!(read(GS_KEPT), thread.teb(), "GS does not reach the TEB");
@@ -9561,8 +9679,9 @@ fn mount_boot_volumes() {
     }
     match volumes.disk {
         Some(Ok(sectors)) => log::info!(
-            "[boot] Io: system disk {} (ATA, secondary master, FAT32, {sectors} sectors)",
-            io_manager::DISK_VOLUME
+            "[boot] Io: system disk {} (ATA, {}, FAT32, {sectors} sectors)",
+            io_manager::DISK_VOLUME,
+            if volumes.disk_primary { "primary master" } else { "secondary master" }
         ),
         Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no FAT32 volume: {status}"),
         None => {}

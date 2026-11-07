@@ -68,6 +68,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fatfs"
+version = "0.1.0"
+dependencies = [
+ "gpt",
+ "io-manager",
+]
+
+[[package]]
 name = "glyph"
 version = "0.1.0"
 dependencies = [
@@ -82,6 +90,10 @@ dependencies = [
  "hal",
  "win32k",
 ]
+
+[[package]]
+name = "gpt"
+version = "0.1.0"
 
 [[package]]
 name = "hal"
@@ -107,6 +119,8 @@ name = "io-manager"
 version = "0.1.0"
 dependencies = [
  "abi",
+ "fatfs",
+ "gpt",
  "hal",
  "ke",
  "log",
@@ -161,7 +175,7 @@ dependencies = [
 name = "mkfat"
 version = "0.1.0"
 dependencies = [
- "io-manager",
+ "fatfs",
 ]
 
 [[package]]
@@ -502,5 +516,7 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "fatfs",
+ "gpt",
  "pe",
 ]
