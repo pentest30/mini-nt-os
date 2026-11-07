@@ -165,9 +165,11 @@ pub unsafe extern "C" fn kernel_main(boot_info_ptr: *const BootInfo) -> ! {
     // ── 1.5. Framebuffer console ─────────────────────────────────────────────
     // Init before the first log::info! so kernel messages appear on screen.
     // The GOP framebuffer (always below 4 GiB on QEMU/VBox) is reachable at
-    // hhdm_offset + framebuffer.base.
+    // hhdm_offset + framebuffer.base. The boot splash takes the screen at
+    // once: the journal keeps going to COM1 alone until win32k, the launcher
+    // or a fatal screen takes over.
     hal::fb::init(&boot_info.framebuffer, boot_info.hhdm_offset);
-    hal::fb::write_str("[fb] boot banner enabled\n");
+    hal::splash::show();
 
     log::info!("micro-nt-os kernel_main — Phase 1");
     log::info!(

@@ -263,6 +263,7 @@ pub fn tick() {
             unsafe { write_times(sud, interrupt_time_100ns) };
         }
     }
+    crate::splash::tick();
 }
 
 /// Writes the times of the KUSER_SHARED_DATA page at `sud`: InterruptTime

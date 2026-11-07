@@ -26,6 +26,9 @@ static EXCLUSIVE: AtomicBool = AtomicBool::new(false);
 ///
 /// # IRQL: PASSIVE_LEVEL
 pub fn set_exclusive(on: bool) {
+    if on {
+        crate::splash::hide();
+    }
     EXCLUSIVE.store(on, Ordering::Relaxed);
 }
 
@@ -527,11 +530,16 @@ pub fn write_str(s: &str) {
 /// Write a string to the framebuffer console for a fatal error screen.
 ///
 /// Ignores exclusive mode, and skips the output instead of waiting when the
-/// console lock is held (the faulting code may own it).
+/// console lock is held (the faulting code may own it). Clears the boot
+/// splash first, so the fatal text does not mix with it.
 ///
 /// # IRQL
 /// Any level.
 pub fn write_str_fatal(s: &str) {
+    if crate::splash::hide() {
+        let (width, height) = dimensions();
+        draw_rect(0, 0, width, height, BG);
+    }
     CONSOLE.try_with(|console| {
         if let Some(c) = console {
             c.write_str_inner(s);
@@ -594,9 +602,10 @@ pub fn draw_text_at(x: u32, y: u32, text: &str, fg: u32, bg: u32, scale: u32) {
 ///
 /// Called by `SerialLogger::log` so every `log::*` macro appears on screen.
 /// The format mirrors serial: `[LEVEL] message\n`.
-/// No-op when exclusive (launcher) mode is active.
+/// No-op when exclusive (launcher) mode is active, or while the boot splash
+/// owns the screen (the journal keeps going to COM1 alone).
 pub fn write_log_record(level: &str, args: &core::fmt::Arguments<'_>) {
-    if EXCLUSIVE.load(Ordering::Relaxed) {
+    if EXCLUSIVE.load(Ordering::Relaxed) || crate::splash::active() {
         return;
     }
     struct FbWriter<'a>(&'a mut Console);

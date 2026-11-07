@@ -94,6 +94,9 @@ pub fn draw(mut draw: impl FnMut(&mut Bitmap<'_>)) -> bool {
     let Some(driver) = DRIVER.get() else { return false };
     let _one = DRAWING.lock();
     if !ACQUIRED.swap(true, Ordering::AcqRel) {
+        // Le premier dessin de win32k prend l'écran : le rideau de démarrage
+        // se lève ici, avant que la surface ne soit touchée.
+        hal::splash::hide();
         driver.acquire();
     }
     driver.with_surface(&mut draw);
