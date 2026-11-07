@@ -108,7 +108,7 @@ fn volume_disk(volume: &FatVolume<RwDisk>) -> &RwDisk {
 /// The big volume `fsck.vfat` wants.
 const FSCK_CLUSTERS: u32 = 65_600;
 
-fn read_all(volume: &FatVolume<RwDisk>, first_cluster: u32, size: u32) -> Vec<u8> {
+fn read_all<D: BlockDevice>(volume: &FatVolume<D>, first_cluster: u32, size: u32) -> Vec<u8> {
     let mut file = FatFile { first_cluster, file_size: size, position: 0 };
     let mut bytes = vec![0u8; size as usize];
     assert_eq!(volume.read(&mut file, &mut bytes), Ok(size as usize));
@@ -200,6 +200,76 @@ fn a_full_volume_refuses_and_keeps_what_was_there() {
     assert_eq!(volume.write_file(&mut first, &mut size, u64::from(u32::MAX), b"x", 3), Err(FatError::Full), "4 GiB");
     let free: Vec<u32> = (2..10).filter(|&c| volume.fat_entry(c) == Ok(0)).collect();
     assert_eq!(free.len(), 8 - 1 - 2, "the root and the file's two clusters");
+}
+
+/// A disk that counts the sectors written to it, and fails every write from
+/// the `fail_at`-th on.
+struct Counting {
+    disk: RwDisk,
+    writes: core::sync::atomic::AtomicU32,
+    fail_at: u32,
+}
+
+impl BlockDevice for Counting {
+    fn sector_size(&self) -> u32 {
+        512
+    }
+    fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        self.disk.read_sector(lba, out)
+    }
+    fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        if self.writes.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1 >= self.fail_at {
+            return Err(FatError::Io);
+        }
+        self.disk.write_sector(lba, data)
+    }
+}
+
+/// A volume of `clusters` clusters whose free clusters hold what an old file
+/// left there (0xA5), on a [`Counting`] disk.
+fn stale(clusters: u32, fail_at: u32) -> FatVolume<Counting> {
+    let disk = fat32(clusters);
+    let data_start = 32 + 2 * ((clusters as usize + 2) * 4).div_ceil(512);
+    // Cluster 2 is the root; the others are free.
+    disk.0.lock()[(data_start + 1) * 512..].fill(0xA5);
+    FatVolume::mount(Counting { disk, writes: core::sync::atomic::AtomicU32::new(0), fail_at }).unwrap()
+}
+
+#[test]
+fn a_new_file_goes_to_the_device_once() {
+    let volume = stale(64, u32::MAX);
+    let data: Vec<u8> = (0..2048u32).map(|i| (i % 253) as u8).collect();
+    let (mut first, mut size) = (0, 0);
+    volume.write_file(&mut first, &mut size, 0, &data, 3).unwrap();
+    // Zeroing the clusters before writing them wrote each sector twice: the
+    // installer's copy of the system took twice as long.
+    let writes = volume.device().writes.load(core::sync::atomic::Ordering::Relaxed);
+    assert_eq!(writes, 4, "four clusters, each written once");
+    assert_eq!(read_all(&volume, first, size), data);
+    // A size that leaves part of the last cluster: that part, which held
+    // 0xA5, reads as zeros, as when the clusters were zeroed first.
+    let (mut first, mut size) = (0, 0);
+    volume.write_file(&mut first, &mut size, 0, &data[..1500], 3).unwrap();
+    let raw = read_all(&volume, first, 1536);
+    assert_eq!(&raw[..1500], &data[..1500]);
+    assert!(raw[1500..].iter().all(|&b| b == 0), "the rest of the last cluster is zeroed");
+    // Growing a file: the clusters it adds are covered the same way.
+    volume.write_file(&mut first, &mut size, 1500, &data[..1000], 3).unwrap();
+    let raw = read_all(&volume, first, 2560);
+    assert_eq!((&raw[..1500], &raw[1500..2500]), (&data[..1500], &data[..1000]));
+    assert!(raw[2500..].iter().all(|&b| b == 0), "the rest of the new last cluster is zeroed");
+}
+
+#[test]
+fn a_failed_write_gives_back_the_clusters_it_took() {
+    // The third sector written fails: the file's clusters are taken, not
+    // all written.
+    let volume = stale(64, 3);
+    let free = |volume: &FatVolume<Counting>| (2..66).filter(|&c| volume.fat_entry(c) == Ok(0)).count();
+    let before = free(&volume);
+    let (mut first, mut size) = (0, 0);
+    assert_eq!(volume.write_file(&mut first, &mut size, 0, &[1u8; 2048], 3), Err(FatError::Io));
+    assert_eq!((first, size, free(&volume)), (0, 0, before), "no cluster kept, no size recorded");
 }
 
 #[test]

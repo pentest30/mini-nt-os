@@ -863,6 +863,13 @@ impl<D: BlockDevice> FatVolume<D> {
     /// last of its chain. `Full` without one; `ReadOnly` for a volume whose
     /// size is unknown.
     pub fn allocate_cluster(&self, hint: u32) -> Result<u32, FatError> {
+        self.take_free_cluster(hint, true)
+    }
+
+    /// [`allocate_cluster`](Self::allocate_cluster), zeroing the cluster only
+    /// when `zero`: a caller that writes the whole cluster at once skips a
+    /// pass over its sectors.
+    fn take_free_cluster(&self, hint: u32, zero: bool) -> Result<u32, FatError> {
         if self.clusters == 0 {
             return Err(FatError::ReadOnly);
         }
@@ -886,7 +893,9 @@ impl<D: BlockDevice> FatVolume<D> {
         };
         match free {
             Some(cluster) => {
-                self.zero_cluster(cluster)?;
+                if zero {
+                    self.zero_cluster(cluster)?;
+                }
                 self.set_fat_entry(cluster, END_OF_CHAIN)?;
                 Ok(cluster)
             }
@@ -925,6 +934,12 @@ impl<D: BlockDevice> FatVolume<D> {
     /// the clusters past them, or adds zeroed ones, allocated from `hint`;
     /// `*first` becomes 0 for no cluster. Rends the chain.
     pub fn resize_chain(&self, first: &mut u32, count: usize, hint: u32) -> Result<Vec<u32>, FatError> {
+        self.resize_chain_with(first, count, hint, true)
+    }
+
+    /// [`resize_chain`](Self::resize_chain), the added clusters zeroed only
+    /// when `zero`.
+    fn resize_chain_with(&self, first: &mut u32, count: usize, hint: u32, zero: bool) -> Result<Vec<u32>, FatError> {
         let mut clusters = if *first == 0 { Vec::new() } else { self.chain(*first)? };
         if count < clusters.len() {
             match count {
@@ -939,7 +954,7 @@ impl<D: BlockDevice> FatVolume<D> {
         let before = clusters.len();
         while clusters.len() < count {
             let hint = clusters.last().map_or(hint, |&last| last + 1);
-            let new = match self.allocate_cluster(hint) {
+            let new = match self.take_free_cluster(hint, zero) {
                 Ok(new) => new,
                 Err(error) => {
                     // What was added goes back; shrinking allocates nothing.
@@ -985,6 +1000,13 @@ impl<D: BlockDevice> FatVolume<D> {
     /// size `*size`, which grows to hold it (the gap between the old end and
     /// `offset` reads as zeros); both are updated. `Full` past 4 GiB or
     /// without room.
+    ///
+    /// The clusters it adds are not zeroed beforehand: each starts at or past
+    /// the old end, which the gap and the data write over up to `end`; the
+    /// rest of the last one, past `end`, is zeroed after. Each byte goes to
+    /// the device once (copying a file onto a new volume wrote it twice). If
+    /// a write fails, the chain gets back its old length: no cluster added
+    /// stays with what it held before.
     pub fn write_file(
         &self,
         first: &mut u32,
@@ -997,13 +1019,26 @@ impl<D: BlockDevice> FatVolume<D> {
             offset.checked_add(data.len() as u64).filter(|&end| end <= u64::from(u32::MAX)).ok_or(FatError::Full)?;
         let per_cluster = u64::from(self.cluster_bytes());
         let new_size = end.max(u64::from(*size));
-        let clusters = self.resize_chain(first, new_size.div_ceil(per_cluster) as usize, hint)?;
-        if offset > u64::from(*size) {
-            // Bytes past the old end may hold what a truncation left there.
-            let gap = vec![0u8; (offset - u64::from(*size)) as usize];
-            self.write_into(&clusters, u64::from(*size), &gap)?;
+        let before = if *first == 0 { 0 } else { self.chain(*first)?.len() };
+        let clusters = self.resize_chain_with(first, new_size.div_ceil(per_cluster) as usize, hint, false)?;
+        let written = (|| {
+            if offset > u64::from(*size) {
+                // Bytes past the old end may hold what a truncation left there.
+                let gap = vec![0u8; (offset - u64::from(*size)) as usize];
+                self.write_into(&clusters, u64::from(*size), &gap)?;
+            }
+            self.write_into(&clusters, offset, data)?;
+            let chain_end = clusters.len() as u64 * per_cluster;
+            if clusters.len() > before && end < chain_end {
+                // The rest of the last cluster added, as zeroing it first did.
+                self.write_into(&clusters, end, &vec![0u8; (chain_end - end) as usize])?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = written {
+            let _ = self.resize_chain(first, before, hint);
+            return Err(error);
         }
-        self.write_into(&clusters, offset, data)?;
         *size = new_size as u32;
         Ok(())
     }
