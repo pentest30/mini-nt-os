@@ -12,6 +12,7 @@
 #![cfg_attr(not(target_os = "none"), feature(thread_local))]
 
 pub mod ata;
+pub mod bochs;
 pub mod bugcheck;
 pub mod callout;
 pub mod cpuid;
