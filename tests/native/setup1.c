@@ -3,7 +3,8 @@
  * scenario puts this WINDOWS-subsystem program in place of winlogon.exe,
  * as the other GUI probes do. It uses the real ReactOS user32/gdi32 over
  * Mino's win32k and implements the five-screen installer flow with keyboard
- * navigation.
+ * navigation; a click on Back or on the primary button does what Enter does
+ * on it.
  *
  * The look is Mino's blue theme (theme.c): a full-screen blue setup screen,
  * the steps on the left, the wizard in a window with a blue title bar. Each
@@ -102,6 +103,13 @@ static const WCHAR CLASS_NAME[] = L"MinoSetup";
 static enum Screen current_screen = SCREEN_WELCOME;
 /* 0 is Back, 1 is the primary action. */
 static int focused_action = 1;
+/* The navigation buttons as last drawn, for the mouse; a disabled button's
+ * rectangle is empty. */
+enum { NAV_BACK, NAV_PRIMARY, NAV_CANCEL, NAV_COUNT };
+static RECT nav_hit[NAV_COUNT];
+/* The button the left button went down on, or -1: a click is a press and a
+ * release on the same button. */
+static int nav_pressed = -1;
 static int disk_visits;
 static int review_visits;
 static int progress;
@@ -302,17 +310,38 @@ static void heading(RECT client, const WCHAR *title, const WCHAR *description)
 /* The wizard's buttons, along the bottom of its window. */
 static void draw_navigation(RECT client, BOOL back, const WCHAR *primary, BOOL primary_enabled)
 {
+    static const RECT none;
     int y = client.bottom - 42;
+    RECT back_area = rect(client.right - 282, y, client.right - 202, y + 26);
+    RECT primary_area = rect(client.right - 194, y, client.right - 106, y + 26);
+    RECT cancel_area = rect(client.right - 94, y, client.right - 18, y + 26);
+    BOOL cancel = current_screen != SCREEN_INSTALL;
 
     fill(&canvas, rect(client.left, client.bottom - 56, client.right, client.bottom - 55), C_FACE_LINE);
     fill(&canvas, rect(client.left, client.bottom - 55, client.right, client.bottom - 54), C_WHITE);
     button(&canvas, rect(client.left + 18, y, client.left + 98, y + 26), L"Help", BUTTON_NORMAL);
-    button(&canvas, rect(client.right - 282, y, client.right - 202, y + 26), L"< Back",
+    button(&canvas, back_area, L"< Back",
            !back ? BUTTON_DISABLED : focused_action == 0 ? BUTTON_FOCUSED : BUTTON_NORMAL);
-    button(&canvas, rect(client.right - 194, y, client.right - 106, y + 26), primary,
+    button(&canvas, primary_area, primary,
            !primary_enabled ? BUTTON_DISABLED : focused_action == 1 ? BUTTON_FOCUSED : BUTTON_NORMAL);
-    button(&canvas, rect(client.right - 94, y, client.right - 18, y + 26), L"Cancel",
-           current_screen == SCREEN_INSTALL ? BUTTON_DISABLED : BUTTON_NORMAL);
+    button(&canvas, cancel_area, L"Cancel", cancel ? BUTTON_NORMAL : BUTTON_DISABLED);
+    nav_hit[NAV_BACK] = back ? back_area : none;
+    nav_hit[NAV_PRIMARY] = primary_enabled ? primary_area : none;
+    nav_hit[NAV_CANCEL] = cancel ? cancel_area : none;
+}
+
+/* The navigation button under the mouse at `l` (a mouse message's client
+ * coordinates; the window covers the screen), or -1. */
+static int nav_at(LPARAM l)
+{
+    int x = MOUSE_X(l), y = MOUSE_Y(l), index;
+
+    for (index = 0; index < NAV_COUNT; ++index) {
+        const RECT *area = &nav_hit[index];
+        if (x >= area->left && x < area->right && y >= area->top && y < area->bottom)
+            return index;
+    }
+    return -1;
 }
 
 /* A drop-down list, closed. */
@@ -748,6 +777,27 @@ static LRESULT __stdcall setup_procedure(HWND window, UINT message, WPARAM w, LP
             return 0;
         }
         break;
+    case WM_LBUTTONDOWN:
+        nav_pressed = nav_at(l);
+        return 0;
+    case WM_LBUTTONUP: {
+        int pressed = nav_pressed;
+
+        nav_pressed = -1;
+        if (pressed < 0 || nav_at(l) != pressed)
+            return 0;
+        if (pressed == NAV_PRIMARY) {
+            DbgPrint("[setup] click primary\n");
+            focused_action = 1;
+            activate(window);
+        } else if (pressed == NAV_BACK) {
+            DbgPrint("[setup] click back\n");
+            go_back(window);
+        } else {
+            DbgPrint("[setup] click cancel: nothing to cancel before the install\n");
+        }
+        return 0;
+    }
     }
     return DefWindowProcW(window, message, w, l);
 }
