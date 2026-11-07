@@ -20,6 +20,7 @@ GetDCEx@12
 GetKeyboardState@4
 GetKeyState@4
 GetMessageW@16
+GetProcessWindowStation@0
 GetMonitorInfoW@8
 GetParent@4
 GetQueueStatus@4

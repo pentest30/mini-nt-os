@@ -1,0 +1,27 @@
+# Pre-installation startup choice: Down selects the live desktop. It starts
+# from the boot media and must not need or prepare a target disk.
+features = test-smss, interactive
+requires = userland, native
+initial-command = BOOT1.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [bootmenu] ready; default install => down ret
+
+expect = [bootmenu] ready; default install
+expect = [bootmenu] focus live
+expect = [bootmenu] selected live
+expect = [bootmenu] child started
+expect = [desktop] start menu open
+expect = [desktop] ready
+
+# The live path reaches the existing desktop: selected Start item, white Files
+# content, green Start button and blue taskbar.
+screen = 190 352 316AC5
+screen = 1150 500 FFFFFF
+screen = 95 790 45983D
+screen = 700 785 1E5CDB
+
+forbid = [bootmenu] launch failed:
+forbid = [setup] screen
+forbid = *** STOP:

@@ -582,6 +582,13 @@ BOOL take_desktop(void)
     HWINSTA station;
     HDESK desktop;
 
+    /* A child launched by BOOT1.EXE already belongs to WinSta0 and its
+       STARTUPINFO names Default. Its first USER call attaches the thread to
+       that inherited desktop, so it must not try to become a second logon
+       process. Direct test scenarios still take the original path below. */
+    station = GetProcessWindowStation();
+    if (station)
+        return TRUE;
     if (!RegisterLogonProcess(GetCurrentProcessId(), TRUE))
         return FALSE;
     station = CreateWindowStationW(L"WinSta0", 0, MAXIMUM_ALLOWED, 0);

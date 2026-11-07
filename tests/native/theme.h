@@ -140,6 +140,7 @@ __declspec(dllimport) int __stdcall DrawTextW(HDC dc, const WCHAR *text, int cou
 __declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *paint);
 __declspec(dllimport) BOOL __stdcall GetClientRect(HWND window, RECT *rect);
 __declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT min, UINT max);
+__declspec(dllimport) HWINSTA __stdcall GetProcessWindowStation(void);
 __declspec(dllimport) int __stdcall GetSystemMetrics(int index);
 __declspec(dllimport) BOOL __stdcall InvalidateRect(HWND window, const RECT *rect, BOOL erase);
 __declspec(dllimport) HKL __stdcall LoadKeyboardLayoutW(const WCHAR *klid, UINT flags);
