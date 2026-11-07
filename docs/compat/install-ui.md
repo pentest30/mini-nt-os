@@ -101,7 +101,7 @@ compare au plan exact avant de rendre le succès.
 | Disque | cible de développement unique | revoir les changements | Tab puis Retour, ou Échap |
 | Revue | cible, suppression, GPT, ESP et système | commencer l'installation | Tab puis Retour, ou Échap |
 | Installation | revalidation, deux GPT, formatage FAT32 et montage de contrôle | aucune pendant l'opération synchrone | non après la limite d'écriture |
-| Terminé | GPT et deux volumes FAT32 vérifiés | terminer ce jalon | non |
+| Terminé | GPT, deux volumes FAT32 et fichiers vérifiés | redémarrer sur le disque installé | non |
 
 Tab déplace le choix entre Retour et l'action primaire ; Retour ou Espace
 l'active ; Échap revient en arrière tant qu'aucune écriture n'a commencé.
@@ -110,13 +110,20 @@ couleurs contrastées et les cinq étapes dans la colonne de gauche de l'écran.
 
 ## Limite de sécurité actuelle
 
-La préparation écrit le MBR protecteur et les deux copies GPT, puis le lot de
-formatage construit les deux volumes FAT32 bornés et vérifie qu'ils remontent
-dans le lecteur du noyau. La copie du chargeur, du noyau et du système reste
-le prochain lot. Un refus (`[setup] prepare failed: …` ou
-`[setup] format failed: …`) laisse l'écran d'installation affiché et la
-progression arrêtée. `SETUP1.EXE` ne reçoit aucun handle de disque brut ; le
-noyau garde la sélection, la revalidation et les E/S ATA.
+La préparation écrit le MBR protecteur et les deux copies GPT ; le formatage
+construit les deux volumes FAT32 bornés ; la copie installe le chargeur, le
+noyau, le ramdisk et l'arbre système, puis vide les caches. Un refus
+(`[setup] prepare failed: …`, `format failed` ou `copy failed`) laisse
+l'écran d'installation affiché et la progression arrêtée. `SETUP1.EXE` ne
+reçoit aucun handle de disque brut ; le noyau garde la sélection, la
+revalidation et les E/S ATA.
+
+Sur le média, `SETUP1.EXE` occupe temporairement le chemin de Winlogon pour
+que SMSS le démarre. Le vrai `WINLOGON.EXE` est conservé comme
+`WINLOGON.ORG` ; le moteur ignore le bootstrap et restaure l'original sous
+son nom canonique sur la cible. Le bouton **Finish** appelle
+`NtShutdownSystem(ShutdownReboot)`, qui déclenche le reset 8042 après les
+flushs. Le démarrage suivant ne revient donc plus dans l'installateur.
 
 Ce jalon n'offre pas encore de démontage générique. Sa politique plus étroite
 accepte seulement le maître secondaire présent que le démarrage n'a pas monté
@@ -141,6 +148,10 @@ FAT32 avec son propre lecteur et compare l'arbre copié au ramdisk, fichier
 par fichier (`io-install.md`, lot 4 étape 2). Le scénario `installer-prepare`
 vérifie en plus le mauvais jeton et la seconde préparation refusés sans
 écriture. Les deux tournent avec les modèles de processeur AMD et Intel.
+`installer-finish` active ensuite Finish et attend la demande de reset. Au
+second démarrage, le média et la cible restent attachés comme sous VirtualBox :
+le chargeur du média repère `MINO.TAG` sur l'ESP installée, y prend le noyau et
+le ramdisk, et le scénario refuse toute réapparition de l'assistant sans cible.
 
 ## Prototype du bureau
 
@@ -167,12 +178,11 @@ cargo xtask test --boot --scenario boot-menu-install --scenario boot-menu-live
 
 ## Suite
 
-1. Copier le chargeur, le noyau et le système, puis rendre de vrais événements
-   de progression ; la revue reste la dernière étape réversible.
+1. Rendre de vrais événements de progression ; la revue reste la dernière
+   étape réversible.
 2. Brancher Files sur le système de fichiers et déplacer le bureau hors des
    sondes natives vers le processus shell retenu.
 3. Ajouter la souris PS/2, le ciblage par fenêtre, les messages `WM_MOUSE*`
    et le curseur dans `win32k`; la navigation clavier reste complète.
-4. Ajouter le démontage générique, les erreurs récupérables, la reprise sûre
-   et le redémarrage après vérification des fichiers copiés.
+4. Ajouter le démontage générique, les erreurs récupérables et la reprise sûre.
 

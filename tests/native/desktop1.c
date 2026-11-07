@@ -2,8 +2,9 @@
  * Mino desktop design probe. It owns WinSta0\Default like winlogon, paints
  * the desktop shell in Mino's blue theme (theme.c) — blue sky wallpaper,
  * desktop icons, a Files window, the two-column Start menu and the blue
- * taskbar — and keeps the Start menu keyboard-accessible. Every shape is
- * drawn by the program; built freestanding by xtask.
+ * taskbar — and keeps the Start menu keyboard-accessible; with the mouse, the
+ * Start button opens and closes it and a press selects an entry. Every shape
+ * is drawn by the program; built freestanding by xtask.
  */
 
 #include "theme.h"
@@ -138,15 +139,19 @@ static void desktop_icon(int x, int y, const WCHAR *label, int kind)
 
 static void draw_wallpaper(int width, int height)
 {
-    static const STOP sky[] = {{0, PX(18, 70, 184)}, {130, PX(48, 112, 222)}, {220, PX(96, 158, 240)},
-                               {256, PX(132, 186, 248)}};
+    /* The welcome screen: two dark blue bands frame a lighter blue field. */
+    static const STOP field[] = {{0, PX(74, 104, 204)}, {160, PX(96, 130, 222)}, {256, PX(122, 156, 238)}};
+    const int band = 52, bottom = height - 30;
 
-    gradient_stops(&canvas, rect(0, 0, width, height - 30), sky, 4);
-    glow(&canvas, width - 260, 120, 420, PX(170, 214, 255), 90);
-    glow(&canvas, width / 3, height - 30, 520, PX(190, 226, 255), 70);
-    desktop_icon(14, 18, L"Computer", 0);
-    desktop_icon(14, 104, L"Documents", 1);
-    desktop_icon(14, 190, L"Trash", 2);
+    gradient_stops(&canvas, rect(0, band, width, bottom - band), field, 3);
+    glow(&canvas, 200, 100, 480, PX(198, 218, 252), 100);
+    fill(&canvas, rect(0, 0, width, band), PX(10, 40, 140));
+    /* rect() takes the right and bottom edges, not a width and a height. */
+    fill(&canvas, rect(0, band, width, band + 2), PX(150, 176, 240));
+    fill(&canvas, rect(0, bottom - band, width, bottom), PX(10, 40, 140));
+    desktop_icon(14, band + 24, L"Computer", 0);
+    desktop_icon(14, band + 110, L"Documents", 1);
+    desktop_icon(14, band + 196, L"Trash", 2);
 }
 
 /* A panel of the Files task pane: a header and lines of links. */
@@ -288,7 +293,7 @@ static void draw_start_menu(int height)
     static const STOP band[] = {{0, PX(40, 124, 244)}, {120, PX(22, 92, 222)}, {256, PX(14, 72, 198)}};
     static const WCHAR *programs[] = {L"Files", L"Text Editor", L"Terminal", L"Settings", L"Software", L"Help"};
     static const WCHAR *details[] = {L"Browse your folders", L"Write plain text", L"Command prompt",
-                                     L"Change how Mino looks", L"Add programs", L"Questions and answers"};
+                                     L"Change how MINO OS looks", L"Add programs", L"Questions and answers"};
     static const WCHAR *places[] = {L"Documents", L"Pictures", L"Music", L"Computer"};
     static const WCHAR *system[] = {L"Network", L"Printers", L"Search", L"Run..."};
     int bottom = height - 30, top = bottom - 496, left = 0, right = 392, middle = 200;
@@ -300,7 +305,7 @@ static void draw_start_menu(int height)
     round_fill(&canvas, rect(12, top + 9, 58, top + 55), 5, CORNERS_ALL, C_WHITE, PX(210, 226, 250));
     round_fill(&canvas, rect(15, top + 12, 55, top + 52), 3, CORNERS_ALL, PX(255, 212, 110), PX(236, 150, 46));
     emblem(&canvas, 35, top + 32, 15);
-    text_shadow(&canvas, L"Mino User", rect(70, top, right - 12, top + 64), C_WHITE, font(15, TRUE),
+    text_shadow(&canvas, L"MINO OS User", rect(70, top, right - 12, top + 64), C_WHITE, font(15, TRUE),
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     fill(&canvas, rect(left + 2, body_top, middle, body_bottom), C_WHITE);
@@ -383,6 +388,55 @@ static void repaint(HWND window)
     UpdateWindow(window);
 }
 
+/* The entries of the Start menu, by their index in draw_start_menu. */
+static const char *const entry_names[] = {"Files",    "Text Editor", "Terminal", "Settings",
+                                          "Software", "Help",        "Restart",  "Shut down"};
+
+/* What the mouse at (x, y) is over: an entry of the open menu (0 to 7), or
+ * one of these. The rectangles are those draw_taskbar and draw_start_menu
+ * paint. */
+enum { HIT_OUTSIDE = -3, HIT_START = -2, HIT_MENU = -1 };
+
+static int desktop_hit(int x, int y)
+{
+    int height = canvas.height, bottom = height - 30, top = bottom - 496;
+    int body_top = top + 66, body_bottom = bottom - 46, index;
+
+    if (y >= bottom && y < height && x >= 0 && x < 108)
+        return HIT_START;
+    if (!menu_open || x < 0 || x >= 392 || y < top || y >= bottom)
+        return HIT_OUTSIDE;
+    for (index = 0; index < 6; ++index) {
+        int item_top = body_top + 6 + index * 46;
+        if (x >= 2 && x < 200 && y >= item_top && y < item_top + 44)
+            return index;
+    }
+    for (index = 6; index < 8; ++index) {
+        int left = 392 - (index == 6 ? 250 : 126), button_top = body_bottom + 11;
+        if (x >= left - 4 && x < left + 104 && y >= button_top - 3 && y < button_top + 27)
+            return index;
+    }
+    return HIT_MENU;
+}
+
+/* A press of the left button: the Start button opens or closes the menu, a
+ * press outside the open menu closes it, an entry is selected. */
+static void click(HWND window, int x, int y)
+{
+    int hit = desktop_hit(x, y);
+
+    if (hit == HIT_START || (hit == HIT_OUTSIDE && menu_open)) {
+        menu_open = !menu_open;
+        DbgPrint("[desktop] %s: start menu %s\n", hit == HIT_START ? "start button" : "press outside the menu",
+                 menu_open ? "open" : "closed");
+        repaint(window);
+    } else if (hit >= 0) {
+        selected_item = hit;
+        DbgPrint("[desktop] selected %s\n", entry_names[hit]);
+        repaint(window);
+    }
+}
+
 static LRESULT __stdcall desktop_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
 {
     PAINTSTRUCT paint;
@@ -393,6 +447,10 @@ static LRESULT __stdcall desktop_procedure(HWND window, UINT message, WPARAM w, 
         BeginPaint(window, &paint);
         draw(paint.hdc);
         EndPaint(window, &paint);
+        return 0;
+    }
+    if (message == WM_LBUTTONDOWN) {
+        click(window, MOUSE_X(l), MOUSE_Y(l));
         return 0;
     }
     if (message == WM_KEYDOWN && menu_open) {
@@ -446,7 +504,7 @@ DWORD __stdcall GuiStartup(void)
     height = GetSystemMetrics(SM_CYSCREEN);
     if (!canvas_create(&canvas, width, height))
         ExitProcess(4);
-    window = CreateWindowExW(0, CLASS_NAME, L"Mino Desktop", WS_POPUP | WS_VISIBLE,
+    window = CreateWindowExW(0, CLASS_NAME, L"MINO OS Desktop", WS_POPUP | WS_VISIBLE,
                              0, 0, width, height, 0, 0, instance, 0);
     if (!window)
         ExitProcess(3);

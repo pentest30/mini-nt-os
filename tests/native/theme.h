@@ -97,6 +97,11 @@ typedef struct {
 #define WM_ERASEBKGND 0x0014
 #define WM_KEYDOWN 0x0100
 #define WM_CHAR 0x0102
+#define WM_LBUTTONDOWN 0x0201
+#define WM_LBUTTONUP 0x0202
+/* The client coordinates of a mouse message, signed 16 bits in its LPARAM. */
+#define MOUSE_X(l) ((int)(short)((DWORD)(l) & 0xFFFF))
+#define MOUSE_Y(l) ((int)(short)(((DWORD)(l) >> 16) & 0xFFFF))
 #define VK_TAB 0x09
 #define VK_RETURN 0x0D
 #define VK_ESCAPE 0x1B

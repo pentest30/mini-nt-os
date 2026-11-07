@@ -1,0 +1,43 @@
+# The interactive installer completes the real GPT/FAT installation, then
+# Finish calls NtShutdownSystem(ShutdownReboot). The first boot uses a GPT
+# installation medium and a blank secondary target. Both stay attached for
+# the second boot, as on VirtualBox: the medium's loader must prefer the
+# installed ESP marked by MINO.TAG.
+#
+# SETUP1.EXE temporarily occupies WINDOWS/SYSTEM32/WINLOGON.EXE on the
+# installation medium. The real ReactOS Winlogon is preserved as
+# WINLOGON.ORG and restored under its canonical name on the target. If the
+# bootstrap were copied instead, the second boot would display setup again
+# and report that no safe target exists.
+features = test-smss
+requires = userland, native
+initial-command = SETUP1.EXE
+disk = installed
+disk = target
+boots = 2
+cpus = default, intel
+timeout = 300
+
+# First boot: the user drives the short path through the installer and
+# Finish requests a real hardware reset.
+expect = [setup] screen welcome
+expect = [setup] screen complete; GPT, FAT32 and files written
+expect = [setup] finish requested; rebooting into the installed system
+expect = [power] NtShutdownSystem: reboot requested
+
+# Second boot: the target's 48 MiB ESP and system partition are used even
+# though the installation medium remains the primary boot disk.
+expect = Io: GPT system partition 2: LBA 100352
+expect = [boot] Io: system disk \Device\HarddiskVolume1 (ATA, secondary master, FAT32
+expect = kernel: phase 1 done
+
+keys = [setup] ready => ret
+keys = [setup] screen disk 1 => ret
+keys = [setup] screen review 1 => ret
+keys = [setup] screen complete; GPT, FAT32 and files written => ret
+
+forbid = [setup] prepare failed:
+forbid = [setup] format failed:
+forbid = [setup] copy failed:
+forbid = [setup] backend no safe target:
+forbid = *** STOP:

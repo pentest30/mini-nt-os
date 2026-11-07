@@ -12,6 +12,7 @@
 #![cfg_attr(not(target_os = "none"), feature(thread_local))]
 
 pub mod ata;
+pub mod bochs;
 pub mod bugcheck;
 pub mod callout;
 pub mod cpuid;
@@ -21,18 +22,21 @@ pub mod gdt;
 pub mod idt;
 pub mod irql;
 pub mod msr;
+pub mod pci;
 pub mod pcr;
 pub mod power;
 pub mod ps2;
 pub mod ring3;
 pub mod rtc;
 pub mod serial;
+pub mod splash;
 pub mod symbols;
 pub mod sync;
 pub mod sysenter;
 pub mod timer;
 pub mod trap;
 pub mod usermem;
+pub mod vmmdev;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

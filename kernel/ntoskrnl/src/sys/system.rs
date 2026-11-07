@@ -1,12 +1,17 @@
 //! Les services d'information du système (Ex).
 
-use abi::ntstatus::{NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS};
+use abi::ntstatus::{
+    NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
+};
 use abi::security::SE_LOAD_DRIVER_PRIVILEGE;
 use abi::system_information::{
-    SystemBasicInformation32, SystemProcessorInformation32, MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS,
-    PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION, SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION,
-    SYSTEM_FLAGS_INFORMATION, SYSTEM_PROCESSOR_INFORMATION, SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION,
-    SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH, SYSTEM_TIME_OF_DAY_INFORMATION,
+    SystemBasicInformation32, SystemProcessInformation32, SystemProcessorInformation32, SystemThreadInformation32,
+    MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS, PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION,
+    SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION, SYSTEM_FILECACHE_INFORMATION, SYSTEM_FLAGS_INFORMATION,
+    SYSTEM_HANDLE_INFORMATION, SYSTEM_PERFORMANCE_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
+    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, SYSTEM_PROCESS_INFORMATION, SYSTEM_PROCESS_INFORMATION_NAME_AT,
+    SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
+    SYSTEM_THREAD_INFORMATION_SIZE, SYSTEM_TIME_OF_DAY_INFORMATION,
 };
 use ke::usermem::UserPtr;
 use mm::virtual_alloc::{ALLOC_GRANULARITY, PAGE_SIZE};
@@ -26,15 +31,35 @@ const UNICODE_STRING_SIZE: u32 = 8;
 /// `NtGlobalFlag` du PEB de chaque processus.
 const NT_GLOBAL_FLAG: u32 = 0;
 
+/// `SHUTDOWN_ACTION::ShutdownReboot` on XP.
+const SHUTDOWN_REBOOT: u32 = 1;
+
+/// NtShutdownSystem(ShutdownAction). The installer uses the reboot action
+/// after every target cache has been flushed. Other actions wait for power
+/// management and an orderly shutdown path.
+pub(super) fn nt_shutdown_system(arguments: &[u32]) -> NtStatus {
+    if arguments[0] != SHUTDOWN_REBOOT {
+        return STATUS_INVALID_PARAMETER;
+    }
+    log::info!("[power] NtShutdownSystem: reboot requested");
+    hal::power::reset()
+}
+
 /// NtQuerySystemInformation(SystemInformationClass, SystemInformation,
 /// SystemInformationLength, ReturnLength) : l'information de la classe,
-/// d'une taille exacte ([`super::return_information`]).
+/// d'une taille exacte ([`super::return_information`]) pour les classes à
+/// structure fixe, à partir de la taille demandée pour les listes.
 ///
 /// | Classe | Contenu |
 /// |---|---|
 /// | `SystemBasicInformation` (0) | page, pages physiques, plage du mode utilisateur, processeurs |
 /// | `SystemProcessorInformation` (1) | architecture, niveau, révision et fonctions du processeur |
+/// | `SystemPerformanceInformation` (2) | les compteurs, tous nuls tant que Ps ne les compte pas |
+/// | `SystemProcessInformation` (5) | la liste des processus et de leurs threads ([`process_information`]) |
+/// | `SystemProcessorPerformanceInformation` (8) | les temps par processeur, tous nuls |
 /// | `SystemTimeOfDayInformation` (3) | l'heure du démarrage, l'heure, le fuseau (nul) ; les premiers octets que demande l'appelant, 48 au plus |
+/// | `SystemHandleInformation` (16) | le nombre de handles, nul |
+/// | `SystemFileCacheInformation` (21) | les caches de fichiers, nuls |
 /// | `SystemFlagsInformation` (9) | les drapeaux globaux (`NtGlobalFlag`), aucun |
 /// | `SystemRangeStartInformation` (50) | le début de la moitié système, `0x80000000` |
 ///
@@ -49,6 +74,17 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         SYSTEM_PROCESSOR_INFORMATION => {
             super::return_information(processor_information().as_bytes(), buffer, length, return_length)
         }
+        SYSTEM_PERFORMANCE_INFORMATION
+        | SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION
+        | SYSTEM_HANDLE_INFORMATION
+        | SYSTEM_FILECACHE_INFORMATION => {
+            // Les compteurs, tous nuls tant que Ps ne les compte pas : les
+            // structures que taskmgr relit avant chaque rafraîchissement.
+            // La taille demandée, plafonnée à une page.
+            let zeros = alloc::vec![0u8; (length as usize).min(PAGE_SIZE as usize)];
+            super::return_information_flexible(&zeros, buffer, length, return_length)
+        }
+        SYSTEM_PROCESS_INFORMATION => process_information(buffer, length, return_length),
         SYSTEM_TIME_OF_DAY_INFORMATION => time_of_day(buffer, length, return_length),
         SYSTEM_RANGE_START_INFORMATION => {
             super::return_information(&SYSTEM_RANGE_START.to_le_bytes(), buffer, length, return_length)
@@ -174,4 +210,54 @@ fn basic_information() -> SystemBasicInformation32 {
     info.active_processors_affinity_mask = 1;
     info.number_of_processors = 1;
     info
+}
+
+/// `SystemProcessInformation` : la liste des processus vivants et de leurs
+/// threads, au format SYSTEM_PROCESS_INFORMATION de ReactOS (i386, paquet
+/// 4) : une entête de 0xB8 octets, les threads de 0x40 chacun, puis le nom
+/// d'image UTF-16 — chaque entrée alignée sur 8, chaînée par
+/// `NextEntryOffset`, le nom pointé à l'intérieur du tampon même. Les temps
+/// et les compteurs de mémoire restent à zéro tant que Ps ne les compte
+/// pas.
+fn process_information(buffer: u32, length: u32, return_length: u32) -> NtStatus {
+    let snapshots = ps::eprocess::snapshots();
+    let mut data = alloc::vec::Vec::new();
+    for (index, snapshot) in snapshots.iter().enumerate() {
+        let entry_at = data.len() as u32;
+        let name_at = entry_at
+            + SYSTEM_PROCESS_INFORMATION_NAME_AT
+            + SYSTEM_THREAD_INFORMATION_SIZE * snapshot.threads.len() as u32;
+        let name: alloc::vec::Vec<u8> = snapshot.name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let total = (name_at - entry_at + name.len() as u32).next_multiple_of(8);
+        let next = if index + 1 == snapshots.len() { 0 } else { total };
+        let header = SystemProcessInformation32 {
+            next_entry_offset: next,
+            number_of_threads: snapshot.threads.len() as u32,
+            image_name_length: name.len() as u16,
+            image_name_maximum_length: if name.is_empty() { 0 } else { name.len() as u16 + 2 },
+            image_name_buffer: if name.is_empty() { 0 } else { buffer + name_at },
+            base_priority: snapshot.base_priority,
+            unique_process_id: snapshot.pid,
+            inherited_from_unique_process_id: snapshot.parent_pid,
+            session_id: snapshot.session_id,
+            page_directory_base: snapshot.directory_table_base as u32,
+            ..Default::default()
+        };
+        data.extend_from_slice(header.as_bytes());
+        for thread in &snapshot.threads {
+            let thread_information = SystemThreadInformation32 {
+                client_id_process: snapshot.pid,
+                client_id_thread: thread.tid,
+                start_address: thread.start_address,
+                priority: thread.priority,
+                base_priority: snapshot.base_priority,
+                thread_state: 5, // Waiting : vivant, pas le thread courant.
+                ..Default::default()
+            };
+            data.extend_from_slice(thread_information.as_bytes());
+        }
+        data.extend_from_slice(&name);
+        data.resize(entry_at as usize + total as usize, 0);
+    }
+    super::return_information_flexible(&data, buffer, length, return_length)
 }

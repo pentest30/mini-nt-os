@@ -253,30 +253,121 @@ fn key_duration(key: &str) -> Duration {
     Duration::from_millis(u64::from(2 * keys * KEY_HOLD_MS + KEY_SETTLE_MS))
 }
 
-/// Types `keys` on the QEMU whose monitor listens on `monitor`, one after
-/// the other (`sendkey`), each answered by the monitor and released
-/// ([`key_duration`]) before the next.
-pub fn send_keys(monitor: &Monitor, keys: &[String]) -> Result<()> {
-    let mut stream = monitor.connect().map_err(|e| format!("QEMU monitor {monitor:?}: {e}"))?;
-    stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| format!("QEMU monitor: {e}"))?;
-    let mut seen = Vec::new();
-    let mut prompts = 1;
-    for key in keys {
-        writeln!(stream, "sendkey {key} {KEY_HOLD_MS}").map_err(|e| format!("QEMU monitor: {e}"))?;
-        prompts += 1;
+/// How long a mouse event of the monitor takes to reach the guest (ms): the
+/// next one comes after it, and two clicks stay well within a double-click.
+const MOUSE_SETTLE_MS: u64 = 100;
+
+/// The monitor command of a mouse token of `keys =`: `move:DX,DY` (a
+/// relative move), `press:N` (the buttons down: 1 left, 2 right, 4
+/// middle), `release` (all up), `wheel:DZ` (QEMU's `dz`: -1 turns the wheel
+/// a notch toward the user, WM_MOUSEWHEEL -120); `None` for a key.
+pub fn mouse_command(token: &str) -> Option<String> {
+    if token == "release" {
+        return Some("mouse_button 0".into());
+    }
+    let (kind, value) = token.split_once(':')?;
+    match kind {
+        "move" => {
+            let (dx, dy) = value.split_once(',')?;
+            Some(format!("mouse_move {} {}", dx.parse::<i32>().ok()?, dy.parse::<i32>().ok()?))
+        }
+        "press" => Some(format!("mouse_button {}", value.parse::<u8>().ok()?)),
+        "wheel" => Some(format!("mouse_move 0 0 {}", value.parse::<i32>().ok()?)),
+        _ => None,
+    }
+}
+
+/// From `info mice`: the index of the PS/2 mouse, and whether it is the
+/// current one (`*`), which `mouse_move` and `mouse_button` drive.
+pub fn ps2_mouse(info: &str) -> Option<(u32, bool)> {
+    info.lines().find(|line| line.contains("PS/2")).and_then(|line| {
+        let current = line.trim_start().starts_with('*');
+        let index = line.split_once('#')?.1.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+        Some((index, current))
+    })
+}
+
+/// A monitor connection, which counts the prompts it has read.
+struct Session {
+    stream: Stream,
+    seen: Vec<u8>,
+    prompts: usize,
+}
+
+impl Session {
+    fn open(monitor: &Monitor) -> Result<Self> {
+        let stream = monitor.connect().map_err(|e| format!("QEMU monitor {monitor:?}: {e}"))?;
+        stream.set_read_timeout(Some(Duration::from_secs(10))).map_err(|e| format!("QEMU monitor: {e}"))?;
+        let mut session = Self { stream, seen: Vec::new(), prompts: 0 };
+        // The banner and the first prompt.
+        session.wait_prompt()?;
+        Ok(session)
+    }
+
+    /// Reads until one more prompt than before; rends what came since the
+    /// last one.
+    fn wait_prompt(&mut self) -> Result<String> {
+        let from = self.seen.len();
         let mut chunk = [0u8; 256];
         let start = Instant::now();
-        while count(&seen, b"(qemu) ") < prompts && start.elapsed() < Duration::from_secs(10) {
-            match stream.read(&mut chunk) {
+        while count(&self.seen, b"(qemu) ") <= self.prompts && start.elapsed() < Duration::from_secs(10) {
+            match self.stream.read(&mut chunk) {
                 Ok(0) => break,
-                Ok(n) => seen.extend_from_slice(&chunk[..n]),
+                Ok(n) => self.seen.extend_from_slice(&chunk[..n]),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
                     break
                 }
                 Err(e) => return Err(format!("QEMU monitor: {e}")),
             }
         }
-        std::thread::sleep(key_duration(key));
+        self.prompts += 1;
+        Ok(String::from_utf8_lossy(&self.seen[from..]).into_owned())
+    }
+
+    /// Sends `command` and rends its answer.
+    fn command(&mut self, command: &str) -> Result<String> {
+        writeln!(self.stream, "{command}").map_err(|e| format!("QEMU monitor: {e}"))?;
+        self.stream.flush().map_err(|e| format!("QEMU monitor: {e}"))?;
+        self.wait_prompt()
+    }
+}
+
+/// Types `keys` on the QEMU whose monitor listens on `monitor`, one after
+/// the other (`sendkey`), each answered by the monitor and released
+/// ([`key_duration`]) before the next. A mouse token ([`mouse_command`])
+/// drives QEMU's PS/2 mouse instead: the first one selects it (`info mice`,
+/// `mouse_set`) and sends an empty move (QEMU loses the first mouse event of
+/// a monitor connection).
+pub fn send_keys(monitor: &Monitor, keys: &[String]) -> Result<()> {
+    let mut session = Session::open(monitor)?;
+    let mut mouse_ready = false;
+    for key in keys {
+        match mouse_command(key) {
+            Some(command) => {
+                if !mouse_ready {
+                    let info = session.command("info mice")?;
+                    match ps2_mouse(&info) {
+                        Some((index, false)) => {
+                            session.command(&format!("mouse_set {index}"))?;
+                        }
+                        Some((_, true)) => {}
+                        None => return Err(format!("QEMU has no PS/2 mouse: {}", info.trim())),
+                    }
+                    session.command("mouse_move 0 0")?;
+                    std::thread::sleep(Duration::from_millis(MOUSE_SETTLE_MS));
+                    mouse_ready = true;
+                }
+                let answer = session.command(&command)?;
+                if answer.contains("Error") || answer.contains("unknown command") {
+                    return Err(format!("`{command}`: {}", answer.trim()));
+                }
+                std::thread::sleep(Duration::from_millis(MOUSE_SETTLE_MS));
+            }
+            None => {
+                session.command(&format!("sendkey {key} {KEY_HOLD_MS}"))?;
+                std::thread::sleep(key_duration(key));
+            }
+        }
     }
     Ok(())
 }
@@ -289,6 +380,25 @@ fn count(haystack: &[u8], needle: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mouse_tokens_become_monitor_commands() {
+        assert_eq!(mouse_command("move:12,-7").as_deref(), Some("mouse_move 12 -7"));
+        assert_eq!(mouse_command("press:1").as_deref(), Some("mouse_button 1"));
+        assert_eq!(mouse_command("release").as_deref(), Some("mouse_button 0"));
+        assert_eq!(mouse_command("wheel:-1").as_deref(), Some("mouse_move 0 0 -1"));
+        assert_eq!(mouse_command("ret"), None, "a key");
+        assert_eq!(mouse_command("move:12"), None, "two coordinates");
+    }
+
+    #[test]
+    fn the_ps2_mouse_is_found_in_info_mice() {
+        let info = "  Mouse #0: QEMU HID Tablet (absolute)\r\n* Mouse #2: QEMU PS/2 Mouse\r\n";
+        assert_eq!(ps2_mouse(info), Some((2, true)));
+        let not_current = "* Mouse #3: QEMU HID Tablet (absolute)\r\n  Mouse #2: QEMU PS/2 Mouse\r\n";
+        assert_eq!(ps2_mouse(not_current), Some((2, false)));
+        assert_eq!(ps2_mouse("No mouse devices connected\r\n"), None);
+    }
 
     #[test]
     fn a_key_waits_for_its_releases() {

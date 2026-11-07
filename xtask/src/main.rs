@@ -454,6 +454,9 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
 
 /// The path of `winlogon.exe` on the ramdisk, which `smss` starts.
 const INITIAL_COMMAND: &str = "WINDOWS/SYSTEM32/WINLOGON.EXE";
+/// Where an installer medium keeps the real Winlogon while SETUP1.EXE is
+/// the initial command. The installer restores it on the target volume.
+const INSTALLED_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.ORG";
 
 /// Among the ramdisk's `files` (`HOST:FAT_PATH`), the test program
 /// `program` (built from `tests/native/`) takes the place of `winlogon.exe`.
@@ -464,7 +467,13 @@ fn put_initial_command(files: &mut Vec<String>, program: &str) -> Result<()> {
         .find_map(|file| file.strip_suffix(suffix.as_str()))
         .ok_or_else(|| format!("initial-command: no test program {program} in tests/native"))?
         .to_string();
-    files.retain(|file| !file.ends_with(&format!(":{INITIAL_COMMAND}")));
+    let initial_suffix = format!(":{INITIAL_COMMAND}");
+    let real = files
+        .iter_mut()
+        .find(|file| file.ends_with(&initial_suffix))
+        .ok_or_else(|| format!("initial-command: the userland has no {INITIAL_COMMAND}"))?;
+    let real_host = real.strip_suffix(&initial_suffix).expect("the matching suffix").to_string();
+    *real = format!("{real_host}:{INSTALLED_WINLOGON}");
     files.push(format!("{host}:{INITIAL_COMMAND}"));
     Ok(())
 }
@@ -600,6 +609,7 @@ mod tests {
         assert_eq!(
             files,
             [
+                "/u/winlogon.exe:WINDOWS/SYSTEM32/WINLOGON.ORG",
                 "/n/GUI1.EXE:GUI1.EXE",
                 "/u/user32.dll:WINDOWS/SYSTEM32/USER32.DLL",
                 "/n/GUI1.EXE:WINDOWS/SYSTEM32/WINLOGON.EXE"

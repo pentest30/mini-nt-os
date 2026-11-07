@@ -18,6 +18,8 @@
 //! - [`shared_data`]: `KUSER_SHARED_DATA`, as on XP SP2.
 //! - [`user`]: what USER (win32k) shares with its i386 clients:
 //!   `USERCONNECT`, `SHAREDINFO`, the handle table, `CLIENTINFO`.
+//! - [`vmmdev`]: the requests of VirtualBox's integration device (the
+//!   absolute mouse).
 //!
 //! `no_std`, without dependencies.
 
@@ -34,6 +36,7 @@ pub mod kbd;
 pub mod loader_block;
 pub mod lpc;
 pub mod memory;
+pub mod mou;
 pub mod ntstatus;
 pub mod object;
 pub mod peb32;
@@ -48,6 +51,7 @@ pub mod shared_data;
 pub mod system_information;
 pub mod teb32;
 pub mod user;
+pub mod vmmdev;
 pub mod winerror;
 
 pub use loader_block::*;

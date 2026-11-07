@@ -165,6 +165,33 @@ jour à chaque commit qui change l'état.
   et pistes dans le document. La VM « Mino » reste définie dans le
   VirtualBox de l'hôte Windows (VHD régénérable par `cargo xtask image` +
   `convertfromraw`).
+- **La souris PS/2 (M6, branche `claude/ps2-mouse`)** : le port auxiliaire du 8042 et IRQ12 (`hal::ps2` :
+  configuration lue une seule fois avec celle du clavier, séquence d'IntelliMouse pour la molette, anneau à
+  part ; `hal::idt::irq_mouse` ne prend un octet que tampon plein — une IRQ12 gardée par le PIC pendant
+  l'initialisation relisait l'ACK 0xFA, un clic droit fantôme) ; le décodeur des paquets de 3 et 4 octets
+  (`i8042::MouseDecoder`, `abi::mou::MouseInputData`) ; le thread d'entrée brute lit les deux anneaux ;
+  `win32k::mouse` : la place du curseur bornée à l'écran, la fenêtre sous lui (co_WinPosWindowFromPoint),
+  WM_MOUSEMOVE (fusionnés dans la file), boutons, WM_*DBLCLK (CS_DBLCLKS, 500 ms, 4 px), WM_NC* avec
+  HTCAPTION/HTBORDER, WM_MOUSEWHEEL au focus, l'état asynchrone des boutons ; les bits QS_MOUSEMOVE et
+  QS_MOUSEBUTTON (le traitement clavier de la file réservé aux touches) ; le curseur logiciel
+  (`win32k::display` : retiré avant chaque dessin de GDI, remis après ; montré au premier mouvement).
+  `xtask` : `keys =` accepte `move:DX,DY`, `press:N`, `release`, `wheel:DZ` (la souris PS/2 de QEMU
+  choisie, un mouvement nul d'amorce) ; scénario `mouse` (`MOUSE1.EXE`, les deux CPU). Pas encore : la
+  capture, WM_NCHITTEST envoyé, l'activation par un clic, WM_SETCURSOR et les formes du curseur,
+  GetCursorPos.
+  Les clics dans l'assistant et le bureau (branche `claude/mouse-clicks`) : `SETUP1.EXE` fait de Back et
+  du bouton principal ce que fait Entrée (un appui et un relâchement sur le même bouton, `nav_at`) ;
+  `DESKTOP1.EXE` ouvre et ferme le menu Démarrer, le ferme par un appui hors de lui, en sélectionne une
+  entrée (`desktop_hit`). Scénarios `installer-click` et `desktop-click`. La file PS/2 de QEMU ne tient
+  que 16 octets : un `move:` de plus de 4 paquets (508 px) part en partie, le reste avec le clic
+  suivant ; les scénarios découpent leurs grands mouvements.
+  Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la copie ou l'étape
+  « configure ») et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
+  La souris absolue de VirtualBox (branche `claude/vbox-mouse`, `docs/compat/vbox.md`) : `hal::pci`
+  (mécanisme n° 1, recherche par fabricant et modèle, BAR d'E/S), `abi::vmmdev`, `hal::vmmdev`, pilote
+  `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
+  de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
+  VirtualBox, rien ne change.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)
@@ -172,7 +199,10 @@ jour à chaque commit qui change l'état.
   démarre la cible seule) ; vérificateur hôte `xtask/src/fat32.rs` (arbre comparé au ramdisk, fichiers de
   boot à l'octet). Sous VirtualBox : feature `interactive` (la sonde de `test-smss` tuait l'installateur
   10 s après la dernière touche ; `cargo xtask image` la met par défaut, scénario `interactive`) et PIO
-  par `rep insw`/`rep outsw` : copie en 17 s, disque installé démarré jusqu'à l'installateur en 21 s.
+  par `rep insw`/`rep outsw` : copie en 17 s. Le média conserve maintenant le vrai Winlogon sous
+  `WINLOGON.ORG`, le restaure sur la cible, et Finish appelle `NtShutdownSystem(ShutdownReboot)`. L'ESP cible reçoit
+  `MINO.TAG` ; même si VirtualBox relance `BOOTX64.EFI` du média primaire, ce chargeur prend `kernel.elf` et
+  `fat.img` sur l'ESP marquée et démarre le système installé au lieu de relancer l'assistant.
   VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
   ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
   phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).

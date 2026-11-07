@@ -99,7 +99,8 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
 /// `ramdisk`, the image the copy read: every file, by its long name, with
 /// its size and its bytes. When the ESP holds files (the installer booted
 /// from a real GPT disk), they are the three boot files of the run's ESP,
-/// `ramdisk`'s directory, byte for byte.
+/// `ramdisk`'s directory, byte for byte, plus `MINO.TAG`, which makes the
+/// loader prefer the installed ESP while the installation medium is attached.
 pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
     let verify = || -> std::io::Result<()> {
         const EXPECTED_BYTES: u64 = 96 * 1024 * 1024;
@@ -153,9 +154,9 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
                 ("kernel.elf", "KERNEL.ELF"),
                 ("fat.img", "FAT.IMG"),
             ];
-            if esp_tree.files != boot_files.len() as u32 {
+            if esp_tree.files != boot_files.len() as u32 + 1 {
                 return Err(std::io::Error::other(format!(
-                    "the ESP holds {} files, not the 3 boot files",
+                    "the ESP holds {} files, not the 3 boot files and installation marker",
                     esp_tree.files
                 )));
             }
@@ -166,6 +167,12 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
                     Some(_) => return Err(std::io::Error::other(format!("ESP {on_esp}: not the run's {host}"))),
                     None => return Err(std::io::Error::other(format!("ESP {on_esp} is missing"))),
                 }
+            }
+            let marker = b"Mino installed\r\n";
+            match esp_tree.contents.get("MINO.TAG") {
+                Some(&(size, hash)) if size as usize == marker.len() && hash == crate::fat32::fnv1a(marker) => {}
+                Some(_) => return Err(std::io::Error::other("ESP MINO.TAG: invalid installation marker")),
+                None => return Err(std::io::Error::other("ESP MINO.TAG is missing")),
             }
         }
 
@@ -194,17 +201,48 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
         if source_tree.files == 0 {
             return Err(std::io::Error::other(format!("{}: an empty source tree", ramdisk.display())));
         }
+        const BOOTSTRAP_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.EXE";
+        const REAL_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.ORG";
+        /// Le shell de session installé : le bureau du média, sous le nom
+        /// canonique, tant que le winlogon de ReactOS ne lance pas de shell.
+        const DESKTOP: &str = "DESKTOP1.EXE";
+        let restores_winlogon = source_tree.contents.contains_key(REAL_WINLOGON);
+        let desktop = source_tree.contents.get(DESKTOP).copied();
         for (path, &(size, hash)) in &source_tree.contents {
-            match stats.contents.get(path) {
-                None => return Err(std::io::Error::other(format!("{path} did not persist"))),
+            if restores_winlogon && (path == BOOTSTRAP_WINLOGON || path == REAL_WINLOGON) {
+                // SETUP1.EXE booted the installation medium under this name,
+                // and the real Winlogon (WINLOGON.ORG) stops for lack of a
+                // session: neither is installed — the desktop takes the name.
+                continue;
+            }
+            let installed_path = path;
+            match stats.contents.get(installed_path) {
+                None => return Err(std::io::Error::other(format!("{installed_path} did not persist"))),
                 Some(&(copied, _)) if copied != size => {
-                    return Err(std::io::Error::other(format!("{path}: {copied} bytes copied, {size} in the source")));
+                    return Err(std::io::Error::other(format!(
+                        "{installed_path}: {copied} bytes copied, {size} in the source"
+                    )));
                 }
                 Some(&(_, copied)) if copied != hash => {
-                    return Err(std::io::Error::other(format!("{path}: the bytes differ from the source")));
+                    return Err(std::io::Error::other(format!("{installed_path}: the bytes differ from the source")));
                 }
                 Some(_) => {}
             }
+        }
+        // The installed shell: the bytes of the medium's desktop.
+        if let Some((size, hash)) = desktop {
+            match stats.contents.get(BOOTSTRAP_WINLOGON) {
+                None => return Err(std::io::Error::other("the installed desktop shell is missing")),
+                Some(&(copied, copied_hash)) if copied == size && copied_hash == hash => {}
+                Some(_) => {
+                    return Err(std::io::Error::other("WINDOWS/SYSTEM32/WINLOGON.EXE is not the media's desktop"))
+                }
+            }
+        } else if restores_winlogon {
+            return Err(std::io::Error::other("the medium has no DESKTOP1.EXE for the installed shell"));
+        }
+        if restores_winlogon && stats.contents.contains_key(REAL_WINLOGON) {
+            return Err(std::io::Error::other("the temporary WINLOGON.ORG reached the installed system"));
         }
         if stats.directories < source_tree.directories {
             return Err(std::io::Error::other(format!(

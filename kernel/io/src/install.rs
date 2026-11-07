@@ -502,6 +502,10 @@ pub struct CopyReport {
 /// cible doit les tenir : le chargeur à la place du média amovible, puis ce
 /// qu'il charge depuis la racine.
 const BOOT_FILES: [&str; 3] = ["EFI/BOOT/BOOTX64.EFI", "kernel.elf", "fat.img"];
+/// Makes an installed ESP win over a still-attached installation medium on
+/// the next UEFI boot. It is written only after all boot files were copied.
+const INSTALLED_MARKER: &str = "MINO.TAG";
+const INSTALLED_MARKER_BYTES: &[u8] = b"Mino installed\r\n";
 
 /// Le volume de l'ESP de démarrage : la partition EFI du disque primaire
 /// quand il porte un GPT (l'image installée, son ESP est FAT32), sinon
@@ -574,23 +578,56 @@ fn copy_boot_file<D: BlockDevice>(
 fn copy_dir(
     src: &FatVolume<impl BlockDevice>,
     src_dir_cluster: u32,
+    src_path: &str,
     dst: &Volume,
     dst_dir: &Node,
     report: &mut CopyReport,
 ) -> Result<(), PrepareError> {
-    for entry in src.dir_entries(src_dir_cluster).map_err(|_| PrepareError::Io)? {
+    let entries = src.dir_entries(src_dir_cluster).map_err(|_| PrepareError::Io)?;
+    // An installer medium boots SETUP1.EXE under the Winlogon name, and keeps
+    // the real userland Winlogon beside it as WINLOGON.ORG. Neither reaches
+    // the installed system: SETUP1 is the medium's session, and the real
+    // Winlogon stops for lack of a session to start. The session shell of
+    // the installed system is the desktop of the medium, DESKTOP1.EXE, under
+    // the canonical name — until a Winlogon that starts a shell itself.
+    let system32 = src_path.eq_ignore_ascii_case("WINDOWS/SYSTEM32");
+    let has_real_winlogon = system32 && entries.iter().any(|entry| entry.name.eq_ignore_ascii_case("WINLOGON.ORG"));
+    if has_real_winlogon {
+        let shell = src.find_in_dir(src.root_cluster(), "DESKTOP1.EXE").map_err(|_| PrepareError::Io)?;
+        let mut file = FatFile { first_cluster: shell.first_cluster, file_size: shell.file_size, position: 0 };
+        let mut data = alloc::vec![0u8; shell.file_size as usize];
+        src.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
+        let node = dst.create(dst_dir, "WINLOGON.EXE", false, 0x20).map_err(|_| PrepareError::Io)?;
+        let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
+        if dst.current(&written).map_err(|_| PrepareError::Io)?.size as u64 != data.len() as u64 {
+            return Err(PrepareError::Io);
+        }
+        report.files += 1;
+        report.bytes += data.len() as u64;
+    }
+    for entry in entries {
         if entry.name == "." || entry.name == ".." {
             continue;
         }
+        if has_real_winlogon
+            && (entry.name.eq_ignore_ascii_case("WINLOGON.EXE") || entry.name.eq_ignore_ascii_case("WINLOGON.ORG"))
+        {
+            continue;
+        }
+        let installed_name = &entry.name;
         if entry.attr & 0x10 != 0 {
-            let node = dst.create(dst_dir, &entry.name, true, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
+            let node =
+                dst.create(dst_dir, installed_name, true, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
             report.directories += 1;
-            copy_dir(src, entry.first_cluster, dst, &node, report)?;
+            let child_path =
+                if src_path.is_empty() { entry.name.clone() } else { alloc::format!("{src_path}/{}", entry.name) };
+            copy_dir(src, entry.first_cluster, &child_path, dst, &node, report)?;
         } else {
             let mut file = FatFile { first_cluster: entry.first_cluster, file_size: entry.file_size, position: 0 };
             let mut data = alloc::vec![0u8; entry.file_size as usize];
             src.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
-            let node = dst.create(dst_dir, &entry.name, false, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
+            let node =
+                dst.create(dst_dir, installed_name, false, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
             let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
             // La vérification après écriture : l'entrée de la cible rend la
             // taille écrite.
@@ -667,6 +704,14 @@ fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
                 report.boot_bytes += copy_boot_file(boot_esp, path, &esp_volume, &esp_root)?;
                 report.boot_files += 1;
             }
+            let marker = esp_volume
+                .create(&esp_root, INSTALLED_MARKER, false, 0x20)
+                .and_then(|marker| esp_volume.write(&marker, 0, INSTALLED_MARKER_BYTES))
+                .map_err(|_| PrepareError::Io)?;
+            if esp_volume.current(&marker).map_err(|_| PrepareError::Io)?.size as usize != INSTALLED_MARKER_BYTES.len()
+            {
+                return Err(PrepareError::Io);
+            }
         }
         // Not "install: copy:": that prefix is the report of a finished copy,
         // which the scenarios wait for.
@@ -680,7 +725,7 @@ fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
     let system_volume = Volume::mount(alloc::boxed::Box::new(system_device)).map_err(|_| PrepareError::Io)?;
     let system_root = system_volume.root();
     let source = FatVolume::mount(crate::ramdisk_device().ok_or(PrepareError::Io)?).map_err(|_| PrepareError::Io)?;
-    copy_dir(&source, source.root_cluster(), &system_volume, &system_root, &mut report)?;
+    copy_dir(&source, source.root_cluster(), "", &system_volume, &system_root, &mut report)?;
     // Tout atteint le support (les FAT en cache, puis le cache du disque) :
     // le disque peut démarrer seul juste après.
     system_volume.flush().map_err(|_| PrepareError::Io)?;

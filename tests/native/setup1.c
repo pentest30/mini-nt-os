@@ -3,7 +3,8 @@
  * scenario puts this WINDOWS-subsystem program in place of winlogon.exe,
  * as the other GUI probes do. It uses the real ReactOS user32/gdi32 over
  * Mino's win32k and implements the five-screen installer flow with keyboard
- * navigation.
+ * navigation; a click on Back or on the primary button does what Enter does
+ * on it.
  *
  * The look is Mino's blue theme (theme.c): a full-screen blue setup screen,
  * the steps on the left, the wizard in a window with a blue title bar. Each
@@ -87,6 +88,7 @@ typedef struct {
 #define IOCTL_MINO_SETUP_COPY 0x8000A00C
 #define SETUP_READY 0
 #define SETUP_DISK_CANDIDATE 1
+#define SHUTDOWN_REBOOT 1
 #define KLF_ACTIVATE 0x00000001
 
 enum Screen {
@@ -101,6 +103,13 @@ static const WCHAR CLASS_NAME[] = L"MinoSetup";
 static enum Screen current_screen = SCREEN_WELCOME;
 /* 0 is Back, 1 is the primary action. */
 static int focused_action = 1;
+/* The navigation buttons as last drawn, for the mouse; a disabled button's
+ * rectangle is empty. */
+enum { NAV_BACK, NAV_PRIMARY, NAV_CANCEL, NAV_COUNT };
+static RECT nav_hit[NAV_COUNT];
+/* The button the left button went down on, or -1: a click is a press and a
+ * release on the same button. */
+static int nav_pressed = -1;
 static int disk_visits;
 static int review_visits;
 static int progress;
@@ -113,6 +122,8 @@ static DWORD target_disk_number;
 static DWORD target_token_low;
 static DWORD target_token_high;
 static WCHAR target_size_text[32] = L"Unavailable";
+static WCHAR esp_size_text[32] = L"Unavailable";
+static WCHAR system_size_text[32] = L"Unavailable";
 
 static CANVAS canvas;
 /* The wizard's content area: its origin and width, set by draw(). */
@@ -127,6 +138,7 @@ __declspec(dllimport) LONG __stdcall NtDeviceIoControlFile(HANDLE file, HANDLE e
                                                            DWORD output_length);
 __declspec(dllimport) LONG __stdcall NtOpenFile(HANDLE *file, DWORD access, OBJECT_ATTRIBUTES *attributes,
                                                 IO_STATUS_BLOCK *iosb, DWORD share, DWORD options);
+__declspec(dllimport) LONG __stdcall NtShutdownSystem(DWORD action);
 
 static void format_mib(WCHAR *out, DWORD value, const WCHAR *suffix)
 {
@@ -197,6 +209,8 @@ static void query_install_backend(void)
     esp_mib = preview.esp_sectors_low / 2048;
     system_mib = preview.system_sectors_low / 2048;
     format_mib(target_size_text, target_mib, L" MiB");
+    format_mib(esp_size_text, esp_mib, L" · FAT32 · verified");
+    format_mib(system_size_text, system_mib, L" · FAT32 · verified");
     target_disk_number = preview.disk_number;
     target_token_low = preview.token_low;
     target_token_high = preview.token_high;
@@ -234,11 +248,11 @@ static void draw_background(int width, int height)
     gradient(&canvas, rect(0, height - 51, width, height), PX(10, 54, 160), PX(4, 34, 116));
 
     emblem(&canvas, 46, 35, 20);
-    text_shadow(&canvas, L"Mino Setup", rect(78, 6, 600, 64), C_WHITE, font(24, TRUE),
+    text_shadow(&canvas, L"MINO OS Setup", rect(78, 6, 600, 64), C_WHITE, font(24, TRUE),
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     line_text(L"Tab  next control      Enter  activate      Esc  go back", rect(24, height - 51, 700, height),
               PX(188, 214, 255), 11, FALSE);
-    say(L"Mino Setup 1.0", rect(width - 300, height - 51, width - 24, height), PX(188, 214, 255), 11, FALSE,
+    say(L"MINO OS Setup 1.0", rect(width - 300, height - 51, width - 24, height), PX(188, 214, 255), 11, FALSE,
         DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
@@ -276,7 +290,7 @@ static void draw_steps(int height)
               TRUE);
     line_text(backend_ready ? target_size_text : L"Attach a blank secondary disk", rect(56, 450, 290, 470),
               PX(208, 226, 255), 11, FALSE);
-    line_text(L"Mino uses the whole disk.", rect(56, 470, 290, 490), PX(208, 226, 255), 11, FALSE);
+    line_text(L"MINO OS uses the whole disk.", rect(56, 470, 290, 490), PX(208, 226, 255), 11, FALSE);
     (void)height;
 }
 
@@ -296,17 +310,38 @@ static void heading(RECT client, const WCHAR *title, const WCHAR *description)
 /* The wizard's buttons, along the bottom of its window. */
 static void draw_navigation(RECT client, BOOL back, const WCHAR *primary, BOOL primary_enabled)
 {
+    static const RECT none;
     int y = client.bottom - 42;
+    RECT back_area = rect(client.right - 282, y, client.right - 202, y + 26);
+    RECT primary_area = rect(client.right - 194, y, client.right - 106, y + 26);
+    RECT cancel_area = rect(client.right - 94, y, client.right - 18, y + 26);
+    BOOL cancel = current_screen != SCREEN_INSTALL;
 
     fill(&canvas, rect(client.left, client.bottom - 56, client.right, client.bottom - 55), C_FACE_LINE);
     fill(&canvas, rect(client.left, client.bottom - 55, client.right, client.bottom - 54), C_WHITE);
     button(&canvas, rect(client.left + 18, y, client.left + 98, y + 26), L"Help", BUTTON_NORMAL);
-    button(&canvas, rect(client.right - 282, y, client.right - 202, y + 26), L"< Back",
+    button(&canvas, back_area, L"< Back",
            !back ? BUTTON_DISABLED : focused_action == 0 ? BUTTON_FOCUSED : BUTTON_NORMAL);
-    button(&canvas, rect(client.right - 194, y, client.right - 106, y + 26), primary,
+    button(&canvas, primary_area, primary,
            !primary_enabled ? BUTTON_DISABLED : focused_action == 1 ? BUTTON_FOCUSED : BUTTON_NORMAL);
-    button(&canvas, rect(client.right - 94, y, client.right - 18, y + 26), L"Cancel",
-           current_screen == SCREEN_INSTALL ? BUTTON_DISABLED : BUTTON_NORMAL);
+    button(&canvas, cancel_area, L"Cancel", cancel ? BUTTON_NORMAL : BUTTON_DISABLED);
+    nav_hit[NAV_BACK] = back ? back_area : none;
+    nav_hit[NAV_PRIMARY] = primary_enabled ? primary_area : none;
+    nav_hit[NAV_CANCEL] = cancel ? cancel_area : none;
+}
+
+/* The navigation button under the mouse at `l` (a mouse message's client
+ * coordinates; the window covers the screen), or -1. */
+static int nav_at(LPARAM l)
+{
+    int x = MOUSE_X(l), y = MOUSE_Y(l), index;
+
+    for (index = 0; index < NAV_COUNT; ++index) {
+        const RECT *area = &nav_hit[index];
+        if (x >= area->left && x < area->right && y >= area->top && y < area->bottom)
+            return index;
+    }
+    return -1;
 }
 
 /* A drop-down list, closed. */
@@ -336,7 +371,7 @@ static void layout_bar(int top)
     fill(&canvas, at(split, top + 1, split + 1, top + 45), PX(72, 112, 182));
     line_text(L"EFI system", at(14, top + 4, split - 8, top + 24), C_INK, 11, TRUE);
     line_text(L"40 MiB · FAT32", at(14, top + 23, split - 8, top + 42), C_INK_SOFT, 11, FALSE);
-    line_text(L"Mino system", at(split + 14, top + 4, content_width - 8, top + 24), C_WHITE, 11, TRUE);
+    line_text(L"MINO OS system", at(split + 14, top + 4, content_width - 8, top + 24), C_WHITE, 11, TRUE);
     line_text(L"54 MiB · FAT32", at(split + 14, top + 23, content_width - 8, top + 42), PX(220, 234, 255), 11,
               FALSE);
 }
@@ -348,9 +383,9 @@ static void draw_welcome(RECT client)
                                    L"AC power connected for laptops"};
     int index;
 
-    heading(client, L"Welcome to Mino Setup",
-            L"This wizard prepares a GPT disk and installs Mino in one guided session.");
-    say(L"Mino will use one whole disk. Nothing is written until you confirm the changes in step 3.",
+    heading(client, L"Welcome to MINO OS Setup",
+            L"This wizard prepares a GPT disk and installs MINO OS in one guided session.");
+    say(L"MINO OS will use one whole disk. Nothing is written until you confirm the changes in step 3.",
         at(0, 0, content_width, 36), C_INK, 11, FALSE, DT_LEFT | DT_WORDBREAK);
     line_text(L"Language", at(0, 44, half - 16, 64), C_INK_SOFT, 11, FALSE);
     line_text(L"Keyboard layout", at(half + 16, 44, content_width, 64), C_INK_SOFT, 11, FALSE);
@@ -371,8 +406,8 @@ static void draw_welcome(RECT client)
 
 static void draw_disk(RECT client)
 {
-    heading(client, L"Select a disk for Mino",
-            L"Mino replaces everything on the selected disk. The running system and boot media are excluded.");
+    heading(client, L"Select a disk for MINO OS",
+            L"MINO OS replaces everything on the selected disk. The running system and boot media are excluded.");
     if (backend_ready)
         card(&canvas, at(0, 0, content_width, 68), PX(226, 238, 255), C_SELECT, C_SELECT);
     else
@@ -423,7 +458,7 @@ static void draw_review(RECT client)
               PX(150, 34, 24), 12, TRUE);
     numbered(66, L"1", L"Create a protective MBR and two verified GPT copies");
     numbered(108, L"2", L"Create an EFI system partition · 40 MiB · FAT32");
-    numbered(150, L"3", L"Create the Mino system partition · 54 MiB · FAT32");
+    numbered(150, L"3", L"Create the MINO OS system partition · 54 MiB · FAT32");
     layout_bar(204);
     line_text(L"Install starts disk writes. Back and Cancel are still safe on this screen.",
               at(0, 270, content_width, 292), C_INK_SOFT, 11, FALSE);
@@ -436,7 +471,7 @@ static void draw_install(RECT client)
                                     L"Verifying volumes", L"Ready for file copy"};
     int index;
 
-    heading(client, L"Installing Mino", L"Writing to ATA secondary master. Keep the computer connected to power.");
+    heading(client, L"Installing MINO OS", L"Writing to ATA secondary master. Keep the computer connected to power.");
     for (index = 0; index < 5; ++index) {
         int top = index * 46;
         int cx = content_x + 14, cy = content_y + top + 16;
@@ -464,27 +499,27 @@ static void draw_install(RECT client)
 
 static void draw_complete(RECT client)
 {
-    heading(client, L"Disk preparation is complete",
-            L"The partition table and both FAT32 volumes passed verification.");
+    heading(client, L"The MINO OS installation is complete",
+            L"The boot files, system files and both FAT32 volumes passed verification.");
     card(&canvas, at(0, 0, content_width, 100), PX(236, 249, 236), PX(150, 204, 150), C_GREEN);
     disc(&canvas, content_x + 42, content_y + 50, 20, PX(132, 218, 118), PX(36, 136, 40));
     check_mark(&canvas, content_x + 32, content_y + 40, 20, C_WHITE);
     line_text(L"Partition table verified", at(80, 12, content_width - 16, 36), PX(30, 110, 40), 13, TRUE);
     line_text(L"Protective MBR, primary GPT and backup GPT are consistent.", at(80, 40, content_width - 16, 62),
               C_INK, 11, FALSE);
-    line_text(L"EFI and Mino volumes are FAT32 and mount successfully.", at(80, 64, content_width - 16, 86),
+    line_text(L"EFI and MINO OS volumes are FAT32 and mount successfully.", at(80, 64, content_width - 16, 86),
               C_INK_SOFT, 11, FALSE);
 
     round_fill(&canvas, at(0, 120, content_width, 196), 4, CORNERS_ALL, C_WHITE, C_WHITE);
     round_frame(&canvas, at(0, 120, content_width, 196), 4, CORNERS_ALL, C_FACE_LINE);
     fill(&canvas, at(1, 158, content_width - 1, 159), PX(226, 234, 248));
     line_text(L"EFI system", at(18, 120, 240, 158), C_INK_SOFT, 11, FALSE);
-    line_text(L"40 MiB · FAT32 · verified", at(240, 120, content_width - 16, 158), C_INK, 11, TRUE);
-    line_text(L"Mino system", at(18, 158, 240, 196), C_INK_SOFT, 11, FALSE);
-    line_text(L"54 MiB · FAT32 · verified", at(240, 158, content_width - 16, 196), C_INK, 11, TRUE);
+    line_text(esp_size_text, at(240, 120, content_width - 16, 158), C_INK, 11, TRUE);
+    line_text(L"MINO OS system", at(18, 158, 240, 196), C_INK_SOFT, 11, FALSE);
+    line_text(system_size_text, at(240, 158, content_width - 16, 196), C_INK, 11, TRUE);
 
     card(&canvas, at(0, 216, content_width, 262), PX(255, 249, 226), PX(230, 198, 112), PX(222, 158, 30));
-    line_text(L"Keep this target attached. The next installer lot copies the boot and system files.",
+    line_text(L"Keep the target attached. Finish restarts the computer into the installed system.",
               at(20, 216, content_width - 16, 262), PX(116, 76, 6), 11, FALSE);
     draw_navigation(client, FALSE, L"Finish", TRUE);
 }
@@ -501,7 +536,7 @@ static void draw(HDC dc)
         window.bottom = height - 72;
     draw_background(width, height);
     draw_steps(height);
-    client = window_frame(&canvas, window, L"Mino Setup", FALSE);
+    client = window_frame(&canvas, window, L"MINO OS Setup", FALSE);
     emblem(&canvas, window.left + 17, window.top + 15, 9);
     fill(&canvas, client, C_FACE);
     content_x = client.left + 44;
@@ -693,7 +728,9 @@ static void activate(HWND window)
     case SCREEN_INSTALL:
         break;
     case SCREEN_COMPLETE:
-        DbgPrint("[setup] finish requested (milestone stays open)\n");
+        DbgPrint("[setup] finish requested; rebooting into the installed system\n");
+        if (NtShutdownSystem(SHUTDOWN_REBOOT) < 0)
+            DbgPrint("[setup] reboot request failed\n");
         break;
     }
 }
@@ -740,6 +777,27 @@ static LRESULT __stdcall setup_procedure(HWND window, UINT message, WPARAM w, LP
             return 0;
         }
         break;
+    case WM_LBUTTONDOWN:
+        nav_pressed = nav_at(l);
+        return 0;
+    case WM_LBUTTONUP: {
+        int pressed = nav_pressed;
+
+        nav_pressed = -1;
+        if (pressed < 0 || nav_at(l) != pressed)
+            return 0;
+        if (pressed == NAV_PRIMARY) {
+            DbgPrint("[setup] click primary\n");
+            focused_action = 1;
+            activate(window);
+        } else if (pressed == NAV_BACK) {
+            DbgPrint("[setup] click back\n");
+            go_back(window);
+        } else {
+            DbgPrint("[setup] click cancel: nothing to cancel before the install\n");
+        }
+        return 0;
+    }
     }
     return DefWindowProcW(window, message, w, l);
 }
@@ -770,7 +828,7 @@ DWORD __stdcall GuiStartup(void)
     height = GetSystemMetrics(SM_CYSCREEN);
     if (!canvas_create(&canvas, width, height))
         ExitProcess(5);
-    window = CreateWindowExW(0, CLASS_NAME, L"Mino Setup", WS_POPUP | WS_VISIBLE, 0, 0, width, height, 0, 0,
+    window = CreateWindowExW(0, CLASS_NAME, L"MINO OS Setup", WS_POPUP | WS_VISIBLE, 0, 0, width, height, 0, 0,
                              instance, 0);
     if (!window)
         ExitProcess(4);
