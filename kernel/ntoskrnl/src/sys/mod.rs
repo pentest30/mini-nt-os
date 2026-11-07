@@ -45,6 +45,7 @@ pub mod locale;
 mod memory;
 mod message;
 mod monitor;
+mod mutant;
 mod object;
 mod port;
 mod process;
@@ -112,6 +113,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateEvent, Handler::Status(event::nt_create_event)),
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
     (services::NtCreateKey, Handler::Status(registry::nt_create_key)),
+    (services::NtCreateMutant, Handler::Status(mutant::nt_create_mutant)),
     (services::NtCreateKeyedEvent, Handler::Status(event::nt_create_keyed_event)),
     (services::NtCreatePort, Handler::Status(port::nt_create_port)),
     (services::NtCreateProcess, Handler::Status(process::nt_create_process)),
@@ -166,6 +168,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtOpenEvent, Handler::Status(event::nt_open_event)),
     (services::NtOpenFile, Handler::Status(file::nt_open_file)),
     (services::NtOpenKey, Handler::Status(registry::nt_open_key)),
+    (services::NtOpenMutant, Handler::Status(mutant::nt_open_mutant)),
     (services::NtOpenKeyedEvent, Handler::Status(event::nt_open_keyed_event)),
     (services::NtOpenProcess, Handler::Status(process::nt_open_process)),
     (services::NtOpenProcessToken, Handler::Status(security::nt_open_process_token)),
@@ -205,7 +208,9 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtReadFile, Handler::Status(file::nt_read_file)),
     (services::NtReadVirtualMemory, Handler::Status(memory::nt_read_virtual_memory)),
+    (services::NtRegisterThreadTerminatePort, Handler::Status(process::nt_register_thread_terminate_port)),
     (services::NtReleaseKeyedEvent, Handler::Status(event::nt_release_keyed_event)),
+    (services::NtReleaseMutant, Handler::Status(mutant::nt_release_mutant)),
     (services::NtReleaseSemaphore, Handler::Status(event::nt_release_semaphore)),
     (services::NtReplyPort, Handler::Status(port::nt_reply_port)),
     (services::NtReplyWaitReceivePort, Handler::Status(port::nt_reply_wait_receive_port)),

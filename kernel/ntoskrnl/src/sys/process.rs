@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::context::Context32;
 use abi::ntstatus::{
-    NtStatus, STATUS_CANT_TERMINATE_SELF, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_CANT_TERMINATE_SELF, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_PARAMETER,
     STATUS_NOT_IMPLEMENTED, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
 };
 use abi::process::{
@@ -445,6 +445,9 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
                 | PROCESS_DEFAULT_HARD_ERROR_MODE
                 | PROCESS_BREAK_ON_TERMINATION
                 | PROCESS_EXCEPTION_PORT
+                | 0x10 /* ProcessUserModeIOPL : l'IOPL d'x86, sans effet */
+                | 0x19 /* ProcessForegroundInformation : un BOOLEAN, sans effet */
+                | 0x22 /* la priorité hors bande, sans effet */
         ) {
             return Err(UNSUPPORTED_SET_CLASSES.report(class));
         }
@@ -452,6 +455,11 @@ pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
             return Err(STATUS_INFO_LENGTH_MISMATCH);
         }
         let value = UserPtr::<u32>::new(buffer).read()?;
+        if matches!(class, 0x10 | 0x19 | 0x22) {
+            // Tolérées sans effet : l'IOPL d'x86, le premier plan, la
+            // priorité hors bande.
+            return Ok(STATUS_SUCCESS);
+        }
         if class == PROCESS_SESSION_INFORMATION {
             super::reference_process(handle, PROCESS_SET_SESSIONID)?.set_session_id(value)?;
             return Ok(STATUS_SUCCESS);
@@ -531,6 +539,23 @@ pub(super) fn nt_set_information_thread(arguments: &[u32]) -> NtStatus {
         Ok(STATUS_SUCCESS)
     };
     status(set())
+}
+
+/// NtRegisterThreadTerminatePort(PortHandle) : le port LPC du thread courant
+/// où csrss veut être averti à sa fin. Le port est gardé par le thread ;
+/// l'envoi du message de fin à la destruction reste à écrire.
+pub(super) fn nt_register_thread_terminate_port(arguments: &[u32]) -> NtStatus {
+    let set = || {
+        let port = super::current_process().handle_table.reference(
+            Handle(arguments[0]),
+            Some(&lpc::PORT_TYPE),
+            AccessMask::NONE,
+        )?;
+        let thread = ps::ethread::current_thread().ok_or(STATUS_ACCESS_DENIED)?;
+        thread.set_terminate_port(port);
+        Ok(())
+    };
+    set().map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
 
 /// NtFlushInstructionCache(ProcessHandle, BaseAddress, Length) : rien à
