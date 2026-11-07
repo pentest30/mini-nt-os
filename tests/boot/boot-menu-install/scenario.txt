@@ -1,0 +1,19 @@
+# Pre-installation startup choice: the default action launches the real Mino
+# installer on WinSta0\Default. The existing installer-ui scenario owns the
+# destructive disk test; this probe stops at the welcome screen.
+features = test-smss, interactive
+requires = userland, native
+initial-command = BOOT1.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [bootmenu] ready; default install => ret
+
+expect = [bootmenu] ready; default install
+expect = [bootmenu] selected install
+expect = [bootmenu] child started
+expect = [setup] screen welcome
+expect = [setup] ready
+
+forbid = [bootmenu] launch failed:
+forbid = *** STOP:
