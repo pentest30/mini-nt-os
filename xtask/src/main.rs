@@ -461,11 +461,18 @@ const INSTALLED_WINLOGON: &str = "WINDOWS/SYSTEM32/WINLOGON.ORG";
 /// Among the ramdisk's `files` (`HOST:FAT_PATH`), the test program
 /// `program` (built from `tests/native/`) takes the place of `winlogon.exe`.
 fn put_initial_command(files: &mut Vec<String>, program: &str) -> Result<()> {
-    let suffix = format!(":{program}");
+    // L'entrée `HOST:FAT_PATH` dont le chemin FAT se termine par le
+    // programme : à la racine du disque pour les sondes natives
+    // (`TASKL.EXE`), dans `WINDOWS/SYSTEM32` pour les applications du
+    // payload (`TASKMGR.EXE`). Le dernier `:` sépare le chemin du hôte de
+    // son chemin FAT, qui n'en contient pas.
     let host = files
         .iter()
-        .find_map(|file| file.strip_suffix(suffix.as_str()))
-        .ok_or_else(|| format!("initial-command: no test program {program} in tests/native"))?
+        .find_map(|file| {
+            let (host, fat) = file.rsplit_once(':')?;
+            (fat == program || fat.ends_with(&format!("/{program}"))).then(|| host.to_string())
+        })
+        .ok_or_else(|| format!("initial-command: no test program {program} on the boot disk"))?
         .to_string();
     let initial_suffix = format!(":{INITIAL_COMMAND}");
     let real = files
