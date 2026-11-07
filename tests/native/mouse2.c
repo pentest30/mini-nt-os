@@ -12,10 +12,12 @@
  *   coordinates; the release too (WM_LBUTTONUP), where A gives the capture
  *   back (ReleaseCapture: WM_CAPTURECHANGED) and reads the cursor
  *   (GetCursorPos);
- * - a press on B's caption: WM_NCHITTEST says HTCAPTION, WM_NCLBUTTONDOWN
- *   (DefWindowProc activates B and brings it in front of A), then
- *   WM_NCLBUTTONUP;
- * - the wheel ends the program with EXIT_STATUS.
+ * - a drag of B's caption: WM_NCHITTEST says HTCAPTION, WM_NCLBUTTONDOWN
+ *   (DefWindowProc activates B, brings it in front of A and moves it with
+ *   the mouse until the release: WM_EXITSIZEMOVE, where B logs its place);
+ * - a drag of A's bottom right corner (HTBOTTOMRIGHT) sizes A;
+ * - a click on B's close button (HTCLOSE): WM_SYSCOMMAND SC_CLOSE, then
+ *   WM_CLOSE, which ends the program with EXIT_STATUS.
  *
  * Built by `cargo xtask` (xtask/src/native.rs) without a C runtime:
  * -nostdlib, entry point GuiStartup.
@@ -60,6 +62,13 @@ typedef struct {
 } POINT;
 
 typedef struct {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+
+typedef struct {
     HWND hwnd;
     UINT message;
     WPARAM wParam;
@@ -71,6 +80,8 @@ typedef struct {
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
 #define WS_VISIBLE 0x10000000
 #define WM_ACTIVATE 0x0006
+#define WM_CLOSE 0x0010
+#define WM_EXITSIZEMOVE 0x0232
 #define WM_MOUSEMOVE 0x0200
 #define WM_LBUTTONDOWN 0x0201
 #define WM_LBUTTONUP 0x0202
@@ -103,6 +114,7 @@ __declspec(dllimport) HWND __stdcall GetCapture(void);
 __declspec(dllimport) BOOL __stdcall GetCursorPos(POINT *point);
 __declspec(dllimport) HWND __stdcall GetFocus(void);
 __declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT min, UINT max);
+__declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
 __declspec(dllimport) void __stdcall PostQuitMessage(int code);
 __declspec(dllimport) ATOM __stdcall RegisterClassExW(const WNDCLASSEXW *class_info);
 __declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
@@ -169,6 +181,7 @@ static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM w, LPARAM l
 {
     const char *name = name_of(window);
     POINT cursor;
+    RECT rect;
 
     switch (message) {
     case WM_ACTIVATE: {
@@ -208,6 +221,15 @@ static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM w, LPARAM l
     case WM_NCLBUTTONUP:
         DbgPrint("[mouse2] %s nclup hit %d\n", name, (int)w);
         break;
+    case WM_EXITSIZEMOVE:
+        GetWindowRect(window, &rect);
+        DbgPrint("[mouse2] %s moved or sized: %ld,%ld %ldx%ld\n", name, rect.left, rect.top, rect.right - rect.left,
+                 rect.bottom - rect.top);
+        break;
+    case WM_CLOSE:
+        DbgPrint("[mouse2] %s close\n", name);
+        PostQuitMessage(0);
+        return 0;
     case WM_MOUSEWHEEL:
         DbgPrint("[mouse2] wheel at %s\n", name);
         PostQuitMessage(0);

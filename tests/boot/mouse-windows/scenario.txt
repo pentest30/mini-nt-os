@@ -8,9 +8,13 @@
 # 2. With the capture, the cursor goes to (800, 600), far outside A: the move
 #    and the release still come to A, in A's client coordinates (696, 476);
 #    A gives the capture back (WM_CAPTURECHANGED) and reads the cursor.
-# 3. A press on B's caption at (560, 262), right of A: HTCAPTION (2),
-#    WM_NCLBUTTONDOWN, B activated and in front of A, WM_NCLBUTTONUP.
-# 4. The wheel, to B, ends the program.
+# 3. A drag of B's caption from (560, 262), right of A, by (100, 150):
+#    HTCAPTION (2), WM_NCLBUTTONDOWN, B activated and in front, moved to
+#    (400, 400) by DefWindowProc's loop, which eats the release.
+# 4. A drag of A's bottom right corner from (498, 398), by (50, 40):
+#    HTBOTTOMRIGHT (17), A activated, sized to 450 x 340.
+# 5. A click on B's close button at (785, 412): HTCLOSE (20), SC_CLOSE,
+#    WM_CLOSE, which ends the program.
 # QEMU's PS/2 queue holds four packets of at most 127 pixels: the longer
 # moves go in several commands (see desktop-click).
 features = test-smss
@@ -21,8 +25,9 @@ timeout = 120
 
 keys = [mouse2] ready => move:-245,-125 move:-245,-125 press:1
 keys = [mouse2] capture A => move:325,225 move:325,225 release
-keys = [mouse2] A lup => move:-120,-169 move:-120,-169 press:1 release
-keys = [mouse2] B nclup hit 2 => wheel:-1
+keys = [mouse2] A lup => move:-120,-169 move:-120,-169 press:1 move:100,150 release
+keys = [mouse2] B moved or sized => move:-162,-14 press:1 move:50,40 release
+keys = [mouse2] A moved or sized => move:237,-26 press:1 release
 
 expect = [mouse2] ready
 expect = [mouse2] A activated: active A, focus A
@@ -33,11 +38,19 @@ expect = [mouse2] A lup 696,476; cursor 800,600; capture none
 expect = [mouse2] A capture changed to none
 expect = [mouse2] B ncldown hit 2
 expect = [mouse2] B activated: active B, focus B
-expect = [mouse2] B nclup hit 2
-expect = [mouse2] wheel at B
+expect = [mouse2] B moved or sized: 400,400 400x300
+expect = [mouse2] A ncldown hit 17
+expect = [mouse2] A moved or sized: 100,100 450x340
+expect = [mouse2] B ncldown hit 20
+expect = [mouse2] B close
 expect = [mouse2] done
 
-# Where A and B overlap, B's client area (COLOR_BTNFACE) is in front again.
-screen = 450 300 D4D0C8
+# B's old place, uncovered: the desktop's background; B's client area at
+# its new place; A's client area where it grew, right of its old frame.
+screen = 650 300 5A7EDC
+screen = 600 600 D4D0C8
+screen = 530 380 FFFFFF
 
 forbid = *** STOP:
+# The move loop takes the release: no WM_NCLBUTTONUP reaches B.
+forbid = [mouse2] B nclup

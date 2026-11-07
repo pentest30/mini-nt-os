@@ -823,6 +823,24 @@ pub const MA_NOACTIVATEANDEAT: u32 = 4;
 /// WM_CAPTURECHANGED: the window loses the mouse capture; `lParam` the
 /// window that takes it.
 pub const WM_CAPTURECHANGED: u32 = 0x0215;
+/// WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE: a move or size loop starts, ends.
+pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
+pub const WM_EXITSIZEMOVE: u32 = 0x0232;
+/// WM_CLOSE: the window is asked to close (DefWindowProc destroys it).
+pub const WM_CLOSE: u32 = 0x0010;
+/// WM_SYSCOMMAND: a command of the window menu or of the frame; `wParam`
+/// SC_* in its upper 12 bits, `lParam` the point on the screen.
+pub const WM_SYSCOMMAND: u32 = 0x0112;
+pub const SC_SIZE: u32 = 0xF000;
+pub const SC_MOVE: u32 = 0xF010;
+pub const SC_MINIMIZE: u32 = 0xF020;
+pub const SC_MAXIMIZE: u32 = 0xF030;
+pub const SC_CLOSE: u32 = 0xF060;
+pub const SC_RESTORE: u32 = 0xF120;
+/// WMSZ_*: the edge SC_SIZE drags, in the low 4 bits of `wParam`; WMSZ_LEFT
+/// (1) to WMSZ_BOTTOMRIGHT (8) follow HTLEFT (10) to HTBOTTOMRIGHT (17).
+pub const WMSZ_LEFT: u32 = 1;
+pub const WMSZ_BOTTOMRIGHT: u32 = 8;
 /// NOPARAM_ROUTINE_RELEASECAPTURE: ReleaseCapture, by NtUserCallNoParam
 /// (user32!ReleaseCapture pushes 0xD).
 pub const NOPARAM_ROUTINE_RELEASECAPTURE: u32 = 0x0D;
@@ -851,10 +869,12 @@ pub const KF_UP: u32 = 0x8000;
 /// The virtual keys (VK_*) that win32k looks at.
 pub mod vk {
     pub const VK_CLEAR: u8 = 0x0C;
+    pub const VK_RETURN: u8 = 0x0D;
     pub const VK_SHIFT: u8 = 0x10;
     pub const VK_CONTROL: u8 = 0x11;
     pub const VK_MENU: u8 = 0x12;
     pub const VK_CAPITAL: u8 = 0x14;
+    pub const VK_ESCAPE: u8 = 0x1B;
     pub const VK_PRIOR: u8 = 0x21;
     pub const VK_NEXT: u8 = 0x22;
     pub const VK_END: u8 = 0x23;
