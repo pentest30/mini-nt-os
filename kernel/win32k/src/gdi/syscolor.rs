@@ -7,6 +7,5 @@
 
 use super::dib::ColorRef;
 
-/// COLOR_BACKGROUND : le fond du bureau, RGB(58, 110, 165) (la table par
-/// défaut de ReactOS, `win32ss/gdi/ntgdi/stockobj.c`).
-pub const BACKGROUND: ColorRef = ColorRef::rgb(58, 110, 165);
+/// COLOR_BACKGROUND : le fond beige du bureau Mino, assorti à l'installateur.
+pub const BACKGROUND: ColorRef = ColorRef::rgb(219, 213, 197);

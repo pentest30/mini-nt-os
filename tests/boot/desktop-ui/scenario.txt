@@ -1,0 +1,18 @@
+# Native visual shell probe: a full-screen Mino desktop with the Start menu
+# open and the Files window in front. It follows the same beige/blue design
+# language as SETUP1.EXE and exercises keyboard navigation in the menu.
+features = test-smss
+requires = userland, native
+initial-command = DESKTOP1.EXE
+cpus = default, intel
+timeout = 120
+
+expect = [desktop] start menu open
+expect = [desktop] ready
+
+# Beige wallpaper, blue selected Start item, white Files content.
+screen = 1100 300 DBD5C5
+screen = 80 470 3A6EA5
+screen = 700 400 FFFFFF
+
+forbid = *** STOP:

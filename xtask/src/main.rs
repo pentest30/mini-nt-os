@@ -381,7 +381,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             if let (true, true, Some(image)) = (outcome.passed, sc.target_disk, &attached_disk) {
                 match partition::verify_setup_target(image) {
                     Ok(()) => println!(
-                        "xtask: {label}: both GPT copies valid; partition contents remain zero in {}",
+                        "xtask: {label}: both GPT copies and both FAT32 volumes are valid in {}",
                         image.display()
                     ),
                     Err(report) => {

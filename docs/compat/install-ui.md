@@ -5,11 +5,12 @@ constructeur d'image GPT/FAT décrit dans [`io-install.md`](io-install.md). Le
 brief visuel reste
 [`../design/installer-ui-prompt.md`](../design/installer-ui-prompt.md).
 
-![Écran final de l'installateur Mino](../images/installer-ui-backend.png)
+![Écran final du nouvel installateur Mino](../images/installer-ui-redesign.png)
 
-La présentation suit le langage visuel des assistants ReactOS et Windows XP :
-rail bleu à cinq étapes, contenu blanc, barre d'actions beige et boutons en
-relief. Les couleurs, le nom et les éléments graphiques restent propres à
+La présentation reprend le langage visuel proposé dans la maquette HTML :
+rail bleu à cinq étapes, en-tête blanc, surface beige, cartes d'état et barre
+d'actions fixe. Elle garde la densité et la lisibilité des assistants
+ReactOS et Windows XP, avec les couleurs et les éléments graphiques propres à
 Mino ; aucune ressource Microsoft n'est intégrée.
 
 ## Architecture retenue
@@ -22,10 +23,10 @@ framebuffer.
 
 `tests/native/setup1.c` est la sonde exécutable de ce choix. Le scénario
 `installer-ui` la met à la place de `winlogon.exe`, comme les autres bancs
-d'essai de USER. Elle ouvre une fenêtre à 760 × 520, qui tient dans un écran
-de 800 × 600, et dessine ses contrôles avec GDI. C'est encore une sonde : le
-programme définitif quittera `tests/native/` quand le chemin d'exécution du
-moteur sera fixé.
+d'essai de USER. Elle ouvre une surface cliente à 800 × 600 au centre du
+bureau 1280 × 800 et dessine ses contrôles avec GDI. C'est encore une sonde :
+le programme définitif quittera `tests/native/` quand le chemin d'exécution
+du moteur sera fixé.
 
 ## Aperçu et préparation GPT privilégiés
 
@@ -71,8 +72,8 @@ compare au plan exact avant de rendre le succès.
 | Accueil | aucune | choisir le disque | non |
 | Disque | cible de développement unique | revoir les changements | Tab puis Retour, ou Échap |
 | Revue | cible, suppression, GPT, ESP et système | commencer l'installation | Tab puis Retour, ou Échap |
-| Installation | revalidation, deux GPT, vidage et relecture | aucune pendant l'opération synchrone | non après la limite d'écriture |
-| Terminé | deux GPT vérifiées | terminer ce jalon | non |
+| Installation | revalidation, deux GPT, formatage FAT32 et montage de contrôle | aucune pendant l'opération synchrone | non après la limite d'écriture |
+| Terminé | GPT et deux volumes FAT32 vérifiés | terminer ce jalon | non |
 
 Tab déplace le choix entre Retour et l'action primaire ; Retour ou Espace
 l'active ; Échap revient en arrière tant qu'aucune écriture n'a commencé.
@@ -81,12 +82,13 @@ couleurs contrastées et les cinq étapes dans un rail latéral.
 
 ## Limite de sécurité actuelle
 
-La préparation écrit uniquement les 67 secteurs de métadonnées GPT : MBR,
-deux tableaux de 32 secteurs et deux en-têtes. Les plages des partitions,
-l'espace libre, les systèmes de fichiers et les fichiers ne sont pas touchés.
-Un refus (`[setup] prepare failed: …`) laisse l'écran d'installation affiché
-et la progression arrêtée. `SETUP1.EXE` ne reçoit aucun handle de disque
-brut ; le noyau garde la sélection, la revalidation et les E/S ATA.
+La préparation écrit le MBR protecteur et les deux copies GPT, puis le lot de
+formatage construit les deux volumes FAT32 bornés et vérifie qu'ils remontent
+dans le lecteur du noyau. La copie du chargeur, du noyau et du système reste
+le prochain lot. Un refus (`[setup] prepare failed: …` ou
+`[setup] format failed: …`) laisse l'écran d'installation affiché et la
+progression arrêtée. `SETUP1.EXE` ne reçoit aucun handle de disque brut ; le
+noyau garde la sélection, la revalidation et les E/S ATA.
 
 Ce jalon n'offre pas encore de démontage générique. Sa politique plus étroite
 accepte seulement le maître secondaire présent que le démarrage n'a pas monté
@@ -105,22 +107,35 @@ peinte (vu sur le chemin SYSENTER, où tout va plus vite).
 
 Le scénario `installer-ui` injecte les touches par le moniteur de QEMU,
 exerce Tab, Retour et Échap, franchit la limite d'écriture et vérifie des
-pixels de l'écran final. Après chaque boot, l'hôte relit les CRC des deux GPT,
-compare les deux partitions au plan 40 Mio/54 Mio et exige que tous les
-secteurs de contenu soient encore nuls. Le scénario `installer-prepare`
-vérifie en plus le mauvais jeton et la seconde préparation refusés sans
-écriture. Les deux tournent avec les modèles de processeur AMD et Intel.
+pixels du nouvel écran final. Après chaque boot, l'hôte relit les deux copies
+GPT, compare les partitions au plan 40 Mio/54 Mio et contrôle les structures
+FAT32. Le scénario `installer-prepare` vérifie en plus le mauvais jeton et la
+seconde préparation refusés sans écriture. Les deux tournent avec les modèles
+de processeur AMD et Intel.
+
+## Prototype du bureau
+
+`DESKTOP1.EXE` est la première sonde du bureau assorti à l'installateur. Elle
+dessine le fond beige, la barre des tâches, le menu Démarrer ouvert et une
+fenêtre Files avec navigation latérale. Le menu accepte Haut, Bas, Entrée,
+Espace et Échap. Le contenu de Files est encore visuel : il ne parcourt pas
+le système de fichiers et ne remplace pas encore un shell de production.
+
+![Prototype du bureau Mino](../images/desktop-ui-redesign.png)
+
+Le scénario `desktop-ui` vérifie les marqueurs après paint et trois zones de
+couleur stables. Il tourne sur les mêmes profils CPU que l'installateur.
 
 ```bash
-cargo xtask test --boot --scenario installer-ui
+cargo xtask test --boot --scenario installer-ui --scenario desktop-ui
 ```
 
 ## Suite
 
-1. Construire les deux vues de partitions bornées, les formater en FAT32 et
-   relire leurs structures avant toute copie.
-2. Copier le chargeur, le noyau et le système, puis rendre de vrais événements
+1. Copier le chargeur, le noyau et le système, puis rendre de vrais événements
    de progression ; la revue reste la dernière étape réversible.
+2. Brancher Files sur le système de fichiers et déplacer le bureau hors des
+   sondes natives vers le processus shell retenu.
 3. Ajouter la souris PS/2, le ciblage par fenêtre, les messages `WM_MOUSE*`
    et le curseur dans `win32k`; la navigation clavier reste complète.
 4. Ajouter le démontage générique, les erreurs récupérables, la reprise sûre
