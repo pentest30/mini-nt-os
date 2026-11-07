@@ -406,9 +406,11 @@ Scénarios :
   noyau et le ramdisk, le noyau monte `C:` sur sa partition système (LBA
   100352) et va au bout de la phase 1 (les deux CPU, 50 s).
 - `installer-finish` conduit l'interface jusqu'à Finish, qui appelle
-  `NtShutdownSystem(ShutdownReboot)`, puis démarre depuis la cible seule. Le
-  vrai Winlogon, gardé comme `WINLOGON.ORG` pendant que SETUP1 occupe son nom
-  sur le média, est restauré comme `WINLOGON.EXE` sur le volume installé.
+  `NtShutdownSystem(ShutdownReboot)`. Le média reste primaire et la cible
+  secondaire pendant les deux boots, comme sous VirtualBox : `MINO.TAG` fait
+  préférer l'ESP installée au chargeur du média. Le vrai Winlogon, gardé comme
+  `WINLOGON.ORG` pendant que SETUP1 occupe son nom sur le média, est restauré
+  comme `WINLOGON.EXE` sur le volume installé.
 
 Sous VirtualBox, voir [`vbox.md`](vbox.md) : l'installateur était tué en
 pleine copie (la sonde de `test-smss`), et le PIO lent ; les deux sont

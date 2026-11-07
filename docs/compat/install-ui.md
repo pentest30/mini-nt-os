@@ -128,9 +128,10 @@ FAT32 avec son propre lecteur et compare l'arbre copié au ramdisk, fichier
 par fichier (`io-install.md`, lot 4 étape 2). Le scénario `installer-prepare`
 vérifie en plus le mauvais jeton et la seconde préparation refusés sans
 écriture. Les deux tournent avec les modèles de processeur AMD et Intel.
-`installer-finish` active ensuite Finish, attend la demande de reset, démarre
-une seconde fois depuis la cible seule et refuse toute réapparition de
-l'assistant sans cible.
+`installer-finish` active ensuite Finish et attend la demande de reset. Au
+second démarrage, le média et la cible restent attachés comme sous VirtualBox :
+le chargeur du média repère `MINO.TAG` sur l'ESP installée, y prend le noyau et
+le ramdisk, et le scénario refuse toute réapparition de l'assistant sans cible.
 
 ## Prototype du bureau
 

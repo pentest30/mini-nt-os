@@ -99,7 +99,8 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
 /// `ramdisk`, the image the copy read: every file, by its long name, with
 /// its size and its bytes. When the ESP holds files (the installer booted
 /// from a real GPT disk), they are the three boot files of the run's ESP,
-/// `ramdisk`'s directory, byte for byte.
+/// `ramdisk`'s directory, byte for byte, plus `MINO.TAG`, which makes the
+/// loader prefer the installed ESP while the installation medium is attached.
 pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
     let verify = || -> std::io::Result<()> {
         const EXPECTED_BYTES: u64 = 96 * 1024 * 1024;
@@ -153,9 +154,9 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
                 ("kernel.elf", "KERNEL.ELF"),
                 ("fat.img", "FAT.IMG"),
             ];
-            if esp_tree.files != boot_files.len() as u32 {
+            if esp_tree.files != boot_files.len() as u32 + 1 {
                 return Err(std::io::Error::other(format!(
-                    "the ESP holds {} files, not the 3 boot files",
+                    "the ESP holds {} files, not the 3 boot files and installation marker",
                     esp_tree.files
                 )));
             }
@@ -166,6 +167,12 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
                     Some(_) => return Err(std::io::Error::other(format!("ESP {on_esp}: not the run's {host}"))),
                     None => return Err(std::io::Error::other(format!("ESP {on_esp} is missing"))),
                 }
+            }
+            let marker = b"Mino installed\r\n";
+            match esp_tree.contents.get("MINO.TAG") {
+                Some(&(size, hash)) if size as usize == marker.len() && hash == crate::fat32::fnv1a(marker) => {}
+                Some(_) => return Err(std::io::Error::other("ESP MINO.TAG: invalid installation marker")),
+                None => return Err(std::io::Error::other("ESP MINO.TAG is missing")),
             }
         }
 

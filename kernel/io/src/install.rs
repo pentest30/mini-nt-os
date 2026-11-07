@@ -502,6 +502,10 @@ pub struct CopyReport {
 /// cible doit les tenir : le chargeur à la place du média amovible, puis ce
 /// qu'il charge depuis la racine.
 const BOOT_FILES: [&str; 3] = ["EFI/BOOT/BOOTX64.EFI", "kernel.elf", "fat.img"];
+/// Makes an installed ESP win over a still-attached installation medium on
+/// the next UEFI boot. It is written only after all boot files were copied.
+const INSTALLED_MARKER: &str = "MINO.TAG";
+const INSTALLED_MARKER_BYTES: &[u8] = b"Mino installed\r\n";
 
 /// Le volume de l'ESP de démarrage : la partition EFI du disque primaire
 /// quand il porte un GPT (l'image installée, son ESP est FAT32), sinon
@@ -685,6 +689,14 @@ fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
             for path in BOOT_FILES {
                 report.boot_bytes += copy_boot_file(boot_esp, path, &esp_volume, &esp_root)?;
                 report.boot_files += 1;
+            }
+            let marker = esp_volume
+                .create(&esp_root, INSTALLED_MARKER, false, 0x20)
+                .and_then(|marker| esp_volume.write(&marker, 0, INSTALLED_MARKER_BYTES))
+                .map_err(|_| PrepareError::Io)?;
+            if esp_volume.current(&marker).map_err(|_| PrepareError::Io)?.size as usize != INSTALLED_MARKER_BYTES.len()
+            {
+                return Err(PrepareError::Io);
             }
         }
         // Not "install: copy:": that prefix is the report of a finished copy,
