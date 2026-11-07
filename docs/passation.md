@@ -161,6 +161,22 @@ jour à chaque commit qui change l'état.
   et pistes dans le document. La VM « Mino » reste définie dans le
   VirtualBox de l'hôte Windows (VHD régénérable par `cargo xtask image` +
   `convertfromraw`).
+- **La souris PS/2 (M6, branche `claude/ps2-mouse`)** : le port auxiliaire du 8042 et IRQ12 (`hal::ps2` :
+  configuration lue une seule fois avec celle du clavier, séquence d'IntelliMouse pour la molette, anneau à
+  part ; `hal::idt::irq_mouse` ne prend un octet que tampon plein — une IRQ12 gardée par le PIC pendant
+  l'initialisation relisait l'ACK 0xFA, un clic droit fantôme) ; le décodeur des paquets de 3 et 4 octets
+  (`i8042::MouseDecoder`, `abi::mou::MouseInputData`) ; le thread d'entrée brute lit les deux anneaux ;
+  `win32k::mouse` : la place du curseur bornée à l'écran, la fenêtre sous lui (co_WinPosWindowFromPoint),
+  WM_MOUSEMOVE (fusionnés dans la file), boutons, WM_*DBLCLK (CS_DBLCLKS, 500 ms, 4 px), WM_NC* avec
+  HTCAPTION/HTBORDER, WM_MOUSEWHEEL au focus, l'état asynchrone des boutons ; les bits QS_MOUSEMOVE et
+  QS_MOUSEBUTTON (le traitement clavier de la file réservé aux touches) ; le curseur logiciel
+  (`win32k::display` : retiré avant chaque dessin de GDI, remis après ; montré au premier mouvement).
+  `xtask` : `keys =` accepte `move:DX,DY`, `press:N`, `release`, `wheel:DZ` (la souris PS/2 de QEMU
+  choisie, un mouvement nul d'amorce) ; scénario `mouse` (`MOUSE1.EXE`, les deux CPU). Pas encore : la
+  capture, WM_NCHITTEST envoyé, l'activation par un clic, WM_SETCURSOR et les formes du curseur,
+  GetCursorPos, les clics dans l'installateur.
+  Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la copie ou l'étape
+  « configure ») et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)

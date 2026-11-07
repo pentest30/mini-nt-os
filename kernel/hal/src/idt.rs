@@ -100,8 +100,9 @@ pub unsafe fn init() {
         // ── Interrupts: the vector's class is the ISR's IRQL (hal::irql) ─────
         // APIC timer at CLOCK_LEVEL, above DISPATCH_LEVEL.
         idt[super::timer::CLOCK_VECTOR].set_handler_fn(irq_timer);
-        // PS/2 keyboard (8259 IRQ1) at DEVICE_LEVEL.
+        // PS/2 keyboard (8259 IRQ1) and mouse (IRQ12) at DEVICE_LEVEL.
         idt[super::timer::PIC_VECTOR_BASE + 1].set_handler_fn(irq_keyboard);
+        idt[super::timer::PIC_VECTOR_BASE + 12].set_handler_fn(irq_mouse);
         // Spurious interrupts: the APIC's (SVR), which a raise of the TPR can
         // produce for an interrupt it has just masked, and the master 8259's
         // IRQ7. Neither takes an EOI.
@@ -125,6 +126,7 @@ pub unsafe fn init() {
             unsafe {
                 idt[super::timer::CLOCK_VECTOR].set_handler_addr(stub(Entry::Clock, handler(irq_timer)));
                 idt[super::timer::PIC_VECTOR_BASE + 1].set_handler_addr(stub(Entry::Keyboard, handler(irq_keyboard)));
+                idt[super::timer::PIC_VECTOR_BASE + 12].set_handler_addr(stub(Entry::Mouse, handler(irq_mouse)));
                 let spurious = stub(Entry::Spurious, handler(irq_spurious));
                 idt[0xFF].set_handler_addr(spurious);
                 idt[super::timer::PIC_VECTOR_BASE + 7].set_handler_addr(spurious);
@@ -692,6 +694,32 @@ extern "x86-interrupt" fn irq_keyboard(_frame: InterruptStackFrame) {
     // Send EOI to the master PIC (IRQ1 is on the master 8259).
     // SAFETY: port 0x20 is the master PIC command register.
     unsafe {
+        Port::<u8>::new(0x20).write(0x20);
+    }
+    super::irql::exit_interrupt(interrupted);
+}
+
+// ── PS/2 mouse IRQ12 handler ──────────────────────────────────────────────
+
+extern "x86-interrupt" fn irq_mouse(_frame: InterruptStackFrame) {
+    let interrupted = super::irql::enter_interrupt(super::irql::Irql::Device);
+    // A byte waits only with the output buffer full (status bit 0): an IRQ12
+    // the PIC kept while the mouse was set up with interrupts off (its
+    // acknowledgements read by polling) finds it empty, and port 0x60 would
+    // give the last byte again (0xFA, which decodes as a right button). The
+    // byte is then the mouse's: IRQ12 says so (the status's auxiliary bit is
+    // not reliable on some emulations).
+    // SAFETY: ports 0x64 and 0x60 are the PS/2 status and data registers;
+    // always safe at CPL 0.
+    if unsafe { Port::<u8>::new(0x64).read() } & 1 != 0 {
+        // SAFETY: as above.
+        let byte: u8 = unsafe { Port::<u8>::new(0x60).read() };
+        super::ps2::isr_push_mouse(byte);
+    }
+    // EOI to the slave 8259 (IRQ12), then to the master (its cascade, IRQ2).
+    // SAFETY: ports 0xA0 and 0x20 are the PICs' command registers.
+    unsafe {
+        Port::<u8>::new(0xA0).write(0x20);
         Port::<u8>::new(0x20).write(0x20);
     }
     super::irql::exit_interrupt(interrupted);

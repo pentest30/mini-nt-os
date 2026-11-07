@@ -1,0 +1,40 @@
+# The PS/2 mouse, from the 8042 to a window (02 §7.2, §8): QEMU's monitor
+# moves the mouse and presses its buttons (`keys = … move:, press:,
+# release, wheel:`); the 8042's auxiliary port raises IRQ12, the i8042
+# driver decodes the packets (4 bytes: QEMU's mouse answers the IntelliMouse
+# sequence), the raw input thread gives them to win32k, which moves the
+# cursor (drawn on the screen) and posts the messages to the window under
+# it. MOUSE1.EXE, in place of winlogon.exe, covers the screen (its client
+# area is the screen) with a class that wants double clicks, and logs each
+# message. The cursor starts at the centre of the screen (640, 400).
+features = test-smss
+requires = userland, native
+initial-command = MOUSE1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [mouse] waiting => move:12,-7
+keys = [mouse] move 652,393 keys 0000 => press:1 release press:1 release
+keys = [mouse] ldblclk 652,393 keys 0001 => press:2 release
+keys = [mouse] rup 652,393 keys 0000 => wheel:-1
+
+expect = HAL PS/2: keyboard IRQ1 and mouse IRQ12 enabled (4-byte packets)
+expect = [mouse] waiting
+expect = [input] PS/2 mouse: first packet: dx=12, dy=-7, buttons=0x0000
+expect = [mouse] move 652,393 keys 0000
+expect = [mouse] ldown 652,393 keys 0001; async down
+expect = [mouse] lup 652,393 keys 0000
+expect = [mouse] ldblclk 652,393 keys 0001
+expect = [mouse] rdown 652,393 keys 0002
+expect = [mouse] rup 652,393 keys 0000
+expect = [mouse] wheel -120 at 652,393 keys 0000
+expect = [mouse] done
+
+# The cursor: its tip (black) at the point, the window (white) beside it.
+screen = 652 393 000000
+screen = 651 393 FFFFFF
+
+forbid = *** STOP:
+# An IRQ12 the PIC kept while the mouse was set up must not read the last
+# acknowledgement again (0xFA: a right button down, before any move).
+forbid = [mouse] rdown 640,400

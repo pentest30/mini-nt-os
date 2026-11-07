@@ -1,6 +1,8 @@
 //! Le thread d'entrée brute (RIT, 02 §7.2 ; RawInputThreadMain d'`input.c`
-//! de ReactOS, comme spécification) : il lit le clavier (`i8042`) et remet
-//! chaque touche à win32k (`win32k::input::process_keyboard_input`).
+//! de ReactOS, comme spécification) : il lit le clavier et la souris
+//! (`i8042`) et remet chaque touche et chaque mouvement à win32k
+//! (`win32k::input::process_keyboard_input`,
+//! `win32k::mouse::process_mouse_input`).
 //!
 //! L'interruption du clavier (`hal::ps2`) appelle [`notify`], qui met un
 //! DPC dans la file ; le DPC signale l'événement qu'attend le thread, à la
@@ -8,7 +10,9 @@
 //! clavier qu'une fois que win32k a pris l'écran : avant, ce qui le lisait
 //! (l'ancien lanceur, `syscall.rs`) le garde.
 //!
-//! Pas encore : la souris, les IRP (kbdclass), les bureaux d'entrée qui
+//! Les deux interruptions (IRQ1, IRQ12) appellent le même [`notify`].
+//!
+//! Pas encore : les IRP (kbdclass, mouclass), les bureaux d'entrée qui
 //! changent, l'arrêt du thread.
 
 use core::ffi::c_void;
@@ -57,6 +61,8 @@ fn signal(_dpc: *const KDpc, _context: *mut c_void, _arg1: *mut c_void, _arg2: *
 fn raw_input_thread(_context: *mut c_void) {
     let event = EVENT.load(Ordering::Acquire);
     let mut keyboard = i8042::Keyboard::new();
+    let mut mouse = i8042::Mouse::new();
+    let mut first_packet = true;
     loop {
         // SAFETY: an event initialised by `start`, never freed; this kernel
         // thread waits at PASSIVE_LEVEL.
@@ -68,6 +74,21 @@ fn raw_input_thread(_context: *mut c_void) {
         }
         while let Some(data) = keyboard.read() {
             win32k::input::process_keyboard_input(&data);
+            LAST_KEY.store(hal::timer::interrupt_time().max(1), Ordering::Relaxed);
+        }
+        while let Some(data) = mouse.as_mut().and_then(i8042::Mouse::read) {
+            // The first packet that does something, once (a boot scenario's
+            // marker); never one per packet.
+            if first_packet && (data.last_x, data.last_y, data.button_flags) != (0, 0, 0) {
+                first_packet = false;
+                log::info!(
+                    "[input] PS/2 mouse: first packet: dx={}, dy={}, buttons={:#06x}",
+                    data.last_x,
+                    data.last_y,
+                    data.button_flags
+                );
+            }
+            win32k::mouse::process_mouse_input(&data);
             LAST_KEY.store(hal::timer::interrupt_time().max(1), Ordering::Relaxed);
         }
     }
@@ -88,5 +109,10 @@ pub fn start() {
     EVENT.store(event, Ordering::Release);
     hal::ps2::set_notify(Some(notify));
     crate::spawn_kernel_thread(ke::sched::LOW_REALTIME_PRIORITY + 3, raw_input_thread, ptr::null_mut());
-    log::info!("[boot] raw input thread: the PS/2 keyboard (i8042) to win32k");
+    match hal::ps2::mouse_packet_size() {
+        Some(size) => {
+            log::info!("[boot] raw input thread: the PS/2 keyboard and mouse ({size}-byte packets, i8042) to win32k")
+        }
+        None => log::info!("[boot] raw input thread: the PS/2 keyboard (i8042) to win32k; no mouse"),
+    }
 }

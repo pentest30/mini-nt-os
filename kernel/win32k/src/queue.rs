@@ -38,9 +38,20 @@ use abi::user::vk::{
     VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_SHIFT,
 };
 use abi::user::{
-    Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_PAINT, QS_POSTMESSAGE, WM_DEVICECHANGE, WM_KEYDOWN,
-    WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_MOUSEBUTTON, QS_MOUSEMOVE, QS_PAINT, QS_POSTMESSAGE,
+    WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_QUIT,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
+
+/// The wake bit of a hardware message: QS_KEY for the keyboard's,
+/// QS_MOUSEMOVE for a move, QS_MOUSEBUTTON for the rest of the mouse's.
+pub fn input_bit(message: &Msg32) -> u16 {
+    match message.message {
+        WM_KEYFIRST..=WM_KEYLAST => QS_KEY,
+        WM_MOUSEMOVE | WM_NCMOUSEMOVE => QS_MOUSEMOVE,
+        _ => QS_MOUSEBUTTON,
+    }
+}
 use ex::{Event, EventType};
 use hal::sync::KSpinLock;
 use ob::Object;
@@ -164,18 +175,24 @@ impl QueueState {
         } else {
             self.wake |= posted;
         }
-        if self.input.is_empty() {
-            self.wake &= !QS_KEY;
-        } else {
-            self.wake |= QS_KEY;
-        }
+        let input = QS_KEY | QS_MOUSEMOVE | QS_MOUSEBUTTON;
+        self.wake = (self.wake & !input) | self.input.iter().fold(0, |bits, message| bits | input_bit(message));
     }
 
-    /// MsqPostMessage d'un message matériel : la touche `message` à la fin
-    /// des touches (`QS_KEY`).
+    /// MsqPostMessage d'un message matériel : `message` à la fin des
+    /// messages du clavier et de la souris (`QS_KEY`, `QS_MOUSEMOVE`,
+    /// `QS_MOUSEBUTTON`). Un mouvement qui en suit un autre pour la même
+    /// fenêtre le remplace (co_MsqInsertMouseMessage) : seule compte la
+    /// dernière place.
     pub fn post_input(&mut self, message: Msg32) {
-        self.input.push_back(message);
-        self.change |= QS_KEY;
+        let bit = input_bit(&message);
+        match self.input.back_mut() {
+            Some(last) if bit == QS_MOUSEMOVE && last.message == message.message && last.hwnd == message.hwnd => {
+                *last = message;
+            }
+            _ => self.input.push_back(message),
+        }
+        self.change |= bit;
         self.refresh();
     }
 
@@ -236,7 +253,7 @@ impl QueueState {
     /// compte. Les bits de changement des messages postés et des touches
     /// sont effacés : on a regardé.
     pub fn peek(&mut self, filter: &Filter, remove: bool) -> Option<Msg32> {
-        self.change &= !(QS_POSTMESSAGE | QS_ALLPOSTMESSAGE | QS_KEY);
+        self.change &= !(QS_POSTMESSAGE | QS_ALLPOSTMESSAGE | QS_KEY | QS_MOUSEMOVE | QS_MOUSEBUTTON);
         let found = match self.posted.iter().position(|message| filter.matches(message)) {
             Some(index) if remove => self.posted.remove(index),
             Some(index) => Some(self.posted[index]),
@@ -258,8 +275,12 @@ impl QueueState {
     fn peek_input(&mut self, filter: &Filter, remove: bool) -> Option<Msg32> {
         let index = self.input.iter().position(|message| filter.matches(message))?;
         let mut message = if remove { self.input.remove(index)? } else { self.input[index] };
-        update_keys_from_message(&mut self.keys, &message);
-        message.w_param = u32::from(crate::input::simplify_vk(message.w_param as u8));
+        // Only a key: a mouse message's `wParam` is MK_* (and the wheel's
+        // amount), not a virtual key.
+        if input_bit(&message) == QS_KEY {
+            update_keys_from_message(&mut self.keys, &message);
+            message.w_param = u32::from(crate::input::simplify_vk(message.w_param as u8));
+        }
         Some(message)
     }
 

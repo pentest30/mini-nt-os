@@ -34,6 +34,7 @@ pub mod kbd;
 pub mod loader_block;
 pub mod lpc;
 pub mod memory;
+pub mod mou;
 pub mod ntstatus;
 pub mod object;
 pub mod peb32;
