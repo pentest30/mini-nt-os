@@ -6,8 +6,8 @@
 # revalidates the disk, writes the protective MBR and both GPT copies, and
 # rereads them (the boot's own self-test stays out, behind the test-install
 # feature, so the target is blank). The host then validates both copies and
-# confirms that every partition-content sector stayed zero. Formatting and
-# file copy remain for the next milestone.
+# confirms both FAT32 metadata prefixes while every free cluster stays zero.
+# File copy remains for the next milestone.
 features = test-smss
 requires = userland, native
 initial-command = SETUP1.EXE
@@ -33,10 +33,11 @@ expect = [setup] stage configure: 80%
 expect = [setup] stage verify: 100%
 expect = [setup] screen complete; GPT, FAT32 and files written
 
-# Final screen: blue classic-wizard rail and green completion mark.
-screen = 130 90 17386F
-screen = 150 360 173D78
-screen = 374 274 2E8152
+# Final screen, in Mino's blue theme: the dark blue top band, the target-disk
+# panel on the blue field, the pale-green completion card of the wizard.
+screen = 900 30 062A87
+screen = 280 410 2356CA
+screen = 1100 320 ECF9EC
 
 keys = [setup] ready => ret
 keys = [setup] screen disk 1 => tab ret

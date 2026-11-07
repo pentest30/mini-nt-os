@@ -135,12 +135,13 @@ pub unsafe fn init() {
         master_cmd.write(0x11);
         slave_cmd.write(0x11);
         // ICW2: vector offset
-        master_dat.write(PIC_VECTOR_BASE); // master: IRQ0 → vector 0x30
-        slave_dat.write(PIC_VECTOR_BASE + 8); // slave:  IRQ8 → vector 0x38
-                                              // ICW3: master/slave wiring
-        master_dat.write(0x04); // slave on IRQ2
-        slave_dat.write(0x02); // slave cascade identity
-                               // ICW4: 8086 mode
+        // Master: IRQ0 → vector 0x30; slave: IRQ8 → vector 0x38.
+        master_dat.write(PIC_VECTOR_BASE);
+        slave_dat.write(PIC_VECTOR_BASE + 8);
+        // ICW3: master/slave wiring
+        master_dat.write(0x04);
+        slave_dat.write(0x02);
+        // ICW4: 8086 mode
         master_dat.write(0x01);
         slave_dat.write(0x01);
         // OCW1: mask all except IRQ1 (keyboard) on master; mask all on slave

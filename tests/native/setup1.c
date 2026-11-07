@@ -2,41 +2,22 @@
  * First native UI milestone for Mino's installer. The `installer-ui` boot
  * scenario puts this WINDOWS-subsystem program in place of winlogon.exe,
  * as the other GUI probes do. It uses the real ReactOS user32/gdi32 over
- * Mino's win32k and implements the five-screen installer flow with custom
- * GDI controls and keyboard navigation.
+ * Mino's win32k and implements the five-screen installer flow with keyboard
+ * navigation.
  *
- * The read-only privileged backend now supplies a real ATA target and an
- * immutable GPT/FAT plan through NtDeviceIoControlFile. Execution remains
- * deliberately disabled: no disk is modified by this program.
+ * The look is Mino's blue theme (theme.c): a full-screen blue setup screen,
+ * the steps on the left, the wizard in a window with a blue title bar. Each
+ * frame is drawn into a DIB section, then copied to the window.
+ *
+ * The privileged backend supplies a real ATA target and an immutable GPT/FAT
+ * plan through NtDeviceIoControlFile; Install writes the GPT and formats
+ * both volumes through the kernel, which revalidates the preview's token.
  *
  * Built by `cargo xtask` without a C runtime: -nostdlib, entry point
  * GuiStartup.
  */
 
-typedef unsigned short WCHAR;
-typedef unsigned short ATOM;
-typedef unsigned short USHORT;
-typedef unsigned char BYTE;
-typedef unsigned int UINT;
-typedef unsigned long DWORD;
-typedef int BOOL;
-typedef long LONG;
-typedef void *HWND;
-typedef void *HINSTANCE;
-typedef void *HMENU;
-typedef void *HICON;
-typedef void *HBRUSH;
-typedef void *HDC;
-typedef void *HGDIOBJ;
-typedef void *HWINSTA;
-typedef void *HDESK;
-typedef void *HKL;
-typedef void *HANDLE;
-typedef unsigned int WPARAM;
-typedef long LPARAM;
-typedef long LRESULT;
-typedef DWORD COLORREF;
-typedef LRESULT(__stdcall *WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+#include "theme.h"
 
 typedef struct {
     USHORT length;
@@ -89,54 +70,6 @@ typedef struct {
     DWORD token_high;
 } SETUP_PREPARE;
 
-typedef struct {
-    UINT cbSize;
-    UINT style;
-    WNDPROC lpfnWndProc;
-    int cbClsExtra;
-    int cbWndExtra;
-    HINSTANCE hInstance;
-    HICON hIcon;
-    HICON hCursor;
-    HBRUSH hbrBackground;
-    const WCHAR *lpszMenuName;
-    const WCHAR *lpszClassName;
-    HICON hIconSm;
-} WNDCLASSEXW;
-
-typedef struct {
-    LONG left;
-    LONG top;
-    LONG right;
-    LONG bottom;
-} RECT;
-
-typedef struct {
-    LONG x;
-    LONG y;
-} POINT;
-
-typedef struct {
-    HWND hwnd;
-    UINT message;
-    WPARAM wParam;
-    LPARAM lParam;
-    DWORD time;
-    POINT pt;
-} MSG;
-
-typedef struct {
-    HDC hdc;
-    BOOL fErase;
-    RECT rcPaint;
-    BOOL fRestore;
-    BOOL fIncUpdate;
-    BYTE rgbReserved[32];
-} PAINTSTRUCT;
-
-#define TRUE 1
-#define FALSE 0
-#define MAXIMUM_ALLOWED 0x02000000
 #define FILE_READ_ATTRIBUTES 0x00000080
 #define FILE_WRITE_ATTRIBUTES 0x00000100
 #define FILE_SHARE_ALL 0x00000007
@@ -154,26 +87,7 @@ typedef struct {
 #define IOCTL_MINO_SETUP_COPY 0x8000A00C
 #define SETUP_READY 0
 #define SETUP_DISK_CANDIDATE 1
-#define WS_OVERLAPPEDWINDOW 0x00CF0000
-#define WS_VISIBLE 0x10000000
-#define COLOR_WINDOW 5
-#define WM_PAINT 0x000F
-#define WM_CHAR 0x0102
-#define VK_TAB 0x09
-#define VK_RETURN 0x0D
-#define VK_ESCAPE 0x1B
-#define VK_SPACE 0x20
 #define KLF_ACTIVATE 0x00000001
-#define TRANSPARENT 1
-#define PATCOPY 0x00F00021
-#define DT_LEFT 0x0000
-#define DT_CENTER 0x0001
-#define DT_VCENTER 0x0004
-#define DT_WORDBREAK 0x0010
-#define DT_SINGLELINE 0x0020
-#define DT_NOPREFIX 0x0800
-#define DEFAULT_GUI_FONT 17
-#define RGB(r, g, b) ((COLORREF)((r) | ((g) << 8) | ((b) << 16)))
 
 enum Screen {
     SCREEN_WELCOME,
@@ -200,7 +114,11 @@ static DWORD target_token_low;
 static DWORD target_token_high;
 static WCHAR target_size_text[32] = L"Unavailable";
 
-__declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+static CANVAS canvas;
+/* The wizard's content area: its origin and width, set by draw(). */
+static int content_x;
+static int content_y;
+static int content_width;
 
 __declspec(dllimport) LONG __stdcall NtClose(HANDLE handle);
 __declspec(dllimport) LONG __stdcall NtDeviceIoControlFile(HANDLE file, HANDLE event, void *apc_routine,
@@ -209,61 +127,6 @@ __declspec(dllimport) LONG __stdcall NtDeviceIoControlFile(HANDLE file, HANDLE e
                                                            DWORD output_length);
 __declspec(dllimport) LONG __stdcall NtOpenFile(HANDLE *file, DWORD access, OBJECT_ATTRIBUTES *attributes,
                                                 IO_STATUS_BLOCK *iosb, DWORD share, DWORD options);
-
-__declspec(dllimport) void __stdcall ExitProcess(UINT code);
-__declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
-__declspec(dllimport) HINSTANCE __stdcall GetModuleHandleW(const WCHAR *name);
-__declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
-
-__declspec(dllimport) HDC __stdcall BeginPaint(HWND window, PAINTSTRUCT *paint);
-__declspec(dllimport) HDESK __stdcall CreateDesktopW(const WCHAR *name, const WCHAR *device, void *mode, DWORD flags,
-                                                     DWORD access, void *attributes);
-__declspec(dllimport) HWND __stdcall CreateWindowExW(DWORD ex_style, const WCHAR *class_name, const WCHAR *name,
-                                                     DWORD style, int x, int y, int width, int height, HWND parent,
-                                                     HMENU menu, HINSTANCE instance, void *param);
-__declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, DWORD flags, DWORD access,
-                                                             void *attributes);
-__declspec(dllimport) LRESULT __stdcall DefWindowProcW(HWND window, UINT message, WPARAM w, LPARAM l);
-__declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
-__declspec(dllimport) int __stdcall DrawTextW(HDC dc, const WCHAR *text, int count, RECT *rect, UINT format);
-__declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *paint);
-__declspec(dllimport) BOOL __stdcall GetClientRect(HWND window, RECT *rect);
-__declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT min, UINT max);
-__declspec(dllimport) BOOL __stdcall InvalidateRect(HWND window, const RECT *rect, BOOL erase);
-__declspec(dllimport) HKL __stdcall LoadKeyboardLayoutW(const WCHAR *klid, UINT flags);
-__declspec(dllimport) ATOM __stdcall RegisterClassExW(const WNDCLASSEXW *class_info);
-__declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
-__declspec(dllimport) BOOL __stdcall SetProcessWindowStation(HWINSTA station);
-__declspec(dllimport) BOOL __stdcall SetThreadDesktop(HDESK desktop);
-__declspec(dllimport) BOOL __stdcall SwitchDesktop(HDESK desktop);
-__declspec(dllimport) BOOL __stdcall TranslateMessage(const MSG *message);
-__declspec(dllimport) BOOL __stdcall UpdateWindow(HWND window);
-
-__declspec(dllimport) HBRUSH __stdcall CreateSolidBrush(COLORREF color);
-__declspec(dllimport) BOOL __stdcall DeleteObject(HGDIOBJ object);
-__declspec(dllimport) BOOL __stdcall GdiFlush(void);
-__declspec(dllimport) HGDIOBJ __stdcall GetStockObject(int index);
-__declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int height, DWORD operation);
-__declspec(dllimport) HGDIOBJ __stdcall SelectObject(HDC dc, HGDIOBJ object);
-__declspec(dllimport) int __stdcall SetBkMode(HDC dc, int mode);
-__declspec(dllimport) COLORREF __stdcall SetTextColor(HDC dc, COLORREF color);
-
-void *memset(void *destination, int value, unsigned int count)
-{
-    BYTE *bytes = destination;
-    while (count--)
-        *bytes++ = (BYTE)value;
-    return destination;
-}
-
-void *memcpy(void *destination, const void *source, unsigned int count)
-{
-    BYTE *to = destination;
-    const BYTE *from = source;
-    while (count--)
-        *to++ = *from++;
-    return destination;
-}
 
 static void format_mib(WCHAR *out, DWORD value, const WCHAR *suffix)
 {
@@ -333,7 +196,7 @@ static void query_install_backend(void)
     target_mib = preview.total_low / 2048;
     esp_mib = preview.esp_sectors_low / 2048;
     system_mib = preview.system_sectors_low / 2048;
-    format_mib(target_size_text, target_mib, L" MiB   Selected");
+    format_mib(target_size_text, target_mib, L" MiB");
     target_disk_number = preview.disk_number;
     target_token_low = preview.token_low;
     target_token_high = preview.token_high;
@@ -343,224 +206,331 @@ static void query_install_backend(void)
              preview.token_high, preview.token_low);
 }
 
-static RECT rect(LONG left, LONG top, LONG right, LONG bottom)
+/* A rectangle of the content area. */
+static RECT at(int left, int top, int right, int bottom)
 {
-    RECT value = {left, top, right, bottom};
-    return value;
+    return rect(content_x + left, content_y + top, content_x + right, content_y + bottom);
 }
 
-static void fill(HDC dc, RECT area, COLORREF color)
+static void say(const WCHAR *value, RECT area, PIXEL color, int pixels, BOOL bold, UINT flags)
 {
-    HBRUSH brush = CreateSolidBrush(color);
-    HGDIOBJ previous;
-
-    if (!brush)
-        return;
-    previous = SelectObject(dc, brush);
-    PatBlt(dc, area.left, area.top, area.right - area.left, area.bottom - area.top, PATCOPY);
-    if (previous)
-        SelectObject(dc, previous);
-    DeleteObject(brush);
+    text(&canvas, value, area, color, font(pixels, bold), flags);
 }
 
-static void border(HDC dc, RECT area, COLORREF color)
+static void line_text(const WCHAR *value, RECT area, PIXEL color, int pixels, BOOL bold)
 {
-    fill(dc, rect(area.left, area.top, area.right, area.top + 1), color);
-    fill(dc, rect(area.left, area.bottom - 1, area.right, area.bottom), color);
-    fill(dc, rect(area.left, area.top, area.left + 1, area.bottom), color);
-    fill(dc, rect(area.right - 1, area.top, area.right, area.bottom), color);
+    say(value, area, color, pixels, bold, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 }
 
-static void text(HDC dc, const WCHAR *value, RECT area, COLORREF color, UINT flags)
+/* The setup screen around the wizard: dark blue bands, a blue field. */
+static void draw_background(int width, int height)
 {
-    SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, color);
-    DrawTextW(dc, value, -1, &area, flags | DT_NOPREFIX);
+    static const STOP field[] = {{0, PX(64, 124, 232)}, {120, PX(46, 102, 216)}, {256, PX(28, 76, 192)}};
+
+    gradient(&canvas, rect(0, 0, width, 70), PX(4, 34, 116), PX(10, 54, 160));
+    hgradient(&canvas, rect(0, 70, width, 72), PX(156, 204, 255), PX(30, 92, 210));
+    gradient_stops(&canvas, rect(0, 72, width, height - 52), field, 3);
+    fill(&canvas, rect(0, height - 52, width, height - 51), PX(98, 156, 242));
+    gradient(&canvas, rect(0, height - 51, width, height), PX(10, 54, 160), PX(4, 34, 116));
+
+    emblem(&canvas, 46, 35, 20);
+    text_shadow(&canvas, L"Mino Setup", rect(78, 6, 600, 64), C_WHITE, font(24, TRUE),
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    line_text(L"Tab  next control      Enter  activate      Esc  go back", rect(24, height - 51, 700, height),
+              PX(188, 214, 255), 11, FALSE);
+    say(L"Mino Setup 1.0", rect(width - 300, height - 51, width - 24, height), PX(188, 214, 255), 11, FALSE,
+        DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 }
 
-static void button(HDC dc, RECT area, const WCHAR *label, BOOL focused)
+/* The steps, down the left of the setup screen. */
+static void draw_steps(int height)
 {
-    fill(dc, area, RGB(236, 233, 216));
-    fill(dc, rect(area.left, area.top, area.right, area.top + 1), RGB(255, 255, 255));
-    fill(dc, rect(area.left, area.top, area.left + 1, area.bottom), RGB(255, 255, 255));
-    fill(dc, rect(area.left, area.bottom - 2, area.right, area.bottom), RGB(64, 64, 64));
-    fill(dc, rect(area.right - 2, area.top, area.right, area.bottom), RGB(64, 64, 64));
-    fill(dc, rect(area.left + 1, area.bottom - 3, area.right - 2, area.bottom - 2), RGB(128, 128, 128));
-    fill(dc, rect(area.right - 3, area.top + 1, area.right - 2, area.bottom - 2), RGB(128, 128, 128));
-    if (focused)
-        border(dc, rect(area.left + 3, area.top + 3, area.right - 4, area.bottom - 4), RGB(49, 106, 197));
-    text(dc, label, area, RGB(0, 0, 0), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-}
-
-static void heading(HDC dc, const WCHAR *title, const WCHAR *description)
-{
-    text(dc, title, rect(218, 24, 650, 50), RGB(0, 0, 0), DT_LEFT | DT_SINGLELINE);
-    text(dc, description, rect(218, 54, 678, 94), RGB(64, 64, 64), DT_LEFT | DT_WORDBREAK);
-    fill(dc, rect(190, 104, 752, 105), RGB(172, 168, 153));
-    fill(dc, rect(190, 105, 752, 106), RGB(255, 255, 255));
-}
-
-static void blue_panel(HDC dc)
-{
-    int x;
-
-    for (x = 0; x < 190; ++x) {
-        int red = 20 + x * 24 / 190;
-        int green = 55 + x * 47 / 190;
-        int blue = 112 + x * 64 / 190;
-        fill(dc, rect(x, 0, x + 1, 430), RGB(red, green, blue));
-    }
-    fill(dc, rect(0, 0, 190, 76), RGB(23, 56, 111));
-    fill(dc, rect(188, 0, 190, 430), RGB(9, 36, 82));
-    text(dc, L"MINO", rect(22, 18, 90, 42), RGB(255, 255, 255), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"Setup Wizard", rect(22, 42, 160, 64), RGB(196, 215, 244), DT_LEFT | DT_SINGLELINE);
-    fill(dc, rect(18, 93, 164, 94), RGB(105, 147, 207));
-}
-
-static void draw_steps(HDC dc)
-{
-    static const WCHAR *labels[] = {L"1  Welcome", L"2  Disk", L"3  Review", L"4  Install", L"5  Complete"};
+    static const WCHAR *labels[] = {L"Welcome", L"Select a disk", L"Review changes", L"Install", L"Complete"};
     int index;
 
-    blue_panel(dc);
+    line_text(L"Installation steps", rect(40, 104, 300, 126), PX(176, 206, 255), 11, TRUE);
+    fill(&canvas, rect(40, 128, 290, 129), PX(110, 164, 246));
     for (index = 0; index < 5; ++index) {
-        RECT row = rect(22, 116 + index * 42, 170, 146 + index * 42);
-        if (index == (int)current_screen) {
-            fill(dc, rect(16, row.top, 19, row.bottom), RGB(255, 210, 72));
-            fill(dc, row, RGB(38, 82, 148));
+        int y = 150 + index * 44;
+        RECT label = rect(84, y - 12, 300, y + 12);
+        if (index < (int)current_screen) {
+            disc(&canvas, 58, y, 9, PX(132, 218, 118), PX(36, 136, 40));
+            check_mark(&canvas, 53, y - 5, 10, C_WHITE);
+            line_text(labels[index], label, C_WHITE, 13, FALSE);
+        } else if (index == (int)current_screen) {
+            ring(&canvas, 58, y, 13, 3, PX(150, 204, 255));
+            disc(&canvas, 58, y, 9, PX(255, 255, 255), PX(196, 222, 255));
+            text_shadow(&canvas, labels[index], label, C_WHITE, font(13, TRUE),
+                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        } else {
+            disc(&canvas, 58, y, 6, PX(128, 172, 240), PX(108, 154, 230));
+            line_text(labels[index], label, PX(178, 206, 250), 13, FALSE);
         }
-        text(dc, labels[index], row,
-             index == (int)current_screen ? RGB(255, 255, 255) : RGB(205, 220, 243),
-             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
-    text(dc, L"Classic setup", rect(22, 388, 160, 410), RGB(164, 191, 230), DT_LEFT | DT_SINGLELINE);
+
+    /* The target, as the kernel's plan describes it. */
+    round_fill(&canvas, rect(40, 396, 300, 500), 6, CORNERS_ALL, PX(36, 88, 204), PX(30, 78, 190));
+    round_frame(&canvas, rect(40, 396, 300, 500), 6, CORNERS_ALL, PX(104, 160, 246));
+    line_text(L"Target disk", rect(56, 406, 290, 426), PX(176, 206, 255), 11, TRUE);
+    line_text(backend_ready ? L"ATA secondary master" : L"No safe target", rect(56, 428, 290, 448), C_WHITE, 13,
+              TRUE);
+    line_text(backend_ready ? target_size_text : L"Attach a blank secondary disk", rect(56, 450, 290, 470),
+              PX(208, 226, 255), 11, FALSE);
+    line_text(L"Mino uses the whole disk.", rect(56, 470, 290, 490), PX(208, 226, 255), 11, FALSE);
+    (void)height;
 }
 
-static void draw_navigation(HDC dc, BOOL back, const WCHAR *primary)
+/* The wizard's header: a white band with a title, a line, the emblem. */
+static void heading(RECT client, const WCHAR *title, const WCHAR *description)
 {
-    fill(dc, rect(0, 430, 752, 492), RGB(236, 233, 216));
-    fill(dc, rect(0, 430, 752, 431), RGB(255, 255, 255));
-    fill(dc, rect(0, 431, 752, 432), RGB(172, 168, 153));
-    if (back)
-        button(dc, rect(414, 450, 510, 478), L"< Back", focused_action == 0);
-    button(dc, rect(516, 450, 612, 478), primary, focused_action == 1);
-    button(dc, rect(632, 450, 728, 478), L"Cancel", FALSE);
+    gradient(&canvas, rect(client.left, client.top, client.right, client.top + 76), C_WHITE, PX(244, 248, 255));
+    fill(&canvas, rect(client.left, client.top + 76, client.right, client.top + 77), C_FACE_LINE);
+    fill(&canvas, rect(client.left, client.top + 77, client.right, client.top + 78), C_WHITE);
+    emblem(&canvas, client.right - 46, client.top + 38, 22);
+    line_text(title, rect(client.left + 28, client.top + 12, client.right - 90, client.top + 38), C_INK_BLUE, 15,
+              TRUE);
+    line_text(description, rect(client.left + 44, client.top + 40, client.right - 90, client.top + 64), C_INK_SOFT,
+              11, FALSE);
 }
 
-static void draw_welcome(HDC dc)
+/* The wizard's buttons, along the bottom of its window. */
+static void draw_navigation(RECT client, BOOL back, const WCHAR *primary, BOOL primary_enabled)
 {
-    heading(dc, L"Welcome to Mino Setup",
-            L"This installer prepares a GPT disk and installs Mino. You can review every change before disk writes begin.");
-    fill(dc, rect(218, 146, 724, 278), RGB(247, 249, 253));
-    border(dc, rect(218, 146, 724, 278), RGB(149, 167, 196));
-    fill(dc, rect(218, 146, 224, 278), RGB(49, 106, 197));
-    text(dc, L"Welcome to the Mino Setup Wizard", rect(242, 168, 690, 194), RGB(0, 51, 153), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"Use Tab to move between actions, Enter or Space to activate, and Escape to go back.",
-         rect(242, 208, 690, 254), RGB(52, 52, 52), DT_LEFT | DT_WORDBREAK);
-    draw_navigation(dc, FALSE, L"Next >");
+    int y = client.bottom - 42;
+
+    fill(&canvas, rect(client.left, client.bottom - 56, client.right, client.bottom - 55), C_FACE_LINE);
+    fill(&canvas, rect(client.left, client.bottom - 55, client.right, client.bottom - 54), C_WHITE);
+    button(&canvas, rect(client.left + 18, y, client.left + 98, y + 26), L"Help", BUTTON_NORMAL);
+    button(&canvas, rect(client.right - 282, y, client.right - 202, y + 26), L"< Back",
+           !back ? BUTTON_DISABLED : focused_action == 0 ? BUTTON_FOCUSED : BUTTON_NORMAL);
+    button(&canvas, rect(client.right - 194, y, client.right - 106, y + 26), primary,
+           !primary_enabled ? BUTTON_DISABLED : focused_action == 1 ? BUTTON_FOCUSED : BUTTON_NORMAL);
+    button(&canvas, rect(client.right - 94, y, client.right - 18, y + 26), L"Cancel",
+           current_screen == SCREEN_INSTALL ? BUTTON_DISABLED : BUTTON_NORMAL);
 }
 
-static void draw_disk(HDC dc)
+/* A drop-down list, closed. */
+static void combo(RECT area, const WCHAR *value)
 {
-    heading(dc, L"Select the installation disk",
-            L"Guided setup will use the whole disk. The kernel excludes the running system and boot media.");
-    fill(dc, rect(218, 142, 724, 228), RGB(255, 255, 255));
-    border(dc, rect(218, 142, 724, 228), RGB(49, 106, 197));
-    fill(dc, rect(218, 142, 224, 228), RGB(49, 106, 197));
-    text(dc, backend_ready ? L"ATA secondary master" : L"No safe target", rect(244, 156, 520, 180),
-         RGB(24, 31, 40), DT_LEFT | DT_SINGLELINE);
-    text(dc, target_size_text, rect(540, 156, 700, 180),
-         backend_ready ? RGB(46, 96, 166) : RGB(145, 42, 42), DT_LEFT | DT_SINGLELINE);
-    fill(dc, rect(244, 196, 332, 210), RGB(116, 162, 218));
-    fill(dc, rect(332, 196, 692, 210), RGB(49, 106, 197));
-    text(dc, L"EFI System", rect(244, 244, 360, 268), RGB(65, 70, 76), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"Mino System", rect(390, 244, 530, 268), RGB(65, 70, 76), DT_LEFT | DT_SINGLELINE);
-    text(dc, backend_ready ? L"Read-only kernel plan ready; no write occurs on this screen."
-                           : L"Connect an unmounted secondary ATA target to continue.",
-         rect(218, 304, 724, 332), RGB(84, 89, 95), DT_LEFT | DT_SINGLELINE);
-    draw_navigation(dc, TRUE, L"Next >");
+    fill(&canvas, area, C_WHITE);
+    frame(&canvas, area, PX(127, 157, 196));
+    round_fill(&canvas, rect(area.right - 20, area.top + 2, area.right - 2, area.bottom - 2), 2, CORNERS_ALL,
+               PX(196, 220, 255), PX(150, 186, 246));
+    line(&canvas, area.right - 15, (area.top + area.bottom) / 2 - 2, area.right - 11, (area.top + area.bottom) / 2 + 2,
+         2, PX(36, 70, 140));
+    line(&canvas, area.right - 11, (area.top + area.bottom) / 2 + 2, area.right - 7, (area.top + area.bottom) / 2 - 2,
+         2, PX(36, 70, 140));
+    line_text(value, rect(area.left + 8, area.top, area.right - 24, area.bottom), C_INK, 11, FALSE);
 }
 
-static void draw_review(HDC dc)
+/* The planned layout: the EFI partition, then Mino's. */
+static void layout_bar(int top)
 {
-    heading(dc, L"Review disk changes",
-            L"Confirm the target and partition plan. Installation begins only when you activate Install.");
-    fill(dc, rect(218, 142, 724, 216), RGB(255, 247, 218));
-    border(dc, rect(218, 142, 724, 216), RGB(181, 137, 38));
-    text(dc, L"All existing data on the secondary ATA target will be removed.", rect(238, 160, 704, 196),
-         RGB(91, 61, 8), DT_LEFT | DT_WORDBREAK);
-    text(dc, L"Before", rect(218, 246, 320, 270), RGB(73, 78, 84), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"Existing disk contents", rect(344, 246, 704, 270), RGB(24, 31, 40), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"After", rect(218, 286, 320, 310), RGB(73, 78, 84), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"GPT + EFI System + Mino System", rect(344, 286, 704, 310), RGB(24, 31, 40), DT_LEFT | DT_SINGLELINE);
-    draw_navigation(dc, TRUE, L"Install");
+    int split = content_width * 40 / 94;
+
+    round_fill(&canvas, at(0, top, split, top + 46), 4, CORNER_TL | CORNER_BL, PX(214, 230, 255),
+               PX(180, 206, 248));
+    round_fill(&canvas, at(split, top, content_width, top + 46), 4, CORNER_TR | CORNER_BR, PX(86, 156, 252),
+               PX(30, 96, 220));
+    round_frame(&canvas, at(0, top, content_width, top + 46), 4, CORNERS_ALL, PX(72, 112, 182));
+    fill(&canvas, at(split, top + 1, split + 1, top + 45), PX(72, 112, 182));
+    line_text(L"EFI system", at(14, top + 4, split - 8, top + 24), C_INK, 11, TRUE);
+    line_text(L"40 MiB · FAT32", at(14, top + 23, split - 8, top + 42), C_INK_SOFT, 11, FALSE);
+    line_text(L"Mino system", at(split + 14, top + 4, content_width - 8, top + 24), C_WHITE, 11, TRUE);
+    line_text(L"54 MiB · FAT32", at(split + 14, top + 23, content_width - 8, top + 42), PX(220, 234, 255), 11,
+              FALSE);
 }
 
-static void draw_install(HDC dc)
+static void draw_welcome(RECT client)
 {
-    static const WCHAR *stages[] = {L"Revalidate target", L"Write backup GPT", L"Write primary GPT",
-                                    L"Flush metadata", L"Verify both copies"};
+    int half = content_width / 2;
+    static const WCHAR *needs[] = {L"At least 8 GB of free disk space", L"UEFI firmware",
+                                   L"AC power connected for laptops"};
     int index;
 
-    heading(dc, L"Installing Mino", L"Keep the machine powered on while setup completes and verifies each stage.");
-    for (index = 0; index < 5; ++index) {
-        int threshold = (index + 1) * 20;
-        RECT mark = rect(222, 142 + index * 42, 238, 158 + index * 42);
-        fill(dc, mark, progress >= threshold ? RGB(46, 129, 82) : RGB(205, 207, 209));
-        text(dc, stages[index], rect(250, 136 + index * 42, 650, 164 + index * 42), RGB(40, 45, 51),
-             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    heading(client, L"Welcome to Mino Setup",
+            L"This wizard prepares a GPT disk and installs Mino in one guided session.");
+    say(L"Mino will use one whole disk. Nothing is written until you confirm the changes in step 3.",
+        at(0, 0, content_width, 36), C_INK, 11, FALSE, DT_LEFT | DT_WORDBREAK);
+    line_text(L"Language", at(0, 44, half - 16, 64), C_INK_SOFT, 11, FALSE);
+    line_text(L"Keyboard layout", at(half + 16, 44, content_width, 64), C_INK_SOFT, 11, FALSE);
+    combo(at(0, 66, half - 16, 90), L"English (United Kingdom)");
+    combo(at(half + 16, 66, content_width, 90), L"Generic 105-key keyboard");
+    card(&canvas, at(0, 116, content_width, 254), PX(234, 242, 255), PX(170, 196, 240), C_SELECT);
+    line_text(L"Before you continue, this computer should have", at(22, 126, content_width - 16, 150), C_INK, 11,
+              TRUE);
+    for (index = 0; index < 3; ++index) {
+        RECT mark = at(26, 160 + index * 30, 38, 172 + index * 30);
+        check_mark(&canvas, mark.left, mark.top, 12, C_GREEN);
+        line_text(needs[index], at(48, 156 + index * 30, content_width - 16, 178 + index * 30), C_INK, 11, FALSE);
     }
-    fill(dc, rect(218, 364, 724, 386), RGB(205, 207, 209));
-    fill(dc, rect(220, 366, 220 + progress * 5, 384), RGB(49, 106, 197));
-    text(dc, L"Installation in progress", rect(218, 394, 724, 418), RGB(72, 78, 86), DT_LEFT | DT_SINGLELINE);
+    line_text(L"You can go back or cancel safely before installation begins.", at(0, 276, content_width, 298),
+              C_INK_SOFT, 11, FALSE);
+    draw_navigation(client, FALSE, L"Next >", TRUE);
 }
 
-static void draw_complete(HDC dc)
+static void draw_disk(RECT client)
 {
-    heading(dc, L"Mino is installed",
-            L"Setup wrote the partition tables, the two FAT32 volumes and the system files. Reboot to start from the disk.");
-    fill(dc, rect(218, 150, 724, 266), RGB(235, 247, 238));
-    border(dc, rect(218, 150, 724, 266), RGB(63, 132, 86));
-    fill(dc, rect(240, 180, 270, 210), RGB(46, 129, 82));
-    text(dc, L"System files copied", rect(290, 176, 690, 202), RGB(29, 91, 51), DT_LEFT | DT_SINGLELINE);
-    text(dc, L"The installed disk boots Mino; remove the boot disk first.", rect(290, 214, 690, 248),
-         RGB(53, 72, 59), DT_LEFT | DT_SINGLELINE);
-    draw_navigation(dc, FALSE, L"Finish");
+    heading(client, L"Select a disk for Mino",
+            L"Mino replaces everything on the selected disk. The running system and boot media are excluded.");
+    if (backend_ready)
+        card(&canvas, at(0, 0, content_width, 68), PX(226, 238, 255), C_SELECT, C_SELECT);
+    else
+        card(&canvas, at(0, 0, content_width, 68), PX(255, 240, 238), PX(214, 104, 92), C_RED);
+    disc(&canvas, content_x + 26, content_y + 24, 8, C_WHITE, PX(226, 234, 248));
+    ring(&canvas, content_x + 26, content_y + 24, 8, 1, PX(28, 81, 128));
+    if (backend_ready)
+        disc(&canvas, content_x + 26, content_y + 24, 4, PX(120, 200, 110), PX(30, 130, 40));
+    line_text(backend_ready ? L"ATA secondary master" : L"No safe installation target", at(44, 10, 500, 34), C_INK,
+              12, TRUE);
+    say(backend_ready ? target_size_text : L"Unavailable", at(500, 10, content_width - 16, 34),
+        backend_ready ? C_INK_BLUE : C_RED, 12, TRUE, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    line_text(backend_ready ? L"Disk 2 · healthy · not mounted" : L"Attach an unmounted secondary ATA disk",
+              at(44, 36, content_width - 16, 58), C_INK_SOFT, 11, FALSE);
+
+    card(&canvas, at(0, 84, content_width, 162), PX(255, 249, 226), PX(230, 198, 112), PX(222, 158, 30));
+    disc(&canvas, content_x + 26, content_y + 106, 10, PX(255, 206, 80), PX(226, 146, 18));
+    say(L"!", at(16, 96, 36, 116), C_WHITE, 13, TRUE, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    line_text(L"All existing data on this disk will be permanently removed.", at(46, 94, content_width - 16, 118),
+              PX(116, 76, 6), 11, TRUE);
+    fill(&canvas, at(46, 130, 59, 143), C_WHITE);
+    frame(&canvas, at(46, 130, 59, 143), PX(28, 81, 128));
+    check_mark(&canvas, content_x + 48, content_y + 132, 9, PX(33, 161, 33));
+    line_text(L"I understand — erase this disk and everything on it.", at(68, 125, content_width - 16, 148), C_INK,
+              11, FALSE);
+
+    line_text(L"Planned layout", at(0, 180, content_width, 200), C_INK_SOFT, 11, TRUE);
+    layout_bar(204);
+    line_text(backend_ready ? L"Kernel plan ready · nothing is written before step 3."
+                            : L"Continue remains unavailable until a safe target exists.",
+              at(0, 270, content_width, 292), C_INK_SOFT, 11, FALSE);
+    draw_navigation(client, TRUE, L"Next >", backend_ready);
 }
 
-static void draw(HWND window, HDC dc)
+static void numbered(int top, const WCHAR *number, const WCHAR *label)
 {
+    disc(&canvas, content_x + 13, content_y + top + 13, 13, PX(96, 160, 252), PX(28, 90, 214));
+    say(number, at(0, top, 26, top + 26), C_WHITE, 12, TRUE, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    line_text(label, at(40, top, content_width, top + 26), C_INK, 11, FALSE);
+}
+
+static void draw_review(RECT client)
+{
+    heading(client, L"Review the changes",
+            L"Nothing is written yet. Every structure written by setup is read back and verified.");
+    card(&canvas, at(0, 0, content_width, 46), PX(255, 238, 236), PX(232, 160, 150), C_RED);
+    line_text(L"Erase all existing data on ATA secondary master", at(20, 0, content_width - 16, 46),
+              PX(150, 34, 24), 12, TRUE);
+    numbered(66, L"1", L"Create a protective MBR and two verified GPT copies");
+    numbered(108, L"2", L"Create an EFI system partition · 40 MiB · FAT32");
+    numbered(150, L"3", L"Create the Mino system partition · 54 MiB · FAT32");
+    layout_bar(204);
+    line_text(L"Install starts disk writes. Back and Cancel are still safe on this screen.",
+              at(0, 270, content_width, 292), C_INK_SOFT, 11, FALSE);
+    draw_navigation(client, TRUE, L"Install", TRUE);
+}
+
+static void draw_install(RECT client)
+{
+    static const WCHAR *stages[] = {L"Validating target", L"Writing GPT", L"Formatting FAT32",
+                                    L"Verifying volumes", L"Ready for file copy"};
+    int index;
+
+    heading(client, L"Installing Mino", L"Writing to ATA secondary master. Keep the computer connected to power.");
+    for (index = 0; index < 5; ++index) {
+        int top = index * 46;
+        int cx = content_x + 14, cy = content_y + top + 16;
+        BOOL done = progress >= (index + 1) * 20;
+        BOOL active = !done && progress >= index * 20;
+        if (done) {
+            disc(&canvas, cx, cy, 13, PX(132, 218, 118), PX(36, 136, 40));
+            check_mark(&canvas, cx - 6, cy - 6, 12, C_WHITE);
+        } else if (active) {
+            disc(&canvas, cx, cy, 13, PX(96, 160, 252), PX(28, 90, 214));
+            line(&canvas, cx - 2, cy - 5, cx + 3, cy, 2, C_WHITE);
+            line(&canvas, cx + 3, cy, cx - 2, cy + 5, 2, C_WHITE);
+        } else {
+            disc(&canvas, cx, cy, 13, PX(222, 230, 244), PX(204, 214, 232));
+        }
+        line_text(stages[index], at(40, top, content_width, top + 18), C_INK, 12, active);
+        line_text(done ? L"completed and verified" : active ? L"in progress" : L"waiting",
+                  at(40, top + 17, content_width, top + 34), done ? C_GREEN : C_INK_SOFT, 11, FALSE);
+    }
+    progress_bar(&canvas, at(0, 240, content_width, 262), progress);
+    line_text(L"Disk writes have begun · Back is no longer available", at(0, 276, content_width, 298),
+              PX(116, 76, 6), 11, FALSE);
+    draw_navigation(client, FALSE, L"Working...", FALSE);
+}
+
+static void draw_complete(RECT client)
+{
+    heading(client, L"Disk preparation is complete",
+            L"The partition table and both FAT32 volumes passed verification.");
+    card(&canvas, at(0, 0, content_width, 100), PX(236, 249, 236), PX(150, 204, 150), C_GREEN);
+    disc(&canvas, content_x + 42, content_y + 50, 20, PX(132, 218, 118), PX(36, 136, 40));
+    check_mark(&canvas, content_x + 32, content_y + 40, 20, C_WHITE);
+    line_text(L"Partition table verified", at(80, 12, content_width - 16, 36), PX(30, 110, 40), 13, TRUE);
+    line_text(L"Protective MBR, primary GPT and backup GPT are consistent.", at(80, 40, content_width - 16, 62),
+              C_INK, 11, FALSE);
+    line_text(L"EFI and Mino volumes are FAT32 and mount successfully.", at(80, 64, content_width - 16, 86),
+              C_INK_SOFT, 11, FALSE);
+
+    round_fill(&canvas, at(0, 120, content_width, 196), 4, CORNERS_ALL, C_WHITE, C_WHITE);
+    round_frame(&canvas, at(0, 120, content_width, 196), 4, CORNERS_ALL, C_FACE_LINE);
+    fill(&canvas, at(1, 158, content_width - 1, 159), PX(226, 234, 248));
+    line_text(L"EFI system", at(18, 120, 240, 158), C_INK_SOFT, 11, FALSE);
+    line_text(L"40 MiB · FAT32 · verified", at(240, 120, content_width - 16, 158), C_INK, 11, TRUE);
+    line_text(L"Mino system", at(18, 158, 240, 196), C_INK_SOFT, 11, FALSE);
+    line_text(L"54 MiB · FAT32 · verified", at(240, 158, content_width - 16, 196), C_INK, 11, TRUE);
+
+    card(&canvas, at(0, 216, content_width, 262), PX(255, 249, 226), PX(230, 198, 112), PX(222, 158, 30));
+    line_text(L"Keep this target attached. The next installer lot copies the boot and system files.",
+              at(20, 216, content_width - 16, 262), PX(116, 76, 6), 11, FALSE);
+    draw_navigation(client, FALSE, L"Finish", TRUE);
+}
+
+static void draw(HDC dc)
+{
+    int width = canvas.width, height = canvas.height;
+    RECT window = rect(340, 104, width - 56, 104 + 560);
     RECT client;
 
-    SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
-    GetClientRect(window, &client);
-    fill(dc, client, RGB(236, 233, 216));
-    fill(dc, rect(190, 0, client.right, 430), RGB(255, 255, 255));
-    draw_steps(dc);
+    if (window.right - window.left > 900)
+        window.right = window.left + 900;
+    if (window.bottom > height - 72)
+        window.bottom = height - 72;
+    draw_background(width, height);
+    draw_steps(height);
+    client = window_frame(&canvas, window, L"Mino Setup", FALSE);
+    emblem(&canvas, window.left + 17, window.top + 15, 9);
+    fill(&canvas, client, C_FACE);
+    content_x = client.left + 44;
+    content_y = client.top + 100;
+    content_width = client.right - client.left - 88;
 
     switch (current_screen) {
     case SCREEN_WELCOME:
-        draw_welcome(dc);
+        draw_welcome(client);
         break;
     case SCREEN_DISK:
-        draw_disk(dc);
+        draw_disk(client);
         break;
     case SCREEN_REVIEW:
-        draw_review(dc);
+        draw_review(client);
         break;
     case SCREEN_INSTALL:
-        draw_install(dc);
+        draw_install(client);
         break;
     case SCREEN_COMPLETE:
-        draw_complete(dc);
+        draw_complete(client);
         break;
     }
-    GdiFlush();
+    canvas_present(&canvas, dc);
 }
 
 static void repaint(HWND window)
 {
-    InvalidateRect(window, 0, TRUE);
+    InvalidateRect(window, 0, FALSE);
     UpdateWindow(window);
 }
 
@@ -588,7 +558,8 @@ static void set_screen(HWND window, enum Screen screen)
 
 /* The write boundary. The kernel revalidates the disk against the token of
  * the preview, writes the protective MBR and both GPT copies, flushes them
- * and rereads them. Formatting and file copy wait for the next milestone. */
+ * and rereads them; then it formats both volumes. File copy waits for the
+ * next milestone. */
 static void run_install(HWND window)
 {
     static WCHAR root_name[] = L"\\GLOBAL??\\C:\\";
@@ -744,11 +715,13 @@ static LRESULT __stdcall setup_procedure(HWND window, UINT message, WPARAM w, LP
 {
     PAINTSTRUCT paint;
 
-    (void)l;
     switch (message) {
+    case WM_ERASEBKGND:
+        /* The canvas covers the whole window. */
+        return 1;
     case WM_PAINT:
         BeginPaint(window, &paint);
-        draw(window, paint.hdc);
+        draw(paint.hdc);
         EndPaint(window, &paint);
         return 0;
     case WM_CHAR:
@@ -771,26 +744,13 @@ static LRESULT __stdcall setup_procedure(HWND window, UINT message, WPARAM w, LP
     return DefWindowProcW(window, message, w, l);
 }
 
-static BOOL take_desktop(void)
-{
-    HWINSTA station;
-    HDESK desktop;
-
-    if (!RegisterLogonProcess(GetCurrentProcessId(), TRUE))
-        return FALSE;
-    station = CreateWindowStationW(L"WinSta0", 0, MAXIMUM_ALLOWED, 0);
-    if (!station || !SetProcessWindowStation(station))
-        return FALSE;
-    desktop = CreateDesktopW(L"Default", 0, 0, 0, MAXIMUM_ALLOWED, 0);
-    return desktop && SetThreadDesktop(desktop) && SwitchDesktop(desktop);
-}
-
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
     HINSTANCE instance = GetModuleHandleW(0);
     HWND window;
     MSG message;
+    int width, height;
 
     if (!take_desktop())
         ExitProcess(1);
@@ -802,15 +762,19 @@ DWORD __stdcall GuiStartup(void)
     class_info.cbSize = sizeof class_info;
     class_info.lpfnWndProc = setup_procedure;
     class_info.hInstance = instance;
-    class_info.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     class_info.lpszClassName = CLASS_NAME;
     if (!RegisterClassExW(&class_info))
         ExitProcess(3);
 
-    window = CreateWindowExW(0, CLASS_NAME, L"Mino Setup Wizard", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-                             120, 60, 760, 520, 0, 0, instance, 0);
+    width = GetSystemMetrics(SM_CXSCREEN);
+    height = GetSystemMetrics(SM_CYSCREEN);
+    if (!canvas_create(&canvas, width, height))
+        ExitProcess(5);
+    window = CreateWindowExW(0, CLASS_NAME, L"Mino Setup", WS_POPUP | WS_VISIBLE, 0, 0, width, height, 0, 0,
+                             instance, 0);
     if (!window)
         ExitProcess(4);
+    UpdateWindow(window);
     DbgPrint("[setup] screen welcome\n");
     DbgPrint("[setup] ready\n");
 
