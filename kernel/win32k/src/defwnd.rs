@@ -24,13 +24,16 @@
 //!   fenêtre de premier niveau activée et passée devant, puis SC_MOVE ; sur
 //!   un bord ou un coin, SC_SIZE ; sur un bouton du titre, son suivi
 //!   ([`crate::sizemove`]) ;
+//! - WM_NCACTIVATE : le cadre peint actif ou inactif
+//!   (`crate::paint::set_frame_active`, NC_HandleNCActivate ; pas de
+//!   peinture pour un `lParam` de -1) ; rend TRUE ;
 //! - WM_SYSCOMMAND ([`crate::sizemove::sys_command`]) : SC_MOVE, SC_SIZE,
 //!   SC_CLOSE (WM_CLOSE), SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE ;
 //! - WM_DEVICECHANGE rend TRUE ; un message de l'application (au-delà de
 //!   WM_USER) rend 0.
 //!
 //! Les autres messages que ReactOS traite ici (WM_PAINT, WM_ERASEBKGND,
-//! WM_NCPAINT, WM_NCACTIVATE, WM_SETCURSOR, WM_ACTIVATE, WM_SHOWWINDOW,
+//! WM_NCPAINT, WM_SETCURSOR, WM_ACTIVATE, WM_SHOWWINDOW,
 //! WM_CLOSE (DestroyWindow), les touches, le double-clic sur le titre…)
 //! attendent la peinture, les contextes de périphérique, l'activation et
 //! l'entrée : ils rendent 0, journalisés une fois chacun. Pas encore de
@@ -53,7 +56,8 @@ use abi::user::{
 use abi::user::{
     CS_HREDRAW, CS_VREDRAW, HTBORDER, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT,
     HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, MA_ACTIVATE, MA_NOACTIVATE,
-    WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WM_SYSCOMMAND, WS_MINIMIZEBOX, WS_SYSMENU,
+    WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WM_SYSCOMMAND, WS_MINIMIZEBOX,
+    WS_SYSMENU,
 };
 use hal::sync::KSpinLock;
 use ke::usermem::{copy_from_user, copy_to_user};
@@ -454,6 +458,10 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             Ok(nc_hit_test(state.style, state.ex_style, state.window, state.client, point, &metrics::get))
         }
         (WM_MOUSEACTIVATE, Some(window)) => Ok(mouse_activate(window, wparam, lparam)),
+        (WM_NCACTIVATE, Some(window)) => {
+            crate::paint::set_frame_active(window, wparam != 0, lparam != u32::MAX);
+            Ok(1)
+        }
         (NC_LBUTTONDOWN, Some(window)) => {
             crate::sizemove::nc_lbutton_down(window, wparam, lparam);
             Ok(0)

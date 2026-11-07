@@ -370,6 +370,8 @@ pub const WNDS_HASMENU: u32 = 0x0000_0001;
 pub const WNDS_HASVERTICALSCROOLLBAR: u32 = 0x0000_0002;
 pub const WNDS_HASHORIZONTALSCROLLBAR: u32 = 0x0000_0004;
 pub const WNDS_HASCAPTION: u32 = 0x0000_0008;
+/// WNDS_ACTIVEFRAME: the frame is painted active (WM_NCACTIVATE).
+pub const WNDS_ACTIVEFRAME: u32 = 0x0000_0040;
 /// WVR_*: what WM_NCCALCSIZE with valid rectangles answers.
 pub const WVR_HREDRAW: u32 = 0x0100;
 pub const WVR_VREDRAW: u32 = 0x0200;
@@ -858,6 +860,9 @@ pub const WM_ACTIVATE: u32 = 0x0006;
 pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
 /// WA_INACTIVE, WA_ACTIVE: the `wParam` of WM_ACTIVATE.
+/// WM_NCACTIVATE: the frame of the window goes active (`wParam` TRUE) or
+/// inactive; DefWindowProc paints it again, unless `lParam` is -1.
+pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WA_INACTIVE: u32 = 0;
 pub const WA_ACTIVE: u32 = 1;
 /// KF_*: the bits of the high word of a keyboard message's `lParam`.
