@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn the_desktop_background_is_its_system_colour() {
         let background = SYSTEM_COLORS[1];
-        assert_eq!(background, 0x00A5_6E3A, "RGB(58, 110, 165)");
+        assert_eq!(background, 0x00DC_7E5A, "RGB(90, 126, 220)");
         let gdi = crate::gdi::syscolor::BACKGROUND;
         assert_eq!(background, gdi.0, "GDI's desktop background");
     }

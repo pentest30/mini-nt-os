@@ -87,7 +87,7 @@ pub fn tick() {
         return;
     }
     let beats = BEATS.fetch_add(1, Ordering::Relaxed);
-    if beats % BEATS_PER_STEP != 0 {
+    if !beats.is_multiple_of(BEATS_PER_STEP) {
         return;
     }
     let (width, height) = fb::dimensions();

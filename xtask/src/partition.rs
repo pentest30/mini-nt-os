@@ -228,9 +228,7 @@ pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
                 None => return Err(std::io::Error::other("the installed desktop shell is missing")),
                 Some(&(copied, copied_hash)) if copied == size && copied_hash == hash => {}
                 Some(_) => {
-                    return Err(std::io::Error::other(
-                        "WINDOWS/SYSTEM32/WINLOGON.EXE is not the media's desktop",
-                    ))
+                    return Err(std::io::Error::other("WINDOWS/SYSTEM32/WINLOGON.EXE is not the media's desktop"))
                 }
             }
         } else if restores_winlogon {
