@@ -17,5 +17,10 @@ screen = 190 352 316AC5
 screen = 1150 500 FFFFFF
 screen = 95 790 45983D
 screen = 700 785 1E5CDB
+# The wallpaper's dark bottom band (above the taskbar, right of the menu) and
+# the light rule under its top band: both stayed unpainted (black, and the
+# field's blue) while their rectangles were given as a width and a height.
+screen = 1000 745 0A288C
+screen = 700 53 96B0F0
 
 forbid = *** STOP:

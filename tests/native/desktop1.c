@@ -145,8 +145,9 @@ static void draw_wallpaper(int width, int height)
     gradient_stops(&canvas, rect(0, band, width, bottom - band), field, 3);
     glow(&canvas, 200, 100, 480, PX(198, 218, 252), 100);
     fill(&canvas, rect(0, 0, width, band), PX(10, 40, 140));
-    fill(&canvas, rect(0, band, width, 2), PX(150, 176, 240));
-    fill(&canvas, rect(0, bottom - band, width, band), PX(10, 40, 140));
+    /* rect() takes the right and bottom edges, not a width and a height. */
+    fill(&canvas, rect(0, band, width, band + 2), PX(150, 176, 240));
+    fill(&canvas, rect(0, bottom - band, width, bottom), PX(10, 40, 140));
     desktop_icon(14, band + 24, L"Computer", 0);
     desktop_icon(14, band + 110, L"Documents", 1);
     desktop_icon(14, band + 196, L"Trash", 2);
