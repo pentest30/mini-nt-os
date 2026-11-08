@@ -172,6 +172,18 @@ jour à chaque commit qui change l'état.
   appeler le moteur ni modifier les disques. Les scénarios
   `boot-menu-install` et `boot-menu-live` passent sur AMD et Intel. Utiliser
   `--initial-command system` pour conserver le `winlogon.exe` de ReactOS.
+- **Le bureau lance `cmd` et `taskmgr`** (branche `claude/desktop-launch`) : dans le menu Démarrer de
+  `DESKTOP1.EXE`, Terminal démarre `C:\WINDOWS\SYSTEM32\CMD.EXE` dans une console à lui (`CREATE_NEW_CONSOLE`),
+  et l'entrée Software devient Task Manager (`TASKMGR.EXE`) ; un appui sur l'entrée ou Entrée dessus. Deux défauts
+  vus en chemin : le bureau ne chargeait pas de disposition de clavier (aucune touche ne devenait une touche
+  virtuelle : le menu n'a jamais répondu au clavier), et un appui sur Démarrer le remontait, plein écran, par-dessus
+  les fenêtres lancées (il garde désormais sa place sous elles : `SWP_NOZORDER` à `WM_WINDOWPOSCHANGING`, comme le
+  bureau d'un shell). Scénario `desktop-launch` (AMD et Intel) : Terminal au clavier, Task Manager à la souris, la
+  liste des processus lue par le PID de Task Manager, la console toujours visible ; sans `SWP_NOZORDER`, il échoue
+  (vérifié). Vérifié aussi sous VirtualBox (VM `Mino-main`) : `cmd` répond au clavier (`ver`). La fenêtre de
+  `taskmgr` s'ouvre avec sa liste des applications, mais sans onglets, menu ni texte de boutons : la suite est sur
+  `claude/apps-wave`. `consrv` y bute sur une assertion de ReactOS (`GuiData->hIcon && GuiData->hIconSm`), ignorée,
+  comme dans `cmd` et `console`.
 - **Le flux d'installation tourne sur VirtualBox** : avec un
   disque cible vierge de 96 Mio attaché en maître secondaire, l'assistant
   navigue et **la préparation réelle écrit le MBR protecteur et les deux
