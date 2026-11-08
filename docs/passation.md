@@ -1,6 +1,6 @@
 # Notes de passation
 
-- **M9 NTFS, parcours des répertoires** (`feature/m9-ntfs-paths`) : lecture de `$I30` (INDEX_ROOT, INDEX_ALLOCATION, BITMAP), fixups INDX et parcours borné avec détection des cycles. Comparaison des entrées avec ntfsls sur images mkntfs ; suite : références séquencées, chemins et `$UpCase`.
+- **M9 NTFS, parcours des répertoires** (`feature/m9-ntfs-paths`) : lecture de `$I30` (INDEX_ROOT, INDEX_ALLOCATION, BITMAP), fixups INDX et parcours borné avec détection des cycles. Comparaison des entrées avec ntfsls sur images mkntfs ; résolution des chemins imbriqués avec références séquencées et `$UpCase`, normalisation bornée et refus des noms ambigus. 16 tests unitaires passent ; suite : répertoires volumineux produits par ntfs-3g. PR #95.
 
 
 - **M9 anticipé, lecteur NTFS isolé** (`feature/m9-ntfs-readonly`) : `libs/ntfs`, interface de lecture seule bornée à une partition, validation du secteur de démarrage. Aucun branchement au noyau ou à M6. FILE et fixups, attributs résidents/non résidents et lecture par numéro MFT (MFT et fichiers fragmentés) sont implémentés ; Tests hôte de corruption et validation croisée mkntfs/ntfscat (clusters 512 et 4096) ; limites et reprise dans [compat/ntfs.md](compat/ntfs.md). Suite : index de répertoire et recherche par chemin, puis montage noyau dans une PR distincte. PR #94.

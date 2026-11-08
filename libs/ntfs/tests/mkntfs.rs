@@ -72,9 +72,10 @@ fn ntfs3g_files_match_at_two_cluster_sizes() {
             assert!(entries
                 .iter()
                 .any(|e| e.reference.record == number && e.name == name.encode_utf16().collect::<Vec<_>>()));
+            assert_eq!(volume.lookup_path(&format!("/{}", name.to_uppercase())).unwrap().record, number);
             assert_eq!(volume.file_size(number).unwrap(), expected.len() as u64);
             let mut got = vec![0xff; expected.len() + 11];
-            assert_eq!(volume.read_file(number, 0, &mut got).unwrap(), expected.len());
+            assert_eq!(volume.read_path(&format!("/{}", name.to_uppercase()), 0, &mut got).unwrap(), expected.len());
             assert_eq!(&got[..expected.len()], &expected);
             assert_eq!(&got[expected.len()..], &[0xff; 11]);
             assert_eq!(run("ntfscat", &[image_path, &format!("/{name}")]), expected);

@@ -1,17 +1,17 @@
 use crate::{Error, ReadAt, Record, Volume};
 use alloc::{vec, vec::Vec};
 
-fn p16(b: &mut [u8], at: usize, n: u16) {
+pub(super) fn p16(b: &mut [u8], at: usize, n: u16) {
     b[at..at + 2].copy_from_slice(&n.to_le_bytes());
 }
-fn p32(b: &mut [u8], at: usize, n: u32) {
+pub(super) fn p32(b: &mut [u8], at: usize, n: u32) {
     b[at..at + 4].copy_from_slice(&n.to_le_bytes());
 }
-fn p64(b: &mut [u8], at: usize, n: u64) {
+pub(super) fn p64(b: &mut [u8], at: usize, n: u64) {
     b[at..at + 8].copy_from_slice(&n.to_le_bytes());
 }
 
-fn resident(payload: &[u8]) -> Vec<u8> {
+pub(super) fn resident(payload: &[u8]) -> Vec<u8> {
     let size = (24 + payload.len() + 7) & !7;
     let mut a = vec![0; size];
     p32(&mut a, 0, 0x80);
@@ -22,7 +22,7 @@ fn resident(payload: &[u8]) -> Vec<u8> {
     a
 }
 
-fn nonresident(mapping: &[u8], clusters: u64, size: u64, initialized: u64) -> Vec<u8> {
+pub(super) fn nonresident(mapping: &[u8], clusters: u64, size: u64, initialized: u64) -> Vec<u8> {
     let len = (64 + mapping.len() + 7) & !7;
     let mut a = vec![0; len];
     p32(&mut a, 0, 0x80);
@@ -37,7 +37,7 @@ fn nonresident(mapping: &[u8], clusters: u64, size: u64, initialized: u64) -> Ve
     a
 }
 
-fn record(attr: &[u8]) -> Vec<u8> {
+pub(super) fn record(attr: &[u8]) -> Vec<u8> {
     let mut b = vec![0; 1024];
     b[..4].copy_from_slice(b"FILE");
     p16(&mut b, 4, 48);

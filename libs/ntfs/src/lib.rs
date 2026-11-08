@@ -21,6 +21,8 @@ mod volume;
 pub use volume::Volume;
 
 #[cfg(test)]
+mod path_tests;
+#[cfg(test)]
 mod tests;
 pub use boot::Geometry;
 pub use record::Record;
