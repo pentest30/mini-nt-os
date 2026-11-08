@@ -650,7 +650,13 @@ impl<D: BlockDevice> FatVolume<D> {
                 }
                 i += 32;
             }
-            cluster = self.next_cluster(cluster)?;
+            // A directory whose entries fill its last cluster has no end
+            // marker: it ends with its chain.
+            cluster = match self.next_cluster(cluster) {
+                Ok(next) => next,
+                Err(FatError::NotFound) => return Ok(out),
+                Err(error) => return Err(error),
+            };
             base += bytes_per_cluster as u32;
         }
     }
@@ -1408,6 +1414,27 @@ mod tests {
         file_sector[0..4].copy_from_slice(b"ABCD");
         d.write_sector(3, &file_sector);
         d
+    }
+
+    #[test]
+    fn a_directory_that_fills_its_last_cluster_ends_with_its_chain() {
+        // 16 entries fill the root's one cluster: no end marker follows
+        // them, the end of the chain ends the directory (SYSTEM32 once
+        // uxtheme and winmm joined it: STATUS_DISK_CORRUPT_ERROR).
+        let disk = make_test_disk();
+        let mut root = [0u8; 512];
+        for (i, entry) in root.chunks_exact_mut(32).enumerate() {
+            entry[..11].copy_from_slice(b"FILE00  TXT");
+            entry[4] = b'0' + (i / 10) as u8;
+            entry[5] = b'0' + (i % 10) as u8;
+            entry[11] = 0x20;
+        }
+        disk.write_sector(2, &root);
+        let vol = FatVolume::mount(disk).expect("mount");
+        let entries = vol.dir_entries(2).expect("listed up to the end of its chain");
+        assert_eq!(entries.len(), 16);
+        assert_eq!(entries[15].name, "FILE15.TXT");
+        assert!(vol.open("/FILE15.TXT").is_ok(), "the last one is found");
     }
 
     #[test]
