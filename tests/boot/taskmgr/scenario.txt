@@ -1,0 +1,20 @@
+# Le gestionnaire de tâches de ReactOS, la première application de la
+# vague M7 : TASKMGR.EXE du payload 0.4.16 démarre comme winlogon (le
+# shell de session), énumère les processus par
+# NtQuerySystemInformation(SystemProcessInformation) chaque seconde — le
+# noyau journalise la première lecture ([apps] the process list) — et
+# dessine ses onglets avec comctl32 sur le win32k de Mino.
+features = test-smss
+requires = userland, native
+initial-command = TASKMGR.EXE
+cpus     = default
+timeout  = 120
+
+expect = [apps] the process list was read by PID
+
+# Sa fenêtre suit : le corps gris des boîtes de dialogue de XP sur le
+# bureau bleu (la capture au marqueur la prend à peine peinte — la
+# vérification visuelle viendra avec les onglets de comctl32).
+
+# Any bugcheck ends the run at once.
+forbid = *** STOP:

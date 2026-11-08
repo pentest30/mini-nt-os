@@ -22,6 +22,7 @@ pub mod dib;
 pub mod draw;
 pub mod fontobj;
 pub mod handles;
+pub mod pen;
 pub mod region;
 pub mod rgnobj;
 pub mod surface;

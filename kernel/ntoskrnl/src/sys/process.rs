@@ -316,6 +316,13 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
             });
             return super::return_information(&cookie.to_le_bytes(), buffer, length, return_length);
         }
+        // Les compteurs d'E/S et les limites de quota : des zéros de la
+        // taille de leur structure (IO_COUNTERS, 48 octets ; QUOTA_LIMITS,
+        // 28) — Mino ne les compte pas encore. Le WOW64 d'un processus
+        // i386 natif : non.
+        2 => return super::return_information(&[0u8; 48], buffer, length, return_length),
+        1 => return super::return_information(&[0u8; 28], buffer, length, return_length),
+        26 => return super::return_information(&0u32.to_le_bytes(), buffer, length, return_length),
         _ => return UNSUPPORTED_QUERY_CLASSES.report(class),
     }
     let process = match super::reference_process(handle, PROCESS_QUERY_INFORMATION) {

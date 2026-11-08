@@ -91,6 +91,11 @@ pub struct DcState {
     pub clip: Option<Region>,
     /// Son pinceau de remplissage (`dclevel.pbrFill`) : son handle, et lui.
     pub fill: Option<(u32, Brush)>,
+    /// Son stylo (`dclevel.pbrLine`) : son handle, et lui ; le stylo
+    /// implicite (noir, un pixel) sans handle.
+    pub pen: Option<(u32, super::pen::Pen)>,
+    /// Sa position courante (`dclevel.ptlCurrent`), d'où LineTo part.
+    pub position: (i32, i32),
     /// Le bitmap où il peint (`dclevel.pSurface`) : aucun pour un DC de
     /// l'écran, qui peint sur l'écran.
     pub bitmap: Option<Selected>,
@@ -359,6 +364,8 @@ pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(),
         vis,
         clip: None,
         fill: Some((white, STOCK_BRUSHES[stock::WHITE_BRUSH])),
+        pen: None,
+        position: (0, 0),
         bitmap: None,
     };
     let attrs = DcAttr32 {
@@ -409,6 +416,8 @@ pub fn create_memory_dc() -> Result<u32, NtStatus> {
         vis: Region::from_rect(Rect::new(0, 0, 1, 1)),
         clip: None,
         fill: Some((white, STOCK_BRUSHES[stock::WHITE_BRUSH])),
+        pen: None,
+        position: (0, 0),
         bitmap: Some(Selected { handle: default, surface }),
     };
     let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width as i32, mode.height as i32));
@@ -642,6 +651,61 @@ pub fn select_font(dc: &Dc, hfont: u32) -> Option<u32> {
     copy_from_user(&mut old, at).ok()?;
     copy_to_user(at, &hfont.to_le_bytes()).ok()?;
     Some(u32::from_le_bytes(old))
+}
+
+/// SelectObject(hpen) : le stylo du DC devient `hpen` (son type GDI doit
+/// être un stylo, au processus du DC) ; rend l'ancien handle, 0 sans.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn select_pen(dc: &Dc, hpen: u32) -> Option<u32> {
+    if hpen & abi::gdi::GDI_HANDLE_TYPE_MASK != abi::gdi::LO_PEN_TYPE {
+        return None;
+    }
+    let (pid, _) = dc.state().owner?;
+    let object = super::handles::get(hpen, pid)?;
+    let pen = match object {
+        super::handles::Object::Pen(pen) => pen,
+        _ => return None,
+    };
+    Some(dc.change(|state| state.pen.replace((hpen, *pen)).map_or(0, |(old, _)| old)))
+}
+
+/// MoveToEx : la position courante du DC devient `(x, y)` (coordonnées
+/// logiques) ; rend l'ancienne en `out` s'il n'est pas nul, et en valeur.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn move_to(dc: &Dc, x: i32, y: i32, out: u32) -> Option<(i32, i32)> {
+    let old = dc.change(|state| core::mem::replace(&mut state.position, (x, y)));
+    if out != 0 {
+        copy_to_user(u64::from(out), &[old.0.to_le_bytes(), old.1.to_le_bytes()].concat()).ok()?;
+    }
+    Some(old)
+}
+
+/// LineTo : le trait de la position courante à `(x, y)` (coordonnées
+/// logiques), du stylo du DC — le noir d'un pixel sans stylo choisi —, où
+/// il peut peindre (`prgnRao`, comme [`paint`]) ; la position devient
+/// `(x, y)`. `false` sans DC ou sans où dessiner.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn line_to(dc: &Dc, x: i32, y: i32) -> bool {
+    let state = dc.state();
+    let (dx, dy) = logical_origin(&state, None);
+    let from = (state.position.0 + dx, state.position.1 + dy);
+    let to = (x + dx, y + dy);
+    let pen = state.pen.as_ref().map_or(super::pen::Pen::BLACK, |(_, pen)| *pen);
+    let rao = state.rao();
+    if rao.is_empty() {
+        return false;
+    }
+    let parts: alloc::vec::Vec<Rect> = rao.rects().to_vec();
+    let drew = state.draw(|surface| surface.draw_line(from, to, &pen, &parts));
+    drop(state);
+    dc.change(|state| state.position = (x, y));
+    drew
 }
 
 /// ROP3 qui se sert d'une source (WIN32_ROP4_USES_SOURCE) : PatBlt n'en a

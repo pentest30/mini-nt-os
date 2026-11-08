@@ -401,6 +401,33 @@ pub fn change(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowS
 /// Change ce qui change de `window` par `change`, puis réécrit son `WND`.
 /// Une fenêtre qui se met à avoir quelque chose à peindre, ou cesse de
 /// l'avoir, compte pour son thread (`cPaintsReady`, [`crate::paint::is_dirty`]).
+/// Les propriétés des fenêtres (SetProp) : `(hwnd, atome, donnée)`,
+/// l'atome remplacé à la seconde pose.
+static PROPERTIES: hal::sync::KSpinLock<alloc::vec::Vec<(u32, u16, u32)>> =
+    hal::sync::KSpinLock::new(alloc::vec::Vec::new());
+
+/// SetProp : la propriété `atom` de la fenêtre devient `data` (remplacée si
+/// l'atome y était déjà).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn set_property(window: &Window, atom: u16, data: u32) {
+    let mut properties = PROPERTIES.lock();
+    if let Some(entry) = properties.iter_mut().find(|(hwnd, at, _)| *hwnd == window.handle && *at == atom) {
+        entry.2 = data;
+    } else {
+        properties.push((window.handle, atom, data));
+    }
+}
+
+/// SetWindowFNID : l'identifiant interne de la fenêtre.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn set_fnid(window: &Window, fnid: u32) {
+    update(window, |state| state.fnid = fnid);
+}
+
 fn update(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowState {
     let (dirty, state) = {
         let mut state = window.state.lock();

@@ -124,6 +124,30 @@ pub fn alloc(object: u32, owner: u32, kind: u8) -> Result<u32, NtStatus> {
     Ok(handle(index, generation))
 }
 
+/// Le nombre d'entrées prises à `owner` (l'adresse du serveur d'un
+/// `PROCESSINFO` ou d'un `THREADINFO`) — GetGuiResources. Les entrées se
+/// lisent de la section partagée ; une entrée rendue a son pointeur nul.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn count_of(owner: u32) -> u32 {
+    let Some(section) = shared::section() else { return 0 };
+    let mut count = 0;
+    for index in 0..shared::HANDLE_COUNT {
+        let at = shared::HANDLE_ENTRIES + index * core::mem::size_of::<UserHandleEntry32>() as u32;
+        let mut bytes = [0u8; 8];
+        if section.read_kernel(u64::from(at), &mut bytes).is_err() {
+            break;
+        }
+        let ptr = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let entry_owner = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        if ptr != 0 && entry_owner == owner {
+            count += 1;
+        }
+    }
+    count
+}
+
 /// Rend le handle `handle` : son entrée devient libre (sa génération
 /// reste, jusqu'à sa reprise).
 ///
