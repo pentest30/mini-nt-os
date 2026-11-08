@@ -603,6 +603,31 @@ pub fn text_attrs(dc: &Dc) -> Option<super::text::TextAttrs> {
     })
 }
 
+/// IntGdiSetTextColor et IntGdiSetBkColor : `text` et `background`
+/// (COLORREF) deviennent les couleurs du texte et du fond du DC, dans ses
+/// attributs chez son propriétaire (les deux formes, et leurs bits de
+/// changement, comme `gdi32` les écrit) ; `None` pour un DC sans
+/// propriétaire ou des attributs qu'on ne peut écrire.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn set_text_colors(dc: &Dc, text: u32, background: u32) -> Option<()> {
+    let (_, attr) = dc.state().owner?;
+    let at = |field: usize| u64::from(attr) + field as u64;
+    for (field, value) in [
+        (offset_of!(DcAttr32, cr_foreground_clr), text),
+        (offset_of!(DcAttr32, ul_foreground_clr), text),
+        (offset_of!(DcAttr32, cr_background_clr), background),
+        (offset_of!(DcAttr32, ul_background_clr), background),
+    ] {
+        copy_to_user(at(field), &value.to_le_bytes()).ok()?;
+    }
+    let mut dirty = [0u8; 4];
+    copy_from_user(&mut dirty, at(offset_of!(DcAttr32, dirty))).ok()?;
+    let dirty = u32::from_le_bytes(dirty) | abi::gdi::dirty::DIRTY_TEXT | abi::gdi::dirty::DIRTY_BACKGROUND;
+    copy_to_user(at(offset_of!(DcAttr32, dirty)), &dirty.to_le_bytes()).ok()
+}
+
 /// DC_hSelectFont (NtGdiSelectFont) : la police `hfont` devient celle du DC
 /// (`hlfntNew` de ses attributs) ; rend l'ancienne, ou `None` si `hfont`
 /// n'est pas une police du processus ou publique, ou sans attributs.

@@ -20,13 +20,16 @@ expect = [dialog] painted
 
 # Centred (DS_CENTER) on the desktop, which has the screen (the boot
 # screen's black without the switch): the dialog's frame, its active
-# caption, its OK button's face. Its client area is not painted yet
-# (NtUserGetControlColor and NtUserGetControlBrush, WM_CTLCOLORDLG), nor the
-# controls' texts (NtUserInternalGetWindowText).
+# caption, its OK button's face; its client area in COLOR_3DFACE (DefDlgProc
+# erases it with the brush of WM_CTLCOLORDLG: NtUserGetControlColor), and
+# the static text in COLOR_WINDOWTEXT (its text through
+# NtUserInternalGetWindowText, its colours through NtUserGetControlBrush).
 screen = 100 100 5A7EDC
 screen = 489 400 D4D0C8
 screen = 600 317 43609B
 screen = 737 462 D4D0C8
+screen = 640 420 D4D0C8
+screen = 528 353 000000
 
 forbid = *** STOP:
 forbid = did not take the screen

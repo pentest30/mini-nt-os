@@ -729,6 +729,17 @@ pub mod color {
     pub const MENUBAR: usize = 30;
 }
 
+/// WM_CTLCOLORMSGBOX to WM_CTLCOLORSTATIC: a control asks its parent the
+/// brush of its background (`wParam` the DC, `lParam` the control); the
+/// CTLCOLOR_* type is the message's distance from WM_CTLCOLORMSGBOX.
+pub const WM_CTLCOLORMSGBOX: u32 = 0x0132;
+pub const WM_CTLCOLORSTATIC: u32 = 0x0138;
+pub const CTLCOLOR_EDIT: u32 = 1;
+pub const CTLCOLOR_LISTBOX: u32 = 2;
+pub const CTLCOLOR_SCROLLBAR: u32 = 5;
+/// CTLCOLOR_MAX: the number of CTLCOLOR_* types.
+pub const CTLCOLOR_MAX: u32 = 7;
+
 /// HRGN_WINDOW: the whole window, the `wParam` of WM_NCPAINT.
 pub const HRGN_WINDOW: u32 = 1;
 pub const WM_NCPAINT: u32 = 0x0085;
