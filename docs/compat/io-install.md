@@ -307,7 +307,16 @@ sans avance.
   seule préparation à la fois, `PrepareError::Busy` →
   `STATUS_DEVICE_BUSY` sinon ; le verrou tient de la sonde du disque à sa
   relecture. La cible n'étant pas montée, pas de démontage à faire : le
-  verrou couvre l'accès exclusif.
+  verrou couvre l'accès exclusif. Préparation, formatage et copie passent
+  par `io::install::run_exclusive`, qui tient le verrou **dans une région
+  critique** (`ke_enter_critical_region`, comme un système de fichiers sous
+  FsRtlEnterFileSystem) : la fin du thread (l'APC noyau normal de
+  NtTerminateProcess et NtTerminateThread) attend la fin du travail et le
+  verrou rendu. Avant, un `SETUP1.EXE` terminé pendant la copie sortait au
+  milieu, laissait le verrou pris pour de bon (tout appel suivant : `Busy`)
+  et le volume à moitié écrit. Self-test de phase 1 (`install_lock_self_test`,
+  scénario `smoke`) : un APC noyau normal mis en file pendant le travail ne
+  passe qu'après, le verrou libre.
 - Banc d'essai : chaque marqueur `[setup] screen …` part **après** le
   paint de l'écran qu'il nomme — sur le chemin SYSENTER, plus rapide, le
   screendump du scénario prenait une fenêtre à moitié peinte (vu et

@@ -16,6 +16,9 @@ use abi::setup::{
     SETUP_READY, SETUP_TOO_SMALL,
 };
 
+use ke::apc::{ke_enter_critical_region, ke_leave_critical_region};
+use ke::sched::KePlatform;
+
 use crate::disk::AtaDisk;
 use crate::fat::{BlockDevice, FatError, FatFile, FatVolume};
 use crate::partition::PartitionDevice;
@@ -261,8 +264,41 @@ impl Exclusive {
     }
 }
 
-/// Le verrou du moteur, autour de chaque préparation réelle.
+/// Le verrou du moteur, autour de chaque préparation, formatage et copie
+/// réels ([`run_exclusive`]).
 static PREPARE_LOCK: Exclusive = Exclusive(AtomicU8::new(0));
+
+/// Fait tourner `work`, le travail du moteur, sur le thread courant : le
+/// verrou exclusif tenu, dans une région critique (KeEnterCriticalRegion,
+/// comme un système de fichiers sous FsRtlEnterFileSystem). Un APC noyau
+/// normal — la fin du thread que demandent NtTerminateProcess et
+/// NtTerminateThread — attend la sortie de la région, une fois le verrou
+/// rendu : le travail va au bout. Sans la région, le thread terminé sortait
+/// au milieu de la copie, laissait le verrou pris pour de bon (tout appel
+/// suivant : `Busy`) et le volume cible à moitié écrit. La région entoure le
+/// verrou : aucun APC ne tombe entre sa prise et le travail, ni entre le
+/// travail et son retour. Le début du travail est une étape du moteur
+/// ([`last_step_time`]).
+///
+/// # Errors
+/// [`PrepareError::Busy`] si le verrou est pris ; sinon, ce que rend `work`.
+///
+/// # IRQL
+/// PASSIVE_LEVEL (le travail du moteur attend le matériel). Peut bloquer.
+pub fn run_exclusive<T>(work: impl FnOnce() -> Result<T, PrepareError>) -> Result<T, PrepareError> {
+    ke_enter_critical_region::<KePlatform>();
+    let result = if PREPARE_LOCK.try_acquire() {
+        step();
+        let result = work();
+        PREPARE_LOCK.release();
+        result
+    } else {
+        Err(PrepareError::Busy)
+    };
+    // Une fin demandée pendant le travail est livrée ici, le verrou rendu.
+    ke_leave_critical_region::<KePlatform>();
+    result
+}
 
 /// Un GUID tiré du jeton, d'un nonce propre à cette exécution et d'un rôle
 /// (1 : le disque, 2 : l'ESP, 3 : le système). La bibliothèque GPT n'invente
@@ -380,7 +416,8 @@ pub fn prepare_disk<D: gpt::WriteSectors<Error = FatError>>(
 /// Prépare le disque `number` d'après le jeton `token` de l'aperçu. Le
 /// média de démarrage (le maître primaire) et le disque qui porte le
 /// système courant sont refusés avant toute écriture ; le verrou exclusif
-/// tient une seule préparation à la fois.
+/// tient une seule préparation à la fois, que la fin du thread
+/// n'interrompt pas ([`run_exclusive`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL (IDENTIFY DEVICE et les E/S PIO attendent le matériel).
@@ -396,13 +433,7 @@ pub fn prepare(number: u32, token: u64) -> Result<gpt::Layout, PrepareError> {
     }
     // Une seule écriture de tables à la fois : le verrou tient toute la
     // préparation, de la sonde du disque à sa relecture.
-    if !PREPARE_LOCK.try_acquire() {
-        return Err(PrepareError::Busy);
-    }
-    step();
-    let prepared = prepare_locked(number, token);
-    PREPARE_LOCK.release();
-    prepared
+    run_exclusive(|| prepare_locked(number, token))
 }
 
 fn prepare_locked(number: u32, token: u64) -> Result<gpt::Layout, PrepareError> {
@@ -488,7 +519,7 @@ pub fn format_disk<D: BlockDevice>(
 
 /// Formate les deux volumes du disque `number` d'après le jeton `token` de
 /// l'aperçu, après la préparation. Les mêmes refus que la préparation, le
-/// même verrou exclusif.
+/// même verrou exclusif ([`run_exclusive`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL (IDENTIFY DEVICE et les E/S PIO attendent le matériel).
@@ -502,13 +533,7 @@ pub fn format(number: u32, token: u64) -> Result<(fatfs::format::Geometry, fatfs
     if number != SECONDARY_MASTER {
         return Err(PrepareError::NoTarget);
     }
-    if !PREPARE_LOCK.try_acquire() {
-        return Err(PrepareError::Busy);
-    }
-    step();
-    let formatted = format_locked(number, token);
-    PREPARE_LOCK.release();
-    formatted
+    run_exclusive(|| format_locked(number, token))
 }
 
 fn format_locked(number: u32, token: u64) -> Result<(fatfs::format::Geometry, fatfs::format::Geometry), PrepareError> {
@@ -678,8 +703,9 @@ fn copy_dir(
 /// Copie le système sur le disque installé : les deux fichiers de boot de
 /// l'ESP de démarrage vers l'ESP cible, et l'arbre WINDOWS du volume de
 /// démarrage (le ramdisk, qui porte la même arborescence) vers le volume
-/// système cible. La même revalidation ; les tables GPT du disque cible
-/// doivent être là (la préparation et le formatage ont tourné).
+/// système cible. La même revalidation, le même verrou exclusif
+/// ([`run_exclusive`]) ; les tables GPT du disque cible doivent être là (la
+/// préparation et le formatage ont tourné).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL (les E/S PIO attendent le matériel).
@@ -693,13 +719,7 @@ pub fn copy_files(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
     if number != SECONDARY_MASTER {
         return Err(PrepareError::NoTarget);
     }
-    if !PREPARE_LOCK.try_acquire() {
-        return Err(PrepareError::Busy);
-    }
-    step();
-    let copied = copy_locked(number, token);
-    PREPARE_LOCK.release();
-    copied
+    run_exclusive(|| copy_locked(number, token))
 }
 
 fn copy_locked(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
