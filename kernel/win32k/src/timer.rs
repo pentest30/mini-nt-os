@@ -30,8 +30,9 @@
 //! est refusé.
 //!
 //! Les minuteries d'un thread qui se termine s'en vont à l'échéance
-//! suivante (pas de rappel de Ps à la fin d'un thread GUI) ; celles d'une
-//! fenêtre détruite, par [`destroy_window_timers`].
+//! suivante de l'une d'elles, prête ou non (pas de rappel de Ps à la fin
+//! d'un thread GUI) ; celles d'une fenêtre détruite, par
+//! [`destroy_window_timers`].
 //!
 //! Pas encore : les minuteries du RIT (TMRF_RIT : le curseur, le clavier),
 //! TMRF_ONESHOT, la procédure d'une minuterie du système (que ReactOS
@@ -129,6 +130,16 @@ pub struct NewTimer {
     pub procedure: u32,
 }
 
+/// Un thread dont une minuterie vient d'échoir ([`Timers::expire`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Expired<O> {
+    pub owner: O,
+    /// Une de ses minuteries vient de devenir prête : sa file prend
+    /// `QS_TIMER` et il est réveillé. Sinon, elles l'étaient déjà (leur
+    /// message n'est pas sorti) : il faut seulement voir s'il vit encore.
+    pub newly_ready: bool,
+}
+
 /// Les minuteries de tous les threads (`TimersListHead`), dans l'ordre où
 /// elles ont été posées.
 #[derive(Debug)]
@@ -222,24 +233,24 @@ impl<O> Timers<O> {
     }
 
     /// ProcessTimers : les minuteries échues à `now` deviennent prêtes, et
-    /// leur échéance repart de `now`. Rend une fois chaque thread dont une
-    /// minuterie vient de devenir prête (selon `same`).
-    pub fn expire(&mut self, now: u64, same: impl Fn(&O, &O) -> bool) -> Vec<O>
+    /// leur échéance repart de `now`. Rend une fois (selon `same`) chaque
+    /// thread dont une minuterie est échue, même déjà prête : un thread fini
+    /// avant d'en sortir le message doit perdre ses minuteries.
+    pub fn expire(&mut self, now: u64, same: impl Fn(&O, &O) -> bool) -> Vec<Expired<O>>
     where
         O: Clone,
     {
-        let mut owners: Vec<O> = Vec::new();
+        let mut expired: Vec<Expired<O>> = Vec::new();
         for timer in self.list.iter_mut().filter(|timer| timer.due <= now) {
             timer.due = now + u64::from(timer.rate) * MILLISECOND;
-            if timer.ready {
-                continue;
-            }
+            let newly_ready = !timer.ready;
             timer.ready = true;
-            if !owners.iter().any(|owner| same(owner, &timer.owner)) {
-                owners.push(timer.owner.clone());
+            match expired.iter_mut().find(|seen| same(&seen.owner, &timer.owner)) {
+                Some(seen) => seen.newly_ready |= newly_ready,
+                None => expired.push(Expired { owner: timer.owner.clone(), newly_ready }),
             }
         }
-        owners
+        expired
     }
 
     /// L'échéance la plus proche, s'il y a une minuterie.
@@ -327,9 +338,13 @@ fn now() -> u64 {
     hal::timer::interrupt_time()
 }
 
+/// Les bits de réveil et de changement d'une file, à reporter dans le
+/// `CLIENTTHREADINFO` de son thread.
+type QueueBits = (u16, u16);
+
 /// Met `QS_TIMER` dans la file de `thread` ou l'en retire, sous le verrou
 /// des minuteries ; rend les bits à reporter dans son `CLIENTTHREADINFO`.
-fn set_ready_bit(thread: &ThreadInfo, ready: bool) -> (u16, u16) {
+fn set_ready_bit(thread: &ThreadInfo, ready: bool) -> QueueBits {
     let ((), wake, change) = thread.queue.with(|queue| queue.set_timers_ready(ready));
     (wake, change)
 }
@@ -432,38 +447,41 @@ pub fn next_due() -> Option<u64> {
 
 /// ProcessTimers : les minuteries échues deviennent prêtes, et la file de
 /// leurs threads prend `QS_TIMER` et est réveillée ; les minuteries des
-/// threads finis s'en vont.
+/// threads finis s'en vont, que leur message soit sorti ou non.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL (le thread d'entrée brute).
 pub fn expire() {
     let mut timers = TIMERS.lock();
-    let owners = timers.expire(now(), Owner::same);
-    let mut ready: Vec<(Arc<ThreadInfo>, (u16, u16))> = Vec::new();
+    let expired = timers.expire(now(), Owner::same);
+    // Each thread, with the bits to mirror when a timer became ready.
+    let mut threads: Vec<(Arc<ThreadInfo>, Option<QueueBits>)> = Vec::new();
     let mut dead: Vec<Owner> = Vec::new();
-    for owner in owners {
+    for Expired { owner, newly_ready } in expired {
         match owner.0.upgrade() {
             Some(thread) => {
-                let bits = set_ready_bit(&thread, true);
-                ready.push((thread, bits));
+                let bits = newly_ready.then(|| set_ready_bit(&thread, true));
+                threads.push((thread, bits));
             }
             None => dead.push(owner),
         }
     }
     drop(timers);
-    for (thread, (wake, change)) in &ready {
+    for (thread, bits) in &threads {
         if !crate::gui::thread_alive(thread) {
             dead.push(Owner(Arc::downgrade(thread)));
             continue;
         }
-        thread.mirror_queue_bits(*wake, *change);
-        thread.queue.wake();
+        if let Some((wake, change)) = bits {
+            thread.mirror_queue_bits(*wake, *change);
+            thread.queue.wake();
+        }
     }
     if !dead.is_empty() {
         TIMERS.lock().purge(|owner| dead.iter().any(|gone| gone.same(owner)));
     }
     // The last references to the threads go here, the lock released.
-    drop(ready);
+    drop(threads);
 }
 
 /// Le message d'une minuterie prête de `thread` que demande `filter`
@@ -512,6 +530,10 @@ mod tests {
         a == b
     }
 
+    fn expired(owner: u32, newly_ready: bool) -> Expired<u32> {
+        Expired { owner, newly_ready }
+    }
+
     #[test]
     fn rates_are_bounded_like_xp() {
         assert_eq!(rate_of(0), USER_TIMER_MINIMUM);
@@ -528,9 +550,9 @@ mod tests {
         assert_eq!(timers.next_due(), Some(1000 * MS));
         assert!(timers.expire(999 * MS, same).is_empty(), "not yet");
         assert_eq!(timers.take(&ALL, true, 0, |&o| o == 7), (None, false));
-        assert_eq!(timers.expire(1000 * MS, same), [7]);
+        assert_eq!(timers.expire(1000 * MS, same), [expired(7, true)]);
         assert_eq!(timers.next_due(), Some(2000 * MS), "from the expiry");
-        assert!(timers.expire(5000 * MS, same).is_empty(), "ready already: one message");
+        assert_eq!(timers.expire(5000 * MS, same), [expired(7, false)], "ready already: one message");
         assert_eq!(timers.next_due(), Some(6000 * MS));
         let (peeked, still) = timers.take(&ALL, false, 42, |&o| o == 7);
         let peeked = peeked.unwrap();
@@ -540,7 +562,28 @@ mod tests {
         let (taken, still) = timers.take(&ALL, true, 0, |&o| o == 7);
         assert!(taken.is_some() && !still);
         assert_eq!(timers.take(&ALL, true, 0, |&o| o == 7), (None, false), "once");
-        assert_eq!(timers.expire(6000 * MS, same), [7], "again at the next expiry");
+        assert_eq!(timers.expire(6000 * MS, same), [expired(7, true)], "again at the next expiry");
+    }
+
+    #[test]
+    fn a_thread_gone_with_a_ready_timer_is_still_reported_and_purged() {
+        // Codex's review of #83: a timer whose message never came out, its
+        // thread gone, was never reported again, so never purged; a
+        // windowless one kept its id for good.
+        let mut timers: Timers<u32> = Timers::new();
+        timers.set(window_timer(0x20, 1, 50), 8, 0, |&o| o == 8);
+        assert_eq!(timers.set(thread_timer(0, 100), 7, 0, |&o| o == 7), Some(WINDOWLESS_IDS));
+        assert_eq!(timers.expire(100 * MS, same), [expired(8, true), expired(7, true)]);
+        // 7 ends without taking its WM_TIMER: its next expiry reports it.
+        let again = timers.expire(200 * MS, same);
+        assert_eq!(again, [expired(8, false), expired(7, false)]);
+        timers.purge(|&o| o == 7);
+        assert_eq!(timers.len(), 1, "8's is left");
+        assert_eq!(timers.set(thread_timer(0, 100), 9, 0, |&o| o == 9), Some(WINDOWLESS_IDS), "its id is free");
+        // A thread with one ready timer and one newly due is woken once.
+        timers.expire(250 * MS, same);
+        timers.set(window_timer(0x30, 2, 10), 8, 250 * MS, |&o| o == 8);
+        assert!(timers.expire(300 * MS, same).contains(&expired(8, true)), "0x30's became ready");
     }
 
     #[test]
