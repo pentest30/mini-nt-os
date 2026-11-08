@@ -1,0 +1,41 @@
+# comctl32's ListView (tests/native/listview1.c, MinGW, linked to ReactOS's
+# kernel32 and user32): LISTVIEW1.EXE takes the place of winlogon.exe,
+# takes WinSta0\Default, loads comctl32 and opens window "Processes" (100,
+# 100, 500 x 300) with a ListView in report view at (10, 10) of its client
+# area, 400 x 200, control id 100: taskmgr's process page in small.
+# - SystemParametersInfo: NONCLIENTMETRICS and the icon title font (the
+#   ListView's default font), Tahoma of 8 points;
+# - the ListView's WM_CREATE loads uxtheme (comctl32's delay-load, on the
+#   boot disk) and creates its header;
+# - GetDlgItem, EnumChildWindows (the ListView and its header),
+#   EnumThreadWindows and EnumWindows (the parent): NtUserBuildHwndList;
+# - a column "Image" and three items, read back;
+# - painted: the header (NtGdiRectVisible lets comctl32 draw its items) with
+#   its column's edge and its bottom line, the items on the ListView's
+#   white background, the parent's COLOR_BTNFACE beside it.
+features = test-smss
+requires = userland, native
+initial-command = LISTVIEW1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [list] SPI_GETNONCLIENTMETRICS: 1, message font Tahoma 1, height -11, caption weight 700
+expect = [list] SPI_GETICONTITLELOGFONT: 1, Tahoma 1, height -11
+expect = [list] comctl32 loaded
+expect = [list] ListView created; header present
+expect = [list] GetDlgItem(100) is the ListView: 1
+expect = [list] EnumChildWindows: 2, the ListView among them 1
+expect = [list] EnumThreadWindows: 1
+expect = [list] EnumWindows: 1
+expect = [list] column inserted at 0
+expect = [list] items: 3, the second smss.exe
+expect = [list] painted
+
+screen = 300 300 FFFFFF
+screen = 560 300 D4D0C8
+screen = 263 142 404040
+screen = 400 150 404040
+
+forbid = *** STOP:
+forbid = Exception when calling
+forbid = uxtheme.dll) failing

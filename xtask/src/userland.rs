@@ -76,6 +76,13 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "winlogon.exe",
         "kbdus.dll",
         "cmd.exe",
+        // comctl32's delay-loaded DLLs (OpenThemeData, PlaySound): GNU ld
+        // leaves the PE's delay-import directory empty, so the closure
+        // below cannot find them; without uxtheme, the delay-load helper
+        // raises an exception in the WM_CREATE of the ListView, the
+        // header, the tab control...
+        "uxtheme.dll",
+        "winmm.dll",
     ]
     .into_iter()
     .map(String::from)

@@ -7,10 +7,12 @@
 
 use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use ke::usermem::UserPtr;
 
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_OBJECT_NAME_COLLISION, STATUS_OBJECT_NAME_INVALID,
-    STATUS_OBJECT_TYPE_MISMATCH,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER, STATUS_OBJECT_NAME_COLLISION,
+    STATUS_OBJECT_NAME_INVALID, STATUS_OBJECT_TYPE_MISMATCH, STATUS_SUCCESS,
 };
 use abi::object::{OBJ_INHERIT, OBJ_OPENIF};
 use abi::winerror::{dos_error, ERROR_BUSY};
@@ -40,6 +42,66 @@ fn boolean(result: Result<(), NtStatus>) -> NtStatus {
 /// droits `access` (IntValidateDesktopHandle).
 fn reference_desktop(handle: u32, access: AccessMask) -> Result<Arc<Object<Desktop>>, NtStatus> {
     super::current_process().handle_table.reference_as::<Desktop>(Handle(handle), &DESKTOP_TYPE, access)
+}
+
+/// NtUserBuildHwndList(hDesktop, hwndParent, bChildren, dwThreadId, cHwnd,
+/// phwndList, pcHwndNeeded) : NTSTATUS. La liste des fenêtres que demandent
+/// EnumWindows, EnumChildWindows, EnumThreadWindows, GetDlgItem
+/// (`WIN_ListChildren`) :
+/// - avec `hwndParent`, ou sans thread : les enfants de `hwndParent` (sans
+///   lui, de la fenêtre du bureau `hDesktop`, ou de celui du thread
+///   courant), dans leur ordre Z, et avec `bChildren` leurs enfants à toute
+///   profondeur ([`win32k::window::children`]) ;
+/// - sinon, les fenêtres de premier niveau du thread `dwThreadId` sur son
+///   bureau.
+///
+/// Les `cHwnd` premiers handles vont en `phwndList` (s'il est donné), leur
+/// nombre total en `pcHwndNeeded` : `user32` appelle une fois pour le
+/// compter, une fois pour les lire. Un parent inconnu donne une liste vide.
+/// `STATUS_INVALID_PARAMETER` sans `pcHwndNeeded` ou pour un thread inconnu
+/// ou qui n'est pas un thread GUI ; `STATUS_INVALID_HANDLE` pour un bureau
+/// qu'on ne peut pas énumérer.
+pub(super) fn nt_user_build_hwnd_list(arguments: &[u32]) -> NtStatus {
+    let [desktop, parent, children, tid, capacity, list, needed] = arguments[..7] else { unreachable!("7 arguments") };
+    if needed == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // A BOOLEAN, in the low byte of its argument.
+    let deep = children as u8 != 0;
+    let handles = if parent != 0 || tid == 0 {
+        let root = if parent != 0 {
+            win32k::window::get(parent)
+        } else if desktop != 0 {
+            match reference_desktop(desktop, AccessMask(win32k::desktop::DESKTOP_ENUMERATE)) {
+                Ok(desktop) => Some(desktop.window.clone()),
+                Err(_) => return STATUS_INVALID_HANDLE,
+            }
+        } else {
+            match win32k::convert_current_thread().ok().and_then(|thread| thread.desktop()) {
+                Some(desktop) => Some(desktop.desktop.window.clone()),
+                None => return STATUS_INVALID_HANDLE,
+            }
+        };
+        root.map_or_else(Vec::new, |root| win32k::window::children(&root, deep))
+    } else {
+        let Ok(thread) = ps::ethread::lookup_thread(tid) else { return STATUS_INVALID_PARAMETER };
+        let Some(info) = thread.win32_thread().map(win32k::gui::thread_info) else { return STATUS_INVALID_PARAMETER };
+        let Some(desktop) = info.desktop() else { return STATUS_INVALID_PARAMETER };
+        win32k::window::children(&desktop.desktop.window, false)
+            .into_iter()
+            .filter(|&handle| win32k::window::get(handle).is_some_and(|window| window.pti == info.server))
+            .collect()
+    };
+    if list != 0 {
+        let bytes: Vec<u8> = handles.iter().take(capacity as usize).flat_map(|handle| handle.to_le_bytes()).collect();
+        if let Err(status) = ke::usermem::copy_to_user(u64::from(list), &bytes) {
+            return status;
+        }
+    }
+    match UserPtr::<u32>::new(needed).write(&(handles.len() as u32)) {
+        Ok(()) => STATUS_SUCCESS,
+        Err(status) => status,
+    }
 }
 
 /// La station et le nom du bureau que désignent les attributs : le dernier

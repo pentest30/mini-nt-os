@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 106 | 296 |
-| win32k | 87 | 737 |
+| win32k | 90 | 737 |
 
 ## ntoskrnl
 
@@ -562,7 +562,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10f3` | `NtGdiQueryFontAssocInfo` | 1 |  |
 | `0x10f4` | `NtGdiRectangle` | 5 |  |
 | `0x10f5` | `NtGdiRectInRegion` | 2 |  |
-| `0x10f6` | `NtGdiRectVisible` | 2 |  |
+| `0x10f6` | `NtGdiRectVisible` | 2 | ✅ |
 | `0x10f7` | `NtGdiRemoveFontResourceW` | 6 |  |
 | `0x10f8` | `NtGdiRemoveFontMemResourceEx` | 1 |  |
 | `0x10f9` | `NtGdiResetDC` | 5 |  |
@@ -627,7 +627,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1134` | `NtUserBitBltSysBmp` | 8 |  |
 | `0x1135` | `NtUserBlockInput` | 1 |  |
 | `0x1136` | `NtUserBuildHimcList` | 4 |  |
-| `0x1137` | `NtUserBuildHwndList` | 7 |  |
+| `0x1137` | `NtUserBuildHwndList` | 7 | ✅ |
 | `0x1138` | `NtUserBuildNameList` | 4 |  |
 | `0x1139` | `NtUserBuildPropList` | 4 |  |
 | `0x113a` | `NtUserCallHwnd` | 2 |  |
@@ -871,7 +871,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1228` | `NtUserShowWindowAsync` | 2 | ✅ |
 | `0x1229` | `NtUserSoundSentry` | 0 |  |
 | `0x122a` | `NtUserSwitchDesktop` | 1 | ✅ |
-| `0x122b` | `NtUserSystemParametersInfo` | 4 |  |
+| `0x122b` | `NtUserSystemParametersInfo` | 4 | ✅ |
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
 | `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
 | `0x122e` | `NtUserThunkedMenuItemInfo` | 6 |  |
