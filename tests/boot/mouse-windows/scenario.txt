@@ -10,7 +10,15 @@
 #    A gives the capture back (WM_CAPTURECHANGED) and reads the cursor.
 # 3. A press on B's caption at (560, 262), right of A: HTCAPTION (2),
 #    WM_NCLBUTTONDOWN, B activated and in front of A, WM_NCLBUTTONUP.
-# 4. The wheel, to B, ends the program.
+# 4. A second thread has window C (850, 100, 300 x 200): a click in it at
+#    (1000, 200) gives that thread the foreground.
+# 5. A click in B's client area at (500, 400): B is still the main thread's
+#    active window, but not in the foreground: WM_MOUSEACTIVATE again, the
+#    main thread takes the foreground back (Codex's review of #79).
+# 6. While the main thread sleeps, a click there: a plain WM_LBUTTONDOWN,
+#    which a PeekMessage for WM_LBUTTONDBLCLK leaves in the queue and one
+#    for WM_LBUTTONDOWN takes (the filter applies to the final form).
+# 7. The wheel, to B, ends the program.
 # QEMU's PS/2 queue holds four packets of at most 127 pixels: the longer
 # moves go in several commands (see desktop-click).
 features = test-smss
@@ -22,7 +30,10 @@ timeout = 120
 keys = [mouse2] ready => move:-245,-125 move:-245,-125 press:1
 keys = [mouse2] capture A => move:325,225 move:325,225 release
 keys = [mouse2] A lup => move:-120,-169 move:-120,-169 press:1 release
-keys = [mouse2] B nclup hit 2 => wheel:-1
+keys = [mouse2] B nclup hit 2 => move:220,-31 move:220,-31 press:1 release
+keys = [mouse2] C ldown => move:-250,100 move:-250,100 press:1 release
+keys = [mouse2] waiting for a click => press:1 release
+keys = [mouse2] filtered peek => wheel:-1
 
 expect = [mouse2] ready
 expect = [mouse2] A activated: active A, focus A
@@ -34,6 +45,11 @@ expect = [mouse2] A capture changed to none
 expect = [mouse2] B ncldown hit 2
 expect = [mouse2] B activated: active B, focus B
 expect = [mouse2] B nclup hit 2
+expect = [mouse2] C mouse-activate #1
+expect = [mouse2] C ldown 146,76
+expect = [mouse2] B mouse-activate #2
+expect = [mouse2] B ldown 196,126
+expect = [mouse2] filtered peek: dblclk 0, down 1 at B
 expect = [mouse2] wheel at B
 expect = [mouse2] done
 
@@ -41,3 +57,4 @@ expect = [mouse2] done
 screen = 450 300 D4D0C8
 
 forbid = *** STOP:
+forbid = C has no desktop
