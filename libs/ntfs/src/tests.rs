@@ -183,3 +183,66 @@ fn io_errors_and_mft_bootstrap_corruption_are_not_hidden() {
     bad[2048 + 56 + 64 + 2] = 8; // mapping no longer points to bootstrap record
     assert!(Volume::open(bad.as_slice()).is_err());
 }
+
+#[test]
+fn invalid_sizes_extents_and_missing_data_are_refused() {
+    for (offset, value) in [(16, 1), (24, u64::MAX), (40, 512), (48, 1025), (56, 901)] {
+        let mut a = nonresident(&[0x11, 2, 60, 0], 2, 900, 900);
+        p64(&mut a, offset, value);
+        let mut b = image();
+        b[10240..11264].copy_from_slice(&record(&a));
+        assert!(Volume::open(b.as_slice()).unwrap().file_size(2).is_err());
+    }
+    let mut b = image();
+    let mut a = resident(b"not data");
+    p32(&mut a, 0, 0x10);
+    b[3072..4096].copy_from_slice(&record(&a));
+    assert_eq!(Volume::open(b.as_slice()).unwrap().file_size(1), Err(Error::NotFound));
+    p32(&mut a, 0, 0xc0);
+    b[3072..4096].copy_from_slice(&record(&a));
+    assert_eq!(Volume::open(b.as_slice()).unwrap().file_size(1), Err(Error::Unsupported("reparse point")));
+}
+
+#[test]
+fn duplicate_data_and_missing_attribute_terminator_are_refused() {
+    let mut a = resident(b"one");
+    a.extend_from_slice(&resident(b"two"));
+    let mut b = image();
+    b[3072..4096].copy_from_slice(&record(&a));
+    assert_eq!(Volume::open(b.as_slice()).unwrap().file_size(1), Err(Error::Unsupported("multiple DATA extents")));
+    let mut r = record(&resident(b"abc"));
+    p32(&mut r, 88, 0x80); // overwrite attribute terminator, with no valid length
+    assert!(Record::parse(r).is_err());
+}
+
+#[test]
+fn mapping_overflow_and_unterminated_pairs_are_refused() {
+    let mut mapping = vec![0x88];
+    mapping.extend_from_slice(&u64::MAX.to_le_bytes());
+    mapping.extend_from_slice(&i64::MAX.to_le_bytes());
+    mapping.push(0);
+    let mut b = image();
+    b[10240..11264].copy_from_slice(&record(&nonresident(&mapping, 2, 900, 900)));
+    assert!(Volume::open(b.as_slice()).unwrap().file_size(2).is_err());
+    // Entire mapping area occupied by pairs; no zero terminator, even in padding.
+    let mut a = nonresident(&[0x11, 2, 60, 0], 2, 900, 900);
+    a[64..].fill(0x11);
+    b[10240..11264].copy_from_slice(&record(&a));
+    assert!(Volume::open(b.as_slice()).unwrap().file_size(2).is_err());
+}
+
+#[test]
+fn single_byte_metadata_mutations_remain_bounded() {
+    let good = image();
+    // Exercise interacting field corruptions, beyond selected hand-written cases.
+    for base in [0, 2048, 3072, 10240] {
+        for offset in 0..512 {
+            let mut bad = good.clone();
+            bad[base + offset] ^= 0xff;
+            if let Ok(mut volume) = Volume::open(bad.as_slice()) {
+                let _ = volume.read_file(1, 0, &mut [0; 32]);
+                let _ = volume.read_file(2, 500, &mut [0; 32]);
+            }
+        }
+    }
+}

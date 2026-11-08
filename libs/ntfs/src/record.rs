@@ -113,6 +113,9 @@ impl Record {
             if !nonresident {
                 bytes(data, payload_offset, u32_at(data, 16)? as usize)?;
             }
+            if kind == 0xc0 {
+                return Err(Error::Unsupported("reparse point"));
+            }
             if kind == 0x20 {
                 return Err(Error::Unsupported("attribute list"));
             }

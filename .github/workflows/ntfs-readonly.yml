@@ -1,0 +1,38 @@
+name: NTFS read-only format
+
+on:
+  push:
+    paths:
+      - 'libs/ntfs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ntfs-readonly.yml'
+  pull_request:
+    paths:
+      - 'libs/ntfs/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/ntfs-readonly.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  format-images:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust and independent NTFS tools
+        run: |
+          rustup toolchain install
+          sudo apt-get update
+          sudo apt-get install -y ntfs-3g
+      - run: cargo test -p ntfs
+      - run: cargo clippy -p ntfs --all-targets -- -D warnings
+      - name: Check real NTFS images against ntfscat
+        run: cargo test -p ntfs --test mkntfs -- --ignored
+      - name: Check no_std target
+        run: cargo check -p ntfs --target x86_64-unknown-none
