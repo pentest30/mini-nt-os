@@ -360,7 +360,11 @@ cible préparée et formatée, avec les mêmes refus et la même revalidation :
 - **l'arbre système** : le ramdisk de démarrage, monté **une fois** pour
   toute la récursion (`copy_dir` lit chaque répertoire par `dir_entries`, chaque
   fichier par un `FatFile` tiré de son entrée), vers le volume système de la
-  cible ; chaque taille relue à son entrée. Avant, la source était remontée
+  cible ; chaque fichier passe par morceaux d'au plus 1 Mio (`copy_file_data`,
+  comme les fichiers de boot), sa taille relue à son entrée. Chaque morceau et
+  chaque répertoire créé est une étape du moteur (`io::install::last_step_time`),
+  que la sonde de `test-smss` compte comme une touche : sous QEMU, la copie
+  dure plus que ses 10 s sans touche. Avant, la source était remontée
   à chaque fichier (lent), et le premier nom long (`KERNEL32_VISTA.DLL`)
   arrêtait la copie : `Volume::create` écrit maintenant les entrées VFAT et
   l'alias 8.3 (`BASE~N.EXT`, unique dans le répertoire, extension comprise) ;

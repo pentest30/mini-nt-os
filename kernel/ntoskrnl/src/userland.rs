@@ -370,8 +370,9 @@ fn keep_created(process: &Arc<ob::Object<ps::EProcess>>) {
 
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
 /// `params`, et attend sa fin (10 s au plus, ou 10 s après la dernière touche
-/// tapée : un programme interactif, `keys =` dans un scénario ; sans limite
-/// avec la feature `interactive`, quand une personne le pilote) : son thread démarre par
+/// tapée — un programme interactif, `keys =` dans un scénario — ou la
+/// dernière étape du moteur de l'installateur, `io::install::last_step_time` ;
+/// sans limite avec la feature `interactive`, quand une personne le pilote) : son thread démarre par
 /// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
 /// entre dans son point d'entrée avec le PEB pour argument
 /// (`NtProcessStartup(PPEB)`). Journalise, avec le préfixe `[tag]` et sous le
@@ -453,10 +454,14 @@ fn run_native(
         wait(QUIET)
     };
     // A program typed into (`keys =` in a scenario) is not stuck: 10 s more
-    // after each key.
+    // after each key. Nor is one whose installation the kernel runs: the
+    // copy of the system tree lasts longer than 10 s after the last key, and
+    // a step of the installer's engine counts as a key.
     while waited == STATUS_TIMEOUT {
-        let Some(last_key) = crate::input::last_key_time() else { break };
-        let idle = hal::timer::interrupt_time().saturating_sub(last_key);
+        let Some(last_activity) = crate::input::last_key_time().max(io_manager::install::last_step_time()) else {
+            break;
+        };
+        let idle = hal::timer::interrupt_time().saturating_sub(last_activity);
         if idle >= QUIET {
             break;
         }
@@ -470,7 +475,10 @@ fn run_native(
         .filter(|created| created.parent_pid() == process.pid())
         .collect();
     if waited == STATUS_TIMEOUT {
-        log::warn!("[{tag}] {name}: the process did not end within 10 s (of its start or the last key): terminated");
+        log::warn!(
+            "[{tag}] {name}: the process did not end within 10 s (of its start, the last key or the last install \
+             step): terminated"
+        );
         if process.is_critical() {
             log::info!("[{tag}] {name} is a critical process: no longer, before it is terminated");
         }

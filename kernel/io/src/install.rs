@@ -9,7 +9,7 @@
 //! calculé entièrement avant d'être rendu à l'interface, et revérifié
 //! entièrement avant la première écriture.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 use abi::setup::{
     SetupPreview, SETUP_ABI_VERSION, SETUP_DISK_BOOT, SETUP_DISK_CANDIDATE, SETUP_DISK_SYSTEM, SETUP_NO_TARGET,
@@ -34,6 +34,34 @@ const SECONDARY_MASTER: u32 = 2;
 
 /// 0 : système en RAM ; 1 : maître primaire ; 2 : maître secondaire.
 static SYSTEM_DISK_NUMBER: AtomicU8 = AtomicU8::new(0);
+
+/// Quand le moteur a avancé pour la dernière fois (`hal::timer::interrupt_time`,
+/// en 100 ns) ; 0 avant sa première étape.
+static LAST_STEP: AtomicU64 = AtomicU64::new(0);
+
+/// Ce qu'une copie lit et écrit d'un coup, et ce qui sépare deux étapes du
+/// moteur pendant la copie : `fat.img` dépasse 40 Mo, `shell32.dll` 10 Mo.
+const COPY_CHUNK: usize = 1 << 20;
+
+/// Le moteur avance : une étape commence, ou un morceau de la copie est
+/// écrit.
+fn step() {
+    LAST_STEP.store(hal::timer::interrupt_time().max(1), Ordering::Relaxed);
+}
+
+/// Quand le moteur a avancé pour la dernière fois — le début d'une
+/// préparation, d'un formatage (et de chacun de ses volumes) ou d'une copie,
+/// puis chaque répertoire créé et chaque morceau d'au plus 1 Mio copié —, en
+/// unités de 100 ns de `hal::timer::interrupt_time` ; `None` avant la
+/// première étape. La sonde de `smss` (`ntoskrnl::userland`) compte une
+/// étape comme une touche : un programme dont le noyau copie le système
+/// n'est pas bloqué, même s'il ne fait rien d'autre pendant la copie.
+///
+/// # IRQL
+/// Tout niveau (une lecture atomique).
+pub fn last_step_time() -> Option<u64> {
+    Some(LAST_STEP.load(Ordering::Relaxed)).filter(|&time| time != 0)
+}
 
 /// Un disque vu par le planificateur, sans accès à son contenu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,6 +399,7 @@ pub fn prepare(number: u32, token: u64) -> Result<gpt::Layout, PrepareError> {
     if !PREPARE_LOCK.try_acquire() {
         return Err(PrepareError::Busy);
     }
+    step();
     let prepared = prepare_locked(number, token);
     PREPARE_LOCK.release();
     prepared
@@ -442,6 +471,7 @@ pub fn format_disk<D: BlockDevice>(
     // L'ESP, puis le système : chaque volume formaté sur sa vue bornée, et
     // vérifié par le montage du lecteur FAT du noyau sur la même vue.
     let mut format_volume = |first: u64, count: u64| -> Result<fatfs::format::Geometry, PrepareError> {
+        step();
         let mut view = PartitionDevice::new(&mut *disk, sectors, first, count).map_err(|_| PrepareError::Io)?;
         let geometry =
             fatfs::format::format(&mut VolumeSectors(&mut view), count as u32).map_err(|error| match error {
@@ -475,6 +505,7 @@ pub fn format(number: u32, token: u64) -> Result<(fatfs::format::Geometry, fatfs
     if !PREPARE_LOCK.try_acquire() {
         return Err(PrepareError::Busy);
     }
+    step();
     let formatted = format_locked(number, token);
     PREPARE_LOCK.release();
     formatted
@@ -532,33 +563,27 @@ fn boot_esp_volume() -> Result<Option<FatVolume<alloc::boxed::Box<dyn BlockDevic
     Ok(None)
 }
 
-/// Copie le fichier `path` de l'ESP de démarrage au même chemin sous
-/// `dst_root`, la racine de l'ESP cible, dont les répertoires sont créés au
-/// besoin (`EFI`, puis `BOOT`). Le fichier passe par morceaux d'1 Mio
-/// (`fat.img` dépasse 40 Mo) : lu par le lecteur FAT, écrit par le Volume
-/// cible ; la taille de l'entrée relue à la fin. Rend les octets copiés.
-fn copy_boot_file<D: BlockDevice>(
-    esp: &FatVolume<D>,
-    path: &str,
+/// Copie le fichier `file` du volume `src` dans `node`, un fichier vide du
+/// Volume cible, par morceaux d'au plus 1 Mio ([`COPY_CHUNK`]) : lus par le
+/// lecteur FAT, écrits par le Volume cible (qui grandit le fichier), une
+/// étape du moteur à chaque morceau. La vérification : tous les octets lus,
+/// et la taille de l'entrée cible relue à la fin. Rend les octets copiés.
+fn copy_file_data<D: BlockDevice>(
+    src: &FatVolume<D>,
+    mut file: FatFile,
     dst: &Volume,
-    dst_root: &Node,
+    mut node: Node,
 ) -> Result<u64, PrepareError> {
-    let mut file = esp.open(path).map_err(|_| PrepareError::Io)?;
-    let (directories, name) = path.rsplit_once('/').unwrap_or(("", path));
-    let mut dir = *dst_root;
-    for part in directories.split('/').filter(|part| !part.is_empty()) {
-        dir = dst.create(&dir, part, true, 0x10).map_err(|_| PrepareError::Io)?;
-    }
-    let mut node = dst.create(&dir, name, false, 0x20).map_err(|_| PrepareError::Io)?;
-    let mut chunk = alloc::vec![0u8; 1 << 20];
+    let mut chunk = alloc::vec![0u8; COPY_CHUNK.min(file.file_size as usize)];
     let mut copied = 0u64;
     loop {
-        let read = esp.read(&mut file, &mut chunk).map_err(|_| PrepareError::Io)?;
+        let read = src.read(&mut file, &mut chunk).map_err(|_| PrepareError::Io)?;
         if read == 0 {
             break;
         }
         node = dst.write(&node, copied, &chunk[..read]).map_err(|_| PrepareError::Io)?;
         copied += read as u64;
+        step();
     }
     let size = dst.current(&node).map_err(|_| PrepareError::Io)?.size as u64;
     if copied != u64::from(file.file_size) || size != copied {
@@ -567,14 +592,34 @@ fn copy_boot_file<D: BlockDevice>(
     Ok(copied)
 }
 
+/// Copie le fichier `path` de l'ESP de démarrage au même chemin sous
+/// `dst_root`, la racine de l'ESP cible, dont les répertoires sont créés au
+/// besoin (`EFI`, puis `BOOT`), par [`copy_file_data`]. Rend les octets
+/// copiés.
+fn copy_boot_file<D: BlockDevice>(
+    esp: &FatVolume<D>,
+    path: &str,
+    dst: &Volume,
+    dst_root: &Node,
+) -> Result<u64, PrepareError> {
+    let file = esp.open(path).map_err(|_| PrepareError::Io)?;
+    let (directories, name) = path.rsplit_once('/').unwrap_or(("", path));
+    let mut dir = *dst_root;
+    for part in directories.split('/').filter(|part| !part.is_empty()) {
+        dir = dst.create(&dir, part, true, 0x10).map_err(|_| PrepareError::Io)?;
+    }
+    let node = dst.create(&dir, name, false, 0x20).map_err(|_| PrepareError::Io)?;
+    copy_file_data(esp, file, dst, node)
+}
+
 /// Copie récursive de l'arbre du répertoire `src_dir_cluster` du volume
 /// source — le ramdisk, **monté une seule fois pour toute la récursion** :
 /// chaque appel ne re-monte rien, la FAT reste en cache — vers le
 /// répertoire `dst_dir` du volume cible. Les entrées `.` et `..` ne se
-/// copient pas ; chaque fichier est relu depuis la source, créé et écrit
-/// sur la cible (le Volume grandit le fichier), sa taille vérifiée à la
-/// relecture de son entrée. Les noms longs passent : le Volume cible écrit
-/// leurs entrées VFAT et l'alias 8.3.
+/// copient pas ; chaque fichier est créé sur la cible et copié par
+/// [`copy_file_data`] (une étape du moteur par morceau d'1 Mio), chaque
+/// répertoire créé est une étape. Les noms longs passent : le Volume cible
+/// écrit leurs entrées VFAT et l'alias 8.3.
 fn copy_dir(
     src: &FatVolume<impl BlockDevice>,
     src_dir_cluster: u32,
@@ -594,16 +639,10 @@ fn copy_dir(
     let has_real_winlogon = system32 && entries.iter().any(|entry| entry.name.eq_ignore_ascii_case("WINLOGON.ORG"));
     if has_real_winlogon {
         let shell = src.find_in_dir(src.root_cluster(), "DESKTOP1.EXE").map_err(|_| PrepareError::Io)?;
-        let mut file = FatFile { first_cluster: shell.first_cluster, file_size: shell.file_size, position: 0 };
-        let mut data = alloc::vec![0u8; shell.file_size as usize];
-        src.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
+        let file = FatFile { first_cluster: shell.first_cluster, file_size: shell.file_size, position: 0 };
         let node = dst.create(dst_dir, "WINLOGON.EXE", false, 0x20).map_err(|_| PrepareError::Io)?;
-        let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
-        if dst.current(&written).map_err(|_| PrepareError::Io)?.size as u64 != data.len() as u64 {
-            return Err(PrepareError::Io);
-        }
+        report.bytes += copy_file_data(src, file, dst, node)?;
         report.files += 1;
-        report.bytes += data.len() as u64;
     }
     for entry in entries {
         if entry.name == "." || entry.name == ".." {
@@ -619,23 +658,18 @@ fn copy_dir(
             let node =
                 dst.create(dst_dir, installed_name, true, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
             report.directories += 1;
+            step();
             let child_path =
                 if src_path.is_empty() { entry.name.clone() } else { alloc::format!("{src_path}/{}", entry.name) };
             copy_dir(src, entry.first_cluster, &child_path, dst, &node, report)?;
         } else {
-            let mut file = FatFile { first_cluster: entry.first_cluster, file_size: entry.file_size, position: 0 };
-            let mut data = alloc::vec![0u8; entry.file_size as usize];
-            src.read(&mut file, &mut data).map_err(|_| PrepareError::Io)?;
+            let file = FatFile { first_cluster: entry.first_cluster, file_size: entry.file_size, position: 0 };
             let node =
                 dst.create(dst_dir, installed_name, false, u32::from(entry.attr)).map_err(|_| PrepareError::Io)?;
-            let written = dst.write(&node, 0, &data).map_err(|_| PrepareError::Io)?;
             // La vérification après écriture : l'entrée de la cible rend la
-            // taille écrite.
-            if dst.current(&written).map_err(|_| PrepareError::Io)?.size as u64 != data.len() as u64 {
-                return Err(PrepareError::Io);
-            }
+            // taille lue de la source (copy_file_data).
+            report.bytes += copy_file_data(src, file, dst, node)?;
             report.files += 1;
-            report.bytes += data.len() as u64;
         }
     }
     Ok(())
@@ -662,6 +696,7 @@ pub fn copy_files(number: u32, token: u64) -> Result<CopyReport, PrepareError> {
     if !PREPARE_LOCK.try_acquire() {
         return Err(PrepareError::Busy);
     }
+    step();
     let copied = copy_locked(number, token);
     PREPARE_LOCK.release();
     copied

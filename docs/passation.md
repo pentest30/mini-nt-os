@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **La sonde de `smss` laisse finir la copie de l'installateur** (`claude/relaxed-lewin-04078b`) : `installer-ui`
+  et `installer-finish` ne finissaient plus sur `main`, sur AMD comme sur Intel. La sonde de `test-smss`
+  (`ntoskrnl::userland::run_native`) termine son programme 10 s après sa dernière touche, et la copie du système
+  (`io::install::copy_files` : l'arbre du ramdisk, 44 Mo, et pour `installer-finish` les fichiers de boot, 44 Mo
+  encore) dure plus longtemps sous QEMU : `SMSS.EXE`, `csrss` et `SETUP1.EXE` étaient terminés en pleine copie
+  (« did not end within 10 s »), et le délai du scénario expirait. Le moteur publie maintenant sa dernière étape
+  (`io::install::last_step_time` : le début de chaque préparation, formatage, volume formaté et copie, puis chaque
+  répertoire créé et chaque morceau d'au plus 1 Mio copié, `copy_file_data`, qui copie aussi les fichiers de boot
+  et le shell installé) ; la sonde la compte comme une touche. Les deux scénarios sont le test : `installer-ui`
+  interdit aussi « did not end within 10 s » (sans la correction de la sonde, il y échoue en pleine copie, vérifié
+  par mutation, au lieu d'attendre ses 900 s) ; `installer-ui` (47 s, 44 s) et `installer-finish` (125 s, 118 s)
+  passent sur AMD et Intel. Au second démarrage d'`installer-finish`, la sonde termine encore `smss` : le système
+  installé n'a pas de touche, c'est la fin attendue. Vu en chemin, à
+  diagnostiquer : le thread de `SETUP1.EXE` terminé pendant l'IOCTL de copie sortait au milieu de la copie (un APC
+  noyau normal), en laissant `PREPARE_LOCK` pris et le volume à moitié écrit ; le moteur devrait tourner dans une
+  région critique (`ke_enter_critical_region`).
+
 - **M9 NTFS, parcours des répertoires** (`feature/m9-ntfs-paths`) : lecture de `$I30` (INDEX_ROOT, INDEX_ALLOCATION, BITMAP), fixups INDX et parcours borné avec détection des cycles. Comparaison des entrées avec ntfsls sur images mkntfs ; résolution des chemins imbriqués avec références séquencées et `$UpCase`, normalisation bornée et refus des noms ambigus. 19 tests unitaires et comparaison de 162 fichiers par image ntfs-3g (clusters 512/4096/8192) passent. Limites et reprise : `docs/compat/ntfs.md`. Suite : ATTRIBUTE_LIST et extents, puis montage noyau séparé. PR #95.
 
 
@@ -190,8 +207,8 @@ jour à chaque commit qui change l'état.
   entrée (`desktop_hit`). Scénarios `installer-click` et `desktop-click`. La file PS/2 de QEMU ne tient
   que 16 octets : un `move:` de plus de 4 paquets (508 px) part en partie, le reste avec le clic
   suivant ; les scénarios découpent leurs grands mouvements.
-  Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la copie ou l'étape
-  « configure ») et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
+  Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la sonde coupait la copie :
+  corrigé, voir « La sonde de `smss` laisse finir la copie » en tête) et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
   La souris absolue de VirtualBox (branche `claude/vbox-mouse`, `docs/compat/vbox.md`) : `hal::pci`
   (mécanisme n° 1, recherche par fabricant et modèle, BAR d'E/S), `abi::vmmdev`, `hal::vmmdev`, pilote
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
