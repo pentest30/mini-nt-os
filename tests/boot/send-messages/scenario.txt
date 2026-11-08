@@ -13,6 +13,12 @@
 # - SendMessageTimeout of 100 ms to a procedure that sleeps 400 ms: FALSE,
 #   ERROR_TIMEOUT (1460); then one of 5 s: TRUE and 1 + 10 x 2;
 # - SendNotifyMessage: TRUE at once, handled by the main thread;
+# - WaitMessage (Codex's review of #84): a message sent while the main thread
+#   waits in it is handled during the wait, which a later posted message
+#   ends;
+# - a thread that ends without answering: SendMessage to its window fails in
+#   about a second, though a third thread posts to the sender every 50 ms
+#   (the recipient's liveness is looked at whatever wakes the sender);
 # then the worker posts WM_QUIT.
 features = test-smss
 requires = userland, native
@@ -31,12 +37,16 @@ expect = [send] SendMessageTimeout of 100 ms: 0, error 1460
 expect = [send] SendMessageTimeout of 5 s: 1, result 21
 expect = [send] SendNotifyMessage: 1
 expect = [send] W got the notification in the main thread
+expect = [send] sent during WaitMessage: 7
+expect = [send] WaitMessage returned; the sent message handled during it 1
+expect = [send] SendMessage to a thread that ended: 0, under 2 s 1
 expect = [send] sent messages out of GetMessage: 0; notified 1
 expect = [send] done
 expect = exit status 0x00007002
 
 # Any bugcheck ends the run at once.
 forbid = *** STOP:
-forbid = SendMessageW Error
 forbid = in the wrong thread
 forbid = the worker has no desktop
+forbid = [send] no zombie thread
+forbid = [send] no pinger thread

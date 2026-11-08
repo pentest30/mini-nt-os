@@ -19,8 +19,11 @@
 //!
 //! Le destinataire peut finir sans répondre (pas de rappel de Ps à la fin
 //! d'un thread GUI) : l'envoyeur regarde toutes les [`SLICE_MS`] ms s'il vit
-//! encore, et l'envoi échoue sinon. SendMessageTimeout borne l'attente ;
-//! SendNotifyMessage n'attend pas ([`notify`]).
+//! encore, quoi qui le réveille entre-temps, et l'envoi échoue sinon.
+//! SendMessageTimeout borne l'attente ; SendNotifyMessage n'attend pas
+//! ([`notify`]) : un message qui porte un pointeur lui est refusé
+//! (`ERROR_MESSAGE_SYNC_ONLY`), l'envoyeur pouvant rendre sa mémoire avant
+//! que le destinataire la lise.
 //!
 //! Pas encore : InSendMessage(Ex), ReplyMessage, SendMessageCallback,
 //! SMTO_ABORTIFHUNG et SMTO_BLOCK, les crochets (WH_CALLWNDPROC), la
@@ -105,6 +108,9 @@ pub enum SendError {
     Gone,
     /// Le message porte un pointeur vers un autre processus (pas encore).
     Unmarshalled,
+    /// SendNotifyMessage d'un message qui porte un pointeur
+    /// (`ERROR_MESSAGE_SYNC_ONLY`).
+    SyncOnly,
     /// L'attente de l'envoyeur s'est finie autrement (sa fin).
     Wait(NtStatus),
 }
@@ -115,7 +121,7 @@ impl SendError {
         match self {
             Self::Timeout => abi::ntstatus::STATUS_IO_TIMEOUT,
             Self::Gone => abi::ntstatus::STATUS_INVALID_HANDLE,
-            Self::Unmarshalled => abi::ntstatus::STATUS_NOT_IMPLEMENTED,
+            Self::Unmarshalled | Self::SyncOnly => abi::ntstatus::STATUS_NOT_IMPLEMENTED,
             Self::Wait(status) => status,
         }
     }
@@ -167,7 +173,7 @@ pub fn notify_window(
             .map_err(SendError::Wait);
     }
     let target = crate::gui::thread_info_of(window.pti).ok_or(SendError::Gone)?;
-    notify(current, &target, window.handle, message, wparam, lparam)
+    notify(&target, window.handle, message, wparam, lparam)
 }
 
 /// Met `sent` parmi les messages envoyés de `target`, qui est réveillé.
@@ -226,14 +232,29 @@ pub fn send(
     let sent = SentMessage::new(hwnd, message, wparam, lparam, true);
     let done = sent.done.clone().expect("a waited message has its event");
     queue_to(target, sent.clone());
+    let slice = u64::from(SLICE_MS) * MILLISECOND;
     let deadline = timeout_ms.map(|ms| hal::timer::interrupt_time() + u64::from(ms) * MILLISECOND);
+    // The recipient's liveness is looked at on this schedule, whatever wakes
+    // the wait: messages to the sender can wake it more often than a slice.
+    let mut next_check = hal::timer::interrupt_time() + slice;
     loop {
         if let Some(result) = sent.reply() {
             return Ok(result);
         }
         let now = hal::timer::interrupt_time();
-        let slice = u64::from(SLICE_MS) * MILLISECOND;
-        let wait = deadline.map_or(slice, |deadline| deadline.saturating_sub(now).clamp(1, slice));
+        if deadline.is_some_and(|deadline| now >= deadline) {
+            withdraw(target, &sent);
+            return Err(SendError::Timeout);
+        }
+        if now >= next_check {
+            if !crate::gui::thread_alive(target) {
+                withdraw(target, &sent);
+                return Err(SendError::Gone);
+            }
+            next_check = now + slice;
+        }
+        let until = deadline.map_or(next_check, |deadline| deadline.min(next_check));
+        let wait = until.saturating_sub(now).max(1);
         let objects = [done.dispatcher_object(), current.queue.event().dispatcher_object()];
         // SAFETY: the current Ps thread, at PASSIVE_LEVEL; `done` and
         // `current`, held here, keep their events for the whole wait.
@@ -248,22 +269,10 @@ pub fn send(
             )
         };
         match status {
-            STATUS_WAIT_0 => {}
+            // The reply, or a deadline: looked at above.
+            STATUS_WAIT_0 | STATUS_TIMEOUT => {}
             status if status == NtStatus::wait(1) => {
                 dispatch_all(current);
-            }
-            STATUS_TIMEOUT => {
-                if sent.reply().is_some() {
-                    continue;
-                }
-                if deadline.is_some_and(|deadline| hal::timer::interrupt_time() >= deadline) {
-                    withdraw(target, &sent);
-                    return Err(SendError::Timeout);
-                }
-                if !crate::gui::thread_alive(target) {
-                    withdraw(target, &sent);
-                    return Err(SendError::Gone);
-                }
             }
             other => {
                 withdraw(target, &sent);
@@ -277,20 +286,14 @@ pub fn send(
 /// est mis parmi ses messages envoyés, sans attendre sa réponse.
 ///
 /// # Errors
-/// [`SendError::Unmarshalled`].
+/// [`SendError::SyncOnly`] pour un message qui porte un pointeur : rien ne
+/// le garde après le retour de l'envoyeur.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
-pub fn notify(
-    current: &ThreadInfo,
-    target: &Arc<ThreadInfo>,
-    hwnd: u32,
-    message: u32,
-    wparam: u32,
-    lparam: u32,
-) -> Result<(), SendError> {
-    if unmarshalled(current, target, message, wparam) {
-        return Err(SendError::Unmarshalled);
+pub fn notify(target: &Arc<ThreadInfo>, hwnd: u32, message: u32, wparam: u32, lparam: u32) -> Result<(), SendError> {
+    if crate::queue::is_pointer_message(message, wparam) {
+        return Err(SendError::SyncOnly);
     }
     queue_to(target, SentMessage::new(hwnd, message, wparam, lparam, false));
     Ok(())
@@ -324,4 +327,24 @@ pub fn dispatch_one(thread: &ThreadInfo) -> bool {
 /// PASSIVE_LEVEL, dans le thread, sans rien tenir.
 pub fn dispatch_all(thread: &ThreadInfo) {
     while dispatch_one(thread) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notifications_never_carry_a_pointer() {
+        // Codex's review of #84: SendNotifyMessage does not wait, so the
+        // sender may free what a pointer designates before it is read.
+        let target = Arc::new(ThreadInfo::new(crate::gui::thread_server_address(8), 0));
+        let wm_settext = 0x000C;
+        assert_eq!(notify(&target, 0x20, wm_settext, 0, 0x0040_1000), Err(SendError::SyncOnly));
+        assert!(target.queue.with(crate::queue::QueueState::pop_sent).0.is_none(), "nothing queued");
+        assert_eq!(notify(&target, 0x20, 0x0400, 1, 2), Ok(()));
+        let sent = target.queue.with(crate::queue::QueueState::pop_sent).0.expect("queued");
+        assert_eq!((sent.message, sent.wparam, sent.lparam, sent.reply()), (0x0400, 1, 2, None));
+        sent.complete(0);
+        assert_eq!(sent.reply(), Some(0), "nobody waits: no event");
+    }
 }

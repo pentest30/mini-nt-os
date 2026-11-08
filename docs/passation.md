@@ -226,6 +226,9 @@ jour à chaque commit qui change l'état.
   PeekMessage et GetMessage, dans WaitMessage et pendant l'attente d'une réponse ; l'envoyeur regarde toutes les
   250 ms si le destinataire vit), NtUserMessageCall de types `FNID_SENDMESSAGE`, `FNID_SENDMESSAGEWTOOPTION`
   (SendMessageTimeout) et `FNID_SENDNOTIFYMESSAGE` ; les envois du noyau vers un autre thread passent par là.
+  La revue de Codex sur #84 : la vie du destinataire regardée toutes les 250 ms quoi qui réveille l'envoyeur,
+  WaitMessage qui traite les messages envoyés pendant l'attente, SendNotifyMessage qui refuse un pointeur
+  (`ERROR_MESSAGE_SYNC_ONLY`).
   Scénario `send-messages` (`tests/native/send1.c`). Pas encore : InSendMessage, ReplyMessage,
   SendMessageCallback, les crochets, HWND_BROADCAST, les pointeurs vers un autre processus.
   taskmgr (essai local `claude/taskmgr-try` : `apps-wave`, les deux branches, SetDialogPointer,

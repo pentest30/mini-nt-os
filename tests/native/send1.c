@@ -13,6 +13,10 @@
  * - SendMessageTimeout of 100 ms to a procedure that sleeps 400 ms: 0 and
  *   ERROR_TIMEOUT;
  * - SendNotifyMessage: TRUE at once, W handles it later;
+ * - WaitMessage: a message sent while the main thread waits in it is
+ *   handled during the wait, which goes on until a posted message;
+ * - a SendMessage to a thread that ends without answering fails in about
+ *   a second, though a third thread posts to the sender every 50 ms;
  * then the worker posts WM_QUIT to the main thread, which never got a sent
  * message from GetMessage, and ends with EXIT_STATUS. Each result goes to the
  * debug port (DbgPrint), where the scenario looks for it.
@@ -102,7 +106,10 @@ __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, 
 __declspec(dllimport) LRESULT __stdcall DefWindowProcW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
 __declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT min, UINT max);
+__declspec(dllimport) BOOL __stdcall PostMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) BOOL __stdcall PostThreadMessageW(DWORD thread, UINT message, WPARAM w, LPARAM l);
+__declspec(dllimport) BOOL __stdcall WaitMessage(void);
+__declspec(dllimport) DWORD __stdcall GetTickCount(void);
 __declspec(dllimport) ATOM __stdcall RegisterClassExW(const WNDCLASSEXW *class_info);
 __declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
 __declspec(dllimport) LRESULT __stdcall SendMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
@@ -121,6 +128,11 @@ static DWORD worker_thread;
 /* What GetMessage returned of the messages the worker sent. */
 static int sent_out_of_get_message;
 static int notified;
+/* WM_USER + 7 was handled (sent during WaitMessage). */
+static int handled_during_wait;
+/* The window of a thread that ends without answering, and its readiness. */
+static HWND window_z;
+static volatile int z_ready;
 
 void *memset(void *destination, int value, unsigned int count)
 {
@@ -172,6 +184,17 @@ static LRESULT __stdcall procedure_w(HWND hwnd, UINT message, WPARAM w, LPARAM l
     case WM_USER + 5:
         Sleep(400);
         return 5;
+    case WM_USER + 7:
+        handled_during_wait = 1;
+        return 7;
+    case WM_USER + 8:
+        /* Posted by the worker, which then sends WM_USER + 7, then posts
+         * WM_USER + 9. */
+        WaitMessage();
+        DbgPrint("[send] WaitMessage returned; the sent message handled during it %d\n", handled_during_wait);
+        return 0;
+    case WM_USER + 9:
+        return 0;
     case WM_USER + 6:
         notified = 1;
         DbgPrint("[send] W got the notification in the %s thread\n",
@@ -192,6 +215,30 @@ static BOOL register_class(const WCHAR *name, WNDPROC procedure)
     class_info.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     class_info.lpszClassName = name;
     return RegisterClassExW(&class_info) != 0;
+}
+
+/* A thread with a window that never answers: it ends after 600 ms. */
+static DWORD __stdcall zombie(void *parameter)
+{
+    (void)parameter;
+    SetThreadDesktop(desktop);
+    window_z = CreateWindowExW(0, L"MinoSendV", L"Z", 0, 0, 0, 100, 100, 0, 0, GetModuleHandleW(0), 0);
+    z_ready = 1;
+    Sleep(600);
+    return 0;
+}
+
+/* Posts to the worker every 50 ms for 3 s: its wait keeps waking. */
+static DWORD __stdcall pinger(void *parameter)
+{
+    int i;
+
+    (void)parameter;
+    for (i = 0; i < 60; i++) {
+        PostThreadMessageW(worker_thread, WM_USER + 11, 0, 0);
+        Sleep(50);
+    }
+    return 0;
 }
 
 static DWORD __stdcall worker(void *parameter)
@@ -222,6 +269,26 @@ static DWORD __stdcall worker(void *parameter)
     DbgPrint("[send] SendMessageTimeout of 5 s: %d, result %lu\n", ok, result);
     DbgPrint("[send] SendNotifyMessage: %d\n", SendNotifyMessageW(window_w, WM_USER + 6, 0, 0));
     Sleep(100);
+    /* WaitMessage in the main thread (WM_USER + 8), a message sent to it
+     * meanwhile, then a posted one that ends the wait. */
+    PostMessageW(window_w, WM_USER + 8, 0, 0);
+    Sleep(300);
+    DbgPrint("[send] sent during WaitMessage: %ld\n", SendMessageW(window_w, WM_USER + 7, 0, 0));
+    PostMessageW(window_w, WM_USER + 9, 0, 0);
+    Sleep(100);
+    {
+        DWORD id, start, elapsed;
+        if (!CreateThread(0, 0, zombie, 0, 0, &id))
+            DbgPrint("[send] no zombie thread\n");
+        while (!z_ready)
+            Sleep(10);
+        if (!CreateThread(0, 0, pinger, 0, 0, &id))
+            DbgPrint("[send] no pinger thread\n");
+        start = GetTickCount();
+        value = SendMessageW(window_z, WM_USER + 10, 0, 0);
+        elapsed = GetTickCount() - start;
+        DbgPrint("[send] SendMessage to a thread that ended: %ld, under 2 s %d\n", value, elapsed < 2000);
+    }
     PostThreadMessageW(main_thread, WM_QUIT, 0, 0);
     return 0;
 }

@@ -256,6 +256,7 @@ fn send_error(error: win32k::sent::SendError) -> u32 {
         win32k::sent::SendError::Timeout => ERROR_TIMEOUT,
         win32k::sent::SendError::Gone => ERROR_INVALID_WINDOW_HANDLE,
         win32k::sent::SendError::Unmarshalled => ERROR_CALL_NOT_IMPLEMENTED,
+        win32k::sent::SendError::SyncOnly => ERROR_MESSAGE_SYNC_ONLY,
         win32k::sent::SendError::Wait(status) => dos_error(status),
     }
 }

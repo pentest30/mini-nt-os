@@ -557,9 +557,9 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 }
 
 /// WaitMessage : attend qu'un message arrive dans la file du thread courant
-/// `thread`, s'il n'y en a pas (ni message posté, ni fenêtre à peindre, ni
-/// minuterie prête) ; les messages envoyés par d'autres threads sont traités
-/// d'abord.
+/// `thread`, s'il n'y en a pas (ni message posté, ni entrée, ni fenêtre à
+/// peindre, ni minuterie prête) ; les messages envoyés par d'autres threads
+/// sont traités, avant et pendant l'attente, sans la finir.
 ///
 /// # Errors
 /// Le statut d'une attente qui finit autrement.
@@ -567,12 +567,17 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 /// # IRQL
 /// PASSIVE_LEVEL, dans le thread.
 pub fn wait_message(thread: &ThreadInfo) -> Result<(), NtStatus> {
-    crate::sent::dispatch_all(thread);
-    let ((), wake, _) = thread.queue.with(|_| ());
-    if wake & (QS_POSTMESSAGE | QS_KEY | QS_PAINT | QS_TIMER) != 0 {
-        return Ok(());
+    let waking = QS_POSTMESSAGE | QS_KEY | QS_MOUSEMOVE | QS_MOUSEBUTTON | QS_PAINT | QS_TIMER;
+    loop {
+        // A message sent while the thread waits is handled here, and the
+        // wait goes on: its sender may need it to post what ends the wait.
+        crate::sent::dispatch_all(thread);
+        let ((), wake, _) = thread.queue.with(|_| ());
+        if wake & waking != 0 {
+            return Ok(());
+        }
+        wait(thread)?;
     }
-    wait(thread)
 }
 
 /// Attend l'événement de la file du thread courant `thread`.
