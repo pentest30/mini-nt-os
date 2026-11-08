@@ -74,6 +74,8 @@ pub const STATUS_INVALID_INFO_CLASS: NtStatus = NtStatus(0xC000_0003);
 pub const STATUS_INFO_LENGTH_MISMATCH: NtStatus = NtStatus(0xC000_0004);
 pub const STATUS_ACCESS_VIOLATION: NtStatus = NtStatus(0xC000_0005);
 pub const STATUS_INVALID_HANDLE: NtStatus = NtStatus(0xC000_0008);
+/// STATUS_IO_TIMEOUT: an operation ran out of its time.
+pub const STATUS_IO_TIMEOUT: NtStatus = NtStatus(0xC000_00B5);
 pub const STATUS_INVALID_CID: NtStatus = NtStatus(0xC000_000B);
 pub const STATUS_INVALID_PARAMETER: NtStatus = NtStatus(0xC000_000D);
 /// NtQueryDirectoryFile: the first query of a handle found no entry that

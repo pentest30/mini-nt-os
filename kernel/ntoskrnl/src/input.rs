@@ -12,6 +12,12 @@
 //!
 //! Les deux interruptions (IRQ1, IRQ12) appellent le même [`notify`].
 //!
+//! Le thread fait aussi expirer les minuteries de USER, comme le RIT de
+//! ReactOS (son `MasterTimer`) : il attend au plus jusqu'à l'échéance la
+//! plus proche (`win32k::timer::next_due`), puis appelle
+//! `win32k::timer::expire`. Poser une minuterie signale son événement
+//! (`win32k::timer::set_wake`), et il recalcule son attente.
+//!
 //! Sous VirtualBox, la souris est absolue (`vboxmouse`) : chaque paquet de la
 //! souris PS/2 prend la position du pointeur de l'hôte que donne VMMDev,
 //! tant que l'intégration de la souris de l'hôte est active.
@@ -85,6 +91,18 @@ fn absolute_mouse() -> Option<vboxmouse::VBoxMouse> {
     }
 }
 
+/// Réveille le thread : une minuterie de USER vient d'être posée.
+fn wake_for_timers() {
+    signal(ptr::null(), ptr::null_mut(), ptr::null_mut(), ptr::null_mut());
+}
+
+/// Le délai relatif (négatif, en 100 ns) jusqu'à l'échéance `due` de la
+/// minuterie la plus proche ; `None` sans minuterie. Une échéance passée
+/// donne le délai le plus court.
+fn timer_timeout(due: Option<u64>, now: u64) -> Option<i64> {
+    due.map(|due| -(due.saturating_sub(now).clamp(1, i64::MAX as u64) as i64))
+}
+
 /// Le thread d'entrée brute.
 fn raw_input_thread(_context: *mut c_void) {
     let event = EVENT.load(Ordering::Acquire);
@@ -97,8 +115,10 @@ fn raw_input_thread(_context: *mut c_void) {
         // SAFETY: an event initialised by `start`, never freed; this kernel
         // thread waits at PASSIVE_LEVEL.
         let header = unsafe { ptr::addr_of_mut!((*event).header) };
+        let timeout = timer_timeout(win32k::timer::next_due(), hal::timer::interrupt_time());
         // SAFETY: as above.
-        let _ = unsafe { ke_wait_for_single_object::<KePlatform>(header, ProcessorMode::Kernel, false, None) };
+        let _ = unsafe { ke_wait_for_single_object::<KePlatform>(header, ProcessorMode::Kernel, false, timeout) };
+        win32k::timer::expire();
         if !win32k::display::acquired() {
             continue;
         }
@@ -142,6 +162,7 @@ pub fn start() {
     // SAFETY: fresh memory at a fixed address, never freed.
     unsafe { ke_initialize_event(event, ObjectType::SynchronizationEvent, false) };
     EVENT.store(event, Ordering::Release);
+    win32k::timer::set_wake(wake_for_timers);
     hal::ps2::set_notify(Some(notify));
     crate::spawn_kernel_thread(ke::sched::LOW_REALTIME_PRIORITY + 3, raw_input_thread, ptr::null_mut());
     match hal::ps2::mouse_packet_size() {
