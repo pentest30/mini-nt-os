@@ -1,0 +1,77 @@
+# Windows and the mouse (MOUSE2.EXE, tests/native/mouse2.c): two framed
+# windows, A (100, 100, 400 x 300, client from (104, 124)) then B (300, 250,
+# 400 x 300), overlap; the screen is 1280x800 and the cursor starts at its
+# centre, (640, 400).
+# 1. A press in A's client area at (150, 150), A not active: WM_MOUSEACTIVATE,
+#    A activated and in front, then WM_LBUTTONDOWN at (46, 26); A takes the
+#    capture.
+# 2. With the capture, the cursor goes to (800, 600), far outside A: the move
+#    and the release still come to A, in A's client coordinates (696, 476);
+#    A gives the capture back (WM_CAPTURECHANGED) and reads the cursor.
+# 3. A drag of B's caption from (560, 262), right of A, by (100, 150):
+#    HTCAPTION (2), WM_NCLBUTTONDOWN, B activated and in front, moved to
+#    (400, 400) by DefWindowProc's loop, which eats the release.
+# 4. A drag of A's bottom right corner from (498, 398), by (50, 40):
+#    HTBOTTOMRIGHT (17), A activated, sized to 450 x 340.
+# 5. A second thread has window C (850, 100, 300 x 200): a click in it at
+#    (1000, 200) gives that thread the foreground.
+# 6. A click in A's client area at (300, 300): A is still the main thread's
+#    active window, but not in the foreground: WM_MOUSEACTIVATE again, the
+#    main thread takes the foreground back (Codex's review of #79).
+# 7. While the main thread sleeps, a click there: a plain WM_LBUTTONDOWN,
+#    which a PeekMessage for WM_LBUTTONDBLCLK leaves in the queue and one
+#    for WM_LBUTTONDOWN takes (the filter applies to the final form).
+# 8. A click on B's close button at (785, 412): HTCLOSE (20), SC_CLOSE,
+#    WM_CLOSE, which ends the program.
+# QEMU's PS/2 queue holds four packets of at most 127 pixels: the longer
+# moves go in several commands (see desktop-click).
+features = test-smss
+requires = userland, native
+initial-command = MOUSE2.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [mouse2] ready => move:-245,-125 move:-245,-125 press:1
+keys = [mouse2] capture A => move:325,225 move:325,225 release
+keys = [mouse2] A lup => move:-120,-169 move:-120,-169 press:1 move:100,150 release
+keys = [mouse2] B moved or sized => move:-162,-14 press:1 move:50,40 release
+keys = [mouse2] A moved or sized => move:226,-119 move:226,-119 press:1 release
+keys = [mouse2] C ldown => move:-175,25 move:-175,25 move:-175,25 move:-175,25 press:1 release
+keys = [mouse2] waiting for a click => press:1 release
+keys = [mouse2] filtered peek => move:243,56 move:242,56 press:1 release
+
+expect = [mouse2] ready
+expect = [mouse2] A activated: active A, focus A
+expect = [mouse2] A ldown 46,26
+expect = [mouse2] capture A
+expect = [mouse2] A captured move 696,476
+expect = [mouse2] A lup 696,476; cursor 800,600; capture none
+expect = [mouse2] A capture changed to none
+expect = [mouse2] B ncldown hit 2
+expect = [mouse2] B activated: active B, focus B
+expect = [mouse2] B moved or sized: 400,400 400x300
+expect = [mouse2] A ncldown hit 17
+expect = [mouse2] A moved or sized: 100,100 450x340
+expect = [mouse2] C mouse-activate #1
+expect = [mouse2] C ldown 146,76
+expect = [mouse2] A mouse-activate #3
+expect = [mouse2] A ldown 196,176
+expect = [mouse2] filtered peek: dblclk 0, down 1 at A
+expect = [mouse2] B ncldown hit 20
+expect = [mouse2] B close
+expect = [mouse2] done
+
+# B's old place, uncovered: the desktop's background; B's client area at
+# its new place; A's client area where it grew, right of its old frame.
+screen = 650 300 5A7EDC
+screen = 600 600 D4D0C8
+screen = 530 380 FFFFFF
+# B, active since the click on its close button, has an active caption
+# (WM_NCACTIVATE: from COLOR_ACTIVECAPTION); A's is inactive.
+screen = 600 412 5877AD
+screen = 300 110 9C9C9C
+
+forbid = *** STOP:
+# The move loop takes the release: no WM_NCLBUTTONUP reaches B.
+forbid = [mouse2] B nclup
+forbid = C has no desktop

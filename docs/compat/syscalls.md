@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 106 | 296 |
-| win32k | 84 | 737 |
+| win32k | 92 | 737 |
 
 ## ntoskrnl
 
@@ -633,11 +633,11 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x113a` | `NtUserCallHwnd` | 2 |  |
 | `0x113b` | `NtUserCallHwndLock` | 2 | ✅ |
 | `0x113c` | `NtUserCallHwndOpt` | 2 |  |
-| `0x113d` | `NtUserCallHwndParam` | 3 |  |
+| `0x113d` | `NtUserCallHwndParam` | 3 | ✅ |
 | `0x113e` | `NtUserCallHwndParamLock` | 3 | ✅ |
 | `0x113f` | `NtUserCallMsgFilter` | 2 |  |
 | `0x1140` | `NtUserCallNextHookEx` | 4 |  |
-| `0x1141` | `NtUserCallNoParam` | 1 |  |
+| `0x1141` | `NtUserCallNoParam` | 1 | ✅ |
 | `0x1142` | `NtUserCallOneParam` | 2 | ✅ |
 | `0x1143` | `NtUserCallTwoParam` | 3 | ✅ |
 | `0x1144` | `NtUserChangeClipboardChain` | 2 |  |
@@ -750,7 +750,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11af` | `NtUserGetScrollBarInfo` | 3 |  |
 | `0x11b0` | `NtUserGetSystemMenu` | 2 |  |
 | `0x11b1` | `NtUserGetThreadDesktop` | 2 |  |
-| `0x11b2` | `NtUserGetThreadState` | 1 |  |
+| `0x11b2` | `NtUserGetThreadState` | 1 | ✅ |
 | `0x11b3` | `NtUserGetTitleBarInfo` | 2 |  |
 | `0x11b4` | `NtUserGetUpdateRect` | 3 | ✅ |
 | `0x11b5` | `NtUserGetUpdateRgn` | 3 | ✅ |
@@ -768,7 +768,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c1` | `NtUserInvalidateRect` | 3 | ✅ |
 | `0x11c2` | `NtUserInvalidateRgn` | 3 | ✅ |
 | `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 |  |
-| `0x11c4` | `NtUserKillTimer` | 2 |  |
+| `0x11c4` | `NtUserKillTimer` | 2 | ✅ |
 | `0x11c5` | `NtUserLoadKeyboardLayoutEx` | 7 | ✅ |
 | `0x11c6` | `NtUserLockWindowStation` | 1 |  |
 | `0x11c7` | `NtUserLockWindowUpdate` | 1 |  |
@@ -819,7 +819,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11f4` | `NtUserSendInput` | 3 |  |
 | `0x11f5` | `NtUserSetActiveWindow` | 1 |  |
 | `0x11f6` | `NtUserSetAppImeLevel` | 2 |  |
-| `0x11f7` | `NtUserSetCapture` | 1 |  |
+| `0x11f7` | `NtUserSetCapture` | 1 | ✅ |
 | `0x11f8` | `NtUserSetClassLong` | 4 |  |
 | `0x11f9` | `NtUserSetClassWord` | 3 |  |
 | `0x11fa` | `NtUserSetClipboardData` | 3 |  |
@@ -850,11 +850,11 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
 | `0x1214` | `NtUserSetSystemCursor` | 2 |  |
 | `0x1215` | `NtUserSetSystemMenu` | 2 |  |
-| `0x1216` | `NtUserSetSystemTimer` | 4 |  |
+| `0x1216` | `NtUserSetSystemTimer` | 4 | ✅ |
 | `0x1217` | `NtUserSetThreadDesktop` | 1 | ✅ |
 | `0x1218` | `NtUserSetThreadLayoutHandles` | 2 |  |
 | `0x1219` | `NtUserSetThreadState` | 2 |  |
-| `0x121a` | `NtUserSetTimer` | 4 |  |
+| `0x121a` | `NtUserSetTimer` | 4 | ✅ |
 | `0x121b` | `NtUserSetWindowFNID` | 2 |  |
 | `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
@@ -898,7 +898,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1243` | `NtUserUserHandleGrantAccess` | 3 |  |
 | `0x1244` | `NtUserValidateHandleSecure` | 1 |  |
 | `0x1245` | `NtUserValidateRect` | 2 | ✅ |
-| `0x1246` | `NtUserValidateTimerCallback` | 1 |  |
+| `0x1246` | `NtUserValidateTimerCallback` | 1 | ✅ |
 | `0x1247` | `NtUserVkKeyScanEx` | 3 |  |
 | `0x1248` | `NtUserWaitForInputIdle` | 3 |  |
 | `0x1249` | `NtUserWaitForMsgAndEvent` | 1 |  |

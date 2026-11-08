@@ -420,20 +420,22 @@ static int desktop_hit(int x, int y)
 }
 
 /* A press of the left button: the Start button opens or closes the menu, a
- * press outside the open menu closes it, an entry is selected. */
+ * press outside the open menu closes it, an entry is selected. The paint goes
+ * before the marker: a scenario's screendump never catches the screen before
+ * the change it names. */
 static void click(HWND window, int x, int y)
 {
     int hit = desktop_hit(x, y);
 
     if (hit == HIT_START || (hit == HIT_OUTSIDE && menu_open)) {
         menu_open = !menu_open;
+        repaint(window);
         DbgPrint("[desktop] %s: start menu %s\n", hit == HIT_START ? "start button" : "press outside the menu",
                  menu_open ? "open" : "closed");
-        repaint(window);
     } else if (hit >= 0) {
         selected_item = hit;
-        DbgPrint("[desktop] selected %s\n", entry_names[hit]);
         repaint(window);
+        DbgPrint("[desktop] selected %s\n", entry_names[hit]);
     }
 }
 

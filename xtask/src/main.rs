@@ -55,9 +55,9 @@ commands:
   image   create one bootable GPT image (ESP + system volume)
           --output FILE       destination; must not exist (default target/mino.img)
           --features F        ntoskrnl features (default test-smss)
-          --initial-command P  the test program P (built from tests/native)
-                              boots as winlogon.exe — SETUP1.EXE runs the
-                              installer flow; needs MinGW
+          --initial-command P  program booted as winlogon.exe (default BOOT1.EXE)
+                              BOOT1 offers install or live desktop; `system`
+                              keeps ReactOS winlogon.exe; native programs need MinGW
   lint    rustfmt --check, the generated service tables up to date, then
           clippy -D warnings on the host and the bare-metal targets (06 §6)
   run     build, then boot in QEMU with the serial port on stdio
@@ -172,21 +172,21 @@ fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
     // A person drives an image (VirtualBox): `interactive`, or the probe ends
     // its program 10 s after the last key, an installation mid-copy.
     let features = args.value("--features")?.unwrap_or_else(|| "test-smss,interactive".into());
-    let initial_command = args.value("--initial-command")?;
+    let initial_command = args.value("--initial-command")?.unwrap_or_else(|| "BOOT1.EXE".into());
     args.finish()?;
     if output.exists() {
         return Err(format!("{} already exists; choose another --output", output.display()));
     }
     let mut files = userland_files(ws).ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
     let artifacts = build(ws, Some(&features))?;
-    if let Some(program) = &initial_command {
-        // The installer flow: the program boots as winlogon.exe, smss's
-        // initial command (the `installer-ui` scenario's substitution).
+    if initial_command != "system" {
+        // The startup choice (or an explicitly selected probe) boots as
+        // winlogon.exe, smss's initial command.
         let native = native::build(ws)?.ok_or_else(|| {
             format!("initial-command: the native programs need {}", native::missing_tool().unwrap_or("a compiler"))
         })?;
         files.extend(native);
-        put_initial_command(&mut files, program)?;
+        put_initial_command(&mut files, &initial_command)?;
     }
     let run_dir = ws.target.join("xtask").join("image-source");
     let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &files)?;

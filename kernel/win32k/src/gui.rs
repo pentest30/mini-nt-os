@@ -432,6 +432,28 @@ pub fn thread_info_of(pti: u32) -> Option<Arc<ThreadInfo>> {
     (info.server == pti).then_some(info)
 }
 
+/// Le PID du processus du thread GUI d'adresse du serveur `pti`, tant que
+/// son thread vit.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn process_id_of(pti: u32) -> Option<u32> {
+    let thread = ps::ethread::lookup_thread(thread_of_server_address(pti)?).ok()?;
+    Some(thread.process().pid())
+}
+
+/// `info` est encore le `THREADINFO` d'un thread de Ps qui ne se termine
+/// pas.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn thread_alive(info: &Arc<ThreadInfo>) -> bool {
+    let Some(tid) = thread_of_server_address(info.server) else { return false };
+    let Ok(thread) = ps::ethread::lookup_thread(tid) else { return false };
+    !thread.is_terminating()
+        && thread.win32_thread().is_some_and(|slot| core::ptr::addr_eq(Arc::as_ptr(&slot), Arc::as_ptr(info)))
+}
+
 /// RtlGetExpWinVer : la version du système qu'attend une image de
 /// sous-système `major.minor`, `MAKEWORD(minor, major)` ; une version 1
 /// compte pour 3.10 (Windows 3.1).

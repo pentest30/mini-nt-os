@@ -137,9 +137,13 @@ jour à chaque commit qui change l'état.
   Restent le formatage des deux vues bornées (`fatfs::format` est prêt),
   la copie des fichiers, la progression et la reprise du moteur (partie
   proposée de l'ADR-022), puis la souris.
-- **Le flux d'installation tourne sur VirtualBox** : `cargo xtask image
-  --initial-command SETUP1.EXE` place le programme à la place de
-  winlogon.exe (la substitution du scénario `installer-ui`) ; avec un
+- **Le choix avant installation est branché** : `cargo xtask image` place
+  maintenant `BOOT1.EXE` à la place de `winlogon.exe`. Il propose
+  **Install MinoOS** (`SETUP1.EXE`) ou **Try MinoOS** (`DESKTOP1.EXE`) sans
+  appeler le moteur ni modifier les disques. Les scénarios
+  `boot-menu-install` et `boot-menu-live` passent sur AMD et Intel. Utiliser
+  `--initial-command system` pour conserver le `winlogon.exe` de ReactOS.
+- **Le flux d'installation tourne sur VirtualBox** : avec un
   disque cible vierge de 96 Mio attaché en maître secondaire, l'assistant
   navigue et **la préparation réelle écrit le MBR protecteur et les deux
   copies GPT** sur le disque cible (relues), l'écran final dit
@@ -188,6 +192,56 @@ jour à chaque commit qui change l'état.
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
   de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
   VirtualBox, rien ne change.
+  Les fenêtres et la souris (branche `claude/mouse-windows`) : le thread d'entrée poste un message brut
+  (le point à l'écran) à la fenêtre qui a la capture, sinon à celle sous le curseur ; le thread qui le
+  retire en fait le message final (`win32k::mouse::finish`, co_IntProcessMouseMessage) : WM_NCHITTEST
+  envoyé (HTTRANSPARENT passe au parent), WM_MOUSEACTIVATE à l'appui si la fenêtre de premier niveau n'est
+  pas active, activation et passage devant (`activate_by_mouse`), zone cliente ou cadre, double-clic
+  (CS_DBLCLKS, ou sur le cadre). Les filtres demandent un message brut sous toutes ses formes
+  (`Filter::matches_mouse`). DefWindowProc : WM_NCHITTEST (`defwnd::nc_hit_test`, GetNCHitEx : bords,
+  coins, titre, boutons), WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN sur le titre (activation). Services :
+  NtUserSetCapture, NtUserCallNoParam (RELEASECAPTURE, 0xD), NtUserGetThreadState (focus 0, active 1,
+  capture 2), GETCURSORPOS (0x26) de NtUserCallOneParam ; numéros lus dans `user32` épinglé. Scénario
+  `mouse-windows` (`MOUSE2.EXE`). Déplacer et redimensionner (branche `claude/window-sizemove`,
+  `win32k::sizemove`) : WM_NCLBUTTONDOWN sur le titre (activation, SC_MOVE), sur un bord ou un coin (SC_SIZE
+  et WMSZ_*), sur un bouton du titre (son suivi jusqu'au relâchement, NC_DoButton, puis WM_SYSCOMMAND) ;
+  WM_SYSCOMMAND : SC_MOVE et SC_SIZE (la boucle de DefWndDoSizeMove : capture, WM_ENTERSIZEMOVE, la fenêtre
+  placée à chaque mouvement, bornée par WM_GETMINMAXINFO ; relâchement ou Entrée, Échap rend la place ;
+  WM_EXITSIZEMOVE), SC_CLOSE (WM_CLOSE), SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE (ShowWindow, qui ne réduit ni
+  n'agrandit encore). Le cadre actif (branche `claude/ncactivate`) : à l'activation, l'ancienne fenêtre
+  active du thread reçoit WM_NCACTIVATE et WM_ACTIVATE inactifs, la nouvelle WM_NCACTIVATE puis WM_ACTIVATE
+  (l'ordre d'XP) ; DefWindowProc de WM_NCACTIVATE tient `WNDS_ACTIVEFRAME` et repeint le cadre
+  (`paint::set_frame_active`), que `nc_paint` peint actif ou inactif. Une fenêtre d'un autre thread (la
+  console de `consrv`, la fenêtre active du thread qui perd le premier plan) ne reçoit pas de messages : le
+  noyau change et peint son cadre lui-même. Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow),
+  WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le titre,
+  WM_ACTIVATEAPP.
+  n'agrandit encore). Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow), WM_NCACTIVATE (le cadre reste
+  peint inactif), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le
+  titre.
+  Les minuteries de USER (branche `claude/win32k-timers`, partie de `main` ; ce que `taskmgr` de la vague
+  `claude/apps-wave` attendait pour relire ses processus chaque seconde) : `win32k::timer` (SetTimer,
+  SetSystemTimer, KillTimer, KillSystemTimer par NtUserCallHwndParam, NtUserValidateTimerCallback ; délai
+  borné comme XP, identifiants sans fenêtre de 32 768 vers 1, une minuterie de fenêtre au thread de sa
+  fenêtre et à son processus seulement) ; le thread d'entrée brute les fait expirer, comme le RIT de ReactOS
+  (attente jusqu'à l'échéance la plus proche, réveil à chaque SetTimer) : `QS_TIMER` et la file réveillée ;
+  PeekMessage fabrique WM_TIMER ou WM_SYSTIMER quand rien d'autre ne sort (un message par minuterie prête).
+  Scénario `timers` (`tests/native/timer1.c`). Pas encore : les minuteries du RIT (curseur, clavier),
+  TMRF_ONESHOT, un rappel de Ps à la fin d'un thread GUI (ses minuteries s'en vont à l'échéance suivante),
+  DestroyWindow (`timer::destroy_window_timers` est prêt).
+  SendMessage entre threads (branche `claude/sent-messages`, par-dessus `claude/win32k-timers`) :
+  `win32k::sent` (les messages envoyés dans la file du destinataire, `QS_SENDMESSAGE`, traités au début de
+  PeekMessage et GetMessage, dans WaitMessage et pendant l'attente d'une réponse ; l'envoyeur regarde toutes les
+  250 ms si le destinataire vit), NtUserMessageCall de types `FNID_SENDMESSAGE`, `FNID_SENDMESSAGEWTOOPTION`
+  (SendMessageTimeout) et `FNID_SENDNOTIFYMESSAGE` ; les envois du noyau vers un autre thread passent par là.
+  La revue de Codex sur #84 : la vie du destinataire regardée toutes les 250 ms quoi qui réveille l'envoyeur,
+  WaitMessage qui traite les messages envoyés pendant l'attente, SendNotifyMessage qui refuse un pointeur
+  (`ERROR_MESSAGE_SYNC_ONLY`).
+  Scénario `send-messages` (`tests/native/send1.c`). Pas encore : InSendMessage, ReplyMessage,
+  SendMessageCallback, les crochets, HWND_BROADCAST, les pointeurs vers un autre processus.
+  taskmgr (essai local `claude/taskmgr-try` : `apps-wave`, les deux branches, SetDialogPointer,
+  `SPI_GETNONCLIENTMETRICS`, glyphes bornés à 2048 × 2048, le bureau du shell à l'écran) relit ses processus, puis
+  plante : la ListView (`SysListView32`) lève une exception à son WM_CREATE, la liste n'existe pas.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)

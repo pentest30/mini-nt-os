@@ -1,20 +1,22 @@
 //! Les services des files de messages (`win32k::queue`) :
 //! NtUserPostThreadMessage, NtUserPostMessage, NtUserPeekMessage,
 //! NtUserGetMessage, NtUserWaitMessage, NtUserCallOneParam
-//! (PostQuitMessage, GetQueueStatus), et NtUserMessageCall
-//! (DefWindowProc du noyau, `win32k::defwnd`).
+//! (PostQuitMessage, GetQueueStatus), et NtUserMessageCall (DefWindowProc
+//! du noyau, `win32k::defwnd` ; SendMessage, SendMessageTimeout et
+//! SendNotifyMessage, `win32k::sent`).
 //!
 //! Ils rendent une valeur (un BOOL, un état) : un échec rend 0, avec
 //! l'erreur Win32 comme dernière erreur.
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    Msg32, FNID_DEFWINDOWPROC, FNID_FIRST, ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE,
-    PM_REMOVE, PM_VALID_FLAGS, QS_ALLINPUT, QS_ALLPOSTMESSAGE, QS_SMRESULT, WM_MAXIMUM, WM_QUIT,
+    Msg32, FNID_DEFWINDOWPROC, FNID_FIRST, FNID_SENDMESSAGE, FNID_SENDMESSAGEWTOOPTION, FNID_SENDNOTIFYMESSAGE,
+    ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE, PM_REMOVE, PM_VALID_FLAGS, QS_ALLINPUT,
+    QS_ALLPOSTMESSAGE, QS_SMRESULT, WM_MAXIMUM, WM_QUIT,
 };
 use abi::winerror::{
     dos_error, ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_FLAGS, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
-    ERROR_MESSAGE_SYNC_ONLY,
+    ERROR_MESSAGE_SYNC_ONLY, ERROR_TIMEOUT,
 };
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -182,12 +184,14 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// pour les bits `Param` (dans `QS_ALLINPUT | QS_ALLPOSTMESSAGE |
 /// QS_SMRESULT`) ; `ONEPARAM_ROUTINE_RELEASEDC` : le DC `Param` retourne au
 /// cache (UserReleaseDC : 1, ou 0 pour un DC qui n'en est pas un pris par
-/// le processus). Une autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`,
-/// journalisée une fois.
+/// le processus) ; `ONEPARAM_ROUTINE_GETCURSORPOS` : la place du curseur
+/// dans le POINT `Param` (`super::mouse::get_cursor_pos`). Une autre rend 0
+/// et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
 pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
     let (param, routine) = (arguments[0], arguments[1]);
     match routine {
         abi::user::ONEPARAM_ROUTINE_RELEASEDC => NtStatus(u32::from(win32k::dce::release_dc(param))),
+        abi::user::ONEPARAM_ROUTINE_GETCURSORPOS => super::mouse::get_cursor_pos(param),
         ONEPARAM_ROUTINE_POSTQUITMESSAGE => {
             queue::post_quit(&current(), param);
             NtStatus(1)
@@ -217,6 +221,9 @@ pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_user_message_call(arguments: &[u32]) -> NtStatus {
     let (handle, message, wparam, lparam, result_info, kind) =
         (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5]);
+    if matches!(kind, FNID_SENDMESSAGE | FNID_SENDMESSAGEWTOOPTION | FNID_SENDNOTIFYMESSAGE) {
+        return send_message_call(handle, message, wparam, lparam, result_info, kind);
+    }
     if kind != FNID_DEFWINDOWPROC {
         let bit = 1 << kind.wrapping_sub(FNID_FIRST).min(31);
         if UNSUPPORTED_MESSAGE_CALLS.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
@@ -238,4 +245,68 @@ pub(super) fn nt_user_message_call(arguments: &[u32]) -> NtStatus {
         return NtStatus(0);
     }
     NtStatus(1)
+}
+
+/// Un message diffusé (HWND_BROADCAST) a déjà été envoyé.
+static BROADCAST_SEND_REPORTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// L'erreur Win32 d'un envoi sans réponse.
+fn send_error(error: win32k::sent::SendError) -> u32 {
+    match error {
+        win32k::sent::SendError::Timeout => ERROR_TIMEOUT,
+        win32k::sent::SendError::Gone => ERROR_INVALID_WINDOW_HANDLE,
+        win32k::sent::SendError::Unmarshalled => ERROR_CALL_NOT_IMPLEMENTED,
+        win32k::sent::SendError::SyncOnly => ERROR_MESSAGE_SYNC_ONLY,
+        win32k::sent::SendError::Wait(status) => dos_error(status),
+    }
+}
+
+/// NtUserMessageCall des envois (`win32k::sent::send_to_window`), BOOL :
+/// - FNID_SENDMESSAGE (SendMessage) : la valeur de la procédure en
+///   `ResultInfo` ;
+/// - FNID_SENDMESSAGEWTOOPTION (SendMessageTimeout) : `ResultInfo` est un
+///   DOSENDMESSAGE (`uFlags`, `uTimeout`, `Result`), le délai en ms,
+///   `ERROR_TIMEOUT` passé ce délai ;
+/// - FNID_SENDNOTIFYMESSAGE (SendNotifyMessage) : sans attendre la
+///   procédure d'un autre thread.
+///
+/// FALSE pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`), un
+/// thread fini sans répondre, ou un pointeur vers un autre processus (pas
+/// encore). La diffusion (HWND_BROADCAST) n'atteint encore aucune fenêtre :
+/// TRUE et 0, journalisé une fois.
+fn send_message_call(handle: u32, message: u32, wparam: u32, lparam: u32, result_info: u32, kind: u32) -> NtStatus {
+    if handle == HWND_BROADCAST {
+        if !BROADCAST_SEND_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: message {message:#x} sent to HWND_BROADCAST: no window yet");
+        }
+        return NtStatus(1);
+    }
+    let Some(window) = win32k::window::get(handle) else { return fail(ERROR_INVALID_WINDOW_HANDLE) };
+    let current = current();
+    let (timeout, result_at) = match kind {
+        FNID_SENDMESSAGEWTOOPTION => {
+            let mut options = [0u8; 12];
+            if ke::usermem::copy_from_user(&mut options, u64::from(result_info)).is_err() {
+                return NtStatus(0);
+            }
+            let timeout = u32::from_le_bytes([options[4], options[5], options[6], options[7]]);
+            (Some(timeout), result_info.wrapping_add(8))
+        }
+        _ => (None, result_info),
+    };
+    if kind == FNID_SENDNOTIFYMESSAGE {
+        return match win32k::sent::notify_window(&current, &window, message, wparam, lparam) {
+            Ok(()) => NtStatus(1),
+            Err(error) => fail(send_error(error)),
+        };
+    }
+    match win32k::sent::send_to_window(&current, &window, message, wparam, lparam, timeout) {
+        Ok(result) => {
+            if result_info != 0 && copy_to_user(u64::from(result_at), &result.to_le_bytes()).is_err() {
+                return NtStatus(0);
+            }
+            NtStatus(1)
+        }
+        Err(error) => fail(send_error(error)),
+    }
 }

@@ -14,7 +14,12 @@
 //! Le premier plan (gpqForeground) est la file du thread dont une fenêtre
 //! de premier niveau a été activée en dernier ([`activate`],
 //! co_IntSetForegroundWindow) : elle devient sa fenêtre active et celle qui
-//! a le clavier, et reçoit WM_ACTIVATE puis WM_SETFOCUS.
+//! a le clavier ; l'ancienne fenêtre active du thread reçoit WM_NCACTIVATE
+//! et WM_ACTIVATE inactifs, la nouvelle WM_NCACTIVATE, WM_ACTIVATE, puis
+//! WM_SETFOCUS. Une fenêtre d'un autre thread ne reçoit pas de messages
+//! (pas encore entre threads) : le noyau change et peint son cadre
+//! lui-même ; de même pour la fenêtre active du thread qui perd le premier
+//! plan.
 //!
 //! SetFocus ([`set_focus`], co_UserSetFocus) donne le clavier à une autre
 //! fenêtre du thread, après avoir activé sa fenêtre de premier niveau s'il
@@ -28,8 +33,9 @@
 //! Pas encore : la souris, les crochets (WH_KEYBOARD_LL), les raccourcis
 //! (RegisterHotKey), Alt + pavé numérique, Alt + Tab, le changement de
 //! disposition par Alt + Maj, les voyants, Impr. écran, SendInput, le
-//! premier plan perdu (WM_ACTIVATE inactif, WM_KILLFOCUS à un autre thread :
-//! les messages envoyés entre threads), plusieurs bureaux d'entrée.
+//! premier plan perdu (WM_ACTIVATE inactif et WM_KILLFOCUS à un autre
+//! thread : les messages envoyés entre threads), plusieurs bureaux
+//! d'entrée.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -41,9 +47,9 @@ use abi::user::vk::{
     VK_RSHIFT, VK_SHIFT, VK_UP,
 };
 use abi::user::{
-    Msg32, KF_ALTDOWN, KF_EXTENDED, KF_REPEAT, KF_UP, WA_ACTIVE, WM_ACTIVATE, WM_CHAR, WM_DEADCHAR, WM_KEYDOWN,
-    WM_KEYUP, WM_KILLFOCUS, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WS_CHILD, WS_DISABLED,
-    WS_MINIMIZE, WS_POPUP,
+    Msg32, KF_ALTDOWN, KF_EXTENDED, KF_REPEAT, KF_UP, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CHAR, WM_DEADCHAR,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_NCACTIVATE, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WNDS_ACTIVEFRAME, WS_CHILD, WS_DISABLED, WS_MINIMIZE, WS_POPUP,
 };
 use hal::sync::KSpinLock;
 
@@ -409,19 +415,46 @@ pub fn activate(window: &Arc<Window>) {
     let hwnd = window.handle;
     let (previous_active, focus) =
         thread.queue.with(|queue| (core::mem::replace(&mut queue.active, hwnd), queue.focus)).0;
-    *FOREGROUND.lock() = Some(thread.clone());
-    if previous_active == hwnd && focus == hwnd {
-        return;
+    let previous_foreground = FOREGROUND.lock().replace(thread.clone());
+    // The foreground leaves another thread: the frame of its active window
+    // goes inactive (no message between threads yet).
+    if let Some(left) = previous_foreground.filter(|left| !Arc::ptr_eq(left, &thread)) {
+        let left_active = left.queue.with(|queue| queue.active).0;
+        if let Some(old) = crate::window::get(left_active) {
+            crate::paint::set_frame_active(&old, false, true);
+        }
     }
     let ours = crate::convert_current_thread().is_ok_and(|current| current.server == window.pti);
+    let old = crate::window::get(previous_active).filter(|_| previous_active != hwnd);
+    if previous_active == hwnd && focus == hwnd {
+        // Already active: its frame only, if it went inactive with the
+        // foreground.
+        if window.state().state & WNDS_ACTIVEFRAME == 0 {
+            if ours {
+                let _ = crate::window::send_message(window, WM_NCACTIVATE, 1, LParam::Value(0));
+            } else {
+                crate::paint::set_frame_active(window, true, true);
+            }
+        }
+        return;
+    }
     if !ours {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("win32k: WM_ACTIVATE and WM_SETFOCUS to a window of another thread: not yet");
         }
         thread.queue.with(|queue| queue.focus = hwnd);
+        if let Some(old) = &old {
+            crate::paint::set_frame_active(old, false, true);
+        }
+        crate::paint::set_frame_active(window, true, true);
         return;
     }
+    if let Some(old) = &old {
+        let _ = crate::window::send_message(old, WM_NCACTIVATE, 0, LParam::Value(0));
+        let _ = crate::window::send_message(old, WM_ACTIVATE, WA_INACTIVE, LParam::Value(hwnd));
+    }
+    let _ = crate::window::send_message(window, WM_NCACTIVATE, 1, LParam::Value(0));
     let _ = crate::window::send_message(window, WM_ACTIVATE, WA_ACTIVE, LParam::Value(previous_active));
     if thread.queue.with(|queue| queue.focus).0 != hwnd {
         send_focus_messages(&thread, Some(window));
