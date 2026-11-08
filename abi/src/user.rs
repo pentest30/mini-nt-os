@@ -300,6 +300,13 @@ pub const FNID_MESSAGEWND: u32 = 0x029F;
 pub const FNID_SWITCH: u32 = 0x02A0;
 pub const FNID_BUTTON: u32 = 0x02A1;
 pub const FNID_GHOST: u32 = 0x02AA;
+/// FNID_SENDMESSAGE, FNID_SENDMESSAGEWTOOPTION, FNID_SENDNOTIFYMESSAGE: the
+/// kinds of NtUserMessageCall behind SendMessage, SendMessageTimeout (its
+/// `ResultInfo` a DOSENDMESSAGE) and SendNotifyMessage (read from the pinned
+/// `user32`).
+pub const FNID_SENDMESSAGE: u32 = 0x02B1;
+pub const FNID_SENDMESSAGEWTOOPTION: u32 = 0x02B3;
+pub const FNID_SENDNOTIFYMESSAGE: u32 = 0x02B7;
 /// FNID_DESTROY: set on a window being destroyed.
 pub const FNID_DESTROY: u32 = 0x4000;
 /// The desktop window's class, an integer atom (`WC_DESKTOP`, `#32769`).
@@ -436,6 +443,9 @@ pub const RDW_VALID_FLAGS: u32 = RDW_ERASE
 /// HWNDLOCK_ROUTINE_UPDATEWINDOW: the routine of NtUserCallHwndLock behind
 /// UpdateWindow (user32!UpdateWindow pushes 0x5E).
 pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
+/// HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: the routine of NtUserCallHwndParam
+/// behind KillSystemTimer (read from the pinned `user32`).
+pub const HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: u32 = 0x4E;
 /// FNID_DEFWINDOWPROC: NtUserMessageCall's DefWindowProc.
 pub const FNID_DEFWINDOWPROC: u32 = 0x029E;
 /// WM_USER: the first message of an application.
@@ -924,8 +934,12 @@ pub const QS_KEY: u16 = 0x0001;
 pub const QS_MOUSEMOVE: u16 = 0x0002;
 pub const QS_MOUSEBUTTON: u16 = 0x0004;
 pub const QS_POSTMESSAGE: u16 = 0x0008;
+/// QS_TIMER: a timer of the thread is due (WM_TIMER, WM_SYSTIMER).
+pub const QS_TIMER: u16 = 0x0010;
 /// QS_PAINT: a window of the thread has something to paint (`cPaintsReady`).
 pub const QS_PAINT: u16 = 0x0020;
+/// QS_SENDMESSAGE: a message sent by another thread waits (SendMessage).
+pub const QS_SENDMESSAGE: u16 = 0x0040;
 pub const QS_ALLPOSTMESSAGE: u16 = 0x0100;
 /// QS_ALLINPUT, QS_SMRESULT: what GetQueueStatus can ask.
 pub const QS_ALLINPUT: u16 = 0x04FF;
