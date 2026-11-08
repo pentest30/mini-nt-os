@@ -59,6 +59,7 @@ fn ntfs3g_files_match_at_two_cluster_sizes() {
         let listing = String::from_utf8(run("ntfsls", &["-i", image_path])).unwrap();
         let file = File::open(&path).unwrap();
         let mut volume = Volume::open(Device { size: file.metadata().unwrap().len(), file }).unwrap();
+        let entries = volume.read_directory(5).unwrap();
         for (name, expected) in files {
             let number: u64 = listing
                 .lines()
@@ -68,6 +69,9 @@ fn ntfs3g_files_match_at_two_cluster_sizes() {
                     (parts.next()? == name).then(|| number.parse().unwrap())
                 })
                 .unwrap_or_else(|| panic!("{name} not in listing: {listing}"));
+            assert!(entries
+                .iter()
+                .any(|e| e.reference.record == number && e.name == name.encode_utf16().collect::<Vec<_>>()));
             assert_eq!(volume.file_size(number).unwrap(), expected.len() as u64);
             let mut got = vec![0xff; expected.len() + 11];
             assert_eq!(volume.read_file(number, 0, &mut got).unwrap(), expected.len());

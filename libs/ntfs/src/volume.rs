@@ -6,8 +6,8 @@ use alloc::vec;
 /// mapping. No namespace lookup or directory index traversal is provided yet:
 /// files are addressed by their MFT record number.
 pub struct Volume<D> {
-    device: D,
-    geometry: Geometry,
+    pub(crate) device: D,
+    pub(crate) geometry: Geometry,
     mft: Stream,
 }
 

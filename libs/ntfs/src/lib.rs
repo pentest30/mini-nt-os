@@ -12,6 +12,9 @@
 extern crate alloc;
 
 mod boot;
+mod index;
+mod namespace;
+pub use index::{DirectoryEntry, FileReference};
 mod record;
 mod stream;
 mod volume;
