@@ -410,6 +410,67 @@ pub(super) fn nt_gdi_ext_select_clip_rgn(arguments: &[u32]) -> NtStatus {
 /// (`win32k::gdi::dc::create_memory_dc`), compatible avec l'écran ; NULL
 /// pour un `hdc` qui n'est pas au processus (sans erreur, comme ReactOS) ou
 /// sans place.
+/// NtGdiCreateBitmap(Width, Height, Planes, BitsPixel, Bits) : le handle
+/// du bitmap que `surface::create_from_bits` convertit en BGRA (la
+/// monochrome 8×8 du pinceau de taskmgr passe ici).
+pub(super) fn nt_gdi_create_bitmap(arguments: &[u32]) -> NtStatus {
+    let [width, height, planes, bits_pixel, bits] = arguments[..5] else { unreachable!("5 arguments") };
+    if bits == 0 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    // La géométrie d'abord, avant toute allocation : les dimensions que le
+    // moteur tient (celles de `surface::create_from_bits`), la profondeur
+    // qu'il convertit (la monochrome et le 32 bits), le pas et la taille
+    // totale en arithmétique contrôlée et bornée — un appelant pourrait
+    // autrement demander des gigaoctets pour une hauteur sans fond.
+    let Some(depth) = planes.checked_mul(bits_pixel).filter(|&depth| depth == 1 || depth == 32) else {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    };
+    if width == 0 || height == 0 || width > 4096 || height > 4096 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    // Les lignes que l'appelant donne sont alignées sur 16 bits.
+    let Some(total) = width
+        .checked_mul(depth)
+        .and_then(|bits| bits.checked_add(15))
+        .map(|bits| bits / 16 * 2)
+        .and_then(|stride| stride.checked_mul(height))
+        .filter(|total| *total <= 16 * 1024 * 1024)
+    else {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    };
+    let mut bytes = alloc::vec![0u8; total as usize];
+    if ke::usermem::copy_from_user(&mut bytes, u64::from(bits)).is_err() {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    match surface::create_from_bits(width, height, planes, bits_pixel, &bytes) {
+        Ok(handle) => NtStatus(handle),
+        Err(STATUS_INVALID_PARAMETER) => fail(ERROR_INVALID_PARAMETER, 0),
+        Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
+    }
+}
+
+/// NtGdiCreatePatternBrushInternal(hbmp, ...) : HBRUSH, le pinceau à motif
+/// du bitmap `hbmp` (`win32k::gdi::brush::create_pattern`), au processus
+/// courant ; NULL sans bitmap ou sans place.
+pub(super) fn nt_gdi_create_pattern_brush_internal(arguments: &[u32]) -> NtStatus {
+    match win32k::gdi::brush::create_pattern(arguments[0]) {
+        Ok(handle) => NtStatus(handle),
+        Err(STATUS_INVALID_PARAMETER) => fail(ERROR_INVALID_PARAMETER, 0),
+        Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
+    }
+}
+
+/// NtGdiOpenDCW(...) : le DC de l'écran — le seul périphérique que le
+/// moteur a —, les noms de périphérique que l'appelant passe étant
+/// ignorés. NULL sans place.
+pub(super) fn nt_gdi_open_dc_w(_arguments: &[u32]) -> NtStatus {
+    match win32k::gdi::dc::create_display_dc() {
+        Ok((handle, _attrs)) => NtStatus(handle),
+        Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
+    }
+}
+
 pub(super) fn nt_gdi_create_compatible_dc(arguments: &[u32]) -> NtStatus {
     let hdc = arguments[0];
     if hdc != 0 && win32k::gdi::dc::lock(hdc).is_none() {

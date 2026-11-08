@@ -30,6 +30,7 @@
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
 pub mod apc;
+mod atom;
 mod callback;
 mod class;
 mod console;
@@ -45,6 +46,7 @@ mod memory;
 mod message;
 mod monitor;
 mod mouse;
+mod mutant;
 mod object;
 mod port;
 mod process;
@@ -101,6 +103,7 @@ pub enum Completion {
 pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAcceptConnectPort, Handler::Status(port::nt_accept_connect_port)),
     (services::NtAdjustPrivilegesToken, Handler::Status(security::nt_adjust_privileges_token)),
+    (services::NtAddAtom, Handler::Status(atom::nt_add_atom)),
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
     (services::NtCallbackReturn, Handler::Status(callback::nt_callback_return)),
     (services::NtClearEvent, Handler::Status(event::nt_clear_event)),
@@ -112,6 +115,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateEvent, Handler::Status(event::nt_create_event)),
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
     (services::NtCreateKey, Handler::Status(registry::nt_create_key)),
+    (services::NtCreateMutant, Handler::Status(mutant::nt_create_mutant)),
     (services::NtCreateKeyedEvent, Handler::Status(event::nt_create_keyed_event)),
     (services::NtCreatePort, Handler::Status(port::nt_create_port)),
     (services::NtCreateProcess, Handler::Status(process::nt_create_process)),
@@ -121,19 +125,23 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateSymbolicLinkObject, Handler::Status(object::nt_create_symbolic_link_object)),
     (services::NtCreateThread, Handler::Status(process::nt_create_thread)),
     (services::NtDelayExecution, Handler::Status(wait::nt_delay_execution)),
+    (services::NtDeleteAtom, Handler::Status(atom::nt_delete_atom)),
     (services::NtDeleteValueKey, Handler::Status(registry::nt_delete_value_key)),
     (services::NtDeviceIoControlFile, Handler::Status(file::nt_device_io_control_file)),
     (services::NtDuplicateObject, Handler::Status(object::nt_duplicate_object)),
     (services::NtEnumerateKey, Handler::Status(registry::nt_enumerate_key)),
     (services::NtEnumerateValueKey, Handler::Status(registry::nt_enumerate_value_key)),
+    (services::NtFindAtom, Handler::Status(atom::nt_find_atom)),
     (services::NtFlushBuffersFile, Handler::Status(file::nt_flush_buffers_file)),
     (services::NtFlushInstructionCache, Handler::Status(process::nt_flush_instruction_cache)),
     (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
     (services::NtGdiBitBlt, Handler::Status(gdi::nt_gdi_bit_blt)),
     (services::NtGdiCombineRgn, Handler::Status(gdi::nt_gdi_combine_rgn)),
+    (services::NtGdiCreateBitmap, Handler::Status(gdi::nt_gdi_create_bitmap)),
     (services::NtGdiCreateCompatibleDC, Handler::Status(gdi::nt_gdi_create_compatible_dc)),
     (services::NtGdiCreateDIBSection, Handler::Status(gdi::nt_gdi_create_dib_section)),
+    (services::NtGdiCreatePatternBrushInternal, Handler::Status(gdi::nt_gdi_create_pattern_brush_internal)),
     (services::NtGdiCreateRectRgn, Handler::Status(gdi::nt_gdi_create_rect_rgn)),
     (services::NtGdiCreateSolidBrush, Handler::Status(gdi::nt_gdi_create_solid_brush)),
     (services::NtGdiDeleteObjectApp, Handler::Status(gdi::nt_gdi_delete_object_app)),
@@ -151,16 +159,19 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiHfontCreate, Handler::Status(gdi::nt_gdi_hfont_create)),
     (services::NtGdiInit, Handler::Status(user::nt_gdi_init)),
     (services::NtGdiIntersectClipRect, Handler::Status(gdi::nt_gdi_intersect_clip_rect)),
+    (services::NtGdiOpenDCW, Handler::Status(gdi::nt_gdi_open_dc_w)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtGdiSelectBitmap, Handler::Status(gdi::nt_gdi_select_bitmap)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),
     (services::NtImpersonateThread, Handler::Status(security::nt_impersonate_thread)),
+    (services::NtInitializeRegistry, Handler::Status(registry::nt_initialize_registry)),
     (services::NtListenPort, Handler::Status(port::nt_listen_port)),
     (services::NtMapViewOfSection, Handler::Status(section::nt_map_view_of_section)),
     (services::NtOpenDirectoryObject, Handler::Status(object::nt_open_directory_object)),
     (services::NtOpenEvent, Handler::Status(event::nt_open_event)),
     (services::NtOpenFile, Handler::Status(file::nt_open_file)),
     (services::NtOpenKey, Handler::Status(registry::nt_open_key)),
+    (services::NtOpenMutant, Handler::Status(mutant::nt_open_mutant)),
     (services::NtOpenKeyedEvent, Handler::Status(event::nt_open_keyed_event)),
     (services::NtOpenProcess, Handler::Status(process::nt_open_process)),
     (services::NtOpenProcessToken, Handler::Status(security::nt_open_process_token)),
@@ -179,6 +190,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQueryDirectoryFile, Handler::Status(file::nt_query_directory_file)),
     (services::NtQueryEvent, Handler::Status(event::nt_query_event)),
     (services::NtQueryFullAttributesFile, Handler::Status(file::nt_query_full_attributes_file)),
+    (services::NtQueryInformationAtom, Handler::Status(atom::nt_query_information_atom)),
     (services::NtQueryInformationFile, Handler::Status(file::nt_query_information_file)),
     (services::NtQueryInformationProcess, Handler::Status(process::nt_query_information_process)),
     (services::NtQueryInformationThread, Handler::Status(process::nt_query_information_thread)),
@@ -199,7 +211,9 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtRaiseException, Handler::Frame(exceptions::nt_raise_exception)),
     (services::NtReadFile, Handler::Status(file::nt_read_file)),
     (services::NtReadVirtualMemory, Handler::Status(memory::nt_read_virtual_memory)),
+    (services::NtRegisterThreadTerminatePort, Handler::Status(process::nt_register_thread_terminate_port)),
     (services::NtReleaseKeyedEvent, Handler::Status(event::nt_release_keyed_event)),
+    (services::NtReleaseMutant, Handler::Status(mutant::nt_release_mutant)),
     (services::NtReleaseSemaphore, Handler::Status(event::nt_release_semaphore)),
     (services::NtReplyPort, Handler::Status(port::nt_reply_port)),
     (services::NtReplyWaitReceivePort, Handler::Status(port::nt_reply_wait_receive_port)),
@@ -245,6 +259,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetDC, Handler::Status(window::nt_user_get_dc)),
     (services::NtUserGetDCEx, Handler::Status(window::nt_user_get_dc_ex)),
     (services::NtUserGetKeyState, Handler::Status(input::nt_user_get_key_state)),
+    (services::NtUserGetAtomName, Handler::Status(atom::nt_user_get_atom_name)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
     (services::NtUserGetKeyboardState, Handler::Status(input::nt_user_get_keyboard_state)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),

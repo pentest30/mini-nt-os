@@ -42,7 +42,7 @@ use ke::sched::KePlatform;
 use mm::kstack::KernelStack;
 use mm::vad::PageProtect;
 use mm::virtual_alloc::{AllocType, FreeType, ALLOC_GRANULARITY, PAGE_SIZE};
-use ob::{create_object, AccessMask, GenericMapping, Object, ObjectType};
+use ob::{create_object, AccessMask, GenericMapping, Object, ObjectRef, ObjectType};
 
 use se::Token;
 
@@ -136,6 +136,9 @@ pub struct EThread {
     create_time: u64,
     /// ExitTime : celle de sa fin, posée avec son statut de sortie ; 0 avant.
     exit_time: AtomicU64,
+    /// Le port LPC où csrss veut l'avis de sa fin
+    /// (NtRegisterThreadTerminatePort), tant qu'il vit.
+    terminate_port: KSpinLock<Option<ObjectRef>>,
     /// Sa fin est demandée : l'APC de fin est en file, ou il se termine.
     terminating: AtomicBool,
     /// L'APC qui le termine, écrit une fois par qui pose `terminating`.
@@ -480,6 +483,13 @@ impl EThread {
     ///
     /// # IRQL
     /// Tout niveau.
+    /// Garder le port LPC de fin de thread que csrss enregistre
+    /// (NtRegisterThreadTerminatePort) ; l'envoi du message à la destruction
+    /// reste à écrire.
+    pub fn set_terminate_port(&self, port: ObjectRef) {
+        *self.terminate_port.lock() = Some(port);
+    }
+
     pub fn set_critical(&self, critical: bool) {
         self.critical.store(critical, Ordering::Release);
     }
@@ -762,6 +772,7 @@ fn start_thread(
             exit_status: AtomicU32::new(STATUS_PENDING.0),
             create_time: hal::rtc::system_time(),
             exit_time: AtomicU64::new(0),
+            terminate_port: KSpinLock::new(None),
             terminating: AtomicBool::new(false),
             exit_apc: UnsafeCell::new(MaybeUninit::uninit()),
             suspension: KSpinLock::new(Suspension { count: 0, apc_ready: false }),

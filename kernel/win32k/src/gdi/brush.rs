@@ -20,7 +20,7 @@ use alloc::sync::Arc;
 use core::mem::offset_of;
 
 use abi::gdi::{objt, stock, BrushAttr32, LO_BRUSH_TYPE};
-use abi::ntstatus::{NtStatus, STATUS_UNSUCCESSFUL};
+use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER, STATUS_UNSUCCESSFUL};
 use abi::user::{ServerInfo32, NUM_SYSCOLORS};
 use hal::sync::Once;
 
@@ -33,12 +33,21 @@ pub struct Brush {
     pub color: ColorRef,
     /// BS_NULL (`BR_IS_NULL`).
     pub null: bool,
+    /// BS_PATTERN : le handle du bitmap dont le motif vient ; 0 pour un
+    /// pinceau sans motif. Le dessin du motif à venir : sa couleur de repli
+    /// (`color`) sert en attendant.
+    pub pattern: u32,
 }
 
 impl Brush {
     /// Un pinceau plein de `color`.
     pub const fn solid(color: ColorRef) -> Self {
-        Self { color, null: false }
+        Self { color, null: false, pattern: 0 }
+    }
+
+    /// Un pinceau à motif, du bitmap GDI `bitmap`.
+    pub const fn pattern(bitmap: u32) -> Self {
+        Self { color: ColorRef(0), null: false, pattern: bitmap }
     }
 }
 
@@ -49,7 +58,7 @@ pub const STOCK_BRUSHES: [Brush; stock::NULL_BRUSH + 1] = [
     Brush::solid(ColorRef::rgb(128, 128, 128)),
     Brush::solid(ColorRef::rgb(64, 64, 64)),
     Brush::solid(ColorRef::rgb(0, 0, 0)),
-    Brush { color: ColorRef(0), null: true },
+    Brush { color: ColorRef(0), null: true, pattern: 0 },
 ];
 
 /// Les handles des objets de stock (0 : pas encore créé).
@@ -113,6 +122,32 @@ pub fn create_solid(color: u32) -> Result<u32, NtStatus> {
     let (pid, attr) = allocate_attr(AttrKind::Brush)?;
     let attrs = BrushAttr32 { attr_flags: 0, color };
     let brush = Object::Brush(Arc::new(Brush::solid(ColorRef(color & 0x00FF_FFFF))));
+    let inserted = ke::usermem::copy_to_user(u64::from(attr), attrs.as_bytes())
+        .and_then(|()| handles::insert_with_user_data(brush, LO_BRUSH_TYPE, objt::BRUSH, pid, attr));
+    if inserted.is_err() {
+        free_attr(AttrKind::Brush, attr);
+    }
+    inserted
+}
+
+/// `CreatePatternBrush` : un pinceau à motif, du bitmap GDI `hbmp` ; rend
+/// son handle GDI, au processus courant. Le motif se peint quand la tranche
+/// dessin l'écrit ; le pinceau, lui, existe et se choisit.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` sans bitmap ; `STATUS_NO_MEMORY` sans place
+/// pour ses attributs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn create_pattern(hbmp: u32) -> Result<u32, NtStatus> {
+    use super::dc::{allocate_attr, free_attr, AttrKind};
+    if hbmp == 0 {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let (pid, attr) = allocate_attr(AttrKind::Brush)?;
+    let attrs = BrushAttr32 { attr_flags: 0, color: 0 };
+    let brush = Object::Brush(Arc::new(Brush::pattern(hbmp)));
     let inserted = ke::usermem::copy_to_user(u64::from(attr), attrs.as_bytes())
         .and_then(|()| handles::insert_with_user_data(brush, LO_BRUSH_TYPE, objt::BRUSH, pid, attr));
     if inserted.is_err() {

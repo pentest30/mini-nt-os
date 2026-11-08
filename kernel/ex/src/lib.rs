@@ -18,6 +18,7 @@ extern crate alloc;
 pub mod event;
 pub mod keyed_event;
 pub mod locale;
+pub mod mutant;
 pub mod semaphore;
 
 pub use event::{Event, EventType, EVENT_ALL_ACCESS, EVENT_MODIFY_STATE, EVENT_QUERY_STATE, EVENT_TYPE};

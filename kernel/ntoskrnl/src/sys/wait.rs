@@ -64,6 +64,9 @@ fn dispatcher_object(object: &ObjectRef) -> Result<*mut DispatcherHeader, NtStat
     if let Some(semaphore) = ob::downcast::<ex::Semaphore>(object) {
         return Ok(semaphore.dispatcher_object());
     }
+    if let Some(mutant) = ob::downcast::<ex::mutant::Mutant>(object) {
+        return Ok(mutant.dispatcher_object());
+    }
     if let Some(process) = ob::downcast::<EProcess>(object) {
         return Ok(process.dispatcher_object());
     }

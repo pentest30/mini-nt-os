@@ -13,11 +13,15 @@ use abi::system_information::{
     SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
     SYSTEM_THREAD_INFORMATION_SIZE, SYSTEM_TIME_OF_DAY_INFORMATION,
 };
+use core::sync::atomic::{AtomicBool, Ordering};
 use ke::usermem::UserPtr;
 use mm::virtual_alloc::{ALLOC_GRANULARITY, PAGE_SIZE};
 
 /// Les classes demandées sans être implémentées.
 static UNSUPPORTED: super::ClassReport = super::ClassReport::new("NtQuerySystemInformation");
+/// La liste des processus a-t-elle déjà été lue ? Un seul marqueur par
+/// démarrage ([`process_information`]).
+static PROCESS_LIST_READ: AtomicBool = AtomicBool::new(false);
 /// Les classes de NtSetSystemInformation demandées sans être implémentées.
 static UNSUPPORTED_SET: super::ClassReport = super::ClassReport::new("NtSetSystemInformation");
 
@@ -84,7 +88,16 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
             let zeros = alloc::vec![0u8; (length as usize).min(PAGE_SIZE as usize)];
             super::return_information_flexible(&zeros, buffer, length, return_length)
         }
-        SYSTEM_PROCESS_INFORMATION => process_information(buffer, length, return_length),
+        SYSTEM_PROCESS_INFORMATION => {
+            // La première lecture de la liste par un processus : le moment
+            // où un gestionnaire de tâches vit et rafraîchit — le marqueur
+            // du scénario taskmgr, une fois par démarrage.
+            if !PROCESS_LIST_READ.swap(true, Ordering::AcqRel) {
+                let pid = super::current_process().pid();
+                log::info!("[apps] the process list was read by PID {pid}");
+            }
+            process_information(buffer, length, return_length)
+        }
         SYSTEM_TIME_OF_DAY_INFORMATION => time_of_day(buffer, length, return_length),
         SYSTEM_RANGE_START_INFORMATION => {
             super::return_information(&SYSTEM_RANGE_START.to_le_bytes(), buffer, length, return_length)

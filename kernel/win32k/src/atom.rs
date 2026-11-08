@@ -234,6 +234,14 @@ pub fn name(atom: u16) -> Option<Vec<u16>> {
     USER_ATOMS.lock().name(atom)
 }
 
+/// Le compte de références de l'atome en chaîne `atom` de la table de USER.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn references(atom: u16) -> Option<u32> {
+    USER_ATOMS.lock().references(atom)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
