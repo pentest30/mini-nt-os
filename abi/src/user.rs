@@ -230,12 +230,12 @@ pub struct MbString32 {
     pub string: u32,
 }
 
-/// SERVERINFO up to `ahbrSystem` of `PERUSERSERVERINFO` (the rest follows,
+/// SERVERINFO up to `hbrGray` of `PERUSERSERVERINFO` (the rest follows,
 /// zero until written): what [`ServerInfoHead32`] holds, the system
-/// classes' atoms, … then the system metrics (`aiSysMet`), colours and
-/// their brushes. The offsets of `aiSysMet`, `argbSystem` and `ahbrSystem`
-/// are those the pinned `user32` reads (GetSystemMetrics, GetSysColor,
-/// GetSysColorBrush).
+/// classes' atoms, … then the system metrics (`aiSysMet`), colours, their
+/// brushes and the gray brush. The offsets of `aiSysMet`, `argbSystem`,
+/// `ahbrSystem` and `hbrGray` are those the pinned `user32` reads
+/// (GetSystemMetrics, GetSysColor, GetSysColorBrush, DrawFocusRect).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServerInfo32 {
@@ -258,6 +258,9 @@ pub struct ServerInfo32 {
     pub argb_system: [u32; NUM_SYSCOLORS],
     /// The system colours' brushes (GetSysColorBrush), stock objects.
     pub ahbr_system: [u32; NUM_SYSCOLORS],
+    /// The gray brush: a 0x55AA monochrome pattern, one pixel in two, a
+    /// stock object (DrawFocusRect, the background of a scroll bar).
+    pub hbr_gray: u32,
 }
 
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
@@ -450,6 +453,49 @@ pub const RDW_VALID_FLAGS: u32 = RDW_ERASE
 /// HWNDLOCK_ROUTINE_UPDATEWINDOW: the routine of NtUserCallHwndLock behind
 /// UpdateWindow (user32!UpdateWindow pushes 0x5E).
 pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
+
+/// SPI_*: the actions of SystemParametersInfo that win32k answers.
+/// SPI_GETICONTITLELOGFONT: the font of the icon titles (`pvParam` a
+/// LOGFONTW of `uiParam` bytes), the ListView's default font.
+pub const SPI_GETICONTITLELOGFONT: u32 = 0x001F;
+/// SPI_GETNONCLIENTMETRICS: fills a NONCLIENTMETRICSW (`uiParam` its size
+/// or 0, `pvParam` it, its `cbSize` set).
+pub const SPI_GETNONCLIENTMETRICS: u32 = 0x0029;
+/// SPI_GETFOCUSBORDERWIDTH: the width of the sides of a focus rectangle
+/// (`pvParam` a UINT), which DrawFocusRect reads.
+pub const SPI_GETFOCUSBORDERWIDTH: u32 = 0x200E;
+/// SPI_GETFOCUSBORDERHEIGHT: the height of its top and bottom.
+pub const SPI_GETFOCUSBORDERHEIGHT: u32 = 0x2010;
+
+/// NONCLIENTMETRICSW: the sizes of the frames, captions, menus and scroll
+/// bars, and the system's fonts.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonClientMetricsW32 {
+    pub cb_size: u32,
+    pub border_width: i32,
+    pub scroll_width: i32,
+    pub scroll_height: i32,
+    pub caption_width: i32,
+    pub caption_height: i32,
+    pub caption_font: crate::gdi::LogFontW32,
+    pub sm_caption_width: i32,
+    pub sm_caption_height: i32,
+    pub sm_caption_font: crate::gdi::LogFontW32,
+    pub menu_width: i32,
+    pub menu_height: i32,
+    pub menu_font: crate::gdi::LogFontW32,
+    pub status_font: crate::gdi::LogFontW32,
+    pub message_font: crate::gdi::LogFontW32,
+}
+
+const _: () = {
+    assert!(size_of::<NonClientMetricsW32>() == 500);
+    assert!(offset_of!(NonClientMetricsW32, caption_font) == 24);
+    assert!(offset_of!(NonClientMetricsW32, sm_caption_font) == 124);
+    assert!(offset_of!(NonClientMetricsW32, menu_font) == 224);
+    assert!(offset_of!(NonClientMetricsW32, message_font) == 408);
+};
 /// HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: the routine of NtUserCallHwndParam
 /// behind KillSystemTimer (read from the pinned `user32`).
 pub const HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: u32 = 0x4E;
@@ -728,6 +774,17 @@ pub mod color {
     pub const MENUHILIGHT: usize = 29;
     pub const MENUBAR: usize = 30;
 }
+
+/// WM_CTLCOLORMSGBOX to WM_CTLCOLORSTATIC: a control asks its parent the
+/// brush of its background (`wParam` the DC, `lParam` the control); the
+/// CTLCOLOR_* type is the message's distance from WM_CTLCOLORMSGBOX.
+pub const WM_CTLCOLORMSGBOX: u32 = 0x0132;
+pub const WM_CTLCOLORSTATIC: u32 = 0x0138;
+pub const CTLCOLOR_EDIT: u32 = 1;
+pub const CTLCOLOR_LISTBOX: u32 = 2;
+pub const CTLCOLOR_SCROLLBAR: u32 = 5;
+/// CTLCOLOR_MAX: the number of CTLCOLOR_* types.
+pub const CTLCOLOR_MAX: u32 = 7;
 
 /// HRGN_WINDOW: the whole window, the `wParam` of WM_NCPAINT.
 pub const HRGN_WINDOW: u32 = 1;
@@ -1404,6 +1461,8 @@ const _: () = {
     assert!(offset_of!(ServerInfo32, argb_system) == 0x7BC);
     // user32!GetSysColorBrush: mov eax, [gpsi + 0x838 + 4 * index].
     assert!(offset_of!(ServerInfo32, ahbr_system) == 0x838);
+    // user32!DrawFocusRect: mov eax, [eax + 0x8B4], gpsi in eax.
+    assert!(offset_of!(ServerInfo32, hbr_gray) == 0x8B4);
     assert!(size_of::<Msg32>() == 28);
     assert!(size_of::<PaintStruct32>() == 64);
     assert!(offset_of!(PaintStruct32, paint) == 8);
@@ -1437,6 +1496,7 @@ macro_rules! as_bytes {
 }
 
 as_bytes!(
+    NonClientMetricsW32,
     Msg32,
     UserHandleEntry32,
     UserHandleTable32,

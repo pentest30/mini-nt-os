@@ -164,7 +164,12 @@ pub fn bit_blt(
         ColorRef(0)
     };
     let (dest_state, source_state) = (dest.state(), source.state());
-    let (rect, from) = geometry((x, y, width, height), dest_state.origin, (x_src, y_src), source_state.origin);
+    let (rect, from) = geometry(
+        (x, y, width, height),
+        dc::logical_origin(&dest_state, None),
+        (x_src, y_src),
+        dc::logical_origin(&source_state, None),
+    );
     let parts = parts(rect, from, dest_state.rao().rects());
     blit(&Target::of(&source_state), &Target::of(&dest_state), &parts, (rop >> 16) as u8, pattern);
     Ok(true)

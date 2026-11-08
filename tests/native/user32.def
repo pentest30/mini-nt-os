@@ -12,6 +12,9 @@ CreateWindowStationW@16
 DefWindowProcW@16
 DispatchMessageW@4
 DrawTextW@20
+EnumChildWindows@12
+EnumThreadWindows@12
+EnumWindows@8
 EndPaint@8
 GetActiveWindow@0
 GetAsyncKeyState@4
@@ -22,6 +25,7 @@ GetCursorPos@4
 GetDC@4
 GetDCEx@12
 GetDlgCtrlID@4
+GetDlgItem@8
 GetFocus@0
 GetKeyboardState@4
 GetKeyState@4
@@ -73,6 +77,7 @@ SetWindowPos@28
 SetWindowTextW@8
 ShowWindow@8
 SwitchDesktop@4
+SystemParametersInfoW@16
 ToUnicodeEx@28
 TranslateMessage@4
 UpdateWindow@4

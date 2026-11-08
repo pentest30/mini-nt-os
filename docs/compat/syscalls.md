@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 115 | 296 |
-| win32k | 96 | 737 |
+| win32k | 105 | 737 |
 
 ## ntoskrnl
 
@@ -484,7 +484,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10a5` | `NtGdiGetColorSpaceforBitmap` | 1 |  |
 | `0x10a6` | `NtGdiGetDCDword` | 3 |  |
 | `0x10a7` | `NtGdiGetDCforBitmap` | 1 |  |
-| `0x10a8` | `NtGdiGetDCObject` | 2 |  |
+| `0x10a8` | `NtGdiGetDCObject` | 2 | ✅ |
 | `0x10a9` | `NtGdiGetDCPoint` | 3 |  |
 | `0x10aa` | `NtGdiGetDeviceCaps` | 2 |  |
 | `0x10ab` | `NtGdiGetDeviceGammaRamp` | 2 |  |
@@ -560,9 +560,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10f1` | `NtGdiPtVisible` | 3 |  |
 | `0x10f2` | `NtGdiQueryFonts` | 3 |  |
 | `0x10f3` | `NtGdiQueryFontAssocInfo` | 1 |  |
-| `0x10f4` | `NtGdiRectangle` | 5 |  |
+| `0x10f4` | `NtGdiRectangle` | 5 | ✅ |
 | `0x10f5` | `NtGdiRectInRegion` | 2 |  |
-| `0x10f6` | `NtGdiRectVisible` | 2 |  |
+| `0x10f6` | `NtGdiRectVisible` | 2 | ✅ |
 | `0x10f7` | `NtGdiRemoveFontResourceW` | 6 |  |
 | `0x10f8` | `NtGdiRemoveFontMemResourceEx` | 1 |  |
 | `0x10f9` | `NtGdiResetDC` | 5 |  |
@@ -612,7 +612,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1125` | `NtGdiStrokeAndFillPath` | 1 |  |
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
 | `0x1127` | `NtGdiSwapBuffers` | 1 |  |
-| `0x1128` | `NtGdiTransformPoints` | 5 |  |
+| `0x1128` | `NtGdiTransformPoints` | 5 | ✅ |
 | `0x1129` | `NtGdiTransparentBlt` | 11 |  |
 | `0x112a` | `NtGdiUnloadPrinterDriver` | 2 |  |
 | `0x112b` | `NtGdiUnmapMemFont` | 1 |  |
@@ -627,7 +627,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1134` | `NtUserBitBltSysBmp` | 8 |  |
 | `0x1135` | `NtUserBlockInput` | 1 |  |
 | `0x1136` | `NtUserBuildHimcList` | 4 |  |
-| `0x1137` | `NtUserBuildHwndList` | 7 |  |
+| `0x1137` | `NtUserBuildHwndList` | 7 | ✅ |
 | `0x1138` | `NtUserBuildNameList` | 4 |  |
 | `0x1139` | `NtUserBuildPropList` | 4 |  |
 | `0x113a` | `NtUserCallHwnd` | 2 |  |
@@ -711,8 +711,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1188` | `NtUserGetClipboardViewer` | 0 |  |
 | `0x1189` | `NtUserGetClipCursor` | 1 |  |
 | `0x118a` | `NtUserGetComboBoxInfo` | 2 |  |
-| `0x118b` | `NtUserGetControlBrush` | 3 |  |
-| `0x118c` | `NtUserGetControlColor` | 4 |  |
+| `0x118b` | `NtUserGetControlBrush` | 3 | ✅ |
+| `0x118c` | `NtUserGetControlColor` | 4 | ✅ |
 | `0x118d` | `NtUserGetCPD` | 3 |  |
 | `0x118e` | `NtUserGetCursorFrameInfo` | 4 |  |
 | `0x118f` | `NtUserGetCursorInfo` | 1 |  |
@@ -764,7 +764,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11bd` | `NtUserInitialize` | 3 | ✅ |
 | `0x11be` | `NtUserInitializeClientPfnArrays` | 4 | ✅ |
 | `0x11bf` | `NtUserInitTask` | 12 |  |
-| `0x11c0` | `NtUserInternalGetWindowText` | 3 |  |
+| `0x11c0` | `NtUserInternalGetWindowText` | 3 | ✅ |
 | `0x11c1` | `NtUserInvalidateRect` | 3 | ✅ |
 | `0x11c2` | `NtUserInvalidateRgn` | 3 | ✅ |
 | `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 |  |
@@ -871,7 +871,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1228` | `NtUserShowWindowAsync` | 2 | ✅ |
 | `0x1229` | `NtUserSoundSentry` | 0 |  |
 | `0x122a` | `NtUserSwitchDesktop` | 1 | ✅ |
-| `0x122b` | `NtUserSystemParametersInfo` | 4 |  |
+| `0x122b` | `NtUserSystemParametersInfo` | 4 | ✅ |
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
 | `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
 | `0x122e` | `NtUserThunkedMenuItemInfo` | 6 |  |

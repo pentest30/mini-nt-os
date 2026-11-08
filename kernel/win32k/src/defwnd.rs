@@ -437,6 +437,108 @@ const NC_LBUTTONDOWN: u32 = WM_LBUTTONDOWN - WM_NC_MOUSE_OFFSET;
 /// encore, déjà journalisés.
 static REPORTED: KSpinLock<BTreeSet<u32>> = KSpinLock::new(BTreeSet::new());
 
+/// Les couleurs par défaut d'un contrôle de type `ctl_type` (CTLCOLOR_*) :
+/// celles de son texte et de son fond, et celle de son pinceau (indices des
+/// couleurs du système).
+///
+/// DefWndControlColor : le texte en COLOR_WINDOWTEXT, sur COLOR_WINDOW pour
+/// une zone d'édition ou une liste, sur COLOR_3DFACE sinon ; une barre de
+/// défilement, son texte en COLOR_3DFACE sur COLOR_3DHILIGHT et le pinceau
+/// COLOR_SCROLLBAR (ou le pinceau gris : [`control_brush`]).
+pub const fn default_control_colors(ctl_type: u32) -> (usize, usize, usize) {
+    use abi::user::color::{BTNFACE, BTNHIGHLIGHT, SCROLLBAR, WINDOW, WINDOWTEXT};
+    match ctl_type {
+        abi::user::CTLCOLOR_SCROLLBAR => (BTNFACE, BTNHIGHLIGHT, SCROLLBAR),
+        abi::user::CTLCOLOR_EDIT | abi::user::CTLCOLOR_LISTBOX => (WINDOWTEXT, WINDOW, WINDOW),
+        _ => (WINDOWTEXT, BTNFACE, BTNFACE),
+    }
+}
+
+/// Le pinceau public du fond d'un contrôle ([`control_brush`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlBrush {
+    /// Celui de la couleur du système de cet indice (`ahbrSystem`).
+    System(usize),
+    /// Le pinceau gris (`hbrGray`).
+    Gray,
+}
+
+/// DefWndControlColor : le pinceau du fond d'un contrôle de type
+/// `ctl_type` sous les couleurs du système `colors` : celui de sa couleur
+/// ([`default_control_colors`]) ; pour une barre de défilement dont le fond
+/// (COLOR_3DHILIGHT) a la couleur des fenêtres (COLOR_WINDOW), comme sous
+/// les couleurs d'XP, le pinceau gris, dont le damier (COLOR_3DFACE sur
+/// COLOR_3DHILIGHT) la distingue d'elles.
+pub fn control_brush(ctl_type: u32, colors: &[u32]) -> ControlBrush {
+    use abi::user::color::{BTNHIGHLIGHT, WINDOW};
+    let (_, background, brush) = default_control_colors(ctl_type);
+    if ctl_type == abi::user::CTLCOLOR_SCROLLBAR && colors.get(background) == colors.get(WINDOW) {
+        debug_assert_eq!(background, BTNHIGHLIGHT);
+        return ControlBrush::Gray;
+    }
+    ControlBrush::System(brush)
+}
+
+/// DefWndControlColor : le DC `hdc` prend les couleurs par défaut d'un
+/// contrôle de type `ctl_type` ([`default_control_colors`]) ; rend le
+/// pinceau public de son fond ([`control_brush`]).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn control_color(hdc: u32, ctl_type: u32) -> u32 {
+    let colors = &crate::metrics::SYSTEM_COLORS;
+    let (text, background, _) = default_control_colors(ctl_type);
+    if let Some(dc) = crate::gdi::dc::lock(hdc) {
+        let color = |index: usize| colors.get(index).copied().unwrap_or(0);
+        let _ = crate::gdi::dc::set_text_colors(&dc, color(text), color(background));
+    }
+    match control_brush(ctl_type, colors) {
+        ControlBrush::System(index) => crate::gdi::brush::sys_color_brush(index),
+        ControlBrush::Gray => crate::gdi::brush::gray_brush(),
+    }
+}
+
+/// GetControlColor (co_ de ReactOS) : le pinceau du fond du contrôle
+/// `window`, que donne son parent `parent` (lui-même sans parent) en
+/// réponse à `message` (WM_CTLCOLOR*) ; s'il n'en donne pas un valide, ou
+/// s'il est d'un autre processus, celui de [`control_color`].
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Envoie un
+/// message (rappel, ou un autre thread).
+pub fn get_control_color(parent: Option<&Arc<Window>>, window: &Arc<Window>, hdc: u32, message: u32) -> u32 {
+    let parent = parent.unwrap_or(window);
+    let ctl_type = message - abi::user::WM_CTLCOLORMSGBOX;
+    let pid = crate::gdi::dc::current_pid();
+    if crate::gui::process_id_of(parent.pti) != Some(pid) {
+        return control_color(hdc, ctl_type);
+    }
+    let brush =
+        crate::window::send_message(parent, message, hdc, crate::window::LParam::Value(window.handle)).unwrap_or(0);
+    if brush != 0 && crate::gdi::handles::brush(brush, pid).is_some() {
+        return brush;
+    }
+    control_color(hdc, ctl_type)
+}
+
+/// GetControlBrush : [`get_control_color`] du parent de `window` : son
+/// parent pour une fenêtre fille, son propriétaire pour une fenêtre
+/// surgissante (IntGetParent).
+///
+/// # IRQL
+/// Comme [`get_control_color`].
+pub fn get_control_brush(window: &Arc<Window>, hdc: u32, message: u32) -> u32 {
+    let state = window.state();
+    let parent = if state.style & WS_CHILD != 0 {
+        crate::window::get(state.parent)
+    } else if state.style & abi::user::WS_POPUP != 0 {
+        crate::window::get(state.owner)
+    } else {
+        None
+    };
+    get_control_color(parent.as_ref(), window, hdc, message)
+}
+
 /// IntDefWindowProc : le traitement par défaut de `message` pour `window`
 /// (aucune : WM_DEVICECHANGE seul a un sens). `lparam` est une adresse du
 /// client pour un message qui désigne une structure (WM_NCCALCSIZE).
@@ -452,6 +554,9 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
     }
     match (message, window) {
         (WM_DEVICECHANGE, _) => Ok(1),
+        (abi::user::WM_CTLCOLORMSGBOX..=abi::user::WM_CTLCOLORSTATIC, _) => {
+            Ok(control_color(wparam, message - abi::user::WM_CTLCOLORMSGBOX))
+        }
         (WM_NCHITTEST, Some(window)) => {
             let state = window.state();
             let point = (i32::from(lparam as u16 as i16), i32::from((lparam >> 16) as u16 as i16));
@@ -534,6 +639,28 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controls_default_to_xp_s_colours() {
+        use abi::user::color::{BTNFACE, BTNHIGHLIGHT, SCROLLBAR, WINDOW, WINDOWTEXT};
+        assert_eq!(default_control_colors(4), (WINDOWTEXT, BTNFACE, BTNFACE), "a dialog: COLOR_3DFACE");
+        assert_eq!(default_control_colors(6), (WINDOWTEXT, BTNFACE, BTNFACE), "a static");
+        assert_eq!(default_control_colors(3), (WINDOWTEXT, BTNFACE, BTNFACE), "a button");
+        assert_eq!(default_control_colors(1), (WINDOWTEXT, WINDOW, WINDOW), "an edit: COLOR_WINDOW");
+        assert_eq!(default_control_colors(2), (WINDOWTEXT, WINDOW, WINDOW), "a list box");
+        assert_eq!(default_control_colors(5), (BTNFACE, BTNHIGHLIGHT, SCROLLBAR), "a scroll bar");
+    }
+
+    #[test]
+    fn a_scroll_bar_on_white_windows_takes_the_gray_brush() {
+        use abi::user::color::{BTNFACE, BTNHIGHLIGHT, SCROLLBAR, WINDOW};
+        let mut colors = metrics::SYSTEM_COLORS;
+        assert_eq!(colors[BTNHIGHLIGHT], colors[WINDOW], "XP's colours: both white");
+        assert_eq!(control_brush(abi::user::CTLCOLOR_SCROLLBAR, &colors), ControlBrush::Gray);
+        assert_eq!(control_brush(3, &colors), ControlBrush::System(BTNFACE), "a button");
+        colors[WINDOW] = 0x00C0_C0C0;
+        assert_eq!(control_brush(abi::user::CTLCOLOR_SCROLLBAR, &colors), ControlBrush::System(SCROLLBAR));
+    }
     use abi::user::{WS_EX_WINDOWEDGE, WS_OVERLAPPEDWINDOW};
 
     fn metric(index: usize) -> i32 {

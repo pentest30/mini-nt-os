@@ -427,6 +427,7 @@ pub struct GdiBsPatBlt32 {
     pub cr_background_clr: u32,
     pub cr_brush_clr: u32,
     pub icm_brush_color: i32,
+    /// Not filled by gdi32's PatBlt: whatever the TEB held there.
     pub viewport_org: PointL32,
     pub ul_foreground_clr: u32,
     pub ul_background_clr: u32,
@@ -518,6 +519,21 @@ impl GdiBsObject32 {
 }
 
 /// Raster operations of PatBlt (ROP3, with their legacy low word).
+/// GDI_OBJECT_TYPE_*: the kinds of object NtGdiGetDCObject (GetCurrentObject)
+/// asks of a DC.
+pub mod object_type {
+    pub const BITMAP: u32 = 0x0005_0000;
+    pub const PALETTE: u32 = 0x0008_0000;
+    pub const FONT: u32 = 0x000A_0000;
+    pub const BRUSH: u32 = 0x0010_0000;
+    pub const PEN: u32 = 0x0030_0000;
+    pub const EXTPEN: u32 = 0x0050_0000;
+}
+
+/// GdiDpToLp, GdiLpToDp: the directions of NtGdiTransformPoints.
+pub const GDI_DP_TO_LP: u32 = 0;
+pub const GDI_LP_TO_DP: u32 = 1;
+
 pub mod rop {
     /// The brush.
     pub const PATCOPY: u32 = 0x00F0_0021;
@@ -782,6 +798,14 @@ impl Default for LogFontW32 {
 }
 
 impl LogFontW32 {
+    /// Its bytes, as they go to user mode.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: a `#[repr(C)]` record of integers without padding (5
+        // LONGs, 8 BYTEs and 32 WCHARs: 92 bytes, checked below): every byte
+        // is initialised.
+        unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
+
     /// The font in `bytes`, as a client wrote it; `None` if they are too few.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let bytes = bytes.get(..size_of::<Self>())?;
@@ -814,6 +838,8 @@ impl LogFontW32 {
         &self.face_name[..end]
     }
 }
+
+const _: () = assert!(size_of::<LogFontW32>() == 92);
 
 /// ENUMLOGFONTEXDVW, what NtGdiHfontCreate is given (`gdi32` passes no size):
 /// a LOGFONTW, its full name, style and script (64, 32 and 32 characters),

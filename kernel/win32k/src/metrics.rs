@@ -41,6 +41,10 @@ pub struct Parameters {
     pub caption_font_average_width: i32,
     pub menu_font_height: i32,
     pub menu_font_external_leading: i32,
+    /// SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur des
+    /// côtés et du haut et du bas d'un rectangle de focus.
+    pub focus_border_width: u32,
+    pub focus_border_height: u32,
 }
 
 impl Parameters {
@@ -68,7 +72,42 @@ impl Parameters {
         caption_font_average_width: 6,
         menu_font_height: 11,
         menu_font_external_leading: 2,
+        focus_border_width: 1,
+        focus_border_height: 1,
     };
+}
+
+/// Une police du système : Tahoma de 8 points (-11 à 96 PPP), de graisse
+/// `weight`.
+pub fn system_font(weight: i32) -> abi::gdi::LogFontW32 {
+    let mut font = abi::gdi::LogFontW32 { height: -11, weight, ..abi::gdi::LogFontW32::default() };
+    for (unit, c) in font.face_name.iter_mut().zip("Tahoma".encode_utf16()) {
+        *unit = c;
+    }
+    font
+}
+
+/// SPI_GETNONCLIENTMETRICS : les tailles de `p` et les polices du système
+/// (SpiUpdatePerUserSystemParameters : la barre de titre en gras, les
+/// autres en normal).
+pub fn non_client_metrics(p: &Parameters) -> abi::user::NonClientMetricsW32 {
+    abi::user::NonClientMetricsW32 {
+        cb_size: size_of::<abi::user::NonClientMetricsW32>() as u32,
+        border_width: p.border_width,
+        scroll_width: p.scroll_width,
+        scroll_height: p.scroll_height,
+        caption_width: p.caption_width,
+        caption_height: p.caption_height,
+        caption_font: system_font(700),
+        sm_caption_width: p.sm_caption_width,
+        sm_caption_height: p.sm_caption_height,
+        sm_caption_font: system_font(400),
+        menu_width: p.menu_width,
+        menu_height: p.menu_height,
+        menu_font: system_font(400),
+        status_font: system_font(400),
+        message_font: system_font(400),
+    }
 }
 
 /// InitMetrics : les métriques d'un écran de `width` × `height` pixels.

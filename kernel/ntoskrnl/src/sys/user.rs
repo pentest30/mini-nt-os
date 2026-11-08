@@ -2,7 +2,7 @@
 //! NtUserInitializeClientPfnArrays, NtUserInitialize, NtGdiInit,
 //! NtUserCallTwoParam (RegisterLogonProcess), NtUserSetInformationThread
 //! (le port d'API de `csrss`), NtUserLoadKeyboardLayoutEx,
-//! NtUserGetKeyboardLayoutList.
+//! NtUserGetKeyboardLayoutList, NtUserSystemParametersInfo.
 //!
 //! Le thread qui les appelle est déjà un thread GUI (`super::dispatch`).
 
@@ -56,6 +56,72 @@ pub(super) fn nt_user_initialize(arguments: &[u32]) -> NtStatus {
         super::current_process().handle_table.reference_as::<Event>(Handle(power_event), &EVENT_TYPE, EVENT_ALL_ACCESS)
     };
     win32k::csrss::initialize(version, reference).map_or_else(|status| status, |()| STATUS_SUCCESS)
+}
+
+/// Les actions de NtUserSystemParametersInfo demandées sans être
+/// implémentées.
+static UNSUPPORTED_SPI_ACTIONS: super::ClassReport = super::ClassReport::new("NtUserSystemParametersInfo");
+
+/// Écrit en `pv` les `bytes` d'une structure que l'appelant dit faire `size`
+/// octets (`uiParam`, 0 : pas dit) et dont il a rempli le `cbSize`
+/// (`with_cb_size`) ; FALSE et `ERROR_INVALID_PARAMETER` sinon.
+fn give_parameter(pv: u32, size: u32, bytes: &[u8], with_cb_size: bool) -> NtStatus {
+    let fail = || {
+        let _ = win32k::set_last_error(abi::winerror::ERROR_INVALID_PARAMETER);
+        NtStatus(0)
+    };
+    let length = bytes.len() as u32;
+    if size != 0 && size != length {
+        return fail();
+    }
+    if with_cb_size {
+        let mut cb_size = [0u8; 4];
+        if ke::usermem::copy_from_user(&mut cb_size, u64::from(pv)).is_err() || u32::from_le_bytes(cb_size) != length {
+            return fail();
+        }
+    }
+    NtStatus(u32::from(ke::usermem::copy_to_user(u64::from(pv), bytes).is_ok()))
+}
+
+/// NtUserSystemParametersInfo(uiAction, uiParam, pvParam, fWinIni) : BOOL
+/// (UserSystemParametersInfo).
+/// - SPI_GETNONCLIENTMETRICS : les tailles du cadre et les polices du système
+///   (`win32k::metrics::non_client_metrics`) ; le `cbSize` lu en `pvParam`
+///   doit être la taille de NONCLIENTMETRICSW ;
+/// - SPI_GETICONTITLELOGFONT : la police des titres d'icônes, Tahoma de 8
+///   points, la police par défaut d'une ListView ;
+/// - SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur d'un
+///   rectangle de focus (un UINT en `pvParam`, `uiParam` ignoré), que
+///   DrawFocusRect lit avant ses quatre PatBlt.
+///
+/// FALSE et `ERROR_INVALID_PARAMETER` pour une taille fausse. Une autre
+/// action est journalisée une fois et rend FALSE
+/// (`ERROR_CALL_NOT_IMPLEMENTED`).
+pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
+    let [action, param, pv, _win_ini] = arguments[..4] else { unreachable!("4 arguments") };
+    match action {
+        abi::user::SPI_GETNONCLIENTMETRICS => {
+            let metrics = win32k::metrics::non_client_metrics(&win32k::metrics::Parameters::DEFAULT);
+            give_parameter(pv, param, metrics.as_bytes(), true)
+        }
+        abi::user::SPI_GETICONTITLELOGFONT => {
+            give_parameter(pv, param, win32k::metrics::system_font(400).as_bytes(), false)
+        }
+        abi::user::SPI_GETFOCUSBORDERWIDTH | abi::user::SPI_GETFOCUSBORDERHEIGHT => {
+            let parameters = &win32k::metrics::Parameters::DEFAULT;
+            let value = if action == abi::user::SPI_GETFOCUSBORDERWIDTH {
+                parameters.focus_border_width
+            } else {
+                parameters.focus_border_height
+            };
+            give_parameter(pv, 0, &value.to_le_bytes(), false)
+        }
+        _ => {
+            UNSUPPORTED_SPI_ACTIONS.report(action);
+            let _ = win32k::set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
+            NtStatus(0)
+        }
+    }
 }
 
 /// NtUserCallTwoParam(Param1, Param2, Routine) : la routine `Routine`,

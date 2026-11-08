@@ -533,3 +533,61 @@ pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
         }
     }
 }
+
+/// Le type CTLCOLOR_* de `message`, s'il est l'un des WM_CTLCOLOR*.
+fn ctl_type(message: u32) -> Option<u32> {
+    message.checked_sub(abi::user::WM_CTLCOLORMSGBOX).filter(|&ctl_type| ctl_type < abi::user::CTLCOLOR_MAX)
+}
+
+/// NtUserGetControlColor(hwndParent, hwnd, hdc, CtlMsg) : HBRUSH, le pinceau
+/// du fond du contrôle `hwnd` que donne `hwndParent` (lui-même sans parent)
+/// en réponse à `CtlMsg` (WM_CTLCOLOR*), ou celui par défaut, ses couleurs
+/// posées dans le DC (`win32k::defwnd::get_control_color`). NULL pour une
+/// fenêtre inconnue, un autre message ou sans DC.
+pub(super) fn nt_user_get_control_color(arguments: &[u32]) -> NtStatus {
+    let [parent, hwnd, hdc, message] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return NtStatus(0) };
+    if ctl_type(message).is_none() || hdc == 0 {
+        return NtStatus(0);
+    }
+    let parent = win32k::window::get(parent);
+    NtStatus(win32k::defwnd::get_control_color(parent.as_ref(), &window, hdc, message))
+}
+
+/// NtUserGetControlBrush(hwnd, hdc, ctlType) : HBRUSH, de même avec le parent
+/// de `hwnd` (son propriétaire pour une fenêtre surgissante,
+/// `win32k::defwnd::get_control_brush`) ; `ctlType` est le message
+/// WM_CTLCOLOR*.
+pub(super) fn nt_user_get_control_brush(arguments: &[u32]) -> NtStatus {
+    let [hwnd, hdc, message] = arguments[..3] else { unreachable!("3 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return NtStatus(0) };
+    if ctl_type(message).is_none() || hdc == 0 {
+        return NtStatus(0);
+    }
+    NtStatus(win32k::defwnd::get_control_brush(&window, hdc, message))
+}
+
+/// NtUserInternalGetWindowText(hWnd, lpString, nMaxCount) : INT, le texte de
+/// la fenêtre (ses unités UTF-16). Avec un tampon, au plus `nMaxCount - 1`
+/// unités puis un NUL y vont, et le nombre copié est rendu ; sans tampon, la
+/// longueur du texte. 0 pour une fenêtre inconnue
+/// (`ERROR_INVALID_WINDOW_HANDLE`), un tampon de moins de 2 unités
+/// (`ERROR_INVALID_PARAMETER`) ou qu'on ne peut écrire.
+pub(super) fn nt_user_internal_get_window_text(arguments: &[u32]) -> NtStatus {
+    let [hwnd, buffer, count] = arguments[..3] else { unreachable!("3 arguments") };
+    if buffer != 0 && (count as i32) <= 1 {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    let Some(window) = win32k::window::get(hwnd) else { return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE) };
+    let text = win32k::window::text(&window).unwrap_or_default();
+    if buffer == 0 {
+        return NtStatus(text.len() as u32);
+    }
+    let copied = text.len().min(count as usize - 1);
+    let bytes: Vec<u8> =
+        text[..copied].iter().chain(core::iter::once(&0)).flat_map(|unit| unit.to_le_bytes()).collect();
+    match ke::usermem::copy_to_user(u64::from(buffer), &bytes) {
+        Ok(()) => NtStatus(copied as u32),
+        Err(status) => fail(dos_error(status)),
+    }
+}
