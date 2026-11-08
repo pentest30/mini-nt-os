@@ -215,9 +215,40 @@ jour à chaque commit qui change l'état.
   WM_SYSCOMMAND : SC_MOVE et SC_SIZE (la boucle de DefWndDoSizeMove : capture, WM_ENTERSIZEMOVE, la fenêtre
   placée à chaque mouvement, bornée par WM_GETMINMAXINFO ; relâchement ou Entrée, Échap rend la place ;
   WM_EXITSIZEMOVE), SC_CLOSE (WM_CLOSE), SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE (ShowWindow, qui ne réduit ni
+  n'agrandit encore). Le cadre actif (branche `claude/ncactivate`) : à l'activation, l'ancienne fenêtre
+  active du thread reçoit WM_NCACTIVATE et WM_ACTIVATE inactifs, la nouvelle WM_NCACTIVATE puis WM_ACTIVATE
+  (l'ordre d'XP) ; DefWindowProc de WM_NCACTIVATE tient `WNDS_ACTIVEFRAME` et repeint le cadre
+  (`paint::set_frame_active`), que `nc_paint` peint actif ou inactif. Une fenêtre d'un autre thread (la
+  console de `consrv`, la fenêtre active du thread qui perd le premier plan) ne reçoit pas de messages : le
+  noyau change et peint son cadre lui-même. Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow),
+  WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le titre,
+  WM_ACTIVATEAPP.
   n'agrandit encore). Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow), WM_NCACTIVATE (le cadre reste
   peint inactif), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le
   titre.
+  Les minuteries de USER (branche `claude/win32k-timers`, partie de `main` ; ce que `taskmgr` de la vague
+  `claude/apps-wave` attendait pour relire ses processus chaque seconde) : `win32k::timer` (SetTimer,
+  SetSystemTimer, KillTimer, KillSystemTimer par NtUserCallHwndParam, NtUserValidateTimerCallback ; délai
+  borné comme XP, identifiants sans fenêtre de 32 768 vers 1, une minuterie de fenêtre au thread de sa
+  fenêtre et à son processus seulement) ; le thread d'entrée brute les fait expirer, comme le RIT de ReactOS
+  (attente jusqu'à l'échéance la plus proche, réveil à chaque SetTimer) : `QS_TIMER` et la file réveillée ;
+  PeekMessage fabrique WM_TIMER ou WM_SYSTIMER quand rien d'autre ne sort (un message par minuterie prête).
+  Scénario `timers` (`tests/native/timer1.c`). Pas encore : les minuteries du RIT (curseur, clavier),
+  TMRF_ONESHOT, un rappel de Ps à la fin d'un thread GUI (ses minuteries s'en vont à l'échéance suivante),
+  DestroyWindow (`timer::destroy_window_timers` est prêt).
+  SendMessage entre threads (branche `claude/sent-messages`, par-dessus `claude/win32k-timers`) :
+  `win32k::sent` (les messages envoyés dans la file du destinataire, `QS_SENDMESSAGE`, traités au début de
+  PeekMessage et GetMessage, dans WaitMessage et pendant l'attente d'une réponse ; l'envoyeur regarde toutes les
+  250 ms si le destinataire vit), NtUserMessageCall de types `FNID_SENDMESSAGE`, `FNID_SENDMESSAGEWTOOPTION`
+  (SendMessageTimeout) et `FNID_SENDNOTIFYMESSAGE` ; les envois du noyau vers un autre thread passent par là.
+  La revue de Codex sur #84 : la vie du destinataire regardée toutes les 250 ms quoi qui réveille l'envoyeur,
+  WaitMessage qui traite les messages envoyés pendant l'attente, SendNotifyMessage qui refuse un pointeur
+  (`ERROR_MESSAGE_SYNC_ONLY`).
+  Scénario `send-messages` (`tests/native/send1.c`). Pas encore : InSendMessage, ReplyMessage,
+  SendMessageCallback, les crochets, HWND_BROADCAST, les pointeurs vers un autre processus.
+  taskmgr (essai local `claude/taskmgr-try` : `apps-wave`, les deux branches, SetDialogPointer,
+  `SPI_GETNONCLIENTMETRICS`, glyphes bornés à 2048 × 2048, le bureau du shell à l'écran) relit ses processus, puis
+  plante : la ListView (`SysListView32`) lève une exception à son WM_CREATE, la liste n'existe pas.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)

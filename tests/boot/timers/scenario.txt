@@ -1,0 +1,46 @@
+# USER's timers (win32k::timer; tests/native/timer1.c, MinGW, linked to
+# ReactOS's kernel32 and user32): TIMER1.EXE takes the place of winlogon.exe,
+# takes WinSta0\Default and opens a window. The raw input thread makes the
+# timers expire (QS_TIMER, the thread's queue woken) and PeekMessage makes
+# WM_TIMER for a due timer once nothing else comes out:
+# - a window timer of 100 ms ticks three times, at least 90 ms apart, with
+#   its id in wParam and no procedure; KillTimer stops it;
+# - a thread timer gets the first free id (32768), its WM_TIMER has no
+#   window, SetTimer with that id replaces it, and a window timer of id 0
+#   gives 1;
+# - a timer procedure is called by user32's DispatchMessage, after
+#   NtUserValidateTimerCallback;
+# - a timer due while the thread sleeps shows in GetQueueStatus(QS_TIMER)
+#   (changed and present), and a message posted after it comes out first;
+# - a system timer sends WM_SYSTIMER, which KillSystemTimer
+#   (NtUserCallHwndParam) stops.
+features = test-smss
+requires = userland, native
+initial-command = TIMER1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [timer] ready
+expect = [timer] SetTimer(window, 1, 100): 1
+expect = [timer] window timer: 3 ticks, plain 1, at least 90 ms apart 1
+expect = [timer] KillTimer(window, 1): 1, again: 0
+expect = [timer] WM_TIMER after KillTimer: 0
+expect = [timer] SetTimer(NULL, 0, 50): 32768
+expect = [timer] thread timer: WM_TIMER without a window, id 32768
+expect = [timer] SetTimer(NULL, 32768, 80) again: 32768
+expect = [timer] KillTimer(NULL, 32768): 1
+expect = [timer] SetTimer(window, 0, 1000): 1; KillTimer: 1
+expect = [timer] SetTimer(window, 2, 30, procedure): 2
+expect = [timer] procedure: window ours, message 113, id 2, time set; KillTimer: 1
+expect = [timer] procedure in lParam: 1
+expect = [timer] GetQueueStatus(QS_TIMER) after a sleep: 00100010
+expect = [timer] first out: the posted message
+expect = [timer] SetSystemTimer(window, 7, 30): 7
+expect = [timer] WM_SYSTIMER 7, window ours; KillSystemTimer: 1
+expect = [timer] WM_SYSTIMER after KillSystemTimer: 0
+expect = [timer] done
+expect = exit status 0x00007001
+
+# Any bugcheck ends the run at once.
+forbid = *** STOP:
+forbid = DispatchMessage of a timer's procedure: not yet

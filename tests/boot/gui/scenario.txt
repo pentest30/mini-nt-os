@@ -139,9 +139,9 @@ expect = [gui] HWND_NOTOPMOST: WS_EX_TOPMOST clear, A above B yes
 expect = [gui] SWP_SHOWWINDOW received 4: 0046 0085 0014 0047
 expect = [gui] SWP_SHOWWINDOW: visible 1
 expect = [gui] SWP_HIDEWINDOW: visible 0
-# Shown and activated: WM_ACTIVATE, then WM_SETFOCUS (DefWindowProc's
-# SetFocus); WM_NCACTIVATE is not sent yet.
-expect = [gui] ShowWindow(SW_SHOWNORMAL) received 9: 0018 0046 0006 0007 0085 0014 0047 0005 0003
+# Shown and activated: WM_NCACTIVATE (its frame active), WM_ACTIVATE, then
+# WM_SETFOCUS (DefWindowProc's SetFocus).
+expect = [gui] ShowWindow(SW_SHOWNORMAL) received 10: 0018 0046 0086 0006 0007 0085 0014 0047 0005 0003
 expect = [gui] ShowWindow(SW_SHOWNORMAL): was 0, visible 1, WM_SHOWWINDOW 1, WM_SIZE 952 572, WM_MOVE 50 70
 expect = [gui] ShowWindow(SW_SHOW), visible received 0:
 expect = [gui] ShowWindow(SW_SHOW), visible: was 1
@@ -161,9 +161,11 @@ expect = [gui] created visible: 69 69 1029 669
 expect = [gui] WM_ERASEBKGND of "Visible": a DC, GetClipBox 2: 0 0 952 572; after: 0, PatBlt 0 (6)
 expect = [gui] SWP_FRAMECHANGED under another window received 5: 0046 0083 0085 0014 0047
 expect = [gui] WM_ERASEBKGND under another window: a DC, GetClipBox 3: 0 0 192 72; after: 0, PatBlt 0 (6)
-# The popup activated: WM_ACTIVATE, then the window that had the keyboard
-# loses it (WM_KILLFOCUS) and the popup gets it (WM_SETFOCUS).
-expect = [gui] popup created visible received 13: 0081 0083 0001 0005 0003 0018 0046 0006 0008 0007 0085 0014 0047
+# The popup activated: the window active before goes inactive
+# (WM_NCACTIVATE, WM_ACTIVATE), the popup goes active (WM_NCACTIVATE,
+# WM_ACTIVATE), then the window that had the keyboard loses it
+# (WM_KILLFOCUS) and the popup gets it (WM_SETFOCUS).
+expect = [gui] popup created visible received 16: 0081 0083 0001 0005 0003 0018 0046 0086 0006 0086 0006 0008 0007 0085 0014 0047
 expect = [gui] popup created visible: visible 1, WINDOWPOS flags 1847
 expect = [gui] PeekMessage of WM_PAINT: the popup 1, another window 0, the thread 0, above 0, WM_PAINT 1
 expect = [gui] the message loop received 10: 000f 000f 000f 000f 0085 0014 000f 0085 0014 000f

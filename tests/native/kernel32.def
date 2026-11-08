@@ -22,6 +22,7 @@ GetExitCodeProcess@8
 GetLastError@0
 GetModuleHandleW@4
 GetStdHandle@4
+GetTickCount@0
 InitializeCriticalSection@4
 LoadLibraryW@4
 LeaveCriticalSection@4

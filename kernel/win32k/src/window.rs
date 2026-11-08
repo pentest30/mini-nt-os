@@ -575,14 +575,17 @@ pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
     Ok(result)
 }
 
-/// co_IntSendMessage : `message` à la procédure de `window`, une fenêtre du
-/// thread courant ; rend ce qu'elle rend. Une procédure dans win32k
-/// (DesktopWindowProc) est appelée directement ; une procédure du client
-/// l'est par un rappel, le `CLIENTINFO` du thread désignant la fenêtre.
+/// co_IntSendMessage : `message` à la procédure de `window` ; rend ce
+/// qu'elle rend. Une procédure dans win32k (DesktopWindowProc) est appelée
+/// directement ; une procédure du client l'est par un rappel, le
+/// `CLIENTINFO` du thread désignant la fenêtre. La fenêtre d'un autre thread
+/// reçoit le message par sa file ([`crate::sent::send`]), le thread courant
+/// attendant la réponse.
 ///
 /// # Errors
-/// `STATUS_NOT_IMPLEMENTED` pour une fenêtre d'un autre thread (journalisé
-/// une fois) ; celles du rappel.
+/// `STATUS_NOT_IMPLEMENTED` pour un tampon du noyau vers un autre thread
+/// (journalisé une fois) ; celles du rappel ; un envoi à un autre thread
+/// sans réponse ([`crate::sent::SendError::status`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
@@ -596,11 +599,16 @@ pub fn send_message(window: &Arc<Window>, message: u32, wparam: u32, lparam: LPa
     }
     let thread = crate::convert_current_thread()?;
     if thread.server != window.pti {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        if !REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("win32k: message {message:#x} sent to a window of another thread: not yet");
-        }
-        return Err(STATUS_NOT_IMPLEMENTED);
+        let LParam::Value(value) = lparam else {
+            static REPORTED: AtomicBool = AtomicBool::new(false);
+            if !REPORTED.swap(true, Ordering::Relaxed) {
+                log::warn!("win32k: message {message:#x} with a kernel buffer sent to another thread: not yet");
+            }
+            return Err(STATUS_NOT_IMPLEMENTED);
+        };
+        let target = crate::gui::thread_info_of(window.pti).ok_or(crate::sent::SendError::Gone.status())?;
+        return crate::sent::send(&thread, &target, window.handle, message, wparam, value, None)
+            .map_err(crate::sent::SendError::status);
     }
     drop(thread);
     let state = window.state();
