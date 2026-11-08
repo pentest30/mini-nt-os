@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 115 | 296 |
-| win32k | 96 | 737 |
+| win32k | 99 | 737 |
 
 ## ntoskrnl
 
@@ -711,8 +711,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1188` | `NtUserGetClipboardViewer` | 0 |  |
 | `0x1189` | `NtUserGetClipCursor` | 1 |  |
 | `0x118a` | `NtUserGetComboBoxInfo` | 2 |  |
-| `0x118b` | `NtUserGetControlBrush` | 3 |  |
-| `0x118c` | `NtUserGetControlColor` | 4 |  |
+| `0x118b` | `NtUserGetControlBrush` | 3 | ✅ |
+| `0x118c` | `NtUserGetControlColor` | 4 | ✅ |
 | `0x118d` | `NtUserGetCPD` | 3 |  |
 | `0x118e` | `NtUserGetCursorFrameInfo` | 4 |  |
 | `0x118f` | `NtUserGetCursorInfo` | 1 |  |
@@ -764,7 +764,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11bd` | `NtUserInitialize` | 3 | ✅ |
 | `0x11be` | `NtUserInitializeClientPfnArrays` | 4 | ✅ |
 | `0x11bf` | `NtUserInitTask` | 12 |  |
-| `0x11c0` | `NtUserInternalGetWindowText` | 3 |  |
+| `0x11c0` | `NtUserInternalGetWindowText` | 3 | ✅ |
 | `0x11c1` | `NtUserInvalidateRect` | 3 | ✅ |
 | `0x11c2` | `NtUserInvalidateRgn` | 3 | ✅ |
 | `0x11c3` | `NtUserIsClipboardFormatAvailable` | 1 |  |

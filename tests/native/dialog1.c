@@ -17,7 +17,7 @@
  * - GetWindowLong(DWL_DLGPROC) comes from the DIALOGINFO, DWL_USER from the
  *   extra bytes;
  * - painted, centred on the desktop: its frame, its caption, its OK
- *   button.
+ *   button, its background (WM_CTLCOLORDLG) and the static text.
  * It ends with EXIT_STATUS. Each result goes to the debug port (DbgPrint),
  * where the scenario looks for it.
  *

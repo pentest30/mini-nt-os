@@ -63,6 +63,8 @@ pub const STOCK_BRUSHES: [Brush; stock::NULL_BRUSH + 1] = [
 
 /// Les handles des objets de stock (0 : pas encore créé).
 static STOCK: Once<[u32; stock::COUNT]> = Once::new();
+/// Les pinceaux des couleurs du système (`ahbrSystem`), une fois créés.
+static SYSTEM: Once<[u32; NUM_SYSCOLORS]> = Once::new();
 
 /// Le handle de l'objet de stock `index` ; 0 avant [`init`] ou pour un
 /// objet pas encore créé.
@@ -71,6 +73,15 @@ static STOCK: Once<[u32; stock::COUNT]> = Once::new();
 /// Tout niveau.
 pub fn stock_object(index: usize) -> u32 {
     STOCK.get().and_then(|objects| objects.get(index).copied()).unwrap_or(0)
+}
+
+/// IntGetSysColorBrush : le pinceau public de la couleur du système `index`
+/// (`ahbrSystem`) ; 0 avant [`init`] ou hors de la table.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn sys_color_brush(index: usize) -> u32 {
+    SYSTEM.get().and_then(|brushes| brushes.get(index).copied()).unwrap_or(0)
 }
 
 /// Un pinceau de stock, public.
@@ -99,10 +110,13 @@ pub fn init(colors: &[u32; NUM_SYSCOLORS]) -> Result<(), NtStatus> {
     }
     objects[stock::DEFAULT_BITMAP] = handles::make_stock(super::surface::create_default_bitmap()?)?;
     STOCK.call_once(|| objects);
+    let mut handles = [0; NUM_SYSCOLORS];
     let mut system = [0u8; NUM_SYSCOLORS * 4];
-    for (slot, &color) in system.chunks_exact_mut(4).zip(colors) {
-        slot.copy_from_slice(&create_stock(Brush::solid(ColorRef(color)))?.to_le_bytes());
+    for ((slot, handle), &color) in system.chunks_exact_mut(4).zip(handles.iter_mut()).zip(colors) {
+        *handle = create_stock(Brush::solid(ColorRef(color)))?;
+        slot.copy_from_slice(&handle.to_le_bytes());
     }
+    SYSTEM.call_once(|| handles);
     let section = crate::shared::section().ok_or(STATUS_UNSUCCESSFUL)?;
     let at = u64::from(crate::shared::SERVER_INFO) + offset_of!(ServerInfo32, ahbr_system) as u64;
     section.write_kernel(at, &system)

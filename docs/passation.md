@@ -243,9 +243,14 @@ jour à chaque commit qui change l'état.
   (NtUserCallHwndParam 0x4F, `window::set_dialog_pointer` : le DIALOGINFO de `user32` dans le `WND`, FNID_DIALOG,
   `WNDS_DIALOGWINDOW` ; sans lui, CreateDialog détruit le dialogue qu'il vient de créer) ; le bureau Default que
   le noyau crée pour le shell de session prend l'écran (`startup::take_the_screen`). Scénario `dialog`
-  (`tests/native/dialog1.c`, un modèle en mémoire, sans prendre de bureau). Pas encore : le fond d'un dialogue
-  et la couleur de ses contrôles (NtUserGetControlColor, NtUserGetControlBrush), leurs textes
-  (NtUserInternalGetWindowText).
+  (`tests/native/dialog1.c`, un modèle en mémoire, sans prendre de bureau).
+  Les couleurs et les textes des contrôles (branche `claude/dialog-colors`, par-dessus `claude/dialog-pointer`) :
+  NtUserGetControlColor et NtUserGetControlBrush (`defwnd::get_control_color` : WM_CTLCOLOR* au parent, sinon
+  DefWndControlColor, `default_control_colors`, ses couleurs posées dans le DC par `gdi::dc::set_text_colors`,
+  le pinceau du système de `gdi::brush::sys_color_brush`) ; WM_CTLCOLOR* dans la DefWindowProc du noyau ;
+  NtUserInternalGetWindowText. Le fond d'un dialogue et le texte d'un statique sont peints. Pas encore : le
+  libellé d'un bouton se place mal (NtGdiTransformPoints, NtGdiGetDCObject), NtGdiRectangle, le pinceau gris
+  d'une barre de défilement.
   taskmgr (essai local `claude/taskmgr-try2` : `main`, la ListView #89, #88, ces dialogues) ne plante plus : sa
   fenêtre, ses onglets et la ListView de la page Applications s'affichent sous VirtualBox, et il relit ses
   processus chaque seconde. Pas encore : les menus, SetProp, les barres de défilement, SetWindowLong du style.
