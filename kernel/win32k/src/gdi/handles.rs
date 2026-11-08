@@ -256,6 +256,15 @@ fn publish(handle: u32, entry: &GdiTableEntry32) -> Result<(), NtStatus> {
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
+/// Le nombre d'objets GDI du processus `pid` (GetGuiResources,
+/// GR_GDIOBJECTS) ; les objets de stock ne comptent pas (owner public).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn count_of(pid: u32) -> u32 {
+    TABLE.lock().slots.iter().filter(|slot| slot.object.is_some() && slot.entry.process_id == pid).count() as u32
+}
+
 pub fn insert(object: Object, handle_type: u32, objt: u8, owner: u32) -> Result<u32, NtStatus> {
     let mut table = TABLE.lock();
     let (handle, entry) = table.insert(object, handle_type, objt, owner).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
