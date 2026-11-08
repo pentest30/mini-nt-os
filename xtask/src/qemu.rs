@@ -333,6 +333,10 @@ fn boot_once(
         .stderr(stderr)
         .spawn()
         .map_err(|e| format!("cannot start QEMU: {e}"))?;
+    #[cfg(windows)]
+    if let Err(why) = crate::job::contain(&child) {
+        eprintln!("xtask: QEMU may outlive this run: {why}");
+    }
 
     let start = Instant::now();
     // The `keys` lines already typed, in order.
@@ -350,8 +354,13 @@ fn boot_once(
             typed += 1;
         }
         let log = format!("{earlier}{this_boot}");
+        let ended_from_outside =
+            exited.and_then(|status| outside_end(cfg!(windows), status.code(), &read_lossy(&qemu_log)));
         if until_exit {
             if let Some(why) = scenario.forbidden(&log) {
+                break (false, why);
+            }
+            if let Some(why) = ended_from_outside {
                 break (false, why);
             }
             if exited.is_some() {
@@ -375,6 +384,9 @@ fn boot_once(
             Verdict::Pass => break (true, String::new()),
             Verdict::Fail(why) => break (false, why),
             Verdict::Pending(missing) => {
+                if let Some(why) = ended_from_outside {
+                    break (false, format!("{why}; missing: {}", missing.join("; ")));
+                }
                 if let Some(status) = exited {
                     break (false, format!("QEMU exited ({status}); missing: {}", missing.join("; ")));
                 }
@@ -395,6 +407,20 @@ fn boot_once(
         reason.push_str(qemu_output.trim_end());
     }
     Ok(Outcome { passed, reason, elapsed, serial_log: serial_log.to_path_buf() })
+}
+
+/// Why QEMU ended when another process ended it, `None` otherwise. On a
+/// Windows host (`windows`), TerminateProcess with code 1 (`taskkill /F`,
+/// Rust's `Child::kill`) gives QEMU no time to write anything; QEMU itself
+/// writes its errors to its output before it exits with 1, and its normal ends
+/// (a guest reset under `-no-reboot`, `quit`) exit with 0. Elsewhere the exit
+/// status names the signal already.
+fn outside_end(windows: bool, code: Option<i32>, qemu_output: &str) -> Option<String> {
+    (windows && code == Some(1) && qemu_output.trim().is_empty()).then(|| {
+        "QEMU ended by another process (exit code 1, nothing from QEMU): something on this host ended it, \
+         such as `taskkill /IM qemu-system-x86_64.exe /F` run for another checkout; rerun the scenario"
+            .to_string()
+    })
 }
 
 /// `fsck.vfat -n` on the disk image `image`: `None` without dosfstools,
@@ -430,4 +456,24 @@ fn existing(path: &Path) -> Result<&Path> {
 
 fn io_error(path: &Path) -> impl Fn(std::io::Error) -> String + '_ {
     move |e| format!("{}: {e}", path.display())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outside_end;
+
+    #[test]
+    fn a_silent_exit_with_1_on_windows_is_an_end_from_outside() {
+        assert!(outside_end(true, Some(1), "").is_some());
+        assert!(outside_end(true, Some(1), " \r\n").is_some(), "blanks only");
+    }
+
+    #[test]
+    fn the_ends_of_qemu_itself_are_not_taken_for_one() {
+        let error = "qemu-system-x86_64.exe: -drive file=C:/x.img: Could not open 'C:/x.img'";
+        assert_eq!(outside_end(true, Some(1), error), None, "its own error, written before it exits with 1");
+        assert_eq!(outside_end(true, Some(0), ""), None, "a guest reset under -no-reboot, or quit");
+        assert_eq!(outside_end(true, None, ""), None);
+        assert_eq!(outside_end(false, Some(1), ""), None, "elsewhere, the status names the signal");
+    }
 }
