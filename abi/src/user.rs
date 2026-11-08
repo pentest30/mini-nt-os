@@ -292,6 +292,9 @@ pub const FIRST_USER_HANDLE: u32 = 0x0020;
 /// TYPE_WINDOW: a handle entry of a window (`HANDLE_TYPE`).
 pub const TYPE_WINDOW: u8 = 1;
 
+/// TYPE_MENU: a handle entry of a menu (`HANDLE_TYPE`).
+pub const TYPE_MENU: u8 = 2;
+
 /// FNID_*: the window function identifiers of the system classes; those
 /// up to `FNID_SWITCH` have a server procedure.
 pub const FNID_SCROLLBAR: u32 = 0x029A;

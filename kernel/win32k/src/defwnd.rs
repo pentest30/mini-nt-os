@@ -47,7 +47,7 @@ use abi::ntstatus::NtStatus;
 use abi::user::{
     sm, MinMaxInfo32, WindowPos32, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE,
     SWP_NOSIZE, SWP_STATECHANGED, WM_DEVICECHANGE, WM_MOVE, WM_NCCALCSIZE, WM_NCPAINT, WM_PAINT, WM_PAINTICON, WM_SIZE,
-    WM_USER, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS_HASCAPTION, WNDS_HASHORIZONTALSCROLLBAR,
+    WM_USER, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS_HASCAPTION, WNDS_HASHORIZONTALSCROLLBAR, WNDS_HASMENU,
     WNDS_HASVERTICALSCROOLLBAR, WS_BORDER, WS_CAPTION, WS_CHILD, WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME,
     WS_EX_LAYOUTRTL, WS_EX_LEFTSCROLLBAR, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_HSCROLL,
     WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VSCROLL, WVR_HREDRAW, WVR_VALIDRECTS,
@@ -116,6 +116,7 @@ pub fn nc_calc_size(
     ex_style: u32,
     class_style: u32,
     valid_rects: bool,
+    has_menu: bool,
     rect: Rect,
     m: &impl Fn(usize) -> i32,
 ) -> NcCalcSize {
@@ -151,6 +152,10 @@ pub fn nc_calc_size(
     if style & WS_CAPTION == WS_CAPTION {
         state |= WNDS_HASCAPTION;
         client.top += if ex_style & WS_EX_TOOLWINDOW != 0 { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) };
+    }
+    if has_menu {
+        state |= WNDS_HASMENU;
+        client.top += m(sm::CYMENU);
     }
     if ex_style & WS_EX_CLIENTEDGE != 0 {
         inflate(&mut client, -2 * m(sm::CXBORDER), -2 * m(sm::CYBORDER));
@@ -584,12 +589,21 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             let rect = Rect { left: word(0), top: word(1), right: word(2), bottom: word(3) };
             let state = window.state();
             let class_style = window.class.as_ref().map_or(0, |class| class.info.style);
-            let calc = nc_calc_size(state.style, state.ex_style, class_style, wparam != 0, rect, &metrics::get);
+            let calc = nc_calc_size(
+                state.style,
+                state.ex_style,
+                class_style,
+                wparam != 0,
+                state.menu != 0,
+                rect,
+                &metrics::get,
+            );
             let client = calc.client;
             let words = [client.left, client.top, client.right, client.bottom];
             let bytes: alloc::vec::Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
             copy_to_user(u64::from(lparam), &bytes)?;
-            const NON_CLIENT: u32 = WNDS_HASCAPTION | WNDS_HASVERTICALSCROOLLBAR | WNDS_HASHORIZONTALSCROLLBAR;
+            const NON_CLIENT: u32 =
+                WNDS_HASMENU | WNDS_HASCAPTION | WNDS_HASVERTICALSCROOLLBAR | WNDS_HASHORIZONTALSCROLLBAR;
             crate::window::change(window, |s| s.state = (s.state & !NON_CLIENT) | calc.state);
             Ok(calc.result)
         }
@@ -682,10 +696,11 @@ mod tests {
     #[test]
     fn the_client_area_of_an_overlapped_window() {
         let rect = Rect::new(0, 0, 800, 600);
-        let calc = nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW, false, rect, &metric);
+        let calc = nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW, false, false, rect, &metric);
         assert_eq!(calc.client, Rect::new(4, 24, 796, 596), "4 of border, 20 of caption");
         assert_eq!((calc.result, calc.state), (0, WNDS_HASCAPTION));
-        let valid = nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW | CS_HREDRAW, true, rect, &metric);
+        let valid =
+            nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW | CS_HREDRAW, true, false, rect, &metric);
         assert_eq!(valid.result, WVR_VREDRAW | WVR_HREDRAW | WVR_VALIDRECTS);
     }
 
