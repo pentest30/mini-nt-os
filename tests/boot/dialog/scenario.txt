@@ -1,0 +1,32 @@
+# A dialog from a template (tests/native/dialog1.c, MinGW, linked to
+# ReactOS's kernel32 and user32): DIALOG1.EXE takes the place of
+# winlogon.exe and, like taskmgr as the session shell, takes no desktop
+# itself: its first window gets WinSta0\Default from the kernel, which gives
+# that desktop the screen. CreateDialogIndirectParam makes a centred dialog
+# (DS_SETFONT "MS Shell Dlg" 8, a static text, an OK button); user32 gives
+# it its DIALOGINFO through SetDialogPointer (NtUserCallHwndParam 0x4F) and
+# reads it back from the WND: without it, the dialog is destroyed as soon
+# as made.
+features = test-smss
+requires = userland, native
+initial-command = DIALOG1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [dialog] WM_INITDIALOG, parameter 1234; controls 100 and 1
+expect = [dialog] created 1
+expect = [dialog] DWL_DLGPROC is the procedure 1, DWL_USER 5678
+expect = [dialog] painted
+
+# Centred (DS_CENTER) on the desktop, which has the screen (the boot
+# screen's black without the switch): the dialog's frame, its active
+# caption, its OK button's face. Its client area is not painted yet
+# (NtUserGetControlColor and NtUserGetControlBrush, WM_CTLCOLORDLG), nor the
+# controls' texts (NtUserInternalGetWindowText).
+screen = 100 100 5A7EDC
+screen = 489 400 D4D0C8
+screen = 600 317 43609B
+screen = 737 462 D4D0C8
+
+forbid = *** STOP:
+forbid = did not take the screen

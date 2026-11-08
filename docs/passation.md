@@ -239,9 +239,16 @@ jour à chaque commit qui change l'état.
   (`ERROR_MESSAGE_SYNC_ONLY`).
   Scénario `send-messages` (`tests/native/send1.c`). Pas encore : InSendMessage, ReplyMessage,
   SendMessageCallback, les crochets, HWND_BROADCAST, les pointeurs vers un autre processus.
-  taskmgr (essai local `claude/taskmgr-try` : `apps-wave`, les deux branches, SetDialogPointer,
-  `SPI_GETNONCLIENTMETRICS`, glyphes bornés à 2048 × 2048, le bureau du shell à l'écran) relit ses processus, puis
-  plante : la ListView (`SysListView32`) lève une exception à son WM_CREATE, la liste n'existe pas.
+  Les dialogues et l'écran du shell (branche `claude/dialog-pointer`, partie de `main`) : SetDialogPointer
+  (NtUserCallHwndParam 0x4F, `window::set_dialog_pointer` : le DIALOGINFO de `user32` dans le `WND`, FNID_DIALOG,
+  `WNDS_DIALOGWINDOW` ; sans lui, CreateDialog détruit le dialogue qu'il vient de créer) ; le bureau Default que
+  le noyau crée pour le shell de session prend l'écran (`startup::take_the_screen`). Scénario `dialog`
+  (`tests/native/dialog1.c`, un modèle en mémoire, sans prendre de bureau). Pas encore : le fond d'un dialogue
+  et la couleur de ses contrôles (NtUserGetControlColor, NtUserGetControlBrush), leurs textes
+  (NtUserInternalGetWindowText).
+  taskmgr (essai local `claude/taskmgr-try2` : `main`, la ListView #89, #88, ces dialogues) ne plante plus : sa
+  fenêtre, ses onglets et la ListView de la page Applications s'affichent sous VirtualBox, et il relit ses
+  processus chaque seconde. Pas encore : les menus, SetProp, les barres de défilement, SetWindowLong du style.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)

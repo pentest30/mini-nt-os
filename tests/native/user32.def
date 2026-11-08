@@ -6,6 +6,7 @@ LIBRARY user32.dll
 EXPORTS
 BeginPaint@8
 CreateDesktopW@24
+CreateDialogIndirectParamW@20
 CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
@@ -20,6 +21,7 @@ GetClientRect@8
 GetCursorPos@4
 GetDC@4
 GetDCEx@12
+GetDlgCtrlID@4
 GetFocus@0
 GetKeyboardState@4
 GetKeyState@4
@@ -66,6 +68,7 @@ SetProcessWindowStation@4
 SetSystemTimer@16
 SetThreadDesktop@4
 SetTimer@16
+SetWindowLongW@12
 SetWindowPos@28
 SetWindowTextW@8
 ShowWindow@8

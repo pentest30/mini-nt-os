@@ -1,12 +1,12 @@
 //! Les services des minuteries de USER (`win32k::timer`) : NtUserSetTimer,
 //! NtUserSetSystemTimer, NtUserKillTimer, NtUserCallHwndParam
-//! (KillSystemTimer), NtUserValidateTimerCallback.
+//! (KillSystemTimer, et SetDialogPointer), NtUserValidateTimerCallback.
 //!
 //! Ils rendent une valeur (un identifiant, un BOOL) : un échec rend 0, avec
 //! l'erreur Win32 comme dernière erreur.
 
 use abi::ntstatus::NtStatus;
-use abi::user::HWNDPARAM_ROUTINE_KILLSYSTEMTIMER;
+use abi::user::{HWNDPARAM_ROUTINE_KILLSYSTEMTIMER, HWNDPARAM_ROUTINE_SETDIALOGPOINTER};
 use abi::winerror::{ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_WINDOW_HANDLE};
 use alloc::sync::Arc;
 use win32k::gui::ThreadInfo;
@@ -87,6 +87,14 @@ pub(super) fn nt_user_call_hwnd_param(arguments: &[u32]) -> NtStatus {
     let [hwnd, param, routine] = arguments[..3] else { unreachable!("3 arguments") };
     match routine {
         HWNDPARAM_ROUTINE_KILLSYSTEMTIMER => kill(hwnd, param, true),
+        HWNDPARAM_ROUTINE_SETDIALOGPOINTER => {
+            let Ok(Some(window)) = window_of(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE) };
+            if let Some(process) = ps::ethread::current_thread().map(|thread| thread.process().pid()) {
+                win32k::window::set_dialog_pointer(&window, process, param);
+            }
+            // ReactOS rend 0 : user32 relit le WND.
+            NtStatus(0)
+        }
         _ => {
             UNSUPPORTED_HWND_PARAM_ROUTINES.report(routine);
             fail(ERROR_CALL_NOT_IMPLEMENTED)
