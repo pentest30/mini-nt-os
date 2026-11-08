@@ -54,6 +54,7 @@ pub mod paint;
 pub mod queue;
 pub mod sent;
 pub mod shared;
+pub mod sizemove;
 pub mod startup;
 pub mod timer;
 pub mod window;

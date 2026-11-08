@@ -44,6 +44,7 @@ pub mod locale;
 mod memory;
 mod message;
 mod monitor;
+mod mouse;
 mod object;
 mod port;
 mod process;
@@ -227,6 +228,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCallHwndLock, Handler::Status(window::nt_user_call_hwnd_lock)),
     (services::NtUserCallHwndParam, Handler::Status(timer::nt_user_call_hwnd_param)),
     (services::NtUserCallHwndParamLock, Handler::Status(window::nt_user_call_hwnd_param_lock)),
+    (services::NtUserCallNoParam, Handler::Status(mouse::nt_user_call_no_param)),
     (services::NtUserCallOneParam, Handler::Status(message::nt_user_call_one_param)),
     (services::NtUserCallTwoParam, Handler::Status(user::nt_user_call_two_param)),
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
@@ -248,6 +250,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
     (services::NtUserGetMonitorInfo, Handler::Status(monitor::nt_user_get_monitor_info)),
     (services::NtUserGetProcessWindowStation, Handler::Status(winsta::nt_user_get_process_window_station)),
+    (services::NtUserGetThreadState, Handler::Status(mouse::nt_user_get_thread_state)),
     (services::NtUserGetUpdateRect, Handler::Status(window::nt_user_get_update_rect)),
     (services::NtUserGetUpdateRgn, Handler::Status(window::nt_user_get_update_rgn)),
     (services::NtUserGetWindowDC, Handler::Status(window::nt_user_get_window_dc)),
@@ -271,6 +274,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserRedrawWindow, Handler::Status(window::nt_user_redraw_window)),
     (services::NtUserRegisterClassExWOW, Handler::Status(class::nt_user_register_class_ex_wow)),
     (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
+    (services::NtUserSetCapture, Handler::Status(mouse::nt_user_set_capture)),
     (services::NtUserSetFocus, Handler::Status(input::nt_user_set_focus)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),

@@ -184,12 +184,14 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// pour les bits `Param` (dans `QS_ALLINPUT | QS_ALLPOSTMESSAGE |
 /// QS_SMRESULT`) ; `ONEPARAM_ROUTINE_RELEASEDC` : le DC `Param` retourne au
 /// cache (UserReleaseDC : 1, ou 0 pour un DC qui n'en est pas un pris par
-/// le processus). Une autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`,
-/// journalisée une fois.
+/// le processus) ; `ONEPARAM_ROUTINE_GETCURSORPOS` : la place du curseur
+/// dans le POINT `Param` (`super::mouse::get_cursor_pos`). Une autre rend 0
+/// et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
 pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
     let (param, routine) = (arguments[0], arguments[1]);
     match routine {
         abi::user::ONEPARAM_ROUTINE_RELEASEDC => NtStatus(u32::from(win32k::dce::release_dc(param))),
+        abi::user::ONEPARAM_ROUTINE_GETCURSORPOS => super::mouse::get_cursor_pos(param),
         ONEPARAM_ROUTINE_POSTQUITMESSAGE => {
             queue::post_quit(&current(), param);
             NtStatus(1)
