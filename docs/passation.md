@@ -202,6 +202,16 @@ jour à chaque commit qui change l'état.
   Scénario `timers` (`tests/native/timer1.c`). Pas encore : les minuteries du RIT (curseur, clavier),
   TMRF_ONESHOT, un rappel de Ps à la fin d'un thread GUI (ses minuteries s'en vont à l'échéance suivante),
   DestroyWindow (`timer::destroy_window_timers` est prêt).
+  SendMessage entre threads (branche `claude/sent-messages`, par-dessus `claude/win32k-timers`) :
+  `win32k::sent` (les messages envoyés dans la file du destinataire, `QS_SENDMESSAGE`, traités au début de
+  PeekMessage et GetMessage, dans WaitMessage et pendant l'attente d'une réponse ; l'envoyeur regarde toutes les
+  250 ms si le destinataire vit), NtUserMessageCall de types `FNID_SENDMESSAGE`, `FNID_SENDMESSAGEWTOOPTION`
+  (SendMessageTimeout) et `FNID_SENDNOTIFYMESSAGE` ; les envois du noyau vers un autre thread passent par là.
+  Scénario `send-messages` (`tests/native/send1.c`). Pas encore : InSendMessage, ReplyMessage,
+  SendMessageCallback, les crochets, HWND_BROADCAST, les pointeurs vers un autre processus.
+  taskmgr (essai local `claude/taskmgr-try` : `apps-wave`, les deux branches, SetDialogPointer,
+  `SPI_GETNONCLIENTMETRICS`, glyphes bornés à 2048 × 2048, le bureau du shell à l'écran) relit ses processus, puis
+  plante : la ListView (`SysListView32`) lève une exception à son WM_CREATE, la liste n'existe pas.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)
