@@ -524,6 +524,43 @@ pub(super) fn nt_gdi_create_bitmap(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiCreatePen(iStyle, cjWidth, crColor, hpen) : le stylo du processus
+/// courant (`win32k::gdi::pen::Pen::create`) ; NULL sans place. Les styles
+/// que le moteur ne tient pas encore se dessinent pleins.
+pub(super) fn nt_gdi_create_pen(arguments: &[u32]) -> NtStatus {
+    let [style, width, color, _hpen] = arguments[..4] else { unreachable!("4 arguments") };
+    match win32k::gdi::pen::Pen::create(style, width as i32, color) {
+        Ok(handle) => NtStatus(handle),
+        Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
+    }
+}
+
+/// NtGdiSelectPen(hdc, hpen) : le stylo du DC ; rend l'ancien handle.
+pub(super) fn nt_gdi_select_pen(arguments: &[u32]) -> NtStatus {
+    let [hdc, hpen] = arguments[..2] else { unreachable!("2 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    NtStatus(win32k::gdi::dc::select_pen(&dc, hpen).unwrap_or_else(|| {
+        let _ = win32k::set_last_error(ERROR_INVALID_HANDLE);
+        0
+    }))
+}
+
+/// NtGdiMoveTo(hdc, x, y, pptOut) : la position courante du DC ; rend
+/// l'ancienne en `pptOut` et TRUE, FALSE sans DC.
+pub(super) fn nt_gdi_move_to(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, out] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    NtStatus(u32::from(win32k::gdi::dc::move_to(&dc, x as i32, y as i32, out).is_some()))
+}
+
+/// NtGdiLineTo(hdc, x, y) : le trait de la position courante à `(x, y)`,
+/// du stylo du DC ; TRUE dessiné, FALSE sans DC ou sans où peindre.
+pub(super) fn nt_gdi_line_to(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y] = arguments[..3] else { unreachable!("3 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    NtStatus(u32::from(win32k::gdi::dc::line_to(&dc, x as i32, y as i32)))
+}
+
 /// NtGdiCreatePatternBrushInternal(hbmp, ...) : HBRUSH, le pinceau à motif
 /// du bitmap `hbmp` (`win32k::gdi::brush::create_pattern`), au processus
 /// courant ; NULL sans bitmap ou sans place.

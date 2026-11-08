@@ -67,6 +67,7 @@ pub const fn kernel_data(index: u32) -> u32 {
 pub enum Object {
     Dc(Arc<Dc>),
     Brush(Arc<Brush>),
+    Pen(Arc<super::pen::Pen>),
     Region(Arc<RegionObject>),
     Font(Arc<super::fontobj::FontObject>),
     Bitmap(Arc<super::surface::Surface>),

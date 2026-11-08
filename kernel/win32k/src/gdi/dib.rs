@@ -80,6 +80,11 @@ impl Rect {
         Self { left, top, right, bottom }
     }
 
+    /// `(x, y)` est dedans (bords gauche/haut compris, droit/bas exclus).
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
+
     /// Vide : sans largeur ou sans hauteur.
     pub const fn is_empty(&self) -> bool {
         self.right <= self.left || self.bottom <= self.top
@@ -231,6 +236,58 @@ impl<'a> Bitmap<'a> {
     /// PatBlt avec un motif monochrome de 8 × 8 pixels ([`MonoFill`]) :
     /// `rect`, coupé aux bords de la surface, prend le pixel du motif qui y
     /// tombe par le ROP3 `rop3` ([`rop3_without_source`]).
+    /// Le trait que `pen` trace de `from` à `to` (Bresenham) : plein, ou
+    /// pointillé (un pixel sur deux, l'approximation des motifs de XP
+    /// suffit aux axes) ; PS_NULL ne dessine rien. Une largeur au-delà
+    /// d'un pixel épaissit le trait perpendiculairement à sa direction.
+    /// Chaque pixel reste dans les bornes ([`set_pixel`]).
+    pub fn draw_line(&mut self, from: (i32, i32), to: (i32, i32), pen: &super::pen::Pen, clip: &[Rect]) {
+        use super::pen::{PS_NULL, PS_SOLID};
+        if pen.style == PS_NULL {
+            return;
+        }
+        let (x0, y0, x1, y1) = (from.0, from.1, to.0, to.1);
+        let (dx, dy) = (x1.abs_diff(x0) as i32, -(y1.abs_diff(y0) as i32));
+        let (mut x, mut y) = (x0, y0);
+        let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
+        let mut error = dx + dy;
+        // Le pas des pointillés : un pixel dessiné, un sauté.
+        let dotted = pen.style != PS_SOLID;
+        let mut step = 0u32;
+        // L'épaisseur : autant de reproductions du trait, décalées
+        // perpendiculairement.
+        let thickness = pen.width.max(1);
+        loop {
+            if (!dotted || step.is_multiple_of(2)) && clip.iter().any(|part| part.contains(x, y)) {
+                self.set_line_pixel(x, y, pen.color, thickness, sx, sy);
+            }
+            if x == x1 && y == y1 {
+                break;
+            }
+            let twice = 2 * error;
+            if twice >= dy {
+                error += dy;
+                x += sx;
+            }
+            if twice <= dx {
+                error += dx;
+                y += sy;
+            }
+            step += 1;
+        }
+    }
+
+    /// Le pixel épais d'un trait : `(x, y)` et ses voisins perpendiculaires,
+    /// hors du négatif.
+    fn set_line_pixel(&mut self, x: i32, y: i32, color: ColorRef, thickness: i32, sx: i32, sy: i32) {
+        for at in 0..thickness {
+            let (ox, oy) = (x + sy * at, y - sx * at);
+            if ox >= 0 && oy >= 0 {
+                self.set_pixel(ox as u32, oy as u32, color.0);
+            }
+        }
+    }
+
     pub fn pat_blt_mono(&mut self, rect: Rect, fill: &MonoFill, rop3: u8) {
         let rect = rect.intersect(&self.bounds());
         if rect.is_empty() {

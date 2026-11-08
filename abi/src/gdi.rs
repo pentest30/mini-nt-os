@@ -43,6 +43,7 @@ pub const RESERVE_ENTRIES_COUNT: u32 = 10;
 /// bits 16 to 20 of its handle.
 pub mod objt {
     pub const DC: u8 = 0x01;
+    pub const PEN: u8 = 0x03;
     pub const RGN: u8 = 0x04;
     pub const SURF: u8 = 0x05;
     pub const PAL: u8 = 0x08;
