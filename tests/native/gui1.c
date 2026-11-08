@@ -168,6 +168,7 @@ typedef struct {
 #define WM_SIZE 0x0005
 #define WM_WINDOWPOSCHANGED 0x0047
 #define WM_SHOWWINDOW 0x0018
+#define WM_ACTIVATEAPP 0x001C
 #define WS_VISIBLE 0x10000000
 #define WS_CLIPCHILDREN 0x02000000
 #define WS_BORDER 0x00800000
@@ -383,7 +384,10 @@ static void check_caption_state(void);
 
 static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
 {
-    if (received_count < 32)
+    /* WM_ACTIVATEAPP goes to every top-level window of the thread, and it
+       has several: one of a row is kept. */
+    BOOL repeated = message == WM_ACTIVATEAPP && received_count > 0 && received[received_count - 1] == message;
+    if (received_count < 32 && !repeated)
         received[received_count++] = message;
     if (message == WM_PARENTNOTIFY) {
         notified_w = w;

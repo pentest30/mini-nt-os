@@ -940,6 +940,10 @@ pub const WM_KILLFOCUS: u32 = 0x0008;
 /// WM_NCACTIVATE: the frame of the window goes active (`wParam` TRUE) or
 /// inactive; DefWindowProc paints it again, unless `lParam` is -1.
 pub const WM_NCACTIVATE: u32 = 0x0086;
+/// WM_ACTIVATEAPP: the foreground goes to another thread; each top-level
+/// window of the thread that gains it gets TRUE and the TID of the thread
+/// that loses it, each of the other FALSE and the TID of the gaining one.
+pub const WM_ACTIVATEAPP: u32 = 0x001C;
 pub const WA_INACTIVE: u32 = 0;
 pub const WA_ACTIVE: u32 = 1;
 /// KF_*: the bits of the high word of a keyboard message's `lParam`.

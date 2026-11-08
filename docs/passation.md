@@ -224,13 +224,15 @@ jour à chaque commit qui change l'état.
   active du thread reçoit WM_NCACTIVATE et WM_ACTIVATE inactifs, la nouvelle WM_NCACTIVATE puis WM_ACTIVATE
   (l'ordre d'XP) ; DefWindowProc de WM_NCACTIVATE tient `WNDS_ACTIVEFRAME` et repeint le cadre
   (`paint::set_frame_active`), que `nc_paint` peint actif ou inactif. Une fenêtre d'un autre thread (la
-  console de `consrv`, la fenêtre active du thread qui perd le premier plan) ne reçoit pas de messages : le
-  noyau change et peint son cadre lui-même. Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow),
-  WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le titre,
-  WM_ACTIVATEAPP.
-  n'agrandit encore). Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow), WM_NCACTIVATE (le cadre reste
-  peint inactif), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le
-  titre.
+  console de `consrv`, la fenêtre active du thread qui perd le premier plan) ne reçoit pas encore
+  WM_NCACTIVATE ni WM_ACTIVATE : le noyau change et peint son cadre lui-même. WM_ACTIVATEAPP (branche
+  `claude/activate-app`, `input::send_activate_app`) : quand le premier plan change de thread, chaque fenêtre
+  de premier niveau, visible ou non, du thread qui le perd (FALSE, le TID de l'autre) puis du thread qui le
+  gagne (TRUE, le TID de celui qui l'a perdu, 0 sans lui) le reçoit, avant les messages de la fenêtre
+  activée ; par SendNotifyMessage (`sent::notify_window`) : tout de suite pour les fenêtres du thread courant,
+  par sa file pour un autre thread. Scénario `activate-app` (`tests/native/activate1.c`). Pas encore :
+  WM_CLOSE de DefWindowProc (DestroyWindow), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné
+  enfoncé, le double-clic sur le titre, SetForegroundWindow et SetActiveWindow.
   Les minuteries de USER (branche `claude/win32k-timers`, partie de `main` ; ce que `taskmgr` de la vague
   `claude/apps-wave` attendait pour relire ses processus chaque seconde) : `win32k::timer` (SetTimer,
   SetSystemTimer, KillTimer, KillSystemTimer par NtUserCallHwndParam, NtUserValidateTimerCallback ; délai

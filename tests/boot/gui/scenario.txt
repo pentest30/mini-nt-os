@@ -30,7 +30,9 @@
 # child with its parent (WM_CHILDACTIVATE to an activated child), order
 # windows (top, bottom, after a sibling, topmost) and show or hide them.
 # ShowWindow shows (WM_SHOWWINDOW, SetWindowPos, then the WM_SIZE and WM_MOVE
-# an overlapped window waited for) and hides windows; a child of a hidden
+# an overlapped window waited for; the thread's first activation takes the
+# foreground, so WM_ACTIVATEAPP, to each of its top-level windows, comes
+# before WM_NCACTIVATE) and hides windows; a child of a hidden
 # window only gets WS_VISIBLE; windows created visible are shown, with the
 # command in y for an overlapped window placed by default. A window shown
 # or changed paints its frame (WM_NCPAINT) then erases its client area
@@ -141,7 +143,7 @@ expect = [gui] SWP_SHOWWINDOW: visible 1
 expect = [gui] SWP_HIDEWINDOW: visible 0
 # Shown and activated: WM_NCACTIVATE (its frame active), WM_ACTIVATE, then
 # WM_SETFOCUS (DefWindowProc's SetFocus).
-expect = [gui] ShowWindow(SW_SHOWNORMAL) received 10: 0018 0046 0086 0006 0007 0085 0014 0047 0005 0003
+expect = [gui] ShowWindow(SW_SHOWNORMAL) received 11: 0018 0046 001c 0086 0006 0007 0085 0014 0047 0005 0003
 expect = [gui] ShowWindow(SW_SHOWNORMAL): was 0, visible 1, WM_SHOWWINDOW 1, WM_SIZE 952 572, WM_MOVE 50 70
 expect = [gui] ShowWindow(SW_SHOW), visible received 0:
 expect = [gui] ShowWindow(SW_SHOW), visible: was 1
