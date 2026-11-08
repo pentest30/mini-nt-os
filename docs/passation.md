@@ -192,6 +192,13 @@ jour à chaque commit qui change l'état.
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
   de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
   VirtualBox, rien ne change.
+  La ListView de `comctl32` (branche `claude/listview`, partie de `main`) : `uxtheme` et `winmm` sur le disque
+  (chargements différés de `comctl32` que la fermeture des imports ne voit pas : sans `uxtheme`, le WM_CREATE de
+  la ListView, de l'en-tête, des onglets lève une exception), NtUserBuildHwndList (`window::children` :
+  GetDlgItem, EnumChildWindows, EnumThreadWindows, EnumWindows), NtUserSystemParametersInfo
+  (`SPI_GETNONCLIENTMETRICS`, `SPI_GETICONTITLELOGFONT`), NtGdiRectVisible (`gdi::dc::rect_visible` : l'en-tête ne
+  peignait pas ses éléments). Scénario `listview` (`tests/native/listview1.c`). Pas encore : NtUserSetProp,
+  NtUserSetScrollInfo, NtUserScrollWindowEx, la bordure WS_EX_CLIENTEDGE.
   Les fenêtres et la souris (branche `claude/mouse-windows`) : le thread d'entrée poste un message brut
   (le point à l'écran) à la fenêtre qui a la capture, sinon à celle sous le curseur ; le thread qui le
   retire en fait le message final (`win32k::mouse::finish`, co_IntProcessMouseMessage) : WM_NCHITTEST
@@ -248,9 +255,21 @@ jour à chaque commit qui change l'état.
   NtUserGetControlColor et NtUserGetControlBrush (`defwnd::get_control_color` : WM_CTLCOLOR* au parent, sinon
   DefWndControlColor, `default_control_colors`, ses couleurs posées dans le DC par `gdi::dc::set_text_colors`,
   le pinceau du système de `gdi::brush::sys_color_brush`) ; WM_CTLCOLOR* dans la DefWindowProc du noyau ;
-  NtUserInternalGetWindowText. Le fond d'un dialogue et le texte d'un statique sont peints. Pas encore : le
-  libellé d'un bouton se place mal (NtGdiTransformPoints, NtGdiGetDCObject), NtGdiRectangle, le pinceau gris
-  d'une barre de défilement.
+  NtUserInternalGetWindowText. Le fond d'un dialogue et le texte d'un statique sont peints.
+  Les boutons (branche `claude/dialog-buttons`, par-dessus `claude/dialog-colors`) : les origines de la fenêtre
+  et de la vue du DC (DC_ATTR, la translation MM_TEXT de `gdi::dc::logical_origin`, celle de la vue qu'apporte un
+  lot) appliquées par PatBlt, Rectangle, ExtTextOut, BitBlt, GetAppClipBox, IntersectClipRect : DrawState de
+  `user32` décale la vue pour le libellé d'un bouton, qui se peint centré ; NtGdiTransformPoints (DPtoLP,
+  LPtoDP), NtGdiGetDCObject (GetCurrentObject), NtGdiRectangle (contour noir d'un pixel : pas encore de
+  stylos). Pas encore : les étendues (seul MM_TEXT), les stylos.
+  Les reliefs (branche `claude/button-reliefs`, par-dessus `claude/dialog-buttons` et `claude/listview`) : un
+  PatBlt en lot prend l'origine des attributs du DC, pas le `ptlViewportOrg` du lot, que le PatBlt de `gdi32` ne
+  remplit pas (le relief blanc d'un bouton se perdait) ; NtGdiRectVisible suit l'origine logique ; le pinceau
+  gris (`hbrGray` du `SERVERINFO`, `gdi::brush::gray_brush`), un motif monochrome de 8 × 8 pixels
+  (`Brush::mono`, `dib::Bitmap::pat_blt_mono`, `gdi::dc::Fill` : couleurs du texte et du fond, origine du
+  pinceau), SPI_GETFOCUSBORDERWIDTH et HEIGHT : le rectangle de focus de DrawFocusRect ; le fond d'une barre
+  de défilement en damier quand COLOR_3DHILIGHT est COLOR_WINDOW (`defwnd::control_brush`). Pas encore : le
+  motif du bitmap d'un pinceau à motif d'un client, les pinceaux hachurés.
   taskmgr (essai local `claude/taskmgr-try2` : `main`, la ListView #89, #88, ces dialogues) ne plante plus : sa
   fenêtre, ses onglets et la ListView de la page Applications s'affichent sous VirtualBox, et il relit ses
   processus chaque seconde. Pas encore : les menus, SetProp, les barres de défilement, SetWindowLong du style.
