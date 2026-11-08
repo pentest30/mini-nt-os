@@ -1,0 +1,35 @@
+# WM_ACTIVATEAPP (win32k::input::send_activate_app; tests/native/activate1.c,
+# MinGW, linked to ReactOS's kernel32 and user32): ACTIVATE1.EXE takes the
+# place of winlogon.exe and takes WinSta0\Default. Its main thread A opens A1,
+# a top-level window A2 that it never shows, and a child of A1; then:
+# 1. ShowWindow(A1): A takes the foreground, from no thread (lParam 0);
+#    A1 and A2 get WM_ACTIVATEAPP (TRUE);
+# 2. a thread B opens and shows B1: B1 gets TRUE and A's TID, at once in B;
+#    A1 and A2 get FALSE and B's TID, through A's queue (SendNotifyMessage);
+# 3. SetWindowPos(A1) without SWP_NOACTIVATE: A1, still the active window of
+#    its thread, takes the foreground back; A1 and A2 get TRUE and B's TID,
+#    B1 FALSE and A's TID.
+# The child never gets one, and no WM_ACTIVATEAPP comes beyond the eight.
+features = test-smss
+requires = userland, native
+initial-command = ACTIVATE1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [activate] ready
+expect = [activate] step 1: A1 WM_ACTIVATEAPP 1, other thread none, in thread A
+expect = [activate] step 1: A2 WM_ACTIVATEAPP 1, other thread none, in thread A
+expect = [activate] step 2: B1 WM_ACTIVATEAPP 1, other thread A, in thread B
+expect = [activate] step 2: A1 WM_ACTIVATEAPP 0, other thread B, in thread A
+expect = [activate] step 2: A2 WM_ACTIVATEAPP 0, other thread B, in thread A
+expect = [activate] step 3: A1 WM_ACTIVATEAPP 1, other thread B, in thread A
+expect = [activate] step 3: A2 WM_ACTIVATEAPP 1, other thread B, in thread A
+expect = [activate] step 3: B1 WM_ACTIVATEAPP 0, other thread A, in thread B
+expect = [activate] done: 8 WM_ACTIVATEAPP
+
+forbid = *** STOP:
+forbid = the child WM_ACTIVATEAPP
+forbid = an unknown window WM_ACTIVATEAPP
+forbid = WM_ACTIVATEAPP came
+forbid = B1 missing
+forbid = B has no desktop
