@@ -1,6 +1,6 @@
 # Notes de passation
 
-- **M9 anticipé, lecteur NTFS isolé** (`feature/m9-ntfs-readonly`) : `libs/ntfs`, interface de lecture seule bornée à une partition, validation du secteur de démarrage. Aucun branchement au noyau ou à M6. Suite : enregistrements FILE, attributs et flux fragmentés, tests et limites dans `docs/compat/ntfs.md`.
+- **M9 anticipé, lecteur NTFS isolé** (`feature/m9-ntfs-readonly`) : `libs/ntfs`, interface de lecture seule bornée à une partition, validation du secteur de démarrage. Aucun branchement au noyau ou à M6. FILE et fixups, attributs résidents/non résidents et lecture par numéro MFT (MFT et fichiers fragmentés) sont implémentés ; 7 tests hôte passent. Suite : validation croisée mkntfs, documentation des limites ; aucun parcours de répertoire ni montage noyau à ce stade.
 
 Où en est le travail, ce qui vient ensuite, et comment le reprendre. Ces notes ne font pas foi (les documents 01 à
 06 et `docs/compat/` font foi) ; elles servent à reprendre une session, depuis n'importe quel compte. Les mettre à

@@ -12,7 +12,15 @@
 extern crate alloc;
 
 mod boot;
+mod record;
+mod stream;
+mod volume;
+pub use volume::Volume;
+
+#[cfg(test)]
+mod tests;
 pub use boot::Geometry;
+pub use record::Record;
 
 /// A malformed volume, unsupported feature, or failed device read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,4 +72,8 @@ pub(crate) fn u16_at(data: &[u8], at: usize) -> Result<u16, Error> {
 }
 pub(crate) fn u64_at(data: &[u8], at: usize) -> Result<u64, Error> {
     Ok(u64::from_le_bytes(bytes(data, at, 8)?.try_into().map_err(|_| Error::Bounds)?))
+}
+
+pub(crate) fn u32_at(data: &[u8], at: usize) -> Result<u32, Error> {
+    Ok(u32::from_le_bytes(bytes(data, at, 4)?.try_into().map_err(|_| Error::Bounds)?))
 }
