@@ -36,6 +36,23 @@ fn tahoma_at_8_points_has_xp_s_text_metrics() {
 }
 
 #[test]
+fn huge_ems_give_no_bitmap_but_an_advance() {
+    let Some(file) = read("tahoma.ttf") else { return };
+    let font = Font::parse(&file).expect("Tahoma");
+    let h = font.glyph_index('H').expect("H");
+    // The height a garbage LOGFONT asked (taskmgr, uninitialised
+    // NONCLIENTMETRICS): a bitmap of hundreds of GiB before the bound, a
+    // failed allocation, STOP 0x1E.
+    let em = 2_287_908 * ONE;
+    assert!(font.render(h, em).is_none(), "past MAX_GLYPH_PIXELS");
+    assert!(font.advance(h, em) > 0, "the advance still comes");
+    assert!(font.render(h, i64::from(i32::MAX.unsigned_abs()) * ONE).is_none(), "the largest LOGFONT height");
+    // A large but sane size still renders.
+    let bitmap = font.render(h, 1000 * ONE).expect("H at 1000 px");
+    assert!(bitmap.width * bitmap.height <= glyph::MAX_GLYPH_PIXELS);
+}
+
+#[test]
 fn tahoma_glyphs_have_stems_holes_and_advances() {
     let Some(file) = read("tahoma.ttf") else { return };
     let font = Font::parse(&file).expect("Tahoma");

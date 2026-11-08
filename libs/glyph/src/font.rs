@@ -90,6 +90,9 @@ pub struct Names {
 /// TMPF_FIXED_PITCH: set for a font of variable pitch (the name is the
 /// opposite of its meaning).
 pub const TMPF_VARIABLE_PITCH: u8 = 0x01;
+/// The most pixels a rendered glyph may have (2048 x 2048): a LOGFONT of a
+/// huge height gets no bitmap rather than one the kernel cannot allocate.
+pub const MAX_GLYPH_PIXELS: usize = 1 << 22;
 pub const TMPF_VECTOR: u8 = 0x02;
 pub const TMPF_TRUETYPE: u8 = 0x04;
 pub const FF_ROMAN: u8 = 0x10;
@@ -340,7 +343,8 @@ impl<'a> Font<'a> {
     }
 
     /// `glyph` rendered at an em of `em` pixels (16.16): `None` for a glyph
-    /// without an outline (a space).
+    /// without an outline (a space), or one whose bitmap would pass
+    /// [`MAX_GLYPH_PIXELS`] (a client's LOGFONT can ask any height).
     pub fn render(&self, glyph: u16, em: i64) -> Option<Bitmap> {
         let bounds = self.face.glyph_bounding_box(GlyphId(glyph))?;
         let scale = |units: i16| self.scale(i64::from(units), em);
@@ -348,7 +352,13 @@ impl<'a> Font<'a> {
         let right = ((scale(bounds.x_max) + ONE - 1) >> 16) as i32;
         let top = ((scale(bounds.y_max) + ONE - 1) >> 16) as i32;
         let bottom = (scale(bounds.y_min) >> 16) as i32;
-        let (width, height) = ((right - left).max(1) as usize, (top - bottom).max(1) as usize);
+        let (width, height) = (
+            usize::try_from(i64::from(right) - i64::from(left)).ok()?.max(1),
+            usize::try_from(i64::from(top) - i64::from(bottom)).ok()?.max(1),
+        );
+        if width.checked_mul(height)? > MAX_GLYPH_PIXELS {
+            return None;
+        }
         // Font units to bitmap pixels: scaled, from the bitmap's left and
         // its top, y downwards. The only float work: one factor per glyph.
         let factor = (em as f32) / (self.units_per_em as f32);
