@@ -112,7 +112,8 @@ fn run(call: &Call, dc: Option<&Dc>) {
     match call {
         Call::PatBlt(call) => {
             if let Some(dc) = dc {
-                dc::batched_pat_blt(dc, call.x, call.y, call.width, call.height, call.rop, call.hbrush);
+                let viewport = (call.viewport_org.x, call.viewport_org.y);
+                dc::batched_pat_blt(dc, call.x, call.y, call.width, call.height, call.rop, call.hbrush, viewport);
             }
         }
         Call::SelectClip(mode, rect) => {
@@ -154,6 +155,7 @@ fn run(call: &Call, dc: Option<&Dc>) {
                     string,
                     dx.as_deref(),
                     &attrs,
+                    Some((call.viewport_org.x, call.viewport_org.y)),
                 );
             }
         }
@@ -163,7 +165,18 @@ fn run(call: &Call, dc: Option<&Dc>) {
                 let rect = Rect::new(rect.left, rect.top, rect.right, rect.bottom);
                 let background = ColorRef(call.ul_background_clr);
                 let attrs = TextAttrs { font: 0, color: background, background, bk_mode: 0, align: 0 };
-                text::ext_text_out(&dc.state(), dc::current_pid(), (0, 0), call.options, Some(rect), &[], None, &attrs);
+                let viewport = Some((call.viewport_org.x, call.viewport_org.y));
+                text::ext_text_out(
+                    &dc.state(),
+                    dc::current_pid(),
+                    (0, 0),
+                    call.options,
+                    Some(rect),
+                    &[],
+                    None,
+                    &attrs,
+                    viewport,
+                );
             }
         }
         Call::Other(cmd) => {

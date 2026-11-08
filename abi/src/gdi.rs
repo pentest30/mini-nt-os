@@ -518,6 +518,21 @@ impl GdiBsObject32 {
 }
 
 /// Raster operations of PatBlt (ROP3, with their legacy low word).
+/// GDI_OBJECT_TYPE_*: the kinds of object NtGdiGetDCObject (GetCurrentObject)
+/// asks of a DC.
+pub mod object_type {
+    pub const BITMAP: u32 = 0x0005_0000;
+    pub const PALETTE: u32 = 0x0008_0000;
+    pub const FONT: u32 = 0x000A_0000;
+    pub const BRUSH: u32 = 0x0010_0000;
+    pub const PEN: u32 = 0x0030_0000;
+    pub const EXTPEN: u32 = 0x0050_0000;
+}
+
+/// GdiDpToLp, GdiLpToDp: the directions of NtGdiTransformPoints.
+pub const GDI_DP_TO_LP: u32 = 0;
+pub const GDI_LP_TO_DP: u32 = 1;
+
 pub mod rop {
     /// The brush.
     pub const PATCOPY: u32 = 0x00F0_0021;

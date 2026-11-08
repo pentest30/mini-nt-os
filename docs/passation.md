@@ -248,9 +248,14 @@ jour à chaque commit qui change l'état.
   NtUserGetControlColor et NtUserGetControlBrush (`defwnd::get_control_color` : WM_CTLCOLOR* au parent, sinon
   DefWndControlColor, `default_control_colors`, ses couleurs posées dans le DC par `gdi::dc::set_text_colors`,
   le pinceau du système de `gdi::brush::sys_color_brush`) ; WM_CTLCOLOR* dans la DefWindowProc du noyau ;
-  NtUserInternalGetWindowText. Le fond d'un dialogue et le texte d'un statique sont peints. Pas encore : le
-  libellé d'un bouton se place mal (NtGdiTransformPoints, NtGdiGetDCObject), NtGdiRectangle, le pinceau gris
-  d'une barre de défilement.
+  NtUserInternalGetWindowText. Le fond d'un dialogue et le texte d'un statique sont peints.
+  Les boutons (branche `claude/dialog-buttons`, par-dessus `claude/dialog-colors`) : les origines de la fenêtre
+  et de la vue du DC (DC_ATTR, la translation MM_TEXT de `gdi::dc::logical_origin`, celle de la vue qu'apporte un
+  lot) appliquées par PatBlt, Rectangle, ExtTextOut, BitBlt, GetAppClipBox, IntersectClipRect : DrawState de
+  `user32` décale la vue pour le libellé d'un bouton, qui se peint centré ; NtGdiTransformPoints (DPtoLP,
+  LPtoDP), NtGdiGetDCObject (GetCurrentObject), NtGdiRectangle (contour noir d'un pixel : pas encore de
+  stylos). Pas encore : les étendues (seul MM_TEXT), les stylos, NtGdiRectVisible (#89) sans la translation, le
+  pinceau gris d'une barre de défilement.
   taskmgr (essai local `claude/taskmgr-try2` : `main`, la ListView #89, #88, ces dialogues) ne plante plus : sa
   fenêtre, ses onglets et la ListView de la page Applications s'affichent sous VirtualBox, et il relit ses
   processus chaque seconde. Pas encore : les menus, SetProp, les barres de défilement, SetWindowLong du style.

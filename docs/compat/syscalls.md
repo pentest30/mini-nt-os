@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 115 | 296 |
-| win32k | 99 | 737 |
+| win32k | 102 | 737 |
 
 ## ntoskrnl
 
@@ -484,7 +484,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10a5` | `NtGdiGetColorSpaceforBitmap` | 1 |  |
 | `0x10a6` | `NtGdiGetDCDword` | 3 |  |
 | `0x10a7` | `NtGdiGetDCforBitmap` | 1 |  |
-| `0x10a8` | `NtGdiGetDCObject` | 2 |  |
+| `0x10a8` | `NtGdiGetDCObject` | 2 | ✅ |
 | `0x10a9` | `NtGdiGetDCPoint` | 3 |  |
 | `0x10aa` | `NtGdiGetDeviceCaps` | 2 |  |
 | `0x10ab` | `NtGdiGetDeviceGammaRamp` | 2 |  |
@@ -560,7 +560,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10f1` | `NtGdiPtVisible` | 3 |  |
 | `0x10f2` | `NtGdiQueryFonts` | 3 |  |
 | `0x10f3` | `NtGdiQueryFontAssocInfo` | 1 |  |
-| `0x10f4` | `NtGdiRectangle` | 5 |  |
+| `0x10f4` | `NtGdiRectangle` | 5 | ✅ |
 | `0x10f5` | `NtGdiRectInRegion` | 2 |  |
 | `0x10f6` | `NtGdiRectVisible` | 2 |  |
 | `0x10f7` | `NtGdiRemoveFontResourceW` | 6 |  |
@@ -612,7 +612,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1125` | `NtGdiStrokeAndFillPath` | 1 |  |
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
 | `0x1127` | `NtGdiSwapBuffers` | 1 |  |
-| `0x1128` | `NtGdiTransformPoints` | 5 |  |
+| `0x1128` | `NtGdiTransformPoints` | 5 | ✅ |
 | `0x1129` | `NtGdiTransparentBlt` | 11 |  |
 | `0x112a` | `NtGdiUnloadPrinterDriver` | 2 |  |
 | `0x112b` | `NtGdiUnmapMemFont` | 1 |  |

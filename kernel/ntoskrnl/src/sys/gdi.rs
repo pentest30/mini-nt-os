@@ -65,6 +65,60 @@ pub(super) fn nt_gdi_get_app_clip_box(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiRectangle(hdc, left, top, right, bottom) : BOOL, le rectangle peint
+/// du pinceau du DC, son contour d'un pixel (`win32k::gdi::dc::rectangle`) ;
+/// FALSE et `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus.
+pub(super) fn nt_gdi_rectangle(arguments: &[u32]) -> NtStatus {
+    let [hdc, left, top, right, bottom] = arguments[..5] else { unreachable!("5 arguments") };
+    match win32k::gdi::dc::rectangle(hdc, left as i32, top as i32, right as i32, bottom as i32) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiGetDCObject(hdc, ObjectType) : HANDLE, l'objet du type
+/// GDI_OBJECT_TYPE_* choisi dans le DC (`win32k::gdi::dc::get_dc_object`) ;
+/// NULL et `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus,
+/// `ERROR_INVALID_PARAMETER` pour un type qu'il ne tient pas.
+pub(super) fn nt_gdi_get_dc_object(arguments: &[u32]) -> NtStatus {
+    match win32k::gdi::dc::get_dc_object(arguments[0], arguments[1]) {
+        Ok(handle) => NtStatus(handle),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// Les points qu'une transformation accepte en un appel.
+const MAX_POINTS: u32 = 0x1_0000;
+
+/// NtGdiTransformPoints(hdc, pptIn, pptOut, Count, iMode) : BOOL, les
+/// `Count` points de `pptIn` (GdiDpToLp : du périphérique vers le logique ;
+/// GdiLpToDp : l'inverse) dans `pptOut`, par la translation MM_TEXT des
+/// origines de la vue et de la fenêtre du DC
+/// (`win32k::gdi::dc::logical_offset` ; pas encore les étendues). FALSE pour
+/// un DC qui n'est pas au processus (`ERROR_INVALID_HANDLE`), un autre mode,
+/// un compte nul ou trop grand (`ERROR_INVALID_PARAMETER`), une mémoire
+/// illisible.
+pub(super) fn nt_gdi_transform_points(arguments: &[u32]) -> NtStatus {
+    let [hdc, points_in, points_out, count, mode] = arguments[..5] else { unreachable!("5 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    if !matches!(mode, abi::gdi::GDI_DP_TO_LP | abi::gdi::GDI_LP_TO_DP) || count as i32 <= 0 || count > MAX_POINTS {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let mut points = alloc::vec![0u8; 8 * count as usize];
+    if copy_from_user(&mut points, u64::from(points_in)).is_err() {
+        return NtStatus(0);
+    }
+    let (dx, dy) = win32k::gdi::dc::logical_offset(&dc.state());
+    let (dx, dy) = if mode == abi::gdi::GDI_LP_TO_DP { (dx, dy) } else { (dx.wrapping_neg(), dy.wrapping_neg()) };
+    for point in points.chunks_exact_mut(8) {
+        let x = i32::from_le_bytes([point[0], point[1], point[2], point[3]]).wrapping_add(dx);
+        let y = i32::from_le_bytes([point[4], point[5], point[6], point[7]]).wrapping_add(dy);
+        point[..4].copy_from_slice(&x.to_le_bytes());
+        point[4..].copy_from_slice(&y.to_le_bytes());
+    }
+    NtStatus(u32::from(copy_to_user(u64::from(points_out), &points).is_ok()))
+}
+
 /// Les caractères d'un texte que le noyau accepte en un appel.
 const MAX_TEXT: u32 = 0x1_0000;
 
@@ -238,7 +292,9 @@ pub(super) fn nt_gdi_get_text_extent_ex_w(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_gdi_intersect_clip_rect(arguments: &[u32]) -> NtStatus {
     let [hdc, left, top, right, bottom] = arguments[..5] else { unreachable!("5 arguments") };
     let Some(dc) = win32k::gdi::dc::lock(hdc) else { return NtStatus(ERROR as u32) };
-    let rect = Rect::new(left as i32, top as i32, right as i32, bottom as i32);
+    // A logical rectangle: to the DC's device coordinates.
+    let (dx, dy) = win32k::gdi::dc::logical_offset(&dc.state());
+    let rect = Rect::new(left as i32 + dx, top as i32 + dy, right as i32 + dx, bottom as i32 + dy);
     NtStatus(dc.change(|state| win32k::gdi::dc::select_clip_rect(state, Some(rect), rgn::AND)) as u32)
 }
 
@@ -319,6 +375,7 @@ pub(super) fn nt_gdi_ext_text_out_w(arguments: &[u32]) -> NtStatus {
         &text,
         dx.as_deref(),
         &attrs,
+        None,
     );
     NtStatus(u32::from(done))
 }

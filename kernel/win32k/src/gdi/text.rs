@@ -101,7 +101,9 @@ pub fn text_ops(
 
 /// GreExtTextOutW sur le DC d'état `state`, au processus `pid` : rend vrai
 /// si le texte a été dessiné (un texte vide avec ETO_OPAQUE ne fait que
-/// remplir son rectangle). Faux sans la police installée.
+/// remplir son rectangle). Faux sans la police installée. Ses coordonnées
+/// sont logiques ([`super::dc::logical_origin`]) ; un appel en lot apporte
+/// l'origine de la vue qu'avait le DC (`viewport`).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
@@ -115,6 +117,7 @@ pub fn ext_text_out(
     text: &[u16],
     dx: Option<&[i32]>,
     attrs: &TextAttrs,
+    viewport: Option<(i32, i32)>,
 ) -> bool {
     let ops = if text.is_empty() {
         match (options & eto::OPAQUE != 0, rect) {
@@ -129,7 +132,8 @@ pub fn ext_text_out(
         }
     };
     let rao = state.rao();
-    state.draw(|surface| paint(surface, &ops, state.origin, &rao));
+    let origin = super::dc::logical_origin(state, viewport);
+    state.draw(|surface| paint(surface, &ops, origin, &rao));
     true
 }
 

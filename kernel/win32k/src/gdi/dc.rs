@@ -682,6 +682,95 @@ pub fn paint(state: &DcState, rect: Rect, rop: u32, brush: &Brush) {
     });
 }
 
+/// Les parties d'un Rectangle de (`left`, `top`) à (`right`, `bottom`)
+/// (bords en tout ordre, la droite et le bas exclus) : son intérieur, s'il
+/// en a un, et ses quatre bords d'un pixel (haut, bas, gauche, droite) ;
+/// aucun pour un rectangle vide.
+pub fn rectangle_parts(left: i32, top: i32, right: i32, bottom: i32) -> (Option<Rect>, alloc::vec::Vec<Rect>) {
+    let (left, right) = (left.min(right), left.max(right));
+    let (top, bottom) = (top.min(bottom), top.max(bottom));
+    if right == left || bottom == top {
+        return (None, alloc::vec::Vec::new());
+    }
+    let inside = Rect::new(left + 1, top + 1, right - 1, bottom - 1);
+    let edges = alloc::vec![
+        Rect::new(left, top, right, top + 1),
+        Rect::new(left, bottom - 1, right, bottom),
+        Rect::new(left, top, left + 1, bottom),
+        Rect::new(right - 1, top, right, bottom),
+    ];
+    (Some(inside).filter(|rect| !rect.is_empty()), edges)
+}
+
+/// NtGdiRectangle : sur le DC `hdc`, le rectangle de (`left`, `top`) à
+/// (`right`, `bottom`) ([`rectangle_parts`]) : son intérieur prend le
+/// pinceau du DC, son contour le stylo. Pas encore de stylos : le contour
+/// est d'un pixel, noir (BLACK_PEN, le stylo d'un nouveau DC, et celui de
+/// COLOR_WINDOWFRAME que les boutons de `user32` choisissent). `Err` :
+/// l'erreur de Win32.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn rectangle(hdc: u32, left: i32, top: i32, right: i32, bottom: i32) -> Result<bool, u32> {
+    let dc = lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    let Some((_, attr)) = dc.state().owner else { return Ok(false) };
+    let brush = fill_brush(&dc, attr, None, false).ok().flatten();
+    let state = dc.state();
+    let (dx, dy) = logical_origin(&state, None);
+    let moved = |rect: Rect| Rect::new(rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy);
+    let (inside, edges) = rectangle_parts(left, top, right, bottom);
+    if let (Some(inside), Some(brush)) = (inside, brush) {
+        paint(&state, moved(inside), abi::gdi::rop::PATCOPY, &brush);
+    }
+    let pen = Brush::solid(super::dib::ColorRef(0));
+    for edge in edges {
+        paint(&state, moved(edge), abi::gdi::rop::PATCOPY, &pen);
+    }
+    Ok(true)
+}
+
+/// Ce que NtGdiGetDCObject rend d'un DC dont les attributs ont pour pinceau
+/// `hbrush`, pour stylo `hpen` et pour police `font`, et qui peint dans le
+/// bitmap `bitmap` : l'objet du type `kind` (GDI_OBJECT_TYPE_*), la police
+/// du système pour une police pas encore choisie, le bitmap par défaut pour
+/// un DC de l'écran ; `None` pour un autre type (pas encore de palettes).
+pub fn current_object(kind: u32, hbrush: u32, hpen: u32, font: u32, bitmap: Option<u32>) -> Option<u32> {
+    use abi::gdi::object_type::{BITMAP, BRUSH, EXTPEN, FONT, PEN};
+    match kind {
+        BRUSH => Some(hbrush),
+        PEN | EXTPEN => Some(hpen),
+        FONT if font == 0 => Some(super::brush::stock_object(abi::gdi::stock::SYSTEM_FONT)),
+        FONT => Some(font),
+        BITMAP => Some(bitmap.unwrap_or_else(|| super::brush::stock_object(abi::gdi::stock::DEFAULT_BITMAP))),
+        _ => None,
+    }
+}
+
+/// NtGdiGetDCObject (GetCurrentObject) : l'objet du type `kind` choisi dans
+/// le DC `hdc` ([`current_object`]), lu dans ses attributs chez son
+/// propriétaire. `Err` : l'erreur de Win32.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn get_dc_object(hdc: u32, kind: u32) -> Result<u32, u32> {
+    use abi::winerror::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER};
+    let dc = lock(hdc).ok_or(ERROR_INVALID_HANDLE)?;
+    let state = dc.state();
+    let (_, attr) = state.owner.ok_or(ERROR_INVALID_HANDLE)?;
+    let mut bytes = [0u8; offset_of!(DcAttr32, lfnt_new) + 4];
+    copy_from_user(&mut bytes, u64::from(attr)).map_err(|_| ERROR_INVALID_HANDLE)?;
+    let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let bitmap = state.bitmap.as_ref().map(|selected| selected.handle);
+    current_object(
+        kind,
+        word(offset_of!(DcAttr32, hbrush)),
+        word(offset_of!(DcAttr32, hpen)),
+        word(offset_of!(DcAttr32, lfnt_new)),
+        bitmap,
+    )
+    .ok_or(ERROR_INVALID_PARAMETER)
+}
+
 /// NtGdiPatBlt : sur le DC `hdc`, le rectangle (`x`, `y`, `width`,
 /// `height`) prend son pinceau par `rop`. `Err` : l'erreur de Win32.
 ///
@@ -695,16 +784,17 @@ pub fn pat_blt(hdc: u32, x: i32, y: i32, width: i32, height: i32, rop: u32) -> R
     let Some((_, attr)) = dc.state().owner else { return Ok(false) };
     let Ok(Some(brush)) = fill_brush(&dc, attr, None, false) else { return Ok(false) };
     let state = dc.state();
-    paint(&state, pat_rect(x, y, width, height, state.origin), rop, &brush);
+    paint(&state, pat_rect(x, y, width, height, logical_origin(&state, None)), rop, &brush);
     Ok(true)
 }
 
 /// Un PatBlt mis en lot (GdiBCPatBlt) sur `dc`, avec le pinceau qu'il
-/// apporte (`hbrush`).
+/// apporte (`hbrush`) et l'origine de la vue qu'avait le DC (`viewport`).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
-pub fn batched_pat_blt(dc: &Dc, x: i32, y: i32, width: i32, height: i32, rop: u32, hbrush: u32) {
+#[expect(clippy::too_many_arguments, reason = "the fields of GDIBSPATBLT")]
+pub fn batched_pat_blt(dc: &Dc, x: i32, y: i32, width: i32, height: i32, rop: u32, hbrush: u32, viewport: (i32, i32)) {
     if uses_source(rop) {
         return;
     }
@@ -717,20 +807,65 @@ pub fn batched_pat_blt(dc: &Dc, x: i32, y: i32, width: i32, height: i32, rop: u3
         return;
     };
     let state = dc.state();
-    paint(&state, pat_rect(x, y, width, height, state.origin), rop, &brush);
+    paint(&state, pat_rect(x, y, width, height, logical_origin(&state, Some(viewport))), rop, &brush);
 }
 
 /// GdiGetClipBox : le rectangle qui tient là où le DC peint (`prgnRao`),
-/// depuis l'origine, et sa complexité (NULLREGION, SIMPLEREGION : un seul
-/// rectangle, COMPLEXREGION).
+/// en coordonnées logiques ([`logical_origin`]), et sa complexité
+/// (NULLREGION, SIMPLEREGION : un seul rectangle, COMPLEXREGION).
 pub fn clip_box(state: &DcState) -> (i32, Rect) {
     let rao = state.rao();
     if rao.is_empty() {
         return (rao.complexity(), Rect::default());
     }
     let bounds = rao.bounds();
-    let (dx, dy) = state.origin;
+    let (dx, dy) = logical_origin(state, None);
     (rao.complexity(), Rect::new(bounds.left - dx, bounds.top - dy, bounds.right - dx, bounds.bottom - dy))
+}
+
+/// La translation MM_TEXT des coordonnées logiques d'un DC vers ses
+/// coordonnées de périphérique : l'origine de sa vue (`viewport`) moins
+/// celle de sa fenêtre (`window`), comme les pose SetViewportOrgEx,
+/// OffsetViewportOrgEx, SetWindowOrgEx (DrawState décale la vue pour
+/// dessiner le libellé d'un bouton).
+pub const fn translation(window: (i32, i32), viewport: (i32, i32)) -> (i32, i32) {
+    (viewport.0.wrapping_sub(window.0), viewport.1.wrapping_sub(window.1))
+}
+
+/// Les origines de la fenêtre et de la vue du DC, lues dans ses attributs
+/// chez son propriétaire ; `None` sans attributs ou s'ils sont illisibles.
+fn attr_origins(state: &DcState) -> Option<((i32, i32), (i32, i32))> {
+    let (_, attr) = state.owner?;
+    let point = |field: usize| {
+        let mut bytes = [0u8; 8];
+        copy_from_user(&mut bytes, u64::from(attr) + field as u64).ok()?;
+        let word = |at: usize| i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        Some((word(0), word(4)))
+    };
+    Some((point(offset_of!(DcAttr32, window_org))?, point(offset_of!(DcAttr32, viewport_org))?))
+}
+
+/// Où tombe, à l'écran, le point logique (0, 0) du DC : son origine plus la
+/// translation ([`translation`]) de ses attributs ; un appel en lot apporte
+/// l'origine de la vue qu'il avait (`viewport`). Pas encore les étendues
+/// (seul MM_TEXT, sans mise à l'échelle).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn logical_origin(state: &DcState, viewport: Option<(i32, i32)>) -> (i32, i32) {
+    let (window, attr_viewport) = attr_origins(state).unwrap_or_default();
+    let (dx, dy) = translation(window, viewport.unwrap_or(attr_viewport));
+    (state.origin.0.wrapping_add(dx), state.origin.1.wrapping_add(dy))
+}
+
+/// La translation des coordonnées logiques du DC vers ses coordonnées de
+/// périphérique ([`translation`] de ses attributs).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn logical_offset(state: &DcState) -> (i32, i32) {
+    let (window, viewport) = attr_origins(state).unwrap_or_default();
+    translation(window, viewport)
 }
 
 #[cfg(test)]
@@ -799,6 +934,37 @@ mod tests {
         assert_eq!(pieces.rects().len(), 3);
         state.vis = pieces;
         assert_eq!(clip_box(&state), (SIMPLEREGION, Rect::new(0, 0, 3, 10)), "pieces that fill their bounds");
+    }
+
+    #[test]
+    fn logical_coordinates_move_with_the_viewport_and_against_the_window() {
+        assert_eq!(translation((0, 0), (0, 0)), (0, 0), "a new DC");
+        assert_eq!(translation((0, 0), (12, 4)), (12, 4), "DrawState: OffsetViewportOrgEx");
+        assert_eq!(translation((10, 20), (0, 0)), (-10, -20), "SetWindowOrgEx");
+        assert_eq!(translation((10, 20), (12, 4)), (2, -16));
+    }
+
+    #[test]
+    fn a_rectangle_has_an_inside_and_four_one_pixel_edges() {
+        let (inside, edges) = rectangle_parts(10, 20, 40, 30);
+        assert_eq!(inside, Some(Rect::new(11, 21, 39, 29)));
+        assert_eq!(edges[0], Rect::new(10, 20, 40, 21), "the top");
+        assert_eq!(edges[1], Rect::new(10, 29, 40, 30), "the bottom: the bottom edge excluded");
+        assert_eq!(edges[2], Rect::new(10, 20, 11, 30), "the left");
+        assert_eq!(edges[3], Rect::new(39, 20, 40, 30), "the right");
+        assert_eq!(rectangle_parts(40, 30, 10, 20).0, inside, "edges in any order");
+        assert_eq!(rectangle_parts(10, 20, 12, 30).0, None, "two pixels wide: no inside");
+        assert!(rectangle_parts(10, 20, 10, 30).1.is_empty(), "empty");
+    }
+
+    #[test]
+    fn the_current_objects_of_a_dc() {
+        use abi::gdi::object_type::{BITMAP, BRUSH, FONT, PALETTE, PEN};
+        assert_eq!(current_object(BRUSH, 0x10, 0x20, 0x30, None), Some(0x10));
+        assert_eq!(current_object(PEN, 0x10, 0x20, 0x30, None), Some(0x20));
+        assert_eq!(current_object(FONT, 0x10, 0x20, 0x30, None), Some(0x30));
+        assert_eq!(current_object(BITMAP, 0x10, 0x20, 0x30, Some(0x40)), Some(0x40));
+        assert_eq!(current_object(PALETTE, 0x10, 0x20, 0x30, None), None, "no palettes yet");
     }
 
     /// A DC at (100, 50) that sees (110, 60)-(210, 160).

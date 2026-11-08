@@ -24,12 +24,18 @@ expect = [dialog] painted
 # erases it with the brush of WM_CTLCOLORDLG: NtUserGetControlColor), and
 # the static text in COLOR_WINDOWTEXT (its text through
 # NtUserInternalGetWindowText, its colours through NtUserGetControlBrush).
+# The OK button: its face, the default button's black frame (Rectangle) on
+# its top, and its label centred: user32's DrawState moves the DC's
+# viewport origin (OffsetViewportOrgEx) to the label before DrawText, which
+# the kernel now honours (its stroke at (731, 460); at the button's top
+# left without it).
 screen = 100 100 5A7EDC
 screen = 489 400 D4D0C8
 screen = 600 317 43609B
-screen = 737 462 D4D0C8
 screen = 640 420 D4D0C8
 screen = 528 353 000000
+screen = 713 465 D4D0C8
+screen = 731 460 0D0D0D
 
 forbid = *** STOP:
 forbid = did not take the screen
