@@ -22,13 +22,19 @@
 //! l'état du clavier du thread ([`QueueState::keys`],
 //! UpdateKeyStateFromMsg), que lisent GetKeyState, GetKeyboardState et
 //! TranslateMessage : celui des messages déjà traités, pas celui du
-//! clavier. La file garde aussi la fenêtre active du thread et celle qui a
-//! le clavier (`spwndActive`, `spwndFocus`).
+//! clavier. La file garde aussi la fenêtre active du thread, celle qui a
+//! le clavier et celle qui a la capture de la souris (`spwndActive`,
+//! `spwndFocus`, `spwndCapture`).
 //!
-//! Pas encore : les messages envoyés (SendMessage entre threads), la
-//! souris, WM_TIMER synthétisé, les crochets, le filtre par fenêtre fille
-//! des messages postés (seule la fenêtre nommée), la position du curseur
-//! (`pt` est nul).
+//! Les messages de la souris arrivent bruts, avec les touches : à leur
+//! sortie, le thread en fait les messages finals (`crate::mouse::finish` :
+//! WM_NCHITTEST, l'activation, le double-clic). Un filtre les demande sous
+//! leur forme de la zone cliente, du cadre ou du double-clic.
+//!
+//! Pas encore : les messages envoyés (SendMessage entre threads),
+//! WM_TIMER synthétisé, les crochets, le filtre par fenêtre fille des
+//! messages postés (seule la fenêtre nommée), la position du curseur des
+//! messages postés (`pt` est nul).
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
@@ -39,8 +45,8 @@ use abi::user::vk::{
 };
 use abi::user::{
     Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_MOUSEBUTTON, QS_MOUSEMOVE, QS_PAINT, QS_POSTMESSAGE,
-    WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_QUIT,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK,
+    WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_NC_MOUSE_OFFSET, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// The wake bit of a hardware message: QS_KEY for the keyboard's,
@@ -90,6 +96,28 @@ impl Filter {
         let range = (self.min == 0 && self.max == 0) || (self.min..=self.max).contains(&message.message);
         window && range
     }
+
+    /// Le message brut de la souris `raw` (WM_MOUSEMOVE, ou l'appui ou le
+    /// relâchement d'un bouton, pour la zone cliente) est l'un de ceux
+    /// qu'il demande sous l'une des formes qu'il prendra : celle de la zone
+    /// cliente, celle du cadre (WM_NC*), le double-clic.
+    pub fn matches_mouse(&self, raw: &Msg32) -> bool {
+        let forms = [
+            raw.message,
+            raw.message - WM_NC_MOUSE_OFFSET,
+            raw.message + (WM_LBUTTONDBLCLK - WM_LBUTTONDOWN),
+            raw.message + (WM_LBUTTONDBLCLK - WM_LBUTTONDOWN) - WM_NC_MOUSE_OFFSET,
+        ];
+        let is_down = raw.message != WM_MOUSEMOVE && (raw.message - WM_LBUTTONDOWN).is_multiple_of(3);
+        let count = if is_down { 4 } else { 2 };
+        forms[..count].iter().any(|&message| self.matches(&Msg32 { message, ..*raw }))
+    }
+}
+
+/// Un message brut de la souris, tel que le thread d'entrée le poste :
+/// WM_MOUSEMOVE ou un bouton (pas la molette, déjà finale).
+fn is_raw_mouse(message: &Msg32) -> bool {
+    (WM_MOUSEMOVE..WM_MBUTTONDBLCLK).contains(&message.message)
 }
 
 /// Ce que tient une file.
@@ -103,6 +131,9 @@ pub struct QueueState {
     /// La fenêtre active du thread et celle qui a le clavier (0 : aucune).
     pub active: u32,
     pub focus: u32,
+    /// La fenêtre du thread qui a la capture de la souris (0 : aucune ;
+    /// `crate::mouse::set_capture`).
+    pub capture: u32,
     /// WM_QUIT demandé, avec son code de sortie.
     quit: Option<u32>,
     /// `cPaintsReady` : les fenêtres du thread qui ont à se peindre.
@@ -121,6 +152,7 @@ impl Default for QueueState {
             keys: [0; 256],
             active: 0,
             focus: 0,
+            capture: 0,
             quit: None,
             paints: 0,
             wake: 0,
@@ -273,7 +305,13 @@ impl QueueState {
     /// du clavier du thread en prend compte, puis la touche gauche ou droite
     /// du message devient la touche commune (co_IntProcessKeyboardMessage).
     fn peek_input(&mut self, filter: &Filter, remove: bool) -> Option<Msg32> {
-        let index = self.input.iter().position(|message| filter.matches(message))?;
+        let index = self.input.iter().position(|message| {
+            if is_raw_mouse(message) {
+                filter.matches_mouse(message)
+            } else {
+                filter.matches(message)
+            }
+        })?;
         let mut message = if remove { self.input.remove(index)? } else { self.input[index] };
         // Only a key: a mouse message's `wParam` is MK_* (and the wheel's
         // amount), not a virtual key.
@@ -374,17 +412,28 @@ pub fn post_quit(thread: &ThreadInfo, code: u32) {
 /// PeekMessage : le premier message de la file de `thread` que demande
 /// `filter`, sorti si `remove` ; sinon WM_PAINT pour une de ses fenêtres
 /// qui a à se peindre, s'il en a (il ne sort pas : il revient tant que la
-/// fenêtre n'est pas peinte).
+/// fenêtre n'est pas peinte). Un message brut de la souris en sort final
+/// (`crate::mouse::finish`) ; mangé, le suivant est cherché.
 ///
 /// # IRQL
-/// PASSIVE_LEVEL.
+/// PASSIVE_LEVEL, dans le thread, sans rien tenir (des rappels).
 pub fn peek(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<Msg32> {
-    let ((found, paints), wake, change) = thread.queue.with(|queue| (queue.peek(filter, remove), queue.paints()));
-    thread.mirror_queue_bits(wake, change);
-    if found.is_some() || paints == 0 {
-        return found;
+    loop {
+        let ((found, paints), wake, change) = thread.queue.with(|queue| (queue.peek(filter, remove), queue.paints()));
+        thread.mirror_queue_bits(wake, change);
+        match found {
+            Some(raw) if is_raw_mouse(&raw) => match crate::mouse::finish(thread, raw, remove) {
+                Some(message) => return Some(message),
+                // Eaten (MA_*ANDEAT) or its window gone: out of the queue,
+                // look for the next one. Peeked only, it stays: give it raw.
+                None if remove => continue,
+                None => return Some(raw),
+            },
+            Some(message) => return Some(message),
+            None if paints == 0 => return None,
+            None => return crate::paint::paint_message(thread, filter),
+        }
     }
-    crate::paint::paint_message(thread, filter)
 }
 
 /// MsqIncPaintCountQueue pour `thread`, qui est réveillé.

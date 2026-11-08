@@ -1,0 +1,43 @@
+# Windows and the mouse (MOUSE2.EXE, tests/native/mouse2.c): two framed
+# windows, A (100, 100, 400 x 300, client from (104, 124)) then B (300, 250,
+# 400 x 300), overlap; the screen is 1280x800 and the cursor starts at its
+# centre, (640, 400).
+# 1. A press in A's client area at (150, 150), A not active: WM_MOUSEACTIVATE,
+#    A activated and in front, then WM_LBUTTONDOWN at (46, 26); A takes the
+#    capture.
+# 2. With the capture, the cursor goes to (800, 600), far outside A: the move
+#    and the release still come to A, in A's client coordinates (696, 476);
+#    A gives the capture back (WM_CAPTURECHANGED) and reads the cursor.
+# 3. A press on B's caption at (560, 262), right of A: HTCAPTION (2),
+#    WM_NCLBUTTONDOWN, B activated and in front of A, WM_NCLBUTTONUP.
+# 4. The wheel, to B, ends the program.
+# QEMU's PS/2 queue holds four packets of at most 127 pixels: the longer
+# moves go in several commands (see desktop-click).
+features = test-smss
+requires = userland, native
+initial-command = MOUSE2.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [mouse2] ready => move:-245,-125 move:-245,-125 press:1
+keys = [mouse2] capture A => move:325,225 move:325,225 release
+keys = [mouse2] A lup => move:-120,-169 move:-120,-169 press:1 release
+keys = [mouse2] B nclup hit 2 => wheel:-1
+
+expect = [mouse2] ready
+expect = [mouse2] A activated: active A, focus A
+expect = [mouse2] A ldown 46,26
+expect = [mouse2] capture A
+expect = [mouse2] A captured move 696,476
+expect = [mouse2] A lup 696,476; cursor 800,600; capture none
+expect = [mouse2] A capture changed to none
+expect = [mouse2] B ncldown hit 2
+expect = [mouse2] B activated: active B, focus B
+expect = [mouse2] B nclup hit 2
+expect = [mouse2] wheel at B
+expect = [mouse2] done
+
+# Where A and B overlap, B's client area (COLOR_BTNFACE) is in front again.
+screen = 450 300 D4D0C8
+
+forbid = *** STOP:

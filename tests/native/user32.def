@@ -12,11 +12,15 @@ DefWindowProcW@16
 DispatchMessageW@4
 DrawTextW@20
 EndPaint@8
+GetActiveWindow@0
 GetAsyncKeyState@4
+GetCapture@0
 GetClassInfoExW@12
 GetClientRect@8
+GetCursorPos@4
 GetDC@4
 GetDCEx@12
+GetFocus@0
 GetKeyboardState@4
 GetKeyState@4
 GetMessageW@16
@@ -48,7 +52,9 @@ PostQuitMessage@4
 RedrawWindow@16
 RegisterClassExW@4
 RegisterLogonProcess@8
+ReleaseCapture@0
 ReleaseDC@8
+SetCapture@4
 SetFocus@4
 SetProcessWindowStation@4
 SetThreadDesktop@4
