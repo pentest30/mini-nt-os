@@ -33,6 +33,7 @@ expect = [smoke] sys: system services from user mode:
 expect = [smoke] Ps: a thread that ends before its creator resumes is reaped
 expect = [smoke] Ps: suspended threads: created suspended, suspended and resumed, up to the limit, ended while suspended
 expect = [smoke] sys: the loader's services: NtQuerySystemInformation(SystemBasicInformation, SystemProcessorInformation), NtProtectVirtualMemory, NtQueryVirtualMemory
+expect = [smoke] Io: the installer's engine holds back a thread's termination
 expect = [smoke] Cm: a mounted hive read from user mode: NtOpenKey, NtQueryValueKey, NtEnumerateKey, NtQueryKey, NtEnumerateValueKey
 expect = [smoke] Ob: object directories and links from user mode: NtCreateDirectoryObject, NtOpenDirectoryObject, NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject, NtQuerySymbolicLinkObject
 expect = [smoke] Ex: events from user mode: NtCreateEvent, NtOpenEvent, NtSetEvent, NtResetEvent, NtClearEvent, NtPulseEvent, NtQueryEvent; waits: NtWaitForSingleObject, NtWaitForMultipleObjects, one woken by the kernel

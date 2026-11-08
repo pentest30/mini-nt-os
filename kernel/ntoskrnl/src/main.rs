@@ -368,6 +368,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_directory_self_test();
     file_self_test();
     file_write_self_test();
+    install_lock_self_test();
     #[cfg(feature = "test-install")]
     install_prepare_self_test();
     section_service_self_test();
@@ -7106,6 +7107,76 @@ fn resolution_self_test() {
         );
     });
     log::info!("[resolution] {}x{}, the desktop repainted: {painted}", mode.width, mode.height);
+}
+
+/// Checks that the installer's engine finishes its work before the end of
+/// its thread (`io::install::run_exclusive`): a normal kernel APC — what
+/// NtTerminateProcess and NtTerminateThread queue — queued to the boot thread
+/// while the engine works waits for the end of the work, and runs once the
+/// engine's lock is given back; a second caller meanwhile gets `Busy`, and the
+/// work's error comes back. Without the critical region, a thread terminated
+/// during the copy left the lock held for good (`installer-ui`, when the probe
+/// of `test-smss` ended SETUP1.EXE in the middle of it).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn install_lock_self_test() {
+    use core::ffi::c_void;
+    use core::ptr::null_mut;
+    use core::sync::atomic::{AtomicU8, Ordering};
+    use io_manager::install::{run_exclusive, PrepareError};
+    use ke::apc::{ke_insert_queue_apc, KApc, NormalRoutine};
+    use ke::dispatcher::{Platform, ProcessorMode, IO_NO_INCREMENT};
+    use ke::sched::KePlatform;
+
+    const NOT_RUN: u8 = 0;
+    const LOCK_FREE: u8 = 1;
+    const LOCK_HELD: u8 = 2;
+    /// What the normal routine saw of the engine's lock.
+    static NORMAL: AtomicU8 = AtomicU8::new(NOT_RUN);
+
+    fn kernel_routine(
+        _: *mut KApc,
+        _: &mut Option<NormalRoutine>,
+        _: &mut *mut c_void,
+        _: &mut *mut c_void,
+        _: &mut *mut c_void,
+    ) {
+    }
+    /// At PASSIVE_LEVEL, where a thread's termination ends it: the engine's
+    /// lock is free if a second piece of work gets it.
+    fn normal_routine(_: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        let free = run_exclusive(|| Ok(())).is_ok();
+        NORMAL.store(if free { LOCK_FREE } else { LOCK_HELD }, Ordering::Relaxed);
+    }
+
+    let me = KePlatform::current_thread();
+    let result = run_exclusive(|| -> Result<(), PrepareError> {
+        let apc = alloc::boxed::Box::leak(alloc::boxed::Box::new(KApc::new(
+            me,
+            kernel_routine,
+            None,
+            Some(NormalRoutine::Kernel(normal_routine)),
+            ProcessorMode::Kernel,
+            null_mut(),
+        )));
+        // SAFETY: the APC is leaked: valid, at a fixed address, for good; the
+        // boot thread is a registered thread, never freed.
+        let queued = unsafe { ke_insert_queue_apc::<KePlatform>(apc, null_mut(), null_mut(), IO_NO_INCREMENT) };
+        assert!(queued);
+        assert_eq!(
+            NORMAL.load(Ordering::Relaxed),
+            NOT_RUN,
+            "a normal kernel APC (a thread's termination) ran in the middle of the installer's engine"
+        );
+        assert_eq!(run_exclusive(|| Ok(())), Err(PrepareError::Busy), "a second caller of the engine");
+        Err(PrepareError::Io)
+    });
+    assert_eq!(result, Err(PrepareError::Io), "the work's result");
+    assert_eq!(NORMAL.load(Ordering::Relaxed), LOCK_FREE, "the APC held back, run once the engine's lock is free");
+    log::info!(
+        "[smoke] Io: the installer's engine holds back a thread's termination (a normal kernel APC) until its work          is done and its lock given back"
+    );
 }
 
 /// `test-install` : les autres scénarios gardent le disque cible vierge

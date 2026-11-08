@@ -1,5 +1,13 @@
 # Notes de passation
 
+- **Le moteur de l'installateur va au bout malgré la fin de son thread** (`claude/install-critical-region`, par-dessus
+  la PR #97) : préparation, formatage et copie passent par `io::install::run_exclusive`, qui tient le verrou exclusif
+  du moteur dans une région critique (`ke_enter_critical_region`) ; la fin du thread (APC noyau normal) attend que le
+  travail soit fini et le verrou rendu. Avant, un thread terminé pendant l'IOCTL de copie sortait au milieu, le
+  verrou pris pour de bon et le volume à moitié écrit. Test : `install_lock_self_test` en phase 1 (scénario `smoke`,
+  marqueur `[smoke] Io: the installer's engine holds back a thread's termination`) ; sans la région, il arrête le
+  système sur son assertion (vérifié par mutation).
+
 - **La sonde de `smss` laisse finir la copie de l'installateur** (`claude/relaxed-lewin-04078b`) : `installer-ui`
   et `installer-finish` ne finissaient plus sur `main`, sur AMD comme sur Intel. La sonde de `test-smss`
   (`ntoskrnl::userland::run_native`) termine son programme 10 s après sa dernière touche, et la copie du système
@@ -12,10 +20,9 @@
   interdit aussi « did not end within 10 s » (sans la correction de la sonde, il y échoue en pleine copie, vérifié
   par mutation, au lieu d'attendre ses 900 s) ; `installer-ui` (47 s, 44 s) et `installer-finish` (125 s, 118 s)
   passent sur AMD et Intel. Au second démarrage d'`installer-finish`, la sonde termine encore `smss` : le système
-  installé n'a pas de touche, c'est la fin attendue. Vu en chemin, à
-  diagnostiquer : le thread de `SETUP1.EXE` terminé pendant l'IOCTL de copie sortait au milieu de la copie (un APC
-  noyau normal), en laissant `PREPARE_LOCK` pris et le volume à moitié écrit ; le moteur devrait tourner dans une
-  région critique (`ke_enter_critical_region`).
+  installé n'a pas de touche, c'est la fin attendue. Vu en chemin : le thread de `SETUP1.EXE` terminé pendant
+  l'IOCTL de copie sortait au milieu de la copie (un APC noyau normal), en laissant `PREPARE_LOCK` pris et le volume
+  à moitié écrit (corrigé : la région critique de l'entrée précédente).
 
 - **M9 NTFS, parcours des répertoires** (`feature/m9-ntfs-paths`) : lecture de `$I30` (INDEX_ROOT, INDEX_ALLOCATION, BITMAP), fixups INDX et parcours borné avec détection des cycles. Comparaison des entrées avec ntfsls sur images mkntfs ; résolution des chemins imbriqués avec références séquencées et `$UpCase`, normalisation bornée et refus des noms ambigus. 19 tests unitaires et comparaison de 162 fichiers par image ntfs-3g (clusters 512/4096/8192) passent. Limites et reprise : `docs/compat/ntfs.md`. Suite : ATTRIBUTE_LIST et extents, puis montage noyau séparé. PR #95.
 
