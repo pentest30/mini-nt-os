@@ -26,8 +26,11 @@
 //! clavier. La file garde aussi la fenêtre active du thread et celle qui a
 //! le clavier (`spwndActive`, `spwndFocus`).
 //!
-//! Pas encore : les messages envoyés (SendMessage entre threads), la
-//! souris, les crochets, le filtre par fenêtre fille
+//! Les messages envoyés par un autre thread (SendMessage, [`crate::sent`])
+//! attendent à part (`QS_SENDMESSAGE`) : PeekMessage, GetMessage et
+//! WaitMessage les traitent d'abord, sans jamais les rendre.
+//!
+//! Pas encore : la souris, les crochets, le filtre par fenêtre fille
 //! des messages postés (seule la fenêtre nommée), la position du curseur
 //! (`pt` est nul).
 
@@ -40,8 +43,8 @@ use abi::user::vk::{
 };
 use abi::user::{
     Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_MOUSEBUTTON, QS_MOUSEMOVE, QS_PAINT, QS_POSTMESSAGE,
-    QS_TIMER, WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_QUIT,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    QS_SENDMESSAGE, QS_TIMER, WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_MOUSEMOVE,
+    WM_NCMOUSEMOVE, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// The wake bit of a hardware message: QS_KEY for the keyboard's,
@@ -99,6 +102,9 @@ pub struct QueueState {
     posted: VecDeque<Msg32>,
     /// Les touches du clavier, dans l'ordre (`HardwareMessagesListHead`).
     input: VecDeque<Msg32>,
+    /// Les messages envoyés par d'autres threads, dans l'ordre
+    /// (`SentMessagesListHead`).
+    sent: VecDeque<Arc<crate::sent::SentMessage>>,
     /// L'état du clavier vu du thread (`afKeyState`).
     pub keys: KeyState,
     /// La fenêtre active du thread et celle qui a le clavier (0 : aucune).
@@ -119,6 +125,7 @@ impl Default for QueueState {
         Self {
             posted: VecDeque::new(),
             input: VecDeque::new(),
+            sent: VecDeque::new(),
             keys: [0; 256],
             active: 0,
             focus: 0,
@@ -178,6 +185,35 @@ impl QueueState {
         }
         let input = QS_KEY | QS_MOUSEMOVE | QS_MOUSEBUTTON;
         self.wake = (self.wake & !input) | self.input.iter().fold(0, |bits, message| bits | input_bit(message));
+        if self.sent.is_empty() {
+            self.wake &= !QS_SENDMESSAGE;
+        } else {
+            self.wake |= QS_SENDMESSAGE;
+        }
+    }
+
+    /// Un message envoyé par un autre thread, après les autres
+    /// (`QS_SENDMESSAGE`).
+    pub fn push_sent(&mut self, sent: Arc<crate::sent::SentMessage>) {
+        self.sent.push_back(sent);
+        self.change |= QS_SENDMESSAGE;
+        self.refresh();
+    }
+
+    /// Le premier message envoyé, sorti de la file.
+    pub fn pop_sent(&mut self) -> Option<Arc<crate::sent::SentMessage>> {
+        let sent = self.sent.pop_front();
+        self.refresh();
+        sent
+    }
+
+    /// Retire `sent`, que son envoyeur n'attend plus ; rend s'il y était
+    /// encore.
+    pub fn remove_sent(&mut self, sent: &Arc<crate::sent::SentMessage>) -> bool {
+        let before = self.sent.len();
+        self.sent.retain(|queued| !Arc::ptr_eq(queued, sent));
+        self.refresh();
+        self.sent.len() != before
     }
 
     /// MsqPostMessage d'un message matériel : `message` à la fin des
@@ -395,6 +431,8 @@ pub fn post_quit(thread: &ThreadInfo, code: u32) {
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn peek(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<Msg32> {
+    // The messages other threads sent come first, and never out.
+    crate::sent::dispatch_all(thread);
     let ((found, paints, timers), wake, change) =
         thread.queue.with(|queue| (queue.peek(filter, remove), queue.paints(), queue.wake & QS_TIMER != 0));
     thread.mirror_queue_bits(wake, change);
@@ -470,7 +508,8 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 
 /// WaitMessage : attend qu'un message arrive dans la file du thread courant
 /// `thread`, s'il n'y en a pas (ni message posté, ni fenêtre à peindre, ni
-/// minuterie prête).
+/// minuterie prête) ; les messages envoyés par d'autres threads sont traités
+/// d'abord.
 ///
 /// # Errors
 /// Le statut d'une attente qui finit autrement.
@@ -478,6 +517,7 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 /// # IRQL
 /// PASSIVE_LEVEL, dans le thread.
 pub fn wait_message(thread: &ThreadInfo) -> Result<(), NtStatus> {
+    crate::sent::dispatch_all(thread);
     let ((), wake, _) = thread.queue.with(|_| ());
     if wake & (QS_POSTMESSAGE | QS_KEY | QS_PAINT | QS_TIMER) != 0 {
         return Ok(());
@@ -615,6 +655,23 @@ mod tests {
         assert_eq!(queue.wake & QS_TIMER, QS_TIMER, "posted messages leave it");
         queue.set_timers_ready(false);
         assert_eq!(queue.status(QS_TIMER), 0);
+    }
+
+    #[test]
+    fn sent_messages_wait_apart_in_order_and_can_be_withdrawn() {
+        let mut queue = QueueState::default();
+        let first = crate::sent::SentMessage::new(0x20, 0x400, 1, 0, false);
+        let second = crate::sent::SentMessage::new(0x20, 0x401, 2, 0, false);
+        queue.push_sent(first.clone());
+        queue.push_sent(second.clone());
+        assert_eq!(queue.status(QS_SENDMESSAGE), 0x0040_0040, "changed and present");
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        assert_eq!(queue.peek(&all, true), None, "never a message GetMessage returns");
+        assert!(queue.remove_sent(&first), "its sender gave up");
+        assert!(!queue.remove_sent(&first), "once");
+        assert_eq!(queue.pop_sent().map(|sent| sent.wparam), Some(2));
+        assert_eq!(queue.wake & QS_SENDMESSAGE, 0, "none left");
+        assert!(queue.pop_sent().is_none());
     }
 
     #[test]

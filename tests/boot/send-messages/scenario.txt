@@ -1,0 +1,42 @@
+# SendMessage between threads (win32k::sent; tests/native/send1.c, MinGW,
+# linked to ReactOS's kernel32 and user32): SEND1.EXE takes the place of
+# winlogon.exe, takes WinSta0\Default, opens window W in its main thread,
+# then starts a worker thread, which opens window V and sends to W. user32
+# goes through NtUserMessageCall (FNID_SENDMESSAGE, FNID_SENDMESSAGEWTOOPTION,
+# FNID_SENDNOTIFYMESSAGE); win32k puts the message among the sent messages of
+# W's thread (QS_SENDMESSAGE), whose GetMessage runs W's procedure without
+# returning the message, and the value goes back to the worker:
+# - W's procedure runs in the main thread: 5 + 10 x 7 = 75;
+# - a pointer to the worker's stack in lParam (one process): written;
+# - nested: while W handles WM_USER + 3, the main thread sends to V; the
+#   worker, waiting for W, runs V's procedure meanwhile: 300 + 4;
+# - SendMessageTimeout of 100 ms to a procedure that sleeps 400 ms: FALSE,
+#   ERROR_TIMEOUT (1460); then one of 5 s: TRUE and 1 + 10 x 2;
+# - SendNotifyMessage: TRUE at once, handled by the main thread;
+# then the worker posts WM_QUIT.
+features = test-smss
+requires = userland, native
+initial-command = SEND1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [send] ready
+expect = [send] worker ready: V created
+expect = [send] W got 401 in the main thread
+expect = [send] SendMessage to the main thread: 75
+expect = [send] through a pointer: 1, written 1234
+expect = [send] V got the nested message in the worker thread
+expect = [send] nested: 304
+expect = [send] SendMessageTimeout of 100 ms: 0, error 1460
+expect = [send] SendMessageTimeout of 5 s: 1, result 21
+expect = [send] SendNotifyMessage: 1
+expect = [send] W got the notification in the main thread
+expect = [send] sent messages out of GetMessage: 0; notified 1
+expect = [send] done
+expect = exit status 0x00007002
+
+# Any bugcheck ends the run at once.
+forbid = *** STOP:
+forbid = SendMessageW Error
+forbid = in the wrong thread
+forbid = the worker has no desktop

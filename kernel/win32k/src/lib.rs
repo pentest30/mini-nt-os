@@ -52,6 +52,7 @@ pub mod mouse;
 pub mod nonclient;
 pub mod paint;
 pub mod queue;
+pub mod sent;
 pub mod shared;
 pub mod startup;
 pub mod timer;

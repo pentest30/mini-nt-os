@@ -300,6 +300,13 @@ pub const FNID_MESSAGEWND: u32 = 0x029F;
 pub const FNID_SWITCH: u32 = 0x02A0;
 pub const FNID_BUTTON: u32 = 0x02A1;
 pub const FNID_GHOST: u32 = 0x02AA;
+/// FNID_SENDMESSAGE, FNID_SENDMESSAGEWTOOPTION, FNID_SENDNOTIFYMESSAGE: the
+/// kinds of NtUserMessageCall behind SendMessage, SendMessageTimeout (its
+/// `ResultInfo` a DOSENDMESSAGE) and SendNotifyMessage (read from the pinned
+/// `user32`).
+pub const FNID_SENDMESSAGE: u32 = 0x02B1;
+pub const FNID_SENDMESSAGEWTOOPTION: u32 = 0x02B3;
+pub const FNID_SENDNOTIFYMESSAGE: u32 = 0x02B7;
 /// FNID_DESTROY: set on a window being destroyed.
 pub const FNID_DESTROY: u32 = 0x4000;
 /// The desktop window's class, an integer atom (`WC_DESKTOP`, `#32769`).
@@ -864,6 +871,8 @@ pub const QS_POSTMESSAGE: u16 = 0x0008;
 pub const QS_TIMER: u16 = 0x0010;
 /// QS_PAINT: a window of the thread has something to paint (`cPaintsReady`).
 pub const QS_PAINT: u16 = 0x0020;
+/// QS_SENDMESSAGE: a message sent by another thread waits (SendMessage).
+pub const QS_SENDMESSAGE: u16 = 0x0040;
 pub const QS_ALLPOSTMESSAGE: u16 = 0x0100;
 /// QS_ALLINPUT, QS_SMRESULT: what GetQueueStatus can ask.
 pub const QS_ALLINPUT: u16 = 0x04FF;
