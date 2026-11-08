@@ -299,6 +299,11 @@ pub const FNID_DESKTOP: u32 = 0x029D;
 pub const FNID_MESSAGEWND: u32 = 0x029F;
 pub const FNID_SWITCH: u32 = 0x02A0;
 pub const FNID_BUTTON: u32 = 0x02A1;
+/// FNID_DIALOG: a dialog (SetDialogPointer, DefDlgProc).
+pub const FNID_DIALOG: u32 = 0x02A4;
+/// DLGWINDOWEXTRA: the extra bytes of a dialog's window (the dialog
+/// class's), the least SetDialogPointer accepts.
+pub const DLGWINDOWEXTRA: u32 = 30;
 pub const FNID_GHOST: u32 = 0x02AA;
 /// FNID_SENDMESSAGE, FNID_SENDMESSAGEWTOOPTION, FNID_SENDNOTIFYMESSAGE: the
 /// kinds of NtUserMessageCall behind SendMessage, SendMessageTimeout (its
@@ -364,6 +369,8 @@ pub const WNDS_SENDERASEBACKGROUND: u32 = 0x0000_0200;
 pub const WNDS_ERASEBACKGROUND: u32 = 0x0000_0400;
 /// WNDS_SERVERSIDEWINDOWPROC: its window procedure runs in win32k.
 pub const WNDS_SERVERSIDEWINDOWPROC: u32 = 0x0004_0000;
+/// WNDS_DIALOGWINDOW: a dialog, its DIALOGINFO in `DialogPointer`.
+pub const WNDS_DIALOGWINDOW: u32 = 0x0001_0000;
 /// CSF_*, `CLS.CSF_flags`.
 pub const CSF_SERVERSIDEPROC: u32 = 0x0001;
 pub const CSF_SYSTEMCLASS: u32 = 0x0008;
@@ -446,6 +453,9 @@ pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
 /// HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: the routine of NtUserCallHwndParam
 /// behind KillSystemTimer (read from the pinned `user32`).
 pub const HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: u32 = 0x4E;
+/// HWNDPARAM_ROUTINE_SETDIALOGPOINTER: the routine behind `user32`'s
+/// SETDLGINFO, which gives a dialog its DIALOGINFO (the next one).
+pub const HWNDPARAM_ROUTINE_SETDIALOGPOINTER: u32 = 0x4F;
 /// FNID_DEFWINDOWPROC: NtUserMessageCall's DefWindowProc.
 pub const FNID_DEFWINDOWPROC: u32 = 0x029E;
 /// WM_USER: the first message of an application.

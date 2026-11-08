@@ -53,16 +53,17 @@ use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
     Rect32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
-    FNID_BUTTON, FNID_DESKTOP, FNID_GHOST, GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC,
-    GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
-    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED,
-    TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO,
-    WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT,
-    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR,
-    WNDS_ANSIWINDOWPROC, WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED,
-    WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR,
-    WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+    DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, GWLP_HINSTANCE, GWLP_HWNDPARENT,
+    GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE,
+    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION,
+    STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4,
+    WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY,
+    WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
+    WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW,
+    WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
+    WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE,
+    WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_TLW_WITH_WSCHILD,
@@ -115,6 +116,9 @@ pub struct WindowState {
     pub painting: Rect,
     /// La valeur de l'application (`dwUserData`, GWLP_USERDATA).
     pub user_data: u32,
+    /// Le DIALOGINFO de `user32` d'un dialogue (`DialogPointer`,
+    /// SetDialogPointer), une adresse du client.
+    pub dialog_pointer: u32,
 }
 
 impl WindowState {
@@ -282,8 +286,43 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
         // region, which is all user32 asks (GetUpdateRect, UpdateWindow).
         hrgn_update: if state.update.is_empty() { 0 } else { HRGN_WINDOW },
         user_data: state.user_data,
+        dialog_pointer: state.dialog_pointer,
         ..Wnd32::default()
     }
+}
+
+/// SetDialogPointer (HWNDPARAM_ROUTINE_SETDIALOGPOINTER) : le DIALOGINFO
+/// `pointer` de `user32` pour `window`, que `user32` relit dans son `WND`
+/// (GETDLGINFO) ; sans lui, CreateDialog détruit le dialogue qu'il vient de
+/// créer. Non nul, la fenêtre devient un dialogue (`WNDS_DIALOGWINDOW`, et
+/// FNID_DIALOG si elle n'a pas de FNID) ; nul, elle cesse de l'être et sa
+/// FNID se marque détruite. Rien, comme ReactOS, pour une fenêtre d'un
+/// autre processus que `process`, à procédure dans win32k, ou de moins de
+/// DLGWINDOWEXTRA octets de plus ; rend si elle a changé.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_dialog_pointer(window: &Window, process: u32, pointer: u32) -> bool {
+    let extra = window.wnd_size - size_of::<Wnd32>() as u32;
+    if crate::gui::process_id_of(window.pti) != Some(process)
+        || extra < DLGWINDOWEXTRA
+        || window.state().state & WNDS_SERVERSIDEWINDOWPROC != 0
+    {
+        return false;
+    }
+    update(window, |state| {
+        state.dialog_pointer = pointer;
+        if pointer != 0 {
+            if state.fnid == 0 {
+                state.fnid = FNID_DIALOG;
+            }
+            state.state |= WNDS_DIALOGWINDOW;
+        } else {
+            state.fnid |= FNID_DESTROY;
+            state.state &= !WNDS_DIALOGWINDOW;
+        }
+    });
+    true
 }
 
 /// Réécrit le `WND` de `window`.

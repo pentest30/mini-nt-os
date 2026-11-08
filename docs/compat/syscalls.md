@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 106 | 296 |
-| win32k | 92 | 737 |
+| ntoskrnl | 115 | 296 |
+| win32k | 96 | 737 |
 
 ## ntoskrnl
 
@@ -23,7 +23,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0005` | `NtAccessCheckByTypeResultList` | 11 |  |
 | `0x0006` | `NtAccessCheckByTypeResultListAndAuditAlarm` | 16 |  |
 | `0x0007` | `NtAccessCheckByTypeResultListAndAuditAlarmByHandle` | 17 |  |
-| `0x0008` | `NtAddAtom` | 3 |  |
+| `0x0008` | `NtAddAtom` | 3 | ✅ |
 | `0x0009` | `NtAddBootEntry` | 2 |  |
 | `0x000a` | `NtAddDriverEntry` | 2 |  |
 | `0x000b` | `NtAdjustGroupsToken` | 6 |  |
@@ -60,7 +60,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x002a` | `NtCreateJobSet` | 3 |  |
 | `0x002b` | `NtCreateKey` | 7 | ✅ |
 | `0x002c` | `NtCreateMailslotFile` | 8 |  |
-| `0x002d` | `NtCreateMutant` | 4 |  |
+| `0x002d` | `NtCreateMutant` | 4 | ✅ |
 | `0x002e` | `NtCreateNamedPipeFile` | 14 |  |
 | `0x002f` | `NtCreatePagingFile` | 4 |  |
 | `0x0030` | `NtCreatePort` | 5 | ✅ |
@@ -77,7 +77,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x003b` | `NtDebugActiveProcess` | 2 |  |
 | `0x003c` | `NtDebugContinue` | 3 |  |
 | `0x003d` | `NtDelayExecution` | 2 | ✅ |
-| `0x003e` | `NtDeleteAtom` | 1 |  |
+| `0x003e` | `NtDeleteAtom` | 1 | ✅ |
 | `0x003f` | `NtDeleteBootEntry` | 1 |  |
 | `0x0040` | `NtDeleteDriverEntry` | 1 |  |
 | `0x0041` | `NtDeleteFile` | 1 |  |
@@ -95,7 +95,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x004d` | `NtEnumerateValueKey` | 6 | ✅ |
 | `0x004e` | `NtExtendSection` | 2 |  |
 | `0x004f` | `NtFilterToken` | 6 |  |
-| `0x0050` | `NtFindAtom` | 3 |  |
+| `0x0050` | `NtFindAtom` | 3 | ✅ |
 | `0x0051` | `NtFlushBuffersFile` | 2 | ✅ |
 | `0x0052` | `NtFlushInstructionCache` | 3 | ✅ |
 | `0x0053` | `NtFlushKey` | 1 | ✅ |
@@ -111,7 +111,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x005d` | `NtImpersonateAnonymousToken` | 1 |  |
 | `0x005e` | `NtImpersonateClientOfPort` | 2 |  |
 | `0x005f` | `NtImpersonateThread` | 3 | ✅ |
-| `0x0060` | `NtInitializeRegistry` | 1 |  |
+| `0x0060` | `NtInitializeRegistry` | 1 | ✅ |
 | `0x0061` | `NtInitiatePowerAction` | 4 |  |
 | `0x0062` | `NtIsProcessInJob` | 2 |  |
 | `0x0063` | `NtIsSystemResumeAutomatic` | 0 |  |
@@ -141,7 +141,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x007b` | `NtOpenIoCompletion` | 3 |  |
 | `0x007c` | `NtOpenJobObject` | 3 |  |
 | `0x007d` | `NtOpenKey` | 3 | ✅ |
-| `0x007e` | `NtOpenMutant` | 3 |  |
+| `0x007e` | `NtOpenMutant` | 3 | ✅ |
 | `0x007f` | `NtOpenObjectAuditAlarm` | 12 |  |
 | `0x0080` | `NtOpenProcess` | 4 | ✅ |
 | `0x0081` | `NtOpenProcessToken` | 3 | ✅ |
@@ -172,7 +172,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x009a` | `NtQueryEaFile` | 9 |  |
 | `0x009b` | `NtQueryEvent` | 5 | ✅ |
 | `0x009c` | `NtQueryFullAttributesFile` | 2 | ✅ |
-| `0x009d` | `NtQueryInformationAtom` | 5 |  |
+| `0x009d` | `NtQueryInformationAtom` | 5 | ✅ |
 | `0x009e` | `NtQueryInformationFile` | 5 | ✅ |
 | `0x009f` | `NtQueryInformationJobObject` | 5 |  |
 | `0x00a0` | `NtQueryInformationPort` | 5 |  |
@@ -210,8 +210,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00c0` | `NtReadFileScatter` | 9 |  |
 | `0x00c1` | `NtReadRequestData` | 6 |  |
 | `0x00c2` | `NtReadVirtualMemory` | 5 | ✅ |
-| `0x00c3` | `NtRegisterThreadTerminatePort` | 1 |  |
-| `0x00c4` | `NtReleaseMutant` | 2 |  |
+| `0x00c3` | `NtRegisterThreadTerminatePort` | 1 | ✅ |
+| `0x00c4` | `NtReleaseMutant` | 2 | ✅ |
 | `0x00c5` | `NtReleaseSemaphore` | 3 | ✅ |
 | `0x00c6` | `NtRemoveIoCompletion` | 5 |  |
 | `0x00c7` | `NtRemoveProcessDebug` | 2 |  |
@@ -341,7 +341,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1016` | `NtGdiComputeXformCoefficients` | 1 |  |
 | `0x1017` | `NtGdiConsoleTextOut` | 4 |  |
 | `0x1018` | `NtGdiConvertMetafileRect` | 2 |  |
-| `0x1019` | `NtGdiCreateBitmap` | 5 |  |
+| `0x1019` | `NtGdiCreateBitmap` | 5 | ✅ |
 | `0x101a` | `NtGdiCreateClientObj` | 1 |  |
 | `0x101b` | `NtGdiCreateColorSpace` | 1 |  |
 | `0x101c` | `NtGdiCreateColorTransform` | 8 |  |
@@ -355,7 +355,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1024` | `NtGdiCreateHatchBrushInternal` | 3 |  |
 | `0x1025` | `NtGdiCreateMetafileDC` | 1 |  |
 | `0x1026` | `NtGdiCreatePaletteInternal` | 2 |  |
-| `0x1027` | `NtGdiCreatePatternBrushInternal` | 3 |  |
+| `0x1027` | `NtGdiCreatePatternBrushInternal` | 3 | ✅ |
 | `0x1028` | `NtGdiCreatePen` | 4 |  |
 | `0x1029` | `NtGdiCreateRectRgn` | 4 | ✅ |
 | `0x102a` | `NtGdiCreateRoundRectRgn` | 6 |  |
@@ -548,7 +548,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10e5` | `NtGdiMoveTo` | 4 |  |
 | `0x10e6` | `NtGdiOffsetClipRgn` | 3 |  |
 | `0x10e7` | `NtGdiOffsetRgn` | 3 |  |
-| `0x10e8` | `NtGdiOpenDCW` | 7 |  |
+| `0x10e8` | `NtGdiOpenDCW` | 7 | ✅ |
 | `0x10e9` | `NtGdiPatBlt` | 6 | ✅ |
 | `0x10ea` | `NtGdiPolyPatBlt` | 5 |  |
 | `0x10eb` | `NtGdiPathToRegion` | 1 |  |
@@ -699,7 +699,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x117c` | `NtUserGetAncestor` | 2 |  |
 | `0x117d` | `NtUserGetAppImeLevel` | 1 |  |
 | `0x117e` | `NtUserGetAsyncKeyState` | 1 | ✅ |
-| `0x117f` | `NtUserGetAtomName` | 2 |  |
+| `0x117f` | `NtUserGetAtomName` | 2 | ✅ |
 | `0x1180` | `NtUserGetCaretBlinkTime` | 0 |  |
 | `0x1181` | `NtUserGetCaretPos` | 1 |  |
 | `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |

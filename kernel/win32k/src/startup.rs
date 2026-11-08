@@ -161,6 +161,16 @@ pub fn assign_startup_desktop(process: &Arc<Object<EProcess>>, info: &ProcessInf
     }
 }
 
+/// Comme le SwitchDesktop de winlogon : le bureau Default que le noyau vient
+/// de créer pour le shell de session prend l'écran (sa fenêtre montrée et
+/// peinte) ; sans quoi l'écran du démarrage resterait, et les fenêtres du
+/// shell n'y paraîtraient pas.
+fn take_the_screen(desktop: &Arc<Object<Desktop>>, process: &EProcess) {
+    if !crate::desktop::switch_to(desktop, process.session_id()) {
+        log::warn!("win32k: the session shell's desktop did not take the screen");
+    }
+}
+
 /// Le bureau d'une fenêtre sans bureau : le shell de session (taskmgr, la
 /// première application, démarrant comme winlogon) ne crée ni la station
 /// interactive ni son bureau Default — le vrai winlogon le fait avant de
@@ -168,7 +178,7 @@ pub fn assign_startup_desktop(process: &Arc<Object<EProcess>>, info: &ProcessInf
 /// avant sa première fenêtre. Le noyau crée WinSta0 et Default s'il le
 /// faut — sans prendre l'enregistrement du processus de logon, qui reste
 /// au winlogon d'une vraie session — puis le thread les prend, et rend le
-/// bureau.
+/// bureau. Le bureau Default qu'il crée prend l'écran ([`take_the_screen`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le service de création d'une fenêtre, sans rien
@@ -178,6 +188,7 @@ pub fn session_desktop(process: &Arc<Object<EProcess>>) -> Result<Arc<Object<Des
         Some(station) => {
             if crate::desktop::find(&station, "Default").is_none() {
                 let desktop = crate::desktop::create(&station, "Default")?;
+                take_the_screen(&desktop, process);
                 // L'Arc lâché tuerait le bureau que la station garde par un
                 // Weak : il vit pour le reste de la session.
                 core::mem::forget(desktop);
@@ -205,6 +216,7 @@ pub fn session_desktop(process: &Arc<Object<EProcess>>) -> Result<Arc<Object<Des
                 crate::winsta::make_interactive(&station);
             }
             let desktop = crate::desktop::create(&station, "Default")?;
+            take_the_screen(&desktop, process);
             core::mem::forget(desktop);
         }
     }
