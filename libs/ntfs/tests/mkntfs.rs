@@ -36,21 +36,25 @@ fn run(tool: &str, args: &[&str]) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires mkntfs, ntfscp, ntfsls and ntfscat on PATH"]
-fn ntfs3g_files_match_at_two_cluster_sizes() {
+fn ntfs3g_paths_and_large_indexes_match_at_three_cluster_sizes() {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = Scratch(std::env::temp_dir().join(format!("mino-ntfs-{}-{stamp}", std::process::id())));
     fs::create_dir(&dir.0).unwrap();
-    for cluster in ["512", "4096"] {
+    for cluster in ["512", "4096", "8192"] {
         let path = dir.0.join(format!("volume-{cluster}.img"));
         let image = File::create_new(&path).unwrap();
         image.set_len(32 * 1024 * 1024).unwrap();
         drop(image);
         let image_path = path.to_str().unwrap();
         run("mkntfs", &["-F", "-Q", "-s", "512", "-c", cluster, image_path]);
-        let files = [
-            ("small.txt", b"Mino NTFS read-only validation\n".to_vec()),
-            ("large.bin", (0..131_195).map(|n| (n % 251) as u8).collect()),
+        let mut files = vec![
+            ("small.txt".to_string(), b"Mino NTFS read-only validation\n".to_vec()),
+            ("large.bin".to_string(), (0..131_195).map(|n| (n % 251) as u8).collect()),
         ];
+        // Enough names to force a multi-block INDEX_ALLOCATION tree.
+        for i in 0..160 {
+            files.push((format!("entry-{i:03}-long-name.txt"), format!("entry {i}\n").into_bytes()));
+        }
         for (name, expected) in &files {
             let source = dir.0.join(name);
             fs::write(&source, expected).unwrap();

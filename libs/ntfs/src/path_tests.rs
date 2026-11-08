@@ -203,3 +203,54 @@ fn upcase_corruption_is_not_replaced_with_host_casing() {
     put_record(&mut b, 10, &resident(b"bad"), false);
     assert_eq!(Volume::open(b.as_slice()).unwrap().lookup_path("folder"), Err(Error::Invalid("UpCase size")));
 }
+
+#[test]
+fn dangling_children_missing_bitmap_and_duplicate_index_are_refused() {
+    for child in [1, u64::MAX] {
+        let mut b = allocated_image();
+        let mut attrs = named(resident(&root(&[], Some(child))), 0x90);
+        attrs.extend(named(nonresident(&[0x11, 1, 64, 0], 1, 512, 512), 0xa0));
+        attrs.extend(named(resident(&[0xff]), 0xb0));
+        put_record(&mut b, 5, &attrs, true);
+        assert!(Volume::open(b.as_slice()).unwrap().read_directory(5).is_err());
+    }
+    let mut b = allocated_image();
+    let mut attrs = named(resident(&root(&[], Some(0))), 0x90);
+    attrs.extend(named(nonresident(&[0x11, 1, 64, 0], 1, 512, 512), 0xa0));
+    put_record(&mut b, 5, &attrs, true);
+    assert_eq!(Volume::open(b.as_slice()).unwrap().read_directory(5), Err(Error::Invalid("index BITMAP missing")));
+    let mut attrs = named(resident(&root(&[], None)), 0x90);
+    attrs.extend_from_slice(&attrs.clone());
+    put_record(&mut b, 5, &attrs, true);
+    assert_eq!(
+        Volume::open(b.as_slice()).unwrap().read_directory(5),
+        Err(Error::Unsupported("multiple index extents"))
+    );
+}
+
+#[test]
+fn empty_directory_and_deleted_target() {
+    let mut b = image();
+    put_record(&mut b, 6, &named(resident(&root(&[], None)), 0x90), true);
+    let mut v = Volume::open(b.as_slice()).unwrap();
+    assert!(v.read_directory(6).unwrap().is_empty());
+    assert_eq!(v.lookup_path("folder/missing"), Err(Error::NotFound));
+    assert_eq!(v.read_directory(7), Err(Error::Invalid("not a directory")));
+    let mut b = image();
+    p16(&mut b, 2048 + 7 * 1024 + 22, 0);
+    assert_eq!(Volume::open(b.as_slice()).unwrap().lookup_path("folder/été.txt"), Err(Error::NotFound));
+}
+
+#[test]
+fn indx_truncation_and_byte_mutations_never_panic() {
+    let good = indx(node(&[entry(5, 6, "Folder", true)], None));
+    let parent = FileReference { record: 5, sequence: 7 };
+    for end in 0..good.len() {
+        assert!(crate::index::block(&mut good[..end].to_vec(), 0, parent).is_err());
+    }
+    for offset in 0..good.len() {
+        let mut bad = good.clone();
+        bad[offset] ^= 0xff;
+        let _ = crate::index::block(&mut bad, 0, parent);
+    }
+}
