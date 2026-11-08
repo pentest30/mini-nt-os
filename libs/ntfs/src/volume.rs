@@ -3,12 +3,13 @@ use crate::{Error, Geometry, ReadAt, Record};
 use alloc::vec;
 
 /// A read-only NTFS volume. Owns its partition reader and the validated $MFT
-/// mapping. No namespace lookup or directory index traversal is provided yet:
-/// files are addressed by their MFT record number.
+/// mapping. Files can be addressed by MFT record number or a root-relative
+/// path. Directory indexes and the volume-specific $UpCase table are validated.
 pub struct Volume<D> {
-    device: D,
-    geometry: Geometry,
+    pub(crate) device: D,
+    pub(crate) geometry: Geometry,
     mft: Stream,
+    pub(crate) upcase: Option<alloc::vec::Vec<u16>>,
 }
 
 impl<D: ReadAt> Volume<D> {
@@ -28,7 +29,7 @@ impl<D: ReadAt> Volume<D> {
         {
             return Err(Error::Invalid("MFT stream"));
         }
-        let mut volume = Self { device, geometry, mft };
+        let mut volume = Self { device, geometry, mft, upcase: None };
         // Require the mapping to point back to the very record used to bootstrap it.
         let mapped = volume.record(0)?;
         if mapped.raw() != record.raw() {
@@ -78,7 +79,7 @@ impl<D: ReadAt> Volume<D> {
         self.device
     }
 
-    fn file_stream(&mut self, number: u64) -> Result<Stream, Error> {
+    pub(crate) fn file_stream(&mut self, number: u64) -> Result<Stream, Error> {
         let record = self.record(number)?;
         if record.is_directory() {
             return Err(Error::Unsupported("directory data"));

@@ -12,11 +12,16 @@
 extern crate alloc;
 
 mod boot;
+mod index;
+mod namespace;
+pub use index::{DirectoryEntry, FileReference};
 mod record;
 mod stream;
 mod volume;
 pub use volume::Volume;
 
+#[cfg(test)]
+mod path_tests;
 #[cfg(test)]
 mod tests;
 pub use boot::Geometry;

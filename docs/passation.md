@@ -1,6 +1,9 @@
 # Notes de passation
 
-- **M9 anticipé, lecteur NTFS isolé** (`feature/m9-ntfs-readonly`) : `libs/ntfs`, interface de lecture seule bornée à une partition, validation du secteur de démarrage. Aucun branchement au noyau ou à M6. FILE et fixups, attributs résidents/non résidents et lecture par numéro MFT (MFT et fichiers fragmentés) sont implémentés ; Tests hôte de corruption et validation croisée mkntfs/ntfscat (clusters 512 et 4096) ; limites et reprise dans [compat/ntfs.md](compat/ntfs.md). Suite : index de répertoire et recherche par chemin, puis montage noyau dans une PR distincte. PR #94.
+- **M9 NTFS, parcours des répertoires** (`feature/m9-ntfs-paths`) : lecture de `$I30` (INDEX_ROOT, INDEX_ALLOCATION, BITMAP), fixups INDX et parcours borné avec détection des cycles. Comparaison des entrées avec ntfsls sur images mkntfs ; résolution des chemins imbriqués avec références séquencées et `$UpCase`, normalisation bornée et refus des noms ambigus. 19 tests unitaires et comparaison de 162 fichiers par image ntfs-3g (clusters 512/4096/8192) passent. Limites et reprise : `docs/compat/ntfs.md`. Suite : ATTRIBUTE_LIST et extents, puis montage noyau séparé. PR #95.
+
+
+- **M9 anticipé, lecteur NTFS isolé** (`feature/m9-ntfs-readonly`) : `libs/ntfs`, interface de lecture seule bornée à une partition, validation du secteur de démarrage. Aucun branchement au noyau ou à M6. FILE et fixups, attributs résidents/non résidents et lecture par numéro MFT (MFT et fichiers fragmentés) sont implémentés ; Tests hôte de corruption et validation croisée mkntfs/ntfscat (clusters 512 et 4096) ; limites et reprise dans [compat/ntfs.md](compat/ntfs.md). PR #94 fusionnée ; les index et chemins sont traités dans le lot PR #95 ci-dessus, le montage noyau reste séparé.
 
 Où en est le travail, ce qui vient ensuite, et comment le reprendre. Ces notes ne font pas foi (les documents 01 à
 06 et `docs/compat/` font foi) ; elles servent à reprendre une session, depuis n'importe quel compte. Les mettre à
