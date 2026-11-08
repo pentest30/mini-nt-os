@@ -53,6 +53,7 @@ pub mod nonclient;
 pub mod paint;
 pub mod queue;
 pub mod shared;
+pub mod sizemove;
 pub mod startup;
 pub mod timer;
 pub mod window;

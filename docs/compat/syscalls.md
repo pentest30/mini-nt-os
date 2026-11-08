@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 106 | 296 |
-| win32k | 89 | 737 |
+| win32k | 92 | 737 |
 
 ## ntoskrnl
 
@@ -637,7 +637,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x113e` | `NtUserCallHwndParamLock` | 3 | ✅ |
 | `0x113f` | `NtUserCallMsgFilter` | 2 |  |
 | `0x1140` | `NtUserCallNextHookEx` | 4 |  |
-| `0x1141` | `NtUserCallNoParam` | 1 |  |
+| `0x1141` | `NtUserCallNoParam` | 1 | ✅ |
 | `0x1142` | `NtUserCallOneParam` | 2 | ✅ |
 | `0x1143` | `NtUserCallTwoParam` | 3 | ✅ |
 | `0x1144` | `NtUserChangeClipboardChain` | 2 |  |
@@ -750,7 +750,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11af` | `NtUserGetScrollBarInfo` | 3 |  |
 | `0x11b0` | `NtUserGetSystemMenu` | 2 |  |
 | `0x11b1` | `NtUserGetThreadDesktop` | 2 |  |
-| `0x11b2` | `NtUserGetThreadState` | 1 |  |
+| `0x11b2` | `NtUserGetThreadState` | 1 | ✅ |
 | `0x11b3` | `NtUserGetTitleBarInfo` | 2 |  |
 | `0x11b4` | `NtUserGetUpdateRect` | 3 | ✅ |
 | `0x11b5` | `NtUserGetUpdateRgn` | 3 | ✅ |
@@ -819,7 +819,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11f4` | `NtUserSendInput` | 3 |  |
 | `0x11f5` | `NtUserSetActiveWindow` | 1 |  |
 | `0x11f6` | `NtUserSetAppImeLevel` | 2 |  |
-| `0x11f7` | `NtUserSetCapture` | 1 |  |
+| `0x11f7` | `NtUserSetCapture` | 1 | ✅ |
 | `0x11f8` | `NtUserSetClassLong` | 4 |  |
 | `0x11f9` | `NtUserSetClassWord` | 3 |  |
 | `0x11fa` | `NtUserSetClipboardData` | 3 |  |

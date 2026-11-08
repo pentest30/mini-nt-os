@@ -192,6 +192,25 @@ jour à chaque commit qui change l'état.
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
   de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
   VirtualBox, rien ne change.
+  Les fenêtres et la souris (branche `claude/mouse-windows`) : le thread d'entrée poste un message brut
+  (le point à l'écran) à la fenêtre qui a la capture, sinon à celle sous le curseur ; le thread qui le
+  retire en fait le message final (`win32k::mouse::finish`, co_IntProcessMouseMessage) : WM_NCHITTEST
+  envoyé (HTTRANSPARENT passe au parent), WM_MOUSEACTIVATE à l'appui si la fenêtre de premier niveau n'est
+  pas active, activation et passage devant (`activate_by_mouse`), zone cliente ou cadre, double-clic
+  (CS_DBLCLKS, ou sur le cadre). Les filtres demandent un message brut sous toutes ses formes
+  (`Filter::matches_mouse`). DefWindowProc : WM_NCHITTEST (`defwnd::nc_hit_test`, GetNCHitEx : bords,
+  coins, titre, boutons), WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN sur le titre (activation). Services :
+  NtUserSetCapture, NtUserCallNoParam (RELEASECAPTURE, 0xD), NtUserGetThreadState (focus 0, active 1,
+  capture 2), GETCURSORPOS (0x26) de NtUserCallOneParam ; numéros lus dans `user32` épinglé. Scénario
+  `mouse-windows` (`MOUSE2.EXE`). Déplacer et redimensionner (branche `claude/window-sizemove`,
+  `win32k::sizemove`) : WM_NCLBUTTONDOWN sur le titre (activation, SC_MOVE), sur un bord ou un coin (SC_SIZE
+  et WMSZ_*), sur un bouton du titre (son suivi jusqu'au relâchement, NC_DoButton, puis WM_SYSCOMMAND) ;
+  WM_SYSCOMMAND : SC_MOVE et SC_SIZE (la boucle de DefWndDoSizeMove : capture, WM_ENTERSIZEMOVE, la fenêtre
+  placée à chaque mouvement, bornée par WM_GETMINMAXINFO ; relâchement ou Entrée, Échap rend la place ;
+  WM_EXITSIZEMOVE), SC_CLOSE (WM_CLOSE), SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE (ShowWindow, qui ne réduit ni
+  n'agrandit encore). Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow), WM_NCACTIVATE (le cadre reste
+  peint inactif), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le
+  titre.
   Les minuteries de USER (branche `claude/win32k-timers`, partie de `main` ; ce que `taskmgr` de la vague
   `claude/apps-wave` attendait pour relire ses processus chaque seconde) : `win32k::timer` (SetTimer,
   SetSystemTimer, KillTimer, KillSystemTimer par NtUserCallHwndParam, NtUserValidateTimerCallback ; délai

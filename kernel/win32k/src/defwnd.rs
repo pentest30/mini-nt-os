@@ -15,12 +15,23 @@
 //! - WM_WINDOWPOSCHANGING : la taille demandée, ramenée dans les limites de
 //!   WM_GETMINMAXINFO ([`limit_size`]) ; WM_WINDOWPOSCHANGED : WM_MOVE et
 //!   WM_SIZE si la zone cliente a bougé ou changé ;
+//! - WM_NCHITTEST : l'endroit d'un point dans la fenêtre ([`nc_hit_test`],
+//!   GetNCHitEx) ;
+//! - WM_MOUSEACTIVATE : la question remonte aux parents d'une fenêtre fille ;
+//!   un clic sur la barre de titre n'active pas (WM_NCLBUTTONDOWN le fera),
+//!   un autre active ;
+//! - WM_NCLBUTTONDOWN (NC_HandleNCLButtonDown) : sur la barre de titre, la
+//!   fenêtre de premier niveau activée et passée devant, puis SC_MOVE ; sur
+//!   un bord ou un coin, SC_SIZE ; sur un bouton du titre, son suivi
+//!   ([`crate::sizemove`]) ;
+//! - WM_SYSCOMMAND ([`crate::sizemove::sys_command`]) : SC_MOVE, SC_SIZE,
+//!   SC_CLOSE (WM_CLOSE), SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE ;
 //! - WM_DEVICECHANGE rend TRUE ; un message de l'application (au-delà de
 //!   WM_USER) rend 0.
 //!
 //! Les autres messages que ReactOS traite ici (WM_PAINT, WM_ERASEBKGND,
-//! WM_NCPAINT, WM_NCACTIVATE, WM_NCHITTEST, WM_SETCURSOR, WM_ACTIVATE,
-//! WM_SHOWWINDOW, WM_SYSCOMMAND, WM_CLOSE, les touches et les boutons…)
+//! WM_NCPAINT, WM_NCACTIVATE, WM_SETCURSOR, WM_ACTIVATE, WM_SHOWWINDOW,
+//! WM_CLOSE (DestroyWindow), les touches, le double-clic sur le titre…)
 //! attendent la peinture, les contextes de périphérique, l'activation et
 //! l'entrée : ils rendent 0, journalisés une fois chacun. Pas encore de
 //! menus (`WNDS_HASMENU`).
@@ -39,7 +50,11 @@ use abi::user::{
     WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VSCROLL, WVR_HREDRAW, WVR_VALIDRECTS,
     WVR_VREDRAW,
 };
-use abi::user::{CS_HREDRAW, CS_VREDRAW};
+use abi::user::{
+    CS_HREDRAW, CS_VREDRAW, HTBORDER, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT,
+    HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, MA_ACTIVATE, MA_NOACTIVATE,
+    WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WM_SYSCOMMAND, WS_MINIMIZEBOX, WS_SYSMENU,
+};
 use hal::sync::KSpinLock;
 use ke::usermem::{copy_from_user, copy_to_user};
 
@@ -284,6 +299,136 @@ fn window_pos_changed(window: &Arc<Window>, flags: u32) {
     }
 }
 
+/// HAS_THICKFRAME de ReactOS : un cadre épais, sauf sous un cadre de
+/// dialogue sans bordure.
+fn has_thick_frame(style: u32) -> bool {
+    style & WS_THICKFRAME != 0 && style & (WS_DLGFRAME | WS_BORDER) != WS_DLGFRAME
+}
+
+/// HAS_DLGFRAME de ReactOS.
+fn has_dialog_frame(style: u32, ex_style: u32) -> bool {
+    ex_style & WS_EX_DLGMODALFRAME != 0 || (style & WS_DLGFRAME != 0 && style & WS_THICKFRAME == 0)
+}
+
+/// HAS_THINFRAME de ReactOS : une bordure, ou une fenêtre recouvrante.
+fn has_thin_frame(style: u32) -> bool {
+    style & WS_BORDER != 0 || style & (WS_CHILD | WS_POPUP) == 0
+}
+
+/// Le code d'un point sur le cadre épais (hors du rectangle `inner`) :
+/// `low`, `middle` ou `high` selon sa place `along` entre `from` et `to`,
+/// les coins sur la longueur `size`.
+fn sizing_border(along: i32, from: i32, to: i32, size: i32, (low, middle, high): (u32, u32, u32)) -> u32 {
+    if along < from + size {
+        low
+    } else if along >= to - size {
+        high
+    } else {
+        middle
+    }
+}
+
+/// GetNCHitEx : où tombe le point (`x`, `y`) de l'écran dans une fenêtre de
+/// style `style` et `ex_style`, de rectangles `window` et `client` (à
+/// l'écran) : HTCLIENT dans la zone cliente ; les bords d'un cadre épais
+/// (HTLEFT…, les coins sur la longueur d'un bouton du titre) ; HTBORDER sur
+/// un autre cadre ; dans la barre de titre, ses boutons (fermer, agrandir,
+/// réduire, de droite à gauche) ou HTCAPTION ; HTNOWHERE ailleurs (pas
+/// encore de menus ni de barres de défilement, ni d'icône : pas de
+/// HTSYSMENU). Une fenêtre réduite est toute en titre.
+pub fn nc_hit_test(
+    style: u32,
+    ex_style: u32,
+    window: Rect,
+    client: Rect,
+    (x, y): (i32, i32),
+    m: &impl Fn(usize) -> i32,
+) -> u32 {
+    let inside = |r: &Rect| x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+    if !inside(&window) {
+        return HTNOWHERE;
+    }
+    if style & WS_MINIMIZE != 0 {
+        return HTCAPTION;
+    }
+    if inside(&client) {
+        return HTCLIENT;
+    }
+    let deflate = |r: Rect, dx: i32, dy: i32| Rect::new(r.left + dx, r.top + dy, r.right - dx, r.bottom - dy);
+    let mut rect = window;
+    if has_thick_frame(style) {
+        rect = deflate(rect, m(sm::CXFRAME), m(sm::CYFRAME));
+        if !inside(&rect) {
+            let (cx, cy) = (m(sm::CXSIZE), m(sm::CYSIZE));
+            return if y < rect.top {
+                sizing_border(x, rect.left, rect.right, cx, (HTTOPLEFT, HTTOP, HTTOPRIGHT))
+            } else if y >= rect.bottom {
+                sizing_border(x, rect.left, rect.right, cx, (HTBOTTOMLEFT, HTBOTTOM, HTBOTTOMRIGHT))
+            } else if x < rect.left {
+                sizing_border(y, rect.top, rect.bottom, cy, (HTTOPLEFT, HTLEFT, HTBOTTOMLEFT))
+            } else {
+                sizing_border(y, rect.top, rect.bottom, cy, (HTTOPRIGHT, HTRIGHT, HTBOTTOMRIGHT))
+            };
+        }
+    } else {
+        if has_dialog_frame(style, ex_style) {
+            rect = deflate(rect, m(sm::CXDLGFRAME), m(sm::CYDLGFRAME));
+        } else if has_thin_frame(style) {
+            rect = deflate(rect, m(sm::CXBORDER), m(sm::CYBORDER));
+        }
+        if !inside(&rect) {
+            return HTBORDER;
+        }
+    }
+    if style & WS_CAPTION == WS_CAPTION {
+        let tool = ex_style & WS_EX_TOOLWINDOW != 0;
+        rect.top += if tool { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) } - 1;
+        if !inside(&rect) {
+            if style & WS_SYSMENU != 0 {
+                rect.right -= m(sm::CYCAPTION);
+                if x >= rect.right {
+                    return HTCLOSE;
+                }
+                if style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX) != 0 && !tool {
+                    rect.right -= m(sm::CXSIZE);
+                    if x >= rect.right {
+                        return HTMAXBUTTON;
+                    }
+                    rect.right -= m(sm::CXSIZE);
+                    if x >= rect.right {
+                        return HTMINBUTTON;
+                    }
+                }
+            }
+            return HTCAPTION;
+        }
+    }
+    HTNOWHERE
+}
+
+/// DefWindowProc de WM_MOUSEACTIVATE : une fenêtre fille pose la question à
+/// son parent, dont une réponse non nulle vaut ; sinon un clic gauche sur la
+/// barre de titre n'active pas (WM_NCLBUTTONDOWN activera), un autre active.
+fn mouse_activate(window: &Arc<Window>, wparam: u32, lparam: u32) -> u32 {
+    let state = window.state();
+    if state.style & WS_CHILD != 0 {
+        if let Some(parent) = crate::window::get(state.parent) {
+            match crate::window::send_message(&parent, WM_MOUSEACTIVATE, wparam, LParam::Value(lparam)) {
+                Ok(0) | Err(_) => {}
+                Ok(answer) => return answer,
+            }
+        }
+    }
+    if lparam >> 16 == WM_LBUTTONDOWN && lparam & 0xFFFF == HTCAPTION {
+        MA_NOACTIVATE
+    } else {
+        MA_ACTIVATE
+    }
+}
+
+/// WM_NCLBUTTONDOWN.
+const NC_LBUTTONDOWN: u32 = WM_LBUTTONDOWN - WM_NC_MOUSE_OFFSET;
+
 /// Les messages que ReactOS traite ici et que DefWindowProc ne traite pas
 /// encore, déjà journalisés.
 static REPORTED: KSpinLock<BTreeSet<u32>> = KSpinLock::new(BTreeSet::new());
@@ -303,6 +448,20 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
     }
     match (message, window) {
         (WM_DEVICECHANGE, _) => Ok(1),
+        (WM_NCHITTEST, Some(window)) => {
+            let state = window.state();
+            let point = (i32::from(lparam as u16 as i16), i32::from((lparam >> 16) as u16 as i16));
+            Ok(nc_hit_test(state.style, state.ex_style, state.window, state.client, point, &metrics::get))
+        }
+        (WM_MOUSEACTIVATE, Some(window)) => Ok(mouse_activate(window, wparam, lparam)),
+        (NC_LBUTTONDOWN, Some(window)) => {
+            crate::sizemove::nc_lbutton_down(window, wparam, lparam);
+            Ok(0)
+        }
+        (WM_SYSCOMMAND, Some(window)) => {
+            crate::sizemove::sys_command(window, wparam, lparam);
+            Ok(0)
+        }
         (WM_NCCALCSIZE, Some(window)) if lparam != 0 => {
             // The RECT, or the first of NCCALCSIZE_PARAMS.
             let mut bytes = [0u8; 16];
@@ -436,6 +595,49 @@ mod tests {
         let child =
             min_max_info(WS_CHILD | WS_THICKFRAME, WS_EX_WINDOWEDGE, (0, 0), Rect::new(0, 0, 400, 300), &metric);
         assert_eq!(child.max_position, [-3, -3], "2 of edge, and the frame beyond a dialog frame");
+    }
+
+    #[test]
+    fn where_a_point_falls_in_an_overlapped_window() {
+        // 800 x 600 at (100, 100): a 4-pixel frame, a 20-pixel caption.
+        let (style, ex) = (WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE);
+        let window = Rect::new(100, 100, 900, 700);
+        let client = Rect::new(104, 124, 896, 696);
+        let at = |x, y| nc_hit_test(style, ex, window, client, (x, y), &metric);
+        assert_eq!(at(500, 400), HTCLIENT);
+        assert_eq!(at(99, 400), HTNOWHERE, "outside");
+        assert_eq!(at(500, 110), HTCAPTION);
+        assert_eq!(at(890, 110), HTCLOSE, "the last caption-height of the caption");
+        assert_eq!(at(862, 110), HTMAXBUTTON);
+        assert_eq!(at(845, 110), HTMINBUTTON);
+        assert_eq!(at(820, 110), HTCAPTION, "left of the buttons");
+        assert_eq!(at(101, 400), HTLEFT);
+        assert_eq!(at(898, 400), HTRIGHT);
+        assert_eq!(at(500, 101), HTTOP);
+        assert_eq!(at(500, 698), HTBOTTOM);
+        assert_eq!(at(101, 101), HTTOPLEFT);
+        assert_eq!(at(110, 101), HTTOPLEFT, "a corner runs a button's width along the edge");
+        assert_eq!(at(898, 698), HTBOTTOMRIGHT);
+        assert_eq!(at(101, 690), HTBOTTOMLEFT);
+    }
+
+    #[test]
+    fn where_a_point_falls_in_other_frames() {
+        let window = Rect::new(0, 0, 200, 100);
+        // A dialog: a dialog frame, a caption with only the close button.
+        let dialog = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+        let client = Rect::new(3, 22, 197, 97);
+        assert_eq!(nc_hit_test(dialog, WS_EX_DLGMODALFRAME, window, client, (1, 50), &metric), HTBORDER);
+        assert_eq!(nc_hit_test(dialog, 0, window, client, (190, 10), &metric), HTCLOSE);
+        assert_eq!(nc_hit_test(dialog, 0, window, client, (165, 10), &metric), HTCAPTION, "no other buttons");
+        // A popup without a frame: its client area is the whole window.
+        assert_eq!(nc_hit_test(WS_POPUP, 0, window, window, (5, 5), &metric), HTCLIENT);
+        // A bordered popup: its border.
+        let inner = Rect::new(1, 1, 199, 99);
+        assert_eq!(nc_hit_test(WS_POPUP | WS_BORDER, 0, window, inner, (0, 50), &metric), HTBORDER);
+        // Minimized: all caption.
+        let min = WS_OVERLAPPEDWINDOW | WS_MINIMIZE;
+        assert_eq!(nc_hit_test(min, 0, window, Rect::new(0, 0, 0, 0), (50, 50), &metric), HTCAPTION);
     }
 
     #[test]

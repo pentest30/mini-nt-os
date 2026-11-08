@@ -791,10 +791,70 @@ pub const MK_SHIFT: u32 = 0x0004;
 pub const MK_CONTROL: u32 = 0x0008;
 pub const MK_MBUTTON: u32 = 0x0010;
 /// HT*: where a point falls in a window (WM_NCHITTEST).
+/// HTTRANSPARENT (-1): the window lets the point through to the one under it.
+pub const HTTRANSPARENT: u32 = u32::MAX;
 pub const HTNOWHERE: u32 = 0;
 pub const HTCLIENT: u32 = 1;
 pub const HTCAPTION: u32 = 2;
+pub const HTSYSMENU: u32 = 3;
+pub const HTSIZE: u32 = 4;
+pub const HTMENU: u32 = 5;
+pub const HTHSCROLL: u32 = 6;
+pub const HTVSCROLL: u32 = 7;
+pub const HTMINBUTTON: u32 = 8;
+pub const HTMAXBUTTON: u32 = 9;
+pub const HTLEFT: u32 = 10;
+pub const HTRIGHT: u32 = 11;
+pub const HTTOP: u32 = 12;
+pub const HTTOPLEFT: u32 = 13;
+pub const HTTOPRIGHT: u32 = 14;
+pub const HTBOTTOM: u32 = 15;
+pub const HTBOTTOMLEFT: u32 = 16;
+pub const HTBOTTOMRIGHT: u32 = 17;
 pub const HTBORDER: u32 = 18;
+pub const HTCLOSE: u32 = 20;
+/// WM_NCHITTEST: `lParam` a point on the screen; the window answers HT*.
+pub const WM_NCHITTEST: u32 = 0x0084;
+/// WM_MOUSEACTIVATE: a button goes down in a window whose top-level window
+/// is not active; `wParam` that top-level window, `lParam` the hit code and
+/// the message; the answer is MA_*.
+pub const WM_MOUSEACTIVATE: u32 = 0x0021;
+pub const MA_ACTIVATE: u32 = 1;
+pub const MA_ACTIVATEANDEAT: u32 = 2;
+pub const MA_NOACTIVATE: u32 = 3;
+pub const MA_NOACTIVATEANDEAT: u32 = 4;
+/// WM_CAPTURECHANGED: the window loses the mouse capture; `lParam` the
+/// window that takes it.
+pub const WM_CAPTURECHANGED: u32 = 0x0215;
+/// WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE: a move or size loop starts, ends.
+pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
+pub const WM_EXITSIZEMOVE: u32 = 0x0232;
+/// WM_CLOSE: the window is asked to close (DefWindowProc destroys it).
+pub const WM_CLOSE: u32 = 0x0010;
+/// WM_SYSCOMMAND: a command of the window menu or of the frame; `wParam`
+/// SC_* in its upper 12 bits, `lParam` the point on the screen.
+pub const WM_SYSCOMMAND: u32 = 0x0112;
+pub const SC_SIZE: u32 = 0xF000;
+pub const SC_MOVE: u32 = 0xF010;
+pub const SC_MINIMIZE: u32 = 0xF020;
+pub const SC_MAXIMIZE: u32 = 0xF030;
+pub const SC_CLOSE: u32 = 0xF060;
+pub const SC_RESTORE: u32 = 0xF120;
+/// WMSZ_*: the edge SC_SIZE drags, in the low 4 bits of `wParam`; WMSZ_LEFT
+/// (1) to WMSZ_BOTTOMRIGHT (8) follow HTLEFT (10) to HTBOTTOMRIGHT (17).
+pub const WMSZ_LEFT: u32 = 1;
+pub const WMSZ_BOTTOMRIGHT: u32 = 8;
+/// NOPARAM_ROUTINE_RELEASECAPTURE: ReleaseCapture, by NtUserCallNoParam
+/// (user32!ReleaseCapture pushes 0xD).
+pub const NOPARAM_ROUTINE_RELEASECAPTURE: u32 = 0x0D;
+/// ONEPARAM_ROUTINE_GETCURSORPOS: GetCursorPos, by NtUserCallOneParam with
+/// the POINT (user32!GetCursorPos pushes 0x26).
+pub const ONEPARAM_ROUTINE_GETCURSORPOS: u32 = 0x26;
+/// THREADSTATE_*: what NtUserGetThreadState gives (user32!GetFocus pushes
+/// 0, GetActiveWindow 1, GetCapture 2).
+pub const THREADSTATE_FOCUSWINDOW: u32 = 0;
+pub const THREADSTATE_ACTIVEWINDOW: u32 = 1;
+pub const THREADSTATE_CAPTUREWINDOW: u32 = 2;
 /// WM_ACTIVATE, WM_SETFOCUS, WM_KILLFOCUS: a window activated or not,
 /// taking or losing the keyboard.
 pub const WM_ACTIVATE: u32 = 0x0006;
@@ -812,10 +872,12 @@ pub const KF_UP: u32 = 0x8000;
 /// The virtual keys (VK_*) that win32k looks at.
 pub mod vk {
     pub const VK_CLEAR: u8 = 0x0C;
+    pub const VK_RETURN: u8 = 0x0D;
     pub const VK_SHIFT: u8 = 0x10;
     pub const VK_CONTROL: u8 = 0x11;
     pub const VK_MENU: u8 = 0x12;
     pub const VK_CAPITAL: u8 = 0x14;
+    pub const VK_ESCAPE: u8 = 0x1B;
     pub const VK_PRIOR: u8 = 0x21;
     pub const VK_NEXT: u8 = 0x22;
     pub const VK_END: u8 = 0x23;
