@@ -58,11 +58,6 @@ pub(super) fn nt_user_initialize(arguments: &[u32]) -> NtStatus {
     win32k::csrss::initialize(version, reference).map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
 
-/// NtUserCallTwoParam(Param1, Param2, Routine) : la routine `Routine`,
-/// qui rend une valeur. `TWOPARAM_ROUTINE_REGISTERLOGONPROCESS` : inscrit
-/// le processus `Param1` comme processus de logon (`Param2` TRUE), ou le
-/// désinscrit (`win32k::logon`). Une autre routine rend 0, avec
-/// `ERROR_CALL_NOT_IMPLEMENTED` comme dernière erreur, journalisée une fois.
 /// Les actions de NtUserSystemParametersInfo demandées sans être
 /// implémentées.
 static UNSUPPORTED_SPI_ACTIONS: super::ClassReport = super::ClassReport::new("NtUserSystemParametersInfo");
@@ -94,7 +89,10 @@ fn give_parameter(pv: u32, size: u32, bytes: &[u8], with_cb_size: bool) -> NtSta
 ///   (`win32k::metrics::non_client_metrics`) ; le `cbSize` lu en `pvParam`
 ///   doit être la taille de NONCLIENTMETRICSW ;
 /// - SPI_GETICONTITLELOGFONT : la police des titres d'icônes, Tahoma de 8
-///   points, la police par défaut d'une ListView.
+///   points, la police par défaut d'une ListView ;
+/// - SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur d'un
+///   rectangle de focus (un UINT en `pvParam`, `uiParam` ignoré), que
+///   DrawFocusRect lit avant ses quatre PatBlt.
 ///
 /// FALSE et `ERROR_INVALID_PARAMETER` pour une taille fausse. Une autre
 /// action est journalisée une fois et rend FALSE
@@ -109,6 +107,15 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
         abi::user::SPI_GETICONTITLELOGFONT => {
             give_parameter(pv, param, win32k::metrics::system_font(400).as_bytes(), false)
         }
+        abi::user::SPI_GETFOCUSBORDERWIDTH | abi::user::SPI_GETFOCUSBORDERHEIGHT => {
+            let parameters = &win32k::metrics::Parameters::DEFAULT;
+            let value = if action == abi::user::SPI_GETFOCUSBORDERWIDTH {
+                parameters.focus_border_width
+            } else {
+                parameters.focus_border_height
+            };
+            give_parameter(pv, 0, &value.to_le_bytes(), false)
+        }
         _ => {
             UNSUPPORTED_SPI_ACTIONS.report(action);
             let _ = win32k::set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
@@ -117,6 +124,11 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtUserCallTwoParam(Param1, Param2, Routine) : la routine `Routine`,
+/// qui rend une valeur. `TWOPARAM_ROUTINE_REGISTERLOGONPROCESS` : inscrit
+/// le processus `Param1` comme processus de logon (`Param2` TRUE), ou le
+/// désinscrit (`win32k::logon`). Une autre routine rend 0, avec
+/// `ERROR_CALL_NOT_IMPLEMENTED` comme dernière erreur, journalisée une fois.
 pub(super) fn nt_user_call_two_param(arguments: &[u32]) -> NtStatus {
     let (first, second, routine) = (arguments[0], arguments[1], arguments[2]);
     if routine == TWOPARAM_ROUTINE_REGISTERLOGONPROCESS {

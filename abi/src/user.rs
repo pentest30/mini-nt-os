@@ -230,12 +230,12 @@ pub struct MbString32 {
     pub string: u32,
 }
 
-/// SERVERINFO up to `ahbrSystem` of `PERUSERSERVERINFO` (the rest follows,
+/// SERVERINFO up to `hbrGray` of `PERUSERSERVERINFO` (the rest follows,
 /// zero until written): what [`ServerInfoHead32`] holds, the system
-/// classes' atoms, … then the system metrics (`aiSysMet`), colours and
-/// their brushes. The offsets of `aiSysMet`, `argbSystem` and `ahbrSystem`
-/// are those the pinned `user32` reads (GetSystemMetrics, GetSysColor,
-/// GetSysColorBrush).
+/// classes' atoms, … then the system metrics (`aiSysMet`), colours, their
+/// brushes and the gray brush. The offsets of `aiSysMet`, `argbSystem`,
+/// `ahbrSystem` and `hbrGray` are those the pinned `user32` reads
+/// (GetSystemMetrics, GetSysColor, GetSysColorBrush, DrawFocusRect).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ServerInfo32 {
@@ -258,6 +258,9 @@ pub struct ServerInfo32 {
     pub argb_system: [u32; NUM_SYSCOLORS],
     /// The system colours' brushes (GetSysColorBrush), stock objects.
     pub ahbr_system: [u32; NUM_SYSCOLORS],
+    /// The gray brush: a 0x55AA monochrome pattern, one pixel in two, a
+    /// stock object (DrawFocusRect, the background of a scroll bar).
+    pub hbr_gray: u32,
 }
 
 /// FNID_FIRST: the first window function identifier (the scroll bar's).
@@ -458,6 +461,11 @@ pub const SPI_GETICONTITLELOGFONT: u32 = 0x001F;
 /// SPI_GETNONCLIENTMETRICS: fills a NONCLIENTMETRICSW (`uiParam` its size
 /// or 0, `pvParam` it, its `cbSize` set).
 pub const SPI_GETNONCLIENTMETRICS: u32 = 0x0029;
+/// SPI_GETFOCUSBORDERWIDTH: the width of the sides of a focus rectangle
+/// (`pvParam` a UINT), which DrawFocusRect reads.
+pub const SPI_GETFOCUSBORDERWIDTH: u32 = 0x200E;
+/// SPI_GETFOCUSBORDERHEIGHT: the height of its top and bottom.
+pub const SPI_GETFOCUSBORDERHEIGHT: u32 = 0x2010;
 
 /// NONCLIENTMETRICSW: the sizes of the frames, captions, menus and scroll
 /// bars, and the system's fonts.
@@ -1449,6 +1457,8 @@ const _: () = {
     assert!(offset_of!(ServerInfo32, argb_system) == 0x7BC);
     // user32!GetSysColorBrush: mov eax, [gpsi + 0x838 + 4 * index].
     assert!(offset_of!(ServerInfo32, ahbr_system) == 0x838);
+    // user32!DrawFocusRect: mov eax, [eax + 0x8B4], gpsi in eax.
+    assert!(offset_of!(ServerInfo32, hbr_gray) == 0x8B4);
     assert!(size_of::<Msg32>() == 28);
     assert!(size_of::<PaintStruct32>() == 64);
     assert!(offset_of!(PaintStruct32, paint) == 8);

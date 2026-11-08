@@ -106,6 +106,21 @@ impl Rect {
     }
 }
 
+/// Un motif monochrome de 8 × 8 pixels posé sur une surface, pour
+/// [`Bitmap::pat_blt_mono`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MonoFill {
+    /// Les lignes du motif, le bit 7 à gauche.
+    pub rows: [u8; 8],
+    /// La couleur des bits à 0 (celle du texte du DC).
+    pub zero: ColorRef,
+    /// La couleur des bits à 1 (celle de son fond).
+    pub one: ColorRef,
+    /// Le pixel de la surface où tombe le coin du motif (l'origine du
+    /// pinceau : celle du DC, plus SetBrushOrgEx).
+    pub origin: (i32, i32),
+}
+
 /// Une surface de 32 bits par pixel : `width` × `height` pixels, `stride`
 /// par ligne, dans `pixels`.
 pub struct Bitmap<'a> {
@@ -209,6 +224,27 @@ impl<'a> Bitmap<'a> {
                         self.layout.pixel(ColorRef::rgb(mix(dr, r), mix(dg, g), mix(db, b)))
                     }
                 };
+            }
+        }
+    }
+
+    /// PatBlt avec un motif monochrome de 8 × 8 pixels ([`MonoFill`]) :
+    /// `rect`, coupé aux bords de la surface, prend le pixel du motif qui y
+    /// tombe par le ROP3 `rop3` ([`rop3_without_source`]).
+    pub fn pat_blt_mono(&mut self, rect: Rect, fill: &MonoFill, rop3: u8) {
+        let rect = rect.intersect(&self.bounds());
+        if rect.is_empty() {
+            return;
+        }
+        let colors = [self.layout.pixel(fill.zero), self.layout.pixel(fill.one)];
+        for y in rect.top..rect.bottom {
+            let bits = fill.rows[(y.wrapping_sub(fill.origin.1) & 7) as usize];
+            let row = self.row(y as u32);
+            for x in rect.left..rect.right {
+                let bit = (bits >> (7 - (x.wrapping_sub(fill.origin.0) & 7))) & 1;
+                let pixel = &mut self.pixels[row + x as usize];
+                // The unused byte stays zero.
+                *pixel = rop3_without_source(rop3, colors[usize::from(bit)], *pixel) & 0x00FF_FFFF;
             }
         }
     }
@@ -438,6 +474,28 @@ mod tests {
         assert_eq!(bitmap.pixel(0, 0), Some(0x00FF_FFFF), "WHITENESS leaves the unused byte zero");
         bitmap.pat_blt(Rect::new(0, 1, 2, 2), ColorRef::rgb(0, 0, 0xFF), PATCOPY);
         assert_eq!((bitmap.pixel(0, 1), bitmap.pixel(1, 1)), (Some(0xFF), Some(0xFF)));
+    }
+
+    #[test]
+    fn a_mono_pattern_repeats_from_the_brush_origin() {
+        let mut pixels = [0x0012_3456u32; 10 * 3];
+        let mut bitmap = Bitmap::new(&mut pixels, 10, 3, 10, PixelLayout::Bgrx).unwrap();
+        let fill = MonoFill {
+            rows: [0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA],
+            zero: ColorRef::rgb(0, 0, 0),
+            one: ColorRef::rgb(0xFF, 0xFF, 0xFF),
+            origin: (1, 0),
+        };
+        bitmap.pat_blt_mono(Rect::new(0, 0, 12, 2), &fill, PATCOPY);
+        let row =
+            |bitmap: &Bitmap<'_>, y: u32| -> [u32; 10] { core::array::from_fn(|x| bitmap.pixel(x as u32, y).unwrap()) };
+        let (black, white) = (0, 0x00FF_FFFF);
+        assert_eq!(row(&bitmap, 0)[..4], [white, black, white, black], "0x55 from x = 1: x = 0 is its last bit");
+        assert_eq!(row(&bitmap, 1)[..4], [black, white, black, white], "0xAA on the next row");
+        assert_eq!(row(&bitmap, 0)[8..], [white, black], "it repeats every 8 pixels");
+        assert_eq!(row(&bitmap, 2), [0x0012_3456; 10], "outside the rectangle");
+        bitmap.pat_blt_mono(Rect::new(0, 2, 2, 3), &MonoFill { origin: (-7, -6), ..fill }, 0x5A);
+        assert_eq!(row(&bitmap, 2)[..3], [0x00ED_CBA9, 0x0012_3456, 0x0012_3456], "PATINVERT; a negative origin");
     }
 
     #[test]

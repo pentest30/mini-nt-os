@@ -36,6 +36,18 @@ screen = 640 420 D4D0C8
 screen = 528 353 000000
 screen = 713 465 D4D0C8
 screen = 731 460 0D0D0D
+# Its relief (DrawFrameControl: batched PatBlts of the system colours'
+# brushes): the white highlight on its top left, which a batched PatBlt
+# placed with the batch's garbage ptlViewportOrg lost; the dark shadow on
+# its right. Its focus rectangle (DrawFocusRect: PATINVERT with hbrGray,
+# one pixel in two, SPI_GETFOCUSBORDERWIDTH and HEIGHT): dots on the
+# face, and no stripe from a PatBlt of an unread border width at x = 702.
+screen = 701 453 FFFFFF
+screen = 701 465 FFFFFF
+screen = 773 460 404040
+screen = 703 455 D4D0C8
+screen = 704 455 000000
+screen = 702 460 D4D0C8
 
 forbid = *** STOP:
 forbid = did not take the screen

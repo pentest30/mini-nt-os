@@ -261,8 +261,15 @@ jour à chaque commit qui change l'état.
   lot) appliquées par PatBlt, Rectangle, ExtTextOut, BitBlt, GetAppClipBox, IntersectClipRect : DrawState de
   `user32` décale la vue pour le libellé d'un bouton, qui se peint centré ; NtGdiTransformPoints (DPtoLP,
   LPtoDP), NtGdiGetDCObject (GetCurrentObject), NtGdiRectangle (contour noir d'un pixel : pas encore de
-  stylos). Pas encore : les étendues (seul MM_TEXT), les stylos, NtGdiRectVisible (#89) sans la translation, le
-  pinceau gris d'une barre de défilement.
+  stylos). Pas encore : les étendues (seul MM_TEXT), les stylos.
+  Les reliefs (branche `claude/button-reliefs`, par-dessus `claude/dialog-buttons` et `claude/listview`) : un
+  PatBlt en lot prend l'origine des attributs du DC, pas le `ptlViewportOrg` du lot, que le PatBlt de `gdi32` ne
+  remplit pas (le relief blanc d'un bouton se perdait) ; NtGdiRectVisible suit l'origine logique ; le pinceau
+  gris (`hbrGray` du `SERVERINFO`, `gdi::brush::gray_brush`), un motif monochrome de 8 × 8 pixels
+  (`Brush::mono`, `dib::Bitmap::pat_blt_mono`, `gdi::dc::Fill` : couleurs du texte et du fond, origine du
+  pinceau), SPI_GETFOCUSBORDERWIDTH et HEIGHT : le rectangle de focus de DrawFocusRect ; le fond d'une barre
+  de défilement en damier quand COLOR_3DHILIGHT est COLOR_WINDOW (`defwnd::control_brush`). Pas encore : le
+  motif du bitmap d'un pinceau à motif d'un client, les pinceaux hachurés.
   taskmgr (essai local `claude/taskmgr-try2` : `main`, la ListView #89, #88, ces dialogues) ne plante plus : sa
   fenêtre, ses onglets et la ListView de la page Applications s'affichent sous VirtualBox, et il relit ses
   processus chaque seconde. Pas encore : les menus, SetProp, les barres de défilement, SetWindowLong du style.

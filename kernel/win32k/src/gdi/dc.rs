@@ -52,7 +52,7 @@ use mm::vad::PageProtect;
 use mm::virtual_alloc::AllocType;
 
 use super::brush::{Brush, STOCK_BRUSHES};
-use super::dib::{Bitmap, ColorRef, Rect};
+use super::dib::{Bitmap, ColorRef, MonoFill, Rect};
 use super::handles::{self, Object, OWNER_NONE};
 use super::region::{combine, Region};
 use super::surface::{self, Surface};
@@ -664,22 +664,77 @@ pub fn pat_rect(x: i32, y: i32, width: i32, height: i32, origin: (i32, i32)) -> 
     )
 }
 
+/// Ce qu'un pinceau peint sur un DC ([`fill_of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fill {
+    /// Rien : un pinceau nul (BS_NULL).
+    Nothing,
+    /// Une couleur.
+    Solid(ColorRef),
+    /// Un motif monochrome, posé sur la surface du DC.
+    Mono(MonoFill),
+}
+
+/// Ce que `brush` peint sur le DC d'état `state`. Un motif monochrome
+/// prend les couleurs du texte et du fond `colors` (un lot apporte celles
+/// qu'avait le DC) ou, sans elles, celles des attributs du DC (noir sur
+/// blanc, celles d'un nouveau DC, sans attributs) ; son coin tombe à
+/// l'origine du DC plus celle du pinceau (`ptlBrushOrigin`, SetBrushOrgEx :
+/// ptlFillOrigin de ReactOS).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn fill_of(state: &DcState, brush: &Brush, colors: Option<(u32, u32)>) -> Fill {
+    if brush.null {
+        return Fill::Nothing;
+    }
+    let Some(rows) = brush.mono else { return Fill::Solid(brush.color) };
+    let word = |field: usize| {
+        let (_, attr) = state.owner?;
+        let mut bytes = [0u8; 4];
+        copy_from_user(&mut bytes, u64::from(attr) + field as u64).ok()?;
+        Some(u32::from_le_bytes(bytes))
+    };
+    let (text, background) = colors
+        .or_else(|| {
+            Some((word(offset_of!(DcAttr32, cr_foreground_clr))?, word(offset_of!(DcAttr32, cr_background_clr))?))
+        })
+        .unwrap_or((0, 0x00FF_FFFF));
+    let brush_origin = offset_of!(DcAttr32, brush_origin);
+    let (bx, by) = (word(brush_origin).unwrap_or(0) as i32, word(brush_origin + 4).unwrap_or(0) as i32);
+    Fill::Mono(MonoFill {
+        rows,
+        zero: ColorRef(text & 0x00FF_FFFF),
+        one: ColorRef(background & 0x00FF_FFFF),
+        origin: (state.origin.0.wrapping_add(bx), state.origin.1.wrapping_add(by)),
+    })
+}
+
 /// IntPatBlt : `rect` (sur la surface du DC d'état `state`), là où il peint,
-/// prend `brush` par le ROP3 `rop`. Un pinceau nul ne peint rien.
+/// prend `fill` ([`fill_of`]) par le ROP3 `rop`.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub fn paint(state: &DcState, rect: Rect, rop: u32, brush: &Brush) {
-    if brush.null {
-        return;
-    }
+pub fn paint(state: &DcState, rect: Rect, rop: u32, fill: &Fill) {
     let rop3 = (rop >> 16) as u8;
     let rao = state.rao();
-    state.draw(|surface| {
-        for part in rao.rects() {
-            surface.pat_blt(part.intersect(&rect), brush.color, rop3);
+    match fill {
+        Fill::Nothing => {}
+        Fill::Solid(color) => {
+            state.draw(|surface| {
+                for part in rao.rects() {
+                    surface.pat_blt(part.intersect(&rect), *color, rop3);
+                }
+            });
         }
-    });
+        Fill::Mono(pattern) => {
+            state.draw(|surface| {
+                for part in rao.rects() {
+                    surface.pat_blt_mono(part.intersect(&rect), pattern, rop3);
+                }
+            });
+        }
+    }
 }
 
 /// Les parties d'un Rectangle de (`left`, `top`) à (`right`, `bottom`)
@@ -720,9 +775,9 @@ pub fn rectangle(hdc: u32, left: i32, top: i32, right: i32, bottom: i32) -> Resu
     let moved = |rect: Rect| Rect::new(rect.left + dx, rect.top + dy, rect.right + dx, rect.bottom + dy);
     let (inside, edges) = rectangle_parts(left, top, right, bottom);
     if let (Some(inside), Some(brush)) = (inside, brush) {
-        paint(&state, moved(inside), abi::gdi::rop::PATCOPY, &brush);
+        paint(&state, moved(inside), abi::gdi::rop::PATCOPY, &fill_of(&state, &brush, None));
     }
-    let pen = Brush::solid(super::dib::ColorRef(0));
+    let pen = Fill::Solid(ColorRef(0));
     for edge in edges {
         paint(&state, moved(edge), abi::gdi::rop::PATCOPY, &pen);
     }
@@ -784,22 +839,27 @@ pub fn pat_blt(hdc: u32, x: i32, y: i32, width: i32, height: i32, rop: u32) -> R
     let Some((_, attr)) = dc.state().owner else { return Ok(false) };
     let Ok(Some(brush)) = fill_brush(&dc, attr, None, false) else { return Ok(false) };
     let state = dc.state();
-    paint(&state, pat_rect(x, y, width, height, logical_origin(&state, None)), rop, &brush);
+    paint(&state, pat_rect(x, y, width, height, logical_origin(&state, None)), rop, &fill_of(&state, &brush, None));
     Ok(true)
 }
 
-/// Un PatBlt mis en lot (GdiBCPatBlt) sur `dc`, avec le pinceau qu'il
-/// apporte (`hbrush`) et l'origine de la vue qu'avait le DC (`viewport`).
+/// Un PatBlt mis en lot (GdiBCPatBlt, `call`) sur `dc`, avec le pinceau et
+/// les couleurs du texte et du fond qu'il apporte (celles d'un motif
+/// monochrome). Son origine est celle des attributs du DC quand le lot
+/// part, pas le `ptlViewportOrg` du lot : le PatBlt de `gdi32` ne le
+/// remplit pas (il reste ce qu'avait le TEB), mais il marque le DC
+/// (DC_MODE_DIRTY) pour que SetViewportOrgEx et ses voisins vident le lot
+/// avant de changer l'origine.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
-#[expect(clippy::too_many_arguments, reason = "the fields of GDIBSPATBLT")]
-pub fn batched_pat_blt(dc: &Dc, x: i32, y: i32, width: i32, height: i32, rop: u32, hbrush: u32, viewport: (i32, i32)) {
+pub fn batched_pat_blt(dc: &Dc, call: &abi::gdi::GdiBsPatBlt32) {
+    let (x, y, width, height, rop) = (call.x, call.y, call.width, call.height, call.rop);
     if uses_source(rop) {
         return;
     }
     let Some((_, attr)) = dc.state().owner else { return };
-    let Ok(Some(brush)) = fill_brush(dc, attr, Some(hbrush), true) else {
+    let Ok(Some(brush)) = fill_brush(dc, attr, Some(call.hbrush), true) else {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("win32k: a batched PatBlt without a brush or attributes dropped");
@@ -807,7 +867,8 @@ pub fn batched_pat_blt(dc: &Dc, x: i32, y: i32, width: i32, height: i32, rop: u3
         return;
     };
     let state = dc.state();
-    paint(&state, pat_rect(x, y, width, height, logical_origin(&state, Some(viewport))), rop, &brush);
+    let fill = fill_of(&state, &brush, Some((call.cr_foreground_clr, call.cr_background_clr)));
+    paint(&state, pat_rect(x, y, width, height, logical_origin(&state, None)), rop, &fill);
 }
 
 /// GdiGetClipBox : le rectangle qui tient là où le DC peint (`prgnRao`),

@@ -427,6 +427,7 @@ pub struct GdiBsPatBlt32 {
     pub cr_background_clr: u32,
     pub cr_brush_clr: u32,
     pub icm_brush_color: i32,
+    /// Not filled by gdi32's PatBlt: whatever the TEB held there.
     pub viewport_org: PointL32,
     pub ul_foreground_clr: u32,
     pub ul_background_clr: u32,

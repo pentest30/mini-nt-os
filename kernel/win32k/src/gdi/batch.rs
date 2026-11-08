@@ -112,8 +112,7 @@ fn run(call: &Call, dc: Option<&Dc>) {
     match call {
         Call::PatBlt(call) => {
             if let Some(dc) = dc {
-                let viewport = (call.viewport_org.x, call.viewport_org.y);
-                dc::batched_pat_blt(dc, call.x, call.y, call.width, call.height, call.rop, call.hbrush, viewport);
+                dc::batched_pat_blt(dc, call);
             }
         }
         Call::SelectClip(mode, rect) => {

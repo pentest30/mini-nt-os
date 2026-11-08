@@ -41,6 +41,10 @@ pub struct Parameters {
     pub caption_font_average_width: i32,
     pub menu_font_height: i32,
     pub menu_font_external_leading: i32,
+    /// SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur des
+    /// côtés et du haut et du bas d'un rectangle de focus.
+    pub focus_border_width: u32,
+    pub focus_border_height: u32,
 }
 
 impl Parameters {
@@ -68,6 +72,8 @@ impl Parameters {
         caption_font_average_width: 6,
         menu_font_height: 11,
         menu_font_external_leading: 2,
+        focus_border_width: 1,
+        focus_border_height: 1,
     };
 }
 
