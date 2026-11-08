@@ -27,8 +27,10 @@
 //! La région à mettre à jour d'une fenêtre est un rectangle (celui qui
 //! tient tout ce qui a été invalidé), non une région.
 //!
-//! Pas encore, journalisé une fois : la fenêtre active (tout cadre est
-//! inactif), les fenêtres d'un autre thread (WM_NCPAINT et WM_ERASEBKGND ne
+//! Le cadre est peint actif ou inactif selon `WNDS_ACTIVEFRAME`
+//! ([`set_frame_active`], WM_NCACTIVATE).
+//!
+//! Pas encore, journalisé une fois : les fenêtres d'un autre thread (WM_NCPAINT et WM_ERASEBKGND ne
 //! leur sont pas envoyés aussitôt ; WM_PAINT leur vient de leur file), les
 //! régions de fenêtre (SetWindowRgn), et sans journal : `WS_EX_TRANSPARENT`
 //! (ignoré, sauf pour l'ordre de WM_PAINT), InvalidateRect, ValidateRect,
@@ -46,8 +48,9 @@ use abi::user::{
     HRGN_WINDOW, RDW_ALLCHILDREN, RDW_ERASE, RDW_ERASENOW, RDW_FRAME, RDW_INTERNALPAINT, RDW_INVALIDATE,
     RDW_NOCHILDREN, RDW_NOERASE, RDW_NOFRAME, RDW_NOINTERNALPAINT, RDW_NOUPDATEDIRTY, RDW_UPDATENOW, RDW_VALIDATE,
     WM_ERASEBKGND, WM_NCPAINT, WM_PAINT, WNDS2_ENDPAINTINVALIDATE, WNDS2_STARTPAINT, WNDS2_WMPAINTSENT,
-    WNDS_ERASEBACKGROUND, WNDS_INTERNALPAINT, WNDS_NONCPAINT, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
-    WNDS_SENDNCPAINT, WNDS_UPDATEDIRTY, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT, WS_MINIMIZE, WS_VISIBLE,
+    WNDS_ACTIVEFRAME, WNDS_ERASEBACKGROUND, WNDS_INTERNALPAINT, WNDS_NONCPAINT, WNDS_PAINTNOTPROCESSED,
+    WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT, WNDS_UPDATEDIRTY, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_TRANSPARENT,
+    WS_MINIMIZE, WS_VISIBLE,
 };
 
 use crate::gdi::dib::{ColorRef, Rect};
@@ -781,6 +784,25 @@ fn system_color(index: usize) -> ColorRef {
     ColorRef(crate::metrics::SYSTEM_COLORS.get(index).copied().unwrap_or(0))
 }
 
+/// NC_HandleNCActivate : le cadre de `window` devient actif ou inactif
+/// (`WNDS_ACTIVEFRAME`) et, s'il a changé et que `repaint`, il est peint de
+/// nouveau. Rend s'il a changé.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_frame_active(window: &Window, active: bool, repaint: bool) -> bool {
+    let before = window.state().state;
+    let after = if active { before | WNDS_ACTIVEFRAME } else { before & !WNDS_ACTIVEFRAME };
+    if before == after {
+        return false;
+    }
+    window::change(window, |state| state.state = after);
+    if repaint {
+        nc_paint(window, HRGN_WINDOW);
+    }
+    true
+}
+
 /// DefWindowProc de WM_NCPAINT (NC_DoNCPaint) : le cadre de `window`, dans
 /// sa région visible (`hrgn` : `HRGN_WINDOW`, la fenêtre entière ; une autre
 /// région, pas encore, compte pour elle). Rien pour une fenêtre invisible ou
@@ -799,13 +821,12 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
     }
     let size = (state.window.right - state.window.left, state.window.bottom - state.window.top);
     let text = window::text(window).unwrap_or_default();
-    // No active window yet: every frame is inactive.
     let (ops, unpainted) = crate::nonclient::frame_ops(
         state.style,
         state.ex_style,
         size,
         &text,
-        false,
+        state.state & WNDS_ACTIVEFRAME != 0,
         true,
         &crate::metrics::get,
         &system_color,

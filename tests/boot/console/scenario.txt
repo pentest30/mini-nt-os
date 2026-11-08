@@ -72,14 +72,16 @@ forbid = win32k: a DIB section of
 # CONSHOW1.EXE's console window, shown by consrv's input thread
 # (ShowWindowAsync) where the cascade puts it, below THREADS1.EXE's (which
 # stays: DestroyWindow is not yet done): its raised edge (23, 23; 24, 24;
-# 689, 454), its inactive caption (300, 36) and its close button (676, 36);
+# 689, 454), its caption, active (300, 36: consrv's window is activated
+# from consrv's thread, the kernel paints its frame), and its close button
+# (676, 36);
 # the desktop to its right. Its client area, inside its sunken edge from
 # (29, 49), holds what consrv painted: "Mino console", grey (attribute 07)
 # on black, the stem of its "M" at (29, 51), and the black of the console
 # below it.
 screen = 23 23 D4D0C8
 screen = 24 24 FFFFFF
-screen = 300 36 9A9A9A
+screen = 300 36 4A68A1
 screen = 676 36 000000
 screen = 689 454 404040
 screen = 700 100 5A7EDC

@@ -66,6 +66,10 @@ expect = [mouse2] done
 screen = 650 300 5A7EDC
 screen = 600 600 D4D0C8
 screen = 530 380 FFFFFF
+# B, active since the click on its close button, has an active caption
+# (WM_NCACTIVATE: from COLOR_ACTIVECAPTION); A's is inactive.
+screen = 600 412 5877AD
+screen = 300 110 9C9C9C
 
 forbid = *** STOP:
 # The move loop takes the release: no WM_NCLBUTTONUP reaches B.
