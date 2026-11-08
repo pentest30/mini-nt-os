@@ -119,6 +119,23 @@ pub(super) fn nt_gdi_transform_points(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(copy_to_user(u64::from(points_out), &points).is_ok()))
 }
 
+/// NtGdiRectVisible(hdc, prc) : BOOL, une partie du rectangle en `prc`
+/// tombe là où le DC peint (`win32k::gdi::dc::rect_visible`) ; FALSE pour un
+/// DC qui n'est pas au processus (`ERROR_INVALID_HANDLE`) ou un rectangle
+/// qu'on ne peut lire. L'en-tête et la ListView de `comctl32` ne peignent
+/// que les éléments qu'il dit visibles.
+pub(super) fn nt_gdi_rect_visible(arguments: &[u32]) -> NtStatus {
+    let [hdc, rect] = arguments[..2] else { unreachable!("2 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let mut bytes = [0u8; 16];
+    if ke::usermem::copy_from_user(&mut bytes, u64::from(rect)).is_err() {
+        return NtStatus(0);
+    }
+    let word = |at: usize| i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let rect = Rect::new(word(0), word(4), word(8), word(12));
+    NtStatus(u32::from(win32k::gdi::dc::rect_visible(&dc.state(), rect)))
+}
+
 /// Les caractères d'un texte que le noyau accepte en un appel.
 const MAX_TEXT: u32 = 0x1_0000;
 

@@ -450,6 +450,44 @@ pub const RDW_VALID_FLAGS: u32 = RDW_ERASE
 /// HWNDLOCK_ROUTINE_UPDATEWINDOW: the routine of NtUserCallHwndLock behind
 /// UpdateWindow (user32!UpdateWindow pushes 0x5E).
 pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
+
+/// SPI_*: the actions of SystemParametersInfo that win32k answers.
+/// SPI_GETICONTITLELOGFONT: the font of the icon titles (`pvParam` a
+/// LOGFONTW of `uiParam` bytes), the ListView's default font.
+pub const SPI_GETICONTITLELOGFONT: u32 = 0x001F;
+/// SPI_GETNONCLIENTMETRICS: fills a NONCLIENTMETRICSW (`uiParam` its size
+/// or 0, `pvParam` it, its `cbSize` set).
+pub const SPI_GETNONCLIENTMETRICS: u32 = 0x0029;
+
+/// NONCLIENTMETRICSW: the sizes of the frames, captions, menus and scroll
+/// bars, and the system's fonts.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonClientMetricsW32 {
+    pub cb_size: u32,
+    pub border_width: i32,
+    pub scroll_width: i32,
+    pub scroll_height: i32,
+    pub caption_width: i32,
+    pub caption_height: i32,
+    pub caption_font: crate::gdi::LogFontW32,
+    pub sm_caption_width: i32,
+    pub sm_caption_height: i32,
+    pub sm_caption_font: crate::gdi::LogFontW32,
+    pub menu_width: i32,
+    pub menu_height: i32,
+    pub menu_font: crate::gdi::LogFontW32,
+    pub status_font: crate::gdi::LogFontW32,
+    pub message_font: crate::gdi::LogFontW32,
+}
+
+const _: () = {
+    assert!(size_of::<NonClientMetricsW32>() == 500);
+    assert!(offset_of!(NonClientMetricsW32, caption_font) == 24);
+    assert!(offset_of!(NonClientMetricsW32, sm_caption_font) == 124);
+    assert!(offset_of!(NonClientMetricsW32, menu_font) == 224);
+    assert!(offset_of!(NonClientMetricsW32, message_font) == 408);
+};
 /// HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: the routine of NtUserCallHwndParam
 /// behind KillSystemTimer (read from the pinned `user32`).
 pub const HWNDPARAM_ROUTINE_KILLSYSTEMTIMER: u32 = 0x4E;
@@ -1444,6 +1482,7 @@ macro_rules! as_bytes {
 }
 
 as_bytes!(
+    NonClientMetricsW32,
     Msg32,
     UserHandleEntry32,
     UserHandleTable32,

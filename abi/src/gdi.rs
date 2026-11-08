@@ -797,6 +797,14 @@ impl Default for LogFontW32 {
 }
 
 impl LogFontW32 {
+    /// Its bytes, as they go to user mode.
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: a `#[repr(C)]` record of integers without padding (5
+        // LONGs, 8 BYTEs and 32 WCHARs: 92 bytes, checked below): every byte
+        // is initialised.
+        unsafe { core::slice::from_raw_parts((self as *const Self).cast::<u8>(), size_of::<Self>()) }
+    }
+
     /// The font in `bytes`, as a client wrote it; `None` if they are too few.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         let bytes = bytes.get(..size_of::<Self>())?;
@@ -829,6 +837,8 @@ impl LogFontW32 {
         &self.face_name[..end]
     }
 }
+
+const _: () = assert!(size_of::<LogFontW32>() == 92);
 
 /// ENUMLOGFONTEXDVW, what NtGdiHfontCreate is given (`gdi32` passes no size):
 /// a LOGFONTW, its full name, style and script (64, 32 and 32 characters),

@@ -192,6 +192,13 @@ jour à chaque commit qui change l'état.
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
   de `GetMouseStatus` tant que l'hôte en envoie ; `MOUSE_MOVE_ABSOLUTE` dans `win32k::mouse`. Sans
   VirtualBox, rien ne change.
+  La ListView de `comctl32` (branche `claude/listview`, partie de `main`) : `uxtheme` et `winmm` sur le disque
+  (chargements différés de `comctl32` que la fermeture des imports ne voit pas : sans `uxtheme`, le WM_CREATE de
+  la ListView, de l'en-tête, des onglets lève une exception), NtUserBuildHwndList (`window::children` :
+  GetDlgItem, EnumChildWindows, EnumThreadWindows, EnumWindows), NtUserSystemParametersInfo
+  (`SPI_GETNONCLIENTMETRICS`, `SPI_GETICONTITLELOGFONT`), NtGdiRectVisible (`gdi::dc::rect_visible` : l'en-tête ne
+  peignait pas ses éléments). Scénario `listview` (`tests/native/listview1.c`). Pas encore : NtUserSetProp,
+  NtUserSetScrollInfo, NtUserScrollWindowEx, la bordure WS_EX_CLIENTEDGE.
   Les fenêtres et la souris (branche `claude/mouse-windows`) : le thread d'entrée poste un message brut
   (le point à l'écran) à la fenêtre qui a la capture, sinon à celle sous le curseur ; le thread qui le
   retire en fait le message final (`win32k::mouse::finish`, co_IntProcessMouseMessage) : WM_NCHITTEST

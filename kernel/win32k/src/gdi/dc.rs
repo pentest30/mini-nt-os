@@ -868,6 +868,21 @@ pub fn logical_offset(state: &DcState) -> (i32, i32) {
     translation(window, viewport)
 }
 
+/// NtGdiRectVisible : une partie de `rect` (coordonnées logiques,
+/// [`logical_origin`] ; ses bords dans n'importe quel ordre) tombe là où le
+/// DC peint (`prgnRao`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn rect_visible(state: &DcState, rect: Rect) -> bool {
+    let (dx, dy) = logical_origin(state, None);
+    let (left, right) = (rect.left.min(rect.right), rect.left.max(rect.right));
+    let (top, bottom) = (rect.top.min(rect.bottom), rect.top.max(rect.bottom));
+    let mut rao = state.rao();
+    rao.intersect_rect(Rect::new(left + dx, top + dy, right + dx, bottom + dy));
+    !rao.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,6 +980,17 @@ mod tests {
         assert_eq!(current_object(FONT, 0x10, 0x20, 0x30, None), Some(0x30));
         assert_eq!(current_object(BITMAP, 0x10, 0x20, 0x30, Some(0x40)), Some(0x40));
         assert_eq!(current_object(PALETTE, 0x10, 0x20, 0x30, None), None, "no palettes yet");
+    }
+
+    #[test]
+    fn a_rect_is_visible_where_it_meets_the_visible_region() {
+        let state =
+            DcState { origin: (100, 50), vis: Region::from_rect(Rect::new(110, 60, 210, 160)), ..DcState::default() };
+        assert!(rect_visible(&state, Rect::new(0, 0, 20, 20)), "(10, 10)-(20, 20) of it");
+        assert!(!rect_visible(&state, Rect::new(0, 0, 10, 10)), "left of and above it");
+        assert!(!rect_visible(&state, Rect::new(110, 0, 200, 300)), "right of it");
+        assert!(rect_visible(&state, Rect::new(50, 50, 20, 20)), "edges in any order");
+        assert!(!rect_visible(&DcState::default(), Rect::new(0, 0, 100, 100)), "nothing visible");
     }
 
     /// A DC at (100, 50) that sees (110, 60)-(210, 160).

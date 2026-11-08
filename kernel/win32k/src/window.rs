@@ -1105,6 +1105,25 @@ pub fn move_tree(window: &Window, dx: i32, dy: i32) {
     }
 }
 
+/// IntWinListChildren et le parcours de NtUserBuildHwndList : les handles
+/// des enfants de `parent`, dans leur ordre Z ; avec `deep`, chacun suivi de
+/// ses propres enfants, à toute profondeur.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn children(parent: &Window, deep: bool) -> Vec<u32> {
+    let mut list = Vec::new();
+    let mut child = get(parent.state().child);
+    while let Some(window) = child {
+        list.push(window.handle);
+        if deep {
+            list.extend(children(&window, true));
+        }
+        child = get(window.state().next);
+    }
+    list
+}
+
 /// IntUnlinkWindow : `window` quitte les enfants de son parent.
 fn unlink(window: &Arc<Window>) {
     let state = window.state();
