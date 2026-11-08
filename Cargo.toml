@@ -20,6 +20,7 @@ members = [
     "drivers/input/vboxmouse",
     "drivers/video/gopfb",
     "libs/fatfs",
+    "libs/ntfs",
     "libs/gpt",
     "libs/pe",
     "libs/regf",
