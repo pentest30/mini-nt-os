@@ -202,8 +202,15 @@ jour à chaque commit qui change l'état.
   coins, titre, boutons), WM_MOUSEACTIVATE, WM_NCLBUTTONDOWN sur le titre (activation). Services :
   NtUserSetCapture, NtUserCallNoParam (RELEASECAPTURE, 0xD), NtUserGetThreadState (focus 0, active 1,
   capture 2), GETCURSORPOS (0x26) de NtUserCallOneParam ; numéros lus dans `user32` épinglé. Scénario
-  `mouse-windows` (`MOUSE2.EXE`). Pas encore : déplacer et redimensionner (SC_MOVE, SC_SIZE), les boutons
-  du titre, WM_NCACTIVATE (le cadre reste peint inactif), WM_SETCURSOR.
+  `mouse-windows` (`MOUSE2.EXE`). Déplacer et redimensionner (branche `claude/window-sizemove`,
+  `win32k::sizemove`) : WM_NCLBUTTONDOWN sur le titre (activation, SC_MOVE), sur un bord ou un coin (SC_SIZE
+  et WMSZ_*), sur un bouton du titre (son suivi jusqu'au relâchement, NC_DoButton, puis WM_SYSCOMMAND) ;
+  WM_SYSCOMMAND : SC_MOVE et SC_SIZE (la boucle de DefWndDoSizeMove : capture, WM_ENTERSIZEMOVE, la fenêtre
+  placée à chaque mouvement, bornée par WM_GETMINMAXINFO ; relâchement ou Entrée, Échap rend la place ;
+  WM_EXITSIZEMOVE), SC_CLOSE (WM_CLOSE), SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE (ShowWindow, qui ne réduit ni
+  n'agrandit encore). Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow), WM_NCACTIVATE (le cadre reste
+  peint inactif), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le
+  titre.
 - **Le disque installé démarre seul (lot 4-2)** ([`compat/io-install.md`](compat/io-install.md),
   [`compat/vbox.md`](compat/vbox.md)) : la copie (source montée une fois, noms longs VFAT, écriture d'un
   fichier neuf en un seul passage), les fichiers de boot (`EFI/BOOT/BOOTX64.EFI`, `kernel.elf`, `fat.img`)
