@@ -418,9 +418,28 @@ pub(super) fn nt_gdi_create_bitmap(arguments: &[u32]) -> NtStatus {
     if bits == 0 {
         return fail(ERROR_INVALID_PARAMETER, 0);
     }
+    // La géométrie d'abord, avant toute allocation : les dimensions que le
+    // moteur tient (celles de `surface::create_from_bits`), la profondeur
+    // qu'il convertit (la monochrome et le 32 bits), le pas et la taille
+    // totale en arithmétique contrôlée et bornée — un appelant pourrait
+    // autrement demander des gigaoctets pour une hauteur sans fond.
+    let Some(depth) = planes.checked_mul(bits_pixel).filter(|&depth| depth == 1 || depth == 32) else {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    };
+    if width == 0 || height == 0 || width > 4096 || height > 4096 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
     // Les lignes que l'appelant donne sont alignées sur 16 bits.
-    let stride = ((width * planes * bits_pixel + 15) / 16) * 2;
-    let mut bytes = alloc::vec![0u8; stride as usize * height as usize];
+    let Some(total) = width
+        .checked_mul(depth)
+        .and_then(|bits| bits.checked_add(15))
+        .map(|bits| bits / 16 * 2)
+        .and_then(|stride| stride.checked_mul(height))
+        .filter(|total| *total <= 16 * 1024 * 1024)
+    else {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    };
+    let mut bytes = alloc::vec![0u8; total as usize];
     if ke::usermem::copy_from_user(&mut bytes, u64::from(bits)).is_err() {
         return fail(ERROR_INVALID_PARAMETER, 0);
     }

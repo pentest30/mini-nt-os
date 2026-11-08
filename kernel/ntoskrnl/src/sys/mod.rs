@@ -261,7 +261,6 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetKeyState, Handler::Status(input::nt_user_get_key_state)),
     (services::NtUserGetAtomName, Handler::Status(atom::nt_user_get_atom_name)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
-    (services::NtUserGetThreadState, Handler::Status(user::nt_user_get_thread_state)),
     (services::NtUserGetKeyboardState, Handler::Status(input::nt_user_get_keyboard_state)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
     (services::NtUserGetMonitorInfo, Handler::Status(monitor::nt_user_get_monitor_info)),

@@ -205,6 +205,24 @@ pub fn inserted(station: &Arc<Object<WindowStation>>, creator: u32) -> bool {
     true
 }
 
+/// La station devient l'interactive, sans le processus de logon : le chemin
+/// du noyau qui crée WinSta0 pour un shell de session
+/// ([`crate::startup::assign_startup_desktop`]) — l'enregistrement du
+/// processus de logon reste à qui l'appelle (le vrai winlogon, après).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn make_interactive(station: &Arc<Object<WindowStation>>) {
+    let mut input = INPUT_WINDOW_STATION.lock();
+    if input.as_ref().and_then(Weak::upgrade).is_some() {
+        return;
+    }
+    station.no_io.store(false, Ordering::Release);
+    *input = Some(Arc::downgrade(station));
+    drop(input);
+    log::info!("win32k: the interactive window station, created by the kernel for the session shell");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

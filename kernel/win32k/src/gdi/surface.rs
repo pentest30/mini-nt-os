@@ -269,7 +269,7 @@ pub fn create_from_bits(width: u32, height: u32, planes: u32, bits_pixel: u32, b
     let mut pixels = alloc::vec![0u32; count];
     match depth {
         1 => {
-            let stride = ((width as usize + 15) / 16) * 2;
+            let stride = (width as usize).div_ceil(16) * 2;
             if bits.len() < stride * height as usize {
                 return Err(STATUS_INVALID_PARAMETER);
             }

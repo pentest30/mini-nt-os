@@ -74,11 +74,15 @@ pub(super) fn nt_delete_atom(arguments: &[u32]) -> NtStatus {
 }
 
 /// NtQueryInformationAtom(Atom, InformationClass, Buffer, Length,
-/// ReturnLength) : `AtomBasicInformation` — le compte de références, les
-/// drapeaux (nuls) et le nom de l'atome, dans la taille du appelant.
+/// ReturnLength) : `AtomBasicInformation` — ATOM_BASIC_INFORMATION de XP :
+/// UsageCount, Flags et NameLength, trois USHORT consécutifs (la longueur du
+/// nom en octets, sans son nul), puis le nom à l'offset 6. Sans la place
+/// pour l'entête, seul le besoin est rendu (`ReturnLength`).
 /// `AtomTableInformation` (le compte des entrées) et les autres classes
 /// rendent `STATUS_NOT_IMPLEMENTED`, journalisées une fois.
 pub(super) fn nt_query_information_atom(arguments: &[u32]) -> NtStatus {
+    /// L'offset du nom dans ATOM_BASIC_INFORMATION.
+    const NAME_AT: usize = 6;
     let [atom, class, buffer, length, return_length] = arguments[..5] else { unreachable!("5 arguments") };
     if class != ATOM_BASIC_INFORMATION {
         return UNSUPPORTED_ATOM_CLASSES.report(class);
@@ -87,20 +91,23 @@ pub(super) fn nt_query_information_atom(arguments: &[u32]) -> NtStatus {
         let name = name_of(atom as u16)?;
         let usage =
             if (atom as u16) >= FIRST_STRING_ATOM { win32k::atom::references(atom as u16).unwrap_or(0) } else { 1 };
-        let mut out = Vec::new();
-        out.extend_from_slice(&usage.to_le_bytes());
+        let needed = NAME_AT + name.len() * 2;
+        if (length as usize) < needed {
+            if return_length != 0 {
+                UserPtr::<u32>::new(return_length).write(&(needed as u32))?;
+            }
+            return Err(abi::ntstatus::STATUS_INFO_LENGTH_MISMATCH);
+        }
+        let mut out = Vec::with_capacity(needed);
+        out.extend_from_slice(&(usage.min(u32::from(u16::MAX)) as u16).to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // Flags.
-        out.extend_from_slice(&(name.len() as u16 * 2).to_le_bytes());
+        out.extend_from_slice(&((name.len() * 2) as u16).to_le_bytes());
         for unit in &name {
             out.extend_from_slice(&unit.to_le_bytes());
         }
-        out.resize(out.len().max(10), 0);
-        if (length as usize) < out.len() {
-            return Err(abi::ntstatus::STATUS_INFO_LENGTH_MISMATCH);
-        }
         ke::usermem::copy_to_user(u64::from(buffer), &out)?;
         if return_length != 0 {
-            UserPtr::<u32>::new(return_length).write(&(out.len() as u32))?;
+            UserPtr::<u32>::new(return_length).write(&(needed as u32))?;
         }
         Ok(())
     };

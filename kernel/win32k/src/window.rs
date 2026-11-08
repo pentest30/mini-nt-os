@@ -1098,17 +1098,19 @@ fn unlink(window: &Arc<Window>) {
 /// PASSIVE_LEVEL, dans un service système. Rappelle le mode utilisateur.
 pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32>> {
     let thread = crate::convert_current_thread().map_err(|_| None)?;
-    let Some(desktop) = thread.desktop() else { return Err(None) };
-    let desktop = desktop.desktop;
-    let Some(thread_p) = ps::ethread::current_thread() else {
-        log::warn!("TEMP create_window: no current thread");
-        return Err(None);
+    // Une fenêtre sans bureau : le shell de session en reçoit un du noyau
+    // (WinSta0\Default, créés s'il le faut) — le moment exact du besoin,
+    // après qu'un vrai winlogon ait eu le sien.
+    let desktop = match thread.desktop() {
+        Some(desktop) => desktop.desktop,
+        None => {
+            let process = ps::ethread::current_thread().map(|thread| thread.process().clone());
+            let Some(process) = process else { return Err(None) };
+            crate::startup::session_desktop(&process).map_err(|_| None)?
+        }
     };
-    let process = thread_p.process().clone();
-    let process_info = crate::process_info(&process).map_err(|_| {
-        log::warn!("TEMP create_window: no process info");
-        None
-    })?;
+    let process = ps::ethread::current_thread().ok_or(None)?.process().clone();
+    let process_info = crate::process_info(&process).map_err(|_| None)?;
     drop(process);
     let class_name = params.class.clone().ok_or(Some(ERROR_CANNOT_FIND_WND_CLASS))?;
     let class = {

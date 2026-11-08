@@ -91,10 +91,7 @@ pub fn resolve_desktop(
     let desktop_name = if desktop_name.is_empty() { "Default" } else { desktop_name };
     let name = alloc::format!("{}\\{station_name}", crate::csrss::window_stations_directory(current.session_id()));
     let flags = OBJ_CASE_INSENSITIVE | if inherit { OBJ_INHERIT } else { 0 };
-    let object = ob::namespace().open(&name, None, Some(&WINDOW_STATION_TYPE), flags).map_err(|status| {
-        log::warn!("TEMP resolve: the station {name} failed: {status:?}");
-        status
-    })?;
+    let object = ob::namespace().open(&name, None, Some(&WINDOW_STATION_TYPE), flags)?;
     let station = ob::downcast::<WindowStation>(&object).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
     if station_name.eq_ignore_ascii_case("WinSta0") {
         let luid = target.primary_token().authentication_id().to_abi();
@@ -103,10 +100,7 @@ pub fn resolve_desktop(
             return Err(STATUS_ACCESS_DENIED);
         }
     }
-    let desktop = crate::desktop::find(&station, desktop_name).ok_or_else(|| {
-        log::warn!("TEMP resolve: the desktop {desktop_name} is missing in the station");
-        STATUS_OBJECT_NAME_NOT_FOUND
-    })?;
+    let desktop = crate::desktop::find(&station, desktop_name).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
     let station = table.insert(station, AccessMask::MAXIMUM_ALLOWED, attributes)?;
     match table.insert(desktop, AccessMask::MAXIMUM_ALLOWED, attributes) {
         Ok(desktop) => Ok((station, desktop)),
@@ -149,63 +143,11 @@ fn desktop_info(process: &EProcess) -> Result<(String, bool), NtStatus> {
 /// PASSIVE_LEVEL, dans le thread qui se convertit.
 pub fn assign_startup_desktop(process: &Arc<Object<EProcess>>, info: &ProcessInfo) -> Result<(), NtStatus> {
     if info.startup_desktop().is_none() {
-        // La station interactive existe, sans bureau Default : le shell de
-        // la session (taskmgr comme première application) ne le crée pas
-        // lui-même — le noyau le fait ici, comme le vrai winlogon l'aurait
-        // fait avant de lancer qui que ce soit.
-        if let Some(station) = crate::winsta::input_window_station() {
-            if crate::desktop::find(&station, "Default").is_none() {
-                let desktop = crate::desktop::create(&station, "Default")?;
-                core::mem::forget(desktop);
-            }
-        }
         if crate::winsta::input_window_station().is_none() {
-            // Le shell de la session : la première application GUI ne trouve
-            // pas de station interactive (le vrai winlogon la crée avant de
-            // lancer qui que ce soit). Le noyau les crée ici : WinSta0 et
-            // son bureau Default, et le processus courant en devient le
-            // processus de logon.
-            crate::logon::register_logon_process(process.pid(), true);
-            let station = crate::winsta::create(process.session_id());
-            let object: ob::ObjectRef = station.clone();
-            let directory = ob::namespace().open(
-                &crate::csrss::window_stations_directory(process.session_id()),
-                None,
-                None,
-                OBJ_CASE_INSENSITIVE,
-            )?;
-            let (handle, status) = ob::insert_object(
-                ob::namespace(),
-                object,
-                Some("WinSta0"),
-                Some(&directory),
-                OBJ_OPENIF | OBJ_CASE_INSENSITIVE,
-                &process.handle_table,
-                AccessMask::MAXIMUM_ALLOWED,
-            )?;
-            log::warn!("TEMP station insert: handle {} status {status:?}", handle.0);
-            if status != abi::ntstatus::STATUS_OBJECT_NAME_EXISTS {
-                crate::winsta::inserted(&station, process.pid());
-            }
-            let _ = handle;
-            match crate::desktop::create(&station, "Default") {
-                Ok(desktop) => {
-                    // L'Arc lâché tuerait le bureau que la station garde par
-                    // un Weak : il vit pour le reste de la session.
-                    core::mem::forget(desktop);
-                }
-                Err(error) => {
-                    log::warn!("TEMP desktop Default FAILED: {error:?}");
-                    return Err(error);
-                }
-            }
+            return Ok(());
         }
         let (path, inherit) = desktop_info(process)?;
-        let (station, desktop) = resolve_desktop(
-            process,
-            &if path.is_empty() { alloc::string::String::from("WinSta0\\Default") } else { path },
-            inherit,
-        )?;
+        let (station, desktop) = resolve_desktop(process, &path, inherit)?;
         let table = &process.handle_table;
         let station_object = table.reference_as::<WindowStation>(station, &WINDOW_STATION_TYPE, AccessMask::NONE)?;
         let (access, _) = table.query(station)?;
@@ -217,4 +159,58 @@ pub fn assign_startup_desktop(process: &Arc<Object<EProcess>>, info: &ProcessInf
         Some((handle, desktop)) => crate::gui::set_thread_desktop(handle, Some(desktop)),
         None => Ok(()),
     }
+}
+
+/// Le bureau d'une fenêtre sans bureau : le shell de session (taskmgr, la
+/// première application, démarrant comme winlogon) ne crée ni la station
+/// interactive ni son bureau Default — le vrai winlogon le fait avant de
+/// lancer qui que ce soit, et ne passe pas ici : sa station, il la crée
+/// avant sa première fenêtre. Le noyau crée WinSta0 et Default s'il le
+/// faut — sans prendre l'enregistrement du processus de logon, qui reste
+/// au winlogon d'une vraie session — puis le thread les prend, et rend le
+/// bureau.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le service de création d'une fenêtre, sans rien
+/// tenir.
+pub fn session_desktop(process: &Arc<Object<EProcess>>) -> Result<Arc<Object<Desktop>>, NtStatus> {
+    match crate::winsta::input_window_station() {
+        Some(station) => {
+            if crate::desktop::find(&station, "Default").is_none() {
+                let desktop = crate::desktop::create(&station, "Default")?;
+                // L'Arc lâché tuerait le bureau que la station garde par un
+                // Weak : il vit pour le reste de la session.
+                core::mem::forget(desktop);
+            }
+        }
+        None => {
+            let station = crate::winsta::create(process.session_id());
+            let object: ob::ObjectRef = station.clone();
+            let directory = ob::namespace().open(
+                &crate::csrss::window_stations_directory(process.session_id()),
+                None,
+                None,
+                OBJ_CASE_INSENSITIVE,
+            )?;
+            let (_handle, status) = ob::insert_object(
+                ob::namespace(),
+                object,
+                Some("WinSta0"),
+                Some(&directory),
+                OBJ_OPENIF | OBJ_CASE_INSENSITIVE,
+                &process.handle_table,
+                AccessMask::MAXIMUM_ALLOWED,
+            )?;
+            if status != abi::ntstatus::STATUS_OBJECT_NAME_EXISTS {
+                crate::winsta::make_interactive(&station);
+            }
+            let desktop = crate::desktop::create(&station, "Default")?;
+            core::mem::forget(desktop);
+        }
+    }
+    let (station, desktop) = resolve_desktop(process, "WinSta0\\Default", false)?;
+    let desktop_object = process.handle_table.reference_as::<Desktop>(desktop, &DESKTOP_TYPE, AccessMask::NONE)?;
+    let _ = station;
+    crate::gui::set_thread_desktop(desktop.0, Some(desktop_object.clone()))?;
+    Ok(desktop_object)
 }
