@@ -343,6 +343,10 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 - Un scénario de démarrage est un répertoire de `tests/boot/` dont `scenario.txt` donne les features du noyau, les CPU,
   les marqueurs série attendus et interdits.
   Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
+- **Ne jamais arrêter QEMU par son nom** (`taskkill /IM qemu-system-x86_64.exe`, `pkill qemu`) : plusieurs sessions
+  font tourner leurs scénarios sur la même machine, et on tue aussi les leurs (elles finissent en « QEMU ended by
+  another process »). Pour arrêter un run, arrêter son `xtask` : sous Windows, chaque QEMU est dans un objet job
+  de son `xtask` et meurt avec lui (`xtask/src/job.rs`), même tué.
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
 - Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW
