@@ -16,9 +16,13 @@
 //! position d'un fichier synchrone (`FILE_SYNCHRONOUS_IO_*`) avance avec
 //! elles.
 //!
+//! Un nom sous `\Device\NamedPipe` ouvre un tube, et les services d'un
+//! fichier de tube passent par [`super::pipe`] (NPFS).
+//!
 //! Pas encore : les attributs étendus (`STATUS_EAS_NOT_SUPPORTED`), le
-//! partage, les E/S asynchrones (un événement ou une APC de fin :
-//! `STATUS_NOT_IMPLEMENTED`, journalisé une fois), la suppression.
+//! partage, les E/S asynchrones des volumes (un événement ou une APC de fin :
+//! `STATUS_NOT_IMPLEMENTED`, journalisé une fois ; celles des tubes sont
+//! faites), la suppression.
 
 use abi::file::{
     directory_entry_layout, FILE_APPEND_DATA, FILE_CREATED, FILE_END_OF_FILE_INFORMATION,
@@ -44,6 +48,7 @@ use abi::ntstatus::{
     STATUS_SUCCESS,
 };
 use abi::object::OBJ_INHERIT;
+use abi::pipe::{FilePipeInformation, FilePipeLocalInformation, FILE_PIPE_INFORMATION, FILE_PIPE_LOCAL_INFORMATION};
 use abi::setup::{
     SetupPrepare, IOCTL_MINO_SETUP_COPY, IOCTL_MINO_SETUP_FORMAT, IOCTL_MINO_SETUP_PREPARE, IOCTL_MINO_SETUP_QUERY,
     SETUP_PREPARE_SIZE, SETUP_PREVIEW_SIZE,
@@ -124,6 +129,9 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
     let granted = FILE_TYPE.granted_access(AccessMask(open.desired));
     let (file, information) = match namespace.open(&name, root, Some(&FILE_TYPE), attributes) {
         Ok(object) => {
+            if let Some(pipe) = ob::downcast::<io_manager::PipeFile>(&object) {
+                return super::pipe::open(pipe, &out, iosb, open.desired, open.options, attributes);
+            }
             let file = ob::downcast::<File>(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
             let information = io_manager::check_open(&file, open.disposition, open.options, granted)?;
             (file, information)
@@ -212,7 +220,9 @@ pub(super) fn nt_query_full_attributes_file(arguments: &[u32]) -> NtStatus {
 /// NtQueryInformationFile(FileHandle, IoStatusBlock, FileInformation,
 /// Length, FileInformationClass) : FileBasic (`FILE_READ_ATTRIBUTES`),
 /// FileStandard, FileName (le chemin depuis la racine du volume),
-/// FilePosition ou FileNetworkOpenInformation (`FILE_READ_ATTRIBUTES`).
+/// FilePosition ou FileNetworkOpenInformation (`FILE_READ_ATTRIBUTES`) ;
+/// sur un tube, FileName (`\nom`), FilePipe et FilePipeLocalInformation
+/// (`FILE_READ_ATTRIBUTES`, [`super::pipe::query_information`]).
 /// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe ; un nom
 /// coupé : `STATUS_BUFFER_OVERFLOW`, sa longueur entière dans
 /// `FileNameLength`.
@@ -252,10 +262,27 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         FILE_NAME_INFORMATION => (size_of::<FileNameInformation>(), 0),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
         FILE_NETWORK_OPEN_INFORMATION => (size_of::<FileNetworkOpenInformation>(), FILE_READ_ATTRIBUTES),
+        FILE_PIPE_INFORMATION => (size_of::<FilePipeInformation>(), FILE_READ_ATTRIBUTES),
+        FILE_PIPE_LOCAL_INFORMATION => (size_of::<FilePipeLocalInformation>(), FILE_READ_ATTRIBUTES),
         _ => return Err(FILE_CLASSES.report(class)),
     };
     if (length as usize) < size {
         return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    if let Some(pipe) = super::pipe::pipe_file(handle, AccessMask(access))? {
+        let (information, status) = match class {
+            FILE_NAME_INFORMATION => {
+                let name: Vec<u16> = pipe.pipe_name().encode_utf16().collect();
+                let mut out = alloc::vec![0u8; (length as usize).min(VARIABLE_INFORMATION)];
+                let encoded = FileNameInformation::encode(&name, &mut out);
+                variable(&out, encoded)
+            }
+            _ => (super::pipe::query_information(&pipe, class)?, STATUS_SUCCESS),
+        };
+        return give_information(&information, status, iosb, buffer);
+    }
+    if matches!(class, FILE_PIPE_INFORMATION | FILE_PIPE_LOCAL_INFORMATION) {
+        return Err(STATUS_INVALID_PARAMETER);
     }
     let file =
         super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask(access))?;
@@ -282,7 +309,8 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
 /// FileFsSizeInformation et FileFsFullSizeInformation (ses clusters, dont
 /// les libres), FileFsDeviceInformation (que le gestionnaire d'E/S rend
 /// lui-même), FileFsAttributeInformation (FAT32 : noms gardés avec leur
-/// casse, en Unicode, de 255 caractères au plus).
+/// casse, en Unicode, de 255 caractères au plus) ; d'un tube, seulement
+/// FileFsDeviceInformation (FILE_DEVICE_NAMED_PIPE).
 /// `STATUS_INFO_LENGTH_MISMATCH` sous la taille de la classe ; un nom coupé :
 /// `STATUS_BUFFER_OVERFLOW`, sa longueur entière dans la structure.
 pub(super) fn nt_query_volume_information_file(arguments: &[u32]) -> NtStatus {
@@ -310,6 +338,12 @@ fn query_volume_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus
     };
     if (length as usize) < size {
         return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    if super::pipe::pipe_file(handle, AccessMask::NONE)?.is_some() {
+        if class != FILE_FS_DEVICE_INFORMATION {
+            return Err(STATUS_INVALID_DEVICE_REQUEST);
+        }
+        return give_information(&super::pipe::device_information().to_bytes(), STATUS_SUCCESS, iosb, buffer);
     }
     let file =
         super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask::NONE)?;
@@ -446,15 +480,23 @@ fn transfer(arguments: &[u32], write: bool) -> Result<(), NtStatus> {
 }
 
 /// NtReadFile : lit au plus `Length` octets (`FILE_READ_DATA`) ;
-/// `STATUS_END_OF_FILE` à la fin, le bloc d'état écrit.
+/// `STATUS_END_OF_FILE` à la fin, le bloc d'état écrit. Un tube :
+/// [`super::pipe::read_write`].
 pub(super) fn nt_read_file(arguments: &[u32]) -> NtStatus {
-    status(transfer(arguments, false))
+    match super::pipe::pipe_file(arguments[0], AccessMask::NONE) {
+        Ok(Some(pipe)) => super::pipe::read_write(pipe, arguments, false),
+        _ => status(transfer(arguments, false)),
+    }
 }
 
 /// NtWriteFile : écrit `Length` octets (`FILE_WRITE_DATA`, ou
-/// `FILE_APPEND_DATA` à la fin), le fichier grandit pour les tenir.
+/// `FILE_APPEND_DATA` à la fin), le fichier grandit pour les tenir. Un
+/// tube : [`super::pipe::read_write`].
 pub(super) fn nt_write_file(arguments: &[u32]) -> NtStatus {
-    status(transfer(arguments, true))
+    match super::pipe::pipe_file(arguments[0], AccessMask::NONE) {
+        Ok(Some(pipe)) => super::pipe::read_write(pipe, arguments, true),
+        _ => status(transfer(arguments, true)),
+    }
 }
 
 /// NtFlushBuffersFile(FileHandle, IoStatusBlock) : chaque écriture va droit
@@ -630,7 +672,8 @@ static SET_CLASSES: super::ClassReport = super::ClassReport::new("NtSetInformati
 /// FileInformationClass) : FileBasicInformation (les dates et les attributs,
 /// `FILE_WRITE_ATTRIBUTES` ; 0 laisse un champ comme il est),
 /// FilePositionInformation (la position) et FileEndOfFileInformation (la
-/// taille, `FILE_WRITE_DATA`).
+/// taille, `FILE_WRITE_DATA`) ; FilePipeInformation d'un tube (ses modes,
+/// `FILE_WRITE_ATTRIBUTES`).
 pub(super) fn nt_set_information_file(arguments: &[u32]) -> NtStatus {
     status(set_information_file(arguments))
 }
@@ -644,10 +687,25 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
         FILE_BASIC_INFORMATION => (size_of::<FileBasicInformation>(), FILE_WRITE_ATTRIBUTES),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
         FILE_END_OF_FILE_INFORMATION => (8, FILE_WRITE_DATA),
+        FILE_PIPE_INFORMATION => (size_of::<FilePipeInformation>(), FILE_WRITE_ATTRIBUTES),
         _ => return Err(SET_CLASSES.report(class)),
     };
     if (length as usize) < size {
         return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    if let Some(pipe) = super::pipe::pipe_file(handle, AccessMask(access))? {
+        if class != FILE_PIPE_INFORMATION {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        ke::usermem::probe_for_write(u64::from(iosb), size_of::<IoStatusBlock32>(), 4)?;
+        let mut bytes = [0u8; size_of::<FilePipeInformation>()];
+        ke::usermem::probe_for_read(u64::from(buffer), bytes.len(), 4)?;
+        ke::usermem::copy_from_user(&mut bytes, u64::from(buffer))?;
+        super::pipe::set_pipe_information(&pipe, &bytes)?;
+        return write_iosb(iosb, STATUS_SUCCESS, 0);
+    }
+    if class == FILE_PIPE_INFORMATION {
+        return Err(STATUS_INVALID_PARAMETER);
     }
     let file =
         super::current_process().handle_table.reference_as::<File>(Handle(handle), &FILE_TYPE, AccessMask(access))?;

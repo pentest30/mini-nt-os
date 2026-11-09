@@ -4,11 +4,17 @@
 ; DLL exports them undecorated.
 LIBRARY kernel32.dll
 EXPORTS
+CancelIo@4
 CloseHandle@4
+ConnectNamedPipe@8
+CreateEventW@16
 CreateFileW@28
+CreateNamedPipeW@32
+CreatePipe@16
 CreateProcessW@40
 CreateThread@24
 DeleteCriticalSection@4
+DisconnectNamedPipe@4
 EnterCriticalSection@4
 ExitProcess@4
 FindClose@4
@@ -19,18 +25,26 @@ GetConsoleWindow@0
 GetCurrentProcessId@0
 GetCurrentThreadId@0
 GetExitCodeProcess@8
+GetFileType@4
 GetLastError@0
 GetModuleHandleW@4
+GetNamedPipeInfo@20
+GetOverlappedResult@16
 GetStdHandle@4
 GetTickCount@0
 InitializeCriticalSection@4
-LoadLibraryW@4
 LeaveCriticalSection@4
+LoadLibraryW@4
+PeekNamedPipe@24
 ReadConsoleW@20
 ReadFile@20
+SetEvent@4
 SetLastError@4
+SetNamedPipeHandleState@16
 Sleep@4
 VirtualQuery@12
 WaitForMultipleObjects@16
 WaitForSingleObject@8
+WaitNamedPipeW@8
 WriteConsoleW@20
+WriteFile@20

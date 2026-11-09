@@ -229,7 +229,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   un tas par bureau dans une section, adresses du serveur sur 32 bits, `DESKTOPINFO` ; NtUserSetThreadDesktop projette
   le tas et remplit le `CLIENTINFO`) ; dispositions de clavier (`win32k::keyboard` : le fichier lu par le noyau
   d'après le registre, ses tables trouvées sans exécuter `KbdLayerDescriptor`) : `winlogon` crée `WinSta0` et ses
-  bureaux, s'y place, charge `00000409`, puis s'arrête à son serveur RPC (tube nommé : NPFS d'Io, à faire).
+  bureaux, s'y place, charge `00000409`, démarre son serveur RPC (le tube nommé `\pipe\winreg`, voir NPFS plus
+  bas), lance `services.exe` et `lsass.exe`, charge `msgina`, crée sa fenêtre SAS et reste dans sa boucle (voir
+  plus bas).
   Premier affichage : pilote d'affichage (`win32k::display`, trait `DisplayDriver`, `drivers/video/gopfb` sur le
   framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; la fenêtre du bureau (`win32k::window` : `WND` et `CLS` dans
   le tas du bureau, handle dans la table USER de la section partagée, `win32k::handles` ; DesktopWindowProc côté
@@ -312,6 +314,21 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtSetInformationFile(FileBasicInformation) ; NtQueryDefaultLocale (`ex::locale`, `Nls\Language`) ; `xtask`
   attend qu'une touche soit relâchée avant la suivante (QEMU 8.2 perd des relâchements sinon) ; `hal::ps2` compte
   ce qu'il perd. **Le critère de `cmd.exe` interactif du M5 est coché.**
+  M5, étape 9, les tubes nommés (étape 24 de `compat/m5-csrss.md`) : NPFS dans Io (`io::npfs` : `\Device\NamedPipe`,
+  tubes et instances, états, files de données en messages ou en octets avec quotas, lectures partielles, écritures
+  qui attendent le quota, aperçu, attente d'instance ; `io::request` : demandes en attente finies hors du verrou) ;
+  `sys::pipe` : NtCreateNamedPipeFile, NtFsControlFile (FSCTL_PIPE_LISTEN, DISCONNECT, PEEK, WAIT), NtCancelIoFile, les
+  tubes dans NtCreateFile, NtReadFile, NtWriteFile, NtQuery/SetInformationFile et les attentes ; E/S asynchrones des
+  tubes (`STATUS_PENDING`, puis le bloc d'état et les données écrits dans le processus du demandeur, son événement et
+  son APC de fin). Le vrai `winlogon` démarre son serveur RPC sur `\pipe\winreg` ; scénario `pipes`
+  (`tests/native/pipe1.c`).
+  M5, étape 9, `services.exe` et `lsass.exe` (étape 25 de `compat/m5-csrss.md`) : le serveur de commandes du
+  moniteur de références (`ntoskrnl::srm` : `\Security`, `\SeRmCommandPort`, `\SeLsaInitEvent`, un thread noyau qui
+  accepte `lsass` et se connecte à son `\SeLsaCommandPort` ; `se::logon` ; un TID réservé du processus System,
+  `ps::ethread::reserve_system_thread_id`) ; les ruches SECURITY et SAM ; ThreadAmILastThread ; NtSetDefaultLocale ;
+  NtUserSetLogonNotifyWindow. L'horloge écrit la page `KUSER_SHARED_DATA` de l'ancien chargeur par son alias du noyau
+  (STOP 0x0A corrigé). `winlogon` lance `services.exe` et `lsass.exe`, charge `msgina`, crée sa fenêtre SAS et reste
+  dans sa boucle : la suite est USER (messages envoyés entre threads, M6).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

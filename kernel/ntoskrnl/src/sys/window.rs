@@ -534,6 +534,22 @@ pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtUserSetLogonNotifyWindow(hWnd) : la fenêtre devient la fenêtre SAS du
+/// processus de logon (`win32k::logon`), où USER postera WM_LOGONNOTIFY ;
+/// TRUE. FALSE pour une fenêtre inconnue, ou pour un autre processus que
+/// celui de logon (`ERROR_ACCESS_DENIED`), comme dans ReactOS
+/// (`ntuser/winsta.c`).
+pub(super) fn nt_user_set_logon_notify_window(arguments: &[u32]) -> NtStatus {
+    let handle = arguments[0];
+    if win32k::window::get(handle).is_none() {
+        return NtStatus(0);
+    }
+    match win32k::logon::set_logon_notify_window(handle, super::current_process().pid()) {
+        Ok(()) => NtStatus(1),
+        Err(error) => fail(error),
+    }
+}
+
 /// Le type CTLCOLOR_* de `message`, s'il est l'un des WM_CTLCOLOR*.
 fn ctl_type(message: u32) -> Option<u32> {
     message.checked_sub(abi::user::WM_CTLCOLORMSGBOX).filter(|&ctl_type| ctl_type < abi::user::CTLCOLOR_MAX)

@@ -68,6 +68,9 @@ use cid::CidTable;
 pub(crate) enum CidEntry {
     Process(Weak<Object<EProcess>>),
     Thread(Weak<Object<EThread>>),
+    /// Un thread noyau du processus System sans objet thread
+    /// ([`ethread::reserve_system_thread_id`]).
+    SystemThread,
 }
 
 /// PspCidTable.

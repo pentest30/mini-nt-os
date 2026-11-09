@@ -111,6 +111,37 @@ pub const STATUS_PORT_CONNECTION_REFUSED: NtStatus = NtStatus(0xC000_0041);
 pub const STATUS_INVALID_PORT_HANDLE: NtStatus = NtStatus(0xC000_0042);
 pub const STATUS_DISK_CORRUPT_ERROR: NtStatus = NtStatus(0xC000_0032);
 pub const STATUS_MEDIA_WRITE_PROTECTED: NtStatus = NtStatus(0xC000_00A2);
+/// Named pipes (NPFS): no instance of the pipe may be created (its maximum
+/// is reached).
+pub const STATUS_INSTANCE_NOT_AVAILABLE: NtStatus = NtStatus(0xC000_00AB);
+/// No instance of the pipe listens for a client.
+pub const STATUS_PIPE_NOT_AVAILABLE: NtStatus = NtStatus(0xC000_00AC);
+/// The control does not suit the state of the instance (FSCTL_PIPE_PEEK).
+pub const STATUS_INVALID_PIPE_STATE: NtStatus = NtStatus(0xC000_00AD);
+/// The completion mode cannot change while operations wait.
+pub const STATUS_PIPE_BUSY: NtStatus = NtStatus(0xC000_00AE);
+/// The control does not apply to this file (FSCTL_PIPE_WAIT off the root).
+pub const STATUS_ILLEGAL_FUNCTION: NtStatus = NtStatus(0xC000_00AF);
+/// The instance has no client: the server disconnected it.
+pub const STATUS_PIPE_DISCONNECTED: NtStatus = NtStatus(0xC000_00B0);
+/// The other end is closed: nothing more to write.
+pub const STATUS_PIPE_CLOSING: NtStatus = NtStatus(0xC000_00B1);
+/// FSCTL_PIPE_LISTEN: a client is already there.
+pub const STATUS_PIPE_CONNECTED: NtStatus = NtStatus(0xC000_00B2);
+/// The instance waits for a client.
+pub const STATUS_PIPE_LISTENING: NtStatus = NtStatus(0xC000_00B3);
+/// A nonblocking read found nothing.
+pub const STATUS_PIPE_EMPTY: NtStatus = NtStatus(0xC000_00D9);
+/// The other end is closed and nothing is left to read.
+pub const STATUS_PIPE_BROKEN: NtStatus = NtStatus(0xC000_014B);
+/// An operation cancelled (NtCancelIoFile).
+pub const STATUS_CANCELLED: NtStatus = NtStatus(0xC000_0120);
+/// The reference monitor knows no logon session of this LUID.
+pub const STATUS_NO_SUCH_LOGON_SESSION: NtStatus = NtStatus(0xC000_005F);
+/// The reference monitor already has a logon session of this LUID.
+pub const STATUS_LOGON_SESSION_EXISTS: NtStatus = NtStatus(0xC000_00EE);
+/// The logon session is still in use (tokens hold it).
+pub const STATUS_BAD_LOGON_SESSION_STATE: NtStatus = NtStatus(0xC000_0104);
 pub const STATUS_FILE_IS_A_DIRECTORY: NtStatus = NtStatus(0xC000_00BA);
 pub const STATUS_FILE_CORRUPT_ERROR: NtStatus = NtStatus(0xC000_0102);
 pub const STATUS_NOT_A_DIRECTORY: NtStatus = NtStatus(0xC000_0103);

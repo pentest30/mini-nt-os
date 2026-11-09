@@ -11,6 +11,7 @@
 //! - [`ntstatus`]: `NtStatus` and the NTSTATUS values in use.
 //! - [`object`]: access masks, generic mapping, object attributes.
 //! - [`peb32`], [`teb32`]: the PEB and TEB of an i386 process, as on XP SP2.
+//! - [`pipe`]: the values, controls and information of named pipes.
 //! - [`process`]: values about processes, such as their execute options.
 //! - [`security`]: SIDs, ACLs, security descriptors and tokens (Se).
 //! - [`service`], [`services`]: the system service tables, generated from the
@@ -40,6 +41,7 @@ pub mod mou;
 pub mod ntstatus;
 pub mod object;
 pub mod peb32;
+pub mod pipe;
 pub mod process;
 pub mod process_parameters;
 pub mod registry;
