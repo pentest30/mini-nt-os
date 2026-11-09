@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **`services.exe` et `lsass.exe` ; `winlogon` va jusqu'à sa fenêtre SAS** (`claude/winlogon-services`, par-dessus
+  `claude/sharp-davinci-37d7d9` (NPFS), `main` et `claude/fpu-double-fault` ; M5 étape 9,
+  [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 25) : sur le disque, `services.exe`, `lsass.exe`, `msv1_0.dll`,
+  `msgina.dll` et les ruches SECURITY et SAM (montées comme SOFTWARE). Se : le serveur de commandes du moniteur de
+  références (`ntoskrnl::srm` : `\Security`, `\SeRmCommandPort`, `\SeLsaInitEvent`, un thread noyau qui accepte `lsass`
+  et se connecte à son `\SeLsaCommandPort` ; `se::logon` pour ses sessions) ; Ps : un TID réservé au thread du SRM
+  (`reserve_system_thread_id`, que Lpc accepte par `client_exists`) ; NtQueryInformationThread(ThreadAmILastThread),
+  NtSetDefaultLocale (locale du système), NtUserSetLogonNotifyWindow. Corrigé en chemin : l'horloge écrivait la page
+  `KUSER_SHARED_DATA` de l'ancien chargeur par `0x7FFE0000` dans l'espace courant ; un thread de `services.exe`
+  courant à un tick y avait sa page en lecture seule (STOP 0x0A) ; elle passe par l'alias du noyau. `winlogon` ne
+  s'arrête plus : il change de bureau et reste dans sa boucle ; il ira plus loin par USER (un message envoyé à la
+  fenêtre d'un autre thread, celle de l'état de `msgina` : M6). Tests : hôte (`abi::security`, `se::logon`), scénario
+  `smss` (AMD et Intel ; ses comptes d'appels qui dépendent de jusqu'où vont les processus sont devenus des préfixes).
+  Suite : les messages envoyés entre threads (M6) ; NtCreateIoCompletion (le pool de threads de `rpcrt4` dans
+  `lsass`) ; `svchost.exe` et les services ; FSCTL_PIPE_IMPERSONATE ; la sonde qui terminerait aussi les
+  petits-enfants de `smss`.
+
 - **La TSS tient dans une seule page** (`claude/fpu-double-fault`) : le scénario `fpu` s'arrêtait (STOP 0x7F, double
   faute, `RIP 0x401000`) sur l'hôte Windows, AMD et Intel, sur `main` aussi. La trace `-d int` de QEMU montre le
   #PF de la première instruction d'un thread i386 qui faute à nouveau pendant sa livraison, sur `0x8017f000` : la
@@ -80,7 +97,9 @@ jour à chaque commit qui change l'état.
   crée la station interactive `WinSta0` et ses bureaux, s'y place (la fenêtre du bureau d'entrée est montrée et peinte
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
   d'un rappel de `user32` : KeUserModeCallback), démarre son serveur RPC (le tube nommé `\pipe\winreg` : NPFS,
-  Io), puis s'arrête à `services.exe`, absent du disque : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 24.
+  Io), lance `services.exe` et `lsass.exe` (qui se connecte au moniteur de références de Se), charge `msgina`, crée
+  sa fenêtre SAS et reste dans sa boucle, où il attend USER (M6) : [`compat/m5-csrss.md`](compat/m5-csrss.md),
+  étapes 15 à 25.
 - La sonde console, étape 8 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : ce que `dir` affiche autour des
   noms (en-tête du volume, dates, place libre ; NtQueryDefaultLocale, FileFsVolume/Size/FullSizeInformation,
   FileNameInformation, FileBasicInformation en écriture ; dates de FAT) : **le critère de `cmd.exe` interactif du M5
@@ -799,9 +818,11 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      `io::npfs`, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client, NtFsControlFile :
      FSCTL_PIPE_LISTEN, DISCONNECT, PEEK, WAIT ; lectures et écritures, synchrones et asynchrones ; NtCancelIoFile) ;
      `rpcrt4` crée `\pipe\winreg` et l'écoute ; le scénario `pipes` ;
-   - **la suite, côté `winlogon`** : `services.exe` (absent du disque : `xtask` l'y mettra, avec ses imports), puis
-     `lsass.exe`, `msgina` ; FSCTL_PIPE_IMPERSONATE (ImpersonateNamedPipeClient) dès qu'un client RPC appellera le
-     serveur ;
+   - [x] `services.exe`, `lsass.exe` et `msgina` (étape 25) : le serveur de commandes du moniteur de références
+     (`ntoskrnl::srm`, `se::logon`), les ruches SECURITY et SAM, NtSetDefaultLocale, NtUserSetLogonNotifyWindow ;
+   - **la suite, côté `winlogon`** : les messages envoyés à la fenêtre d'un autre thread (la fenêtre d'état de
+     `msgina`, M6) ; NtCreateIoCompletion ; `svchost.exe` ; FSCTL_PIPE_IMPERSONATE (ImpersonateNamedPipeClient) dès
+     qu'un client RPC appellera un serveur ;
    - **USER (option 1, choisie avec le mainteneur : le win32k minimal, début du M6 et du spike S3)** :
      le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
      lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande

@@ -230,7 +230,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   le tas et remplit le `CLIENTINFO`) ; dispositions de clavier (`win32k::keyboard` : le fichier lu par le noyau
   d'après le registre, ses tables trouvées sans exécuter `KbdLayerDescriptor`) : `winlogon` crée `WinSta0` et ses
   bureaux, s'y place, charge `00000409`, démarre son serveur RPC (le tube nommé `\pipe\winreg`, voir NPFS plus
-  bas), puis s'arrête à `services.exe`, absent du disque.
+  bas), lance `services.exe` et `lsass.exe`, charge `msgina`, crée sa fenêtre SAS et reste dans sa boucle (voir
+  plus bas).
   Premier affichage : pilote d'affichage (`win32k::display`, trait `DisplayDriver`, `drivers/video/gopfb` sur le
   framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; la fenêtre du bureau (`win32k::window` : `WND` et `CLS` dans
   le tas du bureau, handle dans la table USER de la section partagée, `win32k::handles` ; DesktopWindowProc côté
@@ -321,6 +322,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   tubes (`STATUS_PENDING`, puis le bloc d'état et les données écrits dans le processus du demandeur, son événement et
   son APC de fin). Le vrai `winlogon` démarre son serveur RPC sur `\pipe\winreg` ; scénario `pipes`
   (`tests/native/pipe1.c`).
+  M5, étape 9, `services.exe` et `lsass.exe` (étape 25 de `compat/m5-csrss.md`) : le serveur de commandes du
+  moniteur de références (`ntoskrnl::srm` : `\Security`, `\SeRmCommandPort`, `\SeLsaInitEvent`, un thread noyau qui
+  accepte `lsass` et se connecte à son `\SeLsaCommandPort` ; `se::logon` ; un TID réservé du processus System,
+  `ps::ethread::reserve_system_thread_id`) ; les ruches SECURITY et SAM ; ThreadAmILastThread ; NtSetDefaultLocale ;
+  NtUserSetLogonNotifyWindow. L'horloge écrit la page `KUSER_SHARED_DATA` de l'ancien chargeur par son alias du noyau
+  (STOP 0x0A corrigé). `winlogon` lance `services.exe` et `lsass.exe`, charge `msgina`, crée sa fenêtre SAS et reste
+  dans sa boucle : la suite est USER (messages envoyés entre threads, M6).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.

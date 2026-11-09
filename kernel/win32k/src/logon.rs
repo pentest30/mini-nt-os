@@ -1,13 +1,15 @@
 //! Le processus de logon (`winlogon`) : USER retient celui qui s'inscrit
 //! (RegisterLogonProcess, par NtUserCallTwoParam) ; c'est lui qui crée la
-//! station de fenêtres interactive.
+//! station de fenêtres interactive. Il donne aussi sa fenêtre SAS
+//! (NtUserSetLogonNotifyWindow), où USER postera WM_LOGONNOTIFY.
 //!
 //! Pas encore : l'oubli du processus de logon à sa fin (le rappel de sortie
-//! d'un processus GUI n'existe pas encore).
+//! d'un processus GUI n'existe pas encore) ; WM_LOGONNOTIFY (rien ne la poste
+//! encore : ni Ctrl+Alt+Suppr, ni écran de veille, ni fin de session).
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use abi::winerror::ERROR_INVALID_PARAMETER;
+use abi::winerror::{ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER};
 
 /// Le PID du processus de logon ; 0 sans lui (gpidLogon).
 static LOGON_PROCESS: AtomicU32 = AtomicU32::new(0);
@@ -18,6 +20,31 @@ static LOGON_PROCESS: AtomicU32 = AtomicU32::new(0);
 /// Tout niveau.
 pub fn logon_process() -> u32 {
     LOGON_PROCESS.load(Ordering::Acquire)
+}
+
+/// La fenêtre SAS du processus de logon (hwndSAS) ; 0 sans elle.
+static SAS_WINDOW: AtomicU32 = AtomicU32::new(0);
+
+/// La fenêtre SAS du processus de logon ; 0 sans elle.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn sas_window() -> u32 {
+    SAS_WINDOW.load(Ordering::Acquire)
+}
+
+/// NtUserSetLogonNotifyWindow, pour une fenêtre `hwnd` qui existe : elle
+/// devient la fenêtre SAS si le processus `pid` est celui de logon ; sinon
+/// `Err(ERROR_ACCESS_DENIED)`, à mettre en dernière erreur.
+///
+/// # IRQL
+/// Tout niveau.
+pub fn set_logon_notify_window(hwnd: u32, pid: u32) -> Result<(), u32> {
+    if pid == 0 || logon_process() != pid {
+        return Err(ERROR_ACCESS_DENIED);
+    }
+    SAS_WINDOW.store(hwnd, Ordering::Release);
+    Ok(())
 }
 
 /// Ce que décide l'inscription (`register`) ou la désinscription du

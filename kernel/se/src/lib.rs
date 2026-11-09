@@ -9,6 +9,8 @@
 //!   leurs classes d'information.
 //! - [`client`] : ce qu'emprunte un serveur qui prend l'identité d'un client
 //!   (SeCreateClientSecurity).
+//! - [`logon`] : les sessions de logon et l'audit du moniteur de références,
+//!   que `lsass` lui donne (`ntoskrnl::srm`).
 //!
 //! Les LUID viennent de [`allocate_luid`] (ExAllocateLocallyUniqueId).
 //!
@@ -24,6 +26,7 @@ extern crate alloc;
 pub mod acl;
 pub mod client;
 pub mod descriptor;
+pub mod logon;
 pub mod sid;
 pub mod token;
 

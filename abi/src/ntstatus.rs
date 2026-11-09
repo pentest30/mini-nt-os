@@ -136,6 +136,12 @@ pub const STATUS_PIPE_EMPTY: NtStatus = NtStatus(0xC000_00D9);
 pub const STATUS_PIPE_BROKEN: NtStatus = NtStatus(0xC000_014B);
 /// An operation cancelled (NtCancelIoFile).
 pub const STATUS_CANCELLED: NtStatus = NtStatus(0xC000_0120);
+/// The reference monitor knows no logon session of this LUID.
+pub const STATUS_NO_SUCH_LOGON_SESSION: NtStatus = NtStatus(0xC000_005F);
+/// The reference monitor already has a logon session of this LUID.
+pub const STATUS_LOGON_SESSION_EXISTS: NtStatus = NtStatus(0xC000_00EE);
+/// The logon session is still in use (tokens hold it).
+pub const STATUS_BAD_LOGON_SESSION_STATE: NtStatus = NtStatus(0xC000_0104);
 pub const STATUS_FILE_IS_A_DIRECTORY: NtStatus = NtStatus(0xC000_00BA);
 pub const STATUS_FILE_CORRUPT_ERROR: NtStatus = NtStatus(0xC000_0102);
 pub const STATUS_NOT_A_DIRECTORY: NtStatus = NtStatus(0xC000_0103);

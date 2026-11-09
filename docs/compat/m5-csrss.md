@@ -823,3 +823,48 @@ déconnexion, écoute annulée `ERROR_OPERATION_ABORTED`, deux instances au plus
 attente échue `ERROR_SEM_TIMEOUT`, tube disparu avec sa dernière instance), puis un tube anonyme (CreatePipe : lecture
 de deux écritures, écriture au-delà du quota qui attend les lectures, lecture qui attend une écriture, tube cassé) ;
 le scénario `smss` (le serveur RPC de `winlogon`).
+
+## Étape 25 : `services.exe` et `lsass.exe` ; `winlogon` va jusqu'à sa fenêtre SAS
+
+Après son serveur RPC, `winlogon` (`winlogon.c`) lance `services.exe` (StartServicesManager), puis `lsass.exe`
+(StartLsass), attend LSA (WaitForLsass), charge ses DLL de notification, sa GINA (`msgina`), crée sa fenêtre SAS
+(InitializeSAS) et entre dans sa boucle. `xtask` met sur le disque `services.exe`, `lsass.exe`, les ruches SECURITY et
+SAM, et deux DLL chargées par leur nom, hors de la fermeture des imports : `msv1_0.dll` (le paquet d'authentification
+de `lsasrv`, `Lsa\Authentication Packages`) et `msgina.dll`.
+
+| Partie | Ce qu'elle fait | Demandé par |
+|---|---|---|
+| `ntoskrnl::srm` (Se) | au démarrage, le répertoire `\Security` et son événement `LSA_AUTHENTICATION_INITIALIZED` (SepInitializationPhase1), le port de connexion `\SeRmCommandPort` et l'événement `\SeLsaInitEvent` (SeRmInitPhase1), et un thread noyau qui attend l'événement, accepte la connexion de `lsass`, se connecte en retour à son `\SeLsaCommandPort`, puis sert RmCreateLogonSession, RmDeleteLogonSession et RmAuditSetCommand (`abi::security::RmRequest`) et répond à chacune | `lsasrv` (LsapRmInitializeServer, StartAuthenticationPort) |
+| `se::logon` | les sessions de logon du moniteur (celles de LocalSystem et de l'utilisateur anonyme dès le démarrage ; `STATUS_LOGON_SESSION_EXISTS`, `STATUS_NO_SUCH_LOGON_SESSION`) et l'état de l'audit | le serveur du SRM |
+| `ps::ethread::reserve_system_thread_id`, `client_exists` | un TID du processus System pour le thread du SRM, qui n'a pas d'objet thread : Lpc le reconnaît comme client (`check_client` de NtAcceptConnectPort et NtReplyPort) | `lsass` (NtAcceptConnectPort de la connexion du noyau) |
+| ruches SECURITY et SAM (`userland::mount_machine_hives`) | montées comme SOFTWARE sous `\REGISTRY\MACHINE` | `lsasrv` (LsapOpenServiceKey), `samsrv` |
+| NtQueryInformationThread(`ThreadAmILastThread`) | 1 si le processus du thread n'a pas d'autre thread vivant | `kernel32` (ExitThread) |
+| NtSetDefaultLocale | les paramètres régionaux du système : validés (`Nls\Locale` connaît le LCID et son groupe de langues est installé, ExpValidateNlsLocaleId), écrits dans `Nls\Language\Default`, puis gardés par `ex::locale` ; 0 les relit ; ceux de l'utilisateur (`HKCU`, pas monté) : `STATUS_OBJECT_NAME_NOT_FOUND` | `winlogon` (SetDefaultLanguage, dans InitializeSAS) |
+| NtUserSetLogonNotifyWindow (`win32k::logon`) | la fenêtre SAS du processus de logon (hwndSAS), où USER postera WM_LOGONNOTIFY ; FALSE pour une fenêtre inconnue ou un autre processus (`ERROR_ACCESS_DENIED`) | `winlogon` (InitializeSAS) |
+
+`services.exe` se croit sur le LiveCD (la ruche SYSTEM épinglée a `Setup\CmdLine` avec `-mini`), crée son serveur RPC
+(`\pipe\ntsvcs`) et lance ses services automatiques : leurs images (`svchost.exe`, `eventlog.exe`, `rpcss.exe`…) ne sont
+pas sur le disque (« Starting 'DcomLaunch' failed with error 2 »), toléré. `lsass` se connecte au moniteur de
+références, ouvre SECURITY, charge `msv1_0`, crée `\LsaAuthenticationPort` et son serveur RPC (`\pipe\lsarpc`) ; son
+pool de threads demande NtCreateIoCompletion (manque : « couldn't queue work item »). `winlogon` charge `msgina`, crée
+sa fenêtre SAS, en fait la fenêtre de notification du logon, fixe les paramètres régionaux du système, change de bureau
+et reste dans sa boucle ; il va ensuite plus loin par USER : un message envoyé à la fenêtre d'un autre thread avec un
+tampon du noyau (« message 0x46 with a kernel buffer sent to another thread: not yet », la fenêtre d'état de
+`msgina`), M6. Manquent aussi, tolérés : `sfc.dll`, `wlnotify.dll`, `shsvcs.dll` (DLL de notification),
+NtQueryDirectoryObject, NtQuerySystemInformation(0x2C), NtCreateIoCompletion, NtUserDestroyWindow,
+NtUserSystemParametersInfo(0x100A), NtApphelpCacheControl, NtUserNotifyProcessCreate.
+
+Vu en chemin, un défaut du noyau : l'horloge écrivait la page `KUSER_SHARED_DATA` de l'ancien chargeur par son adresse
+utilisateur (`0x7FFE0000`), valable dans l'espace du système seulement ; `services.exe` et `lsass.exe` survivent à la
+sonde (ce sont des petits-enfants de `smss`), et quand un de leurs threads était courant à un tick, l'écriture tombait
+sur leur page en lecture seule, à CLOCK_LEVEL : STOP 0x0A. L'horloge écrit maintenant cette page par son alias du noyau
+(`set_legacy_shared_data` : la page physique par le HHDM).
+
+Écarts et limites : le thread du SRM n'est pas un thread de Ps (pas de PsCreateSystemThread) ; le noyau ne partage pas
+de section avec `lsass` et ne lui envoie rien (fin de session, audit) ; la fin de `lsass` n'est pas vue ; les sessions
+de logon ne comptent pas les jetons qui les tiennent ; la sonde ne termine pas les petits-enfants de `smss`.
+
+Tests : hôte (`abi::security` : RmRequest lu de ses données, résultat posé à sa place ; `se::logon` : sessions connues,
+création et suppression, audit) ; le scénario `smss` (les ruches, le SRM et la connexion de `lsass`, `\pipe\lsarpc`,
+`\pipe\ntsvcs`, NtSetDefaultLocale, NtUserSetLogonNotifyWindow, aucun échec de `winlogon` ni de `lsass` ; un STOP y
+est interdit, ce qui a révélé le défaut de l'horloge).

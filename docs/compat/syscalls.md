@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 118 | 296 |
-| win32k | 113 | 737 |
+| ntoskrnl | 119 | 296 |
+| win32k | 114 | 737 |
 
 ## ntoskrnl
 
@@ -239,7 +239,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00dd` | `NtSetContextThread` | 2 |  |
 | `0x00de` | `NtSetDebugFilterState` | 3 |  |
 | `0x00df` | `NtSetDefaultHardErrorPort` | 1 | ✅ |
-| `0x00e0` | `NtSetDefaultLocale` | 2 |  |
+| `0x00e0` | `NtSetDefaultLocale` | 2 | ✅ |
 | `0x00e1` | `NtSetDefaultUILanguage` | 1 |  |
 | `0x00e2` | `NtSetDriverEntryOrder` | 2 |  |
 | `0x00e3` | `NtSetEaFile` | 4 |  |
@@ -836,7 +836,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1205` | `NtUserSetInformationThread` | 4 | ✅ |
 | `0x1206` | `NtUserSetInternalWindowPos` | 4 |  |
 | `0x1207` | `NtUserSetKeyboardState` | 1 |  |
-| `0x1208` | `NtUserSetLogonNotifyWindow` | 1 |  |
+| `0x1208` | `NtUserSetLogonNotifyWindow` | 1 | ✅ |
 | `0x1209` | `NtUserSetMenu` | 3 |  |
 | `0x120a` | `NtUserSetMenuContextHelpId` | 2 |  |
 | `0x120b` | `NtUserSetMenuDefaultItem` | 3 |  |

@@ -16,6 +16,7 @@ mod hardware;
 mod input;
 mod launcher;
 mod shared_data;
+mod srm;
 mod sys;
 mod syscall;
 mod userland;
@@ -46,6 +47,19 @@ const HEAP: &mm::pool::Pool<mm::pool::KernelBacking> = &mm::pool::NONPAGED_POOL;
 //
 // # IRQL: PASSIVE_LEVEL only.
 // Both the buddy lock and OffsetPageTable::map_to are spinlock-protected.
+
+/// Gives the clock the legacy loader's KUSER_SHARED_DATA page to update, by
+/// its kernel alias (HHDM): its user address (`SHARED_USER_DATA32_VA`) is
+/// that page only in the system address space, where the legacy processes
+/// run. A Ps process's thread may be current at a tick, and there the same
+/// address is its read-only shared page: written at CLOCK_LEVEL, it stopped
+/// the system (STOP 0x0A) once `services.exe` and `lsass.exe` outlived the
+/// `smss` probe.
+fn set_legacy_shared_data(pt: &mm::MmPageTables, hhdm_offset: u64) {
+    let va = x86_64::VirtAddr::new(u64::from(ps::loader::SHARED_USER_DATA32_VA));
+    let phys = pt.translate(va).expect("setup_process maps the legacy KUSER_SHARED_DATA");
+    hal::timer::set_shared_user_data_addr(Some(phys.as_u64() + hhdm_offset));
+}
 
 struct KernelPageMapper {
     pt: mm::MmPageTables,
@@ -338,6 +352,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     x86_64::instructions::interrupts::enable();
     // The keyboard to win32k (once it has the screen).
     input::start();
+    match srm::start() {
+        Ok(()) => log::info!(
+            "[boot] Se: {}, {} and {}, waiting for lsass",
+            srm::LSA_AUTHENTICATION_INITIALIZED,
+            srm::COMMAND_PORT,
+            srm::LSA_INIT_EVENT
+        ),
+        Err(status) => log::error!("[boot] Se: the reference monitor's command server refused: {status}"),
+    }
     // Raises starved threads every second (ke::sched).
     spawn_kernel_thread(
         ke::balance::BALANCE_SET_MANAGER_PRIORITY,
@@ -430,7 +453,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     userland::install_system_dll();
     userland::install_nls_tables();
     userland::mount_system_hive();
-    userland::mount_software_hive();
+    userland::mount_machine_hives();
     userland::install_fonts();
     if cfg!(feature = "test-persistence") {
         persistence_test();
@@ -9733,7 +9756,7 @@ fn loader_from_fat(hhdm_offset: u64) -> Option<(u32, u32)> {
     let mut mapper = KernelPageMapper { pt };
     let img = ps::loader::load_image(&pe_bytes, &mut vad, &mut mapper, None).ok()?;
     let ctx = ps::loader::setup_process(&img, &mut vad, &mut mapper, 4, 1).ok()?;
-    hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
+    set_legacy_shared_data(&mapper.pt, hhdm_offset);
     syscall::install(vad, hhdm_offset);
     Some((img.entry_point as u32, ctx.stack_top))
 }
@@ -9847,7 +9870,7 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
     );
 
     let ctx = ps::loader::setup_process(&img, &mut vad, &mut mapper, 4, 1).expect("loader_demo: setup_process failed");
-    hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
+    set_legacy_shared_data(&mapper.pt, hhdm_offset);
 
     log::info!("loader_demo: VAD has {} entry(ies)", vad.len());
     syscall::install(vad, hhdm_offset);
@@ -10408,7 +10431,7 @@ fn shell_load_and_spawn(fat_path: &str, hhdm_offset: u64) -> Option<usize> {
     // Re-install syscall context so NtAllocateVirtualMemory uses the new VAD.
     syscall::install(vad, hhdm_offset);
 
-    hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
+    set_legacy_shared_data(&mapper.pt, hhdm_offset);
 
     spawn_user_thread(img.entry_point as u32, ctx.stack_top)
 }

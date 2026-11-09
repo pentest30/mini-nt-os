@@ -56,10 +56,10 @@ fn reference_port(handle: u32, access: AccessMask) -> Result<Arc<Object<Port>>, 
 }
 
 /// PsLookupProcessThreadByCid : `client` désigne un thread vivant de ce
-/// processus ; `STATUS_INVALID_CID` sinon.
+/// processus, ou le thread noyau du moniteur de références (`ntoskrnl::srm`) ;
+/// `STATUS_INVALID_CID` sinon.
 fn check_client(client: ClientId32) -> Result<(), NtStatus> {
-    let thread = ps::ethread::lookup_thread(client.unique_thread).map_err(|_| STATUS_INVALID_CID)?;
-    if thread.pid() != client.unique_process {
+    if !ps::ethread::client_exists(client.unique_process, client.unique_thread) {
         return Err(STATUS_INVALID_CID);
     }
     Ok(())
