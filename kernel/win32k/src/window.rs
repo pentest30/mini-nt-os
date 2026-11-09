@@ -46,7 +46,7 @@ use alloc::vec::Vec;
 use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use abi::ntstatus::{NtStatus, STATUS_NOT_IMPLEMENTED};
+use abi::ntstatus::NtStatus;
 use abi::peb32::Peb32;
 use abi::process_parameters::RtlUserProcessParameters32;
 use abi::teb32::Teb32;
@@ -673,10 +673,12 @@ pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
 /// reçoit le message par sa file ([`crate::sent::send`]), le thread courant
 /// attendant la réponse.
 ///
+/// Un tampon du noyau voyage vers un autre thread par sa copie
+/// ([`crate::sent::send_buffer`]).
+///
 /// # Errors
-/// `STATUS_NOT_IMPLEMENTED` pour un tampon du noyau vers un autre thread
-/// (journalisé une fois) ; celles du rappel ; un envoi à un autre thread
-/// sans réponse ([`crate::sent::SendError::status`]).
+/// Celles du rappel ; un envoi à un autre thread sans réponse
+/// ([`crate::sent::SendError::status`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
@@ -690,16 +692,14 @@ pub fn send_message(window: &Arc<Window>, message: u32, wparam: u32, lparam: LPa
     }
     let thread = crate::convert_current_thread()?;
     if thread.server != window.pti {
-        let LParam::Value(value) = lparam else {
-            static REPORTED: AtomicBool = AtomicBool::new(false);
-            if !REPORTED.swap(true, Ordering::Relaxed) {
-                log::warn!("win32k: message {message:#x} with a kernel buffer sent to another thread: not yet");
-            }
-            return Err(STATUS_NOT_IMPLEMENTED);
-        };
         let target = crate::gui::thread_info_of(window.pti).ok_or(crate::sent::SendError::Gone.status())?;
-        return crate::sent::send(&thread, &target, window.handle, message, wparam, value, None)
-            .map_err(crate::sent::SendError::status);
+        let sent = match lparam {
+            LParam::Value(value) => crate::sent::send(&thread, &target, window.handle, message, wparam, value, None),
+            LParam::Buffer { bytes, write_back } => {
+                crate::sent::send_buffer(&thread, &target, window.handle, message, wparam, bytes, write_back)
+            }
+        };
+        return sent.map_err(crate::sent::SendError::status);
     }
     drop(thread);
     let state = window.state();

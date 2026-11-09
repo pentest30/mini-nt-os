@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **Un tampon du noyau envoyé à la fenêtre d'un autre thread** (`claude/winlogon-sendmessage`, M5 étape 9,
+  [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 26) : `win32k::sent::send_buffer` ; le message emporte la copie
+  du tampon (WM_WINDOWPOSCHANGING et son WINDOWPOS…), le thread de la fenêtre l'emballe vers son mode utilisateur, et
+  ce que la procédure y écrit revient à l'envoyeur. Tests : hôte (`win32k::sent`), scénario `send-messages`
+  (SetWindowPos de la fenêtre d'un autre thread ; mutation du retour détectée), `smss`. Corrigés en chemin, venus de
+  `main` : les tests de `nc_calc_size` (le paramètre `has_menu` de `d4d2231`) ne compilaient plus ; le rapport des
+  services ne suivait pas les menus de la PR #107. **`winlogon` et la ruche du LiveCD** : la ruche SYSTEM épinglée
+  dit une installation en cours (`Setup\SetupType` non nul, `CmdLine` = `setup -mini`) ; `winlogon` lance
+  l'installation de ReactOS (absente du disque) au lieu du logon, et attend. **Décision à prendre** : la couche Mino
+  des ruches (ADR-012 : un système installé, `SetupType` = 0, et l'ouverture de session automatique), en attendant ou
+  par `tools/mkhive`, pour que `winlogon` aille au logon (`msgina`, `userinit`, `explorer`).
+
 - **`services.exe` et `lsass.exe` ; `winlogon` va jusqu'à sa fenêtre SAS** (`claude/winlogon-services`, par-dessus
   `claude/sharp-davinci-37d7d9` (NPFS), `main` et `claude/fpu-double-fault` ; M5 étape 9,
   [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 25) : sur le disque, `services.exe`, `lsass.exe`, `msv1_0.dll`,

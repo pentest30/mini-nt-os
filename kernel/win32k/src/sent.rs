@@ -15,7 +15,12 @@
 //!
 //! Dans un même processus, `lParam` passe tel quel (ses pointeurs y restent
 //! valides) ; vers un autre processus, un message qui porte un pointeur n'est
-//! pas encore traduit (refusé, journalisé une fois).
+//! pas encore traduit (refusé, journalisé une fois). Un message de win32k
+//! dont `lParam` est un tampon du noyau (WM_WINDOWPOSCHANGING et son
+//! WINDOWPOS, WM_NCCALCSIZE…) emporte une copie du tampon
+//! ([`send_buffer`]) : le thread destinataire l'emballe vers son mode
+//! utilisateur comme pour un envoi à lui-même, et l'envoyeur reprend à la
+//! réponse ce que la procédure y a écrit.
 //!
 //! Le destinataire peut finir sans répondre (pas de rappel de Ps à la fin
 //! d'un thread GUI) : l'envoyeur regarde toutes les [`SLICE_MS`] ms s'il vit
@@ -30,6 +35,7 @@
 //! diffusion (HWND_BROADCAST).
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_TIMEOUT, STATUS_WAIT_0};
@@ -54,6 +60,9 @@ pub struct SentMessage {
     pub lparam: u32,
     /// La valeur de la procédure, une fois revenue.
     reply: KSpinLock<Option<u32>>,
+    /// Le tampon du noyau que désigne `lParam`, copié, et si la procédure
+    /// y écrit ; le destinataire le prend le temps de la procédure.
+    buffer: KSpinLock<Option<(Vec<u8>, bool)>>,
     /// Signalé à la réponse ; `None` pour SendNotifyMessage, que personne
     /// n'attend.
     done: Option<Arc<Object<Event>>>,
@@ -69,8 +78,37 @@ impl SentMessage {
             wparam,
             lparam,
             reply: KSpinLock::new(None),
+            buffer: KSpinLock::new(None),
             done: waited.then(|| Event::create(EventType::NotificationEvent, false)),
         })
+    }
+
+    /// Le message `message` pour la fenêtre `hwnd`, dont `lParam` est la
+    /// copie `bytes` d'un tampon du noyau, où la procédure écrit si
+    /// `write_back` ; son envoyeur en attend la réponse.
+    pub fn with_buffer(hwnd: u32, message: u32, wparam: u32, bytes: Vec<u8>, write_back: bool) -> Arc<Self> {
+        let sent = Self::new(hwnd, message, wparam, 0, true);
+        *sent.buffer.lock() = Some((bytes, write_back));
+        sent
+    }
+
+    /// Prend le tampon, le temps de la procédure.
+    fn take_buffer(&self) -> Option<(Vec<u8>, bool)> {
+        self.buffer.lock().take()
+    }
+
+    /// Rend le tampon, tel que la procédure l'a laissé.
+    fn put_back(&self, bytes: Vec<u8>, write_back: bool) {
+        *self.buffer.lock() = Some((bytes, write_back));
+    }
+
+    /// Recopie dans `bytes` ce que la procédure a écrit dans le tampon, si
+    /// elle y écrit (`write_back`) ; rien sinon, ou s'il n'est pas revenu.
+    fn copy_back(&self, bytes: &mut [u8]) {
+        if let Some((copy, true)) = &*self.buffer.lock() {
+            let length = copy.len().min(bytes.len());
+            bytes[..length].copy_from_slice(&copy[..length]);
+        }
     }
 
     /// La valeur de la procédure, si elle est revenue.
@@ -229,7 +267,43 @@ pub fn send(
     if unmarshalled(current, target, message, wparam) {
         return Err(SendError::Unmarshalled);
     }
-    let sent = SentMessage::new(hwnd, message, wparam, lparam, true);
+    wait_reply(current, target, SentMessage::new(hwnd, message, wparam, lparam, true), timeout_ms)
+}
+
+/// co_MsqSendMessage d'un message de win32k dont `lParam` est le tampon du
+/// noyau `bytes` : le message emporte sa copie, que le thread `target`
+/// emballe vers son mode utilisateur ; à la réponse, ce que la procédure y
+/// a écrit revient dans `bytes` (`write_back`). Sans délai.
+///
+/// # Errors
+/// [`SendError`].
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn send_buffer(
+    current: &ThreadInfo,
+    target: &Arc<ThreadInfo>,
+    hwnd: u32,
+    message: u32,
+    wparam: u32,
+    bytes: &mut [u8],
+    write_back: bool,
+) -> Result<u32, SendError> {
+    let sent = SentMessage::with_buffer(hwnd, message, wparam, bytes.to_vec(), write_back);
+    let result = wait_reply(current, target, sent.clone(), None)?;
+    sent.copy_back(bytes);
+    Ok(result)
+}
+
+/// Met `sent` parmi les messages envoyés de `target` et attend sa réponse,
+/// au plus `timeout_ms` ms s'il est donné, en traitant les messages envoyés
+/// à `current`.
+fn wait_reply(
+    current: &ThreadInfo,
+    target: &Arc<ThreadInfo>,
+    sent: Arc<SentMessage>,
+    timeout_ms: Option<u32>,
+) -> Result<u32, SendError> {
     let done = sent.done.clone().expect("a waited message has its event");
     queue_to(target, sent.clone());
     let slice = u64::from(SLICE_MS) * MILLISECOND;
@@ -311,9 +385,17 @@ pub fn dispatch_one(thread: &ThreadInfo) -> bool {
     thread.mirror_queue_bits(wake, change);
     let Some(sent) = sent else { return false };
     let result = match crate::window::get(sent.hwnd) {
-        Some(window) if window.pti == thread.server => {
-            crate::window::send_message(&window, sent.message, sent.wparam, LParam::Value(sent.lparam)).unwrap_or(0)
-        }
+        Some(window) if window.pti == thread.server => match sent.take_buffer() {
+            Some((mut bytes, write_back)) => {
+                let lparam = LParam::Buffer { bytes: &mut bytes, write_back };
+                let result = crate::window::send_message(&window, sent.message, sent.wparam, lparam).unwrap_or(0);
+                sent.put_back(bytes, write_back);
+                result
+            }
+            None => {
+                crate::window::send_message(&window, sent.message, sent.wparam, LParam::Value(sent.lparam)).unwrap_or(0)
+            }
+        },
         _ => 0,
     };
     sent.complete(result);
@@ -346,5 +428,21 @@ mod tests {
         assert_eq!((sent.message, sent.wparam, sent.lparam, sent.reply()), (0x0400, 1, 2, None));
         sent.complete(0);
         assert_eq!(sent.reply(), Some(0), "nobody waits: no event");
+    }
+
+    #[test]
+    fn a_kernel_buffer_travels_as_a_copy_and_comes_back_when_written() {
+        let mut bytes = [1u8, 2, 3, 4];
+        let sent = SentMessage::with_buffer(0x20, 0x0046, 0, bytes.to_vec(), true);
+        let (mut copy, write_back) = sent.take_buffer().expect("the copy");
+        assert!(write_back && sent.take_buffer().is_none(), "taken by the recipient");
+        copy[0] = 9; // What the procedure writes.
+        sent.put_back(copy, write_back);
+        sent.copy_back(&mut bytes);
+        assert_eq!(bytes, [9, 2, 3, 4]);
+        let mut kept = [1u8, 2];
+        let read_only = SentMessage::with_buffer(0x20, 0x0081, 0, alloc::vec![7, 7], false);
+        read_only.copy_back(&mut kept);
+        assert_eq!(kept, [1, 2], "a buffer the procedure only reads stays");
     }
 }
