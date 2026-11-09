@@ -1,5 +1,16 @@
 # Notes de passation
 
+- **La TSS tient dans une seule page** (`claude/fpu-double-fault`) : le scénario `fpu` s'arrêtait (STOP 0x7F, double
+  faute, `RIP 0x401000`) sur l'hôte Windows, AMD et Intel, sur `main` aussi. La trace `-d int` de QEMU montre le
+  #PF de la première instruction d'un thread i386 qui faute à nouveau pendant sa livraison, sur `0x8017f000` : la
+  lecture de RSP0 (TSS+4, 8 octets alignés sur 4) chevauchait une page dans ce binaire, et QEMU 11.1 tronque à 32 bits
+  l'adresse de la seconde page d'une telle lecture implicite quand l'interruption vient du mode compatibilité (TR
+  tient bien `0xffffffff8017eff8`). `hal::gdt` met la TSS dans un bloc aligné sur 128 octets (`TssBlock`) et
+  `gdt::init` vérifie qu'elle ne franchit pas de page ; contournement documenté dans le module. Le défaut de QEMU
+  n'est pas encore signalé en amont ni réduit à un cas minimal : tâche de diagnostic ouverte (06, règle 9). Tests :
+  hôte (`the_tss_never_crosses_a_page`), mutation (sans l'alignement, `fpu` s'arrête au démarrage sur « the TSS
+  crosses a page ») ; `fpu` AMD et Intel, `smoke`.
+
 - **Les tubes nommés d'Io (NPFS) ; `winlogon` démarre son serveur RPC** (`claude/sharp-davinci-37d7d9`, M5 étape 9,
   [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 24) : `io::npfs` (`\Device\NamedPipe`, créé au démarrage ;
   `\??\PIPE` vient de `smss`) tient les tubes, leurs instances, leurs états et leurs files de données (messages et
