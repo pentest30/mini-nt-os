@@ -707,18 +707,22 @@ mod tests {
     #[test]
     fn borders_scroll_bars_and_edges_come_off_the_client_area() {
         let rect = Rect::new(10, 10, 210, 110);
-        assert_eq!(nc_calc_size(WS_POPUP, 0, 0, false, rect, &metric).client, rect, "no frame");
-        assert_eq!(nc_calc_size(WS_POPUP | WS_BORDER, 0, 0, false, rect, &metric).client, Rect::new(11, 11, 209, 109));
-        let scrolled = nc_calc_size(WS_POPUP | WS_VSCROLL | WS_HSCROLL, WS_EX_CLIENTEDGE, 0, false, rect, &metric);
+        assert_eq!(nc_calc_size(WS_POPUP, 0, 0, false, false, rect, &metric).client, rect, "no frame");
+        assert_eq!(
+            nc_calc_size(WS_POPUP | WS_BORDER, 0, 0, false, false, rect, &metric).client,
+            Rect::new(11, 11, 209, 109)
+        );
+        let scrolled =
+            nc_calc_size(WS_POPUP | WS_VSCROLL | WS_HSCROLL, WS_EX_CLIENTEDGE, 0, false, false, rect, &metric);
         assert_eq!(scrolled.client, Rect::new(12, 12, 192, 92), "2 of client edge, then 16 of each scroll bar");
         assert_eq!(scrolled.state, WNDS_HASVERTICALSCROOLLBAR | WNDS_HASHORIZONTALSCROLLBAR);
-        let left = nc_calc_size(WS_POPUP | WS_VSCROLL, WS_EX_LEFTSCROLLBAR, 0, false, rect, &metric);
+        let left = nc_calc_size(WS_POPUP | WS_VSCROLL, WS_EX_LEFTSCROLLBAR, 0, false, false, rect, &metric);
         assert_eq!(left.client, Rect::new(26, 10, 210, 110), "a scroll bar on the left");
-        let tool = nc_calc_size(WS_POPUP | WS_CAPTION, WS_EX_TOOLWINDOW, 0, false, rect, &metric);
+        let tool = nc_calc_size(WS_POPUP | WS_CAPTION, WS_EX_TOOLWINDOW, 0, false, false, rect, &metric);
         assert_eq!(tool.client, Rect::new(13, 29, 207, 107), "a small caption");
-        let tiny = nc_calc_size(WS_OVERLAPPEDWINDOW, 0, 0, false, Rect::new(0, 0, 4, 4), &metric);
+        let tiny = nc_calc_size(WS_OVERLAPPEDWINDOW, 0, 0, false, false, Rect::new(0, 0, 4, 4), &metric);
         assert!(tiny.client.right >= tiny.client.left && tiny.client.bottom >= tiny.client.top, "never inverted");
-        let minimized = nc_calc_size(WS_OVERLAPPEDWINDOW | WS_MINIMIZE, 0, 0, false, rect, &metric);
+        let minimized = nc_calc_size(WS_OVERLAPPEDWINDOW | WS_MINIMIZE, 0, 0, false, false, rect, &metric);
         assert_eq!(minimized.client, Rect::new(10, 10, 10, 10));
     }
 
