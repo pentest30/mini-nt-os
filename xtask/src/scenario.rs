@@ -80,6 +80,8 @@ pub struct Scenario {
     pub timeout: Duration,
     pub requires_userland: bool,
     pub requires_native: bool,
+    /// Les apitests de ReactOS (rostests-build) au disque de démarrage.
+    pub requires_rostests: bool,
     /// The ramdisk image is also the system disk `C:`.
     pub system_disk: bool,
     /// Wrap the system volume in GPT rather than using raw FAT.
@@ -207,6 +209,7 @@ impl Scenario {
             timeout: Duration::from_secs(120),
             requires_userland: false,
             requires_native: false,
+            requires_rostests: false,
             system_disk: false,
             gpt_disk: false,
             installed_disk: false,
@@ -274,6 +277,7 @@ impl Scenario {
                         match requirement {
                             "userland" => sc.requires_userland = true,
                             "native" => sc.requires_native = true,
+                            "rostests" => sc.requires_rostests = true,
                             _ => return Err(format!("{}: unknown requirement `{requirement}`", at())),
                         }
                     }

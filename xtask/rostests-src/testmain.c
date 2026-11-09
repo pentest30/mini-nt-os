@@ -2,9 +2,11 @@
  * (winetest_testlist, posée par testlist.c), rend le résumé de chacun par
  * DbgPrint — le port série, où le scénario le lit — et un bilan final. Le
  * main d'un seul test de wine/test.h est écarté (testlist.c est compilé
- * avec -Dmain=apitest_wine_main). */
+ * avec -Dmain=apitest_wine_main). Chaque test tourne sous __try (PSEH) :
+ * celui qui plante ne tue pas le banc — il compte pour un échec. */
 
 #include <windows.h>
+#include <pseh/pseh2.h>
 
 __declspec(dllimport) int __cdecl DbgPrint(const char *format, ...);
 
@@ -34,19 +36,29 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev, LPSTR line, int show)
     (void)instance; (void)prev; (void)line; (void)show;
     DbgPrint("[apitest] begin\n");
     for (test = winetest_testlist; test->name != 0; ++test) {
-        int ok, todo, fails, skip;
+        int ok, todo, fails, skip, crashed;
         winetest_successes = winetest_failures = 0;
         winetest_todo_successes = winetest_todo_failures = 0;
         winetest_skipped = 0;
-        test->func();
+        crashed = 0;
+        _SEH2_TRY
+        {
+            test->func();
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            crashed = 1;
+        }
+        _SEH2_END;
         ok = winetest_successes;
         todo = winetest_todo_successes;
-        fails = winetest_failures + winetest_todo_failures;
+        fails = winetest_failures + winetest_todo_failures + crashed;
         skip = winetest_skipped;
         skipped += skip;
         total += ok + todo + fails;
         failed += fails;
-        DbgPrint("[apitest] %s: ok=%d todo=%d fail=%d skip=%d\n", test->name, ok, todo, fails, skip);
+        DbgPrint("[apitest] %s: ok=%d todo=%d fail=%d skip=%d%s\n",
+                 test->name, ok, todo, fails, skip, crashed ? " (AV)" : "");
     }
     DbgPrint("[apitest] TOTALS: tests=%d failures=%d skipped=%d\n", total, failed, skipped);
     return 0;

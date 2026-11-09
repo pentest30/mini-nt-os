@@ -334,6 +334,17 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 }
             }
         }
+        if sc.requires_rostests {
+            match rostests::build(ws)? {
+                Some(files) => extra_files.extend(files),
+                None => {
+                    let tool = rostests::missing_tool().unwrap_or("a compiler");
+                    println!("xtask: SKIP {}: rostests needs {tool}", sc.name);
+                    skipped.push(sc.name.clone());
+                    continue;
+                }
+            }
+        }
         if let Some(program) = &sc.initial_command {
             put_initial_command(&mut extra_files, program)?;
         }
@@ -438,6 +449,36 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     Err(report) => {
                         outcome.passed = false;
                         outcome.reason = report;
+                    }
+                }
+            }
+            // Le critère du M5 : le bilan des apitests comparé au seuil
+            // du jalon — [apitest] TOTALS: tests=N failures=N skipped=N.
+            if outcome.passed && sc.requires_rostests {
+                let log = qemu::read_lossy(&outcome.serial_log);
+                let parsed = log.lines().rev().find_map(rostests::parse_totals);
+                match parsed {
+                    Some((tests, failures, skipped)) => {
+                        let passing = tests - failures;
+                        let share = passing as f64 / tests.max(1) as f64;
+                        println!(
+                            "xtask: {label}: apitests {passing}/{tests} passent ({:.0} %), {} écartés ; seuil {:.0} %",
+                            share * 100.0,
+                            skipped,
+                            rostests::THRESHOLD * 100.0
+                        );
+                        if share < rostests::THRESHOLD {
+                            outcome.passed = false;
+                            outcome.reason = format!(
+                                "apitests sous le seuil : {passing}/{tests} ({:.0} %) < {:.0} %",
+                                share * 100.0,
+                                rostests::THRESHOLD * 100.0
+                            );
+                        }
+                    }
+                    None => {
+                        outcome.passed = false;
+                        outcome.reason = "apitests : le bilan [apitest] TOTALS n'est pas dans le journal".into();
                     }
                 }
             }
