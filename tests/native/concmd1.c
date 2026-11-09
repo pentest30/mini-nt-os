@@ -11,6 +11,12 @@
  * (DbgPrint) for each line, where the scenario looks for it; it ends with
  * EXIT_STATUS.
  *
+ * What the root of C: holds changes with the test programs that xtask puts
+ * there and with the files the kernel's self-tests write: the listings are
+ * printed without line numbers (C:\LIST.TXT) or checked here (C:\DIR.TXT:
+ * the summary of `dir` counts what it lists), so that the scenario looks
+ * for no number that moves with them.
+ *
  * Built by `cargo xtask` (xtask/src/native.rs) without a C runtime:
  * -nostdlib, entry point GuiStartup.
  */
@@ -63,8 +69,9 @@ typedef struct {
 #define KLF_ACTIVATE 0x00000001
 #define CMD_WAIT 100000
 #define EXIT_STATUS 0x600D
-/* The longest file read, and the longest line printed. */
-#define FILE_BYTES 4096
+/* The longest file read (a listing of the root, some 50 bytes for each of its
+   files), and the longest line printed. */
+#define FILE_BYTES 65536
 #define LINE_BYTES 160
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
@@ -122,41 +129,153 @@ static BOOL take_a_desktop(void)
     return 1;
 }
 
-/* The file `name`, one line of the debug port for each of its lines, after
-   `tag` and the line's number (from 1); its end of lines (CR, LF) not
-   printed. */
-static void print_file(const WCHAR *name, const char *tag)
+/* The last file read, its `read` bytes. */
+static char bytes[FILE_BYTES];
+static DWORD read;
+
+/* The file `name` in `bytes`, at most FILE_BYTES of it; whether it opened.
+   `tag` names it on the debug port. */
+static BOOL read_file(const WCHAR *name, const char *tag)
 {
-    static char bytes[FILE_BYTES + 1];
-    char line[LINE_BYTES + 1];
-    DWORD read = 0;
-    DWORD at;
-    DWORD length = 0;
-    DWORD number = 0;
     HANDLE file = CreateFileW(name, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
 
+    read = 0;
     if (file == INVALID_HANDLE_VALUE) {
         DbgPrint("[concmd] %s: CreateFileW: error %lu\n", tag, GetLastError());
-        return;
+        return 0;
     }
     if (!ReadFile(file, bytes, FILE_BYTES, &read, 0))
         DbgPrint("[concmd] %s: ReadFile: error %lu\n", tag, GetLastError());
     CloseHandle(file);
     DbgPrint("[concmd] %s: %lu bytes\n", tag, read);
-    for (at = 0; at <= read; at++) {
-        char c = at < read ? bytes[at] : '\n';
-        if (c == '\r')
-            continue;
-        if (c == '\n') {
-            if (length || at < read) {
-                line[length] = 0;
-                DbgPrint("[concmd] %s %lu: %s\n", tag, ++number, line);
-            }
-            length = 0;
-        } else if (length < LINE_BYTES) {
-            line[length++] = c;
+    if (read == FILE_BYTES)
+        DbgPrint("[concmd] %s: too long, cut at %lu bytes\n", tag, read);
+    return 1;
+}
+
+/* The line of `bytes` at `*at` in `line`, without its end (CR, LF), cut at
+   LINE_BYTES, and `*at` past it; 0 after the last line. */
+static BOOL next_line(DWORD *at, char *line)
+{
+    DWORD length = 0;
+
+    if (*at >= read)
+        return 0;
+    for (; *at < read && bytes[*at] != '\n'; ++*at)
+        if (bytes[*at] != '\r' && length < LINE_BYTES)
+            line[length++] = bytes[*at];
+    if (*at < read)
+        ++*at;
+    line[length] = 0;
+    return 1;
+}
+
+/* One line of the debug port for each line of `bytes`, after `tag` and, if
+   `numbered`, the line's number (from 1). */
+static void print_lines(const char *tag, BOOL numbered)
+{
+    char line[LINE_BYTES + 1];
+    DWORD at = 0;
+    DWORD number = 0;
+
+    while (next_line(&at, line)) {
+        if (numbered)
+            DbgPrint("[concmd] %s %lu: %s\n", tag, ++number, line);
+        else
+            DbgPrint("[concmd] %s: %s\n", tag, line);
+    }
+}
+
+/* Whether `text` holds `part`. */
+static BOOL holds(const char *text, const char *part)
+{
+    const char *t;
+    const char *p;
+
+    for (; *text; text++) {
+        for (t = text, p = part; *p && *t == *p; t++, p++)
+            ;
+        if (!*p)
+            return 1;
+    }
+    return 0;
+}
+
+/* The number at the start of `line`, after its blanks. */
+static DWORD leading_number(const char *line)
+{
+    DWORD number = 0;
+
+    while (*line == ' ')
+        line++;
+    for (; *line >= '0' && *line <= '9'; line++)
+        number = number * 10 + (DWORD)(*line - '0');
+    return number;
+}
+
+/* Whether each line of `bytes`, a name, ends with `extension` (in capitals),
+   whatever its case: a line of the debug port for each one that does not. */
+static void check_extension(const char *tag, const char *extension)
+{
+    char line[LINE_BYTES + 1];
+    DWORD at = 0;
+    DWORD length;
+    DWORD size;
+    DWORD i;
+
+    for (size = 0; extension[size]; size++)
+        ;
+    while (next_line(&at, line)) {
+        for (length = 0; line[length]; length++)
+            ;
+        for (i = 0; i < size && length >= size; i++) {
+            char c = line[length - size + i];
+            if (c >= 'a' && c <= 'z')
+                c = (char)(c - 'a' + 'A');
+            if (c != extension[i])
+                break;
+        }
+        if (length < size || i < size)
+            DbgPrint("[concmd] %s: not a %s file: %s\n", tag, extension, line);
+    }
+}
+
+/* Whether the summary of the listing of `dir` in `bytes` counts what it lists:
+   its lines of files and directories begin with their date (a digit), and
+   the directories show <DIR>; File(s) and Dir(s) begin with their number. */
+static void check_summary(const char *tag)
+{
+    char line[LINE_BYTES + 1];
+    DWORD at = 0;
+    DWORD files = 0;
+    DWORD dirs = 0;
+    DWORD files_counted = 0;
+    DWORD dirs_counted = 0;
+    BOOL files_line = 0;
+    BOOL dirs_line = 0;
+
+    while (next_line(&at, line)) {
+        if (line[0] >= '0' && line[0] <= '9') {
+            if (holds(line, "<DIR>"))
+                dirs++;
+            else
+                files++;
+        } else if (holds(line, " File(s) ")) {
+            files_counted = leading_number(line);
+            files_line = 1;
+        } else if (holds(line, " Dir(s) ")) {
+            dirs_counted = leading_number(line);
+            dirs_line = 1;
         }
     }
+    if (!files_line || !dirs_line)
+        DbgPrint("[concmd] %s: the summary does not count what is listed: no File(s) or Dir(s) line\n", tag);
+    else if (files != files_counted || dirs != dirs_counted)
+        DbgPrint("[concmd] %s: the summary does not count what is listed: %lu files and %lu directories listed, "
+                 "%lu and %lu counted\n",
+                 tag, files, dirs, files_counted, dirs_counted);
+    else
+        DbgPrint("[concmd] %s: the summary counts what is listed: %lu files, %lu directories\n", tag, files, dirs);
 }
 
 DWORD __stdcall GuiStartup(void)
@@ -184,8 +303,16 @@ DWORD __stdcall GuiStartup(void)
     DbgPrint("[concmd] CMD.EXE: wait %lu, exit code %lx\n", wait, code);
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
-    print_file(L"C:\\OUT.TXT", "OUT.TXT");
-    print_file(L"C:\\DIR.TXT", "DIR.TXT");
+    if (read_file(L"C:\\OUT.TXT", "OUT.TXT"))
+        print_lines("OUT.TXT", 1);
+    if (read_file(L"C:\\LIST.TXT", "LIST.TXT")) {
+        print_lines("LIST.TXT", 0);
+        check_extension("LIST.TXT", ".TXT");
+    }
+    if (read_file(L"C:\\DIR.TXT", "DIR.TXT")) {
+        print_lines("DIR.TXT", 1);
+        check_summary("DIR.TXT");
+    }
     ExitProcess(EXIT_STATUS);
     return 0;
 }

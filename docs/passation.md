@@ -1,5 +1,13 @@
 # Notes de passation
 
+- **Le scénario `cmd` ne compte plus les fichiers** (`claude/pensive-goldstine-131ffb`) : il échouait sur `main`, sur
+  AMD et Intel. `dir /b C:\*.TXT` listait aussi `A long name.txt` (self-test VFAT du démarrage), la racine de `C:`
+  comptait 34 fichiers et non 22 (les programmes de `tests/native/`), ce qui décalait les lignes attendues de
+  `OUT.TXT` et de `DIR.TXT` ; `forbid = 0 bytes free` attrapait « 4,180,480 bytes free ». `dir /b` écrit maintenant
+  `C:\LIST.TXT`, imprimé sans numéros, dont `CONCMD1.EXE` vérifie qu'il ne tient que des `.TXT` ; pour `dir C:\`,
+  il vérifie que le résumé compte les fichiers et répertoires listés ; le motif interdit vise `Dir(s)` suivi d'une
+  place nulle. Détail : [`compat/m5-console.md`](compat/m5-console.md), étape 8.
+
 - **Le moteur de l'installateur va au bout malgré la fin de son thread** (`claude/install-critical-region`, par-dessus
   la PR #97) : préparation, formatage et copie passent par `io::install::run_exclusive`, qui tient le verrou exclusif
   du moteur dans une région critique (`ke_enter_critical_region`) ; la fin du thread (APC noyau normal) attend que le
@@ -227,7 +235,8 @@ jour à chaque commit qui change l'état.
   que 16 octets : un `move:` de plus de 4 paquets (508 px) part en partie, le reste avec le clic
   suivant ; les scénarios découpent leurs grands mouvements.
   Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la sonde coupait la copie :
-  corrigé, voir « La sonde de `smss` laisse finir la copie » en tête) et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
+  corrigé, voir « La sonde de `smss` laisse finir la copie » en tête) et `cmd` attend des numéros de ligne de `dir` que
+  les fichiers des self-tests ont décalés (corrigé, voir « Le scénario `cmd` ne compte plus les fichiers » en tête).
   La souris absolue de VirtualBox (branche `claude/vbox-mouse`, `docs/compat/vbox.md`) : `hal::pci`
   (mécanisme n° 1, recherche par fabricant et modèle, BAR d'E/S), `abi::vmmdev`, `hal::vmmdev`, pilote
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
