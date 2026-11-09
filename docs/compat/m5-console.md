@@ -465,6 +465,14 @@ Le banc : le scénario `cmd` vérifie l'en-tête de `dir` (sans nom, numéro de 
 (« 08/04/2004  12:00 PM »), la place libre (pas « 0 bytes free », pas de « 1601 »), `copy C:\KERNEL.BIN C:\K.BIN`
 puis `dir /TC C:\K.BIN` (la date de création de la source), et `vol`.
 
+Depuis, la racine de `C:` change : les programmes de `tests/native/` que `xtask` y met, et les fichiers des
+self-tests du noyau (`MINOTEST.TXT`, `A long name.txt`, `MINODIR`…), ont décalé les lignes que le scénario attendait
+(22 fichiers, puis 34). Le scénario ne compte plus rien : `dir /b C:\*.TXT` écrit son propre fichier, `C:\LIST.TXT`,
+que `CONCMD1.EXE` imprime sans numéros de ligne en vérifiant qu'il ne tient que des noms en `.TXT` (quelle que soit
+leur casse) ; pour `dir C:\`, il vérifie que le résumé (`File(s)`, `Dir(s)`) compte les fichiers et les répertoires
+listés. Les lignes numérotées de `C:\OUT.TXT` ne dépendent plus du disque. Le motif interdit vise la seule place libre
+nulle (`Dir(s)`, 15 espaces, `0 bytes free`), et plus une place qui finit par 0.
+
 Tests :
 
 - hôte :
