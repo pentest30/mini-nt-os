@@ -27,6 +27,7 @@ mod iso9660;
 mod native;
 mod partition;
 mod qemu;
+mod rostests;
 mod scenario;
 mod screen;
 mod sha256;
@@ -124,6 +125,14 @@ fn dispatch(mut args: Args) -> Result<()> {
             cargo(&ws, &["run", "--quiet", "-p", "syscall-gen"])
         }
         Some("fetch-userland") => userland::fetch(&ws, args),
+        Some("rostests-fetch") => {
+            args.finish()?;
+            rostests::fetch(&ws)
+        }
+        Some("rostests-build") => {
+            args.finish()?;
+            rostests::build(&ws).map(|_| ())
+        }
         Some("help") | Some("-h") | Some("--help") | None => {
             print!("{USAGE}");
             Ok(())
