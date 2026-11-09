@@ -194,6 +194,18 @@ jour à chaque commit qui change l'état.
   appeler le moteur ni modifier les disques. Les scénarios
   `boot-menu-install` et `boot-menu-live` passent sur AMD et Intel. Utiliser
   `--initial-command system` pour conserver le `winlogon.exe` de ReactOS.
+- **Le bureau lance `cmd` et `taskmgr`** (branche `claude/desktop-launch`) : dans le menu Démarrer de
+  `DESKTOP1.EXE`, Terminal démarre `C:\WINDOWS\SYSTEM32\CMD.EXE` dans une console à lui (`CREATE_NEW_CONSOLE`),
+  et l'entrée Software devient Task Manager (`TASKMGR.EXE`) ; un appui sur l'entrée ou Entrée dessus. Deux défauts
+  vus en chemin : le bureau ne chargeait pas de disposition de clavier (aucune touche ne devenait une touche
+  virtuelle : le menu n'a jamais répondu au clavier), et un appui sur Démarrer le remontait, plein écran, par-dessus
+  les fenêtres lancées (il garde désormais sa place sous elles : `SWP_NOZORDER` à `WM_WINDOWPOSCHANGING`, comme le
+  bureau d'un shell). Scénario `desktop-launch` (AMD et Intel) : Terminal au clavier, Task Manager à la souris, la
+  liste des processus lue par le PID de Task Manager, la console toujours visible ; sans `SWP_NOZORDER`, il échoue
+  (vérifié). Vérifié aussi sous VirtualBox (VM `Mino-main`) : `cmd` répond au clavier (`ver`). La fenêtre de
+  `taskmgr` s'ouvre avec sa liste des applications, mais sans onglets, menu ni texte de boutons : la suite est sur
+  `claude/apps-wave`. `consrv` y bute sur une assertion de ReactOS (`GuiData->hIcon && GuiData->hIconSm`), ignorée,
+  comme dans `cmd` et `console`.
 - **Le flux d'installation tourne sur VirtualBox** : avec un
   disque cible vierge de 96 Mio attaché en maître secondaire, l'assistant
   navigue et **la préparation réelle écrit le MBR protecteur et les deux
@@ -356,9 +368,21 @@ jour à chaque commit qui change l'état.
   (commentaire de la branche `Present`). L'autre symptôme vu en même temps, QEMU sorti avec le code 1 sans message,
   est revenu sur la suite complète (Windows, d'autres sessions lançant QEMU en même temps, aucune VirtualBox) : 4
   runs sur 65 (`bitmap` AMD avant la première ligne série, `dir` Intel, `installed-persistence` Intel, `mouse` AMD en
-  pleine phase 1), `qemu.log` vide, l'autre CPU passant ; relancés seuls, les 4 passent. Le code 1 est celui d'un
-  processus terminé de l'extérieur (`TerminateProcess(…, 1)`, comme `taskkill /F`) : la piste est l'hôte, pas le
-  noyau.
+  pleine phase 1), `qemu.log` vide, l'autre CPU passant ; relancés seuls, les 4 passent.
+- **Les QEMU tués avec le code 1 : la cause est trouvée** (branche `claude/qemu-exit-1`). Un autre assistant
+  (ZCode, qui travaille dans le checkout principal) préfixe chacun de ses lancements de scénarios par
+  `taskkill //IM qemu-system-x86_64.exe //F`, qui tue tous les QEMU de la machine, ceux des autres sessions compris.
+  Pris sur le fait le 2026-11-08 à 23:18:16 : une sonde des processus (une boucle PowerShell sur `Win32_Process`,
+  avec un handle sur chaque QEMU pour son code de sortie) a vu ce `taskkill`, lancé par le bash de ZCode avant son
+  `xtask test --boot --scenario tasklist …`, tuer à la même milliseconde trois QEMU témoins au repos et un run de
+  `cmd`. QEMU écrit ses propres erreurs sur sa sortie avant de sortir avec 1, et un reset de l'invité sous
+  `-no-reboot` comme un `quit` sortent avec 0 : le code 1 sans un mot vient de `TerminateProcess`. Le nettoyage
+  par le nom s'explique : un `xtask` tué laissait son QEMU orphelin (vérifié). Désormais chaque QEMU d'un run est
+  dans un objet job de son `xtask` (`xtask/src/job.rs`, `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) et meurt avec lui ;
+  vérifié en tuant `xtask.exe` seul, avec la contre-épreuve sans le job (QEMU orphelin). `xtask` dit aussi d'un QEMU
+  tué ainsi « QEMU ended by another process » au lieu de « QEMU exited (exit code: 1) » (`qemu::outside_end`, tests
+  hôte). `CLAUDE.md` interdit d'arrêter QEMU par son nom ; ZCode doit en être averti (ses instructions ne sont pas
+  dans le dépôt).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).

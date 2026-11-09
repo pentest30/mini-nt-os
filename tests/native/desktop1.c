@@ -3,11 +3,64 @@
  * the desktop shell in Mino's blue theme (theme.c) — blue sky wallpaper,
  * desktop icons, a Files window, the two-column Start menu and the blue
  * taskbar — and keeps the Start menu keyboard-accessible; with the mouse, the
- * Start button opens and closes it and a press selects an entry. Every shape
- * is drawn by the program; built freestanding by xtask.
+ * Start button opens and closes it and a press selects an entry. Terminal
+ * starts ReactOS's cmd.exe in a console of its own, Task Manager its
+ * taskmgr.exe, by a press or by Enter on the entry; the other entries only
+ * show. Every shape is drawn by the program; built freestanding by xtask.
  */
 
 #include "theme.h"
+
+typedef struct {
+    DWORD cb;
+    WCHAR *lpReserved;
+    WCHAR *lpDesktop;
+    WCHAR *lpTitle;
+    DWORD dwX;
+    DWORD dwY;
+    DWORD dwXSize;
+    DWORD dwYSize;
+    DWORD dwXCountChars;
+    DWORD dwYCountChars;
+    DWORD dwFillAttribute;
+    DWORD dwFlags;
+    WORD wShowWindow;
+    WORD cbReserved2;
+    BYTE *lpReserved2;
+    HANDLE hStdInput;
+    HANDLE hStdOutput;
+    HANDLE hStdError;
+} STARTUPINFOW;
+
+typedef struct {
+    HANDLE hProcess;
+    HANDLE hThread;
+    DWORD dwProcessId;
+    DWORD dwThreadId;
+} PROCESS_INFORMATION;
+
+typedef struct {
+    HWND hwnd;
+    HWND hwndInsertAfter;
+    int x;
+    int y;
+    int cx;
+    int cy;
+    UINT flags;
+} WINDOWPOS;
+
+#define CREATE_NEW_CONSOLE 0x00000010
+#define KLF_ACTIVATE 0x00000001
+#define WM_WINDOWPOSCHANGING 0x0046
+#define SWP_NOZORDER 0x0004
+
+__declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE handle);
+__declspec(dllimport) BOOL __stdcall CreateProcessW(const WCHAR *application, WCHAR *command_line,
+                                                    void *process_attributes, void *thread_attributes,
+                                                    BOOL inherit_handles, DWORD flags, void *environment,
+                                                    const WCHAR *directory, STARTUPINFOW *startup_info,
+                                                    PROCESS_INFORMATION *information);
+__declspec(dllimport) DWORD __stdcall GetLastError(void);
 
 static const WCHAR CLASS_NAME[] = L"MinoDesktop";
 static BOOL menu_open = TRUE;
@@ -59,15 +112,20 @@ static void settings_icon(int x, int y, int size)
     disc(&canvas, cx, cy, size * 5 / 32, PX(70, 120, 210), PX(30, 80, 180));
 }
 
-static void software_icon(int x, int y, int size)
+/* A small screen with an activity curve. */
+static void task_manager_icon(int x, int y, int size)
 {
 #define S(v) ((v) * size / 32)
-    round_fill(&canvas, rect(x + S(4), y + S(8), x + S(28), y + S(28)), S(2), CORNERS_ALL, PX(255, 196, 110),
-               PX(220, 140, 40));
-    round_fill(&canvas, rect(x + S(2), y + S(4), x + S(30), y + S(11)), S(2), CORNERS_ALL, PX(255, 214, 140),
-               PX(238, 168, 70));
-    round_frame(&canvas, rect(x + S(4), y + S(8), x + S(28), y + S(28)), S(2), CORNERS_ALL, PX(170, 100, 20));
-    fill(&canvas, rect(x + S(14), y + S(4), x + S(18), y + S(28)), PX(196, 60, 40));
+    round_fill(&canvas, rect(x + S(2), y + S(4), x + S(30), y + S(25)), S(3), CORNERS_ALL, PX(120, 150, 210),
+               PX(60, 90, 160));
+    fill(&canvas, rect(x + S(5), y + S(7), x + S(27), y + S(22)), PX(16, 28, 52));
+    line(&canvas, x + S(6), y + S(17), x + S(11), y + S(17), 2, PX(110, 230, 120));
+    line(&canvas, x + S(11), y + S(17), x + S(14), y + S(10), 2, PX(110, 230, 120));
+    line(&canvas, x + S(14), y + S(10), x + S(18), y + S(20), 2, PX(110, 230, 120));
+    line(&canvas, x + S(18), y + S(20), x + S(21), y + S(14), 2, PX(110, 230, 120));
+    line(&canvas, x + S(21), y + S(14), x + S(26), y + S(14), 2, PX(110, 230, 120));
+    fill(&canvas, rect(x + S(13), y + S(25), x + S(19), y + S(28)), PX(90, 110, 150));
+    fill(&canvas, rect(x + S(9), y + S(28), x + S(23), y + S(30)), PX(90, 110, 150));
 #undef S
 }
 
@@ -257,7 +315,7 @@ static void menu_item(int index, int left, int top, int right, const WCHAR *labe
         settings_icon(left + 8, top + 6, 32);
         break;
     case 4:
-        software_icon(left + 8, top + 6, 32);
+        task_manager_icon(left + 8, top + 6, 32);
         break;
     default:
         help_icon(left + 8, top + 6, 32);
@@ -291,9 +349,9 @@ static void power_button(int index, int x, int y, const WCHAR *label)
 static void draw_start_menu(int height)
 {
     static const STOP band[] = {{0, PX(40, 124, 244)}, {120, PX(22, 92, 222)}, {256, PX(14, 72, 198)}};
-    static const WCHAR *programs[] = {L"Files", L"Text Editor", L"Terminal", L"Settings", L"Software", L"Help"};
+    static const WCHAR *programs[] = {L"Files", L"Text Editor", L"Terminal", L"Settings", L"Task Manager", L"Help"};
     static const WCHAR *details[] = {L"Browse your folders", L"Write plain text", L"Command prompt",
-                                     L"Change how MINO OS looks", L"Add programs", L"Questions and answers"};
+                                     L"Change how MINO OS looks", L"See running programs", L"Questions and answers"};
     static const WCHAR *places[] = {L"Documents", L"Pictures", L"Music", L"Computer"};
     static const WCHAR *system[] = {L"Network", L"Printers", L"Search", L"Run..."};
     int bottom = height - 30, top = bottom - 496, left = 0, right = 392, middle = 200;
@@ -389,8 +447,40 @@ static void repaint(HWND window)
 }
 
 /* The entries of the Start menu, by their index in draw_start_menu. */
-static const char *const entry_names[] = {"Files",    "Text Editor", "Terminal", "Settings",
-                                          "Software", "Help",        "Restart",  "Shut down"};
+static const char *const entry_names[] = {"Files",        "Text Editor", "Terminal", "Settings",
+                                          "Task Manager", "Help",        "Restart",  "Shut down"};
+
+/* What an entry starts: none for the entries that only show. A console
+ * program gets a console of its own (the desktop has none). */
+static const struct {
+    const WCHAR *program;
+    DWORD flags;
+} entry_programs[] = {
+    {0, 0}, {0, 0}, {L"C:\\WINDOWS\\SYSTEM32\\CMD.EXE", CREATE_NEW_CONSOLE},
+    {0, 0}, {L"C:\\WINDOWS\\SYSTEM32\\TASKMGR.EXE", 0}, {0, 0}, {0, 0}, {0, 0},
+};
+
+/* Starts the program of entry `entry` on WinSta0\Default and closes the menu;
+ * the desktop goes on without waiting for it. */
+static void launch(HWND window, int entry)
+{
+    STARTUPINFOW startup;
+    PROCESS_INFORMATION process;
+
+    menu_open = FALSE;
+    repaint(window);
+    memset(&startup, 0, sizeof startup);
+    startup.cb = sizeof startup;
+    startup.lpDesktop = L"WinSta0\\Default";
+    if (!CreateProcessW(entry_programs[entry].program, 0, 0, 0, FALSE, entry_programs[entry].flags, 0, L"C:\\",
+                        &startup, &process)) {
+        DbgPrint("[desktop] launch failed: %s: %lu\n", entry_names[entry], GetLastError());
+        return;
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    DbgPrint("[desktop] launched %s (PID %lu)\n", entry_names[entry], process.dwProcessId);
+}
 
 /* What the mouse at (x, y) is over: an entry of the open menu (0 to 7), or
  * one of these. The rectangles are those draw_taskbar and draw_start_menu
@@ -420,9 +510,9 @@ static int desktop_hit(int x, int y)
 }
 
 /* A press of the left button: the Start button opens or closes the menu, a
- * press outside the open menu closes it, an entry is selected. The paint goes
- * before the marker: a scenario's screendump never catches the screen before
- * the change it names. */
+ * press outside the open menu closes it, an entry is selected, and started if
+ * it starts a program. The paint goes before the marker: a scenario's
+ * screendump never catches the screen before the change it names. */
 static void click(HWND window, int x, int y)
 {
     int hit = desktop_hit(x, y);
@@ -436,6 +526,8 @@ static void click(HWND window, int x, int y)
         selected_item = hit;
         repaint(window);
         DbgPrint("[desktop] selected %s\n", entry_names[hit]);
+        if (entry_programs[hit].program)
+            launch(window, hit);
     }
 }
 
@@ -445,6 +537,12 @@ static LRESULT __stdcall desktop_procedure(HWND window, UINT message, WPARAM w, 
 
     if (message == WM_ERASEBKGND)
         return 1;
+    /* Like a shell's desktop, it stays under the windows it starts: a press
+     * that activates it (the Start button) does not bring it over them. */
+    if (message == WM_WINDOWPOSCHANGING) {
+        ((WINDOWPOS *)l)->flags |= SWP_NOZORDER;
+        return 0;
+    }
     if (message == WM_PAINT) {
         BeginPaint(window, &paint);
         draw(paint.hdc);
@@ -474,6 +572,10 @@ static LRESULT __stdcall desktop_procedure(HWND window, UINT message, WPARAM w, 
             repaint(window);
             return 0;
         }
+        if ((w == VK_RETURN || w == VK_SPACE) && menu_open && entry_programs[selected_item].program) {
+            launch(window, selected_item);
+            return 0;
+        }
         if (w == VK_RETURN || w == VK_SPACE) {
             menu_open = !menu_open;
             DbgPrint("[desktop] start menu %s\n", menu_open ? "open" : "closed");
@@ -495,6 +597,10 @@ DWORD __stdcall GuiStartup(void)
 
     if (!take_desktop())
         ExitProcess(1);
+    /* Without a layout, no key becomes a virtual key: the menu would not
+     * answer the keyboard. */
+    if (!LoadKeyboardLayoutW(L"00000409", KLF_ACTIVATE))
+        ExitProcess(5);
     memset(&class_info, 0, sizeof class_info);
     class_info.cbSize = sizeof class_info;
     class_info.lpfnWndProc = desktop_procedure;
