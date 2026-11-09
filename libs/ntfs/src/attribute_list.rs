@@ -117,9 +117,8 @@ impl<D: ReadAt> Volume<D> {
             if FileReference::decode(record.base_reference()) != base_ref || record.base_reference() == 0 {
                 return Err(Error::Invalid("extension base reference"));
             }
-            if record.is_directory() != records[0].1.is_directory() {
-                return Err(Error::Invalid("extension FILE flags"));
-            }
+            // File/directory semantics belong to the base record. An extension
+            // only supplies attributes and is authenticated by its base link.
             if record.attributes()?.iter().any(|a| a.kind == 0x20) {
                 return Err(Error::Unsupported("nested attribute list"));
             }
@@ -150,5 +149,42 @@ impl<D: ReadAt> Volume<D> {
             selected.push(found.ok_or(Error::Invalid("listed attribute missing"))?);
         }
         Stream::assemble(&selected.iter().collect::<Vec<_>>(), self.geometry).map(Some)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{p16, p32};
+
+    #[test]
+    fn list_size_and_entry_count_are_bounded() {
+        assert!(matches!(parse(&vec![0; MAX_LIST_SIZE as usize + 1]), Err(Error::Unsupported("attribute list size"))));
+        let mut data = vec![0; (MAX_ENTRIES + 1) * 32];
+        for (id, entry) in data.chunks_exact_mut(32).enumerate() {
+            p32(entry, 0, 0x80);
+            p16(entry, 4, 32);
+            p16(entry, 24, id as u16);
+        }
+        assert_eq!(parse(&data[..MAX_ENTRIES * 32]).unwrap().len(), MAX_ENTRIES);
+        assert!(matches!(parse(&data), Err(Error::Unsupported("attribute list entry limit"))));
+    }
+
+    #[test]
+    fn list_names_and_truncated_entries_are_bounded() {
+        let mut data = vec![0; 40];
+        p32(&mut data, 0, 0x90);
+        p16(&mut data, 4, 40);
+        data[6] = 4;
+        data[7] = 26;
+        data[26..34].copy_from_slice(b"$\0I\x003\x000\0");
+        assert_eq!(parse(&data).unwrap()[0].name, b"$\0I\x003\x000\0");
+        for end in 0..data.len() {
+            assert!(parse(&data[..end]).is_err(), "truncation at {end}");
+        }
+        for offset in [0, 24, 27, 34, 255] {
+            data[7] = offset;
+            assert!(parse(&data).is_err(), "name offset {offset}");
+        }
     }
 }

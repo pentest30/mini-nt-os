@@ -68,10 +68,28 @@ et il ne vérifie pas l'ordre de tri de l'arbre comme le ferait un fsck.
 
 ## Limites explicites
 
+Les `ATTRIBUTE_LIST` résidentes ou non résidentes sont prises en charge quand
+leur mapping complet figure dans le record de base. Le lecteur assemble les
+extents DATA, INDEX_ROOT, INDEX_ALLOCATION et BITMAP référencés dans d'autres
+records FILE. Il vérifie les séquences, le lien de chaque extension à son
+fichier de base, l'identifiant, le type et le nom de l'attribut ainsi que la
+continuité des VCN. Les tailles du premier extent font foi ; le delta LCN
+repart de zéro dans chaque extent. Les trous et recouvrements sont refusés.
+
+La liste est limitée à 1 Mio et 4096 entrées ; chaque résolution accepte
+au plus 64 records FILE, base comprise, et 4096 runs au total. Seules les
+références du flux demandé sont ouvertes, après validation structurelle de
+toute la liste. Les listes imbriquées dans une extension sont refusées.
+`record()` expose uniquement les records de base ; les extensions sont
+résolues en interne pour lire le fichier ou son index.
+
 Refus des secteurs autres que 512 octets, attributs compressés, sparse ou
-chiffrés, reparse points, ATTRIBUTE_LIST et enregistrements d'extension.
+chiffrés et reparse points. Une liste dont le mapping est lui-même réparti
+sur plusieurs records reste hors périmètre.
 Le flux `$MFT` doit être intégralement initialisé et décrit dans son premier
-record. Le miroir est localisé mais ne sert pas à récupérer une MFT corrompue.
+record, sans ATTRIBUTE_LIST : son bootstrap ne peut pas encore résoudre les
+extensions de sa propre table. Le miroir est localisé mais ne sert pas à
+récupérer une MFT corrompue.
 
 Pas encore de flux nommés, de journal, de récupération ou d'écriture.
 Un volume valide qui sort de ce périmètre peut être refusé.
@@ -82,7 +100,7 @@ Aucune promesse de montage général de volumes NTFS existants à ce stade.
 ```sh
 cargo test -p ntfs
 cargo clippy -p ntfs --all-targets -- -D warnings
-# Outils ntfs-3g sur PATH : mkntfs, ntfscp, ntfsls et ntfscat.
+# Outils ntfs-3g sur PATH : mkntfs, ntfscp, ntfsls, ntfscat et ntfsinfo.
 cargo test -p ntfs --test mkntfs -- --ignored
 ```
 
@@ -97,7 +115,13 @@ Le test `mkntfs` est ignoré par défaut pour ne pas imposer les outils ntfs-3g
 lance explicitement ce test en CI quand ce composant change. Il crée trois images
 temporaires de 32 Mio, avec des clusters de 512, 4096 puis 8192 octets. Chaque
 image reçoit un petit fichier résident, un fichier non résident de 131195 octets
-et 160 fichiers supplémentaires pour exercer un index à plusieurs blocs. Il
+et 160 fichiers supplémentaires pour exercer un index à plusieurs blocs.
+L'ajout de 40 flux nommés au petit fichier force une ATTRIBUTE_LIST, dont
+`ntfsinfo` confirme la présence ; le lecteur relit toujours son flux sans nom.
+Ce cas ne prouve pas à lui seul la lecture de DATA réparties entre records :
+les tests synthétiques couvrent ces extents, les listes résidentes/non résidentes,
+les index déplacés en extension, les références étrangères ou périmées, les
+trous/recouvrements et les limites de taille et de nombre d'entrées. Le test réel
 compare les numéros avec `ntfsls`, les recherches par chemin en majuscules et
 les contenus avec les originaux et `ntfscat`, puis supprime les images.
 Les chemins imbriqués, noms accentués, références périmées, cycles, BITMAP,
@@ -107,8 +131,9 @@ Validé avec ntfs-3g 2022.10.3 (paquet Debian 1:2022.10.3-5+deb13u3).
 
 ## Suite, en PR distinctes
 
-1. ATTRIBUTE_LIST et données réparties sur plusieurs records, si nécessaires
-   aux images de référence ; garder les refus pour les fonctionnalités restantes.
+1. Bootstrap d'une MFT dont les données sont réparties entre records, avec
+   validation de la progression et des références ; garder les refus pour
+   les fonctionnalités restantes.
 2. Adaptateur de partition et montage dans Io, à PASSIVE_LEVEL (allocations et
    E/S bloquantes), avec scénarios QEMU. Coordonner alors les changements
    partagés de `Cargo.toml`, de l'initialisation et du harness.

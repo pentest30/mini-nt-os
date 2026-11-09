@@ -83,7 +83,8 @@ fn resident_data_and_named_index_can_live_in_extensions() {
     assert_eq!(&out, b"moved");
     let mut b = image();
     put_record(&mut b, 6, &list(&list_entry(0x90, b"$\0I\x003\x000\0", 0, 9, 0)), true);
-    extension(&mut b, 9, 6, &named(resident(&root(&[entry(6, 7, "Été.txt", false)], None)), 0x90), true);
+    // The base determines that this is a directory, not the extension flag.
+    extension(&mut b, 9, 6, &named(resident(&root(&[entry(6, 7, "Été.txt", false)], None)), 0x90), false);
     assert_eq!(Volume::open(b.as_slice()).unwrap().lookup_path("folder/été.txt").unwrap().record, 7);
 }
 
@@ -124,7 +125,7 @@ fn rejects_extent_gaps_overlaps_and_identity_mismatches() {
 }
 
 #[test]
-fn malformed_duplicate_missing_and_oversized_lists_are_refused() {
+fn malformed_duplicate_missing_and_uninitialized_lists_are_refused() {
     for offset in [0, 4, 6, 8, 16, 24] {
         let mut b = split_image(false);
         b[2048 + 7 * 1024 + 56 + 24 + offset] ^= 0xff;
@@ -147,4 +148,29 @@ fn malformed_duplicate_missing_and_oversized_lists_are_refused() {
     let mut b = image();
     put_record(&mut b, 7, &list(&[]), false);
     assert_eq!(Volume::open(b.as_slice()).unwrap().file_size(7), Err(Error::Invalid("empty attribute list")));
+}
+
+#[test]
+fn index_allocation_and_bitmap_are_resolved_from_extensions() {
+    let mut b = crate::path_tests::allocated_image();
+    let record = Volume::open(b.as_slice()).unwrap().record(5).unwrap();
+    let attrs = record.attributes().unwrap();
+    let mut entries = list_entry(0x90, attrs[0].name, 0, 5, 0);
+    entries.extend(list_entry(0xa0, attrs[1].name, 0, 8, 0));
+    entries.extend(list_entry(0xb0, attrs[2].name, 0, 9, 0));
+    let mut base = list(&entries);
+    base.extend_from_slice(attrs[0].data);
+    put_record(&mut b, 5, &base, true);
+    extension(&mut b, 8, 5, attrs[1].data, true);
+    extension(&mut b, 9, 5, attrs[2].data, true);
+    assert_eq!(Volume::open(b.as_slice()).unwrap().lookup_path("/folder/été.txt").unwrap().record, 7);
+}
+
+#[test]
+fn mft_attribute_list_bootstrap_remains_explicitly_unsupported() {
+    let mut b = image();
+    let mut attrs = list(&list_entry(0x80, &[], 0, 0, 0));
+    attrs.extend(nonresident(&[0x11, 32, 4, 0], 32, 16384, 16384));
+    put_record(&mut b, 0, &attrs, false);
+    assert!(matches!(Volume::open(b.as_slice()), Err(Error::Unsupported("MFT attribute list bootstrap"))));
 }

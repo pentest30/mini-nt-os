@@ -35,8 +35,8 @@ fn run(tool: &str, args: &[&str]) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "requires mkntfs, ntfscp, ntfsls and ntfscat on PATH"]
-fn ntfs3g_paths_and_large_indexes_match_at_three_cluster_sizes() {
+#[ignore = "requires mkntfs, ntfscp, ntfsls, ntfscat and ntfsinfo on PATH"]
+fn ntfs3g_paths_attribute_lists_and_large_indexes_match_at_three_cluster_sizes() {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
     let dir = Scratch(std::env::temp_dir().join(format!("mino-ntfs-{}-{stamp}", std::process::id())));
     fs::create_dir(&dir.0).unwrap();
@@ -60,6 +60,14 @@ fn ntfs3g_paths_and_large_indexes_match_at_three_cluster_sizes() {
             fs::write(&source, expected).unwrap();
             run("ntfscp", &[image_path, source.to_str().unwrap(), &format!("/{name}")]);
         }
+        // Force ATTRIBUTE_LIST and extension FILE records using named streams.
+        // The public reader still exposes only the unnamed file data.
+        let source = dir.0.join("small.txt");
+        for i in 0..40 {
+            run("ntfscp", &["-N", &format!("metadata-{i:03}"), image_path, source.to_str().unwrap(), "/small.txt"]);
+        }
+        let info = String::from_utf8(run("ntfsinfo", &["-F", "/small.txt", image_path])).unwrap();
+        assert!(info.contains("ATTRIBUTE_LIST"), "fixture did not produce an attribute list: {info}");
         let listing = String::from_utf8(run("ntfsls", &["-i", image_path])).unwrap();
         let file = File::open(&path).unwrap();
         let mut volume = Volume::open(Device { size: file.metadata().unwrap().len(), file }).unwrap();

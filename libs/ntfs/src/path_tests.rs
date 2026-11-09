@@ -112,7 +112,7 @@ fn indx(n: Vec<u8>) -> Vec<u8> {
     p16(&mut b, 510, 0xcafe);
     b
 }
-fn allocated_image() -> Vec<u8> {
+pub(super) fn allocated_image() -> Vec<u8> {
     let mut b = image();
     let mut attrs = named(resident(&root(&[], Some(0))), 0x90);
     attrs.extend(named(nonresident(&[0x11, 1, 64, 0], 1, 512, 512), 0xa0));
