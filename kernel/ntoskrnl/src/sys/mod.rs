@@ -43,6 +43,7 @@ mod gdi;
 mod input;
 pub mod locale;
 mod memory;
+mod menu;
 mod message;
 mod monitor;
 mod mouse;
@@ -264,6 +265,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
     (services::NtUserEnumDisplaySettings, Handler::Status(user::nt_user_enum_display_settings)),
+    (services::NtUserEnableMenuItem, Handler::Status(menu::nt_user_enable_menu_item)),
     (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetControlBrush, Handler::Status(window::nt_user_get_control_brush)),
@@ -303,11 +305,13 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserRedrawWindow, Handler::Status(window::nt_user_redraw_window)),
     (services::NtUserRegisterClassExWOW, Handler::Status(class::nt_user_register_class_ex_wow)),
     (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
+    (services::NtUserRemoveMenu, Handler::Status(menu::nt_user_remove_menu)),
     (services::NtUserSetCapture, Handler::Status(mouse::nt_user_set_capture)),
     (services::NtUserSetFocus, Handler::Status(input::nt_user_set_focus)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetProp, Handler::Status(user::nt_user_set_prop)),
+    (services::NtUserSetMenu, Handler::Status(menu::nt_user_set_menu)),
     (services::NtUserSetSystemTimer, Handler::Status(timer::nt_user_set_system_timer)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
     (services::NtUserSetTimer, Handler::Status(timer::nt_user_set_timer)),
@@ -315,6 +319,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserSetWindowLong, Handler::Status(window::nt_user_set_window_long)),
     (services::NtUserSetWindowPos, Handler::Status(window::nt_user_set_window_pos)),
     (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
+    (services::NtUserThunkedMenuItemInfo, Handler::Status(menu::nt_user_thunked_menu_item_info)),
     (services::NtUserShowWindow, Handler::Status(window::nt_user_show_window)),
     (services::NtUserShowWindowAsync, Handler::Status(window::nt_user_show_window_async)),
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
