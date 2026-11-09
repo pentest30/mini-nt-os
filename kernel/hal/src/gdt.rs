@@ -13,9 +13,23 @@
 //! double-fault stack so a kernel stack overflow cannot cause a triple fault.
 //! The IDT wires the double-fault handler to use this slot.
 //!
+//! # The TSS stays within one page
+//! The CPU reads RSP0 (offset 4, only 4-byte aligned: the TSS is packed) and
+//! the IST entries at each interrupt from user mode. QEMU 11.1 truncates to
+//! 32 bits the address of the second page of such a read when it straddles a
+//! page and the interrupted code runs in compatibility mode (the i386
+//! processes): with RSP0 across a page boundary, the #PF of a 32-bit thread
+//! faulted again on `0x0000_0000_xxxx_x000` and became a double fault
+//! (STOP 0x7F, scenario `fpu`, whose build happened to put RSP0 there). The
+//! TSS is kept in a block aligned on its own size rounded up ([`TssBlock`]),
+//! which never crosses a page; [`init`] checks it. Intel also advises
+//! keeping a page boundary out of the part of the TSS the processor reads
+//! (SDM vol. 3A, "Task-State Segment").
+//!
 //! WI7e Ch.3 "Trap Dispatching"
 
 use crate::sync::Once;
+use core::mem::{align_of, size_of};
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::structures::gdt::{Descriptor, Entry, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::tss::TaskStateSegment;
@@ -53,7 +67,24 @@ pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 // ── Static storage ────────────────────────────────────────────────────────────
 
 static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
-static TSS: Once<TaskStateSegment> = Once::new();
+static TSS: Once<TssBlock> = Once::new();
+
+/// The TSS, aligned on its size rounded up to a power of two: it never
+/// crosses a page (see the module).
+#[repr(C, align(128))]
+struct TssBlock(TaskStateSegment);
+
+const _: () = {
+    assert!(size_of::<TaskStateSegment>() <= align_of::<TssBlock>());
+    assert!(PAGE_SIZE.is_multiple_of(align_of::<TssBlock>()));
+};
+
+const PAGE_SIZE: usize = 4096;
+
+/// `[address, address + size)` crosses a page boundary.
+const fn crosses_page(address: u64, size: usize) -> bool {
+    size > 0 && address / PAGE_SIZE as u64 != (address + size as u64 - 1) / PAGE_SIZE as u64
+}
 
 struct Selectors {
     kernel_code: SegmentSelector,
@@ -79,7 +110,7 @@ struct Selectors {
 /// # Safety
 /// Must be called exactly once, in ring 0, with interrupts disabled.
 pub unsafe fn init() {
-    let tss = TSS.call_once(|| {
+    let block = TSS.call_once(|| {
         let mut tss = TaskStateSegment::new();
 
         // RSP0: kernel stack for privilege-level transitions.
@@ -94,8 +125,10 @@ pub unsafe fn init() {
             VirtAddr::new(top as u64)
         };
 
-        tss
+        TssBlock(tss)
     });
+    let tss = &block.0;
+    assert!(!crosses_page(core::ptr::addr_of!(*tss) as u64, size_of::<TaskStateSegment>()), "the TSS crosses a page");
 
     // Record the address of privilege_stack_table[0] so set_kernel_stack_top()
     // can update RSP0 at runtime without going through the Once cell.
@@ -164,7 +197,7 @@ pub fn kernel_data_selector() -> u16 {
 }
 
 pub fn kernel_stack_top() -> u64 {
-    TSS.get().expect("gdt::init not called").privilege_stack_table[0].as_u64()
+    TSS.get().expect("gdt::init not called").0.privilege_stack_table[0].as_u64()
 }
 
 /// Update TSS.RSP0 — the kernel stack pointer loaded on ring-3 → ring-0 transitions.
@@ -231,6 +264,21 @@ pub unsafe fn set_teb_base(base: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_tss_never_crosses_a_page() {
+        // Where scenario `fpu`'s build had it: RSP0 across 0x...8017_F000.
+        assert!(crosses_page(0xFFFF_FFFF_8017_EFF8, size_of::<TaskStateSegment>()));
+        assert!(!crosses_page(0xFFFF_FFFF_8017_EF80, size_of::<TaskStateSegment>()));
+        assert!(!crosses_page(0xFFFF_FFFF_8017_F000 - 8, 8) && crosses_page(0xFFFF_FFFF_8017_F000 - 4, 8));
+        // Any address the block can have keeps the TSS within its page.
+        let align = align_of::<TssBlock>() as u64;
+        for offset in (0..PAGE_SIZE as u64).step_by(align as usize) {
+            assert!(!crosses_page(0xFFFF_FFFF_8017_E000 + offset, size_of::<TaskStateSegment>()), "{offset:#x}");
+        }
+        let block = TssBlock(TaskStateSegment::new());
+        assert_eq!(core::ptr::addr_of!(block.0) as u64 % align, 0, "the TSS starts its block");
+    }
 
     #[test]
     fn the_teb_descriptor_carries_its_base() {

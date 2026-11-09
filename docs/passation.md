@@ -7,6 +7,16 @@
   `C:\LIST.TXT`, imprimé sans numéros, dont `CONCMD1.EXE` vérifie qu'il ne tient que des `.TXT` ; pour `dir C:\`,
   il vérifie que le résumé compte les fichiers et répertoires listés ; le motif interdit vise `Dir(s)` suivi d'une
   place nulle. Détail : [`compat/m5-console.md`](compat/m5-console.md), étape 8.
+- **La TSS tient dans une seule page** (`claude/fpu-double-fault`) : le scénario `fpu` s'arrêtait (STOP 0x7F, double
+  faute, `RIP 0x401000`) sur l'hôte Windows, AMD et Intel, sur `main` aussi. La trace `-d int` de QEMU montre le
+  #PF de la première instruction d'un thread i386 qui faute à nouveau pendant sa livraison, sur `0x8017f000` : la
+  lecture de RSP0 (TSS+4, 8 octets alignés sur 4) chevauchait une page dans ce binaire, et QEMU 11.1 tronque à 32 bits
+  l'adresse de la seconde page d'une telle lecture implicite quand l'interruption vient du mode compatibilité (TR
+  tient bien `0xffffffff8017eff8`). `hal::gdt` met la TSS dans un bloc aligné sur 128 octets (`TssBlock`) et
+  `gdt::init` vérifie qu'elle ne franchit pas de page ; contournement documenté dans le module. Le défaut de QEMU
+  n'est pas encore signalé en amont ni réduit à un cas minimal : tâche de diagnostic ouverte (06, règle 9). Tests :
+  hôte (`the_tss_never_crosses_a_page`), mutation (sans l'alignement, `fpu` s'arrête au démarrage sur « the TSS
+  crosses a page ») ; `fpu` AMD et Intel, `smoke`.
 
 - **Le moteur de l'installateur va au bout malgré la fin de son thread** (`claude/install-critical-region`, par-dessus
   la PR #97) : préparation, formatage et copie passent par `io::install::run_exclusive`, qui tient le verrou exclusif
