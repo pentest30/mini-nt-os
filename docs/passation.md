@@ -24,6 +24,7 @@
   `C:\LIST.TXT`, imprimé sans numéros, dont `CONCMD1.EXE` vérifie qu'il ne tient que des `.TXT` ; pour `dir C:\`,
   il vérifie que le résumé compte les fichiers et répertoires listés ; le motif interdit vise `Dir(s)` suivi d'une
   place nulle. Détail : [`compat/m5-console.md`](compat/m5-console.md), étape 8.
+
 - **La TSS tient dans une seule page** (`claude/fpu-double-fault`) : le scénario `fpu` s'arrêtait (STOP 0x7F, double
   faute, `RIP 0x401000`) sur l'hôte Windows, AMD et Intel, sur `main` aussi. La trace `-d int` de QEMU montre le
   #PF de la première instruction d'un thread i386 qui faute à nouveau pendant sa livraison, sur `0x8017f000` : la
