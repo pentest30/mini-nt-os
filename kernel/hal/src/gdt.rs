@@ -76,7 +76,7 @@ struct TssBlock(TaskStateSegment);
 
 const _: () = {
     assert!(size_of::<TaskStateSegment>() <= align_of::<TssBlock>());
-    assert!(PAGE_SIZE % align_of::<TssBlock>() == 0);
+    assert!(PAGE_SIZE.is_multiple_of(align_of::<TssBlock>()));
 };
 
 const PAGE_SIZE: usize = 4096;
