@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 119 | 296 |
-| win32k | 114 | 737 |
+| win32k | 118 | 737 |
 
 ## ntoskrnl
 
@@ -681,7 +681,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116a` | `NtUserDrawIconEx` | 11 |  |
 | `0x116b` | `NtUserDrawMenuBarTemp` | 5 |  |
 | `0x116c` | `NtUserEmptyClipboard` | 0 |  |
-| `0x116d` | `NtUserEnableMenuItem` | 3 |  |
+| `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
 | `0x116e` | `NtUserEnableScrollBar` | 3 |  |
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
 | `0x1170` | `NtUserEndMenu` | 0 |  |
@@ -808,7 +808,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |
 | `0x11ea` | `NtUserRegisterTasklist` | 1 |  |
 | `0x11eb` | `NtUserRegisterWindowMessage` | 1 |  |
-| `0x11ec` | `NtUserRemoveMenu` | 3 |  |
+| `0x11ec` | `NtUserRemoveMenu` | 3 | ✅ |
 | `0x11ed` | `NtUserRemoveProp` | 2 |  |
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
@@ -837,7 +837,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1206` | `NtUserSetInternalWindowPos` | 4 |  |
 | `0x1207` | `NtUserSetKeyboardState` | 1 |  |
 | `0x1208` | `NtUserSetLogonNotifyWindow` | 1 | ✅ |
-| `0x1209` | `NtUserSetMenu` | 3 |  |
+| `0x1209` | `NtUserSetMenu` | 3 | ✅ |
 | `0x120a` | `NtUserSetMenuContextHelpId` | 2 |  |
 | `0x120b` | `NtUserSetMenuDefaultItem` | 3 |  |
 | `0x120c` | `NtUserSetMenuFlagRtoL` | 1 |  |
@@ -874,7 +874,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x122b` | `NtUserSystemParametersInfo` | 4 | ✅ |
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
 | `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
-| `0x122e` | `NtUserThunkedMenuItemInfo` | 6 |  |
+| `0x122e` | `NtUserThunkedMenuItemInfo` | 6 | ✅ |
 | `0x122f` | `NtUserToUnicodeEx` | 7 | ✅ |
 | `0x1230` | `NtUserTrackMouseEvent` | 1 |  |
 | `0x1231` | `NtUserTrackPopupMenuEx` | 6 |  |
