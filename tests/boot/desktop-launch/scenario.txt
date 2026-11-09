@@ -1,0 +1,34 @@
+# The desktop starts programs from its Start menu: Terminal by the keyboard
+# (Down twice to it, Enter), ReactOS's cmd.exe in a console of its own; then,
+# with the mouse, the Start button opens the menu again and a press on Task
+# Manager starts taskmgr.exe, which reads the process list.
+#
+# The pointer starts at the centre of the 1280x800 screen (640,400); moves are
+# split, QEMU's PS/2 queue holding 16 bytes.
+#
+# The screen, once Task Manager has read the list: cmd's console (black, at the
+# top left) is still over the desktop, which a press on the Start button
+# activates without bringing it over the windows it started; the taskbar.
+# Task Manager's own paint is not checked: the capture can come in the middle
+# of it, right after the list is read.
+features = test-smss
+requires = userland, native
+initial-command = DESKTOP1.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [desktop] ready => down down ret
+keys = [desktop] launched Terminal => move:-293,192 move:-293,193 press:1 release
+keys = [desktop] start button: start menu open => move:46,-118 move:0,-117 press:1 release
+
+expect = [desktop] ready
+expect = [desktop] launched Terminal (PID
+expect = [desktop] start button: start menu open
+expect = [desktop] selected Task Manager
+expect = [desktop] launched Task Manager (PID
+expect = [apps] the process list was read by PID
+screen = 200 300 000000
+screen = 700 785 1E5CDB
+
+forbid = [desktop] launch failed:
+forbid = *** STOP:
