@@ -1,8 +1,8 @@
-use crate::{bytes, u16_at, u32_at, u64_at, Error};
+use crate::{bytes, u16_at, u32_at, Error};
 use alloc::vec::Vec;
 
 /// A FILE record whose update sequence and attribute boundaries were checked.
-/// Only base records in use are supported; attribute lists are refused.
+/// The volume resolver verifies extension records against their owning base.
 #[derive(Debug)]
 pub struct Record {
     data: Vec<u8>,
@@ -43,9 +43,6 @@ impl Record {
         if flags & !3 != 0 {
             return Err(Error::Unsupported("FILE flags"));
         }
-        if u64_at(&data, 32)? != 0 {
-            return Err(Error::Unsupported("extension FILE record"));
-        }
         let sequence = u16_at(&data, usa)?;
         // Check every sector before replacing its trailer. No torn record is used.
         for sector in 1..count {
@@ -60,6 +57,10 @@ impl Record {
         let record = Self { data, first, used };
         record.attributes()?;
         Ok(record)
+    }
+
+    pub(crate) fn base_reference(&self) -> u64 {
+        u64::from_le_bytes(self.data[32..40].try_into().expect("validated FILE header"))
     }
 
     pub(crate) fn raw(&self) -> &[u8] {
@@ -115,9 +116,6 @@ impl Record {
             }
             if kind == 0xc0 {
                 return Err(Error::Unsupported("reparse point"));
-            }
-            if kind == 0x20 {
-                return Err(Error::Unsupported("attribute list"));
             }
             result.push(Attribute { kind, data, name, nonresident, payload_offset });
             // size is nonzero, and bytes() checked at + size against used.

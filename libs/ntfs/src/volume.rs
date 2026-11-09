@@ -21,7 +21,8 @@ impl<D: ReadAt> Volume<D> {
         device.read_exact_at(geometry.mft_cluster * u64::from(geometry.cluster_size), &mut first)?;
         let record = Record::parse(first)?;
         let mft = data_stream(&record, geometry)?;
-        if record.is_directory()
+        if record.base_reference() != 0
+            || record.is_directory()
             || matches!(mft, Stream::Resident(_))
             || !mft.fully_initialized()
             || mft.len() < u64::from(geometry.record_size)
@@ -50,6 +51,14 @@ impl<D: ReadAt> Volume<D> {
 
     /// Read a base FILE record by number. Unused slots return NotFound.
     pub fn record(&mut self, number: u64) -> Result<Record, Error> {
+        let record = self.raw_record(number)?;
+        if record.base_reference() != 0 {
+            return Err(Error::Unsupported("extension FILE record"));
+        }
+        Ok(record)
+    }
+
+    pub(crate) fn raw_record(&mut self, number: u64) -> Result<Record, Error> {
         if number >= self.record_count() {
             return Err(Error::NotFound);
         }
@@ -84,12 +93,15 @@ impl<D: ReadAt> Volume<D> {
         if record.is_directory() {
             return Err(Error::Unsupported("directory data"));
         }
-        data_stream(&record, self.geometry)
+        self.stream(number, 0x80, &[])?.ok_or(Error::NotFound)
     }
 }
 
 fn data_stream(record: &Record, geometry: Geometry) -> Result<Stream, Error> {
     let attributes = record.attributes()?;
+    if attributes.iter().any(|a| a.kind == 0x20) {
+        return Err(Error::Unsupported("MFT attribute list bootstrap"));
+    }
     let mut found = None;
     for attr in &attributes {
         if attr.kind == 0x80 && attr.name.is_empty() {

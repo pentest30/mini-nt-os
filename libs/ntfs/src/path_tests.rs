@@ -2,10 +2,10 @@ use crate::tests::{nonresident, p16, p32, p64, record, resident};
 use crate::{Error, FileReference, Volume};
 use alloc::{vec, vec::Vec};
 
-fn reference(n: u64) -> u64 {
+pub(super) fn reference(n: u64) -> u64 {
     n | (7 << 48)
 }
-fn entry(parent: u64, target: u64, name: &str, directory: bool) -> Vec<u8> {
+pub(super) fn entry(parent: u64, target: u64, name: &str, directory: bool) -> Vec<u8> {
     let units: Vec<u16> = name.encode_utf16().collect();
     let key_len = 66 + units.len() * 2;
     let len = (16 + key_len + 7) & !7;
@@ -44,7 +44,7 @@ fn node(entries: &[Vec<u8>], child: Option<u64>) -> Vec<u8> {
     p32(&mut b, 8, len as u32);
     b
 }
-fn root(entries: &[Vec<u8>], child: Option<u64>) -> Vec<u8> {
+pub(super) fn root(entries: &[Vec<u8>], child: Option<u64>) -> Vec<u8> {
     let mut b = vec![0; 16];
     p32(&mut b, 0, 0x30);
     p32(&mut b, 4, 1);
@@ -53,7 +53,7 @@ fn root(entries: &[Vec<u8>], child: Option<u64>) -> Vec<u8> {
     b.extend_from_slice(&node(entries, child));
     b
 }
-fn named(mut a: Vec<u8>, kind: u32) -> Vec<u8> {
+pub(super) fn named(mut a: Vec<u8>, kind: u32) -> Vec<u8> {
     let offset = if a[8] == 0 { 20 } else { 32 };
     let header = if a[8] == 0 { 24 } else { 64 };
     a.splice(header..header, b"$\0I\x003\x000\0".iter().copied());
@@ -65,14 +65,14 @@ fn named(mut a: Vec<u8>, kind: u32) -> Vec<u8> {
     p16(&mut a, offset, (header + 8) as u16);
     a
 }
-fn put_record(b: &mut [u8], number: usize, attr: &[u8], directory: bool) {
+pub(super) fn put_record(b: &mut [u8], number: usize, attr: &[u8], directory: bool) {
     let mut r = record(attr);
     if directory {
         p16(&mut r, 22, 3);
     }
     b[2048 + number * 1024..2048 + (number + 1) * 1024].copy_from_slice(&r);
 }
-fn image() -> Vec<u8> {
+pub(super) fn image() -> Vec<u8> {
     let mut b = vec![0; 512 * 512];
     b[3..11].copy_from_slice(b"NTFS    ");
     p16(&mut b, 11, 512);

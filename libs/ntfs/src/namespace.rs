@@ -17,25 +17,9 @@ impl<D: ReadAt> Volume<D> {
             return Err(Error::Invalid("not a directory"));
         }
         let parent = FileReference { record: number, sequence: record.sequence() };
-        let attrs = record.attributes()?;
-        let mut root = None;
-        let mut allocation = None;
-        let mut bitmap = None;
-        for attr in &attrs {
-            if attr.name != I30 {
-                continue;
-            }
-            let slot = match attr.kind {
-                0x90 => &mut root,
-                0xa0 => &mut allocation,
-                0xb0 => &mut bitmap,
-                _ => continue,
-            };
-            if slot.is_some() {
-                return Err(Error::Unsupported("multiple index extents"));
-            }
-            *slot = Some(Stream::parse(attr, self.geometry)?);
-        }
+        let root = self.stream(number, 0x90, I30)?;
+        let allocation = self.stream(number, 0xa0, I30)?;
+        let bitmap = self.stream(number, 0xb0, I30)?;
         let root = match root {
             Some(Stream::Resident(data)) => data,
             _ => return Err(Error::Invalid("resident INDEX_ROOT missing")),

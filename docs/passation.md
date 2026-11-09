@@ -1,5 +1,8 @@
 # Notes de passation
 
+- **M9 NTFS, ATTRIBUTE_LIST** (`feature/m9-ntfs-attribute-list`) : listes résidentes/non résidentes bornées, références/instances vérifiées et assemblage des extents DATA ou index ; 24 tests unitaires. MFT avec liste au bootstrap encore refusée. Suite : validation indépendante ntfs-3g, limites et reprise dans `docs/compat/ntfs.md`.
+
+
 - **Le moteur de l'installateur va au bout malgré la fin de son thread** (`claude/install-critical-region`, par-dessus
   la PR #97) : préparation, formatage et copie passent par `io::install::run_exclusive`, qui tient le verrou exclusif
   du moteur dans une région critique (`ke_enter_critical_region`) ; la fin du thread (APC noyau normal) attend que le
