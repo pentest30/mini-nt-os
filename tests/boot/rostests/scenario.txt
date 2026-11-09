@@ -1,0 +1,23 @@
+# Le dernier critère du M5 : les apitests de ReactOS (ntdll et kernel32)
+# dépassent le seuil de réussite du jalon. Les deux bancs — NTAPITST.EXE
+# (~85 tests) et K32APITST.EXE (28) — sont construits par
+# `rostests-build` (modules/rostests/apitests de l'arbre 0.4.16, le SDK
+# recopié et le winnt.h généré, la SAL neutralisée, PSEH en statique) ;
+# NTAPITST démarre comme commande initiale, exécute chaque test de sa
+# liste (le main de lot de testmain.c) et rend son bilan par DbgPrint :
+#   [apitest] <test>: ok=N todo=N fail=N skip=N
+#   [apitest] TOTALS: tests=N failures=N skipped=N
+# L'hôte compare la part des tests qui passent au seuil du jalon
+# (THRESHOLD dans xtask/src/rostests.rs : 0,50) — K32APITST suit au run
+# suivant (les deux ne tiennent pas dans un seul boot).
+features = test-smss
+requires = userland, native, rostests
+initial-command = NTAPITST.EXE
+cpus     = default
+timeout  = 180
+
+expect = [apitest] begin
+expect = [apitest] TOTALS: tests=
+
+# Un banc qui meurt avant son bilan (AV, DLL manquante) ne passe pas.
+forbid = *** STOP:

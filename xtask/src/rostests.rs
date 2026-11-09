@@ -20,12 +20,30 @@ use std::process::Command;
 use crate::native;
 use crate::{Result, Workspace};
 
+/// Le bilan d'une ligne `[apitest] TOTALS: tests=N failures=N skipped=N`
+/// — (tests, échecs, écartés) ; `None` pour toute autre ligne.
+pub fn parse_totals(line: &str) -> Option<(u32, u32, u32)> {
+    let at = line.find("[apitest] TOTALS:")?;
+    let rest = &line[at + "[apitest] TOTALS:".len()..];
+    let mut fields = [0u32; 3];
+    for (at, field) in rest.split_whitespace().enumerate() {
+        let value = field.split('=').nth(1)?.parse().ok()?;
+        fields[at] = value;
+    }
+    Some((fields[0], fields[1], fields[2]))
+}
+
+/// Le premier outil qui manque pour le banc (celui des sondes natives —
+/// le même compilateur MinGW).
+pub fn missing_tool() -> Option<&'static str> {
+    native::missing_tool()
+}
+
 /// Le seuil du jalon M5 : la part des tests qui passent (ok + todo — un
 /// todo réussi compte, un todo attendu ne bloque pas). Fixé au moment du
 /// jalon ; le suivi se fait dans le temps — la valeur ne baisse pas. Le
 /// scénario `rostests` le comparera au bilan ([`super::qemu`], quand le
 /// banc compile — voir l'en-tête du module).
-#[expect(dead_code, reason = "comparé par le scénario rostests, pas encore branché")]
 pub const THRESHOLD: f64 = 0.50;
 
 /// Les modules du critère.
@@ -94,9 +112,11 @@ pub fn build(ws: &Workspace) -> Result<Option<Vec<String>>> {
     let sdk = prepare_sdk(&tree, &out)?;
     let mut files = Vec::new();
     for module in MODULES {
-        let name = if module == "ntdll" { "NTAPITST.EXE" } else { "K32APITST.EXE" };
-        let exe = compile_module(ws, &tree, &sdk, module, &out, name)?;
-        files.push(format!("{}:{}", exe.display(), name));
+        let (driver, runner) =
+            if module == "ntdll" { ("NTAPITST.EXE", "NTAPIRUN.EXE") } else { ("K32APITST.EXE", "K32APIRUN.EXE") };
+        let (driver_exe, runner_exe) = compile_module(ws, &tree, &sdk, module, &out, driver, runner)?;
+        files.push(format!("{}:{}", driver_exe.display(), driver));
+        files.push(format!("{}:{}", runner_exe.display(), runner));
     }
     Ok(Some(files))
 }
@@ -269,7 +289,15 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
 }
 
 /// Un module : ses .c, son testlist.c, testmain.c — compilés puis liés.
-fn compile_module(ws: &Workspace, tree: &Path, sdk: &Path, module: &str, out: &Path, name: &str) -> Result<PathBuf> {
+fn compile_module(
+    ws: &Workspace,
+    tree: &Path,
+    sdk: &Path,
+    module: &str,
+    out: &Path,
+    name: &str,
+    runner_name: &str,
+) -> Result<(PathBuf, PathBuf)> {
     let apitests = tree.join("modules").join("rostests").join("apitests");
     let module_dir = apitests.join(module);
     let objs = out.join(module);
@@ -279,7 +307,6 @@ fn compile_module(ws: &Workspace, tree: &Path, sdk: &Path, module: &str, out: &P
         fs::remove_dir_all(&objs).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(&objs).map_err(|e| e.to_string())?;
-    fs::copy(ws_shim("testmain.c"), out.join("testmain.c")).map_err(|e| e.to_string())?;
     fs::copy(ws_shim(&format!("{module}-precomp.h")), module_dir.join("precomp.h.autostandalone"))
         .map_err(|e| e.to_string())?;
 
@@ -378,10 +405,10 @@ fn compile_module(ws: &Workspace, tree: &Path, sdk: &Path, module: &str, out: &P
         let text = String::from_utf8_lossy(&symbols.stdout);
         let mut found: Vec<String> = Vec::new();
         for line in text.lines() {
-            // `00000000 T _func_Name`
-            if let Some(rest) = line.split_whitespace().nth(1) {
-                if let Some(name) = rest.strip_prefix("_func_") {
-                    found.push(name.to_string());
+            // `00000000 T _func_Name` — l'adresse, le type, le nom.
+            if let Some(name) = line.split_whitespace().nth(2) {
+                if let Some(test) = name.strip_prefix("_func_") {
+                    found.push(test.to_string());
                 }
             }
         }
@@ -398,89 +425,87 @@ fn compile_module(ws: &Workspace, tree: &Path, sdk: &Path, module: &str, out: &P
 
     let testlist_object = objs.join("testlist.o");
     run(Command::new("i686-w64-mingw32-gcc")
-        .args(["-c", "-O1", "-w", "-Dmain=apitest_wine_main", "-D_WIN32_WINNT=0x0501"])
+        .args(["-c", "-O1", "-w", "-D_WIN32_WINNT=0x0501"])
         .args(defines)
         .arg(format!("-I{}", module_dir.display()))
         .args(&includes)
         .arg(&testlist)
         .arg("-o")
         .arg(&testlist_object))?;
-    let testmain_object = objs.join("testmain.o");
-    run(Command::new("i686-w64-mingw32-gcc")
-        .args(["-c", "-O1", "-w"])
-        .arg(out.join("testmain.c"))
-        .arg("-o")
-        .arg(&testmain_object))?;
+    // Le pilote : la même liste, mais seule sa partie table lui sert — le
+    // cadre wine est coupé (STANDALONE, apitest.h) : la struct y est
+    // redéfinie ; il lance chaque test dans un processus fils.
+    let driver_list = out.join(format!("{module}-driver.c"));
+    let driver_source = fs::read_to_string(&testlist).map_err(|e| e.to_string())?;
+    // La table du pilote ne tient que les noms (les fonctions vivent dans
+    // le coureur) : ses déclarations extern sautent, ses entrées perdent
+    // leur fonction.
+    let list_only = driver_source
+        .split_once("#include <apitest.h>")
+        .map(|(_, rest)| rest)
+        .unwrap_or(driver_source.as_str())
+        .lines()
+        .filter(|line| !line.starts_with("extern void func_"))
+        .map(|line: &str| match line.find(", func_") {
+            Some(at) => format!("{}}},", &line[..at]),
+            None => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    let driver = format!(
+        "#include <windows.h>\nstruct test {{ const char *name; void (*func)(void); }};\n{list_only}\n{}",
+        include_str!("../rostests-src/testdriver.c").replace("NTAPIRUN.EXE", runner_name)
+    );
+    fs::write(&driver_list, driver).map_err(|e| e.to_string())?;
 
     let exe = out.join(name);
     let native_libs = ws.target.join("xtask").join("native");
     build_pseh(tree, &native_libs)?;
-    build_ntdll_import(out)?;
-    // Les imports : le ntdll des sondes (DbgPrint y est), la lib PSEH
-    // statique, et les DLL de Mino par leurs libs MinGW — le chargeur de
-    // Mino résout à l'exécution depuis les vraies (kernel32, msvcrt…).
+    // Le coureur : le main de wine/test.h (argv[1] = le test, son code de
+    // sortie = ses échecs) — le pilote l'attend avec un délai.
+    let runner = out.join(runner_name);
+    let stubs_object = objs.join("runner-stubs.o");
+    run(Command::new("i686-w64-mingw32-gcc")
+        .args(["-c", "-O1", "-w"])
+        .arg(ws_shim("runner-stubs.c"))
+        .arg("-o")
+        .arg(&stubs_object))?;
+    // Le coureur est une application console au CRT de MinGW : le main de
+    // wine/test.h y lit argv (argv[1] = le test) — le pilote le lance par
+    // CreateProcess et lit son code de sortie.
     let mut link = Command::new("i686-w64-mingw32-gcc");
-    link.args(["-nostartfiles", "-Wl,--kill-at", "-Wl,--subsystem,windows:5.1", "-Wl,-e,_WinMain@16", "-o"])
-        .arg(&exe)
-        .arg(&testmain_object)
+    link.args(["-Wl,--kill-at", "-Wl,--subsystem,console:5.1", "-o"])
+        .arg(&runner)
         .arg(&testlist_object)
+        .arg(&stubs_object)
         .args(&compiled)
-        // La lib ntdll de MinGW : les deux formes de chaque stdcall
-        // (`Nom` et `Nom@N`) — le chargeur de Mino résout à l'exécution
-        // depuis la ntdll.dll du payload.
         .args(["-lntdll"])
         .arg(native_libs.join("libpseh.a"))
         .args(["-lkernel32", "-luser32", "-lgdi32", "-lmsvcrt", "-ladvapi32"]);
     run(&mut link)?;
-    println!("xtask: rostests {module} : {} ({} tests compilés)", name, compiled.len());
-    Ok(exe)
+    // Le pilote : la liste embarquée, chaque test dans un fils.
+    let driver_object = objs.join("driver.o");
+    run(Command::new("i686-w64-mingw32-gcc")
+        .args(["-c", "-O1", "-w"])
+        .arg(&driver_list)
+        .arg("-o")
+        .arg(&driver_object))?;
+    let mut driver_link = Command::new("i686-w64-mingw32-gcc");
+    driver_link
+        .args(["-nostartfiles", "-Wl,--kill-at", "-Wl,--subsystem,windows:5.1", "-Wl,-e,_WinMain@16", "-o"])
+        .arg(&exe)
+        .arg(&driver_object)
+        .args(["-lntdll", "-lkernel32", "-luser32", "-lmsvcrt"]);
+    run(&mut driver_link)?;
+    println!("xtask: rostests {module} : {} + {} ({} tests compilés)", name, runner_name, compiled.len());
+    Ok((exe, runner))
 }
 
 /// La lib PSEH de ReactOS, compilée en statique (`libpseh.a`) : les tests
 /// s'en servent pour `__try`/`__except` sous MinGW.
-/// La lib d'import ntdll complète : les 1400 exports de la ntdll.dll du
-/// payload, relus par objdump — les tests s'en servent tous (Rtl*, Ldr*,
-/// Nt*), la sonde n'en exportait que cinq.
-fn build_ntdll_import(out: &Path) -> Result<()> {
-    let lib = out.join("libntdll_full.a");
-    if lib.is_file() {
-        return Ok(());
-    }
-    let dump = std::process::Command::new("objdump")
-        .args(["-p", "third_party/reactos/0.4.16/reactos/system32/ntdll.dll"])
-        .output()
-        .map_err(|e| format!("objdump : {e}"))?;
-    let text = String::from_utf8_lossy(&dump.stdout);
-    let mut def = String::from(
-        "LIBRARY ntdll.dll
-EXPORTS
-",
-    );
-    let mut count = 0;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        // `[  12] +base[  13]  0000 Name`
-        let Some(rest) = trimmed.strip_prefix('[') else { continue };
-        let Some((_, tail)) = rest.split_once("] ") else { continue };
-        let mut parts = tail.rsplit(' ');
-        let _hint = parts.next();
-        let Some(name) = parts.next() else { continue };
-        if !name.is_empty() && name != "+base[" {
-            def.push_str(name);
-            def.push('\n');
-            count += 1;
-        }
-    }
-    if count < 1000 {
-        return Err(format!("ntdll.dll : {} exports seulement (objdump a-t-il lu ?)", count));
-    }
-    let def_path = out.join("ntdll-full.def");
-    fs::write(&def_path, def).map_err(|e| e.to_string())?;
-    run(Command::new("i686-w64-mingw32-dlltool").arg("--kill-at").arg("-d").arg(&def_path).arg("-l").arg(&lib))?;
-    println!("xtask: rostests : libntdl_full.a ({count} exports)");
-    Ok(())
-}
-
 fn build_pseh(tree: &Path, native_libs: &Path) -> Result<()> {
     let lib = native_libs.join("libpseh.a");
     if lib.is_file() {
@@ -491,17 +516,15 @@ fn build_pseh(tree: &Path, native_libs: &Path) -> Result<()> {
     let out = native_libs.join("pseh");
     fs::create_dir_all(&out).map_err(|e| e.to_string())?;
     let mut objects = Vec::new();
-    let mut sources: Vec<std::path::PathBuf> = vec![pseh.join("framebased.c"), pseh.join("dummy.c")];
+    let mut sources: Vec<PathBuf> = vec![pseh.join("framebased.c"), pseh.join("dummy.c")];
     // Les entrées SEH2 en assembleur (i386) et le .c du gcchack ; pseh3.c
     // ne compile pas sans le générateur de ReactOS.
     let asm = pseh.join("i386");
     sources.extend([asm.join("framebased-gcchack.c")]);
-    if let Ok(entries) = fs::read_dir(&asm) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "S") {
-                sources.push(path);
-            }
+    for entry in fs::read_dir(&asm).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path.extension().is_some_and(|e| e == "S") {
+            sources.push(path);
         }
     }
     sources.sort();
