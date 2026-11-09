@@ -242,6 +242,110 @@ const _: () = assert!(size_of::<Luid32>() == 8);
 /// SYSTEM_LUID: the logon session of LocalSystem.
 pub const SYSTEM_LUID: Luid32 = Luid32 { low_part: 0x3E7, high_part: 0 };
 
+/// ANONYMOUS_LOGON_LUID: the logon session of the anonymous user.
+pub const ANONYMOUS_LOGON_LUID: Luid32 = Luid32 { low_part: 0x3E6, high_part: 0 };
+
+impl Luid32 {
+    /// The LUID as one 64-bit value (high part above).
+    pub const fn as_u64(self) -> u64 {
+        (self.high_part as u32 as u64) << 32 | self.low_part as u64
+    }
+}
+
+/// The requests of LSA to the reference monitor's command server
+/// (`\SeRmCommandPort`, SRM_API_NUMBER of ReactOS's `srmp.h`).
+pub const RM_AUDIT_SET_COMMAND: u32 = 1;
+pub const RM_CREATE_LOGON_SESSION: u32 = 2;
+pub const RM_DELETE_LOGON_SESSION: u32 = 3;
+
+/// POLICY_AUDIT_EVENT_TYPE_COUNT: the audit categories, System to Account
+/// Logon.
+pub const AUDIT_EVENT_TYPES: usize = 9;
+
+/// The data of SEP_RM_API_MESSAGE, after its PORT_MESSAGE: `ApiNumber`,
+/// then a union whose members this module reads (ReactOS's `srmp.h`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RmApiData32 {
+    pub api_number: u32,
+    /// `u.ResultStatus`, `u.LogonLuid`, `u.SetAuditEvent` start here.
+    pub union: RmSetAuditEvent32,
+}
+
+/// The `SetAuditEvent` member of SEP_RM_API_MESSAGE's union: a BOOLEAN,
+/// then the flags of each category.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RmSetAuditEvent32 {
+    pub enabled: u8,
+    pub flags: [u32; AUDIT_EVENT_TYPES],
+}
+
+const _: () = {
+    assert!(core::mem::offset_of!(RmApiData32, union) == 4);
+    assert!(core::mem::offset_of!(RmSetAuditEvent32, flags) == 4);
+    assert!(size_of::<RmApiData32>() == 44);
+};
+
+/// Where `u` starts in the data of SEP_RM_API_MESSAGE.
+pub const RM_UNION_OFFSET: usize = core::mem::offset_of!(RmApiData32, union);
+
+/// A request of SEP_RM_API_MESSAGE, as the data after its header gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RmRequest {
+    /// RmAuditSetCommand: auditing on or off, and the flags of each category.
+    SetAudit { enabled: bool, flags: [u32; AUDIT_EVENT_TYPES] },
+    /// RmCreateLogonSession.
+    CreateLogonSession(Luid32),
+    /// RmDeleteLogonSession.
+    DeleteLogonSession(Luid32),
+    /// Another API number.
+    Unknown(u32),
+}
+
+fn read32(data: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?))
+}
+
+impl RmRequest {
+    /// The request in `data` (a message's data, without its header);
+    /// `None` when it is too short for its API number.
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        let luid = || {
+            Some(Luid32 {
+                low_part: read32(data, RM_UNION_OFFSET)?,
+                high_part: read32(data, RM_UNION_OFFSET + 4)? as i32,
+            })
+        };
+        Some(match read32(data, 0)? {
+            RM_AUDIT_SET_COMMAND => {
+                let enabled = *data.get(RM_UNION_OFFSET)? != 0;
+                let mut flags = [0; AUDIT_EVENT_TYPES];
+                for (index, flag) in flags.iter_mut().enumerate() {
+                    *flag = read32(data, RM_UNION_OFFSET + 4 + 4 * index)?;
+                }
+                Self::SetAudit { enabled, flags }
+            }
+            RM_CREATE_LOGON_SESSION => Self::CreateLogonSession(luid()?),
+            RM_DELETE_LOGON_SESSION => Self::DeleteLogonSession(luid()?),
+            other => Self::Unknown(other),
+        })
+    }
+}
+
+/// The reply to a request, in place in its data, as the reference monitor
+/// sends it back: `u.ResultStatus` set to `status`, the API number cleared
+/// for RmAuditSetCommand (SepRmSetAuditEvent). `false` if `data` cannot
+/// hold the status.
+pub fn set_rm_result(data: &mut [u8], status: u32) -> bool {
+    let Some(result) = data.get_mut(RM_UNION_OFFSET..RM_UNION_OFFSET + 4) else { return false };
+    result.copy_from_slice(&status.to_le_bytes());
+    if read32(data, 0) == Some(RM_AUDIT_SET_COMMAND) {
+        data[..4].copy_from_slice(&0u32.to_le_bytes());
+    }
+    true
+}
+
 /// LUID_AND_ATTRIBUTES: a privilege and its state.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -339,6 +443,41 @@ as_bytes!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rm_requests_are_read_from_their_data() {
+        let mut data = [0u8; 44];
+        data[..4].copy_from_slice(&RM_CREATE_LOGON_SESSION.to_le_bytes());
+        data[4..8].copy_from_slice(&0x1234u32.to_le_bytes());
+        data[8..12].copy_from_slice(&1u32.to_le_bytes());
+        let luid = Luid32 { low_part: 0x1234, high_part: 1 };
+        assert_eq!(RmRequest::parse(&data), Some(RmRequest::CreateLogonSession(luid)));
+        assert_eq!(luid.as_u64(), 0x1_0000_1234);
+        data[..4].copy_from_slice(&RM_DELETE_LOGON_SESSION.to_le_bytes());
+        assert_eq!(RmRequest::parse(&data), Some(RmRequest::DeleteLogonSession(luid)));
+        assert_eq!(RmRequest::parse(&data[..8]), None, "a LUID cut short");
+        data[..4].copy_from_slice(&RM_AUDIT_SET_COMMAND.to_le_bytes());
+        data[4] = 1;
+        data[8 + 4 * 8..8 + 4 * 9].copy_from_slice(&7u32.to_le_bytes());
+        let Some(RmRequest::SetAudit { enabled: true, flags }) = RmRequest::parse(&data) else {
+            panic!("an audit request")
+        };
+        assert_eq!(flags[8], 7);
+        assert_eq!(RmRequest::parse(&99u32.to_le_bytes()), Some(RmRequest::Unknown(99)));
+    }
+
+    #[test]
+    fn the_rm_result_goes_where_the_union_starts() {
+        let mut data = [0u8; 12];
+        data[..4].copy_from_slice(&RM_CREATE_LOGON_SESSION.to_le_bytes());
+        assert!(set_rm_result(&mut data, 0xC000_00EE));
+        assert_eq!(&data[4..8], &0xC000_00EEu32.to_le_bytes());
+        assert_eq!(&data[..4], &RM_CREATE_LOGON_SESSION.to_le_bytes(), "the API number stays");
+        data[..4].copy_from_slice(&RM_AUDIT_SET_COMMAND.to_le_bytes());
+        assert!(set_rm_result(&mut data, 0));
+        assert_eq!(&data[..4], &[0; 4], "cleared for RmAuditSetCommand");
+        assert!(!set_rm_result(&mut [0u8; 6], 0));
+    }
 
     #[test]
     fn records_are_little_endian_bytes() {

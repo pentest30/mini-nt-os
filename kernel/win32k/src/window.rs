@@ -57,8 +57,8 @@ use abi::user::{
     GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE,
     HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION,
     STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4,
-    WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_PAINT, WM_PARENTNOTIFY,
-    WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
+    WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT, WM_PAINT,
+    WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
     WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW,
     WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
     WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
@@ -99,6 +99,8 @@ pub struct WindowState {
     pub module: u32,
     /// L'identifiant d'une fenêtre fille (`IDMenu`).
     pub id_menu: u32,
+    /// Sa barre de menus (SetMenu) ; 0 sans barre.
+    pub menu: u32,
     /// Ses liens, des handles (0 : aucun).
     pub parent: u32,
     pub owner: u32,
@@ -418,6 +420,29 @@ pub fn set_property(window: &Window, atom: u16, data: u32) {
     } else {
         properties.push((window.handle, atom, data));
     }
+}
+
+/// Les items de la barre de menus de la fenêtre, pour la peindre (une
+/// copie ; vide sans barre).
+pub fn menu_items(window: &Window) -> alloc::vec::Vec<crate::menu::Item> {
+    let handle = window.state().menu;
+    crate::menu::get(handle).map_or_else(Vec::new, |menu| menu.items())
+}
+
+/// SetMenu : la barre de menus de la fenêtre devient `hmenu` (0 la retire) ;
+/// la zone cliente se recalcule (WM_NCCALCSIZE : la barre prend sa place
+/// sous le titre) et le cadre se repeint.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le service système.
+pub fn set_menu(window: &alloc::sync::Arc<Window>, hmenu: u32) {
+    update(window, |state| state.menu = hmenu);
+    let rect = window.state().window;
+    let mut calc = rect_bytes(rect);
+    let _ = send_message(window, WM_NCCALCSIZE, 0, LParam::Buffer { bytes: &mut calc, write_back: true });
+    let client = fix_client_rect(rect_of(&calc), rect);
+    update(window, |state| state.client = client);
+    let _ = send_message(window, WM_NCPAINT, 0, LParam::Value(0));
 }
 
 /// SetWindowFNID : l'identifiant interne de la fenêtre.

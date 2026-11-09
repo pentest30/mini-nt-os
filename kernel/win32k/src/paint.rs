@@ -821,11 +821,13 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
     }
     let size = (state.window.right - state.window.left, state.window.bottom - state.window.top);
     let text = window::text(window).unwrap_or_default();
+    let menu_items = window::menu_items(window);
     let (ops, unpainted) = crate::nonclient::frame_ops(
         state.style,
         state.ex_style,
         size,
         &text,
+        &menu_items,
         state.state & WNDS_ACTIVEFRAME != 0,
         true,
         &crate::metrics::get,

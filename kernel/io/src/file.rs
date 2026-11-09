@@ -65,9 +65,10 @@ pub const FILE_GENERIC_MAPPING: GenericMapping = GenericMapping {
     all: FILE_ALL_ACCESS_MASK,
 };
 
-/// Le type `File`.
+/// Le type `File` : les fichiers et répertoires des volumes ([`File`]) et
+/// les objets fichiers des tubes nommés ([`crate::npfs::PipeFile`]).
 pub static FILE_TYPE: ObjectType =
-    ObjectType::new("File", FILE_ALL_ACCESS_MASK, FILE_GENERIC_MAPPING).with_parse(parse_file);
+    ObjectType::new("File", FILE_ALL_ACCESS_MASK, FILE_GENERIC_MAPPING).with_parse(parse_file).with_close(close_file);
 
 /// Le corps d'un objet `File` ouvert sur un volume.
 pub struct File {
@@ -410,12 +411,25 @@ impl File {
 
 /// La procédure *parse* des fichiers : un nom relatif à un répertoire ouvert.
 fn parse_file(object: &ObjectRef, remaining: &str) -> Result<Parsed, NtStatus> {
-    let file = downcast::<File>(object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
     if remaining.is_empty() {
         return Ok(Parsed::Object(object.clone()));
     }
+    if let Some(pipe) = downcast::<crate::npfs::PipeFile>(object) {
+        return pipe.parse_relative(remaining);
+    }
+    let file = downcast::<File>(object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
     let name = remaining.strip_prefix('\\').ok_or(STATUS_OBJECT_NAME_INVALID)?;
     Ok(Parsed::Object(file.open_relative(name)?))
+}
+
+/// La procédure de fermeture du type `File` : au dernier handle d'un objet
+/// fichier de NPFS, sa fermeture (IRP_MJ_CLEANUP).
+fn close_file(object: &ObjectRef, handles_left: u32) {
+    if handles_left == 0 {
+        if let Some(pipe) = downcast::<crate::npfs::PipeFile>(object) {
+            pipe.cleanup();
+        }
+    }
 }
 
 /// La disposition `disposition` crée le fichier s'il manque.

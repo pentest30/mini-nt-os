@@ -44,6 +44,10 @@ pub type Layout<'a> = &'a dyn Fn(Named, i32, &[u16], Option<i32>, Quality) -> Op
 /// La hauteur de lfCaptionFont et de lfSmCaptionFont par défaut : un em de
 /// 11 pixels.
 pub const CAPTION_FONT_HEIGHT: i32 = -11;
+/// La hauteur de la police des menus (et de la barre).
+const MENU_FONT_HEIGHT: i32 = -11;
+/// Les pixels entre les titres de la barre.
+const MENU_ITEM_GAP: i32 = 8;
 
 /// Ce que le cadre aurait et qui n'est pas dessiné.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -223,6 +227,7 @@ pub fn frame_ops(
     ex_style: u32,
     (width, height): (i32, i32),
     text: &[u16],
+    menu_items: &[crate::menu::Item],
     active: bool,
     gradient: bool,
     m: &impl Fn(usize) -> i32,
@@ -248,6 +253,31 @@ pub fn frame_ops(
         let caption_height = if ex_style & WS_EX_TOOLWINDOW != 0 { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) };
         let caption = Rect::new(current.left, current.top, current.right, current.top + caption_height - 1);
         current.top += caption_height;
+        // La barre de menus (UserDrawMenuBar) : le champ des items, leur
+        // titre en Tahoma, huit pixels entre eux ; les séparateurs n'y
+        // sont pas (une barre n'en tient pas).
+        if !menu_items.is_empty() {
+            let height = m(sm::CYMENU);
+            let bar = Rect::new(current.left, current.top, current.right, current.top + height);
+            current.top += height;
+            ops.push(Op::Fill(bar, c(color::BTNFACE)));
+            let mut at = bar.left + m(sm::CXMENUCHECK) / 2;
+            for item in menu_items {
+                if item.flags & crate::menu::mf::SEPARATOR != 0 {
+                    continue;
+                }
+                if let Some(run) = layout(TAHOMA, MENU_FONT_HEIGHT, &item.caption, None, Quality::Antialiased) {
+                    let top = bar.top + (bar.bottom - bar.top - run.metrics.height()) / 2;
+                    let baseline = top + run.metrics.ascent;
+                    let color = c(color::MENUTEXT);
+                    for glyph in run.glyphs {
+                        let glyph_at = (at + glyph.x + glyph.bitmap.left, baseline - glyph.bitmap.top);
+                        ops.push(Op::Glyph { at: glyph_at, bitmap: glyph.bitmap, color, clip: bar });
+                    }
+                    at += run.width + 2 * MENU_ITEM_GAP;
+                }
+            }
+        }
         let (from, to) = if active {
             (color::ACTIVECAPTION, color::GRADIENTACTIVECAPTION)
         } else {
@@ -337,7 +367,7 @@ mod tests {
         layout: Layout,
     ) -> (impl Fn(i32, i32) -> u32, Unpainted) {
         let (ops, unpainted) =
-            frame_ops(style, ex_style, (width, height), text, active, gradient, &metric, palette, layout);
+            frame_ops(style, ex_style, (width, height), text, &[], active, gradient, &metric, palette, layout);
         let mut pixels = alloc::vec![0u32; (width * height) as usize];
         let mut surface =
             Bitmap::new(&mut pixels, width as u32, height as u32, width as u32, PixelLayout::Rgbx).unwrap();
@@ -391,7 +421,7 @@ mod tests {
 
     #[test]
     fn frames_without_a_caption_or_with_a_client_edge() {
-        let (ops, unpainted) = frame_ops(WS_POPUP, 0, (50, 50), &[], false, true, &metric, &system, &no_fonts);
+        let (ops, unpainted) = frame_ops(WS_POPUP, 0, (50, 50), &[], &[], false, true, &metric, &system, &no_fonts);
         assert!(ops.is_empty() && unpainted == Unpainted::default(), "a popup has no frame");
         let (at, _) = render(WS_POPUP | WS_BORDER, 0, (20, 20), false);
         assert_eq!((at(0, 0), at(1, 1)), (system(color::WINDOWFRAME).0, 0), "a thin border");

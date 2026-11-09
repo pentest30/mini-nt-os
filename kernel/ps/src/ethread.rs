@@ -612,6 +612,33 @@ pub fn lookup_thread(tid: ThreadId) -> Result<Arc<Object<EThread>>, NtStatus> {
     }
 }
 
+/// Un TID pour un thread noyau du processus System qui n'a pas d'objet
+/// thread (pas encore de PsCreateSystemThread), mais que Lpc doit désigner
+/// par son CLIENT_ID : le serveur de commandes du moniteur de références
+/// (`ntoskrnl::srm`), client de `lsass`. Réservé pour de bon ; il ne désigne
+/// aucun thread qu'on puisse ouvrir ([`lookup_thread`] le refuse), mais
+/// [`client_exists`] le connaît.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn reserve_system_thread_id() -> Result<ThreadId, NtStatus> {
+    CID_TABLE.lock().insert(CidEntry::SystemThread).ok_or(STATUS_INSUFFICIENT_RESOURCES)
+}
+
+/// Le CLIENT_ID (`pid`, `tid`) désigne un thread qui existe : un thread
+/// vivant de ce processus, ou un thread noyau réservé du processus System
+/// ([`reserve_system_thread_id`]). Ce que Lpc vérifie avant de répondre.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn client_exists(pid: ProcessId, tid: ThreadId) -> bool {
+    match CID_TABLE.lock().get(tid) {
+        Some(CidEntry::Thread(thread)) => thread.upgrade().is_some_and(|thread| thread.pid() == pid),
+        Some(CidEntry::SystemThread) => pid == crate::eprocess::system_process().pid(),
+        _ => false,
+    }
+}
+
 /// Le thread de l'exécutif qui s'exécute ; `None` pour un thread noyau ou un
 /// thread de l'ancien chargeur.
 ///

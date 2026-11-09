@@ -367,18 +367,21 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
 ///   Ses temps passés en mode noyau et en mode utilisateur sont nuls : Ke ne
 ///   les compte pas encore ;
 /// - `ThreadIsTerminated` : 1 si sa fin est demandée ou en cours
-///   (PsIsThreadTerminating), 0 sinon.
+///   (PsIsThreadTerminating), 0 sinon ;
+/// - `ThreadAmILastThread` : 1 si son processus n'a pas d'autre thread
+///   vivant, 0 sinon.
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
 pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
     use abi::process::{
-        KernelUserTimes, ThreadBasicInformation32, THREAD_BASIC_INFORMATION, THREAD_IS_TERMINATED, THREAD_TIMES,
+        KernelUserTimes, ThreadBasicInformation32, THREAD_AM_I_LAST_THREAD, THREAD_BASIC_INFORMATION,
+        THREAD_IS_TERMINATED, THREAD_TIMES,
     };
 
     let (handle, class, buffer, length, return_length) =
         (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
-    if !matches!(class, THREAD_BASIC_INFORMATION | THREAD_TIMES | THREAD_IS_TERMINATED) {
+    if !matches!(class, THREAD_BASIC_INFORMATION | THREAD_TIMES | THREAD_IS_TERMINATED | THREAD_AM_I_LAST_THREAD) {
         return UNSUPPORTED_THREAD_QUERY_CLASSES.report(class);
     }
     let thread = match super::reference_thread(handle, THREAD_QUERY_INFORMATION) {
@@ -387,10 +390,13 @@ pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
     };
     let basic: ThreadBasicInformation32;
     let times: KernelUserTimes;
-    let terminated: [u8; 4];
+    let flag: [u8; 4];
     let information = if class == THREAD_IS_TERMINATED {
-        terminated = u32::from(thread.is_terminating()).to_le_bytes();
-        &terminated[..]
+        flag = u32::from(thread.is_terminating()).to_le_bytes();
+        &flag[..]
+    } else if class == THREAD_AM_I_LAST_THREAD {
+        flag = u32::from(thread.process().active_threads() == 1).to_le_bytes();
+        &flag[..]
     } else if class == THREAD_BASIC_INFORMATION {
         let process_base = thread.process().base_priority();
         let priority = thread.priority().unwrap_or(process_base);
