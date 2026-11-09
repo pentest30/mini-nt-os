@@ -19,6 +19,14 @@ extern const struct apitest winetest_testlist[];
 extern LONG winetest_successes, winetest_failures, winetest_skipped;
 extern LONG winetest_todo_successes, winetest_todo_failures;
 
+/* La cible de saut de NtContinue.c, que son fichier ne définit que sous
+ * MSVC (asm inline) — un point de retour sans effet sous MinGW. */
+void continuePoint(void);
+
+void continuePoint(void)
+{
+}
+
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev, LPSTR line, int show)
 {
     int total = 0, failed = 0, skipped = 0;
