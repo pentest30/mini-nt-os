@@ -56,9 +56,11 @@ forbid = Source File: ../base/system/smss/smss.c
 # Screen-Saver), goes on Winlogon and switches to it, gives the station its
 # user (csrss logs it off), loads its keyboard layout (00000409: kbdus.dll,
 # its tables read, not run; its code page from user32's GetCharsetInfo
-# callback), then starts its RPC server: not yet (a named
-# pipe, \pipe\winreg: NtCreateNamedPipeFile, Io). It ends; smss ends with
-# it. The probe ends csrss after 2 s.
+# callback), then starts its RPC server: rpcrt4 creates the named pipe
+# \pipe\winreg (NtCreateNamedPipeFile, Io's NPFS) and its server thread
+# listens on it, overlapped (FSCTL_PIPE_LISTEN: STATUS_PENDING); then
+# winlogon starts services.exe: not yet (not on the disk). It ends; smss
+# ends with it. The probe ends csrss after 2 s.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -78,8 +80,8 @@ expect = [m4]   NtAdjustPrivilegesToken (0x000c)
 expect = [m4]   NtSetSystemInformation (0x00f9): 3 calls, the first returned 0x00000000
 expect = [m4]   NtCreateProcess (0x0031): 2 calls, the first returned 0x00000000
 # smss resumes csrss's first thread, csrss its server threads and
-# winlogon's.
-expect = [m4]   NtResumeThread (0x00d6): 5 calls, the first returned 0x00000000
+# winlogon's, winlogon rpcrt4's server thread (CreateThread).
+expect = [m4]   NtResumeThread (0x00d6): 6 calls, the first returned 0x00000000
 # smss's API port (Lpc), on which two threads wait; then csrss's API port
 # and its port for smss (SB API).
 expect = [m4]   NtCreatePort (0x0030): 3 calls, the first returned 0x00000000
@@ -95,7 +97,8 @@ expect = [m4]   NtUserInitializeClientPfnArrays (0x11be): 2 calls, the first ret
 expect = [m4]   NtGdiInit (0x10db): 2 calls, the first returned 0x00000001
 expect = [m4]   NtUserInitialize (0x11bd): 1 calls, the first returned 0x00000000
 expect = [m4]   NtCreateSemaphore (0x0035):
-expect = [m4]   NtQueryObject (0x00aa): 5 calls, the first returned 0x00000000
+# A handle's flags (csrsrv, kernel32), as far as winlogon goes.
+expect = [m4]   NtQueryObject (0x00aa): 7 calls, the first returned 0x00000000
 expect = [m4] USER: started by csrss (PID
 expect = \Windows\WindowStations created; 23 of 23 client procedures of user32 (at 0x77a20000) in SERVERINFO
 # The LPC connections (M5, step 7): csrss to smss (SmConnectToSm), smss
@@ -110,10 +113,13 @@ expect = [m4]   NtSetDefaultHardErrorPort (0x00df): 1 calls, the first returned 
 # winlogon (M5, step 9): on the disk, its process handle duplicated, then
 # handed to csrss, which makes it a CSR process; it connects to csrss,
 # registers as the logon process, creates WinSta0 and its desktops, loads
-# its keyboard layout and stops at its RPC server (a named pipe).
+# its keyboard layout, starts its RPC server (a named pipe, NPFS) and stops
+# at services.exe.
 expect = [m4] SMSS.EXE created winlogon.exe (PID
 expect = [m4]   NtDuplicateObject (0x0047):
-expect = [m4]   NtQueryInformationThread (0x00a2): 2 calls, the first returned 0x00000000
+# csrss asks about winlogon's first thread, then about rpcrt4's server
+# thread (its times, whether it ends).
+expect = [m4]   NtQueryInformationThread (0x00a2): 5 calls, the first returned 0x00000000
 expect = [m4]   NtUserCallTwoParam (0x1143): 1 calls, the first returned 0x00000001
 expect = [m4]   NtUserSetInformationThread (0x1205): 1 calls, the first returned 0x00000000
 expect = [m4]   NtUserCreateWindowStation (0x1157): 1 calls
@@ -142,8 +148,21 @@ expect = win32k: keyboard layout 00000409: charset 0, code page 1252, font signa
 expect = [m4]   NtCallbackReturn (0x0016): 2 calls, the first did not return
 forbid = win32k: GetCharsetInfo for keyboard layout
 expect = [m4]   NtUserGetKeyboardLayoutList (0x119b): 2 calls, the first returned 0x00000001
-expect = sys: NtCreateNamedPipeFile (0x002e) is not implemented
-expect = WL: Could not start the RPC server
+# Its RPC server (M5, step 24): the pipe \pipe\winreg, whose instance
+# listens, overlapped, in rpcrt4's server thread.
+expect = Pipe name: \??\pipe\winreg
+expect = [m4]   NtCreateNamedPipeFile (0x002e): 1 calls, the first returned 0x00000000
+expect = [m4]   NtFsControlFile (0x0058): 1 calls, the first returned 0x00000103
+forbid = sys: NtCreateNamedPipeFile (0x002e) is not implemented
+forbid = sys: NtFsControlFile (0x0058) is not implemented
+forbid = WL: Could not start the RPC server
+forbid = RpcServerUseProtseqEpW() failed
+forbid = RpcServerRegisterIf() failed
+forbid = RpcServerListen() failed
+forbid = pipe listen error
+# Where it stops: services.exe is not on the disk.
+expect = WL: Failed to execute services (error 2)
+expect = WL: Could not start services.exe
 forbid = WL: Could not preload keyboard layouts
 forbid = LoadKeyboardLayoutW(
 forbid = WL: Failed to create Default desktop

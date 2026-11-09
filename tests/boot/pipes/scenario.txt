@@ -1,0 +1,85 @@
+# M5, named pipes (NPFS, docs/compat/m5-csrss.md, step 24): PIPE1.EXE
+# (tests/native/pipe1.c, MinGW, linked to ReactOS's kernel32) takes the
+# place of winlogon.exe, which smss starts as its initial command once csrss
+# runs; smss has made \??\PIPE lead to \Device\NamedPipe (DOS Devices).
+# - A message pipe, \\.\pipe\mino\test, whose server is overlapped like
+#   rpcrt4's: NtCreateNamedPipeFile, then FSCTL_PIPE_LISTEN pending on an
+#   event; a client thread waits for an instance (FSCTL_PIPE_WAIT on the
+#   root, \DosDevices\pipe\), opens the pipe (NtCreateFile: it connects, the
+#   listen ends and its event is set), reads in message mode
+#   (NtSetInformationFile, FilePipeInformation), writes two messages and
+#   waits for a reply (a synchronous read that waits in the kernel). The
+#   server peeks (FSCTL_PIPE_PEEK), reads 3 bytes of the first message
+#   (STATUS_BUFFER_OVERFLOW: ERROR_MORE_DATA), then the rest, then the
+#   second; its next read waits (STATUS_PENDING), it replies, and the
+#   client's close ends that read (STATUS_PIPE_BROKEN, written by the
+#   client's thread into the server's OVERLAPPED). Then the pipe's local
+#   information, a disconnect, a listen cancelled by NtCancelIoFile, the
+#   limit of two instances (ERROR_PIPE_BUSY), a busy pipe (ERROR_PIPE_BUSY)
+#   and a wait that runs out of time (ERROR_SEM_TIMEOUT), and the pipe gone
+#   with its last instance (ERROR_FILE_NOT_FOUND).
+# - An anonymous pipe (CreatePipe: byte mode, synchronous, a quota of 16
+#   bytes): a read across two writes, a write of 40 bytes that waits until
+#   reads free the quota, a read that waits for a write, and a read once the
+#   writer is closed (ERROR_BROKEN_PIPE). GetFileType gives FILE_TYPE_PIPE
+#   (3: FileFsDeviceInformation, FILE_DEVICE_NAMED_PIPE).
+features = test-smss
+requires = userland, native
+initial-command = PIPE1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [boot] Io: \Device\NamedPipe (NPFS)
+expect = [pipe] started
+expect = [pipe] CreateFileW of a missing pipe: 0, error 2
+expect = [pipe] WaitNamedPipeW of a missing pipe: 0, error 2
+expect = [pipe] CreateNamedPipeW: a server, type 3
+expect = [pipe] ConnectNamedPipe: 0, error 997
+expect = [pipe-client] WaitNamedPipeW: 1
+expect = [pipe] the listen ended: wait 0, status 0
+expect = [pipe-client] SetNamedPipeHandleState(message): 1
+expect = [pipe-client] WriteFile: 1, 5 bytes
+expect = [pipe-client] WriteFile: 1, 7 bytes
+expect = [pipe] PeekNamedPipe: 1, 12 bytes, 5 left in this message
+expect = [pipe] ReadFile of 3 bytes: 0, error 234, 3 bytes, hel
+expect = [pipe] ReadFile of the rest: 1, error 0, 2 bytes, lo
+expect = [pipe] ReadFile of the second message: 1, error 0, 7 bytes, world!!
+expect = [pipe] ReadFile with nothing to read: 0, error 997
+expect = [pipe] WriteFile of the reply: 1, 2 bytes
+expect = [pipe-client] ReadFile: 1, 2 bytes, ok
+expect = [pipe] the waiting read: 0, error 109
+expect = [pipe] the client thread: wait 0
+expect = [pipe] GetNamedPipeInfo: 1, flags 5, out 256, in 256, instances 2
+expect = [pipe] DisconnectNamedPipe: 1
+expect = [pipe] a cancelled listen: 0, error 995
+expect = [pipe] a second instance: 1; a third: 0, error 231
+expect = [pipe] a client of the second instance: 1; another: 0, error 231
+expect = [pipe] WaitNamedPipeW of a busy pipe: 0, error 121
+expect = [pipe] the second instance reads: 1, 1 bytes
+expect = [pipe] the pipe after its last instance: 0, error 2
+expect = [pipe] CreatePipe: 1, types 3 3
+expect = [pipe] PeekNamedPipe: 1, 8 bytes
+expect = [pipe] ReadFile of 6 bytes: 1, abcdef
+expect = [pipe] ReadFile of the rest: 1, gh
+expect = [pipe] the writer past the quota, before reads: wait 258; after: wait 0
+expect = [pipe-writer] WriteFile past the quota: 1, 40 bytes
+expect = [pipe] read in three: 40 bytes, the last YZABCDEFGHIJKLMN
+expect = [pipe-reader] ReadFile: 1, 4 bytes, late
+expect = [pipe] the reader, before the write: wait 258; after: wait 0
+expect = [pipe] ReadFile once the writer is closed: 0, error 109
+expect = [pipe] done
+expect = [m4]   NtCreateNamedPipeFile (0x002e):
+expect = [m4]   NtFsControlFile (0x0058):
+expect = [m4]   NtCancelIoFile (0x0018):
+forbid = sys: NtCreateNamedPipeFile (0x002e) is not implemented
+forbid = sys: NtFsControlFile (0x0058) is not implemented
+forbid = sys: NtCancelIoFile (0x0018) is not implemented
+forbid = sys: NtFsControlFile (named pipe) class
+forbid = sys: NtQueryInformationFile class
+forbid = sys: NtSetInformationFile class
+forbid = sys: NtReadFile/NtWriteFile with an event or an APC is not implemented
+forbid = [pipe] CreateNamedPipeW failed
+forbid = [pipe-client] CreateFileW failed
+
+# A fatal error ends the run at once.
+forbid = *** STOP:

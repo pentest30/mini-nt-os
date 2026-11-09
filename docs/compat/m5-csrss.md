@@ -584,7 +584,7 @@ KLF_SUBSTITUTE_OK | KLF_REPLACELANG | KLF_SETFORPROCESS`), puis `user32` prépar
 NtUserSetImeHotKey manque (rend 0, toléré : pas d'IME). `winlogon` démarre ensuite son serveur RPC (`StartRpcServer`,
 `rpcserver.c`) : `RpcServerUseProtseqEpW` sur le tube nommé `\pipe\winreg` (`CreateNamedPipe` de `kernel32`) demande
 **NtCreateNamedPipeFile**, le système de fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe`), pas encore fait :
-« WL: Could not start the RPC server », et `winlogon` finit.
+« WL: Could not start the RPC server », et `winlogon` finit. (NPFS est fait à l'étape 24.)
 
 Pas encore : la traduction des touches par les tables (avec la file d'entrée, M6), la page de code d'une langue autre
 que celle du système, l'IME, le déchargement d'une disposition (`hOldKL`, NtUserUnloadKeyboardLayout), le
@@ -750,3 +750,76 @@ programme retrouvés ; la pile noyau agrandie) ; `kernel_stack_self_test` (crois
 rendues) ; le scénario `smss` (les deux rappels de `winlogon`). Mutations : RSP0 ou SYSENTER_ESP non déplacés, pile
 initiale non gardée par le thread, liste SEH non remise, pile agrandie oubliée, pages non remises à zéro,
 résultat non copié, statut ignoré, rappel ClientThreadSetup absent, mauvais index : toutes détectées.
+
+## Étape 24 : les tubes nommés (NPFS) ; `winlogon` démarre son serveur RPC
+
+`winlogon` démarre son serveur RPC (`StartRpcServer`, `rpcserver.c`) : `RpcServerUseProtseqEpW("ncacn_np",
+"\pipe\winreg")`, puis `RpcServerListen(1, 20, TRUE)`. Le transport `ncacn_np` de `rpcrt4` (`rpc_transport.c`) crée le
+tube par `CreateNamedPipeA` (`\\.\pipe\winreg`, `PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED`, type et lecture en mode
+message, instances sans limite, avec un descripteur de sécurité), et son thread serveur (`RPCRT4_server_thread`) met
+l'instance à l'écoute par NtFsControlFile(FSCTL_PIPE_LISTEN) avec un événement, puis attend (WaitForMultipleObjectsEx).
+Le client (`rpcrt4_conn_open_pipe`) attend une instance (`WaitNamedPipeA`), ouvre le tube et passe en mode message
+(`SetNamedPipeHandleState`) ; lectures et écritures sont des NtReadFile et NtWriteFile avec un événement ;
+l'annulation est NtCancelIoFile.
+
+Il faut donc le système de fichiers des tubes nommés d'Io. La spécification suivie est le pilote de ReactOS 0.4.16
+(`drivers/filesystems/npfs` : `create.c`, `statesup.c`, `fsctrl.c`, `read.c`, `readsup.c`, `write.c`, `writesup.c`,
+`datasup.c`, `fileinfo.c`, `waitsup.c`) et `kernel32` (`client/file/npipe.c`, `rw.c`, `iocompl.c`), sans en porter le
+code.
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `io::npfs` (NPFS) | `\Device\NamedPipe`, créé au démarrage (`io::mount_named_pipes`) ; `\??\PIPE` vient de `smss` (`DOS Devices` de la ruche SYSTEM), comme sous XP. Un tube (FCB) : nom sans casse, type, configuration (tirée du partage de sa création : entrant, sortant, les deux), instances au plus, délai par défaut. Une instance (CCB) : état (déconnectée, à l'écoute, connectée, en fermeture), modes de lecture et de fin par extrémité, deux files de données avec leur quota, écoutes en attente. Tout NPFS sous un verrou ; les demandes finies sous le verrou le sont une fois le verrou rendu (NpCompleteDeferredIrps) |
+| `io::npfs::queue` | la file d'un sens : des lectures en attente, ou des données écrites (une entrée par écriture : un message, ou un morceau du flux) ; une lecture en mode message prend au plus un message (`STATUS_BUFFER_OVERFLOW` et le reste en tête s'il ne tient pas), en mode octet d'une entrée à l'autre ; une écriture au-delà du quota attend que des lectures le libèrent (ses données sont déjà dans la file) ; les lectures en attente prennent les écritures d'abord |
+| `io::npfs::PipeFile` | l'objet fichier d'un tube, du type `File` : la procédure *parse* de `\Device\NamedPipe` en crée un pour la racine (`\`) ou pour un nom, que l'ouverture ou la création lie à son instance (comme IRP_MJ_CREATE et IRP_MJ_CREATE_NAMED_PIPE) ; son événement (FILE_OBJECT.Event) ; la procédure de fermeture du type `File` fait sa fermeture au dernier handle (IRP_MJ_CLEANUP : NpSetClosingPipeState) |
+| `io::request` | une demande en attente (`Request`, ce que garde un IRP en attente) et sa fin (`Requester::deliver`, IopCompleteRequest), hors des verrous du pilote |
+| NtCreateNamedPipeFile (`sys::pipe`) | une instance du tube, créé s'il n'existe pas (FILE_CREATED, FILE_OPENED) ; le handle est son extrémité serveur, à l'écoute. Refus : un tube neuf sans délai par défaut négatif ou sans instance, `FILE_OPEN` d'un tube absent, un partage qui n'est pas une configuration, le mode message d'un tube d'octets ; toutes les instances prises (`STATUS_INSTANCE_NOT_AVAILABLE`) ; `FILE_CREATE` ou un autre partage pour un tube qui existe (`STATUS_ACCESS_DENIED`) ; un nom hors de NPFS (`STATUS_INVALID_DEVICE_REQUEST`). Le descripteur de sécurité est ignoré |
+| NtCreateFile, NtOpenFile d'un tube | la racine, ou un client connecté à la première instance à l'écoute (ses écoutes finissent) ; refus : tube absent (`STATUS_OBJECT_NAME_NOT_FOUND`), aucune instance à l'écoute (`STATUS_PIPE_NOT_AVAILABLE`), lire un tube entrant ou écrire un tube sortant (`STATUS_ACCESS_DENIED`) |
+| NtReadFile, NtWriteFile d'un tube | lire ce que l'autre extrémité a écrit, ou attendre ; sans données, `STATUS_PIPE_BROKEN` si l'autre extrémité est fermée, `STATUS_PIPE_EMPTY` en mode non bloquant ; écrire (`STATUS_PIPE_CLOSING` si l'autre extrémité est fermée) ; en mode non bloquant, un message qui ne tient pas dans le quota n'est pas écrit |
+| NtFsControlFile | FSCTL_PIPE_LISTEN (le serveur attend un client ; `STATUS_PIPE_CONNECTED` s'il est là), FSCTL_PIPE_DISCONNECT (les données et les demandes des deux sens finissent, le client perd l'instance), FSCTL_PIPE_PEEK (l'état, les octets à lire, les messages et la longueur du premier, des données sans les prendre), FSCTL_PIPE_WAIT sur la racine (une instance du tube à l'écoute, ou l'attendre jusqu'au délai : `STATUS_IO_TIMEOUT`) ; le droit que demande un contrôle se vérifie sur le handle |
+| NtQueryInformationFile, NtSetInformationFile | FilePipeInformation (modes de lecture et de fin ; `STATUS_PIPE_BUSY` pour le mode non bloquant pendant que des demandes attendent), FilePipeLocalInformation (le tube et l'instance vus d'une extrémité), FileNameInformation (`\nom`) ; NtQueryVolumeInformationFile : FileFsDeviceInformation (FILE_DEVICE_NAMED_PIPE, le FILE_TYPE_PIPE de GetFileType) |
+| NtCancelIoFile | les demandes du thread courant sur ce fichier finissent avec `STATUS_CANCELLED` |
+| NtWaitForSingleObject, NtWaitForMultipleObjects | un fichier de tube s'attend par son événement : remis à zéro au début de chaque E/S, signalé à sa fin (ce qu'attendent ConnectNamedPipe, ReadFile et GetOverlappedResult de `kernel32` sans événement) |
+
+Une E/S de tube finit tout de suite, ou attend. Sur un fichier synchrone, le thread attend sa fin dans l'appel, puis
+écrit lui-même les données et le bloc d'état. Sur un fichier asynchrone (`FILE_FLAG_OVERLAPPED`), l'appel rend
+`STATUS_PENDING` ; le thread qui termine la demande (celui qui écrit, se connecte, ferme…) écrit les données et le bloc
+d'état dans le processus du demandeur (`EProcess::write_memory`, MmCopyVirtualMemory), signale son événement et celui du
+fichier et met en file son APC de fin, comme IopCompleteRequest. Une erreur rendue tout de suite n'écrit ni le bloc
+d'état ni l'événement, comme sous NT.
+
+Dans le scénario `smss`, `rpcrt4` crée `\pipe\winreg` (NtCreateNamedPipeFile : `STATUS_SUCCESS`), son thread serveur
+l'écoute (NtFsControlFile : `STATUS_PENDING`), et `winlogon` passe à `StartServicesManager` : `services.exe` n'est pas
+sur le disque (« WL: Failed to execute services (error 2) », « WL: Could not start services.exe »), et `winlogon`
+finit. NtSetInformationThread(`ThreadNameInformation`, 0x26, SetThreadDescription du thread serveur de `rpcrt4`) et
+NtIsProcessInJob manquent, tolérés.
+
+Écarts et limites :
+- La sécurité des tubes : le descripteur de leur création est ignoré, le contrôle d'accès d'un client est celui du
+  type `File` (ADR-011) ; FSCTL_PIPE_IMPERSONATE (ImpersonateNamedPipeClient, que le serveur de `rpcrt4` appellera pour
+  chaque appel) manque, comme FSCTL_PIPE_TRANSCEIVE (TransactNamedPipe), les événements de tube
+  (FSCTL_PIPE_ASSIGN_EVENT, FSCTL_PIPE_QUERY_EVENT) et le processus client : `STATUS_NOT_IMPLEMENTED`, journalisé une
+  fois.
+- FSCTL_PIPE_WAIT attend dans l'appel, même sur un fichier asynchrone ; une attente synchrone ne s'interrompt pas pour
+  une APC (`FILE_SYNCHRONOUS_IO_ALERT` vaut `NONALERT`) ; pas de ports de complétion.
+- La fin d'un thread n'annule pas ses demandes (IoCancelThreadIo) : une demande dont le thread se termine est
+  abandonnée (une lecture ne prend plus de données), finie sans rien livrer.
+- Les lectures en attente ne prennent pas de quota (NPFS les compte) ; ce qu'une extrémité peut écrire
+  (`WriteQuotaAvailable`) est le quota libre du sens où elle écrit (ReactOS prend, pour le client, le quota de l'autre
+  sens).
+- Ni énumération de la racine (NtQueryDirectoryFile), ni notifications, ni alias de noms, ni FileBasic,
+  FileStandard ou FileAllInformation d'un tube.
+
+Tests : hôte (`abi::pipe` : FILE_PIPE_WAIT_FOR_BUFFER lu, refusé court ou avec son nom au-delà, les informations ;
+`io::npfs`, 22 tests : création et limites, paramètres refusés, connexion qui finit l'écoute, configurations, écoute
+non bloquante, messages lus un à un et en partie, lecteur d'octets d'un message à l'autre, lecture en attente servie
+par une écriture et message vide, demande abandonnée, écriture au-delà du quota qui attend, message non bloquant qui ne
+tient pas, aperçu, fermetures du client puis du serveur, déconnexion et nouvelle écoute, attente d'instance servie,
+échue, ou dont le tube disparaît, annulation par thread et fichier, modes, informations locales, noms relatifs à la
+racine) ; le scénario `pipes` (`tests/native/pipe1.c`, à la place de `winlogon.exe`, AMD et Intel) : un tube de messages
+au serveur asynchrone comme celui de `rpcrt4` (écoute en attente servie par le client, aperçu, lecture en partie
+`ERROR_MORE_DATA`, lecture en attente finie par la fermeture du client `ERROR_BROKEN_PIPE`, GetNamedPipeInfo,
+déconnexion, écoute annulée `ERROR_OPERATION_ABORTED`, deux instances au plus et tube occupé `ERROR_PIPE_BUSY`,
+attente échue `ERROR_SEM_TIMEOUT`, tube disparu avec sa dernière instance), puis un tube anonyme (CreatePipe : lecture
+de deux écritures, écriture au-delà du quota qui attend les lectures, lecture qui attend une écriture, tube cassé) ;
+le scénario `smss` (le serveur RPC de `winlogon`).

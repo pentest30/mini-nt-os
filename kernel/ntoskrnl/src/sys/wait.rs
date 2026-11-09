@@ -1,9 +1,10 @@
 //! Les attentes du mode utilisateur (`ke::dispatcher`).
 //!
 //! On attend un objet du dispatcher : un processus (signalé à sa fin), un
-//! thread (à sa fin) ou un événement d'Ex. Les autres types d'objets rendent
-//! `STATUS_OBJECT_TYPE_MISMATCH` : un fichier, qu'XP attend par son
-//! événement, viendra avec les E/S asynchrones.
+//! thread (à sa fin), un événement, un sémaphore ou un mutant d'Ex, ou un
+//! fichier de tube (son événement : la fin de sa dernière E/S, comme
+//! FILE_OBJECT.Event). Les autres types d'objets rendent
+//! `STATUS_OBJECT_TYPE_MISMATCH`.
 
 use alloc::vec::Vec;
 
@@ -73,6 +74,10 @@ fn dispatcher_object(object: &ObjectRef) -> Result<*mut DispatcherHeader, NtStat
     if let Some(thread) = ob::downcast::<EThread>(object) {
         // A thread handed out has its Ke thread.
         return thread.dispatcher_object().ok_or(STATUS_INVALID_HANDLE);
+    }
+    if let Some(pipe) = ob::downcast::<io_manager::PipeFile>(object) {
+        // FILE_OBJECT.Event: cleared as each I/O starts, set as it ends.
+        return Ok(pipe.event().header());
     }
     Err(STATUS_OBJECT_TYPE_MISMATCH)
 }

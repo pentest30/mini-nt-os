@@ -9862,8 +9862,12 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
 #[allow(dead_code)]
 /// The boot volumes (`io_manager::mount_boot_volumes`): the boot RAM disk,
 /// and the ATA system disk if there is one, which `\??\C:` and `\SystemRoot`
-/// then lead to.
+/// then lead to; and the named pipe file system (`\Device\NamedPipe`).
 fn mount_boot_volumes() {
+    match io_manager::mount_named_pipes() {
+        Ok(()) => log::info!("[boot] Io: {} (NPFS)", io_manager::npfs::DEVICE_NAME),
+        Err(status) => log::error!("[boot] Io: {} refused: {status}", io_manager::npfs::DEVICE_NAME),
+    }
     let volumes = match io_manager::mount_boot_volumes() {
         Ok(volumes) => volumes,
         Err(status) => return log::error!("[boot] Io: the boot volume refused: {status}"),

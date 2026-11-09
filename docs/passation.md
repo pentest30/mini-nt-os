@@ -1,5 +1,27 @@
 # Notes de passation
 
+- **Les tubes nommés d'Io (NPFS) ; `winlogon` démarre son serveur RPC** (`claude/sharp-davinci-37d7d9`, M5 étape 9,
+  [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 24) : `io::npfs` (`\Device\NamedPipe`, créé au démarrage ;
+  `\??\PIPE` vient de `smss`) tient les tubes, leurs instances, leurs états et leurs files de données (messages et
+  octets, lectures partielles, quotas et écritures qui attendent, aperçu, attente d'instance) ; `io::request` garde les
+  demandes en attente et les termine hors du verrou ; `sys::pipe` : NtCreateNamedPipeFile, NtFsControlFile
+  (FSCTL_PIPE_LISTEN, DISCONNECT, PEEK, WAIT), NtCancelIoFile, et les tubes dans NtCreateFile, NtOpenFile, NtReadFile,
+  NtWriteFile, NtQuery/SetInformationFile (FilePipe, FilePipeLocal, FileName), NtQueryVolumeInformationFile
+  (FileFsDeviceInformation) et les attentes (l'événement du fichier). Les E/S asynchrones des tubes sont faites : sur
+  un fichier asynchrone, `STATUS_PENDING`, puis le thread qui termine la demande écrit les données et le bloc d'état
+  dans le processus du demandeur, signale ses événements et met en file son APC de fin. Le vrai `winlogon` crée
+  `\pipe\winreg`, le thread serveur de `rpcrt4` l'écoute (`STATUS_PENDING`), puis `winlogon` s'arrête à
+  `services.exe`, absent du disque (« WL: Could not start services.exe »). Tests : hôte (`abi::pipe`, 22 de
+  `io::npfs`), scénario `pipes` (`tests/native/pipe1.c` : un tube de messages au serveur asynchrone comme celui de
+  `rpcrt4`, un tube anonyme d'octets ; AMD 21 s, Intel 20 s), scénario `smss`. Suite : `services.exe` sur le disque
+  (puis `lsass.exe`, `msgina`) ; FSCTL_PIPE_IMPERSONATE, que le serveur de `rpcrt4` demandera au premier appel ;
+  la fin d'un thread qui annule ses demandes (IoCancelThreadIo). Limites dans l'étape 24. Suite de démarrage sur
+  l'hôte Windows : 75 runs sur 80 passent ; `smss` Intel a échoué une fois puis repassé (instabilité) ; `fpu` (STOP
+  0x7F, double faute à l'entrée d'un thread de l'ancien chargeur) et `cmd` échouent aussi sur `main` (`103b381`,
+  vérifié) : les marqueurs de `cmd` sont périmés (`A long name.txt`, que crée l'autotest VFAT de `36b6714`, s'ajoute
+  à `dir /b`, et la racine a 34 fichiers, ligne 42 du listing, au lieu de 22, ligne 30 ; `PIPE1.EXE` en ajoute un ; et
+  `forbid = 0 bytes free` attrape une place libre qui finit par 0).
+
 - **Le moteur de l'installateur va au bout malgré la fin de son thread** (`claude/install-critical-region`, par-dessus
   la PR #97) : préparation, formatage et copie passent par `io::install::run_exclusive`, qui tient le verrou exclusif
   du moteur dans une région critique (`ke_enter_critical_region`) ; la fin du thread (APC noyau normal) attend que le
@@ -46,8 +68,8 @@ jour à chaque commit qui change l'état.
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
   crée la station interactive `WinSta0` et ses bureaux, s'y place (la fenêtre du bureau d'entrée est montrée et peinte
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
-  d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
-  NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
+  d'un rappel de `user32` : KeUserModeCallback), démarre son serveur RPC (le tube nommé `\pipe\winreg` : NPFS,
+  Io), puis s'arrête à `services.exe`, absent du disque : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 24.
 - La sonde console, étape 8 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : ce que `dir` affiche autour des
   noms (en-tête du volume, dates, place libre ; NtQueryDefaultLocale, FileFsVolume/Size/FullSizeInformation,
   FileNameInformation, FileBasicInformation en écriture ; dates de FAT) : **le critère de `cmd.exe` interactif du M5
@@ -733,14 +755,18 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      ouvert comme périphérique, les IRP) ; les icônes de `consrv`, SetTimer, le défilement et les barres de
      défilement de la console, DestroyWindow ; le dernier critère du M5 : les `rostests` `ntdll` et `kernel32` ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
-     l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
-     nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
+     l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) passe par NPFS, les tubes
+     nommés d'Io (faits : étape 24 de `compat/m5-csrss.md`), puis `services.exe`, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject), DC en mémoire, BitBlt, texte et polices
      (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
-   - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
-     fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
-     FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
+   - [x] le serveur RPC de `winlogon` (étape 24) : le système de fichiers des tubes nommés d'Io (NPFS,
+     `io::npfs`, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client, NtFsControlFile :
+     FSCTL_PIPE_LISTEN, DISCONNECT, PEEK, WAIT ; lectures et écritures, synchrones et asynchrones ; NtCancelIoFile) ;
+     `rpcrt4` crée `\pipe\winreg` et l'écoute ; le scénario `pipes` ;
+   - **la suite, côté `winlogon`** : `services.exe` (absent du disque : `xtask` l'y mettra, avec ses imports), puis
+     `lsass.exe`, `msgina` ; FSCTL_PIPE_IMPERSONATE (ImpersonateNamedPipeClient) dès qu'un client RPC appellera le
+     serveur ;
    - **USER (option 1, choisie avec le mainteneur : le win32k minimal, début du M6 et du spike S3)** :
      le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
      lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande
@@ -879,7 +905,13 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   (`STATUS_INFO_LENGTH_MISMATCH`) n'a pas de test (une mutation qui le retire survit).
 - Clavier : l'activation d'une disposition (`hKL` et `CodePage` du `CLIENTINFO`) n'a pas de test (une mutation qui
   la retire survit) : il faudrait une station interactive et une vraie disposition, que seul le scénario `smss` a, sans
-  rien qui lise ces champs avant le serveur RPC.
+  rien qui lise ces champs avant `services.exe`.
+- Tubes nommés (étape 24) : la sécurité des tubes (descripteur ignoré ; FSCTL_PIPE_IMPERSONATE,
+  FSCTL_PIPE_TRANSCEIVE, les événements de tube : `STATUS_NOT_IMPLEMENTED`) ; FSCTL_PIPE_WAIT attend dans l'appel même
+  sur un fichier asynchrone ; une attente synchrone ne s'interrompt pas pour une APC ; pas de ports de complétion ; la
+  fin d'un thread n'annule pas ses demandes (IoCancelThreadIo), elles sont abandonnées ; les lectures en attente ne
+  prennent pas de quota ; ni énumération de la racine ni FileBasic/FileStandard d'un tube ; les E/S des volumes restent
+  synchrones (un événement ou une APC : `STATUS_NOT_IMPLEMENTED`).
 - Files de messages : le masque de GetQueueStatus (`QS_ALLINPUT | QS_ALLPOSTMESSAGE | QS_SMRESULT`) ne filtre que des
   bits que la file ne produit pas encore (une mutation qui le retire survit).
 - Fenêtres : NtUserSwitchDesktop cache la fenêtre du bureau d'entrée d'avant, ce que rien ne voit (`winlogon` ne
