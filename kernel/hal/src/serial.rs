@@ -3,6 +3,15 @@
 //! Also provides `SerialLogger` — a `log::Log` implementation that writes
 //! formatted records to COM1. Call `logger_init()` once after `serial::init()`
 //! to redirect all `log::info!` / `log::warn!` / etc. calls to the UART.
+//!
+//! A record is formatted first, into a buffer of [`LINE_CAPACITY`] bytes on
+//! the stack, then sent in one hold of the COM1 lock ([`Chunks`]): two
+//! writers no longer mix their lines (a thread switched out in the middle of
+//! a line, another processor, an ISR), which cut the markers the boot
+//! scenarios look for. A longer record goes in chunks of that size, each
+//! whole. The lock disables interrupts while a line goes: QEMU's and
+//! VirtualBox's UART take a byte at once; a real 16550 at 115200 baud takes
+//! about 87 µs a byte.
 
 use crate::sync::IrqLock;
 use uart_16550::SerialPort;
@@ -82,8 +91,8 @@ pub fn read_byte_blocking() -> u8 {
 
 /// Write formatted output to COM1 (for use in the panic handler).
 ///
-/// Uses the same `SerialWriter` approach as `SerialLogger::log` but acquires
-/// the COM1 lock directly. Safe to call from the panic handler.
+/// Takes the COM1 lock for each piece of `args` (not for the whole line, as
+/// `SerialLogger::log` does). Safe to call from the panic handler.
 pub fn write_fmt(args: core::fmt::Arguments) {
     struct SerialWriterDirect;
     impl core::fmt::Write for SerialWriterDirect {
@@ -123,6 +132,57 @@ pub fn write_str_isr(s: &str) {
 
 // ── Serial logger ─────────────────────────────────────────────────────────────
 
+/// The bytes of a record that go out in one hold of the COM1 lock: more than
+/// a `DbgPrint` (512 bytes) and its prefix.
+pub const LINE_CAPACITY: usize = 640;
+
+/// A formatted record, cut into chunks of at most `N` bytes, each handed
+/// whole to `flush`: a record of `N` bytes or fewer is flushed once.
+pub struct Chunks<F: FnMut(&[u8]), const N: usize> {
+    buffer: [u8; N],
+    len: usize,
+    flush: F,
+}
+
+impl<F: FnMut(&[u8]), const N: usize> Chunks<F, N> {
+    pub fn new(flush: F) -> Self {
+        Self { buffer: [0; N], len: 0, flush }
+    }
+
+    /// Hands what is left to `flush`.
+    pub fn finish(mut self) {
+        if self.len != 0 {
+            (self.flush)(&self.buffer[..self.len]);
+        }
+    }
+}
+
+impl<F: FnMut(&[u8]), const N: usize> core::fmt::Write for Chunks<F, N> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let mut bytes = s.as_bytes();
+        while !bytes.is_empty() {
+            let take = bytes.len().min(N - self.len);
+            self.buffer[self.len..self.len + take].copy_from_slice(&bytes[..take]);
+            self.len += take;
+            bytes = &bytes[take..];
+            if self.len == N {
+                (self.flush)(&self.buffer);
+                self.len = 0;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Sends `bytes` to COM1 in one hold of its lock.
+fn send_line(bytes: &[u8]) {
+    COM1.with(|com1| {
+        if let Some(port) = com1 {
+            bytes.iter().for_each(|&b| port.send(b));
+        }
+    });
+}
+
 /// A `log::Log` implementation that writes to COM1.
 ///
 /// Registered as the global logger by `logger_init()`. Formats records as:
@@ -139,29 +199,17 @@ impl log::Log for SerialLogger {
     }
 
     fn log(&self, record: &log::Record) {
-        // Write "[LEVEL] message\n" without heap allocation.
-        write_str("[");
-        write_str(record.level().as_str());
-        write_str("] ");
-        let mut w = SerialWriter;
-        let _ = core::fmt::write(&mut w, *record.args());
-        write_str("\n");
+        // "[LEVEL] message\n", formatted without heap allocation and without
+        // the lock (a Display that logs does not deadlock), then sent whole.
+        let mut line = Chunks::<_, LINE_CAPACITY>::new(send_line);
+        let _ = core::fmt::write(&mut line, format_args!("[{}] {}\n", record.level().as_str(), record.args()));
+        line.finish();
 
         // Mirror the same record to the framebuffer console (no-op if not init).
         super::fb::write_log_record(record.level().as_str(), record.args());
     }
 
     fn flush(&self) {}
-}
-
-/// Adapter implementing `core::fmt::Write` over `write_byte`.
-struct SerialWriter;
-
-impl core::fmt::Write for SerialWriter {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        super::serial::write_str(s);
-        Ok(())
-    }
 }
 
 /// Register `SerialLogger` as the global `log` logger.
@@ -173,4 +221,41 @@ impl core::fmt::Write for SerialWriter {
 pub fn logger_init() {
     let _ = log::set_logger(&SERIAL_LOGGER);
     log::set_max_level(log::LevelFilter::Info);
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+    use core::fmt::Write;
+    use std::format;
+    use std::vec::Vec;
+
+    use super::Chunks;
+
+    /// The chunks a record of `text` is flushed in, with `N` bytes a chunk.
+    fn chunks<const N: usize>(text: &str) -> Vec<Vec<u8>> {
+        let mut flushed = Vec::new();
+        let mut line = Chunks::<_, N>::new(|bytes: &[u8]| flushed.push(bytes.to_vec()));
+        writeln!(line, "[INFO] {text}").unwrap();
+        line.finish();
+        flushed
+    }
+
+    #[test]
+    fn a_line_goes_out_in_one_piece() {
+        // Each flush is one hold of the COM1 lock: a line that fits goes in
+        // one, and no other writer can cut it (send-messages lost a marker).
+        let flushed = chunks::<128>("DbgPrint 28.48: [send] sent messages out of GetMessage: 0");
+        assert_eq!(flushed.len(), 1);
+        assert_eq!(flushed[0], b"[INFO] DbgPrint 28.48: [send] sent messages out of GetMessage: 0\n");
+    }
+
+    #[test]
+    fn a_longer_line_goes_in_whole_chunks_and_nothing_is_lost() {
+        let text = "x".repeat(150);
+        let flushed = chunks::<64>(&text);
+        assert_eq!(flushed.iter().map(Vec::len).collect::<Vec<_>>(), [64, 64, 30]);
+        assert_eq!(flushed.concat(), format!("[INFO] {text}\n").into_bytes());
+        assert_eq!(chunks::<8>("1").concat(), b"[INFO] 1\n", "exactly full, then the newline");
+    }
 }
