@@ -16,6 +16,8 @@
  * kernel and erases its client area with a DC the kernel lends it
  * (WM_ERASEBKGND: user32's DefWindowProc fills it with the class brush,
  * through gdi32 and the GDI handle table it shares with win32k).
+ * A top-level window created with a menu has its menu bar from its
+ * creation.
  * Each step and each
  * message goes to the debug port (DbgPrint), where the scenario looks for
  * them; the program ends with EXIT_STATUS.
@@ -177,6 +179,9 @@ typedef struct {
 #define SW_SHOWNOACTIVATE 4
 #define SW_SHOW 5
 #define ERROR_INVALID_PARAMETER 87
+#define ERROR_INVALID_MENU_HANDLE 1401
+#define MF_STRING 0x0000
+#define SM_CYMENU 15
 #define GW_CHILD 5
 #define WM_PARENTNOTIFY 0x0210
 #define ERROR_TLW_WITH_WSCHILD 1406
@@ -286,6 +291,8 @@ __declspec(dllimport) BOOL __stdcall MoveWindow(HWND window, int x, int y, int w
 __declspec(dllimport) BOOL __stdcall ShowWindow(HWND window, int command);
 __declspec(dllimport) BOOL __stdcall SetWindowPos(HWND window, HWND after, int x, int y, int cx, int cy, UINT flags);
 __declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
+__declspec(dllimport) HMENU __stdcall CreateMenu(void);
+__declspec(dllimport) BOOL __stdcall AppendMenuW(HMENU menu, UINT flags, UINT id, const WCHAR *item);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int size);
 __declspec(dllimport) BOOL __stdcall IsWindow(HWND window);
 __declspec(dllimport) BOOL __stdcall SetWindowTextW(HWND window, const WCHAR *text);
@@ -1323,6 +1330,39 @@ static void check_second_thread(void)
              found ? message.wParam : 0, found ? message.lParam : 0);
 }
 
+/* A top-level window created with a menu (taskmgr's dialog, from its
+ * template) has it as its bar from its creation: the kernel's WM_NCCALCSIZE
+ * makes its client area SM_CYMENU less tall than without. A menu that does
+ * not exist, no window. */
+static void check_menu_bar(HINSTANCE instance)
+{
+    RECT plain;
+    RECT barred;
+    HMENU menu = CreateMenu();
+    HWND without;
+    HWND with;
+    HWND invalid;
+    DWORD error;
+
+    memset(&plain, 0, sizeof plain);
+    memset(&barred, 0, sizeof barred);
+    AppendMenuW(menu, MF_STRING, 1, L"File");
+    without = CreateWindowExW(0, CLASS_NAME, L"No menu", WS_OVERLAPPEDWINDOW, 10, 10, 300, 200, 0, 0, instance, 0);
+    SetLastError(0);
+    with = CreateWindowExW(0, CLASS_NAME, L"Menu", WS_OVERLAPPEDWINDOW, 10, 10, 300, 200, 0, menu, instance, 0);
+    DbgPrint("[gui] CreateWindowExW with a menu: %s (%lu)\n", with ? "a window" : "none", GetLastError());
+    GetClientRect(without, &plain);
+    GetClientRect(with, &barred);
+    SetLastError(0);
+    invalid = CreateWindowExW(0, CLASS_NAME, L"Bad menu", WS_OVERLAPPEDWINDOW, 10, 10, 300, 200, 0,
+                              (HMENU)0xDEADBEEF, instance, 0);
+    error = GetLastError();
+    DbgPrint("[gui] the menu bar: its client area %s; a menu that does not exist: %s, error %lu\n",
+             menu && with && plain.bottom - barred.bottom == GetSystemMetrics(SM_CYMENU) ? "SM_CYMENU less tall"
+                                                                                       : "WRONG",
+             invalid ? "a window" : "none", error);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -1381,6 +1421,7 @@ DWORD __stdcall GuiStartup(void)
     check_redraw();
     check_dc_and_regions();
     check_second_thread();
+    check_menu_bar(instance);
 
     DbgPrint("[gui] done\n");
     ExitProcess(EXIT_STATUS);

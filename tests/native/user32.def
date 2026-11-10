@@ -4,9 +4,11 @@
 ; DLL exports them undecorated.
 LIBRARY user32.dll
 EXPORTS
+AppendMenuW@16
 BeginPaint@8
 CreateDesktopW@24
 CreateDialogIndirectParamW@20
+CreateMenu@0
 CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16

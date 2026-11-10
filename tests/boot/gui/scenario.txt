@@ -56,7 +56,10 @@
 # caption to paint, GetUpdateRgn empties the region. A second thread goes,
 # at its first call to user32, on the process's startup desktop
 # (IsWindowVisible) and posts to a window of the first thread, whose queue
-# gets the message for the window (PostMessageW, PeekMessageW).
+# gets the message for the window (PostMessageW, PeekMessageW). A top-level
+# window created with a menu has its menu bar from its creation (its client
+# area SM_CYMENU less tall); with a menu that does not exist, no window
+# (ERROR_INVALID_MENU_HANDLE).
 # It ends with status 0x600D.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
@@ -217,6 +220,8 @@ expect = [gui] RedrawWindow of a region received 1: 0014
 expect = [gui] then GetUpdateRgn: 2, box 2: 10 10 30 30
 expect = [gui] only the frame to paint, GetUpdateRgn: 1, box 1: 0 0 0 0
 expect = [gui] a second thread: IsWindowVisible 1, PostMessageW 1; here: 1, for the window, 1 2
+expect = [gui] CreateWindowExW with a menu: a window (0)
+expect = [gui] the menu bar: its client area SM_CYMENU less tall; a menu that does not exist: none, error 1401
 expect = [gui] done
 expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 

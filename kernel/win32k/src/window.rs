@@ -34,7 +34,7 @@
 //! cadre se peint dans le noyau (`crate::paint`), pas encore sa zone cliente.
 //!
 //! Pas encore : DestroyWindow (les fenêtres d'un thread vivent autant que
-//! lui), une fenêtre créée réduite ou agrandie (journalisé), les menus, les messages envoyés à un autre thread, la fenêtre des
+//! lui), une fenêtre créée réduite ou agrandie (journalisé), le menu d'une classe (journalisé), la fenêtre des
 //! messages (`HWND_MESSAGE`), les crochets, les régions (la région à mettre
 //! à jour est un rectangle), les contextes de périphérique (WM_ERASEBKGND
 //! reçoit 0), le fond d'écran, la mise en page de droite à gauche.
@@ -66,7 +66,8 @@ use abi::user::{
     WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
-    ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_TLW_WITH_WSCHILD,
+    ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_TLW_WITH_WSCHILD,
 };
 use hal::sync::KSpinLock;
 use ke::usermem::UserPtr;
@@ -443,6 +444,23 @@ pub fn set_menu(window: &alloc::sync::Arc<Window>, hmenu: u32) {
     let client = fix_client_rect(rect_of(&calc), rect);
     update(window, |state| state.client = client);
     let _ = send_message(window, WM_NCPAINT, 0, LParam::Value(0));
+}
+
+/// IntSetMenu à la création : la barre de menus d'une fenêtre qui n'est pas
+/// fille (`kind`, ses styles WS_CHILD et WS_POPUP) est `hmenu`, un menu qui
+/// existe (`exists`), dès WM_NCCALCSIZE ; une fille n'en a pas, `hmenu` est
+/// son identifiant.
+///
+/// # Errors
+/// `ERROR_INVALID_MENU_HANDLE` pour un menu qui n'existe pas.
+fn creation_menu(kind: u32, hmenu: u32, exists: impl FnOnce(u32) -> bool) -> Result<u32, u32> {
+    if kind == WS_CHILD || hmenu == 0 {
+        Ok(0)
+    } else if exists(hmenu) {
+        Ok(hmenu)
+    } else {
+        Err(ERROR_INVALID_MENU_HANDLE)
+    }
 }
 
 /// SetWindowFNID : l'identifiant interne de la fenêtre.
@@ -1194,13 +1212,16 @@ fn unlink(window: &Arc<Window>) {
 /// bureau du thread courant, sa procédure prévenue par WM_NCCREATE,
 /// WM_NCCALCSIZE et WM_CREATE, puis, si elle n'attend pas d'être montrée,
 /// WM_SIZE et WM_MOVE ; une fenêtre fille prévient son parent
-/// (WM_PARENTNOTIFY). Elle appartient au thread.
+/// (WM_PARENTNOTIFY). Elle appartient au thread. Une fenêtre qui n'est pas
+/// fille a pour barre de menus `params.menu` dès sa création
+/// ([`creation_menu`]).
 ///
 /// # Errors
 /// L'erreur Win32, s'il y en a une : sans classe,
 /// `ERROR_CANNOT_FIND_WND_CLASS` ; une fenêtre fille sans parent,
 /// `ERROR_TLW_WITH_WSCHILD` ; un parent ou un propriétaire qui n'existe pas,
-/// `ERROR_INVALID_WINDOW_HANDLE` ; le tas plein,
+/// `ERROR_INVALID_WINDOW_HANDLE` ; un menu qui n'existe pas,
+/// `ERROR_INVALID_MENU_HANDLE` ; le tas plein,
 /// `ERROR_NOT_ENOUGH_MEMORY`. Aucune quand la procédure refuse WM_NCCREATE
 /// ou WM_CREATE, ou que le thread n'a pas de bureau.
 ///
@@ -1257,6 +1278,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     } else if kind == WS_CHILD {
         return Err(Some(ERROR_TLW_WITH_WSCHILD));
     }
+    let menu = creation_menu(kind, params.menu, |handle| crate::menu::get(handle).is_some()).map_err(Some)?;
     let startup = if params.style & (WS_POPUP | WS_CHILD) == 0 { startup_place() } else { StartupPlace::default() };
     let work = crate::monitor::primary().map(|monitor| monitor.work);
     let mut show =
@@ -1307,6 +1329,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         unicode,
         module: params.instance,
         id_menu: if kind == WS_CHILD { params.menu } else { 0 },
+        menu,
         parent: parent.handle,
         owner: owner.as_ref().map_or(0, |owner| owner.handle),
         ..WindowState::default()
@@ -1488,6 +1511,17 @@ mod tests {
     fn window(width: i32, height: i32) -> WindowState {
         let rect = Rect::new(0, 0, width, height);
         WindowState { window: rect, client: rect, ..WindowState::default() }
+    }
+
+    #[test]
+    fn a_top_level_window_takes_its_menu_bar_at_its_creation() {
+        let exists = |handle: u32| handle == 0x0003_002A;
+        assert_eq!(creation_menu(0, 0x0003_002A, exists), Ok(0x0003_002A), "overlapped: its bar");
+        assert_eq!(creation_menu(WS_POPUP, 0x0003_002A, exists), Ok(0x0003_002A), "a popup too");
+        assert_eq!(creation_menu(0, 0, exists), Ok(0), "no menu");
+        assert_eq!(creation_menu(0, 0xDEAD_BEEF, exists), Err(ERROR_INVALID_MENU_HANDLE));
+        assert_eq!(creation_menu(WS_CHILD, 7, exists), Ok(0), "a child's hMenu is its identifier");
+        assert_eq!(creation_menu(WS_CHILD | WS_POPUP, 0x0003_002A, exists), Ok(0x0003_002A), "not a child");
     }
 
     #[test]
