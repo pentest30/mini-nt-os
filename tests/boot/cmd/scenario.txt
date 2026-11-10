@@ -63,22 +63,25 @@ expect = [concmd] OUT.TXT 3: hello
 expect = [concmd] OUT.TXT 4: MINO=xp
 expect = [concmd] OUT.TXT 5:         1 file(s) copied
 expect = [concmd] OUT.TXT 6: MINOTEST.TXT
-expect = [concmd] OUT.TXT 7: OUT.TXT
-expect = [concmd] OUT.TXT 8: LOG.TXT
-expect = [concmd] OUT.TXT 9: COPY.TXT
-expect = [concmd] OUT.TXT 10: batch: xp
-expect = [concmd] OUT.TXT 11: batch: copy found
+# The kernel's Io self-test leaves `A long name.txt` in C:\ (VFAT
+# creation), which dir /b lists before the files of the commands.
+expect = [concmd] OUT.TXT 7: A long name.txt
+expect = [concmd] OUT.TXT 8: OUT.TXT
+expect = [concmd] OUT.TXT 9: LOG.TXT
+expect = [concmd] OUT.TXT 10: COPY.TXT
+expect = [concmd] OUT.TXT 11: batch: xp
+expect = [concmd] OUT.TXT 12: batch: copy found
 expect = [concmd] DIR.TXT 1:  Volume in drive C has no label.
 expect = [concmd] DIR.TXT 2:  Volume Serial Number is 4D49-4E4F
 expect = [concmd] DIR.TXT 4:  Directory of C:\
 expect = 08/04/2004  12:00 PM    <DIR>          WINDOWS
 expect = 08/04/2004  12:00 PM            12,288 CMD.EXE
-expect = DIR.TXT 30:               22 File(s)
+expect = DIR.TXT 41:               33 File(s)
 expect = bytes free
-expect = [concmd] OUT.TXT 15:  Directory of C:\
-expect = [concmd] OUT.TXT 17: 08/04/2004  12:00 PM                 4 K.BIN
-expect = [concmd] OUT.TXT 20:  Volume in drive C has no label.
-expect = [concmd] OUT.TXT 21:  Volume Serial Number is 4D49-4E4F
+expect = [concmd] OUT.TXT 16:  Directory of C:\
+expect = [concmd] OUT.TXT 18: 08/04/2004  12:00 PM                 4 K.BIN
+expect = [concmd] OUT.TXT 21:  Volume in drive C has no label.
+expect = [concmd] OUT.TXT 22:  Volume Serial Number is 4D49-4E4F
 expect = [boot] default locale: 0x0409 (Nls\Language)
 forbid = sys: NtQueryDirectoryFile (0x0097) is not implemented
 forbid = sys: NtQueryDefaultLocale (0x0095) is not implemented
@@ -90,5 +93,7 @@ forbid = NtSetInformationFile class 0x4 is not implemented
 forbid = Incorrect function.
 forbid = scan codes dropped
 forbid = Cannot pipe
-forbid = 0 bytes free
+# No free space at all: dir right-aligns the amount in 15 columns after
+# `Dir(s) `; a bare `0 bytes free` also matched 4,180,480 bytes free.
+forbid = Dir(s)               0 bytes free
 forbid = 1601
