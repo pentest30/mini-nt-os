@@ -11,6 +11,7 @@
 
 extern crate alloc;
 
+mod attribute_list;
 mod boot;
 mod index;
 mod namespace;
@@ -20,6 +21,8 @@ mod stream;
 mod volume;
 pub use volume::Volume;
 
+#[cfg(test)]
+mod extent_tests;
 #[cfg(test)]
 mod path_tests;
 #[cfg(test)]

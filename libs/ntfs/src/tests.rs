@@ -127,7 +127,7 @@ fn malformed_records_are_bounded_and_never_panic() {
     }
     let mut bad = good.clone();
     p32(&mut bad, 56, 0x20);
-    assert!(matches!(Record::parse(bad), Err(Error::Unsupported("attribute list"))));
+    assert!(Record::parse(bad).is_ok()); // List contents are checked by the volume resolver.
     let mut bad = good;
     p16(&mut bad, 22, 0);
     assert!(matches!(Record::parse(bad), Err(Error::NotFound)));
