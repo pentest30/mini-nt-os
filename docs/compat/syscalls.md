@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 115 | 296 |
-| win32k | 105 | 737 |
+| win32k | 117 | 737 |
 
 ## ntoskrnl
 
@@ -356,7 +356,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1025` | `NtGdiCreateMetafileDC` | 1 |  |
 | `0x1026` | `NtGdiCreatePaletteInternal` | 2 |  |
 | `0x1027` | `NtGdiCreatePatternBrushInternal` | 3 | ✅ |
-| `0x1028` | `NtGdiCreatePen` | 4 |  |
+| `0x1028` | `NtGdiCreatePen` | 4 | ✅ |
 | `0x1029` | `NtGdiCreateRectRgn` | 4 | ✅ |
 | `0x102a` | `NtGdiCreateRoundRectRgn` | 6 |  |
 | `0x102b` | `NtGdiCreateServerMetaFile` | 6 |  |
@@ -539,13 +539,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10dc` | `NtGdiInitSpool` | 0 |  |
 | `0x10dd` | `NtGdiIntersectClipRect` | 5 | ✅ |
 | `0x10de` | `NtGdiInvertRgn` | 2 |  |
-| `0x10df` | `NtGdiLineTo` | 3 |  |
+| `0x10df` | `NtGdiLineTo` | 3 | ✅ |
 | `0x10e0` | `NtGdiMakeFontDir` | 5 |  |
 | `0x10e1` | `NtGdiMakeInfoDC` | 2 |  |
 | `0x10e2` | `NtGdiMaskBlt` | 13 |  |
 | `0x10e3` | `NtGdiModifyWorldTransform` | 3 |  |
 | `0x10e4` | `NtGdiMonoBitmap` | 1 |  |
-| `0x10e5` | `NtGdiMoveTo` | 4 |  |
+| `0x10e5` | `NtGdiMoveTo` | 4 | ✅ |
 | `0x10e6` | `NtGdiOffsetClipRgn` | 3 |  |
 | `0x10e7` | `NtGdiOffsetRgn` | 3 |  |
 | `0x10e8` | `NtGdiOpenDCW` | 7 | ✅ |
@@ -576,7 +576,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1101` | `NtGdiSelectBrush` | 2 |  |
 | `0x1102` | `NtGdiSelectClipPath` | 2 |  |
 | `0x1103` | `NtGdiSelectFont` | 2 | ✅ |
-| `0x1104` | `NtGdiSelectPen` | 2 |  |
+| `0x1104` | `NtGdiSelectPen` | 2 | ✅ |
 | `0x1105` | `NtGdiSetBitmapAttributes` | 2 |  |
 | `0x1106` | `NtGdiSetBitmapBits` | 3 |  |
 | `0x1107` | `NtGdiSetBitmapDimension` | 4 |  |
@@ -681,14 +681,14 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116a` | `NtUserDrawIconEx` | 11 |  |
 | `0x116b` | `NtUserDrawMenuBarTemp` | 5 |  |
 | `0x116c` | `NtUserEmptyClipboard` | 0 |  |
-| `0x116d` | `NtUserEnableMenuItem` | 3 |  |
+| `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
 | `0x116e` | `NtUserEnableScrollBar` | 3 |  |
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
 | `0x1170` | `NtUserEndMenu` | 0 |  |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 |  |
 | `0x1173` | `NtUserEnumDisplayMonitors` | 5 |  |
-| `0x1174` | `NtUserEnumDisplaySettings` | 4 |  |
+| `0x1174` | `NtUserEnumDisplaySettings` | 4 | ✅ |
 | `0x1175` | `NtUserEvent` | 1 |  |
 | `0x1176` | `NtUserExcludeUpdateRgn` | 2 |  |
 | `0x1177` | `NtUserFillWindow` | 4 |  |
@@ -720,7 +720,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1191` | `NtUserGetDCEx` | 3 | ✅ |
 | `0x1192` | `NtUserGetDoubleClickTime` | 0 |  |
 | `0x1193` | `NtUserGetForegroundWindow` | 0 |  |
-| `0x1194` | `NtUserGetGuiResources` | 2 |  |
+| `0x1194` | `NtUserGetGuiResources` | 2 | ✅ |
 | `0x1195` | `NtUserGetGUIThreadInfo` | 2 |  |
 | `0x1196` | `NtUserGetIconInfo` | 6 |  |
 | `0x1197` | `NtUserGetIconSize` | 4 |  |
@@ -808,7 +808,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |
 | `0x11ea` | `NtUserRegisterTasklist` | 1 |  |
 | `0x11eb` | `NtUserRegisterWindowMessage` | 1 |  |
-| `0x11ec` | `NtUserRemoveMenu` | 3 |  |
+| `0x11ec` | `NtUserRemoveMenu` | 3 | ✅ |
 | `0x11ed` | `NtUserRemoveProp` | 2 |  |
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
@@ -837,14 +837,14 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1206` | `NtUserSetInternalWindowPos` | 4 |  |
 | `0x1207` | `NtUserSetKeyboardState` | 1 |  |
 | `0x1208` | `NtUserSetLogonNotifyWindow` | 1 |  |
-| `0x1209` | `NtUserSetMenu` | 3 |  |
+| `0x1209` | `NtUserSetMenu` | 3 | ✅ |
 | `0x120a` | `NtUserSetMenuContextHelpId` | 2 |  |
 | `0x120b` | `NtUserSetMenuDefaultItem` | 3 |  |
 | `0x120c` | `NtUserSetMenuFlagRtoL` | 1 |  |
 | `0x120d` | `NtUserSetObjectInformation` | 4 |  |
 | `0x120e` | `NtUserSetParent` | 2 |  |
 | `0x120f` | `NtUserSetProcessWindowStation` | 1 | ✅ |
-| `0x1210` | `NtUserSetProp` | 3 |  |
+| `0x1210` | `NtUserSetProp` | 3 | ✅ |
 | `0x1211` | `NtUserSetScrollInfo` | 4 |  |
 | `0x1212` | `NtUserSetShellWindowEx` | 2 |  |
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
@@ -855,7 +855,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1218` | `NtUserSetThreadLayoutHandles` | 2 |  |
 | `0x1219` | `NtUserSetThreadState` | 2 |  |
 | `0x121a` | `NtUserSetTimer` | 4 | ✅ |
-| `0x121b` | `NtUserSetWindowFNID` | 2 |  |
+| `0x121b` | `NtUserSetWindowFNID` | 2 | ✅ |
 | `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
 | `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
@@ -874,7 +874,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x122b` | `NtUserSystemParametersInfo` | 4 | ✅ |
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
 | `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
-| `0x122e` | `NtUserThunkedMenuItemInfo` | 6 |  |
+| `0x122e` | `NtUserThunkedMenuItemInfo` | 6 | ✅ |
 | `0x122f` | `NtUserToUnicodeEx` | 7 | ✅ |
 | `0x1230` | `NtUserTrackMouseEvent` | 1 |  |
 | `0x1231` | `NtUserTrackPopupMenuEx` | 6 |  |
