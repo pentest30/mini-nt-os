@@ -128,10 +128,10 @@ impl Node {
 /// ([`FatMount::entries`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Listed {
-    /// Son nom long s'il en a un, sinon son nom 8.3.
-    pub name: String,
-    /// Son nom 8.3, s'il a aussi un nom long.
-    pub short_name: Option<String>,
+    /// Raw UTF-16 long name, or the 8.3 name when no long name exists.
+    pub name: Vec<u16>,
+    /// Raw UTF-16 DOS alias, when paired with a long name.
+    pub short_name: Option<Vec<u16>>,
     /// La place de son entrée dans le répertoire, en octets (`FileIndex`).
     pub offset: u32,
     pub directory: bool,
@@ -312,8 +312,8 @@ impl FatMount {
                 // What its entry says, as `lookup` would give it.
                 let node = Node::from_entry(&listed.entry, None);
                 Listed {
-                    name: listed.name,
-                    short_name: listed.short_name,
+                    name: listed.name.encode_utf16().collect(),
+                    short_name: listed.short_name.map(|name| name.encode_utf16().collect()),
                     offset: listed.offset,
                     directory: node.directory,
                     attributes: node.attributes,

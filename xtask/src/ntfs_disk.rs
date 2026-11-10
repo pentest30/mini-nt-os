@@ -19,11 +19,28 @@ pub fn create(dir: &Path, disk: &Path) -> Result<()> {
     fs::File::create(&image).and_then(|f| f.set_len(32 * 1024 * 1024)).map_err(|e| e.to_string())?;
     run("mkntfs", &["-F", "-Q", "-s", "512", "-c", "4096", "-L", "MinoData", image_path])?;
     fs::write(&source, b"Mino NTFS read-only\n").map_err(|e| e.to_string())?;
-    for name in ["/readme.txt", "/Été.txt"] {
+    for name in ["/readme.txt", "/Été.txt", "/\u{e000}-surrogate.txt"] {
         run("ntfscp", &[image_path, source_path, name])?;
     }
     fs::write(&source, (0..131195).map(|n| (n % 251) as u8).collect::<Vec<_>>()).map_err(|e| e.to_string())?;
     run("ntfscp", &[image_path, source_path, "/large.bin"])?;
+    // Preserve raw UTF-16 in the fixture: ntfscp cannot accept an unpaired
+    // surrogate. Replace only the leading unit in FILE_NAME and $I30; both
+    // the placeholder and replacement sort after the other fixture names.
+    let mut raw = fs::read(&image).map_err(|e| e.to_string())?;
+    let placeholder: Vec<u8> = "\u{e000}-surrogate.txt".encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let offsets: Vec<_> = raw
+        .windows(placeholder.len())
+        .enumerate()
+        .filter_map(|(i, bytes)| (bytes == placeholder).then_some(i))
+        .collect();
+    if offsets.len() != 2 {
+        return Err("expected FILE_NAME and root index placeholder".into());
+    }
+    for at in offsets {
+        raw[at..at + 2].copy_from_slice(&0xd800u16.to_le_bytes());
+    }
+    fs::write(&image, raw).map_err(|e| e.to_string())?;
     crate::partition::create(&image, disk)?;
     fs::remove_file(image).map_err(|e| e.to_string())?;
     fs::remove_file(source).map_err(|e| e.to_string())?;

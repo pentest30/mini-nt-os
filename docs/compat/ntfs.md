@@ -31,14 +31,21 @@ Les appels de fichiers permettent ouverture relative ou absolue, lecture,
 énumération, tailles 64 bits, dates de STANDARD_INFORMATION, label, espace
 libre via `$Bitmap` et identification du système de fichiers. Les records
 internes réservés 0 à 15 ne sont pas énumérés comme fichiers utilisateur ; les
-alias DOS sont rattachés aux entrées Win32. Les noms UTF-16 non représentables
-en UTF-8 sont refusés par l'adaptateur actuel, sans conversion avec perte.
+alias DOS sont rattachés aux entrées Win32. L’énumération NtQueryDirectoryFile conserve les unités UTF-16 brutes,
+y compris les surrogates isolés, dans les noms longs et les alias DOS.
+La capture des chemins par le gestionnaire d’objets et le helper `list()`
+restent limités aux noms représentables en UTF-8 ; l’ouverture d’un nom
+contenant un surrogate isolé reste à implémenter.
 Les motifs d'énumération utilisent le moteur existant d'Io ; la résolution des
 composants utilise bien `$UpCase` du volume.
 
 Toutes les mutations, même sur un disque physiquement inscriptible, échouent
 avec `STATUS_MEDIA_WRITE_PROTECTED` : ouverture demandant des droits de
 modification, création, écrasement, écriture, taille et attributs/dates.
+`GENERIC_READ` et `MAXIMUM_ALLOWED` permettent la lecture : les droits
+de mutation sont retirés du maximum avant insertion dans la table des handles.
+Une demande explicite de ces droits reste refusée, même avec MAXIMUM_ALLOWED.
+NtWriteFile sur un handle ainsi réduit échoue avec `STATUS_ACCESS_DENIED`.
 Un flush NTFS est sans effet et ne sollicite pas le périphérique.
 FileFsAttributeInformation annonce `NTFS` et `FILE_READ_ONLY_VOLUME`.
 Les ACL NTFS ne sont pas interprétées. Les informations communes à FAT/NTFS
@@ -195,6 +202,10 @@ y compris à la destruction du volume. Le scénario `ntfs-readonly` crée une
 partition GPT/NTFS et fait appeler les vrais services NT par `NTFS1.EXE`, lié
 à ntdll. Il vérifie aussi que C: reste sur le ramdisk FAT et que le SHA-256 de
 tout le disque attaché reste inchangé après chaque boot (AMD et Intel).
+Les deux tests incluent un nom contenant le surrogate isolé 0xD800 dans
+FILE_NAME et $I30 : l’énumération restitue exactement ses unités UTF-16.
+Ils vérifient aussi les ouvertures GENERIC_READ/MAXIMUM_ALLOWED, la lecture
+et le refus d’écriture par les droits du handle (STATUS_ACCESS_DENIED).
 
 ## Suite, en PR distinctes
 

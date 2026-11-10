@@ -53,6 +53,17 @@ use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef,
 use crate::directory;
 use crate::volume::{Listed, Node, Space, Volume, VolumeLabel};
 
+const MUTATION_ACCESS: AccessMask = AccessMask(
+    FILE_WRITE_DATA
+        | FILE_APPEND_DATA
+        | abi::file::FILE_WRITE_ATTRIBUTES
+        | abi::file::FILE_WRITE_EA
+        | abi::file::FILE_DELETE_CHILD
+        | AccessMask::DELETE.0
+        | AccessMask::WRITE_DAC.0
+        | AccessMask::WRITE_OWNER.0,
+);
+
 /// FILE_ALL_ACCESS.
 pub const FILE_ALL_ACCESS_MASK: AccessMask = AccessMask(FILE_ALL_ACCESS);
 
@@ -98,7 +109,24 @@ struct Search {
 }
 
 impl File {
+    /// Map generic rights and restrict MAXIMUM_ALLOWED to what this volume
+    /// supports. Explicit write requests still fail on read-only volumes.
+    /// Insert the returned concrete mask into the handle table, not `desired`.
+    /// # IRQL
+    /// <= DISPATCH_LEVEL; no allocation or device I/O.
+    pub fn granted_access(&self, desired: AccessMask) -> Result<AccessMask, NtStatus> {
+        if !self.volume.is_read_only() {
+            return Ok(FILE_TYPE.granted_access(desired));
+        }
+        let explicit = FILE_TYPE.granted_access(desired.without(AccessMask::MAXIMUM_ALLOWED));
+        if explicit.intersects(MUTATION_ACCESS) {
+            return Err(abi::ntstatus::STATUS_MEDIA_WRITE_PROTECTED);
+        }
+        Ok(FILE_TYPE.granted_access(desired).without(MUTATION_ACCESS))
+    }
     /// Filesystem name and capability bits for NtQueryVolumeInformationFile.
+    /// # IRQL
+    /// <= DISPATCH_LEVEL; no allocation or device I/O.
     pub fn filesystem_information(&self) -> (&'static str, u32) {
         (self.volume.filesystem_name(), self.volume.filesystem_attributes())
     }
@@ -342,8 +370,8 @@ impl File {
             .iter()
             .filter(|listed| listed.offset >= resume)
             .map(|listed| {
-                let name: Vec<u16> = listed.name.encode_utf16().collect();
-                let short: Vec<u16> = listed.short_name.as_deref().unwrap_or("").encode_utf16().collect();
+                let name = listed.name.clone();
+                let short = listed.short_name.clone().unwrap_or_default();
                 (listed, name, short)
             })
             .filter(|(_, name, short)| {
@@ -481,15 +509,7 @@ pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMa
         return Err(STATUS_FILE_IS_A_DIRECTORY);
     }
     let writes = granted.intersects(AccessMask(FILE_WRITE_DATA | FILE_APPEND_DATA)) || overwrite;
-    let mutation = writes
-        || granted.intersects(AccessMask(
-            abi::file::FILE_WRITE_ATTRIBUTES
-                | abi::file::FILE_WRITE_EA
-                | abi::file::FILE_DELETE_CHILD
-                | AccessMask::DELETE.0
-                | AccessMask::WRITE_DAC.0
-                | AccessMask::WRITE_OWNER.0, // DELETE, WRITE_DAC, WRITE_OWNER
-        ));
+    let mutation = overwrite || granted.intersects(MUTATION_ACCESS);
     if file.volume.is_read_only() && mutation {
         return Err(abi::ntstatus::STATUS_MEDIA_WRITE_PROTECTED);
     }

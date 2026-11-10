@@ -12,6 +12,7 @@ IMPORT NTSTATUS __stdcall NtTerminateProcess(HANDLE, NTSTATUS);
 IMPORT NTSTATUS __stdcall NtClose(HANDLE);
 IMPORT NTSTATUS __stdcall NtOpenFile(HANDLE *, ULONG, OBJECT_ATTRIBUTES *, IOSB *, ULONG, ULONG);
 IMPORT NTSTATUS __stdcall NtCreateFile(HANDLE *, ULONG, OBJECT_ATTRIBUTES *, IOSB *, void *, ULONG, ULONG, ULONG, ULONG, void *, ULONG);
+IMPORT NTSTATUS __stdcall NtWriteFile(HANDLE, HANDLE, void *, void *, IOSB *, void *, ULONG, void *, void *);
 IMPORT NTSTATUS __stdcall NtReadFile(HANDLE, HANDLE, void *, void *, IOSB *, void *, ULONG, void *, void *);
 IMPORT NTSTATUS __stdcall NtQueryInformationFile(HANDLE, IOSB *, void *, ULONG, ULONG);
 IMPORT NTSTATUS __stdcall NtQueryVolumeInformationFile(HANDLE, IOSB *, void *, ULONG, ULONG);
@@ -61,11 +62,35 @@ void __stdcall NtProcessStartup(void *peb) {
     check(NtQueryVolumeInformationFile(root,&iosb,buffer,sizeof(buffer),3)==0,"volume space");
     check(((ULONG *)buffer)[0]>0,"total clusters");
     check(NtQueryDirectoryFile(root,0,0,0,&iosb,buffer,sizeof(buffer),12,0,0,1)==0,"directory query");
-    ULONG count=0, at=0;
-    for(;;) { ++count; ULONG next=*(ULONG *)(buffer+at); if(!next)break; at+=next; check(at<iosb.information,"directory bounds"); }
-    check(count==3,"three user files");
+    ULONG count=0, at=0, raw_name=0;
+    static const WCHAR unusual[]=L"\xd800-surrogate.txt";
+    for(;;) {
+        ++count;
+        check(at+12<=iosb.information,"directory header bounds");
+        ULONG length=*(ULONG *)(buffer+at+8);
+        check(at+12+length<=iosb.information,"directory name bounds");
+        WCHAR *entry=(WCHAR *)(buffer+at+12);
+        if(length==sizeof(unusual)-2 && entry[0]==0xd800) {
+            for(ULONG i=0;i<length/2;++i) check(entry[i]==unusual[i],"raw UTF-16 preserved");
+            ++raw_name;
+        }
+        ULONG next=*(ULONG *)(buffer+at); if(!next)break;
+        at+=next; check(at<iosb.information,"directory bounds");
+    }
+    check(count==4 && raw_name==1,"four user files including unpaired surrogate");
+    DbgPrint("[ntfs] raw UTF-16 directory names OK\n");
     NtClose(root); DbgPrint("[ntfs] volume and directory information OK\n");
     UNICODE_STRING name; OBJECT_ATTRIBUTES o=attributes(L"\\??\\D:\\readme.txt",&name); HANDLE h=0;
+    const ULONG read_access[]={0x80000000,0x02000000,0x82000000};
+    for(ULONG i=0;i<3;++i) {
+        check(NtOpenFile(&h,read_access[i],&o,&iosb,7,0x60)==0,"generic/maximum read open");
+        offset=0;
+        check(NtReadFile(h,0,0,0,&iosb,buffer,1,&offset,0)==0 && buffer[0]=='M',"generic/maximum read");
+        check(NtWriteFile(h,0,0,0,&iosb,buffer,1,&offset,0)==(NTSTATUS)0xC0000022,"read handle has no write grant");
+        NtClose(h);
+    }
+    check(NtOpenFile(&h,0x02000002,&o,&iosb,7,0x60)==(NTSTATUS)0xC00000A2,"maximum plus explicit write refused");
+    DbgPrint("[ntfs] generic and maximum read access OK\n");
     check(NtOpenFile(&h,0x100002,&o,&iosb,7,0x60)==(NTSTATUS)0xC00000A2,"write open refused");
     check(NtCreateFile(&h,0x100002,&o,&iosb,0,0,7,4,0x60,0,0)==(NTSTATUS)0xC00000A2,"overwrite refused");
     o=attributes(L"\\??\\D:\\new.txt",&name);

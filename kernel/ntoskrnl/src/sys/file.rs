@@ -126,15 +126,15 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
     let name = captured.name.unwrap_or_default();
     let root = captured.root.as_ref();
     let namespace = ob::namespace();
-    let granted = FILE_TYPE.granted_access(AccessMask(open.desired));
-    let (file, information) = match namespace.open(&name, root, Some(&FILE_TYPE), attributes) {
+    let (file, information, granted) = match namespace.open(&name, root, Some(&FILE_TYPE), attributes) {
         Ok(object) => {
             if let Some(pipe) = ob::downcast::<io_manager::PipeFile>(&object) {
                 return super::pipe::open(pipe, &out, iosb, open.desired, open.options, attributes);
             }
             let file = ob::downcast::<File>(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
+            let granted = file.granted_access(AccessMask(open.desired))?;
             let information = io_manager::check_open(&file, open.disposition, open.options, granted)?;
-            (file, information)
+            (file, information, granted)
         }
         Err(STATUS_OBJECT_NAME_NOT_FOUND) if io_manager::creates(open.disposition) => {
             io_manager::check_disposition(open.disposition, open.options)?;
@@ -147,14 +147,16 @@ fn create_file(out: u32, attributes: u32, iosb: u32, open: Open) -> Result<(), N
             let directory = namespace.open(directory, root, Some(&FILE_TYPE), attributes)?;
             let directory = ob::downcast::<File>(&directory).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
             let as_directory = open.options & FILE_DIRECTORY_FILE != 0;
-            (directory.create_child(last, as_directory, open.file_attributes)?, FILE_CREATED)
+            let file = directory.create_child(last, as_directory, open.file_attributes)?;
+            let granted = file.granted_access(AccessMask(open.desired))?;
+            (file, FILE_CREATED, granted)
         }
         Err(status) => return Err(status),
     };
     file.set_mode(open.options);
     let process = super::current_process();
     let handle_attributes = HandleAttributes { inherit: attributes & OBJ_INHERIT != 0, protect_from_close: false };
-    let handle = process.handle_table.insert(file, AccessMask(open.desired), handle_attributes)?;
+    let handle = process.handle_table.insert(file, granted, handle_attributes)?;
     give_handle(&out, handle)?;
     let block = IoStatusBlock32 { status: STATUS_SUCCESS.0, information };
     if let Err(fault) = ke::usermem::copy_to_user(u64::from(iosb), &block.to_bytes()) {

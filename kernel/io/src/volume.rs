@@ -115,13 +115,18 @@ impl Volume {
             Backend::Ntfs(v) => v.lookup(from, path),
         }
     }
-    /// Directory names (excluding dot entries).
+    /// UTF-8 convenience listing (excluding dot entries). For arbitrary UTF-16
+    /// names use `entries`; unrepresentable names are never converted lossily.
     /// # IRQL
     /// PASSIVE_LEVEL; may allocate and read the device.
     pub fn list(&self, node: &Node) -> Result<Vec<String>, NtStatus> {
         match &self.0 {
             Backend::Fat(v) => v.list(node),
-            Backend::Ntfs(v) => Ok(v.entries(node)?.into_iter().map(|e| e.name).collect()),
+            Backend::Ntfs(v) => v
+                .entries(node)?
+                .into_iter()
+                .map(|e| String::from_utf16(&e.name).map_err(|_| STATUS_OBJECT_NAME_INVALID))
+                .collect(),
         }
     }
     /// Entries for NtQueryDirectoryFile.

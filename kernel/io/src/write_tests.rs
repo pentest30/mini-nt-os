@@ -502,9 +502,9 @@ fn a_volume_creates_and_opens_long_names() {
     // alias; the alias alone is not a second entry.
     assert_eq!(volume.lookup(&root, "kernel32_vista.dll").unwrap().size, 2);
     let listed = volume.entries(&root).unwrap();
-    let kernel32 = listed.iter().find(|e| e.name == "KERNEL32_VISTA.DLL").unwrap();
-    assert_eq!(kernel32.short_name.as_deref(), Some("KERNEL~1.DLL"));
-    assert_eq!(listed.iter().filter(|e| e.name == "KERNEL~1.DLL").count(), 0);
+    let kernel32 = listed.iter().find(|e| e.name == "KERNEL32_VISTA.DLL".encode_utf16().collect::<Vec<_>>()).unwrap();
+    assert_eq!(kernel32.short_name.as_deref(), Some("KERNEL~1.DLL".encode_utf16().collect::<Vec<_>>().as_slice()));
+    assert_eq!(listed.iter().filter(|e| e.name == "KERNEL~1.DLL".encode_utf16().collect::<Vec<_>>()).count(), 0);
     // The same long name twice is refused; a different one is not.
     assert_eq!(volume.create(&root, "KERNEL32_VISTA.DLL", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
     assert!(volume.create(&root, "KERNEL32_VISTA.TXT", false, 0).is_ok());

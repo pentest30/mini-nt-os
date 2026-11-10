@@ -149,16 +149,12 @@ impl NtfsMount {
             if e.namespace == 2 && entries.iter().any(|o| o.reference == e.reference && o.namespace == 1) {
                 continue;
             }
-            let name = String::from_utf16(&e.name).map_err(|_| STATUS_OBJECT_NAME_INVALID)?;
-            if name == "." || name == ".." {
+            let name = e.name.clone();
+            if name == [b'.' as u16] || name == [b'.' as u16, b'.' as u16] {
                 continue;
             }
             let short_name = if e.namespace == 1 {
-                entries
-                    .iter()
-                    .find(|o| o.reference == e.reference && o.namespace == 2)
-                    .map(|o| String::from_utf16(&o.name).map_err(|_| STATUS_OBJECT_NAME_INVALID))
-                    .transpose()?
+                entries.iter().find(|o| o.reference == e.reference && o.namespace == 2).map(|o| o.name.clone())
             } else {
                 None
             };
