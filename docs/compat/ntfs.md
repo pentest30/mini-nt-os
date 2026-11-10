@@ -116,6 +116,17 @@ les erreurs d'E/S, les métadonnées tronquées ou incohérentes, les dépasseme
 et les fonctionnalités refusées. Un balayage de mutations d'octets exerce
 les bornes du lecteur sur les métadonnées du boot et de plusieurs records.
 
+Le bootstrap MFT dispose d'images synthétiques à trois extents, avec listes
+résidentes/non résidentes et dépendances successives ou hors ordre VCN. Les
+tests effacent l'ancienne disposition contiguë et lisent ensuite des chemins
+à travers la MFT reconstituée. Ils couvrent les records chevauchant des runs,
+les erreurs d'E/S, les références étrangères/périmées, les fixups corrompus,
+la couverture incomplète, la limite de 64 records et les mutations d'octets.
+Un lecteur instrumenté interdit toute E/S vers un record partiellement mappé
+ou une dépendance circulaire. Les images ntfs-3g ci-dessous vérifient les
+régressions sur volumes réels ; elles ne constituent pas une validation
+indépendante d'une MFT dont DATA est réparti entre plusieurs records.
+
 Le test `mkntfs` est ignoré par défaut pour ne pas imposer les outils ntfs-3g
 à chaque build. Le workflow séparé `.github/workflows/ntfs-readonly.yml`
 lance explicitement ce test en CI quand ce composant change. Il crée trois images
