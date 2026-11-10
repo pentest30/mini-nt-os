@@ -1,7 +1,7 @@
 # Notes de passation
 
-- **DestroyWindow, DestroyMenu, et la fin d'un thread ou d'un processus GUI** (`claude/win32k-destroy`, depuis
-  main `738b823` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 14) : `win32k::destroy`
+- **DestroyWindow, DestroyMenu, et la fin d'un thread ou d'un processus GUI** (`claude/win32k-destroy`, sur
+  main `a6fc45d` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 14) : `win32k::destroy`
   (co_UserDestroyWindow, IntSendDestroyMsg, co_UserFreeWindow de ReactOS comme spécification) ; NtUserDestroyWindow
   (refusé pour la fenêtre d'un autre thread ou d'un bureau : 5 ; WM_PARENTNOTIFY, cachée, fenêtres possédées
   d'abord, une autre fenêtre activée, `input::activate_other`, le clavier rendu, WM_DESTROY de haut en bas,
@@ -17,9 +17,8 @@
   fils compris), sur AMD et Intel, et les scénarios GUI touchés. Les fenêtres partant avec leur processus, les
   programmes de `gui`, `text`, `bitmap`, `mouse` et `mouse-windows` attendent 5 s après leur dernier marqueur, le
   temps de la capture d'écran (`gui`, `text` et `bitmap` n'attendent plus leur statut de sortie). Vu en chemin :
-  `user32` ne sait pas lire nos menus
-  (IsMenu toujours FALSE ; AppendMenu(MF_POPUP) n'attache pas le sous-menu, faute de `MIIM_SUBMENU`) : à reprendre
-  avec la branche des menus. Pas encore : WM_ASYNC_DESTROYWINDOW aux enfants d'un autre thread, les crochets, le
+  `user32` ne sait pas lire nos menus (IsMenu toujours FALSE ; AppendMenu(MF_POPUP) n'attache pas le sous-menu,
+  faute de `MIIM_SUBMENU`) : à reprendre avec les menus. Pas encore : WM_ASYNC_DESTROYWINDOW aux enfants d'un autre thread, les crochets, le
   WM_MOUSEMOVE après une destruction, le menu système, `spwndLastActive`.
 
 - **M9 NTFS, bootstrap de MFT répartie** (`feature/m9-ntfs-mft-bootstrap`, PR #111, depuis main `605ae94`) : résolution progressive des extensions DATA de la MFT, uniquement à travers les mappings déjà validés ; bornes et validations partagées avec le lecteur ATTRIBUTE_LIST. 39 tests unitaires passent, dont dépendances hors ordre VCN, records chevauchant deux runs, erreurs d'E/S, corruptions et limite de 64 records ; refus des cycles ou records partiellement mappés sans E/S spéculatives. Validation locale : cargo xtask lint, tests hôte (949 réussis, 3 ignorés), images ntfs-3g (512/4096/8192) et cible no_std passent. La MFT répartie est couverte par les images synthétiques ; les images ntfs-3g vérifient les régressions générales. Aucun branchement noyau. Limites : liste elle-même entièrement décrite en base, pas de récupération par miroir. Contrat et reprise : `docs/compat/ntfs.md`. Suite : adaptateur de partition et montage Io en lecture seule dans une PR coordonnée avec le chantier noyau.
