@@ -71,7 +71,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use abi::ntstatus::{
-    NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_SYSTEM_SERVICE, STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
+    NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_SYSTEM_SERVICE,
+    STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS,
 };
 use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
 use abi::service::{lookup, Service, Table};
@@ -220,6 +221,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtQuerySymbolicLinkObject, Handler::Status(object::nt_query_symbolic_link_object)),
     (services::NtQuerySystemInformation, Handler::Status(system::nt_query_system_information)),
     (services::NtQuerySystemTime, Handler::Status(time::nt_query_system_time)),
+    (services::NtQueryTimerResolution, Handler::Status(time::nt_query_timer_resolution)),
     (services::NtQueryValueKey, Handler::Status(registry::nt_query_value_key)),
     (services::NtQueryVirtualMemory, Handler::Status(memory::nt_query_virtual_memory)),
     (services::NtQueryVolumeInformationFile, Handler::Status(file::nt_query_volume_information_file)),
@@ -246,6 +248,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtSetInformationObject, Handler::Status(object::nt_set_information_object)),
     (services::NtSetInformationProcess, Handler::Status(process::nt_set_information_process)),
     (services::NtSetInformationThread, Handler::Status(process::nt_set_information_thread)),
+    (services::NtSetTimerResolution, Handler::Status(time::nt_set_timer_resolution)),
     (services::NtSetSecurityObject, Handler::Status(security::nt_set_security_object)),
     (services::NtSetSystemInformation, Handler::Status(system::nt_set_system_information)),
     (services::NtSetValueKey, Handler::Status(registry::nt_set_value_key)),
@@ -578,6 +581,18 @@ impl ClassReport {
             log::warn!("sys: {} class {class:#x} is not implemented", self.service);
         }
         STATUS_NOT_IMPLEMENTED
+    }
+
+    /// [`report`](Self::report), pour les services dont une classe inconnue
+    /// rend `STATUS_INVALID_INFO_CLASS` (ce que NT rend —
+    /// NtQuerySystemInformation notamment, que les apitests vérifient).
+    pub(super) fn report_invalid_class(&self, class: u32) -> NtStatus {
+        let bit = class.min(127) as usize;
+        let mask = 1 << (bit % 32);
+        if self.seen[bit / 32].fetch_or(mask, Ordering::Relaxed) & mask == 0 {
+            log::warn!("sys: {} class {class:#x} is not implemented", self.service);
+        }
+        STATUS_INVALID_INFO_CLASS
     }
 }
 

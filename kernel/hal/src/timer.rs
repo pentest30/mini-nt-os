@@ -83,8 +83,9 @@ const PIT_10MS: u16 = 11_931;
 static INTERRUPT_TIME: AtomicU64 = AtomicU64::new(0);
 
 /// Interval between two ticks, in 100 ns units: the period the APIC timer is
-/// programmed with ([`TICK_INTERVAL_MS`], then `set_resolution`).
-static TICK_INTERVAL_100NS: AtomicU64 = AtomicU64::new(TICK_INTERVAL_MS * 10_000);
+/// programmed with ([`TICK_INTERVAL_MS`], then `set_resolution`). Public :
+/// NtQuery/NtSetTimerResolution le rend à l'appelant.
+pub static TICK_INTERVAL_100NS: AtomicU64 = AtomicU64::new(TICK_INTERVAL_MS * 10_000);
 
 /// APIC timer ticks per millisecond, stored after calibration.
 /// Zero means the timer has not been calibrated yet.

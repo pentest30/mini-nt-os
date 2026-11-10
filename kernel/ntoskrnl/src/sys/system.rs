@@ -67,7 +67,8 @@ pub(super) fn nt_shutdown_system(arguments: &[u32]) -> NtStatus {
 /// | `SystemFlagsInformation` (9) | les drapeaux globaux (`NtGlobalFlag`), aucun |
 /// | `SystemRangeStartInformation` (50) | le début de la moitié système, `0x80000000` |
 ///
-/// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
+/// Les autres classes rendent `STATUS_INVALID_INFO_CLASS` (ce que NT rend),
+/// journalisé à leur
 /// premier appel.
 pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
     let (class, buffer, length, return_length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
@@ -105,7 +106,7 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         SYSTEM_FLAGS_INFORMATION => {
             super::return_information(&NT_GLOBAL_FLAG.to_le_bytes(), buffer, length, return_length)
         }
-        _ => UNSUPPORTED.report(class),
+        _ => UNSUPPORTED.report_invalid_class(class),
     }
 }
 

@@ -266,7 +266,9 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
         FILE_NETWORK_OPEN_INFORMATION => (size_of::<FileNetworkOpenInformation>(), FILE_READ_ATTRIBUTES),
         FILE_PIPE_INFORMATION => (size_of::<FilePipeInformation>(), FILE_READ_ATTRIBUTES),
         FILE_PIPE_LOCAL_INFORMATION => (size_of::<FilePipeLocalInformation>(), FILE_READ_ATTRIBUTES),
-        _ => return Err(FILE_CLASSES.report(class)),
+        // NT rend INVALID_INFO_CLASS pour une classe qu'il ne connaît pas
+        // (l'apitest NtQueryInformationFile le vérifie).
+        _ => return Err(FILE_CLASSES.report_invalid_class(class)),
     };
     if (length as usize) < size {
         return Err(STATUS_INFO_LENGTH_MISMATCH);
