@@ -1,0 +1,12 @@
+[package]
+name    = "se"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "se"
+
+[dependencies]
+abi      = { path = "../../abi" }
+hal      = { path = "../hal" }
+ob       = { path = "../ob" }

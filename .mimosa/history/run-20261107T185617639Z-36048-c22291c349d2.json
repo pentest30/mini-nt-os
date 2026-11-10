@@ -1,0 +1,63 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261107T185617639Z-36048-c22291c349d2",
+  "runStatus": "inconclusive",
+  "errors": [
+    "candidate-select:drivers/input/i8042/src/lib.rs: candidate_limit_exceeded: 4 changed reviewable file(s) were not scanned because the limit is 20",
+    "baseline-read:tests/native/mouse1.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:kernel/win32k/src/mouse.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "scan:abi/src/system_information.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ps/src/eprocess.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/system.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/mod.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:tests/native/taskl.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/src/native.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/src/screen.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:tests/native/mouse1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/display.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/input.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/mouse.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/queue.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/gdi/dib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/input.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/idt.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/ps2.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/timer.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/trap.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+  ],
+  "target": ".",
+  "revision": "3f475e56d10359426ddefbf8554ee56e8d781966",
+  "diffHash": "17d5bdab8e7f449c13e522f408f0a6e54f0b18560dfe2a7a3b13c2d5b07e1998",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-07T18:56:17.639Z",
+  "timing": {
+    "startedAt": "2026-11-07T18:56:15.197Z",
+    "completedAt": "2026-11-07T18:56:17.639Z",
+    "durationMs": 2442
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 0,
+    "bySeverity": {},
+    "byStatus": {}
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 2,
+      "scanner_failed": 20,
+      "project_check_failed": 23
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T185617639Z-36048-c22291c349d2.json"
+}

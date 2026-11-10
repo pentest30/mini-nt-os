@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261108T210205454Z-34824-7ad26ee90e91",
+  "runStatus": "inconclusive",
+  "errors": [
+    "baseline-read:libs/ntfs/Cargo.toml: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/tests/mkntfs.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/boot.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/index.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/lib.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/namespace.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/path_tests.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/record.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/stream.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/tests.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:libs/ntfs/src/volume.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.github/workflows/ntfs-readonly.yml: baseline_snapshot_unreadable: file is missing from task baseline",
+    "scan:libs/ntfs/tests/mkntfs.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/boot.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/index.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/namespace.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/path_tests.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/record.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/stream.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/tests.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:libs/ntfs/src/volume.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/handles.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/window.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/gdi/handles.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/mod.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/process.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/user.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "supply-chain-check:.: stop_budget_exhausted: focused supply-chain check was not run before the gate budget",
+    "agent-check:.: stop_budget_exhausted: focused agent configuration check was not run before the gate budget"
+  ],
+  "target": ".",
+  "revision": "b0833a6c396cc18842cfdc8b0831ba56020653cc",
+  "diffHash": "f7c6761eb96537c961022a1c85b61aa1420c04cead7afebeec074bdfc050504b",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-08T21:02:05.454Z",
+  "timing": {
+    "startedAt": "2026-11-08T21:02:01.239Z",
+    "completedAt": "2026-11-08T21:02:05.454Z",
+    "durationMs": 4215
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 0,
+    "bySeverity": {},
+    "byStatus": {}
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "baseline_snapshot_unreadable": 12,
+      "scanner_failed": 16,
+      "stop_budget_exhausted": 2,
+      "project_check_failed": 30
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261108T210205454Z-34824-7ad26ee90e91.json"
+}

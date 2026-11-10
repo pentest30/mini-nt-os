@@ -89,6 +89,12 @@ commands:
           unpack its system tree into third_party/reactos/<version>/
           --archive FILE      use this copy of the release archive
           --force             unpack again
+  rostests-fetch
+          sparse-clone the pinned ReactOS 0.4.16 tree (apitests, SDK
+          headers, PSEH) into third_party/reactos-0.4.16/ with git
+  rostests-build
+          compile the ntdll and kernel32 apitests with MinGW into
+          target/xtask/rostests/ (NTAPITST, K32APITST and their runners)
 
 firmware and emulator (run, test):
   --ovmf FILE | --ovmf-code FILE [--ovmf-vars FILE] | --qemu FILE
@@ -134,7 +140,10 @@ fn dispatch(mut args: Args) -> Result<()> {
         }
         Some("rostests-build") => {
             args.finish()?;
-            rostests::build(&ws).map(|_| ())
+            match rostests::build(&ws)? {
+                Some(_) => Ok(()),
+                None => Err(format!("rostests needs {}", rostests::missing(&ws).unwrap_or_default())),
+            }
         }
         Some("help") | Some("-h") | Some("--help") | None => {
             print!("{USAGE}");
@@ -346,8 +355,8 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             match rostests::build(ws)? {
                 Some(files) => extra_files.extend(files),
                 None => {
-                    let tool = rostests::missing_tool().unwrap_or("a compiler");
-                    println!("xtask: SKIP {}: rostests needs {tool}", sc.name);
+                    let what = rostests::missing(ws).unwrap_or_default();
+                    println!("xtask: SKIP {}: rostests needs {what}", sc.name);
                     skipped.push(sc.name.clone());
                     continue;
                 }
@@ -472,29 +481,18 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                     }
                 }
             }
-            // Le critère du M5 : le bilan des apitests comparé au seuil
-            // du jalon — [apitest] TOTALS: tests=N failures=N skipped=N.
+            // Le critère du M5 : le bilan des apitests — [apitest] TOTALS:
+            // tests=N failures=N skipped=N — comparé au plancher du scénario
+            // et au seuil du jalon.
             if outcome.passed && sc.requires_rostests {
                 let log = qemu::read_lossy(&outcome.serial_log);
                 let parsed = log.lines().rev().find_map(rostests::parse_totals);
-                match parsed {
-                    Some((tests, failures, skipped)) => {
-                        let passing = tests - failures;
-                        let share = passing as f64 / tests.max(1) as f64;
-                        println!(
-                            "xtask: {label}: apitests {passing}/{tests} passent ({:.0} %), {} écartés ; seuil {:.0} %",
-                            share * 100.0,
-                            skipped,
-                            rostests::THRESHOLD * 100.0
-                        );
-                        if share < rostests::THRESHOLD {
-                            outcome.passed = false;
-                            outcome.reason = format!(
-                                "apitests sous le seuil : {passing}/{tests} ({:.0} %) < {:.0} %",
-                                share * 100.0,
-                                rostests::THRESHOLD * 100.0
-                            );
-                        }
+                let floor = sc.apitests_floor.unwrap_or(0);
+                match parsed.map(|(tests, failures, _)| rostests::judge(tests, failures, floor)) {
+                    Some(Ok(report)) => println!("xtask: {label}: {report}"),
+                    Some(Err(report)) => {
+                        outcome.passed = false;
+                        outcome.reason = report;
                     }
                     None => {
                         outcome.passed = false;

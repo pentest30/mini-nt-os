@@ -1,0 +1,587 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20261107T154158573Z-36632-564f590f15d3",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "scan",
+      "target": "kernel/hal/src/splash.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/hal/src/fb.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/hal/src/timer.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/win32k/src/display.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/ntoskrnl/src/main.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/win32k/src/gdi/syscolor.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/win32k/src/metrics.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "tests/native/desktop1.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "tests/native/setup1.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/io/src/install.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/src/partition.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/hal/src/lib.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": true,
+      "captured_files": 314,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 13
+    },
+    "change_tracking": {
+      "touched_observed": 12,
+      "touched_retained": 12,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 12,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 13,
+      "selected_files": 13,
+      "limit": 20,
+      "truncated": false
+    },
+    "scanning": {
+      "required_files": 12,
+      "scanned_files": 0,
+      "skipped_files": 0,
+      "failed_files": 12,
+      "project_checks_required": 0,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "scanner_failed": 12,
+      "project_check_failed": 12
+    },
+    "reasons": [
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/splash.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/fb.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/timer.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/display.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/main.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/gdi/syscolor.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/metrics.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "tests/native/desktop1.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "tests/native/setup1.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/io/src/install.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/partition.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/lib.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/splash.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/fb.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/timer.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/display.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/main.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/gdi/syscolor.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/metrics.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "tests/native/desktop1.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "tests/native/setup1.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/io/src/install.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/partition.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/hal/src/lib.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-11-07T15:41:58.573Z",
+  "session_id": "sess_4c376608-d924-4de2-8e22-55663f95beef",
+  "target": ".",
+  "revision": "8d523929d8161159627f9c3e83069f6494cfeb47",
+  "rules_version": "unavailable",
+  "diff_hash": "26d1212fb6b0aaa28825132d675eebcbd6de9e602dfe842764927bb6cf411454",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 12,
+    "changed_files": [
+      {
+        "file": "kernel/hal/src/fb.rs",
+        "ranges": [
+          {
+            "start": 29,
+            "end": 31
+          },
+          {
+            "start": 533,
+            "end": 534
+          },
+          {
+            "start": 539,
+            "end": 542
+          },
+          {
+            "start": 605,
+            "end": 606
+          },
+          {
+            "start": 608,
+            "end": 608
+          }
+        ],
+        "before_hash": "03ea8108f0a1a7d3060f6581656a5b0673b33099b553e1c017b0f5a2cc7b8da6",
+        "after_hash": "7268ca96369520ec44a84f24a5e23a4fbf646a80934832c3344abf10cbf2c456"
+      },
+      {
+        "file": "kernel/hal/src/lib.rs",
+        "ranges": [
+          {
+            "start": 30,
+            "end": 30
+          }
+        ],
+        "before_hash": "071fd8a225edc90b6e30a80b6d4d600be558346bb800533cd25da60f06d707cf",
+        "after_hash": "9c3aa61eef16f72ff48dcad9de5567f9646faa0599ef3228c7833e1324a8ae3c"
+      },
+      {
+        "file": "kernel/hal/src/splash.rs",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 155
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "1de019caf6a67edcfa69e7b83a4d2753109a35b30acd3e0de0cda499f68d7cab"
+      },
+      {
+        "file": "kernel/hal/src/timer.rs",
+        "ranges": [
+          {
+            "start": 266,
+            "end": 266
+          }
+        ],
+        "before_hash": "e5247ff70cc8f884fae989cc0da9efd82d7ea2d6a75636b4bc3658310bd2ad0b",
+        "after_hash": "0c4593fc0da5c11d165a28552897b67a7b07043f1c38cabd6f0c26b02aab3a2c"
+      },
+      {
+        "file": "kernel/io/src/install.rs",
+        "ranges": [
+          {
+            "start": 583,
+            "end": 588
+          },
+          {
+            "start": 591,
+            "end": 603
+          },
+          {
+            "start": 608,
+            "end": 610
+          },
+          {
+            "start": 613,
+            "end": 613
+          }
+        ],
+        "before_hash": "ccc37c597ded6f7f3f24e3d81f1d868cb6ebe1a3e451985a635528d1c390c2be",
+        "after_hash": "431466d9cf85d4b5ae80f2e7ea6f034769d030dc7debd060aea0af925862d1ee"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/main.rs",
+        "ranges": [
+          {
+            "start": 168,
+            "end": 170
+          },
+          {
+            "start": 172,
+            "end": 172
+          }
+        ],
+        "before_hash": "70cdd8564e5d70b5e1e453798318d05d61ebc8a46047675b0e61bec0bfda4330",
+        "after_hash": "82d71a99789cd41af860719c4afc883a3a9b88e75df742101a80c0f0e3620bfc"
+      },
+      {
+        "file": "kernel/win32k/src/display.rs",
+        "ranges": [
+          {
+            "start": 97,
+            "end": 99
+          }
+        ],
+        "before_hash": "ced5aefb2e3e27027b5637d54be87ab03fa95ae2417a74ddb59c062a34b606f2",
+        "after_hash": "0f26d7eebd8d285da705c83cefae85098f16aba3341abdfd3c67c54cdcb1bd9b"
+      },
+      {
+        "file": "kernel/win32k/src/gdi/syscolor.rs",
+        "ranges": [
+          {
+            "start": 10,
+            "end": 13
+          }
+        ],
+        "before_hash": "3765f90be3d148294c37ffd7d5b19e31cc8f99642e0d66ffe32e580e5e232045",
+        "after_hash": "14c029ec428cd8669a8453eacdcaa572a482d1b43ce12b478940b0f46c802bd9"
+      },
+      {
+        "file": "kernel/win32k/src/metrics.rs",
+        "ranges": [
+          {
+            "start": 156,
+            "end": 156
+          }
+        ],
+        "before_hash": "765e0df5237a8305d0eedb4f64bdd1ec61ef6da8cae62cec6fdea3d225286c79",
+        "after_hash": "02b10752ea93036280cb7f18d96241b04720e4dcd9ea9d538d26fe3e16c3df19"
+      },
+      {
+        "file": "tests/native/desktop1.c",
+        "ranges": [
+          {
+            "start": 141,
+            "end": 152
+          },
+          {
+            "start": 294,
+            "end": 294
+          },
+          {
+            "start": 306,
+            "end": 306
+          },
+          {
+            "start": 452,
+            "end": 452
+          }
+        ],
+        "before_hash": "f98f23258cd0a961a3ed8bd15ef84749c4adc18f01d32edf00e874fc9ddf25bf",
+        "after_hash": "99744d4034644c9f2591218a52b276c25c187e5b19c6159148c4b9b4f52387c9"
+      },
+      {
+        "file": "tests/native/setup1.c",
+        "ranges": [
+          {
+            "start": 243,
+            "end": 243
+          },
+          {
+            "start": 247,
+            "end": 247
+          },
+          {
+            "start": 285,
+            "end": 285
+          },
+          {
+            "start": 345,
+            "end": 345
+          },
+          {
+            "start": 357,
+            "end": 359
+          },
+          {
+            "start": 380,
+            "end": 381
+          },
+          {
+            "start": 432,
+            "end": 432
+          },
+          {
+            "start": 445,
+            "end": 445
+          },
+          {
+            "start": 473,
+            "end": 473
+          },
+          {
+            "start": 481,
+            "end": 481
+          },
+          {
+            "start": 489,
+            "end": 489
+          },
+          {
+            "start": 510,
+            "end": 510
+          },
+          {
+            "start": 781,
+            "end": 781
+          }
+        ],
+        "before_hash": "9823432c89242408908d0ff5cf22515587fbe89aaebcefceff78cb44d6356c4b",
+        "after_hash": "7811b687c8c187c95285bd76a8f9f2f9fbc981a00019a9e9a4aad7ff900c5260"
+      },
+      {
+        "file": "xtask/src/partition.rs",
+        "ranges": [
+          {
+            "start": 199,
+            "end": 201
+          },
+          {
+            "start": 203,
+            "end": 203
+          },
+          {
+            "start": 205,
+            "end": 208
+          },
+          {
+            "start": 211,
+            "end": 211
+          },
+          {
+            "start": 225,
+            "end": 238
+          }
+        ],
+        "before_hash": "a6c0c1538a050ae8323d88890faa7e0437b760003b68a288c385bdabb8272d4f",
+        "after_hash": "f3dcbd8e0c1c869d7e5d2f7173e7581941857183830e4cb44eae9e2cf51060f1"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-11-07T15:41:55.816Z",
+    "completed_at": "2026-11-07T15:41:58.573Z",
+    "duration_ms": 2757,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 2757,
+    "peakMemoryBytes": 108146688,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 0,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T154158573Z-36632-564f590f15d3.json",
+    "latest_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef.json",
+    "history_summary": ".mimosa/history/run-20261107T154158573Z-36632-564f590f15d3.json"
+  }
+}

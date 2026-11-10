@@ -478,18 +478,26 @@ impl EThread {
         self.critical.load(Ordering::Acquire)
     }
 
+    /// NtRegisterThreadTerminatePort : le port LPC qui recevra l'avis de sa
+    /// fin (`LPC_CLIENT_DIED`, [`crate::exit_thread`]) ; le dernier
+    /// enregistré remplace le précédent.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_terminate_port(&self, port: ObjectRef) {
+        *self.terminate_port.lock() = Some(port);
+    }
+
+    /// Le port de fin enregistré, que sa fin consomme.
+    pub(crate) fn take_terminate_port(&self) -> Option<ObjectRef> {
+        self.terminate_port.lock().take()
+    }
+
     /// NtSetInformationThread(`ThreadBreakOnTermination`) : le rend critique,
     /// ou ne l'est plus.
     ///
     /// # IRQL
     /// Tout niveau.
-    /// Garder le port LPC de fin de thread que csrss enregistre
-    /// (NtRegisterThreadTerminatePort) ; l'envoi du message à la destruction
-    /// reste à écrire.
-    pub fn set_terminate_port(&self, port: ObjectRef) {
-        *self.terminate_port.lock() = Some(port);
-    }
-
     pub fn set_critical(&self, critical: bool) {
         self.critical.store(critical, Ordering::Release);
     }

@@ -1,0 +1,13 @@
+[package]
+name    = "mkfat"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mkfat"
+path = "src/main.rs"
+
+[dependencies]
+# The FAT32 image itself (ADR-022); the tests that mount it with the
+# kernel's FAT reader moved with the crate.
+fatfs = { path = "../../libs/fatfs" }

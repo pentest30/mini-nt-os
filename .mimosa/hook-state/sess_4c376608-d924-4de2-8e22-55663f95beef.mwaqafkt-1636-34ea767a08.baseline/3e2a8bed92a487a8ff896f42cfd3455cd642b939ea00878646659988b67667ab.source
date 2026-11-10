@@ -1,0 +1,20 @@
+[package]
+name    = "ps"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "ps"
+
+[dependencies]
+abi      = { path = "../../abi" }
+hal      = { path = "../hal" }
+ob       = { path = "../ob" }
+mm       = { path = "../mm" }
+pe       = { path = "../../libs/pe" }
+ke       = { path = "../ke" }
+se       = { path = "../se" }
+log      = { workspace = true }
+
+[dev-dependencies]
+pe       = { path = "../../libs/pe", features = ["builder"] }

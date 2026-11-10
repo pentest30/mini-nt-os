@@ -283,6 +283,7 @@ dependencies = [
  "hal",
  "ke",
  "log",
+ "lpc",
  "mm",
  "ob",
  "pe",

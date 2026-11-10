@@ -1,0 +1,14 @@
+[package]
+name    = "lpc"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "lpc"
+
+[dependencies]
+abi      = { path = "../../abi" }
+hal      = { path = "../hal" }
+ke       = { path = "../ke" }
+mm       = { path = "../mm" }
+ob       = { path = "../ob" }

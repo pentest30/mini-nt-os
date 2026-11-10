@@ -1,0 +1,10 @@
+[package]
+name    = "d3d9"
+version.workspace = true
+edition.workspace = true
+[lib]
+crate-type = ["cdylib"]
+name = "d3d9"
+[dependencies]
+spin = { workspace = true }
+log  = { workspace = true }

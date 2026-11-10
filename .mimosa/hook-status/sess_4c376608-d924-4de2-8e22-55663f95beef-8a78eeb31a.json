@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-11-09T16:46:38.435Z",
+  "sessionId": "sess_4c376608-d924-4de2-8e22-55663f95beef",
+  "event": "PostToolUse",
+  "toolName": "Write",
+  "file": "C:/Users/ibaouche/AppData/Local/Temp/rostests3-msg.txt",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 5,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

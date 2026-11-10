@@ -1,0 +1,592 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20261107T140449483Z-35580-3f44c3722232",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "baseline-read",
+      "target": "tests/native/desktop1.c",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": "tests/native/theme.c",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": "tests/native/theme.h",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": true,
+      "captured_files": 310,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 9
+    },
+    "change_tracking": {
+      "touched_observed": 0,
+      "touched_retained": 0,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 12,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 12,
+      "selected_files": 12,
+      "limit": 20,
+      "truncated": false
+    },
+    "scanning": {
+      "required_files": 12,
+      "scanned_files": 12,
+      "skipped_files": 0,
+      "failed_files": 0,
+      "project_checks_required": 0,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "baseline_snapshot_unreadable": 3,
+      "project_check_failed": 3
+    },
+    "reasons": [
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "tests/native/desktop1.c",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "tests/native/theme.c",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "tests/native/theme.h",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "tests/native/desktop1.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "tests/native/theme.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "tests/native/theme.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-11-07T14:04:49.483Z",
+  "session_id": "sess_4c376608-d924-4de2-8e22-55663f95beef",
+  "target": ".",
+  "revision": "220cb5b0cfe20e0a8e695491746b57b7687bf199",
+  "rules_version": "unavailable",
+  "diff_hash": "c02564bf45823cee239b14d6221d7bb1bb47a5f663119123e051f93d7d359b24",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 12,
+    "changed_files": [
+      {
+        "file": "kernel/hal/src/timer.rs",
+        "ranges": [
+          {
+            "start": 138,
+            "end": 144
+          }
+        ],
+        "before_hash": "b6670fb4915ea2ad8c41b31e47f23618edf6a37924b36928174df32c035cf01e",
+        "after_hash": "e5247ff70cc8f884fae989cc0da9efd82d7ea2d6a75636b4bc3658310bd2ad0b"
+      },
+      {
+        "file": "kernel/io/src/install.rs",
+        "ranges": [
+          {
+            "start": 577,
+            "end": 577
+          },
+          {
+            "start": 582,
+            "end": 588
+          },
+          {
+            "start": 592,
+            "end": 599
+          },
+          {
+            "start": 601,
+            "end": 602
+          },
+          {
+            "start": 604,
+            "end": 606
+          },
+          {
+            "start": 611,
+            "end": 612
+          },
+          {
+            "start": 702,
+            "end": 702
+          }
+        ],
+        "before_hash": "252af570f0ca4b665ac1979aab8f02a4911af1b8fa6a7a6873c2be8bc10f5913",
+        "after_hash": "ccc37c597ded6f7f3f24e3d81f1d868cb6ebe1a3e451985a635528d1c390c2be"
+      },
+      {
+        "file": "kernel/io/src/write_tests.rs",
+        "ranges": [
+          {
+            "start": 96,
+            "end": 96
+          },
+          {
+            "start": 353,
+            "end": 353
+          }
+        ],
+        "before_hash": "d98032043c30fde0e157f4a55ffe852e794b1032d0e0d996360094c0c3434efb",
+        "after_hash": "66c5d428ecb78ad620d9976b82385fcbf91db36fa88b06ff89a11c245c95939d"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/sys/mod.rs",
+        "ranges": [
+          {
+            "start": 219,
+            "end": 219
+          }
+        ],
+        "before_hash": "7cf8c7c264c9ad33788eae9a723b481e3529850f20d0762108b3cdcef155c4bd",
+        "after_hash": "19bf0b1b6df0c2b98658a565d14801f455b33b1be1dfa5788a3aa79f7022fccd"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/sys/system.rs",
+        "ranges": [
+          {
+            "start": 3,
+            "end": 5
+          },
+          {
+            "start": 31,
+            "end": 44
+          }
+        ],
+        "before_hash": "71e82edaa52623aad100466eec27433df96f893e0720ff92faf59a078875dad0",
+        "after_hash": "ef30a7c41f2a35d2ffaf0e521e716a5576a780f9fb24b93f16ac140fdff6af6d"
+      },
+      {
+        "file": "tests/native/desktop1.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 462
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "f98f23258cd0a961a3ed8bd15ef84749c4adc18f01d32edf00e874fc9ddf25bf"
+      },
+      {
+        "file": "tests/native/setup1.c",
+        "ranges": [
+          {
+            "start": 5,
+            "end": 6
+          },
+          {
+            "start": 8,
+            "end": 14
+          },
+          {
+            "start": 20,
+            "end": 20
+          },
+          {
+            "start": 90,
+            "end": 90
+          },
+          {
+            "start": 117,
+            "end": 118
+          },
+          {
+            "start": 120,
+            "end": 124
+          },
+          {
+            "start": 133,
+            "end": 133
+          },
+          {
+            "start": 203,
+            "end": 205
+          },
+          {
+            "start": 215,
+            "end": 216
+          },
+          {
+            "start": 218,
+            "end": 218
+          },
+          {
+            "start": 221,
+            "end": 221
+          },
+          {
+            "start": 223,
+            "end": 224
+          },
+          {
+            "start": 226,
+            "end": 228
+          },
+          {
+            "start": 231,
+            "end": 232
+          },
+          {
+            "start": 234,
+            "end": 248
+          },
+          {
+            "start": 251,
+            "end": 252
+          },
+          {
+            "start": 254,
+            "end": 286
+          },
+          {
+            "start": 289,
+            "end": 290
+          },
+          {
+            "start": 292,
+            "end": 299
+          },
+          {
+            "start": 302,
+            "end": 303
+          },
+          {
+            "start": 305,
+            "end": 315
+          },
+          {
+            "start": 318,
+            "end": 319
+          },
+          {
+            "start": 321,
+            "end": 330
+          },
+          {
+            "start": 332,
+            "end": 347
+          },
+          {
+            "start": 350,
+            "end": 350
+          },
+          {
+            "start": 352,
+            "end": 354
+          },
+          {
+            "start": 357,
+            "end": 371
+          },
+          {
+            "start": 373,
+            "end": 375
+          },
+          {
+            "start": 378,
+            "end": 378
+          },
+          {
+            "start": 380,
+            "end": 413
+          },
+          {
+            "start": 416,
+            "end": 416
+          },
+          {
+            "start": 418,
+            "end": 420
+          },
+          {
+            "start": 423,
+            "end": 423
+          },
+          {
+            "start": 425,
+            "end": 436
+          },
+          {
+            "start": 439,
+            "end": 439
+          },
+          {
+            "start": 441,
+            "end": 442
+          },
+          {
+            "start": 445,
+            "end": 445
+          },
+          {
+            "start": 447,
+            "end": 463
+          },
+          {
+            "start": 465,
+            "end": 468
+          },
+          {
+            "start": 471,
+            "end": 471
+          },
+          {
+            "start": 473,
+            "end": 495
+          },
+          {
+            "start": 498,
+            "end": 498
+          },
+          {
+            "start": 500,
+            "end": 501
+          },
+          {
+            "start": 504,
+            "end": 515
+          },
+          {
+            "start": 519,
+            "end": 519
+          },
+          {
+            "start": 522,
+            "end": 522
+          },
+          {
+            "start": 525,
+            "end": 525
+          },
+          {
+            "start": 528,
+            "end": 528
+          },
+          {
+            "start": 531,
+            "end": 531
+          },
+          {
+            "start": 534,
+            "end": 534
+          },
+          {
+            "start": 539,
+            "end": 539
+          },
+          {
+            "start": 567,
+            "end": 568
+          },
+          {
+            "start": 702,
+            "end": 704
+          },
+          {
+            "start": 727,
+            "end": 729
+          },
+          {
+            "start": 732,
+            "end": 732
+          },
+          {
+            "start": 761,
+            "end": 761
+          },
+          {
+            "start": 777,
+            "end": 782
+          },
+          {
+            "start": 785,
+            "end": 785
+          }
+        ],
+        "before_hash": "4bca0a783f71e9fba254d71a0f61f0f85515b50a0851e852f3034a74c8476aec",
+        "after_hash": "9823432c89242408908d0ff5cf22515587fbe89aaebcefceff78cb44d6356c4b"
+      },
+      {
+        "file": "tests/native/theme.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 592
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "595c134c728be2e5b97debd23b896278e404110296ce2d702410f7083523df02"
+      },
+      {
+        "file": "tests/native/theme.h",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 230
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "5f4a8165f3d648a2d78328772c705e54a31ecd86e4801f6c98712b184b0c5213"
+      },
+      {
+        "file": "xtask/src/main.rs",
+        "ranges": [
+          {
+            "start": 457,
+            "end": 459
+          },
+          {
+            "start": 470,
+            "end": 476
+          },
+          {
+            "start": 612,
+            "end": 612
+          }
+        ],
+        "before_hash": "64bb04a4f719a9188b0a51a09662a964ed79b18877e28d481d6025dbe0f07a96",
+        "after_hash": "cb9051053d1f10ba35f77477aeafecc1297f02fbae57420494b40d14ec77b9bd"
+      },
+      {
+        "file": "xtask/src/native.rs",
+        "ranges": [
+          {
+            "start": 52,
+            "end": 53
+          }
+        ],
+        "before_hash": "d5d504a64d7340b23752749304faefaad39bcc0e6aa1c36f3d61a28ab2c708b8",
+        "after_hash": "4c6bcd0583b3b6bcc5ee7c7aad43d0a2c438cc33075e7c981b533563304106db"
+      },
+      {
+        "file": "xtask/src/partition.rs",
+        "ranges": [
+          {
+            "start": 197,
+            "end": 199
+          },
+          {
+            "start": 201,
+            "end": 208
+          },
+          {
+            "start": 210,
+            "end": 212
+          },
+          {
+            "start": 215,
+            "end": 215
+          },
+          {
+            "start": 220,
+            "end": 222
+          }
+        ],
+        "before_hash": "13d9ad4f036d6bb2b908c7b5760253a11d3ecc82547b04633a372a8e7ccf5695",
+        "after_hash": "a6c0c1538a050ae8323d88890faa7e0437b760003b68a288c385bdabb8272d4f"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-11-07T14:04:47.063Z",
+    "completed_at": "2026-11-07T14:04:49.483Z",
+    "duration_ms": 2420,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 2420,
+    "peakMemoryBytes": 152604672,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 12,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T140449483Z-35580-3f44c3722232.json",
+    "latest_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef.json",
+    "history_summary": ".mimosa/history/run-20261107T140449483Z-35580-3f44c3722232.json"
+  }
+}

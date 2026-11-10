@@ -1,0 +1,15 @@
+[package]
+name    = "regf"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "regf"
+
+[features]
+# A writer of whole hives from a tree of keys, for tests and tools/mkhive.
+builder = []
+
+[dev-dependencies]
+# The tests build hives.
+regf = { path = ".", features = ["builder"] }

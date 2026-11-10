@@ -1,0 +1,67 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261109T151839352Z-31992-d0c8217876fc",
+  "runStatus": "inconclusive",
+  "errors": [
+    "candidate-select:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/port.rs: candidate_limit_exceeded: 22 changed reviewable file(s) were not scanned because the limit is 20",
+    "baseline-read:target/xtask/rostests/kernel32-testlist.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "scan:xtask/src/rostests.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/rostests-src/testmain.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:target/xtask/rostests/kernel32-testlist.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:target/xtask/rostests/testmain.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/src/native.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/src/userland.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/logon.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/ethread.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/userland.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/file.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/locale.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/mod.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "agent-check:.: stop_budget_exhausted: focused agent configuration check was not run before the gate budget"
+  ],
+  "target": ".",
+  "revision": "39a5b463b2671cbd4a6cbf20097aaf09d0b9533c",
+  "diffHash": "a6b0ce0a13e22c7850316b1a1b017b2a5589ddcc905a2e04e4b9d334454e71b9",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-09T15:18:39.352Z",
+  "timing": {
+    "startedAt": "2026-11-09T15:18:30.418Z",
+    "completedAt": "2026-11-09T15:18:39.352Z",
+    "durationMs": 8934
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 0,
+    "bySeverity": {},
+    "byStatus": {}
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 5,
+      "scanner_failed": 19,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 26
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261109T151839352Z-31992-d0c8217876fc.json"
+}

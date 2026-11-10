@@ -1,0 +1,18 @@
+[package]
+name    = "mino-loader"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mino-loader"
+path = "src/main.rs"
+# no_std binary with its own panic handler: it cannot be linked into the
+# std test harness, and it has no unit tests (they live in the library crates).
+test  = false
+bench = false
+
+[dependencies]
+abi         = { path = "../../abi" }
+uefi        = { workspace = true }
+x86_64      = { workspace = true }
+log         = { workspace = true }

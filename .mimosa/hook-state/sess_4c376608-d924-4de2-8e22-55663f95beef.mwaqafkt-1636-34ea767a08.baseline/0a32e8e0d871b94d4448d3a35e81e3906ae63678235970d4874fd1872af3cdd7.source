@@ -1,0 +1,236 @@
+//! NTSTATUS (CLAUDE.md, rule 7): the result of a kernel operation, never a
+//! bare `u32`. Values are those of the XP SDK headers (`ntstatus.h`).
+//!
+//! Layout of the 32 bits: severity (2), customer (1), reserved (1),
+//! facility (12), code (16). Success and informational values are
+//! non-negative as `i32`; warnings and errors are negative.
+
+/// An NTSTATUS value.
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct NtStatus(pub u32);
+
+impl NtStatus {
+    /// `NT_SUCCESS`: success or informational.
+    pub const fn is_success(self) -> bool {
+        (self.0 as i32) >= 0
+    }
+
+    /// Severity `STATUS_SEVERITY_ERROR`.
+    pub const fn is_error(self) -> bool {
+        self.0 >> 30 == 3
+    }
+
+    /// `STATUS_WAIT_0 + index`: object `index` satisfied a wait.
+    pub const fn wait(index: u32) -> Self {
+        Self(STATUS_WAIT_0.0 + index)
+    }
+
+    /// `STATUS_ABANDONED_WAIT_0 + index`: the wait acquired abandoned mutant
+    /// `index`.
+    pub const fn abandoned_wait(index: u32) -> Self {
+        Self(STATUS_ABANDONED_WAIT_0.0 + index)
+    }
+}
+
+impl core::fmt::Debug for NtStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "NtStatus({:#010x})", self.0)
+    }
+}
+
+/// The value in hex, as `0xc0000018`.
+impl core::fmt::Display for NtStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:#010x}", self.0)
+    }
+}
+
+pub const STATUS_SUCCESS: NtStatus = NtStatus(0x0000_0000);
+pub const STATUS_WAIT_0: NtStatus = NtStatus(0x0000_0000);
+pub const STATUS_ABANDONED_WAIT_0: NtStatus = NtStatus(0x0000_0080);
+pub const STATUS_USER_APC: NtStatus = NtStatus(0x0000_00C0);
+pub const STATUS_KERNEL_APC: NtStatus = NtStatus(0x0000_0100);
+pub const STATUS_ALERTED: NtStatus = NtStatus(0x0000_0101);
+pub const STATUS_TIMEOUT: NtStatus = NtStatus(0x0000_0102);
+pub const STATUS_PENDING: NtStatus = NtStatus(0x0000_0103);
+pub const STATUS_REPARSE: NtStatus = NtStatus(0x0000_0104);
+/// NtAdjustPrivilegesToken: some privileges asked for are not in the token.
+pub const STATUS_NOT_ALL_ASSIGNED: NtStatus = NtStatus(0x0000_0106);
+pub const STATUS_OBJECT_NAME_EXISTS: NtStatus = NtStatus(0x4000_0000);
+pub const STATUS_IMAGE_NOT_AT_BASE: NtStatus = NtStatus(0x4000_0003);
+pub const STATUS_GUARD_PAGE_VIOLATION: NtStatus = NtStatus(0x8000_0001);
+pub const STATUS_DATATYPE_MISALIGNMENT: NtStatus = NtStatus(0x8000_0002);
+pub const STATUS_BREAKPOINT: NtStatus = NtStatus(0x8000_0003);
+pub const STATUS_BUFFER_OVERFLOW: NtStatus = NtStatus(0x8000_0005);
+/// NtQueryDirectoryFile: no entry left to return.
+pub const STATUS_NO_MORE_FILES: NtStatus = NtStatus(0x8000_0006);
+pub const STATUS_DEVICE_BUSY: NtStatus = NtStatus(0x8000_0011);
+pub const STATUS_PARTIAL_COPY: NtStatus = NtStatus(0x8000_000D);
+pub const STATUS_NO_MORE_ENTRIES: NtStatus = NtStatus(0x8000_001A);
+pub const STATUS_UNSUCCESSFUL: NtStatus = NtStatus(0xC000_0001);
+pub const STATUS_NOT_IMPLEMENTED: NtStatus = NtStatus(0xC000_0002);
+pub const STATUS_INVALID_INFO_CLASS: NtStatus = NtStatus(0xC000_0003);
+pub const STATUS_INFO_LENGTH_MISMATCH: NtStatus = NtStatus(0xC000_0004);
+pub const STATUS_ACCESS_VIOLATION: NtStatus = NtStatus(0xC000_0005);
+pub const STATUS_INVALID_HANDLE: NtStatus = NtStatus(0xC000_0008);
+/// STATUS_IO_TIMEOUT: an operation ran out of its time.
+pub const STATUS_IO_TIMEOUT: NtStatus = NtStatus(0xC000_00B5);
+pub const STATUS_INVALID_CID: NtStatus = NtStatus(0xC000_000B);
+pub const STATUS_INVALID_PARAMETER: NtStatus = NtStatus(0xC000_000D);
+/// NtQueryDirectoryFile: the first query of a handle found no entry that
+/// matches its expression.
+pub const STATUS_NO_SUCH_FILE: NtStatus = NtStatus(0xC000_000F);
+pub const STATUS_INVALID_DEVICE_REQUEST: NtStatus = NtStatus(0xC000_0010);
+pub const STATUS_END_OF_FILE: NtStatus = NtStatus(0xC000_0011);
+pub const STATUS_NO_MEMORY: NtStatus = NtStatus(0xC000_0017);
+pub const STATUS_BUFFER_TOO_SMALL: NtStatus = NtStatus(0xC000_0023);
+pub const STATUS_CONFLICTING_ADDRESSES: NtStatus = NtStatus(0xC000_0018);
+pub const STATUS_NOT_MAPPED_VIEW: NtStatus = NtStatus(0xC000_0019);
+pub const STATUS_UNABLE_TO_FREE_VM: NtStatus = NtStatus(0xC000_001A);
+pub const STATUS_ALREADY_COMMITTED: NtStatus = NtStatus(0xC000_0021);
+pub const STATUS_UNABLE_TO_DELETE_SECTION: NtStatus = NtStatus(0xC000_001B);
+pub const STATUS_INVALID_SYSTEM_SERVICE: NtStatus = NtStatus(0xC000_001C);
+pub const STATUS_ILLEGAL_INSTRUCTION: NtStatus = NtStatus(0xC000_001D);
+pub const STATUS_INVALID_VIEW_SIZE: NtStatus = NtStatus(0xC000_001F);
+pub const STATUS_INVALID_FILE_FOR_SECTION: NtStatus = NtStatus(0xC000_0020);
+pub const STATUS_ACCESS_DENIED: NtStatus = NtStatus(0xC000_0022);
+pub const STATUS_OBJECT_TYPE_MISMATCH: NtStatus = NtStatus(0xC000_0024);
+pub const STATUS_NOT_COMMITTED: NtStatus = NtStatus(0xC000_002D);
+pub const STATUS_PORT_MESSAGE_TOO_LONG: NtStatus = NtStatus(0xC000_002F);
+pub const STATUS_INVALID_PARAMETER_MIX: NtStatus = NtStatus(0xC000_0030);
+pub const STATUS_EAS_NOT_SUPPORTED: NtStatus = NtStatus(0xC000_004F);
+pub const STATUS_OBJECT_NAME_INVALID: NtStatus = NtStatus(0xC000_0033);
+pub const STATUS_OBJECT_NAME_NOT_FOUND: NtStatus = NtStatus(0xC000_0034);
+pub const STATUS_OBJECT_NAME_COLLISION: NtStatus = NtStatus(0xC000_0035);
+pub const STATUS_PORT_DISCONNECTED: NtStatus = NtStatus(0xC000_0037);
+pub const STATUS_OBJECT_PATH_INVALID: NtStatus = NtStatus(0xC000_0039);
+pub const STATUS_OBJECT_PATH_NOT_FOUND: NtStatus = NtStatus(0xC000_003A);
+pub const STATUS_OBJECT_PATH_SYNTAX_BAD: NtStatus = NtStatus(0xC000_003B);
+pub const STATUS_PORT_CONNECTION_REFUSED: NtStatus = NtStatus(0xC000_0041);
+pub const STATUS_INVALID_PORT_HANDLE: NtStatus = NtStatus(0xC000_0042);
+pub const STATUS_DISK_CORRUPT_ERROR: NtStatus = NtStatus(0xC000_0032);
+pub const STATUS_MEDIA_WRITE_PROTECTED: NtStatus = NtStatus(0xC000_00A2);
+/// Named pipes (NPFS): no instance of the pipe may be created (its maximum
+/// is reached).
+pub const STATUS_INSTANCE_NOT_AVAILABLE: NtStatus = NtStatus(0xC000_00AB);
+/// No instance of the pipe listens for a client.
+pub const STATUS_PIPE_NOT_AVAILABLE: NtStatus = NtStatus(0xC000_00AC);
+/// The control does not suit the state of the instance (FSCTL_PIPE_PEEK).
+pub const STATUS_INVALID_PIPE_STATE: NtStatus = NtStatus(0xC000_00AD);
+/// The completion mode cannot change while operations wait.
+pub const STATUS_PIPE_BUSY: NtStatus = NtStatus(0xC000_00AE);
+/// The control does not apply to this file (FSCTL_PIPE_WAIT off the root).
+pub const STATUS_ILLEGAL_FUNCTION: NtStatus = NtStatus(0xC000_00AF);
+/// The instance has no client: the server disconnected it.
+pub const STATUS_PIPE_DISCONNECTED: NtStatus = NtStatus(0xC000_00B0);
+/// The other end is closed: nothing more to write.
+pub const STATUS_PIPE_CLOSING: NtStatus = NtStatus(0xC000_00B1);
+/// FSCTL_PIPE_LISTEN: a client is already there.
+pub const STATUS_PIPE_CONNECTED: NtStatus = NtStatus(0xC000_00B2);
+/// The instance waits for a client.
+pub const STATUS_PIPE_LISTENING: NtStatus = NtStatus(0xC000_00B3);
+/// A nonblocking read found nothing.
+pub const STATUS_PIPE_EMPTY: NtStatus = NtStatus(0xC000_00D9);
+/// The other end is closed and nothing is left to read.
+pub const STATUS_PIPE_BROKEN: NtStatus = NtStatus(0xC000_014B);
+/// An operation cancelled (NtCancelIoFile).
+pub const STATUS_CANCELLED: NtStatus = NtStatus(0xC000_0120);
+/// The reference monitor knows no logon session of this LUID.
+pub const STATUS_NO_SUCH_LOGON_SESSION: NtStatus = NtStatus(0xC000_005F);
+/// The reference monitor already has a logon session of this LUID.
+pub const STATUS_LOGON_SESSION_EXISTS: NtStatus = NtStatus(0xC000_00EE);
+/// The logon session is still in use (tokens hold it).
+pub const STATUS_BAD_LOGON_SESSION_STATE: NtStatus = NtStatus(0xC000_0104);
+pub const STATUS_FILE_IS_A_DIRECTORY: NtStatus = NtStatus(0xC000_00BA);
+pub const STATUS_FILE_CORRUPT_ERROR: NtStatus = NtStatus(0xC000_0102);
+pub const STATUS_NOT_A_DIRECTORY: NtStatus = NtStatus(0xC000_0103);
+pub const STATUS_UNRECOGNIZED_VOLUME: NtStatus = NtStatus(0xC000_014F);
+pub const STATUS_IO_DEVICE_ERROR: NtStatus = NtStatus(0xC000_0185);
+pub const STATUS_REVISION_MISMATCH: NtStatus = NtStatus(0xC000_0059);
+pub const STATUS_NO_SUCH_DEVICE: NtStatus = NtStatus(0xC000_00E0);
+pub const STATUS_DEVICE_NOT_READY: NtStatus = NtStatus(0xC000_00C0);
+pub const STATUS_INVALID_PAGE_PROTECTION: NtStatus = NtStatus(0xC000_0045);
+pub const STATUS_MUTANT_NOT_OWNED: NtStatus = NtStatus(0xC000_0046);
+pub const STATUS_SEMAPHORE_LIMIT_EXCEEDED: NtStatus = NtStatus(0xC000_0047);
+pub const STATUS_SUSPEND_COUNT_EXCEEDED: NtStatus = NtStatus(0xC000_004A);
+pub const STATUS_THREAD_IS_TERMINATING: NtStatus = NtStatus(0xC000_004B);
+pub const STATUS_SECTION_TOO_BIG: NtStatus = NtStatus(0xC000_0040);
+pub const STATUS_SECTION_NOT_IMAGE: NtStatus = NtStatus(0xC000_0049);
+pub const STATUS_SECTION_PROTECTION: NtStatus = NtStatus(0xC000_004E);
+pub const STATUS_DISK_FULL: NtStatus = NtStatus(0xC000_007F);
+pub const STATUS_UNKNOWN_REVISION: NtStatus = NtStatus(0xC000_0058);
+pub const STATUS_INVALID_OWNER: NtStatus = NtStatus(0xC000_005A);
+pub const STATUS_INVALID_PRIMARY_GROUP: NtStatus = NtStatus(0xC000_005B);
+pub const STATUS_PRIVILEGE_NOT_HELD: NtStatus = NtStatus(0xC000_0061);
+/// A process's exception port is set once.
+pub const STATUS_PORT_ALREADY_SET: NtStatus = NtStatus(0xC000_0048);
+pub const STATUS_INVALID_ACL: NtStatus = NtStatus(0xC000_0077);
+pub const STATUS_INVALID_SID: NtStatus = NtStatus(0xC000_0078);
+pub const STATUS_INVALID_SECURITY_DESCR: NtStatus = NtStatus(0xC000_0079);
+pub const STATUS_NO_TOKEN: NtStatus = NtStatus(0xC000_007C);
+pub const STATUS_PROCEDURE_NOT_FOUND: NtStatus = NtStatus(0xC000_007A);
+pub const STATUS_INVALID_IMAGE_FORMAT: NtStatus = NtStatus(0xC000_007B);
+pub const STATUS_INTEGER_DIVIDE_BY_ZERO: NtStatus = NtStatus(0xC000_0094);
+pub const STATUS_PRIVILEGED_INSTRUCTION: NtStatus = NtStatus(0xC000_0096);
+pub const STATUS_INSUFFICIENT_RESOURCES: NtStatus = NtStatus(0xC000_009A);
+pub const STATUS_FREE_VM_NOT_AT_BASE: NtStatus = NtStatus(0xC000_009F);
+/// An impersonation level that the token or the client does not allow.
+pub const STATUS_BAD_IMPERSONATION_LEVEL: NtStatus = NtStatus(0xC000_00A5);
+/// A thread token at SecurityAnonymous, which cannot be opened.
+pub const STATUS_CANT_OPEN_ANONYMOUS: NtStatus = NtStatus(0xC000_00A6);
+/// A primary token where an impersonation token is needed, or the reverse.
+pub const STATUS_BAD_TOKEN_TYPE: NtStatus = NtStatus(0xC000_00A8);
+pub const STATUS_MEMORY_NOT_ALLOCATED: NtStatus = NtStatus(0xC000_00A0);
+pub const STATUS_STACK_OVERFLOW: NtStatus = NtStatus(0xC000_00FD);
+pub const STATUS_ENTRYPOINT_NOT_FOUND: NtStatus = NtStatus(0xC000_0139);
+pub const STATUS_REGISTRY_CORRUPT: NtStatus = NtStatus(0xC000_014C);
+pub const STATUS_REGISTRY_IO_FAILED: NtStatus = NtStatus(0xC000_014D);
+pub const STATUS_CHILD_MUST_BE_VOLATILE: NtStatus = NtStatus(0xC000_0181);
+pub const STATUS_NAME_TOO_LONG: NtStatus = NtStatus(0xC000_0106);
+pub const STATUS_CANT_TERMINATE_SELF: NtStatus = NtStatus(0xC000_00DB);
+pub const STATUS_INVALID_PARAMETER_1: NtStatus = NtStatus(0xC000_00EF);
+pub const STATUS_INVALID_PARAMETER_2: NtStatus = NtStatus(0xC000_00F0);
+pub const STATUS_INVALID_PARAMETER_3: NtStatus = NtStatus(0xC000_00F1);
+pub const STATUS_INVALID_PARAMETER_4: NtStatus = NtStatus(0xC000_00F2);
+pub const STATUS_INVALID_PARAMETER_6: NtStatus = NtStatus(0xC000_00F4);
+pub const STATUS_INVALID_PARAMETER_8: NtStatus = NtStatus(0xC000_00F6);
+pub const STATUS_INVALID_PARAMETER_9: NtStatus = NtStatus(0xC000_00F7);
+pub const STATUS_PROCESS_IS_TERMINATING: NtStatus = NtStatus(0xC000_010A);
+pub const STATUS_MAPPED_FILE_SIZE_ZERO: NtStatus = NtStatus(0xC000_011E);
+pub const STATUS_REPLY_MESSAGE_MISMATCH: NtStatus = NtStatus(0xC000_021F);
+pub const STATUS_MAPPED_ALIGNMENT: NtStatus = NtStatus(0xC000_0220);
+pub const STATUS_HANDLE_NOT_CLOSABLE: NtStatus = NtStatus(0xC000_0235);
+pub const STATUS_LPC_REPLY_LOST: NtStatus = NtStatus(0xC000_0253);
+pub const STATUS_NO_CALLBACK_ACTIVE: NtStatus = NtStatus(0xC000_0258);
+pub const STATUS_SERVER_SID_MISMATCH: NtStatus = NtStatus(0xC000_02A0);
+pub const STATUS_ASSERTION_FAILURE: NtStatus = NtStatus(0xC000_0420);
+pub const STATUS_CALLBACK_POP_STACK: NtStatus = NtStatus(0xC000_0423);
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+
+    #[test]
+    fn classifies_severity() {
+        assert!(STATUS_SUCCESS.is_success());
+        assert!(STATUS_TIMEOUT.is_success(), "informational wait status");
+        assert!(!STATUS_MUTANT_NOT_OWNED.is_success());
+        assert!(STATUS_MUTANT_NOT_OWNED.is_error());
+        assert!(!STATUS_USER_APC.is_error());
+    }
+
+    #[test]
+    fn displays_in_hex() {
+        assert_eq!(std::format!("{STATUS_CONFLICTING_ADDRESSES}"), "0xc0000018");
+        assert_eq!(std::format!("{STATUS_SUCCESS}"), "0x00000000");
+    }
+
+    #[test]
+    fn wait_statuses_carry_the_object_index() {
+        assert_eq!(NtStatus::wait(3), NtStatus(3));
+        assert_eq!(NtStatus::abandoned_wait(2), NtStatus(0x82));
+    }
+}

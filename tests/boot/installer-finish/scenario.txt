@@ -5,8 +5,9 @@
 # installed ESP marked by MINO.TAG.
 #
 # SETUP1.EXE temporarily occupies WINDOWS/SYSTEM32/WINLOGON.EXE on the
-# installation medium. The real ReactOS Winlogon is preserved as
-# WINLOGON.ORG and restored under its canonical name on the target. If the
+# installation medium, the real ReactOS Winlogon beside it as WINLOGON.ORG.
+# Neither reaches the target: the installed session's shell is the medium's
+# DESKTOP1.EXE under the Winlogon name (kernel/io/src/install.rs). If the
 # bootstrap were copied instead, the second boot would display setup again
 # and report that no safe target exists.
 features = test-smss

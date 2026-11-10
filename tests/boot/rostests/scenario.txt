@@ -1,20 +1,27 @@
-# Le dernier critère du M5 : les apitests de ReactOS (ntdll et kernel32)
-# dépassent le seuil de réussite du jalon. Les deux bancs — NTAPITST.EXE
-# (~85 tests) et K32APITST.EXE (28) — sont construits par
-# `rostests-build` (modules/rostests/apitests de l'arbre 0.4.16, le SDK
-# recopié et le winnt.h généré, la SAL neutralisée, PSEH en statique) ;
-# NTAPITST démarre comme commande initiale, exécute chaque test de sa
-# liste (le main de lot de testmain.c) et rend son bilan par DbgPrint :
-#   [apitest] <test>: ok=N todo=N fail=N skip=N
-#   [apitest] TOTALS: tests=N failures=N skipped=N
-# L'hôte compare la part des tests qui passent au seuil du jalon
-# (THRESHOLD dans xtask/src/rostests.rs : 0,50) — K32APITST suit au run
-# suivant (les deux ne tiennent pas dans un seul boot).
-features = test-smss
+# Le dernier critère du M5 : les apitests de ReactOS (ntdll ici, kernel32
+# dans `rostests-kernel32`) dépassent le seuil de réussite du jalon. Les
+# bancs sont construits par `rostests-build` (modules/rostests/apitests de
+# l'arbre 0.4.16 que clone `rostests-fetch`, le SDK recopié et le winnt.h
+# généré, la SAL neutralisée, PSEH en statique) ; sans l'arbre, le scénario
+# est sauté. NTAPITST.EXE, le pilote, démarre comme commande initiale à la
+# place de winlogon : il prend WinSta0\Default comme lui, puis lance chaque
+# test dans un coureur détaché (C:\NTAPIRUN.EXE <test>) et relaie sa sortie
+# et son verdict par DbgPrint :
+#   [apitest] | <ligne de la sortie du test>
+#   [apitest] <test>: pass | FAIL (exit N) | FAIL (timeout) | no-process=N
+#   [apitest] TOTALS: tests=N failures=N skipped=0
+# L'hôte juge le bilan (xtask/src/rostests.rs) : au moins `apitests-floor`
+# tests passent (ceux de la dernière mesure : le plancher ne baisse pas) ;
+# la part qui passe est comparée au seuil du M5 (THRESHOLD, 0,50) et
+# rapportée. `interactive` : la sonde de smss attend le pilote sans délai ;
+# sans lui, elle termine smss et ses processus 10 s après leur début, au
+# milieu du banc.
+features = test-smss, interactive
 requires = userland, native, rostests
 initial-command = NTAPITST.EXE
+apitests-floor = 33
 cpus     = default
-timeout  = 180
+timeout  = 900
 
 expect = [apitest] begin
 expect = [apitest] TOTALS: tests=

@@ -1,0 +1,15 @@
+# Les apitests kernel32 de ReactOS, la seconde moitié du dernier critère du
+# M5 : K32APITST.EXE, le pilote, lance chaque test dans C:\K32APIRUN.EXE.
+# Le banc, son journal et son jugement sont ceux du scénario `rostests`
+# (ntdll), qui les décrit.
+features = test-smss, interactive
+requires = userland, native, rostests
+initial-command = K32APITST.EXE
+apitests-floor = 11
+cpus     = default
+timeout  = 900
+
+expect = [apitest] begin
+expect = [apitest] TOTALS: tests=
+
+forbid = *** STOP:

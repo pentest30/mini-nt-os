@@ -1,0 +1,9 @@
+[package]
+name    = "winmm"
+version.workspace = true
+edition.workspace = true
+[lib]
+crate-type = ["cdylib"]
+name = "winmm"
+[dependencies]
+log = { workspace = true }
