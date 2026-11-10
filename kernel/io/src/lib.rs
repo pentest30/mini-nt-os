@@ -39,11 +39,13 @@ pub mod directory;
 pub mod disk;
 pub mod driver;
 pub mod fat;
+mod fat_volume;
 pub mod file;
 pub mod install;
 pub mod irp;
 pub mod name;
 pub mod npfs;
+mod ntfs_volume;
 pub mod partition;
 pub mod request;
 pub mod volume;
@@ -74,6 +76,8 @@ pub struct BootVolumes {
     pub disk: Option<Result<u64, abi::ntstatus::NtStatus>>,
     /// The system volume was found on the primary boot disk.
     pub disk_primary: bool,
+    /// The attached ATA volume is read-only NTFS data, exposed as D:.
+    pub ntfs_data: bool,
     /// Le volume que désignent `\??\C:` et `\SystemRoot`.
     pub system: Option<&'static str>,
 }
@@ -113,13 +117,21 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
                 FatError::Corrupt => abi::ntstatus::STATUS_DISK_CORRUPT_ERROR,
                 _ => abi::ntstatus::STATUS_UNRECOGNIZED_VOLUME,
             })
-            .and_then(|disk| Volume::mount(alloc::boxed::Box::new(disk)))
-        {
+            .and_then(|disk| {
+                let capacity = disk.sectors();
+                Volume::mount_partition(alloc::boxed::Box::new(disk), capacity)
+            }) {
             Ok(volume) => {
+                volumes.ntfs_data = volume.is_read_only();
                 let device: ob::ObjectRef = Device::with_volume(volume);
                 namespace.insert(&device, DISK_VOLUME, None, permanent)?;
                 volumes.disk = Some(Ok(sectors));
-                volumes.system = Some(DISK_VOLUME);
+                if volumes.ntfs_data {
+                    let link: ob::ObjectRef = ob::SymbolicLink::create(DISK_VOLUME);
+                    namespace.insert(&link, "\\GLOBAL??\\D:", None, permanent)?;
+                } else {
+                    volumes.system = Some(DISK_VOLUME);
+                }
             }
             Err(status) => volumes.disk = Some(Err(status)),
         }

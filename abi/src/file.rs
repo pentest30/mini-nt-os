@@ -128,11 +128,15 @@ pub const FILE_FS_MAXIMUM_INFORMATION: u32 = 10;
 pub const FILE_CASE_SENSITIVE_SEARCH: u32 = 0x0000_0001;
 pub const FILE_CASE_PRESERVED_NAMES: u32 = 0x0000_0002;
 pub const FILE_UNICODE_ON_DISK: u32 = 0x0000_0004;
+/// The mounted filesystem refuses all mutations.
+pub const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
 
 /// Device types and characteristics (FILE_FS_DEVICE_INFORMATION).
 pub const FILE_DEVICE_DISK: u32 = 0x0000_0007;
 pub const FILE_REMOVABLE_MEDIA: u32 = 0x0000_0001;
 pub const FILE_DEVICE_IS_MOUNTED: u32 = 0x0000_0020;
+/// The filesystem device is read-only.
+pub const FILE_READ_ONLY_DEVICE: u32 = 0x0000_0002;
 
 /// FILE_FS_DEVICE_INFORMATION.
 #[repr(C)]

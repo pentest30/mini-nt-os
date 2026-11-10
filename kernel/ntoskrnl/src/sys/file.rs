@@ -32,12 +32,12 @@ use abi::file::{
 use abi::file::{
     FileBasicInformation, FileFsAttributeInformation, FileFsDeviceInformation, FileFsFullSizeInformation,
     FileFsSizeInformation, FileFsVolumeInformation, FileNameInformation, FileNetworkOpenInformation,
-    FilePositionInformation, FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION,
-    FILE_CASE_PRESERVED_NAMES, FILE_DIRECTORY_FILE, FILE_FS_ATTRIBUTE_INFORMATION, FILE_FS_DEVICE_INFORMATION,
-    FILE_FS_FULL_SIZE_INFORMATION, FILE_FS_MAXIMUM_INFORMATION, FILE_FS_SIZE_INFORMATION, FILE_FS_VOLUME_INFORMATION,
-    FILE_MAXIMUM_DISPOSITION, FILE_NAME_INFORMATION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
+    FilePositionInformation, FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE,
+    FILE_FS_ATTRIBUTE_INFORMATION, FILE_FS_DEVICE_INFORMATION, FILE_FS_FULL_SIZE_INFORMATION,
+    FILE_FS_MAXIMUM_INFORMATION, FILE_FS_SIZE_INFORMATION, FILE_FS_VOLUME_INFORMATION, FILE_MAXIMUM_DISPOSITION,
+    FILE_NAME_INFORMATION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
     FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
-    FILE_UNICODE_ON_DISK, FILE_VALID_OPTION_FLAGS, FILE_WRITE_ATTRIBUTES,
+    FILE_VALID_OPTION_FLAGS, FILE_WRITE_ATTRIBUTES,
 };
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DEVICE_BUSY, STATUS_DEVICE_NOT_READY,
@@ -318,7 +318,6 @@ pub(super) fn nt_query_volume_information_file(arguments: &[u32]) -> NtStatus {
 }
 
 /// Le nom du système de fichiers des volumes (FileFsAttributeInformation).
-const FILE_SYSTEM_NAME: &str = "FAT32";
 
 /// La longueur la plus grande d'un composant d'un chemin sur FAT (VFAT).
 const MAXIMUM_COMPONENT_LENGTH: u32 = 255;
@@ -357,9 +356,10 @@ fn query_volume_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus
             variable(&out, encoded)
         }
         FILE_FS_ATTRIBUTE_INFORMATION => {
-            let name: Vec<u16> = FILE_SYSTEM_NAME.encode_utf16().collect();
+            let (filesystem, attributes) = file.filesystem_information();
+            let name: Vec<u16> = filesystem.encode_utf16().collect();
             let fixed = FileFsAttributeInformation {
-                file_system_attributes: FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK,
+                file_system_attributes: attributes,
                 maximum_component_name_length: MAXIMUM_COMPONENT_LENGTH,
                 ..Default::default()
             };
@@ -369,8 +369,8 @@ fn query_volume_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus
         FILE_FS_SIZE_INFORMATION => {
             let space = file.space()?;
             let information = FileFsSizeInformation {
-                total_allocation_units: u64::from(space.total_clusters),
-                available_allocation_units: u64::from(space.free_clusters),
+                total_allocation_units: space.total_clusters,
+                available_allocation_units: space.free_clusters,
                 sectors_per_allocation_unit: space.sectors_per_cluster,
                 bytes_per_sector: space.bytes_per_sector,
             };
@@ -379,9 +379,9 @@ fn query_volume_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus
         FILE_FS_FULL_SIZE_INFORMATION => {
             let space = file.space()?;
             let information = FileFsFullSizeInformation {
-                total_allocation_units: u64::from(space.total_clusters),
-                caller_available_allocation_units: u64::from(space.free_clusters),
-                actual_available_allocation_units: u64::from(space.free_clusters),
+                total_allocation_units: space.total_clusters,
+                caller_available_allocation_units: space.free_clusters,
+                actual_available_allocation_units: space.free_clusters,
                 sectors_per_allocation_unit: space.sectors_per_cluster,
                 bytes_per_sector: space.bytes_per_sector,
             };
