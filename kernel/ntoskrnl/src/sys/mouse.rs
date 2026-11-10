@@ -10,6 +10,7 @@
 use abi::ntstatus::NtStatus;
 use abi::user::{
     NOPARAM_ROUTINE_RELEASECAPTURE, THREADSTATE_ACTIVEWINDOW, THREADSTATE_CAPTUREWINDOW, THREADSTATE_FOCUSWINDOW,
+    THREADSTATE_GETCURSOR,
 };
 use abi::winerror::{dos_error, ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_WINDOW_HANDLE};
 use alloc::sync::Arc;
@@ -71,10 +72,14 @@ pub(super) fn nt_user_call_no_param(arguments: &[u32]) -> NtStatus {
 /// NtUserGetThreadState(Routine) : la fenêtre qui a le clavier
 /// (`THREADSTATE_FOCUSWINDOW`), la fenêtre active
 /// (`THREADSTATE_ACTIVEWINDOW`) ou celle qui a la capture
-/// (`THREADSTATE_CAPTUREWINDOW`) dans la file du thread. Une autre rend 0,
-/// journalisée une fois.
+/// (`THREADSTATE_CAPTUREWINDOW`) dans la file du thread ; son curseur
+/// (`THREADSTATE_GETCURSOR` : GetCursor, `win32k::cursor`). Une autre rend
+/// 0, journalisée une fois.
 pub(super) fn nt_user_get_thread_state(arguments: &[u32]) -> NtStatus {
     let routine = arguments[0];
+    if routine == THREADSTATE_GETCURSOR {
+        return NtStatus(current().cursor.load(core::sync::atomic::Ordering::Acquire));
+    }
     let field = match routine {
         THREADSTATE_FOCUSWINDOW => |queue: &mut win32k::queue::QueueState| queue.focus,
         THREADSTATE_ACTIVEWINDOW => |queue: &mut win32k::queue::QueueState| queue.active,

@@ -235,6 +235,9 @@ pub struct ThreadInfo {
     /// Ses fenêtres (`WindowListHead`) : de leur création à leur
     /// destruction (DestroyWindow, ou sa fin : `crate::destroy`).
     pub windows: KSpinLock<Vec<Arc<crate::window::Window>>>,
+    /// Son curseur (`MessageQueue->CursorObject`, SetCursor) : son handle, 0
+    /// sans curseur (`crate::cursor`).
+    pub cursor: core::sync::atomic::AtomicU32,
 }
 
 /// Le bureau d'un thread : le handle qu'il a donné, le bureau, et la
@@ -256,6 +259,7 @@ impl ThreadInfo {
             keyboard_layout: KSpinLock::new(None),
             queue: MessageQueue::new(),
             windows: KSpinLock::new(Vec::new()),
+            cursor: core::sync::atomic::AtomicU32::new(0),
         }
     }
 

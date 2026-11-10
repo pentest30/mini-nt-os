@@ -461,7 +461,7 @@ pub(super) fn nt_gdi_delete_object_app(arguments: &[u32]) -> NtStatus {
         return fail(ERROR_INVALID_HANDLE, 0);
     }
     let deleted = if handle & GDI_HANDLE_TYPE_MASK == LO_DC_TYPE {
-        win32k::dce::release_dc(handle) || win32k::gdi::dc::delete_memory_dc(handle)
+        win32k::dce::release_dc(handle) || win32k::gdi::dc::delete_dc(handle)
     } else {
         win32k::gdi::delete_object(handle)
     };
@@ -480,18 +480,12 @@ pub(super) fn nt_gdi_ext_select_clip_rgn(arguments: &[u32]) -> NtStatus {
     }
 }
 
-/// NtGdiCreateCompatibleDC(hdc) : HDC, un DC en mémoire du processus
-/// (`win32k::gdi::dc::create_memory_dc`), compatible avec l'écran ; NULL
-/// pour un `hdc` qui n'est pas au processus (sans erreur, comme ReactOS) ou
-/// sans place.
 /// NtGdiCreateBitmap(Width, Height, Planes, BitsPixel, Bits) : le handle
 /// du bitmap que `surface::create_from_bits` convertit en BGRA (la
-/// monochrome 8×8 du pinceau de taskmgr passe ici).
+/// monochrome 8×8 du pinceau de taskmgr passe ici) ; sans `Bits`, un bitmap
+/// noir (les masques d'un curseur que `user32` remplit par StretchDIBits).
 pub(super) fn nt_gdi_create_bitmap(arguments: &[u32]) -> NtStatus {
     let [width, height, planes, bits_pixel, bits] = arguments[..5] else { unreachable!("5 arguments") };
-    if bits == 0 {
-        return fail(ERROR_INVALID_PARAMETER, 0);
-    }
     // La géométrie d'abord, avant toute allocation : les dimensions que le
     // moteur tient (celles de `surface::create_from_bits`), la profondeur
     // qu'il convertit (la monochrome et le 32 bits), le pas et la taille
@@ -513,11 +507,12 @@ pub(super) fn nt_gdi_create_bitmap(arguments: &[u32]) -> NtStatus {
     else {
         return fail(ERROR_INVALID_PARAMETER, 0);
     };
-    let mut bytes = alloc::vec![0u8; total as usize];
-    if ke::usermem::copy_from_user(&mut bytes, u64::from(bits)).is_err() {
+    let mut bytes = alloc::vec![0u8; if bits == 0 { 0 } else { total as usize }];
+    if bits != 0 && ke::usermem::copy_from_user(&mut bytes, u64::from(bits)).is_err() {
         return fail(ERROR_INVALID_PARAMETER, 0);
     }
-    match surface::create_from_bits(width, height, planes, bits_pixel, &bytes) {
+    let given = (bits != 0).then_some(&bytes[..]);
+    match surface::create_from_bits(width, height, planes, bits_pixel, given) {
         Ok(handle) => NtStatus(handle),
         Err(STATUS_INVALID_PARAMETER) => fail(ERROR_INVALID_PARAMETER, 0),
         Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
@@ -572,22 +567,91 @@ pub(super) fn nt_gdi_create_pattern_brush_internal(arguments: &[u32]) -> NtStatu
     }
 }
 
-/// NtGdiOpenDCW(...) : le DC de l'écran — le seul périphérique que le
-/// moteur a —, les noms de périphérique que l'appelant passe étant
-/// ignorés. NULL sans place.
+/// NtGdiOpenDCW(...) : un DC de l'écran — le seul périphérique que le
+/// moteur a —, au processus (`win32k::gdi::dc::open_display_dc`), les noms
+/// de périphérique que l'appelant passe étant ignorés. NULL sans place.
 pub(super) fn nt_gdi_open_dc_w(_arguments: &[u32]) -> NtStatus {
-    match win32k::gdi::dc::create_display_dc() {
-        Ok((handle, _attrs)) => NtStatus(handle),
+    match win32k::gdi::dc::open_display_dc() {
+        Ok(handle) => NtStatus(handle),
         Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
     }
 }
 
+/// NtGdiCreateCompatibleDC(hdc) : HDC, un DC en mémoire du processus
+/// (`win32k::gdi::dc::create_memory_dc`), compatible avec l'écran ; NULL
+/// pour un `hdc` qui n'est pas au processus (sans erreur, comme ReactOS) ou
+/// sans place.
 pub(super) fn nt_gdi_create_compatible_dc(arguments: &[u32]) -> NtStatus {
     let hdc = arguments[0];
     if hdc != 0 && win32k::gdi::dc::lock(hdc).is_none() {
         return NtStatus(0);
     }
     NtStatus(win32k::gdi::dc::create_memory_dc().unwrap_or(0))
+}
+
+/// NtGdiCreateCompatibleBitmap(hdc, cx, cy) : HBITMAP, un bitmap noir du
+/// processus (`win32k::gdi::surface::create_compatible`) : monochrome pour
+/// un DC en mémoire dont le bitmap l'est (le bitmap par défaut compris),
+/// de la couleur de l'écran sinon. NULL pour un DC qui n'est pas au
+/// processus (`ERROR_INVALID_HANDLE`), une taille nulle, négative ou trop
+/// grande (`ERROR_INVALID_PARAMETER`), sans place.
+pub(super) fn nt_gdi_create_compatible_bitmap(arguments: &[u32]) -> NtStatus {
+    let [hdc, width, height] = arguments[..3] else { unreachable!("3 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else { return fail(ERROR_INVALID_HANDLE, 0) };
+    let (width, height) = (width as i32, height as i32);
+    if !(1..=4096).contains(&width) || !(1..=4096).contains(&height) {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let monochrome = dc.state().bitmap.as_ref().is_some_and(|selected| selected.surface.is_monochrome());
+    match surface::create_compatible(width as u32, height as u32, monochrome) {
+        Ok(handle) => NtStatus(handle),
+        Err(_) => fail(ERROR_NOT_ENOUGH_MEMORY, 0),
+    }
+}
+
+/// Le BITMAPINFO d'un appelant tient au plus en-tête V5 et table de 256
+/// couleurs.
+const MAX_BITMAP_INFO: u32 = 124 + 256 * 4;
+
+/// NtGdiStretchDIBitsInternal(hdc, xDst, yDst, cxDst, cyDst, xSrc, ySrc,
+/// cxSrc, cySrc, pjInit, pbmi, dwUsage, dwRop4, cjMaxInfo, cjMaxBits,
+/// hcmXform) : le nombre de lignes peintes de la DIB (`pbmi`, `pjInit`)
+/// dans le DC (`win32k::gdi::dibits`), 0 en cas d'échec, l'erreur de Win32
+/// posée.
+pub(super) fn nt_gdi_stretch_dibits_internal(arguments: &[u32]) -> NtStatus {
+    use win32k::gdi::dibits::{self, Dib, DibFormat};
+    let [hdc, x, y, width, height, x_src, y_src, width_src, height_src, bits, info, usage, rop, info_size, bits_size, _xform] =
+        arguments[..16]
+    else {
+        unreachable!("16 arguments")
+    };
+    if info == 0 || bits == 0 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let info_size = info_size.min(MAX_BITMAP_INFO);
+    let mut info_bytes = alloc::vec![0u8; info_size as usize];
+    if copy_from_user(&mut info_bytes, u64::from(info)).is_err() {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let format = match DibFormat::parse(&info_bytes, usage) {
+        Ok(format) => format,
+        Err(error) => return fail(error, 0),
+    };
+    let needed = format.bits_size();
+    if (bits_size as usize) < needed {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let mut bits_bytes = alloc::vec![0u8; needed];
+    if copy_from_user(&mut bits_bytes, u64::from(bits)).is_err() {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let Some(dib) = Dib::decode(&format, &bits_bytes) else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    let dst = (x as i32, y as i32, width as i32, height as i32);
+    let src = (x_src as i32, y_src as i32, width_src as i32, height_src as i32);
+    match dibits::stretch_dibits(hdc, dst, src, &dib, rop) {
+        Ok(lines) => NtStatus(lines as u32),
+        Err(error) => fail(error, 0),
+    }
 }
 
 /// NtGdiCreateDIBSection(hdc, hSection, dwOffset, pbmi, iUsage, cjHeader,

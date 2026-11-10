@@ -1,0 +1,48 @@
+# The cursors (win32k::cursor; tests/native/cursor1.c, MinGW, linked to
+# ReactOS's kernel32 and user32): CURSOR1.EXE takes the place of
+# winlogon.exe and switches to WinSta0\Default, which has user32 load the
+# 16 system cursors from its resources (the callback LOADDEFAULTCURSORS:
+# CreateDC, CreateCompatibleBitmap, StretchDIBits, NtUserSetCursorIconData,
+# NtUserSetSystemCursor) and make the arrow the thread's cursor.
+# LoadCursor(NULL, IDC_*) finds them. Its window (WS_THICKFRAME, 200,200 to
+# 1000,700) has the cross for its class cursor; the pointer, from the centre
+# of the screen (640,400), goes into its client area, onto its left border
+# (x 201) and back (x 423): WM_SETCURSOR each time, DefWindowProc taking the
+# class cursor, then IDC_SIZEWE, then the cross again. The screen shows the
+# cross at the pointer (423,405): its hot spot at its centre, its bars 8
+# pixels each way (user32's resource), the white window elsewhere.
+features = test-smss
+requires = userland, native
+initial-command = CURSOR1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [cursor] waiting => move:5,5
+keys = [cursor] WM_SETCURSOR in the client area => move:-222,0 move:-222,0
+keys = [cursor] WM_SETCURSOR on the left border => move:222,0
+
+expect = win32k: user32 loaded 16 of 16 system cursors
+expect = [cursor] on WinSta0\Default
+expect = [cursor] IDC_ARROW: 1, shared 1, the thread's cursor 1
+expect = [cursor] IDC_CROSS 1, IDC_SIZEWE 1, all different 1
+expect = [cursor] SetCursor: the arrow before 1, the cross now 1
+expect = [cursor] waiting
+expect = [cursor] WM_SETCURSOR in the client area: for itself 1, WM_MOUSEMOVE 1; DefWindowProc 0, the class cursor 1
+expect = [cursor] WM_SETCURSOR on the left border: DefWindowProc 1, IDC_SIZEWE 1
+expect = [cursor] WM_SETCURSOR in the client area again: the class cursor 1
+expect = [cursor] DestroyCursor(IDC_CROSS): 1, still the same 1
+expect = [cursor] done
+
+forbid = *** STOP:
+forbid = NtUserFindExistingCursorIcon (0x1178) is not implemented
+forbid = NtUserSetCursorIconData (0x11ff) is not implemented
+forbid = NtUserSetCursor (0x11fd) is not implemented
+forbid = NtUserSetSystemCursor (0x1214) is not implemented
+forbid = NtGdiStretchDIBitsInternal (0x1124) is not implemented
+forbid = win32k: the system cursors are not loaded
+forbid = DefWindowProc: message 0x0020 not yet
+
+screen = 423 405 000000
+screen = 431 405 000000
+screen = 423 413 000000
+screen = 425 407 FFFFFF

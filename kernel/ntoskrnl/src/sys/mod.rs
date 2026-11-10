@@ -34,6 +34,7 @@ mod atom;
 mod callback;
 mod class;
 mod console;
+mod cursor;
 mod desktop;
 mod event;
 pub mod exceptions;
@@ -144,6 +145,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiBitBlt, Handler::Status(gdi::nt_gdi_bit_blt)),
     (services::NtGdiCombineRgn, Handler::Status(gdi::nt_gdi_combine_rgn)),
     (services::NtGdiCreateBitmap, Handler::Status(gdi::nt_gdi_create_bitmap)),
+    (services::NtGdiCreateCompatibleBitmap, Handler::Status(gdi::nt_gdi_create_compatible_bitmap)),
     (services::NtGdiCreateCompatibleDC, Handler::Status(gdi::nt_gdi_create_compatible_dc)),
     (services::NtGdiCreateDIBSection, Handler::Status(gdi::nt_gdi_create_dib_section)),
     (services::NtGdiCreatePatternBrushInternal, Handler::Status(gdi::nt_gdi_create_pattern_brush_internal)),
@@ -175,6 +177,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiSelectBitmap, Handler::Status(gdi::nt_gdi_select_bitmap)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),
     (services::NtGdiSelectPen, Handler::Status(gdi::nt_gdi_select_pen)),
+    (services::NtGdiStretchDIBitsInternal, Handler::Status(gdi::nt_gdi_stretch_dibits_internal)),
     (services::NtGdiTransformPoints, Handler::Status(gdi::nt_gdi_transform_points)),
     (services::NtImpersonateThread, Handler::Status(security::nt_impersonate_thread)),
     (services::NtInitializeRegistry, Handler::Status(registry::nt_initialize_registry)),
@@ -267,12 +270,14 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCreateWindowEx, Handler::Status(window::nt_user_create_window_ex)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
     (services::NtUserDefSetText, Handler::Status(window::nt_user_def_set_text)),
+    (services::NtUserDestroyCursor, Handler::Status(cursor::nt_user_destroy_cursor)),
     (services::NtUserDestroyMenu, Handler::Status(menu::nt_user_destroy_menu)),
     (services::NtUserDestroyWindow, Handler::Status(window::nt_user_destroy_window)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
     (services::NtUserEnumDisplaySettings, Handler::Status(user::nt_user_enum_display_settings)),
     (services::NtUserEnableMenuItem, Handler::Status(menu::nt_user_enable_menu_item)),
+    (services::NtUserFindExistingCursorIcon, Handler::Status(cursor::nt_user_find_existing_cursor_icon)),
     (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetControlBrush, Handler::Status(window::nt_user_get_control_brush)),
@@ -282,6 +287,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetKeyState, Handler::Status(input::nt_user_get_key_state)),
     (services::NtUserGetAtomName, Handler::Status(atom::nt_user_get_atom_name)),
     (services::NtUserGetGuiResources, Handler::Status(user::nt_user_get_gui_resources)),
+    (services::NtUserGetIconSize, Handler::Status(cursor::nt_user_get_icon_size)),
     (services::NtUserGetKeyboardLayoutList, Handler::Status(user::nt_user_get_keyboard_layout_list)),
     (services::NtUserGetKeyboardState, Handler::Status(input::nt_user_get_keyboard_state)),
     (services::NtUserGetMessage, Handler::Status(message::nt_user_get_message)),
@@ -314,12 +320,15 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
     (services::NtUserRemoveMenu, Handler::Status(menu::nt_user_remove_menu)),
     (services::NtUserSetCapture, Handler::Status(mouse::nt_user_set_capture)),
+    (services::NtUserSetCursor, Handler::Status(cursor::nt_user_set_cursor)),
+    (services::NtUserSetCursorIconData, Handler::Status(cursor::nt_user_set_cursor_icon_data)),
     (services::NtUserSetFocus, Handler::Status(input::nt_user_set_focus)),
     (services::NtUserSetLogonNotifyWindow, Handler::Status(window::nt_user_set_logon_notify_window)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetProp, Handler::Status(user::nt_user_set_prop)),
     (services::NtUserSetMenu, Handler::Status(menu::nt_user_set_menu)),
+    (services::NtUserSetSystemCursor, Handler::Status(cursor::nt_user_set_system_cursor)),
     (services::NtUserSetSystemTimer, Handler::Status(timer::nt_user_set_system_timer)),
     (services::NtUserSetThreadDesktop, Handler::Status(desktop::nt_user_set_thread_desktop)),
     (services::NtUserSetTimer, Handler::Status(timer::nt_user_set_timer)),

@@ -97,6 +97,29 @@ pub fn load_menu(module: u32, resource: MenuResource<'_>) -> Result<u32, NtStatu
     }
 }
 
+/// co_IntLoadDefaultCursors : `user32` charge les curseurs du système
+/// (User32SetupDefaultCursors : LoadSystemCursors, chaque curseur posé par
+/// NtUserSetSystemCursor), puis fait de la flèche le curseur du thread
+/// courant ; rend la flèche, 0 si `user32` n'en rend pas.
+///
+/// # Errors
+/// Celles du rappel.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn load_default_cursors() -> Result<u32, NtStatus> {
+    // L'argument : BOOL DefaultCursor, vrai.
+    let output = ps::callback::user_mode_callback(
+        abi::user::USER32_CALLBACK_LOADDEFAULTCURSORS,
+        &1u32.to_le_bytes(),
+        size_of::<u32>(),
+    )?;
+    Ok(match output[..] {
+        [a, b, c, d, ..] => u32::from_le_bytes([a, b, c, d]),
+        _ => 0,
+    })
+}
+
 /// co_IntCallWindowProc : la procédure du client `arguments.proc` reçoit le
 /// message (User32CallWindowProcFromKernel) ; rend ce qu'elle a rendu.
 /// `buffer`, s'il y en a un, suit les arguments (`lParam` le désigne dans

@@ -29,11 +29,14 @@
 //!   peinture pour un `lParam` de -1) ; rend TRUE ;
 //! - WM_SYSCOMMAND ([`crate::sizemove::sys_command`]) : SC_MOVE, SC_SIZE,
 //!   SC_CLOSE (WM_CLOSE), SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE ;
+//! - WM_SETCURSOR ([`crate::cursor::def_set_cursor`]) : le curseur de la
+//!   classe dans la zone cliente, une flèche double sur un bord, la flèche
+//!   ailleurs ;
 //! - WM_DEVICECHANGE rend TRUE ; un message de l'application (au-delà de
 //!   WM_USER) rend 0.
 //!
 //! Les autres messages que ReactOS traite ici (WM_PAINT, WM_ERASEBKGND,
-//! WM_NCPAINT, WM_SETCURSOR, WM_ACTIVATE, WM_SHOWWINDOW,
+//! WM_NCPAINT, WM_ACTIVATE, WM_SHOWWINDOW,
 //! WM_CLOSE (DestroyWindow), les touches, le double-clic sur le titre…)
 //! attendent la peinture, les contextes de périphérique, l'activation et
 //! l'entrée : ils rendent 0, journalisés une fois chacun. Pas encore de
@@ -568,6 +571,7 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             Ok(nc_hit_test(state.style, state.ex_style, state.window, state.client, point, &metrics::get))
         }
         (WM_MOUSEACTIVATE, Some(window)) => Ok(mouse_activate(window, wparam, lparam)),
+        (abi::user::WM_SETCURSOR, Some(window)) => Ok(crate::cursor::def_set_cursor(window, wparam, lparam)),
         (WM_NCACTIVATE, Some(window)) => {
             crate::paint::set_frame_active(window, wparam != 0, lparam != u32::MAX);
             Ok(1)

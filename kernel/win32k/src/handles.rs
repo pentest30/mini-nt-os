@@ -61,6 +61,19 @@ impl Slots {
         Self { generations: Vec::new(), holders: Vec::new(), free: Vec::new(), capacity }
     }
 
+    /// L'objet de l'entrée de `handle`, prise, est désormais au processus
+    /// `pid`.
+    pub fn set_process(&mut self, handle: u32, pid: u32) {
+        let Some(index) = index(handle) else { return };
+        let generation = (handle >> 16) as u16;
+        if self.generations.get(index as usize) != Some(&generation) {
+            return;
+        }
+        if let Some(Some(holder)) = self.holders.get_mut(index as usize) {
+            holder.pid = pid;
+        }
+    }
+
     /// Prend une entrée pour un objet de `holder` : une libre (sa génération
     /// suivante, 1 après 0xFFFE), sinon une neuve (génération 2) ; `None` si
     /// la table est pleine. Rend son index et sa génération.
@@ -186,6 +199,18 @@ pub fn taken_by_process(pid: u32) -> Vec<(u32, u8)> {
     SLOTS.lock().as_ref().map_or_else(Vec::new, |slots| slots.taken_by(pid))
 }
 
+/// L'objet de `handle` est désormais au processus `pid` (0 : à aucun, un
+/// curseur du système) : GetGuiResources et la fin d'un processus le
+/// comptent ainsi. Rien pour un handle qui n'est pas pris.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn set_process(handle: u32, pid: u32) {
+    if let Some(slots) = SLOTS.lock().as_mut() {
+        slots.set_process(handle, pid);
+    }
+}
+
 /// Rend le handle `handle` : son entrée devient libre (sa génération
 /// reste, jusqu'à sa reprise).
 ///
@@ -259,5 +284,19 @@ mod tests {
         assert_eq!((again, generation), (a, ga + 1), "the entry taken again by another process");
         assert_eq!((slots.count_for(20), slots.count_for(28)), (1, 1));
         assert!(slots.taken_by(32).is_empty());
+    }
+
+    #[test]
+    fn an_object_changes_process() {
+        let mut slots = Slots::new(4);
+        let (index, generation) = slots.alloc(Holder { pid: 20, kind: abi::user::TYPE_CURSOR }).unwrap();
+        slots.set_process(handle(index, generation), 0);
+        assert_eq!((slots.count_for(20), slots.count_for(0)), (0, 1), "a system cursor: no process's");
+        assert!(slots.taken_by(20).is_empty(), "the end of its process leaves it");
+        slots.set_process(handle(index, generation + 1), 24);
+        assert_eq!(slots.count_for(24), 0, "another generation: nothing changes");
+        slots.free(handle(index, generation));
+        slots.set_process(handle(index, generation), 24);
+        assert_eq!(slots.count_for(24), 0, "a free entry: nothing changes");
     }
 }

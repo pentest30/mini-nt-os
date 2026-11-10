@@ -34,6 +34,7 @@ pub mod class;
 pub mod client;
 pub mod console;
 pub mod csrss;
+pub mod cursor;
 pub mod dce;
 pub mod defwnd;
 pub mod desktop;

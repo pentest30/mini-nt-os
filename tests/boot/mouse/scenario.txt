@@ -33,6 +33,9 @@ expect = [mouse] done
 # The cursor: its tip (black) at the point, the window (white) beside it.
 screen = 652 393 000000
 screen = 651 393 FFFFFF
+# The arrow of user32's resources (the system cursor, loaded when the
+# desktop went on the screen), not win32k's own: black there.
+screen = 659 403 000000
 
 forbid = *** STOP:
 # An IRQ12 the PIC kept while the mouse was set up must not read the last

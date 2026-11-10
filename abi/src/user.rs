@@ -950,6 +950,7 @@ pub const ONEPARAM_ROUTINE_GETCURSORPOS: u32 = 0x26;
 pub const THREADSTATE_FOCUSWINDOW: u32 = 0;
 pub const THREADSTATE_ACTIVEWINDOW: u32 = 1;
 pub const THREADSTATE_CAPTUREWINDOW: u32 = 2;
+pub const THREADSTATE_GETCURSOR: u32 = 6;
 /// WM_ACTIVATE, WM_SETFOCUS, WM_KILLFOCUS: a window activated or not,
 /// taking or losing the keyboard.
 pub const WM_ACTIVATE: u32 = 0x0006;
@@ -1499,6 +1500,174 @@ const _: () = {
     assert!(size_of::<ClientInfo32>() == 62 * 4);
 };
 
+/// TYPE_CURSOR: a cursor or an icon in the USER handle table.
+pub const TYPE_CURSOR: u8 = 3;
+
+/// WM_SETCURSOR: the window under the cursor may set its shape (`wParam` the
+/// window, `lParam` the hit-test code and the mouse message).
+pub const WM_SETCURSOR: u32 = 0x0020;
+
+/// ONEPARAM_ROUTINE_CREATEEMPTYCUROBJECT: NtUserxCreateEmptyCurObject, an
+/// empty cursor or icon object (`param`: an animated one).
+pub const ONEPARAM_ROUTINE_CREATEEMPTYCUROBJECT: u32 = 0x21;
+
+/// USER32_CALLBACK_LOADDEFAULTCURSORS: `user32` loads the system cursors
+/// (User32SetupDefaultCursors, LoadSystemCursors).
+pub const USER32_CALLBACK_LOADDEFAULTCURSORS: u32 = 3;
+
+/// CURSORF_*, `CURSORDATA.CURSORF_flags`.
+pub mod cursorf {
+    /// Loaded from a module's resources.
+    pub const FROMRESOURCE: u32 = 0x0001;
+    /// A system cursor, of no process.
+    pub const GLOBAL: u32 = 0x0002;
+    /// Loaded with LR_SHARED: the process keeps it for the next load.
+    pub const LRSHARED: u32 = 0x0004;
+    /// An animated cursor.
+    pub const ACON: u32 = 0x0008;
+    /// The cursor of a thread (SetCursor).
+    pub const CURRENT: u32 = 0x0200;
+}
+
+/// OCR_*: the system cursors, by their identifiers (SetSystemCursor), with
+/// their index in the system table.
+pub const OCR_CURSORS: [u32; 16] = [
+    32512, // OCR_NORMAL
+    32513, // OCR_IBEAM
+    32514, // OCR_WAIT
+    32515, // OCR_CROSS
+    32516, // OCR_UP
+    32640, // OCR_SIZE
+    32641, // OCR_ICON
+    32642, // OCR_SIZENWSE
+    32643, // OCR_SIZENESW
+    32644, // OCR_SIZEWE
+    32645, // OCR_SIZENS
+    32646, // OCR_SIZEALL
+    32648, // OCR_NO
+    32649, // OCR_HAND
+    32650, // OCR_APPSTARTING
+    32651, // OCR_HELP
+];
+pub const OCR_NORMAL: u32 = 32512;
+pub const OCR_SIZENWSE: u32 = 32642;
+pub const OCR_SIZENESW: u32 = 32643;
+pub const OCR_SIZEWE: u32 = 32644;
+pub const OCR_SIZENS: u32 = 32645;
+
+/// RT_CURSOR, RT_ICON: `CURSORDATA.rt`.
+pub const RT_CURSOR: u16 = 1;
+pub const RT_ICON: u16 = 3;
+
+/// CURSORDATA, 32-bit: what `user32` gives NtUserSetCursorIconData for a
+/// cursor or an icon it has made (its bitmaps, its hot spot).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CursorData32 {
+    pub name: u32,
+    pub module_name: u32,
+    /// RT_CURSOR or RT_ICON.
+    pub rt: u16,
+    pub dummy: u16,
+    /// `cursorf::*`.
+    pub flags: u32,
+    pub x_hotspot: i16,
+    pub y_hotspot: i16,
+    /// The AND mask; for a monochrome one, the AND mask over the XOR mask
+    /// (twice the height).
+    pub hbm_mask: u32,
+    /// The colors; 0 for a monochrome one.
+    pub hbm_color: u32,
+    pub hbm_alpha: u32,
+    pub bounds: Rect32,
+    pub hbm_user_alpha: u32,
+    pub bpp: u32,
+    pub cx: u32,
+    pub cy: u32,
+    /// An animated cursor: its frames, its steps.
+    pub cpcur: u32,
+    pub cicur: u32,
+    pub aspcur: u32,
+    pub aicur: u32,
+    pub ajif_rate: u32,
+    pub iicur: u32,
+}
+
+/// FINDEXISTINGCURICONPARAM, 32-bit: what NtUserFindExistingCursorIcon
+/// looks for.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FindExistingCurIconParam32 {
+    pub icon: i32,
+    pub cx: i32,
+    pub cy: i32,
+}
+
+const _: () = {
+    assert!(size_of::<CursorData32>() == 88);
+    assert!(offset_of!(CursorData32, rt) == 8);
+    assert!(offset_of!(CursorData32, flags) == 12);
+    assert!(offset_of!(CursorData32, x_hotspot) == 16);
+    assert!(offset_of!(CursorData32, hbm_mask) == 20);
+    assert!(offset_of!(CursorData32, hbm_alpha) == 28);
+    assert!(offset_of!(CursorData32, bounds) == 32);
+    assert!(offset_of!(CursorData32, bpp) == 52);
+    assert!(offset_of!(CursorData32, cx) == 56);
+    assert!(offset_of!(CursorData32, cpcur) == 64);
+    assert!(offset_of!(CursorData32, iicur) == 84);
+    assert!(size_of::<FindExistingCurIconParam32>() == 12);
+};
+
+impl CursorData32 {
+    /// The record in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        let half = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        Some(Self {
+            name: word(0),
+            module_name: word(4),
+            rt: half(8),
+            dummy: half(10),
+            flags: word(12),
+            x_hotspot: half(16) as i16,
+            y_hotspot: half(18) as i16,
+            hbm_mask: word(20),
+            hbm_color: word(24),
+            hbm_alpha: word(28),
+            bounds: Rect32 {
+                left: word(32) as i32,
+                top: word(36) as i32,
+                right: word(40) as i32,
+                bottom: word(44) as i32,
+            },
+            hbm_user_alpha: word(48),
+            bpp: word(52),
+            cx: word(56),
+            cy: word(60),
+            cpcur: word(64),
+            cicur: word(68),
+            aspcur: word(72),
+            aicur: word(76),
+            ajif_rate: word(80),
+            iicur: word(84),
+        })
+    }
+}
+
+impl FindExistingCurIconParam32 {
+    /// The record in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        let word = |at: usize| i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        Some(Self { icon: word(0), cx: word(4), cy: word(8) })
+    }
+}
+
 /// `as_bytes` for records of integers whose sizes, checked above, leave no
 /// padding.
 macro_rules! as_bytes {
@@ -1536,12 +1705,38 @@ as_bytes!(
     WindowPos32,
     NcCalcSizeParams32,
     MonitorInfo32,
-    PaintStruct32
+    PaintStruct32,
+    CursorData32,
+    FindExistingCurIconParam32
 );
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_data_reads_back_from_its_bytes() {
+        let data = CursorData32 {
+            name: 0x7F00,
+            module_name: 0x0012_3400,
+            rt: RT_CURSOR,
+            flags: cursorf::FROMRESOURCE | cursorf::LRSHARED,
+            x_hotspot: -1,
+            y_hotspot: 7,
+            hbm_mask: 0x0405_0011,
+            hbm_color: 0x0405_0012,
+            bounds: Rect32 { left: 1, top: 2, right: 3, bottom: 4 },
+            bpp: 32,
+            cx: 32,
+            cy: 32,
+            iicur: 9,
+            ..CursorData32::default()
+        };
+        assert_eq!(CursorData32::from_bytes(data.as_bytes()), Some(data));
+        assert_eq!(CursorData32::from_bytes(&data.as_bytes()[..87]), None, "one byte short");
+        let param = FindExistingCurIconParam32 { icon: 1, cx: 16, cy: -16 };
+        assert_eq!(FindExistingCurIconParam32::from_bytes(param.as_bytes()), Some(param));
+    }
 
     #[test]
     fn a_charset_record_reads_back_from_its_bytes() {

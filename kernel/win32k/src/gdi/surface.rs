@@ -70,6 +70,9 @@ pub struct Surface {
     height: u32,
     /// La ligne du haut est la dernière en mémoire.
     bottom_up: bool,
+    /// Un bitmap monochrome (CreateBitmap d'un bit par pixel) : ses pixels,
+    /// de 32 bits comme les autres, ne sont que noirs ou blancs.
+    monochrome: bool,
     pixels: Pixels,
     selected: Selection,
     /// Un dessin à la fois.
@@ -89,6 +92,7 @@ impl Surface {
             width: 1,
             height: 1,
             bottom_up: false,
+            monochrome: true,
             pixels: Pixels::None,
             selected: Selection::default(),
             drawing: KSpinLock::new(()),
@@ -98,6 +102,30 @@ impl Surface {
     /// Sa largeur et sa hauteur.
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Monochrome : le bitmap par défaut, ou celui de CreateBitmap d'un bit
+    /// par pixel, CreateCompatibleBitmap d'un DC qui en a un.
+    pub fn is_monochrome(&self) -> bool {
+        self.monochrome
+    }
+
+    /// Ses pixels de 32 bits (BGRX, l'octet haut tel que le processus l'a
+    /// écrit dans une DIB section : l'alpha d'une icône), de la ligne du haut
+    /// à celle du bas ; `None` sans pixels (le bitmap par défaut).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn raw_pixels(&self) -> Option<alloc::vec::Vec<u32>> {
+        let mut pixels = alloc::vec::Vec::with_capacity(self.width as usize * self.height as usize);
+        let drawn = self.draw(|bitmap| {
+            for y in 0..self.height {
+                for x in 0..self.width {
+                    pixels.push(bitmap.pixel(x, y).unwrap_or(0));
+                }
+            }
+        });
+        drawn.then_some(pixels)
     }
 
     /// Une DIB section (`hSecure`) : `gdi32` ne met pas en lot ce qui y
@@ -234,6 +262,7 @@ pub fn create_dib_section(geometry: DibGeometry) -> Result<(u32, u32), NtStatus>
         width: geometry.width,
         height: geometry.height,
         bottom_up: geometry.bottom_up,
+        monochrome: false,
         pixels: Pixels::Section { view, user: KSpinLock::new(Some((pid, user.base as u32))) },
         selected: Selection::default(),
         drawing: KSpinLock::new(()),
@@ -250,8 +279,9 @@ pub fn create_dib_section(geometry: DibGeometry) -> Result<(u32, u32), NtStatus>
 /// `CreateBitmap` : un bitmap de `width` × `height`, ses pixels convertis
 /// de `bits` (le contenu que l'appelant donne pour `planes` × `bits_pixel`
 /// bits par pixel, les lignes du haut vers le bas, celles de la monochrome
-/// alignées sur 16 bits, 0 = noir et 1 = blanc) vers 32 bits BGRA, dans une
-/// section vue du noyau seul. Rend son handle GDI, au processus courant.
+/// alignées sur 16 bits, 0 = noir et 1 = blanc ; sans `bits`, noirs) vers
+/// 32 bits BGRA, dans une section vue du noyau seul. Un bitmap d'un bit par
+/// pixel est monochrome. Rend son handle GDI, au processus courant.
 ///
 /// # Errors
 /// `STATUS_INVALID_PARAMETER` pour des dimensions ou une profondeur que le
@@ -260,15 +290,22 @@ pub fn create_dib_section(geometry: DibGeometry) -> Result<(u32, u32), NtStatus>
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
-pub fn create_from_bits(width: u32, height: u32, planes: u32, bits_pixel: u32, bits: &[u8]) -> Result<u32, NtStatus> {
+pub fn create_from_bits(
+    width: u32,
+    height: u32,
+    planes: u32,
+    bits_pixel: u32,
+    bits: Option<&[u8]>,
+) -> Result<u32, NtStatus> {
     if width == 0 || height == 0 || width > 4096 || height > 4096 {
         return Err(STATUS_INVALID_PARAMETER);
     }
     let depth = planes * bits_pixel;
     let count = width as usize * height as usize;
     let mut pixels = alloc::vec![0u32; count];
-    match depth {
-        1 => {
+    match (depth, bits) {
+        (1 | 32, None) => {}
+        (1, Some(bits)) => {
             let stride = (width as usize).div_ceil(16) * 2;
             if bits.len() < stride * height as usize {
                 return Err(STATUS_INVALID_PARAMETER);
@@ -280,7 +317,7 @@ pub fn create_from_bits(width: u32, height: u32, planes: u32, bits_pixel: u32, b
                 }
             }
         }
-        32 => {
+        (32, Some(bits)) => {
             if bits.len() < count * 4 {
                 return Err(STATUS_INVALID_PARAMETER);
             }
@@ -290,6 +327,25 @@ pub fn create_from_bits(width: u32, height: u32, planes: u32, bits_pixel: u32, b
         }
         _ => return Err(STATUS_INVALID_PARAMETER),
     }
+    insert_kernel_bitmap(width, height, depth == 1, &pixels)
+}
+
+/// CreateCompatibleBitmap : un bitmap de `width` × `height`, noir,
+/// monochrome si `monochrome` (celui d'un DC en mémoire qui en a un), de la
+/// couleur de l'écran sinon. Rend son handle GDI, au processus courant.
+///
+/// # Errors
+/// Celles de [`create_from_bits`].
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn create_compatible(width: u32, height: u32, monochrome: bool) -> Result<u32, NtStatus> {
+    create_from_bits(width, height, 1, if monochrome { 1 } else { 32 }, None)
+}
+
+/// Un bitmap de `pixels` (32 bits, la ligne du haut d'abord) dans une section
+/// vue du noyau seul, au processus courant.
+fn insert_kernel_bitmap(width: u32, height: u32, monochrome: bool, pixels: &[u32]) -> Result<u32, NtStatus> {
     let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
     let process = thread.process().clone();
     let size = u64::from(width * height * 4).next_multiple_of(0x1000);
@@ -304,6 +360,7 @@ pub fn create_from_bits(width: u32, height: u32, planes: u32, bits_pixel: u32, b
         width,
         height,
         bottom_up: false,
+        monochrome,
         pixels: Pixels::Section { view, user: KSpinLock::new(None) },
         selected: Selection::default(),
         drawing: KSpinLock::new(()),
