@@ -9,9 +9,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::ntstatus::NtStatus;
 use abi::user::{
     LargeUnicodeString32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_MAX, WS_CHILD, WS_POPUP,
+    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_MAX,
 };
-use abi::winerror::{dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_SUCCESS};
+use abi::winerror::{dos_error, ERROR_SUCCESS};
 use ke::usermem::{copy_from_user, probe_for_read, UserPtr};
 use win32k::class::ClassName;
 use win32k::window::CreateParams;
@@ -86,21 +86,13 @@ fn fail(error: u32) -> NtStatus {
 /// hInstance, lpParam, dwFlags, acbiBuffer) : crée la fenêtre
 /// (`win32k::window::create_window`) et rend son handle, l'erreur Win32
 /// remise à 0. La classe est celle de `plstrClsVersion` (le nom de la
-/// version, comme ReactOS). Pas encore de menus : une fenêtre qui n'est pas
-/// fille ne peut pas en recevoir (`ERROR_INVALID_MENU_HANDLE`, comme un
-/// handle de menu invalide ; journalisé une fois).
+/// version, comme ReactOS). `hMenu` est la barre de menus d'une fenêtre qui
+/// n'est pas fille, l'identifiant d'une fille (`create_window`).
 pub(super) fn nt_user_create_window_ex(arguments: &[u32]) -> NtStatus {
     let (ex_style, version, name, style) = (arguments[0], arguments[2], arguments[3], arguments[4]);
     let (x, y, cx, cy) = (arguments[5] as i32, arguments[6] as i32, arguments[7] as i32, arguments[8] as i32);
     let (parent, menu, instance, param, expected_version) =
         (arguments[9], arguments[10], arguments[11], arguments[12], arguments[13]);
-    if style & (WS_POPUP | WS_CHILD) != WS_CHILD && menu != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        if !REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("sys: NtUserCreateWindowEx with a menu: no menus yet");
-        }
-        return fail(ERROR_INVALID_MENU_HANDLE);
-    }
     let captured = capture_large_string(name).and_then(|name| Ok((name, class_name(version)?)));
     let (name, class) = match captured {
         Ok(captured) => captured,
