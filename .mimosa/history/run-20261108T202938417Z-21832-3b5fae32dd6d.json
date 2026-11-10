@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261108T202938417Z-21832-3b5fae32dd6d",
+  "runStatus": "inconclusive",
+  "errors": [
+    "scan:kernel/win32k/src/gdi/pen.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/gdi/dc.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/gdi/dib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/gdi/handles.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/gdi/mod.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/gdi.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/mod.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:abi/src/gdi.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+  ],
+  "target": ".",
+  "revision": "33a753467c46763ac96f5b3060b2cf2b79350ea0",
+  "diffHash": "8cbf129870802c7805a9b00e428f1860fe6714730bc81720acfe0ea7e3b49c1f",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-08T20:29:38.417Z",
+  "timing": {
+    "startedAt": "2026-11-08T20:29:35.636Z",
+    "completedAt": "2026-11-08T20:29:38.417Z",
+    "durationMs": 2781
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 0,
+    "bySeverity": {},
+    "byStatus": {}
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "scanner_failed": 8,
+      "project_check_failed": 8
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261108T202938417Z-21832-3b5fae32dd6d.json"
+}

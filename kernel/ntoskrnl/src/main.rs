@@ -6489,7 +6489,9 @@ fn keyed_event_self_test() {
 /// set, a short buffer refused, and without SeTcbPrivilege. The kernel
 /// clears both flags, as the smss probe does, before it ends the program:
 /// ending it critical would stop the system (the `critical-process`
-/// scenario).
+/// scenario). Each of its two threads tells its end on that port
+/// (`LPC_CLIENT_DIED`, with its CLIENT_ID and creation time), as csrss
+/// needs to let go of its clients.
 fn process_settings_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_INFO_LENGTH_MISMATCH, STATUS_INVALID_HANDLE, STATUS_INVALID_PARAMETER,
@@ -6656,11 +6658,35 @@ fn process_settings_self_test() {
         )
     };
     assert_eq!(ended, STATUS_WAIT_0, "the test program did not end");
-    drop((thread, other, process));
+    // Each thread off the processor: each has told its end.
+    for ended_thread in [&thread, &other] {
+        let object = ended_thread.dispatcher_object().expect("a started thread");
+        // SAFETY: the thread object, held here, holds its dispatcher object.
+        let waited =
+            unsafe { ke_wait_for_single_object::<KePlatform>(object, ProcessorMode::Kernel, false, Some(-3000 * MS)) };
+        assert_eq!(waited, STATUS_WAIT_0, "a thread of the test program did not end");
+    }
+    // As csrss learns that its clients die: LPC_CLIENT_DIED on the exception
+    // port, from each thread, with its creation time (CLIENT_DIED_MSG).
+    let port = process.exception_port().and_then(|port| ob::downcast::<lpc::Port>(&port)).expect("the port");
+    let mut died: alloc::vec::Vec<(u32, u32, u16, u64)> = (0..port.queued())
+        .map(|_| {
+            let message = port.receive(ProcessorMode::Kernel, None).expect("a queued message");
+            let created = u64::from_le_bytes(message.data[..].try_into().expect("a LARGE_INTEGER"));
+            let id = message.header.client_id;
+            (id.unique_process, id.unique_thread, message.header.kind, created)
+        })
+        .collect();
+    died.sort_unstable();
+    let mut expected =
+        [thread.clone(), other.clone()].map(|t| (process.pid(), t.tid(), abi::lpc::LPC_CLIENT_DIED, t.create_time()));
+    expected.sort_unstable();
+    assert_eq!(died, expected, "LPC_CLIENT_DIED from each thread, on its process's exception port");
+    drop((thread, other, process, port));
     ps::wait_for_reaper();
     log::info!(
         "[smoke] Ps: process settings from user mode: ProcessDefaultHardErrorMode, ProcessBasePriority, \
-         ProcessBreakOnTermination, ThreadBreakOnTermination, ProcessExceptionPort"
+         ProcessBreakOnTermination, ThreadBreakOnTermination, ProcessExceptionPort, LPC_CLIENT_DIED at a thread's end"
     );
 }
 
@@ -9901,12 +9927,15 @@ fn mount_boot_volumes() {
         log::info!("[boot] Io: boot volume {} (FAT32, {size} bytes)", io_manager::RAMDISK_VOLUME);
     }
     match volumes.disk {
+        Some(Ok(sectors)) if volumes.ntfs_data => {
+            log::info!("[boot] Io: NTFS data volume {} (read-only, {sectors} sectors), D:", io_manager::DISK_VOLUME)
+        }
         Some(Ok(sectors)) => log::info!(
             "[boot] Io: system disk {} (ATA, {}, FAT32, {sectors} sectors)",
             io_manager::DISK_VOLUME,
             if volumes.disk_primary { "primary master" } else { "secondary master" }
         ),
-        Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no FAT32 volume: {status}"),
+        Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no supported volume: {status}"),
         None => {}
     }
     match volumes.system {

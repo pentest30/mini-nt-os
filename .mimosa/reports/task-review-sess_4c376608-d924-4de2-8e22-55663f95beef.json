@@ -1,0 +1,1037 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20261109T164912685Z-31016-9ef4b91dde60",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "candidate-select",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/defwnd.rs",
+      "reason": "candidate_limit_exceeded: 16 changed reviewable file(s) were not scanned because the limit is 20"
+    },
+    {
+      "stage": "baseline-read",
+      "target": "target/xtask/rostests/kernel32-driver.c",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": "target/xtask/rostests/ntdll-driver.c",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/src/rostests.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/rostests-src/testmain.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/rostests-src/testdriver.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/rostests-src/runner-stubs.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/src/main.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/src/scenario.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "target/xtask/rostests/kernel32-driver.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "target/xtask/rostests/kernel32-testlist.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "target/xtask/rostests/ntdll-driver.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "target/xtask/rostests/ntdll-testlist.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/main.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/concmd1.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/send1.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "agent-check",
+      "target": ".",
+      "reason": "stop_budget_exhausted: focused agent configuration check was not run before the gate budget"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": true,
+      "captured_files": 3759,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 25
+    },
+    "change_tracking": {
+      "touched_observed": 4,
+      "touched_retained": 4,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 36,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 36,
+      "selected_files": 20,
+      "limit": 20,
+      "truncated": true
+    },
+    "scanning": {
+      "required_files": 19,
+      "scanned_files": 0,
+      "skipped_files": 0,
+      "failed_files": 19,
+      "project_checks_required": 1,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 8,
+      "scanner_failed": 19,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 29
+    },
+    "reasons": [
+      {
+        "code": "candidate_limit_exceeded",
+        "stage": "candidate-select",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/defwnd.rs",
+        "detail": "16 changed reviewable file(s) were not scanned because the limit is 20",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/rostests.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testmain.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testdriver.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/runner-stubs.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/main.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/scenario.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-testlist.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/main.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/concmd1.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/send1.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "stop_budget_exhausted",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "focused agent configuration check was not run before the gate budget",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "candidate-select",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/defwnd.rs",
+        "detail": "candidate_limit_exceeded: 16 changed reviewable file(s) were not scanned because the limit is 20",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/rostests.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testmain.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testdriver.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/runner-stubs.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/main.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/scenario.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-testlist.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/main.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/concmd1.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/send1.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "stop_budget_exhausted: focused agent configuration check was not run before the gate budget",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-11-09T16:49:12.685Z",
+  "session_id": "sess_4c376608-d924-4de2-8e22-55663f95beef",
+  "target": ".",
+  "revision": "2fbe3f42301b2e9ec927f3751d45a027804a729f",
+  "rules_version": "unavailable",
+  "diff_hash": "925cd802afeda8b751aa628bbc3ddb23db2eeea70599e664962fcce8989f917a",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 20,
+    "changed_files": [
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/CLAUDE.md",
+        "ranges": [
+          {
+            "start": 332,
+            "end": 335
+          }
+        ],
+        "before_hash": "5779d17e086a8ea4702b8e050fed23d402d43f06b8390dcb0184f8326afacc84",
+        "after_hash": "17156907a6e739ab97267480d92d410062a9da448c3e814ab56ea22bccd29091"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/concmd1.c",
+        "ranges": [
+          {
+            "start": 14,
+            "end": 19
+          },
+          {
+            "start": 72,
+            "end": 74
+          },
+          {
+            "start": 132,
+            "end": 138
+          },
+          {
+            "start": 142,
+            "end": 142
+          },
+          {
+            "start": 145,
+            "end": 145
+          },
+          {
+            "start": 151,
+            "end": 236
+          },
+          {
+            "start": 238,
+            "end": 239
+          },
+          {
+            "start": 243,
+            "end": 280
+          },
+          {
+            "start": 306,
+            "end": 315
+          }
+        ],
+        "before_hash": "fb68e52919b0c0b51adf62e739647346822029ad4a3ea021baf4d3af149269c4",
+        "after_hash": "969ba6a323e58eca5455c083cc5b8c70c5506eb38943fc308f097270ba0bd81a"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/send1.c",
+        "ranges": [
+          {
+            "start": 16,
+            "end": 18
+          },
+          {
+            "start": 72,
+            "end": 88
+          },
+          {
+            "start": 100,
+            "end": 103
+          },
+          {
+            "start": 145,
+            "end": 146
+          },
+          {
+            "start": 198,
+            "end": 202
+          },
+          {
+            "start": 207,
+            "end": 216
+          },
+          {
+            "start": 312,
+            "end": 319
+          }
+        ],
+        "before_hash": "d1ba93edc330624f2a9520f07042b5a23acf36a1f05f4dfa9023a56e4f5b32a5",
+        "after_hash": "31be3ded11a83f63de89786979f3795575c66a811da90e0d3866f4c186a30420"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 26
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "06f1a002cfd2fba83cff05d5ac1a8790dface4eced6dafc11ef92c1cff41e70e"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 14
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "0934657283e1f6f113867d96f7acb6dd011bf0a456ecd4e1691a4a4ada9f3ea1"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 14
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "ff298f26610d5a714e98a9af45791fd148ac2974d32a8227c5ac57021193be02"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 44
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "c17308c4f24ac4299590260974e90156bf532e0de408ddfb7dcb21a1b926d783"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 53
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "c4c4bac089888f94caed6075f21770a533803c523b1a6914c42b6f631a88e1b1"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/main.rs",
+        "ranges": [
+          {
+            "start": 32,
+            "end": 32
+          },
+          {
+            "start": 130,
+            "end": 137
+          }
+        ],
+        "before_hash": "ed229c929158826f81cdc93a395bf8f45fa571dcfcc5d252e116e4765326465b",
+        "after_hash": "8619d44fc228589066f4c1da44c42ac429bad49ce7d6210d1d10084f9a08c6e0"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 531
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "958a0d261491e3255067655980dbbe4add2ed771262da1bda3a2068c7ca34201"
+      },
+      {
+        "file": "target/xtask/rostests/kernel32-driver.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 96
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "65863d1692d588d6f1c7830ac4911a73de3b77f6b6663eadda45dd340d5c3071"
+      },
+      {
+        "file": "target/xtask/rostests/kernel32-testlist.c",
+        "ranges": [
+          {
+            "start": 4,
+            "end": 32
+          },
+          {
+            "start": 35,
+            "end": 63
+          }
+        ],
+        "before_hash": "d03fa465b1ea6e356b9304c13ee8c20a9814e13f409e7421c8d398f407cacb96",
+        "after_hash": "a09bb2f1cd799c8744df50467b9b3324bf4d7c09953b95e74245801f6306408c"
+      },
+      {
+        "file": "target/xtask/rostests/ntdll-driver.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 151
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "c820326ad9ccebc52cc3dd641dbef5d8961c032eba849ea99a299179d7647bf2"
+      },
+      {
+        "file": "target/xtask/rostests/ntdll-testlist.c",
+        "ranges": [
+          {
+            "start": 4,
+            "end": 87
+          },
+          {
+            "start": 90,
+            "end": 173
+          }
+        ],
+        "before_hash": "d03fa465b1ea6e356b9304c13ee8c20a9814e13f409e7421c8d398f407cacb96",
+        "after_hash": "5dc96b7f15941811a08907b41bda052875788da564475f758a4fb07e544ea0aa"
+      },
+      {
+        "file": "xtask/rostests-src/runner-stubs.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 10
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "91c7c77e31ade5444e6052b8578cc550d5b43e0cf3e2d05cbcd8110107d54fe7"
+      },
+      {
+        "file": "xtask/rostests-src/testdriver.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 60
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "d449df06f5e6f1e876719c8d4247aa559f35295813634e864a530ea157111f65"
+      },
+      {
+        "file": "xtask/rostests-src/testmain.c",
+        "ranges": [
+          {
+            "start": 5,
+            "end": 6
+          },
+          {
+            "start": 9,
+            "end": 9
+          },
+          {
+            "start": 39,
+            "end": 39
+          },
+          {
+            "start": 43,
+            "end": 52
+          },
+          {
+            "start": 55,
+            "end": 55
+          },
+          {
+            "start": 60,
+            "end": 61
+          }
+        ],
+        "before_hash": "81c4b201520c1ee7642cbd26b8bae9c0b4b4e8e3cfa27a0580fe7e7e78837bca",
+        "after_hash": "430f59003906bf545ff0701eeac22b4314c0c45a4fcfe6ff901e8cf0480a14bf"
+      },
+      {
+        "file": "xtask/src/main.rs",
+        "ranges": [
+          {
+            "start": 335,
+            "end": 345
+          },
+          {
+            "start": 453,
+            "end": 482
+          }
+        ],
+        "before_hash": "85976468e81841c58d8cf2bd75840e72c0cd32d3474c4f1733bff0c288b0d6ff",
+        "after_hash": "d2d6ecea773a9774654317ceed79c9c3f835e3d5f7f69c957868247dae62f4b6"
+      },
+      {
+        "file": "xtask/src/rostests.rs",
+        "ranges": [
+          {
+            "start": 23,
+            "end": 41
+          },
+          {
+            "start": 115,
+            "end": 119
+          },
+          {
+            "start": 292,
+            "end": 300
+          },
+          {
+            "start": 408,
+            "end": 411
+          },
+          {
+            "start": 428,
+            "end": 428
+          },
+          {
+            "start": 435,
+            "end": 462
+          },
+          {
+            "start": 467,
+            "end": 478
+          },
+          {
+            "start": 480,
+            "end": 481
+          },
+          {
+            "start": 483,
+            "end": 483
+          },
+          {
+            "start": 489,
+            "end": 504
+          },
+          {
+            "start": 519,
+            "end": 519
+          },
+          {
+            "start": 524,
+            "end": 527
+          }
+        ],
+        "before_hash": "1afeeaf4c15959655422d636ec946babe49e2998c31611f31922a885ae4da833",
+        "after_hash": "8566be10d6a1000919c389b9b7ce23c33891bb2d0e278dc80e6db4d1e7df8e36"
+      },
+      {
+        "file": "xtask/src/scenario.rs",
+        "ranges": [
+          {
+            "start": 83,
+            "end": 84
+          },
+          {
+            "start": 212,
+            "end": 212
+          },
+          {
+            "start": 280,
+            "end": 280
+          }
+        ],
+        "before_hash": "872e79952bfbb9e41ed9f02be11b79071eeb2e7b6544be7e441196d50fef9222",
+        "after_hash": "d6643ecebd018d0c408acac8a85e66474b1183b9cb342025a909eb285679f4ff"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-11-09T16:48:59.501Z",
+    "completed_at": "2026-11-09T16:49:12.685Z",
+    "duration_ms": 13184,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 13184,
+    "peakMemoryBytes": 97935360,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 0,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261109T164912685Z-31016-9ef4b91dde60.json",
+    "latest_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef.json",
+    "history_summary": ".mimosa/history/run-20261109T164912685Z-31016-9ef4b91dde60.json"
+  }
+}

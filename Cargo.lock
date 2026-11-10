@@ -124,6 +124,7 @@ dependencies = [
  "hal",
  "ke",
  "log",
+ "ntfs",
  "ob",
 ]
 
@@ -282,6 +283,7 @@ dependencies = [
  "hal",
  "ke",
  "log",
+ "lpc",
  "mm",
  "ob",
  "pe",

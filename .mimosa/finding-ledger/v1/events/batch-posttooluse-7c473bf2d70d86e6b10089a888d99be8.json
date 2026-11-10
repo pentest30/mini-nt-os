@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "posttooluse-7c473bf2d70d86e6b10089a888d99be8",
+  "runId": null,
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "PostToolUse"
+  },
+  "revision": null,
+  "diffHash": null,
+  "rulesVersion": null,
+  "sessionHash": "8a78eeb31a0aeb890d424ebfa44ad30cf8772c7c4f982b0df3f7cd662ee5adb1",
+  "reportRef": null,
+  "events": [
+    {
+      "eventId": "hook-4c07ae183393bd3e573efa2d06855088",
+      "findingId": "mimosa-84c506a42f79a166957d019d",
+      "type": "static_fix_verified",
+      "at": "2026-11-07T20:34:47.130Z",
+      "identity": {
+        "projectRelativeFile": "kernel/ntoskrnl/src/sys/mutant.rs",
+        "ruleId": "security",
+        "codeEvidenceHash": "66536fa28e7d4d74ff563ef1856c1149bf4a21f79fc06d3a66b343f1e5679844",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 55,
+      "endLine": 55,
+      "reasonCode": "static_rescan_passed",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "evidenceHash": "66536fa28e7d4d74ff563ef1856c1149bf4a21f79fc06d3a66b343f1e5679844"
+      },
+      "sequence": 0
+    }
+  ],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-11-07T20:34:48.000Z"
+}

@@ -1,0 +1,12 @@
+[package]
+name    = "user32"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+name = "user32"
+
+[dependencies]
+spin = { workspace = true }
+log  = { workspace = true }

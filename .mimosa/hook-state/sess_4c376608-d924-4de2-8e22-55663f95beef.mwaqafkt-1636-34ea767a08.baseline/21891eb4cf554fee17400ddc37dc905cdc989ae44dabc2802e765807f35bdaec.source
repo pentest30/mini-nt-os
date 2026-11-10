@@ -1,0 +1,19 @@
+[package]
+name    = "mm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "mm"
+
+[dependencies]
+abi       = { path = "../../abi" }
+hal       = { path = "../hal" }
+ob        = { path = "../ob" }
+pe        = { path = "../../libs/pe" }
+bitflags = { workspace = true }
+x86_64   = { workspace = true }
+log      = { workspace = true }
+
+[dev-dependencies]
+pe       = { path = "../../libs/pe", features = ["builder"] }

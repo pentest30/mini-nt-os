@@ -19,6 +19,7 @@ pub mod conversation;
 pub mod port;
 
 pub use conversation::{
-    accept, check_message, complete, connect, reply, request_wait_reply, send, Accepted, ClientView, Connected,
+    accept, check_message, complete, connect, reply, request_port, request_wait_reply, send, Accepted, ClientView,
+    Connected,
 };
 pub use port::{Message, Port, PortKind, HEADER_LENGTH, PORT_ALL_ACCESS, PORT_CONNECT, PORT_TYPE};

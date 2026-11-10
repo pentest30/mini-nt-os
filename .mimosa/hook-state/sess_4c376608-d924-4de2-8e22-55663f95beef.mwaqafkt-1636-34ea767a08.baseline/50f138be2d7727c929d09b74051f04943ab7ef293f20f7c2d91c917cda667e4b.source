@@ -1,0 +1,65 @@
+/* Généré : la liste des tests qui compilent, pour le main de lot. */
+#define STANDALONE
+#include <apitest.h>
+extern void func_ConsoleCP(void);
+extern void func_ActCtxWithXmlNamespaces(void);
+extern void func_DefaultActCtx(void);
+extern void func_FindActCtxSectionStringW(void);
+extern void func_FindFiles(void);
+extern void func_GetComputerNameEx(void);
+extern void func_GetCurrentDirectory(void);
+extern void func_GetDriveType(void);
+extern void func_GetLocaleInfo(void);
+extern void func_GetVolumeInformation(void);
+extern void func_InitOnce(void);
+extern void func_IsDBCSLeadByteEx(void);
+extern void func_JapaneseCalendar(void);
+extern void func_LoadLibraryExW(void);
+extern void func_Mailslot(void);
+extern void func_Pipes(void);
+extern void func_PrivMoveFileIdentityW(void);
+extern void func_QueueUserAPC(void);
+extern void func_SetComputerNameExW(void);
+extern void func_SetConsoleWindowInfo(void);
+extern void func_SetCurrentDirectory(void);
+extern void func_SetUnhandledExceptionFilter(void);
+extern void func_SystemFirmware(void);
+extern void func_TerminateProcess(void);
+extern void func_WideCharToMultiByte(void);
+extern void func_dosdev(void);
+extern void func_interlck(void);
+extern void func_lstrcpynW(void);
+extern void func_lstrlen(void);
+
+const struct test winetest_testlist[] = {
+    { "ConsoleCP", func_ConsoleCP },
+    { "ActCtxWithXmlNamespaces", func_ActCtxWithXmlNamespaces },
+    { "DefaultActCtx", func_DefaultActCtx },
+    { "FindActCtxSectionStringW", func_FindActCtxSectionStringW },
+    { "FindFiles", func_FindFiles },
+    { "GetComputerNameEx", func_GetComputerNameEx },
+    { "GetCurrentDirectory", func_GetCurrentDirectory },
+    { "GetDriveType", func_GetDriveType },
+    { "GetLocaleInfo", func_GetLocaleInfo },
+    { "GetVolumeInformation", func_GetVolumeInformation },
+    { "InitOnce", func_InitOnce },
+    { "IsDBCSLeadByteEx", func_IsDBCSLeadByteEx },
+    { "JapaneseCalendar", func_JapaneseCalendar },
+    { "LoadLibraryExW", func_LoadLibraryExW },
+    { "Mailslot", func_Mailslot },
+    { "Pipes", func_Pipes },
+    { "PrivMoveFileIdentityW", func_PrivMoveFileIdentityW },
+    { "QueueUserAPC", func_QueueUserAPC },
+    { "SetComputerNameExW", func_SetComputerNameExW },
+    { "SetConsoleWindowInfo", func_SetConsoleWindowInfo },
+    { "SetCurrentDirectory", func_SetCurrentDirectory },
+    { "SetUnhandledExceptionFilter", func_SetUnhandledExceptionFilter },
+    { "SystemFirmware", func_SystemFirmware },
+    { "TerminateProcess", func_TerminateProcess },
+    { "WideCharToMultiByte", func_WideCharToMultiByte },
+    { "dosdev", func_dosdev },
+    { "interlck", func_interlck },
+    { "lstrcpynW", func_lstrcpynW },
+    { "lstrlen", func_lstrlen },
+    { 0, 0 }
+};

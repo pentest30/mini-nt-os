@@ -53,6 +53,17 @@ use ob::{create_object, downcast, AccessMask, GenericMapping, Object, ObjectRef,
 use crate::directory;
 use crate::volume::{Listed, Node, Space, Volume, VolumeLabel};
 
+const MUTATION_ACCESS: AccessMask = AccessMask(
+    FILE_WRITE_DATA
+        | FILE_APPEND_DATA
+        | abi::file::FILE_WRITE_ATTRIBUTES
+        | abi::file::FILE_WRITE_EA
+        | abi::file::FILE_DELETE_CHILD
+        | AccessMask::DELETE.0
+        | AccessMask::WRITE_DAC.0
+        | AccessMask::WRITE_OWNER.0,
+);
+
 /// FILE_ALL_ACCESS.
 pub const FILE_ALL_ACCESS_MASK: AccessMask = AccessMask(FILE_ALL_ACCESS);
 
@@ -98,6 +109,27 @@ struct Search {
 }
 
 impl File {
+    /// Map generic rights and restrict MAXIMUM_ALLOWED to what this volume
+    /// supports. Explicit write requests still fail on read-only volumes.
+    /// Insert the returned concrete mask into the handle table, not `desired`.
+    /// # IRQL
+    /// <= DISPATCH_LEVEL; no allocation or device I/O.
+    pub fn granted_access(&self, desired: AccessMask) -> Result<AccessMask, NtStatus> {
+        if !self.volume.is_read_only() {
+            return Ok(FILE_TYPE.granted_access(desired));
+        }
+        let explicit = FILE_TYPE.granted_access(desired.without(AccessMask::MAXIMUM_ALLOWED));
+        if explicit.intersects(MUTATION_ACCESS) {
+            return Err(abi::ntstatus::STATUS_MEDIA_WRITE_PROTECTED);
+        }
+        Ok(FILE_TYPE.granted_access(desired).without(MUTATION_ACCESS))
+    }
+    /// Filesystem name and capability bits for NtQueryVolumeInformationFile.
+    /// # IRQL
+    /// <= DISPATCH_LEVEL; no allocation or device I/O.
+    pub fn filesystem_information(&self) -> (&'static str, u32) {
+        (self.volume.filesystem_name(), self.volume.filesystem_attributes())
+    }
     /// Ouvre `path` sur `volume` : `\` pour la racine, `\a\b` en dessous.
     /// Erreurs : celles de [`Volume::lookup`] ; `STATUS_OBJECT_NAME_INVALID`
     /// pour un chemin qui ne commence pas par `\`.
@@ -138,7 +170,7 @@ impl File {
     /// Erreurs : celles de `Volume::create`.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn create_child(&self, name: &str, as_directory: bool, attributes: u32) -> Result<Arc<Object<File>>, NtStatus> {
         let node = self.volume.create(&self.opened, name, as_directory, attributes)?;
         Ok(Self::create(self.volume.clone(), self.child_path(name), node))
@@ -164,7 +196,7 @@ impl File {
     /// Ce qu'il désigne, tel que son entrée le dit maintenant.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn node(&self) -> Result<Node, NtStatus> {
         self.volume.current(&self.opened)
     }
@@ -201,7 +233,7 @@ impl File {
     /// Le numéro de série et le nom de son volume (FileFsVolumeInformation).
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn volume_label(&self) -> Result<VolumeLabel, NtStatus> {
         self.volume.label()
     }
@@ -210,7 +242,7 @@ impl File {
     /// FileFsFullSizeInformation).
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn space(&self) -> Result<Space, NtStatus> {
         self.volume.space()
     }
@@ -232,14 +264,14 @@ impl File {
     /// FileBasicInformation) : voir `Volume::set_basic`.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn set_basic_information(&self, basic: &FileBasicInformation) -> Result<(), NtStatus> {
         self.volume.set_basic(&self.opened, basic).map(|_| ())
     }
 
     /// La place que `node` occupe : sa taille, au cluster supérieur.
     fn allocation_size(&self, node: &Node) -> u64 {
-        u64::from(node.size).next_multiple_of(u64::from(self.volume.cluster_bytes()))
+        node.size.next_multiple_of(u64::from(self.volume.cluster_bytes()))
     }
 
     /// FILE_STANDARD_INFORMATION.
@@ -247,7 +279,7 @@ impl File {
         let node = self.node()?;
         Ok(FileStandardInformation {
             allocation_size: self.allocation_size(&node),
-            end_of_file: u64::from(node.size),
+            end_of_file: node.size,
             number_of_links: 1,
             delete_pending: 0,
             directory: u8::from(node.directory),
@@ -264,7 +296,7 @@ impl File {
             last_write_time: basic.last_write_time,
             change_time: basic.change_time,
             allocation_size: self.allocation_size(&node),
-            end_of_file: u64::from(node.size),
+            end_of_file: node.size,
             file_attributes: basic.file_attributes,
         })
     }
@@ -274,7 +306,7 @@ impl File {
     /// pour un répertoire.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn read(&self, offset: u64, out: &mut [u8]) -> Result<usize, NtStatus> {
         if self.opened.directory {
             return Err(STATUS_INVALID_DEVICE_REQUEST);
@@ -286,7 +318,7 @@ impl File {
     /// `STATUS_NOT_A_DIRECTORY` pour un fichier.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn list(&self) -> Result<Vec<String>, NtStatus> {
         self.volume.list(&self.opened)
     }
@@ -306,7 +338,7 @@ impl File {
     /// rien ; celles du volume.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn query_directory(
         &self,
         class: u32,
@@ -338,8 +370,8 @@ impl File {
             .iter()
             .filter(|listed| listed.offset >= resume)
             .map(|listed| {
-                let name: Vec<u16> = listed.name.encode_utf16().collect();
-                let short: Vec<u16> = listed.short_name.as_deref().unwrap_or("").encode_utf16().collect();
+                let name = listed.name.clone();
+                let short = listed.short_name.clone().unwrap_or_default();
                 (listed, name, short)
             })
             .filter(|(_, name, short)| {
@@ -355,8 +387,8 @@ impl File {
                 last_write_time: listed.last_write_time,
                 // FAT has no change time: the last write stands for it.
                 change_time: listed.last_write_time,
-                end_of_file: u64::from(listed.size),
-                allocation_size: u64::from(listed.size).next_multiple_of(cluster),
+                end_of_file: listed.size,
+                allocation_size: listed.size.next_multiple_of(cluster),
                 file_attributes: listed.attributes,
                 name,
                 short_name: short,
@@ -374,7 +406,7 @@ impl File {
     /// Le fichier en entier.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn read_all(&self) -> Result<Vec<u8>, NtStatus> {
         let mut bytes = vec![0u8; self.node()?.size as usize];
         if self.read(0, &mut bytes)? != bytes.len() {
@@ -387,7 +419,7 @@ impl File {
     /// grandit pour le tenir. Erreurs : celles de `Volume::write`.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn write(&self, offset: u64, data: &[u8]) -> Result<(), NtStatus> {
         self.volume.write(&self.opened, offset, data).map(|_| ())
     }
@@ -395,7 +427,7 @@ impl File {
     /// Fait atteindre le support à ce qui est écrit sur son volume.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn flush(&self) -> Result<(), NtStatus> {
         self.volume.flush()
     }
@@ -403,7 +435,7 @@ impl File {
     /// Donne au fichier la taille `size`.
     ///
     /// # IRQL
-    /// <= DISPATCH_LEVEL.
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
     pub fn set_size(&self, size: u32) -> Result<(), NtStatus> {
         self.volume.set_size(&self.opened, size).map(|_| ())
     }
@@ -463,7 +495,7 @@ pub fn check_disposition(disposition: u32, options: u32) -> Result<(), NtStatus>
 /// fichier en lecture seule.
 ///
 /// # IRQL
-/// <= DISPATCH_LEVEL.
+/// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
 pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMask) -> Result<u32, NtStatus> {
     check_disposition(disposition, options)?;
     if disposition == FILE_CREATE {
@@ -477,6 +509,10 @@ pub fn check_open(file: &File, disposition: u32, options: u32, granted: AccessMa
         return Err(STATUS_FILE_IS_A_DIRECTORY);
     }
     let writes = granted.intersects(AccessMask(FILE_WRITE_DATA | FILE_APPEND_DATA)) || overwrite;
+    let mutation = overwrite || granted.intersects(MUTATION_ACCESS);
+    if file.volume.is_read_only() && mutation {
+        return Err(abi::ntstatus::STATUS_MEDIA_WRITE_PROTECTED);
+    }
     if writes && file.node()?.attributes & FILE_ATTRIBUTE_READONLY != 0 {
         return Err(STATUS_ACCESS_DENIED);
     }

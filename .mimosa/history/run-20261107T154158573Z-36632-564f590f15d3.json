@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261107T154158573Z-36632-564f590f15d3",
+  "runStatus": "inconclusive",
+  "errors": [
+    "scan:kernel/hal/src/splash.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/fb.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/timer.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/display.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/gdi/syscolor.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/metrics.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:tests/native/desktop1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:tests/native/setup1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/io/src/install.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/src/partition.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+  ],
+  "target": ".",
+  "revision": "8d523929d8161159627f9c3e83069f6494cfeb47",
+  "diffHash": "26d1212fb6b0aaa28825132d675eebcbd6de9e602dfe842764927bb6cf411454",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-07T15:41:58.573Z",
+  "timing": {
+    "startedAt": "2026-11-07T15:41:55.816Z",
+    "completedAt": "2026-11-07T15:41:58.573Z",
+    "durationMs": 2757
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 0,
+    "bySeverity": {},
+    "byStatus": {}
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "scanner_failed": 12,
+      "project_check_failed": 12
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T154158573Z-36632-564f590f15d3.json"
+}

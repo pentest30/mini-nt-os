@@ -11,6 +11,10 @@ pub struct PartitionDevice<D> {
 }
 
 impl<D: BlockDevice> PartitionDevice<D> {
+    /// Capacity of this partition in device sectors.
+    pub fn sectors(&self) -> u64 {
+        self.sectors
+    }
     /// Checks a nonempty partition against its device's capacity.
     ///
     /// # IRQL

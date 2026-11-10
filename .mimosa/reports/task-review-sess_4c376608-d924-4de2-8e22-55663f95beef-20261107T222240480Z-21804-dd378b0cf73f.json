@@ -1,0 +1,518 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20261107T222240480Z-21804-dd378b0cf73f",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "scan",
+      "target": "kernel/win32k/src/startup.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/win32k/src/window.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/ntoskrnl/src/sys/atom.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/ntoskrnl/src/sys/mod.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/ntoskrnl/src/sys/process.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/ntoskrnl/src/sys/registry.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "kernel/ntoskrnl/src/sys/user.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/ntoskrnl/src/main.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/address_space.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/fault.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "agent-check",
+      "target": ".",
+      "reason": "stop_budget_exhausted: focused agent configuration check was not run before the gate budget"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": true,
+      "captured_files": 679,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 12
+    },
+    "change_tracking": {
+      "touched_observed": 1,
+      "touched_retained": 1,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 12,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 12,
+      "selected_files": 12,
+      "limit": 20,
+      "truncated": false
+    },
+    "scanning": {
+      "required_files": 10,
+      "scanned_files": 0,
+      "skipped_files": 0,
+      "failed_files": 10,
+      "project_checks_required": 1,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "scanner_failed": 10,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 11
+    },
+    "reasons": [
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/startup.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/window.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/atom.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/mod.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/process.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/registry.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/user.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/ntoskrnl/src/main.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/address_space.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/fault.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "stop_budget_exhausted",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "focused agent configuration check was not run before the gate budget",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/startup.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/win32k/src/window.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/atom.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/mod.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/process.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/registry.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "kernel/ntoskrnl/src/sys/user.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/ntoskrnl/src/main.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/address_space.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/fault.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "stop_budget_exhausted: focused agent configuration check was not run before the gate budget",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-11-07T22:22:40.480Z",
+  "session_id": "sess_4c376608-d924-4de2-8e22-55663f95beef",
+  "target": ".",
+  "revision": "ba206d090b67624a18846bafa5ade664bce6c839",
+  "rules_version": "unavailable",
+  "diff_hash": "01ea8f9fffc91a2c175d4bc202a0372f67728b342cae7e4eb8ea7aae55a2610e",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 11,
+    "changed_files": [
+      {
+        "file": ".claude/worktrees/vibrant-bell-a62f96/docs/passation.md",
+        "ranges": [
+          {
+            "start": 209,
+            "end": 223
+          }
+        ],
+        "before_hash": "b14a6f9b5fedc251a69a7a5f67be4eb27ee739ef64dc339b3cddef2181f3959f",
+        "after_hash": "847c478a796b11b3af599b22f94513c4301b8c00a23fbd2d1657bedb2bb86e5e"
+      },
+      {
+        "file": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/address_space.rs",
+        "ranges": [
+          {
+            "start": 509,
+            "end": 515
+          },
+          {
+            "start": 528,
+            "end": 529
+          },
+          {
+            "start": 532,
+            "end": 538
+          },
+          {
+            "start": 546,
+            "end": 546
+          },
+          {
+            "start": 566,
+            "end": 571
+          },
+          {
+            "start": 579,
+            "end": 579
+          },
+          {
+            "start": 657,
+            "end": 657
+          }
+        ],
+        "before_hash": "400556d29e590d55d3376a165e057c39733a1a9b008e73f4dee3abe59d5b2259",
+        "after_hash": "8f93543974659990a8ee9ef23d52cab344a20bc548702f39e5b4b8c13c6b40d4"
+      },
+      {
+        "file": ".claude/worktrees/vibrant-bell-a62f96/kernel/mm/src/fault.rs",
+        "ranges": [
+          {
+            "start": 146,
+            "end": 150
+          }
+        ],
+        "before_hash": "3f83abc296a09a5e87ac43a6f5b2998d142fa7579b59ef817bdc5da03c381a49",
+        "after_hash": "37a006c58f49da88d8e6c10782da6080ccc3c3f7ee050210bc335f1259e945a9"
+      },
+      {
+        "file": ".claude/worktrees/vibrant-bell-a62f96/kernel/ntoskrnl/src/main.rs",
+        "ranges": [
+          {
+            "start": 356,
+            "end": 356
+          },
+          {
+            "start": 1487,
+            "end": 1579
+          }
+        ],
+        "before_hash": "81613f82389a0dc0ff270d69f4c8ba04849f644784f03406011b238657160033",
+        "after_hash": "c7fa59b950e10fef52a4e9792e0a4eee347dc00dbe46a586d1597a8465031dfe"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/sys/atom.rs",
+        "ranges": [
+          {
+            "start": 109,
+            "end": 130
+          }
+        ],
+        "before_hash": "14187f157b36a2486b27d5e713821009d3d85f5f5eb81f84649fef66a844d065",
+        "after_hash": "6162b930204b297d4642cd570b84d336ec4ef3d4c9169df0a33a6b2adfdb7c0f"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/sys/mod.rs",
+        "ranges": [
+          {
+            "start": 165,
+            "end": 165
+          },
+          {
+            "start": 258,
+            "end": 258
+          },
+          {
+            "start": 260,
+            "end": 260
+          }
+        ],
+        "before_hash": "169e33687e7c3ac04fe285eee267ce0755b093323bc054cd5994624cc6422dfc",
+        "after_hash": "c2e71af9ad0ce33a43a2fcbeb4323d857372937d50574190c8bd2c0eda8d315a"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/sys/process.rs",
+        "ranges": [
+          {
+            "start": 449,
+            "end": 449
+          },
+          {
+            "start": 455,
+            "end": 459
+          },
+          {
+            "start": 461,
+            "end": 465
+          },
+          {
+            "start": 533,
+            "end": 537
+          }
+        ],
+        "before_hash": "81087057f1edca74743132358e612bd2c79e64fff7cc60836ad308baaf1a15c6",
+        "after_hash": "04e806ad2feaaa0541fdb225e68967b95078bd16ee415b53ccf42d8dc4dde7b4"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/sys/registry.rs",
+        "ranges": [
+          {
+            "start": 254,
+            "end": 264
+          }
+        ],
+        "before_hash": "ee8cf60fb4a31f1da71705a72db8d0879a597a411c1c4fc474e3eaddb87d17b8",
+        "after_hash": "fc7393af72893a0a2576b0044d6c60bc2b552a45ce255b724e0a88c2e83aefb9"
+      },
+      {
+        "file": "kernel/ntoskrnl/src/sys/user.rs",
+        "ranges": [
+          {
+            "start": 193,
+            "end": 211
+          }
+        ],
+        "before_hash": "7fc1df41adbef042d100b80bb12b8d8612380d4887deeddd6cb34524b7206932",
+        "after_hash": "9d6cd3862516cf4bb4a54125903c59cf67b418b2df4b4e01064a6543b806a190"
+      },
+      {
+        "file": "kernel/win32k/src/startup.rs",
+        "ranges": [
+          {
+            "start": 23,
+            "end": 23
+          },
+          {
+            "start": 94,
+            "end": 97
+          },
+          {
+            "start": 106,
+            "end": 109
+          },
+          {
+            "start": 152,
+            "end": 161
+          },
+          {
+            "start": 163,
+            "end": 201
+          },
+          {
+            "start": 204,
+            "end": 208
+          }
+        ],
+        "before_hash": "500c63ed2c690c45a585c662c93a91c92f04be2a284cf8a4ea76711efcf28eef",
+        "after_hash": "081daa9a23ec4fe43bdd1f464286c57f45f49e14c2a81739820a5f17a254c523"
+      },
+      {
+        "file": "kernel/win32k/src/window.rs",
+        "ranges": [
+          {
+            "start": 1095,
+            "end": 1103
+          }
+        ],
+        "before_hash": "c264f8581711c15df0d42c13f28de4a6e3107d7eabef97214580421a4a36b7fb",
+        "after_hash": "1e23d25ad55f1a66a071c2a4f1515b811087374c5cd29b9cac845bbe997ef25e"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-11-07T22:22:36.156Z",
+    "completed_at": "2026-11-07T22:22:40.480Z",
+    "duration_ms": 4324,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 4324,
+    "peakMemoryBytes": 108314624,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 0,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T222240480Z-21804-dd378b0cf73f.json",
+    "latest_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef.json",
+    "history_summary": ".mimosa/history/run-20261107T222240480Z-21804-dd378b0cf73f.json"
+  }
+}

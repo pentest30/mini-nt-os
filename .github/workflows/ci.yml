@@ -112,6 +112,11 @@ jobs:
             args: --scenario native
             userland: true
             native: true
+          - name: NTFS read-only data volume, native file syscalls (M9)
+            args: --scenario ntfs-readonly
+            userland: true
+            native: true
+            ntfs: true
           - name: ReactOS smss.exe under the probe, where it stops (M4)
             args: --scenario smss
             userland: true
@@ -157,6 +162,9 @@ jobs:
         if: matrix.fsck
         run: sudo apt-get install -y -qq dosfstools && (command -v fsck.vfat || ls /usr/sbin/fsck.vfat)
       # Scenarios of tests/boot/; the firmware is found in /usr/share/OVMF.
+      - name: Install independent NTFS fixture tools
+        if: matrix.ntfs
+        run: sudo apt-get install -y -qq ntfs-3g
       - name: Boot and check serial markers
         run: cargo xtask test --boot ${{ matrix.args }}
       - name: Upload serial and QEMU logs

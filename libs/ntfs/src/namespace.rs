@@ -119,34 +119,50 @@ impl<D: ReadAt> Volume<D> {
             if name.len() > 255 {
                 return Err(Error::Unsupported("component length"));
             }
-            self.load_upcase()?;
-            let entries = self.read_directory(parent.record)?;
-            let table = self.upcase.as_ref().ok_or(Error::Invalid("UpCase missing"))?;
-            let mut found: Option<DirectoryEntry> = None;
-            for entry in entries {
-                if entry.name.len() != name.len()
-                    || !entry.name.iter().zip(&name).all(|(&a, &b)| table[a as usize] == table[b as usize])
-                {
-                    continue;
-                }
-                if let Some(previous) = &found {
-                    if previous.reference != entry.reference || previous.is_directory != entry.is_directory {
-                        return Err(Error::Unsupported("ambiguous case-insensitive name"));
-                    }
-                }
-                found = Some(entry);
-            }
-            let entry = found.ok_or(Error::NotFound)?;
-            if self.referenced_record(entry.reference)?.is_directory() != entry.is_directory {
-                return Err(Error::Invalid("indexed directory flag"));
-            }
-            stack.push(entry.reference);
+            stack.push(self.lookup_child(parent, component)?);
         }
         let result = *stack.last().ok_or(Error::Invalid("path stack"))?;
         if path.ends_with(['/', '\\']) && !self.referenced_record(result)?.is_directory() {
             return Err(Error::Invalid("not a directory"));
         }
         Ok(result)
+    }
+
+    /// Resolve one child using this volume's $UpCase and sequenced references.
+    /// The component must contain no separator, NUL, ADS delimiter or dot path.
+    pub fn lookup_child(&mut self, parent: FileReference, component: &str) -> Result<FileReference, Error> {
+        if component.is_empty() || component == "." || component == ".." || component.contains(['/', '\\', '\0', ':']) {
+            return Err(Error::Unsupported("component syntax"));
+        }
+        if !self.referenced_record(parent)?.is_directory() {
+            return Err(Error::Invalid("not a directory"));
+        }
+        let name: Vec<u16> = component.encode_utf16().collect();
+        if name.len() > 255 {
+            return Err(Error::Unsupported("component length"));
+        }
+        self.load_upcase()?;
+        let entries = self.read_directory(parent.record)?;
+        let table = self.upcase.as_ref().ok_or(Error::Invalid("UpCase missing"))?;
+        let mut found: Option<DirectoryEntry> = None;
+        for entry in entries {
+            if entry.name.len() != name.len()
+                || !entry.name.iter().zip(&name).all(|(&a, &b)| table[a as usize] == table[b as usize])
+            {
+                continue;
+            }
+            if let Some(previous) = &found {
+                if previous.reference != entry.reference || previous.is_directory != entry.is_directory {
+                    return Err(Error::Unsupported("ambiguous case-insensitive name"));
+                }
+            }
+            found = Some(entry);
+        }
+        let entry = found.ok_or(Error::NotFound)?;
+        if self.referenced_record(entry.reference)?.is_directory() != entry.is_directory {
+            return Err(Error::Invalid("indexed directory flag"));
+        }
+        Ok(entry.reference)
     }
 
     /// Read a file by path, with the same EOF and error semantics as read_file.

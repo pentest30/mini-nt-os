@@ -18,6 +18,33 @@
   `user32`), sur AMD et Intel, et les scénarios GUI. Pas encore : CreateCursor et CreateIconIndirect (GetObject,
   CopyImage, GetDIBits), GetIconInfo, DrawIconEx (l'icône du titre), les curseurs animés, ShowCursor, ClipCursor,
   GetClassLong(GCLP_HCURSOR).
+- **M5, le dernier critère : les apitests de ReactOS** (`claude/apps-wave`,
+  [`compat/m5-rostests.md`](compat/m5-rostests.md)). Le banc est fait : `cargo xtask rostests-fetch` (l'arbre
+  0.4.16 par Git, dans `third_party/reactos-0.4.16/`), `xtask/src/rostests.rs` (winnt.h généré, SAL neutralisée,
+  PSEH ; un pilote par module, commande initiale de `smss`, qui prend `WinSta0\Default` comme winlogon et lance
+  chaque test détaché dans un coureur, sa sortie relayée par `DbgPrint`), scénarios `rostests` (ntdll) et
+  `rostests-kernel32`, avec `interactive` (sans lui, la sonde termine `smss` 10 s après son début). Jugement :
+  `apitests-floor` (un plancher qui ne baisse pas : le scénario échoue en dessous) et le seuil du M5 (50 %,
+  rapporté). Sans l'arbre, les scénarios sont sautés, et `cargo xtask test` ne s'arrête plus. Le banc a mis au
+  jour un manque de Ps : la fin d'un thread n'était pas annoncée (`LPC_CLIENT_DIED`), `csrss` gardait ses clients
+  morts et la table des 64 threads de Ke se remplissait ; c'est fait (`ps::exit::notify_client_died`,
+  `lpc::request_port`, `process_settings_self_test`). Le banc compile tests et PSEH avec les options i386 de
+  ReactOS (`-fno-omit-frame-pointer`… : sans elles, chaque `__except` qui attrapait tuait le test,
+  STATUS_UNWIND). **Mesure du 2026-11-10 : ntdll 33/84, kernel32 11/29, 39 % ; le seuil de 50 % n'est pas
+  atteint** (il manque 9 tests ntdll et 4 kernel32), le critère reste décoché ; ce sont les planchers. La suite,
+  vers le seuil : les tests qui meurent ou pendent, puis les assertions une à une (listes dans le document), en
+  montant le plancher à chaque commit. Contournement à suivre : le pilote prend lui-même `WinSta0\Default` ; la
+  station par défaut d'un chemin de bureau qui n'en nomme pas reste à faire dans `win32k::startup`
+  (IntResolveDesktop). Aussi : `docs/compat/syscalls.md` régénéré et les tests de `win32k::defwnd` recompilés
+  (`cargo xtask lint` échouait). Les scénarios `cmd` et `installer-finish` échouaient sur la branche : `main` les a
+  réparés (a05f7dd, et la sonde qui compte la dernière étape de l'installateur), et la fusion e359af6 les apporte ;
+  `installer-finish` repasse sur AMD et Intel après elle.
+
+- **Revue NTFS : sérialisation ATA** (`feature/m9-ntfs-kernel-readonly`, PR #112) : lecteurs NTFS indépendants mais canal PIO partagé ; `hal::ata` possède désormais un KSpinLock par canal primaire/secondaire, commun aux copies de disque et au maître/esclave. IDENTIFY, lecture, écriture et FLUSH le tiennent de la sélection jusqu’à la fin de commande ; préemption différée à DISPATCH_LEVEL, aucune allocation de système de fichiers sous ce verrou. Ordre : volume éventuel puis canal. Test hôte de transactions concurrentes simulées, indépendance des canaux et libération après erreur. NTFS1 ouvre deux handles depuis deux threads, vérifie 256 lectures à offsets différents (2 Mio) et exige une progression entrelacée. Contrôle par mutation : retirer uniquement le garde de read_sectors fait échouer QEMU AMD sur `[ntfs] FAIL: concurrent read status` ; garde restauré. Lint et 959 tests hôte passent (4 ignorés) ; gpt-persistence passe, fsck.vfat propre. Relance finale NTFS réussie : AMD 14,3 s, Intel 14,0 s ; progression entrelacée des lecteurs vérifiée et SHA-256 du disque inchangé.
+
+- **Synchronisation PR #112 / main `4af4787` (PR #116)** : conflit de passation résolu en conservant les notes NTFS/ATA et les notes d’envoi de tampons entre threads. Aucun conflit de code. Lint propre et 961 tests hôte réussis (4 ignorés).
+
+- **M9 NTFS, montage noyau en lecture seule** (`feature/m9-ntfs-kernel-readonly`, depuis main `738b823`, synchronisée avec `11a3464`) : backend NTFS d'Io derrière Volume/File ; identification sur partition bornée, disque de données D: sans déplacer C:/SystemRoot du FAT. Lecture, chemins $UpCase, énumération et informations du volume ; mutations refusées avant toute écriture. Tailles de fichiers et compteurs de clusters en 64 bits. Un lecteur indépendant par opération évite de tenir un spinlock de volume pendant les allocations et E/S NTFS (PASSIVE_LEVEL). Les records internes 0..15 ne sont pas énumérés comme fichiers utilisateur. Tests Io/NTFS et test d'adaptateur sur image mkntfs passent, avec compteur de writes/flush à zéro. Scénario ntfs-readonly : appels système natifs sur une vraie image mkntfs/GPT, QEMU AMD 13,8 s et Intel 13,3 s après synchronisation ; contenu, Unicode, EOF, informations, énumération et refus des mutations vérifiés, SHA-256 du disque inchangé. PR #112. Revue corrigée : unités UTF-16 brutes conservées jusqu’à NtQueryDirectoryFile, y compris surrogate isolé ; GENERIC_READ/MAXIMUM_ALLOWED ouvrent en lecture, droits de mutation retirés avant insertion du handle, écritures refusées par STATUS_ACCESS_DENIED. Tests sur image et programme natif couvrent les deux cas. Lint propre, 958 tests hôte réussis après synchronisation avec main (4 ignorés), tests réels ntfs-3g explicitement exécutés et réussis. QEMU AMD/Intel passent après correction ; gpt-persistence passe en 22,1 s avec fsck.vfat propre. Les interdictions de fallback FAT des scénarios suivent le nouveau message de montage. Limite restante : ouverture par chemin d’un nom avec surrogate isolé non prise en charge par le gestionnaire d’objets UTF-8 (énumération sans perte fonctionnelle).
 
 - **Un tampon du noyau envoyé à la fenêtre d'un autre thread** (`claude/winlogon-sendmessage` repris sur main
   `11a3464`, après la destruction de la PR #114 ; M5 étape 9, [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 26) :
@@ -891,8 +918,9 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      `fc`, `xcopy`, `attrib`) et un scénario qui les enchaîne par des tubes et des redirections ; `del`, `ren`, `md`,
      `rd` (suppression et renommage d'Io) ; plus tard `format` et `chkdsk` (`fmifs.dll`, `ufat.dll` : un volume
      ouvert comme périphérique, les IRP) ; les icônes de `consrv`, le défilement et les barres de
-     défilement de la console (SetTimer et DestroyWindow sont faits) ; le dernier critère du M5 : les `rostests`
-     `ntdll` et `kernel32` ;
+     défilement de la console (SetTimer et DestroyWindow sont faits) ; le dernier critère du M5, les `rostests`
+     `ntdll` et `kernel32` : le banc est fait et mesure 39 % pour un seuil de 50 %
+     ([`compat/m5-rostests.md`](compat/m5-rostests.md)) ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) passe par NPFS, les tubes
      nommés d'Io (faits : étape 24 de `compat/m5-csrss.md`), puis `services.exe`, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow (fait),

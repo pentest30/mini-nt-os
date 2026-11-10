@@ -1,0 +1,99 @@
+[package]
+name    = "ntoskrnl"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "ntoskrnl"
+path = "src/main.rs"
+# no_std binary with its own panic handler: it cannot be linked into the
+# std test harness, and it has no unit tests (they live in the library crates).
+test  = false
+bench = false
+
+[features]
+# Trace Win32 syscalls on the serial port at dispatch. Debugging only:
+# unconditional logging on the syscall hot path is not allowed (06 §5).
+trace-syscalls = []
+# Overflow the boot thread's kernel stack right after the switch to guarded
+# stacks: the boot must end on the STOP screen, not a triple fault (M0).
+test-stack-overflow = []
+# Two kernel threads exchange 10 000 round trips through two events, after
+# the boot self-tests (M1 exit criterion, scenario tests/boot/ke-events).
+test-ke-events = []
+# Four kernel threads compute in floating point in parallel and must get the
+# host's results (M1 exit criterion, scenario tests/boot/fpu).
+test-fpu = []
+# Fails an assertion two calls deep after the boot self-tests: the boot must
+# end on the STOP screen of KeBugCheckEx, with the panic message and a
+# symbolized call stack (M1, scenario tests/boot/bugcheck).
+test-bugcheck = []
+# A priority-9 thread spins while a priority-4 one is ready: the balance set
+# manager must give the starved thread the processor after about 4 s (M1,
+# boosts; scenario tests/boot/ke-starvation).
+test-ke-starvation = []
+# Touches a committed user page at DISPATCH_LEVEL after the boot self-tests:
+# the boot must end on IRQL_NOT_LESS_OR_EQUAL (M2, demand paging; scenario
+# tests/boot/page-fault-irql).
+test-page-fault-irql = []
+# Reads a reserved user page in kernel mode after the boot self-tests: the boot
+# must end on KMODE_EXCEPTION_NOT_HANDLED, STATUS_ACCESS_VIOLATION (M2, demand
+# paging; scenario tests/boot/page-fault-access-violation).
+test-page-fault-access-violation = []
+# A user-mode process makes itself critical (ProcessBreakOnTermination) and
+# terminates itself after the boot self-tests: the boot must end on
+# CRITICAL_OBJECT_TERMINATION (M5; scenario tests/boot/critical-process).
+test-critical-process = []
+# The same with a critical thread (ThreadBreakOnTermination) in a process
+# that is not: the thread's end stops the system (M5; scenario
+# tests/boot/critical-thread).
+test-critical-thread = []
+# Starts ReactOS's smss.exe under the system DLL after the S1 programs and
+# logs the system services it calls and how it ends (M4 discovery probe;
+# scenario tests/boot/smss, which needs the userland).
+test-smss = []
+# Writes files on C:, the ATA system disk, and resets the machine; the next
+# boot reads them back (M4, exit criterion 3; scenario tests/boot/persistence,
+# two boots on the same disk image).
+test-persistence = []
+# Exercises the installer engine's prepare on the target disk: the token
+# refusals, the GPT write and its reread, the not-blank refusal (ADR-022,
+# installer engine lot 2; scenario tests/boot/installer-prepare). Gated so
+# that the other scenarios keep the target blank for the UI's own prepare.
+test-install = []
+# After the installer engine's self-test has installed the target disk, resets
+# the machine: the next boot starts from that disk alone (scenario
+# tests/boot/installed-boot, `reboot = target`).
+test-install-reboot = ["test-install"]
+# Changes the display mode at runtime through the Bochs DISPI interface of
+# the standard VGA (1024x768 to 1280x1024) and repaints the desktop (M6;
+# scenario tests/boot/resolution).
+test-resolution = []
+# A person drives the system (`cargo xtask image`, VirtualBox), not a boot
+# scenario: the native-program probe (`test-smss`) waits for its program with
+# no deadline, instead of ending it 10 s after its last key. An installation
+# copies for minutes over PIO; the deadline killed the installer mid-copy.
+interactive = []
+# Timer ISR heartbeat on the serial port (hal), to tell a hang from a crawl.
+heartbeat = ["hal/heartbeat"]
+
+[dependencies]
+abi              = { path = "../../abi" }
+hal              = { path = "../hal" }
+ke               = { path = "../ke" }
+mm               = { path = "../mm" }
+pe               = { path = "../../libs/pe", features = ["builder"] }
+ob               = { path = "../ob" }
+cm               = { path = "../cm" }
+ex               = { path = "../ex" }
+lpc              = { path = "../lpc" }
+se               = { path = "../se" }
+win32k           = { path = "../win32k" }
+gopfb            = { path = "../../drivers/video/gopfb" }
+i8042            = { path = "../../drivers/input/i8042" }
+vboxmouse        = { path = "../../drivers/input/vboxmouse" }
+regf             = { path = "../../libs/regf", features = ["builder"] }
+ps               = { path = "../ps" }
+io-manager       = { path = "../io" }
+x86_64           = { workspace = true }
+log              = { workspace = true }

@@ -1,0 +1,100 @@
+use crate::stream::Stream;
+use crate::{Error, Geometry, ReadAt, Record};
+use alloc::vec;
+
+/// A read-only NTFS volume. Owns its partition reader and the validated $MFT
+/// mapping. Files can be addressed by MFT record number or a root-relative
+/// path. Directory indexes and the volume-specific $UpCase table are validated.
+pub struct Volume<D> {
+    pub(crate) device: D,
+    pub(crate) geometry: Geometry,
+    mft: Stream,
+    pub(crate) upcase: Option<alloc::vec::Vec<u16>>,
+}
+
+impl<D: ReadAt> Volume<D> {
+    /// Bootstrap $MFT from its first FILE record and progressively reachable
+    /// DATA extensions. The attribute list must be fully mapped in the base.
+    /// Unreachable dependencies and mirror recovery are not supported.
+    pub fn open(mut device: D) -> Result<Self, Error> {
+        let geometry = Geometry::read(&mut device)?;
+        let mut first = vec![0; geometry.record_size as usize];
+        device.read_exact_at(geometry.mft_cluster * u64::from(geometry.cluster_size), &mut first)?;
+        let record = Record::parse(first)?;
+        if record.base_reference() != 0 || record.is_directory() {
+            return Err(Error::Invalid("MFT stream"));
+        }
+        let mft = crate::mft::bootstrap(&mut device, &record, geometry)?;
+        if matches!(mft, Stream::Resident(_))
+            || !mft.fully_initialized()
+            || mft.len() < u64::from(geometry.record_size)
+            || mft.len() % u64::from(geometry.record_size) != 0
+        {
+            return Err(Error::Invalid("MFT stream"));
+        }
+        let mut volume = Self { device, geometry, mft, upcase: None };
+        // Require the mapping to point back to the very record used to bootstrap it.
+        let mapped = volume.record(0)?;
+        if mapped.raw() != record.raw() {
+            return Err(Error::Invalid("MFT bootstrap mapping"));
+        }
+        Ok(volume)
+    }
+
+    /// Validated boot geometry.
+    pub fn geometry(&self) -> Geometry {
+        self.geometry
+    }
+
+    /// Number of record slots in the initialized MFT (including unused ones).
+    pub fn record_count(&self) -> u64 {
+        self.mft.len() / u64::from(self.geometry.record_size)
+    }
+
+    /// Read a base FILE record by number. Unused slots return NotFound.
+    pub fn record(&mut self, number: u64) -> Result<Record, Error> {
+        let record = self.raw_record(number)?;
+        if record.base_reference() != 0 {
+            return Err(Error::Unsupported("extension FILE record"));
+        }
+        Ok(record)
+    }
+
+    pub(crate) fn raw_record(&mut self, number: u64) -> Result<Record, Error> {
+        if number >= self.record_count() {
+            return Err(Error::NotFound);
+        }
+        let mut data = vec![0; self.geometry.record_size as usize];
+        let offset = number.checked_mul(u64::from(self.geometry.record_size)).ok_or(Error::Bounds)?;
+        if self.mft.read(&mut self.device, offset, &mut data)? != data.len() {
+            return Err(Error::Bounds);
+        }
+        Record::parse(data)
+    }
+
+    /// Size of the unnamed DATA stream of a regular file.
+    pub fn file_size(&mut self, number: u64) -> Result<u64, Error> {
+        Ok(self.file_stream(number)?.len())
+    }
+
+    /// Read a regular file's unnamed DATA stream at a byte offset. Returns the
+    /// number copied, zero at EOF. Bytes beyond that count remain untouched.
+    /// Errors may leave a partially filled buffer; callers must discard it.
+    pub fn read_file(&mut self, number: u64, offset: u64, out: &mut [u8]) -> Result<usize, Error> {
+        let stream = self.file_stream(number)?;
+        stream.read(&mut self.device, offset, out)
+    }
+
+    /// Return the underlying device, without performing any writes.
+    pub fn into_inner(self) -> D {
+        self.device
+    }
+
+    pub(crate) fn file_stream(&mut self, number: u64) -> Result<Stream, Error> {
+        let record = self.record(number)?;
+        if record.is_directory() {
+            return Err(Error::Unsupported("directory data"));
+        }
+        self.stream(number, 0x80, &[])?.ok_or(Error::NotFound)
+    }
+}

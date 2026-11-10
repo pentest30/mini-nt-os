@@ -1,0 +1,1040 @@
+{
+  "schema_version": "mimosa-task-review/v2",
+  "run_id": "20261109T151839352Z-31992-d0c8217876fc",
+  "run_status": "inconclusive",
+  "errors": [
+    {
+      "stage": "candidate-select",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/port.rs",
+      "reason": "candidate_limit_exceeded: 22 changed reviewable file(s) were not scanned because the limit is 20"
+    },
+    {
+      "stage": "baseline-read",
+      "target": "target/xtask/rostests/kernel32-testlist.c",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "baseline-read",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs",
+      "reason": "baseline_snapshot_unreadable: file is missing from task baseline"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/src/rostests.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "xtask/rostests-src/testmain.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "target/xtask/rostests/kernel32-testlist.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": "target/xtask/rostests/testmain.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/native.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/userland.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/logon.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/lib.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/ethread.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/lib.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/main.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/userland.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/file.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/locale.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/mod.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "scan",
+      "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs",
+      "reason": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT"
+    },
+    {
+      "stage": "agent-check",
+      "target": ".",
+      "reason": "stop_budget_exhausted: focused agent configuration check was not run before the gate budget"
+    }
+  ],
+  "coverage": {
+    "schema_version": "mimosa-hook-coverage/v1",
+    "status": "partial",
+    "scope": "hook_observed_diff",
+    "baseline": {
+      "complete": true,
+      "captured_files": 3747,
+      "candidate_limit": 5000,
+      "truncated": false,
+      "enumeration_error_count": 0,
+      "snapshot_error_count": 0,
+      "compensated_target_count": 32
+    },
+    "change_tracking": {
+      "touched_observed": 2,
+      "touched_retained": 2,
+      "truncated": false,
+      "bash_mutation": true,
+      "bash_discovered": 42,
+      "bash_discovery_limit": 80,
+      "bash_discovery_truncated": false
+    },
+    "candidates": {
+      "eligible_files": 42,
+      "selected_files": 20,
+      "limit": 20,
+      "truncated": true
+    },
+    "scanning": {
+      "required_files": 19,
+      "scanned_files": 0,
+      "skipped_files": 0,
+      "failed_files": 19,
+      "project_checks_required": 1,
+      "project_checks_completed": 0
+    },
+    "notification": {
+      "eligible_findings": 0,
+      "detailed_findings": 0,
+      "detail_limit": 3,
+      "truncated": false
+    },
+    "reason_counts": {
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 5,
+      "scanner_failed": 19,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 26
+    },
+    "reasons": [
+      {
+        "code": "candidate_limit_exceeded",
+        "stage": "candidate-select",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/port.rs",
+        "detail": "22 changed reviewable file(s) were not scanned because the limit is 20",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs",
+        "detail": "file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/rostests.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testmain.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/testmain.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/native.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/userland.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/logon.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/lib.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/ethread.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/lib.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/main.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/userland.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/file.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/locale.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/mod.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "stop_budget_exhausted",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "focused agent configuration check was not run before the gate budget",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "candidate-select",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/port.rs",
+        "detail": "candidate_limit_exceeded: 22 changed reviewable file(s) were not scanned because the limit is 20",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/rostests.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testmain.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/testmain.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/native.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/userland.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/logon.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/lib.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/ethread.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/lib.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/main.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/userland.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/file.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/locale.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/mod.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affects_completion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "stop_budget_exhausted: focused agent configuration check was not run before the gate budget",
+        "affects_completion": true
+      }
+    ],
+    "reasons_truncated": false
+  },
+  "generated_at": "2026-11-09T15:18:39.352Z",
+  "session_id": "sess_4c376608-d924-4de2-8e22-55663f95beef",
+  "target": ".",
+  "revision": "39a5b463b2671cbd4a6cbf20097aaf09d0b9533c",
+  "rules_version": "unavailable",
+  "diff_hash": "a6b0ce0a13e22c7850316b1a1b017b2a5589ddcc905a2e04e4b9d334454e71b9",
+  "diff": {
+    "algorithm": "sha256",
+    "changed_file_count": 20,
+    "changed_files": [
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/CLAUDE.md",
+        "ranges": [
+          {
+            "start": 232,
+            "end": 234
+          },
+          {
+            "start": 317,
+            "end": 331
+          }
+        ],
+        "before_hash": "36328281459732d092e93e94cdfe4fc1206ac15809c2fdb365696fe92b38e5d8",
+        "after_hash": "5779d17e086a8ea4702b8e050fed23d402d43f06b8390dcb0184f8326afacc84"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/main.rs",
+        "ranges": [
+          {
+            "start": 19,
+            "end": 19
+          },
+          {
+            "start": 51,
+            "end": 63
+          },
+          {
+            "start": 355,
+            "end": 363
+          },
+          {
+            "start": 456,
+            "end": 456
+          },
+          {
+            "start": 9759,
+            "end": 9759
+          },
+          {
+            "start": 9873,
+            "end": 9873
+          },
+          {
+            "start": 9888,
+            "end": 9888
+          },
+          {
+            "start": 9890,
+            "end": 9893
+          },
+          {
+            "start": 10434,
+            "end": 10434
+          }
+        ],
+        "before_hash": "dc4f9e3558fb1b5f6c4642719e69b221a197a7f916e9aac43482999ea511503e",
+        "after_hash": "a865499cdb711e984ff8429c820923031a7d950b3f689e7813a386722f6ee2f5"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/srm.rs",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 196
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "ef4dff17c0f809c244463c8e6f456a24190f14404e9fb3b9af5c5f2882e4bb14"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/file.rs",
+        "ranges": [
+          {
+            "start": 19,
+            "end": 21
+          },
+          {
+            "start": 23,
+            "end": 25
+          },
+          {
+            "start": 51,
+            "end": 51
+          },
+          {
+            "start": 132,
+            "end": 134
+          },
+          {
+            "start": 223,
+            "end": 225
+          },
+          {
+            "start": 265,
+            "end": 266
+          },
+          {
+            "start": 272,
+            "end": 286
+          },
+          {
+            "start": 312,
+            "end": 313
+          },
+          {
+            "start": 342,
+            "end": 347
+          },
+          {
+            "start": 483,
+            "end": 484
+          },
+          {
+            "start": 486,
+            "end": 489
+          },
+          {
+            "start": 493,
+            "end": 494
+          },
+          {
+            "start": 496,
+            "end": 499
+          },
+          {
+            "start": 675,
+            "end": 676
+          },
+          {
+            "start": 690,
+            "end": 690
+          },
+          {
+            "start": 696,
+            "end": 709
+          }
+        ],
+        "before_hash": "4b5f1c2c035e816328f47bb4f73a15f705aed7b659f458179bec1c63daf0de42",
+        "after_hash": "8efb724176b44e8279af55a6e4b6483e26dcccdf2240bffb88f0b5891be5884f"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/locale.rs",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 4
+          },
+          {
+            "start": 6,
+            "end": 10
+          },
+          {
+            "start": 15,
+            "end": 50
+          },
+          {
+            "start": 59,
+            "end": 59
+          },
+          {
+            "start": 78,
+            "end": 115
+          }
+        ],
+        "before_hash": "3017bf2dbcbfde15be1a4f4f397ad3f735e048edef27453163b82b8363b53f53",
+        "after_hash": "f1ce8a2e4f1b9af0a011319569cfa9a855cef483d1265bcdd035817d366bd087"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/mod.rs",
+        "ranges": [
+          {
+            "start": 51,
+            "end": 51
+          },
+          {
+            "start": 110,
+            "end": 110
+          },
+          {
+            "start": 121,
+            "end": 121
+          },
+          {
+            "start": 142,
+            "end": 142
+          },
+          {
+            "start": 239,
+            "end": 239
+          },
+          {
+            "start": 313,
+            "end": 313
+          }
+        ],
+        "before_hash": "ebee56985f53bcbab86b7a650111a32edb5ebed3501864809bd7bcba99fa8535",
+        "after_hash": "3f8cbb75db07ab04c3e0f39a63f8339920039124b5db9fd1fb6329140d4f5d1e"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/sys/pipe.rs",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 483
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "c319e57983b125c2a46c1f693b7ed89eef2521bf5c5c04e53312db4540cc77a0"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ntoskrnl/src/userland.rs",
+        "ranges": [
+          {
+            "start": 21,
+            "end": 27
+          },
+          {
+            "start": 152,
+            "end": 157
+          },
+          {
+            "start": 161,
+            "end": 161
+          },
+          {
+            "start": 163,
+            "end": 175
+          }
+        ],
+        "before_hash": "09458afd6efde19d1b88d3d5f8655a910d6851141cfa063cf045db49d41958cd",
+        "after_hash": "ae7578ffcd1b96f2b73a966f9d30f34d297dd9dbb06b9d8412b96530e4e684a7"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/ethread.rs",
+        "ranges": [
+          {
+            "start": 615,
+            "end": 641
+          }
+        ],
+        "before_hash": "37bc989b69a44f69466defc0a8fd2716f582e89f6cdf51ada4abaab1da6f6db0",
+        "after_hash": "c0ab46e337e27555b566173aad3be700442e1c2796e952d2af086fefa59c06ff"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/ps/src/lib.rs",
+        "ranges": [
+          {
+            "start": 71,
+            "end": 73
+          }
+        ],
+        "before_hash": "29f53c75a3be8d5e551723c739da195cc7a13352bb6bfa0a01fb11a81ad5fa81",
+        "after_hash": "9da1223c2ca397de1bb05591a9dc2f70f2656fbf23a6160a757dc27a7c5a965c"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/lib.rs",
+        "ranges": [
+          {
+            "start": 12,
+            "end": 13
+          },
+          {
+            "start": 29,
+            "end": 29
+          }
+        ],
+        "before_hash": "b18201665500bb732a37f66354bffef60a8a72eb746f066487e632048f016ec1",
+        "after_hash": "748d94c1cf04cb99795be56d318d6e6a5eae7c0477e9529a507fda507d8e5507"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/se/src/logon.rs",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 160
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "59994a29052465fbdbf4cd4ea576415f72a199667ea0c765cb8fe93b31a59990"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/logon.rs",
+        "ranges": [
+          {
+            "start": 3,
+            "end": 4
+          },
+          {
+            "start": 7,
+            "end": 8
+          },
+          {
+            "start": 12,
+            "end": 12
+          },
+          {
+            "start": 25,
+            "end": 49
+          }
+        ],
+        "before_hash": "3bcb984db1c7dbc89d0984c5569685faf8797927dd95716f2a8e5e90bcb07977",
+        "after_hash": "41ce3865a942babf45491bd8dbcf8274976a80028571691acde4e39c65f78780"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/pipe1.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 344
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "1ad2b4869724c96347504d0a1c6b792753f55a7b7b99ddfcab0ce902f4cbe881"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/native.rs",
+        "ranges": [
+          {
+            "start": 69,
+            "end": 69
+          }
+        ],
+        "before_hash": "474ed43f95b3cfcdf69cf43ad90311cded7b1c6e6092d75311b3765f65625215",
+        "after_hash": "b6686f0be667bb37df879075d8da0df254cd1e8685896ea56842af2a7bb9beb1"
+      },
+      {
+        "file": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/userland.rs",
+        "ranges": [
+          {
+            "start": 71,
+            "end": 72
+          },
+          {
+            "start": 79,
+            "end": 84
+          }
+        ],
+        "before_hash": "8c56aa285408c040a84bdfd637876a55a9b3797771f62b80993d8fc6e79c32f9",
+        "after_hash": "166ca8c2af53f8aade507cdee93f19cd79b9f35119b951c72a53e826cadd4d5e"
+      },
+      {
+        "file": "target/xtask/rostests/kernel32-testlist.c",
+        "ranges": [
+          {
+            "start": 1,
+            "end": 8
+          }
+        ],
+        "before_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "after_hash": "d03fa465b1ea6e356b9304c13ee8c20a9814e13f409e7421c8d398f407cacb96"
+      },
+      {
+        "file": "target/xtask/rostests/testmain.c",
+        "ranges": [
+          {
+            "start": 22,
+            "end": 29
+          }
+        ],
+        "before_hash": "2f0f6ff72019b6e90dababb36dc3101fd3f8ac612beeefeb55994e141890db68",
+        "after_hash": "81c4b201520c1ee7642cbd26b8bae9c0b4b4e8e3cfa27a0580fe7e7e78837bca"
+      },
+      {
+        "file": "xtask/rostests-src/testmain.c",
+        "ranges": [
+          {
+            "start": 22,
+            "end": 29
+          }
+        ],
+        "before_hash": "2f0f6ff72019b6e90dababb36dc3101fd3f8ac612beeefeb55994e141890db68",
+        "after_hash": "81c4b201520c1ee7642cbd26b8bae9c0b4b4e8e3cfa27a0580fe7e7e78837bca"
+      },
+      {
+        "file": "xtask/src/rostests.rs",
+        "ranges": [
+          {
+            "start": 276,
+            "end": 280
+          },
+          {
+            "start": 308,
+            "end": 315
+          },
+          {
+            "start": 367,
+            "end": 369
+          },
+          {
+            "start": 377,
+            "end": 391
+          },
+          {
+            "start": 418,
+            "end": 421
+          },
+          {
+            "start": 423,
+            "end": 423
+          },
+          {
+            "start": 428,
+            "end": 433
+          },
+          {
+            "start": 441,
+            "end": 483
+          },
+          {
+            "start": 494,
+            "end": 511
+          },
+          {
+            "start": 514,
+            "end": 514
+          },
+          {
+            "start": 519,
+            "end": 519
+          }
+        ],
+        "before_hash": "3056755438e9ccc254d3bbbabd23e893d7a0bdd3bda312997e1900ef8effa351",
+        "after_hash": "1afeeaf4c15959655422d636ec946babe49e2998c31611f31922a885ae4da833"
+      }
+    ]
+  },
+  "timing": {
+    "started_at": "2026-11-09T15:18:30.418Z",
+    "completed_at": "2026-11-09T15:18:39.352Z",
+    "duration_ms": 8934,
+    "measurement": "hook_wall_clock"
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "model_calls": 0,
+    "measurement": "known-zero"
+  },
+  "telemetry": {
+    "schemaVersion": "mimosa-gate-telemetry/v1",
+    "profile": "gate",
+    "operation": "Stop",
+    "outcome": "partial/INCONCLUSIVE",
+    "latencyMs": 8934,
+    "peakMemoryBytes": 97538048,
+    "memoryMeasurement": "max-observed-process-rss",
+    "scannedFiles": 0,
+    "cache": {
+      "hits": 0,
+      "misses": 0,
+      "measurement": "not-applicable"
+    },
+    "denyCount": 0,
+    "tokens": {
+      "input": 0,
+      "output": 0,
+      "total": 0,
+      "modelCalls": 0,
+      "measurement": "known-zero"
+    }
+  },
+  "finding_count": 0,
+  "rewake_finding_count": 0,
+  "evidence_boundary": {
+    "scan": "candidate",
+    "static_fix_verification": "observed_static_only",
+    "runtime_verification": "not_performed"
+  },
+  "finding_events": [],
+  "findings": [],
+  "artifacts": {
+    "immutable_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261109T151839352Z-31992-d0c8217876fc.json",
+    "latest_report": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef.json",
+    "history_summary": ".mimosa/history/run-20261109T151839352Z-31992-d0c8217876fc.json"
+  }
+}

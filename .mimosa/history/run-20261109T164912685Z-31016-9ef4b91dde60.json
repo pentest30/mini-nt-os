@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261109T164912685Z-31016-9ef4b91dde60",
+  "runStatus": "inconclusive",
+  "errors": [
+    "candidate-select:.claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/defwnd.rs: candidate_limit_exceeded: 16 changed reviewable file(s) were not scanned because the limit is 20",
+    "baseline-read:target/xtask/rostests/kernel32-driver.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:target/xtask/rostests/ntdll-driver.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "scan:xtask/src/rostests.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/rostests-src/testmain.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/rostests-src/testdriver.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/rostests-src/runner-stubs.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:xtask/src/scenario.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:target/xtask/rostests/kernel32-driver.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:target/xtask/rostests/kernel32-testlist.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:target/xtask/rostests/ntdll-driver.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:target/xtask/rostests/ntdll-testlist.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/tests/native/concmd1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/sharp-davinci-37d7d9/tests/native/send1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "agent-check:.: stop_budget_exhausted: focused agent configuration check was not run before the gate budget"
+  ],
+  "target": ".",
+  "revision": "2fbe3f42301b2e9ec927f3751d45a027804a729f",
+  "diffHash": "925cd802afeda8b751aa628bbc3ddb23db2eeea70599e664962fcce8989f917a",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-09T16:49:12.685Z",
+  "timing": {
+    "startedAt": "2026-11-09T16:48:59.501Z",
+    "completedAt": "2026-11-09T16:49:12.685Z",
+    "durationMs": 13184
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 0,
+    "bySeverity": {},
+    "byStatus": {}
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 8,
+      "scanner_failed": 19,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 29
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261109T164912685Z-31016-9ef4b91dde60.json"
+}

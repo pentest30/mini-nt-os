@@ -1,0 +1,430 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20261109T164912685Z-31016-9ef4b91dde60",
+  "runId": "20261109T164912685Z-31016-9ef4b91dde60",
+  "runStatus": "inconclusive",
+  "coverage": {
+    "status": "partial",
+    "reasons": [
+      {
+        "code": "candidate_limit_exceeded",
+        "stage": "candidate-select",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/defwnd.rs",
+        "detail": "16 changed reviewable file(s) were not scanned because the limit is 20",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "baseline_snapshot_unreadable",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/rostests.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testmain.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testdriver.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/runner-stubs.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/main.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "xtask/src/scenario.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-testlist.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/main.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/concmd1.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "scanner_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/send1.c",
+        "detail": "spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "stop_budget_exhausted",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "focused agent configuration check was not run before the gate budget",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "candidate-select",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/kernel/win32k/src/defwnd.rs",
+        "detail": "candidate_limit_exceeded: 16 changed reviewable file(s) were not scanned because the limit is 20",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "baseline-read",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "baseline_snapshot_unreadable: file is missing from task baseline",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/rostests.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testmain.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/testdriver.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/rostests-src/runner-stubs.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/main.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "xtask/src/scenario.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-driver.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/kernel32-testlist.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-driver.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": "target/xtask/rostests/ntdll-testlist.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/main.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/src/rostests.rs",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/apitest-macros.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/kernel32-precomp.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/ntdll-precomp.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/psdk-winnt.h",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/xtask/rostests-src/testmain.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/concmd1.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "scan",
+        "target": ".claude/worktrees/sharp-davinci-37d7d9/tests/native/send1.c",
+        "detail": "scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+        "affectsCompletion": true
+      },
+      {
+        "code": "project_check_failed",
+        "stage": "agent-check",
+        "target": ".",
+        "detail": "stop_budget_exhausted: focused agent configuration check was not run before the gate budget",
+        "affectsCompletion": true
+      }
+    ]
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "2fbe3f42301b2e9ec927f3751d45a027804a729f",
+  "diffHash": "925cd802afeda8b751aa628bbc3ddb23db2eeea70599e664962fcce8989f917a",
+  "rulesVersion": "unavailable",
+  "sessionHash": "8a78eeb31a0aeb890d424ebfa44ad30cf8772c7c4f982b0df3f7cd662ee5adb1",
+  "reportRef": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261109T164912685Z-31016-9ef4b91dde60.json",
+  "events": [],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-11-09T16:49:13.272Z"
+}

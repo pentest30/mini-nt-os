@@ -9,9 +9,13 @@
 //! par commande, en LBA 28 bits (128 Gio) ; [`AtaDrive::flush`] vide le cache
 //! du disque (FLUSH CACHE).
 //!
-//! L'appelant sérialise les commandes d'un canal. Sous QEMU, le canal
-//! primaire tient l'ESP ; le disque système `C:` est le maître du canal
-//! secondaire.
+//! Chaque canal possède un KSpinLock partagé par tous ses disques et copies
+//! d'AtaDrive. Il couvre la sélection, la commande, les données et l'attente
+//! de fin, sans allocation ni rappel vers le système de fichiers. Le titulaire
+//! reste à DISPATCH_LEVEL : il ne peut être préempté au milieu d'une commande.
+//! Ordre des verrous : volume éventuel, puis canal ; jamais l'inverse.
+//! Sous QEMU, le canal primaire tient l'ESP ; le disque système `C:` est le
+//! maître du canal secondaire.
 //!
 //! [`probe`] et [`read_sector`] (le maître du canal secondaire) servent
 //! l'ancien chargeur (`io_manager::open_game_file`) : ne pas les étendre.
@@ -20,6 +24,8 @@
 //! sur un canal.
 
 use x86_64::instructions::port::Port;
+
+use crate::sync::KSpinLock;
 
 /// Un canal IDE : ses registres de commande, puis son registre de contrôle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,6 +36,21 @@ pub struct Channel {
 
 pub const PRIMARY: Channel = Channel { base: 0x1F0, control: 0x3F6 };
 pub const SECONDARY: Channel = Channel { base: 0x170, control: 0x376 };
+
+// Lock the hardware channel, not an AtaDrive/AtaDisk instance: master and
+// slave share registers, and copies/independent probes must share ownership.
+static PRIMARY_COMMAND: KSpinLock<()> = KSpinLock::new(());
+static SECONDARY_COMMAND: KSpinLock<()> = KSpinLock::new(());
+
+impl Channel {
+    fn command_lock(self) -> &'static KSpinLock<()> {
+        match self {
+            PRIMARY => &PRIMARY_COMMAND,
+            SECONDARY => &SECONDARY_COMMAND,
+            _ => unreachable!("only the two legacy IDE channels can be constructed"),
+        }
+    }
+}
 
 /// Un disque d'un canal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +101,7 @@ impl AtaDrive {
 
     fn outb(&self, offset: u16, value: u8) {
         // SAFETY: a register of this IDE channel, which only this driver
-        // programs; the caller serialises the commands of a channel.
+        // programs; every command entry point holds the shared channel lock.
         unsafe { Port::<u8>::new(self.channel.base + offset).write(value) }
     }
 
@@ -188,6 +209,7 @@ impl AtaDrive {
     /// # IRQL
     /// <= DISPATCH_LEVEL (attente active).
     pub fn identify(&self) -> Result<u64, AtaError> {
+        let _command = self.channel.command_lock().lock();
         // SAFETY: as in `outb`: the control register of this channel.
         unsafe { Port::<u8>::new(self.channel.control).write(CONTROL_NIEN) };
         self.select(0);
@@ -217,10 +239,12 @@ impl AtaDrive {
             // SAFETY: the drive offers the 256 words of its identity (DRQ).
             *word = unsafe { data.read() };
         }
+        self.wait_ready()?;
         Ok(identified_sectors(&words))
     }
 
     /// Lit `out.len() / 512` secteurs (256 au plus) depuis `lba`.
+    /// Le tampon doit résider en mémoire pendant toute la commande.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL (attente active).
@@ -228,16 +252,18 @@ impl AtaDrive {
         if out.is_empty() || !out.len().is_multiple_of(SECTOR) {
             return Err(AtaError::OutOfRange);
         }
+        let _command = self.channel.command_lock().lock();
         self.command(COMMAND_READ_SECTORS, lba, out.len() / SECTOR)?;
         for sector in out.chunks_exact_mut(SECTOR) {
             self.wait_data()?;
             self.read_data(sector);
         }
-        Ok(())
+        self.wait_ready().map(drop)
     }
 
     /// Écrit les `data.len() / 512` secteurs de `data` (256 au plus) depuis
     /// `lba`. Ils peuvent rester dans le cache du disque jusqu'à [`flush`].
+    /// Le tampon doit résider en mémoire pendant toute la commande.
     ///
     /// [`flush`]: Self::flush
     ///
@@ -247,6 +273,7 @@ impl AtaDrive {
         if data.is_empty() || !data.len().is_multiple_of(SECTOR) {
             return Err(AtaError::OutOfRange);
         }
+        let _command = self.channel.command_lock().lock();
         self.command(COMMAND_WRITE_SECTORS, lba, data.len() / SECTOR)?;
         for sector in data.chunks_exact(SECTOR) {
             self.wait_data()?;
@@ -260,6 +287,7 @@ impl AtaDrive {
     /// # IRQL
     /// <= DISPATCH_LEVEL (attente active).
     pub fn flush(&self) -> Result<(), AtaError> {
+        let _command = self.channel.command_lock().lock();
         // SAFETY: as in `outb`: the control register of this channel.
         unsafe { Port::<u8>::new(self.channel.control).write(CONTROL_NIEN) };
         self.select(0);
@@ -304,7 +332,46 @@ pub fn read_sector(lba: u32, buf: &mut [u8]) -> Result<(), u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::identified_sectors;
+    extern crate std;
+
+    use super::*;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::{sync::Barrier, thread};
+
+    #[test]
+    fn copied_drives_and_both_devices_share_one_channel_transaction() {
+        let master = AtaDrive::new(SECONDARY, false);
+        let copy = master;
+        let slave = AtaDrive::new(SECONDARY, true);
+        // Model the shared task-file register. Switching host threads between
+        // programming and consuming it must never change its command owner.
+        let register = AtomicUsize::new(0);
+        let start = Barrier::new(3);
+        thread::scope(|scope| {
+            for (id, drive) in [master, copy, slave].into_iter().enumerate() {
+                let (register, start) = (&register, &start);
+                scope.spawn(move || {
+                    start.wait();
+                    for _ in 0..256 {
+                        let _command = drive.channel.command_lock().lock();
+                        register.store(id + 1, Ordering::Relaxed);
+                        thread::yield_now();
+                        assert_eq!(register.load(Ordering::Relaxed), id + 1);
+                    }
+                });
+            }
+        });
+        // Independent channels do not exclude one another. Error returns
+        // release ownership too, so a following command can make progress.
+        let fail = || -> Result<(), AtaError> {
+            let _command = master.channel.command_lock().lock();
+            assert!(PRIMARY.command_lock().try_lock().is_some());
+            assert!(slave.channel.command_lock().try_lock().is_none());
+            Err(AtaError::Timeout(STATUS_BSY))
+        };
+        assert_eq!(fail(), Err(AtaError::Timeout(STATUS_BSY)));
+        assert!(copy.channel.command_lock().try_lock().is_some());
+    }
 
     #[test]
     fn the_identity_gives_the_size() {

@@ -1,14 +1,18 @@
 //! Les `rostests` de ReactOS (`modules/rostests/apitests`), le dernier
 //! critère du M5 : les apitests `ntdll` et `kernel32` compilés par
-//! [`build`] et lancés par le scénario `rostests`, leur bilan lu du port
-//! série et comparé au seuil du jalon ([`THRESHOLD`]).
+//! [`build`] et lancés par les scénarios `rostests` (ntdll) et
+//! `rostests-kernel32`, leur bilan lu du port série et jugé ([`judge`]) :
+//! sous le plancher du scénario (`apitests-floor`), il échoue ; le seuil du
+//! jalon ([`THRESHOLD`]) dit si le critère du M5 est atteint.
 //!
 //! La compilation est autonome : MinGW, contre une copie du PSDK de
-//! l'arbre 0.4.16 où `winnt.h` — que ReactOS génère au build — est
-//! remplacé par un shim (`rostests-src/psdk-winnt.h` : le préambule du
-//! template, le corps complet `xdk/winnt_old.h`). Le `main` d'un seul test
-//! de `wine/test.h` est écarté (`-Dmain=apitest_wine_main` sur testlist.c) ;
-//! `rostests-src/testmain.c` itère la liste et rend chaque résumé par
+//! l'arbre 0.4.16 où `winnt.h` — que ReactOS génère au build — est généré
+//! ici ([`generate_winnt`]). Chaque module donne deux programmes : le
+//! **coureur** (`NTAPIRUN.EXE`, `K32APIRUN.EXE` ; console, le `main` de
+//! `wine/test.h` : `argv[1]` est le test, son code de sortie ses échecs) et
+//! le **pilote** (`NTAPITST.EXE`, `K32APITST.EXE` ; `rostests-src/testdriver.c`),
+//! commande initiale de `smss` à la place de winlogon, qui lance chaque test
+//! de la liste dans un coureur et relaie sa sortie et son verdict par
 //! `DbgPrint`. Les tests qui ne compilent pas sont écartés, listés — le
 //! seuil du jalon s'entend sur ce qui tourne, et le nombre d'écartés fait
 //! partie du suivi.
@@ -33,18 +37,52 @@ pub fn parse_totals(line: &str) -> Option<(u32, u32, u32)> {
     Some((fields[0], fields[1], fields[2]))
 }
 
-/// Le premier outil qui manque pour le banc (celui des sondes natives —
-/// le même compilateur MinGW).
-pub fn missing_tool() -> Option<&'static str> {
-    native::missing_tool()
+/// Ce qui manque pour construire le banc : l'arbre des sources
+/// ([`fetch`]), ou le premier outil (celui des sondes natives, le même
+/// MinGW).
+pub fn missing(ws: &Workspace) -> Option<String> {
+    if !source_tree(ws).join("modules").is_dir() {
+        return Some("the ReactOS 0.4.16 tree (cargo xtask rostests-fetch)".into());
+    }
+    native::missing_tool().map(String::from)
 }
 
-/// Le seuil du jalon M5 : la part des tests qui passent (ok + todo — un
-/// todo réussi compte, un todo attendu ne bloque pas). Fixé au moment du
-/// jalon ; le suivi se fait dans le temps — la valeur ne baisse pas. Le
-/// scénario `rostests` le comparera au bilan ([`super::qemu`], quand le
-/// banc compile — voir l'en-tête du module).
+/// Le seuil du jalon M5 : la part des tests qui passent (un test passe
+/// quand son coureur rend 0 : aucun échec, todo compris). Fixé au moment du
+/// jalon ; le suivi se fait dans le temps, par le plancher de chaque
+/// scénario ([`judge`]).
 pub const THRESHOLD: f64 = 0.50;
+
+/// Le bilan d'un banc (`tests` lancés, `failures` en échec) jugé : `Err`
+/// sous `floor`, le plancher du scénario (les tests qui passaient à la
+/// dernière mesure : il ne baisse pas) ; sinon `Ok`. Le rapport dit aussi
+/// où en est le critère du M5 ([`THRESHOLD`]), et si le plancher peut
+/// monter.
+pub fn judge(tests: u32, failures: u32, floor: u32) -> std::result::Result<String, String> {
+    let passing = tests.saturating_sub(failures);
+    let share = f64::from(passing) / f64::from(tests.max(1));
+    let criterion = if share >= THRESHOLD { "critère du M5 atteint" } else { "sous le seuil du M5" };
+    let report = format!(
+        "apitests {passing}/{tests} passent ({:.0} %), plancher {floor}, seuil {:.0} % : {criterion}",
+        share * 100.0,
+        THRESHOLD * 100.0
+    );
+    if passing < floor {
+        Err(format!("{report} ; sous le plancher"))
+    } else if passing > floor {
+        Ok(format!("{report} ; le plancher peut monter à {passing}"))
+    } else {
+        Ok(report)
+    }
+}
+
+/// Les options de ReactOS pour tout code i386 compilé par GCC
+/// (`sdk/cmake/gcc.cmake`). PSEH2 en dépend : son `_SEH2GlobalUnwind` pousse
+/// quatre mots puis la trame cible, un opérande que GCC peut adresser par ESP
+/// quand il omet le pointeur de trame — RtlUnwind reçoit alors une mauvaise
+/// trame, ne la trouve pas dans la chaîne et lève STATUS_UNWIND : chaque test
+/// dont un `__except` attrapait une exception mourait ainsi (`c0000027`).
+const I386_FLAGS: [&str; 3] = ["-fno-optimize-sibling-calls", "-fno-omit-frame-pointer", "-mstackrealign"];
 
 /// Les modules du critère.
 const MODULES: [&str; 2] = ["ntdll", "kernel32"];
@@ -98,14 +136,13 @@ pub fn fetch(ws: &Workspace) -> Result<()> {
 
 /// `rostests-build` : les deux modules compilés en `NTAPITST.EXE` et
 /// `K32APITST.EXE` (sous-système WINDOWS : la commande initiale de smss
-/// n'accepte que lui), sur le disque de démarrage des scénarios. Rend les
-/// fichiers ajoutés au ramdisk (`HOST:FAT_PATH`).
+/// n'accepte que lui) et leurs coureurs, sur le disque de démarrage des
+/// scénarios. Rend les fichiers ajoutés au ramdisk (`HOST:FAT_PATH`), ou
+/// `None` s'il manque l'arbre ou un outil ([`missing`]) : le scénario est
+/// alors sauté.
 pub fn build(ws: &Workspace) -> Result<Option<Vec<String>>> {
     let tree = source_tree(ws);
-    if !tree.join("modules").is_dir() {
-        return Err("rostests : l'arbre 0.4.16 manque (cargo xtask rostests-fetch)".into());
-    }
-    if native::missing_tool().is_some() {
+    if missing(ws).is_some() {
         return Ok(None);
     }
     let out = ws.target.join("xtask").join("rostests");
@@ -121,9 +158,8 @@ pub fn build(ws: &Workspace) -> Result<Option<Vec<String>>> {
     Ok(Some(files))
 }
 
-/// La copie du SDK : psdk recopié avec le winnt.h **généré**, les
-/// précompils locaux, testmain.c — et les chemins d'inclusion qui vont
-/// avec.
+/// La copie du SDK : psdk recopié avec le winnt.h **généré**, les en-têtes
+/// qu'il inclut sans chemin, et le shim des macros de test.
 fn prepare_sdk(tree: &Path, out: &Path) -> Result<PathBuf> {
     let sdk = out.join("sdk");
     let psdk = sdk.join("include").join("psdk");
@@ -288,7 +324,8 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Un module : ses .c, son testlist.c, testmain.c — compilés puis liés.
+/// Un module : ses .c et son testlist réduit, liés en coureur ; la même
+/// liste, sans les fonctions, liée au pilote.
 fn compile_module(
     ws: &Workspace,
     tree: &Path,
@@ -364,6 +401,7 @@ fn compile_module(
         let mut command = Command::new("i686-w64-mingw32-gcc");
         command
             .args(["-c", "-O1", "-w", "-D_WIN32_WINNT=0x0501"])
+            .args(I386_FLAGS)
             .args(defines)
             .arg("--include")
             .arg("apitest-macros.h")
@@ -426,6 +464,7 @@ fn compile_module(
     let testlist_object = objs.join("testlist.o");
     run(Command::new("i686-w64-mingw32-gcc")
         .args(["-c", "-O1", "-w", "-D_WIN32_WINNT=0x0501"])
+        .args(I386_FLAGS)
         .args(defines)
         .arg(format!("-I{}", module_dir.display()))
         .args(&includes)
@@ -470,6 +509,7 @@ fn compile_module(
     let stubs_object = objs.join("runner-stubs.o");
     run(Command::new("i686-w64-mingw32-gcc")
         .args(["-c", "-O1", "-w"])
+        .args(I386_FLAGS)
         .arg(ws_shim("runner-stubs.c"))
         .arg("-o")
         .arg(&stubs_object))?;
@@ -490,6 +530,7 @@ fn compile_module(
     let driver_object = objs.join("driver.o");
     run(Command::new("i686-w64-mingw32-gcc")
         .args(["-c", "-O1", "-w"])
+        .args(I386_FLAGS)
         .arg(&driver_list)
         .arg("-o")
         .arg(&driver_object))?;
@@ -507,9 +548,11 @@ fn compile_module(
 /// La lib PSEH de ReactOS, compilée en statique (`libpseh.a`) : les tests
 /// s'en servent pour `__try`/`__except` sous MinGW.
 fn build_pseh(tree: &Path, native_libs: &Path) -> Result<()> {
+    // Refaite à chaque construction (quelques fichiers) : une copie d'avant
+    // ces options aurait gardé le défaut qu'elles corrigent.
     let lib = native_libs.join("libpseh.a");
     if lib.is_file() {
-        return Ok(());
+        fs::remove_file(&lib).map_err(|e| format!("{} : {e}", lib.display()))?;
     }
     let pseh = tree.join("sdk").join("lib").join("pseh");
     fs::create_dir_all(native_libs).map_err(|e| e.to_string())?;
@@ -533,6 +576,7 @@ fn build_pseh(tree: &Path, native_libs: &Path) -> Result<()> {
         let object = out.join(format!("{stem}.o"));
         run(Command::new("i686-w64-mingw32-gcc")
             .args(["-c", "-O2", "-w"])
+            .args(I386_FLAGS)
             .arg(format!("-I{}", pseh.join("include").display()))
             .arg(&source)
             .arg("-o")
@@ -551,4 +595,29 @@ fn run(command: &mut Command) -> Result<()> {
         .success()
         .then_some(())
         .ok_or_else(|| format!("{:?} a échoué", command.get_program()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_totals_line_only() {
+        let line = "[INFO] DbgPrint 28.48: [apitest] TOTALS: tests=84 failures=60 skipped=0";
+        assert_eq!(parse_totals(line), Some((84, 60, 0)));
+        assert_eq!(parse_totals("[INFO] DbgPrint 28.48: [apitest] NtReadFile: pass"), None);
+        assert_eq!(parse_totals("[apitest] TOTALS: tests=many"), None);
+    }
+
+    #[test]
+    fn a_bench_fails_below_its_floor_only() {
+        assert!(judge(84, 60, 25).is_err(), "24 pass, 25 did");
+        let report = judge(84, 59, 25).expect("25 pass, as before");
+        assert!(report.contains("25/84") && report.contains("sous le seuil du M5"), "{report}");
+        assert!(!report.contains("peut monter"), "{report}");
+        let report = judge(84, 40, 25).expect("more pass");
+        assert!(report.contains("critère du M5 atteint") && report.contains("peut monter à 44"), "{report}");
+        assert!(judge(0, 0, 0).is_ok(), "nothing compiled, nothing promised");
+        assert!(judge(10, 0, 11).is_err(), "fewer tests than the floor");
+    }
 }

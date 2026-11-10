@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261108T222548549Z-22992-8dd031d250e1",
+  "runStatus": "inconclusive",
+  "errors": [
+    "bash-discovery:.claude/worktrees/vibrant-bell-a62f96/kernel/ntoskrnl/src/sys/user.rs: bash_discovery_truncated: changed-file discovery exceeded 80 files",
+    "candidate-select:.claude/worktrees/vibrant-bell-a62f96/tests/native/gui1.c: candidate_limit_exceeded: 60 changed reviewable file(s) were not scanned because the limit is 20",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/job.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/tests/native/activate1.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/tests/native/dialog1.c: baseline_snapshot_unreadable: file is missing from task baseline",
+    "scan:kernel/win32k/src/menu.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/menu.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/defwnd.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/nonclient.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/paint.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/window.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/mod.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/mouse.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:abi/src/user.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/job.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/native.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/qemu.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/userland.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/tests/native/activate1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/tests/native/desktop1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/tests/native/dialog1.c: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "supply-chain-check:.: stop_budget_exhausted: focused supply-chain check was not run before the gate budget"
+  ],
+  "target": ".",
+  "revision": "d4d2231d6405cd6d8a7a3186ec0cb18ea9318e64",
+  "diffHash": "ba366a279de974e24a5900857504d64b86dd8e411976a510908acae78f45b3a6",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-08T22:25:48.549Z",
+  "timing": {
+    "startedAt": "2026-11-08T22:25:44.570Z",
+    "completedAt": "2026-11-08T22:25:48.549Z",
+    "durationMs": 3979
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 1,
+    "bySeverity": {
+      "high": 1
+    },
+    "byStatus": {
+      "blocked": 1
+    }
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "bash_discovery_truncated": 1,
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 3,
+      "scanner_failed": 18,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 24
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261108T222548549Z-22992-8dd031d250e1.json"
+}
