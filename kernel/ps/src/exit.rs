@@ -14,11 +14,15 @@
 //!   travail d'Ex) attend que chaque thread terminé ait quitté le
 //!   processeur, puis rend sa pile noyau et lâche l'objet thread ; à son
 //!   dernier pointeur, le thread Ke est libéré.
+//! - Les rappels de win32k ([`set_win32_callouts`]) : la fin d'un thread GUI
+//!   (PsW32ThreadCalloutExit), puis celle de son processus GUI s'il est le
+//!   dernier (PspW32ProcessCallout), avant que ses handles soient fermés et
+//!   son espace d'adresses rendu.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ffi::c_void;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_PROCESS_IS_TERMINATING, STATUS_THREAD_IS_TERMINATING};
 use hal::sync::{KSpinLock, Once};
@@ -117,6 +121,49 @@ pub fn wait_for_reaper() {
     reaper().idle.wait();
 }
 
+/// Ce qu'appelle la fin d'un thread GUI, puis celle d'un processus GUI
+/// ([`set_win32_callouts`]) ; 0 : rien.
+static WIN32_THREAD_EXIT: AtomicUsize = AtomicUsize::new(0);
+static WIN32_PROCESS_EXIT: AtomicUsize = AtomicUsize::new(0);
+
+/// PsEstablishWin32Callouts (comme) : `thread_exit` reçoit chaque thread qui
+/// se termine en ayant un `Win32Thread` (un thread GUI), `process_exit` chaque
+/// processus qui a un `Win32Process` quand il se termine (par son dernier
+/// thread, ou par NtTerminateProcess d'un processus sans thread), avant que
+/// ses handles soient fermés et son espace d'adresses rendu.
+///
+/// # IRQL
+/// Tout niveau. Les rappels sont appelés à PASSIVE_LEVEL, sans verrou de Ps
+/// tenu, dans le thread qui se termine : rattaché à l'espace du système, ses
+/// APC faits, il ne peut plus rappeler le mode utilisateur. Seul celui d'un
+/// processus sans thread vient du thread qui le termine.
+pub fn set_win32_callouts(thread_exit: fn(&Arc<Object<EThread>>), process_exit: fn(&Arc<Object<EProcess>>)) {
+    WIN32_THREAD_EXIT.store(thread_exit as usize, Ordering::Release);
+    WIN32_PROCESS_EXIT.store(process_exit as usize, Ordering::Release);
+}
+
+/// PsW32ThreadCalloutExit : `thread`, un thread GUI, se termine.
+fn win32_thread_callout(thread: &Arc<Object<EThread>>) {
+    let callout = WIN32_THREAD_EXIT.load(Ordering::Acquire);
+    if callout != 0 && thread.win32_thread().is_some() {
+        // SAFETY: only `set_win32_callouts` stores here, the address of a
+        // `fn(&Arc<Object<EThread>>)`.
+        let callout: fn(&Arc<Object<EThread>>) = unsafe { core::mem::transmute::<usize, _>(callout) };
+        callout(thread);
+    }
+}
+
+/// PspW32ProcessCallout(…, FALSE) : `process`, un processus GUI, se termine.
+fn win32_process_callout(process: &Arc<Object<EProcess>>) {
+    let callout = WIN32_PROCESS_EXIT.load(Ordering::Acquire);
+    if callout != 0 && process.win32_process().is_some() {
+        // SAFETY: only `set_win32_callouts` stores here, the address of a
+        // `fn(&Arc<Object<EProcess>>)`.
+        let callout: fn(&Arc<Object<EProcess>>) = unsafe { core::mem::transmute::<usize, _>(callout) };
+        callout(process);
+    }
+}
+
 /// La fin d'un objet critique est laissée passer, comme le ferait un
 /// débogueur qui répond « ignorer » ([`set_critical_breaks_ignored`]).
 static CRITICAL_BREAKS_IGNORED: AtomicBool = AtomicBool::new(false);
@@ -151,7 +198,9 @@ fn critical_break(message: &str, kind: u64, object: *const u8, image: &str) {
 /// PspExitThread : termine le thread courant avec `status`. Un thread noyau
 /// ou de l'ancien chargeur se termine directement dans Ke. La fin d'un thread
 /// critique, ou du dernier thread d'un processus critique, arrête le système
-/// (CRITICAL_OBJECT_TERMINATION).
+/// (CRITICAL_OBJECT_TERMINATION). Un thread GUI, puis son processus GUI s'il
+/// est le dernier, passent par les rappels de win32k
+/// ([`set_win32_callouts`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
@@ -172,6 +221,7 @@ pub fn exit_thread(status: NtStatus) -> ! {
     if thread.is_critical() {
         critical_break("Critical thread exited:", 6, Arc::as_ptr(&thread).cast(), process.image_file_name());
     }
+    win32_thread_callout(&thread);
     let last = {
         let mut threads = process.threads.lock();
         let index = threads.list.iter().position(|t| Arc::ptr_eq(t, &thread)).expect("a thread out of its process");
@@ -189,6 +239,7 @@ pub fn exit_thread(status: NtStatus) -> ! {
     }
     if last {
         process.set_exit_status(status);
+        win32_process_callout(&process);
         run_down_process(&process);
     } else {
         ethread::delete_teb(&process, thread.teb());
@@ -244,6 +295,7 @@ pub fn terminate_process(process: Arc<Object<EProcess>>, status: NtStatus) -> Re
     };
     process.set_exit_status(status);
     if rundown {
+        win32_process_callout(&process);
         run_down_process(&process);
         process.signal_exited();
         return Ok(());

@@ -63,7 +63,8 @@
 # shell32's, by its name or its identifier): user32 loads it for an overlapped
 # window, win32k asks user32 for it for a plain WS_OVERLAPPED (the LoadMenu
 # callback).
-# It ends with status 0x600D.
+# It ends with status 0x600D, 5 s after `[gui] done`: its windows go with
+# its process, and the screen is captured meanwhile.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
 requires = userland, native
@@ -228,7 +229,6 @@ expect = [gui] the menu bar: its client area SM_CYMENU less tall; a menu that do
 expect = [gui] the menu of a class, loaded by user32: SM_CYMENU less tall
 expect = [gui] the menu of a class, loaded by win32k: by its name SM_CYMENU less tall, by its identifier SM_CYMENU less tall
 expect = [gui] done
-expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 
 # The windows left visible, drawn by the kernel's DefWindowProc
 # (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under "Visible" at

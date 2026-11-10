@@ -388,11 +388,21 @@ pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(),
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
 pub fn give_back(handle: u32, dc: &Dc) {
-    let old = dc.change(core::mem::take);
-    let _ = handles::set_owner(handle, OWNER_NONE, 0);
-    if let Some((_, attr)) = old.owner {
+    if let Some((_, attr)) = disown(handle, dc) {
         free_attr(AttrKind::Dc, attr);
     }
+}
+
+/// Le DC `handle` n'est plus à personne, sans rendre ses attributs à son
+/// processus (un autre que le processus courant, ou qui se termine) ; rend
+/// son ancien propriétaire et l'adresse de ses attributs chez lui.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn disown(handle: u32, dc: &Dc) -> Option<(u32, u32)> {
+    let old = dc.change(core::mem::take);
+    let _ = handles::set_owner(handle, OWNER_NONE, 0);
+    old.owner
 }
 
 /// GreCreateCompatibleDC : un DC en mémoire, au processus courant, avec ses

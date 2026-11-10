@@ -9,6 +9,11 @@
 //! ([`crate::nonclient`]) ; les menus déroulants attendent (TrackPopupMenu,
 //! la souris dessus).
 //!
+//! Un menu est au processus qui l'a créé (son `PROCESSINFO` dans la table
+//! des handles) ; DestroyMenu le détruit avec ses sous-menus ([`destroy`]),
+//! comme la destruction de la fenêtre dont il est la barre, et la fin du
+//! processus (`crate::destroy`).
+//!
 //! Pas encore : les accélérateurs soulignés (&x), les bitmaps d'items,
 //! GetMenuBarInfo, la barre redessinée à la sélection (le surlignage).
 
@@ -115,7 +120,7 @@ impl Menu {
 static MENUS: KSpinLock<Vec<(u32, Arc<Menu>)>> = KSpinLock::new(Vec::new());
 
 /// UserCreateMenu : un menu neuf dans la table des handles USER, au
-/// thread courant ; rend son handle.
+/// processus courant ; rend son handle.
 ///
 /// # Errors
 /// `STATUS_INSUFFICIENT_RESOURCES` sans place.
@@ -125,7 +130,10 @@ static MENUS: KSpinLock<Vec<(u32, Arc<Menu>)>> = KSpinLock::new(Vec::new());
 pub fn create() -> Result<u32, NtStatus> {
     let menu = Arc::new(Menu::new());
     let server = Arc::as_ptr(&menu) as u32;
-    let handle = crate::handles::alloc(server, 0, TYPE_MENU)?;
+    let owner = ps::ethread::current_thread()
+        .and_then(|thread| crate::existing_process_info(thread.process()))
+        .map_or(0, |info| info.server);
+    let handle = crate::handles::alloc(server, owner, TYPE_MENU)?;
     MENUS.lock().push((handle, menu));
     Ok(handle)
 }
@@ -138,7 +146,9 @@ pub fn get(handle: u32) -> Option<Arc<Menu>> {
     MENUS.lock().iter().find(|(at, _)| *at == handle).map(|(_, menu)| menu.clone())
 }
 
-/// NtUserDestroyMenu : le menu et ses sous-menus rendus ; `false` sans lui.
+/// IntDestroyMenuObject(…, TRUE) : le menu et ses sous-menus rendus (leurs
+/// handles libres) ; `false` sans lui. La barre d'une fenêtre qui le
+/// désignait n'a plus d'items (comme XP, la fenêtre garde le handle).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.

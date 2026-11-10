@@ -1,5 +1,26 @@
 # Notes de passation
 
+- **DestroyWindow, DestroyMenu, et la fin d'un thread ou d'un processus GUI** (`claude/win32k-destroy`, sur
+  main `a6fc45d` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 14) : `win32k::destroy`
+  (co_UserDestroyWindow, IntSendDestroyMsg, co_UserFreeWindow de ReactOS comme spécification) ; NtUserDestroyWindow
+  (refusé pour la fenêtre d'un autre thread ou d'un bureau : 5 ; WM_PARENTNOTIFY, cachée, fenêtres possédées
+  d'abord, une autre fenêtre activée, `input::activate_other`, le clavier rendu, WM_DESTROY de haut en bas,
+  WM_NCDESTROY de bas en haut ; minuteries, messages de la file, envoyeurs réveillés, région à peindre, capture,
+  menu de la barre, DC du cache, propriétés, ordre Z, puis le handle) ; une création qui échoue détruit sa fenêtre ;
+  NtUserDestroyMenu. Les rappels de Ps à la fin d'un thread GUI puis d'un processus GUI (`ps::set_win32_callouts`,
+  documentés avec leur IRQL) : le thread quitte le premier plan, ses fenêtres sont détruites sans message, ses
+  minuteries partent, sa file est vidée, les messages qu'on lui avait envoyés reviennent à leurs envoyeurs, il quitte
+  son bureau ; le processus rend ses menus, les DC du cache qu'il tenait, ses objets GDI, ses classes, ses bureaux et
+  sa station. La table des handles USER retient le processus et le type de chaque objet : GetGuiResources compte les
+  fenêtres. Corrigé : NtUserGetGuiResources prenait 1 pour GDI et 2 pour USER (le SDK : 0 et 1). Tests : hôte
+  (`handles`, `queue`, `sent`, `gdi::handles`, `gui`), scénario `destroy` (`tests/native/destroy1.c`, un processus
+  fils compris), sur AMD et Intel, et les scénarios GUI touchés. Les fenêtres partant avec leur processus, les
+  programmes de `gui`, `text`, `bitmap`, `mouse` et `mouse-windows` attendent 5 s après leur dernier marqueur, le
+  temps de la capture d'écran (`gui`, `text` et `bitmap` n'attendent plus leur statut de sortie). Vu en chemin :
+  `user32` ne sait pas lire nos menus (IsMenu toujours FALSE ; AppendMenu(MF_POPUP) n'attache pas le sous-menu,
+  faute de `MIIM_SUBMENU`) : à reprendre avec les menus. Pas encore : WM_ASYNC_DESTROYWINDOW aux enfants d'un autre thread, les crochets, le
+  WM_MOUSEMOVE après une destruction, le menu système, `spwndLastActive`.
+
 - **M9 NTFS, bootstrap de MFT répartie** (`feature/m9-ntfs-mft-bootstrap`, PR #111, depuis main `605ae94`) : résolution progressive des extensions DATA de la MFT, uniquement à travers les mappings déjà validés ; bornes et validations partagées avec le lecteur ATTRIBUTE_LIST. 39 tests unitaires passent, dont dépendances hors ordre VCN, records chevauchant deux runs, erreurs d'E/S, corruptions et limite de 64 records ; refus des cycles ou records partiellement mappés sans E/S spéculatives. Validation locale : cargo xtask lint, tests hôte (949 réussis, 3 ignorés), images ntfs-3g (512/4096/8192) et cible no_std passent. La MFT répartie est couverte par les images synthétiques ; les images ntfs-3g vérifient les régressions générales. Aucun branchement noyau. Limites : liste elle-même entièrement décrite en base, pas de récupération par miroir. Contrat et reprise : `docs/compat/ntfs.md`. Suite : adaptateur de partition et montage Io en lecture seule dans une PR coordonnée avec le chantier noyau.
 
 - **Une fenêtre créée avec un menu** (`claude/desktop-launch-menu`) : `desktop-launch` échouait sur `main` depuis les
@@ -349,8 +370,9 @@ jour à chaque commit qui change l'état.
   de premier niveau, visible ou non, du thread qui le perd (FALSE, le TID de l'autre) puis du thread qui le
   gagne (TRUE, le TID de celui qui l'a perdu, 0 sans lui) le reçoit, avant les messages de la fenêtre
   activée ; par SendNotifyMessage (`sent::notify_window`) : tout de suite pour les fenêtres du thread courant,
-  par sa file pour un autre thread. Scénario `activate-app` (`tests/native/activate1.c`). Pas encore :
-  WM_CLOSE de DefWindowProc (DestroyWindow), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné
+  par sa file pour un autre thread. Scénario `activate-app` (`tests/native/activate1.c`). Pas encore (WM_CLOSE de
+  DefWindowProc ferme maintenant la fenêtre : DestroyWindow, `win32k::destroy`) : WM_SETCURSOR, le déplacement au
+  clavier, le bouton dessiné
   enfoncé, le double-clic sur le titre, SetForegroundWindow et SetActiveWindow.
   Les minuteries de USER (branche `claude/win32k-timers`, partie de `main` ; ce que `taskmgr` de la vague
   `claude/apps-wave` attendait pour relire ses processus chaque seconde) : `win32k::timer` (SetTimer,
@@ -360,8 +382,7 @@ jour à chaque commit qui change l'état.
   (attente jusqu'à l'échéance la plus proche, réveil à chaque SetTimer) : `QS_TIMER` et la file réveillée ;
   PeekMessage fabrique WM_TIMER ou WM_SYSTIMER quand rien d'autre ne sort (un message par minuterie prête).
   Scénario `timers` (`tests/native/timer1.c`). Pas encore : les minuteries du RIT (curseur, clavier),
-  TMRF_ONESHOT, un rappel de Ps à la fin d'un thread GUI (ses minuteries s'en vont à l'échéance suivante),
-  DestroyWindow (`timer::destroy_window_timers` est prêt).
+  TMRF_ONESHOT. (La fin d'un thread GUI et DestroyWindow rendent maintenant leurs minuteries : `win32k::destroy`.)
   SendMessage entre threads (branche `claude/sent-messages`, par-dessus `claude/win32k-timers`) :
   `win32k::sent` (les messages envoyés dans la file du destinataire, `QS_SENDMESSAGE`, traités au début de
   PeekMessage et GetMessage, dans WaitMessage et pendant l'attente d'une réponse ; l'envoyeur regarde toutes les
@@ -837,11 +858,12 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - **la suite, côté console** : les outils externes de ReactOS sur le disque (`find`, `sort`, `more`, `tree`,
      `fc`, `xcopy`, `attrib`) et un scénario qui les enchaîne par des tubes et des redirections ; `del`, `ren`, `md`,
      `rd` (suppression et renommage d'Io) ; plus tard `format` et `chkdsk` (`fmifs.dll`, `ufat.dll` : un volume
-     ouvert comme périphérique, les IRP) ; les icônes de `consrv`, SetTimer, le défilement et les barres de
-     défilement de la console, DestroyWindow ; le dernier critère du M5 : les `rostests` `ntdll` et `kernel32` ;
+     ouvert comme périphérique, les IRP) ; les icônes de `consrv`, le défilement et les barres de
+     défilement de la console (SetTimer et DestroyWindow sont faits) ; le dernier critère du M5 : les `rostests`
+     `ntdll` et `kernel32` ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) passe par NPFS, les tubes
-     nommés d'Io (faits : étape 24 de `compat/m5-csrss.md`), puis `services.exe`, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
+     nommés d'Io (faits : étape 24 de `compat/m5-csrss.md`), puis `services.exe`, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow (fait),
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject), DC en mémoire, BitBlt, texte et polices
      (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
@@ -890,9 +912,9 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 - Classes de fenêtres (M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : le refus d'un drapeau inconnu par
   NtUserRegisterClassExWOW n'a pas de test (`user32` n'en passe jamais ; une mutation qui le retire survit) ; ni
   curseurs, ni icônes, ni pinceaux, ni désenregistrement, ni procédures d'appel, ni `atomSysClass`.
-- Fenêtres (M6, étape 2) : ni DestroyWindow (les fenêtres d'un thread vivent autant que lui), ni ShowWindow à la
-  création, ni menus, ni `HWND_MESSAGE`, ni messages à un autre thread, ni crochets ; un texte ANSI n'est pas
-  converti par la page de code (ASCII seul).
+- Fenêtres (M6, étape 2) : ni `HWND_MESSAGE`, ni crochets ; un texte ANSI n'est pas converti par la page de code
+  (ASCII seul). (DestroyWindow, ShowWindow à la création, les menus et les messages à un autre thread sont faits
+  depuis.)
 - DefWindowProc du noyau (M6, étape 3) : WM_NCCALCSIZE seul (les autres messages attendent les contextes de
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
@@ -910,18 +932,18 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 - Sonde console (M5, étape 6) : ni souris, ni WM_NCACTIVATE, ni WM_ACTIVATE inactif à l'ancienne fenêtre active,
   ni messages d'activation à un autre thread (le focus est pris sans eux) ; ni crochets, raccourcis, Alt + pavé
   numérique, Alt + Tab, changement de disposition au clavier, voyants, Impr. écran, SendInput ; pas d'IRP
-  (kbdclass : win32k lit le pilote) ; le premier plan garde le thread d'une fenêtre détruite ou d'un thread fini ;
-  ToUnicodeEx garde une touche morte pour tous les threads (`wchDead` global, comme ReactOS).
+  (kbdclass : win32k lit le pilote) ; ToUnicodeEx garde une touche morte pour tous les threads (`wchDead` global,
+  comme ReactOS). (Un thread fini quitte le premier plan, et la destruction de la fenêtre active en active une
+  autre : `win32k::destroy`.)
 - Sonde console (M5, étape 5) : ni bitmaps compatibles (CreateBitmap, CreateCompatibleBitmap : le motif 8 × 8 de
   `consrv`), ni profondeurs autres que 32 bits, ni section d'une application pour une DIB section, ni palettes,
   GetObject, GetDIBits, SetDIBits, StretchBlt, MaskBlt avec un masque, NtGdiGetDeviceCaps ; un bitmap choisi n'est pas
-  supprimé (la documentation ; ReactOS en diffère la suppression) ; les objets GDI d'un processus ne sont pas rendus à
-  sa fin (une DIB section garde sa section et sa vue système) ; le défilement de l'écran à travers plusieurs
+  supprimé (la documentation ; ReactOS en diffère la suppression) ; le défilement de l'écran à travers plusieurs
   rectangles de la région copie l'un après l'autre ; les vues système ne vident pas la TLB des autres processeurs.
 - Sonde console (M5, étape 4) : SetWindowLong de GWL_STYLE, GWL_EXSTYLE, GWLP_WNDPROC, GWLP_HWNDPARENT absent
   (journalisé) ; ShowWindowAsync d'une fenêtre d'un autre thread absent (messages envoyés entre threads) ; un message
   posté à la fenêtre du bureau perdu (pas de thread du bureau) ; un chemin de bureau sans station laisse le thread
-  converti sans bureau (journalisé) ; DestroyWindow, SetTimer, barres de défilement absents.
+  converti sans bureau (journalisé) ; barres de défilement absentes (DestroyWindow et SetTimer sont faits).
 - Sonde console (M5, étape 3) : NtYieldExecution (SwitchToThread) absent ; un thread qui cède garde sa priorité et
   reçoit un quantum neuf (pas de décroissance).
 - Sonde console (M5, étape 2) : polices bitmap (`.fon`), collections et polices privées absentes ; le jeu de caractères

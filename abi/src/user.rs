@@ -324,6 +324,9 @@ pub const FNID_SENDMESSAGEWTOOPTION: u32 = 0x02B3;
 pub const FNID_SENDNOTIFYMESSAGE: u32 = 0x02B7;
 /// FNID_DESTROY: set on a window being destroyed.
 pub const FNID_DESTROY: u32 = 0x4000;
+/// FNID_FREED: set on a window once destroyed (co_UserFreeWindow); no
+/// message reaches it any more.
+pub const FNID_FREED: u32 = 0x8000;
 /// The desktop window's class, an integer atom (`WC_DESKTOP`, `#32769`).
 pub const WC_DESKTOP: u16 = 0x8001;
 /// The other system classes named by an integer atom: menus (`#32768`),
@@ -624,6 +627,9 @@ pub const WNDS_UPDATEDIRTY: u32 = 0x0000_2000;
 pub const WNDS_PAINTNOTPROCESSED: u32 = 0x0040_0000;
 /// WNDS_MAXIMIZESTOMONITOR: maximized, it covers its monitor.
 pub const WNDS_MAXIMIZESTOMONITOR: u32 = 0x4000_0000;
+/// WNDS_DESTROYED: the window is destroyed, after its WM_NCDESTROY; no
+/// message reaches it any more (`user32`'s IsWindow reads it).
+pub const WNDS_DESTROYED: u32 = 0x8000_0000;
 /// WNDS_ANSIWINDOWPROC: its procedure takes ANSI messages.
 pub const WNDS_ANSIWINDOWPROC: u32 = 0x0008_0000;
 /// WNDS_ANSICREATOR: created by CreateWindowExA.
@@ -640,6 +646,8 @@ pub const WNDS2_WMCREATEMSGPROCESSED: u32 = 0x8000_0000;
 pub const WNDS2_WMPAINTSENT: u32 = 0x0000_0001;
 pub const WNDS2_ENDPAINTINVALIDATE: u32 = 0x0000_0002;
 pub const WNDS2_STARTPAINT: u32 = 0x0000_0004;
+/// WNDS2_INDESTROY: its destruction has begun (co_UserFreeWindow).
+pub const WNDS2_INDESTROY: u32 = 0x0000_0080;
 /// The `WND.bits` of a Unicode window.
 pub const WND_UNICODE: u32 = 0x1;
 
@@ -732,6 +740,10 @@ const _: () = {
 
 /// WM_*, window messages.
 pub const WM_CREATE: u32 = 0x0001;
+/// WM_DESTROY: sent to a window, then to its children, before they go;
+/// WM_NCDESTROY: the last message of a window, its children's first.
+pub const WM_DESTROY: u32 = 0x0002;
+pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_PAINT: u32 = 0x000F;
 /// WM_PAINTICON: WM_PAINT of a minimised window of a 3.x module.
 pub const WM_PAINTICON: u32 = 0x0026;

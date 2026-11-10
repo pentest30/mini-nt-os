@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 119 | 296 |
-| win32k | 118 | 737 |
+| win32k | 120 | 737 |
 
 ## ntoskrnl
 
@@ -669,8 +669,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
 | `0x115f` | `NtUserDestroyCursor` | 2 |  |
 | `0x1160` | `NtUserDestroyInputContext` | 1 |  |
-| `0x1161` | `NtUserDestroyMenu` | 1 |  |
-| `0x1162` | `NtUserDestroyWindow` | 1 |  |
+| `0x1161` | `NtUserDestroyMenu` | 1 | ✅ |
+| `0x1162` | `NtUserDestroyWindow` | 1 | ✅ |
 | `0x1163` | `NtUserDisableThreadIme` | 1 |  |
 | `0x1164` | `NtUserDispatchMessage` | 1 | ✅ |
 | `0x1165` | `NtUserDragDetect` | 3 |  |

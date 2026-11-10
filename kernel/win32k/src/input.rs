@@ -51,7 +51,7 @@ use abi::user::vk::{
 use abi::user::{
     Msg32, KF_ALTDOWN, KF_EXTENDED, KF_REPEAT, KF_UP, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CHAR,
     WM_DEADCHAR, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_NCACTIVATE, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WNDS_ACTIVEFRAME, WS_CHILD, WS_DISABLED, WS_MINIMIZE, WS_POPUP,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WNDS_ACTIVEFRAME, WS_CHILD, WS_DISABLED, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
 };
 use hal::sync::KSpinLock;
 
@@ -257,6 +257,107 @@ static FOREGROUND: KSpinLock<Option<Arc<ThreadInfo>>> = KSpinLock::new(None);
 /// <= DISPATCH_LEVEL.
 pub fn foreground() -> Option<Arc<ThreadInfo>> {
     FOREGROUND.lock().clone()
+}
+
+/// `thread`, qui se termine, n'est plus au premier plan
+/// (IntSetFocusMessageQueue(NULL) de MsqDestroyMessageQueue) ; rend s'il
+/// l'était. Le dernier pointeur vers lui part une fois le verrou rendu.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn forget_foreground(thread: &ThreadInfo) -> bool {
+    let left = {
+        let mut foreground = FOREGROUND.lock();
+        match foreground.as_ref() {
+            Some(current) if core::ptr::eq(Arc::as_ptr(current), thread) => foreground.take(),
+            _ => None,
+        }
+    };
+    left.is_some()
+}
+
+/// can_activate_window : une fenêtre qui n'est pas détruite, visible, ni
+/// réduite ni fille.
+fn can_activate(window: &Window) -> bool {
+    let style = window.state().style;
+    window.is_alive()
+        && style & WS_VISIBLE != 0
+        && style & WS_MINIMIZE == 0
+        && style & (WS_POPUP | WS_CHILD) != WS_CHILD
+}
+
+/// UserGetAncestor(GA_ROOT) : la fenêtre de premier niveau de `window`.
+fn root_of(window: Arc<Window>) -> Arc<Window> {
+    let mut root = window;
+    while let Some(parent) = crate::window::get(root.state().parent).filter(|parent| !parent.is_desktop_window()) {
+        root = parent;
+    }
+    root
+}
+
+/// co_WinPosActivateOtherWindow : `window`, la fenêtre active de son
+/// thread, va être détruite ; une autre devient active ([`activate`]) : son
+/// propriétaire pour une fenêtre contextuelle, sinon la suivante de ses
+/// sœurs dans l'ordre Z qui peut l'être, sinon la première d'entre elles.
+/// Les fenêtres du thread `excluded` (un thread qui se termine, à qui
+/// aucun message ne peut aller) sont écartées. Sans autre fenêtre, la file
+/// de son thread n'a plus de fenêtre active ; au thread courant, si
+/// `notify`, `window` reçoit WM_NCACTIVATE et WM_ACTIVATE inactifs
+/// (UserSetActiveWindow(NULL)).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système ou à la fin d'un thread, sans rien
+/// tenir.
+pub fn activate_other(window: &Arc<Window>, excluded: Option<u32>, notify: bool) {
+    let usable = |candidate: &Arc<Window>| {
+        candidate.handle != window.handle && Some(candidate.pti) != excluded && can_activate(candidate)
+    };
+    let state = window.state();
+    let mut to = None;
+    if state.style & WS_POPUP != 0 {
+        to = crate::window::get(state.owner).map(root_of).filter(usable);
+    }
+    if to.is_none() {
+        let mut next = crate::window::get(state.next);
+        while let Some(sibling) = next {
+            if usable(&sibling) {
+                to = Some(sibling);
+                break;
+            }
+            next = crate::window::get(sibling.state().next);
+        }
+    }
+    if to.is_none() {
+        let first = crate::window::get(state.parent).and_then(|parent| crate::window::get(parent.state().child));
+        let mut next = first;
+        while let Some(sibling) = next {
+            if usable(&sibling) {
+                to = Some(sibling);
+                break;
+            }
+            next = crate::window::get(sibling.state().next);
+        }
+    }
+    if let Some(to) = to {
+        activate(&to);
+        return;
+    }
+    let Some(thread) = crate::gui::thread_info_of(window.pti) else { return };
+    let was_active = thread
+        .queue
+        .with(|queue| {
+            let was = queue.active == window.handle;
+            if was {
+                queue.active = 0;
+            }
+            was
+        })
+        .0;
+    let ours = crate::convert_current_thread().is_ok_and(|current| current.server == window.pti);
+    if was_active && notify && ours {
+        let _ = crate::window::send_message(window, WM_NCACTIVATE, 0, LParam::Value(0));
+        let _ = crate::window::send_message(window, WM_ACTIVATE, WA_INACTIVE, LParam::Value(0));
+    }
 }
 
 /// La disposition de `thread` (aucun : la première chargée,

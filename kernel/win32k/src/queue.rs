@@ -31,6 +31,10 @@
 //! attendent à part (`QS_SENDMESSAGE`) : PeekMessage, GetMessage et
 //! WaitMessage les traitent d'abord, sans jamais les rendre.
 //!
+//! Une fenêtre détruite emporte ses messages de la file
+//! ([`QueueState::remove_window_messages`]) ; la fin du thread la vide
+//! ([`QueueState::clear`]).
+//!
 //! Les messages de la souris arrivent bruts, avec les touches : à leur
 //! sortie, le thread en fait les messages finals (`crate::mouse::finish` :
 //! WM_NCHITTEST, l'activation, le double-clic). Un filtre les demande sous
@@ -42,6 +46,7 @@
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 
 use abi::ntstatus::NtStatus;
 use abi::user::vk::{
@@ -256,6 +261,35 @@ impl QueueState {
         self.sent.retain(|queued| !Arc::ptr_eq(queued, sent));
         self.refresh();
         self.sent.len() != before
+    }
+
+    /// MsqRemoveWindowMessagesFromQueue : les messages postés, les entrées
+    /// et les messages envoyés de la fenêtre `hwnd` quittent la file ; rend
+    /// les messages envoyés, dont les envoyeurs attendent une réponse. La
+    /// fenêtre active, celle qui a le clavier et celle qui a la capture ne
+    /// sont plus elle.
+    pub fn remove_window_messages(&mut self, hwnd: u32) -> Vec<Arc<crate::sent::SentMessage>> {
+        self.posted.retain(|message| message.hwnd != hwnd);
+        self.input.retain(|message| message.hwnd != hwnd);
+        let (gone, kept): (Vec<_>, Vec<_>) = self.sent.drain(..).partition(|sent| sent.hwnd == hwnd);
+        self.sent = kept.into();
+        for field in [&mut self.active, &mut self.focus, &mut self.capture] {
+            if *field == hwnd {
+                *field = 0;
+            }
+        }
+        self.refresh();
+        gone
+    }
+
+    /// MsqCleanupMessageQueue, à la fin du thread : la file est vidée
+    /// (messages postés, entrées, WM_QUIT, compte des fenêtres à peindre,
+    /// fenêtres active, du clavier et de la capture) ; rend les messages
+    /// envoyés qui y attendaient.
+    pub fn clear(&mut self) -> Vec<Arc<crate::sent::SentMessage>> {
+        let sent = core::mem::take(&mut self.sent).into();
+        *self = Self { keys: self.keys, ..Self::default() };
+        sent
     }
 
     /// MsqPostMessage d'un message matériel : `message` à la fin des
@@ -844,5 +878,48 @@ mod tests {
         assert_eq!((queue.wake, queue.change), (posted, 0), "looked at; one left");
         queue.peek(&all, true);
         assert_eq!(queue.wake, 0, "empty");
+    }
+
+    #[test]
+    fn a_destroyed_window_takes_its_messages_out_of_the_queue() {
+        let mut queue = QueueState::default();
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        queue.post(message(7, 0x0400, 1));
+        queue.post(message(8, 0x0400, 2));
+        queue.post(message(0, 0x0400, 3));
+        queue.post_input(message(7, WM_KEYDOWN, u32::from(b'A')));
+        let to_7 = crate::sent::SentMessage::new(7, 0x401, 0, 0, true);
+        let to_8 = crate::sent::SentMessage::new(8, 0x402, 0, 0, true);
+        queue.push_sent(to_7.clone());
+        queue.push_sent(to_8.clone());
+        (queue.active, queue.focus, queue.capture) = (7, 7, 8);
+        let gone = queue.remove_window_messages(7);
+        assert_eq!(gone.len(), 1);
+        assert!(Arc::ptr_eq(&gone[0], &to_7), "its sent message, for its sender");
+        assert_eq!((queue.active, queue.focus, queue.capture), (0, 0, 8), "neither active nor focused");
+        assert_eq!(queue.wake & QS_KEY, 0, "its key gone");
+        assert_eq!(queue.peek(&all, true).map(|m| m.w_param), Some(2), "another window's");
+        assert_eq!(queue.peek(&all, true).map(|m| m.w_param), Some(3), "the thread's");
+        assert_eq!(queue.peek(&all, true), None);
+        assert!(queue.pop_sent().is_some_and(|sent| Arc::ptr_eq(&sent, &to_8)), "another window's stays");
+    }
+
+    #[test]
+    fn the_end_of_its_thread_empties_the_queue() {
+        let mut queue = QueueState::default();
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        queue.post(message(7, 0x0400, 1));
+        queue.post_input(message(7, WM_KEYDOWN, u32::from(b'A')));
+        queue.post_quit(3);
+        queue.inc_paint();
+        queue.set_timers_ready(true);
+        queue.push_sent(crate::sent::SentMessage::new(7, 0x401, 0, 0, true));
+        (queue.active, queue.focus, queue.capture) = (7, 7, 7);
+        let sent = queue.clear();
+        assert_eq!(sent.len(), 1, "the sent message, for its sender");
+        assert_eq!((queue.wake, queue.change, queue.paints()), (0, 0, 0));
+        assert_eq!((queue.active, queue.focus, queue.capture), (0, 0, 0));
+        assert_eq!(queue.peek(&all, true), None, "no WM_QUIT either");
+        assert!(queue.pop_sent().is_none());
     }
 }

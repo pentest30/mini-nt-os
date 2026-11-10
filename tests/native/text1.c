@@ -142,6 +142,7 @@ typedef struct {
 #define EXIT_STATUS 0x600D
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+__declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
 
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
@@ -403,6 +404,9 @@ DWORD __stdcall GuiStartup(void)
     check_metrics(window);
 
     DbgPrint("[text] done\n");
+    /* Its windows go with the process: the scenario captures the screen
+     * meanwhile. */
+    Sleep(5000);
     ExitProcess(EXIT_STATUS);
     return 0;
 }
