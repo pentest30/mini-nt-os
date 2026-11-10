@@ -479,22 +479,28 @@ impl EProcess {
         self.critical.load(Ordering::Acquire)
     }
 
-    /// NtSetInformationProcess(`ProcessBreakOnTermination`) : le rend
-    /// critique, ou ne l'est plus.
+    /// NtSetTimerResolution a-t-il posé une résolution pour ce processus ?
     ///
     /// # IRQL
     /// Tout niveau.
-        /// NtSetTimerResolution a-t-il posé une résolution pour ce processus ?
     pub fn timer_resolution_set(&self) -> bool {
         self.timer_resolution_set.load(Ordering::Acquire)
     }
 
     /// Pose (ou retire) la résolution du temporisateur pour ce processus.
+    ///
+    /// # IRQL
+    /// Tout niveau.
     pub fn set_timer_resolution(&self, set: bool) {
         self.timer_resolution_set.store(set, Ordering::Release);
     }
 
-pub fn set_critical(&self, critical: bool) {
+    /// NtSetInformationProcess(`ProcessBreakOnTermination`) : le rend
+    /// critique, ou ne l'est plus.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn set_critical(&self, critical: bool) {
         self.critical.store(critical, Ordering::Release);
     }
 
