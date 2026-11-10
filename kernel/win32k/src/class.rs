@@ -24,7 +24,8 @@
 //! Écarts : pas d'objets curseur ni icône (les handles sont gardés, `spicn`
 //! et `spcur` restent nuls), ni de pinceaux (un pinceau du système vaut sa
 //! couleur plus un) ; le nom de menu reste dans le client (les pointeurs de
-//! `CLSMENUNAME`) ; le compte des fenêtres d'une classe
+//! `CLSMENUNAME`), le noyau en garde une copie pour charger le menu d'une
+//! fenêtre (`lpszMenuName`) ; le compte des fenêtres d'une classe
 //! (`cWndReferenceCount`) n'est pas tenu dans le `CLS` ; pas de
 //! `atomSysClass` dans le `SERVERINFO` ; ni désenregistrement, ni
 //! procédures d'appel (une classe Unicode demandée en ANSI rend sa
@@ -100,12 +101,27 @@ pub struct ClassInfo {
 
 /// Le nom de menu d'une classe, tel que le client le garde (CLSMENUNAME) :
 /// ses chaînes Unicode et ANSI, ou un identifiant de ressource (dans
-/// `unicode` et `ansi`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// `unicode` et `ansi`) ; et la copie du noyau de la chaîne (`name`, vide
+/// pour un identifiant), que `user32` charge pour une fenêtre de la classe
+/// (`crate::callback::load_menu`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MenuName {
     pub unicode: u32,
     pub ansi: u32,
     pub is_string: bool,
+    pub name: Vec<u16>,
+}
+
+impl MenuName {
+    /// La ressource du menu : son nom, ou son identifiant ; aucune sans nom
+    /// de menu.
+    pub fn resource(&self) -> Option<crate::callback::MenuResource<'_>> {
+        if self.is_string {
+            (!self.name.is_empty()).then_some(crate::callback::MenuResource::Name(&self.name))
+        } else {
+            (self.unicode != 0).then_some(crate::callback::MenuResource::Id(self.unicode as u16))
+        }
+    }
 }
 
 /// Une classe de fenêtres.
