@@ -323,9 +323,10 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
 /// ensuite est journalisé.
 ///
 /// # IRQL
-/// PASSIVE_LEVEL, dans son dernier thread (rappel de Ps), avant que ses
-/// handles soient fermés et son espace d'adresses rendu. Aucun rappel du
-/// mode utilisateur.
+/// PASSIVE_LEVEL, dans son dernier thread (rappel de Ps ; pour un processus
+/// sans thread, dans celui qui le termine), avant que ses handles soient
+/// fermés et son espace d'adresses rendu. Aucun rappel du mode utilisateur,
+/// rien n'y est lu ni écrit dans sa mémoire.
 pub fn process_exit(process: &Arc<Object<EProcess>>) {
     let Some(info) = crate::existing_process_info(process) else { return };
     let pid = process.pid();

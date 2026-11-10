@@ -135,7 +135,8 @@ static WIN32_PROCESS_EXIT: AtomicUsize = AtomicUsize::new(0);
 /// # IRQL
 /// Tout niveau. Les rappels sont appelés à PASSIVE_LEVEL, sans verrou de Ps
 /// tenu, dans le thread qui se termine : rattaché à l'espace du système, ses
-/// APC faits, il ne peut plus rappeler le mode utilisateur.
+/// APC faits, il ne peut plus rappeler le mode utilisateur. Seul celui d'un
+/// processus sans thread vient du thread qui le termine.
 pub fn set_win32_callouts(thread_exit: fn(&Arc<Object<EThread>>), process_exit: fn(&Arc<Object<EProcess>>)) {
     WIN32_THREAD_EXIT.store(thread_exit as usize, Ordering::Release);
     WIN32_PROCESS_EXIT.store(process_exit as usize, Ordering::Release);
