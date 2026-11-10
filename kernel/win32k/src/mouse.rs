@@ -453,6 +453,18 @@ pub fn commit(thread: &ThreadInfo, resolved: Resolved, remove: bool) -> Option<M
     }
 }
 
+/// IntReleaseCapture de co_UserFreeWindow : la fenêtre `hwnd`, détruite,
+/// n'a plus la capture, sans message.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn forget_capture(hwnd: u32) {
+    let mut capture = CAPTURE.lock();
+    if *capture == hwnd {
+        *capture = 0;
+    }
+}
+
 /// co_UserSetCapture : `window` (aucune : personne) a la capture pour le
 /// thread courant `thread` ; toute la souris lui va. L'ancienne reçoit
 /// WM_CAPTURECHANGED. Rend l'ancienne ; 0 sans rien changer pour une
