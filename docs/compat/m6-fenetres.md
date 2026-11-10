@@ -95,7 +95,8 @@ Ce qui manque, journalisé une fois : la partie noyau de DefWindowProc et WM_GET
 fenêtre créée visible (ShowWindow, SetWindowPos), les menus (une fenêtre
 qui n'est pas fille ne peut pas en recevoir : `ERROR_INVALID_MENU_HANDLE`), les fenêtres de messages (`HWND_MESSAGE`),
 les messages envoyés à un autre thread, DestroyWindow (les fenêtres d'un thread vivent autant que lui ; une création
-qui échoue ne reçoit ni WM_DESTROY ni WM_NCDESTROY), les crochets (`WH_CBT`), une fenêtre créée réduite ou agrandie.
+qui échoue ne reçoit ni WM_DESTROY ni WM_NCDESTROY : fait à l'étape 14), les crochets (`WH_CBT`), une fenêtre créée
+réduite ou agrandie.
 
 Tests : hôte (`win32k::window` : `CREATESTRUCT` emballé, styles d'une fenêtre neuve, place par défaut, compatibilité,
 zone cliente ramenée dans la fenêtre) ; le scénario `gui`, sur les deux CPU.
@@ -606,3 +607,97 @@ le scénario : `pcCh` qui compte tout, `pdxOut` non écrit, GetRandomRgn qui dit
 visible, IntersectClipRect sans effet ou qui remplace la région. Les deux dernières survivaient à la première version
 du test : DrawText coupe aussi par ETO_CLIPPED, et sans région préalable, AND et COPY donnent la même chose. Le
 scénario `text` passe sur les deux CPU, avec 7 pixels de plus.
+
+## Étape 14 : DestroyWindow, DestroyMenu, et la fin d'un thread ou d'un processus GUI
+
+Jusqu'ici, les fenêtres d'un thread vivaient autant que lui, et rien ne revenait à win32k à la fin d'un thread ou
+d'un processus GUI : fenêtres, menus, minuteries, DC du cache, objets GDI et classes restaient. DestroyWindow
+échouait faute de service, si bien que le DefWindowProc de `user32`, qui répond à WM_CLOSE par DestroyWindow, ne
+fermait rien (SC_CLOSE envoie déjà WM_CLOSE, `win32k::sizemove`). ReactOS sert de spécification
+(co_UserDestroyWindow, IntSendDestroyMsg, co_UserFreeWindow, IntDestroyMenuObject, ExitThreadCallback,
+ExitProcessCallback) ; son code n'est pas porté.
+
+`win32k::destroy` :
+
+- NtUserDestroyWindow (`destroy_window`) : la fenêtre d'un autre thread et celle d'un bureau sont refusées
+  (`ERROR_ACCESS_DENIED`), un handle qui n'est pas une fenêtre aussi (`ERROR_INVALID_WINDOW_HANDLE`). Une fille
+  prévient son parent (WM_PARENTNOTIFY : WM_DESTROY, son identifiant, elle) ; visible, elle est cachée
+  (ShowWindow(SW_HIDE) pour une fille, SetWindowPos(SWP_HIDEWINDOW) sinon : ce qu'elle découvre se repeint) ; ses
+  fenêtres possédées du même thread sont détruites d'abord, celles d'un autre thread perdent leur propriétaire ;
+  active, une autre fenêtre devient active (`input::activate_other`, co_WinPosActivateOtherWindow : son
+  propriétaire pour une fenêtre contextuelle, sinon la suivante de ses sœurs, sinon la première ; sans elle, la file
+  n'a plus de fenêtre active, après WM_NCACTIVATE et WM_ACTIVATE inactifs) ; si elle a le clavier, son parent le
+  prend (une fille), sinon personne (WM_KILLFOCUS). Puis WM_DESTROY à elle et à ses enfants, de haut en bas, tant
+  qu'ils vivent ; puis co_UserFreeWindow : les enfants d'abord, chacun recevant WM_NCDESTROY après les siens. Une
+  procédure qui redétruit sa fenêtre pendant WM_DESTROY réussit sans rien refaire.
+- Ce que rend une fenêtre (`finish`) : ses minuteries (`timer::destroy_window_timers`), ses messages de la file
+  (postés, entrées, et les messages envoyés, dont les envoyeurs sont réveillés : `SentMessage::abandon`), la
+  fenêtre active, celle du clavier et la capture qu'elle était, sa région à mettre à jour (le compte des fenêtres à
+  peindre de son thread suit), le menu de sa barre et ses sous-menus, les DC du cache pris pour elle
+  (`dce::free_window_dcs`, DceFreeWindowDCE : un GetDC sans ReleaseDC, journalisé une fois), ses propriétés, sa place
+  dans l'ordre Z ; `WNDS2_INDESTROY` dès le début de co_UserFreeWindow, puis `WNDS_DESTROYED` (0x80000000, ce que lit
+  l'`IsWindow` de `user32`) et `FNID_FREED` ; enfin son handle (`window::release`). Son `WND` reste dans le tas jusqu'à
+  la dernière référence du noyau, comme UserDeleteObject. Une fenêtre appartient à son thread dès qu'elle a un
+  handle, et une création qui échoue après (WM_NCCREATE ou WM_CREATE refusé, le nom sans place) la détruit, avec
+  WM_DESTROY et WM_NCDESTROY, comme ReactOS.
+- NtUserDestroyMenu, sur `menu::destroy` (IntDestroyMenuObject, avec les sous-menus) ; un menu qui n'existe plus rend
+  `ERROR_INVALID_MENU_HANDLE`. Un menu est au processus qui le crée (son `PROCESSINFO` dans la table des handles).
+- La table des handles USER (`win32k::handles`) retient pour chaque entrée prise le processus de son objet et son
+  type : GetGuiResources(GR_USEROBJECTS) compte ainsi les fenêtres (`ppi->UserHandleCount`), et la fin d'un processus
+  trouve ce qui lui reste.
+- Les rappels de Ps (`ps::set_win32_callouts`, PsEstablishWin32Callouts) : à la fin d'un thread qui a un
+  `Win32Thread`, puis à celle d'un processus qui a un `Win32Process` (son dernier thread, ou NtTerminateProcess d'un
+  processus sans thread), avant que ses handles soient fermés et son espace d'adresses rendu ; à PASSIVE_LEVEL, dans
+  le thread qui se termine, rattaché à l'espace du système, sans rappel du mode utilisateur possible.
+- La fin d'un thread GUI (`thread_exit`) : il quitte le premier plan ; ses fenêtres sont détruites sans message
+  (`TIF_INCLEANUP` de ReactOS : il ne reçoit plus rien), celles de premier niveau d'abord ; ce qu'elles découvrent se
+  repeint, et une fenêtre d'un autre thread devient active si l'une d'elles l'était ; une fenêtre dont la destruction
+  a été interrompue (le thread fini pendant WM_DESTROY) est rendue aussi. Ses minuteries partent
+  (`timer::destroy_thread_timers`), sa file est vidée (`QueueState::clear`), les messages qu'on lui avait envoyés
+  reviennent à leurs envoyeurs (`sent::abandon_all`, sans attendre la vérification de 250 ms), il quitte son bureau
+  (`gui::leave_desktop` : son `CLIENTTHREADINFO` rendu au tas, la vue du tas partie avec le dernier thread du
+  processus sur ce bureau).
+- La fin d'un processus GUI (`process_exit`) : ses objets USER qui restent (ses menus ; une fenêtre, s'il en restait)
+  sont détruits, les DC du cache qu'il avait pris y reviennent (`dce::free_process_dcs`), ses objets GDI quittent la
+  table (`gdi::cleanup_process`, GDI_CleanupForProcess : un DC en mémoire laisse son bitmap), son `PROCESSINFO` rend
+  ses classes, ses vues des tas de bureau, son bureau de démarrage et sa station (`ProcessInfo::release`). Le noyau
+  journalise ce qu'il a rendu, et ce qui resterait (« leaves N USER and M GDI objects »).
+
+Corrigé en chemin : NtUserGetGuiResources prenait 1 pour les objets GDI et 2 pour les objets USER ; le SDK (et
+ReactOS) disent `GR_GDIOBJECTS` 0 et `GR_USEROBJECTS` 1 (2 et 4, les pics, viennent après XP). Le scénario lit les
+deux comptes d'un processus fils avec les valeurs du SDK.
+
+Vu en chemin, déjà là : `user32` ne sait pas lire nos menus (le handle de la table USER ne désigne pas un `MENU` du
+tas d'un bureau) ; IsMenu rend donc toujours FALSE, et AppendMenu(MF_POPUP) n'attache pas le sous-menu
+(`MENU_mnu2mnuii` ne pose `MIIM_SUBMENU` que si `MENU_GetMenu` valide le handle) : l'item reçoit le handle du
+sous-menu comme identifiant. Un tel sous-menu ne part donc pas avec sa barre, mais avec son processus.
+
+Le banc d'essai : `tests/native/destroy1.c` (`DESTROY1.EXE` à la place de `winlogon.exe`, scénario `destroy`). Une
+lettre et `-` est WM_DESTROY, une lettre et `.` WM_NCDESTROY (IsWindow est encore TRUE pendant ces deux messages,
+comme le dit l'`IsWindow` de `user32` épinglé, qui ne lit que `WNDS_DESTROYED`), une lettre et `^` WM_PARENTNOTIFY de
+WM_DESTROY :
+
+- DestroyWindow(A), A possédant la fenêtre contextuelle D et parent de B, lui-même parent de C : `D-D.A-B-C-C.B.A.` ;
+  les quatre handles invalides ensuite ; A de nouveau (1400), la fenêtre du bureau (5) ;
+- une fille F seule (identifiant 7) : `E^F-F.`, son parent E vit et n'a plus d'enfant (GW_CHILD) ;
+- WM_CLOSE et WM_SYSCOMMAND(SC_CLOSE) au DefWindowProc de `user32` : `G-G.`, `H-H.` ;
+- une fenêtre détruite emporte sa minuterie de 10 ms et un message posté (aucun message pour elle 60 ms après,
+  KillTimer échoue) ;
+- une barre de menus part avec sa fenêtre (son DestroyMenu rend 1401), DestroyMenu une seule fois (1401 ensuite) ;
+- un thread qui finit avec une fenêtre visible, sa fille, une minuterie et un DC de GetDC : refusé à un autre thread
+  (5) ; à sa fin, les deux handles sont invalides, sa procédure n'a reçu aucun message, et le compte des objets USER du
+  processus (GetGuiResources) est revenu ; à la fin du programme, il est revenu à celui du départ ;
+- un processus fils (le même programme, `child` et le TID du parent sur sa ligne de commande) crée deux fenêtres
+  (dont une barre de menus), trois menus, une minuterie, un DC du cache, un pinceau et un DC en mémoire, puis finit
+  sans rien rendre : avant, GetGuiResources lui compte au moins 5 objets USER et 3 GDI ; après, 0 et 0, sa fenêtre est
+  invalide et son menu détruit.
+
+Ce qui manque : WM_ASYNC_DESTROYWINDOW aux enfants d'un autre thread (détruits sans message, journalisé une fois),
+les crochets (HCBT_DESTROYWND, HSHELL_WINDOWDESTROYED), le WM_MOUSEMOVE que ReactOS insère pour la fenêtre sous le
+curseur, le menu système, `spwndLastActive` d'un propriétaire, l'effacement de ce qu'une fille cachée découvre dans
+son parent (l'étape 5 ne le fait pas non plus).
+
+Tests : hôte (`handles` : processus et types des entrées ; `queue` : les messages d'une fenêtre détruite, la file
+vidée ; `sent` : un message abandonné réveille son envoyeur sans valeur ; `gdi::handles` : les objets d'un
+processus ; `gui` : l'adresse du serveur d'un `PROCESSINFO`) ; le scénario `destroy`, sur les deux CPU, et les
+scénarios GUI existants (`send-messages` : l'envoi au thread fini échoue maintenant à sa fin, non plus 250 ms après).
