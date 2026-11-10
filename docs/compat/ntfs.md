@@ -23,6 +23,13 @@ L'adaptateur traduit les lectures en octets en lectures de secteurs, y compris
 les lectures non alignées, après vérification de la plage entière. Chaque
 opération crée son lecteur indépendant : aucune allocation ou lecture NTFS
 n'est faite sous un spinlock de volume. Les appels se font à PASSIVE_LEVEL.
+Les lecteurs indépendants partagent toutefois le disque : `hal::ata` protège
+chaque commande PIO complète par un KSpinLock propre au canal (sélection,
+commande, transfert, attente de fin). IDENTIFY, lecture, écriture et FLUSH
+partagent ce verrou, y compris entre copies et maître/esclave. La préemption
+est différée à DISPATCH_LEVEL pendant la commande ; aucune allocation du
+système de fichiers n’a lieu sous ce verrou. Ordre : volume éventuel puis
+canal, jamais l’inverse. Les deux canaux restent indépendants.
 Ce choix relit la MFT et `$UpCase` plutôt que de maintenir un cache partagé ;
 le média doit rester stable pendant le montage (pas de retrait ni d'écriture
 externe). Un cache et le démontage sont des travaux ultérieurs.
@@ -204,6 +211,14 @@ partition GPT/NTFS et fait appeler les vrais services NT par `NTFS1.EXE`, lié
 tout le disque attaché reste inchangé après chaque boot (AMD et Intel).
 Les deux tests incluent un nom contenant le surrogate isolé 0xD800 dans
 FILE_NAME et $I30 : l’énumération restitue exactement ses unités UTF-16.
+Un test hôte vérifie l’exclusion des transactions simulées entre copies et
+maître/esclave, l’indépendance des canaux et la libération après erreur.
+NTFS1 démarre également deux threads avec leurs propres handles et tampons :
+256 lectures à des offsets différents, 2 Mio vérifiés octet par octet sous
+QEMU AMD et Intel, sans modifier le disque. Ce stress complète le contrôle
+du verrou ; il ne force pas une préemption à un cycle PIO précis.
+Contrôle par mutation : retirer seulement le verrou de read_sectors fait
+échouer le scénario AMD avec `[ntfs] FAIL: concurrent read status`.
 Ils vérifient aussi les ouvertures GENERIC_READ/MAXIMUM_ALLOWED, la lecture
 et le refus d’écriture par les droits du handle (STATUS_ACCESS_DENIED).
 

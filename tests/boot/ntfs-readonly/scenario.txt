@@ -15,6 +15,7 @@ expect = [ntfs] volume and directory information OK
 expect = [ntfs] write opens, create and overwrite refused
 expect = [ntfs] generic and maximum read access OK
 expect = [ntfs] raw UTF-16 directory names OK
+expect = [ntfs] concurrent readers: 256 reads, 2 MiB verified
 expect = [ntfs] PASS
 forbid = [ntfs] FAIL
 forbid = *** STOP:

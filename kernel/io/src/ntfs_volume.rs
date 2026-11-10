@@ -1,5 +1,6 @@
 //! Read-only NTFS adapter. Each operation owns a fresh reader, so no spinlock
-//! spans filesystem allocation or device I/O. The mounted media must remain
+//! spans filesystem allocation. ATA serializes each complete PIO command at
+//! the channel, below this adapter. The mounted media must remain
 //! stable; external writes/removal require unmounting (not yet implemented).
 use crate::volume::{Listed, Node, SharedBlockDevice, Space, VolumeLabel};
 use abi::{

@@ -10,6 +10,12 @@ typedef struct { NTSTATUS status; ULONG information; } IOSB;
 IMPORT ULONG __cdecl DbgPrint(const char *, ...);
 IMPORT NTSTATUS __stdcall NtTerminateProcess(HANDLE, NTSTATUS);
 IMPORT NTSTATUS __stdcall NtClose(HANDLE);
+IMPORT NTSTATUS __stdcall NtCreateEvent(HANDLE *, ULONG, void *, ULONG, unsigned char);
+IMPORT NTSTATUS __stdcall NtSetEvent(HANDLE, ULONG *);
+IMPORT NTSTATUS __stdcall NtWaitForSingleObject(HANDLE, unsigned char, long long *);
+IMPORT NTSTATUS __stdcall NtTerminateThread(HANDLE, NTSTATUS);
+IMPORT NTSTATUS __stdcall RtlCreateUserThread(HANDLE, void *, unsigned char, ULONG, ULONG, ULONG,
+                                             NTSTATUS (__stdcall *)(void *), void *, HANDLE *, void *);
 IMPORT NTSTATUS __stdcall NtOpenFile(HANDLE *, ULONG, OBJECT_ATTRIBUTES *, IOSB *, ULONG, ULONG);
 IMPORT NTSTATUS __stdcall NtCreateFile(HANDLE *, ULONG, OBJECT_ATTRIBUTES *, IOSB *, void *, ULONG, ULONG, ULONG, ULONG, void *, ULONG);
 IMPORT NTSTATUS __stdcall NtWriteFile(HANDLE, HANDLE, void *, void *, IOSB *, void *, ULONG, void *, void *);
@@ -39,6 +45,56 @@ static void text(WCHAR *path) {
     check(iosb.information==sizeof(expected)-1,"resident length");
     for(ULONG i=0;i<sizeof(expected)-1;++i) check(buffer[i]==(unsigned char)expected[i],"resident contents");
     NtClose(h);
+}
+/* Each thread owns its handle and buffer. The common event starts both
+   readers after they have opened the same volume; offsets differ so that a
+   stolen/reprogrammed ATA command cannot pass the byte checks accidentally. */
+static HANDLE start_readers, reader_ready[2];
+static unsigned char reader_bytes[2][8192];
+static volatile ULONG rounds_done[2], saw_other_reader[2];
+static void wait_for(HANDLE handle) {
+    long long timeout=-1200000000LL; /* 120 s, never leave a stuck test unbounded. */
+    check(NtWaitForSingleObject(handle,0,&timeout)==0,"reader/event wait");
+}
+static NTSTATUS __stdcall read_concurrently(void *parameter) {
+    ULONG id=(ULONG)parameter;
+    HANDLE file=open_file(L"\\??\\D:\\large.bin",0);
+    check(NtSetEvent(reader_ready[id],0)==0,"reader ready");
+    wait_for(start_readers);
+    for(ULONG round=0;round<128;++round) {
+        unsigned long long offset=(round*7919+id*4721)%(131195-sizeof(reader_bytes[0]));
+        ULONG first=(ULONG)offset;
+        IOSB iosb;
+        check(NtReadFile(file,0,0,0,&iosb,reader_bytes[id],sizeof(reader_bytes[0]),&offset,0)==0,
+              "concurrent read status");
+        check(iosb.information==sizeof(reader_bytes[0]),"concurrent read length");
+        for(ULONG at=0;at<sizeof(reader_bytes[0]);++at)
+            check(reader_bytes[id][at]==(first+at)%251,"concurrent read contents");
+        if(rounds_done[1-id]>0 && rounds_done[1-id]<128) saw_other_reader[id]=1;
+        rounds_done[id]=round+1;
+    }
+    NtClose(file);
+    NtTerminateThread((HANDLE)-2,0);
+    return 0;
+}
+static void concurrent_reads(void) {
+    HANDLE threads[2];
+    check(NtCreateEvent(&start_readers,0x1F0003,0,0,0)==0,"start event");
+    for(ULONG id=0;id<2;++id) {
+        check(NtCreateEvent(&reader_ready[id],0x1F0003,0,0,0)==0,"ready event");
+        check(RtlCreateUserThread((HANDLE)-1,0,0,0,0,0,read_concurrently,(void *)id,&threads[id],0)==0,
+              "create NTFS reader");
+    }
+    for(ULONG id=0;id<2;++id) wait_for(reader_ready[id]);
+    check(NtSetEvent(start_readers,0)==0,"release readers");
+    for(ULONG id=0;id<2;++id) {
+        wait_for(threads[id]);
+        check(rounds_done[id]==128,"reader completed all rounds");
+        NtClose(threads[id]); NtClose(reader_ready[id]);
+    }
+    check(saw_other_reader[0] || saw_other_reader[1],"readers overlapped");
+    NtClose(start_readers);
+    DbgPrint("[ntfs] concurrent readers: 256 reads, 2 MiB verified\n");
 }
 void __stdcall NtProcessStartup(void *peb) {
     (void)peb;
@@ -95,6 +151,8 @@ void __stdcall NtProcessStartup(void *peb) {
     check(NtCreateFile(&h,0x100002,&o,&iosb,0,0,7,4,0x60,0,0)==(NTSTATUS)0xC00000A2,"overwrite refused");
     o=attributes(L"\\??\\D:\\new.txt",&name);
     check(NtCreateFile(&h,0x100002,&o,&iosb,0,0,7,2,0x60,0,0)==(NTSTATUS)0xC00000A2,"create refused");
-    DbgPrint("[ntfs] write opens, create and overwrite refused\n[ntfs] PASS\n");
+    DbgPrint("[ntfs] write opens, create and overwrite refused\n");
+    concurrent_reads();
+    DbgPrint("[ntfs] PASS\n");
     NtTerminateProcess((HANDLE)-1,0x600D);
 }
