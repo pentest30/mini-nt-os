@@ -18,7 +18,7 @@ expect = kernel: phase 1 done
 # A fatal error ends the run at once.
 forbid = *** STOP:
 forbid = [m4] persistence: failed
-forbid = [boot] Io: the ATA system disk holds no FAT32 volume
+forbid = [boot] Io: the ATA system disk holds no
 
 expect = [INFO] Io: GPT system partition 2: LBA
 expect = (Both)
