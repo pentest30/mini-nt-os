@@ -6,9 +6,9 @@
 //! `CurrentControlSet\Control\Nls\Language` (une chaîne hexadécimale,
 //! `0409`), que le noyau lit une fois la ruche SYSTEM montée
 //! ([`set_system_locale`]) ; sans elle, 0x0409 (anglais, États-Unis), comme
-//! ReactOS. Celui de l'utilisateur est le même : NtSetDefaultLocale, par
-//! lequel `winlogon` le prend du profil de l'utilisateur, n'est pas encore
-//! là ; il les séparera.
+//! ReactOS ; NtSetDefaultLocale le change (`ntoskrnl::sys::locale`). Celui de
+//! l'utilisateur est le même : il viendra de son profil (`HKCU`), que le
+//! registre n'a pas encore ; il les séparera.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

@@ -307,7 +307,16 @@ sans avance.
   seule préparation à la fois, `PrepareError::Busy` →
   `STATUS_DEVICE_BUSY` sinon ; le verrou tient de la sonde du disque à sa
   relecture. La cible n'étant pas montée, pas de démontage à faire : le
-  verrou couvre l'accès exclusif.
+  verrou couvre l'accès exclusif. Préparation, formatage et copie passent
+  par `io::install::run_exclusive`, qui tient le verrou **dans une région
+  critique** (`ke_enter_critical_region`, comme un système de fichiers sous
+  FsRtlEnterFileSystem) : la fin du thread (l'APC noyau normal de
+  NtTerminateProcess et NtTerminateThread) attend la fin du travail et le
+  verrou rendu. Avant, un `SETUP1.EXE` terminé pendant la copie sortait au
+  milieu, laissait le verrou pris pour de bon (tout appel suivant : `Busy`)
+  et le volume à moitié écrit. Self-test de phase 1 (`install_lock_self_test`,
+  scénario `smoke`) : un APC noyau normal mis en file pendant le travail ne
+  passe qu'après, le verrou libre.
 - Banc d'essai : chaque marqueur `[setup] screen …` part **après** le
   paint de l'écran qu'il nomme — sur le chemin SYSENTER, plus rapide, le
   screendump du scénario prenait une fenêtre à moitié peinte (vu et
@@ -360,7 +369,11 @@ cible préparée et formatée, avec les mêmes refus et la même revalidation :
 - **l'arbre système** : le ramdisk de démarrage, monté **une fois** pour
   toute la récursion (`copy_dir` lit chaque répertoire par `dir_entries`, chaque
   fichier par un `FatFile` tiré de son entrée), vers le volume système de la
-  cible ; chaque taille relue à son entrée. Avant, la source était remontée
+  cible ; chaque fichier passe par morceaux d'au plus 1 Mio (`copy_file_data`,
+  comme les fichiers de boot), sa taille relue à son entrée. Chaque morceau et
+  chaque répertoire créé est une étape du moteur (`io::install::last_step_time`),
+  que la sonde de `test-smss` compte comme une touche : sous QEMU, la copie
+  dure plus que ses 10 s sans touche. Avant, la source était remontée
   à chaque fichier (lent), et le premier nom long (`KERNEL32_VISTA.DLL`)
   arrêtait la copie : `Volume::create` écrit maintenant les entrées VFAT et
   l'alias 8.3 (`BASE~N.EXT`, unique dans le répertoire, extension comprise) ;

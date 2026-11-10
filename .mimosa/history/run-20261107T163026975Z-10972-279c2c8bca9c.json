@@ -1,0 +1,49 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261107T163026975Z-10972-279c2c8bca9c",
+  "runStatus": "inconclusive",
+  "errors": [
+    "scan:kernel/hal/src/bochs.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/hal/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/win32k/src/display.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:drivers/video/gopfb/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "supply-chain-check:.: stop_budget_exhausted: focused supply-chain check was not run before the gate budget"
+  ],
+  "target": ".",
+  "revision": "3a84b64be39ed6ed8023c67a20c3c1becaad871f",
+  "diffHash": "9e1c4d60fa928469e0bd517495e8ad3a83a87f2b4342f557367cd1e076959472",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-07T16:30:26.975Z",
+  "timing": {
+    "startedAt": "2026-11-07T16:30:24.268Z",
+    "completedAt": "2026-11-07T16:30:26.975Z",
+    "durationMs": 2707
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 3,
+    "bySeverity": {
+      "high": 3
+    },
+    "byStatus": {
+      "static_verified": 3
+    }
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "scanner_failed": 5,
+      "stop_budget_exhausted": 1,
+      "project_check_failed": 6
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T163026975Z-10972-279c2c8bca9c.json"
+}

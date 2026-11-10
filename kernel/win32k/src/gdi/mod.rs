@@ -55,3 +55,26 @@ pub fn delete_object(handle: u32) -> bool {
     }
     true
 }
+
+/// GDI_CleanupForProcess : les objets GDI du processus `pid`, qui se
+/// termine, quittent la table ; un DC en mémoire laisse son bitmap. Leurs
+/// attributs et les vues des DIB sections partent avec la mémoire du
+/// processus. Les DC du cache qu'il a pris sont d'abord rendus au cache
+/// (`crate::dce::free_process_dcs`). Rend le nombre d'objets supprimés.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn cleanup_process(pid: u32) -> usize {
+    let owned = handles::owned_by(pid);
+    let mut deleted = 0;
+    for handle in owned {
+        let Some((object, _)) = handles::delete(handle, pid, |_| true) else { continue };
+        if let Object::Dc(dc) = &object {
+            if let Some(selected) = dc.change(core::mem::take).bitmap {
+                selected.surface.deselect(handle);
+            }
+        }
+        deleted += 1;
+    }
+    deleted
+}

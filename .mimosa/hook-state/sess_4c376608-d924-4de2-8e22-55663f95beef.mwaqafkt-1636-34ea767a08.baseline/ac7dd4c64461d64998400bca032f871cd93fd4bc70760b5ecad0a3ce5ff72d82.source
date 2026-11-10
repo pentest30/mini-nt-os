@@ -1,0 +1,16 @@
+[package]
+name    = "io-manager"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "io_manager"
+
+[dependencies]
+abi  = { path = "../../abi" }
+ob   = { path = "../ob" }
+ke   = { path = "../ke" }
+hal  = { path = "../hal" }
+log  = { workspace = true }
+gpt = { path = "../../libs/gpt" }
+fatfs = { path = "../../libs/fatfs" }

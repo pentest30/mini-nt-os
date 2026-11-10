@@ -24,6 +24,8 @@ mod fat32;
 mod inflate;
 mod install;
 mod iso9660;
+#[cfg(windows)]
+mod job;
 mod native;
 mod partition;
 mod qemu;

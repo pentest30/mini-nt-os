@@ -16,6 +16,7 @@ mod hardware;
 mod input;
 mod launcher;
 mod shared_data;
+mod srm;
 mod sys;
 mod syscall;
 mod userland;
@@ -46,6 +47,19 @@ const HEAP: &mm::pool::Pool<mm::pool::KernelBacking> = &mm::pool::NONPAGED_POOL;
 //
 // # IRQL: PASSIVE_LEVEL only.
 // Both the buddy lock and OffsetPageTable::map_to are spinlock-protected.
+
+/// Gives the clock the legacy loader's KUSER_SHARED_DATA page to update, by
+/// its kernel alias (HHDM): its user address (`SHARED_USER_DATA32_VA`) is
+/// that page only in the system address space, where the legacy processes
+/// run. A Ps process's thread may be current at a tick, and there the same
+/// address is its read-only shared page: written at CLOCK_LEVEL, it stopped
+/// the system (STOP 0x0A) once `services.exe` and `lsass.exe` outlived the
+/// `smss` probe.
+fn set_legacy_shared_data(pt: &mm::MmPageTables, hhdm_offset: u64) {
+    let va = x86_64::VirtAddr::new(u64::from(ps::loader::SHARED_USER_DATA32_VA));
+    let phys = pt.translate(va).expect("setup_process maps the legacy KUSER_SHARED_DATA");
+    hal::timer::set_shared_user_data_addr(Some(phys.as_u64() + hhdm_offset));
+}
 
 struct KernelPageMapper {
     pt: mm::MmPageTables,
@@ -326,6 +340,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     sys::apc::install();
     shared_data::init();
     win32k::init().expect("the USER shared section");
+    // What win32k gives back at the end of a GUI thread, then of its process.
+    ps::set_win32_callouts(win32k::destroy::thread_exit, win32k::destroy::process_exit);
     // The display driver: the UEFI framebuffer, if the loader found one.
     // SAFETY: the HHDM maps [0, 4 GiB) for good and the framebuffer lies
     // below 4 GiB; only gopfb and the boot console write to it.
@@ -338,6 +354,15 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     x86_64::instructions::interrupts::enable();
     // The keyboard to win32k (once it has the screen).
     input::start();
+    match srm::start() {
+        Ok(()) => log::info!(
+            "[boot] Se: {}, {} and {}, waiting for lsass",
+            srm::LSA_AUTHENTICATION_INITIALIZED,
+            srm::COMMAND_PORT,
+            srm::LSA_INIT_EVENT
+        ),
+        Err(status) => log::error!("[boot] Se: the reference monitor's command server refused: {status}"),
+    }
     // Raises starved threads every second (ke::sched).
     spawn_kernel_thread(
         ke::balance::BALANCE_SET_MANAGER_PRIORITY,
@@ -353,6 +378,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     address_space_self_test();
     vad_self_test();
     demand_paging_self_test();
+    copy_race_self_test();
     kernel_stack_self_test();
     out_of_page_tables_self_test();
     section_self_test();
@@ -368,6 +394,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     object_directory_self_test();
     file_self_test();
     file_write_self_test();
+    install_lock_self_test();
     #[cfg(feature = "test-install")]
     install_prepare_self_test();
     section_service_self_test();
@@ -428,7 +455,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     userland::install_system_dll();
     userland::install_nls_tables();
     userland::mount_system_hive();
-    userland::mount_software_hive();
+    userland::mount_machine_hives();
     userland::install_fonts();
     if cfg!(feature = "test-persistence") {
         persistence_test();
@@ -1480,6 +1507,99 @@ fn demand_paging_self_test() {
         "[smoke] Mm: demand paging: 256 MiB reserved, {COMMITTED} pages committed, {} touched for as many \
          pages and faults; PAGE_NOACCESS and guard pages; all back on release and destroy ({tables} page tables)",
         COMMITTED / 2
+    );
+}
+
+/// A copy from outside a space (`AddressSpace::read_bytes`, MmCopyVirtualMemory)
+/// against another thread that resolves the same page: the boot thread reads
+/// committed pages never touched, one after the other, while a thread above it,
+/// woken at each tick (1 ms for the test), writes the page being read. A tick
+/// that lands as the copy finds its page absent switches to that thread, which
+/// maps the page; the copy must then read it, not take the page now present
+/// for an access violation (the STOP 0x1E once seen in `process_round`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn copy_race_self_test() {
+    use abi::ntstatus::{STATUS_SUCCESS, STATUS_WAIT_0};
+    use core::ffi::c_void;
+    use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+    use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
+    use ke::sched::KePlatform;
+    use mm::address_space::AddressSpace;
+    use mm::pfn::{self, PageUsage};
+    use mm::vad::PageProtect;
+    use mm::virtual_alloc::{AllocType, FreeType, PAGE_SIZE};
+
+    const MS: i64 = 10_000;
+    const PAGES: u64 = 64;
+    const RUN_MS: u64 = 100;
+    /// The page the boot thread is reading, 0 between two reads.
+    static TARGET: AtomicU64 = AtomicU64::new(0);
+    static STOP: AtomicBool = AtomicBool::new(false);
+    /// The other thread's writes to a page while the boot thread read it.
+    static WRITES: AtomicU32 = AtomicU32::new(0);
+    fn competitor(space: *mut c_void) {
+        // SAFETY: the boot thread keeps the space until this thread has ended.
+        let space = unsafe { &*space.cast::<AddressSpace>() };
+        while !STOP.load(Ordering::Acquire) {
+            let target = TARGET.load(Ordering::Acquire);
+            if target != 0 {
+                space.write_bytes(target, &[1]).expect("write the page being read");
+                WRITES.fetch_add(1, Ordering::Relaxed);
+            }
+            // SAFETY: a kernel thread at PASSIVE_LEVEL.
+            let delay = unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -MS) };
+            assert_eq!(delay, STATUS_SUCCESS);
+        }
+    }
+
+    let counts = || {
+        let s = pfn::stats();
+        (s.active(PageUsage::PageTable), s.active(PageUsage::UserPrivate))
+    };
+    let before = counts();
+    let space = AddressSpace::new().expect("no PML4");
+    let rw = PageProtect::READWRITE;
+    let size = PAGES * PAGE_SIZE;
+    let base = space.allocate(0, size, AllocType::MEM_RESERVE, rw).expect("reserve");
+    hal::timer::set_resolution(MS as u32);
+    // Above the boot thread, boost included.
+    let tid = spawn_kernel_thread(
+        ke::sched::current_priority() + 1,
+        competitor,
+        alloc::sync::Arc::as_ptr(&space).cast_mut().cast(),
+    );
+    let start = hal::timer::interrupt_time();
+    let mut reads = 0u64;
+    while hal::timer::interrupt_time() - start < RUN_MS * MS as u64 {
+        assert_eq!(space.allocate(base, size, AllocType::MEM_COMMIT, rw), Ok(base), "commit");
+        for page in (base..base + size).step_by(PAGE_SIZE as usize) {
+            TARGET.store(page, Ordering::Release);
+            let mut byte = [0xFFu8];
+            let read = space.read_bytes(page, &mut byte);
+            TARGET.store(0, Ordering::Release);
+            assert_eq!(read, Ok(()), "a page mapped by another thread during the copy, read at {page:#x}");
+            assert!(byte[0] <= 1, "neither zero nor the other thread's byte: {:#x}", byte[0]);
+            reads += 1;
+        }
+        assert_eq!(space.free(base, size, FreeType::MEM_DECOMMIT), Ok((base, size)), "decommit");
+    }
+    STOP.store(true, Ordering::Release);
+    let thread = ke::sched::thread_object(tid).expect("thread object");
+    // SAFETY: the object of a thread of the scheduler, never freed.
+    let ended =
+        unsafe { ke_wait_for_single_object::<KePlatform>(thread, ProcessorMode::Kernel, false, Some(-1000 * MS)) };
+    assert_eq!(ended, STATUS_WAIT_0, "the other thread did not end");
+    hal::timer::set_resolution((hal::timer::TICK_INTERVAL_MS * MS as u64) as u32);
+    assert_eq!(space.free(base, 0, FreeType::MEM_RELEASE), Ok((base, size)), "release");
+    space.destroy();
+    assert_eq!(counts(), before, "the pages read did not all go back");
+    let writes = WRITES.load(Ordering::Relaxed);
+    assert!(writes > 0, "the other thread never ran during a copy");
+    log::info!(
+        "[smoke] Mm: copies against faults: {reads} fresh pages read while a thread above, at each tick, wrote \
+         the page being read ({writes} times)"
     );
 }
 
@@ -7134,6 +7254,76 @@ fn resolution_self_test() {
     log::info!("[resolution] {}x{}, the desktop repainted: {painted}", mode.width, mode.height);
 }
 
+/// Checks that the installer's engine finishes its work before the end of
+/// its thread (`io::install::run_exclusive`): a normal kernel APC — what
+/// NtTerminateProcess and NtTerminateThread queue — queued to the boot thread
+/// while the engine works waits for the end of the work, and runs once the
+/// engine's lock is given back; a second caller meanwhile gets `Busy`, and the
+/// work's error comes back. Without the critical region, a thread terminated
+/// during the copy left the lock held for good (`installer-ui`, when the probe
+/// of `test-smss` ended SETUP1.EXE in the middle of it).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, interrupts enabled.
+fn install_lock_self_test() {
+    use core::ffi::c_void;
+    use core::ptr::null_mut;
+    use core::sync::atomic::{AtomicU8, Ordering};
+    use io_manager::install::{run_exclusive, PrepareError};
+    use ke::apc::{ke_insert_queue_apc, KApc, NormalRoutine};
+    use ke::dispatcher::{Platform, ProcessorMode, IO_NO_INCREMENT};
+    use ke::sched::KePlatform;
+
+    const NOT_RUN: u8 = 0;
+    const LOCK_FREE: u8 = 1;
+    const LOCK_HELD: u8 = 2;
+    /// What the normal routine saw of the engine's lock.
+    static NORMAL: AtomicU8 = AtomicU8::new(NOT_RUN);
+
+    fn kernel_routine(
+        _: *mut KApc,
+        _: &mut Option<NormalRoutine>,
+        _: &mut *mut c_void,
+        _: &mut *mut c_void,
+        _: &mut *mut c_void,
+    ) {
+    }
+    /// At PASSIVE_LEVEL, where a thread's termination ends it: the engine's
+    /// lock is free if a second piece of work gets it.
+    fn normal_routine(_: *mut c_void, _: *mut c_void, _: *mut c_void) {
+        let free = run_exclusive(|| Ok(())).is_ok();
+        NORMAL.store(if free { LOCK_FREE } else { LOCK_HELD }, Ordering::Relaxed);
+    }
+
+    let me = KePlatform::current_thread();
+    let result = run_exclusive(|| -> Result<(), PrepareError> {
+        let apc = alloc::boxed::Box::leak(alloc::boxed::Box::new(KApc::new(
+            me,
+            kernel_routine,
+            None,
+            Some(NormalRoutine::Kernel(normal_routine)),
+            ProcessorMode::Kernel,
+            null_mut(),
+        )));
+        // SAFETY: the APC is leaked: valid, at a fixed address, for good; the
+        // boot thread is a registered thread, never freed.
+        let queued = unsafe { ke_insert_queue_apc::<KePlatform>(apc, null_mut(), null_mut(), IO_NO_INCREMENT) };
+        assert!(queued);
+        assert_eq!(
+            NORMAL.load(Ordering::Relaxed),
+            NOT_RUN,
+            "a normal kernel APC (a thread's termination) ran in the middle of the installer's engine"
+        );
+        assert_eq!(run_exclusive(|| Ok(())), Err(PrepareError::Busy), "a second caller of the engine");
+        Err(PrepareError::Io)
+    });
+    assert_eq!(result, Err(PrepareError::Io), "the work's result");
+    assert_eq!(NORMAL.load(Ordering::Relaxed), LOCK_FREE, "the APC held back, run once the engine's lock is free");
+    log::info!(
+        "[smoke] Io: the installer's engine holds back a thread's termination (a normal kernel APC) until its work          is done and its lock given back"
+    );
+}
+
 /// `test-install` : les autres scénarios gardent le disque cible vierge
 /// pour la préparation réelle de l'interface.
 #[cfg(feature = "test-install")]
@@ -9594,7 +9784,7 @@ fn loader_from_fat(hhdm_offset: u64) -> Option<(u32, u32)> {
     let mut mapper = KernelPageMapper { pt };
     let img = ps::loader::load_image(&pe_bytes, &mut vad, &mut mapper, None).ok()?;
     let ctx = ps::loader::setup_process(&img, &mut vad, &mut mapper, 4, 1).ok()?;
-    hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
+    set_legacy_shared_data(&mapper.pt, hhdm_offset);
     syscall::install(vad, hhdm_offset);
     Some((img.entry_point as u32, ctx.stack_top))
 }
@@ -9708,7 +9898,7 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
     );
 
     let ctx = ps::loader::setup_process(&img, &mut vad, &mut mapper, 4, 1).expect("loader_demo: setup_process failed");
-    hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
+    set_legacy_shared_data(&mapper.pt, hhdm_offset);
 
     log::info!("loader_demo: VAD has {} entry(ies)", vad.len());
     syscall::install(vad, hhdm_offset);
@@ -9723,8 +9913,12 @@ fn loader_demo(hhdm_offset: u64) -> (u32, u32) {
 #[allow(dead_code)]
 /// The boot volumes (`io_manager::mount_boot_volumes`): the boot RAM disk,
 /// and the ATA system disk if there is one, which `\??\C:` and `\SystemRoot`
-/// then lead to.
+/// then lead to; and the named pipe file system (`\Device\NamedPipe`).
 fn mount_boot_volumes() {
+    match io_manager::mount_named_pipes() {
+        Ok(()) => log::info!("[boot] Io: {} (NPFS)", io_manager::npfs::DEVICE_NAME),
+        Err(status) => log::error!("[boot] Io: {} refused: {status}", io_manager::npfs::DEVICE_NAME),
+    }
     let volumes = match io_manager::mount_boot_volumes() {
         Ok(volumes) => volumes,
         Err(status) => return log::error!("[boot] Io: the boot volume refused: {status}"),
@@ -10265,7 +10459,7 @@ fn shell_load_and_spawn(fat_path: &str, hhdm_offset: u64) -> Option<usize> {
     // Re-install syscall context so NtAllocateVirtualMemory uses the new VAD.
     syscall::install(vad, hhdm_offset);
 
-    hal::timer::set_shared_user_data_addr(Some(ps::loader::SHARED_USER_DATA32_VA as u64));
+    set_legacy_shared_data(&mapper.pt, hhdm_offset);
 
     spawn_user_thread(img.entry_point as u32, ctx.stack_top)
 }

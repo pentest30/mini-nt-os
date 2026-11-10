@@ -1,29 +1,129 @@
 # Notes de passation
 
-- **M5, le dernier critère : les apitests de ReactOS** (`claude/apps-wave`,
-  [`compat/m5-rostests.md`](compat/m5-rostests.md)). Le banc est fait : `cargo xtask rostests-fetch` (l'arbre
-  0.4.16 par Git, dans `third_party/reactos-0.4.16/`), `xtask/src/rostests.rs` (winnt.h généré, SAL neutralisée,
-  PSEH ; un pilote par module, commande initiale de `smss`, qui prend `WinSta0\Default` comme winlogon et lance
-  chaque test détaché dans un coureur, sa sortie relayée par `DbgPrint`), scénarios `rostests` (ntdll) et
-  `rostests-kernel32`, avec `interactive` (sans lui, la sonde termine `smss` 10 s après son début). Jugement :
-  `apitests-floor` (un plancher qui ne baisse pas : le scénario échoue en dessous) et le seuil du M5 (50 %,
-  rapporté). Sans l'arbre, les scénarios sont sautés, et `cargo xtask test` ne s'arrête plus. Le banc a mis au
-  jour un manque de Ps : la fin d'un thread n'était pas annoncée (`LPC_CLIENT_DIED`), `csrss` gardait ses clients
-  morts et la table des 64 threads de Ke se remplissait ; c'est fait (`ps::exit::notify_client_died`,
-  `lpc::request_port`, `process_settings_self_test`). Le banc compile maintenant tests et PSEH avec les options
-  i386 de ReactOS (`-fno-omit-frame-pointer`… : sans elles, chaque `__except` qui attrapait tuait le test,
-  STATUS_UNWIND). **Mesure du 2026-11-10 : ntdll 33/84, kernel32 11/29, 39 % ; le seuil de 50 % n'est pas
-  atteint**, le critère reste décoché ; ce sont les planchers. La suite, vers le seuil : les 8 tests qui meurent
-  ou pendent, puis les assertions une à une (listes dans le document), en montant le plancher à chaque commit.
-  Contournement à suivre : le pilote prend lui-même `WinSta0\Default` ; la station par défaut d'un chemin de
-  bureau qui n'en nomme pas reste à faire dans `win32k::startup` (IntResolveDesktop).
-  Aussi : `docs/compat/syscalls.md` régénéré (périmé depuis les stylos et les menus : `cargo xtask lint` échouait),
-  les tests de `win32k::defwnd` recompilent (le paramètre `has_menu` des menus), le scénario `cmd` recalé (cassé
-  depuis 36b6714 : l'auto-test d'Io laisse `A long name.txt` à la racine ; le marqueur `0 bytes free` prenait
-  aussi `4,180,480 bytes free`). Validation sur l'hôte Windows : `cargo xtask lint` propre, 898 tests hôte
-  (`--release`), 75 démarrages sur 77 ; **`installer-finish` échoue** (défaut et Intel) : la sonde termine `smss`
-  10 s après la dernière touche pendant la copie (« stage copy: 60% »), le symptôme connu des scénarios
-  d'installation sur cet hôte, sans rapport avec ce travail, non revérifié sur la base.
+- **DestroyWindow, DestroyMenu, et la fin d'un thread ou d'un processus GUI** (`claude/win32k-destroy`, sur
+  main `a6fc45d` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 14) : `win32k::destroy`
+  (co_UserDestroyWindow, IntSendDestroyMsg, co_UserFreeWindow de ReactOS comme spécification) ; NtUserDestroyWindow
+  (refusé pour la fenêtre d'un autre thread ou d'un bureau : 5 ; WM_PARENTNOTIFY, cachée, fenêtres possédées
+  d'abord, une autre fenêtre activée, `input::activate_other`, le clavier rendu, WM_DESTROY de haut en bas,
+  WM_NCDESTROY de bas en haut ; minuteries, messages de la file, envoyeurs réveillés, région à peindre, capture,
+  menu de la barre, DC du cache, propriétés, ordre Z, puis le handle) ; une création qui échoue détruit sa fenêtre ;
+  NtUserDestroyMenu. Les rappels de Ps à la fin d'un thread GUI puis d'un processus GUI (`ps::set_win32_callouts`,
+  documentés avec leur IRQL) : le thread quitte le premier plan, ses fenêtres sont détruites sans message, ses
+  minuteries partent, sa file est vidée, les messages qu'on lui avait envoyés reviennent à leurs envoyeurs, il quitte
+  son bureau ; le processus rend ses menus, les DC du cache qu'il tenait, ses objets GDI, ses classes, ses bureaux et
+  sa station. La table des handles USER retient le processus et le type de chaque objet : GetGuiResources compte les
+  fenêtres. Corrigé : NtUserGetGuiResources prenait 1 pour GDI et 2 pour USER (le SDK : 0 et 1). Tests : hôte
+  (`handles`, `queue`, `sent`, `gdi::handles`, `gui`), scénario `destroy` (`tests/native/destroy1.c`, un processus
+  fils compris), sur AMD et Intel, et les scénarios GUI touchés. Les fenêtres partant avec leur processus, les
+  programmes de `gui`, `text`, `bitmap`, `mouse` et `mouse-windows` attendent 5 s après leur dernier marqueur, le
+  temps de la capture d'écran (`gui`, `text` et `bitmap` n'attendent plus leur statut de sortie). Vu en chemin :
+  `user32` ne sait pas lire nos menus (IsMenu toujours FALSE ; AppendMenu(MF_POPUP) n'attache pas le sous-menu,
+  faute de `MIIM_SUBMENU`) : à reprendre avec les menus. Pas encore : WM_ASYNC_DESTROYWINDOW aux enfants d'un autre thread, les crochets, le
+  WM_MOUSEMOVE après une destruction, le menu système, `spwndLastActive`.
+
+- **M9 NTFS, bootstrap de MFT répartie** (`feature/m9-ntfs-mft-bootstrap`, PR #111, depuis main `605ae94`) : résolution progressive des extensions DATA de la MFT, uniquement à travers les mappings déjà validés ; bornes et validations partagées avec le lecteur ATTRIBUTE_LIST. 39 tests unitaires passent, dont dépendances hors ordre VCN, records chevauchant deux runs, erreurs d'E/S, corruptions et limite de 64 records ; refus des cycles ou records partiellement mappés sans E/S spéculatives. Validation locale : cargo xtask lint, tests hôte (949 réussis, 3 ignorés), images ntfs-3g (512/4096/8192) et cible no_std passent. La MFT répartie est couverte par les images synthétiques ; les images ntfs-3g vérifient les régressions générales. Aucun branchement noyau. Limites : liste elle-même entièrement décrite en base, pas de récupération par miroir. Contrat et reprise : `docs/compat/ntfs.md`. Suite : adaptateur de partition et montage Io en lecture seule dans une PR coordonnée avec le chantier noyau.
+
+- **Une fenêtre créée avec un menu** (`claude/desktop-launch-menu`) : `desktop-launch` échouait sur `main` depuis les
+  menus de la PR #107 (`d4d2231`). Tant que CreateMenu n'existait pas, LoadMenu rendait NULL et le dialogue de
+  `taskmgr` se créait sans barre. Depuis, LoadMenu rend un vrai menu, que NtUserCreateWindowEx refusait encore
+  (« no menus yet », `ERROR_INVALID_MENU_HANDLE`) : le dialogue n'était pas créé, et la liste des processus jamais
+  lue. C'est aussi ce qui terminait `taskmgr` dans `claude/apps-wave` (l'assertion `pdi != NULL` de `user32` suit
+  l'échec du dialogue), que `d4d2231` attribuait aux tubes nommés. Corrigé : `win32k::window::create_window`
+  donne à une fenêtre qui n'est pas fille sa barre `hMenu` dès sa création, avant WM_NCCALCSIZE ; un menu qui
+  n'existe pas rend `ERROR_INVALID_MENU_HANDLE` (`creation_menu`). Tests : hôte (`creation_menu`), scénario `gui`
+  (zone cliente plus basse de SM_CYMENU, menu invalide refusé), `desktop-launch` sur AMD et Intel. **Le menu de la
+  classe** (`lpszMenuName`) : `user32` le charge lui-même avant NtUserCreateWindowEx pour un style qui a WS_POPUP ou un
+  bit de WS_OVERLAPPEDWINDOW (vu dans son code : GetClassInfoExW puis LoadMenuW), et il passe donc par `hMenu` ;
+  pour les autres (WS_OVERLAPPED seul…), win32k le demande à `user32` par le rappel LoadMenu (n° 6,
+  `win32k::callback::load_menu`, co_IntCallLoadMenu), du module de la classe ; le nom est copié dans le noyau à
+  l'enregistrement (`MenuName::name`). Tests : hôte (les arguments du rappel), scénario `gui` (classes de module
+  `shell32`, dont les menus `MENU_001` et 206 : `user32` refuse une classe de son propre module ; mutation du rappel
+  détectée). Pas encore : `user32` lit GetMenu dans `IDMenu` du `WND`, que le noyau n'écrit pas pour une barre (le
+  handle de la table USER ne désigne pas un `MENU` que `user32` sache lire).
+
+- **M9 NTFS, ATTRIBUTE_LIST** (`feature/m9-ntfs-attribute-list`, PR #103) : listes résidentes/non résidentes bornées, références/instances vérifiées et assemblage des extents DATA ou index. Validation indépendante ntfs-3g : trois images (clusters 512/4096/8192), 162 fichiers chacune, listes forcées par 40 flux nommés ; comparaison des contenus sans nom avec ntfscat. Tests synthétiques des extents, index déplacés, références invalides et bornes. MFT avec liste au bootstrap encore refusée ; aucun montage noyau. Limites et reprise : `docs/compat/ntfs.md`. Validation locale : 28 tests NTFS, 906 tests hôte (3 ignorés), images ntfs-3g, Clippy hôte/noyau/loader et cible no_std passent. Le rapport syscalls.md périmé sur main b7d41ff a été régénéré dans un commit séparé (8 services win32k déjà implémentés) ; cargo xtask lint passe intégralement. Synchronisation avec main 68e8f9a : notes des deux branches conservées et rapport des services régénéré ; sept appels de test nc_calc_size hérités de main ont été adaptés au paramètre has_menu=false dans un commit séparé. Après synchronisation, cargo xtask lint et les tests hôte passent (937 réussis, 3 ignorés). Suite : bootstrap MFT en PR séparée.
+
+- **`services.exe` et `lsass.exe` ; `winlogon` va jusqu'à sa fenêtre SAS** (`claude/winlogon-services`, par-dessus
+  `claude/sharp-davinci-37d7d9` (NPFS), `main` et `claude/fpu-double-fault` ; M5 étape 9,
+  [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 25) : sur le disque, `services.exe`, `lsass.exe`, `msv1_0.dll`,
+  `msgina.dll` et les ruches SECURITY et SAM (montées comme SOFTWARE). Se : le serveur de commandes du moniteur de
+  références (`ntoskrnl::srm` : `\Security`, `\SeRmCommandPort`, `\SeLsaInitEvent`, un thread noyau qui accepte `lsass`
+  et se connecte à son `\SeLsaCommandPort` ; `se::logon` pour ses sessions) ; Ps : un TID réservé au thread du SRM
+  (`reserve_system_thread_id`, que Lpc accepte par `client_exists`) ; NtQueryInformationThread(ThreadAmILastThread),
+  NtSetDefaultLocale (locale du système), NtUserSetLogonNotifyWindow. Corrigé en chemin : l'horloge écrivait la page
+  `KUSER_SHARED_DATA` de l'ancien chargeur par `0x7FFE0000` dans l'espace courant ; un thread de `services.exe`
+  courant à un tick y avait sa page en lecture seule (STOP 0x0A) ; elle passe par l'alias du noyau. `winlogon` ne
+  s'arrête plus : il change de bureau et reste dans sa boucle ; il ira plus loin par USER (un message envoyé à la
+  fenêtre d'un autre thread, celle de l'état de `msgina` : M6). Tests : hôte (`abi::security`, `se::logon`), scénario
+  `smss` (AMD et Intel ; ses comptes d'appels qui dépendent de jusqu'où vont les processus sont devenus des préfixes).
+  Suite : les messages envoyés entre threads (M6) ; NtCreateIoCompletion (le pool de threads de `rpcrt4` dans
+  `lsass`) ; `svchost.exe` et les services ; FSCTL_PIPE_IMPERSONATE ; la sonde qui terminerait aussi les
+  petits-enfants de `smss`.
+
+- **Le scénario `cmd` ne compte plus les fichiers** (`claude/pensive-goldstine-131ffb`) : il échouait sur `main`, sur
+  AMD et Intel. `dir /b C:\*.TXT` listait aussi `A long name.txt` (self-test VFAT du démarrage), la racine de `C:`
+  comptait 34 fichiers et non 22 (les programmes de `tests/native/`), ce qui décalait les lignes attendues de
+  `OUT.TXT` et de `DIR.TXT` ; `forbid = 0 bytes free` attrapait « 4,180,480 bytes free ». `dir /b` écrit maintenant
+  `C:\LIST.TXT`, imprimé sans numéros, dont `CONCMD1.EXE` vérifie qu'il ne tient que des `.TXT` ; pour `dir C:\`,
+  il vérifie que le résumé compte les fichiers et répertoires listés ; le motif interdit vise `Dir(s)` suivi d'une
+  place nulle. Détail : [`compat/m5-console.md`](compat/m5-console.md), étape 8.
+
+- **La TSS tient dans une seule page** (`claude/fpu-double-fault`) : le scénario `fpu` s'arrêtait (STOP 0x7F, double
+  faute, `RIP 0x401000`) sur l'hôte Windows, AMD et Intel, sur `main` aussi. La trace `-d int` de QEMU montre le
+  #PF de la première instruction d'un thread i386 qui faute à nouveau pendant sa livraison, sur `0x8017f000` : la
+  lecture de RSP0 (TSS+4, 8 octets alignés sur 4) chevauchait une page dans ce binaire, et QEMU 11.1 tronque à 32 bits
+  l'adresse de la seconde page d'une telle lecture implicite quand l'interruption vient du mode compatibilité (TR
+  tient bien `0xffffffff8017eff8`). `hal::gdt` met la TSS dans un bloc aligné sur 128 octets (`TssBlock`) et
+  `gdt::init` vérifie qu'elle ne franchit pas de page ; contournement documenté dans le module. Le défaut de QEMU
+  n'est pas encore signalé en amont ni réduit à un cas minimal : tâche de diagnostic ouverte (06, règle 9). Tests :
+  hôte (`the_tss_never_crosses_a_page`), mutation (sans l'alignement, `fpu` s'arrête au démarrage sur « the TSS
+  crosses a page ») ; `fpu` AMD et Intel, `smoke`.
+
+- **Les tubes nommés d'Io (NPFS) ; `winlogon` démarre son serveur RPC** (`claude/sharp-davinci-37d7d9`, M5 étape 9,
+  [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 24) : `io::npfs` (`\Device\NamedPipe`, créé au démarrage ;
+  `\??\PIPE` vient de `smss`) tient les tubes, leurs instances, leurs états et leurs files de données (messages et
+  octets, lectures partielles, quotas et écritures qui attendent, aperçu, attente d'instance) ; `io::request` garde les
+  demandes en attente et les termine hors du verrou ; `sys::pipe` : NtCreateNamedPipeFile, NtFsControlFile
+  (FSCTL_PIPE_LISTEN, DISCONNECT, PEEK, WAIT), NtCancelIoFile, et les tubes dans NtCreateFile, NtOpenFile, NtReadFile,
+  NtWriteFile, NtQuery/SetInformationFile (FilePipe, FilePipeLocal, FileName), NtQueryVolumeInformationFile
+  (FileFsDeviceInformation) et les attentes (l'événement du fichier). Les E/S asynchrones des tubes sont faites : sur
+  un fichier asynchrone, `STATUS_PENDING`, puis le thread qui termine la demande écrit les données et le bloc d'état
+  dans le processus du demandeur, signale ses événements et met en file son APC de fin. Le vrai `winlogon` crée
+  `\pipe\winreg`, le thread serveur de `rpcrt4` l'écoute (`STATUS_PENDING`), puis `winlogon` s'arrête à
+  `services.exe`, absent du disque (« WL: Could not start services.exe »). Tests : hôte (`abi::pipe`, 22 de
+  `io::npfs`), scénario `pipes` (`tests/native/pipe1.c` : un tube de messages au serveur asynchrone comme celui de
+  `rpcrt4`, un tube anonyme d'octets ; AMD 21 s, Intel 20 s), scénario `smss`. Suite : `services.exe` sur le disque
+  (puis `lsass.exe`, `msgina`) ; FSCTL_PIPE_IMPERSONATE, que le serveur de `rpcrt4` demandera au premier appel ;
+  la fin d'un thread qui annule ses demandes (IoCancelThreadIo). Limites dans l'étape 24. Suite de démarrage sur
+  l'hôte Windows : 75 runs sur 80 passent ; `smss` Intel a échoué une fois puis repassé (instabilité) ; `fpu` (STOP
+  0x7F, double faute à l'entrée d'un thread de l'ancien chargeur) et `cmd` échouent aussi sur `main` (`103b381`,
+  vérifié) : les marqueurs de `cmd` sont périmés (`A long name.txt`, que crée l'autotest VFAT de `36b6714`, s'ajoute
+  à `dir /b`, et la racine a 34 fichiers, ligne 42 du listing, au lieu de 22, ligne 30 ; `PIPE1.EXE` en ajoute un ; et
+  `forbid = 0 bytes free` attrape une place libre qui finit par 0).
+
+- **Le moteur de l'installateur va au bout malgré la fin de son thread** (`claude/install-critical-region`, par-dessus
+  la PR #97) : préparation, formatage et copie passent par `io::install::run_exclusive`, qui tient le verrou exclusif
+  du moteur dans une région critique (`ke_enter_critical_region`) ; la fin du thread (APC noyau normal) attend que le
+  travail soit fini et le verrou rendu. Avant, un thread terminé pendant l'IOCTL de copie sortait au milieu, le
+  verrou pris pour de bon et le volume à moitié écrit. Test : `install_lock_self_test` en phase 1 (scénario `smoke`,
+  marqueur `[smoke] Io: the installer's engine holds back a thread's termination`) ; sans la région, il arrête le
+  système sur son assertion (vérifié par mutation).
+
+- **La sonde de `smss` laisse finir la copie de l'installateur** (`claude/relaxed-lewin-04078b`) : `installer-ui`
+  et `installer-finish` ne finissaient plus sur `main`, sur AMD comme sur Intel. La sonde de `test-smss`
+  (`ntoskrnl::userland::run_native`) termine son programme 10 s après sa dernière touche, et la copie du système
+  (`io::install::copy_files` : l'arbre du ramdisk, 44 Mo, et pour `installer-finish` les fichiers de boot, 44 Mo
+  encore) dure plus longtemps sous QEMU : `SMSS.EXE`, `csrss` et `SETUP1.EXE` étaient terminés en pleine copie
+  (« did not end within 10 s »), et le délai du scénario expirait. Le moteur publie maintenant sa dernière étape
+  (`io::install::last_step_time` : le début de chaque préparation, formatage, volume formaté et copie, puis chaque
+  répertoire créé et chaque morceau d'au plus 1 Mio copié, `copy_file_data`, qui copie aussi les fichiers de boot
+  et le shell installé) ; la sonde la compte comme une touche. Les deux scénarios sont le test : `installer-ui`
+  interdit aussi « did not end within 10 s » (sans la correction de la sonde, il y échoue en pleine copie, vérifié
+  par mutation, au lieu d'attendre ses 900 s) ; `installer-ui` (47 s, 44 s) et `installer-finish` (125 s, 118 s)
+  passent sur AMD et Intel. Au second démarrage d'`installer-finish`, la sonde termine encore `smss` : le système
+  installé n'a pas de touche, c'est la fin attendue. Vu en chemin : le thread de `SETUP1.EXE` terminé pendant
+  l'IOCTL de copie sortait au milieu de la copie (un APC noyau normal), en laissant `PREPARE_LOCK` pris et le volume
+  à moitié écrit (corrigé : la région critique de l'entrée précédente).
 
 - **M9 NTFS, parcours des répertoires** (`feature/m9-ntfs-paths`) : lecture de `$I30` (INDEX_ROOT, INDEX_ALLOCATION, BITMAP), fixups INDX et parcours borné avec détection des cycles. Comparaison des entrées avec ntfsls sur images mkntfs ; résolution des chemins imbriqués avec références séquencées et `$UpCase`, normalisation bornée et refus des noms ambigus. 19 tests unitaires et comparaison de 162 fichiers par image ntfs-3g (clusters 512/4096/8192) passent. Limites et reprise : `docs/compat/ntfs.md`. Suite : ATTRIBUTE_LIST et extents, puis montage noyau séparé. PR #95.
 
@@ -47,8 +147,10 @@ jour à chaque commit qui change l'état.
   connecte à `csrss` (vue `SEC_NO_CHANGE` de sa section partagée) et à win32k, s'inscrit comme processus de logon,
   crée la station interactive `WinSta0` et ses bureaux, s'y place (la fenêtre du bureau d'entrée est montrée et peinte
   par WM_PAINT : premier affichage, GDI et `gopfb`), charge sa disposition de clavier (dont la page de code vient
-  d'un rappel de `user32` : KeUserModeCallback), puis s'arrête à son serveur RPC (un tube nommé :
-  NtCreateNamedPipeFile, Io) : [`compat/m5-csrss.md`](compat/m5-csrss.md), étapes 15 à 23.
+  d'un rappel de `user32` : KeUserModeCallback), démarre son serveur RPC (le tube nommé `\pipe\winreg` : NPFS,
+  Io), lance `services.exe` et `lsass.exe` (qui se connecte au moniteur de références de Se), charge `msgina`, crée
+  sa fenêtre SAS et reste dans sa boucle, où il attend USER (M6) : [`compat/m5-csrss.md`](compat/m5-csrss.md),
+  étapes 15 à 25.
 - La sonde console, étape 8 (M5, [`compat/m5-console.md`](compat/m5-console.md)) : ce que `dir` affiche autour des
   noms (en-tête du volume, dates, place libre ; NtQueryDefaultLocale, FileFsVolume/Size/FullSizeInformation,
   FileNameInformation, FileBasicInformation en écriture ; dates de FAT) : **le critère de `cmd.exe` interactif du M5
@@ -173,6 +275,18 @@ jour à chaque commit qui change l'état.
   appeler le moteur ni modifier les disques. Les scénarios
   `boot-menu-install` et `boot-menu-live` passent sur AMD et Intel. Utiliser
   `--initial-command system` pour conserver le `winlogon.exe` de ReactOS.
+- **Le bureau lance `cmd` et `taskmgr`** (branche `claude/desktop-launch`) : dans le menu Démarrer de
+  `DESKTOP1.EXE`, Terminal démarre `C:\WINDOWS\SYSTEM32\CMD.EXE` dans une console à lui (`CREATE_NEW_CONSOLE`),
+  et l'entrée Software devient Task Manager (`TASKMGR.EXE`) ; un appui sur l'entrée ou Entrée dessus. Deux défauts
+  vus en chemin : le bureau ne chargeait pas de disposition de clavier (aucune touche ne devenait une touche
+  virtuelle : le menu n'a jamais répondu au clavier), et un appui sur Démarrer le remontait, plein écran, par-dessus
+  les fenêtres lancées (il garde désormais sa place sous elles : `SWP_NOZORDER` à `WM_WINDOWPOSCHANGING`, comme le
+  bureau d'un shell). Scénario `desktop-launch` (AMD et Intel) : Terminal au clavier, Task Manager à la souris, la
+  liste des processus lue par le PID de Task Manager, la console toujours visible ; sans `SWP_NOZORDER`, il échoue
+  (vérifié). Vérifié aussi sous VirtualBox (VM `Mino-main`) : `cmd` répond au clavier (`ver`). La fenêtre de
+  `taskmgr` s'ouvre avec sa liste des applications, mais sans onglets, menu ni texte de boutons : la suite est sur
+  `claude/apps-wave`. `consrv` y bute sur une assertion de ReactOS (`GuiData->hIcon && GuiData->hIconSm`), ignorée,
+  comme dans `cmd` et `console`.
 - **Le flux d'installation tourne sur VirtualBox** : avec un
   disque cible vierge de 96 Mio attaché en maître secondaire, l'assistant
   navigue et **la préparation réelle écrit le MBR protecteur et les deux
@@ -215,8 +329,9 @@ jour à chaque commit qui change l'état.
   entrée (`desktop_hit`). Scénarios `installer-click` et `desktop-click`. La file PS/2 de QEMU ne tient
   que 16 octets : un `move:` de plus de 4 paquets (508 px) part en partie, le reste avec le clic
   suivant ; les scénarios découpent leurs grands mouvements.
-  Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la copie ou l'étape
-  « configure ») et `cmd` attend des numéros de ligne de `dir` que les fichiers des self-tests ont décalés.
+  Vu en chemin, déjà sur `main` (sans la souris) : `installer-ui` ne finit plus (la sonde coupait la copie :
+  corrigé, voir « La sonde de `smss` laisse finir la copie » en tête) et `cmd` attend des numéros de ligne de `dir` que
+  les fichiers des self-tests ont décalés (corrigé, voir « Le scénario `cmd` ne compte plus les fichiers » en tête).
   La souris absolue de VirtualBox (branche `claude/vbox-mouse`, `docs/compat/vbox.md`) : `hal::pci`
   (mécanisme n° 1, recherche par fabricant et modèle, BAR d'E/S), `abi::vmmdev`, `hal::vmmdev`, pilote
   `vboxmouse` : VMMDev annoncé (`ReportGuestInfo`, `SetMouseStatus`), chaque paquet PS/2 prend la position
@@ -249,13 +364,16 @@ jour à chaque commit qui change l'état.
   active du thread reçoit WM_NCACTIVATE et WM_ACTIVATE inactifs, la nouvelle WM_NCACTIVATE puis WM_ACTIVATE
   (l'ordre d'XP) ; DefWindowProc de WM_NCACTIVATE tient `WNDS_ACTIVEFRAME` et repeint le cadre
   (`paint::set_frame_active`), que `nc_paint` peint actif ou inactif. Une fenêtre d'un autre thread (la
-  console de `consrv`, la fenêtre active du thread qui perd le premier plan) ne reçoit pas de messages : le
-  noyau change et peint son cadre lui-même. Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow),
-  WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le titre,
-  WM_ACTIVATEAPP.
-  n'agrandit encore). Pas encore : WM_CLOSE de DefWindowProc (DestroyWindow), WM_NCACTIVATE (le cadre reste
-  peint inactif), WM_SETCURSOR, le déplacement au clavier, le bouton dessiné enfoncé, le double-clic sur le
-  titre.
+  console de `consrv`, la fenêtre active du thread qui perd le premier plan) ne reçoit pas encore
+  WM_NCACTIVATE ni WM_ACTIVATE : le noyau change et peint son cadre lui-même. WM_ACTIVATEAPP (branche
+  `claude/activate-app`, `input::send_activate_app`) : quand le premier plan change de thread, chaque fenêtre
+  de premier niveau, visible ou non, du thread qui le perd (FALSE, le TID de l'autre) puis du thread qui le
+  gagne (TRUE, le TID de celui qui l'a perdu, 0 sans lui) le reçoit, avant les messages de la fenêtre
+  activée ; par SendNotifyMessage (`sent::notify_window`) : tout de suite pour les fenêtres du thread courant,
+  par sa file pour un autre thread. Scénario `activate-app` (`tests/native/activate1.c`). Pas encore (WM_CLOSE de
+  DefWindowProc ferme maintenant la fenêtre : DestroyWindow, `win32k::destroy`) : WM_SETCURSOR, le déplacement au
+  clavier, le bouton dessiné
+  enfoncé, le double-clic sur le titre, SetForegroundWindow et SetActiveWindow.
   Les minuteries de USER (branche `claude/win32k-timers`, partie de `main` ; ce que `taskmgr` de la vague
   `claude/apps-wave` attendait pour relire ses processus chaque seconde) : `win32k::timer` (SetTimer,
   SetSystemTimer, KillTimer, KillSystemTimer par NtUserCallHwndParam, NtUserValidateTimerCallback ; délai
@@ -264,8 +382,7 @@ jour à chaque commit qui change l'état.
   (attente jusqu'à l'échéance la plus proche, réveil à chaque SetTimer) : `QS_TIMER` et la file réveillée ;
   PeekMessage fabrique WM_TIMER ou WM_SYSTIMER quand rien d'autre ne sort (un message par minuterie prête).
   Scénario `timers` (`tests/native/timer1.c`). Pas encore : les minuteries du RIT (curseur, clavier),
-  TMRF_ONESHOT, un rappel de Ps à la fin d'un thread GUI (ses minuteries s'en vont à l'échéance suivante),
-  DestroyWindow (`timer::destroy_window_timers` est prêt).
+  TMRF_ONESHOT. (La fin d'un thread GUI et DestroyWindow rendent maintenant leurs minuteries : `win32k::destroy`.)
   SendMessage entre threads (branche `claude/sent-messages`, par-dessus `claude/win32k-timers`) :
   `win32k::sent` (les messages envoyés dans la file du destinataire, `QS_SENDMESSAGE`, traités au début de
   PeekMessage et GetMessage, dans WaitMessage et pendant l'attente d'une réponse ; l'envoyeur regarde toutes les
@@ -317,6 +434,37 @@ jour à chaque commit qui change l'état.
   VM `Mino` : `target/vbox/mino-vbox8.vhd` + cible vierge `target96-9.vhd`. Restent : `C:` reste sur le
   ramdisk quand une cible vierge est en secondaire ; l'ancien `CMD.EXE` lit le clavier PS/2 après la
   phase 1 ; `cargo xtask lint` bute sur `syscall-gen` sous Windows (fins de ligne CRLF, `core.autocrlf`).
+- **Le STOP 0x1E intermittent de l'auto-test de Ps est corrigé** (branche `claude/vibrant-bell-a62f96`) :
+  `read a process: NtStatus(0xc0000005)` dans `process_round`, vu sur Intel, sous charge, dans `keyboard` et
+  `gui`. Ce n'était pas un processus fini (le rundown de `EProcess::with_space` rend alors
+  `STATUS_PROCESS_IS_TERMINATING`) : `AddressSpace::copy` (MmCopyVirtualMemory : `read_memory`,
+  `write_memory`, NtRead/WriteVirtualMemory, le TEB, le `CONTEXT`) regardait la page sous le verrou de la VAD, le
+  relâchait, puis le reprenait pour la faute. La préemption différée tombe à ce relâchement (`hal::sync`) : le
+  thread du processus (`grows.exe`, qui écrit sa page de données) la projetait entre les deux, et
+  `fault::resolve`, trouvant une page présente qui permet déjà l'accès, rendait `STATUS_ACCESS_VIOLATION`.
+  Regard, faute et copie sont maintenant sous une seule prise du verrou (`AddressSpace::resolve_fault`). Test :
+  `copy_race_self_test` (marqueur `[smoke] Mm: copies against faults`, sur chaque démarrage, 100 ms) lit des pages
+  neuves pendant qu'un thread plus prioritaire, réveillé à chaque tick (1 ms le temps du test), écrit la page lue ;
+  l'ancien `copy` échoue à chaque démarrage (4 sur 4, AMD et Intel), dès les premières pages. Reste, pour le
+  multiprocesseur : deux fautes matérielles sur une même page se heurteraient de même dans `fault::resolve`
+  (commentaire de la branche `Present`). L'autre symptôme vu en même temps, QEMU sorti avec le code 1 sans message,
+  est revenu sur la suite complète (Windows, d'autres sessions lançant QEMU en même temps, aucune VirtualBox) : 4
+  runs sur 65 (`bitmap` AMD avant la première ligne série, `dir` Intel, `installed-persistence` Intel, `mouse` AMD en
+  pleine phase 1), `qemu.log` vide, l'autre CPU passant ; relancés seuls, les 4 passent.
+- **Les QEMU tués avec le code 1 : la cause est trouvée** (branche `claude/qemu-exit-1`). Un autre assistant
+  (ZCode, qui travaille dans le checkout principal) préfixe chacun de ses lancements de scénarios par
+  `taskkill //IM qemu-system-x86_64.exe //F`, qui tue tous les QEMU de la machine, ceux des autres sessions compris.
+  Pris sur le fait le 2026-11-08 à 23:18:16 : une sonde des processus (une boucle PowerShell sur `Win32_Process`,
+  avec un handle sur chaque QEMU pour son code de sortie) a vu ce `taskkill`, lancé par le bash de ZCode avant son
+  `xtask test --boot --scenario tasklist …`, tuer à la même milliseconde trois QEMU témoins au repos et un run de
+  `cmd`. QEMU écrit ses propres erreurs sur sa sortie avant de sortir avec 1, et un reset de l'invité sous
+  `-no-reboot` comme un `quit` sortent avec 0 : le code 1 sans un mot vient de `TerminateProcess`. Le nettoyage
+  par le nom s'explique : un `xtask` tué laissait son QEMU orphelin (vérifié). Désormais chaque QEMU d'un run est
+  dans un objet job de son `xtask` (`xtask/src/job.rs`, `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) et meurt avec lui ;
+  vérifié en tuant `xtask.exe` seul, avec la contre-épreuve sans le job (QEMU orphelin). `xtask` dit aussi d'un QEMU
+  tué ainsi « QEMU ended by another process » au lieu de « QEMU exited (exit code: 1) » (`qemu::outside_end`, tests
+  hôte). `CLAUDE.md` interdit d'arrêter QEMU par son nom ; ZCode doit en être averti (ses instructions ne sont pas
+  dans le dépôt).
 - PR fusionnées : #29, #30, #31 (spike S1), #32 à #34 (M4) et #35 (l'étape 1 du M5). Après chaque fusion, repartir de
   `origin/main` (`git fetch origin main && git merge --ff-only origin/main`, ou `git merge origin/main` si la branche a
   des commits non fusionnés : jamais de réécriture).
@@ -710,18 +858,24 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
    - **la suite, côté console** : les outils externes de ReactOS sur le disque (`find`, `sort`, `more`, `tree`,
      `fc`, `xcopy`, `attrib`) et un scénario qui les enchaîne par des tubes et des redirections ; `del`, `ren`, `md`,
      `rd` (suppression et renommage d'Io) ; plus tard `format` et `chkdsk` (`fmifs.dll`, `ufat.dll` : un volume
-     ouvert comme périphérique, les IRP) ; les icônes de `consrv`, SetTimer, le défilement et les barres de
-     défilement de la console, DestroyWindow ; le dernier critère du M5, les `rostests` `ntdll` et `kernel32` :
-     le banc est fait et mesure 39 % pour un seuil de 50 % ([`compat/m5-rostests.md`](compat/m5-rostests.md)) ;
+     ouvert comme périphérique, les IRP) ; les icônes de `consrv`, le défilement et les barres de
+     défilement de la console (SetTimer et DestroyWindow sont faits) ; le dernier critère du M5 : les `rostests`
+     `ntdll` et `kernel32` ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
-     l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
-     nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,
+     l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) passe par NPFS, les tubes
+     nommés d'Io (faits : étape 24 de `compat/m5-csrss.md`), puis `services.exe`, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow (fait),
      les messages envoyés (SendMessage entre threads) et postés aux fenêtres, le thread du bureau ;
      GDI : objets d'un client (CreateSolidBrush, NtGdiGetStockObject), DC en mémoire, BitBlt, texte et polices
      (ADR-013), icônes et curseurs ; l'entrée (i8042, souris, thread d'entrée) ;
-   - **la suite, côté `winlogon`** : il démarre son serveur RPC sur le tube nommé `\pipe\winreg` : il faut le système de
-     fichiers des tubes nommés d'Io (NPFS, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client,
-     FSCTL_PIPE_LISTEN, lectures et écritures), hors de USER ; puis `services.exe`, `lsass.exe`, `msgina` ;
+   - [x] le serveur RPC de `winlogon` (étape 24) : le système de fichiers des tubes nommés d'Io (NPFS,
+     `io::npfs`, `\Device\NamedPipe` : NtCreateNamedPipeFile, l'ouverture d'un client, NtFsControlFile :
+     FSCTL_PIPE_LISTEN, DISCONNECT, PEEK, WAIT ; lectures et écritures, synchrones et asynchrones ; NtCancelIoFile) ;
+     `rpcrt4` crée `\pipe\winreg` et l'écoute ; le scénario `pipes` ;
+   - [x] `services.exe`, `lsass.exe` et `msgina` (étape 25) : le serveur de commandes du moniteur de références
+     (`ntoskrnl::srm`, `se::logon`), les ruches SECURITY et SAM, NtSetDefaultLocale, NtUserSetLogonNotifyWindow ;
+   - **la suite, côté `winlogon`** : les messages envoyés à la fenêtre d'un autre thread (la fenêtre d'état de
+     `msgina`, M6) ; NtCreateIoCompletion ; `svchost.exe` ; FSCTL_PIPE_IMPERSONATE (ImpersonateNamedPipeClient) dès
+     qu'un client RPC appellera un serveur ;
    - **USER (option 1, choisie avec le mainteneur : le win32k minimal, début du M6 et du spike S3)** :
      le `consrv` épinglé n'a que son frontal graphique (`winsrv.dll` : `frontends/gui`, pas de `tuiterm`) et `smss`
      lance `winlogon.exe` en dur ; `winlogon` sert donc de guide. Dans l'ordre où il les demande
@@ -758,9 +912,9 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 - Classes de fenêtres (M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md)) : le refus d'un drapeau inconnu par
   NtUserRegisterClassExWOW n'a pas de test (`user32` n'en passe jamais ; une mutation qui le retire survit) ; ni
   curseurs, ni icônes, ni pinceaux, ni désenregistrement, ni procédures d'appel, ni `atomSysClass`.
-- Fenêtres (M6, étape 2) : ni DestroyWindow (les fenêtres d'un thread vivent autant que lui), ni ShowWindow à la
-  création, ni menus, ni `HWND_MESSAGE`, ni messages à un autre thread, ni crochets ; un texte ANSI n'est pas
-  converti par la page de code (ASCII seul).
+- Fenêtres (M6, étape 2) : ni `HWND_MESSAGE`, ni crochets ; un texte ANSI n'est pas converti par la page de code
+  (ASCII seul). (DestroyWindow, ShowWindow à la création, les menus et les messages à un autre thread sont faits
+  depuis.)
 - DefWindowProc du noyau (M6, étape 3) : WM_NCCALCSIZE seul (les autres messages attendent les contextes de
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
@@ -778,18 +932,18 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
 - Sonde console (M5, étape 6) : ni souris, ni WM_NCACTIVATE, ni WM_ACTIVATE inactif à l'ancienne fenêtre active,
   ni messages d'activation à un autre thread (le focus est pris sans eux) ; ni crochets, raccourcis, Alt + pavé
   numérique, Alt + Tab, changement de disposition au clavier, voyants, Impr. écran, SendInput ; pas d'IRP
-  (kbdclass : win32k lit le pilote) ; le premier plan garde le thread d'une fenêtre détruite ou d'un thread fini ;
-  ToUnicodeEx garde une touche morte pour tous les threads (`wchDead` global, comme ReactOS).
+  (kbdclass : win32k lit le pilote) ; ToUnicodeEx garde une touche morte pour tous les threads (`wchDead` global,
+  comme ReactOS). (Un thread fini quitte le premier plan, et la destruction de la fenêtre active en active une
+  autre : `win32k::destroy`.)
 - Sonde console (M5, étape 5) : ni bitmaps compatibles (CreateBitmap, CreateCompatibleBitmap : le motif 8 × 8 de
   `consrv`), ni profondeurs autres que 32 bits, ni section d'une application pour une DIB section, ni palettes,
   GetObject, GetDIBits, SetDIBits, StretchBlt, MaskBlt avec un masque, NtGdiGetDeviceCaps ; un bitmap choisi n'est pas
-  supprimé (la documentation ; ReactOS en diffère la suppression) ; les objets GDI d'un processus ne sont pas rendus à
-  sa fin (une DIB section garde sa section et sa vue système) ; le défilement de l'écran à travers plusieurs
+  supprimé (la documentation ; ReactOS en diffère la suppression) ; le défilement de l'écran à travers plusieurs
   rectangles de la région copie l'un après l'autre ; les vues système ne vident pas la TLB des autres processeurs.
 - Sonde console (M5, étape 4) : SetWindowLong de GWL_STYLE, GWL_EXSTYLE, GWLP_WNDPROC, GWLP_HWNDPARENT absent
   (journalisé) ; ShowWindowAsync d'une fenêtre d'un autre thread absent (messages envoyés entre threads) ; un message
   posté à la fenêtre du bureau perdu (pas de thread du bureau) ; un chemin de bureau sans station laisse le thread
-  converti sans bureau (journalisé) ; DestroyWindow, SetTimer, barres de défilement absents.
+  converti sans bureau (journalisé) ; barres de défilement absentes (DestroyWindow et SetTimer sont faits).
 - Sonde console (M5, étape 3) : NtYieldExecution (SwitchToThread) absent ; un thread qui cède garde sa priorité et
   reçoit un quantum neuf (pas de décroissance).
 - Sonde console (M5, étape 2) : polices bitmap (`.fon`), collections et polices privées absentes ; le jeu de caractères
@@ -860,7 +1014,13 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   (`STATUS_INFO_LENGTH_MISMATCH`) n'a pas de test (une mutation qui le retire survit).
 - Clavier : l'activation d'une disposition (`hKL` et `CodePage` du `CLIENTINFO`) n'a pas de test (une mutation qui
   la retire survit) : il faudrait une station interactive et une vraie disposition, que seul le scénario `smss` a, sans
-  rien qui lise ces champs avant le serveur RPC.
+  rien qui lise ces champs avant `services.exe`.
+- Tubes nommés (étape 24) : la sécurité des tubes (descripteur ignoré ; FSCTL_PIPE_IMPERSONATE,
+  FSCTL_PIPE_TRANSCEIVE, les événements de tube : `STATUS_NOT_IMPLEMENTED`) ; FSCTL_PIPE_WAIT attend dans l'appel même
+  sur un fichier asynchrone ; une attente synchrone ne s'interrompt pas pour une APC ; pas de ports de complétion ; la
+  fin d'un thread n'annule pas ses demandes (IoCancelThreadIo), elles sont abandonnées ; les lectures en attente ne
+  prennent pas de quota ; ni énumération de la racine ni FileBasic/FileStandard d'un tube ; les E/S des volumes restent
+  synchrones (un événement ou une APC : `STATUS_NOT_IMPLEMENTED`).
 - Files de messages : le masque de GetQueueStatus (`QS_ALLINPUT | QS_ALLPOSTMESSAGE | QS_SMRESULT`) ne filtre que des
   bits que la file ne produit pas encore (une mutation qui le retire survit).
 - Fenêtres : NtUserSwitchDesktop cache la fenêtre du bureau d'entrée d'avant, ce que rien ne voit (`winlogon` ne

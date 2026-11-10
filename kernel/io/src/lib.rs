@@ -7,14 +7,18 @@
 //!   vérifie une fois le fichier trouvé.
 //!
 //! - [`disk`] : un disque ATA (`hal::ata`), comme périphérique de blocs.
+//! - [`npfs`] : le système de fichiers des tubes nommés
+//!   (`\Device\NamedPipe`, [`mount_named_pipes`]).
+//! - [`request`] : les demandes d'E/S en attente et leur fin (ce que
+//!   garde un IRP en attente).
 //!
 //! Au démarrage, [`mount_boot_volumes`] monte le disque RAM
 //! (`\Device\Ramdisk0`) et le disque système ATA, s'il y en a un
 //! (`\Device\HarddiskVolume1`, le maître du canal secondaire) : `\??\C:` et
 //! `\SystemRoot` mènent au disque ATA, ou sans lui au disque RAM.
 //!
-//! Pas encore : IRP et piles de périphériques, pilotes de disque, écriture,
-//! E/S asynchrones, ports de complétion.
+//! Pas encore : IRP et piles de périphériques, pilotes de disque, E/S
+//! asynchrones des volumes (seuls les tubes en ont), ports de complétion.
 //!
 //! Le reste de ce module (`open_fat_file`, `open_game_file`, le volume
 //! « demo », [`DeviceObject`], [`Irp`]) sert l'ancienne architecture : ne pas
@@ -39,7 +43,9 @@ pub mod file;
 pub mod install;
 pub mod irp;
 pub mod name;
+pub mod npfs;
 pub mod partition;
+pub mod request;
 pub mod volume;
 
 pub use device::{Device, DEVICE_TYPE};
@@ -47,6 +53,7 @@ pub use driver::{DeviceObject, DriverObject};
 pub use fat::{nt_time, BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};
 pub use file::{check_disposition, check_open, creates, File, FileObject, FILE_TYPE};
 pub use irp::{Irp, IrpMajor};
+pub use npfs::{Npfs, PipeFile};
 pub use volume::{Listed, Node, Space, Volume, VolumeLabel};
 
 /// Le disque RAM de démarrage, comme volume.
@@ -128,6 +135,17 @@ pub fn mount_boot_volumes() -> Result<BootVolumes, abi::ntstatus::NtStatus> {
         volumes.disk.as_ref().and_then(|disk| disk.as_ref().ok()).map(|_| volumes.disk_primary),
     );
     Ok(volumes)
+}
+
+/// Crée le périphérique des tubes nommés, `\Device\NamedPipe` (NPFS),
+/// permanent. Le lien `\??\PIPE` vient de `smss` (`DOS Devices` de la ruche
+/// SYSTEM), comme sous XP.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, une fois, après `ob::init`.
+pub fn mount_named_pipes() -> Result<(), abi::ntstatus::NtStatus> {
+    let device: ob::ObjectRef = Device::with_named_pipes(Npfs::new());
+    ob::namespace().insert(&device, npfs::DEVICE_NAME, None, abi::object::OBJ_PERMANENT).map(drop)
 }
 
 struct RamBlockDevice {

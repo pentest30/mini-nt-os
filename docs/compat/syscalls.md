@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 115 | 296 |
-| win32k | 117 | 737 |
+| ntoskrnl | 119 | 296 |
+| win32k | 120 | 737 |
 
 ## ntoskrnl
 
@@ -39,7 +39,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0015` | `NtAssignProcessToJobObject` | 2 |  |
 | `0x0016` | `NtCallbackReturn` | 3 | ✅ |
 | `0x0017` | `NtCancelDeviceWakeupRequest` | 1 |  |
-| `0x0018` | `NtCancelIoFile` | 2 |  |
+| `0x0018` | `NtCancelIoFile` | 2 | ✅ |
 | `0x0019` | `NtCancelTimer` | 2 |  |
 | `0x001a` | `NtClearEvent` | 1 | ✅ |
 | `0x001b` | `NtClose` | 1 | ✅ |
@@ -61,7 +61,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x002b` | `NtCreateKey` | 7 | ✅ |
 | `0x002c` | `NtCreateMailslotFile` | 8 |  |
 | `0x002d` | `NtCreateMutant` | 4 | ✅ |
-| `0x002e` | `NtCreateNamedPipeFile` | 14 |  |
+| `0x002e` | `NtCreateNamedPipeFile` | 14 | ✅ |
 | `0x002f` | `NtCreatePagingFile` | 4 |  |
 | `0x0030` | `NtCreatePort` | 5 | ✅ |
 | `0x0031` | `NtCreateProcess` | 8 | ✅ |
@@ -103,7 +103,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0055` | `NtFlushWriteBuffer` | 0 |  |
 | `0x0056` | `NtFreeUserPhysicalPages` | 3 |  |
 | `0x0057` | `NtFreeVirtualMemory` | 4 | ✅ |
-| `0x0058` | `NtFsControlFile` | 10 |  |
+| `0x0058` | `NtFsControlFile` | 10 | ✅ |
 | `0x0059` | `NtGetContextThread` | 2 |  |
 | `0x005a` | `NtGetDevicePowerState` | 2 |  |
 | `0x005b` | `NtGetPlugPlayEvent` | 4 |  |
@@ -239,7 +239,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00dd` | `NtSetContextThread` | 2 |  |
 | `0x00de` | `NtSetDebugFilterState` | 3 |  |
 | `0x00df` | `NtSetDefaultHardErrorPort` | 1 | ✅ |
-| `0x00e0` | `NtSetDefaultLocale` | 2 |  |
+| `0x00e0` | `NtSetDefaultLocale` | 2 | ✅ |
 | `0x00e1` | `NtSetDefaultUILanguage` | 1 |  |
 | `0x00e2` | `NtSetDriverEntryOrder` | 2 |  |
 | `0x00e3` | `NtSetEaFile` | 4 |  |
@@ -669,8 +669,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
 | `0x115f` | `NtUserDestroyCursor` | 2 |  |
 | `0x1160` | `NtUserDestroyInputContext` | 1 |  |
-| `0x1161` | `NtUserDestroyMenu` | 1 |  |
-| `0x1162` | `NtUserDestroyWindow` | 1 |  |
+| `0x1161` | `NtUserDestroyMenu` | 1 | ✅ |
+| `0x1162` | `NtUserDestroyWindow` | 1 | ✅ |
 | `0x1163` | `NtUserDisableThreadIme` | 1 |  |
 | `0x1164` | `NtUserDispatchMessage` | 1 | ✅ |
 | `0x1165` | `NtUserDragDetect` | 3 |  |
@@ -836,7 +836,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1205` | `NtUserSetInformationThread` | 4 | ✅ |
 | `0x1206` | `NtUserSetInternalWindowPos` | 4 |  |
 | `0x1207` | `NtUserSetKeyboardState` | 1 |  |
-| `0x1208` | `NtUserSetLogonNotifyWindow` | 1 |  |
+| `0x1208` | `NtUserSetLogonNotifyWindow` | 1 | ✅ |
 | `0x1209` | `NtUserSetMenu` | 3 | ✅ |
 | `0x120a` | `NtUserSetMenuContextHelpId` | 2 |  |
 | `0x120b` | `NtUserSetMenuDefaultItem` | 3 |  |

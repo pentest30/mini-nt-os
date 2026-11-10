@@ -1,0 +1,363 @@
+# Mino — contexte pour Claude Code
+
+Mino est un système d'exploitation libre, compatible XP. Le noyau NT, `win32k` et les pilotes sont écrits en Rust `no_std` ;
+l'espace utilisateur vient d'une version épinglée de ReactOS (binaires i386). La frontière stable du projet est l'interface noyau
+de ReactOS : appels système `ntoskrnl` et `win32k`, structures en mode utilisateur, protocoles LPC de CSR.
+
+## Documents (ils font foi)
+
+| Document | Contenu |
+|---|---|
+| [`docs/01-vision.md`](docs/01-vision.md) | Périmètre, ce qui est exclu |
+| [`docs/02-architecture.md`](docs/02-architecture.md) | Architecture cible, organisation du dépôt (§10) |
+| [`docs/03-decisions.md`](docs/03-decisions.md) | ADR. Une ADR acceptée ne se modifie pas : une nouvelle ADR la remplace. Pour en écrire une : la skill [`mino-adr`](.claude/skills/mino-adr/SKILL.md). |
+| [`docs/04-audit-reutilisation.md`](docs/04-audit-reutilisation.md) | Verdict par fichier du code existant, défauts connus, corrections immédiates (§7) |
+| [`docs/05-feuille-de-route.md`](docs/05-feuille-de-route.md) | Jalons et critères de sortie ; l'état réel s'y suit (cases cochées) |
+| [`docs/06-conventions.md`](docs/06-conventions.md) | **Conventions de développement, à appliquer à tout le code** |
+| [`docs/compat/`](docs/compat/) | Quirks d'applications, imports observés, couverture des appels système |
+
+## Règles non négociables
+
+Le détail est dans [06 — Conventions](docs/06-conventions.md).
+
+1. **Hygiène juridique** (06 §1) : ne jamais consulter, copier ni paraphraser de code Microsoft, y compris les sources fuitées d'XP
+   et de Server 2003 et les WRK. Aucun binaire ni aucune ressource Microsoft. Pas de marque « Windows » : on dit « compatible XP ».
+   Le code porté de ReactOS ou de Wine indique en en-tête son origine (fichier, commit) et sa licence. Tant que l'ADR-007 (licence)
+   n'est pas tranchée, ReactOS sert de spécification : on ne porte pas son code noyau.
+2. **`no_std`** dans les crates noyau et pilotes ; dépendances limitées à la liste de l'ADR-016.
+3. **`unsafe`** (06 §3) : `// SAFETY:` qui énonce l'invariant ; `#![deny(unsafe_op_in_unsafe_fn)]`. La mémoire utilisateur ne
+   s'atteint que par `ke::usermem` (`UserPtr<T>`, `copy_from_user`, `copy_to_user`, `probe_*`).
+4. **IRQL** (06 §4) : chaque fonction publique du noyau documente son IRQL maximal (`/// # IRQL` puis `/// <= APC_LEVEL. Peut bloquer.`).
+   À `DISPATCH_LEVEL` ou plus : ni pool paginé, ni faute de page, ni attente. `spin::Mutex` est interdit dans le noyau
+   (`KSpinLock`, `KGuardedMutex`, `ERESOURCE`).
+5. **Layouts imposés** (PEB, TEB, `KUSER_SHARED_DATA`, `CONTEXT`, `LOADER_BLOCK`…) : uniquement dans la crate `abi`, avec des
+   assertions `size_of` et `offset_of` à la compilation.
+6. **Appels système** : aucun numéro écrit à la main, aucun appel système privé. Tout est généré par `tools/syscall-gen` (ADR-002).
+7. **Erreurs** (06 §5) : `NtStatus(u32)` et `Result<T, NtStatus>`, jamais de `u32` nu ; `panic!` seulement pour un invariant violé.
+   Aucune journalisation inconditionnelle dans un chemin chaud (appels système, interruptions, ordonnanceur).
+8. **Version affichée** : XP 5.1.2600 SP2 (ADR-003). Ne jamais changer les champs de version du PEB ni de `KUSER_SHARED_DATA`.
+9. **Pas de contournement silencieux** : un symptôme contourné est documenté et donne lieu à une tâche de diagnostic (audit §4.2).
+   Un bogue corrigé s'accompagne d'un test qui l'aurait détecté.
+
+## Travailler dans ce dépôt
+
+- **Reprendre une session** : [`docs/passation.md`](docs/passation.md) (tâche en cours, prochaines tâches, comment
+  reprendre). Le tenir à jour à chaque commit qui change l'état.
+- Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
+- Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
+  Déplacements par `git mv`. Une PR traite un seul sujet.
+- **Jalon courant : M5 — Mode console, puis spike S2** ([05](docs/05-feuille-de-route.md#m5--mode-console-puis-spike-s2)).
+  M0 à M4 sont terminés (spike S1 réussi ; l'ADR-002 attend S2 et S3). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
+  `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
+  manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
+  thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
+  (`ke::bugcheck`, `hal::bugcheck`). Scénarios `ke-events`, `fpu`, `ke-starvation`, `bugcheck`. Les APC utilisateur
+  viennent au M3.
+  Acquis de M2 : base PFN faite (`mm::pfn` au-dessus du buddy : toute page physique y passe, avec son usage ; double libération
+  et page réservée arrêtent le système ; cohérence vérifiée en fin de phase 1). Pools faits (`mm::pool`) : non paginé
+  (allocateur global) et paginé, qui grandissent à la demande et rendent leurs pages à la base PFN ;
+  `ex_allocate_pool_with_tag` et compteurs par étiquette. Une PML4 par processus (`mm::address_space`) : moitié haute
+  complétée au démarrage et partagée, CR3 propre à chaque thread et chargé à la commutation, `ke_stack_attach`.
+  L'ancien chargeur (`NtCreateProcess` de `syscall.rs`) reste dans l'espace du système (`ps::eprocess::create_legacy`).
+  VAD faite
+  (`mm::vad`, `mm::virtual_alloc`) : arbre sans limite, état de chaque page (réservée, ou commitée avec sa protection),
+  commit dans une réservation, décommit et libération réels, protection et requête, erreurs `NtStatus`, retour arrière
+  complet si un commit échoue. Fautes de page faites (`mm::fault`) : chaque `AddressSpace` tient sa VAD et s'enregistre
+  par CR3 ; un commit ne projette rien, la première faute donne une page à zéro ; garde levée une fois
+  (`STATUS_GUARD_PAGE_VIOLATION`) ; `PAGE_NOACCESS`, page réservée ou libre : `STATUS_ACCESS_VIOLATION` ; une page
+  inaccessible garde sa page physique (`PTE_RETAINED`). Faute dans la moitié basse à `DISPATCH_LEVEL` : STOP 0x0A ;
+  exception en mode noyau sur une adresse utilisateur : STOP 0x1E (pas de `ke::usermem` avant M3). Scénarios
+  `page-fault-irql`, `page-fault-access-violation`. Les mappers de l'ancien code projettent encore au commit.
+  Parseur PE dans `libs/pe` (réexporté par `ps::loader`, constructeur de PE de test sous la feature `builder`).
+  Sections faites (`mm::section`) : fichier d'échange, fichier de données (octets en mémoire en attendant Io), image
+  (disposition et protections tirées du PE) ; vues (`AddressSpace::map_view`, `unmap_view`) qui partagent les pages de
+  la section (`PTE_SHARED`, `PageUsage::Section`), copie sur écriture, `STATUS_IMAGE_NOT_AT_BASE` (c'est `ntdll` qui
+  reloge). Ob réécrit (`ob`) : `Object<T>` dans un `Arc` (compte de pointeurs), en-tête avec type, nom, compte de
+  handles ; types en `static` avec droits valides, correspondance générique, procédures *parse* et de fermeture ;
+  espace de noms d'XP (`\ObjectTypes`, `\GLOBAL??` derrière `\??`, lien `\DosDevices`…), noms sans casse, liens
+  suivis 32 fois au plus, `OBJ_OPENIF`/`OBJ_OPENLINK`/`OBJ_PERMANENT`, nom retiré au dernier handle ; table de handles
+  par processus (multiples de 4, droits vérifiés, héritage, protection, duplication, rundown). Type `Section` dans
+  `mm::section`. Ps réécrit (`ps`) : table des CID (PID et TID multiples de 4, System = 4) ; EPROCESS (espace
+  d'adresses neuf, image projetée, PEB en `0x7FFDF000`, table de handles, threads vivants, objet attendable) ;
+  ETHREAD (TEB sous le PEB, pile noyau, thread Ke 32 bits dans l'espace du processus : `ke::sched::create_user_thread`,
+  le descripteur du TEB suit chaque commutation, `hal::gdt::set_teb_base`) ; pile utilisateur avec garde
+  (`create_user_stack`). Fin par APC noyau normal (`exit_thread`) : passage dans l'espace du système, rundown des APC
+  (`ke_rundown_apcs`) ; le dernier thread ferme les handles et rend l'espace d'adresses, une fois finis les accès
+  protégés (`rundown::RundownRef`), puis l'objet processus est signalé ; le *reaper* (thread système) rend piles noyau
+  et threads Ke (`ke::sched::delete_thread`). La pile utilisateur grandit par sa garde
+  (`AddressSpace::extend_user_stack`, TEB du thread courant dans le KPCR) jusqu'à `STATUS_STACK_OVERFLOW`. Une faute
+  utilisateur non résolue termine le processus avec le code de l'exception jusqu'au M3. DEP selon la règle OptIn d'XP
+  SP2 (ADR-020) : options d'exécution par processus (`EProcess::set_execute_options`, `MEM_EXECUTE_OPTION_*`), sans
+  DEP toute page lisible s'exécute (`AddressSpace::set_execute_enabled`), la VAD garde la protection demandée. Pas
+  encore : handles noyau, Se (accès accordés, ADR-011).
+  M3 : ReactOS épinglé en 0.4.16 (commit `51bfc703`, i386, version de publication), listes de services copiées dans
+  `tools/syscall-gen/reactos/0.4.16/` avec leur origine. `tools/syscall-gen` génère `abi/src/services.rs` (numéro de
+  chaque service par son nom NT, tables ntoskrnl et win32k avec octets d'arguments ; `abi::service::lookup`) ;
+  `cargo xtask lint` vérifie que le fichier est à jour. Dispatcher des services (`kernel/ntoskrnl/src/sys/`) pour les
+  threads de Ps : interruptions actives à PASSIVE_LEVEL, arguments copiés par `ke::usermem`,
+  `STATUS_INVALID_SYSTEM_SERVICE` hors des tables, `STATUS_NOT_IMPLEMENTED` (journalisé au premier appel) sans
+  handler ; syscall-gen tire de sa liste `IMPLEMENTED` le rapport `docs/compat/syscalls.md`. Services : NtClose,
+  NtTerminateProcess (NULL, soi-même, handle), NtAllocateVirtualMemory, NtFreeVirtualMemory. `ke::usermem` (sondes
+  sous 0x7FFF0000, `copy_from_user`, `copy_to_user`, `UserPtr<T>`) copie par `hal::usermem`, dont une faute sur une
+  adresse utilisateur reprend à sa correction (table des exceptions) au lieu du STOP 0x1E ; une faute du noyau sur la
+  garde de la pile du thread l'étend aussi. SYSENTER_ESP suit la pile noyau du thread. Les threads de l'ancien
+  chargeur gardent `syscall.rs` et ses numéros. Trame de trap faite (`hal::trap::KTrapFrame`) : les portes `int 2Ah`
+  à `2Eh` l'empilent et appellent un handler par vecteur (`sys::gates` : tick count, KiCallbackReturn,
+  assertion qui termine le processus, `DbgPrint` vers le port série avec le PID et le TID en sautant l'`int 3`,
+  KiSystemService) ; GS n'est pas rechargé au retour. `abi::context` (CONTEXT x86) et `ke::context` (conversion,
+  assainissement d'EFLAGS et des sélecteurs). Exceptions du mode utilisateur faites (`ke::exception`, `sys::exceptions`) :
+  #DE, #BP, #UD, #GP, #PF et `int 2Ch` passent par la trame de trap ; KiDispatchException met `CONTEXT` et
+  `EXCEPTION_RECORD` sur la pile du thread, qui reprend dans le répartiteur de ntdll (`set_user_exception_dispatcher` ;
+  sans répartiteur, le processus se termine avec le code) ; NtContinue, NtRaiseException (seconde chance : fin du
+  processus). Les services qui changent la trame (`Handler::Frame`) reçoivent la trame de trap.
+  APC utilisateur faits (`ke::apc`, `sys::apc`) : routine normale du mode utilisateur (`NormalRoutine::User`),
+  livrables après une attente alertable ou un test d'alerte (NtTestAlert, TestAlert de NtContinue), livrés au retour
+  par la trame de trap (`hal::trap::set_user_return_hook`) au répartiteur de ntdll (`set_user_apc_dispatcher`) ;
+  NtQueueApcThread, NtDelayExecution. `KUSER_SHARED_DATA` fait (`abi::shared_data`, `mm::shared_data`) : une page
+  remplie au démarrage (version 5.1, racine, fonctions du processeur, DEP), mise à jour par l'horloge, en lecture seule
+  en `0x7FFE0000` dans chaque processus. DLL système faite (`ps::system_dll`) : points d'entrée de ntdll résolus à son
+  installation, ntdll projetée à sa base dans chaque processus, threads démarrés par `LdrInitializeThunk` (APC
+  utilisateur, 8 octets réservés sous le `CONTEXT` pour l'enregistrement SEH du répartiteur de ReactOS) ; `SystemCall`
+  désigne `KiFastSystemCall` sur Intel, `KiIntSystemCall` ailleurs (ADR-004). SYSENTER fait pour Ps : la même trame
+  de trap que `int 2Eh` (pseudo-vecteur `hal::trap::SYSENTER`, EFLAGS de l'utilisateur gardés), ABI d'XP (arguments
+  en EDX + 8, retour par `KiFastSystemCallRet`) ; l'ancien chargeur garde la sienne (EDX + 4, `ret` en `0x7FFE0300`).
+  SWAPGS fait (`hal::trap`, `hal::pcr`) : base de GS de l'utilisateur en mode utilisateur, KPCR dans
+  `IA32_KERNEL_GS_BASE` ; échange à chaque entrée depuis le mode utilisateur et à chaque retour (trame de trap,
+  interruptions par des stubs `trap::entry_stub`, exceptions sans retour, premier passage d'un thread), sélecteur
+  `GS` de l'utilisateur rechargé au retour. `cargo xtask fetch-userland` fait (`xtask/src/userland.rs`) : archive
+  de publication de ReactOS 0.4.16 (SourceForge, SHA-256 publié vérifié), `/reactos` de son ISO extrait dans
+  `third_party/reactos/0.4.16/` (ignoré par Git) par du code std seul (SHA-256, inflate, ZIP, ISO 9660) ; les
+  scénarios `requires = userland` reçoivent `NTDLL.DLL`, que le noyau installe comme DLL système à la fin des tests de
+  la phase 1 (`ntoskrnl::userland`). Spike S1 fait (`docs/compat/s1-ntdll.md`) : un programme natif
+  construit dans le noyau (`pe::builder`, imports de ntdll) démarre sous le vrai ntdll
+  (`userland::run_native_probe`) ; le noyau journalise sa fin et les appels système faits, dans l'ordre du premier
+  (`sys::service_calls`), le premier appel d'un service sans handler avec son appelant et ses arguments, et
+  l'exception qui termine un processus. Paramètres du processus faits (`abi::process_parameters`,
+  `ps::process_parameters` : bloc normalisé, environnement à part, adresse dans le PEB). Tables NLS faites
+  (`ps::nls` : pages de code ANSI et OEM, casse Unicode, une section en lecture seule projetée dans chaque
+  processus). Services : NtQuerySystemInformation (SystemBasicInformation), NtProtectVirtualMemory. La sonde va au
+  bout : `LdrInitializeThunk` initialise le processus, lie ses imports et l'appelle, qui écrit par `DbgPrint` et se
+  termine. Programme MinGW fait (`tests/native/`, compilé par `xtask/src/native.rs`, lié à `ntdll` par
+  `tests/native/ntdll.def`, scénario `native`) : lancé avec le PEB en argument (`ps::create_thread_with_parameter`),
+  il écrit par `DbgPrint` et se termine. Test SEH fait (`tests/native/s1seh.c`, clang `i686-pc-windows-msvc` et
+  `lld-link`, avec `tests/native/seh3.c`, notre `_except_handler3`) : écriture en 0 attrapée, filtre qui décline,
+  `__finally` au déroulement par `RtlUnwind`. Ke publie le TID d'un thread utilisateur avant de le rendre prêt
+  (`UserThreadStart::tid`).
+  M4 : sonde `smss.exe` faite (`docs/compat/m4-smss.md`, scénario `smss`, feature `test-smss`) : le `smss` de ReactOS
+  s'arrête au registre (`Session Manager`), après des échecs tolérés de LPC, d'Ex et de Ps. `DbgPrompt` reçoit `i`
+  faute de débogueur ; NtQueryVirtualMemory (MemoryBasicInformation). Registre en lecture fait : `libs/regf`
+  (ruches en mémoire, constructeur sous `builder`), `kernel/cm` (type `Key`, `\REGISTRY`, ruches montées en lecture,
+  `CurrentControlSet`, `cm::info`), Ob (nom relatif à une racine à procédure *parse*), NtOpenKey, NtQueryKey,
+  NtEnumerateKey, NtQueryValueKey, NtEnumerateValueKey ; la ruche SYSTEM de ReactOS épinglé montée au démarrage
+  (en attendant `tools/mkhive`). Répertoires d'Ob faits : NtCreateDirectoryObject, NtOpenDirectoryObject,
+  NtCreateSymbolicLinkObject, NtOpenSymbolicLinkObject. `smss` lit `Session Manager`, crée ses répertoires et ses
+  liens. Io fait (`kernel/io`) : le disque RAM de démarrage tient lieu du volume système (`tools/mkfat` écrit des
+  sous-répertoires ; l'espace utilisateur et les 21 KnownDLLs dans `\WINDOWS\SYSTEM32`) ; volume FAT32 en lecture
+  (`io::volume`), types `Device` (*parse* : IopParseDevice) et `File` (nom relatif à un répertoire ouvert),
+  `\Device\Ramdisk0`, `\??\C:`, `\SystemRoot` ; le noyau lit ntdll, les NLS, la ruche et `smss` par Io. Services :
+  NtCreateFile (ouverture), NtOpenFile, NtQueryAttributesFile, NtQueryFullAttributesFile, NtQueryInformationFile,
+  NtQueryVolumeInformationFile (FileFsDeviceInformation) ; sections (`sys::section`) : NtCreateSection (fichier
+  d'échange, données, image d'un fichier ouvert), NtOpenSection, NtMapViewOfSection, NtUnmapViewOfSection. `smss` met
+  21 sections d'image dans `\KnownDlls`. NtQuerySystemInformation(`SystemProcessorInformation`) fait (décodage de
+  CPUID dans `hal::cpuid`). Registre en écriture fait, en mémoire : une ruche montée est un arbre de clés
+  (`cm::HiveKey`) ; NtCreateKey, NtSetValueKey, NtDeleteValueKey ; la ruche HARDWARE, volatile, bâtie au démarrage
+  (`ntoskrnl::hardware`). `smss` écrit ses variables d'environnement, puis ne trouve pas `csrss.exe` (M5) : le premier
+  critère du M4 est coché. FAT32 en écriture fait, sur le disque RAM : `tools/mkfat` écrit un vrai volume FAT32
+  (`fsck.vfat` l'accepte) ; `FatVolume` écrit, `Volume` et `File` créent et écrivent ; NtCreateFile crée, NtReadFile,
+  NtWriteFile, NtSetInformationFile, NtFlushBuffersFile. Disque système ATA fait : `hal::ata` (PIO, lecture,
+  écriture, FLUSH CACHE), `io::disk::AtaDisk` ; un disque FAT32 au maître du canal secondaire devient
+  `\Device\HarddiskVolume1`, et `C:` (sans lui, le disque RAM). Scénario `persistence` (`disk = system`, `boots = 2`,
+  `fsck.vfat` sur l'image) : le critère 3 du M4 est coché. Ruches réécrites sur disque : une ruche
+  lue d'un fichier s'y réécrit en entier, sans ses clés volatiles (`cm::HiveFile::flush`, `regf::builder` avec
+  classes et dates), NtFlushKey ; scénario `registry-persistence` (une valeur et l'empreinte de la ruche SYSTEM
+  relues au second démarrage) : les trois critères sont cochés, **le M4 est terminé**. Ses dettes sont dans la
+  passation.
+  M5, étape 1 (`csrss.exe` lancé par `smss`, [`docs/compat/m5-csrss.md`](docs/compat/m5-csrss.md)) : crate `ex`
+  (événements, NtWaitForSingleObject et NtWaitForMultipleObjects), crate `lpc` (ports de connexion, NtCreatePort,
+  NtReplyWaitReceivePort qui attend), processus et threads créés depuis le mode utilisateur (NtCreateProcess(Ex),
+  NtCreateThread avec un contexte assaini, threads suspendus par un APC noyau livré avant le mode utilisateur),
+  NtRead/WriteVirtualMemory, NtQuerySection, tables NLS au plus haut, NtQuerySymbolicLinkObject. `csrss` charge
+  ses DLL et s'arrête au jeton de son processus.
+  M5, étape 2 (Se, ADR-011) : `abi::security` ; crate `se` (`Sid`, `Acl` vérifiée, `SecurityDescriptor` capturé,
+  fusionné, sous forme relative, `Token` : jeton de System, copie pour un processus créé, privilèges, classes
+  d'information) ; descripteur dans l'en-tête des objets (Ob), jeton primaire par processus (Ps) ; services
+  NtOpenProcessToken(Ex), NtOpenThreadToken(Ex) (`STATUS_NO_TOKEN`), NtQueryInformationToken,
+  NtAdjustPrivilegesToken, NtSetSecurityObject, NtQuerySecurityObject ; NtSetSystemInformation (session de `smss`,
+  `ps::session` ; win32k « chargé », il fait partie du noyau) sous `SeLoadDriverPrivilege`. Contrôle d'accès
+  permissif, contrôle des privilèges appliqué. `csrss` protège son processus, puis s'arrête à sa section partagée.
+  M5, étape 3 (Mm) : sections `SEC_RESERVE` (l'engagement est celui de la section, vu de toutes ses vues :
+  `Section::commit`, `VadNode::page_state`, MEM_COMMIT dans une vue) et `SEC_BASED` (une adresse prise à la
+  création sous `0x7F7F0000`, la même dans chaque processus) ; NtCreateSection et NtQuerySection les acceptent.
+  `csrss` met sa section partagée en `0x7F6F0000`, charge `basesrv`, puis ne trouve pas `advapi32_vista.dll`.
+  M5, étape 4 (le disque de démarrage) : `xtask` y met la fermeture des imports de ses programmes et DLL
+  (`userland::import_closure`, par `libs/pe`) et la page de code 20127 ; noms longs de FAT (VFAT) écrits par
+  `tools/mkfat`, lus par `io::fat` (pas encore créés). `smss` met 37 sections dans `\KnownDlls` ; `csrss` charge
+  `winsrv` et ses imports, puis `user32` appelle win32k (`NtUserProcessConnect`) : le M5 rejoint le win32k minimal.
+  M5, étape 5 (les services simples) : `hal::rtc` (l'heure du démarrage, le temps système, aussi dans
+  `KUSER_SHARED_DATA`), compteur de performance sur le TSC calibré ; NtQuerySystemTime, NtQueryPerformanceCounter,
+  `SystemTimeOfDayInformation`, `SystemRangeStartInformation`, NtQueryDebugFilterState, NtSetInformationObject,
+  `ProcessLUIDDeviceMapsEnabled`, `ProcessCookie`, NtFlushInstructionCache.
+  M5, étape 8 (Ex, Ps) : les événements à clé (`ex::keyed_event`, NtCreateKeyedEvent, NtOpenKeyedEvent,
+  NtWaitForKeyedEvent, NtReleaseKeyedEvent) ; processus et threads critiques (`ProcessBreakOnTermination`,
+  `ThreadBreakOnTermination`) dont la fin arrête le système (`CRITICAL_OBJECT_TERMINATION`, scénarios
+  `critical-process`, `critical-thread`) ; `ProcessBasePriority`
+  (`ke::sched::set_base_priority`) et `ProcessDefaultHardErrorMode`. La sonde retire ses drapeaux à `smss`, critique
+  dès son début, avant de le terminer.
+  M5, étape 6 (win32k minimal, ADR-021 proposée) : crate `kernel/win32k` : la section partagée de USER
+  (`SERVERINFO`, table des handles ; adresses du serveur sur 32 bits, section en `0xBC000000` ; écrite par
+  `Section::write_kernel`), les threads et processus GUI (conversion au premier appel à win32k dans `sys::dispatch`,
+  `CLIENTINFO` dans le TEB, vue en lecture seule), NtUserProcessConnect, NtUserInitializeClientPfnArrays, NtGdiInit,
+  NtUserInitialize (sans vidéo ni GDI) ; `abi::user` ; sémaphores d'Ex ; NtQueryObject (attributs d'un handle).
+  `csrss` charge `winsrv` (USER, puis `consrv`) et s'arrête à `SmConnectToSm` (NtConnectPort, l'étape 7).
+  M5, étape 7 (Lpc) : ports de connexion, clients et de communication du serveur (`lpc::port`), connexion, requêtes,
+  réponses et datagrammes (`lpc::conversation`), section partagée du client ; NtConnectPort, NtSecureConnectPort,
+  NtAcceptConnectPort, NtCompleteConnectPort, NtListenPort, NtRequestWaitReplyPort, NtRequestPort, NtReplyPort,
+  NtReplyWaitReceivePort(Ex), NtSetDefaultHardErrorPort ; NtOpenProcess, NtOpenThread ; `SystemFlagsInformation`.
+  La sonde laisse passer la fin d'un objet critique, comme un débogueur (`ps::set_critical_breaks_ignored`). L'IRQL des
+  tests hôte est propre à chaque thread (`hal::irql`). `csrss` et `smss` se connectent : `csrss` est démarré ; `smss`
+  s'arrête à `winlogon.exe`, absent du disque.
+  M5, étape 9 (`winlogon`, en cours) : `winlogon.exe` sur le disque ; NtDuplicateObject (`ob::duplicate` : pseudo-handles
+  résolus par Ps, sans cible, source fermée quel que soit le résultat). `smss` confie `winlogon` à `csrss`
+  (`SmExecPgm`), qui en fait un processus CSR (`ProcessExceptionPort` ; NtQueryInformationThread :
+  `ThreadBasicInformation`, `ThreadTimes`, `ThreadIsTerminated`). Vues `SEC_NO_CHANGE` (`VadNode::no_change`,
+  `AddressSpace::map_view_with` : NtProtectVirtualMemory refusé) : `kernel32` se connecte à `csrss`. Un service de
+  win32k sans handler rend 0 et `ERROR_CALL_NOT_IMPLEMENTED` s'il rend une valeur (`Service::returns_status`, tiré
+  des prototypes de ReactOS par `tools/syscall-gen`). `winlogon` s'inscrit comme processus de logon
+  (NtUserCallTwoParam, `win32k::logon` ; NtUserSetInformationThread : le port d'API de `csrss`). Stations de
+  fenêtres faites (`win32k::winsta`, `sys::winsta`, type d'Ob `WindowStation` ; la première du processus de logon est
+  la station interactive) et bureaux (`win32k::desktop`, `sys::desktop`, type d'Ob `Desktop` nommé par sa station :
+  un tas par bureau dans une section, adresses du serveur sur 32 bits, `DESKTOPINFO` ; NtUserSetThreadDesktop projette
+  le tas et remplit le `CLIENTINFO`) ; dispositions de clavier (`win32k::keyboard` : le fichier lu par le noyau
+  d'après le registre, ses tables trouvées sans exécuter `KbdLayerDescriptor`) : `winlogon` crée `WinSta0` et ses
+  bureaux, s'y place, charge `00000409`, puis s'arrête à son serveur RPC (tube nommé : NPFS d'Io, à faire).
+  Premier affichage : pilote d'affichage (`win32k::display`, trait `DisplayDriver`, `drivers/video/gopfb` sur le
+  framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; la fenêtre du bureau (`win32k::window` : `WND` et `CLS` dans
+  le tas du bureau, handle dans la table USER de la section partagée, `win32k::handles` ; DesktopWindowProc côté
+  serveur : WM_PAINT, WM_ERASEBKGND), montrée et peinte à NtUserSwitchDesktop ; files de messages (`win32k::queue`,
+  `sys::message` : PostThreadMessage, PeekMessage, GetMessage qui attend, WM_QUIT, GetQueueStatus, bits de réveil dans
+  le `CLIENTTHREADINFO`) ; l'ancien lanceur s'efface devant win32k ; `screen = X Y RRGGBB` dans un scénario vérifie des
+  pixels d'une capture de QEMU (`xtask/src/screen.rs`). Rappels en mode utilisateur (KeUserModeCallback :
+  `ps::callback`, `ke::callout`, `hal::callout` ; NtCallbackReturn, `int 2Bh`) : la pile initiale du thread descend
+  sous ses trames, les rappels s'emboîtent, la pile noyau grandit en place jusqu'à 72 Kio (`mm::kstack::grow`) ;
+  win32k rappelle `user32` (`win32k::callback` : ClientThreadSetup, GetCharsetInfo pour la page de code d'une
+  disposition de clavier). M6 commencé ([`docs/compat/m6-fenetres.md`](docs/compat/m6-fenetres.md)) : le scénario
+  `gui` lance `tests/native/gui1.c` (MinGW, vrais `kernel32` et `user32`) à la place de `winlogon.exe` ; la table
+  des atomes de USER (`win32k::atom`) et les classes de fenêtres (`win32k::class` : NtUserRegisterClassExWOW,
+  NtUserGetClassInfo) ; les fenêtres (`win32k::window::create_window` : NtUserCreateWindowEx, WM_NCCREATE,
+  WM_NCCALCSIZE, WM_CREATE, WM_SIZE, WM_MOVE, WM_PARENTNOTIFY envoyés à la procédure du client par rappel, le
+  `WND` complet que `user32` lit lui-même ; NtUserDefSetText) ; les métriques et couleurs du système
+  (`win32k::metrics`, dans le `SERVERINFO`) et la partie noyau de DefWindowProc (`win32k::defwnd`,
+  NtUserMessageCall : WM_NCCALCSIZE ; WM_GETMINMAXINFO à la création) ; le moniteur principal (`win32k::monitor` :
+  place par défaut en cascade, NtUserMonitorFrom*, NtUserGetMonitorInfo) et SetWindowPos (`win32k::winpos`,
+  NtUserSetWindowPos, NtUserMoveWindow : ordre Z, WM_WINDOWPOS*, WM_MOVE, WM_SIZE) ; ShowWindow
+  (`win32k::winpos::show_window`, NtUserShowWindow : WM_SHOWWINDOW, WM_SIZE et WM_MOVE différés, fenêtres créées
+  visibles ; pas encore réduire ni agrandir) ; le cadre des fenêtres peint par le noyau (`win32k::paint`,
+  `win32k::nonclient`, `gdi::draw`, `gdi::region` : régions visibles, WM_NCPAINT, bords, titre en dégradé, boutons) ;
+  la zone cliente effacée par `user32` et `gdi32` (WM_ERASEBKGND : la table des handles GDI partagée,
+  `win32k::gdi::handles`, dans le PEB ; pinceaux de stock et des couleurs du système ; DC de l'écran et leurs
+  `DC_ATTR` chez le client, `gdi::dc` ; cache des DC de fenêtres, `win32k::dce` ; PatBlt en lot dans le TEB, exécuté
+  au retour d'un rappel et avant chaque service de win32k, `gdi::batch` ; NtGdiPatBlt, NtGdiGetAppClipBox,
+  NtGdiFlush) ; WM_PAINT (le compte des fenêtres à peindre et `QS_PAINT`, WM_PAINT tiré de la file,
+  NtUserDispatchMessage, BeginPaint et EndPaint, DefWindowProc de WM_PAINT) ; InvalidateRect, ValidateRect,
+  RedrawWindow, UpdateWindow et GetUpdateRect (la région à mettre à jour est une région, `win32k::paint` :
+  IntInvalidateWindows, co_UserRedrawWindow, co_IntUpdateWindows) ; GetDC, GetDCEx, GetWindowDC, ReleaseDC et les
+  régions de GDI (`win32k::gdi::rgnobj` : leurs attributs `RGN_ATTR` chez le client, que `gdi32` change lui-même ;
+  entrées de la table rendues et reprises ; région de découpage d'un DC, SelectClipRgn et DeleteObject en lot ;
+  InvalidateRgn, ValidateRgn, GetUpdateRgn ; pas encore le texte). `syscall-gen` suit la variante
+  publiée de ReactOS (`DBG` défini) et vérifie les stubs de `ntdll`, `user32`, `gdi32` quand l'espace utilisateur est
+  là.
+  M6, étape 11 (le texte, ADR-013) : `libs/glyph` (`ttf-parser` 0.21, rastériseur en virgule fixe, niveaux de gris,
+  métriques de GDI), polices de ReactOS dans `WINDOWS\FONTS` installées au démarrage (`userland::install_fonts`),
+  `win32k::font` (texte en glyphes, « ... », cache), `Op::Glyph` ; le titre des fenêtres en Tahoma gras et les symboles
+  Marlett des boutons (`nonclient`).
+  M6, étape 12 (le texte des clients) : polices de GDI (`win32k::gdi::fontobj` : objet police, polices de stock,
+  correspondance d'un LOGFONT, TEXTMETRIC), ExtTextOut (`win32k::gdi::text`) et ses appels en lot, NtGdiGetStockObject,
+  NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent, NtGdiExtTextOutW ; scénario `text`.
+  M6, étape 13 (DrawText de `user32`) : NtGdiGetTextExtentExW (étendues cumulées, `win32k::font::advances`),
+  NtGdiGetRandomRgn (la région de découpage gardée), NtGdiIntersectClipRect.
+  M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
+  lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
+  PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
+  (`ps::ethread::Impersonation`, `se::client`, NtImpersonateThread, ThreadImpersonationToken, NtOpenThreadToken) ;
+  NtUserConsoleControl, NtUserResolveDesktop (`sys::console`). Étape 2 (les polices) : la ruche SOFTWARE montée
+  (`userland::mount_software_hive`), les polices de `\SystemRoot\Fonts` installées (`io::Volume::list` ;
+  `win32k::font` : table de polices, `glyph::Names`), la correspondance d'un LOGFONT par `FontSubstitutes`, famille,
+  graisse, italique et pas (`fontobj::realize`), NtGdiGetFontFamilyInfo (`fontobj::family_info`) : la console de
+  `consrv` est créée (police VGA), `THREADS1.EXE` va au bout. Étape 3 : Sleep(0) cède le reste du quantum à un
+  thread prêt de même priorité (`ke::sched::Scheduler::yield_to_equal`, `Platform::yield_execution`) ; les 8 threads
+  attendent la section critique : le critère des 8 threads du M5 est coché. Étape 4 : la fenêtre console montrée
+  (NtUserSetWindowLong : octets de plus et GWLP_USERDATA ; NtUserShowWindowAsync ; NtUserPostMessage à une fenêtre ;
+  un thread client converti va sur le bureau de démarrage de son processus, pris de `lpDesktop`,
+  `win32k::startup`) ; `CONSHOW1.EXE` garde sa console à l'écran. Étape 5 : le texte de la console peint ; Mm projette
+  une section dans le noyau (`mm::system_view`, MmMapViewInSystemSpace, région de 02 §4.2) ; les capacités de l'écran
+  dans la table des handles (`win32k::gdi::devcaps`) ; les DIB sections de 32 bits, vues du processus et du noyau
+  (`win32k::gdi::surface`, NtGdiCreateDIBSection), les DC en mémoire (NtGdiCreateCompatibleDC, NtGdiSelectBitmap ;
+  `DcState::draw` peint sur l'écran ou le bitmap), BitBlt (`win32k::gdi::bitblt`, ROP3 avec source), les pinceaux
+  d'un client (NtGdiCreateSolidBrush) ; `consrv` peint « Mino console » ; scénario `bitmap` (`tests/native/bitmap1.c`).
+  Étape 6 : le clavier jusqu'aux fenêtres ; le pilote `drivers/input/i8042` (IRQ1 → anneau de `hal::ps2` →
+  KEYBOARD_INPUT_DATA), le thread d'entrée brute (`ntoskrnl::input` : DPC, événement), les tables de la disposition
+  (`win32k::kbdtables` : VSC→VK, ToUnicode), `win32k::input` (ProcessKeyEvent, état du clavier, premier plan à
+  l'activation d'une fenêtre, SetFocus, TranslateMessage), les touches dans la file (`QS_KEY`, état du clavier du
+  thread) ; `keys = MARQUEUR => TOUCHES` fait taper des touches par le moniteur de QEMU ; scénario `keyboard`
+  (`tests/native/keys1.c`). La sonde garde les processus créés depuis leur création (`ps::set_create_process_notify`).
+  Étape 7 (`cmd.exe` interactif) : ReadConsoleW marchait déjà ; NtQueryDirectoryFile (`abi::file` : entrées des
+  classes 1, 2, 3, 12 ; `io::directory` : expression avec les jokers DOS de `kernel32`, tampon aligné ;
+  `io::File::query_directory` : état de l'énumération dans le `File`, expression de la première requête, nom long ou
+  8.3, reprise à la place de l'entrée) : `dir` et `copy` ; le vrai `cmd.exe` sur le disque lit ses commandes tapées
+  dans sa console (`echo`, `set`, `copy`, `type`, `dir`, un `.bat`) ; la sonde attend 10 s après la dernière touche
+  (`ntoskrnl::input::last_key_time`) ; scénario `cmd` (`tests/native/concmd1.c`, `read1.c`). Étape 8 (ce que
+  `dir` affiche autour des noms) : FileNameInformation, FileFsVolume/Attribute/Size/FullSizeInformation (numéro de
+  série du BPB, entrée de volume, clusters libres comptés dans la FAT) ; dates de FAT (`fat::FatTime`) écrites par Io
+  à la création et à l'écriture, et par `tools/mkfat` (2004-08-04 12:00, des images identiques) ;
+  NtSetInformationFile(FileBasicInformation) ; NtQueryDefaultLocale (`ex::locale`, `Nls\Language`) ; `xtask`
+  attend qu'une touche soit relâchée avant la suivante (QEMU 8.2 perd des relâchements sinon) ; `hal::ps2` compte
+  ce qu'il perd. **Le critère de `cmd.exe` interactif du M5 est coché.**
+  Suite : [`docs/passation.md`](docs/passation.md).
+- Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
+  le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
+  Avant de les supprimer, extraire la connaissance utile dans `docs/compat/` (audit §5).
+
+## Commandes
+
+`cargo xtask` (02 §9.2, `xtask/`) :
+
+```bash
+cargo xtask lint                                     # cargo fmt --check, clippy -D warnings (hôte et bare-metal)
+cargo xtask test                                     # tests hôte, puis scénarios de démarrage QEMU (tests/boot/)
+cargo xtask test --boot --scenario smoke --cpu intel # un scénario, un CPU
+cargo xtask run [--cpu intel] [--gdb] [--headless]   # démarre dans QEMU, port série sur stdio
+cargo xtask build [--features trace-syscalls]        # mino-loader et ntoskrnl
+cargo xtask syscall-gen                              # régénère abi/src/services.rs (listes de ReactOS épinglé)
+cargo xtask fetch-userland [--archive FICHIER]       # ReactOS épinglé : archive vérifiée, arborescence dans third_party/
+cargo xtask help
+```
+
+Et directement :
+
+```bash
+cargo check --workspace
+cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel [--features trace-syscalls]
+cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
+```
+
+- Un scénario de démarrage est un répertoire de `tests/boot/` dont `scenario.txt` donne les features du noyau, les CPU,
+  les marqueurs série attendus et interdits.
+  Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
+- Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
+  où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
+- Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW
+  (`i686-w64-mingw32-gcc`, paquet `gcc-mingw-w64-i686`), clang, `lld-link` et `llvm-dlltool` (paquets `clang`, `lld`,
+  `llvm`). Sans eux, ils sont sautés.
+- `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
+  (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
+- `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
+  touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre ; `"dir C:\"` entre guillemets donne les
+  touches de chaque caractère (clavier américain).
+- `initial-command = PROGRAMME.EXE` : ce programme Win32 de `tests/native/` prend la place de `winlogon.exe` sur le
+  disque, et `smss` le lance comme commande initiale (avec `requires = userland, native`).
+- `disk = system` attache l'image du disque RAM comme disque système ATA (`C:`), `boots = N` démarre QEMU N fois sur
+  elle (scénario `persistence`) ; `fsck.vfat` (paquet `dosfstools`) vérifie ensuite l'image.
+- `trace-syscalls` active la trace série des appels système, `heartbeat` le battement du timer (`[alive] tick=N`). Le CPU par défaut de QEMU annonce un fabricant AMD (chemin `int 2Eh`) ;
+  `--cpu intel` exerce le chemin SYSENTER.
+- Formatage : `cargo fmt --all` (rustfmt.toml). Un lint justifié à garder se marque `#[expect(clippy::…, reason = "…")]`.
+- La CI (`.github/workflows/ci.yml`) exécute `cargo xtask lint` et `cargo xtask test`, avec les builds bare-metal sans warning.

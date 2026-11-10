@@ -97,7 +97,8 @@ static TSC_FREQUENCY: AtomicU64 = AtomicU64::new(0);
 /// counter's 0.
 static TSC_BASE: AtomicU64 = AtomicU64::new(0);
 
-/// The legacy loader's KUSER_SHARED_DATA, in the system address space.
+/// The legacy loader's KUSER_SHARED_DATA, by a kernel address valid in every
+/// address space (its HHDM alias); 0 without it.
 static SHARED_USER_DATA_VA: AtomicU64 = AtomicU64::new(0);
 /// The kernel alias of KUSER_SHARED_DATA (`mm::shared_data`), which every Ps
 /// process maps; 0 until set.

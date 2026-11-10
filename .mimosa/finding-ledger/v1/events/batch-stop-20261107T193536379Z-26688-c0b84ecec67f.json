@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "stop-20261107T193536379Z-26688-c0b84ecec67f",
+  "runId": "20261107T193536379Z-26688-c0b84ecec67f",
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "Stop"
+  },
+  "revision": "a2252d22726ed7bc3c2aec0f83f4085a4f1e704d",
+  "diffHash": "d590aafece77c52ae3817fc6cbe0d145fb8f7b7343022df50f5c6b770171b5c0",
+  "rulesVersion": "unavailable",
+  "sessionHash": "8a78eeb31a0aeb890d424ebfa44ad30cf8772c7c4f982b0df3f7cd662ee5adb1",
+  "reportRef": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T193536379Z-26688-c0b84ecec67f.json",
+  "events": [],
+  "observedFindingIds": [
+    "mimosa-2073cc0c7e0503b3f26acdab",
+    "mimosa-1ec5c03033cfdc406e189c0d",
+    "mimosa-4d019aec044752d70f26c76a"
+  ],
+  "verifiedFiles": [
+    {
+      "file": "xtask/src/userland.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "kernel/ntoskrnl/src/sys/system.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "xtask/src/main.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    },
+    {
+      "file": "xtask/src/partition.rs",
+      "direct": "complete",
+      "projectContext": "partial"
+    }
+  ],
+  "recordedAt": "2026-11-07T19:35:37.272Z"
+}

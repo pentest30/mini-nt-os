@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "mimosa-finding-history/v1",
+  "runId": "20261107T210041068Z-11052-1d27bb4a43aa",
+  "runStatus": "inconclusive",
+  "errors": [
+    "bash-discovery:.claude/worktrees/vibrant-bell-a62f96/libs/fatfs/src/gpt_tests.rs: bash_discovery_truncated: changed-file discovery exceeded 80 files",
+    "candidate-select:.claude/worktrees/vibrant-bell-a62f96/xtask/src/scenario.rs: candidate_limit_exceeded: 60 changed reviewable file(s) were not scanned because the limit is 20",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/Cargo.lock: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/Cargo.toml: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/CLAUDE.md: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/design-qa.md: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/README.md: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/Cargo.toml: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/fat32.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/inflate.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/install.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/iso9660.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/main.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/native.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/partition.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "baseline-read:.claude/worktrees/vibrant-bell-a62f96/xtask/src/qemu.rs: baseline_snapshot_unreadable: file is missing from task baseline",
+    "scan:kernel/ex/src/mutant.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ex/src/lib.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/mutant.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ps/src/ethread.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/mod.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:kernel/ntoskrnl/src/sys/process.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/fat32.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/inflate.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/install.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/iso9660.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/main.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/native.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/partition.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "scan:.claude/worktrees/vibrant-bell-a62f96/xtask/src/qemu.rs: scanner_failed: spawnSync C:\\Program Files\\nodejs\\node.exe ETIMEDOUT",
+    "supply-chain-check:.: stop_budget_exhausted: focused supply-chain check was not run before the gate budget",
+    "agent-check:.: stop_budget_exhausted: focused agent configuration check was not run before the gate budget"
+  ],
+  "target": ".",
+  "revision": "f799bcaa224749c14b320fdfca6281ab3e189782",
+  "diffHash": "be799bb5923c33005d52b023985d884fce106e75603440f9ebc3bcd695714552",
+  "rulesVersion": "unavailable",
+  "recordedAt": "2026-11-07T21:00:41.068Z",
+  "timing": {
+    "startedAt": "2026-11-07T21:00:33.659Z",
+    "completedAt": "2026-11-07T21:00:41.068Z",
+    "durationMs": 7409
+  },
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "total": 0,
+    "modelCalls": 0,
+    "measurement": "known-zero"
+  },
+  "findings": {
+    "total": 1,
+    "bySeverity": {
+      "high": 1
+    },
+    "byStatus": {
+      "static_verified": 1
+    }
+  },
+  "coverage": {
+    "status": "partial",
+    "reasonCounts": {
+      "bash_discovery_truncated": 1,
+      "candidate_limit_exceeded": 1,
+      "baseline_snapshot_unreadable": 14,
+      "scanner_failed": 14,
+      "stop_budget_exhausted": 2,
+      "project_check_failed": 32
+    }
+  },
+  "evidenceBoundary": "static_only",
+  "immutableReport": ".mimosa/reports/task-review-sess_4c376608-d924-4de2-8e22-55663f95beef-20261107T210041068Z-11052-1d27bb4a43aa.json"
+}

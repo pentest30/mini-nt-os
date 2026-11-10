@@ -49,6 +49,7 @@ mod monitor;
 mod mouse;
 mod mutant;
 mod object;
+mod pipe;
 mod port;
 mod process;
 mod registry;
@@ -107,6 +108,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtAddAtom, Handler::Status(atom::nt_add_atom)),
     (services::NtAllocateVirtualMemory, Handler::Status(memory::nt_allocate_virtual_memory)),
     (services::NtCallbackReturn, Handler::Status(callback::nt_callback_return)),
+    (services::NtCancelIoFile, Handler::Status(pipe::nt_cancel_io_file)),
     (services::NtClearEvent, Handler::Status(event::nt_clear_event)),
     (services::NtClose, Handler::Status(object::nt_close)),
     (services::NtCompleteConnectPort, Handler::Status(port::nt_complete_connect_port)),
@@ -117,6 +119,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
     (services::NtCreateKey, Handler::Status(registry::nt_create_key)),
     (services::NtCreateMutant, Handler::Status(mutant::nt_create_mutant)),
+    (services::NtCreateNamedPipeFile, Handler::Status(pipe::nt_create_named_pipe_file)),
     (services::NtCreateKeyedEvent, Handler::Status(event::nt_create_keyed_event)),
     (services::NtCreatePort, Handler::Status(port::nt_create_port)),
     (services::NtCreateProcess, Handler::Status(process::nt_create_process)),
@@ -137,6 +140,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtFlushInstructionCache, Handler::Status(process::nt_flush_instruction_cache)),
     (services::NtFlushKey, Handler::Status(registry::nt_flush_key)),
     (services::NtFreeVirtualMemory, Handler::Status(memory::nt_free_virtual_memory)),
+    (services::NtFsControlFile, Handler::Status(pipe::nt_fs_control_file)),
     (services::NtGdiBitBlt, Handler::Status(gdi::nt_gdi_bit_blt)),
     (services::NtGdiCombineRgn, Handler::Status(gdi::nt_gdi_combine_rgn)),
     (services::NtGdiCreateBitmap, Handler::Status(gdi::nt_gdi_create_bitmap)),
@@ -233,6 +237,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtResumeThread, Handler::Status(process::nt_resume_thread)),
     (services::NtSecureConnectPort, Handler::Status(port::nt_secure_connect_port)),
     (services::NtSetDefaultHardErrorPort, Handler::Status(port::nt_set_default_hard_error_port)),
+    (services::NtSetDefaultLocale, Handler::Status(locale::nt_set_default_locale)),
     (services::NtSetEvent, Handler::Status(event::nt_set_event)),
     (services::NtSetInformationFile, Handler::Status(file::nt_set_information_file)),
     (services::NtSetInformationObject, Handler::Status(object::nt_set_information_object)),
@@ -262,6 +267,8 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCreateWindowEx, Handler::Status(window::nt_user_create_window_ex)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
     (services::NtUserDefSetText, Handler::Status(window::nt_user_def_set_text)),
+    (services::NtUserDestroyMenu, Handler::Status(menu::nt_user_destroy_menu)),
+    (services::NtUserDestroyWindow, Handler::Status(window::nt_user_destroy_window)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
     (services::NtUserEnumDisplaySettings, Handler::Status(user::nt_user_enum_display_settings)),
@@ -308,6 +315,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserRemoveMenu, Handler::Status(menu::nt_user_remove_menu)),
     (services::NtUserSetCapture, Handler::Status(mouse::nt_user_set_capture)),
     (services::NtUserSetFocus, Handler::Status(input::nt_user_set_focus)),
+    (services::NtUserSetLogonNotifyWindow, Handler::Status(window::nt_user_set_logon_notify_window)),
     (services::NtUserSetInformationThread, Handler::Status(user::nt_user_set_information_thread)),
     (services::NtUserSetProcessWindowStation, Handler::Status(winsta::nt_user_set_process_window_station)),
     (services::NtUserSetProp, Handler::Status(user::nt_user_set_prop)),

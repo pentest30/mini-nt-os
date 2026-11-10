@@ -1,0 +1,11 @@
+[package]
+name    = "vboxmouse"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "vboxmouse"
+
+[dependencies]
+abi = { path = "../../../abi" }
+hal = { path = "../../../kernel/hal" }

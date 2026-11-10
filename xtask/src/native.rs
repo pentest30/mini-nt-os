@@ -55,6 +55,8 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["timer1.c"], "TIMER1.EXE", Toolchain::MinGwWin32),
     (&["dialog1.c"], "DIALOG1.EXE", Toolchain::MinGwWin32),
     (&["send1.c"], "SEND1.EXE", Toolchain::MinGwWin32),
+    (&["destroy1.c"], "DESTROY1.EXE", Toolchain::MinGwWin32),
+    (&["activate1.c"], "ACTIVATE1.EXE", Toolchain::MinGwWin32),
     (&["mouse2.c"], "MOUSE2.EXE", Toolchain::MinGwWin32),
     (&["setup1.c", "theme.c"], "SETUP1.EXE", Toolchain::MinGwWin32),
     (&["desktop1.c", "theme.c"], "DESKTOP1.EXE", Toolchain::MinGwWin32),
@@ -65,6 +67,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["conshow1.c"], "CONSHOW1.EXE", Toolchain::MinGwConsole),
     (&["read1.c"], "READ1.EXE", Toolchain::MinGwConsole),
     (&["concmd1.c"], "CONCMD1.EXE", Toolchain::MinGwWin32),
+    (&["pipe1.c"], "PIPE1.EXE", Toolchain::MinGwWin32),
 ];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for

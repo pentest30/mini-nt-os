@@ -1,0 +1,9 @@
+[package]
+name    = "syscall-gen"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Generates abi/src/services.rs from the pinned ReactOS service lists
+# (ADR-002, 02 §6.2): `cargo xtask syscall-gen`. Host tool, std only.
+[dependencies]

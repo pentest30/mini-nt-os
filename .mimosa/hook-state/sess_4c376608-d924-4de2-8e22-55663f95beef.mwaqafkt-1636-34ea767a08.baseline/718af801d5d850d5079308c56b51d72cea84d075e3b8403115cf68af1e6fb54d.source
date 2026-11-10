@@ -1,0 +1,294 @@
+//! Global Descriptor Table (GDT)
+//!
+//! NT kernel runs entirely in ring 0. We set up the minimal GDT required:
+//!   - Null descriptor
+//!   - 64-bit kernel code segment  (CS)
+//!   - 64-bit kernel data segment  (SS/DS/ES)
+//!   - 64-bit user code segment    (CS ring 3)  — needed for Win32 (Phase 2)
+//!   - 64-bit user data segment    (DS ring 3)  — needed for Win32 (Phase 2)
+//!   - Task State Segment (TSS)    — RSP0 for ring-3→ring-0 entry + IST slots
+//!
+//! # IST (Interrupt Stack Table)
+//! The TSS holds 7 IST pointers. We populate IST[0] with a dedicated
+//! double-fault stack so a kernel stack overflow cannot cause a triple fault.
+//! The IDT wires the double-fault handler to use this slot.
+//!
+//! # The TSS stays within one page
+//! The CPU reads RSP0 (offset 4, only 4-byte aligned: the TSS is packed) and
+//! the IST entries at each interrupt from user mode. QEMU 11.1 truncates to
+//! 32 bits the address of the second page of such a read when it straddles a
+//! page and the interrupted code runs in compatibility mode (the i386
+//! processes): with RSP0 across a page boundary, the #PF of a 32-bit thread
+//! faulted again on `0x0000_0000_xxxx_x000` and became a double fault
+//! (STOP 0x7F, scenario `fpu`, whose build happened to put RSP0 there). The
+//! TSS is kept in a block aligned on its own size rounded up ([`TssBlock`]),
+//! which never crosses a page; [`init`] checks it. Intel also advises
+//! keeping a page boundary out of the part of the TSS the processor reads
+//! (SDM vol. 3A, "Task-State Segment").
+//!
+//! WI7e Ch.3 "Trap Dispatching"
+
+use crate::sync::Once;
+use core::mem::{align_of, size_of};
+use core::sync::atomic::{AtomicU64, Ordering};
+use x86_64::structures::gdt::{Descriptor, Entry, GlobalDescriptorTable, SegmentSelector};
+use x86_64::structures::tss::TaskStateSegment;
+use x86_64::VirtAddr;
+
+// Virtual address of TSS.privilege_stack_table[0] in static memory.
+// Written once inside init(); used by set_kernel_stack_top() at runtime.
+static TSS_RSP0_VA: AtomicU64 = AtomicU64::new(0);
+
+// ── Static stacks ────────────────────────────────────────────────────────────
+
+/// RSP0 — loaded by the CPU on ring-3 → ring-0 interrupt/syscall entry.
+/// 16 KiB matches NT's kernel interrupt stack size on x64.
+static mut KERNEL_STACK: [u8; 16 * 1024] = [0u8; 16 * 1024];
+
+/// IST slot 0 — dedicated double-fault stack.
+///
+/// Separate from KERNEL_STACK: a stack overflow causing a double fault
+/// switches to this clean stack rather than triple-faulting the machine.
+/// The handler only prints the STOP screen, without locks or formatting;
+/// 16 KiB leaves a wide margin since an overflow here would triple-fault.
+const DOUBLE_FAULT_STACK_SIZE: usize = 16 * 1024;
+static mut DOUBLE_FAULT_STACK: [u8; DOUBLE_FAULT_STACK_SIZE] = [0u8; DOUBLE_FAULT_STACK_SIZE];
+
+// ── Exported constants ────────────────────────────────────────────────────────
+
+/// The TEB of the legacy loader's single thread, the TEB descriptor's base
+/// until the first switch to a thread with its own TEB.
+const LEGACY_TEB: u32 = 0x7FFD_F000;
+
+/// IST slot index used for the double-fault handler.
+/// Referenced by `idt::init` when registering the double-fault entry.
+pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
+
+// ── Static storage ────────────────────────────────────────────────────────────
+
+static GDT: Once<(GlobalDescriptorTable, Selectors)> = Once::new();
+static TSS: Once<TssBlock> = Once::new();
+
+/// The TSS, aligned on its size rounded up to a power of two: it never
+/// crosses a page (see the module).
+#[repr(C, align(128))]
+struct TssBlock(TaskStateSegment);
+
+const _: () = {
+    assert!(size_of::<TaskStateSegment>() <= align_of::<TssBlock>());
+    assert!(PAGE_SIZE.is_multiple_of(align_of::<TssBlock>()));
+};
+
+const PAGE_SIZE: usize = 4096;
+
+/// `[address, address + size)` crosses a page boundary.
+const fn crosses_page(address: u64, size: usize) -> bool {
+    size > 0 && address / PAGE_SIZE as u64 != (address + size as u64 - 1) / PAGE_SIZE as u64
+}
+
+struct Selectors {
+    kernel_code: SegmentSelector,
+    kernel_data: SegmentSelector,
+    tss: SegmentSelector,
+    /// 32-bit ring-3 code segment (L=0, D=1, DPL=3, base=0, limit=4GB).
+    user_code32: SegmentSelector,
+    /// 32-bit ring-3 data segment (DPL=3, base=0, limit=4GB).
+    user_data32: SegmentSelector,
+    /// 32-bit ring-3 FS segment covering the TEB page of the running thread
+    /// ([`set_teb_base`]).
+    user_teb_fs: SegmentSelector,
+}
+
+// ── Public init ──────────────────────────────────────────────────────────────
+
+/// Initialise and load the GDT.
+///
+/// Builds a TSS with:
+/// - `privilege_stack_table[0]` (RSP0) — kernel stack for ring-3→ring-0 entry.
+/// - `interrupt_stack_table[DOUBLE_FAULT_IST_INDEX]` — double-fault stack.
+///
+/// # Safety
+/// Must be called exactly once, in ring 0, with interrupts disabled.
+pub unsafe fn init() {
+    let block = TSS.call_once(|| {
+        let mut tss = TaskStateSegment::new();
+
+        // RSP0: kernel stack for privilege-level transitions.
+        tss.privilege_stack_table[0] = {
+            let top = unsafe { (core::ptr::addr_of_mut!(KERNEL_STACK) as *mut u8).add(16 * 1024) };
+            VirtAddr::new(top as u64)
+        };
+
+        // IST[0]: double-fault stack — survives kernel stack overflow.
+        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
+            let top = unsafe { (core::ptr::addr_of_mut!(DOUBLE_FAULT_STACK) as *mut u8).add(DOUBLE_FAULT_STACK_SIZE) };
+            VirtAddr::new(top as u64)
+        };
+
+        TssBlock(tss)
+    });
+    let tss = &block.0;
+    assert!(!crosses_page(core::ptr::addr_of!(*tss) as u64, size_of::<TaskStateSegment>()), "the TSS crosses a page");
+
+    // Record the address of privilege_stack_table[0] so set_kernel_stack_top()
+    // can update RSP0 at runtime without going through the Once cell.
+    // Use addr_of! instead of a reference because TaskStateSegment is packed
+    // (4-byte aligned) and creating a reference to a VirtAddr field inside it
+    // would be undefined behaviour (misaligned reference).
+    // SAFETY: tss is in 'static Once storage — the address is stable forever.
+    TSS_RSP0_VA.store(core::ptr::addr_of!(tss.privilege_stack_table[0]) as u64, Ordering::Relaxed);
+
+    let (gdt, sel) = GDT.call_once(|| {
+        let mut gdt = GlobalDescriptorTable::new();
+        let kernel_code = gdt.append(Descriptor::kernel_code_segment());
+        let kernel_data = gdt.append(Descriptor::kernel_data_segment());
+        let user_code32 = gdt.append(Descriptor::UserSegment(0x00CF_FA00_0000_FFFF));
+        let user_data32 = gdt.append(Descriptor::UserSegment(0x00CF_F200_0000_FFFF));
+        let user_teb_fs = gdt.append(Descriptor::UserSegment(teb_descriptor(LEGACY_TEB)));
+        let tss_sel = gdt.append(Descriptor::tss_segment(tss));
+
+        (gdt, Selectors { kernel_code, kernel_data, tss: tss_sel, user_code32, user_data32, user_teb_fs })
+    });
+
+    gdt.load();
+
+    // SAFETY: all selectors belong to the GDT we just loaded above.
+    unsafe {
+        use x86_64::instructions::segmentation::{Segment, CS, DS, ES, SS};
+        use x86_64::instructions::tables::load_tss;
+        CS::set_reg(sel.kernel_code);
+        SS::set_reg(sel.kernel_data);
+        DS::set_reg(sel.kernel_data);
+        ES::set_reg(sel.kernel_data);
+        // Load TSS so the CPU can read RSP0 and IST entries on interrupts.
+        load_tss(sel.tss);
+    }
+
+    log::trace!("HAL GDT: loaded (kernel CS/DS + TSS [RSP0=16K, IST0=16K] + user32 segments)");
+}
+
+// ── Selector accessors ────────────────────────────────────────────────────────
+
+/// Raw selector value for the 32-bit ring-3 code segment.
+///
+/// # Panics
+/// Panics if called before `gdt::init()`.
+pub fn user_code32_selector() -> u16 {
+    GDT.get().expect("gdt::init not called").1.user_code32.0
+}
+
+/// Raw selector value for the 32-bit ring-3 data segment.
+pub fn user_data32_selector() -> u16 {
+    GDT.get().expect("gdt::init not called").1.user_data32.0
+}
+
+/// Raw selector value for the 32-bit TEB/FS segment (base: the running
+/// thread's TEB, [`set_teb_base`]).
+pub fn user_teb_fs_selector() -> u16 {
+    GDT.get().expect("gdt::init not called").1.user_teb_fs.0
+}
+
+pub fn kernel_code_selector() -> u16 {
+    GDT.get().expect("gdt::init not called").1.kernel_code.0
+}
+
+pub fn kernel_data_selector() -> u16 {
+    GDT.get().expect("gdt::init not called").1.kernel_data.0
+}
+
+pub fn kernel_stack_top() -> u64 {
+    TSS.get().expect("gdt::init not called").0.privilege_stack_table[0].as_u64()
+}
+
+/// Update TSS.RSP0 — the kernel stack pointer loaded on ring-3 → ring-0 transitions.
+///
+/// Must be called before switching to a new user-mode thread so that interrupts
+/// fired while that thread executes in ring-3 push their saved frame onto its
+/// dedicated kernel stack rather than the shared boot-time stack.
+///
+/// # Safety
+/// - `init()` must have been called before this function.
+/// - Caller is responsible for ensuring `rsp0` points to valid, mapped memory
+///   with at least 512 bytes below it for the CPU interrupt frame.
+/// - On single-CPU Phase 2.5 this is called at DISPATCH_LEVEL (timer ISR)
+///   with IF=0, so no concurrent access to the TSS is possible.
+///
+/// # IRQL: DISPATCH_LEVEL
+pub unsafe fn set_kernel_stack_top(rsp0: u64) {
+    let ptr = TSS_RSP0_VA.load(Ordering::Relaxed);
+    if ptr != 0 {
+        // SAFETY: ptr was stored by init() and points to TSS.privilege_stack_table[0]
+        // which lives in 'static Once<TaskStateSegment> storage.
+        // VirtAddr is repr(transparent) over u64 in x86_64 0.15 — writing u64 is safe.
+        unsafe { (ptr as *mut u64).write_volatile(rsp0) };
+    }
+}
+
+/// The descriptor of the 32-bit TEB segment for a TEB at `base`: data,
+/// read/write, DPL 3, present, 32-bit, limit 0xFFF bytes (one page).
+pub const fn teb_descriptor(base: u32) -> u64 {
+    let base = base as u64;
+    0x0040_F200_0000_0FFF | (base & 0x00FF_FFFF) << 16 | (base >> 24) << 56
+}
+
+/// Points the TEB descriptor at `base`, then reloads FS from it: the CPU
+/// keeps the base of a segment register until it is loaded again. Called at
+/// each switch to a user thread, as XP does with its `KGDT_R3_TEB` entry; user
+/// code that reloads FS with the TEB selector finds its own TEB. The kernel
+/// does not use FS. Without a GDT (host tests), does nothing.
+///
+/// # Safety
+/// FS is not in use by the kernel code that runs until the next return to user
+/// mode; nothing else on this CPU changes the GDT meanwhile.
+///
+/// # IRQL: DISPATCH_LEVEL (the context switch).
+pub unsafe fn set_teb_base(base: u32) {
+    let Some((gdt, sel)) = GDT.get() else { return };
+    let entry = &gdt.entries()[sel.user_teb_fs.index() as usize];
+    const _: () = assert!(core::mem::size_of::<Entry>() == 8);
+    // SAFETY: with the `instructions` feature on x86_64, an `Entry` is a
+    // `repr(transparent)` wrapper around an `AtomicU64`: storing through it is
+    // a store to an atomic, which the shared reference allows.
+    let raw = unsafe { &*(entry as *const Entry).cast::<AtomicU64>() };
+    raw.store(teb_descriptor(base), Ordering::Relaxed);
+    #[cfg(target_os = "none")]
+    // SAFETY: the selector belongs to the loaded GDT and designates a
+    // present, writable data segment; ring 0 may load a DPL 3 data selector
+    // whose RPL is 3. The kernel does not use FS (contract).
+    unsafe {
+        use x86_64::instructions::segmentation::{Segment, FS};
+        FS::set_reg(sel.user_teb_fs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tss_never_crosses_a_page() {
+        // Where scenario `fpu`'s build had it: RSP0 across 0x...8017_F000.
+        assert!(crosses_page(0xFFFF_FFFF_8017_EFF8, size_of::<TaskStateSegment>()));
+        assert!(!crosses_page(0xFFFF_FFFF_8017_EF80, size_of::<TaskStateSegment>()));
+        assert!(!crosses_page(0xFFFF_FFFF_8017_F000 - 8, 8) && crosses_page(0xFFFF_FFFF_8017_F000 - 4, 8));
+        // Any address the block can have keeps the TSS within its page.
+        let align = align_of::<TssBlock>() as u64;
+        for offset in (0..PAGE_SIZE as u64).step_by(align as usize) {
+            assert!(!crosses_page(0xFFFF_FFFF_8017_E000 + offset, size_of::<TaskStateSegment>()), "{offset:#x}");
+        }
+        let block = TssBlock(TaskStateSegment::new());
+        assert_eq!(core::ptr::addr_of!(block.0) as u64 % align, 0, "the TSS starts its block");
+    }
+
+    #[test]
+    fn the_teb_descriptor_carries_its_base() {
+        // The descriptor the GDT has always held for the legacy TEB.
+        assert_eq!(teb_descriptor(0x7FFD_F000), 0x7F40_F2FD_F000_0FFF);
+        let at = teb_descriptor(0x1234_5000);
+        assert_eq!((at >> 16) & 0xFF_FFFF, 0x34_5000, "base bits 0-23");
+        assert_eq!(at >> 56, 0x12, "base bits 24-31");
+        assert_eq!(at & 0xFFFF, 0x0FFF, "one page");
+        assert_eq!((at >> 40) & 0xFF, 0xF2, "present, DPL 3, read/write data");
+        assert_eq!((at >> 52) & 0xF, 0x4, "32-bit, byte granular");
+    }
+}

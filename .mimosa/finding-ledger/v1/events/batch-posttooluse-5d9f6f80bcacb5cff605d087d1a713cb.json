@@ -1,0 +1,96 @@
+{
+  "schemaVersion": "mimosa-finding-ledger-batch/v1",
+  "batchId": "posttooluse-5d9f6f80bcacb5cff605d087d1a713cb",
+  "runId": null,
+  "runStatus": "completed",
+  "coverage": {
+    "status": "complete",
+    "reasons": []
+  },
+  "source": {
+    "component": "zcode-hook",
+    "operationId": "PostToolUse"
+  },
+  "revision": null,
+  "diffHash": null,
+  "rulesVersion": null,
+  "sessionHash": "8a78eeb31a0aeb890d424ebfa44ad30cf8772c7c4f982b0df3f7cd662ee5adb1",
+  "reportRef": null,
+  "events": [
+    {
+      "eventId": "hook-548b06110617ee8608b414b80b465e9a",
+      "findingId": "mimosa-0971261fa585bc62ea5c8527",
+      "type": "static_fix_verified",
+      "at": "2026-11-07T15:50:01.493Z",
+      "identity": {
+        "projectRelativeFile": "kernel/hal/src/bochs.rs",
+        "ruleId": "security",
+        "codeEvidenceHash": "03150f1bbb936bf00daf6abce36daba9e858f41c7b95f413d1f55d655747f328",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 50,
+      "endLine": 50,
+      "reasonCode": "static_rescan_passed",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "evidenceHash": "03150f1bbb936bf00daf6abce36daba9e858f41c7b95f413d1f55d655747f328"
+      },
+      "sequence": 0
+    },
+    {
+      "eventId": "hook-322cd21c0da5c5f35bf43cee1001bf11",
+      "findingId": "mimosa-881ff2e7445c91b1c02a885b",
+      "type": "static_fix_verified",
+      "at": "2026-11-07T15:50:01.493Z",
+      "identity": {
+        "projectRelativeFile": "kernel/hal/src/bochs.rs",
+        "ruleId": "security",
+        "codeEvidenceHash": "48245b998a2e31bdf8d0d997cba7121cdf3735874a88b4053740fe4f9f728183",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 42,
+      "endLine": 42,
+      "reasonCode": "static_rescan_passed",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "evidenceHash": "48245b998a2e31bdf8d0d997cba7121cdf3735874a88b4053740fe4f9f728183"
+      },
+      "sequence": 1
+    },
+    {
+      "eventId": "hook-21ef5fb5811a0f3a833cca34ed2cc9f6",
+      "findingId": "mimosa-e8b06b45f07706fa460e7ca0",
+      "type": "static_fix_verified",
+      "at": "2026-11-07T15:50:01.493Z",
+      "identity": {
+        "projectRelativeFile": "kernel/hal/src/bochs.rs",
+        "ruleId": "security",
+        "codeEvidenceHash": "dbb236d5ae92062a5ff06bd77e3b3c0c4179c866b9c96cab49b586f82de02b9c",
+        "confidence": "stable"
+      },
+      "scope": "direct",
+      "line": 51,
+      "endLine": 51,
+      "reasonCode": "static_rescan_passed",
+      "reportedToAgent": false,
+      "evidence": {
+        "kind": "static_scan",
+        "boundary": "observed",
+        "producer": "deterministic",
+        "evidenceHash": "dbb236d5ae92062a5ff06bd77e3b3c0c4179c866b9c96cab49b586f82de02b9c"
+      },
+      "sequence": 2
+    }
+  ],
+  "observedFindingIds": [],
+  "verifiedFiles": [],
+  "recordedAt": "2026-11-07T15:50:02.912Z"
+}

@@ -51,3 +51,7 @@ keys = [setup] screen review 2 => ret
 forbid = [setup] prepare failed:
 forbid = [setup] format failed:
 forbid = [setup] copy failed:
+# The copy of the system tree lasts more than 10 s after the last key: the
+# probe of test-smss must count the steps of the engine (io::install::
+# last_step_time) as keys, not end SETUP1.EXE in the middle of the copy.
+forbid = did not end within 10 s

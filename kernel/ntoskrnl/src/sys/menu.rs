@@ -1,7 +1,8 @@
 //! Les services des menus (`win32k::menu`) : la barre de menus d'une
 //! fenêtre et ses items — la création passe par NtUserCallNoParam
 //! (CREATEMENU, CREATEMENUPOPUP), les items par NtUserThunkedMenuItemInfo,
-//! l'état par NtUserEnableMenuItem, la barre par NtUserSetMenu.
+//! l'état par NtUserEnableMenuItem, la barre par NtUserSetMenu, la
+//! destruction par NtUserDestroyMenu.
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
 use ke::usermem::UserPtr;
@@ -113,6 +114,18 @@ pub(super) fn nt_user_enable_menu_item(arguments: &[u32]) -> NtStatus {
             | if disable { win32k::menu::mf::GRAYED | win32k::menu::mf::DISABLED } else { 0 };
     });
     NtStatus(previous)
+}
+
+/// NtUserDestroyMenu(hMenu) : BOOL. Le menu et ses sous-menus sont détruits
+/// (IntDestroyMenuObject, `win32k::menu::destroy`) ; FALSE pour un menu qui
+/// n'existe pas (`ERROR_INVALID_MENU_HANDLE`).
+pub(super) fn nt_user_destroy_menu(arguments: &[u32]) -> NtStatus {
+    if win32k::menu::destroy(arguments[0]) {
+        NtStatus(1)
+    } else {
+        let _ = win32k::set_last_error(abi::winerror::ERROR_INVALID_MENU_HANDLE);
+        NtStatus(0)
+    }
 }
 
 /// NtUserRemoveMenu(hMenu, uPosition, uFlags) : l'item retiré (son

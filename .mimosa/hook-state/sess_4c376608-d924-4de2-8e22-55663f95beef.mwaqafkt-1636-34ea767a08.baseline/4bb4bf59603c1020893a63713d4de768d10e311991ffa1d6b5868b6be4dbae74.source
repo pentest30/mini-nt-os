@@ -1,0 +1,13 @@
+[package]
+name    = "xtask"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Build and test driver (02 §9.2), run as `cargo xtask <command>` through the
+# alias in .cargo/config.toml. Host tool, std only, and the workspace's PE
+# parser for the imports of the boot disk's programs: no outside dependency.
+[dependencies]
+pe = { path = "../libs/pe" }
+gpt = { path = "../libs/gpt" }
+fatfs = { path = "../libs/fatfs" }

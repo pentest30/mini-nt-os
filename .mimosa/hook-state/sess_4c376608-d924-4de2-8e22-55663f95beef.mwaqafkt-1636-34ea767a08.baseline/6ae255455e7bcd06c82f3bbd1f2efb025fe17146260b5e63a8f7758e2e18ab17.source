@@ -1,0 +1,170 @@
+# CI (06 §6): rustfmt and clippy (`cargo xtask lint`), no warnings, host
+# tests, bare-metal builds, and the boot scenarios of tests/boot/ through
+# `cargo xtask test`: the smoke test on both syscall paths (ADR-004), a
+# provoked kernel stack overflow that must end on the STOP screen, and the
+# M1 scenarios: event ping-pong between two kernel threads, floating point in
+# four threads, a starved thread raised by the balance set manager, and the
+# symbolized STOP screen of a failed assertion; and the ReactOS userland
+# (`cargo xtask fetch-userland`, its archive cached by its pinned SHA-256),
+# with the native test programs of tests/native/ compiled by MinGW and clang;
+# and two boots on an ATA system disk, a file and a registry value kept,
+# checked by fsck.vfat.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    # Explicit `bash` runs with `-eo pipefail`, so a failing cargo piped to tee fails the step.
+    shell: bash
+
+jobs:
+  lint:
+    name: rustfmt and clippy (-D warnings, host and bare-metal)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - run: cargo xtask lint
+
+  host:
+    name: Host check and tests (-D warnings)
+    runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - run: cargo check --workspace
+      - run: cargo xtask test --host
+
+  bare-metal:
+    name: Kernel and bootloader builds (no warnings)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      # RUSTFLAGS would replace the target rustflags of .cargo/config.toml,
+      # so warnings are detected in the build output instead.
+      - name: Build kernel (with and without its test features) and bootloader
+        run: |
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel 2>&1 | tee build.log
+          cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features trace-syscalls 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-stack-overflow 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-ke-events 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-fpu 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-bugcheck 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-ke-starvation 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-irql 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-page-fault-access-violation 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-critical-process 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-critical-thread 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-smss 2>&1 | tee -a build.log
+          cargo build -p ntoskrnl --target x86_64-unknown-none --profile kernel --features test-persistence 2>&1 | tee -a build.log
+          if grep -E '^warning' build.log; then
+            echo "::error::bare-metal build emitted warnings"
+            exit 1
+          fi
+
+  qemu:
+    name: QEMU (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: smoke, default CPU, AMD vendor, int 2Eh
+            args: --scenario smoke --cpu default
+          - name: smoke, Intel CPU, SYSENTER
+            args: --scenario smoke --cpu intel
+          - name: kernel stack overflow, STOP screen
+            args: --scenario stack-overflow
+          - name: event ping-pong between two kernel threads (M1)
+            args: --scenario ke-events
+          - name: floating point in four threads, host results (M1)
+            args: --scenario fpu
+          - name: starved thread raised by the balance set manager (M1)
+            args: --scenario ke-starvation
+          - name: failed assertion, symbolized STOP screen (M1)
+            args: --scenario bugcheck
+          - name: user page fault at DISPATCH_LEVEL, STOP screen (M2)
+            args: --scenario page-fault-irql
+          - name: kernel read of a reserved user page, STOP screen (M2)
+            args: --scenario page-fault-access-violation
+          - name: a critical process ends, CRITICAL_OBJECT_TERMINATION (M5)
+            args: --scenario critical-process
+          - name: a critical thread ends, CRITICAL_OBJECT_TERMINATION (M5)
+            args: --scenario critical-thread
+          - name: ReactOS userland, NTDLL.DLL installed as the system DLL (M3)
+            args: --scenario userland
+            userland: true
+          - name: native programs linked to ntdll, MinGW and SEH (M3, S1)
+            args: --scenario native
+            userland: true
+            native: true
+          - name: ReactOS smss.exe under the probe, where it stops (M4)
+            args: --scenario smss
+            userland: true
+          - name: a file on C, the ATA system disk, after a reboot; fsck.vfat (M4)
+            args: --scenario persistence
+            fsck: true
+          - name: boot and reboot a single installed GPT disk (ESP + system)
+            args: --scenario installed-persistence
+            fsck: true
+          - name: GPT system partition, persistence, both tables and FAT checked (F4)
+            args: --scenario gpt-persistence
+            fsck: true
+          - name: a registry value on C after a reboot, the SYSTEM hive flushed; fsck.vfat (M4)
+            args: --scenario registry-persistence
+            userland: true
+            fsck: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - name: Install QEMU and OVMF
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 ovmf
+      # The pinned ReactOS release archive (xtask/src/userland.rs), by its
+      # SHA-256: downloaded once, then unpacked from the cache.
+      - name: Cache the ReactOS release archive
+        if: matrix.userland
+        uses: actions/cache@v4
+        with:
+          path: third_party/reactos/0.4.16/ReactOS-0.4.16-i386.zip
+          key: reactos-0.4.16-e5851510cf5b79ef51a76b8155dd5ef7faca1155f44d0a1d41c35b77ece4ce2a
+      - name: Fetch the ReactOS userland
+        if: matrix.userland
+        run: cargo xtask fetch-userland
+      # Without these compilers, xtask would skip the scenario: the install must
+      # succeed. MinGW for the C programs, clang and lld for the SEH test.
+      - name: Install MinGW, clang, lld and llvm (tests/native)
+        if: matrix.native
+        run: |
+          sudo apt-get install -y -qq gcc-mingw-w64-i686 clang lld llvm
+          i686-w64-mingw32-gcc --version && clang --version && lld-link --version && command -v llvm-dlltool
+      # fsck.vfat checks the system disk after the boots (a warning without it).
+      - name: Install dosfstools (fsck.vfat)
+        if: matrix.fsck
+        run: sudo apt-get install -y -qq dosfstools && (command -v fsck.vfat || ls /usr/sbin/fsck.vfat)
+      # Scenarios of tests/boot/; the firmware is found in /usr/share/OVMF.
+      - name: Boot and check serial markers
+        run: cargo xtask test --boot ${{ matrix.args }}
+      - name: Upload serial and QEMU logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-logs-${{ strategy.job-index }}
+          path: |
+            target/xtask/boot/*/serial*.log
+            target/xtask/boot/*/qemu.log
+          if-no-files-found: ignore

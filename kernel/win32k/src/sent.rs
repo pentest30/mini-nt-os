@@ -17,9 +17,12 @@
 //! valides) ; vers un autre processus, un message qui porte un pointeur n'est
 //! pas encore traduit (refusé, journalisé une fois).
 //!
-//! Le destinataire peut finir sans répondre (pas de rappel de Ps à la fin
-//! d'un thread GUI) : l'envoyeur regarde toutes les [`SLICE_MS`] ms s'il vit
-//! encore, quoi qui le réveille entre-temps, et l'envoi échoue sinon.
+//! Le destinataire peut finir sans répondre : sa fin rend ses messages
+//! envoyés à leurs envoyeurs ([`abandon_all`], par le rappel de Ps à la fin
+//! d'un thread GUI, `crate::destroy`), comme la destruction de la fenêtre
+//! visée ([`SentMessage::abandon`]) ; l'envoi échoue alors aussitôt. Par
+//! sûreté, l'envoyeur regarde aussi toutes les [`SLICE_MS`] ms si le
+//! destinataire vit encore, quoi qui le réveille entre-temps.
 //! SendMessageTimeout borne l'attente ; SendNotifyMessage n'attend pas
 //! ([`notify`]) : un message qui porte un pointeur lui est refusé
 //! (`ERROR_MESSAGE_SYNC_ONLY`), l'envoyeur pouvant rendre sa mémoire avant
@@ -30,6 +33,7 @@
 //! diffusion (HWND_BROADCAST).
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_TIMEOUT, STATUS_WAIT_0};
@@ -54,6 +58,9 @@ pub struct SentMessage {
     pub lparam: u32,
     /// La valeur de la procédure, une fois revenue.
     reply: KSpinLock<Option<u32>>,
+    /// Le destinataire ne répondra pas : son thread a fini, ou sa fenêtre
+    /// est détruite.
+    abandoned: AtomicBool,
     /// Signalé à la réponse ; `None` pour SendNotifyMessage, que personne
     /// n'attend.
     done: Option<Arc<Object<Event>>>,
@@ -69,6 +76,7 @@ impl SentMessage {
             wparam,
             lparam,
             reply: KSpinLock::new(None),
+            abandoned: AtomicBool::new(false),
             done: waited.then(|| Event::create(EventType::NotificationEvent, false)),
         })
     }
@@ -84,6 +92,35 @@ impl SentMessage {
         if let Some(done) = &self.done {
             done.set();
         }
+    }
+
+    /// Le destinataire ne répondra pas (son thread a fini, ou la fenêtre
+    /// visée est détruite) : l'envoyeur est réveillé, et son envoi échoue
+    /// ([`SendError::Gone`]).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn abandon(&self) {
+        self.abandoned.store(true, Ordering::Release);
+        if let Some(done) = &self.done {
+            done.set();
+        }
+    }
+
+    /// Le destinataire ne répondra pas.
+    pub fn is_abandoned(&self) -> bool {
+        self.abandoned.load(Ordering::Acquire)
+    }
+}
+
+/// Les messages envoyés à un thread qui finit, ou à une fenêtre détruite,
+/// sont rendus à leurs envoyeurs ([`SentMessage::abandon`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn abandon_all(sent: Vec<Arc<SentMessage>>) {
+    for message in sent {
+        message.abandon();
     }
 }
 
@@ -241,6 +278,9 @@ pub fn send(
         if let Some(result) = sent.reply() {
             return Ok(result);
         }
+        if sent.is_abandoned() {
+            return Err(SendError::Gone);
+        }
         let now = hal::timer::interrupt_time();
         if deadline.is_some_and(|deadline| now >= deadline) {
             withdraw(target, &sent);
@@ -346,5 +386,15 @@ mod tests {
         assert_eq!((sent.message, sent.wparam, sent.lparam, sent.reply()), (0x0400, 1, 2, None));
         sent.complete(0);
         assert_eq!(sent.reply(), Some(0), "nobody waits: no event");
+    }
+
+    #[test]
+    fn an_abandoned_message_wakes_its_sender_without_a_reply() {
+        let sent = SentMessage::new(0x20, 0x400, 0, 0, true);
+        assert!(!sent.is_abandoned());
+        abandon_all(alloc::vec![sent.clone()]);
+        assert!(sent.is_abandoned());
+        assert_eq!(sent.reply(), None, "no value: the send fails");
+        assert_eq!(sent.done.as_ref().map(|done| done.state()), Some(1), "the sender is woken");
     }
 }

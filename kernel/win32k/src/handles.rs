@@ -6,9 +6,13 @@
 //! ont servi (`nb_handles`, la borne des index pour `user32`), le
 //! `SERVERINFO` combien sont prises (`cHandleEntries`).
 //!
+//! Chaque entrée prise retient le processus de son objet et son type
+//! (`ppi->UserHandleCount` de ReactOS) : GetGuiResources les compte
+//! ([`count_for_process`]), et la fin d'un processus GUI rend ce qui lui
+//! reste ([`taken_by_process`], `crate::destroy`).
+//!
 //! Pas encore : les verrous d'objet (`cLockObj`), la destruction différée
-//! (`HANDLEENTRY_DESTROY`), les objets d'un processus ou d'un thread rendus
-//! à sa fin.
+//! (`HANDLEENTRY_DESTROY`) : un objet détruit rend son entrée tout de suite.
 
 use alloc::vec::Vec;
 use core::mem::{offset_of, size_of};
@@ -33,34 +37,46 @@ pub const fn index(handle: u32) -> Option<u32> {
     Some((low - FIRST_USER_HANDLE) >> 1)
 }
 
-/// Les entrées : la génération de chacune de celles qui ont servi, les
-/// libres, et combien la table en tient.
+/// Ce qu'une entrée prise retient de son objet : le PID de son processus
+/// (0 : aucun, la fenêtre d'un bureau) et son type (`TYPE_*`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Holder {
+    pub pid: u32,
+    pub kind: u8,
+}
+
+/// Les entrées : la génération de chacune de celles qui ont servi, ce que
+/// retient chacune de celles qui sont prises, les libres, et combien la
+/// table en tient.
 #[derive(Debug)]
 pub struct Slots {
     generations: Vec<u16>,
+    holders: Vec<Option<Holder>>,
     free: Vec<u32>,
     capacity: u32,
 }
 
 impl Slots {
     pub fn new(capacity: u32) -> Self {
-        Self { generations: Vec::new(), free: Vec::new(), capacity }
+        Self { generations: Vec::new(), holders: Vec::new(), free: Vec::new(), capacity }
     }
 
-    /// Prend une entrée : une libre (sa génération suivante, 1 après
-    /// 0xFFFE), sinon une neuve (génération 2) ; `None` si la table est
-    /// pleine. Rend son index et sa génération.
-    pub fn alloc(&mut self) -> Option<(u32, u16)> {
+    /// Prend une entrée pour un objet de `holder` : une libre (sa génération
+    /// suivante, 1 après 0xFFFE), sinon une neuve (génération 2) ; `None` si
+    /// la table est pleine. Rend son index et sa génération.
+    pub fn alloc(&mut self, holder: Holder) -> Option<(u32, u16)> {
         let index = match self.free.pop() {
             Some(index) => index,
             None if (self.generations.len() as u32) < self.capacity => {
                 self.generations.push(1);
+                self.holders.push(None);
                 self.generations.len() as u32 - 1
             }
             None => return None,
         };
         let generation = &mut self.generations[index as usize];
         *generation = if *generation >= 0xFFFE { 1 } else { *generation + 1 };
+        self.holders[index as usize] = Some(holder);
         Some((index, *generation))
     }
 
@@ -69,11 +85,30 @@ impl Slots {
     pub fn free(&mut self, handle: u32) -> Option<u32> {
         let index = index(handle)?;
         let generation = *self.generations.get(index as usize)?;
-        if generation != (handle >> 16) as u16 || self.free.contains(&index) {
+        if generation != (handle >> 16) as u16 || self.holders[index as usize].is_none() {
             return None;
         }
+        self.holders[index as usize] = None;
         self.free.push(index);
         Some(index)
+    }
+
+    /// Le nombre d'entrées prises par les objets du processus `pid`.
+    pub fn count_for(&self, pid: u32) -> u32 {
+        self.holders.iter().flatten().filter(|holder| holder.pid == pid).count() as u32
+    }
+
+    /// Les handles des objets du processus `pid` et leurs types, dans
+    /// l'ordre des entrées.
+    pub fn taken_by(&self, pid: u32) -> Vec<(u32, u8)> {
+        self.holders
+            .iter()
+            .enumerate()
+            .filter_map(|(index, holder)| {
+                let holder = holder.filter(|holder| holder.pid == pid)?;
+                Some((handle(index as u32, self.generations[index]), holder.kind))
+            })
+            .collect()
     }
 
     /// Combien d'entrées ont servi (`nb_handles`).
@@ -102,9 +137,17 @@ fn write(index: u32, entry: &UserHandleEntry32, slots: &Slots) -> Result<(), NtS
     section.write_kernel(counted, &slots.taken().to_le_bytes())
 }
 
+/// Le PID du processus d'un propriétaire d'objet : un `PROCESSINFO` (son
+/// adresse du serveur), un `THREADINFO` (celui de son thread, qui vit) ; 0
+/// sans propriétaire.
+fn process_of(owner: u32) -> u32 {
+    crate::gui::process_of_server_address(owner).or_else(|| crate::gui::process_id_of(owner)).unwrap_or(0)
+}
+
 /// UserAllocHandle : un handle pour l'objet `object` (son adresse du
 /// serveur) de type `kind` (`TYPE_*`), à `owner` (un `THREADINFO` ou un
-/// `PROCESSINFO`, son adresse du serveur, ou 0).
+/// `PROCESSINFO`, son adresse du serveur, ou 0). L'entrée retient le
+/// processus du propriétaire.
 ///
 /// # Errors
 /// `STATUS_INSUFFICIENT_RESOURCES` si la table est pleine ;
@@ -113,9 +156,10 @@ fn write(index: u32, entry: &UserHandleEntry32, slots: &Slots) -> Result<(), NtS
 /// # IRQL
 /// <= DISPATCH_LEVEL.
 pub fn alloc(object: u32, owner: u32, kind: u8) -> Result<u32, NtStatus> {
+    let holder = Holder { pid: process_of(owner), kind };
     let mut slots = SLOTS.lock();
     let slots = slots.get_or_insert_with(|| Slots::new(shared::HANDLE_COUNT));
-    let (index, generation) = slots.alloc().ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
+    let (index, generation) = slots.alloc(holder).ok_or(STATUS_INSUFFICIENT_RESOURCES)?;
     let entry = UserHandleEntry32 { ptr: object, owner, kind, flags: 0, generation };
     if let Err(status) = write(index, &entry, slots) {
         slots.free(handle(index, generation));
@@ -124,28 +168,22 @@ pub fn alloc(object: u32, owner: u32, kind: u8) -> Result<u32, NtStatus> {
     Ok(handle(index, generation))
 }
 
-/// Le nombre d'entrées prises à `owner` (l'adresse du serveur d'un
-/// `PROCESSINFO` ou d'un `THREADINFO`) — GetGuiResources. Les entrées se
-/// lisent de la section partagée ; une entrée rendue a son pointeur nul.
+/// Le nombre d'objets USER du processus `pid`, ses fenêtres comprises
+/// (GetGuiResources, GR_USEROBJECTS ; `ppi->UserHandleCount`).
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub fn count_of(owner: u32) -> u32 {
-    let Some(section) = shared::section() else { return 0 };
-    let mut count = 0;
-    for index in 0..shared::HANDLE_COUNT {
-        let at = shared::HANDLE_ENTRIES + index * core::mem::size_of::<UserHandleEntry32>() as u32;
-        let mut bytes = [0u8; 8];
-        if section.read_kernel(u64::from(at), &mut bytes).is_err() {
-            break;
-        }
-        let ptr = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        let entry_owner = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-        if ptr != 0 && entry_owner == owner {
-            count += 1;
-        }
-    }
-    count
+pub fn count_for_process(pid: u32) -> u32 {
+    SLOTS.lock().as_ref().map_or(0, |slots| slots.count_for(pid))
+}
+
+/// Les handles des objets USER du processus `pid` qui restent, et leurs
+/// types (`TYPE_*`).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn taken_by_process(pid: u32) -> Vec<(u32, u8)> {
+    SLOTS.lock().as_ref().map_or_else(Vec::new, |slots| slots.taken_by(pid))
 }
 
 /// Rend le handle `handle` : son entrée devient libre (sa génération
@@ -176,27 +214,50 @@ mod tests {
         assert_eq!((index(0x1F), index(0x21)), (None, None), "below the first, or odd");
     }
 
+    const NOBODY: Holder = Holder { pid: 0, kind: 0 };
+
     #[test]
     fn entries_are_new_then_taken_again_one_generation_later() {
         let mut slots = Slots::new(2);
-        let first = slots.alloc().unwrap();
-        let second = slots.alloc().unwrap();
+        let first = slots.alloc(NOBODY).unwrap();
+        let second = slots.alloc(NOBODY).unwrap();
         assert_eq!((first, second), ((0, 2), (1, 2)));
-        assert_eq!(slots.alloc(), None, "full");
+        assert_eq!(slots.alloc(NOBODY), None, "full");
         assert_eq!((slots.used(), slots.taken()), (2, 2));
         assert_eq!(slots.free(handle(0, 2)), Some(0));
         assert_eq!(slots.free(handle(0, 2)), None, "not twice");
         assert_eq!(slots.free(handle(1, 3)), None, "another generation");
         assert_eq!((slots.used(), slots.taken()), (2, 1));
-        assert_eq!(slots.alloc(), Some((0, 3)), "taken again, the next generation");
+        assert_eq!(slots.alloc(NOBODY), Some((0, 3)), "taken again, the next generation");
     }
 
     #[test]
     fn the_generation_wraps_to_one() {
         let mut slots = Slots::new(1);
-        slots.alloc();
+        slots.alloc(NOBODY);
         slots.generations[0] = 0xFFFE;
         slots.free(handle(0, 0xFFFE));
-        assert_eq!(slots.alloc(), Some((0, 1)));
+        assert_eq!(slots.alloc(NOBODY), Some((0, 1)));
+    }
+
+    #[test]
+    fn each_process_counts_its_objects_until_they_are_given_back() {
+        let window = |pid| Holder { pid, kind: abi::user::TYPE_WINDOW };
+        let menu = |pid| Holder { pid, kind: abi::user::TYPE_MENU };
+        let mut slots = Slots::new(8);
+        let (a, ga) = slots.alloc(window(20)).unwrap();
+        let (b, gb) = slots.alloc(menu(20)).unwrap();
+        slots.alloc(window(24)).unwrap();
+        slots.alloc(NOBODY).unwrap();
+        assert_eq!((slots.count_for(20), slots.count_for(24)), (2, 1));
+        let taken = slots.taken_by(20);
+        assert_eq!(taken, [(handle(a, ga), abi::user::TYPE_WINDOW), (handle(b, gb), abi::user::TYPE_MENU)]);
+        slots.free(handle(a, ga));
+        assert_eq!(slots.count_for(20), 1, "a window given back");
+        assert_eq!(slots.taken_by(20), [(handle(b, gb), abi::user::TYPE_MENU)]);
+        let (again, generation) = slots.alloc(menu(28)).unwrap();
+        assert_eq!((again, generation), (a, ga + 1), "the entry taken again by another process");
+        assert_eq!((slots.count_for(20), slots.count_for(28)), (1, 1));
+        assert!(slots.taken_by(32).is_empty());
     }
 }

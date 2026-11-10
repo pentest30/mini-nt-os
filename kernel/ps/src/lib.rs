@@ -45,8 +45,8 @@ pub use ethread::{
     InitialTeb, THREAD_TYPE,
 };
 pub use exit::{
-    exit_thread, set_critical_breaks_ignored, terminate_current_process, terminate_other_threads, terminate_process,
-    terminate_thread, wait_for_reaper,
+    exit_thread, set_critical_breaks_ignored, set_win32_callouts, terminate_current_process, terminate_other_threads,
+    terminate_process, terminate_thread, wait_for_reaper,
 };
 pub use process_parameters::ProcessParameters;
 pub use session::{create_session, detach_session};
@@ -68,6 +68,9 @@ use cid::CidTable;
 pub(crate) enum CidEntry {
     Process(Weak<Object<EProcess>>),
     Thread(Weak<Object<EThread>>),
+    /// Un thread noyau du processus System sans objet thread
+    /// ([`ethread::reserve_system_thread_id`]).
+    SystemThread,
 }
 
 /// PspCidTable.

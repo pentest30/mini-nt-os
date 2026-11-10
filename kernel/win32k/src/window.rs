@@ -33,11 +33,14 @@
 //! Une fenêtre créée visible est montrée (`crate::winpos::show_window`) ; son
 //! cadre se peint dans le noyau (`crate::paint`), pas encore sa zone cliente.
 //!
-//! Pas encore : DestroyWindow (les fenêtres d'un thread vivent autant que
-//! lui), une fenêtre créée réduite ou agrandie (journalisé), les menus, les messages envoyés à un autre thread, la fenêtre des
-//! messages (`HWND_MESSAGE`), les crochets, les régions (la région à mettre
-//! à jour est un rectangle), les contextes de périphérique (WM_ERASEBKGND
-//! reçoit 0), le fond d'écran, la mise en page de droite à gauche.
+//! Une fenêtre appartient à son thread de sa création à sa destruction
+//! (DestroyWindow, ou la fin du thread : `crate::destroy`), qui rend son
+//! handle ([`release`]) ; son `WND` reste dans le tas tant qu'une référence
+//! du noyau la tient. Une création qui échoue la détruit.
+//!
+//! Pas encore : une fenêtre créée réduite ou agrandie (journalisé), la
+//! fenêtre des messages (`HWND_MESSAGE`), les crochets, le fond d'écran, la
+//! mise en page de droite à gauche.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -66,7 +69,8 @@ use abi::user::{
     WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
-    ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_TLW_WITH_WSCHILD,
+    ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_TLW_WITH_WSCHILD,
 };
 use hal::sync::KSpinLock;
 use ke::usermem::UserPtr;
@@ -181,6 +185,11 @@ pub struct Window {
     /// Le nom du bureau, pour la fenêtre d'un bureau.
     pub desktop_name: Option<String>,
     state: KSpinLock<WindowState>,
+    /// Sa destruction a commencé (co_UserDestroyWindow) : une seconde
+    /// demande n'en refait rien.
+    destroying: AtomicBool,
+    /// Détruite : son handle est rendu, [`get`] ne la trouve plus.
+    freed: AtomicBool,
 }
 
 impl Window {
@@ -201,12 +210,31 @@ impl Window {
     pub fn is_desktop_window(&self) -> bool {
         self.desktop_name.is_some()
     }
+
+    /// Elle n'est pas détruite.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn is_alive(&self) -> bool {
+        !self.freed.load(Ordering::Acquire)
+    }
+
+    /// Marque le début de sa destruction ; rend `false` si elle avait déjà
+    /// commencé.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn begin_destroy(&self) -> bool {
+        !self.destroying.swap(true, Ordering::AcqRel)
+    }
 }
 
 impl Drop for Window {
     fn drop(&mut self) {
-        WINDOWS.lock().remove(&self.handle);
-        let _ = crate::handles::free(self.handle);
+        if self.is_alive() {
+            WINDOWS.lock().remove(&self.handle);
+            let _ = crate::handles::free(self.handle);
+        }
         self.heap.free(self.wnd, self.wnd_size);
         if let Some(name) = self.state.lock().name {
             self.heap.free(name.at, name.capacity);
@@ -219,6 +247,31 @@ impl Drop for Window {
 
 /// Les fenêtres vivantes, par handle.
 static WINDOWS: KSpinLock<BTreeMap<u32, Weak<Window>>> = KSpinLock::new(BTreeMap::new());
+
+/// UserDeleteObject, la fin de co_UserFreeWindow : `window` est détruite ;
+/// [`get`] ne la trouve plus, son handle est rendu à la table (que `user32`
+/// lit). Son `WND`, son nom et le `CLS` d'un bureau restent dans le tas
+/// jusqu'à sa dernière référence. Une seconde fois, rien.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub(crate) fn release(window: &Window) {
+    if window.freed.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    WINDOWS.lock().remove(&window.handle);
+    let _ = crate::handles::free(window.handle);
+}
+
+/// Les fenêtres vivantes de `pti` (l'adresse du serveur d'un `THREADINFO`),
+/// d'après la table des fenêtres.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn windows_of(pti: u32) -> Vec<Arc<Window>> {
+    let windows: Vec<Arc<Window>> = WINDOWS.lock().values().filter_map(Weak::upgrade).collect();
+    windows.into_iter().filter(|window| window.pti == pti && window.is_alive()).collect()
+}
 
 /// UserGetWindowObject : la fenêtre de handle `handle`, si elle vit ; un
 /// handle de génération 0 ou `0xFFFF` vaut pour celle de son entrée.
@@ -408,6 +461,15 @@ pub fn change(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowS
 static PROPERTIES: hal::sync::KSpinLock<alloc::vec::Vec<(u32, u16, u32)>> =
     hal::sync::KSpinLock::new(alloc::vec::Vec::new());
 
+/// UserRemoveWindowProps : les propriétés de la fenêtre `hwnd` partent (à
+/// sa destruction).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn remove_properties(hwnd: u32) {
+    PROPERTIES.lock().retain(|(window, _, _)| *window != hwnd);
+}
+
 /// SetProp : la propriété `atom` de la fenêtre devient `data` (remplacée si
 /// l'atome y était déjà).
 ///
@@ -443,6 +505,35 @@ pub fn set_menu(window: &alloc::sync::Arc<Window>, hmenu: u32) {
     let client = fix_client_rect(rect_of(&calc), rect);
     update(window, |state| state.client = client);
     let _ = send_message(window, WM_NCPAINT, 0, LParam::Value(0));
+}
+
+/// IntSetMenu à la création : la barre de menus d'une fenêtre qui n'est pas
+/// fille (`kind`, ses styles WS_CHILD et WS_POPUP) est `hmenu`, un menu qui
+/// existe (`exists`), dès WM_NCCALCSIZE ; une fille n'en a pas, `hmenu` est
+/// son identifiant.
+///
+/// # Errors
+/// `ERROR_INVALID_MENU_HANDLE` pour un menu qui n'existe pas.
+fn creation_menu(kind: u32, hmenu: u32, exists: impl FnOnce(u32) -> bool) -> Result<u32, u32> {
+    if kind == WS_CHILD || hmenu == 0 {
+        Ok(0)
+    } else if exists(hmenu) {
+        Ok(hmenu)
+    } else {
+        Err(ERROR_INVALID_MENU_HANDLE)
+    }
+}
+
+/// co_IntCallLoadMenu : le menu de la classe `class`, que `user32` charge de
+/// son module ; aucun sans nom de menu, si le rappel échoue ou si le menu
+/// rendu n'existe pas (comme ReactOS, la fenêtre se crée sans barre).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+fn class_menu(class: &Class) -> Option<u32> {
+    let resource = class.menu.resource()?;
+    let loaded = crate::callback::load_menu(class.info.instance, resource).ok()?;
+    crate::menu::get(loaded).map(|_| loaded)
 }
 
 /// SetWindowFNID : l'identifiant interne de la fenêtre.
@@ -534,6 +625,8 @@ pub fn create_desktop_window(
         pti: 0,
         desktop_name: Some(String::from(name)),
         state: KSpinLock::new(state),
+        destroying: AtomicBool::new(false),
+        freed: AtomicBool::new(false),
     });
     WINDOWS.lock().insert(handle, Arc::downgrade(&window));
     write(&window)?;
@@ -1141,6 +1234,15 @@ pub fn owns_windows(window: &Window) -> bool {
     windows.iter().any(|other| other.state().owner == window.handle)
 }
 
+/// IntWinListOwnedPopups : les fenêtres que possède la fenêtre `hwnd`.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn owned_by(hwnd: u32) -> Vec<Arc<Window>> {
+    let windows: Vec<Arc<Window>> = WINDOWS.lock().values().filter_map(Weak::upgrade).collect();
+    windows.into_iter().filter(|other| other.state().owner == hwnd && other.handle != hwnd).collect()
+}
+
 /// WinPosInternalMoveWindow : `window` et ses enfants, à toute profondeur,
 /// se déplacent de `dx`, `dy` (rectangles de la fenêtre et de la zone
 /// cliente).
@@ -1177,7 +1279,10 @@ pub fn children(parent: &Window, deep: bool) -> Vec<u32> {
 }
 
 /// IntUnlinkWindow : `window` quitte les enfants de son parent.
-fn unlink(window: &Arc<Window>) {
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub(crate) fn unlink(window: &Arc<Window>) {
     let state = window.state();
     if let Some(prev) = get(state.prev) {
         update(&prev, |prev| prev.next = state.next);
@@ -1194,13 +1299,19 @@ fn unlink(window: &Arc<Window>) {
 /// bureau du thread courant, sa procédure prévenue par WM_NCCREATE,
 /// WM_NCCALCSIZE et WM_CREATE, puis, si elle n'attend pas d'être montrée,
 /// WM_SIZE et WM_MOVE ; une fenêtre fille prévient son parent
-/// (WM_PARENTNOTIFY). Elle appartient au thread.
+/// (WM_PARENTNOTIFY). Elle appartient au thread dès qu'elle a un handle. Une
+/// fenêtre qui n'est pas fille a pour barre de menus `params.menu` dès sa
+/// création ([`creation_menu`]), sinon le menu de sa classe
+/// ([`class_menu`]). Une création qui échoue après la prise du handle
+/// détruit la fenêtre (`crate::destroy::destroy_window` : WM_DESTROY et
+/// WM_NCDESTROY, comme ReactOS).
 ///
 /// # Errors
 /// L'erreur Win32, s'il y en a une : sans classe,
 /// `ERROR_CANNOT_FIND_WND_CLASS` ; une fenêtre fille sans parent,
 /// `ERROR_TLW_WITH_WSCHILD` ; un parent ou un propriétaire qui n'existe pas,
-/// `ERROR_INVALID_WINDOW_HANDLE` ; le tas plein,
+/// `ERROR_INVALID_WINDOW_HANDLE` ; un menu qui n'existe pas,
+/// `ERROR_INVALID_MENU_HANDLE` ; le tas plein,
 /// `ERROR_NOT_ENOUGH_MEMORY`. Aucune quand la procédure refuse WM_NCCREATE
 /// ou WM_CREATE, ou que le thread n'a pas de bureau.
 ///
@@ -1257,6 +1368,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     } else if kind == WS_CHILD {
         return Err(Some(ERROR_TLW_WITH_WSCHILD));
     }
+    let menu = creation_menu(kind, params.menu, |handle| crate::menu::get(handle).is_some()).map_err(Some)?;
     let startup = if params.style & (WS_POPUP | WS_CHILD) == 0 { startup_place() } else { StartupPlace::default() };
     let work = crate::monitor::primary().map(|monitor| monitor.work);
     let mut show =
@@ -1307,6 +1419,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         unicode,
         module: params.instance,
         id_menu: if kind == WS_CHILD { params.menu } else { 0 },
+        menu,
         parent: parent.handle,
         owner: owner.as_ref().map_or(0, |owner| owner.handle),
         ..WindowState::default()
@@ -1321,17 +1434,26 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         pti: thread.server,
         desktop_name: None,
         state: KSpinLock::new(window_state),
+        destroying: AtomicBool::new(false),
+        freed: AtomicBool::new(false),
     });
     WINDOWS.lock().insert(handle, Arc::downgrade(&window));
+    thread.windows.lock().push(window.clone());
     if !params.name.is_empty() && set_text(&window, &params.name).is_err() {
-        return Err(Some(ERROR_NOT_ENOUGH_MEMORY));
-    }
-    if kind != WS_CHILD && params.menu == 0 && class.menu.unicode != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("the menu of a class (co_IntCallLoadMenu)", &REPORTED);
+        drop((thread, desktop, process_info));
+        return Err(failed_creation(&window, Some(ERROR_NOT_ENOUGH_MEMORY)));
     }
 
     drop((thread, desktop, process_info));
+
+    // Without a menu, a window that is not a child takes its class's
+    // (co_IntCallLoadMenu); user32 loads it itself for an overlapped or
+    // popup style.
+    if kind != WS_CHILD && menu == 0 {
+        if let Some(loaded) = class_menu(&class) {
+            update(&window, |state| state.menu = loaded);
+        }
+    }
 
     // The window's rectangle, its size within what WM_GETMINMAXINFO allows
     // a sizing or overlapped window; the minimum wins over the maximum.
@@ -1360,8 +1482,8 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     };
     let mut packed = pack_create_struct(&create, &params.name, &class_name);
     let accepted = send_message(&window, WM_NCCREATE, 0, LParam::Buffer { bytes: &mut packed, write_back: true });
-    if !accepted.is_ok_and(|accepted| accepted != 0) {
-        return Err(None);
+    if !accepted.is_ok_and(|accepted| accepted != 0) || !window.is_alive() {
+        return Err(failed_creation(&window, None));
     }
     link(&window, if style & (WS_CHILD | WS_MAXIMIZE) == WS_CHILD { HWND_BOTTOM } else { HWND_TOP });
 
@@ -1374,9 +1496,8 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     // WM_CREATE.
     let mut packed = pack_create_struct(&create, &params.name, &class_name);
     let created = send_message(&window, WM_CREATE, 0, LParam::Buffer { bytes: &mut packed, write_back: true });
-    if !created.is_ok_and(|result| result != u32::MAX) {
-        unlink(&window);
-        return Err(None);
+    if !created.is_ok_and(|result| result != u32::MAX) || !window.is_alive() {
+        return Err(failed_creation(&window, None));
     }
     update(&window, |state| state.state2 |= WNDS2_WMCREATEMSGPROCESSED);
     if window.state().state & WNDS_SENDSIZEMOVEMSGS == 0 {
@@ -1399,9 +1520,18 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         }
         crate::winpos::show_window(&window, show);
     }
-    let thread = crate::convert_current_thread().map_err(|_| None)?;
-    thread.windows.lock().push(window.clone());
+    if !window.is_alive() {
+        // Destroyed by its own procedure while being created.
+        return Err(None);
+    }
     Ok(window)
+}
+
+/// La fin d'une création qui échoue : la fenêtre est détruite
+/// (co_UserDestroyWindow) ; rend l'erreur Win32 `error`.
+fn failed_creation(window: &Arc<Window>, error: Option<u32>) -> Option<u32> {
+    let _ = crate::destroy::destroy_window(window);
+    error
 }
 
 /// IntGetClientRect : la zone cliente de `window`, à l'origine (celle de la
@@ -1488,6 +1618,17 @@ mod tests {
     fn window(width: i32, height: i32) -> WindowState {
         let rect = Rect::new(0, 0, width, height);
         WindowState { window: rect, client: rect, ..WindowState::default() }
+    }
+
+    #[test]
+    fn a_top_level_window_takes_its_menu_bar_at_its_creation() {
+        let exists = |handle: u32| handle == 0x0003_002A;
+        assert_eq!(creation_menu(0, 0x0003_002A, exists), Ok(0x0003_002A), "overlapped: its bar");
+        assert_eq!(creation_menu(WS_POPUP, 0x0003_002A, exists), Ok(0x0003_002A), "a popup too");
+        assert_eq!(creation_menu(0, 0, exists), Ok(0), "no menu");
+        assert_eq!(creation_menu(0, 0xDEAD_BEEF, exists), Err(ERROR_INVALID_MENU_HANDLE));
+        assert_eq!(creation_menu(WS_CHILD, 7, exists), Ok(0), "a child's hMenu is its identifier");
+        assert_eq!(creation_menu(WS_CHILD | WS_POPUP, 0x0003_002A, exists), Ok(0x0003_002A), "not a child");
     }
 
     #[test]

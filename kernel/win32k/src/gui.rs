@@ -17,12 +17,12 @@
 //! processus voit alors le tas du bureau, et son `CLIENTINFO` y désigne le
 //! `DESKTOPINFO` et son `CLIENTTHREADINFO`.
 //!
-//! Pas encore : la pile noyau agrandie d'un thread GUI (pour les rappels du
-//! mode utilisateur), la file de messages, ce qui est rendu à la fin d'un
-//! thread ou d'un processus GUI (son bureau, ses vues), la disposition du
-//! clavier (`hKL` et `CodePage` restent nuls, comme sous ReactOS sans
-//! disposition chargée), la table des handles de GDI
-//! (`GdiSharedHandleTable` reste nul).
+//! À la fin d'un thread GUI, il quitte son bureau ([`leave_desktop`]) ; à la
+//! fin d'un processus GUI, son `PROCESSINFO` rend ses classes, ses bureaux
+//! et sa station ([`ProcessInfo::release`]) : `crate::destroy`.
+//!
+//! Pas encore : la disposition du clavier (`hKL` et `CodePage` restent nuls,
+//! comme sous ReactOS sans disposition chargée).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -203,6 +203,21 @@ impl ProcessInfo {
         let previous = core::mem::replace(&mut *self.window_station.lock(), station);
         drop(previous);
     }
+
+    /// ExitProcessCallback, pour USER : ses classes (DestroyProcessClasses),
+    /// ses vues des tas de bureau, son bureau de démarrage et sa station
+    /// sont rendus, une fois les verrous rendus. Ses vues partent avec son
+    /// espace d'adresses, qui suit.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn release(&self) {
+        let classes = core::mem::take(&mut *self.classes.lock());
+        let views = core::mem::take(&mut *self.desktop_views.lock());
+        let startup = self.startup_desktop.lock().take();
+        let station = self.window_station.lock().take();
+        drop((classes, views, startup, station));
+    }
 }
 
 /// Ce que win32k garde d'un thread GUI (`THREADINFO`).
@@ -217,8 +232,8 @@ pub struct ThreadInfo {
     keyboard_layout: KSpinLock<Option<Arc<KeyboardLayout>>>,
     /// Sa file de messages (`MessageQueue`).
     pub queue: MessageQueue,
-    /// Ses fenêtres (`WindowListHead`) : elles vivent autant que lui, en
-    /// attendant DestroyWindow.
+    /// Ses fenêtres (`WindowListHead`) : de leur création à leur
+    /// destruction (DestroyWindow, ou sa fin : `crate::destroy`).
     pub windows: KSpinLock<Vec<Arc<crate::window::Window>>>,
 }
 
@@ -282,6 +297,31 @@ impl ThreadInfo {
     /// <= DISPATCH_LEVEL.
     pub fn desktop(&self) -> Option<ThreadDesktop> {
         self.desktop.lock().clone()
+    }
+
+    /// Sa disposition de clavier part (à sa fin).
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn drop_keyboard_layout(&self) {
+        let previous = self.keyboard_layout.lock().take();
+        drop(previous);
+    }
+}
+
+/// IntSetThreadDesktop(NULL) à la fin d'un thread GUI : `info`, le
+/// `THREADINFO` d'un thread de `process` qui se termine, quitte son bureau :
+/// son `CLIENTTHREADINFO` est rendu au tas, la vue du tas par le processus
+/// part avec le dernier de ses threads sur ce bureau. Son TEB n'est pas
+/// réécrit (il part avec lui).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn leave_desktop(info: &ThreadInfo, process: &EProcess) {
+    let Some(previous) = info.desktop.lock().take() else { return };
+    previous.desktop.heap.free(previous.client_thread_info, size_of::<ClientThreadInfo32>() as u32);
+    if let Some(process_info) = process.win32_process().map(downcast::<ProcessInfo>) {
+        process_info.unmap_desktop(process, &previous.desktop);
     }
 }
 
@@ -411,6 +451,15 @@ pub const fn process_server_address(pid: u32) -> u32 {
 /// `0x90000000`–`0x9FFFFFFF`.
 pub const fn thread_server_address(tid: u32) -> u32 {
     0x9000_0000 | ((tid >> 2) << 4)
+}
+
+/// Le PID du processus d'adresse du serveur `ppi`
+/// ([`process_server_address`]), si elle en est une.
+pub const fn process_of_server_address(ppi: u32) -> Option<u32> {
+    if ppi & 0xF000_0000 != 0x8000_0000 || ppi & 0xF != 0 {
+        return None;
+    }
+    Some(((ppi & 0x0FFF_FFFF) >> 4) << 2)
 }
 
 /// Le TID du thread d'adresse du serveur `pti` ([`thread_server_address`]),
@@ -626,6 +675,11 @@ mod tests {
         assert_eq!(thread_of_server_address(0x9000_0024), None, "not a THREADINFO");
         assert_eq!(thread_of_server_address(0), None, "the desktop window's");
         assert_ne!(process_server_address(8), process_server_address(12));
+        assert_eq!(process_of_server_address(process_server_address(20)), Some(20));
+        assert_eq!(process_of_server_address(process_server_address(0x03FF_FFFC)), Some(0x03FF_FFFC));
+        assert_eq!(process_of_server_address(thread_server_address(20)), None, "a thread");
+        assert_eq!(process_of_server_address(0x8000_0014), None, "not a PROCESSINFO");
+        assert_eq!(process_of_server_address(0), None);
     }
 
     #[test]

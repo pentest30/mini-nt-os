@@ -1,0 +1,54 @@
+# DestroyWindow, DestroyMenu, and the end of a GUI thread and of a GUI
+# process (win32k::destroy; tests/native/destroy1.c, MinGW, linked to
+# ReactOS's kernel32, user32 and gdi32): DESTROY1.EXE takes the place of
+# winlogon.exe and takes WinSta0\Default. A letter and '-' is WM_DESTROY
+# (IsWindow TRUE), a letter and '.' WM_NCDESTROY (IsWindow FALSE), a letter
+# and '^' WM_PARENTNOTIFY of WM_DESTROY:
+# - DestroyWindow(A), A owning the popup D and parent of B, itself parent of
+#   C: D first, then WM_DESTROY from the top, WM_NCDESTROY from the bottom;
+# - a child F alone: WM_PARENTNOTIFY (F's id 7, F) to its parent E first;
+# - a destroyed window (1400), the desktop window and another thread's
+#   window (5) are refused;
+# - WM_CLOSE and SC_CLOSE to DefWindowProc destroy the window;
+# - a destroyed window's timer and posted message go with it;
+# - a menu bar goes with its window; DestroyMenu once (1401, which also
+#   says a menu is gone: user32 cannot read win32k's menus, IsMenu is FALSE);
+# - a thread that ends with its windows (a child, a timer, a DC): they are
+#   destroyed without a message, the process's USER objects back
+#   (GetGuiResources, GR_USEROBJECTS = 1, GR_GDIOBJECTS = 0, the SDK's);
+# - a child process that ends with two windows, three menus, a timer, a
+#   cache DC, a brush and a memory DC: none of its USER or GDI objects stay.
+features = test-smss
+requires = userland, native
+initial-command = DESTROY1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [destroy] ready
+expect = [destroy] DestroyWindow(A): 1, messages D-D.A-B-C-C.B.A.
+expect = [destroy] A, B, C, D gone: 1 1 1 1
+expect = [destroy] again: 0, error 1400
+expect = [destroy] the desktop window: 0, error 5
+expect = [destroy] DestroyWindow(F): 1, messages E^F-F., id 7, handle 1
+expect = [destroy] E lives, without a child: 1 1
+expect = [destroy] WM_CLOSE: messages G-G., gone 1
+expect = [destroy] SC_CLOSE: messages H-H., gone 1
+expect = [destroy] messages for K after it: 0, its timer killed again 0
+expect = [destroy] the bar gone with L: 1, error 1401
+expect = [destroy] DestroyMenu: 1, again 0, error 1401
+expect = [destroy] the worker's windows: 1 1, USER objects 2 more
+expect = [destroy] another thread's window: 0, error 5
+expect = [destroy] the worker ended: X, Y gone 1 1, messages '', USER objects back 1
+expect = [destroy] USER objects back to the start: 1
+expect = [destroy] child: window 1, menus 1 1 1
+expect = [destroy] the child holds at least 5 USER and 3 GDI objects: 1 1
+expect = [destroy] the child ended (7104): USER 0, GDI 0, its window gone 1, its menu gone 1 (1401)
+expect = [destroy] done
+expect = exit status 0x00007103
+
+# Any bugcheck ends the run at once.
+forbid = *** STOP:
+forbid = [destroy] window
+forbid = [destroy] no worker thread
+forbid = [destroy] CreateProcessW
+forbid = ) leaves

@@ -1,0 +1,10 @@
+[package]
+name    = "glyph"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "glyph"
+
+[dependencies]
+ttf-parser = { workspace = true }

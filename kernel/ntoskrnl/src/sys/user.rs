@@ -256,21 +256,22 @@ pub(super) fn nt_user_get_keyboard_layout_list(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// GR_GDIOBJECTS, GR_USEROBJECTS : ce que compte GetGuiResources (les
+/// valeurs du SDK ; les pics, 2 et 4, viennent après XP).
+const GR_GDIOBJECTS: u32 = 0;
+const GR_USEROBJECTS: u32 = 1;
+
 /// NtUserGetGuiResources(hProcess, uiFlags) : le nombre d'objets GDI
-/// (GR_GDIOBJECTS, 1) ou USER (GR_USEROBJECTS, 2) du processus. Le compte
-/// USER ne voit que les entrées à son `PROCESSINFO` — les fenêtres, à un
-/// `THREADINFO`, restent dehors (un sous-décompte documenté) ; le compte
-/// GDI est exact. 0 pour un autre drapeau, sans processus ou sans GUI.
+/// (GR_GDIOBJECTS) ou USER (GR_USEROBJECTS, ses fenêtres comprises :
+/// `ppi->UserHandleCount`) du processus, même fini. 0 pour un autre drapeau
+/// (`ERROR_INVALID_PARAMETER`) ou sans processus.
 pub(super) fn nt_user_get_gui_resources(arguments: &[u32]) -> NtStatus {
     let (handle, flags) = (arguments[0], arguments[1]);
     let count = || -> Result<u32, NtStatus> {
         let process = super::reference_process(handle, ps::eprocess::PROCESS_QUERY_INFORMATION)?;
         match flags {
-            1 => Ok(win32k::gdi::handles::count_of(process.pid())),
-            2 => {
-                let Some(info) = win32k::existing_process_info(&process) else { return Ok(0) };
-                Ok(win32k::handles::count_of(info.server))
-            }
+            GR_GDIOBJECTS => Ok(win32k::gdi::handles::count_of(process.pid())),
+            GR_USEROBJECTS => Ok(win32k::handles::count_for_process(process.pid())),
             _ => Err(abi::ntstatus::STATUS_INVALID_PARAMETER),
         }
     };

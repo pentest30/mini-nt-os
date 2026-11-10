@@ -16,6 +16,8 @@
  * kernel and erases its client area with a DC the kernel lends it
  * (WM_ERASEBKGND: user32's DefWindowProc fills it with the class brush,
  * through gdi32 and the GDI handle table it shares with win32k).
+ * A top-level window created with a menu has its menu bar from its
+ * creation; without one, its class's menu.
  * Each step and each
  * message goes to the debug port (DbgPrint), where the scenario looks for
  * them; the program ends with EXIT_STATUS.
@@ -168,6 +170,7 @@ typedef struct {
 #define WM_SIZE 0x0005
 #define WM_WINDOWPOSCHANGED 0x0047
 #define WM_SHOWWINDOW 0x0018
+#define WM_ACTIVATEAPP 0x001C
 #define WS_VISIBLE 0x10000000
 #define WS_CLIPCHILDREN 0x02000000
 #define WS_BORDER 0x00800000
@@ -176,6 +179,10 @@ typedef struct {
 #define SW_SHOWNOACTIVATE 4
 #define SW_SHOW 5
 #define ERROR_INVALID_PARAMETER 87
+#define ERROR_INVALID_MENU_HANDLE 1401
+#define MF_STRING 0x0000
+#define SM_CYMENU 15
+#define WS_OVERLAPPED 0x00000000
 #define GW_CHILD 5
 #define WM_PARENTNOTIFY 0x0210
 #define ERROR_TLW_WITH_WSCHILD 1406
@@ -220,6 +227,7 @@ typedef struct {
 #define EXIT_STATUS 0x600D
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+__declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
 
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE handle);
 __declspec(dllimport) HANDLE __stdcall CreateThread(void *attributes, DWORD stack_size, THREAD_START start,
@@ -229,6 +237,7 @@ __declspec(dllimport) DWORD __stdcall WaitForSingleObject(HANDLE handle, DWORD m
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
 __declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) HINSTANCE __stdcall GetModuleHandleW(const WCHAR *name);
+__declspec(dllimport) HINSTANCE __stdcall LoadLibraryW(const WCHAR *name);
 __declspec(dllimport) void __stdcall SetLastError(DWORD error);
 
 __declspec(dllimport) HDESK __stdcall CreateDesktopW(const WCHAR *name, const WCHAR *device, void *mode, DWORD flags,
@@ -285,6 +294,8 @@ __declspec(dllimport) BOOL __stdcall MoveWindow(HWND window, int x, int y, int w
 __declspec(dllimport) BOOL __stdcall ShowWindow(HWND window, int command);
 __declspec(dllimport) BOOL __stdcall SetWindowPos(HWND window, HWND after, int x, int y, int cx, int cy, UINT flags);
 __declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
+__declspec(dllimport) HMENU __stdcall CreateMenu(void);
+__declspec(dllimport) BOOL __stdcall AppendMenuW(HMENU menu, UINT flags, UINT id, const WCHAR *item);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int size);
 __declspec(dllimport) BOOL __stdcall IsWindow(HWND window);
 __declspec(dllimport) BOOL __stdcall SetWindowTextW(HWND window, const WCHAR *text);
@@ -383,7 +394,10 @@ static void check_caption_state(void);
 
 static LRESULT __stdcall window_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
 {
-    if (received_count < 32)
+    /* WM_ACTIVATEAPP goes to every top-level window of the thread, and it
+       has several: one of a row is kept. */
+    BOOL repeated = message == WM_ACTIVATEAPP && received_count > 0 && received[received_count - 1] == message;
+    if (received_count < 32 && !repeated)
         received[received_count++] = message;
     if (message == WM_PARENTNOTIFY) {
         notified_w = w;
@@ -1319,6 +1333,102 @@ static void check_second_thread(void)
              found ? message.wParam : 0, found ? message.lParam : 0);
 }
 
+/* A top-level window created with a menu (taskmgr's dialog, from its
+ * template) has it as its bar from its creation: the kernel's WM_NCCALCSIZE
+ * makes its client area SM_CYMENU less tall than without. A menu that does
+ * not exist, no window. */
+static void check_menu_bar(HINSTANCE instance)
+{
+    RECT plain;
+    RECT barred;
+    HMENU menu = CreateMenu();
+    HWND without;
+    HWND with;
+    HWND invalid;
+    DWORD error;
+
+    memset(&plain, 0, sizeof plain);
+    memset(&barred, 0, sizeof barred);
+    AppendMenuW(menu, MF_STRING, 1, L"File");
+    without = CreateWindowExW(0, CLASS_NAME, L"No menu", WS_OVERLAPPEDWINDOW, 10, 10, 300, 200, 0, 0, instance, 0);
+    SetLastError(0);
+    with = CreateWindowExW(0, CLASS_NAME, L"Menu", WS_OVERLAPPEDWINDOW, 10, 10, 300, 200, 0, menu, instance, 0);
+    DbgPrint("[gui] CreateWindowExW with a menu: %s (%lu)\n", with ? "a window" : "none", GetLastError());
+    GetClientRect(without, &plain);
+    GetClientRect(with, &barred);
+    SetLastError(0);
+    invalid = CreateWindowExW(0, CLASS_NAME, L"Bad menu", WS_OVERLAPPEDWINDOW, 10, 10, 300, 200, 0,
+                              (HMENU)0xDEADBEEF, instance, 0);
+    error = GetLastError();
+    DbgPrint("[gui] the menu bar: its client area %s; a menu that does not exist: %s, error %lu\n",
+             menu && with && plain.bottom - barred.bottom == GetSystemMetrics(SM_CYMENU) ? "SM_CYMENU less tall"
+                                                                                       : "WRONG",
+             invalid ? "a window" : "none", error);
+}
+
+/* The client area of a window of `class_name` of `instance`, with `style`:
+ * its height, or minus the error without the window. */
+static LONG client_height(const WCHAR *class_name, HINSTANCE instance, DWORD style)
+{
+    RECT rect;
+    HWND window = CreateWindowExW(0, class_name, L"Class menu", style, 10, 10, 300, 200, 0, 0, instance, 0);
+
+    if (!window || !GetClientRect(window, &rect))
+        return -(LONG)GetLastError();
+    return rect.bottom - rect.top;
+}
+
+/* Registers the class `name`, private to `module`, whose menu is
+ * `menu_name` (a name or MAKEINTRESOURCE); returns its atom. */
+static ATOM register_menu_class(const WCHAR *name, HINSTANCE module, const WCHAR *menu_name)
+{
+    WNDCLASSEXW class_info;
+
+    memset(&class_info, 0, sizeof class_info);
+    class_info.cbSize = sizeof class_info;
+    class_info.lpfnWndProc = window_procedure;
+    class_info.hInstance = module;
+    class_info.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    class_info.lpszMenuName = menu_name;
+    class_info.lpszClassName = name;
+    return RegisterClassExW(&class_info);
+}
+
+/* Whether a window of a class with a menu has its menu bar: its client
+ * area is SM_CYMENU less tall than `plain`, that of a class without one. */
+static const char *has_bar(ATOM atom, LONG plain, LONG barred)
+{
+    return atom && plain > 0 && plain - barred == GetSystemMetrics(SM_CYMENU) ? "SM_CYMENU less tall" : "WRONG";
+}
+
+/* A window created without a menu takes its class's (lpszMenuName, a
+ * resource of the class's module: shell32's menus here, MENU_001 by its
+ * name, 206 by its identifier; user32 refuses a class of its own module).
+ * user32 loads it itself before calling win32k for an overlapped or popup
+ * style (WS_OVERLAPPEDWINDOW); for a plain WS_OVERLAPPED, win32k asks user32
+ * for it (co_IntCallLoadMenu, the LoadMenu callback). */
+static void check_class_menu(HINSTANCE instance)
+{
+    static const WCHAR NAMED_CLASS[] = L"MinoNamedMenu";
+    static const WCHAR NUMBERED_CLASS[] = L"MinoNumberedMenu";
+    HINSTANCE shell32 = LoadLibraryW(L"shell32.dll");
+    ATOM named = shell32 ? register_menu_class(NAMED_CLASS, shell32, L"MENU_001") : 0;
+    ATOM numbered = shell32 ? register_menu_class(NUMBERED_CLASS, shell32, (const WCHAR *)206) : 0;
+    LONG plain;
+    LONG barred;
+    LONG by_number;
+
+    plain = client_height(CLASS_NAME, instance, WS_OVERLAPPEDWINDOW);
+    barred = client_height(NAMED_CLASS, shell32, WS_OVERLAPPEDWINDOW);
+    DbgPrint("[gui] the menu of a class, loaded by user32: %s (atoms %04x %04x, %ld, %ld)\n",
+             has_bar(named, plain, barred), named, numbered, plain, barred);
+    plain = client_height(CLASS_NAME, instance, WS_OVERLAPPED);
+    barred = client_height(NAMED_CLASS, shell32, WS_OVERLAPPED);
+    by_number = client_height(NUMBERED_CLASS, shell32, WS_OVERLAPPED);
+    DbgPrint("[gui] the menu of a class, loaded by win32k: by its name %s, by its identifier %s (%ld, %ld, %ld)\n",
+             has_bar(named, plain, barred), has_bar(numbered, plain, by_number), plain, barred, by_number);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -1377,8 +1487,13 @@ DWORD __stdcall GuiStartup(void)
     check_redraw();
     check_dc_and_regions();
     check_second_thread();
+    check_menu_bar(instance);
+    check_class_menu(instance);
 
     DbgPrint("[gui] done\n");
+    /* Its windows go with the process: the scenario captures the screen
+     * meanwhile. */
+    Sleep(5000);
     ExitProcess(EXIT_STATUS);
     return 0;
 }

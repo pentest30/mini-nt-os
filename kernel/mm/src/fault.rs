@@ -143,7 +143,11 @@ pub fn resolve(page: Option<(PageState, PageProtect)>, backing: Backing, pte: Pt
             Resolution::Remap(protect)
         }
         // The page tables already allow this access: nothing explains the
-        // fault, and retrying it would loop.
+        // fault, and retrying it would loop. Nothing maps the page between
+        // the fault and the VAD lock: a fault runs with interrupts masked on
+        // the one processor, and a copy (`AddressSpace::copy`) looks at the
+        // page under the lock it resolves it with. With several processors,
+        // two faults on one page would collide here.
         (_, PteState::Present { .. }) => Resolution::AccessViolation,
     }
 }

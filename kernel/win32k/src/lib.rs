@@ -37,6 +37,7 @@ pub mod csrss;
 pub mod dce;
 pub mod defwnd;
 pub mod desktop;
+pub mod destroy;
 pub mod display;
 pub mod font;
 pub mod gdi;

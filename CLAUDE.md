@@ -229,7 +229,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   un tas par bureau dans une section, adresses du serveur sur 32 bits, `DESKTOPINFO` ; NtUserSetThreadDesktop projette
   le tas et remplit le `CLIENTINFO`) ; dispositions de clavier (`win32k::keyboard` : le fichier lu par le noyau
   d'après le registre, ses tables trouvées sans exécuter `KbdLayerDescriptor`) : `winlogon` crée `WinSta0` et ses
-  bureaux, s'y place, charge `00000409`, puis s'arrête à son serveur RPC (tube nommé : NPFS d'Io, à faire).
+  bureaux, s'y place, charge `00000409`, démarre son serveur RPC (le tube nommé `\pipe\winreg`, voir NPFS plus
+  bas), lance `services.exe` et `lsass.exe`, charge `msgina`, crée sa fenêtre SAS et reste dans sa boucle (voir
+  plus bas).
   Premier affichage : pilote d'affichage (`win32k::display`, trait `DisplayDriver`, `drivers/video/gopfb` sur le
   framebuffer UEFI), moteur DIB (`win32k::gdi::dib`) ; la fenêtre du bureau (`win32k::window` : `WND` et `CLS` dans
   le tas du bureau, handle dans la table USER de la section partagée, `win32k::handles` ; DesktopWindowProc côté
@@ -275,6 +277,15 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtGdiHfontCreate, NtGdiSelectFont, NtGdiGetTextMetricsW, NtGdiGetTextExtent, NtGdiExtTextOutW ; scénario `text`.
   M6, étape 13 (DrawText de `user32`) : NtGdiGetTextExtentExW (étendues cumulées, `win32k::font::advances`),
   NtGdiGetRandomRgn (la région de découpage gardée), NtGdiIntersectClipRect.
+  M6, étape 14 (la destruction, `win32k::destroy`) : NtUserDestroyWindow (co_UserDestroyWindow : WM_PARENTNOTIFY,
+  cachée, fenêtres possédées d'abord, une autre fenêtre activée, `input::activate_other`, WM_DESTROY de haut en
+  bas, WM_NCDESTROY de bas en haut ; minuteries, messages de la file et leurs envoyeurs, région à peindre, capture,
+  menu de la barre, DC du cache, propriétés, ordre Z, puis le handle : `window::release`), une création qui échoue
+  détruite, NtUserDestroyMenu ; les rappels de Ps à la fin d'un thread GUI puis d'un processus GUI
+  (`ps::set_win32_callouts`) : fenêtres détruites sans message, minuteries, file vidée, messages envoyés rendus,
+  premier plan et bureau quittés ; menus, DC du cache, objets GDI, classes, bureaux et station du processus ; la
+  table des handles USER retient le processus et le type de chaque objet (GetGuiResources, dont les drapeaux sont
+  ceux du SDK : `GR_GDIOBJECTS` 0, `GR_USEROBJECTS` 1) ; scénario `destroy` (`tests/native/destroy1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
@@ -312,13 +323,21 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtSetInformationFile(FileBasicInformation) ; NtQueryDefaultLocale (`ex::locale`, `Nls\Language`) ; `xtask`
   attend qu'une touche soit relâchée avant la suivante (QEMU 8.2 perd des relâchements sinon) ; `hal::ps2` compte
   ce qu'il perd. **Le critère de `cmd.exe` interactif du M5 est coché.**
-  Le dernier critère du M5, les apitests de ReactOS ([`docs/compat/m5-rostests.md`](docs/compat/m5-rostests.md)) :
-  `cargo xtask rostests-fetch` clone l'arbre 0.4.16 (sans lui, les scénarios sont sautés) ; `xtask/src/rostests.rs`
-  compile les modules `ntdll` et `kernel32` en un pilote (commande initiale de `smss` à la place de winlogon, il
-  prend `WinSta0\Default`) et un coureur où chaque test tourne, détaché, sa sortie relayée par `DbgPrint` ;
-  scénarios `rostests` et `rostests-kernel32`, jugés par un plancher (`apitests-floor`, qui ne baisse pas) et le
-  seuil du jalon (50 %, rapporté). Ps annonce la fin de chaque thread à son port de fin ou au port d'exception de
-  son processus (`LPC_CLIENT_DIED`, `lpc::request_port`) : `csrss` lâche ses clients morts, et leurs threads Ke.
+  M5, étape 9, les tubes nommés (étape 24 de `compat/m5-csrss.md`) : NPFS dans Io (`io::npfs` : `\Device\NamedPipe`,
+  tubes et instances, états, files de données en messages ou en octets avec quotas, lectures partielles, écritures
+  qui attendent le quota, aperçu, attente d'instance ; `io::request` : demandes en attente finies hors du verrou) ;
+  `sys::pipe` : NtCreateNamedPipeFile, NtFsControlFile (FSCTL_PIPE_LISTEN, DISCONNECT, PEEK, WAIT), NtCancelIoFile, les
+  tubes dans NtCreateFile, NtReadFile, NtWriteFile, NtQuery/SetInformationFile et les attentes ; E/S asynchrones des
+  tubes (`STATUS_PENDING`, puis le bloc d'état et les données écrits dans le processus du demandeur, son événement et
+  son APC de fin). Le vrai `winlogon` démarre son serveur RPC sur `\pipe\winreg` ; scénario `pipes`
+  (`tests/native/pipe1.c`).
+  M5, étape 9, `services.exe` et `lsass.exe` (étape 25 de `compat/m5-csrss.md`) : le serveur de commandes du
+  moniteur de références (`ntoskrnl::srm` : `\Security`, `\SeRmCommandPort`, `\SeLsaInitEvent`, un thread noyau qui
+  accepte `lsass` et se connecte à son `\SeLsaCommandPort` ; `se::logon` ; un TID réservé du processus System,
+  `ps::ethread::reserve_system_thread_id`) ; les ruches SECURITY et SAM ; ThreadAmILastThread ; NtSetDefaultLocale ;
+  NtUserSetLogonNotifyWindow. L'horloge écrit la page `KUSER_SHARED_DATA` de l'ancien chargeur par son alias du noyau
+  (STOP 0x0A corrigé). `winlogon` lance `services.exe` et `lsass.exe`, charge `msgina`, crée sa fenêtre SAS et reste
+  dans sa boucle : la suite est USER (messages envoyés entre threads, M6).
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
@@ -350,6 +369,10 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
 - Un scénario de démarrage est un répertoire de `tests/boot/` dont `scenario.txt` donne les features du noyau, les CPU,
   les marqueurs série attendus et interdits.
   Le run s'arrête dès que le verdict est connu ; journaux dans `target/xtask/boot/<scénario>-<cpu>/`.
+- **Ne jamais arrêter QEMU par son nom** (`taskkill /IM qemu-system-x86_64.exe`, `pkill qemu`) : plusieurs sessions
+  font tourner leurs scénarios sur la même machine, et on tue aussi les leurs (elles finissent en « QEMU ended by
+  another process »). Pour arrêter un run, arrêter son `xtask` : sous Windows, chaque QEMU est dans un objet job
+  de son `xtask` et meurt avec lui (`xtask/src/job.rs`), même tué.
 - Tout compile sans warning. Sur l'hôte, on peut le vérifier avec `RUSTFLAGS="-D warnings"`, mais pas pour les cibles bare-metal,
   où `RUSTFLAGS` remplacerait les options de `.cargo/config.toml`.
 - Les scénarios `requires = userland` demandent `cargo xtask fetch-userland` ; `requires = native` demande MinGW

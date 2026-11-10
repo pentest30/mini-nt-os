@@ -67,6 +67,10 @@ pub const KL_NAMELENGTH: usize = 9;
 pub const USER32_CALLBACK_CLIENTTHREADSTARTUP: u32 = 7;
 /// GetCharsetInfo: TranslateCharsetInfo(`TCI_SRCLOCALE`) for a locale.
 pub const USER32_CALLBACK_GETCHARSETINFO: u32 = 9;
+/// LoadMenu: LoadMenuW of a menu resource of a module (co_IntCallLoadMenu),
+/// the argument a LOADMENU_CALLBACK_ARGUMENTS (the module, an identifier,
+/// or 0 and the name from offset 8), the result the menu's handle.
+pub const USER32_CALLBACK_LOADMENU: u32 = 6;
 /// ANSI_CHARSET.
 pub const ANSI_CHARSET: u32 = 0;
 /// FS_LATIN1: the font signature of code page 1252.
@@ -320,6 +324,9 @@ pub const FNID_SENDMESSAGEWTOOPTION: u32 = 0x02B3;
 pub const FNID_SENDNOTIFYMESSAGE: u32 = 0x02B7;
 /// FNID_DESTROY: set on a window being destroyed.
 pub const FNID_DESTROY: u32 = 0x4000;
+/// FNID_FREED: set on a window once destroyed (co_UserFreeWindow); no
+/// message reaches it any more.
+pub const FNID_FREED: u32 = 0x8000;
 /// The desktop window's class, an integer atom (`WC_DESKTOP`, `#32769`).
 pub const WC_DESKTOP: u16 = 0x8001;
 /// The other system classes named by an integer atom: menus (`#32768`),
@@ -620,6 +627,9 @@ pub const WNDS_UPDATEDIRTY: u32 = 0x0000_2000;
 pub const WNDS_PAINTNOTPROCESSED: u32 = 0x0040_0000;
 /// WNDS_MAXIMIZESTOMONITOR: maximized, it covers its monitor.
 pub const WNDS_MAXIMIZESTOMONITOR: u32 = 0x4000_0000;
+/// WNDS_DESTROYED: the window is destroyed, after its WM_NCDESTROY; no
+/// message reaches it any more (`user32`'s IsWindow reads it).
+pub const WNDS_DESTROYED: u32 = 0x8000_0000;
 /// WNDS_ANSIWINDOWPROC: its procedure takes ANSI messages.
 pub const WNDS_ANSIWINDOWPROC: u32 = 0x0008_0000;
 /// WNDS_ANSICREATOR: created by CreateWindowExA.
@@ -636,6 +646,8 @@ pub const WNDS2_WMCREATEMSGPROCESSED: u32 = 0x8000_0000;
 pub const WNDS2_WMPAINTSENT: u32 = 0x0000_0001;
 pub const WNDS2_ENDPAINTINVALIDATE: u32 = 0x0000_0002;
 pub const WNDS2_STARTPAINT: u32 = 0x0000_0004;
+/// WNDS2_INDESTROY: its destruction has begun (co_UserFreeWindow).
+pub const WNDS2_INDESTROY: u32 = 0x0000_0080;
 /// The `WND.bits` of a Unicode window.
 pub const WND_UNICODE: u32 = 0x1;
 
@@ -728,6 +740,10 @@ const _: () = {
 
 /// WM_*, window messages.
 pub const WM_CREATE: u32 = 0x0001;
+/// WM_DESTROY: sent to a window, then to its children, before they go;
+/// WM_NCDESTROY: the last message of a window, its children's first.
+pub const WM_DESTROY: u32 = 0x0002;
+pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_PAINT: u32 = 0x000F;
 /// WM_PAINTICON: WM_PAINT of a minimised window of a 3.x module.
 pub const WM_PAINTICON: u32 = 0x0026;
@@ -943,6 +959,10 @@ pub const WM_KILLFOCUS: u32 = 0x0008;
 /// WM_NCACTIVATE: the frame of the window goes active (`wParam` TRUE) or
 /// inactive; DefWindowProc paints it again, unless `lParam` is -1.
 pub const WM_NCACTIVATE: u32 = 0x0086;
+/// WM_ACTIVATEAPP: the foreground goes to another thread; each top-level
+/// window of the thread that gains it gets TRUE and the TID of the thread
+/// that loses it, each of the other FALSE and the TID of the gaining one.
+pub const WM_ACTIVATEAPP: u32 = 0x001C;
 pub const WA_INACTIVE: u32 = 0;
 pub const WA_ACTIVE: u32 = 1;
 /// KF_*: the bits of the high word of a keyboard message's `lParam`.

@@ -11,7 +11,8 @@ cpus     = default, intel
 timeout  = 180
 
 expect = [m4] SMSS.EXE under the system DLL: exit status
-expect = (SMSS.EXE): ignored, as a debugger would
+# winlogon lives on: smss waits for it, and the probe ends smss after 10 s.
+expect = [m4] SMSS.EXE is a critical process: no longer, before it is terminated
 # At its start it makes its process and its thread critical (Ps, M5), sets
 # its base priority, its hard-error mode, and creates keyed events (Ex).
 expect = [m4]   NtCreateKeyedEvent (0x0121):
@@ -56,9 +57,19 @@ forbid = Source File: ../base/system/smss/smss.c
 # Screen-Saver), goes on Winlogon and switches to it, gives the station its
 # user (csrss logs it off), loads its keyboard layout (00000409: kbdus.dll,
 # its tables read, not run; its code page from user32's GetCharsetInfo
-# callback), then starts its RPC server: not yet (a named
-# pipe, \pipe\winreg: NtCreateNamedPipeFile, Io). It ends; smss ends with
-# it. The probe ends csrss after 2 s.
+# callback), then starts its RPC server: rpcrt4 creates the named pipe
+# \pipe\winreg (NtCreateNamedPipeFile, Io's NPFS) and its server thread
+# listens on it, overlapped (FSCTL_PIPE_LISTEN: STATUS_PENDING). winlogon
+# starts services.exe (its RPC server on \pipe\ntsvcs, then its auto-start
+# services, whose images are not on the disk) and lsass.exe, which signals
+# \SeLsaInitEvent and connects to the kernel's \SeRmCommandPort, the kernel
+# connecting back to its \SeLsaCommandPort (Se, ntoskrnl::srm); lsass opens
+# the SECURITY hive, loads msv1_0 and starts its authentication port and its
+# RPC server (\pipe\lsarpc). winlogon loads msgina, creates its SAS window,
+# makes it the logon notify window (NtUserSetLogonNotifyWindow) and sets the
+# system locale (NtSetDefaultLocale), then switches desktops and stays in
+# its loop: where it goes on is USER (messages sent to another thread, M6).
+# The probe ends smss, csrss and winlogon after 10 s.
 # Update with each step (docs/compat/m5-csrss.md).
 expect = [boot] SYSTEM hive mounted at \REGISTRY\MACHINE\SYSTEM
 expect = [boot] Io: boot volume \Device\Ramdisk0
@@ -78,11 +89,11 @@ expect = [m4]   NtAdjustPrivilegesToken (0x000c)
 expect = [m4]   NtSetSystemInformation (0x00f9): 3 calls, the first returned 0x00000000
 expect = [m4]   NtCreateProcess (0x0031): 2 calls, the first returned 0x00000000
 # smss resumes csrss's first thread, csrss its server threads and
-# winlogon's.
-expect = [m4]   NtResumeThread (0x00d6): 5 calls, the first returned 0x00000000
+# winlogon's, winlogon rpcrt4's server thread (CreateThread).
+expect = [m4]   NtResumeThread (0x00d6):
 # smss's API port (Lpc), on which two threads wait; then csrss's API port
 # and its port for smss (SB API).
-expect = [m4]   NtCreatePort (0x0030): 3 calls, the first returned 0x00000000
+expect = [m4]   NtCreatePort (0x0030):
 expect = [m4]   NtReplyWaitReceivePort (0x00cb):
 # csrss: the size of TokenUser, then TokenUser, and the DACL of its process
 # (how many calls depends on how far winlogon goes).
@@ -90,45 +101,50 @@ expect = [m4]   NtQueryInformationToken (0x00a3):
 expect = [m4]   NtSetSecurityObject (0x00f6): 1 calls, the first returned 0x00000000
 # win32k (M5, step 6): user32 in csrss, then USER started by winsrv; user32
 # in winlogon.
-expect = [m4]   NtUserProcessConnect (0x11dd): 2 calls, the first returned 0x00000000
-expect = [m4]   NtUserInitializeClientPfnArrays (0x11be): 2 calls, the first returned 0x00000000
-expect = [m4]   NtGdiInit (0x10db): 2 calls, the first returned 0x00000001
+expect = [m4]   NtUserProcessConnect (0x11dd):
+expect = [m4]   NtUserInitializeClientPfnArrays (0x11be):
+expect = [m4]   NtGdiInit (0x10db):
 expect = [m4]   NtUserInitialize (0x11bd): 1 calls, the first returned 0x00000000
 expect = [m4]   NtCreateSemaphore (0x0035):
-expect = [m4]   NtQueryObject (0x00aa): 5 calls, the first returned 0x00000000
+# A handle's flags (csrsrv, kernel32), as far as winlogon goes.
+expect = [m4]   NtQueryObject (0x00aa):
 expect = [m4] USER: started by csrss (PID
 expect = \Windows\WindowStations created; 23 of 23 client procedures of user32 (at 0x77a20000) in SERVERINFO
 # The LPC connections (M5, step 7): csrss to smss (SmConnectToSm), smss
 # back to csrss's SB port, winlogon to csrss's API port, each accepted and
 # completed.
-expect = [m4]   NtConnectPort (0x0021): 3 calls, the first returned 0x00000000
-expect = [m4]   NtSecureConnectPort (0x00da): 1 calls, the first returned 0x00000000
+expect = [m4]   NtConnectPort (0x0021):
+expect = [m4]   NtSecureConnectPort (0x00da):
 expect = [m4]   NtOpenProcess (0x0080): 2 calls, the first returned 0x00000000
-expect = [m4]   NtAcceptConnectPort (0x0000): 4 calls, the first returned 0x00000000
-expect = [m4]   NtCompleteConnectPort (0x001f): 4 calls, the first returned 0x00000000
+expect = [m4]   NtAcceptConnectPort (0x0000):
+expect = [m4]   NtCompleteConnectPort (0x001f):
 expect = [m4]   NtSetDefaultHardErrorPort (0x00df): 1 calls, the first returned 0x00000000
 # winlogon (M5, step 9): on the disk, its process handle duplicated, then
 # handed to csrss, which makes it a CSR process; it connects to csrss,
 # registers as the logon process, creates WinSta0 and its desktops, loads
-# its keyboard layout and stops at its RPC server (a named pipe).
+# its keyboard layout, starts its RPC server (a named pipe, NPFS),
+# services.exe and lsass.exe, its GINA and its SAS window.
 expect = [m4] SMSS.EXE created winlogon.exe (PID
 expect = [m4]   NtDuplicateObject (0x0047):
-expect = [m4]   NtQueryInformationThread (0x00a2): 2 calls, the first returned 0x00000000
-expect = [m4]   NtUserCallTwoParam (0x1143): 1 calls, the first returned 0x00000001
+# csrss asks about winlogon's first thread, then about rpcrt4's server
+# thread (its times, whether it ends).
+expect = [m4]   NtQueryInformationThread (0x00a2):
+expect = [m4]   NtUserCallTwoParam (0x1143):
 expect = [m4]   NtUserSetInformationThread (0x1205): 1 calls, the first returned 0x00000000
 expect = [m4]   NtUserCreateWindowStation (0x1157): 1 calls
 expect = win32k: the interactive window station, created by the logon process (PID
 expect = [m4]   NtUserSetProcessWindowStation (0x120f): 1 calls, the first returned 0x00000001
 expect = [m4]   NtUserCreateDesktop (0x1153): 3 calls
-expect = [m4]   NtUserSetThreadDesktop (0x1217): 1 calls, the first returned 0x00000001
-expect = [m4]   NtUserSwitchDesktop (0x122a): 1 calls, the first returned 0x00000001
+expect = [m4]   NtUserSetThreadDesktop (0x1217):
+expect = [m4]   NtUserSwitchDesktop (0x122a):
 # The input desktop's window, shown and painted (WM_PAINT, then
 # WM_ERASEBKGND: the background) by win32k (GDI) on the GOP framebuffer
 # (gopfb): the screen dump shows it.
 expect = win32k: display 1280x800 (Bgrx)
 expect = win32k: the desktop window of Winlogon erased (WM_ERASEBKGND), 1280x800
 expect = kernel_main: win32k owns the display: no launcher
-screen = 640 400 5A7EDC
+# Its corners: msgina's status window (its startup message) may already
+# cover the middle, depending on timing.
 screen = 0 0 5A7EDC
 screen = 1279 799 5A7EDC
 expect = [m4]   NtUserSetWindowStationUser (0x1222): 1 calls, the first returned 0x00000001
@@ -139,11 +155,46 @@ expect = [m4] USER: keyboard layouts loaded: [04090409 (00000409, tables at 0x10
 # thread, GetCharsetInfo (gdi32's TranslateCharsetInfo) for its layout.
 expect = win32k: ClientThreadSetup for thread
 expect = win32k: keyboard layout 00000409: charset 0, code page 1252, font signature 0x1 (GetCharsetInfo)
-expect = [m4]   NtCallbackReturn (0x0016): 2 calls, the first did not return
+expect = [m4]   NtCallbackReturn (0x0016):
 forbid = win32k: GetCharsetInfo for keyboard layout
 expect = [m4]   NtUserGetKeyboardLayoutList (0x119b): 2 calls, the first returned 0x00000001
-expect = sys: NtCreateNamedPipeFile (0x002e) is not implemented
-expect = WL: Could not start the RPC server
+# Its RPC server (M5, step 24): the pipe \pipe\winreg, whose instance
+# listens, overlapped, in rpcrt4's server thread.
+expect = Pipe name: \??\pipe\winreg
+expect = [m4]   NtCreateNamedPipeFile (0x002e):
+expect = [m4]   NtFsControlFile (0x0058):
+forbid = sys: NtCreateNamedPipeFile (0x002e) is not implemented
+forbid = sys: NtFsControlFile (0x0058) is not implemented
+forbid = WL: Could not start the RPC server
+forbid = RpcServerUseProtseqEpW() failed
+forbid = RpcServerRegisterIf() failed
+forbid = RpcServerListen() failed
+forbid = pipe listen error
+# services.exe and lsass.exe (M5, step 25): the reference monitor's
+# command server (Se), the SECURITY and SAM hives, the RPC servers of both.
+expect = [boot] SECURITY hive mounted at \REGISTRY\MACHINE\SECURITY
+expect = [boot] SAM hive mounted at \REGISTRY\MACHINE\SAM
+expect = [boot] Se: \Security\LSA_AUTHENTICATION_INITIALIZED, \SeRmCommandPort and \SeLsaInitEvent, waiting for lsass
+expect = [boot] Se: lsass (PID
+expect = Pipe name: \??\pipe\lsarpc
+expect = Pipe name: \??\pipe\ntsvcs
+expect = [m4]   NtSetDefaultLocale (0x00e0): 1 calls, the first returned 0x00000000
+expect = [m4]   NtUserSetLogonNotifyWindow (0x1208): 1 calls, the first returned 0x00000001
+forbid = WL: Failed to execute services
+forbid = WL: Could not start services.exe
+forbid = WL: Failed to start lsass.exe service
+forbid = LsapRmInitializeServer() failed
+forbid = LsapInitLsa() failed
+forbid = StartAuthenticationPort() failed
+forbid = WL: Failed to initialize Gina
+forbid = WL: Failed to register SAS window
+forbid = WL: Failed to initialize SAS
+forbid = Se: the reference monitor's command server stops
+forbid = sys: NtSetDefaultLocale (0x00e0) is not implemented
+forbid = sys: NtUserSetLogonNotifyWindow (0x1208) is not implemented
+# Where winlogon goes on: a message sent to another thread's window (USER,
+# M6).
+expect = win32k: message 0x46 with a kernel buffer sent to another thread: not yet
 forbid = WL: Could not preload keyboard layouts
 forbid = LoadKeyboardLayoutW(
 forbid = WL: Failed to create Default desktop
@@ -156,7 +207,7 @@ forbid = WL: Could not register logon process
 forbid = Failed to register logon process with CSRSS
 forbid = sys: NtUserCallTwoParam class 0x69 
 forbid = sys: NtUserSetInformationThread class
-expect = SMSS: Initial command 'winlogon.exe' terminated when it wasn't supposed to.
+forbid = SMSS: Initial command 'winlogon.exe' terminated when it wasn't supposed to.
 forbid = sys: NtSetInformationProcess class 0x8 is not implemented
 forbid = sys: NtQueryInformationThread class
 forbid = CSRSS: Rejecting Connection Request

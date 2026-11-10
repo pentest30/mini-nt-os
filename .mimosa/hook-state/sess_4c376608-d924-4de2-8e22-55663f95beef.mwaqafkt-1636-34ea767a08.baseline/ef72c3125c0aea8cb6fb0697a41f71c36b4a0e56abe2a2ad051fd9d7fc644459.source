@@ -1,0 +1,13 @@
+[package]
+name    = "pe-inspect"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "pe-inspect"
+path = "src/main.rs"
+
+# This tool runs on the HOST (std environment) for testing.
+# The actual kernel PE loader (no_std) lives in kernel/ps/src/loader.rs.
+[dependencies]
+pelite = { workspace = true }

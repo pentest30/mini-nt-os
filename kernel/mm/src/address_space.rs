@@ -506,6 +506,13 @@ impl AddressSpace {
     /// Passe sur `[addr, addr + len)` page par page : `copy(page, done, len)`
     /// reçoit l'adresse, par le HHDM, des `len` octets de la page qui suivent
     /// les `done` premiers, une fois la page présente avec le droit `access`.
+    ///
+    /// La page est regardée, sa faute résolue et la copie faite sous une seule
+    /// prise du verrou de la VAD. Le relâcher entre le regard et la faute
+    /// laissait une fenêtre : la préemption différée tombe à ce relâchement
+    /// (`hal::sync`), et un autre thread (une faute du processus, une autre
+    /// copie) pouvait projeter la page ; la faute la trouvait alors présente,
+    /// sans rien qui l'explique, et rendait `STATUS_ACCESS_VIOLATION`.
     fn copy(
         &self,
         addr: u64,
@@ -518,19 +525,17 @@ impl AddressSpace {
             let va = addr.checked_add(done as u64).ok_or(STATUS_ACCESS_VIOLATION)?;
             let (page, offset) = (va & !(PAGE - 1), (va & (PAGE - 1)) as usize);
             let chunk = (len - done).min(PAGE as usize - offset);
+            let mut vad = self.vad.lock();
+            let mut tables = self.tables();
             let mut faulted = false;
             loop {
-                {
-                    let _vad = self.vad.lock();
-                    let mut tables = self.tables();
-                    if let Some(entry) = tables.leaf_entry(VirtAddr::new(page)) {
-                        let flags = entry.flags();
-                        let usable = flags.contains(PageTableFlags::PRESENT)
-                            && (access != Access::Write || flags.contains(PageTableFlags::WRITABLE));
-                        if usable {
-                            copy((hhdm() + entry.addr().as_u64() + offset as u64) as *mut u8, done, chunk);
-                            break;
-                        }
+                if let Some(entry) = tables.leaf_entry(VirtAddr::new(page)) {
+                    let flags = entry.flags();
+                    let usable = flags.contains(PageTableFlags::PRESENT)
+                        && (access != Access::Write || flags.contains(PageTableFlags::WRITABLE));
+                    if usable {
+                        copy((hhdm() + entry.addr().as_u64() + offset as u64) as *mut u8, done, chunk);
+                        break;
                     }
                 }
                 // Once resolved, the page must be usable: a second fault would
@@ -538,7 +543,7 @@ impl AddressSpace {
                 if faulted {
                     return Err(STATUS_ACCESS_VIOLATION);
                 }
-                let status = self.access_fault(page, access);
+                let status = self.resolve_fault(&mut vad, &mut tables, page, access);
                 if status != STATUS_SUCCESS {
                     return Err(status);
                 }
@@ -556,9 +561,14 @@ impl AddressSpace {
     /// # IRQL
     /// < DISPATCH_LEVEL.
     pub fn access_fault(&self, addr: u64, access: Access) -> NtStatus {
-        let page = addr & !(PAGE - 1);
         let mut vad = self.vad.lock();
         let mut tables = self.tables();
+        self.resolve_fault(&mut vad, &mut tables, addr & !(PAGE - 1), access)
+    }
+
+    /// [`access_fault`](Self::access_fault) sur la page `page`, sous le
+    /// verrou de la VAD que tient l'appelant (`vad`), avec ses tables.
+    fn resolve_fault(&self, vad: &mut VadTree, tables: &mut MmPageTables, page: u64, access: Access) -> NtStatus {
         let node = vad.find(page);
         // Faults go by the rights of the page: those of the VAD's protection,
         // with execute if DEP is off.
@@ -566,7 +576,7 @@ impl AddressSpace {
             node.and_then(|node| node.page_state(page)).map(|(state, protect, _)| (state, self.effective(protect)));
         let backing =
             if node.and_then(|node| node.section_page(page)).is_some() { Backing::Section } else { Backing::Private };
-        match fault::resolve(state, backing, pte_state(&mut tables, page), access) {
+        match fault::resolve(state, backing, pte_state(tables, page), access) {
             Resolution::DemandZero(protect) => {
                 let Some(frame) = pfn::allocate_page(PageUsage::UserPrivate) else {
                     return STATUS_NO_MEMORY;
@@ -644,7 +654,7 @@ impl AddressSpace {
                 STATUS_SUCCESS
             }
             Resolution::Remap(protect) => {
-                set_rights(&mut tables, page, protect);
+                set_rights(tables, page, protect);
                 STATUS_SUCCESS
             }
             Resolution::Guard => {

@@ -1,5 +1,6 @@
-//! Les fenêtres (`win32k::window`, `win32k::winpos`) : NtUserCreateWindowEx,
-//! NtUserDefSetText, NtUserSetWindowPos, NtUserMoveWindow, NtUserShowWindow.
+//! Les fenêtres (`win32k::window`, `win32k::winpos`, `win32k::destroy`) :
+//! NtUserCreateWindowEx, NtUserDestroyWindow, NtUserDefSetText,
+//! NtUserSetWindowPos, NtUserMoveWindow, NtUserShowWindow.
 //! Comme dans win32k, un échec rend 0 et met l'erreur Win32 dans le TEB du
 //! thread.
 
@@ -9,9 +10,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::ntstatus::NtStatus;
 use abi::user::{
     LargeUnicodeString32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_MAX, WS_CHILD, WS_POPUP,
+    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_MAX,
 };
-use abi::winerror::{dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_SUCCESS};
+use abi::winerror::{dos_error, ERROR_SUCCESS};
 use ke::usermem::{copy_from_user, probe_for_read, UserPtr};
 use win32k::class::ClassName;
 use win32k::window::CreateParams;
@@ -86,21 +87,13 @@ fn fail(error: u32) -> NtStatus {
 /// hInstance, lpParam, dwFlags, acbiBuffer) : crée la fenêtre
 /// (`win32k::window::create_window`) et rend son handle, l'erreur Win32
 /// remise à 0. La classe est celle de `plstrClsVersion` (le nom de la
-/// version, comme ReactOS). Pas encore de menus : une fenêtre qui n'est pas
-/// fille ne peut pas en recevoir (`ERROR_INVALID_MENU_HANDLE`, comme un
-/// handle de menu invalide ; journalisé une fois).
+/// version, comme ReactOS). `hMenu` est la barre de menus d'une fenêtre qui
+/// n'est pas fille, l'identifiant d'une fille (`create_window`).
 pub(super) fn nt_user_create_window_ex(arguments: &[u32]) -> NtStatus {
     let (ex_style, version, name, style) = (arguments[0], arguments[2], arguments[3], arguments[4]);
     let (x, y, cx, cy) = (arguments[5] as i32, arguments[6] as i32, arguments[7] as i32, arguments[8] as i32);
     let (parent, menu, instance, param, expected_version) =
         (arguments[9], arguments[10], arguments[11], arguments[12], arguments[13]);
-    if style & (WS_POPUP | WS_CHILD) != WS_CHILD && menu != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        if !REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("sys: NtUserCreateWindowEx with a menu: no menus yet");
-        }
-        return fail(ERROR_INVALID_MENU_HANDLE);
-    }
     let captured = capture_large_string(name).and_then(|name| Ok((name, class_name(version)?)));
     let (name, class) = match captured {
         Ok(captured) => captured,
@@ -128,6 +121,21 @@ pub(super) fn nt_user_create_window_ex(arguments: &[u32]) -> NtStatus {
         }
         Err(Some(error)) => fail(error),
         Err(None) => NtStatus(0),
+    }
+}
+
+/// NtUserDestroyWindow(hWnd) : BOOL. La fenêtre du thread courant est
+/// détruite avec ses enfants et ses fenêtres possédées
+/// (`win32k::destroy::destroy_window`) ; FALSE pour une fenêtre qui n'existe
+/// pas (`ERROR_INVALID_WINDOW_HANDLE`), d'un autre thread ou d'un bureau
+/// (`ERROR_ACCESS_DENIED`).
+pub(super) fn nt_user_destroy_window(arguments: &[u32]) -> NtStatus {
+    let Some(window) = win32k::window::get(arguments[0]) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    match win32k::destroy::destroy_window(&window) {
+        Ok(()) => NtStatus(1),
+        Err(error) => fail(error),
     }
 }
 
@@ -531,6 +539,22 @@ pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
             let _ = UNSUPPORTED_HWND_LOCK_ROUTINES.report(routine);
             NtStatus(0)
         }
+    }
+}
+
+/// NtUserSetLogonNotifyWindow(hWnd) : la fenêtre devient la fenêtre SAS du
+/// processus de logon (`win32k::logon`), où USER postera WM_LOGONNOTIFY ;
+/// TRUE. FALSE pour une fenêtre inconnue, ou pour un autre processus que
+/// celui de logon (`ERROR_ACCESS_DENIED`), comme dans ReactOS
+/// (`ntuser/winsta.c`).
+pub(super) fn nt_user_set_logon_notify_window(arguments: &[u32]) -> NtStatus {
+    let handle = arguments[0];
+    if win32k::window::get(handle).is_none() {
+        return NtStatus(0);
+    }
+    match win32k::logon::set_logon_notify_window(handle, super::current_process().pid()) {
+        Ok(()) => NtStatus(1),
+        Err(error) => fail(error),
     }
 }
 

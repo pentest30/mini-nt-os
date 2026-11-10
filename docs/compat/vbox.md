@@ -275,7 +275,10 @@ journal série le disait : `[m4] SMSS.EXE: the process did not end within
 construisait le noyau avec `test-smss` seul ; la sonde qui lance `smss`
 termine `smss`, `csrss` et le programme initial (ici `SETUP1.EXE`) 10 s
 après la dernière touche — juste pour un scénario, fatal à une copie de
-plusieurs minutes sans touche. Sous QEMU, la copie finissait avant ces 10 s.
+plusieurs minutes sans touche. Sous QEMU, la copie finissait avant ces 10 s ;
+elle ne le fait plus depuis que l'arbre copié a grandi (44 Mo) : la sonde
+compte maintenant chaque étape du moteur de l'installateur comme une touche
+(`io::install::last_step_time`, un morceau d'1 Mio copié au plus par étape).
 La feature noyau `interactive` fait attendre la sonde sans délai ;
 `cargo xtask image` la met par défaut (`test-smss,interactive`). Le
 scénario `interactive` (`WAIT1.EXE`, 12 s sans touche) le vérifie ; sans la

@@ -13,8 +13,16 @@
 # NtQueryDirectoryFile, by its name) and copies it; type; dir /b C:\*.TXT
 # (FindFirstFile turns *.TXT into <.TXT, DOS_STAR) and dir C:\; a batch file
 # written by echo, with a variable and if exist; exit. CONCMD1.EXE then
-# prints C:\OUT.TXT and C:\DIR.TXT, one numbered line at a time. The probe
-# waits for smss 10 s after the last key.
+# prints C:\OUT.TXT and C:\DIR.TXT, one numbered line at a time, and
+# C:\LIST.TXT, the names of dir /b, without numbers. The probe waits for smss
+# 10 s after the last key.
+#
+# The root of C: holds the test programs of tests/native/ and the files of
+# the kernel's self-tests (MINOTEST.TXT, A long name.txt, MINODIR...), whose
+# number changes: no marker counts them or depends on a line that moves with
+# them. dir /b writes its own file, which CONCMD1.EXE checks holds only names
+# in .TXT; for dir C:\, it checks that the summary (File(s), Dir(s)) counts
+# the files and directories listed.
 #
 # dir shows its header (GetVolumeInformation: FileNameInformation on the
 # root, FileFsVolumeInformation: no label, the serial number mkfat writes),
@@ -38,7 +46,7 @@ keys = [read] the line: => "set MINO>> C:\OUT.TXT" ret
 keys = [read] the line: => "copy C:\OUT.TXT C:\COPY.TXT> C:\LOG.TXT" ret
 keys = [read] the line: => "type C:\COPY.TXT>> C:\OUT.TXT" ret
 keys = [read] the line: => "type C:\LOG.TXT>> C:\OUT.TXT" ret
-keys = [read] the line: => "dir /b C:\*.TXT>> C:\OUT.TXT" ret
+keys = [read] the line: => "dir /b C:\*.TXT> C:\LIST.TXT" ret
 keys = [read] the line: => "dir C:\> C:\DIR.TXT" ret
 keys = [read] the line: => "echo @echo off> C:\T.BAT" ret
 keys = [read] the line: => "echo echo batch: %MINO%>> C:\T.BAT" ret
@@ -62,26 +70,24 @@ expect = [concmd] OUT.TXT 2: MINO=xp
 expect = [concmd] OUT.TXT 3: hello
 expect = [concmd] OUT.TXT 4: MINO=xp
 expect = [concmd] OUT.TXT 5:         1 file(s) copied
-expect = [concmd] OUT.TXT 6: MINOTEST.TXT
-# The kernel's Io self-test leaves `A long name.txt` in C:\ (VFAT
-# creation), which dir /b lists before the files of the commands.
-expect = [concmd] OUT.TXT 7: A long name.txt
-expect = [concmd] OUT.TXT 8: OUT.TXT
-expect = [concmd] OUT.TXT 9: LOG.TXT
-expect = [concmd] OUT.TXT 10: COPY.TXT
-expect = [concmd] OUT.TXT 11: batch: xp
-expect = [concmd] OUT.TXT 12: batch: copy found
+expect = [concmd] OUT.TXT 6: batch: xp
+expect = [concmd] OUT.TXT 7: batch: copy found
+expect = [concmd] OUT.TXT 11:  Directory of C:\
+expect = [concmd] OUT.TXT 13: 08/04/2004  12:00 PM                 4 K.BIN
+expect = [concmd] OUT.TXT 16:  Volume in drive C has no label.
+expect = [concmd] OUT.TXT 17:  Volume Serial Number is 4D49-4E4F
+expect = [concmd] LIST.TXT: MINOTEST.TXT
+expect = [concmd] LIST.TXT: A long name.txt
+expect = [concmd] LIST.TXT: OUT.TXT
+expect = [concmd] LIST.TXT: LOG.TXT
+expect = [concmd] LIST.TXT: COPY.TXT
 expect = [concmd] DIR.TXT 1:  Volume in drive C has no label.
 expect = [concmd] DIR.TXT 2:  Volume Serial Number is 4D49-4E4F
 expect = [concmd] DIR.TXT 4:  Directory of C:\
 expect = 08/04/2004  12:00 PM    <DIR>          WINDOWS
 expect = 08/04/2004  12:00 PM            12,288 CMD.EXE
-expect = DIR.TXT 41:               33 File(s)
+expect = [concmd] DIR.TXT: the summary counts what is listed
 expect = bytes free
-expect = [concmd] OUT.TXT 16:  Directory of C:\
-expect = [concmd] OUT.TXT 18: 08/04/2004  12:00 PM                 4 K.BIN
-expect = [concmd] OUT.TXT 21:  Volume in drive C has no label.
-expect = [concmd] OUT.TXT 22:  Volume Serial Number is 4D49-4E4F
 expect = [boot] default locale: 0x0409 (Nls\Language)
 forbid = sys: NtQueryDirectoryFile (0x0097) is not implemented
 forbid = sys: NtQueryDefaultLocale (0x0095) is not implemented
@@ -93,7 +99,9 @@ forbid = NtSetInformationFile class 0x4 is not implemented
 forbid = Incorrect function.
 forbid = scan codes dropped
 forbid = Cannot pipe
-# No free space at all: dir right-aligns the amount in 15 columns after
-# `Dir(s) `; a bare `0 bytes free` also matched 4,180,480 bytes free.
+forbid = not a .TXT file
+forbid = the summary does not count what is listed
+forbid = too long, cut at
+# No free space: cmd right-aligns the number in 15 columns after Dir(s).
 forbid = Dir(s)               0 bytes free
 forbid = 1601

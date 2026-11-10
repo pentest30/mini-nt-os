@@ -1,0 +1,12 @@
+[package]
+name    = "ob"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "ob"
+
+[dependencies]
+abi      = { path = "../../abi" }
+hal      = { path = "../hal" }
+log      = { workspace = true }

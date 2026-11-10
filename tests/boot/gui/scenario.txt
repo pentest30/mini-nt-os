@@ -30,7 +30,9 @@
 # child with its parent (WM_CHILDACTIVATE to an activated child), order
 # windows (top, bottom, after a sibling, topmost) and show or hide them.
 # ShowWindow shows (WM_SHOWWINDOW, SetWindowPos, then the WM_SIZE and WM_MOVE
-# an overlapped window waited for) and hides windows; a child of a hidden
+# an overlapped window waited for; the thread's first activation takes the
+# foreground, so WM_ACTIVATEAPP, to each of its top-level windows, comes
+# before WM_NCACTIVATE) and hides windows; a child of a hidden
 # window only gets WS_VISIBLE; windows created visible are shown, with the
 # command in y for an overlapped window placed by default. A window shown
 # or changed paints its frame (WM_NCPAINT) then erases its client area
@@ -54,8 +56,15 @@
 # caption to paint, GetUpdateRgn empties the region. A second thread goes,
 # at its first call to user32, on the process's startup desktop
 # (IsWindowVisible) and posts to a window of the first thread, whose queue
-# gets the message for the window (PostMessageW, PeekMessageW).
-# It ends with status 0x600D.
+# gets the message for the window (PostMessageW, PeekMessageW). A top-level
+# window created with a menu has its menu bar from its creation (its client
+# area SM_CYMENU less tall); with a menu that does not exist, no window
+# (ERROR_INVALID_MENU_HANDLE). Without one, it takes its class's menu (one of
+# shell32's, by its name or its identifier): user32 loads it for an overlapped
+# window, win32k asks user32 for it for a plain WS_OVERLAPPED (the LoadMenu
+# callback).
+# It ends with status 0x600D, 5 s after `[gui] done`: its windows go with
+# its process, and the screen is captured meanwhile.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
 requires = userland, native
@@ -141,7 +150,7 @@ expect = [gui] SWP_SHOWWINDOW: visible 1
 expect = [gui] SWP_HIDEWINDOW: visible 0
 # Shown and activated: WM_NCACTIVATE (its frame active), WM_ACTIVATE, then
 # WM_SETFOCUS (DefWindowProc's SetFocus).
-expect = [gui] ShowWindow(SW_SHOWNORMAL) received 10: 0018 0046 0086 0006 0007 0085 0014 0047 0005 0003
+expect = [gui] ShowWindow(SW_SHOWNORMAL) received 11: 0018 0046 001c 0086 0006 0007 0085 0014 0047 0005 0003
 expect = [gui] ShowWindow(SW_SHOWNORMAL): was 0, visible 1, WM_SHOWWINDOW 1, WM_SIZE 952 572, WM_MOVE 50 70
 expect = [gui] ShowWindow(SW_SHOW), visible received 0:
 expect = [gui] ShowWindow(SW_SHOW), visible: was 1
@@ -215,8 +224,11 @@ expect = [gui] RedrawWindow of a region received 1: 0014
 expect = [gui] then GetUpdateRgn: 2, box 2: 10 10 30 30
 expect = [gui] only the frame to paint, GetUpdateRgn: 1, box 1: 0 0 0 0
 expect = [gui] a second thread: IsWindowVisible 1, PostMessageW 1; here: 1, for the window, 1 2
+expect = [gui] CreateWindowExW with a menu: a window (0)
+expect = [gui] the menu bar: its client area SM_CYMENU less tall; a menu that does not exist: none, error 1401
+expect = [gui] the menu of a class, loaded by user32: SM_CYMENU less tall
+expect = [gui] the menu of a class, loaded by win32k: by its name SM_CYMENU less tall, by its identifier SM_CYMENU less tall
 expect = [gui] done
-expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 
 # The windows left visible, drawn by the kernel's DefWindowProc
 # (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under "Visible" at

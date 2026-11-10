@@ -18,6 +18,13 @@ const NLS_FILES: [&str; 3] =
 const SYSTEM_HIVE: &str = "\\SystemRoot\\System32\\config\\SYSTEM";
 /// La ruche SOFTWARE.
 const SOFTWARE_HIVE: &str = "\\SystemRoot\\System32\\config\\SOFTWARE";
+/// Les ruches de la machine montées de leur fichier, après SYSTEM : leur
+/// nom sous `\REGISTRY\MACHINE`, et leur fichier.
+const MACHINE_HIVES: [(&str, &str); 3] = [
+    ("SOFTWARE", SOFTWARE_HIVE),
+    ("SECURITY", "\\SystemRoot\\System32\\config\\SECURITY"),
+    ("SAM", "\\SystemRoot\\System32\\config\\SAM"),
+];
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -142,25 +149,30 @@ fn list_boot_directory(path: &str) -> Option<alloc::vec::Vec<alloc::string::Stri
     ob::downcast::<io_manager::File>(&object)?.list().ok()
 }
 
-/// Monte la ruche SOFTWARE du disque RAM de démarrage en
-/// `\REGISTRY\MACHINE\SOFTWARE`, si le disque la tient : comme SYSTEM, celle de
-/// la version épinglée de ReactOS (les substituts des polices, les réglages
-/// de la console…), réécrite dans son fichier par NtFlushKey.
+/// Monte les ruches SOFTWARE, SECURITY et SAM du disque RAM de démarrage
+/// sous `\REGISTRY\MACHINE`, si le disque les tient : comme SYSTEM, celles de
+/// la version épinglée de ReactOS (SOFTWARE : les substituts des polices, les
+/// réglages de la console… ; SECURITY : la base de LSA, que `lsasrv` ouvre ;
+/// SAM : celle des comptes, de `samsrv`), réécrites dans leur fichier par
+/// NtFlushKey.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage.
-pub fn mount_software_hive() {
-    let Some(hive) = read_boot_file(SOFTWARE_HIVE) else {
-        return log::info!("[boot] no SOFTWARE hive on the boot disk (cargo xtask fetch-userland)");
-    };
-    let size = hive.len();
+pub fn mount_machine_hives() {
     let registry = cm::registry().expect("Cm not initialised");
-    let mounted = cm::HiveFile::new(Arc::from(hive))
-        .map(|file| file.with_file(SOFTWARE_HIVE))
-        .and_then(|file| cm::mount(&registry, "MACHINE", "SOFTWARE", file));
-    match mounted {
-        Ok(()) => log::info!("[boot] SOFTWARE hive mounted at \\REGISTRY\\MACHINE\\SOFTWARE: {size} bytes"),
-        Err(status) => log::error!("[boot] SOFTWARE hive not mounted: {status}"),
+    for (name, path) in MACHINE_HIVES {
+        let Some(hive) = read_boot_file(path) else {
+            log::info!("[boot] no {name} hive on the boot disk (cargo xtask fetch-userland)");
+            continue;
+        };
+        let size = hive.len();
+        let mounted = cm::HiveFile::new(Arc::from(hive))
+            .map(|file| file.with_file(path))
+            .and_then(|file| cm::mount(&registry, "MACHINE", name, file));
+        match mounted {
+            Ok(()) => log::info!("[boot] {name} hive mounted at \\REGISTRY\\MACHINE\\{name}: {size} bytes"),
+            Err(status) => log::error!("[boot] {name} hive not mounted: {status}"),
+        }
     }
 }
 
@@ -370,8 +382,9 @@ fn keep_created(process: &Arc<ob::Object<ps::EProcess>>) {
 
 /// Lance le programme natif `image` sous la DLL système, avec les paramètres
 /// `params`, et attend sa fin (10 s au plus, ou 10 s après la dernière touche
-/// tapée : un programme interactif, `keys =` dans un scénario ; sans limite
-/// avec la feature `interactive`, quand une personne le pilote) : son thread démarre par
+/// tapée — un programme interactif, `keys =` dans un scénario — ou la
+/// dernière étape du moteur de l'installateur, `io::install::last_step_time` ;
+/// sans limite avec la feature `interactive`, quand une personne le pilote) : son thread démarre par
 /// `LdrInitializeThunk`, qui initialise le processus et lie ses imports, puis
 /// entre dans son point d'entrée avec le PEB pour argument
 /// (`NtProcessStartup(PPEB)`). Journalise, avec le préfixe `[tag]` et sous le
@@ -453,10 +466,14 @@ fn run_native(
         wait(QUIET)
     };
     // A program typed into (`keys =` in a scenario) is not stuck: 10 s more
-    // after each key.
+    // after each key. Nor is one whose installation the kernel runs: the
+    // copy of the system tree lasts longer than 10 s after the last key, and
+    // a step of the installer's engine counts as a key.
     while waited == STATUS_TIMEOUT {
-        let Some(last_key) = crate::input::last_key_time() else { break };
-        let idle = hal::timer::interrupt_time().saturating_sub(last_key);
+        let Some(last_activity) = crate::input::last_key_time().max(io_manager::install::last_step_time()) else {
+            break;
+        };
+        let idle = hal::timer::interrupt_time().saturating_sub(last_activity);
         if idle >= QUIET {
             break;
         }
@@ -470,7 +487,10 @@ fn run_native(
         .filter(|created| created.parent_pid() == process.pid())
         .collect();
     if waited == STATUS_TIMEOUT {
-        log::warn!("[{tag}] {name}: the process did not end within 10 s (of its start or the last key): terminated");
+        log::warn!(
+            "[{tag}] {name}: the process did not end within 10 s (of its start, the last key or the last install \
+             step): terminated"
+        );
         if process.is_critical() {
             log::info!("[{tag}] {name} is a critical process: no longer, before it is terminated");
         }

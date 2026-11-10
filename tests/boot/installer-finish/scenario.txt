@@ -9,7 +9,12 @@
 # WINLOGON.ORG and restored under its canonical name on the target. If the
 # bootstrap were copied instead, the second boot would display setup again
 # and report that no safe target exists.
-features = test-smss
+#
+# `interactive`, as `cargo xtask image` builds the medium: no key is typed
+# while the kernel copies the system tree, and without it the probe ends
+# smss 10 s after the last key, in the middle of the copy ("stage copy:
+# 60%"), so Finish never comes.
+features = test-smss, interactive
 requires = userland, native
 initial-command = SETUP1.EXE
 disk = installed
