@@ -25,4 +25,4 @@ forbid = *** STOP:
 forbid = [m4] persistence: failed
 forbid = [m4] persistence: no SYSTEM hive
 forbid = [boot] SYSTEM hive refused
-forbid = [boot] Io: the ATA system disk holds no FAT32 volume
+forbid = [boot] Io: the ATA system disk holds no

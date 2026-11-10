@@ -338,6 +338,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserSetLogonNotifyWindow. L'horloge écrit la page `KUSER_SHARED_DATA` de l'ancien chargeur par son alias du noyau
   (STOP 0x0A corrigé). `winlogon` lance `services.exe` et `lsass.exe`, charge `msgina`, crée sa fenêtre SAS et reste
   dans sa boucle : la suite est USER (messages envoyés entre threads, M6).
+  M5, étape 9, un tampon du noyau envoyé à la fenêtre d'un autre thread (étape 26) : `win32k::sent::send_buffer`
+  (la copie du tampon va au thread de la fenêtre, ce que la procédure y écrit revient). `winlogon` lit alors la
+  ruche du LiveCD (`Setup\SetupType`, `setup -mini`) et lance l'installation de ReactOS au lieu du logon : la
+  couche Mino des ruches (ADR-012) est à trancher.
   Le dernier critère du M5, les apitests de ReactOS ([`docs/compat/m5-rostests.md`](docs/compat/m5-rostests.md)) :
   `cargo xtask rostests-fetch` clone l'arbre 0.4.16 (sans lui, les scénarios sont sautés) ; `xtask/src/rostests.rs`
   compile les modules `ntdll` et `kernel32` en un pilote (commande initiale de `smss` à la place de winlogon, il

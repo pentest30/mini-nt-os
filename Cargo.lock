@@ -124,6 +124,7 @@ dependencies = [
  "hal",
  "ke",
  "log",
+ "ntfs",
  "ob",
 ]
 

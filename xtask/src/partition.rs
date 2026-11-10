@@ -26,7 +26,7 @@ impl gpt::WriteSectors for Disk {
     }
 }
 
-/// Wraps the FAT image in a Basic Data partition aligned to 1 MiB. Leaves
+/// Wraps a filesystem image in a Basic Data partition aligned to 1 MiB. Leaves
 /// 1 MiB before it and enough trailing space for the backup table/header.
 pub fn create(volume: &Path, image: &Path) -> Result<()> {
     let create = || -> std::io::Result<()> {

@@ -610,7 +610,7 @@ fn copy_file_data<D: BlockDevice>(
         copied += read as u64;
         step();
     }
-    let size = dst.current(&node).map_err(|_| PrepareError::Io)?.size as u64;
+    let size = dst.current(&node).map_err(|_| PrepareError::Io)?.size;
     if copied != u64::from(file.file_size) || size != copied {
         return Err(PrepareError::Io);
     }

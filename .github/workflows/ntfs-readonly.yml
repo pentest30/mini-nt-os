@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'libs/ntfs/**'
+      - 'kernel/io/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -11,6 +12,7 @@ on:
   pull_request:
     paths:
       - 'libs/ntfs/**'
+      - 'kernel/io/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -34,5 +36,7 @@ jobs:
       - run: cargo clippy -p ntfs --all-targets -- -D warnings
       - name: Check real NTFS images against ntfscat
         run: cargo test -p ntfs --test mkntfs -- --ignored
+      - name: Check read-only kernel adapter on a real image
+        run: cargo test -p io-manager --test ntfs -- --ignored
       - name: Check no_std target
         run: cargo check -p ntfs --target x86_64-unknown-none
