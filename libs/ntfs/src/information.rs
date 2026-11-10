@@ -78,3 +78,59 @@ impl<D: ReadAt> Volume<D> {
         Ok(clusters - used)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        path_tests::{image, put_record},
+        tests::{p32, p64, resident},
+    };
+
+    #[test]
+    fn standard_information_sizes_timestamps_and_sequence_are_checked() {
+        let mut b = image();
+        let mut info = [0; 72];
+        for (offset, time) in [(0, 123), (8, 456), (24, 789)] {
+            p64(&mut info, offset, time);
+        }
+        p32(&mut info, 32, 0x20);
+        let mut attrs = resident(&info);
+        p32(&mut attrs, 0, 0x10);
+        attrs.extend(resident(b"data"));
+        put_record(&mut b, 7, &attrs, false);
+        let mut v = Volume::open(b.as_slice()).unwrap();
+        let reference = FileReference { record: 7, sequence: 7 };
+        let m = v.metadata(reference).unwrap();
+        assert_eq!(
+            (m.size, m.creation_time, m.last_write_time, m.last_access_time, m.attributes),
+            (4, 123, 456, 789, 0x20)
+        );
+        assert!(v.metadata(FileReference { sequence: 8, ..reference }).is_err());
+        let mut short = resident(&[0; 47]);
+        p32(&mut short, 0, 0x10);
+        short.extend(resident(b"data"));
+        put_record(&mut b, 7, &short, false);
+        assert!(matches!(
+            Volume::open(b.as_slice()).unwrap().metadata(reference),
+            Err(Error::Invalid("STANDARD_INFORMATION size"))
+        ));
+    }
+
+    #[test]
+    fn bitmap_ignores_padding_and_volume_label_preserves_utf16() {
+        let mut b = image();
+        p64(&mut b, 40, 511);
+        let mut bitmap = [0xff; 64];
+        bitmap[63] = 0x80;
+        put_record(&mut b, 6, &resident(&bitmap), false);
+        let mut label = resident(&[0xc9, 0, b't', 0, 0xe9, 0]);
+        p32(&mut label, 0, 0x60);
+        put_record(&mut b, 3, &label, false);
+        let mut v = Volume::open(b.as_slice()).unwrap();
+        assert_eq!(v.free_clusters(), Ok(7));
+        assert_eq!(v.volume_label().unwrap(), [0xc9, b't' as u16, 0xe9]);
+        put_record(&mut b, 6, &resident(&[0; 63]), false);
+        assert_eq!(Volume::open(b.as_slice()).unwrap().free_clusters(), Err(Error::Invalid("volume bitmap")));
+    }
+}

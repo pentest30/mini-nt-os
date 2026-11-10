@@ -317,8 +317,6 @@ pub(super) fn nt_query_volume_information_file(arguments: &[u32]) -> NtStatus {
     query_volume_information_file(arguments).unwrap_or_else(|status| status)
 }
 
-/// Le nom du système de fichiers des volumes (FileFsAttributeInformation).
-
 /// La longueur la plus grande d'un composant d'un chemin sur FAT (VFAT).
 const MAXIMUM_COMPONENT_LENGTH: u32 = 255;
 
@@ -433,7 +431,7 @@ fn transfer(arguments: &[u32], write: bool) -> Result<(), NtStatus> {
     let synchronous = file.is_synchronous();
     let offset = match requested {
         None | Some(FILE_USE_FILE_POINTER_POSITION) if synchronous => file.position(),
-        Some(FILE_WRITE_TO_END_OF_FILE) if write => u64::from(file.node()?.size),
+        Some(FILE_WRITE_TO_END_OF_FILE) if write => file.node()?.size,
         Some(offset) if offset >= 0 => offset as u64,
         _ => return Err(STATUS_INVALID_PARAMETER),
     };
@@ -450,7 +448,7 @@ fn transfer(arguments: &[u32], write: bool) -> Result<(), NtStatus> {
         ke::usermem::probe_for_read(u64::from(buffer), length, 1)?;
     } else {
         ke::usermem::probe_for_write(u64::from(buffer), length, 1)?;
-        if length > 0 && offset >= u64::from(file.node()?.size) {
+        if length > 0 && offset >= file.node()?.size {
             write_iosb(iosb, STATUS_END_OF_FILE, 0)?;
             return Err(STATUS_END_OF_FILE);
         }

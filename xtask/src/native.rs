@@ -42,6 +42,7 @@ enum Toolchain {
 /// Each program: its sources in `tests/native/`, its name on the boot disk
 /// (which the kernel or a scenario looks for), and its toolchain.
 const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
+    (&["ntfs1.c"], "NTFS1.EXE", Toolchain::MinGw),
     (&["s1hello.c"], "S1HELLO.EXE", Toolchain::MinGw),
     (&["s1seh.c", "seh3.c"], "S1SEH.EXE", Toolchain::ClangMsvc),
     (&["gui1.c"], "GUI1.EXE", Toolchain::MinGwWin32),

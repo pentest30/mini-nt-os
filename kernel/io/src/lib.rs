@@ -85,9 +85,9 @@ pub struct BootVolumes {
 /// Monte le disque RAM de démarrage ([`RAMDISK_VOLUME`]) et le disque système
 /// ATA ([`DISK_VOLUME`]), s'ils sont là, puis fait mener `\GLOBAL??\C:` et
 /// `\SystemRoot` (son répertoire `WINDOWS`) au disque ATA, ou sans lui au
-/// disque RAM ; tout est permanent. Un disque ATA qui ne porte pas de FAT32
-/// reste sans volume. Une table GPT valide expose sa première partition Basic
-/// Data ; sans GPT, le volume FAT32 brut reste pris en charge.
+/// disque RAM ; tout est permanent. Un volume NTFS reconnu devient D: en lecture
+/// seule et ne remplace pas le système FAT. Une table GPT valide expose sa
+/// première partition Basic Data ; sans GPT, FAT32 et NTFS bruts sont reconnus.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, une fois, après [`init`] et `ob::init`.

@@ -1,0 +1,18 @@
+# Independent mkntfs volume in a GPT Basic Data partition; C: stays on FAT.
+# NTFS1 invokes native file syscalls through the pinned ReactOS ntdll.
+# The harness requires the entire disk's SHA-256 to remain unchanged.
+features = test-smss
+requires = userland, native
+initial-command = NTFS1.EXE
+disk = ntfs-data
+cpus = default, intel
+timeout = 180
+expect = [boot] Io: NTFS data volume
+expect = [boot] Io: \GLOBAL??\C: -> \Device\Ramdisk0
+expect = [ntfs] resident and Unicode reads OK
+expect = [ntfs] nonresident reads and EOF OK
+expect = [ntfs] volume and directory information OK
+expect = [ntfs] write opens, create and overwrite refused
+expect = [ntfs] PASS
+forbid = [ntfs] FAIL
+forbid = *** STOP:

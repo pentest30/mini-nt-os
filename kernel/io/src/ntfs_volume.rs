@@ -195,3 +195,41 @@ impl NtfsMount {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::{boxed::Box, sync::Arc};
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    struct Disk(Arc<AtomicUsize>);
+    impl crate::fat::BlockDevice for Disk {
+        fn sector_size(&self) -> u32 {
+            512
+        }
+        fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), crate::fat::FatError> {
+            assert!(lba < 2);
+            self.0.fetch_add(1, Ordering::Relaxed);
+            for (i, byte) in out.iter_mut().enumerate() {
+                *byte = ((lba * 512 + i as u64) % 251) as u8;
+            }
+            Ok(())
+        }
+    }
+    #[test]
+    fn byte_reader_handles_unaligned_reads_and_checks_bounds_before_io() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let disk: SharedBlockDevice = Box::new(Disk(calls.clone()));
+        let mut reader = Reader { device: &disk, bytes: 1024 };
+        let mut out = [0; 23];
+        reader.read_exact_at(509, &mut out).unwrap();
+        for (i, byte) in out.iter().enumerate() {
+            assert_eq!(*byte, ((509 + i) % 251) as u8);
+        }
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        for offset in [1002, 1024, u64::MAX] {
+            assert_eq!(reader.read_exact_at(offset, &mut out), Err(Error::Bounds));
+        }
+        reader.read_exact_at(1024, &mut []).unwrap();
+        assert_eq!(calls.load(Ordering::Relaxed), 2, "no out-of-partition I/O");
+    }
+}

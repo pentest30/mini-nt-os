@@ -27,6 +27,7 @@ mod iso9660;
 #[cfg(windows)]
 mod job;
 mod native;
+mod ntfs_disk;
 mod partition;
 mod qemu;
 mod rostests;
@@ -312,6 +313,13 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
     let mut skipped = Vec::new();
     let mut runs = 0;
     for sc in &scenarios {
+        if sc.ntfs_disk {
+            if let Some(tool) = ntfs_disk::missing_tool() {
+                println!("xtask: SKIP {}: needs {tool} (ntfs-3g)", sc.name);
+                skipped.push(sc.name.clone());
+                continue;
+            }
+        }
         let mut extra_files = Vec::new();
         if sc.requires_userland {
             match userland_files(ws) {
@@ -361,9 +369,11 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
             let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &extra_files)?;
             // A system disk starts as the ramdisk (or an installed image). A
             // setup target is a distinct blank secondary ATA disk.
-            let attached_disk = (sc.system_disk || sc.target_disk).then(|| run_dir.join("c.img"));
+            let attached_disk = (sc.system_disk || sc.target_disk || sc.ntfs_disk).then(|| run_dir.join("c.img"));
             if let Some(image) = &attached_disk {
-                if sc.target_disk {
+                if sc.ntfs_disk {
+                    ntfs_disk::create(&run_dir, image)?;
+                } else if sc.target_disk {
                     let file = std::fs::OpenOptions::new()
                         .write(true)
                         .create(true)
@@ -418,6 +428,8 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 },
                 system_disk: if sc.installed_disk && boot_image.is_none() { None } else { attached_disk.clone() },
             };
+            let ntfs_hash =
+                if sc.ntfs_disk { Some(ntfs_disk::digest(attached_disk.as_ref().expect("NTFS disk"))?) } else { None };
             let mut outcome = qemu::boot_and_watch(
                 &machine,
                 installed_target.as_ref(),
@@ -426,6 +438,14 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                 timeout.unwrap_or(sc.timeout),
                 &run_dir,
             )?;
+            if let Some(before) = ntfs_hash {
+                if ntfs_disk::digest(attached_disk.as_ref().expect("NTFS disk"))? != before {
+                    outcome.passed = false;
+                    outcome.reason = "NTFS disk changed during a read-only boot".into();
+                } else {
+                    println!("xtask: {label}: NTFS disk SHA-256 unchanged");
+                }
+            }
             if let (true, true, Some(image)) = (outcome.passed, sc.system_disk, &attached_disk) {
                 let check_image = if sc.gpt_disk { Some(partition::extract(image)?) } else { None };
                 match qemu::fsck(check_image.as_deref().unwrap_or(image)) {
