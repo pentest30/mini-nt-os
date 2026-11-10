@@ -13,6 +13,9 @@
  * - SendMessageTimeout of 100 ms to a procedure that sleeps 400 ms: 0 and
  *   ERROR_TIMEOUT;
  * - SendNotifyMessage: TRUE at once, W handles it later;
+ * - SetWindowPos of W from the worker: win32k sends WM_WINDOWPOSCHANGING,
+ *   whose lParam is a WINDOWPOS of the kernel, to W's thread; W's procedure
+ *   widens it, and the window takes the width it wrote;
  * - WaitMessage: a message sent while the main thread waits in it is
  *   handled during the wait, which goes on until a posted message;
  * - a SendMessage to a thread that ends without answering fails in about
@@ -67,6 +70,23 @@ typedef struct {
 } POINT;
 
 typedef struct {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+
+typedef struct {
+    HWND hwnd;
+    HWND hwndInsertAfter;
+    int x;
+    int y;
+    int cx;
+    int cy;
+    UINT flags;
+} WINDOWPOS;
+
+typedef struct {
     HWND hwnd;
     UINT message;
     WPARAM wParam;
@@ -77,6 +97,10 @@ typedef struct {
 
 #define WM_USER 0x0400
 #define WM_QUIT 0x0012
+#define WM_WINDOWPOSCHANGING 0x0046
+#define SWP_NOMOVE 0x0002
+#define SWP_NOZORDER 0x0004
+#define SWP_NOACTIVATE 0x0010
 #define SMTO_NORMAL 0x0000
 #define COLOR_WINDOW 5
 #define MAXIMUM_ALLOWED 0x02000000
@@ -118,6 +142,8 @@ __declspec(dllimport) LRESULT __stdcall SendMessageTimeoutW(HWND window, UINT me
 __declspec(dllimport) BOOL __stdcall SendNotifyMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) BOOL __stdcall SetProcessWindowStation(HWINSTA station);
 __declspec(dllimport) BOOL __stdcall SetThreadDesktop(HDESK desktop);
+__declspec(dllimport) BOOL __stdcall SetWindowPos(HWND window, HWND after, int x, int y, int cx, int cy, UINT flags);
+__declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
 __declspec(dllimport) BOOL __stdcall SwitchDesktop(HDESK desktop);
 
 static HDESK desktop;
@@ -169,10 +195,25 @@ static LRESULT __stdcall procedure_v(HWND hwnd, UINT message, WPARAM w, LPARAM l
     return DefWindowProcW(hwnd, message, w, l);
 }
 
+/* WM_WINDOWPOSCHANGING of the worker's SetWindowPos reached W: the thread
+ * that got it, and the width it carried. */
+static int position_thread_main;
+static int position_width;
+
 /* W, the main thread's window. */
 static LRESULT __stdcall procedure_w(HWND hwnd, UINT message, WPARAM w, LPARAM l)
 {
     switch (message) {
+    case WM_WINDOWPOSCHANGING: {
+        WINDOWPOS *position = (WINDOWPOS *)l;
+        if (position->cx == 123) {
+            /* The worker's SetWindowPos: W widens it. */
+            position_thread_main = GetCurrentThreadId() == main_thread;
+            position_width = position->cx;
+            position->cx = 150;
+        }
+        return 0;
+    }
     case WM_USER + 1:
         DbgPrint("[send] W got %x in the %s thread\n", message, GetCurrentThreadId() == main_thread ? "main" : "wrong");
         return (LRESULT)(w + 10 * l);
@@ -268,6 +309,14 @@ static DWORD __stdcall worker(void *parameter)
     ok = SendMessageTimeoutW(window_w, WM_USER + 1, 1, 2, SMTO_NORMAL, 5000, &result);
     DbgPrint("[send] SendMessageTimeout of 5 s: %d, result %lu\n", ok, result);
     DbgPrint("[send] SendNotifyMessage: %d\n", SendNotifyMessageW(window_w, WM_USER + 6, 0, 0));
+    {
+        RECT rect;
+        BOOL moved = SetWindowPos(window_w, 0, 0, 0, 123, 45, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        GetWindowRect(window_w, &rect);
+        DbgPrint("[send] SetWindowPos of W from the worker: %d; W got WM_WINDOWPOSCHANGING in the main thread %d, "
+                 "width %d; W is %ld wide\n",
+                 moved, position_thread_main, position_width, rect.right - rect.left);
+    }
     Sleep(100);
     /* WaitMessage in the main thread (WM_USER + 8), a message sent to it
      * meanwhile, then a posted one that ends the wait. */
