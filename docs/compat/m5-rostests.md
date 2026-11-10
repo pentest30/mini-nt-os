@@ -97,7 +97,8 @@ Le 2026-11-10, QEMU, processeur par défaut (chemin `int 2Eh`) ; ce sont les pla
 | kernel32 | 29 | 12 | 11 | 38 % | 11 |
 | **Ensemble** | **113** | 35 | **44** | **39 %** | |
 
-Le seuil du M5 (50 %) n'est pas atteint : il manque 6 tests en ntdll (39 sur 84), 4 en kernel32 (15 sur 29).
+Le seuil du M5 (50 %) n'est pas atteint : il manque 9 tests en ntdll (42 sur 84), 4 en kernel32 (15 sur 29),
+13 sur l'ensemble (57 sur 113).
 
 - **ntdll, passent** : DllLoadNotification, LdrLoadDll, NtAcceptConnectPort, NtAccessCheck,
   NtAccessCheckByTypeResultList, NtAdjustPrivilegesToken, NtCreateFile, NtCreateThread, NtDuplicateObject, NtMutant,
