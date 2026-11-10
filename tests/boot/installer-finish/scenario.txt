@@ -5,15 +5,17 @@
 # installed ESP marked by MINO.TAG.
 #
 # SETUP1.EXE temporarily occupies WINDOWS/SYSTEM32/WINLOGON.EXE on the
-# installation medium. The real ReactOS Winlogon is preserved as
-# WINLOGON.ORG and restored under its canonical name on the target. If the
+# installation medium, the real ReactOS Winlogon beside it as WINLOGON.ORG.
+# Neither reaches the target: the installed session's shell is the medium's
+# DESKTOP1.EXE under the Winlogon name (kernel/io/src/install.rs). If the
 # bootstrap were copied instead, the second boot would display setup again
 # and report that no safe target exists.
 #
 # `interactive`, as `cargo xtask image` builds the medium: no key is typed
 # while the kernel copies the system tree, and without it the probe ends
 # smss 10 s after the last key, in the middle of the copy ("stage copy:
-# 60%"), so Finish never comes.
+# 60%"), so Finish never comes. With it, the probe waits for smss for good:
+# phase 1 does not end, and the second boot is judged by its desktop.
 features = test-smss, interactive
 requires = userland, native
 initial-command = SETUP1.EXE
@@ -31,10 +33,11 @@ expect = [setup] finish requested; rebooting into the installed system
 expect = [power] NtShutdownSystem: reboot requested
 
 # Second boot: the target's 48 MiB ESP and system partition are used even
-# though the installation medium remains the primary boot disk.
+# though the installation medium remains the primary boot disk, and the
+# installed session reaches its desktop.
 expect = Io: GPT system partition 2: LBA 100352
 expect = [boot] Io: system disk \Device\HarddiskVolume1 (ATA, secondary master, FAT32
-expect = kernel: phase 1 done
+expect = [desktop] ready
 
 keys = [setup] ready => ret
 keys = [setup] screen disk 1 => ret
