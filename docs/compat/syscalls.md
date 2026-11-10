@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 119 | 296 |
-| win32k | 128 | 737 |
+| ntoskrnl | 121 | 296 |
+| win32k | 129 | 737 |
 
 ## ntoskrnl
 
@@ -199,7 +199,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00b5` | `NtQuerySystemInformation` | 4 | ✅ |
 | `0x00b6` | `NtQuerySystemTime` | 1 | ✅ |
 | `0x00b7` | `NtQueryTimer` | 5 |  |
-| `0x00b8` | `NtQueryTimerResolution` | 3 |  |
+| `0x00b8` | `NtQueryTimerResolution` | 3 | ✅ |
 | `0x00b9` | `NtQueryValueKey` | 6 | ✅ |
 | `0x00ba` | `NtQueryVirtualMemory` | 6 | ✅ |
 | `0x00bb` | `NtQueryVolumeInformationFile` | 5 | ✅ |
@@ -269,7 +269,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00fb` | `NtSetSystemTime` | 2 |  |
 | `0x00fc` | `NtSetThreadExecutionState` | 2 |  |
 | `0x00fd` | `NtSetTimer` | 7 |  |
-| `0x00fe` | `NtSetTimerResolution` | 3 |  |
+| `0x00fe` | `NtSetTimerResolution` | 3 | ✅ |
 | `0x00ff` | `NtSetUuidSeed` | 1 |  |
 | `0x0100` | `NtSetValueKey` | 6 | ✅ |
 | `0x0101` | `NtSetVolumeInformationFile` | 5 |  |
@@ -678,7 +678,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1167` | `NtUserDrawAnimatedRects` | 4 |  |
 | `0x1168` | `NtUserDrawCaption` | 4 |  |
 | `0x1169` | `NtUserDrawCaptionTemp` | 7 |  |
-| `0x116a` | `NtUserDrawIconEx` | 11 |  |
+| `0x116a` | `NtUserDrawIconEx` | 11 | ✅ |
 | `0x116b` | `NtUserDrawMenuBarTemp` | 5 |  |
 | `0x116c` | `NtUserEmptyClipboard` | 0 |  |
 | `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |

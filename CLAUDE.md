@@ -294,6 +294,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserSetCursor et GetCursor par thread, l'écran montrant celui du thread sous le pointeur ; WM_SETCURSOR à chaque
   message de la souris qui sort de la file, DefWindowProc (curseur de la classe, flèches doubles des bords) ; le
   curseur logiciel dessine toute forme ; scénario `cursor` (`tests/native/cursor1.c`).
+  M6, étape 16 (les icônes) : les icônes du système chargées par `user32` (rappel SETWNDICONS) ; l'icône du titre
+  (`cursor::caption_icon`, `Op::Icon`) ; WM_SETICON et WM_GETICON ; les propriétés des fenêtres dans un tas de la
+  section partagée (`shared::alloc`), où `user32` les lit ; NtUserDrawIconEx ; scénario `icons` (`tests/native/icon1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

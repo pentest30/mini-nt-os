@@ -309,7 +309,7 @@ pub(super) fn nt_user_set_prop(arguments: &[u32]) -> NtStatus {
             win32k::atom::add(win32k::atom::AtomName::String(&units))?
         };
         let window = win32k::window::get(handle).ok_or(abi::ntstatus::STATUS_INVALID_HANDLE)?;
-        win32k::window::set_property(&window, atom, data);
+        win32k::window::set_property(&window, atom, data, false);
         Ok(())
     };
     NtStatus(u32::from(set().is_ok()))

@@ -833,14 +833,11 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
         &crate::metrics::get,
         &system_color,
         &crate::font::text_run_named,
+        crate::cursor::caption_icon(window),
     );
     if unpainted.text {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         report_missing("the caption's text and button symbols without their fonts", &REPORTED);
-    }
-    if unpainted.icon {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("the caption's icon (icons)", &REPORTED);
     }
     if unpainted.scroll_bars {
         static REPORTED: AtomicBool = AtomicBool::new(false);

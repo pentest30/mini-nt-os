@@ -276,6 +276,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserDestroyCursor, Handler::Status(cursor::nt_user_destroy_cursor)),
     (services::NtUserDestroyMenu, Handler::Status(menu::nt_user_destroy_menu)),
     (services::NtUserDestroyWindow, Handler::Status(window::nt_user_destroy_window)),
+    (services::NtUserDrawIconEx, Handler::Status(cursor::nt_user_draw_icon_ex)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
     (services::NtUserEnumDisplaySettings, Handler::Status(user::nt_user_enum_display_settings)),

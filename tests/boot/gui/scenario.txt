@@ -79,7 +79,8 @@ expect = [gui] on WinSta0\Default
 expect = [gui] GetSystemMetrics: screen 1280x800, caption 20, frame 4, minimum width 112
 expect = [gui] GetSysColor: dc7e5a ffffff c8d0d4
 expect = [gui] GetSysColorBrush(COLOR_WINDOW): a stock brush, GetObjectType 2; of no brush 0
-expect = [gui] RegisterClassExW: atom c00a (0)
+# The first class atom after the system's (InitUserAtoms: SysICS, SysIC).
+expect = [gui] RegisterClassExW: atom c00c (0)
 expect = [gui] GetClassInfoExW: the class as registered
 expect = [gui] GetClassInfoExW(Button): user32's class
 expect = [gui] GetClassInfoExW(NoSuchClass): 0 (1411)
@@ -233,19 +234,22 @@ expect = [gui] done
 # The windows left visible, drawn by the kernel's DefWindowProc
 # (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under "Visible" at
 # 69, 69 (960 x 600): the raised edge, the caption's gradient from
-# COLOR_INACTIVECAPTION, the line under it, the close button. The caption's
-# text is in Tahoma Bold (win32k's fonts, ADR-013), in
-# COLOR_INACTIVECAPTIONTEXT: the l of "Visible" at 95, 82, its baseline at
-# 87; the close button's cross is Marlett's r, in COLOR_BTNTEXT (its centre
-# at 1014, 82, its face beside it at 1010, 82). Their client
+# COLOR_INACTIVECAPTION, the line under it, the close button. The caption
+# starts with the window's icon, the default one (user32's WINLOGO: 76, 82
+# dark), its class having none; the caption's text follows it, pushed by the
+# caption's height (19), in Tahoma Bold (win32k's fonts, ADR-013), in
+# COLOR_INACTIVECAPTIONTEXT: the stem of the b of "Visible" at 114, 82, its
+# baseline at 87; the close button's cross is Marlett's r, in COLOR_BTNTEXT
+# (its centre at 1014, 82, its face beside it at 1010, 82). Their client
 # areas are erased by user32's DefWindowProc (WM_ERASEBKGND: GetClipBox,
 # then FillRect with the class brush, COLOR_WINDOW + 1, batched in the TEB
 # and run when the callback returns): white from 73, 93 in "Visible".
 # "Pending", painted again (SWP_FRAMECHANGED), is clipped by "Visible"
 # above it: its right edge at 199, 60, the caption of "Visible" at 199, 80
 # and over the client area of "Pending" at 150, 85. The popup at 10, 10
-# (50 x 50) covers the caption of "Pending" up to 59, white (20, 12: no
-# call of an earlier batch runs again in it) but for its square (30, 15). The child "Framed" of
+# (50 x 50) covers the caption of "Pending" up to 59 (60, 10, above its
+# text), white (20, 12: no call of an earlier batch runs again in it) but for
+# its square (30, 15). The child "Framed" of
 # "Clipper" (WS_CLIPCHILDREN) sticks out of its parent's client area: its
 # border is clipped there (1044, 140) and drawn inside (1093, 140), its
 # client area erased (1070, 140) like its parent's (1150, 200), which,
@@ -281,8 +285,9 @@ screen = 73 93 FFFFFF
 screen = 1006 75 FFFFFF
 screen = 1014 82 000000
 screen = 1010 82 D4D0C8
-screen = 95 82 D4D0C8
-screen = 95 87 818181
+screen = 76 82 292929
+screen = 114 82 D4D0C8
+screen = 114 87 828282
 screen = 1028 668 404040
 screen = 1027 667 808080
 screen = 199 60 404040
@@ -291,7 +296,7 @@ screen = 150 85 858585
 screen = 100 55 FFFFFF
 screen = 30 15 000000
 screen = 20 12 FFFFFF
-screen = 60 15 929292
+screen = 60 10 929292
 screen = 1044 140 5A7EDC
 screen = 1093 140 000000
 screen = 1070 140 FFFFFF

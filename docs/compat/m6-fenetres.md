@@ -769,3 +769,36 @@ curseurs du système, la forme dessinée (toujours la flèche), le point chaud, 
 équivalente dans les scénarios : le noir ou le blanc des masques (chaque curseur de `user32` a une variante de 1 bit
 et une de 32 bits avec alpha ; sur un écran de 32 bits, LookupIconIdFromDirectoryEx prend la seconde, dont l'alpha
 l'emporte sur les masques) : `gdi::dibits::to_monochrome` n'a qu'un test hôte.
+
+## Étape 16 : les icônes (icônes du système, icône du titre, WM_SETICON, DrawIconEx, GetProp du client)
+
+Les 12 scénarios dont les fenêtres ont un menu système journalisaient « the caption's icon (icons): not yet ». Une
+icône est un objet curseur (étape 15) ; ce qui manquait, c'est d'où elle vient et qui la dessine (`cursoricon.c`,
+`nonclient.c`, `painting.c`, `defwnd.c` de win32k et de `user32`, ReactOS comme spécification).
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les icônes du système | au premier NtUserSwitchDesktop, après les curseurs, le rappel SETWNDICONS (n° 11, User32CallSetWndIconsFromKernel, co_IntSetWndIcons) : `user32` charge IDI_APPLICATION, IDI_HAND, IDI_QUESTION, IDI_EXCLAMATION, IDI_ASTERISK, IDI_WINLOGO et sa petite forme ; elles ne sont plus à aucun processus (IntLoadSystenIcons), et LoadIcon(NULL, IDI_*) d'une application les retrouve (FindExistingCursorIcon, second passage) |
+| L'icône du titre (`cursor::caption_icon`, NC_IconForWindow) | la petite icône de la fenêtre (WM_SETICON), sinon la grande, sinon la petite de sa classe, sinon la grande, sinon la petite IDI_WINLOGO du système (pas pour WS_EX_DLGMODALFRAME) ; dessinée à SM_CXSMICON × SM_CYSMICON au début du titre d'une fenêtre qui a un menu système et n'est pas une fenêtre d'outils, centrée dans un carré de la hauteur du titre, le texte décalé d'autant (UserDrawCaption ; `Op::Icon` de `gdi::draw`) |
+| WM_SETICON, WM_GETICON | DefWindowProc du noyau (DefWndSetIcon, DefWndGetIcon) : ICON_SMALL et ICON_BIG dans deux propriétés du système de la fenêtre (atomes `SysICS`, `SysIC`, publiés dans le `SERVERINFO` : `atomIconSmProp`, `atomIconProp`), le cadre repeint ; `user32` répond lui-même à WM_GETICON en lisant ces propriétés |
+| Les propriétés lues par le client | `user32` lit GetProp (et WM_GETICON) dans la liste `PropListHead` du `WND`, des `PROPERTY` (`abi::user::Property32`) qu'il atteint par `ulSharedDelta` : elles sont maintenant dans un tas à la fin de la section partagée de USER (`shared::alloc`, UserHeapAlloc), réécrites à chaque SetProp (`window::publish_properties`) ; jusque-là, GetProp d'une application rendait toujours NULL |
+| DrawIconEx | NtUserDrawIconEx (`cursor::draw_icon_ex`, UserDrawIconEx) : la forme à la taille demandée (0 : la sienne, ou SM_CXICON avec DI_DEFAULTSIZE), au plus proche, dans le DC là où il peint ; DI_NORMAL, DI_IMAGE, DI_MASK ; ERROR_INVALID_CURSOR_HANDLE pour un handle qui n'en est pas un |
+
+Ce qui manque : le pinceau de DrawIconEx qui efface le fond (`hbrFlickerFreeDraw`, journalisé, sans effet),
+ICON_SMALL2, `hIconSmWindows` et `hIconWindows` du `SERVERINFO` (gardées par win32k seul), GetIconInfo, CopyImage et
+CreateIconIndirect (GetObject, GetDIBits), une petite icône de classe tirée de la grande par CopyImage (la grande est
+réduite au dessin), le titre d'une fenêtre réduite, NtUserRemoveProp et l'énumération des propriétés
+(NtUserBuildPropList). Le tas partagé tient environ 750 propriétés à la fois.
+
+Le banc d'essai : `tests/native/icon1.c` (`ICON1.EXE` à la place de `winlogon.exe`, scénario `icons`) : les 7
+icônes du système sont chargées ; IDI_APPLICATION est la même à chaque chargement ; trois fenêtres à menu système : A
+(classe sans icône) montre la petite IDI_WINLOGO, B (classe à IDI_HAND) la montre et la dessine à 32 × 32 dans sa
+zone cliente par DrawIconEx (TRUE ; un faux handle : FALSE, 1402), C reçoit IDI_ASTERISK par WM_SETICON (aucune
+avant), que WM_GETICON rend (ICON_BIG : aucune) et que son titre montre. Neuf pixels vérifiés à l'écran.
+
+Tests : hôte (`nonclient` : la place de l'icône, ni sans menu système ni dans une fenêtre d'outils ; `cursor` : une
+forme dessinée à la taille demandée, DI_IMAGE, DI_MASK, coupée ; `window` : la chaîne des `PROPERTY` depuis le
+`WND`) ; le scénario `icons` sur AMD et Intel, et les scénarios GUI. Dans `gui`, l'icône par défaut paraît au
+début des titres, dont le texte se décale de 19 pixels (la hauteur du titre) : deux pixels vérifiés ont suivi, et
+l'atome de la première classe devient `c00c` : comme InitUserAtoms, win32k crée `SysICS` et `SysIC` à son
+initialisation, avant toute classe.
