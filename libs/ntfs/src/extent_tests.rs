@@ -3,7 +3,7 @@ use crate::tests::{nonresident, p16, p32, p64, record, resident};
 use crate::{Error, Volume};
 use alloc::{vec, vec::Vec};
 
-fn list_entry(kind: u32, name: &[u8], lowest: u64, number: u64, id: u16) -> Vec<u8> {
+pub(super) fn list_entry(kind: u32, name: &[u8], lowest: u64, number: u64, id: u16) -> Vec<u8> {
     let mut b = vec![0; (26 + name.len() + 7) & !7];
     let size = b.len();
     p32(&mut b, 0, kind);
@@ -16,7 +16,7 @@ fn list_entry(kind: u32, name: &[u8], lowest: u64, number: u64, id: u16) -> Vec<
     b[26..26 + name.len()].copy_from_slice(name);
     b
 }
-fn list(data: &[u8]) -> Vec<u8> {
+pub(super) fn list(data: &[u8]) -> Vec<u8> {
     let mut a = resident(data);
     p32(&mut a, 0, 0x20);
     p16(&mut a, 14, 9);
@@ -167,10 +167,10 @@ fn index_allocation_and_bitmap_are_resolved_from_extensions() {
 }
 
 #[test]
-fn mft_attribute_list_bootstrap_remains_explicitly_unsupported() {
+fn mft_with_a_list_and_all_data_in_base_is_supported() {
     let mut b = image();
     let mut attrs = list(&list_entry(0x80, &[], 0, 0, 0));
     attrs.extend(nonresident(&[0x11, 32, 4, 0], 32, 16384, 16384));
     put_record(&mut b, 0, &attrs, false);
-    assert!(matches!(Volume::open(b.as_slice()), Err(Error::Unsupported("MFT attribute list bootstrap"))));
+    assert_eq!(Volume::open(b.as_slice()).unwrap().lookup_path("/folder/été.txt").unwrap().record, 7);
 }

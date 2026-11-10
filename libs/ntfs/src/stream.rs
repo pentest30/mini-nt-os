@@ -26,6 +26,16 @@ impl Stream {
     /// Assemble a complete, ordered stream. Only the first extent defines the
     /// stream sizes; extension records' size fields are not authoritative.
     pub fn assemble(attrs: &[&Attribute<'_>], g: Geometry) -> Result<Self, Error> {
+        Self::assemble_inner(attrs, g, true)
+    }
+
+    /// Bootstrap-only mapping with holes. Call `covers` before each read; this
+    /// stream must never escape as a mounted volume's complete MFT mapping.
+    pub(crate) fn assemble_partial(attrs: &[&Attribute<'_>], g: Geometry) -> Result<Self, Error> {
+        Self::assemble_inner(attrs, g, false)
+    }
+
+    fn assemble_inner(attrs: &[&Attribute<'_>], g: Geometry, complete: bool) -> Result<Self, Error> {
         let first = attrs.first().ok_or(Error::NotFound)?;
         if u16_at(first.data, 12)? != 0 {
             return Err(Error::Unsupported("compressed, encrypted or sparse attribute"));
@@ -44,13 +54,17 @@ impl Stream {
         if initialized > size || size > allocated || allocated > g.volume_size {
             return Err(Error::Invalid("stream sizes"));
         }
+        if u64_at(first.data, 16)? != 0 {
+            return Err(Error::Invalid("first extent VCN"));
+        }
         let mut runs = Vec::new();
         let mut next = 0;
         for attr in attrs {
             if !attr.nonresident {
                 return Err(Error::Invalid("mixed resident and nonresident extents"));
             }
-            if u64_at(attr.data, 16)? != next {
+            let lowest = u64_at(attr.data, 16)?;
+            if lowest < next || (complete && lowest != next) {
                 return Err(Error::Invalid("extent gap or overlap"));
             }
             let part = Self::extent(attr, g)?;
@@ -60,10 +74,38 @@ impl Stream {
             runs.extend(part);
             next = u64_at(attr.data, 24)?.checked_add(1).ok_or(Error::Bounds)?;
         }
-        if next.checked_mul(u64::from(g.cluster_size)).ok_or(Error::Bounds)? != allocated {
+        let end = next.checked_mul(u64::from(g.cluster_size)).ok_or(Error::Bounds)?;
+        if end > allocated || (complete && end != allocated) {
             return Err(Error::Invalid("mapping coverage"));
         }
         Ok(Self::Runs { runs, size, initialized })
+    }
+
+    /// Whether the entire byte range has initialized, known physical mappings.
+    /// A partial bootstrap mapping must not issue I/O through an unknown hole.
+    pub(crate) fn covers(&self, offset: u64, length: u64) -> bool {
+        let Some(end) = offset.checked_add(length) else { return false };
+        match self {
+            Self::Resident(data) => end <= data.len() as u64,
+            Self::Runs { runs, size, initialized } => {
+                if end > *size || end > *initialized {
+                    return false;
+                }
+                let mut at = offset;
+                for run in runs {
+                    if at == end {
+                        return true;
+                    }
+                    if run.start > at {
+                        return false;
+                    }
+                    if at < run.start + run.length {
+                        at = end.min(run.start + run.length);
+                    }
+                }
+                at == end
+            }
+        }
     }
 
     fn extent(attr: &Attribute<'_>, g: Geometry) -> Result<Vec<Run>, Error> {

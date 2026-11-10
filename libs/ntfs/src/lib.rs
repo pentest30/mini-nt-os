@@ -14,6 +14,7 @@ extern crate alloc;
 mod attribute_list;
 mod boot;
 mod index;
+mod mft;
 mod namespace;
 pub use index::{DirectoryEntry, FileReference};
 mod record;
@@ -23,6 +24,8 @@ pub use volume::Volume;
 
 #[cfg(test)]
 mod extent_tests;
+#[cfg(test)]
+mod mft_tests;
 #[cfg(test)]
 mod path_tests;
 #[cfg(test)]

@@ -1,5 +1,7 @@
 # Notes de passation
 
+- **M9 NTFS, bootstrap de MFT répartie** (`feature/m9-ntfs-mft-bootstrap`, depuis main `605ae94`, PR #103 fusionnée) : résolution progressive des extensions DATA de la MFT, uniquement à travers les mappings déjà validés ; bornes et validations partagées avec le lecteur ATTRIBUTE_LIST. 33 tests unitaires passent, dont dépendances hors ordre VCN, enregistrements chevauchant deux runs et refus des cycles sans E/S spéculatives. Aucun branchement noyau. Suite de cette PR : tests de corruption et limites, images ntfs-3g, lint et tests hôte complets. Contrat : `docs/compat/ntfs.md`.
+
 - **Une fenêtre créée avec un menu** (`claude/desktop-launch-menu`) : `desktop-launch` échouait sur `main` depuis les
   menus de la PR #107 (`d4d2231`). Tant que CreateMenu n'existait pas, LoadMenu rendait NULL et le dialogue de
   `taskmgr` se créait sans barre. Depuis, LoadMenu rend un vrai menu, que NtUserCreateWindowEx refusait encore
