@@ -13,17 +13,19 @@ pub struct Volume<D> {
 }
 
 impl<D: ReadAt> Volume<D> {
-    /// Bootstrap $MFT from its first FILE record. The full mapping must reside
-    /// in this record; attribute lists and mirror recovery are not supported.
+    /// Bootstrap $MFT from its first FILE record and progressively reachable
+    /// DATA extensions. The attribute list must be fully mapped in the base.
+    /// Unreachable dependencies and mirror recovery are not supported.
     pub fn open(mut device: D) -> Result<Self, Error> {
         let geometry = Geometry::read(&mut device)?;
         let mut first = vec![0; geometry.record_size as usize];
         device.read_exact_at(geometry.mft_cluster * u64::from(geometry.cluster_size), &mut first)?;
         let record = Record::parse(first)?;
-        let mft = data_stream(&record, geometry)?;
-        if record.base_reference() != 0
-            || record.is_directory()
-            || matches!(mft, Stream::Resident(_))
+        if record.base_reference() != 0 || record.is_directory() {
+            return Err(Error::Invalid("MFT stream"));
+        }
+        let mft = crate::mft::bootstrap(&mut device, &record, geometry)?;
+        if matches!(mft, Stream::Resident(_))
             || !mft.fully_initialized()
             || mft.len() < u64::from(geometry.record_size)
             || mft.len() % u64::from(geometry.record_size) != 0
@@ -95,21 +97,4 @@ impl<D: ReadAt> Volume<D> {
         }
         self.stream(number, 0x80, &[])?.ok_or(Error::NotFound)
     }
-}
-
-fn data_stream(record: &Record, geometry: Geometry) -> Result<Stream, Error> {
-    let attributes = record.attributes()?;
-    if attributes.iter().any(|a| a.kind == 0x20) {
-        return Err(Error::Unsupported("MFT attribute list bootstrap"));
-    }
-    let mut found = None;
-    for attr in &attributes {
-        if attr.kind == 0x80 && attr.name.is_empty() {
-            if found.is_some() {
-                return Err(Error::Unsupported("multiple DATA extents"));
-            }
-            found = Some(Stream::parse(attr, geometry)?);
-        }
-    }
-    found.ok_or(Error::NotFound)
 }

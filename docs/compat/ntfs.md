@@ -15,7 +15,7 @@ sont pas modifiés. Les critères de sortie de M9 restent inchangés.
   de 512 octets à 64 Kio, la taille signée des enregistrements FILE (512 octets
   à 64 Kio) et les positions de la MFT et de son miroir.
 - `Volume::open` lit le premier FILE à l'emplacement annoncé, vérifie les
-  fixups USA de chaque secteur, charge le flux DATA de `$MFT`, puis vérifie
+  fixups USA de chaque secteur, reconstitue le flux DATA de `$MFT`, puis vérifie
   que son mapping ramène bien au même premier enregistrement.
 - `Volume::record`, `file_size` et `read_file` permettent de lire les records
   alloués et les flux DATA sans nom. La MFT et les fichiers peuvent être
@@ -86,10 +86,16 @@ résolues en interne pour lire le fichier ou son index.
 Refus des secteurs autres que 512 octets, attributs compressés, sparse ou
 chiffrés et reparse points. Une liste dont le mapping est lui-même réparti
 sur plusieurs records reste hors périmètre.
-Le flux `$MFT` doit être intégralement initialisé et décrit dans son premier
-record, sans ATTRIBUTE_LIST : son bootstrap ne peut pas encore résoudre les
-extensions de sa propre table. Le miroir est localisé mais ne sert pas à
-récupérer une MFT corrompue.
+Le flux `$MFT` doit être intégralement initialisé, avec son premier extent DATA
+dans le record de base. Son ATTRIBUTE_LIST peut référencer des extensions :
+le bootstrap ouvre un record seulement quand tous ses octets sont couverts par
+les mappings déjà validés, puis ajoute ses extents connus. Les dépendances
+peuvent se résoudre hors ordre des VCN. Chaque itération charge un record
+distinct, avec la même limite de 64 records (base comprise). Une dépendance
+inaccessible donne `Unsupported("unreachable MFT extension")` ; aucune adresse
+physique n'est devinée et aucun scan du disque n'est tenté. La couverture complète
+et contiguë est exigée avant de publier le volume. Le miroir est localisé mais
+ne sert pas à récupérer une MFT corrompue.
 
 Pas encore de flux nommés, de journal, de récupération ou d'écriture.
 Un volume valide qui sort de ce périmètre peut être refusé.
@@ -109,6 +115,17 @@ les fixups au milieu des données résidentes, les trous d'initialisation, EOF,
 les erreurs d'E/S, les métadonnées tronquées ou incohérentes, les dépassements
 et les fonctionnalités refusées. Un balayage de mutations d'octets exerce
 les bornes du lecteur sur les métadonnées du boot et de plusieurs records.
+
+Le bootstrap MFT dispose d'images synthétiques à trois extents, avec listes
+résidentes/non résidentes et dépendances successives ou hors ordre VCN. Les
+tests effacent l'ancienne disposition contiguë et lisent ensuite des chemins
+à travers la MFT reconstituée. Ils couvrent les records chevauchant des runs,
+les erreurs d'E/S, les références étrangères/périmées, les fixups corrompus,
+la couverture incomplète, la limite de 64 records et les mutations d'octets.
+Un lecteur instrumenté interdit toute E/S vers un record partiellement mappé
+ou une dépendance circulaire. Les images ntfs-3g ci-dessous vérifient les
+régressions sur volumes réels ; elles ne constituent pas une validation
+indépendante d'une MFT dont DATA est réparti entre plusieurs records.
 
 Le test `mkntfs` est ignoré par défaut pour ne pas imposer les outils ntfs-3g
 à chaque build. Le workflow séparé `.github/workflows/ntfs-readonly.yml`
@@ -131,12 +148,11 @@ Validé avec ntfs-3g 2022.10.3 (paquet Debian 1:2022.10.3-5+deb13u3).
 
 ## Suite, en PR distinctes
 
-1. Bootstrap d'une MFT dont les données sont réparties entre records, avec
-   validation de la progression et des références ; garder les refus pour
-   les fonctionnalités restantes.
-2. Adaptateur de partition et montage dans Io, à PASSIVE_LEVEL (allocations et
+1. Adaptateur de partition et montage dans Io, à PASSIVE_LEVEL (allocations et
    E/S bloquantes), avec scénarios QEMU. Coordonner alors les changements
    partagés de `Cargo.toml`, de l'initialisation et du harness.
+2. Étendre les fonctionnalités restantes selon les volumes de référence,
+   notamment les listes dont le mapping lui-même est réparti entre records.
 
 Le développement actuel partage seulement les manifests Cargo et la note de
 passation avec les autres chantiers. Aucun fichier `abi`, USER, GDI ou pilote
