@@ -154,6 +154,7 @@ typedef struct {
 #define RED_PIXEL 0x00FF0000
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+__declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
 
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
@@ -387,6 +388,9 @@ DWORD __stdcall GuiStartup(void)
             DispatchMessageW(&message);
     DbgPrint("[bitmap] painted: %s\n", painted ? "yes" : "no");
     DbgPrint("[bitmap] done\n");
+    /* Its windows go with the process: the scenario captures the screen
+     * meanwhile. */
+    Sleep(5000);
     ExitProcess(EXIT_STATUS);
     return 0;
 }

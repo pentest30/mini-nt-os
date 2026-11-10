@@ -697,6 +697,12 @@ les crochets (HCBT_DESTROYWND, HSHELL_WINDOWDESTROYED), le WM_MOUSEMOVE que Reac
 curseur, le menu système, `spwndLastActive` d'un propriétaire, l'effacement de ce qu'une fille cachée découvre dans
 son parent (l'étape 5 ne le fait pas non plus).
 
+Les fenêtres d'un programme partent maintenant avec son processus, comme sous XP : les scénarios qui capturaient
+l'écran après la fin de leur programme (`gui`, `text`, `bitmap`) n'y voyaient plus que le bureau. Leurs programmes,
+comme ceux de `mouse` et `mouse-windows` (qui finissaient juste après leur dernier marqueur, une course), attendent
+5 s après lui, comme `dialog` et `listview` : la capture se fait pendant ce temps, et `gui`, `text` et `bitmap`
+n'attendent plus leur statut de sortie (leur marqueur `done` dit qu'ils sont allés au bout).
+
 Tests : hôte (`handles` : processus et types des entrées ; `queue` : les messages d'une fenêtre détruite, la file
 vidée ; `sent` : un message abandonné réveille son envoyeur sans valeur ; `gdi::handles` : les objets d'un
 processus ; `gui` : l'adresse du serveur d'un `PROCESSINFO`) ; le scénario `destroy`, sur les deux CPU, et les

@@ -14,7 +14,10 @@
   sa station. La table des handles USER retient le processus et le type de chaque objet : GetGuiResources compte les
   fenêtres. Corrigé : NtUserGetGuiResources prenait 1 pour GDI et 2 pour USER (le SDK : 0 et 1). Tests : hôte
   (`handles`, `queue`, `sent`, `gdi::handles`, `gui`), scénario `destroy` (`tests/native/destroy1.c`, un processus
-  fils compris), sur AMD et Intel, et les scénarios GUI touchés. Vu en chemin : `user32` ne sait pas lire nos menus
+  fils compris), sur AMD et Intel, et les scénarios GUI touchés. Les fenêtres partant avec leur processus, les
+  programmes de `gui`, `text`, `bitmap`, `mouse` et `mouse-windows` attendent 5 s après leur dernier marqueur, le
+  temps de la capture d'écran (`gui`, `text` et `bitmap` n'attendent plus leur statut de sortie). Vu en chemin :
+  `user32` ne sait pas lire nos menus
   (IsMenu toujours FALSE ; AppendMenu(MF_POPUP) n'attache pas le sous-menu, faute de `MIIM_SUBMENU`) : à reprendre
   avec la branche des menus. Pas encore : WM_ASYNC_DESTROYWINDOW aux enfants d'un autre thread, les crochets, le
   WM_MOUSEMOVE après une destruction, le menu système, `spwndLastActive`.

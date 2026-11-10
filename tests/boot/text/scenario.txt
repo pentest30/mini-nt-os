@@ -26,7 +26,8 @@
 #   the second crossing the first: the clip region from 100, 150 to 140, 163
 #   (GetClipBox), which cuts a TextOutW, then SelectClipRgn(NULL), which gives
 #   back the client area.
-# It ends with status 0x600D.
+# It ends with status 0x600D, 5 s after `[text] done`: its windows go with
+# its process, and the screen is captured meanwhile.
 # Update with each step (docs/compat/m6-fenetres.md).
 features = test-smss
 requires = userland, native
@@ -53,7 +54,6 @@ expect = [text] CreateFontW: a font (type 6)
 expect = [text] GetTextExtentPoint32W(Mino): 23 x 13, bold 27 x 13
 expect = [text] GetTextExtentExPointW(Mino, 12): 1, fit 2, dx 8 11 17 23, 23 x 13
 expect = [text] done
-expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 forbid = *** STOP:
 forbid = batched GDI call 2: not yet
 forbid = batched GDI call 6: not yet

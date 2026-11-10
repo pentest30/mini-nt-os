@@ -352,6 +352,9 @@ DWORD __stdcall GuiStartup(void)
         }
     }
     DbgPrint("[mouse2] done\n");
+    /* Its windows go with the process: the scenario captures the screen
+     * meanwhile. */
+    Sleep(5000);
     ExitProcess(EXIT_STATUS);
     return 0;
 }
