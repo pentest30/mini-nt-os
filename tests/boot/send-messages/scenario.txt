@@ -37,6 +37,11 @@ expect = [send] SendMessageTimeout of 100 ms: 0, error 1460
 expect = [send] SendMessageTimeout of 5 s: 1, result 21
 expect = [send] SendNotifyMessage: 1
 expect = [send] W got the notification in the main thread
+# A kernel buffer to another thread (M5, step 26): the WINDOWPOS of
+# WM_WINDOWPOSCHANGING goes to W's thread as a copy, and what W's
+# procedure writes in it comes back (150 wide, not 123).
+expect = [send] SetWindowPos of W from the worker: 1; W got WM_WINDOWPOSCHANGING in the main thread 1, width 123; W is 150 wide
+forbid = with a kernel buffer sent to another thread: not yet
 expect = [send] sent during WaitMessage: 7
 expect = [send] WaitMessage returned; the sent message handled during it 1
 expect = [send] SendMessage to a thread that ended: 0, under 2 s 1

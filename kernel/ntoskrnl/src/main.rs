@@ -9927,12 +9927,15 @@ fn mount_boot_volumes() {
         log::info!("[boot] Io: boot volume {} (FAT32, {size} bytes)", io_manager::RAMDISK_VOLUME);
     }
     match volumes.disk {
+        Some(Ok(sectors)) if volumes.ntfs_data => {
+            log::info!("[boot] Io: NTFS data volume {} (read-only, {sectors} sectors), D:", io_manager::DISK_VOLUME)
+        }
         Some(Ok(sectors)) => log::info!(
             "[boot] Io: system disk {} (ATA, {}, FAT32, {sectors} sectors)",
             io_manager::DISK_VOLUME,
             if volumes.disk_primary { "primary master" } else { "secondary master" }
         ),
-        Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no FAT32 volume: {status}"),
+        Some(Err(status)) => log::warn!("[boot] Io: the ATA system disk holds no supported volume: {status}"),
         None => {}
     }
     match volumes.system {

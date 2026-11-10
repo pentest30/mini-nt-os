@@ -402,8 +402,12 @@ fn a_volume_describes_itself_and_dates_what_it_writes() {
     let volume = alloc::sync::Arc::new(volume);
 
     assert_eq!(volume.label(), Ok(VolumeLabel { serial: 0x4D49_4E4F, label: "MINO DISK".into() }));
-    let empty =
-        Space { total_clusters: clusters, free_clusters: clusters - 1, sectors_per_cluster: 1, bytes_per_sector: 512 };
+    let empty = Space {
+        total_clusters: u64::from(clusters),
+        free_clusters: u64::from(clusters - 1),
+        sectors_per_cluster: 1,
+        bytes_per_sector: 512,
+    };
     assert_eq!(volume.space(), Ok(empty), "the root takes a cluster");
 
     // Created now: creation (to the hundredth), last write and access (to
@@ -416,7 +420,7 @@ fn a_volume_describes_itself_and_dates_what_it_writes() {
     assert!(volume.list(&volume.root()).unwrap().contains(&String::from("A.TXT")), "beside the label");
     CLOCK.store(nt_time(DATE, LATER, 0), core::sync::atomic::Ordering::Relaxed);
     file.write(0, &[7u8; 1500]).unwrap();
-    assert_eq!(volume.space().unwrap().free_clusters, clusters - 1 - 3, "three clusters written");
+    assert_eq!(volume.space().unwrap().free_clusters, u64::from(clusters - 1 - 3), "three clusters written");
     let written = file.node().unwrap();
     assert_eq!((written.creation_time, written.last_write_time), (created.creation_time, nt_time(DATE, LATER, 0)));
 
@@ -498,9 +502,9 @@ fn a_volume_creates_and_opens_long_names() {
     // alias; the alias alone is not a second entry.
     assert_eq!(volume.lookup(&root, "kernel32_vista.dll").unwrap().size, 2);
     let listed = volume.entries(&root).unwrap();
-    let kernel32 = listed.iter().find(|e| e.name == "KERNEL32_VISTA.DLL").unwrap();
-    assert_eq!(kernel32.short_name.as_deref(), Some("KERNEL~1.DLL"));
-    assert_eq!(listed.iter().filter(|e| e.name == "KERNEL~1.DLL").count(), 0);
+    let kernel32 = listed.iter().find(|e| e.name == "KERNEL32_VISTA.DLL".encode_utf16().collect::<Vec<_>>()).unwrap();
+    assert_eq!(kernel32.short_name.as_deref(), Some("KERNEL~1.DLL".encode_utf16().collect::<Vec<_>>().as_slice()));
+    assert_eq!(listed.iter().filter(|e| e.name == "KERNEL~1.DLL".encode_utf16().collect::<Vec<_>>()).count(), 0);
     // The same long name twice is refused; a different one is not.
     assert_eq!(volume.create(&root, "KERNEL32_VISTA.DLL", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
     assert!(volume.create(&root, "KERNEL32_VISTA.TXT", false, 0).is_ok());

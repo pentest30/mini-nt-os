@@ -1,10 +1,63 @@
-# M9 préparatoire — NTFS en lecture seule
+# M9 — NTFS en lecture seule
 
 `libs/ntfs` prépare un sous-lot de M9 en parallèle de M6. La bibliothèque
 Rust `no_std` + `alloc` n'a aucune dépendance externe et interdit `unsafe`.
-Elle ne monte aucun volume dans Mino : elle lit des fichiers **par numéro MFT ou chemin**
-sur une interface de lecture fournie par l'appelant. Le noyau et `win32k` ne
-sont pas modifiés. Les critères de sortie de M9 restent inchangés.
+Elle lit des fichiers **par numéro MFT ou chemin** sur une interface de lecture
+fournie par l'appelant. `kernel/io` l'adapte maintenant aux partitions et aux
+objets Volume/File du noyau. `win32k` n'est pas modifié. Les critères de sortie
+de M9 restent inchangés : ce lot est un montage de données en lecture seule.
+
+## Montage dans Mino
+
+`Volume::mount_partition` reconnaît NTFS par sa signature, sur une partition
+dont la capacité est connue. Un NTFS corrompu ne retombe pas sur FAT32.
+La détection existante choisit la première partition GPT Basic Data du disque
+ATA attaché, ou le volume brut sans GPT. Elle ne parcourt pas toutes les
+partitions. Les secteurs physiques de 512 octets sont requis.
+
+Un volume NTFS devient `\Device\HarddiskVolume1`, accessible par `D:`.
+Il ne remplace pas le volume FAT de `C:` ou de `SystemRoot`. Le démarrage et
+l'installation de Mino sur NTFS ne font pas partie de ce lot.
+
+L'adaptateur traduit les lectures en octets en lectures de secteurs, y compris
+les lectures non alignées, après vérification de la plage entière. Chaque
+opération crée son lecteur indépendant : aucune allocation ou lecture NTFS
+n'est faite sous un spinlock de volume. Les appels se font à PASSIVE_LEVEL.
+Les lecteurs indépendants partagent toutefois le disque : `hal::ata` protège
+chaque commande PIO complète par un KSpinLock propre au canal (sélection,
+commande, transfert, attente de fin). IDENTIFY, lecture, écriture et FLUSH
+partagent ce verrou, y compris entre copies et maître/esclave. La préemption
+est différée à DISPATCH_LEVEL pendant la commande ; aucune allocation du
+système de fichiers n’a lieu sous ce verrou. Ordre : volume éventuel puis
+canal, jamais l’inverse. Les deux canaux restent indépendants.
+Ce choix relit la MFT et `$UpCase` plutôt que de maintenir un cache partagé ;
+le média doit rester stable pendant le montage (pas de retrait ni d'écriture
+externe). Un cache et le démontage sont des travaux ultérieurs.
+
+Les appels de fichiers permettent ouverture relative ou absolue, lecture,
+énumération, tailles 64 bits, dates de STANDARD_INFORMATION, label, espace
+libre via `$Bitmap` et identification du système de fichiers. Les records
+internes réservés 0 à 15 ne sont pas énumérés comme fichiers utilisateur ; les
+alias DOS sont rattachés aux entrées Win32. L’énumération NtQueryDirectoryFile conserve les unités UTF-16 brutes,
+y compris les surrogates isolés, dans les noms longs et les alias DOS.
+La capture des chemins par le gestionnaire d’objets et le helper `list()`
+restent limités aux noms représentables en UTF-8 ; l’ouverture d’un nom
+contenant un surrogate isolé reste à implémenter.
+Les motifs d'énumération utilisent le moteur existant d'Io ; la résolution des
+composants utilise bien `$UpCase` du volume.
+
+Toutes les mutations, même sur un disque physiquement inscriptible, échouent
+avec `STATUS_MEDIA_WRITE_PROTECTED` : ouverture demandant des droits de
+modification, création, écrasement, écriture, taille et attributs/dates.
+`GENERIC_READ` et `MAXIMUM_ALLOWED` permettent la lecture : les droits
+de mutation sont retirés du maximum avant insertion dans la table des handles.
+Une demande explicite de ces droits reste refusée, même avec MAXIMUM_ALLOWED.
+NtWriteFile sur un handle ainsi réduit échoue avec `STATUS_ACCESS_DENIED`.
+Un flush NTFS est sans effet et ne sollicite pas le périphérique.
+FileFsAttributeInformation annonce `NTFS` et `FILE_READ_ONLY_VOLUME`.
+Les ACL NTFS ne sont pas interprétées. Les informations communes à FAT/NTFS
+restent un sous-ensemble : allocation arrondie au cluster, un lien déclaré et
+date de changement représentée par la dernière écriture.
 
 ## Contrat et périmètre
 
@@ -108,6 +161,9 @@ cargo test -p ntfs
 cargo clippy -p ntfs --all-targets -- -D warnings
 # Outils ntfs-3g sur PATH : mkntfs, ntfscp, ntfsls, ntfscat et ntfsinfo.
 cargo test -p ntfs --test mkntfs -- --ignored
+cargo test -p io-manager --test ntfs -- --ignored
+# Avec QEMU, OVMF, MinGW/LLVM et le userland ReactOS épinglé :
+cargo xtask test --boot --scenario ntfs-readonly
 ```
 
 Les tests synthétiques couvrent la MFT fragmentée, les runs vers l'arrière,
@@ -146,15 +202,34 @@ blocs tronqués et erreurs de `$UpCase` sont couverts par les tests synthétique
 Il ne monte aucun système de fichiers et ne requiert pas root.
 Validé avec ntfs-3g 2022.10.3 (paquet Debian 1:2022.10.3-5+deb13u3).
 
+Le test d'adaptateur monte une vraie image mkntfs à un offset non nul, ouvre et
+lit via `File`, vérifie Unicode/EOF/métadonnées/énumération et refuse toutes les
+mutations. Le périphérique instrumenté compte zéro écriture et zéro flush,
+y compris à la destruction du volume. Le scénario `ntfs-readonly` crée une
+partition GPT/NTFS et fait appeler les vrais services NT par `NTFS1.EXE`, lié
+à ntdll. Il vérifie aussi que C: reste sur le ramdisk FAT et que le SHA-256 de
+tout le disque attaché reste inchangé après chaque boot (AMD et Intel).
+Les deux tests incluent un nom contenant le surrogate isolé 0xD800 dans
+FILE_NAME et $I30 : l’énumération restitue exactement ses unités UTF-16.
+Un test hôte vérifie l’exclusion des transactions simulées entre copies et
+maître/esclave, l’indépendance des canaux et la libération après erreur.
+NTFS1 démarre également deux threads avec leurs propres handles et tampons :
+256 lectures à des offsets différents, 2 Mio vérifiés octet par octet sous
+QEMU AMD et Intel, sans modifier le disque. Ce stress complète le contrôle
+du verrou ; il ne force pas une préemption à un cycle PIO précis.
+Contrôle par mutation : retirer seulement le verrou de read_sectors fait
+échouer le scénario AMD avec `[ntfs] FAIL: concurrent read status`.
+Ils vérifient aussi les ouvertures GENERIC_READ/MAXIMUM_ALLOWED, la lecture
+et le refus d’écriture par les droits du handle (STATUS_ACCESS_DENIED).
+
 ## Suite, en PR distinctes
 
-1. Adaptateur de partition et montage dans Io, à PASSIVE_LEVEL (allocations et
-   E/S bloquantes), avec scénarios QEMU. Coordonner alors les changements
-   partagés de `Cargo.toml`, de l'initialisation et du harness.
+1. Cache partagé à verrou bloquant, démontage et choix de plusieurs partitions ;
+   étendre les informations et la sémantique des noms exposées par Io.
 2. Étendre les fonctionnalités restantes selon les volumes de référence,
    notamment les listes dont le mapping lui-même est réparti entre records.
 
-Le développement actuel partage seulement les manifests Cargo et la note de
-passation avec les autres chantiers. Aucun fichier `abi`, USER, GDI ou pilote
+L'intégration partage les objets de fichiers d'Io, les informations de volume
+des services NT et le harness QEMU. Aucun code USER, GDI ou pilote d'entrée
 M6 n'est modifié. Le code est original ; les structures disque sont décodées
 par offsets, sans portage de code Microsoft ou de ntfs-3g.
