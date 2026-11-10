@@ -17,6 +17,7 @@ DestroyCursor@4
 DestroyMenu@4
 DestroyWindow@4
 DispatchMessageW@4
+DrawIconEx@36
 DrawTextW@20
 EndPaint@8
 EnumChildWindows@12
@@ -60,6 +61,7 @@ IsWindowVisible@4
 KillSystemTimer@8
 KillTimer@8
 LoadCursorW@8
+LoadIconW@8
 LoadKeyboardLayoutW@8
 MonitorFromPoint@12
 MonitorFromWindow@8

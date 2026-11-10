@@ -32,6 +32,9 @@
 //! - WM_SETCURSOR ([`crate::cursor::def_set_cursor`]) : le curseur de la
 //!   classe dans la zone cliente, une flèche double sur un bord, la flèche
 //!   ailleurs ;
+//! - WM_SETICON, WM_GETICON ([`crate::cursor::set_window_icon`],
+//!   [`crate::cursor::window_icon`]) : les icônes de la fenêtre, dans ses
+//!   propriétés ; le cadre se repeint ;
 //! - WM_DEVICECHANGE rend TRUE ; un message de l'application (au-delà de
 //!   WM_USER) rend 0.
 //!
@@ -572,6 +575,20 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
         }
         (WM_MOUSEACTIVATE, Some(window)) => Ok(mouse_activate(window, wparam, lparam)),
         (abi::user::WM_SETCURSOR, Some(window)) => Ok(crate::cursor::def_set_cursor(window, wparam, lparam)),
+        (abi::user::WM_SETICON, Some(window)) => match crate::cursor::set_window_icon(window, wparam, lparam) {
+            Some(old) => Ok(old),
+            None => {
+                let _ = crate::set_last_error(abi::winerror::ERROR_INVALID_PARAMETER);
+                Ok(0)
+            }
+        },
+        (abi::user::WM_GETICON, Some(window)) => match crate::cursor::window_icon(window, wparam) {
+            Some(icon) => Ok(icon),
+            None => {
+                let _ = crate::set_last_error(abi::winerror::ERROR_INVALID_PARAMETER);
+                Ok(0)
+            }
+        },
         (WM_NCACTIVATE, Some(window)) => {
             crate::paint::set_frame_active(window, wparam != 0, lparam != u32::MAX);
             Ok(1)

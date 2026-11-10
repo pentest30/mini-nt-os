@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **Les icônes** (`claude/new-session-696xfc`, sur main `ea66c30` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 16) : les icônes du système chargées par `user32` au premier NtUserSwitchDesktop (rappel SETWNDICONS, n° 11)
+  et rendues globales ; l'icône du titre (`cursor::caption_icon` : WM_SETICON, puis la classe, puis la petite
+  IDI_WINLOGO) dessinée par le cadre (`Op::Icon`), le texte décalé ; WM_SETICON et WM_GETICON (propriétés du système
+  `SysICS`, `SysIC`, atomes publiés dans le `SERVERINFO`) ; les propriétés des fenêtres copiées dans un tas à la fin
+  de la section partagée (`shared::alloc`), où `user32` les lit (GetProp et WM_GETICON marchent côté client) ;
+  NtUserDrawIconEx (`cursor::draw_icon_ex`). Tests : hôte (`nonclient`, `cursor`, `window`) ; scénario `icons`
+  (`tests/native/icon1.c`, neuf pixels), sur AMD et Intel, et les scénarios GUI. Pas encore : le pinceau de
+  DrawIconEx, ICON_SMALL2, GetIconInfo, CopyImage, CreateIconIndirect, NtUserRemoveProp, NtUserBuildPropList.
+
 - **Le journal série écrit chaque ligne d'un coup** (`claude/new-session-696xfc`, sur main `38d86a7`) : `hal::serial`
   envoyait un enregistrement octet par octet, le verrou de COM1 pris pour chacun ; un thread préempté au milieu d'une
   ligne laissait un autre y glisser la sienne. `send-messages` a ainsi perdu un marqueur sur Intel (« [send] sent

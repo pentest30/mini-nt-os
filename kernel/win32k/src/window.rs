@@ -125,6 +125,10 @@ pub struct WindowState {
     /// Le DIALOGINFO de `user32` d'un dialogue (`DialogPointer`,
     /// SetDialogPointer), une adresse du client.
     pub dialog_pointer: u32,
+    /// La liste de ses propriétés dans le tas du bureau (`PropListHead` :
+    /// la première, la dernière, adresses du serveur ; `PropListItems`) ;
+    /// `None` sans propriété.
+    pub prop_list: Option<(u32, u32, u32)>,
 }
 
 impl WindowState {
@@ -342,6 +346,13 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
         hrgn_update: if state.update.is_empty() { 0 } else { HRGN_WINDOW },
         user_data: state.user_data,
         dialog_pointer: state.dialog_pointer,
+        prop_list_head: {
+            // An empty list points at itself.
+            let head = self_address + offset_of!(Wnd32, prop_list_head) as u32;
+            let (flink, blink, _) = state.prop_list.unwrap_or((head, head, 0));
+            abi::user::ListEntry32 { flink, blink }
+        },
+        prop_list_items: state.prop_list.map_or(0, |(_, _, count)| count),
         ..Wnd32::default()
     }
 }
@@ -456,32 +467,147 @@ pub fn change(window: &Window, change: impl FnOnce(&mut WindowState)) -> WindowS
 /// Change ce qui change de `window` par `change`, puis réécrit son `WND`.
 /// Une fenêtre qui se met à avoir quelque chose à peindre, ou cesse de
 /// l'avoir, compte pour son thread (`cPaintsReady`, [`crate::paint::is_dirty`]).
-/// Les propriétés des fenêtres (SetProp) : `(hwnd, atome, donnée)`,
-/// l'atome remplacé à la seconde pose.
-static PROPERTIES: hal::sync::KSpinLock<alloc::vec::Vec<(u32, u16, u32)>> =
+/// Une propriété d'une fenêtre (SetProp ; une propriété du système : les
+/// icônes de WM_SETICON).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Property {
+    hwnd: u32,
+    atom: u16,
+    data: u32,
+    system: bool,
+}
+
+/// Les propriétés des fenêtres, l'atome remplacé à la seconde pose. Leur
+/// copie dans le tas partagé (`crate::shared::alloc`, UserHeapAlloc : des
+/// `PROPERTY` chaînées depuis le `WND`), que `user32` lit lui-même par
+/// `ulSharedDelta` (GetProp, WM_GETICON) : ses blocs, par fenêtre
+/// ([`publish_properties`]).
+static PROPERTIES: hal::sync::KSpinLock<alloc::vec::Vec<Property>> = hal::sync::KSpinLock::new(alloc::vec::Vec::new());
+static PROPERTY_BLOCKS: hal::sync::KSpinLock<alloc::vec::Vec<(u32, alloc::vec::Vec<u32>)>> =
     hal::sync::KSpinLock::new(alloc::vec::Vec::new());
 
+/// Les blocs de `PROPERTY` de la fenêtre `hwnd` retournent au tas partagé.
+fn free_property_blocks(hwnd: u32) {
+    let blocks = {
+        let mut all = PROPERTY_BLOCKS.lock();
+        all.iter().position(|(window, _)| *window == hwnd).map(|at| all.swap_remove(at))
+    };
+    if let Some((_, offsets)) = blocks {
+        for offset in offsets {
+            crate::shared::free(offset, size_of::<abi::user::Property32>() as u32);
+        }
+    }
+}
+
+/// La chaîne des `PROPERTY` de `properties` dans des blocs du tas d'adresses
+/// du serveur `blocks`, depuis la tête de liste `head` (l'adresse du
+/// serveur de `PropListHead`) : chaque entrée, avec ses voisines ; la
+/// dernière revient à la tête, comme la première.
+pub fn property_chain(head: u32, blocks: &[u32], properties: &[(u16, u32, bool)]) -> Vec<abi::user::Property32> {
+    let count = blocks.len().min(properties.len());
+    (0..count)
+        .map(|i| {
+            let (atom, data, system) = properties[i];
+            abi::user::Property32 {
+                entry: abi::user::ListEntry32 {
+                    flink: if i + 1 < count { blocks[i + 1] } else { head },
+                    blink: if i > 0 { blocks[i - 1] } else { head },
+                },
+                data,
+                atom,
+                fs: if system { abi::user::PROPERTY_FLAG_SYSTEM } else { 0 },
+            }
+        })
+        .collect()
+}
+
+/// Les propriétés de `window` réécrites dans le tas partagé, où `user32` les
+/// lit : de nouveaux blocs, chaînés depuis son `WND`. Sans place, la liste
+/// reste vide (journalisé une fois).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+fn publish_properties(window: &Window) {
+    free_property_blocks(window.handle);
+    let properties: Vec<(u16, u32, bool)> = PROPERTIES
+        .lock()
+        .iter()
+        .filter(|property| property.hwnd == window.handle)
+        .map(|property| (property.atom, property.data, property.system))
+        .collect();
+    let size = size_of::<abi::user::Property32>() as u32;
+    let mut offsets = Vec::with_capacity(properties.len());
+    for _ in &properties {
+        match crate::shared::alloc(size) {
+            Some(offset) => offsets.push(offset),
+            None => {
+                static REPORTED: AtomicBool = AtomicBool::new(false);
+                if !REPORTED.swap(true, Ordering::Relaxed) {
+                    log::warn!("win32k: the windows' properties do not fit in the shared heap: user32 sees none");
+                }
+                for offset in offsets.drain(..) {
+                    crate::shared::free(offset, size);
+                }
+                break;
+            }
+        }
+    }
+    let head = window.server_address() + offset_of!(Wnd32, prop_list_head) as u32;
+    let blocks: Vec<u32> = offsets.iter().map(|&offset| crate::shared::server_address(offset)).collect();
+    if let Some(section) = crate::shared::section() {
+        for (offset, property) in offsets.iter().zip(property_chain(head, &blocks, &properties)) {
+            let _ = section.write_kernel(u64::from(*offset), property.as_bytes());
+        }
+    }
+    let list = (!blocks.is_empty()).then(|| (blocks[0], blocks[blocks.len() - 1], blocks.len() as u32));
+    update(window, |state| state.prop_list = list);
+    if !offsets.is_empty() {
+        PROPERTY_BLOCKS.lock().push((window.handle, offsets));
+    }
+}
+
 /// UserRemoveWindowProps : les propriétés de la fenêtre `hwnd` partent (à
-/// sa destruction).
+/// sa destruction), et leurs blocs du tas partagé.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
 pub fn remove_properties(hwnd: u32) {
-    PROPERTIES.lock().retain(|(window, _, _)| *window != hwnd);
+    PROPERTIES.lock().retain(|property| property.hwnd != hwnd);
+    free_property_blocks(hwnd);
 }
 
 /// SetProp : la propriété `atom` de la fenêtre devient `data` (remplacée si
-/// l'atome y était déjà).
+/// l'atome y était déjà) ; `system` pour une propriété du système
+/// (PROPERTY_FLAG_SYSTEM : les icônes de WM_SETICON, que GetProp d'une
+/// application ne voit pas). `user32` la voit dans le tas du bureau.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub fn set_property(window: &Window, atom: u16, data: u32) {
-    let mut properties = PROPERTIES.lock();
-    if let Some(entry) = properties.iter_mut().find(|(hwnd, at, _)| *hwnd == window.handle && *at == atom) {
-        entry.2 = data;
-    } else {
-        properties.push((window.handle, atom, data));
+pub fn set_property(window: &Window, atom: u16, data: u32, system: bool) {
+    {
+        let mut properties = PROPERTIES.lock();
+        let found = properties
+            .iter_mut()
+            .find(|property| property.hwnd == window.handle && property.atom == atom && property.system == system);
+        match found {
+            Some(property) => property.data = data,
+            None => properties.push(Property { hwnd: window.handle, atom, data, system }),
+        }
     }
+    publish_properties(window);
+}
+
+/// GetProp du noyau : la propriété `atom` (du système ou non) de la
+/// fenêtre, si elle l'a.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn property(window: &Window, atom: u16, system: bool) -> Option<u32> {
+    PROPERTIES
+        .lock()
+        .iter()
+        .find(|property| property.hwnd == window.handle && property.atom == atom && property.system == system)
+        .map(|property| property.data)
 }
 
 /// Les items de la barre de menus de la fenêtre, pour la peindre (une
@@ -1629,6 +1755,22 @@ mod tests {
         assert_eq!(creation_menu(0, 0xDEAD_BEEF, exists), Err(ERROR_INVALID_MENU_HANDLE));
         assert_eq!(creation_menu(WS_CHILD, 7, exists), Ok(0), "a child's hMenu is its identifier");
         assert_eq!(creation_menu(WS_CHILD | WS_POPUP, 0x0003_002A, exists), Ok(0x0003_002A), "not a child");
+    }
+
+    #[test]
+    fn properties_chain_from_the_wnd_and_back() {
+        // What user32's IntGetProp walks: PropListHead.Flink, then each
+        // entry's Flink, PropListItems times.
+        let head = 0xBC00_0100;
+        let blocks = [0xBC00_2000, 0xBC00_2010, 0xBC00_2020];
+        let chain = property_chain(head, &blocks, &[(0xC001, 7, false), (0xC002, 8, true), (0xC003, 9, false)]);
+        assert_eq!(chain.len(), 3);
+        assert_eq!((chain[0].entry.flink, chain[0].entry.blink), (blocks[1], head));
+        assert_eq!((chain[1].entry.flink, chain[1].entry.blink), (blocks[2], blocks[0]));
+        assert_eq!((chain[2].entry.flink, chain[2].entry.blink), (head, blocks[1]), "the last one back to the head");
+        assert_eq!((chain[1].atom, chain[1].data, chain[1].fs), (0xC002, 8, abi::user::PROPERTY_FLAG_SYSTEM));
+        assert_eq!(chain[0].fs, 0, "an application's property");
+        assert!(property_chain(head, &[], &[(1, 2, false)]).is_empty(), "no block, no entry");
     }
 
     #[test]

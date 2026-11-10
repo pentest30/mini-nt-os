@@ -29,6 +29,8 @@ pub enum Op {
     /// Un glyphe rendu en `color` (ExtTextOut, fond transparent), son coin en
     /// `at`, coupé à `clip` (ETO_CLIPPED).
     Glyph { at: (i32, i32), bitmap: Arc<glyph::Bitmap>, color: ColorRef, clip: Rect },
+    /// Une icône à la taille de son rectangle (DrawIconEx, DI_NORMAL).
+    Icon(Rect, Arc<crate::cursor::Shape>),
 }
 
 /// La couleur de la colonne `x` d'un dégradé de `from` à `to` entre `left`
@@ -50,6 +52,9 @@ pub fn paint(surface: &mut Bitmap<'_>, ops: &[Op], origin: (i32, i32), clip: &Re
         for &visible in clip.rects() {
             match op {
                 &Op::Fill(rect, color) => surface.fill_rect(moved(rect).intersect(&visible), color),
+                Op::Icon(rect, shape) => {
+                    crate::cursor::draw_shape(surface, shape, moved(*rect), visible, abi::user::di::NORMAL);
+                }
                 Op::Glyph { at, bitmap, color, clip } => {
                     let at = (at.0 + origin.0, at.1 + origin.1);
                     let clip = moved(*clip).intersect(&visible);

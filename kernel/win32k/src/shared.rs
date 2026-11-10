@@ -1,7 +1,9 @@
 //! La section partagée de USER (02 §7.2) : ce que win32k écrit et que
 //! chaque processus GUI lit par une vue en lecture seule. Elle tient le
 //! `SERVERINFO` (sa première page) puis la table des handles USER (sa tête,
-//! puis 4096 entrées, comme `UserCreateHandleTable` de ReactOS).
+//! puis 4096 entrées, comme `UserCreateHandleTable` de ReactOS), et dans ce
+//! qui reste, le tas partagé ([`alloc`], UserHeapAlloc) : les propriétés des
+//! fenêtres, que `user32` lit lui-même (GetProp).
 //!
 //! Les pointeurs qu'elle contient sont des *adresses du serveur* sur 32 bits
 //! (ADR-021) : la section y est en [`SERVER_BASE`], et un client y retrouve
@@ -12,6 +14,8 @@
 
 use alloc::sync::Arc;
 use core::mem::size_of;
+
+use hal::sync::KSpinLock;
 
 use abi::ntstatus::NtStatus;
 use abi::user::{ServerInfoHead32, UserHandleEntry32, UserHandleTable32, FNID_NUM, FNID_NUMSERVERPROC};
@@ -36,10 +40,47 @@ pub const HANDLE_ENTRIES: u32 = HANDLE_TABLE + size_of::<UserHandleTable32>() as
 /// Les entrées de la table (`UserCreateHandleTable` : 1024 * 4).
 pub const HANDLE_COUNT: u32 = 4096;
 
+/// Le tas partagé, après la table des handles, jusqu'au bout de la section.
+pub const HEAP: u32 = (HANDLE_ENTRIES + HANDLE_COUNT * size_of::<UserHandleEntry32>() as u32).next_multiple_of(16);
+
 const _: () = {
     assert!(size_of::<ServerInfoHead32>() as u32 <= HANDLE_TABLE, "SERVERINFO fits in its page");
-    assert!(HANDLE_ENTRIES + HANDLE_COUNT * size_of::<UserHandleEntry32>() as u32 <= SIZE);
+    assert!(HEAP + 0x2000 <= SIZE, "at least 8 KiB of shared heap");
 };
+
+/// Le granule d'un bloc du tas partagé.
+const HEAP_GRANULARITY: u32 = 8;
+/// Ses plages libres, créées au premier besoin.
+static HEAP_FREE: KSpinLock<Option<crate::desktop::FreeRanges>> = KSpinLock::new(None);
+
+/// UserHeapAlloc : `size` octets du tas partagé, à zéro ; rend leur place
+/// dans la section. `None` s'il est plein ou avant [`init`].
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn alloc(size: u32) -> Option<u32> {
+    let section = section()?;
+    let offset = HEAP_FREE
+        .lock()
+        .get_or_insert_with(|| crate::desktop::FreeRanges::new(HEAP, SIZE - HEAP))
+        .take(size.max(1), HEAP_GRANULARITY)?;
+    let zeros = alloc::vec![0u8; size as usize];
+    if section.write_kernel(u64::from(offset), &zeros).is_err() {
+        free(offset, size);
+        return None;
+    }
+    Some(offset)
+}
+
+/// UserHeapFree : rend le bloc de `size` octets en `offset` du tas partagé.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn free(offset: u32, size: u32) {
+    if let Some(ranges) = HEAP_FREE.lock().as_mut() {
+        ranges.give(offset, size.max(1), HEAP_GRANULARITY);
+    }
+}
 
 /// L'adresse du serveur de l'octet `offset` de la section.
 pub const fn server_address(offset: u32) -> u32 {

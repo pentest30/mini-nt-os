@@ -24,6 +24,7 @@
 //! les barres de défilement, la barre de menus ; le texte et les symboles
 //! sans leurs polices.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use abi::user::WS_BORDER;
@@ -54,8 +55,6 @@ const MENU_ITEM_GAP: i32 = 8;
 pub struct Unpainted {
     /// Le texte du titre ou les symboles des boutons, sans leurs polices.
     pub text: bool,
-    /// L'icône du titre.
-    pub icon: bool,
     /// Les barres de défilement.
     pub scroll_bars: bool,
 }
@@ -176,13 +175,14 @@ fn caption_buttons(
 
 /// UserDrawCaptionText : `text` dans le titre `caption`, en Tahoma gras (ou
 /// normal pour une fenêtre d'outils), de la couleur du texte du titre actif
-/// ou inactif ; de deux pixels après le bord gauche (pas encore d'icône)
-/// jusqu'aux boutons, centré en hauteur, fini par « ... » s'il ne tient pas.
-/// Faux sans la police.
+/// ou inactif ; de deux pixels après le bord gauche (après l'icône, s'il y
+/// en a une) jusqu'aux boutons, centré en hauteur, fini par « ... » s'il ne
+/// tient pas. Faux sans la police.
 #[expect(clippy::too_many_arguments, reason = "the caption, its window's text and styles, and the system")]
 fn caption_text(
     caption: Rect,
     text: &[u16],
+    icon: bool,
     active: bool,
     style: u32,
     ex_style: u32,
@@ -196,6 +196,9 @@ fn caption_text(
     }
     let small = ex_style & WS_EX_TOOLWINDOW != 0;
     let mut room = Rect::new(caption.left + 2, caption.top, caption.right, caption.bottom);
+    if icon {
+        room.left += caption.bottom - caption.top;
+    }
     if style & WS_SYSMENU != 0 {
         room.right -= m(sm::CYCAPTION) - 1;
         if style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX) != 0 && !small {
@@ -220,7 +223,11 @@ fn caption_text(
 /// NC_DoNCPaint : le cadre d'une fenêtre de style `style` et `ex_style`,
 /// de `width` × `height`, de titre `text`, active ou non, en dégradé ou non
 /// (`gradient`), d'après les métriques `m`, les couleurs système `c` et la
-/// mise en glyphes `layout` ; et ce qu'il n'a pas pu dessiner.
+/// mise en glyphes `layout` ; et ce qu'il n'a pas pu dessiner. Son icône
+/// (`icon`, NC_IconForWindow) va au début du titre d'une fenêtre qui a un
+/// menu système et n'est pas une fenêtre d'outils, à la taille SM_CXSMICON ×
+/// SM_CYSMICON, centrée dans un carré de la hauteur du titre
+/// (UserDrawCaption) ; le texte la suit.
 #[expect(clippy::too_many_arguments, reason = "what NC_DoNCPaint reads of the window and the system")]
 pub fn frame_ops(
     style: u32,
@@ -233,6 +240,7 @@ pub fn frame_ops(
     m: &impl Fn(usize) -> i32,
     c: &impl Fn(usize) -> ColorRef,
     layout: Layout,
+    icon: Option<Arc<crate::cursor::Shape>>,
 ) -> (Vec<Op>, Unpainted) {
     let mut ops = Vec::new();
     let mut unpainted = Unpainted::default();
@@ -288,8 +296,14 @@ pub fn frame_ops(
         } else {
             ops.push(Op::Fill(caption, c(from)));
         }
-        unpainted.text = !caption_text(caption, text, active, style, ex_style, m, c, layout, &mut ops);
-        unpainted.icon = style & WS_SYSMENU != 0 && ex_style & WS_EX_TOOLWINDOW == 0;
+        let icon = icon.filter(|_| style & WS_SYSMENU != 0 && ex_style & WS_EX_TOOLWINDOW == 0);
+        if let Some(icon) = &icon {
+            let (cx, cy) = (m(sm::CXSMICON), m(sm::CYSMICON));
+            let x = caption.left - cx / 2 + 1 + (caption.bottom - caption.top) / 2;
+            let y = (caption.top + caption.bottom - cy) / 2;
+            ops.push(Op::Icon(Rect::new(x, y, x + cx, y + cy), icon.clone()));
+        }
+        unpainted.text = !caption_text(caption, text, icon.is_some(), active, style, ex_style, m, c, layout, &mut ops);
         if style & WS_SYSMENU != 0 && !caption_buttons(caption, style, ex_style, m, c, layout, &mut ops) {
             unpainted.text = true;
         }
@@ -367,7 +381,7 @@ mod tests {
         layout: Layout,
     ) -> (impl Fn(i32, i32) -> u32, Unpainted) {
         let (ops, unpainted) =
-            frame_ops(style, ex_style, (width, height), text, &[], active, gradient, &metric, palette, layout);
+            frame_ops(style, ex_style, (width, height), text, &[], active, gradient, &metric, palette, layout, None);
         let mut pixels = alloc::vec![0u32; (width * height) as usize];
         let mut surface =
             Bitmap::new(&mut pixels, width as u32, height as u32, width as u32, PixelLayout::Rgbx).unwrap();
@@ -386,7 +400,7 @@ mod tests {
         assert_eq!(at(10, 23), system(color::BTNFACE).0, "the line under the caption");
         assert_eq!(at(10, 24), 0, "the client area is not the frame's");
         assert_eq!((at(196, 50), at(197, 50)), (system(color::BTNFACE).0, system(color::INACTIVEBORDER).0), "right");
-        assert_eq!(unpainted, Unpainted { text: true, icon: true, scroll_bars: false });
+        assert_eq!(unpainted, Unpainted { text: true, scroll_bars: false });
     }
 
     #[test]
@@ -421,7 +435,8 @@ mod tests {
 
     #[test]
     fn frames_without_a_caption_or_with_a_client_edge() {
-        let (ops, unpainted) = frame_ops(WS_POPUP, 0, (50, 50), &[], &[], false, true, &metric, &system, &no_fonts);
+        let (ops, unpainted) =
+            frame_ops(WS_POPUP, 0, (50, 50), &[], &[], false, true, &metric, &system, &no_fonts, None);
         assert!(ops.is_empty() && unpainted == Unpainted::default(), "a popup has no frame");
         let (at, _) = render(WS_POPUP | WS_BORDER, 0, (20, 20), false);
         assert_eq!((at(0, 0), at(1, 1)), (system(color::WINDOWFRAME).0, 0), "a thin border");
@@ -434,12 +449,48 @@ mod tests {
     }
 
     #[test]
+    fn the_icon_starts_the_caption_and_pushes_its_text() {
+        use crate::cursor::{Pixel, Shape};
+        let red = ColorRef::rgb(255, 0, 0);
+        let icon = Arc::new(Shape { width: 2, height: 2, hotspot: (0, 0), pixels: alloc::vec![Pixel::Opaque(red); 4] });
+        let draw = |style: u32, ex_style: u32| {
+            let (ops, _) = frame_ops(
+                style,
+                ex_style,
+                (200, 100),
+                &[],
+                &[],
+                false,
+                false,
+                &metric,
+                &system,
+                &no_fonts,
+                Some(icon.clone()),
+            );
+            ops.into_iter().find_map(|op| match op {
+                Op::Icon(rect, _) => Some(rect),
+                _ => None,
+            })
+        };
+        // Edge 2, thick frame 2: the caption from (4, 4), 19 high (20 - 1).
+        let (cx, cy) = (metric(sm::CXSMICON), metric(sm::CYSMICON));
+        let x = 4 - cx / 2 + 1 + 19 / 2;
+        let y = (4 + 23 - cy) / 2;
+        assert_eq!(
+            draw(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE),
+            Some(Rect::new(x, y, x + cx, y + cy)),
+            "UserDrawCaption"
+        );
+        assert_eq!(draw(WS_CAPTION, WS_EX_WINDOWEDGE), None, "no system menu, no icon");
+        assert_eq!(draw(WS_POPUP | WS_CAPTION | WS_SYSMENU, WS_EX_TOOLWINDOW), None, "no icon in a tool window");
+    }
+
+    #[test]
     fn a_tool_window_has_a_small_caption_and_one_button() {
         let style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let (at, unpainted) = render(style, WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE, (100, 60), false);
+        let (at, _) = render(style, WS_EX_TOOLWINDOW | WS_EX_WINDOWEDGE, (100, 60), false);
         // Edge 2, thin frame 1: the caption from 3, 15 high (16 - 1), the line at 18.
         assert_eq!((at(3, 17), at(10, 18)), (system(color::INACTIVECAPTION).0, system(color::BTNFACE).0));
-        assert!(!unpainted.icon, "no icon in a tool window");
         // The close button only, a small one.
         let left = 97 - metric(sm::CXSMSIZE);
         assert_eq!(at(left, 5), system(color::BTNHIGHLIGHT).0);

@@ -1555,6 +1555,69 @@ pub const OCR_SIZENESW: u32 = 32643;
 pub const OCR_SIZEWE: u32 = 32644;
 pub const OCR_SIZENS: u32 = 32645;
 
+/// USER32_CALLBACK_SETWNDICONS: `user32` loads the system icons
+/// (User32CallSetWndIconsFromKernel) and gives them back
+/// ([`SetWndIconsArguments32`]).
+pub const USER32_CALLBACK_SETWNDICONS: u32 = 11;
+
+/// SETWNDICONS_CALLBACK_ARGUMENTS, 32-bit: the system icons `user32` loads,
+/// in the order of [`OIC_ICONS`] (the window icon, then its small form).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SetWndIconsArguments32 {
+    pub icons: [u32; 7],
+}
+
+const _: () = assert!(size_of::<SetWndIconsArguments32>() == 28);
+
+/// OIC_*: the system icons, in the order of [`SetWndIconsArguments32`]:
+/// OIC_SAMPLE (IDI_APPLICATION), OIC_HAND, OIC_QUES, OIC_BANG, OIC_NOTE,
+/// OIC_WINLOGO, and the small window icon (OIC_INTERNAL_WINSMALL, which
+/// ReactOS keeps apart).
+pub const OIC_ICONS: [u32; 7] = [32512, 32513, 32514, 32515, 32516, 32517, 32518];
+
+/// WM_GETICON, WM_SETICON: a window's icons (`wParam` ICON_SMALL, ICON_BIG
+/// or ICON_SMALL2).
+pub const WM_GETICON: u32 = 0x007F;
+pub const WM_SETICON: u32 = 0x0080;
+pub const ICON_SMALL: u32 = 0;
+pub const ICON_BIG: u32 = 1;
+pub const ICON_SMALL2: u32 = 2;
+
+/// DI_*: what DrawIconEx draws.
+pub mod di {
+    /// The AND mask.
+    pub const MASK: u32 = 0x0001;
+    /// The colours (the XOR mask).
+    pub const IMAGE: u32 = 0x0002;
+    /// Both: the icon as it shows.
+    pub const NORMAL: u32 = 0x0003;
+    /// No size given: the system's (SM_CXICON, SM_CYICON).
+    pub const DEFAULTSIZE: u32 = 0x0008;
+}
+
+/// PROPERTY, 32-bit: a window property (SetProp) in its desktop's heap,
+/// which `user32` reads itself (GetProp, IntGetProp): its entry in the list
+/// of the `WND` (`PropListHead`, `PropListItems`), its data, its atom.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Property32 {
+    pub entry: ListEntry32,
+    pub data: u32,
+    pub atom: u16,
+    /// PROPERTY_FLAG_SYSTEM for a property of the system (the icons of
+    /// WM_SETICON).
+    pub fs: u16,
+}
+
+pub const PROPERTY_FLAG_SYSTEM: u16 = 1;
+
+const _: () = {
+    assert!(size_of::<Property32>() == 16);
+    assert!(offset_of!(Property32, data) == 8);
+    assert!(offset_of!(Property32, atom) == 12);
+};
+
 /// RT_CURSOR, RT_ICON: `CURSORDATA.rt`.
 pub const RT_CURSOR: u16 = 1;
 pub const RT_ICON: u16 = 3;
@@ -1707,7 +1770,9 @@ as_bytes!(
     MonitorInfo32,
     PaintStruct32,
     CursorData32,
-    FindExistingCurIconParam32
+    FindExistingCurIconParam32,
+    SetWndIconsArguments32,
+    Property32
 );
 
 #[cfg(test)]

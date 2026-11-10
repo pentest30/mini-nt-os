@@ -120,6 +120,32 @@ pub fn load_default_cursors() -> Result<u32, NtStatus> {
     })
 }
 
+/// co_IntSetWndIcons : `user32` charge les icônes du système
+/// (User32CallSetWndIconsFromKernel : IDI_APPLICATION, IDI_HAND,
+/// IDI_QUESTION, IDI_EXCLAMATION, IDI_ASTERISK, IDI_WINLOGO et sa petite
+/// forme) et les rend, dans l'ordre d'`abi::user::OIC_ICONS`.
+///
+/// # Errors
+/// Celles du rappel ; `STATUS_INFO_LENGTH_MISMATCH` pour un résultat trop
+/// court.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn set_wnd_icons() -> Result<[u32; 7], NtStatus> {
+    let argument = abi::user::SetWndIconsArguments32::default();
+    let output = ps::callback::user_mode_callback(
+        abi::user::USER32_CALLBACK_SETWNDICONS,
+        argument.as_bytes(),
+        size_of::<abi::user::SetWndIconsArguments32>(),
+    )?;
+    if output.len() < size_of::<abi::user::SetWndIconsArguments32>() {
+        return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    Ok(core::array::from_fn(|i| {
+        u32::from_le_bytes([output[4 * i], output[4 * i + 1], output[4 * i + 2], output[4 * i + 3]])
+    }))
+}
+
 /// co_IntCallWindowProc : la procédure du client `arguments.proc` reçoit le
 /// message (User32CallWindowProcFromKernel) ; rend ce qu'elle a rendu.
 /// `buffer`, s'il y en a un, suit les arguments (`lParam` le désigne dans
