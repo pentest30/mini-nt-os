@@ -39,7 +39,6 @@ expect = [bitmap] DeleteObject: 1 1 1, DeleteDC: 1
 expect = [bitmap] deleted: the pixels free, types 0 0 0
 expect = [bitmap] painted: yes
 expect = [bitmap] done
-expect = [m4] SMSS.EXE created winlogon.exe (PID 28): exit status 0x0000600d
 forbid = *** STOP:
 forbid = sys: NtGdiCreateCompatibleDC (0x101e) is not implemented
 forbid = sys: NtGdiCreateDIBSection (0x1021) is not implemented

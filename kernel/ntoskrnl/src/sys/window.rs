@@ -1,5 +1,6 @@
-//! Les fenêtres (`win32k::window`, `win32k::winpos`) : NtUserCreateWindowEx,
-//! NtUserDefSetText, NtUserSetWindowPos, NtUserMoveWindow, NtUserShowWindow.
+//! Les fenêtres (`win32k::window`, `win32k::winpos`, `win32k::destroy`) :
+//! NtUserCreateWindowEx, NtUserDestroyWindow, NtUserDefSetText,
+//! NtUserSetWindowPos, NtUserMoveWindow, NtUserShowWindow.
 //! Comme dans win32k, un échec rend 0 et met l'erreur Win32 dans le TEB du
 //! thread.
 
@@ -120,6 +121,21 @@ pub(super) fn nt_user_create_window_ex(arguments: &[u32]) -> NtStatus {
         }
         Err(Some(error)) => fail(error),
         Err(None) => NtStatus(0),
+    }
+}
+
+/// NtUserDestroyWindow(hWnd) : BOOL. La fenêtre du thread courant est
+/// détruite avec ses enfants et ses fenêtres possédées
+/// (`win32k::destroy::destroy_window`) ; FALSE pour une fenêtre qui n'existe
+/// pas (`ERROR_INVALID_WINDOW_HANDLE`), d'un autre thread ou d'un bureau
+/// (`ERROR_ACCESS_DENIED`).
+pub(super) fn nt_user_destroy_window(arguments: &[u32]) -> NtStatus {
+    let Some(window) = win32k::window::get(arguments[0]) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    match win32k::destroy::destroy_window(&window) {
+        Ok(()) => NtStatus(1),
+        Err(error) => fail(error),
     }
 }
 

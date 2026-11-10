@@ -29,10 +29,11 @@
 //! fenêtre et son identifiant ; SetTimer d'une fenêtre d'un autre processus
 //! est refusé.
 //!
-//! Les minuteries d'un thread qui se termine s'en vont à l'échéance
-//! suivante de l'une d'elles, prête ou non (pas de rappel de Ps à la fin
-//! d'un thread GUI) ; celles d'une fenêtre détruite, par
-//! [`destroy_window_timers`].
+//! Les minuteries d'un thread qui se termine s'en vont avec lui
+//! ([`destroy_thread_timers`], par le rappel de Ps à la fin d'un thread GUI) ;
+//! celles d'une fenêtre détruite, par [`destroy_window_timers`]. Par sûreté,
+//! celles d'un thread fini qui resteraient s'en vont à l'échéance suivante
+//! de l'une d'elles.
 //!
 //! Pas encore : les minuteries du RIT (TMRF_RIT : le curseur, le clavier),
 //! TMRF_ONESHOT, la procédure d'une minuterie du système (que ReactOS
@@ -434,6 +435,15 @@ pub fn destroy_window_timers(hwnd: u32) {
     for (thread, (wake, change)) in threads {
         thread.mirror_queue_bits(wake, change);
     }
+}
+
+/// DestroyTimersForThread : retire les minuteries de `thread`, qui se
+/// termine (celles de ses fenêtres et celles sans fenêtre).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn destroy_thread_timers(thread: &ThreadInfo) {
+    TIMERS.lock().purge(|owner| owner.is(thread));
 }
 
 /// L'échéance la plus proche, en temps d'interruption, s'il y a une

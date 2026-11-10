@@ -94,12 +94,12 @@ pub(super) fn nt_user_register_class_ex_wow(arguments: &[u32]) -> NtStatus {
             _ => return Ok(Err(ERROR_INVALID_PARAMETER)),
         };
         let menu = if menu_name.length != 0 {
-            probe_for_read(u64::from(menu_name.buffer), usize::from(menu_name.length), 2)?;
-            MenuName { unicode: menu.client_unicode, ansi: menu.client_ansi, is_string: true }
+            let name = read_units(menu_name.buffer, menu_name.length)?;
+            MenuName { unicode: menu.client_unicode, ansi: menu.client_ansi, is_string: true, name }
         } else if menu_name.buffer != 0 && !is_atom(menu_name.buffer) {
             return Ok(Err(ERROR_INVALID_PARAMETER));
         } else {
-            MenuName { unicode: menu_name.buffer, ansi: menu_name.buffer, is_string: false }
+            MenuName { unicode: menu_name.buffer, ansi: menu_name.buffer, is_string: false, name: Vec::new() }
         };
         let class = ClassInfo {
             style: wc.style,

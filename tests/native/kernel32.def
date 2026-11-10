@@ -20,8 +20,10 @@ ExitProcess@4
 FindClose@4
 FindFirstFileW@8
 FindNextFileW@8
+GetCommandLineW@0
 GetConsoleMode@8
 GetConsoleWindow@0
+GetCurrentProcess@0
 GetCurrentProcessId@0
 GetCurrentThreadId@0
 GetExitCodeProcess@8

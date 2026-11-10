@@ -15,11 +15,15 @@
 //! ne fait que passer outre `CS_OWNDC` et `CS_CLASSDC`) et dans Wine ;
 //! ReactOS rend alors NULL.
 //!
+//! Les DC pris pour une fenêtre détruite retournent au repos
+//! ([`free_window_dcs`], DceFreeWindowDCE), comme ceux d'un processus qui se
+//! termine ([`free_process_dcs`]).
+//!
 //! Pas encore, journalisé une fois : les DC d'une fenêtre ou d'une classe
 //! (`CS_OWNDC`, `CS_CLASSDC` : un DC du cache à la place), le DC du parent
 //! (`CS_PARENTDC`, `DCX_PARENTCLIP` : la fenêtre seule), `DCX_INTERSECTUPDATE`
-//! (ignoré), les DC dont la fenêtre bouge ou disparaît pendant qu'ils sont
-//! pris (DceResetActiveDCEs).
+//! (ignoré), les DC dont la fenêtre bouge pendant qu'ils sont pris
+//! (DceResetActiveDCEs).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -302,6 +306,63 @@ pub fn release_dc(hdc: u32) -> bool {
         crate::gdi::delete_object(hrgn);
     }
     true
+}
+
+/// Les DC du cache pris que `taken` reconnaît (leur fenêtre, le PID de leur
+/// processus), et leurs handles.
+fn taken_dcs(taken: impl Fn(u32, Option<u32>) -> bool) -> Vec<(u32, Arc<Dc>)> {
+    CACHE
+        .lock()
+        .iter()
+        .filter(|entry| entry.busy && taken(entry.window, entry.dc.state().owner.map(|(pid, _)| pid)))
+        .map(|entry| (entry.hdc, entry.dc.clone()))
+        .collect()
+}
+
+/// DceFreeWindowDCE : les DC du cache pris pour la fenêtre `hwnd`, qui est
+/// détruite, retournent au repos (un GetDC sans ReleaseDC, journalisé une
+/// fois). Leurs attributs et la région d'un client qui les coupait sont
+/// rendus au processus courant s'ils sont à lui ; sinon, son processus les
+/// garde. Rend leur nombre.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn free_window_dcs(hwnd: u32) -> usize {
+    let taken = taken_dcs(|window, _| window == hwnd);
+    if !taken.is_empty() {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("win32k: a window destroyed with a DC taken (GetDC without ReleaseDC)");
+        }
+    }
+    let current = dc::current_pid();
+    for (hdc, dc) in &taken {
+        if dc.state().owner.is_some_and(|(pid, _)| pid == current) {
+            dc::give_back(*hdc, dc);
+            if let Some(hrgn) = set_free(*hdc) {
+                crate::gdi::delete_object(hrgn);
+            }
+        } else {
+            dc::disown(*hdc, dc);
+            set_free(*hdc);
+        }
+    }
+    taken.len()
+}
+
+/// Les DC du cache pris par le processus `pid`, qui se termine, retournent
+/// au repos, sans toucher à sa mémoire (ses attributs et ses régions partent
+/// avec elle et avec ses objets GDI). Rend leur nombre.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn free_process_dcs(pid: u32) -> usize {
+    let taken = taken_dcs(|_, owner| owner == Some(pid));
+    for (hdc, dc) in &taken {
+        dc::disown(*hdc, dc);
+        set_free(*hdc);
+    }
+    taken.len()
 }
 
 #[cfg(test)]

@@ -135,6 +135,16 @@ impl Table {
             .filter(|slot| slot.object.is_some() && u32::from(slot.entry.full_unique) == handle >> 16)
     }
 
+    /// Les handles des objets du processus `pid`, dans l'ordre des entrées.
+    pub fn owned_by(&self, pid: u32) -> Vec<u32> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.object.is_some() && slot.entry.process_id == pid && pid != OWNER_PUBLIC)
+            .map(|(index, slot)| handle_of(RESERVE_ENTRIES_COUNT + index as u32, &slot.entry))
+            .collect()
+    }
+
     /// L'objet de `handle` et son propriétaire.
     pub fn get(&self, handle: u32) -> Option<(Object, u32)> {
         let slot = self.slot(handle)?;
@@ -263,6 +273,14 @@ fn publish(handle: u32, entry: &GdiTableEntry32) -> Result<(), NtStatus> {
 /// <= DISPATCH_LEVEL.
 pub fn count_of(pid: u32) -> u32 {
     TABLE.lock().slots.iter().filter(|slot| slot.object.is_some() && slot.entry.process_id == pid).count() as u32
+}
+
+/// Les handles des objets du processus `pid` (GDI_CleanupForProcess).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn owned_by(pid: u32) -> Vec<u32> {
+    TABLE.lock().owned_by(pid)
 }
 
 pub fn insert(object: Object, handle_type: u32, objt: u8, owner: u32) -> Result<u32, NtStatus> {
@@ -506,6 +524,22 @@ mod tests {
         let (last, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).unwrap();
         assert_eq!(last, 0x0010_FFFF);
         assert!(table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).is_none(), "full");
+    }
+
+    #[test]
+    fn a_process_s_objects_are_found_for_its_end() {
+        let mut table = Table::default();
+        let (brush_44, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).unwrap();
+        table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x48).unwrap();
+        let (dc_44, _) = table.insert(brush(), LO_DC_TYPE, objt::DC, 0x44).unwrap();
+        table.insert(brush(), LO_DC_TYPE, objt::DC, OWNER_NONE).unwrap();
+        let (stock, _) = table.insert(brush(), LO_BRUSH_TYPE, objt::BRUSH, 0x44).unwrap();
+        let (stock, _) = table.make_stock(stock).unwrap();
+        assert_eq!(table.owned_by(0x44), [brush_44, dc_44], "not the stock object, nobody's DC, 0x48's");
+        table.remove(brush_44);
+        assert_eq!(table.owned_by(0x44), [dc_44]);
+        assert!(table.owned_by(OWNER_PUBLIC).is_empty(), "the stock objects are nobody's to clean up");
+        assert!(table.get(stock).is_some());
     }
 
     #[test]

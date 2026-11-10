@@ -340,6 +340,8 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
     sys::apc::install();
     shared_data::init();
     win32k::init().expect("the USER shared section");
+    // What win32k gives back at the end of a GUI thread, then of its process.
+    ps::set_win32_callouts(win32k::destroy::thread_exit, win32k::destroy::process_exit);
     // The display driver: the UEFI framebuffer, if the loader found one.
     // SAFETY: the HHDM maps [0, 4 GiB) for good and the framebuffer lies
     // below 4 GiB; only gopfb and the boot console write to it.
