@@ -13,11 +13,14 @@
 //! la voit déjà, le serveur la voit à son tour quand il accepte, et chacun
 //! apprend où l'autre la voit.
 //!
+//! Le noyau envoie aussi ses messages ([`request_port`]) : Ps y annonce la
+//! fin d'un thread (`LPC_CLIENT_DIED`).
+//!
 //! Pas encore : la section d'un serveur (`ServerView`), les rappels (une
-//! requête envoyée en réponse), les messages `LPC_PORT_CLOSED` et
-//! `LPC_CLIENT_DIED`, NtReadRequestData et NtWriteRequestData. Un thread qui
-//! se termine pendant son attente laisse son inscription, qu'écrase la
-//! suivante de son TID.
+//! requête envoyée en réponse), le message `LPC_PORT_CLOSED` (le dernier
+//! handle d'un port client fermé), NtReadRequestData et NtWriteRequestData.
+//! Un thread qui se termine pendant son attente laisse son inscription,
+//! qu'écrase la suivante de son TID.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -25,7 +28,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ptr;
 
-use abi::lpc::{PortMessage32, LPC_CONNECTION_REQUEST, LPC_DATAGRAM, LPC_REPLY, LPC_REQUEST};
+use abi::lpc::{PortMessage32, LPC_CLIENT_DIED, LPC_CONNECTION_REQUEST, LPC_DATAGRAM, LPC_REPLY, LPC_REQUEST};
 use abi::ntstatus::{
     NtStatus, STATUS_INVALID_PARAMETER, STATUS_INVALID_PORT_HANDLE, STATUS_LPC_REPLY_LOST,
     STATUS_PORT_CONNECTION_REFUSED, STATUS_PORT_MESSAGE_TOO_LONG, STATUS_REPLY_MESSAGE_MISMATCH, STATUS_WAIT_0,
@@ -405,6 +408,31 @@ pub fn send(
     to.queue(message)
 }
 
+/// LpcRequestPort, pour le noyau : le message de sorte `kind` et de données
+/// `data` part par `port` au nom du thread `client`, sans attendre de
+/// réponse ; il va où irait un datagramme ([`Port::send_port`]). La sorte va
+/// de `LPC_DATAGRAM` à `LPC_CLIENT_DIED`, comme dans ReactOS, et reste telle
+/// quelle : sans `LPC_KERNELMODE_MESSAGE`, que `csrss` ne reconnaîtrait pas.
+/// C'est ainsi que Ps annonce la fin d'un thread (`LPC_CLIENT_DIED`).
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` pour une autre sorte ;
+/// `STATUS_PORT_MESSAGE_TOO_LONG` au-delà des messages du port ;
+/// `STATUS_PORT_DISCONNECTED` sans serveur.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn request_port(port: &Arc<Object<Port>>, client: ClientId32, kind: u16, data: Vec<u8>) -> Result<(), NtStatus> {
+    if !(LPC_DATAGRAM..=LPC_CLIENT_DIED).contains(&kind) {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let data_length = u16::try_from(data.len()).map_err(|_| STATUS_PORT_MESSAGE_TOO_LONG)?;
+    let total_length = data_length.checked_add(HEADER_LENGTH as u16).ok_or(STATUS_PORT_MESSAGE_TOO_LONG)?;
+    let header = PortMessage32 { data_length, total_length, ..PortMessage32::default() };
+    let (to, message) = outgoing(port, client, &header, data, kind)?;
+    to.queue(message)
+}
+
 /// NtReplyPort, et la réponse de NtReplyWaitReceivePort : le serveur répond
 /// par `port` au message que désignent le CLIENT_ID et l'identifiant de
 /// `header`, avec les données `data` ; le thread qui l'attend est réveillé.
@@ -501,6 +529,38 @@ mod tests {
         assert_eq!(complete(&server), Ok(()));
         assert_eq!(complete(&server).err(), Some(STATUS_INVALID_PARAMETER), "woken once");
         unregister(&waiter);
+    }
+
+    #[test]
+    fn the_kernel_tells_a_server_that_a_client_died() {
+        use abi::lpc::LPC_KERNELMODE_MESSAGE;
+        let connection = Port::create(0, 0x100, 16).expect("a port");
+        let dying = ClientId32 { unique_process: 20, unique_thread: 48 };
+        let created = 0x01D2_0000_1234_5678u64.to_le_bytes().to_vec();
+        for kind in [LPC_REQUEST, LPC_REPLY, LPC_CONNECTION_REQUEST, LPC_CLIENT_DIED | LPC_KERNELMODE_MESSAGE] {
+            assert_eq!(request_port(&connection, dying, kind, created.clone()), Err(STATUS_INVALID_PARAMETER));
+        }
+        assert_eq!(connection.queued(), 0, "nothing sent");
+        assert_eq!(request_port(&connection, dying, LPC_CLIENT_DIED, created.clone()), Ok(()));
+        assert_eq!(connection.queued(), 1, "a connection port receives what is sent by it");
+        let message = connection.receive(ProcessorMode::Kernel, None).expect("the message");
+        assert_eq!(message.header.kind, LPC_CLIENT_DIED, "its kind as is: csrss compares it");
+        assert_eq!(message.header.client_id, dying, "from the thread that ends");
+        assert_eq!((message.header.data_length, message.header.total_length), (8, 0x20));
+        assert_ne!(message.header.message_id, 0);
+        assert_eq!((message.data, message.context), (created, 0));
+        let too_long = alloc::vec![0; 0x100];
+        assert_eq!(
+            request_port(&connection, dying, LPC_CLIENT_DIED, too_long),
+            Err(STATUS_PORT_MESSAGE_TOO_LONG),
+            "past the port"
+        );
+        let client = Port::communication(PortKind::Client, &connection);
+        assert_eq!(
+            request_port(&client, dying, LPC_CLIENT_DIED, alloc::vec![0; 8]),
+            Err(abi::ntstatus::STATUS_PORT_DISCONNECTED),
+            "a client port without its server"
+        );
     }
 
     #[test]

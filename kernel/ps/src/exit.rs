@@ -2,7 +2,9 @@
 //!
 //! - [`exit_thread`] (PspExitThread) : le thread courant se termine. Il passe
 //!   dans l'espace du système, fait le rundown de ses APC, quitte la liste
-//!   de son processus et rend son TEB. Le dernier thread termine aussi le
+//!   de son processus, annonce sa fin à son port de fin ou au port
+//!   d'exception de son processus (`LPC_CLIENT_DIED`, ce qu'attend `csrss`)
+//!   et rend son TEB. Le dernier thread termine aussi le
 //!   processus : rundown de la table de handles, espace d'adresses rendu une
 //!   fois finis les accès en cours, objet processus signalé. Le thread se
 //!   confie ensuite au *reaper*, puis quitte le processeur pour de bon.
@@ -20,7 +22,9 @@ use alloc::vec::Vec;
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use abi::lpc::LPC_CLIENT_DIED;
 use abi::ntstatus::{NtStatus, STATUS_PROCESS_IS_TERMINATING, STATUS_THREAD_IS_TERMINATING};
+use abi::teb32::ClientId32;
 use hal::sync::{KSpinLock, Once};
 use ke::dispatcher::{ObjectType as KObjectType, Platform, ProcessorMode};
 use ke::sched::KePlatform;
@@ -149,7 +153,8 @@ fn critical_break(message: &str, kind: u64, object: *const u8, image: &str) {
 }
 
 /// PspExitThread : termine le thread courant avec `status`. Un thread noyau
-/// ou de l'ancien chargeur se termine directement dans Ke. La fin d'un thread
+/// ou de l'ancien chargeur se termine directement dans Ke. Sa fin est
+/// annoncée par `LPC_CLIENT_DIED` ([`notify_client_died`]). La fin d'un thread
 /// critique, ou du dernier thread d'un processus critique, arrête le système
 /// (CRITICAL_OBJECT_TERMINATION).
 ///
@@ -187,6 +192,7 @@ pub fn exit_thread(status: NtStatus) -> ! {
     if last && process.is_critical() {
         critical_break("Critical process exited:", 3, Arc::as_ptr(&process).cast(), process.image_file_name());
     }
+    notify_client_died(&thread, &process);
     if last {
         process.set_exit_status(status);
         run_down_process(&process);
@@ -203,6 +209,23 @@ pub fn exit_thread(status: NtStatus) -> ! {
     drop(process);
     ke::sched::terminate_current_thread();
     unreachable!("a terminated thread was resumed");
+}
+
+/// L'avis de la fin d'un thread (PspExitThread) : `LPC_CLIENT_DIED` à son
+/// port de fin (NtRegisterThreadTerminatePort), sinon au port d'exception
+/// de son processus — celui que `csrss` pose sur chaque processus de Win32
+/// (CsrCreateProcess) et par lequel il apprend la mort de ses clients :
+/// CsrDestroyThread, puis CsrDestroyProcess au dernier thread, ferment les
+/// handles qu'il tient sur eux. Sans cet avis, chaque processus fini
+/// resterait référencé, et ses threads Ke avec. Le message porte le
+/// CLIENT_ID du thread et son heure de création (CLIENT_DIED_MSG), que
+/// `csrss` compare à celle qu'il a lue (ThreadTimes). Un serveur parti n'a
+/// plus rien à apprendre : l'échec de l'envoi est ignoré.
+fn notify_client_died(thread: &EThread, process: &EProcess) {
+    let Some(port) = thread.take_terminate_port().or_else(|| process.exception_port()) else { return };
+    let Some(port) = ob::downcast::<lpc::Port>(&port) else { return };
+    let client = ClientId32 { unique_process: thread.pid(), unique_thread: thread.tid() };
+    let _ = lpc::request_port(&port, client, LPC_CLIENT_DIED, thread.create_time().to_le_bytes().to_vec());
 }
 
 /// PspExitProcess : ferme les handles du processus et rend son espace
