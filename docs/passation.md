@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **Le journal série écrit chaque ligne d'un coup** (`claude/new-session-696xfc`, sur main `38d86a7`) : `hal::serial`
+  envoyait un enregistrement octet par octet, le verrou de COM1 pris pour chacun ; un thread préempté au milieu d'une
+  ligne laissait un autre y glisser la sienne. `send-messages` a ainsi perdu un marqueur sur Intel (« [send] sent
+  messa[INFO] win32k: thread 44 … ended »), la ligne de fin d'un thread GUI tombant dans un `DbgPrint`. Corrigé :
+  l'enregistrement est formaté sur la pile (`serial::Chunks`, `LINE_CAPACITY` = 640 octets, plus qu'un `DbgPrint`)
+  puis envoyé en une seule prise du verrou ; un enregistrement plus long part par morceaux entiers de cette taille.
+  Les interruptions restent masquées le temps d'une ligne (immédiat sur l'UART de QEMU et de VirtualBox, environ
+  87 µs par octet sur un 16550 réel). Tests : hôte (`hal::serial` : une ligne en un morceau, une longue en morceaux
+  entiers sans perte) ; scénarios `smoke`, `send-messages`, `destroy`, `smss` sur AMD et Intel.
+
 - **Les curseurs** (`claude/new-session-696xfc`, sur main `11a3464` et l'envoi d'un tampon du noyau ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 15) : `user32` chargeait mal ses curseurs
   (NtUserFindExistingCursorIcon absent dans les 21 scénarios GUI, puis NtGdiCreateCompatibleDC refusait le DC de
