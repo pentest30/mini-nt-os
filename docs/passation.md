@@ -1,5 +1,30 @@
 # Notes de passation
 
+- **M5, le dernier critère : les apitests de ReactOS** (`claude/apps-wave`,
+  [`compat/m5-rostests.md`](compat/m5-rostests.md)). Le banc est fait : `cargo xtask rostests-fetch` (l'arbre
+  0.4.16 par Git, dans `third_party/reactos-0.4.16/`), `xtask/src/rostests.rs` (winnt.h généré, SAL neutralisée,
+  PSEH ; un pilote par module, commande initiale de `smss`, qui prend `WinSta0\Default` comme winlogon et lance
+  chaque test détaché dans un coureur, sa sortie relayée par `DbgPrint`), scénarios `rostests` (ntdll) et
+  `rostests-kernel32`, avec `interactive` (sans lui, la sonde termine `smss` 10 s après son début). Jugement :
+  `apitests-floor` (un plancher qui ne baisse pas : le scénario échoue en dessous) et le seuil du M5 (50 %,
+  rapporté). Sans l'arbre, les scénarios sont sautés, et `cargo xtask test` ne s'arrête plus. Le banc a mis au
+  jour un manque de Ps : la fin d'un thread n'était pas annoncée (`LPC_CLIENT_DIED`), `csrss` gardait ses clients
+  morts et la table des 64 threads de Ke se remplissait ; c'est fait (`ps::exit::notify_client_died`,
+  `lpc::request_port`, `process_settings_self_test`). Le banc compile maintenant tests et PSEH avec les options
+  i386 de ReactOS (`-fno-omit-frame-pointer`… : sans elles, chaque `__except` qui attrapait tuait le test,
+  STATUS_UNWIND). **Mesure du 2026-11-10 : ntdll 33/84, kernel32 11/29, 39 % ; le seuil de 50 % n'est pas
+  atteint**, le critère reste décoché ; ce sont les planchers. La suite, vers le seuil : les 8 tests qui meurent
+  ou pendent, puis les assertions une à une (listes dans le document), en montant le plancher à chaque commit.
+  Contournement à suivre : le pilote prend lui-même `WinSta0\Default` ; la station par défaut d'un chemin de
+  bureau qui n'en nomme pas reste à faire dans `win32k::startup` (IntResolveDesktop).
+  Aussi : `docs/compat/syscalls.md` régénéré (périmé depuis les stylos et les menus : `cargo xtask lint` échouait),
+  les tests de `win32k::defwnd` recompilent (le paramètre `has_menu` des menus), le scénario `cmd` recalé (cassé
+  depuis 36b6714 : l'auto-test d'Io laisse `A long name.txt` à la racine ; le marqueur `0 bytes free` prenait
+  aussi `4,180,480 bytes free`). Validation sur l'hôte Windows : `cargo xtask lint` propre, 898 tests hôte
+  (`--release`), 75 démarrages sur 77 ; **`installer-finish` échoue** (défaut et Intel) : la sonde termine `smss`
+  10 s après la dernière touche pendant la copie (« stage copy: 60% »), le symptôme connu des scénarios
+  d'installation sur cet hôte, sans rapport avec ce travail, non revérifié sur la base.
+
 - **M9 NTFS, parcours des répertoires** (`feature/m9-ntfs-paths`) : lecture de `$I30` (INDEX_ROOT, INDEX_ALLOCATION, BITMAP), fixups INDX et parcours borné avec détection des cycles. Comparaison des entrées avec ntfsls sur images mkntfs ; résolution des chemins imbriqués avec références séquencées et `$UpCase`, normalisation bornée et refus des noms ambigus. 19 tests unitaires et comparaison de 162 fichiers par image ntfs-3g (clusters 512/4096/8192) passent. Limites et reprise : `docs/compat/ntfs.md`. Suite : ATTRIBUTE_LIST et extents, puis montage noyau séparé. PR #95.
 
 
@@ -686,7 +711,8 @@ Ce que le M4 prévoyait (05) ou a laissé en chemin, à reprendre quand cela com
      `fc`, `xcopy`, `attrib`) et un scénario qui les enchaîne par des tubes et des redirections ; `del`, `ren`, `md`,
      `rd` (suppression et renommage d'Io) ; plus tard `format` et `chkdsk` (`fmifs.dll`, `ufat.dll` : un volume
      ouvert comme périphérique, les IRP) ; les icônes de `consrv`, SetTimer, le défilement et les barres de
-     défilement de la console, DestroyWindow ; le dernier critère du M5 : les `rostests` `ntdll` et `kernel32` ;
+     défilement de la console, DestroyWindow ; le dernier critère du M5, les `rostests` `ntdll` et `kernel32` :
+     le banc est fait et mesure 39 % pour un seuil de 50 % ([`compat/m5-rostests.md`](compat/m5-rostests.md)) ;
    - **la suite, côté affichage** (le chemin critique du M5 et du M6) : les contrôles et
      l'entrée ; le chemin de la connexion (avis donné au mainteneur : après ceux-ci) commence par NPFS, les tubes
      nommés d'Io, où s'arrête le vrai `winlogon` ; la fenêtre active et le premier plan, réduire et agrandir (WINDOWPLACEMENT), DestroyWindow,

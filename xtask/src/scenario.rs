@@ -31,7 +31,14 @@
 //!   - `userland`: the ramdisk gets the fetched ReactOS userland (`NTDLL.DLL`
 //!     and the NLS tables);
 //!   - `native`: the ramdisk gets the native test programs of
-//!     `tests/native/`, compiled with MinGW or clang (`xtask/src/native.rs`).
+//!     `tests/native/`, compiled with MinGW or clang (`xtask/src/native.rs`);
+//!   - `rostests`: the ramdisk gets the ReactOS apitests (`NTAPITST.EXE`,
+//!     `K32APITST.EXE` and their runners, `xtask/src/rostests.rs`), built
+//!     from the tree that `cargo xtask rostests-fetch` clones.
+//! - `apitests-floor = N` (with `requires = rostests`, and only then): at
+//!   least N apitests must pass, the count of the last measurement; the
+//!   share of passing tests is also compared to the M5 threshold, and only
+//!   reported.
 //! - `disk = installed`: a single GPT disk holds the real ESP and system
 //!   partition, replacing the external virtual FAT boot disk.
 //! - `disk = system-gpt`: wraps the FAT image in a GPT Basic Data partition;
@@ -62,7 +69,7 @@
 //!   keys that type its characters on a US keyboard. The `keys` lines fire
 //!   in their order.
 //! - `initial-command = PROGRAM.EXE`: this Win32 test program of
-//!   `tests/native/` takes the place of `winlogon.exe` on the ramdisk, so
+//!   `tests/native/` (or of the rostests) takes the place of `winlogon.exe` on the ramdisk, so
 //!   that `smss` starts it as its initial command (with `requires =
 //!   userland, native`).
 
@@ -82,6 +89,9 @@ pub struct Scenario {
     pub requires_native: bool,
     /// Les apitests de ReactOS (rostests-build) au disque de démarrage.
     pub requires_rostests: bool,
+    /// Les apitests qui doivent passer au moins (`apitests-floor`) : ceux
+    /// qui passaient à la dernière mesure.
+    pub apitests_floor: Option<u32>,
     /// The ramdisk image is also the system disk `C:`.
     pub system_disk: bool,
     /// Wrap the system volume in GPT rather than using raw FAT.
@@ -210,6 +220,7 @@ impl Scenario {
             requires_userland: false,
             requires_native: false,
             requires_rostests: false,
+            apitests_floor: None,
             system_disk: false,
             gpt_disk: false,
             installed_disk: false,
@@ -245,6 +256,11 @@ impl Scenario {
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
+                "apitests-floor" => {
+                    let floor =
+                        value.parse().map_err(|_| format!("{}: apitests-floor `{value}` is not a number", at()))?;
+                    sc.apitests_floor = Some(floor);
+                }
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "keys" => sc.keys.push(Keys::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
@@ -296,6 +312,9 @@ impl Scenario {
         }
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
+        }
+        if sc.requires_rostests != sc.apitests_floor.is_some() {
+            return Err(format!("{name}/{SCENARIO_FILE}: `requires = rostests` goes with `apitests-floor`"));
         }
         // An installed image is the primary boot disk: the target can be the
         // secondary master beside it, not beside a system disk there.
@@ -413,6 +432,12 @@ requires = userland
         assert_eq!(gui.initial_command.as_deref(), Some("GUI1.EXE"));
         assert_eq!(sc.initial_command, None);
         assert!(Scenario::parse("x", "expect = a\ninitial-command = GUI1.EXE").is_err(), "without the userland");
+        let bench = Scenario::parse("x", "expect = a\nrequires = rostests\napitests-floor = 12").unwrap();
+        assert!(bench.requires_rostests && bench.apitests_floor == Some(12));
+        assert_eq!(sc.apitests_floor, None);
+        assert!(Scenario::parse("x", "expect = a\nrequires = rostests").is_err(), "a bench without its floor");
+        assert!(Scenario::parse("x", "expect = a\napitests-floor = 3").is_err(), "a floor without its bench");
+        assert!(Scenario::parse("x", "expect = a\nrequires = rostests\napitests-floor = many").is_err());
     }
 
     #[test]

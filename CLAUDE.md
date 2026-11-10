@@ -312,6 +312,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtSetInformationFile(FileBasicInformation) ; NtQueryDefaultLocale (`ex::locale`, `Nls\Language`) ; `xtask`
   attend qu'une touche soit relâchée avant la suivante (QEMU 8.2 perd des relâchements sinon) ; `hal::ps2` compte
   ce qu'il perd. **Le critère de `cmd.exe` interactif du M5 est coché.**
+  Le dernier critère du M5, les apitests de ReactOS ([`docs/compat/m5-rostests.md`](docs/compat/m5-rostests.md)) :
+  `cargo xtask rostests-fetch` clone l'arbre 0.4.16 (sans lui, les scénarios sont sautés) ; `xtask/src/rostests.rs`
+  compile les modules `ntdll` et `kernel32` en un pilote (commande initiale de `smss` à la place de winlogon, il
+  prend `WinSta0\Default`) et un coureur où chaque test tourne, détaché, sa sortie relayée par `DbgPrint` ;
+  scénarios `rostests` et `rostests-kernel32`, jugés par un plancher (`apitests-floor`, qui ne baisse pas) et le
+  seuil du jalon (50 %, rapporté). Ps annonce la fin de chaque thread à son port de fin ou au port d'exception de
+  son processus (`LPC_CLIENT_DIED`, `lpc::request_port`) : `csrss` lâche ses clients morts, et leurs threads Ke.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
   le générateur de stubs de `kernel/ps/src/loader.rs`, `kernel/ntoskrnl/src/launcher.rs`, `win32/*`, `directx/*`.
