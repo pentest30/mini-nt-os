@@ -1,0 +1,11 @@
+[package]
+name    = "mkhive"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "mkhive"
+
+[dependencies]
+# The hive format, read and written whole (ADR-012).
+regf = { path = "../../libs/regf", features = ["builder"] }
