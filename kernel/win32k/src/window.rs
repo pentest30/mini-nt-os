@@ -129,6 +129,9 @@ pub struct WindowState {
     /// la première, la dernière, adresses du serveur ; `PropListItems`) ;
     /// `None` sans propriété.
     pub prop_list: Option<(u32, u32, u32)>,
+    /// Ses barres de défilement, dès qu'on lui en parle (`crate::scroll`),
+    /// et la place de leur `SBINFO` dans le tas (`pSBInfo`).
+    pub scroll: Option<crate::scroll::ScrollBars>,
 }
 
 impl WindowState {
@@ -240,8 +243,15 @@ impl Drop for Window {
             let _ = crate::handles::free(self.handle);
         }
         self.heap.free(self.wnd, self.wnd_size);
-        if let Some(name) = self.state.lock().name {
+        let (name, scroll) = {
+            let state = self.state.lock();
+            (state.name, state.scroll)
+        };
+        if let Some(name) = name {
             self.heap.free(name.at, name.capacity);
+        }
+        if let Some(scroll) = scroll {
+            self.heap.free(scroll.at, size_of::<abi::user::SbInfo32>() as u32);
         }
         if self.class.is_none() {
             self.heap.free(self.cls, size_of::<Cls32>() as u32);
@@ -353,6 +363,7 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
             abi::user::ListEntry32 { flink, blink }
         },
         prop_list_items: state.prop_list.map_or(0, |(_, _, count)| count),
+        sb_info: state.scroll.map_or(0, |bars| heap.server_address(bars.at)),
         ..Wnd32::default()
     }
 }

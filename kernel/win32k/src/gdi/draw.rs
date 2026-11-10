@@ -8,13 +8,13 @@
 //!
 //! Le texte y est une suite de glyphes rendus ([`Op::Glyph`], `crate::font`).
 //!
-//! Pas encore : les bords plats et monochromes (`BF_FLAT`, `BF_MONO`) et
-//! diagonaux (`BF_DIAGONAL`), les lignes quelconques, les icônes.
+//! Pas encore : les bords monochromes (`BF_MONO`) et diagonaux
+//! (`BF_DIAGONAL`), les lignes quelconques.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use super::dib::{Bitmap, ColorRef, Rect};
+use super::dib::{Bitmap, ColorRef, MonoFill, Rect};
 use super::region::Region;
 use abi::user::color;
 
@@ -31,6 +31,9 @@ pub enum Op {
     Glyph { at: (i32, i32), bitmap: Arc<glyph::Bitmap>, color: ColorRef, clip: Rect },
     /// Une icône à la taille de son rectangle (DrawIconEx, DI_NORMAL).
     Icon(Rect, Arc<crate::cursor::Shape>),
+    /// PatBlt d'un pinceau à motif monochrome (le pinceau gris), le coin du
+    /// motif à l'origine du contexte plus celle de `MonoFill`.
+    Mono(Rect, MonoFill),
 }
 
 /// La couleur de la colonne `x` d'un dégradé de `from` à `to` entre `left`
@@ -52,6 +55,11 @@ pub fn paint(surface: &mut Bitmap<'_>, ops: &[Op], origin: (i32, i32), clip: &Re
         for &visible in clip.rects() {
             match op {
                 &Op::Fill(rect, color) => surface.fill_rect(moved(rect).intersect(&visible), color),
+                Op::Mono(rect, fill) => {
+                    let fill = MonoFill { origin: (fill.origin.0 + origin.0, fill.origin.1 + origin.1), ..*fill };
+                    // PATCOPY.
+                    surface.pat_blt_mono(moved(*rect).intersect(&visible), &fill, 0xF0);
+                }
                 Op::Icon(rect, shape) => {
                     crate::cursor::draw_shape(surface, shape, moved(*rect), visible, abi::user::di::NORMAL);
                 }
@@ -88,6 +96,8 @@ pub const BF_RECT: u32 = BF_LEFT | BF_TOP | BF_RIGHT | BF_BOTTOM;
 pub const BF_MIDDLE: u32 = 0x0800;
 pub const BF_SOFT: u32 = 0x1000;
 pub const BF_ADJUST: u32 = 0x2000;
+/// Un bord plat (une flèche enfoncée d'une barre de défilement, DFCS_FLAT).
+pub const BF_FLAT: u32 = 0x4000;
 
 /// Les couleurs système des quatre traits d'un bord : en haut et à gauche
 /// (extérieur, intérieur), en bas et à droite (extérieur, intérieur) ;
@@ -96,8 +106,21 @@ pub const BF_ADJUST: u32 = 0x2000;
 /// et très sombre en bas à droite (`COLOR_3DDKSHADOW`), un bord intérieur en
 /// relief blanc (`COLOR_3DLIGHT` doux) puis ombré (`COLOR_BTNSHADOW`) ; un
 /// bord creux l'inverse. Un bord intérieur seul se trace à la place de
-/// l'extérieur.
-fn edge_colors(edge: u32, soft: bool) -> [Option<usize>; 4] {
+/// l'extérieur. Un bord plat (`BF_FLAT`, LTRBOuterFlat, LTRBInnerFlat) a
+/// son trait extérieur en `COLOR_BTNSHADOW` des quatre côtés, son trait
+/// intérieur en `COLOR_BTNFACE` (le seul, s'il n'a pas d'extérieur).
+fn edge_colors(edge: u32, soft: bool, flat: bool) -> [Option<usize>; 4] {
+    if flat {
+        let has_outer = edge & (BDR_RAISEDOUTER | BDR_SUNKENOUTER) != 0;
+        let has_inner = edge & (BDR_RAISEDINNER | BDR_SUNKENINNER) != 0;
+        let (outer, inner) = match (has_outer, has_inner) {
+            (true, true) => (Some(color::BTNSHADOW), Some(color::BTNFACE)),
+            (true, false) => (Some(color::BTNSHADOW), None),
+            (false, true) => (Some(color::BTNFACE), None),
+            (false, false) => (None, None),
+        };
+        return [outer, inner, outer, inner];
+    }
     let outer = match edge & (BDR_RAISEDOUTER | BDR_SUNKENOUTER) {
         BDR_RAISEDOUTER => Some((if soft { color::BTNHIGHLIGHT } else { color::LIGHT_3D }, color::DKSHADOW_3D)),
         BDR_SUNKENOUTER => Some((if soft { color::DKSHADOW_3D } else { color::BTNSHADOW }, color::BTNHIGHLIGHT)),
@@ -120,7 +143,8 @@ fn edge_colors(edge: u32, soft: bool) -> [Option<usize>; 4] {
 /// IntDrawRectEdge : le bord `edge` (`BDR_*`) des côtés `flags` (`BF_*`) de
 /// `rect`, ajouté à `ops` dans les couleurs `colors` ; avec `BF_MIDDLE`, le
 /// milieu d'abord de `COLOR_BTNFACE` ; avec `BF_ADJUST`, `rect` devient ce
-/// qui reste dedans. Rend FALSE pour un bord à la fois en relief et creux.
+/// qui reste dedans. Rend FALSE pour un bord à la fois en relief et creux
+/// (pas pour un bord plat).
 pub fn draw_edge(
     rect: &mut Rect,
     edge: u32,
@@ -128,9 +152,10 @@ pub fn draw_edge(
     colors: &impl Fn(usize) -> ColorRef,
     ops: &mut Vec<Op>,
 ) -> bool {
-    let valid = edge & (BDR_RAISEDINNER | BDR_SUNKENINNER) != (BDR_RAISEDINNER | BDR_SUNKENINNER)
-        && edge & (BDR_RAISEDOUTER | BDR_SUNKENOUTER) != (BDR_RAISEDOUTER | BDR_SUNKENOUTER);
-    let [lt_outer, lt_inner, rb_outer, rb_inner] = edge_colors(edge, flags & BF_SOFT != 0);
+    let valid = flags & BF_FLAT != 0
+        || (edge & (BDR_RAISEDINNER | BDR_SUNKENINNER) != (BDR_RAISEDINNER | BDR_SUNKENINNER)
+            && edge & (BDR_RAISEDOUTER | BDR_SUNKENOUTER) != (BDR_RAISEDOUTER | BDR_SUNKENOUTER));
+    let [lt_outer, lt_inner, rb_outer, rb_inner] = edge_colors(edge, flags & BF_SOFT != 0, flags & BF_FLAT != 0);
     let r = *rect;
     if flags & BF_MIDDLE != 0 && valid {
         ops.push(Op::Fill(r, colors(color::BTNFACE)));
@@ -252,16 +277,33 @@ mod tests {
 
     #[test]
     fn an_inner_edge_alone_takes_the_outer_line() {
-        assert_eq!(edge_colors(BDR_RAISEDOUTER | BDR_SUNKENOUTER | BDR_RAISEDINNER, false), [None; 4], "no outer edge");
         assert_eq!(
-            edge_colors(BDR_RAISEDOUTER | BDR_RAISEDINNER | BDR_SUNKENINNER, false),
+            edge_colors(BDR_RAISEDOUTER | BDR_SUNKENOUTER | BDR_RAISEDINNER, false, false),
+            [None; 4],
+            "no outer edge"
+        );
+        assert_eq!(
+            edge_colors(BDR_RAISEDOUTER | BDR_RAISEDINNER | BDR_SUNKENINNER, false, false),
             [Some(color::LIGHT_3D), None, Some(color::DKSHADOW_3D), None],
             "no inner edge"
         );
-        assert_eq!(edge_colors(BDR_SUNKENINNER, false), [Some(color::DKSHADOW_3D), None, Some(color::LIGHT_3D), None]);
+        assert_eq!(
+            edge_colors(BDR_SUNKENINNER, false, false),
+            [Some(color::DKSHADOW_3D), None, Some(color::LIGHT_3D), None]
+        );
         let mut rect = Rect::new(0, 0, 6, 6);
         draw_edge(&mut rect, BDR_SUNKENINNER, BF_RECT | BF_ADJUST, &system, &mut Vec::new());
         assert_eq!(rect, Rect::new(1, 1, 5, 5), "one line");
+    }
+
+    #[test]
+    fn a_flat_edge_is_shadow_then_face() {
+        let mut ops = Vec::new();
+        assert!(draw_edge(&mut Rect::new(0, 0, 6, 6), EDGE_SUNKEN, BF_RECT | BF_MIDDLE | BF_FLAT, &system, &mut ops));
+        let at = render(&ops);
+        let (shadow, face) = (system(color::BTNSHADOW).0, system(color::BTNFACE).0);
+        assert_eq!((at(0, 0), at(5, 5), at(0, 5), at(5, 0)), (shadow, shadow, shadow, shadow), "the outer line");
+        assert_eq!((at(1, 1), at(4, 4), at(3, 3)), (face, face, face), "the inner line and the middle");
     }
 
     #[test]

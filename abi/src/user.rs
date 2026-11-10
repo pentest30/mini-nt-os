@@ -934,6 +934,10 @@ pub const SC_MOVE: u32 = 0xF010;
 pub const SC_MINIMIZE: u32 = 0xF020;
 pub const SC_MAXIMIZE: u32 = 0xF030;
 pub const SC_CLOSE: u32 = 0xF060;
+/// A click on a scroll bar (plus HTVSCROLL or HTHSCROLL): `user32` follows
+/// the mouse (DefWndTrackScrollBar).
+pub const SC_VSCROLL: u32 = 0xF070;
+pub const SC_HSCROLL: u32 = 0xF080;
 pub const SC_RESTORE: u32 = 0xF120;
 /// WMSZ_*: the edge SC_SIZE drags, in the low 4 bits of `wParam`; WMSZ_LEFT
 /// (1) to WMSZ_BOTTOMRIGHT (8) follow HTLEFT (10) to HTBOTTOMRIGHT (17).
@@ -1618,6 +1622,203 @@ const _: () = {
     assert!(offset_of!(Property32, atom) == 12);
 };
 
+/// WM_HSCROLL, WM_VSCROLL: a scroll bar's request (`LOWORD(wParam)`, `sb`).
+pub const WM_HSCROLL: u32 = 0x0114;
+pub const WM_VSCROLL: u32 = 0x0115;
+
+/// SB_*: which scroll bar (GetScrollInfo, SetScrollInfo, ShowScrollBar,
+/// EnableScrollBar), and the requests of WM_HSCROLL and WM_VSCROLL.
+pub mod sb {
+    pub const HORZ: u32 = 0;
+    pub const VERT: u32 = 1;
+    /// A scroll bar control (the ScrollBar class).
+    pub const CTL: u32 = 2;
+    pub const BOTH: u32 = 3;
+    pub const LINEUP: u32 = 0;
+    pub const LINEDOWN: u32 = 1;
+    pub const PAGEUP: u32 = 2;
+    pub const PAGEDOWN: u32 = 3;
+    pub const THUMBPOSITION: u32 = 4;
+    pub const THUMBTRACK: u32 = 5;
+    pub const ENDSCROLL: u32 = 8;
+}
+
+/// SIF_*: what a `SCROLLINFO` carries.
+pub mod sif {
+    pub const RANGE: u32 = 0x0001;
+    pub const PAGE: u32 = 0x0002;
+    pub const POS: u32 = 0x0004;
+    /// A bar left with nothing to scroll is disabled, not hidden.
+    pub const DISABLENOSCROLL: u32 = 0x0008;
+    pub const TRACKPOS: u32 = 0x0010;
+    pub const ALL: u32 = RANGE | PAGE | POS | TRACKPOS;
+    /// ReactOS's: the bar is drawn by a theme.
+    pub const THEMED: u32 = 0x0080;
+    /// ReactOS's (`undocuser.h`): SetScrollInfo returns the position before
+    /// (SetScrollPos).
+    pub const PREVIOUSPOS: u32 = 0x1000;
+}
+
+/// ESB_*: the arrows of a scroll bar that are disabled (EnableScrollBar,
+/// `SBINFO.WSBflags`).
+pub mod esb {
+    pub const ENABLE_BOTH: u32 = 0;
+    /// The left or top arrow.
+    pub const DISABLE_LTUP: u32 = 1;
+    /// The right or bottom arrow.
+    pub const DISABLE_RTDN: u32 = 2;
+    pub const DISABLE_BOTH: u32 = 3;
+}
+
+/// OBJID_*: the object GetScrollBarInfo is about (`SBOBJ_TO_SBID`: minus
+/// OBJID_HSCROLL gives SB_HORZ, SB_VERT, SB_CTL).
+pub const OBJID_HSCROLL: i32 = -6;
+pub const OBJID_VSCROLL: i32 = -5;
+pub const OBJID_CLIENT: i32 = -4;
+
+/// STATE_SYSTEM_*: the state of a part of a scroll bar (`rgstate`).
+pub mod state_system {
+    pub const UNAVAILABLE: u32 = 0x0000_0001;
+    pub const PRESSED: u32 = 0x0000_0008;
+    pub const INVISIBLE: u32 = 0x0000_8000;
+    pub const OFFSCREEN: u32 = 0x0001_0000;
+}
+
+/// The parts of a scroll bar (CCHILDREN_SCROLLBAR), and so `rgstate` has one
+/// more entry, the bar's own: the top or left arrow (1), the page above or
+/// left of the thumb (2), the thumb (3), the page below or right of it (4),
+/// the bottom or right arrow (5).
+pub const CCHILDREN_SCROLLBAR: usize = 5;
+
+/// SBS_VERT: a vertical scroll bar control.
+pub const SBS_VERT: u32 = 0x0001;
+
+/// SBDATA, 32-bit: the range, page and position of a scroll bar, which
+/// `user32` reads itself (GetScrollPos, GetScrollRange).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SbData32 {
+    pub pos_min: i32,
+    pub pos_max: i32,
+    pub page: i32,
+    pub pos: i32,
+}
+
+/// SBINFO, 32-bit: the scroll bars of a window, in its desktop's heap
+/// (`WND.pSBInfo`): the disabled arrows (`ESB_*`), then the horizontal and
+/// the vertical bar.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SbInfo32 {
+    pub wsb_flags: i32,
+    pub horz: SbData32,
+    pub vert: SbData32,
+}
+
+/// SCROLLINFO, 32-bit (SetScrollInfo, GetScrollInfo); an application may
+/// give it without `nTrackPos`, 24 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollInfo32 {
+    pub cb_size: u32,
+    pub f_mask: u32,
+    pub n_min: i32,
+    pub n_max: i32,
+    pub n_page: u32,
+    pub n_pos: i32,
+    pub n_track_pos: i32,
+}
+
+/// SCROLLBARINFO, 32-bit (GetScrollBarInfo): the bar's rectangle (in the
+/// window's coordinates from NtUserGetScrollBarInfo, `user32` moves it to
+/// the screen), the length of its arrows, its thumb, the state of each part.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollBarInfo32 {
+    pub cb_size: u32,
+    pub rc_scroll_bar: Rect32,
+    pub dxy_line_button: i32,
+    pub xy_thumb_top: i32,
+    pub xy_thumb_bottom: i32,
+    pub reserved: i32,
+    pub rgstate: [u32; CCHILDREN_SCROLLBAR + 1],
+}
+
+/// SETSCROLLBARINFO, 32-bit (NtUserSetScrollBarInfo, ReactOS's): what
+/// `user32` keeps of a bar while it follows the mouse on it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SetScrollBarInfo32 {
+    pub n_track_pos: i32,
+    pub reserved: i32,
+    pub rgstate: [u32; CCHILDREN_SCROLLBAR + 1],
+}
+
+const _: () = {
+    assert!(size_of::<SbData32>() == 16);
+    assert!(size_of::<SbInfo32>() == 36);
+    assert!(offset_of!(SbInfo32, horz) == 4);
+    assert!(offset_of!(SbInfo32, vert) == 20);
+    assert!(size_of::<ScrollInfo32>() == 28);
+    assert!(offset_of!(ScrollInfo32, n_track_pos) == 24);
+    assert!(size_of::<ScrollBarInfo32>() == 60);
+    assert!(offset_of!(ScrollBarInfo32, dxy_line_button) == 20);
+    assert!(offset_of!(ScrollBarInfo32, rgstate) == 36);
+    assert!(size_of::<SetScrollBarInfo32>() == 32);
+};
+
+/// The little-endian words of `bytes`, if they are at least `N` of them.
+fn words<const N: usize>(bytes: &[u8]) -> Option<[u32; N]> {
+    let mut words = [0u32; N];
+    for (index, word) in words.iter_mut().enumerate() {
+        let at = index * 4;
+        *word = u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?);
+    }
+    Some(words)
+}
+
+impl ScrollInfo32 {
+    /// The record in `bytes`, whose first 24 bytes (without `nTrackPos`,
+    /// 0 then) are enough; `None` if they are fewer.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let [cb_size, f_mask, n_min, n_max, n_page, n_pos] = words::<6>(bytes)?;
+        let n_track_pos = words::<7>(bytes).map_or(0, |w| w[6] as i32);
+        Some(Self {
+            cb_size,
+            f_mask,
+            n_min: n_min as i32,
+            n_max: n_max as i32,
+            n_page,
+            n_pos: n_pos as i32,
+            n_track_pos,
+        })
+    }
+}
+
+impl ScrollBarInfo32 {
+    /// The record in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let w = words::<15>(bytes)?;
+        Some(Self {
+            cb_size: w[0],
+            rc_scroll_bar: Rect32 { left: w[1] as i32, top: w[2] as i32, right: w[3] as i32, bottom: w[4] as i32 },
+            dxy_line_button: w[5] as i32,
+            xy_thumb_top: w[6] as i32,
+            xy_thumb_bottom: w[7] as i32,
+            reserved: w[8] as i32,
+            rgstate: [w[9], w[10], w[11], w[12], w[13], w[14]],
+        })
+    }
+}
+
+impl SetScrollBarInfo32 {
+    /// The record in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let w = words::<8>(bytes)?;
+        Some(Self { n_track_pos: w[0] as i32, reserved: w[1] as i32, rgstate: [w[2], w[3], w[4], w[5], w[6], w[7]] })
+    }
+}
+
 /// RT_CURSOR, RT_ICON: `CURSORDATA.rt`.
 pub const RT_CURSOR: u16 = 1;
 pub const RT_ICON: u16 = 3;
@@ -1772,12 +1973,38 @@ as_bytes!(
     CursorData32,
     FindExistingCurIconParam32,
     SetWndIconsArguments32,
-    Property32
+    Property32,
+    SbInfo32,
+    ScrollInfo32,
+    ScrollBarInfo32
 );
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scroll_records_read_back_from_their_bytes() {
+        let info =
+            ScrollInfo32 { cb_size: 28, f_mask: sif::ALL, n_min: -5, n_max: 99, n_page: 10, n_pos: 30, n_track_pos: 7 };
+        assert_eq!(ScrollInfo32::from_bytes(info.as_bytes()), Some(info));
+        let short = ScrollInfo32::from_bytes(&info.as_bytes()[..24]).unwrap();
+        assert_eq!((short.n_pos, short.n_track_pos), (30, 0), "without nTrackPos");
+        assert_eq!(ScrollInfo32::from_bytes(&info.as_bytes()[..20]), None);
+        let bar = ScrollBarInfo32 {
+            cb_size: 60,
+            rc_scroll_bar: Rect32 { left: 1, top: -2, right: 3, bottom: 4 },
+            dxy_line_button: 16,
+            xy_thumb_top: 20,
+            xy_thumb_bottom: 43,
+            reserved: 0,
+            rgstate: [1, 2, 3, 4, 5, 6],
+        };
+        assert_eq!(ScrollBarInfo32::from_bytes(bar.as_bytes()), Some(bar));
+        let set = SetScrollBarInfo32::from_bytes(&bar.as_bytes()[20..52]).unwrap();
+        assert_eq!((set.n_track_pos, set.reserved, set.rgstate), (16, 20, [43, 0, 1, 2, 3, 4]), "eight words");
+        assert_eq!(SetScrollBarInfo32::from_bytes(&[0; 31]), None);
+    }
 
     #[test]
     fn cursor_data_reads_back_from_its_bytes() {
