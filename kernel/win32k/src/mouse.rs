@@ -20,9 +20,12 @@
 //! devient WM_LBUTTONDBLCLK (pour une classe CS_DBLCLKS, ou sur le cadre).
 //! La molette va à la fenêtre qui a le clavier (WM_MOUSEWHEEL).
 //!
-//! Pas encore : WM_SETCURSOR et les formes du curseur (les objets curseur),
-//! les boutons X, ClipCursor, le suivi (TrackMouseEvent), la capture qui
-//! passe d'un thread à l'autre, WM_PARENTNOTIFY au clic.
+//! L'écran montre le curseur du thread de la fenêtre sous le pointeur (ou qui
+//! a la capture : `crate::cursor::pointer_over`) ; chaque message qui sort de
+//! la file envoie WM_SETCURSOR à sa fenêtre, sauf pendant la capture.
+//!
+//! Pas encore : les boutons X, ClipCursor, le suivi (TrackMouseEvent), la
+//! capture qui passe d'un thread à l'autre, WM_PARENTNOTIFY au clic.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -36,8 +39,8 @@ use abi::user::{
     Msg32, CS_DBLCLKS, HTBORDER, HTCAPTION, HTCLIENT, HTNOWHERE, HTTRANSPARENT, HWND_TOP, MA_ACTIVATEANDEAT,
     MA_NOACTIVATE, MA_NOACTIVATEANDEAT, MK_CONTROL, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_SHIFT, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, WM_CAPTURECHANGED, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WS_CAPTION, WS_CHILD, WS_POPUP,
-    WS_VISIBLE,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WM_SETCURSOR, WS_CAPTION,
+    WS_CHILD, WS_POPUP, WS_VISIBLE,
 };
 use hal::sync::KSpinLock;
 
@@ -275,6 +278,8 @@ pub fn process_mouse_input(data: &MouseInputData) {
     let target =
         captured.or_else(|| crate::desktop::input_desktop().and_then(|desktop| window_at(&desktop.window, x, y)));
     if let Some(window) = &target {
+        // gpqCursor: the screen shows the cursor of this window's thread.
+        crate::cursor::pointer_over(window.pti);
         let raw = |message| Msg32 {
             hwnd: window.handle,
             message,
@@ -367,6 +372,9 @@ pub struct Resolved {
     hit: u32,
     /// Le clic d'un appui de bouton, et s'il en fait un double-clic.
     click: Option<(Click, bool)>,
+    /// Le message brut (WM_MOUSEMOVE, WM_LBUTTONDOWN…) que WM_SETCURSOR
+    /// porte, sans la capture ; `None` sinon (la capture, la molette).
+    set_cursor: Option<u32>,
 }
 
 /// co_IntProcessMouseMessage, sans rien changer : le message final du
@@ -384,17 +392,19 @@ pub fn resolve(thread: &ThreadInfo, raw: Msg32) -> Option<Resolved> {
     let button = button_of(raw.message);
     let mut window = crate::window::get(raw.hwnd)?;
     if raw.message != WM_MOUSEMOVE && button.is_none() {
-        return Some(Resolved { message: raw, window, hit: HTCLIENT, click: None });
+        return Some(Resolved { message: raw, window, hit: HTCLIENT, click: None, set_cursor: None });
     }
     let (x, y) = (raw.pt_x, raw.pt_y);
     let capture = thread.queue.with(|queue| queue.capture).0;
-    let hit = if capture != 0 && capture == window.handle { HTCLIENT } else { hit_test(&mut window, x, y) };
+    let captured = capture != 0 && capture == window.handle;
+    let hit = if captured { HTCLIENT } else { hit_test(&mut window, x, y) };
+    let set_cursor = (!captured).then_some(raw.message);
     let client = hit == HTCLIENT;
     let extra = (!client).then_some(hit);
     let Some((index, down)) = button else {
         let message = if client { WM_MOUSEMOVE } else { WM_MOUSEMOVE - WM_NC_MOUSE_OFFSET };
         let message = message_for(&window, message, raw.w_param, x, y, raw.time, extra);
-        return Some(Resolved { message, window, hit, click: None });
+        return Some(Resolved { message, window, hit, click: None, set_cursor });
     };
     let click = down.then(|| {
         let click = Click { time: raw.time, hwnd: window.handle, button: index, x, y };
@@ -405,7 +415,7 @@ pub fn resolve(thread: &ThreadInfo, raw: Msg32) -> Option<Resolved> {
     });
     let double = click.as_ref().is_some_and(|&(_, double)| double);
     let message = message_for(&window, button_message(index, down, double, client), raw.w_param, x, y, raw.time, extra);
-    Some(Resolved { message, window, hit, click })
+    Some(Resolved { message, window, hit, click, set_cursor })
 }
 
 /// La fenêtre de premier niveau `top` de `thread` est à activer par un clic :
@@ -422,33 +432,53 @@ fn needs_activation(thread: &ThreadInfo, top: &Window) -> bool {
 /// il devient le dernier clic (un double-clic n'en commence pas un autre),
 /// et WM_MOUSEACTIVATE va à sa fenêtre si sa fenêtre de premier niveau est
 /// à activer ([`needs_activation`] : MA_ACTIVATE l'active, un `…ANDEAT` mange
-/// le message). `None` : le message est mangé.
+/// le message) ; puis, sans la capture, WM_SETCURSOR (la fenêtre, le code de
+/// l'endroit et le message brut) lui permet de choisir le curseur, même
+/// pour un message mangé. `None` : le message est mangé.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le thread, sans rien tenir (des rappels).
 pub fn commit(thread: &ThreadInfo, resolved: Resolved, remove: bool) -> Option<Msg32> {
-    let Resolved { message, window, hit, click } = resolved;
-    let Some((click, double)) = click.filter(|_| remove) else { return Some(message) };
+    let Resolved { message, window, hit, click, set_cursor } = resolved;
+    if !remove {
+        return Some(message);
+    }
+    let kept = match click {
+        Some((click, double)) => activate_on_click(thread, &window, hit, click, double),
+        None => true,
+    };
+    if let Some(raw) = set_cursor {
+        let lparam = (hit & 0xFFFF) | raw << 16;
+        let _ = crate::window::send_message(&window, WM_SETCURSOR, window.handle, LParam::Value(lparam));
+    }
+    kept.then_some(message)
+}
+
+/// L'appui `click` sorti de la file, sur `window` à l'endroit `hit` : il
+/// devient le dernier clic, et WM_MOUSEACTIVATE décide de l'activation.
+/// Faux : le message est mangé.
+fn activate_on_click(thread: &ThreadInfo, window: &Arc<Window>, hit: u32, click: Click, double: bool) -> bool {
+    let button = click.button;
     if let Some(state) = STATE.lock().as_mut() {
         state.last_click = (!double).then_some(click);
     }
-    let top = top_level(&window);
+    let top = top_level(window);
     if !needs_activation(thread, &top) {
-        return Some(message);
+        return true;
     }
-    let raw_down = button_message(click.button, true, false, true);
+    let raw_down = button_message(button, true, false, true);
     let lparam = (hit & 0xFFFF) | raw_down << 16;
-    let answer = crate::window::send_message(&window, WM_MOUSEACTIVATE, top.handle, LParam::Value(lparam));
+    let answer = crate::window::send_message(window, WM_MOUSEACTIVATE, top.handle, LParam::Value(lparam));
     match answer.unwrap_or(0) {
-        MA_NOACTIVATEANDEAT => None,
-        MA_NOACTIVATE => Some(message),
+        MA_NOACTIVATEANDEAT => false,
+        MA_NOACTIVATE => true,
         MA_ACTIVATEANDEAT => {
             activate_by_mouse(&top);
-            None
+            false
         }
         _ => {
             activate_by_mouse(&top);
-            Some(message)
+            true
         }
     }
 }

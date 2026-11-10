@@ -48,8 +48,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::user::{
-    FNID_FREED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, TYPE_MENU, TYPE_WINDOW,
-    WM_DESTROY, WM_NCDESTROY, WM_PARENTNOTIFY, WNDS2_INDESTROY, WNDS_DESTROYED, WNDS_ERASEBACKGROUND,
+    FNID_FREED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, TYPE_CURSOR, TYPE_MENU,
+    TYPE_WINDOW, WM_DESTROY, WM_NCDESTROY, WM_PARENTNOTIFY, WNDS2_INDESTROY, WNDS_DESTROYED, WNDS_ERASEBACKGROUND,
     WNDS_INTERNALPAINT, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT, WS_CHILD, WS_EX_NOPARENTNOTIFY, WS_POPUP,
     WS_VISIBLE,
 };
@@ -330,7 +330,7 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
 pub fn process_exit(process: &Arc<Object<EProcess>>) {
     let Some(info) = crate::existing_process_info(process) else { return };
     let pid = process.pid();
-    let (mut windows, mut menus) = (0, 0);
+    let (mut windows, mut menus, mut cursors) = (0, 0, 0);
     for (handle, kind) in crate::handles::taken_by_process(pid) {
         match kind {
             TYPE_WINDOW => {
@@ -344,15 +344,16 @@ pub fn process_exit(process: &Arc<Object<EProcess>>) {
                 }
             }
             TYPE_MENU if crate::menu::destroy(handle) => menus += 1,
+            TYPE_CURSOR if crate::cursor::destroy(handle, true) => cursors += 1,
             _ => {}
         }
     }
     let dcs = crate::dce::free_process_dcs(pid);
     let gdi = crate::gdi::cleanup_process(pid);
     info.release();
-    if windows != 0 || menus != 0 || dcs != 0 || gdi != 0 {
+    if windows != 0 || menus != 0 || cursors != 0 || dcs != 0 || gdi != 0 {
         log::info!(
-            "win32k: process {pid} ({}) ended: {windows} windows, {menus} menus, {dcs} cache DCs, {gdi} GDI objects given back",
+            "win32k: process {pid} ({}) ended: {windows} windows, {menus} menus, {cursors} cursors, {dcs} cache DCs, {gdi} GDI objects given back",
             process.image_file_name()
         );
     }

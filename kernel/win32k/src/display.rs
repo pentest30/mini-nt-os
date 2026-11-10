@@ -16,11 +16,14 @@
 //! la synchronisation avec le balayage.
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use hal::sync::{KSpinLock, Once};
 
-use crate::gdi::dib::{Bitmap, ColorRef, PixelLayout};
+use crate::cursor::{Pixel, Shape};
+use crate::gdi::dib::{Bitmap, PixelLayout};
 
 /// Le mode d'un écran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,57 +60,58 @@ static DRIVER: Once<Box<dyn DisplayDriver>> = Once::new();
 /// Un dessin à la fois ; le curseur, que chacun retire puis remet.
 static DRAWING: KSpinLock<Cursor> = KSpinLock::new(Cursor::new());
 
-/// La flèche du curseur : `X` le contour (noir), `.` l'intérieur (blanc),
-/// le reste transparent. Le point chaud est le coin en haut à gauche.
-const ARROW: [&[u8; CURSOR_WIDTH]; CURSOR_HEIGHT] = [
-    b"X           ",
-    b"XX          ",
-    b"X.X         ",
-    b"X..X        ",
-    b"X...X       ",
-    b"X....X      ",
-    b"X.....X     ",
-    b"X......X    ",
-    b"X.......X   ",
-    b"X........X  ",
-    b"X.........X ",
-    b"X......XXXXX",
-    b"X...X..X    ",
-    b"X..XX..X    ",
-    b"X.X  X..X   ",
-    b"XX   X..X   ",
-    b"X     X..X  ",
-    b"      X..X  ",
-    b"       XX   ",
-];
-const CURSOR_WIDTH: usize = 12;
-const CURSOR_HEIGHT: usize = 19;
+/// Ce que l'écran montre au pointeur.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CursorImage {
+    /// La flèche de win32k, avant les curseurs du système
+    /// ([`crate::cursor::Shape::arrow`]).
+    Arrow,
+    /// La forme d'un curseur.
+    Shape(Arc<Shape>),
+    /// Rien : SetCursor(NULL).
+    Hidden,
+}
 
 /// Le curseur logiciel (la « pointer exclusion » de GDI, réduite) : sa
-/// place, s'il est montré, et les pixels de l'écran qu'il couvre.
+/// place, s'il est montré, sa forme, et les pixels de l'écran qu'il couvre.
 struct Cursor {
     x: i32,
     y: i32,
     visible: bool,
-    /// Le coin des pixels gardés, quand il est dessiné.
-    drawn: Option<(i32, i32)>,
-    saved: [u32; CURSOR_WIDTH * CURSOR_HEIGHT],
+    /// Sa forme ; `None` : la flèche de win32k, faite au premier dessin.
+    image: Option<CursorImage>,
+    arrow: Option<Arc<Shape>>,
+    /// Le coin de la forme dessinée et sa taille, quand elle l'est.
+    drawn: Option<(i32, i32, u32, u32)>,
+    saved: Vec<u32>,
 }
 
 impl Cursor {
     const fn new() -> Self {
-        Self { x: 0, y: 0, visible: false, drawn: None, saved: [0; CURSOR_WIDTH * CURSOR_HEIGHT] }
+        Self { x: 0, y: 0, visible: false, image: None, arrow: None, drawn: None, saved: Vec::new() }
     }
 
-    /// Les pixels de l'écran d'(`x`, `y`) relatifs au curseur dessiné en
-    /// (`left`, `top`), sur `surface`.
-    fn cells(left: i32, top: i32, surface: &Bitmap<'_>) -> impl Iterator<Item = (usize, u32, u32)> {
+    /// La forme à dessiner ; `None` : rien.
+    fn shape(&mut self) -> Option<Arc<Shape>> {
+        match self.image.clone().unwrap_or(CursorImage::Arrow) {
+            CursorImage::Hidden => None,
+            CursorImage::Shape(shape) => Some(shape),
+            CursorImage::Arrow => Some(self.arrow.get_or_insert_with(|| Arc::new(Shape::arrow())).clone()),
+        }
+    }
+
+    /// Les pixels de l'écran d'une forme de `width` × `height` dessinée en
+    /// (`left`, `top`), sur `surface` : leur rang dans la forme et leur place.
+    fn cells(
+        (left, top, width, height): (i32, i32, u32, u32),
+        surface: &Bitmap<'_>,
+    ) -> impl Iterator<Item = (usize, u32, u32)> {
         let bounds = surface.bounds();
-        (0..CURSOR_HEIGHT).flat_map(move |row| {
-            (0..CURSOR_WIDTH).filter_map(move |column| {
+        (0..height as usize).flat_map(move |row| {
+            (0..width as usize).filter_map(move |column| {
                 let (x, y) = (left + column as i32, top + row as i32);
                 (x >= bounds.left && x < bounds.right && y >= bounds.top && y < bounds.bottom).then_some((
-                    row * CURSOR_WIDTH + column,
+                    row * width as usize + column,
                     x as u32,
                     y as u32,
                 ))
@@ -117,8 +121,8 @@ impl Cursor {
 
     /// Rend à l'écran les pixels que le curseur couvrait.
     fn hide(&mut self, surface: &mut Bitmap<'_>) {
-        let Some((left, top)) = self.drawn.take() else { return };
-        let cells: alloc::vec::Vec<_> = Self::cells(left, top, surface).collect();
+        let Some(place) = self.drawn.take() else { return };
+        let cells: Vec<_> = Self::cells(place, surface).collect();
         for (index, x, y) in cells {
             surface.set_pixel(x, y, self.saved[index]);
         }
@@ -129,19 +133,21 @@ impl Cursor {
         if !self.visible || self.drawn.is_some() {
             return;
         }
-        let (left, top) = (self.x, self.y);
-        let black = surface.layout().pixel(ColorRef::rgb(0, 0, 0));
-        let white = surface.layout().pixel(ColorRef::rgb(255, 255, 255));
-        let cells: alloc::vec::Vec<_> = Self::cells(left, top, surface).collect();
+        let Some(shape) = self.shape() else { return };
+        let place = (self.x - shape.hotspot.0, self.y - shape.hotspot.1, shape.width, shape.height);
+        let layout = surface.layout();
+        self.saved.clear();
+        self.saved.resize(shape.pixels.len(), 0);
+        let cells: Vec<_> = Self::cells(place, surface).collect();
         for (index, x, y) in cells {
-            self.saved[index] = surface.pixel(x, y).unwrap_or(0);
-            match ARROW[index / CURSOR_WIDTH][index % CURSOR_WIDTH] {
-                b'X' => surface.set_pixel(x, y, black),
-                b'.' => surface.set_pixel(x, y, white),
-                _ => {}
+            let screen = surface.pixel(x, y).unwrap_or(0);
+            self.saved[index] = screen;
+            let pixel = shape.pixels[index];
+            if pixel != Pixel::Transparent {
+                surface.set_pixel(x, y, layout.pixel(pixel.over(layout.color(screen))));
             }
         }
-        self.drawn = Some((left, top));
+        self.drawn = Some(place);
     }
 }
 
@@ -162,6 +168,28 @@ pub fn set_cursor(x: i32, y: i32) {
         cursor.show(surface);
     });
 }
+
+/// L'écran montre `image` au pointeur, à sa place ; il la gardera quand il
+/// se montrera.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn set_cursor_image(image: CursorImage) {
+    let mut cursor = DRAWING.lock();
+    if cursor.image.as_ref() == Some(&image) {
+        return;
+    }
+    let redraw = DRIVER.get().filter(|_| acquired() && cursor.visible);
+    match redraw {
+        Some(driver) => driver.with_surface(&mut |surface| {
+            cursor.hide(surface);
+            cursor.image = Some(image.clone());
+            cursor.show(surface);
+        }),
+        None => cursor.image = Some(image),
+    }
+}
+
 /// Le pilote a pris l'écran.
 static ACQUIRED: AtomicBool = AtomicBool::new(false);
 

@@ -707,3 +707,65 @@ Tests : hôte (`handles` : processus et types des entrées ; `queue` : les messa
 vidée ; `sent` : un message abandonné réveille son envoyeur sans valeur ; `gdi::handles` : les objets d'un
 processus ; `gui` : l'adresse du serveur d'un `PROCESSINFO`) ; le scénario `destroy`, sur les deux CPU, et les
 scénarios GUI existants (`send-messages` : l'envoi au thread fini échoue maintenant à sa fin, non plus 250 ms après).
+
+## Étape 15 : les curseurs (objets curseur, curseurs du système, SetCursor, WM_SETCURSOR)
+
+`user32` fait lui-même ses curseurs et ses icônes ; win32k n'en garde que l'objet et la forme. Les 21 scénarios GUI
+appelaient tous NtUserFindExistingCursorIcon (non fait, 0), puis LoadCursor échouait plus loin, sans rien
+journaliser : CURSORICON_GetCursorDataFromBMI ouvre l'écran (CreateDC("DISPLAY") : NtGdiOpenDCW), en fait un DC en
+mémoire (NtGdiCreateCompatibleDC), qui refusait le DC de NtGdiOpenDCW, rendu sans propriétaire. Le chemin de
+LoadImage (`cursoricon.c` de `user32` et de win32k, ReactOS comme spécification) :
+
+| Étape de `user32` | Ce que fait Mino |
+|---|---|
+| NtUserFindExistingCursorIcon(module, ressource, {icône, cx, cy}) | un curseur LR_SHARED du processus de cette ressource de ce module, sinon un curseur du système qui en vient (`win32k::cursor::find_existing`) ; les noms sans casse, un identifiant (MAKEINTRESOURCE) comme ReactOS (un tampon sous 0x10000) |
+| CreateDC("DISPLAY"), CreateCompatibleDC | NtGdiOpenDCW donne un DC de l'écran entier au processus, avec ses attributs (`gdi::dc::open_display_dc`) ; DeleteDC le rend (`gdi::dc::delete_dc`, qui prend maintenant tout DC du processus hors du cache) |
+| CreateBitmap(cx, 2 cy, 1, 1, NULL), CreateCompatibleBitmap | un bitmap noir sans bits ; monochrome pour un bit par pixel (le drapeau `monochrome` d'une surface), de la couleur de l'écran sinon, monochrome aussi pour un DC en mémoire dont le bitmap l'est (`gdi::surface::create_compatible`) |
+| StretchDIBits de la ressource dans le bitmap | NtGdiStretchDIBitsInternal (`gdi::dibits`) : DIB de 1, 4, 8, 16 (5-5-5), 24 ou 32 bits sans compression, BITMAPINFOHEADER ou BITMAPCOREHEADER, étirée au plus proche ; vers un bitmap monochrome, le noir ou le blanc le plus proche |
+| NtUserCallOneParam(CREATEEMPTYCUROBJECT), NtUserSetCursorIconData | un objet `TYPE_CURSOR` de la table des handles USER ; ses données (CURSORDATA, `abi::user::CursorData32`) : le point chaud, la taille, le masque AND (sur le masque XOR pour un curseur monochrome), les couleurs, l'alpha ; les bitmaps deviennent publics, et le noyau tire la forme qu'il dessine (`win32k::cursor::Shape` : transparent, opaque, XOR, mélange) |
+
+Les curseurs du système : la première fois qu'un bureau va à l'écran (NtUserSwitchDesktop), win32k fait le rappel
+LOADDEFAULTCURSORS (n° 3, User32SetupDefaultCursors, co_IntLoadDefaultCursors) : `user32` charge les 16 curseurs
+(LoadSystemCursors) et les pose par NtUserSetSystemCursor (ils ne sont plus à aucun processus, CURSORF_GLOBAL), puis
+fait de la flèche le curseur du thread. Une application qui charge IDC_ARROW les retrouve (FindExistingCursorIcon,
+second passage), sans objet à elle.
+
+Le curseur de l'écran : chaque thread a le sien (SetCursor : NtUserSetCursor, GetCursor :
+NtUserGetThreadState(THREADSTATE_GETCURSOR)) ; l'écran montre celui du thread de la fenêtre sous le pointeur
+(gpqCursor : `cursor::pointer_over`, appelé par le thread d'entrée brute). Chaque message de la souris qui sort de la
+file, hors capture, envoie WM_SETCURSOR à sa fenêtre (la fenêtre, le code de l'endroit, le message brut), après
+WM_MOUSEACTIVATE, comme Wine ; DefWindowProc (`cursor::def_set_cursor`, DefWndHandleSetCursor) laisse d'abord le
+parent d'une fille choisir hors des bords, met le curseur de la classe dans la zone cliente (FALSE), une flèche
+double du système sur un bord ou un coin d'une fenêtre qui n'est pas agrandie (TRUE), rien sur HTERROR, la flèche
+ailleurs (TRUE). Le curseur logiciel de `display` dessine n'importe quelle forme, son point chaud au pointeur ; la
+flèche codée dans win32k ne sert qu'avant les curseurs du système. SetCursor(NULL) cache le curseur.
+
+DestroyCursor (NtUserDestroyCursor) : un curseur du système reste (TRUE), comme un curseur LR_SHARED ; celui d'un
+autre processus ou le curseur d'un thread refuse (FALSE) ; sinon il part, ses bitmaps supprimés. La fin d'un
+processus détruit ses curseurs (`crate::destroy`). NtUserGetIconSize rend la taille.
+
+Ce qui manque : CreateCursor, CreateIcon et CreateIconIndirect (`user32` y lit GetObject, CopyImage et GetDIBits :
+NtGdiExtGetObjectW, NtGdiGetDIBitsInternal ne sont pas faits), GetIconInfo, DrawIconEx (l'icône du titre et des
+boutons de la barre des tâches), les curseurs animés (refusés, journalisé une fois), ShowCursor, ClipCursor,
+GetCursorInfo, le remplacement d'un curseur du système déjà posé (FALSE, comme ReactOS), GetClassLong(GCLP_HCURSOR)
+(le `CLS` n'a pas de pointeur vers l'objet, et la table USER désigne l'objet du serveur, comme pour les menus), le
+curseur réévalué quand une fenêtre bouge sous un pointeur immobile ; StretchDIBits sans les autres ROP que SRCCOPY,
+DIB_PAL_COLORS, les compressions, les étendues négatives ; un curseur du système garde des bitmaps publics que
+GetIconInfo rendrait après la fin du processus qui les a faits.
+
+Le banc d'essai : `tests/native/cursor1.c` (`CURSOR1.EXE` à la place de `winlogon.exe`, scénario `cursor`) : après
+SwitchDesktop, les 16 curseurs du système sont chargés et la flèche est le curseur du thread ; IDC_ARROW est le même
+à chaque chargement ; IDC_CROSS et IDC_SIZEWE existent et diffèrent ; SetCursor rend l'ancien ; sa fenêtre
+(WS_THICKFRAME, de 200,200 à 1000,700) a la croix pour curseur de classe. Le pointeur va dans sa zone cliente
+(WM_SETCURSOR pour elle, de WM_MOUSEMOVE ; DefWindowProc 0, la croix), sur son bord gauche (DefWindowProc 1,
+IDC_SIZEWE), puis revient (la croix) ; DestroyCursor(IDC_CROSS) rend TRUE et la croix reste. L'écran montre la croix
+au pointeur (423,405), centrée sur lui, ses barres à 8 pixels, la fenêtre blanche à côté. Le scénario `mouse` vérifie
+en plus un pixel que seule la flèche de `user32` noircit (659,403).
+
+Tests : hôte (`abi::user` : CURSORDATA ; `gdi::dibits` : lecture des DIB, étirement, monochrome ; `cursor` : formes
+monochromes, en couleurs, avec alpha, pixels sur l'écran, la flèche de win32k ; `handles` : le processus d'une
+entrée changé). Mutations tuées : le curseur de la classe, l'envoi de WM_SETCURSOR, la recherche des
+curseurs du système, la forme dessinée (toujours la flèche), le point chaud, la flèche double d'un bord. Mutation
+équivalente dans les scénarios : le noir ou le blanc des masques (chaque curseur de `user32` a une variante de 1 bit
+et une de 32 bits avec alpha ; sur un écran de 32 bits, LookupIconIdFromDirectoryEx prend la seconde, dont l'alpha
+l'emporte sur les masques) : `gdi::dibits::to_monochrome` n'a qu'un test hôte.

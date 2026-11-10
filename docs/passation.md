@@ -1,5 +1,24 @@
 # Notes de passation
 
+- **Les curseurs** (`claude/new-session-696xfc`, sur main `11a3464` et l'envoi d'un tampon du noyau ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 15) : `user32` chargeait mal ses curseurs
+  (NtUserFindExistingCursorIcon absent dans les 21 scénarios GUI, puis NtGdiCreateCompatibleDC refusait le DC de
+  NtGdiOpenDCW, sans propriétaire). GDI : NtGdiOpenDCW donne un DC de l'écran au processus
+  (`gdi::dc::open_display_dc`, DeleteDC le rend : `delete_dc`), CreateBitmap sans bits, NtGdiCreateCompatibleBitmap,
+  NtGdiStretchDIBitsInternal (`gdi::dibits` : 1 à 32 bits sans compression, au plus proche, vers le monochrome), le
+  drapeau monochrome des surfaces. USER (`win32k::cursor`) : objets `TYPE_CURSOR` (CREATEEMPTYCUROBJECT,
+  NtUserSetCursorIconData : la forme tirée des masques, des couleurs et de l'alpha ; NtUserFindExistingCursorIcon :
+  LR_SHARED du processus puis curseurs du système ; NtUserDestroyCursor ; NtUserGetIconSize) ; les 16 curseurs du
+  système chargés par `user32` au premier NtUserSwitchDesktop (le rappel LOADDEFAULTCURSORS, n° 3) et posés par
+  NtUserSetSystemCursor ; le curseur de chaque thread (NtUserSetCursor, GetCursor par NtUserGetThreadState) et celui
+  de l'écran, du thread sous le pointeur ; WM_SETCURSOR à chaque message de la souris qui sort de la file (hors
+  capture), et DefWindowProc (curseur de la classe, flèches doubles des bords, flèche) ; le curseur logiciel de
+  `display` dessine toute forme à son point chaud. Tests : hôte (`abi::user`, `gdi::dibits`, `cursor`, `handles`) ;
+  scénario `cursor` (`tests/native/cursor1.c`, la croix vérifiée à l'écran), `mouse` (un pixel de la flèche de
+  `user32`), sur AMD et Intel, et les scénarios GUI. Pas encore : CreateCursor et CreateIconIndirect (GetObject,
+  CopyImage, GetDIBits), GetIconInfo, DrawIconEx (l'icône du titre), les curseurs animés, ShowCursor, ClipCursor,
+  GetClassLong(GCLP_HCURSOR).
+
 - **Un tampon du noyau envoyé à la fenêtre d'un autre thread** (`claude/winlogon-sendmessage` repris sur main
   `11a3464`, après la destruction de la PR #114 ; M5 étape 9, [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 26) :
   `win32k::sent::send_buffer` ; le message emporte la copie du tampon (WM_WINDOWPOSCHANGING et son WINDOWPOS…), le

@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 119 | 296 |
-| win32k | 120 | 737 |
+| win32k | 128 | 737 |
 
 ## ntoskrnl
 
@@ -345,7 +345,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x101a` | `NtGdiCreateClientObj` | 1 |  |
 | `0x101b` | `NtGdiCreateColorSpace` | 1 |  |
 | `0x101c` | `NtGdiCreateColorTransform` | 8 |  |
-| `0x101d` | `NtGdiCreateCompatibleBitmap` | 3 |  |
+| `0x101d` | `NtGdiCreateCompatibleBitmap` | 3 | ✅ |
 | `0x101e` | `NtGdiCreateCompatibleDC` | 1 | ✅ |
 | `0x101f` | `NtGdiCreateDIBBrush` | 6 |  |
 | `0x1020` | `NtGdiCreateDIBitmapInternal` | 11 |  |
@@ -608,7 +608,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1121` | `NtGdiStartDoc` | 4 |  |
 | `0x1122` | `NtGdiStartPage` | 1 |  |
 | `0x1123` | `NtGdiStretchBlt` | 12 |  |
-| `0x1124` | `NtGdiStretchDIBitsInternal` | 16 |  |
+| `0x1124` | `NtGdiStretchDIBitsInternal` | 16 | ✅ |
 | `0x1125` | `NtGdiStrokeAndFillPath` | 1 |  |
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
 | `0x1127` | `NtGdiSwapBuffers` | 1 |  |
@@ -667,7 +667,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x115c` | `NtUserDefSetText` | 2 | ✅ |
 | `0x115d` | `NtUserDeleteMenu` | 3 |  |
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
-| `0x115f` | `NtUserDestroyCursor` | 2 |  |
+| `0x115f` | `NtUserDestroyCursor` | 2 | ✅ |
 | `0x1160` | `NtUserDestroyInputContext` | 1 |  |
 | `0x1161` | `NtUserDestroyMenu` | 1 | ✅ |
 | `0x1162` | `NtUserDestroyWindow` | 1 | ✅ |
@@ -692,7 +692,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1175` | `NtUserEvent` | 1 |  |
 | `0x1176` | `NtUserExcludeUpdateRgn` | 2 |  |
 | `0x1177` | `NtUserFillWindow` | 4 |  |
-| `0x1178` | `NtUserFindExistingCursorIcon` | 3 |  |
+| `0x1178` | `NtUserFindExistingCursorIcon` | 3 | ✅ |
 | `0x1179` | `NtUserFindWindowEx` | 5 |  |
 | `0x117a` | `NtUserFlashWindowEx` | 1 |  |
 | `0x117b` | `NtUserGetAltTabInfo` | 6 |  |
@@ -723,7 +723,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1194` | `NtUserGetGuiResources` | 2 | ✅ |
 | `0x1195` | `NtUserGetGUIThreadInfo` | 2 |  |
 | `0x1196` | `NtUserGetIconInfo` | 6 |  |
-| `0x1197` | `NtUserGetIconSize` | 4 |  |
+| `0x1197` | `NtUserGetIconSize` | 4 | ✅ |
 | `0x1198` | `NtUserGetImeHotKey` | 4 |  |
 | `0x1199` | `NtUserGetImeInfoEx` | 2 |  |
 | `0x119a` | `NtUserGetInternalWindowPos` | 3 |  |
@@ -825,9 +825,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11fa` | `NtUserSetClipboardData` | 3 |  |
 | `0x11fb` | `NtUserSetClipboardViewer` | 1 |  |
 | `0x11fc` | `NtUserSetConsoleReserveKeys` | 2 |  |
-| `0x11fd` | `NtUserSetCursor` | 1 |  |
+| `0x11fd` | `NtUserSetCursor` | 1 | ✅ |
 | `0x11fe` | `NtUserSetCursorContents` | 2 |  |
-| `0x11ff` | `NtUserSetCursorIconData` | 4 |  |
+| `0x11ff` | `NtUserSetCursorIconData` | 4 | ✅ |
 | `0x1200` | `NtUserSetFocus` | 1 | ✅ |
 | `0x1201` | `NtUserSetImeHotKey` | 5 |  |
 | `0x1202` | `NtUserSetImeInfoEx` | 1 |  |
@@ -848,7 +848,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1211` | `NtUserSetScrollInfo` | 4 |  |
 | `0x1212` | `NtUserSetShellWindowEx` | 2 |  |
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
-| `0x1214` | `NtUserSetSystemCursor` | 2 |  |
+| `0x1214` | `NtUserSetSystemCursor` | 2 | ✅ |
 | `0x1215` | `NtUserSetSystemMenu` | 2 |  |
 | `0x1216` | `NtUserSetSystemTimer` | 4 | ✅ |
 | `0x1217` | `NtUserSetThreadDesktop` | 1 | ✅ |

@@ -382,6 +382,26 @@ pub fn take(handle: u32, dc: &Dc, vis: Region, origin: (i32, i32)) -> Result<(),
     Ok(())
 }
 
+/// GreOpenDCW d'un client (CreateDC("DISPLAY")) : un DC de l'écran entier
+/// au processus courant, avec ses attributs chez lui, à lui jusqu'à
+/// DeleteDC ; rend son handle. `user32` en fait l'écran dont il tire les
+/// bitmaps d'un curseur (CreateCompatibleDC, CreateCompatibleBitmap).
+///
+/// # Errors
+/// Celles de [`create_display_dc`] et de [`take`] (rien ne reste alors).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn open_display_dc() -> Result<u32, NtStatus> {
+    let (handle, dc) = create_display_dc()?;
+    let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width as i32, mode.height as i32));
+    if let Err(status) = take(handle, &dc, Region::from_rect(Rect::new(0, 0, width, height)), (0, 0)) {
+        let _ = handles::delete(handle, OWNER_NONE, |_| true);
+        return Err(status);
+    }
+    Ok(handle)
+}
+
 /// DC_vSetOwner(GDI_OBJ_HMGR_NONE) : le DC `handle` n'est plus à personne ;
 /// ses attributs retournent au processus courant, son propriétaire.
 ///
@@ -445,15 +465,16 @@ pub fn create_memory_dc() -> Result<u32, NtStatus> {
     inserted
 }
 
-/// IntGdiDeleteDC d'un DC en mémoire : le DC `hdc` du processus courant
-/// quitte la table, rend ses attributs, et son bitmap le quitte. Faux pour
-/// un DC de l'écran ou d'un autre processus.
+/// IntGdiDeleteDC : le DC `hdc` du processus courant (en mémoire, ou de
+/// l'écran que CreateDC lui a donné) quitte la table, rend ses attributs,
+/// et son bitmap le quitte. Faux pour un DC d'un autre processus. Un DC du
+/// cache se rend au cache avant (`crate::dce::release_dc`).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
-pub fn delete_memory_dc(hdc: u32) -> bool {
-    let memory = |object: &Object| matches!(object, Object::Dc(dc) if dc.memory);
-    let Some((Object::Dc(dc), attr)) = handles::delete(hdc, current_pid(), memory) else { return false };
+pub fn delete_dc(hdc: u32) -> bool {
+    let is_dc = |object: &Object| matches!(object, Object::Dc(_));
+    let Some((Object::Dc(dc), attr)) = handles::delete(hdc, current_pid(), is_dc) else { return false };
     let old = dc.change(core::mem::take);
     if let Some(selected) = &old.bitmap {
         selected.surface.deselect(hdc);

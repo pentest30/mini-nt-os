@@ -19,6 +19,7 @@ pub mod brush;
 pub mod dc;
 pub mod devcaps;
 pub mod dib;
+pub mod dibits;
 pub mod draw;
 pub mod fontobj;
 pub mod handles;

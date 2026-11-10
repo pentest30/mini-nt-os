@@ -286,6 +286,14 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   premier plan et bureau quittés ; menus, DC du cache, objets GDI, classes, bureaux et station du processus ; la
   table des handles USER retient le processus et le type de chaque objet (GetGuiResources, dont les drapeaux sont
   ceux du SDK : `GR_GDIOBJECTS` 0, `GR_USEROBJECTS` 1) ; scénario `destroy` (`tests/native/destroy1.c`).
+  M6, étape 15 (les curseurs, `win32k::cursor`) : NtGdiOpenDCW donne un DC de l'écran au processus,
+  CreateBitmap sans bits, NtGdiCreateCompatibleBitmap, NtGdiStretchDIBitsInternal (`gdi::dibits`) ; objets
+  `TYPE_CURSOR` (CREATEEMPTYCUROBJECT, NtUserSetCursorIconData : la forme tirée des bitmaps,
+  NtUserFindExistingCursorIcon, NtUserDestroyCursor, NtUserGetIconSize) ; les 16 curseurs du système chargés par
+  `user32` au premier NtUserSwitchDesktop (rappel LOADDEFAULTCURSORS) et posés par NtUserSetSystemCursor ;
+  NtUserSetCursor et GetCursor par thread, l'écran montrant celui du thread sous le pointeur ; WM_SETCURSOR à chaque
+  message de la souris qui sort de la file, DefWindowProc (curseur de la classe, flèches doubles des bords) ; le
+  curseur logiciel dessine toute forme ; scénario `cursor` (`tests/native/cursor1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
