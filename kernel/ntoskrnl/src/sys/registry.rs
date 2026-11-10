@@ -66,8 +66,9 @@ pub(super) fn nt_open_key(arguments: &[u32]) -> NtStatus {
 }
 
 fn open_key(arguments: &[u32]) -> Result<(), NtStatus> {
-    let out = UserPtr::<u32>::new(arguments[0]);
-    out.write(&0)?;
+    let out = arguments[0];
+    ke::usermem::probe_for_write(u64::from(out), 4, 1)?;
+    ke::usermem::copy_to_user(u64::from(out), &0u32.to_le_bytes())?;
     let attributes = capture_attributes(arguments[2])?;
     let name = attributes.name.unwrap_or_default();
     let process = super::current_process();
@@ -80,7 +81,7 @@ fn open_key(arguments: &[u32]) -> Result<(), NtStatus> {
         &process.handle_table,
         AccessMask(arguments[1]),
     )?;
-    if let Err(fault) = out.write(&handle.0) {
+    if let Err(fault) = ke::usermem::copy_to_user(u64::from(out), &handle.0.to_le_bytes()) {
         let _ = process.handle_table.close(handle);
         return Err(fault);
     }
