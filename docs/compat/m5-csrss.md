@@ -868,3 +868,27 @@ Tests : hôte (`abi::security` : RmRequest lu de ses données, résultat posé �
 création et suppression, audit) ; le scénario `smss` (les ruches, le SRM et la connexion de `lsass`, `\pipe\lsarpc`,
 `\pipe\ntsvcs`, NtSetDefaultLocale, NtUserSetLogonNotifyWindow, aucun échec de `winlogon` ni de `lsass` ; un STOP y
 est interdit, ce qui a révélé le défaut de l'horloge).
+
+## Étape 26 : un tampon du noyau envoyé à la fenêtre d'un autre thread ; `winlogon` et la ruche du LiveCD
+
+Après InitializeSAS, `winlogon` montre puis retire la fenêtre d'état de `msgina` : un SetWindowPos fait par un thread
+sur la fenêtre d'un autre fait envoyer par win32k WM_WINDOWPOSCHANGING, dont `lParam` est un WINDOWPOS du noyau, au
+thread de la fenêtre. win32k le refusait (« message 0x46 with a kernel buffer sent to another thread: not yet »).
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `win32k::sent::send_buffer` | le message emporte une copie du tampon (`SentMessage::with_buffer`) ; le thread de la fenêtre la prend le temps de la procédure et l'emballe vers son mode utilisateur comme pour un envoi à lui-même (`LParam::Buffer`, le rappel de la procédure) ; à la réponse, ce que la procédure y a écrit revient dans le tampon de l'envoyeur, pour un message qui y écrit (WM_WINDOWPOSCHANGING, WM_NCCALCSIZE, WM_GETMINMAXINFO…). ReactOS passe le pointeur du noyau lui-même (co_MsqSendMessage), l'envoyeur attendant ; la copie revient au même |
+| `win32k::window::send_message` | vers un autre thread : une valeur par `sent::send`, un tampon par `sent::send_buffer` |
+
+`winlogon` va ensuite au bout de son initialisation, puis lit `Setup\SetupType` : la ruche SYSTEM épinglée est celle du
+LiveCD de ReactOS (`SetupType` non nul, `CmdLine` = `setup -mini`). Il lance donc l'installation (RunSetup : un thread
+qui passe sur le bureau Default et crée `setup -mini`), au lieu de poster WLX_WM_SAS à sa fenêtre SAS pour le logon ;
+`setup.exe` n'est pas sur le disque, le thread revient sur le bureau Winlogon, et `winlogon` attend dans sa boucle des
+messages qui ne viennent pas. Le chemin du logon (WlxDisplaySASNotice de `msgina`, `userinit`, `explorer` : le critère
+du M6) demande une ruche d'un système installé (`SetupType` = 0) : la couche Mino des ruches (ADR-012, `tools/mkhive`,
+qui doit aussi porter l'ouverture de session automatique), à trancher.
+
+Tests : hôte (`win32k::sent` : la copie va au destinataire, revient si la procédure y écrit, reste sinon) ; le scénario
+`send-messages` (`tests/native/send1.c` : le thread de travail fait SetWindowPos de W, la fenêtre du thread principal ;
+W reçoit WM_WINDOWPOSCHANGING dans son thread, y élargit la fenêtre, et la largeur écrite est prise ; sans le retour du
+tampon, W garde sa largeur : mutation détectée) ; le scénario `smss` interdit le refus d'avant.

@@ -192,9 +192,9 @@ forbid = WL: Failed to initialize SAS
 forbid = Se: the reference monitor's command server stops
 forbid = sys: NtSetDefaultLocale (0x00e0) is not implemented
 forbid = sys: NtUserSetLogonNotifyWindow (0x1208) is not implemented
-# Where winlogon goes on: a message sent to another thread's window (USER,
-# M6).
-expect = win32k: message 0x46 with a kernel buffer sent to another thread: not yet
+# A message whose lParam is a kernel buffer (WM_WINDOWPOSCHANGING and its
+# WINDOWPOS) goes to another thread's window as a copy (M5, step 26).
+forbid = with a kernel buffer sent to another thread: not yet
 forbid = WL: Could not preload keyboard layouts
 forbid = LoadKeyboardLayoutW(
 forbid = WL: Failed to create Default desktop
