@@ -144,8 +144,8 @@ fn a_file_is_created_written_and_read_back() {
 fn directories_grow_and_hold_their_dot_entries() {
     let volume = FatVolume::mount(fat32(FSCK_CLUSTERS)).unwrap();
     let root = volume.root_cluster();
-    let (dir, _) = volume.create_directory(root, &short_name("SUB").unwrap(), 3).unwrap();
-    let (inner, _) = volume.create_directory(dir, &short_name("INNER").unwrap(), 3).unwrap();
+    let (dir, _) = volume.create_directory(root, "SUB", 3).unwrap();
+    let (inner, _) = volume.create_directory(dir, "INNER", 3).unwrap();
     for i in 0..40 {
         let name = short_name(&std::format!("F{i}.DAT")).unwrap();
         let at = volume.add_entry(dir, &make_entry(&name, 0x20, 0, 0), 3).unwrap();
@@ -339,6 +339,13 @@ fn files_are_created_written_and_seen_by_every_open() {
     let long = logs.create_child("A long name.txt", false, 0).unwrap();
     long.write(0, b"long").unwrap();
     assert_eq!(File::open(&volume, "\\Logs\\A long name.txt").unwrap().read_all().unwrap(), b"long");
+    // A long-named directory too, and what it holds.
+    let profiles = root.create_child("Documents and Settings", true, 0).unwrap();
+    assert!(profiles.is_directory());
+    let user = profiles.create_child("Default User", true, 0).unwrap();
+    user.create_child("NTUSER.DAT", false, 0).unwrap().write(0, b"regf").unwrap();
+    let path = "\\documents and settings\\DEFAULT USER\\ntuser.dat";
+    assert_eq!(File::open(&volume, path).unwrap().read_all().unwrap(), b"regf");
     assert_eq!(logs.create_child("bad*name", false, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
     assert_eq!(file.create_child("x", false, 0).err(), Some(STATUS_OBJECT_PATH_NOT_FOUND), "under a file");
     assert_eq!(logs.write(0, b"x").err(), Some(STATUS_INVALID_DEVICE_REQUEST), "writing a directory");
@@ -452,6 +459,33 @@ fn a_volume_describes_itself_and_dates_what_it_writes() {
     directory.set_basic_information(&FileBasicInformation { file_attributes: FILE_ATTRIBUTE_HIDDEN, ..basic }).unwrap();
     assert_eq!(directory.node().unwrap().attributes, FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN);
     let _ = FatTime::default();
+}
+
+#[test]
+fn a_directory_takes_a_long_name() {
+    // The profiles of an installed system (ADR-023): userenv's
+    // InitializeProfiles creates `Documents and Settings`, then `Default User`
+    // in it. A directory was refused a name 8.3 could not hold.
+    let volume = FatVolume::mount(fat32(FSCK_CLUSTERS)).unwrap();
+    let root = volume.root_cluster();
+    let (profiles, _) = volume.create_directory(root, "Documents and Settings", 3).unwrap();
+    let (user, _) = volume.create_directory(profiles, "Default User", 3).unwrap();
+    let at = volume.add_entry_long(user, "NTUSER.DAT", 0x20, 3).unwrap();
+    let (mut first, mut size) = (0, 0);
+    volume.write_file(&mut first, &mut size, 0, b"regf", 3).unwrap();
+    volume.update_entry(at, first, size).unwrap();
+    let (found, _) = volume.find_entry(root, "DOCUMENTS AND SETTINGS").expect("by its long name, any case");
+    assert_eq!(found.first_cluster, profiles);
+    let listed = volume.dir_entries(root).unwrap().into_iter().find(|e| e.name == "Documents and Settings").unwrap();
+    assert_eq!(&listed.raw_name, b"DOCUME~1   ", "its alias");
+    assert_ne!(listed.attr & 0x10, 0, "a directory");
+    let inside = volume.list_dir("/Documents and Settings/Default User").unwrap();
+    assert_eq!((inside[0].name.as_str(), inside[0].first_cluster), (".", user));
+    assert_eq!((inside[1].name.as_str(), inside[1].first_cluster), ("..", profiles), "`..` names its parent");
+    assert_eq!(inside[2].name, "NTUSER.DAT");
+    let (ntuser, _) = volume.find_entry(user, "ntuser.dat").unwrap();
+    assert_eq!(read_all(&volume, ntuser.first_cluster, ntuser.file_size), b"regf");
+    assert_clean(volume);
 }
 
 #[test]

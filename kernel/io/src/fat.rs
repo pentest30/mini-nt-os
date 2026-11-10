@@ -1204,8 +1204,21 @@ impl<D: BlockDevice> FatVolume<D> {
         attributes: u8,
         hint: u32,
     ) -> Result<EntryRef, FatError> {
+        self.add_named_entry(dir_cluster, long, attributes, 0, hint)
+    }
+
+    /// [`add_entry_long`](Self::add_entry_long), the 8.3 entry naming
+    /// `first_cluster` (a subdirectory's own cluster).
+    fn add_named_entry(
+        &self,
+        dir_cluster: u32,
+        long: &str,
+        attributes: u8,
+        first_cluster: u32,
+        hint: u32,
+    ) -> Result<EntryRef, FatError> {
         if let Ok(short) = short_name(long) {
-            return self.add_entry(dir_cluster, &make_entry(&short, attributes, 0, 0), hint);
+            return self.add_entry(dir_cluster, &make_entry(&short, attributes, first_cluster, 0), hint);
         }
         // The alias must not collide with the 8.3 names the directory holds,
         // the aliases of its long names included.
@@ -1218,13 +1231,16 @@ impl<D: BlockDevice> FatVolume<D> {
         for part in long_name_entries(long, &alias) {
             self.add_entry(dir_cluster, &part, hint)?;
         }
-        self.add_entry(dir_cluster, &make_entry(&alias, attributes, 0, 0), hint)
+        self.add_entry(dir_cluster, &make_entry(&alias, attributes, first_cluster, 0), hint)
     }
 
-    /// Creates the subdirectory `name` (8.3, padded) of the directory at
-    /// `parent` (the root's `..` names cluster 0): a zeroed cluster with its
-    /// `.` and `..`, and its entry. Rends its cluster and its entry.
-    pub fn create_directory(&self, parent: u32, name: &[u8; 11], hint: u32) -> Result<(u32, EntryRef), FatError> {
+    /// Creates the subdirectory `name` of the directory at `parent` (the
+    /// root's `..` names cluster 0): a zeroed cluster with its `.` and `..`,
+    /// and its entry in `parent` — a single 8.3 entry for a name 8.3 holds,
+    /// else its long-name (VFAT) entries and its alias's
+    /// ([`add_entry_long`](Self::add_entry_long)). Returns its cluster and
+    /// its 8.3 entry.
+    pub fn create_directory(&self, parent: u32, name: &str, hint: u32) -> Result<(u32, EntryRef), FatError> {
         let cluster = self.allocate_cluster(hint)?;
         let dot_dot = if parent == self.bpb.root_cluster { 0 } else { parent };
         let made = self
@@ -1235,7 +1251,7 @@ impl<D: BlockDevice> FatVolume<D> {
                     &make_entry(b"..         ", ATTR_DIRECTORY, dot_dot, 0),
                 )
             })
-            .and_then(|()| self.add_entry(parent, &make_entry(name, ATTR_DIRECTORY, cluster, 0), cluster + 1));
+            .and_then(|()| self.add_named_entry(parent, name, ATTR_DIRECTORY, cluster, cluster + 1));
         match made {
             Ok(at) => Ok((cluster, at)),
             Err(error) => {
