@@ -34,7 +34,7 @@
 //! cadre se peint dans le noyau (`crate::paint`), pas encore sa zone cliente.
 //!
 //! Pas encore : DestroyWindow (les fenêtres d'un thread vivent autant que
-//! lui), une fenêtre créée réduite ou agrandie (journalisé), le menu d'une classe (journalisé), la fenêtre des
+//! lui), une fenêtre créée réduite ou agrandie (journalisé), la fenêtre des
 //! messages (`HWND_MESSAGE`), les crochets, les régions (la région à mettre
 //! à jour est un rectangle), les contextes de périphérique (WM_ERASEBKGND
 //! reçoit 0), le fond d'écran, la mise en page de droite à gauche.
@@ -461,6 +461,18 @@ fn creation_menu(kind: u32, hmenu: u32, exists: impl FnOnce(u32) -> bool) -> Res
     } else {
         Err(ERROR_INVALID_MENU_HANDLE)
     }
+}
+
+/// co_IntCallLoadMenu : le menu de la classe `class`, que `user32` charge de
+/// son module ; aucun sans nom de menu, si le rappel échoue ou si le menu
+/// rendu n'existe pas (comme ReactOS, la fenêtre se crée sans barre).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+fn class_menu(class: &Class) -> Option<u32> {
+    let resource = class.menu.resource()?;
+    let loaded = crate::callback::load_menu(class.info.instance, resource).ok()?;
+    crate::menu::get(loaded).map(|_| loaded)
 }
 
 /// SetWindowFNID : l'identifiant interne de la fenêtre.
@@ -1214,7 +1226,7 @@ fn unlink(window: &Arc<Window>) {
 /// WM_SIZE et WM_MOVE ; une fenêtre fille prévient son parent
 /// (WM_PARENTNOTIFY). Elle appartient au thread. Une fenêtre qui n'est pas
 /// fille a pour barre de menus `params.menu` dès sa création
-/// ([`creation_menu`]).
+/// ([`creation_menu`]), sinon le menu de sa classe ([`class_menu`]).
 ///
 /// # Errors
 /// L'erreur Win32, s'il y en a une : sans classe,
@@ -1349,12 +1361,17 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     if !params.name.is_empty() && set_text(&window, &params.name).is_err() {
         return Err(Some(ERROR_NOT_ENOUGH_MEMORY));
     }
-    if kind != WS_CHILD && params.menu == 0 && class.menu.unicode != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("the menu of a class (co_IntCallLoadMenu)", &REPORTED);
-    }
 
     drop((thread, desktop, process_info));
+
+    // Without a menu, a window that is not a child takes its class's
+    // (co_IntCallLoadMenu); user32 loads it itself for an overlapped or
+    // popup style.
+    if kind != WS_CHILD && menu == 0 {
+        if let Some(loaded) = class_menu(&class) {
+            update(&window, |state| state.menu = loaded);
+        }
+    }
 
     // The window's rectangle, its size within what WM_GETMINMAXINFO allows
     // a sizing or overlapped window; the minimum wins over the maximum.

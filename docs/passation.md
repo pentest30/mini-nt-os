@@ -10,9 +10,15 @@
   l'échec du dialogue), que `d4d2231` attribuait aux tubes nommés. Corrigé : `win32k::window::create_window`
   donne à une fenêtre qui n'est pas fille sa barre `hMenu` dès sa création, avant WM_NCCALCSIZE ; un menu qui
   n'existe pas rend `ERROR_INVALID_MENU_HANDLE` (`creation_menu`). Tests : hôte (`creation_menu`), scénario `gui`
-  (zone cliente plus basse de SM_CYMENU, menu invalide refusé), `desktop-launch` sur AMD et Intel. Pas encore :
-  `user32` lit GetMenu dans `IDMenu` du `WND`, que le noyau n'écrit pas pour une barre (le handle de la table USER ne
-  désigne pas un `MENU` que `user32` sache lire).
+  (zone cliente plus basse de SM_CYMENU, menu invalide refusé), `desktop-launch` sur AMD et Intel. **Le menu de la
+  classe** (`lpszMenuName`) : `user32` le charge lui-même avant NtUserCreateWindowEx pour un style qui a WS_POPUP ou un
+  bit de WS_OVERLAPPEDWINDOW (vu dans son code : GetClassInfoExW puis LoadMenuW), et il passe donc par `hMenu` ;
+  pour les autres (WS_OVERLAPPED seul…), win32k le demande à `user32` par le rappel LoadMenu (n° 6,
+  `win32k::callback::load_menu`, co_IntCallLoadMenu), du module de la classe ; le nom est copié dans le noyau à
+  l'enregistrement (`MenuName::name`). Tests : hôte (les arguments du rappel), scénario `gui` (classes de module
+  `shell32`, dont les menus `MENU_001` et 206 : `user32` refuse une classe de son propre module ; mutation du rappel
+  détectée). Pas encore : `user32` lit GetMenu dans `IDMenu` du `WND`, que le noyau n'écrit pas pour une barre (le
+  handle de la table USER ne désigne pas un `MENU` que `user32` sache lire).
 
 - **M9 NTFS, ATTRIBUTE_LIST** (`feature/m9-ntfs-attribute-list`, PR #103) : listes résidentes/non résidentes bornées, références/instances vérifiées et assemblage des extents DATA ou index. Validation indépendante ntfs-3g : trois images (clusters 512/4096/8192), 162 fichiers chacune, listes forcées par 40 flux nommés ; comparaison des contenus sans nom avec ntfscat. Tests synthétiques des extents, index déplacés, références invalides et bornes. MFT avec liste au bootstrap encore refusée ; aucun montage noyau. Limites et reprise : `docs/compat/ntfs.md`. Validation locale : 28 tests NTFS, 906 tests hôte (3 ignorés), images ntfs-3g, Clippy hôte/noyau/loader et cible no_std passent. Le rapport syscalls.md périmé sur main b7d41ff a été régénéré dans un commit séparé (8 services win32k déjà implémentés) ; cargo xtask lint passe intégralement. Synchronisation avec main 68e8f9a : notes des deux branches conservées et rapport des services régénéré ; sept appels de test nc_calc_size hérités de main ont été adaptés au paramètre has_menu=false dans un commit séparé. Après synchronisation, cargo xtask lint et les tests hôte passent (937 réussis, 3 ignorés). Suite : bootstrap MFT en PR séparée.
 

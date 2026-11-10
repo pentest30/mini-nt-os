@@ -67,6 +67,10 @@ pub const KL_NAMELENGTH: usize = 9;
 pub const USER32_CALLBACK_CLIENTTHREADSTARTUP: u32 = 7;
 /// GetCharsetInfo: TranslateCharsetInfo(`TCI_SRCLOCALE`) for a locale.
 pub const USER32_CALLBACK_GETCHARSETINFO: u32 = 9;
+/// LoadMenu: LoadMenuW of a menu resource of a module (co_IntCallLoadMenu),
+/// the argument a LOADMENU_CALLBACK_ARGUMENTS (the module, an identifier,
+/// or 0 and the name from offset 8), the result the menu's handle.
+pub const USER32_CALLBACK_LOADMENU: u32 = 6;
 /// ANSI_CHARSET.
 pub const ANSI_CHARSET: u32 = 0;
 /// FS_LATIN1: the font signature of code page 1252.
