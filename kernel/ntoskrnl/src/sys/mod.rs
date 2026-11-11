@@ -176,6 +176,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiGetTextExtentExW, Handler::Status(gdi::nt_gdi_get_text_extent_ex_w)),
     (services::NtGdiGetTextMetricsW, Handler::Status(gdi::nt_gdi_get_text_metrics_w)),
     (services::NtGdiHfontCreate, Handler::Status(gdi::nt_gdi_hfont_create)),
+    (services::NtGdiExtGetObjectW, Handler::Status(gdi::nt_gdi_ext_get_object_w)),
     (services::NtGdiInit, Handler::Status(user::nt_gdi_init)),
     (services::NtGdiIntersectClipRect, Handler::Status(gdi::nt_gdi_intersect_clip_rect)),
     (services::NtGdiLineTo, Handler::Status(gdi::nt_gdi_line_to)),

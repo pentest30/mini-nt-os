@@ -134,6 +134,17 @@ impl Surface {
         matches!(self.pixels, Pixels::Section { .. })
     }
 
+    /// L'adresse de ses pixels chez le processus `pid` : la vue d'une DIB
+    /// section qu'il a encore ; `None` sinon.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn user_bits(&self, pid: u32) -> Option<u32> {
+        let Pixels::Section { user, .. } = &self.pixels else { return None };
+        let view = *user.lock();
+        view.filter(|&(owner, _)| owner == pid).map(|(_, at)| at)
+    }
+
     /// Choisi dans un DC.
     pub fn is_selected(&self) -> bool {
         self.selected.is_selected()

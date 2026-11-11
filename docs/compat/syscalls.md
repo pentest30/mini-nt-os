@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 127 | 296 |
-| win32k | 155 | 737 |
+| win32k | 156 | 737 |
 
 ## ntoskrnl
 
@@ -460,7 +460,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x108d` | `NtGdiExtCreateRegion` | 3 |  |
 | `0x108e` | `NtGdiExtEscape` | 8 |  |
 | `0x108f` | `NtGdiExtFloodFill` | 5 |  |
-| `0x1090` | `NtGdiExtGetObjectW` | 3 |  |
+| `0x1090` | `NtGdiExtGetObjectW` | 3 | ✅ |
 | `0x1091` | `NtGdiExtSelectClipRgn` | 3 | ✅ |
 | `0x1092` | `NtGdiExtTextOutW` | 9 | ✅ |
 | `0x1093` | `NtGdiFillPath` | 1 |  |
