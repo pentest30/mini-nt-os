@@ -274,7 +274,8 @@ pub(super) fn nt_user_set_window_long(arguments: &[u32]) -> NtStatus {
 /// NtUserBeginPaint(hWnd, lpPaint) : `hWnd` se peint (IntBeginPaint) ; le
 /// `PAINTSTRUCT` écrit, rend son DC, NULL sans DC. NULL pour une fenêtre
 /// inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` qu'on ne peut
-/// écrire (le DC reste pris, comme dans ReactOS).
+/// écrire (le DC reste pris, comme dans ReactOS ; le caret que BeginPaint a
+/// caché se remontre, l'appelant n'ayant pas d'EndPaint à faire).
 pub(super) fn nt_user_begin_paint(arguments: &[u32]) -> NtStatus {
     let (handle, paint) = (arguments[0], arguments[1]);
     let Some(window) = win32k::window::get(handle) else {
@@ -283,7 +284,10 @@ pub(super) fn nt_user_begin_paint(arguments: &[u32]) -> NtStatus {
     let ps = win32k::paint::begin_paint(&window);
     match ke::usermem::copy_to_user(u64::from(paint), ps.as_bytes()) {
         Ok(()) => NtStatus(ps.hdc),
-        Err(status) => fail(dos_error(status)),
+        Err(status) => {
+            win32k::caret::show_in(&window);
+            fail(dos_error(status))
+        }
     }
 }
 

@@ -272,6 +272,11 @@ static void steps(void)
     SetCaretPos(30, 40);
     DbgPrint("[caret] moved: where it was %06lx, where it is %06lx\n", pixel(10, 40), pixel(30, 40));
 
+    /* A BeginPaint that cannot write its PAINTSTRUCT fails: no EndPaint
+       follows, and the caret it hid shows again. */
+    ok = BeginPaint(w, (PAINTSTRUCT *)1) != 0;
+    DbgPrint("[caret] BeginPaint without a PAINTSTRUCT: %d, the caret %06lx\n", ok, pixel(30, 40));
+
     InvalidateRect(w, 0, 1);
     UpdateWindow(w);
     DbgPrint("[caret] after WM_PAINT: %06lx\n", pixel(30, 40));

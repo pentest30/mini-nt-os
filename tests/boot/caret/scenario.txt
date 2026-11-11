@@ -28,6 +28,7 @@ expect = [caret] steady 250 ms later: 000000
 # Hiding counts (the API's documentation, not ReactOS's boolean).
 expect = [caret] hidden twice, shown once: ffffff; shown again: 000000
 expect = [caret] moved: where it was ffffff, where it is 000000
+expect = [caret] BeginPaint without a PAINTSTRUCT: 0, the caret 000000
 # BeginPaint hides it before the background is erased, EndPaint shows it.
 expect = [caret] after WM_PAINT: 000000
 # ScrollWindowEx hides it, then it moves with the content (co_IntFixCaret).

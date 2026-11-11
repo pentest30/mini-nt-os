@@ -1,5 +1,14 @@
 # Notes de passation
 
+- **Revue de la PR #122** (`claude/new-session-696xfc`) : une branche de menus reste sous MAX_DEPTH quel que soit
+  l'ordre où on l'accroche (les menus au-dessus de celui qui reçoit le sous-menu comptent, `Menus::depth_above`,
+  niveau par niveau ; sinon des arbres de 30 accrochés l'un sous l'autre grandissaient sans fin, et les parcours
+  récursifs avec eux sur la pile du noyau) ; MAX_ITEMS vaut pour le menu qui reçoit l'item (un sous-menu trouvé par
+  identifiant), pas pour celui qu'on nomme ; une fenêtre WS_POPUP à menu sans titre peint sa barre (nc_calc_size lui
+  faisait sa place) ; un BeginPaint qui ne peut écrire son PAINTSTRUCT remontre le caret. Laissé : MF_DISABLED seul
+  n'est pas grisé, c'est le sens de l'API (MF_GRAYED grise). Tests : hôte (`menu`, `nonclient`) ; scénario `caret`
+  (BeginPaint sur une adresse invalide).
+
 - **Les menus déroulants** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 22) : `win32k::menupopup` (la fenêtre #32768 : mise en page MENU_PopupMenuCalcSize avec coches, raccourcis
   alignés et flèches, dessin, procédure du serveur, que `window::server_window_proc` reconnaît à sa classe et à qui
