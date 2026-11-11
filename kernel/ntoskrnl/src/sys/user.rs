@@ -320,6 +320,36 @@ pub(super) fn nt_user_set_prop(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(set().is_ok()))
 }
 
+/// NtUserRegisterWindowMessage(MessageName) : l'atome du nom dans la table
+/// des atomes de USER (IntAddAtom), créé s'il le faut : RegisterWindowMessage
+/// rend un message de `0xC000` à `0xFFFF`, le même pour le même nom (sans
+/// tenir compte de la casse). 0 : un nom nul (`ERROR_INVALID_PARAMETER`),
+/// illisible ou refusé par la table (l'erreur), ou un thread sans bureau
+/// (sans erreur, comme ReactOS).
+pub(super) fn nt_user_register_window_message(arguments: &[u32]) -> NtStatus {
+    let address = arguments[0];
+    if address == 0 {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    let units = match super::object::capture_unicode_string(address) {
+        Ok(units) => units,
+        Err(status) => return fail(abi::winerror::dos_error(status)),
+    };
+    if win32k::convert_current_thread().map_or(true, |thread| thread.desktop().is_none()) {
+        return fail(abi::winerror::ERROR_SUCCESS);
+    }
+    match win32k::atom::add(win32k::atom::AtomName::String(&units)) {
+        Ok(atom) => NtStatus(u32::from(atom)),
+        Err(status) => fail(abi::winerror::dos_error(status)),
+    }
+}
+
+/// Met l'erreur Win32 `error` et rend 0.
+fn fail(error: u32) -> NtStatus {
+    let _ = win32k::set_last_error(error);
+    NtStatus(0)
+}
+
 /// NtUserEnumDisplaySettings(lpszDevice, iMode, lpDevMode, dwFlags) : le
 /// mode d'affichage `iMode` dans le DEVMODEW de l'appelant — le mode
 /// courant seul (ENUM_CURRENT_SETTINGS ou 0) : le périphérique de Mino

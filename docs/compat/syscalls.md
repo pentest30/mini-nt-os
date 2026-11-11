@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 127 | 296 |
-| win32k | 158 | 737 |
+| win32k | 164 | 737 |
 
 ## ntoskrnl
 
@@ -651,9 +651,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x114c` | `NtUserCloseWindowStation` | 1 | ✅ |
 | `0x114d` | `NtUserConsoleControl` | 3 | ✅ |
 | `0x114e` | `NtUserConvertMemHandle` | 2 |  |
-| `0x114f` | `NtUserCopyAcceleratorTable` | 3 |  |
+| `0x114f` | `NtUserCopyAcceleratorTable` | 3 | ✅ |
 | `0x1150` | `NtUserCountClipboardFormats` | 0 |  |
-| `0x1151` | `NtUserCreateAcceleratorTable` | 2 |  |
+| `0x1151` | `NtUserCreateAcceleratorTable` | 2 | ✅ |
 | `0x1152` | `NtUserCreateCaret` | 4 | ✅ |
 | `0x1153` | `NtUserCreateDesktop` | 5 | ✅ |
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
@@ -666,7 +666,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x115b` | `NtUserDeferWindowPos` | 8 |  |
 | `0x115c` | `NtUserDefSetText` | 2 | ✅ |
 | `0x115d` | `NtUserDeleteMenu` | 3 | ✅ |
-| `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
+| `0x115e` | `NtUserDestroyAcceleratorTable` | 1 | ✅ |
 | `0x115f` | `NtUserDestroyCursor` | 2 | ✅ |
 | `0x1160` | `NtUserDestroyInputContext` | 1 |  |
 | `0x1161` | `NtUserDestroyMenu` | 1 | ✅ |
@@ -797,7 +797,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11de` | `NtUserQueryInformationThread` | 4 |  |
 | `0x11df` | `NtUserQueryInputContext` | 2 |  |
 | `0x11e0` | `NtUserQuerySendMessage` | 1 |  |
-| `0x11e1` | `NtUserQueryWindow` | 2 |  |
+| `0x11e1` | `NtUserQueryWindow` | 2 | ✅ |
 | `0x11e2` | `NtUserRealChildWindowFromPoint` | 3 |  |
 | `0x11e3` | `NtUserRealInternalGetMessage` | 6 |  |
 | `0x11e4` | `NtUserRealWaitMessageEx` | 2 |  |
@@ -807,7 +807,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e8` | `NtUserRegisterHotKey` | 4 |  |
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |
 | `0x11ea` | `NtUserRegisterTasklist` | 1 |  |
-| `0x11eb` | `NtUserRegisterWindowMessage` | 1 |  |
+| `0x11eb` | `NtUserRegisterWindowMessage` | 1 | ✅ |
 | `0x11ec` | `NtUserRemoveMenu` | 3 | ✅ |
 | `0x11ed` | `NtUserRemoveProp` | 2 |  |
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
@@ -880,7 +880,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1231` | `NtUserTrackPopupMenuEx` | 6 | ✅ |
 | `0x1232` | `NtUserCalcMenuBar` | 5 |  |
 | `0x1233` | `NtUserPaintMenuBar` | 6 |  |
-| `0x1234` | `NtUserTranslateAccelerator` | 3 |  |
+| `0x1234` | `NtUserTranslateAccelerator` | 3 | ✅ |
 | `0x1235` | `NtUserTranslateMessage` | 2 | ✅ |
 | `0x1236` | `NtUserUnhookWindowsHookEx` | 1 |  |
 | `0x1237` | `NtUserUnhookWinEvent` | 1 |  |

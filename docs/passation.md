@@ -9,10 +9,17 @@
   `abi::user::WindowPlacement32`. La fenêtre s'affiche entière : titre, barre de menus, contrôle Edit avec ses
   barres de défilement, barre d'état de `comctl32`. Pas encore : `InternalPos` (rien à garder sans réduire ni
   agrandir), WPF_ASYNCWINDOWPLACEMENT (fait tout de suite). Tests : hôte (`winpos`) ; `notepad` sur AMD et Intel,
-  qu'une mutation (SetWindowPlacement sans ShowWindow) fait échouer. **Suite** : NtUserRegisterWindowMessage (rendu 0
-  aujourd'hui : la procédure du Bloc-notes prend WM_NULL pour FINDMSGSTRING), NtUserCreateAcceleratorTable,
-  NtUserQueryWindow, le « SendMessageW Error » de `user32` pendant la création (à diagnostiquer), puis taper du texte
-  (touches de QEMU), l'enregistrer (la boîte Enregistrer sous de `comdlg32`) et le rouvrir.
+  qu'une mutation (SetWindowPlacement sans ShowWindow) fait échouer. Puis (étape 25) : NtUserRegisterWindowMessage
+  (la table des atomes de USER), NtUserQueryWindow (`win32k::window::query` : GetWindowThreadProcessId, le meneur
+  d'une console de `csrss`, fenêtres active et focalisée, premier plan), les accélérateurs (`win32k::accel`,
+  `sys::accel` : Create, Copy, Destroy, TranslateAccelerator ; l'item cherché par identifiant comme Wine et la
+  documentation, pas par position comme ReactOS) ; Ctrl+G tapé par QEMU ouvre « Goto line », Échap la ferme. Le
+  « SendMessageW Error » venait du Bloc-notes (WM_SETFONT à son Edit pas encore créé) : rien à corriger. Tests : hôte
+  (`accel`) ; `notepad` (mutation : sans WM_COMMAND), `cmd`, `desktop-launch`, `console` sur AMD et Intel. **Suite** :
+  NtUserSetActiveWindow et NtUserSetThreadState (la fin d'une boîte), NtUserGetAncestor,
+  NtUserIsClipboardFormatAvailable, les métriques de police (GetOutlineTextMetrics, GetFontData, GetGlyphIndices,
+  GetCharABCWidths), puis taper du texte (touches de QEMU), l'enregistrer (la boîte Enregistrer sous de `comdlg32`) et
+  le rouvrir.
 
 - **Le gestionnaire des tâches : page grise, onglets, relance** (`claude/new-session-696xfc`, worktree
   `.claude/worktrees/pr122` ; demandé le 2026-11-11, testé sous VirtualBox). Trois défauts :

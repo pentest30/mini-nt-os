@@ -82,6 +82,7 @@ GetWindowDC@4
 GetWindowLongW@8
 GetWindowRect@8
 GetWindowTextW@12
+GetWindowThreadProcessId@8
 HideCaret@4
 HiliteMenuItem@16
 InsertMenuW@20
@@ -108,6 +109,7 @@ PostThreadMessageW@16
 RedrawWindow@16
 RegisterClassExW@4
 RegisterLogonProcess@8
+RegisterWindowMessageW@4
 ReleaseCapture@0
 ReleaseDC@8
 RemoveMenu@12

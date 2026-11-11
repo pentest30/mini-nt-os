@@ -525,6 +525,18 @@ pub(super) fn nt_user_get_update_rect(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(update.is_some()))
 }
 
+/// NtUserQueryWindow(hWnd, Index) : ce que l'index demande de la fenêtre
+/// (`win32k::window::query` : PID, TID, fenêtre active, fenêtre qui a le
+/// clavier, premier plan…) ; 0 pour une fenêtre inconnue
+/// (`ERROR_INVALID_WINDOW_HANDLE`).
+pub(super) fn nt_user_query_window(arguments: &[u32]) -> NtStatus {
+    let (handle, index) = (arguments[0], arguments[1]);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    NtStatus(win32k::window::query(&window, index))
+}
+
 /// NtUserGetWindowPlacement(hWnd, lpwndpl) : le `WINDOWPLACEMENT` de la
 /// fenêtre (`win32k::winpos::placement`) écrit en `lpwndpl`, sa longueur
 /// mise à 44 quelle qu'elle soit (comme ReactOS) ; TRUE. FALSE pour une

@@ -336,6 +336,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 24 (le Bloc-notes s'affiche) : GetWindowPlacement et SetWindowPlacement (`win32k::winpos::placement`,
   `set_placement` : rectangle normal dans la zone de travail, make_rect_onscreen, ShowWindow) ; scénario `notepad`
   (`tests/native/notepad1.c` lance le vrai `notepad.exe` : titre, menus, contrôle Edit, barre d'état).
+  M6, étape 25 : RegisterWindowMessage (atomes de USER), NtUserQueryWindow (`win32k::window::query`), les
+  accélérateurs (`win32k::accel`, `sys::accel` : Create, Copy, Destroy, TranslateAccelerator) : Ctrl+G ouvre « Goto
+  line » du Bloc-notes.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

@@ -599,6 +599,47 @@ impl WindowPlacement32 {
     }
 }
 
+/// ACCEL: an entry of an accelerator table, as CreateAcceleratorTable and
+/// CopyAcceleratorTable carry it (6 bytes: `fVirt`, a byte of padding, `key`,
+/// `cmd`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Accel32 {
+    pub f_virt: u8,
+    pub pad: u8,
+    pub key: u16,
+    pub cmd: u16,
+}
+
+/// ACCEL's `fVirt`: the key is a virtual key (not a character), and the
+/// modifiers it wants.
+pub mod fvirt {
+    pub const FVIRTKEY: u8 = 0x01;
+    pub const FSHIFT: u8 = 0x04;
+    pub const FCONTROL: u8 = 0x08;
+    pub const FALT: u8 = 0x10;
+    /// The bits kept: FVIRT_TBL_END (0x80, the last entry of a resource
+    /// table) is removed.
+    pub const MASK: u8 = 0x7F;
+}
+
+/// TYPE_ACCELTABLE: an accelerator table in the USER handle table.
+pub const TYPE_ACCELTABLE: u8 = 8;
+
+/// NtUserQueryWindow's indexes (QUERY_WINDOW_*, ReactOS `ntuser.h`).
+pub mod query_window {
+    pub const UNIQUE_PROCESS_ID: u32 = 0x00;
+    pub const UNIQUE_THREAD_ID: u32 = 0x01;
+    pub const ACTIVE: u32 = 0x02;
+    pub const FOCUS: u32 = 0x03;
+    pub const ISHUNG: u32 = 0x04;
+    pub const REAL_ID: u32 = 0x05;
+    pub const FOREGROUND: u32 = 0x06;
+    pub const DEFAULT_IME: u32 = 0x07;
+    pub const DEFAULT_ICONTEXT: u32 = 0x08;
+    pub const ACTIVE_IME: u32 = 0x09;
+}
+
 /// WPF_SETMINPOSITION: SetWindowPlacement takes `ptMinPosition` too.
 pub const WPF_SETMINPOSITION: u32 = 0x0001;
 /// WPF_RESTORETOMAXIMIZED: a minimized window comes back maximized.
@@ -643,6 +684,9 @@ pub const TYPE_MONITOR: u8 = 12;
 const _: () = {
     assert!(size_of::<WindowPos32>() == 28);
     assert!(size_of::<WindowPlacement32>() == 44);
+    assert!(size_of::<Accel32>() == 6);
+    assert!(offset_of!(Accel32, key) == 2);
+    assert!(offset_of!(Accel32, cmd) == 4);
     assert!(offset_of!(WindowPlacement32, normal_position) == 28);
     assert!(size_of::<NcCalcSizeParams32>() == 52);
     assert!(offset_of!(NcCalcSizeParams32, pos) == 48);
