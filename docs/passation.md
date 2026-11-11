@@ -1,5 +1,21 @@
 # Notes de passation
 
+- **La barre de menus suivie** (`claude/new-session-696xfc`, repartie de `main` après la PR 122 ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 23) : HTMENU dans `defwnd::nc_hit_test` (paramètre
+  `has_menu`, `window_hit_test` pour une fenêtre) ; WM_NCLBUTTONDOWN sur HTMENU donne SC_MOUSEMENU, et DefWindowProc
+  suit la barre (`menutrack::track_mouse_menu_bar` : TPM_BUTTONDOWN, `TimeToHide` pour le second clic) ;
+  DefWindowProc de WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP, WM_SYSCHAR (`defwnd::key_menu`, l'état dans
+  `queue.menu_keys`) donne SC_KEYMENU (`menutrack::track_kbd_menu_bar` : premier item, ou l'item de la lettre et un
+  VK_RETURN posté, TF_ENDMENU sans item) ; ←/→ passent d'un item de la barre à l'autre ; WM_CANCELMODE finit le
+  suivi (`end_menu_of`) ; GetMenuBarInfo rend fBarFocused, fFocused et `hwndMenu`. Tests : hôte (`defwnd`) ;
+  scénario `menu` (clics postés, touches de QEMU, vrai clic sur la barre, capture) sur AMD et Intel ; douze
+  mutations le font échouer. **À finir** : deux mutations (premier item sans lettre, `menu_owner` pour la barre ;
+  `menubar_mutate.py` dans le scratchpad) et les régressions (`gui`, `destroy`, `desktop-click`, `mouse`,
+  `mouse-windows`, `keyboard`, `dialog`, `cmd`…) n'ont pas encore été passées.
+  Pas encore : le menu de la fenêtre (HTSYSMENU, Alt+Espace, WM_NEXTMENU : la sélection fait le tour aux bouts de
+  la barre), MENU_SuspendPopup, Alt+F4 et Alt+Tab. Suite proposée : le menu de la fenêtre (GetSystemMenu), ou
+  réduire et agrandir, ou un scénario du Bloc-notes.
+
 - **Revue de la PR #122** (`claude/new-session-696xfc`) : une branche de menus reste sous MAX_DEPTH quel que soit
   l'ordre où on l'accroche (les menus au-dessus de celui qui reçoit le sous-menu comptent, `Menus::depth_above`,
   niveau par niveau ; sinon des arbres de 30 accrochés l'un sous l'autre grandissaient sans fin, et les parcours

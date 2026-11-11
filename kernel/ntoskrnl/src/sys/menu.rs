@@ -230,8 +230,10 @@ fn give_rect(address: u32, rect: win32k::gdi::dib::Rect) -> Result<(), u32> {
 /// (OBJID_MENU) d'une fenêtre qui n'est pas fille, le MENUBARINFO (32
 /// octets) : le rectangle de la barre à l'écran (`idItem` 0 : depuis son
 /// premier item, de la taille `cxMenu` × `cyMenu`) ou de l'item `idItem` - 1,
-/// le menu, et qui a le focus (rien sans suivi du menu). Pas encore les menus
-/// déroulants (OBJID_CLIENT) ni le menu système (OBJID_SYSMENU) : FALSE.
+/// le menu, si la barre est suivie (fBarFocused), si l'item est sélectionné
+/// (fFocused ; la barre suivie pour `idItem` 0) et la fenêtre de son menu
+/// ouvert. Pas encore les menus déroulants (OBJID_CLIENT) ni le menu système
+/// (OBJID_SYSMENU) : FALSE.
 pub(super) fn nt_user_get_menu_bar_info(arguments: &[u32]) -> NtStatus {
     let [hwnd, object, item, info] = arguments[..4] else { unreachable!("4 arguments") };
     let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
@@ -259,13 +261,23 @@ pub(super) fn nt_user_get_menu_bar_info(arguments: &[u32]) -> NtStatus {
         } else {
             win32k::menubar::item_rect(Some(&window), hmenu, item - 1).unwrap_or_default()
         };
-        let focused = item != 0 && menu.focused == item - 1;
+        // fBarFocused: the bar is the menu tracked; fFocused: the item
+        // selected (the bar itself for idItem 0), with its open menu's window.
+        let bar_focused = win32k::menutrack::tracked_menu() == Some(hmenu);
+        let (focused, hwnd_menu) = if item == 0 {
+            (bar_focused, 0)
+        } else {
+            let focused = menu.focused == item - 1;
+            let submenu = menu.items.get((item - 1) as usize).map_or(0, |entry| entry.submenu);
+            let open = (focused && submenu != 0).then(|| win32k::menu::state(submenu)).flatten();
+            (focused, open.map_or(0, |state| state.hwnd))
+        };
         let answer = MenuBarInfo32 {
             cb_size: core::mem::size_of::<MenuBarInfo32>() as u32,
             rc_bar: [rect.left, rect.top, rect.right, rect.bottom],
             h_menu: hmenu,
-            hwnd_menu: 0,
-            focus: u32::from(focused) << 1,
+            hwnd_menu,
+            focus: u32::from(bar_focused) | u32::from(focused) << 1,
         };
         ke::usermem::copy_to_user(u64::from(info), answer.as_bytes()).map_err(dos_error)?;
         Ok(true)

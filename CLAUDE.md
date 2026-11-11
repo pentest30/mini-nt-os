@@ -328,6 +328,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   coordonnées d'écran pendant le suivi, `queue.menu_owner`, clavier, mnémoniques et WM_MENUCHAR, sous-menus,
   notifications, WM_COMMAND ou TPM_RETURNCMD) ; NtUserTrackPopupMenuEx, NtUserEndMenu ; scénario `menu` (touches et
   souris de QEMU).
+  M6, étape 23 (la barre suivie) : HTMENU (`defwnd::window_hit_test`) ; WM_NCLBUTTONDOWN donne SC_MOUSEMENU
+  (`menutrack::track_mouse_menu_bar` : le menu de l'item sous la souris, `TimeToHide`) ; DefWindowProc des touches du
+  menu (`defwnd::key_menu`, `queue.menu_keys` : Alt, F10, Alt et une lettre donnent SC_KEYMENU,
+  `menutrack::track_kbd_menu_bar`) ; ←/→ sur la barre ; WM_CANCELMODE (`menutrack::end_menu_of`) ; GetMenuBarInfo
+  (fBarFocused, fFocused, `hwndMenu`). Pas encore le menu de la fenêtre.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

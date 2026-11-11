@@ -6,7 +6,9 @@
 # TrackPopupMenuEx (win32k::menutrack, the window of the class #32768 in
 # win32k::menupopup): the keys below, typed at each "[menu] tracking N" (the
 # owner's first WM_ENTERIDLE), the mouse by messages W posts to the menu's
-# window, EndMenu; the last menu stays open for the capture.
+# window, EndMenu. Then the bar (win32k::menutrack): clicks by messages W
+# sends and posts, the keys (Alt, Alt+letter, F10, the arrows, Escape), at
+# last a real click on File, whose menu stays open for the capture.
 features = test-smss
 requires = userland, native
 initial-command = MENU1.EXE
@@ -71,9 +73,37 @@ expect = [menu] TrackPopupMenuEx 4, EndMenu: 0; at 300,160; notified 0
 # its submenu opens (the menu tracked, the mouse's messages keep the screen's
 # coordinates).
 keys = [menu] tracking 5 => move:-220,-93 move:-219,-93
-# The places the screen's checks below rely on: the menu, Sub (in its client
-# area, 3 pixels in), its submenu's Inner to the right of the menu.
-expect = [menu] the last menu at 150,160 to 253,243; Sub 153,206 to 250,223; Inner 252,206 to 309,223
+expect = [menu] the mouse's menu at 150,160 to 253,243; Sub 153,206 to 250,223; Inner 252,206 to 309,223
+# The bar (win32k::menutrack::track_mouse_menu_bar, track_kbd_menu_bar):
+# HTMENU over the client area (WM_NCHITTEST, 5), HTCLIENT (1) in it.
+expect = [menu] the bar: File at 126,133, Help at 479,133; WM_NCHITTEST 5, in the client area 1
+# WM_NCLBUTTONDOWN on File (SC_MOUSEMENU): its menu open, the bar and File
+# focused (GetMenuBarInfo), still open after the release; over Help it
+# closes; a click on Help posts its WM_COMMAND.
+expect = [menu] the bar 6: File's menu 1, focused 3, its window 1, open after the release 1, Help after it 1; WM_COMMAND 300, EXITMENULOOP 1
+# A second click on File, open, closes the bar (TimeToHide).
+expect = [menu] the bar 7, clicked twice: WM_COMMAND 0, INITMENUPOPUP 1, UNINITMENUPOPUP 1, EXITMENULOOP 1
+expect = [menu] the bar 8, WM_CANCELMODE: WM_COMMAND 0, UNINITMENUPOPUP 1, EXITMENULOOP 1
+# The keys (DefWindowProc: WM_SYSKEYDOWN, WM_SYSKEYUP, WM_SYSCHAR give
+# SC_KEYMENU): Alt+F opens File, x is its Exit (102).
+keys = [menu] keys 9 => alt-f x
+expect = [menu] keys 9: WM_COMMAND 102; ENTERMENULOOP 1 0, INITMENU 1, INITMENUPOPUP 1, UNINITMENUPOPUP 1, WM_MENUCHAR 0
+# Alt alone selects File; left goes round to Help; Enter chooses it.
+keys = [menu] keys 10 => alt left ret
+expect = [menu] keys 10: WM_COMMAND 300; ENTERMENULOOP 1 0, INITMENU 1, INITMENUPOPUP 0, UNINITMENUPOPUP 0, WM_MENUCHAR 0
+# F10, down opens File's menu, right closes it for Help.
+keys = [menu] keys 11 => f10 down right ret
+expect = [menu] keys 11: WM_COMMAND 300; ENTERMENULOOP 1 0, INITMENU 1, INITMENUPOPUP 1, UNINITMENUPOPUP 1, WM_MENUCHAR 0
+# Escape closes File's menu, the bar still tracked.
+keys = [menu] keys 12 => alt-f esc right ret
+expect = [menu] keys 12: WM_COMMAND 300; ENTERMENULOOP 1 0, INITMENU 1, INITMENUPOPUP 1, UNINITMENUPOPUP 1, WM_MENUCHAR 0
+# Alt+Q: no item, WM_MENUCHAR ('q', not a popup), the tracking ends at once.
+keys = [menu] keys 13 => alt-q
+expect = [menu] keys 13: WM_COMMAND 0; ENTERMENULOOP 1 0, INITMENU 1, INITMENUPOPUP 0, UNINITMENUPOPUP 0, WM_MENUCHAR 71
+# The real mouse, from Sub's middle to File's (129, 133), clicks: File's
+# menu stays open under the bar for the capture.
+keys = [menu] click the bar => move:-72,-81 press:1 release
+expect = [menu] the bar clicked: File's menu 1, focused 3, at 104,142 to 179,225
 expect = [menu] done
 
 forbid = *** STOP:
@@ -89,28 +119,32 @@ forbid = NtUserHiliteMenuItem (0x11bb) is not implemented
 forbid = NtUserCallHwndLock class 0x55 is not implemented
 forbid = NtUserTrackPopupMenuEx (0x1231) is not implemented
 forbid = NtUserEndMenu (0x1170) is not implemented
+# DefWindowProc handles the menu keys, WM_CANCELMODE, SC_MOUSEMENU and
+# SC_KEYMENU.
+forbid = DefWindowProc: message 0x0105 not yet
+forbid = DefWindowProc: message 0x0106 not yet
+forbid = DefWindowProc: message 0x001f not yet
+forbid = WM_SYSCOMMAND other than
 
 # W's client area, white, under its bar.
 screen = 300 300 FFFFFF
-# The bar (y 124 to 142, COLOR_MENU): "&Fichier", and "&Help" at its right;
-# each prefixed letter underlined under the baseline (y 138), as wide as the
-# letter less one pixel. (Edit, deleted, is gone from the screen too: a menu's
-# window that closes over W makes W repaint its whole frame, WM_NCPAINT
-# not yet drawing only a part of it, see paint::nc_paint.)
+# The bar (y 124 to 142, COLOR_MENU): File (104 to 149) sunken
+# (BDR_SUNKENOUTER: COLOR_BTNSHADOW above, COLOR_BTNHIGHLIGHT on the right),
+# its text a pixel lower and to the right, its prefixed letter underlined
+# (y 139); "&Help" at the bar's right, its H underlined under the baseline
+# (y 138). (Edit, deleted, is gone from the screen too: a menu's window that
+# closes over W makes W repaint its whole frame, WM_NCPAINT not yet drawing
+# only a part of it, see paint::nc_paint.)
 screen = 300 130 D4D0C8
-screen = 110 138 000000
-screen = 114 138 000000
-screen = 115 138 D4D0C8
+screen = 120 124 808080
+screen = 148 130 FFFFFF
+screen = 111 139 000000
+screen = 115 139 000000
+screen = 116 139 D4D0C8
 screen = 468 138 000000
-# The last menu, open at (150, 160) to (253, 243): its raised frame (a
-# dialog's), the separator etched (y 183 and 184), Sub hilited
-# (COLOR_HIGHLIGHT) with its arrow (Marlett, COLOR_HIGHLIGHTTEXT); its
-# submenu from (249, 203), over the menu's edge, Inner not hilited, its frame.
-screen = 151 161 FFFFFF
-screen = 252 242 404040
-screen = 200 183 808080
-screen = 200 184 FFFFFF
-screen = 157 208 0A246A
-screen = 243 214 FFFFFF
-screen = 305 215 D4D0C8
-screen = 310 215 808080
+# File's menu under it, from (104, 142): its raised frame, the separator
+# etched (y 182 and 183).
+screen = 105 143 FFFFFF
+screen = 178 224 404040
+screen = 160 182 808080
+screen = 160 183 FFFFFF

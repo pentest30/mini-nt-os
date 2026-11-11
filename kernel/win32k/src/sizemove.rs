@@ -17,7 +17,9 @@
 //! Un appui sur un bouton du titre le suit ([`track_button`]) jusqu'au
 //! relâchement : sur le même bouton, WM_SYSCOMMAND (SC_CLOSE, SC_MINIMIZE,
 //! SC_MAXIMIZE ou SC_RESTORE). SC_CLOSE envoie WM_CLOSE ; réduire et
-//! agrandir passent par ShowWindow (`crate::winpos`).
+//! agrandir passent par ShowWindow (`crate::winpos`). Un appui sur la barre
+//! de menus demande SC_MOUSEMENU, que le suivi de la barre traite comme
+//! SC_KEYMENU (`crate::menutrack`).
 //!
 //! Pas encore : le déplacement au clavier (SC_MOVE du menu de la fenêtre),
 //! le cadre en pointillés (sans le contenu), WM_MOVING et WM_SIZING, le
@@ -29,11 +31,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::user::vk::{VK_ESCAPE, VK_RETURN};
 use abi::user::{
-    Msg32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLOSE, HTHSCROLL, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
-    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, SC_CLOSE, SC_HSCROLL, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE,
-    SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE,
-    SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KEYDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SYSCOMMAND, WS_CHILD, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    Msg32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLOSE, HTHSCROLL, HTLEFT, HTMAXBUTTON, HTMENU,
+    HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, SC_CLOSE, SC_HSCROLL, SC_KEYMENU, SC_MAXIMIZE,
+    SC_MINIMIZE, SC_MOUSEMENU, SC_MOVE, SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE,
+    WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SYSCOMMAND, WS_CHILD, WS_MAXIMIZE,
+    WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
 };
 
 use crate::gdi::dib::Rect;
@@ -235,9 +238,7 @@ pub fn track_button(window: &Arc<Window>, hit: u32) {
         crate::mouse::set_capture(&thread, None);
     }
     let Some(point) = released else { return };
-    let state = window.state();
-    let metrics = crate::metrics::get;
-    if crate::defwnd::nc_hit_test(state.style, state.ex_style, state.window, state.client, point, &metrics) == hit {
+    if crate::defwnd::window_hit_test(window, point) == hit {
         let lparam = crate::mouse::make_lparam(point.0, point.1);
         let _ = crate::window::send_message(window, WM_SYSCOMMAND, command, LParam::Value(lparam));
     }
@@ -260,6 +261,10 @@ pub fn nc_lbutton_down(window: &Arc<Window>, hit: u32, lparam: u32) {
             let _ = crate::window::send_message(window, WM_SYSCOMMAND, command, LParam::Value(lparam));
         }
         HTCLOSE | HTMINBUTTON | HTMAXBUTTON => track_button(window, hit),
+        // The menu bar: DefWindowProc tracks it (SC_MOUSEMENU).
+        HTMENU => {
+            let _ = crate::window::send_message(window, WM_SYSCOMMAND, SC_MOUSEMENU + HTMENU, LParam::Value(lparam));
+        }
         // user32 follows the mouse on the bar (DefWndTrackScrollBar).
         HTHSCROLL => {
             let _ = crate::window::send_message(window, WM_SYSCOMMAND, SC_HSCROLL + HTHSCROLL, LParam::Value(lparam));
@@ -294,9 +299,14 @@ pub fn sys_command(window: &Arc<Window>, wparam: u32, lparam: u32) {
         // user32 follows the mouse on a scroll bar itself; it gives the
         // kernel these only under a CBT hook.
         SC_VSCROLL | SC_HSCROLL => {}
+        SC_MOUSEMENU => crate::menutrack::track_mouse_menu_bar(window, wparam & 0x000F, point_of(lparam)),
+        SC_KEYMENU => crate::menutrack::track_kbd_menu_bar(window, lparam as u16),
         _ => {
             static REPORTED: AtomicBool = AtomicBool::new(false);
-            report_missing("WM_SYSCOMMAND other than move, size, close, minimize, maximize and restore", &REPORTED);
+            report_missing(
+                "WM_SYSCOMMAND other than move, size, close, minimize, maximize, restore and the menus",
+                &REPORTED,
+            );
         }
     }
 }

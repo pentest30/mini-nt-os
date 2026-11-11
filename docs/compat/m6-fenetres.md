@@ -1051,3 +1051,47 @@ le scénario `menu` sur AMD et Intel, que dix-huit mutations du suivi font écho
 ramenées à la zone cliente pendant le suivi) ; et `gui`, `destroy`, `desktop-ui`, `desktop-launch`, `desktop-click`,
 `cursor`, `mouse`, `mouse-windows`, `keyboard`, `caret`, `scroll`, `scrollex`, `dialog`, `listview`, `tasklist`, `text`,
 `icons`, `console`, `bitmap`, `send-messages`, `activate-app`, `cmd` sur AMD et Intel.
+
+## Étape 23 : la barre de menus suivie (le clic, F10, Alt, les flèches)
+
+Le clic sur la barre et le clavier passent par DefWindowProc : `user32` donne au noyau WM_NCLBUTTONDOWN,
+WM_SYSCOMMAND (SC_MOUSEMENU, SC_KEYMENU), WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_SYSCHAR et WM_CANCELMODE.
+`defwnd.c`, `nonclient.c` et `menu.c` de win32k (IntDefWindowProc, DefWndHandleSysCommand, GetNCHitEx,
+NC_HandleNCLButtonDown, MENU_TrackMouseMenuBar, MENU_TrackKbdMenuBar, MENU_KeyLeft, MENU_KeyRight, MENU_ButtonUp,
+MENU_EndMenu, NtUserGetMenuBarInfo), ReactOS comme spécification ; `win32k::defwnd`, `win32k::sizemove`,
+`win32k::menutrack`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| HTMENU (`defwnd::nc_hit_test`, `window_hit_test`) | au-dessus de la zone cliente, entre ses côtés, pour une fenêtre qui n'est pas fille et a un menu (HAS_MENU) |
+| Le clic (`sizemove::nc_lbutton_down`) | WM_NCLBUTTONDOWN sur HTMENU envoie WM_SYSCOMMAND SC_MOUSEMENU + HTMENU, que DefWindowProc fait suivre (`menutrack::track_mouse_menu_bar`) : TPM_BUTTONDOWN, TPM_VERTICAL ; l'item sous la souris sélectionné et son menu ouvert sous lui ; la fenêtre en est la propriétaire et a la souris (ses messages en coordonnées d'écran, comme pour un menu déroulant) |
+| Le relâchement (MENU_ButtonUp) | sur l'item ouvert, le menu reste ouvert ; un second clic sur lui ferme la barre (`TimeToHide`) ; sur un item sans menu, il est exécuté (WM_COMMAND posté) ; hors des menus, le suivi finit |
+| Les touches (`defwnd::key_menu`) | Alt enfoncé seul, sans répétition, puis relâché, ou F10 enfoncé puis relâché : SC_KEYMENU (0) à la fenêtre de premier niveau ; Alt et une lettre (WM_SYSCHAR) : SC_KEYMENU (la lettre) ; ce qu'il en reste dans la file du thread (QF_FMENUSTATUS, QF_FF10STATUS : `queue.menu_keys`) |
+| SC_KEYMENU (`menutrack::track_kbd_menu_bar`) | la barre de la fenêtre de premier niveau ; sans lettre, le premier item sélectionné ; avec une lettre, l'item qu'elle souligne sélectionné et un VK_RETURN posté (son menu s'ouvre) ; sans item (WM_MENUCHAR ignoré), le suivi finit aussitôt (TF_ENDMENU) |
+| Les flèches sur la barre (MENU_KeyLeft, MENU_KeyRight) | ← et → passent à l'item voisin de la barre (du premier au dernier et retour) ; si un menu était ouvert, celui du nouvel item s'ouvre, son premier item sélectionné ; → ouvre d'abord le sous-menu de l'item sélectionné d'un menu ouvert ; ↑ et ↓ ouvrent le menu de l'item ; Échap ferme le menu ouvert, puis la barre |
+| WM_CANCELMODE (`menutrack::end_menu_of`) | les touches du menu oubliées ; le suivi finit si la fenêtre est celle du menu suivi ou sa propriétaire (MENU_EndMenu) ; la souris rendue si elle l'avait |
+| NtUserGetMenuBarInfo | fBarFocused : la barre est le menu suivi ; fFocused : l'item sélectionné (la barre suivie pour `idItem` 0) ; `hwndMenu` : la fenêtre du menu ouvert de l'item |
+
+Écarts avec ReactOS, faute du menu de la fenêtre : aux bouts de la barre, la sélection fait le tour au lieu de passer
+au menu de la fenêtre (MENU_DoNextMenu, WM_NEXTMENU) ; Alt+Espace, Maj+Échap, une fenêtre réduite ou sans barre ne
+suivent rien (HTSYSMENU non plus).
+
+Ce qui manque : le menu de la fenêtre (GetSystemMenu, HTSYSMENU, SC_KEYMENU ' '), WM_NEXTMENU, MENU_SuspendPopup
+(une flèche répétée ouvre chaque menu), Alt+F4, Alt+Tab, Alt+Échap, Maj+F10 (WM_CONTEXTMENU), le premier plan du
+clavier pendant le suivi (KF_MENUMODE).
+
+Vu en chemin : la file simplifie déjà la touche (VK_LMENU devient VK_MENU, `queue.rs`) ; la barre suivie se repeint
+entière (WM_NCPAINT, limite connue de `paint::nc_paint`).
+
+Le banc d'essai : `tests/native/menu1.c`, scénario `menu` (étapes 20 à 22), avec la barre de W (Fichier, Help) :
+WM_NCHITTEST (HTMENU au-dessus de la zone cliente) ; WM_NCLBUTTONDOWN sur Fichier (son menu ouvert, la barre et
+l'item « focalisés » pour GetMenuBarInfo, le menu ouvert après le relâchement, fermé quand la souris passe à Help,
+dont le clic poste WM_COMMAND) ; deux clics sur Fichier ; WM_CANCELMODE ; les touches de QEMU : Alt+F puis x (Exit),
+Alt seul puis ← et Entrée (Help), F10 ↓ → Entrée, Alt+F Échap → Entrée, Alt+Q (WM_MENUCHAR, fin aussitôt) ; enfin le
+vrai clic de QEMU sur Fichier, dont le menu reste ouvert pour la capture (l'item enfoncé, son texte décalé, le menu
+dessous, son sillon).
+
+Tests : hôte (`defwnd` : HTMENU, les touches du menu) ; le scénario `menu` sur AMD et Intel, que douze mutations font
+échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur la barre, le VK_RETURN d'une
+lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused) ; deux autres (le premier item sans lettre, `menu_owner` pour la
+barre) et les régressions des autres scénarios restent à passer.

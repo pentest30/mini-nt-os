@@ -311,7 +311,10 @@ fn button_of(message: u32) -> Option<(usize, bool)> {
 
 /// La fenêtre de premier niveau de `window` : en remontant ses parents tant
 /// qu'elle est fille (IntGetNonChildAncestor).
-fn top_level(window: &Arc<Window>) -> Arc<Window> {
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub(crate) fn top_level(window: &Arc<Window>) -> Arc<Window> {
     let mut top = window.clone();
     loop {
         let state = top.state();

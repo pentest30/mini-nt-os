@@ -941,6 +941,12 @@ pub const SC_CLOSE: u32 = 0xF060;
 /// the mouse (DefWndTrackScrollBar).
 pub const SC_VSCROLL: u32 = 0xF070;
 pub const SC_HSCROLL: u32 = 0xF080;
+/// A click on the menu bar (plus HTMENU, or HTSYSMENU for the window menu):
+/// DefWindowProc tracks the bar (MENU_TrackMouseMenuBar).
+pub const SC_MOUSEMENU: u32 = 0xF090;
+/// The menu bar from the keyboard (Alt, F10, Alt and a letter in `lParam`):
+/// MENU_TrackKbdMenuBar.
+pub const SC_KEYMENU: u32 = 0xF100;
 pub const SC_RESTORE: u32 = 0xF120;
 /// WMSZ_*: the edge SC_SIZE drags, in the low 4 bits of `wParam`; WMSZ_LEFT
 /// (1) to WMSZ_BOTTOMRIGHT (8) follow HTLEFT (10) to HTBOTTOMRIGHT (17).
@@ -989,6 +995,7 @@ pub const KF_UP: u32 = 0x8000;
 
 /// The virtual keys (VK_*) that win32k looks at.
 pub mod vk {
+    pub const VK_TAB: u8 = 0x09;
     pub const VK_CLEAR: u8 = 0x0C;
     pub const VK_RETURN: u8 = 0x0D;
     pub const VK_SHIFT: u8 = 0x10;

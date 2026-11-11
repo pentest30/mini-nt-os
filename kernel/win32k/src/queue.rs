@@ -161,6 +161,9 @@ pub struct QueueState {
     /// messages de la souris gardent leur place à l'écran
     /// (`crate::menutrack`).
     pub menu_owner: u32,
+    /// Ce que DefWindowProc retient des touches du menu (QF_FMENUSTATUS,
+    /// QF_FF10STATUS : `crate::defwnd::key_menu`).
+    pub menu_keys: crate::defwnd::MenuKeys,
     /// WM_QUIT demandé, avec son code de sortie.
     quit: Option<u32>,
     /// `cPaintsReady` : les fenêtres du thread qui ont à se peindre.
@@ -184,6 +187,7 @@ impl Default for QueueState {
             focus: 0,
             capture: 0,
             menu_owner: 0,
+            menu_keys: crate::defwnd::MenuKeys::default(),
             quit: None,
             paints: 0,
             wake: 0,

@@ -50,6 +50,7 @@ use alloc::sync::Arc;
 use core::mem::size_of;
 
 use abi::ntstatus::NtStatus;
+use abi::user::vk::{VK_ESCAPE, VK_F10, VK_LMENU, VK_MENU, VK_RMENU, VK_TAB};
 use abi::user::{
     sm, MinMaxInfo32, WindowPos32, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE,
     SWP_NOSIZE, SWP_STATECHANGED, WM_DEVICECHANGE, WM_MOVE, WM_NCCALCSIZE, WM_NCPAINT, WM_PAINT, WM_PAINTICON, WM_SIZE,
@@ -61,10 +62,11 @@ use abi::user::{
 };
 use abi::user::{
     CS_HREDRAW, CS_VREDRAW, HTBORDER, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTHSCROLL,
-    HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTSIZE, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, MA_ACTIVATE,
-    MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WM_SYSCOMMAND,
-    WS_MINIMIZEBOX, WS_SYSMENU,
+    HTLEFT, HTMAXBUTTON, HTMENU, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTSIZE, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL,
+    MA_ACTIVATE, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET,
+    WM_SYSCOMMAND, WS_MINIMIZEBOX, WS_SYSMENU,
 };
+use abi::user::{KF_ALTDOWN, KF_REPEAT, SC_KEYMENU, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP};
 use hal::sync::KSpinLock;
 use ke::usermem::{copy_from_user, copy_to_user};
 
@@ -352,13 +354,16 @@ fn sizing_border(along: i32, from: i32, to: i32, size: i32, (low, middle, high):
 /// l'écran) : HTCLIENT dans la zone cliente ; les bords d'un cadre épais
 /// (HTLEFT…, les coins sur la longueur d'un bouton du titre) ; HTBORDER sur
 /// un autre cadre ; dans la barre de titre, ses boutons (fermer, agrandir,
-/// réduire, de droite à gauche) ou HTCAPTION ; contre la zone cliente, ses
-/// barres de défilement (HTVSCROLL, HTHSCROLL, et HTSIZE dans le coin entre
-/// les deux) ; HTNOWHERE ailleurs (pas encore de menus, ni de menu système :
-/// pas de HTMENU ni de HTSYSMENU). Une fenêtre réduite est toute en titre.
+/// réduire, de droite à gauche) ou HTCAPTION ; au-dessus de la zone cliente,
+/// entre ses côtés, sa barre de menus si elle en a une (`has_menu` :
+/// HAS_MENU, une fenêtre qui n'est pas fille et a un menu) ; contre la zone
+/// cliente, ses barres de défilement (HTVSCROLL, HTHSCROLL, et HTSIZE dans le
+/// coin entre les deux) ; HTNOWHERE ailleurs (pas encore de menu système :
+/// pas de HTSYSMENU). Une fenêtre réduite est toute en titre.
 pub fn nc_hit_test(
     style: u32,
     ex_style: u32,
+    has_menu: bool,
     window: Rect,
     client: Rect,
     (x, y): (i32, i32),
@@ -423,6 +428,9 @@ pub fn nc_hit_test(
             return HTCAPTION;
         }
     }
+    if has_menu && y < client.top && x >= client.left && x < client.right {
+        return HTMENU;
+    }
     // The scroll bars, beside the client area (the vertical one on the left
     // for WS_EX_LEFTSCROLLBAR, which right-to-left windows swap).
     let left =
@@ -448,6 +456,17 @@ pub fn nc_hit_test(
     HTNOWHERE
 }
 
+/// [`nc_hit_test`] pour `window`, d'après son état : son style, ses
+/// rectangles, et sa barre de menus (HAS_MENU).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn window_hit_test(window: &Window, point: (i32, i32)) -> u32 {
+    let state = window.state();
+    let has_menu = state.style & WS_CHILD == 0 && state.menu != 0;
+    nc_hit_test(state.style, state.ex_style, has_menu, state.window, state.client, point, &metrics::get)
+}
+
 /// DefWindowProc de WM_MOUSEACTIVATE : une fenêtre fille pose la question à
 /// son parent, dont une réponse non nulle vaut ; sinon un clic gauche sur la
 /// barre de titre n'active pas (WM_NCLBUTTONDOWN activera), un autre active.
@@ -470,6 +489,63 @@ fn mouse_activate(window: &Arc<Window>, wparam: u32, lparam: u32) -> u32 {
 
 /// WM_NCLBUTTONDOWN.
 const NC_LBUTTONDOWN: u32 = WM_LBUTTONDOWN - WM_NC_MOUSE_OFFSET;
+
+/// Ce que DefWindowProc retient des touches du menu, dans la file du
+/// thread : Alt enfoncé seul (QF_FMENUSTATUS), F10 enfoncé (QF_FF10STATUS).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MenuKeys {
+    pub alt: bool,
+    pub f10: bool,
+}
+
+/// Où va SC_KEYMENU ([`key_menu`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyMenu {
+    /// À la fenêtre elle-même, `lParam` le caractère (Alt et une lettre).
+    Window(u32),
+    /// À sa fenêtre de premier niveau, `lParam` 0 (Alt ou F10 relâché).
+    Root,
+}
+
+/// Une touche Alt (VK_MENU, ou celle de gauche ou de droite).
+fn is_alt(wparam: u32) -> bool {
+    [VK_MENU, VK_LMENU, VK_RMENU].iter().any(|&vk| u32::from(vk) == wparam)
+}
+
+/// IntDefWindowProc de WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP et WM_SYSCHAR,
+/// pour les menus : Alt enfoncé seul (sans répétition) puis relâché, ou F10
+/// enfoncé puis relâché, demandent la barre (SC_KEYMENU, 0, à la fenêtre de
+/// premier niveau) ; Alt et une lettre (WM_SYSCHAR) demandent l'item qu'elle
+/// souligne (SC_KEYMENU, la lettre) ; une autre touche entre-temps oublie Alt.
+/// Pas encore : Alt+F4, Alt+Tab, Alt+Échap, Maj+F10 (WM_CONTEXTMENU), Maj+Échap
+/// et Alt+Espace (le menu de la fenêtre), Entrée sur une fenêtre réduite.
+pub fn key_menu(keys: &mut MenuKeys, message: u32, wparam: u32, lparam: u32) -> Option<KeyMenu> {
+    let flags = lparam >> 16;
+    match message {
+        WM_SYSKEYDOWN => {
+            if flags & KF_ALTDOWN != 0 {
+                if flags & KF_REPEAT == 0 {
+                    keys.alt = is_alt(wparam) && !keys.alt;
+                }
+                keys.f10 = false;
+            } else if wparam == u32::from(VK_F10) {
+                keys.f10 = true;
+            }
+            None
+        }
+        WM_KEYUP | WM_SYSKEYUP => {
+            let fire = (is_alt(wparam) && keys.alt) || (wparam == u32::from(VK_F10) && keys.f10);
+            *keys = MenuKeys::default();
+            fire.then_some(KeyMenu::Root)
+        }
+        WM_SYSCHAR => {
+            keys.alt = false;
+            let control = [u32::from(VK_TAB), u32::from(VK_ESCAPE)].contains(&wparam);
+            (flags & KF_ALTDOWN != 0 && wparam != 0 && !control).then_some(KeyMenu::Window(wparam))
+        }
+        _ => None,
+    }
+}
 
 /// Les messages que ReactOS traite ici et que DefWindowProc ne traite pas
 /// encore, déjà journalisés.
@@ -596,9 +672,8 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             Ok(control_color(wparam, message - abi::user::WM_CTLCOLORMSGBOX))
         }
         (WM_NCHITTEST, Some(window)) => {
-            let state = window.state();
             let point = (i32::from(lparam as u16 as i16), i32::from((lparam >> 16) as u16 as i16));
-            Ok(nc_hit_test(state.style, state.ex_style, state.window, state.client, point, &metrics::get))
+            Ok(window_hit_test(window, point))
         }
         (WM_MOUSEACTIVATE, Some(window)) => Ok(mouse_activate(window, wparam, lparam)),
         (abi::user::WM_SETCURSOR, Some(window)) => Ok(crate::cursor::def_set_cursor(window, wparam, lparam)),
@@ -626,6 +701,32 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
         }
         (WM_SYSCOMMAND, Some(window)) => {
             crate::sizemove::sys_command(window, wparam, lparam);
+            Ok(0)
+        }
+        (WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP | WM_SYSCHAR, Some(window)) => {
+            let thread = crate::convert_current_thread()?;
+            let command = thread.queue.with(|queue| key_menu(&mut queue.menu_keys, message, wparam, lparam)).0;
+            drop(thread);
+            let (target, character) = match command {
+                Some(KeyMenu::Window(character)) => (window.clone(), character),
+                Some(KeyMenu::Root) => (crate::mouse::top_level(window), 0),
+                None => return Ok(0),
+            };
+            let _ = crate::window::send_message(&target, WM_SYSCOMMAND, SC_KEYMENU, LParam::Value(character));
+            Ok(0)
+        }
+        (abi::menu::wm::CANCELMODE, Some(window)) => {
+            // The menu keys forgotten, a menu this window tracks ended
+            // (MENU_EndMenu), its capture released.
+            let thread = crate::convert_current_thread()?;
+            let capture = thread.queue.with(|queue| {
+                queue.menu_keys.alt = false;
+                queue.capture
+            });
+            crate::menutrack::end_menu_of(window);
+            if capture.0 == window.handle {
+                crate::mouse::set_capture(&thread, None);
+            }
             Ok(0)
         }
         (WM_NCCALCSIZE, Some(window)) if lparam != 0 => {
@@ -810,7 +911,7 @@ mod tests {
         let (style, ex) = (WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE);
         let window = Rect::new(100, 100, 900, 700);
         let client = Rect::new(104, 124, 896, 696);
-        let at = |x, y| nc_hit_test(style, ex, window, client, (x, y), &metric);
+        let at = |x, y| nc_hit_test(style, ex, false, window, client, (x, y), &metric);
         assert_eq!(at(500, 400), HTCLIENT);
         assert_eq!(at(99, 400), HTNOWHERE, "outside");
         assert_eq!(at(500, 110), HTCAPTION);
@@ -828,23 +929,72 @@ mod tests {
         assert_eq!(at(101, 690), HTBOTTOMLEFT);
     }
 
+    use abi::user::KF_UP;
+
+    /// The `lParam` of a key: KF_* in its high word.
+    fn key(flags: u32) -> u32 {
+        1 | flags << 16
+    }
+
+    #[test]
+    fn alt_or_f10_pressed_and_released_alone_ask_for_the_bar() {
+        let (alt, f10, letter) = (u32::from(VK_MENU), u32::from(VK_F10), u32::from(b'F'));
+        let mut keys = MenuKeys::default();
+        // Alt down, its repeats, then up: the bar, from the root window.
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYDOWN, alt, key(KF_ALTDOWN)), None);
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYDOWN, alt, key(KF_ALTDOWN | KF_REPEAT)), None);
+        assert!(keys.alt, "a repeat leaves it");
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYUP, alt, key(KF_UP | KF_REPEAT)), Some(KeyMenu::Root));
+        assert_eq!(keys, MenuKeys::default());
+        // Alt and a letter: the letter's item, from the window; Alt's
+        // release then asks for nothing.
+        key_menu(&mut keys, WM_SYSKEYDOWN, u32::from(VK_LMENU), key(KF_ALTDOWN));
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYDOWN, letter, key(KF_ALTDOWN)), None);
+        assert_eq!(key_menu(&mut keys, WM_SYSCHAR, u32::from(b'f'), key(KF_ALTDOWN)), Some(KeyMenu::Window(0x66)));
+        assert_eq!(key_menu(&mut keys, WM_KEYUP, alt, key(KF_UP | KF_REPEAT)), None);
+        // Alt+Tab and Alt+Escape are not the menus'.
+        let tab = key_menu(&mut keys, WM_SYSCHAR, u32::from(VK_TAB), key(KF_ALTDOWN));
+        assert_eq!(tab, None);
+        // F10 down then up: the bar.
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYDOWN, f10, key(0)), None);
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYUP, f10, key(KF_UP | KF_REPEAT)), Some(KeyMenu::Root));
+        // A WM_SYSCHAR without Alt (no menu), and a key up never pressed.
+        assert_eq!(key_menu(&mut keys, WM_SYSCHAR, u32::from(b'f'), key(0)), None);
+        assert_eq!(key_menu(&mut keys, WM_KEYUP, f10, key(KF_UP)), None);
+    }
+
+    #[test]
+    fn the_menu_bar_lies_over_the_client_area() {
+        // As above with a 19-pixel bar under the caption (y 124 to 143).
+        let (style, ex) = (WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE);
+        let window = Rect::new(100, 100, 900, 700);
+        let client = Rect::new(104, 143, 896, 696);
+        let at = |has_menu, x, y| nc_hit_test(style, ex, has_menu, window, client, (x, y), &metric);
+        assert_eq!(at(true, 500, 130), HTMENU);
+        assert_eq!(at(true, 104, 142), HTMENU, "from the client area's left");
+        assert_eq!(at(true, 500, 143), HTCLIENT);
+        assert_eq!(at(true, 500, 110), HTCAPTION);
+        assert_eq!(at(true, 101, 130), HTLEFT, "the frame first");
+        assert_eq!(at(false, 500, 130), HTNOWHERE, "no bar: nothing there");
+    }
+
     #[test]
     fn where_a_point_falls_in_other_frames() {
         let window = Rect::new(0, 0, 200, 100);
         // A dialog: a dialog frame, a caption with only the close button.
         let dialog = WS_POPUP | WS_CAPTION | WS_SYSMENU;
         let client = Rect::new(3, 22, 197, 97);
-        assert_eq!(nc_hit_test(dialog, WS_EX_DLGMODALFRAME, window, client, (1, 50), &metric), HTBORDER);
-        assert_eq!(nc_hit_test(dialog, 0, window, client, (190, 10), &metric), HTCLOSE);
-        assert_eq!(nc_hit_test(dialog, 0, window, client, (165, 10), &metric), HTCAPTION, "no other buttons");
+        assert_eq!(nc_hit_test(dialog, WS_EX_DLGMODALFRAME, false, window, client, (1, 50), &metric), HTBORDER);
+        assert_eq!(nc_hit_test(dialog, 0, false, window, client, (190, 10), &metric), HTCLOSE);
+        assert_eq!(nc_hit_test(dialog, 0, false, window, client, (165, 10), &metric), HTCAPTION, "no other buttons");
         // A popup without a frame: its client area is the whole window.
-        assert_eq!(nc_hit_test(WS_POPUP, 0, window, window, (5, 5), &metric), HTCLIENT);
+        assert_eq!(nc_hit_test(WS_POPUP, 0, false, window, window, (5, 5), &metric), HTCLIENT);
         // A bordered popup: its border.
         let inner = Rect::new(1, 1, 199, 99);
-        assert_eq!(nc_hit_test(WS_POPUP | WS_BORDER, 0, window, inner, (0, 50), &metric), HTBORDER);
+        assert_eq!(nc_hit_test(WS_POPUP | WS_BORDER, 0, false, window, inner, (0, 50), &metric), HTBORDER);
         // Minimized: all caption.
         let min = WS_OVERLAPPEDWINDOW | WS_MINIMIZE;
-        assert_eq!(nc_hit_test(min, 0, window, Rect::new(0, 0, 0, 0), (50, 50), &metric), HTCAPTION);
+        assert_eq!(nc_hit_test(min, 0, false, window, Rect::new(0, 0, 0, 0), (50, 50), &metric), HTCAPTION);
     }
 
     #[test]
@@ -854,7 +1004,7 @@ mod tests {
         let style = WS_POPUP | WS_BORDER | WS_VSCROLL | WS_HSCROLL;
         let window = Rect::new(0, 0, 200, 100);
         let client = Rect::new(1, 1, 183, 83);
-        let at = |ex: u32, x, y| nc_hit_test(style, ex, window, client, (x, y), &metric);
+        let at = |ex: u32, x, y| nc_hit_test(style, ex, false, window, client, (x, y), &metric);
         assert_eq!(at(0, 190, 40), HTVSCROLL);
         assert_eq!(at(0, 100, 90), HTHSCROLL);
         assert_eq!(at(0, 190, 90), HTSIZE, "the corner between them");
@@ -862,9 +1012,9 @@ mod tests {
         assert_eq!(at(0, 0, 40), HTBORDER);
         // On the left: the client area moves right.
         let left = Rect::new(17, 1, 199, 83);
-        let at = |x, y| nc_hit_test(style, WS_EX_LEFTSCROLLBAR, window, left, (x, y), &metric);
+        let at = |x, y| nc_hit_test(style, WS_EX_LEFTSCROLLBAR, false, window, left, (x, y), &metric);
         assert_eq!((at(5, 40), at(5, 90), at(100, 90)), (HTVSCROLL, HTSIZE, HTHSCROLL));
-        let hidden = nc_hit_test(WS_POPUP | WS_BORDER, 0, window, client, (190, 40), &metric);
+        let hidden = nc_hit_test(WS_POPUP | WS_BORDER, 0, false, window, client, (190, 40), &metric);
         assert_eq!(hidden, HTNOWHERE, "no bar without its style");
     }
 

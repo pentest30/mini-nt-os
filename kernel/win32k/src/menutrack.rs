@@ -21,20 +21,33 @@
 //! WM_UNINITMENUPOPUP (de chaque menu qui se ferme), WM_EXITMENULOOP, sauf
 //! TPM_NONOTIFY. Le caret du thread est caché pendant le suivi.
 //!
-//! Pas encore : le suivi de la barre (le clic, F10, Alt : l'étape suivante),
-//! les colonnes au clavier (MENU_GetStartOfNextColumn), WM_NEXTMENU,
-//! l'aide (F1, WM_HELP), les menus système.
+//! La barre d'une fenêtre se suit de même ([`track_mouse_menu_bar`],
+//! [`track_kbd_menu_bar`]), la fenêtre en est la propriétaire et a la
+//! souris : un appui sur la barre (SC_MOUSEMENU) ouvre le menu de l'item
+//! sous la souris, qui reste ouvert au relâchement ; un second clic sur cet
+//! item ferme la barre (`TimeToHide`) ; Alt ou F10 seuls (SC_KEYMENU)
+//! sélectionnent le premier item, Alt et une lettre ouvrent le menu de
+//! l'item qu'elle souligne ; ← et → passent d'un item de la barre à l'autre
+//! (du dernier au premier), en ouvrant le menu du nouvel item si un menu
+//! était ouvert ; ↑ et ↓ ouvrent le menu de l'item. WM_CANCELMODE à la
+//! fenêtre du menu ou à sa propriétaire finit le suivi ([`end_menu_of`]).
+//!
+//! Pas encore : le menu de la fenêtre (HTSYSMENU, Alt+Espace) et
+//! WM_NEXTMENU (aux bouts de la barre, la sélection fait le tour), les
+//! colonnes au clavier (MENU_GetStartOfNextColumn), l'aide (F1, WM_HELP),
+//! MENU_SuspendPopup (le menu s'ouvre à chaque flèche, même répétée).
 
 use alloc::sync::Arc;
 
 use abi::menu::{mf, mft, mnc, mnf, mns, tpm, wm, MSGF_MENU, NO_SELECTED_ITEM};
-use abi::user::vk::{VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT, VK_MENU, VK_RIGHT, VK_UP};
+use abi::user::vk::{VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_UP};
 use abi::user::{
     sm, Msg32, HTCAPTION, HWND_TOPMOST, RDW_ALLCHILDREN, SWP_NOACTIVATE, SWP_SHOWWINDOW, WC_MENU, WM_CHAR, WM_KEYDOWN,
     WM_KEYFIRST, WM_KEYLAST, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEFIRST, WM_MOUSELAST, WM_MOUSEMOVE,
     WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSTIMER, WM_TIMER,
     WS_BORDER, WS_CLIPSIBLINGS, WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_POPUP,
 };
+use abi::user::{HTMENU, WS_CHILD, WS_EX_LAYOUTRTL, WS_MINIMIZE};
 use abi::winerror::ERROR_POPUP_ALREADY_ACTIVE;
 use hal::sync::KSpinLock;
 
@@ -44,9 +57,22 @@ use crate::gui::ThreadInfo;
 use crate::queue::Filter;
 use crate::window::{self, CreateParams, LParam, Window};
 
-/// Le menu suivi (`top_popup`, `top_popup_hmenu`) : sa fenêtre, lui ; un à
-/// la fois dans le système.
-static TOP: KSpinLock<Option<(u32, u32)>> = KSpinLock::new(None);
+/// Le menu suivi (`top_popup`, `top_popup_hmenu`, `spwndNotify`) ; un à la
+/// fois dans le système.
+#[derive(Clone, Copy)]
+struct Top {
+    /// La fenêtre du menu : celle du menu déroulant, ou celle de la barre.
+    hwnd: u32,
+    menu: u32,
+    /// La fenêtre propriétaire, qui reçoit les notifications.
+    owner: u32,
+}
+
+static TOP: KSpinLock<Option<Top>> = KSpinLock::new(None);
+
+/// TF_ENDMENU : le suivi finit avant de commencer (une lettre qu'aucun item
+/// de la barre ne souligne).
+const TF_ENDMENU: u32 = 0x0001_0000;
 
 /// MTRACKER.
 struct Tracker {
@@ -57,6 +83,9 @@ struct Tracker {
     owner: Arc<Window>,
     /// Le point du dernier message, à l'écran.
     pt: (i32, i32),
+    /// `TimeToHide` de la barre suivie : un second clic sur son item ouvert
+    /// la ferme.
+    time_to_hide: bool,
 }
 
 /// MAKELONG.
@@ -344,7 +373,6 @@ fn show_popup(menu: u32, flags: u32, (x, y): (i32, i32), exclude: Option<Rect>) 
     let monitor = crate::monitor::primary().map_or_else(|| Rect::new(0, 0, 640, 480), |monitor| monitor.rect);
     let (x, y) = popup_place(flags, (x, y), size, exclude, monitor, &m);
     let Some(window) = window::get(state.hwnd) else { return false };
-    TOP.lock().get_or_insert((window.handle, menu));
     crate::winpos::set_window_pos(&window, HWND_TOPMOST, x, y, size.0, size.1, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     crate::paint::update_window(&window, RDW_ALLCHILDREN);
     true
@@ -470,7 +498,8 @@ fn item_at(menu: u32, (x, y): (i32, i32)) -> Option<u32> {
 }
 
 /// MENU_PtMenu : le menu sous `pt` : un sous-menu ouvert d'abord, puis la
-/// fenêtre de `menu` (un menu déroulant), ou l'un des items de sa barre.
+/// fenêtre de `menu` (un menu déroulant), ou la barre de sa fenêtre
+/// (HTMENU).
 fn menu_at(menu: u32, pt: (i32, i32)) -> Option<u32> {
     if let Some(found) = sub_popup(menu).and_then(|submenu| menu_at(submenu, pt)) {
         return Some(found);
@@ -481,8 +510,14 @@ fn menu_at(menu: u32, pt: (i32, i32)) -> Option<u32> {
         let inside = pt.0 >= rect.left && pt.0 < rect.right && pt.1 >= rect.top && pt.1 < rect.bottom;
         inside.then_some(menu)
     } else {
-        item_at(menu, pt).map(|_| menu)
+        (crate::defwnd::window_hit_test(&window, pt) == HTMENU).then(|| bar_of(&window)).flatten()
     }
+}
+
+/// IntGetMenu : la barre de `window` (`WND.IDMenu`), qui n'est pas fille.
+fn bar_of(window: &Window) -> Option<u32> {
+    let state = window.state();
+    (state.style & WS_CHILD == 0 && state.menu != 0 && crate::menu::exists(state.menu)).then_some(state.menu)
 }
 
 /// MENU_ButtonDown : un bouton enfoncé sur un item de `menu` le sélectionne
@@ -504,19 +539,30 @@ fn button_down(tracker: &mut Tracker, menu: Option<u32>, flags: u32) -> bool {
 }
 
 /// MENU_ButtonUp : relâché sur l'item sélectionné de `menu` qui n'ouvre pas
-/// de sous-menu, il est exécuté (son identifiant) ; -1 sinon (le suivi
-/// continue).
+/// de sous-menu, il est exécuté (son identifiant) ; sur l'item ouvert de la
+/// barre suivie, la seconde fois (`TimeToHide`), le suivi finit (0) ; -1
+/// sinon (le suivi continue), et un relâchement sur la barre prépare cette
+/// seconde fois.
 fn button_up(tracker: &mut Tracker, menu: Option<u32>, flags: u32) -> i32 {
     let Some(menu) = menu else { return -1 };
-    let Some(index) = item_at(menu, tracker.pt) else { return -1 };
-    let Some(state) = crate::menu::state(menu) else { return -1 };
-    if state.focused != index || state.items.get(index as usize).is_none_or(|item| item.submenu != 0) {
-        return -1;
+    let focused = crate::menu::state(menu).map_or(NO_SELECTED_ITEM, |state| state.focused);
+    let item = item_at(menu, tracker.pt).filter(|&index| index == focused);
+    if let Some(index) = item {
+        let submenu = crate::menu::state(menu).and_then(|state| state.items.get(index as usize).map(|i| i.submenu));
+        if submenu == Some(0) {
+            return match exec_focused(tracker, menu, flags) {
+                -1 | -2 => -1,
+                id => id,
+            };
+        }
+        if tracker.top == menu && tracker.time_to_hide {
+            return 0;
+        }
     }
-    match exec_focused(tracker, menu, flags) {
-        -1 | -2 => -1,
-        id => id,
+    if !is_popup(menu) {
+        tracker.time_to_hide = true;
     }
+    -1
 }
 
 /// MENU_MouseMove : l'item sous la souris est sélectionné et son
@@ -561,21 +607,46 @@ fn key_escape(tracker: &mut Tracker, flags: u32) -> bool {
     false
 }
 
-/// MENU_KeyLeft, pour les menus déroulants : le sous-menu le plus profond se
-/// ferme.
+/// MENU_KeyLeft : le sous-menu le plus profond se ferme ; revenu à la barre
+/// suivie, la sélection passe à l'item de gauche (du premier, au dernier),
+/// dont le menu s'ouvre si un menu était ouvert.
 fn key_left(tracker: &mut Tracker, flags: u32) {
     let previous = parent_of_current(tracker);
+    let was_open = tracker.current != tracker.top;
     let owner = tracker.owner.clone();
     hide_sub_popups(&owner, previous, true, flags);
     tracker.current = previous;
+    if previous == tracker.top && !is_popup(tracker.top) {
+        move_selection(&owner, tracker.top, -1);
+        if was_open {
+            tracker.current = show_sub_popup(&owner, tracker.top, true, flags);
+        }
+    }
 }
 
-/// MENU_KeyRight, pour les menus déroulants : le sous-menu de l'item
-/// sélectionné s'ouvre, son premier item sélectionné.
+/// MENU_KeyRight : le sous-menu de l'item sélectionné s'ouvre, son premier
+/// item sélectionné ; sans lui, sur la barre suivie, la sélection passe à
+/// l'item de droite (du dernier, au premier), dont le menu s'ouvre si un
+/// menu était ouvert.
 fn key_right(tracker: &mut Tracker, flags: u32) {
+    let owner = tracker.owner.clone();
     if is_popup(tracker.top) || tracker.current != tracker.top {
-        let owner = tracker.owner.clone();
-        tracker.current = show_sub_popup(&owner, tracker.current, true, flags);
+        let current = tracker.current;
+        tracker.current = show_sub_popup(&owner, current, true, flags);
+        if tracker.current != current {
+            return;
+        }
+    }
+    if !is_popup(tracker.top) {
+        let was_open = tracker.current != tracker.top;
+        if was_open {
+            hide_sub_popups(&owner, tracker.top, false, flags);
+            tracker.current = tracker.top;
+        }
+        move_selection(&owner, tracker.top, 1);
+        if was_open {
+            tracker.current = show_sub_popup(&owner, tracker.top, true, flags);
+        }
     }
 }
 
@@ -658,10 +729,13 @@ fn next_message(thread: &ThreadInfo, tracker: &Tracker, idle_sent: &mut bool) ->
 /// sinon 1.
 fn track_menu(menu: u32, flags: u32, (x, y): (i32, i32), owner: &Arc<Window>) -> i32 {
     let Ok(thread) = crate::convert_current_thread() else { return 0 };
-    let mut tracker = Tracker { current: menu, top: menu, owner: owner.clone(), pt: (x, y) };
+    let mut tracker = Tracker { current: menu, top: menu, owner: owner.clone(), pt: (x, y), time_to_hide: false };
     let mut inside = true;
     if flags & tpm::BUTTONDOWN != 0 {
         inside = button_down(&mut tracker, Some(menu), flags);
+    }
+    if flags & TF_ENDMENU != 0 {
+        inside = false;
     }
     if flags & tpm::POPUPMENU != 0 && crate::menu::state(menu).is_none_or(|state| state.items.is_empty()) {
         release_capture(&thread);
@@ -809,7 +883,7 @@ fn init_tracking(owner: &Arc<Window>, menu: u32, popup: bool, flags: u32) {
     let mut top = TOP.lock();
     if top.is_none() {
         let hwnd = crate::menu::state(menu).map_or(0, |state| state.hwnd);
-        *top = Some((hwnd, menu));
+        *top = Some(Top { hwnd, menu, owner: owner.handle });
     }
     drop(top);
     if flags & tpm::NONOTIFY == 0 {
@@ -890,9 +964,101 @@ pub fn track_popup_menu(
 /// PASSIVE_LEVEL.
 pub fn end_menu() {
     let top = *TOP.lock();
-    if let Some(window) = top.and_then(|(hwnd, _)| window::get(hwnd)) {
+    if let Some(window) = top.and_then(|top| window::get(top.hwnd)) {
         post(&window, wm::CANCELMODE, 0, 0);
     }
+}
+
+/// MENU_EndMenu, pour DefWindowProc de WM_CANCELMODE : le suivi en cours
+/// finit si `window` est la fenêtre du menu suivi ou sa propriétaire.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn end_menu_of(window: &Window) {
+    let top = *TOP.lock();
+    if top.is_some_and(|top| top.hwnd == window.handle || top.owner == window.handle) {
+        end_menu();
+    }
+}
+
+/// Le menu suivi, s'il y en a un (`top_popup_hmenu` : la barre « a le
+/// focus » pour GetMenuBarInfo).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn tracked_menu() -> Option<u32> {
+    TOP.lock().map(|top| top.menu)
+}
+
+/// MENU_TrackMouseMenuBar : un appui sur la barre de `window` (`hit`
+/// HTMENU), au point `pt` de l'écran : la barre est suivie, l'item sous le
+/// point sélectionné et son menu ouvert (TPM_BUTTONDOWN, TPM_VERTICAL).
+/// Pas encore : le menu de la fenêtre (HTSYSMENU).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
+/// rien tenir.
+pub fn track_mouse_menu_bar(window: &Arc<Window>, hit: u32, pt: (i32, i32)) {
+    if hit != HTMENU {
+        return;
+    }
+    let mut flags = tpm::BUTTONDOWN | tpm::VERTICAL;
+    if window.state().ex_style & WS_EX_LAYOUTRTL != 0 {
+        flags |= tpm::LAYOUTRTL;
+    }
+    let Some(menu) = bar_of(window) else { return };
+    init_tracking(window, menu, false, flags);
+    // Fetched again: WM_INITMENU may have changed it.
+    if let Some(menu) = bar_of(window) {
+        track_menu(menu, flags, pt, window);
+    } else if let Ok(thread) = crate::convert_current_thread() {
+        release_capture(&thread);
+    }
+    exit_tracking(window, false, flags);
+}
+
+/// MENU_TrackKbdMenuBar : la barre de la fenêtre de premier niveau de
+/// `window` suivie au clavier : avec une lettre (`character`), l'item
+/// qu'elle souligne est choisi (son menu s'ouvre, par un VK_RETURN posté) ;
+/// sans item, le suivi finit aussitôt ; sans lettre (Alt, F10), le premier
+/// item est sélectionné. Pas encore : le menu de la fenêtre (Alt+Espace,
+/// une fenêtre réduite ou sans barre).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
+/// rien tenir.
+pub fn track_kbd_menu_bar(window: &Arc<Window>, character: u16) {
+    let window = crate::mouse::top_level(window);
+    if window.state().style & WS_MINIMIZE != 0 || character == u16::from(b' ') {
+        return;
+    }
+    let Some(menu) = bar_of(&window) else { return };
+    let mut flags = 0;
+    init_tracking(&window, menu, false, flags);
+    let Some(menu) = bar_of(&window) else {
+        if let Ok(thread) = crate::convert_current_thread() {
+            release_capture(&thread);
+        }
+        exit_tracking(&window, false, flags);
+        return;
+    };
+    let mut item = NO_SELECTED_ITEM;
+    if character != 0 {
+        match find_item_by_key(&window, menu, character) {
+            -1 | -2 => flags |= TF_ENDMENU,
+            at => item = at as u32,
+        }
+    }
+    if flags & TF_ENDMENU == 0 {
+        select_item(&window, menu, item, true, None);
+        if item == NO_SELECTED_ITEM {
+            move_selection(&window, menu, 1);
+        } else {
+            post(&window, WM_KEYDOWN, u32::from(VK_RETURN), 0);
+        }
+    }
+    track_menu(menu, flags, (0, 0), &window);
+    exit_tracking(&window, false, flags);
 }
 
 #[cfg(test)]
