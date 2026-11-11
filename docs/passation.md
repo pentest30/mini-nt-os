@@ -1,5 +1,23 @@
 # Notes de passation
 
+- **GetObject, et la position courante de LineTo** (`claude/new-session-696xfc`, demandé pour le texte des boutons
+  du gestionnaire des tâches) : NtGdiExtGetObjectW (`win32k::gdi::object`, GreGetObject) : une police rend son
+  LOGFONTW puis le reste d'un ENUMLOGFONTEXDVW sans axes, à zéro (356 octets au plus ; 92 sans tampon), un bitmap
+  son BITMAP (lignes alignées sur 16 bits, sur 32 pour une DIB section, `bmBits` d'une DIB section seule) ou le
+  DIBSECTION d'une DIB section qui a la place ; une DIB section est le bitmap dont le processus voit les pixels
+  (`Surface::user_bits` : ceux de CreateBitmap sont aussi dans une section, que le noyau seul voit). `abi::gdi` :
+  BITMAP, DIBSECTION. Pas encore : pinceaux, stylos, palettes (0, journalisé une fois). LineTo part de la position
+  que MoveToEx de `gdi32` écrit dans DC_ATTR (`ptlCurrent`, sans appel au noyau) et l'y remet, ses bits de
+  changement retirés (IntGdiLineTo, IntGdiMoveToEx) : le soulignement du préfixe d'un bouton désactivé était une
+  diagonale depuis la dernière position du noyau. Tests : hôte (`object`) ; `text` (GetObjectW d'une police créée
+  et de DEFAULT_GUI_FONT), `bitmap` (DIBSECTION, BITMAP, un bitmap monochrome), `dialog` (un bouton désactivé
+  « &Switch To » : trois pixels de son soulignement et de son relief, qu'une mutation de LineTo fait échouer).
+  **Reste, vu au gestionnaire des tâches** : la page Applications est repeinte en gris par le contrôle d'onglets,
+  son frère d'en dessous sans WS_CLIPSIBLINGS, peint après elle (l'ordre : la fenêtre, la page, la liste, les
+  boutons, puis l'onglet, puis la barre d'état ; DefWindowProc efface l'onglet de COLOR_BTNFACE, sa classe le
+  demande) ; ReactOS l'affiche bien avec le même comctl32 : à comprendre (l'ordre des WM_PAINT, les régions
+  invalidées à l'affichage). La liste et les boutons se voient un instant avant.
+
 - **La barre de menus suivie** (`claude/new-session-696xfc`, repartie de `main` après la PR 122 ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 23) : HTMENU dans `defwnd::nc_hit_test` (paramètre
   `has_menu`, `window_hit_test` pour une fenêtre) ; WM_NCLBUTTONDOWN sur HTMENU donne SC_MOUSEMENU, et DefWindowProc
@@ -17,6 +35,7 @@
   Pas encore : le menu de la fenêtre (HTSYSMENU, Alt+Espace, WM_NEXTMENU : la sélection fait le tour aux bouts de
   la barre), MENU_SuspendPopup, Alt+F4 et Alt+Tab. Suite proposée : le menu de la fenêtre (GetSystemMenu), ou
   réduire et agrandir, ou un scénario du Bloc-notes.
+
 
 - **LineTo et des coordonnées absurdes** (`claude/new-session-696xfc`, vu sous VirtualBox : le gestionnaire des
   tâches figé, plus de curseur) : `Bitmap::draw_line` parcourait chaque point du trait, sous le verrou de la surface

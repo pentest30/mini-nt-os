@@ -182,6 +182,27 @@ pub(super) fn nt_gdi_hfont_create(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiExtGetObjectW(hgdiobj, cjBufferSize, lpBuffer) : ce que l'objet dit
+/// de lui-même (GreGetObject, `win32k::gdi::object`) : sans tampon, la taille
+/// de sa description ; sinon, elle écrite (au plus `cjBufferSize` octets, un
+/// nombre négatif comptant comme un grand) et sa taille rendue. 0 pour un
+/// objet sans description, et pour un tampon qu'on ne peut écrire, sans
+/// dernière erreur (comme ReactOS).
+pub(super) fn nt_gdi_ext_get_object_w(arguments: &[u32]) -> NtStatus {
+    let [handle, size, buffer] = arguments[..3] else { unreachable!("3 arguments") };
+    let count = size.min(win32k::gdi::object::MAX_OBJECT_SIZE);
+    let pid = win32k::gdi::dc::current_pid();
+    let (result, bytes) = win32k::gdi::object::get_object(handle, pid, count, buffer != 0);
+    if buffer == 0 || result == 0 {
+        return NtStatus(result);
+    }
+    let length = (count.min(result) as usize).min(bytes.len());
+    match copy_to_user(u64::from(buffer), &bytes[..length]) {
+        Ok(()) => NtStatus(result),
+        Err(_) => NtStatus(0),
+    }
+}
+
 /// NtGdiSelectFont(hdc, hfont) : HFONT, l'ancienne police du DC ; NULL pour
 /// un DC qui n'est pas au processus ou un `hfont` qui n'est pas une police.
 pub(super) fn nt_gdi_select_font(arguments: &[u32]) -> NtStatus {

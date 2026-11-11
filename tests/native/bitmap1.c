@@ -107,6 +107,24 @@ typedef struct {
 } BITMAPINFO;
 
 typedef struct {
+    LONG bmType;
+    LONG bmWidth;
+    LONG bmHeight;
+    LONG bmWidthBytes;
+    WORD bmPlanes;
+    WORD bmBitsPixel;
+    void *bmBits;
+} BITMAP;
+
+typedef struct {
+    BITMAP dsBm;
+    BITMAPINFOHEADER dsBmih;
+    DWORD dsBitfields[3];
+    HANDLE dshSection;
+    DWORD dsOffset;
+} DIBSECTION;
+
+typedef struct {
     void *BaseAddress;
     void *AllocationBase;
     DWORD AllocationProtect;
@@ -191,6 +209,9 @@ __declspec(dllimport) BOOL __stdcall DeleteDC(HDC dc);
 __declspec(dllimport) BOOL __stdcall DeleteObject(HGDIOBJ object);
 __declspec(dllimport) int __stdcall GetDeviceCaps(HDC dc, int index);
 __declspec(dllimport) DWORD __stdcall GetObjectType(HGDIOBJ object);
+__declspec(dllimport) int __stdcall GetObjectW(HGDIOBJ object, int size, void *buffer);
+__declspec(dllimport) HBITMAP __stdcall CreateBitmap(int width, int height, UINT planes, UINT bits_pixel,
+                                                     const void *bits);
 __declspec(dllimport) HGDIOBJ __stdcall GetStockObject(int index);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int height, DWORD rop);
 __declspec(dllimport) HGDIOBJ __stdcall SelectObject(HDC dc, HGDIOBJ object);
@@ -280,6 +301,33 @@ static void check_bottom_up(HDC memory, HBRUSH brush)
     DeleteObject(bitmap);
 }
 
+/* GetObjectW of bitmaps: a DIB section's DIBSECTION, its pixels where the
+   program sees them; its BITMAP when only that fits; a monochrome bitmap's
+   BITMAP, rows of 16-bit words, without pixels. */
+static void check_get_object(HBITMAP dib, const DWORD *bits)
+{
+    DIBSECTION section;
+    BITMAP only, mono_info;
+    HBITMAP mono = CreateBitmap(13, 4, 1, 1, 0);
+    int whole, short_one, mono_size;
+
+    memset(&section, 0, sizeof section);
+    memset(&only, 0, sizeof only);
+    memset(&mono_info, 0, sizeof mono_info);
+    whole = GetObjectW(dib, sizeof section, &section);
+    short_one = GetObjectW(dib, sizeof only, &only);
+    mono_size = GetObjectW(mono, sizeof mono_info, &mono_info);
+    DbgPrint("[bitmap] GetObjectW: DIBSECTION %d, %ldx%ld, %ld bytes a row, %u bits, pixels %s, header %lu %ld %ld %u, "
+             "image %lu\n",
+             whole, section.dsBm.bmWidth, section.dsBm.bmHeight, section.dsBm.bmWidthBytes, section.dsBm.bmBitsPixel,
+             section.dsBm.bmBits == bits ? "its own" : "WRONG", section.dsBmih.biSize, section.dsBmih.biWidth,
+             section.dsBmih.biHeight, section.dsBmih.biBitCount, section.dsBmih.biSizeImage);
+    DbgPrint("[bitmap] GetObjectW: BITMAP %d, pixels %s; a monochrome one %d, %ld bytes a row, %u bit, pixels %s\n",
+             short_one, only.bmBits == bits ? "its own" : "WRONG", mono_size, mono_info.bmWidthBytes,
+             mono_info.bmBitsPixel, mono_info.bmBits ? "WRONG" : "none");
+    DeleteObject(mono);
+}
+
 /* Draws into a DIB section, reads it back, copies it to the window, within
    the window, and from the window into a second one. */
 static void draw_bitmaps(HWND window, HDC dc)
@@ -309,6 +357,7 @@ static void draw_bitmaps(HWND window, HDC dc)
                  memory_state(bits), GetObjectType(bitmap));
         DeleteDC(other);
     }
+    check_get_object(bitmap, bits);
 
     /* The kernel draws, the program reads. (The calls are made one by one:
        C does not say in which order a call's arguments are evaluated.) */

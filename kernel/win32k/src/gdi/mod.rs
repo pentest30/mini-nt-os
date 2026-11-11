@@ -5,7 +5,8 @@
 //! système ([`syscolor`]) ; la table des handles GDI que voient les clients
 //! ([`handles`]) et les capacités de l'écran ([`devcaps`]), les pinceaux
 //! ([`brush`]), les régions d'un client ([`rgnobj`]), les polices
-//! ([`fontobj`]), les bitmaps ([`surface`] : DIB sections), les contextes de
+//! ([`fontobj`]), les bitmaps ([`surface`] : DIB sections), ce qu'un objet
+//! dit de lui-même ([`object`] : GetObject), les contextes de
 //! périphérique de l'écran et en mémoire ([`dc`]), BitBlt ([`bitblt`]), le
 //! texte ([`text`], ADR-013) et les appels qu'un client met en lot
 //! ([`batch`]).
@@ -23,6 +24,7 @@ pub mod dibits;
 pub mod draw;
 pub mod fontobj;
 pub mod handles;
+pub mod object;
 pub mod pen;
 pub mod region;
 pub mod rgnobj;

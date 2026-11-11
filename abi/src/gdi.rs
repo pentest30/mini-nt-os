@@ -303,6 +303,12 @@ pub mod dirty {
     pub const DIRTY_CHARSET: u32 = 0x0000_0010;
     /// What a new DC has (`DIRTY_DEFAULT`).
     pub const DIRTY_DEFAULT: u32 = DIRTY_CHARSET | DIRTY_BACKGROUND | DIRTY_TEXT | DIRTY_LINE | DIRTY_FILL;
+    /// `ptlCurrent` is stale, `ptfxCurrent` holds the current position.
+    pub const DIRTY_PTLCURRENT: u32 = 0x0000_0100;
+    /// `ptfxCurrent` is stale: `gdi32`'s MoveToEx wrote `ptlCurrent` alone.
+    pub const DIRTY_PTFXCURRENT: u32 = 0x0000_0200;
+    /// The pen's style state starts again (MoveToEx).
+    pub const DIRTY_STYLESTATE: u32 = 0x0000_0400;
     /// `hbrush` changed (`GdiSelectBrush`).
     pub const DC_BRUSH_DIRTY: u32 = 0x0000_1000;
     pub const DC_PEN_DIRTY: u32 = 0x0000_2000;
@@ -723,7 +729,45 @@ const _: () = {
     assert!(offset_of!(BrushAttr32, color) == 4);
     assert!(offset_of!(RgnAttr32, complexity) == 4);
     assert!(offset_of!(RgnAttr32, rect) == 8);
+    // GetObject: sizeof(BITMAP), sizeof(DIBSECTION) of the i386 SDK.
+    assert!(size_of::<Bitmap32>() == 24);
+    assert!(offset_of!(Bitmap32, planes) == 16);
+    assert!(offset_of!(Bitmap32, bits) == 20);
+    assert!(size_of::<DibSection32>() == 84);
+    assert!(offset_of!(DibSection32, header) == 24);
+    assert!(offset_of!(DibSection32, bitfields) == 64);
+    assert!(offset_of!(DibSection32, section) == 76);
+    assert!(offset_of!(DibSection32, offset) == 80);
 };
+
+/// BITMAP: what GetObject says of a bitmap.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bitmap32 {
+    /// Always 0.
+    pub bm_type: i32,
+    pub width: i32,
+    pub height: i32,
+    /// The bytes of a row: aligned on 16 bits, on 32 for a DIB section.
+    pub width_bytes: i32,
+    pub planes: u16,
+    pub bits_pixel: u16,
+    /// A DIB section's pixels in its process; 0 for another bitmap.
+    pub bits: u32,
+}
+
+/// DIBSECTION: what GetObject says of a DIB section, given room for it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DibSection32 {
+    pub bitmap: Bitmap32,
+    pub header: BitmapInfoHeader32,
+    /// Its red, green and blue masks.
+    pub bitfields: [u32; 3],
+    /// The application's section it was made from; 0 without one.
+    pub section: u32,
+    pub offset: u32,
+}
 
 /// `as_bytes` for records of integers whose sizes, checked above, leave no
 /// padding.
@@ -749,7 +793,9 @@ as_bytes!(
     GdiBsObject32,
     RgnAttr32,
     BitmapInfoHeader32,
-    BrushAttr32
+    BrushAttr32,
+    Bitmap32,
+    DibSection32
 );
 
 /// LF_FACESIZE: the characters of a face name, its NUL included.
@@ -846,6 +892,10 @@ const _: () = assert!(size_of::<LogFontW32>() == 92);
 /// a LOGFONTW, its full name, style and script (64, 32 and 32 characters),
 /// then a DESIGNVECTOR (two words and 16 values).
 pub const ENUM_LOG_FONT_EX_DV_SIZE: usize = size_of::<LogFontW32>() + 2 * (64 + 32 + 32) + 4 * (2 + 16);
+
+/// An ENUMLOGFONTEXDVW up to its design vector's values, what GetObject
+/// gives at most of a font without axes (`dvValues[dvNumAxes]`, FontGetObject).
+pub const ENUM_LOG_FONT_EX_DV_NO_AXES_SIZE: usize = size_of::<LogFontW32>() + 2 * (64 + 32 + 32) + 4 * 2;
 
 /// TEXTMETRICW.
 #[repr(C)]
