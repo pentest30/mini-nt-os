@@ -166,33 +166,51 @@ static void check_registered_message(void)
         DbgPrint("[notepad] RegisterWindowMessage: %x %x %x\n", first, again, other);
 }
 
+/* `from` copied to `to` (at most 64 bytes, as `ascii` gives). */
+static void copy_text(char *to, const char *from)
+{
+    int i;
+    for (i = 0; i < 63 && from[i]; i++)
+        to[i] = from[i];
+    to[i] = 0;
+}
+
 /* What the probe has seen of Notepad's windows. */
 static int notepad_seen, goto_seen, goto_closed;
 
-/* The windows and their titles, when they are not those of the last time;
- * Notepad's window checked the first time it is there, its "Goto line"
- * dialog followed. */
+/* The windows and their titles, when they are not those of the last time:
+ * another window, or another title. Notepad's window is "Notepad" from its
+ * creation until Notepad names its document ("Untitled - Notepad"); a probe
+ * that only looked at the windows could see it in between and never again.
+ * Notepad's window checked the first time it has that title, its "Goto
+ * line" dialog followed. */
 static void list_windows(const PROCESS_INFORMATION *process)
 {
     static HWND last[MAX_WINDOWS];
+    static char last_text[MAX_WINDOWS][64];
     static int last_count = -1;
+    char texts[MAX_WINDOWS][64];
     WCHAR title[64];
-    char text[64];
     int i, same, has_goto = 0;
 
     window_count = 0;
     EnumWindows(collect, 0);
+    for (i = 0; i < window_count; i++) {
+        title[0] = 0;
+        GetWindowTextW(windows[i], title, 64);
+        ascii(title, texts[i]);
+    }
     same = window_count == last_count;
     for (i = 0; same && i < window_count; i++)
-        same = windows[i] == last[i];
+        same = windows[i] == last[i] && same_text(texts[i], last_text[i]);
     if (same)
         return;
     DbgPrint("[notepad] %d top-level windows\n", window_count);
     for (i = 0; i < window_count; i++) {
-        title[0] = 0;
-        GetWindowTextW(windows[i], title, 64);
-        DbgPrint("[notepad]   %p \"%s\"\n", windows[i], ascii(title, text));
+        const char *text = texts[i];
+        DbgPrint("[notepad]   %p \"%s\"\n", windows[i], text);
         last[i] = windows[i];
+        copy_text(last_text[i], text);
         if (!notepad_seen && same_text(text, "Untitled - Notepad")) {
             DWORD pid = 0, tid = GetWindowThreadProcessId(windows[i], &pid);
             notepad_seen = 1;
