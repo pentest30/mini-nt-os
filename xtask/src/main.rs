@@ -200,15 +200,10 @@ fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
     }
     let mut files = userland_files(ws)?.ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
     let artifacts = build(ws, Some(&features))?;
-    if initial_command != "system" {
-        // The startup choice (or an explicitly selected probe) boots as
-        // winlogon.exe, smss's initial command.
-        let native = native::build(ws)?.ok_or_else(|| {
-            format!("initial-command: the native programs need {}", native::missing_tool().unwrap_or("a compiler"))
-        })?;
-        files.extend(native);
-        put_initial_command(&mut files, &initial_command)?;
-    }
+    // Even with the real winlogon: it starts MINOINIT.EXE at the first boot.
+    let native = native::build(ws)?
+        .ok_or_else(|| format!("image: the native programs need {}", native::missing_tool().unwrap_or("a compiler")))?;
+    add_image_programs(&mut files, native, &initial_command)?;
     let run_dir = ws.target.join("xtask").join("image-source");
     let esp = qemu::assemble_esp(ws, &run_dir, &artifacts, &files)?;
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -555,6 +550,20 @@ fn put_initial_command(files: &mut Vec<String>, program: &str) -> Result<()> {
     Ok(())
 }
 
+/// The programs of an image, among its `files`: the startup choice (or an
+/// explicitly selected probe), `initial_command`, boots as winlogon.exe,
+/// smss's initial command, with every native program; `system` keeps
+/// ReactOS's winlogon.exe and only the system programs, MINOINIT.EXE among
+/// them, which the layered SYSTEM hive has it start (ADR-023).
+fn add_image_programs(files: &mut Vec<String>, native: Vec<String>, initial_command: &str) -> Result<()> {
+    if initial_command == "system" {
+        files.extend(native::system_programs(native));
+        return Ok(());
+    }
+    files.extend(native);
+    put_initial_command(files, initial_command)
+}
+
 /// The files of the fetched userland for the FAT ramdisk (`HOST:FAT_PATH`),
 /// under `WINDOWS/SYSTEM32`: `NTDLL.DLL`, which the kernel installs as the
 /// system DLL, the NLS tables each process maps, and the others of
@@ -694,5 +703,29 @@ mod tests {
             ]
         );
         assert!(put_initial_command(&mut files, "NONE.EXE").is_err());
+    }
+
+    #[test]
+    fn an_image_takes_minoinit_with_or_without_its_winlogon() {
+        let userland = || vec!["/u/winlogon.exe:WINDOWS/SYSTEM32/WINLOGON.EXE".to_string()];
+        let native =
+            || vec!["/n/BOOT1.EXE:BOOT1.EXE".to_string(), "/n/MINOINIT.EXE:WINDOWS/SYSTEM32/MINOINIT.EXE".to_string()];
+        let mut files = userland();
+        add_image_programs(&mut files, native(), "system").unwrap();
+        assert_eq!(
+            files,
+            ["/u/winlogon.exe:WINDOWS/SYSTEM32/WINLOGON.EXE", "/n/MINOINIT.EXE:WINDOWS/SYSTEM32/MINOINIT.EXE"]
+        );
+        let mut files = userland();
+        add_image_programs(&mut files, native(), "BOOT1.EXE").unwrap();
+        assert_eq!(
+            files,
+            [
+                "/u/winlogon.exe:WINDOWS/SYSTEM32/WINLOGON.ORG",
+                "/n/BOOT1.EXE:BOOT1.EXE",
+                "/n/MINOINIT.EXE:WINDOWS/SYSTEM32/MINOINIT.EXE",
+                "/n/BOOT1.EXE:WINDOWS/SYSTEM32/WINLOGON.EXE"
+            ]
+        );
     }
 }
