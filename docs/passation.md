@@ -1,5 +1,14 @@
 # Notes de passation
 
+- **Les listes libres du buddy, sans limite** (`claude/new-session-696xfc`, vu en enregistrant dans le Bloc-notes) :
+  les listes de `mm::buddy` étaient des tableaux fixes de 512 blocs par ordre ; un processus qui laisse plus de 512
+  pages libres dont le buddy est encore pris (ses tables de pages, rendues une à une à sa fin) arrêtait le système
+  (`buddy free list overflow`, STOP 0x1E, vu à la fin du Bloc-notes après la boîte Enregistrer sous). Chaque liste
+  est maintenant chaînée dans les deux sens à travers une table de `FreeLink` (une par page, 12 octets : prise dans
+  la carte mémoire avec la base PFN, `BuddyAllocator::set_links`) : prendre, rendre et trouver un buddy libre sont en
+  O(1), sans capacité. Tests : hôte (`buddy` : 4 096 pages isolées puis refusionnées en deux blocs de 16 Mio, un
+  buddy retiré du milieu de sa liste, de la mémoire au-delà des liens refusée).
+
 - **Revue de la PR 125 : NtUserCreateAcceleratorTable** (`claude/new-session-696xfc`) : le compte de l'appelant
   allouait `count × 6` octets avant toute validation (0xFFFFFFFF : 24 Gio, l'échec de l'allocation arrêtait le
   système depuis un appel système). Le compte est borné à 65 536 entrées (au-delà : NULL et
