@@ -99,19 +99,31 @@ NtAllocateLocallyUniqueId) : `NtSetDefaultLocale` (ntdll) et `Pipes` (kernel32) 
 | kernel32 | 29 | 12 | 12 | 41 % | 12 |
 | **Ensemble** | **113** | 35 | **46** | **41 %** | |
 
-Le seuil du M5 (50 %) n'est pas atteint : il manque 8 tests en ntdll (42 sur 84), 3 en kernel32 (15 sur 29),
-11 sur l'ensemble (57 sur 113).
+Le 2026-11-11, après la fusion de `main` (0574fcd : NtQuery/NtSetTimerResolution, STATUS_INVALID_INFO_CLASS pour
+une classe inconnue, NtOpenKey à une adresse non alignée, les pages de code 850, 775, 932 et 10000 sur le disque)
+dans `claude/hive-layer` ; `SystemFirmware` (kernel32), que la classe inconnue avait fait tomber, repasse
+(SystemFirmwareTableInformation rend STATUS_NOT_IMPLEMENTED, comme ReactOS) :
+
+| Module | Lancés | Écartés | Passent | Part | Plancher |
+|---|---:|---:|---:|---:|---:|
+| ntdll | 84 | 23 | 43 | 51 % | 43 |
+| kernel32 | 29 | 12 | 12 | 41 % | 12 |
+| **Ensemble** | **113** | 35 | **55** | **49 %** | |
+
+ntdll passe le seuil du M5 (50 %) ; kernel32 non : il y manque 3 tests (15 sur 29), 2 sur l'ensemble (57 sur
+113). Le critère reste décoché.
 
 - **ntdll, passent** : DllLoadNotification, LdrLoadDll, NtAcceptConnectPort, NtAccessCheck,
   NtAccessCheckByTypeResultList, NtAdjustPrivilegesToken, NtCreateFile, NtCreateThread, NtDuplicateObject, NtMutant,
-  NtOpenProcessToken, NtSetDefaultLocale, NtSetInformationFile, RtlCopyMappedMemory, RtlDebugInformation, RtlDeleteAce,
-  RtlDetermineDosPathNameType, RtlFirstFreeAce, RtlGetFullPathName_U, RtlGetFullPathName_Ustr,
+  NtOpenKey, NtOpenProcessToken, NtQueryInformationFile, NtQuerySystemInformation, NtSetDefaultLocale,
+  NtSetInformationFile, RtlCopyMappedMemory, RtlDebugInformation, RtlDeleteAce, RtlDetermineDosPathNameType,
+  RtlFirstFreeAce, RtlGenerate8dot3Name, RtlGetFullPathName_U, RtlGetFullPathName_Ustr,
   RtlGetLengthWithoutLastFullDosOrNtPathElement, RtlGetLengthWithoutTrailingPathSeperators,
   RtlGetLongestNtPathLength, RtlGetProcessHeaps, RtlHandle, RtlImageDirectoryEntryToData, RtlImageRvaToVa, RtlLocale,
   RtlMultipleAllocateHeap, RtlRemovePrivileges, RtlUnhandledExceptionFilter, RtlUnicodeStringToAnsiString,
-  RtlValidateUnicodeString, RtlpEnsureBufferSize.
-- **ntdll, meurent ou pendent** (le reste échoue sur des assertions, détaillées dans le journal) : NtContinue,
-  RtlGenerate8dot3Name, RtlUnicodeStringToCountedOemString, RtlxUnicodeStringToAnsiSize, RtlxUnicodeStringToOemSize
+  RtlUnicodeStringToCountedOemString, RtlUnicodeToOemN, RtlValidateUnicodeString, RtlpEnsureBufferSize,
+  RtlxUnicodeStringToAnsiSize, RtlxUnicodeStringToOemSize, TimerResolution.
+- **ntdll, meurent ou pendent** (le reste échoue sur des assertions, détaillées dans le journal) : NtContinue
   (`c0000005`) ; NtApphelpCacheControl, NtProtectVirtualMemory, RtlReAllocateHeap (20 s dépassées).
 - **kernel32, passent** : ConsoleCP, GetCurrentDirectory, GetLocaleInfo, GetVolumeInformation, InitOnce, Pipes,
   SetCurrentDirectory, SystemFirmware, WideCharToMultiByte, interlck, lstrcpynW, lstrlen.

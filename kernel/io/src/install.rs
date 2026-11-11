@@ -28,8 +28,10 @@ use crate::volume::{Node, Volume};
 const ALIGNMENT: u64 = 2048;
 /// La politique guidée réserve 56 Mio à l'ESP : le chargeur, le noyau et le
 /// ramdisk de démarrage (`fat.img`) que le disque installé charge comme
-/// l'image de développement. Le 2026-11-10, ces trois fichiers font 49,9 Mo
-/// (`fat.img` 47,9 Mo, dont 4 Mio libres) : 48 Mio ne les tenaient plus.
+/// l'image de développement. Le 2026-11-11, ces trois fichiers demandent
+/// 98 263 clusters d'un secteur (47,98 Mio) : une ESP de 48 Mio n'en a que
+/// 96 760 (47,25 Mio), celle de 56 Mio 112 892 (`docs/compat/io-install.md`,
+/// « Le plan agrandi »).
 const ESP_SECTORS: u64 = 56 * 2048;
 /// Numéro du maître primaire dans l'ABI.
 const PRIMARY_MASTER: u32 = 1;

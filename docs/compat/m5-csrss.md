@@ -934,7 +934,7 @@ Vu en chemin : `msgina` montre aussi sa fenêtre de logon, dont le contrôle d'�
 (curseur d'insertion : NtUserCreateCaret, pas encore ; les barres de défilement sont venues depuis, M6, étape 17) ;
 `services.exe` parle aux services qu'il lance par FSCTL_PIPE_TRANSCEIVE (TransactNamedPipe, pas encore) ; deux lignes
 du journal série pouvaient se couper (corrigé depuis : 4bac731, une ligne en une seule prise du verrou). Le disque de
-démarrage a grossi de 0,9 Mo (`secur32.dll` et ses imports) : l'ESP du plan de l'installateur ne le tenait plus, elle
+démarrage a grossi (`secur32.dll` et ses imports) : l'ESP du plan de l'installateur ne le tenait plus, elle
 passe à 56 Mio, la cible de test à 128 Mio ([`io-install.md`](io-install.md), « Le plan agrandi »).
 
 Tests : hôte (`regf` : relire l'arbre d'une ruche ; `mkhive` : la lecture, l'application, `mino.inf` sur des ruches
