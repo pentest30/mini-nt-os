@@ -15,12 +15,13 @@
 # The screen then: cmd's console (black, at the top left) is still over the
 # desktop, which a press on the Start button activates without bringing it
 # over the windows it started; the taskbar. Task Manager's Applications page
-# over its tab control, which erases all its inside (COLOR_BTNFACE) and has no
-# WS_CLIPSIBLINGS: the first row of the list selected, the underlined N of New
-# Task..., the white relief under the S of Switch To and the E of End Task,
-# disabled (DrawState, a font from GetObjectW). Siblings repaint from the
-# bottom of the Z order up; from the top, the tab control painted over the
-# page, gray.
+# over its tab control, which erases all its inside (COLOR_BTNFACE) and paints
+# after the page (siblings repaint from the top of the Z order down, as in
+# ReactOS), but gives itself WS_CLIPSIBLINGS (SetWindowLongW(GWL_STYLE) in
+# comctl32's TAB_Create): the first row of the list selected, the underlined N
+# of New Task..., the white relief under the S of Switch To and the E of End
+# Task, disabled (DrawState, a font from GetObjectW). Without the style, the
+# tab control painted over the page, gray.
 features = test-smss
 requires = userland, native
 initial-command = DESKTOP1.EXE

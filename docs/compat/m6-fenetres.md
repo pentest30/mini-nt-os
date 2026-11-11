@@ -1242,4 +1242,37 @@ NtQueryInformationProcess(ProcessDeviceMap), NtOpenKey puis NtQueryKey(KeyNameIn
 `\Registry\Machine\Software\Classes` (taille d'abord, puis le nom `\REGISTRY\MACHINE\SOFTWARE\Classes`) et
 NtQueryObject(ObjectBasicInformation) (une mauvaise taille refusée, les droits KEY_READ, un handle) ; une carte des
 lecteurs vide la fait échouer (mutation). `notepad` sur AMD et Intel, et toute la suite sur AMD (54 sur 55 ; `gui`
-échoue par l'ordre de peinture des sœurs, voir la passation).
+échouait par l'ordre de peinture des sœurs, corrigé à l'étape 28).
+
+## Étape 28 : SetWindowLong du style (GWL_STYLE, GWL_EXSTYLE)
+
+La page Applications du gestionnaire des tâches se repeignait en gris. Son contrôle d'onglets (`SysTabControl32`,
+sœur de la page, sous elle dans l'ordre Z) ne traite pas WM_ERASEBKGND : DefWindowProc efface sa région à mettre à
+jour du pinceau de sa classe (COLOR_BTNFACE), et cette région couvre la page quand une autre page se cache. Les sœurs
+se repeignent de haut en bas de l'ordre Z (IntFindWindowToRepaint) : l'onglet passe après la page. Dans ReactOS, son
+DC est coupé par la page, parce que `comctl32` (TAB_Create) se donne `WS_CLIPSIBLINGS` par SetWindowLongW(GWL_STYLE)
+à sa création ; Mino refusait GWL_STYLE (`ERROR_CALL_NOT_IMPLEMENTED`), l'onglet restait sans le style et peignait
+sur la page.
+
+Un premier correctif avait inversé l'ordre de peinture des sœurs (du bas vers le haut, écart avec ReactOS) : la page
+passait, mais le premier WM_PAINT n'allait plus au popup qu'attend le scénario `gui`. L'ordre de ReactOS est rétabli,
+et la cause corrigée :
+
+- `win32k::window::set_style` (co_IntSetWindowLongPtr, GWL_STYLE et GWL_EXSTYLE) : WM_STYLECHANGING porte un
+  STYLESTRUCT (`abi::user::StyleStruct32`) dont la procédure peut changer le nouveau style ; puis le style change, et
+  WM_STYLECHANGED le dit. Rend l'ancien style.
+- `restyle` (GWL_STYLE) : une fenêtre de premier niveau garde `WS_CLIPSIBLINGS`, une fenêtre réduite `WS_MINIMIZE` ;
+  `WS_EX_WINDOWEDGE` suit le cadre (IntCheckFrameEdge, d'après la valeur de l'appelant) ; une fille qui cesse de
+  l'être perd son identifiant, une fenêtre qui devient fille sa barre de menus (`WNDS_HASMENU`), son `IDMenu` gardant
+  la valeur de la barre comme dans ReactOS, qui n'a qu'un champ pour les deux.
+- `restyle_ex` (GWL_EXSTYLE) : `WS_EX_WINDOWEDGE` d'après le style et la valeur de l'appelant. Pas encore :
+  `WS_EX_TOPMOST` ôté à la fenêtre du shell (SetShellWindow manque) ; les fenêtres en couches.
+- Rien à refaire pour les DC : un DC du cache tire du style ce qui le coupe à chaque GetDCEx
+  (`dce::effective_flags`), et Mino ne garde pas de DC propre (DceResetActiveDCEs de ReactOS, au changement de
+  `WS_VISIBLE`).
+
+GWLP_WNDPROC et GWLP_HWNDPARENT restent à faire (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois).
+
+Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZE` gardés, le bord de fenêtre, la
+fille qui cesse ou devient fille) ; `desktop-launch` sur AMD, qui échoue avec l'ordre de ReactOS sans GWL_STYLE
+(la page grise, ses quatre pixels).

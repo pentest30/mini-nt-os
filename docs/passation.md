@@ -1,14 +1,23 @@
 # Notes de passation
 
+- **SetWindowLong du style ; l'ordre de peinture de ReactOS rétabli** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 28 ; choix du mainteneur : revenir à l'ordre de ReactOS
+  et trouver la vraie cause de la page grise du gestionnaire des tâches). La cause : NtUserSetWindowLong refusait
+  GWL_STYLE, et le contrôle d'onglets de `comctl32` se donne `WS_CLIPSIBLINGS` ainsi à sa création (TAB_Create) ;
+  sans lui, son effacement (COLOR_BTNFACE) passait sur la page peinte avant lui. `win32k::window::set_style`
+  (co_IntSetWindowLongPtr : WM_STYLECHANGING, `restyle`, `restyle_ex`, WM_STYLECHANGED ; `abi::user::StyleStruct32`)
+  fait GWL_STYLE et GWL_EXSTYLE ; `paint::find_window_to_repaint` va de nouveau de haut en bas de l'ordre Z, comme
+  ReactOS (l'écart retiré). Tests : hôte (`window`, quatre tests) ; `desktop-launch` échoue avec l'ordre de ReactOS
+  sans GWL_STYLE (mutation : la page grise) et passe avec, sur AMD ; `cargo xtask lint` propre, 1087 tests hôte.
+  **À finir** : la suite complète sur AMD (lancée, `gui` compris), `desktop-launch` et `gui` sur Intel. Pas encore : GWLP_WNDPROC,
+  GWLP_HWNDPARENT, WS_EX_TOPMOST ôté à la fenêtre du shell, les fenêtres en couches.
+
 - **La boîte Enregistrer sous du Bloc-notes** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 27) : NtQueryKey(KeyNameInformation) (`cm::Key::full_name`), NtQueryObject(ObjectBasicInformation),
   NtQueryInformationProcess(ProcessDeviceMap) (`io_manager::device::dos_drive_type`) : HKEY_CLASSES_ROOT marche,
   GetLogicalDrives voit `C:`, le shell parcourt `C:\`. Tests : hôte (`cm`) ; la sonde de `notepad` (carte des
   lecteurs, nom d'une clé, droits d'un handle ; mutation de la carte) sur AMD et Intel ; toute la suite sur AMD : 54
-  sur 55. **`gui` échoue** depuis la fusion du changement de l'autre session dans `paint.rs` (les sœurs peintes du
-  bas vers le haut, écart voulu avec ReactOS pour l'onglet du gestionnaire des tâches) : le premier WM_PAINT ne va
-  plus au popup qu'attend `gui` ; avec l'ancien `paint.rs`, `gui` passe. À trancher : garder l'écart et mettre à jour
-  `gui`, ou revenir à l'ordre de ReactOS et corriger l'onglet autrement. **Suite** pour enregistrer : l'assertion
+  sur 55 (`gui` échouait par l'ordre de peinture des sœurs : corrigé, entrée ci-dessus). **Suite** pour enregistrer : l'assertion
   d'ATL du shell (`::IsWindow(m_hWnd)`, une fenêtre ATL non créée), les fenêtres message seul, NtUserSetParent,
   NtUserGetIconInfo, les DIB à palette de StretchDIBits, NtUserGetClassName, SB_CTL (liste dans l'étape 27).
 
@@ -55,9 +64,10 @@
 - **Le gestionnaire des tâches : page grise, onglets, relance** (`claude/new-session-696xfc`, worktree
   `.claude/worktrees/pr122` ; demandé le 2026-11-11, testé sous VirtualBox). Trois défauts :
   1. La page Applications repeinte en gris : son contrôle d'onglets (sœur d'en dessous, sans WS_CLIPSIBLINGS,
-     effacé de COLOR_BTNFACE par DefWindowProc) peignait après elle. `paint::find_window_to_repaint` va maintenant
-     des sœurs du bas de l'ordre Z vers le haut (écart voulu avec ReactOS, qui va de haut en bas ; ReactOS 0.4.16,
-     vérifié dans la VM `reactos` de VirtualBox, affiche bien la page, avec son thème).
+     effacé de COLOR_BTNFACE par DefWindowProc) peignait après elle. `paint::find_window_to_repaint` allait alors
+     des sœurs du bas de l'ordre Z vers le haut (écart avec ReactOS ; ReactOS 0.4.16, vérifié dans la VM `reactos`
+     de VirtualBox, affiche bien la page, avec son thème). **Remplacé** : l'ordre de ReactOS est rétabli et la cause
+     corrigée (GWL_STYLE, première entrée).
   2. Plus aucune application après un passage par un autre onglet : la même cause.
   3. Le gestionnaire ne se rouvrait plus : NtUserGetWindowPlacement manquait, il gardait pour sa place (WM_DESTROY,
      puis MoveWindow au lancement suivant) des octets de sa pile. Le service a été écrit deux fois, ici et pour le
@@ -77,11 +87,8 @@
   pas. Il relit maintenant les titres à chaque passage et reliste quand l'un change. Reproduit en sondant toutes
   les 1 ms (l'ancienne sonde échoue ainsi à coup sûr ; la nouvelle voit « Notepad » puis « Untitled - Notepad » et
   va jusqu'au « Goto line » fermé, seul « probe done » manque : 8000 passages d'un tick dépassent 120 s) ; à
-  250 ms, `notepad` passe sur AMD et Intel. À mesurer : si l'ordre de peinture du bas vers le haut allonge
-  l'intervalle entre la création et le titre. **Reste à vérifier** : `dialog`, `desktop-ui`, `desktop-click`,
-  `gui`, `menu`, `caret`,
-  `console`, `cmd`, `listview`, `scroll`, `scrollex`, `icons`, `destroy`, `cursor`, `mouse` avec le nouvel ordre de
-  peinture ; puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
+  250 ms, `notepad` passe sur AMD et Intel. (L'ordre de peinture du bas vers le haut et ses vérifications sont
+  sans objet : l'ordre de ReactOS est rétabli, première entrée.) Puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
   target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format VHD`, l'attacher à la VM `Mino` à la place de
   `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
   **Vu, pas fait** : LineTo dessine toujours du stylo noir par défaut. `gdi32` choisit les stylos dans DC_ATTR sans
