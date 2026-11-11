@@ -1486,4 +1486,8 @@ cargo xtask lint && cargo xtask test                        # avant chaque commi
   échoue, rétablir. Un script le fait pour une liste de mutations JSON `[nom, [[chemin, ancien, nouveau], ...]]`
   (`target/work/mutate.py`, hors dépôt : à réécrire au besoin, une vingtaine de lignes autour de
   `cargo xtask test --boot --scenario NOM --cpu CPU`).
+  Le fichier rétabli doit avoir une date plus récente que la compilation mutée (`touch`, ou une copie sans
+  `cp -p`) : sinon cargo le croit à jour et les runs suivants gardent le binaire muté (vu à l'étape 26 du M6 :
+  des largeurs ABC nulles « survivaient » à la restauration, et le scénario `notepad` échouait sans raison
+  apparente).
 - Un symptôme contourné est documenté ; un bogue corrigé vient avec le test qui l'aurait détecté.
