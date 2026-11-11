@@ -2366,11 +2366,13 @@ fn loader_services_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_ACCESS_VIOLATION, STATUS_DATATYPE_MISALIGNMENT, STATUS_INFO_LENGTH_MISMATCH,
         STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_NOT_COMMITTED,
-        STATUS_SUCCESS, STATUS_WAIT_0,
+        STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::process::NT_CURRENT_PROCESS;
     use abi::services;
-    use abi::system_information::{SYSTEM_BASIC_INFORMATION, SYSTEM_PROCESSOR_INFORMATION};
+    use abi::system_information::{
+        SYSTEM_BASIC_INFORMATION, SYSTEM_FIRMWARE_TABLE_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
+    };
     use alloc::sync::Arc;
     use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
@@ -2391,6 +2393,7 @@ fn loader_services_self_test() {
     const MISALIGNED: u32 = DATA + 0x50;
     const UNKNOWN_CLASS: u32 = DATA + 0x54;
     const LONG: u32 = DATA + 0x58;
+    const FIRMWARE_CLASS: u32 = DATA + 0x5C;
     // NtProtectVirtualMemory: two committed pages and a reserved one, the
     // ranges passed and returned, the old protections and the statuses.
     const PAGES: u32 = DATA + 0x60;
@@ -2445,6 +2448,8 @@ fn loader_services_self_test() {
         .store_eax(MISALIGNED)
         .call(query, &[UNKNOWN_CLASS_VALUE, SCRATCH, 0x100, 0])
         .store_eax(UNKNOWN_CLASS)
+        .call(query, &[SYSTEM_FIRMWARE_TABLE_INFORMATION, SCRATCH, 0x100, 0])
+        .store_eax(FIRMWARE_CLASS)
         .call(query, &[SYSTEM_PROCESSOR_INFORMATION, PROCESSOR, 12, PROCESSOR_LENGTH])
         .store_eax(PROCESSOR_STATUS)
         .call(query, &[SYSTEM_PROCESSOR_INFORMATION, SCRATCH, 11, 0])
@@ -2563,6 +2568,7 @@ fn loader_services_self_test() {
         assert_eq!(bits & KF_NX_ENABLED != 0, nx, "NX as EFER has it");
     }
     assert_eq!(status(UNKNOWN_CLASS), STATUS_INVALID_INFO_CLASS, "a class without implementation");
+    assert_eq!(status(FIRMWARE_CLASS), STATUS_NOT_IMPLEMENTED, "a class ReactOS knows without implementing it");
     let pages = read(PAGES);
     assert_ne!(pages, 0, "NtAllocateVirtualMemory");
     assert_eq!(

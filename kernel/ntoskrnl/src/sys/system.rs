@@ -7,8 +7,8 @@ use abi::security::SE_LOAD_DRIVER_PRIVILEGE;
 use abi::system_information::{
     SystemBasicInformation32, SystemProcessInformation32, SystemProcessorInformation32, SystemThreadInformation32,
     MAXIMUM_USER_MODE_ADDRESS, MINIMUM_USER_MODE_ADDRESS, PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_BASIC_INFORMATION,
-    SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION, SYSTEM_FILECACHE_INFORMATION, SYSTEM_FLAGS_INFORMATION,
-    SYSTEM_HANDLE_INFORMATION, SYSTEM_PERFORMANCE_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
+    SYSTEM_EXTEND_SERVICE_TABLE_INFORMATION, SYSTEM_FILECACHE_INFORMATION, SYSTEM_FIRMWARE_TABLE_INFORMATION,
+    SYSTEM_FLAGS_INFORMATION, SYSTEM_HANDLE_INFORMATION, SYSTEM_PERFORMANCE_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
     SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, SYSTEM_PROCESS_INFORMATION, SYSTEM_PROCESS_INFORMATION_NAME_AT,
     SYSTEM_RANGE_START, SYSTEM_RANGE_START_INFORMATION, SYSTEM_SESSION_CREATE, SYSTEM_SESSION_DETACH,
     SYSTEM_THREAD_INFORMATION_SIZE, SYSTEM_TIME_OF_DAY_INFORMATION,
@@ -68,8 +68,9 @@ pub(super) fn nt_shutdown_system(arguments: &[u32]) -> NtStatus {
 /// | `SystemRangeStartInformation` (50) | le début de la moitié système, `0x80000000` |
 ///
 /// Les autres classes rendent `STATUS_INVALID_INFO_CLASS` (ce que NT rend),
-/// journalisé à leur
-/// premier appel.
+/// journalisé à leur premier appel ; `SystemFirmwareTableInformation` (76),
+/// que ReactOS connaît sans l'implémenter, `STATUS_NOT_IMPLEMENTED`, comme
+/// lui (l'apitest SystemFirmware de kernel32 l'accepte).
 pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
     let (class, buffer, length, return_length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
     match class {
@@ -106,6 +107,11 @@ pub(super) fn nt_query_system_information(arguments: &[u32]) -> NtStatus {
         SYSTEM_FLAGS_INFORMATION => {
             super::return_information(&NT_GLOBAL_FLAG.to_le_bytes(), buffer, length, return_length)
         }
+        // A class ReactOS knows without implementing it: kernel32 turns
+        // STATUS_NOT_IMPLEMENTED into ERROR_INVALID_FUNCTION, which its
+        // SystemFirmware apitest accepts, and not the ERROR_INVALID_PARAMETER
+        // of STATUS_INVALID_INFO_CLASS.
+        SYSTEM_FIRMWARE_TABLE_INFORMATION => UNSUPPORTED.report(class),
         _ => UNSUPPORTED.report_invalid_class(class),
     }
 }
