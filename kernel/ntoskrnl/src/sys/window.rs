@@ -291,6 +291,30 @@ pub(super) fn nt_user_begin_paint(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtUserGetWindowPlacement(hWnd, lpwndpl) : où est la fenêtre et comment
+/// elle est montrée (`win32k::winpos::placement`) ; TRUE. FALSE pour une
+/// fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`), un `lpwndpl` qu'on ne
+/// peut lire ou écrire, ou dont `length` n'est pas celle d'un
+/// WINDOWPLACEMENT (comme ReactOS). Sans lui, le gestionnaire des tâches
+/// gardait pour sa place des octets de sa pile, et sa fenêtre ne se voyait
+/// plus au lancement suivant.
+pub(super) fn nt_user_get_window_placement(arguments: &[u32]) -> NtStatus {
+    let (handle, out) = (arguments[0], arguments[1]);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let size = core::mem::size_of::<abi::user::WindowPlacement32>();
+    let mut length = [0u8; 4];
+    if copy_from_user(&mut length, u64::from(out)).is_err() || u32::from_le_bytes(length) as usize != size {
+        return NtStatus(0);
+    }
+    let placement = win32k::winpos::placement(&window);
+    match ke::usermem::copy_to_user(u64::from(out), placement.as_bytes()) {
+        Ok(()) => NtStatus(1),
+        Err(status) => fail(dos_error(status)),
+    }
+}
+
 /// NtUserEndPaint(hWnd, lpPaint) : le DC de BeginPaint (`lpPaint->hdc`) est
 /// rendu ; TRUE. FALSE pour une fenêtre inconnue
 /// (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` illisible.

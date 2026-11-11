@@ -233,6 +233,39 @@ fn parent_origin(parent: Option<&Arc<Window>>) -> (i32, i32) {
     }
 }
 
+/// IntGetWindowPlacement : où est `window` et comment elle est montrée.
+/// `rcNormalPosition` est sa place, dans la zone cliente de son parent pour
+/// une fenêtre fille, dans la zone de travail de son moniteur sinon ; Mino
+/// ne réduit ni n'agrandit encore : c'est sa place actuelle, et ses places
+/// réduite et agrandie ne sont pas connues (-1, -1).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn placement(window: &Window) -> abi::user::WindowPlacement32 {
+    let state = window.state();
+    let origin = if state.style & WS_CHILD != 0 {
+        parent_origin(window::get(state.parent).as_ref())
+    } else {
+        crate::monitor::primary().map_or((0, 0), |monitor| (monitor.work.left, monitor.work.top))
+    };
+    let show_cmd = if state.style & WS_MINIMIZE != 0 {
+        abi::user::SW_SHOWMINIMIZED
+    } else if state.style & WS_MAXIMIZE != 0 {
+        abi::user::SW_SHOWMAXIMIZED
+    } else {
+        abi::user::SW_SHOWNORMAL
+    };
+    let rect = offset(state.window, -origin.0, -origin.1);
+    abi::user::WindowPlacement32 {
+        length: core::mem::size_of::<abi::user::WindowPlacement32>() as u32,
+        flags: 0,
+        show_cmd,
+        min_position: [-1, -1],
+        max_position: [-1, -1],
+        normal_position: abi::user::Rect32 { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+    }
+}
+
 /// co_WinPosDoNCCALCSize : WM_NCCALCSIZE avec des rectangles valides (la
 /// nouvelle place de la fenêtre, l'ancienne, l'ancienne zone cliente, dans
 /// la zone cliente du parent d'une fenêtre fille) quand la taille ou le

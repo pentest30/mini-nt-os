@@ -648,31 +648,33 @@ pub fn def_paint(window: &Arc<Window>) {
     }
 }
 
-/// IntFindWindowToRepaint : la première fenêtre du thread `pti` qui a
-/// quelque chose à peindre, de `first` et des sœurs qui la suivent dans
-/// l'ordre Z, puis de leurs enfants ; une fenêtre `WS_EX_TRANSPARENT` passe
-/// après ses sœurs opaques à peindre.
+/// IntFindWindowToRepaint : la fenêtre du thread `pti` qui a quelque chose à
+/// peindre, de `first` et des sœurs qui la suivent dans l'ordre Z, puis de
+/// leurs enfants — une fenêtre avant ses enfants, les sœurs **du bas de
+/// l'ordre Z vers le haut**.
+///
+/// Écart voulu avec ReactOS, qui va de haut en bas : deux sœurs qui se
+/// recouvrent sans `WS_CLIPSIBLINGS` peignent chacune sur l'autre, et la
+/// dernière peinte gagne. Le contrôle d'onglets du gestionnaire des tâches,
+/// sous ses pages, efface tout son intérieur (COLOR_BTNFACE de sa classe)
+/// et les recouvrait ; ReactOS l'affiche bien (son thème). Peindre du bas
+/// vers le haut laisse au-dessus ce que l'ordre Z y met. Une fenêtre
+/// `WS_EX_TRANSPARENT` passe ainsi après ses sœurs d'en dessous.
 pub fn find_window_to_repaint(first: Option<Arc<Window>>, pti: u32) -> Option<Arc<Window>> {
+    let mut siblings = Vec::new();
     let mut current = first;
     while let Some(window) = current {
+        current = window::get(window.state().next);
+        siblings.push(window);
+    }
+    for window in siblings.into_iter().rev() {
         let state = window.state();
         if window.pti == pti && is_dirty(&state) {
-            if state.ex_style & WS_EX_TRANSPARENT != 0 {
-                let mut sibling = window::get(state.next);
-                while let Some(other) = sibling {
-                    let other_state = other.state();
-                    if other_state.ex_style & WS_EX_TRANSPARENT == 0 && other.pti == pti && is_dirty(&other_state) {
-                        return Some(other);
-                    }
-                    sibling = window::get(other_state.next);
-                }
-            }
             return Some(window);
         }
         if let Some(found) = find_window_to_repaint(window::get(state.child), pti) {
             return Some(found);
         }
-        current = window::get(state.next);
     }
     None
 }

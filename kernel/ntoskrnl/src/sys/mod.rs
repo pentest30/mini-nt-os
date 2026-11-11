@@ -270,6 +270,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtTestAlert, Handler::Status(apc::nt_test_alert)),
     (services::NtUnmapViewOfSection, Handler::Status(section::nt_unmap_view_of_section)),
     (services::NtUserBeginPaint, Handler::Status(window::nt_user_begin_paint)),
+    (services::NtUserGetWindowPlacement, Handler::Status(window::nt_user_get_window_placement)),
     (services::NtUserBuildHwndList, Handler::Status(desktop::nt_user_build_hwnd_list)),
     (services::NtUserCallHwndLock, Handler::Status(window::nt_user_call_hwnd_lock)),
     (services::NtUserCallHwndParam, Handler::Status(timer::nt_user_call_hwnd_param)),

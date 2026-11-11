@@ -1248,6 +1248,29 @@ pub struct Rect32 {
     pub bottom: i32,
 }
 
+/// WINDOWPLACEMENT: where GetWindowPlacement says a window is and how it is
+/// shown.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowPlacement32 {
+    /// Its own size: 44.
+    pub length: u32,
+    /// WPF_*.
+    pub flags: u32,
+    /// SW_SHOWNORMAL, SW_SHOWMINIMIZED or SW_SHOWMAXIMIZED.
+    pub show_cmd: u32,
+    pub min_position: [i32; 2],
+    pub max_position: [i32; 2],
+    /// Its rectangle when neither minimized nor maximized.
+    pub normal_position: Rect32,
+}
+
+const _: () = {
+    assert!(size_of::<WindowPlacement32>() == 44);
+    assert!(core::mem::offset_of!(WindowPlacement32, show_cmd) == 8);
+    assert!(core::mem::offset_of!(WindowPlacement32, normal_position) == 28);
+};
+
 /// PAINTSTRUCT: what BeginPaint gives (NtUserBeginPaint writes it whole) and
 /// EndPaint takes back.
 #[repr(C)]
@@ -2013,7 +2036,8 @@ as_bytes!(
     Property32,
     SbInfo32,
     ScrollInfo32,
-    ScrollBarInfo32
+    ScrollBarInfo32,
+    WindowPlacement32
 );
 
 #[cfg(test)]
