@@ -16,9 +16,11 @@
   Scénario `desktop-launch` étendu : le gestionnaire fermé par sa croix, relancé du menu Démarrer, Processus puis
   Applications ; quatre pixels (la première ligne choisie, le N souligné de New Task..., le relief sous le S de
   Switch To et le E de End Task). Passe sur AMD et Intel ; les deux mutations (l'ordre de haut en bas, le service
-  retiré) le font échouer. **Reste à passer** : `cargo xtask lint`, les tests hôte, et les scénarios GUI (`text`,
-  `bitmap`, `dialog`, `desktop-ui`, `desktop-click`, `gui`, `menu`, `caret`, `console`, `cmd`, `listview`, `scroll`,
-  `scrollex`, `icons`, `destroy`, `cursor`, `mouse`) avec le nouvel ordre de peinture ; puis pousser, refaire
+  retiré) le font échouer. `cargo xtask lint` propre, 1064 tests hôte. **Reste à vérifier** : les scénarios GUI
+  (`text`, `bitmap`, `dialog`, `desktop-ui`, `desktop-click`, `gui`, `menu`, `caret`, `console`, `cmd`, `listview`,
+  `scroll`, `scrollex`, `icons`, `destroy`, `cursor`, `mouse`) avec le nouvel ordre de peinture, lancés le 2026-11-11 :
+  leur bilan s'écrit dans `target/tm-fix-boot.log` du worktree (une ligne par scénario, `rc=0` passé) ; puis pousser
+  (`ab1d8ca`, `647e506` et ce commit ne sont pas sur `origin`), refaire
   l'image VirtualBox (`cargo xtask image --output target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format
   VHD`, l'attacher à la VM `Mino` à la place de `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
   **Vu, pas fait** : LineTo dessine toujours du stylo noir par défaut. `gdi32` choisit les stylos dans DC_ATTR sans
