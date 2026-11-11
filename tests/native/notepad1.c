@@ -3,11 +3,16 @@
  * MinGW and linked to ReactOS's kernel32 and user32, which the scenario
  * `notepad` puts on the boot disk in the place of winlogon.exe (like `cmd`,
  * see concmd1.c). Like winlogon, it takes WinSta0\Default and loads the US
- * keyboard layout; then it starts ReactOS's notepad.exe by CreateProcessW
- * and, each second for PROBE_SECONDS, lists the top-level windows of the
+ * keyboard layout. It checks RegisterWindowMessage (the same message for the
+ * same name, whatever its case); then it starts ReactOS's notepad.exe by
+ * CreateProcessW and, for PROBE_SECONDS, lists the top-level windows of the
  * desktop with their titles when the list changes, and says when Notepad
- * ends (its exit code). One line of the debug port (DbgPrint) for each;
- * the program ends with EXIT_STATUS.
+ * ends (its exit code). When Notepad's window is there, it checks that
+ * GetWindowThreadProcessId gives Notepad's process and thread, and says so
+ * ("[notepad] Notepad is up"): the scenario then types Ctrl+G, Notepad's
+ * accelerator for its "Goto line" dialog, then Escape when the probe has
+ * seen the dialog. One line of the debug port (DbgPrint) for each; the
+ * program ends with EXIT_STATUS.
  *
  * Built by `cargo xtask` (xtask/src/native.rs) without a C runtime:
  * -nostdlib, entry point GuiStartup.
@@ -60,6 +65,7 @@ typedef struct {
 #define KLF_ACTIVATE 0x00000001
 #define WAIT_TIMEOUT 0x102
 #define PROBE_SECONDS 8
+#define POLL_MS 250
 #define MAX_WINDOWS 16
 #define EXIT_STATUS 0x6011
 
@@ -79,6 +85,8 @@ __declspec(dllimport) HDESK __stdcall CreateDesktopW(const WCHAR *name, const WC
 __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, DWORD flags, DWORD access,
                                                              void *attributes);
 __declspec(dllimport) BOOL __stdcall EnumWindows(WNDENUMPROC procedure, LPARAM parameter);
+__declspec(dllimport) DWORD __stdcall GetWindowThreadProcessId(HWND window, DWORD *process);
+__declspec(dllimport) UINT __stdcall RegisterWindowMessageW(const WCHAR *name);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int max);
 __declspec(dllimport) HKL __stdcall LoadKeyboardLayoutW(const WCHAR *name, UINT flags);
 __declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
@@ -137,14 +145,40 @@ static const char *ascii(const WCHAR *text, char *out)
     return out;
 }
 
-/* The windows and their titles, when they are not those of the last time. */
-static void list_windows(void)
+/* The two strings are the same. */
+static int same_text(const char *a, const char *b)
+{
+    while (*a && *a == *b)
+        a++, b++;
+    return *a == *b;
+}
+
+/* RegisterWindowMessage: a message of 0xC000 or more, the same for the same
+ * name in another case. */
+static void check_registered_message(void)
+{
+    UINT first = RegisterWindowMessageW(L"commdlg_FindReplace");
+    UINT again = RegisterWindowMessageW(L"COMMDLG_FINDREPLACE");
+    UINT other = RegisterWindowMessageW(L"Mino notepad probe");
+    if (first >= 0xC000 && first == again && other >= 0xC000 && other != first)
+        DbgPrint("[notepad] RegisterWindowMessage: one message per name\n");
+    else
+        DbgPrint("[notepad] RegisterWindowMessage: %x %x %x\n", first, again, other);
+}
+
+/* What the probe has seen of Notepad's windows. */
+static int notepad_seen, goto_seen, goto_closed;
+
+/* The windows and their titles, when they are not those of the last time;
+ * Notepad's window checked the first time it is there, its "Goto line"
+ * dialog followed. */
+static void list_windows(const PROCESS_INFORMATION *process)
 {
     static HWND last[MAX_WINDOWS];
     static int last_count = -1;
     WCHAR title[64];
     char text[64];
-    int i, same;
+    int i, same, has_goto = 0;
 
     window_count = 0;
     EnumWindows(collect, 0);
@@ -159,8 +193,26 @@ static void list_windows(void)
         GetWindowTextW(windows[i], title, 64);
         DbgPrint("[notepad]   %p \"%s\"\n", windows[i], ascii(title, text));
         last[i] = windows[i];
+        if (!notepad_seen && same_text(text, "Untitled - Notepad")) {
+            DWORD pid = 0, tid = GetWindowThreadProcessId(windows[i], &pid);
+            notepad_seen = 1;
+            if (pid == process->dwProcessId && tid == process->dwThreadId)
+                DbgPrint("[notepad] Notepad is up: its window is its main thread's\n");
+            else
+                DbgPrint("[notepad] the window of PID %lu TID %lu, not %lu %lu\n", pid, tid,
+                         process->dwProcessId, process->dwThreadId);
+        }
+        if (same_text(text, "Goto line"))
+            has_goto = 1;
     }
     last_count = window_count;
+    if (has_goto && !goto_seen) {
+        goto_seen = 1;
+        DbgPrint("[notepad] the Goto line dialog is up\n");
+    } else if (!has_goto && goto_seen && !goto_closed) {
+        goto_closed = 1;
+        DbgPrint("[notepad] the Goto line dialog is closed\n");
+    }
 }
 
 DWORD __stdcall GuiStartup(void)
@@ -169,10 +221,11 @@ DWORD __stdcall GuiStartup(void)
     PROCESS_INFORMATION process;
     WCHAR command_line[] = L"notepad.exe";
     DWORD code = 0;
-    int second;
+    int tick;
 
     if (!take_a_desktop())
         ExitProcess(1);
+    check_registered_message();
     memset(&startup, 0, sizeof startup);
     startup.cb = sizeof startup;
     startup.lpDesktop = L"WinSta0\\Default";
@@ -182,15 +235,15 @@ DWORD __stdcall GuiStartup(void)
         ExitProcess(2);
     }
     DbgPrint("[notepad] launched (PID %lu)\n", process.dwProcessId);
-    for (second = 0; second < PROBE_SECONDS; second++) {
-        list_windows();
-        if (WaitForSingleObject(process.hProcess, 1000) != WAIT_TIMEOUT) {
+    for (tick = 0; tick < PROBE_SECONDS * 1000 / POLL_MS; tick++) {
+        list_windows(&process);
+        if (WaitForSingleObject(process.hProcess, POLL_MS) != WAIT_TIMEOUT) {
             GetExitCodeProcess(process.hProcess, &code);
             DbgPrint("[notepad] ended: exit code %08lx\n", code);
             break;
         }
     }
-    list_windows();
+    list_windows(&process);
     DbgPrint("[notepad] probe done\n");
     ExitProcess(EXIT_STATUS);
     return 0;

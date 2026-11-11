@@ -416,6 +416,68 @@ pub fn extra_offset(extra: u32, index: i32) -> Option<u32> {
     (index.checked_add(4)? <= extra).then_some(index)
 }
 
+/// Le LONG `index` des octets de plus de `window` (GetWindowLong d'un
+/// index positif), s'il y est.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn extra_long(window: &Window, index: i32) -> Option<u32> {
+    let extra = window.wnd_size.checked_sub(size_of::<Wnd32>() as u32)?;
+    let at = u64::from(window.wnd) + size_of::<Wnd32>() as u64 + u64::from(extra_offset(extra, index)?);
+    let mut value = [0u8; 4];
+    window.heap.section.read_kernel(at, &mut value).ok()?;
+    Some(u32::from_le_bytes(value))
+}
+
+/// NtUserQueryWindow : ce que l'index `index` (`abi::user::query_window`)
+/// demande de `window` :
+/// - le PID et le TID de son thread ; pour une fenêtre console de `csrss`
+///   (sa classe est celle que `consrv` a donnée,
+///   `crate::console::console_window_class`), ceux du processus qui mène la
+///   console, que `consrv` met dans ses octets de plus (0 et 4) ;
+/// - la fenêtre active et celle qui a le clavier dans la file de son thread ;
+/// - le PID de son thread (`REAL_ID`) ; si sa file est au premier plan ;
+/// - 0 pour le reste : une fenêtre qui ne répond plus (MsqIsHung : l'âge du
+///   dernier message lu n'est pas encore suivi), et les fenêtres et
+///   contextes de l'IME (pas d'IME).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn query(window: &Window, index: u32) -> u32 {
+    use abi::user::query_window;
+    let thread = crate::gui::thread_info_of(window.pti);
+    let console_leader = |at: i32| {
+        let csrss = thread.as_ref().is_some_and(|thread| thread.ti_flags & abi::user::TIF_CSRSSTHREAD != 0);
+        let console = window.class.as_ref().is_some_and(|class| {
+            let atom = crate::console::console_window_class();
+            atom != 0 && class.atom == atom
+        });
+        if csrss && console {
+            extra_long(window, at)
+        } else {
+            None
+        }
+    };
+    let process = || crate::gui::process_id_of(window.pti).unwrap_or(0);
+    let queue = |pick: fn(&crate::queue::QueueState) -> u32| {
+        thread.as_ref().map_or(0, |thread| thread.queue.with(|state| pick(state)).0)
+    };
+    match index {
+        query_window::UNIQUE_PROCESS_ID => console_leader(0).unwrap_or_else(process),
+        query_window::UNIQUE_THREAD_ID => {
+            console_leader(4).unwrap_or_else(|| crate::gui::thread_of_server_address(window.pti).unwrap_or(0))
+        }
+        query_window::ACTIVE => queue(|state| state.active),
+        query_window::FOCUS => queue(|state| state.focus),
+        query_window::REAL_ID => process(),
+        query_window::FOREGROUND => {
+            let foreground = crate::input::foreground();
+            u32::from(foreground.is_some_and(|foreground| foreground.server == window.pti && window.pti != 0))
+        }
+        _ => 0,
+    }
+}
+
 /// co_IntSetWindowLongPtr, pour un index négatif que le noyau fait : la
 /// valeur de l'application (GWLP_USERDATA), l'identifiant (GWLP_ID) ou
 /// l'instance (GWLP_HINSTANCE) devient `value` ; rend l'ancienne. `None`

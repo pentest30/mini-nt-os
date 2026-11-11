@@ -1128,10 +1128,49 @@ Ce que le Bloc-notes montre ensuite (journal du scénario) : NtUserRegisterWindo
 la procédure du Bloc-notes prend alors WM_NULL pour le message de la recherche), NtUserCreateAcceleratorTable (ses
 raccourcis), NtQueryDefaultUILanguage, NtSetInformationThread (classe 9), NtUserCallOneParam (0x28),
 NtUserSystemParametersInfo (0x2006), SetWindowLong de GWL_EXSTYLE, CS_PARENTDC, et un « SendMessageW Error » de
-`user32` pendant la création (un NtUserMessageCall FNID_SENDMESSAGE qui rend FALSE) : à diagnostiquer. La sonde
-appelle NtUserQueryWindow (GetWindowTextW). Le manifeste de `comctl32` 6 manque (toléré : la version 5 sert).
+`user32` pendant la création (un NtUserMessageCall FNID_SENDMESSAGE qui rend FALSE ; expliqué à l'étape 25). La
+sonde appelle NtUserQueryWindow (GetWindowTextW). Le manifeste de `comctl32` 6 manque (toléré : la version 5 sert).
 
 Tests : hôte (`winpos` : le placement d'une fenêtre normale, agrandie, réduite, d'outils, fille ; make_rect_onscreen
 des quatre côtés ; les octets du `WINDOWPLACEMENT`) ; le scénario `notepad` sur AMD et Intel (le titre « Untitled -
 Notepad », le contrôle Edit blanc, le titre actif, « Line 1 » de la barre d'état de `comctl32`), qui échoue quand
 SetWindowPlacement ne montre plus la fenêtre (mutation).
+
+## Étape 25 : RegisterWindowMessage, GetWindowThreadProcessId, les accélérateurs (Ctrl+G dans le Bloc-notes)
+
+`window.c` (NtUserRegisterWindowMessage, NtUserQueryWindow), `useratom.c` (IntAddAtom) et `accelerator.c`
+(NtUserCreateAcceleratorTable, NtUserCopyAcceleratorTable, NtUserDestroyAcceleratorTable, NtUserTranslateAccelerator,
+co_IntTranslateAccelerator) de win32k, ReactOS comme spécification ; Wine (`dlls/user32/menu.c`,
+translate_accelerator) pour la recherche de l'item ; `win32k::accel`, `win32k::window::query`, `sys::accel`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| RegisterWindowMessage | l'atome du nom dans la table des atomes de USER (`win32k::atom`) : un message de 0xC000 à 0xFFFF, le même pour le même nom sans tenir compte de la casse ; 0 pour un nom nul (ERROR_INVALID_PARAMETER) ou un thread sans bureau. Sans lui, le Bloc-notes avait FINDMSGSTRING = 0 et aurait pris WM_NULL pour le message de sa recherche |
+| NtUserQueryWindow | le PID et le TID du thread de la fenêtre (GetWindowThreadProcessId) ; pour une fenêtre console de `csrss` (sa classe est celle que `consrv` donne par NtUserConsoleControl), ceux du processus qui mène la console, dans ses octets de plus (0 et 4) ; la fenêtre active et celle qui a le clavier dans la file de son thread ; le PID (REAL_ID) ; si sa file est au premier plan ; 0 pour ISHUNG et l'IME |
+| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon |
+| TranslateAccelerator (`accel::translate`) | WM_KEYDOWN, WM_SYSKEYDOWN : une entrée FVIRTKEY de même touche, Maj, Ctrl et Alt du thread exactement ; WM_CHAR, WM_SYSCHAR : une entrée de caractère de même code, Alt seul comparé ; la commande, si c'est un item du menu de la fenêtre (non fille) : WM_INITMENU, puis WM_INITMENUPOPUP du menu qui porte l'item et sa position, sauf souris capturée ; WM_COMMAND (HIWORD 1) sauf fenêtre désactivée, item désactivé ou grisé (après WM_INITMENUPOPUP), fenêtre réduite ; le message est alors traduit |
+
+Écarts voulus avec ReactOS : il cherche l'item du menu à la position égale à la commande (MF_BYPOSITION), et donne
+WM_INITMENUPOPUP comme pour le menu de la fenêtre (HIWORD 1) ; Mino suit Wine et la documentation de l'API (par
+identifiant, HIWORD 0, pas de WM_INITMENUPOPUP pour un item de la barre elle-même).
+
+Ce qui manque : le menu de la fenêtre (WM_SYSCOMMAND d'une commande qui y est) ; la conversion d'un caractère ANSI
+au-delà de l'ASCII par la page de code (l'octet est gardé, journalisé une fois) ; MsqIsHung.
+
+Vu en chemin : le « SendMessageW Error » de `user32` à l'étape 24 vient du Bloc-notes lui-même : il lit ses réglages
+et envoie WM_SETFONT à son contrôle Edit avant de l'avoir créé (`hEdit` nul) ; Mino rend
+ERROR_INVALID_WINDOW_HANDLE, comme ReactOS.
+
+Le Bloc-notes, avec la boîte « Goto line » ouverte puis fermée, montre ensuite : NtUserIsClipboardFormatAvailable
+(son WM_INITMENUPOPUP, pour Coller), NtUserGetAncestor, NtGdiGetOutlineTextMetricsInternalW, NtGdiGetFontData,
+NtGdiGetGlyphIndicesW, NtGdiGetCharABCWidthsW (la police de la boîte, son contrôle Edit), WinPosDoOwnedPopups,
+NtUserCallTwoParam (0x60), NtUserSetActiveWindow et NtUserSetThreadState (la fin de la boîte).
+
+Le banc d'essai : `tests/native/notepad1.c`, scénario `notepad` : RegisterWindowMessage (un message par nom, sans
+casse) ; GetWindowThreadProcessId de la fenêtre du Bloc-notes (le processus et le thread que CreateProcessW a
+rendus) ; Ctrl+G tapé par QEMU (« ^G » : WM_CHAR 7 par TranslateMessage, puis TranslateAccelerator) ouvre « Goto
+line », Échap la ferme, et le contrôle Edit est repeint là où elle était.
+
+Tests : hôte (`accel` : touches virtuelles et modificateurs, caractères et Alt, FVIRT_TBL_END et l'ANSI, les
+messages du menu, ce qui empêche WM_COMMAND) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
+l'accélérateur (mutation) ; `cmd`, `desktop-launch`, `console` (qui appelaient NtUserQueryWindow) sur AMD et Intel.

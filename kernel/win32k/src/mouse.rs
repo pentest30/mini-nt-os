@@ -494,6 +494,14 @@ fn activate_on_click(thread: &ThreadInfo, window: &Arc<Window>, hit: u32, click:
     }
 }
 
+/// IntGetCaptureWindow : la fenêtre qui a la souris (la capture), 0 sans.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn capture_window() -> u32 {
+    *CAPTURE.lock()
+}
+
 /// IntReleaseCapture de co_UserFreeWindow : la fenêtre `hwnd`, détruite,
 /// n'a plus la capture, sans message.
 ///

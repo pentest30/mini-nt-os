@@ -29,6 +29,7 @@
 //! Les threads de l'ancien chargeur gardent leur dispatcher (`syscall.rs`),
 //! qui a ses propres numéros, jusqu'à sa suppression.
 
+mod accel;
 pub mod apc;
 mod atom;
 mod callback;
@@ -280,10 +281,13 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCloseDesktop, Handler::Status(desktop::nt_user_close_desktop)),
     (services::NtUserCloseWindowStation, Handler::Status(winsta::nt_user_close_window_station)),
     (services::NtUserConsoleControl, Handler::Status(console::nt_user_console_control)),
+    (services::NtUserCopyAcceleratorTable, Handler::Status(accel::nt_user_copy_accelerator_table)),
+    (services::NtUserCreateAcceleratorTable, Handler::Status(accel::nt_user_create_accelerator_table)),
     (services::NtUserCreateDesktop, Handler::Status(desktop::nt_user_create_desktop)),
     (services::NtUserCreateWindowEx, Handler::Status(window::nt_user_create_window_ex)),
     (services::NtUserCreateWindowStation, Handler::Status(winsta::nt_user_create_window_station)),
     (services::NtUserDefSetText, Handler::Status(window::nt_user_def_set_text)),
+    (services::NtUserDestroyAcceleratorTable, Handler::Status(accel::nt_user_destroy_accelerator_table)),
     (services::NtUserDestroyCursor, Handler::Status(cursor::nt_user_destroy_cursor)),
     (services::NtUserDestroyMenu, Handler::Status(menu::nt_user_destroy_menu)),
     (services::NtUserCheckMenuItem, Handler::Status(menu::nt_user_check_menu_item)),
@@ -357,7 +361,9 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserPostThreadMessage, Handler::Status(message::nt_user_post_thread_message)),
     (services::NtUserProcessConnect, Handler::Status(user::nt_user_process_connect)),
     (services::NtUserRedrawWindow, Handler::Status(window::nt_user_redraw_window)),
+    (services::NtUserQueryWindow, Handler::Status(window::nt_user_query_window)),
     (services::NtUserRegisterClassExWOW, Handler::Status(class::nt_user_register_class_ex_wow)),
+    (services::NtUserRegisterWindowMessage, Handler::Status(user::nt_user_register_window_message)),
     (services::NtUserResolveDesktop, Handler::Status(console::nt_user_resolve_desktop)),
     (services::NtUserRemoveMenu, Handler::Status(menu::nt_user_remove_menu)),
     (services::NtUserSetCapture, Handler::Status(mouse::nt_user_set_capture)),
@@ -384,6 +390,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
     (services::NtUserSystemParametersInfo, Handler::Status(user::nt_user_system_parameters_info)),
     (services::NtUserToUnicodeEx, Handler::Status(input::nt_user_to_unicode_ex)),
+    (services::NtUserTranslateAccelerator, Handler::Status(accel::nt_user_translate_accelerator)),
     (services::NtUserTranslateMessage, Handler::Status(input::nt_user_translate_message)),
     (services::NtUserValidateRect, Handler::Status(window::nt_user_validate_rect)),
     (services::NtUserValidateTimerCallback, Handler::Status(timer::nt_user_validate_timer_callback)),
