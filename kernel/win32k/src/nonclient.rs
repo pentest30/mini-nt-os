@@ -326,6 +326,13 @@ pub fn frame_ops(
             };
             ops.push(Op::Fill(Rect::new(caption.left, caption.bottom, caption.right, caption.bottom + 1), c(index)));
         }
+    } else if let Some(bar) = menu_bar(current) {
+        // Sans titre (une fenêtre WS_POPUP qui a un menu), la barre prend le
+        // haut de la place, que nc_calc_size lui a faite.
+        if !crate::menubar::bar_ops(&bar, c, layout, &mut ops) {
+            unpainted.text = true;
+        }
+        current.top = bar.rect.bottom;
     }
     if style & WS_MINIMIZE == 0 {
         if ex_style & WS_EX_CLIENTEDGE != 0 {
@@ -463,6 +470,40 @@ mod tests {
         assert_eq!(at(10, 10), 0, "the client area is not the frame's");
         let (_, alone) = render(style, 0, (100, 80), false);
         assert!(alone.scroll_bars, "without their state");
+    }
+
+    #[test]
+    fn a_popup_without_a_caption_paints_its_menu_bar() {
+        // WS_POPUP | WS_BORDER with a menu: defwnd::nc_calc_size gives the bar
+        // the top of the window, under the border; the frame paints it there.
+        let bar = |inside: Rect| {
+            Some(crate::menubar::Bar {
+                rect: Rect::new(inside.left, inside.top, inside.right, inside.top + 19),
+                items: Vec::new(),
+                char_width: 0,
+            })
+        };
+        let (ops, _) = frame_ops(
+            WS_POPUP | WS_BORDER,
+            0,
+            (100, 80),
+            &[],
+            &bar,
+            false,
+            true,
+            &metric,
+            &coded,
+            &no_fonts,
+            None,
+            (&[], false),
+        );
+        let mut pixels = alloc::vec![0u32; 100 * 80];
+        let mut surface = Bitmap::new(&mut pixels, 100, 80, 100, PixelLayout::Rgbx).unwrap();
+        paint(&mut surface, &ops, (0, 0), &Region::from_rect(Rect::new(0, 0, 100, 80)));
+        let at = |x: usize, y: usize| pixels[y * 100 + x];
+        assert_eq!(at(50, 5), coded(color::MENU).0, "the bar, under the border");
+        assert_eq!(at(50, 19), coded(color::BTNFACE).0, "its last line");
+        assert_eq!(at(50, 30), 0, "the client area is not the frame's");
     }
 
     #[test]
