@@ -339,6 +339,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 25 : RegisterWindowMessage (atomes de USER), NtUserQueryWindow (`win32k::window::query`), les
   accélérateurs (`win32k::accel`, `sys::accel` : Create, Copy, Destroy, TranslateAccelerator) : Ctrl+G ouvre « Goto
   line » du Bloc-notes.
+  M6, étape 26 (le texte d'Uniscribe) : GetFontData, GetGlyphIndicesW, GetCharABCWidths(I) (`glyph::Font::abc`,
+  `win32k::font`), ExtTextOut ETO_GLYPH_INDEX : le texte tapé dans le Bloc-notes s'affiche à sa place.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

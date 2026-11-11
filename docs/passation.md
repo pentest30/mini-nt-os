@@ -15,11 +15,13 @@
   `sys::accel` : Create, Copy, Destroy, TranslateAccelerator ; l'item cherché par identifiant comme Wine et la
   documentation, pas par position comme ReactOS) ; Ctrl+G tapé par QEMU ouvre « Goto line », Échap la ferme. Le
   « SendMessageW Error » venait du Bloc-notes (WM_SETFONT à son Edit pas encore créé) : rien à corriger. Tests : hôte
-  (`accel`) ; `notepad` (mutation : sans WM_COMMAND), `cmd`, `desktop-launch`, `console` sur AMD et Intel. **Suite** :
-  NtUserSetActiveWindow et NtUserSetThreadState (la fin d'une boîte), NtUserGetAncestor,
-  NtUserIsClipboardFormatAvailable, les métriques de police (GetOutlineTextMetrics, GetFontData, GetGlyphIndices,
-  GetCharABCWidths), puis taper du texte (touches de QEMU), l'enregistrer (la boîte Enregistrer sous de `comdlg32`) et
-  le rouvrir.
+  (`accel`) ; `notepad` (mutation : sans WM_COMMAND), `cmd`, `desktop-launch`, `console` sur AMD et Intel. Puis
+  (étape 26) : le texte tapé dans le contrôle Edit passe par Uniscribe (`usp10`) : GetFontData (`glyph::Font::table`,
+  `font::font_data`), GetGlyphIndicesW, GetCharABCWidths(I) (`glyph::Font::abc`), ExtTextOut ETO_GLYPH_INDEX
+  (`font::glyph_run`) ; sans eux, les caractères d'une ligne se superposaient. Le scénario `notepad` tape deux lignes
+  et vérifie leurs pixels et « Line 2, column 7 » dans la barre d'état. **Suite** : NtUserSetActiveWindow et
+  NtUserSetThreadState (la fin d'une boîte), NtUserGetAncestor, NtUserIsClipboardFormatAvailable,
+  GetOutlineTextMetricsW, puis enregistrer (Ctrl+S : la boîte Enregistrer sous de `comdlg32`) et rouvrir le fichier.
 
 - **GetObject, et la position courante de LineTo** (`claude/new-session-696xfc`, demandé pour le texte des boutons
   du gestionnaire des tâches) : NtGdiExtGetObjectW (`win32k::gdi::object`, GreGetObject) : une police rend son

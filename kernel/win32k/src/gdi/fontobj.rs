@@ -146,6 +146,16 @@ pub fn text_run(logfont: &LogFontW32, text: &[u16]) -> Option<TextRun> {
     font::text_run(face, height, text, None, Quality::Antialiased)
 }
 
+/// Les glyphes `glyphs` (ETO_GLYPH_INDEX) dans la police `logfont` ; `None`
+/// sans la police installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn glyph_run(logfont: &LogFontW32, glyphs: &[u16]) -> Option<TextRun> {
+    let (face, height) = realize(logfont)?;
+    font::glyph_run(face, height, glyphs, Quality::Antialiased)
+}
+
 /// GetTextExtentPoint32 : la largeur de `text` (la somme des avances) et la
 /// hauteur de la police (tmHeight) ; `None` sans la police installée.
 ///

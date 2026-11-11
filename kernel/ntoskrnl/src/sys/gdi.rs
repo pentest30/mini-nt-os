@@ -294,6 +294,131 @@ pub(super) fn nt_gdi_get_text_extent(arguments: &[u32]) -> NtStatus {
 /// GTEF_INDICES : des index de glyphes à la place des caractères.
 const GTEF_INDICES: u32 = 1;
 
+/// GDI_ERROR : ce que rendent GetFontData et GetGlyphIndicesW en échec.
+const GDI_ERROR: u32 = 0xFFFF_FFFF;
+/// MAX_TEXT_BUFFER de ReactOS : le plus d'octets qu'un service de texte copie.
+const MAX_TEXT_BUFFER: usize = 0x0271_0000;
+
+/// La police installée du DC `hdc` et sa hauteur de LOGFONT ; `Err` avec ce
+/// que le service rend : `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au
+/// processus ou sans police installée.
+fn dc_face(hdc: u32, failure: u32) -> Result<(win32k::font::Face, i32), NtStatus> {
+    let Some((_, _, logfont)) = dc_font(hdc) else { return Err(fail(ERROR_INVALID_HANDLE, failure)) };
+    win32k::gdi::fontobj::realize(&logfont).ok_or_else(|| fail(ERROR_INVALID_HANDLE, failure))
+}
+
+/// NtGdiGetFontData(hdc, Table, Offset, Buffer, Size) : DWORD (ftGdiGetFontData)
+/// ; la table `Table` (MS_MAKE_TAG ; 0 : le fichier entier) de la police du
+/// DC. Sans `Buffer` ou avec `Size` nul, sa taille ; sinon ses octets depuis
+/// `Offset` (au plus sa taille) écrits en `Buffer`, et leur nombre.
+/// GDI_ERROR : un DC qui n'est pas au processus (`ERROR_INVALID_HANDLE`),
+/// une table absente, une place au-delà de la table, un tampon inaccessible.
+pub(super) fn nt_gdi_get_font_data(arguments: &[u32]) -> NtStatus {
+    let [hdc, table, offset, buffer, size] = arguments[..5] else { unreachable!("5 arguments") };
+    let (face, _) = match dc_face(hdc, GDI_ERROR) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    let Some((data, range)) = win32k::font::font_data(face, table) else { return NtStatus(GDI_ERROR) };
+    if buffer == 0 || size == 0 {
+        return NtStatus(range.len() as u32);
+    }
+    // As FT_Load_Sfnt_Table: at most the table's size, from `Offset`.
+    let length = (size as usize).min(range.len());
+    let Some(start) = range.start.checked_add(offset as usize) else { return NtStatus(GDI_ERROR) };
+    let Some(bytes) = start.checked_add(length).filter(|&end| end <= range.end).map(|end| &data[start..end]) else {
+        return NtStatus(GDI_ERROR);
+    };
+    match ke::usermem::copy_to_user(u64::from(buffer), bytes) {
+        Ok(()) => NtStatus(length as u32),
+        Err(_) => NtStatus(GDI_ERROR),
+    }
+}
+
+/// NtGdiGetGlyphIndicesW(hdc, pwc, cwc, pgi, iMode) : DWORD
+/// (GreGetGlyphIndicesW) ; le glyphe de chacun des `cwc` caractères de
+/// `pwc` dans la police du DC, écrits en `pgi`, et leur nombre ; un
+/// caractère absent a 0xFFFF avec GGI_MARK_NONEXISTING_GLYPHS (1), sinon le
+/// glyphe du caractère par défaut de la police. Sans rien (`pwc`, `pgi`,
+/// `cwc` et `iMode` nuls), le nombre de glyphes de la police. GDI_ERROR : un
+/// `cwc` négatif ou nul (hors ce cas), trop grand, un DC qui n'est pas au
+/// processus, une mémoire inaccessible.
+pub(super) fn nt_gdi_get_glyph_indices_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, text, count, out, mode] = arguments[..5] else { unreachable!("5 arguments") };
+    let count = count as i32;
+    if count < 0 {
+        return NtStatus(GDI_ERROR);
+    }
+    let (face, _) = match dc_face(hdc, GDI_ERROR) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    if count == 0 {
+        if text == 0 && out == 0 && mode == 0 {
+            return NtStatus(win32k::font::glyph_count(face).map_or(GDI_ERROR, u32::from));
+        }
+        return NtStatus(GDI_ERROR);
+    }
+    if count as usize > MAX_TEXT_BUFFER / 4 {
+        return NtStatus(GDI_ERROR);
+    }
+    let Ok(units) = read_text(text, count as u32) else { return NtStatus(GDI_ERROR) };
+    let missing = (mode & GGI_MARK_NONEXISTING_GLYPHS != 0).then_some(0xFFFF);
+    let Some(glyphs) = win32k::font::glyph_indices(face, &units, missing) else { return NtStatus(GDI_ERROR) };
+    let bytes: alloc::vec::Vec<u8> = glyphs.iter().flat_map(|glyph| glyph.to_le_bytes()).collect();
+    match ke::usermem::copy_to_user(u64::from(out), &bytes) {
+        Ok(()) => NtStatus(count as u32),
+        Err(_) => NtStatus(GDI_ERROR),
+    }
+}
+
+/// GGI_MARK_NONEXISTING_GLYPHS : GetGlyphIndices marque un caractère absent
+/// de 0xFFFF.
+const GGI_MARK_NONEXISTING_GLYPHS: u32 = 0x0001;
+/// GCABCW_INDICES : des indices de glyphes (sinon des caractères). Les
+/// largeurs sont des entiers (ABC) pour tout drapeau, GCABCW_NOFLOAT (1)
+/// comme celui-ci, et des ABCFLOAT sans drapeau, comme ReactOS.
+const GCABCW_INDICES: u32 = 0x0002;
+
+/// NtGdiGetCharABCWidthsW(hdc, FirstChar, Count, pwch, fl, Buffer) : BOOL
+/// (GreGetCharABCWidthsW) ; les largeurs A, B, C des `Count` codes (ceux de
+/// `pwch`, sinon `FirstChar` et les suivants) dans la police du DC, en
+/// `Buffer` : des ABC entiers pour `fl` non nul, des ABCFLOAT pour 0 (comme
+/// ReactOS) ; des indices de glyphes avec GCABCW_INDICES. FALSE sans
+/// `Buffer`, avec `pwch` et aucun code, pour trop de codes, un DC qui n'est
+/// pas au processus (`ERROR_INVALID_HANDLE`) ou une mémoire inaccessible.
+pub(super) fn nt_gdi_get_char_abc_widths_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, first, count, codes, flags, buffer] = arguments[..6] else { unreachable!("6 arguments") };
+    if buffer == 0 || (codes != 0 && count == 0) || count as usize > MAX_TEXT_BUFFER / 12 {
+        return NtStatus(0);
+    }
+    let codes: alloc::vec::Vec<u32> = if codes != 0 {
+        let Ok(units) = read_text(codes, count) else { return NtStatus(0) };
+        units.into_iter().map(u32::from).collect()
+    } else {
+        (0..count).map(|at| first.wrapping_add(at)).collect()
+    };
+    let (face, height) = match dc_face(hdc, 0) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    let indices = flags & GCABCW_INDICES != 0;
+    let Some(widths) = win32k::font::abc_widths(face, height, &codes, indices) else { return NtStatus(0) };
+    let integers = flags != 0;
+    let bytes: alloc::vec::Vec<u8> = widths
+        .iter()
+        .flat_map(|&(a, b, c)| {
+            let words = if integers {
+                [a as u32, b as u32, c as u32]
+            } else {
+                [(a as f32).to_bits(), (b as f32).to_bits(), (c as f32).to_bits()]
+            };
+            words.into_iter().flat_map(u32::to_le_bytes)
+        })
+        .collect();
+    NtStatus(u32::from(ke::usermem::copy_to_user(u64::from(buffer), &bytes).is_ok()))
+}
+
 /// NtGdiGetTextExtentExW(hdc, lpwsz, cwc, dxMax, pcCh, pdxOut, psize,
 /// flOpts) : BOOL ; écrit en `psize` l'étendue des `cwc` caractères dans la
 /// police du DC, en `pdxOut` (s'il est donné) l'étendue cumulée de chacun, en

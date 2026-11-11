@@ -1174,3 +1174,36 @@ line », Échap la ferme, et le contrôle Edit est repeint là où elle était.
 Tests : hôte (`accel` : touches virtuelles et modificateurs, caractères et Alt, FVIRT_TBL_END et l'ANSI, les
 messages du menu, ce qui empêche WM_COMMAND) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
 l'accélérateur (mutation) ; `cmd`, `desktop-launch`, `console` (qui appelaient NtUserQueryWindow) sur AMD et Intel.
+
+## Étape 26 : le texte d'Uniscribe (GetFontData, GetGlyphIndicesW, GetCharABCWidths, ETO_GLYPH_INDEX)
+
+Le contrôle Edit de `user32` (repris de Wine) place et dessine son texte par Uniscribe (`usp10` :
+ScriptStringAnalyse, ScriptShape, ScriptPlace, ScriptTextOut). Uniscribe lit la police du DC : GetTextMetricsW,
+GetOutlineTextMetricsW (facultatif), GetFontData de la table `head` (une police TrueType : les glyphes viennent de
+sa `cmap`), GetGlyphIndicesW, GetCharABCWidthsI (une police TMPF_TRUETYPE), puis dessine par ExtTextOutW avec
+ETO_GLYPH_INDEX. Sans ces services, il prenait la police pour une police bitmap : les codes des caractères passaient
+pour des glyphes, leurs avances valaient 0, et tout le texte d'une ligne se superposait.
+
+`freetype.c` et `font.c` de win32k (ftGdiGetFontData, GreGetGlyphIndicesW, NtGdiGetGlyphIndicesWInternal,
+GreGetCharABCWidthsW, NtGdiGetCharABCWidthsW, NtGdiGetFontData), ReactOS comme spécification ; `libs/glyph`
+(`Font::table`, `glyph_count`, `default_char`, `abc`), `win32k::font` (`font_data`, `glyph_indices`, `glyph_count`,
+`abc_widths`, `glyph_run`), `sys::gdi`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| GetFontData | la table demandée (MS_MAKE_TAG : son premier caractère dans l'octet bas), ou le fichier entier pour 0 : sa taille sans tampon, sinon ses octets depuis `Offset`, au plus sa taille ; GDI_ERROR sans la table ou au-delà d'elle |
+| GetGlyphIndicesW | le glyphe de chaque unité UTF-16 par la `cmap` (Unicode, sinon symboles) ; une moitié de paire de substitution est un caractère absent ; un caractère absent a 0xFFFF (GGI_MARK_NONEXISTING_GLYPHS) ou le glyphe du caractère par défaut (`OS/2` usDefaultChar dès la version 2, 0 avant) ; sans rien, le nombre de glyphes |
+| GetCharABCWidths(I) | A : du stylo au bord gauche du glyphe, arrondi vers le bas ; B : jusqu'au bord droit arrondi vers le haut ; C : ce que l'avance arrondie laisse ; tout en avance pour un glyphe sans contour ; des caractères ou des indices (GCABCW_INDICES) ; des entiers pour tout drapeau, des ABCFLOAT sans drapeau (comme ReactOS) |
+| ExtTextOut ETO_GLYPH_INDEX | le texte est fait d'indices de glyphes, rendus et placés comme les caractères |
+
+Ce qui manque : GetOutlineTextMetricsW (rend 0 : Uniscribe s'en passe), GetTextExtentExPointI (GTEF_INDICES), les
+collections TrueType (`ttcf`) dans GetFontData, le hinting des largeurs ABC (ReactOS les prend de FreeType, avec
+hinting ; Mino des contours, sans).
+
+Le banc d'essai : le scénario `notepad` tape « Hello, Mino! », Entrée, « Line 2 » dans le contrôle Edit du
+Bloc-notes : le texte est à sa place (la hampe du H, le « ! » douze caractères plus loin, le L de la seconde ligne),
+et la barre d'état dit « Line 2, column 7 ».
+
+Tests : hôte (`font` : glyphes absents marqués ou par défaut, A + B + C = l'avance, par caractère ou par glyphe,
+`head` et le fichier entier ; `gdi::text` : des indices dessinent ce que dessinent leurs caractères) ; `notepad` et
+`desktop-launch` (le gestionnaire des tâches passait par ces services) sur AMD et Intel.
