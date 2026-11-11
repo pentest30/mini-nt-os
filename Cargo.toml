@@ -28,6 +28,7 @@ members = [
     "tools/pe-inspect",
     "tools/syscall-gen",
     "tools/mkfat",
+    "tools/mkhive",
     "xtask",
 ]
 # Code mort de l'ancienne architecture (ADR-019), hors du workspace en attendant

@@ -49,7 +49,7 @@
 //!   a file attached as the master of the secondary IDE channel, which the
 //!   boots share; after the last one, `fsck.vfat -n` must find it clean
 //!   (skipped, with a warning, without dosfstools).
-//! - `disk = target`: attaches a new, blank 96 MiB secondary ATA disk. It is
+//! - `disk = target`: attaches a new, blank 128 MiB secondary ATA disk. It is
 //!   never copied from the ramdisk and is not checked as a FAT volume; setup
 //!   scenarios use it as a non-system installation candidate. With `disk =
 //!   installed` too, the installed image is the primary boot disk and the

@@ -72,7 +72,13 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["read1.c"], "READ1.EXE", Toolchain::MinGwConsole),
     (&["concmd1.c"], "CONCMD1.EXE", Toolchain::MinGwWin32),
     (&["pipe1.c"], "PIPE1.EXE", Toolchain::MinGwWin32),
+    (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
+
+/// The programs of the system, not of a test: on the boot disk in
+/// `WINDOWS/SYSTEM32`, where the hives name them. MINOINIT.EXE ends the
+/// installation at the first boot (`SYSTEM\Setup\CmdLine`, ADR-023).
+const SYSTEM_PROGRAMS: &[&str] = &["MINOINIT.EXE"];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
 /// every program, kernel32, user32 and gdi32 for the Win32 ones.
@@ -180,9 +186,20 @@ pub fn build(ws: &Workspace) -> Result<Option<Vec<String>>> {
                 run(link.arg(&msvc_library))?;
             }
         }
-        files.push(format!("{}:{name}", image.display()));
+        let place = if SYSTEM_PROGRAMS.contains(&name) { format!("WINDOWS/SYSTEM32/{name}") } else { name.to_string() };
+        files.push(format!("{}:{place}", image.display()));
     }
     Ok(Some(files))
+}
+
+/// Among `files` (from [`build`]), the system programs: what a disk keeps
+/// when no test program replaces winlogon.exe, which still needs them (the
+/// layered SYSTEM hive names MINOINIT.EXE).
+pub fn system_programs(files: Vec<String>) -> Vec<String> {
+    files
+        .into_iter()
+        .filter(|file| SYSTEM_PROGRAMS.iter().any(|name| file.ends_with(&format!(":WINDOWS/SYSTEM32/{name}"))))
+        .collect()
 }
 
 /// Runs `command`; its failure is an error.
@@ -193,4 +210,42 @@ fn run(command: &mut Command) -> Result<()> {
         return Err(format!("{program} failed ({status})"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_setup_command_of_the_hive_layer_is_a_system_program() {
+        let layer = mkhive::parse(mkhive::MINO_LAYER).unwrap();
+        let data = layer
+            .add
+            .iter()
+            .find_map(|entry| match &entry.action {
+                mkhive::Action::Set { name, data, .. }
+                    if entry.hive == mkhive::Hive::System && entry.path == "Setup" && name == "CmdLine" =>
+                {
+                    Some(data)
+                }
+                _ => None,
+            })
+            .expect("mino.inf sets SYSTEM\\Setup\\CmdLine");
+        let units: Vec<u16> =
+            data.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).take_while(|&u| u != 0).collect();
+        let command = String::from_utf16(&units).unwrap();
+        let program = command.rsplit('\\').next().unwrap().to_ascii_uppercase();
+        assert!(SYSTEM_PROGRAMS.contains(&program.as_str()), "{command} is not a system program");
+        assert!(PROGRAMS.iter().any(|&(_, name, _)| name == program), "{program} is not built");
+    }
+
+    #[test]
+    fn only_the_system_programs_stay() {
+        let files = vec![
+            "/n/GUI1.EXE:GUI1.EXE".to_string(),
+            "C:/n/MINOINIT.EXE:WINDOWS/SYSTEM32/MINOINIT.EXE".to_string(),
+            "/n/BOOT1.EXE:BOOT1.EXE".to_string(),
+        ];
+        assert_eq!(system_programs(files), ["C:/n/MINOINIT.EXE:WINDOWS/SYSTEM32/MINOINIT.EXE"]);
+    }
 }

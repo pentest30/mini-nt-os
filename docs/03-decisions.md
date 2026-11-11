@@ -33,6 +33,7 @@ Pour changer une décision acceptée, on écrit une nouvelle ADR qui la remplace
 | 020 | DEP : règle OptIn d'XP SP2, exécution permise par défaut | Acceptée |
 | 021 | win32k : ce que USER partage avec ses clients, à des adresses du serveur sur 32 bits | **Proposée** (spike S3) |
 | 022 | FAT32 : crate partagée `fatfs` ; formatage et partitions servis par le noyau | **Proposée** (chantier d'installation) |
+| 023 | Premier démarrage en mode installation : couche Mino des ruches (`mino.inf`) et fin d'installation par un programme Mino | **Proposée** (scénario `logon`) |
 
 ---
 
@@ -363,3 +364,60 @@ Sous `OptIn`, un programme qui ne l'a pas demandé tourne sans DEP. Or beaucoup 
 - ❌ Un IOCTL de formatage est un écart avec XP, où `fmifs` formate côté utilisateur ; le repli (un `fmifs` en mode utilisateur au-dessus de la même crate) reste ouvert, la crate s'y prêtant.
 - ❌ Un code d'IOCTL hors des numéros ReactOS : les codes d'IOCTL ne sont pas des appels système — la règle des numéros générés (06 §2) ne s'y applique pas — mais la plage privée reste à documenter là où elle sert.
 - **Statut proposé** : la partie crate est acquise par construction (le repli `fmifs` l'emploierait aussi) ; c'est le service par le noyau que le mainteneur tranche.
+
+---
+
+## ADR-023 — Premier démarrage en mode installation : couche Mino des ruches (`mino.inf`) et fin d'installation par un programme Mino
+
+**Contexte.** L'ADR-012 (acceptée) veut des ruches générées par `tools/mkhive` depuis les `.inf` de ReactOS, plus une
+couche Mino (version XP, pilotes intégrés, ouverture de session automatique). En attendant `mkhive`, le disque porte
+les ruches de la version épinglée, celles de son LiveCD : `Setup\SetupType` = 1 et `CmdLine` = `setup -mini`.
+`winlogon` lance donc l'installation au lieu de l'ouverture de session (`compat/m5-csrss.md`, étape 26), ce qui
+arrête le premier critère du M6 (`winlogon`, `userinit`, `explorer`). Mettre `SetupType` à 0 ne suffit pas : la ruche
+SAM épinglée est vide, et `samsrv` ne crée les comptes (`Administrator`, `Guest`) qu'en mode installation
+(SampIsSetupRunning lit le même `SetupType`) ; l'ouverture de session demande aussi les profils (`ProfileList`, le
+profil `Default User` et son `NTUSER.DAT`), que la seconde étape de l'installation de ReactOS (`syssetup`,
+InstallReactOS) crée. Le mainteneur a choisi le chemin le 2026-11-10 : le même enchaînement que ReactOS, en deux
+démarrages.
+
+**Décision.**
+- La couche Mino est un fichier `.inf` (`tools/mkhive/mino.inf`), dans la syntaxe des couches de ReactOS
+  (`boot/bootdata/livecd.inf` : sections `[AddReg]` et `[DelReg]`), appliqué par `tools/mkhive` aux ruches de base
+  quand `xtask` construit le disque. Aujourd'hui la base est celle des ruches épinglées ; quand `mkhive` les générera
+  des `.inf` de ReactOS (ADR-012), la même couche s'y appliquera.
+- La couche met le système en **mode installation au premier démarrage** : `SetupType` = 1, `CmdLine` = le programme
+  de fin d'installation de Mino (`%SystemRoot%\system32\minoinit.exe`). Elle porte aussi ce qu'un système installé
+  a de fixe : le nom de la machine (`MINO`), l'ouverture de session automatique d'`Administrator` sans mot de passe
+  (`AutoAdminLogon`, `DefaultUserName`, `DefaultDomainName`, `DefaultPassword`), le répertoire des profils et les
+  dossiers du shell d'un système installé (ceux de `hivesft.inf` et `hivedef.inf`, que le LiveCD avait changés).
+- Au premier démarrage, `samsrv` remplit la SAM lui-même ; `winlogon` lance `minoinit.exe` (un programme Mino,
+  sous-système WINDOWS, `tests/native/minoinit.c`), qui fait la part d'InstallReactOS dont dépend l'ouverture de
+  session : les profils (InitializeProfiles de `userenv`), le `NTUSER.DAT` du profil `Default User` (une copie de la
+  ruche `DEFAULT`), puis `SetupType` = 0, `SystemSetupInProgress` = 0, `CmdLine` vide, les ruches réécrites sur le
+  disque (NtFlushKey), et le redémarrage (NtShutdownSystem).
+- Au second démarrage, `winlogon` va au logon : `msgina` ouvre la session d'`Administrator`.
+
+**Conséquences.**
+- ✅ L'enchaînement est celui de ReactOS : `samsrv`, `lsasrv` et `userenv` créent eux-mêmes leurs données, dans leurs
+  formats ; Mino n'écrit pas le format interne de la SAM.
+- ✅ La couche est un `.inf` lisible, qui survivra au passage à `mkhive` ; l'installateur de Mino (ADR-022) y trouve sa
+  suite : le système qu'il copie finit son installation à son premier démarrage.
+- ❌ Deux démarrages avant le bureau, et des écritures du registre qui persistent entre eux : le premier démarrage
+  dépend de la SAM et des profils en mode utilisateur (registre, création de répertoires, copie de fichiers,
+  NtFlushKey). Le scénario de bout en bout démarre deux fois sur le disque système (`disk = system`).
+- ❌ Un compte `Administrator` sans mot de passe ouvert automatiquement : acceptable pour un système de développement ;
+  le choix d'un mot de passe viendra avec une vraie fin d'installation.
+- ⚠️ `minoinit.exe` est une partie réduite de `syssetup` ; ce qu'il ne fait pas (enregistrement des DLL, raccourcis,
+  thèmes, assistant) reste à faire, par lui ou par le vrai `syssetup` quand Mino pourra l'exécuter.
+
+**Alternatives écartées.**
+- *Tout générer à la construction de l'image* (la SAM, ses comptes et ses alias, et les profils, écrits par `xtask`) :
+  un seul démarrage, déterministe, mais il faudrait reproduire sur l'hôte le format interne de `samsrv`, et suivre la
+  version épinglée.
+- *La vraie seconde étape de ReactOS* (`setup -newsetup`, `syssetup`) : la plus fidèle, mais elle demande le
+  traitement des `.inf` par `setupapi`, l'enregistrement des DLL, COM et l'assistant ; hors de portée aujourd'hui.
+- *Changer `SetupType` dans le noyau au démarrage* : un contournement silencieux, et la SAM resterait vide.
+
+**À valider.** Le scénario `logon` (`disk = system`, deux démarrages) : au premier, `samsrv` crée `Administrator` et
+`minoinit.exe` va au bout ; au second, `winlogon` va au logon au lieu de l'installation, et `msgina` tente l'ouverture
+de session automatique d'`Administrator`. Jusqu'où elle va est suivi dans `docs/compat/m5-csrss.md`.

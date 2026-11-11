@@ -429,3 +429,16 @@ Sous VirtualBox, voir [`vbox.md`](vbox.md) : l'installateur était tué en
 pleine copie (la sonde de `test-smss`), et le PIO lent ; les deux sont
 corrigés (copie en 17 s, disque installé démarré jusqu'à l'installateur en
 21 s).
+
+## Le plan agrandi (2026-11-10)
+
+L'ESP du plan guidé passe de 48 à 56 Mio (`io::install::ESP_SECTORS`), et la cible de test de 96 à 128 Mio
+(`disk = target`, `xtask::partition::verify_setup_target`) : l'ESP installée porte le chargeur, le noyau et
+`fat.img`, l'image entière du disque de démarrage, qui a passé 47,9 Mo quand l'étape 27 de
+[`m5-csrss.md`](m5-csrss.md) y a mis `secur32.dll` et ses imports (`netapi32`, `iphlpapi`, `dhcpcsvc`), la ruche
+DEFAULT et `minoinit.exe` : 49,9 Mo de fichiers ne tenaient plus dans 48 Mio (la marge était sous le demi-mégaoctet),
+la copie échouait (`STATUS_IO_DEVICE_ERROR`, un disque plein que `PrepareError::Io` ne distingue pas). Sur 128 Mio :
+ESP 2048..116735 (114688 secteurs), système 116736..262110 (145375 secteurs, 70 Mio). Une cible de 96 Mio reste
+acceptée par le plan (le système y garde 39 Mio, au-dessus du minimum de FAT32), mais l'arbre (43 Mo) ne s'y copie
+plus : le plan ne vérifie pas encore la place que demande la copie. Sous VirtualBox, la cible vierge
+(`target96-*.vhd`) est à refaire en 128 Mio.

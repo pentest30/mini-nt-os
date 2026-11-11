@@ -11,3 +11,5 @@ publish = false
 pe = { path = "../libs/pe" }
 gpt = { path = "../libs/gpt" }
 fatfs = { path = "../libs/fatfs" }
+# The Mino layer of the hives (ADR-023).
+mkhive = { path = "../tools/mkhive" }

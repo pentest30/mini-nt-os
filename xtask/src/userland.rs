@@ -76,6 +76,9 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "config/software",
         "config/security",
         "config/sam",
+        // The default user's hive, which minoinit.exe copies into the profile
+        // of `Default User` (ADR-023).
+        "config/default",
         "csrss.exe",
         "csrsrv.dll",
         "basesrv.dll",
@@ -88,6 +91,9 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         // package (Lsa\Authentication Packages), winlogon's GINA.
         "msv1_0.dll",
         "msgina.dll",
+        // The LSA client (LsaLogonUser), loaded by name by msgina and
+        // winlogon for the logon (ADR-023).
+        "secur32.dll",
         "kbdus.dll",
         "cmd.exe",
         "taskmgr.exe",
@@ -120,6 +126,31 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         .iter()
         .map(|font| fonts_file(ws, font).map(|path| (path, format!("{FONTS_DIR}/{}", font.to_ascii_uppercase()))));
     system32.chain(fonts).collect()
+}
+
+/// The hives of the boot disk under the Mino layer (ADR-023,
+/// `tools/mkhive/mino.inf`): each hive the layer changes is read from
+/// `files`, changed by `mkhive`, written to `target/xtask/hives/`, and the
+/// boot disk takes that copy in place of the pinned hive.
+pub fn layer_hives(ws: &Workspace, files: &mut [(PathBuf, String)]) -> Result<()> {
+    let layer = mkhive::parse(mkhive::MINO_LAYER).map_err(|e| format!("tools/mkhive/mino.inf: {e}"))?;
+    let out = ws.target.join("xtask").join("hives");
+    fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    for hive in layer.hives() {
+        let upper = hive.file_name().to_ascii_uppercase();
+        let name = format!("{SYSTEM32}/CONFIG/{upper}");
+        let entry = files
+            .iter_mut()
+            .find(|(_, fat)| *fat == name)
+            .ok_or_else(|| format!("{name}: not on the boot disk, for the Mino layer"))?;
+        let base = fs::read(&entry.0).map_err(|e| format!("{}: {e}", entry.0.display()))?;
+        let header = format!("\\SystemRoot\\System32\\Config\\{upper}");
+        let layered = mkhive::layered(hive, &base, &layer, &header)?;
+        let path = out.join(&upper);
+        fs::write(&path, layered).map_err(|e| format!("{}: {e}", path.display()))?;
+        entry.0 = path;
+    }
+    Ok(())
 }
 
 /// The fonts directory on the boot disk (`\SystemRoot\Fonts`).

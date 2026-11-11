@@ -180,6 +180,9 @@ const ATTR_LONG_NAME: u8 = 0x0F;
 const LONG_NAME_LAST: u8 = 0x40;
 /// The UTF-16 units of a long name each of its entries holds.
 const LONG_NAME_UNITS: usize = 13;
+/// The longest name VFAT holds, in UTF-16 units: 20 entries, whose order
+/// stays under [`LONG_NAME_LAST`].
+pub(crate) const MAX_LONG_NAME_UNITS: usize = 255;
 /// Where those units are in the entry: 5, then 6, then 2.
 const LONG_NAME_SPANS: [(usize, usize); 3] = [(1, 5), (14, 6), (28, 2)];
 
@@ -1196,7 +1199,9 @@ impl<D: BlockDevice> FatVolume<D> {
     /// carrying the checksum of the alias — then that alias's 8.3 entry,
     /// unique in the directory. A name 8.3 already holds gets a single
     /// entry. Every entry lands in the first free slot; a full directory
-    /// grows by a zeroed cluster.
+    /// grows by a zeroed cluster. `PathFormat` for a name longer than VFAT
+    /// holds, before anything is written; if an entry cannot be written, the
+    /// long-name entries already written are deleted again.
     pub fn add_entry_long(
         &self,
         dir_cluster: u32,
@@ -1204,8 +1209,24 @@ impl<D: BlockDevice> FatVolume<D> {
         attributes: u8,
         hint: u32,
     ) -> Result<EntryRef, FatError> {
+        self.add_named_entry(dir_cluster, long, attributes, 0, hint)
+    }
+
+    /// [`add_entry_long`](Self::add_entry_long), the 8.3 entry naming
+    /// `first_cluster` (a subdirectory's own cluster).
+    fn add_named_entry(
+        &self,
+        dir_cluster: u32,
+        long: &str,
+        attributes: u8,
+        first_cluster: u32,
+        hint: u32,
+    ) -> Result<EntryRef, FatError> {
         if let Ok(short) = short_name(long) {
-            return self.add_entry(dir_cluster, &make_entry(&short, attributes, 0, 0), hint);
+            return self.add_entry(dir_cluster, &make_entry(&short, attributes, first_cluster, 0), hint);
+        }
+        if long.encode_utf16().count() > MAX_LONG_NAME_UNITS {
+            return Err(FatError::PathFormat);
         }
         // The alias must not collide with the 8.3 names the directory holds,
         // the aliases of its long names included.
@@ -1215,16 +1236,37 @@ impl<D: BlockDevice> FatVolume<D> {
             .filter_map(|entry| short_name(entry.short_name.as_deref().unwrap_or(&entry.name)).ok())
             .collect();
         let alias = alias_11(long, |candidate| taken.contains(candidate));
+        let mut written = Vec::new();
         for part in long_name_entries(long, &alias) {
-            self.add_entry(dir_cluster, &part, hint)?;
+            match self.add_entry(dir_cluster, &part, hint) {
+                Ok(at) => written.push(at),
+                Err(error) => return Err(self.delete_entries(&written, error)),
+            }
         }
-        self.add_entry(dir_cluster, &make_entry(&alias, attributes, 0, 0), hint)
+        self.add_entry(dir_cluster, &make_entry(&alias, attributes, first_cluster, 0), hint)
+            .map_err(|error| self.delete_entries(&written, error))
     }
 
-    /// Creates the subdirectory `name` (8.3, padded) of the directory at
-    /// `parent` (the root's `..` names cluster 0): a zeroed cluster with its
-    /// `.` and `..`, and its entry. Rends its cluster and its entry.
-    pub fn create_directory(&self, parent: u32, name: &[u8; 11], hint: u32) -> Result<(u32, EntryRef), FatError> {
+    /// Marks the entries at `written` deleted (0xE5): the long-name entries
+    /// of a name whose 8.3 entry could not follow them, which would stay
+    /// orphans. Returns `error`, the failure that stopped the name.
+    fn delete_entries(&self, written: &[EntryRef], error: FatError) -> FatError {
+        for &at in written {
+            if let Ok(mut entry) = self.read_entry(at) {
+                entry[0] = 0xE5;
+                let _ = self.write_entry(at, &entry);
+            }
+        }
+        error
+    }
+
+    /// Creates the subdirectory `name` of the directory at `parent` (the
+    /// root's `..` names cluster 0): a zeroed cluster with its `.` and `..`,
+    /// and its entry in `parent` — a single 8.3 entry for a name 8.3 holds,
+    /// else its long-name (VFAT) entries and its alias's
+    /// ([`add_entry_long`](Self::add_entry_long)). Returns its cluster and
+    /// its 8.3 entry.
+    pub fn create_directory(&self, parent: u32, name: &str, hint: u32) -> Result<(u32, EntryRef), FatError> {
         let cluster = self.allocate_cluster(hint)?;
         let dot_dot = if parent == self.bpb.root_cluster { 0 } else { parent };
         let made = self
@@ -1235,7 +1277,7 @@ impl<D: BlockDevice> FatVolume<D> {
                     &make_entry(b"..         ", ATTR_DIRECTORY, dot_dot, 0),
                 )
             })
-            .and_then(|()| self.add_entry(parent, &make_entry(name, ATTR_DIRECTORY, cluster, 0), cluster + 1));
+            .and_then(|()| self.add_named_entry(parent, name, ATTR_DIRECTORY, cluster, cluster + 1));
         match made {
             Ok(at) => Ok((cluster, at)),
             Err(error) => {

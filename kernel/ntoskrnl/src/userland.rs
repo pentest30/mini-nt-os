@@ -25,6 +25,9 @@ const MACHINE_HIVES: [(&str, &str); 3] = [
     ("SECURITY", "\\SystemRoot\\System32\\config\\SECURITY"),
     ("SAM", "\\SystemRoot\\System32\\config\\SAM"),
 ];
+/// La ruche de l'utilisateur par défaut : sous `\REGISTRY\USER`, son nom, son
+/// fichier.
+const USER_DEFAULT_HIVE: (&str, &str, &str) = ("USER", ".DEFAULT", "\\SystemRoot\\System32\\config\\DEFAULT");
 
 /// Installe `NTDLL.DLL` comme DLL système, si le disque RAM de démarrage la
 /// tient : les processus créés ensuite la projettent, et leurs threads
@@ -150,17 +153,20 @@ fn list_boot_directory(path: &str) -> Option<alloc::vec::Vec<alloc::string::Stri
 }
 
 /// Monte les ruches SOFTWARE, SECURITY et SAM du disque RAM de démarrage
-/// sous `\REGISTRY\MACHINE`, si le disque les tient : comme SYSTEM, celles de
-/// la version épinglée de ReactOS (SOFTWARE : les substituts des polices, les
-/// réglages de la console… ; SECURITY : la base de LSA, que `lsasrv` ouvre ;
-/// SAM : celle des comptes, de `samsrv`), réécrites dans leur fichier par
-/// NtFlushKey.
+/// sous `\REGISTRY\MACHINE`, et DEFAULT en `\REGISTRY\USER\.DEFAULT`, si le
+/// disque les tient : comme SYSTEM, celles de la version épinglée de ReactOS
+/// sous la couche Mino (ADR-023 ; SOFTWARE : les substituts des polices, les
+/// réglages de la console, l'ouverture de session… ; SECURITY : la base de
+/// LSA, que `lsasrv` ouvre ; SAM : celle des comptes, de `samsrv` ; DEFAULT :
+/// les réglages de l'utilisateur par défaut, d'où vient le `NTUSER.DAT` du
+/// profil `Default User`), réécrites dans leur fichier par NtFlushKey.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, au démarrage.
 pub fn mount_machine_hives() {
     let registry = cm::registry().expect("Cm not initialised");
-    for (name, path) in MACHINE_HIVES {
+    let hives = MACHINE_HIVES.iter().map(|&(name, path)| ("MACHINE", name, path)).chain([USER_DEFAULT_HIVE]);
+    for (parent, name, path) in hives {
         let Some(hive) = read_boot_file(path) else {
             log::info!("[boot] no {name} hive on the boot disk (cargo xtask fetch-userland)");
             continue;
@@ -168,9 +174,9 @@ pub fn mount_machine_hives() {
         let size = hive.len();
         let mounted = cm::HiveFile::new(Arc::from(hive))
             .map(|file| file.with_file(path))
-            .and_then(|file| cm::mount(&registry, "MACHINE", name, file));
+            .and_then(|file| cm::mount(&registry, parent, name, file));
         match mounted {
-            Ok(()) => log::info!("[boot] {name} hive mounted at \\REGISTRY\\MACHINE\\{name}: {size} bytes"),
+            Ok(()) => log::info!("[boot] {name} hive mounted at \\REGISTRY\\{parent}\\{name}: {size} bytes"),
             Err(status) => log::error!("[boot] {name} hive not mounted: {status}"),
         }
     }
@@ -267,7 +273,11 @@ pub fn run_smss_probe() {
         dll_path: "C:\\WINDOWS\\system32",
         window_title: "",
         desktop_info: "",
-        environment: &["Path=C:\\WINDOWS\\system32", "SystemRoot=C:\\WINDOWS"],
+        // As ExpLoadInitialProcess gives it to smss: the DLL path, the
+        // system drive (the root's first two characters), the root. smss
+        // hands them down to every process; without SystemDrive,
+        // %SystemDrive% stayed unexpanded (userenv's profiles, ADR-023).
+        environment: &["Path=C:\\WINDOWS\\system32", "SystemDrive=C:", "SystemRoot=C:\\WINDOWS"],
     };
     run_native("m4", "SMSS.EXE", image, &params, None);
     log_known_dlls();

@@ -892,3 +892,53 @@ Tests : hôte (`win32k::sent` : la copie va au destinataire, revient si la proc�
 `send-messages` (`tests/native/send1.c` : le thread de travail fait SetWindowPos de W, la fenêtre du thread principal ;
 W reçoit WM_WINDOWPOSCHANGING dans son thread, y élargit la fenêtre, et la largeur écrite est prise ; sans le retour du
 tampon, W garde sa largeur : mutation détectée) ; le scénario `smss` interdit le refus d'avant.
+
+## Étape 27 : la couche Mino des ruches ; le premier démarrage en mode installation, puis le logon
+
+La décision est l'ADR-023 (proposée) : la couche Mino de l'ADR-012 est `tools/mkhive/mino.inf`, dans la syntaxe des
+couches de ReactOS (`boot/bootdata/livecd.inf`), qu'applique `tools/mkhive` aux ruches épinglées quand `xtask` construit
+le disque. Elle ramène les ruches du LiveCD à celles d'un système installé (profils sous `Documents and Settings`,
+dossiers du shell, ouverture de session automatique d'`Administrator` sans mot de passe, nom `MINO`) et met le premier
+démarrage en mode installation : `samsrv` n'y crée les comptes que là (SampIsSetupRunning lit `SetupType`), et
+`winlogon` y lance `SYSTEM\Setup\CmdLine`, `minoinit.exe`, qui fait la part d'InstallReactOS dont dépend le logon.
+
+| Partie | Ce qu'elle fait |
+|---|---|
+| `tools/mkhive` | lit `[DelReg]` puis `[AddReg]` d'une couche (types, « ne pas écraser », « la clé seule », ajout à une `REG_MULTI_SZ`, continuations, guillemets), route chaque ligne vers sa ruche (`HKLM\SYSTEM`…, `HKCU` et `HKU\.DEFAULT` vers DEFAULT, `HKCR`), `CurrentControlSet` vers le jeu de `Select\Current` ; `layered` relit une ruche, l'applique, la réécrit |
+| `regf::builder::KeyNode::read` | l'arbre d'une ruche, que `build` réécrit (classes et dates gardées) |
+| `xtask` (`userland::layer_hives`) | les ruches que la couche change sont réécrites dans `target/xtask/hives/` et prennent la place des épinglées sur le disque ; DEFAULT y va aussi ; `secur32.dll` (chargé par son nom pour LsaLogonUser) ; `MINOINIT.EXE` dans `WINDOWS\SYSTEM32` |
+| `ntoskrnl::userland` | DEFAULT montée en `\REGISTRY\USER\.DEFAULT`, réécrite par NtFlushKey comme les autres ; `smss` reçoit `SystemDrive=C:`, comme ExpLoadInitialProcess le lui donne (sans lui, `%SystemDrive%` restait tel quel dans `userenv`) |
+| `tests/native/minoinit.c` | attend `Administrator` dans la SAM (une valeur de `Users\Names`), InitializeProfiles (ordinal 100 de `userenv`), HKU\.DEFAULT réécrite puis copiée en `NTUSER.DAT` de `Default User` (la part de SaveDefaultUserHive), `SetupType` = 0, `SystemSetupInProgress` = 0, `CmdLine` vide, les ruches réécrites, NtShutdownSystem(reboot) ; chaque étape dit son résultat (« [minoinit] … ») |
+
+Ce que le premier démarrage demandait au noyau, dans l'ordre où il s'est arrêté :
+
+1. **Les ports de complétion d'E/S** (`io_manager::completion`, le type `IoCompletion` ; `sys::completion` :
+   NtCreateIoCompletion, NtOpenIoCompletion, NtSetIoCompletion, NtRemoveIoCompletion, NtQueryIoCompletion). `samsrv`
+   demande le domaine du compte à `lsasrv` (LsaOpenPolicy) par RPC sur `\pipe\lsarpc`, dans le même processus : le
+   serveur RPC reçoit la requête, puis la confie au pool de threads de `ntdll` (QueueUserWorkItem), qui crée son
+   port de complétion ; sans lui, « couldn't queue work item for worker thread » : la requête est perdue, `samsrv`
+   attend sans fin et la SAM reste vide. Les paquets sous un verrou et un sémaphore de Ke qui les compte, comme la
+   file d'un port LPC. Pas encore : le nombre de threads concurrents, l'association d'un fichier, l'attente d'un port
+   par NtWaitForSingleObject.
+2. **`SystemDrive`** dans l'environnement : voir le tableau.
+3. **Les répertoires à nom long** (`io::fat::FatVolume::create_directory` : les entrées VFAT et l'alias 8.3 d'un
+   répertoire, comme d'un fichier depuis 36b6714) : InitializeProfiles crée `C:\Documents and Settings`.
+
+Au second démarrage, `winlogon` va au logon (WLX_SAS_TYPE_CTRL_ALT_DEL posté, la touche Ctrl+Alt+Del demandée :
+NtUserRegisterHotKey, pas encore) ; `msgina` ouvre la session d'`Administrator` (AutoAdminLogon) par LsaLogonUser, qui
+demandait **NtAllocateLocallyUniqueId** (fait : `se::allocate_luid`) ; `msv1_0` trouve le compte et son mot de passe vide
+dans la SAM, puis `lsasrv` s'arrête à **NtCreateToken** (le jeton de la session : l'utilisateur, ses groupes, ses
+privilèges, son DACL par défaut) : la suite, Se.
+
+Vu en chemin : `msgina` montre aussi sa fenêtre de logon, dont le contrôle d'édition de `user32` lève des exceptions
+(curseur d'insertion : NtUserCreateCaret, pas encore ; les barres de défilement sont venues depuis, M6, étape 17) ;
+`services.exe` parle aux services qu'il lance par FSCTL_PIPE_TRANSCEIVE (TransactNamedPipe, pas encore) ; deux lignes
+du journal série pouvaient se couper (corrigé depuis : 4bac731, une ligne en une seule prise du verrou). Le disque de
+démarrage a grossi de 0,9 Mo (`secur32.dll` et ses imports) : l'ESP du plan de l'installateur ne le tenait plus, elle
+passe à 56 Mio, la cible de test à 128 Mio ([`io-install.md`](io-install.md), « Le plan agrandi »).
+
+Tests : hôte (`regf` : relire l'arbre d'une ruche ; `mkhive` : la lecture, l'application, `mino.inf` sur des ruches
+construites et sur les ruches épinglées ; `io` : les paquets d'un port de complétion, un répertoire à nom long et ce
+qu'il tient, vérifié par `fsck.vfat`) ; le scénario `logon` (deux démarrages sur le disque système : le premier va
+au bout de `minoinit`, avec `SystemDrive` ; le second s'arrête à NtCreateToken) ; `security_self_test`
+(NtAllocateLocallyUniqueId : deux LUID neufs) ; `object_manager_self_test` (le type `IoCompletion`).

@@ -1,0 +1,48 @@
+; La couche Mino des ruches (ADR-012, ADR-023), appliquée par tools/mkhive
+; aux ruches de base quand xtask construit le disque. La base est encore
+; celle de la version épinglée de ReactOS : les ruches de son LiveCD, que
+; boot/bootdata/livecd.inf de ReactOS avait changées. La couche les ramène
+; à un système installé (les valeurs de hivesft.inf et hivedef.inf), et met
+; son premier démarrage en mode installation.
+
+[Version]
+Signature = "$Windows NT$"
+
+[DelReg]
+
+; Les dossiers du shell que le LiveCD posait sous \Profiles : un système
+; installé laisse shell32 les calculer.
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Documents"
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders","Common Desktop"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Desktop"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders","Personal"
+
+; Le verrouillage du poste et le changement de mot de passe, que le LiveCD
+; interdisait.
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DisableLockWorkstation"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","DisableLockWorkstation"
+HKCU,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","DisableChangePassword"
+
+[AddReg]
+
+; Le premier démarrage en mode installation (ADR-023) : samsrv y crée les
+; comptes (Administrator, Guest), winlogon y lance CmdLine au lieu de
+; l'ouverture de session ; minoinit.exe finit l'installation (profils,
+; NTUSER.DAT de Default User), remet SetupType à 0, réécrit les ruches et
+; redémarre.
+HKLM,"SYSTEM\Setup","SetupType",0x00010001,1
+HKLM,"SYSTEM\Setup","SystemSetupInProgress",0x00010001,1
+HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"%SystemRoot%\system32\minoinit.exe"
+
+; Le nom de la machine, que l'installation de ReactOS demande à l'utilisateur.
+HKLM,"SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName","ComputerName",0x00000000,"MINO"
+
+; Le répertoire des profils d'un système installé (le LiveCD : \Profiles).
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Documents and Settings"
+
+; L'ouverture de session automatique d'Administrator, sans mot de passe
+; (SetAutoAdminLogon de syssetup) ; son domaine est le nom de la machine.
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoAdminLogon",0x00000000,"1"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DefaultUserName",0x00000000,"Administrator"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DefaultDomainName",0x00000000,"MINO"
+HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","DefaultPassword",0x00000000,""

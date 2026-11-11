@@ -65,6 +65,33 @@ impl KeyNode {
         self.values.retain(|v| !v.name.encode_utf16().map(upcase).eq(units.iter().copied()));
         self.values.push(ValueNode { name: name.into(), data_type, data });
     }
+
+    /// The tree of `key` and of everything below it, as a hive holds it:
+    /// what [`build`] writes back, for a tool that changes a hive
+    /// (`tools/mkhive`). Names become strings (an unpaired surrogate of a
+    /// UTF-16 name is replaced); classes and write times are kept, security
+    /// descriptors are not ([`build`] writes one, empty, for every key).
+    ///
+    /// # Errors
+    /// Those of the hive's cells.
+    pub fn read(key: &super::Key<'_>) -> Result<Self, super::Error> {
+        let class = key.class()?.map(|class| class.to_string_lossy()).unwrap_or_default();
+        let mut node = KeyNode {
+            name: key.name().to_string_lossy(),
+            class,
+            last_written: key.last_written(),
+            values: Vec::new(),
+            subkeys: Vec::new(),
+        };
+        for value in key.values()? {
+            let data = value.data()?.into_owned();
+            node.values.push(ValueNode { name: value.name().to_string_lossy(), data_type: value.data_type(), data });
+        }
+        for subkey in key.subkeys()? {
+            node.subkeys.push(Self::read(&subkey)?);
+        }
+        Ok(node)
+    }
 }
 
 /// A name as stored: Latin-1 if every character fits, else UTF-16.

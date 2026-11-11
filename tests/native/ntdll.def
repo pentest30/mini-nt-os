@@ -23,3 +23,7 @@ NtSetEvent@8
 NtWaitForSingleObject@12
 NtTerminateThread@8
 RtlCreateUserThread@40
+NtOpenKey@12
+NtQueryValueKey@24
+NtSetValueKey@24
+NtFlushKey@4

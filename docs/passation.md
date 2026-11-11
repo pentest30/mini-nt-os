@@ -1,5 +1,32 @@
 # Notes de passation
 
+- **La couche Mino des ruches, le premier démarrage, le logon** (`claude/hive-layer`, sur main `38d86a7` ; ADR-023
+  proposée, choix du mainteneur du 2026-11-10 ; [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 27) :
+  `tools/mkhive` applique `tools/mkhive/mino.inf` (syntaxe des couches de ReactOS) aux ruches épinglées à la
+  construction du disque (`regf::builder::KeyNode::read`, `xtask::userland::layer_hives`) : système installé,
+  ouverture de session automatique d'`Administrator`, premier démarrage en mode installation, où `winlogon` lance
+  `minoinit.exe` (`tests/native/minoinit.c`, dans `WINDOWS\SYSTEM32`) : comptes de `samsrv` attendus, profils
+  (InitializeProfiles), `NTUSER.DAT` de `Default User`, `SetupType` = 0, ruches réécrites, redémarrage. Noyau : les
+  ports de complétion d'E/S (`io_manager::completion`, `sys::completion` : sans eux, le pool de `ntdll` ne démarre
+  pas et le serveur RPC de `lsass` perd chaque requête), DEFAULT montée en `\REGISTRY\USER\.DEFAULT`, `SystemDrive`
+  donné à `smss` (oublié), les répertoires FAT à nom long, NtAllocateLocallyUniqueId ; `secur32.dll` sur le disque.
+  Scénario `logon` (deux démarrages, `disk = system`) : le premier va au bout ; au second, `winlogon` va au logon,
+  `msgina` ouvre la session d'`Administrator`, `msv1_0` valide le compte, et **`lsasrv` s'arrête à NtCreateToken** :
+  la suite (Se : un jeton construit de l'utilisateur, de ses groupes, de ses privilèges, de son DACL par défaut).
+  Vu en chemin, pas encore : NtUserRegisterHotKey, le contrôle d'édition (NtUserCreateCaret ; les barres de
+  défilement sont venues de main), FSCTL_PIPE_TRANSCEIVE (`services.exe`). Des lignes du journal série coupées par un
+  autre thread faisaient échouer des marqueurs, d'où peu de marqueurs dans `logon` ; main l'a corrigé (4bac731, une
+  ligne en une seule prise du verrou), venu par la fusion. Le disque de démarrage a grossi de 0,9 Mo (`secur32.dll`
+  et ses imports) : l'ESP du plan de l'installateur ne tenait plus `fat.img` ; elle passe à 56 Mio, la cible de test
+  à 128 Mio
+  ([`compat/io-install.md`](compat/io-install.md), « Le plan agrandi » ; sous VirtualBox, la cible vierge est à
+  refaire en 128 Mio). Les apitests montent : ntdll 34/84, kernel32 12/29 (planchers relevés). Validation sur
+  l'hôte Windows : `cargo xtask lint` propre, 987 tests hôte (`--release`), 81 démarrages sur 86 dans la suite
+  entière, puis les cinq autres repassés : `gpt-persistence` (Intel, QEMU muet dès le firmware : l'hôte), les deux
+  rostests (l'arbre manquait au worktree), et après le plan agrandi `installed-boot`, `installer-finish`,
+  `installer-prepare`, `installer-ui` sur AMD et Intel. Vu une fois : `installer-finish` sur Intel, le second
+  démarrage muet après le lancement de `smss`, puis passé seul en 98 s.
+
 - **Le nom d'un volume en UTF-16 tel quel** (`claude/new-session-696xfc`, après les barres de défilement) :
   `io::VolumeLabel.label` devient un `Vec<u16>` ; NTFS rend `$VOLUME_NAME` sans le convertir (un surrogate isolé
   faisait échouer FileFsVolumeInformation en `STATUS_FILE_CORRUPT_ERROR`, donc `vol` et l'en-tête de `dir`), FAT

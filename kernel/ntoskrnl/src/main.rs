@@ -298,6 +298,7 @@ extern "C" fn kernel_main_phase1(boot_info_ptr: *const BootInfo) -> ! {
         &ps::ethread::THREAD_TYPE,
         &io_manager::FILE_TYPE,
         &io_manager::DEVICE_TYPE,
+        &io_manager::IO_COMPLETION_TYPE,
         &cm::KEY_TYPE,
         &ex::EVENT_TYPE,
         &ex::KEYED_EVENT_TYPE,
@@ -2365,11 +2366,13 @@ fn loader_services_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_ACCESS_VIOLATION, STATUS_DATATYPE_MISALIGNMENT, STATUS_INFO_LENGTH_MISMATCH,
         STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_NOT_COMMITTED,
-        STATUS_SUCCESS, STATUS_WAIT_0,
+        STATUS_NOT_IMPLEMENTED, STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::process::NT_CURRENT_PROCESS;
     use abi::services;
-    use abi::system_information::{SYSTEM_BASIC_INFORMATION, SYSTEM_PROCESSOR_INFORMATION};
+    use abi::system_information::{
+        SYSTEM_BASIC_INFORMATION, SYSTEM_FIRMWARE_TABLE_INFORMATION, SYSTEM_PROCESSOR_INFORMATION,
+    };
     use alloc::sync::Arc;
     use ke::dispatcher::{ke_delay_execution_thread, ke_wait_for_single_object, ProcessorMode};
     use ke::sched::KePlatform;
@@ -2390,6 +2393,7 @@ fn loader_services_self_test() {
     const MISALIGNED: u32 = DATA + 0x50;
     const UNKNOWN_CLASS: u32 = DATA + 0x54;
     const LONG: u32 = DATA + 0x58;
+    const FIRMWARE_CLASS: u32 = DATA + 0x5C;
     // NtProtectVirtualMemory: two committed pages and a reserved one, the
     // ranges passed and returned, the old protections and the statuses.
     const PAGES: u32 = DATA + 0x60;
@@ -2444,6 +2448,8 @@ fn loader_services_self_test() {
         .store_eax(MISALIGNED)
         .call(query, &[UNKNOWN_CLASS_VALUE, SCRATCH, 0x100, 0])
         .store_eax(UNKNOWN_CLASS)
+        .call(query, &[SYSTEM_FIRMWARE_TABLE_INFORMATION, SCRATCH, 0x100, 0])
+        .store_eax(FIRMWARE_CLASS)
         .call(query, &[SYSTEM_PROCESSOR_INFORMATION, PROCESSOR, 12, PROCESSOR_LENGTH])
         .store_eax(PROCESSOR_STATUS)
         .call(query, &[SYSTEM_PROCESSOR_INFORMATION, SCRATCH, 11, 0])
@@ -2562,6 +2568,7 @@ fn loader_services_self_test() {
         assert_eq!(bits & KF_NX_ENABLED != 0, nx, "NX as EFER has it");
     }
     assert_eq!(status(UNKNOWN_CLASS), STATUS_INVALID_INFO_CLASS, "a class without implementation");
+    assert_eq!(status(FIRMWARE_CLASS), STATUS_NOT_IMPLEMENTED, "a class ReactOS knows without implementing it");
     let pages = read(PAGES);
     assert_ne!(pages, 0, "NtAllocateVirtualMemory");
     assert_eq!(
@@ -3993,6 +4000,7 @@ fn security_self_test() {
     const WIN32K_NAME: u32 = DATA + 0x510;
     const OTHER_NAME: u32 = DATA + 0x580;
     const SESSION: u32 = DATA + 0x5F0;
+    const LUIDS: u32 = DATA + 0x600; // 2 LUIDs
     const DONE: u32 = DATA + 0x7FC;
     // As CsrSetProcessSecurity: what its user may do to it.
     const CSRSS_ACCESS: u32 = 0x0002_0C79;
@@ -4078,6 +4086,9 @@ fn security_self_test() {
     code.call_args(set_system, &[v(extend), v(OTHER_US), v(8)]).store_eax(status(29));
     code.call_args(services::NtClose, &[m(handle(0))]).store_eax(status(23));
     code.call_args(services::NtClose, &[m(handle(1))]).store_eax(status(24));
+    // Two locally unique identifiers, as lsasrv takes one per logon.
+    code.call_args(services::NtAllocateLocallyUniqueId, &[v(LUIDS)]).store_eax(status(30));
+    code.call_args(services::NtAllocateLocallyUniqueId, &[v(LUIDS + 8)]).store_eax(status(31));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x800];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -4111,7 +4122,10 @@ fn security_self_test() {
         unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
     }
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..30).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..32).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!((statuses[30], statuses[31]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtAllocateLocallyUniqueId");
+    let (first, second) = ((read(LUIDS), read(LUIDS + 4)), (read(LUIDS + 8), read(LUIDS + 12)));
+    assert!(first != second && first.0 > 0x3E7 && second.0 > 0x3E7, "two new LUIDs: {first:?} {second:?}");
     // The token: a copy of System's.
     let token = process.primary_token();
     let system_token = system.primary_token();
@@ -9250,6 +9264,7 @@ fn object_manager_self_test() {
             "Directory",
             "Event",
             "File",
+            "IoCompletion",
             "Key",
             "KeyedEvent",
             "Port",

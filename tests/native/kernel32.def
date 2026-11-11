@@ -7,6 +7,7 @@ EXPORTS
 CancelIo@4
 CloseHandle@4
 ConnectNamedPipe@8
+CopyFileW@12
 CreateEventW@16
 CreateFileW@28
 CreateNamedPipeW@32
@@ -17,6 +18,7 @@ DeleteCriticalSection@4
 DisconnectNamedPipe@4
 EnterCriticalSection@4
 ExitProcess@4
+ExpandEnvironmentStringsW@12
 FindClose@4
 FindFirstFileW@8
 FindNextFileW@8
@@ -32,6 +34,7 @@ GetLastError@0
 GetModuleHandleW@4
 GetNamedPipeInfo@20
 GetOverlappedResult@16
+GetProcAddress@8
 GetStdHandle@4
 GetTickCount@0
 InitializeCriticalSection@4
