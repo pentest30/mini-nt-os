@@ -11,6 +11,7 @@
 //!   (`\Device\NamedPipe`, [`mount_named_pipes`]).
 //! - [`request`] : les demandes d'E/S en attente et leur fin (ce que
 //!   garde un IRP en attente).
+//! - [`completion`] : les ports de complétion (le type `IoCompletion`).
 //!
 //! Au démarrage, [`mount_boot_volumes`] monte le disque RAM
 //! (`\Device\Ramdisk0`) et le disque système ATA, s'il y en a un
@@ -18,7 +19,8 @@
 //! `\SystemRoot` mènent au disque ATA, ou sans lui au disque RAM.
 //!
 //! Pas encore : IRP et piles de périphériques, pilotes de disque, E/S
-//! asynchrones des volumes (seuls les tubes en ont), ports de complétion.
+//! asynchrones des volumes (seuls les tubes en ont), l'association d'un
+//! fichier à un port de complétion.
 //!
 //! Le reste de ce module (`open_fat_file`, `open_game_file`, le volume
 //! « demo », [`DeviceObject`], [`Irp`]) sert l'ancienne architecture : ne pas
@@ -34,6 +36,7 @@ use core::arch::asm;
 use core::mem::ManuallyDrop;
 use hal::sync::KSpinLock;
 
+pub mod completion;
 pub mod device;
 pub mod directory;
 pub mod disk;
@@ -50,6 +53,10 @@ pub mod partition;
 pub mod request;
 pub mod volume;
 
+pub use completion::{
+    IoCompletion, Packet, IO_COMPLETION_ALL_ACCESS, IO_COMPLETION_MODIFY_STATE, IO_COMPLETION_QUERY_STATE,
+    IO_COMPLETION_TYPE,
+};
 pub use device::{Device, DEVICE_TYPE};
 pub use driver::{DeviceObject, DriverObject};
 pub use fat::{nt_time, BlockDevice, DirEntry, DirEntryInfo, Fat32Bpb, FatError, FatFile, FatVolume};

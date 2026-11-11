@@ -33,6 +33,7 @@ pub mod apc;
 mod atom;
 mod callback;
 mod class;
+mod completion;
 mod console;
 mod cursor;
 mod desktop;
@@ -117,6 +118,11 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
     (services::NtCreateDirectoryObject, Handler::Status(object::nt_create_directory_object)),
     (services::NtCreateEvent, Handler::Status(event::nt_create_event)),
+    (services::NtCreateIoCompletion, Handler::Status(completion::nt_create_io_completion)),
+    (services::NtOpenIoCompletion, Handler::Status(completion::nt_open_io_completion)),
+    (services::NtQueryIoCompletion, Handler::Status(completion::nt_query_io_completion)),
+    (services::NtRemoveIoCompletion, Handler::Status(completion::nt_remove_io_completion)),
+    (services::NtSetIoCompletion, Handler::Status(completion::nt_set_io_completion)),
     (services::NtCreateFile, Handler::Status(file::nt_create_file)),
     (services::NtCreateKey, Handler::Status(registry::nt_create_key)),
     (services::NtCreateMutant, Handler::Status(mutant::nt_create_mutant)),

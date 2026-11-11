@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 119 | 296 |
+| ntoskrnl | 124 | 296 |
 | win32k | 128 | 737 |
 
 ## ntoskrnl
@@ -55,7 +55,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0025` | `NtCreateEvent` | 5 | ✅ |
 | `0x0026` | `NtCreateEventPair` | 3 |  |
 | `0x0027` | `NtCreateFile` | 11 | ✅ |
-| `0x0028` | `NtCreateIoCompletion` | 4 |  |
+| `0x0028` | `NtCreateIoCompletion` | 4 | ✅ |
 | `0x0029` | `NtCreateJobObject` | 3 |  |
 | `0x002a` | `NtCreateJobSet` | 3 |  |
 | `0x002b` | `NtCreateKey` | 7 | ✅ |
@@ -138,7 +138,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0078` | `NtOpenEvent` | 3 | ✅ |
 | `0x0079` | `NtOpenEventPair` | 3 |  |
 | `0x007a` | `NtOpenFile` | 6 | ✅ |
-| `0x007b` | `NtOpenIoCompletion` | 3 |  |
+| `0x007b` | `NtOpenIoCompletion` | 3 | ✅ |
 | `0x007c` | `NtOpenJobObject` | 3 |  |
 | `0x007d` | `NtOpenKey` | 3 | ✅ |
 | `0x007e` | `NtOpenMutant` | 3 | ✅ |
@@ -181,7 +181,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00a3` | `NtQueryInformationToken` | 5 | ✅ |
 | `0x00a4` | `NtQueryInstallUILanguage` | 1 |  |
 | `0x00a5` | `NtQueryIntervalProfile` | 2 |  |
-| `0x00a6` | `NtQueryIoCompletion` | 5 |  |
+| `0x00a6` | `NtQueryIoCompletion` | 5 | ✅ |
 | `0x00a7` | `NtQueryKey` | 5 | ✅ |
 | `0x00a8` | `NtQueryMultipleValueKey` | 6 |  |
 | `0x00a9` | `NtQueryMutant` | 5 |  |
@@ -213,7 +213,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00c3` | `NtRegisterThreadTerminatePort` | 1 | ✅ |
 | `0x00c4` | `NtReleaseMutant` | 2 | ✅ |
 | `0x00c5` | `NtReleaseSemaphore` | 3 | ✅ |
-| `0x00c6` | `NtRemoveIoCompletion` | 5 |  |
+| `0x00c6` | `NtRemoveIoCompletion` | 5 | ✅ |
 | `0x00c7` | `NtRemoveProcessDebug` | 2 |  |
 | `0x00c8` | `NtRenameKey` | 2 |  |
 | `0x00c9` | `NtReplaceKey` | 3 |  |
@@ -256,7 +256,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00ee` | `NtSetInformationThread` | 4 | ✅ |
 | `0x00ef` | `NtSetInformationToken` | 4 |  |
 | `0x00f0` | `NtSetIntervalProfile` | 2 |  |
-| `0x00f1` | `NtSetIoCompletion` | 5 |  |
+| `0x00f1` | `NtSetIoCompletion` | 5 | ✅ |
 | `0x00f2` | `NtSetLdtEntries` | 6 |  |
 | `0x00f3` | `NtSetLowEventPair` | 1 |  |
 | `0x00f4` | `NtSetLowWaitHighEventPair` | 1 |  |

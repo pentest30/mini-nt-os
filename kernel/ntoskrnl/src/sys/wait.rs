@@ -37,7 +37,7 @@ pub(super) fn nt_delay_execution(arguments: &[u32]) -> NtStatus {
 }
 
 /// L'échéance en `timeout` (format NT) ; `None` sans elle (pointeur nul).
-fn capture_timeout(timeout: u32) -> Result<Option<i64>, NtStatus> {
+pub(super) fn capture_timeout(timeout: u32) -> Result<Option<i64>, NtStatus> {
     match timeout {
         0 => Ok(None),
         at => UserPtr::<i64>::new(at).read().map(Some),
