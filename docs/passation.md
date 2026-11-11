@@ -21,9 +21,11 @@
   (DISPATCH_LEVEL) ; un trait de (0x56FBAE85, 0x28F81DE0) gelait tout le système. Ces coordonnées viennent du
   soulignement du préfixe d'un bouton (« &Switch To ») dessiné par `user32` dans une police créée d'un LOGFONT jamais
   rempli : **NtGdiExtGetObjectW n'est pas implémenté** (GetObject d'une police rend 0, le texte des boutons du
-  gestionnaire des tâches reste blanc) — la suite. Un trait plus long que 16 384 pixels est maintenant coupé à ce que
-  sa région peut recevoir (`dib::cut_line`, Liang–Barsky en rationnels exacts) ; en deçà, rien ne change ; LineTo
-  sature ses coordonnées. Trouvé par bissection (`desktop-launch`, un pixel de la liste : 9a03386, la barre de menus,
+  gestionnaire des tâches reste blanc) — la suite. D'un trait plus long que 16 384 pas, seuls sont parcourus ceux
+  qui peuvent atteindre sa région (`dib::cut_steps`, Liang–Barsky en rationnels exacts), depuis l'état que la marche
+  entière y a (`LineWalk::at`, forme close de la variante de Bresenham : l'axe court avance de k·court/long arrondi) ;
+  la revue de la PR avait vu que repartir des bouts arrondis du trait coupé changeait ses pixels et la phase de ses
+  pointillés ; LineTo sature ses coordonnées. Trouvé par bissection (`desktop-launch`, un pixel de la liste : 9a03386, la barre de menus,
   rend le blocage visible avant la capture) puis une trace temporaire des appels du thread de l'interface. Tests :
   hôte (`dib`) ; `desktop-launch` (onglets et barre d'état dessinés, la boucle de messages vivante 110 s), et les
   scénarios GUI sur AMD et Intel.

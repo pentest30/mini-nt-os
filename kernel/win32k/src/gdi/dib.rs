@@ -240,54 +240,44 @@ impl<'a> Bitmap<'a> {
     /// pointillé (un pixel sur deux, l'approximation des motifs de XP
     /// suffit aux axes) ; PS_NULL ne dessine rien. Une largeur au-delà
     /// d'un pixel épaissit le trait perpendiculairement à sa direction.
-    /// Chaque pixel reste dans les bornes ([`set_pixel`]). Un trait plus
-    /// long que [`MAX_UNCUT_LINE`] est d'abord coupé à ce que `clip` (élargi
-    /// de son épaisseur) peut recevoir ([`cut_line`]) : des coordonnées
-    /// absurdes (un LOGFONT jamais rempli) feraient sinon parcourir des
-    /// milliards de points, sous le verrou de la surface.
+    /// Chaque pixel reste dans les bornes ([`set_pixel`]). D'un trait plus
+    /// long que [`MAX_UNCUT_LINE`], seuls sont parcourus les pas qui peuvent
+    /// atteindre `clip` (élargi de son épaisseur, [`cut_steps`]), depuis
+    /// l'état que la marche entière y a ([`LineWalk::at`]) : les mêmes
+    /// pixels et les mêmes pointillés, sans parcourir des milliards de
+    /// points sous le verrou de la surface quand les coordonnées sont
+    /// absurdes (un LOGFONT jamais rempli).
     pub fn draw_line(&mut self, from: (i32, i32), to: (i32, i32), pen: &super::pen::Pen, clip: &[Rect]) {
         use super::pen::{PS_NULL, PS_SOLID};
         if pen.style == PS_NULL || clip.is_empty() {
             return;
         }
         let thickness = pen.width.max(1);
-        let length = from.0.abs_diff(to.0).max(from.1.abs_diff(to.1));
-        let (from, to) = if length > MAX_UNCUT_LINE {
+        let steps = u64::from(from.0.abs_diff(to.0).max(from.1.abs_diff(to.1)));
+        let (first, last) = if steps > u64::from(MAX_UNCUT_LINE) {
             let reach = clip.iter().skip(1).fold(clip[0], |all, part| all.union(part));
-            match cut_line(from, to, reach, thickness) {
-                Some(cut) => cut,
+            match cut_steps(from, to, reach, thickness) {
+                Some(range) => range,
                 None => return,
             }
         } else {
-            (from, to)
+            (0, steps)
         };
-        let (x0, y0, x1, y1) = (from.0, from.1, to.0, to.1);
-        let (dx, dy) = (x1.abs_diff(x0) as i32, -(y1.abs_diff(y0) as i32));
-        let (mut x, mut y) = (x0, y0);
-        let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
-        let mut error = dx + dy;
-        // Le pas des pointillés : un pixel dessiné, un sauté.
+        let mut walk = LineWalk::at(from, to, first);
+        // Le pas des pointillés : un pixel dessiné, un sauté, comptés depuis
+        // le début du trait.
         let dotted = pen.style != PS_SOLID;
-        let mut step = 0u32;
         // L'épaisseur : autant de reproductions du trait, décalées
         // perpendiculairement.
-        loop {
-            if (!dotted || step.is_multiple_of(2)) && clip.iter().any(|part| part.contains(x, y)) {
-                self.set_line_pixel(x, y, pen.color, thickness, sx, sy);
+        for step in first..=last {
+            if !dotted || step.is_multiple_of(2) {
+                if let (Ok(x), Ok(y)) = (i32::try_from(walk.x), i32::try_from(walk.y)) {
+                    if clip.iter().any(|part| part.contains(x, y)) {
+                        self.set_line_pixel(x, y, pen.color, thickness, walk.sx as i32, walk.sy as i32);
+                    }
+                }
             }
-            if x == x1 && y == y1 {
-                break;
-            }
-            let twice = 2 * error;
-            if twice >= dy {
-                error += dy;
-                x += sx;
-            }
-            if twice <= dx {
-                error += dx;
-                y += sy;
-            }
-            step += 1;
+            walk.advance();
         }
     }
 
@@ -466,15 +456,85 @@ pub const fn rop3_without_source(rop3: u8, pattern: u32, dest: u32) -> u32 {
     out
 }
 
-/// La longueur (en pixels, sur l'axe le plus long) au-delà de laquelle
-/// [`Bitmap::draw_line`] coupe un trait avant de le parcourir ; en deçà, le
-/// trait est tracé tel quel, au pixel près.
+/// La longueur (en pas, sur l'axe le plus long) au-delà de laquelle
+/// [`Bitmap::draw_line`] ne parcourt que les pas d'un trait qui peuvent
+/// atteindre sa région ; en deçà, il les parcourt tous.
 pub const MAX_UNCUT_LINE: u32 = 1 << 14;
 
-/// Le trait de `from` à `to` coupé à `reach` élargi de `margin` de chaque
-/// côté (Liang–Barsky, en rationnels exacts sur 128 bits), ses bouts
-/// arrondis au pixel ; `None` s'il n'y passe pas.
-pub fn cut_line(from: (i32, i32), to: (i32, i32), reach: Rect, margin: i32) -> Option<((i32, i32), (i32, i32))> {
+/// La marche de Bresenham de [`Bitmap::draw_line`] (la variante à une seule
+/// erreur pour toutes les directions), sur 64 bits.
+struct LineWalk {
+    x: i64,
+    y: i64,
+    error: i64,
+    /// |Δx| et −|Δy|.
+    dx: i64,
+    dy: i64,
+    sx: i64,
+    sy: i64,
+}
+
+impl LineWalk {
+    /// L'état de la marche de `from` à `to` après `k` pas, sans les faire :
+    /// l'axe le plus long avance d'un pixel à chaque pas, l'autre de
+    /// ⌊(2·k·court + long) / (2·long)⌋ (`k·court / long` arrondi), et
+    /// l'erreur en suit.
+    fn at(from: (i32, i32), to: (i32, i32), k: u64) -> Self {
+        let (a, b) = (i64::from(from.0.abs_diff(to.0)), i64::from(from.1.abs_diff(to.1)));
+        let (sx, sy) = (if from.0 < to.0 { 1 } else { -1 }, if from.1 < to.1 { 1 } else { -1 });
+        let (wide, tall, k) = (i128::from(a), i128::from(b), i128::from(k));
+        let (along_x, along_y, error) = if a >= b {
+            let m = if a == 0 { 0 } else { (2 * tall * k + wide) / (2 * wide) };
+            (k, m, wide - tall - k * tall + m * wide)
+        } else {
+            let n = (2 * wide * k + tall) / (2 * tall);
+            (n, k, wide - tall + k * wide - n * tall)
+        };
+        // Bounded by the line's own size: 64 bits hold them.
+        Self {
+            x: i64::from(from.0) + sx * along_x as i64,
+            y: i64::from(from.1) + sy * along_y as i64,
+            error: error as i64,
+            dx: a,
+            dy: -b,
+            sx,
+            sy,
+        }
+    }
+
+    /// Un pas.
+    fn advance(&mut self) {
+        let twice = 2 * self.error;
+        if twice >= self.dy {
+            self.error += self.dy;
+            self.x += self.sx;
+        }
+        if twice <= self.dx {
+            self.error += self.dx;
+            self.y += self.sy;
+        }
+    }
+}
+
+/// Les pas de la marche de `from` à `to` ([`LineWalk`]) dont le pixel peut
+/// tomber dans `reach` élargi de `margin` : le pixel du pas `k` est sur
+/// l'axe long au point exact du trait en `k / pas`, à un demi-pixel au plus
+/// sur l'autre ; d'où les fractions où le trait exact entre dans `reach`
+/// élargi d'un pixel de plus, et en sort, arrondies vers l'extérieur.
+/// `None` s'il n'y passe pas.
+pub fn cut_steps(from: (i32, i32), to: (i32, i32), reach: Rect, margin: i32) -> Option<(u64, u64)> {
+    let (enter, leave) = crossing(from, to, reach, margin.saturating_add(1))?;
+    let steps = i128::from(from.0.abs_diff(to.0).max(from.1.abs_diff(to.1)));
+    let first = (enter.0 * steps).div_euclid(enter.1) - 1;
+    let last = -((-(leave.0 * steps)).div_euclid(leave.1)) + 1;
+    Some((first.clamp(0, steps) as u64, last.clamp(0, steps) as u64))
+}
+
+/// Les fractions de t (numérateur, dénominateur positif) où le trait de
+/// `from` à `to` (`from` + t·(`to` − `from`), t de 0 à 1) entre dans `reach`
+/// élargi de `margin` de chaque côté et en sort (Liang–Barsky, en
+/// rationnels exacts sur 128 bits) ; `None` s'il n'y passe pas.
+fn crossing(from: (i32, i32), to: (i32, i32), reach: Rect, margin: i32) -> Option<((i128, i128), (i128, i128))> {
     let (left, top) = (i64::from(reach.left) - i64::from(margin), i64::from(reach.top) - i64::from(margin));
     let (right, bottom) =
         (i64::from(reach.right) - 1 + i64::from(margin), i64::from(reach.bottom) - 1 + i64::from(margin));
@@ -503,14 +563,7 @@ pub fn cut_line(from: (i32, i32), to: (i32, i32), reach: Rect, margin: i32) -> O
     if enter.0 * leave.1 > leave.0 * enter.1 {
         return None;
     }
-    let at = |(num, den): (i128, i128)| {
-        let rounded = |start: i64, delta: i64| {
-            let offset = (2 * i128::from(delta) * num + den).div_euclid(2 * den);
-            (i128::from(start) + offset) as i32
-        };
-        (rounded(x0, dx), rounded(y0, dy))
-    };
-    Some((at(enter), at(leave)))
+    Some((enter, leave))
 }
 
 #[cfg(test)]
@@ -546,7 +599,108 @@ mod tests {
         );
         Bitmap::new(&mut near, 16, 16, 16, PixelLayout::Bgrx).unwrap().draw_line((0, 0), (15, 15), &white, &all);
         assert_eq!(far, near);
-        assert_eq!(cut_line((-50_000, 40), (50_000, 40), Rect::new(0, 0, 16, 16), 1), None, "below it");
+        assert_eq!(cut_steps((-50_000, 40), (50_000, 40), Rect::new(0, 0, 16, 16), 1), None, "below it");
+    }
+
+    /// The pixels of the whole walk from `from` to `to` (the same Bresenham
+    /// as `draw_line`, every step, on 64 bits), a pixel on two for a
+    /// dotted pen: what a cut line must give.
+    fn walked(from: (i32, i32), to: (i32, i32), dotted: bool, size: usize) -> alloc::vec::Vec<u32> {
+        let mut pixels = alloc::vec![0u32; size * size];
+        let (x1, y1) = (i64::from(to.0), i64::from(to.1));
+        let (mut x, mut y) = (i64::from(from.0), i64::from(from.1));
+        let (dx, dy) = (x1.abs_diff(x) as i64, -(y1.abs_diff(y) as i64));
+        let (sx, sy) = (if x < x1 { 1 } else { -1 }, if y < y1 { 1 } else { -1 });
+        let (mut error, mut step) = (dx + dy, 0u64);
+        loop {
+            let inside = (0..size as i64).contains(&x) && (0..size as i64).contains(&y);
+            if inside && (!dotted || step.is_multiple_of(2)) {
+                pixels[y as usize * size + x as usize] = 0xFF_FFFF;
+            }
+            if x == x1 && y == y1 {
+                return pixels;
+            }
+            let twice = 2 * error;
+            if twice >= dy {
+                error += dy;
+                x += sx;
+            }
+            if twice <= dx {
+                error += dx;
+                y += sy;
+            }
+            step += 1;
+        }
+    }
+
+    #[test]
+    fn the_state_after_k_steps_is_the_walk_s() {
+        // Every line between points of a 21 x 21 square: the closed form at
+        // each step is where the walk is.
+        for (x0, y0, x1, y1) in (0..21 * 21 * 21 * 21).map(|i| (i % 21 - 10, i / 21 % 21 - 10, i / 441 % 21, i / 9261))
+        {
+            let (from, to) = ((x0, y0), (x1 - 10, y1 - 10));
+            let mut walk = LineWalk::at(from, to, 0);
+            let steps = u64::from(from.0.abs_diff(to.0).max(from.1.abs_diff(to.1)));
+            for k in 0..=steps {
+                let state = LineWalk::at(from, to, k);
+                assert_eq!((state.x, state.y, state.error), (walk.x, walk.y, walk.error), "{from:?} to {to:?}, {k}");
+                walk.advance();
+            }
+        }
+    }
+
+    #[test]
+    fn a_cut_line_keeps_the_pixels_and_the_dots_of_the_whole_one() {
+        let white = super::super::pen::Pen { color: ColorRef(0xFF_FFFF), ..super::super::pen::Pen::BLACK };
+        // PS_DOT (2): any style but PS_SOLID and PS_NULL is dotted.
+        let dots = super::super::pen::Pen { style: 2, ..white };
+        let drawn = |from, to, pen: &super::super::pen::Pen| {
+            let mut pixels = alloc::vec![0u32; 16 * 16];
+            Bitmap::new(&mut pixels, 16, 16, 16, PixelLayout::Bgrx).unwrap().draw_line(
+                from,
+                to,
+                pen,
+                &[Rect::new(0, 0, 16, 16)],
+            );
+            pixels
+        };
+        // A slope that is not 1: the same rows as the whole walk.
+        let slope = ((-20_000, -10_000), (15, 10));
+        assert_eq!(drawn(slope.0, slope.1, &white), walked(slope.0, slope.1, false, 16));
+        // Dotted: the same phase (the even steps from the start).
+        let row = ((-20_000, 5), (15, 5));
+        assert_eq!(drawn(row.0, row.1, &dots), walked(row.0, row.1, true, 16));
+        // A shallow slope across a larger surface (0.35, from and to far
+        // away): the rows of the whole walk, not of a line between rounded
+        // cut ends.
+        let large = |from, to| {
+            let mut pixels = alloc::vec![0u32; 100 * 100];
+            Bitmap::new(&mut pixels, 100, 100, 100, PixelLayout::Bgrx).unwrap().draw_line(
+                from,
+                to,
+                &white,
+                &[Rect::new(0, 0, 100, 100)],
+            );
+            pixels
+        };
+        let shallow = ((-20_000, -7_000), (20_000, 7_000));
+        assert_eq!(large(shallow.0, shallow.1), walked(shallow.0, shallow.1, false, 100));
+        // Lines of all directions, from and to far away.
+        let mut seed = 0x2545_F491_u32;
+        let mut next = |range: i32| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed % (2 * range as u32 + 1)) as i32 - range
+        };
+        for _ in 0..200 {
+            let from = (next(30_000), next(30_000));
+            let to = (next(40) + 8, next(40) + 8);
+            let (from, to) = if next(1) > 0 { (from, to) } else { (to, from) };
+            assert_eq!(drawn(from, to, &white), walked(from, to, false, 16), "{from:?} to {to:?}");
+            assert_eq!(drawn(from, to, &dots), walked(from, to, true, 16), "{from:?} to {to:?}, dotted");
+        }
     }
 
     #[test]
