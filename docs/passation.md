@@ -30,10 +30,11 @@
   Applications ; quatre pixels (la première ligne choisie, le N souligné de New Task..., le relief sous le S de
   Switch To et le E de End Task). Passait sur AMD et Intel avec notre GetWindowPlacement ; les deux mutations
   (l'ordre de haut en bas, le service retiré) le faisaient échouer. `cargo xtask lint` propre, 1064 tests hôte.
-  Scénarios GUI avec le nouvel ordre de peinture (avant la fusion) : `text` et `bitmap` passent. **Reste à
-  vérifier**, après la fusion : `desktop-launch` avec le GetWindowPlacement du Bloc-notes, `notepad`, puis `dialog`,
-  `desktop-ui`, `desktop-click`, `gui`, `menu`, `caret`, `console`, `cmd`, `listview`, `scroll`, `scrollex`, `icons`,
-  `destroy`, `cursor`, `mouse` ; puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
+  Scénarios GUI avec le nouvel ordre de peinture (avant la fusion) : `text` et `bitmap` passent. Après la fusion :
+  lint propre, 1069 tests hôte ; `desktop-launch` (avec le GetWindowPlacement du Bloc-notes) et `notepad` passent
+  sur AMD et Intel. **Reste à vérifier** : `dialog`, `desktop-ui`, `desktop-click`, `gui`, `menu`, `caret`,
+  `console`, `cmd`, `listview`, `scroll`, `scrollex`, `icons`, `destroy`, `cursor`, `mouse` avec le nouvel ordre de
+  peinture ; puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
   target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format VHD`, l'attacher à la VM `Mino` à la place de
   `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
   **Vu, pas fait** : LineTo dessine toujours du stylo noir par défaut. `gdi32` choisit les stylos dans DC_ATTR sans
