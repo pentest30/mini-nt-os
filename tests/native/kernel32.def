@@ -53,3 +53,5 @@ WaitForSingleObject@8
 WaitNamedPipeW@8
 WriteConsoleW@20
 WriteFile@20
+GetDriveTypeW@4
+GetLogicalDrives@0

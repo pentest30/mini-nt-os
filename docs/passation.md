@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **La boîte Enregistrer sous du Bloc-notes** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 27) : NtQueryKey(KeyNameInformation) (`cm::Key::full_name`), NtQueryObject(ObjectBasicInformation),
+  NtQueryInformationProcess(ProcessDeviceMap) (`io_manager::device::dos_drive_type`) : HKEY_CLASSES_ROOT marche,
+  GetLogicalDrives voit `C:`, le shell parcourt `C:\`. Tests : hôte (`cm`) ; la sonde de `notepad` (carte des
+  lecteurs, nom d'une clé, droits d'un handle ; mutation de la carte) sur AMD et Intel ; toute la suite sur AMD : 54
+  sur 55. **`gui` échoue** depuis la fusion du changement de l'autre session dans `paint.rs` (les sœurs peintes du
+  bas vers le haut, écart voulu avec ReactOS pour l'onglet du gestionnaire des tâches) : le premier WM_PAINT ne va
+  plus au popup qu'attend `gui` ; avec l'ancien `paint.rs`, `gui` passe. À trancher : garder l'écart et mettre à jour
+  `gui`, ou revenir à l'ordre de ReactOS et corriger l'onglet autrement. **Suite** pour enregistrer : l'assertion
+  d'ATL du shell (`::IsWindow(m_hWnd)`, une fenêtre ATL non créée), les fenêtres message seul, NtUserSetParent,
+  NtUserGetIconInfo, les DIB à palette de StretchDIBits, NtUserGetClassName, SB_CTL (liste dans l'étape 27).
+
 - **Les listes libres du buddy, sans limite** (`claude/new-session-696xfc`, vu en enregistrant dans le Bloc-notes) :
   les listes de `mm::buddy` étaient des tableaux fixes de 512 blocs par ordre ; un processus qui laisse plus de 512
   pages libres dont le buddy est encore pris (ses tables de pages, rendues une à une à sa fin) arrêtait le système

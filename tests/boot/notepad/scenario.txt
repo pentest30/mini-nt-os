@@ -21,6 +21,7 @@ keys = [notepad] the Goto line dialog is up => esc
 expect = [notepad] on WinSta0\Default
 expect = [notepad] RegisterWindowMessage: one message per name
 expect = [notepad] CreateAcceleratorTable: one entry made, a huge count refused
+expect = [notepad] Save As needs: drives, key names, handle rights
 expect = [notepad] launched (PID
 expect = "Untitled - Notepad"
 expect = [notepad] Notepad is up: its window is its main thread's

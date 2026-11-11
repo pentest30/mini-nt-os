@@ -1210,3 +1210,36 @@ et la barre d'état dit « Line 2, column 7 ».
 Tests : hôte (`font` : glyphes absents marqués ou par défaut, A + B + C = l'avance, par caractère ou par glyphe,
 `head` et le fichier entier ; `gdi::text` : des indices dessinent ce que dessinent leurs caractères) ; `notepad` et
 `desktop-launch` (le gestionnaire des tâches passait par ces services) sur AMD et Intel.
+
+## Étape 27 : la boîte Enregistrer sous trouve ses dossiers (KeyNameInformation, ObjectBasicInformation, ProcessDeviceMap)
+
+Ctrl+S ouvre la boîte « Save As » de `comdlg32`, qui parcourt le shell (`shell32`, `browseui`). Elle s'affichait,
+mais vide (« Save in » sans dossier, la liste sans fichiers), et un nom tapé rendait « Path does not exist ». Trois
+services du noyau manquaient en chemin :
+
+| Service | Ce que fait Mino | Qui le demande |
+|---|---|---|
+| NtQueryKey(KeyNameInformation) | le chemin complet de la clé depuis `\REGISTRY`, avec la casse des clés (celui de la cible pour une clé ouverte par un lien) : `cm::Key::full_name`, `cm::info::name_information` ; NtQueryKey seul (à l'énumération, ReactOS refuse la classe) | `advapi32` (`hkcr.c`) : les clés de HKEY_CLASSES_ROOT, HKCU d'abord, HKLM sinon |
+| NtQueryObject(ObjectBasicInformation) | OBJECT_BASIC_INFORMATION (56 octets exactement) : attributs du handle et OBJ_PERMANENT, droits accordés, comptes de handles et de pointeurs, place du nom complet et du type, celle du descripteur de sécurité avec READ_CONTROL | `advapi32` (`hkcr.c`, GetKeySam) |
+| NtQueryInformationProcess(ProcessDeviceMap) | la carte des lecteurs DOS : un bit par lien « X: » de `\GLOBAL??`, le type de chaque lecteur d'après le périphérique cible (`io_manager::device::dos_drive_type`, comme ObpProcessDosDeviceSymbolicLink : disque fixe ou amovible, virtuel, CD-ROM, réseau) ; la taille de Query exactement (36) ; la forme EX demande les cartes par LUID (STATUS_INVALID_PARAMETER) | `kernel32` : GetLogicalDrives (rendait 0 : « My Computer » n'avait aucun lecteur, et `C:\` n'était pas un chemin), GetDriveTypeW |
+
+Écart : Mino calcule la carte à chaque demande, à partir des liens présents, au lieu de la tenir à jour à leur
+création ; le résultat est le même tant qu'il n'y a qu'une carte (celle de tous).
+
+Vu en chemin : la fin du processus du Bloc-notes, après la boîte, arrêtait le système (« buddy free list overflow »)
+: les listes libres de `mm::buddy` sont désormais chaînées, sans limite (commit `mm`, voir la passation).
+
+Ce qui manque encore pour enregistrer (journal du scénario, Ctrl+S puis « hello.txt » et Entrée) : une assertion
+d'ATL dans le shell (`atlwin.h:1118`, `::IsWindow(m_hWnd)` dans CWindow::SendMessage : une fenêtre ATL qui n'a pas
+été créée ; à identifier, peut-être la liste d'autocomplétion de `browseui`), les fenêtres message seul
+(HWND_MESSAGE : la fenêtre d'appartement de `combase`), NtUserSetParent, NtUserGetIconInfo, StretchDIBits d'une DIB à
+palette (les icônes du shell), NtUserGetClassName, NtUserGetSystemMenu, NtUserSetActiveWindow, NtUserSetThreadState,
+les barres de défilement des contrôles (SB_CTL). Le Bloc-notes se termine alors avec le code 3 (abort).
+
+Tests : hôte (`cm` : le chemin complet par ouverture sans casse, lien, nom relatif, énumération, création ;
+`cm::info` : l'encodage de KEY_NAME_INFORMATION) ; la sonde de `notepad` appelle GetLogicalDrives, GetDriveTypeW,
+NtQueryInformationProcess(ProcessDeviceMap), NtOpenKey puis NtQueryKey(KeyNameInformation) sur
+`\Registry\Machine\Software\Classes` (taille d'abord, puis le nom `\REGISTRY\MACHINE\SOFTWARE\Classes`) et
+NtQueryObject(ObjectBasicInformation) (une mauvaise taille refusée, les droits KEY_READ, un handle) ; une carte des
+lecteurs vide la fait échouer (mutation). `notepad` sur AMD et Intel, et toute la suite sur AMD (54 sur 55 ; `gui`
+échoue par l'ordre de peinture des sœurs, voir la passation).

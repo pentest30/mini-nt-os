@@ -336,6 +336,9 @@ pub struct Key {
     node: Node,
     /// Son nom, le dernier composant de son chemin.
     name: String,
+    /// Son chemin depuis la racine (`\REGISTRY\MACHINE\SOFTWARE`), avec la
+    /// casse des clés ; celui de la cible pour une clé ouverte par un lien.
+    path: String,
 }
 
 /// Le pas d'une recherche.
@@ -355,6 +358,17 @@ impl Key {
     /// n'est nommé dans l'espace d'Ob que pour `\REGISTRY`).
     pub fn key_name(&self) -> &str {
         &self.name
+    }
+
+    /// Son chemin complet (KeyNameInformation, CmpQueryNameInformation) :
+    /// `\REGISTRY` puis le nom de chaque clé jusqu'à elle.
+    pub fn full_name(&self) -> &str {
+        &self.path
+    }
+
+    /// Le chemin de sa sous-clé `name`.
+    fn child_path(&self, name: &str) -> String {
+        format!("{}\\{name}", self.path)
     }
 
     /// Sa sous-clé `name`, ou le lien de ce nom ; `None` sans elle.
@@ -424,14 +438,15 @@ impl Key {
                         Child::Virtual(child) => Node::Virtual(child.clone()),
                         Child::Hive(file) => Node::Hive { file: file.clone(), key: file.root.clone() },
                     };
-                    Key { node, name: name.clone() }
+                    Key { node, name: name.clone(), path: self.child_path(name) }
                 }))
             }
             Node::Hive { file, key } => {
                 let child = key.state.lock().subkeys.get(index as usize).cloned();
                 Ok(child.map(|child| {
                     let name = child.name_string();
-                    Key { node: Node::Hive { file: file.clone(), key: child }, name }
+                    let path = self.child_path(&name);
+                    Key { node: Node::Hive { file: file.clone(), key: child }, name, path }
                 }))
             }
         }
@@ -530,7 +545,8 @@ impl Key {
         }
         let opened = |child: Arc<HiveKey>| {
             let name = child.name_string();
-            Key { node: Node::Hive { file: file.clone(), key: child }, name }
+            let path = self.child_path(&name);
+            Key { node: Node::Hive { file: file.clone(), key: child }, name, path }
         };
         let mut state = key.state.lock();
         if let Some(child) = state.subkeys.iter().find(|k| units_eq_ignore_case(&k.name, &units)) {
@@ -656,14 +672,17 @@ fn parse_key(object: &ObjectRef, remaining: &str) -> Result<Parsed, NtStatus> {
         return Ok(Parsed::Object(object.clone()));
     }
     let rest = remaining.strip_prefix('\\').ok_or(STATUS_OBJECT_NAME_INVALID)?;
-    let mut current = Key { node: key.node.clone(), name: key.name.clone() };
+    let mut current = Key { node: key.node.clone(), name: key.name.clone(), path: key.path.clone() };
     let mut parts = rest.split('\\');
     while let Some(part) = parts.next() {
         if part.is_empty() {
             return Err(STATUS_OBJECT_NAME_INVALID);
         }
         match current.step(part)? {
-            Some(Step::Key(node, name)) => current = Key { node, name },
+            Some(Step::Key(node, name)) => {
+                let path = current.child_path(&name);
+                current = Key { node, name, path };
+            }
             Some(Step::Link(target)) => {
                 let tail: Vec<&str> = parts.collect();
                 return Ok(Parsed::Reparse(if tail.is_empty() {
@@ -688,7 +707,10 @@ pub fn new_registry() -> Arc<Object<Key>> {
     for name in ["MACHINE", "USER"] {
         root.children.lock().push((name.into(), Child::Virtual(Arc::new(VirtualKey::new()))));
     }
-    create_object(&KEY_TYPE, Key { node: Node::Virtual(Arc::new(root)), name: "REGISTRY".into() })
+    create_object(
+        &KEY_TYPE,
+        Key { node: Node::Virtual(Arc::new(root)), name: "REGISTRY".into(), path: "\\REGISTRY".into() },
+    )
 }
 
 /// Monte `file` sous la clé virtuelle `parent` (un chemin sous la racine
@@ -862,6 +884,29 @@ mod tests {
             Lookup::Missing { .. } => panic!("missing"),
         };
         assert_eq!(found.key_name(), "KnownDLLs");
+    }
+
+    #[test]
+    fn a_key_knows_its_full_name_with_the_stored_case() {
+        let (ns, registry) = registry();
+        assert_eq!(registry.full_name(), "\\REGISTRY");
+        let session = open(&ns, "\\registry\\machine\\system\\ControlSet001\\control\\SESSION MANAGER").unwrap();
+        assert_eq!(session.full_name(), "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Control\\Session Manager");
+        let set = open(&ns, "\\Registry\\Machine\\System\\CurrentControlSet").unwrap();
+        assert_eq!(set.full_name(), "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001", "a link gives its target");
+        let control: ObjectRef = open(&ns, "\\Registry\\Machine\\System\\ControlSet001\\Control").unwrap();
+        let relative = match ns.lookup("session manager\\knowndlls", Some(&control), false).unwrap() {
+            Lookup::Found(object) => downcast::<Key>(&object).unwrap(),
+            Lookup::Missing { .. } => panic!("missing"),
+        };
+        assert_eq!(
+            relative.full_name(),
+            "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Control\\Session Manager\\KnownDLLs"
+        );
+        let machine = open(&ns, "\\REGISTRY\\MACHINE").unwrap();
+        assert_eq!(machine.subkey_at(0).unwrap().unwrap().full_name(), "\\REGISTRY\\MACHINE\\SYSTEM", "enumerated");
+        let (created, _) = session.create_subkey("New", &[], false).unwrap();
+        assert_eq!(created.full_name(), "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Control\\Session Manager\\New");
     }
 
     #[test]
