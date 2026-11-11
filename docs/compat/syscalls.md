@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 127 | 296 |
-| win32k | 135 | 737 |
+| win32k | 155 | 737 |
 
 ## ntoskrnl
 
@@ -506,7 +506,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10bb` | `NtGdiGetObjectBitmapHandle` | 2 |  |
 | `0x10bc` | `NtGdiGetOutlineTextMetricsInternalW` | 4 |  |
 | `0x10bd` | `NtGdiGetPath` | 4 |  |
-| `0x10be` | `NtGdiGetPixel` | 3 |  |
+| `0x10be` | `NtGdiGetPixel` | 3 | ✅ |
 | `0x10bf` | `NtGdiGetRandomRgn` | 3 | ✅ |
 | `0x10c0` | `NtGdiGetRasterizerCaps` | 2 |  |
 | `0x10c1` | `NtGdiGetRealizationInfo` | 3 |  |
@@ -643,7 +643,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1144` | `NtUserChangeClipboardChain` | 2 |  |
 | `0x1145` | `NtUserChangeDisplaySettings` | 4 |  |
 | `0x1146` | `NtUserCheckImeHotKey` | 2 |  |
-| `0x1147` | `NtUserCheckMenuItem` | 3 |  |
+| `0x1147` | `NtUserCheckMenuItem` | 3 | ✅ |
 | `0x1148` | `NtUserChildWindowFromPointEx` | 4 |  |
 | `0x1149` | `NtUserClipCursor` | 1 |  |
 | `0x114a` | `NtUserCloseClipboard` | 0 |  |
@@ -654,7 +654,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x114f` | `NtUserCopyAcceleratorTable` | 3 |  |
 | `0x1150` | `NtUserCountClipboardFormats` | 0 |  |
 | `0x1151` | `NtUserCreateAcceleratorTable` | 2 |  |
-| `0x1152` | `NtUserCreateCaret` | 4 |  |
+| `0x1152` | `NtUserCreateCaret` | 4 | ✅ |
 | `0x1153` | `NtUserCreateDesktop` | 5 | ✅ |
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
 | `0x1155` | `NtUserCreateLocalMemHandle` | 4 |  |
@@ -665,7 +665,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x115a` | `NtUserDdeSetQualityOfService` | 3 |  |
 | `0x115b` | `NtUserDeferWindowPos` | 8 |  |
 | `0x115c` | `NtUserDefSetText` | 2 | ✅ |
-| `0x115d` | `NtUserDeleteMenu` | 3 |  |
+| `0x115d` | `NtUserDeleteMenu` | 3 | ✅ |
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
 | `0x115f` | `NtUserDestroyCursor` | 2 | ✅ |
 | `0x1160` | `NtUserDestroyInputContext` | 1 |  |
@@ -684,7 +684,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
 | `0x116e` | `NtUserEnableScrollBar` | 3 | ✅ |
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
-| `0x1170` | `NtUserEndMenu` | 0 |  |
+| `0x1170` | `NtUserEndMenu` | 0 | ✅ |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 |  |
 | `0x1173` | `NtUserEnumDisplayMonitors` | 5 |  |
@@ -700,8 +700,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x117d` | `NtUserGetAppImeLevel` | 1 |  |
 | `0x117e` | `NtUserGetAsyncKeyState` | 1 | ✅ |
 | `0x117f` | `NtUserGetAtomName` | 2 | ✅ |
-| `0x1180` | `NtUserGetCaretBlinkTime` | 0 |  |
-| `0x1181` | `NtUserGetCaretPos` | 1 |  |
+| `0x1180` | `NtUserGetCaretBlinkTime` | 0 | ✅ |
+| `0x1181` | `NtUserGetCaretPos` | 1 | ✅ |
 | `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |
 | `0x1183` | `NtUserGetClassName` | 3 |  |
 | `0x1184` | `NtUserGetClipboardData` | 2 |  |
@@ -733,9 +733,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x119e` | `NtUserGetKeyNameText` | 3 |  |
 | `0x119f` | `NtUserGetKeyState` | 1 | ✅ |
 | `0x11a0` | `NtUserGetListBoxInfo` | 1 |  |
-| `0x11a1` | `NtUserGetMenuBarInfo` | 4 |  |
+| `0x11a1` | `NtUserGetMenuBarInfo` | 4 | ✅ |
 | `0x11a2` | `NtUserGetMenuIndex` | 2 |  |
-| `0x11a3` | `NtUserGetMenuItemRect` | 4 |  |
+| `0x11a3` | `NtUserGetMenuItemRect` | 4 | ✅ |
 | `0x11a4` | `NtUserGetMessage` | 4 | ✅ |
 | `0x11a5` | `NtUserGetMouseMovePointsEx` | 5 |  |
 | `0x11a6` | `NtUserGetObjectInformation` | 5 |  |
@@ -758,8 +758,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11b7` | `NtUserGetWindowPlacement` | 2 |  |
 | `0x11b8` | `NtUserGetWOWClass` | 2 |  |
 | `0x11b9` | `NtUserHardErrorControl` | 3 |  |
-| `0x11ba` | `NtUserHideCaret` | 1 |  |
-| `0x11bb` | `NtUserHiliteMenuItem` | 4 |  |
+| `0x11ba` | `NtUserHideCaret` | 1 | ✅ |
+| `0x11bb` | `NtUserHiliteMenuItem` | 4 | ✅ |
 | `0x11bc` | `NtUserImpersonateDdeClientWindow` | 2 |  |
 | `0x11bd` | `NtUserInitialize` | 3 | ✅ |
 | `0x11be` | `NtUserInitializeClientPfnArrays` | 4 | ✅ |
@@ -774,7 +774,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c7` | `NtUserLockWindowUpdate` | 1 |  |
 | `0x11c8` | `NtUserLockWorkStation` | 0 |  |
 | `0x11c9` | `NtUserMapVirtualKeyEx` | 4 |  |
-| `0x11ca` | `NtUserMenuItemFromPoint` | 4 |  |
+| `0x11ca` | `NtUserMenuItemFromPoint` | 4 | ✅ |
 | `0x11cb` | `NtUserMessageCall` | 7 | ✅ |
 | `0x11cc` | `NtUserMinMaximize` | 3 |  |
 | `0x11cd` | `NtUserMNDragLeave` | 0 |  |
@@ -813,8 +813,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
 | `0x11f0` | `NtUserSBGetParms` | 4 | ✅ |
-| `0x11f1` | `NtUserScrollDC` | 7 |  |
-| `0x11f2` | `NtUserScrollWindowEx` | 8 |  |
+| `0x11f1` | `NtUserScrollDC` | 7 | ✅ |
+| `0x11f2` | `NtUserScrollWindowEx` | 8 | ✅ |
 | `0x11f3` | `NtUserSelectPalette` | 3 |  |
 | `0x11f4` | `NtUserSendInput` | 3 |  |
 | `0x11f5` | `NtUserSetActiveWindow` | 1 |  |
@@ -838,9 +838,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1207` | `NtUserSetKeyboardState` | 1 |  |
 | `0x1208` | `NtUserSetLogonNotifyWindow` | 1 | ✅ |
 | `0x1209` | `NtUserSetMenu` | 3 | ✅ |
-| `0x120a` | `NtUserSetMenuContextHelpId` | 2 |  |
-| `0x120b` | `NtUserSetMenuDefaultItem` | 3 |  |
-| `0x120c` | `NtUserSetMenuFlagRtoL` | 1 |  |
+| `0x120a` | `NtUserSetMenuContextHelpId` | 2 | ✅ |
+| `0x120b` | `NtUserSetMenuDefaultItem` | 3 | ✅ |
+| `0x120c` | `NtUserSetMenuFlagRtoL` | 1 | ✅ |
 | `0x120d` | `NtUserSetObjectInformation` | 4 |  |
 | `0x120e` | `NtUserSetParent` | 2 |  |
 | `0x120f` | `NtUserSetProcessWindowStation` | 1 | ✅ |
@@ -865,7 +865,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1222` | `NtUserSetWindowStationUser` | 4 | ✅ |
 | `0x1223` | `NtUserSetWindowWord` | 3 |  |
 | `0x1224` | `NtUserSetWinEventHook` | 8 |  |
-| `0x1225` | `NtUserShowCaret` | 1 |  |
+| `0x1225` | `NtUserShowCaret` | 1 | ✅ |
 | `0x1226` | `NtUserShowScrollBar` | 3 | ✅ |
 | `0x1227` | `NtUserShowWindow` | 2 | ✅ |
 | `0x1228` | `NtUserShowWindowAsync` | 2 | ✅ |
@@ -873,11 +873,11 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x122a` | `NtUserSwitchDesktop` | 1 | ✅ |
 | `0x122b` | `NtUserSystemParametersInfo` | 4 | ✅ |
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
-| `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
+| `0x122d` | `NtUserThunkedMenuInfo` | 2 | ✅ |
 | `0x122e` | `NtUserThunkedMenuItemInfo` | 6 | ✅ |
 | `0x122f` | `NtUserToUnicodeEx` | 7 | ✅ |
 | `0x1230` | `NtUserTrackMouseEvent` | 1 |  |
-| `0x1231` | `NtUserTrackPopupMenuEx` | 6 |  |
+| `0x1231` | `NtUserTrackPopupMenuEx` | 6 | ✅ |
 | `0x1232` | `NtUserCalcMenuBar` | 5 |  |
 | `0x1233` | `NtUserPaintMenuBar` | 6 |  |
 | `0x1234` | `NtUserTranslateAccelerator` | 3 |  |

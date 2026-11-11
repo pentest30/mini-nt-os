@@ -395,27 +395,35 @@ pub fn resolve(thread: &ThreadInfo, raw: Msg32) -> Option<Resolved> {
         return Some(Resolved { message: raw, window, hit: HTCLIENT, click: None, set_cursor: None });
     }
     let (x, y) = (raw.pt_x, raw.pt_y);
-    let capture = thread.queue.with(|queue| queue.capture).0;
+    let ((capture, menu_owner), _, _) = thread.queue.with(|queue| (queue.capture, queue.menu_owner));
     let captured = capture != 0 && capture == window.handle;
     let hit = if captured { HTCLIENT } else { hit_test(&mut window, x, y) };
     let set_cursor = (!captured).then_some(raw.message);
     let client = hit == HTCLIENT;
     let extra = (!client).then_some(hit);
+    // A menu's tracking: its messages stay in the screen's coordinates.
+    let in_menu = menu_owner != 0;
+    let screen = |mut message: Msg32| {
+        if in_menu && client {
+            message.l_param = make_lparam(x, y);
+        }
+        message
+    };
     let Some((index, down)) = button else {
         let message = if client { WM_MOUSEMOVE } else { WM_MOUSEMOVE - WM_NC_MOUSE_OFFSET };
-        let message = message_for(&window, message, raw.w_param, x, y, raw.time, extra);
+        let message = screen(message_for(&window, message, raw.w_param, x, y, raw.time, extra));
         return Some(Resolved { message, window, hit, click: None, set_cursor });
     };
     let click = down.then(|| {
         let click = Click { time: raw.time, hwnd: window.handle, button: index, x, y };
-        let wants = !client || window.class.as_ref().is_some_and(|class| class.info.style & CS_DBLCLKS != 0);
+        let wants = in_menu || !client || window.class.as_ref().is_some_and(|class| class.info.style & CS_DBLCLKS != 0);
         let double =
             wants && STATE.lock().as_ref().is_some_and(|state| is_double_click(state.last_click.as_ref(), &click));
         (click, double)
     });
     let double = click.as_ref().is_some_and(|&(_, double)| double);
     let message = message_for(&window, button_message(index, down, double, client), raw.w_param, x, y, raw.time, extra);
-    Some(Resolved { message, window, hit, click, set_cursor })
+    Some(Resolved { message: screen(message), window, hit, click, set_cursor })
 }
 
 /// La fenêtre de premier niveau `top` de `thread` est à activer par un clic :

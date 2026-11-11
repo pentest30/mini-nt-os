@@ -1,5 +1,86 @@
 # Notes de passation
 
+- **Revue de la PR #122** (`claude/new-session-696xfc`) : une branche de menus reste sous MAX_DEPTH quel que soit
+  l'ordre où on l'accroche (les menus au-dessus de celui qui reçoit le sous-menu comptent, `Menus::depth_above`,
+  niveau par niveau ; sinon des arbres de 30 accrochés l'un sous l'autre grandissaient sans fin, et les parcours
+  récursifs avec eux sur la pile du noyau) ; MAX_ITEMS vaut pour le menu qui reçoit l'item (un sous-menu trouvé par
+  identifiant), pas pour celui qu'on nomme ; une fenêtre WS_POPUP à menu sans titre peint sa barre (nc_calc_size lui
+  faisait sa place) ; un BeginPaint qui ne peut écrire son PAINTSTRUCT remontre le caret. Laissé : MF_DISABLED seul
+  n'est pas grisé, c'est le sens de l'API (MF_GRAYED grise). Tests : hôte (`menu`, `nonclient`) ; scénario `caret`
+  (BeginPaint sur une adresse invalide).
+
+- **Les menus déroulants** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 22) : `win32k::menupopup` (la fenêtre #32768 : mise en page MENU_PopupMenuCalcSize avec coches, raccourcis
+  alignés et flèches, dessin, procédure du serveur, que `window::server_window_proc` reconnaît à sa classe et à qui
+  il passe le `lParam` emballé) ; `win32k::menutrack` (IntTrackPopupMenuEx et MENU_TrackMenu dans le service : place
+  sur le moniteur et rectangle évité, souris capturée, clavier, mnémoniques et WM_MENUCHAR, sous-menus, toutes les
+  notifications, WM_COMMAND posté ou TPM_RETURNCMD, WM_ENTERIDLE, EndMenu par WM_CANCELMODE). La file porte la
+  fenêtre qui suit un menu (`queue.menu_owner`, MSQ_STATE_MENUOWNER) : ses messages de la souris gardent leur place à
+  l'écran (`mouse::resolve`), comme ReactOS, et la boucle la lit dans `lParam`. Services : NtUserTrackPopupMenuEx,
+  NtUserEndMenu. Tests : hôte (`menutrack`, `menupopup`, `menu`) ; scénario `menu` étendu (touches et souris de QEMU,
+  messages postés, huit pixels du menu ouvert) sur AMD et Intel ; dix-huit mutations (séparateurs non sautés,
+  WM_COMMAND malgré TPM_RETURNCMD, sans WM_MENUCHAR, sans mnémonique, coordonnées de la souris ramenées à la zone
+  cliente, point du message plutôt que `lParam`, rectangle à éviter ignoré, EndMenu sans effet, TPM_NONOTIFY ignoré,
+  sans WM_UNINITMENUPOPUP, WM_ENTERIDLE une seule fois, sous-menu non ouvert à la souris, premier item non
+  sélectionné, Échap qui finit, ← sans effet, sans le WM_MENUSELECT final, sans `menu_owner`, sélection non
+  repeinte) le font toutes échouer. Vu en chemin : un WM_NCPAINT partiel
+  repeint tout le cadre (limite connue de `paint::nc_paint`), la barre de W montre donc son état réel quand un menu se
+  ferme au-dessus ; `menu1.c` doit charger la disposition de clavier pour recevoir les touches. Suite : le suivi de
+  la barre (HTMENU, SC_MOUSEMENU, MENU_TrackMouseMenuBar ; F10, Alt, SC_KEYMENU, MENU_TrackKbdMenuBar), puis le
+  menu système.
+
+- **La barre de menus** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape
+  21) : `win32k::menubar` : mise en page (MENU_MenuBarCalcSize : texte sans ses `&` plus MenuCharSize de chaque côté,
+  SM_CYMENU - 1 de haut au moins, lignes, MF_HELP à droite) faite par WM_NCCALCSIZE (`defwnd::nc_calc_size` prend une
+  fonction de mise en page au lieu de SM_CYMENU) et gardée dans les items du tas ; dessin dans le cadre (`frame_ops`
+  reçoit la barre mise en page) : fond COLOR_MENU, texte centré, lettre préfixée soulignée, surligné enfoncé, grisé
+  en relief. Services : NtUserGetMenuBarInfo (OBJID_MENU), NtUserGetMenuItemRect, NtUserMenuItemFromPoint,
+  NtUserHiliteMenuItem ; DrawMenuBar (HWNDLOCK_ROUTINE_DRAWMENUBAR = 0x55, SWP_FRAMECHANGED). Écarts voulus :
+  HiliteMenuItem selon la documentation, MenuItemFromPoint rend -1 hors des items, une barre vide n'a pas de place.
+  Tests : hôte (`menubar`, `menu`) ; scénario `menu` étendu (GetPixel de la barre, six pixels de la capture) sur AMD
+  et Intel ; quatre mutations (soulignement, Help à droite, DrawMenuBar, repeint du surlignage) le font échouer.
+  Pratique : un script de mutation qui restaure un fichier doit remettre sa date à jour (`os.utime`), sinon cargo
+  garde le binaire muté pour les runs suivants. Suite : TrackPopupMenuEx (fenêtre #32768, boucle du menu), puis
+  le clic dans la barre (HTMENU, SC_MOUSEMENU) et le clavier.
+
+- **Les menus dans le tas du bureau** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 20) : `abi::menu` (`MENU`, `ITEM` de ReactOS, MENUITEMINFOW, MENUINFO, les drapeaux) ; `win32k::menu` réécrit :
+  une table (`Menus`) sous un seul verrou, republiée dans le tas du bureau après chaque changement (textes, tableau
+  des items par 8, `MENU`) ; l'entrée de la table des handles porte l'adresse du serveur du `MENU`, `user32` lit
+  donc IsMenu, GetMenuItemCount, GetSubMenu, GetMenuItemID, GetMenuState, GetMenuString, GetMenuItemInfo,
+  GetMenuDefaultItem, GetMenuInfo ; AppendMenu(MF_POPUP) attache le sous-menu. Services : NtUserThunkedMenuItemInfo
+  (IntSetMenuItemInfo complet, insertion par position ou identifiant), NtUserCheckMenuItem, NtUserDeleteMenu,
+  NtUserSetMenuDefaultItem, NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId, NtUserSetMenuFlagRtoL ; SetMenu
+  (IntSetMenu : une barre par fenêtre, pas de fille) et `WND.IDMenu` (GetMenu). `DesktopHeap::alloc` va jusqu'à
+  DISPATCH_LEVEL. Écarts voulus : un sous-menu détruit quitte ses parents, un menu ne s'ouvre pas lui-même,
+  InsertMenuItem garde les coches. Tests : hôte (`menu`, `abi::menu`) ; scénario `menu` (`tests/native/menu1.c`)
+  sur AMD et Intel ; trois mutations (texte non publié, sans `IDMenu`, recherche qui ne descend pas) le font
+  échouer. Suite : la barre (taille et place des items, dessin, sélection, GetMenuBarInfo, DrawMenuBar), puis
+  TrackPopupMenuEx, puis le clic dans la barre et le clavier.
+
+- **Le caret** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 19) :
+  `win32k::caret` (un par thread, dans sa file : fenêtre, forme pleine, grise ou bitmap, position, niveau de masquage ;
+  dessiné en inversant l'écran dans la partie visible de la zone cliente) ; NtUserCreateCaret, NtUserShowCaret,
+  NtUserHideCaret, NtUserGetCaretPos, NtUserGetCaretBlinkTime (`sys::caret`), DESTROY_CARET, SETCARETBLINKTIME,
+  SETCARETPOS ; le clignotement par une minuterie du système (IDCARETTIMER) à procédure du noyau
+  (`timer::set_kernel_timer` : WM_SYSTIMER porte KERNEL_PROCEDURE, `user32` le rend à NtUserDispatchMessage) ;
+  BeginPaint le cache, EndPaint le remontre, ScrollWindowEx le cache puis le décale (co_IntFixCaret), la destruction
+  de sa fenêtre le détruit ; NtGdiGetPixel (`gdi::dc::get_pixel`). Écarts voulus avec ReactOS : le masquage se
+  compte, dessin aussitôt visible, pas de clignotement caché. Tests : hôte (`caret`, `timer`, `gdi::dc`) ; scénario `caret`
+  (`tests/native/caret1.c`, chaque pas relu par GetPixel, cinq pixels de la capture) sur AMD et Intel ; trois
+  mutations (BeginPaint sans masquage, booléen, sans co_IntFixCaret) le font échouer ; `scrollex`, `scroll`, `gui`,
+  `text`, `console`, `destroy`, `keyboard`. Pas encore : EVENT_OBJECT_* du caret, GetGUIThreadInfo,
+  `CursorBlinkRate` du registre. Suite proposée : les menus (clic dans la barre, TrackPopupMenu), puis réduire et
+  agrandir, puis un scénario du Bloc-notes.
+
+- **Le défilement d'une fenêtre ou d'un DC** (`claude/new-session-696xfc` ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 18) : `win32k::scrollex` (ScrollDC : la copie dans la surface
+  du DC et la région découverte, `plan` ; ScrollWindowEx : par un DC du cache, la région déjà à repeindre décalée,
+  SW_SCROLLCHILDREN, SW_INVALIDATE, SW_ERASE), NtUserScrollWindowEx et NtUserScrollDC (`sys::scroll`) ; BitBlt dans
+  une même surface copie les rectangles d'une région dans le sens du décalage (`gdi::bitblt::overlap_order`). Tests :
+  hôte (`scrollex`, `gdi::bitblt`) ; scénario `scrollex` (`tests/native/scrollx1.c`) sur AMD et Intel. Pas encore :
+  le DC propre de ScrollWindow (le caret : l'entrée au-dessus).
+
 - **La couche Mino des ruches, le premier démarrage, le logon** (`claude/hive-layer`, sur main `38d86a7` ; ADR-023
   proposée, choix du mainteneur du 2026-11-10 ; [`compat/m5-csrss.md`](compat/m5-csrss.md), étape 27) :
   `tools/mkhive` applique `tools/mkhive/mino.inf` (syntaxe des couches de ReactOS) aux ruches épinglées à la

@@ -48,10 +48,6 @@ pub type Layout<'a> = &'a dyn Fn(Named, i32, &[u16], Option<i32>, Quality) -> Op
 /// La hauteur de lfCaptionFont et de lfSmCaptionFont par défaut : un em de
 /// 11 pixels.
 pub const CAPTION_FONT_HEIGHT: i32 = -11;
-/// La hauteur de la police des menus (et de la barre).
-const MENU_FONT_HEIGHT: i32 = -11;
-/// Les pixels entre les titres de la barre.
-const MENU_ITEM_GAP: i32 = 8;
 
 /// Ce que le cadre aurait et qui n'est pas dessiné.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -264,7 +260,7 @@ pub fn frame_ops(
     ex_style: u32,
     (width, height): (i32, i32),
     text: &[u16],
-    menu_items: &[crate::menu::Item],
+    menu_bar: &dyn Fn(Rect) -> Option<crate::menubar::Bar>,
     active: bool,
     gradient: bool,
     m: &impl Fn(usize) -> i32,
@@ -292,30 +288,13 @@ pub fn frame_ops(
         let caption_height = if ex_style & WS_EX_TOOLWINDOW != 0 { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) };
         let caption = Rect::new(current.left, current.top, current.right, current.top + caption_height - 1);
         current.top += caption_height;
-        // La barre de menus (UserDrawMenuBar) : le champ des items, leur
-        // titre en Tahoma, huit pixels entre eux ; les séparateurs n'y
-        // sont pas (une barre n'en tient pas).
-        if !menu_items.is_empty() {
-            let height = m(sm::CYMENU);
-            let bar = Rect::new(current.left, current.top, current.right, current.top + height);
-            current.top += height;
-            ops.push(Op::Fill(bar, c(color::BTNFACE)));
-            let mut at = bar.left + m(sm::CXMENUCHECK) / 2;
-            for item in menu_items {
-                if item.flags & crate::menu::mf::SEPARATOR != 0 {
-                    continue;
-                }
-                if let Some(run) = layout(TAHOMA, MENU_FONT_HEIGHT, &item.caption, None, Quality::Antialiased) {
-                    let top = bar.top + (bar.bottom - bar.top - run.metrics.height()) / 2;
-                    let baseline = top + run.metrics.ascent;
-                    let color = c(color::MENUTEXT);
-                    for glyph in run.glyphs {
-                        let glyph_at = (at + glyph.x + glyph.bitmap.left, baseline - glyph.bitmap.top);
-                        ops.push(Op::Glyph { at: glyph_at, bitmap: glyph.bitmap, color, clip: bar });
-                    }
-                    at += run.width + 2 * MENU_ITEM_GAP;
-                }
+        // La barre de menus (MENU_DrawMenuBar) : sous le titre, de la
+        // hauteur que sa mise en page lui donne.
+        if let Some(bar) = menu_bar(current) {
+            if !crate::menubar::bar_ops(&bar, c, layout, &mut ops) {
+                unpainted.text = true;
             }
+            current.top = bar.rect.bottom;
         }
         let (from, to) = if active {
             (color::ACTIVECAPTION, color::GRADIENTACTIVECAPTION)
@@ -347,6 +326,13 @@ pub fn frame_ops(
             };
             ops.push(Op::Fill(Rect::new(caption.left, caption.bottom, caption.right, caption.bottom + 1), c(index)));
         }
+    } else if let Some(bar) = menu_bar(current) {
+        // Sans titre (une fenêtre WS_POPUP qui a un menu), la barre prend le
+        // haut de la place, que nc_calc_size lui a faite.
+        if !crate::menubar::bar_ops(&bar, c, layout, &mut ops) {
+            unpainted.text = true;
+        }
+        current.top = bar.rect.bottom;
     }
     if style & WS_MINIMIZE == 0 {
         if ex_style & WS_EX_CLIENTEDGE != 0 {
@@ -398,6 +384,11 @@ mod tests {
     }
 
     /// No fonts: the frame without its text and symbols.
+    /// No menu bar.
+    fn no_bar(_: Rect) -> Option<crate::menubar::Bar> {
+        None
+    }
+
     fn no_fonts(_: Named, _: i32, _: &[u16], _: Option<i32>, _: Quality) -> Option<TextRun> {
         None
     }
@@ -428,7 +419,7 @@ mod tests {
             ex_style,
             (width, height),
             text,
-            &[],
+            &no_bar,
             active,
             gradient,
             &metric,
@@ -453,8 +444,20 @@ mod tests {
             .iter()
             .map(|&bar| (bar_info(bar, &Bar::new(), style, 0, (window, client), &metric), bar == VERT))
             .collect();
-        let (ops, unpainted) =
-            frame_ops(style, 0, (100, 80), &[], &[], false, true, &metric, &system, &no_fonts, None, (&bars, false));
+        let (ops, unpainted) = frame_ops(
+            style,
+            0,
+            (100, 80),
+            &[],
+            &no_bar,
+            false,
+            true,
+            &metric,
+            &system,
+            &no_fonts,
+            None,
+            (&bars, false),
+        );
         assert!(!unpainted.scroll_bars && unpainted.text, "the bars, without their symbols");
         let mut pixels = alloc::vec![0u32; 100 * 80];
         let mut surface = Bitmap::new(&mut pixels, 100, 80, 100, PixelLayout::Rgbx).unwrap();
@@ -467,6 +470,40 @@ mod tests {
         assert_eq!(at(10, 10), 0, "the client area is not the frame's");
         let (_, alone) = render(style, 0, (100, 80), false);
         assert!(alone.scroll_bars, "without their state");
+    }
+
+    #[test]
+    fn a_popup_without_a_caption_paints_its_menu_bar() {
+        // WS_POPUP | WS_BORDER with a menu: defwnd::nc_calc_size gives the bar
+        // the top of the window, under the border; the frame paints it there.
+        let bar = |inside: Rect| {
+            Some(crate::menubar::Bar {
+                rect: Rect::new(inside.left, inside.top, inside.right, inside.top + 19),
+                items: Vec::new(),
+                char_width: 0,
+            })
+        };
+        let (ops, _) = frame_ops(
+            WS_POPUP | WS_BORDER,
+            0,
+            (100, 80),
+            &[],
+            &bar,
+            false,
+            true,
+            &metric,
+            &coded,
+            &no_fonts,
+            None,
+            (&[], false),
+        );
+        let mut pixels = alloc::vec![0u32; 100 * 80];
+        let mut surface = Bitmap::new(&mut pixels, 100, 80, 100, PixelLayout::Rgbx).unwrap();
+        paint(&mut surface, &ops, (0, 0), &Region::from_rect(Rect::new(0, 0, 100, 80)));
+        let at = |x: usize, y: usize| pixels[y * 100 + x];
+        assert_eq!(at(50, 5), coded(color::MENU).0, "the bar, under the border");
+        assert_eq!(at(50, 19), coded(color::BTNFACE).0, "its last line");
+        assert_eq!(at(50, 30), 0, "the client area is not the frame's");
     }
 
     #[test]
@@ -515,8 +552,20 @@ mod tests {
 
     #[test]
     fn frames_without_a_caption_or_with_a_client_edge() {
-        let (ops, unpainted) =
-            frame_ops(WS_POPUP, 0, (50, 50), &[], &[], false, true, &metric, &system, &no_fonts, None, (&[], false));
+        let (ops, unpainted) = frame_ops(
+            WS_POPUP,
+            0,
+            (50, 50),
+            &[],
+            &no_bar,
+            false,
+            true,
+            &metric,
+            &system,
+            &no_fonts,
+            None,
+            (&[], false),
+        );
         assert!(ops.is_empty() && unpainted == Unpainted::default(), "a popup has no frame");
         let (at, _) = render(WS_POPUP | WS_BORDER, 0, (20, 20), false);
         assert_eq!((at(0, 0), at(1, 1)), (system(color::WINDOWFRAME).0, 0), "a thin border");
@@ -539,7 +588,7 @@ mod tests {
                 ex_style,
                 (200, 100),
                 &[],
-                &[],
+                &no_bar,
                 false,
                 false,
                 &metric,

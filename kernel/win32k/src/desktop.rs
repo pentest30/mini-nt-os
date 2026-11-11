@@ -196,7 +196,8 @@ impl DesktopHeap {
     /// tas. `STATUS_NO_MEMORY` si le tas est plein.
     ///
     /// # IRQL
-    /// PASSIVE_LEVEL.
+    /// <= DISPATCH_LEVEL (le pool non paginé, `Section::write_kernel`) : les
+    /// menus y publient leurs items sous leur verrou (`crate::menu`).
     pub fn alloc(&self, size: u32) -> Result<u32, NtStatus> {
         let offset = self.free.lock().take(size.max(1), HEAP_GRANULARITY).ok_or(STATUS_NO_MEMORY)?;
         let zeros = alloc::vec![0u8; size as usize];

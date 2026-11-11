@@ -302,7 +302,32 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserGetScrollBarInfo, NtUserSetScrollBarInfo, NtUserShowScrollBar, NtUserEnableScrollBar ; le cadre dessine
   flèches, fond en damier (`Op::Mono`), curseur, coin et poignée de taille ; HTVSCROLL, HTHSCROLL, HTSIZE ; un clic
   devient WM_SYSCOMMAND SC_VSCROLL, que `user32` suit (DefWndTrackScrollBar) ; scénario `scroll`
-  (`tests/native/scroll1.c`). Pas encore SB_CTL, ScrollWindowEx, ScrollDC.
+  (`tests/native/scroll1.c`). Pas encore SB_CTL.
+  M6, étape 18 (le défilement, `win32k::scrollex`) : NtUserScrollDC (la copie dans la surface du DC, la région
+  découverte) et NtUserScrollWindowEx (par un DC du cache, la région déjà à repeindre décalée, SW_SCROLLCHILDREN,
+  SW_INVALIDATE, SW_ERASE) ; BitBlt dans une même surface copie dans le sens du décalage
+  (`gdi::bitblt::overlap_order`) ; scénario `scrollex` (`tests/native/scrollx1.c`).
+  M6, étape 19 (le caret, `win32k::caret`) : un par thread, dans sa file ; NtUserCreateCaret, NtUserShowCaret,
+  NtUserHideCaret (le masquage se compte), SetCaretPos, DestroyCaret, Get/SetCaretBlinkTime, NtUserGetCaretPos ; dessiné
+  en inversant l'écran ; il clignote par une minuterie du système dont la procédure est du noyau
+  (`timer::set_kernel_timer`, WM_SYSTIMER rendu à NtUserDispatchMessage) ; BeginPaint le cache, EndPaint le remontre,
+  ScrollWindowEx le décale ; NtGdiGetPixel ; scénario `caret` (`tests/native/caret1.c`).
+  M6, étape 20 (les menus dans le tas du bureau, `win32k::menu`, `abi::menu`) : `MENU` et `ITEM` de ReactOS (textes
+  compris) publiés dans le tas du bureau, que `user32` lit (IsMenu, GetMenuItemCount, GetSubMenu, GetMenuState,
+  GetMenuString, GetMenuItemInfo…) ; une table sous un seul verrou, recherche par identifiant dans les sous-menus ;
+  NtUserThunkedMenuItemInfo complet, NtUserCheckMenuItem, NtUserDeleteMenu, NtUserSetMenuDefaultItem,
+  NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId ; SetMenu (une barre par fenêtre, `WND.IDMenu`) ; scénario
+  `menu` (`tests/native/menu1.c`).
+  M6, étape 21 (la barre de menus, `win32k::menubar`) : mise en page (MENU_MenuBarCalcSize : lignes, MF_HELP à droite,
+  places dans le tas) par WM_NCCALCSIZE ; dessin (fond COLOR_MENU, texte centré, préfixe souligné, surligné enfoncé,
+  grisé en relief) ; NtUserGetMenuBarInfo, NtUserGetMenuItemRect, NtUserMenuItemFromPoint, NtUserHiliteMenuItem,
+  DrawMenuBar (HWNDLOCK_ROUTINE_DRAWMENUBAR) ; scénario `menu`.
+  M6, étape 22 (les menus déroulants) : la fenêtre #32768 (`win32k::menupopup` : mise en page, dessin, procédure du
+  serveur reconnue à sa classe par `window::server_window_proc`) ; le suivi (`win32k::menutrack` : IntTrackPopupMenuEx,
+  MENU_TrackMenu dans le service : place sur le moniteur et rectangle évité, souris capturée, ses messages en
+  coordonnées d'écran pendant le suivi, `queue.menu_owner`, clavier, mnémoniques et WM_MENUCHAR, sous-menus,
+  notifications, WM_COMMAND ou TPM_RETURNCMD) ; NtUserTrackPopupMenuEx, NtUserEndMenu ; scénario `menu` (touches et
+  souris de QEMU).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

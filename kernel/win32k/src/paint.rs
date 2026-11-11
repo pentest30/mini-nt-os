@@ -240,7 +240,7 @@ pub fn invalidate_windows(window: &Window, region: Option<&Region>, flags: u32) 
 
 /// IntIsWindowDrawable : `window` et ses parents sont visibles, et aucun
 /// parent n'est réduit.
-fn is_drawable(window: &Window) -> bool {
+pub(crate) fn is_drawable(window: &Window) -> bool {
     let state = window.state();
     if state.style & WS_VISIBLE == 0 {
         return false;
@@ -559,6 +559,8 @@ fn update_on_screen(state: &WindowState) -> Option<Region> {
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
 pub fn begin_paint(window: &Arc<Window>) -> PaintStruct32 {
+    // co_UserHideCaret: the caret does not stay under what is painted.
+    crate::caret::hide_in(window);
     let state = window::change(window, |state| {
         state.state2 |= WNDS2_STARTPAINT;
         state.state &= !(WNDS_PAINTNOTPROCESSED | WNDS_UPDATEDIRTY);
@@ -626,6 +628,7 @@ fn same_thread(window: &Window) -> bool {
 pub fn end_paint(window: &Window, hdc: u32) {
     crate::dce::release_dc(hdc);
     window::change(window, |state| state.state2 &= !(WNDS2_WMPAINTSENT | WNDS2_STARTPAINT));
+    crate::caret::show_in(window);
 }
 
 /// DefWindowProc de WM_PAINT : BeginPaint puis EndPaint, ce qui valide la
@@ -821,14 +824,13 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
     }
     let size = (state.window.right - state.window.left, state.window.bottom - state.window.top);
     let text = window::text(window).unwrap_or_default();
-    let menu_items = window::menu_items(window);
     let (bars, size_grip) = crate::scroll::frame_bars(window, &state);
     let (ops, unpainted) = crate::nonclient::frame_ops(
         state.style,
         state.ex_style,
         size,
         &text,
-        &menu_items,
+        &|rect| crate::menubar::paint(window, rect),
         state.state & WNDS_ACTIVEFRAME != 0,
         true,
         &crate::metrics::get,

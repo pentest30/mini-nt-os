@@ -136,6 +136,17 @@ pub(super) fn nt_gdi_rect_visible(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(win32k::gdi::dc::rect_visible(&dc.state(), rect)))
 }
 
+/// NtGdiGetPixel(hdc, x, y) : COLORREF, la couleur du point logique là où
+/// le DC peint (`win32k::gdi::dc::get_pixel`) ; CLR_INVALID ailleurs, ou
+/// pour un DC qui n'est pas au processus (`ERROR_INVALID_HANDLE`).
+pub(super) fn nt_gdi_get_pixel(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y] = arguments[..3] else { unreachable!("3 arguments") };
+    let Some(dc) = win32k::gdi::dc::lock(hdc) else {
+        return fail(ERROR_INVALID_HANDLE, win32k::gdi::dc::CLR_INVALID);
+    };
+    NtStatus(win32k::gdi::dc::get_pixel(&dc.state(), x as i32, y as i32))
+}
+
 /// Les caractères d'un texte que le noyau accepte en un appel.
 const MAX_TEXT: u32 = 0x1_0000;
 

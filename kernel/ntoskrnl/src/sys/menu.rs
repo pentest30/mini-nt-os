@@ -1,119 +1,181 @@
-//! Les services des menus (`win32k::menu`) : la barre de menus d'une
-//! fenêtre et ses items — la création passe par NtUserCallNoParam
-//! (CREATEMENU, CREATEMENUPOPUP), les items par NtUserThunkedMenuItemInfo,
-//! l'état par NtUserEnableMenuItem, la barre par NtUserSetMenu, la
-//! destruction par NtUserDestroyMenu.
+//! Les services des menus (`win32k::menu`) : la création passe par
+//! NtUserCallNoParam (CREATEMENU, CREATEMENUPOPUP, `super::mouse`), les items
+//! par NtUserThunkedMenuItemInfo, leur état par NtUserEnableMenuItem,
+//! NtUserCheckMenuItem et NtUserSetMenuDefaultItem, le menu par
+//! NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId et
+//! NtUserSetMenuFlagRtoL, la barre d'une fenêtre par NtUserSetMenu ; la
+//! destruction par NtUserRemoveMenu, NtUserDeleteMenu, NtUserDestroyMenu ;
+//! la barre se mesure par NtUserGetMenuBarInfo, NtUserGetMenuItemRect,
+//! NtUserMenuItemFromPoint et se surligne par NtUserHiliteMenuItem ; un menu
+//! déroulant se suit par NtUserTrackPopupMenuEx, et NtUserEndMenu finit le
+//! suivi. `user32` lit le reste lui-même dans le tas du bureau.
+//!
+//! Comme dans win32k, un échec rend FALSE (ou -1) et met l'erreur Win32
+//! dans le TEB ; un menu qui n'existe pas, `ERROR_INVALID_MENU_HANDLE`.
 
-use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
-use ke::usermem::UserPtr;
+use alloc::vec::Vec;
 
-/// La taille d'un MENUITEMINFOW de XP.
-const MENU_ITEM_INFO_SIZE: usize = 48;
-/// MIIM_* : les champs qu'un appel demande.
-const MIIM_STATE: u32 = 0x0001;
-const MIIM_ID: u32 = 0x0002;
-const MIIM_SUBMENU: u32 = 0x0004;
-const MIIM_STRING: u32 = 0x0040;
-const MIIM_FTYPE: u32 = 0x0100;
-/// MFT_SEPARATOR.
-const MFT_SEPARATOR: u32 = 0x0001;
-/// MF_BYPOSITION.
-const MF_BYPOSITION: u32 = 0x0400;
+use abi::menu::{
+    miim, MenuBarInfo32, MenuInfo32, MenuItemInfoW32, TpmParams32, MENUITEMINFOW_OLD_SIZE, ROSMENUINFO_SIZE,
+};
+use abi::ntstatus::NtStatus;
+use abi::winerror::{dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE};
+use ke::usermem::{copy_from_user, UserPtr};
 
-/// Le mot 32 bits à `at` de `bytes`.
-fn word(bytes: &[u8; MENU_ITEM_INFO_SIZE], at: usize) -> u32 {
-    u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+/// La taille d'un MENUITEMINFOW.
+const MENU_ITEM_INFO_SIZE: u32 = core::mem::size_of::<MenuItemInfoW32>() as u32;
+/// La taille de ROSMENUITEMINFO, que seul le `user32` de ReactOS donnait à
+/// SetMenuItemInfo : ses champs après MENUITEMINFOW ne sont pas lus.
+const ROSMENUITEMINFO_SIZE: u32 = 80;
+
+/// Met l'erreur Win32 `error` et rend `value`.
+fn fail(error: u32, value: u32) -> NtStatus {
+    let _ = win32k::set_last_error(error);
+    NtStatus(value)
 }
 
-/// Le titre de l'item : l'UNICODE_STRING à `caption` chez l'appelant (sa
-/// longueur, son tampon), comme `user32` le thunk.
-fn capture_caption(caption: u32) -> Result<alloc::vec::Vec<u16>, NtStatus> {
+/// TRUE, ou FALSE avec l'erreur.
+fn boolean(result: Result<(), u32>) -> NtStatus {
+    match result {
+        Ok(()) => NtStatus(1),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// Le menu `hmenu` existe, sinon `ERROR_INVALID_MENU_HANDLE`
+/// (UserGetMenuObject).
+fn menu(hmenu: u32) -> Result<u32, u32> {
+    if win32k::menu::exists(hmenu) {
+        Ok(hmenu)
+    } else {
+        Err(ERROR_INVALID_MENU_HANDLE)
+    }
+}
+
+/// ProbeAndCaptureUnicodeString : la légende d'un item, l'UNICODE_STRING
+/// en `caption` chez l'appelant ; `None` sans elle ou sans tampon.
+fn capture_caption(caption: u32) -> Result<Option<Vec<u16>>, u32> {
+    if caption == 0 {
+        return Ok(None);
+    }
     let mut string = [0u8; 8];
-    ke::usermem::copy_from_user(&mut string, u64::from(caption))?;
+    copy_from_user(&mut string, u64::from(caption)).map_err(dos_error)?;
     let length = u16::from_le_bytes([string[0], string[1]]) as usize & !1;
     let buffer = u32::from_le_bytes([string[4], string[5], string[6], string[7]]);
+    if buffer == 0 {
+        return Ok(None);
+    }
     let mut units = alloc::vec![0u8; length];
-    ke::usermem::copy_from_user(&mut units, u64::from(buffer))?;
-    Ok(units.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect())
+    copy_from_user(&mut units, u64::from(buffer)).map_err(dos_error)?;
+    Ok(Some(units.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect()))
+}
+
+/// UserInsertMenuItem et UserMenuItemInfo : le MENUITEMINFOW en `info` chez
+/// l'appelant, de 48 octets ou de 44 sans `hbmpItem` (0 alors) ; une autre
+/// taille, ou MIIM_BITMAP sans `hbmpItem`, `ERROR_INVALID_PARAMETER`. SetMenuItemInfo
+/// prend aussi la taille du ROSMENUITEMINFO de ReactOS.
+fn capture_item_info(info: u32, insert: bool) -> Result<MenuItemInfoW32, u32> {
+    let size = UserPtr::<u32>::new(info).read().map_err(dos_error)?;
+    let known =
+        size == MENU_ITEM_INFO_SIZE || size == MENUITEMINFOW_OLD_SIZE || (!insert && size == ROSMENUITEMINFO_SIZE);
+    if !known {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    let mut bytes = [0u8; MENU_ITEM_INFO_SIZE as usize];
+    let read = size.min(MENU_ITEM_INFO_SIZE) as usize;
+    copy_from_user(&mut bytes[..read], u64::from(info)).map_err(dos_error)?;
+    let item = MenuItemInfoW32::from_bytes(&bytes[..read]).ok_or(ERROR_INVALID_PARAMETER)?;
+    if !insert && size == MENUITEMINFOW_OLD_SIZE && item.f_mask & miim::BITMAP != 0 {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    Ok(item)
 }
 
 /// NtUserThunkedMenuItemInfo(hMenu, uItem, fByPosition, bInsert, lpmii,
-/// lpszCaption) : l'item inséré (`bInsert`) au bout ou à sa position, ou
-/// mis à jour — son identifiant, son sous-menu, son état, son séparateur,
-/// son titre. TRUE, FALSE sans menu ou champs illisibles.
+/// lpszCaption) : avec `bInsert`, un item neuf au bout, à sa position ou
+/// avant l'item d'identifiant `uItem` (`win32k::menu::insert_item`) ; sans,
+/// l'item `uItem` mis à jour (`win32k::menu::set_item_info`). Le texte vient
+/// de la légende capturée. TRUE ; FALSE et l'erreur sinon.
 pub(super) fn nt_user_thunked_menu_item_info(arguments: &[u32]) -> NtStatus {
     let [hmenu, item, by_position, insert, info, caption] = arguments[..6] else { unreachable!("6 arguments") };
-    let change = || -> Result<(), NtStatus> {
-        let menu = win32k::menu::get(hmenu).ok_or(STATUS_INVALID_PARAMETER)?;
-        let size = UserPtr::<u32>::new(info).read()? as usize;
-        if size != 44 && size != 48 {
-            // XP SP2 accepte les deux tailles (avec ou sans hbmpItem).
-            return Err(STATUS_INVALID_PARAMETER);
-        }
-        let mut bytes = [0u8; MENU_ITEM_INFO_SIZE];
-        ke::usermem::copy_from_user(&mut bytes[..size], u64::from(info))?;
-        let mask = word(&bytes, 4);
-        let mut flags = 0;
-        if mask & MIIM_FTYPE != 0 && word(&bytes, 8) & MFT_SEPARATOR != 0 {
-            flags |= win32k::menu::mf::SEPARATOR;
-        }
-        if mask & MIIM_STATE != 0 && word(&bytes, 12) & 0x0003 != 0 {
-            flags |= win32k::menu::mf::DISABLED | win32k::menu::mf::GRAYED;
-        }
-        let title =
-            if mask & MIIM_STRING != 0 && caption != 0 { capture_caption(caption)? } else { alloc::vec::Vec::new() };
-        let new = win32k::menu::Item {
-            id: if mask & MIIM_ID != 0 { word(&bytes, 16) } else { 0 },
-            caption: title,
-            flags,
-            popup: if mask & MIIM_SUBMENU != 0 { word(&bytes, 20) } else { 0 },
-        };
+    let run = || {
+        let hmenu = menu(hmenu)?;
+        let text = capture_caption(caption)?;
+        let info = capture_item_info(info, insert != 0)?;
         if insert != 0 {
-            let at = (by_position != 0).then_some(item);
-            menu.insert(at, new);
-            return Ok(());
+            win32k::menu::insert_item(hmenu, item, by_position != 0, &info, text.as_deref())
+        } else {
+            win32k::menu::set_item_info(hmenu, item, by_position != 0, &info, text.as_deref())
         }
-        menu.set(item, by_position != 0, |held| {
-            if mask & MIIM_ID != 0 {
-                held.id = new.id;
-            }
-            if mask & MIIM_SUBMENU != 0 {
-                held.popup = new.popup;
-            }
-            if mask & (MIIM_FTYPE | MIIM_STATE) != 0 {
-                held.flags = (held.flags & !win32k::menu::mf::SEPARATOR) | (new.flags & win32k::menu::mf::SEPARATOR);
-                held.flags = (held.flags & !(win32k::menu::mf::DISABLED | win32k::menu::mf::GRAYED))
-                    | (new.flags & (win32k::menu::mf::DISABLED | win32k::menu::mf::GRAYED));
-            }
-            if mask & MIIM_STRING != 0 && !new.caption.is_empty() {
-                held.caption = new.caption;
-            }
-        })
-        .ok_or(STATUS_INVALID_PARAMETER)
     };
-    let failed = |status: NtStatus| {
-        let _ = win32k::set_last_error(abi::winerror::dos_error(status));
-        NtStatus(0)
-    };
-    change().map_or_else(failed, |()| NtStatus(1))
+    boolean(run())
 }
 
-/// NtUserEnableMenuItem(hMenu, uItem, uEnable) : l'état de l'item —
-/// MF_ENABLED (0) le remet, MF_GRAYED/MF_DISABLED le retire — par
-/// identifiant ou position (`MF_BYPOSITION`) ; rend son état d'avant
-/// (MF_ENABLED, MF_GRAYED…), -1 sans item.
+/// NtUserThunkedMenuInfo(hMenu, lpcmi) : le MENUINFO (de 28 octets jusqu'à
+/// la taille d'un ROSMENUINFO, dont seuls les champs de MENUINFO sont lus)
+/// change le menu (`win32k::menu::set_info`). TRUE ; FALSE et l'erreur
+/// sinon.
+pub(super) fn nt_user_thunked_menu_info(arguments: &[u32]) -> NtStatus {
+    let [hmenu, info] = arguments[..2] else { unreachable!("2 arguments") };
+    let run = || {
+        let hmenu = menu(hmenu)?;
+        let size = UserPtr::<u32>::new(info).read().map_err(dos_error)?;
+        let least = core::mem::size_of::<MenuInfo32>() as u32;
+        if !(least..=ROSMENUINFO_SIZE).contains(&size) {
+            return Err(ERROR_INVALID_PARAMETER);
+        }
+        let mut bytes = [0u8; core::mem::size_of::<MenuInfo32>()];
+        copy_from_user(&mut bytes, u64::from(info)).map_err(dos_error)?;
+        let info = MenuInfo32::from_bytes(&bytes).ok_or(ERROR_INVALID_PARAMETER)?;
+        win32k::menu::set_info(hmenu, &info).then_some(()).ok_or(ERROR_INVALID_MENU_HANDLE)
+    };
+    boolean(run())
+}
+
+/// NtUserEnableMenuItem(hMenu, uIDEnableItem, uEnable) : l'état grisé et
+/// désactivé de l'item, par identifiant ou position (MF_BYPOSITION) ; rend
+/// celui d'avant (MF_GRAYED, MF_DISABLED), -1 sans menu ou item.
 pub(super) fn nt_user_enable_menu_item(arguments: &[u32]) -> NtStatus {
     let [hmenu, item, enable] = arguments[..3] else { unreachable!("3 arguments") };
-    let Some(menu) = win32k::menu::get(hmenu) else { return NtStatus(u32::MAX) };
-    let by_position = enable & MF_BYPOSITION != 0;
-    let Some(before) = menu.find(item, by_position) else { return NtStatus(u32::MAX) };
-    let previous = u32::from(before.flags & (win32k::menu::mf::GRAYED | win32k::menu::mf::DISABLED) != 0);
-    let disable = enable & (win32k::menu::mf::GRAYED | win32k::menu::mf::DISABLED) != 0;
-    let _ = menu.set(item, by_position, |held| {
-        held.flags = (held.flags & !(win32k::menu::mf::GRAYED | win32k::menu::mf::DISABLED))
-            | if disable { win32k::menu::mf::GRAYED | win32k::menu::mf::DISABLED } else { 0 };
-    });
-    NtStatus(previous)
+    match menu(hmenu) {
+        Ok(hmenu) => NtStatus(win32k::menu::enable(hmenu, item, enable)),
+        Err(error) => fail(error, u32::MAX),
+    }
+}
+
+/// NtUserCheckMenuItem(hMenu, uIDCheckItem, uCheck) : l'item coché ou non
+/// (MF_CHECKED) ; rend son état d'avant, -1 sans menu ou item.
+pub(super) fn nt_user_check_menu_item(arguments: &[u32]) -> NtStatus {
+    let [hmenu, item, check] = arguments[..3] else { unreachable!("3 arguments") };
+    match menu(hmenu) {
+        Ok(hmenu) => NtStatus(win32k::menu::check(hmenu, item, check)),
+        Err(error) => fail(error, u32::MAX),
+    }
+}
+
+/// NtUserSetMenuDefaultItem(hMenu, uItem, fByPos) : l'item par défaut du
+/// menu (-1 : aucun). BOOL.
+pub(super) fn nt_user_set_menu_default_item(arguments: &[u32]) -> NtStatus {
+    let [hmenu, item, by_position] = arguments[..3] else { unreachable!("3 arguments") };
+    match menu(hmenu) {
+        Ok(hmenu) => NtStatus(u32::from(win32k::menu::set_default(hmenu, item, by_position != 0))),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtUserSetMenuContextHelpId(hMenu, dwContextHelpId). BOOL.
+pub(super) fn nt_user_set_menu_context_help_id(arguments: &[u32]) -> NtStatus {
+    let [hmenu, help_id] = arguments[..2] else { unreachable!("2 arguments") };
+    boolean(menu(hmenu).map(|hmenu| {
+        win32k::menu::set_help_id(hmenu, help_id);
+    }))
+}
+
+/// NtUserSetMenuFlagRtoL(hMenu) : le menu se lit de droite à gauche. BOOL.
+pub(super) fn nt_user_set_menu_flag_rtol(arguments: &[u32]) -> NtStatus {
+    boolean(menu(arguments[0]).map(|hmenu| {
+        win32k::menu::set_rtol(hmenu);
+    }))
 }
 
 /// NtUserDestroyMenu(hMenu) : BOOL. Le menu et ses sous-menus sont détruits
@@ -123,8 +185,7 @@ pub(super) fn nt_user_destroy_menu(arguments: &[u32]) -> NtStatus {
     if win32k::menu::destroy(arguments[0]) {
         NtStatus(1)
     } else {
-        let _ = win32k::set_last_error(abi::winerror::ERROR_INVALID_MENU_HANDLE);
-        NtStatus(0)
+        fail(ERROR_INVALID_MENU_HANDLE, 0)
     }
 }
 
@@ -132,16 +193,180 @@ pub(super) fn nt_user_destroy_menu(arguments: &[u32]) -> NtStatus {
 /// sous-menu vit) ; TRUE, FALSE sans lui.
 pub(super) fn nt_user_remove_menu(arguments: &[u32]) -> NtStatus {
     let [hmenu, item, flags] = arguments[..3] else { unreachable!("3 arguments") };
-    let Some(menu) = win32k::menu::get(hmenu) else { return NtStatus(0) };
-    NtStatus(u32::from(menu.remove(item, flags & MF_BYPOSITION != 0).is_some()))
+    match menu(hmenu) {
+        Ok(hmenu) => NtStatus(u32::from(win32k::menu::remove(hmenu, item, flags, false))),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtUserDeleteMenu(hMenu, uPosition, uFlags) : l'item retiré, son
+/// sous-menu détruit ; TRUE, FALSE sans lui.
+pub(super) fn nt_user_delete_menu(arguments: &[u32]) -> NtStatus {
+    let [hmenu, item, flags] = arguments[..3] else { unreachable!("3 arguments") };
+    match menu(hmenu) {
+        Ok(hmenu) => NtStatus(u32::from(win32k::menu::remove(hmenu, item, flags, true))),
+        Err(error) => fail(error, 0),
+    }
 }
 
 /// NtUserSetMenu(hWnd, hMenu, bRepaint) : la barre de menus de la fenêtre
-/// (0 la retire) ; la zone cliente se recalcule et le cadre se repeint.
-/// TRUE, FALSE sans fenêtre.
+/// (0 la retire ; `win32k::window::set_menu`). TRUE ; FALSE pour une
+/// fenêtre qui n'existe pas ou qui est fille, un menu qui n'existe pas ou
+/// qui est la barre d'une autre fenêtre.
 pub(super) fn nt_user_set_menu(arguments: &[u32]) -> NtStatus {
-    let [hwnd, hmenu, _repaint] = arguments[..3] else { unreachable!("3 arguments") };
-    let Some(window) = win32k::window::get(hwnd) else { return NtStatus(0) };
-    win32k::window::set_menu(&window, hmenu);
+    let [hwnd, hmenu, repaint] = arguments[..3] else { unreachable!("3 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    boolean(win32k::window::set_menu(&window, hmenu, repaint != 0))
+}
+
+/// Le RECT `rect` en `address` chez le client.
+fn give_rect(address: u32, rect: win32k::gdi::dib::Rect) -> Result<(), u32> {
+    let words = [rect.left, rect.top, rect.right, rect.bottom];
+    let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    ke::usermem::copy_to_user(u64::from(address), &bytes).map_err(dos_error)
+}
+
+/// NtUserGetMenuBarInfo(hwnd, idObject, idItem, pmbi) : BOOL ; pour la barre
+/// (OBJID_MENU) d'une fenêtre qui n'est pas fille, le MENUBARINFO (32
+/// octets) : le rectangle de la barre à l'écran (`idItem` 0 : depuis son
+/// premier item, de la taille `cxMenu` × `cyMenu`) ou de l'item `idItem` - 1,
+/// le menu, et qui a le focus (rien sans suivi du menu). Pas encore les menus
+/// déroulants (OBJID_CLIENT) ni le menu système (OBJID_SYSMENU) : FALSE.
+pub(super) fn nt_user_get_menu_bar_info(arguments: &[u32]) -> NtStatus {
+    let [hwnd, object, item, info] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    let run = || -> Result<bool, u32> {
+        let state = window.state();
+        if object as i32 != abi::user::OBJID_MENU || state.style & abi::user::WS_CHILD != 0 || state.menu == 0 {
+            return Ok(false);
+        }
+        let hmenu = state.menu;
+        if UserPtr::<u32>::new(info).read().map_err(dos_error)? != core::mem::size_of::<MenuBarInfo32>() as u32 {
+            return Err(ERROR_INVALID_PARAMETER);
+        }
+        let Some(menu) = win32k::menu::state(hmenu) else { return Ok(false) };
+        if item as usize > menu.items.len() {
+            return Ok(false);
+        }
+        let rect = if item == 0 {
+            let origin = win32k::menubar::item_rect(Some(&window), hmenu, 0).unwrap_or_default();
+            win32k::gdi::dib::Rect::new(
+                origin.left,
+                origin.top,
+                origin.left + menu.width as i32,
+                origin.top + menu.height as i32,
+            )
+        } else {
+            win32k::menubar::item_rect(Some(&window), hmenu, item - 1).unwrap_or_default()
+        };
+        let focused = item != 0 && menu.focused == item - 1;
+        let answer = MenuBarInfo32 {
+            cb_size: core::mem::size_of::<MenuBarInfo32>() as u32,
+            rc_bar: [rect.left, rect.top, rect.right, rect.bottom],
+            h_menu: hmenu,
+            hwnd_menu: 0,
+            focus: u32::from(focused) << 1,
+        };
+        ke::usermem::copy_to_user(u64::from(info), answer.as_bytes()).map_err(dos_error)?;
+        Ok(true)
+    };
+    match run() {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtUserGetMenuItemRect(hWnd, hMenu, uItem, lprcItem) : BOOL ; le
+/// rectangle de l'item `uItem` (sa position) à l'écran, dans la fenêtre
+/// dont le menu est la barre (`hWnd`, sinon celle du menu)
+/// (`win32k::menubar::item_rect`).
+pub(super) fn nt_user_get_menu_item_rect(arguments: &[u32]) -> NtStatus {
+    let [hwnd, hmenu, item, rect] = arguments[..4] else { unreachable!("4 arguments") };
+    if rect == 0 || !win32k::menu::exists(hmenu) {
+        return NtStatus(0);
+    }
+    let window = if hwnd == 0 { None } else { win32k::window::get(hwnd) };
+    if hwnd != 0 && window.is_none() {
+        return NtStatus(0);
+    }
+    match win32k::menubar::item_rect(window.as_deref(), hmenu, item) {
+        Some(found) => boolean(give_rect(rect, found)),
+        None => NtStatus(0),
+    }
+}
+
+/// NtUserMenuItemFromPoint(hWnd, hMenu, X, Y) : la position de l'item du
+/// menu sous le point (X, Y) de l'écran (`win32k::menubar::item_from_point`) ;
+/// -1 hors des items, sans menu ou sans sa fenêtre.
+pub(super) fn nt_user_menu_item_from_point(arguments: &[u32]) -> NtStatus {
+    let [_hwnd, hmenu, x, y] = arguments[..4] else { unreachable!("4 arguments") };
+    NtStatus(win32k::menubar::item_from_point(hmenu, (x as i32, y as i32)).unwrap_or(u32::MAX))
+}
+
+/// NtUserHiliteMenuItem(hWnd, hMenu, uItemHilite, uHilite) : l'item de la
+/// barre surligné (MF_HILITE) ou éteint, par position (MF_BYPOSITION) ou
+/// identifiant, et la barre repeinte (`win32k::menubar::hilite`) ; TRUE,
+/// même sans l'item (comme ReactOS). FALSE pour une fenêtre ou un menu qui
+/// n'existe pas.
+pub(super) fn nt_user_hilite_menu_item(arguments: &[u32]) -> NtStatus {
+    let [hwnd, hmenu, item, hilite] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    match menu(hmenu) {
+        Ok(hmenu) => {
+            win32k::menubar::hilite(&window, hmenu, item, hilite);
+            NtStatus(1)
+        }
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtUserTrackPopupMenuEx(hMenu, fuFlags, x, y, hWnd, lptpm) : le menu
+/// déroulant montré en (x, y) et suivi pour la fenêtre `hWnd`, du thread
+/// courant (`win32k::menutrack::track_popup_menu`) ; rend, avec
+/// TPM_RETURNCMD, l'identifiant de l'item choisi (0 sans), sinon TRUE.
+/// FALSE : des drapeaux inconnus (`ERROR_INVALID_FLAGS`), un menu
+/// (`ERROR_INVALID_MENU_HANDLE`) ou une fenêtre qui n'existe pas, un
+/// TPMPARAMS (son rectangle que le menu évite) d'une autre taille
+/// (`ERROR_INVALID_PARAMETER`), une fenêtre d'un autre thread, un menu déjà
+/// montré (`ERROR_POPUP_ALREADY_ACTIVE`).
+pub(super) fn nt_user_track_popup_menu_ex(arguments: &[u32]) -> NtStatus {
+    let [hmenu, flags, x, y, hwnd, params] = arguments[..6] else { unreachable!("6 arguments") };
+    if flags & !abi::menu::tpm::VALID != 0 {
+        return fail(abi::winerror::ERROR_INVALID_FLAGS, 0);
+    }
+    let hmenu = match menu(hmenu) {
+        Ok(hmenu) => hmenu,
+        Err(error) => return fail(error, 0),
+    };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    let exclude = if params == 0 {
+        None
+    } else {
+        let mut bytes = [0u8; core::mem::size_of::<TpmParams32>()];
+        if copy_from_user(&mut bytes, u64::from(params)).is_err() {
+            return NtStatus(0);
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        if word(0) != core::mem::size_of::<TpmParams32>() as u32 {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        let side = |at: usize| word(at) as i32;
+        Some(win32k::gdi::dib::Rect::new(side(4), side(8), side(12), side(16)))
+    };
+    let Ok(thread) = win32k::convert_current_thread() else { return NtStatus(0) };
+    if thread.server != window.pti {
+        return NtStatus(0);
+    }
+    drop(thread);
+    match win32k::menutrack::track_popup_menu(hmenu, flags, (x as i32, y as i32), &window, exclude) {
+        Ok(result) => NtStatus(result),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtUserEndMenu() : le suivi d'un menu en cours finit
+/// (`win32k::menutrack::end_menu`) ; TRUE.
+pub(super) fn nt_user_end_menu(_arguments: &[u32]) -> NtStatus {
+    win32k::menutrack::end_menu();
     NtStatus(1)
 }

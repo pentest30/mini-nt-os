@@ -88,6 +88,8 @@ pub const BDR_RAISEDINNER: u32 = 0x0004;
 pub const BDR_SUNKENINNER: u32 = 0x0008;
 pub const EDGE_RAISED: u32 = BDR_RAISEDOUTER | BDR_RAISEDINNER;
 pub const EDGE_SUNKEN: u32 = BDR_SUNKENOUTER | BDR_SUNKENINNER;
+/// EDGE_ETCHED : un sillon (les séparateurs des menus).
+pub const EDGE_ETCHED: u32 = BDR_SUNKENOUTER | BDR_RAISEDINNER;
 pub const BF_LEFT: u32 = 0x0001;
 pub const BF_TOP: u32 = 0x0002;
 pub const BF_RIGHT: u32 = 0x0004;

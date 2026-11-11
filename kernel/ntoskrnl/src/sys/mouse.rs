@@ -48,7 +48,8 @@ pub(super) fn nt_user_set_capture(arguments: &[u32]) -> NtStatus {
 }
 
 /// NtUserCallNoParam(Routine) : `NOPARAM_ROUTINE_RELEASECAPTURE`, la
-/// capture rendue (TRUE) ; `NOPARAM_ROUTINE_CREATEMENU` et
+/// capture rendue (TRUE) ; `NOPARAM_ROUTINE_DESTROY_CARET`, DestroyCaret
+/// (`win32k::caret::destroy_current`, TRUE) ; `NOPARAM_ROUTINE_CREATEMENU` et
 /// `NOPARAM_ROUTINE_CREATEMENUPOPUP` (`0` et `1`, les premières de l'enum
 /// de XP SP2), un menu neuf — son handle (`win32k::menu`). Une autre rend
 /// 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
@@ -58,9 +59,10 @@ pub(super) fn nt_user_call_no_param(arguments: &[u32]) -> NtStatus {
             win32k::mouse::set_capture(&current(), None);
             NtStatus(1)
         }
-        0 | 1 => match win32k::menu::create() {
+        abi::user::NOPARAM_ROUTINE_DESTROY_CARET => NtStatus(u32::from(win32k::caret::destroy_current())),
+        0 | 1 => match win32k::menu::create(arguments[0] == 1) {
             Ok(handle) => NtStatus(handle),
-            Err(status) => fail(abi::winerror::dos_error(status)),
+            Err(error) => fail(error),
         },
         routine => {
             UNSUPPORTED_NO_PARAM_ROUTINES.report(routine);

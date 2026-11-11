@@ -156,6 +156,11 @@ pub struct QueueState {
     /// La fenêtre du thread qui a la capture de la souris (0 : aucune ;
     /// `crate::mouse::set_capture`).
     pub capture: u32,
+    /// La fenêtre qui suit un menu (`MenuOwner`, MSQ_STATE_MENUOWNER : celle
+    /// du menu déroulant, ou la propriétaire de la barre ; 0 : aucune) : les
+    /// messages de la souris gardent leur place à l'écran
+    /// (`crate::menutrack`).
+    pub menu_owner: u32,
     /// WM_QUIT demandé, avec son code de sortie.
     quit: Option<u32>,
     /// `cPaintsReady` : les fenêtres du thread qui ont à se peindre.
@@ -164,6 +169,8 @@ pub struct QueueState {
     /// arrivé depuis la dernière fois qu'on a regardé (fsChangeBits).
     pub wake: u16,
     pub change: u16,
+    /// Le caret du thread (`CaretInfo`, `crate::caret`).
+    pub caret: crate::caret::Caret,
 }
 
 impl Default for QueueState {
@@ -176,10 +183,12 @@ impl Default for QueueState {
             active: 0,
             focus: 0,
             capture: 0,
+            menu_owner: 0,
             quit: None,
             paints: 0,
             wake: 0,
             change: 0,
+            caret: crate::caret::Caret::default(),
         }
     }
 }

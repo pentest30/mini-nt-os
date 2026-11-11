@@ -43,6 +43,10 @@ pub const ERROR_TIMEOUT: u32 = 1460;
 pub const ERROR_SUCCESS: u32 = 0;
 /// ERROR_INVALID_MENU_HANDLE.
 pub const ERROR_INVALID_MENU_HANDLE: u32 = 1401;
+/// ERROR_MENU_ITEM_NOT_FOUND.
+pub const ERROR_MENU_ITEM_NOT_FOUND: u32 = 1456;
+/// ERROR_POPUP_ALREADY_ACTIVE: TrackPopupMenu on a menu already shown.
+pub const ERROR_POPUP_ALREADY_ACTIVE: u32 = 1446;
 /// ERROR_INVALID_CURSOR_HANDLE.
 pub const ERROR_INVALID_CURSOR_HANDLE: u32 = 1402;
 /// The window has no scroll bars (GetScrollInfo before any).

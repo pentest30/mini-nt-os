@@ -187,14 +187,19 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// le processus) ; `ONEPARAM_ROUTINE_GETCURSORPOS` : la place du curseur
 /// dans le POINT `Param` (`super::mouse::get_cursor_pos`) ;
 /// `ONEPARAM_ROUTINE_CREATEEMPTYCUROBJECT` : un curseur vide
-/// (`super::cursor::create_empty_cur_object`). Une autre rend 0
-/// et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
+/// (`super::cursor::create_empty_cur_object`) ;
+/// `ONEPARAM_ROUTINE_SETCARETBLINKTIME` : SetCaretBlinkTime (TRUE). Une
+/// autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
 pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
     let (param, routine) = (arguments[0], arguments[1]);
     match routine {
         abi::user::ONEPARAM_ROUTINE_RELEASEDC => NtStatus(u32::from(win32k::dce::release_dc(param))),
         abi::user::ONEPARAM_ROUTINE_GETCURSORPOS => super::mouse::get_cursor_pos(param),
         abi::user::ONEPARAM_ROUTINE_CREATEEMPTYCUROBJECT => super::cursor::create_empty_cur_object(param),
+        abi::user::ONEPARAM_ROUTINE_SETCARETBLINKTIME => {
+            win32k::caret::set_blink_time(param);
+            NtStatus(1)
+        }
         ONEPARAM_ROUTINE_POSTQUITMESSAGE => {
             queue::post_quit(&current(), param);
             NtStatus(1)

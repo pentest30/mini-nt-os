@@ -463,6 +463,9 @@ pub const RDW_VALID_FLAGS: u32 = RDW_ERASE
 /// HWNDLOCK_ROUTINE_UPDATEWINDOW: the routine of NtUserCallHwndLock behind
 /// UpdateWindow (user32!UpdateWindow pushes 0x5E).
 pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
+/// HWNDLOCK_ROUTINE_DRAWMENUBAR: DrawMenuBar, by NtUserCallHwndLock (XP's
+/// order of the enum, as the routines above).
+pub const HWNDLOCK_ROUTINE_DRAWMENUBAR: u32 = 0x55;
 
 /// SPI_*: the actions of SystemParametersInfo that win32k answers.
 /// SPI_GETICONTITLELOGFONT: the font of the icon titles (`pvParam` a
@@ -946,6 +949,14 @@ pub const WMSZ_BOTTOMRIGHT: u32 = 8;
 /// NOPARAM_ROUTINE_RELEASECAPTURE: ReleaseCapture, by NtUserCallNoParam
 /// (user32!ReleaseCapture pushes 0xD).
 pub const NOPARAM_ROUTINE_RELEASECAPTURE: u32 = 0x0D;
+/// NOPARAM_ROUTINE_DESTROY_CARET: DestroyCaret (XP's order of the enum).
+pub const NOPARAM_ROUTINE_DESTROY_CARET: u32 = 0x05;
+/// ONEPARAM_ROUTINE_SETCARETBLINKTIME: SetCaretBlinkTime.
+pub const ONEPARAM_ROUTINE_SETCARETBLINKTIME: u32 = 0x3B;
+/// TWOPARAM_ROUTINE_SETCARETPOS: SetCaretPos.
+pub const TWOPARAM_ROUTINE_SETCARETPOS: u32 = 0x6E;
+/// IDCARETTIMER: the system timer that makes the caret blink.
+pub const IDCARETTIMER: u32 = 0xFFFF;
 /// ONEPARAM_ROUTINE_GETCURSORPOS: GetCursorPos, by NtUserCallOneParam with
 /// the POINT (user32!GetCursorPos pushes 0x26).
 pub const ONEPARAM_ROUTINE_GETCURSORPOS: u32 = 0x26;
@@ -1675,6 +1686,10 @@ pub mod esb {
 pub const OBJID_HSCROLL: i32 = -6;
 pub const OBJID_VSCROLL: i32 = -5;
 pub const OBJID_CLIENT: i32 = -4;
+/// OBJID_MENU: a window's menu bar (GetMenuBarInfo).
+pub const OBJID_MENU: i32 = -3;
+/// OBJID_SYSMENU: a window's system menu.
+pub const OBJID_SYSMENU: i32 = -1;
 
 /// STATE_SYSTEM_*: the state of a part of a scroll bar (`rgstate`).
 pub mod state_system {
@@ -1692,6 +1707,21 @@ pub const CCHILDREN_SCROLLBAR: usize = 5;
 
 /// SBS_VERT: a vertical scroll bar control.
 pub const SBS_VERT: u32 = 0x0001;
+
+/// SW_*: what ScrollWindowEx does besides scrolling.
+pub mod sw_scroll {
+    /// The children move too (WM_MOVE), and are scrolled with the client
+    /// area.
+    pub const SCROLLCHILDREN: u32 = 0x0001;
+    /// What the scroll uncovers is invalidated.
+    pub const INVALIDATE: u32 = 0x0002;
+    /// And erased (with INVALIDATE: WM_ERASEBKGND at the next paint).
+    pub const ERASE: u32 = 0x0004;
+    /// Smoothly (ignored, as in ReactOS).
+    pub const SMOOTHSCROLL: u32 = 0x0010;
+    /// ReactOS's (`undocuser.h`): ScrollWindow, with the window's DC.
+    pub const SCROLLWNDDCE: u32 = 0x8000;
+}
 
 /// SBDATA, 32-bit: the range, page and position of a scroll bar, which
 /// `user32` reads itself (GetScrollPos, GetScrollRange).

@@ -482,8 +482,7 @@ static void check_queue(void)
     DbgPrint("[destroy] messages for K after it: %d, its timer killed again %d\n", left, killed);
 }
 
-/* user32 cannot read win32k's menus yet (IsMenu is FALSE, AppendMenu does
- * not attach a popup): a second DestroyMenu, which win32k answers, says
+/* A second DestroyMenu, which win32k answers (user32 forwards it), says
  * whether a menu is gone. */
 static void check_menus(void)
 {

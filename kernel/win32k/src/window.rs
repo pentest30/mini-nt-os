@@ -56,12 +56,12 @@ use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
     Rect32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
-    DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, GWLP_HINSTANCE, GWLP_HWNDPARENT,
-    GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE,
-    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION,
-    STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4,
-    WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT, WM_PAINT,
-    WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
+    DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, FNID_MENU, GWLP_HINSTANCE,
+    GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM,
+    HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+    STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
+    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT,
+    WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
     WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW,
     WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
     WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
@@ -344,7 +344,8 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
         rc_client: rect32(state.client),
         wnd_proc: state.wnd_proc,
         pcls: heap.server_address(window.cls),
-        id_menu: state.id_menu,
+        // A child's identifier, the bar of any other window (GetMenu).
+        id_menu: if state.style & (WS_CHILD | WS_POPUP) == WS_CHILD { state.id_menu } else { state.menu },
         name,
         cb_wnd_extra: window.wnd_size - size_of::<Wnd32>() as u32,
         spwnd_last_active: self_address,
@@ -621,27 +622,39 @@ pub fn property(window: &Window, atom: u16, system: bool) -> Option<u32> {
         .map(|property| property.data)
 }
 
-/// Les items de la barre de menus de la fenêtre, pour la peindre (une
-/// copie ; vide sans barre).
-pub fn menu_items(window: &Window) -> alloc::vec::Vec<crate::menu::Item> {
-    let handle = window.state().menu;
-    crate::menu::get(handle).map_or_else(Vec::new, |menu| menu.items())
-}
-
-/// SetMenu : la barre de menus de la fenêtre devient `hmenu` (0 la retire) ;
-/// la zone cliente se recalcule (WM_NCCALCSIZE : la barre prend sa place
-/// sous le titre) et le cadre se repeint.
+/// NtUserSetMenu (IntSetMenu) : la barre de menus de la fenêtre devient
+/// `hmenu` (0 la retire ; le menu sait de quelle fenêtre il est la barre,
+/// `crate::menu::attach`) ; si elle change, ou avec `repaint`, et que la
+/// fenêtre n'est pas réduite, la zone cliente se recalcule (WM_NCCALCSIZE :
+/// la barre prend sa place sous le titre) et le cadre se repeint.
+///
+/// # Errors
+/// `ERROR_INVALID_WINDOW_HANDLE` pour une fenêtre fille ;
+/// `ERROR_INVALID_MENU_HANDLE` pour un menu qui n'existe pas ou qui est la
+/// barre d'une autre fenêtre.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le service système.
-pub fn set_menu(window: &alloc::sync::Arc<Window>, hmenu: u32) {
-    update(window, |state| state.menu = hmenu);
+pub fn set_menu(window: &alloc::sync::Arc<Window>, hmenu: u32, repaint: bool) -> Result<(), u32> {
+    let state = window.state();
+    if state.style & (WS_CHILD | WS_POPUP) == WS_CHILD {
+        return Err(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    let changed = state.menu != hmenu;
+    if changed {
+        crate::menu::attach(hmenu, state.menu, window.handle)?;
+        update(window, |state| state.menu = hmenu);
+    }
+    if state.style & WS_MINIMIZE != 0 || !(changed || repaint) {
+        return Ok(());
+    }
     let rect = window.state().window;
     let mut calc = rect_bytes(rect);
     let _ = send_message(window, WM_NCCALCSIZE, 0, LParam::Buffer { bytes: &mut calc, write_back: true });
     let client = fix_client_rect(rect_of(&calc), rect);
     update(window, |state| state.client = client);
     let _ = send_message(window, WM_NCPAINT, 0, LParam::Value(0));
+    Ok(())
 }
 
 /// IntSetMenu à la création : la barre de menus d'une fenêtre qui n'est pas
@@ -670,7 +683,7 @@ fn creation_menu(kind: u32, hmenu: u32, exists: impl FnOnce(u32) -> bool) -> Res
 fn class_menu(class: &Class) -> Option<u32> {
     let resource = class.menu.resource()?;
     let loaded = crate::callback::load_menu(class.info.instance, resource).ok()?;
-    crate::menu::get(loaded).map(|_| loaded)
+    crate::menu::exists(loaded).then_some(loaded)
 }
 
 /// SetWindowFNID : l'identifiant interne de la fenêtre.
@@ -803,17 +816,29 @@ pub fn hide_desktop_window(desktop: &Desktop) {
 fn update_window(window: &Window) {
     let state = window.state();
     if state.style & WS_VISIBLE != 0 && !state.update.is_empty() {
-        server_window_proc(window, WM_PAINT, 0, 0);
+        server_window_proc(window, WM_PAINT, 0, &mut LParam::Value(0));
     }
 }
 
 /// La procédure dans win32k d'une fenêtre qui en a une ; `None` pour une
-/// autre (sa procédure est alors celle du client).
-fn server_window_proc(window: &Window, message: u32, wparam: u32, lparam: u32) -> Option<u32> {
+/// autre (sa procédure est alors celle du client). Celle d'un menu
+/// déroulant se reconnaît à sa classe : sa FNID n'est posée qu'à
+/// WM_NCCREATE.
+fn server_window_proc(window: &Window, message: u32, wparam: u32, lparam: &mut LParam<'_>) -> Option<u32> {
     let state = window.state();
-    match state.fnid {
-        FNID_DESKTOP if state.state & WNDS_SERVERSIDEWINDOWPROC != 0 => {
-            Some(desktop_window_proc(window, message, wparam, lparam))
+    if state.state & WNDS_SERVERSIDEWINDOWPROC == 0 {
+        return None;
+    }
+    let fnid = state.fnid;
+    drop(state);
+    let value = match lparam {
+        LParam::Value(value) => *value,
+        LParam::Buffer { .. } => 0,
+    };
+    match fnid {
+        FNID_DESKTOP => Some(desktop_window_proc(window, message, wparam, value)),
+        _ if window.class.as_ref().is_some_and(|class| class.fnid == FNID_MENU) => {
+            Some(crate::menupopup::window_proc(window, message, wparam, lparam))
         }
         _ => None,
     }
@@ -868,7 +893,8 @@ pub enum LParam<'a> {
 /// fenêtre (`user32` n'en passe ici que WM_PAINT et ceux d'une procédure
 /// dans win32k) ; rend ce qu'elle rend, 0 sans fenêtre. Une fenêtre qui n'a
 /// pas appelé BeginPaint pour WM_PAINT repeint son cadre et son fond
-/// (IntPaintWindow).
+/// (IntPaintWindow). Le WM_SYSTIMER d'une minuterie à procédure du noyau
+/// l'appelle (`crate::timer::kernel_procedure` : le clignotement du caret).
 ///
 /// # Errors
 /// Ceux de [`send_message`].
@@ -876,7 +902,18 @@ pub enum LParam<'a> {
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
-    if matches!(message.message, WM_TIMER | WM_SYSTIMER) && message.l_param != 0 {
+    if message.message == WM_SYSTIMER && message.l_param != 0 {
+        // FindSystemTimer: a system timer's procedure in the kernel (the
+        // caret's blink).
+        let thread = crate::gui::convert_current_thread().ok();
+        let procedure =
+            thread.and_then(|thread| crate::timer::kernel_procedure(&thread, message.hwnd, message.w_param));
+        if let Some(procedure) = procedure {
+            procedure(message.hwnd, message.w_param);
+        }
+        return Ok(0);
+    }
+    if message.message == WM_TIMER && message.l_param != 0 {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("win32k: DispatchMessage of a timer's procedure: not yet");
@@ -913,11 +950,12 @@ pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn send_message(window: &Arc<Window>, message: u32, wparam: u32, lparam: LParam<'_>) -> Result<u32, NtStatus> {
+    let mut lparam = lparam;
     let value = match &lparam {
         LParam::Value(value) => *value,
         LParam::Buffer { .. } => 0,
     };
-    if let Some(result) = server_window_proc(window, message, wparam, value) {
+    if let Some(result) = server_window_proc(window, message, wparam, &mut lparam) {
         return Ok(result);
     }
     let thread = crate::convert_current_thread()?;
@@ -1505,7 +1543,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     } else if kind == WS_CHILD {
         return Err(Some(ERROR_TLW_WITH_WSCHILD));
     }
-    let menu = creation_menu(kind, params.menu, |handle| crate::menu::get(handle).is_some()).map_err(Some)?;
+    let menu = creation_menu(kind, params.menu, crate::menu::exists).map_err(Some)?;
     let startup = if params.style & (WS_POPUP | WS_CHILD) == 0 { startup_place() } else { StartupPlace::default() };
     let work = crate::monitor::primary().map(|monitor| monitor.work);
     let mut show =
@@ -1556,7 +1594,8 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         unicode,
         module: params.instance,
         id_menu: if kind == WS_CHILD { params.menu } else { 0 },
-        menu,
+        // IntSetMenu: a menu that is another window's bar is none of hers.
+        menu: if crate::menu::attach(menu, 0, handle).is_ok() { menu } else { 0 },
         parent: parent.handle,
         owner: owner.as_ref().map_or(0, |owner| owner.handle),
         ..WindowState::default()
@@ -1587,7 +1626,8 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     // (co_IntCallLoadMenu); user32 loads it itself for an overlapped or
     // popup style.
     if kind != WS_CHILD && menu == 0 {
-        if let Some(loaded) = class_menu(&class) {
+        if let Some(loaded) = class_menu(&class).filter(|&loaded| crate::menu::attach(loaded, 0, window.handle).is_ok())
+        {
             update(&window, |state| state.menu = loaded);
         }
     }

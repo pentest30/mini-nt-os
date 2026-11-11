@@ -239,6 +239,7 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
     let hwnd = window.handle;
     crate::timer::destroy_window_timers(hwnd);
     if let Some(thread) = thread {
+        crate::caret::destroy_in(thread, hwnd);
         let (gone, wake, change) = thread.queue.with(|queue| queue.remove_window_messages(hwnd));
         thread.mirror_queue_bits(wake, change);
         crate::sent::abandon_all(gone);

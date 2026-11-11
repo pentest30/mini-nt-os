@@ -19,6 +19,7 @@ GdiFlush@0
 GetClipBox@8
 GetDeviceCaps@8
 GetObjectType@4
+GetPixel@12
 GetRgnBox@8
 GetStockObject@4
 GetTextExtentExPointW@28

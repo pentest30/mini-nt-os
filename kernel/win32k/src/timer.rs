@@ -35,9 +35,14 @@
 //! celles d'un thread fini qui resteraient s'en vont à l'échéance suivante
 //! de l'une d'elles.
 //!
+//! Une minuterie du système peut avoir une procédure du noyau
+//! ([`set_kernel_timer`] : le clignotement du caret, `crate::caret`) : son
+//! WM_SYSTIMER porte [`KERNEL_PROCEDURE`] en `lParam`, que `user32` rend au
+//! noyau (NtUserDispatchMessage), qui l'appelle ([`kernel_procedure`],
+//! FindSystemTimer).
+//!
 //! Pas encore : les minuteries du RIT (TMRF_RIT : le curseur, le clavier),
-//! TMRF_ONESHOT, la procédure d'une minuterie du système (que ReactOS
-//! ignore aussi), le nombre maximal de minuteries d'un processus.
+//! TMRF_ONESHOT, le nombre maximal de minuteries d'un processus.
 
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
@@ -56,6 +61,13 @@ pub const USER_TIMER_MAXIMUM: u32 = 0x7FFF_FFFF;
 /// NUM_WINDOW_LESS_TIMERS : les identifiants des minuteries sans fenêtre,
 /// de ce nombre vers 1.
 pub const WINDOWLESS_IDS: u32 = 32_768;
+/// Le `lParam` du WM_SYSTIMER d'une minuterie à procédure du noyau : une
+/// adresse de la moitié du noyau, que le client ne peut pas appeler, et
+/// non nulle, pour que DispatchMessage de `user32` la rende au noyau.
+pub const KERNEL_PROCEDURE: u32 = 0x8000_0000;
+/// La procédure du noyau d'une minuterie du système : sa fenêtre et son
+/// identifiant.
+pub type KernelProcedure = fn(u32, u32);
 
 /// Une milliseconde en unités du temps d'interruption (100 ns).
 const MILLISECOND: u64 = 10_000;
@@ -102,6 +114,8 @@ struct Timer<O> {
     due: u64,
     /// Sa procédure (`TIMERPROC`), le `lParam` de son message ; 0 sans.
     procedure: u32,
+    /// Sa procédure du noyau, pour une minuterie du système.
+    kernel: Option<KernelProcedure>,
     /// TMRF_READY : échue, son message pas encore sorti.
     ready: bool,
 }
@@ -129,6 +143,7 @@ pub struct NewTimer {
     /// Le délai demandé, en millisecondes (borné par [`rate_of`]).
     pub elapse: u32,
     pub procedure: u32,
+    pub kernel: Option<KernelProcedure>,
 }
 
 /// Un thread dont une minuterie vient d'échoir ([`Timers::expire`]).
@@ -188,12 +203,14 @@ impl<O> Timers<O> {
             timer.rate = rate;
             timer.due = due;
             timer.procedure = new.procedure;
+            timer.kernel = new.kernel;
             return Some(key.id);
         }
         if key.windowless() {
             key.id = self.free_windowless_id()?;
         }
-        self.list.push(Timer { key, owner, process: new.process, rate, due, procedure: new.procedure, ready: false });
+        let (procedure, kernel) = (new.procedure, new.kernel);
+        self.list.push(Timer { key, owner, process: new.process, rate, due, procedure, kernel, ready: false });
         Some(key.id)
     }
 
@@ -282,6 +299,13 @@ impl<O> Timers<O> {
             });
         let still_ready = self.list.iter().any(|timer| timer.ready && is_owner(&timer.owner));
         (found, still_ready)
+    }
+
+    /// FindSystemTimer : la procédure du noyau de la minuterie du système
+    /// `id` de la fenêtre `hwnd`, à un thread que dit `is_owner`.
+    pub fn kernel_procedure(&self, hwnd: u32, id: u32, is_owner: impl Fn(&O) -> bool) -> Option<KernelProcedure> {
+        let key = TimerKey { hwnd, id, system: true };
+        self.list.iter().find(|timer| timer.key == key && is_owner(&timer.owner))?.kernel
     }
 
     /// ValidateTimerCallback : une minuterie hors du système du processus
@@ -384,13 +408,51 @@ pub fn set_timer(
         }
         None => current.clone(),
     };
-    let new = NewTimer { key, process, elapse, procedure };
+    let new = NewTimer { key, process, elapse, procedure, kernel: None };
     let id = TIMERS
         .lock()
         .set(new, Owner(Arc::downgrade(&owner)), now(), |timer| timer.is(current))
         .ok_or(ERROR_NO_SYSTEM_RESOURCES)?;
     wake_expirer();
     Ok(id)
+}
+
+/// IntSetTimer d'une minuterie du système de la fenêtre `window`,
+/// d'identifiant `id`, de délai `elapse`, dont le message appelle
+/// `procedure` dans le noyau (TMRF_SYSTEM avec une procédure : le
+/// clignotement du caret).
+///
+/// # Errors
+/// `ERROR_ACCESS_DENIED` pour une fenêtre sans thread.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_kernel_timer(
+    window: &crate::window::Window,
+    id: u32,
+    elapse: u32,
+    procedure: KernelProcedure,
+) -> Result<u32, u32> {
+    let owner = crate::gui::thread_info_of(window.pti).ok_or(abi::winerror::ERROR_ACCESS_DENIED)?;
+    let process = crate::gui::process_id_of(window.pti).unwrap_or(0);
+    let key = TimerKey { hwnd: window.handle, id, system: true };
+    let new = NewTimer { key, process, elapse, procedure: KERNEL_PROCEDURE, kernel: Some(procedure) };
+    let id = TIMERS
+        .lock()
+        .set(new, Owner(Arc::downgrade(&owner)), now(), |_| false)
+        .ok_or(abi::winerror::ERROR_NO_SYSTEM_RESOURCES)?;
+    wake_expirer();
+    Ok(id)
+}
+
+/// FindSystemTimer : la procédure du noyau de la minuterie du système `id`
+/// de la fenêtre `hwnd`, au thread `thread` (DispatchMessage de son
+/// WM_SYSTIMER) ; `None` sans elle.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn kernel_procedure(thread: &ThreadInfo, hwnd: u32, id: u32) -> Option<KernelProcedure> {
+    TIMERS.lock().kernel_procedure(hwnd, id, |timer| timer.is(thread))
 }
 
 /// IntKillTimer : retire la minuterie `key` (sans fenêtre : du thread
@@ -529,7 +591,7 @@ mod tests {
     const MS: u64 = MILLISECOND;
 
     fn window_timer(hwnd: u32, id: u32, elapse: u32) -> NewTimer {
-        NewTimer { key: TimerKey { hwnd, id, system: false }, process: 8, elapse, procedure: 0 }
+        NewTimer { key: TimerKey { hwnd, id, system: false }, process: 8, elapse, procedure: 0, kernel: None }
     }
 
     fn thread_timer(id: u32, elapse: u32) -> NewTimer {
@@ -655,5 +717,26 @@ mod tests {
         assert!(!timers.validates(8, 0), "no procedure");
         timers.purge(|&o| o == 7);
         assert!(timers.is_empty());
+    }
+
+    fn blink(_: u32, _: u32) {}
+
+    #[test]
+    fn a_system_timer_may_call_into_the_kernel() {
+        let mut timers: Timers<u32> = Timers::new();
+        let key = TimerKey { hwnd: 0x20, id: 0xFFFF, system: true };
+        let caret = NewTimer { key, procedure: KERNEL_PROCEDURE, kernel: Some(blink), ..window_timer(0x20, 0, 10) };
+        timers.set(caret, 7, 0, |_| true);
+        timers.set(window_timer(0x20, 0xFFFF, 10), 7, 0, |_| true);
+        assert!(timers.kernel_procedure(0x20, 0xFFFF, |&o| o == 7).is_some());
+        assert!(timers.kernel_procedure(0x20, 0xFFFF, |&o| o == 9).is_none(), "another thread's");
+        assert!(timers.kernel_procedure(0x20, 3, |&o| o == 7).is_none());
+        timers.expire(10 * MS, same);
+        let message = timers.take(&ALL, true, 0, |&o| o == 7).0.unwrap();
+        assert_eq!(message.message, WM_SYSTIMER, "the system timer, from the kernel");
+        assert_eq!(message.l_param, KERNEL_PROCEDURE, "user32 gives it back to the kernel");
+        // SetSystemTimer again without the procedure: none.
+        timers.set(NewTimer { key, ..window_timer(0x20, 0, 10) }, 7, 0, |_| true);
+        assert!(timers.kernel_procedure(0x20, 0xFFFF, |&o| o == 7).is_none());
     }
 }

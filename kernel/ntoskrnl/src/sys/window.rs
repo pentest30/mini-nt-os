@@ -274,7 +274,8 @@ pub(super) fn nt_user_set_window_long(arguments: &[u32]) -> NtStatus {
 /// NtUserBeginPaint(hWnd, lpPaint) : `hWnd` se peint (IntBeginPaint) ; le
 /// `PAINTSTRUCT` écrit, rend son DC, NULL sans DC. NULL pour une fenêtre
 /// inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` qu'on ne peut
-/// écrire (le DC reste pris, comme dans ReactOS).
+/// écrire (le DC reste pris, comme dans ReactOS ; le caret que BeginPaint a
+/// caché se remontre, l'appelant n'ayant pas d'EndPaint à faire).
 pub(super) fn nt_user_begin_paint(arguments: &[u32]) -> NtStatus {
     let (handle, paint) = (arguments[0], arguments[1]);
     let Some(window) = win32k::window::get(handle) else {
@@ -283,7 +284,10 @@ pub(super) fn nt_user_begin_paint(arguments: &[u32]) -> NtStatus {
     let ps = win32k::paint::begin_paint(&window);
     match ke::usermem::copy_to_user(u64::from(paint), ps.as_bytes()) {
         Ok(()) => NtStatus(ps.hdc),
-        Err(status) => fail(dos_error(status)),
+        Err(status) => {
+            win32k::caret::show_in(&window);
+            fail(dos_error(status))
+        }
     }
 }
 
@@ -308,7 +312,7 @@ pub(super) fn nt_user_end_paint(arguments: &[u32]) -> NtStatus {
 static UNSUPPORTED_HWND_LOCK_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallHwndLock");
 
 /// Le RECT en `address` ; `None` pour une adresse nulle.
-fn read_rect(address: u32) -> Result<Option<win32k::gdi::dib::Rect>, NtStatus> {
+pub(super) fn read_rect(address: u32) -> Result<Option<win32k::gdi::dib::Rect>, NtStatus> {
     if address == 0 {
         return Ok(None);
     }
@@ -522,7 +526,10 @@ pub(super) fn nt_user_get_update_rect(arguments: &[u32]) -> NtStatus {
 }
 
 /// NtUserCallHwndLock(hWnd, Routine) : `HWNDLOCK_ROUTINE_UPDATEWINDOW`
-/// (UpdateWindow : la fenêtre et ses enfants se peignent aussitôt) ; TRUE.
+/// (UpdateWindow : la fenêtre et ses enfants se peignent aussitôt) ;
+/// `HWNDLOCK_ROUTINE_DRAWMENUBAR` (DrawMenuBar : le cadre d'une fenêtre qui
+/// n'est pas fille se recalcule, sa barre se remet en page et se repeint,
+/// SetWindowPos(SWP_FRAMECHANGED)) ; TRUE.
 /// FALSE pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou une
 /// autre routine (journalisée à son premier appel).
 pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
@@ -533,6 +540,14 @@ pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
     match routine {
         abi::user::HWNDLOCK_ROUTINE_UPDATEWINDOW => {
             win32k::paint::update_window(&window, abi::user::RDW_ALLCHILDREN);
+            NtStatus(1)
+        }
+        abi::user::HWNDLOCK_ROUTINE_DRAWMENUBAR => {
+            use abi::user::{SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER};
+            if window.state().style & (abi::user::WS_CHILD | abi::user::WS_POPUP) != abi::user::WS_CHILD {
+                let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+                win32k::winpos::set_window_pos(&window, 0, 0, 0, 0, 0, flags);
+            }
             NtStatus(1)
         }
         _ => {

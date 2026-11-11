@@ -670,7 +670,8 @@ deux comptes d'un processus fils avec les valeurs du SDK.
 Vu en chemin, déjà là : `user32` ne sait pas lire nos menus (le handle de la table USER ne désigne pas un `MENU` du
 tas d'un bureau) ; IsMenu rend donc toujours FALSE, et AppendMenu(MF_POPUP) n'attache pas le sous-menu
 (`MENU_mnu2mnuii` ne pose `MIIM_SUBMENU` que si `MENU_GetMenu` valide le handle) : l'item reçoit le handle du
-sous-menu comme identifiant. Un tel sous-menu ne part donc pas avec sa barre, mais avec son processus.
+sous-menu comme identifiant. Un tel sous-menu ne part donc pas avec sa barre, mais avec son processus. Corrigé à l'étape 20 :
+les menus sont dans le tas du bureau.
 
 Le banc d'essai : `tests/native/destroy1.c` (`DESTROY1.EXE` à la place de `winlogon.exe`, scénario `destroy`). Une
 lettre et `-` est WM_DESTROY, une lettre et `.` WM_NCDESTROY (IsWindow est encore TRUE pendant ces deux messages,
@@ -846,3 +847,207 @@ avec ses barres et leur coin ; `defwnd` : HTVSCROLL, HTHSCROLL, HTSIZE ; `gdi::d
 `desktop-launch`) ou dont le test d'atteinte compte (`gui`, `mouse`, `cursor`). Dans `console`, la fenêtre de
 `consrv` a maintenant sa barre verticale (conwnd.c l'ajoute à sa largeur et la montre) : sa zone cliente fait les 640
 pixels de ses 80 colonnes, plus 656.
+
+## Étape 18 : le défilement d'une fenêtre ou d'un DC (ScrollWindowEx, ScrollDC)
+
+Avec les barres de défilement (étape 17), `consrv` et la listview appelaient NtUserScrollWindowEx, absent (0 rendu) :
+rien ne défilait. `scrollex.c` de win32k (ReactOS comme spécification) ; `win32k::scrollex`, `sys::scroll`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| ScrollDC (`scrollex::scroll_dc`, UserScrollDC) | dans la surface du DC, la partie de `prcScroll` (sans lui, la boîte de découpage du DC) qui tombe dans le découpage et `prcClip` est copiée, décalée de (dx, dy) (BitBlt SRCCOPY sur le même DC) ; à repeindre (`scrollex::plan`) : la destination de tout `prcScroll` et la source, moins ce qui a été copié d'une source visible ; dans `hrgnUpdate` et `prcUpdate` (coordonnées logiques) |
+| ScrollWindowEx (`scrollex::scroll_window`, IntScrollWindowEx) | la même chose sur la zone cliente, par un DC du cache (`dc_flags` : sans couper les filles avec SW_SCROLLCHILDREN) ; la région déjà à repeindre de la fenêtre se décale aussi ; SW_SCROLLCHILDREN déplace les filles (`window::move_tree`) et envoie WM_MOVE à celles que le rectangle touchait ; SW_INVALIDATE (et SW_ERASE) invalide ce qui est découvert ; rend sa complexité (NULLREGION, SIMPLEREGION, COMPLEXREGION ; ERROR pour une fenêtre qu'on ne voit pas) |
+| BitBlt dans une même surface (`gdi::bitblt::overlap_order`) | les rectangles d'une région se copient dans le sens du décalage (les bandes, puis dans une bande), aucun n'écrasant la source d'un suivant : un défilement dont la région est découpée par une fille copie juste (le manque que notait `gdi::bitblt`) |
+
+Un écart voulu avec ReactOS : WM_MOVE d'une fille déplacée par SW_SCROLLCHILDREN porte le coin de sa zone cliente dans
+celle de son parent, comme la documentation de l'API.
+
+Ce qui manque : le DC propre d'une fenêtre ou de sa classe pour ScrollWindow (le cache aussi), SW_SMOOTHSCROLL (ignoré,
+comme ReactOS). Le caret est venu à l'étape 19.
+
+Le banc d'essai : `tests/native/scrollx1.c` (`SCROLLX1.EXE` à la place de `winlogon.exe`, scénario `scrollex`) : une
+fenêtre peinte en bandes de 20 pixels selon une position, qui ne peint que ce qu'on lui demande ; ScrollWindowEx vers le
+haut de 30 (SIMPLEREGION, les 30 dernières lignes dans `hrgnUpdate`, `prcUpdate` et GetUpdateRect, et seules peintes),
+ScrollDC vers le bas de 20 sur son DC (les 20 premières), une fille déplacée de 10 vers la gauche avec SW_SCROLLCHILDREN
+(WM_MOVE 290, 100) ; sept pixels vérifiés (sans la copie, cinq sont faux).
+
+Tests : hôte (`scrollex` : la région découverte, ce qui n'a pas pu être copié, le rectangle de défilement et celui de
+découpage, les zones, les drapeaux du DC ; `gdi::bitblt` : l'ordre des copies dans une même surface, qui échoue dans
+l'ordre de la région) ; le scénario `scrollex` sur AMD et Intel, et `listview`, `console`, `cmd`, `desktop-launch`,
+`gui`, `bitmap`, `scroll` sur AMD.
+
+## Étape 19 : le caret (CreateCaret, ShowCaret, HideCaret, SetCaretPos)
+
+Le contrôle Edit (le Bloc-notes, les boîtes de dialogue) et la console de `consrv` montrent un caret ; NtUserCreateCaret,
+NtUserShowCaret et NtUserHideCaret étaient absents (0 rendu). `caret.c` de win32k (ReactOS comme spécification) ;
+`win32k::caret`, `sys::caret`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| L'état (`caret::Caret`, dans la file du thread : `QueueState.caret`) | un caret par thread : sa fenêtre, sa forme (rectangle plein, gris pour `(HBITMAP)1`, ou bitmap), sa position dans la zone cliente, son niveau de masquage, s'il est dessiné ; GetCaretPos ; le temps de clignotement (`dtCaretBlink`, 530 ms par défaut, GetCaretBlinkTime, SetCaretBlinkTime ; négatif, INFINITE : fixe) |
+| Le dessin (`caret::draw`) | une inversion de l'écran, dans la zone cliente de sa fenêtre là où elle se voit (découpée par les filles et les sœurs selon WS_CLIPCHILDREN et WS_CLIPSIBLINGS) : DSTINVERT pour un rectangle plein, PATINVERT du damier gris, SRCINVERT d'un bitmap ; dessiné deux fois, il s'efface |
+| CreateCaret, DestroyCaret (`caret::create`, `destroy`) | le caret d'avant effacé et détruit ; le nouveau naît caché, en 0, 0 ; une largeur ou une hauteur nulle prend celle d'une bordure (SM_CXBORDER, SM_CYBORDER) ; une fenêtre d'un autre thread : `ERROR_ACCESS_DENIED` ; la destruction de la fenêtre le détruit (`destroy_in`, dans `destroy::finish`) |
+| HideCaret, ShowCaret (`caret::hide`, `show`) | le masquage se compte : chaque HideCaret le cache une fois de plus, il ne se voit qu'avec autant de ShowCaret ; visible, il se dessine aussitôt et clignote ; une fenêtre qui ne l'a pas : `ERROR_ACCESS_DENIED` (`hWnd` NULL : celle du caret) |
+| SetCaretPos (TWOPARAM_ROUTINE_SETCARETPOS, `caret::set_pos`) | effacé où il était, dessiné où il va s'il se voyait ; FALSE sans caret |
+| Le clignotement (`caret::blink`) | une minuterie du système (IDCARETTIMER, 0xFFFF) dont la procédure est du noyau (`timer::set_kernel_timer`) : son WM_SYSTIMER porte `lParam` = KERNEL_PROCEDURE (0x80000000), que `user32` rend à NtUserDispatchMessage, qui appelle la procédure (`window::dispatch_message`) ; elle n'est armée que tant qu'il se voit |
+| BeginPaint, EndPaint (`caret::hide_in`, `show_in`) | BeginPaint le cache avant que le fond soit effacé, EndPaint le remontre, s'il est dans la fenêtre peinte |
+| ScrollWindowEx (`caret::before_scroll`, `after_scroll`, co_IntFixCaret) | caché pendant la copie s'il est dans le rectangle défilé (ou dans une fille déplacée), puis décalé comme le contenu et remontré |
+| NtGdiGetPixel (`gdi::dc::get_pixel`) | la couleur d'un point logique du DC sur sa surface, s'il tombe là où le DC peint ; CLR_INVALID sinon |
+
+Écarts voulus avec ReactOS : le masquage se compte (la documentation de l'API et Wine ; ReactOS n'a qu'un booléen) ; un
+caret qui devient visible se dessine aussitôt (ReactOS attend la première échéance de la minuterie) ; un caret caché ne
+clignote pas (ReactOS l'inverse à chaque échéance dès sa création).
+
+Ce qui manque : les événements d'accessibilité (EVENT_OBJECT_*), le caret dans GetGUIThreadInfo, le temps de
+clignotement lu dans le registre (`CursorBlinkRate`), le DC propre d'une fenêtre pour ScrollWindow.
+
+Le banc d'essai : `tests/native/caret1.c` (`CARET1.EXE` à la place de `winlogon.exe`, scénario `caret`) : une fenêtre
+blanche prend un caret de 2 × 16 pixels qu'elle relit sur l'écran à chaque pas (GetPixel : noir là où il inverse le
+blanc) : sans caret, SetCaretPos échoue ; le caret part avec sa fenêtre ; il naît caché ; ShowCaret le dessine ;
+WM_SYSTIMER arrive à la boucle de messages toutes les 100 ms ; INFINITE le laisse fixe ; caché deux fois et montré une,
+il reste caché ; déplacé, il laisse sa place propre ; WM_PAINT et ScrollWindowEx le laissent dessiné ; cinq pixels de la
+capture vérifiés. Sans le masquage de BeginPaint, avec un booléen à la place du compte, ou sans co_IntFixCaret, le
+scénario échoue.
+
+Tests : hôte (`caret` : la naissance cachée, le compte du masquage, le clignotement et le déplacement, une fenêtre
+absente ; `timer` : une minuterie du système dont la procédure est du noyau ; `gdi::dc` : GetPixel ne lit que là où le DC
+peint) ; le scénario `caret` sur AMD et Intel, et `scrollex`, `scroll`, `gui`, `text`, `console`, `destroy`, `keyboard`
+sur AMD et Intel.
+
+## Étape 20 : les menus dans le tas du bureau, lus par `user32`
+
+`user32` lit lui-même les menus : GetMenuItemCount, GetSubMenu, GetMenuItemID, GetMenuState, GetMenuString,
+GetMenuItemInfo, IsMenu, GetMenuDefaultItem, GetMenuInfo, GetMenuContextHelpId, et CheckMenuItem, CheckMenuRadioItem,
+AppendMenu(MF_POPUP) avant d'appeler le noyau. Il valide le handle dans la table USER, prend l'adresse de l'objet
+(DesktopPtrToUser : un menu est un objet du bureau, pas de la section partagée) et suit `rgItems`, `spSubMenu`,
+`Xlpstr`. Jusqu'ici l'entrée de la table désignait un objet du noyau : IsMenu rendait FALSE, et un sous-menu ne
+s'attachait pas (étape 14). `menu.c` de win32k et de `user32` (ReactOS comme spécification) ; `win32k::menu`,
+`sys::menu`, `abi::menu`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les enregistrements (`abi::menu`) | `MENU` (104 octets : `PROCDESKHEAD`, `fFlags`, `iItem`, `cAlloced`, `cItems`, `rgItems`, aide, données, fond, `hWnd`) et `ITEM` (84 octets : type, état, identifiant, `spSubMenu`, coches, `Xlpstr` et `cch`, données, place, bitmap, `lpstr`) de ReactOS sur i386, avec leurs tailles et positions vérifiées à la compilation ; MENUITEMINFOW (48 ou 44 octets), MENUINFO, les MF_, MFT_, MFS_, MIIM_, MIM_, MNS_, MNF_ |
+| La table (`menu::Menus`) | la copie du noyau de chaque menu (`MenuState`, ses items) sous un seul verrou, comme le verrou de USER de ReactOS ; après chaque changement, les menus touchés sont republiés dans leur tas : le texte des items (NUL final) qui n'y est pas, le tableau des items (`cAlloced` par 8, rendu quand le menu se vide), puis le `MENU` ; les blocs remplacés sont rendus après. L'entrée de la table des handles porte l'adresse du serveur du `MENU`. `DesktopHeap::alloc` est utilisable jusqu'à DISPATCH_LEVEL (pool non paginé, `write_kernel`) |
+| CreateMenu, CreatePopupMenu (`menu::create`) | dans le tas du bureau du thread, au processus (son `PROCESSINFO` en `hTaskWow`) ; MNF_POPUP pour un menu déroulant |
+| Les items (IntSetMenuItemInfo, `Menus::set_item`) | type, état (UpdateMenuItemState ; MFS_DEFAULT retiré des autres items), identifiant, sous-menu (marqué MNF_POPUP ; un menu absent, lui-même, un ancêtre ou une branche de plus de 30 : `ERROR_INVALID_PARAMETER`), coches, données, bitmap (MFS_HBMMENUBMP pour un HBMMENU_*), texte (la légende capturée, `cch` caractères au plus) ; sans texte, sans données de texte, sans bitmap : un séparateur |
+| La recherche (MENU_FindItem, `Menus::find`) | par position ; par identifiant, dans les sous-menus d'abord, sinon le dernier item à sous-menu qui le porte |
+| NtUserThunkedMenuItemInfo | avec `bInsert` (MENU_InsertItem) : au bout (une position au-delà du dernier : AppendMenu), à la position, ou avant l'item de l'identifiant (dans le sous-menu où il est) ; les boutons MDI restent à droite ; sans : l'item mis à jour, `ERROR_MENU_ITEM_NOT_FOUND` sans lui (SC_TASKLIST passe, comme ReactOS) |
+| NtUserEnableMenuItem, NtUserCheckMenuItem, NtUserSetMenuDefaultItem | l'état d'avant, -1 sans l'item ; l'item par défaut (-1 : aucun) |
+| NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId, NtUserSetMenuFlagRtoL | fond, aide, hauteur, données, style (MIM_APPLYTOSUBMENUS), de 28 octets à la taille d'un ROSMENUINFO |
+| NtUserRemoveMenu, NtUserDeleteMenu | l'item quitte son menu ; DeleteMenu détruit son sous-menu |
+| NtUserSetMenu (IntSetMenu, `window::set_menu`) | une fille n'a pas de barre (`ERROR_INVALID_WINDOW_HANDLE`) ; un menu est la barre d'une seule fenêtre (`MENU.hWnd`, `ERROR_INVALID_MENU_HANDLE`) ; le cadre se recalcule si la barre change ou avec `bRepaint` ; la création d'une fenêtre et le menu de sa classe rattachent la barre de même ; `WND.IDMenu` porte la barre d'une fenêtre qui n'est pas fille (GetMenu) |
+| DestroyMenu (`menu::destroy`) | le menu et ses sous-menus quittent la table, leur tas et la table des handles |
+
+Écarts voulus avec ReactOS : un sous-menu détruit quitte les items qui l'ouvraient (ReactOS le garde en vie tant
+qu'ils le tiennent ; leurs `spSubMenu` seraient sinon des adresses libérées que `user32` suivrait) ; un menu qui
+s'ouvrirait lui-même est refusé (ReactOS en crée un vide à sa place) ; InsertMenuItem garde les coches de
+MIIM_CHECKMARKS (ReactOS les efface après les avoir posées).
+
+Ce qui manque : la place et la taille des items (`xItem`…, `cxMenu`, `cyMenu` : la barre à l'étape 21, les menus
+déroulants ensuite), le menu système (GetSystemMenu), MNS_NOTIFYBYPOS et les menus sans fenêtre.
+
+Le banc d'essai : `tests/native/menu1.c` (`MENU1.EXE` à la place de `winlogon.exe`, scénario `menu`) : une barre
+(File, Edit, Help) relue par `user32` : IsMenu, GetMenuItemCount, GetSubMenu, GetMenuItemID, GetMenuState (séparateur,
+sous-menu, MF_HELP), GetMenuStringW, GetMenuItemInfoW ; InsertMenuW par position et par identifiant, ModifyMenuW,
+CheckMenuItem, CheckMenuRadioItem, EnableMenuItem depuis la barre (le noyau descend dans File), l'item par défaut,
+l'aide et les données du menu ; GetMenu, une barre refusée à une autre fenêtre et à une fille ; RemoveMenu, DeleteMenu ;
+LoadMenuIndirectW ; DestroyMenu et ses sous-menus. Sans le texte dans le tas, sans `WND.IDMenu`, ou sans la descente
+du noyau dans les sous-menus, le scénario échoue.
+
+Tests : hôte (`menu` : ce que `user32` lit dans le tas, la recherche, l'insertion, le séparateur, un texte remplacé,
+l'état et l'item par défaut, les boucles refusées, RemoveMenu et DeleteMenu, la destruction, une barre à une fenêtre,
+MENUINFO, le tableau par 8 ; `abi::menu`) ; le scénario `menu` sur AMD et Intel, et `destroy`, `gui`, `tasklist`,
+`desktop-ui`, `desktop-launch`, `console`, `cmd`, `listview`, `dialog` sur AMD et Intel.
+
+## Étape 21 : la barre de menus (mise en page, dessin, GetMenuBarInfo, DrawMenuBar)
+
+Jusqu'ici le cadre dessinait la barre lui-même (titres à huit pixels l'un de l'autre, sans préfixe), et WM_NCCALCSIZE
+lui donnait SM_CYMENU. `menu.c` de win32k (MENU_MenuBarCalcSize, MENU_CalcItemSize, IntDrawMenuBarTemp,
+MENU_DrawMenuItem) et `rtl/text.c` (les préfixes de DrawText), ReactOS comme spécification ; `win32k::menubar`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| La mise en page (`menubar::layout`, MENU_MenuBarCalcSize) | les items de gauche à droite dans le rectangle sous le titre (coordonnées de la fenêtre) : chacun le texte montré (sans ses `&`, jusqu'à une tabulation) plus la largeur moyenne d'un caractère de chaque côté (MenuCharSize : l'alphabet / 26, arrondi), de SM_CYMENU - 1 de haut au moins ; une ligne de plus quand un item ne tient pas (un item seul sur sa ligne est coupé) ou porte MF_MENUBREAK ; les items depuis le premier MF_RIGHTJUSTIFY (MF_HELP) à droite de la dernière ligne ; la barre fait un pixel de plus que ses items. La place de chaque item (`xItem`, `yItem`, `cxItem`, `cyItem` : la droite et le bas, comme ReactOS) et la taille de la barre (`cxMenu`, `cyMenu`) vont dans le tas |
+| WM_NCCALCSIZE (`defwnd::nc_calc_size`, `menubar::calc`) | la barre est mise en page dans ce qui reste sous le titre et prend sa hauteur (une barre vide : 0) ; un item changé remet `cyMenu` à 0, le dessin remet alors la barre en page |
+| Le dessin (`menubar::bar_ops`, dans le cadre) | le fond COLOR_MENU, la dernière ligne COLOR_3DFACE ; chaque item : son texte centré en Tahoma (gras pour l'item par défaut), la lettre préfixée soulignée sous la ligne de base, de sa largeur moins un pixel (TEXT_DrawUnderscore) ; surligné (MF_HILITE) : un bord enfoncé (BDR_SUNKENOUTER) et le texte décalé d'un pixel ; grisé (MF_GRAYED) : le texte en relief (COLOR_BTNHIGHLIGHT décalé, puis COLOR_BTNSHADOW) |
+| NtUserGetMenuBarInfo | OBJID_MENU : le rectangle de la barre à l'écran (`idItem` 0) ou d'un item, le menu, l'item qui a le focus |
+| NtUserGetMenuItemRect, NtUserMenuItemFromPoint | la place d'un item à l'écran (dans la fenêtre de la barre, ou dans la zone cliente d'un menu déroulant) ; l'item sous un point, -1 ailleurs |
+| NtUserHiliteMenuItem (`menubar::hilite`) | l'item surligné ou éteint, le cadre repeint s'il a changé |
+| DrawMenuBar (NtUserCallHwndLock, HWNDLOCK_ROUTINE_DRAWMENUBAR = 0x55) | SetWindowPos(SWP_FRAMECHANGED) d'une fenêtre qui n'est pas fille : la barre est remise en page et repeinte |
+
+Écarts voulus avec ReactOS : HiliteMenuItem surligne ou éteint l'item, comme la documentation de l'API (ReactOS le
+sélectionne comme le suivi d'un menu, même pour MF_UNHILITE) ; MenuItemFromPoint rend -1 hors des items (ReactOS rend le
+nombre d'items) ; une barre sans items n'est ni comptée ni dessinée (le calcul de ReactOS lui donne 0, son
+dessin SM_CYMENU).
+
+Ce qui manque : les items à bitmap (MDI) et dessinés par l'application (WM_MEASUREITEM, WM_DRAWITEM), le menu système,
+les menus plats (SPI_GETFLATMENU), HTMENU et le clic dans la barre (le suivi des menus, étapes suivantes).
+
+Vu en chemin : le scénario `gui` attendait d'une fenêtre au menu de classe MENU_001 de `shell32` une zone cliente de
+SM_CYMENU de moins. Ce menu est celui d'un menu déroulant (cinq titres longs) : en barre, il ne tient pas dans 292
+pixels et passe sur deux lignes (37 pixels), comme sous XP. `gui1.c` compte maintenant la hauteur de la barre
+(GetMenuBarInfo) et ses lignes.
+
+Le banc d'essai : `tests/native/menu1.c`, scénario `menu` (étape 20), avec la barre de W : GetMenuBarInfo (19 de haut,
+entre les côtés du cadre, au-dessus de la zone cliente), GetMenuItemRect (File au bord gauche, Edit à sa suite, Help
+au bord droit, 18 de haut), GetMenuBarInfo d'un item, MenuItemFromPoint ; le texte relu à l'écran, HiliteMenuItem (le
+coin de l'item en COLOR_BTNSHADOW) puis éteint ; ModifyMenuW ne déplace Edit qu'après DrawMenuBar ; six pixels de la
+capture (le fond de la barre, les soulignements de F, E et H). Sans le soulignement, sans Help à droite, sans
+DrawMenuBar ou sans repeindre au surlignage, le scénario échoue.
+
+Tests : hôte (`menubar` : les préfixes, la largeur moyenne, la mise en page, Help à droite, une barre longue sur
+plusieurs lignes, l'item par défaut en gras, le soulignement, le dessin d'un item surligné ; `menu` : la place des items
+et le surlignage dans le tas ; `abi::menu`) ; le scénario `menu` sur AMD et Intel, et `gui`, `destroy`, `tasklist`,
+`desktop-ui`, `desktop-launch`, `console`, `cmd`, `listview`, `dialog`, `caret`, `icons`, `scroll`, `scrollex`, `text`
+sur AMD et Intel.
+
+## Étape 22 : les menus déroulants (TrackPopupMenuEx, la boucle du menu, EndMenu)
+
+`user32` exporte TrackPopupMenuEx et EndMenu tels quels (NtUserTrackPopupMenuEx, NtUserEndMenu) ; TrackPopupMenu
+appelle le premier sans TPMPARAMS. Tout le suivi est dans win32k, dans le service, au thread de la fenêtre
+propriétaire. `menu.c` de win32k (IntTrackPopupMenuEx, MENU_InitPopup, MENU_ShowPopup, MENU_ShowSubPopup,
+MENU_HideSubPopups, MENU_TrackMenu, MENU_ExecFocusedItem, MENU_FindItemByKey, PopupMenuWndProc) et `msgqueue.c` (les
+coordonnées de la souris pendant le suivi), ReactOS comme spécification ; `win32k::menupopup`, `win32k::menutrack`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| La fenêtre #32768 (`menutrack::init_popup`, `menupopup::window_proc`) | créée par win32k : WS_POPUP, WS_CLIPSIBLINGS, WS_BORDER ; WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_EX_TOPMOST, WS_EX_DLGMODALFRAME ; possédée par la propriétaire, du module de `user32`. Sa procédure est du serveur : `window::server_window_proc` la reconnaît à sa classe (FNID_MENU ; sa FNID n'est posée qu'à WM_NCCREATE) et lui passe le `lParam` emballé (WM_NCCALCSIZE). Zone cliente : le cadre de son style ; WM_PAINT peint le menu, WM_ERASEBKGND n'efface rien, WM_MOUSEACTIVATE rend MA_NOACTIVATE, MN_GETHMENU son menu |
+| La mise en page (`menupopup::layout`, MENU_PopupMenuCalcSize) | une colonne d'items (une de plus à MF_MENUBREAK), chacun : la place d'une coche (SM_CXMENUCHECK, sauf MNS_NOCHECK), son texte, le raccourci après une tabulation aligné sur le plus long texte (`dxTab`), la flèche d'un sous-menu (OBM_MNARROW, 6 pixels) ; les places dans le tas (`xItem`…, `cxMenu`, `cyMenu`), où `user32` les lit |
+| Le dessin (`menupopup::popup_ops`, MENU_DrawPopupMenu) | le fond COLOR_MENU ; l'item sélectionné en COLOR_HIGHLIGHT, son texte en COLOR_HIGHLIGHTTEXT ; grisé, en relief ; la coche, la puce (MFT_RADIOCHECK) et la flèche en Marlett ; un séparateur, un sillon (EDGE_ETCHED) |
+| La place (`menutrack::popup_place`, MENU_ShowPopup) | selon TPM_RIGHTALIGN, TPM_CENTERALIGN, TPM_BOTTOMALIGN, TPM_VCENTERALIGN (TPM_LAYOUTRTL inverse la droite) ; gardée sur le moniteur (trop bas : son bas une barre de menus sous le point, sinon au-dessus) ; à côté du rectangle à éviter (TPMPARAMS, ou le menu parent d'un sous-menu) s'il le couvre : à droite, à gauche, dessous, dessus (MENU_MoveRect) ; montrée au-dessus de tout sans activation (HWND_TOPMOST, SWP_NOACTIVATE) et peinte |
+| Le début et la fin (MENU_InitTracking, MENU_ExitTracking) | le caret du thread caché ; WM_ENTERMENULOOP ; la souris capturée par la fenêtre du menu, et le thread suit un menu (`MenuOwner` : `queue.menu_owner`) ; WM_SETCURSOR ; WM_INITMENU, WM_INITMENUPOPUP ; à la fin : la capture rendue, les sous-menus fermés, la fenêtre détruite, WM_UNINITMENUPOPUP, WM_MENUSELECT (0, 0xFFFF), WM_EXITMENULOOP, le caret remontré. TPM_NONOTIFY retire les notifications, sauf WM_MENUSELECT et WM_ENTERIDLE |
+| La boucle (`menutrack::track_menu`, MENU_TrackMenu) | le premier message de la file du thread, laissé dedans tant que le suivi peut finir ; la file vide : WM_ENTERIDLE (MSGF_MENU, la fenêtre du menu courant) une fois, puis l'attente. La souris (sa place dans `lParam`, à l'écran : pendant le suivi, `mouse::resolve` ne la ramène pas à la zone cliente, et un message posté par le programme compte aussi) : le mouvement sélectionne l'item sous elle et ouvre son sous-menu, un bouton enfoncé hors des menus finit le suivi (le message reste à l'application), relâché sur l'item sélectionné il l'exécute ; le bouton droit seulement avec TPM_RIGHTBUTTON. Le clavier : ↑ ↓ (les séparateurs sautés), Début, Fin, → (le sous-menu), ← et Échap (le sous-menu le plus profond se ferme ; Échap sur le premier menu finit), Alt et F10 finissent ; les autres touches traduites (TranslateMessage) : Entrée et espace exécutent, une lettre l'item qu'elle souligne, sinon WM_MENUCHAR (MNC_EXECUTE : la position rendue ; MNC_CLOSE : la fin). WM_CANCELMODE finit ; les autres messages sont distribués |
+| Les sous-menus (MENU_ShowSubPopup, MENU_HideSubPopups) | WM_INITMENUPOPUP d'abord ; à droite de l'item, le haut sur lui, le menu parent (moins 2 × SM_CXEDGE de chaque côté) évité ; le premier item sélectionné au clavier ; fermé : sa fenêtre détruite, WM_UNINITMENUPOPUP |
+| L'exécution (MENU_ExecFocusedItem) | un item actif qui n'est pas un séparateur : son identifiant rendu avec TPM_RETURNCMD ; sinon WM_COMMAND posté (WM_MENUCOMMAND avec MNS_NOTIFYBYPOS, WM_SYSCOMMAND d'un menu système) |
+| NtUserTrackPopupMenuEx | FALSE : des drapeaux hors de VALID_TPM_FLAGS (`ERROR_INVALID_FLAGS`), un menu (`ERROR_INVALID_MENU_HANDLE`) ou une fenêtre qui n'existe pas, un TPMPARAMS d'une autre taille (`ERROR_INVALID_PARAMETER`), une fenêtre d'un autre thread, un menu déjà montré (`ERROR_POPUP_ALREADY_ACTIVE`) ; un menu vide est montré, notifié, et le suivi rend 0 aussitôt |
+| NtUserEndMenu | WM_CANCELMODE posté à la fenêtre du menu suivi (un à la fois dans le système, `top_popup`) |
+
+Ce qui manque : le suivi de la barre (le clic, F10, Alt : l'étape suivante), le clavier entre colonnes
+(MENU_GetStartOfNextColumn), WM_NEXTMENU, l'aide (F1, WM_HELP), le menu système, les menus trop hauts pour l'écran
+(les flèches de défilement), les items à bitmap ou dessinés par l'application (WM_MEASUREITEM, WM_DRAWITEM),
+l'ombre (CS_DROPSHADOW) et l'animation, TPM_LAYOUTRTL pour la fenêtre (WS_EX_LAYOUTRTL), QF_CAPTURELOCKED.
+
+Vu en chemin :
+- un WM_NCPAINT pour une partie du cadre le repeint en entier (`paint::nc_paint`, limite connue) : la fermeture d'un
+  menu au-dessus de W repeint sa barre, qui montre alors l'état de son menu (Edit supprimé par DeleteMenu sans
+  DrawMenuBar ne s'y voit plus). Le scénario ne vérifie plus le soulignement d'Edit à l'écran ;
+- `menu1.c` charge la disposition de clavier `00000409`, sans quoi les touches tapées par QEMU sont ignorées ;
+- WM_ENTERIDLE désigne la fenêtre du menu courant : des clics postés à celle d'un sous-menu disparaissent avec elle
+  quand il se ferme (comme sous XP) ; le banc poste à la fenêtre du premier menu.
+
+Le banc d'essai : `tests/native/menu1.c`, scénario `menu` (étapes 20 et 21), avec un menu déroulant (Open avec un
+raccourci, un séparateur, Gray grisé, Sub et son sous-menu Inner, Exit) suivi pour W : les refus de
+TrackPopupMenuEx ; un menu vide ; au clavier (les touches tapées par QEMU quand « [menu] tracking N » paraît) :
+↓ ↓ ↓ → Entrée choisit Inner (TPM_RETURNCMD, aucun WM_COMMAND), avec les notifications comptées et le second
+TrackPopupMenuEx refusé ; → Échap → ← ferment le sous-menu sans finir, `q` donne WM_MENUCHAR, `x` exécute Exit
+(WM_COMMAND posté, TrackPopupMenu) ; à la souris, par des messages que W poste : Open surligné (relu à l'écran, son
+texte, le sillon du séparateur), Sub ouvre son sous-menu à droite, un clic sur Open le choisit ; TPM_NONOTIFY et le
+rectangle évité, EndMenu ; enfin la vraie souris (QEMU) ouvre le sous-menu de Sub, et la capture vérifie huit pixels
+du menu ouvert (son cadre, le sillon, Sub surligné et sa flèche, le sous-menu).
+
+Tests : hôte (`menutrack` : la place d'un menu sur l'écran, le rectangle évité, la lettre soulignée ; `menupopup` :
+la mise en page, le raccourci aligné, les colonnes, le dessin ; `menu` : une seule sélection, jamais un séparateur) ;
+le scénario `menu` sur AMD et Intel, que dix-huit mutations du suivi font échouer (dont les coordonnées de la souris
+ramenées à la zone cliente pendant le suivi) ; et `gui`, `destroy`, `desktop-ui`, `desktop-launch`, `desktop-click`,
+`cursor`, `mouse`, `mouse-windows`, `keyboard`, `caret`, `scroll`, `scrollex`, `dialog`, `listview`, `tasklist`, `text`,
+`icons`, `console`, `bitmap`, `send-messages`, `activate-app`, `cmd` sur AMD et Intel.

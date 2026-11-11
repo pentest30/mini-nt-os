@@ -1,0 +1,40 @@
+# The scrolling of a window and of a DC (win32k::scrollex; tests/native/
+# scrollx1.c, MinGW, linked to ReactOS's kernel32, user32 and gdi32):
+# SCROLLX1.EXE takes the place of winlogon.exe and switches to
+# WinSta0\Default. W (100, 100, 400 x 300; its client area 392 x 272 from
+# 104, 124) shows bands of 20 pixels, red, green, blue, from a position
+# `top`, and paints only what it is asked to. ScrollWindowEx up 30 uncovers
+# the last 30 rows (SIMPLEREGION), which alone are painted; ScrollDC down 20
+# on its DC uncovers the first 20; with SW_SCROLLCHILDREN left 10, its
+# child C (50 x 30 at 300, 100) moves to 290, 100 and receives WM_MOVE.
+features = test-smss
+requires = userland, native
+initial-command = SCROLLX1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [scrollx] on WinSta0\Default
+expect = [scrollx] painted
+expect = [scrollx] ScrollWindowEx up 30: 2, prcUpdate 0 242 392 272, hrgnUpdate 0 242 392 272, GetUpdateRect 0 242 392 272
+expect = [scrollx] WM_PAINT 0 242 392 272
+expect = [scrollx] ScrollDC down 20: 1, prcUpdate 0 0 392 20
+expect = [scrollx] WM_PAINT 0 0 392 20
+expect = [scrollx] SW_SCROLLCHILDREN left 10: 2, C from 404 to 394, WM_MOVE 290 100
+expect = [scrollx] done
+
+forbid = *** STOP:
+forbid = NtUserScrollWindowEx (0x11f2) is not implemented
+forbid = NtUserScrollDC (0x11f1) is not implemented
+
+# The bands where `top` is 10 at the end (band k at client row y when
+# (y + 10) / 20 is k: red, green, blue in turn), whether a row was copied
+# by a scroll or repainted after it: rows 5 (red), 12 (green), 30 (blue,
+# copied twice), 255 (green), 271 (blue). C, black, at its new place (400,
+# 230), and the stripe it uncovered, repainted (450, 230: row 106, blue).
+screen = 200 129 FF0000
+screen = 200 136 00A000
+screen = 200 154 0000FF
+screen = 200 379 00A000
+screen = 200 395 0000FF
+screen = 400 230 000000
+screen = 450 230 0000FF

@@ -32,6 +32,7 @@
 pub mod apc;
 mod atom;
 mod callback;
+mod caret;
 mod class;
 mod completion;
 mod console;
@@ -182,6 +183,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiOpenDCW, Handler::Status(gdi::nt_gdi_open_dc_w)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtGdiRectVisible, Handler::Status(gdi::nt_gdi_rect_visible)),
+    (services::NtGdiGetPixel, Handler::Status(gdi::nt_gdi_get_pixel)),
     (services::NtGdiRectangle, Handler::Status(gdi::nt_gdi_rectangle)),
     (services::NtGdiSelectBitmap, Handler::Status(gdi::nt_gdi_select_bitmap)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),
@@ -283,11 +285,30 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserDefSetText, Handler::Status(window::nt_user_def_set_text)),
     (services::NtUserDestroyCursor, Handler::Status(cursor::nt_user_destroy_cursor)),
     (services::NtUserDestroyMenu, Handler::Status(menu::nt_user_destroy_menu)),
+    (services::NtUserCheckMenuItem, Handler::Status(menu::nt_user_check_menu_item)),
+    (services::NtUserDeleteMenu, Handler::Status(menu::nt_user_delete_menu)),
+    (services::NtUserSetMenuDefaultItem, Handler::Status(menu::nt_user_set_menu_default_item)),
+    (services::NtUserSetMenuContextHelpId, Handler::Status(menu::nt_user_set_menu_context_help_id)),
+    (services::NtUserSetMenuFlagRtoL, Handler::Status(menu::nt_user_set_menu_flag_rtol)),
+    (services::NtUserThunkedMenuInfo, Handler::Status(menu::nt_user_thunked_menu_info)),
+    (services::NtUserGetMenuBarInfo, Handler::Status(menu::nt_user_get_menu_bar_info)),
+    (services::NtUserGetMenuItemRect, Handler::Status(menu::nt_user_get_menu_item_rect)),
+    (services::NtUserMenuItemFromPoint, Handler::Status(menu::nt_user_menu_item_from_point)),
+    (services::NtUserHiliteMenuItem, Handler::Status(menu::nt_user_hilite_menu_item)),
+    (services::NtUserTrackPopupMenuEx, Handler::Status(menu::nt_user_track_popup_menu_ex)),
+    (services::NtUserEndMenu, Handler::Status(menu::nt_user_end_menu)),
     (services::NtUserDestroyWindow, Handler::Status(window::nt_user_destroy_window)),
     (services::NtUserDrawIconEx, Handler::Status(cursor::nt_user_draw_icon_ex)),
+    (services::NtUserCreateCaret, Handler::Status(caret::nt_user_create_caret)),
+    (services::NtUserShowCaret, Handler::Status(caret::nt_user_show_caret)),
+    (services::NtUserHideCaret, Handler::Status(caret::nt_user_hide_caret)),
+    (services::NtUserGetCaretPos, Handler::Status(caret::nt_user_get_caret_pos)),
+    (services::NtUserGetCaretBlinkTime, Handler::Status(caret::nt_user_get_caret_blink_time)),
     (services::NtUserEnableScrollBar, Handler::Status(scroll::nt_user_enable_scroll_bar)),
     (services::NtUserGetScrollBarInfo, Handler::Status(scroll::nt_user_get_scroll_bar_info)),
     (services::NtUserSBGetParms, Handler::Status(scroll::nt_user_sb_get_parms)),
+    (services::NtUserScrollDC, Handler::Status(scroll::nt_user_scroll_dc)),
+    (services::NtUserScrollWindowEx, Handler::Status(scroll::nt_user_scroll_window_ex)),
     (services::NtUserSetScrollBarInfo, Handler::Status(scroll::nt_user_set_scroll_bar_info)),
     (services::NtUserSetScrollInfo, Handler::Status(scroll::nt_user_set_scroll_info)),
     (services::NtUserShowScrollBar, Handler::Status(scroll::nt_user_show_scroll_bar)),
