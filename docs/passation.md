@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **LineTo et des coordonnées absurdes** (`claude/new-session-696xfc`, vu sous VirtualBox : le gestionnaire des
+  tâches figé, plus de curseur) : `Bitmap::draw_line` parcourait chaque point du trait, sous le verrou de la surface
+  (DISPATCH_LEVEL) ; un trait de (0x56FBAE85, 0x28F81DE0) gelait tout le système. Ces coordonnées viennent du
+  soulignement du préfixe d'un bouton (« &Switch To ») dessiné par `user32` dans une police créée d'un LOGFONT jamais
+  rempli : **NtGdiExtGetObjectW n'est pas implémenté** (GetObject d'une police rend 0, le texte des boutons du
+  gestionnaire des tâches reste blanc) — la suite. Un trait plus long que 16 384 pixels est maintenant coupé à ce que
+  sa région peut recevoir (`dib::cut_line`, Liang–Barsky en rationnels exacts) ; en deçà, rien ne change ; LineTo
+  sature ses coordonnées. Trouvé par bissection (`desktop-launch`, un pixel de la liste : 9a03386, la barre de menus,
+  rend le blocage visible avant la capture) puis une trace temporaire des appels du thread de l'interface. Tests :
+  hôte (`dib`) ; `desktop-launch` (onglets et barre d'état dessinés, la boucle de messages vivante 110 s), et les
+  scénarios GUI sur AMD et Intel.
+
 - **Revue de la PR #122** (`claude/new-session-696xfc`) : une branche de menus reste sous MAX_DEPTH quel que soit
   l'ordre où on l'accroche (les menus au-dessus de celui qui reçoit le sous-menu comptent, `Menus::depth_above`,
   niveau par niveau ; sinon des arbres de 30 accrochés l'un sous l'autre grandissaient sans fin, et les parcours

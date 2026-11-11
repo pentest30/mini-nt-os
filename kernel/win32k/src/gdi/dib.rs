@@ -240,12 +240,27 @@ impl<'a> Bitmap<'a> {
     /// pointillé (un pixel sur deux, l'approximation des motifs de XP
     /// suffit aux axes) ; PS_NULL ne dessine rien. Une largeur au-delà
     /// d'un pixel épaissit le trait perpendiculairement à sa direction.
-    /// Chaque pixel reste dans les bornes ([`set_pixel`]).
+    /// Chaque pixel reste dans les bornes ([`set_pixel`]). Un trait plus
+    /// long que [`MAX_UNCUT_LINE`] est d'abord coupé à ce que `clip` (élargi
+    /// de son épaisseur) peut recevoir ([`cut_line`]) : des coordonnées
+    /// absurdes (un LOGFONT jamais rempli) feraient sinon parcourir des
+    /// milliards de points, sous le verrou de la surface.
     pub fn draw_line(&mut self, from: (i32, i32), to: (i32, i32), pen: &super::pen::Pen, clip: &[Rect]) {
         use super::pen::{PS_NULL, PS_SOLID};
-        if pen.style == PS_NULL {
+        if pen.style == PS_NULL || clip.is_empty() {
             return;
         }
+        let thickness = pen.width.max(1);
+        let length = from.0.abs_diff(to.0).max(from.1.abs_diff(to.1));
+        let (from, to) = if length > MAX_UNCUT_LINE {
+            let reach = clip.iter().skip(1).fold(clip[0], |all, part| all.union(part));
+            match cut_line(from, to, reach, thickness) {
+                Some(cut) => cut,
+                None => return,
+            }
+        } else {
+            (from, to)
+        };
         let (x0, y0, x1, y1) = (from.0, from.1, to.0, to.1);
         let (dx, dy) = (x1.abs_diff(x0) as i32, -(y1.abs_diff(y0) as i32));
         let (mut x, mut y) = (x0, y0);
@@ -256,7 +271,6 @@ impl<'a> Bitmap<'a> {
         let mut step = 0u32;
         // L'épaisseur : autant de reproductions du trait, décalées
         // perpendiculairement.
-        let thickness = pen.width.max(1);
         loop {
             if (!dotted || step.is_multiple_of(2)) && clip.iter().any(|part| part.contains(x, y)) {
                 self.set_line_pixel(x, y, pen.color, thickness, sx, sy);
@@ -452,9 +466,88 @@ pub const fn rop3_without_source(rop3: u8, pattern: u32, dest: u32) -> u32 {
     out
 }
 
+/// La longueur (en pixels, sur l'axe le plus long) au-delà de laquelle
+/// [`Bitmap::draw_line`] coupe un trait avant de le parcourir ; en deçà, le
+/// trait est tracé tel quel, au pixel près.
+pub const MAX_UNCUT_LINE: u32 = 1 << 14;
+
+/// Le trait de `from` à `to` coupé à `reach` élargi de `margin` de chaque
+/// côté (Liang–Barsky, en rationnels exacts sur 128 bits), ses bouts
+/// arrondis au pixel ; `None` s'il n'y passe pas.
+pub fn cut_line(from: (i32, i32), to: (i32, i32), reach: Rect, margin: i32) -> Option<((i32, i32), (i32, i32))> {
+    let (left, top) = (i64::from(reach.left) - i64::from(margin), i64::from(reach.top) - i64::from(margin));
+    let (right, bottom) =
+        (i64::from(reach.right) - 1 + i64::from(margin), i64::from(reach.bottom) - 1 + i64::from(margin));
+    let (x0, y0) = (i64::from(from.0), i64::from(from.1));
+    let (dx, dy) = (i64::from(to.0) - x0, i64::from(to.1) - y0);
+    // Les fractions de t (numérateur, dénominateur positif) où le trait
+    // entre dans le rectangle et en sort.
+    let (mut enter, mut leave) = ((0i128, 1i128), (1i128, 1i128));
+    for (p, q) in [(-dx, x0 - left), (dx, right - x0), (-dy, y0 - top), (dy, bottom - y0)] {
+        let (p, q) = (i128::from(p), i128::from(q));
+        if p == 0 {
+            if q < 0 {
+                return None;
+            }
+            continue;
+        }
+        if p < 0 {
+            let t = (-q, -p);
+            if t.0 * enter.1 > enter.0 * t.1 {
+                enter = t;
+            }
+        } else if q * leave.1 < leave.0 * p {
+            leave = (q, p);
+        }
+    }
+    if enter.0 * leave.1 > leave.0 * enter.1 {
+        return None;
+    }
+    let at = |(num, den): (i128, i128)| {
+        let rounded = |start: i64, delta: i64| {
+            let offset = (2 * i128::from(delta) * num + den).div_euclid(2 * den);
+            (i128::from(start) + offset) as i32
+        };
+        (rounded(x0, dx), rounded(y0, dy))
+    };
+    Some((at(enter), at(leave)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_far_outside_is_cut_to_what_it_can_reach() {
+        let mut pixels = alloc::vec![0u32; 16 * 16];
+        let pen = super::super::pen::Pen::BLACK;
+        let white = super::super::pen::Pen { color: ColorRef(0xFF_FFFF), ..pen };
+        let all = [Rect::new(0, 0, 16, 16)];
+        {
+            let mut bitmap = Bitmap::new(&mut pixels, 16, 16, 16, PixelLayout::Bgrx).unwrap();
+            // Across the surface from two billion pixels on each side: the
+            // row, and nothing else, in a few steps.
+            bitmap.draw_line((-2_000_000_000, 5), (2_000_000_000, 5), &white, &all);
+            // Where Task Manager hung (a button's prefix underline from a
+            // LOGFONT never filled): far away, and through nothing.
+            bitmap.draw_line((0x56FB_AE85, 0x28F8_1DE0), (i32::MIN, i32::MAX), &white, &all);
+        }
+        let row = |pixels: &[u32], y: usize| pixels[y * 16..(y + 1) * 16].iter().filter(|&&p| p != 0).count();
+        assert_eq!(row(&pixels, 5), 16, "the whole row");
+        assert_eq!(pixels.iter().filter(|&&p| p != 0).count(), 16, "only it");
+        // A diagonal from far up-left: the same pixels as the short one.
+        let mut far = alloc::vec![0u32; 16 * 16];
+        let mut near = alloc::vec![0u32; 16 * 16];
+        Bitmap::new(&mut far, 16, 16, 16, PixelLayout::Bgrx).unwrap().draw_line(
+            (-100_000, -100_000),
+            (15, 15),
+            &white,
+            &all,
+        );
+        Bitmap::new(&mut near, 16, 16, 16, PixelLayout::Bgrx).unwrap().draw_line((0, 0), (15, 15), &white, &all);
+        assert_eq!(far, near);
+        assert_eq!(cut_line((-50_000, 40), (50_000, 40), Rect::new(0, 0, 16, 16), 1), None, "below it");
+    }
 
     #[test]
     fn a_color_becomes_the_pixel_of_its_layout() {
