@@ -279,6 +279,29 @@ impl Menus {
         deepest
     }
 
+    /// La plus longue chaîne de menus au-dessus de `handle` : le nombre de
+    /// niveaux de menus dont un item ouvre, de proche en proche, `handle`
+    /// (0 pour une racine), niveau par niveau, sans parcourir chaque chemin ;
+    /// s'arrête passé [`MAX_DEPTH`].
+    fn depth_above(&self, handle: u32) -> u32 {
+        let mut level = alloc::vec![handle];
+        let mut depth = 0;
+        while depth <= MAX_DEPTH {
+            let parents: Vec<u32> = self
+                .map
+                .iter()
+                .filter(|(_, entry)| entry.state.items.iter().any(|item| level.contains(&item.submenu)))
+                .map(|(&parent, _)| parent)
+                .collect();
+            if parents.is_empty() {
+                break;
+            }
+            level = parents;
+            depth += 1;
+        }
+        depth
+    }
+
     /// IntInsertMenuItem et MENU_InsertItem : un item neuf, rempli par
     /// `info` et `text` ([`Self::set_item`]), au bout du menu (par position
     /// au-delà du dernier : AppendMenu), à sa position, ou avant l'item qui
@@ -287,7 +310,7 @@ impl Menus {
     ///
     /// # Errors
     /// `ERROR_INVALID_MENU_HANDLE` ; `ERROR_NOT_ENOUGH_MEMORY` passé
-    /// MAX_MENU_ITEMS ; celles de l'item.
+    /// MAX_MENU_ITEMS dans le menu qui reçoit l'item ; celles de l'item.
     pub fn insert(
         &mut self,
         handle: u32,
@@ -297,15 +320,15 @@ impl Menus {
         text: Option<&[u16]>,
     ) -> Result<(), u32> {
         let count = self.state(handle).ok_or(ERROR_INVALID_MENU_HANDLE)?.items.len();
-        if count >= MAX_ITEMS {
-            return Err(ERROR_NOT_ENOUGH_MEMORY);
-        }
         let (menu, mut position) = if by_position {
             (handle, (at as usize).min(count))
         } else {
             self.find(handle, at, false).unwrap_or((handle, count))
         };
         let state = self.state_mut(menu).ok_or(ERROR_INVALID_MENU_HANDLE)?;
+        if state.items.len() >= MAX_ITEMS {
+            return Err(ERROR_NOT_ENOUGH_MEMORY);
+        }
         while position > 0 && (hbmmenu::SYSTEM..=hbmmenu::MBAR_CLOSE_D).contains(&state.items[position - 1].bitmap) {
             position -= 1;
         }
@@ -352,8 +375,11 @@ impl Menus {
     ///
     /// # Errors
     /// `ERROR_INVALID_PARAMETER` pour un sous-menu qui n'existe pas, qui est
-    /// le menu lui-même ou qui ferait une branche trop profonde (une
-    /// boucle).
+    /// le menu lui-même, un de ses ancêtres (une boucle), ou qui ferait une
+    /// branche trop profonde : les menus au-dessus de `menu` comptent avec
+    /// ceux du sous-menu, sans quoi des arbres accrochés l'un sous l'autre
+    /// grandiraient sans fin, et les parcours récursifs avec eux sur la pile
+    /// du noyau.
     fn set_item_info(
         &mut self,
         menu: u32,
@@ -364,7 +390,11 @@ impl Menus {
         let mask = info.f_mask;
         let submenu = if mask & miim::SUBMENU != 0 && info.h_sub_menu != 0 {
             let sub = info.h_sub_menu;
-            if !self.contains(sub) || sub == menu || self.depth(sub, 0) > MAX_DEPTH || self.find_menu(sub, menu) {
+            if !self.contains(sub)
+                || sub == menu
+                || self.depth_above(menu) + self.depth(sub, 0) > MAX_DEPTH
+                || self.find_menu(sub, menu)
+            {
                 return Err(ERROR_INVALID_PARAMETER);
             }
             if let Some(state) = self.state_mut(sub) {
@@ -1299,6 +1329,58 @@ mod tests {
         assert!(menus.state(0x20).unwrap().items.is_empty(), "the failed item is gone");
         let missing = menus.insert(0x10, u32::MAX, true, &popup_item(0x99, &text), Some(&text));
         assert_eq!(missing, Err(ERROR_INVALID_PARAMETER));
+    }
+
+    #[test]
+    fn a_branch_stays_within_the_depth_however_it_is_built() {
+        let (mut menus, heap) = table();
+        let text = wide("x");
+        // Two chains of 30 menus: each one alone is as deep as a branch may
+        // be.
+        for first in [0x1000, 0x2000] {
+            for level in 0..30 {
+                add(&mut menus, &heap, first + level, true);
+            }
+            for level in 0..29 {
+                append(&mut menus, first + level, &popup_item(first + level + 1, &text), &text);
+            }
+            assert_eq!(menus.depth(first, 0), 30);
+        }
+        // Under the leaf of the first, the second would make 59 levels below
+        // its root: refused, though the second alone passes.
+        let deeper = menus.insert(0x1000 + 29, u32::MAX, true, &popup_item(0x2000, &text), Some(&text));
+        assert_eq!(deeper, Err(ERROR_INVALID_PARAMETER));
+        // One more menu under the leaf: 30 levels below the root, allowed;
+        // one under that one: refused.
+        add(&mut menus, &heap, 0x3000, true);
+        add(&mut menus, &heap, 0x3001, true);
+        append(&mut menus, 0x1000 + 29, &popup_item(0x3000, &text), &text);
+        let deeper = menus.insert(0x3000, u32::MAX, true, &popup_item(0x3001, &text), Some(&text));
+        assert_eq!(deeper, Err(ERROR_INVALID_PARAMETER));
+        assert_eq!(menus.depth_above(0x3000), 30);
+        // The first chain under a new root: 31 levels below it.
+        add(&mut menus, &heap, 0x4000, false);
+        let under = menus.insert(0x4000, u32::MAX, true, &popup_item(0x1000, &text), Some(&text));
+        assert_eq!(under, Err(ERROR_INVALID_PARAMETER));
+    }
+
+    #[test]
+    fn the_item_limit_is_the_receiving_menus() {
+        let (mut menus, heap) = table();
+        add(&mut menus, &heap, 0x10, false);
+        add(&mut menus, &heap, 0x20, true);
+        let text = wide("x");
+        append(&mut menus, 0x20, &string_item(7, &text), &text);
+        append(&mut menus, 0x10, &popup_item(0x20, &text), &text);
+        while menus.state(0x20).unwrap().items.len() < MAX_ITEMS {
+            append(&mut menus, 0x20, &string_item(8, &text), &text);
+        }
+        // Before item 7, in the full submenu, through the bar of one item.
+        let full = menus.insert(0x10, 7, false, &string_item(9, &text), Some(&text));
+        assert_eq!(full, Err(ERROR_NOT_ENOUGH_MEMORY));
+        assert_eq!(menus.state(0x20).unwrap().items.len(), MAX_ITEMS);
+        menus.insert(0x10, 1, true, &string_item(9, &text), Some(&text)).unwrap();
+        assert_eq!(menus.state(0x10).unwrap().items.len(), 2, "the bar itself has room");
     }
 
     #[test]
