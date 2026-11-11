@@ -23,6 +23,43 @@
   NtUserSetThreadState (la fin d'une boîte), NtUserGetAncestor, NtUserIsClipboardFormatAvailable,
   GetOutlineTextMetricsW, puis enregistrer (Ctrl+S : la boîte Enregistrer sous de `comdlg32`) et rouvrir le fichier.
 
+- **Le gestionnaire des tâches : page grise, onglets, relance** (`claude/new-session-696xfc`, worktree
+  `.claude/worktrees/pr122` ; demandé le 2026-11-11, testé sous VirtualBox). Trois défauts :
+  1. La page Applications repeinte en gris : son contrôle d'onglets (sœur d'en dessous, sans WS_CLIPSIBLINGS,
+     effacé de COLOR_BTNFACE par DefWindowProc) peignait après elle. `paint::find_window_to_repaint` va maintenant
+     des sœurs du bas de l'ordre Z vers le haut (écart voulu avec ReactOS, qui va de haut en bas ; ReactOS 0.4.16,
+     vérifié dans la VM `reactos` de VirtualBox, affiche bien la page, avec son thème).
+  2. Plus aucune application après un passage par un autre onglet : la même cause.
+  3. Le gestionnaire ne se rouvrait plus : NtUserGetWindowPlacement manquait, il gardait pour sa place (WM_DESTROY,
+     puis MoveWindow au lancement suivant) des octets de sa pile. Le service a été écrit deux fois, ici et pour le
+     Bloc-notes (entrée ci-dessus) ; à la fusion, **la version du Bloc-notes est gardée** (`winpos::placement`,
+     `sys::window::nt_user_get_window_placement` : longueur mise à 44 quelle qu'elle soit, comme ReactOS ;
+     `abi::user::WindowPlacement32`), la nôtre retirée.
+  Scénario `desktop-launch` étendu : le gestionnaire fermé par sa croix, relancé du menu Démarrer, Processus puis
+  Applications ; quatre pixels (la première ligne choisie, le N souligné de New Task..., le relief sous le S de
+  Switch To et le E de End Task). Passait sur AMD et Intel avec notre GetWindowPlacement ; les deux mutations
+  (l'ordre de haut en bas, le service retiré) le faisaient échouer. `cargo xtask lint` propre, 1064 tests hôte.
+  Scénarios GUI avec le nouvel ordre de peinture (avant la fusion) : `text` et `bitmap` passent. Après la fusion :
+  lint propre, 1074 tests hôte ; `desktop-launch` (avec le GetWindowPlacement du Bloc-notes) et `notepad` (avec les
+  accélérateurs, `b8f8642`) passent sur AMD et Intel. **Course de la sonde de `notepad`, corrigée** : un run sur
+  AMD et Intel avait échoué (« Untitled - Notepad » jamais vu). `tests/native/notepad1.c` ne relisait les titres que
+  quand la liste des fenêtres changeait : s'il voyait la fenêtre avant que le Bloc-notes y mette « Untitled -
+  Notepad » (elle s'appelle « Notepad » depuis sa création), il ne la reconnaissait plus, et les touches ne venaient
+  pas. Il relit maintenant les titres à chaque passage et reliste quand l'un change. Reproduit en sondant toutes
+  les 1 ms (l'ancienne sonde échoue ainsi à coup sûr ; la nouvelle voit « Notepad » puis « Untitled - Notepad » et
+  va jusqu'au « Goto line » fermé, seul « probe done » manque : 8000 passages d'un tick dépassent 120 s) ; à
+  250 ms, `notepad` passe sur AMD et Intel. À mesurer : si l'ordre de peinture du bas vers le haut allonge
+  l'intervalle entre la création et le titre. **Reste à vérifier** : `dialog`, `desktop-ui`, `desktop-click`,
+  `gui`, `menu`, `caret`,
+  `console`, `cmd`, `listview`, `scroll`, `scrollex`, `icons`, `destroy`, `cursor`, `mouse` avec le nouvel ordre de
+  peinture ; puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
+  target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format VHD`, l'attacher à la VM `Mino` à la place de
+  `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
+  **Vu, pas fait** : LineTo dessine toujours du stylo noir par défaut. `gdi32` choisit les stylos dans DC_ATTR sans
+  appeler le noyau (`hpen`, DC_PEN_DIRTY) et SetDCPenColor y écrit `crPenClr` (le DC_PEN de stock) ; DrawEdge de
+  `user32` (BF_DIAGONAL) trace ainsi en noir les coins des onglets. NtUserFindWindowEx manque (le gestionnaire
+  déjà ouvert n'est pas ramené devant).
+
 - **GetObject, et la position courante de LineTo** (`claude/new-session-696xfc`, demandé pour le texte des boutons
   du gestionnaire des tâches) : NtGdiExtGetObjectW (`win32k::gdi::object`, GreGetObject) : une police rend son
   LOGFONTW puis le reste d'un ENUMLOGFONTEXDVW sans axes, à zéro (356 octets au plus ; 92 sans tampon), un bitmap

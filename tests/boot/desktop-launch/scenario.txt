@@ -6,11 +6,21 @@
 # The pointer starts at the centre of the 1280x800 screen (640,400); moves are
 # split, QEMU's PS/2 queue holding 16 bytes.
 #
-# The screen, once Task Manager has read the list: cmd's console (black, at the
-# top left) is still over the desktop, which a press on the Start button
-# activates without bringing it over the windows it started; the taskbar.
-# Task Manager's own paint is not checked: the capture can come in the middle
-# of it, right after the list is read.
+# Once Task Manager has read the list, the mouse closes it (its close button)
+# and starts it again from the Start menu: it saved its place
+# (GetWindowPlacement; without it, bytes of its stack, and the second window
+# was nowhere to be seen). In the second one, a press on Processes, then on
+# Applications, waits between steps (moves of nothing) leaving time to paint.
+#
+# The screen then: cmd's console (black, at the top left) is still over the
+# desktop, which a press on the Start button activates without bringing it
+# over the windows it started; the taskbar. Task Manager's Applications page
+# over its tab control, which erases all its inside (COLOR_BTNFACE) and has no
+# WS_CLIPSIBLINGS: the first row of the list selected, the underlined N of New
+# Task..., the white relief under the S of Switch To and the E of End Task,
+# disabled (DrawState, a font from GetObjectW). Siblings repaint from the
+# bottom of the Z order up; from the top, the tab control painted over the
+# page, gray.
 features = test-smss
 requires = userland, native
 initial-command = DESKTOP1.EXE
@@ -20,6 +30,7 @@ timeout = 120
 keys = [desktop] ready => down down ret
 keys = [desktop] launched Terminal => move:-293,192 move:-293,193 press:1 release
 keys = [desktop] start button: start menu open => move:46,-118 move:0,-117 press:1 release
+keys = [apps] the process list was read => move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:182,-90 move:182,-90 move:182,-90 move:180,-91 press:1 release move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:-193,149 move:-193,149 move:-193,149 move:-193,149 press:1 release move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:46,-118 move:0,-117 press:1 release move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:150,-105 move:150,-105 move:151,-105 press:1 release move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:-71,-1 press:1 release move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0 move:0,0
 
 expect = [desktop] ready
 expect = [desktop] launched Terminal (PID
@@ -27,8 +38,13 @@ expect = [desktop] start button: start menu open
 expect = [desktop] selected Task Manager
 expect = [desktop] launched Task Manager (PID
 expect = [apps] the process list was read by PID
+expect = (TASKMGR.EXE) ended
 screen = 200 300 000000
 screen = 700 785 1E5CDB
+screen = 500 288 0A246A
+screen = 751 572 000000
+screen = 672 573 FFFFFF
+screen = 590 573 FFFFFF
 
 forbid = [desktop] launch failed:
 forbid = *** STOP:
