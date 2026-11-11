@@ -89,20 +89,22 @@ compris (refaite à chaque construction). La trame cible est `0xc(%ebp)`, l'argu
 
 ## Mesures
 
-Le 2026-11-10, QEMU, processeur par défaut (chemin `int 2Eh`) ; ce sont les planchers des scénarios.
+Le 2026-11-10, QEMU, processeur par défaut (chemin `int 2Eh`) ; ce sont les planchers des scénarios. Mesure
+reprise le même jour sur `main` (38d86a7) et l'étape 27 de `compat/m5-csrss.md` (ports de complétion,
+NtAllocateLocallyUniqueId) : `NtSetDefaultLocale` (ntdll) et `Pipes` (kernel32) passent en plus.
 
 | Module | Lancés | Écartés | Passent | Part | Plancher |
 |---|---:|---:|---:|---:|---:|
-| ntdll | 84 | 23 | 33 | 39 % | 33 |
-| kernel32 | 29 | 12 | 11 | 38 % | 11 |
-| **Ensemble** | **113** | 35 | **44** | **39 %** | |
+| ntdll | 84 | 23 | 34 | 40 % | 34 |
+| kernel32 | 29 | 12 | 12 | 41 % | 12 |
+| **Ensemble** | **113** | 35 | **46** | **41 %** | |
 
-Le seuil du M5 (50 %) n'est pas atteint : il manque 9 tests en ntdll (42 sur 84), 4 en kernel32 (15 sur 29),
-13 sur l'ensemble (57 sur 113).
+Le seuil du M5 (50 %) n'est pas atteint : il manque 8 tests en ntdll (42 sur 84), 3 en kernel32 (15 sur 29),
+11 sur l'ensemble (57 sur 113).
 
 - **ntdll, passent** : DllLoadNotification, LdrLoadDll, NtAcceptConnectPort, NtAccessCheck,
   NtAccessCheckByTypeResultList, NtAdjustPrivilegesToken, NtCreateFile, NtCreateThread, NtDuplicateObject, NtMutant,
-  NtOpenProcessToken, NtSetInformationFile, RtlCopyMappedMemory, RtlDebugInformation, RtlDeleteAce,
+  NtOpenProcessToken, NtSetDefaultLocale, NtSetInformationFile, RtlCopyMappedMemory, RtlDebugInformation, RtlDeleteAce,
   RtlDetermineDosPathNameType, RtlFirstFreeAce, RtlGetFullPathName_U, RtlGetFullPathName_Ustr,
   RtlGetLengthWithoutLastFullDosOrNtPathElement, RtlGetLengthWithoutTrailingPathSeperators,
   RtlGetLongestNtPathLength, RtlGetProcessHeaps, RtlHandle, RtlImageDirectoryEntryToData, RtlImageRvaToVa, RtlLocale,
@@ -111,7 +113,7 @@ Le seuil du M5 (50 %) n'est pas atteint : il manque 9 tests en ntdll (42 sur 84)
 - **ntdll, meurent ou pendent** (le reste échoue sur des assertions, détaillées dans le journal) : NtContinue,
   RtlGenerate8dot3Name, RtlUnicodeStringToCountedOemString, RtlxUnicodeStringToAnsiSize, RtlxUnicodeStringToOemSize
   (`c0000005`) ; NtApphelpCacheControl, NtProtectVirtualMemory, RtlReAllocateHeap (20 s dépassées).
-- **kernel32, passent** : ConsoleCP, GetCurrentDirectory, GetLocaleInfo, GetVolumeInformation, InitOnce,
+- **kernel32, passent** : ConsoleCP, GetCurrentDirectory, GetLocaleInfo, GetVolumeInformation, InitOnce, Pipes,
   SetCurrentDirectory, SystemFirmware, WideCharToMultiByte, interlck, lstrcpynW, lstrlen.
 - **kernel32, meurent ou pendent** : LoadLibraryExW (`c0000005`) ; QueueUserAPC, TerminateProcess (20 s
   dépassées).

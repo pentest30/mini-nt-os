@@ -19,7 +19,7 @@
 features = test-smss, interactive
 requires = userland, native, rostests
 initial-command = NTAPITST.EXE
-apitests-floor = 33
+apitests-floor = 34
 cpus     = default
 timeout  = 900
 
