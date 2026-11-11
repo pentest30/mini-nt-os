@@ -716,7 +716,8 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             Ok(0)
         }
         (abi::menu::wm::CANCELMODE, Some(window)) => {
-            // The menu keys forgotten, a menu this window tracks ended
+            // Alt forgotten (QF_FMENUSTATUS; F10 down stays, as ReactOS
+            // keeps QF_FF10STATUS), a menu this window tracks ended
             // (MENU_EndMenu), its capture released.
             let thread = crate::convert_current_thread()?;
             let capture = thread.queue.with(|queue| {

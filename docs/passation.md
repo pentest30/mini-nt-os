@@ -8,10 +8,12 @@
   `queue.menu_keys`) donne SC_KEYMENU (`menutrack::track_kbd_menu_bar` : premier item, ou l'item de la lettre et un
   VK_RETURN posté, TF_ENDMENU sans item) ; ←/→ passent d'un item de la barre à l'autre ; WM_CANCELMODE finit le
   suivi (`end_menu_of`) ; GetMenuBarInfo rend fBarFocused, fFocused et `hwndMenu`. Tests : hôte (`defwnd`) ;
-  scénario `menu` (clics postés, touches de QEMU, vrai clic sur la barre, capture) sur AMD et Intel ; douze
-  mutations le font échouer. **À finir** : deux mutations (premier item sans lettre, `menu_owner` pour la barre ;
-  `menubar_mutate.py` dans le scratchpad) et les régressions (`gui`, `destroy`, `desktop-click`, `mouse`,
-  `mouse-windows`, `keyboard`, `dialog`, `cmd`…) n'ont pas encore été passées.
+  scénario `menu` (clics postés, touches de QEMU, vrai clic sur la barre, capture) sur AMD et Intel ; quatorze
+  mutations le font toutes échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur
+  la barre, le VK_RETURN d'une lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused, le premier item sans lettre,
+  `menu_owner` pour la barre) ; 21 autres scénarios GUI et `cmd` passent sur AMD et Intel. WM_CANCELMODE n'oublie
+  qu'Alt (QF_FMENUSTATUS), comme ReactOS : F10 enfoncé reste retenu (la revue de la PR 125 proposait de tout
+  oublier ; on garde la spécification).
   Pas encore : le menu de la fenêtre (HTSYSMENU, Alt+Espace, WM_NEXTMENU : la sélection fait le tour aux bouts de
   la barre), MENU_SuspendPopup, Alt+F4 et Alt+Tab. Suite proposée : le menu de la fenêtre (GetSystemMenu), ou
   réduire et agrandir, ou un scénario du Bloc-notes.

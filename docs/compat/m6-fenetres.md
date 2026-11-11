@@ -1069,7 +1069,7 @@ MENU_EndMenu, NtUserGetMenuBarInfo), ReactOS comme spécification ; `win32k::def
 | Les touches (`defwnd::key_menu`) | Alt enfoncé seul, sans répétition, puis relâché, ou F10 enfoncé puis relâché : SC_KEYMENU (0) à la fenêtre de premier niveau ; Alt et une lettre (WM_SYSCHAR) : SC_KEYMENU (la lettre) ; ce qu'il en reste dans la file du thread (QF_FMENUSTATUS, QF_FF10STATUS : `queue.menu_keys`) |
 | SC_KEYMENU (`menutrack::track_kbd_menu_bar`) | la barre de la fenêtre de premier niveau ; sans lettre, le premier item sélectionné ; avec une lettre, l'item qu'elle souligne sélectionné et un VK_RETURN posté (son menu s'ouvre) ; sans item (WM_MENUCHAR ignoré), le suivi finit aussitôt (TF_ENDMENU) |
 | Les flèches sur la barre (MENU_KeyLeft, MENU_KeyRight) | ← et → passent à l'item voisin de la barre (du premier au dernier et retour) ; si un menu était ouvert, celui du nouvel item s'ouvre, son premier item sélectionné ; → ouvre d'abord le sous-menu de l'item sélectionné d'un menu ouvert ; ↑ et ↓ ouvrent le menu de l'item ; Échap ferme le menu ouvert, puis la barre |
-| WM_CANCELMODE (`menutrack::end_menu_of`) | les touches du menu oubliées ; le suivi finit si la fenêtre est celle du menu suivi ou sa propriétaire (MENU_EndMenu) ; la souris rendue si elle l'avait |
+| WM_CANCELMODE (`menutrack::end_menu_of`) | Alt oublié (QF_FMENUSTATUS ; F10 enfoncé reste retenu, comme ReactOS) ; le suivi finit si la fenêtre est celle du menu suivi ou sa propriétaire (MENU_EndMenu) ; la souris rendue si elle l'avait |
 | NtUserGetMenuBarInfo | fBarFocused : la barre est le menu suivi ; fFocused : l'item sélectionné (la barre suivie pour `idItem` 0) ; `hwndMenu` : la fenêtre du menu ouvert de l'item |
 
 Écarts avec ReactOS, faute du menu de la fenêtre : aux bouts de la barre, la sélection fait le tour au lieu de passer
@@ -1091,7 +1091,9 @@ Alt seul puis ← et Entrée (Help), F10 ↓ → Entrée, Alt+F Échap → Entr�
 vrai clic de QEMU sur Fichier, dont le menu reste ouvert pour la capture (l'item enfoncé, son texte décalé, le menu
 dessous, son sillon).
 
-Tests : hôte (`defwnd` : HTMENU, les touches du menu) ; le scénario `menu` sur AMD et Intel, que douze mutations font
-échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur la barre, le VK_RETURN d'une
-lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused) ; deux autres (le premier item sans lettre, `menu_owner` pour la
-barre) et les régressions des autres scénarios restent à passer.
+Tests : hôte (`defwnd` : HTMENU, les touches du menu) ; le scénario `menu` sur AMD et Intel, que quatorze mutations
+font échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur la barre, le VK_RETURN
+d'une lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused, le premier item sans lettre, `menu_owner` pour la barre) ;
+et `desktop-launch`, `desktop-ui`, `desktop-click`, `gui`, `destroy`, `mouse`, `mouse-windows`, `keyboard`, `caret`,
+`text`, `dialog`, `listview`, `tasklist`, `scroll`, `icons`, `bitmap`, `console`, `cursor`, `send-messages`,
+`activate-app`, `cmd` sur AMD et Intel.
