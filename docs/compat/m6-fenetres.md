@@ -1069,7 +1069,7 @@ MENU_EndMenu, NtUserGetMenuBarInfo), ReactOS comme spécification ; `win32k::def
 | Les touches (`defwnd::key_menu`) | Alt enfoncé seul, sans répétition, puis relâché, ou F10 enfoncé puis relâché : SC_KEYMENU (0) à la fenêtre de premier niveau ; Alt et une lettre (WM_SYSCHAR) : SC_KEYMENU (la lettre) ; ce qu'il en reste dans la file du thread (QF_FMENUSTATUS, QF_FF10STATUS : `queue.menu_keys`) |
 | SC_KEYMENU (`menutrack::track_kbd_menu_bar`) | la barre de la fenêtre de premier niveau ; sans lettre, le premier item sélectionné ; avec une lettre, l'item qu'elle souligne sélectionné et un VK_RETURN posté (son menu s'ouvre) ; sans item (WM_MENUCHAR ignoré), le suivi finit aussitôt (TF_ENDMENU) |
 | Les flèches sur la barre (MENU_KeyLeft, MENU_KeyRight) | ← et → passent à l'item voisin de la barre (du premier au dernier et retour) ; si un menu était ouvert, celui du nouvel item s'ouvre, son premier item sélectionné ; → ouvre d'abord le sous-menu de l'item sélectionné d'un menu ouvert ; ↑ et ↓ ouvrent le menu de l'item ; Échap ferme le menu ouvert, puis la barre |
-| WM_CANCELMODE (`menutrack::end_menu_of`) | les touches du menu oubliées ; le suivi finit si la fenêtre est celle du menu suivi ou sa propriétaire (MENU_EndMenu) ; la souris rendue si elle l'avait |
+| WM_CANCELMODE (`menutrack::end_menu_of`) | Alt oublié (QF_FMENUSTATUS ; F10 enfoncé reste retenu, comme ReactOS) ; le suivi finit si la fenêtre est celle du menu suivi ou sa propriétaire (MENU_EndMenu) ; la souris rendue si elle l'avait |
 | NtUserGetMenuBarInfo | fBarFocused : la barre est le menu suivi ; fFocused : l'item sélectionné (la barre suivie pour `idItem` 0) ; `hwndMenu` : la fenêtre du menu ouvert de l'item |
 
 Écarts avec ReactOS, faute du menu de la fenêtre : aux bouts de la barre, la sélection fait le tour au lieu de passer
@@ -1091,7 +1091,47 @@ Alt seul puis ← et Entrée (Help), F10 ↓ → Entrée, Alt+F Échap → Entr�
 vrai clic de QEMU sur Fichier, dont le menu reste ouvert pour la capture (l'item enfoncé, son texte décalé, le menu
 dessous, son sillon).
 
-Tests : hôte (`defwnd` : HTMENU, les touches du menu) ; le scénario `menu` sur AMD et Intel, que douze mutations font
-échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur la barre, le VK_RETURN d'une
-lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused) ; deux autres (le premier item sans lettre, `menu_owner` pour la
-barre) et les régressions des autres scénarios restent à passer.
+Tests : hôte (`defwnd` : HTMENU, les touches du menu) ; le scénario `menu` sur AMD et Intel, que quatorze mutations
+font échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur la barre, le VK_RETURN
+d'une lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused, le premier item sans lettre, `menu_owner` pour la barre) ;
+et `desktop-launch`, `desktop-ui`, `desktop-click`, `gui`, `destroy`, `mouse`, `mouse-windows`, `keyboard`, `caret`,
+`text`, `dialog`, `listview`, `tasklist`, `scroll`, `icons`, `bitmap`, `console`, `cursor`, `send-messages`,
+`activate-app`, `cmd` sur AMD et Intel.
+
+## Étape 24 : le Bloc-notes s'affiche (GetWindowPlacement, SetWindowPlacement)
+
+Le banc d'essai : `tests/native/notepad1.c` (`NOTEPAD1.EXE`, MinGW), scénario `notepad`. Il prend la place de
+`winlogon.exe`, prend `WinSta0\Default` comme lui, lance le vrai `notepad.exe` de ReactOS par CreateProcessW, puis
+liste chaque seconde les fenêtres de premier niveau et leur titre (8 s : la sonde de `smss` arrête tout 10 s après
+le démarrage ou la dernière touche). `xtask` met `notepad.exe` sur le disque, avec la fermeture de ses imports
+(`comdlg32`, `shell32`, `shlwapi`, `comctl32`…).
+
+Au démarrage, le Bloc-notes lit ses réglages (`HKCU\Software\Microsoft\Notepad`), crée sa fenêtre
+(`WS_OVERLAPPEDWINDOW`, `CW_USEDEFAULT`) et, dans WM_CREATE, son contrôle Edit et sa barre d'état ; sans place
+enregistrée, il prend celle que donne GetWindowPlacement, et c'est SetWindowPlacement qui montre la fenêtre. Sans
+ces deux services, la fenêtre existait, cachée.
+
+`winpos.c` de win32k (IntGetWindowPlacement, make_rect_onscreen, IntSetWindowPlacement, NtUserGetWindowPlacement,
+NtUserSetWindowPlacement), ReactOS comme spécification ; `win32k::winpos`, `abi::user::WindowPlacement32`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| GetWindowPlacement (`winpos::placement`) | la commande qui montre la fenêtre telle qu'elle est (SW_SHOWMINIMIZED, SW_SHOWMAXIMIZED ou SW_SHOWNORMAL) ; le rectangle normal : celui de la fenêtre dans la zone cliente de son parent, décalé dans la zone de travail pour une fenêtre de premier niveau qui n'est pas une fenêtre d'outils ; les points de l'icône et de la fenêtre agrandie à (−1, −1) ; WPF_RESTORETOMAXIMIZED d'une fenêtre agrandie ; la longueur mise à 44 quelle qu'elle soit |
+| SetWindowPlacement (`winpos::set_placement`) | une longueur autre que 44 : ERROR_INVALID_PARAMETER ; la fenêtre du bureau : FALSE ; le rectangle normal ramené sur la zone de travail du moniteur le plus proche s'il en sort tout entier (make_rect_onscreen) ; la fenêtre placée là sans changer son rang ni l'activer, puis montrée par ShowWindow avec la commande donnée |
+
+Écarts, faute de réduire et d'agrandir : pas de place gardée à part (`InternalPos` : le rectangle normal d'une
+fenêtre réduite ou agrandie, les places de l'icône et de la fenêtre agrandie) ; une fenêtre réduite ou agrandie
+n'est pas déplacée (journalisé une fois) ; WPF_ASYNCWINDOWPLACEMENT est fait tout de suite (journalisé une fois) ;
+la tolérance de longueur pour un module qui attend Windows 3.x manque.
+
+Ce que le Bloc-notes montre ensuite (journal du scénario) : NtUserRegisterWindowMessage (FINDMSGSTRING : rendu 0,
+la procédure du Bloc-notes prend alors WM_NULL pour le message de la recherche), NtUserCreateAcceleratorTable (ses
+raccourcis), NtQueryDefaultUILanguage, NtSetInformationThread (classe 9), NtUserCallOneParam (0x28),
+NtUserSystemParametersInfo (0x2006), SetWindowLong de GWL_EXSTYLE, CS_PARENTDC, et un « SendMessageW Error » de
+`user32` pendant la création (un NtUserMessageCall FNID_SENDMESSAGE qui rend FALSE) : à diagnostiquer. La sonde
+appelle NtUserQueryWindow (GetWindowTextW). Le manifeste de `comctl32` 6 manque (toléré : la version 5 sert).
+
+Tests : hôte (`winpos` : le placement d'une fenêtre normale, agrandie, réduite, d'outils, fille ; make_rect_onscreen
+des quatre côtés ; les octets du `WINDOWPLACEMENT`) ; le scénario `notepad` sur AMD et Intel (le titre « Untitled -
+Notepad », le contrôle Edit blanc, le titre actif, « Line 1 » de la barre d'état de `comctl32`), qui échoue quand
+SetWindowPlacement ne montre plus la fenêtre (mutation).

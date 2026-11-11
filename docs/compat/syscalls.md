@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 127 | 296 |
-| win32k | 157 | 737 |
+| win32k | 158 | 737 |
 
 ## ntoskrnl
 
@@ -857,7 +857,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x121a` | `NtUserSetTimer` | 4 | ✅ |
 | `0x121b` | `NtUserSetWindowFNID` | 2 | ✅ |
 | `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
-| `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
+| `0x121d` | `NtUserSetWindowPlacement` | 2 | ✅ |
 | `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
 | `0x121f` | `NtUserSetWindowRgn` | 3 |  |
 | `0x1220` | `NtUserSetWindowsHookAW` | 3 |  |

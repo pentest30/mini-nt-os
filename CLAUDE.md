@@ -333,6 +333,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   menu (`defwnd::key_menu`, `queue.menu_keys` : Alt, F10, Alt et une lettre donnent SC_KEYMENU,
   `menutrack::track_kbd_menu_bar`) ; ←/→ sur la barre ; WM_CANCELMODE (`menutrack::end_menu_of`) ; GetMenuBarInfo
   (fBarFocused, fFocused, `hwndMenu`). Pas encore le menu de la fenêtre.
+  M6, étape 24 (le Bloc-notes s'affiche) : GetWindowPlacement et SetWindowPlacement (`win32k::winpos::placement`,
+  `set_placement` : rectangle normal dans la zone de travail, make_rect_onscreen, ShowWindow) ; scénario `notepad`
+  (`tests/native/notepad1.c` lance le vrai `notepad.exe` : titre, menus, contrôle Edit, barre d'état).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

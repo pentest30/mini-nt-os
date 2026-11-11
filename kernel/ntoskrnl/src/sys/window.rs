@@ -9,8 +9,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    LargeUnicodeString32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_MAX,
+    LargeUnicodeString32, WindowPlacement32, HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOREDRAW, SWP_NOSIZE, SWP_NOZORDER, SW_MAX,
 };
 use abi::winerror::{dos_error, ERROR_SUCCESS};
 use ke::usermem::{copy_from_user, probe_for_read, UserPtr};
@@ -291,30 +291,6 @@ pub(super) fn nt_user_begin_paint(arguments: &[u32]) -> NtStatus {
     }
 }
 
-/// NtUserGetWindowPlacement(hWnd, lpwndpl) : où est la fenêtre et comment
-/// elle est montrée (`win32k::winpos::placement`) ; TRUE. FALSE pour une
-/// fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`), un `lpwndpl` qu'on ne
-/// peut lire ou écrire, ou dont `length` n'est pas celle d'un
-/// WINDOWPLACEMENT (comme ReactOS). Sans lui, le gestionnaire des tâches
-/// gardait pour sa place des octets de sa pile, et sa fenêtre ne se voyait
-/// plus au lancement suivant.
-pub(super) fn nt_user_get_window_placement(arguments: &[u32]) -> NtStatus {
-    let (handle, out) = (arguments[0], arguments[1]);
-    let Some(window) = win32k::window::get(handle) else {
-        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
-    };
-    let size = core::mem::size_of::<abi::user::WindowPlacement32>();
-    let mut length = [0u8; 4];
-    if copy_from_user(&mut length, u64::from(out)).is_err() || u32::from_le_bytes(length) as usize != size {
-        return NtStatus(0);
-    }
-    let placement = win32k::winpos::placement(&window);
-    match ke::usermem::copy_to_user(u64::from(out), placement.as_bytes()) {
-        Ok(()) => NtStatus(1),
-        Err(status) => fail(dos_error(status)),
-    }
-}
-
 /// NtUserEndPaint(hWnd, lpPaint) : le DC de BeginPaint (`lpPaint->hdc`) est
 /// rendu ; TRUE. FALSE pour une fenêtre inconnue
 /// (`ERROR_INVALID_WINDOW_HANDLE`) ou un `lpPaint` illisible.
@@ -547,6 +523,49 @@ pub(super) fn nt_user_get_update_rect(arguments: &[u32]) -> NtStatus {
         }
     }
     NtStatus(u32::from(update.is_some()))
+}
+
+/// NtUserGetWindowPlacement(hWnd, lpwndpl) : le `WINDOWPLACEMENT` de la
+/// fenêtre (`win32k::winpos::placement`) écrit en `lpwndpl`, sa longueur
+/// mise à 44 quelle qu'elle soit (comme ReactOS) ; TRUE. FALSE pour une
+/// fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou une structure qu'on
+/// ne peut lire ou écrire (l'erreur de la copie).
+pub(super) fn nt_user_get_window_placement(arguments: &[u32]) -> NtStatus {
+    let (handle, address) = (arguments[0], arguments[1]);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let mut bytes = [0u8; size_of::<WindowPlacement32>()];
+    if let Err(status) = copy_from_user(&mut bytes, u64::from(address)) {
+        return fail(dos_error(status));
+    }
+    let placement = win32k::winpos::placement(&window);
+    match ke::usermem::copy_to_user(u64::from(address), &placement.as_bytes()) {
+        Ok(()) => NtStatus(1),
+        Err(status) => fail(dos_error(status)),
+    }
+}
+
+/// NtUserSetWindowPlacement(hWnd, lpwndpl) : la fenêtre placée et montrée
+/// selon le `WINDOWPLACEMENT` (`win32k::winpos::set_placement`). FALSE pour
+/// une structure qu'on ne peut lire (l'erreur de la copie), d'une autre
+/// longueur que 44 (`ERROR_INVALID_PARAMETER` ; la tolérance de ReactOS
+/// pour un module qui attend Windows 3.x : pas encore), une fenêtre
+/// inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou celle du bureau.
+pub(super) fn nt_user_set_window_placement(arguments: &[u32]) -> NtStatus {
+    let (handle, address) = (arguments[0], arguments[1]);
+    let mut bytes = [0u8; size_of::<WindowPlacement32>()];
+    if let Err(status) = copy_from_user(&mut bytes, u64::from(address)) {
+        return fail(dos_error(status));
+    }
+    let placement = WindowPlacement32::from_bytes(&bytes);
+    if placement.length as usize != size_of::<WindowPlacement32>() {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    NtStatus(u32::from(win32k::winpos::set_placement(&window, &placement)))
 }
 
 /// NtUserCallHwndLock(hWnd, Routine) : `HWNDLOCK_ROUTINE_UPDATEWINDOW`

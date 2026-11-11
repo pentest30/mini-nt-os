@@ -1,28 +1,41 @@
 # Notes de passation
 
+- **Le Bloc-notes s'affiche** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 24 ; le critère « Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre » commence) :
+  scénario `notepad` (`tests/native/notepad1.c` à la place de `winlogon.exe` lance le vrai `notepad.exe`, que
+  `xtask` met sur le disque avec ses imports). Le Bloc-notes montre sa fenêtre par SetWindowPlacement, avec la place
+  de GetWindowPlacement : `win32k::winpos::placement` et `set_placement` (IntGetWindowPlacement,
+  make_rect_onscreen, IntSetWindowPlacement), NtUserGetWindowPlacement, NtUserSetWindowPlacement,
+  `abi::user::WindowPlacement32`. La fenêtre s'affiche entière : titre, barre de menus, contrôle Edit avec ses
+  barres de défilement, barre d'état de `comctl32`. Pas encore : `InternalPos` (rien à garder sans réduire ni
+  agrandir), WPF_ASYNCWINDOWPLACEMENT (fait tout de suite). Tests : hôte (`winpos`) ; `notepad` sur AMD et Intel,
+  qu'une mutation (SetWindowPlacement sans ShowWindow) fait échouer. **Suite** : NtUserRegisterWindowMessage (rendu 0
+  aujourd'hui : la procédure du Bloc-notes prend WM_NULL pour FINDMSGSTRING), NtUserCreateAcceleratorTable,
+  NtUserQueryWindow, le « SendMessageW Error » de `user32` pendant la création (à diagnostiquer), puis taper du texte
+  (touches de QEMU), l'enregistrer (la boîte Enregistrer sous de `comdlg32`) et le rouvrir.
+
 - **Le gestionnaire des tâches : page grise, onglets, relance** (`claude/new-session-696xfc`, worktree
-  `.claude/worktrees/pr122` ; demandé le 2026-11-11, testé sous VirtualBox). Trois défauts, corrigés, **commit local
-  à pousser** (après le dernier push `0ac36c5`) :
+  `.claude/worktrees/pr122` ; demandé le 2026-11-11, testé sous VirtualBox). Trois défauts :
   1. La page Applications repeinte en gris : son contrôle d'onglets (sœur d'en dessous, sans WS_CLIPSIBLINGS,
      effacé de COLOR_BTNFACE par DefWindowProc) peignait après elle. `paint::find_window_to_repaint` va maintenant
      des sœurs du bas de l'ordre Z vers le haut (écart voulu avec ReactOS, qui va de haut en bas ; ReactOS 0.4.16,
      vérifié dans la VM `reactos` de VirtualBox, affiche bien la page, avec son thème).
   2. Plus aucune application après un passage par un autre onglet : la même cause.
   3. Le gestionnaire ne se rouvrait plus : NtUserGetWindowPlacement manquait, il gardait pour sa place (WM_DESTROY,
-     puis MoveWindow au lancement suivant) des octets de sa pile. Fait : `winpos::placement` (IntGetWindowPlacement :
-     rcNormalPosition dans la zone cliente du parent ou la zone de travail, SW_SHOWNORMAL, places réduite et agrandie
-     à -1, Mino ne réduisant ni n'agrandissant encore), `sys::window::nt_user_get_window_placement` (FALSE si
-     `length` n'est pas 44, comme ReactOS), `abi::user::WindowPlacement32`.
+     puis MoveWindow au lancement suivant) des octets de sa pile. Le service a été écrit deux fois, ici et pour le
+     Bloc-notes (entrée ci-dessus) ; à la fusion, **la version du Bloc-notes est gardée** (`winpos::placement`,
+     `sys::window::nt_user_get_window_placement` : longueur mise à 44 quelle qu'elle soit, comme ReactOS ;
+     `abi::user::WindowPlacement32`), la nôtre retirée.
   Scénario `desktop-launch` étendu : le gestionnaire fermé par sa croix, relancé du menu Démarrer, Processus puis
   Applications ; quatre pixels (la première ligne choisie, le N souligné de New Task..., le relief sous le S de
-  Switch To et le E de End Task). Passe sur AMD et Intel ; les deux mutations (l'ordre de haut en bas, le service
-  retiré) le font échouer. `cargo xtask lint` propre, 1064 tests hôte. **Reste à vérifier** : les scénarios GUI
-  (`text`, `bitmap`, `dialog`, `desktop-ui`, `desktop-click`, `gui`, `menu`, `caret`, `console`, `cmd`, `listview`,
-  `scroll`, `scrollex`, `icons`, `destroy`, `cursor`, `mouse`) avec le nouvel ordre de peinture, lancés le 2026-11-11 :
-  leur bilan s'écrit dans `target/tm-fix-boot.log` du worktree (une ligne par scénario, `rc=0` passé) ; puis pousser
-  (`ab1d8ca`, `647e506` et ce commit ne sont pas sur `origin`), refaire
-  l'image VirtualBox (`cargo xtask image --output target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format
-  VHD`, l'attacher à la VM `Mino` à la place de `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
+  Switch To et le E de End Task). Passait sur AMD et Intel avec notre GetWindowPlacement ; les deux mutations
+  (l'ordre de haut en bas, le service retiré) le faisaient échouer. `cargo xtask lint` propre, 1064 tests hôte.
+  Scénarios GUI avec le nouvel ordre de peinture (avant la fusion) : `text` et `bitmap` passent. **Reste à
+  vérifier**, après la fusion : `desktop-launch` avec le GetWindowPlacement du Bloc-notes, `notepad`, puis `dialog`,
+  `desktop-ui`, `desktop-click`, `gui`, `menu`, `caret`, `console`, `cmd`, `listview`, `scroll`, `scrollex`, `icons`,
+  `destroy`, `cursor`, `mouse` ; puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
+  target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format VHD`, l'attacher à la VM `Mino` à la place de
+  `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
   **Vu, pas fait** : LineTo dessine toujours du stylo noir par défaut. `gdi32` choisit les stylos dans DC_ATTR sans
   appeler le noyau (`hpen`, DC_PEN_DIRTY) et SetDCPenColor y écrit `crPenClr` (le DC_PEN de stock) ; DrawEdge de
   `user32` (BF_DIAGONAL) trace ainsi en noir les coins des onglets. NtUserFindWindowEx manque (le gestionnaire
@@ -54,10 +67,12 @@
   `queue.menu_keys`) donne SC_KEYMENU (`menutrack::track_kbd_menu_bar` : premier item, ou l'item de la lettre et un
   VK_RETURN posté, TF_ENDMENU sans item) ; ←/→ passent d'un item de la barre à l'autre ; WM_CANCELMODE finit le
   suivi (`end_menu_of`) ; GetMenuBarInfo rend fBarFocused, fFocused et `hwndMenu`. Tests : hôte (`defwnd`) ;
-  scénario `menu` (clics postés, touches de QEMU, vrai clic sur la barre, capture) sur AMD et Intel ; douze
-  mutations le font échouer. **À finir** : deux mutations (premier item sans lettre, `menu_owner` pour la barre ;
-  `menubar_mutate.py` dans le scratchpad) et les régressions (`gui`, `destroy`, `desktop-click`, `mouse`,
-  `mouse-windows`, `keyboard`, `dialog`, `cmd`…) n'ont pas encore été passées.
+  scénario `menu` (clics postés, touches de QEMU, vrai clic sur la barre, capture) sur AMD et Intel ; quatorze
+  mutations le font toutes échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur
+  la barre, le VK_RETURN d'une lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused, le premier item sans lettre,
+  `menu_owner` pour la barre) ; 21 autres scénarios GUI et `cmd` passent sur AMD et Intel. WM_CANCELMODE n'oublie
+  qu'Alt (QF_FMENUSTATUS), comme ReactOS : F10 enfoncé reste retenu (la revue de la PR 125 proposait de tout
+  oublier ; on garde la spécification).
   Pas encore : le menu de la fenêtre (HTSYSMENU, Alt+Espace, WM_NEXTMENU : la sélection fait le tour aux bouts de
   la barre), MENU_SuspendPopup, Alt+F4 et Alt+Tab. Suite proposée : le menu de la fenêtre (GetSystemMenu), ou
   réduire et agrandir, ou un scénario du Bloc-notes.
@@ -68,9 +83,11 @@
   (DISPATCH_LEVEL) ; un trait de (0x56FBAE85, 0x28F81DE0) gelait tout le système. Ces coordonnées viennent du
   soulignement du préfixe d'un bouton (« &Switch To ») dessiné par `user32` dans une police créée d'un LOGFONT jamais
   rempli : **NtGdiExtGetObjectW n'est pas implémenté** (GetObject d'une police rend 0, le texte des boutons du
-  gestionnaire des tâches reste blanc) — la suite. Un trait plus long que 16 384 pixels est maintenant coupé à ce que
-  sa région peut recevoir (`dib::cut_line`, Liang–Barsky en rationnels exacts) ; en deçà, rien ne change ; LineTo
-  sature ses coordonnées. Trouvé par bissection (`desktop-launch`, un pixel de la liste : 9a03386, la barre de menus,
+  gestionnaire des tâches reste blanc) — la suite. D'un trait plus long que 16 384 pas, seuls sont parcourus ceux
+  qui peuvent atteindre sa région (`dib::cut_steps`, Liang–Barsky en rationnels exacts), depuis l'état que la marche
+  entière y a (`LineWalk::at`, forme close de la variante de Bresenham : l'axe court avance de k·court/long arrondi) ;
+  la revue de la PR avait vu que repartir des bouts arrondis du trait coupé changeait ses pixels et la phase de ses
+  pointillés ; LineTo sature ses coordonnées. Trouvé par bissection (`desktop-launch`, un pixel de la liste : 9a03386, la barre de menus,
   rend le blocage visible avant la capture) puis une trace temporaire des appels du thread de l'interface. Tests :
   hôte (`dib`) ; `desktop-launch` (onglets et barre d'état dessinés, la boucle de messages vivante 110 s), et les
   scénarios GUI sur AMD et Intel.
