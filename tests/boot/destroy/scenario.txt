@@ -11,8 +11,8 @@
 #   window (5) are refused;
 # - WM_CLOSE and SC_CLOSE to DefWindowProc destroy the window;
 # - a destroyed window's timer and posted message go with it;
-# - a menu bar goes with its window; DestroyMenu once (1401, which also
-#   says a menu is gone: user32 cannot read win32k's menus, IsMenu is FALSE);
+# - a menu bar goes with its window; DestroyMenu once (1401 the second
+#   time, which also says a menu is gone);
 # - a thread that ends with its windows (a child, a timer, a DC): they are
 #   destroyed without a message, the process's USER objects back
 #   (GetGuiResources, GR_USEROBJECTS = 1, GR_GDIOBJECTS = 0, the SDK's);

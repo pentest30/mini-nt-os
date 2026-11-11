@@ -1,0 +1,45 @@
+# Menus that user32 reads itself (win32k::menu: MENU and ITEM in the
+# desktop's heap; tests/native/menu1.c, MinGW, linked to ReactOS's kernel32
+# and user32): MENU1.EXE takes the place of winlogon.exe and switches to
+# WinSta0\Default. It builds a bar (File, Edit, Help), gives it to W (100,
+# 100, 400 x 300, white) and reads every change back through user32.
+features = test-smss
+requires = userland, native
+initial-command = MENU1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [menu] on WinSta0\Default
+expect = [menu] CreateMenu: IsMenu 1 1, 0 items
+expect = [menu] items: bar 3, File 3; GetSubMenu: File 1, Edit 1, Help none 1
+# A popup item has no identifier for GetMenuItemID; a separator's is 0.
+expect = [menu] GetMenuItemID: 101 0 -1
+# MF_SEPARATOR | MF_GRAYED | MF_DISABLED; three items << 8 | MF_POPUP; MF_HELP.
+expect = [menu] GetMenuState: separator 803, File popup 310, Exit by command 0, Help 4000
+expect = [menu] GetMenuStringW: &File 5, by command E&xit 5
+expect = [menu] GetMenuItemInfoW 1: submenu Edit 1, id 1, text &Edit 5, type 0, state 0
+# Before the item 102, and at position 0.
+expect = [menu] InsertMenuW: 100 101 0 103 102
+expect = [menu] ModifyMenuW: 104 Save &As
+# MFT_RADIOCHECK | MFS_CHECKED.
+expect = [menu] CheckMenuItem: 0 8 8; CheckMenuRadioItem 1: 208, Undo 0
+expect = [menu] EnableMenuItem: 0 1 -1
+expect = [menu] default item 1: 101 at 1
+expect = [menu] help 77, data 1 1234
+# GetMenu reads WND.IDMenu; a bar is one window's (1401); a child has none
+# (1400).
+expect = [menu] GetMenu 1; SetMenu of another window's bar: 0 (1401), of a child: 0 (1400)
+expect = [menu] RemoveMenu 1: 2 items, Edit lives 1; DeleteMenu 1: Edit gone 1
+expect = [menu] LoadMenuIndirectW: 1 item, View 2 items, 402 &Small
+expect = [menu] DestroyMenu 1: gone 1, its submenu gone 1
+expect = [menu] done
+
+forbid = *** STOP:
+forbid = NtUserThunkedMenuInfo (0x122d) is not implemented
+forbid = NtUserCheckMenuItem (0x1147) is not implemented
+forbid = NtUserDeleteMenu (0x115d) is not implemented
+forbid = NtUserSetMenuDefaultItem (0x120b) is not implemented
+forbid = NtUserSetMenuContextHelpId (0x120a) is not implemented
+
+# W's client area, white, under its bar.
+screen = 300 300 FFFFFF

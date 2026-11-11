@@ -302,10 +302,10 @@ pub fn frame_ops(
             ops.push(Op::Fill(bar, c(color::BTNFACE)));
             let mut at = bar.left + m(sm::CXMENUCHECK) / 2;
             for item in menu_items {
-                if item.flags & crate::menu::mf::SEPARATOR != 0 {
+                if item.f_type & abi::menu::mft::SEPARATOR != 0 {
                     continue;
                 }
-                if let Some(run) = layout(TAHOMA, MENU_FONT_HEIGHT, &item.caption, None, Quality::Antialiased) {
+                if let Some(run) = layout(TAHOMA, MENU_FONT_HEIGHT, &item.text, None, Quality::Antialiased) {
                     let top = bar.top + (bar.bottom - bar.top - run.metrics.height()) / 2;
                     let baseline = top + run.metrics.ascent;
                     let color = c(color::MENUTEXT);

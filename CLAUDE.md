@@ -312,6 +312,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   en inversant l'écran ; il clignote par une minuterie du système dont la procédure est du noyau
   (`timer::set_kernel_timer`, WM_SYSTIMER rendu à NtUserDispatchMessage) ; BeginPaint le cache, EndPaint le remontre,
   ScrollWindowEx le décale ; NtGdiGetPixel ; scénario `caret` (`tests/native/caret1.c`).
+  M6, étape 20 (les menus dans le tas du bureau, `win32k::menu`, `abi::menu`) : `MENU` et `ITEM` de ReactOS (textes
+  compris) publiés dans le tas du bureau, que `user32` lit (IsMenu, GetMenuItemCount, GetSubMenu, GetMenuState,
+  GetMenuString, GetMenuItemInfo…) ; une table sous un seul verrou, recherche par identifiant dans les sous-menus ;
+  NtUserThunkedMenuItemInfo complet, NtUserCheckMenuItem, NtUserDeleteMenu, NtUserSetMenuDefaultItem,
+  NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId ; SetMenu (une barre par fenêtre, `WND.IDMenu`) ; scénario
+  `menu` (`tests/native/menu1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

@@ -6,6 +6,8 @@ LIBRARY user32.dll
 EXPORTS
 AppendMenuW@16
 BeginPaint@8
+CheckMenuItem@12
+CheckMenuRadioItem@20
 CreateCaret@16
 CreateDesktopW@24
 CreateDialogIndirectParamW@20
@@ -14,6 +16,7 @@ CreatePopupMenu@0
 CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
+DeleteMenu@12
 DestroyCaret@0
 DestroyCursor@4
 DestroyMenu@4
@@ -21,6 +24,7 @@ DestroyWindow@4
 DispatchMessageW@4
 DrawIconEx@36
 DrawTextW@20
+EnableMenuItem@12
 EnableScrollBar@12
 EndPaint@8
 EnumChildWindows@12
@@ -45,6 +49,15 @@ GetFocus@0
 GetGuiResources@8
 GetKeyboardState@4
 GetKeyState@4
+GetMenu@4
+GetMenuContextHelpId@4
+GetMenuDefaultItem@12
+GetMenuInfo@8
+GetMenuItemCount@4
+GetMenuItemID@8
+GetMenuItemInfoW@16
+GetMenuState@12
+GetMenuStringW@20
 GetMessageW@16
 GetMonitorInfoW@8
 GetParent@4
@@ -54,6 +67,7 @@ GetScrollBarInfo@12
 GetScrollInfo@12
 GetScrollPos@8
 GetScrollRange@16
+GetSubMenu@8
 GetSysColor@4
 GetSysColorBrush@4
 GetSystemMetrics@4
@@ -65,8 +79,10 @@ GetWindowLongW@8
 GetWindowRect@8
 GetWindowTextW@12
 HideCaret@4
+InsertMenuW@20
 InvalidateRect@12
 InvalidateRgn@12
+IsMenu@4
 IsWindow@4
 IsWindowVisible@4
 KillSystemTimer@8
@@ -74,6 +90,8 @@ KillTimer@8
 LoadCursorW@8
 LoadIconW@8
 LoadKeyboardLayoutW@8
+LoadMenuIndirectW@4
+ModifyMenuW@20
 MonitorFromPoint@12
 MonitorFromWindow@8
 MoveWindow@24
@@ -86,6 +104,7 @@ RegisterClassExW@4
 RegisterLogonProcess@8
 ReleaseCapture@0
 ReleaseDC@8
+RemoveMenu@12
 ScrollDC@28
 ScrollWindowEx@32
 SendMessageTimeoutW@28
@@ -96,6 +115,10 @@ SetCaretBlinkTime@4
 SetCaretPos@8
 SetCursor@4
 SetFocus@4
+SetMenu@8
+SetMenuContextHelpId@8
+SetMenuDefaultItem@12
+SetMenuInfo@8
 SetProcessWindowStation@4
 SetScrollInfo@16
 SetScrollPos@16

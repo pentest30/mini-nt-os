@@ -670,7 +670,8 @@ deux comptes d'un processus fils avec les valeurs du SDK.
 Vu en chemin, déjà là : `user32` ne sait pas lire nos menus (le handle de la table USER ne désigne pas un `MENU` du
 tas d'un bureau) ; IsMenu rend donc toujours FALSE, et AppendMenu(MF_POPUP) n'attache pas le sous-menu
 (`MENU_mnu2mnuii` ne pose `MIIM_SUBMENU` que si `MENU_GetMenu` valide le handle) : l'item reçoit le handle du
-sous-menu comme identifiant. Un tel sous-menu ne part donc pas avec sa barre, mais avec son processus.
+sous-menu comme identifiant. Un tel sous-menu ne part donc pas avec sa barre, mais avec son processus. Corrigé à l'étape 20 :
+les menus sont dans le tas du bureau.
 
 Le banc d'essai : `tests/native/destroy1.c` (`DESTROY1.EXE` à la place de `winlogon.exe`, scénario `destroy`). Une
 lettre et `-` est WM_DESTROY, une lettre et `.` WM_NCDESTROY (IsWindow est encore TRUE pendant ces deux messages,
@@ -912,3 +913,48 @@ Tests : hôte (`caret` : la naissance cachée, le compte du masquage, le clignot
 absente ; `timer` : une minuterie du système dont la procédure est du noyau ; `gdi::dc` : GetPixel ne lit que là où le DC
 peint) ; le scénario `caret` sur AMD et Intel, et `scrollex`, `scroll`, `gui`, `text`, `console`, `destroy`, `keyboard`
 sur AMD et Intel.
+
+## Étape 20 : les menus dans le tas du bureau, lus par `user32`
+
+`user32` lit lui-même les menus : GetMenuItemCount, GetSubMenu, GetMenuItemID, GetMenuState, GetMenuString,
+GetMenuItemInfo, IsMenu, GetMenuDefaultItem, GetMenuInfo, GetMenuContextHelpId, et CheckMenuItem, CheckMenuRadioItem,
+AppendMenu(MF_POPUP) avant d'appeler le noyau. Il valide le handle dans la table USER, prend l'adresse de l'objet
+(DesktopPtrToUser : un menu est un objet du bureau, pas de la section partagée) et suit `rgItems`, `spSubMenu`,
+`Xlpstr`. Jusqu'ici l'entrée de la table désignait un objet du noyau : IsMenu rendait FALSE, et un sous-menu ne
+s'attachait pas (étape 14). `menu.c` de win32k et de `user32` (ReactOS comme spécification) ; `win32k::menu`,
+`sys::menu`, `abi::menu`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les enregistrements (`abi::menu`) | `MENU` (104 octets : `PROCDESKHEAD`, `fFlags`, `iItem`, `cAlloced`, `cItems`, `rgItems`, aide, données, fond, `hWnd`) et `ITEM` (84 octets : type, état, identifiant, `spSubMenu`, coches, `Xlpstr` et `cch`, données, place, bitmap, `lpstr`) de ReactOS sur i386, avec leurs tailles et positions vérifiées à la compilation ; MENUITEMINFOW (48 ou 44 octets), MENUINFO, les MF_, MFT_, MFS_, MIIM_, MIM_, MNS_, MNF_ |
+| La table (`menu::Menus`) | la copie du noyau de chaque menu (`MenuState`, ses items) sous un seul verrou, comme le verrou de USER de ReactOS ; après chaque changement, les menus touchés sont republiés dans leur tas : le texte des items (NUL final) qui n'y est pas, le tableau des items (`cAlloced` par 8, rendu quand le menu se vide), puis le `MENU` ; les blocs remplacés sont rendus après. L'entrée de la table des handles porte l'adresse du serveur du `MENU`. `DesktopHeap::alloc` est utilisable jusqu'à DISPATCH_LEVEL (pool non paginé, `write_kernel`) |
+| CreateMenu, CreatePopupMenu (`menu::create`) | dans le tas du bureau du thread, au processus (son `PROCESSINFO` en `hTaskWow`) ; MNF_POPUP pour un menu déroulant |
+| Les items (IntSetMenuItemInfo, `Menus::set_item`) | type, état (UpdateMenuItemState ; MFS_DEFAULT retiré des autres items), identifiant, sous-menu (marqué MNF_POPUP ; un menu absent, lui-même, un ancêtre ou une branche de plus de 30 : `ERROR_INVALID_PARAMETER`), coches, données, bitmap (MFS_HBMMENUBMP pour un HBMMENU_*), texte (la légende capturée, `cch` caractères au plus) ; sans texte, sans données de texte, sans bitmap : un séparateur |
+| La recherche (MENU_FindItem, `Menus::find`) | par position ; par identifiant, dans les sous-menus d'abord, sinon le dernier item à sous-menu qui le porte |
+| NtUserThunkedMenuItemInfo | avec `bInsert` (MENU_InsertItem) : au bout (une position au-delà du dernier : AppendMenu), à la position, ou avant l'item de l'identifiant (dans le sous-menu où il est) ; les boutons MDI restent à droite ; sans : l'item mis à jour, `ERROR_MENU_ITEM_NOT_FOUND` sans lui (SC_TASKLIST passe, comme ReactOS) |
+| NtUserEnableMenuItem, NtUserCheckMenuItem, NtUserSetMenuDefaultItem | l'état d'avant, -1 sans l'item ; l'item par défaut (-1 : aucun) |
+| NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId, NtUserSetMenuFlagRtoL | fond, aide, hauteur, données, style (MIM_APPLYTOSUBMENUS), de 28 octets à la taille d'un ROSMENUINFO |
+| NtUserRemoveMenu, NtUserDeleteMenu | l'item quitte son menu ; DeleteMenu détruit son sous-menu |
+| NtUserSetMenu (IntSetMenu, `window::set_menu`) | une fille n'a pas de barre (`ERROR_INVALID_WINDOW_HANDLE`) ; un menu est la barre d'une seule fenêtre (`MENU.hWnd`, `ERROR_INVALID_MENU_HANDLE`) ; le cadre se recalcule si la barre change ou avec `bRepaint` ; la création d'une fenêtre et le menu de sa classe rattachent la barre de même ; `WND.IDMenu` porte la barre d'une fenêtre qui n'est pas fille (GetMenu) |
+| DestroyMenu (`menu::destroy`) | le menu et ses sous-menus quittent la table, leur tas et la table des handles |
+
+Écarts voulus avec ReactOS : un sous-menu détruit quitte les items qui l'ouvraient (ReactOS le garde en vie tant
+qu'ils le tiennent ; leurs `spSubMenu` seraient sinon des adresses libérées que `user32` suivrait) ; un menu qui
+s'ouvrirait lui-même est refusé (ReactOS en crée un vide à sa place) ; InsertMenuItem garde les coches de
+MIIM_CHECKMARKS (ReactOS les efface après les avoir posées).
+
+Ce qui manque : la place et la taille des items (`xItem`…, `cxMenu`, `cyMenu` : la barre et les menus déroulants,
+étapes suivantes), le menu système (GetSystemMenu), DrawMenuBar, MNS_NOTIFYBYPOS et les menus sans fenêtre.
+
+Le banc d'essai : `tests/native/menu1.c` (`MENU1.EXE` à la place de `winlogon.exe`, scénario `menu`) : une barre
+(File, Edit, Help) relue par `user32` : IsMenu, GetMenuItemCount, GetSubMenu, GetMenuItemID, GetMenuState (séparateur,
+sous-menu, MF_HELP), GetMenuStringW, GetMenuItemInfoW ; InsertMenuW par position et par identifiant, ModifyMenuW,
+CheckMenuItem, CheckMenuRadioItem, EnableMenuItem depuis la barre (le noyau descend dans File), l'item par défaut,
+l'aide et les données du menu ; GetMenu, une barre refusée à une autre fenêtre et à une fille ; RemoveMenu, DeleteMenu ;
+LoadMenuIndirectW ; DestroyMenu et ses sous-menus. Sans le texte dans le tas, sans `WND.IDMenu`, ou sans la descente
+du noyau dans les sous-menus, le scénario échoue.
+
+Tests : hôte (`menu` : ce que `user32` lit dans le tas, la recherche, l'insertion, le séparateur, un texte remplacé,
+l'état et l'item par défaut, les boucles refusées, RemoveMenu et DeleteMenu, la destruction, une barre à une fenêtre,
+MENUINFO, le tableau par 8 ; `abi::menu`) ; le scénario `menu` sur AMD et Intel, et `destroy`, `gui`, `tasklist`,
+`desktop-ui`, `desktop-launch`, `console`, `cmd`, `listview`, `dialog` sur AMD et Intel.

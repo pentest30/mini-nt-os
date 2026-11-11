@@ -344,7 +344,8 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
         rc_client: rect32(state.client),
         wnd_proc: state.wnd_proc,
         pcls: heap.server_address(window.cls),
-        id_menu: state.id_menu,
+        // A child's identifier, the bar of any other window (GetMenu).
+        id_menu: if state.style & (WS_CHILD | WS_POPUP) == WS_CHILD { state.id_menu } else { state.menu },
         name,
         cb_wnd_extra: window.wnd_size - size_of::<Wnd32>() as u32,
         spwnd_last_active: self_address,
@@ -624,24 +625,42 @@ pub fn property(window: &Window, atom: u16, system: bool) -> Option<u32> {
 /// Les items de la barre de menus de la fenêtre, pour la peindre (une
 /// copie ; vide sans barre).
 pub fn menu_items(window: &Window) -> alloc::vec::Vec<crate::menu::Item> {
-    let handle = window.state().menu;
-    crate::menu::get(handle).map_or_else(Vec::new, |menu| menu.items())
+    crate::menu::items(window.state().menu)
 }
 
-/// SetMenu : la barre de menus de la fenêtre devient `hmenu` (0 la retire) ;
-/// la zone cliente se recalcule (WM_NCCALCSIZE : la barre prend sa place
-/// sous le titre) et le cadre se repeint.
+/// NtUserSetMenu (IntSetMenu) : la barre de menus de la fenêtre devient
+/// `hmenu` (0 la retire ; le menu sait de quelle fenêtre il est la barre,
+/// `crate::menu::attach`) ; si elle change, ou avec `repaint`, et que la
+/// fenêtre n'est pas réduite, la zone cliente se recalcule (WM_NCCALCSIZE :
+/// la barre prend sa place sous le titre) et le cadre se repeint.
+///
+/// # Errors
+/// `ERROR_INVALID_WINDOW_HANDLE` pour une fenêtre fille ;
+/// `ERROR_INVALID_MENU_HANDLE` pour un menu qui n'existe pas ou qui est la
+/// barre d'une autre fenêtre.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le service système.
-pub fn set_menu(window: &alloc::sync::Arc<Window>, hmenu: u32) {
-    update(window, |state| state.menu = hmenu);
+pub fn set_menu(window: &alloc::sync::Arc<Window>, hmenu: u32, repaint: bool) -> Result<(), u32> {
+    let state = window.state();
+    if state.style & (WS_CHILD | WS_POPUP) == WS_CHILD {
+        return Err(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    let changed = state.menu != hmenu;
+    if changed {
+        crate::menu::attach(hmenu, state.menu, window.handle)?;
+        update(window, |state| state.menu = hmenu);
+    }
+    if state.style & WS_MINIMIZE != 0 || !(changed || repaint) {
+        return Ok(());
+    }
     let rect = window.state().window;
     let mut calc = rect_bytes(rect);
     let _ = send_message(window, WM_NCCALCSIZE, 0, LParam::Buffer { bytes: &mut calc, write_back: true });
     let client = fix_client_rect(rect_of(&calc), rect);
     update(window, |state| state.client = client);
     let _ = send_message(window, WM_NCPAINT, 0, LParam::Value(0));
+    Ok(())
 }
 
 /// IntSetMenu à la création : la barre de menus d'une fenêtre qui n'est pas
@@ -670,7 +689,7 @@ fn creation_menu(kind: u32, hmenu: u32, exists: impl FnOnce(u32) -> bool) -> Res
 fn class_menu(class: &Class) -> Option<u32> {
     let resource = class.menu.resource()?;
     let loaded = crate::callback::load_menu(class.info.instance, resource).ok()?;
-    crate::menu::get(loaded).map(|_| loaded)
+    crate::menu::exists(loaded).then_some(loaded)
 }
 
 /// SetWindowFNID : l'identifiant interne de la fenêtre.
@@ -1517,7 +1536,7 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     } else if kind == WS_CHILD {
         return Err(Some(ERROR_TLW_WITH_WSCHILD));
     }
-    let menu = creation_menu(kind, params.menu, |handle| crate::menu::get(handle).is_some()).map_err(Some)?;
+    let menu = creation_menu(kind, params.menu, crate::menu::exists).map_err(Some)?;
     let startup = if params.style & (WS_POPUP | WS_CHILD) == 0 { startup_place() } else { StartupPlace::default() };
     let work = crate::monitor::primary().map(|monitor| monitor.work);
     let mut show =
@@ -1568,7 +1587,8 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
         unicode,
         module: params.instance,
         id_menu: if kind == WS_CHILD { params.menu } else { 0 },
-        menu,
+        // IntSetMenu: a menu that is another window's bar is none of hers.
+        menu: if crate::menu::attach(menu, 0, handle).is_ok() { menu } else { 0 },
         parent: parent.handle,
         owner: owner.as_ref().map_or(0, |owner| owner.handle),
         ..WindowState::default()
@@ -1599,7 +1619,8 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     // (co_IntCallLoadMenu); user32 loads it itself for an overlapped or
     // popup style.
     if kind != WS_CHILD && menu == 0 {
-        if let Some(loaded) = class_menu(&class) {
+        if let Some(loaded) = class_menu(&class).filter(|&loaded| crate::menu::attach(loaded, 0, window.handle).is_ok())
+        {
             update(&window, |state| state.menu = loaded);
         }
     }

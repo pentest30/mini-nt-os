@@ -60,9 +60,9 @@ pub(super) fn nt_user_call_no_param(arguments: &[u32]) -> NtStatus {
             NtStatus(1)
         }
         abi::user::NOPARAM_ROUTINE_DESTROY_CARET => NtStatus(u32::from(win32k::caret::destroy_current())),
-        0 | 1 => match win32k::menu::create() {
+        0 | 1 => match win32k::menu::create(arguments[0] == 1) {
             Ok(handle) => NtStatus(handle),
-            Err(status) => fail(abi::winerror::dos_error(status)),
+            Err(error) => fail(error),
         },
         routine => {
             UNSUPPORTED_NO_PARAM_ROUTINES.report(routine);

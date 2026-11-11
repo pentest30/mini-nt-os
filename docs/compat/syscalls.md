@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 121 | 296 |
-| win32k | 143 | 737 |
+| win32k | 149 | 737 |
 
 ## ntoskrnl
 
@@ -643,7 +643,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1144` | `NtUserChangeClipboardChain` | 2 |  |
 | `0x1145` | `NtUserChangeDisplaySettings` | 4 |  |
 | `0x1146` | `NtUserCheckImeHotKey` | 2 |  |
-| `0x1147` | `NtUserCheckMenuItem` | 3 |  |
+| `0x1147` | `NtUserCheckMenuItem` | 3 | ✅ |
 | `0x1148` | `NtUserChildWindowFromPointEx` | 4 |  |
 | `0x1149` | `NtUserClipCursor` | 1 |  |
 | `0x114a` | `NtUserCloseClipboard` | 0 |  |
@@ -665,7 +665,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x115a` | `NtUserDdeSetQualityOfService` | 3 |  |
 | `0x115b` | `NtUserDeferWindowPos` | 8 |  |
 | `0x115c` | `NtUserDefSetText` | 2 | ✅ |
-| `0x115d` | `NtUserDeleteMenu` | 3 |  |
+| `0x115d` | `NtUserDeleteMenu` | 3 | ✅ |
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
 | `0x115f` | `NtUserDestroyCursor` | 2 | ✅ |
 | `0x1160` | `NtUserDestroyInputContext` | 1 |  |
@@ -838,9 +838,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1207` | `NtUserSetKeyboardState` | 1 |  |
 | `0x1208` | `NtUserSetLogonNotifyWindow` | 1 | ✅ |
 | `0x1209` | `NtUserSetMenu` | 3 | ✅ |
-| `0x120a` | `NtUserSetMenuContextHelpId` | 2 |  |
-| `0x120b` | `NtUserSetMenuDefaultItem` | 3 |  |
-| `0x120c` | `NtUserSetMenuFlagRtoL` | 1 |  |
+| `0x120a` | `NtUserSetMenuContextHelpId` | 2 | ✅ |
+| `0x120b` | `NtUserSetMenuDefaultItem` | 3 | ✅ |
+| `0x120c` | `NtUserSetMenuFlagRtoL` | 1 | ✅ |
 | `0x120d` | `NtUserSetObjectInformation` | 4 |  |
 | `0x120e` | `NtUserSetParent` | 2 |  |
 | `0x120f` | `NtUserSetProcessWindowStation` | 1 | ✅ |
@@ -873,7 +873,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x122a` | `NtUserSwitchDesktop` | 1 | ✅ |
 | `0x122b` | `NtUserSystemParametersInfo` | 4 | ✅ |
 | `0x122c` | `NtUserTestForInteractiveUser` | 1 |  |
-| `0x122d` | `NtUserThunkedMenuInfo` | 2 |  |
+| `0x122d` | `NtUserThunkedMenuInfo` | 2 | ✅ |
 | `0x122e` | `NtUserThunkedMenuItemInfo` | 6 | ✅ |
 | `0x122f` | `NtUserToUnicodeEx` | 7 | ✅ |
 | `0x1230` | `NtUserTrackMouseEvent` | 1 |  |

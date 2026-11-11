@@ -1,5 +1,20 @@
 # Notes de passation
 
+- **Les menus dans le tas du bureau** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 20) : `abi::menu` (`MENU`, `ITEM` de ReactOS, MENUITEMINFOW, MENUINFO, les drapeaux) ; `win32k::menu` réécrit :
+  une table (`Menus`) sous un seul verrou, republiée dans le tas du bureau après chaque changement (textes, tableau
+  des items par 8, `MENU`) ; l'entrée de la table des handles porte l'adresse du serveur du `MENU`, `user32` lit
+  donc IsMenu, GetMenuItemCount, GetSubMenu, GetMenuItemID, GetMenuState, GetMenuString, GetMenuItemInfo,
+  GetMenuDefaultItem, GetMenuInfo ; AppendMenu(MF_POPUP) attache le sous-menu. Services : NtUserThunkedMenuItemInfo
+  (IntSetMenuItemInfo complet, insertion par position ou identifiant), NtUserCheckMenuItem, NtUserDeleteMenu,
+  NtUserSetMenuDefaultItem, NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId, NtUserSetMenuFlagRtoL ; SetMenu
+  (IntSetMenu : une barre par fenêtre, pas de fille) et `WND.IDMenu` (GetMenu). `DesktopHeap::alloc` va jusqu'à
+  DISPATCH_LEVEL. Écarts voulus : un sous-menu détruit quitte ses parents, un menu ne s'ouvre pas lui-même,
+  InsertMenuItem garde les coches. Tests : hôte (`menu`, `abi::menu`) ; scénario `menu` (`tests/native/menu1.c`)
+  sur AMD et Intel ; trois mutations (texte non publié, sans `IDMenu`, recherche qui ne descend pas) le font
+  échouer. Suite : la barre (taille et place des items, dessin, sélection, GetMenuBarInfo, DrawMenuBar), puis
+  TrackPopupMenuEx, puis le clic dans la barre et le clavier.
+
 - **Le caret** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 19) :
   `win32k::caret` (un par thread, dans sa file : fenêtre, forme pleine, grise ou bitmap, position, niveau de masquage ;
   dessiné en inversant l'écran dans la partie visible de la zone cliente) ; NtUserCreateCaret, NtUserShowCaret,
