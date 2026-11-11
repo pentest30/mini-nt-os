@@ -26,9 +26,9 @@ expect = [setup] screen complete; GPT, FAT32 and files written
 expect = [setup] finish requested; rebooting into the installed system
 expect = [power] NtShutdownSystem: reboot requested
 
-# Second boot: the target's 48 MiB ESP and system partition are used even
+# Second boot: the target's 56 MiB ESP and system partition are used even
 # though the installation medium remains the primary boot disk.
-expect = Io: GPT system partition 2: LBA 100352
+expect = Io: GPT system partition 2: LBA 116736
 expect = [boot] Io: system disk \Device\HarddiskVolume1 (ATA, secondary master, FAT32
 expect = kernel: phase 1 done
 

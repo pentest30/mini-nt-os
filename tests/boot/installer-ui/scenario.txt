@@ -15,7 +15,7 @@ cpus = default, intel
 timeout = 900
 
 expect = [setup] screen welcome
-expect = [setup] backend target 2: 96 MiB; plan EFI 48 MiB, system 46 MiB; token
+expect = [setup] backend target 2: 128 MiB; plan EFI 56 MiB, system 70 MiB; token
 expect = [setup] focus back
 expect = [setup] back to welcome
 expect = [setup] screen disk 2

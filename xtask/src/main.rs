@@ -389,7 +389,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
                         .truncate(true)
                         .open(image)
                         .map_err(|e| format!("{}: {e}", image.display()))?;
-                    file.set_len(96 * 1024 * 1024).map_err(|e| format!("{}: {e}", image.display()))?;
+                    file.set_len(128 * 1024 * 1024).map_err(|e| format!("{}: {e}", image.display()))?;
                 } else if sc.installed_disk {
                     install::create(&esp, image)?;
                 } else if sc.gpt_disk {
