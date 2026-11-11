@@ -1,0 +1,23 @@
+# Notepad, the probe (tests/native/notepad1.c): NOTEPAD1.EXE takes the place
+# of winlogon.exe, takes WinSta0\Default and starts ReactOS's notepad.exe,
+# then lists the top-level windows each second for 8 seconds (the probe of
+# smss ends everything 10 seconds after the last key). Notepad shows its
+# window by SetWindowPlacement, with the place GetWindowPlacement gave.
+features = test-smss
+requires = userland, native
+initial-command = NOTEPAD1.EXE
+cpus = default, intel
+timeout = 120
+
+expect = [notepad] on WinSta0\Default
+expect = [notepad] launched (PID
+expect = "Untitled - Notepad"
+expect = [notepad] probe done
+
+forbid = *** STOP:
+forbid = SetWindowPlacement
+# The Edit control, white; the active caption; "Line 1" in the status bar
+# (comctl32), the foot of the L.
+screen = 400 300 FFFFFF
+screen = 500 13 5B7AAF
+screen = 7 590 0C0B0B

@@ -1,5 +1,19 @@
 # Notes de passation
 
+- **Le Bloc-notes s'affiche** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 24 ; le critère « Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre » commence) :
+  scénario `notepad` (`tests/native/notepad1.c` à la place de `winlogon.exe` lance le vrai `notepad.exe`, que
+  `xtask` met sur le disque avec ses imports). Le Bloc-notes montre sa fenêtre par SetWindowPlacement, avec la place
+  de GetWindowPlacement : `win32k::winpos::placement` et `set_placement` (IntGetWindowPlacement,
+  make_rect_onscreen, IntSetWindowPlacement), NtUserGetWindowPlacement, NtUserSetWindowPlacement,
+  `abi::user::WindowPlacement32`. La fenêtre s'affiche entière : titre, barre de menus, contrôle Edit avec ses
+  barres de défilement, barre d'état de `comctl32`. Pas encore : `InternalPos` (rien à garder sans réduire ni
+  agrandir), WPF_ASYNCWINDOWPLACEMENT (fait tout de suite). Tests : hôte (`winpos`) ; `notepad` sur AMD et Intel,
+  qu'une mutation (SetWindowPlacement sans ShowWindow) fait échouer. **Suite** : NtUserRegisterWindowMessage (rendu 0
+  aujourd'hui : la procédure du Bloc-notes prend WM_NULL pour FINDMSGSTRING), NtUserCreateAcceleratorTable,
+  NtUserQueryWindow, le « SendMessageW Error » de `user32` pendant la création (à diagnostiquer), puis taper du texte
+  (touches de QEMU), l'enregistrer (la boîte Enregistrer sous de `comdlg32`) et le rouvrir.
+
 - **GetObject, et la position courante de LineTo** (`claude/new-session-696xfc`, demandé pour le texte des boutons
   du gestionnaire des tâches) : NtGdiExtGetObjectW (`win32k::gdi::object`, GreGetObject) : une police rend son
   LOGFONTW puis le reste d'un ENUMLOGFONTEXDVW sans axes, à zéro (356 octets au plus ; 92 sans tampon), un bitmap

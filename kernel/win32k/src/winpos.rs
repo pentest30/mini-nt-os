@@ -32,6 +32,18 @@
 //! repeint), et une fenêtre montrée, déplacée ou redimensionnée repeint
 //! aussitôt son cadre (WM_NCPAINT), avant WM_WINDOWPOSCHANGED.
 //!
+//! GetWindowPlacement et SetWindowPlacement ([`placement`],
+//! [`set_placement`]), comme IntGetWindowPlacement et IntSetWindowPlacement
+//! : le rectangle « normal » est le rectangle de la fenêtre dans la zone
+//! cliente de son parent, en coordonnées de la zone de travail pour une
+//! fenêtre de premier niveau ; SetWindowPlacement ramène ce rectangle sur
+//! la zone de travail (make_rect_onscreen), y place la fenêtre, puis la
+//! montre par ShowWindow. Sans réduire ni agrandir, il n'y a pas de place
+//! gardée à part (`InternalPos` de ReactOS : rectangle normal d'une
+//! fenêtre réduite ou agrandie, places de l'icône et de la fenêtre
+//! agrandie) : les points rendus valent (−1, −1), et une fenêtre réduite
+//! ou agrandie n'est pas déplacée (journalisé une fois).
+//!
 //! Pas encore, journalisé une fois : réduire et agrandir (les commandes qui
 //! le demandent, ou montrer une fenêtre réduite ou agrandie, ne font rien et
 //! rendent FALSE) ; la copie des bits valides (tout est repeint), garder
@@ -50,6 +62,7 @@ use abi::user::{
     WM_CHILDACTIVATE, WM_NCCALCSIZE, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS2_WIN31COMPAT, WNDS_SENDNCPAINT,
     WS_CHILD, WS_EX_TOPMOST, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
 };
+use abi::user::{WindowPlacement32, WPF_ASYNCWINDOWPLACEMENT, WPF_RESTORETOMAXIMIZED, WS_EX_TOOLWINDOW};
 use abi::user::{
     STARTF_USEPOSITION, STARTF_USESHOWWINDOW, STARTF_USESIZE, SW_FORCEMINIMIZE, SW_HIDE, SW_MINIMIZE, SW_RESTORE,
     SW_SHOW, SW_SHOWDEFAULT, SW_SHOWMAXIMIZED, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNA, SW_SHOWNOACTIVATE,
@@ -614,6 +627,128 @@ pub fn show_window(window: &Arc<Window>, cmd: u32) -> bool {
     was_visible
 }
 
+/// IntGetWindowPlacement, d'une fenêtre de style `style` et de style
+/// étendu `ex_style`, de rectangle `normal` dans la zone cliente de son
+/// parent : la commande qui la montre telle qu'elle est (réduite, agrandie
+/// ou normale), ses points de fenêtre réduite et agrandie (−1, −1 : jamais
+/// placés) et son rectangle normal. Pour une fenêtre de premier niveau
+/// (`top_level`) qui n'est pas une fenêtre d'outils, le rectangle est
+/// donné dans la zone de travail de son moniteur (`monitor`).
+pub fn placement_of(
+    style: u32,
+    ex_style: u32,
+    normal: Rect,
+    top_level: bool,
+    monitor: Option<crate::monitor::Monitor>,
+) -> WindowPlacement32 {
+    let show_cmd = if style & WS_MINIMIZE != 0 {
+        SW_SHOWMINIMIZED
+    } else if style & WS_MAXIMIZE != 0 {
+        SW_SHOWMAXIMIZED
+    } else {
+        SW_SHOWNORMAL
+    };
+    let mut normal = normal;
+    if top_level && ex_style & WS_EX_TOOLWINDOW == 0 {
+        if let Some(monitor) = monitor {
+            normal = offset(normal, monitor.rect.left - monitor.work.left, monitor.rect.top - monitor.work.top);
+        }
+    }
+    WindowPlacement32 {
+        length: core::mem::size_of::<WindowPlacement32>() as u32,
+        flags: if style & WS_MAXIMIZE != 0 { WPF_RESTORETOMAXIMIZED } else { 0 },
+        show_cmd,
+        min_position: [-1, -1],
+        max_position: [-1, -1],
+        normal_position: [normal.left, normal.top, normal.right, normal.bottom],
+    }
+}
+
+/// Le rectangle de `window` dans la zone cliente de son parent (à l'écran
+/// pour une fenêtre de premier niveau), et si elle est de premier niveau.
+fn rect_in_parent(window: &Window) -> (Rect, bool) {
+    let state = window.state();
+    match window::get(state.parent).filter(|parent| !parent.is_desktop_window()) {
+        Some(parent) => {
+            let client = parent.state().client;
+            (offset(state.window, -client.left, -client.top), false)
+        }
+        None => (state.window, true),
+    }
+}
+
+/// GetWindowPlacement : [`placement_of`] pour `window`, le moniteur pris de
+/// son rectangle (le principal par défaut).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn placement(window: &Window) -> WindowPlacement32 {
+    let (normal, top_level) = rect_in_parent(window);
+    let state = window.state();
+    let monitor = crate::monitor::from_rect(normal, abi::user::MONITOR_DEFAULTTOPRIMARY);
+    placement_of(state.style, state.ex_style, normal, top_level, monitor)
+}
+
+/// make_rect_onscreen : `rect` ramené sur la zone de travail `work` quand
+/// il en sort tout entier, par un côté ou par l'autre (sa taille gardée).
+pub fn on_screen(rect: Rect, work: Rect) -> Rect {
+    let mut rect = rect;
+    if rect.right <= work.left {
+        rect.right += work.left - rect.left;
+        rect.left = work.left;
+    } else if rect.left >= work.right {
+        rect.left += work.right - rect.right;
+        rect.right = work.right;
+    }
+    if rect.bottom <= work.top {
+        rect.bottom += work.top - rect.top;
+        rect.top = work.top;
+    } else if rect.top >= work.bottom {
+        rect.top += work.bottom - rect.bottom;
+        rect.bottom = work.bottom;
+    }
+    rect
+}
+
+/// IntSetWindowPlacement : `window` placée sur le rectangle normal de
+/// `placement` (ramené sur la zone de travail du moniteur le plus proche),
+/// sans changer son rang ni l'activer, puis montrée par la commande de
+/// `placement` ([`show_window`]). FALSE pour la fenêtre du bureau.
+/// `WPF_ASYNCWINDOWPLACEMENT` : fait tout de suite, journalisé une fois.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur.
+pub fn set_placement(window: &Arc<Window>, placement: &WindowPlacement32) -> bool {
+    if window.is_desktop_window() {
+        return false;
+    }
+    let [left, top, right, bottom] = placement.normal_position;
+    let mut normal = Rect::new(left, top, right, bottom);
+    if let Some(monitor) = crate::monitor::from_rect(normal, abi::user::MONITOR_DEFAULTTONEAREST) {
+        normal = on_screen(normal, monitor.work);
+    }
+    let mut flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    if placement.flags & WPF_ASYNCWINDOWPLACEMENT != 0 {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("win32k: SetWindowPlacement: WPF_ASYNCWINDOWPLACEMENT (done at once): not yet");
+        }
+        flags |= SWP_ASYNCWINDOWPOS;
+    }
+    if window.state().style & (WS_MINIMIZE | WS_MAXIMIZE) != 0 {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("win32k: SetWindowPlacement of a minimized or maximized window (InternalPos): not yet");
+        }
+    } else {
+        let (cx, cy) = (normal.right - normal.left, normal.bottom - normal.top);
+        set_window_pos(window, HWND_TOP, normal.left, normal.top, cx, cy, flags);
+    }
+    show_window(window, placement.show_cmd);
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -784,5 +919,50 @@ mod tests {
         assert_eq!(startup_command(SW_SHOWDEFAULT, WS_POPUP, false, &mut default), SW_SHOWMAXIMIZED, "SW_SHOWDEFAULT");
         let mut none = StartupPlace::default();
         assert_eq!(startup_command(SW_SHOWDEFAULT, overlapped, false, &mut none), SW_SHOWDEFAULT, "no STARTUPINFO");
+    }
+
+    #[test]
+    fn the_placement_says_how_the_window_is_shown_and_where() {
+        let monitor =
+            crate::monitor::Monitor { handle: 1, rect: Rect::new(0, 0, 1024, 768), work: Rect::new(0, 30, 1024, 768) };
+        let rect = Rect::new(100, 130, 500, 430);
+        let normal = placement_of(WS_VISIBLE, 0, rect, true, Some(monitor));
+        assert_eq!((normal.length, normal.flags, normal.show_cmd), (44, 0, SW_SHOWNORMAL));
+        assert_eq!((normal.min_position, normal.max_position), ([-1, -1], [-1, -1]), "never placed");
+        assert_eq!(normal.normal_position, [100, 100, 500, 400], "in the work area");
+        let tool = placement_of(WS_VISIBLE, WS_EX_TOOLWINDOW, rect, true, Some(monitor));
+        assert_eq!(tool.normal_position, [100, 130, 500, 430], "a tool window: on the screen");
+        let child = placement_of(WS_CHILD, 0, rect, false, Some(monitor));
+        assert_eq!(child.normal_position, [100, 130, 500, 430], "a child: in its parent");
+        let maximized = placement_of(WS_MAXIMIZE, 0, rect, true, Some(monitor));
+        assert_eq!((maximized.show_cmd, maximized.flags), (SW_SHOWMAXIMIZED, WPF_RESTORETOMAXIMIZED));
+        let minimized = placement_of(WS_MINIMIZE | WS_MAXIMIZE, 0, rect, true, Some(monitor));
+        assert_eq!(minimized.show_cmd, SW_SHOWMINIMIZED, "minimized comes first");
+    }
+
+    #[test]
+    fn a_rect_out_of_the_work_area_is_brought_back() {
+        let work = Rect::new(0, 0, 800, 600);
+        assert_eq!(on_screen(Rect::new(10, 20, 110, 70), work), Rect::new(10, 20, 110, 70), "inside: kept");
+        assert_eq!(on_screen(Rect::new(-300, 20, -200, 70), work), Rect::new(0, 20, 100, 70), "left");
+        assert_eq!(on_screen(Rect::new(900, 20, 1000, 70), work), Rect::new(700, 20, 800, 70), "right");
+        assert_eq!(on_screen(Rect::new(10, -90, 110, -40), work), Rect::new(10, 0, 110, 50), "above");
+        assert_eq!(on_screen(Rect::new(10, 700, 110, 750), work), Rect::new(10, 550, 110, 600), "below");
+        assert_eq!(on_screen(Rect::new(-50, 20, 50, 70), work), Rect::new(-50, 20, 50, 70), "partly in: kept");
+    }
+
+    #[test]
+    fn a_placement_reads_back_from_its_bytes() {
+        let placement = WindowPlacement32 {
+            length: 44,
+            flags: WPF_RESTORETOMAXIMIZED,
+            show_cmd: SW_SHOWMAXIMIZED,
+            min_position: [-1, -2],
+            max_position: [3, 4],
+            normal_position: [5, -6, 7, 8],
+        };
+        let bytes = placement.as_bytes();
+        assert_eq!(&bytes[28..32], &5i32.to_le_bytes(), "rcNormalPosition at 28");
+        assert_eq!(WindowPlacement32::from_bytes(&bytes), placement);
     }
 }

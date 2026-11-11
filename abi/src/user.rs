@@ -547,6 +547,66 @@ pub struct WindowPos32 {
     pub flags: u32,
 }
 
+/// WINDOWPLACEMENT, 32-bit: what GetWindowPlacement and SetWindowPlacement
+/// carry; the points and the rectangle as (x, y) and (left, top, right,
+/// bottom).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowPlacement32 {
+    pub length: u32,
+    pub flags: u32,
+    pub show_cmd: u32,
+    pub min_position: [i32; 2],
+    pub max_position: [i32; 2],
+    pub normal_position: [i32; 4],
+}
+
+impl WindowPlacement32 {
+    /// The structure from its 44 bytes.
+    pub fn from_bytes(bytes: &[u8; 44]) -> Self {
+        let word = |i: usize| u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+        let signed = |i: usize| word(i) as i32;
+        Self {
+            length: word(0),
+            flags: word(1),
+            show_cmd: word(2),
+            min_position: [signed(3), signed(4)],
+            max_position: [signed(5), signed(6)],
+            normal_position: [signed(7), signed(8), signed(9), signed(10)],
+        }
+    }
+
+    /// Its 44 bytes.
+    pub fn as_bytes(&self) -> [u8; 44] {
+        let words = [
+            self.length,
+            self.flags,
+            self.show_cmd,
+            self.min_position[0] as u32,
+            self.min_position[1] as u32,
+            self.max_position[0] as u32,
+            self.max_position[1] as u32,
+            self.normal_position[0] as u32,
+            self.normal_position[1] as u32,
+            self.normal_position[2] as u32,
+            self.normal_position[3] as u32,
+        ];
+        let mut bytes = [0u8; 44];
+        for (at, word) in words.iter().enumerate() {
+            bytes[4 * at..4 * at + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+/// WPF_SETMINPOSITION: SetWindowPlacement takes `ptMinPosition` too.
+pub const WPF_SETMINPOSITION: u32 = 0x0001;
+/// WPF_RESTORETOMAXIMIZED: a minimized window comes back maximized.
+pub const WPF_RESTORETOMAXIMIZED: u32 = 0x0002;
+/// WPF_ASYNCWINDOWPLACEMENT: the window of another thread is placed without
+/// waiting for it.
+pub const WPF_ASYNCWINDOWPLACEMENT: u32 = 0x0004;
+
 /// NCCALCSIZE_PARAMS, 32-bit: three rectangles (left, top, right, bottom),
 /// then the address of a WINDOWPOS (packed after it in a message).
 #[repr(C)]
@@ -582,6 +642,8 @@ pub const TYPE_MONITOR: u8 = 12;
 
 const _: () = {
     assert!(size_of::<WindowPos32>() == 28);
+    assert!(size_of::<WindowPlacement32>() == 44);
+    assert!(offset_of!(WindowPlacement32, normal_position) == 28);
     assert!(size_of::<NcCalcSizeParams32>() == 52);
     assert!(offset_of!(NcCalcSizeParams32, pos) == 48);
     assert!(size_of::<MonitorInfo32>() == 40);
