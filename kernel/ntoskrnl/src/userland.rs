@@ -267,7 +267,11 @@ pub fn run_smss_probe() {
         dll_path: "C:\\WINDOWS\\system32",
         window_title: "",
         desktop_info: "",
-        environment: &["Path=C:\\WINDOWS\\system32", "SystemRoot=C:\\WINDOWS"],
+        // As ExpLoadInitialProcess gives it to smss: the DLL path, the
+        // system drive (the root's first two characters), the root. smss
+        // hands them down to every process; without SystemDrive,
+        // %SystemDrive% stayed unexpanded (userenv's profiles, ADR-023).
+        environment: &["Path=C:\\WINDOWS\\system32", "SystemDrive=C:", "SystemRoot=C:\\WINDOWS"],
     };
     run_native("m4", "SMSS.EXE", image, &params, None);
     log_known_dlls();
