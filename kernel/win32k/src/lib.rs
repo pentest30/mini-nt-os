@@ -55,6 +55,7 @@ pub mod mouse;
 pub mod nonclient;
 pub mod paint;
 pub mod queue;
+pub mod scroll;
 pub mod sent;
 pub mod shared;
 pub mod sizemove;
@@ -153,6 +154,8 @@ pub fn set_last_error(error: u32) -> Result<(), NtStatus> {
 /// PASSIVE_LEVEL, au démarrage, Mm prêt.
 pub fn init() -> Result<(), NtStatus> {
     shared::init()?;
+    // InitUserAtoms: the system's atoms come before any class's.
+    cursor::init_atoms();
     gdi::handles::init()?;
     gdi::brush::init(&metrics::SYSTEM_COLORS)?;
     ps::callback::set_gdi_batch_flush(gdi::batch::flush);

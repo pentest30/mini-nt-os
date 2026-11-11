@@ -53,6 +53,8 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["boot1.c", "theme.c"], "BOOT1.EXE", Toolchain::MinGwWin32),
     (&["mouse1.c"], "MOUSE1.EXE", Toolchain::MinGwWin32),
     (&["cursor1.c"], "CURSOR1.EXE", Toolchain::MinGwWin32),
+    (&["icon1.c"], "ICON1.EXE", Toolchain::MinGwWin32),
+    (&["scroll1.c"], "SCROLL1.EXE", Toolchain::MinGwWin32),
     (&["listview1.c"], "LISTVIEW1.EXE", Toolchain::MinGwWin32),
     (&["timer1.c"], "TIMER1.EXE", Toolchain::MinGwWin32),
     (&["dialog1.c"], "DIALOG1.EXE", Toolchain::MinGwWin32),

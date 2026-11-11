@@ -769,3 +769,80 @@ curseurs du système, la forme dessinée (toujours la flèche), le point chaud, 
 équivalente dans les scénarios : le noir ou le blanc des masques (chaque curseur de `user32` a une variante de 1 bit
 et une de 32 bits avec alpha ; sur un écran de 32 bits, LookupIconIdFromDirectoryEx prend la seconde, dont l'alpha
 l'emporte sur les masques) : `gdi::dibits::to_monochrome` n'a qu'un test hôte.
+
+## Étape 16 : les icônes (icônes du système, icône du titre, WM_SETICON, DrawIconEx, GetProp du client)
+
+Les 12 scénarios dont les fenêtres ont un menu système journalisaient « the caption's icon (icons): not yet ». Une
+icône est un objet curseur (étape 15) ; ce qui manquait, c'est d'où elle vient et qui la dessine (`cursoricon.c`,
+`nonclient.c`, `painting.c`, `defwnd.c` de win32k et de `user32`, ReactOS comme spécification).
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les icônes du système | au premier NtUserSwitchDesktop, après les curseurs, le rappel SETWNDICONS (n° 11, User32CallSetWndIconsFromKernel, co_IntSetWndIcons) : `user32` charge IDI_APPLICATION, IDI_HAND, IDI_QUESTION, IDI_EXCLAMATION, IDI_ASTERISK, IDI_WINLOGO et sa petite forme ; elles ne sont plus à aucun processus (IntLoadSystenIcons), et LoadIcon(NULL, IDI_*) d'une application les retrouve (FindExistingCursorIcon, second passage) |
+| L'icône du titre (`cursor::caption_icon`, NC_IconForWindow) | la petite icône de la fenêtre (WM_SETICON), sinon la grande, sinon la petite de sa classe, sinon la grande, sinon la petite IDI_WINLOGO du système (pas pour WS_EX_DLGMODALFRAME) ; dessinée à SM_CXSMICON × SM_CYSMICON au début du titre d'une fenêtre qui a un menu système et n'est pas une fenêtre d'outils, centrée dans un carré de la hauteur du titre, le texte décalé d'autant (UserDrawCaption ; `Op::Icon` de `gdi::draw`) |
+| WM_SETICON, WM_GETICON | DefWindowProc du noyau (DefWndSetIcon, DefWndGetIcon) : ICON_SMALL et ICON_BIG dans deux propriétés du système de la fenêtre (atomes `SysICS`, `SysIC`, publiés dans le `SERVERINFO` : `atomIconSmProp`, `atomIconProp`), le cadre repeint ; `user32` répond lui-même à WM_GETICON en lisant ces propriétés |
+| Les propriétés lues par le client | `user32` lit GetProp (et WM_GETICON) dans la liste `PropListHead` du `WND`, des `PROPERTY` (`abi::user::Property32`) qu'il atteint par `ulSharedDelta` : elles sont maintenant dans un tas à la fin de la section partagée de USER (`shared::alloc`, UserHeapAlloc), réécrites à chaque SetProp (`window::publish_properties`) ; jusque-là, GetProp d'une application rendait toujours NULL |
+| DrawIconEx | NtUserDrawIconEx (`cursor::draw_icon_ex`, UserDrawIconEx) : la forme à la taille demandée (0 : la sienne, ou SM_CXICON avec DI_DEFAULTSIZE), au plus proche, dans le DC là où il peint ; DI_NORMAL, DI_IMAGE, DI_MASK ; ERROR_INVALID_CURSOR_HANDLE pour un handle qui n'en est pas un |
+
+Ce qui manque : le pinceau de DrawIconEx qui efface le fond (`hbrFlickerFreeDraw`, journalisé, sans effet),
+ICON_SMALL2, `hIconSmWindows` et `hIconWindows` du `SERVERINFO` (gardées par win32k seul), GetIconInfo, CopyImage et
+CreateIconIndirect (GetObject, GetDIBits), une petite icône de classe tirée de la grande par CopyImage (la grande est
+réduite au dessin), le titre d'une fenêtre réduite, NtUserRemoveProp et l'énumération des propriétés
+(NtUserBuildPropList). Le tas partagé tient environ 750 propriétés à la fois.
+
+Le banc d'essai : `tests/native/icon1.c` (`ICON1.EXE` à la place de `winlogon.exe`, scénario `icons`) : les 7
+icônes du système sont chargées ; IDI_APPLICATION est la même à chaque chargement ; trois fenêtres à menu système : A
+(classe sans icône) montre la petite IDI_WINLOGO, B (classe à IDI_HAND) la montre et la dessine à 32 × 32 dans sa
+zone cliente par DrawIconEx (TRUE ; un faux handle : FALSE, 1402), C reçoit IDI_ASTERISK par WM_SETICON (aucune
+avant), que WM_GETICON rend (ICON_BIG : aucune) et que son titre montre. Neuf pixels vérifiés à l'écran.
+
+Tests : hôte (`nonclient` : la place de l'icône, ni sans menu système ni dans une fenêtre d'outils ; `cursor` : une
+forme dessinée à la taille demandée, DI_IMAGE, DI_MASK, coupée ; `window` : la chaîne des `PROPERTY` depuis le
+`WND`) ; le scénario `icons` sur AMD et Intel, et les scénarios GUI. Dans `gui`, l'icône par défaut paraît au
+début des titres, dont le texte se décale de 19 pixels (la hauteur du titre) : deux pixels vérifiés ont suivi, et
+l'atome de la première classe devient `c00c` : comme InitUserAtoms, win32k crée `SysICS` et `SysIC` à son
+initialisation, avant toute classe.
+
+## Étape 17 : les barres de défilement des fenêtres (SetScrollInfo, ShowScrollBar, le dessin, le clic)
+
+La console de `consrv`, `cmd`, la listview de `comctl32` et `desktop-launch` appelaient NtUserSetScrollInfo et
+NtUserShowScrollBar, absents (0 rendu), et le cadre journalisait « scroll bars: not yet ». `scrollbar.c` et
+`nonclient.c` de win32k, `controls/scrollbar.c` et `windows/defwnd.c` de `user32` (ReactOS comme spécification) ;
+`win32k::scroll`, `sys::scroll`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| L'état des barres | dès qu'on parle d'elles (co_IntCreateScrollBars : SetScrollInfo, GetScrollBarInfo, EnableScrollBar, le cadre peint avec une barre ; `user32` en donne à WM_NCCREATE d'une fenêtre qui en a le style), deux barres dans le noyau (`scroll::ScrollBars` : intervalle, page, position, position suivie, état des parties : le `SBINFOEX` de ReactOS) et leur `SBINFO` (`abi::user::SbInfo32`) dans le tas du bureau, en `WND.pSBInfo` : `user32` y lit lui-même GetScrollPos et GetScrollRange ; d'abord de 0 à 100 ; rendu au tas avec le `WND` |
+| SetScrollInfo (`scroll::set_info`, co_IntSetScrollInfo) | la page ramenée à l'intervalle, la position entre le début et la fin moins la page ; SIF_PREVIOUSPOS (SetScrollPos) rend la position d'avant ; une barre qui n'a plus de quoi défiler se cache (ou, SIF_DISABLENOSCROLL, ses deux flèches se désactivent), une qui en a de nouveau se montre ; puis elle se repeint : par le cadre (RDW_INVALIDATE, RDW_FRAME) si ses flèches changent, sinon son intérieur aussitôt (IntRefeshScrollInterior) |
+| ShowScrollBar (`scroll::show_scroll_bar`) | le style WS_HSCROLL ou WS_VSCROLL ; s'il change, SetWindowPos(SWP_FRAMECHANGED) recalcule la zone cliente et repeint le cadre ; rend s'il a changé |
+| EnableScrollBar, NtUserSBGetParms, GetScrollBarInfo, NtUserSetScrollBarInfo | les flèches désactivées (`WSBflags`, l'état des flèches), ce que `fMask` demande, le rectangle de la barre dans la fenêtre (contre la zone cliente, d'un pixel plus long de chaque côté avec WS_BORDER), ses flèches et son curseur (IntCalculateThumb : la page dans l'intervalle, 8 pixels au moins ; SM_CXHTHUMB sans page), l'état de la barre (invisible, indisponible, hors de l'écran) et de ses parties ; ce que `user32` tient pendant un clic |
+| Le dessin (`scroll::bar_ops`, `corner_ops`) | dans WM_NCPAINT après le bord client : les deux flèches (un bouton en relief, enfoncé et plat pendant un clic, `BF_FLAT` de DrawEdge ; le symbole de Marlett, grisé si la flèche est désactivée), le fond (le pinceau gris en damier, COLOR_3DFACE sur COLOR_3DHILIGHT depuis le coin de la fenêtre, `Op::Mono`, quand COLOR_3DHILIGHT est COLOR_WINDOW ; noir sur la page où l'on clique), le curseur en relief ; entre deux barres, le coin en COLOR_BTNFACE et la poignée de taille d'une fenêtre à cadre épais (o et p de Marlett) |
+| Le clic | WM_NCHITTEST rend HTVSCROLL, HTHSCROLL, et HTSIZE dans le coin (GetNCHitEx) ; WM_NCLBUTTONDOWN dessus envoie WM_SYSCOMMAND SC_VSCROLL ou SC_HSCROLL, que `user32` traite lui-même (DefWndTrackScrollBar : la capture, sa boucle de messages, la minuterie du système qui répète, WM_VSCROLL ou WM_HSCROLL, SB_ENDSCROLL au relâchement) |
+
+Deux écarts voulus avec ReactOS : ESB_DISABLE_LTUP désactive la flèche du haut d'une barre verticale, comme la
+documentation de l'API et Wine (IntEnableScrollBar de ReactOS échange les deux flèches d'une barre verticale) ; l'état
+de la barre elle-même (`rgstate[0]`) se calcule à chaque GetScrollBarInfo, ce que ReactOS écrit puis écrase par l'état
+gardé. co_IntCreateScrollBars de ReactOS recalcule aussi la zone cliente (co_WinPosGetNonClientSize) : Mino ne le fait
+pas, la zone cliente étant déjà celle du style.
+
+Ce qui manque : les barres des contrôles (SB_CTL, la classe ScrollBar : leur SBCALC dans les octets de plus du `WND`,
+journalisé une fois), ScrollWindowEx et ScrollDC (le contenu ne défile pas encore : NtUserScrollWindowEx est le
+prochain manque de `consrv` et de la listview), les barres d'une fenêtre de droite à gauche, les thèmes ; HideCaret et
+ShowCaret, que `user32` appelle autour du clic (journalisés, sans effet). Les symboles que `user32` dessine lui-même
+pendant un clic sont lissés, ceux du noyau monochromes (la qualité de la police Marlett de DrawFrameControl).
+
+Le banc d'essai : `tests/native/scroll1.c` (`SCROLL1.EXE` à la place de `winlogon.exe`, scénario `scroll`) : une
+fenêtre sans barres (ERROR_NO_SCROLLBARS) ; A et ses barres de WM_NCCREATE (0 à 100), SetScrollInfo puis
+GetScrollPos, GetScrollRange (lus par `user32` dans le tas) et GetScrollInfo, SetScrollPos au-delà de la fin (90, la
+position d'avant rendue), GetScrollBarInfo (le rectangle à l'écran, les flèches, le curseur) ; B, sa barre cachée
+quand elle n'a rien à faire défiler (la zone cliente grandit de 16 pixels) et montrée de nouveau, désactivée avec
+SIF_DISABLENOSCROLL, EnableScrollBar, ShowScrollBar ; un clic sur la flèche du bas de A (le moniteur de QEMU) :
+WM_VSCROLL SB_LINEDOWN, puis SB_ENDSCROLL, le curseur plus bas ; quatorze pixels vérifiés à l'écran.
+
+Tests : hôte (`scroll` : SetScrollInfo, la page et la position, cacher ou désactiver, le record vérifié,
+GetScrollInfo, les flèches, le rectangle, le curseur, l'état, le dessin, la poignée de taille ; `nonclient` : le cadre
+avec ses barres et leur coin ; `defwnd` : HTVSCROLL, HTHSCROLL, HTSIZE ; `gdi::draw` : `BF_FLAT`) ; le scénario
+`scroll` sur AMD et Intel, et les scénarios où des barres paraissent (`console`, `cmd`, `listview`,
+`desktop-launch`) ou dont le test d'atteinte compte (`gui`, `mouse`, `cursor`). Dans `console`, la fenêtre de
+`consrv` a maintenant sa barre verticale (conwnd.c l'ajoute à sa largeur et la montre) : sa zone cliente fait les 640
+pixels de ses 80 colonnes, plus 656.

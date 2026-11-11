@@ -13,12 +13,12 @@
   Scénario `logon` (deux démarrages, `disk = system`) : le premier va au bout ; au second, `winlogon` va au logon,
   `msgina` ouvre la session d'`Administrator`, `msv1_0` valide le compte, et **`lsasrv` s'arrête à NtCreateToken** :
   la suite (Se : un jeton construit de l'utilisateur, de ses groupes, de ses privilèges, de son DACL par défaut).
-  Vu en chemin, pas encore : NtUserRegisterHotKey, le contrôle d'édition (NtUserCreateCaret, NtUserSetScrollInfo),
-  FSCTL_PIPE_TRANSCEIVE (`services.exe`). **Dette** : le journal série écrit une ligne en plusieurs morceaux sans verrou
-  de bout en bout (`hal::serial::SerialLogger`) ; deux threads qui écrivent en même temps coupent leurs lignes, et un
-  marqueur coupé fait échouer un scénario : à corriger (un verrou par ligne, sans bloquer le chemin de l'arrêt), d'où
-  peu de marqueurs dans `logon`. Le disque de démarrage a grossi de 0,9 Mo (`secur32.dll` et ses imports) : l'ESP du
-  plan de l'installateur ne tenait plus `fat.img` ; elle passe à 56 Mio, la cible de test à 128 Mio
+  Vu en chemin, pas encore : NtUserRegisterHotKey, le contrôle d'édition (NtUserCreateCaret ; les barres de
+  défilement sont venues de main), FSCTL_PIPE_TRANSCEIVE (`services.exe`). Des lignes du journal série coupées par un
+  autre thread faisaient échouer des marqueurs, d'où peu de marqueurs dans `logon` ; main l'a corrigé (4bac731, une
+  ligne en une seule prise du verrou), venu par la fusion. Le disque de démarrage a grossi de 0,9 Mo (`secur32.dll`
+  et ses imports) : l'ESP du plan de l'installateur ne tenait plus `fat.img` ; elle passe à 56 Mio, la cible de test
+  à 128 Mio
   ([`compat/io-install.md`](compat/io-install.md), « Le plan agrandi » ; sous VirtualBox, la cible vierge est à
   refaire en 128 Mio). Les apitests montent : ntdll 34/84, kernel32 12/29 (planchers relevés). Validation sur
   l'hôte Windows : `cargo xtask lint` propre, 987 tests hôte (`--release`), 81 démarrages sur 86 dans la suite
@@ -26,6 +26,43 @@
   rostests (l'arbre manquait au worktree), et après le plan agrandi `installed-boot`, `installer-finish`,
   `installer-prepare`, `installer-ui` sur AMD et Intel. Vu une fois : `installer-finish` sur Intel, le second
   démarrage muet après le lancement de `smss`, puis passé seul en 98 s.
+
+- **Le nom d'un volume en UTF-16 tel quel** (`claude/new-session-696xfc`, après les barres de défilement) :
+  `io::VolumeLabel.label` devient un `Vec<u16>` ; NTFS rend `$VOLUME_NAME` sans le convertir (un surrogate isolé
+  faisait échouer FileFsVolumeInformation en `STATUS_FILE_CORRUPT_ERROR`, donc `vol` et l'en-tête de `dir`), FAT
+  donne chaque octet de son entrée de volume comme avant, `sys::file` recopie. Test hôte sur une image NTFS construite
+  par le test ([`compat/ntfs.md`](compat/ntfs.md)).
+
+- **Les barres de défilement des fenêtres** (`claude/new-session-696xfc`, sur main `b95a011` ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 17) : `win32k::scroll` (l'état des deux barres d'une
+  fenêtre et leur `SBINFO` dans le tas du bureau, où `user32` lit GetScrollPos et GetScrollRange ; SetScrollInfo,
+  SBGetParms, Get/SetScrollBarInfo, ShowScrollBar, EnableScrollBar, `sys::scroll`) ; le cadre dessine les barres
+  (flèches de Marlett, fond en damier `Op::Mono`, curseur, coin, poignée de taille ; `BF_FLAT` de DrawEdge) ;
+  HTVSCROLL, HTHSCROLL, HTSIZE ; un clic devient WM_SYSCOMMAND SC_VSCROLL, que `user32` suit. Tests : hôte (`scroll`,
+  `nonclient`, `defwnd`, `gdi::draw`) ; scénario `scroll` (`tests/native/scroll1.c`, quatorze pixels, un clic) sur AMD
+  et Intel ; `console`, `cmd`, `listview`, `desktop-launch`, `gui`, `mouse`, `cursor` sur AMD. Pas encore : SB_CTL (la
+  classe ScrollBar), **ScrollWindowEx et ScrollDC** (le prochain manque de `consrv` et de la listview), HideCaret,
+  ShowCaret.
+
+- **Les icônes** (`claude/new-session-696xfc`, sur main `ea66c30` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 16) : les icônes du système chargées par `user32` au premier NtUserSwitchDesktop (rappel SETWNDICONS, n° 11)
+  et rendues globales ; l'icône du titre (`cursor::caption_icon` : WM_SETICON, puis la classe, puis la petite
+  IDI_WINLOGO) dessinée par le cadre (`Op::Icon`), le texte décalé ; WM_SETICON et WM_GETICON (propriétés du système
+  `SysICS`, `SysIC`, atomes publiés dans le `SERVERINFO`) ; les propriétés des fenêtres copiées dans un tas à la fin
+  de la section partagée (`shared::alloc`), où `user32` les lit (GetProp et WM_GETICON marchent côté client) ;
+  NtUserDrawIconEx (`cursor::draw_icon_ex`). Tests : hôte (`nonclient`, `cursor`, `window`) ; scénario `icons`
+  (`tests/native/icon1.c`, neuf pixels), sur AMD et Intel, et les scénarios GUI. Pas encore : le pinceau de
+  DrawIconEx, ICON_SMALL2, GetIconInfo, CopyImage, CreateIconIndirect, NtUserRemoveProp, NtUserBuildPropList.
+
+- **Le journal série écrit chaque ligne d'un coup** (`claude/new-session-696xfc`, sur main `38d86a7`) : `hal::serial`
+  envoyait un enregistrement octet par octet, le verrou de COM1 pris pour chacun ; un thread préempté au milieu d'une
+  ligne laissait un autre y glisser la sienne. `send-messages` a ainsi perdu un marqueur sur Intel (« [send] sent
+  messa[INFO] win32k: thread 44 … ended »), la ligne de fin d'un thread GUI tombant dans un `DbgPrint`. Corrigé :
+  l'enregistrement est formaté sur la pile (`serial::Chunks`, `LINE_CAPACITY` = 640 octets, plus qu'un `DbgPrint`)
+  puis envoyé en une seule prise du verrou ; un enregistrement plus long part par morceaux entiers de cette taille.
+  Les interruptions restent masquées le temps d'une ligne (immédiat sur l'UART de QEMU et de VirtualBox, environ
+  87 µs par octet sur un 16550 réel). Tests : hôte (`hal::serial` : une ligne en un morceau, une longue en morceaux
+  entiers sans perte) ; scénarios `smoke`, `send-messages`, `destroy`, `smss` sur AMD et Intel.
 
 - **Les curseurs** (`claude/new-session-696xfc`, sur main `11a3464` et l'envoi d'un tampon du noyau ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 15) : `user32` chargeait mal ses curseurs

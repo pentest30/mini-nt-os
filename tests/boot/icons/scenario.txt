@@ -1,0 +1,42 @@
+# The icons (win32k::cursor; tests/native/icon1.c, MinGW, linked to ReactOS's
+# kernel32 and user32): ICON1.EXE takes the place of winlogon.exe and
+# switches to WinSta0\Default, which has user32 load the system cursors,
+# then the 7 system icons (the callback SETWNDICONS); LoadIcon(NULL, IDI_*)
+# finds them. Three windows with a caption and a system menu: A (40,100), of
+# a class without an icon, shows the system's small IDI_WINLOGO; B
+# (450,100), of a class whose icon is IDI_HAND, shows it, and draws it at
+# 32 x 32 in its client area with DrawIconEx; C (860,100), given IDI_ASTERISK
+# by WM_SETICON, shows it.
+features = test-smss
+requires = userland, native
+initial-command = ICON1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = win32k: user32 loaded 16 of 16 system cursors
+expect = win32k: user32 loaded 7 of 7 system icons
+expect = [icon] on WinSta0\Default
+expect = [icon] IDI_APPLICATION 1, shared 1; IDI_HAND 1, IDI_ASTERISK 1, IDI_WINLOGO 1
+expect = [icon] WM_SETICON(ICON_SMALL): none before 1; WM_GETICON gives it 1, no big one 1
+expect = [icon] DrawIconEx(IDI_HAND, 32 x 32): 1; a handle that is no icon: refused 1, error 1402
+expect = [icon] done
+
+forbid = *** STOP:
+forbid = NtUserDrawIconEx (0x116a) is not implemented
+forbid = win32k: the system icons are not loaded
+forbid = DefWindowProc: message 0x0080 not yet
+forbid = DefWindowProc: message 0x007f not yet
+
+# The captions' icons, at SM_CXSMICON x SM_CYSMICON from their left: A's the
+# system's small IDI_WINLOGO (its dark outline), B's IDI_HAND (red, its white
+# bar), C's IDI_ASTERISK (its outline, its white); the inactive captions are
+# gray. B's client area: IDI_HAND drawn at 32 x 32 from (20, 20).
+screen = 45 112 808080
+screen = 47 112 0F0F0F
+screen = 458 112 F34B4B
+screen = 461 112 F3F3F3
+screen = 869 112 000000
+screen = 872 112 F6F7FA
+screen = 478 158 F34B4B
+screen = 485 158 F3F3F3
+screen = 472 158 FFFFFF

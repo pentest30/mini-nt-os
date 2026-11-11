@@ -205,7 +205,8 @@ pub(super) fn nt_user_set_thread_desktop(arguments: &[u32]) -> NtStatus {
 /// (`DESKTOP_SWITCHDESKTOP`) devient le bureau d'entrée, s'il est sur la
 /// station interactive de la session de l'appelant ; FALSE sinon
 /// (`ERROR_ACCESS_DENIED`). Le premier bureau mis à l'écran fait charger à
-/// `user32` les curseurs du système (`win32k::cursor::load_system_cursors`).
+/// `user32` les curseurs du système (`win32k::cursor::load_system_cursors`),
+/// puis ses icônes (`load_system_icons`).
 pub(super) fn nt_user_switch_desktop(arguments: &[u32]) -> NtStatus {
     let switch = || {
         let desktop = reference_desktop(arguments[0], AccessMask(DESKTOP_SWITCHDESKTOP))?;
@@ -217,8 +218,9 @@ pub(super) fn nt_user_switch_desktop(arguments: &[u32]) -> NtStatus {
     let switched = switch();
     if switched.is_ok() {
         // co_IntInitializeDesktopGraphics: the first desktop on the screen
-        // has user32 load the system cursors.
+        // has user32 load the system cursors, then the system icons.
         win32k::cursor::load_system_cursors();
+        win32k::cursor::load_system_icons();
     }
     boolean(switched)
 }

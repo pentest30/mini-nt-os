@@ -28,10 +28,24 @@
 //! DefWindowProc ([`def_set_cursor`]) y met le curseur de sa classe dans la
 //! zone cliente, une flèche double sur un bord, la flèche ailleurs.
 //!
+//! Les icônes sont les mêmes objets. Les icônes du système viennent du
+//! rappel SETWNDICONS ([`load_system_icons`], co_IntSetWndIcons), après les
+//! curseurs. L'icône du titre d'une fenêtre ([`caption_icon`],
+//! NC_IconForWindow) : sa petite icône (WM_SETICON, ICON_SMALL), sinon la
+//! grande, sinon la petite de sa classe, sinon la grande, sinon la petite
+//! icône IDI_WINLOGO du système (pas pour WS_EX_DLGMODALFRAME). WM_SETICON et
+//! WM_GETICON (DefWndSetIcon, DefWndGetIcon : [`set_window_icon`],
+//! [`window_icon`]) les rangent dans ses propriétés `SysICS` et `SysIC`.
+//! DrawIconEx ([`draw_icon_ex`]) et le cadre ([`draw_shape`]) dessinent une
+//! forme à la taille demandée, au plus proche.
+//!
 //! Pas encore : les curseurs animés (CURSORF_ACON : refusés), ShowCursor,
-//! ClipCursor, GetIconInfo, DrawIconEx (l'icône du titre), CopyImage, le
-//! remplacement d'un curseur du système déjà posé (FALSE, comme ReactOS),
-//! GetClassLong(GCLP_HCURSOR) (le `CLS` n'a pas de pointeur vers l'objet).
+//! ClipCursor, GetIconInfo, CopyImage, CreateIconIndirect, le remplacement
+//! d'un curseur du système déjà posé (FALSE, comme ReactOS),
+//! GetClassLong(GCLP_HCURSOR) (le `CLS` n'a pas de pointeur vers l'objet),
+//! le pinceau de DrawIconEx qui efface le fond (`hbrFlickerFreeDraw` :
+//! journalisé, sans effet), ICON_SMALL2, `hIconSmWindows` et `hIconWindows`
+//! du `SERVERINFO` (gardés par win32k seul).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -39,13 +53,13 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    cursorf, CursorData32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
-    HTTOPRIGHT, OCR_CURSORS, OCR_NORMAL, OCR_SIZENESW, OCR_SIZENS, OCR_SIZENWSE, OCR_SIZEWE, RT_ICON, TYPE_CURSOR,
-    WM_SETCURSOR, WS_CHILD, WS_MAXIMIZE,
+    cursorf, di, CursorData32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
+    HTTOPRIGHT, ICON_BIG, ICON_SMALL, ICON_SMALL2, OCR_CURSORS, OCR_NORMAL, OCR_SIZENESW, OCR_SIZENS, OCR_SIZENWSE,
+    OCR_SIZEWE, OIC_ICONS, RT_ICON, TYPE_CURSOR, WM_SETCURSOR, WS_CAPTION, WS_CHILD, WS_EX_DLGMODALFRAME, WS_MAXIMIZE,
 };
 use hal::sync::KSpinLock;
 
-use crate::gdi::dib::{ColorRef, PixelLayout};
+use crate::gdi::dib::{Bitmap, ColorRef, PixelLayout, Rect};
 use crate::gui::ThreadInfo;
 use crate::window::{LParam, Window};
 
@@ -108,6 +122,14 @@ pub struct Shape {
 }
 
 impl Shape {
+    /// Le pixel de la forme qui tombe en (`x`, `y`) d'une forme dessinée à
+    /// `width` × `height` : le plus proche.
+    pub fn scaled_pixel(&self, x: u32, y: u32, width: u32, height: u32) -> Pixel {
+        let sx = (u64::from(x) * u64::from(self.width) / u64::from(width.max(1))) as usize;
+        let sy = (u64::from(y) * u64::from(self.height) / u64::from(height.max(1))) as usize;
+        self.pixels.get(sy * self.width as usize + sx).copied().unwrap_or(Pixel::Transparent)
+    }
+
     /// La forme de `width` × `height` des masques d'un curseur (les pixels
     /// de 32 bits de ses bitmaps, la ligne du haut d'abord) : `mask`, le
     /// masque AND (blanc : 1), et sans `color` le masque XOR sous lui
@@ -463,6 +485,232 @@ pub fn load_system_cursors() {
     }
 }
 
+/// Les icônes du système, dans l'ordre d'[`OIC_ICONS`] ; 0 : pas posée.
+static SYSTEM_ICONS: KSpinLock<[u32; 7]> = KSpinLock::new([0; 7]);
+/// `user32` a été prié de charger les icônes du système.
+static ICONS_LOADING: AtomicBool = AtomicBool::new(false);
+
+/// Le curseur `handle` n'est plus à aucun processus (IntLoadSystenIcons) :
+/// la fin du sien ne le détruit pas, et tout processus le retrouve.
+fn make_global(handle: u32) {
+    let Some(cursor) = get(handle) else { return };
+    cursor.pid.store(0, Ordering::Release);
+    if let Some(data) = cursor.data.lock().as_mut() {
+        data.flags |= cursorf::GLOBAL;
+    }
+    crate::handles::set_process(handle, 0);
+}
+
+/// co_IntSetWndIcons, une fois, après [`load_system_cursors`] : `user32`
+/// charge les icônes du système (`crate::callback::set_wnd_icons`), qui ne
+/// sont plus à aucun processus. Journalisé une fois.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn load_system_icons() {
+    if ICONS_LOADING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    match crate::callback::set_wnd_icons() {
+        Ok(icons) => {
+            let icons = icons.map(|handle| if get(handle).is_some() { handle } else { 0 });
+            for &handle in icons.iter().filter(|&&handle| handle != 0) {
+                make_global(handle);
+            }
+            *SYSTEM_ICONS.lock() = icons;
+            let _ = icon_atoms();
+            let count = icons.iter().filter(|&&handle| handle != 0).count();
+            log::info!("win32k: user32 loaded {count} of 7 system icons");
+        }
+        Err(status) => log::warn!("win32k: the system icons are not loaded: {status:?}"),
+    }
+}
+
+/// L'icône du système `oic` (OIC_*), si elle est posée.
+pub fn system_icon(oic: u32) -> Option<u32> {
+    let index = OIC_ICONS.iter().position(|&id| id == oic)?;
+    Some(SYSTEM_ICONS.lock()[index]).filter(|&handle| handle != 0)
+}
+
+/// La petite icône de fenêtre du système (`gpsi->hIconSmWindows`), sinon la
+/// grande (`hIconWindows`).
+fn default_window_icon() -> Option<u32> {
+    system_icon(OIC_ICONS[6]).or_else(|| system_icon(OIC_ICONS[5]))
+}
+
+/// InitUserAtoms, pour les icônes : les atomes `SysICS` et `SysIC` créés à
+/// l'initialisation de USER, avant les classes, et publiés dans le
+/// `SERVERINFO`.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, au démarrage, après la section partagée.
+pub fn init_atoms() {
+    let _ = icon_atoms();
+}
+
+/// Les atomes des propriétés des icônes d'une fenêtre (`SysICS`, la petite ;
+/// `SysIC`, la grande), créés à l'initialisation ([`init_atoms`]) et
+/// publiés dans le `SERVERINFO` (`atomIconSmProp`, `atomIconProp`), où
+/// `user32` les lit (WM_GETICON, DefWndGetIcon).
+fn icon_atoms() -> Option<(u16, u16)> {
+    static PUBLISHED: AtomicBool = AtomicBool::new(false);
+    let atom = |name: &str| {
+        let name: Vec<u16> = name.encode_utf16().collect();
+        crate::atom::add(crate::atom::AtomName::String(&name)).ok()
+    };
+    let atoms = (atom("SysICS")?, atom("SysIC")?);
+    if !PUBLISHED.load(Ordering::Acquire) {
+        let field = core::mem::offset_of!(abi::user::ServerInfo32, atom_icon_sm_prop);
+        let at = u64::from(crate::shared::SERVER_INFO) + field as u64;
+        let mut bytes = [0u8; 4];
+        bytes[..2].copy_from_slice(&atoms.0.to_le_bytes());
+        bytes[2..].copy_from_slice(&atoms.1.to_le_bytes());
+        let written = crate::shared::section().is_some_and(|section| section.write_kernel(at, &bytes).is_ok());
+        PUBLISHED.store(written, Ordering::Release);
+    }
+    Some(atoms)
+}
+
+/// DefWndGetIcon (WM_GETICON) : l'icône `which` de la fenêtre (ICON_BIG, ou
+/// la petite : ICON_SMALL, ICON_SMALL2) ; 0 sans elle. `None` pour un `which`
+/// inconnu.
+pub fn window_icon(window: &Window, which: u32) -> Option<u32> {
+    let (small, big) = icon_atoms()?;
+    let atom = match which {
+        ICON_BIG => big,
+        ICON_SMALL | ICON_SMALL2 => small,
+        _ => return None,
+    };
+    Some(crate::window::property(window, atom, true).unwrap_or(0))
+}
+
+/// DefWndSetIcon (WM_SETICON) : l'icône `which` de la fenêtre devient
+/// `handle` (0 la retire), son cadre se repeint s'il a un titre ; rend
+/// l'ancienne. `None` pour un `which` inconnu (ICON_SMALL2 ne pose rien,
+/// comme ReactOS).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_window_icon(window: &Window, which: u32, handle: u32) -> Option<u32> {
+    let (small, big) = icon_atoms()?;
+    let (atom, old) = match which {
+        ICON_BIG => (big, window_icon(window, ICON_BIG)?),
+        ICON_SMALL => (small, window_icon(window, ICON_SMALL)?),
+        ICON_SMALL2 => return window_icon(window, ICON_SMALL),
+        _ => return None,
+    };
+    crate::window::set_property(window, atom, handle, true);
+    if window.state().style & WS_CAPTION == WS_CAPTION {
+        crate::paint::nc_paint(window, abi::user::HRGN_WINDOW);
+    }
+    Some(old)
+}
+
+/// NC_IconForWindow : la forme de l'icône du titre de la fenêtre ; `None`
+/// sans elle (rien n'est alors dessiné, et le texte du titre ne se décale
+/// pas).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn caption_icon(window: &Window) -> Option<Arc<Shape>> {
+    let shape = |handle: u32| get(handle).and_then(|cursor| cursor.shape());
+    let from_props =
+        [ICON_SMALL, ICON_BIG].iter().filter_map(|&which| window_icon(window, which)).find(|&handle| handle != 0);
+    if let Some(found) = from_props.and_then(shape) {
+        return Some(found);
+    }
+    if let Some(class) = &window.class {
+        if let Some(found) = [class.info.icon_sm, class.info.icon].into_iter().find_map(shape) {
+            return Some(found);
+        }
+    }
+    if window.state().ex_style & WS_EX_DLGMODALFRAME != 0 {
+        return None;
+    }
+    default_window_icon().and_then(shape)
+}
+
+/// Dessine `shape` à la taille de `rect` sur `surface`, dans `clip` (à
+/// l'écran) : DI_NORMAL comme le pointeur ; DI_IMAGE ses couleurs seules
+/// (le noir où elle est transparente) ; DI_MASK son masque AND (blanc où elle
+/// est transparente, noir ailleurs).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn draw_shape(surface: &mut Bitmap<'_>, shape: &Shape, rect: Rect, clip: Rect, flags: u32) {
+    let part = rect.intersect(&clip).intersect(&surface.bounds());
+    if part.is_empty() {
+        return;
+    }
+    let layout = surface.layout();
+    let (width, height) = ((rect.right - rect.left) as u32, (rect.bottom - rect.top) as u32);
+    for y in part.top..part.bottom {
+        for x in part.left..part.right {
+            let pixel = shape.scaled_pixel((x - rect.left) as u32, (y - rect.top) as u32, width, height);
+            let color = match (flags & di::NORMAL, pixel) {
+                (di::NORMAL, Pixel::Transparent) => continue,
+                (di::NORMAL, pixel) => {
+                    let screen = surface.pixel(x as u32, y as u32).unwrap_or(0);
+                    pixel.over(layout.color(screen))
+                }
+                (di::IMAGE, Pixel::Transparent) => ColorRef::rgb(0, 0, 0),
+                (di::IMAGE, Pixel::Opaque(color) | Pixel::Xor(color) | Pixel::Blend(color, _)) => color,
+                (_, Pixel::Transparent | Pixel::Xor(_)) => ColorRef::rgb(255, 255, 255),
+                (_, Pixel::Blend(_, 0)) => ColorRef::rgb(255, 255, 255),
+                _ => ColorRef::rgb(0, 0, 0),
+            };
+            surface.set_pixel(x as u32, y as u32, layout.pixel(color));
+        }
+    }
+}
+
+/// UserDrawIconEx : l'icône (ou le curseur) `handle` dessinée dans le DC
+/// `hdc` en (`x`, `y`), à `width` × `height` (0 : sa taille, ou celle du
+/// système avec DI_DEFAULTSIZE), selon `flags` (DI_NORMAL, DI_IMAGE,
+/// DI_MASK), là où le DC peint. `Ok(false)` pour un DC qui n'est pas au
+/// processus ; `Err` : l'erreur de Win32 (`ERROR_INVALID_CURSOR_HANDLE`).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn draw_icon_ex(
+    hdc: u32,
+    (x, y): (i32, i32),
+    handle: u32,
+    (width, height): (i32, i32),
+    flags: u32,
+) -> Result<bool, u32> {
+    let Some(cursor) = get(handle) else { return Err(abi::winerror::ERROR_INVALID_CURSOR_HANDLE) };
+    let (Some(shape), Some((cx, cy))) = (cursor.shape(), cursor.size()) else {
+        return Err(abi::winerror::ERROR_INVALID_CURSOR_HANDLE);
+    };
+    let Some(dc) = crate::gdi::dc::lock(hdc) else { return Ok(false) };
+    let default = flags & di::DEFAULTSIZE != 0;
+    let width = match width {
+        0 if default => crate::metrics::get(abi::user::sm::CXICON),
+        0 => cx as i32,
+        width => width,
+    };
+    let height = match height {
+        0 if default => crate::metrics::get(abi::user::sm::CYICON),
+        0 => cy as i32,
+        height => height,
+    };
+    if width <= 0 || height <= 0 {
+        return Ok(true);
+    }
+    let flags = if flags & di::NORMAL == 0 { di::NORMAL } else { flags };
+    let state = dc.state();
+    let (ox, oy) = crate::gdi::dc::logical_origin(&state, None);
+    let rect = Rect::new(x + ox, y + oy, x + ox + width, y + oy + height);
+    let clip: Vec<Rect> = state.rao().rects().to_vec();
+    state.draw(|surface| {
+        for &visible in &clip {
+            draw_shape(surface, &shape, rect, visible, flags);
+        }
+    });
+    Ok(true)
+}
+
 /// Le thread (son adresse du serveur) dont l'écran montre le curseur : celui
 /// de la fenêtre sous le pointeur, ou qui a la capture.
 static POINTER_THREAD: AtomicU32 = AtomicU32::new(0);
@@ -633,6 +881,28 @@ mod tests {
             Pixel::Blend(ColorRef::rgb(0, 0, 0), 128).over(ColorRef::rgb(255, 255, 255)),
             ColorRef::rgb(127, 127, 127)
         );
+    }
+
+    #[test]
+    fn a_shape_is_drawn_at_the_size_asked_for() {
+        let (red, blue) = (ColorRef::rgb(255, 0, 0), ColorRef::rgb(0, 0, 255));
+        // 2 × 1: red, then transparent; drawn at 4 × 2.
+        let shape =
+            Shape { width: 2, height: 1, hotspot: (0, 0), pixels: alloc::vec![Pixel::Opaque(red), Pixel::Transparent] };
+        let layout = PixelLayout::Bgrx;
+        let mut pixels = alloc::vec![layout.pixel(blue); 6 * 3];
+        let mut surface = Bitmap::new(&mut pixels, 6, 3, 6, layout).unwrap();
+        let rect = Rect::new(1, 1, 5, 3);
+        draw_shape(&mut surface, &shape, rect, Rect::new(0, 0, 6, 3), di::NORMAL);
+        let at = |surface: &Bitmap<'_>, x, y| layout.color(surface.pixel(x, y).unwrap());
+        assert_eq!([at(&surface, 1, 1), at(&surface, 2, 2)], [red, red], "the first source column, twice");
+        assert_eq!([at(&surface, 3, 1), at(&surface, 4, 2)], [blue, blue], "transparent: the screen stays");
+        assert_eq!(at(&surface, 0, 1), blue, "outside the rectangle");
+        draw_shape(&mut surface, &shape, rect, Rect::new(0, 0, 3, 3), di::IMAGE);
+        assert_eq!([at(&surface, 2, 1), at(&surface, 3, 1)], [red, blue], "clipped at x 3");
+        draw_shape(&mut surface, &shape, rect, Rect::new(0, 0, 6, 3), di::MASK);
+        let (black, white) = (ColorRef::rgb(0, 0, 0), ColorRef::rgb(255, 255, 255));
+        assert_eq!([at(&surface, 1, 1), at(&surface, 4, 1)], [black, white], "the AND mask");
     }
 
     #[test]

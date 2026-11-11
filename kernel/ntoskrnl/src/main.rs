@@ -2365,7 +2365,7 @@ fn early_exit_self_test() {
 fn loader_services_self_test() {
     use abi::ntstatus::{
         NtStatus, STATUS_ACCESS_VIOLATION, STATUS_DATATYPE_MISALIGNMENT, STATUS_INFO_LENGTH_MISMATCH,
-        STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_NOT_COMMITTED, STATUS_NOT_IMPLEMENTED,
+        STATUS_INVALID_INFO_CLASS, STATUS_INVALID_PAGE_PROTECTION, STATUS_INVALID_PARAMETER, STATUS_NOT_COMMITTED,
         STATUS_SUCCESS, STATUS_WAIT_0,
     };
     use abi::process::NT_CURRENT_PROCESS;
@@ -2562,7 +2562,7 @@ fn loader_services_self_test() {
         assert_eq!(bits & KF_FAST_SYSCALL != 0, intel, "SYSENTER on Intel only (ADR-004)");
         assert_eq!(bits & KF_NX_ENABLED != 0, nx, "NX as EFER has it");
     }
-    assert_eq!(status(UNKNOWN_CLASS), STATUS_NOT_IMPLEMENTED, "a class without implementation");
+    assert_eq!(status(UNKNOWN_CLASS), STATUS_INVALID_INFO_CLASS, "a class without implementation");
     let pages = read(PAGES);
     assert_ne!(pages, 0, "NtAllocateVirtualMemory");
     assert_eq!(

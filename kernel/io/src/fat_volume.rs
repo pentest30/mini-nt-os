@@ -72,8 +72,11 @@ pub struct FatMount {
 pub struct VolumeLabel {
     /// Son numéro de série (BS_VolID).
     pub serial: u32,
-    /// Le nom de son entrée de volume, à la racine ; vide sans elle.
-    pub label: String,
+    /// Son nom, en UTF-16 tel quel (FileFsVolumeInformation le recopie) :
+    /// celui de l'entrée de volume de la racine pour FAT, vide sans elle ;
+    /// `$VOLUME_NAME` pour NTFS, qui accepte toute suite de 16 bits (un
+    /// demi-caractère isolé compris).
+    pub label: Vec<u16>,
 }
 
 /// La place d'un volume, en clusters (FileFsSizeInformation).
@@ -180,7 +183,8 @@ impl FatMount {
     }
 
     /// Son numéro de série et son nom (l'entrée de volume de la racine,
-    /// sans les espaces de la fin).
+    /// sans les espaces de la fin ; chaque octet est un caractère de 0 à 255,
+    /// comme avant).
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
@@ -189,12 +193,15 @@ impl FatMount {
             let _guard = self.lock.lock();
             self.fat.dir_entries(self.fat.root_cluster()).map_err(device_error)?
         };
-        let label = entries
+        let mut label: Vec<u16> = entries
             .iter()
             .find(|entry| entry.attr & 0x08 != 0)
-            .map(|entry| entry.raw_name.iter().map(|&byte| char::from(byte)).collect::<String>())
+            .map(|entry| entry.raw_name.iter().map(|&byte| u16::from(byte)).collect())
             .unwrap_or_default();
-        Ok(VolumeLabel { serial: self.fat.bpb().volume_id, label: String::from(label.trim_end_matches(' ')) })
+        while label.last() == Some(&u16::from(b' ')) {
+            label.pop();
+        }
+        Ok(VolumeLabel { serial: self.fat.bpb().volume_id, label })
     }
 
     /// Sa place : ses clusters, dont ceux qui sont libres.

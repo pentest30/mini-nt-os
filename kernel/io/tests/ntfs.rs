@@ -86,7 +86,7 @@ fn real_ntfs_partition_uses_file_api_and_never_writes() {
     let volume = Arc::new(Volume::mount_partition(Box::new(partition), sectors).unwrap());
     assert_eq!(volume.filesystem_name(), "NTFS");
     assert!(volume.is_read_only());
-    assert_eq!(volume.label().unwrap().label, "MinoData");
+    assert_eq!(volume.label().unwrap().label, "MinoData".encode_utf16().collect::<Vec<_>>());
     assert!(volume.space().unwrap().free_clusters > 0);
     let file = File::open(&volume, "\\ÉTÉ.BIN").unwrap();
     assert_eq!(file.node().unwrap().size, expected.len() as u64);

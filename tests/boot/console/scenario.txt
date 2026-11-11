@@ -49,7 +49,11 @@ expect = [console] CONSHOW1.EXE started
 expect = [console] done
 expect = [conshow] WriteConsoleW: 1 (0), 14 characters
 expect = [conshow] the console window: visible
-expect = [conshow] GetWindowRect: 23 23 691 455, GetClientRect: 0 0 656 400
+# consrv sizes its window for 80 columns of 8 pixels and its vertical
+# scroll bar (conwnd.c: the buffer is taller than the window, Width +=
+# SM_CXVSCROLL, ShowScrollBar): the bar takes 16 pixels of the 656 inside
+# the frame and the client edge.
+expect = [conshow] GetWindowRect: 23 23 691 455, GetClientRect: 0 0 640 400
 expect = [conshow] the leader in the window: this process, this thread
 expect = [conshow] waiting
 expect = [boot] SOFTWARE hive mounted at \REGISTRY\MACHINE\SOFTWARE

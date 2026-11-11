@@ -65,6 +65,12 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "c_437.nls",
         "l_intl.nls",
         "c_20127.nls",
+        // Les pages de code des apitests (SetupLocale : RtlGenerate8dot3Name,
+        // les OemString/OemN — 850, 775, 932, 10000).
+        "c_850.nls",
+        "c_775.nls",
+        "c_932.nls",
+        "c_10000.nls",
         "smss.exe",
         "config/system",
         "config/software",

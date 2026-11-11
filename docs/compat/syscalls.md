@@ -8,8 +8,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 125 | 296 |
-| win32k | 128 | 737 |
+| ntoskrnl | 127 | 296 |
+| win32k | 135 | 737 |
 
 ## ntoskrnl
 
@@ -199,7 +199,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00b5` | `NtQuerySystemInformation` | 4 | ✅ |
 | `0x00b6` | `NtQuerySystemTime` | 1 | ✅ |
 | `0x00b7` | `NtQueryTimer` | 5 |  |
-| `0x00b8` | `NtQueryTimerResolution` | 3 |  |
+| `0x00b8` | `NtQueryTimerResolution` | 3 | ✅ |
 | `0x00b9` | `NtQueryValueKey` | 6 | ✅ |
 | `0x00ba` | `NtQueryVirtualMemory` | 6 | ✅ |
 | `0x00bb` | `NtQueryVolumeInformationFile` | 5 | ✅ |
@@ -269,7 +269,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x00fb` | `NtSetSystemTime` | 2 |  |
 | `0x00fc` | `NtSetThreadExecutionState` | 2 |  |
 | `0x00fd` | `NtSetTimer` | 7 |  |
-| `0x00fe` | `NtSetTimerResolution` | 3 |  |
+| `0x00fe` | `NtSetTimerResolution` | 3 | ✅ |
 | `0x00ff` | `NtSetUuidSeed` | 1 |  |
 | `0x0100` | `NtSetValueKey` | 6 | ✅ |
 | `0x0101` | `NtSetVolumeInformationFile` | 5 |  |
@@ -678,11 +678,11 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1167` | `NtUserDrawAnimatedRects` | 4 |  |
 | `0x1168` | `NtUserDrawCaption` | 4 |  |
 | `0x1169` | `NtUserDrawCaptionTemp` | 7 |  |
-| `0x116a` | `NtUserDrawIconEx` | 11 |  |
+| `0x116a` | `NtUserDrawIconEx` | 11 | ✅ |
 | `0x116b` | `NtUserDrawMenuBarTemp` | 5 |  |
 | `0x116c` | `NtUserEmptyClipboard` | 0 |  |
 | `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
-| `0x116e` | `NtUserEnableScrollBar` | 3 |  |
+| `0x116e` | `NtUserEnableScrollBar` | 3 | ✅ |
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
 | `0x1170` | `NtUserEndMenu` | 0 |  |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
@@ -747,7 +747,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ac` | `NtUserGetRawInputDeviceInfo` | 4 |  |
 | `0x11ad` | `NtUserGetRawInputDeviceList` | 3 |  |
 | `0x11ae` | `NtUserGetRegisteredRawInputDevices` | 3 |  |
-| `0x11af` | `NtUserGetScrollBarInfo` | 3 |  |
+| `0x11af` | `NtUserGetScrollBarInfo` | 3 | ✅ |
 | `0x11b0` | `NtUserGetSystemMenu` | 2 |  |
 | `0x11b1` | `NtUserGetThreadDesktop` | 2 |  |
 | `0x11b2` | `NtUserGetThreadState` | 1 | ✅ |
@@ -812,7 +812,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ed` | `NtUserRemoveProp` | 2 |  |
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
-| `0x11f0` | `NtUserSBGetParms` | 4 |  |
+| `0x11f0` | `NtUserSBGetParms` | 4 | ✅ |
 | `0x11f1` | `NtUserScrollDC` | 7 |  |
 | `0x11f2` | `NtUserScrollWindowEx` | 8 |  |
 | `0x11f3` | `NtUserSelectPalette` | 3 |  |
@@ -845,7 +845,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x120e` | `NtUserSetParent` | 2 |  |
 | `0x120f` | `NtUserSetProcessWindowStation` | 1 | ✅ |
 | `0x1210` | `NtUserSetProp` | 3 | ✅ |
-| `0x1211` | `NtUserSetScrollInfo` | 4 |  |
+| `0x1211` | `NtUserSetScrollInfo` | 4 | ✅ |
 | `0x1212` | `NtUserSetShellWindowEx` | 2 |  |
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
 | `0x1214` | `NtUserSetSystemCursor` | 2 | ✅ |
@@ -866,7 +866,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1223` | `NtUserSetWindowWord` | 3 |  |
 | `0x1224` | `NtUserSetWinEventHook` | 8 |  |
 | `0x1225` | `NtUserShowCaret` | 1 |  |
-| `0x1226` | `NtUserShowScrollBar` | 3 |  |
+| `0x1226` | `NtUserShowScrollBar` | 3 | ✅ |
 | `0x1227` | `NtUserShowWindow` | 2 | ✅ |
 | `0x1228` | `NtUserShowWindowAsync` | 2 | ✅ |
 | `0x1229` | `NtUserSoundSentry` | 0 |  |
@@ -995,7 +995,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x12a4` | `NtUserMonitorFromPoint` | 3 | ✅ |
 | `0x12a5` | `NtUserMonitorFromRect` | 2 | ✅ |
 | `0x12a6` | `NtUserMonitorFromWindow` | 2 | ✅ |
-| `0x12a7` | `NtUserSetScrollBarInfo` | 3 |  |
+| `0x12a7` | `NtUserSetScrollBarInfo` | 3 | ✅ |
 | `0x12a8` | `NtGdiDdDDICreateDCFromMemory` | 1 |  |
 | `0x12a9` | `NtGdiDdDDIDestroyDCFromMemory` | 1 |  |
 | `0x12aa` | `NtGdiDdDDICheckExclusiveOwnership` | 0 |  |

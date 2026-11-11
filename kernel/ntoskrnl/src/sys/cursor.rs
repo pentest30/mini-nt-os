@@ -1,7 +1,8 @@
 //! Les services des curseurs et des icônes (`win32k::cursor`) :
 //! NtUserFindExistingCursorIcon, NtUserSetCursorIconData,
 //! NtUserDestroyCursor, NtUserSetCursor, NtUserSetSystemCursor,
-//! NtUserGetIconSize, et NtUserCallOneParam(CREATEEMPTYCUROBJECT).
+//! NtUserGetIconSize, NtUserDrawIconEx, et
+//! NtUserCallOneParam(CREATEEMPTYCUROBJECT).
 
 use alloc::vec::Vec;
 
@@ -129,6 +130,26 @@ pub(super) fn nt_user_get_icon_size(arguments: &[u32]) -> NtStatus {
     };
     let written = UserPtr::<u32>::new(cx).write(&width).and_then(|()| UserPtr::<u32>::new(cy).write(&height));
     NtStatus(u32::from(written.is_ok()))
+}
+
+/// NtUserDrawIconEx(hdc, xLeft, yTop, hIcon, cxWidth, cyWidth,
+/// istepIfAniCur, hbrFlickerFreeDraw, diFlags, bMetaHDC, pDIXData) : BOOL,
+/// l'icône dessinée dans le DC (`win32k::cursor::draw_icon_ex`) ; FALSE
+/// pour une icône qui n'existe pas (`ERROR_INVALID_CURSOR_HANDLE`) ou un DC
+/// qui n'est pas au processus. Le pinceau qui efface le fond n'est pas
+/// encore suivi (journalisé une fois).
+pub(super) fn nt_user_draw_icon_ex(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, icon, width, height, _step, brush, flags] = arguments[..9] else { unreachable!("11 arguments") };
+    if brush != 0 {
+        static REPORTED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        if !REPORTED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            log::warn!("sys: NtUserDrawIconEx with a brush to erase the background: not yet (the icon is drawn alone)");
+        }
+    }
+    match win32k::cursor::draw_icon_ex(hdc, (x as i32, y as i32), icon, (width as i32, height as i32), flags) {
+        Ok(drawn) => NtStatus(u32::from(drawn)),
+        Err(error) => fail(error, 0),
+    }
 }
 
 /// NtUserCallOneParam(animated, ONEPARAM_ROUTINE_CREATEEMPTYCUROBJECT) :

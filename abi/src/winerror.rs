@@ -45,6 +45,8 @@ pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_INVALID_MENU_HANDLE: u32 = 1401;
 /// ERROR_INVALID_CURSOR_HANDLE.
 pub const ERROR_INVALID_CURSOR_HANDLE: u32 = 1402;
+/// The window has no scroll bars (GetScrollInfo before any).
+pub const ERROR_NO_SCROLLBARS: u32 = 1447;
 /// ERROR_TLW_WITH_WSCHILD: a child window without a parent.
 pub const ERROR_TLW_WITH_WSCHILD: u32 = 1406;
 /// ERROR_CANNOT_FIND_WND_CLASS.

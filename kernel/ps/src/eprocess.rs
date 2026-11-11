@@ -210,6 +210,9 @@ pub struct EProcess {
     /// BreakOnTermination : un processus critique, dont la fin arrête le
     /// système (`crate::exit`).
     critical: AtomicBool,
+    /// NtSetTimerResolution a posé une résolution pour ce processus (le
+    /// temps système n'en tient pas compte — le temporisateur est fixe).
+    timer_resolution_set: AtomicBool,
     /// La priorité de base de ses threads (ProcessBasePriority).
     base_priority: AtomicU8,
     /// DefaultHardErrorProcessing : les `SEM_*` du processus, ceux de son
@@ -270,6 +273,7 @@ impl EProcess {
                 token: KSpinLock::new(token),
                 cookie: AtomicU32::new(0),
                 critical: AtomicBool::new(false),
+                timer_resolution_set: AtomicBool::new(false),
                 base_priority: AtomicU8::new(ke::sched::NORMAL_PRIORITY),
                 hard_error_mode: AtomicU32::new(hard_error_mode),
                 win32_process: KSpinLock::new(None),
@@ -473,6 +477,22 @@ impl EProcess {
     /// Tout niveau.
     pub fn is_critical(&self) -> bool {
         self.critical.load(Ordering::Acquire)
+    }
+
+    /// NtSetTimerResolution a-t-il posé une résolution pour ce processus ?
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn timer_resolution_set(&self) -> bool {
+        self.timer_resolution_set.load(Ordering::Acquire)
+    }
+
+    /// Pose (ou retire) la résolution du temporisateur pour ce processus.
+    ///
+    /// # IRQL
+    /// Tout niveau.
+    pub fn set_timer_resolution(&self, set: bool) {
+        self.timer_resolution_set.store(set, Ordering::Release);
     }
 
     /// NtSetInformationProcess(`ProcessBreakOnTermination`) : le rend
