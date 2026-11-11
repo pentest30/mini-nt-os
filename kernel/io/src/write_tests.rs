@@ -401,7 +401,7 @@ fn a_volume_describes_itself_and_dates_what_it_writes() {
     let volume = Volume::mount(alloc::boxed::Box::new(Shared(disk.clone()))).unwrap().with_clock(now);
     let volume = alloc::sync::Arc::new(volume);
 
-    assert_eq!(volume.label(), Ok(VolumeLabel { serial: 0x4D49_4E4F, label: "MINO DISK".into() }));
+    assert_eq!(volume.label(), Ok(VolumeLabel { serial: 0x4D49_4E4F, label: "MINO DISK".encode_utf16().collect() }));
     let empty = Space {
         total_clusters: u64::from(clusters),
         free_clusters: u64::from(clusters - 1),

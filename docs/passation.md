@@ -1,5 +1,11 @@
 # Notes de passation
 
+- **Le nom d'un volume en UTF-16 tel quel** (`claude/new-session-696xfc`, après les barres de défilement) :
+  `io::VolumeLabel.label` devient un `Vec<u16>` ; NTFS rend `$VOLUME_NAME` sans le convertir (un surrogate isolé
+  faisait échouer FileFsVolumeInformation en `STATUS_FILE_CORRUPT_ERROR`, donc `vol` et l'en-tête de `dir`), FAT
+  donne chaque octet de son entrée de volume comme avant, `sys::file` recopie. Test hôte sur une image NTFS construite
+  par le test ([`compat/ntfs.md`](compat/ntfs.md)).
+
 - **Les barres de défilement des fenêtres** (`claude/new-session-696xfc`, sur main `b95a011` ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 17) : `win32k::scroll` (l'état des deux barres d'une
   fenêtre et leur `SBINFO` dans le tas du bureau, où `user32` lit GetScrollPos et GetScrollRange ; SetScrollInfo,
