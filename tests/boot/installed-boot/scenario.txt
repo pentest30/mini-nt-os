@@ -2,16 +2,16 @@
 #
 # Premier démarrage : depuis une vraie image GPT (`disk = installed` : son ESP
 # FAT32 tient le chargeur, le noyau et le ramdisk), avec un disque cible
-# vierge de 96 Mio en maître secondaire (`disk = target`). Le self-test du
+# vierge de 128 Mio en maître secondaire (`disk = target`). Le self-test du
 # moteur d'installation (feature test-install-reboot) prépare la cible, la
-# formate (ESP de 48 Mio, système de 46), copie les fichiers de boot de l'ESP
+# formate (ESP de 56 Mio, système de 71), copie les fichiers de boot de l'ESP
 # de démarrage vers la sienne (EFI/BOOT/BOOTX64.EFI, kernel.elf et fat.img,
 # le ramdisk de taille réelle avec l'espace utilisateur) et l'arbre du
 # ramdisk vers son volume système, vide les caches, puis redémarre.
 #
 # Second démarrage : depuis la cible seule, en maître primaire (`reboot =
 # target`) : le micrologiciel y trouve le chargeur, le chargeur le noyau et le
-# ramdisk, le noyau `C:` sur sa partition système (LBA 100352 ; celle de
+# ramdisk, le noyau `C:` sur sa partition système (LBA 116736 ; celle de
 # l'image d'installation commence ailleurs, son ESP suit la taille du
 # ramdisk). Le démarrage va au bout de la phase 1.
 #
@@ -28,12 +28,12 @@ cpus     = default, intel
 timeout  = 300
 
 # Premier démarrage : l'installation.
-expect = [m4] install: format: ESP 98304 sectors, system 96223 sectors, FAT32 mounted by the kernel
+expect = [m4] install: format: ESP 114688 sectors, system 145375 sectors, FAT32 mounted by the kernel
 expect = [m4] install: boot files: 3 files
 expect = bytes to disk 2
 expect = [m4] install: the target is installed; resetting to boot from it
 # Second démarrage : depuis la cible.
-expect = Io: GPT system partition 2: LBA 100352
+expect = Io: GPT system partition 2: LBA 116736
 expect = [boot] Io: system disk \Device\HarddiskVolume1 (ATA, primary master, FAT32
 expect = kernel: phase 1 done
 

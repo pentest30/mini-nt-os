@@ -90,7 +90,7 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
     extract().map_err(|e| format!("{}: {e}", image.display()))
 }
 
-/// Checks the installer's result on the 96 MiB disposable target: a
+/// Checks the installer's result on the 128 MiB disposable target: a
 /// canonical two-partition GPT with both copies valid, and — read back by
 /// the host's own FAT32 reader, independent of the kernel's — each volume
 /// walking whole, every file's chain intact (the DLLs with their MZ, the
@@ -103,15 +103,15 @@ pub fn extract(image: &Path) -> Result<PathBuf> {
 /// loader prefer the installed ESP while the installation medium is attached.
 pub fn verify_setup_target(image: &Path, ramdisk: &Path) -> Result<()> {
     let verify = || -> std::io::Result<()> {
-        const EXPECTED_BYTES: u64 = 96 * 1024 * 1024;
+        const EXPECTED_BYTES: u64 = 128 * 1024 * 1024;
         const ESP_FIRST: u64 = 2048;
-        // The plan of the kernel (io_manager::install): 48 MiB of ESP.
-        const ESP_SECTORS: u64 = 48 * 2048;
+        // The plan of the kernel (io_manager::install): 56 MiB of ESP.
+        const ESP_SECTORS: u64 = 56 * 2048;
 
         let mut disk = Disk(File::open(image)?);
         let bytes = disk.0.metadata()?.len();
         if bytes != EXPECTED_BYTES {
-            return Err(std::io::Error::other(format!("expected a 96 MiB target, got {bytes} bytes")));
+            return Err(std::io::Error::other(format!("expected a 128 MiB target, got {bytes} bytes")));
         }
         let sectors = bytes / 512;
         let (layout, source) =

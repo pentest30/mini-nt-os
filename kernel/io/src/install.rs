@@ -26,10 +26,13 @@ use crate::volume::{Node, Volume};
 
 /// Alignement GPT des partitions : 1 Mio sur des secteurs de 512 octets.
 const ALIGNMENT: u64 = 2048;
-/// La politique guidée réserve 48 Mio à l'ESP : le chargeur, le noyau et le
-/// ramdisk de démarrage (`fat.img`, 42,5 Mo avec l'espace utilisateur) que
-/// le disque installé charge comme l'image de développement.
-const ESP_SECTORS: u64 = 48 * 2048;
+/// La politique guidée réserve 56 Mio à l'ESP : le chargeur, le noyau et le
+/// ramdisk de démarrage (`fat.img`) que le disque installé charge comme
+/// l'image de développement. Le 2026-11-11, ces trois fichiers demandent
+/// 98 263 clusters d'un secteur (47,98 Mio) : une ESP de 48 Mio n'en a que
+/// 96 760 (47,25 Mio), celle de 56 Mio 112 892 (`docs/compat/io-install.md`,
+/// « Le plan agrandi »).
+const ESP_SECTORS: u64 = 56 * 2048;
 /// Numéro du maître primaire dans l'ABI.
 const PRIMARY_MASTER: u32 = 1;
 /// Numéro du maître secondaire dans l'ABI.
@@ -1006,7 +1009,7 @@ mod prepare_tests {
         let (esp, system) = format_disk(&mut disk, RamSectors::SECTORS, SECONDARY_MASTER, SETUP_DISK_CANDIDATE, token)
             .expect("the volumes format");
         assert_eq!(esp.total_sectors as u64, ESP_SECTORS, "the ESP of the plan");
-        // The rest of the disk, up to the backup GPT: 46 MiB of 96.
+        // The rest of the disk, up to the backup GPT: 39 MiB of 96.
         let system_sectors = RamSectors::SECTORS - 34 - (2048 + ESP_SECTORS) + 1;
         assert_eq!(system.total_sectors as u64, system_sectors, "the system volume of the plan");
         // Le secteur de boot de l'ESP : l'OEM de Mino et la signature, les

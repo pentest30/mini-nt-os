@@ -25,6 +25,10 @@ pub const SYSTEM_FLAGS_INFORMATION: u32 = 9;
 /// starts (MmSystemRangeStart), a ULONG_PTR.
 pub const SYSTEM_RANGE_START_INFORMATION: u32 = 50;
 
+/// SystemFirmwareTableInformation: the ACPI, SMBIOS and firmware tables that
+/// kernel32's EnumSystemFirmwareTables and GetSystemFirmwareTable read.
+pub const SYSTEM_FIRMWARE_TABLE_INFORMATION: u32 = 76;
+
 /// SystemPerformanceInformation: the CPU, memory and IO counters, the ones
 /// taskmgr's header and graphs read ([`SystemPerformanceInformation32`]).
 pub const SYSTEM_PERFORMANCE_INFORMATION: u32 = 2;

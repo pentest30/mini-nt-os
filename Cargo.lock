@@ -180,6 +180,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mkhive"
+version = "0.1.0"
+dependencies = [
+ "regf",
+]
+
+[[package]]
 name = "mm"
 version = "0.1.0"
 dependencies = [
@@ -533,5 +540,6 @@ version = "0.1.0"
 dependencies = [
  "fatfs",
  "gpt",
+ "mkhive",
  "pe",
 ]

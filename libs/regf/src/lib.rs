@@ -509,6 +509,25 @@ mod tests {
     }
 
     #[test]
+    fn a_hive_reads_back_into_the_tree_it_was_built_from() {
+        let file = sample();
+        let hive = Hive::parse(&file).expect("a hive");
+        let tree = KeyNode::read(&hive.root().unwrap()).expect("the tree");
+        assert_eq!(tree.name, "ROOT");
+        let names: Vec<_> = tree.subkeys.iter().map(|k| k.name.as_str()).collect();
+        assert_eq!(names, ["ControlSet001", "Select", "Ünïcödé"]);
+        let mut session = tree.clone();
+        let session = session.key_mut("ControlSet001\\Control\\Session Manager");
+        let values: Vec<_> = session.values.iter().map(|v| (v.name.as_str(), v.data_type)).collect();
+        assert_eq!(values, [("GlobalFlag", REG_DWORD), ("", REG_SZ), ("Sm", REG_BINARY)], "in their order");
+        assert_eq!(session.subkeys[0].values[0].data, sz("C:\\WINDOWS\\system32"), "data in a cell of its own");
+        // Written again, the hive is the same tree: a changed copy loses nothing.
+        let again = build(&tree, "SYSTEM");
+        let reread = KeyNode::read(&Hive::parse(&again).unwrap().root().unwrap()).unwrap();
+        assert_eq!(reread, tree);
+    }
+
+    #[test]
     fn classes_and_write_times_read_back() {
         let mut root = KeyNode::new("ROOT");
         root.last_written = 0x01D9_0000_1234_5678;

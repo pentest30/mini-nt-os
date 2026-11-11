@@ -429,3 +429,21 @@ Sous VirtualBox, voir [`vbox.md`](vbox.md) : l'installateur était tué en
 pleine copie (la sonde de `test-smss`), et le PIO lent ; les deux sont
 corrigés (copie en 17 s, disque installé démarré jusqu'à l'installateur en
 21 s).
+
+## Le plan agrandi (2026-11-10)
+
+L'ESP du plan guidé passe de 48 à 56 Mio (`io::install::ESP_SECTORS`), et la cible de test de 96 à 128 Mio
+(`disk = target`, `xtask::partition::verify_setup_target`) : l'ESP installée porte le chargeur, le noyau et
+`fat.img`, l'image entière du disque de démarrage, qui a grossi quand l'étape 27 de [`m5-csrss.md`](m5-csrss.md) y
+a mis `secur32.dll` et ses imports (`netapi32`, `iphlpapi`, `dhcpcsvc`), la ruche DEFAULT et `minoinit.exe` : la
+copie échouait (`STATUS_IO_DEVICE_ERROR`, un disque plein que `PrepareError::Io` ne distingue pas). Le compte, en Mio
+(2^20 octets), mesuré le 2026-11-11 après la fusion de main (qui ajoute quatre pages de code) : `fat.img` 48 256 000
+octets, `kernel.elf` 2 023 280, `BOOTX64.EFI` 29 696, soit 50 308 976 octets (47,98 Mio) ; l'ESP est formatée en
+clusters d'un secteur (`fatfs::format`), d'où 98 263 clusters de 512 octets avec la racine, `EFI` et `EFI/BOOT`
+(47,98 Mio, la perte du dernier cluster de chaque fichier comprise). Une ESP de 48 Mio (98 304 secteurs : 32
+réservés, deux FAT de 756 secteurs) n'a que 96 760 clusters de données (47,25 Mio) : il en manque 1 503 (0,73 Mio).
+Celle de 56 Mio (deux FAT de 882 secteurs) en a 112 892 (55,12 Mio), 14 629 de marge (7,14 Mio). Sur 128 Mio :
+ESP 2048..116735 (114688 secteurs), système 116736..262110 (145375 secteurs, 70 Mio). Une cible de 96 Mio reste
+acceptée par le plan (le système y garde 39 Mio, au-dessus du minimum de FAT32), mais l'arbre (43 Mo) ne s'y copie
+plus : le plan ne vérifie pas encore la place que demande la copie. Sous VirtualBox, la cible vierge
+(`target96-*.vhd`) est à refaire en 128 Mio.

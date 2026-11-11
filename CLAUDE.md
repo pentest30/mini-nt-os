@@ -384,6 +384,13 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (la copie du tampon va au thread de la fenêtre, ce que la procédure y écrit revient). `winlogon` lit alors la
   ruche du LiveCD (`Setup\SetupType`, `setup -mini`) et lance l'installation de ReactOS au lieu du logon : la
   couche Mino des ruches (ADR-012) est à trancher.
+  M5, étape 9, la couche Mino des ruches et le logon (étape 27, ADR-023 proposée) : `tools/mkhive` applique
+  `tools/mkhive/mino.inf` aux ruches épinglées à la construction du disque (`regf::builder::KeyNode::read`) ; le
+  premier démarrage est en mode installation (`samsrv` crée les comptes, `winlogon` lance `minoinit.exe` :
+  profils, `NTUSER.DAT` de `Default User`, `SetupType` = 0, redémarrage), le second va au logon. Les ports de
+  complétion d'E/S (`io_manager::completion`, `sys::completion`), DEFAULT en `\REGISTRY\USER\.DEFAULT`,
+  `SystemDrive` donné à `smss`, les répertoires FAT à nom long, NtAllocateLocallyUniqueId ; scénario `logon` :
+  `msgina` ouvre la session d'`Administrator`, `lsasrv` s'arrête à NtCreateToken.
   Le dernier critère du M5, les apitests de ReactOS ([`docs/compat/m5-rostests.md`](docs/compat/m5-rostests.md)) :
   `cargo xtask rostests-fetch` clone l'arbre 0.4.16 (sans lui, les scénarios sont sautés) ; `xtask/src/rostests.rs`
   compile les modules `ntdll` et `kernel32` en un pilote (commande initiale de `smss` à la place de winlogon, il
