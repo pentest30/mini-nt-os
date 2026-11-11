@@ -29,11 +29,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::user::vk::{VK_ESCAPE, VK_RETURN};
 use abi::user::{
-    Msg32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP,
-    HTTOPLEFT, HTTOPRIGHT, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, SWP_NOACTIVATE,
-    SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE,
-    WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SYSCOMMAND, WS_CHILD,
-    WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    Msg32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLOSE, HTHSCROLL, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
+    HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, SC_CLOSE, SC_HSCROLL, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE,
+    SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_KEYDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SYSCOMMAND, WS_CHILD, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
 };
 
 use crate::gdi::dib::Rect;
@@ -260,6 +260,13 @@ pub fn nc_lbutton_down(window: &Arc<Window>, hit: u32, lparam: u32) {
             let _ = crate::window::send_message(window, WM_SYSCOMMAND, command, LParam::Value(lparam));
         }
         HTCLOSE | HTMINBUTTON | HTMAXBUTTON => track_button(window, hit),
+        // user32 follows the mouse on the bar (DefWndTrackScrollBar).
+        HTHSCROLL => {
+            let _ = crate::window::send_message(window, WM_SYSCOMMAND, SC_HSCROLL + HTHSCROLL, LParam::Value(lparam));
+        }
+        HTVSCROLL => {
+            let _ = crate::window::send_message(window, WM_SYSCOMMAND, SC_VSCROLL + HTVSCROLL, LParam::Value(lparam));
+        }
         _ => {}
     }
 }
@@ -284,6 +291,9 @@ pub fn sys_command(window: &Arc<Window>, wparam: u32, lparam: u32) {
         SC_RESTORE => {
             crate::winpos::show_window(window, SW_RESTORE);
         }
+        // user32 follows the mouse on a scroll bar itself; it gives the
+        // kernel these only under a CBT hook.
+        SC_VSCROLL | SC_HSCROLL => {}
         _ => {
             static REPORTED: AtomicBool = AtomicBool::new(false);
             report_missing("WM_SYSCOMMAND other than move, size, close, minimize, maximize and restore", &REPORTED);

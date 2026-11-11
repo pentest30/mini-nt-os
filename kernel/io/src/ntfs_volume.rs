@@ -7,7 +7,7 @@ use abi::{
     file::{FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL},
     ntstatus::*,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 use ntfs::{Error, FileReference, ReadAt};
 
 pub(crate) struct NtfsMount {
@@ -174,9 +174,12 @@ impl NtfsMount {
         }
         Ok(listed)
     }
+    /// The serial number and `$VOLUME_NAME`, its UTF-16 as stored: NTFS
+    /// accepts any 16-bit units, an unpaired surrogate too, which a
+    /// conversion to `String` would refuse (as directory names are kept).
     pub(crate) fn label(&self) -> Result<VolumeLabel, NtStatus> {
         let mut v = self.reader()?;
-        let label = String::from_utf16(&v.volume_label().map_err(status)?).map_err(|_| STATUS_FILE_CORRUPT_ERROR)?;
+        let label = v.volume_label().map_err(status)?;
         let mut boot = [0; 512];
         self.device.read_sector(0, &mut boot).map_err(|_| STATUS_IO_DEVICE_ERROR)?;
         Ok(VolumeLabel { label, serial: u32::from_le_bytes(boot[72..76].try_into().expect("boot sector")) })
@@ -212,6 +215,102 @@ mod tests {
             Ok(())
         }
     }
+    /// A read-only disk image.
+    struct Image(alloc::vec::Vec<u8>);
+    impl crate::fat::BlockDevice for Image {
+        fn sector_size(&self) -> u32 {
+            512
+        }
+        fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), crate::fat::FatError> {
+            let at = usize::try_from(lba * 512).map_err(|_| crate::fat::FatError::Io)?;
+            out.copy_from_slice(self.0.get(at..at + 512).ok_or(crate::fat::FatError::Io)?);
+            Ok(())
+        }
+    }
+
+    fn put(bytes: &mut [u8], at: usize, value: &[u8]) {
+        bytes[at..at + value.len()].copy_from_slice(value);
+    }
+
+    /// A FILE record of 1024 bytes, in use, holding `attribute`, with its
+    /// update sequence (one number, then the saved end of each sector).
+    fn file_record(attribute: &[u8]) -> alloc::vec::Vec<u8> {
+        let mut b = alloc::vec![0; 1024];
+        b[..4].copy_from_slice(b"FILE");
+        put(&mut b, 4, &48u16.to_le_bytes());
+        put(&mut b, 6, &3u16.to_le_bytes());
+        put(&mut b, 16, &1u16.to_le_bytes());
+        put(&mut b, 20, &56u16.to_le_bytes());
+        put(&mut b, 22, &1u16.to_le_bytes());
+        put(&mut b, 24, &((56 + attribute.len() + 8) as u32).to_le_bytes());
+        put(&mut b, 28, &1024u32.to_le_bytes());
+        put(&mut b, 56, attribute);
+        put(&mut b, 56 + attribute.len(), &u32::MAX.to_le_bytes());
+        put(&mut b, 48, &0x5A5Au16.to_le_bytes());
+        for (end, slot) in [(510, 50), (1022, 52)] {
+            let saved = [b[end], b[end + 1]];
+            put(&mut b, slot, &saved);
+            put(&mut b, end, &0x5A5Au16.to_le_bytes());
+        }
+        b
+    }
+
+    /// A 64-sector volume of 512-byte clusters: its boot sector (serial
+    /// `serial`), an MFT of four records at cluster 4 (the first maps it),
+    /// and `$Volume` (record 3) whose `$VOLUME_NAME` is `name`.
+    fn volume_image(serial: u32, name: &[u16]) -> alloc::vec::Vec<u8> {
+        let mut b = alloc::vec![0; 64 * 512];
+        put(&mut b, 3, b"NTFS    ");
+        put(&mut b, 11, &512u16.to_le_bytes());
+        b[13] = 1;
+        put(&mut b, 40, &64u64.to_le_bytes());
+        put(&mut b, 48, &4u64.to_le_bytes());
+        put(&mut b, 56, &20u64.to_le_bytes());
+        b[64] = 0xF6; // FILE records of 2^10 bytes.
+        put(&mut b, 72, &serial.to_le_bytes());
+        put(&mut b, 510, &[0x55, 0xAA]);
+        // $MFT's $DATA: non-resident, 8 clusters from cluster 4.
+        let mut data = alloc::vec![0; 72];
+        put(&mut data, 0, &0x80u32.to_le_bytes());
+        put(&mut data, 4, &72u32.to_le_bytes());
+        data[8] = 1;
+        put(&mut data, 24, &7u64.to_le_bytes());
+        put(&mut data, 32, &64u16.to_le_bytes());
+        for at in [40, 48, 56] {
+            put(&mut data, at, &4096u64.to_le_bytes());
+        }
+        put(&mut data, 64, &[0x11, 8, 4, 0]);
+        put(&mut b, 4 * 512, &file_record(&data));
+        // $VOLUME_NAME: resident.
+        let value: alloc::vec::Vec<u8> = name.iter().flat_map(|unit| unit.to_le_bytes()).collect();
+        let length = (24 + value.len() + 7) & !7;
+        let mut attribute = alloc::vec![0; length];
+        put(&mut attribute, 0, &0x60u32.to_le_bytes());
+        put(&mut attribute, 4, &(length as u32).to_le_bytes());
+        put(&mut attribute, 16, &(value.len() as u32).to_le_bytes());
+        put(&mut attribute, 20, &24u16.to_le_bytes());
+        put(&mut attribute, 24, &value);
+        put(&mut b, 4 * 512 + 3 * 1024, &file_record(&attribute));
+        b
+    }
+
+    #[test]
+    fn the_volume_name_keeps_its_utf16_as_stored() {
+        // An unpaired surrogate first: valid on NTFS, refused by
+        // String::from_utf16.
+        let name = [0xD800, u16::from(b'M'), u16::from(b'i'), u16::from(b'n'), u16::from(b'o')];
+        let mount = NtfsMount {
+            device: Box::new(Image(volume_image(0x4D49_4E4F, &name))),
+            bytes: 64 * 512,
+            cluster: 512,
+            root: Node::default(),
+        };
+        assert_eq!(mount.label(), Ok(VolumeLabel { serial: 0x4D49_4E4F, label: name.to_vec() }));
+        let plain: alloc::vec::Vec<u16> = "MinoData".encode_utf16().collect();
+        let mount = NtfsMount { device: Box::new(Image(volume_image(7, &plain))), ..mount };
+        assert_eq!(mount.label(), Ok(VolumeLabel { serial: 7, label: plain }));
+    }
+
     #[test]
     fn byte_reader_handles_unaligned_reads_and_checks_bounds_before_io() {
         let calls = Arc::new(AtomicUsize::new(0));

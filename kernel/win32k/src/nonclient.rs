@@ -20,9 +20,12 @@
 //! style qui le permet. Les glyphes viennent de `crate::font`, par la
 //! fonction [`Layout`] que reçoit [`frame_ops`].
 //!
-//! Pas encore (ce que rend [`Unpainted`]) : l'icône de la fenêtre (icônes),
-//! les barres de défilement, la barre de menus ; le texte et les symboles
-//! sans leurs polices.
+//! Les barres de défilement (IntDrawScrollBar) viennent de `crate::scroll`
+//! (leurs flèches, leur fond, leur curseur ; le coin entre deux barres, la
+//! poignée de taille).
+//!
+//! Pas encore (ce que rend [`Unpainted`]) : le texte et les symboles sans
+//! leurs polices ; les barres de défilement sans leur `SBINFO`.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -55,7 +58,8 @@ const MENU_ITEM_GAP: i32 = 8;
 pub struct Unpainted {
     /// Le texte du titre ou les symboles des boutons, sans leurs polices.
     pub text: bool,
-    /// Les barres de défilement.
+    /// Les barres de défilement, sans leur état ([`frame_ops`] ne l'a pas
+    /// reçu).
     pub scroll_bars: bool,
 }
 
@@ -98,38 +102,61 @@ fn frame(
     }
 }
 
-/// Le symbole Marlett `symbol` d'un bouton `button` (UITOOLS95_DrawFrameCaption) :
-/// dans son carré moins un pixel de chaque côté, une police dont la cellule
-/// a sa hauteur, monochrome ; grisé (`inactive`) : une ombre en
-/// `COLOR_BTNHIGHLIGHT` décalée d'un pixel, puis le symbole en
+/// UITOOLS_MakeSquareRect : le carré centré dans `rect`, du côté de sa plus
+/// petite dimension.
+pub(crate) fn square_in(rect: Rect) -> Rect {
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    let side = width.min(height);
+    let (left, top) = (rect.left + (width - side) / 2, rect.top + (height - side) / 2);
+    Rect::new(left, top, left + side, top + side)
+}
+
+/// Le symbole Marlett `symbol` dans la cellule `cell` (TextOut à son coin,
+/// une police dont la cellule a sa hauteur, monochrome), en `color`, décalé
+/// de `offset` pixels à droite et en bas, coupé à `clip`. Faux sans la
+/// police.
+pub(crate) fn marlett(
+    cell: Rect,
+    symbol: char,
+    color: ColorRef,
+    offset: i32,
+    clip: Rect,
+    layout: Layout,
+    ops: &mut Vec<Op>,
+) -> bool {
+    let Some(run) = layout(MARLETT, cell.bottom - cell.top, &[symbol as u16], None, Quality::Monochrome) else {
+        return false;
+    };
+    let baseline = cell.top + run.metrics.ascent;
+    for glyph in run.glyphs {
+        let at = (cell.left + glyph.x + glyph.bitmap.left + offset, baseline - glyph.bitmap.top + offset);
+        ops.push(Op::Glyph { at, bitmap: glyph.bitmap, color, clip });
+    }
+    true
+}
+
+/// Le symbole Marlett `symbol` d'un bouton `button` (UITOOLS95_DrawFrameCaption,
+/// UITOOLS95_DrawFrameScroll) : dans son carré moins un pixel de chaque
+/// côté, décalé d'un pixel s'il est enfoncé (`pushed`) ; grisé (`inactive`) :
+/// une ombre en `COLOR_BTNHIGHLIGHT` décalée d'un pixel, puis le symbole en
 /// `COLOR_BTNSHADOW`, sinon en `COLOR_BTNTEXT`. Faux sans la police.
-fn button_symbol(
+pub(crate) fn button_symbol(
     button: Rect,
     symbol: char,
     inactive: bool,
+    pushed: bool,
     c: &impl Fn(usize) -> ColorRef,
     layout: Layout,
     ops: &mut Vec<Op>,
 ) -> bool {
-    let (width, height) = (button.right - button.left, button.bottom - button.top);
-    let side = width.min(height);
-    let (left, top) = (button.left + (width - side) / 2, button.top + (height - side) / 2);
-    let square = Rect::new(left + 1, top + 1, left + side - 1, top + side - 1);
-    let Some(run) = layout(MARLETT, square.bottom - square.top, &[symbol as u16], None, Quality::Monochrome) else {
+    let square = square_in(button);
+    let shift = i32::from(pushed);
+    let cell =
+        Rect::new(square.left + 1 + shift, square.top + 1 + shift, square.right - 1 + shift, square.bottom - 1 + shift);
+    if inactive && !marlett(cell, symbol, c(color::BTNHIGHLIGHT), 1, button, layout, ops) {
         return false;
-    };
-    let baseline = square.top + run.metrics.ascent;
-    let mut draw = |offset: i32, color: ColorRef| {
-        for glyph in &run.glyphs {
-            let at = (square.left + glyph.x + glyph.bitmap.left + offset, baseline - glyph.bitmap.top + offset);
-            ops.push(Op::Glyph { at, bitmap: glyph.bitmap.clone(), color, clip: button });
-        }
-    };
-    if inactive {
-        draw(1, c(color::BTNHIGHLIGHT));
     }
-    draw(0, c(if inactive { color::BTNSHADOW } else { color::BTNTEXT }));
-    true
+    marlett(cell, symbol, c(if inactive { color::BTNSHADOW } else { color::BTNTEXT }), 0, button, layout, ops)
 }
 
 /// Les boutons du titre `caption` (UserDrawCaptionButton) : fermer, puis
@@ -146,7 +173,7 @@ fn caption_buttons(
 ) -> bool {
     let button = |rect: Rect, symbol: char, inactive: bool, ops: &mut Vec<Op>| {
         draw_edge(&mut rect.clone(), EDGE_RAISED, BF_RECT | BF_MIDDLE | BF_SOFT, c, ops);
-        button_symbol(rect, symbol, inactive, c, layout, ops)
+        button_symbol(rect, symbol, inactive, false, c, layout, ops)
     };
     let (cx, cy) = if ex_style & WS_EX_TOOLWINDOW != 0 {
         (m(sm::CXSMSIZE), m(sm::CYSMSIZE))
@@ -227,7 +254,10 @@ fn caption_text(
 /// (`icon`, NC_IconForWindow) va au début du titre d'une fenêtre qui a un
 /// menu système et n'est pas une fenêtre d'outils, à la taille SM_CXSMICON ×
 /// SM_CYSMICON, centrée dans un carré de la hauteur du titre
-/// (UserDrawCaption) ; le texte la suit.
+/// (UserDrawCaption) ; le texte la suit. Ses barres de défilement
+/// (`scroll` : celles qu'elle montre, dans ses coordonnées, verticales ou
+/// non, et si elle a une poignée de taille, `crate::scroll::frame_bars`)
+/// suivent son bord client, après le coin qui les sépare.
 #[expect(clippy::too_many_arguments, reason = "what NC_DoNCPaint reads of the window and the system")]
 pub fn frame_ops(
     style: u32,
@@ -241,6 +271,7 @@ pub fn frame_ops(
     c: &impl Fn(usize) -> ColorRef,
     layout: Layout,
     icon: Option<Arc<crate::cursor::Shape>>,
+    scroll: (&[(abi::user::ScrollBarInfo32, bool)], bool),
 ) -> (Vec<Op>, Unpainted) {
     let mut ops = Vec::new();
     let mut unpainted = Unpainted::default();
@@ -321,7 +352,19 @@ pub fn frame_ops(
         if ex_style & WS_EX_CLIENTEDGE != 0 {
             draw_edge(&mut current, EDGE_SUNKEN, BF_RECT | BF_ADJUST, c, &mut ops);
         }
-        unpainted.scroll_bars = style & (WS_VSCROLL | WS_HSCROLL) != 0;
+        let (bars, size_grip) = scroll;
+        if style & (WS_VSCROLL | WS_HSCROLL) == (WS_VSCROLL | WS_HSCROLL)
+            && bars.len() == 2
+            && !crate::scroll::corner_ops(current, ex_style, size_grip, m, c, layout, &mut ops)
+        {
+            unpainted.text = true;
+        }
+        for (info, vertical) in bars {
+            if !crate::scroll::bar_ops(info, *vertical, c, layout, &mut ops) {
+                unpainted.text = true;
+            }
+        }
+        unpainted.scroll_bars = style & (WS_VSCROLL | WS_HSCROLL) != 0 && bars.is_empty();
     }
     (ops, unpainted)
 }
@@ -380,13 +423,50 @@ mod tests {
         palette: &impl Fn(usize) -> ColorRef,
         layout: Layout,
     ) -> (impl Fn(i32, i32) -> u32, Unpainted) {
-        let (ops, unpainted) =
-            frame_ops(style, ex_style, (width, height), text, &[], active, gradient, &metric, palette, layout, None);
+        let (ops, unpainted) = frame_ops(
+            style,
+            ex_style,
+            (width, height),
+            text,
+            &[],
+            active,
+            gradient,
+            &metric,
+            palette,
+            layout,
+            None,
+            (&[], false),
+        );
         let mut pixels = alloc::vec![0u32; (width * height) as usize];
         let mut surface =
             Bitmap::new(&mut pixels, width as u32, height as u32, width as u32, PixelLayout::Rgbx).unwrap();
         paint(&mut surface, &ops, (0, 0), &Region::from_rect(Rect::new(0, 0, width, height)));
         (move |x: i32, y: i32| pixels[(y * width + x) as usize], unpainted)
+    }
+
+    #[test]
+    fn the_scroll_bars_and_their_corner_follow_the_client_area() {
+        use crate::scroll::{bar_info, Bar, HORZ, VERT};
+        let style = WS_POPUP | WS_VSCROLL | WS_HSCROLL;
+        let (window, client) = (Rect::new(0, 0, 100, 80), Rect::new(0, 0, 84, 64));
+        let bars: Vec<_> = [VERT, HORZ]
+            .iter()
+            .map(|&bar| (bar_info(bar, &Bar::new(), style, 0, (window, client), &metric), bar == VERT))
+            .collect();
+        let (ops, unpainted) =
+            frame_ops(style, 0, (100, 80), &[], &[], false, true, &metric, &system, &no_fonts, None, (&bars, false));
+        assert!(!unpainted.scroll_bars && unpainted.text, "the bars, without their symbols");
+        let mut pixels = alloc::vec![0u32; 100 * 80];
+        let mut surface = Bitmap::new(&mut pixels, 100, 80, 100, PixelLayout::Rgbx).unwrap();
+        paint(&mut surface, &ops, (0, 0), &Region::from_rect(Rect::new(0, 0, 100, 80)));
+        let at = |x: usize, y: usize| pixels[y * 100 + x];
+        assert_eq!(at(92, 72), system(color::BTNFACE).0, "the corner");
+        assert_eq!(at(84, 0), system(color::LIGHT_3D).0, "the vertical bar's top arrow");
+        assert_eq!(at(0, 64), system(color::LIGHT_3D).0, "the horizontal bar's left arrow");
+        assert_eq!(at(84, 64), system(color::DKSHADOW_3D).0, "its right arrow, a pixel into the corner");
+        assert_eq!(at(10, 10), 0, "the client area is not the frame's");
+        let (_, alone) = render(style, 0, (100, 80), false);
+        assert!(alone.scroll_bars, "without their state");
     }
 
     #[test]
@@ -436,7 +516,7 @@ mod tests {
     #[test]
     fn frames_without_a_caption_or_with_a_client_edge() {
         let (ops, unpainted) =
-            frame_ops(WS_POPUP, 0, (50, 50), &[], &[], false, true, &metric, &system, &no_fonts, None);
+            frame_ops(WS_POPUP, 0, (50, 50), &[], &[], false, true, &metric, &system, &no_fonts, None, (&[], false));
         assert!(ops.is_empty() && unpainted == Unpainted::default(), "a popup has no frame");
         let (at, _) = render(WS_POPUP | WS_BORDER, 0, (20, 20), false);
         assert_eq!((at(0, 0), at(1, 1)), (system(color::WINDOWFRAME).0, 0), "a thin border");
@@ -466,6 +546,7 @@ mod tests {
                 &system,
                 &no_fonts,
                 Some(icon.clone()),
+                (&[], false),
             );
             ops.into_iter().find_map(|op| match op {
                 Op::Icon(rect, _) => Some(rect),

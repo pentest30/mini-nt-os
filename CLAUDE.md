@@ -297,6 +297,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 16 (les icônes) : les icônes du système chargées par `user32` (rappel SETWNDICONS) ; l'icône du titre
   (`cursor::caption_icon`, `Op::Icon`) ; WM_SETICON et WM_GETICON ; les propriétés des fenêtres dans un tas de la
   section partagée (`shared::alloc`), où `user32` les lit ; NtUserDrawIconEx ; scénario `icons` (`tests/native/icon1.c`).
+  M6, étape 17 (les barres de défilement des fenêtres, `win32k::scroll`) : l'état des deux barres et leur `SBINFO`
+  dans le tas du bureau (`WND.pSBInfo`, lu par `user32`) ; NtUserSetScrollInfo, NtUserSBGetParms,
+  NtUserGetScrollBarInfo, NtUserSetScrollBarInfo, NtUserShowScrollBar, NtUserEnableScrollBar ; le cadre dessine
+  flèches, fond en damier (`Op::Mono`), curseur, coin et poignée de taille ; HTVSCROLL, HTHSCROLL, HTSIZE ; un clic
+  devient WM_SYSCOMMAND SC_VSCROLL, que `user32` suit (DefWndTrackScrollBar) ; scénario `scroll`
+  (`tests/native/scroll1.c`). Pas encore SB_CTL, ScrollWindowEx, ScrollDC.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

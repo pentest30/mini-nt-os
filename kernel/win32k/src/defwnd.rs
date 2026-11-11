@@ -60,10 +60,10 @@ use abi::user::{
     WVR_VREDRAW,
 };
 use abi::user::{
-    CS_HREDRAW, CS_VREDRAW, HTBORDER, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT,
-    HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, MA_ACTIVATE, MA_NOACTIVATE,
-    WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WM_SYSCOMMAND, WS_MINIMIZEBOX,
-    WS_SYSMENU,
+    CS_HREDRAW, CS_VREDRAW, HTBORDER, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTHSCROLL,
+    HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTSIZE, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, MA_ACTIVATE,
+    MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET, WM_SYSCOMMAND,
+    WS_MINIMIZEBOX, WS_SYSMENU,
 };
 use hal::sync::KSpinLock;
 use ke::usermem::{copy_from_user, copy_to_user};
@@ -348,9 +348,10 @@ fn sizing_border(along: i32, from: i32, to: i32, size: i32, (low, middle, high):
 /// l'écran) : HTCLIENT dans la zone cliente ; les bords d'un cadre épais
 /// (HTLEFT…, les coins sur la longueur d'un bouton du titre) ; HTBORDER sur
 /// un autre cadre ; dans la barre de titre, ses boutons (fermer, agrandir,
-/// réduire, de droite à gauche) ou HTCAPTION ; HTNOWHERE ailleurs (pas
-/// encore de menus ni de barres de défilement, ni d'icône : pas de
-/// HTSYSMENU). Une fenêtre réduite est toute en titre.
+/// réduire, de droite à gauche) ou HTCAPTION ; contre la zone cliente, ses
+/// barres de défilement (HTVSCROLL, HTHSCROLL, et HTSIZE dans le coin entre
+/// les deux) ; HTNOWHERE ailleurs (pas encore de menus, ni de menu système :
+/// pas de HTMENU ni de HTSYSMENU). Une fenêtre réduite est toute en titre.
 pub fn nc_hit_test(
     style: u32,
     ex_style: u32,
@@ -416,6 +417,28 @@ pub fn nc_hit_test(
                 }
             }
             return HTCAPTION;
+        }
+    }
+    // The scroll bars, beside the client area (the vertical one on the left
+    // for WS_EX_LEFTSCROLLBAR, which right-to-left windows swap).
+    let left =
+        (ex_style ^ if ex_style & WS_EX_LAYOUTRTL != 0 { WS_EX_LEFTSCROLLBAR } else { 0 }) & WS_EX_LEFTSCROLLBAR != 0;
+    let mut rect = client;
+    if style & WS_VSCROLL != 0 {
+        if left {
+            rect.left -= m(sm::CXVSCROLL);
+        } else {
+            rect.right += m(sm::CXVSCROLL);
+        }
+        if inside(&rect) {
+            return HTVSCROLL;
+        }
+    }
+    if style & WS_HSCROLL != 0 {
+        rect.bottom += m(sm::CYHSCROLL);
+        if inside(&rect) {
+            let corner = if left { x <= rect.left + m(sm::CXVSCROLL) } else { x >= rect.right - m(sm::CXVSCROLL) };
+            return if style & WS_VSCROLL != 0 && corner { HTSIZE } else { HTHSCROLL };
         }
     }
     HTNOWHERE
@@ -813,6 +836,27 @@ mod tests {
         // Minimized: all caption.
         let min = WS_OVERLAPPEDWINDOW | WS_MINIMIZE;
         assert_eq!(nc_hit_test(min, 0, window, Rect::new(0, 0, 0, 0), (50, 50), &metric), HTCAPTION);
+    }
+
+    #[test]
+    fn the_scroll_bars_lie_beside_the_client_area() {
+        // A popup with a border and both bars: its client area 16 pixels
+        // less wide and less tall.
+        let style = WS_POPUP | WS_BORDER | WS_VSCROLL | WS_HSCROLL;
+        let window = Rect::new(0, 0, 200, 100);
+        let client = Rect::new(1, 1, 183, 83);
+        let at = |ex: u32, x, y| nc_hit_test(style, ex, window, client, (x, y), &metric);
+        assert_eq!(at(0, 190, 40), HTVSCROLL);
+        assert_eq!(at(0, 100, 90), HTHSCROLL);
+        assert_eq!(at(0, 190, 90), HTSIZE, "the corner between them");
+        assert_eq!(at(0, 182, 82), HTCLIENT);
+        assert_eq!(at(0, 0, 40), HTBORDER);
+        // On the left: the client area moves right.
+        let left = Rect::new(17, 1, 199, 83);
+        let at = |x, y| nc_hit_test(style, WS_EX_LEFTSCROLLBAR, window, left, (x, y), &metric);
+        assert_eq!((at(5, 40), at(5, 90), at(100, 90)), (HTVSCROLL, HTSIZE, HTHSCROLL));
+        let hidden = nc_hit_test(WS_POPUP | WS_BORDER, 0, window, client, (190, 40), &metric);
+        assert_eq!(hidden, HTNOWHERE, "no bar without its style");
     }
 
     #[test]

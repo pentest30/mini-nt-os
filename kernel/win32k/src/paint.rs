@@ -780,7 +780,7 @@ pub fn sync_and_paint(window: &Arc<Window>) {
 }
 
 /// La couleur système `index`.
-fn system_color(index: usize) -> ColorRef {
+pub(crate) fn system_color(index: usize) -> ColorRef {
     ColorRef(crate::metrics::SYSTEM_COLORS.get(index).copied().unwrap_or(0))
 }
 
@@ -822,6 +822,7 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
     let size = (state.window.right - state.window.left, state.window.bottom - state.window.top);
     let text = window::text(window).unwrap_or_default();
     let menu_items = window::menu_items(window);
+    let (bars, size_grip) = crate::scroll::frame_bars(window, &state);
     let (ops, unpainted) = crate::nonclient::frame_ops(
         state.style,
         state.ex_style,
@@ -834,6 +835,7 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
         &system_color,
         &crate::font::text_run_named,
         crate::cursor::caption_icon(window),
+        (&bars, size_grip),
     );
     if unpainted.text {
         static REPORTED: AtomicBool = AtomicBool::new(false);
@@ -841,11 +843,22 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
     }
     if unpainted.scroll_bars {
         static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("scroll bars", &REPORTED);
+        report_missing("scroll bars without their SBINFO (the desktop heap is full)", &REPORTED);
     }
+    draw_frame_ops(window, &state, &ops);
+}
+
+/// Fait `ops` (dans les coordonnées de `window`, d'état `state`) à l'écran,
+/// là où elle se voit, sans ses enfants (WS_CLIPCHILDREN) ni ses sœurs
+/// (WS_CLIPSIBLINGS) si son style le dit : le cadre, ou l'intérieur d'une
+/// barre de défilement (IntRefeshScrollInterior).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn draw_frame_ops(window: &Window, state: &WindowState, ops: &[crate::gdi::draw::Op]) {
     let clip = visible_region(window, false, state.style & WS_CLIPCHILDREN != 0, state.style & WS_CLIPSIBLINGS != 0);
     let origin = (state.window.left, state.window.top);
-    crate::display::draw(|screen| crate::gdi::draw::paint(screen, &ops, origin, &clip));
+    crate::display::draw(|screen| crate::gdi::draw::paint(screen, ops, origin, &clip));
 }
 
 /// Ce que `window` découvre (`exposed`, à l'écran) en se cachant ou en

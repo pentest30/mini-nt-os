@@ -352,9 +352,8 @@ fn query_volume_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus
     let (information, status): (Vec<u8>, NtStatus) = match class {
         FILE_FS_VOLUME_INFORMATION => {
             let volume = file.volume_label()?;
-            let label: Vec<u16> = volume.label.encode_utf16().collect();
             let fixed = FileFsVolumeInformation { volume_serial_number: volume.serial, ..Default::default() };
-            let encoded = fixed.encode(&label, &mut out);
+            let encoded = fixed.encode(&volume.label, &mut out);
             variable(&out, encoded)
         }
         FILE_FS_ATTRIBUTE_INFORMATION => {

@@ -40,6 +40,9 @@ libre via `$Bitmap` et identification du système de fichiers. Les records
 internes réservés 0 à 15 ne sont pas énumérés comme fichiers utilisateur ; les
 alias DOS sont rattachés aux entrées Win32. L’énumération NtQueryDirectoryFile conserve les unités UTF-16 brutes,
 y compris les surrogates isolés, dans les noms longs et les alias DOS.
+Le nom du volume (`$VOLUME_NAME`, FileFsVolumeInformation) aussi : `VolumeLabel.label` est en UTF-16 tel quel,
+que `sys::file` recopie ; un nom de volume avec un surrogate isolé n'échoue plus en `STATUS_FILE_CORRUPT_ERROR` (test
+hôte `ntfs_volume::tests::the_volume_name_keeps_its_utf16_as_stored`, sur une image construite par le test).
 La capture des chemins par le gestionnaire d’objets et le helper `list()`
 restent limités aux noms représentables en UTF-8 ; l’ouverture d’un nom
 contenant un surrogate isolé reste à implémenter.

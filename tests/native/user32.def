@@ -19,6 +19,7 @@ DestroyWindow@4
 DispatchMessageW@4
 DrawIconEx@36
 DrawTextW@20
+EnableScrollBar@12
 EndPaint@8
 EnumChildWindows@12
 EnumThreadWindows@12
@@ -44,6 +45,10 @@ GetMonitorInfoW@8
 GetParent@4
 GetProcessWindowStation@0
 GetQueueStatus@4
+GetScrollBarInfo@12
+GetScrollInfo@12
+GetScrollPos@8
+GetScrollRange@16
 GetSysColor@4
 GetSysColorBrush@4
 GetSystemMetrics@4
@@ -82,12 +87,15 @@ SetCapture@4
 SetCursor@4
 SetFocus@4
 SetProcessWindowStation@4
+SetScrollInfo@16
+SetScrollPos@16
 SetSystemTimer@16
 SetThreadDesktop@4
 SetTimer@16
 SetWindowLongW@12
 SetWindowPos@28
 SetWindowTextW@8
+ShowScrollBar@12
 ShowWindow@8
 SwitchDesktop@4
 SystemParametersInfoW@16

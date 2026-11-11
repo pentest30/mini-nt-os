@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **Le nom d'un volume en UTF-16 tel quel** (`claude/new-session-696xfc`, après les barres de défilement) :
+  `io::VolumeLabel.label` devient un `Vec<u16>` ; NTFS rend `$VOLUME_NAME` sans le convertir (un surrogate isolé
+  faisait échouer FileFsVolumeInformation en `STATUS_FILE_CORRUPT_ERROR`, donc `vol` et l'en-tête de `dir`), FAT
+  donne chaque octet de son entrée de volume comme avant, `sys::file` recopie. Test hôte sur une image NTFS construite
+  par le test ([`compat/ntfs.md`](compat/ntfs.md)).
+
+- **Les barres de défilement des fenêtres** (`claude/new-session-696xfc`, sur main `b95a011` ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 17) : `win32k::scroll` (l'état des deux barres d'une
+  fenêtre et leur `SBINFO` dans le tas du bureau, où `user32` lit GetScrollPos et GetScrollRange ; SetScrollInfo,
+  SBGetParms, Get/SetScrollBarInfo, ShowScrollBar, EnableScrollBar, `sys::scroll`) ; le cadre dessine les barres
+  (flèches de Marlett, fond en damier `Op::Mono`, curseur, coin, poignée de taille ; `BF_FLAT` de DrawEdge) ;
+  HTVSCROLL, HTHSCROLL, HTSIZE ; un clic devient WM_SYSCOMMAND SC_VSCROLL, que `user32` suit. Tests : hôte (`scroll`,
+  `nonclient`, `defwnd`, `gdi::draw`) ; scénario `scroll` (`tests/native/scroll1.c`, quatorze pixels, un clic) sur AMD
+  et Intel ; `console`, `cmd`, `listview`, `desktop-launch`, `gui`, `mouse`, `cursor` sur AMD. Pas encore : SB_CTL (la
+  classe ScrollBar), **ScrollWindowEx et ScrollDC** (le prochain manque de `consrv` et de la listview), HideCaret,
+  ShowCaret.
+
 - **Les icônes** (`claude/new-session-696xfc`, sur main `ea66c30` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 16) : les icônes du système chargées par `user32` au premier NtUserSwitchDesktop (rappel SETWNDICONS, n° 11)
   et rendues globales ; l'icône du titre (`cursor::caption_icon` : WM_SETICON, puis la classe, puis la petite

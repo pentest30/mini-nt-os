@@ -54,6 +54,7 @@ mod pipe;
 mod port;
 mod process;
 mod registry;
+mod scroll;
 mod section;
 mod security;
 mod system;
@@ -277,6 +278,12 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserDestroyMenu, Handler::Status(menu::nt_user_destroy_menu)),
     (services::NtUserDestroyWindow, Handler::Status(window::nt_user_destroy_window)),
     (services::NtUserDrawIconEx, Handler::Status(cursor::nt_user_draw_icon_ex)),
+    (services::NtUserEnableScrollBar, Handler::Status(scroll::nt_user_enable_scroll_bar)),
+    (services::NtUserGetScrollBarInfo, Handler::Status(scroll::nt_user_get_scroll_bar_info)),
+    (services::NtUserSBGetParms, Handler::Status(scroll::nt_user_sb_get_parms)),
+    (services::NtUserSetScrollBarInfo, Handler::Status(scroll::nt_user_set_scroll_bar_info)),
+    (services::NtUserSetScrollInfo, Handler::Status(scroll::nt_user_set_scroll_info)),
+    (services::NtUserShowScrollBar, Handler::Status(scroll::nt_user_show_scroll_bar)),
     (services::NtUserDispatchMessage, Handler::Status(message::nt_user_dispatch_message)),
     (services::NtUserEndPaint, Handler::Status(window::nt_user_end_paint)),
     (services::NtUserEnumDisplaySettings, Handler::Status(user::nt_user_enum_display_settings)),
