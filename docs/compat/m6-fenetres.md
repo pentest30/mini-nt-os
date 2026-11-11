@@ -943,8 +943,8 @@ qu'ils le tiennent ; leurs `spSubMenu` seraient sinon des adresses libérées qu
 s'ouvrirait lui-même est refusé (ReactOS en crée un vide à sa place) ; InsertMenuItem garde les coches de
 MIIM_CHECKMARKS (ReactOS les efface après les avoir posées).
 
-Ce qui manque : la place et la taille des items (`xItem`…, `cxMenu`, `cyMenu` : la barre et les menus déroulants,
-étapes suivantes), le menu système (GetSystemMenu), DrawMenuBar, MNS_NOTIFYBYPOS et les menus sans fenêtre.
+Ce qui manque : la place et la taille des items (`xItem`…, `cxMenu`, `cyMenu` : la barre à l'étape 21, les menus
+déroulants ensuite), le menu système (GetSystemMenu), MNS_NOTIFYBYPOS et les menus sans fenêtre.
 
 Le banc d'essai : `tests/native/menu1.c` (`MENU1.EXE` à la place de `winlogon.exe`, scénario `menu`) : une barre
 (File, Edit, Help) relue par `user32` : IsMenu, GetMenuItemCount, GetSubMenu, GetMenuItemID, GetMenuState (séparateur,
@@ -958,3 +958,45 @@ Tests : hôte (`menu` : ce que `user32` lit dans le tas, la recherche, l'inserti
 l'état et l'item par défaut, les boucles refusées, RemoveMenu et DeleteMenu, la destruction, une barre à une fenêtre,
 MENUINFO, le tableau par 8 ; `abi::menu`) ; le scénario `menu` sur AMD et Intel, et `destroy`, `gui`, `tasklist`,
 `desktop-ui`, `desktop-launch`, `console`, `cmd`, `listview`, `dialog` sur AMD et Intel.
+
+## Étape 21 : la barre de menus (mise en page, dessin, GetMenuBarInfo, DrawMenuBar)
+
+Jusqu'ici le cadre dessinait la barre lui-même (titres à huit pixels l'un de l'autre, sans préfixe), et WM_NCCALCSIZE
+lui donnait SM_CYMENU. `menu.c` de win32k (MENU_MenuBarCalcSize, MENU_CalcItemSize, IntDrawMenuBarTemp,
+MENU_DrawMenuItem) et `rtl/text.c` (les préfixes de DrawText), ReactOS comme spécification ; `win32k::menubar`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| La mise en page (`menubar::layout`, MENU_MenuBarCalcSize) | les items de gauche à droite dans le rectangle sous le titre (coordonnées de la fenêtre) : chacun le texte montré (sans ses `&`, jusqu'à une tabulation) plus la largeur moyenne d'un caractère de chaque côté (MenuCharSize : l'alphabet / 26, arrondi), de SM_CYMENU - 1 de haut au moins ; une ligne de plus quand un item ne tient pas (un item seul sur sa ligne est coupé) ou porte MF_MENUBREAK ; les items depuis le premier MF_RIGHTJUSTIFY (MF_HELP) à droite de la dernière ligne ; la barre fait un pixel de plus que ses items. La place de chaque item (`xItem`, `yItem`, `cxItem`, `cyItem` : la droite et le bas, comme ReactOS) et la taille de la barre (`cxMenu`, `cyMenu`) vont dans le tas |
+| WM_NCCALCSIZE (`defwnd::nc_calc_size`, `menubar::calc`) | la barre est mise en page dans ce qui reste sous le titre et prend sa hauteur (une barre vide : 0) ; un item changé remet `cyMenu` à 0, le dessin remet alors la barre en page |
+| Le dessin (`menubar::bar_ops`, dans le cadre) | le fond COLOR_MENU, la dernière ligne COLOR_3DFACE ; chaque item : son texte centré en Tahoma (gras pour l'item par défaut), la lettre préfixée soulignée sous la ligne de base, de sa largeur moins un pixel (TEXT_DrawUnderscore) ; surligné (MF_HILITE) : un bord enfoncé (BDR_SUNKENOUTER) et le texte décalé d'un pixel ; grisé (MF_GRAYED) : le texte en relief (COLOR_BTNHIGHLIGHT décalé, puis COLOR_BTNSHADOW) |
+| NtUserGetMenuBarInfo | OBJID_MENU : le rectangle de la barre à l'écran (`idItem` 0) ou d'un item, le menu, l'item qui a le focus |
+| NtUserGetMenuItemRect, NtUserMenuItemFromPoint | la place d'un item à l'écran (dans la fenêtre de la barre, ou dans la zone cliente d'un menu déroulant) ; l'item sous un point, -1 ailleurs |
+| NtUserHiliteMenuItem (`menubar::hilite`) | l'item surligné ou éteint, le cadre repeint s'il a changé |
+| DrawMenuBar (NtUserCallHwndLock, HWNDLOCK_ROUTINE_DRAWMENUBAR = 0x55) | SetWindowPos(SWP_FRAMECHANGED) d'une fenêtre qui n'est pas fille : la barre est remise en page et repeinte |
+
+Écarts voulus avec ReactOS : HiliteMenuItem surligne ou éteint l'item, comme la documentation de l'API (ReactOS le
+sélectionne comme le suivi d'un menu, même pour MF_UNHILITE) ; MenuItemFromPoint rend -1 hors des items (ReactOS rend le
+nombre d'items) ; une barre sans items n'est ni comptée ni dessinée (le calcul de ReactOS lui donne 0, son
+dessin SM_CYMENU).
+
+Ce qui manque : les items à bitmap (MDI) et dessinés par l'application (WM_MEASUREITEM, WM_DRAWITEM), le menu système,
+les menus plats (SPI_GETFLATMENU), HTMENU et le clic dans la barre (le suivi des menus, étapes suivantes).
+
+Vu en chemin : le scénario `gui` attendait d'une fenêtre au menu de classe MENU_001 de `shell32` une zone cliente de
+SM_CYMENU de moins. Ce menu est celui d'un menu déroulant (cinq titres longs) : en barre, il ne tient pas dans 292
+pixels et passe sur deux lignes (37 pixels), comme sous XP. `gui1.c` compte maintenant la hauteur de la barre
+(GetMenuBarInfo) et ses lignes.
+
+Le banc d'essai : `tests/native/menu1.c`, scénario `menu` (étape 20), avec la barre de W : GetMenuBarInfo (19 de haut,
+entre les côtés du cadre, au-dessus de la zone cliente), GetMenuItemRect (File au bord gauche, Edit à sa suite, Help
+au bord droit, 18 de haut), GetMenuBarInfo d'un item, MenuItemFromPoint ; le texte relu à l'écran, HiliteMenuItem (le
+coin de l'item en COLOR_BTNSHADOW) puis éteint ; ModifyMenuW ne déplace Edit qu'après DrawMenuBar ; six pixels de la
+capture (le fond de la barre, les soulignements de F, E et H). Sans le soulignement, sans Help à droite, sans
+DrawMenuBar ou sans repeindre au surlignage, le scénario échoue.
+
+Tests : hôte (`menubar` : les préfixes, la largeur moyenne, la mise en page, Help à droite, une barre longue sur
+plusieurs lignes, l'item par défaut en gras, le soulignement, le dessin d'un item surligné ; `menu` : la place des items
+et le surlignage dans le tas ; `abi::menu`) ; le scénario `menu` sur AMD et Intel, et `gui`, `destroy`, `tasklist`,
+`desktop-ui`, `desktop-launch`, `console`, `cmd`, `listview`, `dialog`, `caret`, `icons`, `scroll`, `scrollex`, `text`
+sur AMD et Intel.

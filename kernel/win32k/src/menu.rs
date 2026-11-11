@@ -125,7 +125,7 @@ pub struct Item {
     pub cy: u32,
     /// Son texte dans le tas : sa position et sa taille en octets ; (0, 0)
     /// tant qu'il n'est pas publié.
-    text_at: (u32, u32),
+    pub(crate) text_at: (u32, u32),
 }
 
 /// Un menu (`MENU`), la copie du noyau.
@@ -564,6 +564,36 @@ impl Menus {
         Ok(())
     }
 
+    /// La place de chaque item du menu `handle` (mis en page dans `laid`,
+    /// une copie de ses items) et sa taille (`cxMenu`, `cyMenu`) ; faux sans
+    /// lui, ou s'il n'a plus autant d'items (changé entre-temps).
+    pub fn set_places(&mut self, handle: u32, laid: &[Item], width: u32, height: u32) -> bool {
+        let Some(state) = self.state_mut(handle) else { return false };
+        if state.items.len() != laid.len() {
+            return false;
+        }
+        for (item, place) in state.items.iter_mut().zip(laid) {
+            (item.x, item.y, item.cx, item.cy) = (place.x, place.y, place.cx, place.cy);
+        }
+        (state.width, state.height) = (width, height);
+        true
+    }
+
+    /// IntHiliteMenuItem : l'item `at` (selon `flags`, MF_BYPOSITION) est
+    /// surligné si `flags` porte MF_HILITE, ne l'est plus sinon ; rend s'il a
+    /// changé.
+    pub fn hilite(&mut self, handle: u32, at: u32, flags: u32) -> bool {
+        let Some((menu, index)) = self.find(handle, at, flags & mf::BYPOSITION != 0) else { return false };
+        let Some(item) = self.state_mut(menu).and_then(|state| state.items.get_mut(index)) else { return false };
+        let before = item.f_state;
+        if flags & mf::HILITE != 0 {
+            item.f_state |= mf::HILITE;
+        } else {
+            item.f_state &= !mf::HILITE;
+        }
+        item.f_state != before
+    }
+
     /// IntDestroyMenuObject(…, TRUE) : le menu `handle` et ses sous-menus
     /// quittent la table et leur tas ; les items d'autres menus qui les
     /// ouvraient n'ont plus de sous-menu. Rend leurs handles (vide sans le
@@ -791,6 +821,30 @@ pub fn exists(handle: u32) -> bool {
 /// <= DISPATCH_LEVEL.
 pub fn items(handle: u32) -> Vec<Item> {
     MENUS.lock().state(handle).map_or_else(Vec::new, |state| state.items.clone())
+}
+
+/// La copie du menu `handle` (ses items, leur place, sa taille).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn state(handle: u32) -> Option<MenuState> {
+    MENUS.lock().state(handle).cloned()
+}
+
+/// [`Menus::set_places`], publié.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_places(handle: u32, laid: &[Item], width: u32, height: u32) -> bool {
+    with(|menus| Ok(menus.set_places(handle, laid, width, height))).unwrap_or(false)
+}
+
+/// [`Menus::hilite`], publié ; rend si l'item a changé.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn hilite(handle: u32, at: u32, flags: u32) -> bool {
+    with(|menus| Ok(menus.hilite(handle, at, flags))).unwrap_or(false)
 }
 
 /// NtUserThunkedMenuItemInfo avec `bInsert` : [`Menus::insert`].
@@ -1252,6 +1306,30 @@ mod tests {
         assert_eq!(heap.word(BASE + at + 28), 16, "cAlloced");
         assert_eq!(heap.word(BASE + at + 32), 9, "cItems");
         assert!(heap.freed.lock().iter().any(|&(_, size)| size == 8 * ITEM_SIZE), "the old array of 8 goes back");
+    }
+
+    #[test]
+    fn places_and_hilite_reach_user32() {
+        let (mut menus, heap) = table();
+        let at = add(&mut menus, &heap, 0x10, false);
+        let text = wide("x");
+        append(&mut menus, 0x10, &string_item(1, &text), &text);
+        append(&mut menus, 0x10, &string_item(2, &text), &text);
+        let mut laid = menus.state(0x10).unwrap().items.clone();
+        (laid[1].x, laid[1].y, laid[1].cx, laid[1].cy) = (40, 23, 76, 41);
+        assert!(menus.set_places(0x10, &laid, 392, 19));
+        assert!(!menus.set_places(0x10, &laid[..1], 392, 19), "not as many items");
+        assert!(menus.hilite(0x10, 2, mf::HILITE), "by identifier");
+        assert!(!menus.hilite(0x10, 2, mf::HILITE), "already");
+        assert!(!menus.hilite(0x10, 9, mf::HILITE | mf::BYPOSITION), "no such item");
+        menus.publish_dirty().unwrap();
+        let menu = BASE + at;
+        assert_eq!((heap.word(menu + 36), heap.word(menu + 40)), (392, 19), "cxMenu, cyMenu");
+        let second = heap.word(menu + 52) + ITEM_SIZE;
+        assert_eq!(heap.word(second + 4) & mf::HILITE, mf::HILITE, "fState");
+        let place = [heap.word(second + 36), heap.word(second + 40), heap.word(second + 44), heap.word(second + 48)];
+        assert_eq!(place, [40, 23, 76, 41], "xItem, yItem, cxItem, cyItem");
+        assert!(menus.hilite(0x10, 1, mf::BYPOSITION), "unhilite");
     }
 
     #[test]

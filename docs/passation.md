@@ -1,5 +1,19 @@
 # Notes de passation
 
+- **La barre de menus** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape
+  21) : `win32k::menubar` : mise en page (MENU_MenuBarCalcSize : texte sans ses `&` plus MenuCharSize de chaque côté,
+  SM_CYMENU - 1 de haut au moins, lignes, MF_HELP à droite) faite par WM_NCCALCSIZE (`defwnd::nc_calc_size` prend une
+  fonction de mise en page au lieu de SM_CYMENU) et gardée dans les items du tas ; dessin dans le cadre (`frame_ops`
+  reçoit la barre mise en page) : fond COLOR_MENU, texte centré, lettre préfixée soulignée, surligné enfoncé, grisé
+  en relief. Services : NtUserGetMenuBarInfo (OBJID_MENU), NtUserGetMenuItemRect, NtUserMenuItemFromPoint,
+  NtUserHiliteMenuItem ; DrawMenuBar (HWNDLOCK_ROUTINE_DRAWMENUBAR = 0x55, SWP_FRAMECHANGED). Écarts voulus :
+  HiliteMenuItem selon la documentation, MenuItemFromPoint rend -1 hors des items, une barre vide n'a pas de place.
+  Tests : hôte (`menubar`, `menu`) ; scénario `menu` étendu (GetPixel de la barre, six pixels de la capture) sur AMD
+  et Intel ; quatre mutations (soulignement, Help à droite, DrawMenuBar, repeint du surlignage) le font échouer.
+  Pratique : un script de mutation qui restaure un fichier doit remettre sa date à jour (`os.utime`), sinon cargo
+  garde le binaire muté pour les runs suivants. Suite : TrackPopupMenuEx (fenêtre #32768, boucle du menu), puis
+  le clic dans la barre (HTMENU, SC_MOUSEMENU) et le clavier.
+
 - **Les menus dans le tas du bureau** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 20) : `abi::menu` (`MENU`, `ITEM` de ReactOS, MENUITEMINFOW, MENUINFO, les drapeaux) ; `win32k::menu` réécrit :
   une table (`Menus`) sous un seul verrou, republiée dans le tas du bureau après chaque changement (textes, tableau

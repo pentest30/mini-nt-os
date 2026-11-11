@@ -622,12 +622,6 @@ pub fn property(window: &Window, atom: u16, system: bool) -> Option<u32> {
         .map(|property| property.data)
 }
 
-/// Les items de la barre de menus de la fenêtre, pour la peindre (une
-/// copie ; vide sans barre).
-pub fn menu_items(window: &Window) -> alloc::vec::Vec<crate::menu::Item> {
-    crate::menu::items(window.state().menu)
-}
-
 /// NtUserSetMenu (IntSetMenu) : la barre de menus de la fenêtre devient
 /// `hmenu` (0 la retire ; le menu sait de quelle fenêtre il est la barre,
 /// `crate::menu::attach`) ; si elle change, ou avec `repaint`, et que la

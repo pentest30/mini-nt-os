@@ -29,6 +29,16 @@ expect = [menu] help 77, data 1 1234
 # GetMenu reads WND.IDMenu; a bar is one window's (1401); a child has none
 # (1400).
 expect = [menu] GetMenu 1; SetMenu of another window's bar: 0 (1401), of a child: 0 (1400)
+# The bar (win32k::menubar): SM_CYMENU high, between the frame's sides,
+# over the client area; its items from its left, Help (MF_HELP) at its right.
+expect = [menu] GetMenuBarInfo 1: menu 1, 19 high, the frame's width each side 1, the client area under it 1
+expect = [menu] GetMenuItemRect 1 1 1: File at the bar's left 1, Edit after it 1, Help at its right 1, 18 high
+expect = [menu] GetMenuBarInfo of Edit 1: its rectangle 1; MenuItemFromPoint: Edit 1, elsewhere -1
+# Read back from the screen: the text (more than 20 pixels that are not
+# COLOR_MENU inside the item); hilited, a sunken edge (COLOR_BTNSHADOW at its
+# corner) and the text still there.
+expect = [menu] the text of File drawn 1; HiliteMenuItem: 80, sunken 1, text 1; unlit: 0, flat 1
+expect = [menu] ModifyMenuW: Edit stays 1 until DrawMenuBar, then moves right 1
 expect = [menu] RemoveMenu 1: 2 items, Edit lives 1; DeleteMenu 1: Edit gone 1
 expect = [menu] LoadMenuIndirectW: 1 item, View 2 items, 402 &Small
 expect = [menu] DestroyMenu 1: gone 1, its submenu gone 1
@@ -40,6 +50,20 @@ forbid = NtUserCheckMenuItem (0x1147) is not implemented
 forbid = NtUserDeleteMenu (0x115d) is not implemented
 forbid = NtUserSetMenuDefaultItem (0x120b) is not implemented
 forbid = NtUserSetMenuContextHelpId (0x120a) is not implemented
+forbid = NtUserGetMenuBarInfo (0x11a1) is not implemented
+forbid = NtUserGetMenuItemRect (0x11a3) is not implemented
+forbid = NtUserMenuItemFromPoint (0x11ca) is not implemented
+forbid = NtUserHiliteMenuItem (0x11bb) is not implemented
+forbid = NtUserCallHwndLock class 0x55 is not implemented
 
 # W's client area, white, under its bar.
 screen = 300 300 FFFFFF
+# The bar (y 124 to 142, COLOR_MENU), as DrawMenuBar left it: "&Fichier",
+# "&Edit", and "&Help" at its right; each prefixed letter underlined under the
+# baseline (y 138), as wide as the letter less one pixel.
+screen = 300 130 D4D0C8
+screen = 110 138 000000
+screen = 114 138 000000
+screen = 115 138 D4D0C8
+screen = 155 138 000000
+screen = 468 138 000000

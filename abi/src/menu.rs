@@ -270,6 +270,20 @@ pub struct MenuInfo32 {
     pub dw_menu_data: u32,
 }
 
+/// MENUBARINFO, 32-bit (GetMenuBarInfo): the bar's (or an item's) rectangle
+/// on the screen, the menu, the window of its open submenu, and two bits:
+/// the bar has the focus (`fBarFocused`), the item has it (`fFocused`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MenuBarInfo32 {
+    pub cb_size: u32,
+    pub rc_bar: [i32; 4],
+    pub h_menu: u32,
+    pub hwnd_menu: u32,
+    /// Bit 0: fBarFocused; bit 1: fFocused.
+    pub focus: u32,
+}
+
 /// The size of ReactOS's ROSMENUINFO (MENUINFO and the fields only its
 /// own `user32` gave): NtUserThunkedMenuInfo takes a MENUINFO up to it.
 pub const ROSMENUINFO_SIZE: u32 = 76;
@@ -295,6 +309,8 @@ const _: () = {
     assert!(size_of::<MenuItemInfoW32>() == 48);
     assert!(MENUITEMINFOW_OLD_SIZE == 44);
     assert!(size_of::<MenuInfo32>() == 28);
+    assert!(size_of::<MenuBarInfo32>() == 32);
+    assert!(offset_of!(MenuBarInfo32, h_menu) == 20);
 };
 
 /// The little-endian words of `bytes`, `N` of them, or `None` if it is
@@ -354,7 +370,7 @@ macro_rules! as_bytes {
     )*};
 }
 
-as_bytes!(Menu32, Item32, MenuItemInfoW32, MenuInfo32);
+as_bytes!(Menu32, Item32, MenuItemInfoW32, MenuInfo32, MenuBarInfo32);
 
 #[cfg(test)]
 mod tests {

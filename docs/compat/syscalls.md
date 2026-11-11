@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 121 | 296 |
-| win32k | 149 | 737 |
+| win32k | 153 | 737 |
 
 ## ntoskrnl
 
@@ -733,9 +733,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x119e` | `NtUserGetKeyNameText` | 3 |  |
 | `0x119f` | `NtUserGetKeyState` | 1 | ✅ |
 | `0x11a0` | `NtUserGetListBoxInfo` | 1 |  |
-| `0x11a1` | `NtUserGetMenuBarInfo` | 4 |  |
+| `0x11a1` | `NtUserGetMenuBarInfo` | 4 | ✅ |
 | `0x11a2` | `NtUserGetMenuIndex` | 2 |  |
-| `0x11a3` | `NtUserGetMenuItemRect` | 4 |  |
+| `0x11a3` | `NtUserGetMenuItemRect` | 4 | ✅ |
 | `0x11a4` | `NtUserGetMessage` | 4 | ✅ |
 | `0x11a5` | `NtUserGetMouseMovePointsEx` | 5 |  |
 | `0x11a6` | `NtUserGetObjectInformation` | 5 |  |
@@ -759,7 +759,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11b8` | `NtUserGetWOWClass` | 2 |  |
 | `0x11b9` | `NtUserHardErrorControl` | 3 |  |
 | `0x11ba` | `NtUserHideCaret` | 1 | ✅ |
-| `0x11bb` | `NtUserHiliteMenuItem` | 4 |  |
+| `0x11bb` | `NtUserHiliteMenuItem` | 4 | ✅ |
 | `0x11bc` | `NtUserImpersonateDdeClientWindow` | 2 |  |
 | `0x11bd` | `NtUserInitialize` | 3 | ✅ |
 | `0x11be` | `NtUserInitializeClientPfnArrays` | 4 | ✅ |
@@ -774,7 +774,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c7` | `NtUserLockWindowUpdate` | 1 |  |
 | `0x11c8` | `NtUserLockWorkStation` | 0 |  |
 | `0x11c9` | `NtUserMapVirtualKeyEx` | 4 |  |
-| `0x11ca` | `NtUserMenuItemFromPoint` | 4 |  |
+| `0x11ca` | `NtUserMenuItemFromPoint` | 4 | ✅ |
 | `0x11cb` | `NtUserMessageCall` | 7 | ✅ |
 | `0x11cc` | `NtUserMinMaximize` | 3 |  |
 | `0x11cd` | `NtUserMNDragLeave` | 0 |  |

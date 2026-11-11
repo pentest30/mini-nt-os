@@ -522,7 +522,10 @@ pub(super) fn nt_user_get_update_rect(arguments: &[u32]) -> NtStatus {
 }
 
 /// NtUserCallHwndLock(hWnd, Routine) : `HWNDLOCK_ROUTINE_UPDATEWINDOW`
-/// (UpdateWindow : la fenêtre et ses enfants se peignent aussitôt) ; TRUE.
+/// (UpdateWindow : la fenêtre et ses enfants se peignent aussitôt) ;
+/// `HWNDLOCK_ROUTINE_DRAWMENUBAR` (DrawMenuBar : le cadre d'une fenêtre qui
+/// n'est pas fille se recalcule, sa barre se remet en page et se repeint,
+/// SetWindowPos(SWP_FRAMECHANGED)) ; TRUE.
 /// FALSE pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou une
 /// autre routine (journalisée à son premier appel).
 pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
@@ -533,6 +536,14 @@ pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
     match routine {
         abi::user::HWNDLOCK_ROUTINE_UPDATEWINDOW => {
             win32k::paint::update_window(&window, abi::user::RDW_ALLCHILDREN);
+            NtStatus(1)
+        }
+        abi::user::HWNDLOCK_ROUTINE_DRAWMENUBAR => {
+            use abi::user::{SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER};
+            if window.state().style & (abi::user::WS_CHILD | abi::user::WS_POPUP) != abi::user::WS_CHILD {
+                let flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED;
+                win32k::winpos::set_window_pos(&window, 0, 0, 0, 0, 0, flags);
+            }
             NtStatus(1)
         }
         _ => {

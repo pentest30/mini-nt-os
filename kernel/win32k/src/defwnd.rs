@@ -115,14 +115,16 @@ pub struct NcCalcSize {
     pub state: u32,
 }
 
-/// NC_HandleNCCalcSize : la zone cliente d'une fenêtre de rectangle `rect`
-/// (sans menu) ; `valid_rects` est le `wParam` de WM_NCCALCSIZE.
+/// NC_HandleNCCalcSize : la zone cliente d'une fenêtre de rectangle `rect` ;
+/// `valid_rects` est le `wParam` de WM_NCCALCSIZE. Sous le titre, la barre
+/// de menus prend la hauteur que `menu_bar` lui donne, mise en page dans ce
+/// qui reste (dans les coordonnées de la fenêtre) ; `None` : pas de barre.
 pub fn nc_calc_size(
     style: u32,
     ex_style: u32,
     class_style: u32,
     valid_rects: bool,
-    has_menu: bool,
+    menu_bar: &dyn Fn(Rect) -> Option<i32>,
     rect: Rect,
     m: &impl Fn(usize) -> i32,
 ) -> NcCalcSize {
@@ -159,9 +161,11 @@ pub fn nc_calc_size(
         state |= WNDS_HASCAPTION;
         client.top += if ex_style & WS_EX_TOOLWINDOW != 0 { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) };
     }
-    if has_menu {
+    let inside =
+        Rect::new(client.left - rect.left, client.top - rect.top, client.right - rect.left, client.bottom - rect.top);
+    if let Some(height) = menu_bar(inside) {
         state |= WNDS_HASMENU;
-        client.top += m(sm::CYMENU);
+        client.top += height;
     }
     if ex_style & WS_EX_CLIENTEDGE != 0 {
         inflate(&mut client, -2 * m(sm::CXBORDER), -2 * m(sm::CYBORDER));
@@ -638,7 +642,7 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
                 state.ex_style,
                 class_style,
                 wparam != 0,
-                state.menu != 0,
+                &|inside| crate::menubar::calc(window, inside),
                 rect,
                 &metrics::get,
             );
@@ -698,6 +702,11 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
 mod tests {
     use super::*;
 
+    /// No menu bar.
+    fn no_bar(_: Rect) -> Option<i32> {
+        None
+    }
+
     #[test]
     fn controls_default_to_xp_s_colours() {
         use abi::user::color::{BTNFACE, BTNHIGHLIGHT, SCROLLBAR, WINDOW, WINDOWTEXT};
@@ -740,33 +749,33 @@ mod tests {
     #[test]
     fn the_client_area_of_an_overlapped_window() {
         let rect = Rect::new(0, 0, 800, 600);
-        let calc = nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW, false, false, rect, &metric);
+        let calc = nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW, false, &no_bar, rect, &metric);
         assert_eq!(calc.client, Rect::new(4, 24, 796, 596), "4 of border, 20 of caption");
         assert_eq!((calc.result, calc.state), (0, WNDS_HASCAPTION));
         let valid =
-            nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW | CS_HREDRAW, true, false, rect, &metric);
+            nc_calc_size(WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE, CS_VREDRAW | CS_HREDRAW, true, &no_bar, rect, &metric);
         assert_eq!(valid.result, WVR_VREDRAW | WVR_HREDRAW | WVR_VALIDRECTS);
     }
 
     #[test]
     fn borders_scroll_bars_and_edges_come_off_the_client_area() {
         let rect = Rect::new(10, 10, 210, 110);
-        assert_eq!(nc_calc_size(WS_POPUP, 0, 0, false, false, rect, &metric).client, rect, "no frame");
+        assert_eq!(nc_calc_size(WS_POPUP, 0, 0, false, &no_bar, rect, &metric).client, rect, "no frame");
         assert_eq!(
-            nc_calc_size(WS_POPUP | WS_BORDER, 0, 0, false, false, rect, &metric).client,
+            nc_calc_size(WS_POPUP | WS_BORDER, 0, 0, false, &no_bar, rect, &metric).client,
             Rect::new(11, 11, 209, 109)
         );
         let scrolled =
-            nc_calc_size(WS_POPUP | WS_VSCROLL | WS_HSCROLL, WS_EX_CLIENTEDGE, 0, false, false, rect, &metric);
+            nc_calc_size(WS_POPUP | WS_VSCROLL | WS_HSCROLL, WS_EX_CLIENTEDGE, 0, false, &no_bar, rect, &metric);
         assert_eq!(scrolled.client, Rect::new(12, 12, 192, 92), "2 of client edge, then 16 of each scroll bar");
         assert_eq!(scrolled.state, WNDS_HASVERTICALSCROOLLBAR | WNDS_HASHORIZONTALSCROLLBAR);
-        let left = nc_calc_size(WS_POPUP | WS_VSCROLL, WS_EX_LEFTSCROLLBAR, 0, false, false, rect, &metric);
+        let left = nc_calc_size(WS_POPUP | WS_VSCROLL, WS_EX_LEFTSCROLLBAR, 0, false, &no_bar, rect, &metric);
         assert_eq!(left.client, Rect::new(26, 10, 210, 110), "a scroll bar on the left");
-        let tool = nc_calc_size(WS_POPUP | WS_CAPTION, WS_EX_TOOLWINDOW, 0, false, false, rect, &metric);
+        let tool = nc_calc_size(WS_POPUP | WS_CAPTION, WS_EX_TOOLWINDOW, 0, false, &no_bar, rect, &metric);
         assert_eq!(tool.client, Rect::new(13, 29, 207, 107), "a small caption");
-        let tiny = nc_calc_size(WS_OVERLAPPEDWINDOW, 0, 0, false, false, Rect::new(0, 0, 4, 4), &metric);
+        let tiny = nc_calc_size(WS_OVERLAPPEDWINDOW, 0, 0, false, &no_bar, Rect::new(0, 0, 4, 4), &metric);
         assert!(tiny.client.right >= tiny.client.left && tiny.client.bottom >= tiny.client.top, "never inverted");
-        let minimized = nc_calc_size(WS_OVERLAPPEDWINDOW | WS_MINIMIZE, 0, 0, false, false, rect, &metric);
+        let minimized = nc_calc_size(WS_OVERLAPPEDWINDOW | WS_MINIMIZE, 0, 0, false, &no_bar, rect, &metric);
         assert_eq!(minimized.client, Rect::new(10, 10, 10, 10));
     }
 

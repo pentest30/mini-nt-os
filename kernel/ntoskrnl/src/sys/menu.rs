@@ -12,7 +12,7 @@
 
 use alloc::vec::Vec;
 
-use abi::menu::{miim, MenuInfo32, MenuItemInfoW32, MENUITEMINFOW_OLD_SIZE, ROSMENUINFO_SIZE};
+use abi::menu::{miim, MenuBarInfo32, MenuInfo32, MenuItemInfoW32, MENUITEMINFOW_OLD_SIZE, ROSMENUINFO_SIZE};
 use abi::ntstatus::NtStatus;
 use abi::winerror::{dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE};
 use ke::usermem::{copy_from_user, UserPtr};
@@ -212,4 +212,105 @@ pub(super) fn nt_user_set_menu(arguments: &[u32]) -> NtStatus {
     let [hwnd, hmenu, repaint] = arguments[..3] else { unreachable!("3 arguments") };
     let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
     boolean(win32k::window::set_menu(&window, hmenu, repaint != 0))
+}
+
+/// Le RECT `rect` en `address` chez le client.
+fn give_rect(address: u32, rect: win32k::gdi::dib::Rect) -> Result<(), u32> {
+    let words = [rect.left, rect.top, rect.right, rect.bottom];
+    let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    ke::usermem::copy_to_user(u64::from(address), &bytes).map_err(dos_error)
+}
+
+/// NtUserGetMenuBarInfo(hwnd, idObject, idItem, pmbi) : BOOL ; pour la barre
+/// (OBJID_MENU) d'une fenêtre qui n'est pas fille, le MENUBARINFO (32
+/// octets) : le rectangle de la barre à l'écran (`idItem` 0 : depuis son
+/// premier item, de la taille `cxMenu` × `cyMenu`) ou de l'item `idItem` - 1,
+/// le menu, et qui a le focus (rien sans suivi du menu). Pas encore les menus
+/// déroulants (OBJID_CLIENT) ni le menu système (OBJID_SYSMENU) : FALSE.
+pub(super) fn nt_user_get_menu_bar_info(arguments: &[u32]) -> NtStatus {
+    let [hwnd, object, item, info] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    let run = || -> Result<bool, u32> {
+        let state = window.state();
+        if object as i32 != abi::user::OBJID_MENU || state.style & abi::user::WS_CHILD != 0 || state.menu == 0 {
+            return Ok(false);
+        }
+        let hmenu = state.menu;
+        if UserPtr::<u32>::new(info).read().map_err(dos_error)? != core::mem::size_of::<MenuBarInfo32>() as u32 {
+            return Err(ERROR_INVALID_PARAMETER);
+        }
+        let Some(menu) = win32k::menu::state(hmenu) else { return Ok(false) };
+        if item as usize > menu.items.len() {
+            return Ok(false);
+        }
+        let rect = if item == 0 {
+            let origin = win32k::menubar::item_rect(Some(&window), hmenu, 0).unwrap_or_default();
+            win32k::gdi::dib::Rect::new(
+                origin.left,
+                origin.top,
+                origin.left + menu.width as i32,
+                origin.top + menu.height as i32,
+            )
+        } else {
+            win32k::menubar::item_rect(Some(&window), hmenu, item - 1).unwrap_or_default()
+        };
+        let focused = item != 0 && menu.focused == item - 1;
+        let answer = MenuBarInfo32 {
+            cb_size: core::mem::size_of::<MenuBarInfo32>() as u32,
+            rc_bar: [rect.left, rect.top, rect.right, rect.bottom],
+            h_menu: hmenu,
+            hwnd_menu: 0,
+            focus: u32::from(focused) << 1,
+        };
+        ke::usermem::copy_to_user(u64::from(info), answer.as_bytes()).map_err(dos_error)?;
+        Ok(true)
+    };
+    match run() {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtUserGetMenuItemRect(hWnd, hMenu, uItem, lprcItem) : BOOL ; le
+/// rectangle de l'item `uItem` (sa position) à l'écran, dans la fenêtre
+/// dont le menu est la barre (`hWnd`, sinon celle du menu)
+/// (`win32k::menubar::item_rect`).
+pub(super) fn nt_user_get_menu_item_rect(arguments: &[u32]) -> NtStatus {
+    let [hwnd, hmenu, item, rect] = arguments[..4] else { unreachable!("4 arguments") };
+    if rect == 0 || !win32k::menu::exists(hmenu) {
+        return NtStatus(0);
+    }
+    let window = if hwnd == 0 { None } else { win32k::window::get(hwnd) };
+    if hwnd != 0 && window.is_none() {
+        return NtStatus(0);
+    }
+    match win32k::menubar::item_rect(window.as_deref(), hmenu, item) {
+        Some(found) => boolean(give_rect(rect, found)),
+        None => NtStatus(0),
+    }
+}
+
+/// NtUserMenuItemFromPoint(hWnd, hMenu, X, Y) : la position de l'item du
+/// menu sous le point (X, Y) de l'écran (`win32k::menubar::item_from_point`) ;
+/// -1 hors des items, sans menu ou sans sa fenêtre.
+pub(super) fn nt_user_menu_item_from_point(arguments: &[u32]) -> NtStatus {
+    let [_hwnd, hmenu, x, y] = arguments[..4] else { unreachable!("4 arguments") };
+    NtStatus(win32k::menubar::item_from_point(hmenu, (x as i32, y as i32)).unwrap_or(u32::MAX))
+}
+
+/// NtUserHiliteMenuItem(hWnd, hMenu, uItemHilite, uHilite) : l'item de la
+/// barre surligné (MF_HILITE) ou éteint, par position (MF_BYPOSITION) ou
+/// identifiant, et la barre repeinte (`win32k::menubar::hilite`) ; TRUE,
+/// même sans l'item (comme ReactOS). FALSE pour une fenêtre ou un menu qui
+/// n'existe pas.
+pub(super) fn nt_user_hilite_menu_item(arguments: &[u32]) -> NtStatus {
+    let [hwnd, hmenu, item, hilite] = arguments[..4] else { unreachable!("4 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    match menu(hmenu) {
+        Ok(hmenu) => {
+            win32k::menubar::hilite(&window, hmenu, item, hilite);
+            NtStatus(1)
+        }
+        Err(error) => fail(error, 0),
+    }
 }

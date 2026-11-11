@@ -318,6 +318,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserThunkedMenuItemInfo complet, NtUserCheckMenuItem, NtUserDeleteMenu, NtUserSetMenuDefaultItem,
   NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId ; SetMenu (une barre par fenêtre, `WND.IDMenu`) ; scénario
   `menu` (`tests/native/menu1.c`).
+  M6, étape 21 (la barre de menus, `win32k::menubar`) : mise en page (MENU_MenuBarCalcSize : lignes, MF_HELP à droite,
+  places dans le tas) par WM_NCCALCSIZE ; dessin (fond COLOR_MENU, texte centré, préfixe souligné, surligné enfoncé,
+  grisé en relief) ; NtUserGetMenuBarInfo, NtUserGetMenuItemRect, NtUserMenuItemFromPoint, NtUserHiliteMenuItem,
+  DrawMenuBar (HWNDLOCK_ROUTINE_DRAWMENUBAR) ; scénario `menu`.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

@@ -1368,13 +1368,34 @@ static void check_menu_bar(HINSTANCE instance)
 
 /* The client area of a window of `class_name` of `instance`, with `style`:
  * its height, or minus the error without the window. */
-static LONG client_height(const WCHAR *class_name, HINSTANCE instance, DWORD style)
+/* MENUBARINFO (GetMenuBarInfo). */
+typedef struct {
+    DWORD cbSize;
+    RECT rcBar;
+    HMENU hMenu;
+    HWND hwndMenu;
+    DWORD focus;
+} MENUBARINFO;
+
+#define OBJID_MENU (-3)
+
+__declspec(dllimport) BOOL __stdcall GetMenuBarInfo(HWND window, LONG object, LONG item, MENUBARINFO *info);
+
+/* The height of the client area of a window of `class_name`, and of its
+ * menu bar in `bar` (GetMenuBarInfo; 0 without). */
+static LONG client_height(const WCHAR *class_name, HINSTANCE instance, DWORD style, LONG *bar)
 {
     RECT rect;
+    MENUBARINFO info;
     HWND window = CreateWindowExW(0, class_name, L"Class menu", style, 10, 10, 300, 200, 0, 0, instance, 0);
 
+    *bar = 0;
     if (!window || !GetClientRect(window, &rect))
         return -(LONG)GetLastError();
+    memset(&info, 0, sizeof info);
+    info.cbSize = sizeof info;
+    if (GetMenuBarInfo(window, OBJID_MENU, 0, &info))
+        *bar = info.rcBar.bottom - info.rcBar.top;
     return rect.bottom - rect.top;
 }
 
@@ -1394,11 +1415,17 @@ static ATOM register_menu_class(const WCHAR *name, HINSTANCE module, const WCHAR
     return RegisterClassExW(&class_info);
 }
 
-/* Whether a window of a class with a menu has its menu bar: its client
- * area is SM_CYMENU less tall than `plain`, that of a class without one. */
-static const char *has_bar(ATOM atom, LONG plain, LONG barred)
+/* The lines of the menu bar of a window of a class with a menu: its client
+ * area is as much less tall than `plain` (that of a class without one) as its
+ * bar (`bar` high), a pixel over whole lines of SM_CYMENU - 1; 0 otherwise. A
+ * bar wraps where its items do not fit (shell32's MENU_001: two lines in 292
+ * pixels). */
+static int bar_lines(ATOM atom, LONG plain, LONG barred, LONG bar)
 {
-    return atom && plain > 0 && plain - barred == GetSystemMetrics(SM_CYMENU) ? "SM_CYMENU less tall" : "WRONG";
+    LONG line = GetSystemMetrics(SM_CYMENU) - 1;
+    if (!atom || plain <= 0 || plain - barred != bar || bar <= 1 || (bar - 1) % line)
+        return 0;
+    return (bar - 1) / line;
 }
 
 /* A window created without a menu takes its class's (lpszMenuName, a
@@ -1414,19 +1441,20 @@ static void check_class_menu(HINSTANCE instance)
     HINSTANCE shell32 = LoadLibraryW(L"shell32.dll");
     ATOM named = shell32 ? register_menu_class(NAMED_CLASS, shell32, L"MENU_001") : 0;
     ATOM numbered = shell32 ? register_menu_class(NUMBERED_CLASS, shell32, (const WCHAR *)206) : 0;
-    LONG plain;
-    LONG barred;
-    LONG by_number;
+    LONG plain, barred, by_number;
+    LONG none, bar, number_bar;
 
-    plain = client_height(CLASS_NAME, instance, WS_OVERLAPPEDWINDOW);
-    barred = client_height(NAMED_CLASS, shell32, WS_OVERLAPPEDWINDOW);
-    DbgPrint("[gui] the menu of a class, loaded by user32: %s (atoms %04x %04x, %ld, %ld)\n",
-             has_bar(named, plain, barred), named, numbered, plain, barred);
-    plain = client_height(CLASS_NAME, instance, WS_OVERLAPPED);
-    barred = client_height(NAMED_CLASS, shell32, WS_OVERLAPPED);
-    by_number = client_height(NUMBERED_CLASS, shell32, WS_OVERLAPPED);
-    DbgPrint("[gui] the menu of a class, loaded by win32k: by its name %s, by its identifier %s (%ld, %ld, %ld)\n",
-             has_bar(named, plain, barred), has_bar(numbered, plain, by_number), plain, barred, by_number);
+    plain = client_height(CLASS_NAME, instance, WS_OVERLAPPEDWINDOW, &none);
+    barred = client_height(NAMED_CLASS, shell32, WS_OVERLAPPEDWINDOW, &bar);
+    DbgPrint("[gui] the menu of a class, loaded by user32: a bar of %d lines (atoms %04x %04x, %ld, %ld)\n",
+             bar_lines(named, plain, barred, bar), named, numbered, plain, barred);
+    plain = client_height(CLASS_NAME, instance, WS_OVERLAPPED, &none);
+    barred = client_height(NAMED_CLASS, shell32, WS_OVERLAPPED, &bar);
+    by_number = client_height(NUMBERED_CLASS, shell32, WS_OVERLAPPED, &number_bar);
+    DbgPrint("[gui] the menu of a class, loaded by win32k: by its name a bar of %d lines, by its identifier %d (%ld, "
+             "%ld, %ld)\n",
+             bar_lines(named, plain, barred, bar), bar_lines(numbered, plain, by_number, number_bar), plain, barred,
+             by_number);
 }
 
 DWORD __stdcall GuiStartup(void)

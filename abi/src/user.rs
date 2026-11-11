@@ -463,6 +463,9 @@ pub const RDW_VALID_FLAGS: u32 = RDW_ERASE
 /// HWNDLOCK_ROUTINE_UPDATEWINDOW: the routine of NtUserCallHwndLock behind
 /// UpdateWindow (user32!UpdateWindow pushes 0x5E).
 pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
+/// HWNDLOCK_ROUTINE_DRAWMENUBAR: DrawMenuBar, by NtUserCallHwndLock (XP's
+/// order of the enum, as the routines above).
+pub const HWNDLOCK_ROUTINE_DRAWMENUBAR: u32 = 0x55;
 
 /// SPI_*: the actions of SystemParametersInfo that win32k answers.
 /// SPI_GETICONTITLELOGFONT: the font of the icon titles (`pvParam` a
@@ -1683,6 +1686,10 @@ pub mod esb {
 pub const OBJID_HSCROLL: i32 = -6;
 pub const OBJID_VSCROLL: i32 = -5;
 pub const OBJID_CLIENT: i32 = -4;
+/// OBJID_MENU: a window's menu bar (GetMenuBarInfo).
+pub const OBJID_MENU: i32 = -3;
+/// OBJID_SYSMENU: a window's system menu.
+pub const OBJID_SYSMENU: i32 = -1;
 
 /// STATE_SYSTEM_*: the state of a part of a scroll bar (`rgstate`).
 pub mod state_system {

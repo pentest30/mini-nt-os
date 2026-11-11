@@ -50,6 +50,7 @@ pub mod kbdtables;
 pub mod keyboard;
 pub mod logon;
 pub mod menu;
+pub mod menubar;
 pub mod metrics;
 pub mod monitor;
 pub mod mouse;

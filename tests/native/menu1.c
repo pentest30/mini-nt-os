@@ -64,6 +64,24 @@ typedef struct {
 } POINT;
 
 typedef struct {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+
+typedef void *HDC;
+typedef DWORD COLORREF;
+
+typedef struct {
+    DWORD cbSize;
+    RECT rcBar;
+    HMENU hMenu;
+    HWND hwndMenu;
+    DWORD focus; /* fBarFocused : 1, fFocused : 1 */
+} MENUBARINFO;
+
+typedef struct {
     HWND hwnd;
     UINT message;
     WPARAM wParam;
@@ -112,6 +130,11 @@ typedef struct {
 #define MF_BYPOSITION 0x0400
 #define MF_SEPARATOR 0x0800
 #define MF_HELP 0x4000
+#define MF_HILITE 0x0080
+#define MF_UNHILITE 0x0000
+#define OBJID_MENU (-3)
+#define COLOR_MENU 4
+#define COLOR_BTNSHADOW 16
 #define MF_ENABLED 0x0000
 #define MF_UNCHECKED 0x0000
 #define MIIM_STATE 0x0001
@@ -177,6 +200,17 @@ __declspec(dllimport) BOOL __stdcall SetMenuInfo(HMENU menu, const MENUINFO *inf
 __declspec(dllimport) BOOL __stdcall SetProcessWindowStation(HWINSTA station);
 __declspec(dllimport) BOOL __stdcall SetThreadDesktop(HDESK desktop);
 __declspec(dllimport) BOOL __stdcall SwitchDesktop(HDESK desktop);
+__declspec(dllimport) BOOL __stdcall DrawMenuBar(HWND window);
+__declspec(dllimport) BOOL __stdcall GetClientRect(HWND window, RECT *rect);
+__declspec(dllimport) BOOL __stdcall GetMenuBarInfo(HWND window, LONG object, LONG item, MENUBARINFO *info);
+__declspec(dllimport) BOOL __stdcall GetMenuItemRect(HWND window, HMENU menu, UINT item, RECT *rect);
+__declspec(dllimport) DWORD __stdcall GetSysColor(int index);
+__declspec(dllimport) HDC __stdcall GetWindowDC(HWND window);
+__declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
+__declspec(dllimport) BOOL __stdcall HiliteMenuItem(HWND window, HMENU menu, UINT item, UINT hilite);
+__declspec(dllimport) int __stdcall MenuItemFromPoint(HWND window, HMENU menu, POINT point);
+__declspec(dllimport) int __stdcall ReleaseDC(HWND window, HDC hdc);
+__declspec(dllimport) COLORREF __stdcall GetPixel(HDC hdc, int x, int y);
 __declspec(dllimport) BOOL __stdcall TranslateMessage(const MSG *message);
 
 static const WCHAR CLASS_NAME[] = L"MinoMenu";
@@ -406,12 +440,99 @@ static void remove_and_load(void)
     DbgPrint("[menu] DestroyMenu %d: gone %d, its submenu gone %d\n", destroyed, loaded_gone, view_gone);
 }
 
+/* The colour at (x, y) of W, on the screen (its window DC). */
+static COLORREF window_pixel(int x, int y)
+{
+    HDC hdc = GetWindowDC(w);
+    COLORREF color = GetPixel(hdc, x, y);
+    ReleaseDC(w, hdc);
+    return color;
+}
+
+/* The pixels inside `rect` (on the screen, without its edge) that are not
+ * `background`: the text, smoothed. */
+static int count_pixels(const RECT *rect, RECT window, COLORREF background)
+{
+    int x, y, count = 0;
+    for (y = rect->top + 1; y < rect->bottom - 1; y++)
+        for (x = rect->left + 1; x < rect->right - 1; x++)
+            if (window_pixel(x - window.left, y - window.top) != background)
+                count++;
+    return count;
+}
+
+/* W's bar (File, Edit, Help): between its caption and its client area, the
+ * items from its left, Help on its right; MenuItemFromPoint, HiliteMenuItem
+ * on the screen, DrawMenuBar after a longer title. */
+static void bar_checks(void)
+{
+    MENUBARINFO info, item_info;
+    RECT window, client, file_rect, edit_rect, help_rect, moved;
+    POINT middle, outside;
+    BOOL got, item_got, file_got, edit_got, help_got, same, stays;
+    int height, border, client_top, at_edit, away, text, hilited, sunken, flat;
+    UINT state, after;
+
+    GetWindowRect(w, &window);
+    GetClientRect(w, &client);
+    memset(&info, 0, sizeof info);
+    info.cbSize = sizeof info;
+    got = GetMenuBarInfo(w, OBJID_MENU, 0, &info);
+    file_got = GetMenuItemRect(w, bar, 0, &file_rect);
+    edit_got = GetMenuItemRect(w, bar, 1, &edit_rect);
+    help_got = GetMenuItemRect(w, bar, 2, &help_rect);
+    height = info.rcBar.bottom - info.rcBar.top;
+    /* The frame is as thick at the bottom as on the right. */
+    border = window.right - info.rcBar.right;
+    client_top = window.bottom - border - (client.bottom - client.top);
+    DbgPrint("[menu] GetMenuBarInfo %d: menu %d, %d high, the frame's width each side %d, the client area under it "
+             "%d\n",
+             got, info.hMenu == bar, height, info.rcBar.left - window.left == border, info.rcBar.bottom == client_top);
+    DbgPrint("[menu] GetMenuItemRect %d %d %d: File at the bar's left %d, Edit after it %d, Help at its right %d, "
+             "%d high\n",
+             file_got, edit_got, help_got, file_rect.left == info.rcBar.left, edit_rect.left == file_rect.right,
+             help_rect.right == info.rcBar.right, file_rect.bottom - file_rect.top);
+    memset(&item_info, 0, sizeof item_info);
+    item_info.cbSize = sizeof item_info;
+    item_got = GetMenuBarInfo(w, OBJID_MENU, 2, &item_info);
+    same = item_info.rcBar.left == edit_rect.left && item_info.rcBar.top == edit_rect.top && item_info.rcBar.right == edit_rect.right &&
+           item_info.rcBar.bottom == edit_rect.bottom;
+    middle.x = (edit_rect.left + edit_rect.right) / 2;
+    middle.y = (edit_rect.top + edit_rect.bottom) / 2;
+    outside.x = window.left + 1;
+    outside.y = window.bottom - 2;
+    at_edit = MenuItemFromPoint(w, bar, middle);
+    away = MenuItemFromPoint(w, bar, outside);
+    DbgPrint("[menu] GetMenuBarInfo of Edit %d: its rectangle %d; MenuItemFromPoint: Edit %d, elsewhere %d\n",
+             item_got, same, at_edit, away);
+
+    text = count_pixels(&file_rect, window, GetSysColor(COLOR_MENU));
+    HiliteMenuItem(w, bar, 0, MF_BYPOSITION | MF_HILITE);
+    state = GetMenuState(bar, 0, MF_BYPOSITION) & MF_HILITE;
+    sunken = window_pixel(file_rect.left - window.left, file_rect.top - window.top) == GetSysColor(COLOR_BTNSHADOW);
+    hilited = count_pixels(&file_rect, window, GetSysColor(COLOR_MENU));
+    HiliteMenuItem(w, bar, 0, MF_BYPOSITION | MF_UNHILITE);
+    after = GetMenuState(bar, 0, MF_BYPOSITION) & MF_HILITE;
+    flat = window_pixel(file_rect.left - window.left, file_rect.top - window.top) == GetSysColor(COLOR_MENU);
+    DbgPrint("[menu] the text of File drawn %d; HiliteMenuItem: %x, sunken %d, text %d; unlit: %x, flat %d\n",
+             text > 20, state, sunken, hilited > 20, after, flat);
+
+    ModifyMenuW(bar, 0, MF_BYPOSITION | MF_STRING, (ULONG_PTR)file, L"&Fichier");
+    GetMenuItemRect(w, bar, 1, &moved);
+    stays = moved.left == edit_rect.left;
+    DrawMenuBar(w);
+    GetMenuItemRect(w, bar, 1, &moved);
+    DbgPrint("[menu] ModifyMenuW: Edit stays %d until DrawMenuBar, then moves right %d\n", stays,
+             moved.left > edit_rect.left);
+}
+
 static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
     if (message == WM_APP) {
         read_back();
         change();
         windows();
+        bar_checks();
         remove_and_load();
         DbgPrint("[menu] done\n");
         PostQuitMessage(0);
