@@ -308,7 +308,7 @@ pub(super) fn nt_user_end_paint(arguments: &[u32]) -> NtStatus {
 static UNSUPPORTED_HWND_LOCK_ROUTINES: super::ClassReport = super::ClassReport::new("NtUserCallHwndLock");
 
 /// Le RECT en `address` ; `None` pour une adresse nulle.
-fn read_rect(address: u32) -> Result<Option<win32k::gdi::dib::Rect>, NtStatus> {
+pub(super) fn read_rect(address: u32) -> Result<Option<win32k::gdi::dib::Rect>, NtStatus> {
     if address == 0 {
         return Ok(None);
     }

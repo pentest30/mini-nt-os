@@ -1,6 +1,8 @@
 //! Les barres de défilement des fenêtres (`win32k::scroll`) :
 //! NtUserSetScrollInfo, NtUserSBGetParms, NtUserGetScrollBarInfo,
-//! NtUserSetScrollBarInfo, NtUserShowScrollBar, NtUserEnableScrollBar.
+//! NtUserSetScrollBarInfo, NtUserShowScrollBar, NtUserEnableScrollBar ; le
+//! défilement d'une fenêtre ou d'un DC (`win32k::scrollex`) :
+//! NtUserScrollWindowEx, NtUserScrollDC.
 //! Comme dans win32k, un échec rend 0 et met l'erreur Win32 dans le TEB du
 //! thread ; une fenêtre qui n'existe pas, `ERROR_INVALID_WINDOW_HANDLE`.
 
@@ -8,8 +10,9 @@ use core::mem::size_of;
 
 use abi::ntstatus::NtStatus;
 use abi::user::{ScrollBarInfo32, ScrollInfo32, SetScrollBarInfo32};
-use abi::winerror::{dos_error, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE};
+use abi::winerror::{dos_error, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE};
 use ke::usermem::{copy_from_user, copy_to_user};
+use win32k::gdi::region::Region;
 use win32k::window::Window;
 
 /// Met l'erreur Win32 `error` et rend 0.
@@ -129,6 +132,84 @@ pub(super) fn nt_user_enable_scroll_bar(arguments: &[u32]) -> NtStatus {
     let [hwnd, bar, arrows] = arguments[..3] else { unreachable!("3 arguments") };
     match window(hwnd).and_then(|window| win32k::scroll::enable_scroll_bar(&window, bar, arrows)) {
         Ok(changed) => NtStatus(u32::from(changed)),
+        Err(error) => fail(error),
+    }
+}
+
+/// Le RECT `rect` en `address` chez le client, s'il y en a un.
+fn give_rect(address: u32, rect: win32k::gdi::dib::Rect) -> Result<(), u32> {
+    if address == 0 {
+        return Ok(());
+    }
+    let words = [rect.left, rect.top, rect.right, rect.bottom];
+    let bytes: alloc::vec::Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+    copy_to_user(u64::from(address), &bytes).map_err(dos_error)
+}
+
+/// La région GDI `hrgn` du processus, si elle est donnée ;
+/// `ERROR_INVALID_HANDLE` pour un handle qui n'en est pas une.
+fn region_object(hrgn: u32) -> Result<Option<alloc::sync::Arc<win32k::gdi::rgnobj::RegionObject>>, u32> {
+    if hrgn == 0 {
+        return Ok(None);
+    }
+    win32k::gdi::rgnobj::lock(hrgn).map(Some).ok_or(ERROR_INVALID_HANDLE)
+}
+
+/// NtUserScrollWindowEx(hWnd, dx, dy, prcScroll, prcClip, hrgnUpdate,
+/// prcUpdate, flags) : la complexité de ce que le défilement découvre
+/// (NULLREGION, SIMPLEREGION, COMPLEXREGION ; `win32k::scrollex::scroll_window`),
+/// que `hrgnUpdate` reçoit, avec la région déjà à repeindre de la fenêtre,
+/// et `prcUpdate` son rectangle ; ERROR (0) pour une fenêtre qu'on ne voit
+/// pas, un RECT illisible ou une région qui n'en est pas une.
+pub(super) fn nt_user_scroll_window_ex(arguments: &[u32]) -> NtStatus {
+    let [hwnd, dx, dy, scroll, clip, hrgn, update_rect, flags] = arguments[..8] else { unreachable!("8 arguments") };
+    let run = || {
+        let window = window(hwnd)?;
+        let scroll = super::window::read_rect(scroll).map_err(dos_error)?;
+        let clip = super::window::read_rect(clip).map_err(dos_error)?;
+        let object = region_object(hrgn)?;
+        let delta = (dx as i32, dy as i32);
+        let Some(scrolled) = win32k::scrollex::scroll_window(&window, delta, scroll, clip, flags, object.is_some())
+        else {
+            return Ok(abi::gdi::ERROR);
+        };
+        give_rect(update_rect, scrolled.update.bounds())?;
+        if let Some(object) = object {
+            let mut region = scrolled.update.clone();
+            region.union(&scrolled.window_update);
+            object.set(region);
+        }
+        Ok(scrolled.update.complexity())
+    };
+    match run() {
+        Ok(complexity) => NtStatus(complexity as u32),
+        Err(error) => fail(error),
+    }
+}
+
+/// NtUserScrollDC(hDC, dx, dy, prcScroll, prcClip, hrgnUpdate, prcUpdate) :
+/// BOOL ; le contenu du DC défile (`win32k::scrollex::scroll_dc`), ce qu'il
+/// découvre (en coordonnées logiques) dans `hrgnUpdate` et `prcUpdate`.
+/// FALSE pour un DC qui n'est pas au processus, un RECT illisible ou une
+/// région qui n'en est pas une.
+pub(super) fn nt_user_scroll_dc(arguments: &[u32]) -> NtStatus {
+    let [hdc, dx, dy, scroll, clip, hrgn, update_rect] = arguments[..7] else { unreachable!("7 arguments") };
+    let run = || {
+        let scroll = super::window::read_rect(scroll).map_err(dos_error)?;
+        let clip = super::window::read_rect(clip).map_err(dos_error)?;
+        let object = region_object(hrgn)?;
+        let Some(update): Option<Region> = win32k::scrollex::scroll_dc(hdc, (dx as i32, dy as i32), scroll, clip)
+        else {
+            return Err(ERROR_INVALID_HANDLE);
+        };
+        give_rect(update_rect, update.bounds())?;
+        if let Some(object) = object {
+            object.set(update);
+        }
+        Ok(())
+    };
+    match run() {
+        Ok(()) => NtStatus(1),
         Err(error) => fail(error),
     }
 }

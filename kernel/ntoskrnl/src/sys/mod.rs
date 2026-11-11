@@ -281,6 +281,8 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserEnableScrollBar, Handler::Status(scroll::nt_user_enable_scroll_bar)),
     (services::NtUserGetScrollBarInfo, Handler::Status(scroll::nt_user_get_scroll_bar_info)),
     (services::NtUserSBGetParms, Handler::Status(scroll::nt_user_sb_get_parms)),
+    (services::NtUserScrollDC, Handler::Status(scroll::nt_user_scroll_dc)),
+    (services::NtUserScrollWindowEx, Handler::Status(scroll::nt_user_scroll_window_ex)),
     (services::NtUserSetScrollBarInfo, Handler::Status(scroll::nt_user_set_scroll_bar_info)),
     (services::NtUserSetScrollInfo, Handler::Status(scroll::nt_user_set_scroll_info)),
     (services::NtUserShowScrollBar, Handler::Status(scroll::nt_user_show_scroll_bar)),

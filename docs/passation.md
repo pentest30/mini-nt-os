@@ -1,5 +1,13 @@
 # Notes de passation
 
+- **Le défilement d'une fenêtre ou d'un DC** (`claude/new-session-696xfc` ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 18) : `win32k::scrollex` (ScrollDC : la copie dans la surface
+  du DC et la région découverte, `plan` ; ScrollWindowEx : par un DC du cache, la région déjà à repeindre décalée,
+  SW_SCROLLCHILDREN, SW_INVALIDATE, SW_ERASE), NtUserScrollWindowEx et NtUserScrollDC (`sys::scroll`) ; BitBlt dans
+  une même surface copie les rectangles d'une région dans le sens du décalage (`gdi::bitblt::overlap_order`). Tests :
+  hôte (`scrollex`, `gdi::bitblt`) ; scénario `scrollex` (`tests/native/scrollx1.c`) sur AMD et Intel. Pas encore :
+  le caret (le prochain manque : le contrôle Edit du Bloc-notes), le DC propre de ScrollWindow.
+
 - **Le nom d'un volume en UTF-16 tel quel** (`claude/new-session-696xfc`, après les barres de défilement) :
   `io::VolumeLabel.label` devient un `Vec<u16>` ; NTFS rend `$VOLUME_NAME` sans le convertir (un surrogate isolé
   faisait échouer FileFsVolumeInformation en `STATUS_FILE_CORRUPT_ERROR`, donc `vol` et l'en-tête de `dir`), FAT

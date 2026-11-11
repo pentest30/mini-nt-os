@@ -24,6 +24,7 @@ EndPaint@8
 EnumChildWindows@12
 EnumThreadWindows@12
 EnumWindows@8
+FillRect@12
 GetActiveWindow@0
 GetAsyncKeyState@4
 GetCapture@0
@@ -80,6 +81,8 @@ RegisterClassExW@4
 RegisterLogonProcess@8
 ReleaseCapture@0
 ReleaseDC@8
+ScrollDC@28
+ScrollWindowEx@32
 SendMessageTimeoutW@28
 SendMessageW@16
 SendNotifyMessageW@16

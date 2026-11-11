@@ -10,13 +10,14 @@
 //!
 //! Deux surfaces : les bitmaps se prennent avant l'écran, et deux bitmaps
 //! dans l'ordre de leurs adresses ; une même surface copie en place
-//! ([`Bitmap::blt_within`]).
+//! ([`Bitmap::blt_within`]), un rectangle de la région après l'autre dans
+//! le sens du décalage ([`overlap_order`]) : aucun n'écrase la source d'un
+//! suivant (ScrollDC, ScrollWindowEx sur une région découpée par des
+//! fenêtres filles).
 //!
 //! Pas encore : StretchBlt (CAPTUREBLT y mène dans ReactOS : sans fenêtres
 //! superposées, c'est le même BitBlt), MaskBlt avec un masque, les DC
-//! transformés, les motifs autres que pleins, le défilement de l'écran à
-//! travers plusieurs rectangles de la région (chacun copie en place, l'un
-//! après l'autre).
+//! transformés, les motifs autres que pleins.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -73,6 +74,23 @@ pub fn parts(rect: Rect, from: (i32, i32), clip: &[Rect]) -> Vec<Part> {
         .collect()
 }
 
+/// Les étapes `parts` d'une copie dans une même surface, dans l'ordre où
+/// aucune n'écrase la source d'une suivante : les bandes de la région
+/// (rectangles de même haut) en partant du côté où va le décalage, et dans
+/// une bande, les rectangles aussi. La source d'un rectangle est du côté
+/// opposé au décalage : déjà lue quand on y écrit.
+pub fn overlap_order(parts: &[Part]) -> Vec<Part> {
+    let mut parts = parts.to_vec();
+    let Some(&(rect, from)) = parts.first() else { return parts };
+    let (dx, dy) = (rect.left - from.0, rect.top - from.1);
+    parts.sort_by(|a, b| {
+        let by_y = if dy > 0 { b.0.top.cmp(&a.0.top) } else { a.0.top.cmp(&b.0.top) };
+        let by_x = if dx > 0 { b.0.left.cmp(&a.0.left) } else { a.0.left.cmp(&b.0.left) };
+        by_y.then(by_x)
+    });
+    parts
+}
+
 /// La surface d'un DC.
 #[derive(Clone)]
 enum Target {
@@ -98,7 +116,7 @@ fn blit(source: &Target, dest: &Target, parts: &[Part], rop3: u8, pattern: Color
         }
     };
     let within = |surface: &mut Bitmap<'_>| {
-        for &(rect, from) in parts {
+        for (rect, from) in overlap_order(parts) {
             surface.blt_within(rect, from, rop3, pattern);
         }
     };
@@ -199,6 +217,39 @@ mod tests {
         let (rect, from) = geometry((10, 20, -4, -6), (0, 0), (50, 60), (0, 0));
         assert_eq!(rect, Rect::new(6, 14, 10, 20), "well ordered");
         assert_eq!(from, (46, 54), "the source's corner moves back by the extents");
+    }
+
+    #[test]
+    fn copies_in_one_surface_go_the_way_of_the_shift() {
+        use super::super::dib::{PixelLayout, SRCCOPY};
+        // A 10 x 10 surface, each pixel its own value; a region of two bands
+        // (rows 0 to 5 in two rectangles, rows 5 to 10) scrolled down 3 and
+        // right 2: each part copied in the other order would read pixels
+        // already overwritten.
+        let start: Vec<u32> = (0..100).collect();
+        let clip = [Rect::new(0, 0, 4, 5), Rect::new(6, 0, 10, 5), Rect::new(0, 5, 10, 10)];
+        let scrolled = parts(Rect::new(0, 0, 10, 10), (-2, -3), &clip);
+        let ordered = overlap_order(&scrolled);
+        assert_eq!(ordered[0].0, Rect::new(0, 5, 10, 10), "the band the shift goes to first");
+        assert_eq!(ordered[1].0, Rect::new(6, 0, 10, 5), "then right to left");
+        let mut pixels = start.clone();
+        let mut surface = Bitmap::new(&mut pixels, 10, 10, 10, PixelLayout::Rgbx).unwrap();
+        for (rect, from) in ordered {
+            surface.blt_within(rect, from, SRCCOPY, ColorRef(0));
+        }
+        let value = |x: i32, y: i32| pixels[(y * 10 + x) as usize];
+        let original = |x: i32, y: i32| start[(y * 10 + x) as usize];
+        // Inside the region, each pixel holds what was 2 left and 3 up, if
+        // that was on the surface.
+        for &rect in &clip {
+            for y in rect.top.max(3)..rect.bottom {
+                for x in rect.left.max(2)..rect.right {
+                    assert_eq!(value(x, y), original(x - 2, y - 3), "({x}, {y})");
+                }
+            }
+        }
+        let up = overlap_order(&parts(Rect::new(0, 0, 10, 10), (0, 3), &clip));
+        assert_eq!(up[0].0, Rect::new(0, 0, 4, 5), "scrolled up: the top band first, left to right");
     }
 
     #[test]

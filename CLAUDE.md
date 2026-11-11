@@ -302,7 +302,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserGetScrollBarInfo, NtUserSetScrollBarInfo, NtUserShowScrollBar, NtUserEnableScrollBar ; le cadre dessine
   flèches, fond en damier (`Op::Mono`), curseur, coin et poignée de taille ; HTVSCROLL, HTHSCROLL, HTSIZE ; un clic
   devient WM_SYSCOMMAND SC_VSCROLL, que `user32` suit (DefWndTrackScrollBar) ; scénario `scroll`
-  (`tests/native/scroll1.c`). Pas encore SB_CTL, ScrollWindowEx, ScrollDC.
+  (`tests/native/scroll1.c`). Pas encore SB_CTL.
+  M6, étape 18 (le défilement, `win32k::scrollex`) : NtUserScrollDC (la copie dans la surface du DC, la région
+  découverte) et NtUserScrollWindowEx (par un DC du cache, la région déjà à repeindre décalée, SW_SCROLLCHILDREN,
+  SW_INVALIDATE, SW_ERASE) ; BitBlt dans une même surface copie dans le sens du décalage
+  (`gdi::bitblt::overlap_order`) ; scénario `scrollex` (`tests/native/scrollx1.c`). Pas encore le caret.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

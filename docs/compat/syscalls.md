@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 121 | 296 |
-| win32k | 135 | 737 |
+| win32k | 137 | 737 |
 
 ## ntoskrnl
 
@@ -813,8 +813,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
 | `0x11f0` | `NtUserSBGetParms` | 4 | ✅ |
-| `0x11f1` | `NtUserScrollDC` | 7 |  |
-| `0x11f2` | `NtUserScrollWindowEx` | 8 |  |
+| `0x11f1` | `NtUserScrollDC` | 7 | ✅ |
+| `0x11f2` | `NtUserScrollWindowEx` | 8 | ✅ |
 | `0x11f3` | `NtUserSelectPalette` | 3 |  |
 | `0x11f4` | `NtUserSendInput` | 3 |  |
 | `0x11f5` | `NtUserSetActiveWindow` | 1 |  |

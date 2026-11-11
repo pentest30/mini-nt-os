@@ -240,7 +240,7 @@ pub fn invalidate_windows(window: &Window, region: Option<&Region>, flags: u32) 
 
 /// IntIsWindowDrawable : `window` et ses parents sont visibles, et aucun
 /// parent n'est réduit.
-fn is_drawable(window: &Window) -> bool {
+pub(crate) fn is_drawable(window: &Window) -> bool {
     let state = window.state();
     if state.style & WS_VISIBLE == 0 {
         return false;

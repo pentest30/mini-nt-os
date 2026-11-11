@@ -846,3 +846,31 @@ avec ses barres et leur coin ; `defwnd` : HTVSCROLL, HTHSCROLL, HTSIZE ; `gdi::d
 `desktop-launch`) ou dont le test d'atteinte compte (`gui`, `mouse`, `cursor`). Dans `console`, la fenêtre de
 `consrv` a maintenant sa barre verticale (conwnd.c l'ajoute à sa largeur et la montre) : sa zone cliente fait les 640
 pixels de ses 80 colonnes, plus 656.
+
+## Étape 18 : le défilement d'une fenêtre ou d'un DC (ScrollWindowEx, ScrollDC)
+
+Avec les barres de défilement (étape 17), `consrv` et la listview appelaient NtUserScrollWindowEx, absent (0 rendu) :
+rien ne défilait. `scrollex.c` de win32k (ReactOS comme spécification) ; `win32k::scrollex`, `sys::scroll`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| ScrollDC (`scrollex::scroll_dc`, UserScrollDC) | dans la surface du DC, la partie de `prcScroll` (sans lui, la boîte de découpage du DC) qui tombe dans le découpage et `prcClip` est copiée, décalée de (dx, dy) (BitBlt SRCCOPY sur le même DC) ; à repeindre (`scrollex::plan`) : la destination de tout `prcScroll` et la source, moins ce qui a été copié d'une source visible ; dans `hrgnUpdate` et `prcUpdate` (coordonnées logiques) |
+| ScrollWindowEx (`scrollex::scroll_window`, IntScrollWindowEx) | la même chose sur la zone cliente, par un DC du cache (`dc_flags` : sans couper les filles avec SW_SCROLLCHILDREN) ; la région déjà à repeindre de la fenêtre se décale aussi ; SW_SCROLLCHILDREN déplace les filles (`window::move_tree`) et envoie WM_MOVE à celles que le rectangle touchait ; SW_INVALIDATE (et SW_ERASE) invalide ce qui est découvert ; rend sa complexité (NULLREGION, SIMPLEREGION, COMPLEXREGION ; ERROR pour une fenêtre qu'on ne voit pas) |
+| BitBlt dans une même surface (`gdi::bitblt::overlap_order`) | les rectangles d'une région se copient dans le sens du décalage (les bandes, puis dans une bande), aucun n'écrasant la source d'un suivant : un défilement dont la région est découpée par une fille copie juste (le manque que notait `gdi::bitblt`) |
+
+Un écart voulu avec ReactOS : WM_MOVE d'une fille déplacée par SW_SCROLLCHILDREN porte le coin de sa zone cliente dans
+celle de son parent, comme la documentation de l'API.
+
+Ce qui manque : le caret (co_IntFixCaret le cache pendant le défilement, puis le décale), le DC propre d'une fenêtre ou
+de sa classe pour ScrollWindow (le cache aussi), SW_SMOOTHSCROLL (ignoré, comme ReactOS).
+
+Le banc d'essai : `tests/native/scrollx1.c` (`SCROLLX1.EXE` à la place de `winlogon.exe`, scénario `scrollex`) : une
+fenêtre peinte en bandes de 20 pixels selon une position, qui ne peint que ce qu'on lui demande ; ScrollWindowEx vers le
+haut de 30 (SIMPLEREGION, les 30 dernières lignes dans `hrgnUpdate`, `prcUpdate` et GetUpdateRect, et seules peintes),
+ScrollDC vers le bas de 20 sur son DC (les 20 premières), une fille déplacée de 10 vers la gauche avec SW_SCROLLCHILDREN
+(WM_MOVE 290, 100) ; sept pixels vérifiés (sans la copie, cinq sont faux).
+
+Tests : hôte (`scrollex` : la région découverte, ce qui n'a pas pu être copié, le rectangle de défilement et celui de
+découpage, les zones, les drapeaux du DC ; `gdi::bitblt` : l'ordre des copies dans une même surface, qui échoue dans
+l'ordre de la région) ; le scénario `scrollex` sur AMD et Intel, et `listview`, `console`, `cmd`, `desktop-launch`,
+`gui`, `bitmap`, `scroll` sur AMD.

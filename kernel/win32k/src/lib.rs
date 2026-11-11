@@ -56,6 +56,7 @@ pub mod nonclient;
 pub mod paint;
 pub mod queue;
 pub mod scroll;
+pub mod scrollex;
 pub mod sent;
 pub mod shared;
 pub mod sizemove;

@@ -1693,6 +1693,21 @@ pub const CCHILDREN_SCROLLBAR: usize = 5;
 /// SBS_VERT: a vertical scroll bar control.
 pub const SBS_VERT: u32 = 0x0001;
 
+/// SW_*: what ScrollWindowEx does besides scrolling.
+pub mod sw_scroll {
+    /// The children move too (WM_MOVE), and are scrolled with the client
+    /// area.
+    pub const SCROLLCHILDREN: u32 = 0x0001;
+    /// What the scroll uncovers is invalidated.
+    pub const INVALIDATE: u32 = 0x0002;
+    /// And erased (with INVALIDATE: WM_ERASEBKGND at the next paint).
+    pub const ERASE: u32 = 0x0004;
+    /// Smoothly (ignored, as in ReactOS).
+    pub const SMOOTHSCROLL: u32 = 0x0010;
+    /// ReactOS's (`undocuser.h`): ScrollWindow, with the window's DC.
+    pub const SCROLLWNDDCE: u32 = 0x8000;
+}
+
 /// SBDATA, 32-bit: the range, page and position of a scroll bar, which
 /// `user32` reads itself (GetScrollPos, GetScrollRange).
 #[repr(C)]
