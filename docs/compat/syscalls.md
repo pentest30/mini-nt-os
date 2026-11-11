@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 127 | 296 |
-| win32k | 156 | 737 |
+| win32k | 157 | 737 |
 
 ## ntoskrnl
 
@@ -755,7 +755,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11b4` | `NtUserGetUpdateRect` | 3 | ✅ |
 | `0x11b5` | `NtUserGetUpdateRgn` | 3 | ✅ |
 | `0x11b6` | `NtUserGetWindowDC` | 1 | ✅ |
-| `0x11b7` | `NtUserGetWindowPlacement` | 2 |  |
+| `0x11b7` | `NtUserGetWindowPlacement` | 2 | ✅ |
 | `0x11b8` | `NtUserGetWOWClass` | 2 |  |
 | `0x11b9` | `NtUserHardErrorControl` | 3 |  |
 | `0x11ba` | `NtUserHideCaret` | 1 | ✅ |
