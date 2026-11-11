@@ -725,8 +725,9 @@ pub fn move_to(dc: &Dc, x: i32, y: i32, out: u32) -> Option<(i32, i32)> {
 pub fn line_to(dc: &Dc, x: i32, y: i32) -> bool {
     let state = dc.state();
     let (dx, dy) = logical_origin(&state, None);
-    let from = (state.position.0 + dx, state.position.1 + dy);
-    let to = (x + dx, y + dy);
+    // Any coordinates the caller gives (see Bitmap::draw_line).
+    let from = (state.position.0.saturating_add(dx), state.position.1.saturating_add(dy));
+    let to = (x.saturating_add(dx), y.saturating_add(dy));
     let pen = state.pen.as_ref().map_or(super::pen::Pen::BLACK, |(_, pen)| *pen);
     let rao = state.rao();
     if rao.is_empty() {
