@@ -56,12 +56,12 @@ use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
     Rect32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
-    DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, GWLP_HINSTANCE, GWLP_HWNDPARENT,
-    GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE,
-    HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION,
-    STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4,
-    WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT, WM_PAINT,
-    WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
+    DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, FNID_MENU, GWLP_HINSTANCE,
+    GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM,
+    HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+    STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
+    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT,
+    WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
     WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW,
     WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
     WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
@@ -816,17 +816,29 @@ pub fn hide_desktop_window(desktop: &Desktop) {
 fn update_window(window: &Window) {
     let state = window.state();
     if state.style & WS_VISIBLE != 0 && !state.update.is_empty() {
-        server_window_proc(window, WM_PAINT, 0, 0);
+        server_window_proc(window, WM_PAINT, 0, &mut LParam::Value(0));
     }
 }
 
 /// La procédure dans win32k d'une fenêtre qui en a une ; `None` pour une
-/// autre (sa procédure est alors celle du client).
-fn server_window_proc(window: &Window, message: u32, wparam: u32, lparam: u32) -> Option<u32> {
+/// autre (sa procédure est alors celle du client). Celle d'un menu
+/// déroulant se reconnaît à sa classe : sa FNID n'est posée qu'à
+/// WM_NCCREATE.
+fn server_window_proc(window: &Window, message: u32, wparam: u32, lparam: &mut LParam<'_>) -> Option<u32> {
     let state = window.state();
-    match state.fnid {
-        FNID_DESKTOP if state.state & WNDS_SERVERSIDEWINDOWPROC != 0 => {
-            Some(desktop_window_proc(window, message, wparam, lparam))
+    if state.state & WNDS_SERVERSIDEWINDOWPROC == 0 {
+        return None;
+    }
+    let fnid = state.fnid;
+    drop(state);
+    let value = match lparam {
+        LParam::Value(value) => *value,
+        LParam::Buffer { .. } => 0,
+    };
+    match fnid {
+        FNID_DESKTOP => Some(desktop_window_proc(window, message, wparam, value)),
+        _ if window.class.as_ref().is_some_and(|class| class.fnid == FNID_MENU) => {
+            Some(crate::menupopup::window_proc(window, message, wparam, lparam))
         }
         _ => None,
     }
@@ -938,11 +950,12 @@ pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn send_message(window: &Arc<Window>, message: u32, wparam: u32, lparam: LParam<'_>) -> Result<u32, NtStatus> {
+    let mut lparam = lparam;
     let value = match &lparam {
         LParam::Value(value) => *value,
         LParam::Buffer { .. } => 0,
     };
-    if let Some(result) = server_window_proc(window, message, wparam, value) {
+    if let Some(result) = server_window_proc(window, message, wparam, &mut lparam) {
         return Ok(result);
     }
     let thread = crate::convert_current_thread()?;

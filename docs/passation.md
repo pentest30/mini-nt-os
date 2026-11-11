@@ -1,5 +1,25 @@
 # Notes de passation
 
+- **Les menus déroulants** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 22) : `win32k::menupopup` (la fenêtre #32768 : mise en page MENU_PopupMenuCalcSize avec coches, raccourcis
+  alignés et flèches, dessin, procédure du serveur, que `window::server_window_proc` reconnaît à sa classe et à qui
+  il passe le `lParam` emballé) ; `win32k::menutrack` (IntTrackPopupMenuEx et MENU_TrackMenu dans le service : place
+  sur le moniteur et rectangle évité, souris capturée, clavier, mnémoniques et WM_MENUCHAR, sous-menus, toutes les
+  notifications, WM_COMMAND posté ou TPM_RETURNCMD, WM_ENTERIDLE, EndMenu par WM_CANCELMODE). La file porte la
+  fenêtre qui suit un menu (`queue.menu_owner`, MSQ_STATE_MENUOWNER) : ses messages de la souris gardent leur place à
+  l'écran (`mouse::resolve`), comme ReactOS, et la boucle la lit dans `lParam`. Services : NtUserTrackPopupMenuEx,
+  NtUserEndMenu. Tests : hôte (`menutrack`, `menupopup`, `menu`) ; scénario `menu` étendu (touches et souris de QEMU,
+  messages postés, huit pixels du menu ouvert) sur AMD et Intel ; dix-huit mutations (séparateurs non sautés,
+  WM_COMMAND malgré TPM_RETURNCMD, sans WM_MENUCHAR, sans mnémonique, coordonnées de la souris ramenées à la zone
+  cliente, point du message plutôt que `lParam`, rectangle à éviter ignoré, EndMenu sans effet, TPM_NONOTIFY ignoré,
+  sans WM_UNINITMENUPOPUP, WM_ENTERIDLE une seule fois, sous-menu non ouvert à la souris, premier item non
+  sélectionné, Échap qui finit, ← sans effet, sans le WM_MENUSELECT final, sans `menu_owner`, sélection non
+  repeinte) le font toutes échouer. Vu en chemin : un WM_NCPAINT partiel
+  repeint tout le cadre (limite connue de `paint::nc_paint`), la barre de W montre donc son état réel quand un menu se
+  ferme au-dessus ; `menu1.c` doit charger la disposition de clavier pour recevoir les touches. Suite : le suivi de
+  la barre (HTMENU, SC_MOUSEMENU, MENU_TrackMouseMenuBar ; F10, Alt, SC_KEYMENU, MENU_TrackKbdMenuBar), puis le
+  menu système.
+
 - **La barre de menus** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape
   21) : `win32k::menubar` : mise en page (MENU_MenuBarCalcSize : texte sans ses `&` plus MenuCharSize de chaque côté,
   SM_CYMENU - 1 de haut au moins, lignes, MF_HELP à droite) faite par WM_NCCALCSIZE (`defwnd::nc_calc_size` prend une

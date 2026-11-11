@@ -123,6 +123,9 @@ pub struct Item {
     pub y: u32,
     pub cx: u32,
     pub cy: u32,
+    /// Où commence le texte qui suit une tabulation (`dxTab`, un menu
+    /// déroulant).
+    pub dx_tab: u32,
     /// Son texte dans le tas : sa position et sa taille en octets ; (0, 0)
     /// tant qu'il n'est pas publié.
     pub(crate) text_at: (u32, u32),
@@ -573,7 +576,7 @@ impl Menus {
             return false;
         }
         for (item, place) in state.items.iter_mut().zip(laid) {
-            (item.x, item.y, item.cx, item.cy) = (place.x, place.y, place.cx, place.cy);
+            (item.x, item.y, item.cx, item.cy, item.dx_tab) = (place.x, place.y, place.cx, place.cy, place.dx_tab);
         }
         (state.width, state.height) = (width, height);
         true
@@ -592,6 +595,47 @@ impl Menus {
             item.f_state &= !mf::HILITE;
         }
         item.f_state != before
+    }
+
+    /// MENU_SelectItem, pour l'état : l'item `index` du menu `handle` devient
+    /// le sélectionné (`iItem` ; NO_SELECTED_ITEM : aucun), surligné s'il
+    /// n'est pas un séparateur ; l'ancien ne l'est plus (ni MF_MOUSESELECT).
+    /// Rend s'il a changé.
+    pub fn select(&mut self, handle: u32, index: u32) -> bool {
+        let Some(state) = self.state_mut(handle) else { return false };
+        if state.focused == index {
+            return false;
+        }
+        if let Some(old) = state.items.get_mut(state.focused as usize) {
+            old.f_state &= !(mf::HILITE | mf::MOUSESELECT);
+        }
+        state.focused = index;
+        if let Some(new) = state.items.get_mut(index as usize) {
+            if new.f_type & mft::SEPARATOR == 0 {
+                new.f_state |= mf::HILITE;
+            }
+        }
+        true
+    }
+
+    /// MF_MOUSESELECT de l'item `index` (son sous-menu est montré) : posé ou
+    /// retiré.
+    pub fn set_mouse_select(&mut self, handle: u32, index: u32, on: bool) {
+        if let Some(item) = self.state_mut(handle).and_then(|state| state.items.get_mut(index as usize)) {
+            if on {
+                item.f_state |= mf::MOUSESELECT;
+            } else {
+                item.f_state &= !mf::MOUSESELECT;
+            }
+        }
+    }
+
+    /// La fenêtre qui montre le menu `handle` (`hWnd` : celle d'un menu
+    /// déroulant pendant son suivi, 0 ensuite).
+    pub fn set_hwnd(&mut self, handle: u32, hwnd: u32) {
+        if let Some(state) = self.state_mut(handle) {
+            state.hwnd = hwnd;
+        }
     }
 
     /// IntDestroyMenuObject(…, TRUE) : le menu `handle` et ses sous-menus
@@ -716,6 +760,7 @@ fn item_record(item: &Item, submenu: u32, heap: &dyn MenuHeap) -> Item32 {
         y_item: item.y,
         cx_item: item.cx,
         cy_item: item.cy,
+        dx_tab: item.dx_tab,
         hbmp: item.bitmap,
         lpstr: if text == 0 {
             UnicodeString32::default()
@@ -837,6 +882,36 @@ pub fn state(handle: u32) -> Option<MenuState> {
 /// PASSIVE_LEVEL.
 pub fn set_places(handle: u32, laid: &[Item], width: u32, height: u32) -> bool {
     with(|menus| Ok(menus.set_places(handle, laid, width, height))).unwrap_or(false)
+}
+
+/// [`Menus::select`], publié ; rend si la sélection a changé.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn select(handle: u32, index: u32) -> bool {
+    with(|menus| Ok(menus.select(handle, index))).unwrap_or(false)
+}
+
+/// [`Menus::set_mouse_select`], publié.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_mouse_select(handle: u32, index: u32, on: bool) {
+    let _ = with(|menus| {
+        menus.set_mouse_select(handle, index, on);
+        Ok(())
+    });
+}
+
+/// [`Menus::set_hwnd`], publié.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_hwnd(handle: u32, hwnd: u32) {
+    let _ = with(|menus| {
+        menus.set_hwnd(handle, hwnd);
+        Ok(())
+    });
 }
 
 /// [`Menus::hilite`], publié ; rend si l'item a changé.
@@ -1330,6 +1405,25 @@ mod tests {
         let place = [heap.word(second + 36), heap.word(second + 40), heap.word(second + 44), heap.word(second + 48)];
         assert_eq!(place, [40, 23, 76, 41], "xItem, yItem, cxItem, cyItem");
         assert!(menus.hilite(0x10, 1, mf::BYPOSITION), "unhilite");
+    }
+
+    #[test]
+    fn one_item_selected_at_a_time_and_never_a_separator_lit() {
+        let (mut menus, heap) = table();
+        add(&mut menus, &heap, 0x10, true);
+        let text = wide("x");
+        append(&mut menus, 0x10, &string_item(1, &text), &text);
+        let separator = MenuItemInfoW32 { f_mask: miim::FTYPE, f_type: mft::SEPARATOR, ..MenuItemInfoW32::default() };
+        menus.insert(0x10, u32::MAX, true, &separator, None).unwrap();
+        assert!(menus.select(0x10, 0));
+        assert!(!menus.select(0x10, 0), "already");
+        menus.set_mouse_select(0x10, 0, true);
+        assert_eq!(menus.state(0x10).unwrap().items[0].f_state, mf::HILITE | mf::MOUSESELECT);
+        assert!(menus.select(0x10, 1));
+        let items = &menus.state(0x10).unwrap().items;
+        assert_eq!((items[0].f_state, items[1].f_state & mf::HILITE), (0, 0), "the separator selected, not lit");
+        assert!(menus.select(0x10, NO_SELECTED_ITEM));
+        assert_eq!(menus.state(0x10).unwrap().focused, NO_SELECTED_ITEM);
     }
 
     #[test]

@@ -4,15 +4,20 @@
 //! NtUserCheckMenuItem et NtUserSetMenuDefaultItem, le menu par
 //! NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId et
 //! NtUserSetMenuFlagRtoL, la barre d'une fenêtre par NtUserSetMenu ; la
-//! destruction par NtUserRemoveMenu, NtUserDeleteMenu, NtUserDestroyMenu.
-//! `user32` lit le reste lui-même dans le tas du bureau.
+//! destruction par NtUserRemoveMenu, NtUserDeleteMenu, NtUserDestroyMenu ;
+//! la barre se mesure par NtUserGetMenuBarInfo, NtUserGetMenuItemRect,
+//! NtUserMenuItemFromPoint et se surligne par NtUserHiliteMenuItem ; un menu
+//! déroulant se suit par NtUserTrackPopupMenuEx, et NtUserEndMenu finit le
+//! suivi. `user32` lit le reste lui-même dans le tas du bureau.
 //!
 //! Comme dans win32k, un échec rend FALSE (ou -1) et met l'erreur Win32
 //! dans le TEB ; un menu qui n'existe pas, `ERROR_INVALID_MENU_HANDLE`.
 
 use alloc::vec::Vec;
 
-use abi::menu::{miim, MenuBarInfo32, MenuInfo32, MenuItemInfoW32, MENUITEMINFOW_OLD_SIZE, ROSMENUINFO_SIZE};
+use abi::menu::{
+    miim, MenuBarInfo32, MenuInfo32, MenuItemInfoW32, TpmParams32, MENUITEMINFOW_OLD_SIZE, ROSMENUINFO_SIZE,
+};
 use abi::ntstatus::NtStatus;
 use abi::winerror::{dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE};
 use ke::usermem::{copy_from_user, UserPtr};
@@ -313,4 +318,55 @@ pub(super) fn nt_user_hilite_menu_item(arguments: &[u32]) -> NtStatus {
         }
         Err(error) => fail(error, 0),
     }
+}
+
+/// NtUserTrackPopupMenuEx(hMenu, fuFlags, x, y, hWnd, lptpm) : le menu
+/// déroulant montré en (x, y) et suivi pour la fenêtre `hWnd`, du thread
+/// courant (`win32k::menutrack::track_popup_menu`) ; rend, avec
+/// TPM_RETURNCMD, l'identifiant de l'item choisi (0 sans), sinon TRUE.
+/// FALSE : des drapeaux inconnus (`ERROR_INVALID_FLAGS`), un menu
+/// (`ERROR_INVALID_MENU_HANDLE`) ou une fenêtre qui n'existe pas, un
+/// TPMPARAMS (son rectangle que le menu évite) d'une autre taille
+/// (`ERROR_INVALID_PARAMETER`), une fenêtre d'un autre thread, un menu déjà
+/// montré (`ERROR_POPUP_ALREADY_ACTIVE`).
+pub(super) fn nt_user_track_popup_menu_ex(arguments: &[u32]) -> NtStatus {
+    let [hmenu, flags, x, y, hwnd, params] = arguments[..6] else { unreachable!("6 arguments") };
+    if flags & !abi::menu::tpm::VALID != 0 {
+        return fail(abi::winerror::ERROR_INVALID_FLAGS, 0);
+    }
+    let hmenu = match menu(hmenu) {
+        Ok(hmenu) => hmenu,
+        Err(error) => return fail(error, 0),
+    };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    let exclude = if params == 0 {
+        None
+    } else {
+        let mut bytes = [0u8; core::mem::size_of::<TpmParams32>()];
+        if copy_from_user(&mut bytes, u64::from(params)).is_err() {
+            return NtStatus(0);
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        if word(0) != core::mem::size_of::<TpmParams32>() as u32 {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        let side = |at: usize| word(at) as i32;
+        Some(win32k::gdi::dib::Rect::new(side(4), side(8), side(12), side(16)))
+    };
+    let Ok(thread) = win32k::convert_current_thread() else { return NtStatus(0) };
+    if thread.server != window.pti {
+        return NtStatus(0);
+    }
+    drop(thread);
+    match win32k::menutrack::track_popup_menu(hmenu, flags, (x as i32, y as i32), &window, exclude) {
+        Ok(result) => NtStatus(result),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtUserEndMenu() : le suivi d'un menu en cours finit
+/// (`win32k::menutrack::end_menu`) ; TRUE.
+pub(super) fn nt_user_end_menu(_arguments: &[u32]) -> NtStatus {
+    win32k::menutrack::end_menu();
+    NtStatus(1)
 }

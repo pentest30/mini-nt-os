@@ -13,7 +13,16 @@
  * - a window takes the bar (GetMenu), which no other window may take, nor a
  *   child; RemoveMenu keeps the submenu, DeleteMenu destroys it;
  *   LoadMenuIndirectW builds a menu from a template; DestroyMenu takes its
- *   submenus.
+ *   submenus;
+ * - TrackPopupMenuEx (win32k::menutrack): a popup menu (Open, a separator,
+ *   Gray, Sub with Inner, Exit) in a window of the class #32768 that the
+ *   owner W never activates; the keys the scenario types when "[menu]
+ *   tracking N" shows (the owner writes it at its first WM_ENTERIDLE): the
+ *   arrows, Enter, a letter; mouse messages that W posts to the menu's
+ *   window, at the screen's coordinates; EndMenu; the notifications W hears;
+ *   the rectangle a menu avoids; at last a menu left open, Sub's submenu
+ *   opened by the mouse the scenario moves, for its capture of the screen,
+ *   until a timer ends it.
  * Each step goes to the debug port (DbgPrint, a line each, its values taken
  * before); the program ends with EXIT_STATUS.
  *
@@ -106,6 +115,11 @@ typedef struct {
 } MENUITEMINFOW;
 
 typedef struct {
+    UINT cbSize;
+    RECT rcExclude;
+} TPMPARAMS;
+
+typedef struct {
     DWORD cbSize;
     DWORD fMask;
     DWORD dwStyle;
@@ -143,6 +157,29 @@ typedef struct {
 #define MIIM_STRING 0x0040
 #define MIIM_FTYPE 0x0100
 #define MIM_MENUDATA 0x0008
+#define WM_COMMAND 0x0111
+#define WM_TIMER 0x0113
+#define WM_INITMENU 0x0116
+#define WM_INITMENUPOPUP 0x0117
+#define WM_MENUSELECT 0x011F
+#define WM_MENUCHAR 0x0120
+#define WM_ENTERIDLE 0x0121
+#define WM_UNINITMENUPOPUP 0x0125
+#define WM_MOUSEMOVE 0x0200
+#define WM_LBUTTONDOWN 0x0201
+#define WM_LBUTTONUP 0x0202
+#define WM_ENTERMENULOOP 0x0211
+#define WM_EXITMENULOOP 0x0212
+#define MN_GETHMENU 0x01E1
+#define MSGF_MENU 2
+#define MK_LBUTTON 1
+#define PM_REMOVE 1
+#define TPM_NONOTIFY 0x0080
+#define TPM_RETURNCMD 0x0100
+#define SM_CXDLGFRAME 7
+#define COLOR_HIGHLIGHT 13
+#define KLF_ACTIVATE 0x00000001
+#define MAKELPARAM(low, high) ((LPARAM)(((high) << 16) | ((low)&0xFFFF)))
 #define EXIT_STATUS 0x6014
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
@@ -212,6 +249,18 @@ __declspec(dllimport) int __stdcall MenuItemFromPoint(HWND window, HMENU menu, P
 __declspec(dllimport) int __stdcall ReleaseDC(HWND window, HDC hdc);
 __declspec(dllimport) COLORREF __stdcall GetPixel(HDC hdc, int x, int y);
 __declspec(dllimport) BOOL __stdcall TranslateMessage(const MSG *message);
+__declspec(dllimport) BOOL __stdcall EndMenu(void);
+__declspec(dllimport) int __stdcall GetSystemMetrics(int index);
+__declspec(dllimport) BOOL __stdcall IsWindow(HWND window);
+__declspec(dllimport) BOOL __stdcall KillTimer(HWND window, ULONG_PTR id);
+__declspec(dllimport) void *__stdcall LoadKeyboardLayoutW(const WCHAR *name, UINT flags);
+__declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT min, UINT max, UINT remove);
+__declspec(dllimport) LRESULT __stdcall SendMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
+__declspec(dllimport) ULONG_PTR __stdcall SetTimer(HWND window, ULONG_PTR id, UINT elapse, void *procedure);
+__declspec(dllimport) BOOL __stdcall TrackPopupMenu(HMENU menu, UINT flags, int x, int y, int reserved, HWND window,
+                                                    const RECT *rect);
+__declspec(dllimport) BOOL __stdcall TrackPopupMenuEx(HMENU menu, UINT flags, int x, int y, HWND window,
+                                                      TPMPARAMS *params);
 
 static const WCHAR CLASS_NAME[] = L"MinoMenu";
 static HINSTANCE instance;
@@ -239,8 +288,253 @@ static BOOL take_a_desktop(void)
     desktop = CreateDesktopW(L"Default", 0, 0, 0, MAXIMUM_ALLOWED, 0);
     if (!desktop || !SetThreadDesktop(desktop) || !SwitchDesktop(desktop))
         return 0;
+    /* The keys the scenario types (a popup menu's tracking). */
+    if (!LoadKeyboardLayoutW(L"00000409", KLF_ACTIVATE))
+        return 0;
     DbgPrint("[menu] on WinSta0\\Default\n");
     return 1;
+}
+
+/* The popup menu that TrackPopupMenuEx shows (Open, a separator, Gray,
+ * Sub with Inner, Exit), and what W hears while it is tracked. */
+static HMENU pop, sub;
+static struct {
+    int run, announced, step;
+    int enter, enter_popup, init, init_popups, selects, uninit, exits, idles, idle_flag;
+    HMENU init_menu, popups[4];
+    WPARAM last_select, menu_char;
+    LPARAM last_select_menu;
+    HWND popup;
+    RECT popup_rect;
+    int checks[6];
+} track;
+
+/* The middle of the item `position` of `menu` on the screen. */
+static LPARAM item_middle(HMENU menu, UINT position)
+{
+    RECT rect;
+    GetMenuItemRect(0, menu, position, &rect);
+    return MAKELPARAM((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+}
+
+/* The colour at (x, y) of the screen, through the menu's window DC. */
+static COLORREF popup_pixel(int x, int y)
+{
+    HDC hdc = GetWindowDC(track.popup);
+    COLORREF color = GetPixel(hdc, x - track.popup_rect.left, y - track.popup_rect.top);
+    ReleaseDC(track.popup, hdc);
+    return color;
+}
+
+/* The pixels of the row `y` of `rect` (on the screen) that are (or are
+ * not) `color`, through one window DC. */
+static int count_in_row(RECT rect, int y, COLORREF color, BOOL equal)
+{
+    HDC hdc = GetWindowDC(track.popup);
+    int x, count = 0;
+    for (x = rect.left; x < rect.right; x++)
+        if ((GetPixel(hdc, x - track.popup_rect.left, y - track.popup_rect.top) == color) == equal)
+            count++;
+    ReleaseDC(track.popup, hdc);
+    return count;
+}
+
+/* The most pixels of `color` (or not of it) in a row of `rect`. */
+static int most_in_a_row(RECT rect, COLORREF color, BOOL equal)
+{
+    int y, most = 0;
+    for (y = rect.top; y < rect.bottom; y++) {
+        int count = count_in_row(rect, y, color, equal);
+        if (count > most)
+            most = count;
+    }
+    return most;
+}
+
+/* WM_ENTERIDLE: the menu waits for input. The first one of a run writes
+ * the marker the scenario's keys wait for; the runs without keys act here,
+ * a step each time the menu waits again. */
+static void idle(WPARAM flag, HWND popup)
+{
+    RECT client, open, separator;
+
+    track.idles++;
+    if (!track.announced) {
+        track.announced = 1;
+        track.idle_flag = (int)flag;
+        track.popup = popup;
+        GetWindowRect(popup, &track.popup_rect);
+        DbgPrint("[menu] tracking %d\n", track.run);
+    }
+    switch (track.run * 10 + track.step) {
+    case 10:
+        /* Shown where asked, its frame a dialog's, its menu MN_GETHMENU's;
+         * a menu already shown is not shown twice. */
+        GetClientRect(popup, &client);
+        track.checks[0] = flag == MSGF_MENU && popup != 0;
+        track.checks[1] = SendMessageW(popup, MN_GETHMENU, 0, 0) == (LRESULT)pop;
+        track.checks[2] = track.popup_rect.left == 150 && track.popup_rect.top == 160;
+        track.checks[3] = (track.popup_rect.right - track.popup_rect.left) - client.right ==
+                          2 * GetSystemMetrics(SM_CXDLGFRAME);
+        SetLastError(0);
+        track.checks[4] = TrackPopupMenuEx(pop, 0, 10, 10, w, 0);
+        track.checks[5] = (int)GetLastError();
+        track.step++;
+        break;
+    case 30:
+        /* The mouse over Open. */
+        PostMessageW(track.popup, WM_MOUSEMOVE, 0, item_middle(pop, 0));
+        track.step++;
+        break;
+    case 31:
+        /* Open hilited (COLOR_HIGHLIGHT, its text drawn over it); the
+         * separator an etched line. Then a click on Open. */
+        GetMenuItemRect(0, pop, 0, &open);
+        GetMenuItemRect(0, pop, 1, &separator);
+        track.checks[0] = popup_pixel(open.left + 1, open.top + 1) == GetSysColor(COLOR_HIGHLIGHT);
+        track.checks[1] = most_in_a_row(open, GetSysColor(COLOR_HIGHLIGHT), 0) > 5;
+        track.checks[2] = most_in_a_row(separator, GetSysColor(COLOR_BTNSHADOW), 1) > (separator.right - separator.left) / 2;
+        /* Over Sub: its submenu opens, to the right of the menu. */
+        PostMessageW(track.popup, WM_MOUSEMOVE, 0, item_middle(pop, 3));
+        track.step++;
+        break;
+    case 32:
+        GetMenuItemRect(0, sub, 0, &open);
+        track.checks[3] = track.init_popups == 2 && track.popups[1] == sub;
+        track.checks[4] = open.left >= track.popup_rect.right - 2 * GetSystemMetrics(SM_CXDLGFRAME);
+        /* Back on Open, clicked: Sub's submenu closes, Open is chosen. The
+         * messages go to the first menu's window: WM_ENTERIDLE names the
+         * submenu's, which its closing destroys, with its messages. */
+        track.checks[5] = popup != track.popup;
+        PostMessageW(track.popup, WM_MOUSEMOVE, 0, item_middle(pop, 0));
+        PostMessageW(track.popup, WM_LBUTTONDOWN, MK_LBUTTON, item_middle(pop, 0));
+        PostMessageW(track.popup, WM_LBUTTONUP, 0, item_middle(pop, 0));
+        track.step++;
+        break;
+    case 40:
+        /* EndMenu ends the tracking. */
+        EndMenu();
+        track.step++;
+        break;
+    case 50:
+        /* The last menu: the scenario moves the mouse over Sub, whose
+         * submenu opens, for the capture. */
+        track.step++;
+        break;
+    case 51:
+        if (track.init_popups < 2)
+            break;
+        GetMenuItemRect(0, pop, 3, &open);
+        GetMenuItemRect(0, sub, 0, &separator);
+        DbgPrint("[menu] the last menu at %d,%d to %d,%d; Sub %d,%d to %d,%d; Inner %d,%d to %d,%d\n",
+                 track.popup_rect.left, track.popup_rect.top, track.popup_rect.right, track.popup_rect.bottom,
+                 open.left, open.top, open.right, open.bottom, separator.left, separator.top, separator.right,
+                 separator.bottom);
+        DbgPrint("[menu] done\n");
+        /* Ended (EndMenu) a while after the capture. */
+        SetTimer(w, 1, 4000, 0);
+        track.step++;
+        break;
+    }
+}
+
+/* A run of TrackPopupMenuEx: what W hears is counted from 0. */
+static void begin(int run)
+{
+    memset(&track, 0, sizeof track);
+    track.run = run;
+}
+
+/* No WM_COMMAND left in W's queue; the one posted otherwise, its wParam. */
+static WPARAM posted_command(void)
+{
+    MSG message;
+    if (!PeekMessageW(&message, w, WM_COMMAND, WM_COMMAND, PM_REMOVE))
+        return 0;
+    return message.wParam;
+}
+
+static void popups(void)
+{
+    int result, error, menu_result, menu_error, params_result, params_error;
+    TPMPARAMS params;
+    HMENU empty;
+
+    pop = CreatePopupMenu();
+    sub = CreatePopupMenu();
+    AppendMenuW(pop, MF_STRING, 201, L"&Open\tCtrl+O");
+    AppendMenuW(pop, MF_SEPARATOR, 0, 0);
+    AppendMenuW(pop, MF_STRING | MF_GRAYED, 202, L"&Gray");
+    AppendMenuW(sub, MF_STRING, 301, L"&Inner");
+    AppendMenuW(pop, MF_POPUP, (ULONG_PTR)sub, L"&Sub");
+    AppendMenuW(pop, MF_STRING, 203, L"E&xit");
+
+    /* What TrackPopupMenuEx refuses. */
+    SetLastError(0);
+    result = TrackPopupMenuEx(pop, 0x10000, 150, 160, w, 0);
+    error = (int)GetLastError();
+    SetLastError(0);
+    menu_result = TrackPopupMenuEx((HMENU)0x1234, 0, 150, 160, w, 0);
+    menu_error = (int)GetLastError();
+    memset(&params, 0, sizeof params);
+    params.cbSize = 16;
+    SetLastError(0);
+    params_result = TrackPopupMenuEx(pop, 0, 150, 160, w, &params);
+    params_error = (int)GetLastError();
+    DbgPrint("[menu] TrackPopupMenuEx refuses: a flag %d (%d), a menu %d (%d), a TPMPARAMS %d (%d)\n", result, error,
+             menu_result, menu_error, params_result, params_error);
+    empty = CreatePopupMenu();
+    begin(0);
+    result = TrackPopupMenuEx(empty, TPM_RETURNCMD, 150, 160, w, 0);
+    DbgPrint("[menu] an empty menu: %d, notified %d %d %d %d %d, never waits %d\n", result, track.enter, track.init,
+             track.init_popups, track.uninit, track.exits, track.idles == 0);
+    DestroyMenu(empty);
+
+    /* 1: down down down right Enter: Open, Gray (a separator skipped), Sub,
+     * its submenu opened on Inner, chosen; TPM_RETURNCMD returns it. */
+    begin(1);
+    result = TrackPopupMenuEx(pop, TPM_RETURNCMD, 150, 160, w, 0);
+    DbgPrint("[menu] tracked 1: MSGF_MENU %d, MN_GETHMENU %d, at 150,160 %d, a dialog's frame %d, again %d (%d)\n",
+             track.checks[0], track.checks[1], track.checks[2], track.checks[3], track.checks[4], track.checks[5]);
+    DbgPrint("[menu] TrackPopupMenuEx 1: %d; ENTERMENULOOP %d %d, INITMENU %d %d, INITMENUPOPUP %d %d %d, "
+             "MENUSELECT %d %x %x, UNINITMENUPOPUP %d, EXITMENULOOP %d, its window gone %d, WM_COMMAND %d\n",
+             result, track.enter, track.enter_popup, track.init, track.init_menu == pop, track.init_popups,
+             track.popups[0] == pop, track.popups[1] == sub, track.selects, (unsigned)track.last_select,
+             (unsigned)track.last_select_menu, track.uninit, track.exits, !IsWindow(track.popup),
+             (int)posted_command());
+
+    /* 2: Sub's submenu opened (right), closed (Escape), opened again,
+     * closed (left): the tracking goes on; q (no item: WM_MENUCHAR,
+     * ignored), then x: Exit, posted as WM_COMMAND (TrackPopupMenu, without
+     * TPM_RETURNCMD). */
+    begin(2);
+    result = TrackPopupMenu(pop, 0, 150, 160, 0, w, 0);
+    DbgPrint("[menu] TrackPopupMenu 2: %d; INITMENUPOPUP %d, UNINITMENUPOPUP %d, WM_MENUCHAR %x, WM_COMMAND %d\n",
+             result, track.init_popups, track.uninit, (unsigned)track.menu_char, (int)posted_command());
+
+    /* 3: the mouse, by the messages W posts to the menu's window. */
+    begin(3);
+    result = TrackPopupMenuEx(pop, TPM_RETURNCMD, 150, 160, w, 0);
+    DbgPrint("[menu] TrackPopupMenuEx 3, the mouse: %d; Open hilited %d, its text %d, the separator %d; "
+             "Sub opens %d, at the right %d, WM_ENTERIDLE names it %d\n",
+             result, track.checks[0], track.checks[1], track.checks[2], track.checks[3], track.checks[4],
+             track.checks[5]);
+
+    /* 4: TPM_NONOTIFY, a rectangle to avoid (the menu goes to its right),
+     * EndMenu. */
+    begin(4);
+    params.cbSize = sizeof params;
+    params.rcExclude.left = 100;
+    params.rcExclude.top = 150;
+    params.rcExclude.right = 300;
+    params.rcExclude.bottom = 250;
+    result = TrackPopupMenuEx(pop, TPM_RETURNCMD | TPM_NONOTIFY, 150, 160, w, &params);
+    DbgPrint("[menu] TrackPopupMenuEx 4, EndMenu: %d; at %d,%d; notified %d\n", result, track.popup_rect.left,
+             track.popup_rect.top, track.enter + track.init + track.init_popups + track.uninit + track.exits);
+
+    /* 5: left open for the capture. */
+    begin(5);
+    result = TrackPopupMenuEx(pop, TPM_RETURNCMD, 150, 160, w, 0);
 }
 
 /* `text` in ASCII (what the test writes is ASCII), at most 31 characters. */
@@ -528,14 +822,50 @@ static void bar_checks(void)
 
 static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
-    if (message == WM_APP) {
+    switch (message) {
+    case WM_APP:
         read_back();
         change();
         windows();
         bar_checks();
         remove_and_load();
-        DbgPrint("[menu] done\n");
+        popups();
         PostQuitMessage(0);
+        return 0;
+    case WM_ENTERMENULOOP:
+        track.enter++;
+        track.enter_popup = (int)wparam;
+        return 0;
+    case WM_INITMENU:
+        track.init++;
+        track.init_menu = (HMENU)wparam;
+        return 0;
+    case WM_INITMENUPOPUP:
+        if (track.init_popups < 4)
+            track.popups[track.init_popups] = (HMENU)wparam;
+        track.init_popups++;
+        return 0;
+    case WM_MENUSELECT:
+        track.selects++;
+        track.last_select = wparam;
+        track.last_select_menu = lparam;
+        return 0;
+    case WM_UNINITMENUPOPUP:
+        track.uninit++;
+        return 0;
+    case WM_EXITMENULOOP:
+        track.exits++;
+        return 0;
+    case WM_MENUCHAR:
+        /* MNC_IGNORE. */
+        track.menu_char = wparam;
+        return 0;
+    case WM_ENTERIDLE:
+        idle(wparam, (HWND)lparam);
+        return 0;
+    case WM_TIMER:
+        KillTimer(window, wparam);
+        EndMenu();
         return 0;
     }
     return DefWindowProcW(window, message, wparam, lparam);

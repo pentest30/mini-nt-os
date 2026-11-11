@@ -51,6 +51,8 @@ pub mod keyboard;
 pub mod logon;
 pub mod menu;
 pub mod menubar;
+pub mod menupopup;
+pub mod menutrack;
 pub mod metrics;
 pub mod monitor;
 pub mod mouse;

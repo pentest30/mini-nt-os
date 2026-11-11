@@ -1000,3 +1000,54 @@ plusieurs lignes, l'item par défaut en gras, le soulignement, le dessin d'un it
 et le surlignage dans le tas ; `abi::menu`) ; le scénario `menu` sur AMD et Intel, et `gui`, `destroy`, `tasklist`,
 `desktop-ui`, `desktop-launch`, `console`, `cmd`, `listview`, `dialog`, `caret`, `icons`, `scroll`, `scrollex`, `text`
 sur AMD et Intel.
+
+## Étape 22 : les menus déroulants (TrackPopupMenuEx, la boucle du menu, EndMenu)
+
+`user32` exporte TrackPopupMenuEx et EndMenu tels quels (NtUserTrackPopupMenuEx, NtUserEndMenu) ; TrackPopupMenu
+appelle le premier sans TPMPARAMS. Tout le suivi est dans win32k, dans le service, au thread de la fenêtre
+propriétaire. `menu.c` de win32k (IntTrackPopupMenuEx, MENU_InitPopup, MENU_ShowPopup, MENU_ShowSubPopup,
+MENU_HideSubPopups, MENU_TrackMenu, MENU_ExecFocusedItem, MENU_FindItemByKey, PopupMenuWndProc) et `msgqueue.c` (les
+coordonnées de la souris pendant le suivi), ReactOS comme spécification ; `win32k::menupopup`, `win32k::menutrack`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| La fenêtre #32768 (`menutrack::init_popup`, `menupopup::window_proc`) | créée par win32k : WS_POPUP, WS_CLIPSIBLINGS, WS_BORDER ; WS_EX_TOOLWINDOW, WS_EX_WINDOWEDGE, WS_EX_TOPMOST, WS_EX_DLGMODALFRAME ; possédée par la propriétaire, du module de `user32`. Sa procédure est du serveur : `window::server_window_proc` la reconnaît à sa classe (FNID_MENU ; sa FNID n'est posée qu'à WM_NCCREATE) et lui passe le `lParam` emballé (WM_NCCALCSIZE). Zone cliente : le cadre de son style ; WM_PAINT peint le menu, WM_ERASEBKGND n'efface rien, WM_MOUSEACTIVATE rend MA_NOACTIVATE, MN_GETHMENU son menu |
+| La mise en page (`menupopup::layout`, MENU_PopupMenuCalcSize) | une colonne d'items (une de plus à MF_MENUBREAK), chacun : la place d'une coche (SM_CXMENUCHECK, sauf MNS_NOCHECK), son texte, le raccourci après une tabulation aligné sur le plus long texte (`dxTab`), la flèche d'un sous-menu (OBM_MNARROW, 6 pixels) ; les places dans le tas (`xItem`…, `cxMenu`, `cyMenu`), où `user32` les lit |
+| Le dessin (`menupopup::popup_ops`, MENU_DrawPopupMenu) | le fond COLOR_MENU ; l'item sélectionné en COLOR_HIGHLIGHT, son texte en COLOR_HIGHLIGHTTEXT ; grisé, en relief ; la coche, la puce (MFT_RADIOCHECK) et la flèche en Marlett ; un séparateur, un sillon (EDGE_ETCHED) |
+| La place (`menutrack::popup_place`, MENU_ShowPopup) | selon TPM_RIGHTALIGN, TPM_CENTERALIGN, TPM_BOTTOMALIGN, TPM_VCENTERALIGN (TPM_LAYOUTRTL inverse la droite) ; gardée sur le moniteur (trop bas : son bas une barre de menus sous le point, sinon au-dessus) ; à côté du rectangle à éviter (TPMPARAMS, ou le menu parent d'un sous-menu) s'il le couvre : à droite, à gauche, dessous, dessus (MENU_MoveRect) ; montrée au-dessus de tout sans activation (HWND_TOPMOST, SWP_NOACTIVATE) et peinte |
+| Le début et la fin (MENU_InitTracking, MENU_ExitTracking) | le caret du thread caché ; WM_ENTERMENULOOP ; la souris capturée par la fenêtre du menu, et le thread suit un menu (`MenuOwner` : `queue.menu_owner`) ; WM_SETCURSOR ; WM_INITMENU, WM_INITMENUPOPUP ; à la fin : la capture rendue, les sous-menus fermés, la fenêtre détruite, WM_UNINITMENUPOPUP, WM_MENUSELECT (0, 0xFFFF), WM_EXITMENULOOP, le caret remontré. TPM_NONOTIFY retire les notifications, sauf WM_MENUSELECT et WM_ENTERIDLE |
+| La boucle (`menutrack::track_menu`, MENU_TrackMenu) | le premier message de la file du thread, laissé dedans tant que le suivi peut finir ; la file vide : WM_ENTERIDLE (MSGF_MENU, la fenêtre du menu courant) une fois, puis l'attente. La souris (sa place dans `lParam`, à l'écran : pendant le suivi, `mouse::resolve` ne la ramène pas à la zone cliente, et un message posté par le programme compte aussi) : le mouvement sélectionne l'item sous elle et ouvre son sous-menu, un bouton enfoncé hors des menus finit le suivi (le message reste à l'application), relâché sur l'item sélectionné il l'exécute ; le bouton droit seulement avec TPM_RIGHTBUTTON. Le clavier : ↑ ↓ (les séparateurs sautés), Début, Fin, → (le sous-menu), ← et Échap (le sous-menu le plus profond se ferme ; Échap sur le premier menu finit), Alt et F10 finissent ; les autres touches traduites (TranslateMessage) : Entrée et espace exécutent, une lettre l'item qu'elle souligne, sinon WM_MENUCHAR (MNC_EXECUTE : la position rendue ; MNC_CLOSE : la fin). WM_CANCELMODE finit ; les autres messages sont distribués |
+| Les sous-menus (MENU_ShowSubPopup, MENU_HideSubPopups) | WM_INITMENUPOPUP d'abord ; à droite de l'item, le haut sur lui, le menu parent (moins 2 × SM_CXEDGE de chaque côté) évité ; le premier item sélectionné au clavier ; fermé : sa fenêtre détruite, WM_UNINITMENUPOPUP |
+| L'exécution (MENU_ExecFocusedItem) | un item actif qui n'est pas un séparateur : son identifiant rendu avec TPM_RETURNCMD ; sinon WM_COMMAND posté (WM_MENUCOMMAND avec MNS_NOTIFYBYPOS, WM_SYSCOMMAND d'un menu système) |
+| NtUserTrackPopupMenuEx | FALSE : des drapeaux hors de VALID_TPM_FLAGS (`ERROR_INVALID_FLAGS`), un menu (`ERROR_INVALID_MENU_HANDLE`) ou une fenêtre qui n'existe pas, un TPMPARAMS d'une autre taille (`ERROR_INVALID_PARAMETER`), une fenêtre d'un autre thread, un menu déjà montré (`ERROR_POPUP_ALREADY_ACTIVE`) ; un menu vide est montré, notifié, et le suivi rend 0 aussitôt |
+| NtUserEndMenu | WM_CANCELMODE posté à la fenêtre du menu suivi (un à la fois dans le système, `top_popup`) |
+
+Ce qui manque : le suivi de la barre (le clic, F10, Alt : l'étape suivante), le clavier entre colonnes
+(MENU_GetStartOfNextColumn), WM_NEXTMENU, l'aide (F1, WM_HELP), le menu système, les menus trop hauts pour l'écran
+(les flèches de défilement), les items à bitmap ou dessinés par l'application (WM_MEASUREITEM, WM_DRAWITEM),
+l'ombre (CS_DROPSHADOW) et l'animation, TPM_LAYOUTRTL pour la fenêtre (WS_EX_LAYOUTRTL), QF_CAPTURELOCKED.
+
+Vu en chemin :
+- un WM_NCPAINT pour une partie du cadre le repeint en entier (`paint::nc_paint`, limite connue) : la fermeture d'un
+  menu au-dessus de W repeint sa barre, qui montre alors l'état de son menu (Edit supprimé par DeleteMenu sans
+  DrawMenuBar ne s'y voit plus). Le scénario ne vérifie plus le soulignement d'Edit à l'écran ;
+- `menu1.c` charge la disposition de clavier `00000409`, sans quoi les touches tapées par QEMU sont ignorées ;
+- WM_ENTERIDLE désigne la fenêtre du menu courant : des clics postés à celle d'un sous-menu disparaissent avec elle
+  quand il se ferme (comme sous XP) ; le banc poste à la fenêtre du premier menu.
+
+Le banc d'essai : `tests/native/menu1.c`, scénario `menu` (étapes 20 et 21), avec un menu déroulant (Open avec un
+raccourci, un séparateur, Gray grisé, Sub et son sous-menu Inner, Exit) suivi pour W : les refus de
+TrackPopupMenuEx ; un menu vide ; au clavier (les touches tapées par QEMU quand « [menu] tracking N » paraît) :
+↓ ↓ ↓ → Entrée choisit Inner (TPM_RETURNCMD, aucun WM_COMMAND), avec les notifications comptées et le second
+TrackPopupMenuEx refusé ; → Échap → ← ferment le sous-menu sans finir, `q` donne WM_MENUCHAR, `x` exécute Exit
+(WM_COMMAND posté, TrackPopupMenu) ; à la souris, par des messages que W poste : Open surligné (relu à l'écran, son
+texte, le sillon du séparateur), Sub ouvre son sous-menu à droite, un clic sur Open le choisit ; TPM_NONOTIFY et le
+rectangle évité, EndMenu ; enfin la vraie souris (QEMU) ouvre le sous-menu de Sub, et la capture vérifie huit pixels
+du menu ouvert (son cadre, le sillon, Sub surligné et sa flèche, le sous-menu).
+
+Tests : hôte (`menutrack` : la place d'un menu sur l'écran, le rectangle évité, la lettre soulignée ; `menupopup` :
+la mise en page, le raccourci aligné, les colonnes, le dessin ; `menu` : une seule sélection, jamais un séparateur) ;
+le scénario `menu` sur AMD et Intel, que dix-huit mutations du suivi font échouer (dont les coordonnées de la souris
+ramenées à la zone cliente pendant le suivi) ; et `gui`, `destroy`, `desktop-ui`, `desktop-launch`, `desktop-click`,
+`cursor`, `mouse`, `mouse-windows`, `keyboard`, `caret`, `scroll`, `scrollex`, `dialog`, `listview`, `tasklist`, `text`,
+`icons`, `console`, `bitmap`, `send-messages`, `activate-app`, `cmd` sur AMD et Intel.

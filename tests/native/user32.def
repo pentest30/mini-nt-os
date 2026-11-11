@@ -27,6 +27,7 @@ DrawMenuBar@4
 DrawTextW@20
 EnableMenuItem@12
 EnableScrollBar@12
+EndMenu@0
 EndPaint@8
 EnumChildWindows@12
 EnumThreadWindows@12
@@ -139,6 +140,8 @@ ShowWindow@8
 SwitchDesktop@4
 SystemParametersInfoW@16
 ToUnicodeEx@28
+TrackPopupMenu@28
+TrackPopupMenuEx@24
 TranslateMessage@4
 UpdateWindow@4
 ValidateRect@8

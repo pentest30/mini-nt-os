@@ -118,6 +118,82 @@ pub mod mnf {
     pub const SYSMENU: u32 = 0x0200;
 }
 
+/// The messages of menus and of their tracking.
+pub mod wm {
+    pub const CANCELMODE: u32 = 0x001F;
+    pub const COMMAND: u32 = 0x0111;
+    pub const SYSCOMMAND: u32 = 0x0112;
+    pub const INITMENU: u32 = 0x0116;
+    pub const INITMENUPOPUP: u32 = 0x0117;
+    pub const MENUSELECT: u32 = 0x011F;
+    pub const MENUCHAR: u32 = 0x0120;
+    pub const ENTERIDLE: u32 = 0x0121;
+    pub const UNINITMENUPOPUP: u32 = 0x0125;
+    pub const MENUCOMMAND: u32 = 0x0126;
+    /// MN_GETHMENU: a popup menu window's menu.
+    pub const MN_GETHMENU: u32 = 0x01E1;
+    pub const ENTERMENULOOP: u32 = 0x0211;
+    pub const EXITMENULOOP: u32 = 0x0212;
+}
+
+/// MSGF_MENU: WM_ENTERIDLE from a menu.
+pub const MSGF_MENU: u32 = 2;
+
+/// MNC_*: what WM_MENUCHAR answers (its high word).
+pub mod mnc {
+    pub const IGNORE: u32 = 0;
+    pub const CLOSE: u32 = 1;
+    pub const EXECUTE: u32 = 2;
+    pub const SELECT: u32 = 3;
+}
+
+/// TPM_*: TrackPopupMenuEx's flags.
+pub mod tpm {
+    pub const RECURSE: u32 = 0x0001;
+    pub const RIGHTBUTTON: u32 = 0x0002;
+    pub const CENTERALIGN: u32 = 0x0004;
+    pub const RIGHTALIGN: u32 = 0x0008;
+    pub const VCENTERALIGN: u32 = 0x0010;
+    pub const BOTTOMALIGN: u32 = 0x0020;
+    pub const VERTICAL: u32 = 0x0040;
+    pub const NONOTIFY: u32 = 0x0080;
+    pub const RETURNCMD: u32 = 0x0100;
+    pub const HORPOSANIMATION: u32 = 0x0400;
+    pub const HORNEGANIMATION: u32 = 0x0800;
+    pub const VERPOSANIMATION: u32 = 0x1000;
+    pub const VERNEGANIMATION: u32 = 0x2000;
+    pub const NOANIMATION: u32 = 0x4000;
+    pub const LAYOUTRTL: u32 = 0x8000;
+    /// The flags TrackPopupMenuEx takes (VALID_TPM_FLAGS).
+    pub const VALID: u32 = LAYOUTRTL
+        | NOANIMATION
+        | VERNEGANIMATION
+        | VERPOSANIMATION
+        | HORNEGANIMATION
+        | HORPOSANIMATION
+        | RETURNCMD
+        | NONOTIFY
+        | VERTICAL
+        | BOTTOMALIGN
+        | VCENTERALIGN
+        | RIGHTALIGN
+        | CENTERALIGN
+        | RIGHTBUTTON
+        | RECURSE;
+    /// Internal (ReactOS's): the tracking started with a button down.
+    pub const BUTTONDOWN: u32 = 0x4000_0000;
+    /// Internal: the menu tracked is a popup menu (TrackPopupMenuEx).
+    pub const POPUPMENU: u32 = 0x2000_0000;
+}
+
+/// TPMPARAMS, 32-bit: a rectangle a popup menu does not cover.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TpmParams32 {
+    pub cb_size: u32,
+    pub rc_exclude: [i32; 4],
+}
+
 /// NO_SELECTED_ITEM: `MENU.iItem` when no item is selected.
 pub const NO_SELECTED_ITEM: u32 = 0xFFFF;
 
@@ -310,6 +386,7 @@ const _: () = {
     assert!(MENUITEMINFOW_OLD_SIZE == 44);
     assert!(size_of::<MenuInfo32>() == 28);
     assert!(size_of::<MenuBarInfo32>() == 32);
+    assert!(size_of::<TpmParams32>() == 20);
     assert!(offset_of!(MenuBarInfo32, h_menu) == 20);
 };
 
@@ -370,7 +447,7 @@ macro_rules! as_bytes {
     )*};
 }
 
-as_bytes!(Menu32, Item32, MenuItemInfoW32, MenuInfo32, MenuBarInfo32);
+as_bytes!(Menu32, Item32, MenuItemInfoW32, MenuInfo32, MenuBarInfo32, TpmParams32);
 
 #[cfg(test)]
 mod tests {

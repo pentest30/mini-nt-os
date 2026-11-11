@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 121 | 296 |
-| win32k | 153 | 737 |
+| win32k | 155 | 737 |
 
 ## ntoskrnl
 
@@ -684,7 +684,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
 | `0x116e` | `NtUserEnableScrollBar` | 3 | ✅ |
 | `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
-| `0x1170` | `NtUserEndMenu` | 0 |  |
+| `0x1170` | `NtUserEndMenu` | 0 | ✅ |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 |  |
 | `0x1173` | `NtUserEnumDisplayMonitors` | 5 |  |
@@ -877,7 +877,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x122e` | `NtUserThunkedMenuItemInfo` | 6 | ✅ |
 | `0x122f` | `NtUserToUnicodeEx` | 7 | ✅ |
 | `0x1230` | `NtUserTrackMouseEvent` | 1 |  |
-| `0x1231` | `NtUserTrackPopupMenuEx` | 6 |  |
+| `0x1231` | `NtUserTrackPopupMenuEx` | 6 | ✅ |
 | `0x1232` | `NtUserCalcMenuBar` | 5 |  |
 | `0x1233` | `NtUserPaintMenuBar` | 6 |  |
 | `0x1234` | `NtUserTranslateAccelerator` | 3 |  |

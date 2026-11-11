@@ -64,7 +64,7 @@ pub fn strip_prefix(text: &[u16]) -> (Vec<u16>, Option<usize>) {
 
 /// Le texte d'un item dans la barre : jusqu'à sa première tabulation ou
 /// son premier `\b` (MENU_DrawMenuItem).
-fn bar_text(text: &[u16]) -> &[u16] {
+pub(crate) fn bar_text(text: &[u16]) -> &[u16] {
     let end = text.iter().position(|&unit| unit == u16::from(b'\t') || unit == 0x08).unwrap_or(text.len());
     &text[..end]
 }
@@ -77,6 +77,8 @@ pub type Measure<'a> = &'a dyn Fn(&[u16], bool) -> (i32, i32);
 /// Ce que la mise en page tire de la police des menus.
 pub struct MenuFont<'a> {
     pub measure: Measure<'a>,
+    /// MenuCharSize.cy : la hauteur d'un caractère (tmHeight).
+    pub char_height: i32,
     /// MenuCharSize.cx : la largeur moyenne d'un caractère.
     pub char_width: i32,
 }
@@ -183,21 +185,36 @@ pub struct Bar {
     pub char_width: i32,
 }
 
-/// Le texte `text` centré dans `rect` (DT_CENTER | DT_VCENTER |
-/// DT_SINGLELINE), coupé à `rect`, son caractère `underline` souligné
+/// Où DrawText met une ligne dans son rectangle (DT_LEFT, DT_CENTER,
+/// DT_RIGHT).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+/// Le texte `text` dans `rect` (DT_VCENTER | DT_SINGLELINE, aligné selon
+/// `align`), coupé à `rect`, son caractère `underline` souligné
 /// (TEXT_DrawUnderscore : sous la ligne de base) ; faux sans la police.
-fn text_ops(
+#[expect(clippy::too_many_arguments, reason = "DrawText's text, rectangle, format and colour")]
+pub(crate) fn text_ops(
     text: &[u16],
     underline: Option<usize>,
     bold: bool,
     rect: Rect,
+    align: Align,
     color: ColorRef,
     layout: Layout,
     ops: &mut Vec<Op>,
 ) -> bool {
     let face = if bold { TAHOMA_BOLD } else { TAHOMA };
     let Some(run) = layout(face, MENU_FONT_HEIGHT, text, None, Quality::Antialiased) else { return false };
-    let x = rect.left + (rect.right - rect.left - run.width) / 2;
+    let x = match align {
+        Align::Left => rect.left,
+        Align::Center => rect.left + (rect.right - rect.left - run.width) / 2,
+        Align::Right => rect.right - run.width,
+    };
     let top = rect.top + (rect.bottom - rect.top - run.metrics.height()) / 2;
     let baseline = top + run.metrics.ascent;
     for glyph in &run.glyphs {
@@ -252,11 +269,12 @@ pub fn bar_ops(bar: &Bar, c: &impl Fn(usize) -> ColorRef, layout: Layout, ops: &
         if grayed {
             if !hilite {
                 let raised = Rect::new(rect.left + 1, rect.top + 1, rect.right + 1, rect.bottom + 1);
-                painted &= text_ops(&shown, underline, bold, raised, c(color::BTNHIGHLIGHT), layout, ops);
+                painted &=
+                    text_ops(&shown, underline, bold, raised, Align::Center, c(color::BTNHIGHLIGHT), layout, ops);
             }
             text_color = c(color::BTNSHADOW);
         }
-        painted &= text_ops(&shown, underline, bold, rect, text_color, layout, ops);
+        painted &= text_ops(&shown, underline, bold, rect, Align::Center, text_color, layout, ops);
     }
     painted
 }
@@ -270,6 +288,20 @@ fn system_measure(text: &[u16], bold: bool) -> (i32, i32) {
     let face = if bold { TAHOMA_BOLD } else { TAHOMA };
     crate::font::text_run_named(face, MENU_FONT_HEIGHT, text, None, Quality::Antialiased)
         .map_or((0, 0), |run| (run.width, run.metrics.height()))
+}
+
+/// La police des menus du système et sa taille de caractère (MenuInit,
+/// MenuCharSize).
+///
+/// # IRQL
+/// PASSIVE_LEVEL (les polices).
+pub fn system_font() -> MenuFont<'static> {
+    let alphabet: Vec<u16> = ALPHABET.encode_utf16().collect();
+    MenuFont {
+        measure: &system_measure,
+        char_width: char_width(&system_measure),
+        char_height: system_measure(&alphabet, false).1,
+    }
 }
 
 /// La barre de menus de `window` : sa barre (`IDMenu`) si elle n'est pas
@@ -290,8 +322,7 @@ fn bar_menu(window: &Window) -> Option<u32> {
 pub fn calc(window: &Window, rect: Rect) -> Option<i32> {
     let menu = bar_menu(window)?;
     let mut items = crate::menu::items(menu);
-    let font = MenuFont { measure: &system_measure, char_width: char_width(&system_measure) };
-    let height = layout(&mut items, rect, &font, &crate::metrics::get);
+    let height = layout(&mut items, rect, &system_font(), &crate::metrics::get);
     let width = (rect.right - rect.left).max(0) as u32;
     crate::menu::set_places(menu, &items, width, height.max(0) as u32);
     Some(height)
@@ -407,7 +438,7 @@ mod tests {
     }
 
     fn font() -> MenuFont<'static> {
-        MenuFont { measure: &measure, char_width: char_width(&measure) }
+        MenuFont { measure: &measure, char_width: char_width(&measure), char_height: 13 }
     }
 
     fn item(text: &str, f_type: u32) -> Item {
@@ -482,7 +513,8 @@ mod tests {
         // "Exit", x underlined: centered in 40..80 (24 wide: from 48), 3..18
         // (13 high: from 4, baseline 15).
         let red = ColorRef(0xFF);
-        assert!(text_ops(&wide("Exit"), Some(1), false, Rect::new(40, 3, 80, 18), red, &flat_font, &mut ops));
+        let rect = Rect::new(40, 3, 80, 18);
+        assert!(text_ops(&wide("Exit"), Some(1), false, rect, Align::Center, red, &flat_font, &mut ops));
         assert_eq!(ops, [Op::Fill(Rect::new(54, 16, 59, 17), red)], "from 48 + 6 to 48 + 12 - 1");
     }
 

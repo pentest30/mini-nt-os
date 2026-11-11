@@ -322,6 +322,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   places dans le tas) par WM_NCCALCSIZE ; dessin (fond COLOR_MENU, texte centré, préfixe souligné, surligné enfoncé,
   grisé en relief) ; NtUserGetMenuBarInfo, NtUserGetMenuItemRect, NtUserMenuItemFromPoint, NtUserHiliteMenuItem,
   DrawMenuBar (HWNDLOCK_ROUTINE_DRAWMENUBAR) ; scénario `menu`.
+  M6, étape 22 (les menus déroulants) : la fenêtre #32768 (`win32k::menupopup` : mise en page, dessin, procédure du
+  serveur reconnue à sa classe par `window::server_window_proc`) ; le suivi (`win32k::menutrack` : IntTrackPopupMenuEx,
+  MENU_TrackMenu dans le service : place sur le moniteur et rectangle évité, souris capturée, ses messages en
+  coordonnées d'écran pendant le suivi, `queue.menu_owner`, clavier, mnémoniques et WM_MENUCHAR, sous-menus,
+  notifications, WM_COMMAND ou TPM_RETURNCMD) ; NtUserTrackPopupMenuEx, NtUserEndMenu ; scénario `menu` (touches et
+  souris de QEMU).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

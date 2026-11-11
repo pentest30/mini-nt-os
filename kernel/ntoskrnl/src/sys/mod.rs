@@ -288,6 +288,8 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserGetMenuItemRect, Handler::Status(menu::nt_user_get_menu_item_rect)),
     (services::NtUserMenuItemFromPoint, Handler::Status(menu::nt_user_menu_item_from_point)),
     (services::NtUserHiliteMenuItem, Handler::Status(menu::nt_user_hilite_menu_item)),
+    (services::NtUserTrackPopupMenuEx, Handler::Status(menu::nt_user_track_popup_menu_ex)),
+    (services::NtUserEndMenu, Handler::Status(menu::nt_user_end_menu)),
     (services::NtUserDestroyWindow, Handler::Status(window::nt_user_destroy_window)),
     (services::NtUserDrawIconEx, Handler::Status(cursor::nt_user_draw_icon_ex)),
     (services::NtUserCreateCaret, Handler::Status(caret::nt_user_create_caret)),

@@ -2,7 +2,11 @@
 # desktop's heap; tests/native/menu1.c, MinGW, linked to ReactOS's kernel32
 # and user32): MENU1.EXE takes the place of winlogon.exe and switches to
 # WinSta0\Default. It builds a bar (File, Edit, Help), gives it to W (100,
-# 100, 400 x 300, white) and reads every change back through user32.
+# 100, 400 x 300, white) and reads every change back through user32. Then
+# TrackPopupMenuEx (win32k::menutrack, the window of the class #32768 in
+# win32k::menupopup): the keys below, typed at each "[menu] tracking N" (the
+# owner's first WM_ENTERIDLE), the mouse by messages W posts to the menu's
+# window, EndMenu; the last menu stays open for the capture.
 features = test-smss
 requires = userland, native
 initial-command = MENU1.EXE
@@ -42,6 +46,34 @@ expect = [menu] ModifyMenuW: Edit stays 1 until DrawMenuBar, then moves right 1
 expect = [menu] RemoveMenu 1: 2 items, Edit lives 1; DeleteMenu 1: Edit gone 1
 expect = [menu] LoadMenuIndirectW: 1 item, View 2 items, 402 &Small
 expect = [menu] DestroyMenu 1: gone 1, its submenu gone 1
+# ERROR_INVALID_FLAGS, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_PARAMETER.
+expect = [menu] TrackPopupMenuEx refuses: a flag 0 (1004), a menu 0 (1401), a TPMPARAMS 0 (87)
+# Shown, notified (WM_ENTERMENULOOP, WM_INITMENU, WM_INITMENUPOPUP,
+# WM_UNINITMENUPOPUP, WM_EXITMENULOOP), but nothing to wait for.
+expect = [menu] an empty menu: 0, notified 1 1 1 1 1, never waits 1
+# Open, Gray (the separator skipped), Sub, its submenu on Inner, Enter.
+keys = [menu] tracking 1 => down down down right ret
+# The menu at (150, 160), its frame SM_CXDLGFRAME wide; shown already:
+# ERROR_POPUP_ALREADY_ACTIVE.
+expect = [menu] tracked 1: MSGF_MENU 1, MN_GETHMENU 1, at 150,160 1, a dialog's frame 1, again 0 (1446)
+# WM_MENUSELECT: Open, Gray, Sub, Inner, then (0, 0xFFFF) and no menu.
+expect = [menu] TrackPopupMenuEx 1: 301; ENTERMENULOOP 1 1, INITMENU 1 1, INITMENUPOPUP 2 1 1, MENUSELECT 5 ffff0000 0, UNINITMENUPOPUP 2, EXITMENULOOP 1, its window gone 1, WM_COMMAND 0
+# Sub's submenu opened and closed twice (Escape, left: the tracking goes
+# on); q: no item (WM_MENUCHAR 'q' | MF_POPUP << 16, ignored); x: Exit.
+keys = [menu] tracking 2 => down down down right esc right left q x
+expect = [menu] TrackPopupMenu 2: 1; INITMENUPOPUP 3, UNINITMENUPOPUP 3, WM_MENUCHAR 100071, WM_COMMAND 203
+# W posts the mouse's messages to the menu's window, at the screen's
+# coordinates (the menu tracked: not the client area's).
+expect = [menu] TrackPopupMenuEx 3, the mouse: 201; Open hilited 1, its text 1, the separator 1; Sub opens 1, at the right 1, WM_ENTERIDLE names it 1
+# To the right of the rectangle to avoid (100, 150, 300, 250).
+expect = [menu] TrackPopupMenuEx 4, EndMenu: 0; at 300,160; notified 0
+# The mouse, from the middle of the screen (640, 400), to Sub's (201, 214):
+# its submenu opens (the menu tracked, the mouse's messages keep the screen's
+# coordinates).
+keys = [menu] tracking 5 => move:-220,-93 move:-219,-93
+# The places the screen's checks below rely on: the menu, Sub (in its client
+# area, 3 pixels in), its submenu's Inner to the right of the menu.
+expect = [menu] the last menu at 150,160 to 253,243; Sub 153,206 to 250,223; Inner 252,206 to 309,223
 expect = [menu] done
 
 forbid = *** STOP:
@@ -55,15 +87,30 @@ forbid = NtUserGetMenuItemRect (0x11a3) is not implemented
 forbid = NtUserMenuItemFromPoint (0x11ca) is not implemented
 forbid = NtUserHiliteMenuItem (0x11bb) is not implemented
 forbid = NtUserCallHwndLock class 0x55 is not implemented
+forbid = NtUserTrackPopupMenuEx (0x1231) is not implemented
+forbid = NtUserEndMenu (0x1170) is not implemented
 
 # W's client area, white, under its bar.
 screen = 300 300 FFFFFF
-# The bar (y 124 to 142, COLOR_MENU), as DrawMenuBar left it: "&Fichier",
-# "&Edit", and "&Help" at its right; each prefixed letter underlined under the
-# baseline (y 138), as wide as the letter less one pixel.
+# The bar (y 124 to 142, COLOR_MENU): "&Fichier", and "&Help" at its right;
+# each prefixed letter underlined under the baseline (y 138), as wide as the
+# letter less one pixel. (Edit, deleted, is gone from the screen too: a menu's
+# window that closes over W makes W repaint its whole frame, WM_NCPAINT
+# not yet drawing only a part of it, see paint::nc_paint.)
 screen = 300 130 D4D0C8
 screen = 110 138 000000
 screen = 114 138 000000
 screen = 115 138 D4D0C8
-screen = 155 138 000000
 screen = 468 138 000000
+# The last menu, open at (150, 160) to (253, 243): its raised frame (a
+# dialog's), the separator etched (y 183 and 184), Sub hilited
+# (COLOR_HIGHLIGHT) with its arrow (Marlett, COLOR_HIGHLIGHTTEXT); its
+# submenu from (249, 203), over the menu's edge, Inner not hilited, its frame.
+screen = 151 161 FFFFFF
+screen = 252 242 404040
+screen = 200 183 808080
+screen = 200 184 FFFFFF
+screen = 157 208 0A246A
+screen = 243 214 FFFFFF
+screen = 305 215 D4D0C8
+screen = 310 215 808080
