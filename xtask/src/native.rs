@@ -70,7 +70,13 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["read1.c"], "READ1.EXE", Toolchain::MinGwConsole),
     (&["concmd1.c"], "CONCMD1.EXE", Toolchain::MinGwWin32),
     (&["pipe1.c"], "PIPE1.EXE", Toolchain::MinGwWin32),
+    (&["minoinit.c"], "MINOINIT.EXE", Toolchain::MinGwWin32),
 ];
+
+/// The programs of the system, not of a test: on the boot disk in
+/// `WINDOWS/SYSTEM32`, where the hives name them. MINOINIT.EXE ends the
+/// installation at the first boot (`SYSTEM\Setup\CmdLine`, ADR-023).
+const SYSTEM_PROGRAMS: &[&str] = &["MINOINIT.EXE"];
 
 /// The DLLs of the import libraries (`tests/native/NAME.def`): ntdll for
 /// every program, kernel32, user32 and gdi32 for the Win32 ones.
@@ -178,7 +184,8 @@ pub fn build(ws: &Workspace) -> Result<Option<Vec<String>>> {
                 run(link.arg(&msvc_library))?;
             }
         }
-        files.push(format!("{}:{name}", image.display()));
+        let place = if SYSTEM_PROGRAMS.contains(&name) { format!("WINDOWS/SYSTEM32/{name}") } else { name.to_string() };
+        files.push(format!("{}:{place}", image.display()));
     }
     Ok(Some(files))
 }

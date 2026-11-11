@@ -198,7 +198,7 @@ fn install_image(ws: &Workspace, mut args: Args) -> Result<()> {
     if output.exists() {
         return Err(format!("{} already exists; choose another --output", output.display()));
     }
-    let mut files = userland_files(ws).ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
+    let mut files = userland_files(ws)?.ok_or("fetch ReactOS first: cargo xtask fetch-userland")?;
     let artifacts = build(ws, Some(&features))?;
     if initial_command != "system" {
         // The startup choice (or an explicitly selected probe) boots as
@@ -254,7 +254,7 @@ fn run(ws: &Workspace, mut args: Args) -> Result<()> {
     }
 
     let artifacts = build(ws, features.as_deref())?;
-    match userland_files(ws) {
+    match userland_files(ws)? {
         Some(files) => {
             extra_files.extend(files);
             // The native test programs, if MinGW can build them.
@@ -331,7 +331,7 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
         }
         let mut extra_files = Vec::new();
         if sc.requires_userland {
-            match userland_files(ws) {
+            match userland_files(ws)? {
                 Some(files) => extra_files.extend(files),
                 None => {
                     println!("xtask: SKIP {}: needs the ReactOS userland (cargo xtask fetch-userland)", sc.name);
@@ -559,9 +559,10 @@ fn put_initial_command(files: &mut Vec<String>, program: &str) -> Result<()> {
 /// under `WINDOWS/SYSTEM32`: `NTDLL.DLL`, which the kernel installs as the
 /// system DLL, the NLS tables each process maps, and the others of
 /// `userland::boot_files`; `None` until `fetch-userland` ran.
-fn userland_files(ws: &Workspace) -> Option<Vec<String>> {
-    let files = userland::boot_files(ws)?;
-    Some(files.into_iter().map(|(path, name)| format!("{}:{name}", path.display())).collect())
+fn userland_files(ws: &Workspace) -> Result<Option<Vec<String>>> {
+    let Some(mut files) = userland::boot_files(ws) else { return Ok(None) };
+    userland::layer_hives(ws, &mut files)?;
+    Ok(Some(files.into_iter().map(|(path, name)| format!("{}:{name}", path.display())).collect()))
 }
 
 // ── Building ──────────────────────────────────────────────────────────────────
