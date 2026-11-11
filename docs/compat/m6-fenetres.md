@@ -1274,5 +1274,6 @@ et la cause corrigée :
 GWLP_WNDPROC et GWLP_HWNDPARENT restent à faire (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois).
 
 Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZE` gardés, le bord de fenêtre, la
-fille qui cesse ou devient fille) ; `desktop-launch` sur AMD, qui échoue avec l'ordre de ReactOS sans GWL_STYLE
-(la page grise, ses quatre pixels).
+fille qui cesse ou devient fille) ; `desktop-launch` sur AMD et Intel, qui échoue avec l'ordre de ReactOS sans
+GWL_STYLE (la page grise, ses quatre pixels) ; `gui` passe de nouveau sur AMD et Intel ; toute la suite sur AMD (55
+sur 55).

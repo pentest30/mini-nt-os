@@ -8,8 +8,9 @@
   (co_IntSetWindowLongPtr : WM_STYLECHANGING, `restyle`, `restyle_ex`, WM_STYLECHANGED ; `abi::user::StyleStruct32`)
   fait GWL_STYLE et GWL_EXSTYLE ; `paint::find_window_to_repaint` va de nouveau de haut en bas de l'ordre Z, comme
   ReactOS (l'écart retiré). Tests : hôte (`window`, quatre tests) ; `desktop-launch` échoue avec l'ordre de ReactOS
-  sans GWL_STYLE (mutation : la page grise) et passe avec, sur AMD ; `cargo xtask lint` propre, 1087 tests hôte.
-  **À finir** : la suite complète sur AMD (lancée, `gui` compris), `desktop-launch` et `gui` sur Intel. Pas encore : GWLP_WNDPROC,
+  sans GWL_STYLE (mutation : la page grise) et passe avec, sur AMD et Intel ; `gui` passe de nouveau sur AMD et
+  Intel ; toute la suite sur AMD : 55 sur 55 (les rostests sautés, sans leur arbre) ; `cargo xtask lint` propre, 1087
+  tests hôte. Pas encore : GWLP_WNDPROC,
   GWLP_HWNDPARENT, WS_EX_TOPMOST ôté à la fenêtre du shell, les fenêtres en couches.
 
 - **La boîte Enregistrer sous du Bloc-notes** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
