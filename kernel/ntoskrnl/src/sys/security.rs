@@ -104,6 +104,14 @@ fn open_process_token(process: u32, desired: u32, attributes: u32, out: u32) -> 
     status(open())
 }
 
+/// NtAllocateLocallyUniqueId(*Luid) : un LUID neuf (ExAllocateLocallyUniqueId,
+/// `se::allocate_luid`), écrit chez l'appelant ; `lsasrv` en prend un pour
+/// chaque session qu'il ouvre (LsaLogonUser, ADR-023).
+pub(super) fn nt_allocate_locally_unique_id(arguments: &[u32]) -> NtStatus {
+    // A LUID is LowPart then HighPart: a little-endian u64.
+    status(UserPtr::<u64>::new(arguments[0]).write(&se::allocate_luid().0).map(|()| STATUS_SUCCESS))
+}
+
 /// NtOpenProcessToken(ProcessHandle, DesiredAccess, *TokenHandle).
 pub(super) fn nt_open_process_token(arguments: &[u32]) -> NtStatus {
     open_process_token(arguments[0], arguments[1], 0, arguments[2])

@@ -117,6 +117,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtConnectPort, Handler::Status(port::nt_connect_port)),
     (services::NtContinue, Handler::Frame(exceptions::nt_continue)),
     (services::NtCreateDirectoryObject, Handler::Status(object::nt_create_directory_object)),
+    (services::NtAllocateLocallyUniqueId, Handler::Status(security::nt_allocate_locally_unique_id)),
     (services::NtCreateEvent, Handler::Status(event::nt_create_event)),
     (services::NtCreateIoCompletion, Handler::Status(completion::nt_create_io_completion)),
     (services::NtOpenIoCompletion, Handler::Status(completion::nt_open_io_completion)),

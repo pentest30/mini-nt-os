@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 124 | 296 |
+| ntoskrnl | 125 | 296 |
 | win32k | 128 | 737 |
 
 ## ntoskrnl
@@ -30,7 +30,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x000c` | `NtAdjustPrivilegesToken` | 6 | ✅ |
 | `0x000d` | `NtAlertResumeThread` | 2 |  |
 | `0x000e` | `NtAlertThread` | 1 |  |
-| `0x000f` | `NtAllocateLocallyUniqueId` | 1 |  |
+| `0x000f` | `NtAllocateLocallyUniqueId` | 1 | ✅ |
 | `0x0010` | `NtAllocateUserPhysicalPages` | 3 |  |
 | `0x0011` | `NtAllocateUuids` | 4 |  |
 | `0x0012` | `NtAllocateVirtualMemory` | 6 | ✅ |

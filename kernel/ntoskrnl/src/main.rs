@@ -3994,6 +3994,7 @@ fn security_self_test() {
     const WIN32K_NAME: u32 = DATA + 0x510;
     const OTHER_NAME: u32 = DATA + 0x580;
     const SESSION: u32 = DATA + 0x5F0;
+    const LUIDS: u32 = DATA + 0x600; // 2 LUIDs
     const DONE: u32 = DATA + 0x7FC;
     // As CsrSetProcessSecurity: what its user may do to it.
     const CSRSS_ACCESS: u32 = 0x0002_0C79;
@@ -4079,6 +4080,9 @@ fn security_self_test() {
     code.call_args(set_system, &[v(extend), v(OTHER_US), v(8)]).store_eax(status(29));
     code.call_args(services::NtClose, &[m(handle(0))]).store_eax(status(23));
     code.call_args(services::NtClose, &[m(handle(1))]).store_eax(status(24));
+    // Two locally unique identifiers, as lsasrv takes one per logon.
+    code.call_args(services::NtAllocateLocallyUniqueId, &[v(LUIDS)]).store_eax(status(30));
+    code.call_args(services::NtAllocateLocallyUniqueId, &[v(LUIDS + 8)]).store_eax(status(31));
     code.word(&[0xC7, 0x05], DONE).bytes(&1u32.to_le_bytes()).bytes(&[0xEB, 0xFE]);
     let mut text = [0xCC; 0x800];
     assert!(code.0.len() <= text.len(), "the test program outgrew its slot");
@@ -4112,7 +4116,10 @@ fn security_self_test() {
         unsafe { ke_delay_execution_thread::<KePlatform>(ProcessorMode::Kernel, false, -10 * MS) };
     }
 
-    let statuses: alloc::vec::Vec<NtStatus> = (0..30).map(|i| NtStatus(read(status(i)))).collect();
+    let statuses: alloc::vec::Vec<NtStatus> = (0..32).map(|i| NtStatus(read(status(i)))).collect();
+    assert_eq!((statuses[30], statuses[31]), (STATUS_SUCCESS, STATUS_SUCCESS), "NtAllocateLocallyUniqueId");
+    let (first, second) = ((read(LUIDS), read(LUIDS + 4)), (read(LUIDS + 8), read(LUIDS + 12)));
+    assert!(first != second && first.0 > 0x3E7 && second.0 > 0x3E7, "two new LUIDs: {first:?} {second:?}");
     // The token: a copy of System's.
     let token = process.primary_token();
     let system_token = system.primary_token();
