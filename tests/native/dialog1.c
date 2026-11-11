@@ -59,6 +59,7 @@ typedef struct {
 #define WS_CAPTION 0x00C00000
 #define WS_SYSMENU 0x00080000
 #define WS_TABSTOP 0x00010000
+#define WS_DISABLED 0x08000000
 #define DS_SETFONT 0x0040
 #define DS_MODALFRAME 0x0080
 #define DS_CENTER 0x0800
@@ -71,6 +72,7 @@ typedef struct {
 #define GW_CHILD 5
 #define IDOK 1
 #define ID_TEXT 100
+#define ID_DISABLED 101
 #define EXIT_STATUS 0x7004
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
@@ -143,7 +145,7 @@ static const void *build_template(void)
     /* DLGTEMPLATE */
     dword(&at, WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE | DS_SETFONT | DS_MODALFRAME | DS_CENTER);
     dword(&at, 0);
-    word(&at, 2);
+    word(&at, 3);
     word(&at, 0);
     word(&at, 0);
     word(&at, 200);
@@ -155,6 +157,9 @@ static const void *build_template(void)
     string(&at, L"MS Shell Dlg");
     item(&at, WS_CHILD | WS_VISIBLE, 10, 10, 120, 10, ID_TEXT, 0x0082, L"A dialog from a template");
     item(&at, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, 140, 76, 50, 14, IDOK, 0x0080, L"OK");
+    /* Disabled, its text grayed by DrawState in a font made from GetObject
+       of the DC's (Task Manager's Switch To). */
+    item(&at, WS_CHILD | WS_VISIBLE | WS_DISABLED, 75, 76, 60, 14, ID_DISABLED, 0x0080, L"&Switch To");
     return template_words;
 }
 

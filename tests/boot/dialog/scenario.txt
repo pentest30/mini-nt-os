@@ -48,6 +48,18 @@ screen = 773 460 404040
 screen = 703 455 D4D0C8
 screen = 704 455 000000
 screen = 702 460 D4D0C8
+# A disabled button, "&Switch To" (Task Manager's): user32's DrawState
+# draws its label grayed in a font made from GetObjectW of the DC's
+# (NtGdiExtGetObjectW; without it, a LOGFONT never filled, an underline from
+# absurd coordinates, a LineTo that froze the system). Its prefix underline
+# under the S, in COLOR_BTNSHADOW, its white relief a pixel below and to
+# the right; LineTo starts where gdi32's MoveToEx put the current position
+# (DC_ATTR.ptlCurrent), not where the kernel last left it (a diagonal from
+# (624, 456)).
+screen = 626 468 808080
+screen = 627 469 FFFFFF
+screen = 624 457 D4D0C8
 
 forbid = *** STOP:
 forbid = did not take the screen
+forbid = NtGdiExtGetObjectW (0x1090) is not implemented

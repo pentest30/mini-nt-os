@@ -303,6 +303,12 @@ pub mod dirty {
     pub const DIRTY_CHARSET: u32 = 0x0000_0010;
     /// What a new DC has (`DIRTY_DEFAULT`).
     pub const DIRTY_DEFAULT: u32 = DIRTY_CHARSET | DIRTY_BACKGROUND | DIRTY_TEXT | DIRTY_LINE | DIRTY_FILL;
+    /// `ptlCurrent` is stale, `ptfxCurrent` holds the current position.
+    pub const DIRTY_PTLCURRENT: u32 = 0x0000_0100;
+    /// `ptfxCurrent` is stale: `gdi32`'s MoveToEx wrote `ptlCurrent` alone.
+    pub const DIRTY_PTFXCURRENT: u32 = 0x0000_0200;
+    /// The pen's style state starts again (MoveToEx).
+    pub const DIRTY_STYLESTATE: u32 = 0x0000_0400;
     /// `hbrush` changed (`GdiSelectBrush`).
     pub const DC_BRUSH_DIRTY: u32 = 0x0000_1000;
     pub const DC_PEN_DIRTY: u32 = 0x0000_2000;
