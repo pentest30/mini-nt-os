@@ -203,6 +203,31 @@ fn a_full_volume_refuses_and_keeps_what_was_there() {
     assert_eq!(free.len(), 8 - 1 - 2, "the root and the file's two clusters");
 }
 
+#[test]
+fn a_long_name_that_cannot_be_written_leaves_no_entry() {
+    let volume = FatVolume::mount(fat32(8)).unwrap();
+    let root = volume.root_cluster();
+    // More than VFAT's 255 units: refused before anything is written (the
+    // 64th part's order would read as the last-part flag).
+    assert_eq!(volume.add_entry_long(root, &"n".repeat(256), 0x20, 3), Err(FatError::PathFormat));
+    assert_eq!(volume.add_entry_long(root, &"n".repeat(900), 0x20, 3), Err(FatError::PathFormat));
+    assert!(volume.dir_entries(root).unwrap().is_empty());
+    // The root keeps two free slots of its 16, and no cluster is left: the two
+    // parts of the name fit, its 8.3 entry would need the directory to grow.
+    for i in 0..14 {
+        volume.add_entry(root, &make_entry(&short_name(&std::format!("F{i}.DAT")).unwrap(), 0x20, 0, 0), 3).unwrap();
+    }
+    let (mut first, mut size) = (0, 0);
+    volume.write_file(&mut first, &mut size, 0, &[1u8; 512 * 7], 3).unwrap();
+    assert_eq!(volume.add_entry_long(root, "A long file name.txt", 0x20, 3), Err(FatError::Full));
+    for index in 14..16 {
+        let entry = volume.read_entry(crate::fat::EntryRef { cluster: root, index }).unwrap();
+        assert_eq!(entry[0], 0xE5, "slot {index}: the part written is deleted again");
+    }
+    assert_eq!(volume.dir_entries(root).unwrap().len(), 14);
+    assert!(volume.find_entry(root, "A long file name.txt").is_err());
+}
+
 /// A disk that counts the sectors written to it, and fails every write from
 /// the `fail_at`-th on.
 struct Counting {
@@ -347,6 +372,15 @@ fn files_are_created_written_and_seen_by_every_open() {
     let path = "\\documents and settings\\DEFAULT USER\\ntuser.dat";
     assert_eq!(File::open(&volume, path).unwrap().read_all().unwrap(), b"regf");
     assert_eq!(logs.create_child("bad*name", false, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
+    // VFAT holds 255 UTF-16 units at most: a longer name, file or
+    // directory, is refused before anything is written.
+    let longest = "n".repeat(255);
+    logs.create_child(&longest, false, 0).unwrap().write(0, b"255").unwrap();
+    assert_eq!(File::open(&volume, &std::format!("\\Logs\\{longest}")).unwrap().read_all().unwrap(), b"255");
+    let too_long = "n".repeat(256);
+    assert_eq!(logs.create_child(&too_long, false, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
+    assert_eq!(logs.create_child(&"d".repeat(900), true, 0).err(), Some(STATUS_OBJECT_NAME_INVALID));
+    assert_eq!(File::open(&volume, &std::format!("\\Logs\\{too_long}")).err(), Some(STATUS_OBJECT_NAME_INVALID));
     assert_eq!(file.create_child("x", false, 0).err(), Some(STATUS_OBJECT_PATH_NOT_FOUND), "under a file");
     assert_eq!(logs.write(0, b"x").err(), Some(STATUS_INVALID_DEVICE_REQUEST), "writing a directory");
     let locked = root.create_child("RO.TXT", false, FILE_ATTRIBUTE_READONLY).unwrap();

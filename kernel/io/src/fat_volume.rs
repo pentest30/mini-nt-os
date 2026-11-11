@@ -5,7 +5,8 @@
 //! un répertoire du volume, sans casse, et rend un [`Node`] : un fichier, ou
 //! un répertoire, avec la place de son entrée. Les erreurs sont celles qu'un
 //! pilote de système de fichiers d'XP rend à IopParseDevice : composant vide,
-//! `.`, `..` ou caractère interdit (`STATUS_OBJECT_NAME_INVALID`), composant
+//! `.`, `..`, caractère interdit ou plus de 255 unités UTF-16
+//! (`STATUS_OBJECT_NAME_INVALID`), composant
 //! intermédiaire absent ou qui n'est pas un répertoire
 //! (`STATUS_OBJECT_PATH_NOT_FOUND`), dernier composant absent
 //! (`STATUS_OBJECT_NAME_NOT_FOUND`).
@@ -153,9 +154,14 @@ fn is_invalid_character(c: char) -> bool {
     (c as u32) < 0x20 || matches!(c, '"' | '*' | '/' | ':' | '<' | '>' | '?' | '\\' | '|')
 }
 
-/// Un nom qu'un fichier ne peut pas porter.
+/// Un nom qu'un fichier ne peut pas porter : vide, `.`, `..`, un caractère
+/// interdit, ou plus long que VFAT ne le tient (255 unités UTF-16).
 fn is_invalid_name(name: &str) -> bool {
-    name.is_empty() || name == "." || name == ".." || name.chars().any(is_invalid_character)
+    name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.chars().any(is_invalid_character)
+        || name.encode_utf16().count() > crate::fat::MAX_LONG_NAME_UNITS
 }
 
 /// Les attributs qu'on donne à un fichier créé.
