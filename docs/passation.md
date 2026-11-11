@@ -1,5 +1,13 @@
 # Notes de passation
 
+- **Revue de la PR 125 : NtUserCreateAcceleratorTable** (`claude/new-session-696xfc`) : le compte de l'appelant
+  allouait `count × 6` octets avant toute validation (0xFFFFFFFF : 24 Gio, l'échec de l'allocation arrêtait le
+  système depuis un appel système). Le compte est borné à 65 536 entrées (au-delà : NULL et
+  ERROR_NOT_ENOUGH_MEMORY), la plage sondée avant d'allouer, les allocations faillibles (`try_reserve_exact`). Test :
+  la sonde de `notepad` appelle CreateAcceleratorTableW avec 0xFFFFFFFF (STOP sans le correctif) et fait, copie,
+  détruit une table d'une entrée ; `notepad` sur AMD et Intel. À regarder de même : NtGdiGetCharABCWidthsW sans
+  `pwch` alloue jusqu'à ~90 Mio pour un compte borné seulement par MAX_TEXT_BUFFER.
+
 - **Le Bloc-notes s'affiche** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 24 ; le critère « Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre » commence) :
   scénario `notepad` (`tests/native/notepad1.c` à la place de `winlogon.exe` lance le vrai `notepad.exe`, que

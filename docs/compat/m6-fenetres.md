@@ -1147,7 +1147,7 @@ translate_accelerator) pour la recherche de l'item ; `win32k::accel`, `win32k::w
 |---|---|
 | RegisterWindowMessage | l'atome du nom dans la table des atomes de USER (`win32k::atom`) : un message de 0xC000 à 0xFFFF, le même pour le même nom sans tenir compte de la casse ; 0 pour un nom nul (ERROR_INVALID_PARAMETER) ou un thread sans bureau. Sans lui, le Bloc-notes avait FINDMSGSTRING = 0 et aurait pris WM_NULL pour le message de sa recherche |
 | NtUserQueryWindow | le PID et le TID du thread de la fenêtre (GetWindowThreadProcessId) ; pour une fenêtre console de `csrss` (sa classe est celle que `consrv` donne par NtUserConsoleControl), ceux du processus qui mène la console, dans ses octets de plus (0 et 4) ; la fenêtre active et celle qui a le clavier dans la file de son thread ; le PID (REAL_ID) ; si sa file est au premier plan ; 0 pour ISHUNG et l'IME |
-| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon |
+| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon ; au plus 65 536 entrées (au-delà, NULL et ERROR_NOT_ENOUGH_MEMORY, comme une allocation qui échoue chez ReactOS), la plage de l'appelant sondée et le compte borné avant toute allocation, les allocations faillibles |
 | TranslateAccelerator (`accel::translate`) | WM_KEYDOWN, WM_SYSKEYDOWN : une entrée FVIRTKEY de même touche, Maj, Ctrl et Alt du thread exactement ; WM_CHAR, WM_SYSCHAR : une entrée de caractère de même code, Alt seul comparé ; la commande, si c'est un item du menu de la fenêtre (non fille) : WM_INITMENU, puis WM_INITMENUPOPUP du menu qui porte l'item et sa position, sauf souris capturée ; WM_COMMAND (HIWORD 1) sauf fenêtre désactivée, item désactivé ou grisé (après WM_INITMENUPOPUP), fenêtre réduite ; le message est alors traduit |
 
 Écarts voulus avec ReactOS : il cherche l'item du menu à la position égale à la commande (MF_BYPOSITION), et donne
@@ -1172,7 +1172,10 @@ rendus) ; Ctrl+G tapé par QEMU (« ^G » : WM_CHAR 7 par TranslateMessage, puis
 line », Échap la ferme, et le contrôle Edit est repeint là où elle était.
 
 Tests : hôte (`accel` : touches virtuelles et modificateurs, caractères et Alt, FVIRT_TBL_END et l'ANSI, les
-messages du menu, ce qui empêche WM_COMMAND) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
+messages du menu, ce qui empêche WM_COMMAND) ; la sonde crée, copie et détruit une table d'une entrée, et
+CreateAcceleratorTableW d'un compte de 0xFFFFFFFF est refusé (la revue de la PR 125 : le noyau allouait 24 Gio
+avant de regarder le compte, et l'échec de l'allocation arrêtait le système ; le scénario le reproduit sans le
+correctif) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
 l'accélérateur (mutation) ; `cmd`, `desktop-launch`, `console` (qui appelaient NtUserQueryWindow) sur AMD et Intel.
 
 ## Étape 26 : le texte d'Uniscribe (GetFontData, GetGlyphIndicesW, GetCharABCWidths, ETO_GLYPH_INDEX)

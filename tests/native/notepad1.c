@@ -4,7 +4,8 @@
  * `notepad` puts on the boot disk in the place of winlogon.exe (like `cmd`,
  * see concmd1.c). Like winlogon, it takes WinSta0\Default and loads the US
  * keyboard layout. It checks RegisterWindowMessage (the same message for the
- * same name, whatever its case); then it starts ReactOS's notepad.exe by
+ * same name, whatever its case) and CreateAcceleratorTableW (a count beyond
+ * what the kernel takes is refused, without stopping the system); then it starts ReactOS's notepad.exe by
  * CreateProcessW and, for PROBE_SECONDS, lists the top-level windows of the
  * desktop with their titles when the list changes, and says when Notepad
  * ends (its exit code). When Notepad's window is there, it checks that
@@ -87,6 +88,9 @@ __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, 
 __declspec(dllimport) BOOL __stdcall EnumWindows(WNDENUMPROC procedure, LPARAM parameter);
 __declspec(dllimport) DWORD __stdcall GetWindowThreadProcessId(HWND window, DWORD *process);
 __declspec(dllimport) UINT __stdcall RegisterWindowMessageW(const WCHAR *name);
+__declspec(dllimport) int __stdcall CopyAcceleratorTableW(HANDLE table, void *entries, int count);
+__declspec(dllimport) HANDLE __stdcall CreateAcceleratorTableW(void *entries, int count);
+__declspec(dllimport) BOOL __stdcall DestroyAcceleratorTable(HANDLE table);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int max);
 __declspec(dllimport) HKL __stdcall LoadKeyboardLayoutW(const WCHAR *name, UINT flags);
 __declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
@@ -175,6 +179,35 @@ static void copy_text(char *to, const char *from)
     to[i] = 0;
 }
 
+/* ACCEL. */
+typedef struct {
+    BYTE fVirt;
+    WORD key;
+    WORD cmd;
+} ACCEL;
+
+#define FVIRTKEY 0x01
+#define FCONTROL 0x08
+#define ERROR_NOT_ENOUGH_MEMORY 8
+
+/* CreateAcceleratorTableW (NtUserCreateAcceleratorTable itself in user32): a
+ * table of one entry is made, copied and destroyed; a count of 0xFFFFFFFF,
+ * which the kernel once allocated before looking at it (and stopped the
+ * system), is refused with ERROR_NOT_ENOUGH_MEMORY. */
+static void check_accelerator_tables(void)
+{
+    ACCEL entry = {FVIRTKEY | FCONTROL, 'S', 0x101};
+    HANDLE table = CreateAcceleratorTableW(&entry, 1);
+    int copied = table ? CopyAcceleratorTableW(table, 0, 0) : -1;
+    BOOL destroyed = table && DestroyAcceleratorTable(table);
+    HANDLE huge = CreateAcceleratorTableW(&entry, -1);
+    DWORD error = GetLastError();
+    if (table && copied == 1 && destroyed && !huge && error == ERROR_NOT_ENOUGH_MEMORY)
+        DbgPrint("[notepad] CreateAcceleratorTable: one entry made, a huge count refused\n");
+    else
+        DbgPrint("[notepad] CreateAcceleratorTable: %p %d %d %p %lu\n", table, copied, destroyed, huge, error);
+}
+
 /* What the probe has seen of Notepad's windows. */
 static int notepad_seen, goto_seen, goto_closed;
 
@@ -244,6 +277,7 @@ DWORD __stdcall GuiStartup(void)
     if (!take_a_desktop())
         ExitProcess(1);
     check_registered_message();
+    check_accelerator_tables();
     memset(&startup, 0, sizeof startup);
     startup.cb = sizeof startup;
     startup.lpDesktop = L"WinSta0\\Default";
