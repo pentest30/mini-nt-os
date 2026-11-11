@@ -946,6 +946,14 @@ pub const WMSZ_BOTTOMRIGHT: u32 = 8;
 /// NOPARAM_ROUTINE_RELEASECAPTURE: ReleaseCapture, by NtUserCallNoParam
 /// (user32!ReleaseCapture pushes 0xD).
 pub const NOPARAM_ROUTINE_RELEASECAPTURE: u32 = 0x0D;
+/// NOPARAM_ROUTINE_DESTROY_CARET: DestroyCaret (XP's order of the enum).
+pub const NOPARAM_ROUTINE_DESTROY_CARET: u32 = 0x05;
+/// ONEPARAM_ROUTINE_SETCARETBLINKTIME: SetCaretBlinkTime.
+pub const ONEPARAM_ROUTINE_SETCARETBLINKTIME: u32 = 0x3B;
+/// TWOPARAM_ROUTINE_SETCARETPOS: SetCaretPos.
+pub const TWOPARAM_ROUTINE_SETCARETPOS: u32 = 0x6E;
+/// IDCARETTIMER: the system timer that makes the caret blink.
+pub const IDCARETTIMER: u32 = 0xFFFF;
 /// ONEPARAM_ROUTINE_GETCURSORPOS: GetCursorPos, by NtUserCallOneParam with
 /// the POINT (user32!GetCursorPos pushes 0x26).
 pub const ONEPARAM_ROUTINE_GETCURSORPOS: u32 = 0x26;

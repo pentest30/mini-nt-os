@@ -32,6 +32,7 @@
 pub mod apc;
 mod atom;
 mod callback;
+mod caret;
 mod class;
 mod console;
 mod cursor;
@@ -175,6 +176,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiOpenDCW, Handler::Status(gdi::nt_gdi_open_dc_w)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtGdiRectVisible, Handler::Status(gdi::nt_gdi_rect_visible)),
+    (services::NtGdiGetPixel, Handler::Status(gdi::nt_gdi_get_pixel)),
     (services::NtGdiRectangle, Handler::Status(gdi::nt_gdi_rectangle)),
     (services::NtGdiSelectBitmap, Handler::Status(gdi::nt_gdi_select_bitmap)),
     (services::NtGdiSelectFont, Handler::Status(gdi::nt_gdi_select_font)),
@@ -278,6 +280,11 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserDestroyMenu, Handler::Status(menu::nt_user_destroy_menu)),
     (services::NtUserDestroyWindow, Handler::Status(window::nt_user_destroy_window)),
     (services::NtUserDrawIconEx, Handler::Status(cursor::nt_user_draw_icon_ex)),
+    (services::NtUserCreateCaret, Handler::Status(caret::nt_user_create_caret)),
+    (services::NtUserShowCaret, Handler::Status(caret::nt_user_show_caret)),
+    (services::NtUserHideCaret, Handler::Status(caret::nt_user_hide_caret)),
+    (services::NtUserGetCaretPos, Handler::Status(caret::nt_user_get_caret_pos)),
+    (services::NtUserGetCaretBlinkTime, Handler::Status(caret::nt_user_get_caret_blink_time)),
     (services::NtUserEnableScrollBar, Handler::Status(scroll::nt_user_enable_scroll_bar)),
     (services::NtUserGetScrollBarInfo, Handler::Status(scroll::nt_user_get_scroll_bar_info)),
     (services::NtUserSBGetParms, Handler::Status(scroll::nt_user_sb_get_parms)),

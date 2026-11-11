@@ -1,12 +1,27 @@
 # Notes de passation
 
+- **Le caret** (`claude/new-session-696xfc` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 19) :
+  `win32k::caret` (un par thread, dans sa file : fenêtre, forme pleine, grise ou bitmap, position, niveau de masquage ;
+  dessiné en inversant l'écran dans la partie visible de la zone cliente) ; NtUserCreateCaret, NtUserShowCaret,
+  NtUserHideCaret, NtUserGetCaretPos, NtUserGetCaretBlinkTime (`sys::caret`), DESTROY_CARET, SETCARETBLINKTIME,
+  SETCARETPOS ; le clignotement par une minuterie du système (IDCARETTIMER) à procédure du noyau
+  (`timer::set_kernel_timer` : WM_SYSTIMER porte KERNEL_PROCEDURE, `user32` le rend à NtUserDispatchMessage) ;
+  BeginPaint le cache, EndPaint le remontre, ScrollWindowEx le cache puis le décale (co_IntFixCaret), la destruction
+  de sa fenêtre le détruit ; NtGdiGetPixel (`gdi::dc::get_pixel`). Écarts voulus avec ReactOS : le masquage se
+  compte, dessin aussitôt visible, pas de clignotement caché. Tests : hôte (`caret`, `timer`, `gdi::dc`) ; scénario `caret`
+  (`tests/native/caret1.c`, chaque pas relu par GetPixel, cinq pixels de la capture) sur AMD et Intel ; trois
+  mutations (BeginPaint sans masquage, booléen, sans co_IntFixCaret) le font échouer ; `scrollex`, `scroll`, `gui`,
+  `text`, `console`, `destroy`, `keyboard`. Pas encore : EVENT_OBJECT_* du caret, GetGUIThreadInfo,
+  `CursorBlinkRate` du registre. Suite proposée : les menus (clic dans la barre, TrackPopupMenu), puis réduire et
+  agrandir, puis un scénario du Bloc-notes.
+
 - **Le défilement d'une fenêtre ou d'un DC** (`claude/new-session-696xfc` ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 18) : `win32k::scrollex` (ScrollDC : la copie dans la surface
   du DC et la région découverte, `plan` ; ScrollWindowEx : par un DC du cache, la région déjà à repeindre décalée,
   SW_SCROLLCHILDREN, SW_INVALIDATE, SW_ERASE), NtUserScrollWindowEx et NtUserScrollDC (`sys::scroll`) ; BitBlt dans
   une même surface copie les rectangles d'une région dans le sens du décalage (`gdi::bitblt::overlap_order`). Tests :
   hôte (`scrollex`, `gdi::bitblt`) ; scénario `scrollex` (`tests/native/scrollx1.c`) sur AMD et Intel. Pas encore :
-  le caret (le prochain manque : le contrôle Edit du Bloc-notes), le DC propre de ScrollWindow.
+  le DC propre de ScrollWindow (le caret : l'entrée au-dessus).
 
 - **Le nom d'un volume en UTF-16 tel quel** (`claude/new-session-696xfc`, après les barres de défilement) :
   `io::VolumeLabel.label` devient un `Vec<u16>` ; NTFS rend `$VOLUME_NAME` sans le convertir (un surrogate isolé

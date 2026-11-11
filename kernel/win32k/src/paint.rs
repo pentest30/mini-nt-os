@@ -559,6 +559,8 @@ fn update_on_screen(state: &WindowState) -> Option<Region> {
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
 pub fn begin_paint(window: &Arc<Window>) -> PaintStruct32 {
+    // co_UserHideCaret: the caret does not stay under what is painted.
+    crate::caret::hide_in(window);
     let state = window::change(window, |state| {
         state.state2 |= WNDS2_STARTPAINT;
         state.state &= !(WNDS_PAINTNOTPROCESSED | WNDS_UPDATEDIRTY);
@@ -626,6 +628,7 @@ fn same_thread(window: &Window) -> bool {
 pub fn end_paint(window: &Window, hdc: u32) {
     crate::dce::release_dc(hdc);
     window::change(window, |state| state.state2 &= !(WNDS2_WMPAINTSENT | WNDS2_STARTPAINT));
+    crate::caret::show_in(window);
 }
 
 /// DefWindowProc de WM_PAINT : BeginPaint puis EndPaint, ce qui valide la

@@ -127,12 +127,17 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
 /// NtUserCallTwoParam(Param1, Param2, Routine) : la routine `Routine`,
 /// qui rend une valeur. `TWOPARAM_ROUTINE_REGISTERLOGONPROCESS` : inscrit
 /// le processus `Param1` comme processus de logon (`Param2` TRUE), ou le
-/// désinscrit (`win32k::logon`). Une autre routine rend 0, avec
-/// `ERROR_CALL_NOT_IMPLEMENTED` comme dernière erreur, journalisée une fois.
+/// désinscrit (`win32k::logon`). `TWOPARAM_ROUTINE_SETCARETPOS` : le caret
+/// du thread va en (`Param1`, `Param2`) (`win32k::caret::set_pos` ; FALSE
+/// sans caret). Une autre routine rend 0, avec `ERROR_CALL_NOT_IMPLEMENTED`
+/// comme dernière erreur, journalisée une fois.
 pub(super) fn nt_user_call_two_param(arguments: &[u32]) -> NtStatus {
     let (first, second, routine) = (arguments[0], arguments[1], arguments[2]);
     if routine == TWOPARAM_ROUTINE_REGISTERLOGONPROCESS {
         return NtStatus(u32::from(win32k::logon::register_logon_process(first, second != 0)));
+    }
+    if routine == abi::user::TWOPARAM_ROUTINE_SETCARETPOS {
+        return NtStatus(u32::from(win32k::caret::set_pos(first as i32, second as i32)));
     }
     UNSUPPORTED_TWO_PARAM_ROUTINES.report(routine);
     let _ = win32k::set_last_error(ERROR_CALL_NOT_IMPLEMENTED);

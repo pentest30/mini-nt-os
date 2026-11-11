@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 121 | 296 |
-| win32k | 137 | 737 |
+| win32k | 143 | 737 |
 
 ## ntoskrnl
 
@@ -506,7 +506,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10bb` | `NtGdiGetObjectBitmapHandle` | 2 |  |
 | `0x10bc` | `NtGdiGetOutlineTextMetricsInternalW` | 4 |  |
 | `0x10bd` | `NtGdiGetPath` | 4 |  |
-| `0x10be` | `NtGdiGetPixel` | 3 |  |
+| `0x10be` | `NtGdiGetPixel` | 3 | ✅ |
 | `0x10bf` | `NtGdiGetRandomRgn` | 3 | ✅ |
 | `0x10c0` | `NtGdiGetRasterizerCaps` | 2 |  |
 | `0x10c1` | `NtGdiGetRealizationInfo` | 3 |  |
@@ -654,7 +654,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x114f` | `NtUserCopyAcceleratorTable` | 3 |  |
 | `0x1150` | `NtUserCountClipboardFormats` | 0 |  |
 | `0x1151` | `NtUserCreateAcceleratorTable` | 2 |  |
-| `0x1152` | `NtUserCreateCaret` | 4 |  |
+| `0x1152` | `NtUserCreateCaret` | 4 | ✅ |
 | `0x1153` | `NtUserCreateDesktop` | 5 | ✅ |
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
 | `0x1155` | `NtUserCreateLocalMemHandle` | 4 |  |
@@ -700,8 +700,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x117d` | `NtUserGetAppImeLevel` | 1 |  |
 | `0x117e` | `NtUserGetAsyncKeyState` | 1 | ✅ |
 | `0x117f` | `NtUserGetAtomName` | 2 | ✅ |
-| `0x1180` | `NtUserGetCaretBlinkTime` | 0 |  |
-| `0x1181` | `NtUserGetCaretPos` | 1 |  |
+| `0x1180` | `NtUserGetCaretBlinkTime` | 0 | ✅ |
+| `0x1181` | `NtUserGetCaretPos` | 1 | ✅ |
 | `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |
 | `0x1183` | `NtUserGetClassName` | 3 |  |
 | `0x1184` | `NtUserGetClipboardData` | 2 |  |
@@ -758,7 +758,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11b7` | `NtUserGetWindowPlacement` | 2 |  |
 | `0x11b8` | `NtUserGetWOWClass` | 2 |  |
 | `0x11b9` | `NtUserHardErrorControl` | 3 |  |
-| `0x11ba` | `NtUserHideCaret` | 1 |  |
+| `0x11ba` | `NtUserHideCaret` | 1 | ✅ |
 | `0x11bb` | `NtUserHiliteMenuItem` | 4 |  |
 | `0x11bc` | `NtUserImpersonateDdeClientWindow` | 2 |  |
 | `0x11bd` | `NtUserInitialize` | 3 | ✅ |
@@ -865,7 +865,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1222` | `NtUserSetWindowStationUser` | 4 | ✅ |
 | `0x1223` | `NtUserSetWindowWord` | 3 |  |
 | `0x1224` | `NtUserSetWinEventHook` | 8 |  |
-| `0x1225` | `NtUserShowCaret` | 1 |  |
+| `0x1225` | `NtUserShowCaret` | 1 | ✅ |
 | `0x1226` | `NtUserShowScrollBar` | 3 | ✅ |
 | `0x1227` | `NtUserShowWindow` | 2 | ✅ |
 | `0x1228` | `NtUserShowWindowAsync` | 2 | ✅ |

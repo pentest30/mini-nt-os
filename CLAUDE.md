@@ -306,7 +306,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 18 (le défilement, `win32k::scrollex`) : NtUserScrollDC (la copie dans la surface du DC, la région
   découverte) et NtUserScrollWindowEx (par un DC du cache, la région déjà à repeindre décalée, SW_SCROLLCHILDREN,
   SW_INVALIDATE, SW_ERASE) ; BitBlt dans une même surface copie dans le sens du décalage
-  (`gdi::bitblt::overlap_order`) ; scénario `scrollex` (`tests/native/scrollx1.c`). Pas encore le caret.
+  (`gdi::bitblt::overlap_order`) ; scénario `scrollex` (`tests/native/scrollx1.c`).
+  M6, étape 19 (le caret, `win32k::caret`) : un par thread, dans sa file ; NtUserCreateCaret, NtUserShowCaret,
+  NtUserHideCaret (le masquage se compte), SetCaretPos, DestroyCaret, Get/SetCaretBlinkTime, NtUserGetCaretPos ; dessiné
+  en inversant l'écran ; il clignote par une minuterie du système dont la procédure est du noyau
+  (`timer::set_kernel_timer`, WM_SYSTIMER rendu à NtUserDispatchMessage) ; BeginPaint le cache, EndPaint le remontre,
+  ScrollWindowEx le décale ; NtGdiGetPixel ; scénario `caret` (`tests/native/caret1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

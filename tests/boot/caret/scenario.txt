@@ -1,0 +1,51 @@
+# The caret (win32k::caret; tests/native/caret1.c, MinGW, linked to
+# ReactOS's kernel32, user32 and gdi32): CARET1.EXE takes the place of
+# winlogon.exe and switches to WinSta0\Default. W (100, 100, 400 x 300,
+# white, its client area from 104, 124) takes a caret of 2 x 16 pixels and
+# reads it back from the screen at each step (GetPixel: 000000 where the
+# caret inverts the white, ffffff where it does not).
+features = test-smss
+requires = userland, native
+initial-command = CARET1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [caret] on WinSta0\Default
+expect = [caret] blink time 530
+expect = [caret] without a caret: DestroyCaret 1, SetCaretPos 0
+# A caret goes with its window (DestroyWindow).
+expect = [caret] its window destroyed: SetCaretPos 0
+# Born hidden at 0, 0; the window that does not have it refuses HideCaret.
+expect = [caret] CreateCaret 1, at 0 0, hidden ffffff; SetCaretPos 1
+expect = [caret] at 10 40; HideCaret of a window without it: 0 (5)
+# Shown: drawn at once, x 10 to 12, y 40 to 56.
+expect = [caret] ShowCaret 1: 000000 000000, beside it ffffff
+# Blinking every 100 ms: WM_SYSTIMER (IDCARETTIMER) to the message loop.
+expect = [caret] blinking: at least 3 WM_SYSTIMER 1
+# INFINITE: it no longer blinks.
+expect = [caret] steady: hidden ffffff, blink time -1, shown 000000
+expect = [caret] steady 250 ms later: 000000
+# Hiding counts (the API's documentation, not ReactOS's boolean).
+expect = [caret] hidden twice, shown once: ffffff; shown again: 000000
+expect = [caret] moved: where it was ffffff, where it is 000000
+# BeginPaint hides it before the background is erased, EndPaint shows it.
+expect = [caret] after WM_PAINT: 000000
+# ScrollWindowEx hides it, then it moves with the content (co_IntFixCaret).
+expect = [caret] scrolled up 10: at 30 30, 000000, below it ffffff
+expect = [caret] done
+
+forbid = *** STOP:
+forbid = NtUserCreateCaret (0x1152) is not implemented
+forbid = NtUserShowCaret (0x1225) is not implemented
+forbid = NtUserHideCaret (0x11ba) is not implemented
+forbid = NtGdiGetPixel (0x10be) is not implemented
+forbid = DispatchMessage of a timer's procedure: not yet
+
+# The caret at its last place (30, 30: x 134 to 136, y 154 to 170 on the
+# screen), and nothing where it was before (10, 40; 30, 40 before the
+# scroll: 164 to 180).
+screen = 134 160 000000
+screen = 135 160 000000
+screen = 136 160 FFFFFF
+screen = 134 172 FFFFFF
+screen = 114 164 FFFFFF

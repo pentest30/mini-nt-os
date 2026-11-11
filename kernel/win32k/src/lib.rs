@@ -30,6 +30,7 @@ extern crate alloc;
 
 pub mod atom;
 pub mod callback;
+pub mod caret;
 pub mod class;
 pub mod client;
 pub mod console;

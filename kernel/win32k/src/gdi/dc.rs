@@ -1039,6 +1039,37 @@ pub fn rect_visible(state: &DcState, rect: Rect) -> bool {
     !rao.is_empty()
 }
 
+/// CLR_INVALID : GetPixel hors de là où le DC peint.
+pub const CLR_INVALID: u32 = 0xFFFF_FFFF;
+
+/// NtGdiGetPixel : la couleur du point logique (`x`, `y`) du DC
+/// ([`logical_origin`]) sur sa surface (l'écran ou son bitmap), s'il tombe là
+/// où le DC peint (`prgnRao`) ; [`CLR_INVALID`] sinon.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le processus du DC.
+pub fn get_pixel(state: &DcState, x: i32, y: i32) -> u32 {
+    let Some((column, row)) = pixel_of(state, x, y) else { return CLR_INVALID };
+    let mut color = CLR_INVALID;
+    state.draw(|surface| {
+        if let Some(pixel) = surface.pixel(column, row) {
+            color = surface.layout().color(pixel).0;
+        }
+    });
+    color
+}
+
+/// Le pixel de la surface du point logique (`x`, `y`) du DC, s'il tombe là
+/// où le DC peint.
+fn pixel_of(state: &DcState, x: i32, y: i32) -> Option<(u32, u32)> {
+    let (dx, dy) = logical_origin(state, None);
+    let (x, y) = (x.wrapping_add(dx), y.wrapping_add(dy));
+    if !state.rao().contains(x, y) {
+        return None;
+    }
+    Some((u32::try_from(x).ok()?, u32::try_from(y).ok()?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1150,6 +1181,21 @@ mod tests {
     }
 
     /// A DC at (100, 50) that sees (110, 60)-(210, 160).
+    #[test]
+    fn get_pixel_reads_only_where_the_dc_paints() {
+        let state =
+            DcState { origin: (100, 50), vis: Region::from_rect(Rect::new(110, 60, 210, 160)), ..DcState::default() };
+        assert_eq!(pixel_of(&state, 10, 10), Some((110, 60)), "from the origin");
+        assert_eq!(pixel_of(&state, 109, 109), Some((209, 159)));
+        assert_eq!(pixel_of(&state, 5, 5), None, "105, 55 is above and left of the visible region");
+        assert_eq!(pixel_of(&state, 110, 50), None, "210, 100: the right edge is outside");
+        assert_eq!(pixel_of(&DcState::default(), 0, 0), None, "nothing visible");
+        let clipped = DcState { clip: Some(Region::from_rect(Rect::new(50, 50, 60, 60))), ..state };
+        assert_eq!(pixel_of(&clipped, 10, 10), None, "cut by the clip region");
+        assert_eq!(pixel_of(&clipped, 55, 55), Some((155, 105)));
+        assert_eq!(get_pixel(&clipped, 10, 10), CLR_INVALID);
+    }
+
     fn seeing() -> DcState {
         DcState { origin: (100, 50), vis: Region::from_rect(Rect::new(110, 60, 210, 160)), ..DcState::default() }
     }

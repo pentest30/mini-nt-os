@@ -868,7 +868,8 @@ pub enum LParam<'a> {
 /// fenêtre (`user32` n'en passe ici que WM_PAINT et ceux d'une procédure
 /// dans win32k) ; rend ce qu'elle rend, 0 sans fenêtre. Une fenêtre qui n'a
 /// pas appelé BeginPaint pour WM_PAINT repeint son cadre et son fond
-/// (IntPaintWindow).
+/// (IntPaintWindow). Le WM_SYSTIMER d'une minuterie à procédure du noyau
+/// l'appelle (`crate::timer::kernel_procedure` : le clignotement du caret).
 ///
 /// # Errors
 /// Ceux de [`send_message`].
@@ -876,7 +877,18 @@ pub enum LParam<'a> {
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn dispatch_message(message: &Msg32) -> Result<u32, NtStatus> {
-    if matches!(message.message, WM_TIMER | WM_SYSTIMER) && message.l_param != 0 {
+    if message.message == WM_SYSTIMER && message.l_param != 0 {
+        // FindSystemTimer: a system timer's procedure in the kernel (the
+        // caret's blink).
+        let thread = crate::gui::convert_current_thread().ok();
+        let procedure =
+            thread.and_then(|thread| crate::timer::kernel_procedure(&thread, message.hwnd, message.w_param));
+        if let Some(procedure) = procedure {
+            procedure(message.hwnd, message.w_param);
+        }
+        return Ok(0);
+    }
+    if message.message == WM_TIMER && message.l_param != 0 {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("win32k: DispatchMessage of a timer's procedure: not yet");

@@ -861,8 +861,8 @@ rien ne défilait. `scrollex.c` de win32k (ReactOS comme spécification) ; `win3
 Un écart voulu avec ReactOS : WM_MOVE d'une fille déplacée par SW_SCROLLCHILDREN porte le coin de sa zone cliente dans
 celle de son parent, comme la documentation de l'API.
 
-Ce qui manque : le caret (co_IntFixCaret le cache pendant le défilement, puis le décale), le DC propre d'une fenêtre ou
-de sa classe pour ScrollWindow (le cache aussi), SW_SMOOTHSCROLL (ignoré, comme ReactOS).
+Ce qui manque : le DC propre d'une fenêtre ou de sa classe pour ScrollWindow (le cache aussi), SW_SMOOTHSCROLL (ignoré,
+comme ReactOS). Le caret est venu à l'étape 19.
 
 Le banc d'essai : `tests/native/scrollx1.c` (`SCROLLX1.EXE` à la place de `winlogon.exe`, scénario `scrollex`) : une
 fenêtre peinte en bandes de 20 pixels selon une position, qui ne peint que ce qu'on lui demande ; ScrollWindowEx vers le
@@ -874,3 +874,41 @@ Tests : hôte (`scrollex` : la région découverte, ce qui n'a pas pu être copi
 découpage, les zones, les drapeaux du DC ; `gdi::bitblt` : l'ordre des copies dans une même surface, qui échoue dans
 l'ordre de la région) ; le scénario `scrollex` sur AMD et Intel, et `listview`, `console`, `cmd`, `desktop-launch`,
 `gui`, `bitmap`, `scroll` sur AMD.
+
+## Étape 19 : le caret (CreateCaret, ShowCaret, HideCaret, SetCaretPos)
+
+Le contrôle Edit (le Bloc-notes, les boîtes de dialogue) et la console de `consrv` montrent un caret ; NtUserCreateCaret,
+NtUserShowCaret et NtUserHideCaret étaient absents (0 rendu). `caret.c` de win32k (ReactOS comme spécification) ;
+`win32k::caret`, `sys::caret`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| L'état (`caret::Caret`, dans la file du thread : `QueueState.caret`) | un caret par thread : sa fenêtre, sa forme (rectangle plein, gris pour `(HBITMAP)1`, ou bitmap), sa position dans la zone cliente, son niveau de masquage, s'il est dessiné ; GetCaretPos ; le temps de clignotement (`dtCaretBlink`, 530 ms par défaut, GetCaretBlinkTime, SetCaretBlinkTime ; négatif, INFINITE : fixe) |
+| Le dessin (`caret::draw`) | une inversion de l'écran, dans la zone cliente de sa fenêtre là où elle se voit (découpée par les filles et les sœurs selon WS_CLIPCHILDREN et WS_CLIPSIBLINGS) : DSTINVERT pour un rectangle plein, PATINVERT du damier gris, SRCINVERT d'un bitmap ; dessiné deux fois, il s'efface |
+| CreateCaret, DestroyCaret (`caret::create`, `destroy`) | le caret d'avant effacé et détruit ; le nouveau naît caché, en 0, 0 ; une largeur ou une hauteur nulle prend celle d'une bordure (SM_CXBORDER, SM_CYBORDER) ; une fenêtre d'un autre thread : `ERROR_ACCESS_DENIED` ; la destruction de la fenêtre le détruit (`destroy_in`, dans `destroy::finish`) |
+| HideCaret, ShowCaret (`caret::hide`, `show`) | le masquage se compte : chaque HideCaret le cache une fois de plus, il ne se voit qu'avec autant de ShowCaret ; visible, il se dessine aussitôt et clignote ; une fenêtre qui ne l'a pas : `ERROR_ACCESS_DENIED` (`hWnd` NULL : celle du caret) |
+| SetCaretPos (TWOPARAM_ROUTINE_SETCARETPOS, `caret::set_pos`) | effacé où il était, dessiné où il va s'il se voyait ; FALSE sans caret |
+| Le clignotement (`caret::blink`) | une minuterie du système (IDCARETTIMER, 0xFFFF) dont la procédure est du noyau (`timer::set_kernel_timer`) : son WM_SYSTIMER porte `lParam` = KERNEL_PROCEDURE (0x80000000), que `user32` rend à NtUserDispatchMessage, qui appelle la procédure (`window::dispatch_message`) ; elle n'est armée que tant qu'il se voit |
+| BeginPaint, EndPaint (`caret::hide_in`, `show_in`) | BeginPaint le cache avant que le fond soit effacé, EndPaint le remontre, s'il est dans la fenêtre peinte |
+| ScrollWindowEx (`caret::before_scroll`, `after_scroll`, co_IntFixCaret) | caché pendant la copie s'il est dans le rectangle défilé (ou dans une fille déplacée), puis décalé comme le contenu et remontré |
+| NtGdiGetPixel (`gdi::dc::get_pixel`) | la couleur d'un point logique du DC sur sa surface, s'il tombe là où le DC peint ; CLR_INVALID sinon |
+
+Écarts voulus avec ReactOS : le masquage se compte (la documentation de l'API et Wine ; ReactOS n'a qu'un booléen) ; un
+caret qui devient visible se dessine aussitôt (ReactOS attend la première échéance de la minuterie) ; un caret caché ne
+clignote pas (ReactOS l'inverse à chaque échéance dès sa création).
+
+Ce qui manque : les événements d'accessibilité (EVENT_OBJECT_*), le caret dans GetGUIThreadInfo, le temps de
+clignotement lu dans le registre (`CursorBlinkRate`), le DC propre d'une fenêtre pour ScrollWindow.
+
+Le banc d'essai : `tests/native/caret1.c` (`CARET1.EXE` à la place de `winlogon.exe`, scénario `caret`) : une fenêtre
+blanche prend un caret de 2 × 16 pixels qu'elle relit sur l'écran à chaque pas (GetPixel : noir là où il inverse le
+blanc) : sans caret, SetCaretPos échoue ; le caret part avec sa fenêtre ; il naît caché ; ShowCaret le dessine ;
+WM_SYSTIMER arrive à la boucle de messages toutes les 100 ms ; INFINITE le laisse fixe ; caché deux fois et montré une,
+il reste caché ; déplacé, il laisse sa place propre ; WM_PAINT et ScrollWindowEx le laissent dessiné ; cinq pixels de la
+capture vérifiés. Sans le masquage de BeginPaint, avec un booléen à la place du compte, ou sans co_IntFixCaret, le
+scénario échoue.
+
+Tests : hôte (`caret` : la naissance cachée, le compte du masquage, le clignotement et le déplacement, une fenêtre
+absente ; `timer` : une minuterie du système dont la procédure est du noyau ; `gdi::dc` : GetPixel ne lit que là où le DC
+peint) ; le scénario `caret` sur AMD et Intel, et `scrollex`, `scroll`, `gui`, `text`, `console`, `destroy`, `keyboard`
+sur AMD et Intel.

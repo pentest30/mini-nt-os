@@ -20,8 +20,11 @@
 //! rectangle, ou de sa zone cliente à l'écran sous une fenêtre de premier
 //! niveau).
 //!
-//! Pas encore : le caret (co_IntFixCaret : il se cacherait, puis suivrait le
-//! défilement), SW_SMOOTHSCROLL (ignoré, comme ReactOS).
+//! Le caret du thread se cache pendant la copie s'il est dans la zone qui
+//! défile (ou dans une fille qui défile aussi), puis suit le contenu
+//! (co_IntFixCaret, `crate::caret::before_scroll`).
+//!
+//! Pas encore : SW_SMOOTHSCROLL (ignoré, comme ReactOS).
 
 use alloc::sync::Arc;
 
@@ -166,6 +169,8 @@ pub fn scroll_window(
     } else {
         RDW_INVALIDATE
     };
+    // co_IntFixCaret: the caret is not copied with the content.
+    let caret = crate::caret::before_scroll(window, scroll, flags & sw_scroll::SCROLLCHILDREN != 0);
     let update = scroll_dc(hdc, delta, Some(scroll), Some(clip));
     crate::dce::release_dc(hdc);
     let update = update?;
@@ -188,6 +193,9 @@ pub fn scroll_window(
     if flags & (sw_scroll::INVALIDATE | sw_scroll::ERASE) != 0 {
         let children = if flags & sw_scroll::SCROLLCHILDREN != 0 { RDW_ALLCHILDREN } else { RDW_NOCHILDREN };
         crate::paint::redraw_window(window, None, Some(&update), rdw | children);
+    }
+    if let Some(hwnd) = caret {
+        crate::caret::after_scroll(window, hwnd, delta);
     }
     Some(Scrolled { update, window_update })
 }

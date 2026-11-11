@@ -164,6 +164,8 @@ pub struct QueueState {
     /// arrivé depuis la dernière fois qu'on a regardé (fsChangeBits).
     pub wake: u16,
     pub change: u16,
+    /// Le caret du thread (`CaretInfo`, `crate::caret`).
+    pub caret: crate::caret::Caret,
 }
 
 impl Default for QueueState {
@@ -180,6 +182,7 @@ impl Default for QueueState {
             paints: 0,
             wake: 0,
             change: 0,
+            caret: crate::caret::Caret::default(),
         }
     }
 }

@@ -6,6 +6,7 @@ LIBRARY user32.dll
 EXPORTS
 AppendMenuW@16
 BeginPaint@8
+CreateCaret@16
 CreateDesktopW@24
 CreateDialogIndirectParamW@20
 CreateMenu@0
@@ -13,6 +14,7 @@ CreatePopupMenu@0
 CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
+DestroyCaret@0
 DestroyCursor@4
 DestroyMenu@4
 DestroyWindow@4
@@ -28,6 +30,8 @@ FillRect@12
 GetActiveWindow@0
 GetAsyncKeyState@4
 GetCapture@0
+GetCaretBlinkTime@0
+GetCaretPos@4
 GetClassInfoExW@12
 GetClientRect@8
 GetCursor@0
@@ -60,6 +64,7 @@ GetWindowDC@4
 GetWindowLongW@8
 GetWindowRect@8
 GetWindowTextW@12
+HideCaret@4
 InvalidateRect@12
 InvalidateRgn@12
 IsWindow@4
@@ -87,6 +92,8 @@ SendMessageTimeoutW@28
 SendMessageW@16
 SendNotifyMessageW@16
 SetCapture@4
+SetCaretBlinkTime@4
+SetCaretPos@8
 SetCursor@4
 SetFocus@4
 SetProcessWindowStation@4
@@ -98,6 +105,7 @@ SetTimer@16
 SetWindowLongW@12
 SetWindowPos@28
 SetWindowTextW@8
+ShowCaret@4
 ShowScrollBar@12
 ShowWindow@8
 SwitchDesktop@4
