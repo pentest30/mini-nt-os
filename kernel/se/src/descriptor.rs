@@ -238,8 +238,11 @@ impl SecurityDescriptor {
     }
 }
 
-/// Le SID en `at`, lu par `read` : son en-tête, puis le reste.
-fn capture_sid(at: u32, read: &mut impl FnMut(u32, &mut [u8]) -> Result<(), NtStatus>) -> Result<Sid, NtStatus> {
+/// SeCaptureSid : le SID en `at`, lu par `read` : son en-tête, puis le reste.
+///
+/// # Errors
+/// `STATUS_INVALID_SID` pour un SID qui n'est pas valide ; celles de `read`.
+pub fn capture_sid(at: u32, read: &mut impl FnMut(u32, &mut [u8]) -> Result<(), NtStatus>) -> Result<Sid, NtStatus> {
     let mut header = [0u8; SID_HEADER_SIZE];
     read(at, &mut header)?;
     let count = Sid::check_header(&header)?;
@@ -249,8 +252,12 @@ fn capture_sid(at: u32, read: &mut impl FnMut(u32, &mut [u8]) -> Result<(), NtSt
     Sid::parse(bytes)
 }
 
-/// L'ACL en `at`, lue par `read` : son en-tête, puis le reste.
-fn capture_acl(at: u32, read: &mut impl FnMut(u32, &mut [u8]) -> Result<(), NtStatus>) -> Result<Acl, NtStatus> {
+/// SepCaptureAcl : l'ACL en `at`, lue par `read` : son en-tête, puis le
+/// reste.
+///
+/// # Errors
+/// `STATUS_INVALID_ACL` pour une ACL qui n'est pas valide ; celles de `read`.
+pub fn capture_acl(at: u32, read: &mut impl FnMut(u32, &mut [u8]) -> Result<(), NtStatus>) -> Result<Acl, NtStatus> {
     let mut header = [0u8; 8];
     read(at, &mut header)?;
     let size = Acl::size_from_header(&header)?;

@@ -17,8 +17,8 @@ use abi::ntstatus::{
     STATUS_NOT_IMPLEMENTED, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
 };
 use abi::process::{
-    InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_BASE_PRIORITY, PROCESS_BASIC_INFORMATION,
-    PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
+    InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_ACCESS_TOKEN, PROCESS_BASE_PRIORITY,
+    PROCESS_BASIC_INFORMATION, PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
     PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_DEFAULT_HARD_ERROR_MODE, PROCESS_EXCEPTION_PORT,
     PROCESS_LUID_DEVICE_MAPS_ENABLED, PROCESS_SESSION_INFORMATION, THREAD_BREAK_ON_TERMINATION,
     THREAD_IMPERSONATION_TOKEN,
@@ -426,6 +426,8 @@ pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
 /// ProcessInformation, ProcessInformationLength) : change ce que sait le
 /// processus, une valeur de 4 octets (`STATUS_INFO_LENGTH_MISMATCH` pour une
 /// autre taille) :
+/// - `ProcessAccessToken` (`PROCESS_SET_INFORMATION`, 8 octets) : son jeton
+///   primaire, celui d'un handle (`super::security::assign_primary_token`) ;
 /// - `ProcessSessionInformation` (`PROCESS_SET_SESSIONID`) : sa session, que
 ///   son PEB dit aussi ;
 /// - `ProcessBasePriority` (`PROCESS_SET_INFORMATION`) : la priorité de base
@@ -451,6 +453,16 @@ pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
     let set = || {
+        if class == PROCESS_ACCESS_TOKEN {
+            // PROCESS_ACCESS_TOKEN: the token's handle, then a thread's
+            // (unused, as on XP).
+            if length != 8 {
+                return Err(STATUS_INFO_LENGTH_MISMATCH);
+            }
+            let [token, _thread] = UserPtr::<[u32; 2]>::new(buffer).read()?;
+            let process = super::reference_process(handle, PROCESS_SET_INFORMATION)?;
+            return super::security::assign_primary_token(&process, token);
+        }
         if !matches!(
             class,
             PROCESS_SESSION_INFORMATION

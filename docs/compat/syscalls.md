@@ -8,7 +8,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 
 | Table | Implémentés | Services |
 |---|---:|---:|
-| ntoskrnl | 127 | 296 |
+| ntoskrnl | 131 | 296 |
 | win32k | 164 | 737 |
 
 ## ntoskrnl
@@ -72,7 +72,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0036` | `NtCreateSymbolicLinkObject` | 4 | ✅ |
 | `0x0037` | `NtCreateThread` | 8 | ✅ |
 | `0x0038` | `NtCreateTimer` | 4 |  |
-| `0x0039` | `NtCreateToken` | 13 |  |
+| `0x0039` | `NtCreateToken` | 13 | ✅ |
 | `0x003a` | `NtCreateWaitablePort` | 5 |  |
 | `0x003b` | `NtDebugActiveProcess` | 2 |  |
 | `0x003c` | `NtDebugContinue` | 3 |  |
@@ -87,7 +87,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0045` | `NtDeviceIoControlFile` | 10 | ✅ |
 | `0x0046` | `NtDisplayString` | 1 |  |
 | `0x0047` | `NtDuplicateObject` | 7 | ✅ |
-| `0x0048` | `NtDuplicateToken` | 6 |  |
+| `0x0048` | `NtDuplicateToken` | 6 | ✅ |
 | `0x0049` | `NtEnumerateBootEntries` | 2 |  |
 | `0x004a` | `NtEnumerateDriverEntries` | 2 |  |
 | `0x004b` | `NtEnumerateKey` | 6 | ✅ |
@@ -117,7 +117,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x0063` | `NtIsSystemResumeAutomatic` | 0 |  |
 | `0x0064` | `NtListenPort` | 2 | ✅ |
 | `0x0065` | `NtLoadDriver` | 1 |  |
-| `0x0066` | `NtLoadKey` | 2 |  |
+| `0x0066` | `NtLoadKey` | 2 | ✅ |
 | `0x0067` | `NtLoadKey2` | 3 |  |
 | `0x0068` | `NtLoadKeyEx` | 4 |  |
 | `0x0069` | `NtLockFile` | 10 |  |
@@ -287,7 +287,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x010d` | `NtTraceEvent` | 4 |  |
 | `0x010e` | `NtTranslateFilePath` | 4 |  |
 | `0x010f` | `NtUnloadDriver` | 1 |  |
-| `0x0110` | `NtUnloadKey` | 1 |  |
+| `0x0110` | `NtUnloadKey` | 1 | ✅ |
 | `0x0111` | `NtUnloadKey2` | 2 |  |
 | `0x0112` | `NtUnloadKeyEx` | 2 |  |
 | `0x0113` | `NtUnlockFile` | 5 |  |

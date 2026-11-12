@@ -700,6 +700,58 @@ pub fn new_registry() -> Arc<Object<Key>> {
 /// <= DISPATCH_LEVEL.
 pub fn mount(registry: &Key, parent: &str, name: &str, file: HiveFile) -> Result<(), NtStatus> {
     let parent = virtual_key(registry, parent)?;
+    mount_under(&parent, name, file)
+}
+
+/// CmLoadKey (NtLoadKey) : monte `file` sous la clé ouverte `parent`, au nom
+/// `name` (un seul composant), comme `userenv` charge le `NTUSER.DAT` d'un
+/// utilisateur en `\REGISTRY\USER\<SID>`.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` pour une clé d'une ruche (seules les clés
+/// virtuelles, `\REGISTRY\USER` ou `\REGISTRY\MACHINE`, reçoivent une ruche)
+/// ou un nom vide ou de plusieurs composants ;
+/// `STATUS_OBJECT_NAME_COLLISION` si le nom est pris.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn load_hive(parent: &Key, name: &str, file: HiveFile) -> Result<(), NtStatus> {
+    let Node::Virtual(parent) = &parent.node else { return Err(STATUS_INVALID_PARAMETER) };
+    if name.is_empty() || name.contains('\\') {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    mount_under(parent, name, file)
+}
+
+/// CmUnloadKey (NtUnloadKey) : la ruche montée au nom `name` sous la clé
+/// ouverte `parent` est réécrite dans son fichier si elle a changé
+/// ([`HiveFile::flush`]), puis démontée ; les clés déjà ouvertes la gardent.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` pour une clé d'une ruche ;
+/// `STATUS_OBJECT_NAME_NOT_FOUND` sans ruche de ce nom ; celles de la
+/// réécriture, la ruche restant alors montée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL (Io).
+pub fn unload_hive(parent: &Key, name: &str) -> Result<(), NtStatus> {
+    let Node::Virtual(parent) = &parent.node else { return Err(STATUS_INVALID_PARAMETER) };
+    let file = parent
+        .children
+        .lock()
+        .iter()
+        .find_map(|(child, node)| match node {
+            Child::Hive(file) if eq_ignore_case(child, name) => Some(file.clone()),
+            _ => None,
+        })
+        .ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
+    file.flush()?;
+    parent.children.lock().retain(|(_, node)| !matches!(node, Child::Hive(other) if Arc::ptr_eq(other, &file)));
+    Ok(())
+}
+
+/// Monte `file` sous la clé virtuelle `parent`, au nom `name`.
+fn mount_under(parent: &VirtualKey, name: &str, file: HiveFile) -> Result<(), NtStatus> {
     let mut children = parent.children.lock();
     if children.iter().any(|(child, _)| eq_ignore_case(child, name)) {
         return Err(STATUS_OBJECT_NAME_COLLISION);
@@ -1000,6 +1052,41 @@ mod tests {
         assert_eq!(kept.facts().unwrap().class, units("Cls"));
         assert_eq!(kept.value(&units("TEXT")).unwrap().unwrap().data, sz("kept"));
         assert!(!again.hive_file().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn a_hive_loads_under_an_open_virtual_key() {
+        let (ns, _) = registry();
+        let users = open(&ns, "\\REGISTRY\\USER").unwrap();
+        let hive = || {
+            let mut root = KeyNode::new("NTUSER");
+            root.subkeys.push(KeyNode::new("Control Panel"));
+            HiveFile::new(Arc::from(build(&root, "NTUSER"))).unwrap()
+        };
+        load_hive(&users, "S-1-5-21-1-2-3-500", hive()).unwrap();
+        assert!(open(&ns, "\\REGISTRY\\USER\\s-1-5-21-1-2-3-500\\Control Panel").is_ok(), "as RegLoadKey loads it");
+        assert_eq!(load_hive(&users, "S-1-5-21-1-2-3-500", hive()).err(), Some(STATUS_OBJECT_NAME_COLLISION));
+        assert_eq!(load_hive(&users, "", hive()).err(), Some(STATUS_INVALID_PARAMETER));
+        assert_eq!(load_hive(&users, "A\\B", hive()).err(), Some(STATUS_INVALID_PARAMETER), "one component");
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        assert_eq!(load_hive(&system, "Other", hive()).err(), Some(STATUS_INVALID_PARAMETER), "a key of a hive");
+    }
+
+    #[test]
+    fn an_unloaded_hive_can_load_again() {
+        let (ns, _) = registry();
+        let users = open(&ns, "\\REGISTRY\\USER").unwrap();
+        let hive = || HiveFile::new(Arc::from(build(&KeyNode::new("NTUSER"), "NTUSER"))).unwrap();
+        load_hive(&users, "S-1-5-21-1-2-3-500", hive()).unwrap();
+        let kept = open(&ns, "\\REGISTRY\\USER\\S-1-5-21-1-2-3-500").unwrap();
+        // As userenv does: load, write, unload, then load for the session.
+        unload_hive(&users, "s-1-5-21-1-2-3-500").unwrap();
+        assert_eq!(open(&ns, "\\REGISTRY\\USER\\S-1-5-21-1-2-3-500").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+        assert!(kept.hive_file().is_some(), "an open key keeps its hive");
+        load_hive(&users, "S-1-5-21-1-2-3-500", hive()).unwrap();
+        assert_eq!(unload_hive(&users, "S-1-5-21-1-2-3-501").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        assert_eq!(unload_hive(&system, "Select").err(), Some(STATUS_INVALID_PARAMETER), "a key of a hive");
     }
 
     #[test]

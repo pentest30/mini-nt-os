@@ -30,14 +30,14 @@ use abi::file::{
     FILE_USE_FILE_POINTER_POSITION, FILE_WRITE_DATA, FILE_WRITE_TO_END_OF_FILE,
 };
 use abi::file::{
-    FileBasicInformation, FileFsAttributeInformation, FileFsDeviceInformation, FileFsFullSizeInformation,
-    FileFsSizeInformation, FileFsVolumeInformation, FileNameInformation, FileNetworkOpenInformation,
-    FilePositionInformation, FileStandardInformation, IoStatusBlock32, FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE,
-    FILE_FS_ATTRIBUTE_INFORMATION, FILE_FS_DEVICE_INFORMATION, FILE_FS_FULL_SIZE_INFORMATION,
-    FILE_FS_MAXIMUM_INFORMATION, FILE_FS_SIZE_INFORMATION, FILE_FS_VOLUME_INFORMATION, FILE_MAXIMUM_DISPOSITION,
-    FILE_NAME_INFORMATION, FILE_NETWORK_OPEN_INFORMATION, FILE_NON_DIRECTORY_FILE, FILE_OPEN,
-    FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS, FILE_STANDARD_INFORMATION,
-    FILE_VALID_OPTION_FLAGS, FILE_WRITE_ATTRIBUTES,
+    FileBasicInformation, FileEaInformation, FileFsAttributeInformation, FileFsDeviceInformation,
+    FileFsFullSizeInformation, FileFsSizeInformation, FileFsVolumeInformation, FileNameInformation,
+    FileNetworkOpenInformation, FilePositionInformation, FileStandardInformation, IoStatusBlock32,
+    FILE_BASIC_INFORMATION, FILE_DIRECTORY_FILE, FILE_EA_INFORMATION, FILE_FS_ATTRIBUTE_INFORMATION,
+    FILE_FS_DEVICE_INFORMATION, FILE_FS_FULL_SIZE_INFORMATION, FILE_FS_MAXIMUM_INFORMATION, FILE_FS_SIZE_INFORMATION,
+    FILE_FS_VOLUME_INFORMATION, FILE_MAXIMUM_DISPOSITION, FILE_NAME_INFORMATION, FILE_NETWORK_OPEN_INFORMATION,
+    FILE_NON_DIRECTORY_FILE, FILE_OPEN, FILE_POSITION_INFORMATION, FILE_READ_ATTRIBUTES, FILE_SHARE_VALID_FLAGS,
+    FILE_STANDARD_INFORMATION, FILE_VALID_OPTION_FLAGS, FILE_WRITE_ATTRIBUTES,
 };
 use abi::ntstatus::{
     NtStatus, STATUS_ACCESS_DENIED, STATUS_BUFFER_OVERFLOW, STATUS_DEVICE_BUSY, STATUS_DEVICE_NOT_READY,
@@ -221,7 +221,8 @@ pub(super) fn nt_query_full_attributes_file(arguments: &[u32]) -> NtStatus {
 
 /// NtQueryInformationFile(FileHandle, IoStatusBlock, FileInformation,
 /// Length, FileInformationClass) : FileBasic (`FILE_READ_ATTRIBUTES`),
-/// FileStandard, FileName (le chemin depuis la racine du volume),
+/// FileStandard, FileEa (0 : ni la FAT ni NPFS n'ont d'attributs étendus),
+/// FileName (le chemin depuis la racine du volume),
 /// FilePosition ou FileNetworkOpenInformation (`FILE_READ_ATTRIBUTES`) ;
 /// sur un tube, FileName (`\nom`), FilePipe et FilePipeLocalInformation
 /// (`FILE_READ_ATTRIBUTES`, [`super::pipe::query_information`]).
@@ -261,6 +262,7 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
     let (size, access) = match class {
         FILE_BASIC_INFORMATION => (size_of::<FileBasicInformation>(), FILE_READ_ATTRIBUTES),
         FILE_STANDARD_INFORMATION => (size_of::<FileStandardInformation>(), 0),
+        FILE_EA_INFORMATION => (size_of::<FileEaInformation>(), 0),
         FILE_NAME_INFORMATION => (size_of::<FileNameInformation>(), 0),
         FILE_POSITION_INFORMATION => (size_of::<FilePositionInformation>(), 0),
         FILE_NETWORK_OPEN_INFORMATION => (size_of::<FileNetworkOpenInformation>(), FILE_READ_ATTRIBUTES),
@@ -272,6 +274,13 @@ fn query_information_file(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
     };
     if (length as usize) < size {
         return Err(STATUS_INFO_LENGTH_MISMATCH);
+    }
+    if class == FILE_EA_INFORMATION {
+        // Neither FAT (as Io writes it) nor NPFS keeps extended attributes:
+        // the handle is checked, the size is 0 (CopyFileW asks before
+        // copying them, userenv's CopyDirectory through it).
+        super::current_process().handle_table.reference(Handle(handle), None, AccessMask::NONE)?;
+        return give_information(&FileEaInformation { ea_size: 0 }.to_bytes(), STATUS_SUCCESS, iosb, buffer);
     }
     if let Some(pipe) = super::pipe::pipe_file(handle, AccessMask(access))? {
         let (information, status) = match class {
