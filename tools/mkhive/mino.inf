@@ -40,6 +40,13 @@ HKLM,"SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName","ComputerName"
 ; Le répertoire des profils d'un système installé (le LiveCD : \Profiles).
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Documents and Settings"
 
+; Les paramètres régionaux de l'utilisateur, que la page des paramètres
+; régionaux de l'installation de ReactOS écrit (la clé du LiveCD est vide) :
+; winlogon les lit à l'ouverture de session (SetDefaultLanguage), et la
+; ferme sans eux. Ils passent de HKU\.DEFAULT au NTUSER.DAT de Default User
+; (minoinit.exe), puis au profil de chaque utilisateur.
+HKCU,"Control Panel\International","Locale",0x00000000,"00000409"
+
 ; L'ouverture de session automatique d'Administrator, sans mot de passe
 ; (SetAutoAdminLogon de syssetup) ; son domaine est le nom de la machine.
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoAdminLogon",0x00000000,"1"

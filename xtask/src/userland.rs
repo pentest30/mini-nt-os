@@ -94,6 +94,9 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         // The LSA client (LsaLogonUser), loaded by name by msgina and
         // winlogon for the logon (ADR-023).
         "secur32.dll",
+        // What winlogon starts in the user's session once logged on
+        // (Winlogon\Userinit), which then starts the shell.
+        "userinit.exe",
         "kbdus.dll",
         "cmd.exe",
         "taskmgr.exe",

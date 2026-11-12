@@ -252,7 +252,7 @@ impl<'a> Bitmap<'a> {
         if pen.style == PS_NULL || clip.is_empty() {
             return;
         }
-        let thickness = pen.width.max(1);
+        let thickness = self.line_thickness(pen.width);
         let steps = u64::from(from.0.abs_diff(to.0).max(from.1.abs_diff(to.1)));
         let (first, last) = if steps > u64::from(MAX_UNCUT_LINE) {
             let reach = clip.iter().skip(1).fold(clip[0], |all, part| all.union(part));
@@ -279,6 +279,19 @@ impl<'a> Bitmap<'a> {
             }
             walk.advance();
         }
+    }
+
+    /// L'épaisseur d'un trait d'un stylo de largeur `width`, entre 1 et le
+    /// plus grand côté de la surface : chaque pas de l'épaississement décale
+    /// d'un pixel au moins, et aucun pixel de la surface n'est plus loin
+    /// d'un autre. Un stylo plus large ne dessine rien de plus, et ferait
+    /// seulement tourner la boucle (CreatePen prend toute largeur, jusqu'à
+    /// 2^31 - 1) et élargir la coupe d'un trait démesuré, sous le verrou de
+    /// la surface.
+    fn line_thickness(&self, width: i32) -> i32 {
+        let bounds = self.bounds();
+        let side = (bounds.right - bounds.left).max(bounds.bottom - bounds.top).max(1);
+        width.clamp(1, side)
     }
 
     /// Le pixel épais d'un trait : `(x, y)` et ses voisins perpendiculaires,
@@ -600,6 +613,28 @@ mod tests {
         Bitmap::new(&mut near, 16, 16, 16, PixelLayout::Bgrx).unwrap().draw_line((0, 0), (15, 15), &white, &all);
         assert_eq!(far, near);
         assert_eq!(cut_steps((-50_000, 40), (50_000, 40), Rect::new(0, 0, 16, 16), 1), None, "below it");
+    }
+
+    #[test]
+    fn a_pen_wider_than_the_surface_draws_as_one_as_wide() {
+        // CreatePen takes any width: 2^31 - 1 would loop that many times
+        // per pixel, and widen the cut of a far line to all its steps.
+        let all = [Rect::new(0, 0, 16, 16)];
+        let white = super::super::pen::Pen { color: ColorRef(0xFF_FFFF), ..super::super::pen::Pen::BLACK };
+        let draw = |width: i32| {
+            let mut pixels = alloc::vec![0u32; 16 * 16];
+            let pen = super::super::pen::Pen { width, ..white };
+            let mut bitmap = Bitmap::new(&mut pixels, 16, 16, 16, PixelLayout::Bgrx).unwrap();
+            bitmap.draw_line((-2_000_000_000, 15), (2_000_000_000, 15), &pen, &all);
+            bitmap.draw_line((3, 3), (12, 9), &pen, &all);
+            pixels
+        };
+        assert_eq!(draw(i32::MAX), draw(16), "nothing more than the surface's side");
+        assert_ne!(draw(16), draw(1), "the width still counts");
+        let mut pixels = alloc::vec![0u32; 16 * 8];
+        let bitmap = Bitmap::new(&mut pixels, 16, 8, 16, PixelLayout::Bgrx).unwrap();
+        let widths = [i32::MAX, 17, 16, 3, 1, 0, -5, i32::MIN].map(|width| bitmap.line_thickness(width));
+        assert_eq!(widths, [16, 16, 16, 3, 1, 1, 1, 1], "between 1 and the larger side");
     }
 
     /// The pixels of the whole walk from `from` to `to` (the same Bresenham

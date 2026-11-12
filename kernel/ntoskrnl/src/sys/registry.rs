@@ -3,19 +3,24 @@
 //! d'information viennent de `cm::info` ; ce qui ne tient pas dans le tampon
 //! de l'appelant suit la règle d'XP ([`return_variable`]).
 //!
-//! NtFlushKey réécrit la ruche de la clé dans son fichier (`cm`).
+//! NtFlushKey réécrit la ruche de la clé dans son fichier (`cm`) ; NtLoadKey
+//! monte la ruche d'un fichier sous `\REGISTRY\USER` ou `\REGISTRY\MACHINE`
+//! (le `NTUSER.DAT` d'un utilisateur qui ouvre sa session), NtUnloadKey la
+//! réécrit et la démonte.
 //!
 //! Pas encore : les clés liens (`REG_OPTION_CREATE_LINK`,
 //! `STATUS_NOT_IMPLEMENTED`, journalisé une fois), NtDeleteKey.
 
 use abi::ntstatus::{
-    NtStatus, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL, STATUS_NO_MORE_ENTRIES, STATUS_OBJECT_NAME_NOT_FOUND,
+    NtStatus, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL, STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED,
+    STATUS_NO_MORE_ENTRIES, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_TYPE_MISMATCH, STATUS_PRIVILEGE_NOT_HELD,
     STATUS_SUCCESS,
 };
 use abi::registry::{
     KEY_ENUMERATE_SUB_KEYS, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_CREATED_NEW_KEY, REG_LEGAL_OPTION,
     REG_OPENED_EXISTING_KEY, REG_OPTION_CREATE_LINK, REG_OPTION_VOLATILE,
 };
+use abi::security::SE_RESTORE_PRIVILEGE;
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 use ke::usermem::UserPtr;
@@ -255,6 +260,81 @@ pub(super) fn nt_delete_value_key(arguments: &[u32]) -> NtStatus {
 /// elle a changé (`cm::Key::flush`) ; rien pour une ruche sans fichier.
 pub(super) fn nt_flush_key(arguments: &[u32]) -> NtStatus {
     status(reference_key(arguments[0], 0).and_then(|key| key.flush()))
+}
+
+/// NtLoadKey(TargetKey, SourceFile) : la ruche du fichier que désignent les
+/// attributs `SourceFile` (un nom absolu, lu par Io), montée à la clé que
+/// désignent les attributs `TargetKey` (`cm::load_hive`) : un nom d'un
+/// composant sous une clé virtuelle ouverte (RegLoadKey : `HKEY_USERS` et le
+/// SID) ou un chemin (`\Registry\User\<SID>`). NtFlushKey la réécrit dans ce
+/// fichier. `userenv` y charge le `NTUSER.DAT` de l'utilisateur qui ouvre sa
+/// session.
+///
+/// # Errors
+/// `STATUS_PRIVILEGE_NOT_HELD` sans `SeRestorePrivilege` actif ;
+/// `STATUS_INVALID_PARAMETER` sans nom ; `STATUS_NOT_IMPLEMENTED` pour un
+/// fichier désigné relativement à un répertoire ouvert (sa réécriture
+/// demande son nom entier) ; celles de la capture, de l'ouverture et de la
+/// lecture du fichier, de `cm::HiveFile::new` (`STATUS_REGISTRY_CORRUPT`) et
+/// de `cm::load_hive`.
+pub(super) fn nt_load_key(arguments: &[u32]) -> NtStatus {
+    status(load_key(arguments[0], arguments[1]))
+}
+
+fn load_key(target: u32, source: u32) -> Result<(), NtStatus> {
+    if !super::security::privilege_enabled(SE_RESTORE_PRIVILEGE) {
+        return Err(STATUS_PRIVILEGE_NOT_HELD);
+    }
+    let (parent, name) = hive_place(target)?;
+    let source = capture_attributes(source)?;
+    let path = source.name.ok_or(STATUS_INVALID_PARAMETER)?;
+    if source.root.is_some() {
+        return Err(STATUS_NOT_IMPLEMENTED);
+    }
+    let file = ob::namespace().open(&path, None, Some(&io_manager::FILE_TYPE), source.attributes)?;
+    let bytes = ob::downcast::<io_manager::File>(&file).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?.read_all()?;
+    let hive = cm::HiveFile::new(Arc::from(bytes))?.with_file(&path);
+    cm::load_hive(&parent, &name, hive)
+}
+
+/// La clé au-dessus de la ruche que désignent les OBJECT_ATTRIBUTES en
+/// `target` de NtLoadKey ou NtUnloadKey, et le nom de la ruche sous elle :
+/// un nom d'un composant sous la clé ouverte `RootDirectory`, ou un chemin.
+fn hive_place(target: u32) -> Result<(Arc<Object<cm::Key>>, alloc::string::String), NtStatus> {
+    let target = capture_attributes(target)?;
+    let name = target.name.ok_or(STATUS_INVALID_PARAMETER)?;
+    let (above, leaf) = name.rsplit_once('\\').unwrap_or(("", &name));
+    let parent = match (above, target.root) {
+        ("", Some(root)) => root,
+        ("", None) => return Err(STATUS_INVALID_PARAMETER),
+        (above, root) => ob::namespace().open(above, root.as_ref(), Some(&cm::KEY_TYPE), target.attributes)?,
+    };
+    let parent = ob::downcast::<cm::Key>(&parent).ok_or(STATUS_OBJECT_TYPE_MISMATCH)?;
+    Ok((parent, leaf.into()))
+}
+
+/// NtUnloadKey(TargetKey) : la ruche montée à la clé que désignent les
+/// attributs (comme pour NtLoadKey) est réécrite dans son fichier si elle a
+/// changé, puis démontée (`cm::unload_hive`). `userenv` décharge ainsi la
+/// ruche d'un utilisateur qu'il vient de préparer, avant de la recharger
+/// pour sa session.
+///
+/// # Errors
+/// `STATUS_PRIVILEGE_NOT_HELD` sans `SeRestorePrivilege` actif ;
+/// `STATUS_INVALID_PARAMETER` sans nom ; celles de la capture, de
+/// l'ouverture de la clé au-dessus et de `cm::unload_hive`.
+///
+/// Pas encore : le refus d'une ruche dont des clés sont ouvertes
+/// (`STATUS_CANNOT_DELETE`) ; elles la gardent.
+pub(super) fn nt_unload_key(arguments: &[u32]) -> NtStatus {
+    let unload = || {
+        if !super::security::privilege_enabled(SE_RESTORE_PRIVILEGE) {
+            return Err(STATUS_PRIVILEGE_NOT_HELD);
+        }
+        let (parent, name) = hive_place(arguments[0])?;
+        cm::unload_hive(&parent, &name)
+    };
+    status(unload())
 }
 
 /// NtInitializeRegistry(RegistryAction) : le registre est déjà en mémoire

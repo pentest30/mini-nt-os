@@ -5,8 +5,9 @@
 //! - [`descriptor`] : les descripteurs de sécurité ; capture du mode
 //!   utilisateur, forme relative, requête et changement de leurs parties.
 //! - [`token`] : les jetons (type `Token`), le jeton de System, sa copie pour
-//!   un processus créé ou pour un emprunt d'identité, leurs privilèges et
-//!   leurs classes d'information.
+//!   un processus créé ou pour un emprunt d'identité, un jeton créé de toutes
+//!   pièces (NtCreateToken, celui d'un utilisateur qui ouvre sa session),
+//!   leurs privilèges et leurs classes d'information.
 //! - [`client`] : ce qu'emprunte un serveur qui prend l'identité d'un client
 //!   (SeCreateClientSecurity).
 //! - [`logon`] : les sessions de logon et l'audit du moniteur de références,
@@ -31,9 +32,9 @@ pub mod sid;
 pub mod token;
 
 pub use acl::{Ace, Acl};
-pub use descriptor::SecurityDescriptor;
+pub use descriptor::{capture_acl, capture_sid, SecurityDescriptor};
 pub use sid::Sid;
-pub use token::{Adjusted, Privilege, PrivilegeChange, SidAndAttributes, Token, TOKEN_OBJECT_TYPE};
+pub use token::{Adjusted, NewToken, Privilege, PrivilegeChange, SidAndAttributes, Token, TOKEN_OBJECT_TYPE};
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

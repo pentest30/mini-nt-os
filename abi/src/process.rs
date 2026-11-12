@@ -38,6 +38,10 @@ pub const PROCESS_BASE_PRIORITY: u32 = 5;
 /// ProcessExceptionPort: a HANDLE, the LPC port that the process's unhandled
 /// exceptions go to (that of csrss), set once (NtSetInformationProcess).
 pub const PROCESS_EXCEPTION_PORT: u32 = 8;
+/// ProcessAccessToken: a PROCESS_ACCESS_TOKEN (the handle of a primary
+/// token, then that of a thread, unused), the process's new primary token
+/// (NtSetInformationProcess, CreateProcessAsUser).
+pub const PROCESS_ACCESS_TOKEN: u32 = 9;
 /// ProcessDefaultHardErrorMode: a ULONG, `SEM_*` flags of the process.
 pub const PROCESS_DEFAULT_HARD_ERROR_MODE: u32 = 12;
 /// ProcessSessionInformation: the process's session.

@@ -17,17 +17,29 @@
 //! Un processus reçoit une copie du jeton de son créateur
 //! ([`Token::duplicate_primary`], SeSubProcessToken).
 //!
+//! Un jeton créé de toutes pièces ([`Token::create`], SepCreateToken, pour
+//! NtCreateToken) : `lsasrv` en fait un pour l'utilisateur qui ouvre sa
+//! session (LsaLogonUser). Son propriétaire par défaut est l'utilisateur, ou
+//! un de ses groupes qui porte `SE_GROUP_OWNER` ; son groupe principal,
+//! l'utilisateur ou un de ses groupes. Sa session (Terminal Services) est 0 ;
+//! `winlogon` la change ensuite.
+//!
 //! [`Token::query`] rend une classe d'information de NtQueryInformationToken
 //! telle que le mode utilisateur la reçoit, pointeurs compris.
 //!
-//! Pas encore : les jetons d'emprunt d'identité, NtDuplicateToken,
-//! NtAdjustGroupsToken, NtSetInformationToken, les SID restreints.
+//! Une copie pour NtDuplicateToken ([`Token::duplicate_as`]) peut ne garder
+//! que les groupes et les privilèges actifs (`EffectiveOnly`).
+//!
+//! Pas encore : NtAdjustGroupsToken, NtSetInformationToken, les SID
+//! restreints.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use abi::ntstatus::{NtStatus, STATUS_INVALID_INFO_CLASS, STATUS_NOT_IMPLEMENTED};
+use abi::ntstatus::{
+    NtStatus, STATUS_INVALID_INFO_CLASS, STATUS_INVALID_OWNER, STATUS_INVALID_PRIMARY_GROUP, STATUS_NOT_IMPLEMENTED,
+};
 use abi::object::{AccessMask, GenericMapping};
 use abi::security::{
     LuidAndAttributes32, SidAndAttributes32, TokenSource32, TokenStatistics32, SECURITY_ANONYMOUS, SE_GROUP_ENABLED,
@@ -117,6 +129,26 @@ pub struct Adjusted {
     /// Chaque privilège demandé est dans le jeton
     /// (`STATUS_NOT_ALL_ASSIGNED` sinon).
     pub all_assigned: bool,
+}
+
+/// Ce que NtCreateToken donne d'un jeton neuf, capturé.
+#[derive(Clone, Debug)]
+pub struct NewToken {
+    /// TOKEN_TYPE_PRIMARY ou TOKEN_TYPE_IMPERSONATION.
+    pub token_type: u32,
+    /// SECURITY_*, pour un jeton d'emprunt d'identité.
+    pub impersonation_level: u32,
+    /// Sa session d'ouverture.
+    pub authentication_id: Luid,
+    pub expiration_time: i64,
+    pub user: SidAndAttributes,
+    pub groups: Vec<SidAndAttributes>,
+    pub privileges: Vec<Privilege>,
+    /// Le propriétaire par défaut ; l'utilisateur sans lui.
+    pub owner: Option<Sid>,
+    pub primary_group: Sid,
+    pub default_dacl: Option<Acl>,
+    pub source: TokenSource32,
 }
 
 /// Ce qui change dans un jeton.
@@ -237,7 +269,26 @@ impl Token {
     /// # IRQL
     /// <= DISPATCH_LEVEL.
     pub fn duplicate(&self, token_type: u32, impersonation_level: u32) -> Arc<Object<Self>> {
-        let state = self.state.lock().clone();
+        self.duplicate_as(token_type, impersonation_level, false)
+    }
+
+    /// SepDuplicateToken de NtDuplicateToken : comme [`duplicate`](Self::duplicate)
+    /// ; avec `effective_only`, la copie ne garde que les groupes actifs
+    /// (`SE_GROUP_ENABLED`) et les privilèges actifs, et son propriétaire par
+    /// défaut redevient l'utilisateur si son groupe n'y est plus.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn duplicate_as(&self, token_type: u32, impersonation_level: u32, effective_only: bool) -> Arc<Object<Self>> {
+        let mut state = self.state.lock().clone();
+        let mut groups = self.groups.clone();
+        let mut default_owner = self.default_owner;
+        if effective_only {
+            let owner = self.default_owner();
+            groups.retain(|group| group.attributes & SE_GROUP_ENABLED != 0);
+            state.privileges.retain(Privilege::is_enabled);
+            default_owner = groups.iter().position(|group| group.sid == owner).map_or(0, |index| index + 1);
+        }
         let token = Self {
             token_id: allocate_luid(),
             authentication_id: self.authentication_id,
@@ -246,14 +297,60 @@ impl Token {
             source: self.source,
             expiration_time: self.expiration_time,
             user: self.user,
-            groups: self.groups.clone(),
-            default_owner: self.default_owner,
+            groups,
+            default_owner,
             primary_group: self.primary_group,
             default_dacl: self.default_dacl.clone(),
             session_id: AtomicU32::new(self.session_id()),
             state: KSpinLock::new(state),
         };
         create_object(&TOKEN_OBJECT_TYPE, token)
+    }
+
+    /// SepCreateToken : un jeton neuf, de son propre identifiant, tel que
+    /// `new` le décrit (voir le module).
+    ///
+    /// # Errors
+    /// `STATUS_INVALID_OWNER` pour un propriétaire qui n'est ni
+    /// l'utilisateur ni un de ses groupes qui porte `SE_GROUP_OWNER` ;
+    /// `STATUS_INVALID_PRIMARY_GROUP` pour un groupe principal qui n'est ni
+    /// l'utilisateur ni un de ses groupes.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn create(new: NewToken) -> Result<Arc<Object<Self>>, NtStatus> {
+        let default_owner = match new.owner {
+            None => 0,
+            Some(owner) if owner == new.user.sid => 0,
+            Some(owner) => {
+                new.groups
+                    .iter()
+                    .position(|group| group.sid == owner && group.attributes & SE_GROUP_OWNER != 0)
+                    .ok_or(STATUS_INVALID_OWNER)?
+                    + 1
+            }
+        };
+        let in_token =
+            new.primary_group == new.user.sid || new.groups.iter().any(|group| group.sid == new.primary_group);
+        if !in_token {
+            return Err(STATUS_INVALID_PRIMARY_GROUP);
+        }
+        let token = Self {
+            token_id: allocate_luid(),
+            authentication_id: new.authentication_id,
+            token_type: new.token_type,
+            impersonation_level: new.impersonation_level,
+            source: new.source,
+            expiration_time: new.expiration_time,
+            user: new.user,
+            groups: new.groups,
+            default_owner,
+            primary_group: new.primary_group,
+            default_dacl: new.default_dacl,
+            session_id: AtomicU32::new(0),
+            state: KSpinLock::new(State { privileges: new.privileges, modified_id: allocate_luid() }),
+        };
+        Ok(create_object(&TOKEN_OBJECT_TYPE, token))
     }
 
     /// TokenType : TOKEN_TYPE_PRIMARY ou TOKEN_TYPE_IMPERSONATION.
@@ -578,6 +675,111 @@ mod tests {
         assert!(token.privileges().iter().all(|privilege| !privilege.is_enabled()));
         let attributes = token.privileges()[0].attributes;
         assert_eq!(attributes, SE_PRIVILEGE_ENABLED_BY_DEFAULT, "only SE_PRIVILEGE_ENABLED changes");
+    }
+
+    /// Administrator d'une machine (S-1-5-21-1-2-3-500).
+    const ADMINISTRATOR: Sid = Sid::new(SECURITY_NT_AUTHORITY, &[21, 1, 2, 3, 500]);
+    /// None, son groupe principal (S-1-5-21-1-2-3-513).
+    const NONE: Sid = Sid::new(SECURITY_NT_AUTHORITY, &[21, 1, 2, 3, 513]);
+
+    /// Un jeton comme celui que `lsasrv` fait pour Administrator.
+    fn administrator(owner: Option<Sid>, primary_group: Sid) -> NewToken {
+        let group = SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED;
+        NewToken {
+            token_type: TOKEN_TYPE_PRIMARY,
+            impersonation_level: SECURITY_ANONYMOUS,
+            authentication_id: Luid(0x4321),
+            expiration_time: i64::MAX,
+            user: SidAndAttributes { sid: ADMINISTRATOR, attributes: 0 },
+            groups: alloc::vec![
+                SidAndAttributes { sid: NONE, attributes: group },
+                SidAndAttributes { sid: Sid::EVERYONE, attributes: group },
+                SidAndAttributes { sid: Sid::ADMINISTRATORS, attributes: group | SE_GROUP_OWNER },
+                SidAndAttributes { sid: Sid::AUTHENTICATED_USERS, attributes: group },
+            ],
+            privileges: alloc::vec![
+                privilege(SE_CHANGE_NOTIFY_PRIVILEGE, SE_PRIVILEGE_ENABLED_BY_DEFAULT | SE_PRIVILEGE_ENABLED),
+                privilege(SE_SHUTDOWN_PRIVILEGE, 0),
+            ],
+            owner,
+            primary_group,
+            default_dacl: Some(crate::Acl::allowing(&[(AccessMask::GENERIC_ALL.0, ADMINISTRATOR)])),
+            source: TokenSource32 { source_name: *b"User32  ", source_identifier: Luid(0x4322).to_abi() },
+        }
+    }
+
+    #[test]
+    fn a_created_token_is_what_was_given() {
+        let token = Token::create(administrator(Some(Sid::ADMINISTRATORS), NONE)).unwrap();
+        assert_eq!((token.token_type(), token.authentication_id()), (TOKEN_TYPE_PRIMARY, Luid(0x4321)));
+        assert!(token.token_id() > Luid(0x3E7) && token.token_id() != token.modified_id());
+        assert_eq!(token.user().sid, ADMINISTRATOR);
+        assert_eq!(token.groups().len(), 4);
+        assert_eq!(token.default_owner(), Sid::ADMINISTRATORS, "a group that may own");
+        assert!(token.is_privilege_enabled(Luid(SE_CHANGE_NOTIFY_PRIVILEGE.into())));
+        assert!(!token.is_privilege_enabled(Luid(SE_SHUTDOWN_PRIVILEGE.into())), "held, but disabled");
+        assert_eq!(token.session_id(), 0, "winlogon sets it");
+        let group = token.query(TOKEN_PRIMARY_GROUP, AT).unwrap();
+        assert_eq!(Sid::parse(&group[4..]), Ok(NONE));
+        assert_eq!(token.query(TOKEN_SOURCE, AT).unwrap()[..8], *b"User32  ");
+        let statistics = token.query(TOKEN_STATISTICS, AT).unwrap();
+        assert_eq!(word(&statistics, 8), 0x4321, "its logon session");
+        assert_eq!((word(&statistics, 0x28), word(&statistics, 0x2C)), (4, 2), "groups, privileges");
+        let dacl = token.query(TOKEN_DEFAULT_DACL, AT).unwrap();
+        let aces: Vec<Option<Sid>> = crate::Acl::parse(&dacl[4..]).unwrap().aces().map(|ace| ace.sid).collect();
+        assert_eq!(aces, [Some(ADMINISTRATOR)]);
+        let child = token.duplicate_primary();
+        assert_eq!((child.user().sid, child.default_owner()), (ADMINISTRATOR, Sid::ADMINISTRATORS));
+    }
+
+    #[test]
+    fn the_user_owns_by_default() {
+        assert_eq!(Token::create(administrator(None, NONE)).unwrap().default_owner(), ADMINISTRATOR);
+        assert_eq!(
+            Token::create(administrator(Some(ADMINISTRATOR), ADMINISTRATOR)).unwrap().default_owner(),
+            ADMINISTRATOR
+        );
+    }
+
+    #[test]
+    fn an_owner_must_be_the_user_or_a_group_that_may_own() {
+        let not_owner = Token::create(administrator(Some(Sid::EVERYONE), NONE));
+        assert_eq!(not_owner.err(), Some(STATUS_INVALID_OWNER), "Everyone lacks SE_GROUP_OWNER");
+        let stranger = Token::create(administrator(Some(Sid::LOCAL_SYSTEM), NONE));
+        assert_eq!(stranger.err(), Some(STATUS_INVALID_OWNER), "not in the token");
+        let group = Token::create(administrator(None, Sid::LOCAL_SYSTEM));
+        assert_eq!(group.err(), Some(STATUS_INVALID_PRIMARY_GROUP), "not in the token");
+    }
+
+    #[test]
+    fn an_effective_only_copy_keeps_what_is_enabled() {
+        let mut new = administrator(Some(Sid::ADMINISTRATORS), NONE);
+        new.groups[2].attributes &= !SE_GROUP_ENABLED;
+        let token = Token::create(new).unwrap();
+        let full = token.duplicate_as(TOKEN_TYPE_IMPERSONATION, SECURITY_IMPERSONATION, false);
+        assert_eq!((full.groups().len(), full.privileges().len()), (4, 2));
+        assert_eq!(full.default_owner(), Sid::ADMINISTRATORS);
+        let effective = token.duplicate_as(TOKEN_TYPE_IMPERSONATION, SECURITY_IMPERSONATION, true);
+        let groups: Vec<Sid> = effective.groups().iter().map(|group| group.sid).collect();
+        assert_eq!(groups, [NONE, Sid::EVERYONE, Sid::AUTHENTICATED_USERS], "Administrators disabled");
+        assert_eq!(effective.privileges(), [privilege(SE_CHANGE_NOTIFY_PRIVILEGE, 3)], "the enabled one");
+        assert_eq!(effective.default_owner(), ADMINISTRATOR, "its group gone, the user owns");
+        assert_eq!(
+            (effective.token_type(), effective.impersonation_level()),
+            (TOKEN_TYPE_IMPERSONATION, SECURITY_IMPERSONATION)
+        );
+        assert_eq!(token.groups().len(), 4, "the source keeps its own");
+    }
+
+    #[test]
+    fn a_created_impersonation_token_has_its_level() {
+        let new = NewToken {
+            token_type: TOKEN_TYPE_IMPERSONATION,
+            impersonation_level: SECURITY_IMPERSONATION,
+            ..administrator(None, NONE)
+        };
+        let token = Token::create(new).unwrap();
+        assert_eq!(token.query(TOKEN_IMPERSONATION_LEVEL, AT), Ok(SECURITY_IMPERSONATION.to_le_bytes().to_vec()));
     }
 
     #[test]
