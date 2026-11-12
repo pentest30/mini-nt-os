@@ -18,7 +18,14 @@
 # - a bitmap goes in one DC at a time; DeleteObject of a selected bitmap
 #   fails; once out of the DC, the bitmaps, the brush (whose deletion gdi32
 #   queues) and the memory DC go, and the DIB's pixels leave the program's
-#   memory.
+#   memory;
+# - what comctl32's image lists and toolbar ask: StretchBlt between DIB
+#   sections, larger (each source pixel twice) then smaller (every other
+#   one); GetNearestColor (the colour itself on 32 bits); GetDIBits of a
+#   bitmap of 32 bits (its format alone: BI_BITFIELDS as ReactOS; its lines
+#   from the top, then from the bottom) and of a monochrome one (black and
+#   white, its bottom line first); StretchDIBits of a 16-bit DIB with its
+#   5-6-5 masks (BI_BITFIELDS, as comctl32's toolbar bitmaps, of 32 bits).
 features = test-smss
 requires = userland, native
 initial-command = BITMAP1.EXE
@@ -41,6 +48,14 @@ expect = [bitmap] bottom-up: the top row last, the first in memory untouched
 expect = [bitmap] DeleteObject: 1 1 1, DeleteDC: 1
 expect = [bitmap] deleted: the pixels free, types 0 0 0
 expect = [bitmap] painted: yes
+expect = [bitmap] StretchBlt 2x1 to 4x2: 1, 00ff0000 00ff0000 00123456 00123456, 00ff0000 00123456
+expect = [bitmap] StretchBlt 4x2 to 2x1: 1, 0000ff00 000000ff
+expect = [bitmap] GetNearestColor: 00030201; of no DC: CLR_INVALID
+expect = [bitmap] GetDIBits of a bitmap of 32 bits, its format: 2, 4x2, 32 bits, compression 3, 32 bytes
+expect = [bitmap] GetDIBits from the top: 2, 00ff0000 00123456, then 00000001
+expect = [bitmap] GetDIBits from the bottom: 2, 00000001, then 00ff0000
+expect = [bitmap] GetDIBits of a monochrome bitmap: 2, colours 000000 ffffff, rows 00ff a50f
+expect = [bitmap] StretchDIBits of 5-6-5 bit fields: 1, pixel 0000ff00
 expect = [bitmap] done
 forbid = *** STOP:
 forbid = sys: NtGdiCreateCompatibleDC (0x101e) is not implemented
@@ -48,6 +63,9 @@ forbid = sys: NtGdiCreateDIBSection (0x1021) is not implemented
 forbid = sys: NtGdiSelectBitmap (0x1100) is not implemented
 forbid = sys: NtGdiBitBlt (0x100d) is not implemented
 forbid = sys: NtGdiCreateSolidBrush (0x102c) is not implemented
+forbid = sys: NtGdiStretchBlt (0x1123) is not implemented
+forbid = sys: NtGdiGetDIBitsInternal (0x10ad) is not implemented
+forbid = sys: NtGdiGetNearestColor (0x10b9) is not implemented
 
 # The window's client area is at (303, 223): the DIB copied at (10, 10),
 # the brush's colour with the program's red pixel at (11, 11); the same

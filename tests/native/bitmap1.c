@@ -9,7 +9,9 @@
  * SelectObject of a bitmap, a solid brush of its own (CreateSolidBrush),
  * PatBlt into a bitmap, and BitBlt from a bitmap to a window, within the
  * window (a scroll) and from the window to a bitmap; then DeleteObject and
- * DeleteDC. Each result goes to the debug port (DbgPrint), where the scenario
+ * DeleteDC; then what comctl32's image lists ask: StretchBlt, GetNearestColor,
+ * GetDIBits, StretchDIBits of bit fields (check_stretch_and_dibits). Each
+ * result goes to the debug port (DbgPrint), where the scenario
  * looks for it, and the drawing to the screen, where it checks pixels; the
  * program ends with EXIT_STATUS.
  *
@@ -152,6 +154,8 @@ typedef struct {
 #define RC_BITBLT 1
 #define DEFAULT_BITMAP 21
 #define BI_RGB 0
+#define BI_BITFIELDS 3
+#define CLR_INVALID 0xFFFFFFFF
 #define DIB_RGB_COLORS 0
 #define OBJ_BRUSH 2
 #define OBJ_BITMAP 7
@@ -214,6 +218,14 @@ __declspec(dllimport) HBITMAP __stdcall CreateBitmap(int width, int height, UINT
                                                      const void *bits);
 __declspec(dllimport) HGDIOBJ __stdcall GetStockObject(int index);
 __declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int height, DWORD rop);
+__declspec(dllimport) int __stdcall GetDIBits(HDC dc, HBITMAP bitmap, UINT start, UINT lines, void *bits, BITMAPINFO *info,
+                                              UINT usage);
+__declspec(dllimport) COLORREF __stdcall GetNearestColor(HDC dc, COLORREF color);
+__declspec(dllimport) BOOL __stdcall StretchBlt(HDC dest, int x, int y, int width, int height, HDC source, int x_source,
+                                                int y_source, int width_source, int height_source, DWORD rop);
+__declspec(dllimport) int __stdcall StretchDIBits(HDC dc, int x, int y, int width, int height, int x_source,
+                                                  int y_source, int width_source, int height_source, const void *bits,
+                                                  const BITMAPINFO *info, UINT usage, DWORD rop);
 __declspec(dllimport) HGDIOBJ __stdcall SelectObject(HDC dc, HGDIOBJ object);
 
 static const WCHAR CLASS_NAME[] = L"MinoBitmap";
@@ -395,6 +407,100 @@ static void draw_bitmaps(HWND window, HDC dc)
     }
 }
 
+/* A BITMAPINFO with three entries after its header: two colours, or three
+   masks. */
+typedef struct {
+    BITMAPINFOHEADER bmiHeader;
+    DWORD bmiColors[3];
+} BITMAPINFO3;
+
+static void header(BITMAPINFO3 *info, LONG width, LONG height, WORD bit_count, DWORD compression)
+{
+    memset(info, 0, sizeof *info);
+    info->bmiHeader.biSize = sizeof info->bmiHeader;
+    info->bmiHeader.biWidth = width;
+    info->bmiHeader.biHeight = height;
+    info->bmiHeader.biPlanes = 1;
+    info->bmiHeader.biBitCount = bit_count;
+    info->bmiHeader.biCompression = compression;
+}
+
+/* What comctl32's image lists and toolbar ask of GDI: StretchBlt between
+   DIB sections, larger then smaller; GetNearestColor; GetDIBits of a bitmap
+   of 32 bits (its format alone, then its lines from the top and from the
+   bottom) and of a monochrome one (its two colours, its lines from the
+   bottom); StretchDIBits of a DIB of 16 bits with its 5-6-5 masks
+   (BI_BITFIELDS). */
+static void check_stretch_and_dibits(void)
+{
+    static const DWORD deep_pixels[8] = {RED_PIXEL, BRUSH_PIXEL, 0x0000FF00, 0x000000FF, 1, 2, 3, 4};
+    static const BYTE mono_rows[4] = {0xA5, 0x0F, 0x00, 0xFF};
+    HDC source_dc = CreateCompatibleDC(0), dest_dc = CreateCompatibleDC(0);
+    DWORD *source_bits, *dest_bits, got[8], green_line = 0x07E0;
+    BYTE mono_got[8];
+    HBITMAP source = dib_section(2, -1, &source_bits), dest = dib_section(4, -2, &dest_bits);
+    HBITMAP deep = CreateBitmap(4, 2, 1, 32, deep_pixels), mono = CreateBitmap(16, 2, 1, 1, mono_rows);
+    HGDIOBJ old_source, old_dest;
+    BITMAPINFO3 info;
+    BOOL done;
+    int lines;
+
+    if (!source_dc || !dest_dc || !source || !dest || !deep || !mono) {
+        DbgPrint("[bitmap] StretchBlt and GetDIBits: no DC or bitmap\n");
+        return;
+    }
+    old_source = SelectObject(source_dc, source);
+    old_dest = SelectObject(dest_dc, dest);
+    source_bits[0] = RED_PIXEL;
+    source_bits[1] = BRUSH_PIXEL;
+    done = StretchBlt(dest_dc, 0, 0, 4, 2, source_dc, 0, 0, 2, 1, SRCCOPY);
+    DbgPrint("[bitmap] StretchBlt 2x1 to 4x2: %d, %08lx %08lx %08lx %08lx, %08lx %08lx\n", done, dest_bits[0],
+             dest_bits[1], dest_bits[2], dest_bits[3], dest_bits[4], dest_bits[7]);
+    dest_bits[0] = 0x0000FF00;
+    dest_bits[2] = 0x000000FF;
+    done = StretchBlt(source_dc, 0, 0, 2, 1, dest_dc, 0, 0, 4, 2, SRCCOPY);
+    DbgPrint("[bitmap] StretchBlt 4x2 to 2x1: %d, %08lx %08lx\n", done, source_bits[0], source_bits[1]);
+    DbgPrint("[bitmap] GetNearestColor: %08lx; of no DC: %s\n", GetNearestColor(dest_dc, RGB(1, 2, 3)),
+             GetNearestColor((HDC)0x0BAD0BAD, RGB(1, 2, 3)) == CLR_INVALID ? "CLR_INVALID" : "WRONG");
+
+    header(&info, 0, 0, 0, BI_RGB);
+    lines = GetDIBits(dest_dc, deep, 0, 0, 0, (BITMAPINFO *)&info, DIB_RGB_COLORS);
+    DbgPrint("[bitmap] GetDIBits of a bitmap of 32 bits, its format: %d, %ldx%ld, %u bits, compression %lu, %lu bytes\n",
+             lines, info.bmiHeader.biWidth, info.bmiHeader.biHeight, info.bmiHeader.biBitCount,
+             info.bmiHeader.biCompression, info.bmiHeader.biSizeImage);
+    header(&info, 4, -2, 32, BI_RGB);
+    memset(got, 0, sizeof got);
+    lines = GetDIBits(dest_dc, deep, 0, 2, got, (BITMAPINFO *)&info, DIB_RGB_COLORS);
+    DbgPrint("[bitmap] GetDIBits from the top: %d, %08lx %08lx, then %08lx\n", lines, got[0], got[1], got[4]);
+    header(&info, 4, 2, 32, BI_RGB);
+    memset(got, 0, sizeof got);
+    lines = GetDIBits(dest_dc, deep, 0, 2, got, (BITMAPINFO *)&info, DIB_RGB_COLORS);
+    DbgPrint("[bitmap] GetDIBits from the bottom: %d, %08lx, then %08lx\n", lines, got[0], got[4]);
+    header(&info, 16, 2, 1, BI_RGB);
+    info.bmiColors[0] = info.bmiColors[1] = 0x00ABCDEF;
+    memset(mono_got, 0, sizeof mono_got);
+    lines = GetDIBits(dest_dc, mono, 0, 2, mono_got, (BITMAPINFO *)&info, DIB_RGB_COLORS);
+    DbgPrint("[bitmap] GetDIBits of a monochrome bitmap: %d, colours %06lx %06lx, rows %02x%02x %02x%02x\n", lines,
+             info.bmiColors[0], info.bmiColors[1], mono_got[0], mono_got[1], mono_got[4], mono_got[5]);
+
+    header(&info, 1, 1, 16, BI_BITFIELDS);
+    info.bmiColors[0] = 0xF800;
+    info.bmiColors[1] = 0x07E0;
+    info.bmiColors[2] = 0x001F;
+    dest_bits[0] = 0;
+    lines = StretchDIBits(dest_dc, 0, 0, 1, 1, 0, 0, 1, 1, &green_line, (BITMAPINFO *)&info, DIB_RGB_COLORS, SRCCOPY);
+    DbgPrint("[bitmap] StretchDIBits of 5-6-5 bit fields: %d, pixel %08lx\n", lines, dest_bits[0]);
+
+    SelectObject(source_dc, old_source);
+    SelectObject(dest_dc, old_dest);
+    DeleteObject(source);
+    DeleteObject(dest);
+    DeleteObject(deep);
+    DeleteObject(mono);
+    DeleteDC(source_dc);
+    DeleteDC(dest_dc);
+}
+
 static LRESULT __stdcall bitmap_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
 {
     PAINTSTRUCT paint;
@@ -436,6 +542,7 @@ DWORD __stdcall GuiStartup(void)
         while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE))
             DispatchMessageW(&message);
     DbgPrint("[bitmap] painted: %s\n", painted ? "yes" : "no");
+    check_stretch_and_dibits();
     DbgPrint("[bitmap] done\n");
     /* Its windows go with the process: the scenario captures the screen
      * meanwhile. */

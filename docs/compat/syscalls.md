@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 167 | 737 |
+| win32k | 171 | 737 |
 
 ## ntoskrnl
 
@@ -489,7 +489,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10aa` | `NtGdiGetDeviceCaps` | 2 |  |
 | `0x10ab` | `NtGdiGetDeviceGammaRamp` | 2 |  |
 | `0x10ac` | `NtGdiGetDeviceCapsAll` | 2 |  |
-| `0x10ad` | `NtGdiGetDIBitsInternal` | 9 |  |
+| `0x10ad` | `NtGdiGetDIBitsInternal` | 9 | ✅ |
 | `0x10ae` | `NtGdiGetETM` | 2 |  |
 | `0x10af` | `NtGdiGetEudcTimeStampEx` | 3 |  |
 | `0x10b0` | `NtGdiGetFontData` | 5 | ✅ |
@@ -501,7 +501,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10b6` | `NtGdiGetLinkedUFIs` | 3 |  |
 | `0x10b7` | `NtGdiGetMiterLimit` | 2 |  |
 | `0x10b8` | `NtGdiGetMonitorID` | 3 |  |
-| `0x10b9` | `NtGdiGetNearestColor` | 2 |  |
+| `0x10b9` | `NtGdiGetNearestColor` | 2 | ✅ |
 | `0x10ba` | `NtGdiGetNearestPaletteIndex` | 2 |  |
 | `0x10bb` | `NtGdiGetObjectBitmapHandle` | 2 |  |
 | `0x10bc` | `NtGdiGetOutlineTextMetricsInternalW` | 4 |  |
@@ -607,7 +607,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1120` | `NtGdiSetSizeDevice` | 3 |  |
 | `0x1121` | `NtGdiStartDoc` | 4 |  |
 | `0x1122` | `NtGdiStartPage` | 1 |  |
-| `0x1123` | `NtGdiStretchBlt` | 12 |  |
+| `0x1123` | `NtGdiStretchBlt` | 12 | ✅ |
 | `0x1124` | `NtGdiStretchDIBitsInternal` | 16 | ✅ |
 | `0x1125` | `NtGdiStrokeAndFillPath` | 1 |  |
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
@@ -722,7 +722,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1193` | `NtUserGetForegroundWindow` | 0 |  |
 | `0x1194` | `NtUserGetGuiResources` | 2 | ✅ |
 | `0x1195` | `NtUserGetGUIThreadInfo` | 2 |  |
-| `0x1196` | `NtUserGetIconInfo` | 6 |  |
+| `0x1196` | `NtUserGetIconInfo` | 6 | ✅ |
 | `0x1197` | `NtUserGetIconSize` | 4 | ✅ |
 | `0x1198` | `NtUserGetImeHotKey` | 4 |  |
 | `0x1199` | `NtUserGetImeInfoEx` | 2 |  |

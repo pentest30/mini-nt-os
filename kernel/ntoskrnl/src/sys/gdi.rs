@@ -811,6 +811,58 @@ pub(super) fn nt_gdi_stretch_dibits_internal(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiGetDIBitsInternal(hdc, hbm, iStartScan, cScans, pBits, pbmi,
+/// iUsage, cjMaxBits, cjMaxInfo) : INT, les lignes du bitmap copiées en DIB
+/// dans `pBits` (`win32k::gdi::dibits::get_dibits`), l'en-tête de `pbmi`
+/// rempli, la table de couleurs ou les masques écrits derrière lui s'ils
+/// tiennent dans `cjMaxInfo` octets ; 0 en cas d'échec, l'erreur de Win32
+/// posée s'il y en a une. DIB_PAL_COLORS n'est pas encore fait (0,
+/// journalisé une fois).
+pub(super) fn nt_gdi_get_dibits_internal(arguments: &[u32]) -> NtStatus {
+    use abi::gdi::{DIB_PAL_COLORS, DIB_RGB_COLORS};
+    let [hdc, hbm, start, lines, bits, info, usage, max_bits, max_info] = arguments[..9] else {
+        unreachable!("9 arguments")
+    };
+    if info == 0 || hbm == 0 || !matches!(usage, DIB_RGB_COLORS | DIB_PAL_COLORS) {
+        return NtStatus(0);
+    }
+    if usage == DIB_PAL_COLORS {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtGdiGetDIBitsInternal with DIB_PAL_COLORS: not yet");
+        }
+        return NtStatus(0);
+    }
+    let mut bytes = [0u8; core::mem::size_of::<BitmapInfoHeader32>()];
+    if (max_info as usize) < bytes.len() || copy_from_user(&mut bytes, u64::from(info)).is_err() {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let Some(header) = BitmapInfoHeader32::from_bytes(&bytes) else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    let reply = match win32k::gdi::dibits::get_dibits(hdc, hbm, header, start, lines, bits != 0) {
+        Ok(reply) => reply,
+        Err(0) => return NtStatus(0),
+        Err(error) => return fail(error, 0),
+    };
+    let write = || -> Result<(), NtStatus> {
+        copy_to_user(u64::from(info), reply.header.as_bytes())?;
+        let table_end = header.size as usize + reply.after_header.len();
+        if !reply.after_header.is_empty() && table_end <= max_info as usize {
+            copy_to_user(u64::from(info) + u64::from(header.size), &reply.after_header)?;
+        }
+        if let Some(lines) = &reply.bits {
+            if lines.len() > max_bits as usize {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            copy_to_user(u64::from(bits), lines)?;
+        }
+        Ok(())
+    };
+    match write() {
+        Ok(()) => NtStatus(reply.lines),
+        Err(_) => fail(ERROR_INVALID_PARAMETER, 0),
+    }
+}
+
 /// NtGdiCreateDIBSection(hdc, hSection, dwOffset, pbmi, iUsage, cjHeader,
 /// fl, dwColorSpace, ppvBits) : HBITMAP, une DIB section du processus
 /// (`win32k::gdi::surface`), dont l'adresse des pixels chez lui va en
@@ -886,6 +938,33 @@ pub(super) fn nt_gdi_bit_blt(arguments: &[u32]) -> NtStatus {
         Ok(done) => NtStatus(u32::from(done)),
         Err(error) => fail(error, 0),
     }
+}
+
+/// NtGdiStretchBlt(hdcDst, xDst, yDst, cxDst, cyDst, hdcSrc, xSrc, ySrc,
+/// cxSrc, cySrc, dwRop, dwBackColor) : BOOL (`win32k::gdi::bitblt::stretch_blt`).
+/// `dwBackColor` ne sert qu'à une source monochrome (pas encore).
+pub(super) fn nt_gdi_stretch_blt(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, width, height, hdc_src, x_src, y_src, width_src, height_src, rop, _back] = arguments[..12] else {
+        unreachable!("12 arguments")
+    };
+    let dst = (x as i32, y as i32, width as i32, height as i32);
+    let src = (x_src as i32, y_src as i32, width_src as i32, height_src as i32);
+    match win32k::gdi::bitblt::stretch_blt(hdc, dst, hdc_src, src, rop) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiGetNearestColor(hdc, Color) : COLORREF, la couleur la plus proche de
+/// `Color` que le DC peint : sur une surface de 32 bits, elle-même (sans
+/// l'octet haut de PALETTERGB) ; CLR_INVALID pour un DC qui n'est pas au
+/// processus (`ERROR_INVALID_HANDLE`).
+pub(super) fn nt_gdi_get_nearest_color(arguments: &[u32]) -> NtStatus {
+    let [hdc, color] = arguments[..2] else { unreachable!("2 arguments") };
+    if win32k::gdi::dc::lock(hdc).is_none() {
+        return fail(ERROR_INVALID_HANDLE, abi::gdi::CLR_INVALID);
+    }
+    NtStatus(color & 0x00FF_FFFF)
 }
 
 /// NtGdiCreateSolidBrush(cr, hbr) : HBRUSH, un pinceau plein du processus

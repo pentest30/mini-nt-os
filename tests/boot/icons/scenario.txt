@@ -6,7 +6,10 @@
 # a class without an icon, shows the system's small IDI_WINLOGO; B
 # (450,100), of a class whose icon is IDI_HAND, shows it, and draws it at
 # 32 x 32 in its client area with DrawIconEx; C (860,100), given IDI_ASTERISK
-# by WM_SETICON, shows it.
+# by WM_SETICON, shows it. Before them, GetIconInfo of IDI_HAND: copies of
+# its bitmaps, the program's own (GetObject, GetDIBits, DeleteObject), the
+# icon intact; CopyImage(LR_COPYFROMRESOURCE) loads it again at 16 x 16 from
+# its module and resource.
 features = test-smss
 requires = userland, native
 initial-command = ICON1.EXE
@@ -17,12 +20,18 @@ expect = win32k: user32 loaded 16 of 16 system cursors
 expect = win32k: user32 loaded 7 of 7 system icons
 expect = [icon] on WinSta0\Default
 expect = [icon] IDI_APPLICATION 1, shared 1; IDI_HAND 1, IDI_ASTERISK 1, IDI_WINLOGO 1
+expect = [icon] GetIconInfo(IDI_HAND): 1, an icon 1, hot spot 16 16; mask 32x32 1 bit, colours 32x32 32 bits
+expect = [icon] its colours read back: red yes; the copies deleted 1 1
+expect = [icon] GetIconInfo of no icon: refused 1, error 1402
+expect = [icon] CopyImage(IDI_HAND, 16 x 16, LR_COPYFROMRESOURCE): a new icon, mask 16x16
 expect = [icon] WM_SETICON(ICON_SMALL): none before 1; WM_GETICON gives it 1, no big one 1
 expect = [icon] DrawIconEx(IDI_HAND, 32 x 32): 1; a handle that is no icon: refused 1, error 1402
 expect = [icon] done
 
 forbid = *** STOP:
 forbid = NtUserDrawIconEx (0x116a) is not implemented
+forbid = NtUserGetIconInfo (0x1196) is not implemented
+forbid = NtGdiGetDIBitsInternal (0x10ad) is not implemented
 forbid = win32k: the system icons are not loaded
 forbid = DefWindowProc: message 0x0080 not yet
 forbid = DefWindowProc: message 0x007f not yet

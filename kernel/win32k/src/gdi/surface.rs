@@ -15,10 +15,13 @@
 //! de DeleteObject ; ReactOS en diffère la suppression). Supprimé, une DIB
 //! section quitte la mémoire de son processus.
 //!
-//! Pas encore : les bitmaps compatibles (CreateBitmap,
-//! CreateCompatibleBitmap), les profondeurs autres que 32 bits, les masques
-//! autres que ceux de BI_RGB, la section d'une application (`hSection`),
-//! les palettes, GetObject, GetDIBits et SetDIBits ; les bitmaps d'un
+//! Un bitmap se copie (BITMAP_CopyBitmap : [`copy_bitmap`]) : GetIconInfo
+//! donne ainsi les bitmaps d'une icône à son appelant ; GetDIBits les lit
+//! (`super::dibits`).
+//!
+//! Pas encore : les profondeurs autres que 32 bits (et la monochrome), les
+//! masques autres que ceux de BI_RGB, la section d'une application
+//! (`hSection`), les palettes, SetDIBits, CreateDIBitmap ; les bitmaps d'un
 //! processus rendus à sa fin.
 
 use alloc::sync::Arc;
@@ -102,6 +105,11 @@ impl Surface {
     /// Sa largeur et sa hauteur.
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Une DIB section dont les lignes montent depuis celle du bas.
+    pub fn is_bottom_up(&self) -> bool {
+        self.bottom_up
     }
 
     /// Monochrome : le bitmap par défaut, ou celui de CreateBitmap d'un bit
@@ -352,6 +360,23 @@ pub fn create_from_bits(
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn create_compatible(width: u32, height: u32, monochrome: bool) -> Result<u32, NtStatus> {
     create_from_bits(width, height, 1, if monochrome { 1 } else { 32 }, None)
+}
+
+/// BITMAP_CopyBitmap : un bitmap neuf, au processus courant, de la taille, de
+/// la profondeur et des pixels du bitmap `handle` (au processus courant, ou
+/// public : ceux d'un curseur), l'octet haut compris (l'alpha d'une icône).
+/// C'est un bitmap du noyau seul, comme ceux de CreateBitmap, même pour la
+/// copie d'une DIB section (GreCreateBitmapEx ne lui donne pas de
+/// `hSecure`). `None` pour un bitmap inconnu ou sans pixels (le bitmap par
+/// défaut), ou sans place.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn copy_bitmap(handle: u32) -> Option<u32> {
+    let surface = lock(handle, super::dc::current_pid())?;
+    let (width, height) = surface.size();
+    let pixels = surface.raw_pixels()?;
+    insert_kernel_bitmap(width, height, surface.is_monochrome(), &pixels).ok()
 }
 
 /// Un bitmap de `pixels` (32 bits, la ligne du haut d'abord) dans une section

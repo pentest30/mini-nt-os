@@ -15,17 +15,27 @@
 //! suivant (ScrollDC, ScrollWindowEx sur une région découpée par des
 //! fenêtres filles).
 //!
-//! Pas encore : StretchBlt (CAPTUREBLT y mène dans ReactOS : sans fenêtres
-//! superposées, c'est le même BitBlt), MaskBlt avec un masque, les DC
-//! transformés, les motifs autres que pleins.
+//! StretchBlt ([`stretch_blt`]) : aux mêmes tailles, BitBlt ; sinon chaque
+//! pixel de la destination prend celui de la source qui lui répond, le plus
+//! proche (STRETCH_DELETESCANS, comme StretchDIBits), la source lue d'abord
+//! dans un tampon ([`read_area`]) : une même surface ne s'écrase pas.
+//!
+//! Pas encore : MaskBlt avec un masque, les DC transformés, les motifs
+//! autres que pleins, StretchBlt d'une étendue négative (l'image retournée).
+//! CAPTUREBLT est ignoré : sans fenêtres superposées, c'est le même BitBlt.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use abi::gdi::rop::{CAPTUREBLT, NOMIRRORBITMAP};
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use abi::winerror::ERROR_CALL_NOT_IMPLEMENTED;
+
 use super::dc::{self, DcState};
-use super::dib::{Bitmap, ColorRef, Rect};
+use super::dib::{Bitmap, ColorRef, PixelLayout, Rect, SRCCOPY};
+use super::dibits::source_of;
 use super::surface::Surface;
 
 /// Une étape de BitBlt : un rectangle de la destination, sur sa surface, et
@@ -193,10 +203,184 @@ pub fn bit_blt(
     Ok(true)
 }
 
+/// Les pixels de `area` sur la surface `target`, ligne par ligne (0 hors
+/// d'elle), et l'ordre de leurs octets ; `None` pour un bitmap sans pixels.
+fn read_area(target: &Target, area: Rect) -> Option<(Vec<u32>, PixelLayout)> {
+    let mut read = None;
+    let mut copy = |surface: &mut Bitmap<'_>| {
+        let mut pixels = Vec::with_capacity(((area.right - area.left) * (area.bottom - area.top)) as usize);
+        for y in area.top..area.bottom {
+            for x in area.left..area.right {
+                let inside = x >= 0 && y >= 0;
+                pixels.push(if inside { surface.pixel(x as u32, y as u32).unwrap_or(0) } else { 0 });
+            }
+        }
+        read = Some((pixels, surface.layout()));
+    };
+    match target {
+        Target::Display => {
+            crate::display::draw(&mut copy);
+        }
+        Target::Bitmap(surface) => {
+            surface.draw(&mut copy);
+        }
+    }
+    read
+}
+
+/// Une source de StretchBlt lue : ses pixels (`width` × `height`, la ligne du
+/// haut d'abord) et l'ordre de leurs octets.
+pub struct Stretched<'a> {
+    pub pixels: &'a [u32],
+    pub width: i32,
+    pub height: i32,
+    pub layout: PixelLayout,
+}
+
+/// La partie `part` du rectangle `rect` de `dest` reçoit `source`, étirée ou
+/// réduite à `rect` (le pixel le plus proche), par le ROP3 `rop3` avec le
+/// motif plein `pattern`. SRCCOPY garde l'octet haut d'une source du même
+/// ordre d'octets, comme BitBlt.
+pub fn stretch_part(
+    dest: &mut Bitmap<'_>,
+    part: Rect,
+    rect: Rect,
+    source: &Stretched<'_>,
+    rop3: u8,
+    pattern: ColorRef,
+) {
+    let part = part.intersect(&rect).intersect(&dest.bounds());
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    let layout = dest.layout();
+    let pattern = layout.pixel(pattern);
+    for y in part.top..part.bottom {
+        let sy = source_of(y - rect.top, height, 0, source.height);
+        for x in part.left..part.right {
+            let sx = source_of(x - rect.left, width, 0, source.width);
+            let raw = source.pixels[(sy * source.width + sx) as usize];
+            let pixel = if source.layout == layout { raw } else { layout.pixel(source.layout.color(raw)) };
+            let value = if rop3 == SRCCOPY {
+                pixel
+            } else {
+                let under = dest.pixel(x as u32, y as u32).unwrap_or(0);
+                super::dib::rop3(rop3, pattern, pixel, under) & 0x00FF_FFFF
+            };
+            dest.set_pixel(x as u32, y as u32, value);
+        }
+    }
+}
+
+static NEGATIVE_STRETCH_REPORTED: AtomicBool = AtomicBool::new(false);
+
+/// NtGdiStretchBlt (GreStretchBltMask sans masque) : le rectangle (`x`, `y`,
+/// `width`, `height`) du DC `hdc` reçoit le rectangle (`x_src`, `y_src`,
+/// `width_src`, `height_src`) du DC `hdc_src`, étiré ou réduit, par le ROP
+/// `rop`, avec le pinceau du DC s'il s'en sert. Aux mêmes tailles, c'est
+/// [`bit_blt`] ; un ROP sans source, PatBlt. `Ok(false)` comme BitBlt ; `Err`
+/// : l'erreur de Win32, `ERROR_CALL_NOT_IMPLEMENTED` pour une étendue
+/// négative (journalisé une fois).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn stretch_blt(
+    hdc: u32,
+    (x, y, width, height): (i32, i32, i32, i32),
+    hdc_src: u32,
+    (x_src, y_src, width_src, height_src): (i32, i32, i32, i32),
+    rop: u32,
+) -> Result<bool, u32> {
+    let rop = rop & !(NOMIRRORBITMAP | CAPTUREBLT);
+    if !dc::uses_source(rop) {
+        return dc::pat_blt(hdc, x, y, width, height, rop);
+    }
+    if (width, height) == (width_src, height_src) {
+        return bit_blt(hdc, (x, y, width, height), hdc_src, (x_src, y_src), rop);
+    }
+    if width < 0 || height < 0 || width_src < 0 || height_src < 0 {
+        if !NEGATIVE_STRETCH_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("win32k: StretchBlt of a negative extent (a mirrored image): not yet");
+        }
+        return Err(ERROR_CALL_NOT_IMPLEMENTED);
+    }
+    let (Some(dest), Some(source)) = (dc::lock(hdc), dc::lock(hdc_src)) else { return Ok(false) };
+    if width == 0 || height == 0 || width_src == 0 || height_src == 0 {
+        return Ok(true);
+    }
+    let pattern = if uses_pattern(rop) {
+        let Some((_, attr)) = dest.state().owner else { return Ok(false) };
+        match dc::fill_brush(&dest, attr, None, false) {
+            Ok(Some(brush)) if !brush.null => brush.color,
+            _ => return Ok(false),
+        }
+    } else {
+        ColorRef(0)
+    };
+    let (dest_state, source_state) = (dest.state(), source.state());
+    let (ox, oy) = dc::logical_origin(&dest_state, None);
+    let (sx, sy) = dc::logical_origin(&source_state, None);
+    let (left, top) = (x.saturating_add(ox), y.saturating_add(oy));
+    let rect = Rect::new(left, top, left.saturating_add(width), top.saturating_add(height));
+    let (src_left, src_top) = (x_src.saturating_add(sx), y_src.saturating_add(sy));
+    let area = Rect::new(src_left, src_top, src_left.saturating_add(width_src), src_top.saturating_add(height_src));
+    let Some((pixels, layout)) = read_area(&Target::of(&source_state), area) else { return Ok(false) };
+    let stretched = Stretched { pixels: &pixels, width: width_src, height: height_src, layout };
+    let clip: Vec<Rect> = dest_state.rao().rects().to_vec();
+    let draw = |surface: &mut Bitmap<'_>| {
+        for &visible in &clip {
+            stretch_part(surface, visible, rect, &stretched, (rop >> 16) as u8, pattern);
+        }
+    };
+    match Target::of(&dest_state) {
+        Target::Display => crate::display::draw(draw),
+        Target::Bitmap(surface) => surface.draw(draw),
+    };
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use abi::gdi::rop;
+
+    #[test]
+    fn stretching_takes_the_nearest_pixel_where_the_destination_paints() {
+        // A 2 x 1 source, red then blue, drawn at 4 x 2 from (1, 1) of a 6 x 3
+        // surface, then shrunk back from a 4 x 2 source.
+        let layout = PixelLayout::Bgrx;
+        let (red, blue) = (layout.pixel(ColorRef::rgb(255, 0, 0)), layout.pixel(ColorRef::rgb(0, 0, 255)));
+        let source = [red | 0x8000_0000, blue];
+        let stretched = Stretched { pixels: &source, width: 2, height: 1, layout };
+        let mut pixels = alloc::vec![0u32; 6 * 3];
+        let mut surface = Bitmap::new(&mut pixels, 6, 3, 6, layout).unwrap();
+        let rect = Rect::new(1, 1, 5, 3);
+        stretch_part(&mut surface, Rect::new(0, 0, 4, 3), rect, &stretched, SRCCOPY, ColorRef(0));
+        let at = |surface: &Bitmap<'_>, x, y| surface.pixel(x, y).unwrap();
+        assert_eq!([at(&surface, 1, 1), at(&surface, 2, 2)], [red | 0x8000_0000, red | 0x8000_0000], "twice as big");
+        assert_eq!(at(&surface, 3, 1), blue);
+        assert_eq!(at(&surface, 4, 1), 0, "clipped at x 4");
+        assert_eq!(at(&surface, 0, 1), 0, "outside the rectangle");
+        // SRCAND with white keeps the destination, with black clears it.
+        let white = layout.pixel(ColorRef::rgb(255, 255, 255));
+        let mask = [white, 0];
+        let and = Stretched { pixels: &mask, width: 2, height: 1, layout };
+        stretch_part(&mut surface, rect, rect, &and, 0x88, ColorRef(0));
+        assert_eq!([at(&surface, 1, 1), at(&surface, 3, 1)], [red, 0], "SRCAND; the high byte cleared");
+        // Shrunk: a 4 x 1 source drawn at 2 x 1 takes every other pixel.
+        let four = [1, 2, 3, 4];
+        let shrunk = Stretched { pixels: &four, width: 4, height: 1, layout };
+        stretch_part(&mut surface, rect, Rect::new(0, 0, 2, 1), &shrunk, SRCCOPY, ColorRef(0));
+        assert_eq!([at(&surface, 0, 0), at(&surface, 1, 0)], [0, 0], "outside the part");
+        stretch_part(&mut surface, Rect::new(0, 0, 6, 3), Rect::new(0, 0, 2, 1), &shrunk, SRCCOPY, ColorRef(0));
+        assert_eq!([at(&surface, 0, 0), at(&surface, 1, 0)], [1, 3]);
+        // Taller: a 1 x 2 source (5 over 6) drawn at 1 x 4 — rows apart from
+        // columns, the extents not square.
+        let column = [5, 6];
+        let tall = Stretched { pixels: &column, width: 1, height: 2, layout };
+        let mut pixels = alloc::vec![0u32; 4];
+        let mut surface = Bitmap::new(&mut pixels, 1, 4, 1, layout).unwrap();
+        stretch_part(&mut surface, Rect::new(0, 0, 1, 4), Rect::new(0, 0, 1, 4), &tall, SRCCOPY, ColorRef(0));
+        assert_eq!((0..4).map(|y| at(&surface, 0, y)).collect::<Vec<_>>(), [5, 5, 6, 6], "each source row twice");
+    }
 
     #[test]
     fn which_rops_use_the_pattern() {

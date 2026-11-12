@@ -2044,6 +2044,28 @@ pub struct FindExistingCurIconParam32 {
     pub cy: i32,
 }
 
+/// ICONINFO, 32-bit: what NtUserGetIconInfo (GetIconInfo) gives of a cursor
+/// or an icon.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IconInfo32 {
+    /// TRUE for an icon, FALSE for a cursor.
+    pub icon: i32,
+    pub x_hotspot: u32,
+    pub y_hotspot: u32,
+    /// Its AND mask; for a monochrome one, over its XOR mask.
+    pub hbm_mask: u32,
+    /// Its colors; 0 for a monochrome one.
+    pub hbm_color: u32,
+}
+
+const _: () = {
+    assert!(size_of::<IconInfo32>() == 20);
+    assert!(offset_of!(IconInfo32, x_hotspot) == 4);
+    assert!(offset_of!(IconInfo32, hbm_mask) == 12);
+    assert!(offset_of!(IconInfo32, hbm_color) == 16);
+};
+
 const _: () = {
     assert!(size_of::<CursorData32>() == 88);
     assert!(offset_of!(CursorData32, rt) == 8);
@@ -2148,6 +2170,7 @@ as_bytes!(
     MonitorInfo32,
     PaintStruct32,
     CursorData32,
+    IconInfo32,
     FindExistingCurIconParam32,
     SetWndIconsArguments32,
     Property32,
