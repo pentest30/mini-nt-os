@@ -328,6 +328,25 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   coordonnées d'écran pendant le suivi, `queue.menu_owner`, clavier, mnémoniques et WM_MENUCHAR, sous-menus,
   notifications, WM_COMMAND ou TPM_RETURNCMD) ; NtUserTrackPopupMenuEx, NtUserEndMenu ; scénario `menu` (touches et
   souris de QEMU).
+  M6, étape 23 (la barre suivie) : HTMENU (`defwnd::window_hit_test`) ; WM_NCLBUTTONDOWN donne SC_MOUSEMENU
+  (`menutrack::track_mouse_menu_bar` : le menu de l'item sous la souris, `TimeToHide`) ; DefWindowProc des touches du
+  menu (`defwnd::key_menu`, `queue.menu_keys` : Alt, F10, Alt et une lettre donnent SC_KEYMENU,
+  `menutrack::track_kbd_menu_bar`) ; ←/→ sur la barre ; WM_CANCELMODE (`menutrack::end_menu_of`) ; GetMenuBarInfo
+  (fBarFocused, fFocused, `hwndMenu`). Pas encore le menu de la fenêtre.
+  M6, étape 24 (le Bloc-notes s'affiche) : GetWindowPlacement et SetWindowPlacement (`win32k::winpos::placement`,
+  `set_placement` : rectangle normal dans la zone de travail, make_rect_onscreen, ShowWindow) ; scénario `notepad`
+  (`tests/native/notepad1.c` lance le vrai `notepad.exe` : titre, menus, contrôle Edit, barre d'état).
+  M6, étape 25 : RegisterWindowMessage (atomes de USER), NtUserQueryWindow (`win32k::window::query`), les
+  accélérateurs (`win32k::accel`, `sys::accel` : Create, Copy, Destroy, TranslateAccelerator) : Ctrl+G ouvre « Goto
+  line » du Bloc-notes.
+  M6, étape 26 (le texte d'Uniscribe) : GetFontData, GetGlyphIndicesW, GetCharABCWidths(I) (`glyph::Font::abc`,
+  `win32k::font`), ExtTextOut ETO_GLYPH_INDEX : le texte tapé dans le Bloc-notes s'affiche à sa place.
+  M6, étape 27 (la boîte Enregistrer sous) : NtQueryKey(KeyNameInformation) (`cm::Key::full_name`),
+  NtQueryObject(ObjectBasicInformation), NtQueryInformationProcess(ProcessDeviceMap) : HKCR, et les lecteurs DOS ;
+  les listes libres du buddy chaînées, sans limite (`mm::buddy`, `FreeLink`).
+  M6, étape 28 : SetWindowLong de GWL_STYLE et GWL_EXSTYLE (`win32k::window::set_style` : WM_STYLECHANGING,
+  `restyle`, `restyle_ex`, WM_STYLECHANGED) ; l'onglet du gestionnaire des tâches se donne `WS_CLIPSIBLINGS` et ne
+  peint plus sur sa page ; les sœurs se repeignent de haut en bas de l'ordre Z, comme ReactOS.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

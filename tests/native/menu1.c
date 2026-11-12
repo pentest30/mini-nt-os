@@ -20,9 +20,17 @@
  *   tracking N" shows (the owner writes it at its first WM_ENTERIDLE): the
  *   arrows, Enter, a letter; mouse messages that W posts to the menu's
  *   window, at the screen's coordinates; EndMenu; the notifications W hears;
- *   the rectangle a menu avoids; at last a menu left open, Sub's submenu
- *   opened by the mouse the scenario moves, for its capture of the screen,
- *   until a timer ends it.
+ *   the rectangle a menu avoids; Sub's submenu opened by the mouse the
+ *   scenario moves;
+ * - the bar (win32k::menutrack::track_mouse_menu_bar, track_kbd_menu_bar):
+ *   WM_NCHITTEST gives HTMENU over it; WM_NCLBUTTONDOWN on File opens its
+ *   menu (SC_MOUSEMENU), which stays open after the release, closes when
+ *   the mouse goes to Help, whose click posts WM_COMMAND; a second click
+ *   on File closes the bar; WM_CANCELMODE ends it; the keys the scenario
+ *   types at "[menu] keys N" (Alt, Alt+letter, F10, the arrows, Escape, a
+ *   letter no item has) go through DefWindowProc to SC_KEYMENU; at last
+ *   the real mouse clicks File, whose menu stays open for the scenario's
+ *   capture of the screen, until a timer ends it.
  * Each step goes to the debug port (DbgPrint, a line each, its values taken
  * before); the program ends with EXIT_STATUS.
  *
@@ -168,6 +176,10 @@ typedef struct {
 #define WM_MOUSEMOVE 0x0200
 #define WM_LBUTTONDOWN 0x0201
 #define WM_LBUTTONUP 0x0202
+#define WM_CANCELMODE 0x001F
+#define WM_NCHITTEST 0x0084
+#define WM_NCLBUTTONDOWN 0x00A1
+#define HTMENU 5
 #define WM_ENTERMENULOOP 0x0211
 #define WM_EXITMENULOOP 0x0212
 #define MN_GETHMENU 0x01E1
@@ -298,6 +310,8 @@ static BOOL take_a_desktop(void)
 /* The popup menu that TrackPopupMenuEx shows (Open, a separator, Gray,
  * Sub with Inner, Exit), and what W hears while it is tracked. */
 static HMENU pop, sub;
+/* The bar and its menus (below). */
+static HMENU bar, file, edit;
 static struct {
     int run, announced, step;
     int enter, enter_popup, init, init_popups, selects, uninit, exits, idles, idle_flag;
@@ -307,6 +321,8 @@ static struct {
     HWND popup;
     RECT popup_rect;
     int checks[6];
+    int bar_focus;
+    HWND bar_menu;
 } track;
 
 /* The middle of the item `position` of `menu` on the screen. */
@@ -349,6 +365,18 @@ static int most_in_a_row(RECT rect, COLORREF color, BOOL equal)
             most = count;
     }
     return most;
+}
+
+/* GetMenuBarInfo of W's bar, item `item` (0: the bar): fBarFocused and
+ * fFocused, and the window of the item's open menu. */
+static void bar_info(LONG item)
+{
+    MENUBARINFO info;
+    memset(&info, 0, sizeof info);
+    info.cbSize = sizeof info;
+    GetMenuBarInfo(w, OBJID_MENU, item, &info);
+    track.bar_focus = (int)(info.focus & 3);
+    track.bar_menu = info.hwndMenu;
 }
 
 /* WM_ENTERIDLE: the menu waits for input. The first one of a run writes
@@ -426,12 +454,60 @@ static void idle(WPARAM flag, HWND popup)
             break;
         GetMenuItemRect(0, pop, 3, &open);
         GetMenuItemRect(0, sub, 0, &separator);
-        DbgPrint("[menu] the last menu at %d,%d to %d,%d; Sub %d,%d to %d,%d; Inner %d,%d to %d,%d\n",
+        DbgPrint("[menu] the mouse's menu at %d,%d to %d,%d; Sub %d,%d to %d,%d; Inner %d,%d to %d,%d\n",
                  track.popup_rect.left, track.popup_rect.top, track.popup_rect.right, track.popup_rect.bottom,
                  open.left, open.top, open.right, open.bottom, separator.left, separator.top, separator.right,
                  separator.bottom);
+        EndMenu();
+        track.step++;
+        break;
+    case 60:
+        /* The bar: File's menu opened by the button down on File. Released
+         * there, it stays open. */
+        bar_info(1);
+        track.checks[0] = track.init_popups == 1 && track.popups[0] == file && track.enter_popup == 0;
+        track.checks[1] = track.bar_focus;
+        track.checks[2] = track.bar_menu != 0;
+        PostMessageW(w, WM_LBUTTONUP, 0, item_middle(bar, 0));
+        track.step++;
+        break;
+    case 61:
+        /* Still open; over Help, it closes, Help is selected. */
+        track.checks[3] = IsWindow(track.bar_menu);
+        PostMessageW(w, WM_MOUSEMOVE, 0, item_middle(bar, 1));
+        track.step++;
+        break;
+    case 62:
+        /* File's menu gone (its window, from step 60), Help focused. */
+        track.checks[4] = !IsWindow(track.bar_menu);
+        bar_info(2);
+        track.checks[4] = track.checks[4] && track.uninit == 1 && track.bar_focus == 3;
+        PostMessageW(w, WM_LBUTTONDOWN, MK_LBUTTON, item_middle(bar, 1));
+        PostMessageW(w, WM_LBUTTONUP, 0, item_middle(bar, 1));
+        track.step++;
+        break;
+    case 70:
+        /* A second click on File, open: the bar closes. */
+        PostMessageW(w, WM_LBUTTONUP, 0, item_middle(bar, 0));
+        PostMessageW(w, WM_LBUTTONDOWN, MK_LBUTTON, item_middle(bar, 0));
+        PostMessageW(w, WM_LBUTTONUP, 0, item_middle(bar, 0));
+        track.step++;
+        break;
+    case 80:
+        /* WM_CANCELMODE to W ends the bar's tracking (DefWindowProc). */
+        SendMessageW(w, WM_CANCELMODE, 0, 0);
+        track.step++;
+        break;
+    case 140:
+        /* The real mouse clicked File: its menu open under the bar, for
+         * the capture, ended (EndMenu) a while after it. */
+        if (track.init_popups < 1)
+            break;
+        bar_info(1);
+        GetWindowRect(track.bar_menu, &open);
+        DbgPrint("[menu] the bar clicked: File's menu %d, focused %d, at %d,%d to %d,%d\n",
+                 track.popups[0] == file, track.bar_focus, open.left, open.top, open.right, open.bottom);
         DbgPrint("[menu] done\n");
-        /* Ended (EndMenu) a while after the capture. */
         SetTimer(w, 1, 4000, 0);
         track.step++;
         break;
@@ -452,6 +528,75 @@ static WPARAM posted_command(void)
     if (!PeekMessageW(&message, w, WM_COMMAND, WM_COMMAND, PM_REMOVE))
         return 0;
     return message.wParam;
+}
+
+/* Messages to W, the way its loop gives them, until a tracking ends. */
+static void pump_until_tracked(void)
+{
+    MSG message;
+    while (!track.exits && GetMessageW(&message, 0, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
+
+/* A tracking of the bar from the keys the scenario types at "[menu] keys
+ * N": what W heard, and the WM_COMMAND posted. */
+static void keyboard_run(int run)
+{
+    begin(run);
+    DbgPrint("[menu] keys %d\n", run);
+    pump_until_tracked();
+    DbgPrint("[menu] keys %d: WM_COMMAND %d; ENTERMENULOOP %d %d, INITMENU %d, INITMENUPOPUP %d, UNINITMENUPOPUP %d, "
+             "WM_MENUCHAR %x\n",
+             run, (int)posted_command(), track.enter, track.enter_popup, track.init_menu == bar, track.init_popups,
+             track.uninit, (unsigned)track.menu_char);
+}
+
+/* The bar (win32k::menutrack::track_mouse_menu_bar, track_kbd_menu_bar):
+ * the mouse by messages, the keys, at last the real mouse. */
+static void bar_runs(void)
+{
+    LPARAM file_middle = item_middle(bar, 0), help_middle = item_middle(bar, 1);
+    LRESULT hit = SendMessageW(w, WM_NCHITTEST, 0, file_middle);
+    LRESULT client = SendMessageW(w, WM_NCHITTEST, 0, MAKELPARAM(300, 300));
+    DbgPrint("[menu] the bar: File at %ld,%ld, Help at %ld,%ld; WM_NCHITTEST %ld, in the client area %ld\n",
+             (long)(file_middle & 0xFFFF), (long)(file_middle >> 16), (long)(help_middle & 0xFFFF),
+             (long)(help_middle >> 16), (long)hit, (long)client);
+
+    /* 6: a click on File opens its menu; over Help, Help is chosen. */
+    begin(6);
+    SendMessageW(w, WM_NCLBUTTONDOWN, HTMENU, file_middle);
+    DbgPrint("[menu] the bar 6: File's menu %d, focused %d, its window %d, open after the release %d, "
+             "Help after it %d; WM_COMMAND %d, EXITMENULOOP %d\n",
+             track.checks[0], track.checks[1], track.checks[2], track.checks[3], track.checks[4],
+             (int)posted_command(), track.exits);
+
+    /* 7: a second click on File closes the bar. */
+    begin(7);
+    SendMessageW(w, WM_NCLBUTTONDOWN, HTMENU, file_middle);
+    DbgPrint("[menu] the bar 7, clicked twice: WM_COMMAND %d, INITMENUPOPUP %d, UNINITMENUPOPUP %d, "
+             "EXITMENULOOP %d\n",
+             (int)posted_command(), track.init_popups, track.uninit, track.exits);
+
+    /* 8: WM_CANCELMODE. */
+    begin(8);
+    SendMessageW(w, WM_NCLBUTTONDOWN, HTMENU, file_middle);
+    DbgPrint("[menu] the bar 8, WM_CANCELMODE: WM_COMMAND %d, UNINITMENUPOPUP %d, EXITMENULOOP %d\n",
+             (int)posted_command(), track.uninit, track.exits);
+
+    /* 9 to 13: the keys. */
+    keyboard_run(9);
+    keyboard_run(10);
+    keyboard_run(11);
+    keyboard_run(12);
+    keyboard_run(13);
+
+    /* 14: the real mouse clicks File, left open for the capture. */
+    begin(14);
+    track.step = 0;
+    DbgPrint("[menu] click the bar\n");
+    pump_until_tracked();
 }
 
 static void popups(void)
@@ -532,9 +677,11 @@ static void popups(void)
     DbgPrint("[menu] TrackPopupMenuEx 4, EndMenu: %d; at %d,%d; notified %d\n", result, track.popup_rect.left,
              track.popup_rect.top, track.enter + track.init + track.init_popups + track.uninit + track.exits);
 
-    /* 5: left open for the capture. */
+    /* 5: the real mouse over Sub. */
     begin(5);
     result = TrackPopupMenuEx(pop, TPM_RETURNCMD, 150, 160, w, 0);
+
+    bar_runs();
 }
 
 /* `text` in ASCII (what the test writes is ASCII), at most 31 characters. */

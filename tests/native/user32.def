@@ -8,6 +8,8 @@ AppendMenuW@16
 BeginPaint@8
 CheckMenuItem@12
 CheckMenuRadioItem@20
+CopyAcceleratorTableW@12
+CreateAcceleratorTableW@8
 CreateCaret@16
 CreateDesktopW@24
 CreateDialogIndirectParamW@20
@@ -17,6 +19,7 @@ CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
 DeleteMenu@12
+DestroyAcceleratorTable@4
 DestroyCaret@0
 DestroyCursor@4
 DestroyMenu@4
@@ -82,6 +85,7 @@ GetWindowDC@4
 GetWindowLongW@8
 GetWindowRect@8
 GetWindowTextW@12
+GetWindowThreadProcessId@8
 HideCaret@4
 HiliteMenuItem@16
 InsertMenuW@20
@@ -108,6 +112,7 @@ PostThreadMessageW@16
 RedrawWindow@16
 RegisterClassExW@4
 RegisterLogonProcess@8
+RegisterWindowMessageW@4
 ReleaseCapture@0
 ReleaseDC@8
 RemoveMenu@12

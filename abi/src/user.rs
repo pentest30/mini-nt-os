@@ -547,6 +547,134 @@ pub struct WindowPos32 {
     pub flags: u32,
 }
 
+/// WINDOWPLACEMENT, 32-bit: what GetWindowPlacement and SetWindowPlacement
+/// carry; the points and the rectangle as (x, y) and (left, top, right,
+/// bottom).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WindowPlacement32 {
+    pub length: u32,
+    pub flags: u32,
+    pub show_cmd: u32,
+    pub min_position: [i32; 2],
+    pub max_position: [i32; 2],
+    pub normal_position: [i32; 4],
+}
+
+impl WindowPlacement32 {
+    /// The structure from its 44 bytes.
+    pub fn from_bytes(bytes: &[u8; 44]) -> Self {
+        let word = |i: usize| u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
+        let signed = |i: usize| word(i) as i32;
+        Self {
+            length: word(0),
+            flags: word(1),
+            show_cmd: word(2),
+            min_position: [signed(3), signed(4)],
+            max_position: [signed(5), signed(6)],
+            normal_position: [signed(7), signed(8), signed(9), signed(10)],
+        }
+    }
+
+    /// Its 44 bytes.
+    pub fn as_bytes(&self) -> [u8; 44] {
+        let words = [
+            self.length,
+            self.flags,
+            self.show_cmd,
+            self.min_position[0] as u32,
+            self.min_position[1] as u32,
+            self.max_position[0] as u32,
+            self.max_position[1] as u32,
+            self.normal_position[0] as u32,
+            self.normal_position[1] as u32,
+            self.normal_position[2] as u32,
+            self.normal_position[3] as u32,
+        ];
+        let mut bytes = [0u8; 44];
+        for (at, word) in words.iter().enumerate() {
+            bytes[4 * at..4 * at + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+/// STYLESTRUCT, 32-bit: what WM_STYLECHANGING (the procedure may change
+/// `style_new`) and WM_STYLECHANGED carry.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StyleStruct32 {
+    pub style_old: u32,
+    pub style_new: u32,
+}
+
+impl StyleStruct32 {
+    /// The structure from its 8 bytes.
+    pub fn from_bytes(bytes: &[u8; 8]) -> Self {
+        Self {
+            style_old: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            style_new: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+        }
+    }
+
+    /// Its 8 bytes.
+    pub fn as_bytes(&self) -> [u8; 8] {
+        let mut bytes = [0u8; 8];
+        bytes[..4].copy_from_slice(&self.style_old.to_le_bytes());
+        bytes[4..].copy_from_slice(&self.style_new.to_le_bytes());
+        bytes
+    }
+}
+
+/// ACCEL: an entry of an accelerator table, as CreateAcceleratorTable and
+/// CopyAcceleratorTable carry it (6 bytes: `fVirt`, a byte of padding, `key`,
+/// `cmd`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Accel32 {
+    pub f_virt: u8,
+    pub pad: u8,
+    pub key: u16,
+    pub cmd: u16,
+}
+
+/// ACCEL's `fVirt`: the key is a virtual key (not a character), and the
+/// modifiers it wants.
+pub mod fvirt {
+    pub const FVIRTKEY: u8 = 0x01;
+    pub const FSHIFT: u8 = 0x04;
+    pub const FCONTROL: u8 = 0x08;
+    pub const FALT: u8 = 0x10;
+    /// The bits kept: FVIRT_TBL_END (0x80, the last entry of a resource
+    /// table) is removed.
+    pub const MASK: u8 = 0x7F;
+}
+
+/// TYPE_ACCELTABLE: an accelerator table in the USER handle table.
+pub const TYPE_ACCELTABLE: u8 = 8;
+
+/// NtUserQueryWindow's indexes (QUERY_WINDOW_*, ReactOS `ntuser.h`).
+pub mod query_window {
+    pub const UNIQUE_PROCESS_ID: u32 = 0x00;
+    pub const UNIQUE_THREAD_ID: u32 = 0x01;
+    pub const ACTIVE: u32 = 0x02;
+    pub const FOCUS: u32 = 0x03;
+    pub const ISHUNG: u32 = 0x04;
+    pub const REAL_ID: u32 = 0x05;
+    pub const FOREGROUND: u32 = 0x06;
+    pub const DEFAULT_IME: u32 = 0x07;
+    pub const DEFAULT_ICONTEXT: u32 = 0x08;
+    pub const ACTIVE_IME: u32 = 0x09;
+}
+
+/// WPF_SETMINPOSITION: SetWindowPlacement takes `ptMinPosition` too.
+pub const WPF_SETMINPOSITION: u32 = 0x0001;
+/// WPF_RESTORETOMAXIMIZED: a minimized window comes back maximized.
+pub const WPF_RESTORETOMAXIMIZED: u32 = 0x0002;
+/// WPF_ASYNCWINDOWPLACEMENT: the window of another thread is placed without
+/// waiting for it.
+pub const WPF_ASYNCWINDOWPLACEMENT: u32 = 0x0004;
+
 /// NCCALCSIZE_PARAMS, 32-bit: three rectangles (left, top, right, bottom),
 /// then the address of a WINDOWPOS (packed after it in a message).
 #[repr(C)]
@@ -582,6 +710,13 @@ pub const TYPE_MONITOR: u8 = 12;
 
 const _: () = {
     assert!(size_of::<WindowPos32>() == 28);
+    assert!(size_of::<WindowPlacement32>() == 44);
+    assert!(size_of::<StyleStruct32>() == 8);
+    assert!(offset_of!(StyleStruct32, style_new) == 4);
+    assert!(size_of::<Accel32>() == 6);
+    assert!(offset_of!(Accel32, key) == 2);
+    assert!(offset_of!(Accel32, cmd) == 4);
+    assert!(offset_of!(WindowPlacement32, normal_position) == 28);
     assert!(size_of::<NcCalcSizeParams32>() == 52);
     assert!(offset_of!(NcCalcSizeParams32, pos) == 48);
     assert!(size_of::<MonitorInfo32>() == 40);
@@ -762,6 +897,8 @@ pub const WM_CHILDACTIVATE: u32 = 0x0022;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
 pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+pub const WM_STYLECHANGING: u32 = 0x007C;
+pub const WM_STYLECHANGED: u32 = 0x007D;
 /// COLOR_*, the indices of the system colours (GetSysColor): `LIGHT_3D` is
 /// COLOR_3DLIGHT, `DKSHADOW_3D` COLOR_3DDKSHADOW; COLOR_3DFACE is `BTNFACE`.
 pub mod color {
@@ -941,6 +1078,12 @@ pub const SC_CLOSE: u32 = 0xF060;
 /// the mouse (DefWndTrackScrollBar).
 pub const SC_VSCROLL: u32 = 0xF070;
 pub const SC_HSCROLL: u32 = 0xF080;
+/// A click on the menu bar (plus HTMENU, or HTSYSMENU for the window menu):
+/// DefWindowProc tracks the bar (MENU_TrackMouseMenuBar).
+pub const SC_MOUSEMENU: u32 = 0xF090;
+/// The menu bar from the keyboard (Alt, F10, Alt and a letter in `lParam`):
+/// MENU_TrackKbdMenuBar.
+pub const SC_KEYMENU: u32 = 0xF100;
 pub const SC_RESTORE: u32 = 0xF120;
 /// WMSZ_*: the edge SC_SIZE drags, in the low 4 bits of `wParam`; WMSZ_LEFT
 /// (1) to WMSZ_BOTTOMRIGHT (8) follow HTLEFT (10) to HTBOTTOMRIGHT (17).
@@ -989,6 +1132,7 @@ pub const KF_UP: u32 = 0x8000;
 
 /// The virtual keys (VK_*) that win32k looks at.
 pub mod vk {
+    pub const VK_TAB: u8 = 0x09;
     pub const VK_CLEAR: u8 = 0x0C;
     pub const VK_RETURN: u8 = 0x0D;
     pub const VK_SHIFT: u8 = 0x10;

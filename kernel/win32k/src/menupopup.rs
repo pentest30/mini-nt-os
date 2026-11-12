@@ -400,6 +400,7 @@ pub fn window_proc(window: &Window, message: u32, wparam: u32, lparam: &mut LPar
             crate::defwnd::nc_hit_test(
                 state.style,
                 state.ex_style,
+                false,
                 state.window,
                 state.client,
                 point,

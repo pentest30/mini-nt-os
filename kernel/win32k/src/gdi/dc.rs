@@ -702,31 +702,77 @@ pub fn select_pen(dc: &Dc, hpen: u32) -> Option<u32> {
     Some(dc.change(|state| state.pen.replace((hpen, *pen)).map_or(0, |(old, _)| old)))
 }
 
+/// La position courante du DC `state` (`ptlCurrent`, en coordonnées
+/// logiques) : dans ses attributs chez son propriétaire, où MoveToEx de
+/// `gdi32` l'écrit sans appeler le noyau ; celle du noyau sans attributs.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn current_position(state: &DcState) -> (i32, i32) {
+    let Some((_, attr)) = state.owner else { return state.position };
+    let mut bytes = [0u8; 8];
+    if copy_from_user(&mut bytes, u64::from(attr) + offset_of!(DcAttr32, current) as u64).is_err() {
+        return state.position;
+    }
+    let word = |at: usize| i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    (word(0), word(4))
+}
+
+/// IntGdiMoveToEx, sa fin : `(x, y)` devient la position courante du DC,
+/// dans le noyau et dans ses attributs (`ptlCurrent` et `ptfxCurrent`,
+/// pareils sans transformation, leurs bits de changement retirés).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn set_current_position(dc: &Dc, (x, y): (i32, i32)) {
+    use abi::gdi::dirty::{DIRTY_PTFXCURRENT, DIRTY_PTLCURRENT, DIRTY_STYLESTATE};
+    let owner = dc.change(|state| {
+        state.position = (x, y);
+        state.owner
+    });
+    let Some((_, attr)) = owner else { return };
+    let at = |field: usize| u64::from(attr) + field as u64;
+    let point = [x.to_le_bytes(), y.to_le_bytes()].concat();
+    let _ = copy_to_user(at(offset_of!(DcAttr32, current)), &point);
+    let _ = copy_to_user(at(offset_of!(DcAttr32, fx_current)), &point);
+    let mut dirty = [0u8; 4];
+    if copy_from_user(&mut dirty, at(offset_of!(DcAttr32, dirty))).is_ok() {
+        let dirty = u32::from_le_bytes(dirty) & !(DIRTY_PTLCURRENT | DIRTY_PTFXCURRENT | DIRTY_STYLESTATE);
+        let _ = copy_to_user(at(offset_of!(DcAttr32, dirty)), &dirty.to_le_bytes());
+    }
+}
+
 /// MoveToEx : la position courante du DC devient `(x, y)` (coordonnées
-/// logiques) ; rend l'ancienne en `out` s'il n'est pas nul, et en valeur.
+/// logiques, [`set_current_position`]) ; rend l'ancienne en `out` s'il n'est
+/// pas nul, et en valeur.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
 pub fn move_to(dc: &Dc, x: i32, y: i32, out: u32) -> Option<(i32, i32)> {
-    let old = dc.change(|state| core::mem::replace(&mut state.position, (x, y)));
+    let old = current_position(&dc.state());
+    set_current_position(dc, (x, y));
     if out != 0 {
         copy_to_user(u64::from(out), &[old.0.to_le_bytes(), old.1.to_le_bytes()].concat()).ok()?;
     }
     Some(old)
 }
 
-/// LineTo : le trait de la position courante à `(x, y)` (coordonnées
-/// logiques), du stylo du DC — le noir d'un pixel sans stylo choisi —, où
-/// il peut peindre (`prgnRao`, comme [`paint`]) ; la position devient
-/// `(x, y)`. `false` sans DC ou sans où dessiner.
+/// LineTo (IntGdiLineTo) : le trait de la position courante
+/// ([`current_position`] : celle que MoveToEx de `gdi32` a écrite dans les
+/// attributs du DC) à `(x, y)` (coordonnées logiques), du stylo du DC — le
+/// noir d'un pixel sans stylo choisi —, où il peut peindre (`prgnRao`,
+/// comme [`paint`]) ; la position devient `(x, y)`. `false` sans DC ou sans
+/// où dessiner.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir.
 pub fn line_to(dc: &Dc, x: i32, y: i32) -> bool {
     let state = dc.state();
     let (dx, dy) = logical_origin(&state, None);
-    let from = (state.position.0 + dx, state.position.1 + dy);
-    let to = (x + dx, y + dy);
+    let position = current_position(&state);
+    // Any coordinates the caller gives (see Bitmap::draw_line).
+    let from = (position.0.saturating_add(dx), position.1.saturating_add(dy));
+    let to = (x.saturating_add(dx), y.saturating_add(dy));
     let pen = state.pen.as_ref().map_or(super::pen::Pen::BLACK, |(_, pen)| *pen);
     let rao = state.rao();
     if rao.is_empty() {
@@ -735,7 +781,7 @@ pub fn line_to(dc: &Dc, x: i32, y: i32) -> bool {
     let parts: alloc::vec::Vec<Rect> = rao.rects().to_vec();
     let drew = state.draw(|surface| surface.draw_line(from, to, &pen, &parts));
     drop(state);
-    dc.change(|state| state.position = (x, y));
+    set_current_position(dc, (x, y));
     drew
 }
 

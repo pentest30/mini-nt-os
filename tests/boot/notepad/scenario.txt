@@ -1,0 +1,56 @@
+# Notepad, the probe (tests/native/notepad1.c): NOTEPAD1.EXE takes the place
+# of winlogon.exe, takes WinSta0\Default, checks RegisterWindowMessage and
+# starts ReactOS's notepad.exe, then lists the top-level windows four times a
+# second for 8 seconds (the probe of smss ends everything 10 seconds after the
+# last key). Notepad shows its window by SetWindowPlacement, with the place
+# GetWindowPlacement gave; GetWindowThreadProcessId (NtUserQueryWindow) gives
+# its process and thread. Ctrl+G, typed by QEMU, is one of Notepad's
+# accelerators ("^G": WM_CHAR 7, TranslateAccelerator): its "Goto line" dialog;
+# Escape closes it. Before it, QEMU types two lines into Notepad's Edit
+# control, which places and draws them by Uniscribe (usp10: GetFontData,
+# GetGlyphIndicesW, GetCharABCWidthsI, ExtTextOut with ETO_GLYPH_INDEX).
+features = test-smss
+requires = userland, native
+initial-command = NOTEPAD1.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [notepad] Notepad is up => "Hello, Mino!" ret "Line 2" ctrl-g
+keys = [notepad] the Goto line dialog is up => esc
+
+expect = [notepad] on WinSta0\Default
+expect = [notepad] RegisterWindowMessage: one message per name
+expect = [notepad] CreateAcceleratorTable: one entry made, a huge count refused
+expect = [notepad] Save As needs: drives, key names, handle rights
+expect = [notepad] launched (PID
+expect = "Untitled - Notepad"
+expect = [notepad] Notepad is up: its window is its main thread's
+expect = "Goto line"
+expect = [notepad] the Goto line dialog is up
+expect = [notepad] the Goto line dialog is closed
+expect = [notepad] probe done
+
+forbid = *** STOP:
+forbid = sys: NtUserGetWindowPlacement (0x11b7) is not implemented
+forbid = sys: NtUserSetWindowPlacement (0x121d) is not implemented
+forbid = sys: NtUserCreateAcceleratorTable (0x1151) is not implemented
+forbid = sys: NtUserTranslateAccelerator (0x1234) is not implemented
+forbid = sys: NtUserQueryWindow (0x11e1) is not implemented
+forbid = sys: NtUserRegisterWindowMessage (0x11eb) is not implemented
+forbid = sys: NtGdiGetFontData (0x10b0) is not implemented
+forbid = sys: NtGdiGetGlyphIndicesW (0x10b2) is not implemented
+forbid = sys: NtGdiGetCharABCWidthsW (0x109f) is not implemented
+# The Edit control, white; the active caption; "Line 2, column 7" in the
+# status bar (comctl32), the foot of the L and two pixels of the 2; the Edit
+# control where the dialog was, repainted; the typed text: the stem of the H,
+# the "!" that ends the first line twelve characters on (the advances), the
+# foot of the L of "Line 2".
+screen = 400 300 FFFFFF
+screen = 500 13 5B7AAF
+screen = 7 590 0C0B0B
+screen = 28 590 080808
+screen = 31 585 080808
+screen = 100 80 FFFFFF
+screen = 12 53 000000
+screen = 68 50 3E3E3E
+screen = 14 72 000000

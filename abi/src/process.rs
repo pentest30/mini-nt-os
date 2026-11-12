@@ -58,6 +58,25 @@ pub const SEM_FAILCRITICALERRORS: u32 = 0x0001;
 /// ProcessLUIDDeviceMapsEnabled: a ULONG, non-zero when each logon session
 /// has its own DOS devices.
 pub const PROCESS_LUID_DEVICE_MAPS_ENABLED: u32 = 28;
+/// ProcessDeviceMap: the DOS drives the process sees
+/// (PROCESS_DEVICEMAP_INFORMATION's Query: DriveMap, DriveType[32]).
+pub const PROCESS_DEVICE_MAP: u32 = 23;
+/// The size of PROCESS_DEVICEMAP_INFORMATION's Query, and of
+/// PROCESS_DEVICEMAP_INFORMATION_EX (with its Flags).
+pub const PROCESS_DEVICEMAP_QUERY_SIZE: u32 = 36;
+pub const PROCESS_DEVICEMAP_EX_SIZE: u32 = 40;
+
+/// DOSDEVICE_DRIVE_*: a drive's type in a device map (GetDriveType's
+/// DRIVE_* from 2 on).
+pub mod dosdevice_drive {
+    pub const UNKNOWN: u8 = 0;
+    pub const CALCULATE: u8 = 1;
+    pub const REMOVABLE: u8 = 2;
+    pub const FIXED: u8 = 3;
+    pub const REMOTE: u8 = 4;
+    pub const CDROM: u8 = 5;
+    pub const RAMDISK: u8 = 6;
+}
 /// ProcessCookie: a ULONG, the process's random cookie (pointer encoding),
 /// for the calling process only.
 pub const PROCESS_COOKIE: u32 = 36;

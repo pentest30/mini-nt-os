@@ -169,7 +169,8 @@ manquaient. Comme ReactOS (`window.c`, `winpos.c`, `message.c`, `main.c`, comme 
 - `win32k::window::set_long` (co_IntSetWindowLongPtr) : un index positif est une place dans les octets de plus de la
   fenêtre (`cbWndExtra`, après le `WND`, où `user32` les lit lui-même ; `ERROR_INVALID_INDEX` au-delà) ; GWLP_USERDATA
   (`dwUserData` du `WND`), GWLP_ID, GWLP_HINSTANCE. GWL_STYLE, GWL_EXSTYLE, GWLP_WNDPROC et GWLP_HWNDPARENT : pas encore
-  (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois ; `consrv` change GWL_EXSTYLE en passant). La fenêtre du bureau :
+  (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois ; `consrv` change GWL_EXSTYLE en passant). GWL_STYLE et
+  GWL_EXSTYLE sont faits depuis ([`m6-fenetres.md`](m6-fenetres.md), étape 28). La fenêtre du bureau :
   `ERROR_ACCESS_DENIED` (ReactOS met à tort le statut NT comme erreur).
 - NtUserShowWindowAsync : pour une fenêtre du thread courant, WM_ASYNC_SHOWWINDOW est traité aussitôt
   (co_WinPosShowWindow : rend si elle était visible) ; pour celle d'un autre thread, pas encore (les messages envoyés

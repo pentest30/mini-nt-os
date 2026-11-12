@@ -1051,3 +1051,229 @@ le scénario `menu` sur AMD et Intel, que dix-huit mutations du suivi font écho
 ramenées à la zone cliente pendant le suivi) ; et `gui`, `destroy`, `desktop-ui`, `desktop-launch`, `desktop-click`,
 `cursor`, `mouse`, `mouse-windows`, `keyboard`, `caret`, `scroll`, `scrollex`, `dialog`, `listview`, `tasklist`, `text`,
 `icons`, `console`, `bitmap`, `send-messages`, `activate-app`, `cmd` sur AMD et Intel.
+
+## Étape 23 : la barre de menus suivie (le clic, F10, Alt, les flèches)
+
+Le clic sur la barre et le clavier passent par DefWindowProc : `user32` donne au noyau WM_NCLBUTTONDOWN,
+WM_SYSCOMMAND (SC_MOUSEMENU, SC_KEYMENU), WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_SYSCHAR et WM_CANCELMODE.
+`defwnd.c`, `nonclient.c` et `menu.c` de win32k (IntDefWindowProc, DefWndHandleSysCommand, GetNCHitEx,
+NC_HandleNCLButtonDown, MENU_TrackMouseMenuBar, MENU_TrackKbdMenuBar, MENU_KeyLeft, MENU_KeyRight, MENU_ButtonUp,
+MENU_EndMenu, NtUserGetMenuBarInfo), ReactOS comme spécification ; `win32k::defwnd`, `win32k::sizemove`,
+`win32k::menutrack`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| HTMENU (`defwnd::nc_hit_test`, `window_hit_test`) | au-dessus de la zone cliente, entre ses côtés, pour une fenêtre qui n'est pas fille et a un menu (HAS_MENU) |
+| Le clic (`sizemove::nc_lbutton_down`) | WM_NCLBUTTONDOWN sur HTMENU envoie WM_SYSCOMMAND SC_MOUSEMENU + HTMENU, que DefWindowProc fait suivre (`menutrack::track_mouse_menu_bar`) : TPM_BUTTONDOWN, TPM_VERTICAL ; l'item sous la souris sélectionné et son menu ouvert sous lui ; la fenêtre en est la propriétaire et a la souris (ses messages en coordonnées d'écran, comme pour un menu déroulant) |
+| Le relâchement (MENU_ButtonUp) | sur l'item ouvert, le menu reste ouvert ; un second clic sur lui ferme la barre (`TimeToHide`) ; sur un item sans menu, il est exécuté (WM_COMMAND posté) ; hors des menus, le suivi finit |
+| Les touches (`defwnd::key_menu`) | Alt enfoncé seul, sans répétition, puis relâché, ou F10 enfoncé puis relâché : SC_KEYMENU (0) à la fenêtre de premier niveau ; Alt et une lettre (WM_SYSCHAR) : SC_KEYMENU (la lettre) ; ce qu'il en reste dans la file du thread (QF_FMENUSTATUS, QF_FF10STATUS : `queue.menu_keys`) |
+| SC_KEYMENU (`menutrack::track_kbd_menu_bar`) | la barre de la fenêtre de premier niveau ; sans lettre, le premier item sélectionné ; avec une lettre, l'item qu'elle souligne sélectionné et un VK_RETURN posté (son menu s'ouvre) ; sans item (WM_MENUCHAR ignoré), le suivi finit aussitôt (TF_ENDMENU) |
+| Les flèches sur la barre (MENU_KeyLeft, MENU_KeyRight) | ← et → passent à l'item voisin de la barre (du premier au dernier et retour) ; si un menu était ouvert, celui du nouvel item s'ouvre, son premier item sélectionné ; → ouvre d'abord le sous-menu de l'item sélectionné d'un menu ouvert ; ↑ et ↓ ouvrent le menu de l'item ; Échap ferme le menu ouvert, puis la barre |
+| WM_CANCELMODE (`menutrack::end_menu_of`) | Alt oublié (QF_FMENUSTATUS ; F10 enfoncé reste retenu, comme ReactOS) ; le suivi finit si la fenêtre est celle du menu suivi ou sa propriétaire (MENU_EndMenu) ; la souris rendue si elle l'avait |
+| NtUserGetMenuBarInfo | fBarFocused : la barre est le menu suivi ; fFocused : l'item sélectionné (la barre suivie pour `idItem` 0) ; `hwndMenu` : la fenêtre du menu ouvert de l'item |
+
+Écarts avec ReactOS, faute du menu de la fenêtre : aux bouts de la barre, la sélection fait le tour au lieu de passer
+au menu de la fenêtre (MENU_DoNextMenu, WM_NEXTMENU) ; Alt+Espace, Maj+Échap, une fenêtre réduite ou sans barre ne
+suivent rien (HTSYSMENU non plus).
+
+Ce qui manque : le menu de la fenêtre (GetSystemMenu, HTSYSMENU, SC_KEYMENU ' '), WM_NEXTMENU, MENU_SuspendPopup
+(une flèche répétée ouvre chaque menu), Alt+F4, Alt+Tab, Alt+Échap, Maj+F10 (WM_CONTEXTMENU), le premier plan du
+clavier pendant le suivi (KF_MENUMODE).
+
+Vu en chemin : la file simplifie déjà la touche (VK_LMENU devient VK_MENU, `queue.rs`) ; la barre suivie se repeint
+entière (WM_NCPAINT, limite connue de `paint::nc_paint`).
+
+Le banc d'essai : `tests/native/menu1.c`, scénario `menu` (étapes 20 à 22), avec la barre de W (Fichier, Help) :
+WM_NCHITTEST (HTMENU au-dessus de la zone cliente) ; WM_NCLBUTTONDOWN sur Fichier (son menu ouvert, la barre et
+l'item « focalisés » pour GetMenuBarInfo, le menu ouvert après le relâchement, fermé quand la souris passe à Help,
+dont le clic poste WM_COMMAND) ; deux clics sur Fichier ; WM_CANCELMODE ; les touches de QEMU : Alt+F puis x (Exit),
+Alt seul puis ← et Entrée (Help), F10 ↓ → Entrée, Alt+F Échap → Entrée, Alt+Q (WM_MENUCHAR, fin aussitôt) ; enfin le
+vrai clic de QEMU sur Fichier, dont le menu reste ouvert pour la capture (l'item enfoncé, son texte décalé, le menu
+dessous, son sillon).
+
+Tests : hôte (`defwnd` : HTMENU, les touches du menu) ; le scénario `menu` sur AMD et Intel, que quatorze mutations
+font échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur la barre, le VK_RETURN
+d'une lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused, le premier item sans lettre, `menu_owner` pour la barre) ;
+et `desktop-launch`, `desktop-ui`, `desktop-click`, `gui`, `destroy`, `mouse`, `mouse-windows`, `keyboard`, `caret`,
+`text`, `dialog`, `listview`, `tasklist`, `scroll`, `icons`, `bitmap`, `console`, `cursor`, `send-messages`,
+`activate-app`, `cmd` sur AMD et Intel.
+
+## Étape 24 : le Bloc-notes s'affiche (GetWindowPlacement, SetWindowPlacement)
+
+Le banc d'essai : `tests/native/notepad1.c` (`NOTEPAD1.EXE`, MinGW), scénario `notepad`. Il prend la place de
+`winlogon.exe`, prend `WinSta0\Default` comme lui, lance le vrai `notepad.exe` de ReactOS par CreateProcessW, puis
+liste chaque seconde les fenêtres de premier niveau et leur titre (8 s : la sonde de `smss` arrête tout 10 s après
+le démarrage ou la dernière touche). `xtask` met `notepad.exe` sur le disque, avec la fermeture de ses imports
+(`comdlg32`, `shell32`, `shlwapi`, `comctl32`…).
+
+Au démarrage, le Bloc-notes lit ses réglages (`HKCU\Software\Microsoft\Notepad`), crée sa fenêtre
+(`WS_OVERLAPPEDWINDOW`, `CW_USEDEFAULT`) et, dans WM_CREATE, son contrôle Edit et sa barre d'état ; sans place
+enregistrée, il prend celle que donne GetWindowPlacement, et c'est SetWindowPlacement qui montre la fenêtre. Sans
+ces deux services, la fenêtre existait, cachée.
+
+`winpos.c` de win32k (IntGetWindowPlacement, make_rect_onscreen, IntSetWindowPlacement, NtUserGetWindowPlacement,
+NtUserSetWindowPlacement), ReactOS comme spécification ; `win32k::winpos`, `abi::user::WindowPlacement32`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| GetWindowPlacement (`winpos::placement`) | la commande qui montre la fenêtre telle qu'elle est (SW_SHOWMINIMIZED, SW_SHOWMAXIMIZED ou SW_SHOWNORMAL) ; le rectangle normal : celui de la fenêtre dans la zone cliente de son parent, décalé dans la zone de travail pour une fenêtre de premier niveau qui n'est pas une fenêtre d'outils ; les points de l'icône et de la fenêtre agrandie à (−1, −1) ; WPF_RESTORETOMAXIMIZED d'une fenêtre agrandie ; la longueur mise à 44 quelle qu'elle soit |
+| SetWindowPlacement (`winpos::set_placement`) | une longueur autre que 44 : ERROR_INVALID_PARAMETER ; la fenêtre du bureau : FALSE ; le rectangle normal ramené sur la zone de travail du moniteur le plus proche s'il en sort tout entier (make_rect_onscreen) ; la fenêtre placée là sans changer son rang ni l'activer, puis montrée par ShowWindow avec la commande donnée |
+
+Écarts, faute de réduire et d'agrandir : pas de place gardée à part (`InternalPos` : le rectangle normal d'une
+fenêtre réduite ou agrandie, les places de l'icône et de la fenêtre agrandie) ; une fenêtre réduite ou agrandie
+n'est pas déplacée (journalisé une fois) ; WPF_ASYNCWINDOWPLACEMENT est fait tout de suite (journalisé une fois) ;
+la tolérance de longueur pour un module qui attend Windows 3.x manque.
+
+Ce que le Bloc-notes montre ensuite (journal du scénario) : NtUserRegisterWindowMessage (FINDMSGSTRING : rendu 0,
+la procédure du Bloc-notes prend alors WM_NULL pour le message de la recherche), NtUserCreateAcceleratorTable (ses
+raccourcis), NtQueryDefaultUILanguage, NtSetInformationThread (classe 9), NtUserCallOneParam (0x28),
+NtUserSystemParametersInfo (0x2006), SetWindowLong de GWL_EXSTYLE, CS_PARENTDC, et un « SendMessageW Error » de
+`user32` pendant la création (un NtUserMessageCall FNID_SENDMESSAGE qui rend FALSE ; expliqué à l'étape 25). La
+sonde appelle NtUserQueryWindow (GetWindowTextW). Le manifeste de `comctl32` 6 manque (toléré : la version 5 sert).
+
+Tests : hôte (`winpos` : le placement d'une fenêtre normale, agrandie, réduite, d'outils, fille ; make_rect_onscreen
+des quatre côtés ; les octets du `WINDOWPLACEMENT`) ; le scénario `notepad` sur AMD et Intel (le titre « Untitled -
+Notepad », le contrôle Edit blanc, le titre actif, « Line 1 » de la barre d'état de `comctl32`), qui échoue quand
+SetWindowPlacement ne montre plus la fenêtre (mutation).
+
+## Étape 25 : RegisterWindowMessage, GetWindowThreadProcessId, les accélérateurs (Ctrl+G dans le Bloc-notes)
+
+`window.c` (NtUserRegisterWindowMessage, NtUserQueryWindow), `useratom.c` (IntAddAtom) et `accelerator.c`
+(NtUserCreateAcceleratorTable, NtUserCopyAcceleratorTable, NtUserDestroyAcceleratorTable, NtUserTranslateAccelerator,
+co_IntTranslateAccelerator) de win32k, ReactOS comme spécification ; Wine (`dlls/user32/menu.c`,
+translate_accelerator) pour la recherche de l'item ; `win32k::accel`, `win32k::window::query`, `sys::accel`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| RegisterWindowMessage | l'atome du nom dans la table des atomes de USER (`win32k::atom`) : un message de 0xC000 à 0xFFFF, le même pour le même nom sans tenir compte de la casse ; 0 pour un nom nul (ERROR_INVALID_PARAMETER) ou un thread sans bureau. Sans lui, le Bloc-notes avait FINDMSGSTRING = 0 et aurait pris WM_NULL pour le message de sa recherche |
+| NtUserQueryWindow | le PID et le TID du thread de la fenêtre (GetWindowThreadProcessId) ; pour une fenêtre console de `csrss` (sa classe est celle que `consrv` donne par NtUserConsoleControl), ceux du processus qui mène la console, dans ses octets de plus (0 et 4) ; la fenêtre active et celle qui a le clavier dans la file de son thread ; le PID (REAL_ID) ; si sa file est au premier plan ; 0 pour ISHUNG et l'IME |
+| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon ; au plus 65 536 entrées (au-delà, NULL et ERROR_NOT_ENOUGH_MEMORY, comme une allocation qui échoue chez ReactOS), la plage de l'appelant sondée et le compte borné avant toute allocation, les allocations faillibles |
+| TranslateAccelerator (`accel::translate`) | WM_KEYDOWN, WM_SYSKEYDOWN : une entrée FVIRTKEY de même touche, Maj, Ctrl et Alt du thread exactement ; WM_CHAR, WM_SYSCHAR : une entrée de caractère de même code, Alt seul comparé ; la commande, si c'est un item du menu de la fenêtre (non fille) : WM_INITMENU, puis WM_INITMENUPOPUP du menu qui porte l'item et sa position, sauf souris capturée ; WM_COMMAND (HIWORD 1) sauf fenêtre désactivée, item désactivé ou grisé (après WM_INITMENUPOPUP), fenêtre réduite ; le message est alors traduit |
+
+Écarts voulus avec ReactOS : il cherche l'item du menu à la position égale à la commande (MF_BYPOSITION), et donne
+WM_INITMENUPOPUP comme pour le menu de la fenêtre (HIWORD 1) ; Mino suit Wine et la documentation de l'API (par
+identifiant, HIWORD 0, pas de WM_INITMENUPOPUP pour un item de la barre elle-même).
+
+Ce qui manque : le menu de la fenêtre (WM_SYSCOMMAND d'une commande qui y est) ; la conversion d'un caractère ANSI
+au-delà de l'ASCII par la page de code (l'octet est gardé, journalisé une fois) ; MsqIsHung.
+
+Vu en chemin : le « SendMessageW Error » de `user32` à l'étape 24 vient du Bloc-notes lui-même : il lit ses réglages
+et envoie WM_SETFONT à son contrôle Edit avant de l'avoir créé (`hEdit` nul) ; Mino rend
+ERROR_INVALID_WINDOW_HANDLE, comme ReactOS.
+
+Le Bloc-notes, avec la boîte « Goto line » ouverte puis fermée, montre ensuite : NtUserIsClipboardFormatAvailable
+(son WM_INITMENUPOPUP, pour Coller), NtUserGetAncestor, NtGdiGetOutlineTextMetricsInternalW, NtGdiGetFontData,
+NtGdiGetGlyphIndicesW, NtGdiGetCharABCWidthsW (la police de la boîte, son contrôle Edit), WinPosDoOwnedPopups,
+NtUserCallTwoParam (0x60), NtUserSetActiveWindow et NtUserSetThreadState (la fin de la boîte).
+
+Le banc d'essai : `tests/native/notepad1.c`, scénario `notepad` : RegisterWindowMessage (un message par nom, sans
+casse) ; GetWindowThreadProcessId de la fenêtre du Bloc-notes (le processus et le thread que CreateProcessW a
+rendus) ; Ctrl+G tapé par QEMU (« ^G » : WM_CHAR 7 par TranslateMessage, puis TranslateAccelerator) ouvre « Goto
+line », Échap la ferme, et le contrôle Edit est repeint là où elle était.
+
+Tests : hôte (`accel` : touches virtuelles et modificateurs, caractères et Alt, FVIRT_TBL_END et l'ANSI, les
+messages du menu, ce qui empêche WM_COMMAND) ; la sonde crée, copie et détruit une table d'une entrée, et
+CreateAcceleratorTableW d'un compte de 0xFFFFFFFF est refusé (la revue de la PR 125 : le noyau allouait 24 Gio
+avant de regarder le compte, et l'échec de l'allocation arrêtait le système ; le scénario le reproduit sans le
+correctif) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
+l'accélérateur (mutation) ; `cmd`, `desktop-launch`, `console` (qui appelaient NtUserQueryWindow) sur AMD et Intel.
+
+## Étape 26 : le texte d'Uniscribe (GetFontData, GetGlyphIndicesW, GetCharABCWidths, ETO_GLYPH_INDEX)
+
+Le contrôle Edit de `user32` (repris de Wine) place et dessine son texte par Uniscribe (`usp10` :
+ScriptStringAnalyse, ScriptShape, ScriptPlace, ScriptTextOut). Uniscribe lit la police du DC : GetTextMetricsW,
+GetOutlineTextMetricsW (facultatif), GetFontData de la table `head` (une police TrueType : les glyphes viennent de
+sa `cmap`), GetGlyphIndicesW, GetCharABCWidthsI (une police TMPF_TRUETYPE), puis dessine par ExtTextOutW avec
+ETO_GLYPH_INDEX. Sans ces services, il prenait la police pour une police bitmap : les codes des caractères passaient
+pour des glyphes, leurs avances valaient 0, et tout le texte d'une ligne se superposait.
+
+`freetype.c` et `font.c` de win32k (ftGdiGetFontData, GreGetGlyphIndicesW, NtGdiGetGlyphIndicesWInternal,
+GreGetCharABCWidthsW, NtGdiGetCharABCWidthsW, NtGdiGetFontData), ReactOS comme spécification ; `libs/glyph`
+(`Font::table`, `glyph_count`, `default_char`, `abc`), `win32k::font` (`font_data`, `glyph_indices`, `glyph_count`,
+`abc_widths`, `glyph_run`), `sys::gdi`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| GetFontData | la table demandée (MS_MAKE_TAG : son premier caractère dans l'octet bas), ou le fichier entier pour 0 : sa taille sans tampon, sinon ses octets depuis `Offset`, au plus sa taille ; GDI_ERROR sans la table ou au-delà d'elle |
+| GetGlyphIndicesW | le glyphe de chaque unité UTF-16 par la `cmap` (Unicode, sinon symboles) ; une moitié de paire de substitution est un caractère absent ; un caractère absent a 0xFFFF (GGI_MARK_NONEXISTING_GLYPHS) ou le glyphe du caractère par défaut (`OS/2` usDefaultChar dès la version 2, 0 avant) ; sans rien, le nombre de glyphes |
+| GetCharABCWidths(I) | A : du stylo au bord gauche du glyphe, arrondi vers le bas ; B : jusqu'au bord droit arrondi vers le haut ; C : ce que l'avance arrondie laisse ; tout en avance pour un glyphe sans contour ; des caractères ou des indices (GCABCW_INDICES) ; des entiers pour tout drapeau, des ABCFLOAT sans drapeau (comme ReactOS) |
+| ExtTextOut ETO_GLYPH_INDEX | le texte est fait d'indices de glyphes, rendus et placés comme les caractères |
+
+Ce qui manque : GetOutlineTextMetricsW (rend 0 : Uniscribe s'en passe), GetTextExtentExPointI (GTEF_INDICES), les
+collections TrueType (`ttcf`) dans GetFontData, le hinting des largeurs ABC (ReactOS les prend de FreeType, avec
+hinting ; Mino des contours, sans).
+
+Le banc d'essai : le scénario `notepad` tape « Hello, Mino! », Entrée, « Line 2 » dans le contrôle Edit du
+Bloc-notes : le texte est à sa place (la hampe du H, le « ! » douze caractères plus loin, le L de la seconde ligne),
+et la barre d'état dit « Line 2, column 7 ».
+
+Tests : hôte (`font` : glyphes absents marqués ou par défaut, A + B + C = l'avance, par caractère ou par glyphe,
+`head` et le fichier entier ; `gdi::text` : des indices dessinent ce que dessinent leurs caractères) ; `notepad` et
+`desktop-launch` (le gestionnaire des tâches passait par ces services) sur AMD et Intel.
+
+## Étape 27 : la boîte Enregistrer sous trouve ses dossiers (KeyNameInformation, ObjectBasicInformation, ProcessDeviceMap)
+
+Ctrl+S ouvre la boîte « Save As » de `comdlg32`, qui parcourt le shell (`shell32`, `browseui`). Elle s'affichait,
+mais vide (« Save in » sans dossier, la liste sans fichiers), et un nom tapé rendait « Path does not exist ». Trois
+services du noyau manquaient en chemin :
+
+| Service | Ce que fait Mino | Qui le demande |
+|---|---|---|
+| NtQueryKey(KeyNameInformation) | le chemin complet de la clé depuis `\REGISTRY`, avec la casse des clés (celui de la cible pour une clé ouverte par un lien) : `cm::Key::full_name`, `cm::info::name_information` ; NtQueryKey seul (à l'énumération, ReactOS refuse la classe) | `advapi32` (`hkcr.c`) : les clés de HKEY_CLASSES_ROOT, HKCU d'abord, HKLM sinon |
+| NtQueryObject(ObjectBasicInformation) | OBJECT_BASIC_INFORMATION (56 octets exactement) : attributs du handle et OBJ_PERMANENT, droits accordés, comptes de handles et de pointeurs, place du nom complet et du type, celle du descripteur de sécurité avec READ_CONTROL | `advapi32` (`hkcr.c`, GetKeySam) |
+| NtQueryInformationProcess(ProcessDeviceMap) | la carte des lecteurs DOS : un bit par lien « X: » de `\GLOBAL??`, le type de chaque lecteur d'après le périphérique cible (`io_manager::device::dos_drive_type`, comme ObpProcessDosDeviceSymbolicLink : disque fixe ou amovible, virtuel, CD-ROM, réseau) ; la taille de Query exactement (36) ; la forme EX demande les cartes par LUID (STATUS_INVALID_PARAMETER) | `kernel32` : GetLogicalDrives (rendait 0 : « My Computer » n'avait aucun lecteur, et `C:\` n'était pas un chemin), GetDriveTypeW |
+
+Écart : Mino calcule la carte à chaque demande, à partir des liens présents, au lieu de la tenir à jour à leur
+création ; le résultat est le même tant qu'il n'y a qu'une carte (celle de tous).
+
+Vu en chemin : la fin du processus du Bloc-notes, après la boîte, arrêtait le système (« buddy free list overflow »)
+: les listes libres de `mm::buddy` sont désormais chaînées, sans limite (commit `mm`, voir la passation).
+
+Ce qui manque encore pour enregistrer (journal du scénario, Ctrl+S puis « hello.txt » et Entrée) : une assertion
+d'ATL dans le shell (`atlwin.h:1118`, `::IsWindow(m_hWnd)` dans CWindow::SendMessage : une fenêtre ATL qui n'a pas
+été créée ; à identifier, peut-être la liste d'autocomplétion de `browseui`), les fenêtres message seul
+(HWND_MESSAGE : la fenêtre d'appartement de `combase`), NtUserSetParent, NtUserGetIconInfo, StretchDIBits d'une DIB à
+palette (les icônes du shell), NtUserGetClassName, NtUserGetSystemMenu, NtUserSetActiveWindow, NtUserSetThreadState,
+les barres de défilement des contrôles (SB_CTL). Le Bloc-notes se termine alors avec le code 3 (abort).
+
+Tests : hôte (`cm` : le chemin complet par ouverture sans casse, lien, nom relatif, énumération, création ;
+`cm::info` : l'encodage de KEY_NAME_INFORMATION) ; la sonde de `notepad` appelle GetLogicalDrives, GetDriveTypeW,
+NtQueryInformationProcess(ProcessDeviceMap), NtOpenKey puis NtQueryKey(KeyNameInformation) sur
+`\Registry\Machine\Software\Classes` (taille d'abord, puis le nom `\REGISTRY\MACHINE\SOFTWARE\Classes`) et
+NtQueryObject(ObjectBasicInformation) (une mauvaise taille refusée, les droits KEY_READ, un handle) ; une carte des
+lecteurs vide la fait échouer (mutation). `notepad` sur AMD et Intel, et toute la suite sur AMD (54 sur 55 ; `gui`
+échouait par l'ordre de peinture des sœurs, corrigé à l'étape 28).
+
+## Étape 28 : SetWindowLong du style (GWL_STYLE, GWL_EXSTYLE)
+
+La page Applications du gestionnaire des tâches se repeignait en gris. Son contrôle d'onglets (`SysTabControl32`,
+sœur de la page, sous elle dans l'ordre Z) ne traite pas WM_ERASEBKGND : DefWindowProc efface sa région à mettre à
+jour du pinceau de sa classe (COLOR_BTNFACE), et cette région couvre la page quand une autre page se cache. Les sœurs
+se repeignent de haut en bas de l'ordre Z (IntFindWindowToRepaint) : l'onglet passe après la page. Dans ReactOS, son
+DC est coupé par la page, parce que `comctl32` (TAB_Create) se donne `WS_CLIPSIBLINGS` par SetWindowLongW(GWL_STYLE)
+à sa création ; Mino refusait GWL_STYLE (`ERROR_CALL_NOT_IMPLEMENTED`), l'onglet restait sans le style et peignait
+sur la page.
+
+Un premier correctif avait inversé l'ordre de peinture des sœurs (du bas vers le haut, écart avec ReactOS) : la page
+passait, mais le premier WM_PAINT n'allait plus au popup qu'attend le scénario `gui`. L'ordre de ReactOS est rétabli,
+et la cause corrigée :
+
+- `win32k::window::set_style` (co_IntSetWindowLongPtr, GWL_STYLE et GWL_EXSTYLE) : WM_STYLECHANGING porte un
+  STYLESTRUCT (`abi::user::StyleStruct32`) dont la procédure peut changer le nouveau style ; puis le style change, et
+  WM_STYLECHANGED le dit. Rend l'ancien style.
+- `restyle` (GWL_STYLE) : une fenêtre de premier niveau garde `WS_CLIPSIBLINGS`, une fenêtre réduite `WS_MINIMIZE` ;
+  `WS_EX_WINDOWEDGE` suit le cadre (IntCheckFrameEdge, d'après la valeur de l'appelant) ; une fille qui cesse de
+  l'être perd son identifiant, une fenêtre qui devient fille sa barre de menus (`WNDS_HASMENU`), son `IDMenu` gardant
+  la valeur de la barre comme dans ReactOS, qui n'a qu'un champ pour les deux.
+- `restyle_ex` (GWL_EXSTYLE) : `WS_EX_WINDOWEDGE` d'après le style et la valeur de l'appelant. Pas encore :
+  `WS_EX_TOPMOST` ôté à la fenêtre du shell (SetShellWindow manque) ; les fenêtres en couches.
+- Rien à refaire pour les DC : un DC du cache tire du style ce qui le coupe à chaque GetDCEx
+  (`dce::effective_flags`), et Mino ne garde pas de DC propre (DceResetActiveDCEs de ReactOS, au changement de
+  `WS_VISIBLE`).
+
+GWLP_WNDPROC et GWLP_HWNDPARENT restent à faire (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois).
+
+Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZE` gardés, le bord de fenêtre, la
+fille qui cesse ou devient fille) ; `desktop-launch` sur AMD et Intel, qui échoue avec l'ordre de ReactOS sans
+GWL_STYLE (la page grise, ses quatre pixels) ; `gui` passe de nouveau sur AMD et Intel ; toute la suite sur AMD (55
+sur 55).

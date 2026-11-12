@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 127 | 296 |
-| win32k | 155 | 737 |
+| win32k | 167 | 737 |
 
 ## ntoskrnl
 
@@ -460,7 +460,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x108d` | `NtGdiExtCreateRegion` | 3 |  |
 | `0x108e` | `NtGdiExtEscape` | 8 |  |
 | `0x108f` | `NtGdiExtFloodFill` | 5 |  |
-| `0x1090` | `NtGdiExtGetObjectW` | 3 |  |
+| `0x1090` | `NtGdiExtGetObjectW` | 3 | ✅ |
 | `0x1091` | `NtGdiExtSelectClipRgn` | 3 | ✅ |
 | `0x1092` | `NtGdiExtTextOutW` | 9 | ✅ |
 | `0x1093` | `NtGdiFillPath` | 1 |  |
@@ -475,7 +475,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x109c` | `NtGdiGetBitmapBits` | 3 |  |
 | `0x109d` | `NtGdiGetBitmapDimension` | 2 |  |
 | `0x109e` | `NtGdiGetBoundsRect` | 3 |  |
-| `0x109f` | `NtGdiGetCharABCWidthsW` | 6 |  |
+| `0x109f` | `NtGdiGetCharABCWidthsW` | 6 | ✅ |
 | `0x10a0` | `NtGdiGetCharacterPlacementW` | 6 |  |
 | `0x10a1` | `NtGdiGetCharSet` | 1 |  |
 | `0x10a2` | `NtGdiGetCharWidthW` | 6 |  |
@@ -492,9 +492,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10ad` | `NtGdiGetDIBitsInternal` | 9 |  |
 | `0x10ae` | `NtGdiGetETM` | 2 |  |
 | `0x10af` | `NtGdiGetEudcTimeStampEx` | 3 |  |
-| `0x10b0` | `NtGdiGetFontData` | 5 |  |
+| `0x10b0` | `NtGdiGetFontData` | 5 | ✅ |
 | `0x10b1` | `NtGdiGetFontResourceInfoInternalW` | 7 |  |
-| `0x10b2` | `NtGdiGetGlyphIndicesW` | 5 |  |
+| `0x10b2` | `NtGdiGetGlyphIndicesW` | 5 | ✅ |
 | `0x10b3` | `NtGdiGetGlyphIndicesWInternal` | 6 |  |
 | `0x10b4` | `NtGdiGetGlyphOutline` | 8 |  |
 | `0x10b5` | `NtGdiGetKerningPairs` | 3 |  |
@@ -651,9 +651,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x114c` | `NtUserCloseWindowStation` | 1 | ✅ |
 | `0x114d` | `NtUserConsoleControl` | 3 | ✅ |
 | `0x114e` | `NtUserConvertMemHandle` | 2 |  |
-| `0x114f` | `NtUserCopyAcceleratorTable` | 3 |  |
+| `0x114f` | `NtUserCopyAcceleratorTable` | 3 | ✅ |
 | `0x1150` | `NtUserCountClipboardFormats` | 0 |  |
-| `0x1151` | `NtUserCreateAcceleratorTable` | 2 |  |
+| `0x1151` | `NtUserCreateAcceleratorTable` | 2 | ✅ |
 | `0x1152` | `NtUserCreateCaret` | 4 | ✅ |
 | `0x1153` | `NtUserCreateDesktop` | 5 | ✅ |
 | `0x1154` | `NtUserCreateInputContext` | 1 |  |
@@ -666,7 +666,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x115b` | `NtUserDeferWindowPos` | 8 |  |
 | `0x115c` | `NtUserDefSetText` | 2 | ✅ |
 | `0x115d` | `NtUserDeleteMenu` | 3 | ✅ |
-| `0x115e` | `NtUserDestroyAcceleratorTable` | 1 |  |
+| `0x115e` | `NtUserDestroyAcceleratorTable` | 1 | ✅ |
 | `0x115f` | `NtUserDestroyCursor` | 2 | ✅ |
 | `0x1160` | `NtUserDestroyInputContext` | 1 |  |
 | `0x1161` | `NtUserDestroyMenu` | 1 | ✅ |
@@ -755,7 +755,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11b4` | `NtUserGetUpdateRect` | 3 | ✅ |
 | `0x11b5` | `NtUserGetUpdateRgn` | 3 | ✅ |
 | `0x11b6` | `NtUserGetWindowDC` | 1 | ✅ |
-| `0x11b7` | `NtUserGetWindowPlacement` | 2 |  |
+| `0x11b7` | `NtUserGetWindowPlacement` | 2 | ✅ |
 | `0x11b8` | `NtUserGetWOWClass` | 2 |  |
 | `0x11b9` | `NtUserHardErrorControl` | 3 |  |
 | `0x11ba` | `NtUserHideCaret` | 1 | ✅ |
@@ -797,7 +797,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11de` | `NtUserQueryInformationThread` | 4 |  |
 | `0x11df` | `NtUserQueryInputContext` | 2 |  |
 | `0x11e0` | `NtUserQuerySendMessage` | 1 |  |
-| `0x11e1` | `NtUserQueryWindow` | 2 |  |
+| `0x11e1` | `NtUserQueryWindow` | 2 | ✅ |
 | `0x11e2` | `NtUserRealChildWindowFromPoint` | 3 |  |
 | `0x11e3` | `NtUserRealInternalGetMessage` | 6 |  |
 | `0x11e4` | `NtUserRealWaitMessageEx` | 2 |  |
@@ -807,7 +807,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e8` | `NtUserRegisterHotKey` | 4 |  |
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |
 | `0x11ea` | `NtUserRegisterTasklist` | 1 |  |
-| `0x11eb` | `NtUserRegisterWindowMessage` | 1 |  |
+| `0x11eb` | `NtUserRegisterWindowMessage` | 1 | ✅ |
 | `0x11ec` | `NtUserRemoveMenu` | 3 | ✅ |
 | `0x11ed` | `NtUserRemoveProp` | 2 |  |
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
@@ -857,7 +857,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x121a` | `NtUserSetTimer` | 4 | ✅ |
 | `0x121b` | `NtUserSetWindowFNID` | 2 | ✅ |
 | `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
-| `0x121d` | `NtUserSetWindowPlacement` | 2 |  |
+| `0x121d` | `NtUserSetWindowPlacement` | 2 | ✅ |
 | `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
 | `0x121f` | `NtUserSetWindowRgn` | 3 |  |
 | `0x1220` | `NtUserSetWindowsHookAW` | 3 |  |
@@ -880,7 +880,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1231` | `NtUserTrackPopupMenuEx` | 6 | ✅ |
 | `0x1232` | `NtUserCalcMenuBar` | 5 |  |
 | `0x1233` | `NtUserPaintMenuBar` | 6 |  |
-| `0x1234` | `NtUserTranslateAccelerator` | 3 |  |
+| `0x1234` | `NtUserTranslateAccelerator` | 3 | ✅ |
 | `0x1235` | `NtUserTranslateMessage` | 2 | ✅ |
 | `0x1236` | `NtUserUnhookWindowsHookEx` | 1 |  |
 | `0x1237` | `NtUserUnhookWinEvent` | 1 |  |

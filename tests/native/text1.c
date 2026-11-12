@@ -114,6 +114,23 @@ typedef struct {
     BYTE tmCharSet;
 } TEXTMETRICW;
 
+typedef struct {
+    LONG lfHeight;
+    LONG lfWidth;
+    LONG lfEscapement;
+    LONG lfOrientation;
+    LONG lfWeight;
+    BYTE lfItalic;
+    BYTE lfUnderline;
+    BYTE lfStrikeOut;
+    BYTE lfCharSet;
+    BYTE lfOutPrecision;
+    BYTE lfClipPrecision;
+    BYTE lfQuality;
+    BYTE lfPitchAndFamily;
+    WCHAR lfFaceName[32];
+} LOGFONTW;
+
 #define WS_OVERLAPPED 0x00000000
 #define WS_CAPTION 0x00C00000
 #define WS_SYSMENU 0x00080000
@@ -180,6 +197,7 @@ __declspec(dllimport) BOOL __stdcall ExtTextOutW(HDC dc, int x, int y, UINT opti
 __declspec(dllimport) BOOL __stdcall GdiFlush(void);
 __declspec(dllimport) int __stdcall GetClipBox(HDC dc, RECT *rect);
 __declspec(dllimport) DWORD __stdcall GetObjectType(HGDIOBJ object);
+__declspec(dllimport) int __stdcall GetObjectW(HGDIOBJ object, int size, void *buffer);
 __declspec(dllimport) HGDIOBJ __stdcall GetStockObject(int index);
 __declspec(dllimport) BOOL __stdcall GetTextExtentExPointW(HDC dc, const WCHAR *string, int count, int max_extent,
                                                            int *fit, int *dx, SIZE *size);
@@ -331,6 +349,33 @@ static void check_stock_fonts(void)
              gui ? "a font" : "none", GetObjectType(gui), system ? "a font" : "none", GetObjectType(system));
 }
 
+/* GetObjectW of a font: its LOGFONTW, as it was created (user32 makes a font
+   from it to draw a button's text). `face` gets its name in ASCII. */
+static int font_object(HGDIOBJ font, LOGFONTW *logfont, char *face, int room)
+{
+    int got, i;
+
+    memset(logfont, 0, sizeof *logfont);
+    got = GetObjectW(font, sizeof *logfont, logfont);
+    for (i = 0; i < room - 1 && logfont->lfFaceName[i]; i++)
+        face[i] = (char)logfont->lfFaceName[i];
+    face[i] = 0;
+    return got;
+}
+
+static void check_font_objects(HFONT bold)
+{
+    LOGFONTW logfont;
+    char face[32];
+    int got;
+
+    got = font_object(bold, &logfont, face, sizeof face);
+    DbgPrint("[text] GetObjectW(the bold font): %d, height %ld, weight %ld, %s\n", got, logfont.lfHeight,
+             logfont.lfWeight, face);
+    got = font_object(GetStockObject(DEFAULT_GUI_FONT), &logfont, face, sizeof face);
+    DbgPrint("[text] GetObjectW(DEFAULT_GUI_FONT): %d, height %ld, %s\n", got, logfont.lfHeight, face);
+}
+
 /* The metrics and extents of the default GUI font (MS Shell Dlg, -11: Tahoma)
    and of a bold font. */
 static void check_metrics(HWND window)
@@ -357,6 +402,7 @@ static void check_metrics(HWND window)
     GetTextExtentPoint32W(dc, L"Mino", 4, &size);
     bold = bold_font();
     DbgPrint("[text] CreateFontW: %s (type %lu)\n", bold ? "a font" : "none", GetObjectType(bold));
+    check_font_objects(bold);
     SelectObject(dc, bold);
     memset(&bold_size, 0, sizeof bold_size);
     GetTextExtentPoint32W(dc, L"Mino", 4, &bold_size);

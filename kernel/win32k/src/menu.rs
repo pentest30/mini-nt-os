@@ -881,6 +881,38 @@ pub fn create(popup: bool) -> Result<u32, u32> {
     result
 }
 
+/// MENU_FindItem par identifiant, pour TranslateAccelerator : le menu sous
+/// `handle` (lui ou l'un de ses sous-menus) qui porte l'item `id`, et l'état
+/// de l'item (`fState`).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn find_command(handle: u32, id: u32) -> Option<(u32, u32)> {
+    let menus = MENUS.lock();
+    let (menu, at) = menus.find(handle, id, false)?;
+    let state = menus.state(menu)?.items.get(at)?.f_state;
+    Some((menu, state))
+}
+
+/// MENU_FindSubMenu : la position, dans `handle` ou l'un de ses sous-menus,
+/// de l'item qui porte le sous-menu `sub` ; NO_SELECTED_ITEM sans lui.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn find_submenu(handle: u32, sub: u32) -> u32 {
+    fn search(menus: &Menus, handle: u32, sub: u32, depth: u32) -> Option<u32> {
+        let items = &menus.state(handle)?.items;
+        if let Some(at) = items.iter().position(|item| item.submenu != 0 && item.submenu == sub) {
+            return Some(at as u32);
+        }
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+        items.iter().filter(|item| item.submenu != 0).find_map(|item| search(menus, item.submenu, sub, depth + 1))
+    }
+    search(&MENUS.lock(), handle, sub, 0).unwrap_or(NO_SELECTED_ITEM)
+}
+
 /// Le menu `handle` existe.
 ///
 /// # IRQL

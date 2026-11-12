@@ -1,5 +1,153 @@
 # Notes de passation
 
+- **SetWindowLong du style ; l'ordre de peinture de ReactOS rétabli** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 28 ; choix du mainteneur : revenir à l'ordre de ReactOS
+  et trouver la vraie cause de la page grise du gestionnaire des tâches). La cause : NtUserSetWindowLong refusait
+  GWL_STYLE, et le contrôle d'onglets de `comctl32` se donne `WS_CLIPSIBLINGS` ainsi à sa création (TAB_Create) ;
+  sans lui, son effacement (COLOR_BTNFACE) passait sur la page peinte avant lui. `win32k::window::set_style`
+  (co_IntSetWindowLongPtr : WM_STYLECHANGING, `restyle`, `restyle_ex`, WM_STYLECHANGED ; `abi::user::StyleStruct32`)
+  fait GWL_STYLE et GWL_EXSTYLE ; `paint::find_window_to_repaint` va de nouveau de haut en bas de l'ordre Z, comme
+  ReactOS (l'écart retiré). Tests : hôte (`window`, quatre tests) ; `desktop-launch` échoue avec l'ordre de ReactOS
+  sans GWL_STYLE (mutation : la page grise) et passe avec, sur AMD et Intel ; `gui` passe de nouveau sur AMD et
+  Intel ; toute la suite sur AMD : 55 sur 55 (les rostests sautés, sans leur arbre) ; `cargo xtask lint` propre, 1087
+  tests hôte. Pas encore : GWLP_WNDPROC,
+  GWLP_HWNDPARENT, WS_EX_TOPMOST ôté à la fenêtre du shell, les fenêtres en couches.
+
+- **La boîte Enregistrer sous du Bloc-notes** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 27) : NtQueryKey(KeyNameInformation) (`cm::Key::full_name`), NtQueryObject(ObjectBasicInformation),
+  NtQueryInformationProcess(ProcessDeviceMap) (`io_manager::device::dos_drive_type`) : HKEY_CLASSES_ROOT marche,
+  GetLogicalDrives voit `C:`, le shell parcourt `C:\`. Tests : hôte (`cm`) ; la sonde de `notepad` (carte des
+  lecteurs, nom d'une clé, droits d'un handle ; mutation de la carte) sur AMD et Intel ; toute la suite sur AMD : 54
+  sur 55 (`gui` échouait par l'ordre de peinture des sœurs : corrigé, entrée ci-dessus). **Suite** pour enregistrer : l'assertion
+  d'ATL du shell (`::IsWindow(m_hWnd)`, une fenêtre ATL non créée), les fenêtres message seul, NtUserSetParent,
+  NtUserGetIconInfo, les DIB à palette de StretchDIBits, NtUserGetClassName, SB_CTL (liste dans l'étape 27).
+
+- **Les listes libres du buddy, sans limite** (`claude/new-session-696xfc`, vu en enregistrant dans le Bloc-notes) :
+  les listes de `mm::buddy` étaient des tableaux fixes de 512 blocs par ordre ; un processus qui laisse plus de 512
+  pages libres dont le buddy est encore pris (ses tables de pages, rendues une à une à sa fin) arrêtait le système
+  (`buddy free list overflow`, STOP 0x1E, vu à la fin du Bloc-notes après la boîte Enregistrer sous). Chaque liste
+  est maintenant chaînée dans les deux sens à travers une table de `FreeLink` (une par page, 12 octets : prise dans
+  la carte mémoire avec la base PFN, `BuddyAllocator::set_links`) : prendre, rendre et trouver un buddy libre sont en
+  O(1), sans capacité. Tests : hôte (`buddy` : 4 096 pages isolées puis refusionnées en deux blocs de 16 Mio, un
+  buddy retiré du milieu de sa liste, de la mémoire au-delà des liens refusée).
+
+- **Revue de la PR 125 : NtUserCreateAcceleratorTable** (`claude/new-session-696xfc`) : le compte de l'appelant
+  allouait `count × 6` octets avant toute validation (0xFFFFFFFF : 24 Gio, l'échec de l'allocation arrêtait le
+  système depuis un appel système). Le compte est borné à 65 536 entrées (au-delà : NULL et
+  ERROR_NOT_ENOUGH_MEMORY), la plage sondée avant d'allouer, les allocations faillibles (`try_reserve_exact`). Test :
+  la sonde de `notepad` appelle CreateAcceleratorTableW avec 0xFFFFFFFF (STOP sans le correctif) et fait, copie,
+  détruit une table d'une entrée ; `notepad` sur AMD et Intel. À regarder de même : NtGdiGetCharABCWidthsW sans
+  `pwch` alloue jusqu'à ~90 Mio pour un compte borné seulement par MAX_TEXT_BUFFER.
+
+- **Le Bloc-notes s'affiche** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 24 ; le critère « Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre » commence) :
+  scénario `notepad` (`tests/native/notepad1.c` à la place de `winlogon.exe` lance le vrai `notepad.exe`, que
+  `xtask` met sur le disque avec ses imports). Le Bloc-notes montre sa fenêtre par SetWindowPlacement, avec la place
+  de GetWindowPlacement : `win32k::winpos::placement` et `set_placement` (IntGetWindowPlacement,
+  make_rect_onscreen, IntSetWindowPlacement), NtUserGetWindowPlacement, NtUserSetWindowPlacement,
+  `abi::user::WindowPlacement32`. La fenêtre s'affiche entière : titre, barre de menus, contrôle Edit avec ses
+  barres de défilement, barre d'état de `comctl32`. Pas encore : `InternalPos` (rien à garder sans réduire ni
+  agrandir), WPF_ASYNCWINDOWPLACEMENT (fait tout de suite). Tests : hôte (`winpos`) ; `notepad` sur AMD et Intel,
+  qu'une mutation (SetWindowPlacement sans ShowWindow) fait échouer. Puis (étape 25) : NtUserRegisterWindowMessage
+  (la table des atomes de USER), NtUserQueryWindow (`win32k::window::query` : GetWindowThreadProcessId, le meneur
+  d'une console de `csrss`, fenêtres active et focalisée, premier plan), les accélérateurs (`win32k::accel`,
+  `sys::accel` : Create, Copy, Destroy, TranslateAccelerator ; l'item cherché par identifiant comme Wine et la
+  documentation, pas par position comme ReactOS) ; Ctrl+G tapé par QEMU ouvre « Goto line », Échap la ferme. Le
+  « SendMessageW Error » venait du Bloc-notes (WM_SETFONT à son Edit pas encore créé) : rien à corriger. Tests : hôte
+  (`accel`) ; `notepad` (mutation : sans WM_COMMAND), `cmd`, `desktop-launch`, `console` sur AMD et Intel. Puis
+  (étape 26) : le texte tapé dans le contrôle Edit passe par Uniscribe (`usp10`) : GetFontData (`glyph::Font::table`,
+  `font::font_data`), GetGlyphIndicesW, GetCharABCWidths(I) (`glyph::Font::abc`), ExtTextOut ETO_GLYPH_INDEX
+  (`font::glyph_run`) ; sans eux, les caractères d'une ligne se superposaient. Le scénario `notepad` tape deux lignes
+  et vérifie leurs pixels et « Line 2, column 7 » dans la barre d'état. **Suite** : NtUserSetActiveWindow et
+  NtUserSetThreadState (la fin d'une boîte), NtUserGetAncestor, NtUserIsClipboardFormatAvailable,
+  GetOutlineTextMetricsW, puis enregistrer (Ctrl+S : la boîte Enregistrer sous de `comdlg32`) et rouvrir le fichier.
+
+- **Le gestionnaire des tâches : page grise, onglets, relance** (`claude/new-session-696xfc`, worktree
+  `.claude/worktrees/pr122` ; demandé le 2026-11-11, testé sous VirtualBox). Trois défauts :
+  1. La page Applications repeinte en gris : son contrôle d'onglets (sœur d'en dessous, sans WS_CLIPSIBLINGS,
+     effacé de COLOR_BTNFACE par DefWindowProc) peignait après elle. `paint::find_window_to_repaint` allait alors
+     des sœurs du bas de l'ordre Z vers le haut (écart avec ReactOS ; ReactOS 0.4.16, vérifié dans la VM `reactos`
+     de VirtualBox, affiche bien la page, avec son thème). **Remplacé** : l'ordre de ReactOS est rétabli et la cause
+     corrigée (GWL_STYLE, première entrée).
+  2. Plus aucune application après un passage par un autre onglet : la même cause.
+  3. Le gestionnaire ne se rouvrait plus : NtUserGetWindowPlacement manquait, il gardait pour sa place (WM_DESTROY,
+     puis MoveWindow au lancement suivant) des octets de sa pile. Le service a été écrit deux fois, ici et pour le
+     Bloc-notes (entrée ci-dessus) ; à la fusion, **la version du Bloc-notes est gardée** (`winpos::placement`,
+     `sys::window::nt_user_get_window_placement` : longueur mise à 44 quelle qu'elle soit, comme ReactOS ;
+     `abi::user::WindowPlacement32`), la nôtre retirée.
+  Scénario `desktop-launch` étendu : le gestionnaire fermé par sa croix, relancé du menu Démarrer, Processus puis
+  Applications ; quatre pixels (la première ligne choisie, le N souligné de New Task..., le relief sous le S de
+  Switch To et le E de End Task). Passait sur AMD et Intel avec notre GetWindowPlacement ; les deux mutations
+  (l'ordre de haut en bas, le service retiré) le faisaient échouer. `cargo xtask lint` propre, 1064 tests hôte.
+  Scénarios GUI avec le nouvel ordre de peinture (avant la fusion) : `text` et `bitmap` passent. Après la fusion :
+  lint propre, 1074 tests hôte ; `desktop-launch` (avec le GetWindowPlacement du Bloc-notes) et `notepad` (avec les
+  accélérateurs, `b8f8642`) passent sur AMD et Intel. **Course de la sonde de `notepad`, corrigée** : un run sur
+  AMD et Intel avait échoué (« Untitled - Notepad » jamais vu). `tests/native/notepad1.c` ne relisait les titres que
+  quand la liste des fenêtres changeait : s'il voyait la fenêtre avant que le Bloc-notes y mette « Untitled -
+  Notepad » (elle s'appelle « Notepad » depuis sa création), il ne la reconnaissait plus, et les touches ne venaient
+  pas. Il relit maintenant les titres à chaque passage et reliste quand l'un change. Reproduit en sondant toutes
+  les 1 ms (l'ancienne sonde échoue ainsi à coup sûr ; la nouvelle voit « Notepad » puis « Untitled - Notepad » et
+  va jusqu'au « Goto line » fermé, seul « probe done » manque : 8000 passages d'un tick dépassent 120 s) ; à
+  250 ms, `notepad` passe sur AMD et Intel. (L'ordre de peinture du bas vers le haut et ses vérifications sont
+  sans objet : l'ordre de ReactOS est rétabli, première entrée.) Puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
+  target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format VHD`, l'attacher à la VM `Mino` à la place de
+  `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
+  **Vu, pas fait** : LineTo dessine toujours du stylo noir par défaut. `gdi32` choisit les stylos dans DC_ATTR sans
+  appeler le noyau (`hpen`, DC_PEN_DIRTY) et SetDCPenColor y écrit `crPenClr` (le DC_PEN de stock) ; DrawEdge de
+  `user32` (BF_DIAGONAL) trace ainsi en noir les coins des onglets. NtUserFindWindowEx manque (le gestionnaire
+  déjà ouvert n'est pas ramené devant).
+
+- **GetObject, et la position courante de LineTo** (`claude/new-session-696xfc`, demandé pour le texte des boutons
+  du gestionnaire des tâches) : NtGdiExtGetObjectW (`win32k::gdi::object`, GreGetObject) : une police rend son
+  LOGFONTW puis le reste d'un ENUMLOGFONTEXDVW sans axes, à zéro (356 octets au plus ; 92 sans tampon), un bitmap
+  son BITMAP (lignes alignées sur 16 bits, sur 32 pour une DIB section, `bmBits` d'une DIB section seule) ou le
+  DIBSECTION d'une DIB section qui a la place ; une DIB section est le bitmap dont le processus voit les pixels
+  (`Surface::user_bits` : ceux de CreateBitmap sont aussi dans une section, que le noyau seul voit). `abi::gdi` :
+  BITMAP, DIBSECTION. Pas encore : pinceaux, stylos, palettes (0, journalisé une fois). LineTo part de la position
+  que MoveToEx de `gdi32` écrit dans DC_ATTR (`ptlCurrent`, sans appel au noyau) et l'y remet, ses bits de
+  changement retirés (IntGdiLineTo, IntGdiMoveToEx) : le soulignement du préfixe d'un bouton désactivé était une
+  diagonale depuis la dernière position du noyau. Tests : hôte (`object`) ; `text` (GetObjectW d'une police créée
+  et de DEFAULT_GUI_FONT), `bitmap` (DIBSECTION, BITMAP, un bitmap monochrome), `dialog` (un bouton désactivé
+  « &Switch To » : trois pixels de son soulignement et de son relief, qu'une mutation de LineTo fait échouer).
+  **Reste, vu au gestionnaire des tâches** : la page Applications est repeinte en gris par le contrôle d'onglets,
+  son frère d'en dessous sans WS_CLIPSIBLINGS, peint après elle (l'ordre : la fenêtre, la page, la liste, les
+  boutons, puis l'onglet, puis la barre d'état ; DefWindowProc efface l'onglet de COLOR_BTNFACE, sa classe le
+  demande) ; ReactOS l'affiche bien avec le même comctl32 : à comprendre (l'ordre des WM_PAINT, les régions
+  invalidées à l'affichage). La liste et les boutons se voient un instant avant.
+
+- **La barre de menus suivie** (`claude/new-session-696xfc`, repartie de `main` après la PR 122 ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 23) : HTMENU dans `defwnd::nc_hit_test` (paramètre
+  `has_menu`, `window_hit_test` pour une fenêtre) ; WM_NCLBUTTONDOWN sur HTMENU donne SC_MOUSEMENU, et DefWindowProc
+  suit la barre (`menutrack::track_mouse_menu_bar` : TPM_BUTTONDOWN, `TimeToHide` pour le second clic) ;
+  DefWindowProc de WM_SYSKEYDOWN, WM_KEYUP, WM_SYSKEYUP, WM_SYSCHAR (`defwnd::key_menu`, l'état dans
+  `queue.menu_keys`) donne SC_KEYMENU (`menutrack::track_kbd_menu_bar` : premier item, ou l'item de la lettre et un
+  VK_RETURN posté, TF_ENDMENU sans item) ; ←/→ passent d'un item de la barre à l'autre ; WM_CANCELMODE finit le
+  suivi (`end_menu_of`) ; GetMenuBarInfo rend fBarFocused, fFocused et `hwndMenu`. Tests : hôte (`defwnd`) ;
+  scénario `menu` (clics postés, touches de QEMU, vrai clic sur la barre, capture) sur AMD et Intel ; quatorze
+  mutations le font toutes échouer (HTMENU, SC_MOUSEMENU, Alt ou F10 relâché, WM_SYSCHAR, `TimeToHide`, ← et → sur
+  la barre, le VK_RETURN d'une lettre, TF_ENDMENU, WM_CANCELMODE, fBarFocused, le premier item sans lettre,
+  `menu_owner` pour la barre) ; 21 autres scénarios GUI et `cmd` passent sur AMD et Intel. WM_CANCELMODE n'oublie
+  qu'Alt (QF_FMENUSTATUS), comme ReactOS : F10 enfoncé reste retenu (la revue de la PR 125 proposait de tout
+  oublier ; on garde la spécification).
+  Pas encore : le menu de la fenêtre (HTSYSMENU, Alt+Espace, WM_NEXTMENU : la sélection fait le tour aux bouts de
+  la barre), MENU_SuspendPopup, Alt+F4 et Alt+Tab. Suite proposée : le menu de la fenêtre (GetSystemMenu), ou
+  réduire et agrandir, ou un scénario du Bloc-notes.
+
+
+- **LineTo et des coordonnées absurdes** (`claude/new-session-696xfc`, vu sous VirtualBox : le gestionnaire des
+  tâches figé, plus de curseur) : `Bitmap::draw_line` parcourait chaque point du trait, sous le verrou de la surface
+  (DISPATCH_LEVEL) ; un trait de (0x56FBAE85, 0x28F81DE0) gelait tout le système. Ces coordonnées viennent du
+  soulignement du préfixe d'un bouton (« &Switch To ») dessiné par `user32` dans une police créée d'un LOGFONT jamais
+  rempli : **NtGdiExtGetObjectW n'est pas implémenté** (GetObject d'une police rend 0, le texte des boutons du
+  gestionnaire des tâches reste blanc) — la suite. D'un trait plus long que 16 384 pas, seuls sont parcourus ceux
+  qui peuvent atteindre sa région (`dib::cut_steps`, Liang–Barsky en rationnels exacts), depuis l'état que la marche
+  entière y a (`LineWalk::at`, forme close de la variante de Bresenham : l'axe court avance de k·court/long arrondi) ;
+  la revue de la PR avait vu que repartir des bouts arrondis du trait coupé changeait ses pixels et la phase de ses
+  pointillés ; LineTo sature ses coordonnées. Trouvé par bissection (`desktop-launch`, un pixel de la liste : 9a03386, la barre de menus,
+  rend le blocage visible avant la capture) puis une trace temporaire des appels du thread de l'interface. Tests :
+  hôte (`dib`) ; `desktop-launch` (onglets et barre d'état dessinés, la boucle de messages vivante 110 s), et les
+  scénarios GUI sur AMD et Intel.
+
 - **Revue de la PR #122** (`claude/new-session-696xfc`) : une branche de menus reste sous MAX_DEPTH quel que soit
   l'ordre où on l'accroche (les menus au-dessus de celui qui reçoit le sous-menu comptent, `Menus::depth_above`,
   niveau par niveau ; sinon des arbres de 30 accrochés l'un sous l'autre grandissaient sans fin, et les parcours
@@ -1375,4 +1523,8 @@ cargo xtask lint && cargo xtask test                        # avant chaque commi
   échoue, rétablir. Un script le fait pour une liste de mutations JSON `[nom, [[chemin, ancien, nouveau], ...]]`
   (`target/work/mutate.py`, hors dépôt : à réécrire au besoin, une vingtaine de lignes autour de
   `cargo xtask test --boot --scenario NOM --cpu CPU`).
+  Le fichier rétabli doit avoir une date plus récente que la compilation mutée (`touch`, ou une copie sans
+  `cp -p`) : sinon cargo le croit à jour et les runs suivants gardent le binaire muté (vu à l'étape 26 du M6 :
+  des largeurs ABC nulles « survivaient » à la restauration, et le scénario `notepad` échouait sans raison
+  apparente).
 - Un symptôme contourné est documenté ; un bogue corrigé vient avec le test qui l'aurait détecté.

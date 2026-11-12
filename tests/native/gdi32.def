@@ -6,6 +6,7 @@ LIBRARY gdi32.dll
 EXPORTS
 BitBlt@36
 CombineRgn@16
+CreateBitmap@20
 CreateCompatibleDC@4
 CreateDIBSection@24
 CreateFontW@56
@@ -19,6 +20,7 @@ GdiFlush@0
 GetClipBox@8
 GetDeviceCaps@8
 GetObjectType@4
+GetObjectW@12
 GetPixel@12
 GetRgnBox@8
 GetStockObject@4
