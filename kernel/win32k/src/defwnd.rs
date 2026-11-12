@@ -48,6 +48,7 @@
 use alloc::collections::BTreeSet;
 use alloc::sync::Arc;
 use core::mem::size_of;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::NtStatus;
 use abi::user::vk::{VK_ESCAPE, VK_F10, VK_LMENU, VK_MENU, VK_RMENU, VK_TAB};
@@ -66,7 +67,9 @@ use abi::user::{
     MA_ACTIVATE, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET,
     WM_SYSCOMMAND, WS_MINIMIZEBOX, WS_SYSMENU,
 };
-use abi::user::{KF_ALTDOWN, KF_REPEAT, SC_KEYMENU, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP};
+use abi::user::{
+    KF_ALTDOWN, KF_REPEAT, SC_KEYMENU, SC_MAXIMIZE, SC_RESTORE, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+};
 use hal::sync::KSpinLock;
 use ke::usermem::{copy_from_user, copy_to_user};
 
@@ -251,6 +254,18 @@ pub fn min_max_info(
     }
 }
 
+/// Où s'agrandit une fenêtre de style `style` sur le moniteur de rectangle
+/// `monitor` : sa zone de travail `work`, ou tout le moniteur pour une
+/// fenêtre sans bouton d'agrandissement, ou contextuelle (ou fille) sans
+/// titre.
+pub fn maximize_area(style: u32, monitor: Rect, work: Rect) -> Rect {
+    if style & WS_MAXIMIZEBOX != 0 && (style & WS_CAPTION == WS_CAPTION || style & (WS_CHILD | WS_POPUP) == 0) {
+        work
+    } else {
+        monitor
+    }
+}
+
 /// co_WinPosGetMinMaxInfo, après WM_GETMINMAXINFO : ce que la procédure a
 /// laissé à sa valeur par défaut (`defaults`) s'adapte à la zone de travail
 /// `work` du moniteur de rectangle `monitor` (à son rectangle pour une
@@ -263,12 +278,7 @@ pub fn adapt_to_monitor(
     monitor: Rect,
     work: Rect,
 ) -> bool {
-    let area =
-        if style & WS_MAXIMIZEBOX != 0 && (style & WS_CAPTION == WS_CAPTION || style & (WS_CHILD | WS_POPUP) == 0) {
-            work
-        } else {
-            monitor
-        };
+    let area = maximize_area(style, monitor, work);
     // The borders around the parent's client area: -ptMaxPosition by default.
     let (xinc, yinc) = (-defaults.max_position[0], -defaults.max_position[1]);
     let screen = (monitor.right - monitor.left, monitor.bottom - monitor.top);
@@ -359,7 +369,11 @@ fn sizing_border(along: i32, from: i32, to: i32, size: i32, (low, middle, high):
 /// HAS_MENU, une fenêtre qui n'est pas fille et a un menu) ; contre la zone
 /// cliente, ses barres de défilement (HTVSCROLL, HTHSCROLL, et HTSIZE dans le
 /// coin entre les deux) ; HTNOWHERE ailleurs (pas encore de menu système :
-/// pas de HTSYSMENU). Une fenêtre réduite est toute en titre.
+/// pas de HTSYSMENU). Une fenêtre réduite est toute en titre, sauf les
+/// boutons de sa barre : GetNCHitEx de ReactOS rend HTCAPTION partout, mais
+/// sa version d'avant (DefWndNCHitTest, gardée sous `#if 0`) et XP donnent
+/// les boutons ; sans shell, celui qui rétablit est le chemin de la fenêtre
+/// réduite à la souris.
 pub fn nc_hit_test(
     style: u32,
     ex_style: u32,
@@ -373,13 +387,19 @@ pub fn nc_hit_test(
     if !inside(&window) {
         return HTNOWHERE;
     }
+    let deflate = |r: Rect, dx: i32, dy: i32| Rect::new(r.left + dx, r.top + dy, r.right - dx, r.bottom - dy);
     if style & WS_MINIMIZE != 0 {
-        return HTCAPTION;
+        // Its edges are its caption; in it, its buttons.
+        let (cx, cy) = window_borders(style, ex_style, m);
+        let rect = deflate(window, cx, cy);
+        if !inside(&rect) || style & WS_CAPTION != WS_CAPTION {
+            return HTCAPTION;
+        }
+        return caption_part(style, ex_style, rect.right, x, m);
     }
     if inside(&client) {
         return HTCLIENT;
     }
-    let deflate = |r: Rect, dx: i32, dy: i32| Rect::new(r.left + dx, r.top + dy, r.right - dx, r.bottom - dy);
     let mut rect = window;
     if has_thick_frame(style) {
         rect = deflate(rect, m(sm::CXFRAME), m(sm::CYFRAME));
@@ -409,23 +429,7 @@ pub fn nc_hit_test(
         let tool = ex_style & WS_EX_TOOLWINDOW != 0;
         rect.top += if tool { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) } - 1;
         if !inside(&rect) {
-            if style & WS_SYSMENU != 0 {
-                rect.right -= m(sm::CYCAPTION);
-                if x >= rect.right {
-                    return HTCLOSE;
-                }
-                if style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX) != 0 && !tool {
-                    rect.right -= m(sm::CXSIZE);
-                    if x >= rect.right {
-                        return HTMAXBUTTON;
-                    }
-                    rect.right -= m(sm::CXSIZE);
-                    if x >= rect.right {
-                        return HTMINBUTTON;
-                    }
-                }
-            }
-            return HTCAPTION;
+            return caption_part(style, ex_style, rect.right, x, m);
         }
     }
     if has_menu && y < client.top && x >= client.left && x < client.right {
@@ -454,6 +458,30 @@ pub fn nc_hit_test(
         }
     }
     HTNOWHERE
+}
+
+/// Sur la barre de titre d'une fenêtre de style `style`, dont le côté droit
+/// est en `right`, le bouton sous `x` (fermer, agrandir, réduire, de droite
+/// à gauche, pour une fenêtre à menu système), sinon HTCAPTION.
+fn caption_part(style: u32, ex_style: u32, right: i32, x: i32, m: &impl Fn(usize) -> i32) -> u32 {
+    if style & WS_SYSMENU == 0 {
+        return HTCAPTION;
+    }
+    let mut right = right - m(sm::CYCAPTION);
+    if x >= right {
+        return HTCLOSE;
+    }
+    if style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX) != 0 && ex_style & WS_EX_TOOLWINDOW == 0 {
+        right -= m(sm::CXSIZE);
+        if x >= right {
+            return HTMAXBUTTON;
+        }
+        right -= m(sm::CXSIZE);
+        if x >= right {
+            return HTMINBUTTON;
+        }
+    }
+    HTCAPTION
 }
 
 /// [`nc_hit_test`] pour `window`, d'après son état : son style, ses
@@ -487,8 +515,40 @@ fn mouse_activate(window: &Arc<Window>, wparam: u32, lparam: u32) -> u32 {
     }
 }
 
-/// WM_NCLBUTTONDOWN.
+/// WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK.
 const NC_LBUTTONDOWN: u32 = WM_LBUTTONDOWN - WM_NC_MOUSE_OFFSET;
+const NC_LBUTTONDBLCLK: u32 = abi::user::WM_LBUTTONDBLCLK - WM_NC_MOUSE_OFFSET;
+
+/// Ce que fait un double-clic sur le cadre (NC_HandleNCLButtonDblClk).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoubleClick {
+    /// WM_SYSCOMMAND de cette commande.
+    Command(u32),
+    /// Rien.
+    Nothing,
+    /// Pas encore (journalisé une fois) : rien.
+    NotYet,
+    /// Comme un appui (WM_NCLBUTTONDOWN).
+    ButtonDown,
+}
+
+/// NC_HandleNCLButtonDblClk : un double-clic à l'endroit `hit` d'une
+/// fenêtre de style `style`. Sur la barre de titre d'une fenêtre à titre et
+/// bouton d'agrandissement : SC_RESTORE d'une fenêtre réduite ou agrandie,
+/// SC_MAXIMIZE sinon. Sur le bord du haut ou du bas, ReactOS agrandit la
+/// fenêtre en hauteur sur la zone de travail : pas encore. Pas de menu
+/// système (HTSYSMENU). Ailleurs, comme un appui.
+pub fn double_click(hit: u32, style: u32) -> DoubleClick {
+    match hit {
+        HTCAPTION if style & WS_CAPTION == WS_CAPTION && style & WS_MAXIMIZEBOX != 0 => {
+            let restore = style & (WS_MINIMIZE | WS_MAXIMIZE) != 0;
+            DoubleClick::Command(if restore { SC_RESTORE } else { SC_MAXIMIZE })
+        }
+        HTCAPTION => DoubleClick::Nothing,
+        HTTOP | HTBOTTOM => DoubleClick::NotYet,
+        _ => DoubleClick::ButtonDown,
+    }
+}
 
 /// Ce que DefWindowProc retient des touches du menu, dans la file du
 /// thread : Alt enfoncé seul (QF_FMENUSTATUS), F10 enfoncé (QF_FF10STATUS).
@@ -699,6 +759,24 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             crate::sizemove::nc_lbutton_down(window, wparam, lparam);
             Ok(0)
         }
+        (NC_LBUTTONDBLCLK, Some(window)) => {
+            match double_click(wparam, window.state().style) {
+                DoubleClick::Command(command) => {
+                    let _ = crate::window::send_message(window, WM_SYSCOMMAND, command, LParam::Value(0));
+                }
+                DoubleClick::ButtonDown => crate::sizemove::nc_lbutton_down(window, wparam, lparam),
+                DoubleClick::NotYet => {
+                    static REPORTED: AtomicBool = AtomicBool::new(false);
+                    if !REPORTED.swap(true, Ordering::Relaxed) {
+                        log::warn!("win32k: DefWindowProc: a double-click on the top or bottom border: not yet");
+                    }
+                }
+                DoubleClick::Nothing => {}
+            }
+            Ok(0)
+        }
+        // A minimized window may be restored (user32 answers it first).
+        (abi::user::WM_QUERYOPEN, _) => Ok(1),
         (WM_SYSCOMMAND, Some(window)) => {
             crate::sizemove::sys_command(window, wparam, lparam);
             Ok(0)
@@ -993,9 +1071,31 @@ mod tests {
         // A bordered popup: its border.
         let inner = Rect::new(1, 1, 199, 99);
         assert_eq!(nc_hit_test(WS_POPUP | WS_BORDER, 0, false, window, inner, (0, 50), &metric), HTBORDER);
-        // Minimized: all caption.
+        // Minimized: all caption, but for its buttons.
         let min = WS_OVERLAPPEDWINDOW | WS_MINIMIZE;
         assert_eq!(nc_hit_test(min, 0, false, window, Rect::new(0, 0, 0, 0), (50, 50), &metric), HTCAPTION);
+        let icon = Rect::new(1, 774, 167, 799);
+        let at = |x: i32, y: i32| nc_hit_test(min, 0, false, icon, Rect::new(1, 774, 1, 774), (x, y), &metric);
+        assert_eq!(at(160, 786), HTCLOSE, "its close button");
+        assert_eq!(at(135, 786), HTMAXBUTTON);
+        assert_eq!(at(115, 786), HTMINBUTTON, "the restore button");
+        assert_eq!(at(60, 786), HTCAPTION);
+        assert_eq!(at(160, 775), HTCAPTION, "its edges are caption");
+        assert_eq!(at(166, 786), HTCAPTION);
+        let no_caption = WS_POPUP | WS_MINIMIZE | WS_SYSMENU;
+        assert_eq!(nc_hit_test(no_caption, 0, false, icon, icon, (160, 786), &metric), HTCAPTION, "no buttons");
+    }
+
+    #[test]
+    fn a_double_click_on_the_caption_maximizes_or_restores() {
+        let style = WS_OVERLAPPEDWINDOW;
+        assert_eq!(double_click(HTCAPTION, style), DoubleClick::Command(SC_MAXIMIZE));
+        assert_eq!(double_click(HTCAPTION, style | WS_MAXIMIZE), DoubleClick::Command(SC_RESTORE));
+        assert_eq!(double_click(HTCAPTION, style | WS_MINIMIZE), DoubleClick::Command(SC_RESTORE));
+        assert_eq!(double_click(HTCAPTION, style & !WS_MAXIMIZEBOX), DoubleClick::Nothing, "no maximize box");
+        assert_eq!(double_click(HTCAPTION, WS_POPUP | WS_BORDER | WS_MAXIMIZEBOX), DoubleClick::Nothing);
+        assert_eq!(double_click(HTTOP, style), DoubleClick::NotYet);
+        assert_eq!(double_click(HTMAXBUTTON, style), DoubleClick::ButtonDown, "a button: pressed again");
     }
 
     #[test]

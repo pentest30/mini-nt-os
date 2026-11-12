@@ -647,6 +647,24 @@ pub const WPF_RESTORETOMAXIMIZED: u32 = 0x0002;
 /// WPF_ASYNCWINDOWPLACEMENT: the window of another thread is placed without
 /// waiting for it.
 pub const WPF_ASYNCWINDOWPLACEMENT: u32 = 0x0004;
+/// WPF_MININIT, WPF_MAXINIT (internal to win32k, `InternalPos.flags`): the
+/// place of the window minimized, maximized, has been set.
+pub const WPF_MININIT: u32 = 0x0008;
+pub const WPF_MAXINIT: u32 = 0x0010;
+
+/// ARW_* (MINIMIZEDMETRICS.iArrange, SM_ARRANGE): the corner where
+/// minimized windows start, and the direction they go; ARW_HIDE, a shell
+/// shows them itself (they go off the screen).
+pub const ARW_BOTTOMLEFT: u32 = 0x0000;
+pub const ARW_BOTTOMRIGHT: u32 = 0x0001;
+pub const ARW_TOPLEFT: u32 = 0x0002;
+pub const ARW_TOPRIGHT: u32 = 0x0003;
+pub const ARW_STARTMASK: u32 = 0x0003;
+pub const ARW_LEFT: u32 = 0x0000;
+pub const ARW_RIGHT: u32 = 0x0000;
+pub const ARW_UP: u32 = 0x0004;
+pub const ARW_DOWN: u32 = 0x0004;
+pub const ARW_HIDE: u32 = 0x0008;
 
 /// NCCALCSIZE_PARAMS, 32-bit: three rectangles (left, top, right, bottom),
 /// then the address of a WINDOWPOS (packed after it in a message).
@@ -926,6 +944,7 @@ pub const SW_HIDE: u32 = 0;
 pub const SW_SHOWNORMAL: u32 = 1;
 pub const SW_SHOWMINIMIZED: u32 = 2;
 pub const SW_SHOWMAXIMIZED: u32 = 3;
+pub const SW_MAXIMIZE: u32 = 3;
 pub const SW_SHOWNOACTIVATE: u32 = 4;
 pub const SW_SHOW: u32 = 5;
 pub const SW_MINIMIZE: u32 = 6;
@@ -1035,6 +1054,11 @@ pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
 pub const WM_EXITSIZEMOVE: u32 = 0x0232;
 /// WM_CLOSE: the window is asked to close (DefWindowProc destroys it).
 pub const WM_CLOSE: u32 = 0x0010;
+/// WM_QUERYOPEN: a minimized window may be restored (FALSE: it stays
+/// minimized).
+pub const WM_QUERYOPEN: u32 = 0x0013;
+/// WS_EX_NOACTIVATE: the window is never activated by the system.
+pub const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
 /// WM_SYSCOMMAND: a command of the window menu or of the frame; `wParam`
 /// SC_* in its upper 12 bits, `lParam` the point on the screen.
 pub const WM_SYSCOMMAND: u32 = 0x0112;

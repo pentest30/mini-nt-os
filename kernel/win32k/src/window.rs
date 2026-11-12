@@ -132,6 +132,9 @@ pub struct WindowState {
     /// Ses barres de défilement, dès qu'on lui en parle (`crate::scroll`),
     /// et la place de leur `SBINFO` dans le tas (`pSBInfo`).
     pub scroll: Option<crate::scroll::ScrollBars>,
+    /// Ses places gardées (`InternalPos` : le rectangle normal d'une
+    /// fenêtre réduite ou agrandie, ses places réduite et agrandie).
+    pub internal_pos: crate::winpos::InternalPos,
 }
 
 impl WindowState {
@@ -1742,9 +1745,19 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     if window.state().state & WNDS_SENDSIZEMOVEMSGS == 0 {
         send_size_move(&window);
     }
-    if params.style & (WS_MINIMIZE | WS_MAXIMIZE) != 0 {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("a window created minimized or maximized", &REPORTED);
+    // Minimized or maximized from its creation: the style taken back, then
+    // given by co_WinPosMinMaximize, which places it there.
+    let old = window.state();
+    update(&window, |state| state.style &= !(WS_MINIMIZE | WS_MAXIMIZE));
+    if old.style & (WS_MINIMIZE | WS_MAXIMIZE) != 0 {
+        let command = if old.style & WS_MINIMIZE != 0 { abi::user::SW_MINIMIZE } else { abi::user::SW_MAXIMIZE };
+        let (flags, rect) = crate::winpos::min_maximize(&window, command);
+        let mut flags = flags | abi::user::SWP_NOZORDER | abi::user::SWP_FRAMECHANGED;
+        // Created hidden (its WS_VISIBLE comes with ShowWindow): never
+        // activated here.
+        flags |= abi::user::SWP_NOACTIVATE;
+        let (cx, cy) = (rect.right - rect.left, rect.bottom - rect.top);
+        crate::winpos::set_window_pos(&window, 0, rect.left, rect.top, cx, cy, flags);
     }
     if kind == WS_CHILD && ex_style & WS_EX_NOPARENTNOTIFY == 0 && !parent.is_desktop_window() {
         let id = window.state().id_menu;
@@ -1785,7 +1798,8 @@ pub fn client_rect(window: &Window) -> Rect {
 
 /// co_WinPosGetMinMaxInfo : les limites de `window`. Les valeurs par défaut
 /// (`defwnd::min_max_info`, dans la zone cliente de son parent, en
-/// `ptReserved` le coin de la fenêtre), ce qu'en fait sa procédure
+/// `ptReserved` le coin de la fenêtre ; sa place agrandie gardée, si elle
+/// en a une, `InternalPos`), ce qu'en fait sa procédure
 /// (WM_GETMINMAXINFO), puis, sur un moniteur, ce qu'elle a laissé s'adapte à
 /// sa zone de travail (`WNDS_MAXIMIZESTOMONITOR` si la fenêtre agrandie le
 /// couvre).
@@ -1798,7 +1812,11 @@ pub fn min_max_info(window: &Arc<Window>) -> MinMaxInfo32 {
     let parent = get(state.parent).map_or(Rect::default(), |parent| client_rect(&parent));
     let corner = (state.window.left, state.window.top);
     let defaults = crate::defwnd::min_max_info(state.style, state.ex_style, corner, parent, &crate::metrics::get);
-    let mut bytes = defaults.as_bytes().to_vec();
+    let mut given = defaults;
+    if state.internal_pos.max != crate::winpos::NO_PLACE {
+        given.max_position = [state.internal_pos.max.0, state.internal_pos.max.1];
+    }
+    let mut bytes = given.as_bytes().to_vec();
     let _ = send_message(window, WM_GETMINMAXINFO, 0, LParam::Buffer { bytes: &mut bytes, write_back: true });
     let word = |i: usize| i32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
     let mut info = MinMaxInfo32 {

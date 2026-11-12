@@ -21,10 +21,13 @@
 //! de menus demande SC_MOUSEMENU, que le suivi de la barre traite comme
 //! SC_KEYMENU (`crate::menutrack`).
 //!
+//! Le bouton est peint enfoncé pendant son suivi, tant que la souris est
+//! dessus. Un double-clic sur le titre agrandit ou rétablit la fenêtre
+//! (`crate::defwnd::double_click`).
+//!
 //! Pas encore : le déplacement au clavier (SC_MOVE du menu de la fenêtre),
 //! le cadre en pointillés (sans le contenu), WM_MOVING et WM_SIZING, le
-//! bouton dessiné enfoncé pendant son suivi, le double-clic sur le titre,
-//! le menu de la fenêtre.
+//! menu de la fenêtre.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -36,7 +39,7 @@ use abi::user::{
     SC_MINIMIZE, SC_MOUSEMENU, SC_MOVE, SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
     SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE,
     WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SYSCOMMAND, WS_CHILD, WS_MAXIMIZE,
-    WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX,
 };
 
 use crate::gdi::dib::Rect;
@@ -92,12 +95,14 @@ pub fn dragged_rect(start: Rect, part: u32, (dx, dy): (i32, i32), min: [i32; 2],
 }
 
 /// La commande d'un bouton du titre `hit` d'une fenêtre de style `style` :
-/// fermer, réduire, agrandir ou restaurer une fenêtre agrandie ; `None`
-/// pour un bouton que le style désactive.
+/// fermer, réduire ou rétablir une fenêtre réduite, agrandir ou rétablir
+/// une fenêtre agrandie ; `None` pour un bouton que le style désactive.
 pub fn button_command(hit: u32, style: u32) -> Option<u32> {
     match hit {
         HTCLOSE => Some(SC_CLOSE),
-        HTMINBUTTON if style & WS_MINIMIZEBOX != 0 => Some(SC_MINIMIZE),
+        HTMINBUTTON if style & WS_MINIMIZEBOX != 0 => {
+            Some(if style & WS_MINIMIZE != 0 { SC_RESTORE } else { SC_MINIMIZE })
+        }
         HTMAXBUTTON if style & WS_MAXIMIZEBOX != 0 => {
             Some(if style & WS_MAXIMIZE != 0 { SC_RESTORE } else { SC_MAXIMIZE })
         }
@@ -208,7 +213,10 @@ pub fn size_move(window: &Arc<Window>, wparam: u32, lparam: u32) {
 }
 
 /// NC_DoButton : suit l'appui sur le bouton du titre `hit` de `window`
-/// jusqu'au relâchement ; sur le même bouton, sa commande (WM_SYSCOMMAND).
+/// jusqu'au relâchement. Le bouton est peint enfoncé tant que la souris est
+/// dessus, relevé quand elle en sort ou qu'il est relâché
+/// ([`crate::paint::draw_caption_button`]) ; relâché sur lui, sa commande
+/// (WM_SYSCOMMAND, [`button_command`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
@@ -219,6 +227,10 @@ pub fn track_button(window: &Arc<Window>, hit: u32) {
     if window.pti != thread.server {
         return;
     }
+    // Pending updates first: the button is drawn over what shows.
+    crate::paint::update_windows(window, abi::user::RDW_ALLCHILDREN);
+    let mut pressed = true;
+    crate::paint::draw_caption_button(window, hit, pressed);
     crate::mouse::set_capture(&thread, Some(window));
     let mut released = None;
     while let Some(message) = next_message(&thread) {
@@ -227,12 +239,21 @@ pub fn track_button(window: &Arc<Window>, hit: u32) {
                 released = Some((message.pt_x, message.pt_y));
                 break;
             }
-            WM_MOUSEMOVE => {}
+            WM_MOUSEMOVE => {
+                let over = crate::defwnd::window_hit_test(window, (message.pt_x, message.pt_y)) == hit;
+                if over != pressed {
+                    pressed = over;
+                    crate::paint::draw_caption_button(window, hit, pressed);
+                }
+            }
             _ => pass_on(&thread, &message),
         }
         if thread.queue.with(|queue| queue.capture).0 != window.handle {
             break;
         }
+    }
+    if pressed {
+        crate::paint::draw_caption_button(window, hit, false);
     }
     if thread.queue.with(|queue| queue.capture).0 == window.handle {
         crate::mouse::set_capture(&thread, None);
@@ -354,6 +375,8 @@ mod tests {
         assert_eq!(button_command(HTMINBUTTON, style), Some(SC_MINIMIZE));
         assert_eq!(button_command(HTMAXBUTTON, style), Some(SC_MAXIMIZE));
         assert_eq!(button_command(HTMAXBUTTON, style | WS_MAXIMIZE), Some(SC_RESTORE));
+        assert_eq!(button_command(HTMINBUTTON, style | WS_MINIMIZE), Some(SC_RESTORE), "minimized: restore");
+        assert_eq!(button_command(HTMAXBUTTON, style | WS_MINIMIZE), Some(SC_MAXIMIZE));
         assert_eq!(button_command(HTMINBUTTON, style & !WS_MINIMIZEBOX), None, "a disabled box");
         assert_eq!(button_command(HTCLIENT, style), None);
     }

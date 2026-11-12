@@ -852,6 +852,34 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
     draw_frame_ops(window, &state, &ops);
 }
 
+/// UserDrawCaptionButtonWnd : le bouton `hit` (HTCLOSE, HTMINBUTTON,
+/// HTMAXBUTTON) du titre de `window`, enfoncé ou non (`pushed`), peint
+/// aussitôt là où elle se voit ; rien pour une fenêtre invisible ou sans ce
+/// bouton.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn draw_caption_button(window: &Window, hit: u32, pushed: bool) {
+    let state = window.state();
+    if !window::is_visible(window) {
+        return;
+    }
+    let size = (state.window.right - state.window.left, state.window.bottom - state.window.top);
+    let ops = crate::nonclient::caption_button_ops(
+        state.style,
+        state.ex_style,
+        size,
+        hit,
+        pushed,
+        &crate::metrics::get,
+        &system_color,
+        &crate::font::text_run_named,
+    );
+    if let Some(ops) = ops {
+        draw_frame_ops(window, &state, &ops);
+    }
+}
+
 /// Fait `ops` (dans les coordonnées de `window`, d'état `state`) à l'écran,
 /// là où elle se voit, sans ses enfants (WS_CLIPCHILDREN) ni ses sœurs
 /// (WS_CLIPSIBLINGS) si son style le dit : le cadre, ou l'intérieur d'une

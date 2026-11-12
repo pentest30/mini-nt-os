@@ -1,0 +1,138 @@
+# Minimizing, maximizing and restoring top-level windows (win32k::winpos:
+# co_WinPosMinMaximize, InternalPos; tests/native/minmax1.c, MinGW, linked to
+# ReactOS's kernel32 and user32): MINMAX1.EXE takes the place of
+# winlogon.exe and switches to WinSta0\Default. The screen is 1280 x 800,
+# its work area the whole screen; SM_CXMINIMIZED x SM_CYMINIMIZED is
+# 166 x 25; MINIMIZEDMETRICS: ARW_BOTTOMLEFT | ARW_RIGHT (Mino has no shell
+# that shows minimized windows: they stay on the screen, at the bottom left).
+# Update with docs/compat/m6-fenetres.md, step 26.
+features = test-smss
+requires = userland, native
+initial-command = MINMAX1.EXE
+cpus     = default, intel
+timeout  = 120
+
+# The mouse, at each "[minmax] mouse:" line. The pointer starts at the centre
+# of the screen (640, 400); one move token at a time, each under 255 pixels.
+# W (100, 100, 400 x 300): its maximize button at (466, 113).
+keys = [minmax] mouse: the maximize button => move:-87,-143 move:-87,-144 press:1 release
+# Maximized (-4, -4, 1288 x 808): its restore button at (1250, 9).
+keys = [minmax] mouse: the restore button of the maximized window => move:196,-26 move:196,-26 move:196,-26 move:196,-26 press:1 release
+# Restored: its minimize button at (449, 113).
+keys = [minmax] mouse: the minimize button => move:-200,26 move:-200,26 move:-200,26 move:-201,26 press:1 release
+# The icon (1, 774, 166 x 25): its restore button at (116, 786).
+keys = [minmax] mouse: the restore button of the icon => move:-83,168 move:-83,168 move:-83,168 move:-84,169 press:1 release
+# Restored: a double-click on its caption at (250, 112).
+keys = [minmax] mouse: a double-click on the caption => move:33,-168 move:33,-168 move:33,-168 move:35,-170 press:1 release press:1 release
+# Maximized: a double-click on its caption at (250, 9).
+keys = [minmax] mouse: a double-click on the maximized caption => move:0,-103 press:1 release press:1 release
+# Restored: a press on the maximize button (466, 113), released in the
+# client area below it (466, 173): nothing.
+keys = [minmax] mouse: the maximize button released elsewhere => move:108,52 move:108,52 press:1 move:0,60 release
+# Maximized again: the restore button (1250, 9) pressed and held.
+keys = [minmax] mouse: the restore button held => move:196,-41 move:196,-41 move:196,-41 move:196,-41 press:1
+
+expect = [minmax] on WinSta0\Default
+# Created maximized (WS_MAXIMIZE): WM_GETMINMAXINFO's place, the frame off
+# the screen; its normal rectangle kept. Created minimized (F, beside B, a
+# topmost window, and T, a tool window): the first place at the bottom left,
+# 1 pixel from the edges.
+expect = [minmax] E, created maximized: iconic 0, zoomed 1, -4 -4 1284 804
+expect = [minmax] E: GetWindowPlacement 1: show 3, flags 2, min -1 -1, max -1 -1, normal 10 10 310 210
+expect = [minmax] F, created minimized: iconic 1, zoomed 0, 1 774 167 799
+expect = [minmax] W: iconic 0, zoomed 0, 100 100 500 400
+expect = [minmax] W active 1
+# SW_MINIMIZE: WM_WINDOWPOSCHANGING, WM_GETMINMAXINFO, WM_NCCALCSIZE,
+# WM_NCPAINT, WM_WINDOWPOSCHANGED, WM_MOVE, WM_SIZE (SIZE_MINIMIZED, 0), then
+# W deactivated (WM_NCACTIVATE, WM_ACTIVATE) and B activated, the keyboard
+# with it (WM_KILLFOCUS): ActivateOtherWindowMin takes the first window that
+# is not a tool window (co_WinPosActivateOtherWindow would take T, under W).
+# The icon at the next free place, F having the first.
+expect = [minmax] SW_MINIMIZE received 10: 0046 0024 0083 0085 0047 0003 0005 0086 0006 0008
+expect = [minmax] SW_MINIMIZE: was 1, WM_SIZE 1 0, active B 1, focus B 1
+expect = [minmax] minimized: iconic 1, zoomed 0, 167 774 333 799
+expect = [minmax] minimized: GetWindowPlacement 1: show 2, flags 0, min 167 774, max -1 -1, normal 100 100 500 400
+expect = [minmax] SW_MINIMIZE again: was 1, iconic 1
+# WM_QUERYOPEN answered FALSE: it stays minimized.
+expect = [minmax] SW_RESTORE refused: was 1, WM_QUERYOPEN 1, iconic 1
+# SW_RESTORE: WM_QUERYOPEN first, its normal rectangle, SIZE_RESTORED, the
+# keyboard, WM_ACTIVATE (already active: the refused SW_RESTORE activated it,
+# as ReactOS).
+expect = [minmax] SW_RESTORE received 10: 0013 0046 0024 0083 0085 0014 0047 0003 0005 0006
+expect = [minmax] SW_RESTORE: was 1, WM_QUERYOPEN 2, WM_SIZE 0 392 272, active W 1, focus W 1
+expect = [minmax] restored: iconic 0, zoomed 0, 100 100 500 400
+# SW_SHOWMAXIMIZED: WM_GETMINMAXINFO first, no WM_SHOWWINDOW, SIZE_MAXIMIZED;
+# covering its monitor, no maximized place in its placement.
+expect = [minmax] SW_SHOWMAXIMIZED received 9: 0024 0046 0024 0083 0085 0014 0047 0003 0005
+expect = [minmax] SW_SHOWMAXIMIZED: was 1, WM_SIZE 2 1280 780, client 1280 780
+expect = [minmax] maximized: iconic 0, zoomed 1, -4 -4 1284 804
+expect = [minmax] maximized: GetWindowPlacement 1: show 3, flags 2, min 167 774, max -1 -1, normal 100 100 500 400
+expect = [minmax] SW_SHOWMAXIMIZED again: was 1
+# Minimized from maximized (F destroyed: the first place again):
+# WPF_RESTORETOMAXIMIZED, and restored maximized.
+expect = [minmax] minimized from maximized: GetWindowPlacement 1: show 2, flags 2, min 1 774, max -1 -1, normal 100 100 500 400
+expect = [minmax] restored to maximized: iconic 0, zoomed 1, -4 -4 1284 804
+expect = [minmax] restored from maximized: WM_SIZE 0
+expect = [minmax] restored again: iconic 0, zoomed 0, 100 100 500 400
+# A maximum of its own: WM_GETMINMAXINFO puts it at 600, 50 (500 x 300).
+expect = [minmax] maximized to its own place: iconic 0, zoomed 1, 600 50 1100 350
+# Its maximized place kept (InternalPos): WM_GETMINMAXINFO's place by
+# default, with the default size. SetWindowPlacement while maximized: no
+# maximized place (it covers its monitor), the new normal rectangle kept.
+expect = [minmax] maximized at its place kept: iconic 0, zoomed 1, 600 50 1888 858
+expect = [minmax] SetWindowPlacement while maximized: 1, zoomed 1
+expect = [minmax] restored to the new rectangle: iconic 0, zoomed 0, 150 120 550 420
+expect = [minmax] placed back: iconic 0, zoomed 0, 100 100 500 400
+# WPF_SETMINPOSITION: the icon at the place given, kept.
+expect = [minmax] D, SetWindowPlacement(WPF_SETMINPOSITION): iconic 1, zoomed 0, 400 600 566 625
+expect = [minmax] D: GetWindowPlacement 1: show 2, flags 0, min 400 600, max -1 -1, normal 300 200 600 400
+expect = [minmax] D, minimized again: iconic 1, zoomed 0, 400 600 566 625
+expect = [minmax] before the mouse: W active 1, iconic 0, zoomed 0
+# The mouse: the caption's buttons (NC_DoButton), WM_SYSCOMMAND SC_MAXIMIZE,
+# SC_RESTORE, SC_MINIMIZE; the restore button of the icon (its buttons
+# answer WM_NCHITTEST); the double-click on the caption.
+expect = [minmax] step 1: iconic 0, zoomed 1, -4 -4 1284 804
+expect = [minmax] step 1: WM_SIZE 2 1280 780, active W 1
+expect = [minmax] step 2: iconic 0, zoomed 0, 100 100 500 400
+expect = [minmax] step 2: WM_SIZE 0 392 272, active W 1
+expect = [minmax] step 3: iconic 1, zoomed 0, 1 774 167 799
+expect = [minmax] step 3: WM_SIZE 1 0 0, active W 0
+expect = [minmax] step 4: iconic 0, zoomed 0, 100 100 500 400
+expect = [minmax] step 4: WM_SIZE 0 392 272, active W 1
+expect = [minmax] step 5: iconic 0, zoomed 1, -4 -4 1284 804
+expect = [minmax] step 5: WM_SIZE 2 1280 780, active W 1
+expect = [minmax] step 6: iconic 0, zoomed 0, 100 100 500 400
+expect = [minmax] step 6: WM_SIZE 0 392 272, active W 1
+# Released off the button: no command.
+expect = [minmax] step 7: iconic 0, zoomed 0, 100 100 500 400
+expect = [minmax] step 7: WM_SIZE -1 392 272, active W 1
+expect = [minmax] at last, B: iconic 1, zoomed 0, 1 774 167 799
+expect = [minmax] at last, W: iconic 0, zoomed 1, -4 -4 1284 804
+expect = [minmax] at last: B above W 1, W active 1
+expect = [minmax] the restore button is held
+
+forbid = *** STOP:
+forbid = minimizing and maximizing (co_WinPosMinMaximize): not yet
+forbid = SetWindowPlacement of a minimized or maximized window (InternalPos): not yet
+forbid = a window created minimized or maximized: not yet
+forbid = DefWindowProc: message 0x00a3 not yet
+forbid = DefWindowProc: message 0x0013 not yet
+
+# W maximized: its client area and its caption reach the edges of the screen
+# (its frame off the screen). Its restore button (1242 to 1258, 2 to 16),
+# pressed and held: sunken (its outer edge dark at the top left, white when
+# raised), the Restore symbol (Marlett 2) a pixel lower and further right:
+# the bar of the window in front at 1249, 10, nothing at 1248, 5 (where the
+# raised symbol has the bar of the window behind). B, minimized and topmost, at 1, 774 (166 x 25)
+# over W: its edge at 1, 786 and W's client area left of it, its inactive
+# caption at 5, 780, the Restore symbol in its minimize button at 114, 786.
+screen = 0 300 FFFFFF
+screen = 0 10 0A246A
+screen = 1279 300 FFFFFF
+screen = 1242 2 404040
+screen = 1249 10 000000
+screen = 1248 5 D4D0C8
+screen = 0 786 FFFFFF
+screen = 1 786 D4D0C8
+screen = 5 780 808080
+screen = 114 786 000000

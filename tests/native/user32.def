@@ -80,6 +80,7 @@ GetUpdateRgn@12
 GetWindow@8
 GetWindowDC@4
 GetWindowLongW@8
+GetWindowPlacement@8
 GetWindowRect@8
 GetWindowTextW@12
 GetWindowThreadProcessId@8
@@ -88,9 +89,11 @@ HiliteMenuItem@16
 InsertMenuW@20
 InvalidateRect@12
 InvalidateRgn@12
+IsIconic@4
 IsMenu@4
 IsWindow@4
 IsWindowVisible@4
+IsZoomed@4
 KillSystemTimer@8
 KillTimer@8
 LoadCursorW@8
@@ -134,6 +137,7 @@ SetSystemTimer@16
 SetThreadDesktop@4
 SetTimer@16
 SetWindowLongW@12
+SetWindowPlacement@8
 SetWindowPos@28
 SetWindowTextW@8
 ShowCaret@4
