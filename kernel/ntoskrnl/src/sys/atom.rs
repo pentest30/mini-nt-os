@@ -5,6 +5,7 @@
 //! repartent dans le pointeur `Atom` de l'appelant.
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_HANDLE, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS};
+use abi::peb32::UnicodeString32;
 use alloc::vec::Vec;
 use ke::usermem::UserPtr;
 use win32k::atom::{self, AtomName, FIRST_STRING_ATOM};
@@ -114,24 +115,29 @@ pub(super) fn nt_query_information_atom(arguments: &[u32]) -> NtStatus {
     query().map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
 
-/// NtUserGetAtomName(Atom, Buffer) : le nom de l'atome, en WCHAR terminés
-/// par nul, dans le tampon de l'appelant ; le nombre d'unités écrites sans
-/// le nul. Les atomes entiers rendent leurs chiffres décimaux.
+/// NtUserGetAtomName(Atom, pustrName) : le nom de l'atome dans le tampon du
+/// UNICODE_STRING de l'appelant (`Buffer`, `MaximumLength` octets), tronqué
+/// à sa place et terminé par un NUL (`win32k::atom::name_in_buffer`) ; rend
+/// le nombre d'unités écrites sans le NUL. `Length` n'est pas touché :
+/// `user32` (ClassNameToVersion) le calcule. Les atomes entiers rendent leurs
+/// chiffres décimaux. 0 pour un atome inconnu (`ERROR_INVALID_HANDLE`) ou une
+/// adresse qui faute.
 pub(super) fn nt_user_get_atom_name(arguments: &[u32]) -> NtStatus {
-    let [atom, buffer] = arguments[..2] else { unreachable!("2 arguments") };
+    let [atom, string] = arguments[..2] else { unreachable!("2 arguments") };
     let get = || -> Result<u32, NtStatus> {
-        if buffer == 0 {
-            return Ok(0);
-        }
         let name = name_of(atom as u16)?;
-        let mut units: Vec<u16> = name;
-        units.push(0);
-        let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
-        ke::usermem::copy_to_user(u64::from(buffer), &bytes)?;
-        Ok(units.len() as u32 - 1)
+        let string = UserPtr::<UnicodeString32>::new(string).read()?;
+        let (bytes, count) = atom::name_in_buffer(&name, string.maximum_length);
+        if !bytes.is_empty() {
+            ke::usermem::copy_to_user(u64::from(string.buffer), &bytes)?;
+        }
+        Ok(count)
     };
     match get() {
         Ok(count) => NtStatus(count),
-        Err(status) => status,
+        Err(status) => {
+            let _ = win32k::set_last_error(abi::winerror::dos_error(status));
+            NtStatus(0)
+        }
     }
 }

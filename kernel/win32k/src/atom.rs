@@ -234,6 +234,19 @@ pub fn name(atom: u16) -> Option<Vec<u16>> {
     USER_ATOMS.lock().name(atom)
 }
 
+/// NtUserGetAtomName (RtlQueryAtomInAtomTable dans un tampon) : ce qu'un
+/// tampon de `maximum_length` octets — le `MaximumLength` du UNICODE_STRING
+/// de l'appelant — reçoit du nom `name` : autant de ses unités qu'il en
+/// tient avec un NUL, puis le NUL ; rien s'il ne tient pas même le NUL.
+/// Rend les octets à écrire et le nombre d'unités du nom qu'ils portent.
+pub fn name_in_buffer(name: &[u16], maximum_length: u16) -> (Vec<u8>, u32) {
+    let Some(room) = usize::from(maximum_length).checked_sub(2) else { return (Vec::new(), 0) };
+    let count = (room / 2).min(name.len());
+    let mut bytes: Vec<u8> = name[..count].iter().flat_map(|unit| unit.to_le_bytes()).collect();
+    bytes.extend_from_slice(&[0, 0]);
+    (bytes, count as u32)
+}
+
 /// Le compte de références de l'atome en chaîne `atom` de la table de USER.
 ///
 /// # IRQL
@@ -264,6 +277,22 @@ mod tests {
         assert_eq!(table.name(edit), Some(w("Edit")), "the first spelling");
         let accented = table.add(AtomName::String(&w("Fenêtre"))).unwrap();
         assert_eq!(table.find(AtomName::String(&w("FENÊTRE"))), Some(accented), "beyond ASCII");
+    }
+
+    #[test]
+    fn a_name_goes_into_the_room_of_the_callers_buffer() {
+        let name = w("SHELLDLL_DefView");
+        let (bytes, count) = name_in_buffer(&name, 520);
+        assert_eq!(count, 16);
+        assert_eq!(bytes.len(), 34, "the name and its NUL, nothing past them");
+        assert_eq!(&bytes[..4], &[b'S', 0, b'H', 0]);
+        assert_eq!(&bytes[32..], &[0, 0]);
+        let (bytes, count) = name_in_buffer(&name, 10);
+        assert_eq!((count, bytes.len()), (4, 10), "four units and the NUL: ten bytes, no more");
+        assert_eq!(&bytes[8..], &[0, 0]);
+        assert_eq!(name_in_buffer(&name, 7).0.len(), 6, "an odd room: whole units");
+        assert_eq!(name_in_buffer(&name, 2), (alloc::vec![0, 0], 0), "the NUL alone");
+        assert_eq!(name_in_buffer(&name, 1), (Vec::new(), 0), "not even the NUL");
     }
 
     #[test]
