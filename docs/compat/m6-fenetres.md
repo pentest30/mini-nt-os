@@ -1122,7 +1122,8 @@ NtUserSetWindowPlacement), ReactOS comme spécification ; `win32k::winpos`, `abi
 Écarts, faute de réduire et d'agrandir : pas de place gardée à part (`InternalPos` : le rectangle normal d'une
 fenêtre réduite ou agrandie, les places de l'icône et de la fenêtre agrandie) ; une fenêtre réduite ou agrandie
 n'est pas déplacée (journalisé une fois) ; WPF_ASYNCWINDOWPLACEMENT est fait tout de suite (journalisé une fois) ;
-la tolérance de longueur pour un module qui attend Windows 3.x manque.
+la tolérance de longueur pour un module qui attend Windows 3.x manque. Les deux premiers sont levés à l'étape 26
+(réduire, agrandir, rétablir) ; les deux derniers restent.
 
 Ce que le Bloc-notes montre ensuite (journal du scénario) : NtUserRegisterWindowMessage (FINDMSGSTRING : rendu 0,
 la procédure du Bloc-notes prend alors WM_NULL pour le message de la recherche), NtUserCreateAcceleratorTable (ses
@@ -1174,3 +1175,100 @@ line », Échap la ferme, et le contrôle Edit est repeint là où elle était.
 Tests : hôte (`accel` : touches virtuelles et modificateurs, caractères et Alt, FVIRT_TBL_END et l'ANSI, les
 messages du menu, ce qui empêche WM_COMMAND) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
 l'accélérateur (mutation) ; `cmd`, `desktop-launch`, `console` (qui appelaient NtUserQueryWindow) sur AMD et Intel.
+
+## Étape 26 : réduire, agrandir et rétablir (ShowWindow, les boutons du titre, le double-clic)
+
+Sous VirtualBox, les boutons Réduire et Agrandir du Bloc-notes et du gestionnaire des tâches étaient sans effet :
+ShowWindow journalisait « minimizing and maximizing (co_WinPosMinMaximize): not yet » et rendait FALSE.
+
+`winpos.c` de win32k (WinPosInitInternalPos, IntGetWindowPlacement, IntSetWindowPlacement, co_WinPosMinMaximize,
+WinPosFindIconPos, co_WinPosArrangeIconicWindows, co_WinPosShowWindow, ActivateOtherWindowMin, co_WinPosGetMinMaxInfo),
+`window.c` (la création d'une fenêtre réduite ou agrandie), `nonclient.c` (NC_DoButton, UserDrawCaptionButton,
+NC_HandleNCLButtonDblClk, GetNCHitEx), `defwnd.c` (DefWndHandleSysCommand), `draw.c` (UITOOLS95_DrawFrameCaption),
+`sysparams.c` (MINIMIZEDMETRICS), ReactOS comme spécification ; `win32k::winpos`, `win32k::defwnd`,
+`win32k::sizemove`, `win32k::nonclient`, `win32k::paint::draw_caption_button`, `win32k::input::activate_other_min`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| La place gardée (`winpos::InternalPos`, WinPosInitInternalPos) | dans la zone cliente du parent : le rectangle normal, pris la première fois qu'on regarde la fenêtre puis tant qu'elle n'est ni réduite ni agrandie ; la place de l'icône d'une fenêtre réduite (WPF_MININIT) ; la place d'une fenêtre agrandie (WPF_MAXINIT), depuis la zone de travail de son moniteur pour une fenêtre de premier niveau, aucune si elle couvre son moniteur (WNDS_MAXIMIZESTOMONITOR) ; WPF_SETMINPOSITION, WPF_RESTORETOMAXIMIZED |
+| Réduire (`winpos::min_maximize`, SW_MINIMIZE, SW_SHOWMINIMIZED, SW_SHOWMINNOACTIVE, SW_FORCEMINIMIZE) | WPF_RESTORETOMAXIMIZED si elle était agrandie ; `WS_MINIMIZE` ; plus rien à peindre (RDW_VALIDATE) ; la place de son icône (`find_icon_pos`), de SM_CXMINIMIZED × SM_CYMINIMIZED ; SWP_STATECHANGED : WM_SIZE SIZE_MINIMIZED (0) par DefWindowProc de WM_WINDOWPOSCHANGED, sa zone cliente vide (WM_NCCALCSIZE) ; ni activée ni montée (SWP_NOACTIVATE ; SW_SHOWMINNOACTIVE garde aussi son rang) ; SW_SHOWMINIMIZED rend d'abord le clavier ; après SW_MINIMIZE, la fenêtre active du premier plan cède l'activation : à la première de ses sœurs visible, activée, ni réduite ni d'outils, sous les fenêtres toujours au-dessus puis depuis la première (ActivateOtherWindowMin), sinon comme à sa destruction (co_WinPosActivateOtherWindow) ; le clavier revient à son parent |
+| Agrandir (SW_SHOWMAXIMIZED, SW_MAXIMIZE) | la place et la taille de WM_GETMINMAXINFO (`window::min_max_info` : sa place agrandie gardée en `ptMaxPosition` s'il en a une ; ce que la procédure laisse s'adapte à la zone de travail) : son cadre épais et ses bords hors de l'écran (−4, −4, 1288 × 808 sur 1280 × 800) ; `WS_MAXIMIZE` ; SWP_STATECHANGED : WM_SIZE SIZE_MAXIMIZED ; pas de WM_SHOWWINDOW (comme ReactOS) ; rien pour une fenêtre déjà agrandie et visible |
+| Rétablir (SW_RESTORE, SW_SHOWNORMAL, SW_SHOWDEFAULT, SW_SHOWNOACTIVATE) | d'une fenêtre réduite : WM_QUERYOPEN d'abord (FALSE : elle le reste ; DefWindowProc rend TRUE), puis agrandie si elle l'était (WPF_RESTORETOMAXIMIZED, pas par SW_SHOWNOACTIVATE), sinon à son rectangle normal ; elle prend le clavier et, de premier niveau, WM_ACTIVATE ; d'une fenêtre agrandie : son rectangle normal, SWP_STATECHANGED, WM_SIZE SIZE_RESTORED |
+| Créée réduite ou agrandie (`window::create_window`) | le style ôté puis rendu par co_WinPosMinMaximize, la fenêtre placée là sans être activée ; montrée ensuite par SW_SHOWMINIMIZED ou SW_SHOW si elle a WS_VISIBLE |
+| Une fenêtre réduite sans shell (`winpos::icon_slot`) | une barre de titre de 166 × 25 (son bord, son titre, ses boutons Rétablir, Agrandir et Fermer), à la première case libre de la zone cliente de son parent, d'après MINIMIZEDMETRICS (SM_ARRANGE) : depuis le coin de `iArrange`, de côté ou (ARW_UP) vers le haut ou le bas, des cases pleines seulement, à un pixel du bord ; ARW_HIDE (ce que demande un shell qui montre lui-même les fenêtres réduites) : hors de l'écran, en (−32000, −32000), comme ReactOS. Une place donnée par SetWindowPlacement (WPF_SETMINPOSITION) est gardée |
+| GetWindowPlacement (`winpos::placement`) | la place gardée, mise à jour d'abord ; les points de l'icône et de la fenêtre agrandie quand ils sont pris (pas la place agrandie d'une fenêtre qui couvre son moniteur), sinon (−1, −1) ; l'icône décalée dans la zone de travail comme le rectangle normal ; WPF_RESTORETOMAXIMIZED d'une fenêtre agrandie ou qui se rétablira agrandie ; WPF_SETMINPOSITION d'une fenêtre fille qui l'a reçu |
+| SetWindowPlacement (`winpos::set_placement`) | les places données (l'icône seulement avec WPF_SETMINPOSITION) ramenées sur la zone de travail du moniteur le plus proche et gardées ; la fenêtre va à celle de son état (réduite : son icône, si elle a été donnée ; agrandie : sa place agrandie, si elle a été donnée ; sinon son rectangle normal), puis ShowWindow ; réduite alors, elle garde WPF_SETMINPOSITION et WPF_RESTORETOMAXIMIZED |
+| Les boutons du titre (`sizemove::track_button`, NC_DoButton) | les fenêtres à peindre le sont d'abord ; le bouton peint enfoncé (creux, son symbole décalé d'un pixel : `nonclient::caption_button_ops`, `paint::draw_caption_button`) tant que la souris est dessus, relevé quand elle en sort et au relâchement ; relâché dessus : SC_MINIMIZE, SC_MAXIMIZE ou SC_RESTORE (le bouton Réduire d'une fenêtre réduite, Agrandir d'une fenêtre agrandie), SC_CLOSE |
+| Le cadre (`nonclient`) | le glyphe Rétablir (Marlett `2`) pour Agrandir d'une fenêtre agrandie et Réduire d'une fenêtre réduite ; réduite, ni cadre épais ni trait sous le titre, son bord en relief autour |
+| Le double-clic (`defwnd::double_click`, NC_HandleNCLButtonDblClk) | sur le titre d'une fenêtre à titre et bouton d'agrandissement : SC_RESTORE d'une fenêtre réduite ou agrandie, sinon SC_MAXIMIZE ; sur un bouton ou ailleurs, comme un appui |
+| WM_NCHITTEST d'une fenêtre réduite (`defwnd::nc_hit_test`) | ses bords sont son titre (HTCAPTION), ses boutons répondent (HTCLOSE, HTMAXBUTTON, HTMINBUTTON) |
+
+Écarts voulus avec ReactOS :
+- **Les fenêtres réduites restent à l'écran.** ReactOS met MINIMIZEDMETRICS `iArrange` à ARW_HIDE (sa valeur par
+  défaut dans `sysparams.c`) et WinPosFindIconPos envoie toute fenêtre de premier niveau réduite en (−32000, −32000) :
+  son explorateur les montre dans sa barre des tâches. Mino n'a pas de shell qui le fasse (le bureau de
+  `DESKTOP1.EXE` dessine sa barre) : réduite, une fenêtre y disparaîtrait sans retour. Mino prend donc
+  `ARW_BOTTOMLEFT | ARW_RIGHT` (SM_ARRANGE vaut 0), comme un système sans shell, et suit `iArrange` comme le
+  prévoient MINIMIZEDMETRICS et co_WinPosArrangeIconicWindows (« FIXME: Support Minimize Metrics » chez ReactOS, qui
+  part toujours d'en bas à gauche) ; un shell demandera ARW_HIDE par SPI_SETMINIMIZEDMETRICS (pas encore).
+- **Les boutons d'une fenêtre réduite répondent.** GetNCHitEx de ReactOS rend HTCAPTION sur toute une fenêtre
+  réduite ; sa version d'avant (DefWndNCHitTest, gardée sous `#if 0`) et XP donnent les boutons de sa barre. Sans
+  shell, le bouton Rétablir est le chemin d'une fenêtre réduite à la souris (le double-clic sur sa barre aussi).
+- **La première case libre.** WinPosFindIconPos s'arrête à la première icône sœur qui n'est pas à la case qu'il
+  essaie ; co_WinPosArrangeIconicWindows passe au-delà du bord droit. Mino prend la première case qu'aucune autre
+  icône n'occupe, en cases pleines.
+- **SW_FORCEMINIMIZE réduit**, comme le dit l'API (même si le thread de la fenêtre ne répond pas) ; ReactOS cache la
+  fenêtre (IntForceMinimizeWindow, pour ses fenêtres fantômes).
+- **Un rectangle, pas une taille.** co_WinPosMinMaximize rend à co_WinPosShowWindow un rectangle dont il passe la
+  droite et le bas comme taille ; il y met tantôt la taille, tantôt le coin opposé (rétablie agrandie depuis réduite,
+  une fenêtre y gagnait sa place en taille). Mino rend un rectangle et l'appelant en tire la taille.
+- **Le rectangle normal de `InternalPos`.** ReactOS rétablit au rectangle de GetWindowPlacement, décalé dans la zone
+  de travail (faux quand elle ne commence pas au coin du moniteur) ; Mino prend celui qu'il garde, dans la zone
+  cliente du parent.
+- **(−1, −1) n'est pas une place.** SetWindowPlacement ramène chaque point sur l'écran (make_point_onscreen), et
+  ReactOS fait de (−1, −1) le point (0, 0) : le Bloc-notes, qui rend ce que GetWindowPlacement lui donne, agrandi,
+  aurait son cadre à l'écran en haut à gauche et débordé à droite et en bas. Mino garde (−1, −1) comme « pas donné ».
+- **SetWindowPlacement d'une fenêtre jamais regardée.** ReactOS ne marque pas la place comme prise ; la première
+  lecture d'après (co_WinPosMinMaximize) écrasait le rectangle normal donné par celui de la fenêtre. Mino prend
+  d'abord la place présente, puis les places données.
+
+Pas encore (journalisé une fois) : cacher et remontrer les fenêtres possédées d'une fenêtre réduite
+(IntShowOwnedPopups) ; le crochet CBT (HCBT_MINMAX) ; la fenêtre active d'avant (`spwndActivePrev`) qu'essaie
+d'abord ActivateOtherWindowMin ; SW_HIDE de la fenêtre active ne cède toujours pas l'activation (comme avant) ; le
+double-clic sur le bord du haut ou du bas (ReactOS agrandit en hauteur) ; SPI_SETMINIMIZEDMETRICS et
+SPI_GETMINIMIZEDMETRICS ; le menu de la fenêtre (Réduire, Agrandir, Restaurer y sont des commandes).
+
+Vu en chemin, pas fait : `window::link` met une fenêtre placée par HWND_TOP au-dessus de la dernière de ses sœurs
+quand toutes les autres sont toujours au-dessus (WS_EX_TOPMOST), comme IntLinkHwnd de ReactOS (sa boucle s'arrête
+à la dernière sœur au lieu de passer après elle) : agrandie, une fenêtre y passait sur une fenêtre toujours
+au-dessus réduite. Le banc d'essai garde une fenêtre cachée sous les autres.
+
+Le banc d'essai : `tests/native/minmax1.c` (`MINMAX1.EXE`, MinGW), scénario `minmax`, à la place de
+`winlogon.exe`. E est créée agrandie, F réduite ; B (toujours au-dessus), T (une fenêtre d'outils) et W (active,
+100, 100, 400 × 300). ShowWindow de W : SW_MINIMIZE (sa barre à la case libre à côté de celle de F, WM_SIZE
+SIZE_MINIMIZED, B activée plutôt que T, le clavier avec elle), SW_RESTORE refusé par WM_QUERYOPEN, puis accepté,
+SW_SHOWMAXIMIZED (−4, −4, 1288 × 808 ; zone cliente 1280 × 780), réduite depuis agrandie puis rétablie agrandie,
+rétablie ; une place agrandie à elle (WM_GETMINMAXINFO), gardée ensuite ; SetWindowPlacement d'un rectangle normal
+pendant qu'elle est agrandie, d'une place d'icône (WPF_SETMINPOSITION) pour D. Chaque fois l'état (IsIconic,
+IsZoomed, GetWindowRect), GetWindowPlacement et, pour SW_MINIMIZE, SW_RESTORE et SW_SHOWMAXIMIZED, les messages
+reçus. Puis la souris de QEMU : le bouton Agrandir, Rétablir de la fenêtre agrandie, Réduire, Rétablir de la barre
+réduite, un double-clic sur le titre, un autre sur le titre de la fenêtre agrandie, un appui sur Agrandir relâché
+dans la zone cliente (rien) ; enfin B réduite, W agrandie, son bouton Rétablir enfoncé et tenu pendant la capture.
+L'écran : W agrandie, son titre et sa zone cliente jusqu'aux bords (son cadre hors de l'écran), son bouton
+Rétablir creux, son symbole décalé ; la barre réduite de B en bas à gauche, au-dessus, inactive, avec le symbole
+Rétablir.
+
+Tests : hôte (`winpos` : les commandes de ShowWindow, WinPosInitInternalPos, GetWindowPlacement d'une fenêtre
+réduite ou agrandie, les cases des fenêtres réduites selon MINIMIZEDMETRICS, make_point_onscreen et (−1, −1) ;
+`defwnd` : WM_NCHITTEST d'une fenêtre réduite, le double-clic ; `sizemove` : les commandes des boutons ;
+`nonclient` : le bouton enfoncé, seul, sur le cadre ; la barre d'une fenêtre réduite et ses symboles) ; `minmax`
+sur AMD et Intel. Chacune de ces mutations le fait échouer : pas de `WS_MINIMIZE` ; MINIMIZEDMETRICS à ARW_HIDE ;
+la première case même prise ; la fenêtre agrandie ailleurs qu'à la place de WM_GETMINMAXINFO ; rétablie ailleurs
+qu'à son rectangle normal ; pas de WPF_RESTORETOMAXIMIZED ; WM_QUERYOPEN ignoré ; l'activation gardée par la
+fenêtre réduite ; ActivateOtherWindowMin sauté ; GetWindowPlacement qui prend le rectangle présent pour normal ;
+SetWindowPlacement qui ne garde pas le rectangle normal ; WPF_SETMINPOSITION pris trop tard ; la place agrandie pas
+gardée ; rien pour une fenêtre créée réduite ou agrandie ; le bouton pas peint enfoncé ; le bouton Réduire d'une
+fenêtre réduite qui la réduit ; une fenêtre réduite toute en titre ; le double-clic sans effet ; le symbole
+Agrandir sur une fenêtre agrandie, Réduire sur une fenêtre réduite. `menu`, `notepad`, `desktop-launch` passent sur
+AMD et Intel ; `gui` échoue comme au commit de départ (l'ordre des WM_PAINT des sœurs, de bas en haut depuis
+l'étape 24 : voir la passation).

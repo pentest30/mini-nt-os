@@ -1,5 +1,36 @@
 # Notes de passation
 
+- **Réduire, agrandir, rétablir** (`claude/stoic-margulis-2f5356`, partie de `claude/new-session-696xfc` ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 26 ; demandé parce que sous VirtualBox les boutons Réduire
+  et Agrandir du Bloc-notes et du gestionnaire des tâches étaient sans effet) : co_WinPosMinMaximize
+  (`win32k::winpos::min_maximize`), la place gardée de chaque fenêtre (`winpos::InternalPos`, WinPosInitInternalPos),
+  dont GetWindowPlacement et SetWindowPlacement tiennent compte (les écarts de l'étape 24 levés), ShowWindow de toutes
+  ses commandes (`winpos::show_command`, `MinMax { cmd, swp }`), une fenêtre créée réduite ou agrandie
+  (`window::create_window`), WM_QUERYOPEN, la place agrandie gardée comme `ptMaxPosition` de WM_GETMINMAXINFO
+  (`window::min_max_info`) ; la fenêtre active réduite cède l'activation (`input::activate_other_min`,
+  ActivateOtherWindowMin) et le clavier. Le cadre : le bouton du titre peint enfoncé pendant son suivi
+  (`nonclient::caption_button_ops`, `paint::draw_caption_button`, `sizemove::track_button`), le bouton Réduire d'une
+  fenêtre réduite la rétablit, le double-clic sur le titre (`defwnd::double_click`), les boutons d'une fenêtre réduite
+  répondent à WM_NCHITTEST. **Choix sans shell** : MINIMIZEDMETRICS `iArrange` vaut `ARW_BOTTOMLEFT | ARW_RIGHT`
+  (SM_ARRANGE 0, `metrics::Parameters::DEFAULT`), pas ARW_HIDE comme ReactOS : une fenêtre réduite devient une barre
+  de titre à la première case libre en bas à gauche (`winpos::icon_slot`) au lieu de partir en (−32000, −32000) ;
+  ARW_HIDE reste suivi pour quand un shell le demandera (SPI_SETMINIMIZEDMETRICS, pas encore). Les autres écarts
+  voulus (SW_FORCEMINIMIZE réduit, (−1, −1) n'est pas une place pour SetWindowPlacement, le rectangle de
+  co_WinPosMinMaximize, la première case libre) sont dans l'étape 26. Tests : hôte (`winpos`, `defwnd`, `sizemove`,
+  `nonclient`) ; scénario `minmax` (`tests/native/minmax1.c` : ShowWindow, placements, puis la souris de QEMU sur
+  les boutons et le titre ; pixels du cadre hors de l'écran, du bouton Rétablir enfoncé, de la barre réduite) sur
+  AMD et Intel, que vingt mutations (une par comportement, liste dans l'étape 26) font échouer chacune ; `menu`,
+  `notepad`, `desktop-launch` passent sur AMD et Intel ; lint propre, 1082 tests hôte. **`gui` échoue**, sur AMD et
+  Intel, mais déjà au commit de départ (`509ad05`, vérifié dans un worktree à part) : l'ordre des WM_PAINT
+  (« Pending Visible Clipper Framed Striped Popup » au lieu de « Popup Striped Clipper Framed Visible Pending »)
+  vient de `paint::find_window_to_repaint` qui va du bas de l'ordre Z vers le haut (entrée du gestionnaire des
+  tâches ci-dessous, « Reste à vérifier ») ; ses attentes sont à mettre à jour ou l'ordre à revoir. **Vu, pas fait** : `window::link` place une fenêtre
+  HWND_TOP au-dessus de la dernière de ses sœurs quand toutes sont WS_EX_TOPMOST (comme IntLinkHwnd de ReactOS) ;
+  SW_HIDE de la fenêtre active ne cède toujours pas l'activation ; IntShowOwnedPopups (les fenêtres possédées d'une
+  fenêtre réduite restent montrées), le crochet HCBT_MINMAX, `spwndActivePrev`, le menu de la fenêtre. **Suite** :
+  vérifier sous VirtualBox avec le Bloc-notes et le gestionnaire des tâches (refaire l'image), puis le menu de la
+  fenêtre (SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE par lui).
+
 - **Le Bloc-notes s'affiche** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 24 ; le critère « Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre » commence) :
   scénario `notepad` (`tests/native/notepad1.c` à la place de `winlogon.exe` lance le vrai `notepad.exe`, que

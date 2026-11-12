@@ -339,6 +339,16 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 25 : RegisterWindowMessage (atomes de USER), NtUserQueryWindow (`win32k::window::query`), les
   accélérateurs (`win32k::accel`, `sys::accel` : Create, Copy, Destroy, TranslateAccelerator) : Ctrl+G ouvre « Goto
   line » du Bloc-notes.
+  M6, étape 26 (réduire, agrandir, rétablir, `win32k::winpos`) : co_WinPosMinMaximize (`winpos::min_maximize` :
+  `WS_MINIMIZE`, `WS_MAXIMIZE`, WM_QUERYOPEN, WM_GETMINMAXINFO, WM_SIZE `SIZE_MINIMIZED` ou `SIZE_MAXIMIZED` par
+  `SWP_STATECHANGED`) et la place gardée de chaque fenêtre (`winpos::InternalPos` : rectangle normal, places réduite
+  et agrandie), que lisent et donnent GetWindowPlacement et SetWindowPlacement ; ShowWindow de toutes ses commandes,
+  une fenêtre créée réduite ou agrandie ; la fenêtre active réduite cède l'activation
+  (`input::activate_other_min`). Agrandie, une fenêtre a son cadre épais hors de l'écran ; réduite, sans shell, elle
+  devient une barre de titre à la première case libre en bas à gauche (MINIMIZEDMETRICS `ARW_BOTTOMLEFT`, pas
+  `ARW_HIDE` comme ReactOS : `winpos::icon_slot`), dont les boutons répondent. Le cadre : le bouton du titre peint
+  enfoncé pendant son suivi (`paint::draw_caption_button`), le glyphe Rétablir, le double-clic sur le titre
+  (`defwnd::double_click`) ; scénario `minmax` (`tests/native/minmax1.c` : ShowWindow, puis la souris de QEMU).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
