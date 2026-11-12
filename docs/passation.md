@@ -1,5 +1,23 @@
 # Notes de passation
 
+- **Le logon jusqu'à `userinit`** (`claude/logon-token`, tirée de `claude/new-session-696xfc` à `509ad05`, qui y
+  a été fusionnée ensuite à `b9b46c6` ; worktree `.claude/worktrees/logon-token` ; M6, premier critère,
+  [`compat/m6-logon.md`](compat/m6-logon.md)). Le second
+  démarrage du scénario `logon` s'arrêtait à NtCreateToken ; il va maintenant jusqu'à `userinit.exe`, lancé par
+  `msgina` sous le jeton d'`Administrator`, qui cherche `C:\WINDOWS\explorer.exe` (absent du disque) et affiche
+  « Userinit failed to start the shell! ». Fait, dans l'ordre où le logon le demandait : NtCreateToken
+  (`se::Token::create`, `se::capture_sid`/`capture_acl` publics), FileEaInformation (la copie du profil),
+  NtLoadKey et NtUnloadKey (`cm::load_hive`, `cm::unload_hive`), NtDuplicateToken (`Token::duplicate_as` ; un
+  `DesiredAccess` nul prend les droits du handle copié), `Locale` dans `HKCU\Control Panel\International` (couche Mino)
+  et NtSetDefaultLocale de l'utilisateur (`ex::locale::user_locale`), `ProcessAccessToken`
+  (`ps::EProcess::set_primary_token`) ; `userinit.exe` sur le disque. Tests : hôte (`se`, `cm`, `ex`, 1081) ; `logon`
+  passe, et neuf mutations le font échouer (voir le document) ; `smss`, `console`, `cmd` (AMD et Intel),
+  `persistence`, `registry-persistence`, `rostests-kernel32` passent ; `rostests` reste à 43 (NtDuplicateToken et
+  NtOpenThreadToken gagnés, NtAccessCheck et NtAccessCheckByTypeResultList perdus : ils se sautaient et vont
+  maintenant jusqu'à NtAccessCheck, absent). **Vu, pas fait** : NtAccessCheck (SeAccessCheck, ADR-011) ; le thread de `userinit` sans
+  bureau de démarrage (`win32k::startup`, STATUS_NOT_IMPLEMENTED) ; NtDeleteKey ; la parenté des jetons ; NtUnloadKey
+  ne refuse pas une ruche dont des clés sont ouvertes. **Suite** : `explorer.exe` sur le disque, et ce qu'il demande.
+
 - **SetWindowLong du style ; l'ordre de peinture de ReactOS rétabli** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 28 ; choix du mainteneur : revenir à l'ordre de ReactOS
   et trouver la vraie cause de la page grise du gestionnaire des tâches). La cause : NtUserSetWindowLong refusait

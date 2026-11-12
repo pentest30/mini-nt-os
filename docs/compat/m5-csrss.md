@@ -928,7 +928,8 @@ Au second démarrage, `winlogon` va au logon (WLX_SAS_TYPE_CTRL_ALT_DEL posté, 
 NtUserRegisterHotKey, pas encore) ; `msgina` ouvre la session d'`Administrator` (AutoAdminLogon) par LsaLogonUser, qui
 demandait **NtAllocateLocallyUniqueId** (fait : `se::allocate_luid`) ; `msv1_0` trouve le compte et son mot de passe vide
 dans la SAM, puis `lsasrv` s'arrête à **NtCreateToken** (le jeton de la session : l'utilisateur, ses groupes, ses
-privilèges, son DACL par défaut) : la suite, Se.
+privilèges, son DACL par défaut) : la suite, Se. Elle est faite au M6 ([`m6-logon.md`](m6-logon.md)) : le logon va
+maintenant jusqu'à `userinit.exe`, qui cherche le shell.
 
 Vu en chemin : `msgina` montre aussi sa fenêtre de logon, dont le contrôle d'édition de `user32` lève des exceptions
 (curseur d'insertion : NtUserCreateCaret, pas encore ; les barres de défilement sont venues depuis, M6, étape 17) ;

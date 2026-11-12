@@ -1,8 +1,8 @@
-# M6, the logon (ADR-023, docs/compat/m5-csrss.md step 27). The hives of
-# the boot disk carry the Mino layer (tools/mkhive/mino.inf): the first
-# boot is in setup mode, the second goes to the logon. Two boots on the
-# system disk, so that what the first writes (the hives, the profiles) is
-# there for the second.
+# M6, the logon (ADR-023, docs/compat/m5-csrss.md step 27, docs/compat/m6-logon.md).
+# The hives of the boot disk carry the Mino layer (tools/mkhive/mino.inf):
+# the first boot is in setup mode, the second goes to the logon. Two boots
+# on the system disk, so that what the first writes (the hives, the
+# profiles) is there for the second.
 #
 # First boot: samsrv makes the accounts (setup mode), winlogon starts
 # MINOINIT.EXE (SYSTEM\Setup\CmdLine), which waits for Administrator in
@@ -15,14 +15,21 @@
 #
 # Second boot: winlogon goes to the logon, msgina logs Administrator on
 # (AutoAdminLogon) through LsaLogonUser; msv1_0 finds the account and its
-# blank password in the SAM, and lsasrv stops at NtCreateToken: where the
-# logon stops today.
+# blank password in the SAM, and lsasrv makes the user's token
+# (NtCreateToken). winlogon makes the profile of Administrator from Default
+# User (CopyFileW asks FileEaInformation), loads and unloads its NTUSER.DAT
+# (NtLoadKey, NtUnloadKey), then loads it for the session in
+# \REGISTRY\USER\<SID>; impersonates the user (NtDuplicateToken), sets the
+# user's locale from the profile (Control Panel\International\Locale, from
+# the Mino layer; NtSetDefaultLocale) and is logged on. msgina starts
+# userinit.exe under the user's token (CreateProcessAsUser:
+# NtSetInformationProcess, ProcessAccessToken, with a token copy of the same
+# access); userinit sets the user up and looks for the shell,
+# C:\WINDOWS\explorer.exe, which is not on the disk: where the logon stops
+# today ("Userinit failed to start the shell!").
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
-#
-# Few markers: the serial log can cut a line with another thread's
-# (docs/passation.md, the debts of step 27).
 features = test-smss, interactive
 requires = userland, native
 disk = system
@@ -33,7 +40,17 @@ timeout = 300
 expect = [boot] .DEFAULT hive mounted at \REGISTRY\USER\.DEFAULT
 expect = [minoinit] environment: SystemDrive=C:
 expect = [minoinit] done; rebooting
-expect = sys: NtCreateToken (0x0039) is not implemented
+expect = IncrementRefCount(S-1-5-21-
+expect = We are logged on
+expect = of userinit.exe
+expect = Failed to start default shell
 
 forbid = [minoinit] stopped:
 forbid = *** STOP:
+forbid = NtCreateToken failed
+forbid = LsaLogonUser failed
+forbid = CreateUserProfileW() failed
+forbid = RegLoadKeyW() failed
+forbid = ImpersonateLoggedOnUser() failed
+forbid = Failed to assign primary token
+forbid = CreateProcessAsUserW() failed

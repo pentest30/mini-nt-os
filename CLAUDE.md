@@ -347,6 +347,14 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 28 : SetWindowLong de GWL_STYLE et GWL_EXSTYLE (`win32k::window::set_style` : WM_STYLECHANGING,
   `restyle`, `restyle_ex`, WM_STYLECHANGED) ; l'onglet du gestionnaire des tâches se donne `WS_CLIPSIBLINGS` et ne
   peint plus sur sa page ; les sœurs se repeignent de haut en bas de l'ordre Z, comme ReactOS.
+  M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
+  NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
+  NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),
+  FileEaInformation, NtLoadKey et NtUnloadKey (`cm::load_hive`, `cm::unload_hive` : le `NTUSER.DAT` du profil en
+  `\REGISTRY\USER\<SID>`), NtSetDefaultLocale de l'utilisateur (son profil ; `ex::locale` sépare utilisateur et
+  système), `ProcessAccessToken` (`ps::EProcess::set_primary_token`) ; `Locale` dans la couche Mino ;
+  `userinit.exe` sur le disque. `winlogon` ouvre la session, `msgina` lance `userinit` sous le jeton de
+  l'utilisateur, qui ne trouve pas `explorer.exe`.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
@@ -409,7 +417,8 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   profils, `NTUSER.DAT` de `Default User`, `SetupType` = 0, redémarrage), le second va au logon. Les ports de
   complétion d'E/S (`io_manager::completion`, `sys::completion`), DEFAULT en `\REGISTRY\USER\.DEFAULT`,
   `SystemDrive` donné à `smss`, les répertoires FAT à nom long, NtAllocateLocallyUniqueId ; scénario `logon` :
-  `msgina` ouvre la session d'`Administrator`, `lsasrv` s'arrête à NtCreateToken.
+  `msgina` ouvre la session d'`Administrator`, `lsasrv` s'arrête à NtCreateToken (la suite au M6 : le logon jusqu'à
+  `userinit`).
   Le dernier critère du M5, les apitests de ReactOS ([`docs/compat/m5-rostests.md`](docs/compat/m5-rostests.md)) :
   `cargo xtask rostests-fetch` clone l'arbre 0.4.16 (sans lui, les scénarios sont sautés) ; `xtask/src/rostests.rs`
   compile les modules `ntdll` et `kernel32` en un pilote (commande initiale de `smss` à la place de winlogon, il
