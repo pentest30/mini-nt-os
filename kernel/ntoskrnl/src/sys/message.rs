@@ -278,18 +278,37 @@ fn send_error(error: win32k::sent::SendError) -> u32 {
 /// - FNID_SENDNOTIFYMESSAGE (SendNotifyMessage) : sans attendre la
 ///   procédure d'un autre thread.
 ///
-/// FALSE pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`), un
-/// thread fini sans répondre, ou un pointeur vers un autre processus (pas
-/// encore). La diffusion (HWND_BROADCAST) n'atteint encore aucune fenêtre :
-/// TRUE et 0, journalisé une fois.
+/// Un envoi qui échoue — une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`),
+/// un thread fini sans répondre, un pointeur vers un autre processus (pas
+/// encore) — pose l'erreur ; SendMessage rend alors TRUE et 0 en
+/// `ResultInfo`, comme ReactOS (co_IntDoSendMessage rend 0) : `user32`
+/// rend ce qu'il y lit, sa variable n'est pas initialisée
+/// (`Header_GetItemCount` d'une liste sans en-tête, dans la vue des fichiers
+/// de `shell32`, doit valoir 0) ; les deux autres rendent FALSE. La diffusion
+/// (HWND_BROADCAST) n'atteint encore aucune fenêtre : TRUE et 0, journalisé
+/// une fois.
 fn send_message_call(handle: u32, message: u32, wparam: u32, lparam: u32, result_info: u32, kind: u32) -> NtStatus {
     if handle == HWND_BROADCAST {
         if !BROADCAST_SEND_REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("sys: message {message:#x} sent to HWND_BROADCAST: no window yet");
         }
+        // SendMessage's result is 0, written where user32 reads it.
+        if kind == FNID_SENDMESSAGE && result_info != 0 {
+            let _ = copy_to_user(u64::from(result_info), &0u32.to_le_bytes());
+        }
         return NtStatus(1);
     }
-    let Some(window) = win32k::window::get(handle) else { return fail(ERROR_INVALID_WINDOW_HANDLE) };
+    let failed = |error: u32| {
+        if kind != FNID_SENDMESSAGE {
+            return fail(error);
+        }
+        let _ = win32k::set_last_error(error);
+        if result_info != 0 && copy_to_user(u64::from(result_info), &0u32.to_le_bytes()).is_err() {
+            return NtStatus(0);
+        }
+        NtStatus(1)
+    };
+    let Some(window) = win32k::window::get(handle) else { return failed(ERROR_INVALID_WINDOW_HANDLE) };
     let current = current();
     let (timeout, result_at) = match kind {
         FNID_SENDMESSAGEWTOOPTION => {
@@ -315,6 +334,6 @@ fn send_message_call(handle: u32, message: u32, wparam: u32, lparam: u32, result
             }
             NtStatus(1)
         }
-        Err(error) => fail(send_error(error)),
+        Err(error) => failed(send_error(error)),
     }
 }
