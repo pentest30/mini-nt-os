@@ -1,0 +1,18 @@
+# A new document: keyboard input, Save As, independent byte verification,
+# clean application exit, fresh Notepad process, and rendered saved text.
+features = test-smss
+requires = userland, native
+initial-command = NOTEPAD2.EXE
+cpus = default, intel
+timeout = 120
+keys = [note-save] ready for typing => "Hello, Mino!" ret "Line 2" ctrl-s
+keys = [note-save] Save As ready => alt-n "C:\MINO-NOTE.TXT" ret
+keys = [note-save] exact file bytes verified, close now => alt-f4
+expect = [note-save] exact file bytes verified, close now
+expect = [note-save] first process closed cleanly
+expect = [note-save] reopened in a new process; PASS
+forbid = [apps] FAIL
+forbid = *** STOP:
+screen = 12 53 000000
+screen = 68 50 3E3E3E
+screen = 14 72 000000

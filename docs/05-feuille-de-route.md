@@ -117,7 +117,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 
 **Critères de sortie**
 - [ ] `winlogon` (ouverture de session automatique), `userinit` et `explorer` affichent le bureau, la barre des tâches et le menu Démarrer.
-- [ ] Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre.
+- [x] Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre (`notepad-save`, AMD et Intel ; [parcours vérifié](compat/applications.md)).
 - [ ] La résolution se change depuis le panneau Affichage (QEMU).
 
 ## M7 — Bureau et applications
