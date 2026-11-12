@@ -582,7 +582,9 @@ fn frame_edge(style: u32, ex_style: u32) -> bool {
 /// fenêtre réduite `WS_MINIMIZE`. Une fille qui cesse de l'être perd son
 /// identifiant ; une fenêtre qui devient fille, sa barre de menus
 /// (`WNDS_HASMENU`) : son `IDMenu` garde la valeur de la barre, comme dans
-/// ReactOS, qui n'a qu'un champ pour les deux.
+/// ReactOS, qui n'a qu'un champ pour les deux. Fille ou non d'après le style
+/// appliqué (`style`) : ReactOS regarde `value`, et une procédure qui garde
+/// `WS_CHILD` à WM_STYLECHANGING laissait une fille sans identifiant.
 pub fn restyle(state: &mut WindowState, value: u32, style: u32, top_level: bool) {
     let old = state.style;
     let mut style = style;
@@ -598,7 +600,7 @@ pub fn restyle(state: &mut WindowState, value: u32, style: u32, top_level: bool)
         state.ex_style &= !WS_EX_WINDOWEDGE;
     }
     let was_child = old & (WS_CHILD | WS_POPUP) == WS_CHILD;
-    let is_child = value & (WS_CHILD | WS_POPUP) == WS_CHILD;
+    let is_child = style & (WS_CHILD | WS_POPUP) == WS_CHILD;
     if was_child && !is_child {
         state.id_menu = 0;
     } else if !was_child && is_child {
@@ -2048,6 +2050,18 @@ mod tests {
         let mut state = WindowState { style: WS_POPUP, menu: 0x40, state: WNDS_HASMENU, ..WindowState::default() };
         restyle(&mut state, WS_CHILD, WS_CHILD, false);
         assert_eq!((state.state & WNDS_HASMENU, state.menu, state.id_menu), (0, 0, 0x40), "IDMenu keeps its value");
+    }
+
+    #[test]
+    fn the_style_wm_stylechanging_leaves_decides_whether_it_is_a_child() {
+        // Asked to become a popup, kept a child by its procedure.
+        let mut state = WindowState { style: WS_CHILD, id_menu: 7, ..WindowState::default() };
+        restyle(&mut state, WS_POPUP, WS_CHILD, false);
+        assert_eq!((state.style, state.id_menu), (WS_CHILD, 7), "still a child: its identifier stays");
+        // Asked to become a child, kept a popup: its menu bar stays.
+        let mut state = WindowState { style: WS_POPUP, menu: 0x40, state: WNDS_HASMENU, ..WindowState::default() };
+        restyle(&mut state, WS_CHILD, WS_POPUP, false);
+        assert_eq!((state.state & WNDS_HASMENU, state.menu, state.id_menu), (WNDS_HASMENU, 0x40, 0));
     }
 
     #[test]
