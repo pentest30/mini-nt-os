@@ -1,5 +1,10 @@
 # Notes de passation
 
+- **Text Editor du bureau lance le Bloc-notes** (`claude/desktop-notepad`, sur main `a4fa4c3`) : l'entrée « Text
+  Editor » du menu Démarrer de `tests/native/desktop1.c` ne lançait rien (seuls Terminal et Task Manager avaient un
+  programme) ; elle lance `NOTEPAD.EXE`. Scénario `desktop-notepad` (Bas, Entrée : « launched Text Editor », le
+  thread de `NOTEPAD.EXE` converti) sur AMD et Intel ; la mutation (l'entrée vide) le fait échouer.
+
 - **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, PR #127, base main `3942dd5`) : `notepad-save` passe sur AMD et Intel : saisie QEMU, vrai Save As, vérification des 20 octets, Alt+F4, sortie normale, nouveau processus et texte relu à l'écran. GWLP_WNDPROC client de même encodage débloque ATL ; Alt+F4 poste SC_CLOSE au premier niveau, sauf CS_NOCLOSE. Conversions ANSI/Unicode et procédures serveur refusées explicitement (thunks à faire). 322 tests hôte win32k passent. Critère Bloc-notes de M6 coché ; pas de reboot/persistance dans ce scénario RAM. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` et lint global à rejouer.
 
 - **Le logon jusqu'à `userinit`** (`claude/logon-token`, tirée de `claude/new-session-696xfc` à `509ad05`, qui y
