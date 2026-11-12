@@ -407,6 +407,8 @@ pub const WVR_VALIDRECTS: u32 = 0x0400;
 /// changes.
 pub const CS_VREDRAW: u32 = 0x0001;
 pub const CS_HREDRAW: u32 = 0x0002;
+/// Suppress the close command on the class's windows.
+pub const CS_NOCLOSE: u32 = 0x0200;
 /// CS_OWNDC, CS_CLASSDC: each window (the class) has a DC of its own;
 /// CS_PARENTDC: a child draws with its parent's DC.
 pub const CS_OWNDC: u32 = 0x0020;
@@ -1152,6 +1154,7 @@ pub mod vk {
     pub const VK_DELETE: u8 = 0x2E;
     pub const VK_NUMPAD0: u8 = 0x60;
     pub const VK_DECIMAL: u8 = 0x6E;
+    pub const VK_F4: u8 = 0x73;
     pub const VK_F10: u8 = 0x79;
     pub const VK_NUMLOCK: u8 = 0x90;
     pub const VK_LSHIFT: u8 = 0xA0;

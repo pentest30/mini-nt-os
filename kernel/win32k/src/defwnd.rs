@@ -50,7 +50,7 @@ use alloc::sync::Arc;
 use core::mem::size_of;
 
 use abi::ntstatus::NtStatus;
-use abi::user::vk::{VK_ESCAPE, VK_F10, VK_LMENU, VK_MENU, VK_RMENU, VK_TAB};
+use abi::user::vk::{VK_ESCAPE, VK_F10, VK_F4, VK_LMENU, VK_MENU, VK_RMENU, VK_TAB};
 use abi::user::{
     sm, MinMaxInfo32, WindowPos32, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE,
     SWP_NOSIZE, SWP_STATECHANGED, WM_DEVICECHANGE, WM_MOVE, WM_NCCALCSIZE, WM_NCPAINT, WM_PAINT, WM_PAINTICON, WM_SIZE,
@@ -498,13 +498,15 @@ pub struct MenuKeys {
     pub f10: bool,
 }
 
-/// Où va SC_KEYMENU ([`key_menu`]).
+/// La commande système produite par le clavier ([`key_menu`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyMenu {
     /// À la fenêtre elle-même, `lParam` le caractère (Alt et une lettre).
     Window(u32),
     /// À sa fenêtre de premier niveau, `lParam` 0 (Alt ou F10 relâché).
     Root,
+    /// Alt+F4 : SC_CLOSE, posté à la fenêtre de premier niveau.
+    CloseRoot,
 }
 
 /// Une touche Alt (VK_MENU, ou celle de gauche ou de droite).
@@ -517,8 +519,12 @@ fn is_alt(wparam: u32) -> bool {
 /// enfoncé puis relâché, demandent la barre (SC_KEYMENU, 0, à la fenêtre de
 /// premier niveau) ; Alt et une lettre (WM_SYSCHAR) demandent l'item qu'elle
 /// souligne (SC_KEYMENU, la lettre) ; une autre touche entre-temps oublie Alt.
-/// Pas encore : Alt+F4, Alt+Tab, Alt+Échap, Maj+F10 (WM_CONTEXTMENU), Maj+Échap
+/// Alt+F4 demande SC_CLOSE à la fenêtre de premier niveau.
+/// Pas encore : Alt+Tab, Alt+Échap, Maj+F10 (WM_CONTEXTMENU), Maj+Échap
 /// et Alt+Espace (le menu de la fenêtre), Entrée sur une fenêtre réduite.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL. N'alloue pas.
 pub fn key_menu(keys: &mut MenuKeys, message: u32, wparam: u32, lparam: u32) -> Option<KeyMenu> {
     let flags = lparam >> 16;
     match message {
@@ -528,6 +534,10 @@ pub fn key_menu(keys: &mut MenuKeys, message: u32, wparam: u32, lparam: u32) -> 
                     keys.alt = is_alt(wparam) && !keys.alt;
                 }
                 keys.f10 = false;
+                if wparam == u32::from(VK_F4) {
+                    *keys = MenuKeys::default();
+                    return Some(KeyMenu::CloseRoot);
+                }
             } else if wparam == u32::from(VK_F10) {
                 keys.f10 = true;
             }
@@ -710,6 +720,25 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             let (target, character) = match command {
                 Some(KeyMenu::Window(character)) => (window.clone(), character),
                 Some(KeyMenu::Root) => (crate::mouse::top_level(window), 0),
+                Some(KeyMenu::CloseRoot) => {
+                    let target = crate::mouse::top_level(window);
+                    let style = target.class.as_ref().map_or(0, |class| class.info.style);
+                    if style & abi::user::CS_NOCLOSE == 0 {
+                        if let Some(thread) = crate::gui::thread_info_of(target.pti) {
+                            crate::queue::post(
+                                &thread,
+                                abi::user::Msg32 {
+                                    hwnd: target.handle,
+                                    message: WM_SYSCOMMAND,
+                                    w_param: abi::user::SC_CLOSE,
+                                    time: hal::timer::get_tick_count() as u32,
+                                    ..abi::user::Msg32::default()
+                                },
+                            );
+                        }
+                    }
+                    return Ok(0);
+                }
                 None => return Ok(0),
             };
             let _ = crate::window::send_message(&target, WM_SYSCOMMAND, SC_KEYMENU, LParam::Value(character));
@@ -962,6 +991,15 @@ mod tests {
         // A WM_SYSCHAR without Alt (no menu), and a key up never pressed.
         assert_eq!(key_menu(&mut keys, WM_SYSCHAR, u32::from(b'f'), key(0)), None);
         assert_eq!(key_menu(&mut keys, WM_KEYUP, f10, key(KF_UP)), None);
+    }
+
+    #[test]
+    fn alt_f4_closes_the_root_without_opening_the_menu_on_release() {
+        let mut keys = MenuKeys::default();
+        key_menu(&mut keys, WM_SYSKEYDOWN, u32::from(VK_MENU), key(KF_ALTDOWN));
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYDOWN, u32::from(VK_F4), key(KF_ALTDOWN)), Some(KeyMenu::CloseRoot));
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYUP, u32::from(VK_MENU), key(KF_UP)), None);
+        assert_eq!(key_menu(&mut keys, WM_SYSKEYDOWN, u32::from(VK_F4), key(0)), None);
     }
 
     #[test]

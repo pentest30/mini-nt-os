@@ -258,14 +258,14 @@ pub(super) fn nt_user_show_window_async(arguments: &[u32]) -> NtStatus {
 /// (`ERROR_ACCESS_DENIED` ; ReactOS met à tort le statut NT
 /// `STATUS_ACCESS_DENIED` comme erreur) ou un index refusé.
 pub(super) fn nt_user_set_window_long(arguments: &[u32]) -> NtStatus {
-    let [handle, index, value] = arguments[..3] else { unreachable!("4 arguments, the last unused") };
+    let [handle, index, value, ansi] = arguments[..4] else { unreachable!("4 arguments") };
     let Some(window) = win32k::window::get(handle) else {
         return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
     };
     if window.is_desktop_window() {
         return fail(abi::winerror::ERROR_ACCESS_DENIED);
     }
-    match win32k::window::set_long(&window, index as i32, value) {
+    match win32k::window::set_long(&window, index as i32, value, ansi != 0) {
         Ok(old) => NtStatus(old),
         Err(error) => fail(error),
     }

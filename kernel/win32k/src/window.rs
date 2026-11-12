@@ -502,11 +502,12 @@ pub fn apply_long(state: &mut WindowState, index: i32, value: u32) -> Option<u32
 /// # Errors
 /// L'erreur de Win32 : `ERROR_INVALID_INDEX` pour une place au-delà des
 /// octets de plus ou un index inconnu ; `ERROR_CALL_NOT_IMPLEMENTED` pour
-/// GWLP_WNDPROC et GWLP_HWNDPARENT (pas encore, journalisé une fois).
+/// GWLP_HWNDPARENT, les procédures serveur et les ponts ANSI/Unicode.
+/// GWLP_WNDPROC d’un autre processus : ERROR_ACCESS_DENIED.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
-pub fn set_long(window: &Arc<Window>, index: i32, value: u32) -> Result<u32, u32> {
+pub fn set_long(window: &Arc<Window>, index: i32, value: u32, ansi: bool) -> Result<u32, u32> {
     if index >= 0 {
         let extra = window.wnd_size - size_of::<Wnd32>() as u32;
         let at = extra_offset(extra, index).ok_or(abi::winerror::ERROR_INVALID_INDEX)?;
@@ -522,7 +523,16 @@ pub fn set_long(window: &Arc<Window>, index: i32, value: u32) -> Result<u32, u32
     if matches!(index, GWL_STYLE | GWL_EXSTYLE) {
         return Ok(set_style(window, index, value));
     }
-    if matches!(index, GWLP_WNDPROC | GWLP_HWNDPARENT) {
+    if index == GWLP_WNDPROC {
+        let current = ps::ethread::current_thread().ok_or(abi::winerror::ERROR_ACCESS_DENIED)?;
+        if crate::gui::process_id_of(window.pti) != Some(current.process().pid()) {
+            return Err(abi::winerror::ERROR_ACCESS_DENIED);
+        }
+        let mut result = Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+        change(window, |state| result = replace_procedure(state, value, !ansi));
+        return result;
+    }
+    if index == GWLP_HWNDPARENT {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("win32k: SetWindowLong of the procedure or the parent ({index}): not yet");
@@ -532,6 +542,16 @@ pub fn set_long(window: &Arc<Window>, index: i32, value: u32) -> Result<u32, u32
     let mut old = None;
     change(window, |state| old = apply_long(state, index, value));
     old.ok_or(abi::winerror::ERROR_INVALID_INDEX)
+}
+
+/// Replace a client procedure without changing its character-set contract.
+/// ANSI/Unicode crossings need CALLPROCDATA handles (CallWindowProc thunks),
+/// and server procedures need their client counterpart; neither is inferred.
+fn replace_procedure(state: &mut WindowState, procedure: u32, unicode: bool) -> Result<u32, u32> {
+    if state.unicode != unicode || state.state & WNDS_SERVERSIDEWINDOWPROC != 0 {
+        return Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+    }
+    Ok(core::mem::replace(&mut state.wnd_proc, procedure))
 }
 
 /// co_IntSetWindowLongPtr, GWL_STYLE et GWL_EXSTYLE : la procédure de
@@ -2009,6 +2029,19 @@ mod tests {
     }
 
     /// Task Manager's tab control (comctl32, TAB_Create) gives itself
+    #[test]
+    fn client_procedure_can_be_replaced_and_restored() {
+        let mut state = WindowState { wnd_proc: 0x401000, unicode: true, ..WindowState::default() };
+        assert_eq!(replace_procedure(&mut state, 0x402000, true), Ok(0x401000));
+        assert_eq!(state.wnd_proc, 0x402000);
+        assert_eq!(replace_procedure(&mut state, 0x401000, true), Ok(0x402000));
+        assert_eq!(replace_procedure(&mut state, 0x403000, false), Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED));
+        assert_eq!(state.wnd_proc, 0x401000, "unsupported conversion leaves the procedure intact");
+        state.state |= WNDS_SERVERSIDEWINDOWPROC;
+        assert!(replace_procedure(&mut state, 0x403000, true).is_err());
+        assert_eq!(state.wnd_proc, 0x401000);
+    }
+
     /// WS_CLIPSIBLINGS by SetWindowLong(GWL_STYLE); refused, it painted its
     /// background over the page above it in the Z order.
     #[test]
