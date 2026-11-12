@@ -1,6 +1,6 @@
 # Notes de passation
 
-- **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, base main `3942dd5`) : nouvelle sonde `NOTEPAD2.EXE`/scénario `notepad-save` avec saisie QEMU, vrai Save As, vérification des octets du fichier, fermeture et réouverture dans un processus neuf. Échec de main reproduit : assertion ATL `IsWindow(m_hWnd)`, aucun fichier enregistré. Le test est volontairement rouge jusqu’aux correctifs USER ; remplacement GWLP_WNDPROC en cours. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` à rejouer.
+- **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, PR #127, base main `3942dd5`) : `notepad-save` passe sur AMD et Intel : saisie QEMU, vrai Save As, vérification des 20 octets, Alt+F4, sortie normale, nouveau processus et texte relu à l'écran. GWLP_WNDPROC client de même encodage débloque ATL ; Alt+F4 poste SC_CLOSE au premier niveau, sauf CS_NOCLOSE. Conversions ANSI/Unicode et procédures serveur refusées explicitement (thunks à faire). 322 tests hôte win32k passent. Critère Bloc-notes de M6 coché ; pas de reboot/persistance dans ce scénario RAM. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` et lint global à rejouer.
 
 - **SetWindowLong du style ; l'ordre de peinture de ReactOS rétabli** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 28 ; choix du mainteneur : revenir à l'ordre de ReactOS

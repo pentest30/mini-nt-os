@@ -6,7 +6,7 @@ Les exécutables de référence sont ceux de ReactOS 0.4.16 (`51bfc703`), déjà
 
 | Application | Parcours à vérifier | État de cette campagne |
 |---|---|---|
-| Bloc-notes | Nouveau document, saisie au clavier, Enregistrer sous, contenu exact sur disque, fermeture normale, réouverture et rendu | Échec reproduit sur main ; correction en cours |
+| Bloc-notes | Nouveau document, saisie au clavier, Enregistrer sous, contenu exact sur disque, fermeture normale, réouverture et rendu | PASS QEMU AMD et Intel |
 | Calculatrice | Lancer, calculer une expression, vérifier le résultat, fermer | À exécuter |
 | Démineur | Lancer, interaction avec une case, nouvelle partie, fermer | À exécuter |
 | Gestionnaire des tâches | Fermer, relancer, naviguer entre Applications et Processus | Scénario existant `desktop-launch`, régression à relancer |
@@ -28,5 +28,14 @@ Reproduction sur main : fenêtre Save As visible, puis assertion
 scénario échoue sur `[apps] FAIL: saved file contents`. L'ancien scénario
 `notepad` valide uniquement la saisie et Ctrl+G, pas l'enregistrement.
 
-Reprise : `cargo xtask test --boot --scenario notepad-save --cpu default`.
-Ne cocher le critère M6 qu'après succès du parcours complet sur AMD et Intel.
+Correctifs : GWLP_WNDPROC remplace/restaure une procédure cliente dans le
+processus propriétaire, publie le nouveau pointeur dans WND et rend l'ancien.
+Les conversions ANSI/Unicode et les procédures serveur nécessitent encore
+des thunks ; ces cas rendent explicitement ERROR_CALL_NOT_IMPLEMENTED.
+Alt+F4 poste SC_CLOSE à la fenêtre de premier niveau (sauf CS_NOCLOSE), puis
+laisse l'application traiter normalement WM_CLOSE. Aucun processus n'est tué.
+
+Validation : `notepad-save` passe sur AMD (`int 2Eh`) et Intel (`SYSENTER`) ;
+322 tests hôte de win32k passent. Le fichier est sur le volume de démarrage
+en RAM de ce scénario : ce test ne prouve pas la persistance après reboot.
+Reprise : `cargo xtask test --boot --scenario notepad-save`.
