@@ -1277,3 +1277,85 @@ Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZ
 fille qui cesse ou devient fille) ; `desktop-launch` sur AMD et Intel, qui échoue avec l'ordre de ReactOS sans
 GWL_STYLE (la page grise, ses quatre pixels) ; `gui` passe de nouveau sur AMD et Intel ; toute la suite sur AMD (55
 sur 55).
+
+## Étape 29 : la vue des fichiers de la boîte Enregistrer sous (GetIconInfo, GetDIBits, StretchBlt ; GetAtomName et SendMessage corrigés)
+
+Sous VirtualBox, la boîte « Save As » du Bloc-notes restait figée : sa vue des fichiers vide, le thread du Bloc-notes
+bouclait (environ 25 lignes par seconde : « GetIconInfo Failed », « Failed to add IDI_SHELL_DOCUMENT icon to cache »,
+« Imagelist no longer valid », puis `shell32.dll` rechargé). Sous QEMU la boucle tournait aussi (18 tours avant la
+saisie) ; `notepad-save` passait parce qu'il tapait un chemin complet sans attendre la vue. Ce que la boîte demandait,
+dans l'ordre où elle bloquait :
+
+1. **NtUserGetIconInfo.** Le cache d'icônes de `shell32` (SIC_Initialize) met IDI_SHELL_DOCUMENT dans deux listes
+   d'images de `comctl32` (ILC_COLOR32 | ILC_MASK). ImageList_ReplaceIcon demande d'abord CopyImage(LR_COPYFROMRESOURCE),
+   qui veut le module et la ressource de l'icône (NtUserGetIconInfo, deux fois : la place, puis les noms) pour la
+   recharger à la taille de la liste ; puis GetIconInfo, des copies de ses bitmaps. Sans le service, l'ajout échouait,
+   le cache était détruit, et chaque icône demandée le refaisait. Fait : `win32k::cursor::icon_info` (ICONINFO, `pbpp`
+   tiré de CURSORDATA.bpp, désormais gardé) ; les copies par `gdi::surface::copy_bitmap` (BITMAP_CopyBitmap : un
+   bitmap du noyau de la même taille, monochrome ou non, les pixels et leur octet haut, au processus appelant, qui les
+   supprime) ; `module_reply` et `resource_reply` (la place qu'il faut quand le tampon est trop petit, un identifiant
+   MAKEINTRESOURCE dans `Buffer`) ; `abi::user::IconInfo32` ; `sys::cursor::nt_user_get_icon_info`. Écarts : le nom
+   d'une ressource revient en majuscules (Mino le garde ainsi pour la recherche sans casse) ; sa place compte un NUL,
+   que `user32` écrit lui-même au bout.
+2. **NtUserGetAtomName écrasait la pile.** Son second argument est un PUNICODE_STRING : `user32` (ClassNameToVersion,
+   à CreateWindowEx d'une classe désignée par son atome) y donne un tampon de MAX_PATH caractères. Mino écrivait le nom
+   par-dessus la structure elle-même : « SHELLDLL_DefView » écrasait les registres sauvés de l'appelant, et
+   SHGetSetSettings de `shell32` partait avec des arguments faits de texte UTF-16 (une exception dans le WM_INITDIALOG
+   de la boîte). Le nom va dans `Buffer`, tronqué à `MaximumLength` avec son NUL (`win32k::atom::name_in_buffer`,
+   comme NtUserGetAtomName de ReactOS) ; `Length` n'est pas touché.
+3. **SendMessage à une fenêtre qui n'existe pas.** NtUserMessageCall(FNID_SENDMESSAGE) rendait FALSE sans écrire
+   `ResultInfo`, et `user32` (SendMessageW) rend alors sa variable non initialisée. CDefView::LoadColumns demande
+   Header_GetItemCount de l'en-tête de sa liste, qui n'existe pas encore en vue liste (`comctl32` le crée à la
+   première colonne) : il croyait avoir deux millions de colonnes, les changeait au lieu de les insérer, et
+   l'assertion `MapFolderColumnToListColumn(0)` (CDefView.cpp:1178) arrêtait le Bloc-notes (abort, code 3). Comme
+   ReactOS (co_IntDoSendMessage rend 0, l'appel réussit) : 0 en `ResultInfo`, l'erreur posée
+   (`ERROR_INVALID_WINDOW_HANDLE`), TRUE. SendMessageTimeout et SendNotifyMessage rendent toujours FALSE.
+4. **Les icônes de la liste.** ImageList_ReplaceIcon lit les copies de GetIconInfo par GetDIBits (add_with_alpha), et
+   la liste se dessine par StretchBlt :
+   - GetDIBits (`gdi::dibits::get_dibits`, NtGdiGetDIBitsInternal) : en 1 bit (noir 0, blanc 1, la table de deux
+     couleurs) et en 32 bits (l'octet haut gardé, les masques écrits pour BI_BITFIELDS) ; un en-tête de 0 bit demande
+     le format seul (BI_BITFIELDS en 32 bits, comme ReactOS ; la hauteur négative d'une DIB section descendante) ; les
+     lignes comptées depuis le bas, une DIB moins haute que le bitmap prenant son haut, comme ReactOS
+     (`scan_window`, `encode_lines`). Pas encore : les autres profondeurs (journalisé), DIB_PAL_COLORS, un
+     BITMAPCOREHEADER.
+   - StretchBlt (`gdi::bitblt::stretch_blt`, NtGdiStretchBlt) : aux mêmes tailles, BitBlt ; sinon le pixel le plus
+     proche, la source lue d'abord dans un tampon (`read_area`, `stretch_part`). Pas encore : une étendue négative.
+   - GetNearestColor (NtGdiGetNearestColor) : sur 32 bits, la couleur elle-même.
+5. **La barre d'outils.** Ses bitmaps (ceux de `comctl32`, LoadImage) sont de 32 bits en BI_BITFIELDS, avec un en-tête
+   V4 : StretchDIBits lit maintenant les masques de 16 et 32 bits, derrière un BITMAPINFOHEADER ou dans un en-tête V4
+   ou V5 (`DibFormat::masks`). Son « not yet » dit désormais la profondeur, la compression et l'usage (le « DIB à
+   palette » vu sous VirtualBox était ce BI_BITFIELDS).
+
+La boîte montre maintenant `C:\` filtré sur `*.txt` : Documents and Settings, MINODIR, WINDOWS, A long name.txt,
+MINOTEST.TXT, avec leurs icônes ; Alt+N et le chemin tapé enregistrent le fichier. Le scénario `notepad-save` attend
+que la vue soit remplie avant de taper (`app_file_view` : GetDlgItem de `lst2`, puis de la liste, LVM_GETITEMCOUNT) :
+tapées plus tôt, les touches allaient au premier contrôle de la boîte encore en construction.
+
+Vu, pas fait : l'alpha des images de 32 bits (StretchDIBits le perd ; NtGdiCreateDIBitmapInternal, le bitmap d'alpha
+d'une icône, create_alpha_bitmap de `user32` ; NtGdiAlphaBlend) et la conversion couleur ↔ monochrome de BitBlt
+(ImageList_AddMasked de `comctl32` en tire le masque : la couleur de fond du DC source devient le blanc) : les boutons
+de la barre d'outils et la barre des emplacements ont un fond noir et des images fausses. La DIB section de 4 bits
+vue sous VirtualBox paraît sous QEMU dans le gestionnaire des tâches (`desktop-launch`) : sa liste d'images est de
+4 bits par pixel (GetDIBits de 4 bits pour la table par défaut, puis CreateDIBSection, tous deux « not yet ») ; ses
+tâches, sans icône avant (ImageList_ReplaceIcon échouait), en ont maintenant une, noire, qui décale le texte de la
+ligne : le scénario vérifie la ligne choisie après son texte. NtUserGetClassName, NtUserSetWindowsHookEx (le WH_MSGFILTER de
+`comdlg32`), NtUserCallTwoParam 0x60 ; NtQueryDebugFilterState rend TRUE, ce qui fait évaluer les TRACE des DLL de
+ReactOS (des fautes gérées dans leurs `debugstr`).
+
+Tests : hôte (`cursor` : ce que GetIconInfo dit d'une icône, d'un curseur monochrome, d'un curseur sans données ;
+la place du module et du nom de ressource, un identifiant ; `atom` : le nom tronqué à la place du tampon ; `dibits`
+: les lignes de GetDIBits depuis le bas, l'encodage en 1 et 32 bits, les masques de BI_BITFIELDS en 16 et 32 bits ;
+`bitblt` : StretchBlt plus grand, plus petit, plus haut, SRCAND). Sondes : `icons` (GetIconInfo de IDI_HAND, ses
+copies lues par GetDIBits puis supprimées, une icône qui n'existe pas, CopyImage(LR_COPYFROMRESOURCE) à 16 × 16),
+`bitmap` (StretchBlt, GetNearestColor, GetDIBits d'un bitmap de 32 bits et d'un monochrome, StretchDIBits en 5-6-5),
+`listview` (une fenêtre « Files » dont le WM_CREATE fait ce que fait la vue de `shell32` : SendMessage à l'en-tête
+absent rend 0 et `ERROR_INVALID_WINDOW_HANDLE`, la colonne Name insérée crée l'en-tête et se relit en sous-élément 0),
+`notepad-saveas` (nouveau : `tests/native/notepad3.c`, la vue liste 5 éléments ; l'icône de dossier de la première
+ligne, un coin transparent de sa case blanc et non noir, une ligne grise de l'icône de document ; les messages de la
+boucle et de l'assertion interdits), `notepad-save` (la sonde attend la vue avant de taper). Quatorze mutations, une
+par correction, font chacune échouer un test (sans NtUserGetIconInfo, sans copie, la copie qui perd « monochrome »,
+la place du NUL oubliée, l'ancien NtUserGetAtomName — l'exception revient dans `notepad-saveas` —, MaximumLength
+ignoré, SendMessage sans `ResultInfo`, sans GetDIBits, GetDIBits toujours descendant ou sans le décalage de ReactOS,
+sans StretchBlt, StretchBlt sur le mauvais axe, sans GetNearestColor, BI_BITFIELDS refusé). 1107 tests hôte ;
+`notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` sur AMD
+et Intel.

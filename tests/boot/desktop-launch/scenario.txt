@@ -21,7 +21,10 @@
 # comctl32's TAB_Create): the first row of the list selected, the underlined N
 # of New Task..., the white relief under the S of Switch To and the E of End
 # Task, disabled (DrawState, a font from GetObjectW). Without the style, the
-# tab control painted over the page, gray.
+# tab control painted over the page, gray. The selected row is checked after
+# its text: the list's image list (comctl32, 4 bits per pixel) now gets the
+# tasks' icons (GetIconInfo), which shift the text; they show black, its DIB
+# section of 4 bits not being made yet.
 features = test-smss
 requires = userland, native
 initial-command = DESKTOP1.EXE
@@ -42,7 +45,7 @@ expect = [apps] the process list was read by PID
 expect = (TASKMGR.EXE) ended
 screen = 200 300 000000
 screen = 700 785 1E5CDB
-screen = 500 288 0A246A
+screen = 660 288 0A246A
 screen = 751 572 000000
 screen = 672 573 FFFFFF
 screen = 590 573 FFFFFF

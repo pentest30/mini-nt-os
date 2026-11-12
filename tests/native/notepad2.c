@@ -49,8 +49,11 @@ DWORD WINAPI GuiStartup(void)
     PROCESS_INFORMATION process=app_start(L"C:\\WINDOWS\\SYSTEM32\\NOTEPAD.EXE",command);
     app_wait_window(&process,L"Untitled - Notepad");
     DbgPrint("[note-save] ready for typing\n");
-    app_wait_window(&process,L"Save As");
+    HWND dialog=app_wait_window(&process,L"Save As");
     DbgPrint("[note-save] Save As ready\n");
+    /* Typed before the view is there, the keys would go to the dialog's
+       first control while it is still being made. */
+    DbgPrint("[note-save] the Save As view lists %d files and folders\n",app_file_view(&process,dialog));
     BOOL found=FALSE;
     for(unsigned int n=0;n<240;++n) {
         if(saved()) {found=TRUE;break;}

@@ -70,6 +70,25 @@ static inline HWND app_wait_window(const PROCESS_INFORMATION *process, const WCH
     }
     app_check(FALSE,"window timed out");return 0;
 }
+/* The file view of a file dialog (comdlg32 with shell32's view): the shell
+   view window has comdlg32's control id lst2, its list view the id 1. Waits
+   until the list view of `dialog` lists something, its process alive, and
+   returns how many items: shell32 fills it before the dialog takes messages
+   (CDefView::FillList), so the first count is the whole folder. Without
+   GetIconInfo the icon cache of shell32 failed and retried forever; without
+   the SendMessage result of a missing header the view asserted. */
+#define APP_LST2 0x0461
+#define APP_LVM_GETITEMCOUNT 0x1004
+static inline int app_file_view(const PROCESS_INFORMATION *process, HWND dialog)
+{
+    for(unsigned int n=0;n<240;++n) {
+        HWND list=GetDlgItem(GetDlgItem(dialog,APP_LST2),1);
+        int count=list ? (int)SendMessageW(list,APP_LVM_GETITEMCOUNT,0,0) : 0;
+        if(count>0) return count;
+        app_alive(process); Sleep(50);
+    }
+    app_check(FALSE,"the file view lists nothing");return 0;
+}
 static inline void app_closed(PROCESS_INFORMATION *process)
 {
     app_check(WaitForSingleObject(process->hProcess,5000)==WAIT_OBJECT_0,"close timed out");

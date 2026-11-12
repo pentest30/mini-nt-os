@@ -347,6 +347,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 28 : SetWindowLong de GWL_STYLE et GWL_EXSTYLE (`win32k::window::set_style` : WM_STYLECHANGING,
   `restyle`, `restyle_ex`, WM_STYLECHANGED) ; l'onglet du gestionnaire des tâches se donne `WS_CLIPSIBLINGS` et ne
   peint plus sur sa page ; les sœurs se repeignent de haut en bas de l'ordre Z, comme ReactOS.
+  M6, étape 29 (la vue des fichiers de la boîte Enregistrer sous) : NtUserGetIconInfo (`win32k::cursor::icon_info`,
+  copies des bitmaps par `gdi::surface::copy_bitmap`, module et ressource), GetDIBits (`gdi::dibits::get_dibits`, 1
+  et 32 bits), StretchBlt (`gdi::bitblt::stretch_blt`), GetNearestColor, BI_BITFIELDS de StretchDIBits ;
+  NtUserGetAtomName écrit dans le UNICODE_STRING de l'appelant (il écrasait la pile), un SendMessage qui échoue rend 0
+  dans `ResultInfo` : le cache d'icônes de `shell32` ne boucle plus, la vue liste `C:\` avec ses icônes ; scénario
+  `notepad-saveas`. Pas encore : l'alpha des images de 32 bits, BitBlt couleur ↔ monochrome.
   M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
   NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
   NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),

@@ -1,0 +1,43 @@
+# The Save As dialog of ReactOS's Notepad (tests/native/notepad3.c):
+# comdlg32 with shell32's file view of C:\, filtered on *.txt: three folders
+# (Documents and Settings, MINODIR, WINDOWS) and two text files, with their
+# icons. shell32's icon cache (SIC_Initialize) puts IDI_SHELL_DOCUMENT in
+# comctl32's image lists: CopyImage(LR_COPYFROMRESOURCE) asks
+# NtUserGetIconInfo for the icon's module and resource, ImageList_ReplaceIcon
+# GetIconInfo for copies of its bitmaps, which it reads by GetDIBits
+# (add_with_alpha); without them the cache failed and shell32 retried forever.
+# The view asks its ListView's header for its column count before the header
+# exists: SendMessage to no window must give 0 (it gave user32's
+# uninitialised variable, and CDefView asserted). The view's
+# NtUserGetAtomName of its class atom must stay in the caller's buffer (it
+# overwrote the stack).
+features = test-smss
+requires = userland, native
+initial-command = NOTEPAD3.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [saveas] Notepad is up => ctrl-s
+
+expect = [saveas] Notepad is up
+expect = [saveas] the view lists 5 files and folders
+expect = [saveas] done
+
+forbid = [apps] FAIL
+forbid = *** STOP:
+forbid = sys: NtUserGetIconInfo (0x1196) is not implemented
+forbid = sys: NtGdiGetDIBitsInternal (0x10ad) is not implemented
+forbid = sys: NtGdiStretchBlt (0x1123) is not implemented
+forbid = Failed to add IDI_SHELL_DOCUMENT icon to cache
+forbid = GetIconInfo Failed
+forbid = Imagelist no longer valid
+forbid = Assertion failed
+forbid = Exception when calling
+
+# The first row's folder icon, its blue edge and its light inside; a corner
+# of its 16 x 16 cell that the icon leaves transparent: the list's white, not
+# black (the mask); a gray line of the text document icon of the fourth row.
+screen = 105 82 3465A4
+screen = 108 86 8CB1D8
+screen = 116 80 FFFFFF
+screen = 105 132 C4C4C4

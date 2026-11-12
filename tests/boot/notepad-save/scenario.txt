@@ -1,18 +1,31 @@
 # A new document: keyboard input, Save As, independent byte verification,
 # clean application exit, fresh Notepad process, and rendered saved text.
+# The Save As dialog shows shell32's file view (tests/boot/notepad-saveas
+# checks its icons): the probe waits until it lists C:\'s three folders and
+# two text files before typing the path; typed earlier, the keys went to the
+# dialog's first control while it was still being made.
 features = test-smss
 requires = userland, native
 initial-command = NOTEPAD2.EXE
 cpus = default, intel
 timeout = 120
 keys = [note-save] ready for typing => "Hello, Mino!" ret "Line 2" ctrl-s
-keys = [note-save] Save As ready => alt-n "C:\MINO-NOTE.TXT" ret
+keys = [note-save] the Save As view lists => alt-n "C:\MINO-NOTE.TXT" ret
 keys = [note-save] exact file bytes verified, close now => alt-f4
+expect = [note-save] the Save As view lists 5 files and folders
 expect = [note-save] exact file bytes verified, close now
 expect = [note-save] first process closed cleanly
 expect = [note-save] reopened in a new process; PASS
 forbid = [apps] FAIL
 forbid = *** STOP:
+forbid = sys: NtUserGetIconInfo (0x1196) is not implemented
+forbid = sys: NtGdiGetDIBitsInternal (0x10ad) is not implemented
+forbid = sys: NtGdiStretchBlt (0x1123) is not implemented
+forbid = Failed to add IDI_SHELL_DOCUMENT icon to cache
+forbid = GetIconInfo Failed
+forbid = Imagelist no longer valid
+forbid = Assertion failed
+forbid = Exception when calling
 screen = 12 53 000000
 screen = 68 50 3E3E3E
 screen = 14 72 000000

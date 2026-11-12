@@ -1,5 +1,19 @@
 # Notes de passation
 
+- **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
+  `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 29). Sous VirtualBox la boîte « Save As »
+  du Bloc-notes restait vide et son thread bouclait sur le cache d'icônes de `shell32`. Fait, dans l'ordre où la
+  boîte bloquait : NtUserGetIconInfo (`win32k::cursor::icon_info`, copies des bitmaps par
+  `gdi::surface::copy_bitmap`, module et ressource pour CopyImage(LR_COPYFROMRESOURCE)) ; NtUserGetAtomName écrit
+  dans le tampon du UNICODE_STRING de l'appelant (il écrasait la pile de `user32` : exception dans le WM_INITDIALOG
+  de la boîte) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
+  CDefView croyait sa liste pleine de colonnes et s'arrêtait sur une assertion) ; GetDIBits (1 et 32 bits),
+  StretchBlt, GetNearestColor, BI_BITFIELDS de StretchDIBits (la barre d'outils). La boîte montre `C:\` et ses
+  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel, DIB section pas encore faite), qui décalent le texte. **Vu, pas fait** : les DIB sections de 4 bits (et GetDIBits de 4 bits) ; l'alpha des images
+  de 32 bits (StretchDIBits le perd, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend) et BitBlt couleur ↔ monochrome
+  (ImageList_AddMasked) : la barre d'outils et la barre des emplacements ont un fond noir ; NtUserGetClassName ;
+  NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
+
 - **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, PR #127, base main `3942dd5`) : `notepad-save` passe sur AMD et Intel : saisie QEMU, vrai Save As, vérification des 20 octets, Alt+F4, sortie normale, nouveau processus et texte relu à l'écran. GWLP_WNDPROC client de même encodage débloque ATL ; Alt+F4 poste SC_CLOSE au premier niveau, sauf CS_NOCLOSE. Conversions ANSI/Unicode et procédures serveur refusées explicitement (thunks à faire). 322 tests hôte win32k passent. Critère Bloc-notes de M6 coché ; pas de reboot/persistance dans ce scénario RAM. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` et lint global à rejouer.
 
 - **Le logon jusqu'à `userinit`** (`claude/logon-token`, tirée de `claude/new-session-696xfc` à `509ad05`, qui y
