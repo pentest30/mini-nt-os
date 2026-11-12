@@ -152,3 +152,4 @@ UpdateWindow@4
 ValidateRect@8
 ValidateRgn@8
 WaitMessage@0
+CallWindowProcW@20

@@ -1,5 +1,7 @@
 # Notes de passation
 
+- **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, base main `3942dd5`) : nouvelle sonde `NOTEPAD2.EXE`/scénario `notepad-save` avec saisie QEMU, vrai Save As, vérification des octets du fichier, fermeture et réouverture dans un processus neuf. Échec de main reproduit : assertion ATL `IsWindow(m_hWnd)`, aucun fichier enregistré. Le test est volontairement rouge jusqu’aux correctifs USER ; remplacement GWLP_WNDPROC en cours. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` à rejouer.
+
 - **SetWindowLong du style ; l'ordre de peinture de ReactOS rétabli** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 28 ; choix du mainteneur : revenir à l'ordre de ReactOS
   et trouver la vraie cause de la page grise du gestionnaire des tâches). La cause : NtUserSetWindowLong refusait
