@@ -599,6 +599,33 @@ impl WindowPlacement32 {
     }
 }
 
+/// STYLESTRUCT, 32-bit: what WM_STYLECHANGING (the procedure may change
+/// `style_new`) and WM_STYLECHANGED carry.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StyleStruct32 {
+    pub style_old: u32,
+    pub style_new: u32,
+}
+
+impl StyleStruct32 {
+    /// The structure from its 8 bytes.
+    pub fn from_bytes(bytes: &[u8; 8]) -> Self {
+        Self {
+            style_old: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            style_new: u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+        }
+    }
+
+    /// Its 8 bytes.
+    pub fn as_bytes(&self) -> [u8; 8] {
+        let mut bytes = [0u8; 8];
+        bytes[..4].copy_from_slice(&self.style_old.to_le_bytes());
+        bytes[4..].copy_from_slice(&self.style_new.to_le_bytes());
+        bytes
+    }
+}
+
 /// ACCEL: an entry of an accelerator table, as CreateAcceleratorTable and
 /// CopyAcceleratorTable carry it (6 bytes: `fVirt`, a byte of padding, `key`,
 /// `cmd`).
@@ -684,6 +711,8 @@ pub const TYPE_MONITOR: u8 = 12;
 const _: () = {
     assert!(size_of::<WindowPos32>() == 28);
     assert!(size_of::<WindowPlacement32>() == 44);
+    assert!(size_of::<StyleStruct32>() == 8);
+    assert!(offset_of!(StyleStruct32, style_new) == 4);
     assert!(size_of::<Accel32>() == 6);
     assert!(offset_of!(Accel32, key) == 2);
     assert!(offset_of!(Accel32, cmd) == 4);
@@ -868,6 +897,8 @@ pub const WM_CHILDACTIVATE: u32 = 0x0022;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
 pub const WM_WINDOWPOSCHANGING: u32 = 0x0046;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+pub const WM_STYLECHANGING: u32 = 0x007C;
+pub const WM_STYLECHANGED: u32 = 0x007D;
 /// COLOR_*, the indices of the system colours (GetSysColor): `LIGHT_3D` is
 /// COLOR_3DLIGHT, `DKSHADOW_3D` COLOR_3DDKSHADOW; COLOR_3DFACE is `BTNFACE`.
 pub mod color {

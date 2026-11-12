@@ -1147,7 +1147,7 @@ translate_accelerator) pour la recherche de l'item ; `win32k::accel`, `win32k::w
 |---|---|
 | RegisterWindowMessage | l'atome du nom dans la table des atomes de USER (`win32k::atom`) : un message de 0xC000 à 0xFFFF, le même pour le même nom sans tenir compte de la casse ; 0 pour un nom nul (ERROR_INVALID_PARAMETER) ou un thread sans bureau. Sans lui, le Bloc-notes avait FINDMSGSTRING = 0 et aurait pris WM_NULL pour le message de sa recherche |
 | NtUserQueryWindow | le PID et le TID du thread de la fenêtre (GetWindowThreadProcessId) ; pour une fenêtre console de `csrss` (sa classe est celle que `consrv` donne par NtUserConsoleControl), ceux du processus qui mène la console, dans ses octets de plus (0 et 4) ; la fenêtre active et celle qui a le clavier dans la file de son thread ; le PID (REAL_ID) ; si sa file est au premier plan ; 0 pour ISHUNG et l'IME |
-| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon |
+| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon ; au plus 65 536 entrées (au-delà, NULL et ERROR_NOT_ENOUGH_MEMORY, comme une allocation qui échoue chez ReactOS), la plage de l'appelant sondée et le compte borné avant toute allocation, les allocations faillibles |
 | TranslateAccelerator (`accel::translate`) | WM_KEYDOWN, WM_SYSKEYDOWN : une entrée FVIRTKEY de même touche, Maj, Ctrl et Alt du thread exactement ; WM_CHAR, WM_SYSCHAR : une entrée de caractère de même code, Alt seul comparé ; la commande, si c'est un item du menu de la fenêtre (non fille) : WM_INITMENU, puis WM_INITMENUPOPUP du menu qui porte l'item et sa position, sauf souris capturée ; WM_COMMAND (HIWORD 1) sauf fenêtre désactivée, item désactivé ou grisé (après WM_INITMENUPOPUP), fenêtre réduite ; le message est alors traduit |
 
 Écarts voulus avec ReactOS : il cherche l'item du menu à la position égale à la commande (MF_BYPOSITION), et donne
@@ -1172,5 +1172,108 @@ rendus) ; Ctrl+G tapé par QEMU (« ^G » : WM_CHAR 7 par TranslateMessage, puis
 line », Échap la ferme, et le contrôle Edit est repeint là où elle était.
 
 Tests : hôte (`accel` : touches virtuelles et modificateurs, caractères et Alt, FVIRT_TBL_END et l'ANSI, les
-messages du menu, ce qui empêche WM_COMMAND) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
+messages du menu, ce qui empêche WM_COMMAND) ; la sonde crée, copie et détruit une table d'une entrée, et
+CreateAcceleratorTableW d'un compte de 0xFFFFFFFF est refusé (la revue de la PR 125 : le noyau allouait 24 Gio
+avant de regarder le compte, et l'échec de l'allocation arrêtait le système ; le scénario le reproduit sans le
+correctif) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
 l'accélérateur (mutation) ; `cmd`, `desktop-launch`, `console` (qui appelaient NtUserQueryWindow) sur AMD et Intel.
+
+## Étape 26 : le texte d'Uniscribe (GetFontData, GetGlyphIndicesW, GetCharABCWidths, ETO_GLYPH_INDEX)
+
+Le contrôle Edit de `user32` (repris de Wine) place et dessine son texte par Uniscribe (`usp10` :
+ScriptStringAnalyse, ScriptShape, ScriptPlace, ScriptTextOut). Uniscribe lit la police du DC : GetTextMetricsW,
+GetOutlineTextMetricsW (facultatif), GetFontData de la table `head` (une police TrueType : les glyphes viennent de
+sa `cmap`), GetGlyphIndicesW, GetCharABCWidthsI (une police TMPF_TRUETYPE), puis dessine par ExtTextOutW avec
+ETO_GLYPH_INDEX. Sans ces services, il prenait la police pour une police bitmap : les codes des caractères passaient
+pour des glyphes, leurs avances valaient 0, et tout le texte d'une ligne se superposait.
+
+`freetype.c` et `font.c` de win32k (ftGdiGetFontData, GreGetGlyphIndicesW, NtGdiGetGlyphIndicesWInternal,
+GreGetCharABCWidthsW, NtGdiGetCharABCWidthsW, NtGdiGetFontData), ReactOS comme spécification ; `libs/glyph`
+(`Font::table`, `glyph_count`, `default_char`, `abc`), `win32k::font` (`font_data`, `glyph_indices`, `glyph_count`,
+`abc_widths`, `glyph_run`), `sys::gdi`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| GetFontData | la table demandée (MS_MAKE_TAG : son premier caractère dans l'octet bas), ou le fichier entier pour 0 : sa taille sans tampon, sinon ses octets depuis `Offset`, au plus sa taille ; GDI_ERROR sans la table ou au-delà d'elle |
+| GetGlyphIndicesW | le glyphe de chaque unité UTF-16 par la `cmap` (Unicode, sinon symboles) ; une moitié de paire de substitution est un caractère absent ; un caractère absent a 0xFFFF (GGI_MARK_NONEXISTING_GLYPHS) ou le glyphe du caractère par défaut (`OS/2` usDefaultChar dès la version 2, 0 avant) ; sans rien, le nombre de glyphes |
+| GetCharABCWidths(I) | A : du stylo au bord gauche du glyphe, arrondi vers le bas ; B : jusqu'au bord droit arrondi vers le haut ; C : ce que l'avance arrondie laisse ; tout en avance pour un glyphe sans contour ; des caractères ou des indices (GCABCW_INDICES) ; des entiers pour tout drapeau, des ABCFLOAT sans drapeau (comme ReactOS) |
+| ExtTextOut ETO_GLYPH_INDEX | le texte est fait d'indices de glyphes, rendus et placés comme les caractères |
+
+Ce qui manque : GetOutlineTextMetricsW (rend 0 : Uniscribe s'en passe), GetTextExtentExPointI (GTEF_INDICES), les
+collections TrueType (`ttcf`) dans GetFontData, le hinting des largeurs ABC (ReactOS les prend de FreeType, avec
+hinting ; Mino des contours, sans).
+
+Le banc d'essai : le scénario `notepad` tape « Hello, Mino! », Entrée, « Line 2 » dans le contrôle Edit du
+Bloc-notes : le texte est à sa place (la hampe du H, le « ! » douze caractères plus loin, le L de la seconde ligne),
+et la barre d'état dit « Line 2, column 7 ».
+
+Tests : hôte (`font` : glyphes absents marqués ou par défaut, A + B + C = l'avance, par caractère ou par glyphe,
+`head` et le fichier entier ; `gdi::text` : des indices dessinent ce que dessinent leurs caractères) ; `notepad` et
+`desktop-launch` (le gestionnaire des tâches passait par ces services) sur AMD et Intel.
+
+## Étape 27 : la boîte Enregistrer sous trouve ses dossiers (KeyNameInformation, ObjectBasicInformation, ProcessDeviceMap)
+
+Ctrl+S ouvre la boîte « Save As » de `comdlg32`, qui parcourt le shell (`shell32`, `browseui`). Elle s'affichait,
+mais vide (« Save in » sans dossier, la liste sans fichiers), et un nom tapé rendait « Path does not exist ». Trois
+services du noyau manquaient en chemin :
+
+| Service | Ce que fait Mino | Qui le demande |
+|---|---|---|
+| NtQueryKey(KeyNameInformation) | le chemin complet de la clé depuis `\REGISTRY`, avec la casse des clés (celui de la cible pour une clé ouverte par un lien) : `cm::Key::full_name`, `cm::info::name_information` ; NtQueryKey seul (à l'énumération, ReactOS refuse la classe) | `advapi32` (`hkcr.c`) : les clés de HKEY_CLASSES_ROOT, HKCU d'abord, HKLM sinon |
+| NtQueryObject(ObjectBasicInformation) | OBJECT_BASIC_INFORMATION (56 octets exactement) : attributs du handle et OBJ_PERMANENT, droits accordés, comptes de handles et de pointeurs, place du nom complet et du type, celle du descripteur de sécurité avec READ_CONTROL | `advapi32` (`hkcr.c`, GetKeySam) |
+| NtQueryInformationProcess(ProcessDeviceMap) | la carte des lecteurs DOS : un bit par lien « X: » de `\GLOBAL??`, le type de chaque lecteur d'après le périphérique cible (`io_manager::device::dos_drive_type`, comme ObpProcessDosDeviceSymbolicLink : disque fixe ou amovible, virtuel, CD-ROM, réseau) ; la taille de Query exactement (36) ; la forme EX demande les cartes par LUID (STATUS_INVALID_PARAMETER) | `kernel32` : GetLogicalDrives (rendait 0 : « My Computer » n'avait aucun lecteur, et `C:\` n'était pas un chemin), GetDriveTypeW |
+
+Écart : Mino calcule la carte à chaque demande, à partir des liens présents, au lieu de la tenir à jour à leur
+création ; le résultat est le même tant qu'il n'y a qu'une carte (celle de tous).
+
+Vu en chemin : la fin du processus du Bloc-notes, après la boîte, arrêtait le système (« buddy free list overflow »)
+: les listes libres de `mm::buddy` sont désormais chaînées, sans limite (commit `mm`, voir la passation).
+
+Ce qui manque encore pour enregistrer (journal du scénario, Ctrl+S puis « hello.txt » et Entrée) : une assertion
+d'ATL dans le shell (`atlwin.h:1118`, `::IsWindow(m_hWnd)` dans CWindow::SendMessage : une fenêtre ATL qui n'a pas
+été créée ; à identifier, peut-être la liste d'autocomplétion de `browseui`), les fenêtres message seul
+(HWND_MESSAGE : la fenêtre d'appartement de `combase`), NtUserSetParent, NtUserGetIconInfo, StretchDIBits d'une DIB à
+palette (les icônes du shell), NtUserGetClassName, NtUserGetSystemMenu, NtUserSetActiveWindow, NtUserSetThreadState,
+les barres de défilement des contrôles (SB_CTL). Le Bloc-notes se termine alors avec le code 3 (abort).
+
+Tests : hôte (`cm` : le chemin complet par ouverture sans casse, lien, nom relatif, énumération, création ;
+`cm::info` : l'encodage de KEY_NAME_INFORMATION) ; la sonde de `notepad` appelle GetLogicalDrives, GetDriveTypeW,
+NtQueryInformationProcess(ProcessDeviceMap), NtOpenKey puis NtQueryKey(KeyNameInformation) sur
+`\Registry\Machine\Software\Classes` (taille d'abord, puis le nom `\REGISTRY\MACHINE\SOFTWARE\Classes`) et
+NtQueryObject(ObjectBasicInformation) (une mauvaise taille refusée, les droits KEY_READ, un handle) ; une carte des
+lecteurs vide la fait échouer (mutation). `notepad` sur AMD et Intel, et toute la suite sur AMD (54 sur 55 ; `gui`
+échouait par l'ordre de peinture des sœurs, corrigé à l'étape 28).
+
+## Étape 28 : SetWindowLong du style (GWL_STYLE, GWL_EXSTYLE)
+
+La page Applications du gestionnaire des tâches se repeignait en gris. Son contrôle d'onglets (`SysTabControl32`,
+sœur de la page, sous elle dans l'ordre Z) ne traite pas WM_ERASEBKGND : DefWindowProc efface sa région à mettre à
+jour du pinceau de sa classe (COLOR_BTNFACE), et cette région couvre la page quand une autre page se cache. Les sœurs
+se repeignent de haut en bas de l'ordre Z (IntFindWindowToRepaint) : l'onglet passe après la page. Dans ReactOS, son
+DC est coupé par la page, parce que `comctl32` (TAB_Create) se donne `WS_CLIPSIBLINGS` par SetWindowLongW(GWL_STYLE)
+à sa création ; Mino refusait GWL_STYLE (`ERROR_CALL_NOT_IMPLEMENTED`), l'onglet restait sans le style et peignait
+sur la page.
+
+Un premier correctif avait inversé l'ordre de peinture des sœurs (du bas vers le haut, écart avec ReactOS) : la page
+passait, mais le premier WM_PAINT n'allait plus au popup qu'attend le scénario `gui`. L'ordre de ReactOS est rétabli,
+et la cause corrigée :
+
+- `win32k::window::set_style` (co_IntSetWindowLongPtr, GWL_STYLE et GWL_EXSTYLE) : WM_STYLECHANGING porte un
+  STYLESTRUCT (`abi::user::StyleStruct32`) dont la procédure peut changer le nouveau style ; puis le style change, et
+  WM_STYLECHANGED le dit. Rend l'ancien style.
+- `restyle` (GWL_STYLE) : une fenêtre de premier niveau garde `WS_CLIPSIBLINGS`, une fenêtre réduite `WS_MINIMIZE` ;
+  `WS_EX_WINDOWEDGE` suit le cadre (IntCheckFrameEdge, d'après la valeur de l'appelant) ; une fille qui cesse de
+  l'être perd son identifiant, une fenêtre qui devient fille sa barre de menus (`WNDS_HASMENU`), son `IDMenu` gardant
+  la valeur de la barre comme dans ReactOS, qui n'a qu'un champ pour les deux.
+- `restyle_ex` (GWL_EXSTYLE) : `WS_EX_WINDOWEDGE` d'après le style et la valeur de l'appelant. Pas encore :
+  `WS_EX_TOPMOST` ôté à la fenêtre du shell (SetShellWindow manque) ; les fenêtres en couches.
+- Rien à refaire pour les DC : un DC du cache tire du style ce qui le coupe à chaque GetDCEx
+  (`dce::effective_flags`), et Mino ne garde pas de DC propre (DceResetActiveDCEs de ReactOS, au changement de
+  `WS_VISIBLE`).
+
+GWLP_WNDPROC et GWLP_HWNDPARENT restent à faire (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois).
+
+Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZE` gardés, le bord de fenêtre, la
+fille qui cesse ou devient fille) ; `desktop-launch` sur AMD et Intel, qui échoue avec l'ordre de ReactOS sans
+GWL_STYLE (la page grise, ses quatre pixels) ; `gui` passe de nouveau sur AMD et Intel ; toute la suite sur AMD (55
+sur 55).

@@ -8,6 +8,8 @@ AppendMenuW@16
 BeginPaint@8
 CheckMenuItem@12
 CheckMenuRadioItem@20
+CopyAcceleratorTableW@12
+CreateAcceleratorTableW@8
 CreateCaret@16
 CreateDesktopW@24
 CreateDialogIndirectParamW@20
@@ -17,6 +19,7 @@ CreateWindowExW@48
 CreateWindowStationW@16
 DefWindowProcW@16
 DeleteMenu@12
+DestroyAcceleratorTable@4
 DestroyCaret@0
 DestroyCursor@4
 DestroyMenu@4

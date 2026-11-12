@@ -55,18 +55,19 @@ use abi::process_parameters::RtlUserProcessParameters32;
 use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
-    Rect32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS, CW_USEDEFAULT,
-    DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, FNID_MENU, GWLP_HINSTANCE,
-    GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM,
-    HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+    Rect32, StyleStruct32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS,
+    CW_USEDEFAULT, DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, FNID_MENU,
+    GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW,
+    HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
     STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
     WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT,
-    WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
-    WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW,
-    WNDS_ERASEBACKGROUND, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
-    WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE,
-    WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+    WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT,
+    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR,
+    WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW, WNDS_ERASEBACKGROUND, WNDS_HASMENU, WNDS_MAXIMIZESTOMONITOR,
+    WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY,
+    WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP,
+    WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
@@ -495,17 +496,17 @@ pub fn apply_long(state: &mut WindowState, index: i32, value: u32) -> Option<u32
 /// co_IntSetWindowLongPtr (NtUserSetWindowLong) : le LONG `index` de
 /// `window` devient `value` ; rend l'ancien. Un index positif est une place
 /// dans ses octets de plus (`cbWndExtra`, après le `WND`, où `user32` les lit
-/// lui-même) ; un index négatif, l'un de ceux de [`apply_long`].
+/// lui-même) ; GWL_STYLE et GWL_EXSTYLE passent par [`set_style`] ; un autre
+/// index négatif est l'un de ceux de [`apply_long`].
 ///
 /// # Errors
 /// L'erreur de Win32 : `ERROR_INVALID_INDEX` pour une place au-delà des
 /// octets de plus ou un index inconnu ; `ERROR_CALL_NOT_IMPLEMENTED` pour
-/// GWL_STYLE, GWL_EXSTYLE, GWLP_WNDPROC et GWLP_HWNDPARENT (pas encore,
-/// journalisé une fois).
+/// GWLP_WNDPROC et GWLP_HWNDPARENT (pas encore, journalisé une fois).
 ///
 /// # IRQL
-/// PASSIVE_LEVEL.
-pub fn set_long(window: &Window, index: i32, value: u32) -> Result<u32, u32> {
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn set_long(window: &Arc<Window>, index: i32, value: u32) -> Result<u32, u32> {
     if index >= 0 {
         let extra = window.wnd_size - size_of::<Wnd32>() as u32;
         let at = extra_offset(extra, index).ok_or(abi::winerror::ERROR_INVALID_INDEX)?;
@@ -518,16 +519,111 @@ pub fn set_long(window: &Window, index: i32, value: u32) -> Result<u32, u32> {
             .map_err(abi::winerror::dos_error)?;
         return Ok(u32::from_le_bytes(old));
     }
-    if matches!(index, GWL_STYLE | GWL_EXSTYLE | GWLP_WNDPROC | GWLP_HWNDPARENT) {
+    if matches!(index, GWL_STYLE | GWL_EXSTYLE) {
+        return Ok(set_style(window, index, value));
+    }
+    if matches!(index, GWLP_WNDPROC | GWLP_HWNDPARENT) {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("win32k: SetWindowLong of the style, the procedure or the parent ({index}): not yet");
+            log::warn!("win32k: SetWindowLong of the procedure or the parent ({index}): not yet");
         }
         return Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
     }
     let mut old = None;
     change(window, |state| old = apply_long(state, index, value));
     old.ok_or(abi::winerror::ERROR_INVALID_INDEX)
+}
+
+/// co_IntSetWindowLongPtr, GWL_STYLE et GWL_EXSTYLE : la procédure de
+/// `window` voit le changement (WM_STYLECHANGING, où elle peut changer le
+/// nouveau style), puis le style devient celui qu'elle laisse
+/// ([`restyle`], [`restyle_ex`]), qu'elle voit enfin (WM_STYLECHANGED).
+/// Rend l'ancien style. Les DC de fenêtres n'ont rien à refaire : un DC du
+/// cache tire du style ce qui le coupe à chaque GetDCEx
+/// (`crate::dce::effective_flags`), sans DC propre à garder.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
+pub fn set_style(window: &Arc<Window>, index: i32, value: u32) -> u32 {
+    let state = window.state();
+    let old = if index == GWL_STYLE { state.style } else { state.ex_style };
+    let mut style = StyleStruct32 { style_old: old, style_new: value };
+    let mut bytes = style.as_bytes();
+    let changing = LParam::Buffer { bytes: &mut bytes, write_back: true };
+    if send_message(window, WM_STYLECHANGING, index as u32, changing).is_ok() {
+        style.style_new = StyleStruct32::from_bytes(&bytes).style_new;
+    }
+    let top_level = get(state.parent).is_some_and(|parent| parent.is_desktop_window());
+    let state = change(window, |state| {
+        if index == GWL_STYLE {
+            restyle(state, value, style.style_new, top_level);
+        } else {
+            restyle_ex(state, value, style.style_new);
+        }
+    });
+    style.style_new = if index == GWL_STYLE { state.style } else { state.ex_style };
+    let mut bytes = style.as_bytes();
+    let changed = LParam::Buffer { bytes: &mut bytes, write_back: false };
+    let _ = send_message(window, WM_STYLECHANGED, index as u32, changed);
+    old
+}
+
+/// IntCheckFrameEdge : un cadre modal, ou un cadre de dialogue ou épais
+/// sans bord statique, a le bord de fenêtre (`WS_EX_WINDOWEDGE`).
+fn frame_edge(style: u32, ex_style: u32) -> bool {
+    ex_style & WS_EX_DLGMODALFRAME != 0
+        || (ex_style & WS_EX_STATICEDGE == 0 && style & (WS_DLGFRAME | WS_THICKFRAME) != 0)
+}
+
+/// co_IntSetWindowLongPtr, GWL_STYLE, sans les messages : `style` devient
+/// le style de `state` ; `value` est celui qu'a donné l'appelant (avant
+/// WM_STYLECHANGING), dont dépend le bord de fenêtre. Une fenêtre de premier
+/// niveau (`top_level`, fille du bureau) garde `WS_CLIPSIBLINGS`, une
+/// fenêtre réduite `WS_MINIMIZE`. Une fille qui cesse de l'être perd son
+/// identifiant ; une fenêtre qui devient fille, sa barre de menus
+/// (`WNDS_HASMENU`) : son `IDMenu` garde la valeur de la barre, comme dans
+/// ReactOS, qui n'a qu'un champ pour les deux. Fille ou non d'après le style
+/// appliqué (`style`) : ReactOS regarde `value`, et une procédure qui garde
+/// `WS_CHILD` à WM_STYLECHANGING laissait une fille sans identifiant.
+pub fn restyle(state: &mut WindowState, value: u32, style: u32, top_level: bool) {
+    let old = state.style;
+    let mut style = style;
+    if top_level {
+        style |= WS_CLIPSIBLINGS;
+    }
+    if old & WS_MINIMIZE != 0 {
+        style |= WS_MINIMIZE;
+    }
+    if frame_edge(value, state.ex_style) {
+        state.ex_style |= WS_EX_WINDOWEDGE;
+    } else {
+        state.ex_style &= !WS_EX_WINDOWEDGE;
+    }
+    let was_child = old & (WS_CHILD | WS_POPUP) == WS_CHILD;
+    let is_child = style & (WS_CHILD | WS_POPUP) == WS_CHILD;
+    if was_child && !is_child {
+        state.id_menu = 0;
+    } else if !was_child && is_child {
+        state.state &= !WNDS_HASMENU;
+        state.id_menu = core::mem::take(&mut state.menu);
+    }
+    state.style = style;
+}
+
+/// co_IntSetWindowLongPtr, GWL_EXSTYLE, sans les messages : `ex_style`
+/// devient le style étendu de `state`, avec le bord de fenêtre que
+/// demandent son style et `value`, le style étendu donné par l'appelant.
+/// ReactOS ôte aussi `WS_EX_TOPMOST` à la fenêtre du shell
+/// (SetShellWindow : pas encore) ; sans fenêtres en couches, rien à faire de
+/// `WS_EX_LAYERED`.
+pub fn restyle_ex(state: &mut WindowState, value: u32, ex_style: u32) {
+    let mut ex_style = ex_style;
+    if frame_edge(state.style, value) {
+        ex_style |= WS_EX_WINDOWEDGE;
+    } else {
+        ex_style &= !WS_EX_WINDOWEDGE;
+    }
+    state.ex_style = ex_style;
 }
 
 /// Change ce qui change de `window` par `change`, puis réécrit son `WND`.
@@ -1910,6 +2006,62 @@ mod tests {
         assert_eq!(apply_long(&mut state, GWL_STYLE, 0), None);
         assert_eq!(apply_long(&mut state, -100, 0), None);
         assert_eq!(state, before, "unchanged");
+    }
+
+    /// Task Manager's tab control (comctl32, TAB_Create) gives itself
+    /// WS_CLIPSIBLINGS by SetWindowLong(GWL_STYLE); refused, it painted its
+    /// background over the page above it in the Z order.
+    #[test]
+    fn a_child_takes_the_style_it_is_given() {
+        let mut state = WindowState { style: WS_CHILD | WS_VISIBLE, id_menu: 7, ..WindowState::default() };
+        restyle(&mut state, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, false);
+        assert_eq!(state.style, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS);
+        assert_eq!(state.id_menu, 7, "still a child: its identifier stays");
+        restyle(&mut state, WS_CHILD, WS_CHILD, false);
+        assert_eq!(state.style, WS_CHILD, "WS_CLIPSIBLINGS goes away from a child");
+    }
+
+    #[test]
+    fn a_top_level_window_keeps_clipsiblings_and_a_minimized_one_stays_minimized() {
+        let mut state = WindowState { style: WS_POPUP | WS_CLIPSIBLINGS | WS_MINIMIZE, ..WindowState::default() };
+        restyle(&mut state, WS_POPUP, WS_POPUP, true);
+        assert_eq!(state.style, WS_POPUP | WS_CLIPSIBLINGS | WS_MINIMIZE);
+    }
+
+    #[test]
+    fn the_window_edge_follows_the_frame() {
+        let mut state = WindowState { style: WS_POPUP, ..WindowState::default() };
+        restyle(&mut state, WS_POPUP | WS_THICKFRAME, WS_POPUP | WS_THICKFRAME, true);
+        assert_eq!(state.ex_style, WS_EX_WINDOWEDGE, "a thick frame has the edge");
+        // The edge comes from the caller's style, not the one WM_STYLECHANGING left.
+        restyle(&mut state, WS_POPUP, WS_POPUP | WS_DLGFRAME, true);
+        assert_eq!((state.style & WS_DLGFRAME, state.ex_style), (WS_DLGFRAME, 0));
+        restyle_ex(&mut state, WS_EX_STATICEDGE | WS_EX_WINDOWEDGE, WS_EX_STATICEDGE | WS_EX_WINDOWEDGE);
+        assert_eq!(state.ex_style, WS_EX_STATICEDGE, "a static edge takes the window edge away");
+        restyle_ex(&mut state, WS_EX_DLGMODALFRAME, WS_EX_DLGMODALFRAME);
+        assert_eq!(state.ex_style, WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE, "a modal frame has it");
+    }
+
+    #[test]
+    fn a_window_that_stops_or_starts_being_a_child_loses_its_identifier_or_its_bar() {
+        let mut state = WindowState { style: WS_CHILD, id_menu: 7, ..WindowState::default() };
+        restyle(&mut state, WS_POPUP, WS_POPUP, false);
+        assert_eq!((state.id_menu, state.menu), (0, 0), "no longer a child: no identifier");
+        let mut state = WindowState { style: WS_POPUP, menu: 0x40, state: WNDS_HASMENU, ..WindowState::default() };
+        restyle(&mut state, WS_CHILD, WS_CHILD, false);
+        assert_eq!((state.state & WNDS_HASMENU, state.menu, state.id_menu), (0, 0, 0x40), "IDMenu keeps its value");
+    }
+
+    #[test]
+    fn the_style_wm_stylechanging_leaves_decides_whether_it_is_a_child() {
+        // Asked to become a popup, kept a child by its procedure.
+        let mut state = WindowState { style: WS_CHILD, id_menu: 7, ..WindowState::default() };
+        restyle(&mut state, WS_POPUP, WS_CHILD, false);
+        assert_eq!((state.style, state.id_menu), (WS_CHILD, 7), "still a child: its identifier stays");
+        // Asked to become a child, kept a popup: its menu bar stays.
+        let mut state = WindowState { style: WS_POPUP, menu: 0x40, state: WNDS_HASMENU, ..WindowState::default() };
+        restyle(&mut state, WS_CHILD, WS_POPUP, false);
+        assert_eq!((state.state & WNDS_HASMENU, state.menu, state.id_menu), (WNDS_HASMENU, 0x40, 0));
     }
 
     #[test]

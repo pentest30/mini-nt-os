@@ -70,6 +70,40 @@ impl Device {
     }
 }
 
+/// Le type de lecteur (DOSDEVICE_DRIVE_*) d'un lien « X: » qui mène à
+/// `object`, comme ObpProcessDosDeviceSymbolicLink le calcule : d'après le
+/// type et les caractéristiques d'un périphérique (disque virtuel, CD-ROM,
+/// disque amovible ou fixe, réseau ; inconnu pour un autre), CALCULATE pour
+/// ce qui n'est pas un périphérique.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn dos_drive_type(object: &ObjectRef) -> u8 {
+    use abi::file::{
+        FILE_DEVICE_CD_ROM, FILE_DEVICE_CD_ROM_FILE_SYSTEM, FILE_DEVICE_DISK, FILE_DEVICE_DISK_FILE_SYSTEM,
+        FILE_DEVICE_FILE_SYSTEM, FILE_DEVICE_NETWORK, FILE_DEVICE_NETWORK_FILE_SYSTEM, FILE_DEVICE_VIRTUAL_DISK,
+        FILE_REMOVABLE_MEDIA,
+    };
+    use abi::process::dosdevice_drive;
+    let Some(device) = downcast::<Device>(object) else { return dosdevice_drive::CALCULATE };
+    // The named pipe file system is no drive.
+    let Some(volume) = device.volume() else { return dosdevice_drive::UNKNOWN };
+    let information = volume.device_information();
+    match information.device_type {
+        FILE_DEVICE_VIRTUAL_DISK => dosdevice_drive::RAMDISK,
+        FILE_DEVICE_CD_ROM | FILE_DEVICE_CD_ROM_FILE_SYSTEM => dosdevice_drive::CDROM,
+        FILE_DEVICE_DISK | FILE_DEVICE_DISK_FILE_SYSTEM | FILE_DEVICE_FILE_SYSTEM => {
+            if information.characteristics & FILE_REMOVABLE_MEDIA != 0 {
+                dosdevice_drive::REMOVABLE
+            } else {
+                dosdevice_drive::FIXED
+            }
+        }
+        FILE_DEVICE_NETWORK | FILE_DEVICE_NETWORK_FILE_SYSTEM => dosdevice_drive::REMOTE,
+        _ => dosdevice_drive::UNKNOWN,
+    }
+}
+
 /// La procédure *parse* des périphériques : le fichier que désigne la suite
 /// du nom sur le volume, l'objet fichier de NPFS, ou le périphérique sans
 /// suite.

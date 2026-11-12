@@ -291,7 +291,11 @@ pub(super) fn nt_terminate_thread(arguments: &[u32]) -> NtStatus {
 ///   tous (le défaut d'XP) ;
 /// - `ProcessCookie` : son cookie, tiré à la première demande, pour le
 ///   processus de l'appelant seulement (`NtCurrentProcess()`,
-///   `STATUS_INVALID_PARAMETER` sinon).
+///   `STATUS_INVALID_PARAMETER` sinon) ;
+/// - `ProcessDeviceMap` : ses lecteurs DOS ([`device_map`]), à la taille de
+///   Query exactement (`STATUS_INFO_LENGTH_MISMATCH` sinon) ; la forme EX
+///   (avec Flags) demande les cartes par LUID, que Mino n'active pas
+///   (`STATUS_INVALID_PARAMETER`, comme ReactOS sans elles).
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
@@ -305,6 +309,22 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
         | PROCESS_BREAK_ON_TERMINATION => {}
         PROCESS_LUID_DEVICE_MAPS_ENABLED => {
             return super::return_information(&0u32.to_le_bytes(), buffer, length, return_length)
+        }
+        abi::process::PROCESS_DEVICE_MAP => {
+            if length == abi::process::PROCESS_DEVICEMAP_EX_SIZE {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if length != abi::process::PROCESS_DEVICEMAP_QUERY_SIZE {
+                return abi::ntstatus::STATUS_INFO_LENGTH_MISMATCH;
+            }
+            if let Err(status) = super::reference_process(handle, PROCESS_QUERY_INFORMATION) {
+                return status;
+            }
+            let (drive_map, drive_types) = device_map();
+            let mut query = [0u8; 36];
+            query[..4].copy_from_slice(&drive_map.to_le_bytes());
+            query[4..].copy_from_slice(&drive_types);
+            return super::return_information(&query, buffer, length, return_length);
         }
         PROCESS_COOKIE if handle != NT_CURRENT_PROCESS => return STATUS_INVALID_PARAMETER,
         PROCESS_COOKIE => {
@@ -354,6 +374,38 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
         }
     };
     super::return_information(information, buffer, length, return_length)
+}
+
+/// La carte des lecteurs DOS (ObQueryDeviceMapInformation) : un bit par
+/// lettre qui a son lien dans `\GLOBAL??` (« C: », sans casse), et le type
+/// de chaque lecteur (`io_manager::device::dos_drive_type` de la cible du
+/// lien). Mino n'a qu'une carte, celle de tous : les processus voient les
+/// mêmes lecteurs (ProcessLUIDDeviceMapsEnabled rend 0).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn device_map() -> (u32, [u8; 32]) {
+    let namespace = ob::namespace();
+    let mut drive_map = 0u32;
+    let mut drive_types = [0u8; 32];
+    let Ok(ob::Lookup::Found(directory)) = namespace.lookup("\\GLOBAL??", None, true) else {
+        return (drive_map, drive_types);
+    };
+    let Some(directory) = ob::downcast::<ob::Directory>(&directory) else { return (drive_map, drive_types) };
+    for (name, type_name) in directory.entries() {
+        let mut chars = name.chars();
+        let (Some(letter), Some(':'), None) = (chars.next(), chars.next(), chars.next()) else { continue };
+        if type_name != ob::SYMBOLIC_LINK_TYPE.name || !letter.is_ascii_alphabetic() {
+            continue;
+        }
+        let index = usize::from(letter.to_ascii_uppercase() as u8 - b'A');
+        drive_types[index] = match namespace.lookup(&alloc::format!("\\GLOBAL??\\{name}"), None, false) {
+            Ok(ob::Lookup::Found(target)) => io_manager::device::dos_drive_type(&target),
+            _ => abi::process::dosdevice_drive::CALCULATE,
+        };
+        drive_map |= 1 << index;
+    }
+    (drive_map, drive_types)
 }
 
 /// NtQueryInformationThread(ThreadHandle, ThreadInformationClass,

@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 164 | 737 |
+| win32k | 167 | 737 |
 
 ## ntoskrnl
 
@@ -475,7 +475,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x109c` | `NtGdiGetBitmapBits` | 3 |  |
 | `0x109d` | `NtGdiGetBitmapDimension` | 2 |  |
 | `0x109e` | `NtGdiGetBoundsRect` | 3 |  |
-| `0x109f` | `NtGdiGetCharABCWidthsW` | 6 |  |
+| `0x109f` | `NtGdiGetCharABCWidthsW` | 6 | ✅ |
 | `0x10a0` | `NtGdiGetCharacterPlacementW` | 6 |  |
 | `0x10a1` | `NtGdiGetCharSet` | 1 |  |
 | `0x10a2` | `NtGdiGetCharWidthW` | 6 |  |
@@ -492,9 +492,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10ad` | `NtGdiGetDIBitsInternal` | 9 |  |
 | `0x10ae` | `NtGdiGetETM` | 2 |  |
 | `0x10af` | `NtGdiGetEudcTimeStampEx` | 3 |  |
-| `0x10b0` | `NtGdiGetFontData` | 5 |  |
+| `0x10b0` | `NtGdiGetFontData` | 5 | ✅ |
 | `0x10b1` | `NtGdiGetFontResourceInfoInternalW` | 7 |  |
-| `0x10b2` | `NtGdiGetGlyphIndicesW` | 5 |  |
+| `0x10b2` | `NtGdiGetGlyphIndicesW` | 5 | ✅ |
 | `0x10b3` | `NtGdiGetGlyphIndicesWInternal` | 6 |  |
 | `0x10b4` | `NtGdiGetGlyphOutline` | 8 |  |
 | `0x10b5` | `NtGdiGetKerningPairs` | 3 |  |

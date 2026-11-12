@@ -179,6 +179,15 @@ impl HandleTable {
         downcast(&self.reference(handle, Some(ty), desired)?).ok_or(STATUS_OBJECT_TYPE_MISMATCH)
     }
 
+    /// L'objet, les droits et les attributs de `handle`, lus ensemble ;
+    /// `STATUS_INVALID_HANDLE` sans entrée.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn query_entry(&self, handle: Handle) -> Result<(ObjectRef, AccessMask, HandleAttributes), NtStatus> {
+        self.entry(handle)
+    }
+
     /// Les droits et les attributs de `handle`.
     ///
     /// # IRQL

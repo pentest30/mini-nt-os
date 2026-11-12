@@ -101,6 +101,20 @@ pub fn key_information(facts: &KeyFacts, class: u32) -> Option<Encoded> {
     Some(Encoded { bytes, minimum })
 }
 
+/// KeyNameInformation : la classe que NtQueryKey seul connaît.
+pub const KEY_NAME_INFORMATION: u32 = 3;
+
+/// KEY_NAME_INFORMATION d'une clé de chemin complet `path`
+/// (CmpQueryNameInformation) : NameLength, en octets, puis le nom, sans
+/// zéro final ; la partie fixe est NameLength.
+pub fn name_information(path: &str) -> Encoded {
+    let units: Vec<u16> = path.encode_utf16().collect();
+    let mut bytes = Vec::with_capacity(4 + units.len() * 2);
+    bytes.extend_from_slice(&((units.len() * 2) as u32).to_le_bytes());
+    bytes.extend(units_bytes(&units));
+    Encoded { bytes, minimum: 4 }
+}
+
 /// La classe `class` (`KEY_VALUE_*_INFORMATION`) de la valeur `facts` ;
 /// `None` pour une classe que Cm ne connaît pas. Dans
 /// KEY_VALUE_FULL_INFORMATION, les données suivent le nom, alignées sur
@@ -183,6 +197,15 @@ mod tests {
         let classless = KeyFacts { class: Vec::new(), ..facts };
         assert_eq!(word(&key_information(&classless, KEY_FULL_INFORMATION).unwrap().bytes, 12), u32::MAX);
         assert!(key_information(&classless, 3).is_none(), "KeyNameInformation is not known");
+    }
+
+    #[test]
+    fn the_name_class_is_its_length_then_the_full_path() {
+        let encoded = name_information("\\REGISTRY\\MACHINE");
+        assert_eq!(encoded.minimum, 4, "NameLength");
+        assert_eq!(&encoded.bytes[..4], &34u32.to_le_bytes(), "17 characters, no terminating zero");
+        assert_eq!(encoded.bytes.len(), 4 + 34);
+        assert_eq!(&encoded.bytes[4..8], &[b'\\', 0, b'R', 0]);
     }
 
     #[test]

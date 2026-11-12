@@ -339,6 +339,14 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 25 : RegisterWindowMessage (atomes de USER), NtUserQueryWindow (`win32k::window::query`), les
   accélérateurs (`win32k::accel`, `sys::accel` : Create, Copy, Destroy, TranslateAccelerator) : Ctrl+G ouvre « Goto
   line » du Bloc-notes.
+  M6, étape 26 (le texte d'Uniscribe) : GetFontData, GetGlyphIndicesW, GetCharABCWidths(I) (`glyph::Font::abc`,
+  `win32k::font`), ExtTextOut ETO_GLYPH_INDEX : le texte tapé dans le Bloc-notes s'affiche à sa place.
+  M6, étape 27 (la boîte Enregistrer sous) : NtQueryKey(KeyNameInformation) (`cm::Key::full_name`),
+  NtQueryObject(ObjectBasicInformation), NtQueryInformationProcess(ProcessDeviceMap) : HKCR, et les lecteurs DOS ;
+  les listes libres du buddy chaînées, sans limite (`mm::buddy`, `FreeLink`).
+  M6, étape 28 : SetWindowLong de GWL_STYLE et GWL_EXSTYLE (`win32k::window::set_style` : WM_STYLECHANGING,
+  `restyle`, `restyle_ex`, WM_STYLECHANGED) ; l'onglet du gestionnaire des tâches se donne `WS_CLIPSIBLINGS` et ne
+  peint plus sur sa page ; les sœurs se repeignent de haut en bas de l'ordre Z, comme ReactOS.
   M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
   NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
   NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),

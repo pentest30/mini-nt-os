@@ -1,7 +1,8 @@
 # Notes de passation
 
-- **Le logon jusqu'à `userinit`** (`claude/logon-token`, tirée de `claude/new-session-696xfc` à `509ad05`, worktree
-  `.claude/worktrees/logon-token` ; M6, premier critère, [`compat/m6-logon.md`](compat/m6-logon.md)). Le second
+- **Le logon jusqu'à `userinit`** (`claude/logon-token`, tirée de `claude/new-session-696xfc` à `509ad05`, qui y
+  a été fusionnée ensuite à `b9b46c6` ; worktree `.claude/worktrees/logon-token` ; M6, premier critère,
+  [`compat/m6-logon.md`](compat/m6-logon.md)). Le second
   démarrage du scénario `logon` s'arrêtait à NtCreateToken ; il va maintenant jusqu'à `userinit.exe`, lancé par
   `msgina` sous le jeton d'`Administrator`, qui cherche `C:\WINDOWS\explorer.exe` (absent du disque) et affiche
   « Userinit failed to start the shell! ». Fait, dans l'ordre où le logon le demandait : NtCreateToken
@@ -16,6 +17,45 @@
   maintenant jusqu'à NtAccessCheck, absent). **Vu, pas fait** : NtAccessCheck (SeAccessCheck, ADR-011) ; le thread de `userinit` sans
   bureau de démarrage (`win32k::startup`, STATUS_NOT_IMPLEMENTED) ; NtDeleteKey ; la parenté des jetons ; NtUnloadKey
   ne refuse pas une ruche dont des clés sont ouvertes. **Suite** : `explorer.exe` sur le disque, et ce qu'il demande.
+
+- **SetWindowLong du style ; l'ordre de peinture de ReactOS rétabli** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 28 ; choix du mainteneur : revenir à l'ordre de ReactOS
+  et trouver la vraie cause de la page grise du gestionnaire des tâches). La cause : NtUserSetWindowLong refusait
+  GWL_STYLE, et le contrôle d'onglets de `comctl32` se donne `WS_CLIPSIBLINGS` ainsi à sa création (TAB_Create) ;
+  sans lui, son effacement (COLOR_BTNFACE) passait sur la page peinte avant lui. `win32k::window::set_style`
+  (co_IntSetWindowLongPtr : WM_STYLECHANGING, `restyle`, `restyle_ex`, WM_STYLECHANGED ; `abi::user::StyleStruct32`)
+  fait GWL_STYLE et GWL_EXSTYLE ; `paint::find_window_to_repaint` va de nouveau de haut en bas de l'ordre Z, comme
+  ReactOS (l'écart retiré). Tests : hôte (`window`, quatre tests) ; `desktop-launch` échoue avec l'ordre de ReactOS
+  sans GWL_STYLE (mutation : la page grise) et passe avec, sur AMD et Intel ; `gui` passe de nouveau sur AMD et
+  Intel ; toute la suite sur AMD : 55 sur 55 (les rostests sautés, sans leur arbre) ; `cargo xtask lint` propre, 1087
+  tests hôte. Pas encore : GWLP_WNDPROC,
+  GWLP_HWNDPARENT, WS_EX_TOPMOST ôté à la fenêtre du shell, les fenêtres en couches.
+
+- **La boîte Enregistrer sous du Bloc-notes** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 27) : NtQueryKey(KeyNameInformation) (`cm::Key::full_name`), NtQueryObject(ObjectBasicInformation),
+  NtQueryInformationProcess(ProcessDeviceMap) (`io_manager::device::dos_drive_type`) : HKEY_CLASSES_ROOT marche,
+  GetLogicalDrives voit `C:`, le shell parcourt `C:\`. Tests : hôte (`cm`) ; la sonde de `notepad` (carte des
+  lecteurs, nom d'une clé, droits d'un handle ; mutation de la carte) sur AMD et Intel ; toute la suite sur AMD : 54
+  sur 55 (`gui` échouait par l'ordre de peinture des sœurs : corrigé, entrée ci-dessus). **Suite** pour enregistrer : l'assertion
+  d'ATL du shell (`::IsWindow(m_hWnd)`, une fenêtre ATL non créée), les fenêtres message seul, NtUserSetParent,
+  NtUserGetIconInfo, les DIB à palette de StretchDIBits, NtUserGetClassName, SB_CTL (liste dans l'étape 27).
+
+- **Les listes libres du buddy, sans limite** (`claude/new-session-696xfc`, vu en enregistrant dans le Bloc-notes) :
+  les listes de `mm::buddy` étaient des tableaux fixes de 512 blocs par ordre ; un processus qui laisse plus de 512
+  pages libres dont le buddy est encore pris (ses tables de pages, rendues une à une à sa fin) arrêtait le système
+  (`buddy free list overflow`, STOP 0x1E, vu à la fin du Bloc-notes après la boîte Enregistrer sous). Chaque liste
+  est maintenant chaînée dans les deux sens à travers une table de `FreeLink` (une par page, 12 octets : prise dans
+  la carte mémoire avec la base PFN, `BuddyAllocator::set_links`) : prendre, rendre et trouver un buddy libre sont en
+  O(1), sans capacité. Tests : hôte (`buddy` : 4 096 pages isolées puis refusionnées en deux blocs de 16 Mio, un
+  buddy retiré du milieu de sa liste, de la mémoire au-delà des liens refusée).
+
+- **Revue de la PR 125 : NtUserCreateAcceleratorTable** (`claude/new-session-696xfc`) : le compte de l'appelant
+  allouait `count × 6` octets avant toute validation (0xFFFFFFFF : 24 Gio, l'échec de l'allocation arrêtait le
+  système depuis un appel système). Le compte est borné à 65 536 entrées (au-delà : NULL et
+  ERROR_NOT_ENOUGH_MEMORY), la plage sondée avant d'allouer, les allocations faillibles (`try_reserve_exact`). Test :
+  la sonde de `notepad` appelle CreateAcceleratorTableW avec 0xFFFFFFFF (STOP sans le correctif) et fait, copie,
+  détruit une table d'une entrée ; `notepad` sur AMD et Intel. À regarder de même : NtGdiGetCharABCWidthsW sans
+  `pwch` alloue jusqu'à ~90 Mio pour un compte borné seulement par MAX_TEXT_BUFFER.
 
 - **Le Bloc-notes s'affiche** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 24 ; le critère « Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre » commence) :
@@ -32,18 +72,21 @@
   `sys::accel` : Create, Copy, Destroy, TranslateAccelerator ; l'item cherché par identifiant comme Wine et la
   documentation, pas par position comme ReactOS) ; Ctrl+G tapé par QEMU ouvre « Goto line », Échap la ferme. Le
   « SendMessageW Error » venait du Bloc-notes (WM_SETFONT à son Edit pas encore créé) : rien à corriger. Tests : hôte
-  (`accel`) ; `notepad` (mutation : sans WM_COMMAND), `cmd`, `desktop-launch`, `console` sur AMD et Intel. **Suite** :
-  NtUserSetActiveWindow et NtUserSetThreadState (la fin d'une boîte), NtUserGetAncestor,
-  NtUserIsClipboardFormatAvailable, les métriques de police (GetOutlineTextMetrics, GetFontData, GetGlyphIndices,
-  GetCharABCWidths), puis taper du texte (touches de QEMU), l'enregistrer (la boîte Enregistrer sous de `comdlg32`) et
-  le rouvrir.
+  (`accel`) ; `notepad` (mutation : sans WM_COMMAND), `cmd`, `desktop-launch`, `console` sur AMD et Intel. Puis
+  (étape 26) : le texte tapé dans le contrôle Edit passe par Uniscribe (`usp10`) : GetFontData (`glyph::Font::table`,
+  `font::font_data`), GetGlyphIndicesW, GetCharABCWidths(I) (`glyph::Font::abc`), ExtTextOut ETO_GLYPH_INDEX
+  (`font::glyph_run`) ; sans eux, les caractères d'une ligne se superposaient. Le scénario `notepad` tape deux lignes
+  et vérifie leurs pixels et « Line 2, column 7 » dans la barre d'état. **Suite** : NtUserSetActiveWindow et
+  NtUserSetThreadState (la fin d'une boîte), NtUserGetAncestor, NtUserIsClipboardFormatAvailable,
+  GetOutlineTextMetricsW, puis enregistrer (Ctrl+S : la boîte Enregistrer sous de `comdlg32`) et rouvrir le fichier.
 
 - **Le gestionnaire des tâches : page grise, onglets, relance** (`claude/new-session-696xfc`, worktree
   `.claude/worktrees/pr122` ; demandé le 2026-11-11, testé sous VirtualBox). Trois défauts :
   1. La page Applications repeinte en gris : son contrôle d'onglets (sœur d'en dessous, sans WS_CLIPSIBLINGS,
-     effacé de COLOR_BTNFACE par DefWindowProc) peignait après elle. `paint::find_window_to_repaint` va maintenant
-     des sœurs du bas de l'ordre Z vers le haut (écart voulu avec ReactOS, qui va de haut en bas ; ReactOS 0.4.16,
-     vérifié dans la VM `reactos` de VirtualBox, affiche bien la page, avec son thème).
+     effacé de COLOR_BTNFACE par DefWindowProc) peignait après elle. `paint::find_window_to_repaint` allait alors
+     des sœurs du bas de l'ordre Z vers le haut (écart avec ReactOS ; ReactOS 0.4.16, vérifié dans la VM `reactos`
+     de VirtualBox, affiche bien la page, avec son thème). **Remplacé** : l'ordre de ReactOS est rétabli et la cause
+     corrigée (GWL_STYLE, première entrée).
   2. Plus aucune application après un passage par un autre onglet : la même cause.
   3. Le gestionnaire ne se rouvrait plus : NtUserGetWindowPlacement manquait, il gardait pour sa place (WM_DESTROY,
      puis MoveWindow au lancement suivant) des octets de sa pile. Le service a été écrit deux fois, ici et pour le
@@ -63,11 +106,8 @@
   pas. Il relit maintenant les titres à chaque passage et reliste quand l'un change. Reproduit en sondant toutes
   les 1 ms (l'ancienne sonde échoue ainsi à coup sûr ; la nouvelle voit « Notepad » puis « Untitled - Notepad » et
   va jusqu'au « Goto line » fermé, seul « probe done » manque : 8000 passages d'un tick dépassent 120 s) ; à
-  250 ms, `notepad` passe sur AMD et Intel. À mesurer : si l'ordre de peinture du bas vers le haut allonge
-  l'intervalle entre la création et le titre. **Reste à vérifier** : `dialog`, `desktop-ui`, `desktop-click`,
-  `gui`, `menu`, `caret`,
-  `console`, `cmd`, `listview`, `scroll`, `scrollex`, `icons`, `destroy`, `cursor`, `mouse` avec le nouvel ordre de
-  peinture ; puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
+  250 ms, `notepad` passe sur AMD et Intel. (L'ordre de peinture du bas vers le haut et ses vérifications sont
+  sans objet : l'ordre de ReactOS est rétabli, première entrée.) Puis pousser, refaire l'image VirtualBox (`cargo xtask image --output
   target/vbox/pr122-4.img`, `VBoxManage convertfromraw --format VHD`, l'attacher à la VM `Mino` à la place de
   `pr122-3.vhd`, supprimer l'ancienne par `closemedium --delete`).
   **Vu, pas fait** : LineTo dessine toujours du stylo noir par défaut. `gdi32` choisit les stylos dans DC_ATTR sans
@@ -1501,4 +1541,8 @@ cargo xtask lint && cargo xtask test                        # avant chaque commi
   échoue, rétablir. Un script le fait pour une liste de mutations JSON `[nom, [[chemin, ancien, nouveau], ...]]`
   (`target/work/mutate.py`, hors dépôt : à réécrire au besoin, une vingtaine de lignes autour de
   `cargo xtask test --boot --scenario NOM --cpu CPU`).
+  Le fichier rétabli doit avoir une date plus récente que la compilation mutée (`touch`, ou une copie sans
+  `cp -p`) : sinon cargo le croit à jour et les runs suivants gardent le binaire muté (vu à l'étape 26 du M6 :
+  des largeurs ABC nulles « survivaient » à la restauration, et le scénario `notepad` échouait sans raison
+  apparente).
 - Un symptôme contourné est documenté ; un bogue corrigé vient avec le test qui l'aurait détecté.

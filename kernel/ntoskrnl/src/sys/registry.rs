@@ -103,7 +103,11 @@ pub(super) fn nt_query_key(arguments: &[u32]) -> NtStatus {
 fn query_key(arguments: &[u32]) -> Result<(), NtStatus> {
     let key = reference_key(arguments[0], KEY_QUERY_VALUE)?;
     let class = arguments[1];
-    let encoded = cm::info::key_information(&key.facts()?, class).ok_or_else(|| KEY_CLASSES.report(class))?;
+    let encoded = if class == cm::info::KEY_NAME_INFORMATION {
+        cm::info::name_information(key.full_name())
+    } else {
+        cm::info::key_information(&key.facts()?, class).ok_or_else(|| KEY_CLASSES.report(class))?
+    };
     return_variable(encoded, arguments[2], arguments[3], arguments[4])
 }
 
