@@ -19,15 +19,23 @@ static void check_class_name(void)
 }
 static void result(PROCESS_INFORMATION *process, HWND window, const WCHAR *expected)
 {
-    HWND display=GetDlgItem(window,1074);
-    app_check(display!=0,"calculator display");
+    HWND display=0;WCHAR text[128]={0};
     for(unsigned int n=0;n<120;++n) {
-        WCHAR text[128];GetWindowTextW(display,text,128);
-        unsigned int i=0;while(text[i] && text[i]==expected[i]) ++i;
-        if(text[i]==expected[i]) return;
+        /* The top-level title can be published before the dialog children
+           exist. Wait for the display and its value, including on reopen. */
+        display=GetDlgItem(window,1074);text[0]=0;
+        if(display && GetWindowTextW(display,text,128)>0) {
+            unsigned int i=0;while(text[i] && text[i]==expected[i]) ++i;
+            if(text[i]==expected[i]) {
+                DWORD_PTR reply=0;
+                app_check(SendMessageTimeoutW(window,WM_NULL,0,0,SMTO_NORMAL,3000,&reply)!=0,
+                          "calculator message loop ready");
+                return;
+            }
+        }
         app_alive(process);Sleep(50);
     }
-    WCHAR text[128];char ascii[128];GetWindowTextW(display,text,128);
+    char ascii[128];
     unsigned int i=0;for(;i<127 && text[i];++i) ascii[i]=(char)text[i];ascii[i]=0;
     DbgPrint("[calc] unexpected display: '%s'\n",ascii);
     app_check(FALSE,"calculator result");
@@ -39,7 +47,7 @@ DWORD WINAPI GuiStartup(void)
     WCHAR command[]=L"calc.exe";
     PROCESS_INFORMATION process=app_start(L"C:\\WINDOWS\\SYSTEM32\\CALC.EXE",command);
     HWND window=app_wait_window(&process,L"Calculator");
-    Sleep(300);result(&process,window,L"0.");
+    result(&process,window,L"0.");
     DbgPrint("[calc] ready for 12 + 30\n");
     result(&process,window,L"42.");
     DbgPrint("[calc] result 42 verified; close now\n");
