@@ -1,6 +1,19 @@
 # Notes de passation
 
-- **Campagne applications, suite de la PR #127** (`feat/m7-classic-apps`, nouveau main `abfe106`) : `calculator`, `minesweeper`, `notepad-save` et `desktop-launch` passent tous sur AMD et Intel (8/8). NtUserGetClassName débloque les boutons de la Calculatrice : `12+30=42`, fermeture, relance puis `6*7=42`. Démineur : clic droit, drapeau vérifié dans les pixels, F2 restitue la case couverte, fermeture et relance. GetClassNameW/A et les bornes testés ; CS_NOCLOSE et refus du subclassing interprocessus testés dans NOTEPAD2. Sur la base initiale : 1 090 tests hôte, lint propre. Revalidation sur le nouveau main en cours (PR #130) ; sonde Calculatrice corrigée pour attendre la création de son afficheur après le titre, puis un aller-retour WM_NULL. Le premier passage complet a détecté cette course ; reprise ciblée nécessaire. `desktop-click` est aussi adapté à #129 : cliquer Settings (sans programme) au lieu de Text Editor (qui lance désormais le Bloc-notes et ferme le menu). Ces deux reprises restent à valider ; les autres scénarios continuent. CI enrichie, captures dans `docs/images`, portée et commandes dans `docs/compat/applications.md`. Reprise : finir la suite générale, mettre à jour ce bilan, passer la PR en revue.
+- **Applications Win32 x86 validées** (`feat/m7-classic-apps`, PR #130, base main `abfe106`, suite de #127) :
+  Calculatrice (`12+30=42`, fermeture, relance, `6*7=42`), Démineur (drapeau au clic droit, F2, fermeture/relance),
+  Bloc-notes (saisie, sauvegarde, fermeture/réouverture), bureau et Gestionnaire des tâches : les six scénarios passent
+  sur AMD et Intel (12 parcours). NtUserGetClassName débloque les boutons de la Calculatrice ; copie UTF-16 bornée,
+  tests W/A, troncature, NUL seul, pointeur/HWND invalides. NOTEPAD2 vérifie aussi CS_NOCLOSE et le refus du
+  subclassing interprocessus. La sonde attend les contrôles et un aller-retour WM_NULL ; `desktop-click` sélectionne
+  Settings pour rester un test de menu depuis le lancement réel de Text Editor (#129).
+  **Validation** : lint propre, 1 098 tests hôte ; 59 scénarios AMD distincts réussis après reprises ciblées, 6 scénarios
+  applicatifs Intel réussis ; CI applications AMD/Intel verte. Deux rostests sautés faute d'arbre de tests.
+  `installed-boot` repris avec OVMF pflash (le firmware combiné écrivait NVVARS dans l'ESP) ; aucune vérification de
+  disque assouplie. Suite terminée après libération des images temporaires ayant rempli le disque de travail.
+  Captures dans `docs/images`, commandes et limites dans `docs/compat/applications.md`. Pas de validation VirtualBox,
+  ni de sauvegarde du document après reboot dans le scénario RAM. Reprise : revue de #130 ; conserver les scénarios
+  dans la CI, puis étendre la matrice avec un parcours précis par application.
 
 - **Text Editor du bureau lance le Bloc-notes** (`claude/desktop-notepad`, sur main `a4fa4c3`) : l'entrée « Text
   Editor » du menu Démarrer de `tests/native/desktop1.c` ne lançait rien (seuls Terminal et Task Manager avaient un
