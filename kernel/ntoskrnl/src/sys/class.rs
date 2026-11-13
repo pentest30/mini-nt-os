@@ -9,7 +9,7 @@ use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
 use abi::peb32::UnicodeString32;
 use abi::user::{ClsMenuName32, WndClassExW32, CSF_ANSIPROC, CS_GLOBALCLASS};
 use abi::winerror::{dos_error, ERROR_CLASS_DOES_NOT_EXIST, ERROR_INVALID_FLAGS, ERROR_INVALID_PARAMETER};
-use ke::usermem::{copy_from_user, probe_for_read, probe_for_write, UserPtr};
+use ke::usermem::{copy_from_user, copy_to_user, probe_for_read, probe_for_write, UserPtr};
 use win32k::class::{ClassInfo, ClassName, MenuName};
 
 /// IS_ATOM : une adresse sous 64 Kio est un atome entier.
@@ -48,6 +48,40 @@ fn answer(result: Result<Result<u32, u32>, NtStatus>) -> NtStatus {
     };
     let _ = win32k::set_last_error(error);
     NtStatus(0)
+}
+
+/// NtUserGetClassName(hwnd, real, name) : le nom non versionné de la classe,
+/// tronqué à MaximumLength / 2 - 1 unités, suivi d'un NUL. Le retour exclut
+/// le NUL. Les classes entières s'écrivent #nnnnn. Pas encore de résolution
+/// RealGetWindowClass des superclasses ; elles rendent leur nom enregistré.
+///
+/// # IRQL
+/// PASSIVE_LEVEL. Ne copie que par les helpers de mémoire utilisateur.
+pub(super) fn nt_user_get_class_name(arguments: &[u32]) -> NtStatus {
+    let [hwnd, _real, address] = arguments[..3] else { unreachable!("3 arguments") };
+    let query = || -> Result<Result<u32, u32>, NtStatus> {
+        let Some(window) = win32k::window::get(hwnd) else {
+            return Ok(Err(abi::winerror::ERROR_INVALID_WINDOW_HANDLE));
+        };
+        let Some(class) = &window.class else { return Ok(Err(ERROR_CLASS_DOES_NOT_EXIST)) };
+        let string = UserPtr::<UnicodeString32>::new(address).read()?;
+        let capacity = usize::from(string.maximum_length) / 2;
+        if capacity == 0 {
+            return Ok(Err(ERROR_INVALID_PARAMETER));
+        }
+        let name = if class.nv_atom < win32k::atom::FIRST_STRING_ATOM {
+            alloc::format!("#{}", class.nv_atom).encode_utf16().collect()
+        } else {
+            win32k::atom::name(class.nv_atom).unwrap_or_default()
+        };
+        let copied = name.len().min(capacity - 1);
+        let bytes: Vec<u8> =
+            name[..copied].iter().chain(core::iter::once(&0)).flat_map(|unit| unit.to_le_bytes()).collect();
+        probe_for_write(u64::from(string.buffer), bytes.len(), 2)?;
+        copy_to_user(u64::from(string.buffer), &bytes)?;
+        Ok(Ok(copied as u32))
+    };
+    answer(query())
 }
 
 /// NtUserRegisterClassExWOW(lpwcx, ClassName, ClsVersion, pClassMenuName,

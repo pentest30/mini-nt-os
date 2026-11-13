@@ -1271,9 +1271,31 @@ et la cause corrigée :
   (`dce::effective_flags`), et Mino ne garde pas de DC propre (DceResetActiveDCEs de ReactOS, au changement de
   `WS_VISIBLE`).
 
-GWLP_WNDPROC et GWLP_HWNDPARENT restent à faire (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois).
+À cette étape, GWLP_WNDPROC et GWLP_HWNDPARENT restaient à faire (suite ci-dessous).
 
 Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZE` gardés, le bord de fenêtre, la
 fille qui cesse ou devient fille) ; `desktop-launch` sur AMD et Intel, qui échoue avec l'ordre de ReactOS sans
 GWL_STYLE (la page grise, ses quatre pixels) ; `gui` passe de nouveau sur AMD et Intel ; toute la suite sur AMD (55
 sur 55).
+
+## Étape 29 : sauvegarder, fermer et rouvrir ; petites applications x86
+
+Le parcours Bloc-notes est complet dans `notepad-save` (PR #127) : saisie
+QEMU, vrai dialogue Enregistrer sous, contrôle des 20 octets du fichier,
+Alt+F4, sortie normale, puis nouveau processus et texte relu à l'écran.
+Le remplacement de GWLP_WNDPROC pour une procédure cliente de même encodage
+débloque les fenêtres ATL du shell. Alt+F4 poste SC_CLOSE à la fenêtre de
+premier niveau ; CS_NOCLOSE est respecté. Les ponts ANSI/Unicode et les
+procédures serveur restent refusés ; GWLP_HWNDPARENT reste à faire.
+
+La Calculatrice demandait ensuite GetClassName avant de transformer une
+touche en clic sur un bouton. NtUserGetClassName rend maintenant le nom
+non versionné, avec troncature et NUL dans le tampon UTF-16 de l'appelant.
+`calculator` vérifie `12+30=42`, ferme le processus, relance et vérifie
+`6*7=42`, avec contrôle du texte et du rendu. `minesweeper` contrôle un
+drapeau posé au clic droit, F2, la fermeture et la relance. Les détails,
+résultats, captures et limites sont dans [applications.md](applications.md).
+
+Ces scénarios utilisent les vrais exécutables ReactOS épinglés, sans les
+modifier. Le test Bloc-notes vérifie une relance sur le même volume RAM ;
+la persistance après redémarrage de l'OS n'est pas couverte par ce parcours.

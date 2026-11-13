@@ -1,5 +1,20 @@
 # Notes de passation
 
+- **Applications Win32 x86 validées** (`feat/m7-classic-apps`, PR #130, base main `abfe106`, suite de #127) :
+  Calculatrice (`12+30=42`, fermeture, relance, `6*7=42`), Démineur (drapeau au clic droit, F2, fermeture/relance),
+  Bloc-notes (saisie, sauvegarde, fermeture/réouverture), bureau et Gestionnaire des tâches : les six scénarios passent
+  sur AMD et Intel (12 parcours). NtUserGetClassName débloque les boutons de la Calculatrice ; copie UTF-16 bornée,
+  tests W/A, troncature, NUL seul, pointeur/HWND invalides. NOTEPAD2 vérifie aussi CS_NOCLOSE et le refus du
+  subclassing interprocessus. La sonde attend les contrôles et un aller-retour WM_NULL ; `desktop-click` sélectionne
+  Settings pour rester un test de menu depuis le lancement réel de Text Editor (#129).
+  **Validation** : lint propre, 1 098 tests hôte ; 59 scénarios AMD distincts réussis après reprises ciblées, 6 scénarios
+  applicatifs Intel réussis ; CI applications AMD/Intel verte. Deux rostests sautés faute d'arbre de tests.
+  `installed-boot` repris avec OVMF pflash (le firmware combiné écrivait NVVARS dans l'ESP) ; aucune vérification de
+  disque assouplie. Suite terminée après libération des images temporaires ayant rempli le disque de travail.
+  Captures dans `docs/images`, commandes et limites dans `docs/compat/applications.md`. Pas de validation VirtualBox,
+  ni de sauvegarde du document après reboot dans le scénario RAM. Reprise : revue de #130 ; conserver les scénarios
+  dans la CI, puis étendre la matrice avec un parcours précis par application.
+
 - **Text Editor du bureau lance le Bloc-notes** (`claude/desktop-notepad`, sur main `a4fa4c3`) : l'entrée « Text
   Editor » du menu Démarrer de `tests/native/desktop1.c` ne lançait rien (seuls Terminal et Task Manager avaient un
   programme) ; elle lance `NOTEPAD.EXE`. Scénario `desktop-notepad` (Bas, Entrée : « launched Text Editor », le

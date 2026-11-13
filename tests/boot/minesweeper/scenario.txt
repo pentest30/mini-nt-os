@@ -1,0 +1,21 @@
+features = test-smss
+requires = userland, native
+initial-command = MINE1.EXE
+cpus = default, intel
+timeout = 120
+# Cursor starts at (640,400). First tile centre: (16,83).
+# Move off it after the right click to exclude the pointer from pixel reads.
+keys = [mine] ready for right click => move:-312,-158 move:-312,-159 press:2 release move:100,0
+keys = [mine] flagged tile changed; new game now => f2
+keys = [mine] F2 restored covered tile; close now => alt-f4
+expect = [mine] flagged tile changed; new game now
+expect = [mine] F2 restored covered tile; close now
+expect = [mine] first process closed cleanly
+expect = [mine] reopened with covered board; PASS
+forbid = [apps] FAIL
+forbid = *** STOP:
+# Covered tile's raised top/left edge, centre, lower edge; smiley's face.
+screen = 8 75 FFFFFF
+screen = 16 83 C0C0C0
+screen = 23 90 808080
+screen = 79 56 FFFF00
