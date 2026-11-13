@@ -331,6 +331,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserFindExistingCursorIcon, Handler::Status(cursor::nt_user_find_existing_cursor_icon)),
     (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
+    (services::NtUserGetClassName, Handler::Status(class::nt_user_get_class_name)),
     (services::NtUserGetControlBrush, Handler::Status(window::nt_user_get_control_brush)),
     (services::NtUserGetControlColor, Handler::Status(window::nt_user_get_control_color)),
     (services::NtUserGetDC, Handler::Status(window::nt_user_get_dc)),

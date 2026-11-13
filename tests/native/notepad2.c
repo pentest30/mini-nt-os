@@ -37,6 +37,14 @@ static void check_subclass(void)
     app_check((WNDPROC)SetWindowLongW(window,GWL_WNDPROC,(LONG)previous_proc)==replacement_proc,"restore procedure");
     app_check(SendMessageW(window,WM_APP+1,0,0)==41,"restored procedure");
     app_check(DestroyWindow(window),"destroy subclass probe");
+    cls.style=CS_NOCLOSE;cls.lpszClassName=L"MinoNoClose";
+    app_check(RegisterClassExW(&cls)!=0,"register CS_NOCLOSE probe");
+    window=CreateWindowExW(0,cls.lpszClassName,L"",0,0,0,0,0,0,0,cls.hInstance,0);
+    app_check(window!=0,"create CS_NOCLOSE probe");
+    SendMessageW(window,WM_SYSKEYDOWN,VK_F4,(1u<<29)|1);
+    MSG message;
+    app_check(!PeekMessageW(&message,window,WM_SYSCOMMAND,WM_SYSCOMMAND,PM_REMOVE),"Alt+F4 respects CS_NOCLOSE");
+    app_check(DestroyWindow(window),"destroy CS_NOCLOSE probe");
     DbgPrint("[note-save] client procedure replaced and restored\n");
 }
 DWORD WINAPI GuiStartup(void)
@@ -47,7 +55,10 @@ DWORD WINAPI GuiStartup(void)
     app_check(absent==INVALID_HANDLE_VALUE && GetLastError()==ERROR_FILE_NOT_FOUND,"fresh file fixture");
     WCHAR command[]=L"notepad.exe";
     PROCESS_INFORMATION process=app_start(L"C:\\WINDOWS\\SYSTEM32\\NOTEPAD.EXE",command);
-    app_wait_window(&process,L"Untitled - Notepad");
+    HWND first=app_wait_window(&process,L"Untitled - Notepad");
+    SetLastError(0);
+    app_check(SetWindowLongW(first,GWL_WNDPROC,(LONG)original_proc)==0
+              && GetLastError()==ERROR_ACCESS_DENIED,"cannot subclass another process");
     DbgPrint("[note-save] ready for typing\n");
     app_wait_window(&process,L"Save As");
     DbgPrint("[note-save] Save As ready\n");

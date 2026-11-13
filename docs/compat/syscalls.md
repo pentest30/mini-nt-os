@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 167 | 737 |
+| win32k | 168 | 737 |
 
 ## ntoskrnl
 
@@ -703,7 +703,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1180` | `NtUserGetCaretBlinkTime` | 0 | ✅ |
 | `0x1181` | `NtUserGetCaretPos` | 1 | ✅ |
 | `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |
-| `0x1183` | `NtUserGetClassName` | 3 |  |
+| `0x1183` | `NtUserGetClassName` | 3 | ✅ |
 | `0x1184` | `NtUserGetClipboardData` | 2 |  |
 | `0x1185` | `NtUserGetClipboardFormatName` | 3 |  |
 | `0x1186` | `NtUserGetClipboardOwner` | 0 |  |

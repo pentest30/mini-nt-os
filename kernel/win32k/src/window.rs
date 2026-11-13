@@ -497,7 +497,8 @@ pub fn apply_long(state: &mut WindowState, index: i32, value: u32) -> Option<u32
 /// `window` devient `value` ; rend l'ancien. Un index positif est une place
 /// dans ses octets de plus (`cbWndExtra`, après le `WND`, où `user32` les lit
 /// lui-même) ; GWL_STYLE et GWL_EXSTYLE passent par [`set_style`] ; un autre
-/// index négatif est l'un de ceux de [`apply_long`].
+/// GWLP_WNDPROC remplace la procédure cliente ; un autre index négatif
+/// est l'un de ceux de [`apply_long`].
 ///
 /// # Errors
 /// L'erreur de Win32 : `ERROR_INVALID_INDEX` pour une place au-delà des
@@ -535,7 +536,7 @@ pub fn set_long(window: &Arc<Window>, index: i32, value: u32, ansi: bool) -> Res
     if index == GWLP_HWNDPARENT {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("win32k: SetWindowLong of the procedure or the parent ({index}): not yet");
+            log::warn!("win32k: SetWindowLong of the parent ({index}): not yet");
         }
         return Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
     }

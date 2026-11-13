@@ -112,6 +112,10 @@ jobs:
             args: --scenario native
             userland: true
             native: true
+          - name: Win32 apps, save and reopen, keyboard arithmetic and mouse (AMD + Intel)
+            args: --scenario notepad-save --scenario calculator --scenario minesweeper --scenario desktop-launch
+            userland: true
+            native: true
           - name: NTFS read-only data volume, native file syscalls (M9)
             args: --scenario ntfs-readonly
             userland: true
