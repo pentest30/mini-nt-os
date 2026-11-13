@@ -60,6 +60,11 @@ MapVirtualKeyEx reste absent ; ce n'est pas le blocage observé ici : ToAsciiEx
 peut encore traduire ces touches par la disposition chargée. Pas de
 validation des fonctions scientifiques, de l'aide HTML ou du presse-papiers.
 
+La sonde attend l'existence de l'afficheur **et** sa valeur, puis une réponse
+à WM_NULL avec délai maximal. L'existence du titre seul ne garantit pas que
+les contrôles du dialogue sont créés : une course à la relance, détectée lors
+du passage sur le nouveau main, faisait échouer la première version de la sonde.
+
 ## Démineur
 
 `MINE1.EXE` lance `winmine.exe` (titre WineMine). La sonde lit les 256 pixels
@@ -75,10 +80,13 @@ clic. Une partie gagnée/perdue et le son ne sont pas validés.
 Ces parcours portent sur les binaires x86 épinglés, pas sur toute application
 XP. Les images de test incluent désormais `calc.exe`, `winmine.exe` et leurs
 imports. La CI exécute les trois nouveaux scénarios et `desktop-launch` sur
-les deux chemins d'appels système. Commande de la campagne :
+les deux chemins d'appels système, ainsi que le lancement du Bloc-notes et
+les clics du menu du bureau. `desktop-click` sélectionne désormais Settings :
+depuis la PR #129, Text Editor lance réellement une application et ferme le
+menu, contrairement à l'hypothèse de l'ancien test. Commande de la campagne :
 
 ```sh
-cargo xtask test --boot --scenario notepad-save --scenario calculator --scenario minesweeper --scenario desktop-launch
+cargo xtask test --boot --scenario notepad-save --scenario calculator --scenario minesweeper --scenario desktop-launch --scenario desktop-notepad --scenario desktop-click
 ```
 
 Bilan de la campagne : 8 démarrages sur 8 réussis, 1 090 tests hôte réussis,
@@ -88,3 +96,9 @@ Pas de validation VirtualBox dans cette campagne.
 Captures QEMU réelles : [Bloc-notes rouvert](../images/notepad-save.png),
 [Calculatrice après relance](../images/calculator.png),
 [Démineur après relance](../images/minesweeper.png).
+
+Pour un essai manuel dans une image reconstruite avec cette branche : ouvrir
+le bureau live puis Terminal et lancer `C:\WINDOWS\SYSTEM32\CALC.EXE` ou
+`C:\WINDOWS\SYSTEM32\WINMINE.EXE`. Le menu Text Editor lance déjà le Bloc-notes
+depuis la PR #129. Ces commandes manuelles ne constituent pas une validation
+supplémentaire VirtualBox.

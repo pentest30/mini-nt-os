@@ -1,8 +1,11 @@
 # The desktop with the mouse: a press on an entry of the open Start menu
 # selects it, a press outside the menu closes it, a press on the Start button
 # opens it again (DESKTOP1.EXE, desktop_hit). The screen is 1280x800 and the
-# cursor starts at its centre, (640, 400): Text Editor is the second entry
-# (x 2-199, y 392-435), Start the taskbar's left 108 pixels (y 770-799).
+# cursor starts at its centre, (640, 400): Settings is the fourth entry
+# (x 2-199, y 484-527), Start the taskbar's left 108 pixels (y 770-799).
+# Text Editor now launches Notepad and closes the menu (PR #129); this
+# menu-only test selects an entry without a program. desktop-notepad covers
+# the Text Editor launch separately.
 # QEMU's PS/2 queue holds 16 bytes, four packets of at most 127 pixels: a
 # longer move goes in several commands, or its rest leaves with the press.
 features = test-smss
@@ -11,19 +14,20 @@ initial-command = DESKTOP1.EXE
 cpus = default, intel
 timeout = 120
 
-keys = [desktop] ready => move:-270,7 move:-270,7 press:1 release
-keys = [desktop] selected Text Editor => move:350,-57 move:350,-57 press:1 release
+keys = [desktop] ready => move:-270,53 move:-270,53 press:1 release
+keys = [desktop] selected Settings => move:350,-103 move:350,-103 press:1 release
 keys = [desktop] press outside the menu: start menu closed => move:-373,243 move:-373,242 press:1 release
 
 expect = [desktop] ready
-expect = [desktop] selected Text Editor
+expect = [desktop] selected Settings
 expect = [desktop] press outside the menu: start menu closed
 expect = [desktop] start button: start menu open
 
-# Text Editor selected, Files no longer; the Start button pressed (the menu
+# Settings selected, Files no longer; the Start button pressed (the menu
 # is open again).
-screen = 190 398 316AC5
+screen = 190 490 316AC5
 screen = 190 352 FFFFFF
 screen = 95 790 45983D
 
 forbid = *** STOP:
+forbid = [desktop] launched
