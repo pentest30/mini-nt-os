@@ -95,17 +95,22 @@ fn open_key(arguments: &[u32]) -> Result<(), NtStatus> {
 
 /// NtQueryKey(KeyHandle, KeyInformationClass, KeyInformation, Length,
 /// ResultLength) : KEY_BASIC, NODE ou FULL_INFORMATION de la clé
-/// (`KEY_QUERY_VALUE`).
+/// (`KEY_QUERY_VALUE`) ; KeyNameInformation, son nom entier, pour un handle
+/// qui porte un droit quelconque (comme ReactOS : `advapi32` demande le nom
+/// d'une clé de HKCR créée avec KEY_WRITE).
 pub(super) fn nt_query_key(arguments: &[u32]) -> NtStatus {
     status(query_key(arguments))
 }
 
 fn query_key(arguments: &[u32]) -> Result<(), NtStatus> {
-    let key = reference_key(arguments[0], KEY_QUERY_VALUE)?;
     let class = arguments[1];
     let encoded = if class == cm::info::KEY_NAME_INFORMATION {
+        let key = super::current_process()
+            .handle_table
+            .reference_as_with_any_access::<cm::Key>(Handle(arguments[0]), &cm::KEY_TYPE)?;
         cm::info::name_information(key.full_name())
     } else {
+        let key = reference_key(arguments[0], KEY_QUERY_VALUE)?;
         cm::info::key_information(&key.facts()?, class).ok_or_else(|| KEY_CLASSES.report(class))?
     };
     return_variable(encoded, arguments[2], arguments[3], arguments[4])
