@@ -10,8 +10,8 @@
   `dnsapi.dll` sur le disque (`xtask/src/userland.rs`), le nom DNS (`Services\Tcpip\Parameters` : `NV Hostname`,
   `Hostname`, `NV Domain`, `Domain`) dans `tools/mkhive/mino.inf`. **ntdll 44/84 (52 %), kernel32 16/29 (55 %)** :
   planchers relevés (44 et 16), critère coché, **le M5 est terminé** ; S1, S2 et S3 ont réussi, l'ADR-002 est à
-  confirmer (décision du mainteneur, skill `mino-adr`). `cargo xtask lint` propre, tests hôte de `xtask` (37) ; **à finir** : toute la suite sur AMD (lancée), le disque de
-  chaque scénario ayant changé. **Suite** : le bureau d'`explorer`
+  confirmer (décision du mainteneur, skill `mino-adr`). `cargo xtask lint` propre, tests hôte de `xtask` (37) ; toute la suite sur AMD (le disque de chaque scénario a
+  changé) : 61 sur 61, les deux rostests compris. **Suite** : le bureau d'`explorer`
   (M6), puis les tests kernel32 les moins coûteux (FindFiles et `\Device\Mup`, l'exception SSE #XM pour
   SetUnhandledExceptionFilter, JapaneseCalendar ; liste dans le document).
 
