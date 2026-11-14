@@ -38,8 +38,13 @@
 # desktop, lists the user's Desktop folder, and declares its window the
 # shell's (NtUserSetShellWindowEx), which goes to the bottom of the Z order:
 # the taskbar stays above it, painted again where the desktop covered it
-# (the two pixels). The desktop's background and icons are not yet there
-# (NtUserPaintDesktop, NtUserGetIconInfo).
+# (the two pixels). That needs explorer's process to have a window station:
+# msgina gives userinit, then explorer, a desktop path without one
+# ("Default"), which takes WinSta0 (IntResolveDesktop; "no startup desktop"
+# forbidden for both). The desktop paints its background by PaintDesktop
+# (NtUserPaintDesktop) through a DC it took while it was above everything
+# (DceResetActiveDCEs keeps that DC off the taskbar). Its icons are not yet
+# there (NtUserGetIconInfo).
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
@@ -75,3 +80,5 @@ forbid = Failed to start default shell
 forbid = (explorer.exe) ended
 forbid = desktop.cpp:193
 forbid = atlcomcli.h
+forbid = of userinit.exe (NtStatus
+forbid = of explorer.exe (NtStatus

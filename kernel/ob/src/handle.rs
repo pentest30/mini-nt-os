@@ -240,6 +240,20 @@ impl HandleTable {
         Ok(())
     }
 
+    /// ObFindHandleForObject, sans objet donné : le premier handle (le plus
+    /// petit) sur un objet du type `ty`, et cet objet ; `None` s'il n'y en a
+    /// pas.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn find_by_type(&self, ty: &ObjectType) -> Option<(Handle, ObjectRef)> {
+        let slots = self.slots.lock();
+        slots.entries.iter().enumerate().find_map(|(slot, entry)| {
+            let entry = entry.as_ref().filter(|entry| entry.object.is_type(ty))?;
+            Some((Handle::from_slot(slot), entry.object.clone()))
+        })
+    }
+
     /// ObDuplicateHandleTable : la table d'un processus fils, avec les handles
     /// héritables de celle-ci, aux mêmes valeurs.
     ///
@@ -371,6 +385,23 @@ mod tests {
         assert_eq!(table.insert(event(), ALL, NONE), Ok(Handle(4)));
         assert_eq!(table.insert(event(), ALL, NONE), Ok(Handle(16)));
         assert_eq!(table.count(), 4);
+    }
+
+    #[test]
+    fn the_first_handle_of_a_type_is_found() {
+        let table = HandleTable::new();
+        assert!(table.find_by_type(&EVENT).is_none(), "an empty table");
+        let mutant: ObjectRef = create_object(&MUTANT, 0u32);
+        table.insert(mutant.clone(), ALL, NONE).unwrap();
+        let first = event();
+        let handle = table.insert(first.clone(), ALL, NONE).unwrap();
+        table.insert(event(), ALL, NONE).unwrap();
+        let (found, object) = table.find_by_type(&EVENT).unwrap();
+        assert_eq!(found, handle);
+        assert!(Arc::ptr_eq(&object, &first), "the first event, not the mutant");
+        table.close(handle).unwrap();
+        assert_eq!(table.find_by_type(&EVENT).map(|(handle, _)| handle), Some(Handle(12)), "the next one");
+        assert!(table.find_by_type(&MUTANT).is_some_and(|(_, object)| Arc::ptr_eq(&object, &mutant)));
     }
 
     #[test]

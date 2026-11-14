@@ -6,11 +6,13 @@
 //! paramètres (`DesktopInfo`, ce que CreateProcess tient de `lpDesktop`),
 //! puis le thread placé sur ce bureau ([`assign_startup_desktop`]).
 //!
-//! Pas encore, journalisé une fois : la station par défaut d'un chemin qui
-//! n'en nomme pas (une station héritée, ou celle des services,
-//! `Service-0x0-3e7$`, que crée ReactOS pour un processus de System) ; le
-//! thread converti reste alors sans bureau (ReactOS fait échouer la
-//! conversion).
+//! Un chemin qui ne nomme pas de station (`Default`, ce que `msgina` donne
+//! à `userinit`, puis `explorer`) prend la station héritée du processus ou
+//! WinSta0 ([`default_station`]). Pas encore, journalisé une fois : la
+//! station des services (`Service-0x…$`, que crée ReactOS pour un processus
+//! sans accès à WinSta0 ni station héritée) ; le thread converti reste alors
+//! sans bureau (ReactOS fait échouer la conversion). Un chemin sans bureau
+//! prend `Default`, pas encore le bureau hérité.
 
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -35,6 +37,39 @@ use crate::winsta::{WindowStation, WINDOW_STATION_TYPE};
 /// STARTF_INHERITDESKTOP (ReactOS) : le bureau vient du processus parent.
 pub const STARTF_INHERITDESKTOP: u32 = 0x4000_0000;
 
+/// La station d'un chemin qui n'en nomme pas (IntResolveDesktop).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DefaultStation {
+    /// La station héritée par le processus (un handle dans sa table).
+    Inherited,
+    /// La station interactive, WinSta0.
+    Interactive,
+    /// La station des services de son ouverture de session (`Service-0x…$`).
+    Service,
+    /// Aucune : une station héritée interactive sans accès à WinSta0.
+    Refused,
+}
+
+/// IntResolveDesktop, pour un chemin sans station : la station héritée
+/// (`inherited` : son interactivité, `!WSS_NOIO`, s'il y en a une) est
+/// gardée si elle est interactive autant que le processus a accès à
+/// WinSta0 (`winsta0_allowed`) ; sinon WinSta0 s'il y a accès ; sinon la
+/// station des services, faute de station héritée.
+pub fn default_station(inherited: Option<bool>, winsta0_allowed: bool) -> DefaultStation {
+    let interactive = inherited == Some(true);
+    if interactive == winsta0_allowed {
+        if inherited.is_some() {
+            DefaultStation::Inherited
+        } else {
+            DefaultStation::Service
+        }
+    } else if winsta0_allowed {
+        DefaultStation::Interactive
+    } else {
+        DefaultStation::Refused
+    }
+}
+
 /// Le processus courant.
 fn current_process() -> Result<Arc<Object<EProcess>>, NtStatus> {
     Ok(ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?.process().clone())
@@ -45,10 +80,13 @@ fn current_process() -> Result<Arc<Object<EProcess>>, NtStatus> {
 /// station et son bureau de démarrage les garde ; sinon `path` dit
 /// `Station\Bureau` (le bureau seul, ou rien : `Default`). La station
 /// interactive (WinSta0) ne va qu'à un processus de la session d'ouverture
-/// de System ou de celle de son utilisateur.
+/// de son utilisateur, ou de celle de System quand le chemin la nomme ou
+/// que les handles sont hérités (`inherit`). Sans station dans le chemin :
+/// [`default_station`], la station héritée cherchée dans la table de
+/// `target` (ObFindHandleForObject).
 ///
 /// # Errors
-/// `STATUS_NOT_IMPLEMENTED` pour un chemin sans station (journalisé une
+/// `STATUS_NOT_IMPLEMENTED` pour la station des services (journalisé une
 /// fois) ; `STATUS_OBJECT_NAME_NOT_FOUND`, `STATUS_ACCESS_DENIED` ; celles
 /// de la table des handles.
 ///
@@ -79,27 +117,52 @@ pub fn resolve_desktop(
         }
     }
     let (station_name, desktop_name) = match path.split_once('\\') {
-        Some((station, desktop)) if !station.is_empty() => (station, desktop),
-        _ => {
-            static REPORTED: AtomicBool = AtomicBool::new(false);
-            if !REPORTED.swap(true, Ordering::Relaxed) {
-                log::warn!("win32k: a desktop path without a window station (the default station): not yet");
-            }
-            return Err(STATUS_NOT_IMPLEMENTED);
-        }
+        Some((station, desktop)) if !station.is_empty() => (Some(station), desktop),
+        Some((_, desktop)) => (None, desktop),
+        None => (None, path),
     };
     let desktop_name = if desktop_name.is_empty() { "Default" } else { desktop_name };
-    let name = alloc::format!("{}\\{station_name}", crate::csrss::window_stations_directory(current.session_id()));
-    let flags = OBJ_CASE_INSENSITIVE | if inherit { OBJ_INHERIT } else { 0 };
-    let object = ob::namespace().open(&name, None, Some(&WINDOW_STATION_TYPE), flags)?;
-    let station = ob::downcast::<WindowStation>(&object).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
-    if station_name.eq_ignore_ascii_case("WinSta0") {
-        let luid = target.primary_token().authentication_id().to_abi();
-        let user = station.user().luid;
-        if luid != SYSTEM_LUID && luid != user {
-            return Err(STATUS_ACCESS_DENIED);
+    let luid = target.primary_token().authentication_id().to_abi();
+    let open_station = |name: &str| -> Result<Arc<Object<WindowStation>>, NtStatus> {
+        let name = alloc::format!("{}\\{name}", crate::csrss::window_stations_directory(current.session_id()));
+        let flags = OBJ_CASE_INSENSITIVE | if inherit { OBJ_INHERIT } else { 0 };
+        let object = ob::namespace().open(&name, None, Some(&WINDOW_STATION_TYPE), flags)?;
+        ob::downcast::<WindowStation>(&object).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)
+    };
+    let station = match station_name {
+        Some(station_name) => {
+            let station = open_station(station_name)?;
+            if station_name.eq_ignore_ascii_case("WinSta0") {
+                let user = station.user().luid;
+                if luid != SYSTEM_LUID && luid != user {
+                    return Err(STATUS_ACCESS_DENIED);
+                }
+            }
+            station
         }
-    }
+        None => {
+            let inherited = target
+                .handle_table
+                .find_by_type(&WINDOW_STATION_TYPE)
+                .and_then(|(_, object)| ob::downcast::<WindowStation>(&object));
+            let winsta0 = open_station("WinSta0").ok();
+            let allowed =
+                winsta0.as_ref().is_some_and(|station| luid == station.user().luid || (inherit && luid == SYSTEM_LUID));
+            match (default_station(inherited.as_ref().map(|station| !station.no_io()), allowed), inherited, winsta0) {
+                (DefaultStation::Inherited, Some(station), _) | (DefaultStation::Interactive, _, Some(station)) => {
+                    station
+                }
+                (DefaultStation::Refused, ..) => return Err(STATUS_ACCESS_DENIED),
+                _ => {
+                    static REPORTED: AtomicBool = AtomicBool::new(false);
+                    if !REPORTED.swap(true, Ordering::Relaxed) {
+                        log::warn!("win32k: the service window station of a logon session (Service-0x…$): not yet");
+                    }
+                    return Err(STATUS_NOT_IMPLEMENTED);
+                }
+            }
+        }
+    };
     let desktop = crate::desktop::find(&station, desktop_name).ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
     let station = table.insert(station, AccessMask::MAXIMUM_ALLOWED, attributes)?;
     match table.insert(desktop, AccessMask::MAXIMUM_ALLOWED, attributes) {
@@ -225,4 +288,20 @@ pub fn session_desktop(process: &Arc<Object<EProcess>>) -> Result<Arc<Object<Des
     let _ = station;
     crate::gui::set_thread_desktop(desktop.0, Some(desktop_object.clone()))?;
     Ok(desktop_object)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_without_a_station_takes_the_inherited_one_or_winsta0() {
+        use DefaultStation::{Inherited, Interactive, Refused, Service};
+        assert_eq!(default_station(None, true), Interactive, "explorer: nothing inherited, its user's WinSta0");
+        assert_eq!(default_station(None, false), Service, "a service: nothing inherited, no WinSta0");
+        assert_eq!(default_station(Some(true), true), Inherited, "an interactive station inherited, WinSta0 allowed");
+        assert_eq!(default_station(Some(false), false), Inherited, "a service station inherited");
+        assert_eq!(default_station(Some(false), true), Interactive, "WinSta0 over a service station");
+        assert_eq!(default_station(Some(true), false), Refused, "an interactive station without its access");
+    }
 }
