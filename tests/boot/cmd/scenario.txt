@@ -58,6 +58,7 @@ keys = [read] the line: => "vol>> C:\OUT.TXT" ret
 keys = [read] the line: => "exit" ret
 
 expect = [concmd] on WinSta0\Default
+expect = [concmd] FILE_BASIC_INFORMATION on a 4-byte boundary: 0
 expect = [concmd] CMD.EXE started
 expect = [read] started
 expect = [read] the console window: visible

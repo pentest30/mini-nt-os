@@ -9,7 +9,9 @@
 # the SAM, makes the profiles (userenv's InitializeProfiles: C:\Documents
 # and Settings, a long-named directory), copies HKU\.DEFAULT, written back,
 # as NTUSER.DAT of Default User, sets SetupType = 0, writes the hives back
-# and reboots. Every step logs "[minoinit] ..."; a failed step stops it
+# registers the COM servers on the disk (DllRegisterServer, syssetup's
+# RegistrationPhase2: browseui's Start menu and band site, which explorer
+# creates) and reboots. Every step logs "[minoinit] ..."; a failed step stops it
 # ("[minoinit] stopped: ..."). It also logs its environment: smss passes on
 # SystemDrive, which the kernel gives it as ReactOS's does.
 #
@@ -24,9 +26,11 @@
 # the Mino layer; NtSetDefaultLocale) and is logged on. msgina starts
 # userinit.exe under the user's token (CreateProcessAsUser:
 # NtSetInformationProcess, ProcessAccessToken, with a token copy of the same
-# access); userinit sets the user up and looks for the shell,
-# C:\WINDOWS\explorer.exe, which is not on the disk: where the logon stops
-# today ("Userinit failed to start the shell!").
+# access); userinit sets the user up and starts the shell,
+# C:\WINDOWS\explorer.exe (xtask puts the programs of the Windows directory
+# on the disk, with their imports), whose thread win32k converts. Where the
+# logon stops today: explorer raises an exception in its first steps
+# (docs/compat/m6-logon.md, « explorer »).
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
@@ -39,11 +43,13 @@ timeout = 300
 
 expect = [boot] .DEFAULT hive mounted at \REGISTRY\USER\.DEFAULT
 expect = [minoinit] environment: SystemDrive=C:
+expect = [minoinit] CoInitialize: 0
+expect = [minoinit] DllRegisterServer browseui.dll: 0
 expect = [minoinit] done; rebooting
 expect = IncrementRefCount(S-1-5-21-
 expect = We are logged on
 expect = of userinit.exe
-expect = Failed to start default shell
+expect = of explorer.exe
 
 forbid = [minoinit] stopped:
 forbid = *** STOP:
@@ -54,3 +60,4 @@ forbid = RegLoadKeyW() failed
 forbid = ImpersonateLoggedOnUser() failed
 forbid = Failed to assign primary token
 forbid = CreateProcessAsUserW() failed
+forbid = Failed to start default shell

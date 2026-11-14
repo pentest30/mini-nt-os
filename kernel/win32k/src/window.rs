@@ -38,9 +38,15 @@
 //! handle ([`release`]) ; son `WND` reste dans le tas tant qu'une référence
 //! du noyau la tient. Une création qui échoue la détruit.
 //!
+//! Chaque bureau a aussi sa fenêtre des messages ([`create_message_window`],
+//! `spwndMessage`) : une fenêtre créée avec `HWND_MESSAGE` est son enfant,
+//! jamais montrée et hors des fenêtres de premier niveau ; COM en fait une
+//! pour chaque appartement.
+//!
 //! Pas encore : une fenêtre créée réduite ou agrandie (journalisé), la
-//! fenêtre des messages (`HWND_MESSAGE`), les crochets, le fond d'écran, la
-//! mise en page de droite à gauche.
+//! recherche des fenêtres message seul (FindWindowEx(HWND_MESSAGE),
+//! GetAncestor), les crochets, le fond d'écran, la mise en page de droite à
+//! gauche.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -57,17 +63,17 @@ use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
     Rect32, StyleStruct32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS,
     CW_USEDEFAULT, DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, FNID_MENU,
-    GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW,
-    HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
-    STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31,
-    WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT,
-    WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT,
-    WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR,
-    WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW, WNDS_ERASEBACKGROUND, WNDS_HASMENU, WNDS_MAXIMIZESTOMONITOR,
-    WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY,
-    WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP,
-    WS_THICKFRAME, WS_VISIBLE,
+    FNID_MESSAGEWND, GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
+    HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED,
+    SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP,
+    WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE,
+    WM_NCCREATE, WM_NCPAINT, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSTIMER,
+    WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT,
+    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW, WNDS_ERASEBACKGROUND, WNDS_HASMENU,
+    WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS,
+    WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
+    WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE,
+    WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
@@ -904,7 +910,6 @@ pub fn create_desktop_window(
     width: u32,
     height: u32,
 ) -> Result<Arc<Window>, NtStatus> {
-    let cls = heap.alloc(size_of::<Cls32>() as u32)?;
     let class = Cls32 {
         atom_class_name: WC_DESKTOP,
         atom_nv_class_name: WC_DESKTOP,
@@ -916,7 +921,66 @@ pub fn create_desktop_window(
         background: COLOR_BACKGROUND + 1,
         ..Cls32::default()
     };
-    let wnd_size = size_of::<Wnd32>() as u32 + DESKTOP_WND_EXTRA;
+    let rect = Rect::new(0, 0, width as i32, height as i32);
+    let state = WindowState {
+        style: WS_POPUP | WS_CLIPCHILDREN,
+        state: WNDS_SERVERSIDEWINDOWPROC,
+        fnid: FNID_DESKTOP,
+        unicode: true,
+        window: rect,
+        client: rect,
+        ..WindowState::default()
+    };
+    let window = create_server_window(heap, class, DESKTOP_WND_EXTRA, state, Some(String::from(name)))?;
+    let spwnd = u64::from(desk_info) + offset_of!(DeskInfoHead32, spwnd) as u64;
+    heap.section.write_kernel(spwnd, &window.server_address().to_le_bytes())?;
+    Ok(window)
+}
+
+/// La fenêtre des messages d'un bureau (`spwndMessage`, IntCreateDesktop) :
+/// `WS_POPUP | WS_CLIPCHILDREN`, cachée, de 100 × 100, sans thread ni parent,
+/// son `WND` et sa classe (FNID_MESSAGEWND) dans `heap`. Les fenêtres créées
+/// avec `HWND_MESSAGE` sont ses enfants : jamais montrées, hors des fenêtres
+/// de premier niveau (EnumWindows), elles reçoivent leurs messages comme les
+/// autres — la fenêtre d'appartement de COM en est une.
+///
+/// # Errors
+/// Celles du tas et de la table des handles.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn create_message_window(heap: &Arc<DesktopHeap>) -> Result<Arc<Window>, NtStatus> {
+    let class = Cls32 {
+        fnid: FNID_MESSAGEWND,
+        rpdesk_parent: heap.server_base,
+        csf_flags: CSF_SERVERSIDEPROC | CSF_SYSTEMCLASS,
+        ..Cls32::default()
+    };
+    let rect = Rect::new(0, 0, 100, 100);
+    let state = WindowState {
+        style: WS_POPUP | WS_CLIPCHILDREN,
+        state: WNDS_SERVERSIDEWINDOWPROC,
+        fnid: FNID_MESSAGEWND,
+        unicode: true,
+        window: rect,
+        client: rect,
+        ..WindowState::default()
+    };
+    create_server_window(heap, class, 0, state, None)
+}
+
+/// Une fenêtre du serveur (sans thread) : sa classe `class` et son `WND`
+/// (avec `extra` octets) dans `heap`, son handle, son état `state` ;
+/// `desktop_name` pour la fenêtre d'un bureau.
+fn create_server_window(
+    heap: &Arc<DesktopHeap>,
+    class: Cls32,
+    extra: u32,
+    state: WindowState,
+    desktop_name: Option<String>,
+) -> Result<Arc<Window>, NtStatus> {
+    let cls = heap.alloc(size_of::<Cls32>() as u32)?;
+    let wnd_size = size_of::<Wnd32>() as u32 + extra;
     let allocated =
         heap.section.write_kernel(u64::from(cls), class.as_bytes()).and_then(|()| heap.alloc(wnd_size)).and_then(
             |wnd| match crate::handles::alloc(heap.server_address(wnd), 0, TYPE_WINDOW) {
@@ -934,16 +998,6 @@ pub fn create_desktop_window(
             return Err(status);
         }
     };
-    let rect = Rect::new(0, 0, width as i32, height as i32);
-    let state = WindowState {
-        style: WS_POPUP | WS_CLIPCHILDREN,
-        state: WNDS_SERVERSIDEWINDOWPROC,
-        fnid: FNID_DESKTOP,
-        unicode: true,
-        window: rect,
-        client: rect,
-        ..WindowState::default()
-    };
     let window = Arc::new(Window {
         handle,
         heap: heap.clone(),
@@ -952,15 +1006,13 @@ pub fn create_desktop_window(
         cls,
         class: None,
         pti: 0,
-        desktop_name: Some(String::from(name)),
+        desktop_name,
         state: KSpinLock::new(state),
         destroying: AtomicBool::new(false),
         freed: AtomicBool::new(false),
     });
     WINDOWS.lock().insert(handle, Arc::downgrade(&window));
     write(&window)?;
-    let spwnd = u64::from(desk_info) + offset_of!(DeskInfoHead32, spwnd) as u64;
-    heap.section.write_kernel(spwnd, &window.server_address().to_le_bytes())?;
     Ok(window)
 }
 
@@ -1701,9 +1753,9 @@ pub fn create_window(mut params: CreateParams) -> Result<Arc<Window>, Option<u32
     let mut owner = None;
     let kind = params.style & (WS_CHILD | WS_POPUP);
     if params.parent == HWND_MESSAGE {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        report_missing("message-only windows (HWND_MESSAGE)", &REPORTED);
-        return Err(Some(ERROR_INVALID_WINDOW_HANDLE));
+        // A message-only window: a child of the desktop's message window,
+        // whatever its style (co_UserCreateWindowEx).
+        parent = desktop.message_window.clone();
     } else if params.parent != 0 {
         let window = get(params.parent).ok_or(Some(ERROR_INVALID_WINDOW_HANDLE))?;
         if kind == WS_CHILD {

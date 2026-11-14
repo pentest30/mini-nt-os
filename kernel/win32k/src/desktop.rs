@@ -242,6 +242,9 @@ pub struct Desktop {
     pub desk_info: u32,
     /// Sa fenêtre (`DesktopWindow`, `pDeskInfo->spwnd`).
     pub window: Arc<crate::window::Window>,
+    /// Sa fenêtre des messages (`spwndMessage`) : le parent des fenêtres
+    /// créées avec `HWND_MESSAGE` (`crate::window::create_message_window`).
+    pub message_window: Arc<crate::window::Window>,
     /// dwConsoleThreadId : le thread d'entrée des consoles de `consrv` sur
     /// ce bureau ; 0 sans lui.
     console_thread: AtomicU32,
@@ -295,6 +298,7 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
     // The window of the desktop, the size of the screen (SM_CXVIRTUALSCREEN).
     let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width, mode.height));
     let window = crate::window::create_desktop_window(&heap, name, at, width, height)?;
+    let message_window = crate::window::create_message_window(&heap)?;
     let desktop = ob::create_object(
         &DESKTOP_TYPE,
         Desktop {
@@ -303,6 +307,7 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
             heap,
             desk_info: at,
             window,
+            message_window,
             console_thread: AtomicU32::new(0),
         },
     );
