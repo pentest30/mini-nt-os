@@ -383,6 +383,8 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
             state.state |= WNDS_SENDNCPAINT;
         }
     });
+    // The DCs taken see the windows where they are now (DceResetActiveDCEs).
+    crate::dce::reset_active_dcs(window);
     let redraw = pos.flags & SWP_NOREDRAW == 0 && pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE;
     if redraw || (pos.flags & SWP_NOZORDER != 0 && pos.flags & SWP_NOOWNERZORDER != 0) {
         let visible_after = window::is_visible(window) && !new_window.is_empty();
