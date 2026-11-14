@@ -1,5 +1,24 @@
 # Notes de passation
 
+- **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects
+  échouait (WAIT_FAILED) faute de NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27) : chaque thread GUI reçoit
+  à sa conversion un handle sur l'événement de sa file (`hEventQueueClient`, fermé à sa fin),
+  `win32k::queue::input_event` (IntMsqSetWakeMask) le rend, NOPARAM_ROUTINE_MSQCLEARWAKEMASK rend TRUE (pas de masque
+  de réveil à effacer ; les bits de réveil ne sont pas remis à zéro comme le fait ReactOS) ; `explorer` ne s'arrête
+  plus à `desktop.cpp:193`, son thread du bureau crée le bureau ; (2) NtUserSetShellWindowEx (`win32k::shell`) : la
+  fenêtre du shell et celle de son fond dans la station et le `DESKTOPINFO`, la première au bas de l'ordre Z, que
+  SetWindowPos ne lui fait plus quitter, oubliées à leur destruction ; (3) SetWindowPos tenait pour découvert l'ancien
+  rectangle moins le nouveau, rien quand seul l'ordre Z change : il compare maintenant les régions visibles avant et
+  après (VisBefore moins VisAfter), la barre des tâches se repeint. Tests : `msg-wait` (`msgwait1.c` ; WAIT_FAILED
+  sans la routine), `zorder` (`zorder1.c`, trois pixels ; l'ancien calcul laisse la fenêtre du dessous recouverte),
+  `logon` (le Bureau de l'utilisateur parcouru, `desktop.cpp:193` et `atlcomcli.h` interdits, la barre visible :
+  sans SetShellWindowEx le bureau la recouvre), hôte (`win32k::winsta`, un seul shell par station). Captures avant
+  et après dans `target/screenshots/` (régénérées par `logon`). `cargo xtask lint` propre, 1101 tests hôte ; la suite
+  complète sur AMD tourne.
+  **Suite** : le fond du bureau (NtUserPaintDesktop) et ses icônes (NtUserGetIconInfo) ; la station par défaut d'un
+  chemin de bureau ; le bouton Démarrer et ce que la barre demande.
+
 - **`explorer.exe` démarre ; NtUserGetAtomName écrasait la pile de `user32`** (`claude/new-session-696xfc`, M6,
   premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). `explorer.exe` est sur le
   disque des scénarios qui le demandent (`shell = explorer`, `xtask/src/scenario.rs` ; `SHELL_FILES`,
@@ -25,11 +44,8 @@
   start default shell » et la fin d'`explorer` interdits), qui échoue avec l'ancien `atom.rs` ; `send-messages`
   (SendMessageW(NULL) après la pile salie : 0 et 1400 ; l'ancien service rend le motif) ; `activate-app`, étapes 4 et
   5 (l'ancien `activate` échoue aux deux) ; `notepad-save` de nouveau au bout. `cargo xtask lint` propre ; la suite
-  complète sur AMD est en cours.
-  **Suite** : MsgWaitForMultipleObjects (ONEPARAM_ROUTINE_GETINPUTEVENT, IntMsqSetWakeMask : l'événement de la file
-  du thread dans sa table de handles, signalé selon le masque de réveil ; NOPARAM_ROUTINE_MSQCLEARWAKEMASK) ; la station
-  par défaut d'un chemin de bureau (les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage) ; le
-  bouton Démarrer et ce que la barre demande.
+  complète a tourné avec le point suivant.
+  **Suite** : faite au point précédent (MsgWaitForMultipleObjects, la fenêtre du shell).
 
 - **Le dernier critère du M5 : les apitests passent le seuil** (`claude/new-session-696xfc`, sur main `6f60178` ;
   [`compat/m5-rostests.md`](compat/m5-rostests.md)). Sous Ubuntu 24.04 (mingw-w64 11, GCC 13), le banc n'avait plus

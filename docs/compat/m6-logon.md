@@ -115,23 +115,49 @@ boîte n'avait pas de liste ; `notepad-save` passait ainsi. La vue créée, deux
   à la fenêtre que s'il n'est pas déjà dans l'une de ses filles (IntGetNonChildAncestor). `win32k::input::activate`
   fait de même (`focus_is_in`).
 
-**Où `explorer` va maintenant.** Il crée sa barre des tâches, peinte en bas de l'écran (vide : ni bouton Démarrer ni
-horloge), puis son bureau : `desktop.cpp:193` (« Unexpected failure », E_FAIL), et dans le thread du bureau une
-assertion d'ATL (atlcomcli.h:208, `p != 0`). La cause : CDesktopThread::Initialize attend le thread du bureau et
-son événement par MsgWaitForMultipleObjects, dont `user32` (RealMsgWaitForMultipleObjectsEx) prend l'événement de
-la file du thread par NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27 ; IntMsqSetWakeMask), que Mino
-n'implémente pas : 0, WAIT_FAILED, E_FAIL, et Initialize met `m_Tray` à NULL avant que le thread du bureau ne s'en
-serve (CComPtr : `p != 0`). En chemin : BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo
-(classes 0x2B, 0x2F, 0x100A), les fenêtres message seul (HWND_MESSAGE), NtUserGetIconInfo, NtGdiGetDIBitsInternal,
-NtUserRemoveProp, NtUserSetWindowRgn, NtUserCallOneParam (0x1E, 0x27), le fond du bureau repeint à la demande.
-Les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage : `msgina` leur donne un chemin sans
-station, que win32k ne résout pas encore (la station du processus, IntResolveDesktop).
+**Le thread du bureau : MsgWaitForMultipleObjects.** CDesktopThread::Initialize attend son thread du bureau et
+l'événement que celui-ci signale une fois le bureau créé, par MsgWaitForMultipleObjects (`desktop.cpp`). `user32`
+(RealMsgWaitForMultipleObjectsEx) y ajoute l'événement de la file du thread, qu'il demande par
+NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27 ; IntMsqSetWakeMask), puis efface le masque de réveil
+(NOPARAM_ROUTINE_MSQCLEARWAKEMASK, 0x03). Mino n'avait ni l'un ni l'autre : WAIT_FAILED tout de suite, E_FAIL
+(`desktop.cpp:193`), et Initialize remettait le plateau à NULL avant que le thread du bureau ne s'en serve
+(l'assertion d'ATL, atlcomcli.h:208, `p != 0`). Comme InitThreadCallback, chaque thread GUI reçoit maintenant à sa
+conversion un handle (EVENT_ALL_ACCESS) sur l'événement de sa file (`hEventQueueClient`,
+`win32k::gui::ThreadInfo::queue_event_handle`), fermé à sa fin s'il le désigne encore ; IntMsqSetWakeMask
+(`win32k::queue::input_event`) rend ce handle et signale l'événement si la file a déjà changé pour le masque demandé
+(ou, MWMO_INPUTAVAILABLE, si l'un de ses bits est levé). La file de Mino n'a pas de masque de réveil (son événement
+est signalé à chaque message) : NOPARAM_ROUTINE_MSQCLEARWAKEMASK n'a rien à défaire. ReactOS y remet aussi
+`fsWakeBits` à zéro (« very hacky ») ; Mino ne le fait pas, ses bits de réveil suivent ce que tient la file.
+
+**La fenêtre du shell : NtUserSetShellWindowEx.** Le thread du bureau crée alors le bureau d'`explorer` (« Progman »,
+sa vue de dossier sur le Bureau de l'utilisateur et de All Users) et déclare sa fenêtre celle du shell
+(`win32k::shell`, comme `window.c`) : une fois par station (ShellWindow, ShellListView), dans le `DESKTOPINFO` du
+bureau (`hShellWindow`, `spwndShell`, `spwndBkGnd`, `ppiShellProcess`, que `user32` lit pour GetShellWindow), et
+la fenêtre du shell passe au bas de l'ordre Z (`WNDS2_BOTTOMMOST`), que SetWindowPos ne lui fait plus quitter
+(UserGetShellWindow dans co_WinPosSetWindowPos). Détruite, elle quitte la station et le `DESKTOPINFO`. Pas encore :
+le raccourci Ctrl+Échap (SC_TASKLIST), faute de RegisterHotKey.
+
+**Ce qu'une fenêtre découvre en changeant seulement de rang.** Le bureau d'`explorer`, d'abord au-dessus de tout,
+avait recouvert la barre des tâches ; passé au fond, il ne la découvrait pas : SetWindowPos tenait pour découvert
+l'ancien rectangle moins le nouveau, vide quand seul l'ordre Z change. Comme co_WinPosSetWindowPos
+(co_VIS_WindowLayoutChanged de VisBefore moins VisAfter), `win32k::winpos::set_window_pos` compare maintenant ce qu'on
+voyait de la fenêtre avant et après, ses sœurs au-dessus déduites (`paint::visible_region`) : la barre des tâches
+se repeint.
+
+**Où `explorer` va maintenant.** Sa barre des tâches (vide : ni bouton Démarrer ni horloge) au-dessus de son bureau,
+sans assertion. Le bureau n'a encore ni fond (NtUserPaintDesktop : on voit celui de la fenêtre du bureau de win32k)
+ni icônes (NtUserGetIconInfo ; CDesktopFolder.cpp:977 et CDefView.cpp:2744 pour les détails des éléments). En
+chemin : BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo (classes 0x2B, 0x2F, 0x30,
+0x100A), les fenêtres message seul (HWND_MESSAGE), NtGdiGetDIBitsInternal, NtGdiAlphaBlend, NtUserRemoveProp,
+NtUserSetWindowRgn, NtUserFindWindowEx, NtUserCallOneParam (0x1E BEGINDEFERWNDPOS, 0x28 GETKEYBOARDLAYOUT), le
+fond du bureau repeint à la demande. Les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage :
+`msgina` leur donne un chemin sans station, que win32k ne résout pas encore (la station du processus,
+IntResolveDesktop).
 
 ## La suite
 
-Le bureau d'`explorer` : MsgWaitForMultipleObjects (ONEPARAM_ROUTINE_GETINPUTEVENT, l'événement de la file de
-chaque thread GUI dans sa table de handles, signalé selon le masque de réveil ; NOPARAM_ROUTINE_MSQCLEARWAKEMASK),
-cause de `desktop.cpp:193` ; la station par défaut d'un chemin de bureau, puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
+Le bureau d'`explorer` : son fond (NtUserPaintDesktop : la couleur COLOR_BACKGROUND et le papier peint) et ses
+icônes (NtUserGetIconInfo, les détails des éléments) ; la station par défaut d'un chemin de bureau, puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
 presse-papiers, notifications, `NtNotifyChangeKey`) et le bureau du critère.
 
 ## Tests
@@ -150,7 +176,15 @@ par `MaximumLength` avec son nul). Scénario `send-messages` : SendMessageW(NULL
 `ERROR_INVALID_WINDOW_HANDLE`, la pile salie d'un motif avant l'appel (l'ancien service rend ce motif, 0x5EEDBEEF).
 Scénario `activate-app`, étapes 4 et 5 : SetWindowPos d'une fenêtre active dont une fille a le focus ne lui envoie
 pas WM_ACTIVATE et laisse le focus à la fille ; une fenêtre dont WM_ACTIVATE donne le focus à sa fille le lui laisse
-(l'ancien `activate` échoue aux deux). `notepad-save` va de nouveau au bout, la vue de dossier créée.
+(l'ancien `activate` échoue aux deux). `notepad-save` va de nouveau au bout, la vue de dossier créée. Scénario
+`msg-wait` (`msgwait1.c`) : MsgWaitForMultipleObjects expire sur une file vide, se réveille pour un message posté
+par un autre thread, attend un thread et un événement comme `explorer`, puis encore après WaitMessage ; sans
+GETINPUTEVENT, chaque attente rend WAIT_FAILED. Scénario `zorder` (`zorder1.c`) : deux fenêtres qui se
+chevauchent, celle du dessus envoyée au fond sans bouger ; la capture montre la première repeinte dans le
+chevauchement (l'ancien calcul y laisse la seconde). Hôte : `win32k::winsta` (une station prend un seul shell,
+jusqu'à la destruction de sa fenêtre). Scénario `logon` : `Documents and Settings\Administrator\Desktop` parcouru,
+`desktop.cpp:193` et `atlcomcli.h` interdits, la barre des tâches visible au-dessus du bureau (ses deux pixels, que
+le bureau recouvrait sans SetShellWindowEx).
 
 Les apitests de `ntdll` (scénario `rostests`) restent à 43 sur 84, le plancher, mais pas les mêmes : NtDuplicateToken
 (un `NewTokenHandle` nul : `STATUS_ACCESS_VIOLATION`, la poignée écrite d'abord, comme ProbeForWriteHandle) et

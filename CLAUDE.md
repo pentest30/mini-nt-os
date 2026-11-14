@@ -360,7 +360,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (bornée par `MaximumLength`, avec son nul ; `win32k::atom::query_name`, « #n » d'un atome entier) : il écrasait la
   pile de `user32` (ClassNameToVersion). NtUserMessageCall(FNID_SENDMESSAGE) écrit toujours `ResultInfo` (0 si
   l'envoi échoue : `user32` rend sinon sa variable non initialisée) ; une fenêtre déjà active n'est pas réactivée et
-  le focus reste dans ses filles (`win32k::input::activate`, co_IntSetActiveWindow).
+  le focus reste dans ses filles (`win32k::input::activate`, co_IntSetActiveWindow). MsgWaitForMultipleObjects :
+  l'événement de la file de chaque thread GUI dans la table de son processus (ONEPARAM_ROUTINE_GETINPUTEVENT,
+  `win32k::queue::input_event`) ; la fenêtre du shell (NtUserSetShellWindowEx, `win32k::shell` : station,
+  `DESKTOPINFO`, au fond de l'ordre Z) ; SetWindowPos découvre par régions visibles (VisBefore moins VisAfter). Le
+  bureau d'`explorer` est créé sous sa barre des tâches ; pas encore son fond (NtUserPaintDesktop) ni ses icônes.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
