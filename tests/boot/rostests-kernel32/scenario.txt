@@ -5,7 +5,7 @@
 features = test-smss, interactive
 requires = userland, native, rostests
 initial-command = K32APITST.EXE
-apitests-floor = 12
+apitests-floor = 16
 cpus     = default
 timeout  = 900
 

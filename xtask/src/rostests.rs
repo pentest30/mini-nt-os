@@ -84,6 +84,19 @@ pub fn judge(tests: u32, failures: u32, floor: u32) -> std::result::Result<Strin
 /// dont un `__except` attrapait une exception mourait ainsi (`c0000027`).
 const I386_FLAGS: [&str; 3] = ["-fno-optimize-sibling-calls", "-fno-omit-frame-pointer", "-mstackrealign"];
 
+/// Les avertissements dont GCC 14 fait des erreurs, imposés aux tests quel
+/// que soit le GCC : un test qui appelle une fonction que le banc ne déclare
+/// pas (`ok_size_t`, `wine_dbgstr_w`, `IsReactOS`…) est écarté à la
+/// compilation, au lieu de compiler sous GCC 13 et de faire échouer le lien
+/// de tout le module. Les tests qui tournent sont ainsi les mêmes sous les
+/// deux.
+const GCC14_ERRORS: [&str; 4] = [
+    "-Werror=implicit-function-declaration",
+    "-Werror=implicit-int",
+    "-Werror=int-conversion",
+    "-Werror=incompatible-pointer-types",
+];
+
 /// Les modules du critère.
 const MODULES: [&str; 2] = ["ntdll", "kernel32"];
 
@@ -377,6 +390,11 @@ fn compile_module(
         "-D_In_count_(n)=",
         "-D_Out_bytecap_(n)=",
         "-D_Inout_bytecap_(n)=",
+        // Une annotation SAL 1 de rtlfuncs.h (RtlQueryTagHeap) que no_sal2.h
+        // n'a pas : le sal.h des MinGW récents la définit, celui de
+        // mingw-w64 11 (Ubuntu 24.04) non, et sans elle ntndk.h ne compile
+        // plus — presque tous les tests étaient écartés.
+        "-D_Ret_opt_z_=",
         "-DSTATUS_WAIT_0=0x00000000L",
         "-DSTATUS_ABANDONED_WAIT_0=0x00000080L",
         "-DSTATUS_DISCONNECTION=0xC0000254L",
@@ -398,9 +416,14 @@ fn compile_module(
             continue;
         }
         let object = objs.join(source.file_name().expect("un nom").to_string_lossy().replace(".c", ".o"));
+        // Les diagnostics du test dans son journal, à côté de son objet :
+        // sans `-w` (qui l'emporterait sur les -Werror), ils sont des
+        // milliers.
+        let log = fs::File::create(object.with_extension("log")).map_err(|e| e.to_string())?;
         let mut command = Command::new("i686-w64-mingw32-gcc");
         command
-            .args(["-c", "-O1", "-w", "-D_WIN32_WINNT=0x0501"])
+            .args(["-c", "-O1", "-D_WIN32_WINNT=0x0501"])
+            .args(GCC14_ERRORS)
             .args(I386_FLAGS)
             .args(defines)
             .arg("--include")
@@ -409,7 +432,8 @@ fn compile_module(
             .args(&includes)
             .arg(source)
             .arg("-o")
-            .arg(&object);
+            .arg(&object)
+            .stderr(log);
         if command.status().map_err(|e| e.to_string())?.success() {
             compiled.push(object);
         } else {

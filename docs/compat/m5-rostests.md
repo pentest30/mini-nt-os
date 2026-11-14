@@ -87,6 +87,23 @@ enregistrement STATUS_UNWIND. ReactOS compile tout code i386 avec `-fno-optimize
 -fno-omit-frame-pointer -mstackrealign` (`sdk/cmake/gcc.cmake`) ; le banc aussi maintenant (`I386_FLAGS`), PSEH
 compris (refaite à chaque construction). La trame cible est `0xc(%ebp)`, l'argument du gestionnaire.
 
+### Le banc dépendait de la version de MinGW (le banc)
+
+Sous Ubuntu 24.04 (mingw-w64 11, GCC 13), le banc n'avait plus rien à mesurer : 108 tests ntdll sur 108 et 39
+kernel32 sur 40 étaient écartés. Deux écarts avec le MinGW où le banc avait été écrit (GCC 14, MSYS2) :
+
+- `rtlfuncs.h` (RtlQueryTagHeap) porte l'annotation SAL 1 `_Ret_opt_z_`, que `no_sal2.h` n'a pas et que le
+  `sal.h` des MinGW récents définit, pas celui de mingw-w64 11 : `ntndk.h` ne compilait plus. Le banc la définit
+  à vide (`-D_Ret_opt_z_=`).
+- GCC 14 fait des erreurs de quatre avertissements (fonction non déclarée, `int` implicite, conversions entre
+  entier et pointeur, types de pointeurs incompatibles) ; GCC 13 non, et `-w` les taisait. Des tests qui
+  appellent ce que le banc ne déclare pas (`ok_size_t`, `wine_dbgstr_w`, `IsReactOS`) compilaient, puis le lien
+  de tout le module échouait. Le banc impose ces quatre erreurs (`GCC14_ERRORS`, `xtask/src/rostests.rs`), sans
+  `-w`, qui l'emporterait sur elles ; les diagnostics de chaque test vont dans son journal
+  (`target/xtask/rostests/<module>/<test>.log`) au lieu de l'écran.
+
+Les tests qui tournent sont de nouveau ceux du banc d'origine (les mêmes écartés) : ntdll en a 84, kernel32 29.
+
 ## Mesures
 
 Le 2026-11-10, QEMU, processeur par défaut (chemin `int 2Eh`) ; ce sont les planchers des scénarios. Mesure
@@ -137,6 +154,37 @@ ntdll passe le seuil du M5 (50 %) ; kernel32 non : il y manque 3 tests (15 sur 2
   UserModeException, load_notifications, probelib, sprintf ; kernel32 CreateProcess, DeviceIoControl, FLS,
   FormatMessage, GetCPInfo, GetFinalPathNameByHandle, GetModuleFileName, LCMapString, LocaleNameToLCID,
   MultiByteToWideChar, TunnelCache, UEFIFirmware.
+
+Le 2026-11-14, sur `main` (6f60178) et sous Ubuntu 24.04 (le banc corrigé ci-dessus) ; QEMU, processeur par
+défaut :
+
+| Module | Lancés | Écartés | Passent | Part | Plancher |
+|---|---:|---:|---:|---:|---:|
+| ntdll | 84 | 23 | 44 | 52 % | 44 |
+| kernel32 | 29 | 12 | 16 | 55 % | 16 |
+| **Ensemble** | **113** | 35 | **60** | **53 %** | |
+
+**Les deux modules dépassent le seuil du M5 : le critère est coché.** Depuis la mesure du 2026-11-11, ntdll gagne
+NtDuplicateToken et NtOpenThreadToken (le logon jusqu'à `userinit`) et NtProtectVirtualMemory, et perd NtAccessCheck
+et NtAccessCheckByTypeResultList (ils vont maintenant jusqu'à NtAccessCheck, absent) ; kernel32 gagne GetDriveType.
+Puis, dans cette étape, trois tests kernel32 passent par ce que le disque et la couche Mino des ruches avaient de
+moins qu'un système installé :
+
+- **IsDBCSLeadByteEx** : les pages de code DBCS 936, 949 et 950 sur le disque (`c_936.nls`, `c_949.nls`,
+  `c_950.nls` ; 932 y était déjà).
+- **GetComputerNameEx** et **SetComputerNameExW** : le nom DNS de la machine dans
+  `Services\Tcpip\Parameters` (`NV Hostname`, `Hostname`, `NV Domain`, `Domain`, dans `tools/mkhive/mino.inf`).
+  L'installation de ReactOS écrit `NV Hostname` par SetComputerNameExW (ComputerNamePhysicalDnsHostname) ; sur un
+  système démarré, `Hostname` le reprend.
+- **SetComputerNameExW** encore : `dnsapi.dll` sur le disque. `kernel32` la charge par son nom pour valider un nom
+  DNS (BaseVerifyDnsName, DnsValidateName_W) ; sans elle, tout nom était refusé (ERROR_INVALID_PARAMETER).
+
+Ce qui reste à faire passer en kernel32, du moins coûteux au plus coûteux : FindFiles (`FindFirstFile("\\\\")`
+doit rendre ERROR_INVALID_NAME : `\??\UNC` mène à `\Device\Mup`, absent de Mino), JapaneseCalendar (une
+conversion ANSI en page 932), SetUnhandledExceptionFilter (l'exception SSE #XM livrée au processus,
+STATUS_FLOAT_MULTIPLE_TRAPS comme KiTrap13Handler ; `hal::idt` termine encore le processus), Mailslot (MSFS),
+SetConsoleWindowInfo (le coureur détaché n'a pas de console), les contextes d'activation, PrivMoveFileIdentityW,
+dosdev, QueueUserAPC et TerminateProcess (20 s dépassées), LoadLibraryExW (`c0000005`).
 
 La suite, vers le seuil : les huit tests qui meurent ou pendent d'abord (un plantage cache tout ce que le test
 vérifiait après), puis les assertions, test par test, en montant le plancher à chaque commit qui en fait passer ;

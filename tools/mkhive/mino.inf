@@ -36,6 +36,15 @@ HKLM,"SYSTEM\Setup","CmdLine",0x00020000,"%SystemRoot%\system32\minoinit.exe"
 
 ; Le nom de la machine, que l'installation de ReactOS demande à l'utilisateur.
 HKLM,"SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName","ComputerName",0x00000000,"MINO"
+;
+; Son nom DNS : l'installation l'écrit par SetComputerNameExW
+; (ComputerNamePhysicalDnsHostname : NV Hostname), et sur un système
+; démarré Hostname le reprend ; le domaine DNS est vide. GetComputerNameEx
+; et SetComputerNameEx les lisent (DnsHostname, DnsDomain…).
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters","NV Hostname",0x00000000,"MINO"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters","Hostname",0x00000000,"MINO"
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters","NV Domain",0x00000000,""
+HKLM,"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters","Domain",0x00000000,""
 
 ; Le répertoire des profils d'un système installé (le LiveCD : \Profiles).
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList","ProfilesDirectory",0x00020000,"%SystemDrive%\Documents and Settings"

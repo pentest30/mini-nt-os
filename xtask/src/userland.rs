@@ -66,10 +66,14 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "l_intl.nls",
         "c_20127.nls",
         // Les pages de code des apitests (SetupLocale : RtlGenerate8dot3Name,
-        // les OemString/OemN — 850, 775, 932, 10000).
+        // les OemString/OemN — 850, 775, 932, 10000 ; IsDBCSLeadByteEx : les
+        // pages DBCS 932, 936, 949, 950).
         "c_850.nls",
         "c_775.nls",
         "c_932.nls",
+        "c_936.nls",
+        "c_949.nls",
+        "c_950.nls",
         "c_10000.nls",
         "smss.exe",
         "config/system",
@@ -110,6 +114,9 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         // header, the tab control...
         "uxtheme.dll",
         "winmm.dll",
+        // Loaded by name by kernel32 to check a DNS host name
+        // (SetComputerNameExW: BaseVerifyDnsName, DnsValidateName_W).
+        "dnsapi.dll",
     ]
     .into_iter()
     .map(String::from)

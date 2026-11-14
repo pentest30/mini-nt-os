@@ -1,5 +1,20 @@
 # Notes de passation
 
+- **Le dernier critère du M5 : les apitests passent le seuil** (`claude/new-session-696xfc`, sur main `6f60178` ;
+  [`compat/m5-rostests.md`](compat/m5-rostests.md)). Sous Ubuntu 24.04 (mingw-w64 11, GCC 13), le banc n'avait plus
+  rien à mesurer : `_Ret_opt_z_` (SAL 1, `rtlfuncs.h`) manquait au `sal.h` de ce MinGW, et GCC 13 laissait compiler
+  des tests qui appellent ce que le banc ne déclare pas, puis le lien du module échouait. Le banc définit
+  `_Ret_opt_z_` et impose les quatre erreurs de GCC 14 (`GCC14_ERRORS`, sans `-w` ; diagnostics dans
+  `target/xtask/rostests/<module>/<test>.log`) : les mêmes tests tournent sous GCC 13 et 14 (84 et 29). Puis trois
+  tests kernel32 passent par ce qui manquait à un système installé : les pages de code 936, 949, 950 et
+  `dnsapi.dll` sur le disque (`xtask/src/userland.rs`), le nom DNS (`Services\Tcpip\Parameters` : `NV Hostname`,
+  `Hostname`, `NV Domain`, `Domain`) dans `tools/mkhive/mino.inf`. **ntdll 44/84 (52 %), kernel32 16/29 (55 %)** :
+  planchers relevés (44 et 16), critère coché, **le M5 est terminé** ; S1, S2 et S3 ont réussi, l'ADR-002 est à
+  confirmer (décision du mainteneur, skill `mino-adr`). `cargo xtask lint` propre, tests hôte de `xtask` (37) ; **à finir** : toute la suite sur AMD (lancée), le disque de
+  chaque scénario ayant changé. **Suite** : le bureau d'`explorer`
+  (M6), puis les tests kernel32 les moins coûteux (FindFiles et `\Device\Mup`, l'exception SSE #XM pour
+  SetUnhandledExceptionFilter, JapaneseCalendar ; liste dans le document).
+
 - **Applications Win32 x86 validées** (`feat/m7-classic-apps`, PR #130, base main `abfe106`, suite de #127) :
   Calculatrice (`12+30=42`, fermeture, relance, `6*7=42`), Démineur (drapeau au clic droit, F2, fermeture/relance),
   Bloc-notes (saisie, sauvegarde, fermeture/réouverture), bureau et Gestionnaire des tâches : les six scénarios passent
