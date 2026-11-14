@@ -13,7 +13,8 @@
   `paint-desktop` (`paintdsk1.c`), `dc-reset` (`dcreset1.c`, le programme lit l'écran), `logon` (« no startup
   desktop » interdit pour `userinit` et `explorer`, la barre visible au-dessus du fond peint), hôte (`ob`,
   `win32k::startup`, `win32k::desktop`) ; chacun échoue sans sa correction. `cargo xtask lint` propre, 1104 tests
-  hôte ; la suite complète sur AMD tourne.
+  hôte ; toute la suite sur AMD : 65 sur 65 (rostests 44/84 et 16/29, aux planchers) ; sur Intel, `msg-wait`,
+  `send-messages`, `activate-app`, `notepad-save`, `gui`, `menu` passent.
   **Suite** : les icônes du bureau (NtUserGetIconInfo, les détails des éléments), le papier peint
   (SPI_SETDESKWALLPAPER), la taille de « Progman » (1, 0)-(32768, 32767) à vérifier, la station des services ; le
   bouton Démarrer et ce que la barre demande.
