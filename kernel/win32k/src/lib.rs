@@ -64,6 +64,7 @@ pub mod scroll;
 pub mod scrollex;
 pub mod sent;
 pub mod shared;
+pub mod shell;
 pub mod sizemove;
 pub mod startup;
 pub mod timer;

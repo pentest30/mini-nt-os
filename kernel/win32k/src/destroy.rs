@@ -245,6 +245,7 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
         crate::sent::abandon_all(gone);
     }
     crate::mouse::forget_capture(hwnd);
+    crate::shell::forget(hwnd);
     let state = window::change(window, |state| {
         state.style &= !WS_VISIBLE;
         state.update = Region::default();

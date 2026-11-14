@@ -360,7 +360,8 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
     // What was seen of it before (VisBefore): its siblings above clip it.
     let clip_siblings = state.style & WS_CLIPSIBLINGS != 0;
     let seen_before = visible_before.then(|| paint::visible_region(window, false, false, clip_siblings));
-    if pos.flags & SWP_NOZORDER == 0 {
+    // The shell's window keeps its place, at the bottom (UserGetShellWindow).
+    if pos.flags & SWP_NOZORDER == 0 && !crate::shell::is_shell_window(window.handle) {
         window::link(window, pos.insert_after);
     }
     let old = window.state();

@@ -784,6 +784,9 @@ pub const WNDS2_WMCREATEMSGPROCESSED: u32 = 0x8000_0000;
 /// invalidated by another thread while painting; WNDS2_STARTPAINT: between
 /// BeginPaint and EndPaint.
 pub const WNDS2_WMPAINTSENT: u32 = 0x0000_0001;
+/// WNDS2_BOTTOMMOST: the shell's window, at the bottom of the Z order
+/// (NtUserSetShellWindowEx).
+pub const WNDS2_BOTTOMMOST: u32 = 0x0000_0020;
 pub const WNDS2_ENDPAINTINVALIDATE: u32 = 0x0000_0002;
 pub const WNDS2_STARTPAINT: u32 = 0x0000_0004;
 /// WNDS2_INDESTROY: its destruction has begun (co_UserFreeWindow).

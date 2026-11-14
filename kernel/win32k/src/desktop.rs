@@ -22,7 +22,7 @@
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::mem::size_of;
+use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_NO_MEMORY, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_INVALID};
@@ -248,6 +248,49 @@ pub struct Desktop {
 }
 
 impl Desktop {
+    /// NtUserSetShellWindowEx : son `DESKTOPINFO` reçoit la fenêtre du shell
+    /// (`hShellWindow`, `spwndShell`), celle de son fond (`spwndBkGnd`) et
+    /// le `PROCESSINFO` de son processus (`ppiShellProcess`, son adresse du
+    /// serveur) ; `user32` y lit GetShellWindow.
+    ///
+    /// # Errors
+    /// Celles de l'écriture du tas.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn set_shell(
+        &self,
+        shell: &crate::window::Window,
+        background: &crate::window::Window,
+        process: u32,
+    ) -> Result<(), NtStatus> {
+        let at = u64::from(self.desk_info);
+        let fields = [
+            (offset_of!(DeskInfoHead32, shell_window), shell.handle),
+            (offset_of!(DeskInfoHead32, spwnd_shell), shell.server_address()),
+            (offset_of!(DeskInfoHead32, spwnd_bk_gnd), background.server_address()),
+            (offset_of!(DeskInfoHead32, ppi_shell_process), process),
+        ];
+        for (offset, value) in fields {
+            self.heap.section.write_kernel(at + offset as u64, &value.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// co_UserDestroyWindow : `hwnd`, détruite, n'est plus la fenêtre du
+    /// shell de son `DESKTOPINFO` (`hShellWindow` à NULL ; comme ReactOS,
+    /// `spwndShell` et `spwndBkGnd` restent).
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn forget_shell_window(&self, hwnd: u32) {
+        let at = u64::from(self.desk_info) + offset_of!(DeskInfoHead32, shell_window) as u64;
+        let mut current = [0u8; 4];
+        if self.heap.section.read_kernel(at, &mut current).is_ok() && u32::from_le_bytes(current) == hwnd {
+            let _ = self.heap.section.write_kernel(at, &0u32.to_le_bytes());
+        }
+    }
+
     /// ConsoleCtrlDesktopConsoleThread : le thread d'entrée des consoles du
     /// bureau devient `thread`, s'il est donné ; rend celui d'avant.
     ///

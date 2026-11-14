@@ -94,6 +94,36 @@ pub struct StationUser {
     pub sid: Option<Vec<u8>>,
 }
 
+/// ShellWindow et ShellListView d'une station : la fenêtre du shell et
+/// celle de son fond, déclarées par NtUserSetShellWindowEx (`crate::shell`) ;
+/// 0 sans elles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShellWindows {
+    pub shell: u32,
+    pub list_view: u32,
+}
+
+impl ShellWindows {
+    /// Le shell se déclare : refusé (`false`) s'il y en a déjà un.
+    pub fn claim(&mut self, shell: u32, list_view: u32) -> bool {
+        if self.shell != 0 {
+            return false;
+        }
+        *self = Self { shell, list_view };
+        true
+    }
+
+    /// IntDestroyWindow : `hwnd`, détruite, n'est plus ni l'une ni l'autre.
+    pub fn forget(&mut self, hwnd: u32) {
+        if self.shell == hwnd {
+            self.shell = 0;
+        }
+        if self.list_view == hwnd {
+            self.list_view = 0;
+        }
+    }
+}
+
 /// Une station de fenêtres (WINSTATION_OBJECT).
 pub struct WindowStation {
     /// La session de son créateur.
@@ -104,6 +134,8 @@ pub struct WindowStation {
     user: KSpinLock<StationUser>,
     /// Ses bureaux (DesktopListHead), qui la tiennent.
     desktops: KSpinLock<Vec<Weak<Object<Desktop>>>>,
+    /// La fenêtre du shell et celle de son fond.
+    shell: KSpinLock<ShellWindows>,
 }
 
 impl WindowStation {
@@ -114,7 +146,16 @@ impl WindowStation {
             no_io: AtomicBool::new(true),
             user: KSpinLock::new(StationUser::default()),
             desktops: KSpinLock::new(Vec::new()),
+            shell: KSpinLock::new(ShellWindows::default()),
         }
+    }
+
+    /// Change ses fenêtres du shell par `change`, et rend ce qu'il rend.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn with_shell<R>(&self, change: impl FnOnce(&mut ShellWindows) -> R) -> R {
+        change(&mut self.shell.lock())
     }
 
     /// Ses bureaux vivants.
@@ -226,6 +267,18 @@ pub fn make_interactive(station: &Arc<Object<WindowStation>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_station_takes_one_shell_until_its_window_is_destroyed() {
+        let mut shell = ShellWindows::default();
+        assert!(shell.claim(0x10, 0x14));
+        assert!(!shell.claim(0x20, 0x24), "a second shell");
+        assert_eq!(shell, ShellWindows { shell: 0x10, list_view: 0x14 });
+        shell.forget(0x14);
+        assert_eq!(shell, ShellWindows { shell: 0x10, list_view: 0 }, "its list view destroyed");
+        shell.forget(0x10);
+        assert!(shell.claim(0x20, 0x20), "the place is free again");
+    }
 
     #[test]
     fn the_logon_process_makes_the_interactive_station_once() {

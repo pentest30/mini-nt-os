@@ -391,6 +391,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserSetWindowLong, Handler::Status(window::nt_user_set_window_long)),
     (services::NtUserSetWindowPlacement, Handler::Status(window::nt_user_set_window_placement)),
     (services::NtUserSetWindowPos, Handler::Status(window::nt_user_set_window_pos)),
+    (services::NtUserSetShellWindowEx, Handler::Status(window::nt_user_set_shell_window_ex)),
     (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
     (services::NtUserThunkedMenuItemInfo, Handler::Status(menu::nt_user_thunked_menu_item_info)),
     (services::NtUserShowWindow, Handler::Status(window::nt_user_show_window)),
