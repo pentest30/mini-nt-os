@@ -62,6 +62,8 @@ typedef struct {
 
 #define MAXIMUM_ALLOWED 0x02000000
 #define GENERIC_READ 0x80000000
+#define FILE_WRITE_ATTRIBUTES 0x0100
+#define FILE_BASIC_INFORMATION_CLASS 4
 #define FILE_SHARE_READ 1
 #define OPEN_EXISTING 3
 #define FILE_ATTRIBUTE_NORMAL 0x80
@@ -75,6 +77,13 @@ typedef struct {
 #define LINE_BYTES 160
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+/* An IO_STATUS_BLOCK: the status, then the information. */
+typedef struct {
+    long Status;
+    DWORD Information;
+} IO_STATUS_BLOCK;
+__declspec(dllimport) long __stdcall NtSetInformationFile(HANDLE file, IO_STATUS_BLOCK *status, void *information,
+                                                          DWORD length, DWORD file_information_class);
 
 __declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE handle);
 __declspec(dllimport) HANDLE __stdcall CreateFileW(const WCHAR *name, DWORD access, DWORD share, void *attributes,
@@ -278,6 +287,31 @@ static void check_summary(const char *tag)
         DbgPrint("[concmd] %s: the summary counts what is listed: %lu files, %lu directories\n", tag, files, dirs);
 }
 
+/* NtSetInformationFile(FileBasicInformation) with its FILE_BASIC_INFORMATION
+ * on a 4-byte boundary that is not an 8-byte one, where x86 compilers may
+ * leave a structure of LARGE_INTEGERs on the stack (kernel32's CopyFileW
+ * does): the kernel takes it. All zero: nothing changes. */
+static void check_basic_information_alignment(void)
+{
+    DWORD storage[16];
+    unsigned char *at = (unsigned char *)storage;
+    IO_STATUS_BLOCK status_block;
+    HANDLE file = CreateFileW(L"C:\\WINDOWS\\SYSTEM32\\CMD.EXE", GENERIC_READ | FILE_WRITE_ATTRIBUTES,
+                              FILE_SHARE_READ, 0, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, 0);
+    long status;
+
+    if (((unsigned long)at & 7) == 0)
+        at += 4;
+    memset(at, 0, 40);
+    if (file == INVALID_HANDLE_VALUE) {
+        DbgPrint("[concmd] FILE_BASIC_INFORMATION on a 4-byte boundary: CreateFileW: error %lu\n", GetLastError());
+        return;
+    }
+    status = NtSetInformationFile(file, &status_block, at, 40, FILE_BASIC_INFORMATION_CLASS);
+    DbgPrint("[concmd] FILE_BASIC_INFORMATION on a 4-byte boundary: %lx\n", (DWORD)status);
+    CloseHandle(file);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     static WCHAR command_line[] = L"cmd /K C:\\READ1.EXE";
@@ -288,6 +322,7 @@ DWORD __stdcall GuiStartup(void)
 
     if (!take_a_desktop())
         ExitProcess(1);
+    check_basic_information_alignment();
     memset(&startup, 0, sizeof startup);
     startup.cb = sizeof startup;
     startup.lpDesktop = L"WinSta0\\Default";
