@@ -1,5 +1,67 @@
 # Notes de passation
 
+- **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects
+  échouait (WAIT_FAILED) faute de NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27) : chaque thread GUI reçoit
+  à sa conversion un handle sur l'événement de sa file (`hEventQueueClient`, fermé à sa fin),
+  `win32k::queue::input_event` (IntMsqSetWakeMask) le rend, NOPARAM_ROUTINE_MSQCLEARWAKEMASK rend TRUE (pas de masque
+  de réveil à effacer ; les bits de réveil ne sont pas remis à zéro comme le fait ReactOS) ; `explorer` ne s'arrête
+  plus à `desktop.cpp:193`, son thread du bureau crée le bureau ; (2) NtUserSetShellWindowEx (`win32k::shell`) : la
+  fenêtre du shell et celle de son fond dans la station et le `DESKTOPINFO`, la première au bas de l'ordre Z, que
+  SetWindowPos ne lui fait plus quitter, oubliées à leur destruction ; (3) SetWindowPos tenait pour découvert l'ancien
+  rectangle moins le nouveau, rien quand seul l'ordre Z change : il compare maintenant les régions visibles avant et
+  après (VisBefore moins VisAfter), la barre des tâches se repeint. Tests : `msg-wait` (`msgwait1.c` ; WAIT_FAILED
+  sans la routine), `zorder` (`zorder1.c`, trois pixels ; l'ancien calcul laisse la fenêtre du dessous recouverte),
+  `logon` (le Bureau de l'utilisateur parcouru, `desktop.cpp:193` et `atlcomcli.h` interdits, la barre visible :
+  sans SetShellWindowEx le bureau la recouvre), hôte (`win32k::winsta`, un seul shell par station). Captures avant
+  et après dans `target/screenshots/` (régénérées par `logon`). `cargo xtask lint` propre, 1101 tests hôte ; la suite
+  complète sur AMD tourne.
+  **Suite** : le fond du bureau (NtUserPaintDesktop) et ses icônes (NtUserGetIconInfo) ; la station par défaut d'un
+  chemin de bureau ; le bouton Démarrer et ce que la barre demande.
+
+- **`explorer.exe` démarre ; NtUserGetAtomName écrasait la pile de `user32`** (`claude/new-session-696xfc`, M6,
+  premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). `explorer.exe` est sur le
+  disque des scénarios qui le demandent (`shell = explorer`, `xtask/src/scenario.rs` ; `SHELL_FILES`,
+  `xtask/src/userland.rs`, avec la fermeture de ses imports, `browseui` et `shdocvw`) : sur tous les disques, la
+  copie de l'installateur ne tenait plus sur sa cible (`installer-finish`). `userinit` le lance. Il mourait dans la
+  création de sa barre des tâches, « Shell_TrayWnd » dans ses registres sauvés et son adresse de retour :
+  NtUserGetAtomName prend une UNICODE_STRING (useratom.c) que `user32` pose sur sa pile (ClassNameToVersion), et Mino
+  y écrivait le nom entier, comme dans un tampon. Corrigé selon useratom.c (`win32k::atom::query_name`,
+  `copied_name_units` : 255 caractères au plus, « #n » pour un atome entier, tronqué à `MaximumLength` avec son nul,
+  0 pour un thread sans bureau) ; NtQueryInformationAtom rend aussi « #n ». `explorer` affiche maintenant sa barre
+  des tâches (vide), puis s'arrête à son bureau (`desktop.cpp:193` : CDesktopThread::Initialize attend le thread du
+  bureau par MsgWaitForMultipleObjects, dont l'événement de file, NtUserCallOneParam(GETINPUTEVENT, 0x27), manque :
+  WAIT_FAILED, E_FAIL, puis le thread du bureau déréférence `m_Tray` remis à NULL, l'assertion d'ATL atlcomcli.h:208).
+  La correction a montré deux écarts, par la boîte Enregistrer sous du Bloc-notes, dont la vue de dossier (CDefView)
+  n'était jamais créée tant que la pile de `user32` était écrasée : (1) NtUserMessageCall(FNID_SENDMESSAGE) rendait
+  FALSE sans écrire `ResultInfo` pour une fenêtre inconnue, et `user32` rendait alors sa variable non initialisée
+  (CDefView comptait des colonnes dans un en-tête absent, CDefView.cpp:1178) : TRUE et 0 avec l'erreur, comme
+  ReactOS (`sys::message::send_message_result`) ; (2) `win32k::input::activate` réactivait une fenêtre déjà active
+  dont une fille avait le focus (SetWindowPos de comdlg32 sans SWP_NOACTIVATE : le focus passait à la liste
+  « Enregistrer dans ») : rien pour une fenêtre déjà active, et le focus à la fenêtre activée seulement s'il n'est pas
+  dans l'une de ses filles, comme co_IntSetActiveWindow (`focus_is_in`). Tests : hôte (`win32k::atom`, deux tests ;
+  `xtask`, la clé `shell`) ; `logon` (`explorer` converti, `desktop.cpp:193`, deux pixels de la barre ; « Failed to
+  start default shell » et la fin d'`explorer` interdits), qui échoue avec l'ancien `atom.rs` ; `send-messages`
+  (SendMessageW(NULL) après la pile salie : 0 et 1400 ; l'ancien service rend le motif) ; `activate-app`, étapes 4 et
+  5 (l'ancien `activate` échoue aux deux) ; `notepad-save` de nouveau au bout. `cargo xtask lint` propre ; la suite
+  complète a tourné avec le point suivant.
+  **Suite** : faite au point précédent (MsgWaitForMultipleObjects, la fenêtre du shell).
+
+- **Le dernier critère du M5 : les apitests passent le seuil** (`claude/new-session-696xfc`, sur main `6f60178` ;
+  [`compat/m5-rostests.md`](compat/m5-rostests.md)). Sous Ubuntu 24.04 (mingw-w64 11, GCC 13), le banc n'avait plus
+  rien à mesurer : `_Ret_opt_z_` (SAL 1, `rtlfuncs.h`) manquait au `sal.h` de ce MinGW, et GCC 13 laissait compiler
+  des tests qui appellent ce que le banc ne déclare pas, puis le lien du module échouait. Le banc définit
+  `_Ret_opt_z_` et impose les quatre erreurs de GCC 14 (`GCC14_ERRORS`, sans `-w` ; diagnostics dans
+  `target/xtask/rostests/<module>/<test>.log`) : les mêmes tests tournent sous GCC 13 et 14 (84 et 29). Puis trois
+  tests kernel32 passent par ce qui manquait à un système installé : les pages de code 936, 949, 950 et
+  `dnsapi.dll` sur le disque (`xtask/src/userland.rs`), le nom DNS (`Services\Tcpip\Parameters` : `NV Hostname`,
+  `Hostname`, `NV Domain`, `Domain`) dans `tools/mkhive/mino.inf`. **ntdll 44/84 (52 %), kernel32 16/29 (55 %)** :
+  planchers relevés (44 et 16), critère coché, **le M5 est terminé** ; S1, S2 et S3 ont réussi, l'ADR-002 est à
+  confirmer (décision du mainteneur, skill `mino-adr`). `cargo xtask lint` propre, tests hôte de `xtask` (37) ; toute la suite sur AMD (le disque de chaque scénario a
+  changé) : 61 sur 61, les deux rostests compris. **Suite** : le bureau d'`explorer`
+  (M6), puis les tests kernel32 les moins coûteux (FindFiles et `\Device\Mup`, l'exception SSE #XM pour
+  SetUnhandledExceptionFilter, JapaneseCalendar ; liste dans le document).
+
 - **Applications Win32 x86 validées** (`feat/m7-classic-apps`, PR #130, base main `abfe106`, suite de #127) :
   Calculatrice (`12+30=42`, fermeture, relance, `6*7=42`), Démineur (drapeau au clic droit, F2, fermeture/relance),
   Bloc-notes (saisie, sauvegarde, fermeture/réouverture), bureau et Gestionnaire des tâches : les six scénarios passent

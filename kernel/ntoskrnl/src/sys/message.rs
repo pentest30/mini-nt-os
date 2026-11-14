@@ -188,8 +188,11 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// dans le POINT `Param` (`super::mouse::get_cursor_pos`) ;
 /// `ONEPARAM_ROUTINE_CREATEEMPTYCUROBJECT` : un curseur vide
 /// (`super::cursor::create_empty_cur_object`) ;
-/// `ONEPARAM_ROUTINE_SETCARETBLINKTIME` : SetCaretBlinkTime (TRUE). Une
-/// autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
+/// `ONEPARAM_ROUTINE_SETCARETBLINKTIME` : SetCaretBlinkTime (TRUE) ;
+/// `ONEPARAM_ROUTINE_GETINPUTEVENT` : le handle de l'événement de la file,
+/// pour MsgWaitForMultipleObjects, `Param` étant MAKELONG(masque de réveil,
+/// MWMO_*) (`queue::input_event`). Une autre rend 0 et
+/// `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
 pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
     let (param, routine) = (arguments[0], arguments[1]);
     match routine {
@@ -208,6 +211,7 @@ pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
             let flags = param as u16 & (QS_ALLINPUT | QS_ALLPOSTMESSAGE | QS_SMRESULT);
             NtStatus(queue::status(&current(), flags))
         }
+        abi::user::ONEPARAM_ROUTINE_GETINPUTEVENT => NtStatus(queue::input_event(&current(), param)),
         _ => {
             UNSUPPORTED_ONE_PARAM_ROUTINES.report(routine);
             fail(ERROR_CALL_NOT_IMPLEMENTED)
@@ -222,8 +226,9 @@ pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
 /// (`ERROR_INVALID_WINDOW_HANDLE`, sans fenêtre : `hWnd` nul est permis),
 /// une structure du message illisible ou un `ResultInfo` où l'on ne peut
 /// pas écrire (ReactOS n'a pas de garde autour du traitement : une faute y
-/// arrêterait le système). Les autres types (la barre de défilement, le
-/// bureau, les menus, SendMessage et ses variantes…) rendent FALSE et
+/// arrêterait le système). SendMessage, SendMessageTimeout et
+/// SendNotifyMessage : `send_message_call`. Les autres types (la barre de
+/// défilement, le bureau, les menus…) rendent FALSE et
 /// `ERROR_CALL_NOT_IMPLEMENTED`, journalisés une fois chacun. `Ansi` ne
 /// sert pas encore : aucun des messages traités n'a de texte.
 pub(super) fn nt_user_message_call(arguments: &[u32]) -> NtStatus {
@@ -270,51 +275,86 @@ fn send_error(error: win32k::sent::SendError) -> u32 {
 }
 
 /// NtUserMessageCall des envois (`win32k::sent::send_to_window`), BOOL :
-/// - FNID_SENDMESSAGE (SendMessage) : la valeur de la procédure en
-///   `ResultInfo` ;
+/// - FNID_SENDMESSAGE (SendMessage) : TRUE, comme ReactOS, avec en
+///   `ResultInfo` la valeur de la procédure, ou 0 si l'envoi échoue (son
+///   erreur comme dernière erreur) ; FALSE seulement si l'on ne peut pas y
+///   écrire ;
 /// - FNID_SENDMESSAGEWTOOPTION (SendMessageTimeout) : `ResultInfo` est un
 ///   DOSENDMESSAGE (`uFlags`, `uTimeout`, `Result`), le délai en ms,
 ///   `ERROR_TIMEOUT` passé ce délai ;
 /// - FNID_SENDNOTIFYMESSAGE (SendNotifyMessage) : sans attendre la
 ///   procédure d'un autre thread.
 ///
-/// FALSE pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`), un
-/// thread fini sans répondre, ou un pointeur vers un autre processus (pas
-/// encore). La diffusion (HWND_BROADCAST) n'atteint encore aucune fenêtre :
-/// TRUE et 0, journalisé une fois.
+/// Les deux derniers rendent FALSE pour une fenêtre inconnue
+/// (`ERROR_INVALID_WINDOW_HANDLE`), un thread fini sans répondre, ou un
+/// pointeur vers un autre processus (pas encore). La diffusion
+/// (HWND_BROADCAST) n'atteint encore aucune fenêtre : TRUE et 0, journalisé
+/// une fois.
 fn send_message_call(handle: u32, message: u32, wparam: u32, lparam: u32, result_info: u32, kind: u32) -> NtStatus {
+    if kind == FNID_SENDMESSAGE {
+        return send_message_result(result_info, send_message(handle, message, wparam, lparam));
+    }
     if handle == HWND_BROADCAST {
-        if !BROADCAST_SEND_REPORTED.swap(true, Ordering::Relaxed) {
-            log::warn!("sys: message {message:#x} sent to HWND_BROADCAST: no window yet");
-        }
+        report_broadcast(message);
         return NtStatus(1);
     }
     let Some(window) = win32k::window::get(handle) else { return fail(ERROR_INVALID_WINDOW_HANDLE) };
     let current = current();
-    let (timeout, result_at) = match kind {
-        FNID_SENDMESSAGEWTOOPTION => {
-            let mut options = [0u8; 12];
-            if ke::usermem::copy_from_user(&mut options, u64::from(result_info)).is_err() {
-                return NtStatus(0);
-            }
-            let timeout = u32::from_le_bytes([options[4], options[5], options[6], options[7]]);
-            (Some(timeout), result_info.wrapping_add(8))
-        }
-        _ => (None, result_info),
-    };
     if kind == FNID_SENDNOTIFYMESSAGE {
         return match win32k::sent::notify_window(&current, &window, message, wparam, lparam) {
             Ok(()) => NtStatus(1),
             Err(error) => fail(send_error(error)),
         };
     }
-    match win32k::sent::send_to_window(&current, &window, message, wparam, lparam, timeout) {
+    let mut options = [0u8; 12];
+    if ke::usermem::copy_from_user(&mut options, u64::from(result_info)).is_err() {
+        return NtStatus(0);
+    }
+    let timeout = u32::from_le_bytes([options[4], options[5], options[6], options[7]]);
+    match win32k::sent::send_to_window(&current, &window, message, wparam, lparam, Some(timeout)) {
         Ok(result) => {
-            if result_info != 0 && copy_to_user(u64::from(result_at), &result.to_le_bytes()).is_err() {
+            if copy_to_user(u64::from(result_info.wrapping_add(8)), &result.to_le_bytes()).is_err() {
                 return NtStatus(0);
             }
             NtStatus(1)
         }
         Err(error) => fail(send_error(error)),
     }
+}
+
+/// Journalise une fois un envoi à HWND_BROADCAST.
+fn report_broadcast(message: u32) {
+    if !BROADCAST_SEND_REPORTED.swap(true, Ordering::Relaxed) {
+        log::warn!("sys: message {message:#x} sent to HWND_BROADCAST: no window yet");
+    }
+}
+
+/// SendMessage : la valeur de la procédure de la fenêtre, ou l'erreur
+/// Win32 de l'envoi.
+fn send_message(handle: u32, message: u32, wparam: u32, lparam: u32) -> Result<u32, u32> {
+    if handle == HWND_BROADCAST {
+        report_broadcast(message);
+        return Ok(0);
+    }
+    let window = win32k::window::get(handle).ok_or(ERROR_INVALID_WINDOW_HANDLE)?;
+    win32k::sent::send_to_window(&current(), &window, message, wparam, lparam, None).map_err(send_error)
+}
+
+/// Le BOOL de NtUserMessageCall(FNID_SENDMESSAGE), comme ReactOS
+/// (co_IntDoSendMessage) : TRUE, la valeur (0 si l'envoi échoue, son
+/// erreur comme dernière erreur) en `ResultInfo` s'il n'est pas nul, FALSE
+/// seulement si l'on ne peut pas l'y écrire. `user32` (SendMessageW,
+/// SendMessageA) rend la variable qu'il passe en `ResultInfo` sans
+/// l'initialiser : la laisser telle quelle lui faisait rendre ce qui
+/// traînait sur sa pile (le compte des colonnes d'un en-tête nul pour
+/// CDefView de `shell32`).
+fn send_message_result(result_info: u32, outcome: Result<u32, u32>) -> NtStatus {
+    let value = outcome.unwrap_or_else(|error| {
+        let _ = win32k::set_last_error(error);
+        0
+    });
+    if result_info != 0 && copy_to_user(u64::from(result_info), &value.to_le_bytes()).is_err() {
+        return NtStatus(0);
+    }
+    NtStatus(1)
 }

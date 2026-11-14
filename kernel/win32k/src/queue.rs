@@ -53,10 +53,10 @@ use abi::user::vk::{
     VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_SHIFT,
 };
 use abi::user::{
-    Msg32, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_MOUSEBUTTON, QS_MOUSEMOVE, QS_PAINT, QS_POSTMESSAGE,
-    QS_SENDMESSAGE, QS_TIMER, WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP, WM_LBUTTONDBLCLK,
-    WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_NC_MOUSE_OFFSET, WM_QUIT, WM_SYSKEYDOWN,
-    WM_SYSKEYUP,
+    Msg32, MWMO_INPUTAVAILABLE, POINTER_MESSAGES, QS_ALLPOSTMESSAGE, QS_KEY, QS_MOUSEBUTTON, QS_MOUSEMOVE, QS_PAINT,
+    QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, WM_DEVICECHANGE, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST, WM_KEYUP,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_NCMOUSEMOVE, WM_NC_MOUSE_OFFSET, WM_QUIT,
+    WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// The wake bit of a hardware message: QS_KEY for the keyboard's,
@@ -647,6 +647,26 @@ pub fn status(thread: &ThreadInfo, flags: u16) -> u32 {
     let (status, wake, change) = thread.queue.with(|queue| queue.status(flags));
     thread.mirror_queue_bits(wake, change);
     status
+}
+
+/// IntMsqSetWakeMask (MsgWaitForMultipleObjects : NtUserCallOneParam,
+/// ONEPARAM_ROUTINE_GETINPUTEVENT) : le handle de l'événement de la file du
+/// thread courant `thread` (`hEventQueueClient`), que `user32` attend avec
+/// les objets de l'appelant. Il est signalé tout de suite si la file a
+/// changé pour l'un des bits du mot bas de `wake_mask` (`fsChangeBits`), ou,
+/// avec MWMO_INPUTAVAILABLE dans son mot haut, si l'un d'eux est levé
+/// (`fsWakeBits`) ; ensuite à chaque message, comme pour GetMessage. Pas
+/// d'IdlePing : WaitForInputIdle n'est pas encore là.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn input_event(thread: &ThreadInfo, wake_mask: u32) -> u32 {
+    let (mask, flags) = (wake_mask as u16, (wake_mask >> 16) as u16);
+    let ((), wake, change) = thread.queue.with(|_| ());
+    if change & mask != 0 || (flags & MWMO_INPUTAVAILABLE != 0 && wake & mask != 0) {
+        thread.queue.wake();
+    }
+    thread.queue_event_handle()
 }
 
 /// GetMessage : le premier message de la file du thread courant `thread`

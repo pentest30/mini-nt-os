@@ -59,6 +59,18 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// maps each import, and some of these have long names
 /// (`advapi32_vista.dll`). `None` until `fetch-userland` ran.
 pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
+    files_with(ws, &[])
+}
+
+/// [`boot_files`], with the shell: `explorer.exe` in `WINDOWS` and what it
+/// imports (scenarios with `shell = explorer`).
+pub fn shell_boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
+    files_with(ws, &SHELL_FILES)
+}
+
+/// [`boot_files`], with `windows_files` of the userland's Windows directory
+/// in `WINDOWS`, and their imports.
+fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, String)>> {
     let mut files: Vec<String> = [
         "ntdll.dll",
         "c_1252.nls",
@@ -66,10 +78,14 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         "l_intl.nls",
         "c_20127.nls",
         // Les pages de code des apitests (SetupLocale : RtlGenerate8dot3Name,
-        // les OemString/OemN — 850, 775, 932, 10000).
+        // les OemString/OemN — 850, 775, 932, 10000 ; IsDBCSLeadByteEx : les
+        // pages DBCS 932, 936, 949, 950).
         "c_850.nls",
         "c_775.nls",
         "c_932.nls",
+        "c_936.nls",
+        "c_949.nls",
+        "c_950.nls",
         "c_10000.nls",
         "smss.exe",
         "config/system",
@@ -110,13 +126,18 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
         // header, the tab control...
         "uxtheme.dll",
         "winmm.dll",
+        // Loaded by name by kernel32 to check a DNS host name
+        // (SetComputerNameExW: BaseVerifyDnsName, DnsValidateName_W).
+        "dnsapi.dll",
     ]
     .into_iter()
     .map(String::from)
     .chain(KNOWN_DLLS.iter().map(|dll| format!("{dll}.dll")))
     .collect();
-    let (imported, missing) = import_closure(&files, |file| {
-        let path = system32_file(ws, file)?;
+    // The programs of `WINDOWS` import from system32 like the others.
+    let closure_roots: Vec<String> = files.iter().cloned().chain(windows_files.iter().map(|f| f.to_string())).collect();
+    let (imported, missing) = import_closure(&closure_roots, |file| {
+        let path = system32_file(ws, file).or_else(|| windows_file(ws, file))?;
         let bytes = fs::read(&path).ok()?;
         let pe = pe::Pe32::parse(&bytes).ok()?;
         Some(pe.imports().map(|import| import.dll_name().to_ascii_lowercase()).collect())
@@ -128,10 +149,27 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     let system32 = files
         .into_iter()
         .map(|file| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{}", file.to_ascii_uppercase()))));
+    let windows = windows_files
+        .iter()
+        .map(|file| windows_file(ws, file).map(|path| (path, format!("{WINDOWS_DIR}/{}", file.to_ascii_uppercase()))));
     let fonts = FONTS
         .iter()
         .map(|font| fonts_file(ws, font).map(|path| (path, format!("{FONTS_DIR}/{}", font.to_ascii_uppercase()))));
-    system32.chain(fonts).collect()
+    system32.chain(windows).chain(fonts).collect()
+}
+
+/// The Windows directory on the boot disk (`%SystemRoot%`).
+const WINDOWS_DIR: &str = "WINDOWS";
+
+/// The shell, in the fetched userland's Windows directory, which userinit
+/// starts from `%SystemRoot%` (`Winlogon\Shell`, M6).
+const SHELL_FILES: [&str; 1] = ["explorer.exe"];
+
+/// The file `name` of the fetched userland's Windows directory (the parent
+/// of `system32`); `None` until `fetch-userland` ran, or without it.
+fn windows_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
+    let file = system32_file(ws, "ntdll.dll")?.parent()?.parent()?.join(name);
+    file.is_file().then_some(file)
 }
 
 /// The hives of the boot disk under the Mino layer (ADR-023,

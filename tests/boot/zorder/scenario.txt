@@ -1,0 +1,24 @@
+# What a window uncovers when only its place in the Z order changes
+# (win32k::winpos::set_window_pos; tests/native/zorder1.c, MinGW, linked to
+# ReactOS's kernel32, user32 and gdi32): ZORDER1.EXE takes the place of
+# winlogon.exe and takes WinSta0\Default. Popup A, red, at (100, 100)-
+# (400, 300), then popup B, green, above it at (200, 200)-(500, 400); then
+# SetWindowPos(B, HWND_BOTTOM, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE), as
+# NtUserSetShellWindowEx sends explorer's desktop under its taskbar. What
+# was seen of B and is not any more (VisBefore less VisAfter, by visible
+# regions) is exposed: A paints the overlap again. Taking the old rectangle
+# less the new one, nothing was exposed and B's green stayed on A.
+features = test-smss
+requires = userland, native
+initial-command = ZORDER1.EXE
+cpus     = default
+timeout  = 120
+
+expect = [zorder] A and B painted, B above
+expect = [zorder] B sent to the bottom: 1; look now
+# The overlap, A's again; only A; only B.
+screen = 300 250 FF0000
+screen = 150 150 FF0000
+screen = 450 350 00FF00
+
+forbid = *** STOP:

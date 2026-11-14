@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 168 | 737 |
+| win32k | 169 | 737 |
 
 ## ntoskrnl
 
@@ -846,7 +846,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x120f` | `NtUserSetProcessWindowStation` | 1 | ✅ |
 | `0x1210` | `NtUserSetProp` | 3 | ✅ |
 | `0x1211` | `NtUserSetScrollInfo` | 4 | ✅ |
-| `0x1212` | `NtUserSetShellWindowEx` | 2 |  |
+| `0x1212` | `NtUserSetShellWindowEx` | 2 | ✅ |
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
 | `0x1214` | `NtUserSetSystemCursor` | 2 | ✅ |
 | `0x1215` | `NtUserSetSystemMenu` | 2 |  |

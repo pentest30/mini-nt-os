@@ -69,10 +69,96 @@ que le logon s'arrête aujourd'hui.**
 - NtLoadKey refuse un fichier désigné relativement à un répertoire ouvert (`STATUS_NOT_IMPLEMENTED`) : sa réécriture
   demande son nom entier.
 
+## Le shell : `explorer.exe`
+
+`explorer.exe` est sur le disque des scénarios qui le demandent (`shell = explorer`, ici `logon`), dans
+`C:\WINDOWS` (`SHELL_FILES`, `xtask/src/userland.rs` : la fermeture de ses imports vient avec, `browseui` et
+`shdocvw` compris). Les autres disques ne le prennent pas : avec ces trois fichiers, la copie du disque de
+l'installateur ne tenait plus sur sa cible (`installer-finish` : « copy failed: c0000185 »). `userinit` le lance
+sous le jeton de l'utilisateur.
+
+**Le premier lancement a mis au jour un bogue du noyau.** `explorer` mourait (`c0000096`, une instruction privilégiée à
+l'adresse `0x006E0057`) dans la création de sa barre des tâches. Ses registres sauvés portaient les mots successifs de
+« Shell_TrayWnd » en UTF-16 : EBX « l_ », EDI « Tr », EBP « ay », et l'adresse de retour « Wn ». NtUserGetAtomName
+prend une UNICODE_STRING (`pustrName`, useratom.c), que `user32` pose sur sa pile quand une classe est donnée par
+son atome (ClassNameToVersion, VersionRegisterClass, autour de CreateWindowEx et de RegisterClass) ; Mino la prenait
+pour le tampon et y écrivait le nom entier, au-delà de ses 8 octets. Le même motif (« SHELLDLL_DefView » sur la pile)
+faisait planter la boîte Enregistrer sous du Bloc-notes avant la PR 127. NtUserGetAtomName suit maintenant
+useratom.c :
+
+- le nom vient de la table de USER comme RtlQueryAtomInAtomTable le rend (`win32k::atom::query_name`) : 255
+  caractères au plus (IntGetAtomName), « #n » pour un atome entier (NtQueryInformationAtom aussi, qui rendait les
+  chiffres sans « # ») ;
+- la UNICODE_STRING est lue, son tampon sondé sur `MaximumLength` ; le nom y est tronqué pour laisser la place du nul
+  (`win32k::atom::copied_name_units`), rien sans cette place ; le service rend le nombre de caractères copiés ;
+- 0 pour un thread sans bureau (IntGetAtomName) ; 0 et la dernière erreur pour un atome inconnu ou une adresse fautive.
+
+**La correction a montré deux autres écarts, dans la boîte Enregistrer sous du Bloc-notes.** Tant que la pile de
+`user32` était écrasée, la création de la vue de dossier (CDefView, « SHELLDLL_DefView ») échouait sans bruit et la
+boîte n'avait pas de liste ; `notepad-save` passait ainsi. La vue créée, deux écarts du noyau l'ont arrêtée :
+
+- **SendMessage vers une fenêtre qui n'existe pas rendait une valeur au hasard.** CDefView compte les colonnes de
+  l'en-tête de sa liste (`Header_GetItemCount(ListView_GetHeader(...))`) alors que la liste n'a pas encore d'en-tête :
+  SendMessageW(NULL, HDM_GETITEMCOUNT). `user32` (SendMessageW, SendMessageA) passe au noyau l'adresse d'une variable
+  `Result` qu'il n'initialise pas et la rend telle quelle. ReactOS (NtUserMessageCall, FNID_SENDMESSAGE) y écrit
+  toujours la valeur de co_IntDoSendMessage, 0 pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`), et rend
+  TRUE ; Mino rendait FALSE sans l'écrire. CDefView prenait donc des colonnes pour existantes, les modifiait
+  (LVM_SETCOLUMN) au lieu de les insérer, et l'assertion `MapFolderColumnToListColumn(0)` (CDefView.cpp:1178)
+  arrêtait le Bloc-notes. NtUserMessageCall(FNID_SENDMESSAGE) suit maintenant ReactOS (`sys::message`,
+  `send_message_result`) : TRUE et 0 si l'envoi échoue, avec son erreur ; FALSE seulement si `ResultInfo` est fautif.
+- **Une fenêtre déjà active était réactivée, et perdait le focus.** comdlg32 redimensionne sa boîte (ArrangeCtrlPositions :
+  SetWindowPos sans SWP_NOACTIVATE). Mino ne tenait une fenêtre pour déjà active que si elle avait aussi le focus ;
+  celui de la boîte était sur le champ du nom : WM_NCACTIVATE, WM_ACTIVATE, puis le focus à la boîte elle-même, que
+  DefDlgProc rendait à son premier contrôle, la liste « Enregistrer dans ». Les touches tapées après Alt+N y
+  choisissaient « Poste de travail », et le champ ne gardait que la dernière lettre : « Path does not exist ».
+  ReactOS (co_IntSetActiveWindow) ne fait rien pour une fenêtre déjà active ; après WM_ACTIVATE, il ne donne le focus
+  à la fenêtre que s'il n'est pas déjà dans l'une de ses filles (IntGetNonChildAncestor). `win32k::input::activate`
+  fait de même (`focus_is_in`).
+
+**Le thread du bureau : MsgWaitForMultipleObjects.** CDesktopThread::Initialize attend son thread du bureau et
+l'événement que celui-ci signale une fois le bureau créé, par MsgWaitForMultipleObjects (`desktop.cpp`). `user32`
+(RealMsgWaitForMultipleObjectsEx) y ajoute l'événement de la file du thread, qu'il demande par
+NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27 ; IntMsqSetWakeMask), puis efface le masque de réveil
+(NOPARAM_ROUTINE_MSQCLEARWAKEMASK, 0x03). Mino n'avait ni l'un ni l'autre : WAIT_FAILED tout de suite, E_FAIL
+(`desktop.cpp:193`), et Initialize remettait le plateau à NULL avant que le thread du bureau ne s'en serve
+(l'assertion d'ATL, atlcomcli.h:208, `p != 0`). Comme InitThreadCallback, chaque thread GUI reçoit maintenant à sa
+conversion un handle (EVENT_ALL_ACCESS) sur l'événement de sa file (`hEventQueueClient`,
+`win32k::gui::ThreadInfo::queue_event_handle`), fermé à sa fin s'il le désigne encore ; IntMsqSetWakeMask
+(`win32k::queue::input_event`) rend ce handle et signale l'événement si la file a déjà changé pour le masque demandé
+(ou, MWMO_INPUTAVAILABLE, si l'un de ses bits est levé). La file de Mino n'a pas de masque de réveil (son événement
+est signalé à chaque message) : NOPARAM_ROUTINE_MSQCLEARWAKEMASK n'a rien à défaire. ReactOS y remet aussi
+`fsWakeBits` à zéro (« very hacky ») ; Mino ne le fait pas, ses bits de réveil suivent ce que tient la file.
+
+**La fenêtre du shell : NtUserSetShellWindowEx.** Le thread du bureau crée alors le bureau d'`explorer` (« Progman »,
+sa vue de dossier sur le Bureau de l'utilisateur et de All Users) et déclare sa fenêtre celle du shell
+(`win32k::shell`, comme `window.c`) : une fois par station (ShellWindow, ShellListView), dans le `DESKTOPINFO` du
+bureau (`hShellWindow`, `spwndShell`, `spwndBkGnd`, `ppiShellProcess`, que `user32` lit pour GetShellWindow), et
+la fenêtre du shell passe au bas de l'ordre Z (`WNDS2_BOTTOMMOST`), que SetWindowPos ne lui fait plus quitter
+(UserGetShellWindow dans co_WinPosSetWindowPos). Détruite, elle quitte la station et le `DESKTOPINFO`. Pas encore :
+le raccourci Ctrl+Échap (SC_TASKLIST), faute de RegisterHotKey.
+
+**Ce qu'une fenêtre découvre en changeant seulement de rang.** Le bureau d'`explorer`, d'abord au-dessus de tout,
+avait recouvert la barre des tâches ; passé au fond, il ne la découvrait pas : SetWindowPos tenait pour découvert
+l'ancien rectangle moins le nouveau, vide quand seul l'ordre Z change. Comme co_WinPosSetWindowPos
+(co_VIS_WindowLayoutChanged de VisBefore moins VisAfter), `win32k::winpos::set_window_pos` compare maintenant ce qu'on
+voyait de la fenêtre avant et après, ses sœurs au-dessus déduites (`paint::visible_region`) : la barre des tâches
+se repeint.
+
+**Où `explorer` va maintenant.** Sa barre des tâches (vide : ni bouton Démarrer ni horloge) au-dessus de son bureau,
+sans assertion. Le bureau n'a encore ni fond (NtUserPaintDesktop : on voit celui de la fenêtre du bureau de win32k)
+ni icônes (NtUserGetIconInfo ; CDesktopFolder.cpp:977 et CDefView.cpp:2744 pour les détails des éléments). En
+chemin : BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo (classes 0x2B, 0x2F, 0x30,
+0x100A), les fenêtres message seul (HWND_MESSAGE), NtGdiGetDIBitsInternal, NtGdiAlphaBlend, NtUserRemoveProp,
+NtUserSetWindowRgn, NtUserFindWindowEx, NtUserCallOneParam (0x1E BEGINDEFERWNDPOS, 0x28 GETKEYBOARDLAYOUT), le
+fond du bureau repeint à la demande. Les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage :
+`msgina` leur donne un chemin sans station, que win32k ne résout pas encore (la station du processus,
+IntResolveDesktop).
+
 ## La suite
 
-Mettre `explorer.exe` sur le disque et suivre ce qu'il demande : `shell32` (dossiers du shell, icônes), la barre des
-tâches (crochets, `SetWindowsHookEx`, presse-papiers, notifications), `NtNotifyChangeKey`, puis le bureau du critère.
+Le bureau d'`explorer` : son fond (NtUserPaintDesktop : la couleur COLOR_BACKGROUND et le papier peint) et ses
+icônes (NtUserGetIconInfo, les détails des éléments) ; la station par défaut d'un chemin de bureau, puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
+presse-papiers, notifications, `NtNotifyChangeKey`) et le bureau du critère.
 
 ## Tests
 
@@ -80,10 +166,25 @@ Hôte : `se` (un jeton créé tel qu'on l'a donné, le propriétaire et le group
 d'identité créé, la copie « effective only »), `cm` (une ruche montée sous une clé virtuelle ouverte, refusée sous une
 clé de ruche, déchargée puis rechargée), `ex` (les paramètres de l'utilisateur suivent ceux du système jusqu'à être
 fixés). Scénario `logon` : les marqueurs du profil chargé (`IncrementRefCount(S-1-5-21-…)`), de la session ouverte
-(« We are logged on »), de `userinit` (son thread converti, « Failed to start default shell ») ; chaque échec traversé
-est interdit (NtCreateToken, LsaLogonUser, le profil, RegLoadKeyW, ImpersonateLoggedOnUser, l'assignation du jeton,
-CreateProcessAsUserW). Neuf mutations (chacun des sept services ou classes retiré, la valeur `Locale` de la couche, les
-droits d'une copie à `DesiredAccess` nul) font échouer le scénario.
+(« We are logged on »), de `userinit` (son thread converti), d'`explorer` (son thread converti, `desktop.cpp:193`, sa
+barre des tâches à l'écran : deux pixels) ; chaque échec traversé est interdit (NtCreateToken, LsaLogonUser, le
+profil, RegLoadKeyW, ImpersonateLoggedOnUser, l'assignation du jeton, CreateProcessAsUserW, « Failed to start default
+shell »), et la fin d'`explorer` (`(explorer.exe) ended`). Neuf mutations (chacun des sept services ou classes
+retiré, la valeur `Locale` de la couche, les droits d'une copie à `DesiredAccess` nul) font échouer le scénario ;
+l'ancien NtUserGetAtomName aussi (`explorer` meurt). Hôte : `win32k::atom` (« #n » d'un atome entier, la copie bornée
+par `MaximumLength` avec son nul). Scénario `send-messages` : SendMessageW(NULL) rend 0 et
+`ERROR_INVALID_WINDOW_HANDLE`, la pile salie d'un motif avant l'appel (l'ancien service rend ce motif, 0x5EEDBEEF).
+Scénario `activate-app`, étapes 4 et 5 : SetWindowPos d'une fenêtre active dont une fille a le focus ne lui envoie
+pas WM_ACTIVATE et laisse le focus à la fille ; une fenêtre dont WM_ACTIVATE donne le focus à sa fille le lui laisse
+(l'ancien `activate` échoue aux deux). `notepad-save` va de nouveau au bout, la vue de dossier créée. Scénario
+`msg-wait` (`msgwait1.c`) : MsgWaitForMultipleObjects expire sur une file vide, se réveille pour un message posté
+par un autre thread, attend un thread et un événement comme `explorer`, puis encore après WaitMessage ; sans
+GETINPUTEVENT, chaque attente rend WAIT_FAILED. Scénario `zorder` (`zorder1.c`) : deux fenêtres qui se
+chevauchent, celle du dessus envoyée au fond sans bouger ; la capture montre la première repeinte dans le
+chevauchement (l'ancien calcul y laisse la seconde). Hôte : `win32k::winsta` (une station prend un seul shell,
+jusqu'à la destruction de sa fenêtre). Scénario `logon` : `Documents and Settings\Administrator\Desktop` parcouru,
+`desktop.cpp:193` et `atlcomcli.h` interdits, la barre des tâches visible au-dessus du bureau (ses deux pixels, que
+le bureau recouvrait sans SetShellWindowEx).
 
 Les apitests de `ntdll` (scénario `rostests`) restent à 43 sur 84, le plancher, mais pas les mêmes : NtDuplicateToken
 (un `NewTokenHandle` nul : `STATUS_ACCESS_VIOLATION`, la poignée écrite d'abord, comme ProbeForWriteHandle) et

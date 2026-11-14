@@ -8,7 +8,13 @@
 #    A1 and A2 get FALSE and B's TID, through A's queue (SendNotifyMessage);
 # 3. SetWindowPos(A1) without SWP_NOACTIVATE: A1, still the active window of
 #    its thread, takes the foreground back; A1 and A2 get TRUE and B's TID,
-#    B1 FALSE and A's TID.
+#    B1 FALSE and A's TID;
+# 4. SetFocus(A1's child), then SetWindowPos(A1) without SWP_NOACTIVATE (as
+#    comdlg32 resizes its dialog): A1 is already active, so it gets no
+#    WM_ACTIVATE and the child keeps the focus (co_IntSetActiveWindow);
+# 5. ShowWindow(A3), whose WM_ACTIVATE gives the focus to its child C3: C3
+#    keeps it (the focus goes to the activated window only if it is not in
+#    it already).
 # The child never gets one, and no WM_ACTIVATEAPP comes beyond the eight.
 features = test-smss
 requires = userland, native
@@ -25,6 +31,8 @@ expect = [activate] step 2: A2 WM_ACTIVATEAPP 0, other thread B, in thread A
 expect = [activate] step 3: A1 WM_ACTIVATEAPP 1, other thread B, in thread A
 expect = [activate] step 3: A2 WM_ACTIVATEAPP 1, other thread B, in thread A
 expect = [activate] step 3: B1 WM_ACTIVATEAPP 0, other thread A, in thread B
+expect = [activate] step 4: SetWindowPos of the active window: focus on the child 1, WM_ACTIVATE 0
+expect = [activate] step 5: A3 shown: focus on the child its WM_ACTIVATE chose 1
 expect = [activate] done: 8 WM_ACTIVATEAPP
 
 forbid = *** STOP:

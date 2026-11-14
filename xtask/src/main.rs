@@ -326,7 +326,8 @@ fn test(ws: &Workspace, mut args: Args) -> Result<()> {
         }
         let mut extra_files = Vec::new();
         if sc.requires_userland {
-            match userland_files(ws)? {
+            let files = if sc.shell { shell_userland_files(ws)? } else { userland_files(ws)? };
+            match files {
                 Some(files) => extra_files.extend(files),
                 None => {
                     println!("xtask: SKIP {}: needs the ReactOS userland (cargo xtask fetch-userland)", sc.name);
@@ -569,7 +570,17 @@ fn add_image_programs(files: &mut Vec<String>, native: Vec<String>, initial_comm
 /// system DLL, the NLS tables each process maps, and the others of
 /// `userland::boot_files`; `None` until `fetch-userland` ran.
 fn userland_files(ws: &Workspace) -> Result<Option<Vec<String>>> {
-    let Some(mut files) = userland::boot_files(ws) else { return Ok(None) };
+    disk_files(userland::boot_files(ws), ws)
+}
+
+/// [`userland_files`], with the shell (`shell = explorer`).
+fn shell_userland_files(ws: &Workspace) -> Result<Option<Vec<String>>> {
+    disk_files(userland::shell_boot_files(ws), ws)
+}
+
+/// The paths of `files` for the ramdisk, the hives under the Mino layer.
+fn disk_files(files: Option<Vec<(PathBuf, String)>>, ws: &Workspace) -> Result<Option<Vec<String>>> {
+    let Some(mut files) = files else { return Ok(None) };
     userland::layer_hives(ws, &mut files)?;
     Ok(Some(files.into_iter().map(|(path, name)| format!("{}:{name}", path.display())).collect()))
 }

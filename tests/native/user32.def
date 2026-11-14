@@ -107,6 +107,8 @@ ModifyMenuW@20
 MonitorFromPoint@12
 MonitorFromWindow@8
 MoveWindow@24
+MsgWaitForMultipleObjects@20
+MsgWaitForMultipleObjectsEx@20
 PeekMessageW@20
 PostMessageW@16
 PostQuitMessage@4

@@ -46,8 +46,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Une session traite **un jalon et un composant**, et se termine en faisant passer `cargo xtask lint` et `cargo xtask test`.
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
-- **Jalon courant : M5 — Mode console, puis spike S2** ([05](docs/05-feuille-de-route.md#m5--mode-console-puis-spike-s2)).
-  M0 à M4 sont terminés (spike S1 réussi ; l'ADR-002 attend S2 et S3). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
+- **Jalon courant : M6 — win32k** ([05](docs/05-feuille-de-route.md#m6--win32k-avec-le-spike-s3-en-premier)) : le
+  bureau d'`explorer` et le changement de résolution restent. M0 à M5 sont terminés (spikes S1, S2 et S3 réussis ;
+  l'ADR-002 qui les attendait est à confirmer par le mainteneur). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
   `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
   thread, IRQL = TPR de l'APIC (CR8), KPCR (`hal::pcr`) puis KPRCB (`ke::prcb`) par GS, écran STOP symbolisé
@@ -354,7 +355,16 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `\REGISTRY\USER\<SID>`), NtSetDefaultLocale de l'utilisateur (son profil ; `ex::locale` sépare utilisateur et
   système), `ProcessAccessToken` (`ps::EProcess::set_primary_token`) ; `Locale` dans la couche Mino ;
   `userinit.exe` sur le disque. `winlogon` ouvre la session, `msgina` lance `userinit` sous le jeton de
-  l'utilisateur, qui ne trouve pas `explorer.exe`.
+  l'utilisateur, qui lance `explorer.exe` (dans `C:\WINDOWS`, sur le disque des scénarios `shell = explorer`) : sa
+  barre des tâches s'affiche, il s'arrête à son bureau. NtUserGetAtomName écrit dans la UNICODE_STRING de l'appelant
+  (bornée par `MaximumLength`, avec son nul ; `win32k::atom::query_name`, « #n » d'un atome entier) : il écrasait la
+  pile de `user32` (ClassNameToVersion). NtUserMessageCall(FNID_SENDMESSAGE) écrit toujours `ResultInfo` (0 si
+  l'envoi échoue : `user32` rend sinon sa variable non initialisée) ; une fenêtre déjà active n'est pas réactivée et
+  le focus reste dans ses filles (`win32k::input::activate`, co_IntSetActiveWindow). MsgWaitForMultipleObjects :
+  l'événement de la file de chaque thread GUI dans la table de son processus (ONEPARAM_ROUTINE_GETINPUTEVENT,
+  `win32k::queue::input_event`) ; la fenêtre du shell (NtUserSetShellWindowEx, `win32k::shell` : station,
+  `DESKTOPINFO`, au fond de l'ordre Z) ; SetWindowPos découvre par régions visibles (VisBefore moins VisAfter). Le
+  bureau d'`explorer` est créé sous sa barre des tâches ; pas encore son fond (NtUserPaintDesktop) ni ses icônes.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
@@ -424,7 +434,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   compile les modules `ntdll` et `kernel32` en un pilote (commande initiale de `smss` à la place de winlogon, il
   prend `WinSta0\Default`) et un coureur où chaque test tourne, détaché, sa sortie relayée par `DbgPrint` ;
   scénarios `rostests` et `rostests-kernel32`, jugés par un plancher (`apitests-floor`, qui ne baisse pas) et le
-  seuil du jalon (50 %, rapporté). Ps annonce la fin de chaque thread à son port de fin ou au port d'exception de
+  seuil du jalon (50 %, rapporté). Le banc est le même sous GCC 13 et 14 (`-D_Ret_opt_z_=`, `GCC14_ERRORS`) ; les
+  pages de code 936, 949, 950, `dnsapi.dll` sur le disque et le nom DNS dans `mino.inf` : ntdll 44/84,
+  kernel32 16/29, **le M5 est terminé**. Ps annonce la fin de chaque thread à son port de fin ou au port d'exception de
   son processus (`LPC_CLIENT_DIED`, `lpc::request_port`) : `csrss` lâche ses clients morts, et leurs threads Ke.
   Suite : [`docs/passation.md`](docs/passation.md).
 - Le code actuel suit l'ancienne architecture (Win32 dans le noyau). **Ne pas étendre** : la partie Win32 de `kernel/ntoskrnl/src/syscall.rs`,
