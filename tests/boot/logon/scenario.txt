@@ -25,7 +25,8 @@
 # userinit.exe under the user's token (CreateProcessAsUser:
 # NtSetInformationProcess, ProcessAccessToken, with a token copy of the same
 # access); userinit sets the user up and starts the shell,
-# C:\WINDOWS\explorer.exe. Explorer creates its taskbar, painted at the
+# C:\WINDOWS\explorer.exe (`shell = explorer`: only this scenario's disk
+# has it, with browseui and shdocvw). Explorer creates its taskbar, painted at the
 # bottom of the screen (COLOR_BTNFACE, its white top edge); user32 asks the
 # names of class atoms by NtUserGetAtomName into a UNICODE_STRING on its
 # stack (ClassNameToVersion), which the kernel once wrote past, and explorer
@@ -37,6 +38,7 @@
 # first boot); without it, it would end smss 10 s after its start.
 features = test-smss, interactive
 requires = userland, native
+shell = explorer
 disk = system
 boots = 2
 cpus = default

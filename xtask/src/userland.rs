@@ -59,6 +59,18 @@ pub fn ntdll(ws: &Workspace) -> Option<PathBuf> {
 /// maps each import, and some of these have long names
 /// (`advapi32_vista.dll`). `None` until `fetch-userland` ran.
 pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
+    files_with(ws, &[])
+}
+
+/// [`boot_files`], with the shell: `explorer.exe` in `WINDOWS` and what it
+/// imports (scenarios with `shell = explorer`).
+pub fn shell_boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
+    files_with(ws, &SHELL_FILES)
+}
+
+/// [`boot_files`], with `windows_files` of the userland's Windows directory
+/// in `WINDOWS`, and their imports.
+fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, String)>> {
     let mut files: Vec<String> = [
         "ntdll.dll",
         "c_1252.nls",
@@ -123,7 +135,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     .chain(KNOWN_DLLS.iter().map(|dll| format!("{dll}.dll")))
     .collect();
     // The programs of `WINDOWS` import from system32 like the others.
-    let closure_roots: Vec<String> = files.iter().cloned().chain(WINDOWS_FILES.iter().map(|f| f.to_string())).collect();
+    let closure_roots: Vec<String> = files.iter().cloned().chain(windows_files.iter().map(|f| f.to_string())).collect();
     let (imported, missing) = import_closure(&closure_roots, |file| {
         let path = system32_file(ws, file).or_else(|| windows_file(ws, file))?;
         let bytes = fs::read(&path).ok()?;
@@ -137,7 +149,7 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     let system32 = files
         .into_iter()
         .map(|file| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{}", file.to_ascii_uppercase()))));
-    let windows = WINDOWS_FILES
+    let windows = windows_files
         .iter()
         .map(|file| windows_file(ws, file).map(|path| (path, format!("{WINDOWS_DIR}/{}", file.to_ascii_uppercase()))));
     let fonts = FONTS
@@ -149,10 +161,9 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
 /// The Windows directory on the boot disk (`%SystemRoot%`).
 const WINDOWS_DIR: &str = "WINDOWS";
 
-/// The programs of the fetched userland's Windows directory that the boot
-/// disk takes: the shell, which userinit starts from `%SystemRoot%`
-/// (`Winlogon\Shell`, M6).
-const WINDOWS_FILES: [&str; 1] = ["explorer.exe"];
+/// The shell, in the fetched userland's Windows directory, which userinit
+/// starts from `%SystemRoot%` (`Winlogon\Shell`, M6).
+const SHELL_FILES: [&str; 1] = ["explorer.exe"];
 
 /// The file `name` of the fetched userland's Windows directory (the parent
 /// of `system32`); `None` until `fetch-userland` ran, or without it.
