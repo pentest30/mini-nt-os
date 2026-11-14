@@ -144,20 +144,41 @@ l'ancien rectangle moins le nouveau, vide quand seul l'ordre Z change. Comme co_
 voyait de la fenêtre avant et après, ses sœurs au-dessus déduites (`paint::visible_region`) : la barre des tâches
 se repeint.
 
+**La station d'un chemin de bureau sans station.** NtUserSetShellWindowEx prend la station du processus ; celui
+d'`explorer` n'en avait pas : `msgina` donne à `userinit`, puis à `explorer`, le chemin `Default`, sans station, que
+win32k refusait (STATUS_NOT_IMPLEMENTED, « no startup desktop »). Le bureau restait alors au-dessus de tout, et
+une fois son fond peint, il couvrait la barre des tâches. Comme IntResolveDesktop, `win32k::startup::resolve_desktop`
+prend maintenant la station héritée du processus (ObFindHandleForObject, `ob::HandleTable::find_by_type`) si son
+interactivité (`!WSS_NOIO`) correspond à son droit sur WinSta0, sinon WinSta0 s'il y a droit (le LUID de son
+utilisateur, ou System avec des handles hérités) (`default_station`). Pas encore : la station des services
+(`Service-0x…$`), dont `services.exe` et `lsass.exe` restent privés comme avant, et le bureau hérité d'un chemin
+sans bureau (`Default` à la place).
+
+**Le fond du bureau : NtUserPaintDesktop.** `explorer` peint le fond de son bureau par PaintDesktop. Comme
+IntPaintDesktop sans papier peint (`win32k::desktop::paint_desktop`), la boîte de découpage du DC prend le pinceau
+de la classe de la fenêtre du bureau, COLOR_BACKGROUND (la classe garde la forme « couleur + 1 », ramenée au pinceau
+public de la couleur), par PATCOPY, sans changer le pinceau choisi dans le DC. Pas encore : le papier peint
+(SPI_SETDESKWALLPAPER, classe 0x14 de NtUserSystemParametersInfo), le texte de version (PaintDesktopVersion), le
+fond noir du mode sans échec.
+
+**Les DC pris pendant qu'une fenêtre bouge.** `explorer` prend le DC de son bureau quand celui-ci est au-dessus de
+tout, et le garde. Comme DceResetActiveDCEs, `win32k::dce::reset_active_dcs` refait après chaque SetWindowPos la
+région visible de chaque DC du cache pris pour une fenêtre ; ceux de la fenêtre déplacée ou de ses filles suivent
+son coin, et la région qui les coupe, gardée à leur prise, est décalée d'autant.
+
 **Où `explorer` va maintenant.** Sa barre des tâches (vide : ni bouton Démarrer ni horloge) au-dessus de son bureau,
-sans assertion. Le bureau n'a encore ni fond (NtUserPaintDesktop : on voit celui de la fenêtre du bureau de win32k)
-ni icônes (NtUserGetIconInfo ; CDesktopFolder.cpp:977 et CDefView.cpp:2744 pour les détails des éléments). En
-chemin : BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo (classes 0x2B, 0x2F, 0x30,
+dont il peint le fond lui-même (COLOR_BACKGROUND), sans assertion. Le bureau n'a pas encore d'icônes
+(NtUserGetIconInfo ; CDesktopFolder.cpp:977 et CDefView.cpp:2744 pour les détails des éléments). En chemin :
+BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo (classes 0x14, 0x2B, 0x2F, 0x30,
 0x100A), les fenêtres message seul (HWND_MESSAGE), NtGdiGetDIBitsInternal, NtGdiAlphaBlend, NtUserRemoveProp,
-NtUserSetWindowRgn, NtUserFindWindowEx, NtUserCallOneParam (0x1E BEGINDEFERWNDPOS, 0x28 GETKEYBOARDLAYOUT), le
-fond du bureau repeint à la demande. Les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage :
-`msgina` leur donne un chemin sans station, que win32k ne résout pas encore (la station du processus,
-IntResolveDesktop).
+NtUserSetWindowRgn, NtUserFindWindowEx, NtUserCallOneParam (0x1E BEGINDEFERWNDPOS, 0x28 GETKEYBOARDLAYOUT). La
+fenêtre « Progman » d'`explorer` mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à
+vérifier (SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN).
 
 ## La suite
 
-Le bureau d'`explorer` : son fond (NtUserPaintDesktop : la couleur COLOR_BACKGROUND et le papier peint) et ses
-icônes (NtUserGetIconInfo, les détails des éléments) ; la station par défaut d'un chemin de bureau, puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
+Le bureau d'`explorer` : ses icônes (NtUserGetIconInfo, les détails des éléments), son papier peint
+(SPI_SETDESKWALLPAPER) ; la station des services ; puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
 presse-papiers, notifications, `NtNotifyChangeKey`) et le bureau du critère.
 
 ## Tests
@@ -184,7 +205,13 @@ chevauchent, celle du dessus envoyée au fond sans bouger ; la capture montre la
 chevauchement (l'ancien calcul y laisse la seconde). Hôte : `win32k::winsta` (une station prend un seul shell,
 jusqu'à la destruction de sa fenêtre). Scénario `logon` : `Documents and Settings\Administrator\Desktop` parcouru,
 `desktop.cpp:193` et `atlcomcli.h` interdits, la barre des tâches visible au-dessus du bureau (ses deux pixels, que
-le bureau recouvrait sans SetShellWindowEx).
+le bureau recouvrait sans SetShellWindowEx), « no startup desktop » interdit pour `userinit` et `explorer`. Scénario
+`paint-desktop` (`paintdsk1.c`) : un DC en mémoire peint en blanc prend la couleur du bureau par PaintDesktop et
+garde son pinceau ; une fenêtre dont WM_ERASEBKGND appelle PaintDesktop montre cette couleur (sans le service, le
+blanc reste). Scénario `dc-reset` (`dcreset1.c`) : le DC gardé d'une fenêtre passée sous une autre ne peint plus
+sur elle, ni à son ancienne place une fois déplacée ; le programme lit l'écran (l'ancien DC faisait les deux).
+Hôte : `ob` (le premier handle d'un type), `win32k::startup` (la station d'un chemin sans station),
+`win32k::desktop` (le pinceau d'une classe).
 
 Les apitests de `ntdll` (scénario `rostests`) restent à 43 sur 84, le plancher, mais pas les mêmes : NtDuplicateToken
 (un `NewTokenHandle` nul : `STATUS_ACCESS_VIOLATION`, la poignée écrite d'abord, comme ProbeForWriteHandle) et

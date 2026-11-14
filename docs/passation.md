@@ -1,5 +1,23 @@
 # Notes de passation
 
+- **explorer peint le fond de son bureau ; sa station ; les DC pris** (`claude/new-session-696xfc`, M6, premier
+  critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). NtUserPaintDesktop
+  (`win32k::desktop::paint_desktop`, IntPaintDesktop sans papier peint : la boîte de découpage du DC prend le pinceau
+  de la classe du bureau, COLOR_BACKGROUND, par PATCOPY ; `gdi::dc::fill_with_brush`). Le fond peint couvrait la
+  barre des tâches : NtUserSetShellWindowEx échouait, le processus d'`explorer` n'ayant pas de station, parce que le
+  chemin de bureau que `msgina` donne (`Default`) n'en nomme pas ; `win32k::startup::resolve_desktop` prend
+  maintenant, comme IntResolveDesktop, la station héritée (ObFindHandleForObject : `ob::HandleTable::find_by_type`)
+  ou WinSta0 selon le droit du processus (`default_station`) ; la station des services (`Service-0x…$`) reste à
+  faire (`services.exe`, `lsass.exe`). Et un DC pris gardait la région de sa prise : `win32k::dce::reset_active_dcs`
+  (DceResetActiveDCEs) la refait après chaque SetWindowPos, l'origine suivant la fenêtre déplacée. Tests :
+  `paint-desktop` (`paintdsk1.c`), `dc-reset` (`dcreset1.c`, le programme lit l'écran), `logon` (« no startup
+  desktop » interdit pour `userinit` et `explorer`, la barre visible au-dessus du fond peint), hôte (`ob`,
+  `win32k::startup`, `win32k::desktop`) ; chacun échoue sans sa correction. `cargo xtask lint` propre, 1104 tests
+  hôte ; la suite complète sur AMD tourne.
+  **Suite** : les icônes du bureau (NtUserGetIconInfo, les détails des éléments), le papier peint
+  (SPI_SETDESKWALLPAPER), la taille de « Progman » (1, 0)-(32768, 32767) à vérifier, la station des services ; le
+  bouton Démarrer et ce que la barre demande.
+
 - **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects
   échouait (WAIT_FAILED) faute de NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27) : chaque thread GUI reçoit
@@ -15,9 +33,8 @@
   `logon` (le Bureau de l'utilisateur parcouru, `desktop.cpp:193` et `atlcomcli.h` interdits, la barre visible :
   sans SetShellWindowEx le bureau la recouvre), hôte (`win32k::winsta`, un seul shell par station). Captures avant
   et après dans `target/screenshots/` (régénérées par `logon`). `cargo xtask lint` propre, 1101 tests hôte ; la suite
-  complète sur AMD tourne.
-  **Suite** : le fond du bureau (NtUserPaintDesktop) et ses icônes (NtUserGetIconInfo) ; la station par défaut d'un
-  chemin de bureau ; le bouton Démarrer et ce que la barre demande.
+  complète a tourné avec le point suivant.
+  **Suite** : faite au point précédent (le fond, la station) ; restent les icônes et le bouton Démarrer.
 
 - **`explorer.exe` démarre ; NtUserGetAtomName écrasait la pile de `user32`** (`claude/new-session-696xfc`, M6,
   premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). `explorer.exe` est sur le

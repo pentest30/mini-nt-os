@@ -364,7 +364,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   l'événement de la file de chaque thread GUI dans la table de son processus (ONEPARAM_ROUTINE_GETINPUTEVENT,
   `win32k::queue::input_event`) ; la fenêtre du shell (NtUserSetShellWindowEx, `win32k::shell` : station,
   `DESKTOPINFO`, au fond de l'ordre Z) ; SetWindowPos découvre par régions visibles (VisBefore moins VisAfter). Le
-  bureau d'`explorer` est créé sous sa barre des tâches ; pas encore son fond (NtUserPaintDesktop) ni ses icônes.
+  bureau d'`explorer` est créé sous sa barre des tâches, et il en peint le fond (NtUserPaintDesktop,
+  `win32k::desktop::paint_desktop`) ; un chemin de bureau sans station prend la station héritée ou WinSta0
+  (`win32k::startup::default_station`, `ob::HandleTable::find_by_type`) ; les DC pris refont leur région après
+  chaque SetWindowPos (`win32k::dce::reset_active_dcs`). Pas encore ses icônes.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
