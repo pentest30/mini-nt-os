@@ -20,6 +20,9 @@
  *   handled during the wait, which goes on until a posted message;
  * - a SendMessage to a thread that ends without answering fails in about
  *   a second, though a third thread posts to the sender every 50 ms;
+ * - SendMessage to no window: 0 and ERROR_INVALID_WINDOW_HANDLE, though
+ *   the stack where user32 keeps the result holds something else (user32
+ *   returns its uninitialized result if the kernel does not write it);
  * then the worker posts WM_QUIT to the main thread, which never got a sent
  * message from GetMessage, and ends with EXIT_STATUS. Each result goes to the
  * debug port (DbgPrint), where the scenario looks for it.
@@ -258,6 +261,18 @@ static BOOL register_class(const WCHAR *name, WNDPROC procedure)
     return RegisterClassExW(&class_info) != 0;
 }
 
+/* Leaves a pattern on the stack below the caller's frame, where the
+ * locals of its next call go. */
+static DWORD __attribute__((noinline)) soil_stack(void)
+{
+    volatile DWORD junk[256];
+    int i;
+
+    for (i = 0; i < 256; i++)
+        junk[i] = 0x5EEDBEEF;
+    return junk[255];
+}
+
 /* A thread with a window that never answers: it ends after 600 ms. */
 static DWORD __stdcall zombie(void *parameter)
 {
@@ -338,6 +353,11 @@ static DWORD __stdcall worker(void *parameter)
         elapsed = GetTickCount() - start;
         DbgPrint("[send] SendMessage to a thread that ended: %ld, under 2 s %d\n", value, elapsed < 2000);
     }
+    (void)soil_stack();
+    SetLastError(0);
+    value = SendMessageW(0, WM_USER + 12, 0, 0);
+    error = GetLastError();
+    DbgPrint("[send] SendMessage to no window: %ld, error %lu\n", value, error);
     PostThreadMessageW(main_thread, WM_QUIT, 0, 0);
     return 0;
 }

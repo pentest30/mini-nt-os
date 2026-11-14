@@ -19,6 +19,10 @@
 # - a thread that ends without answering: SendMessage to its window fails in
 #   about a second, though a third thread posts to the sender every 50 ms
 #   (the recipient's liveness is looked at whatever wakes the sender);
+# - SendMessage to no window (CDefView's Header_GetItemCount of a list view
+#   without a header): 0 and ERROR_INVALID_WINDOW_HANDLE (1400), with the
+#   stack soiled first: user32 returns the result it passed to the kernel
+#   uninitialized, so NtUserMessageCall must write 0 there;
 # then the worker posts WM_QUIT.
 features = test-smss
 requires = userland, native
@@ -45,6 +49,7 @@ forbid = with a kernel buffer sent to another thread: not yet
 expect = [send] sent during WaitMessage: 7
 expect = [send] WaitMessage returned; the sent message handled during it 1
 expect = [send] SendMessage to a thread that ended: 0, under 2 s 1
+expect = [send] SendMessage to no window: 0, error 1400
 expect = [send] sent messages out of GetMessage: 0; notified 1
 expect = [send] done
 expect = exit status 0x00007002
