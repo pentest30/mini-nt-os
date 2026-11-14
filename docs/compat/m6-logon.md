@@ -52,8 +52,31 @@ Chaque ligne est un arrêt du scénario `logon`, sa cause, et ce qui l'a levé.
 `userinit.exe` (sur le disque depuis cette étape) tourne alors sous le jeton de l'utilisateur : il se connecte à
 `csrss` et à win32k, charge la disposition de clavier, applique les paramètres de l'utilisateur
 (UpdatePerUserSystemParameters), puis cherche le shell de `Winlogon\Shell`, `C:\WINDOWS\explorer.exe`, qui n'est pas
-sur le disque : « Failed to start default shell », puis la boîte « Userinit failed to start the shell! ». **C'est là
-que le logon s'arrête aujourd'hui.**
+sur le disque : « Failed to start default shell », puis la boîte « Userinit failed to start the shell! ».
+
+## `explorer`
+
+`xtask` met maintenant les programmes du répertoire Windows de ReactOS sur le disque, dans `WINDOWS` (`explorer.exe`),
+avec leurs imports (`browseui.dll`…) dans la fermeture de `system32` (`userland::WINDOWS_PROGRAMS`). `userinit` le
+lance, et win32k convertit son thread. **Où le logon s'arrête aujourd'hui** : `explorer` lève une exception dès ses
+premiers pas (STATUS_PRIVILEGED_INSTRUCTION dans l'en-tête de `shlwapi.dll`). Sa pile est écrasée par
+« Shell_TrayWnd » : NtUserGetAtomName prenait son second argument, un `PUNICODE_STRING`, pour le tampon, et écrivait le
+nom par-dessus la structure et la pile de l'appelant. Le correctif est celui de la boîte Enregistrer sous
+(`claude/blissful-herschel-4bf0cc`, commit `4226c9c`, à fusionner avant la suite).
+
+Avec ce correctif appliqué, `explorer` crée la fenêtre de sa barre des tâches et va plus loin ; ce qu'il demande
+ensuite, dans l'ordre où cela bloque :
+
+1. **Les classes COM de `browseui` et `shell32`** : CLSID_StartMenu (`{4622AD11-FF23-11D0-8D34-00A0C90F2719}`) et
+   CLSID_RebarBandSite (`{ECD4FC4D-521C-11D0-B792-00A0C90312E1}`) ne sont pas enregistrées (`REGDB_E_CLASSNOTREG`) :
+   l'installation de ReactOS appelle DllRegisterServer des DLL de `syssetup.inf` (`RegistrationPhase2`,
+   `OleControlDlls`), que `minoinit.exe` ne fait pas encore.
+2. **Les fenêtres « message seul »** (`HWND_MESSAGE`, « not yet ») : la fenêtre d'appartement de COM n'est pas créée
+   (`combase` apartment.c : « CreateWindow failed with error 1400 »).
+3. **DeferWindowPos** (NtUserCallOneParam 0x1E, BeginDeferWindowPos : « BeginDeferWindowPos failed. lastErr=120 »),
+   NtUserSetWindowRgn, SystemParametersInfo (0x2B, 0x2F), NtUserCallOneParam 0x27, NtUserGetSystemMenu.
+4. Le bureau du shell échoue (`desktop.cpp:193`, E_FAIL), puis une assertion d'ATL (`atlcomcli.h:208`, `p != 0`).
+5. Côté icônes : NtUserGetIconInfo, NtGdiGetDIBitsInternal, NtUserRemoveProp (le travail de la boîte Enregistrer sous).
 
 ## Vu en chemin, pas fait
 
@@ -71,8 +94,10 @@ que le logon s'arrête aujourd'hui.**
 
 ## La suite
 
-Mettre `explorer.exe` sur le disque et suivre ce qu'il demande : `shell32` (dossiers du shell, icônes), la barre des
-tâches (crochets, `SetWindowsHookEx`, presse-papiers, notifications), `NtNotifyChangeKey`, puis le bureau du critère.
+Fusionner le correctif de NtUserGetAtomName, puis lever les blocages d'`explorer` ci-dessus dans l'ordre : les classes
+COM (DllRegisterServer dans `minoinit`), les fenêtres message seul, DeferWindowPos ; ensuite ce qu'il demandera pour
+la barre des tâches (crochets, `SetWindowsHookEx`, presse-papiers, notifications), `NtNotifyChangeKey`, puis le bureau
+du critère.
 
 ## Tests
 

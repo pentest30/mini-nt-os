@@ -115,8 +115,9 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     .map(String::from)
     .chain(KNOWN_DLLS.iter().map(|dll| format!("{dll}.dll")))
     .collect();
-    let (imported, missing) = import_closure(&files, |file| {
-        let path = system32_file(ws, file)?;
+    let roots: Vec<String> = files.iter().cloned().chain(WINDOWS_PROGRAMS.iter().map(|p| p.to_string())).collect();
+    let (imported, missing) = import_closure(&roots, |file| {
+        let path = system32_file(ws, file).or_else(|| windows_file(ws, file))?;
         let bytes = fs::read(&path).ok()?;
         let pe = pe::Pe32::parse(&bytes).ok()?;
         Some(pe.imports().map(|import| import.dll_name().to_ascii_lowercase()).collect())
@@ -128,10 +129,26 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     let system32 = files
         .into_iter()
         .map(|file| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{}", file.to_ascii_uppercase()))));
+    let windows = WINDOWS_PROGRAMS.iter().map(|program| {
+        windows_file(ws, program).map(|path| (path, format!("WINDOWS/{}", program.to_ascii_uppercase())))
+    });
     let fonts = FONTS
         .iter()
         .map(|font| fonts_file(ws, font).map(|path| (path, format!("{FONTS_DIR}/{}", font.to_ascii_uppercase()))));
-    system32.chain(fonts).collect()
+    system32.chain(windows).chain(fonts).collect()
+}
+
+/// The programs of the userland's Windows directory (`%SystemRoot%`) that the
+/// boot disk gets in `WINDOWS`: the shell that userinit starts
+/// (`Winlogon\Shell`, `C:\WINDOWS\explorer.exe`); their imports join the
+/// closure of `system32`.
+const WINDOWS_PROGRAMS: [&str; 1] = ["explorer.exe"];
+
+/// The file `name` of the fetched Windows directory (`system32`'s parent);
+/// `None` until `fetch-userland` ran, or without it.
+fn windows_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
+    let file = system32_file(ws, "ntdll.dll")?.parent()?.parent()?.join(name);
+    file.is_file().then_some(file)
 }
 
 /// The hives of the boot disk under the Mino layer (ADR-023,
