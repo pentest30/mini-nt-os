@@ -188,8 +188,11 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// dans le POINT `Param` (`super::mouse::get_cursor_pos`) ;
 /// `ONEPARAM_ROUTINE_CREATEEMPTYCUROBJECT` : un curseur vide
 /// (`super::cursor::create_empty_cur_object`) ;
-/// `ONEPARAM_ROUTINE_SETCARETBLINKTIME` : SetCaretBlinkTime (TRUE). Une
-/// autre rend 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
+/// `ONEPARAM_ROUTINE_SETCARETBLINKTIME` : SetCaretBlinkTime (TRUE) ;
+/// `ONEPARAM_ROUTINE_GETINPUTEVENT` : le handle de l'événement de la file,
+/// pour MsgWaitForMultipleObjects, `Param` étant MAKELONG(masque de réveil,
+/// MWMO_*) (`queue::input_event`). Une autre rend 0 et
+/// `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
 pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
     let (param, routine) = (arguments[0], arguments[1]);
     match routine {
@@ -208,6 +211,7 @@ pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
             let flags = param as u16 & (QS_ALLINPUT | QS_ALLPOSTMESSAGE | QS_SMRESULT);
             NtStatus(queue::status(&current(), flags))
         }
+        abi::user::ONEPARAM_ROUTINE_GETINPUTEVENT => NtStatus(queue::input_event(&current(), param)),
         _ => {
             UNSUPPORTED_ONE_PARAM_ROUTINES.report(routine);
             fail(ERROR_CALL_NOT_IMPLEMENTED)

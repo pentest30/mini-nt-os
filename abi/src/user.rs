@@ -1096,6 +1096,9 @@ pub const WMSZ_BOTTOMRIGHT: u32 = 8;
 pub const NOPARAM_ROUTINE_RELEASECAPTURE: u32 = 0x0D;
 /// NOPARAM_ROUTINE_DESTROY_CARET: DestroyCaret (XP's order of the enum).
 pub const NOPARAM_ROUTINE_DESTROY_CARET: u32 = 0x05;
+/// NOPARAM_ROUTINE_MSQCLEARWAKEMASK: after MsgWaitForMultipleObjects
+/// (NtUserxMsqClearWakeMask, XP's order of the enum).
+pub const NOPARAM_ROUTINE_MSQCLEARWAKEMASK: u32 = 0x03;
 /// ONEPARAM_ROUTINE_SETCARETBLINKTIME: SetCaretBlinkTime.
 pub const ONEPARAM_ROUTINE_SETCARETBLINKTIME: u32 = 0x3B;
 /// TWOPARAM_ROUTINE_SETCARETPOS: SetCaretPos.
@@ -1205,6 +1208,13 @@ pub const PM_VALID_FLAGS: u32 = 0x0001 | 0x0002 | (0x0407 | 0x0040 | 0x0020 | 0x
 /// ONEPARAM_ROUTINE_GETQUEUESTATUS, ONEPARAM_ROUTINE_POSTQUITMESSAGE: the
 /// routines of NtUserCallOneParam (`SIMPLECALLROUTINES`, before Vista).
 pub const ONEPARAM_ROUTINE_GETQUEUESTATUS: u32 = 0x2B;
+/// ONEPARAM_ROUTINE_GETINPUTEVENT: the event of the thread's queue, for
+/// MsgWaitForMultipleObjects (NtUserxMsqSetWakeMask; the parameter is
+/// MAKELONG(wake mask, MWMO_* flags)).
+pub const ONEPARAM_ROUTINE_GETINPUTEVENT: u32 = 0x27;
+/// MWMO_INPUTAVAILABLE: MsgWaitForMultipleObjectsEx also returns for input
+/// already in the queue (its wake bits), not only for new input.
+pub const MWMO_INPUTAVAILABLE: u16 = 0x0004;
 pub const ONEPARAM_ROUTINE_POSTQUITMESSAGE: u32 = 0x33;
 /// ONEPARAM_ROUTINE_RELEASEDC: ReleaseDC (user32!ReleaseDC pushes 0x39).
 pub const ONEPARAM_ROUTINE_RELEASEDC: u32 = 0x39;
