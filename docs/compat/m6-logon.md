@@ -68,9 +68,18 @@ Avec ce correctif appliqué, `explorer` crée la fenêtre de sa barre des tâche
 ensuite, dans l'ordre où cela bloque :
 
 1. **Les classes COM de `browseui` et `shell32`** : CLSID_StartMenu (`{4622AD11-FF23-11D0-8D34-00A0C90F2719}`) et
-   CLSID_RebarBandSite (`{ECD4FC4D-521C-11D0-B792-00A0C90312E1}`) ne sont pas enregistrées (`REGDB_E_CLASSNOTREG`) :
+   CLSID_RebarBandSite (`{ECD4FC4D-521C-11D0-B792-00A0C90312E1}`) n'étaient pas enregistrées (`REGDB_E_CLASSNOTREG`) :
    l'installation de ReactOS appelle DllRegisterServer des DLL de `syssetup.inf` (`RegistrationPhase2`,
-   `OleControlDlls`), que `minoinit.exe` ne fait pas encore.
+   `OleControlDlls`). Fait en partie : `minoinit.exe` appelle CoInitialize, puis DllRegisterServer des DLL de cette
+   liste qui sont sur le disque, avant la réécriture des ruches. `browseui` et `rpcrt4` réussissent (le scénario
+   `logon` attend `browseui`) ; `oleaut32`, `shdocvw` et `urlmon` rendent `E_NOINTERFACE`, `shell32` `E_FAIL`,
+   `wininet` n'a pas de DllRegisterServer. À diagnostiquer : sans doute le registrar d'ATL (`atl.dll`, en tête de la
+   liste, pas sur le disque) et l'enregistrement des bibliothèques de types.
+
+   En chemin, CopyFileW de `minoinit` a échoué (erreur 998) dès que sa pile a changé : NtSetInformationFile
+   (FileBasicInformation) exigeait 8 octets d'alignement, que les compilateurs x86 ne garantissent pas à une
+   structure posée sur la pile. Corrigé : 4, comme les autres valeurs 64 bits ; le scénario `cmd` le vérifie
+   (`concmd1.c`, un tampon aligné sur 4 et pas sur 8).
 2. **Les fenêtres « message seul »** (`HWND_MESSAGE`) : la fenêtre d'appartement de COM n'était pas créée
    (`combase` apartment.c : « CreateWindow failed with error 1400 »). Fait : chaque bureau a sa fenêtre des messages
    (`win32k::window::create_message_window`, `spwndMessage`), dont les fenêtres `HWND_MESSAGE` sont les enfants ;

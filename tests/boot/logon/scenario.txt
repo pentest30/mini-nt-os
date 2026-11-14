@@ -9,7 +9,9 @@
 # the SAM, makes the profiles (userenv's InitializeProfiles: C:\Documents
 # and Settings, a long-named directory), copies HKU\.DEFAULT, written back,
 # as NTUSER.DAT of Default User, sets SetupType = 0, writes the hives back
-# and reboots. Every step logs "[minoinit] ..."; a failed step stops it
+# registers the COM servers on the disk (DllRegisterServer, syssetup's
+# RegistrationPhase2: browseui's Start menu and band site, which explorer
+# creates) and reboots. Every step logs "[minoinit] ..."; a failed step stops it
 # ("[minoinit] stopped: ..."). It also logs its environment: smss passes on
 # SystemDrive, which the kernel gives it as ReactOS's does.
 #
@@ -41,6 +43,8 @@ timeout = 300
 
 expect = [boot] .DEFAULT hive mounted at \REGISTRY\USER\.DEFAULT
 expect = [minoinit] environment: SystemDrive=C:
+expect = [minoinit] CoInitialize: 0
+expect = [minoinit] DllRegisterServer browseui.dll: 0
 expect = [minoinit] done; rebooting
 expect = IncrementRefCount(S-1-5-21-
 expect = We are logged on

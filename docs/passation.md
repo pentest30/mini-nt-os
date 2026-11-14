@@ -5,8 +5,11 @@
   est sur le disque (`xtask` : `userland::WINDOWS_PROGRAMS`, dans `WINDOWS`, ses imports dans la fermeture) ;
   `userinit` le lance et le scénario `logon` attend son thread converti. **Il s'arrête** sur une exception :
   NtUserGetAtomName écrase sa pile (corrigé sur `claude/blissful-herschel-4bf0cc`, `4226c9c`, à fusionner). Avec ce
-  correctif, la suite d'`explorer` est listée dans le document : classes COM non enregistrées (DllRegisterServer
-  dans `minoinit`), fenêtres message seul, DeferWindowPos, SetWindowRgn, SystemParametersInfo.
+  correctif, la suite d'`explorer` est listée dans le document. Fait depuis : les fenêtres message seul
+  (`win32k::window::create_message_window`, scénario `gui`), DllRegisterServer dans `minoinit` (`browseui` et
+  `rpcrt4` réussissent ; `oleaut32`, `shdocvw`, `urlmon`, `shell32` échouent, à diagnostiquer), FILE_BASIC_INFORMATION
+  pris sur une limite de 4 octets (scénario `cmd`). **Reste** : les échecs d'enregistrement, DeferWindowPos
+  (NtUserCallOneParam 0x1E), SetWindowRgn, SystemParametersInfo 0x2B/0x2F, le bureau du shell.
 
 - **Applications Win32 x86 validées** (`feat/m7-classic-apps`, PR #130, base main `abfe106`, suite de #127) :
   Calculatrice (`12+30=42`, fermeture, relance, `6*7=42`), Démineur (drapeau au clic droit, F2, fermeture/relance),
