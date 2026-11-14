@@ -63,6 +63,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["dialog1.c"], "DIALOG1.EXE", Toolchain::MinGwWin32),
     (&["send1.c"], "SEND1.EXE", Toolchain::MinGwWin32),
     (&["msgwait1.c"], "MSGWAIT1.EXE", Toolchain::MinGwWin32),
+    (&["zorder1.c"], "ZORDER1.EXE", Toolchain::MinGwWin32),
     (&["destroy1.c"], "DESTROY1.EXE", Toolchain::MinGwWin32),
     (&["activate1.c"], "ACTIVATE1.EXE", Toolchain::MinGwWin32),
     (&["mouse2.c"], "MOUSE2.EXE", Toolchain::MinGwWin32),
