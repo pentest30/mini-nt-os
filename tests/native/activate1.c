@@ -7,7 +7,12 @@
  * then:
  * 1. shows A1: A takes the foreground;
  * 2. starts a thread B, which opens and shows B1: B takes it;
- * 3. brings A1 back with SetWindowPos (no SWP_NOACTIVATE): A takes it again.
+ * 3. brings A1 back with SetWindowPos (no SWP_NOACTIVATE): A takes it again;
+ * 4. gives the focus to A1's child, then resizes A1, the active window, with
+ *    SetWindowPos without SWP_NOACTIVATE (as comdlg32 resizes its dialog):
+ *    A1 gets no WM_ACTIVATE and the child keeps the focus;
+ * 5. shows a window A3 whose WM_ACTIVATE gives the focus to its child C3:
+ *    C3 keeps it.
  * Each time the foreground changes thread, every top-level window of the
  * two threads, shown or not, gets WM_ACTIVATEAPP: TRUE and the TID of the
  * thread that loses the foreground in the thread that gains it, FALSE and
@@ -69,6 +74,8 @@ typedef struct {
     POINT pt;
 } MSG;
 
+#define WM_ACTIVATE 0x0006
+#define WA_INACTIVE 0
 #define WM_QUIT 0x0012
 #define WM_ACTIVATEAPP 0x001C
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
@@ -77,6 +84,7 @@ typedef struct {
 #define SW_SHOWNORMAL 1
 #define SWP_NOSIZE 0x0001
 #define SWP_NOMOVE 0x0002
+#define SWP_NOZORDER 0x0004
 #define HWND_TOP ((HWND)0)
 #define PM_REMOVE 0x0001
 #define COLOR_WINDOW 5
@@ -114,6 +122,8 @@ __declspec(dllimport) BOOL __stdcall SetThreadDesktop(HDESK desktop);
 __declspec(dllimport) BOOL __stdcall SetWindowPos(HWND window, HWND insert_after, int x, int y, int cx, int cy,
                                                   UINT flags);
 __declspec(dllimport) BOOL __stdcall ShowWindow(HWND window, int command);
+__declspec(dllimport) HWND __stdcall GetFocus(void);
+__declspec(dllimport) HWND __stdcall SetFocus(HWND window);
 __declspec(dllimport) BOOL __stdcall SwitchDesktop(HDESK desktop);
 
 static HDESK desktop;
@@ -121,6 +131,10 @@ static HWND window_a1;
 static HWND window_a2;
 static HWND window_child;
 static HWND window_b1;
+static HWND window_a3;
+static HWND window_c3;
+/* WM_ACTIVATE that came during step 4. */
+static LONG activations;
 static DWORD thread_a;
 static volatile DWORD thread_b;
 /* The step under way, and the WM_ACTIVATEAPP received by both threads. */
@@ -181,6 +195,12 @@ static LRESULT __stdcall procedure(HWND hwnd, UINT message, WPARAM w, LPARAM l)
         DbgPrint("[activate] step %d: %s WM_ACTIVATEAPP %u, other thread %s, in thread %s\n", step,
                  window_name(hwnd), w, thread_name((DWORD)l), thread_name(GetCurrentThreadId()));
         __sync_fetch_and_add(&received, 1);
+        return 0;
+    }
+    if (message == WM_ACTIVATE && step == 4)
+        __sync_fetch_and_add(&activations, 1);
+    if (message == WM_ACTIVATE && hwnd == window_a3 && (w & 0xFFFF) != WA_INACTIVE) {
+        SetFocus(window_c3);
         return 0;
     }
     return DefWindowProcW(hwnd, message, w, l);
@@ -263,6 +283,19 @@ DWORD __stdcall GuiStartup(void)
     SetWindowPos(window_a1, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
     if (!pump_until(8))
         ExitProcess(7);
+
+    step = 4;
+    SetFocus(window_child);
+    SetWindowPos(window_a1, 0, 0, 0, 260, 180, SWP_NOMOVE | SWP_NOZORDER);
+    DbgPrint("[activate] step 4: SetWindowPos of the active window: focus on the child %d, WM_ACTIVATE %ld\n",
+             GetFocus() == window_child, activations);
+
+    step = 5;
+    window_a3 = CreateWindowExW(0, L"MinoActivate", L"A3", WS_OVERLAPPEDWINDOW, 150, 150, 240, 160, 0, 0, instance, 0);
+    window_c3 =
+        CreateWindowExW(0, L"MinoActivate", L"C3", WS_CHILD | WS_VISIBLE, 10, 10, 60, 40, window_a3, 0, instance, 0);
+    ShowWindow(window_a3, SW_SHOWNORMAL);
+    DbgPrint("[activate] step 5: A3 shown: focus on the child its WM_ACTIVATE chose %d\n", GetFocus() == window_c3);
 
     /* Time for a WM_ACTIVATEAPP too many to show up. */
     Sleep(200);
