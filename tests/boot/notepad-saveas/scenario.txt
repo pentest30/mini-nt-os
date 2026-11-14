@@ -33,6 +33,8 @@ forbid = GetIconInfo Failed
 forbid = Imagelist no longer valid
 forbid = Assertion failed
 forbid = Exception when calling
+forbid = sys: NtGdiAlphaBlend (0x1007) is not implemented
+forbid = sys: NtGdiCreateDIBitmapInternal (0x1020) is not implemented
 
 # The first row's folder icon, its blue edge and its light inside; a corner
 # of its 16 x 16 cell that the icon leaves transparent: the list's white, not
@@ -41,3 +43,12 @@ screen = 105 82 3465A4
 screen = 108 86 8CB1D8
 screen = 116 80 FFFFFF
 screen = 105 132 C4C4C4
+# The toolbar (comctl32's bitmaps of 32 bits, with their alpha:
+# ImageList_AddMasked, BitBlt to and from monochrome, the alpha through the
+# ROPs, GdiAlphaBlend): the green of the Up button's arrow, and a pixel of
+# its image that the alpha leaves transparent (the button's face, black
+# without it). The places bar's Desktop icon (its alpha icon): a transparent
+# corner of its 32 x 32 cell.
+screen = 343 61 67C011
+screen = 337 61 D4D0C8
+screen = 37 80 D4D0C8

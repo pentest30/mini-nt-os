@@ -1331,7 +1331,7 @@ MINOTEST.TXT, avec leurs icônes ; Alt+N et le chemin tapé enregistrent le fich
 que la vue soit remplie avant de taper (`app_file_view` : GetDlgItem de `lst2`, puis de la liste, LVM_GETITEMCOUNT) :
 tapées plus tôt, les touches allaient au premier contrôle de la boîte encore en construction.
 
-Vu, pas fait : l'alpha des images de 32 bits (StretchDIBits le perd ; NtGdiCreateDIBitmapInternal, le bitmap d'alpha
+Vu, pas fait (fait à l'étape 30) : l'alpha des images de 32 bits (StretchDIBits le perd ; NtGdiCreateDIBitmapInternal, le bitmap d'alpha
 d'une icône, create_alpha_bitmap de `user32` ; NtGdiAlphaBlend) et la conversion couleur ↔ monochrome de BitBlt
 (ImageList_AddMasked de `comctl32` en tire le masque : la couleur de fond du DC source devient le blanc) : les boutons
 de la barre d'outils et la barre des emplacements ont un fond noir et des images fausses. La DIB section de 4 bits
@@ -1359,3 +1359,57 @@ ignoré, SendMessage sans `ResultInfo`, sans GetDIBits, GetDIBits toujours desce
 sans StretchBlt, StretchBlt sur le mauvais axe, sans GetNearestColor, BI_BITFIELDS refusé). 1107 tests hôte ;
 `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` sur AMD
 et Intel.
+
+## Étape 30 : les images de `comctl32` (BitBlt monochrome, alpha, DIB sections de 4 et 8 bits)
+
+Après l'étape 29, la barre d'outils de la boîte Enregistrer sous et sa barre des emplacements montraient leurs images
+sur un fond noir, et les icônes des tâches du gestionnaire des tâches étaient des carrés noirs. Trois manques du
+moteur GDI, dans l'ordre où ils jouaient :
+
+1. **BitBlt entre un bitmap monochrome et des couleurs** (`gdi::bitblt::Convert`, comme EXLATEOBJ_vInitXlateFromDCs
+   de ReactOS) : vers un bitmap monochrome, la couleur de fond du DC source donne le blanc et toute autre le noir ;
+   d'une source monochrome, le noir donne la couleur du texte du DC de destination et le blanc sa couleur de fond.
+   ImageList_AddMasked en tire le masque d'une image, puis l'ôte de l'image par NOTSRCAND. Un bitmap monochrome de
+   Mino garde des pixels de 32 bits, et le texte lissé qu'on y dessine laisse des gris : la source se lit au plus
+   proche du noir ou du blanc (DrawState peint ainsi le texte désactivé des boutons, en relief). StretchBlt convertit
+   de même.
+2. **L'alpha des images de 32 bits.** StretchDIBits garde l'octet alpha d'une DIB de 32 bits (BI_RGB, ou les masques
+   de BI_RGB) sur un bitmap de 32 bits, comme EngCopyBits avec une traduction triviale ; les ROP avec une source
+   (BitBlt, défilement, StretchBlt) portent sur les 32 bits, comme le moteur de 32 bits de ReactOS (le NOTSRCAND
+   d'ImageList_AddMasked effaçait l'alpha : `comctl32` ne voyait plus l'alpha de la barre d'outils et la dessinait par
+   un masque tout noir) ; PatBlt garde l'octet haut à zéro. NtGdiCreateDIBitmapInternal
+   (`gdi::dibits::create_dibitmap`, IntCreateDIBitmap : monochrome pour une DIB d'un bit noir puis blanc, ou sans
+   CBM_CREATDIB pour un DC dont le bitmap est monochrome ; CBM_INIT) : `user32` en fait le bitmap d'alpha d'une icône
+   (create_alpha_bitmap). NtGdiAlphaBlend (`gdi::bitblt::alpha_blend`, `blend` : DIB_32BPP_AlphaBlend, AC_SRC_OVER,
+   l'alpha constant et, avec AC_SRC_ALPHA, celui de chaque pixel, couleurs prémultipliées ; le pixel le plus proche
+   pour étirer) : les listes d'images ILC_COLOR32 dessinent ainsi une image qui a son alpha (alpha_blend_image). Le
+   pixel d'une icône à alpha (`cursor::Pixel::Blend`) se mélange de même, prémultiplié, comme le bitmap d'alpha de
+   `user32`. Jusqu'ici, CreateDIBitmap manquant, `user32` ne faisait aucun bitmap d'alpha : les curseurs et icônes de
+   32 bits se dessinaient par leurs masques (ce que l'étape 15 dit de l'alpha qui l'emporte sur les masques ne valait
+   pas encore). Ils se mélangent maintenant par leur alpha, comme UserDrawIconEx de ReactOS : les bords et les ombres
+   des icônes des titres changent. Les pixels attendus de `gui` (le contour de WINLOGO) et d'`icons` (ceux de WINLOGO
+   et d'IDI_ASTERISK) ont été recalculés à part, des images de 32 bits des ressources de `user32.dll` mélangées sur
+   le fond du titre : toute l'icône est identique au pixel près.
+3. **Les DIB sections de 4 et 8 bits** (`gdi::surface::Format::Indexed`) : la section garde des index dans la table
+   de la DIB, comme le processus les lit ; le moteur dessine sur leurs couleurs décodées en 32 bits
+   (`decode_indexed`) puis réécrit les pixels changés par l'index de la couleur la plus proche (`encode_indexed`,
+   `nearest_index`). GetObject dit leurs bits et leur table ; GetDIBits rend en 4 et 8 bits la table de la DIB section
+   de même profondeur, sinon la table par défaut (`gdi::dibits::default_palette` : les 16 couleurs de la VGA, ou 256 :
+   les 20 couleurs fixes et le cube de 6 × 6 × 6), que ImageList_CreateImage demande pour une liste ILC_COLOR4 ou
+   ILC_COLOR8. La liste du gestionnaire des tâches est de 4 bits : ses icônes y prennent les 16 couleurs.
+
+Pas encore : les DIB sections de 1, 16 et 24 bits, une table DIB_PAL_COLORS, SetDIBits, la couleur de fond d'un DC
+dans StretchDIBits vers le monochrome, StretchBlt et AlphaBlend d'une étendue négative, MaskBlt ; « My Documents » et
+« My Computer » de la barre des emplacements montrent l'icône de document par défaut (l'index de leur icône dans le
+cache de `shell32` n'est pas trouvé : à voir avec le registre du shell).
+
+Tests : hôte (`surface` : l'index le plus proche, décodage et réécriture d'une DIB de 4 et 8 bits, la géométrie ;
+`object` : le DIBSECTION d'une DIB de 4 bits ; `dibits` : l'alpha d'une DIB de 32 bits, le choix monochrome de
+CreateDIBitmap, les tables par défaut, GetDIBits de 4 et 8 bits ; `bitblt` : la conversion monochrome, le texte
+lissé, AlphaBlend ; `dib` : un ROP garde l'alpha ; `cursor` : le pixel prémultiplié). Sonde `bitmap` : BitBlt vers le
+monochrome et retour, une DIB section de 4 bits (peinte presque rouge : l'index du rouge ; GetObject ; GetDIBits : sa
+table, ou celle de la VGA), CreateDIBitmap qui garde l'alpha, GdiAlphaBlend. `notepad-saveas` : la flèche verte du
+bouton « Up » et un pixel transparent de son image (noir avant), un coin transparent de l'icône « Desktop ».
+`desktop-launch` : le teal de la barre de titre de l'icône de `cmd` (noire avant), et l'ombre du T de « End Task »,
+dans la lettre (le texte désactivé, lu au noir exact, disparaissait). Douze mutations, une par correction, font
+chacune échouer un test.

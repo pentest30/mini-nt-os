@@ -22,7 +22,7 @@ use abi::winerror::{
     ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_NO_SYSTEM_RESOURCES,
 };
 use ke::usermem::{copy_from_user, copy_to_user};
-use win32k::gdi::dib::Rect;
+use win32k::gdi::dib::{ColorRef, Rect};
 use win32k::gdi::{region, rgnobj, surface};
 
 /// Met l'erreur de Win32 `error` du thread et rend `value`.
@@ -872,7 +872,7 @@ pub(super) fn nt_gdi_get_dibits_internal(arguments: &[u32]) -> NtStatus {
 /// l'application (`hSection`) : pas encore (`ERROR_INVALID_PARAMETER`,
 /// journalisé une fois).
 pub(super) fn nt_gdi_create_dib_section(arguments: &[u32]) -> NtStatus {
-    let [hdc, section, _offset, info, _usage, _header_size, _fl, _color_space, bits] = arguments[..9] else {
+    let [hdc, section, _offset, info, usage, _header_size, _fl, _color_space, bits] = arguments[..9] else {
         unreachable!("9 arguments")
     };
     if info == 0 {
@@ -902,14 +902,31 @@ pub(super) fn nt_gdi_create_dib_section(arguments: &[u32]) -> NtStatus {
         } else {
             None
         };
-        Ok((header, masks))
+        // The colour table of 4 and 8 bits, after the whole header: biClrUsed
+        // entries, or all of them.
+        let mut palette = alloc::vec::Vec::new();
+        if matches!(header.bit_count, 4 | 8) {
+            let full = 1u32 << header.bit_count;
+            let colors = if (1..=full).contains(&header.clr_used) { header.clr_used } else { full };
+            let mut table = alloc::vec![0u8; colors as usize * 4];
+            copy_from_user(&mut table, u64::from(info) + u64::from(header.size))?;
+            palette = table.chunks_exact(4).map(|quad| ColorRef::rgb(quad[2], quad[1], quad[0])).collect();
+        }
+        Ok((header, masks, palette))
     };
-    let Ok((header, masks)) = read() else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    let Ok((header, masks, palette)) = read() else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    if usage != abi::gdi::DIB_RGB_COLORS && matches!(header.bit_count, 4 | 8) {
+        static PAL_REPORTED: AtomicBool = AtomicBool::new(false);
+        if !PAL_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtGdiCreateDIBSection with a table of palette indices: not yet");
+        }
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
     let geometry = match surface::dib_geometry(&header, masks) {
         Ok(geometry) => geometry,
         Err(error) => return fail(error, 0),
     };
-    let Ok((hbitmap, base)) = surface::create_dib_section(geometry) else {
+    let Ok((hbitmap, base)) = surface::create_dib_section(geometry, palette) else {
         return fail(ERROR_NO_SYSTEM_RESOURCES, 0);
     };
     if bits != 0 {
@@ -935,6 +952,62 @@ pub(super) fn nt_gdi_bit_blt(arguments: &[u32]) -> NtStatus {
     };
     let rect = (x as i32, y as i32, width as i32, height as i32);
     match win32k::gdi::bitblt::bit_blt(hdc, rect, hdc_src, (x_src as i32, y_src as i32), rop) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// Les lignes que NtGdiCreateDIBitmapInternal copie au plus (16 Mio).
+const MAX_DIB_BITS: u32 = 16 * 1024 * 1024;
+
+/// NtGdiCreateDIBitmapInternal(hdc, cx, cy, fInit, pjInit, pbmi, iUsage,
+/// cjMaxInitInfo, cjMaxBits, fl, hcmXform) : HBITMAP, un bitmap du processus
+/// (`win32k::gdi::dibits::create_dibitmap`), initialisé de la DIB `pbmi` et
+/// `pjInit` avec CBM_INIT ; NULL en cas d'échec, l'erreur posée.
+pub(super) fn nt_gdi_create_dibitmap_internal(arguments: &[u32]) -> NtStatus {
+    use win32k::gdi::dibits::{create_dibitmap, CBM_INIT};
+    let [hdc, width, height, init, bits, info, usage, info_size, bits_size, _fl, _xform] = arguments[..11] else {
+        unreachable!("11 arguments")
+    };
+    let info_bytes = if info != 0 {
+        let mut bytes = alloc::vec![0u8; info_size.min(MAX_BITMAP_INFO) as usize];
+        if copy_from_user(&mut bytes, u64::from(info)).is_err() {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+    let bits_bytes = if bits != 0 && init & CBM_INIT != 0 {
+        if bits_size == 0 || bits_size > MAX_DIB_BITS {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        let mut bytes = alloc::vec![0u8; bits_size as usize];
+        if copy_from_user(&mut bytes, u64::from(bits)).is_err() {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+    let size = (width as i32, height as i32);
+    match create_dibitmap(hdc, size, init, info_bytes.as_deref(), bits_bytes.as_deref(), usage) {
+        Ok(handle) => NtStatus(handle),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiAlphaBlend(hdcDst, xDst, yDst, cxDst, cyDst, hdcSrc, xSrc, ySrc,
+/// cxSrc, cySrc, BlendFunction, hcmXform) : BOOL
+/// (`win32k::gdi::bitblt::alpha_blend`).
+pub(super) fn nt_gdi_alpha_blend(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, width, height, hdc_src, x_src, y_src, width_src, height_src, blend, _xform] = arguments[..12]
+    else {
+        unreachable!("12 arguments")
+    };
+    let dst = (x as i32, y as i32, width as i32, height as i32);
+    let src = (x_src as i32, y_src as i32, width_src as i32, height_src as i32);
+    match win32k::gdi::bitblt::alpha_blend(hdc, dst, hdc_src, src, blend) {
         Ok(done) => NtStatus(u32::from(done)),
         Err(error) => fail(error, 0),
     }

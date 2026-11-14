@@ -25,7 +25,15 @@
 #   bitmap of 32 bits (its format alone: BI_BITFIELDS as ReactOS; its lines
 #   from the top, then from the bottom) and of a monochrome one (black and
 #   white, its bottom line first); StretchDIBits of a 16-bit DIB with its
-#   5-6-5 masks (BI_BITFIELDS, as comctl32's toolbar bitmaps, of 32 bits).
+#   5-6-5 masks (BI_BITFIELDS, as comctl32's toolbar bitmaps, of 32 bits);
+# - what its toolbar, its image lists of 4 bits and alpha icons ask: BitBlt
+#   from colours to a monochrome bitmap (the source's background colour
+#   gives white) and back (black: the destination's text colour, white: its
+#   background colour); a DIB section of 4 bits (painted near red: the index
+#   of red in its table; GetObject; GetDIBits of 4 bits: its table, or the
+#   VGA one, silver before gray); CreateDIBitmap keeping the alpha;
+#   GdiAlphaBlend with each pixel's alpha (0x40 premultiplied over 0xC8 at
+#   0x80: 0xA3).
 features = test-smss
 requires = userland, native
 initial-command = BITMAP1.EXE
@@ -56,6 +64,11 @@ expect = [bitmap] GetDIBits from the top: 2, 00ff0000 00123456, then 00000001
 expect = [bitmap] GetDIBits from the bottom: 2, 00000001, then 00ff0000
 expect = [bitmap] GetDIBits of a monochrome bitmap: 2, colours 000000 ffffff, rows 00ff a50f
 expect = [bitmap] StretchDIBits of 5-6-5 bit fields: 1, pixel 0000ff00
+expect = [bitmap] BitBlt to monochrome: 80; back to colours: 0000ff00 000000ff
+expect = [bitmap] a DIB section of 4 bits: 4 bits, 16 colours; painted near red: 10; GetDIBits: 10, its red ff0000
+expect = [bitmap] the default table of 4 bits: c0c0c0 808080 ff0000
+expect = [bitmap] CreateDIBitmap of 32 bits: a bitmap, read back 80402010
+expect = [bitmap] GdiAlphaBlend: 1, 80a3a3a3 00c8c8c8
 expect = [bitmap] done
 forbid = *** STOP:
 forbid = sys: NtGdiCreateCompatibleDC (0x101e) is not implemented
@@ -66,6 +79,8 @@ forbid = sys: NtGdiCreateSolidBrush (0x102c) is not implemented
 forbid = sys: NtGdiStretchBlt (0x1123) is not implemented
 forbid = sys: NtGdiGetDIBitsInternal (0x10ad) is not implemented
 forbid = sys: NtGdiGetNearestColor (0x10b9) is not implemented
+forbid = sys: NtGdiAlphaBlend (0x1007) is not implemented
+forbid = sys: NtGdiCreateDIBitmapInternal (0x1020) is not implemented
 
 # The window's client area is at (303, 223): the DIB copied at (10, 10),
 # the brush's colour with the program's red pixel at (11, 11); the same

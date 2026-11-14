@@ -8,6 +8,7 @@ BitBlt@36
 CombineRgn@16
 CreateBitmap@20
 CreateCompatibleDC@4
+CreateDIBitmap@24
 CreateDIBSection@24
 CreateFontW@56
 CreateRectRgn@16
@@ -16,6 +17,7 @@ DeleteDC@4
 DeleteObject@4
 ExtSelectClipRgn@12
 ExtTextOutW@32
+GdiAlphaBlend@44
 GdiFlush@0
 GetClipBox@8
 GetDIBits@28

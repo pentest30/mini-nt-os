@@ -238,8 +238,11 @@ expect = [gui] done
 # (WM_NCPAINT), inactive: "Pending" at 0, 0 (200 x 100) under "Visible" at
 # 69, 69 (960 x 600): the raised edge, the caption's gradient from
 # COLOR_INACTIVECAPTION, the line under it, the close button. The caption
-# starts with the window's icon, the default one (user32's WINLOGO: 76, 82
-# dark), its class having none; the caption's text follows it, pushed by the
+# starts with the window's icon, the default one (user32's WINLOGO), its
+# class having none, mixed by its alpha (user32's create_alpha_bitmap,
+# premultiplied): 76, 82 is its outline, 292929 at alpha 31 over the
+# caption's 808080 (drawn by its masks, it was 292929); the caption's text
+# follows it, pushed by the
 # caption's height (19), in Tahoma Bold (win32k's fonts, ADR-013), in
 # COLOR_INACTIVECAPTIONTEXT: the stem of the b of "Visible" at 114, 82, its
 # baseline at 87; the close button's cross is Marlett's r, in COLOR_BTNTEXT
@@ -288,7 +291,7 @@ screen = 73 93 FFFFFF
 screen = 1006 75 FFFFFF
 screen = 1014 82 000000
 screen = 1010 82 D4D0C8
-screen = 76 82 292929
+screen = 76 82 747474
 screen = 114 82 D4D0C8
 screen = 114 87 828282
 screen = 1028 668 404040

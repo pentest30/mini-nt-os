@@ -1,5 +1,20 @@
 # Notes de passation
 
+- **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). La barre d'outils de la boîte Enregistrer sous, sa
+  barre des emplacements et les icônes des tâches du gestionnaire des tâches s'affichent justes : BitBlt et
+  StretchBlt convertissent entre monochrome et couleurs (`gdi::bitblt::Convert`, la source monochrome lue au plus
+  proche du noir ou du blanc : le texte lissé de DrawState) ; l'alpha des images de 32 bits passe (StretchDIBits le
+  garde, les ROP avec source portent sur 32 bits, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend, `Pixel::Blend`
+  prémultiplié) ; les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`) et GetDIBits de 4 et 8 bits
+  (`gdi::dibits::default_palette`). Avec CreateDIBitmap, `user32` fait enfin le bitmap d'alpha des curseurs et icônes
+  de 32 bits, qui se mélangent par leur alpha au lieu de leurs masques : les pixels des icônes des titres de `gui` et
+  d'`icons` ont changé (recalculés à part depuis les ressources de `user32.dll`, identiques). Tests : hôte ; la sonde de `bitmap` (BitBlt monochrome, DIB section de 4 bits,
+  CreateDIBitmap, GdiAlphaBlend) ; des pixels de `notepad-saveas` (la barre d'outils, l'icône « Desktop ») et de
+  `desktop-launch` (l'icône de `cmd`). Douze mutations font chacune échouer un test (sans DIB section indexée, index réécrits à 0, table par défaut dans l'ancien ordre, sans conversion monochrome, source monochrome lue au noir exact, couleur de fond comparée avec son octet haut, StretchDIBits sans alpha, sans CreateDIBitmap, sans AlphaBlend, AlphaBlend sans l'alpha des pixels, ROP qui effacent l'alpha, alpha d'icône non prémultiplié). **Vu, pas fait** : les DIB sections de 1, 16 et 24 bits,
+  DIB_PAL_COLORS, SetDIBits, MaskBlt ; « My Documents » et « My Computer » de la barre des emplacements montrent
+  l'icône de document par défaut (l'index de leur icône dans le cache de `shell32`).
+
 - **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
   `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 29). Sous VirtualBox la boîte « Save As »
   du Bloc-notes restait vide et son thread bouclait sur le cache d'icônes de `shell32`. Fait, dans l'ordre où la
@@ -9,9 +24,8 @@
   de la boîte) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
   CDefView croyait sa liste pleine de colonnes et s'arrêtait sur une assertion) ; GetDIBits (1 et 32 bits),
   StretchBlt, GetNearestColor, BI_BITFIELDS de StretchDIBits (la barre d'outils). La boîte montre `C:\` et ses
-  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel, DIB section pas encore faite), qui décalent le texte. **Vu, pas fait** : les DIB sections de 4 bits (et GetDIBits de 4 bits) ; l'alpha des images
-  de 32 bits (StretchDIBits le perd, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend) et BitBlt couleur ↔ monochrome
-  (ImageList_AddMasked) : la barre d'outils et la barre des emplacements ont un fond noir ; NtUserGetClassName ;
+  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 30, entrée
+  ci-dessus) : NtUserGetClassName ;
   NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
 
 - **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, PR #127, base main `3942dd5`) : `notepad-save` passe sur AMD et Intel : saisie QEMU, vrai Save As, vérification des 20 octets, Alt+F4, sortie normale, nouveau processus et texte relu à l'écran. GWLP_WNDPROC client de même encodage débloque ATL ; Alt+F4 poste SC_CLOSE au premier niveau, sauf CS_NOCLOSE. Conversions ANSI/Unicode et procédures serveur refusées explicitement (thunks à faire). 322 tests hôte win32k passent. Critère Bloc-notes de M6 coché ; pas de reboot/persistance dans ce scénario RAM. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` et lint global à rejouer.

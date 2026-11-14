@@ -94,7 +94,9 @@ pub enum Pixel {
     Opaque(ColorRef),
     /// L'écran XOR la couleur (AND 1, XOR non nul) : le blanc l'inverse.
     Xor(ColorRef),
-    /// L'écran mélangé à la couleur, par son alpha.
+    /// La couleur, prémultipliée par son alpha (le bitmap d'alpha que fait
+    /// `user32`, create_alpha_bitmap), ajoutée à l'écran multiplié par
+    /// 255 − l'alpha, comme AlphaBlend avec AC_SRC_ALPHA.
     Blend(ColorRef, u8),
 }
 
@@ -105,13 +107,7 @@ impl Pixel {
             Pixel::Transparent => screen,
             Pixel::Opaque(color) => color,
             Pixel::Xor(color) => ColorRef((screen.0 ^ color.0) & 0x00FF_FFFF),
-            Pixel::Blend(color, alpha) => {
-                let mix = |a: u8, b: u8| {
-                    ((u32::from(a) * u32::from(alpha) + u32::from(b) * (255 - u32::from(alpha))) / 255) as u8
-                };
-                let ((r, g, b), (sr, sg, sb)) = (color.components(), screen.components());
-                ColorRef::rgb(mix(r, sr), mix(g, sg), mix(b, sb))
-            }
+            Pixel::Blend(color, alpha) => crate::gdi::bitblt::blend((color, alpha), (screen, 0), 255, true).0,
         }
     }
 }
@@ -1000,7 +996,12 @@ mod tests {
         assert_eq!(Pixel::Opaque(ColorRef::rgb(1, 2, 3)).over(screen), ColorRef::rgb(1, 2, 3));
         assert_eq!(Pixel::Xor(ColorRef::rgb(255, 255, 255)).over(screen), ColorRef::rgb(245, 235, 225), "inverted");
         assert_eq!(Pixel::Blend(ColorRef::rgb(255, 255, 255), 255).over(screen), ColorRef::rgb(255, 255, 255));
-        assert_eq!(Pixel::Blend(ColorRef::rgb(255, 255, 255), 0).over(screen), screen);
+        assert_eq!(Pixel::Blend(ColorRef::rgb(0, 0, 0), 0).over(screen), screen, "transparent: black, premultiplied");
+        assert_eq!(
+            Pixel::Blend(ColorRef::rgb(64, 0, 0), 128).over(ColorRef::rgb(200, 200, 200)),
+            ColorRef::rgb(163, 99, 99),
+            "premultiplied: the colour added"
+        );
         assert_eq!(
             Pixel::Blend(ColorRef::rgb(0, 0, 0), 128).over(ColorRef::rgb(255, 255, 255)),
             ColorRef::rgb(127, 127, 127)

@@ -221,6 +221,19 @@ __declspec(dllimport) BOOL __stdcall PatBlt(HDC dc, int x, int y, int width, int
 __declspec(dllimport) int __stdcall GetDIBits(HDC dc, HBITMAP bitmap, UINT start, UINT lines, void *bits, BITMAPINFO *info,
                                               UINT usage);
 __declspec(dllimport) COLORREF __stdcall GetNearestColor(HDC dc, COLORREF color);
+typedef struct {
+    BYTE BlendOp;
+    BYTE BlendFlags;
+    BYTE SourceConstantAlpha;
+    BYTE AlphaFormat;
+} BLENDFUNCTION;
+__declspec(dllimport) HBITMAP __stdcall CreateDIBitmap(HDC dc, const BITMAPINFOHEADER *header, DWORD init,
+                                                       const void *bits, const BITMAPINFO *info, UINT usage);
+__declspec(dllimport) BOOL __stdcall GdiAlphaBlend(HDC dest, int x, int y, int width, int height, HDC source,
+                                                   int x_source, int y_source, int width_source, int height_source,
+                                                   BLENDFUNCTION blend);
+__declspec(dllimport) COLORREF __stdcall SetBkColor(HDC dc, COLORREF color);
+__declspec(dllimport) COLORREF __stdcall SetTextColor(HDC dc, COLORREF color);
 __declspec(dllimport) BOOL __stdcall StretchBlt(HDC dest, int x, int y, int width, int height, HDC source, int x_source,
                                                 int y_source, int width_source, int height_source, DWORD rop);
 __declspec(dllimport) int __stdcall StretchDIBits(HDC dc, int x, int y, int width, int height, int x_source,
@@ -501,6 +514,114 @@ static void check_stretch_and_dibits(void)
     DeleteDC(dest_dc);
 }
 
+/* A BITMAPINFO with a table of 16 colours. */
+typedef struct {
+    BITMAPINFOHEADER bmiHeader;
+    DWORD bmiColors[16];
+} BITMAPINFO16;
+
+/* What comctl32's toolbar, its image lists of 4 bits and alpha icons ask
+   of GDI: BitBlt from colours to a monochrome bitmap (the source's
+   background colour gives white) and back (black gives the destination's
+   text colour, white its background colour); a DIB section of 4 bits
+   (indices in its table, the nearest colour; GetObject; GetDIBits of 4
+   bits: its own table, the VGA table of a bitmap without one);
+   CreateDIBitmap keeping the alpha of a DIB of 32 bits; GdiAlphaBlend with
+   the alpha of each pixel (premultiplied). */
+static void check_mono_indexed_alpha(void)
+{
+    HDC colour_dc = CreateCompatibleDC(0), mono_dc = CreateCompatibleDC(0), four_dc = CreateCompatibleDC(0);
+    DWORD *colour_bits, *source_bits, got = 0;
+    BYTE *four_bits, mono_byte[4] = {0}, four_got[4] = {0};
+    HBITMAP colour = dib_section(2, -1, &colour_bits), source = dib_section(2, -1, &source_bits);
+    HBITMAP mono = CreateBitmap(2, 1, 1, 1, 0), four, made;
+    HGDIOBJ old_colour, old_mono, old_four;
+    HBRUSH red = CreateSolidBrush(RGB(250, 10, 0));
+    BITMAPINFO16 info4;
+    BITMAPINFO3 info;
+    DIBSECTION section;
+    BLENDFUNCTION blend = {0, 0, 255, 1};
+    DWORD alpha_pixel = 0x80402010;
+    BOOL blended;
+
+    if (!colour_dc || !mono_dc || !four_dc || !colour || !source || !mono || !red) {
+        DbgPrint("[bitmap] monochrome, indexed and alpha: no DC or bitmap\n");
+        return;
+    }
+    old_colour = SelectObject(colour_dc, colour);
+    old_mono = SelectObject(mono_dc, mono);
+    colour_bits[0] = BRUSH_PIXEL;
+    colour_bits[1] = RED_PIXEL;
+    SetBkColor(colour_dc, BRUSH);
+    BitBlt(mono_dc, 0, 0, 2, 1, colour_dc, 0, 0, SRCCOPY);
+    header(&info, 2, 1, 1, BI_RGB);
+    GetDIBits(mono_dc, mono, 0, 1, mono_byte, (BITMAPINFO *)&info, DIB_RGB_COLORS);
+    SetTextColor(colour_dc, RGB(0, 0, 255));
+    SetBkColor(colour_dc, RGB(0, 255, 0));
+    BitBlt(colour_dc, 0, 0, 2, 1, mono_dc, 0, 0, SRCCOPY);
+    DbgPrint("[bitmap] BitBlt to monochrome: %02x; back to colours: %08lx %08lx\n", mono_byte[0], colour_bits[0],
+             colour_bits[1]);
+
+    memset(&info4, 0, sizeof info4);
+    info4.bmiHeader.biSize = sizeof info4.bmiHeader;
+    info4.bmiHeader.biWidth = 2;
+    info4.bmiHeader.biHeight = -1;
+    info4.bmiHeader.biPlanes = 1;
+    info4.bmiHeader.biBitCount = 4;
+    info4.bmiHeader.biCompression = BI_RGB;
+    info4.bmiColors[1] = 0x00FF0000;
+    info4.bmiColors[2] = 0x0000FF00;
+    four_bits = 0;
+    four = CreateDIBSection(0, (BITMAPINFO *)&info4, DIB_RGB_COLORS, (void **)&four_bits, 0, 0);
+    old_four = SelectObject(four_dc, four);
+    SelectObject(four_dc, red);
+    PatBlt(four_dc, 0, 0, 1, 1, PATCOPY);
+    memset(&section, 0, sizeof section);
+    GetObjectW(four, sizeof section, &section);
+    info4.bmiColors[1] = 0;
+    GetDIBits(four_dc, four, 0, 1, four_got, (BITMAPINFO *)&info4, DIB_RGB_COLORS);
+    DbgPrint("[bitmap] a DIB section of 4 bits: %u bits, %lu colours; painted near red: %02x; GetDIBits: %02x, its "
+             "red %06lx\n",
+             section.dsBm.bmBitsPixel, section.dsBmih.biClrUsed, four_bits ? four_bits[0] : 0xEE, four_got[0],
+             info4.bmiColors[1]);
+    memset(&info4, 0, sizeof info4);
+    info4.bmiHeader.biSize = sizeof info4.bmiHeader;
+    info4.bmiHeader.biWidth = 2;
+    info4.bmiHeader.biHeight = 1;
+    info4.bmiHeader.biPlanes = 1;
+    info4.bmiHeader.biBitCount = 4;
+    GetDIBits(colour_dc, colour, 0, 0, 0, (BITMAPINFO *)&info4, DIB_RGB_COLORS);
+    DbgPrint("[bitmap] the default table of 4 bits: %06lx %06lx %06lx\n", info4.bmiColors[7], info4.bmiColors[8],
+             info4.bmiColors[9]);
+
+    header(&info, 1, 1, 32, BI_RGB);
+    made = CreateDIBitmap(colour_dc, &info.bmiHeader, 4 /* CBM_INIT */, &alpha_pixel, (BITMAPINFO *)&info,
+                          DIB_RGB_COLORS);
+    header(&info, 1, 1, 32, BI_RGB);
+    GetDIBits(colour_dc, made, 0, 1, &got, (BITMAPINFO *)&info, DIB_RGB_COLORS);
+    DbgPrint("[bitmap] CreateDIBitmap of 32 bits: %s, read back %08lx\n", made ? "a bitmap" : "none", got);
+
+    SelectObject(mono_dc, source);
+    source_bits[0] = 0x80404040;
+    source_bits[1] = 0;
+    colour_bits[0] = colour_bits[1] = 0x00C8C8C8;
+    blended = GdiAlphaBlend(colour_dc, 0, 0, 2, 1, mono_dc, 0, 0, 2, 1, blend);
+    DbgPrint("[bitmap] GdiAlphaBlend: %d, %08lx %08lx\n", blended, colour_bits[0], colour_bits[1]);
+
+    SelectObject(colour_dc, old_colour);
+    SelectObject(mono_dc, old_mono);
+    SelectObject(four_dc, old_four);
+    DeleteObject(colour);
+    DeleteObject(source);
+    DeleteObject(mono);
+    DeleteObject(four);
+    DeleteObject(made);
+    DeleteObject(red);
+    DeleteDC(colour_dc);
+    DeleteDC(mono_dc);
+    DeleteDC(four_dc);
+}
+
 static LRESULT __stdcall bitmap_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
 {
     PAINTSTRUCT paint;
@@ -543,6 +664,7 @@ DWORD __stdcall GuiStartup(void)
             DispatchMessageW(&message);
     DbgPrint("[bitmap] painted: %s\n", painted ? "yes" : "no");
     check_stretch_and_dibits();
+    check_mono_indexed_alpha();
     DbgPrint("[bitmap] done\n");
     /* Its windows go with the process: the scenario captures the screen
      * meanwhile. */

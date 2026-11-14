@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 171 | 737 |
+| win32k | 173 | 737 |
 
 ## ntoskrnl
 
@@ -323,7 +323,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1004` | `NtGdiAddFontMemResourceEx` | 5 |  |
 | `0x1005` | `NtGdiRemoveMergeFont` | 2 |  |
 | `0x1006` | `NtGdiAddRemoteMMInstanceToDC` | 3 |  |
-| `0x1007` | `NtGdiAlphaBlend` | 12 |  |
+| `0x1007` | `NtGdiAlphaBlend` | 12 | ✅ |
 | `0x1008` | `NtGdiAngleArc` | 6 |  |
 | `0x1009` | `NtGdiAnyLinkedFonts` | 0 |  |
 | `0x100a` | `NtGdiFontIsLinked` | 1 |  |
@@ -348,7 +348,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x101d` | `NtGdiCreateCompatibleBitmap` | 3 | ✅ |
 | `0x101e` | `NtGdiCreateCompatibleDC` | 1 | ✅ |
 | `0x101f` | `NtGdiCreateDIBBrush` | 6 |  |
-| `0x1020` | `NtGdiCreateDIBitmapInternal` | 11 |  |
+| `0x1020` | `NtGdiCreateDIBitmapInternal` | 11 | ✅ |
 | `0x1021` | `NtGdiCreateDIBSection` | 9 | ✅ |
 | `0x1022` | `NtGdiCreateEllipticRgn` | 4 |  |
 | `0x1023` | `NtGdiCreateHalftonePalette` | 1 |  |

@@ -23,16 +23,29 @@
 //!
 //! GetDIBits (NtGdiGetDIBitsInternal, GreGetDIBitsInternal) fait l'inverse :
 //! des lignes d'un bitmap en DIB de 1 bit (noir 0, blanc 1, la table de deux
-//! couleurs) ou de 32 bits (l'octet haut tel que le bitmap le garde : l'alpha
-//! d'une DIB section), comptées depuis le bas du bitmap ([`scan_window`],
-//! [`encode_lines`]). C'est ce que la liste d'images de `comctl32` lit des
-//! copies des bitmaps d'une icône (ImageList_ReplaceIcon, add_with_alpha).
+//! couleurs), de 4 ou 8 bits (la table de la DIB section indexée de même
+//! profondeur, sinon la table par défaut : [`default_palette`] ; l'index de
+//! la couleur la plus proche) ou de 32 bits (l'octet haut tel que le bitmap
+//! le garde : l'alpha d'une DIB section), comptées depuis le bas du bitmap
+//! ([`scan_window`], [`encode_lines`]). C'est ce que la liste d'images de
+//! `comctl32` lit des copies des bitmaps d'une icône (ImageList_ReplaceIcon,
+//! add_with_alpha), et la table qu'elle demande pour une liste ILC_COLOR4 ou
+//! ILC_COLOR8.
+//!
+//! Une DIB de 32 bits (BI_RGB, ou les masques de BI_RGB) garde son octet
+//! alpha sur un bitmap de 32 bits, comme EngCopyBits (une traduction
+//! triviale) : les icônes de 32 bits et les bitmaps de la barre d'outils de
+//! `comctl32` gardent leur transparence.
+//!
+//! CreateDIBitmap (NtGdiCreateDIBitmapInternal : [`create_dibitmap`],
+//! IntCreateDIBitmap) : un bitmap monochrome ou en couleurs, initialisé
+//! d'une DIB avec CBM_INIT ; `user32` en fait le bitmap d'alpha d'une icône
+//! (create_alpha_bitmap).
 //!
 //! Pas encore : les ROP autres que SRCCOPY, DIB_PAL_COLORS, les compressions
 //! (RLE, JPEG, PNG), les étendues négatives (l'image retournée), les DC
-//! transformés, l'alpha d'une DIB de 32 bits (perdu : les icônes de 32 bits
-//! se dessinent par leurs masques) ; la conversion vers le monochrome se fait
-//! couleur par couleur, sans la couleur de fond du DC.
+//! transformés ; la conversion vers le monochrome se fait couleur par
+//! couleur, sans la couleur de fond du DC.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -153,6 +166,9 @@ pub struct Dib {
     pub width: u32,
     pub height: u32,
     pixels: Vec<ColorRef>,
+    /// L'alpha de chaque pixel d'une DIB de 32 bits (BI_RGB, ou les masques
+    /// de BI_RGB) ; vide sinon.
+    alpha: Vec<u8>,
 }
 
 impl Dib {
@@ -164,9 +180,15 @@ impl Dib {
             return None;
         }
         let mut pixels = Vec::with_capacity(width * height);
+        let rgb_masks = Some([0x00FF_0000, 0x0000_FF00, 0x0000_00FF]);
+        let with_alpha = format.bit_count == 32 && (format.masks.is_none() || format.masks == rgb_masks);
+        let mut alpha = Vec::with_capacity(if with_alpha { width * height } else { 0 });
         for y in 0..height {
             let line = if format.bottom_up { height - 1 - y } else { y };
             let row = &bits[line * stride..line * stride + stride];
+            if with_alpha {
+                alpha.extend((0..width).map(|x| row[4 * x + 3]));
+            }
             for x in 0..width {
                 let color = match format.bit_count {
                     1 | 4 | 8 => {
@@ -198,7 +220,13 @@ impl Dib {
                 pixels.push(color);
             }
         }
-        Some(Self { width: format.width, height: format.height, pixels })
+        Some(Self { width: format.width, height: format.height, pixels, alpha })
+    }
+
+    /// L'alpha du pixel en (`x`, `y`) ; 0 sans alpha.
+    pub fn alpha(&self, x: u32, y: u32) -> u8 {
+        let at = y as usize * self.width as usize + x as usize;
+        self.alpha.get(at).copied().unwrap_or(0)
     }
 
     /// Le pixel en (`x`, `y`), depuis le coin en haut à gauche.
@@ -265,6 +293,8 @@ pub fn stretch_dibits(
     }
     let state = dc.state();
     let monochrome = state.bitmap.as_ref().is_some_and(|selected| selected.surface.is_monochrome());
+    // A bitmap of 32 bits keeps the alpha byte (a trivial translation).
+    let keep_alpha = state.bitmap.as_ref().is_some_and(|selected| selected.surface.bit_count() == 32);
     let (ox, oy) = dc::logical_origin(&state, None);
     let left = x.saturating_add(ox);
     let top = y.saturating_add(oy);
@@ -281,7 +311,8 @@ pub fn stretch_dibits(
                     let (Ok(sx), Ok(sy)) = (u32::try_from(sx), u32::try_from(sy)) else { continue };
                     let Some(color) = dib.pixel(sx, sy) else { continue };
                     let color = if monochrome { to_monochrome(color) } else { color };
-                    surface.set_pixel(px as u32, py as u32, layout.pixel(color));
+                    let alpha = if keep_alpha { u32::from(dib.alpha(sx, sy)) << 24 } else { 0 };
+                    surface.set_pixel(px as u32, py as u32, layout.pixel(color) | alpha);
                 }
             }
         }
@@ -289,9 +320,152 @@ pub fn stretch_dibits(
     Ok(height_src)
 }
 
-/// GetDIBits sait rendre une DIB de `bit_count` bits par pixel : 1 ou 32.
+/// CBM_INIT : CreateDIBitmap initialise le bitmap des lignes données.
+pub const CBM_INIT: u32 = 4;
+/// CBM_CREATDIB (non documenté) : un bitmap du format de la DIB, et non de
+/// celui du DC.
+pub const CBM_CREATDIB: u32 = 2;
+
+/// IntCreateDIBitmap, son choix : un bitmap monochrome pour une DIB d'un bit
+/// dont la table est noir puis blanc (et donnée : CBM_INIT, `info`,
+/// DIB_RGB_COLORS) ou sans initialisation, ou sans CBM_CREATDIB pour un DC
+/// dont le bitmap est monochrome (un DC en mémoire et son bitmap par défaut,
+/// comme IntCreateCompatibleBitmap) ; en couleurs sinon.
+pub fn dibitmap_is_monochrome(format: Option<&DibFormat>, init: u32, usage: u32, dc_monochrome: bool) -> bool {
+    let black_then_white = |format: &DibFormat| {
+        format.palette.first() == Some(&ColorRef::rgb(0, 0, 0))
+            && format.palette.get(1) == Some(&ColorRef::rgb(255, 255, 255))
+    };
+    match format {
+        Some(format) if format.bit_count == 1 => {
+            usage != DIB_RGB_COLORS || init & CBM_INIT == 0 || black_then_white(format)
+        }
+        Some(_) if init & CBM_CREATDIB != 0 => false,
+        _ => dc_monochrome,
+    }
+}
+
+/// NtGdiCreateDIBitmapInternal (GreCreateDIBitmapInternal) : un bitmap de
+/// `width` × `height` au processus courant, monochrome ou de 32 bits
+/// ([`dibitmap_is_monochrome`] ; le DC `hdc`, ou un DC en mémoire sans lui),
+/// initialisé avec CBM_INIT de la DIB `info` et `bits` (l'alpha d'une DIB de
+/// 32 bits gardé). `Err` : l'erreur de Win32 (`ERROR_INVALID_HANDLE` pour un
+/// DC qui n'est pas au processus, celles de [`DibFormat::parse`], une taille
+/// refusée, sans place).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn create_dibitmap(
+    hdc: u32,
+    (width, height): (i32, i32),
+    init: u32,
+    info: Option<&[u8]>,
+    bits: Option<&[u8]>,
+    usage: u32,
+) -> Result<u32, u32> {
+    let dc_monochrome = match hdc {
+        0 => true,
+        hdc => {
+            let dc = dc::lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+            let state = dc.state();
+            state.bitmap.as_ref().is_some_and(|selected| selected.surface.is_monochrome())
+        }
+    };
+    let init = if bits.is_some() { init } else { init & !CBM_INIT };
+    let format = match info {
+        Some(info) if init & (CBM_INIT | CBM_CREATDIB) != 0 => Some(DibFormat::parse(info, usage)?),
+        _ => None,
+    };
+    let (width, height) = (u32::try_from(width).map_err(|_| ERROR_INVALID_PARAMETER)?, height.unsigned_abs());
+    let monochrome = dibitmap_is_monochrome(format.as_ref(), init, usage, dc_monochrome);
+    let handle = super::surface::create_from_bits(width, height, 1, if monochrome { 1 } else { 32 }, None).map_err(
+        |status| {
+            if status == abi::ntstatus::STATUS_INVALID_PARAMETER {
+                ERROR_INVALID_PARAMETER
+            } else {
+                abi::winerror::ERROR_NOT_ENOUGH_MEMORY
+            }
+        },
+    )?;
+    if let (Some(format), Some(bits), true) = (&format, bits, init & CBM_INIT != 0) {
+        let dib = Dib::decode(format, bits).ok_or(ERROR_INVALID_PARAMETER)?;
+        if let Some(surface) = super::surface::lock(handle, dc::current_pid()) {
+            surface.draw(|bitmap| {
+                let layout = bitmap.layout();
+                for y in 0..height.min(dib.height) {
+                    for x in 0..width.min(dib.width) {
+                        let Some(color) = dib.pixel(x, y) else { continue };
+                        let value = if monochrome {
+                            layout.pixel(to_monochrome(color))
+                        } else {
+                            layout.pixel(color) | (u32::from(dib.alpha(x, y)) << 24)
+                        };
+                        bitmap.set_pixel(x, y, value);
+                    }
+                }
+            });
+        }
+    }
+    Ok(handle)
+}
+
+/// GetDIBits sait rendre une DIB de `bit_count` bits par pixel : 1, 4, 8 ou
+/// 32.
 pub const fn encodes(bit_count: u16) -> bool {
-    matches!(bit_count, 1 | 32)
+    matches!(bit_count, 1 | 4 | 8 | 32)
+}
+
+/// Les 20 couleurs fixes de la palette par défaut (DefLogPaletteQuads) :
+/// les 10 premières et les 10 dernières d'une table de 256.
+const STATIC_COLORS: [(u8, u8, u8); 20] = [
+    (0x00, 0x00, 0x00),
+    (0x80, 0x00, 0x00),
+    (0x00, 0x80, 0x00),
+    (0x80, 0x80, 0x00),
+    (0x00, 0x00, 0x80),
+    (0x80, 0x00, 0x80),
+    (0x00, 0x80, 0x80),
+    (0xC0, 0xC0, 0xC0),
+    (0xC0, 0xDC, 0xC0),
+    (0xA6, 0xCA, 0xF0),
+    (0xFF, 0xFB, 0xF0),
+    (0xA0, 0xA0, 0xA4),
+    (0x80, 0x80, 0x80),
+    (0xFF, 0x00, 0x00),
+    (0x00, 0xFF, 0x00),
+    (0xFF, 0xFF, 0x00),
+    (0x00, 0x00, 0xFF),
+    (0xFF, 0x00, 0xFF),
+    (0x00, 0xFF, 0xFF),
+    (0xFF, 0xFF, 0xFF),
+];
+
+/// La table par défaut d'une DIB de `bit_count` bits que GetDIBits rend d'un
+/// bitmap qui n'en a pas (GreGetDIBitsInternal) : noir et blanc en 1 bit ;
+/// les 16 couleurs de la VGA en 4 bits (les 8 premières couleurs fixes, puis
+/// les 8 dernières) ; en 8 bits, les 10 premières couleurs fixes, le cube de
+/// 6 × 6 × 6, des zéros, les 10 dernières. Vide pour 16 bits et plus.
+pub fn default_palette(bit_count: u16) -> Vec<ColorRef> {
+    let fixed = |range: core::ops::Range<usize>| STATIC_COLORS[range].iter().map(|&(r, g, b)| ColorRef::rgb(r, g, b));
+    match bit_count {
+        1 => alloc::vec![ColorRef::rgb(0, 0, 0), ColorRef::rgb(255, 255, 255)],
+        4 => fixed(0..8).chain(fixed(12..20)).collect(),
+        8 => {
+            let mut table: Vec<ColorRef> = fixed(0..10).collect();
+            for r in 0..6u32 {
+                for g in 0..6u32 {
+                    for b in 0..6u32 {
+                        let level = |v: u32| (v * 0xFF / 5) as u8;
+                        table.push(ColorRef::rgb(level(r), level(g), level(b)));
+                    }
+                }
+            }
+            table.resize(246, ColorRef::rgb(0, 0, 0));
+            table.extend(fixed(10..20));
+            table
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Les octets d'une ligne de `width` pixels de `bit_count` bits, alignée
@@ -318,16 +492,17 @@ pub fn scan_window(bitmap_height: u32, dib_height: u32, start: u32, lines: u32) 
 
 /// Les octets de `lines` lignes, à partir de la ligne `top` (depuis le haut)
 /// d'un bitmap de `width` × `height` pixels de 32 bits (`pixels`, la ligne du
-/// haut d'abord), en DIB de `dib_width` pixels de `bit_count` bits (1 ou 32 :
-/// [`encodes`]), la ligne du bas d'abord sauf `top_down`. Hors du bitmap, des
-/// zéros. En 1 bit, le blanc le plus proche (`to_monochrome`) donne 1.
+/// haut d'abord), en DIB de `dib_width` pixels de `bit_count` bits (1, 4, 8
+/// ou 32 : [`encodes`]), la ligne du bas d'abord sauf `top_down`. Hors du
+/// bitmap, des zéros. En 1 bit, le blanc le plus proche (`to_monochrome`)
+/// donne 1 ; en 4 et 8 bits, l'index de la couleur la plus proche dans
+/// `palette`.
 pub fn encode_lines(
     pixels: &[u32],
     (width, height): (u32, u32),
     top: i64,
     lines: u32,
-    dib_width: u32,
-    bit_count: u16,
+    (dib_width, bit_count, palette): (u32, u16, &[ColorRef]),
     top_down: bool,
 ) -> Vec<u8> {
     let stride = dib_stride(dib_width, bit_count);
@@ -348,6 +523,11 @@ pub fn encode_lines(
                         out[x / 8] |= 0x80 >> (x % 8);
                     }
                 }
+                4 => {
+                    let index = super::surface::nearest_index(palette, layout.color(raw));
+                    out[x / 2] |= if x % 2 == 0 { index << 4 } else { index & 0x0F };
+                }
+                8 => out[x] = super::surface::nearest_index(palette, layout.color(raw)),
                 _ => out[4 * x..4 * x + 4].copy_from_slice(&raw.to_le_bytes()),
             }
         }
@@ -406,7 +586,7 @@ pub fn get_dibits(
         return Err(0);
     }
     let (width, height) = surface.size();
-    let depth: u16 = if surface.is_monochrome() { 1 } else { 32 };
+    let depth = surface.bit_count();
     header.clr_used = 0;
     header.clr_important = 0;
     if header.bit_count == 0 {
@@ -419,8 +599,8 @@ pub fn get_dibits(
         header.compression = if depth == 32 { BI_BITFIELDS } else { BI_RGB };
         header.x_pels_per_meter = 0;
         header.y_pels_per_meter = 0;
-        if depth == 1 {
-            header.clr_used = 2;
+        if depth <= 8 {
+            header.clr_used = 1 << depth;
         }
         return Ok(DibBits { lines: height, header, after_header: Vec::new(), bits: None });
     }
@@ -430,8 +610,25 @@ pub fn get_dibits(
         }
         return Err(ERROR_CALL_NOT_IMPLEMENTED);
     }
+    // An indexed DIB section of the depth asked gives its own table (and
+    // its count, unless 256, as ReactOS); any other bitmap the default one.
+    let palette = match surface.format() {
+        super::surface::Format::Indexed { bit_count, palette } if *bit_count == header.bit_count => {
+            if palette.len() != 256 {
+                header.clr_used = palette.len() as u32;
+            }
+            palette.clone()
+        }
+        _ => default_palette(header.bit_count),
+    };
     let after_header = match (header.bit_count, header.compression) {
-        (1, _) => alloc::vec![0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0],
+        (1 | 4 | 8, _) => palette
+            .iter()
+            .flat_map(|color| {
+                let (r, g, b) = color.components();
+                [b, g, r, 0]
+            })
+            .collect(),
         (32, BI_BITFIELDS) => {
             [0x00FF_0000u32, 0x0000_FF00, 0x0000_00FF].iter().flat_map(|mask| mask.to_le_bytes()).collect()
         }
@@ -447,8 +644,8 @@ pub fn get_dibits(
         return Ok(DibBits { lines: 1, header, after_header, bits: None });
     };
     let Some(pixels) = surface.raw_pixels() else { return Err(0) };
-    let bits =
-        encode_lines(&pixels, (width, height), top, count, header.width as u32, header.bit_count, header.height < 0);
+    let format = (header.width as u32, header.bit_count, &palette[..]);
+    let bits = encode_lines(&pixels, (width, height), top, count, format, header.height < 0);
     Ok(DibBits { lines: count, header, after_header, bits: Some(bits) })
 }
 
@@ -608,22 +805,74 @@ mod tests {
         // byte of the red pixel is its alpha.
         let (white, red, black, gray) = (0x00FF_FFFF, 0x80FF_0000, 0, 0x0040_4040);
         let pixels = [white, red, black, gray];
-        let bottom_up = encode_lines(&pixels, (2, 2), 0, 2, 2, 32, false);
+        let bottom_up = encode_lines(&pixels, (2, 2), 0, 2, (2, 32, &[]), false);
         assert_eq!(bottom_up.len(), 16);
         assert_eq!(&bottom_up[..8], &[0, 0, 0, 0, 0x40, 0x40, 0x40, 0], "the bottom line first");
         assert_eq!(&bottom_up[8..], &[0xFF, 0xFF, 0xFF, 0, 0, 0, 0xFF, 0x80], "BGRA, the alpha kept");
-        let top_down = encode_lines(&pixels, (2, 2), 0, 2, 2, 32, true);
+        let top_down = encode_lines(&pixels, (2, 2), 0, 2, (2, 32, &[]), true);
         assert_eq!(&top_down[..8], &bottom_up[8..], "the top line first");
-        let mono = encode_lines(&pixels, (2, 2), 0, 2, 2, 1, false);
+        let mono = encode_lines(&pixels, (2, 2), 0, 2, (2, 1, &[]), false);
         assert_eq!(mono, [0b0000_0000, 0, 0, 0, 0b1000_0000, 0, 0, 0], "white is 1; lines of 4 bytes");
-        let wider = encode_lines(&pixels, (2, 2), 0, 1, 3, 32, true);
+        let wider = encode_lines(&pixels, (2, 2), 0, 1, (3, 32, &[]), true);
         assert_eq!(wider.len(), 12);
         assert_eq!(&wider[8..], &[0, 0, 0, 0], "past the bitmap's width: zeros");
-        let above = encode_lines(&pixels, (2, 2), -1, 2, 2, 32, true);
+        let above = encode_lines(&pixels, (2, 2), -1, 2, (2, 32, &[]), true);
         assert_eq!(&above[..8], &[0; 8], "above the bitmap: zeros");
         assert_eq!(&above[8..12], &[0xFF, 0xFF, 0xFF, 0]);
-        assert!(encodes(1) && encodes(32) && !encodes(24) && !encodes(4));
+        assert!(encodes(1) && encodes(4) && encodes(8) && encodes(32) && !encodes(24) && !encodes(16));
+        // 4 bits: the index of the nearest colour of the table, two a byte.
+        let vga = default_palette(4);
+        let four = encode_lines(&pixels, (2, 2), 0, 2, (2, 4, &vga), true);
+        assert_eq!(
+            four,
+            [0xF9, 0, 0, 0, 0x00, 0, 0, 0],
+            "white 15 and red 9; black, and 40 40 40 as near black as gray: the first, 0"
+        );
+        let eight = encode_lines(&pixels, (2, 2), 0, 1, (2, 8, &default_palette(8)), true);
+        assert_eq!(&eight[..2], &[225, 190], "white and red: the cube's, before the fixed colours at the end");
         assert_eq!((dib_stride(16, 1), dib_stride(33, 1), dib_stride(3, 32)), (4, 8, 12));
+    }
+
+    #[test]
+    fn a_dib_of_32_bits_keeps_its_alpha() {
+        let format = DibFormat::parse(&info(2, -1, 32, &[]), DIB_RGB_COLORS).expect("valid");
+        let dib = Dib::decode(&format, &[1, 2, 3, 0x80, 4, 5, 6, 0xFF]).expect("one line");
+        assert_eq!((dib.alpha(0, 0), dib.alpha(1, 0)), (0x80, 0xFF));
+        assert_eq!(dib.pixel(0, 0), Some(ColorRef::rgb(3, 2, 1)));
+        let format = DibFormat::parse(&info(1, 1, 24, &[]), DIB_RGB_COLORS).expect("valid");
+        assert_eq!(Dib::decode(&format, &[1, 2, 3, 0]).map(|dib| dib.alpha(0, 0)), Some(0), "24 bits: no alpha");
+    }
+
+    #[test]
+    fn create_dibitmap_chooses_monochrome_as_reactos() {
+        let mono_table = DibFormat::parse(&info(1, 1, 1, &[BLACK, WHITE]), DIB_RGB_COLORS).unwrap();
+        let other_table = DibFormat::parse(&info(1, 1, 1, &[WHITE, BLACK]), DIB_RGB_COLORS).unwrap();
+        let colors = DibFormat::parse(&info(1, 1, 32, &[]), DIB_RGB_COLORS).unwrap();
+        assert!(dibitmap_is_monochrome(Some(&mono_table), CBM_INIT, DIB_RGB_COLORS, false), "black then white");
+        assert!(!dibitmap_is_monochrome(Some(&other_table), CBM_INIT, DIB_RGB_COLORS, false), "white then black");
+        assert!(dibitmap_is_monochrome(Some(&other_table), 0, DIB_RGB_COLORS, false), "one bit, no CBM_INIT");
+        assert!(!dibitmap_is_monochrome(Some(&colors), CBM_CREATDIB, DIB_RGB_COLORS, true), "the DIB's format");
+        assert!(dibitmap_is_monochrome(Some(&colors), CBM_INIT, DIB_RGB_COLORS, true), "the DC's: monochrome");
+        assert!(!dibitmap_is_monochrome(None, 0, DIB_RGB_COLORS, false), "the screen's");
+    }
+
+    #[test]
+    fn the_default_tables() {
+        assert_eq!(default_palette(1), [BLACK, WHITE]);
+        let vga = default_palette(4);
+        assert_eq!(vga.len(), 16);
+        assert_eq!(
+            [vga[7], vga[8], vga[9], vga[15]],
+            [ColorRef::rgb(0xC0, 0xC0, 0xC0), ColorRef::rgb(0x80, 0x80, 0x80), ColorRef::rgb(255, 0, 0), WHITE],
+            "silver, then gray: the VGA order"
+        );
+        let table = default_palette(8);
+        assert_eq!(table.len(), 256);
+        assert_eq!(table[10], BLACK, "the cube starts black");
+        assert_eq!(table[10 + 215], WHITE, "and ends white");
+        assert_eq!(table[10 + 36], ColorRef::rgb(0x33, 0, 0), "red 1 of 5");
+        assert_eq!((table[246], table[255]), (ColorRef::rgb(0xFF, 0xFB, 0xF0), WHITE));
+        assert!(default_palette(32).is_empty());
     }
 
     #[test]

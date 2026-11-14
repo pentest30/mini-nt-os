@@ -352,7 +352,15 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   et 32 bits), StretchBlt (`gdi::bitblt::stretch_blt`), GetNearestColor, BI_BITFIELDS de StretchDIBits ;
   NtUserGetAtomName écrit dans le UNICODE_STRING de l'appelant (il écrasait la pile), un SendMessage qui échoue rend 0
   dans `ResultInfo` : le cache d'icônes de `shell32` ne boucle plus, la vue liste `C:\` avec ses icônes ; scénario
-  `notepad-saveas`. Pas encore : l'alpha des images de 32 bits, BitBlt couleur ↔ monochrome.
+  `notepad-saveas`.
+  M6, étape 30 (les images de `comctl32`) : BitBlt et StretchBlt entre un bitmap monochrome et des couleurs
+  (`gdi::bitblt::Convert` : la couleur de fond du DC source, celles du texte et du fond de la destination) ; l'alpha
+  des images de 32 bits (StretchDIBits le garde, les ROP avec source portent sur 32 bits, NtGdiCreateDIBitmapInternal
+  `gdi::dibits::create_dibitmap`, NtGdiAlphaBlend `gdi::bitblt::alpha_blend`, le pixel d'une icône prémultiplié ;
+  `user32` fait enfin le bitmap d'alpha des curseurs et icônes de 32 bits, mélangés par leur alpha et non leurs masques) ;
+  les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`, la couleur la plus proche) et GetDIBits de 4 et 8
+  bits (`gdi::dibits::default_palette`) : la barre d'outils de la boîte Enregistrer sous, sa barre des emplacements et
+  les icônes du gestionnaire des tâches s'affichent justes.
   M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
   NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
   NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),
