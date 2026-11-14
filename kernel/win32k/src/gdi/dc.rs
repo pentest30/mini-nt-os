@@ -984,6 +984,27 @@ pub fn pat_blt(hdc: u32, x: i32, y: i32, width: i32, height: i32, rop: u32) -> R
     Ok(true)
 }
 
+/// Le remplissage d'IntPaintDesktop sans papier peint : sur le DC `hdc`,
+/// sa boîte de découpage ([`clip_box`]) prend le pinceau `brush` (celui de
+/// la classe du bureau) par PATCOPY, comme NtGdiSelectBrush, NtGdiPatBlt
+/// puis le pinceau d'avant rendu : celui que le DC a choisi ne change pas.
+/// Comme ReactOS, le PatBlt part du coin de la boîte avec sa droite et son
+/// bas pour largeur et hauteur ; la région de découpage le borne. FALSE
+/// sans erreur pour un pinceau qui n'en est pas un. `Err` : l'erreur de
+/// Win32 (`ERROR_INVALID_HANDLE` pour un DC qui n'est pas au processus).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn fill_with_brush(hdc: u32, brush: u32) -> Result<bool, u32> {
+    let dc = lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    let Some(brush) = resolve_brush(brush) else { return Ok(false) };
+    let state = dc.state();
+    let (_, bounds) = clip_box(&state);
+    let rect = pat_rect(bounds.left, bounds.top, bounds.right, bounds.bottom, logical_origin(&state, None));
+    paint(&state, rect, abi::gdi::rop::PATCOPY, &fill_of(&state, &brush, None));
+    Ok(true)
+}
+
 /// Un PatBlt mis en lot (GdiBCPatBlt, `call`) sur `dc`, avec le pinceau et
 /// les couleurs du texte et du fond qu'il apporte (celles d'un motif
 /// monochrome). Son origine est celle des attributs du DC quand le lot

@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 169 | 737 |
+| win32k | 170 | 737 |
 
 ## ntoskrnl
 
@@ -788,7 +788,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11d5` | `NtUserOpenDesktop` | 3 | ✅ |
 | `0x11d6` | `NtUserOpenInputDesktop` | 3 |  |
 | `0x11d7` | `NtUserOpenWindowStation` | 2 | ✅ |
-| `0x11d8` | `NtUserPaintDesktop` | 1 |  |
+| `0x11d8` | `NtUserPaintDesktop` | 1 | ✅ |
 | `0x11d9` | `NtUserPeekMessage` | 5 | ✅ |
 | `0x11da` | `NtUserPostMessage` | 4 | ✅ |
 | `0x11db` | `NtUserPostThreadMessage` | 4 | ✅ |

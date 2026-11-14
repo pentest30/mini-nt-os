@@ -304,6 +304,45 @@ impl Desktop {
     }
 }
 
+/// IntPaintDesktop (PaintDesktop : NtUserPaintDesktop) : le DC `hdc` prend,
+/// dans sa boîte de découpage, le pinceau de la classe de la fenêtre du
+/// bureau du thread courant (COLOR_BACKGROUND : la classe garde la forme
+/// « couleur + 1 », ramenée au pinceau public de la couleur), comme le
+/// fond du bureau sans papier peint. Pas encore : le papier peint
+/// (SPI_SETDESKWALLPAPER), le texte de version (PaintDesktopVersion), le
+/// fond noir du mode sans échec (SM_CLEANBOOT, jamais levé).
+///
+/// # Errors
+/// L'erreur Win32 : `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au
+/// processus (GdiGetClipBox), `ERROR_INVALID_WINDOW_HANDLE` pour un thread
+/// sans bureau (UserGetWindowObject de la fenêtre du bureau).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système.
+pub fn paint_desktop(hdc: u32) -> Result<bool, u32> {
+    crate::gdi::dc::lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    let desktop = ps::ethread::current_thread()
+        .and_then(|thread| thread.win32_thread())
+        .map(crate::gui::thread_info)
+        .and_then(|thread| thread.desktop())
+        .ok_or(abi::winerror::ERROR_INVALID_WINDOW_HANDLE)?;
+    let window = &desktop.desktop.window;
+    let mut background = [0u8; 4];
+    let at = u64::from(window.cls) + offset_of!(abi::user::Cls32, background) as u64;
+    window.heap.section.read_kernel(at, &mut background).map_err(|_| abi::winerror::ERROR_INVALID_WINDOW_HANDLE)?;
+    crate::gdi::dc::fill_with_brush(hdc, class_brush_handle(u32::from_le_bytes(background)))
+}
+
+/// Le pinceau d'une classe : une couleur du système plus un (`COLOR_* + 1`,
+/// jusqu'à COLOR_MENUBAR) désigne le pinceau public de cette couleur ; le
+/// reste est un handle de pinceau.
+pub fn class_brush_handle(background: u32) -> u32 {
+    match background as usize {
+        index @ 1..=abi::user::NUM_SYSCOLORS => crate::gdi::brush::sys_color_brush(index - 1),
+        _ => background,
+    }
+}
+
 /// Le `DESKTOPINFO` d'un bureau dont le tas va de `base` à `limit`
 /// (adresses du serveur) et dont il occupe l'adresse `at` : ses chaînes de
 /// crochets vides (chaque tête pointe sur elle-même), ni fenêtre ni shell.
@@ -432,6 +471,13 @@ mod tests {
         ranges.give(0x10, 0x10, 8);
         assert_eq!(ranges, FreeRanges::new(0, 0x100), "all merged back");
         assert_eq!(ranges.take(0x101, 8), None, "too big");
+    }
+
+    #[test]
+    fn a_class_brush_past_the_system_colours_is_a_handle() {
+        assert_eq!(class_brush_handle(0), 0, "no brush");
+        assert_eq!(class_brush_handle(0x0110_0010), 0x0110_0010, "a brush handle");
+        assert_eq!(class_brush_handle(abi::user::NUM_SYSCOLORS as u32 + 1), abi::user::NUM_SYSCOLORS as u32 + 1);
     }
 
     #[test]

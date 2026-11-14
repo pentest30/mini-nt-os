@@ -397,6 +397,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserShowWindow, Handler::Status(window::nt_user_show_window)),
     (services::NtUserShowWindowAsync, Handler::Status(window::nt_user_show_window_async)),
     (services::NtUserSwitchDesktop, Handler::Status(desktop::nt_user_switch_desktop)),
+    (services::NtUserPaintDesktop, Handler::Status(desktop::nt_user_paint_desktop)),
     (services::NtUserSystemParametersInfo, Handler::Status(user::nt_user_system_parameters_info)),
     (services::NtUserToUnicodeEx, Handler::Status(input::nt_user_to_unicode_ex)),
     (services::NtUserTranslateAccelerator, Handler::Status(accel::nt_user_translate_accelerator)),

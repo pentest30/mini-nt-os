@@ -1,6 +1,6 @@
 //! Les services des bureaux (`win32k::desktop`, `win32k::gui`) :
 //! NtUserCreateDesktop, NtUserOpenDesktop, NtUserCloseDesktop,
-//! NtUserSetThreadDesktop, NtUserSwitchDesktop.
+//! NtUserSetThreadDesktop, NtUserSwitchDesktop, NtUserPaintDesktop.
 //!
 //! Ils rendent une valeur (un handle, un BOOL) : un échec rend 0, avec
 //! l'erreur Win32 du statut comme dernière erreur (SetLastNtError).
@@ -199,6 +199,19 @@ pub(super) fn nt_user_set_thread_desktop(arguments: &[u32]) -> NtStatus {
         win32k::gui::set_thread_desktop(handle, desktop)
     };
     boolean(set())
+}
+
+/// NtUserPaintDesktop(hDC) : BOOL, le fond du bureau peint dans la boîte de
+/// découpage du DC (`win32k::desktop::paint_desktop`) ; FALSE et l'erreur
+/// pour un DC qui n'est pas au processus ou un thread sans bureau.
+pub(super) fn nt_user_paint_desktop(arguments: &[u32]) -> NtStatus {
+    match win32k::desktop::paint_desktop(arguments[0]) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => {
+            let _ = win32k::set_last_error(error);
+            NtStatus(0)
+        }
+    }
 }
 
 /// NtUserSwitchDesktop(hDesktop) : le bureau du handle

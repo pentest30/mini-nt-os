@@ -7,6 +7,7 @@ EXPORTS
 BitBlt@36
 CombineRgn@16
 CreateBitmap@20
+CreateCompatibleBitmap@12
 CreateCompatibleDC@4
 CreateDIBSection@24
 CreateFontW@56
@@ -18,6 +19,7 @@ ExtSelectClipRgn@12
 ExtTextOutW@32
 GdiFlush@0
 GetClipBox@8
+GetCurrentObject@8
 GetDeviceCaps@8
 GetObjectType@4
 GetObjectW@12
