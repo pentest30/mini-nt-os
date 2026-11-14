@@ -79,11 +79,15 @@ static inline HWND app_wait_window(const PROCESS_INFORMATION *process, const WCH
    the SendMessage result of a missing header the view asserted. */
 #define APP_LST2 0x0461
 #define APP_LVM_GETITEMCOUNT 0x1004
+static inline int app_file_view_count(HWND dialog)
+{
+    HWND list=GetDlgItem(GetDlgItem(dialog,APP_LST2),1);
+    return list ? (int)SendMessageW(list,APP_LVM_GETITEMCOUNT,0,0) : 0;
+}
 static inline int app_file_view(const PROCESS_INFORMATION *process, HWND dialog)
 {
     for(unsigned int n=0;n<240;++n) {
-        HWND list=GetDlgItem(GetDlgItem(dialog,APP_LST2),1);
-        int count=list ? (int)SendMessageW(list,APP_LVM_GETITEMCOUNT,0,0) : 0;
+        int count=app_file_view_count(dialog);
         if(count>0) return count;
         app_alive(process); Sleep(50);
     }

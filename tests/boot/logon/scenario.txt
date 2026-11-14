@@ -7,9 +7,12 @@
 # First boot: samsrv makes the accounts (setup mode), winlogon starts
 # MINOINIT.EXE (SYSTEM\Setup\CmdLine), which waits for Administrator in
 # the SAM, makes the profiles (userenv's InitializeProfiles: C:\Documents
-# and Settings, a long-named directory), copies HKU\.DEFAULT, written back,
-# as NTUSER.DAT of Default User, sets SetupType = 0, writes the hives back
-# and reboots. Every step logs "[minoinit] ..."; a failed step stops it
+# and Settings, a long-named directory), registers shell32 (its
+# DllRegisterServer, as syssetup's RegistrationPhase2: the CLSIDs of the
+# shell's folders under HKCR; advapi32 asks the name of each key it creates
+# there by NtQueryKey, which a handle without KEY_QUERY_VALUE must get),
+# copies HKU\.DEFAULT, written back, as NTUSER.DAT of Default User, sets
+# SetupType = 0, writes the hives back and reboots. Every step logs "[minoinit] ..."; a failed step stops it
 # ("[minoinit] stopped: ..."). It also logs its environment: smss passes on
 # SystemDrive, which the kernel gives it as ReactOS's does.
 #
@@ -39,6 +42,7 @@ timeout = 300
 
 expect = [boot] .DEFAULT hive mounted at \REGISTRY\USER\.DEFAULT
 expect = [minoinit] environment: SystemDrive=C:
+expect = [minoinit] shell32.dll registered
 expect = [minoinit] done; rebooting
 expect = IncrementRefCount(S-1-5-21-
 expect = We are logged on

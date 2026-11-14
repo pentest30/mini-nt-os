@@ -1400,8 +1400,8 @@ moteur GDI, dans l'ordre où ils jouaient :
 
 Pas encore : les DIB sections de 1, 16 et 24 bits, une table DIB_PAL_COLORS, SetDIBits, la couleur de fond d'un DC
 dans StretchDIBits vers le monochrome, StretchBlt et AlphaBlend d'une étendue négative, MaskBlt ; « My Documents » et
-« My Computer » de la barre des emplacements montrent l'icône de document par défaut (l'index de leur icône dans le
-cache de `shell32` n'est pas trouvé : à voir avec le registre du shell).
+« My Computer » de la barre des emplacements montrent l'icône de document par défaut (fait à l'étape 31 : `shell32`
+n'était pas enregistré).
 
 Tests : hôte (`surface` : l'index le plus proche, décodage et réécriture d'une DIB de 4 et 8 bits, la géométrie ;
 `object` : le DIBSECTION d'une DIB de 4 bits ; `dibits` : l'alpha d'une DIB de 32 bits, le choix monochrome de
@@ -1413,3 +1413,45 @@ bouton « Up » et un pixel transparent de son image (noir avant), un coin trans
 `desktop-launch` : le teal de la barre de titre de l'icône de `cmd` (noire avant), et l'ombre du T de « End Task »,
 dans la lettre (le texte désactivé, lu au noir exact, disparaissait). Douze mutations, une par correction, font
 chacune échouer un test.
+
+## Étape 31 : la barre des emplacements de la boîte Enregistrer sous (`shell32` enregistré)
+
+Après l'étape 30, la barre des emplacements montrait trois emplacements au lieu des cinq de ReactOS (Recent, Desktop,
+My Documents, My Computer, My Network Places : filedlg_collect_places_pidls de `comdlg32`), et « My Documents » et
+« My Computer » y avaient le papier blanc d'IDI_SHELL_DOCUMENT. `shell32` tire l'icône d'un dossier à CLSID de
+`HKCR\CLSID\{…}\DefaultIcon` (CGuidItemExtractIcon_CreateInstance), et prend le papier blanc faute de mieux. Ces
+clés n'existaient pas : elles viennent des scripts que DllRegisterServer de `shell32` applique (ses ressources
+`REGISTRY` : My Computer, My Documents, My Network Places…), et c'est l'installation de ReactOS qui l'appelle
+(`syssetup.inf`, RegistrationPhase2 ; `setup -mini` du LiveCD aussi). `minoinit.exe`, qui tient ce rôle chez Mino,
+ne le faisait pas (ADR-023 : l'enregistrement des DLL restait à faire).
+
+1. **NtQueryKey(KeyNameInformation) pour un handle sans KEY_QUERY_VALUE** (`sys::registry`,
+   `ob::HandleTable::reference_as_with_any_access`) : comme NtQueryKey de ReactOS, le nom d'une clé se lit avec un
+   droit quelconque, pas aucun ; les autres classes demandent KEY_QUERY_VALUE. L'émulation de HKCR d'`advapi32`
+   (`hkcr.c`) demande le nom de chaque clé qu'elle crée avec KEY_WRITE : elle recevait `STATUS_ACCESS_DENIED`, et
+   DllRegisterServer de `shell32` rendait E_FAIL.
+2. **`minoinit.exe` enregistre `shell32`** (`tests/native/minoinit.c`, son étape 3, entre les profils et la ruche de
+   `Default User`, comme RegistrationPhase2 vient après les profils) : les CLSID des dossiers du shell et leurs
+   icônes sous HKCR, les dossiers du shell de l'utilisateur (SHELL_RegisterShellFolders). Un échec se journalise sans
+   arrêter, comme dans `syssetup`. Des DLL de RegistrationPhase2, seul `shell32` est enregistré : les autres ne sont
+   pas sur le disque ou ne servent pas encore.
+3. **NtSetInformationFile(FileBasicInformation) d'un tampon aligné sur 4** (`sys::file`) : la sonde demandait 8, ReactOS
+   `sizeof(ULONG)`, comme notre NtQueryInformationFile. CopyFileW de `kernel32` pose les dates de la copie depuis une
+   variable locale qu'une pile i386 n'aligne que sur 4 : ses cadres déplacés, la copie du `NTUSER.DAT` de
+   `Default User` par `minoinit` échouait (`STATUS_DATATYPE_MISALIGNMENT`, ERROR_NOACCESS).
+
+Un Mino installé montre ainsi les cinq emplacements avec leurs icônes. Le dossier « My Documents » existant, la boîte
+s'ouvre dedans, comme sous XP quand l'application ne donne pas de répertoire (CSIDL_PERSONAL).
+
+Vu, pas fait : « Recent » s'affiche « RECENT » : Io crée un nom que le format 8.3 tient sans entrée de nom long, donc
+en majuscules (`io::fat_volume`, `create`) ; FastFAT de ReactOS et XP gardent la casse d'un nom mixte par une entrée
+de nom long.
+
+Tests : hôte (`ob` : un droit quelconque suffit, aucun ne suffit pas). La sonde de `dir` pose les dates de
+`KERNEL.BIN` depuis un tampon à 4 octets d'un multiple de 8. La sonde de `notepad-saveas` enregistre
+`shell32` comme `minoinit` (DllRegisterServer rend 0), puis tape `C:\` dans le nom de fichier pour revenir à la
+racine ; le bleu du dossier de « My Documents » et l'écran de « My Computer » (les icônes 235 et 16 de `shell32`,
+recalculées à part depuis ses ressources : identiques au pixel près) ; le coin transparent vérifié est maintenant
+celui de « Recent ». `logon` : `[minoinit] shell32.dll registered`. Quatre mutations font chacune échouer un test :
+NtQueryKey qui demande KEY_QUERY_VALUE pour le nom (`notepad-saveas`), une référence sans aucun droit acceptée
+(hôte), FileBasicInformation aligné sur 8 (`dir`), `minoinit` sans l'enregistrement (`logon`).

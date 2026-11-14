@@ -361,6 +361,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`, la couleur la plus proche) et GetDIBits de 4 et 8
   bits (`gdi::dibits::default_palette`) : la barre d'outils de la boîte Enregistrer sous, sa barre des emplacements et
   les icônes du gestionnaire des tâches s'affichent justes.
+  M6, étape 31 (la barre des emplacements) : `minoinit.exe` enregistre `shell32` (DllRegisterServer, RegistrationPhase2
+  de `syssetup.inf`) ; NtQueryKey(KeyNameInformation) accepte un handle qui porte un droit quelconque
+  (`ob::HandleTable::reference_as_with_any_access`) ; NtSetInformationFile(FileBasicInformation) sonde sur 4
+  octets, comme ReactOS : les CLSID du shell et leurs icônes sous HKCR, les cinq emplacements de la boîte
+  Enregistrer sous avec leurs icônes.
   M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
   NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
   NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),

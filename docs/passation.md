@@ -1,5 +1,18 @@
 # Notes de passation
 
+- **La barre des emplacements de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée
+  ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). « My Documents » et « My Computer »
+  avaient le papier blanc : leurs CLSID manquaient sous HKCR, que DllRegisterServer de `shell32` écrit et que
+  l'installation de ReactOS appelle (RegistrationPhase2). `minoinit.exe` enregistre maintenant `shell32` ; il fallait
+  pour cela que NtQueryKey(KeyNameInformation) accepte un handle sans KEY_QUERY_VALUE (un droit quelconque, comme
+  ReactOS : `ob::HandleTable::reference_as_with_any_access`), et que NtSetInformationFile(FileBasicInformation)
+  accepte un tampon aligné sur 4 (CopyFileW du `NTUSER.DAT` de `Default User` échouait une fois les cadres de
+  `minoinit` déplacés). La barre montre les cinq emplacements de ReactOS avec leurs icônes ; la boîte s'ouvre dans
+  « My Documents », créé par l'enregistrement. Tests : hôte (`ob`) ; `dir` (les dates d'un fichier depuis un tampon
+  aligné sur 4) ; `notepad-saveas` (sa sonde enregistre `shell32`, tape `C:\` ; un pixel de chaque icône) ; `logon`
+  (`[minoinit] shell32.dll registered`) ; quatre mutations. **Vu, pas fait** : « Recent » s'affiche « RECENT » (Io crée un nom 8.3
+  sans nom long : la casse se perd) ; les autres DLL de RegistrationPhase2.
+
 - **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). La barre d'outils de la boîte Enregistrer sous, sa
   barre des emplacements et les icônes des tâches du gestionnaire des tâches s'affichent justes : BitBlt et
@@ -12,8 +25,8 @@
   d'`icons` ont changé (recalculés à part depuis les ressources de `user32.dll`, identiques). Tests : hôte ; la sonde de `bitmap` (BitBlt monochrome, DIB section de 4 bits,
   CreateDIBitmap, GdiAlphaBlend) ; des pixels de `notepad-saveas` (la barre d'outils, l'icône « Desktop ») et de
   `desktop-launch` (l'icône de `cmd`). Douze mutations font chacune échouer un test (sans DIB section indexée, index réécrits à 0, table par défaut dans l'ancien ordre, sans conversion monochrome, source monochrome lue au noir exact, couleur de fond comparée avec son octet haut, StretchDIBits sans alpha, sans CreateDIBitmap, sans AlphaBlend, AlphaBlend sans l'alpha des pixels, ROP qui effacent l'alpha, alpha d'icône non prémultiplié). **Vu, pas fait** : les DIB sections de 1, 16 et 24 bits,
-  DIB_PAL_COLORS, SetDIBits, MaskBlt ; « My Documents » et « My Computer » de la barre des emplacements montrent
-  l'icône de document par défaut (l'index de leur icône dans le cache de `shell32`).
+  DIB_PAL_COLORS, SetDIBits, MaskBlt ; « My Documents » et « My Computer » de la barre des emplacements montraient
+  l'icône de document par défaut (fait : l'entrée ci-dessus).
 
 - **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
   `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 29). Sous VirtualBox la boîte « Save As »
