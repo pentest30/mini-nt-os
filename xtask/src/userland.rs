@@ -122,8 +122,10 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     .map(String::from)
     .chain(KNOWN_DLLS.iter().map(|dll| format!("{dll}.dll")))
     .collect();
-    let (imported, missing) = import_closure(&files, |file| {
-        let path = system32_file(ws, file)?;
+    // The programs of `WINDOWS` import from system32 like the others.
+    let closure_roots: Vec<String> = files.iter().cloned().chain(WINDOWS_FILES.iter().map(|f| f.to_string())).collect();
+    let (imported, missing) = import_closure(&closure_roots, |file| {
+        let path = system32_file(ws, file).or_else(|| windows_file(ws, file))?;
         let bytes = fs::read(&path).ok()?;
         let pe = pe::Pe32::parse(&bytes).ok()?;
         Some(pe.imports().map(|import| import.dll_name().to_ascii_lowercase()).collect())
@@ -135,10 +137,28 @@ pub fn boot_files(ws: &Workspace) -> Option<Vec<(PathBuf, String)>> {
     let system32 = files
         .into_iter()
         .map(|file| system32_file(ws, &file).map(|path| (path, format!("{SYSTEM32}/{}", file.to_ascii_uppercase()))));
+    let windows = WINDOWS_FILES
+        .iter()
+        .map(|file| windows_file(ws, file).map(|path| (path, format!("{WINDOWS_DIR}/{}", file.to_ascii_uppercase()))));
     let fonts = FONTS
         .iter()
         .map(|font| fonts_file(ws, font).map(|path| (path, format!("{FONTS_DIR}/{}", font.to_ascii_uppercase()))));
-    system32.chain(fonts).collect()
+    system32.chain(windows).chain(fonts).collect()
+}
+
+/// The Windows directory on the boot disk (`%SystemRoot%`).
+const WINDOWS_DIR: &str = "WINDOWS";
+
+/// The programs of the fetched userland's Windows directory that the boot
+/// disk takes: the shell, which userinit starts from `%SystemRoot%`
+/// (`Winlogon\Shell`, M6).
+const WINDOWS_FILES: [&str; 1] = ["explorer.exe"];
+
+/// The file `name` of the fetched userland's Windows directory (the parent
+/// of `system32`); `None` until `fetch-userland` ran, or without it.
+fn windows_file(ws: &Workspace, name: &str) -> Option<PathBuf> {
+    let file = system32_file(ws, "ntdll.dll")?.parent()?.parent()?.join(name);
+    file.is_file().then_some(file)
 }
 
 /// The hives of the boot disk under the Mino layer (ADR-023,

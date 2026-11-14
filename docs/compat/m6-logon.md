@@ -69,10 +69,41 @@ que le logon s'arrête aujourd'hui.**
 - NtLoadKey refuse un fichier désigné relativement à un répertoire ouvert (`STATUS_NOT_IMPLEMENTED`) : sa réécriture
   demande son nom entier.
 
+## Le shell : `explorer.exe`
+
+`explorer.exe` est sur le disque, dans `C:\WINDOWS` (`WINDOWS_FILES`, `xtask/src/userland.rs` : la fermeture de ses
+imports vient avec, `browseui` compris). `userinit` le lance sous le jeton de l'utilisateur.
+
+**Le premier lancement a mis au jour un bogue du noyau.** `explorer` mourait (`c0000096`, une instruction privilégiée à
+l'adresse `0x006E0057`) dans la création de sa barre des tâches. Ses registres sauvés portaient les mots successifs de
+« Shell_TrayWnd » en UTF-16 : EBX « l_ », EDI « Tr », EBP « ay », et l'adresse de retour « Wn ». NtUserGetAtomName
+prend une UNICODE_STRING (`pustrName`, useratom.c), que `user32` pose sur sa pile quand une classe est donnée par
+son atome (ClassNameToVersion, VersionRegisterClass, autour de CreateWindowEx et de RegisterClass) ; Mino la prenait
+pour le tampon et y écrivait le nom entier, au-delà de ses 8 octets. Le même motif (« SHELLDLL_DefView » sur la pile)
+faisait planter la boîte Enregistrer sous du Bloc-notes avant la PR 127. NtUserGetAtomName suit maintenant
+useratom.c :
+
+- le nom vient de la table de USER comme RtlQueryAtomInAtomTable le rend (`win32k::atom::query_name`) : 255
+  caractères au plus (IntGetAtomName), « #n » pour un atome entier (NtQueryInformationAtom aussi, qui rendait les
+  chiffres sans « # ») ;
+- la UNICODE_STRING est lue, son tampon sondé sur `MaximumLength` ; le nom y est tronqué pour laisser la place du nul
+  (`win32k::atom::copied_name_units`), rien sans cette place ; le service rend le nombre de caractères copiés ;
+- 0 pour un thread sans bureau (IntGetAtomName) ; 0 et la dernière erreur pour un atome inconnu ou une adresse fautive.
+
+**Où `explorer` va maintenant.** Il crée sa barre des tâches, peinte en bas de l'écran (vide : ni bouton Démarrer ni
+horloge), puis son bureau : `desktop.cpp:193` (« Unexpected failure », E_FAIL), et dans le thread du bureau une
+assertion, de `shell32` (CDefView.cpp:1178, MapFolderColumnToListColumn) ou d'ATL (atlcomcli.h:208, `p != 0`) selon
+l'ordre des threads. En chemin : BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo
+(classes 0x2B, 0x2F, 0x100A), les fenêtres message seul (HWND_MESSAGE), NtUserGetIconInfo, NtGdiGetDIBitsInternal,
+NtUserRemoveProp, NtUserSetWindowRgn, NtUserCallOneParam (0x1E, 0x27), le fond du bureau repeint à la demande.
+Les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage : `msgina` leur donne un chemin sans
+station, que win32k ne résout pas encore (la station du processus, IntResolveDesktop).
+
 ## La suite
 
-Mettre `explorer.exe` sur le disque et suivre ce qu'il demande : `shell32` (dossiers du shell, icônes), la barre des
-tâches (crochets, `SetWindowsHookEx`, presse-papiers, notifications), `NtNotifyChangeKey`, puis le bureau du critère.
+Le bureau d'`explorer` : la cause de `desktop.cpp:193` et des assertions de son thread, la station par défaut d'un
+chemin de bureau, puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
+presse-papiers, notifications, `NtNotifyChangeKey`) et le bureau du critère.
 
 ## Tests
 
@@ -80,10 +111,13 @@ Hôte : `se` (un jeton créé tel qu'on l'a donné, le propriétaire et le group
 d'identité créé, la copie « effective only »), `cm` (une ruche montée sous une clé virtuelle ouverte, refusée sous une
 clé de ruche, déchargée puis rechargée), `ex` (les paramètres de l'utilisateur suivent ceux du système jusqu'à être
 fixés). Scénario `logon` : les marqueurs du profil chargé (`IncrementRefCount(S-1-5-21-…)`), de la session ouverte
-(« We are logged on »), de `userinit` (son thread converti, « Failed to start default shell ») ; chaque échec traversé
-est interdit (NtCreateToken, LsaLogonUser, le profil, RegLoadKeyW, ImpersonateLoggedOnUser, l'assignation du jeton,
-CreateProcessAsUserW). Neuf mutations (chacun des sept services ou classes retiré, la valeur `Locale` de la couche, les
-droits d'une copie à `DesiredAccess` nul) font échouer le scénario.
+(« We are logged on »), de `userinit` (son thread converti), d'`explorer` (son thread converti, `desktop.cpp:193`, sa
+barre des tâches à l'écran : deux pixels) ; chaque échec traversé est interdit (NtCreateToken, LsaLogonUser, le
+profil, RegLoadKeyW, ImpersonateLoggedOnUser, l'assignation du jeton, CreateProcessAsUserW, « Failed to start default
+shell »), et la fin d'`explorer` (`(explorer.exe) ended`). Neuf mutations (chacun des sept services ou classes
+retiré, la valeur `Locale` de la couche, les droits d'une copie à `DesiredAccess` nul) font échouer le scénario ;
+l'ancien NtUserGetAtomName aussi (`explorer` meurt). Hôte : `win32k::atom` (« #n » d'un atome entier, la copie bornée
+par `MaximumLength` avec son nul).
 
 Les apitests de `ntdll` (scénario `rostests`) restent à 43 sur 84, le plancher, mais pas les mêmes : NtDuplicateToken
 (un `NewTokenHandle` nul : `STATUS_ACCESS_VIOLATION`, la poignée écrite d'abord, comme ProbeForWriteHandle) et

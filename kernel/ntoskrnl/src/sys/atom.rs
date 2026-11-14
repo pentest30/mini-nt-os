@@ -5,6 +5,7 @@
 //! repartent dans le pointeur `Atom` de l'appelant.
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_HANDLE, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_SUCCESS};
+use abi::peb32::UnicodeString32;
 use alloc::vec::Vec;
 use ke::usermem::UserPtr;
 use win32k::atom::{self, AtomName, FIRST_STRING_ATOM};
@@ -30,17 +31,10 @@ fn write_atom_back(atom: u32, value: u16) -> Result<(), NtStatus> {
     Ok(())
 }
 
-/// Les unités du nom d'un atome : celles de la table pour un atome en
-/// chaîne, ses chiffres décimaux pour un atome entier.
+/// Les unités du nom d'un atome, comme RtlQueryAtomInAtomTable : celles de
+/// la table pour un atome en chaîne, « #n » pour un atome entier.
 fn name_of(atom: u16) -> Result<Vec<u16>, NtStatus> {
-    match atom::name(atom) {
-        Some(name) => Ok(name),
-        None if atom < FIRST_STRING_ATOM => {
-            let digits = alloc::format!("{atom}");
-            Ok(digits.encode_utf16().collect())
-        }
-        None => Err(STATUS_INVALID_HANDLE),
-    }
+    atom::queried_name(atom).ok_or(STATUS_INVALID_HANDLE)
 }
 
 /// NtAddAtom(AtomName, Length, Atom) : l'atome du nom, créé s'il le faut,
@@ -114,24 +108,36 @@ pub(super) fn nt_query_information_atom(arguments: &[u32]) -> NtStatus {
     query().map_or_else(|status| status, |()| STATUS_SUCCESS)
 }
 
-/// NtUserGetAtomName(Atom, Buffer) : le nom de l'atome, en WCHAR terminés
-/// par nul, dans le tampon de l'appelant ; le nombre d'unités écrites sans
-/// le nul. Les atomes entiers rendent leurs chiffres décimaux.
+/// NtUserGetAtomName(Atom, pustrName) : le nom de l'atome de la table de
+/// USER (IntGetAtomName : 255 caractères au plus, « #n » pour un atome
+/// entier) dans le tampon de la UNICODE_STRING de l'appelant, tronqué à son
+/// `MaximumLength` et terminé par nul (rien sans la place du nul) ; rend le
+/// nombre de caractères copiés, sans le nul. 0 pour un thread sans bureau ;
+/// 0 et la dernière erreur pour un atome inconnu ou une chaîne qu'on ne peut
+/// lire, ou un tampon où l'on ne peut écrire.
 pub(super) fn nt_user_get_atom_name(arguments: &[u32]) -> NtStatus {
-    let [atom, buffer] = arguments[..2] else { unreachable!("2 arguments") };
+    let [atom, string] = arguments[..2] else { unreachable!("2 arguments") };
     let get = || -> Result<u32, NtStatus> {
-        if buffer == 0 {
-            return Ok(0);
+        if win32k::convert_current_thread()?.desktop().is_none() {
+            return Err(STATUS_SUCCESS);
         }
         let name = name_of(atom as u16)?;
-        let mut units: Vec<u16> = name;
-        units.push(0);
-        let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_le_bytes()).collect();
-        ke::usermem::copy_to_user(u64::from(buffer), &bytes)?;
-        Ok(units.len() as u32 - 1)
+        let string = UserPtr::<UnicodeString32>::new(string).read()?;
+        ke::usermem::probe_for_write(u64::from(string.buffer), usize::from(string.maximum_length), 1)?;
+        if string.maximum_length < 2 {
+            return Ok(0);
+        }
+        let copied = atom::copied_name_units(name.len(), string.maximum_length);
+        let bytes: Vec<u8> =
+            name[..copied].iter().chain(core::iter::once(&0)).flat_map(|unit| unit.to_le_bytes()).collect();
+        ke::usermem::copy_to_user(u64::from(string.buffer), &bytes)?;
+        Ok(copied as u32)
     };
     match get() {
         Ok(count) => NtStatus(count),
-        Err(status) => status,
+        Err(status) => {
+            let _ = win32k::set_last_error(abi::winerror::dos_error(status));
+            NtStatus(0)
+        }
     }
 }

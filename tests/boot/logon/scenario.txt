@@ -24,9 +24,14 @@
 # the Mino layer; NtSetDefaultLocale) and is logged on. msgina starts
 # userinit.exe under the user's token (CreateProcessAsUser:
 # NtSetInformationProcess, ProcessAccessToken, with a token copy of the same
-# access); userinit sets the user up and looks for the shell,
-# C:\WINDOWS\explorer.exe, which is not on the disk: where the logon stops
-# today ("Userinit failed to start the shell!").
+# access); userinit sets the user up and starts the shell,
+# C:\WINDOWS\explorer.exe. Explorer creates its taskbar, painted at the
+# bottom of the screen (COLOR_BTNFACE, its white top edge); user32 asks the
+# names of class atoms by NtUserGetAtomName into a UNICODE_STRING on its
+# stack (ClassNameToVersion), which the kernel once wrote past, and explorer
+# died on its own "Shell_TrayWnd" in its saved registers. It stops today
+# at its desktop (desktop.cpp:193, then an assertion of shell32's view or
+# of ATL in its desktop thread).
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
@@ -43,7 +48,10 @@ expect = [minoinit] done; rebooting
 expect = IncrementRefCount(S-1-5-21-
 expect = We are logged on
 expect = of userinit.exe
-expect = Failed to start default shell
+expect = of explorer.exe
+expect = desktop.cpp:193
+screen = 640 790 D4D0C8
+screen = 640 773 FFFFFF
 
 forbid = [minoinit] stopped:
 forbid = *** STOP:
@@ -54,3 +62,5 @@ forbid = RegLoadKeyW() failed
 forbid = ImpersonateLoggedOnUser() failed
 forbid = Failed to assign primary token
 forbid = CreateProcessAsUserW() failed
+forbid = Failed to start default shell
+forbid = (explorer.exe) ended

@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **`explorer.exe` démarre ; NtUserGetAtomName écrasait la pile de `user32`** (`claude/new-session-696xfc`, M6,
+  premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). `explorer.exe` est sur le
+  disque, dans `C:\WINDOWS` (`WINDOWS_FILES`, `xtask/src/userland.rs`, avec la fermeture de ses imports) ; `userinit`
+  le lance. Il mourait dans la création de sa barre des tâches, « Shell_TrayWnd » dans ses registres sauvés et son
+  adresse de retour : NtUserGetAtomName prend une UNICODE_STRING (useratom.c) que `user32` pose sur sa pile
+  (ClassNameToVersion), et Mino y écrivait le nom entier, comme dans un tampon. Corrigé selon useratom.c
+  (`win32k::atom::query_name`, `copied_name_units` : 255 caractères au plus, « #n » pour un atome entier, tronqué à
+  `MaximumLength` avec son nul, 0 pour un thread sans bureau) ; NtQueryInformationAtom rend aussi « #n ». Le même
+  motif (« SHELLDLL_DefView ») faisait planter la boîte Enregistrer sous avant la PR 127. `explorer` affiche
+  maintenant sa barre des tâches (vide), puis s'arrête à son bureau (`desktop.cpp:193`, une assertion de CDefView ou
+  d'ATL dans le thread du bureau). Tests : hôte (`win32k::atom`, deux tests) ; scénario `logon` (`explorer` converti,
+  `desktop.cpp:193`, deux pixels de la barre ; « Failed to start default shell » et la fin d'`explorer` interdits),
+  qui échoue avec l'ancien `atom.rs` (`(explorer.exe) ended`). `cargo xtask lint` propre, 1100 tests hôte ; **à finir** : toute la suite sur AMD (lancée), `logon` sur Intel.
+  **Suite** : `desktop.cpp:193` et les
+  assertions du thread du bureau ; la station par défaut d'un chemin de bureau (les threads de `userinit` et
+  d'`explorer` n'ont pas de bureau de démarrage) ; le bouton Démarrer et ce que la barre demande.
+
 - **Le dernier critère du M5 : les apitests passent le seuil** (`claude/new-session-696xfc`, sur main `6f60178` ;
   [`compat/m5-rostests.md`](compat/m5-rostests.md)). Sous Ubuntu 24.04 (mingw-w64 11, GCC 13), le banc n'avait plus
   rien à mesurer : `_Ret_opt_z_` (SAL 1, `rtlfuncs.h`) manquait au `sal.h` de ce MinGW, et GCC 13 laissait compiler
