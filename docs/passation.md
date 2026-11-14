@@ -2,20 +2,34 @@
 
 - **`explorer.exe` démarre ; NtUserGetAtomName écrasait la pile de `user32`** (`claude/new-session-696xfc`, M6,
   premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). `explorer.exe` est sur le
-  disque, dans `C:\WINDOWS` (`WINDOWS_FILES`, `xtask/src/userland.rs`, avec la fermeture de ses imports) ; `userinit`
-  le lance. Il mourait dans la création de sa barre des tâches, « Shell_TrayWnd » dans ses registres sauvés et son
-  adresse de retour : NtUserGetAtomName prend une UNICODE_STRING (useratom.c) que `user32` pose sur sa pile
-  (ClassNameToVersion), et Mino y écrivait le nom entier, comme dans un tampon. Corrigé selon useratom.c
-  (`win32k::atom::query_name`, `copied_name_units` : 255 caractères au plus, « #n » pour un atome entier, tronqué à
-  `MaximumLength` avec son nul, 0 pour un thread sans bureau) ; NtQueryInformationAtom rend aussi « #n ». Le même
-  motif (« SHELLDLL_DefView ») faisait planter la boîte Enregistrer sous avant la PR 127. `explorer` affiche
-  maintenant sa barre des tâches (vide), puis s'arrête à son bureau (`desktop.cpp:193`, une assertion de CDefView ou
-  d'ATL dans le thread du bureau). Tests : hôte (`win32k::atom`, deux tests) ; scénario `logon` (`explorer` converti,
-  `desktop.cpp:193`, deux pixels de la barre ; « Failed to start default shell » et la fin d'`explorer` interdits),
-  qui échoue avec l'ancien `atom.rs` (`(explorer.exe) ended`). `cargo xtask lint` propre, 1100 tests hôte ; **à finir** : toute la suite sur AMD (lancée), `logon` sur Intel.
-  **Suite** : `desktop.cpp:193` et les
-  assertions du thread du bureau ; la station par défaut d'un chemin de bureau (les threads de `userinit` et
-  d'`explorer` n'ont pas de bureau de démarrage) ; le bouton Démarrer et ce que la barre demande.
+  disque des scénarios qui le demandent (`shell = explorer`, `xtask/src/scenario.rs` ; `SHELL_FILES`,
+  `xtask/src/userland.rs`, avec la fermeture de ses imports, `browseui` et `shdocvw`) : sur tous les disques, la
+  copie de l'installateur ne tenait plus sur sa cible (`installer-finish`). `userinit` le lance. Il mourait dans la
+  création de sa barre des tâches, « Shell_TrayWnd » dans ses registres sauvés et son adresse de retour :
+  NtUserGetAtomName prend une UNICODE_STRING (useratom.c) que `user32` pose sur sa pile (ClassNameToVersion), et Mino
+  y écrivait le nom entier, comme dans un tampon. Corrigé selon useratom.c (`win32k::atom::query_name`,
+  `copied_name_units` : 255 caractères au plus, « #n » pour un atome entier, tronqué à `MaximumLength` avec son nul,
+  0 pour un thread sans bureau) ; NtQueryInformationAtom rend aussi « #n ». `explorer` affiche maintenant sa barre
+  des tâches (vide), puis s'arrête à son bureau (`desktop.cpp:193` : CDesktopThread::Initialize attend le thread du
+  bureau par MsgWaitForMultipleObjects, dont l'événement de file, NtUserCallOneParam(GETINPUTEVENT, 0x27), manque :
+  WAIT_FAILED, E_FAIL, puis le thread du bureau déréférence `m_Tray` remis à NULL, l'assertion d'ATL atlcomcli.h:208).
+  La correction a montré deux écarts, par la boîte Enregistrer sous du Bloc-notes, dont la vue de dossier (CDefView)
+  n'était jamais créée tant que la pile de `user32` était écrasée : (1) NtUserMessageCall(FNID_SENDMESSAGE) rendait
+  FALSE sans écrire `ResultInfo` pour une fenêtre inconnue, et `user32` rendait alors sa variable non initialisée
+  (CDefView comptait des colonnes dans un en-tête absent, CDefView.cpp:1178) : TRUE et 0 avec l'erreur, comme
+  ReactOS (`sys::message::send_message_result`) ; (2) `win32k::input::activate` réactivait une fenêtre déjà active
+  dont une fille avait le focus (SetWindowPos de comdlg32 sans SWP_NOACTIVATE : le focus passait à la liste
+  « Enregistrer dans ») : rien pour une fenêtre déjà active, et le focus à la fenêtre activée seulement s'il n'est pas
+  dans l'une de ses filles, comme co_IntSetActiveWindow (`focus_is_in`). Tests : hôte (`win32k::atom`, deux tests ;
+  `xtask`, la clé `shell`) ; `logon` (`explorer` converti, `desktop.cpp:193`, deux pixels de la barre ; « Failed to
+  start default shell » et la fin d'`explorer` interdits), qui échoue avec l'ancien `atom.rs` ; `send-messages`
+  (SendMessageW(NULL) après la pile salie : 0 et 1400 ; l'ancien service rend le motif) ; `activate-app`, étapes 4 et
+  5 (l'ancien `activate` échoue aux deux) ; `notepad-save` de nouveau au bout. `cargo xtask lint` propre ; la suite
+  complète sur AMD est en cours.
+  **Suite** : MsgWaitForMultipleObjects (ONEPARAM_ROUTINE_GETINPUTEVENT, IntMsqSetWakeMask : l'événement de la file
+  du thread dans sa table de handles, signalé selon le masque de réveil ; NOPARAM_ROUTINE_MSQCLEARWAKEMASK) ; la station
+  par défaut d'un chemin de bureau (les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage) ; le
+  bouton Démarrer et ce que la barre demande.
 
 - **Le dernier critère du M5 : les apitests passent le seuil** (`claude/new-session-696xfc`, sur main `6f60178` ;
   [`compat/m5-rostests.md`](compat/m5-rostests.md)). Sous Ubuntu 24.04 (mingw-w64 11, GCC 13), le banc n'avait plus

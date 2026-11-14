@@ -355,10 +355,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `\REGISTRY\USER\<SID>`), NtSetDefaultLocale de l'utilisateur (son profil ; `ex::locale` sépare utilisateur et
   système), `ProcessAccessToken` (`ps::EProcess::set_primary_token`) ; `Locale` dans la couche Mino ;
   `userinit.exe` sur le disque. `winlogon` ouvre la session, `msgina` lance `userinit` sous le jeton de
-  l'utilisateur, qui lance `explorer.exe` (dans `C:\WINDOWS`, `WINDOWS_FILES` de `xtask`) : sa barre des tâches
-  s'affiche, il s'arrête à son bureau. NtUserGetAtomName écrit dans la UNICODE_STRING de l'appelant (bornée par
-  `MaximumLength`, avec son nul ; `win32k::atom::query_name`, « #n » d'un atome entier) : il écrasait la pile de
-  `user32` (ClassNameToVersion).
+  l'utilisateur, qui lance `explorer.exe` (dans `C:\WINDOWS`, sur le disque des scénarios `shell = explorer`) : sa
+  barre des tâches s'affiche, il s'arrête à son bureau. NtUserGetAtomName écrit dans la UNICODE_STRING de l'appelant
+  (bornée par `MaximumLength`, avec son nul ; `win32k::atom::query_name`, « #n » d'un atome entier) : il écrasait la
+  pile de `user32` (ClassNameToVersion). NtUserMessageCall(FNID_SENDMESSAGE) écrit toujours `ResultInfo` (0 si
+  l'envoi échoue : `user32` rend sinon sa variable non initialisée) ; une fenêtre déjà active n'est pas réactivée et
+  le focus reste dans ses filles (`win32k::input::activate`, co_IntSetActiveWindow).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
