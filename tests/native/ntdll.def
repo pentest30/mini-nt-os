@@ -18,6 +18,7 @@ NtQueryInformationFile@20
 NtQueryVolumeInformationFile@20
 NtQueryDirectoryFile@44
 NtWriteFile@36
+NtSetInformationFile@20
 NtCreateEvent@20
 NtSetEvent@8
 NtWaitForSingleObject@12
