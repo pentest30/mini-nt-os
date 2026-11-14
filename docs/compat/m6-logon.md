@@ -71,8 +71,10 @@ ensuite, dans l'ordre où cela bloque :
    CLSID_RebarBandSite (`{ECD4FC4D-521C-11D0-B792-00A0C90312E1}`) ne sont pas enregistrées (`REGDB_E_CLASSNOTREG`) :
    l'installation de ReactOS appelle DllRegisterServer des DLL de `syssetup.inf` (`RegistrationPhase2`,
    `OleControlDlls`), que `minoinit.exe` ne fait pas encore.
-2. **Les fenêtres « message seul »** (`HWND_MESSAGE`, « not yet ») : la fenêtre d'appartement de COM n'est pas créée
-   (`combase` apartment.c : « CreateWindow failed with error 1400 »).
+2. **Les fenêtres « message seul »** (`HWND_MESSAGE`) : la fenêtre d'appartement de COM n'était pas créée
+   (`combase` apartment.c : « CreateWindow failed with error 1400 »). Fait : chaque bureau a sa fenêtre des messages
+   (`win32k::window::create_message_window`, `spwndMessage`), dont les fenêtres `HWND_MESSAGE` sont les enfants ;
+   la sonde du scénario `gui` en crée une (cachée, hors d'EnumWindows, son message reçu, détruite).
 3. **DeferWindowPos** (NtUserCallOneParam 0x1E, BeginDeferWindowPos : « BeginDeferWindowPos failed. lastErr=120 »),
    NtUserSetWindowRgn, SystemParametersInfo (0x2B, 0x2F), NtUserCallOneParam 0x27, NtUserGetSystemMenu.
 4. Le bureau du shell échoue (`desktop.cpp:193`, E_FAIL), puis une assertion d'ATL (`atlcomcli.h:208`, `p != 0`).

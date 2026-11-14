@@ -221,6 +221,8 @@ typedef struct {
 #define DCX_KEEPCLIPRGN 0x00040000
 #define OBJ_REGION 8
 #define WM_USER 0x0400
+/* The parent of message-only windows. */
+#define HWND_MESSAGE ((HWND)-3)
 #define INFINITE 0xFFFFFFFF
 
 /* What the scenario expects when the program runs to its end. */
@@ -258,6 +260,9 @@ __declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *pa
 __declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
 __declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT min, UINT max, UINT remove);
 __declspec(dllimport) BOOL __stdcall PostMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
+typedef BOOL(__stdcall *WNDENUMPROC)(HWND window, LPARAM parameter);
+__declspec(dllimport) BOOL __stdcall EnumWindows(WNDENUMPROC procedure, LPARAM parameter);
+__declspec(dllimport) BOOL __stdcall DestroyWindow(HWND window);
 __declspec(dllimport) DWORD __stdcall GetQueueStatus(UINT flags);
 __declspec(dllimport) BOOL __stdcall InvalidateRect(HWND window, const RECT *rect, BOOL erase);
 __declspec(dllimport) BOOL __stdcall ValidateRect(HWND window, const RECT *rect);
@@ -1457,6 +1462,41 @@ static void check_class_menu(HINSTANCE instance)
              by_number);
 }
 
+/* What check_message_only looks for in EnumWindows. */
+static HWND enumerated_target;
+static BOOL enumerated_found;
+
+static BOOL __stdcall find_enumerated(HWND window, LPARAM parameter)
+{
+    (void)parameter;
+    if (window == enumerated_target)
+        enumerated_found = TRUE;
+    return TRUE;
+}
+
+/* A message-only window (HWND_MESSAGE), as COM makes for its apartments: it
+ * is created, never visible (WS_VISIBLE asked), out of EnumWindows, gets what
+ * is posted to it, and is destroyed. */
+static void check_message_only(HINSTANCE instance)
+{
+    MSG message;
+    BOOL got;
+    HWND window = CreateWindowExW(0, CLASS_NAME, L"Mino message-only", WS_VISIBLE, 0, 0, 10, 10, HWND_MESSAGE, 0,
+                                  instance, 0);
+    if (!window) {
+        DbgPrint("[gui] message-only window: not created (%lu)\n", GetLastError());
+        return;
+    }
+    enumerated_target = window;
+    EnumWindows(find_enumerated, 0);
+    PostMessageW(window, WM_USER + 9, 3, 4);
+    got = PeekMessageW(&message, window, WM_USER + 9, WM_USER + 9, PM_REMOVE) && message.hwnd == window &&
+          message.wParam == 3;
+    DbgPrint("[gui] message-only window: created, %s, %s, %s\n", IsWindowVisible(window) ? "VISIBLE" : "hidden",
+             enumerated_found ? "ENUMERATED" : "not enumerated", got ? "its message received" : "NO MESSAGE");
+    DbgPrint("[gui] message-only window destroyed: %d\n", DestroyWindow(window));
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     WNDCLASSEXW class_info;
@@ -1517,6 +1557,7 @@ DWORD __stdcall GuiStartup(void)
     check_second_thread();
     check_menu_bar(instance);
     check_class_menu(instance);
+    check_message_only(instance);
 
     DbgPrint("[gui] done\n");
     /* Its windows go with the process: the scenario captures the screen
