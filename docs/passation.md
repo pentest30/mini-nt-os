@@ -14,7 +14,9 @@
   s'arrête là (ni site de bandes ni zone de notification). Un clic sur Démarrer (essayé au moniteur de QEMU) donne
   traywnd.cpp:2997 (E_FAIL) et l'assertion d'ATL atlwin.h:1124 ; captures `target/screenshots/demarrer-bouton.png`
   et `demarrer-clic.png`. Tests : `defer-window-pos` (`defer1.c`, AMD et Intel, quatre mutations détectées), hôte
-  (`win32k::deferpos`), `logon` (deux pixels du bouton, « BeginDeferWindowPos failed » interdit).
+  (`win32k::deferpos`), `logon` (deux pixels du bouton, « BeginDeferWindowPos failed » interdit). `cargo xtask
+  lint` propre ; toute la suite (`cargo xtask test`) : 1107 tests hôte, 117 runs de démarrage sur 117 (rostests 44/84
+  et 16/29, aux planchers).
   **Suite** : les icônes d'abord (l'autre session), puis le menu Démarrer d'un clic : les crochets WH_GETMESSAGE et
   WH_MSGFILTER (CMenuFocusManager), SPI_SETWORKAREA, RegisterHotKey, FindWindowEx, SetParent.
 
