@@ -306,7 +306,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserGetScrollBarInfo, NtUserSetScrollBarInfo, NtUserShowScrollBar, NtUserEnableScrollBar ; le cadre dessine
   flèches, fond en damier (`Op::Mono`), curseur, coin et poignée de taille ; HTVSCROLL, HTHSCROLL, HTSIZE ; un clic
   devient WM_SYSCOMMAND SC_VSCROLL, que `user32` suit (DefWndTrackScrollBar) ; scénario `scroll`
-  (`tests/native/scroll1.c`). Pas encore SB_CTL.
+  (`tests/native/scroll1.c`). SB_CTL à l'étape 33.
   M6, étape 18 (le défilement, `win32k::scrollex`) : NtUserScrollDC (la copie dans la surface du DC, la région
   découverte) et NtUserScrollWindowEx (par un DC du cache, la région déjà à repeindre décalée, SW_SCROLLCHILDREN,
   SW_INVALIDATE, SW_ERASE) ; BitBlt dans une même surface copie dans le sens du décalage
@@ -400,7 +400,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   chaînes par thread et par bureau, `fsHooks`, NtUserSetWindowsHookEx, NtUserUnhookWindowsHookEx,
   NtUserCallNextHookEx, NtUserCallMsgFilter ; WH_GETMESSAGE dans `queue::peek`, WH_MSGFILTER dans la boucle des
   menus), avec NtUserWindowFromPoint, NtUserGetAncestor, Get/SetForegroundWindow ; scénario `hooks`
-  (`tests/native/hook1.c`).
+  (`tests/native/hook1.c`). M6, étape 33 : les contrôles ScrollBar (SB_CTL : le `SBWND` dans les octets de plus,
+  `abi::user::SbWndExtra32`, lu par `user32` ; GetScrollBarInfo(OBJID_CLIENT), EnableScrollBar, ShowScrollBar) et
+  GWLP_WNDPROC d'une fenêtre à procédure du serveur (`win32k::window::replace_procedure`, IntSetWindowProc : ATL
+  sous-classe la poignée de taille de l'autocomplétion de `browseui`) ; scénario `scroll-control`
+  (`tests/native/sbctl1.c`) : la fenêtre de dossier d'`explorer` s'ouvre (« My Documents »), sa vue encore vide.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

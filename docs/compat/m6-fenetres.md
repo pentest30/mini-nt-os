@@ -827,7 +827,7 @@ gardé. co_IntCreateScrollBars de ReactOS recalcule aussi la zone cliente (co_Wi
 pas, la zone cliente étant déjà celle du style.
 
 Ce qui manque : les barres des contrôles (SB_CTL, la classe ScrollBar : leur SBCALC dans les octets de plus du `WND`,
-journalisé une fois), ScrollWindowEx et ScrollDC (le contenu ne défile pas encore : NtUserScrollWindowEx est le
+journalisé une fois ; faites à l'étape 33), ScrollWindowEx et ScrollDC (le contenu ne défile pas encore : NtUserScrollWindowEx est le
 prochain manque de `consrv` et de la listview), les barres d'une fenêtre de droite à gauche, les thèmes ; HideCaret et
 ShowCaret, que `user32` appelle autour du clic (journalisés, sans effet). Les symboles que `user32` dessine lui-même
 pendant un clic sont lissés, ceux du noyau monochromes (la qualité de la police Marlett de DrawFrameControl).
@@ -1478,3 +1478,49 @@ recalculées à part depuis ses ressources : identiques au pixel près) ; le coi
 celui de « Recent ». `logon` : `[minoinit] shell32.dll registered`. Quatre mutations font chacune échouer un test :
 NtQueryKey qui demande KEY_QUERY_VALUE pour le nom (`notepad-saveas`), une référence sans aucun droit acceptée
 (hôte), FileBasicInformation aligné sur 8 (`dir`), `minoinit` sans l'enregistrement (`logon`).
+
+## Étape 33 : les contrôles ScrollBar (SB_CTL) et le sous-classement d'une fenêtre à procédure du serveur
+
+Un item de dossier du menu Démarrer (« My Documents ») tuait `explorer` (voir [`m6-logon.md`](m6-logon.md)) : la
+barre d'adresse de la fenêtre de dossier demande l'autocomplétion (SHAutoComplete de `shlwapi`), dont la liste
+déroulante (CAutoComplete de `browseui`) crée dans son WM_CREATE une ListView, puis une poignée de taille et une barre
+de défilement, deux contrôles de la classe ScrollBar. Deux manques, dans l'ordre où le second masquait le premier :
+
+1. **Les barres des contrôles (SB_CTL)** (`win32k::scroll`, la troisième barre) : la fenêtre d'un contrôle ScrollBar
+   garde l'état de sa barre dans ses octets de plus, un `SBWND` de ReactOS (`abi::user::SbWndExtra32` : `fVert`,
+   `wDisableFlags`, puis un `SBCALC` dont les quatre premiers champs sont le `SBDATA`), que `user32` lit lui-même
+   (GetScrollPos, SBM_GETPOS, SBM_GETRANGE ; `Window::write_extra`). SetScrollInfo et GetScrollInfo de SB_CTL ;
+   GetScrollBarInfo(OBJID_CLIENT) : la barre est la zone cliente du contrôle (SBS_VERT), ses flèches et son curseur,
+   l'état « indisponible » quand il n'y a rien à faire défiler ou que le contrôle est désactivé ; EnableScrollBar(SB_CTL)
+   change les flèches (l'activation de la fenêtre, EnableWindow, journalisée : pas encore) ; ShowScrollBar(SB_CTL)
+   montre ou cache le contrôle (ShowWindow). Le dessin est celui de `user32` (IntDrawScrollBar, son WM_PAINT).
+   Un écart voulu : ReactOS marque la barre indisponible quand le contrôle n'est *pas* désactivé ; Mino suit Wine.
+2. **GWLP_WNDPROC d'une fenêtre à procédure du serveur** (`win32k::window::replace_procedure`, IntSetWindowProc ;
+   `window_procedure`, IntGetWindowProc). ATL sous-classe la poignée de taille (SubclassWindow : SetWindowLongPtr de
+   GWLP_WNDPROC) ; la classe ScrollBar est une classe du serveur (`CSF_SERVERSIDEPROC`), et win32k refusait
+   (`ERROR_CALL_NOT_IMPLEMENTED`). OnCreate rendait alors -1 et la liste n'était pas créée ; OnFinalMessage relâchait
+   CAutoComplete sans l'AddRef de OnCreate, si bien qu'à la seconde tentative (SetOptions) l'objet était détruit, et
+   SHAutoComplete appelait une méthode virtuelle pure (l'emplacement `__cxa_pure_virtual` de la vtable de
+   CAutoComplete, `int 3` dans `browseui`, 80000003). Comme ReactOS : l'ancienne procédure d'une fenêtre à procédure
+   du serveur est celle du client de son FNID, ANSI ou non, sans CALLPROCDATA ; la nouvelle en fait une procédure du
+   client, dans son jeu de caractères (NULL garde l'actuelle) ; la procédure du client d'un FNID qui a une procédure
+   du serveur rend celle-ci à la fenêtre (`WNDS_SERVERSIDEWINDOWPROC`, Unicode). Un contrôle (de FNID_BUTTON à
+   FNID_GHOST, sauf Edit) passe d'un jeu de caractères à l'autre par ses deux procédures du client. Reste refusée
+   l'ancienne procédure d'une fenêtre du client demandée dans l'autre jeu de caractères : ReactOS rend un
+   CALLPROCDATA (UserGetCPD), que Mino n'a pas encore. `win32k::client` cherche dans une copie des procédures du
+   client (`procedures`, `client_procedure_in`, `server_procedure_in`, `server_fnid_in`).
+
+La fenêtre « My Documents » s'ouvre alors (titre, menus, barre d'outils) ; sa barre d'adresse et sa vue des fichiers
+restent vides : la suite.
+
+Tests : hôte (`win32k::window` : une procédure du client remplacée, rendue, NULL qui la garde, l'autre jeu de
+caractères refusé ; une procédure du serveur sous-classée en Unicode puis en ANSI et rendue ; un contrôle qui passe
+d'un jeu de caractères à l'autre, Edit refusé ; `win32k::scroll`). Scénario `scroll-control`
+(`tests/native/sbctl1.c`, AMD et Intel) : un contrôle ScrollBar vertical dans une fenêtre blanche ; SetScrollInfo et
+GetScrollInfo, GetScrollPos et SBM_GETRANGE (lus par `user32` dans les octets de plus), SetScrollPos au-delà de la
+fin, GetScrollBarInfo(OBJID_CLIENT), EnableScrollBar(ESB_DISABLE_UP), ShowScrollBar ; sous-classé comme par ATL
+(SetWindowLongW : l'ancienne procédure est celle de la classe, ses messages passent par la nouvelle, la procédure
+rendue), puis en ANSI (SetWindowLongA : celle, ANSI, de la classe ; rendue, la procédure du serveur revient) ; le
+contrôle peint par `user32` (quatre pixels : la face et le symbole de la flèche du haut, le curseur au bout).
+Deux mutations font échouer le scénario : SB_CTL refusé (les étapes 1 à 6), une procédure du serveur refusée (les
+étapes 7 et 8).

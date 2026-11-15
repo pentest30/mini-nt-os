@@ -260,10 +260,14 @@ sous-menu et un clic exécute l'item. La première ouverture prenait 55 s dans V
 `shell32.dll` (11 Mio) comme fichier de données pour chaque icône, et NtCreateSection relisait le fichier entier, une
 commande ATA par secteur (14 fois, 55,2 s) ; la branche `claude/file-read-speed` (le partage des octets d'un fichier
 entre ses sections, `io::section_cache`) la ramène à 75 ms. Les suivantes sont immédiates (0,13 s) ; le sous-menu de
-« Programs », dont le dossier est vide, s'ouvre sans son item « (Empty) » dessiné, à vérifier. Un item de dossier tue encore `explorer` : la fenêtre de dossier que `browseui`
-crée échoue (CreateWindowEx rend 0) juste après la création d'une barre de défilement (le contrôle, dont
-SetScrollInfo(SB_CTL) rend 0 : pas encore SB_CTL), puis une assertion (`int 3`, 80000003, NtRaiseHardError absent)
-arrête le processus ; à diagnostiquer. Pas encore, vus en chemin : NtUserTrackMouseEvent, SPI_GETMENUSHOWDELAY
+« Programs », dont le dossier est vide, s'ouvre sans son item « (Empty) » dessiné, à vérifier. Un item de dossier tuait `explorer` (`int 3`, 80000003, NtRaiseHardError absent) : la liste
+d'autocomplétion de la barre d'adresse (CAutoComplete de `browseui`, par SHAutoComplete de `shlwapi`) crée deux
+contrôles ScrollBar, et ATL sous-classe sa poignée de taille par SetWindowLongPtr(GWLP_WNDPROC), que win32k refusait
+pour une fenêtre à procédure du serveur. La liste n'était pas créée, CAutoComplete se relâchait une fois de trop, et
+SHAutoComplete appelait une méthode virtuelle pure de l'objet détruit. Faits : SB_CTL et le sous-classement d'une
+fenêtre à procédure du serveur (étape 33 de [`m6-fenetres.md`](m6-fenetres.md), scénario `scroll-control`). La
+fenêtre « My Documents » s'ouvre alors, avec son titre, ses menus et sa barre d'outils ; sa barre d'adresse et sa vue
+des fichiers restent vides (NtUserLockWindowUpdate et NtUserDrawCaption manquent, entre autres). Pas encore, vus en chemin : NtUserTrackMouseEvent, SPI_GETMENUSHOWDELAY
 (0x6A : le sous-menu s'ouvre sans délai), NtUserGetDoubleClickTime, NtUserCallNoParam 9, NtUserGetThreadState 0xB,
 Ctrl+Échap (RegisterHotKey).
 
@@ -271,7 +275,8 @@ Ctrl+Échap (RegisterHotKey).
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
 ChangeDisplaySettings, le panneau Affichage). Pour le shell : la fenêtre de dossier qu'ouvre un item du menu Démarrer
-(la barre de défilement contrôle, SB_CTL, puis ce que `browseui` demande ensuite) ; Ctrl+Échap et les raccourcis
+(sa barre d'adresse et sa vue des fichiers, vides : LockWindowUpdate, DrawCaption, puis ce que `browseui` et `shell32`
+demandent) ; Ctrl+Échap et les raccourcis
 (RegisterHotKey) ; la zone de travail (SPI_SETWORKAREA), FindWindowEx, SetParent, TrackMouseEvent ; le papier peint
 (SPI_SETDESKWALLPAPER), la station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
 

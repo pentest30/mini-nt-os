@@ -1,5 +1,21 @@
 # Notes de passation
 
+- **La fenêtre de dossier d'`explorer` s'ouvre : SB_CTL et le sous-classement des contrôles du serveur**
+  (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 33 ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Les PR 136 (les crochets) et 137 (le partage
+  des octets d'un fichier entre ses sections) fusionnées ici. Un item de dossier du menu Démarrer tuait `explorer`
+  (`int 3` dans `browseui`) : la liste de l'autocomplétion de la barre d'adresse (CAutoComplete) crée deux contrôles
+  ScrollBar et ATL sous-classe sa poignée de taille ; win32k refusait SB_CTL et GWLP_WNDPROC d'une fenêtre à
+  procédure du serveur, la liste n'était pas créée, CAutoComplete se relâchait une fois de trop et SHAutoComplete
+  appelait une méthode virtuelle pure de l'objet détruit (diagnostic : la vtable de l'objet dans `EDX`, ses trois
+  premiers emplacements `__cxa_pure_virtual` ; un journal temporaire de CreateWindowEx, retiré). Faits : SB_CTL
+  (`win32k::scroll`, `abi::user::SbWndExtra32`) et IntGetWindowProc, IntSetWindowProc
+  (`win32k::window::window_procedure`, `replace_procedure` ; sans CALLPROCDATA, toujours refusé pour une procédure du
+  client dans l'autre jeu de caractères). Scénario `scroll-control` (`tests/native/sbctl1.c`, AMD et Intel) ; deux
+  mutations détectées (SB_CTL refusé, procédure du serveur refusée). « My Documents » s'ouvre (titre, menus, barre
+  d'outils). **Suite** : sa barre d'adresse et sa vue des fichiers, vides (NtUserLockWindowUpdate, NtUserDrawCaption
+  manquent) ; le logon de ReactOS qui demande Ctrl+Alt+Suppr (NtUserRegisterHotKey absent : la SAS de `winlogon`).
+
 - **Le menu Démarrer s'ouvre : le premier critère du M6 est atteint** (`claude/new-session-696xfc`, M6,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La branche des icônes
   (`claude/blissful-herschel-4bf0cc`) fusionnée ici : NtUserGetIconInfo, GetDIBits, StretchBlt, les images de
