@@ -149,8 +149,9 @@ sa vue de dossier sur le Bureau de l'utilisateur et de All Users) et déclare sa
 (`win32k::shell`, comme `window.c`) : une fois par station (ShellWindow, ShellListView), dans le `DESKTOPINFO` du
 bureau (`hShellWindow`, `spwndShell`, `spwndBkGnd`, `ppiShellProcess`, que `user32` lit pour GetShellWindow), et
 la fenêtre du shell passe au bas de l'ordre Z (`WNDS2_BOTTOMMOST`), que SetWindowPos ne lui fait plus quitter
-(UserGetShellWindow dans co_WinPosSetWindowPos). Détruite, elle quitte la station et le `DESKTOPINFO`. Pas encore :
-le raccourci Ctrl+Échap (SC_TASKLIST), faute de RegisterHotKey.
+(UserGetShellWindow dans co_WinPosSetWindowPos). Détruite, elle quitte la station et le `DESKTOPINFO`. Ctrl+Échap
+devient son raccourci (WM_SYSCOMMAND SC_TASKLIST, voir plus bas « Ctrl+Alt+Suppr ») ; le menu Démarrer attend
+encore la notification HSHELL_TASKMAN des fenêtres de crochet du shell.
 
 **Ce qu'une fenêtre découvre en changeant seulement de rang.** Le bureau d'`explorer`, d'abord au-dessus de tout,
 avait recouvert la barre des tâches ; passé au fond, il ne la découvrait pas : SetWindowPos tenait pour découvert
@@ -230,7 +231,8 @@ bandeau. **Le premier critère du M6 est atteint.**
   WH_GETMESSAGE et WH_MSGFILTER (SetWindowsHookEx, pas encore).
 - En chemin : NtUserSystemParametersInfo (classes 0x14 SPI_SETDESKWALLPAPER, 0x2B et 0x2C MINIMIZEDMETRICS, 0x2F et
   0x30 WORKAREA, 0x42, 0x100A), NtUserCallHwnd (0x48), NtUserCallHwndOpt (0x4B), NtUserGetAncestor,
-  NtUserGetDoubleClickTime, NtUserFindWindowEx, NtUserSetParent, NtUserRegisterHotKey, NtUserGetSystemMenu,
+  NtUserGetDoubleClickTime, NtUserFindWindowEx, NtUserSetParent, NtUserRegisterHotKey (fait depuis : `win32k::hotkey`),
+  NtUserGetSystemMenu,
   NtUserCallOneParam (0x28 GETKEYBOARDLAYOUT, 0x31 MESSAGEBEEP), NtQueryInformationThread (classe 0x10),
   NtNotifyChangeDirectoryFile (« ReadDirectoryChangesW ... failed », le bureau ne suit pas son dossier). La fenêtre
   « Progman » mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à vérifier
@@ -268,16 +270,35 @@ SHAutoComplete appelait une méthode virtuelle pure de l'objet détruit. Faits :
 fenêtre à procédure du serveur (étape 33 de [`m6-fenetres.md`](m6-fenetres.md), scénario `scroll-control`). La
 fenêtre « My Documents » s'ouvre alors, avec son titre, ses menus et sa barre d'outils ; sa barre d'adresse et sa vue
 des fichiers restent vides (NtUserLockWindowUpdate et NtUserDrawCaption manquent, entre autres). Pas encore, vus en chemin : NtUserTrackMouseEvent, SPI_GETMENUSHOWDELAY
-(0x6A : le sous-menu s'ouvre sans délai), NtUserGetDoubleClickTime, NtUserCallNoParam 9, NtUserGetThreadState 0xB,
-Ctrl+Échap (RegisterHotKey).
+(0x6A : le sous-menu s'ouvre sans délai), NtUserGetDoubleClickTime, NtUserCallNoParam 9, NtUserGetThreadState 0xB.
+
+**Ctrl+Alt+Suppr : les raccourcis clavier.** L'écran de ReactOS qui demande Ctrl+Alt+Suppr (l'invite de `msgina`
+quand l'ouverture automatique ne s'applique pas : après une fermeture de session, l'autologon ne servant qu'une
+fois, Maj enfoncée, ou un poste verrouillé) ne réagissait pas : `winlogon` attend la SAS comme un raccourci de sa
+fenêtre SAS (RegisterHotKeys de `sas.c` : MOD_CONTROL | MOD_ALT et VK_DELETE, puis Ctrl+Maj+Échap, Win+L, Win+U), et
+NtUserRegisterHotKey manquait (« WL: Unable to register Ctrl+Alt+Del hotkey »). `win32k::hotkey` (hotkey.c) :
+NtUserRegisterHotKey, NtUserUnregisterHotKey ; le thread d'entrée brute présente chaque touche
+(co_UserProcessHotKeys, après l'état asynchrone du clavier) : la touche d'un raccourci avec ses modificateurs poste
+WM_HOTKEY (son identifiant, MAKELONG(modificateurs, touche)) à sa fenêtre ou à son thread, sans message de touche ;
+des modificateurs seuls partent à leur relâchement. Les raccourcis d'une fenêtre partent avec elle, ceux d'un thread
+à sa fin. Un écart voulu : UnregisterHotKey sans fenêtre ne retire que ceux du thread appelant (ReactOS : ceux de tous
+les threads). Dans la session d'`explorer`, Ctrl+Alt+Suppr ouvre la boîte « Security » de `msgina` (sur le bureau
+Winlogon) ; « Lock Computer » donne « Computer Locked… Press Ctrl-Alt-Del to unlock », et Ctrl+Alt+Suppr y ouvre
+« Unlock Computer » (le nom d'utilisateur rempli). Les raccourcis de la barre des tâches (Win+R, Win+E, Win+D…)
+marchent : Win+R ouvre « Run ». La fenêtre du shell reçoit Ctrl+Échap (NtUserSetShellWindowEx :
+UserRegisterHotKey(SC_TASKLIST), WM_SYSCOMMAND SC_TASKLIST) ; pour ouvrir le menu Démarrer, la barre des tâches
+attend HSHELL_TASKMAN de ses crochets du shell (RegisterShellHookWindow, pas encore). Vus en chemin, pas faits :
+EnableWindow (NtUserCallTwoParam 0x60, TWOPARAM_ROUTINE_ENABLEWINDOW), NtUserAlterWindowStyle, NtUserGetComboBoxInfo,
+Tab dans la boîte « Security » (le focus ne change pas : DefWindowProc de WM_KEYDOWN, journalisé), le texte
+« Logon Information » vide.
 
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
 ChangeDisplaySettings, le panneau Affichage). Pour le shell : la fenêtre de dossier qu'ouvre un item du menu Démarrer
 (sa barre d'adresse et sa vue des fichiers, vides : LockWindowUpdate, DrawCaption, puis ce que `browseui` et `shell32`
-demandent) ; Ctrl+Échap et les raccourcis
-(RegisterHotKey) ; la zone de travail (SPI_SETWORKAREA), FindWindowEx, SetParent, TrackMouseEvent ; le papier peint
+demandent) ; les fenêtres de crochet du shell (RegisterShellHookWindow : les boutons de la barre des tâches,
+HSHELL_TASKMAN pour Ctrl+Échap) ; EnableWindow, Tab dans les boîtes de `msgina` ; la zone de travail (SPI_SETWORKAREA), FindWindowEx, SetParent, TrackMouseEvent ; le papier peint
 (SPI_SETDESKWALLPAPER), la station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
 
 ## Tests
@@ -337,3 +358,12 @@ menu), un crochet sur un autre thread (appelé dans ce thread, rendu à sa fin),
 transparente, désactivée, cachée ; le bureau), SetForegroundWindow et GetForegroundWindow. Sept mutations le font
 échouer : WH_GETMESSAGE ou MSGF_MENU retiré, crochets gardés à la fin du thread, le dernier posé appelé le dernier,
 `fsHooks` non publié, HTTRANSPARENT ignoré, SetForegroundWindow sur la fille elle-même. Hôte : `win32k::hook`.
+
+Scénario `hotkey` (`tests/native/hotkey1.c`, AMD et Intel) : RegisterHotKey de Ctrl+Alt+Suppr pour une fenêtre, la
+même combinaison refusée (1409), MOD_NOREPEAT (1004), la fenêtre du bureau (1408), Ctrl+Maj+Échap pour le thread ;
+QEMU tape Ctrl+Alt+Suppr, Ctrl+Maj+Échap puis Suppr : WM_HOTKEY à la fenêtre (id 0, 0x002E0003) sans WM_KEYDOWN de
+Suppr, WM_HOTKEY au thread (id 3, 0x001B0006), Suppr seule une touche ; UnregisterHotKey (puis plus rien, puis celui du
+thread) ; Ctrl+Alt+Suppr redevient une touche. Une mutation (aucun raccourci présenté) le fait échouer. Hôte :
+`win32k::hotkey` (la SAS, une combinaison par raccourci, les modificateurs seuls au relâchement, les raccourcis d'une
+fenêtre et d'un thread retirés, les modificateurs de l'état du clavier, Ctrl+Échap du shell). Scénario `logon` :
+« WL: Unable to register Ctrl+Alt+Del hotkey » interdit.

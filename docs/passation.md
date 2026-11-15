@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **Ctrl+Alt+Suppr arrive à `winlogon` : les raccourcis clavier** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe), « Ctrl+Alt+Suppr »). L'écran de ReactOS qui
+  demande Ctrl+Alt+Suppr (après une fermeture de session, l'autologon ne servant qu'une fois, Maj enfoncée, ou un
+  poste verrouillé) ne réagissait pas : `winlogon` attend la SAS comme un raccourci de sa fenêtre SAS, et
+  NtUserRegisterHotKey manquait (« WL: Unable to register Ctrl+Alt+Del hotkey »). `win32k::hotkey` : RegisterHotKey,
+  UnregisterHotKey, WM_HOTKEY au clavier (`input::send_key`), raccourcis retirés avec leur fenêtre et leur thread,
+  Ctrl+Échap de la fenêtre du shell (SC_TASKLIST). Ctrl+Alt+Suppr ouvre « Security » ; verrouillé, « Unlock
+  Computer » ; Win+R ouvre « Run ». Scénario `hotkey` (`tests/native/hotkey1.c`, AMD et Intel ; une mutation
+  détectée) ; « WL: Unable to register Ctrl+Alt+Del hotkey » interdit dans `logon`. **Suite** : les fenêtres de
+  crochet du shell (RegisterShellHookWindow : les boutons de la barre des tâches, HSHELL_TASKMAN pour que Ctrl+Échap
+  ouvre le menu Démarrer), EnableWindow (TwoParam 0x60), Tab dans les boîtes de `msgina`.
+
 - **La fenêtre de dossier d'`explorer` s'ouvre : SB_CTL et le sous-classement des contrôles du serveur**
   (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 33 ;
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Les PR 136 (les crochets) et 137 (le partage

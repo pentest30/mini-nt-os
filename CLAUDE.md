@@ -405,6 +405,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   GWLP_WNDPROC d'une fenêtre à procédure du serveur (`win32k::window::replace_procedure`, IntSetWindowProc : ATL
   sous-classe la poignée de taille de l'autocomplétion de `browseui`) ; scénario `scroll-control`
   (`tests/native/sbctl1.c`) : la fenêtre de dossier d'`explorer` s'ouvre (« My Documents »), sa vue encore vide.
+  Les raccourcis clavier (`win32k::hotkey` : NtUserRegisterHotKey, NtUserUnregisterHotKey, WM_HOTKEY au clavier,
+  Ctrl+Échap de la fenêtre du shell) : `winlogon` reçoit Ctrl+Alt+Suppr (la SAS : « Security », « Unlock
+  Computer »), Win+R d'`explorer` ouvre « Run » ; scénario `hotkey` (`tests/native/hotkey1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
