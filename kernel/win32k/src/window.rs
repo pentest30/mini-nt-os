@@ -231,6 +231,19 @@ impl Window {
         self.state().fnid == FNID_MESSAGEWND
     }
 
+    /// IntGetParent : son propriétaire si elle est surgissante, son parent
+    /// si elle est fille, sinon aucun.
+    pub fn popup_or_child_parent(&self) -> Option<Arc<Window>> {
+        let state = self.state();
+        if state.style & abi::user::WS_POPUP != 0 {
+            get(state.owner)
+        } else if state.style & abi::user::WS_CHILD != 0 {
+            get(state.parent)
+        } else {
+            None
+        }
+    }
+
     /// Elle n'est pas détruite.
     ///
     /// # IRQL
@@ -314,6 +327,46 @@ pub fn get(handle: u32) -> Option<Arc<Window>> {
         return None;
     }
     windows.iter().find(|(&other, _)| other & 0xFFFF == handle & 0xFFFF).and_then(|(_, window)| window.upgrade())
+}
+
+/// UserGetAncestor : l'ancêtre `kind` de `window` (`GA_*`) : son parent
+/// (GA_PARENT) ; sa fenêtre de premier niveau, la dernière avant le bureau
+/// ou sa fenêtre des messages (GA_ROOT) ; le bout de la chaîne de ses
+/// propriétaires et parents (GA_ROOTOWNER, IntGetParent). Aucun pour un
+/// bureau, sa fenêtre des messages, une fenêtre sans parent ou un autre
+/// `kind`.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn ancestor(window: &Arc<Window>, kind: u32) -> Option<Arc<Window>> {
+    if window.is_desktop_window() || window.is_message_window() {
+        return None;
+    }
+    let parent = get(window.state().parent)?;
+    match kind {
+        abi::user::GA_PARENT => Some(parent),
+        abi::user::GA_ROOT => {
+            let mut root = window.clone();
+            let mut parent = Some(parent);
+            while let Some(above) = parent.filter(|above| !above.is_desktop_window() && !above.is_message_window()) {
+                parent = get(above.state().parent);
+                root = above;
+            }
+            Some(root)
+        }
+        abi::user::GA_ROOTOWNER => {
+            let mut root = window.clone();
+            // A chain longer than any real one is a loop.
+            for _ in 0..1024 {
+                match root.popup_or_child_parent() {
+                    Some(above) => root = above,
+                    None => break,
+                }
+            }
+            Some(root)
+        }
+        _ => None,
+    }
 }
 
 /// L'adresse du serveur du `WND` de la fenêtre `handle` ; 0 sans fenêtre.

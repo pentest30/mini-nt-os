@@ -194,6 +194,68 @@ fn window_at(parent: &Window, x: i32, y: i32) -> Option<Arc<Window>> {
     None
 }
 
+/// co_WinPosSearchChildren : la fenêtre sous (`x`, `y`) dans `scope` et
+/// ses enfants (dans l'ordre Z, à toute profondeur, dans sa zone cliente
+/// quand elle n'est pas réduite) ; aucune hors de `scope`, cachée, ou
+/// transparente à la souris (WS_EX_LAYERED et WS_EX_TRANSPARENT). Une
+/// fenêtre désactivée est la réponse (HTERROR), sauf une fille, qui n'en est
+/// pas une. Une fenêtre du thread `pti` dit où tombe le point
+/// (WM_NCHITTEST) : HTTRANSPARENT la laisse aux suivantes.
+fn search_children(scope: &Arc<Window>, x: i32, y: i32, pti: u32, hit: &mut u32) -> Option<Arc<Window>> {
+    let state = scope.state();
+    if state.style & WS_VISIBLE == 0 || !contains(&state.window, x, y) {
+        return None;
+    }
+    let see_through = abi::user::WS_EX_LAYERED | abi::user::WS_EX_TRANSPARENT;
+    if state.ex_style & see_through == see_through {
+        return None;
+    }
+    if state.style & abi::user::WS_DISABLED != 0 {
+        if state.style & (WS_POPUP | WS_CHILD) == WS_CHILD {
+            return None;
+        }
+        *hit = abi::user::HTERROR;
+        return Some(scope.clone());
+    }
+    if state.style & abi::user::WS_MINIMIZE == 0 && contains(&state.client, x, y) {
+        let mut children = Vec::new();
+        let mut next = state.child;
+        while let Some(child) = crate::window::get(next) {
+            next = child.state().next;
+            children.push(child);
+        }
+        for child in &children {
+            if let Some(found) = search_children(child, x, y, pti, hit) {
+                return Some(found);
+            }
+        }
+    }
+    if scope.pti == pti {
+        *hit = crate::window::send_message(scope, WM_NCHITTEST, 0, LParam::Value(make_lparam(x, y))).unwrap_or(0);
+        if *hit as u16 == HTTRANSPARENT as u16 {
+            return None;
+        }
+    } else if *hit == HTNOWHERE {
+        *hit = HTCLIENT;
+    }
+    Some(scope.clone())
+}
+
+/// NtUserWindowFromPoint (co_WinPosWindowFromPoint) : la fenêtre sous
+/// (`x`, `y`) sur le bureau d'entrée, le bureau lui-même si aucune autre ;
+/// les fenêtres du thread courant `thread` disent où tombe le point
+/// (WM_NCHITTEST).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir (des rappels).
+pub fn window_from_point(thread: &ThreadInfo, x: i32, y: i32) -> Option<Arc<Window>> {
+    let desktop = crate::desktop::input_desktop()?;
+    let scope = desktop.window.clone();
+    drop(desktop);
+    let mut hit = HTNOWHERE;
+    search_children(&scope, x, y, thread.server, &mut hit)
+}
+
 /// Les touches et boutons enfoncés, en MK_*.
 fn key_flags(buttons: u32) -> u32 {
     let down = |vk| crate::input::async_key_state(vk) & 0x8000 != 0;

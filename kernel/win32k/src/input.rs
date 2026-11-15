@@ -259,6 +259,30 @@ pub fn foreground() -> Option<Arc<ThreadInfo>> {
     FOREGROUND.lock().clone()
 }
 
+/// UserGetForegroundWindow : la fenêtre active du thread du premier plan ;
+/// 0 sans premier plan.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn foreground_window() -> u32 {
+    foreground().map_or(0, |thread| thread.queue.with(|queue| queue.active).0)
+}
+
+/// co_IntSetForegroundWindow (SetForegroundWindow) : la fenêtre de premier
+/// niveau de `window` est activée et passe au premier plan ([`activate`]) ;
+/// rend si elle a pu l'être (visible, ni réduite ni fille, pas détruite).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn set_foreground_window(window: &Arc<Window>) -> bool {
+    let root = root_of(window.clone());
+    if !can_activate(&root) {
+        return false;
+    }
+    activate(&root);
+    true
+}
+
 /// `thread`, qui se termine, n'est plus au premier plan
 /// (IntSetFocusMessageQueue(NULL) de MsqDestroyMessageQueue) ; rend s'il
 /// l'était. Le dernier pointeur vers lui part une fois le verrou rendu.

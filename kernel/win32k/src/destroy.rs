@@ -270,7 +270,8 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
 /// ExitThreadCallback : `thread`, un thread GUI, se termine. Ses fenêtres
 /// sont détruites sans message (celles de premier niveau d'abord), puis
 /// celles dont la destruction aurait été interrompue ; ses minuteries
-/// partent ; sa file est vidée, les messages qu'on lui avait envoyés
+/// partent, et les crochets qui l'accrochent ou qu'il a posés
+/// (`crate::hook::thread_exit`) ; sa file est vidée, les messages qu'on lui avait envoyés
 /// reviennent à leurs envoyeurs ; il n'est plus au premier plan et quitte
 /// son bureau ; le handle de l'événement de sa file est fermé.
 ///
@@ -299,6 +300,7 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
     }
     drop((top, rest));
     crate::timer::destroy_thread_timers(&info);
+    let hooks = crate::hook::thread_exit(info.server);
     let (sent, _, _) = info.queue.with(crate::queue::QueueState::clear);
     let abandoned = sent.len();
     crate::sent::abandon_all(sent);
@@ -306,13 +308,14 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
     info.drop_keyboard_layout();
     info.close_queue_event(thread.process());
     let left = core::mem::take(&mut *info.windows.lock());
-    if count != 0 || abandoned != 0 || !left.is_empty() {
+    if count != 0 || abandoned != 0 || hooks != 0 || !left.is_empty() {
         log::info!(
-            "win32k: thread {} of {} ended with {} windows (destroyed), {} sent messages (given back)",
+            "win32k: thread {} of {} ended with {} windows (destroyed), {} sent messages (given back), {} hooks (removed)",
             thread.tid(),
             thread.process().image_file_name(),
             count,
-            abandoned
+            abandoned,
+            hooks
         );
     }
     drop(left);
@@ -320,7 +323,7 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
 
 /// ExitProcessCallback : `process`, un processus GUI, se termine (son
 /// dernier thread a fini) : ses objets USER qui restent sont détruits (ses
-/// menus, ses tables d'accélérateurs ; une fenêtre qui resterait, sans
+/// menus, ses tables d'accélérateurs, ses crochets ; une fenêtre qui resterait, sans
 /// message), les DC du cache qu'il avait pris y reviennent, ses objets GDI
 /// quittent la table, son `PROCESSINFO` rend ses classes, ses bureaux et sa
 /// station. Ce qui reste ensuite est journalisé.
@@ -349,6 +352,9 @@ pub fn process_exit(process: &Arc<Object<EProcess>>) {
             TYPE_MENU if crate::menu::destroy(handle) => menus += 1,
             TYPE_CURSOR if crate::cursor::destroy(handle, true) => cursors += 1,
             TYPE_ACCELTABLE if crate::accel::destroy(handle) => accelerators += 1,
+            abi::user::TYPE_HOOK => {
+                crate::hook::destroy(handle);
+            }
             // Un lot de DeferWindowPos jamais fini : rendu sans rien déplacer.
             TYPE_SETWINDOWPOS => {
                 crate::deferpos::destroy(handle);

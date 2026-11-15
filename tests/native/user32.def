@@ -9,6 +9,8 @@ GetClassNameA@12
 AppendMenuW@16
 BeginDeferWindowPos@4
 BeginPaint@8
+CallMsgFilterW@8
+CallNextHookEx@16
 CheckMenuItem@12
 CheckMenuRadioItem@20
 CopyAcceleratorTableW@12
@@ -35,6 +37,7 @@ DrawIconEx@36
 EndDeferWindowPos@4
 DrawMenuBar@4
 DrawTextW@20
+EnableWindow@8
 EnableMenuItem@12
 EnableScrollBar@12
 EndMenu@0
@@ -48,10 +51,12 @@ GetAsyncKeyState@4
 GetCapture@0
 GetCaretBlinkTime@0
 GetCaretPos@4
+GetAncestor@8
 GetClassInfoExW@12
 GetClientRect@8
 GetCursor@0
 GetCursorPos@4
+GetForegroundWindow@0
 GetDC@4
 GetDCEx@12
 GetDesktopWindow@0
@@ -153,6 +158,10 @@ SetWindowTextW@8
 ShowCaret@4
 ShowScrollBar@12
 ShowWindow@8
+SetForegroundWindow@4
+SetWindowsHookExW@16
+UnhookWindowsHookEx@4
+WindowFromPoint@8
 SwitchDesktop@4
 SystemParametersInfoW@16
 ToUnicodeEx@28

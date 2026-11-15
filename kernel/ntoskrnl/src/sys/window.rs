@@ -707,6 +707,9 @@ pub(super) fn nt_user_set_window_placement(arguments: &[u32]) -> NtStatus {
 /// `HWNDLOCK_ROUTINE_DRAWMENUBAR` (DrawMenuBar : le cadre d'une fenêtre qui
 /// n'est pas fille se recalcule, sa barre se remet en page et se repeint,
 /// SetWindowPos(SWP_FRAMECHANGED)) ; TRUE.
+/// `HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW` (SetForegroundWindow,
+/// `win32k::input::set_foreground_window`) : si sa fenêtre de premier niveau
+/// a pu être activée.
 /// FALSE pour une fenêtre inconnue (`ERROR_INVALID_WINDOW_HANDLE`) ou une
 /// autre routine (journalisée à son premier appel).
 pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
@@ -718,6 +721,9 @@ pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
         abi::user::HWNDLOCK_ROUTINE_UPDATEWINDOW => {
             win32k::paint::update_window(&window, abi::user::RDW_ALLCHILDREN);
             NtStatus(1)
+        }
+        abi::user::HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW => {
+            NtStatus(u32::from(win32k::input::set_foreground_window(&window)))
         }
         abi::user::HWNDLOCK_ROUTINE_DRAWMENUBAR => {
             use abi::user::{SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER};
@@ -732,6 +738,35 @@ pub(super) fn nt_user_call_hwnd_lock(arguments: &[u32]) -> NtStatus {
             NtStatus(0)
         }
     }
+}
+
+/// NtUserGetAncestor(hWnd, uType) : HWND, l'ancêtre `uType` (`GA_*`) de la
+/// fenêtre (`win32k::window::ancestor`) ; 0 sans lui, 0 et
+/// `ERROR_INVALID_WINDOW_HANDLE` pour une fenêtre inconnue, 0 et
+/// `ERROR_INVALID_PARAMETER` pour un autre type.
+pub(super) fn nt_user_get_ancestor(arguments: &[u32]) -> NtStatus {
+    let [handle, kind] = arguments[..2] else { unreachable!("2 arguments") };
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    if !(abi::user::GA_PARENT..=abi::user::GA_ROOTOWNER).contains(&kind) {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    NtStatus(win32k::window::ancestor(&window, kind).map_or(0, |ancestor| ancestor.handle))
+}
+
+/// NtUserWindowFromPoint(X, Y) : HWND, la fenêtre sous le point
+/// (`win32k::mouse::window_from_point`) ; 0 sans bureau d'entrée.
+pub(super) fn nt_user_window_from_point(arguments: &[u32]) -> NtStatus {
+    let [x, y] = arguments[..2] else { unreachable!("2 arguments") };
+    let thread = win32k::convert_current_thread().expect("a GUI thread at a win32k service");
+    NtStatus(win32k::mouse::window_from_point(&thread, x as i32, y as i32).map_or(0, |window| window.handle))
+}
+
+/// NtUserGetForegroundWindow() : HWND, la fenêtre active du thread du premier
+/// plan (`win32k::input::foreground_window`) ; 0 sans elle.
+pub(super) fn nt_user_get_foreground_window(_arguments: &[u32]) -> NtStatus {
+    NtStatus(win32k::input::foreground_window())
 }
 
 /// NtUserSetLogonNotifyWindow(hWnd) : la fenêtre devient la fenêtre SAS du

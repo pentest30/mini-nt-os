@@ -558,9 +558,21 @@ pub fn post_quit(thread: &ThreadInfo, code: u32) {
 /// l'activation). Mangé (MA_*ANDEAT), ou sa fenêtre n'étant plus, le suivant
 /// est cherché.
 ///
+/// Le message trouvé passe ensuite par les crochets WH_GETMESSAGE du thread
+/// (`crate::hook::get_message`), qui peuvent le changer, comme dans
+/// co_IntGetPeekMessage : PeekMessage, GetMessage et les boucles du noyau
+/// (menus, déplacement) les appellent ainsi.
+///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le thread, sans rien tenir (des rappels).
 pub fn peek(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<Msg32> {
+    let mut message = peek_unhooked(thread, filter, remove)?;
+    crate::hook::get_message(thread, &mut message, remove);
+    Some(message)
+}
+
+/// [`peek`] sans les crochets.
+fn peek_unhooked(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<Msg32> {
     // The messages other threads sent come first, and never out.
     crate::sent::dispatch_all(thread);
     let mut skip = 0;
