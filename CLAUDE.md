@@ -507,6 +507,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   `llvm`). Sans eux, ils sont sautés.
 - `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
+- `screen-wait = SECONDES` : l'écran peut mettre ce temps à montrer les pixels de `screen` après les marqueurs
+  (ce qu'ont lancé des `keys`) ; la capture est refaite chaque seconde jusque-là.
 - `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
   touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre ; `"dir C:\"` entre guillemets donne les
   touches de chaque caractère (clavier américain).

@@ -54,8 +54,15 @@
 # (win32k::deferpos), which once failed ("BeginDeferWindowPos failed",
 # traywnd.cpp:1705): the button kept a size of 0; it is now at the left of
 # the taskbar, (2, 776)-(66, 796), its right edge dark (COLOR_3DDKSHADOW).
-# Its Start menu is not yet created: its toolbars ask the system image list
-# (SHGetImageList), which the missing icons leave NULL.
+# With the icons (the system image list of shell32, which the Start menu's
+# toolbars ask by SHGetImageList), explorer creates its Start menu, then
+# the rest of its taskbar (the notification area and its clock). A click on
+# the Start button (the mouse of QEMU, from the middle of the screen) opens
+# the Start menu above it ("BaseBar", (2, 498)-(175, 776)): its face where
+# the desktop was blue, its dark right edge, the button pushed. The menu
+# takes 15 to 30 s to appear the first time: each of its icons makes a data
+# section of shell32.dll, which the kernel copies whole (10.9 MB, read from
+# the ATA disk); hence `screen-wait`.
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
@@ -65,7 +72,7 @@ shell = explorer
 disk = system
 boots = 2
 cpus = default
-timeout = 300
+timeout = 420
 
 expect = [boot] .DEFAULT hive mounted at \REGISTRY\USER\.DEFAULT
 expect = [minoinit] environment: SystemDrive=C:
@@ -78,10 +85,14 @@ expect = We are logged on
 expect = of userinit.exe
 expect = of explorer.exe
 expect = Documents and Settings\Administrator\Desktop\*.*
+keys = Documents and Settings\Administrator\Desktop\*.* => move:-300,193 move:-300,193 press:1 release
 screen = 640 790 D4D0C8
 screen = 640 773 FFFFFF
-screen = 65 786 404040
-screen = 2 786 FFFFFF
+screen = 2 786 404040
+screen = 65 786 FFFFFF
+screen = 100 560 D4D0C8
+screen = 174 600 404040
+screen-wait = 120
 
 forbid = [minoinit] stopped:
 forbid = *** STOP:
