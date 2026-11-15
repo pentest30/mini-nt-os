@@ -177,3 +177,7 @@ GetPropW@8
 RemovePropW@8
 SetPropW@12
 SetWindowRgn@12
+CallWindowProcA@20
+GetClassLongA@8
+GetClassLongW@8
+SetWindowLongA@12

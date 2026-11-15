@@ -62,18 +62,18 @@ use abi::teb32::Teb32;
 use abi::user::{
     CallbackWnd32, ClientInfo32, Cls32, CreateStructW32, DeskInfoHead32, LargeUnicodeString32, MinMaxInfo32, Msg32,
     Rect32, StyleStruct32, WindowProcArguments32, Wnd32, CSF_ANSIPROC, CSF_SERVERSIDEPROC, CSF_SYSTEMCLASS, CS_DBLCLKS,
-    CW_USEDEFAULT, DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_GHOST, FNID_MENU,
-    FNID_MESSAGEWND, GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA, GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE,
-    HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED,
-    SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW, SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP,
-    WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE,
-    WM_NCCREATE, WM_NCPAINT, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE, WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSTIMER,
-    WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT, WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT,
-    WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW, WNDS_ERASEBACKGROUND, WNDS_HASMENU,
-    WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND, WNDS_SENDSIZEMOVEMSGS,
-    WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_DLGFRAME,
-    WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_WINDOWEDGE,
-    WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
+    CW_USEDEFAULT, DLGWINDOWEXTRA, FNID_BUTTON, FNID_DESKTOP, FNID_DESTROY, FNID_DIALOG, FNID_EDIT, FNID_FIRST,
+    FNID_GHOST, FNID_MENU, FNID_MESSAGEWND, FNID_SWITCH, GWLP_HINSTANCE, GWLP_HWNDPARENT, GWLP_ID, GWLP_USERDATA,
+    GWLP_WNDPROC, GWL_EXSTYLE, GWL_STYLE, HRGN_WINDOW, HWND_BOTTOM, HWND_MESSAGE, HWND_NOTOPMOST, HWND_TOP,
+    HWND_TOPMOST, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, STARTF_USEPOSITION, STARTF_USESIZE, SW_SHOW,
+    SW_SHOWMINIMIZED, TYPE_WINDOW, WC_DESKTOP, WINVER_WIN2K, WINVER_WIN31, WINVER_WINNT4, WM_CREATE, WM_ERASEBKGND,
+    WM_GETMINMAXINFO, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCPAINT, WM_PAINT, WM_PARENTNOTIFY, WM_SIZE,
+    WM_STYLECHANGED, WM_STYLECHANGING, WM_SYSTIMER, WM_TIMER, WNDS2_WIN31COMPAT, WNDS2_WIN40COMPAT, WNDS2_WIN50COMPAT,
+    WNDS2_WMCREATEMSGPROCESSED, WNDS2_WMPAINTSENT, WNDS_ANSICREATOR, WNDS_ANSIWINDOWPROC, WNDS_DIALOGWINDOW,
+    WNDS_ERASEBACKGROUND, WNDS_HASMENU, WNDS_MAXIMIZESTOMONITOR, WNDS_PAINTNOTPROCESSED, WNDS_SENDERASEBACKGROUND,
+    WNDS_SENDSIZEMOVEMSGS, WNDS_SERVERSIDEWINDOWPROC, WND_UNICODE, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+    WS_CLIPSIBLINGS, WS_DLGFRAME, WS_EX_DLGMODALFRAME, WS_EX_NOPARENTNOTIFY, WS_EX_SETANSICREATOR, WS_EX_STATICEDGE,
+    WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MINIMIZE, WS_POPUP, WS_THICKFRAME, WS_VISIBLE,
 };
 use abi::winerror::{
     ERROR_CANNOT_FIND_WND_CLASS, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
@@ -84,6 +84,7 @@ use ke::usermem::UserPtr;
 use ob::Object;
 
 use crate::class::{Class, ClassName};
+use crate::client::ClientProcedures;
 use crate::desktop::{Desktop, DesktopHeap};
 use crate::gdi::dib::Rect;
 use crate::gdi::region::Region;
@@ -223,6 +224,29 @@ impl Window {
     /// C'est la fenêtre d'un bureau.
     pub fn is_desktop_window(&self) -> bool {
         self.desktop_name.is_some()
+    }
+
+    /// Le nombre de ses octets de plus (`cbwndExtra`), après son `WND`.
+    pub fn extra_size(&self) -> u32 {
+        self.wnd_size - size_of::<Wnd32>() as u32
+    }
+
+    /// Écrit `bytes` dans ses octets de plus, à `offset` de leur début, dans
+    /// le tas du bureau où `user32` les lit.
+    ///
+    /// # Errors
+    /// `STATUS_INVALID_PARAMETER` au-delà de ses octets de plus ; celles de
+    /// l'écriture du tas.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn write_extra(&self, offset: u32, bytes: &[u8]) -> Result<(), NtStatus> {
+        let end = offset.checked_add(bytes.len() as u32).ok_or(abi::ntstatus::STATUS_INVALID_PARAMETER)?;
+        if end > self.extra_size() {
+            return Err(abi::ntstatus::STATUS_INVALID_PARAMETER);
+        }
+        let at = u64::from(self.wnd) + size_of::<Wnd32>() as u64 + u64::from(offset);
+        self.heap.section.write_kernel(at, bytes)
     }
 
     /// C'est la fenêtre des messages d'un bureau (UserIsMessageWindow), le
@@ -562,14 +586,15 @@ pub fn apply_long(state: &mut WindowState, index: i32, value: u32) -> Option<u32
 /// `window` devient `value` ; rend l'ancien. Un index positif est une place
 /// dans ses octets de plus (`cbWndExtra`, après le `WND`, où `user32` les lit
 /// lui-même) ; GWL_STYLE et GWL_EXSTYLE passent par [`set_style`] ; un autre
-/// GWLP_WNDPROC remplace la procédure cliente ; un autre index négatif
+/// GWLP_WNDPROC remplace la procédure ([`replace_procedure`]) ; un autre index négatif
 /// est l'un de ceux de [`apply_long`].
 ///
 /// # Errors
 /// L'erreur de Win32 : `ERROR_INVALID_INDEX` pour une place au-delà des
 /// octets de plus ou un index inconnu ; `ERROR_CALL_NOT_IMPLEMENTED` pour
-/// GWLP_HWNDPARENT, les procédures serveur et les ponts ANSI/Unicode.
-/// GWLP_WNDPROC d’un autre processus : ERROR_ACCESS_DENIED.
+/// GWLP_HWNDPARENT et une ancienne procédure du client demandée dans l'autre
+/// jeu de caractères ([`replace_procedure`]). GWLP_WNDPROC d’un autre
+/// processus : ERROR_ACCESS_DENIED.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, sans rien tenir. Rappelle le mode utilisateur.
@@ -594,8 +619,10 @@ pub fn set_long(window: &Arc<Window>, index: i32, value: u32, ansi: bool) -> Res
         if crate::gui::process_id_of(window.pti) != Some(current.process().pid()) {
             return Err(abi::winerror::ERROR_ACCESS_DENIED);
         }
+        let procedures = crate::client::procedures();
+        let fnid = window.class.as_ref().map_or(0, |class| class.fnid);
         let mut result = Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
-        change(window, |state| result = replace_procedure(state, value, !ansi));
+        change(window, |state| result = replace_procedure(state, fnid, value, ansi, procedures.as_ref()));
         return result;
     }
     if index == GWLP_HWNDPARENT {
@@ -610,14 +637,93 @@ pub fn set_long(window: &Arc<Window>, index: i32, value: u32, ansi: bool) -> Res
     old.ok_or(abi::winerror::ERROR_INVALID_INDEX)
 }
 
-/// Replace a client procedure without changing its character-set contract.
-/// ANSI/Unicode crossings need CALLPROCDATA handles (CallWindowProc thunks),
-/// and server procedures need their client counterpart; neither is inferred.
-fn replace_procedure(state: &mut WindowState, procedure: u32, unicode: bool) -> Result<u32, u32> {
-    if state.unicode != unicode || state.state & WNDS_SERVERSIDEWINDOWPROC != 0 {
-        return Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+/// IntGetWindowProc : la procédure de la fenêtre `state` (de la classe de
+/// FNID `fnid`) que voit le client, ANSI ou non (`ansi`). Pour une procédure
+/// du serveur, celle du client du même FNID (0 si aucun ne lui correspond) ;
+/// pour un contrôle (de FNID_BUTTON à FNID_GHOST, sauf Edit) dont c'est la
+/// procédure du client dans l'autre jeu de caractères, celle de ce jeu-ci.
+///
+/// # Errors
+/// `ERROR_CALL_NOT_IMPLEMENTED` quand ReactOS rendrait un CALLPROCDATA (une
+/// procédure du client demandée dans l'autre jeu de caractères, UserGetCPD) :
+/// Mino n'a pas encore ces handles.
+fn window_procedure(
+    state: &WindowState,
+    fnid: u32,
+    ansi: bool,
+    procedures: Option<&ClientProcedures>,
+) -> Result<u32, u32> {
+    if state.state & WNDS_SERVERSIDEWINDOWPROC != 0 {
+        let client = procedures.and_then(|procedures| {
+            (FNID_FIRST..=FNID_SWITCH)
+                .find(|&fnid| crate::client::server_procedure_in(procedures, fnid) == Some(state.wnd_proc))
+                .and_then(|fnid| crate::client::client_procedure_in(procedures, fnid, ansi))
+        });
+        return Ok(client.unwrap_or(0));
     }
-    Ok(core::mem::replace(&mut state.wnd_proc, procedure))
+    let procedure = state.wnd_proc;
+    if fnid != FNID_EDIT && (FNID_BUTTON..=FNID_GHOST).contains(&fnid) {
+        let crossed = procedures.and_then(|procedures| {
+            (crate::client::client_procedure_in(procedures, fnid, !ansi) == Some(procedure))
+                .then(|| crate::client::client_procedure_in(procedures, fnid, ansi))
+                .flatten()
+        });
+        if let Some(crossed) = crossed.filter(|&crossed| crossed != procedure) {
+            return Ok(crossed);
+        }
+    }
+    if ansi == (state.state & WNDS_ANSIWINDOWPROC != 0) {
+        return Ok(procedure);
+    }
+    Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED)
+}
+
+/// IntSetWindowProc : `procedure` devient la procédure de la fenêtre
+/// `state` (de la classe de FNID `fnid`), ANSI ou non (`ansi`) ; rend
+/// l'ancienne, vue du client ([`window_procedure`]). La procédure du client
+/// d'un FNID qui a une procédure du serveur rend celle-ci à la fenêtre
+/// (`WNDS_SERVERSIDEWINDOWPROC`, Unicode) ; une autre en fait une procédure
+/// du client, dans son jeu de caractères, et NULL garde la procédure
+/// actuelle. Ainsi ATL sous-classe un contrôle ScrollBar (SubclassWindow :
+/// la poignée de taille de l'autocomplétion de browseui), puis lui rend sa
+/// procédure. Pas de CALLPROCDATA à reconnaître : Mino n'en donne pas.
+///
+/// # Errors
+/// Ceux de [`window_procedure`] ; la fenêtre reste alors inchangée.
+fn replace_procedure(
+    state: &mut WindowState,
+    fnid: u32,
+    procedure: u32,
+    ansi: bool,
+    procedures: Option<&ClientProcedures>,
+) -> Result<u32, u32> {
+    let old = window_procedure(state, fnid, ansi, procedures)?;
+    let server = procedures.and_then(|procedures| {
+        crate::client::server_fnid_in(procedures, procedure)
+            .and_then(|fnid| crate::client::server_procedure_in(procedures, fnid))
+    });
+    if let Some(server) = server {
+        state.wnd_proc = server;
+        state.unicode = true;
+        state.state &= !WNDS_ANSIWINDOWPROC;
+        state.state |= WNDS_SERVERSIDEWINDOWPROC;
+        return Ok(old);
+    }
+    state.unicode = !ansi;
+    if ansi {
+        state.state |= WNDS_ANSIWINDOWPROC;
+    } else {
+        state.state &= !WNDS_ANSIWINDOWPROC;
+    }
+    state.state &= !WNDS_SERVERSIDEWINDOWPROC;
+    let procedure = if procedure == 0 { state.wnd_proc } else { procedure };
+    let crossed = procedures.filter(|_| (FNID_BUTTON..=FNID_GHOST).contains(&fnid)).and_then(|procedures| {
+        (crate::client::client_procedure_in(procedures, fnid, !ansi) == Some(procedure))
+            .then(|| crate::client::client_procedure_in(procedures, fnid, ansi))
+            .flatten()
+    });
+    state.wnd_proc = crossed.unwrap_or(procedure);
+    Ok(old)
 }
 
 /// co_IntSetWindowLongPtr, GWL_STYLE et GWL_EXSTYLE : la procédure de
@@ -2099,6 +2205,7 @@ pub fn make_long(low: i32, high: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use abi::user::FNID_SCROLLBAR;
 
     fn window(width: i32, height: i32) -> WindowState {
         let rect = Rect::new(0, 0, width, height);
@@ -2158,18 +2265,106 @@ mod tests {
         assert_eq!(state, before, "unchanged");
     }
 
-    /// Task Manager's tab control (comctl32, TAB_Create) gives itself
+    /// The procedures of a test client, in the order of the FNIDs: ANSI at
+    /// 0x7000_0000 + 0x10 * i, Unicode at 0x7100_0000 + 0x10 * i.
+    fn test_procedures() -> ClientProcedures {
+        (
+            core::array::from_fn(|i| 0x7000_0000 + 0x10 * i as u32),
+            core::array::from_fn(|i| 0x7100_0000 + 0x10 * i as u32),
+        )
+    }
+
+    /// A client procedure (a dialog's, a subclassed control's) replaced and
+    /// given back; NULL keeps it.
     #[test]
     fn client_procedure_can_be_replaced_and_restored() {
+        let procedures = test_procedures();
+        let procedures = Some(&procedures);
         let mut state = WindowState { wnd_proc: 0x401000, unicode: true, ..WindowState::default() };
-        assert_eq!(replace_procedure(&mut state, 0x402000, true), Ok(0x401000));
+        assert_eq!(replace_procedure(&mut state, 0, 0x402000, false, procedures), Ok(0x401000));
         assert_eq!(state.wnd_proc, 0x402000);
-        assert_eq!(replace_procedure(&mut state, 0x401000, true), Ok(0x402000));
-        assert_eq!(replace_procedure(&mut state, 0x403000, false), Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED));
-        assert_eq!(state.wnd_proc, 0x401000, "unsupported conversion leaves the procedure intact");
-        state.state |= WNDS_SERVERSIDEWINDOWPROC;
-        assert!(replace_procedure(&mut state, 0x403000, true).is_err());
-        assert_eq!(state.wnd_proc, 0x401000);
+        assert_eq!(replace_procedure(&mut state, 0, 0x401000, false, procedures), Ok(0x402000));
+        assert_eq!(
+            replace_procedure(&mut state, 0, 0x403000, true, procedures),
+            Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED),
+            "the old Unicode procedure asked in ANSI: a CALLPROCDATA in ReactOS"
+        );
+        assert_eq!((state.wnd_proc, state.unicode), (0x401000, true), "left intact");
+        assert_eq!(replace_procedure(&mut state, 0, 0, false, procedures), Ok(0x401000));
+        assert_eq!(state.wnd_proc, 0x401000, "NULL keeps the procedure");
+    }
+
+    /// ATL subclasses the size box of browseui's autocompletion, a ScrollBar
+    /// control, whose procedure is the server's (SubclassWindow); refused,
+    /// the drop-down list was not created, CAutoComplete released itself
+    /// once too often and explorer ended on a pure virtual call when it
+    /// opened a folder.
+    #[test]
+    fn a_server_procedure_can_be_subclassed_and_given_back() {
+        let procedures = test_procedures();
+        let client = |ansi| crate::client::client_procedure_in(&procedures, FNID_SCROLLBAR, ansi).unwrap();
+        let server = crate::client::server_procedure_in(&procedures, FNID_SCROLLBAR).unwrap();
+        let procedures = Some(&procedures);
+        let mut state =
+            WindowState { wnd_proc: server, unicode: true, state: WNDS_SERVERSIDEWINDOWPROC, ..WindowState::default() };
+        assert_eq!(window_procedure(&state, FNID_SCROLLBAR, true, procedures), Ok(client(true)));
+        assert_eq!(window_procedure(&state, FNID_SCROLLBAR, false, procedures), Ok(client(false)));
+
+        assert_eq!(replace_procedure(&mut state, FNID_SCROLLBAR, 0x402000, false, procedures), Ok(client(false)));
+        assert_eq!((state.wnd_proc, state.unicode, state.state), (0x402000, true, 0), "a client procedure now");
+        assert_eq!(
+            replace_procedure(&mut state, FNID_SCROLLBAR, client(false), false, procedures),
+            Ok(0x402000),
+            "given back"
+        );
+        assert_eq!((state.wnd_proc, state.state), (server, WNDS_SERVERSIDEWINDOWPROC), "the server's again");
+
+        assert_eq!(
+            replace_procedure(&mut state, FNID_SCROLLBAR, 0x403000, true, procedures),
+            Ok(client(true)),
+            "subclassed in ANSI: the client's ANSI procedure, without a CALLPROCDATA"
+        );
+        assert_eq!((state.unicode, state.state), (false, WNDS_ANSIWINDOWPROC));
+        assert_eq!(replace_procedure(&mut state, FNID_SCROLLBAR, client(true), true, procedures), Ok(0x403000));
+        assert_eq!(
+            (state.wnd_proc, state.unicode, state.state),
+            (server, true, WNDS_SERVERSIDEWINDOWPROC),
+            "the ANSI procedure of the client gives back the server's, Unicode"
+        );
+
+        let mut other =
+            WindowState { wnd_proc: 0x7fff_0000, state: WNDS_SERVERSIDEWINDOWPROC, ..WindowState::default() };
+        assert_eq!(window_procedure(&other, 0, false, procedures), Ok(0), "no FNID has it: 0, as ReactOS");
+        assert_eq!(replace_procedure(&mut other, 0, 0x402000, false, None), Ok(0), "before the client registers");
+    }
+
+    /// A control (from FNID_BUTTON to FNID_GHOST) crosses character sets by
+    /// its two client procedures; Edit does not (IntGetWindowProc).
+    #[test]
+    fn a_control_crosses_character_sets_by_its_client_procedures() {
+        let procedures = test_procedures();
+        let button = |ansi| crate::client::client_procedure_in(&procedures, FNID_BUTTON, ansi).unwrap();
+        let edit = crate::client::client_procedure_in(&procedures, FNID_EDIT, false).unwrap();
+        let procedures = Some(&procedures);
+        let mut state = WindowState { wnd_proc: button(false), unicode: true, ..WindowState::default() };
+        assert_eq!(window_procedure(&state, FNID_BUTTON, true, procedures), Ok(button(true)));
+        assert_eq!(replace_procedure(&mut state, FNID_BUTTON, 0x402000, true, procedures), Ok(button(true)));
+        assert_eq!((state.wnd_proc, state.unicode, state.state), (0x402000, false, WNDS_ANSIWINDOWPROC));
+        assert_eq!(replace_procedure(&mut state, FNID_BUTTON, button(true), true, procedures), Ok(0x402000));
+        assert_eq!(state.wnd_proc, button(true));
+        assert_eq!(replace_procedure(&mut state, FNID_BUTTON, button(true), false, procedures), Ok(button(false)));
+        assert_eq!(
+            (state.wnd_proc, state.unicode, state.state),
+            (button(false), true, 0),
+            "the ANSI procedure given in Unicode: the Unicode one"
+        );
+
+        let mut state = WindowState { wnd_proc: edit, unicode: true, ..WindowState::default() };
+        assert_eq!(
+            replace_procedure(&mut state, FNID_EDIT, 0x402000, true, procedures),
+            Err(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED)
+        );
+        assert_eq!(state.wnd_proc, edit);
     }
 
     /// WS_CLIPSIBLINGS by SetWindowLong(GWL_STYLE); refused, it painted its

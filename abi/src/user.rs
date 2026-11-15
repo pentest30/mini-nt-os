@@ -311,6 +311,9 @@ pub const FNID_SWITCH: u32 = 0x02A0;
 pub const FNID_BUTTON: u32 = 0x02A1;
 /// FNID_DIALOG: a dialog (SetDialogPointer, DefDlgProc).
 pub const FNID_DIALOG: u32 = 0x02A4;
+/// FNID_EDIT: an Edit control, whose procedure the client sees as it is
+/// (IntGetWindowProc).
+pub const FNID_EDIT: u32 = 0x02A5;
 /// DLGWINDOWEXTRA: the extra bytes of a dialog's window (the dialog
 /// class's), the least SetDialogPointer accepts.
 pub const DLGWINDOWEXTRA: u32 = 30;
@@ -2050,6 +2053,38 @@ pub struct SbInfo32 {
     pub vert: SbData32,
 }
 
+/// SBCALC, 32-bit: the state of a scroll bar control (the ScrollBar class),
+/// its SBDATA first; win32k keeps those four fields, `user32` reads them
+/// (GetScrollPos, SBM_GETPOS, SBM_GETRANGE) and the rest is unused.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SbCalc32 {
+    pub data: SbData32,
+    pub px_top: i32,
+    pub px_bottom: i32,
+    pub px_left: i32,
+    pub px_right: i32,
+    pub cpx_thumb: i32,
+    pub px_up_arrow: i32,
+    pub px_down_arrow: i32,
+    pub px_start: i32,
+    pub px_thumb_bottom: i32,
+    pub px_thumb_top: i32,
+    pub cpx: i32,
+    pub px_min: i32,
+}
+
+/// What a scroll bar control's WND carries past the WND (SBWND, less the
+/// WND): its class has these extra bytes (`sizeof(SBWND) - sizeof(WND)`),
+/// and its SB_CTL bar lives there (`SBCalc`), not in an SBINFO.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SbWndExtra32 {
+    pub f_vert: i32,
+    pub w_disable_flags: u32,
+    pub sb_calc: SbCalc32,
+}
+
 /// SCROLLINFO, 32-bit (SetScrollInfo, GetScrollInfo); an application may
 /// give it without `nTrackPos`, 24 bytes.
 #[repr(C)]
@@ -2092,6 +2127,9 @@ pub struct SetScrollBarInfo32 {
 const _: () = {
     assert!(size_of::<SbData32>() == 16);
     assert!(size_of::<SbInfo32>() == 36);
+    assert!(size_of::<SbCalc32>() == 64);
+    assert!(size_of::<SbWndExtra32>() == 72);
+    assert!(offset_of!(SbWndExtra32, sb_calc) == 8);
     assert!(offset_of!(SbInfo32, horz) == 4);
     assert!(offset_of!(SbInfo32, vert) == 20);
     assert!(size_of::<ScrollInfo32>() == 28);
@@ -2332,6 +2370,7 @@ as_bytes!(
     FindExistingCurIconParam32,
     SetWndIconsArguments32,
     Property32,
+    SbData32,
     SbInfo32,
     ScrollInfo32,
     ScrollBarInfo32,

@@ -74,7 +74,8 @@ pub(super) fn nt_user_sb_get_parms(arguments: &[u32]) -> NtStatus {
 
 /// NtUserGetScrollBarInfo(hWnd, idObject, psbi) : BOOL ; le SCROLLBARINFO
 /// du client (dont le `cbSize` doit être le sien) reçoit celui de la barre,
-/// son rectangle dans la fenêtre (`win32k::scroll::scroll_bar_info`).
+/// son rectangle dans la fenêtre, ou dans la zone cliente d'un contrôle
+/// (OBJID_CLIENT, `win32k::scroll::scroll_bar_info`).
 pub(super) fn nt_user_get_scroll_bar_info(arguments: &[u32]) -> NtStatus {
     let [hwnd, object, info] = arguments[..3] else { unreachable!("3 arguments") };
     let get = || {
@@ -110,7 +111,8 @@ pub(super) fn nt_user_set_scroll_bar_info(arguments: &[u32]) -> NtStatus {
 }
 
 /// NtUserShowScrollBar(hWnd, nBar, bShow) : si le cadre a changé
-/// (`win32k::scroll::show_scroll_bar` : SB_HORZ, SB_VERT ou les deux).
+/// (`win32k::scroll::show_scroll_bar` : SB_HORZ, SB_VERT ou les deux ; SB_CTL
+/// montre ou cache le contrôle).
 pub(super) fn nt_user_show_scroll_bar(arguments: &[u32]) -> NtStatus {
     let [hwnd, bar, show] = arguments[..3] else { unreachable!("3 arguments") };
     let show = show != 0;

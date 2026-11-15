@@ -1,0 +1,52 @@
+# Scroll bar controls (tests/native/sbctl1.c, MinGW, linked to ReactOS's
+# kernel32 and user32): SBCTL1.EXE takes the place of winlogon.exe and
+# takes WinSta0\Default. explorer's folder window died on them (the
+# address bar's autocompletion, browseui's CAutoComplete, makes ScrollBar
+# controls for its drop-down list and ATL subclasses its size box; win32k
+# refused SB_CTL and the procedure of a server-side window, the drop-down
+# list was not created, CAutoComplete released itself once too often, then
+# int 3 on a pure virtual call). A white popup
+# with a vertical ScrollBar control of user32 in it (FNID_SCROLLBAR, its
+# extra bytes SBWND), then:
+# 1. SetScrollInfo and GetScrollInfo of SB_CTL (win32k::scroll, the third
+#    bar);
+# 2. what user32 reads itself in the control's extra bytes (SBWND.SBCalc):
+#    GetScrollPos and SBM_GETRANGE;
+# 3. SetScrollPos past the end: 30 before, 90 after (99 + 1 - the page);
+# 4. GetScrollBarInfo(OBJID_CLIENT): the bar is the control's client area
+#    (20 x 200), its arrows of SM_CYVSCROLL, its thumb at the end;
+# 5. EnableScrollBar(ESB_DISABLE_UP): only the top arrow unavailable;
+# 6. ShowScrollBar(SB_CTL) hides then shows the control (ShowWindow);
+# 7. SetWindowLongW(GWLP_WNDPROC), like ATL's SubclassWindow: the old
+#    procedure is the class's (user32's ScrollBar procedure, the client's
+#    for the server's), the messages go through the new one; given back, the
+#    control has it again (win32k::window::replace_procedure);
+# 8. the same in ANSI: the class's ANSI procedure, then the server's again;
+# 9. user32 paints it (WM_PAINT of the control, NtUserGetScrollBarInfo):
+#    the control at (110, 110)-(130, 310) on the screen; the face and the
+#    black symbol of its top arrow, its thumb at the end (position 90: its
+#    face where the checkered trough would be white, its dark bottom edge),
+#    where the popup was white.
+features = test-smss
+requires = userland, native
+initial-command = SBCTL1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [sbctl] ready: the control 1
+expect = [sbctl] step 1: SetScrollInfo 30; GetScrollInfo 1: 0..99, page 10, position 30
+expect = [sbctl] step 2: GetScrollPos 30, SBM_GETRANGE 0..99
+expect = [sbctl] step 3: SetScrollPos(200) 30, then 90
+expect = [sbctl] step 4: GetScrollBarInfo 1: 20x200, arrows 16 (the metric 16), thumb at the end 1
+expect = [sbctl] step 5: EnableScrollBar 1, the top arrow unavailable 1, the bottom one 0
+expect = [sbctl] step 6: ShowScrollBar hides 1, shows 1
+expect = [sbctl] step 7: subclassed 1 (the old procedure the class's 1), messages seen 1, SBM_GETRANGE 0..99; given back 1, its procedure again 1
+expect = [sbctl] step 8: subclassed in ANSI 1 (the class's ANSI procedure 1), messages seen 1; given back 1, the Unicode procedure again 1
+expect = [sbctl] step 9: painted; look now
+screen = 113 113 D4D0C8
+screen = 120 118 010101
+screen = 116 285 D4D0C8
+screen = 117 293 404040
+
+forbid = *** STOP:
+forbid = scroll bar controls (SB_CTL): not yet

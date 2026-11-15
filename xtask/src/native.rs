@@ -69,6 +69,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["paintdsk1.c"], "PAINTDSK1.EXE", Toolchain::MinGwWin32),
     (&["dcreset1.c"], "DCRESET1.EXE", Toolchain::MinGwWin32),
     (&["defer1.c"], "DEFER1.EXE", Toolchain::MinGwWin32),
+    (&["sbctl1.c"], "SBCTL1.EXE", Toolchain::MinGwWin32),
     (&["destroy1.c"], "DESTROY1.EXE", Toolchain::MinGwWin32),
     (&["activate1.c"], "ACTIVATE1.EXE", Toolchain::MinGwWin32),
     (&["mouse2.c"], "MOUSE2.EXE", Toolchain::MinGwWin32),
