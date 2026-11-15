@@ -19,9 +19,26 @@ pub enum FatError {
     Corrupt,
 }
 
+/// The most a file read asks of its device in one call (a run of contiguous
+/// clusters): 256 sectors of 512 bytes, one ATA command.
+const MAX_RUN_BYTES: usize = 128 * 1024;
+
 pub trait BlockDevice {
     fn sector_size(&self) -> u32;
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError>;
+    /// Reads the `out.len() / sector_size` consecutive sectors from `lba`
+    /// (`out` holds whole sectors): one at a time, unless the device reads
+    /// them in fewer commands (an ATA disk: 256 sectors a command).
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        let size = self.sector_size() as usize;
+        if size == 0 || !out.len().is_multiple_of(size) {
+            return Err(FatError::Io);
+        }
+        for (i, sector) in out.chunks_exact_mut(size).enumerate() {
+            self.read_sector(lba + i as u64, sector)?;
+        }
+        Ok(())
+    }
     /// Writes the sector `lba`; a device that cannot is read-only.
     fn write_sector(&self, _lba: u64, _data: &[u8]) -> Result<(), FatError> {
         Err(FatError::ReadOnly)
@@ -40,6 +57,9 @@ impl<D: BlockDevice + ?Sized> BlockDevice for alloc::boxed::Box<D> {
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
         (**self).read_sector(lba, out)
     }
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        (**self).read_sectors(lba, out)
+    }
     fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
         (**self).write_sector(lba, data)
     }
@@ -54,6 +74,9 @@ impl<D: BlockDevice + ?Sized> BlockDevice for &mut D {
     }
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
         (**self).read_sector(lba, out)
+    }
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        (**self).read_sectors(lba, out)
     }
     fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
         (**self).write_sector(lba, data)
@@ -526,19 +549,58 @@ impl<D: BlockDevice> FatVolume<D> {
         }
         let mut cluster_offset = file.position as usize % bytes_per_cluster;
         let mut written = 0usize;
-        let mut buf = vec![0u8; bytes_per_cluster];
+        let max_run = (MAX_RUN_BYTES / bytes_per_cluster).max(1);
+        let mut buf = Vec::new();
         while written < target {
-            self.read_cluster(cluster, &mut buf)?;
-            let can_take = (bytes_per_cluster - cluster_offset).min(target - written);
-            out[written..written + can_take].copy_from_slice(&buf[cluster_offset..cluster_offset + can_take]);
-            written += can_take;
+            // The run: `cluster` and those that follow it on the disk in its
+            // chain, as many as the read still needs.
+            let wanted = (cluster_offset + target - written).div_ceil(bytes_per_cluster).min(max_run);
+            let (run, last) = self.contiguous_run(cluster, wanted);
+            let run_bytes = run * bytes_per_cluster;
+            let take = (run_bytes - cluster_offset).min(target - written);
+            let lba = self.data_lba(cluster)?;
+            if cluster_offset == 0 && take == run_bytes {
+                // Whole clusters: straight into the caller's buffer.
+                self.device.read_sectors(lba, &mut out[written..written + take])?;
+            } else {
+                buf.resize(run_bytes, 0);
+                self.device.read_sectors(lba, &mut buf)?;
+                out[written..written + take].copy_from_slice(&buf[cluster_offset..cluster_offset + take]);
+            }
+            written += take;
             cluster_offset = 0;
             if written < target {
-                cluster = self.next_cluster(cluster)?;
+                cluster = self.next_cluster(last)?;
             }
         }
         file.position = file.position.saturating_add(written as u32);
         Ok(written)
+    }
+
+    /// How many clusters, at most `wanted` (one at least), follow `first`
+    /// on the disk in its chain (`first`, `first + 1`…), and the last of
+    /// them. A chain that ends or jumps ends the run.
+    fn contiguous_run(&self, first: u32, wanted: usize) -> (usize, u32) {
+        let (mut run, mut last) = (1, first);
+        while run < wanted {
+            match self.next_cluster(last) {
+                Ok(next) if next == last.wrapping_add(1) => {
+                    last = next;
+                    run += 1;
+                }
+                _ => break,
+            }
+        }
+        (run, last)
+    }
+
+    /// The first sector of the data cluster `cluster`; clusters 0 and 1
+    /// hold none.
+    fn data_lba(&self, cluster: u32) -> Result<u64, FatError> {
+        if cluster < 2 {
+            return Err(FatError::InvalidBpb);
+        }
+        Ok(self.cluster_to_lba(cluster))
     }
 
     /// The cluster of the root directory.
@@ -673,14 +735,7 @@ impl<D: BlockDevice> FatVolume<D> {
         if out.len() != bytes_per_sector * sectors_per_cluster {
             return Err(FatError::InvalidBpb);
         }
-        let first_lba = self.cluster_to_lba(cluster);
-        let mut i = 0usize;
-        while i < sectors_per_cluster {
-            let start = i * bytes_per_sector;
-            self.device.read_sector(first_lba + i as u64, &mut out[start..start + bytes_per_sector])?;
-            i += 1;
-        }
-        Ok(())
+        self.device.read_sectors(self.cluster_to_lba(cluster), out)
     }
 
     fn cluster_to_lba(&self, cluster: u32) -> u64 {

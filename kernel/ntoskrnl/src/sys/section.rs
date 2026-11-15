@@ -156,7 +156,9 @@ fn create_section(arguments: &[u32]) -> Result<NtStatus, NtStatus> {
             if file.is_directory() {
                 return Err(STATUS_INVALID_FILE_FOR_SECTION);
             }
-            let bytes: Arc<[u8]> = Arc::from(file.read_all()?);
+            // The bytes another section of the unchanged file holds, else
+            // the file read whole (io::section_cache).
+            let bytes: Arc<[u8]> = file.contents()?;
             if allocation & SEC_IMAGE != 0 {
                 Section::create_image_of(bytes, file.path())?
             } else {

@@ -10,6 +10,21 @@ use alloc::{string::String, vec::Vec};
 
 /// A mounted FAT32 or read-only NTFS filesystem.
 pub struct Volume(Backend);
+
+impl Volume {
+    /// The content of `node` changes: before the change, and after it (even
+    /// a write that failed halfway), the sections no longer share what was
+    /// read of it (`crate::section_cache`); what a section read while it
+    /// changed is not kept.
+    fn changed(&self, node: &Node) {
+        crate::section_cache::CACHE.invalidate(self.cache_id(), node.identity());
+    }
+
+    /// What designates this volume in `crate::section_cache`: its address.
+    pub(crate) fn cache_id(&self) -> usize {
+        core::ptr::from_ref(self) as usize
+    }
+}
 enum Backend {
     Fat(FatMount),
     Ntfs(NtfsMount),
@@ -160,19 +175,25 @@ impl Volume {
     /// # IRQL
     /// PASSIVE_LEVEL.
     pub fn write(&self, node: &Node, offset: u64, data: &[u8]) -> Result<Node, NtStatus> {
-        match &self.0 {
+        self.changed(node);
+        let written = match &self.0 {
             Backend::Fat(v) => v.write(node, offset, data),
             Backend::Ntfs(_) => Err(STATUS_MEDIA_WRITE_PROTECTED),
-        }
+        };
+        self.changed(node);
+        written
     }
     /// Change FAT file length; NTFS is write protected.
     /// # IRQL
     /// PASSIVE_LEVEL.
     pub fn set_size(&self, node: &Node, size: u32) -> Result<Node, NtStatus> {
-        match &self.0 {
+        self.changed(node);
+        let resized = match &self.0 {
             Backend::Fat(v) => v.set_size(node, size),
             Backend::Ntfs(_) => Err(STATUS_MEDIA_WRITE_PROTECTED),
-        }
+        };
+        self.changed(node);
+        resized
     }
     /// Change FAT metadata; NTFS is write protected.
     /// # IRQL

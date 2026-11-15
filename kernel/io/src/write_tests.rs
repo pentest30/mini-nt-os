@@ -577,3 +577,118 @@ fn a_volume_creates_and_opens_long_names() {
     assert_eq!(volume.create(&root, "KERNEL32_VISTA.DLL", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
     assert!(volume.create(&root, "KERNEL32_VISTA.TXT", false, 0).is_ok());
 }
+
+/// What a [`ReadCounting`] disk counts: the calls that read it, and the
+/// sectors they read.
+#[derive(Default)]
+struct Reads {
+    calls: core::sync::atomic::AtomicU32,
+    sectors: core::sync::atomic::AtomicU32,
+}
+
+impl Reads {
+    fn take(&self) -> (u32, u32) {
+        use core::sync::atomic::Ordering::Relaxed;
+        (self.calls.swap(0, Relaxed), self.sectors.swap(0, Relaxed))
+    }
+}
+
+/// A disk that reads runs of sectors in one call, as an ATA disk does, and
+/// counts them.
+struct ReadCounting(alloc::sync::Arc<RwDisk>, alloc::sync::Arc<Reads>);
+
+impl BlockDevice for ReadCounting {
+    fn sector_size(&self) -> u32 {
+        512
+    }
+    fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        self.read_sectors(lba, out)
+    }
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        use core::sync::atomic::Ordering::Relaxed;
+        self.1.calls.fetch_add(1, Relaxed);
+        self.1.sectors.fetch_add((out.len() / 512) as u32, Relaxed);
+        for (i, sector) in out.chunks_exact_mut(512).enumerate() {
+            self.0.read_sector(lba + i as u64, sector)?;
+        }
+        Ok(())
+    }
+    fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
+        self.0.write_sector(lba, data)
+    }
+}
+
+/// A byte pattern no two nearby sectors share.
+fn pattern(length: usize, seed: u8) -> Vec<u8> {
+    (0..length).map(|i| (i as u32).wrapping_mul(2_654_435_761).to_le_bytes()[3] ^ seed).collect()
+}
+
+#[test]
+fn file_reads_take_runs_of_contiguous_clusters() {
+    use crate::File;
+
+    let reads = alloc::sync::Arc::new(Reads::default());
+    let disk = alloc::sync::Arc::new(fat32(4096));
+    let device = alloc::boxed::Box::new(ReadCounting(disk, reads.clone()));
+    let volume = alloc::sync::Arc::new(crate::Volume::mount(device).unwrap());
+    let root = File::open(&volume, "\\").unwrap();
+    // 300 Kio in one write: 600 clusters of 512 bytes, one after the other.
+    let long = pattern(300 * 1024, 0x11);
+    let whole = root.create_child("WHOLE.BIN", false, 0).unwrap();
+    whole.write(0, &long).unwrap();
+    // Two files written in turns: their clusters alternate.
+    let (one, two) = (root.create_child("ONE.BIN", false, 0).unwrap(), root.create_child("TWO.BIN", false, 0).unwrap());
+    let (first, second) = (pattern(8 * 512, 0x22), pattern(8 * 512, 0x33));
+    for at in (0..8 * 512).step_by(512) {
+        one.write(at as u64, &first[at..at + 512]).unwrap();
+        two.write(at as u64, &second[at..at + 512]).unwrap();
+    }
+
+    let read = |file: &File, offset: u64, length: usize| {
+        let node = file.node().unwrap();
+        reads.take();
+        let mut out = vec![0u8; length];
+        assert_eq!(volume.read(&node, offset, &mut out).unwrap(), length);
+        // The read checks the file's entry first: a sector of its own.
+        let (calls, sectors) = reads.take();
+        (out, (calls - 1, sectors - 1))
+    };
+    let (out, counted) = read(&whole, 0, long.len());
+    assert!(out == long, "the whole file");
+    assert_eq!(counted, (3, 600), "three runs of 128 Kio at most: 256 + 256 + 88 sectors");
+    let (out, counted) = read(&whole, 1000, 3000);
+    assert!(out[..] == long[1000..4000], "from the middle of a cluster");
+    assert_eq!(counted, (1, 7), "clusters 1 to 7, one run");
+    let (out, counted) = read(&whole, 0, 128 * 1024 + 512);
+    assert!(out[..] == long[..128 * 1024 + 512], "a cluster more than a run");
+    assert_eq!(counted, (2, 257), "256 sectors a call at most");
+    let (out, counted) = read(&one, 0, first.len());
+    assert!(out == first, "a fragmented file");
+    assert_eq!(counted, (8, 8), "a run per cluster: its clusters are not contiguous");
+    let (out, _) = read(&two, 512 + 17, 1024);
+    assert!(out[..] == second[512 + 17..512 + 17 + 1024]);
+}
+
+#[test]
+fn sections_share_the_bytes_of_an_unchanged_file() {
+    use crate::File;
+
+    let (volume, _disk) = mounted(256);
+    let root = File::open(&volume, "\\").unwrap();
+    let file = root.create_child("SHELL32.DLL", false, 0).unwrap();
+    file.write(0, b"first").unwrap();
+    let held = file.contents().unwrap();
+    assert_eq!(&held[..], b"first");
+    let again = File::open(&volume, "\\shell32.dll").unwrap().contents().unwrap();
+    assert!(alloc::sync::Arc::ptr_eq(&held, &again), "another open, the same bytes: not read again");
+    file.write(0, b"FIRST").unwrap();
+    let written = file.contents().unwrap();
+    assert_eq!(&written[..], b"FIRST", "a write of the same size: read again");
+    assert_eq!(&held[..], b"first", "a section keeps what it read");
+    file.set_size(3).unwrap();
+    assert_eq!(&file.contents().unwrap()[..], b"FIR", "a new size");
+    let other = root.create_child("OTHER.DLL", false, 0).unwrap();
+    other.write(0, b"FIR").unwrap();
+    let other_bytes = other.contents().unwrap();
+    assert!(!alloc::sync::Arc::ptr_eq(&other_bytes, &file.contents().unwrap()), "another file, its own bytes");
+}

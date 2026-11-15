@@ -127,6 +127,28 @@
   icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 31, entrée
   ci-dessus) : NtUserGetClassName ;
   NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
+- **Les lectures de fichiers accélérées : le menu Démarrer s'ouvre en 75 ms au lieu de 55 s**
+  (`claude/file-read-speed`, depuis `main`). Mesuré dans VirtualBox (un profileur temporaire, jamais committé, qui
+  compte le temps de chaque service d'`explorer` du clic à la pose du crochet du menu) : 55,2 des 55,3 s passaient
+  dans 14 NtCreateSection, `shell32` ouvrant `shell32.dll` (11 Mio) comme fichier de données pour chaque icône, et
+  NtCreateSection relisant le fichier entier (`File::read_all`), une commande ATA par secteur. Deux corrections :
+  `BlockDevice::read_sectors` (une suite de secteurs en un appel : 256 secteurs par commande pour `io::disk::AtaDisk`,
+  une copie pour le disque RAM, bornée par `PartitionDevice`) et `FatVolume::read` qui lit chaque suite de clusters
+  contigus d'un coup (128 Kio au plus, droit dans le tampon de l'appelant) ; `io::section_cache` (le rôle des
+  SECTION_OBJECT_POINTERS : `File::contents` reprend les octets qu'une section du même fichier inchangé tient encore,
+  clés volume, entrée, taille, premier cluster ; sans référence forte ; `Volume::write` et `Volume::set_size`
+  invalident avant et après, et ce qui est lu pendant un changement n'est pas gardé). Mesures du scénario
+  `section-cache` (QEMU, Intel, avant / après) : une section de 2 Mio 524 / 504 ms (le transfert PIO domine dans
+  QEMU, ~125 µs par secteur), une seconde section du même fichier 505 / 0 ms, `shell32.dll` en données 4853 / 1 ms ;
+  dans VirtualBox, avec la branche des crochets (`claude/start-menu-hooks`), du clic au menu 55,3 s / 75 ms
+  (NtCreateSection : 55,2 s / 2 ms). Tests hôte (`io::section_cache`, suites contiguës et fragmentées, appels comptés,
+  partition), scénario `section-cache` (AMD et Intel) ; huit mutations détectées (contiguïté ignorée, décalage dans
+  le cluster ignoré, invalidation retirée, lecture pendant un changement gardée, suite de partition non bornée,
+  suites d'un cluster, cache jamais consulté ; une seule des deux invalidations retirée reste sans effet, voulu).
+  **Suite** : le verrou du volume FAT est un `KSpinLock` tenu pendant toute la lecture (DISPATCH_LEVEL : une lecture
+  longue gèle la machine, le pointeur compris) ; la pagination à la demande des sections (lire à la faute les seules
+  pages touchées) ; le DMA ATA (bus master), le transfert PIO restant le coût de chaque secteur ; la suppression et
+  le renommage, quand les volumes les feront, devront invalider le cache.
 
 - **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects

@@ -51,6 +51,7 @@ pub mod npfs;
 mod ntfs_volume;
 pub mod partition;
 pub mod request;
+pub mod section_cache;
 pub mod volume;
 
 pub use completion::{
@@ -242,6 +243,29 @@ impl BlockDevice for PhysRamBlockDevice {
                 (self.hhdm_offset + self.phys_base + off as u64) as *const u8,
                 out.as_mut_ptr(),
                 s,
+            );
+        }
+        Ok(())
+    }
+
+    /// The run in one copy.
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        let s = self.sector_size as usize;
+        let off = (lba as usize).checked_mul(s).ok_or(FatError::Io)?;
+        if s == 0
+            || out.is_empty()
+            || !out.len().is_multiple_of(s)
+            || off.checked_add(out.len()).is_none_or(|end| end > self.total_size)
+        {
+            return Err(FatError::Io);
+        }
+        // SAFETY: HHDM maps all physical RAM; off..off + out.len() lies inside
+        // the ramdisk (checked above); out is valid for writes.
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                (self.hhdm_offset + self.phys_base + off as u64) as *const u8,
+                out.as_mut_ptr(),
+                out.len(),
             );
         }
         Ok(())
