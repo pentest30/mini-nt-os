@@ -14,7 +14,11 @@
 #   first query without a match is STATUS_NO_SUCH_FILE, not
 #   STATUS_NO_MORE_FILES);
 # - the whole enumeration again gives the same entries (a new handle scans
-#   from the start).
+#   from the start);
+# - NtSetInformationFile(FileBasicInformation) takes a buffer aligned on 4
+#   bytes only (sizeof(ULONG), as ReactOS probes it): an i386 stack gives
+#   kernel32's CopyFileW no better for its local one, and asking 8 made it
+#   fail (minoinit's copy of NTUSER.DAT, once its frames had moved).
 # It ends with status 0x600D.
 # Update with each step (docs/compat/io-install.md).
 features = test-smss
@@ -33,6 +37,7 @@ expect = [dir] NTDLL.DLL: seen
 expect = [dir] NTDLL.DLL: 1404928 bytes, alternate
 expect = [dir] C:\ZZ*: error 2
 expect = [dir] WINDOWS: seen
+expect = [dir] FileBasicInformation aligned on 4: 0
 expect = [dir] done
 
 # The enumeration itself, and what FindFirstFile needs of it.

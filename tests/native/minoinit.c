@@ -11,17 +11,22 @@
  * 2. the profiles: userenv's InitializeProfiles (ordinal 100), which
  *    creates the profiles directory, Default User and All Users, and writes
  *    ProfileList and the shell folders of HKU\.DEFAULT;
- * 3. the hive of Default User: HKU\.DEFAULT written back to its file
+ * 3. the COM servers registered (syssetup.inf's OleControlDlls,
+ *    RegistrationPhase2, which syssetup runs after the profiles): CoInitialize,
+ *    then the DllRegisterServer of each one on the disk, which writes its
+ *    classes under HKCR (browseui: the Start menu and the taskbar's band site,
+ *    which explorer creates; shell32: the CLSIDs of the shell's folders and
+ *    their icons, the user's shell folders); a failed registration is logged,
+ *    not fatal, as in syssetup;
+ * 4. the hive of Default User: HKU\.DEFAULT written back to its file
  *    (NtFlushKey), copied as NTUSER.DAT in the Default User profile
  *    (syssetup's SaveDefaultUserHive saves the key itself, RegSaveKeyEx);
- * 4. the COM servers on the disk registered (DllRegisterServer, syssetup's
- *    RegistrationPhase2): the classes explorer creates;
  * 5. setup done: SetupType = 0, SystemSetupInProgress = 0, CmdLine empty;
  * 6. the hives written back to their files (NtFlushKey), then a reboot
  *    (NtShutdownSystem).
  *
  * Each step says how it went by DbgPrint ("[minoinit] ..."); a failed step
- * stops the program without the reboot.
+ * other than a registration stops the program without the reboot.
  *
  * Built by `cargo xtask` without a C runtime: -nostdlib, entry point
  * GuiStartup; placed in WINDOWS\SYSTEM32 (xtask/src/native.rs).
@@ -220,16 +225,12 @@ static void wait_for_the_accounts(void)
     stop("no account Administrator in the SAM");
 }
 
-/* 2 and 3. The profiles, and the hive of Default User. */
-static void make_the_profiles(void)
+/* 2. The profiles; `profile` receives the directory of Default User. */
+static void make_the_profiles(WCHAR *profile, DWORD size)
 {
-    WCHAR profile[260];
-    WCHAR from[260];
-    DWORD size = 260;
     HMODULE userenv = LoadLibraryW(L"userenv.dll");
     InitializeProfilesFn initialize_profiles;
     GetDefaultUserProfileDirectoryWFn default_user_profile;
-    NTSTATUS status;
 
     if (!userenv)
         stop("userenv.dll does not load");
@@ -247,28 +248,17 @@ static void make_the_profiles(void)
         stop("no Default User profile");
     }
     DbgPrint("[minoinit] profiles: Default User in %s\n", ascii(profile));
-
-    status = flush(L"\\Registry\\User\\.DEFAULT");
-    if (!NT_SUCCESS(status))
-        stop("HKU\\.DEFAULT not written back");
-    if (!ExpandEnvironmentStringsW(L"%SystemRoot%\\system32\\config\\default", from, 260))
-        stop("no %SystemRoot%");
-    append(profile, 260, L"\\NTUSER.DAT");
-    if (!CopyFileW(from, profile, 0)) {
-        DbgPrint("[minoinit] CopyFileW %s: error %lu\n", ascii(profile), GetLastError());
-        stop("no NTUSER.DAT for Default User");
-    }
-    DbgPrint("[minoinit] the hive of Default User: %s\n", ascii(profile));
 }
 
-/* 4. The COM servers of syssetup.inf's OleControlDlls (RegistrationPhase2)
+/* 3. The COM servers of syssetup.inf's OleControlDlls (RegistrationPhase2)
  * that are on the disk, in its order, as syssetup's RegisterDlls does it:
  * CoInitialize, then each DLL's DllRegisterServer, which writes its classes
- * in HKCR (SOFTWARE\Classes). explorer needs them: the Start menu and the
- * taskbar's band site are browseui's, the desktop's folders shell32's. A DLL
- * that does not load or fails is reported; it does not stop the setup (as
- * syssetup). */
-static void register_the_com_servers(void)
+ * in HKCR (SOFTWARE\Classes), before the hive of Default User is saved
+ * (shell32 also writes the user's shell folders). explorer needs them: the
+ * Start menu and the taskbar's band site are browseui's, the desktop's
+ * folders shell32's. A DLL that does not load or fails is reported; it does
+ * not stop the setup (as syssetup). */
+static void register_the_dlls(void)
 {
     static const WCHAR *const dlls[] = {
         L"browseui.dll", L"oleaut32.dll", L"rpcrt4.dll", L"shdocvw.dll", L"shell32.dll", L"urlmon.dll", L"wininet.dll",
@@ -289,6 +279,23 @@ static void register_the_com_servers(void)
         }
         DbgPrint("[minoinit] DllRegisterServer %s: %lx\n", ascii(dlls[i]), (DWORD)register_server());
     }
+}
+
+/* 4. The hive of Default User, in its profile `profile`. */
+static void save_the_default_user_hive(WCHAR *profile)
+{
+    WCHAR from[260];
+    NTSTATUS status = flush(L"\\Registry\\User\\.DEFAULT");
+    if (!NT_SUCCESS(status))
+        stop("HKU\\.DEFAULT not written back");
+    if (!ExpandEnvironmentStringsW(L"%SystemRoot%\\system32\\config\\default", from, 260))
+        stop("no %SystemRoot%");
+    append(profile, 260, L"\\NTUSER.DAT");
+    if (!CopyFileW(from, profile, 0)) {
+        DbgPrint("[minoinit] CopyFileW %s: error %lu\n", ascii(profile), GetLastError());
+        stop("no NTUSER.DAT for Default User");
+    }
+    DbgPrint("[minoinit] the hive of Default User: %s\n", ascii(profile));
 }
 
 /* 5 and 6. Setup done, the hives written back, the reboot. */
@@ -322,9 +329,11 @@ DWORD __stdcall GuiStartup(void)
     if (ExpandEnvironmentStringsW(L"SystemDrive=%SystemDrive% SystemRoot=%SystemRoot% windir=%windir%", environment,
                                   260))
         DbgPrint("[minoinit] environment: %s\n", ascii(environment));
+    WCHAR profile[260];
     wait_for_the_accounts();
-    make_the_profiles();
-    register_the_com_servers();
+    make_the_profiles(profile, 260);
+    register_the_dlls();
+    save_the_default_user_hive(profile);
     finish();
     ExitProcess(0);
     return 0;

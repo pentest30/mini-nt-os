@@ -389,8 +389,10 @@ impl Bitmap<'_> {
             for (x, &pixel) in from.iter().enumerate() {
                 let pixel = self.converted(pixel, source.layout);
                 let dest = &mut self.pixels[to + x];
-                // The unused byte stays zero.
-                *dest = self::rop3(rop3, pattern, pixel, *dest) & 0x00FF_FFFF;
+                // On all 32 bits, as the 32-bit DIB engine of ReactOS: the
+                // alpha of a bitmap goes through the ROP (ImageList_AddMasked
+                // takes out the background by NOTSRCAND and keeps it).
+                *dest = self::rop3(rop3, pattern, pixel, *dest);
             }
         }
     }
@@ -419,7 +421,7 @@ impl Bitmap<'_> {
             for x in columns {
                 let pixel = self.pixels[at + x];
                 let dest = &mut self.pixels[to + x];
-                *dest = self::rop3(rop3, pattern, pixel, *dest) & 0x00FF_FFFF;
+                *dest = self::rop3(rop3, pattern, pixel, *dest);
             }
         }
     }
@@ -897,6 +899,18 @@ mod tests {
     }
 
     #[test]
+    fn a_rop_with_a_source_keeps_the_alpha_byte() {
+        // NOTSRCAND (D and not S): under a white mask pixel the destination
+        // keeps its alpha, under a black one all of it.
+        let mut mask = [0x00FF_FFFFu32, 0];
+        let source = Bitmap::new(&mut mask, 2, 1, 2, PixelLayout::Bgrx).unwrap();
+        let mut pixels = [0x8012_3456u32, 0xFF65_4321];
+        let mut dest = Bitmap::new(&mut pixels, 2, 1, 2, PixelLayout::Bgrx).unwrap();
+        dest.blt_from(Rect::new(0, 0, 2, 1), &source, (0, 0), 0x22, ColorRef(0));
+        assert_eq!(pixels, [0x8000_0000, 0xFF65_4321]);
+    }
+
+    #[test]
     fn blt_within_reads_each_pixel_before_writing_it() {
         let numbered = || core::array::from_fn::<u32, 16, _>(|i| i as u32);
         for (from, rop) in [((0, 1), SRCCOPY), ((0, 1), 0x66), ((1, 0), 0x66), ((0, 0), SRCCOPY)] {
@@ -910,7 +924,7 @@ mod tests {
                     let (sx, sy) = (x + from.0 as usize, y + from.1 as usize);
                     if sx < 4 && sy < 4 {
                         let (s, d) = (numbered()[sy * 4 + sx], numbered()[y * 4 + x]);
-                        expected[y * 4 + x] = rop3(rop, 0, s, d) & 0x00FF_FFFF;
+                        expected[y * 4 + x] = rop3(rop, 0, s, d);
                     }
                 }
             }

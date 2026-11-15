@@ -60,8 +60,11 @@ DWORD WINAPI GuiStartup(void)
     app_check(SetWindowLongW(first,GWL_WNDPROC,(LONG)original_proc)==0
               && GetLastError()==ERROR_ACCESS_DENIED,"cannot subclass another process");
     DbgPrint("[note-save] ready for typing\n");
-    app_wait_window(&process,L"Save As");
+    HWND dialog=app_wait_window(&process,L"Save As");
     DbgPrint("[note-save] Save As ready\n");
+    /* Typed before the view is there, the keys would go to the dialog's
+       first control while it is still being made. */
+    DbgPrint("[note-save] the Save As view lists %d files and folders\n",app_file_view(&process,dialog));
     BOOL found=FALSE;
     for(unsigned int n=0;n<240;++n) {
         if(saved()) {found=TRUE;break;}
