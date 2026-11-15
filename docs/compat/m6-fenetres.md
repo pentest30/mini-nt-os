@@ -1553,5 +1553,15 @@ il est là). `notepad-saveas` vérifie deux pixels du texte « Recent » de la b
 et le fond au-dessus des minuscules, où était le haut du « C » de « RECENT »). Mutations : la règle
 réduite à l'entrée 8.3 seule (les deux tests hôte, `notepad-saveas`), les drapeaux non relus (les deux tests hôte).
 
-Vu, pas fait : `libs/fatfs` (l'image de `tools/mkfat`) écrit aussi en majuscules tout nom que le format 8.3 tient ;
-une entrée sans nom long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend toujours).
+Les images des outils de l'hôte suivent la même règle : `libs/fatfs` (ADR-022, la source unique du format FAT32 de
+Mino) la tient (`fatfs::image::case_flags`, `CASE_LOWER_BASE`, `CASE_LOWER_EXT`), Io la reprend (`io::fat` les
+réexporte), et `fatfs::build` (les images de `tools/mkfat`, l'ESP et le volume système de l'image GPT de `xtask`)
+écrit les drapeaux de casse ou le nom long. `xtask` met déjà en majuscules les noms de l'espace utilisateur qu'il
+donne ; l'ESP de l'image GPT tient `kernel.elf` et `fat.img`, maintenant en minuscules (drapeaux 0x18), que le
+micrologiciel et Io ouvrent sans casse. Tests : hôte (`fatfs` : les sept règles dans une image, relues par le
+lecteur du noyau ; le lecteur à part de `xtask/src/fat32.rs` parcourt un dossier `Recent` et un `readme.txt`) ; trois
+mutations (règle réduite à l'entrée seule : les tests de `fatfs` et d'Io ; octet 12 non écrit ; casse mixte sans nom
+long).
+
+Vu, pas fait : une entrée sans nom long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend
+toujours).

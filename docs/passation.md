@@ -1,5 +1,17 @@
 # Notes de passation
 
+- **La même casse dans les images des outils** (`claude/new-session-696xfc`, PR 134, suite de l'entrée ci-dessous ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). `libs/fatfs` (ADR-022) tient maintenant la règle de
+  `vfatfs` (`fatfs::image::case_flags`, `CASE_LOWER_BASE`, `CASE_LOWER_EXT`), qu'Io réexporte au lieu de la copier ;
+  `fatfs::build` écrit les drapeaux de casse ou le nom long d'un nom que le 8.3 tient. `xtask` donne déjà en
+  majuscules les noms de l'espace utilisateur ; l'ESP de l'image GPT tient `kernel.elf` et `fat.img` avec les
+  drapeaux 0x18 (le micrologiciel et Io les ouvrent sans casse ; l'installateur les recopie tels quels). Tests : hôte
+  (`fatfs` : les sept règles dans une image relue par le lecteur du noyau ; `xtask/src/fat32.rs` parcourt `Recent`
+  et `readme.txt`) ; trois mutations (règle réduite à l'entrée seule : les tests de `fatfs` et d'Io ; octet 12 non
+  écrit ; casse mixte sans nom long). 1121 tests hôte, lint propre ; `smoke`, `dir`, `cmd`, `notepad-saveas`,
+  `installer-finish`, `installed-boot`, `installed-persistence`, `gpt-persistence` (AMD et Intel), `persistence`,
+  `registry-persistence`, `logon` passent.
+
 - **La casse des noms que le format 8.3 tient** (`claude/new-session-696xfc`, PR 134 ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). La
   barre des emplacements de la boîte Enregistrer sous montrait « RECENT » : Io créait tout nom que le 8.3 tient avec
@@ -14,8 +26,9 @@
   Intel), `persistence`, `registry-persistence`, `logon` passent. `fsck.vfat` n'est pas sur l'hôte Windows : les
   images n'y sont pas vérifiées par lui ; un lecteur à part (Python, hors dépôt) a relu celle de `logon` : 66 noms
   longs aux sommes justes, aucun nom 8.3 en double, les dossiers du profil dans leur casse. **Vu, pas fait** :
-  `libs/fatfs` (l'image de `tools/mkfat`) écrit aussi en majuscules tout nom que le 8.3 tient ; une entrée sans nom
-  long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend toujours).
+  `libs/fatfs` (l'image de `tools/mkfat`) écrivait aussi en majuscules tout nom que le 8.3 tient (fait : l'entrée
+  ci-dessus) ; une entrée sans nom long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend
+  toujours).
 
 - **Ctrl+Alt+Suppr arrive à `winlogon` : les raccourcis clavier** (`claude/new-session-696xfc`, M6,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe), « Ctrl+Alt+Suppr »). L'écran de ReactOS qui

@@ -782,28 +782,9 @@ pub fn short_name(name: &str) -> Result<[u8; 11], FatError> {
     short_name_11(name)
 }
 
-/// The NT case flags of an 8.3 entry, in its byte 12 (which DOS reserved):
-/// the base of its name is in lower case…
-pub const CASE_LOWER_BASE: u8 = 0x08;
-/// … its extension is.
-pub const CASE_LOWER_EXT: u8 = 0x10;
-
-/// The case flags that keep the case of `name`, a name 8.3 holds: a base or
-/// an extension all in lower case gets its flag; `None` when one of them
-/// mixes cases, which only a long name keeps. As ReactOS's vfatfs decides
-/// (FATAddEntry, `BaseAllLower`, `ExtensionAllLower`).
-fn case_flags(name: &str) -> Option<u8> {
-    let (base, extension) = name.split_once('.').unwrap_or((name, ""));
-    let flag = |part: &str, lower: u8| {
-        let has_lower = part.bytes().any(|byte| byte.is_ascii_lowercase());
-        match (has_lower, part.bytes().any(|byte| byte.is_ascii_uppercase())) {
-            (true, true) => None,
-            (true, false) => Some(lower),
-            (false, _) => Some(0),
-        }
-    };
-    Some(flag(base, CASE_LOWER_BASE)? | flag(extension, CASE_LOWER_EXT)?)
-}
+/// The NT case flags of an 8.3 entry (byte 12) and the rule that gives them,
+/// as the images of the host tools have them (`fatfs`, ADR-022).
+pub use fatfs::image::{case_flags, CASE_LOWER_BASE, CASE_LOWER_EXT};
 
 /// The 8.3 alias of the long name `long`, as other systems make it: its base
 /// (before its last dot) and its extension in upper case, without spaces or
