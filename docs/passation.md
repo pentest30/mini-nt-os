@@ -18,6 +18,28 @@
   copie par fichier) ; les crochets WH_GETMESSAGE et WH_MSGFILTER (le menu suivi) ; puis le troisième critère, la
   résolution (`bochs-dispi`, ChangeDisplaySettings, le panneau Affichage).
 
+- **Le menu Démarrer suit la souris : les crochets** (`claude/start-menu-hooks`, sur la fusion locale des PR 134 et
+  135 ; M6, premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Avec les icônes, un
+  clic sur Démarrer ouvre le menu, mais il restait inerte : CMenuFocusManager de `shell32` le suit par un crochet
+  WH_GETMESSAGE. `win32k::hook` (hook.c, callback.c) : objets `TYPE_HOOK` dans le tas du bureau
+  (`abi::user::Hook32`, lu par CallNextHookEx de `user32`), chaînes par thread et par type, chaînes globales du
+  bureau, `fsHooks` du `CLIENTINFO` et du `DESKTOPINFO` ; NtUserSetWindowsHookEx, NtUserSetWindowsHookAW,
+  NtUserUnhookWindowsHookEx, NtUserCallNextHookEx (`phkCurrent`), NtUserCallMsgFilter ; USER32_CALLBACK_HOOKPROC ;
+  WH_GETMESSAGE dans `queue::peek`, WH_SYSMSGFILTER puis WH_MSGFILTER dans la boucle des menus (MSGF_MENU) ; les
+  autres types posés, pas appelés (journalisé). Et NtUserWindowFromPoint (co_WinPosSearchChildren), NtUserGetAncestor,
+  NtUserGetForegroundWindow, SetForegroundWindow (NtUserCallHwndLock 0x5B). Dans VirtualBox : le menu s'ouvre, le
+  survol ouvre les sous-menus, un clic exécute l'item (la première ouverture prenait 55 s : NtCreateSection relisait
+  `shell32.dll` pour chaque icône ; 75 ms avec `claude/file-read-speed`) ; un item de dossier tue `explorer` (la fenêtre de dossier de
+  `browseui` échoue après une barre de défilement contrôle, SB_CTL ; assertion, `int 3`). Scénario `hooks`
+  (`tests/native/hook1.c`, AMD et Intel) ; sept mutations détectées (WH_GETMESSAGE ou MSGF_MENU retiré, crochets
+  gardés à la fin du thread, ordre de la chaîne, `fsHooks` non publié, HTTRANSPARENT ignoré, SetForegroundWindow
+  sans la fenêtre de premier niveau). Hôte : `win32k::hook` (chaînes, suivant, `fsHooks`, arguments du rappel).
+  `cargo xtask lint` propre, 1130 tests hôte ; la suite de démarrage : `rostests` 43/84 sous son plancher (44), le
+  même verdict, apitest par apitest, que la branche de la PR 135 seule.
+  **Suite** : la fenêtre de dossier (SB_CTL, puis `browseui`) ; TrackMouseEvent, SPI_GETMENUSHOWDELAY,
+  GetDoubleClickTime ; Ctrl+Échap (RegisterHotKey). La branche dépend des PR 134 et 135 (à rebaser une fois
+  fusionnées).
+
 - **Le bouton Démarrer d'`explorer` placé ; son menu attend les icônes** (`claude/new-session-696xfc`, M6, premier
   critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La barre des tâches place ses contrôles
   par DeferWindowPos, absent (« BeginDeferWindowPos failed », traywnd.cpp:1705) : le bouton gardait une taille nulle.
@@ -65,6 +87,46 @@
   **Suite** : les icônes du bureau (NtUserGetIconInfo, les détails des éléments), le papier peint
   (SPI_SETDESKWALLPAPER), la taille de « Progman » (1, 0)-(32768, 32767) à vérifier, la station des services ; le
   bouton Démarrer et ce que la barre demande.
+- **La barre des emplacements de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée
+  ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 32). « My Documents » et « My Computer »
+  avaient le papier blanc : leurs CLSID manquaient sous HKCR, que DllRegisterServer de `shell32` écrit et que
+  l'installation de ReactOS appelle (RegistrationPhase2). `minoinit.exe` enregistre maintenant `shell32` ; il fallait
+  pour cela que NtQueryKey(KeyNameInformation) accepte un handle sans KEY_QUERY_VALUE (un droit quelconque, comme
+  ReactOS : `ob::HandleTable::reference_as_with_any_access`), et que NtSetInformationFile(FileBasicInformation)
+  accepte un tampon aligné sur 4 (CopyFileW du `NTUSER.DAT` de `Default User` échouait une fois les cadres de
+  `minoinit` déplacés). La barre montre les cinq emplacements de ReactOS avec leurs icônes ; la boîte s'ouvre dans
+  « My Documents », créé par l'enregistrement. Tests : hôte (`ob`) ; `dir` (les dates d'un fichier depuis un tampon
+  aligné sur 4) ; `notepad-saveas` (sa sonde enregistre `shell32`, tape `C:\` ; un pixel de chaque icône) ; `logon`
+  (`[minoinit] shell32.dll registered`) ; quatre mutations. **Vu, pas fait** : « Recent » s'affiche « RECENT » (Io crée un nom 8.3
+  sans nom long : la casse se perd) ; les autres DLL de RegistrationPhase2.
+
+- **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). La barre d'outils de la boîte Enregistrer sous, sa
+  barre des emplacements et les icônes des tâches du gestionnaire des tâches s'affichent justes : BitBlt et
+  StretchBlt convertissent entre monochrome et couleurs (`gdi::bitblt::Convert`, la source monochrome lue au plus
+  proche du noir ou du blanc : le texte lissé de DrawState) ; l'alpha des images de 32 bits passe (StretchDIBits le
+  garde, les ROP avec source portent sur 32 bits, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend, `Pixel::Blend`
+  prémultiplié) ; les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`) et GetDIBits de 4 et 8 bits
+  (`gdi::dibits::default_palette`). Avec CreateDIBitmap, `user32` fait enfin le bitmap d'alpha des curseurs et icônes
+  de 32 bits, qui se mélangent par leur alpha au lieu de leurs masques : les pixels des icônes des titres de `gui` et
+  d'`icons` ont changé (recalculés à part depuis les ressources de `user32.dll`, identiques). Tests : hôte ; la sonde de `bitmap` (BitBlt monochrome, DIB section de 4 bits,
+  CreateDIBitmap, GdiAlphaBlend) ; des pixels de `notepad-saveas` (la barre d'outils, l'icône « Desktop ») et de
+  `desktop-launch` (l'icône de `cmd`). Douze mutations font chacune échouer un test (sans DIB section indexée, index réécrits à 0, table par défaut dans l'ancien ordre, sans conversion monochrome, source monochrome lue au noir exact, couleur de fond comparée avec son octet haut, StretchDIBits sans alpha, sans CreateDIBitmap, sans AlphaBlend, AlphaBlend sans l'alpha des pixels, ROP qui effacent l'alpha, alpha d'icône non prémultiplié). **Vu, pas fait** : les DIB sections de 1, 16 et 24 bits,
+  DIB_PAL_COLORS, SetDIBits, MaskBlt ; « My Documents » et « My Computer » de la barre des emplacements montraient
+  l'icône de document par défaut (fait : l'entrée ci-dessus).
+
+- **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
+  `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). Sous VirtualBox la boîte « Save As »
+  du Bloc-notes restait vide et son thread bouclait sur le cache d'icônes de `shell32`. Fait, dans l'ordre où la
+  boîte bloquait : NtUserGetIconInfo (`win32k::cursor::icon_info`, copies des bitmaps par
+  `gdi::surface::copy_bitmap`, module et ressource pour CopyImage(LR_COPYFROMRESOURCE)) ; NtUserGetAtomName écrit
+  dans le tampon du UNICODE_STRING de l'appelant (il écrasait la pile de `user32` : exception dans le WM_INITDIALOG
+  de la boîte ; à la fusion, la correction de `main` reste) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
+  CDefView croyait sa liste pleine de colonnes et s'arrêtait sur une assertion) ; GetDIBits (1 et 32 bits),
+  StretchBlt, GetNearestColor, BI_BITFIELDS de StretchDIBits (la barre d'outils). La boîte montre `C:\` et ses
+  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 31, entrée
+  ci-dessus) : NtUserGetClassName ;
+  NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
 
 - **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects
@@ -146,47 +208,6 @@
   Editor » du menu Démarrer de `tests/native/desktop1.c` ne lançait rien (seuls Terminal et Task Manager avaient un
   programme) ; elle lance `NOTEPAD.EXE`. Scénario `desktop-notepad` (Bas, Entrée : « launched Text Editor », le
   thread de `NOTEPAD.EXE` converti) sur AMD et Intel ; la mutation (l'entrée vide) le fait échouer.
-- **La barre des emplacements de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée
-  ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 32). « My Documents » et « My Computer »
-  avaient le papier blanc : leurs CLSID manquaient sous HKCR, que DllRegisterServer de `shell32` écrit et que
-  l'installation de ReactOS appelle (RegistrationPhase2). `minoinit.exe` enregistre maintenant `shell32` ; il fallait
-  pour cela que NtQueryKey(KeyNameInformation) accepte un handle sans KEY_QUERY_VALUE (un droit quelconque, comme
-  ReactOS : `ob::HandleTable::reference_as_with_any_access`), et que NtSetInformationFile(FileBasicInformation)
-  accepte un tampon aligné sur 4 (CopyFileW du `NTUSER.DAT` de `Default User` échouait une fois les cadres de
-  `minoinit` déplacés). La barre montre les cinq emplacements de ReactOS avec leurs icônes ; la boîte s'ouvre dans
-  « My Documents », créé par l'enregistrement. Tests : hôte (`ob`) ; `dir` (les dates d'un fichier depuis un tampon
-  aligné sur 4) ; `notepad-saveas` (sa sonde enregistre `shell32`, tape `C:\` ; un pixel de chaque icône) ; `logon`
-  (`[minoinit] shell32.dll registered`) ; quatre mutations. **Vu, pas fait** : « Recent » s'affiche « RECENT » (Io crée un nom 8.3
-  sans nom long : la casse se perd) ; les autres DLL de RegistrationPhase2.
-
-- **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
-  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). La barre d'outils de la boîte Enregistrer sous, sa
-  barre des emplacements et les icônes des tâches du gestionnaire des tâches s'affichent justes : BitBlt et
-  StretchBlt convertissent entre monochrome et couleurs (`gdi::bitblt::Convert`, la source monochrome lue au plus
-  proche du noir ou du blanc : le texte lissé de DrawState) ; l'alpha des images de 32 bits passe (StretchDIBits le
-  garde, les ROP avec source portent sur 32 bits, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend, `Pixel::Blend`
-  prémultiplié) ; les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`) et GetDIBits de 4 et 8 bits
-  (`gdi::dibits::default_palette`). Avec CreateDIBitmap, `user32` fait enfin le bitmap d'alpha des curseurs et icônes
-  de 32 bits, qui se mélangent par leur alpha au lieu de leurs masques : les pixels des icônes des titres de `gui` et
-  d'`icons` ont changé (recalculés à part depuis les ressources de `user32.dll`, identiques). Tests : hôte ; la sonde de `bitmap` (BitBlt monochrome, DIB section de 4 bits,
-  CreateDIBitmap, GdiAlphaBlend) ; des pixels de `notepad-saveas` (la barre d'outils, l'icône « Desktop ») et de
-  `desktop-launch` (l'icône de `cmd`). Douze mutations font chacune échouer un test (sans DIB section indexée, index réécrits à 0, table par défaut dans l'ancien ordre, sans conversion monochrome, source monochrome lue au noir exact, couleur de fond comparée avec son octet haut, StretchDIBits sans alpha, sans CreateDIBitmap, sans AlphaBlend, AlphaBlend sans l'alpha des pixels, ROP qui effacent l'alpha, alpha d'icône non prémultiplié). **Vu, pas fait** : les DIB sections de 1, 16 et 24 bits,
-  DIB_PAL_COLORS, SetDIBits, MaskBlt ; « My Documents » et « My Computer » de la barre des emplacements montraient
-  l'icône de document par défaut (fait : l'entrée ci-dessus).
-
-- **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
-  `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). Sous VirtualBox la boîte « Save As »
-  du Bloc-notes restait vide et son thread bouclait sur le cache d'icônes de `shell32`. Fait, dans l'ordre où la
-  boîte bloquait : NtUserGetIconInfo (`win32k::cursor::icon_info`, copies des bitmaps par
-  `gdi::surface::copy_bitmap`, module et ressource pour CopyImage(LR_COPYFROMRESOURCE)) ; NtUserGetAtomName écrit
-  dans le tampon du UNICODE_STRING de l'appelant (il écrasait la pile de `user32` : exception dans le WM_INITDIALOG
-  de la boîte) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
-  CDefView croyait sa liste pleine de colonnes et s'arrêtait sur une assertion) ; GetDIBits (1 et 32 bits),
-  StretchBlt, GetNearestColor, BI_BITFIELDS de StretchDIBits (la barre d'outils). La boîte montre `C:\` et ses
-  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 30, entrée
-  ci-dessus) : NtUserGetClassName ;
-  NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
-
 - **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, PR #127, base main `3942dd5`) : `notepad-save` passe sur AMD et Intel : saisie QEMU, vrai Save As, vérification des 20 octets, Alt+F4, sortie normale, nouveau processus et texte relu à l'écran. GWLP_WNDPROC client de même encodage débloque ATL ; Alt+F4 poste SC_CLOSE au premier niveau, sauf CS_NOCLOSE. Conversions ANSI/Unicode et procédures serveur refusées explicitement (thunks à faire). 322 tests hôte win32k passent. Critère Bloc-notes de M6 coché ; pas de reboot/persistance dans ce scénario RAM. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` et lint global à rejouer.
 
 - **Le logon jusqu'à `userinit`** (`claude/logon-token`, tirée de `claude/new-session-696xfc` à `509ad05`, qui y

@@ -44,6 +44,7 @@ pub mod exceptions;
 mod file;
 pub mod gates;
 mod gdi;
+mod hook;
 mod input;
 pub mod locale;
 mod memory;
@@ -285,6 +286,8 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserBeginPaint, Handler::Status(window::nt_user_begin_paint)),
     (services::NtUserBuildHwndList, Handler::Status(desktop::nt_user_build_hwnd_list)),
     (services::NtUserCallHwndLock, Handler::Status(window::nt_user_call_hwnd_lock)),
+    (services::NtUserCallMsgFilter, Handler::Status(hook::nt_user_call_msg_filter)),
+    (services::NtUserCallNextHookEx, Handler::Status(hook::nt_user_call_next_hook_ex)),
     (services::NtUserCallHwndParam, Handler::Status(timer::nt_user_call_hwnd_param)),
     (services::NtUserCallHwndParamLock, Handler::Status(window::nt_user_call_hwnd_param_lock)),
     (services::NtUserCallNoParam, Handler::Status(mouse::nt_user_call_no_param)),
@@ -335,12 +338,14 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserEnableMenuItem, Handler::Status(menu::nt_user_enable_menu_item)),
     (services::NtUserFindExistingCursorIcon, Handler::Status(cursor::nt_user_find_existing_cursor_icon)),
     (services::NtUserGetAsyncKeyState, Handler::Status(input::nt_user_get_async_key_state)),
+    (services::NtUserGetAncestor, Handler::Status(window::nt_user_get_ancestor)),
     (services::NtUserGetClassInfo, Handler::Status(class::nt_user_get_class_info)),
     (services::NtUserGetClassName, Handler::Status(class::nt_user_get_class_name)),
     (services::NtUserGetControlBrush, Handler::Status(window::nt_user_get_control_brush)),
     (services::NtUserGetControlColor, Handler::Status(window::nt_user_get_control_color)),
     (services::NtUserGetDC, Handler::Status(window::nt_user_get_dc)),
     (services::NtUserGetDCEx, Handler::Status(window::nt_user_get_dc_ex)),
+    (services::NtUserGetForegroundWindow, Handler::Status(window::nt_user_get_foreground_window)),
     (services::NtUserGetKeyState, Handler::Status(input::nt_user_get_key_state)),
     (services::NtUserGetAtomName, Handler::Status(atom::nt_user_get_atom_name)),
     (services::NtUserGetGuiResources, Handler::Status(user::nt_user_get_gui_resources)),
@@ -403,6 +408,8 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserSetWindowRgn, Handler::Status(window::nt_user_set_window_rgn)),
     (services::NtUserSetShellWindowEx, Handler::Status(window::nt_user_set_shell_window_ex)),
     (services::NtUserSetWindowStationUser, Handler::Status(winsta::nt_user_set_window_station_user)),
+    (services::NtUserSetWindowsHookAW, Handler::Status(hook::nt_user_set_windows_hook_aw)),
+    (services::NtUserSetWindowsHookEx, Handler::Status(hook::nt_user_set_windows_hook_ex)),
     (services::NtUserThunkedMenuItemInfo, Handler::Status(menu::nt_user_thunked_menu_item_info)),
     (services::NtUserShowWindow, Handler::Status(window::nt_user_show_window)),
     (services::NtUserShowWindowAsync, Handler::Status(window::nt_user_show_window_async)),
@@ -412,9 +419,11 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserToUnicodeEx, Handler::Status(input::nt_user_to_unicode_ex)),
     (services::NtUserTranslateAccelerator, Handler::Status(accel::nt_user_translate_accelerator)),
     (services::NtUserTranslateMessage, Handler::Status(input::nt_user_translate_message)),
+    (services::NtUserUnhookWindowsHookEx, Handler::Status(hook::nt_user_unhook_windows_hook_ex)),
     (services::NtUserValidateRect, Handler::Status(window::nt_user_validate_rect)),
     (services::NtUserValidateTimerCallback, Handler::Status(timer::nt_user_validate_timer_callback)),
     (services::NtUserWaitMessage, Handler::Status(message::nt_user_wait_message)),
+    (services::NtUserWindowFromPoint, Handler::Status(window::nt_user_window_from_point)),
     (services::NtWaitForKeyedEvent, Handler::Status(event::nt_wait_for_keyed_event)),
     (services::NtWaitForMultipleObjects, Handler::Status(wait::nt_wait_for_multiple_objects)),
     (services::NtWaitForSingleObject, Handler::Status(wait::nt_wait_for_single_object)),

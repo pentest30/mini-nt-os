@@ -43,6 +43,19 @@ pub const ERROR_TIMEOUT: u32 = 1460;
 pub const ERROR_SUCCESS: u32 = 0;
 /// ERROR_INVALID_MENU_HANDLE.
 pub const ERROR_INVALID_MENU_HANDLE: u32 = 1401;
+/// ERROR_INVALID_HOOK_HANDLE: UnhookWindowsHookEx of a handle that is no
+/// hook.
+pub const ERROR_INVALID_HOOK_HANDLE: u32 = 1404;
+/// ERROR_INVALID_HOOK_FILTER: SetWindowsHookEx of an unknown hook type.
+pub const ERROR_INVALID_HOOK_FILTER: u32 = 1426;
+/// ERROR_INVALID_FILTER_PROC: SetWindowsHookEx without a procedure.
+pub const ERROR_INVALID_FILTER_PROC: u32 = 1427;
+/// ERROR_HOOK_NEEDS_HMOD: a hook into another process without a module.
+pub const ERROR_HOOK_NEEDS_HMOD: u32 = 1428;
+/// ERROR_GLOBAL_ONLY_HOOK: a thread hook of a type that is global only.
+pub const ERROR_GLOBAL_ONLY_HOOK: u32 = 1429;
+/// ERROR_HOOK_TYPE_NOT_ALLOWED: a hook into a thread of csrss or the system.
+pub const ERROR_HOOK_TYPE_NOT_ALLOWED: u32 = 1458;
 /// ERROR_INVALID_ACCEL_HANDLE.
 pub const ERROR_INVALID_ACCEL_HANDLE: u32 = 1403;
 /// ERROR_INVALID_DWP_HANDLE: an HDWP that BeginDeferWindowPos did not

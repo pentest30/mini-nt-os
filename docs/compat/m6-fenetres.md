@@ -1322,15 +1322,17 @@ dans l'ordre où elle bloquait :
    à CreateWindowEx d'une classe désignée par son atome) y donne un tampon de MAX_PATH caractères. Mino écrivait le nom
    par-dessus la structure elle-même : « SHELLDLL_DefView » écrasait les registres sauvés de l'appelant, et
    SHGetSetSettings de `shell32` partait avec des arguments faits de texte UTF-16 (une exception dans le WM_INITDIALOG
-   de la boîte). Le nom va dans `Buffer`, tronqué à `MaximumLength` avec son NUL (`win32k::atom::name_in_buffer`,
-   comme NtUserGetAtomName de ReactOS) ; `Length` n'est pas touché.
+   de la boîte). Le nom va dans `Buffer`, tronqué à `MaximumLength` avec son nul, comme NtUserGetAtomName de
+   ReactOS ; `Length` n'est pas touché. `main` l'a corrigé en même temps (`win32k::atom::copied_name_units`,
+   « #n » d'un atome entier) : c'est sa correction qui reste à la fusion.
 3. **SendMessage à une fenêtre qui n'existe pas.** NtUserMessageCall(FNID_SENDMESSAGE) rendait FALSE sans écrire
    `ResultInfo`, et `user32` (SendMessageW) rend alors sa variable non initialisée. CDefView::LoadColumns demande
    Header_GetItemCount de l'en-tête de sa liste, qui n'existe pas encore en vue liste (`comctl32` le crée à la
    première colonne) : il croyait avoir deux millions de colonnes, les changeait au lieu de les insérer, et
    l'assertion `MapFolderColumnToListColumn(0)` (CDefView.cpp:1178) arrêtait le Bloc-notes (abort, code 3). Comme
    ReactOS (co_IntDoSendMessage rend 0, l'appel réussit) : 0 en `ResultInfo`, l'erreur posée
-   (`ERROR_INVALID_WINDOW_HANDLE`), TRUE. SendMessageTimeout et SendNotifyMessage rendent toujours FALSE.
+   (`ERROR_INVALID_WINDOW_HANDLE`), TRUE. SendMessageTimeout et SendNotifyMessage rendent toujours FALSE. Là
+   aussi, la correction de `main` (`sys::message::send_message_result`) reste à la fusion.
 4. **Les icônes de la liste.** ImageList_ReplaceIcon lit les copies de GetIconInfo par GetDIBits (add_with_alpha), et
    la liste se dessine par StretchBlt :
    - GetDIBits (`gdi::dibits::get_dibits`, NtGdiGetDIBitsInternal) : en 1 bit (noir 0, blanc 1, la table de deux

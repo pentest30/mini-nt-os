@@ -468,6 +468,9 @@ pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
 /// HWNDLOCK_ROUTINE_DRAWMENUBAR: DrawMenuBar, by NtUserCallHwndLock (XP's
 /// order of the enum, as the routines above).
 pub const HWNDLOCK_ROUTINE_DRAWMENUBAR: u32 = 0x55;
+/// HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW: SetForegroundWindow, by
+/// NtUserCallHwndLock.
+pub const HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW: u32 = 0x5B;
 
 /// SPI_*: the actions of SystemParametersInfo that win32k answers.
 /// SPI_GETICONTITLELOGFONT: the font of the icon titles (`pvParam` a
@@ -962,6 +965,9 @@ pub const CTLCOLOR_MAX: u32 = 7;
 pub const HRGN_WINDOW: u32 = 1;
 pub const WM_NCPAINT: u32 = 0x0085;
 pub const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+/// WS_EX_LAYERED: a layered window; with WS_EX_TRANSPARENT, the mouse goes
+/// through it (WindowFromPoint skips it).
+pub const WS_EX_LAYERED: u32 = 0x0008_0000;
 /// WNDS_NONCPAINT: no WM_NCPAINT until the frame is invalidated again.
 pub const WNDS_NONCPAINT: u32 = 0x0000_0100;
 
@@ -1041,6 +1047,8 @@ pub const MK_MBUTTON: u32 = 0x0010;
 /// HT*: where a point falls in a window (WM_NCHITTEST).
 /// HTTRANSPARENT (-1): the window lets the point through to the one under it.
 pub const HTTRANSPARENT: u32 = u32::MAX;
+/// HTERROR: on a disabled window (-2).
+pub const HTERROR: u32 = 0xFFFF_FFFE;
 pub const HTNOWHERE: u32 = 0;
 pub const HTCLIENT: u32 = 1;
 pub const HTCAPTION: u32 = 2;
@@ -1551,8 +1559,127 @@ pub struct Cls32 {
     pub bits: u32,
 }
 
+/// GA_*: the ancestors of GetAncestor.
+pub const GA_PARENT: u32 = 1;
+pub const GA_ROOT: u32 = 2;
+pub const GA_ROOTOWNER: u32 = 3;
+
 /// NB_HOOKS: the hook types, `WH_MSGFILTER` (-1) to `WH_MOUSE_LL` (14).
 pub const NB_HOOKS: usize = 16;
+
+/// WH_*: the hook types of SetWindowsHookEx.
+pub mod wh {
+    pub const MSGFILTER: i32 = -1;
+    pub const JOURNALRECORD: i32 = 0;
+    pub const JOURNALPLAYBACK: i32 = 1;
+    pub const KEYBOARD: i32 = 2;
+    pub const GETMESSAGE: i32 = 3;
+    pub const CALLWNDPROC: i32 = 4;
+    pub const CBT: i32 = 5;
+    pub const SYSMSGFILTER: i32 = 6;
+    pub const MOUSE: i32 = 7;
+    pub const HARDWARE: i32 = 8;
+    pub const DEBUG: i32 = 9;
+    pub const SHELL: i32 = 10;
+    pub const FOREGROUNDIDLE: i32 = 11;
+    pub const CALLWNDPROCRET: i32 = 12;
+    pub const KEYBOARD_LL: i32 = 13;
+    pub const MOUSE_LL: i32 = 14;
+    /// WH_MINHOOK, WH_MAXHOOK.
+    pub const MIN: i32 = MSGFILTER;
+    pub const MAX: i32 = MOUSE_LL;
+}
+
+/// HC_ACTION: the code of a hook call about a message or an event.
+pub const HC_ACTION: i32 = 0;
+
+/// HOOKID_TO_FLAG: the bit of hook type `id` in `fsHooks` (CLIENTINFO,
+/// DESKTOPINFO), which `user32` tests (ISITHOOKED: CallMsgFilter).
+pub const fn hook_flag(id: i32) -> u32 {
+    1 << (id + 1)
+}
+
+/// TYPE_HOOK: a handle entry of a hook (`HANDLE_TYPE`).
+pub const TYPE_HOOK: u8 = 5;
+
+/// USER32_CALLBACK_HOOKPROC: a hook procedure of the client
+/// (User32CallHookProcFromKernel).
+pub const USER32_CALLBACK_HOOKPROC: u32 = 4;
+
+/// HOOK: a hook, in the desktop heap of its thread. `user32` reads
+/// `phkNext`, `HookId` and `Ansi` of the hook its `CLIENTINFO` names
+/// (`phkCurrent`) in CallNextHookEx; the rest is the server's. Pointers are
+/// server addresses.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hook32 {
+    /// THRDESKHEAD: h, cLockObj, pti, rpdesk, pSelf.
+    pub handle: u32,
+    pub lock_count: u32,
+    pub pti: u32,
+    pub desktop: u32,
+    pub self_: u32,
+    /// The next hook of its chain, while one of its chain is being called;
+    /// 0 otherwise or at the end.
+    pub phk_next: u32,
+    pub hook_id: i32,
+    /// offPfn: the procedure's offset in its module (`ihmod`), 0 without
+    /// a module.
+    pub off_pfn: u32,
+    pub flags: u32,
+    pub ihmod: u32,
+    /// ptiHooked: the hooked thread; 0 for a global hook.
+    pub pti_hooked: u32,
+    pub rpdesk: u32,
+    pub chain: ListEntry32,
+    pub proc_: u32,
+    /// BOOLEAN, then 3 bytes of padding.
+    pub ansi: u32,
+    /// UNICODE_STRING ModuleName: the server's copy, never read here.
+    pub module_name: [u32; 2],
+}
+
+/// HOOKPROC_CALLBACK_ARGUMENTS: a hook procedure's call
+/// (USER32_CALLBACK_HOOKPROC), followed by what `lParam` points to; there,
+/// `l_param` is that record's offset from the start of the arguments.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookProcArguments32 {
+    pub hook_id: i32,
+    pub code: i32,
+    pub w_param: u32,
+    pub l_param: u32,
+    pub proc_: u32,
+    /// Mod: the module of a hook set with one (`ihmod`).
+    pub module: u32,
+    pub off_pfn: u32,
+    /// BOOLEAN, then 3 bytes of padding.
+    pub ansi: u32,
+    /// LRESULT: what the procedure returned, written back by `user32`.
+    pub result: u32,
+    pub l_param_size: u32,
+    /// The module's path, which `user32` loads for a procedure of another
+    /// process (`offPfn` and `Mod` set); nul-terminated.
+    pub module_name: [u16; 512],
+}
+
+impl Default for HookProcArguments32 {
+    fn default() -> Self {
+        Self {
+            hook_id: 0,
+            code: 0,
+            w_param: 0,
+            l_param: 0,
+            proc_: 0,
+            module: 0,
+            off_pfn: 0,
+            ansi: 0,
+            result: 0,
+            l_param_size: 0,
+            module_name: [0; 512],
+        }
+    }
+}
 
 /// LIST_ENTRY, 32-bit: two server addresses in the desktop heap.
 #[repr(C)]
@@ -1632,6 +1759,16 @@ const _: () = {
     assert!(offset_of!(DeskInfoHead32, ppi_shell_process) == 0xA4);
     // szDesktopName follows, at 0xAC; sizeof(DESKTOPINFO) is 0xB0.
     assert!(size_of::<DeskInfoHead32>() == 0xAC);
+    // user32!CallNextHookEx: `pHook->phkNext`, then `phkNext->HookId` and
+    // `pHook->Ansi`.
+    assert!(offset_of!(Hook32, phk_next) == 0x14);
+    assert!(offset_of!(Hook32, hook_id) == 0x18);
+    assert!(offset_of!(Hook32, chain) == 0x30);
+    assert!(offset_of!(Hook32, ansi) == 0x3C);
+    assert!(size_of::<Hook32>() == 0x48);
+    assert!(offset_of!(HookProcArguments32, result) == 0x20);
+    assert!(offset_of!(HookProcArguments32, module_name) == 0x28);
+    assert!(size_of::<HookProcArguments32>() == 0x428);
     assert!(offset_of!(ClientThreadInfo32, time_last_read) == 0x0C);
     assert!(size_of::<ClientThreadInfo32>() == 0x14);
     assert!(size_of::<UserHandleEntry32>() == 12);
@@ -2197,7 +2334,9 @@ as_bytes!(
     Property32,
     SbInfo32,
     ScrollInfo32,
-    ScrollBarInfo32
+    ScrollBarInfo32,
+    Hook32,
+    HookProcArguments32
 );
 
 #[cfg(test)]

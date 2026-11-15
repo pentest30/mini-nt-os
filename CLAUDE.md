@@ -393,7 +393,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserRemoveProp ; scénario `defer-window-pos`. La branche des icônes fusionnée (étapes 30 à 32 de
   `m6-fenetres.md`) : le menu Démarrer se crée, la barre aussi (zone de notification, horloge), le bureau montre ses
   icônes, et un clic sur Démarrer ouvre le menu (scénario `logon`, `screen-wait`) : **le premier critère du M6 est
-  coché**. Dette : le menu met 15 à 30 s à paraître (chaque icône copie `shell32.dll` entier dans une section).
+  coché**. Les crochets (PR 136) le font suivre la souris (`win32k::hook` : objets `TYPE_HOOK` dans le tas du bureau,
+  chaînes par thread et par bureau, `fsHooks`, NtUserSetWindowsHookEx, NtUserUnhookWindowsHookEx,
+  NtUserCallNextHookEx, NtUserCallMsgFilter ; WH_GETMESSAGE dans `queue::peek`, WH_MSGFILTER dans la boucle des
+  menus), avec NtUserWindowFromPoint, NtUserGetAncestor, Get/SetForegroundWindow ; scénario `hooks`
+  (`tests/native/hook1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

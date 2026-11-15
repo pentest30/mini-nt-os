@@ -237,13 +237,43 @@ bandeau. **Le premier critère du M6 est atteint.**
   (SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN). Le bouton Démarrer n'a pas son logo (comctl32 6, l'assemblage côte à côte
   manque).
 
+**Le menu Démarrer s'ouvre et suit la souris : les crochets.** Avec les icônes (PR 135), un clic sur Démarrer crée
+le menu (ses barres d'outils, leurs icônes, sa fenêtre CMenuDeskBar montrée au-dessus de la barre), mais le menu
+restait inerte : son suivi est celui de `shell32` (CMenuFocusManager), qui pose un crochet WH_GETMESSAGE sur son
+thread, prend la capture et regarde chaque message de la souris avant que GetMessage le rende (WindowFromPoint,
+GetAncestor, TB_HITTEST, puis WM_USER_CHANGETRACKEDITEM à la barre d'outils sous la souris). `win32k::hook` (`hook.c`
+et `callback.c` de ReactOS) : un crochet est un objet USER (`TYPE_HOOK`) dans le tas du bureau
+(`abi::user::Hook32`, dont CallNextHookEx de `user32` lit `phkNext`, `HookId` et `Ansi`), dans la chaîne de son
+thread et de son type, ou dans celle du bureau pour un crochet global ; `fsHooks` dans le `CLIENTINFO` et le
+`DESKTOPINFO` (`user32` le teste : CallMsgFilter) ; NtUserSetWindowsHookEx (les refus de ReactOS),
+NtUserSetWindowsHookAW, NtUserUnhookWindowsHookEx, NtUserCallNextHookEx (le crochet courant du thread et
+`phkCurrent`), NtUserCallMsgFilter ; la procédure appelée par `user32` (USER32_CALLBACK_HOOKPROC, le MSG après
+HOOKPROC_CALLBACK_ARGUMENTS, relu pour WH_GETMESSAGE). WH_GETMESSAGE est appelé par `queue::peek` (PeekMessage,
+GetMessage et les boucles du noyau, comme co_IntGetPeekMessage), WH_SYSMSGFILTER puis WH_MSGFILTER par la boucle des
+menus (MSGF_MENU) ; les autres types se posent sans être appelés (journalisé une fois par type). Un crochet part avec
+le thread qu'il accroche, avec celui qui l'a posé (ReactOS : le premier seul) ou avec son processus. Et ce que le
+crochet du menu demande : NtUserWindowFromPoint (`win32k::mouse::window_from_point`, co_WinPosSearchChildren : une
+fille transparente à la souris, désactivée ou cachée laisse le point à son parent, le bureau hors de toute fenêtre),
+NtUserGetAncestor (`win32k::window::ancestor`), NtUserGetForegroundWindow et SetForegroundWindow (NtUserCallHwndLock
+0x5B : la fenêtre de premier niveau activée). Dans la VM, le menu s'ouvre, le survol de « Programs » ouvre son
+sous-menu et un clic exécute l'item. La première ouverture prenait 55 s dans VirtualBox : `shell32` ouvre
+`shell32.dll` (11 Mio) comme fichier de données pour chaque icône, et NtCreateSection relisait le fichier entier, une
+commande ATA par secteur (14 fois, 55,2 s) ; la branche `claude/file-read-speed` (le partage des octets d'un fichier
+entre ses sections, `io::section_cache`) la ramène à 75 ms. Les suivantes sont immédiates (0,13 s) ; le sous-menu de
+« Programs », dont le dossier est vide, s'ouvre sans son item « (Empty) » dessiné, à vérifier. Un item de dossier tue encore `explorer` : la fenêtre de dossier que `browseui`
+crée échoue (CreateWindowEx rend 0) juste après la création d'une barre de défilement (le contrôle, dont
+SetScrollInfo(SB_CTL) rend 0 : pas encore SB_CTL), puis une assertion (`int 3`, 80000003, NtRaiseHardError absent)
+arrête le processus ; à diagnostiquer. Pas encore, vus en chemin : NtUserTrackMouseEvent, SPI_GETMENUSHOWDELAY
+(0x6A : le sous-menu s'ouvre sans délai), NtUserGetDoubleClickTime, NtUserCallNoParam 9, NtUserGetThreadState 0xB,
+Ctrl+Échap (RegisterHotKey).
+
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
-ChangeDisplaySettings, le panneau Affichage). Pour le shell : les sections d'un même fichier partagées (le menu
-Démarrer lent), les crochets (WH_GETMESSAGE, WH_MSGFILTER : le menu suivi à la souris et au clavier), la zone de
-travail (SPI_SETWORKAREA), RegisterHotKey, FindWindowEx, SetParent, le papier peint (SPI_SETDESKWALLPAPER), la station
-des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
+ChangeDisplaySettings, le panneau Affichage). Pour le shell : la fenêtre de dossier qu'ouvre un item du menu Démarrer
+(la barre de défilement contrôle, SB_CTL, puis ce que `browseui` demande ensuite) ; Ctrl+Échap et les raccourcis
+(RegisterHotKey) ; la zone de travail (SPI_SETWORKAREA), FindWindowEx, SetParent, TrackMouseEvent ; le papier peint
+(SPI_SETDESKWALLPAPER), la station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
 
 ## Tests
 
@@ -294,3 +324,11 @@ NtDuplicateToken (GetToken), vont maintenant jusqu'à NtAccessCheck, pas encore 
 NtSetDefaultLocale de l'utilisateur rend `STATUS_OBJECT_NAME_NOT_FOUND` pour un LCID que `Nls\Locale` ne connaît
 pas, comme l'apitest l'attend d'XP (ExpValidateNlsLocaleId : la valeur introuvable) ; un groupe de langues absent
 reste `STATUS_INVALID_PARAMETER`.
+
+Scénario `hooks` (`tests/native/hook1.c`, AMD et Intel) : les refus de SetWindowsHookEx, WH_GETMESSAGE (le code, le
+message sorti ou non, changé par le crochet), deux crochets dans l'ordre et CallNextHookEx, UnhookWindowsHookEx deux
+fois, CallMsgFilter avec et sans crochet, WH_MSGFILTER dans TrackPopupMenu (MSGF_MENU, le message traité finit le
+menu), un crochet sur un autre thread (appelé dans ce thread, rendu à sa fin), GetAncestor, WindowFromPoint (filles
+transparente, désactivée, cachée ; le bureau), SetForegroundWindow et GetForegroundWindow. Sept mutations le font
+échouer : WH_GETMESSAGE ou MSGF_MENU retiré, crochets gardés à la fin du thread, le dernier posé appelé le dernier,
+`fsHooks` non publié, HTTRANSPARENT ignoré, SetForegroundWindow sur la fille elle-même. Hôte : `win32k::hook`.
