@@ -7,8 +7,11 @@
   abandonné à la demande du mainteneur. La sonde de `dir` attend `alternate NTDLL.DLL`, crée `readme.txt` et `Recent`
   et les relit par FindFirstFileW (`CreateDirectoryW` ajouté à `tests/native/kernel32.def`). Tests : hôte
   (`a_directory_is_enumerated`, `a_volume_creates_a_mixed_case_name_in_its_case`) ; une mutation (l'ancienne règle :
-  les deux tests hôte et `dir`). 1121 tests hôte, lint propre ; `dir`, `cmd`, `notepad-save`, `notepad-saveas`,
-  `installer-finish` (AMD et Intel), `logon`, `persistence` passent.
+  les deux tests hôte et `dir`). Les trois commits de la casse des noms 8.3 (écrits sur
+  `claude/blissful-herschel-4bf0cc`) rejoués sur la PR 134 (`b2c89ef`), leur étape devenue la 34 : 1146 tests hôte,
+  `cargo xtask lint` propre ; `smoke`, `dir`, `cmd`, `notepad-save`, `notepad-saveas`, `section-cache`,
+  `installer-finish`, `installed-boot`, `gpt-persistence` (AMD et Intel), `logon`, `persistence`,
+  `registry-persistence` passent. `fsck.vfat` n'est pas sur l'hôte Windows (la CI le passe).
 
 - **La même casse dans les images des outils** (`claude/new-session-696xfc`, PR 134, suite de l'entrée ci-dessous ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). `libs/fatfs` (ADR-022) tient maintenant la règle de
