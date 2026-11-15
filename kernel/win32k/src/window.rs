@@ -225,6 +225,12 @@ impl Window {
         self.desktop_name.is_some()
     }
 
+    /// C'est la fenêtre des messages d'un bureau (UserIsMessageWindow), le
+    /// parent des fenêtres créées avec `HWND_MESSAGE`.
+    pub fn is_message_window(&self) -> bool {
+        self.state().fnid == FNID_MESSAGEWND
+    }
+
     /// Elle n'est pas détruite.
     ///
     /// # IRQL
@@ -792,6 +798,24 @@ pub fn set_property(window: &Window, atom: u16, data: u32, system: bool) {
         }
     }
     publish_properties(window);
+}
+
+/// RemoveProp (UserRemoveProp) : la propriété `atom` (du système ou non)
+/// de la fenêtre part ; rend sa donnée, si elle l'avait. `user32` ne la voit
+/// plus dans le tas partagé.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn remove_property(window: &Window, atom: u16, system: bool) -> Option<u32> {
+    let data = {
+        let mut properties = PROPERTIES.lock();
+        let at = properties.iter().position(|property| {
+            property.hwnd == window.handle && property.atom == atom && property.system == system
+        })?;
+        properties.remove(at).data
+    };
+    publish_properties(window);
+    Some(data)
 }
 
 /// GetProp du noyau : la propriété `atom` (du système ou non) de la

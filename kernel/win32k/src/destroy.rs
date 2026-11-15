@@ -49,8 +49,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::user::{
     FNID_FREED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, TYPE_ACCELTABLE,
-    TYPE_CURSOR, TYPE_MENU, TYPE_WINDOW, WM_DESTROY, WM_NCDESTROY, WM_PARENTNOTIFY, WNDS2_INDESTROY, WNDS_DESTROYED,
-    WNDS_ERASEBACKGROUND, WNDS_INTERNALPAINT, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT, WS_CHILD,
+    TYPE_CURSOR, TYPE_MENU, TYPE_SETWINDOWPOS, TYPE_WINDOW, WM_DESTROY, WM_NCDESTROY, WM_PARENTNOTIFY, WNDS2_INDESTROY,
+    WNDS_DESTROYED, WNDS_ERASEBACKGROUND, WNDS_INTERNALPAINT, WNDS_SENDERASEBACKGROUND, WNDS_SENDNCPAINT, WS_CHILD,
     WS_EX_NOPARENTNOTIFY, WS_POPUP, WS_VISIBLE,
 };
 use abi::winerror::ERROR_ACCESS_DENIED;
@@ -349,6 +349,10 @@ pub fn process_exit(process: &Arc<Object<EProcess>>) {
             TYPE_MENU if crate::menu::destroy(handle) => menus += 1,
             TYPE_CURSOR if crate::cursor::destroy(handle, true) => cursors += 1,
             TYPE_ACCELTABLE if crate::accel::destroy(handle) => accelerators += 1,
+            // Un lot de DeferWindowPos jamais fini : rendu sans rien déplacer.
+            TYPE_SETWINDOWPOS => {
+                crate::deferpos::destroy(handle);
+            }
             _ => {}
         }
     }

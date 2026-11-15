@@ -38,6 +38,7 @@ pub mod console;
 pub mod csrss;
 pub mod cursor;
 pub mod dce;
+pub mod deferpos;
 pub mod defwnd;
 pub mod desktop;
 pub mod destroy;

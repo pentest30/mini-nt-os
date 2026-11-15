@@ -45,6 +45,9 @@ pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_INVALID_MENU_HANDLE: u32 = 1401;
 /// ERROR_INVALID_ACCEL_HANDLE.
 pub const ERROR_INVALID_ACCEL_HANDLE: u32 = 1403;
+/// ERROR_INVALID_DWP_HANDLE: an HDWP that BeginDeferWindowPos did not
+/// give, or that EndDeferWindowPos already ended.
+pub const ERROR_INVALID_DWP_HANDLE: u32 = 1405;
 /// ERROR_MENU_ITEM_NOT_FOUND.
 pub const ERROR_MENU_ITEM_NOT_FOUND: u32 = 1456;
 /// ERROR_POPUP_ALREADY_ACTIVE: TrackPopupMenu on a menu already shown.

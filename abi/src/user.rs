@@ -655,6 +655,14 @@ pub mod fvirt {
 /// TYPE_ACCELTABLE: an accelerator table in the USER handle table.
 pub const TYPE_ACCELTABLE: u8 = 8;
 
+/// TYPE_SETWINDOWPOS: a batch of BeginDeferWindowPos (`SMWP`, an HDWP) in
+/// the USER handle table.
+pub const TYPE_SETWINDOWPOS: u8 = 4;
+/// ONEPARAM_ROUTINE_BEGINDEFERWNDPOS: BeginDeferWindowPos, by
+/// NtUserCallOneParam (the parameter is the number of windows; the result
+/// the HDWP).
+pub const ONEPARAM_ROUTINE_BEGINDEFERWNDPOS: u32 = 0x1E;
+
 /// NtUserQueryWindow's indexes (QUERY_WINDOW_*, ReactOS `ntuser.h`).
 pub mod query_window {
     pub const UNIQUE_PROCESS_ID: u32 = 0x00;

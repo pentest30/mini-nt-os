@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 170 | 737 |
+| win32k | 174 | 737 |
 
 ## ntoskrnl
 
@@ -663,7 +663,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1158` | `NtUserDdeGetQualityOfService` | 3 |  |
 | `0x1159` | `NtUserDdeInitialize` | 5 |  |
 | `0x115a` | `NtUserDdeSetQualityOfService` | 3 |  |
-| `0x115b` | `NtUserDeferWindowPos` | 8 |  |
+| `0x115b` | `NtUserDeferWindowPos` | 8 | ✅ |
 | `0x115c` | `NtUserDefSetText` | 2 | ✅ |
 | `0x115d` | `NtUserDeleteMenu` | 3 | ✅ |
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 | ✅ |
@@ -683,7 +683,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116c` | `NtUserEmptyClipboard` | 0 |  |
 | `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
 | `0x116e` | `NtUserEnableScrollBar` | 3 | ✅ |
-| `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
+| `0x116f` | `NtUserEndDeferWindowPosEx` | 2 | ✅ |
 | `0x1170` | `NtUserEndMenu` | 0 | ✅ |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 |  |
@@ -809,7 +809,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ea` | `NtUserRegisterTasklist` | 1 |  |
 | `0x11eb` | `NtUserRegisterWindowMessage` | 1 | ✅ |
 | `0x11ec` | `NtUserRemoveMenu` | 3 | ✅ |
-| `0x11ed` | `NtUserRemoveProp` | 2 |  |
+| `0x11ed` | `NtUserRemoveProp` | 2 | ✅ |
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
 | `0x11f0` | `NtUserSBGetParms` | 4 | ✅ |
@@ -859,7 +859,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 | ✅ |
 | `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
-| `0x121f` | `NtUserSetWindowRgn` | 3 |  |
+| `0x121f` | `NtUserSetWindowRgn` | 3 | ✅ |
 | `0x1220` | `NtUserSetWindowsHookAW` | 3 |  |
 | `0x1221` | `NtUserSetWindowsHookEx` | 6 |  |
 | `0x1222` | `NtUserSetWindowStationUser` | 4 | ✅ |

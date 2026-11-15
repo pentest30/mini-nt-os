@@ -193,6 +193,114 @@ pub(super) fn nt_user_set_window_pos(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(win32k::winpos::set_window_pos(&window, after, x, y, cx, cy, flags)))
 }
 
+/// Les `SWP_*` que NtUserDeferWindowPos accepte (les autres :
+/// `ERROR_INVALID_FLAGS`) ; `win32k::deferpos` en refuse encore quelques-uns
+/// (`ERROR_INVALID_PARAMETER`), comme ReactOS.
+const DEFER_WINDOW_POS_FLAGS: u32 = abi::user::SWP_ASYNCWINDOWPOS
+    | abi::user::SWP_DEFERERASE
+    | abi::user::SWP_NOSENDCHANGING
+    | abi::user::SWP_NOOWNERZORDER
+    | abi::user::SWP_NOCOPYBITS
+    | abi::user::SWP_HIDEWINDOW
+    | abi::user::SWP_SHOWWINDOW
+    | abi::user::SWP_FRAMECHANGED
+    | SWP_NOACTIVATE
+    | SWP_NOREDRAW
+    | SWP_NOZORDER
+    | SWP_NOMOVE
+    | SWP_NOSIZE;
+
+/// Une fenêtre qu'un déplacement peut nommer : elle existe, ce n'est ni la
+/// fenêtre d'un bureau ni sa fenêtre des messages ; `ERROR_INVALID_WINDOW_HANDLE`
+/// si elle n'existe pas, 0 (sans erreur) sinon.
+fn movable_window(handle: u32) -> Result<(), Option<u32>> {
+    let window = win32k::window::get(handle).ok_or(Some(abi::winerror::ERROR_INVALID_WINDOW_HANDLE))?;
+    if window.is_desktop_window() || window.is_message_window() {
+        return Err(None);
+    }
+    Ok(())
+}
+
+/// NtUserDeferWindowPos(hWinPosInfo, hWnd, hWndInsertAfter, x, y, cx, cy,
+/// Flags) : le déplacement de `hWnd` entre dans le lot (DeferWindowPos,
+/// `win32k::deferpos::defer`) ; rend le lot. 0 et `ERROR_INVALID_FLAGS` pour
+/// un drapeau inconnu ; 0 pour une fenêtre qui n'existe pas
+/// (`ERROR_INVALID_WINDOW_HANDLE`), un bureau ou sa fenêtre des messages,
+/// pour l'une ou pour celle d'avant elle (un `HWND_*` excepté) ; 0 et
+/// l'erreur du lot sinon.
+pub(super) fn nt_user_defer_window_pos(arguments: &[u32]) -> NtStatus {
+    let [batch, handle, after, x, y, cx, cy, flags] = arguments[..8] else { unreachable!("8 arguments") };
+    if flags & !DEFER_WINDOW_POS_FLAGS != 0 {
+        return fail(abi::winerror::ERROR_INVALID_FLAGS);
+    }
+    let named = movable_window(handle).and_then(|()| {
+        if matches!(after, HWND_TOP | HWND_BOTTOM | HWND_TOPMOST | HWND_NOTOPMOST) {
+            Ok(())
+        } else {
+            movable_window(after)
+        }
+    });
+    match named {
+        Err(Some(error)) => return fail(error),
+        Err(None) => return NtStatus(0),
+        Ok(()) => {}
+    }
+    let next =
+        win32k::deferpos::Move { hwnd: handle, after, x: x as i32, y: y as i32, cx: cx as i32, cy: cy as i32, flags };
+    match win32k::deferpos::defer(batch, next) {
+        Ok(batch) => NtStatus(batch),
+        Err(error) => fail(error),
+    }
+}
+
+/// NtUserEndDeferWindowPosEx(hWinPosInfo, bAsync) : les déplacements du lot,
+/// faits l'un après l'autre (EndDeferWindowPos, `win32k::deferpos::end`) ;
+/// TRUE s'ils ont tous réussi. FALSE et l'erreur pour un lot qui n'existe
+/// pas, ou avec `bAsync` (pas encore).
+pub(super) fn nt_user_end_defer_window_pos_ex(arguments: &[u32]) -> NtStatus {
+    match win32k::deferpos::end(arguments[0], arguments[1] != 0) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error),
+    }
+}
+
+/// NtUserSetWindowRgn(hWnd, hRgn, bRedraw) : la région de la fenêtre. Sans
+/// région (`hRgn` NULL), la fenêtre n'en a pas : comme ReactOS, son cadre se
+/// recalcule et elle passe en tête de ses sœurs (SetWindowPos HWND_TOP,
+/// SWP_FRAMECHANGED, sans la déplacer ni l'activer ; SWP_NOREDRAW sans
+/// `bRedraw`) ; rend ce que SetWindowPos rend. 0 pour une fenêtre qui
+/// n'existe pas (`ERROR_INVALID_WINDOW_HANDLE`), un bureau ou sa fenêtre des
+/// messages. Pas encore : une vraie région (régions visibles et test de
+/// position la suivant), refusée (0, `ERROR_CALL_NOT_IMPLEMENTED`,
+/// journalisée une fois) ; la barre des tâches n'en pose une que sur
+/// plusieurs moniteurs.
+pub(super) fn nt_user_set_window_rgn(arguments: &[u32]) -> NtStatus {
+    let (handle, region, redraw) = (arguments[0], arguments[1], arguments[2] != 0);
+    match movable_window(handle) {
+        Err(Some(error)) => return fail(error),
+        Err(None) => return NtStatus(0),
+        Ok(()) => {}
+    }
+    if region != 0 {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtUserSetWindowRgn with a region: not yet");
+        }
+        return fail(abi::winerror::ERROR_CALL_NOT_IMPLEMENTED);
+    }
+    let Some(window) = win32k::window::get(handle) else { return NtStatus(0) };
+    let mut flags = abi::user::SWP_NOCLIENTSIZE
+        | abi::user::SWP_NOCLIENTMOVE
+        | SWP_NOACTIVATE
+        | abi::user::SWP_FRAMECHANGED
+        | SWP_NOSIZE
+        | SWP_NOMOVE;
+    if !redraw {
+        flags |= SWP_NOREDRAW;
+    }
+    NtStatus(u32::from(win32k::winpos::set_window_pos(&window, HWND_TOP, 0, 0, 0, 0, flags)))
+}
+
 /// NtUserSetShellWindowEx(hwndShell, hwndShellListView) : la fenêtre du
 /// shell et celle de son fond pour la station du processus
 /// (`win32k::shell::set_shell_window`) ; la première passe au bas de

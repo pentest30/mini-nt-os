@@ -191,7 +191,10 @@ pub(super) fn nt_user_wait_message(_arguments: &[u32]) -> NtStatus {
 /// `ONEPARAM_ROUTINE_SETCARETBLINKTIME` : SetCaretBlinkTime (TRUE) ;
 /// `ONEPARAM_ROUTINE_GETINPUTEVENT` : le handle de l'événement de la file,
 /// pour MsgWaitForMultipleObjects, `Param` étant MAKELONG(masque de réveil,
-/// MWMO_*) (`queue::input_event`). Une autre rend 0 et
+/// MWMO_*) (`queue::input_event`) ; `ONEPARAM_ROUTINE_BEGINDEFERWNDPOS` :
+/// BeginDeferWindowPos, un lot pour `Param` fenêtres
+/// (`win32k::deferpos::begin` ; 0 et l'erreur pour un nombre négatif). Une
+/// autre rend 0 et
 /// `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
 pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
     let (param, routine) = (arguments[0], arguments[1]);
@@ -212,6 +215,10 @@ pub(super) fn nt_user_call_one_param(arguments: &[u32]) -> NtStatus {
             NtStatus(queue::status(&current(), flags))
         }
         abi::user::ONEPARAM_ROUTINE_GETINPUTEVENT => NtStatus(queue::input_event(&current(), param)),
+        abi::user::ONEPARAM_ROUTINE_BEGINDEFERWNDPOS => match win32k::deferpos::begin(param as i32) {
+            Ok(handle) => NtStatus(handle),
+            Err(error) => fail(error),
+        },
         _ => {
             UNSUPPORTED_ONE_PARAM_ROUTINES.report(routine);
             fail(ERROR_CALL_NOT_IMPLEMENTED)
