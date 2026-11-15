@@ -47,6 +47,46 @@
   **Suite** : les icônes du bureau (NtUserGetIconInfo, les détails des éléments), le papier peint
   (SPI_SETDESKWALLPAPER), la taille de « Progman » (1, 0)-(32768, 32767) à vérifier, la station des services ; le
   bouton Démarrer et ce que la barre demande.
+- **La barre des emplacements de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée
+  ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 32). « My Documents » et « My Computer »
+  avaient le papier blanc : leurs CLSID manquaient sous HKCR, que DllRegisterServer de `shell32` écrit et que
+  l'installation de ReactOS appelle (RegistrationPhase2). `minoinit.exe` enregistre maintenant `shell32` ; il fallait
+  pour cela que NtQueryKey(KeyNameInformation) accepte un handle sans KEY_QUERY_VALUE (un droit quelconque, comme
+  ReactOS : `ob::HandleTable::reference_as_with_any_access`), et que NtSetInformationFile(FileBasicInformation)
+  accepte un tampon aligné sur 4 (CopyFileW du `NTUSER.DAT` de `Default User` échouait une fois les cadres de
+  `minoinit` déplacés). La barre montre les cinq emplacements de ReactOS avec leurs icônes ; la boîte s'ouvre dans
+  « My Documents », créé par l'enregistrement. Tests : hôte (`ob`) ; `dir` (les dates d'un fichier depuis un tampon
+  aligné sur 4) ; `notepad-saveas` (sa sonde enregistre `shell32`, tape `C:\` ; un pixel de chaque icône) ; `logon`
+  (`[minoinit] shell32.dll registered`) ; quatre mutations. **Vu, pas fait** : « Recent » s'affiche « RECENT » (Io crée un nom 8.3
+  sans nom long : la casse se perd) ; les autres DLL de RegistrationPhase2.
+
+- **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). La barre d'outils de la boîte Enregistrer sous, sa
+  barre des emplacements et les icônes des tâches du gestionnaire des tâches s'affichent justes : BitBlt et
+  StretchBlt convertissent entre monochrome et couleurs (`gdi::bitblt::Convert`, la source monochrome lue au plus
+  proche du noir ou du blanc : le texte lissé de DrawState) ; l'alpha des images de 32 bits passe (StretchDIBits le
+  garde, les ROP avec source portent sur 32 bits, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend, `Pixel::Blend`
+  prémultiplié) ; les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`) et GetDIBits de 4 et 8 bits
+  (`gdi::dibits::default_palette`). Avec CreateDIBitmap, `user32` fait enfin le bitmap d'alpha des curseurs et icônes
+  de 32 bits, qui se mélangent par leur alpha au lieu de leurs masques : les pixels des icônes des titres de `gui` et
+  d'`icons` ont changé (recalculés à part depuis les ressources de `user32.dll`, identiques). Tests : hôte ; la sonde de `bitmap` (BitBlt monochrome, DIB section de 4 bits,
+  CreateDIBitmap, GdiAlphaBlend) ; des pixels de `notepad-saveas` (la barre d'outils, l'icône « Desktop ») et de
+  `desktop-launch` (l'icône de `cmd`). Douze mutations font chacune échouer un test (sans DIB section indexée, index réécrits à 0, table par défaut dans l'ancien ordre, sans conversion monochrome, source monochrome lue au noir exact, couleur de fond comparée avec son octet haut, StretchDIBits sans alpha, sans CreateDIBitmap, sans AlphaBlend, AlphaBlend sans l'alpha des pixels, ROP qui effacent l'alpha, alpha d'icône non prémultiplié). **Vu, pas fait** : les DIB sections de 1, 16 et 24 bits,
+  DIB_PAL_COLORS, SetDIBits, MaskBlt ; « My Documents » et « My Computer » de la barre des emplacements montraient
+  l'icône de document par défaut (fait : l'entrée ci-dessus).
+
+- **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
+  `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). Sous VirtualBox la boîte « Save As »
+  du Bloc-notes restait vide et son thread bouclait sur le cache d'icônes de `shell32`. Fait, dans l'ordre où la
+  boîte bloquait : NtUserGetIconInfo (`win32k::cursor::icon_info`, copies des bitmaps par
+  `gdi::surface::copy_bitmap`, module et ressource pour CopyImage(LR_COPYFROMRESOURCE)) ; NtUserGetAtomName écrit
+  dans le tampon du UNICODE_STRING de l'appelant (il écrasait la pile de `user32` : exception dans le WM_INITDIALOG
+  de la boîte ; à la fusion, la correction de `main` reste) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
+  CDefView croyait sa liste pleine de colonnes et s'arrêtait sur une assertion) ; GetDIBits (1 et 32 bits),
+  StretchBlt, GetNearestColor, BI_BITFIELDS de StretchDIBits (la barre d'outils). La boîte montre `C:\` et ses
+  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 31, entrée
+  ci-dessus) : NtUserGetClassName ;
+  NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
 
 - **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects

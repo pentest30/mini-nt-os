@@ -21,7 +21,11 @@
 # comctl32's TAB_Create): the first row of the list selected, the underlined N
 # of New Task..., the white relief under the S of Switch To and the E of End
 # Task, disabled (DrawState, a font from GetObjectW). Without the style, the
-# tab control painted over the page, gray.
+# tab control painted over the page, gray. The selected row is checked after
+# its text: the list's image list (comctl32, 4 bits per pixel) has the
+# tasks' icons (GetIconInfo), which shift the text; the first one, cmd's,
+# shows the teal of its title bar in the 16 colours of its DIB section of 4
+# bits (black without it).
 features = test-smss
 requires = userland, native
 initial-command = DESKTOP1.EXE
@@ -42,10 +46,17 @@ expect = [apps] the process list was read by PID
 expect = (TASKMGR.EXE) ended
 screen = 200 300 000000
 screen = 700 785 1E5CDB
-screen = 500 288 0A246A
+screen = 660 288 0A246A
+screen = 472 282 008080
+# The shadow of the T of End Task, inside the letter: DrawState draws the
+# disabled text in a monochrome bitmap, smoothed, then BitBlt converts it
+# (the nearest of black and white; read as exact black, the letters went).
+screen = 612 567 808080
 screen = 751 572 000000
 screen = 672 573 FFFFFF
 screen = 590 573 FFFFFF
 
 forbid = [desktop] launch failed:
 forbid = *** STOP:
+forbid = win32k: a DIB section of 4 bits per pixel
+forbid = win32k: GetDIBits of 4 bits per pixel

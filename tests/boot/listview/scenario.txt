@@ -10,6 +10,11 @@
 # - GetDlgItem, EnumChildWindows (the ListView and its header),
 #   EnumThreadWindows and EnumWindows (the parent): NtUserBuildHwndList;
 # - a column "Image" and three items, read back;
+# - a window "Files" (700, 450) whose WM_CREATE does what shell32's file
+#   view does: SendMessage (Header_GetItemCount) to the header of a list
+#   view in list view, not there yet, gives 0 and ERROR_INVALID_WINDOW_HANDLE
+#   (win32k writes the 0 user32 returns); the Name column inserted at the
+#   end then creates the header and reads back as subitem 0;
 # - painted: the header (NtGdiRectVisible lets comctl32 draw its items) with
 #   its column's edge and its bottom line, the items on the ListView's
 #   white background, the parent's COLOR_BTNFACE beside it.
@@ -29,6 +34,7 @@ expect = [list] EnumThreadWindows: 1
 expect = [list] EnumWindows: 1
 expect = [list] column inserted at 0
 expect = [list] items: 3, the second smss.exe
+expect = [list] a file view: no header 1, its item count 0 (error 1400); Name inserted at 0, header present, column 0 read 1, subitem 0
 expect = [list] painted
 
 screen = 300 300 FFFFFF

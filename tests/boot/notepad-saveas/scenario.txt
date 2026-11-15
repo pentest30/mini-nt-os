@@ -1,0 +1,74 @@
+# The Save As dialog of ReactOS's Notepad (tests/native/notepad3.c):
+# comdlg32 with shell32's file view of C:\, filtered on *.txt: three folders
+# (Documents and Settings, MINODIR, WINDOWS) and two text files, with their
+# icons. shell32's icon cache (SIC_Initialize) puts IDI_SHELL_DOCUMENT in
+# comctl32's image lists: CopyImage(LR_COPYFROMRESOURCE) asks
+# NtUserGetIconInfo for the icon's module and resource, ImageList_ReplaceIcon
+# GetIconInfo for copies of its bitmaps, which it reads by GetDIBits
+# (add_with_alpha); without them the cache failed and shell32 retried forever.
+# The view asks its ListView's header for its column count before the header
+# exists: SendMessage to no window must give 0 (it gave user32's
+# uninitialised variable, and CDefView asserted). The view's
+# NtUserGetAtomName of its class atom must stay in the caller's buffer (it
+# overwrote the stack).
+#
+# The probe first registers shell32 (DllRegisterServer), as minoinit.exe does
+# at the end of the installation: its scripts (REGISTRY resources) write the
+# CLSIDs of the shell's folders under HKCR, whose DefaultIcon the places bar
+# reads (CGuidItemExtractIcon_CreateInstance; without them, the blank paper
+# of IDI_SHELL_DOCUMENT). advapi32 asks the name of each key it creates under
+# HKCR (NtQueryKey, KeyNameInformation) by a handle without KEY_QUERY_VALUE:
+# any access must do (it gave STATUS_ACCESS_DENIED, and the registration
+# failed). The registration also creates the user's shell folders, so the
+# dialog opens in My Documents, empty; typing C:\ in the file name goes to
+# the root.
+features = test-smss
+requires = userland, native
+initial-command = NOTEPAD3.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [saveas] Notepad is up => ctrl-s
+keys = [saveas] the dialog is up => alt-n "C:\" ret
+
+expect = [saveas] shell32's DllRegisterServer: 00000000
+expect = [saveas] Notepad is up
+expect = [saveas] the view lists 5 files and folders
+expect = [saveas] done
+
+forbid = [apps] FAIL
+forbid = *** STOP:
+forbid = sys: NtUserGetIconInfo (0x1196) is not implemented
+forbid = sys: NtGdiGetDIBitsInternal (0x10ad) is not implemented
+forbid = sys: NtGdiStretchBlt (0x1123) is not implemented
+forbid = Failed to add IDI_SHELL_DOCUMENT icon to cache
+forbid = GetIconInfo Failed
+forbid = Imagelist no longer valid
+forbid = Assertion failed
+forbid = Exception when calling
+forbid = sys: NtGdiAlphaBlend (0x1007) is not implemented
+forbid = sys: NtGdiCreateDIBitmapInternal (0x1020) is not implemented
+
+# The first row's folder icon, its blue edge and its light inside; a corner
+# of its 16 x 16 cell that the icon leaves transparent: the list's white, not
+# black (the mask); a gray line of the text document icon of the fourth row.
+screen = 105 82 3465A4
+screen = 108 86 8CB1D8
+screen = 116 80 FFFFFF
+screen = 105 132 C4C4C4
+# The toolbar (comctl32's bitmaps of 32 bits, with their alpha:
+# ImageList_AddMasked, BitBlt to and from monochrome, the alpha through the
+# ROPs, GdiAlphaBlend): the green of the Up button's arrow, and a pixel of
+# its image that the alpha leaves transparent (the button's face, black
+# without it). The places bar's first icon, Recent's (shell32's icon 21, from
+# 36, 79): a transparent corner of its 32 x 32 cell.
+screen = 343 61 67C011
+screen = 337 61 D4D0C8
+screen = 37 80 D4D0C8
+# The places bar: Recent, Desktop, My Documents, My Computer and My Network
+# Places, as ReactOS's comdlg32 lists them. The icons that HKCR\CLSID gives
+# (shell32's icons 235 and 16, drawn by their alpha; the whole icons computed
+# apart from shell32.dll's resources): the blue of My Documents' folder (from
+# 36, 205) and the dark screen of My Computer (from 36, 268), both opaque.
+screen = 46 222 7EA7D2
+screen = 44 280 26294B

@@ -179,6 +179,27 @@ impl HandleTable {
         downcast(&self.reference(handle, Some(ty), desired)?).ok_or(STATUS_OBJECT_TYPE_MISMATCH)
     }
 
+    /// [`reference_as`](Self::reference_as) sans droit précis, pourvu que le
+    /// handle en porte au moins un (`STATUS_ACCESS_DENIED` sinon) : ce que
+    /// demande NtQueryKey(KeyNameInformation) de ReactOS.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn reference_as_with_any_access<T: Any + Send + Sync>(
+        &self,
+        handle: Handle,
+        ty: &ObjectType,
+    ) -> Result<Arc<Object<T>>, NtStatus> {
+        let (object, granted, _) = self.entry(handle)?;
+        if !object.is_type(ty) {
+            return Err(STATUS_OBJECT_TYPE_MISMATCH);
+        }
+        if granted == AccessMask::NONE {
+            return Err(STATUS_ACCESS_DENIED);
+        }
+        downcast(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)
+    }
+
     /// L'objet, les droits et les attributs de `handle`, lus ensemble ;
     /// `STATUS_INVALID_HANDLE` sans entrée.
     ///
@@ -450,6 +471,20 @@ mod tests {
             table.reference_as::<u64>(read_only, &EVENT, AccessMask::NONE).err(),
             Some(STATUS_OBJECT_TYPE_MISMATCH)
         );
+    }
+
+    #[test]
+    fn any_access_is_enough_but_none_is_not() {
+        let table = HandleTable::new();
+        let write_only = table.insert(event(), AccessMask(2), NONE).unwrap();
+        let no_access = table.insert(event(), AccessMask::NONE, NONE).unwrap();
+        assert_eq!(table.reference_as_with_any_access::<u32>(write_only, &EVENT).map(|e| **e), Ok(0));
+        assert_eq!(table.reference_as_with_any_access::<u32>(no_access, &EVENT).err(), Some(STATUS_ACCESS_DENIED));
+        assert_eq!(
+            table.reference_as_with_any_access::<u32>(write_only, &MUTANT).err(),
+            Some(STATUS_OBJECT_TYPE_MISMATCH)
+        );
+        assert_eq!(table.reference_as_with_any_access::<u32>(Handle(64), &EVENT).err(), Some(STATUS_INVALID_HANDLE));
     }
 
     #[test]

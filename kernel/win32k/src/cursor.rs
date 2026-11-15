@@ -39,8 +39,15 @@
 //! DrawIconEx ([`draw_icon_ex`]) et le cadre ([`draw_shape`]) dessinent une
 //! forme à la taille demandée, au plus proche.
 //!
+//! GetIconInfo (NtUserGetIconInfo : [`icon_info`], [`module_reply`],
+//! [`resource_reply`]) rend ce qu'est le curseur, des copies de ses bitmaps
+//! au processus appelant, et le module et la ressource dont il vient :
+//! CopyImage de `user32` s'en sert pour le recharger à une autre taille
+//! (LR_COPYFROMRESOURCE), ou pour en faire un autre ; les listes d'images de
+//! `comctl32` (ImageList_ReplaceIcon), pour le cache d'icônes de `shell32`.
+//!
 //! Pas encore : les curseurs animés (CURSORF_ACON : refusés), ShowCursor,
-//! ClipCursor, GetIconInfo, CopyImage, CreateIconIndirect, le remplacement
+//! ClipCursor, CreateIconIndirect, le remplacement
 //! d'un curseur du système déjà posé (FALSE, comme ReactOS),
 //! GetClassLong(GCLP_HCURSOR) (le `CLS` n'a pas de pointeur vers l'objet),
 //! le pinceau de DrawIconEx qui efface le fond (`hbrFlickerFreeDraw` :
@@ -87,7 +94,9 @@ pub enum Pixel {
     Opaque(ColorRef),
     /// L'écran XOR la couleur (AND 1, XOR non nul) : le blanc l'inverse.
     Xor(ColorRef),
-    /// L'écran mélangé à la couleur, par son alpha.
+    /// La couleur, prémultipliée par son alpha (le bitmap d'alpha que fait
+    /// `user32`, create_alpha_bitmap), ajoutée à l'écran multiplié par
+    /// 255 − l'alpha, comme AlphaBlend avec AC_SRC_ALPHA.
     Blend(ColorRef, u8),
 }
 
@@ -98,13 +107,7 @@ impl Pixel {
             Pixel::Transparent => screen,
             Pixel::Opaque(color) => color,
             Pixel::Xor(color) => ColorRef((screen.0 ^ color.0) & 0x00FF_FFFF),
-            Pixel::Blend(color, alpha) => {
-                let mix = |a: u8, b: u8| {
-                    ((u32::from(a) * u32::from(alpha) + u32::from(b) * (255 - u32::from(alpha))) / 255) as u8
-                };
-                let ((r, g, b), (sr, sg, sb)) = (color.components(), screen.components());
-                ColorRef::rgb(mix(r, sr), mix(g, sg), mix(b, sb))
-            }
+            Pixel::Blend(color, alpha) => crate::gdi::bitblt::blend((color, alpha), (screen, 0), 255, true).0,
         }
     }
 }
@@ -216,6 +219,9 @@ struct Data {
     flags: u32,
     icon: bool,
     size: (u32, u32),
+    /// La profondeur de ses couleurs (CURSORDATA.bpp : 1 pour un curseur
+    /// monochrome, celle de l'écran sinon).
+    bpp: u32,
     /// Ses bitmaps : le masque, les couleurs, l'alpha (0 : aucun).
     bitmaps: [u32; 3],
     shape: Arc<Shape>,
@@ -248,6 +254,119 @@ impl CurIcon {
     fn flags(&self) -> u32 {
         self.data.lock().as_ref().map_or(0, |data| data.flags)
     }
+
+    /// Ce que GetIconInfo dit de lui, ses propres bitmaps (sans copie) en
+    /// `hbm_mask` et `hbm_color` ; tout à zéro sans données (comme ReactOS :
+    /// ni masque ni couleurs, un curseur).
+    pub fn facts(&self) -> IconInfo {
+        let data = self.data.lock();
+        let Some(data) = data.as_ref() else { return IconInfo::default() };
+        let (x, y) = data.shape.hotspot;
+        IconInfo {
+            record: abi::user::IconInfo32 {
+                icon: i32::from(data.icon),
+                x_hotspot: x as u32,
+                y_hotspot: y as u32,
+                hbm_mask: data.bitmaps[0],
+                hbm_color: data.bitmaps[1],
+            },
+            bpp: data.bpp,
+        }
+    }
+
+    /// Le chemin du module de sa ressource, en majuscules, s'il en vient
+    /// (un curseur chargé avec LR_SHARED).
+    pub fn module(&self) -> Option<Vec<u16>> {
+        self.data.lock().as_ref().and_then(|data| data.module.clone())
+    }
+
+    /// Le nom de sa ressource, s'il en vient.
+    pub fn resource(&self) -> Option<Resource> {
+        self.data.lock().as_ref().and_then(|data| data.resource.clone())
+    }
+}
+
+/// Ce que NtUserGetIconInfo rend d'un curseur : son ICONINFO et la
+/// profondeur de ses couleurs (`pbpp`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IconInfo {
+    pub record: abi::user::IconInfo32,
+    pub bpp: u32,
+}
+
+/// NtUserGetIconInfo, son ICONINFO : ce qu'est le curseur `cursor` (icône
+/// ou curseur, point chaud, profondeur), avec des copies de son masque et de
+/// ses couleurs (BITMAP_CopyBitmap), données au processus courant, qui les
+/// supprime : les bitmaps du curseur restent à lui. Une copie qui échoue
+/// donne 0, comme dans ReactOS.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn icon_info(cursor: &CurIcon) -> IconInfo {
+    let mut info = cursor.facts();
+    let copy = |bitmap: u32| if bitmap == 0 { 0 } else { crate::gdi::surface::copy_bitmap(bitmap).unwrap_or(0) };
+    info.record.hbm_mask = copy(info.record.hbm_mask);
+    info.record.hbm_color = copy(info.record.hbm_color);
+    info
+}
+
+/// Ce que le UNICODE_STRING d'un appelant de NtUserGetIconInfo reçoit d'un
+/// nom : ses champs, et les octets à écrire dans son tampon (aucun quand il
+/// est trop petit : `MaximumLength` dit alors la place qu'il faut).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NameReply {
+    pub string: abi::peb32::UnicodeString32,
+    pub bytes: Vec<u8>,
+}
+
+/// Les octets d'un nom en UTF-16, sans terminateur.
+fn utf16_bytes(name: &[u16]) -> Vec<u8> {
+    name.iter().flat_map(|unit| unit.to_le_bytes()).collect()
+}
+
+/// Une longueur en octets d'un UNICODE_STRING (au plus 0xFFFF).
+fn string_length(bytes: usize) -> u16 {
+    u16::try_from(bytes).unwrap_or(u16::MAX)
+}
+
+/// NtUserGetIconInfo, `lpModule` (RtlQueryAtomInAtomTable) : le chemin
+/// `module` dans le UNICODE_STRING `asked` de l'appelant. Si son tampon
+/// (`MaximumLength`) ne tient pas le nom et un NUL, `Length` 0 et la place
+/// qu'il faut en `MaximumLength` ; sinon le nom et son NUL dans le tampon,
+/// sa longueur (sans le NUL) en `Length`.
+pub fn module_reply(asked: abi::peb32::UnicodeString32, module: &[u16]) -> NameReply {
+    let needed = string_length(2 * module.len() + 2);
+    if needed > asked.maximum_length {
+        let string = abi::peb32::UnicodeString32 { length: 0, maximum_length: needed, buffer: asked.buffer };
+        return NameReply { string, bytes: Vec::new() };
+    }
+    let mut bytes = utf16_bytes(module);
+    let length = string_length(bytes.len());
+    bytes.extend_from_slice(&[0, 0]);
+    NameReply { string: abi::peb32::UnicodeString32 { length, ..asked }, bytes }
+}
+
+/// NtUserGetIconInfo, `lpResName` : le nom de ressource `resource` dans le
+/// UNICODE_STRING `asked`. Un identifiant (MAKEINTRESOURCE) va dans
+/// `Buffer`, les longueurs à 0. Un nom : si le tampon ne le tient pas avec un
+/// NUL (la place de `strName`, que `user32` termine lui-même),
+/// `Length` 0 et cette place en `MaximumLength` ; sinon le nom (sans NUL)
+/// dans le tampon, sa longueur en `Length`.
+pub fn resource_reply(asked: abi::peb32::UnicodeString32, resource: &Resource) -> NameReply {
+    let name = match resource {
+        Resource::Id(id) => {
+            let string = abi::peb32::UnicodeString32 { length: 0, maximum_length: 0, buffer: u32::from(*id) };
+            return NameReply { string, bytes: Vec::new() };
+        }
+        Resource::Name(name) => name,
+    };
+    let needed = string_length(2 * name.len() + 2);
+    if asked.maximum_length < needed {
+        let string = abi::peb32::UnicodeString32 { length: 0, maximum_length: needed, buffer: asked.buffer };
+        return NameReply { string, bytes: Vec::new() };
+    }
+    let bytes = utf16_bytes(name);
+    NameReply { string: abi::peb32::UnicodeString32 { length: string_length(bytes.len()), ..asked }, bytes }
 }
 
 /// Les curseurs par handle.
@@ -360,6 +479,7 @@ pub fn set_data(handle: u32, module: Option<Vec<u16>>, resource: Option<Resource
         flags,
         icon: data.rt == RT_ICON,
         size: (cx, cy),
+        bpp: data.bpp,
         bitmaps,
         shape: Arc::new(shape),
         module,
@@ -876,7 +996,12 @@ mod tests {
         assert_eq!(Pixel::Opaque(ColorRef::rgb(1, 2, 3)).over(screen), ColorRef::rgb(1, 2, 3));
         assert_eq!(Pixel::Xor(ColorRef::rgb(255, 255, 255)).over(screen), ColorRef::rgb(245, 235, 225), "inverted");
         assert_eq!(Pixel::Blend(ColorRef::rgb(255, 255, 255), 255).over(screen), ColorRef::rgb(255, 255, 255));
-        assert_eq!(Pixel::Blend(ColorRef::rgb(255, 255, 255), 0).over(screen), screen);
+        assert_eq!(Pixel::Blend(ColorRef::rgb(0, 0, 0), 0).over(screen), screen, "transparent: black, premultiplied");
+        assert_eq!(
+            Pixel::Blend(ColorRef::rgb(64, 0, 0), 128).over(ColorRef::rgb(200, 200, 200)),
+            ColorRef::rgb(163, 99, 99),
+            "premultiplied: the colour added"
+        );
         assert_eq!(
             Pixel::Blend(ColorRef::rgb(0, 0, 0), 128).over(ColorRef::rgb(255, 255, 255)),
             ColorRef::rgb(127, 127, 127)
@@ -903,6 +1028,80 @@ mod tests {
         draw_shape(&mut surface, &shape, rect, Rect::new(0, 0, 6, 3), di::MASK);
         let (black, white) = (ColorRef::rgb(0, 0, 0), ColorRef::rgb(255, 255, 255));
         assert_eq!([at(&surface, 1, 1), at(&surface, 4, 1)], [black, white], "the AND mask");
+    }
+
+    /// Un curseur aux données `data`, hors de la table.
+    fn cursor_with(data: Option<Data>) -> CurIcon {
+        CurIcon { pid: AtomicU32::new(8), current: AtomicBool::new(false), data: KSpinLock::new(data) }
+    }
+
+    fn icon_data(icon: bool, hotspot: (i32, i32), bpp: u32, bitmaps: [u32; 3]) -> Data {
+        let shape = Shape { width: 1, height: 1, hotspot, pixels: alloc::vec![Pixel::Transparent] };
+        Data {
+            flags: cursorf::FROMRESOURCE | cursorf::LRSHARED,
+            icon,
+            size: (32, 32),
+            bpp,
+            bitmaps,
+            shape: Arc::new(shape),
+            module: Some("C:\\WINDOWS\\SYSTEM32\\SHELL32.DLL".encode_utf16().collect()),
+            resource: Some(Resource::Id(1)),
+        }
+    }
+
+    #[test]
+    fn get_icon_info_tells_what_the_cursor_is() {
+        let icon = cursor_with(Some(icon_data(true, (16, 16), 32, [0x10, 0x20, 0x30])));
+        let record = abi::user::IconInfo32 { icon: 1, x_hotspot: 16, y_hotspot: 16, hbm_mask: 0x10, hbm_color: 0x20 };
+        assert_eq!(icon.facts(), IconInfo { record, bpp: 32 }, "its own bitmaps, not the alpha one");
+        let arrow = cursor_with(Some(icon_data(false, (3, 5), 1, [0x40, 0, 0])));
+        let record = abi::user::IconInfo32 { icon: 0, x_hotspot: 3, y_hotspot: 5, hbm_mask: 0x40, hbm_color: 0 };
+        assert_eq!(arrow.facts(), IconInfo { record, bpp: 1 }, "a monochrome cursor: no colors");
+        assert_eq!(cursor_with(None).facts(), IconInfo::default(), "no data yet");
+        assert_eq!(icon.resource(), Some(Resource::Id(1)));
+        assert_eq!(cursor_with(None).module(), None);
+    }
+
+    #[test]
+    fn get_icon_info_without_bitmaps_copies_nothing() {
+        let empty = cursor_with(None);
+        assert_eq!(icon_info(&empty), IconInfo::default());
+    }
+
+    const BUFFER: u32 = 0x0012_0000;
+
+    fn asked(maximum_length: u16) -> abi::peb32::UnicodeString32 {
+        abi::peb32::UnicodeString32 { length: 7, maximum_length, buffer: BUFFER }
+    }
+
+    #[test]
+    fn the_module_name_or_the_room_it_needs() {
+        let module: Vec<u16> = "C:\\A.DLL".encode_utf16().collect();
+        // Eight characters and a NUL: 18 bytes.
+        let reply = module_reply(asked(0), &module);
+        assert_eq!(reply.string, abi::peb32::UnicodeString32 { length: 0, maximum_length: 18, buffer: BUFFER });
+        assert!(reply.bytes.is_empty(), "nothing written");
+        assert_eq!(module_reply(asked(17), &module).string.maximum_length, 18, "no room for the NUL");
+        let reply = module_reply(asked(18), &module);
+        assert_eq!(reply.string, abi::peb32::UnicodeString32 { length: 16, maximum_length: 18, buffer: BUFFER });
+        assert_eq!(reply.bytes.len(), 18);
+        assert_eq!(&reply.bytes[..4], &[b'C', 0, b':', 0]);
+        assert_eq!(&reply.bytes[16..], &[0, 0], "terminated");
+        assert_eq!(module_reply(asked(64), &module).string.maximum_length, 64, "the caller's room stays");
+    }
+
+    #[test]
+    fn the_resource_an_identifier_or_a_name() {
+        let id = resource_reply(asked(0), &Resource::Id(0x7F02));
+        assert_eq!(id.string, abi::peb32::UnicodeString32 { length: 0, maximum_length: 0, buffer: 0x7F02 });
+        assert!(id.bytes.is_empty());
+        let name = Resource::Name("APP".encode_utf16().collect());
+        let reply = resource_reply(asked(0), &name);
+        assert_eq!(reply.string, abi::peb32::UnicodeString32 { length: 0, maximum_length: 8, buffer: BUFFER });
+        assert!(reply.bytes.is_empty());
+        let reply = resource_reply(asked(8), &name);
+        assert_eq!(reply.string, abi::peb32::UnicodeString32 { length: 6, maximum_length: 8, buffer: BUFFER });
+        assert_eq!(reply.bytes, [b'A', 0, b'P', 0, b'P', 0], "without the NUL, which user32 adds");
     }
 
     #[test]
