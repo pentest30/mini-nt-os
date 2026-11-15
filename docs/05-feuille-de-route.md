@@ -117,7 +117,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - Pilotes `gopfb`, puis `bochs-dispi` (changement de résolution), et i8042 souris.
 
 **Critères de sortie**
-- [ ] `winlogon` (ouverture de session automatique), `userinit` et `explorer` affichent le bureau, la barre des tâches et le menu Démarrer.
+- [x] `winlogon` (ouverture de session automatique), `userinit` et `explorer` affichent le bureau, la barre des tâches et le menu Démarrer (`logon`, AMD ; [parcours](compat/m6-logon.md#le-shell--explorerexe)).
 - [x] Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre (`notepad-save`, AMD et Intel ; [parcours vérifié](compat/applications.md)).
 - [ ] La résolution se change depuis le panneau Affichage (QEMU).
 

@@ -199,29 +199,51 @@ texte « Start » : pas encore son logo, ni le thème de comctl32 6, faute de l'
 `Microsoft.Windows.Common-Controls` 6.0 (« Could not find dependent assembly ») et des listes d'images. Pas encore :
 une vraie région de fenêtre (refusée, journalisée une fois), EndDeferWindowPos asynchrone.
 
-**Où `explorer` va maintenant : le menu Démarrer attend les icônes.** Avec les classes COM de la PR 133, `explorer`
-crée son menu Démarrer pendant la création de sa barre (CTrayWindow::OnCreate, CreateStartMenu : les dossiers
-`Start Menu` de l'utilisateur et de All Users parcourus), mais ses barres d'outils demandent la liste d'images du
-système (CMenuToolbars.cpp:356, SHGetImageList), que `shell32` n'a pas pu créer faute des icônes (NtUserGetIconInfo,
-NtGdiCreateDIBitmapInternal, NtGdiGetDIBitsInternal : « Failed to add IDI_SHELL_DOCUMENT icon to cache ») ;
-SHGetImageList appelle alors QueryInterface d'une liste NULL (une lecture en 0 dans `shell32`, RVA `0xF4533`), que
-`user32` rattrape (« Exception when calling unicode WndProc ... Msg 1 ») : OnCreate s'arrête là, sans site de bandes,
-ni bouton des tâches, ni zone de notification. Un clic sur le bouton Démarrer arrive à la barre (TWM_OPENSTARTMENU),
-mais la fenêtre du menu n'existe pas (traywnd.cpp:2997, E_FAIL), et une assertion d'ATL s'affiche (atlwin.h:1124,
-`::IsWindow(hWnd)`). La chaîne des icônes est le travail d'une autre session ; le bureau, lui, montre déjà les noms
-de ses éléments (« My... », « Rec... ») sans leurs icônes. En chemin : NtUserSystemParametersInfo (classes 0x14,
-0x2B, 0x2F, 0x30, 0x100A), NtGdiAlphaBlend, NtGdiStretchBlt, NtUserFindWindowEx, NtUserSetParent,
-NtUserRegisterHotKey, NtUserCallOneParam (0x28 GETKEYBOARDLAYOUT, 0x31 MESSAGEBEEP). La fenêtre « Progman »
-d'`explorer` mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à vérifier
-(SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN).
+**Le menu Démarrer attendait les icônes.** Avec les classes COM de la PR 133, `explorer` crée son menu Démarrer
+pendant la création de sa barre (CTrayWindow::OnCreate, CreateStartMenu : les dossiers `Start Menu` de
+l'utilisateur et de All Users parcourus), mais ses barres d'outils demandent la liste d'images du système
+(CMenuToolbars.cpp:356, SHGetImageList), que `shell32` ne pouvait pas créer sans les icônes (« Failed to add
+IDI_SHELL_DOCUMENT icon to cache ») : SHGetImageList appelait QueryInterface d'une liste NULL (une lecture en 0 dans
+`shell32`, RVA `0xF4533`), que `user32` rattrapait (« Exception when calling unicode WndProc ... Msg 1 ») ; OnCreate
+s'arrêtait là, sans site de bandes ni zone de notification, et un clic sur Démarrer donnait traywnd.cpp:2997 (E_FAIL)
+et l'assertion d'ATL atlwin.h:1124. La branche des icônes (`claude/blissful-herschel-4bf0cc`, fusionnée ici :
+NtUserGetIconInfo, GetDIBits, StretchBlt, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend, les images de `comctl32`,
+`shell32` enregistré) lève ce blocage.
+
+**Le bureau, la barre des tâches et le menu Démarrer.** `explorer` crée maintenant toute sa barre : le bouton
+Démarrer, le site de bandes, la zone de notification et son horloge ; son bureau montre ses quatre icônes (My
+Documents, My Computer, My Network Places, Recycle Bin). Un clic sur le bouton Démarrer (la souris de QEMU, scénario
+`logon`) poste TWM_OPENSTARTMENU à la barre, qui ouvre son menu (CMenuDeskBar::Popup : la fenêtre « BaseBar »,
+SetWindowPos HWND_TOPMOST, SWP_SHOWWINDOW) au-dessus du bouton, en (2, 498)-(175, 776), et enfonce le bouton
+(BM_SETSTATE) : Programs, Documents, Settings, Search, Help and Support, Run..., Shut Down..., avec leurs icônes et le
+bandeau. **Le premier critère du M6 est atteint.**
+
+Écarts et dettes vus en chemin :
+
+- **Le menu met 15 à 30 s à paraître la première fois.** Chacune de ses icônes fait créer par `shell32` une section de
+  données de `shell32.dll` (NtCreateSection, `SEC_COMMIT`, pour LoadImage), et Mino copie le fichier entier dans
+  chaque section (`sys::section`, `io_manager::File::read_all` : 10,9 Mo lus en PIO sur le disque ATA à chaque fois).
+  NT partage une seule *control area* par fichier entre ses sections ; Mino en est loin. Tâche : une copie par fichier
+  (ou des pages lues à la demande), pour toutes les sections d'un même fichier. Le scénario `logon` attend le menu
+  jusqu'à 120 s (`screen-wait`).
+- Le suivi du menu par la souris et le clavier n'est pas vérifié : `shell32` (CMenuFocusManager) pose des crochets
+  WH_GETMESSAGE et WH_MSGFILTER (SetWindowsHookEx, pas encore).
+- En chemin : NtUserSystemParametersInfo (classes 0x14 SPI_SETDESKWALLPAPER, 0x2B et 0x2C MINIMIZEDMETRICS, 0x2F et
+  0x30 WORKAREA, 0x42, 0x100A), NtUserCallHwnd (0x48), NtUserCallHwndOpt (0x4B), NtUserGetAncestor,
+  NtUserGetDoubleClickTime, NtUserFindWindowEx, NtUserSetParent, NtUserRegisterHotKey, NtUserGetSystemMenu,
+  NtUserCallOneParam (0x28 GETKEYBOARDLAYOUT, 0x31 MESSAGEBEEP), NtQueryInformationThread (classe 0x10),
+  NtNotifyChangeDirectoryFile (« ReadDirectoryChangesW ... failed », le bureau ne suit pas son dossier). La fenêtre
+  « Progman » mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à vérifier
+  (SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN). Le bouton Démarrer n'a pas son logo (comctl32 6, l'assemblage côte à côte
+  manque).
 
 ## La suite
 
-Les icônes (la liste d'images du système : NtUserGetIconInfo, NtGdiCreateDIBitmapInternal, NtGdiGetDIBitsInternal),
-dont dépendent le menu Démarrer et le reste de la barre ; puis le menu Démarrer ouvert d'un clic (les crochets
-WH_GETMESSAGE et WH_MSGFILTER que pose le suivi du menu de `shell32`, CMenuFocusManager), la zone de travail que la
-barre réserve (SPI_SETWORKAREA), RegisterHotKey, FindWindowEx, SetParent ; le papier peint (SPI_SETDESKWALLPAPER), la
-station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`, et le bureau du critère.
+Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
+ChangeDisplaySettings, le panneau Affichage). Pour le shell : les sections d'un même fichier partagées (le menu
+Démarrer lent), les crochets (WH_GETMESSAGE, WH_MSGFILTER : le menu suivi à la souris et au clavier), la zone de
+travail (SPI_SETWORKAREA), RegisterHotKey, FindWindowEx, SetParent, le papier peint (SPI_SETDESKWALLPAPER), la station
+des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
 
 ## Tests
 
@@ -260,7 +282,10 @@ le lot fini refusé (`ERROR_INVALID_DWP_HANDLE`) ; un drapeau inconnu, SWP_ASYNC
 vide fini ; SetWindowRgn(NULL) met la fenêtre en tête ; RemoveProp rend la donnée puis plus rien. Quatre mutations
 (sans la routine BEGINDEFERWNDPOS, SetWindowRgn qui garde le rang, RemoveProp sans republier la liste, les drapeaux
 du lot non vérifiés) le font échouer. Hôte : `win32k::deferpos` (la fusion de deux déplacements). Scénario `logon` :
-le bouton Démarrer à l'écran (ses bords gauche et droit), « BeginDeferWindowPos failed » interdit.
+le bouton Démarrer à l'écran (ses bords gauche et droit), « BeginDeferWindowPos failed » interdit. Puis, avec les
+icônes : un clic sur Démarrer (`keys`, la souris de QEMU) et le menu ouvert au-dessus du bouton (sa face, son bord
+droit, le bouton enfoncé ; `screen-wait = 120`, une option de `xtask` : l'écran capturé de nouveau chaque seconde
+jusqu'à montrer les pixels) ; `minoinit` enregistre `browseui` et `shell32` (0).
 
 Les apitests de `ntdll` (scénario `rostests`) restent à 43 sur 84, le plancher, mais pas les mêmes : NtDuplicateToken
 (un `NewTokenHandle` nul : `STATUS_ACCESS_VIOLATION`, la poignée écrite d'abord, comme ProbeForWriteHandle) et

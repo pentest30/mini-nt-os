@@ -47,7 +47,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
 - **Jalon courant : M6 — win32k** ([05](docs/05-feuille-de-route.md#m6--win32k-avec-le-spike-s3-en-premier)) : le
-  bureau d'`explorer` et le changement de résolution restent. M0 à M5 sont terminés (spikes S1, S2 et S3 réussis ;
+  changement de résolution reste (le bureau d'`explorer` est fait). M0 à M5 sont terminés (spikes S1, S2 et S3 réussis ;
   l'ADR-002 qui les attendait est à confirmer par le mainteneur). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
   `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
@@ -390,8 +390,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `HWND_MESSAGE`, serveurs COM du disque enregistrés par `minoinit` (CLSID_StartMenu, CLSID_RebarBandSite). Le bouton
   Démarrer placé par DeferWindowPos (`win32k::deferpos` : BeginDeferWindowPos par NtUserCallOneParam 0x1E, un lot
   `TYPE_SETWINDOWPOS`, NtUserDeferWindowPos, NtUserEndDeferWindowPosEx) ; NtUserSetWindowRgn sans région,
-  NtUserRemoveProp ; scénario `defer-window-pos`. Le menu Démarrer meurt à sa création dans SHGetImageList (la
-  liste d'images du système, faute des icônes).
+  NtUserRemoveProp ; scénario `defer-window-pos`. La branche des icônes fusionnée (étapes 30 à 32 de
+  `m6-fenetres.md`) : le menu Démarrer se crée, la barre aussi (zone de notification, horloge), le bureau montre ses
+  icônes, et un clic sur Démarrer ouvre le menu (scénario `logon`, `screen-wait`) : **le premier critère du M6 est
+  coché**. Dette : le menu met 15 à 30 s à paraître (chaque icône copie `shell32.dll` entier dans une section).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

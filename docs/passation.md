@@ -1,5 +1,23 @@
 # Notes de passation
 
+- **Le menu Démarrer s'ouvre : le premier critère du M6 est atteint** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La branche des icônes
+  (`claude/blissful-herschel-4bf0cc`) fusionnée ici : NtUserGetIconInfo, GetDIBits, StretchBlt, les images de
+  `comctl32`, `shell32` enregistré ; les trois correctifs faits des deux côtés (NtUserGetAtomName, le ResultInfo de
+  SendMessage, FileBasicInformation) gardent la version de cette branche ; `minoinit` enregistre en une étape, avant la
+  ruche de Default User, les serveurs COM du disque (browseui et shell32 réussissent) ; ses étapes 29 à 31 de
+  `m6-fenetres.md` deviennent 30 à 32. Avec la liste d'images du système, `explorer` crée son menu Démarrer et toute sa
+  barre (zone de notification, horloge), son bureau montre ses icônes, et un clic sur Démarrer ouvre le menu (« BaseBar »,
+  (2, 498)-(175, 776), Programs… Shut Down…). `xtask` : `screen-wait = SECONDES`, l'écran capturé de nouveau chaque
+  seconde jusqu'à montrer les pixels. Scénario `logon` : le clic (`keys`), le menu ouvert et le bouton enfoncé
+  (`screen-wait = 120`). Case cochée dans `05-feuille-de-route.md`. Capture `target/screenshots/menu-demarrer.png`.
+  `cargo xtask lint` propre ; toute la suite : 1126 tests hôte, 119 runs de démarrage sur 119 (rostests 44/84 et
+  16/29, aux planchers).
+  **Dette** : le menu met 15 à 30 s à paraître la première fois, chaque icône copiant `shell32.dll` (10,9 Mo) dans une
+  section de données (`sys::section`, `File::read_all`). **Suite** : partager les sections d'un même fichier (une
+  copie par fichier) ; les crochets WH_GETMESSAGE et WH_MSGFILTER (le menu suivi) ; puis le troisième critère, la
+  résolution (`bochs-dispi`, ChangeDisplaySettings, le panneau Affichage).
+
 - **Le bouton Démarrer d'`explorer` placé ; son menu attend les icônes** (`claude/new-session-696xfc`, M6, premier
   critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La barre des tâches place ses contrôles
   par DeferWindowPos, absent (« BeginDeferWindowPos failed », traywnd.cpp:1705) : le bouton gardait une taille nulle.
