@@ -377,6 +377,9 @@ cible préparée et formatée, avec les mêmes refus et la même revalidation :
   à chaque fichier (lent), et le premier nom long (`KERNEL32_VISTA.DLL`)
   arrêtait la copie : `Volume::create` écrit maintenant les entrées VFAT et
   l'alias 8.3 (`BASE~N.EXT`, unique dans le répertoire, extension comprise) ;
+  un nom que le 8.3 tient garde sa casse comme chez `vfatfs` (drapeaux de casse de
+  NT, ou un nom long pour une casse mixte : étape 34 de
+  [`m6-fenetres.md`](m6-fenetres.md)) ;
 - **les fichiers de boot** : quand l'ESP de démarrage est montable en FAT32
   (une image GPT, VirtualBox), `EFI/BOOT/BOOTX64.EFI`, `kernel.elf` et
   `fat.img` (le ramdisk, 42,5 Mo avec l'espace utilisateur) vont à leur place

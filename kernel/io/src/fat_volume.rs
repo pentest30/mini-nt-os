@@ -31,7 +31,13 @@
 //! heure locale ; sans fuseau horaire, elles passent pour de l'UTC.
 //!
 //! Un nom que le format 8.3 ne tient pas, fichier ou répertoire, se crée
-//! avec ses entrées de nom long (VFAT) et un alias 8.3 unique.
+//! avec ses entrées de nom long (VFAT) et un alias 8.3 unique. Un nom qu'il
+//! tient garde sa casse comme vfatfs de ReactOS la garde : tout en
+//! majuscules, son entrée 8.3 seule ; une base ou une extension toute en
+//! minuscules, les drapeaux de casse de NT de l'entrée 8.3 (octet 12 :
+//! 0x08 la base, 0x10 l'extension), qu'Io relit ; une base ou une extension
+//! à casse mixte (`Recent`), des entrées de nom long devant son entrée 8.3,
+//! le nom en majuscules sans `~N`.
 //!
 //! Pas encore : la suppression, le renommage ; le dernier accès à la
 //! lecture.
@@ -497,8 +503,10 @@ impl FatMount {
             Err(FatError::NotFound) => {}
             Err(error) => return Err(device_error(error)),
         }
-        // Un nom que le format 8.3 tient : son entrée 8.3 seule ; sinon ses
-        // entrées de nom long (VFAT) et l'entrée 8.3 de son alias.
+        // Un nom que le format 8.3 tient : son entrée 8.3 seule, avec les
+        // drapeaux de casse de NT, ou, à casse mixte, des entrées de nom long
+        // devant elle ; sinon ses entrées de nom long (VFAT) et l'entrée 8.3
+        // de son alias (`fat::FatVolume::add_entry_long`).
         let at = if as_directory {
             let (cluster, at) =
                 self.fat.create_directory(directory.first_cluster, name, *hint).map_err(device_error)?;

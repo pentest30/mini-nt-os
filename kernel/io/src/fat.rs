@@ -279,7 +279,8 @@ fn same_name(long: &str, name: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct DirEntryInfo {
-    /// Its long name if it has one, else its 8.3 name.
+    /// Its long name if it has one, else its 8.3 name (a part in lower case
+    /// if its NT case flag says so).
     pub name: String,
     pub attr: u8,
     pub first_cluster: u32,
@@ -781,6 +782,29 @@ pub fn short_name(name: &str) -> Result<[u8; 11], FatError> {
     short_name_11(name)
 }
 
+/// The NT case flags of an 8.3 entry, in its byte 12 (which DOS reserved):
+/// the base of its name is in lower case…
+pub const CASE_LOWER_BASE: u8 = 0x08;
+/// … its extension is.
+pub const CASE_LOWER_EXT: u8 = 0x10;
+
+/// The case flags that keep the case of `name`, a name 8.3 holds: a base or
+/// an extension all in lower case gets its flag; `None` when one of them
+/// mixes cases, which only a long name keeps. As ReactOS's vfatfs decides
+/// (FATAddEntry, `BaseAllLower`, `ExtensionAllLower`).
+fn case_flags(name: &str) -> Option<u8> {
+    let (base, extension) = name.split_once('.').unwrap_or((name, ""));
+    let flag = |part: &str, lower: u8| {
+        let has_lower = part.bytes().any(|byte| byte.is_ascii_lowercase());
+        match (has_lower, part.bytes().any(|byte| byte.is_ascii_uppercase())) {
+            (true, true) => None,
+            (true, false) => Some(lower),
+            (false, _) => Some(0),
+        }
+    };
+    Some(flag(base, CASE_LOWER_BASE)? | flag(extension, CASE_LOWER_EXT)?)
+}
+
 /// The 8.3 alias of the long name `long`, as other systems make it: its base
 /// (before its last dot) and its extension in upper case, without spaces or
 /// dots, other characters 8.3 cannot hold as `_`; then `~N` after at most 6
@@ -1252,11 +1276,16 @@ impl<D: BlockDevice> FatVolume<D> {
     /// Adds the entry of `long` to the directory at `dir_cluster`: the
     /// long-name (VFAT) entries of its 8.3 alias — the last part first, each
     /// carrying the checksum of the alias — then that alias's 8.3 entry,
-    /// unique in the directory. A name 8.3 already holds gets a single
-    /// entry. Every entry lands in the first free slot; a full directory
-    /// grows by a zeroed cluster. `PathFormat` for a name longer than VFAT
-    /// holds, before anything is written; if an entry cannot be written, the
-    /// long-name entries already written are deleted again.
+    /// unique in the directory. A name 8.3 already holds keeps its case as
+    /// ReactOS's vfatfs keeps it (FATAddEntry): in upper case, or with a
+    /// base or an extension all in lower case, a single 8.3 entry with the
+    /// NT case flags ([`CASE_LOWER_BASE`], [`CASE_LOWER_EXT`]); with a base
+    /// or an extension of mixed case (`Recent`), long-name entries before
+    /// its 8.3 entry, the name in upper case without `~N`. Every entry lands
+    /// in the first free slot; a full directory grows by a zeroed cluster.
+    /// `PathFormat` for a name longer than VFAT holds, before anything is
+    /// written; if an entry cannot be written, the long-name entries already
+    /// written are deleted again.
     pub fn add_entry_long(
         &self,
         dir_cluster: u32,
@@ -1277,20 +1306,26 @@ impl<D: BlockDevice> FatVolume<D> {
         first_cluster: u32,
         hint: u32,
     ) -> Result<EntryRef, FatError> {
-        if let Ok(short) = short_name(long) {
-            return self.add_entry(dir_cluster, &make_entry(&short, attributes, first_cluster, 0), hint);
-        }
-        if long.encode_utf16().count() > MAX_LONG_NAME_UNITS {
-            return Err(FatError::PathFormat);
-        }
-        // The alias must not collide with the 8.3 names the directory holds,
-        // the aliases of its long names included.
-        let taken: Vec<[u8; 11]> = self
-            .dir_entries(dir_cluster)?
-            .iter()
-            .filter_map(|entry| short_name(entry.short_name.as_deref().unwrap_or(&entry.name)).ok())
-            .collect();
-        let alias = alias_11(long, |candidate| taken.contains(candidate));
+        let alias = match short_name(long) {
+            Ok(short) => match case_flags(long) {
+                Some(case) => {
+                    let mut entry = make_entry(&short, attributes, first_cluster, 0);
+                    entry[12] = case;
+                    return self.add_entry(dir_cluster, &entry, hint);
+                }
+                // The long name keeps the case.
+                None => short,
+            },
+            Err(_) => {
+                if long.encode_utf16().count() > MAX_LONG_NAME_UNITS {
+                    return Err(FatError::PathFormat);
+                }
+                // The alias must not collide with the 8.3 names the
+                // directory holds, the aliases of its long names included.
+                let taken: Vec<[u8; 11]> = self.dir_entries(dir_cluster)?.iter().map(|entry| entry.raw_name).collect();
+                alias_11(long, |candidate| taken.contains(candidate))
+            }
+        };
         let mut written = Vec::new();
         for part in long_name_entries(long, &alias) {
             match self.add_entry(dir_cluster, &part, hint) {
@@ -1317,10 +1352,9 @@ impl<D: BlockDevice> FatVolume<D> {
 
     /// Creates the subdirectory `name` of the directory at `parent` (the
     /// root's `..` names cluster 0): a zeroed cluster with its `.` and `..`,
-    /// and its entry in `parent` — a single 8.3 entry for a name 8.3 holds,
-    /// else its long-name (VFAT) entries and its alias's
-    /// ([`add_entry_long`](Self::add_entry_long)). Returns its cluster and
-    /// its 8.3 entry.
+    /// and its entry in `parent`, named as
+    /// [`add_entry_long`](Self::add_entry_long) names a file. Returns its
+    /// cluster and its 8.3 entry.
     pub fn create_directory(&self, parent: u32, name: &str, hint: u32) -> Result<(u32, EntryRef), FatError> {
         let cluster = self.allocate_cluster(hint)?;
         let dot_dot = if parent == self.bpb.root_cluster { 0 } else { parent };
@@ -1398,6 +1432,8 @@ fn upcase_fat_char(ch: u8) -> Result<u8, FatError> {
     }
 }
 
+/// The 8.3 name of the entry `ent`, `BASE.EXT`: a part whose NT case flag
+/// the entry carries in lower case (vfat8Dot3ToString of ReactOS's vfatfs).
 fn short_name_from_entry(ent: &[u8]) -> String {
     let mut base_end = 8usize;
     while base_end > 0 && ent[base_end - 1] == b' ' {
@@ -1407,19 +1443,13 @@ fn short_name_from_entry(ent: &[u8]) -> String {
     while ext_end > 0 && ent[8 + ext_end - 1] == b' ' {
         ext_end -= 1;
     }
-    let mut out = String::new();
-    let mut i = 0usize;
-    while i < base_end {
-        out.push(ent[i] as char);
-        i += 1;
-    }
+    let part = |bytes: &[u8], lower: bool| -> String {
+        bytes.iter().map(|&byte| if lower { byte.to_ascii_lowercase() } else { byte } as char).collect()
+    };
+    let mut out = part(&ent[..base_end], ent[12] & CASE_LOWER_BASE != 0);
     if ext_end > 0 {
         out.push('.');
-        let mut j = 0usize;
-        while j < ext_end {
-            out.push(ent[8 + j] as char);
-            j += 1;
-        }
+        out.push_str(&part(&ent[8..8 + ext_end], ent[12] & CASE_LOWER_EXT != 0));
     }
     out
 }

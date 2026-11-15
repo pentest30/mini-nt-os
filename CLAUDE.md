@@ -370,6 +370,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`ob::HandleTable::reference_as_with_any_access`) ; NtSetInformationFile(FileBasicInformation) sonde sur 4
   octets, comme ReactOS : les CLSID du shell et leurs icônes sous HKCR, les cinq emplacements de la boîte
   Enregistrer sous avec leurs icônes.
+  M6, étape 34 (la casse des noms 8.3, Io) : comme `vfatfs` de ReactOS (FATAddEntry), un nom que le 8.3 tient garde
+  sa casse : tout en majuscules, son entrée 8.3 seule ; une base ou une extension toute en minuscules, les drapeaux
+  de casse de NT (octet 12 : `fat::CASE_LOWER_BASE`, `CASE_LOWER_EXT`), relus par `FatVolume::dir_entries` ; à casse
+  mixte, des entrées de nom long devant l'entrée 8.3 en majuscules : « Recent » s'affiche « Recent ».
   M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
   NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
   NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),

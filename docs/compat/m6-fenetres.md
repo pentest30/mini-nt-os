@@ -1467,8 +1467,8 @@ Un Mino installé montre ainsi les cinq emplacements avec leurs icônes. Le doss
 s'ouvre dedans, comme sous XP quand l'application ne donne pas de répertoire (CSIDL_PERSONAL).
 
 Vu, pas fait : « Recent » s'affiche « RECENT » : Io crée un nom que le format 8.3 tient sans entrée de nom long, donc
-en majuscules (`io::fat_volume`, `create`) ; FastFAT de ReactOS et XP gardent la casse d'un nom mixte par une entrée
-de nom long.
+en majuscules (`io::fat_volume`, `create`) ; le pilote FAT de ReactOS garde la casse d'un nom mixte par une entrée
+de nom long (fait à l'étape 34).
 
 Tests : hôte (`ob` : un droit quelconque suffit, aucun ne suffit pas). La sonde de `dir` pose les dates de
 `KERNEL.BIN` depuis un tampon à 4 octets d'un multiple de 8. La sonde de `notepad-saveas` enregistre
@@ -1524,3 +1524,34 @@ rendue), puis en ANSI (SetWindowLongA : celle, ANSI, de la classe ; rendue, la p
 contrôle peint par `user32` (quatre pixels : la face et le symbole de la flèche du haut, le curseur au bout).
 Deux mutations font échouer le scénario : SB_CTL refusé (les étapes 1 à 6), une procédure du serveur refusée (les
 étapes 7 et 8).
+
+## Étape 34 : la casse des noms que le format 8.3 tient (Io)
+
+La barre des emplacements de l'étape 32 montrait « RECENT » : `shell32` crée le dossier `Recent` du profil
+(CreateDirectoryW), et Io créait tout nom que le format 8.3 tient avec sa seule entrée 8.3, en majuscules
+(`io::fat::FatVolume::add_entry_long`) ; la boîte relit le nom par NtQueryDirectoryFile. Io fait maintenant comme
+`vfatfs`, le pilote FAT de ReactOS 0.4.16 (FATAddEntry de `dirwr.c`, vfat8Dot3ToString de `create.c`, lus comme
+spécification ; le `drivers/filesystems/fastfat` de l'arbre de ReactOS est l'exemple FastFAT du WDK de Microsoft, qu'on
+ne lit pas) :
+
+- un nom tout en majuscules (`NTUSER.DAT`) garde son entrée 8.3 seule ;
+- une base ou une extension toute en minuscules (`readme.txt`, `lower.TXT`) prend les drapeaux de casse de NT dans
+  l'octet 12 de l'entrée 8.3 (`fat::CASE_LOWER_BASE` 0x08, `fat::CASE_LOWER_EXT` 0x10), sans nom long ; une partie
+  sans lettre (`123`) n'en prend pas ;
+- une base ou une extension à casse mixte (`Recent`, `MIXEXT.Txt`) reçoit des entrées de nom long (VFAT) devant son
+  entrée 8.3, qui est le nom en majuscules, sans `~N` ;
+- à la lecture (`FatVolume::dir_entries`, donc `Volume::list` et `Volume::entries`), une entrée sans nom long rend
+  la partie que son drapeau dit en minuscules, comme son nom 8.3 ; la recherche reste sans casse.
+
+Un caractère hors de l'ASCII n'entre déjà pas dans un nom 8.3 chez Io : il prend un nom long et un alias `~N`, comme
+chez `vfatfs`. Les dossiers du profil que `minoinit` et `shell32` créent (`Desktop`, `Recent`, `NetHood`, `SendTo`,
+`Cookies`…) gardent ainsi leur casse.
+
+Tests : hôte (`io` : les sept règles de casse et ce qu'elles relisent, octet 12 et entrées de nom long compris ;
+`Recent` créé par `Volume::create`, relu après un nouveau montage, une collision dans toute casse ; `fsck.vfat` quand
+il est là). `notepad-saveas` vérifie deux pixels du texte « Recent » de la barre des emplacements (un trait du premier « e »,
+et le fond au-dessus des minuscules, où était le haut du « C » de « RECENT »). Mutations : la règle
+réduite à l'entrée 8.3 seule (les deux tests hôte, `notepad-saveas`), les drapeaux non relus (les deux tests hôte).
+
+Vu, pas fait : `libs/fatfs` (l'image de `tools/mkfat`) écrit aussi en majuscules tout nom que le format 8.3 tient ;
+une entrée sans nom long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend toujours).

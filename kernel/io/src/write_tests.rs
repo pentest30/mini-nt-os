@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use hal::sync::KSpinLock;
 
-use crate::fat::{make_entry, short_name, BlockDevice, FatError, FatFile, FatVolume};
+use crate::fat::{make_entry, short_name, BlockDevice, FatError, FatFile, FatVolume, CASE_LOWER_BASE, CASE_LOWER_EXT};
 
 pub(crate) struct RwDisk(pub(crate) KSpinLock<Vec<u8>>);
 
@@ -691,4 +691,98 @@ fn sections_share_the_bytes_of_an_unchanged_file() {
     other.write(0, b"FIR").unwrap();
     let other_bytes = other.contents().unwrap();
     assert!(!alloc::sync::Arc::ptr_eq(&other_bytes, &file.contents().unwrap()), "another file, its own bytes");
+}
+
+/// The 8.3 entry of `name` in the directory at `dir`, and how many long-name
+/// entries come right before it.
+fn entry_and_long_parts(volume: &FatVolume<RwDisk>, dir: u32, name: &str) -> ([u8; 32], usize) {
+    let (_, at) = volume.find_entry(dir, name).unwrap();
+    let entry = volume.read_entry(at).unwrap();
+    let parts = (0..at.index)
+        .rev()
+        .map(|index| volume.read_entry(crate::fat::EntryRef { index, ..at }).unwrap())
+        .take_while(|before| before[11] == 0x0F && before[0] != 0xE5)
+        .count();
+    (entry, parts)
+}
+
+#[test]
+fn a_name_8_3_holds_keeps_its_case() {
+    // shell32 creates `Recent` in a profile; it came back `RECENT` (a single
+    // 8.3 entry), and the places bar of the Save As box showed it so. As
+    // vfatfs: all upper case, the 8.3 entry alone; a base or an extension
+    // all in lower case, the NT case flags; mixed case, a long name.
+    let volume = FatVolume::mount(fat32(FSCK_CLUSTERS)).unwrap();
+    let root = volume.root_cluster();
+    let (recent, _) = volume.create_directory(root, "Recent", 3).unwrap();
+    for name in ["UPPER.DAT", "readme.txt", "lower.TXT", "UPCASE.txt", "123.dat", "Mixed.txt", "MIXEXT.Txt"] {
+        volume.add_entry_long(recent, name, 0x20, 3).unwrap();
+    }
+    let (entry, parts) = entry_and_long_parts(&volume, root, "RECENT");
+    assert_eq!((&entry[..11], entry[12], parts), (&b"RECENT     "[..], 0, 1), "a long name before RECENT");
+    let listed = volume.dir_entries(root).unwrap().into_iter().find(|e| e.raw_name == *b"RECENT     ").unwrap();
+    assert_eq!((listed.name.as_str(), listed.short_name.as_deref()), ("Recent", Some("RECENT")));
+    assert_eq!(volume.find_entry(root, "recent").unwrap().0.first_cluster, recent, "found in any case");
+    let expected: [(&str, &[u8; 11], u8, usize); 7] = [
+        ("UPPER.DAT", b"UPPER   DAT", 0, 0),
+        ("readme.txt", b"README  TXT", CASE_LOWER_BASE | CASE_LOWER_EXT, 0),
+        ("lower.TXT", b"LOWER   TXT", CASE_LOWER_BASE, 0),
+        ("UPCASE.txt", b"UPCASE  TXT", CASE_LOWER_EXT, 0),
+        ("123.dat", b"123     DAT", CASE_LOWER_EXT, 0),
+        ("Mixed.txt", b"MIXED   TXT", 0, 1),
+        ("MIXEXT.Txt", b"MIXEXT  TXT", 0, 1),
+    ];
+    for (name, short, case, long_parts) in expected {
+        let (entry, parts) = entry_and_long_parts(&volume, recent, name);
+        assert_eq!((&entry[..11], entry[12], parts), (&short[..], case, long_parts), "{name}");
+    }
+    // Read back in its case, by the long name or by the flags; an entry
+    // without a long name has no separate 8.3 name.
+    let names: Vec<(String, Option<String>)> =
+        volume.dir_entries(recent).unwrap().into_iter().skip(2).map(|e| (e.name, e.short_name)).collect();
+    let short = |name: &str| Some(String::from(name));
+    assert_eq!(
+        names,
+        [
+            ("UPPER.DAT".into(), None),
+            ("readme.txt".into(), None),
+            ("lower.TXT".into(), None),
+            ("UPCASE.txt".into(), None),
+            ("123.dat".into(), None),
+            ("Mixed.txt".into(), short("MIXED.TXT")),
+            ("MIXEXT.Txt".into(), short("MIXEXT.TXT")),
+        ]
+    );
+    assert_clean(volume);
+}
+
+#[test]
+fn a_volume_creates_a_mixed_case_name_in_its_case() {
+    use abi::ntstatus::STATUS_OBJECT_NAME_COLLISION;
+
+    let (volume, disk) = mounted(FSCK_CLUSTERS);
+    let root = volume.root();
+    let recent = volume.create(&root, "Recent", true, 0).unwrap();
+    volume.create(&recent, "notes.txt", false, 0).unwrap();
+    let utf16 = |name: &str| name.encode_utf16().collect::<Vec<u16>>();
+    let listed = volume.entries(&root).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!((listed[0].name.clone(), listed[0].short_name.clone()), (utf16("Recent"), Some(utf16("RECENT"))));
+    assert!(listed[0].directory);
+    assert_eq!(volume.list(&root).unwrap(), ["Recent"]);
+    assert_eq!(volume.list(&recent).unwrap(), ["notes.txt"]);
+    // Found in any case, and taken in any case.
+    assert_eq!(volume.lookup(&root, "RECENT\\NOTES.TXT").unwrap().size, 0);
+    assert_eq!(volume.create(&root, "RECENT", true, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
+    assert_eq!(volume.create(&recent, "Notes.Txt", false, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));
+    // A fresh mount reads the same names.
+    volume.flush().unwrap();
+    drop(volume);
+    let again = crate::Volume::mount(alloc::boxed::Box::new(Shared(disk.clone()))).unwrap();
+    assert_eq!(again.list(&again.root()).unwrap(), ["Recent"]);
+    let bytes = core::mem::take(&mut *disk.0.lock());
+    match fsck(&bytes) {
+        Some(result) => result.unwrap_or_else(|report| panic!("fsck.vfat: {report}")),
+        None => std::eprintln!("fsck.vfat not found: the volume is not checked (dosfstools)"),
+    }
 }

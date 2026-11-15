@@ -72,3 +72,9 @@ screen = 37 80 D4D0C8
 # 36, 205) and the dark screen of My Computer (from 36, 268), both opaque.
 screen = 46 222 7EA7D2
 screen = 44 280 26294B
+# Recent's label, as shell32 created the folder (Io keeps the case of a
+# mixed-case name that 8.3 holds by a long name; it was RECENT): the stroke
+# of its first e, and the button face above its lower-case letters, where
+# the top of RECENT's C was.
+screen = 44 117 151414
+screen = 48 115 D4D0C8

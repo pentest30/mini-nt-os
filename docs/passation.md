@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **La casse des noms que le format 8.3 tient** (`claude/new-session-696xfc`, PR 134 ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). La
+  barre des emplacements de la boîte Enregistrer sous montrait « RECENT » : Io créait tout nom que le 8.3 tient avec
+  sa seule entrée 8.3. Comme `vfatfs` de ReactOS (FATAddEntry ; le `fastfat` de l'arbre de ReactOS est l'exemple du
+  WDK de Microsoft, à ne pas lire), `FatVolume::add_entry_long` garde la casse : entrée seule pour un nom tout en
+  majuscules ; drapeaux de casse de NT (octet 12 : 0x08 base, 0x10 extension) pour une partie toute en minuscules,
+  relus par `dir_entries` ; entrées de nom long devant l'entrée 8.3 en majuscules pour une casse mixte. Tests : deux
+  tests hôte (`io` : les règles, l'octet 12, les entrées de nom long, `Recent` par `Volume::create` relu après un
+  nouveau montage) ; `notepad-saveas` (deux pixels du texte « Recent » de la barre des emplacements) ; deux mutations
+  (règle réduite à l'entrée seule : les deux tests hôte et `notepad-saveas` ; drapeaux non relus : les deux tests
+  hôte). 1120 tests hôte ; `cargo xtask lint` propre ; `notepad-saveas`, `dir`, `cmd`, `installer-finish` (AMD et
+  Intel), `persistence`, `registry-persistence`, `logon` passent. `fsck.vfat` n'est pas sur l'hôte Windows : les
+  images n'y sont pas vérifiées par lui ; un lecteur à part (Python, hors dépôt) a relu celle de `logon` : 66 noms
+  longs aux sommes justes, aucun nom 8.3 en double, les dossiers du profil dans leur casse. **Vu, pas fait** :
+  `libs/fatfs` (l'image de `tools/mkfat`) écrit aussi en majuscules tout nom que le 8.3 tient ; une entrée sans nom
+  long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend toujours).
+
 - **Ctrl+Alt+Suppr arrive à `winlogon` : les raccourcis clavier** (`claude/new-session-696xfc`, M6,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe), « Ctrl+Alt+Suppr »). L'écran de ReactOS qui
   demande Ctrl+Alt+Suppr (après une fermeture de session, l'autologon ne servant qu'une fois, Maj enfoncée, ou un
@@ -115,6 +132,7 @@
   **Suite** : les icônes du bureau (NtUserGetIconInfo, les détails des éléments), le papier peint
   (SPI_SETDESKWALLPAPER), la taille de « Progman » (1, 0)-(32768, 32767) à vérifier, la station des services ; le
   bouton Démarrer et ce que la barre demande.
+
 - **La barre des emplacements de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée
   ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 32). « My Documents » et « My Computer »
   avaient le papier blanc : leurs CLSID manquaient sous HKCR, que DllRegisterServer de `shell32` écrit et que
@@ -125,8 +143,8 @@
   `minoinit` déplacés). La barre montre les cinq emplacements de ReactOS avec leurs icônes ; la boîte s'ouvre dans
   « My Documents », créé par l'enregistrement. Tests : hôte (`ob`) ; `dir` (les dates d'un fichier depuis un tampon
   aligné sur 4) ; `notepad-saveas` (sa sonde enregistre `shell32`, tape `C:\` ; un pixel de chaque icône) ; `logon`
-  (`[minoinit] shell32.dll registered`) ; quatre mutations. **Vu, pas fait** : « Recent » s'affiche « RECENT » (Io crée un nom 8.3
-  sans nom long : la casse se perd) ; les autres DLL de RegistrationPhase2.
+  (`[minoinit] shell32.dll registered`) ; quatre mutations. **Vu, pas fait** : « Recent » s'affichait « RECENT » (Io créait un nom 8.3
+  sans nom long : fait, étape 34 de `m6-fenetres.md`) ; les autres DLL de RegistrationPhase2.
 
 - **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). La barre d'outils de la boîte Enregistrer sous, sa
@@ -1566,7 +1584,7 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
-- Sonde console (M5, étape 8) : ni casse des noms 8.3 (octet 12), ni dernier accès à la lecture, ni fuseau horaire
+- Sonde console (M5, étape 8) : ni dernier accès à la lecture, ni fuseau horaire
   (les dates de FAT passent pour de l'UTC) ; NtSetDefaultLocale absent (la locale de l'utilisateur est celle du
   système) ; ProcessDeviceMap (NtQueryInformationProcess, classe 0x17) absent ; FileFsVolumeInformation sans date de
   création du volume ; la place libre compte toute la FAT à chaque requête (le secteur FSInfo n'est ni cru ni tenu à
