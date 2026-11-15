@@ -73,7 +73,7 @@ use abi::user::{
     SWP_DEFERERASE, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOCLIENTMOVE, SWP_NOCLIENTSIZE, SWP_NOMOVE,
     SWP_NOOWNERZORDER, SWP_NOREDRAW, SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SWP_STATECHANGED,
     WM_CHILDACTIVATE, WM_NCCALCSIZE, WM_WINDOWPOSCHANGED, WM_WINDOWPOSCHANGING, WNDS2_WIN31COMPAT, WNDS_SENDNCPAINT,
-    WS_CHILD, WS_EX_TOPMOST, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
+    WS_CHILD, WS_CLIPSIBLINGS, WS_EX_TOPMOST, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
 };
 use abi::user::{
     WindowPlacement32, ARW_BOTTOMRIGHT, ARW_HIDE, ARW_STARTMASK, ARW_TOPLEFT, ARW_TOPRIGHT, ARW_UP, RDW_NOERASE,
@@ -87,7 +87,6 @@ use abi::user::{
 };
 
 use crate::gdi::dib::Rect;
-use crate::gdi::region::Region;
 use crate::paint;
 use crate::window::{self, LParam, StartupPlace, Window};
 
@@ -375,7 +374,11 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
         && !state.window.is_empty();
 
     let new_client = nc_calc_size(window, &mut pos, new_window, new_client);
-    if pos.flags & SWP_NOZORDER == 0 {
+    // What was seen of it before (VisBefore): its siblings above clip it.
+    let clip_siblings = state.style & WS_CLIPSIBLINGS != 0;
+    let seen_before = visible_before.then(|| paint::visible_region(window, false, false, clip_siblings));
+    // The shell's window keeps its place, at the bottom (UserGetShellWindow).
+    if pos.flags & SWP_NOZORDER == 0 && !crate::shell::is_shell_window(window.handle) {
         window::link(window, pos.insert_after);
     }
     let old = window.state();
@@ -397,6 +400,8 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
             state.state |= WNDS_SENDNCPAINT;
         }
     });
+    // The DCs taken see the windows where they are now (DceResetActiveDCEs).
+    crate::dce::reset_active_dcs(window);
     let redraw = pos.flags & SWP_NOREDRAW == 0 && pos.flags & SWP_AGG_STATUSFLAGS != SWP_AGG_NOPOSCHANGE;
     if redraw || (pos.flags & SWP_NOZORDER != 0 && pos.flags & SWP_NOOWNERZORDER != 0) {
         let visible_after = window::is_visible(window) && !new_window.is_empty();
@@ -404,10 +409,12 @@ pub fn set_window_pos(window: &Arc<Window>, insert_after: u32, x: i32, y: i32, c
             // No bits are copied: all of it is to be painted again.
             paint::invalidate(window);
         }
-        if visible_before {
-            let mut exposed = Region::from_rect(old.window);
+        // What was seen of it and is not any more (co_VIS_WindowLayoutChanged
+        // of VisBefore less VisAfter): moved, shrunk, or now under siblings
+        // that were below it.
+        if let Some(mut exposed) = seen_before {
             if visible_after {
-                exposed.subtract_rect(new_window);
+                exposed.subtract(&paint::visible_region(window, false, false, clip_siblings));
             }
             paint::expose(window, &exposed);
         }

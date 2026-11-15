@@ -9,12 +9,20 @@
 #   a star: a star before a dot names only the extension-less, *.* all);
 # - an exact name, C:\KERNEL.BIN, gives the file and its size (4 bytes);
 # - C:\WINDOWS\SYSTEM32\NT* gives at least NTDLL.DLL; an exact name gives
-#   its size back and, because it is already 8.3, an empty alternate name;
+#   its size back and its 8.3 name as the alternate name, as ReactOS's
+#   vfatfs gives it for every entry (it was empty for an 8.3 name);
+# - a file created as readme.txt comes back so, its alternate name too (the
+#   NT case flags of its 8.3 entry); a directory created as Recent comes
+#   back so (its long name), its alternate name RECENT;
 # - a name nothing matches, C:\ZZ*, fails with ERROR_FILE_NOT_FOUND (a
 #   first query without a match is STATUS_NO_SUCH_FILE, not
 #   STATUS_NO_MORE_FILES);
 # - the whole enumeration again gives the same entries (a new handle scans
-#   from the start).
+#   from the start);
+# - NtSetInformationFile(FileBasicInformation) takes a buffer aligned on 4
+#   bytes only (sizeof(ULONG), as ReactOS probes it): an i386 stack gives
+#   kernel32's CopyFileW no better for its local one, and asking 8 made it
+#   fail (minoinit's copy of NTUSER.DAT, once its frames had moved).
 # It ends with status 0x600D.
 # Update with each step (docs/compat/io-install.md).
 features = test-smss
@@ -30,9 +38,12 @@ expect = [dir] KERNEL.BIN: seen
 expect = [dir] TEST.EXE: seen
 expect = [dir] KERNEL.BIN: 4 bytes
 expect = [dir] NTDLL.DLL: seen
-expect = [dir] NTDLL.DLL: 1404928 bytes, alternate
+expect = [dir] NTDLL.DLL: 1404928 bytes, alternate NTDLL.DLL
+expect = [dir] created readme.txt, alternate readme.txt
+expect = [dir] created Recent, alternate RECENT
 expect = [dir] C:\ZZ*: error 2
 expect = [dir] WINDOWS: seen
+expect = [dir] FileBasicInformation aligned on 4: 0
 expect = [dir] done
 
 # The enumeration itself, and what FindFirstFile needs of it.

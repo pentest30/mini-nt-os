@@ -1,0 +1,20 @@
+# The desktop's Text Editor starts ReactOS's notepad.exe: the Start menu is
+# open when the desktop is ready, on Files; Down selects Text Editor, Enter
+# starts it (tests/native/desktop1.c). Notepad's thread becomes a GUI thread
+# (win32k converts it at its first call). Its window is the `notepad`
+# scenario's: the screen is dumped as soon as the markers are found, before
+# Notepad has painted.
+features = test-smss
+requires = userland, native
+initial-command = DESKTOP1.EXE
+cpus = default, intel
+timeout = 120
+
+keys = [desktop] ready => down ret
+
+expect = [desktop] ready
+expect = [desktop] launched Text Editor (PID
+expect = of NOTEPAD.EXE
+
+forbid = [desktop] launch failed:
+forbid = *** STOP:

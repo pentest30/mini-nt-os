@@ -17,8 +17,8 @@ use abi::ntstatus::{
     STATUS_NOT_IMPLEMENTED, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
 };
 use abi::process::{
-    InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_BASE_PRIORITY, PROCESS_BASIC_INFORMATION,
-    PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
+    InitialTeb32, ProcessBasicInformation32, NT_CURRENT_PROCESS, PROCESS_ACCESS_TOKEN, PROCESS_BASE_PRIORITY,
+    PROCESS_BASIC_INFORMATION, PROCESS_BREAK_ON_TERMINATION, PROCESS_COOKIE, PROCESS_CREATE_FLAGS_INHERIT_HANDLES,
     PROCESS_CREATE_FLAGS_LEGAL_MASK, PROCESS_DEFAULT_HARD_ERROR_MODE, PROCESS_EXCEPTION_PORT,
     PROCESS_LUID_DEVICE_MAPS_ENABLED, PROCESS_SESSION_INFORMATION, THREAD_BREAK_ON_TERMINATION,
     THREAD_IMPERSONATION_TOKEN,
@@ -291,7 +291,11 @@ pub(super) fn nt_terminate_thread(arguments: &[u32]) -> NtStatus {
 ///   tous (le défaut d'XP) ;
 /// - `ProcessCookie` : son cookie, tiré à la première demande, pour le
 ///   processus de l'appelant seulement (`NtCurrentProcess()`,
-///   `STATUS_INVALID_PARAMETER` sinon).
+///   `STATUS_INVALID_PARAMETER` sinon) ;
+/// - `ProcessDeviceMap` : ses lecteurs DOS ([`device_map`]), à la taille de
+///   Query exactement (`STATUS_INFO_LENGTH_MISMATCH` sinon) ; la forme EX
+///   (avec Flags) demande les cartes par LUID, que Mino n'active pas
+///   (`STATUS_INVALID_PARAMETER`, comme ReactOS sans elles).
 ///
 /// Les autres classes rendent `STATUS_NOT_IMPLEMENTED`, journalisé à leur
 /// premier appel.
@@ -305,6 +309,22 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
         | PROCESS_BREAK_ON_TERMINATION => {}
         PROCESS_LUID_DEVICE_MAPS_ENABLED => {
             return super::return_information(&0u32.to_le_bytes(), buffer, length, return_length)
+        }
+        abi::process::PROCESS_DEVICE_MAP => {
+            if length == abi::process::PROCESS_DEVICEMAP_EX_SIZE {
+                return STATUS_INVALID_PARAMETER;
+            }
+            if length != abi::process::PROCESS_DEVICEMAP_QUERY_SIZE {
+                return abi::ntstatus::STATUS_INFO_LENGTH_MISMATCH;
+            }
+            if let Err(status) = super::reference_process(handle, PROCESS_QUERY_INFORMATION) {
+                return status;
+            }
+            let (drive_map, drive_types) = device_map();
+            let mut query = [0u8; 36];
+            query[..4].copy_from_slice(&drive_map.to_le_bytes());
+            query[4..].copy_from_slice(&drive_types);
+            return super::return_information(&query, buffer, length, return_length);
         }
         PROCESS_COOKIE if handle != NT_CURRENT_PROCESS => return STATUS_INVALID_PARAMETER,
         PROCESS_COOKIE => {
@@ -354,6 +374,38 @@ pub(super) fn nt_query_information_process(arguments: &[u32]) -> NtStatus {
         }
     };
     super::return_information(information, buffer, length, return_length)
+}
+
+/// La carte des lecteurs DOS (ObQueryDeviceMapInformation) : un bit par
+/// lettre qui a son lien dans `\GLOBAL??` (« C: », sans casse), et le type
+/// de chaque lecteur (`io_manager::device::dos_drive_type` de la cible du
+/// lien). Mino n'a qu'une carte, celle de tous : les processus voient les
+/// mêmes lecteurs (ProcessLUIDDeviceMapsEnabled rend 0).
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+fn device_map() -> (u32, [u8; 32]) {
+    let namespace = ob::namespace();
+    let mut drive_map = 0u32;
+    let mut drive_types = [0u8; 32];
+    let Ok(ob::Lookup::Found(directory)) = namespace.lookup("\\GLOBAL??", None, true) else {
+        return (drive_map, drive_types);
+    };
+    let Some(directory) = ob::downcast::<ob::Directory>(&directory) else { return (drive_map, drive_types) };
+    for (name, type_name) in directory.entries() {
+        let mut chars = name.chars();
+        let (Some(letter), Some(':'), None) = (chars.next(), chars.next(), chars.next()) else { continue };
+        if type_name != ob::SYMBOLIC_LINK_TYPE.name || !letter.is_ascii_alphabetic() {
+            continue;
+        }
+        let index = usize::from(letter.to_ascii_uppercase() as u8 - b'A');
+        drive_types[index] = match namespace.lookup(&alloc::format!("\\GLOBAL??\\{name}"), None, false) {
+            Ok(ob::Lookup::Found(target)) => io_manager::device::dos_drive_type(&target),
+            _ => abi::process::dosdevice_drive::CALCULATE,
+        };
+        drive_map |= 1 << index;
+    }
+    (drive_map, drive_types)
 }
 
 /// NtQueryInformationThread(ThreadHandle, ThreadInformationClass,
@@ -426,6 +478,8 @@ pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
 /// ProcessInformation, ProcessInformationLength) : change ce que sait le
 /// processus, une valeur de 4 octets (`STATUS_INFO_LENGTH_MISMATCH` pour une
 /// autre taille) :
+/// - `ProcessAccessToken` (`PROCESS_SET_INFORMATION`, 8 octets) : son jeton
+///   primaire, celui d'un handle (`super::security::assign_primary_token`) ;
 /// - `ProcessSessionInformation` (`PROCESS_SET_SESSIONID`) : sa session, que
 ///   son PEB dit aussi ;
 /// - `ProcessBasePriority` (`PROCESS_SET_INFORMATION`) : la priorité de base
@@ -451,6 +505,16 @@ pub(super) fn nt_query_information_thread(arguments: &[u32]) -> NtStatus {
 pub(super) fn nt_set_information_process(arguments: &[u32]) -> NtStatus {
     let (handle, class, buffer, length) = (arguments[0], arguments[1], arguments[2], arguments[3]);
     let set = || {
+        if class == PROCESS_ACCESS_TOKEN {
+            // PROCESS_ACCESS_TOKEN: the token's handle, then a thread's
+            // (unused, as on XP).
+            if length != 8 {
+                return Err(STATUS_INFO_LENGTH_MISMATCH);
+            }
+            let [token, _thread] = UserPtr::<[u32; 2]>::new(buffer).read()?;
+            let process = super::reference_process(handle, PROCESS_SET_INFORMATION)?;
+            return super::security::assign_primary_token(&process, token);
+        }
         if !matches!(
             class,
             PROCESS_SESSION_INFORMATION

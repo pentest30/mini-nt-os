@@ -179,6 +179,36 @@ impl HandleTable {
         downcast(&self.reference(handle, Some(ty), desired)?).ok_or(STATUS_OBJECT_TYPE_MISMATCH)
     }
 
+    /// [`reference_as`](Self::reference_as) sans droit précis, pourvu que le
+    /// handle en porte au moins un (`STATUS_ACCESS_DENIED` sinon) : ce que
+    /// demande NtQueryKey(KeyNameInformation) de ReactOS.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn reference_as_with_any_access<T: Any + Send + Sync>(
+        &self,
+        handle: Handle,
+        ty: &ObjectType,
+    ) -> Result<Arc<Object<T>>, NtStatus> {
+        let (object, granted, _) = self.entry(handle)?;
+        if !object.is_type(ty) {
+            return Err(STATUS_OBJECT_TYPE_MISMATCH);
+        }
+        if granted == AccessMask::NONE {
+            return Err(STATUS_ACCESS_DENIED);
+        }
+        downcast(&object).ok_or(STATUS_OBJECT_TYPE_MISMATCH)
+    }
+
+    /// L'objet, les droits et les attributs de `handle`, lus ensemble ;
+    /// `STATUS_INVALID_HANDLE` sans entrée.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn query_entry(&self, handle: Handle) -> Result<(ObjectRef, AccessMask, HandleAttributes), NtStatus> {
+        self.entry(handle)
+    }
+
     /// Les droits et les attributs de `handle`.
     ///
     /// # IRQL
@@ -229,6 +259,20 @@ impl HandleTable {
         };
         handle_closed(&entry.object);
         Ok(())
+    }
+
+    /// ObFindHandleForObject, sans objet donné : le premier handle (le plus
+    /// petit) sur un objet du type `ty`, et cet objet ; `None` s'il n'y en a
+    /// pas.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn find_by_type(&self, ty: &ObjectType) -> Option<(Handle, ObjectRef)> {
+        let slots = self.slots.lock();
+        slots.entries.iter().enumerate().find_map(|(slot, entry)| {
+            let entry = entry.as_ref().filter(|entry| entry.object.is_type(ty))?;
+            Some((Handle::from_slot(slot), entry.object.clone()))
+        })
     }
 
     /// ObDuplicateHandleTable : la table d'un processus fils, avec les handles
@@ -365,6 +409,23 @@ mod tests {
     }
 
     #[test]
+    fn the_first_handle_of_a_type_is_found() {
+        let table = HandleTable::new();
+        assert!(table.find_by_type(&EVENT).is_none(), "an empty table");
+        let mutant: ObjectRef = create_object(&MUTANT, 0u32);
+        table.insert(mutant.clone(), ALL, NONE).unwrap();
+        let first = event();
+        let handle = table.insert(first.clone(), ALL, NONE).unwrap();
+        table.insert(event(), ALL, NONE).unwrap();
+        let (found, object) = table.find_by_type(&EVENT).unwrap();
+        assert_eq!(found, handle);
+        assert!(Arc::ptr_eq(&object, &first), "the first event, not the mutant");
+        table.close(handle).unwrap();
+        assert_eq!(table.find_by_type(&EVENT).map(|(handle, _)| handle), Some(Handle(12)), "the next one");
+        assert!(table.find_by_type(&MUTANT).is_some_and(|(_, object)| Arc::ptr_eq(&object, &mutant)));
+    }
+
+    #[test]
     fn the_low_bits_of_a_handle_are_ignored() {
         let table = HandleTable::new();
         let object = event();
@@ -410,6 +471,20 @@ mod tests {
             table.reference_as::<u64>(read_only, &EVENT, AccessMask::NONE).err(),
             Some(STATUS_OBJECT_TYPE_MISMATCH)
         );
+    }
+
+    #[test]
+    fn any_access_is_enough_but_none_is_not() {
+        let table = HandleTable::new();
+        let write_only = table.insert(event(), AccessMask(2), NONE).unwrap();
+        let no_access = table.insert(event(), AccessMask::NONE, NONE).unwrap();
+        assert_eq!(table.reference_as_with_any_access::<u32>(write_only, &EVENT).map(|e| **e), Ok(0));
+        assert_eq!(table.reference_as_with_any_access::<u32>(no_access, &EVENT).err(), Some(STATUS_ACCESS_DENIED));
+        assert_eq!(
+            table.reference_as_with_any_access::<u32>(write_only, &MUTANT).err(),
+            Some(STATUS_OBJECT_TYPE_MISMATCH)
+        );
+        assert_eq!(table.reference_as_with_any_access::<u32>(Handle(64), &EVENT).err(), Some(STATUS_INVALID_HANDLE));
     }
 
     #[test]

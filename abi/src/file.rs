@@ -95,6 +95,8 @@ pub const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x0100;
 /// `FILE_INFORMATION_CLASS`.
 pub const FILE_BASIC_INFORMATION: u32 = 4;
 pub const FILE_STANDARD_INFORMATION: u32 = 5;
+/// FileEaInformation: the size of the file's extended attributes.
+pub const FILE_EA_INFORMATION: u32 = 7;
 pub const FILE_DISPOSITION_INFORMATION: u32 = 13;
 pub const FILE_POSITION_INFORMATION: u32 = 14;
 pub const FILE_END_OF_FILE_INFORMATION: u32 = 20;
@@ -132,7 +134,14 @@ pub const FILE_UNICODE_ON_DISK: u32 = 0x0000_0004;
 pub const FILE_READ_ONLY_VOLUME: u32 = 0x0008_0000;
 
 /// Device types and characteristics (FILE_FS_DEVICE_INFORMATION).
+pub const FILE_DEVICE_CD_ROM: u32 = 0x0000_0002;
+pub const FILE_DEVICE_CD_ROM_FILE_SYSTEM: u32 = 0x0000_0003;
 pub const FILE_DEVICE_DISK: u32 = 0x0000_0007;
+pub const FILE_DEVICE_DISK_FILE_SYSTEM: u32 = 0x0000_0008;
+pub const FILE_DEVICE_FILE_SYSTEM: u32 = 0x0000_0009;
+pub const FILE_DEVICE_NETWORK: u32 = 0x0000_0012;
+pub const FILE_DEVICE_NETWORK_FILE_SYSTEM: u32 = 0x0000_0014;
+pub const FILE_DEVICE_VIRTUAL_DISK: u32 = 0x0000_0024;
 pub const FILE_REMOVABLE_MEDIA: u32 = 0x0000_0001;
 pub const FILE_DEVICE_IS_MOUNTED: u32 = 0x0000_0020;
 /// The filesystem device is read-only.
@@ -173,6 +182,14 @@ pub struct FileStandardInformation {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FilePositionInformation {
     pub current_byte_offset: u64,
+}
+
+/// FILE_EA_INFORMATION: the size of the extended attributes, as a
+/// FILE_FULL_EA_INFORMATION list would hold them.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileEaInformation {
+    pub ea_size: u32,
 }
 
 /// FILE_NETWORK_OPEN_INFORMATION.
@@ -554,6 +571,13 @@ impl FilePositionInformation {
     }
 }
 
+impl FileEaInformation {
+    /// Its bytes, as they go to the caller.
+    pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
+        Encoder([0; size_of::<Self>()]).u32(0, self.ea_size).0
+    }
+}
+
 impl FileNetworkOpenInformation {
     /// Its bytes, as they go to the caller, padding zeroed.
     pub fn to_bytes(&self) -> [u8; size_of::<Self>()] {
@@ -578,6 +602,7 @@ const _: () = {
     assert!(offset_of!(FileStandardInformation, number_of_links) == 16);
     assert!(offset_of!(FileStandardInformation, directory) == 21);
     assert!(size_of::<FilePositionInformation>() == 8);
+    assert!(size_of::<FileEaInformation>() == 4);
     assert!(size_of::<FileNetworkOpenInformation>() == 56);
     assert!(offset_of!(FileNetworkOpenInformation, allocation_size) == 32);
     assert!(offset_of!(FileNetworkOpenInformation, file_attributes) == 48);

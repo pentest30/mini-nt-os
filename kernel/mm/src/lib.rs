@@ -61,7 +61,12 @@ pub fn init(boot_info: &BootInfo, kernel_phys_end: u64) {
     let clipped = |r: &abi::MemoryRegion| (r.start_pfn.min(limit), (r.start_pfn + r.page_count).min(limit));
 
     let count = usable().map(|r| clipped(r).1).max().unwrap_or(0);
-    let table_pages = (count * core::mem::size_of::<pfn::MmPfn>() as u64).div_ceil(page);
+    // The PFN database, then the free-list links of the buddy, one of each
+    // per page.
+    let database_bytes = count * core::mem::size_of::<pfn::MmPfn>() as u64;
+    let links_offset = database_bytes.next_multiple_of(core::mem::align_of::<buddy::FreeLink>() as u64);
+    let table_bytes = links_offset + count * core::mem::size_of::<buddy::FreeLink>() as u64;
+    let table_pages = table_bytes.div_ceil(page);
     // The first usable run that holds the table, outside the kernel image, and
     // above 1 MiB if possible: the memory below stays for what needs it (the
     // startup trampoline of the other processors).
@@ -87,8 +92,12 @@ pub fn init(boot_info: &BootInfo, kernel_phys_end: u64) {
     let mut frames = pfn::PAGE_FRAMES.lock();
     // SAFETY: [table, table + table_pages) is usable RAM below the HHDM limit,
     // outside the kernel image, and kept out of the free lists below: it
-    // belongs to the database for good.
-    unsafe { frames.init((boot_info.hhdm_offset + table * page) as *mut pfn::MmPfn, count) };
+    // belongs to the database and the links for good, `count` entries of each
+    // (`table_bytes`), the links aligned.
+    unsafe {
+        let base = boot_info.hhdm_offset + table * page;
+        frames.init(base as *mut pfn::MmPfn, (base + links_offset) as *mut buddy::FreeLink, count)
+    };
     frames.mark_active(Pfn(table), table_pages, pfn::PageUsage::PfnDatabase);
     let mut excluded = [kernel, (table, table + table_pages)];
     excluded.sort_unstable();
@@ -103,7 +112,7 @@ pub fn init(boot_info: &BootInfo, kernel_phys_end: u64) {
     unsafe { address_space::init() };
 
     log::info!(
-        "Mm: PFN database: {} pages tracked, table at {:#x} ({} KiB), {} MiB free",
+        "Mm: PFN database: {} pages tracked, table and free-list links at {:#x} ({} KiB), {} MiB free",
         stats.tracked,
         table * page,
         table_pages * page / 1024,

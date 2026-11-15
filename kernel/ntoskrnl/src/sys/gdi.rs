@@ -22,7 +22,7 @@ use abi::winerror::{
     ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_NO_SYSTEM_RESOURCES,
 };
 use ke::usermem::{copy_from_user, copy_to_user};
-use win32k::gdi::dib::Rect;
+use win32k::gdi::dib::{ColorRef, Rect};
 use win32k::gdi::{region, rgnobj, surface};
 
 /// Met l'erreur de Win32 `error` du thread et rend `value`.
@@ -293,6 +293,131 @@ pub(super) fn nt_gdi_get_text_extent(arguments: &[u32]) -> NtStatus {
 
 /// GTEF_INDICES : des index de glyphes à la place des caractères.
 const GTEF_INDICES: u32 = 1;
+
+/// GDI_ERROR : ce que rendent GetFontData et GetGlyphIndicesW en échec.
+const GDI_ERROR: u32 = 0xFFFF_FFFF;
+/// MAX_TEXT_BUFFER de ReactOS : le plus d'octets qu'un service de texte copie.
+const MAX_TEXT_BUFFER: usize = 0x0271_0000;
+
+/// La police installée du DC `hdc` et sa hauteur de LOGFONT ; `Err` avec ce
+/// que le service rend : `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au
+/// processus ou sans police installée.
+fn dc_face(hdc: u32, failure: u32) -> Result<(win32k::font::Face, i32), NtStatus> {
+    let Some((_, _, logfont)) = dc_font(hdc) else { return Err(fail(ERROR_INVALID_HANDLE, failure)) };
+    win32k::gdi::fontobj::realize(&logfont).ok_or_else(|| fail(ERROR_INVALID_HANDLE, failure))
+}
+
+/// NtGdiGetFontData(hdc, Table, Offset, Buffer, Size) : DWORD (ftGdiGetFontData)
+/// ; la table `Table` (MS_MAKE_TAG ; 0 : le fichier entier) de la police du
+/// DC. Sans `Buffer` ou avec `Size` nul, sa taille ; sinon ses octets depuis
+/// `Offset` (au plus sa taille) écrits en `Buffer`, et leur nombre.
+/// GDI_ERROR : un DC qui n'est pas au processus (`ERROR_INVALID_HANDLE`),
+/// une table absente, une place au-delà de la table, un tampon inaccessible.
+pub(super) fn nt_gdi_get_font_data(arguments: &[u32]) -> NtStatus {
+    let [hdc, table, offset, buffer, size] = arguments[..5] else { unreachable!("5 arguments") };
+    let (face, _) = match dc_face(hdc, GDI_ERROR) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    let Some((data, range)) = win32k::font::font_data(face, table) else { return NtStatus(GDI_ERROR) };
+    if buffer == 0 || size == 0 {
+        return NtStatus(range.len() as u32);
+    }
+    // As FT_Load_Sfnt_Table: at most the table's size, from `Offset`.
+    let length = (size as usize).min(range.len());
+    let Some(start) = range.start.checked_add(offset as usize) else { return NtStatus(GDI_ERROR) };
+    let Some(bytes) = start.checked_add(length).filter(|&end| end <= range.end).map(|end| &data[start..end]) else {
+        return NtStatus(GDI_ERROR);
+    };
+    match ke::usermem::copy_to_user(u64::from(buffer), bytes) {
+        Ok(()) => NtStatus(length as u32),
+        Err(_) => NtStatus(GDI_ERROR),
+    }
+}
+
+/// NtGdiGetGlyphIndicesW(hdc, pwc, cwc, pgi, iMode) : DWORD
+/// (GreGetGlyphIndicesW) ; le glyphe de chacun des `cwc` caractères de
+/// `pwc` dans la police du DC, écrits en `pgi`, et leur nombre ; un
+/// caractère absent a 0xFFFF avec GGI_MARK_NONEXISTING_GLYPHS (1), sinon le
+/// glyphe du caractère par défaut de la police. Sans rien (`pwc`, `pgi`,
+/// `cwc` et `iMode` nuls), le nombre de glyphes de la police. GDI_ERROR : un
+/// `cwc` négatif ou nul (hors ce cas), trop grand, un DC qui n'est pas au
+/// processus, une mémoire inaccessible.
+pub(super) fn nt_gdi_get_glyph_indices_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, text, count, out, mode] = arguments[..5] else { unreachable!("5 arguments") };
+    let count = count as i32;
+    if count < 0 {
+        return NtStatus(GDI_ERROR);
+    }
+    let (face, _) = match dc_face(hdc, GDI_ERROR) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    if count == 0 {
+        if text == 0 && out == 0 && mode == 0 {
+            return NtStatus(win32k::font::glyph_count(face).map_or(GDI_ERROR, u32::from));
+        }
+        return NtStatus(GDI_ERROR);
+    }
+    if count as usize > MAX_TEXT_BUFFER / 4 {
+        return NtStatus(GDI_ERROR);
+    }
+    let Ok(units) = read_text(text, count as u32) else { return NtStatus(GDI_ERROR) };
+    let missing = (mode & GGI_MARK_NONEXISTING_GLYPHS != 0).then_some(0xFFFF);
+    let Some(glyphs) = win32k::font::glyph_indices(face, &units, missing) else { return NtStatus(GDI_ERROR) };
+    let bytes: alloc::vec::Vec<u8> = glyphs.iter().flat_map(|glyph| glyph.to_le_bytes()).collect();
+    match ke::usermem::copy_to_user(u64::from(out), &bytes) {
+        Ok(()) => NtStatus(count as u32),
+        Err(_) => NtStatus(GDI_ERROR),
+    }
+}
+
+/// GGI_MARK_NONEXISTING_GLYPHS : GetGlyphIndices marque un caractère absent
+/// de 0xFFFF.
+const GGI_MARK_NONEXISTING_GLYPHS: u32 = 0x0001;
+/// GCABCW_INDICES : des indices de glyphes (sinon des caractères). Les
+/// largeurs sont des entiers (ABC) pour tout drapeau, GCABCW_NOFLOAT (1)
+/// comme celui-ci, et des ABCFLOAT sans drapeau, comme ReactOS.
+const GCABCW_INDICES: u32 = 0x0002;
+
+/// NtGdiGetCharABCWidthsW(hdc, FirstChar, Count, pwch, fl, Buffer) : BOOL
+/// (GreGetCharABCWidthsW) ; les largeurs A, B, C des `Count` codes (ceux de
+/// `pwch`, sinon `FirstChar` et les suivants) dans la police du DC, en
+/// `Buffer` : des ABC entiers pour `fl` non nul, des ABCFLOAT pour 0 (comme
+/// ReactOS) ; des indices de glyphes avec GCABCW_INDICES. FALSE sans
+/// `Buffer`, avec `pwch` et aucun code, pour trop de codes, un DC qui n'est
+/// pas au processus (`ERROR_INVALID_HANDLE`) ou une mémoire inaccessible.
+pub(super) fn nt_gdi_get_char_abc_widths_w(arguments: &[u32]) -> NtStatus {
+    let [hdc, first, count, codes, flags, buffer] = arguments[..6] else { unreachable!("6 arguments") };
+    if buffer == 0 || (codes != 0 && count == 0) || count as usize > MAX_TEXT_BUFFER / 12 {
+        return NtStatus(0);
+    }
+    let codes: alloc::vec::Vec<u32> = if codes != 0 {
+        let Ok(units) = read_text(codes, count) else { return NtStatus(0) };
+        units.into_iter().map(u32::from).collect()
+    } else {
+        (0..count).map(|at| first.wrapping_add(at)).collect()
+    };
+    let (face, height) = match dc_face(hdc, 0) {
+        Ok(found) => found,
+        Err(status) => return status,
+    };
+    let indices = flags & GCABCW_INDICES != 0;
+    let Some(widths) = win32k::font::abc_widths(face, height, &codes, indices) else { return NtStatus(0) };
+    let integers = flags != 0;
+    let bytes: alloc::vec::Vec<u8> = widths
+        .iter()
+        .flat_map(|&(a, b, c)| {
+            let words = if integers {
+                [a as u32, b as u32, c as u32]
+            } else {
+                [(a as f32).to_bits(), (b as f32).to_bits(), (c as f32).to_bits()]
+            };
+            words.into_iter().flat_map(u32::to_le_bytes)
+        })
+        .collect();
+    NtStatus(u32::from(ke::usermem::copy_to_user(u64::from(buffer), &bytes).is_ok()))
+}
 
 /// NtGdiGetTextExtentExW(hdc, lpwsz, cwc, dxMax, pcCh, pdxOut, psize,
 /// flOpts) : BOOL ; écrit en `psize` l'étendue des `cwc` caractères dans la
@@ -686,6 +811,58 @@ pub(super) fn nt_gdi_stretch_dibits_internal(arguments: &[u32]) -> NtStatus {
     }
 }
 
+/// NtGdiGetDIBitsInternal(hdc, hbm, iStartScan, cScans, pBits, pbmi,
+/// iUsage, cjMaxBits, cjMaxInfo) : INT, les lignes du bitmap copiées en DIB
+/// dans `pBits` (`win32k::gdi::dibits::get_dibits`), l'en-tête de `pbmi`
+/// rempli, la table de couleurs ou les masques écrits derrière lui s'ils
+/// tiennent dans `cjMaxInfo` octets ; 0 en cas d'échec, l'erreur de Win32
+/// posée s'il y en a une. DIB_PAL_COLORS n'est pas encore fait (0,
+/// journalisé une fois).
+pub(super) fn nt_gdi_get_dibits_internal(arguments: &[u32]) -> NtStatus {
+    use abi::gdi::{DIB_PAL_COLORS, DIB_RGB_COLORS};
+    let [hdc, hbm, start, lines, bits, info, usage, max_bits, max_info] = arguments[..9] else {
+        unreachable!("9 arguments")
+    };
+    if info == 0 || hbm == 0 || !matches!(usage, DIB_RGB_COLORS | DIB_PAL_COLORS) {
+        return NtStatus(0);
+    }
+    if usage == DIB_PAL_COLORS {
+        static REPORTED: AtomicBool = AtomicBool::new(false);
+        if !REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtGdiGetDIBitsInternal with DIB_PAL_COLORS: not yet");
+        }
+        return NtStatus(0);
+    }
+    let mut bytes = [0u8; core::mem::size_of::<BitmapInfoHeader32>()];
+    if (max_info as usize) < bytes.len() || copy_from_user(&mut bytes, u64::from(info)).is_err() {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let Some(header) = BitmapInfoHeader32::from_bytes(&bytes) else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    let reply = match win32k::gdi::dibits::get_dibits(hdc, hbm, header, start, lines, bits != 0) {
+        Ok(reply) => reply,
+        Err(0) => return NtStatus(0),
+        Err(error) => return fail(error, 0),
+    };
+    let write = || -> Result<(), NtStatus> {
+        copy_to_user(u64::from(info), reply.header.as_bytes())?;
+        let table_end = header.size as usize + reply.after_header.len();
+        if !reply.after_header.is_empty() && table_end <= max_info as usize {
+            copy_to_user(u64::from(info) + u64::from(header.size), &reply.after_header)?;
+        }
+        if let Some(lines) = &reply.bits {
+            if lines.len() > max_bits as usize {
+                return Err(STATUS_INVALID_PARAMETER);
+            }
+            copy_to_user(u64::from(bits), lines)?;
+        }
+        Ok(())
+    };
+    match write() {
+        Ok(()) => NtStatus(reply.lines),
+        Err(_) => fail(ERROR_INVALID_PARAMETER, 0),
+    }
+}
+
 /// NtGdiCreateDIBSection(hdc, hSection, dwOffset, pbmi, iUsage, cjHeader,
 /// fl, dwColorSpace, ppvBits) : HBITMAP, une DIB section du processus
 /// (`win32k::gdi::surface`), dont l'adresse des pixels chez lui va en
@@ -695,7 +872,7 @@ pub(super) fn nt_gdi_stretch_dibits_internal(arguments: &[u32]) -> NtStatus {
 /// l'application (`hSection`) : pas encore (`ERROR_INVALID_PARAMETER`,
 /// journalisé une fois).
 pub(super) fn nt_gdi_create_dib_section(arguments: &[u32]) -> NtStatus {
-    let [hdc, section, _offset, info, _usage, _header_size, _fl, _color_space, bits] = arguments[..9] else {
+    let [hdc, section, _offset, info, usage, _header_size, _fl, _color_space, bits] = arguments[..9] else {
         unreachable!("9 arguments")
     };
     if info == 0 {
@@ -725,14 +902,31 @@ pub(super) fn nt_gdi_create_dib_section(arguments: &[u32]) -> NtStatus {
         } else {
             None
         };
-        Ok((header, masks))
+        // The colour table of 4 and 8 bits, after the whole header: biClrUsed
+        // entries, or all of them.
+        let mut palette = alloc::vec::Vec::new();
+        if matches!(header.bit_count, 4 | 8) {
+            let full = 1u32 << header.bit_count;
+            let colors = if (1..=full).contains(&header.clr_used) { header.clr_used } else { full };
+            let mut table = alloc::vec![0u8; colors as usize * 4];
+            copy_from_user(&mut table, u64::from(info) + u64::from(header.size))?;
+            palette = table.chunks_exact(4).map(|quad| ColorRef::rgb(quad[2], quad[1], quad[0])).collect();
+        }
+        Ok((header, masks, palette))
     };
-    let Ok((header, masks)) = read() else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    let Ok((header, masks, palette)) = read() else { return fail(ERROR_INVALID_PARAMETER, 0) };
+    if usage != abi::gdi::DIB_RGB_COLORS && matches!(header.bit_count, 4 | 8) {
+        static PAL_REPORTED: AtomicBool = AtomicBool::new(false);
+        if !PAL_REPORTED.swap(true, Ordering::Relaxed) {
+            log::warn!("sys: NtGdiCreateDIBSection with a table of palette indices: not yet");
+        }
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
     let geometry = match surface::dib_geometry(&header, masks) {
         Ok(geometry) => geometry,
         Err(error) => return fail(error, 0),
     };
-    let Ok((hbitmap, base)) = surface::create_dib_section(geometry) else {
+    let Ok((hbitmap, base)) = surface::create_dib_section(geometry, palette) else {
         return fail(ERROR_NO_SYSTEM_RESOURCES, 0);
     };
     if bits != 0 {
@@ -761,6 +955,89 @@ pub(super) fn nt_gdi_bit_blt(arguments: &[u32]) -> NtStatus {
         Ok(done) => NtStatus(u32::from(done)),
         Err(error) => fail(error, 0),
     }
+}
+
+/// Les lignes que NtGdiCreateDIBitmapInternal copie au plus (16 Mio).
+const MAX_DIB_BITS: u32 = 16 * 1024 * 1024;
+
+/// NtGdiCreateDIBitmapInternal(hdc, cx, cy, fInit, pjInit, pbmi, iUsage,
+/// cjMaxInitInfo, cjMaxBits, fl, hcmXform) : HBITMAP, un bitmap du processus
+/// (`win32k::gdi::dibits::create_dibitmap`), initialisé de la DIB `pbmi` et
+/// `pjInit` avec CBM_INIT ; NULL en cas d'échec, l'erreur posée.
+pub(super) fn nt_gdi_create_dibitmap_internal(arguments: &[u32]) -> NtStatus {
+    use win32k::gdi::dibits::{create_dibitmap, CBM_INIT};
+    let [hdc, width, height, init, bits, info, usage, info_size, bits_size, _fl, _xform] = arguments[..11] else {
+        unreachable!("11 arguments")
+    };
+    let info_bytes = if info != 0 {
+        let mut bytes = alloc::vec![0u8; info_size.min(MAX_BITMAP_INFO) as usize];
+        if copy_from_user(&mut bytes, u64::from(info)).is_err() {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+    let bits_bytes = if bits != 0 && init & CBM_INIT != 0 {
+        if bits_size == 0 || bits_size > MAX_DIB_BITS {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        let mut bytes = alloc::vec![0u8; bits_size as usize];
+        if copy_from_user(&mut bytes, u64::from(bits)).is_err() {
+            return fail(ERROR_INVALID_PARAMETER, 0);
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+    let size = (width as i32, height as i32);
+    match create_dibitmap(hdc, size, init, info_bytes.as_deref(), bits_bytes.as_deref(), usage) {
+        Ok(handle) => NtStatus(handle),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiAlphaBlend(hdcDst, xDst, yDst, cxDst, cyDst, hdcSrc, xSrc, ySrc,
+/// cxSrc, cySrc, BlendFunction, hcmXform) : BOOL
+/// (`win32k::gdi::bitblt::alpha_blend`).
+pub(super) fn nt_gdi_alpha_blend(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, width, height, hdc_src, x_src, y_src, width_src, height_src, blend, _xform] = arguments[..12]
+    else {
+        unreachable!("12 arguments")
+    };
+    let dst = (x as i32, y as i32, width as i32, height as i32);
+    let src = (x_src as i32, y_src as i32, width_src as i32, height_src as i32);
+    match win32k::gdi::bitblt::alpha_blend(hdc, dst, hdc_src, src, blend) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiStretchBlt(hdcDst, xDst, yDst, cxDst, cyDst, hdcSrc, xSrc, ySrc,
+/// cxSrc, cySrc, dwRop, dwBackColor) : BOOL (`win32k::gdi::bitblt::stretch_blt`).
+/// `dwBackColor` ne sert qu'à une source monochrome (pas encore).
+pub(super) fn nt_gdi_stretch_blt(arguments: &[u32]) -> NtStatus {
+    let [hdc, x, y, width, height, hdc_src, x_src, y_src, width_src, height_src, rop, _back] = arguments[..12] else {
+        unreachable!("12 arguments")
+    };
+    let dst = (x as i32, y as i32, width as i32, height as i32);
+    let src = (x_src as i32, y_src as i32, width_src as i32, height_src as i32);
+    match win32k::gdi::bitblt::stretch_blt(hdc, dst, hdc_src, src, rop) {
+        Ok(done) => NtStatus(u32::from(done)),
+        Err(error) => fail(error, 0),
+    }
+}
+
+/// NtGdiGetNearestColor(hdc, Color) : COLORREF, la couleur la plus proche de
+/// `Color` que le DC peint : sur une surface de 32 bits, elle-même (sans
+/// l'octet haut de PALETTERGB) ; CLR_INVALID pour un DC qui n'est pas au
+/// processus (`ERROR_INVALID_HANDLE`).
+pub(super) fn nt_gdi_get_nearest_color(arguments: &[u32]) -> NtStatus {
+    let [hdc, color] = arguments[..2] else { unreachable!("2 arguments") };
+    if win32k::gdi::dc::lock(hdc).is_none() {
+        return fail(ERROR_INVALID_HANDLE, abi::gdi::CLR_INVALID);
+    }
+    NtStatus(color & 0x00FF_FFFF)
 }
 
 /// NtGdiCreateSolidBrush(cr, hbr) : HBRUSH, un pinceau plein du processus

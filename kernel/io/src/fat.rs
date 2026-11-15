@@ -19,9 +19,26 @@ pub enum FatError {
     Corrupt,
 }
 
+/// The most a file read asks of its device in one call (a run of contiguous
+/// clusters): 256 sectors of 512 bytes, one ATA command.
+const MAX_RUN_BYTES: usize = 128 * 1024;
+
 pub trait BlockDevice {
     fn sector_size(&self) -> u32;
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError>;
+    /// Reads the `out.len() / sector_size` consecutive sectors from `lba`
+    /// (`out` holds whole sectors): one at a time, unless the device reads
+    /// them in fewer commands (an ATA disk: 256 sectors a command).
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        let size = self.sector_size() as usize;
+        if size == 0 || !out.len().is_multiple_of(size) {
+            return Err(FatError::Io);
+        }
+        for (i, sector) in out.chunks_exact_mut(size).enumerate() {
+            self.read_sector(lba + i as u64, sector)?;
+        }
+        Ok(())
+    }
     /// Writes the sector `lba`; a device that cannot is read-only.
     fn write_sector(&self, _lba: u64, _data: &[u8]) -> Result<(), FatError> {
         Err(FatError::ReadOnly)
@@ -40,6 +57,9 @@ impl<D: BlockDevice + ?Sized> BlockDevice for alloc::boxed::Box<D> {
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
         (**self).read_sector(lba, out)
     }
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        (**self).read_sectors(lba, out)
+    }
     fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
         (**self).write_sector(lba, data)
     }
@@ -54,6 +74,9 @@ impl<D: BlockDevice + ?Sized> BlockDevice for &mut D {
     }
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
         (**self).read_sector(lba, out)
+    }
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        (**self).read_sectors(lba, out)
     }
     fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
         (**self).write_sector(lba, data)
@@ -256,7 +279,8 @@ fn same_name(long: &str, name: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub struct DirEntryInfo {
-    /// Its long name if it has one, else its 8.3 name.
+    /// Its long name if it has one, else its 8.3 name (a part in lower case
+    /// if its NT case flag says so).
     pub name: String,
     pub attr: u8,
     pub first_cluster: u32,
@@ -526,19 +550,58 @@ impl<D: BlockDevice> FatVolume<D> {
         }
         let mut cluster_offset = file.position as usize % bytes_per_cluster;
         let mut written = 0usize;
-        let mut buf = vec![0u8; bytes_per_cluster];
+        let max_run = (MAX_RUN_BYTES / bytes_per_cluster).max(1);
+        let mut buf = Vec::new();
         while written < target {
-            self.read_cluster(cluster, &mut buf)?;
-            let can_take = (bytes_per_cluster - cluster_offset).min(target - written);
-            out[written..written + can_take].copy_from_slice(&buf[cluster_offset..cluster_offset + can_take]);
-            written += can_take;
+            // The run: `cluster` and those that follow it on the disk in its
+            // chain, as many as the read still needs.
+            let wanted = (cluster_offset + target - written).div_ceil(bytes_per_cluster).min(max_run);
+            let (run, last) = self.contiguous_run(cluster, wanted);
+            let run_bytes = run * bytes_per_cluster;
+            let take = (run_bytes - cluster_offset).min(target - written);
+            let lba = self.data_lba(cluster)?;
+            if cluster_offset == 0 && take == run_bytes {
+                // Whole clusters: straight into the caller's buffer.
+                self.device.read_sectors(lba, &mut out[written..written + take])?;
+            } else {
+                buf.resize(run_bytes, 0);
+                self.device.read_sectors(lba, &mut buf)?;
+                out[written..written + take].copy_from_slice(&buf[cluster_offset..cluster_offset + take]);
+            }
+            written += take;
             cluster_offset = 0;
             if written < target {
-                cluster = self.next_cluster(cluster)?;
+                cluster = self.next_cluster(last)?;
             }
         }
         file.position = file.position.saturating_add(written as u32);
         Ok(written)
+    }
+
+    /// How many clusters, at most `wanted` (one at least), follow `first`
+    /// on the disk in its chain (`first`, `first + 1`…), and the last of
+    /// them. A chain that ends or jumps ends the run.
+    fn contiguous_run(&self, first: u32, wanted: usize) -> (usize, u32) {
+        let (mut run, mut last) = (1, first);
+        while run < wanted {
+            match self.next_cluster(last) {
+                Ok(next) if next == last.wrapping_add(1) => {
+                    last = next;
+                    run += 1;
+                }
+                _ => break,
+            }
+        }
+        (run, last)
+    }
+
+    /// The first sector of the data cluster `cluster`; clusters 0 and 1
+    /// hold none.
+    fn data_lba(&self, cluster: u32) -> Result<u64, FatError> {
+        if cluster < 2 {
+            return Err(FatError::InvalidBpb);
+        }
+        Ok(self.cluster_to_lba(cluster))
     }
 
     /// The cluster of the root directory.
@@ -673,14 +736,7 @@ impl<D: BlockDevice> FatVolume<D> {
         if out.len() != bytes_per_sector * sectors_per_cluster {
             return Err(FatError::InvalidBpb);
         }
-        let first_lba = self.cluster_to_lba(cluster);
-        let mut i = 0usize;
-        while i < sectors_per_cluster {
-            let start = i * bytes_per_sector;
-            self.device.read_sector(first_lba + i as u64, &mut out[start..start + bytes_per_sector])?;
-            i += 1;
-        }
-        Ok(())
+        self.device.read_sectors(self.cluster_to_lba(cluster), out)
     }
 
     fn cluster_to_lba(&self, cluster: u32) -> u64 {
@@ -725,6 +781,10 @@ pub fn make_entry(name: &[u8; 11], attr: u8, first_cluster: u32, size: u32) -> [
 pub fn short_name(name: &str) -> Result<[u8; 11], FatError> {
     short_name_11(name)
 }
+
+/// The NT case flags of an 8.3 entry (byte 12) and the rule that gives them,
+/// as the images of the host tools have them (`fatfs`, ADR-022).
+pub use fatfs::image::{case_flags, CASE_LOWER_BASE, CASE_LOWER_EXT};
 
 /// The 8.3 alias of the long name `long`, as other systems make it: its base
 /// (before its last dot) and its extension in upper case, without spaces or
@@ -1197,11 +1257,16 @@ impl<D: BlockDevice> FatVolume<D> {
     /// Adds the entry of `long` to the directory at `dir_cluster`: the
     /// long-name (VFAT) entries of its 8.3 alias — the last part first, each
     /// carrying the checksum of the alias — then that alias's 8.3 entry,
-    /// unique in the directory. A name 8.3 already holds gets a single
-    /// entry. Every entry lands in the first free slot; a full directory
-    /// grows by a zeroed cluster. `PathFormat` for a name longer than VFAT
-    /// holds, before anything is written; if an entry cannot be written, the
-    /// long-name entries already written are deleted again.
+    /// unique in the directory. A name 8.3 already holds keeps its case as
+    /// ReactOS's vfatfs keeps it (FATAddEntry): in upper case, or with a
+    /// base or an extension all in lower case, a single 8.3 entry with the
+    /// NT case flags ([`CASE_LOWER_BASE`], [`CASE_LOWER_EXT`]); with a base
+    /// or an extension of mixed case (`Recent`), long-name entries before
+    /// its 8.3 entry, the name in upper case without `~N`. Every entry lands
+    /// in the first free slot; a full directory grows by a zeroed cluster.
+    /// `PathFormat` for a name longer than VFAT holds, before anything is
+    /// written; if an entry cannot be written, the long-name entries already
+    /// written are deleted again.
     pub fn add_entry_long(
         &self,
         dir_cluster: u32,
@@ -1222,20 +1287,26 @@ impl<D: BlockDevice> FatVolume<D> {
         first_cluster: u32,
         hint: u32,
     ) -> Result<EntryRef, FatError> {
-        if let Ok(short) = short_name(long) {
-            return self.add_entry(dir_cluster, &make_entry(&short, attributes, first_cluster, 0), hint);
-        }
-        if long.encode_utf16().count() > MAX_LONG_NAME_UNITS {
-            return Err(FatError::PathFormat);
-        }
-        // The alias must not collide with the 8.3 names the directory holds,
-        // the aliases of its long names included.
-        let taken: Vec<[u8; 11]> = self
-            .dir_entries(dir_cluster)?
-            .iter()
-            .filter_map(|entry| short_name(entry.short_name.as_deref().unwrap_or(&entry.name)).ok())
-            .collect();
-        let alias = alias_11(long, |candidate| taken.contains(candidate));
+        let alias = match short_name(long) {
+            Ok(short) => match case_flags(long) {
+                Some(case) => {
+                    let mut entry = make_entry(&short, attributes, first_cluster, 0);
+                    entry[12] = case;
+                    return self.add_entry(dir_cluster, &entry, hint);
+                }
+                // The long name keeps the case.
+                None => short,
+            },
+            Err(_) => {
+                if long.encode_utf16().count() > MAX_LONG_NAME_UNITS {
+                    return Err(FatError::PathFormat);
+                }
+                // The alias must not collide with the 8.3 names the
+                // directory holds, the aliases of its long names included.
+                let taken: Vec<[u8; 11]> = self.dir_entries(dir_cluster)?.iter().map(|entry| entry.raw_name).collect();
+                alias_11(long, |candidate| taken.contains(candidate))
+            }
+        };
         let mut written = Vec::new();
         for part in long_name_entries(long, &alias) {
             match self.add_entry(dir_cluster, &part, hint) {
@@ -1262,10 +1333,9 @@ impl<D: BlockDevice> FatVolume<D> {
 
     /// Creates the subdirectory `name` of the directory at `parent` (the
     /// root's `..` names cluster 0): a zeroed cluster with its `.` and `..`,
-    /// and its entry in `parent` — a single 8.3 entry for a name 8.3 holds,
-    /// else its long-name (VFAT) entries and its alias's
-    /// ([`add_entry_long`](Self::add_entry_long)). Returns its cluster and
-    /// its 8.3 entry.
+    /// and its entry in `parent`, named as
+    /// [`add_entry_long`](Self::add_entry_long) names a file. Returns its
+    /// cluster and its 8.3 entry.
     pub fn create_directory(&self, parent: u32, name: &str, hint: u32) -> Result<(u32, EntryRef), FatError> {
         let cluster = self.allocate_cluster(hint)?;
         let dot_dot = if parent == self.bpb.root_cluster { 0 } else { parent };
@@ -1343,6 +1413,8 @@ fn upcase_fat_char(ch: u8) -> Result<u8, FatError> {
     }
 }
 
+/// The 8.3 name of the entry `ent`, `BASE.EXT`: a part whose NT case flag
+/// the entry carries in lower case (vfat8Dot3ToString of ReactOS's vfatfs).
 fn short_name_from_entry(ent: &[u8]) -> String {
     let mut base_end = 8usize;
     while base_end > 0 && ent[base_end - 1] == b' ' {
@@ -1352,19 +1424,13 @@ fn short_name_from_entry(ent: &[u8]) -> String {
     while ext_end > 0 && ent[8 + ext_end - 1] == b' ' {
         ext_end -= 1;
     }
-    let mut out = String::new();
-    let mut i = 0usize;
-    while i < base_end {
-        out.push(ent[i] as char);
-        i += 1;
-    }
+    let part = |bytes: &[u8], lower: bool| -> String {
+        bytes.iter().map(|&byte| if lower { byte.to_ascii_lowercase() } else { byte } as char).collect()
+    };
+    let mut out = part(&ent[..base_end], ent[12] & CASE_LOWER_BASE != 0);
     if ext_end > 0 {
         out.push('.');
-        let mut j = 0usize;
-        while j < ext_end {
-            out.push(ent[8 + j] as char);
-            j += 1;
-        }
+        out.push_str(&part(&ent[8..8 + ext_end], ent[12] & CASE_LOWER_EXT != 0));
     }
     out
 }

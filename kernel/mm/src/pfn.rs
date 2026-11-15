@@ -22,7 +22,7 @@ use core::fmt;
 
 use hal::sync::KSpinLock;
 
-use crate::buddy::{BuddyAllocator, Pfn, MAX_ORDER};
+use crate::buddy::{BuddyAllocator, FreeLink, Pfn, MAX_ORDER};
 
 /// État d'une page physique.
 #[repr(u8)]
@@ -161,17 +161,19 @@ impl PageFrames {
 
     /// La base couvre `count` pages, toutes réservées : [`add_free`](Self::add_free)
     /// et [`mark_active`](Self::mark_active) disent ensuite ce qui est libre et
-    /// déjà pris.
+    /// déjà pris. Les listes libres du buddy se chaînent dans `links`.
     ///
     /// # Safety
-    /// Une fois ; `pfns` désigne `count` entrées accessibles en écriture,
-    /// réservées à la base pour toute sa vie.
-    pub unsafe fn init(&mut self, pfns: *mut MmPfn, count: u64) {
+    /// Une fois ; `pfns` et `links` désignent chacun `count` entrées
+    /// accessibles en écriture, réservées à la base pour toute sa vie.
+    pub unsafe fn init(&mut self, pfns: *mut MmPfn, links: *mut FreeLink, count: u64) {
         assert!(self.pfns.is_null(), "PFN database initialised twice");
         for i in 0..count as usize {
             // SAFETY: garanti par l'appelant.
             unsafe { pfns.add(i).write(MmPfn::RESERVED) };
         }
+        // SAFETY: garanti par l'appelant.
+        unsafe { self.buddy.set_links(links, count) };
         self.pfns = pfns;
         self.count = count;
     }
@@ -403,9 +405,10 @@ mod tests {
     /// Une base de `count` pages, toutes réservées.
     fn reserved(count: u64) -> Box<PageFrames> {
         let pfns = Box::leak(std::vec![MmPfn::FREE; count as usize].into_boxed_slice());
+        let links = Box::leak(std::vec![FreeLink::UNUSED; count as usize].into_boxed_slice());
         let mut frames = Box::new(PageFrames::empty());
-        // SAFETY: tableau du test, jamais libéré.
-        unsafe { frames.init(pfns.as_mut_ptr(), count) };
+        // SAFETY: tableaux du test, jamais libérés.
+        unsafe { frames.init(pfns.as_mut_ptr(), links.as_mut_ptr(), count) };
         frames
     }
 

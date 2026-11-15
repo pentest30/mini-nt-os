@@ -51,8 +51,14 @@ pub(super) fn nt_user_set_capture(arguments: &[u32]) -> NtStatus {
 /// capture rendue (TRUE) ; `NOPARAM_ROUTINE_DESTROY_CARET`, DestroyCaret
 /// (`win32k::caret::destroy_current`, TRUE) ; `NOPARAM_ROUTINE_CREATEMENU` et
 /// `NOPARAM_ROUTINE_CREATEMENUPOPUP` (`0` et `1`, les premières de l'enum
-/// de XP SP2), un menu neuf — son handle (`win32k::menu`). Une autre rend
-/// 0 et `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
+/// de XP SP2), un menu neuf — son handle (`win32k::menu`) ;
+/// `NOPARAM_ROUTINE_MSQCLEARWAKEMASK` (IntMsqClearWakeMask, après
+/// MsgWaitForMultipleObjects) : TRUE, rien à défaire, la file n'ayant pas
+/// de masque de réveil (son événement est signalé à chaque message). ReactOS
+/// y met aussi `fsWakeBits` à zéro (« very hacky ») ; Mino ne le fait pas :
+/// ses bits de réveil suivent ce que tient la file, et GetQueueStatus,
+/// WaitMessage et MWMO_INPUTAVAILABLE les lisent. Une autre rend 0 et
+/// `ERROR_CALL_NOT_IMPLEMENTED`, journalisée une fois.
 pub(super) fn nt_user_call_no_param(arguments: &[u32]) -> NtStatus {
     match arguments[0] {
         NOPARAM_ROUTINE_RELEASECAPTURE => {
@@ -60,6 +66,7 @@ pub(super) fn nt_user_call_no_param(arguments: &[u32]) -> NtStatus {
             NtStatus(1)
         }
         abi::user::NOPARAM_ROUTINE_DESTROY_CARET => NtStatus(u32::from(win32k::caret::destroy_current())),
+        abi::user::NOPARAM_ROUTINE_MSQCLEARWAKEMASK => NtStatus(1),
         0 | 1 => match win32k::menu::create(arguments[0] == 1) {
             Ok(handle) => NtStatus(handle),
             Err(error) => fail(error),

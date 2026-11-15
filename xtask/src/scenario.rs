@@ -64,6 +64,9 @@
 //! - `screen = X Y RRGGBB`: once the markers are found, the screen of the
 //!   last boot is dumped (`screen.ppm` in the run directory) and the pixel
 //!   at column X, row Y must have this colour (`xtask/src/screen.rs`).
+//! - `screen-wait = SECONDS` (with `screen`): the screen may take that long
+//!   to show the pixels once the markers are found (what keys started is
+//!   slow to appear): it is dumped again every second until it does.
 //! - `keys = MARKER => KEY…`: once MARKER is in the serial log of the boot,
 //!   QEMU's monitor types the keys, one after the other (`sendkey`, with
 //!   QEMU's key names: `a`, `shift-a`, `ret`, `spc`…), once
@@ -74,6 +77,10 @@
 //!   `tests/native/` (or of the rostests) takes the place of `winlogon.exe` on the ramdisk, so
 //!   that `smss` starts it as its initial command (with `requires =
 //!   userland, native`).
+//! - `shell = explorer` (with `requires = userland`): the boot disk also
+//!   takes the shell, `explorer.exe` in `WINDOWS`, and the DLLs it imports
+//!   that the other scenarios' disk does not have (`browseui`, `shdocvw`),
+//!   which userinit starts after the logon.
 
 use std::fs;
 use std::path::Path;
@@ -109,8 +116,14 @@ pub struct Scenario {
     pub boots: u32,
     /// Pixels the screen must show once the markers are found.
     pub screen: Vec<crate::screen::Pixel>,
+    /// How long the screen may take to show them once the markers are found
+    /// (`screen-wait`, in seconds): captured again until it does; 0, one
+    /// capture.
+    pub screen_wait: Duration,
     /// The test program that takes the place of `winlogon.exe`.
     pub initial_command: Option<String>,
+    /// The boot disk takes the shell, `explorer.exe`, and its imports.
+    pub shell: bool,
     /// Keys to type once a marker is in the serial log, in order.
     pub keys: Vec<Keys>,
     expect: Vec<Vec<String>>,
@@ -233,7 +246,9 @@ impl Scenario {
             reboot_target: false,
             boots: 1,
             screen: Vec::new(),
+            screen_wait: Duration::ZERO,
             initial_command: None,
+            shell: false,
             keys: Vec::new(),
             expect: Vec::new(),
             forbid: Vec::new(),
@@ -261,12 +276,20 @@ impl Scenario {
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
+                "shell" => match value {
+                    "explorer" => sc.shell = true,
+                    _ => return Err(format!("{}: unknown shell `{value}`", at())),
+                },
                 "apitests-floor" => {
                     let floor =
                         value.parse().map_err(|_| format!("{}: apitests-floor `{value}` is not a number", at()))?;
                     sc.apitests_floor = Some(floor);
                 }
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
+                "screen-wait" => {
+                    let secs = value.parse().map_err(|_| format!("{}: screen-wait `{value}` is not a number", at()))?;
+                    sc.screen_wait = Duration::from_secs(secs);
+                }
                 "keys" => sc.keys.push(Keys::parse(value).map_err(|e| format!("{}: {e}", at()))?),
                 "disk" => match value {
                     "system" => sc.system_disk = true,
@@ -318,6 +341,12 @@ impl Scenario {
         }
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
+        }
+        if !sc.screen_wait.is_zero() && sc.screen.is_empty() {
+            return Err(format!("{name}/{SCENARIO_FILE}: `screen-wait` without `screen` pixels"));
+        }
+        if sc.shell && !sc.requires_userland {
+            return Err(format!("{name}/{SCENARIO_FILE}: `shell` needs `requires = userland`"));
         }
         if sc.requires_rostests != sc.apitests_floor.is_some() {
             return Err(format!("{name}/{SCENARIO_FILE}: `requires = rostests` goes with `apitests-floor`"));
@@ -440,10 +469,18 @@ requires = userland
         let screen = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5").unwrap();
         assert_eq!(screen.screen, [crate::screen::Pixel { x: 1, y: 2, rgb: [0x3A, 0x6E, 0xA5] }]);
         assert!(sc.screen.is_empty());
+        assert_eq!(screen.screen_wait, Duration::ZERO, "one capture by default");
+        let waiting = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5\nscreen-wait = 60").unwrap();
+        assert_eq!(waiting.screen_wait, Duration::from_secs(60));
+        assert!(Scenario::parse("x", "expect = a\nscreen-wait = 60").is_err(), "a wait without pixels");
+        assert!(Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5\nscreen-wait = soon").is_err());
         let gui = Scenario::parse("x", "expect = a\nrequires = userland, native\ninitial-command = GUI1.EXE").unwrap();
         assert_eq!(gui.initial_command.as_deref(), Some("GUI1.EXE"));
         assert_eq!(sc.initial_command, None);
         assert!(Scenario::parse("x", "expect = a\ninitial-command = GUI1.EXE").is_err(), "without the userland");
+        let shell = Scenario::parse("x", "expect = a\nrequires = userland\nshell = explorer").unwrap();
+        assert!(shell.shell && !sc.shell);
+        assert!(Scenario::parse("x", "expect = a\nshell = explorer").is_err(), "a shell without the userland");
         let bench = Scenario::parse("x", "expect = a\nrequires = rostests\napitests-floor = 12").unwrap();
         assert!(bench.requires_rostests && bench.apitests_floor == Some(12));
         assert_eq!(sc.apitests_floor, None);
@@ -478,6 +515,7 @@ requires = userland
         assert!(Scenario::parse("x", "expect =").is_err());
         assert!(Scenario::parse("x", "expect = a\nrequires = network").is_err());
         assert!(Scenario::parse("x", "expect = a\ndisk = floppy").is_err());
+        assert!(Scenario::parse("x", "expect = a\nrequires = userland\nshell = progman").is_err());
         assert!(Scenario::parse("x", "expect = a\nboots = 0").is_err());
         assert!(Scenario::parse("x", "expect = a\nscreen = 1 2").is_err());
         assert!(Scenario::parse("x", "expect = a\nkeys = ready").is_err(), "no keys");

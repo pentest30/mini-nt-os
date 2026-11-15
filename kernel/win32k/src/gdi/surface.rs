@@ -10,18 +10,29 @@
 //! écrivent ce que win32k y dessine, et inversement, sans copie. Ses lignes
 //! montent depuis celle du bas si `biHeight` est positif.
 //!
+//! Une DIB section de 4 ou 8 bits par pixel ([`Format::Indexed`]) garde des
+//! index dans sa table de couleurs, comme son processus les lit et les
+//! écrit : le moteur dessine sur ses pixels décodés en 32 bits
+//! ([`decode_indexed`]), puis réécrit les pixels changés par l'index de la
+//! couleur la plus proche ([`encode_indexed`], [`nearest_index`]). C'est le
+//! format d'une liste d'images ILC_COLOR4 ou ILC_COLOR8 de `comctl32` (celle
+//! du gestionnaire des tâches).
+//!
 //! Un bitmap n'est choisi que dans un DC à la fois (`hdc` du SURFACE) ; on
 //! ne le supprime pas tant qu'il y est choisi (ce que dit la documentation
 //! de DeleteObject ; ReactOS en diffère la suppression). Supprimé, une DIB
 //! section quitte la mémoire de son processus.
 //!
-//! Pas encore : les bitmaps compatibles (CreateBitmap,
-//! CreateCompatibleBitmap), les profondeurs autres que 32 bits, les masques
-//! autres que ceux de BI_RGB, la section d'une application (`hSection`),
-//! les palettes, GetObject, GetDIBits et SetDIBits ; les bitmaps d'un
-//! processus rendus à sa fin.
+//! Un bitmap se copie (BITMAP_CopyBitmap : [`copy_bitmap`]) : GetIconInfo
+//! donne ainsi les bitmaps d'une icône à son appelant ; GetDIBits les lit
+//! (`super::dibits`).
+//!
+//! Pas encore : les DIB sections de 1, 16 et 24 bits, les masques autres
+//! que ceux de BI_RGB, la section d'une application (`hSection`), une table
+//! DIB_PAL_COLORS, SetDIBits ; les bitmaps d'un processus rendus à sa fin.
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use abi::gdi::{objt, BitmapInfoHeader32, BI_BITFIELDS, BI_RGB, LO_BITMAP_TYPE};
@@ -32,7 +43,7 @@ use mm::section::Section;
 use mm::system_view::{self, SystemView};
 use mm::vad::PageProtect;
 
-use super::dib::{Bitmap, PixelLayout};
+use super::dib::{Bitmap, ColorRef, PixelLayout};
 use super::handles::{self, Object, OWNER_PUBLIC};
 
 /// Les pixels d'un bitmap.
@@ -42,6 +53,113 @@ enum Pixels {
     /// Ceux d'une DIB section : la vue du noyau, et celle de son processus
     /// (son PID et son adresse) tant qu'elle n'est pas défaite.
     Section { view: SystemView, user: KSpinLock<Option<(u32, u32)>> },
+}
+
+/// Le format des pixels d'un bitmap qui en a.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Format {
+    /// 32 bits par pixel, BGRX ; l'octet haut tel que le processus l'écrit
+    /// (l'alpha d'une icône).
+    Bgrx,
+    /// Des index de `bit_count` bits (4 ou 8) dans `palette`, les lignes
+    /// alignées sur 32 bits.
+    Indexed { bit_count: u16, palette: Vec<ColorRef> },
+}
+
+/// Les octets d'une ligne de `width` pixels de `bit_count` bits, alignée sur
+/// 32 bits.
+pub fn stride(width: u32, bit_count: u16) -> usize {
+    (width as usize * usize::from(bit_count)).div_ceil(32) * 4
+}
+
+/// L'index de `palette` dont la couleur est `color`, sinon la plus proche
+/// (la plus petite somme des carrés des écarts) ; le premier à égalité.
+pub fn nearest_index(palette: &[ColorRef], color: ColorRef) -> u8 {
+    let (r, g, b) = color.components();
+    let distance = |entry: &ColorRef| {
+        let (er, eg, eb) = entry.components();
+        let d = |a: u8, b: u8| (i32::from(a) - i32::from(b)).pow(2);
+        d(r, er) + d(g, eg) + d(b, eb)
+    };
+    let mut best = (0usize, i32::MAX);
+    for (index, entry) in palette.iter().enumerate() {
+        let gap = distance(entry);
+        if gap < best.1 {
+            best = (index, gap);
+        }
+    }
+    best.0 as u8
+}
+
+/// Le décalage, dans sa ligne, du pixel `x` d'une DIB de `bit_count` bits :
+/// son octet et le décalage de ses bits dans l'octet (le premier pixel dans
+/// les bits hauts).
+fn index_place(x: usize, bit_count: u16) -> (usize, u32) {
+    let bit = x * usize::from(bit_count);
+    (bit / 8, (8 - u32::from(bit_count)) - (bit % 8) as u32)
+}
+
+/// La ligne en mémoire de la ligne `y` (depuis le haut) d'une DIB de `height`
+/// lignes.
+fn memory_line(y: usize, height: usize, bottom_up: bool) -> usize {
+    if bottom_up {
+        height - 1 - y
+    } else {
+        y
+    }
+}
+
+/// Les pixels BGRX, la ligne du haut d'abord, de la DIB indexée `bytes` de
+/// `width` × `height` pixels de `bit_count` bits ; un index hors de `palette`
+/// donne le noir.
+pub fn decode_indexed(
+    bytes: &[u8],
+    (width, height): (u32, u32),
+    bit_count: u16,
+    palette: &[ColorRef],
+    bottom_up: bool,
+) -> Vec<u32> {
+    let (w, h, line_bytes) = (width as usize, height as usize, stride(width, bit_count));
+    let mask = (1u16 << bit_count) - 1;
+    let mut pixels = Vec::with_capacity(w * h);
+    for y in 0..h {
+        let line = &bytes[memory_line(y, h, bottom_up) * line_bytes..][..line_bytes];
+        for x in 0..w {
+            let (at, shift) = index_place(x, bit_count);
+            let index = (u16::from(line[at]) >> shift) & mask;
+            let color = palette.get(usize::from(index)).copied().unwrap_or(ColorRef::rgb(0, 0, 0));
+            pixels.push(PixelLayout::Bgrx.pixel(color));
+        }
+    }
+    pixels
+}
+
+/// Réécrit dans la DIB indexée `bytes` les pixels de `after` (BGRX, la ligne
+/// du haut d'abord) qui diffèrent de `before`, par l'index de leur couleur
+/// la plus proche dans `palette` ; les autres gardent leur index.
+pub fn encode_indexed(
+    bytes: &mut [u8],
+    (width, height): (u32, u32),
+    (bit_count, palette): (u16, &[ColorRef]),
+    bottom_up: bool,
+    before: &[u32],
+    after: &[u32],
+) {
+    let (w, h, line_bytes) = (width as usize, height as usize, stride(width, bit_count));
+    let mask = ((1u16 << bit_count) - 1) as u8;
+    for y in 0..h {
+        let base = memory_line(y, h, bottom_up) * line_bytes;
+        for x in 0..w {
+            let at = y * w + x;
+            if before[at] == after[at] {
+                continue;
+            }
+            let index = nearest_index(palette, PixelLayout::Bgrx.color(after[at]));
+            let (byte, shift) = index_place(x, bit_count);
+            let cell = &mut bytes[base + byte];
+            *cell = (*cell & !(mask << shift)) | ((index & mask) << shift);
+        }
+    }
 }
 
 /// Le DC où un bitmap est choisi (`hdc` du SURFACE), 0 sinon.
@@ -73,6 +191,7 @@ pub struct Surface {
     /// Un bitmap monochrome (CreateBitmap d'un bit par pixel) : ses pixels,
     /// de 32 bits comme les autres, ne sont que noirs ou blancs.
     monochrome: bool,
+    format: Format,
     pixels: Pixels,
     selected: Selection,
     /// Un dessin à la fois.
@@ -93,6 +212,7 @@ impl Surface {
             height: 1,
             bottom_up: false,
             monochrome: true,
+            format: Format::Bgrx,
             pixels: Pixels::None,
             selected: Selection::default(),
             drawing: KSpinLock::new(()),
@@ -102,6 +222,26 @@ impl Surface {
     /// Sa largeur et sa hauteur.
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Une DIB section dont les lignes montent depuis celle du bas.
+    pub fn is_bottom_up(&self) -> bool {
+        self.bottom_up
+    }
+
+    /// Le format de ses pixels.
+    pub fn format(&self) -> &Format {
+        &self.format
+    }
+
+    /// Ses bits par pixel : 1 (monochrome), 4 ou 8 (une DIB section indexée),
+    /// 32.
+    pub fn bit_count(&self) -> u16 {
+        match &self.format {
+            _ if self.monochrome => 1,
+            Format::Indexed { bit_count, .. } => *bit_count,
+            Format::Bgrx => 32,
+        }
     }
 
     /// Monochrome : le bitmap par défaut, ou celui de CreateBitmap d'un bit
@@ -169,6 +309,25 @@ impl Surface {
     pub fn draw(&self, mut draw: impl FnMut(&mut Bitmap<'_>)) -> bool {
         let Pixels::Section { view, .. } = &self.pixels else { return false };
         let _one = self.drawing.lock();
+        if let Format::Indexed { bit_count, palette } = &self.format {
+            let size = stride(self.width, *bit_count) * self.height as usize;
+            // SAFETY: the system view maps at least `size` bytes, the DIB's
+            // lines (`create_dib_section`), resident while `self` lives;
+            // `drawing` keeps the kernel to one slice at a time, as above.
+            let bytes = unsafe { core::slice::from_raw_parts_mut(view.base() as *mut u8, size) };
+            let size = (self.width, self.height);
+            let mut pixels = decode_indexed(bytes, size, *bit_count, palette, self.bottom_up);
+            let before = pixels.clone();
+            {
+                let Some(mut bitmap) = Bitmap::new(&mut pixels, self.width, self.height, self.width, PixelLayout::Bgrx)
+                else {
+                    return false;
+                };
+                draw(&mut bitmap);
+            }
+            encode_indexed(bytes, size, (*bit_count, palette), self.bottom_up, &before, &pixels);
+            return true;
+        }
         let count = self.width as usize * self.height as usize;
         // SAFETY: the system view maps `view.size()` bytes, at least
         // `count` pixels (`create_dib_section`), of pages resident while the
@@ -209,6 +368,8 @@ pub struct DibGeometry {
     pub height: u32,
     /// `biHeight` positif : les lignes montent depuis celle du bas.
     pub bottom_up: bool,
+    /// 4, 8 ou 32.
+    pub bit_count: u16,
     /// Ses octets.
     pub size: u32,
 }
@@ -222,8 +383,8 @@ pub const RGB_MASKS: [u32; 3] = [0x00FF_0000, 0x0000_FF00, 0x0000_00FF];
 /// (ses masques `masks` pour BI_BITFIELDS). `Err` : l'erreur de Win32,
 /// `ERROR_INVALID_PARAMETER` (un en-tête trop court, une compression RLE,
 /// une taille nulle, négative ou trop grande, plus d'un plan) ou
-/// `ERROR_CALL_NOT_IMPLEMENTED` (une autre profondeur que 32 bits, d'autres
-/// masques).
+/// `ERROR_CALL_NOT_IMPLEMENTED` (une autre profondeur que 4, 8 ou 32 bits,
+/// BI_BITFIELDS hors de 32 bits, d'autres masques).
 pub fn dib_geometry(header: &BitmapInfoHeader32, masks: Option<[u32; 3]>) -> Result<DibGeometry, u32> {
     let valid = header.size as usize >= core::mem::size_of::<BitmapInfoHeader32>()
         && header.width > 0
@@ -233,7 +394,12 @@ pub fn dib_geometry(header: &BitmapInfoHeader32, masks: Option<[u32; 3]>) -> Res
     if !valid || !matches!(header.compression, BI_RGB | BI_BITFIELDS) {
         return Err(ERROR_INVALID_PARAMETER);
     }
-    if header.bit_count != 32 || (header.compression == BI_BITFIELDS && masks != Some(RGB_MASKS)) {
+    let supported = match header.bit_count {
+        4 | 8 => header.compression == BI_RGB,
+        32 => header.compression == BI_RGB || masks == Some(RGB_MASKS),
+        _ => false,
+    };
+    if !supported {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!(
@@ -245,15 +411,17 @@ pub fn dib_geometry(header: &BitmapInfoHeader32, masks: Option<[u32; 3]>) -> Res
         return Err(ERROR_CALL_NOT_IMPLEMENTED);
     }
     let (width, height) = (header.width as u32, header.height.unsigned_abs());
-    // WIDTH_BYTES_ALIGN32 of 32 bits per pixel: 4 bytes a pixel.
-    let size = width.checked_mul(4).and_then(|stride| stride.checked_mul(height)).filter(|&size| size <= MAX_DIB_SIZE);
-    let size = size.ok_or(ERROR_INVALID_PARAMETER)?;
-    Ok(DibGeometry { width, height, bottom_up: header.height > 0, size })
+    // WIDTH_BYTES_ALIGN32.
+    let line = u64::from(width) * u64::from(header.bit_count);
+    let size = line.div_ceil(32) * 4 * u64::from(height);
+    let size = u32::try_from(size).ok().filter(|&size| size <= MAX_DIB_SIZE).ok_or(ERROR_INVALID_PARAMETER)?;
+    Ok(DibGeometry { width, height, bottom_up: header.height > 0, bit_count: header.bit_count, size })
 }
 
 /// DIB_CreateDIBSection, sans section d'application : une DIB section de
-/// `geometry` (des pixels à zéro), au processus courant. Rend son handle et
-/// l'adresse de ses pixels chez lui.
+/// `geometry` (des pixels à zéro), au processus courant, sa table de
+/// couleurs `palette` pour 4 et 8 bits. Rend son handle et l'adresse de ses
+/// pixels chez lui.
 ///
 /// # Errors
 /// `STATUS_INVALID_PARAMETER` hors d'un thread de Ps ; celles de la
@@ -261,7 +429,7 @@ pub fn dib_geometry(header: &BitmapInfoHeader32, masks: Option<[u32; 3]>) -> Res
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
-pub fn create_dib_section(geometry: DibGeometry) -> Result<(u32, u32), NtStatus> {
+pub fn create_dib_section(geometry: DibGeometry, palette: Vec<ColorRef>) -> Result<(u32, u32), NtStatus> {
     let thread = ps::ethread::current_thread().ok_or(STATUS_INVALID_PARAMETER)?;
     let process = thread.process().clone();
     let size = u64::from(geometry.size).next_multiple_of(0x1000);
@@ -274,6 +442,10 @@ pub fn create_dib_section(geometry: DibGeometry) -> Result<(u32, u32), NtStatus>
         height: geometry.height,
         bottom_up: geometry.bottom_up,
         monochrome: false,
+        format: match geometry.bit_count {
+            4 | 8 => Format::Indexed { bit_count: geometry.bit_count, palette },
+            _ => Format::Bgrx,
+        },
         pixels: Pixels::Section { view, user: KSpinLock::new(Some((pid, user.base as u32))) },
         selected: Selection::default(),
         drawing: KSpinLock::new(()),
@@ -354,6 +526,23 @@ pub fn create_compatible(width: u32, height: u32, monochrome: bool) -> Result<u3
     create_from_bits(width, height, 1, if monochrome { 1 } else { 32 }, None)
 }
 
+/// BITMAP_CopyBitmap : un bitmap neuf, au processus courant, de la taille, de
+/// la profondeur et des pixels du bitmap `handle` (au processus courant, ou
+/// public : ceux d'un curseur), l'octet haut compris (l'alpha d'une icône).
+/// C'est un bitmap du noyau seul, comme ceux de CreateBitmap, même pour la
+/// copie d'une DIB section (GreCreateBitmapEx ne lui donne pas de
+/// `hSecure`). `None` pour un bitmap inconnu ou sans pixels (le bitmap par
+/// défaut), ou sans place.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn copy_bitmap(handle: u32) -> Option<u32> {
+    let surface = lock(handle, super::dc::current_pid())?;
+    let (width, height) = surface.size();
+    let pixels = surface.raw_pixels()?;
+    insert_kernel_bitmap(width, height, surface.is_monochrome(), &pixels).ok()
+}
+
 /// Un bitmap de `pixels` (32 bits, la ligne du haut d'abord) dans une section
 /// vue du noyau seul, au processus courant.
 fn insert_kernel_bitmap(width: u32, height: u32, monochrome: bool, pixels: &[u32]) -> Result<u32, NtStatus> {
@@ -372,6 +561,7 @@ fn insert_kernel_bitmap(width: u32, height: u32, monochrome: bool, pixels: &[u32
         height,
         bottom_up: false,
         monochrome,
+        format: Format::Bgrx,
         pixels: Pixels::Section { view, user: KSpinLock::new(None) },
         selected: Selection::default(),
         drawing: KSpinLock::new(()),
@@ -412,7 +602,8 @@ mod tests {
     #[test]
     fn a_dib_of_32_bits_per_pixel() {
         let geometry = dib_geometry(&header(656, 400, 32, BI_RGB), None);
-        assert_eq!(geometry, Ok(DibGeometry { width: 656, height: 400, bottom_up: true, size: 656 * 400 * 4 }));
+        let expected = DibGeometry { width: 656, height: 400, bottom_up: true, bit_count: 32, size: 656 * 400 * 4 };
+        assert_eq!(geometry, Ok(expected));
         let top_down = dib_geometry(&header(3, -2, 32, BI_RGB), None).unwrap();
         assert_eq!((top_down.height, top_down.bottom_up, top_down.size), (2, false, 24));
         let masks = Some(RGB_MASKS);
@@ -439,8 +630,52 @@ mod tests {
         assert_eq!(refused(header(65536, 65536, 32, BI_RGB)), Some(ERROR_INVALID_PARAMETER), "too big");
         assert_eq!(refused(header(8192, 8193, 32, BI_RGB)), Some(ERROR_INVALID_PARAMETER), "past 256 MiB");
         assert_eq!(refused(header(1, 1, 24, BI_RGB)), Some(ERROR_CALL_NOT_IMPLEMENTED), "24 bits: not yet");
+        assert_eq!(refused(header(1, 1, 1, BI_RGB)), Some(ERROR_CALL_NOT_IMPLEMENTED), "1 bit: not yet");
+        assert_eq!(refused(header(1, 1, 8, BI_BITFIELDS)), Some(ERROR_CALL_NOT_IMPLEMENTED), "masks of 8 bits");
         let other_masks = Some([0xFF, 0xFF00, 0x00FF_0000]);
         assert_eq!(dib_geometry(&header(1, 1, 32, BI_BITFIELDS), other_masks).err(), Some(ERROR_CALL_NOT_IMPLEMENTED));
+    }
+
+    #[test]
+    fn dib_sections_of_four_and_eight_bits() {
+        // A line of 33 pixels of 4 bits takes 17 bytes, aligned on 20.
+        let four = dib_geometry(&header(33, -2, 4, BI_RGB), None).unwrap();
+        assert_eq!((four.bit_count, four.size, four.bottom_up), (4, 40, false));
+        let eight = dib_geometry(&header(3, 2, 8, BI_RGB), None).unwrap();
+        assert_eq!((eight.bit_count, eight.size), (8, 8));
+    }
+
+    const BLACK: ColorRef = ColorRef::rgb(0, 0, 0);
+    const RED: ColorRef = ColorRef::rgb(255, 0, 0);
+    const GRAY: ColorRef = ColorRef::rgb(128, 128, 128);
+    const WHITE: ColorRef = ColorRef::rgb(255, 255, 255);
+
+    #[test]
+    fn the_nearest_colour_of_a_table() {
+        let palette = [BLACK, RED, GRAY, WHITE];
+        assert_eq!(nearest_index(&palette, RED), 1, "exact");
+        assert_eq!(nearest_index(&palette, ColorRef::rgb(200, 10, 10)), 1);
+        assert_eq!(nearest_index(&palette, ColorRef::rgb(140, 120, 130)), 2);
+        assert_eq!(nearest_index(&palette, ColorRef::rgb(250, 250, 240)), 3);
+        assert_eq!(nearest_index(&[GRAY, GRAY], GRAY), 0, "the first of equals");
+    }
+
+    #[test]
+    fn indexed_pixels_decode_and_encode_back() {
+        let palette = [BLACK, RED, GRAY, WHITE];
+        // 3 x 2 of 4 bits, from the bottom line up: bottom 3 2 1, top 1 0 3.
+        let mut bytes = [0x32, 0x10, 0, 0, 0x10, 0x30, 0, 0];
+        let pixels = decode_indexed(&bytes, (3, 2), 4, &palette, true);
+        let bgrx = |c| PixelLayout::Bgrx.pixel(c);
+        assert_eq!(pixels, [bgrx(RED), bgrx(BLACK), bgrx(WHITE), bgrx(WHITE), bgrx(GRAY), bgrx(RED)]);
+        let mut after = pixels.clone();
+        after[1] = bgrx(ColorRef::rgb(250, 5, 0)); // near red
+        after[5] = bgrx(BLACK);
+        encode_indexed(&mut bytes, (3, 2), (4, &palette), true, &pixels, &after);
+        assert_eq!(bytes, [0x32, 0x00, 0, 0, 0x11, 0x30, 0, 0], "two pixels changed, the others kept");
+        // 8 bits, from the top line down; an index past the table is black.
+        let bytes = [3, 9, 0, 0];
+        assert_eq!(decode_indexed(&bytes, (2, 1), 8, &palette, false), [bgrx(WHITE), bgrx(BLACK)]);
     }
 
     #[test]

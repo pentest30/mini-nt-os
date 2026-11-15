@@ -336,6 +336,9 @@ pub struct Key {
     node: Node,
     /// Son nom, le dernier composant de son chemin.
     name: String,
+    /// Son chemin depuis la racine (`\REGISTRY\MACHINE\SOFTWARE`), avec la
+    /// casse des clés ; celui de la cible pour une clé ouverte par un lien.
+    path: String,
 }
 
 /// Le pas d'une recherche.
@@ -355,6 +358,17 @@ impl Key {
     /// n'est nommé dans l'espace d'Ob que pour `\REGISTRY`).
     pub fn key_name(&self) -> &str {
         &self.name
+    }
+
+    /// Son chemin complet (KeyNameInformation, CmpQueryNameInformation) :
+    /// `\REGISTRY` puis le nom de chaque clé jusqu'à elle.
+    pub fn full_name(&self) -> &str {
+        &self.path
+    }
+
+    /// Le chemin de sa sous-clé `name`.
+    fn child_path(&self, name: &str) -> String {
+        format!("{}\\{name}", self.path)
     }
 
     /// Sa sous-clé `name`, ou le lien de ce nom ; `None` sans elle.
@@ -424,14 +438,15 @@ impl Key {
                         Child::Virtual(child) => Node::Virtual(child.clone()),
                         Child::Hive(file) => Node::Hive { file: file.clone(), key: file.root.clone() },
                     };
-                    Key { node, name: name.clone() }
+                    Key { node, name: name.clone(), path: self.child_path(name) }
                 }))
             }
             Node::Hive { file, key } => {
                 let child = key.state.lock().subkeys.get(index as usize).cloned();
                 Ok(child.map(|child| {
                     let name = child.name_string();
-                    Key { node: Node::Hive { file: file.clone(), key: child }, name }
+                    let path = self.child_path(&name);
+                    Key { node: Node::Hive { file: file.clone(), key: child }, name, path }
                 }))
             }
         }
@@ -530,7 +545,8 @@ impl Key {
         }
         let opened = |child: Arc<HiveKey>| {
             let name = child.name_string();
-            Key { node: Node::Hive { file: file.clone(), key: child }, name }
+            let path = self.child_path(&name);
+            Key { node: Node::Hive { file: file.clone(), key: child }, name, path }
         };
         let mut state = key.state.lock();
         if let Some(child) = state.subkeys.iter().find(|k| units_eq_ignore_case(&k.name, &units)) {
@@ -656,14 +672,17 @@ fn parse_key(object: &ObjectRef, remaining: &str) -> Result<Parsed, NtStatus> {
         return Ok(Parsed::Object(object.clone()));
     }
     let rest = remaining.strip_prefix('\\').ok_or(STATUS_OBJECT_NAME_INVALID)?;
-    let mut current = Key { node: key.node.clone(), name: key.name.clone() };
+    let mut current = Key { node: key.node.clone(), name: key.name.clone(), path: key.path.clone() };
     let mut parts = rest.split('\\');
     while let Some(part) = parts.next() {
         if part.is_empty() {
             return Err(STATUS_OBJECT_NAME_INVALID);
         }
         match current.step(part)? {
-            Some(Step::Key(node, name)) => current = Key { node, name },
+            Some(Step::Key(node, name)) => {
+                let path = current.child_path(&name);
+                current = Key { node, name, path };
+            }
             Some(Step::Link(target)) => {
                 let tail: Vec<&str> = parts.collect();
                 return Ok(Parsed::Reparse(if tail.is_empty() {
@@ -688,7 +707,10 @@ pub fn new_registry() -> Arc<Object<Key>> {
     for name in ["MACHINE", "USER"] {
         root.children.lock().push((name.into(), Child::Virtual(Arc::new(VirtualKey::new()))));
     }
-    create_object(&KEY_TYPE, Key { node: Node::Virtual(Arc::new(root)), name: "REGISTRY".into() })
+    create_object(
+        &KEY_TYPE,
+        Key { node: Node::Virtual(Arc::new(root)), name: "REGISTRY".into(), path: "\\REGISTRY".into() },
+    )
 }
 
 /// Monte `file` sous la clé virtuelle `parent` (un chemin sous la racine
@@ -700,6 +722,58 @@ pub fn new_registry() -> Arc<Object<Key>> {
 /// <= DISPATCH_LEVEL.
 pub fn mount(registry: &Key, parent: &str, name: &str, file: HiveFile) -> Result<(), NtStatus> {
     let parent = virtual_key(registry, parent)?;
+    mount_under(&parent, name, file)
+}
+
+/// CmLoadKey (NtLoadKey) : monte `file` sous la clé ouverte `parent`, au nom
+/// `name` (un seul composant), comme `userenv` charge le `NTUSER.DAT` d'un
+/// utilisateur en `\REGISTRY\USER\<SID>`.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` pour une clé d'une ruche (seules les clés
+/// virtuelles, `\REGISTRY\USER` ou `\REGISTRY\MACHINE`, reçoivent une ruche)
+/// ou un nom vide ou de plusieurs composants ;
+/// `STATUS_OBJECT_NAME_COLLISION` si le nom est pris.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn load_hive(parent: &Key, name: &str, file: HiveFile) -> Result<(), NtStatus> {
+    let Node::Virtual(parent) = &parent.node else { return Err(STATUS_INVALID_PARAMETER) };
+    if name.is_empty() || name.contains('\\') {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    mount_under(parent, name, file)
+}
+
+/// CmUnloadKey (NtUnloadKey) : la ruche montée au nom `name` sous la clé
+/// ouverte `parent` est réécrite dans son fichier si elle a changé
+/// ([`HiveFile::flush`]), puis démontée ; les clés déjà ouvertes la gardent.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` pour une clé d'une ruche ;
+/// `STATUS_OBJECT_NAME_NOT_FOUND` sans ruche de ce nom ; celles de la
+/// réécriture, la ruche restant alors montée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL (Io).
+pub fn unload_hive(parent: &Key, name: &str) -> Result<(), NtStatus> {
+    let Node::Virtual(parent) = &parent.node else { return Err(STATUS_INVALID_PARAMETER) };
+    let file = parent
+        .children
+        .lock()
+        .iter()
+        .find_map(|(child, node)| match node {
+            Child::Hive(file) if eq_ignore_case(child, name) => Some(file.clone()),
+            _ => None,
+        })
+        .ok_or(STATUS_OBJECT_NAME_NOT_FOUND)?;
+    file.flush()?;
+    parent.children.lock().retain(|(_, node)| !matches!(node, Child::Hive(other) if Arc::ptr_eq(other, &file)));
+    Ok(())
+}
+
+/// Monte `file` sous la clé virtuelle `parent`, au nom `name`.
+fn mount_under(parent: &VirtualKey, name: &str, file: HiveFile) -> Result<(), NtStatus> {
     let mut children = parent.children.lock();
     if children.iter().any(|(child, _)| eq_ignore_case(child, name)) {
         return Err(STATUS_OBJECT_NAME_COLLISION);
@@ -865,6 +939,29 @@ mod tests {
     }
 
     #[test]
+    fn a_key_knows_its_full_name_with_the_stored_case() {
+        let (ns, registry) = registry();
+        assert_eq!(registry.full_name(), "\\REGISTRY");
+        let session = open(&ns, "\\registry\\machine\\system\\ControlSet001\\control\\SESSION MANAGER").unwrap();
+        assert_eq!(session.full_name(), "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Control\\Session Manager");
+        let set = open(&ns, "\\Registry\\Machine\\System\\CurrentControlSet").unwrap();
+        assert_eq!(set.full_name(), "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001", "a link gives its target");
+        let control: ObjectRef = open(&ns, "\\Registry\\Machine\\System\\ControlSet001\\Control").unwrap();
+        let relative = match ns.lookup("session manager\\knowndlls", Some(&control), false).unwrap() {
+            Lookup::Found(object) => downcast::<Key>(&object).unwrap(),
+            Lookup::Missing { .. } => panic!("missing"),
+        };
+        assert_eq!(
+            relative.full_name(),
+            "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Control\\Session Manager\\KnownDLLs"
+        );
+        let machine = open(&ns, "\\REGISTRY\\MACHINE").unwrap();
+        assert_eq!(machine.subkey_at(0).unwrap().unwrap().full_name(), "\\REGISTRY\\MACHINE\\SYSTEM", "enumerated");
+        let (created, _) = session.create_subkey("New", &[], false).unwrap();
+        assert_eq!(created.full_name(), "\\REGISTRY\\MACHINE\\SYSTEM\\ControlSet001\\Control\\Session Manager\\New");
+    }
+
+    #[test]
     fn virtual_keys_and_hive_keys_enumerate() {
         let (ns, registry) = registry();
         let machine = open(&ns, "\\REGISTRY\\MACHINE").unwrap();
@@ -1000,6 +1097,41 @@ mod tests {
         assert_eq!(kept.facts().unwrap().class, units("Cls"));
         assert_eq!(kept.value(&units("TEXT")).unwrap().unwrap().data, sz("kept"));
         assert!(!again.hive_file().unwrap().is_dirty());
+    }
+
+    #[test]
+    fn a_hive_loads_under_an_open_virtual_key() {
+        let (ns, _) = registry();
+        let users = open(&ns, "\\REGISTRY\\USER").unwrap();
+        let hive = || {
+            let mut root = KeyNode::new("NTUSER");
+            root.subkeys.push(KeyNode::new("Control Panel"));
+            HiveFile::new(Arc::from(build(&root, "NTUSER"))).unwrap()
+        };
+        load_hive(&users, "S-1-5-21-1-2-3-500", hive()).unwrap();
+        assert!(open(&ns, "\\REGISTRY\\USER\\s-1-5-21-1-2-3-500\\Control Panel").is_ok(), "as RegLoadKey loads it");
+        assert_eq!(load_hive(&users, "S-1-5-21-1-2-3-500", hive()).err(), Some(STATUS_OBJECT_NAME_COLLISION));
+        assert_eq!(load_hive(&users, "", hive()).err(), Some(STATUS_INVALID_PARAMETER));
+        assert_eq!(load_hive(&users, "A\\B", hive()).err(), Some(STATUS_INVALID_PARAMETER), "one component");
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        assert_eq!(load_hive(&system, "Other", hive()).err(), Some(STATUS_INVALID_PARAMETER), "a key of a hive");
+    }
+
+    #[test]
+    fn an_unloaded_hive_can_load_again() {
+        let (ns, _) = registry();
+        let users = open(&ns, "\\REGISTRY\\USER").unwrap();
+        let hive = || HiveFile::new(Arc::from(build(&KeyNode::new("NTUSER"), "NTUSER"))).unwrap();
+        load_hive(&users, "S-1-5-21-1-2-3-500", hive()).unwrap();
+        let kept = open(&ns, "\\REGISTRY\\USER\\S-1-5-21-1-2-3-500").unwrap();
+        // As userenv does: load, write, unload, then load for the session.
+        unload_hive(&users, "s-1-5-21-1-2-3-500").unwrap();
+        assert_eq!(open(&ns, "\\REGISTRY\\USER\\S-1-5-21-1-2-3-500").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+        assert!(kept.hive_file().is_some(), "an open key keeps its hive");
+        load_hive(&users, "S-1-5-21-1-2-3-500", hive()).unwrap();
+        assert_eq!(unload_hive(&users, "S-1-5-21-1-2-3-501").err(), Some(STATUS_OBJECT_NAME_NOT_FOUND));
+        let system = open(&ns, "\\REGISTRY\\MACHINE\\SYSTEM").unwrap();
+        assert_eq!(unload_hive(&system, "Select").err(), Some(STATUS_INVALID_PARAMETER), "a key of a hive");
     }
 
     #[test]

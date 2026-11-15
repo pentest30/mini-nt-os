@@ -304,17 +304,18 @@ fn a_directory_is_enumerated() {
     };
     let directory = |path| File::open(&volume, path).unwrap();
 
-    // All of it: `.` and `..`, the attributes, the sizes, the 8.3 name of a
-    // long name; then nothing more.
+    // All of it: `.` and `..`, the attributes, the sizes, the 8.3 name of
+    // every entry (vfatfs gives it even without a long name; it was empty);
+    // then nothing more.
     let system32 = directory("\\WINDOWS\\SYSTEM32");
     let (entries, status) = query(&system32, false, None, false).unwrap();
     assert_eq!(status, STATUS_SUCCESS);
     let dir = FILE_ATTRIBUTE_DIRECTORY;
     let expected: [Both; 5] = [
-        (0, ".".into(), "".into(), dir, 0, 0),
-        (32, "..".into(), "".into(), dir, 0, 0),
-        (64, "NTDLL.DLL".into(), "".into(), FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE, 600, 1024),
-        (96, "CONFIG".into(), "".into(), dir, 0, 0),
+        (0, ".".into(), ".".into(), dir, 0, 0),
+        (32, "..".into(), "..".into(), dir, 0, 0),
+        (64, "NTDLL.DLL".into(), "NTDLL.DLL".into(), FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_ARCHIVE, 600, 1024),
+        (96, "CONFIG".into(), "CONFIG".into(), dir, 0, 0),
         (192, "advapi32_vista.dll".into(), "ADVAPI~1.DLL".into(), FILE_ATTRIBUTE_ARCHIVE, 0, 0),
     ];
     assert_eq!(entries, expected);

@@ -103,7 +103,8 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 **Critères de sortie (spike S2)**
 - [x] `cmd.exe` est interactif : `dir`, `copy`, `type`, `set`, et des scripts `.bat`.
 - [x] Un programme console C (MSVC ou MinGW) qui crée 8 threads synchronisés par des sections critiques se termine correctement.
-- [ ] Les `rostests` `ntdll` et `kernel32` (apitests) dépassent un seuil de réussite fixé au moment du jalon, puis suivi dans le temps.
+- [x] Les `rostests` `ntdll` et `kernel32` (apitests) dépassent un seuil de réussite fixé au moment du jalon, puis suivi dans le temps
+  (seuil 50 % ; ntdll 44/84, kernel32 16/29 ; planchers des scénarios `rostests`, [mesures](compat/m5-rostests.md#mesures)).
 
 ## M6 — win32k, avec le spike S3 en premier
 
@@ -116,8 +117,8 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 - Pilotes `gopfb`, puis `bochs-dispi` (changement de résolution), et i8042 souris.
 
 **Critères de sortie**
-- [ ] `winlogon` (ouverture de session automatique), `userinit` et `explorer` affichent le bureau, la barre des tâches et le menu Démarrer.
-- [ ] Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre.
+- [x] `winlogon` (ouverture de session automatique), `userinit` et `explorer` affichent le bureau, la barre des tâches et le menu Démarrer (`logon`, AMD ; [parcours](compat/m6-logon.md#le-shell--explorerexe)).
+- [x] Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre (`notepad-save`, AMD et Intel ; [parcours vérifié](compat/applications.md)).
 - [ ] La résolution se change depuis le panneau Affichage (QEMU).
 
 ## M7 — Bureau et applications

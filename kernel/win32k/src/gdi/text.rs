@@ -9,10 +9,13 @@
 //! moment du dessin, ou de ceux qu'un appel en lot a pris avec lui
 //! (GdiBCTextOut).
 //!
+//! Avec ETO_GLYPH_INDEX, le texte est fait d'indices de glyphes de la police
+//! (ce que dessine Uniscribe, `usp10`, ScriptTextOut).
+//!
 //! Pas encore : TA_UPDATECP (la position courante), les DC transformés,
-//! le texte de droite à gauche (ETO_RTLREADING), ETO_GLYPH_INDEX (des
-//! glyphes à la place des caractères), les décalages verticaux d'ETO_PDY,
-//! le soulignement et le barré, un fond de mode OPAQUE autre que la cellule.
+//! le texte de droite à gauche (ETO_RTLREADING), les décalages verticaux
+//! d'ETO_PDY, le soulignement et le barré, un fond de mode OPAQUE autre que
+//! la cellule.
 
 use alloc::vec::Vec;
 
@@ -57,7 +60,11 @@ pub fn text_ops(
     attrs: &TextAttrs,
     logfont: &abi::gdi::LogFontW32,
 ) -> Option<Vec<Op>> {
-    let run = fontobj::text_run(logfont, text)?;
+    let run = if options & eto::GLYPH_INDEX != 0 {
+        fontobj::glyph_run(logfont, text)?
+    } else {
+        fontobj::text_run(logfont, text)?
+    };
     let metrics = run.metrics;
     // With dx, the advances are the caller's.
     let offsets: Option<Vec<i32>> = dx.map(|dx| {
@@ -180,6 +187,22 @@ mod tests {
 
     fn attrs(bk_mode: i32, align: u32) -> TextAttrs {
         TextAttrs { font: 0, color: NAVY, background: YELLOW, bk_mode, align }
+    }
+
+    #[test]
+    fn glyph_indices_draw_what_their_characters_draw() {
+        if !crate::font::tests::install_reactos_fonts() {
+            return;
+        }
+        let text = units("Mino");
+        let (face, _) = fontobj::realize(&gui_font()).unwrap();
+        let glyphs = crate::font::glyph_indices(face, &text, None).unwrap();
+        let by_char = text_ops((10, 5), 0, None, &text, None, &attrs(TRANSPARENT, 0), &gui_font()).unwrap();
+        let by_glyph =
+            text_ops((10, 5), eto::GLYPH_INDEX, None, &glyphs, None, &attrs(TRANSPARENT, 0), &gui_font()).unwrap();
+        assert_eq!(by_glyph, by_char);
+        let as_chars = text_ops((10, 5), 0, None, &glyphs, None, &attrs(TRANSPARENT, 0), &gui_font()).unwrap();
+        assert_ne!(as_chars, by_char, "glyph indices are not characters");
     }
 
     #[test]

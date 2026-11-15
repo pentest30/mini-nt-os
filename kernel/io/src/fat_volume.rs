@@ -31,7 +31,13 @@
 //! heure locale ; sans fuseau horaire, elles passent pour de l'UTC.
 //!
 //! Un nom que le format 8.3 ne tient pas, fichier ou répertoire, se crée
-//! avec ses entrées de nom long (VFAT) et un alias 8.3 unique.
+//! avec ses entrées de nom long (VFAT) et un alias 8.3 unique. Un nom qu'il
+//! tient garde sa casse comme vfatfs de ReactOS la garde : tout en
+//! majuscules, son entrée 8.3 seule ; une base ou une extension toute en
+//! minuscules, les drapeaux de casse de NT de l'entrée 8.3 (octet 12 :
+//! 0x08 la base, 0x10 l'extension), qu'Io relit ; une base ou une extension
+//! à casse mixte (`Recent`), des entrées de nom long devant son entrée 8.3,
+//! le nom en majuscules sans `~N`.
 //!
 //! Pas encore : la suppression, le renommage ; le dernier accès à la
 //! lecture.
@@ -109,6 +115,19 @@ pub struct Node {
 }
 
 impl Node {
+    /// Ce qui le désigne sur son volume, tant qu'il existe : la place de son
+    /// entrée (FAT : son cluster et son rang), ou sa référence (NTFS : son
+    /// enregistrement et sa séquence) ; aucune pour la racine.
+    pub fn identity(&self) -> Option<u64> {
+        match (self.entry, self.reference) {
+            (Some(at), _) => Some((u64::from(at.cluster) << 32) | u64::from(at.index)),
+            (None, Some(reference)) => {
+                Some((u64::from(reference.sequence) << 48) | (reference.record & 0xFFFF_FFFF_FFFF))
+            }
+            (None, None) => None,
+        }
+    }
+
     /// Ce que dit `entry`, dont l'entrée est en `at` (`None` : une description seule,
     /// qui ne relit rien).
     fn from_entry(entry: &DirEntry, at: Option<EntryRef>) -> Self {
@@ -134,7 +153,9 @@ impl Node {
 pub struct Listed {
     /// Raw UTF-16 long name, or the 8.3 name when no long name exists.
     pub name: Vec<u16>,
-    /// Raw UTF-16 DOS alias, when paired with a long name.
+    /// Son nom 8.3 (FILE_BOTH_DIR_INFORMATION.ShortName) : sur FAT, celui de
+    /// toute entrée, avec ses drapeaux de casse, `.` et `..` compris, comme
+    /// vfatfs de ReactOS le rend ; sur NTFS, le nom DOS apparié à un nom long.
     pub short_name: Option<Vec<u16>>,
     /// La place de son entrée dans le répertoire, en octets (`FileIndex`).
     pub offset: u32,
@@ -306,7 +327,8 @@ impl FatMount {
     /// Ce que tient le répertoire `directory`, dans l'ordre de ses entrées,
     /// décrit pour NtQueryDirectoryFile : `.` et `..` compris (un
     /// sous-répertoire de FAT les tient ; la racine, non), sans le nom du
-    /// volume. `STATUS_NOT_A_DIRECTORY` pour un fichier.
+    /// volume ; chaque entrée avec son nom 8.3, même sans nom long (vfatfs).
+    /// `STATUS_NOT_A_DIRECTORY` pour un fichier.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
@@ -326,7 +348,8 @@ impl FatMount {
                 let node = Node::from_entry(&listed.entry, None);
                 Listed {
                     name: listed.name.encode_utf16().collect(),
-                    short_name: listed.short_name.map(|name| name.encode_utf16().collect()),
+                    // Its 8.3 name: beside a long name, or the name itself.
+                    short_name: Some(listed.short_name.as_ref().unwrap_or(&listed.name).encode_utf16().collect()),
                     offset: listed.offset,
                     directory: node.directory,
                     attributes: node.attributes,
@@ -484,8 +507,10 @@ impl FatMount {
             Err(FatError::NotFound) => {}
             Err(error) => return Err(device_error(error)),
         }
-        // Un nom que le format 8.3 tient : son entrée 8.3 seule ; sinon ses
-        // entrées de nom long (VFAT) et l'entrée 8.3 de son alias.
+        // Un nom que le format 8.3 tient : son entrée 8.3 seule, avec les
+        // drapeaux de casse de NT, ou, à casse mixte, des entrées de nom long
+        // devant elle ; sinon ses entrées de nom long (VFAT) et l'entrée 8.3
+        // de son alias (`fat::FatVolume::add_entry_long`).
         let at = if as_directory {
             let (cluster, at) =
                 self.fat.create_directory(directory.first_cluster, name, *hint).map_err(device_error)?;

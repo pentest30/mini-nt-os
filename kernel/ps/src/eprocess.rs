@@ -608,6 +608,15 @@ impl EProcess {
     pub fn primary_token(&self) -> Arc<Object<Token>> {
         self.token.lock().clone()
     }
+
+    /// PspAssignPrimaryToken : `token` devient son jeton primaire ; ses
+    /// threads, qui n'empruntent rien, agissent désormais sous lui.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn set_primary_token(&self, token: Arc<Object<Token>>) {
+        *self.token.lock() = token;
+    }
 }
 
 impl Drop for EProcess {

@@ -1,27 +1,32 @@
 //! Buddy allocator — physical page allocator.
 //!
-//! Manages physical memory in power-of-two page blocks (orders 0–10).
-//! Order 0 = 4 KiB (one page), Order 10 = 4 MiB.
+//! Manages physical memory in power-of-two page blocks (orders 0–12).
+//! Order 0 = 4 KiB (one page), order 12 = 16 MiB.
 //!
 //! The PFN database (`mm::pfn`) sits on top of it: every allocation and free
 //! goes through `mm::pfn`, which owns the one instance (`PAGE_FRAMES`) and
 //! checks each page's state.
 //!
-//! # No-alloc design
-//! Free lists use fixed-size arrays instead of Vec so the buddy allocator
-//! can be initialised BEFORE the kernel heap exists (mm::init() is called
-//! before the kernel pool is set up), in a static (`new` is `const`).
-//!
-//! MAX_FREE_ENTRIES per order is 512.  Worst-case with 128 MiB RAM and 31
-//! BootInfo regions the total entries across all levels is ~350, so 512 per
-//! level is a large safety margin.
+//! # Free lists without a limit
+//! Each order's free list is doubly linked through a table of [`FreeLink`]s,
+//! one per page, that the owner hands over before adding memory
+//! ([`BuddyAllocator::set_links`]: `mm::init` takes it from the memory map
+//! with the PFN database, before any allocation). The first page of a free
+//! block holds its order and its neighbours in the list of that order: taking
+//! a block, putting one back, and finding whether a block's buddy is free (to
+//! merge them) are O(1), and a list holds as many blocks as memory can make.
+//! The lists were once fixed arrays of 512 entries per order: a process that
+//! left more than 512 free pages whose buddies were still in use (its page
+//! tables, freed one by one) stopped the system.
 
 /// Page size: 4 KiB.
 pub const PAGE_SIZE: usize = 4096;
 /// Maximum order (2^12 pages = 16 MiB block). Increased for Phase 3 DLL loading.
 pub const MAX_ORDER: usize = 13;
-/// Maximum free-list entries per order level.
-const MAX_FREE_ENTRIES: usize = 512;
+/// No page: the end of a list.
+const NONE: u32 = u32::MAX;
+/// The order of a page that heads no free block.
+const NOT_FREE: u8 = u8::MAX;
 
 /// A physical page frame number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -33,53 +38,36 @@ impl Pfn {
     }
 }
 
-// ── Fixed-size free list ──────────────────────────────────────────────────────
-
-/// A fixed-capacity stack of PFNs — no heap allocation required.
-struct FreeList {
-    data: [u64; MAX_FREE_ENTRIES],
-    count: usize,
+/// The free-list links of a page: for the first page of a free block, the
+/// block's order and its neighbours in the list of that order.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FreeLink {
+    next: u32,
+    prev: u32,
+    order: u8,
 }
 
-impl FreeList {
-    const fn new() -> Self {
-        Self { data: [0u64; MAX_FREE_ENTRIES], count: 0 }
-    }
-
-    fn push(&mut self, pfn: u64) {
-        assert!(self.count < MAX_FREE_ENTRIES, "buddy free list overflow");
-        self.data[self.count] = pfn;
-        self.count += 1;
-    }
-
-    fn pop(&mut self) -> Option<u64> {
-        if self.count == 0 {
-            return None;
-        }
-        self.count -= 1;
-        Some(self.data[self.count])
-    }
-
-    /// Remove the entry at `pos` (swap with last for O(1) removal).
-    fn remove(&mut self, pos: usize) {
-        self.data[pos] = self.data[self.count - 1];
-        self.count -= 1;
-    }
-
-    fn position(&self, pfn: u64) -> Option<usize> {
-        self.data[..self.count].iter().position(|&x| x == pfn)
-    }
+impl FreeLink {
+    /// A page that heads no free block.
+    pub const UNUSED: Self = Self { next: NONE, prev: NONE, order: NOT_FREE };
 }
 
 // ── BuddyAllocator ────────────────────────────────────────────────────────────
 
-/// Buddy allocator state — ~44 KiB in kernel BSS (no heap required).
+/// Buddy allocator state: the head of each order's list; the links live in
+/// the table given by [`set_links`](Self::set_links).
 pub struct BuddyAllocator {
-    /// free_lists[order] = set of free block PFNs of size 2^order pages.
-    free_lists: [FreeList; MAX_ORDER],
+    heads: [u32; MAX_ORDER],
+    links: *mut FreeLink,
+    link_count: u64,
     total_pages: u64,
     free_pages: u64,
 }
+
+// SAFETY: `links` designates a table reserved for the allocator for the life
+// of the system, that only its owner touches (under `mm::pfn::PAGE_FRAMES`).
+unsafe impl Send for BuddyAllocator {}
 
 impl Default for BuddyAllocator {
     fn default() -> Self {
@@ -88,15 +76,91 @@ impl Default for BuddyAllocator {
 }
 
 impl BuddyAllocator {
-    /// Create a new empty allocator (no heap allocation).
+    /// An allocator without memory nor links, for a static (no heap
+    /// allocation).
     pub const fn new() -> Self {
-        Self { free_lists: [const { FreeList::new() }; MAX_ORDER], total_pages: 0, free_pages: 0 }
+        Self { heads: [NONE; MAX_ORDER], links: core::ptr::null_mut(), link_count: 0, total_pages: 0, free_pages: 0 }
+    }
+
+    /// The free lists are linked through `links`, one entry for each of the
+    /// pages 0 to `count - 1`: memory can then be added below `count`.
+    ///
+    /// # Safety
+    /// Once; `links` designates `count` entries writable, reserved for the
+    /// allocator for its life.
+    ///
+    /// # Panics
+    /// If called twice, or for more pages than a link can name.
+    pub unsafe fn set_links(&mut self, links: *mut FreeLink, count: u64) {
+        assert!(self.links.is_null(), "free-list links given twice");
+        assert!(count < u64::from(NONE), "{count} pages: more than the links can name");
+        for i in 0..count as usize {
+            // SAFETY: guaranteed by the caller.
+            unsafe { links.add(i).write(FreeLink::UNUSED) };
+        }
+        self.links = links;
+        self.link_count = count;
+    }
+
+    /// The links of `pfn`.
+    ///
+    /// # Panics
+    /// If `pfn` is beyond the links.
+    fn link(&mut self, pfn: u64) -> &mut FreeLink {
+        assert!(pfn < self.link_count, "page {pfn:#x} beyond the free-list links");
+        // SAFETY: `link_count` entries reserved for the allocator (contract
+        // of `set_links`), `pfn` below.
+        unsafe { &mut *self.links.add(pfn as usize) }
+    }
+
+    /// `pfn` heads a free block of order `order`.
+    fn heads_free_block(&self, pfn: u64, order: usize) -> bool {
+        // SAFETY: as `link`, `pfn` below `link_count`.
+        pfn < self.link_count && unsafe { (*self.links.add(pfn as usize)).order } == order as u8
+    }
+
+    /// Puts the block of order `order` at `pfn` at the head of its list.
+    fn push(&mut self, order: usize, pfn: u64) {
+        let head = self.heads[order];
+        *self.link(pfn) = FreeLink { next: head, prev: NONE, order: order as u8 };
+        if head != NONE {
+            self.link(u64::from(head)).prev = pfn as u32;
+        }
+        self.heads[order] = pfn as u32;
+    }
+
+    /// Takes the block of order `order` at `pfn` out of its list.
+    fn unlink(&mut self, order: usize, pfn: u64) {
+        let FreeLink { next, prev, .. } = *self.link(pfn);
+        if prev == NONE {
+            self.heads[order] = next;
+        } else {
+            self.link(u64::from(prev)).next = next;
+        }
+        if next != NONE {
+            self.link(u64::from(next)).prev = prev;
+        }
+        *self.link(pfn) = FreeLink::UNUSED;
+    }
+
+    /// Takes the first block of the list of order `order`.
+    fn pop(&mut self, order: usize) -> Option<u64> {
+        let head = self.heads[order];
+        if head == NONE {
+            return None;
+        }
+        self.unlink(order, u64::from(head));
+        Some(u64::from(head))
     }
 
     /// Mark a physical region [start_pfn, start_pfn + page_count) as free.
+    ///
+    /// # Panics
+    /// If the region goes beyond the links (`set_links`).
     pub fn add_region(&mut self, start_pfn: Pfn, page_count: u64) {
         let mut pfn = start_pfn.0;
         let end = pfn + page_count;
+        assert!(end <= self.link_count, "pages {pfn:#x}..{end:#x} beyond the free-list links");
         self.total_pages += page_count;
         self.free_pages += page_count;
 
@@ -110,7 +174,7 @@ impl BuddyAllocator {
                 }
                 order -= 1;
             }
-            self.free_lists[order].push(pfn);
+            self.push(order, pfn);
             pfn += 1u64 << order;
         }
     }
@@ -123,11 +187,11 @@ impl BuddyAllocator {
 
         // Find the smallest free block that satisfies the request.
         for o in order..MAX_ORDER {
-            if let Some(pfn) = self.free_lists[o].pop() {
+            if let Some(pfn) = self.pop(o) {
                 // Split excess blocks and put them back.
                 for split in (order..o).rev() {
                     let buddy_pfn = pfn + (1u64 << split);
-                    self.free_lists[split].push(buddy_pfn);
+                    self.push(split, buddy_pfn);
                 }
                 self.free_pages -= 1u64 << order;
                 return Some(Pfn(pfn));
@@ -148,16 +212,15 @@ impl BuddyAllocator {
 
         while current_order < MAX_ORDER - 1 {
             let buddy_pfn = current_pfn ^ (1u64 << current_order);
-            if let Some(pos) = self.free_lists[current_order].position(buddy_pfn) {
-                self.free_lists[current_order].remove(pos);
-                current_pfn = current_pfn.min(buddy_pfn);
-                current_order += 1;
-            } else {
+            if !self.heads_free_block(buddy_pfn, current_order) {
                 break;
             }
+            self.unlink(current_order, buddy_pfn);
+            current_pfn = current_pfn.min(buddy_pfn);
+            current_order += 1;
         }
 
-        self.free_lists[current_order].push(current_pfn);
+        self.push(current_order, current_pfn);
     }
 
     pub fn total_pages(&self) -> u64 {
@@ -169,9 +232,12 @@ impl BuddyAllocator {
 
     /// Calls `f(pfn, order)` for every free block.
     pub fn for_each_free_block(&self, mut f: impl FnMut(Pfn, usize)) {
-        for (order, list) in self.free_lists.iter().enumerate() {
-            for &pfn in &list.data[..list.count] {
-                f(Pfn(pfn), order);
+        for (order, &head) in self.heads.iter().enumerate() {
+            let mut pfn = head;
+            while pfn != NONE {
+                f(Pfn(u64::from(pfn)), order);
+                // SAFETY: a page of a list is below `link_count` (`push`).
+                pfn = unsafe { (*self.links.add(pfn as usize)).next };
             }
         }
     }
@@ -187,10 +253,69 @@ impl BuddyAllocator {
 mod tests {
     use super::*;
 
-    fn make_alloc(page_count: u64) -> BuddyAllocator {
+    /// An allocator with links for `link_count` pages, none free.
+    fn with_links(link_count: u64) -> BuddyAllocator {
+        let links = alloc::boxed::Box::leak(alloc::vec![FreeLink::UNUSED; link_count as usize].into_boxed_slice());
         let mut a = BuddyAllocator::new();
+        // SAFETY: the test's table, never freed.
+        unsafe { a.set_links(links.as_mut_ptr(), link_count) };
+        a
+    }
+
+    fn make_alloc(page_count: u64) -> BuddyAllocator {
+        let mut a = with_links(page_count);
         a.add_region(Pfn(0), page_count);
         a
+    }
+
+    /// The free blocks, by order.
+    fn blocks(a: &BuddyAllocator) -> alloc::vec::Vec<(u64, usize)> {
+        let mut blocks = alloc::vec::Vec::new();
+        a.for_each_free_block(|pfn, order| blocks.push((pfn.0, order)));
+        blocks.sort_unstable();
+        blocks
+    }
+
+    #[test]
+    fn thousands_of_lone_free_pages_fit_in_the_lists() {
+        // Every other page freed: none can merge with its buddy, still in use
+        // (what a process leaves when its page tables go one by one). The old
+        // fixed lists held 512 blocks per order and stopped the system.
+        let pages = 8192u64;
+        let mut a = make_alloc(pages);
+        let taken: alloc::vec::Vec<Pfn> = (0..pages).map(|_| a.alloc(0).expect("a page")).collect();
+        assert!(a.alloc(0).is_none());
+        for pfn in taken.iter().filter(|pfn| pfn.0 % 2 == 0) {
+            a.free(*pfn, 0);
+        }
+        assert_eq!(a.free_pages(), pages / 2);
+        assert_eq!(blocks(&a).len(), (pages / 2) as usize, "4096 lone pages, order 0");
+        for pfn in taken.iter().filter(|pfn| pfn.0 % 2 == 1) {
+            a.free(*pfn, 0);
+        }
+        assert_eq!(a.free_pages(), pages);
+        assert_eq!(blocks(&a), [(0, 12), (4096, 12)], "all merged back into two blocks of 16 MiB");
+    }
+
+    #[test]
+    fn a_block_comes_out_of_the_middle_of_its_list() {
+        let mut a = make_alloc(16);
+        let pages: alloc::vec::Vec<Pfn> = (0..16).map(|_| a.alloc(0).unwrap()).collect();
+        for pfn in [0u64, 4, 8, 12, 2] {
+            a.free(Pfn(pfn), 0);
+        }
+        // 3's buddy, 2, is in the middle of the order-0 list: it comes out
+        // and the two make an order-1 block.
+        a.free(pages[3], 0);
+        assert_eq!(blocks(&a), [(0, 0), (2, 1), (4, 0), (8, 0), (12, 0)]);
+        assert_eq!(a.alloc(1), Some(Pfn(2)));
+    }
+
+    #[test]
+    #[should_panic(expected = "beyond the free-list links")]
+    fn memory_beyond_the_links_is_refused() {
+        let mut a = with_links(8);
+        a.add_region(Pfn(4), 8);
     }
 
     #[test]

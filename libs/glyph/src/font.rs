@@ -331,6 +331,39 @@ impl<'a> Font<'a> {
             .map(|glyph| glyph.0)
     }
 
+    /// The table `tag` of the font, its raw bytes (GetFontData): `None`
+    /// without it.
+    pub fn table(&self, tag: [u8; 4]) -> Option<&'a [u8]> {
+        self.face.raw_face().table(Tag::from_bytes(&tag))
+    }
+
+    /// The number of glyphs in the font (`maxp` numGlyphs).
+    pub fn glyph_count(&self) -> u16 {
+        self.face.number_of_glyphs()
+    }
+
+    /// The default character of the font (`OS/2` usDefaultChar, offset 90,
+    /// from version 2; 0 before, or without the table, as FreeType reads it).
+    pub fn default_char(&self) -> u16 {
+        match self.table_u16(b"OS/2", 0) {
+            Some(version) if version >= 2 => self.table_u16(b"OS/2", 90).unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    /// The A, B and C widths of `glyph` at an em of `em` pixels (16.16)
+    /// (GetCharABCWidths, as ReactOS takes them from FreeType's metrics): A
+    /// from the pen to the glyph's left edge, rounded down; B its width, to
+    /// its right edge rounded up; C what the advance, rounded, leaves after
+    /// it. A glyph without an outline (a space) is all advance.
+    pub fn abc(&self, glyph: u16, em: i64) -> (i32, i32, i32) {
+        let advance = ((self.advance(glyph, em) + ONE / 2) >> 16) as i32;
+        let Some(bounds) = self.face.glyph_bounding_box(GlyphId(glyph)) else { return (0, 0, advance) };
+        let left = (self.scale(i64::from(bounds.x_min), em) >> 16) as i32;
+        let right = ((self.scale(i64::from(bounds.x_max), em) + ONE - 1) >> 16) as i32;
+        (left, right - left, advance - right)
+    }
+
     /// The advance of `glyph`, in font units.
     fn advance_units(&self, glyph: u16) -> Option<i64> {
         self.face.glyph_hor_advance(GlyphId(glyph)).map(i64::from)

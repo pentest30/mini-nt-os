@@ -1,0 +1,18 @@
+features = test-smss
+requires = userland, native
+initial-command = CALC1.EXE
+cpus = default, intel
+timeout = 120
+keys = [calc] ready for 12 + 30 => "12+30="
+keys = [calc] result 42 verified; close now => alt-f4
+keys = [calc] reopened; calculate again => "6*7="
+expect = [calc] result 42 verified; close now
+expect = [calc] first process closed cleanly
+expect = [calc] keyboard result 42 after reopen; PASS
+forbid = [apps] FAIL
+forbid = *** STOP:
+# The visible "42." (Tahoma antialiasing), plus the white display background.
+screen = 236 53 0E0E0E
+screen = 240 59 020202
+screen = 246 59 060606
+screen = 20 50 FFFFFF

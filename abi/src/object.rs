@@ -127,6 +127,63 @@ pub const OBJ_OPENIF: u32 = 0x0000_0080;
 pub const OBJ_OPENLINK: u32 = 0x0000_0100;
 pub const OBJ_KERNEL_HANDLE: u32 = 0x0000_0200;
 
+// NtQueryObject's classes.
+/// ObjectBasicInformation: OBJECT_BASIC_INFORMATION.
+pub const OBJECT_BASIC_INFORMATION: u32 = 0;
+
+/// OBJECT_BASIC_INFORMATION, 32-bit (56 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectBasicInformation32 {
+    pub attributes: u32,
+    pub granted_access: u32,
+    pub handle_count: u32,
+    pub pointer_count: u32,
+    pub paged_pool_charge: u32,
+    pub non_paged_pool_charge: u32,
+    pub reserved: [u32; 3],
+    pub name_info_size: u32,
+    pub type_info_size: u32,
+    pub security_descriptor_size: u32,
+    pub creation_time: i64,
+}
+
+impl ObjectBasicInformation32 {
+    /// Its bytes, as they go to the caller.
+    pub fn to_bytes(&self) -> [u8; 56] {
+        let words = [
+            self.attributes,
+            self.granted_access,
+            self.handle_count,
+            self.pointer_count,
+            self.paged_pool_charge,
+            self.non_paged_pool_charge,
+            self.reserved[0],
+            self.reserved[1],
+            self.reserved[2],
+            self.name_info_size,
+            self.type_info_size,
+            self.security_descriptor_size,
+        ];
+        let mut bytes = [0u8; 56];
+        for (at, word) in words.iter().enumerate() {
+            bytes[4 * at..4 * at + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        bytes[48..].copy_from_slice(&self.creation_time.to_le_bytes());
+        bytes
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<ObjectBasicInformation32>() == 56);
+const _: () = assert!(core::mem::offset_of!(ObjectBasicInformation32, name_info_size) == 36);
+const _: () = assert!(core::mem::offset_of!(ObjectBasicInformation32, creation_time) == 48);
+
+/// sizeof(OBJECT_TYPE_INFORMATION), 32-bit: what TypeInfoSize counts before
+/// the type's name.
+pub const OBJECT_TYPE_INFORMATION_SIZE: u32 = 0x60;
+/// sizeof(OBJECT_NAME_INFORMATION), 32-bit: a UNICODE_STRING.
+pub const OBJECT_NAME_INFORMATION_SIZE: u32 = 8;
+
 // NtSetInformationObject's classes.
 /// OBJECT_HANDLE_FLAG_INFORMATION: two BOOLEANs, Inherit and
 /// ProtectFromClose.

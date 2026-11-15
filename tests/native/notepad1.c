@@ -4,7 +4,9 @@
  * `notepad` puts on the boot disk in the place of winlogon.exe (like `cmd`,
  * see concmd1.c). Like winlogon, it takes WinSta0\Default and loads the US
  * keyboard layout. It checks RegisterWindowMessage (the same message for the
- * same name, whatever its case); then it starts ReactOS's notepad.exe by
+ * same name, whatever its case), CreateAcceleratorTableW (a count beyond
+ * what the kernel takes is refused, without stopping the system) and what
+ * the Save As dialog needs of the kernel (check_save_dialog_needs); then it starts ReactOS's notepad.exe by
  * CreateProcessW and, for PROBE_SECONDS, lists the top-level windows of the
  * desktop with their titles when the list changes, and says when Notepad
  * ends (its exit code). When Notepad's window is there, it checks that
@@ -26,6 +28,7 @@ typedef unsigned long DWORD;
 typedef int BOOL;
 typedef long LONG;
 typedef long LPARAM;
+typedef long long LONGLONG;
 typedef void *HANDLE;
 typedef void *HWND;
 typedef void *HWINSTA;
@@ -61,6 +64,21 @@ typedef struct {
     DWORD dwThreadId;
 } PROCESS_INFORMATION;
 
+typedef struct {
+    WORD Length;
+    WORD MaximumLength;
+    WCHAR *Buffer;
+} UNICODE_STRING;
+
+typedef struct {
+    DWORD Length;
+    HANDLE RootDirectory;
+    UNICODE_STRING *ObjectName;
+    DWORD Attributes;
+    void *SecurityDescriptor;
+    void *SecurityQualityOfService;
+} OBJECT_ATTRIBUTES;
+
 #define MAXIMUM_ALLOWED 0x02000000
 #define KLF_ACTIVATE 0x00000001
 #define WAIT_TIMEOUT 0x102
@@ -76,6 +94,16 @@ __declspec(dllimport) BOOL __stdcall CreateProcessW(const WCHAR *application, WC
                                                     const WCHAR *directory, STARTUPINFOW *startup_info,
                                                     PROCESS_INFORMATION *information);
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
+__declspec(dllimport) DWORD __stdcall GetLogicalDrives(void);
+__declspec(dllimport) UINT __stdcall GetDriveTypeW(const WCHAR *root);
+__declspec(dllimport) LONG __stdcall NtClose(HANDLE handle);
+__declspec(dllimport) LONG __stdcall NtOpenKey(HANDLE *key, DWORD access, OBJECT_ATTRIBUTES *attributes);
+__declspec(dllimport) LONG __stdcall NtQueryKey(HANDLE key, DWORD class, void *information, DWORD length,
+                                                DWORD *result_length);
+__declspec(dllimport) LONG __stdcall NtQueryObject(HANDLE handle, DWORD class, void *information, DWORD length,
+                                                   DWORD *result_length);
+__declspec(dllimport) LONG __stdcall NtQueryInformationProcess(HANDLE process, DWORD class, void *information,
+                                                               DWORD length, DWORD *result_length);
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
 __declspec(dllimport) BOOL __stdcall GetExitCodeProcess(HANDLE process, DWORD *code);
 __declspec(dllimport) DWORD __stdcall GetLastError(void);
@@ -87,6 +115,9 @@ __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, 
 __declspec(dllimport) BOOL __stdcall EnumWindows(WNDENUMPROC procedure, LPARAM parameter);
 __declspec(dllimport) DWORD __stdcall GetWindowThreadProcessId(HWND window, DWORD *process);
 __declspec(dllimport) UINT __stdcall RegisterWindowMessageW(const WCHAR *name);
+__declspec(dllimport) int __stdcall CopyAcceleratorTableW(HANDLE table, void *entries, int count);
+__declspec(dllimport) HANDLE __stdcall CreateAcceleratorTableW(void *entries, int count);
+__declspec(dllimport) BOOL __stdcall DestroyAcceleratorTable(HANDLE table);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int max);
 __declspec(dllimport) HKL __stdcall LoadKeyboardLayoutW(const WCHAR *name, UINT flags);
 __declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
@@ -175,6 +206,93 @@ static void copy_text(char *to, const char *from)
     to[i] = 0;
 }
 
+/* ACCEL. */
+typedef struct {
+    BYTE fVirt;
+    WORD key;
+    WORD cmd;
+} ACCEL;
+
+#define FVIRTKEY 0x01
+#define FCONTROL 0x08
+#define ERROR_NOT_ENOUGH_MEMORY 8
+
+/* CreateAcceleratorTableW (NtUserCreateAcceleratorTable itself in user32): a
+ * table of one entry is made, copied and destroyed; a count of 0xFFFFFFFF,
+ * which the kernel once allocated before looking at it (and stopped the
+ * system), is refused with ERROR_NOT_ENOUGH_MEMORY. */
+static void check_accelerator_tables(void)
+{
+    ACCEL entry = {FVIRTKEY | FCONTROL, 'S', 0x101};
+    HANDLE table = CreateAcceleratorTableW(&entry, 1);
+    int copied = table ? CopyAcceleratorTableW(table, 0, 0) : -1;
+    BOOL destroyed = table && DestroyAcceleratorTable(table);
+    HANDLE huge = CreateAcceleratorTableW(&entry, -1);
+    DWORD error = GetLastError();
+    if (table && copied == 1 && destroyed && !huge && error == ERROR_NOT_ENOUGH_MEMORY)
+        DbgPrint("[notepad] CreateAcceleratorTable: one entry made, a huge count refused\n");
+    else
+        DbgPrint("[notepad] CreateAcceleratorTable: %p %d %d %p %lu\n", table, copied, destroyed, huge, error);
+}
+
+#define OBJ_CASE_INSENSITIVE 0x40
+#define KEY_READ 0x20019
+#define KEY_NAME_INFORMATION 3
+#define OBJECT_BASIC_INFORMATION 0
+#define PROCESS_DEVICE_MAP 23
+#define DRIVE_FIXED 3
+
+/* What the Save As dialog needs of the kernel, by ntdll and kernel32: the
+ * DOS drives (ProcessDeviceMap: GetLogicalDrives returned 0, and the shell
+ * saw no drive, so "C:\" was no path), the full name of a registry key
+ * (NtQueryKey, KeyNameInformation) and the rights of its handle (NtQueryObject,
+ * ObjectBasicInformation): advapi32 finds HKEY_CLASSES_ROOT's keys by them. */
+static void check_save_dialog_needs(void)
+{
+    static const WCHAR classes[] = L"\\Registry\\Machine\\Software\\Classes";
+    static const WCHAR expected[] = L"\\REGISTRY\\MACHINE\\SOFTWARE\\Classes";
+    UNICODE_STRING name = {sizeof classes - 2, sizeof classes, (WCHAR *)classes};
+    OBJECT_ATTRIBUTES attributes = {sizeof attributes, 0, &name, OBJ_CASE_INSENSITIVE, 0, 0};
+    struct {
+        DWORD drive_map;
+        BYTE drive_type[32];
+    } map;
+    struct {
+        DWORD attributes, granted_access, handle_count, pointer_count;
+        DWORD reserved[8];
+        LONGLONG creation_time;
+    } basic;
+    struct {
+        DWORD name_length;
+        WCHAR name[64];
+    } key_name;
+    HANDLE key = 0;
+    DWORD drives = GetLogicalDrives(), length = 0, i;
+    UINT type = GetDriveTypeW(L"C:\\");
+    LONG device_map = NtQueryInformationProcess((HANDLE)-1, PROCESS_DEVICE_MAP, &map, sizeof map, 0);
+    LONG opened = NtOpenKey(&key, KEY_READ, &attributes);
+    LONG too_small = NtQueryKey(key, KEY_NAME_INFORMATION, 0, 0, &length);
+    DWORD needed = length;
+    LONG named = NtQueryKey(key, KEY_NAME_INFORMATION, &key_name, sizeof key_name, &length);
+    LONG mismatch = NtQueryObject(key, OBJECT_BASIC_INFORMATION, &basic, 40, &length);
+    LONG queried = NtQueryObject(key, OBJECT_BASIC_INFORMATION, &basic, sizeof basic, &length);
+    int same_name = named == 0 && key_name.name_length == sizeof expected - 2;
+    for (i = 0; same_name && i < key_name.name_length / 2; i++)
+        same_name = key_name.name[i] == expected[i];
+    if (key)
+        NtClose(key);
+    if ((drives & 4) && type == DRIVE_FIXED && device_map == 0 && (map.drive_map & 4) && map.drive_type[2] == 3 &&
+        opened == 0 && too_small == (LONG)0xC0000023 && needed == 4 + sizeof expected - 2 && same_name &&
+        mismatch == (LONG)0xC0000004 && queried == 0 && length == sizeof basic && basic.granted_access == KEY_READ &&
+        basic.handle_count == 1)
+        DbgPrint("[notepad] Save As needs: drives, key names, handle rights\n");
+    else
+        DbgPrint("[notepad] Save As needs: drives %lx type %u map %lx/%lx/%u key %lx %lx %lu %lx %d object %lx %lx "
+                 "%lu %lx %lu\n",
+                 drives, type, device_map, map.drive_map, map.drive_type[2], opened, too_small, needed, named,
+                 same_name, mismatch, queried, length, basic.granted_access, basic.handle_count);
+}
+
 /* What the probe has seen of Notepad's windows. */
 static int notepad_seen, goto_seen, goto_closed;
 
@@ -244,6 +362,8 @@ DWORD __stdcall GuiStartup(void)
     if (!take_a_desktop())
         ExitProcess(1);
     check_registered_message();
+    check_accelerator_tables();
+    check_save_dialog_needs();
     memset(&startup, 0, sizeof startup);
     startup.cb = sizeof startup;
     startup.lpDesktop = L"WinSta0\\Default";

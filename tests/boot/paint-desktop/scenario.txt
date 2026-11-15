@@ -1,0 +1,27 @@
+# PaintDesktop (NtUserPaintDesktop, win32k::desktop::paint_desktop;
+# tests/native/paintdsk1.c, MinGW, linked to ReactOS's kernel32, user32 and
+# gdi32): PAINTDSK1.EXE takes the place of winlogon.exe and takes
+# WinSta0\Default. explorer's desktop paints its background this way:
+# IntPaintDesktop fills the DC's clip box with the brush of the desktop
+# window's class, COLOR_BACKGROUND (90, 126, 220), while no wallpaper is
+# set. Then:
+# 1. a memory DC of 16 x 16 pixels painted white: after PaintDesktop, its
+#    pixel is the desktop's colour, and the DC keeps the brush it chose;
+# 2. a popup at (100, 100)-(400, 300) whose WM_ERASEBKGND fills its DC
+#    white, then calls PaintDesktop: the screen shows the desktop's colour
+#    inside it.
+# Without the service, PaintDesktop fails and white stays.
+features = test-smss
+requires = userland, native
+initial-command = PAINTDSK1.EXE
+cpus     = default
+timeout  = 120
+
+expect = [paintdsk] ready; the desktop's colour dc7e5a
+expect = [paintdsk] step 1: a memory DC: 1, the desktop's colour 1, its brush kept 1
+expect = [paintdsk] step 2: a window erased by PaintDesktop: 1, erased 1; look now
+screen = 250 200 5A7EDC
+screen = 101 101 5A7EDC
+screen = 398 298 5A7EDC
+
+forbid = *** STOP:

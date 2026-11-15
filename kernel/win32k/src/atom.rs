@@ -234,6 +234,37 @@ pub fn name(atom: u16) -> Option<Vec<u16>> {
     USER_ATOMS.lock().name(atom)
 }
 
+/// RtlQueryAtomInAtomTable, le nom : celui de l'atome en chaîne `atom` de
+/// `table`, ou « #n » pour un atome entier (sous `FIRST_STRING_ATOM`, que la
+/// table ne garde pas) ; `None` pour un atome en chaîne inconnu.
+pub fn query_name(table: &AtomTable, atom: u16) -> Option<Vec<u16>> {
+    if atom < FIRST_STRING_ATOM {
+        return Some(alloc::format!("#{atom}").encode_utf16().collect());
+    }
+    table.name(atom)
+}
+
+/// Le nom de l'atome `atom` de la table de USER, comme le rend
+/// RtlQueryAtomInAtomTable ([`query_name`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn queried_name(atom: u16) -> Option<Vec<u16>> {
+    query_name(&USER_ATOMS.lock(), atom)
+}
+
+/// NtUserGetAtomName, ce qu'il copie d'un nom de `name_len` caractères dans
+/// une UNICODE_STRING de `maximum_length` octets : le nom, pris dans un
+/// tampon de 256 caractères (IntGetAtomName : 255 au plus), tronqué pour
+/// laisser la place du nul ; rien sans la place du nul. Rend le nombre de
+/// caractères copiés, nul en plus.
+pub fn copied_name_units(name_len: usize, maximum_length: u16) -> usize {
+    if maximum_length < 2 {
+        return 0;
+    }
+    name_len.min(MAXIMUM_ATOM_LENGTH).min(usize::from(maximum_length - 2) / 2)
+}
+
 /// Le compte de références de l'atome en chaîne `atom` de la table de USER.
 ///
 /// # IRQL
@@ -248,6 +279,28 @@ mod tests {
 
     fn w(text: &str) -> Vec<u16> {
         text.encode_utf16().collect()
+    }
+
+    #[test]
+    fn an_integer_atom_is_named_by_its_number_after_a_hash() {
+        let mut table = AtomTable::new();
+        let button = table.add(AtomName::String(&w("Button"))).unwrap();
+        assert_eq!(query_name(&table, 0x0123), Some(w("#291")));
+        assert_eq!(query_name(&table, button), Some(w("Button")));
+        assert_eq!(query_name(&table, button + 1), None, "an unknown string atom");
+    }
+
+    /// user32 passes a UNICODE_STRING on its stack (ClassNameToVersion):
+    /// the name written past its MaximumLength overwrote the caller's frame
+    /// (explorer's "Shell_TrayWnd" in its saved registers).
+    #[test]
+    fn the_atom_name_fits_the_callers_string_with_its_nul() {
+        assert_eq!(copied_name_units(13, 2 * 260), 13, "room enough");
+        assert_eq!(copied_name_units(13, 8), 3, "8 bytes: 3 characters and the nul");
+        assert_eq!(copied_name_units(13, 7), 2, "an odd length rounds down");
+        assert_eq!(copied_name_units(13, 2), 0, "the nul alone");
+        assert_eq!(copied_name_units(13, 1), 0, "no room for the nul: nothing");
+        assert_eq!(copied_name_units(300, u16::MAX), MAXIMUM_ATOM_LENGTH, "255 characters at most");
     }
 
     #[test]

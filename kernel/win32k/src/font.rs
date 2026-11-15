@@ -420,15 +420,113 @@ pub fn text_run(face: Face, height: i32, text: &[u16], max_width: Option<i32>, q
     }
     let dot = glyph_of('.');
     let shown = glyphs[..kept].iter().copied().chain(core::iter::repeat_n(dot, if truncated { 3 } else { 0 }));
+    let (placed, width) = place(face, &font, em, shown, quality);
+    Some(TextRun { glyphs: placed, width, metrics: font.metrics(em), truncated })
+}
+
+/// Les glyphes `shown` de `font` (la police `face`) à l'em `em`, placés l'un
+/// après l'autre de leur avance arrondie ; et la largeur du tout.
+fn place(
+    face: Face,
+    font: &Font,
+    em: i64,
+    shown: impl Iterator<Item = u16>,
+    quality: Quality,
+) -> (Vec<PlacedGlyph>, i32) {
     let mut x = 0;
     let mut placed = Vec::new();
     for (index, glyph) in shown.enumerate() {
-        if let Some(bitmap) = rendered(face, &font, em, glyph, quality) {
+        if let Some(bitmap) = rendered(face, font, em, glyph, quality) {
             placed.push(PlacedGlyph { x, index, bitmap });
         }
-        x += advance(glyph);
+        x += ((font.advance(glyph, em) + ONE / 2) >> 16) as i32;
     }
-    Some(TextRun { glyphs: placed, width: x, metrics: font.metrics(em), truncated })
+    (placed, x)
+}
+
+/// Les glyphes `glyphs` (des indices de glyphes, ETO_GLYPH_INDEX) de la
+/// police `face` à la hauteur de LOGFONT `height` ; `None` si elle n'est
+/// pas installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL (rend et alloue).
+pub fn glyph_run(face: Face, height: i32, glyphs: &[u16], quality: Quality) -> Option<TextRun> {
+    let data = file(face)?;
+    let font = Font::parse(&data).ok()?;
+    let em = em_of(&font, height);
+    let (placed, width) = place(face, &font, em, glyphs.iter().copied(), quality);
+    Some(TextRun { glyphs: placed, width, metrics: font.metrics(em), truncated: false })
+}
+
+/// GetGlyphIndicesW (GreGetGlyphIndicesW) : le glyphe de chaque unité
+/// UTF-16 de `text` dans `face` (une paire de substitution n'est pas lue :
+/// ses moitiés sont des caractères absents, comme Windows). Un caractère
+/// absent a `missing` (0xFFFF, GGI_MARK_NONEXISTING_GLYPHS) ou, sans lui,
+/// le glyphe du caractère par défaut de la police (`OS/2` usDefaultChar).
+/// `None` si elle n'est pas installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn glyph_indices(face: Face, text: &[u16], missing: Option<u16>) -> Option<Vec<u16>> {
+    let data = file(face)?;
+    let font = Font::parse(&data).ok()?;
+    let glyph =
+        |unit: u16| char::from_u32(u32::from(unit)).and_then(|c| font.glyph_index(c)).filter(|&glyph| glyph != 0);
+    let default = missing.unwrap_or_else(|| glyph(font.default_char()).unwrap_or(0));
+    Some(text.iter().map(|&unit| glyph(unit).unwrap_or(default)).collect())
+}
+
+/// Le nombre de glyphes de `face` ; `None` si elle n'est pas installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn glyph_count(face: Face) -> Option<u16> {
+    let data = file(face)?;
+    Some(Font::parse(&data).ok()?.glyph_count())
+}
+
+/// GetCharABCWidths (GreGetCharABCWidthsW) : les largeurs A, B et C de
+/// chaque code de `codes` dans `face` à la hauteur de LOGFONT `height` ;
+/// des indices de glyphes avec `indices` (GCABCW_INDICES), sinon des
+/// caractères (le glyphe 0 pour un caractère absent). `None` si la police
+/// n'est pas installée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn abc_widths(face: Face, height: i32, codes: &[u32], indices: bool) -> Option<Vec<(i32, i32, i32)>> {
+    let data = file(face)?;
+    let font = Font::parse(&data).ok()?;
+    let em = em_of(&font, height);
+    let glyph = |code: u32| {
+        if indices {
+            code as u16
+        } else {
+            char::from_u32(code).and_then(|c| font.glyph_index(c)).unwrap_or(0)
+        }
+    };
+    Some(codes.iter().map(|&code| font.abc(glyph(code), em)).collect())
+}
+
+/// GetFontData (ftGdiGetFontData) : le fichier de `face` et la place, dans
+/// lui, de sa table `tag` (MS_MAKE_TAG : son premier caractère dans l'octet
+/// bas), ou du fichier entier pour 0 ; `None` sans la police ou sans la
+/// table.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn font_data(face: Face, tag: u32) -> Option<(Arc<[u8]>, core::ops::Range<usize>)> {
+    let data = file(face)?;
+    if tag == 0 {
+        let whole = 0..data.len();
+        return Some((data, whole));
+    }
+    let range = {
+        let font = Font::parse(&data).ok()?;
+        let table = font.table(tag.to_le_bytes())?;
+        let start = table.as_ptr() as usize - data.as_ptr() as usize;
+        start..start + table.len()
+    };
+    Some((data, range))
 }
 
 /// [`text_run`] dans la police `named` ; `None` si elle n'est pas installée.
@@ -571,6 +669,60 @@ pub(crate) mod tests {
         assert_eq!(char_set_of(None), ANSI_CHARSET, "no OS/2 code pages");
         assert_eq!(char_set_of(Some(1 << 31)), SYMBOL_CHARSET);
         assert_eq!(char_set_of(Some(1 << 9 | 1 << 2)), RUSSIAN_CHARSET, "reserved bits are passed over");
+    }
+
+    #[test]
+    fn glyph_indices_mark_or_default_what_is_missing() {
+        if !install_reactos_fonts() {
+            return;
+        }
+        let tahoma = find("Tahoma", 400, false).unwrap();
+        let glyphs = glyph_indices(tahoma, &units("Ab"), Some(0xFFFF)).unwrap();
+        assert!(glyphs.iter().all(|&glyph| glyph != 0 && glyph != 0xFFFF), "{glyphs:?}");
+        assert_ne!(glyphs[0], glyphs[1]);
+        let missing = [0xE000u16, 0xD800];
+        assert_eq!(
+            glyph_indices(tahoma, &missing, Some(0xFFFF)).unwrap(),
+            [0xFFFF, 0xFFFF],
+            "marked; a lone surrogate"
+        );
+        let default = glyph_indices(tahoma, &missing, None).unwrap();
+        assert_eq!(default[0], default[1], "the default character's glyph");
+        assert!(glyph_count(tahoma).unwrap() > 200);
+    }
+
+    #[test]
+    fn abc_widths_add_up_to_the_advance() {
+        if !install_reactos_fonts() {
+            return;
+        }
+        let tahoma = find("Tahoma", 400, false).unwrap();
+        let text = units("Wi j");
+        let (advances, _) = advances(tahoma, -11, &text).unwrap();
+        let codes: Vec<u32> = text.iter().map(|&unit| u32::from(unit)).collect();
+        let by_char = abc_widths(tahoma, -11, &codes, false).unwrap();
+        for (&(a, b, c), &advance) in by_char.iter().zip(&advances) {
+            assert_eq!(a + b + c, advance);
+        }
+        assert_eq!(by_char[2], (0, 0, advances[2]), "a space is all advance");
+        assert!(by_char.iter().enumerate().all(|(at, abc)| at == 2 || abc.1 > 0), "letters have ink: {by_char:?}");
+        let glyphs: Vec<u32> = glyph_indices(tahoma, &text, None).unwrap().into_iter().map(u32::from).collect();
+        assert_eq!(abc_widths(tahoma, -11, &glyphs, true).unwrap(), by_char, "by glyph index");
+    }
+
+    #[test]
+    fn font_data_gives_a_table_or_the_file() {
+        if !install_reactos_fonts() {
+            return;
+        }
+        let tahoma = find("Tahoma", 400, false).unwrap();
+        let tag = |name: &[u8; 4]| u32::from_le_bytes(*name);
+        let (data, head) = font_data(tahoma, tag(b"head")).unwrap();
+        assert_eq!(head.len(), 54, "the head table");
+        assert_eq!(&data[head.start + 12..head.start + 16], &[0x5F, 0x0F, 0x3C, 0xF5], "its magic number");
+        let (_, whole) = font_data(tahoma, 0).unwrap();
+        assert_eq!(whole, 0..data.len(), "0: the whole file");
+        assert!(font_data(tahoma, tag(b"zzzz")).is_none(), "no such table");
     }
 
     #[test]

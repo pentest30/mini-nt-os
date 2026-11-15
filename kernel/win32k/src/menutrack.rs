@@ -706,12 +706,18 @@ fn only(message: u32) -> Filter {
 
 /// Le premier message de la file du thread, laissé dedans ; attend qu'il en
 /// arrive un (WM_ENTERIDLE à la propriétaire la première fois que la file
-/// est vide). `None` si l'attente finit autrement (le thread finit) ou si la
-/// propriétaire ou la fenêtre du menu courant n'est plus.
+/// est vide). Un message que les crochets WH_SYSMSGFILTER ou WH_MSGFILTER
+/// du thread traitent (MSGF_MENU : `crate::hook::call_msg_filter`) sort de
+/// la file sans revenir. `None` si l'attente finit autrement (le thread
+/// finit) ou si la propriétaire ou la fenêtre du menu courant n'est plus.
 fn next_message(thread: &ThreadInfo, tracker: &Tracker, idle_sent: &mut bool) -> Option<Msg32> {
     loop {
-        if let Some(message) = crate::queue::peek(thread, &Filter { hwnd: 0, min: 0, max: 0 }, false) {
-            return Some(message);
+        if let Some(mut message) = crate::queue::peek(thread, &Filter { hwnd: 0, min: 0, max: 0 }, false) {
+            if crate::hook::call_msg_filter(thread, &mut message, MSGF_MENU as i32) == 0 {
+                return Some(message);
+            }
+            let _ = crate::queue::peek(thread, &only(message.message), true);
+            continue;
         }
         window::get(tracker.owner.handle)?;
         window_of(tracker.current)?;

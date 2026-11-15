@@ -1,7 +1,7 @@
 //! Les services des curseurs et des icônes (`win32k::cursor`) :
 //! NtUserFindExistingCursorIcon, NtUserSetCursorIconData,
 //! NtUserDestroyCursor, NtUserSetCursor, NtUserSetSystemCursor,
-//! NtUserGetIconSize, NtUserDrawIconEx, et
+//! NtUserGetIconSize, NtUserGetIconInfo, NtUserDrawIconEx, et
 //! NtUserCallOneParam(CREATEEMPTYCUROBJECT).
 
 use alloc::vec::Vec;
@@ -9,9 +9,9 @@ use alloc::vec::Vec;
 use abi::ntstatus::NtStatus;
 use abi::peb32::UnicodeString32;
 use abi::user::{CursorData32, FindExistingCurIconParam32};
-use abi::winerror::ERROR_INVALID_CURSOR_HANDLE;
-use ke::usermem::{copy_from_user, UserPtr};
-use win32k::cursor::Resource;
+use abi::winerror::{dos_error, ERROR_INVALID_CURSOR_HANDLE, ERROR_INVALID_PARAMETER};
+use ke::usermem::{copy_from_user, copy_to_user, UserPtr};
+use win32k::cursor::{NameReply, Resource};
 
 /// Met l'erreur de Win32 `error` du thread et rend `value`.
 fn fail(error: u32, value: u32) -> NtStatus {
@@ -130,6 +130,65 @@ pub(super) fn nt_user_get_icon_size(arguments: &[u32]) -> NtStatus {
     };
     let written = UserPtr::<u32>::new(cx).write(&width).and_then(|()| UserPtr::<u32>::new(cy).write(&height));
     NtStatus(u32::from(written.is_ok()))
+}
+
+/// Le UNICODE_STRING de l'appelant en `address` reçoit ce que `reply` en
+/// fait : d'abord les octets dans son tampon, puis ses champs.
+fn give_name(address: u32, reply: impl FnOnce(UnicodeString32) -> NameReply) -> Result<(), NtStatus> {
+    let string = UserPtr::<UnicodeString32>::new(address);
+    let NameReply { string: answer, bytes } = reply(string.read()?);
+    if !bytes.is_empty() {
+        copy_to_user(u64::from(answer.buffer), &bytes)?;
+    }
+    string.write(&answer)
+}
+
+/// NtUserGetIconInfo(hCurIcon, IconInfo, lpModule, lpResName, pbpp,
+/// bInternal) : BOOL. `IconInfo` reçoit l'ICONINFO du curseur, avec des
+/// copies de ses bitmaps données au processus (`win32k::cursor::icon_info`),
+/// et `pbpp` la profondeur de ses couleurs ; `lpModule` et `lpResName` le
+/// module et le nom de la ressource dont il vient, ou la place qu'il leur
+/// faut (`win32k::cursor::module_reply`, `resource_reply`). FALSE sans rien
+/// à remplir (`ERROR_INVALID_PARAMETER`), pour un curseur qui n'existe pas
+/// (`ERROR_INVALID_CURSOR_HANDLE`), une adresse qui faute (les copies sont
+/// alors supprimées), un nom demandé d'un curseur qui ne vient pas d'une
+/// ressource (sans erreur, comme ReactOS : CopyImage passe alors à une copie
+/// par GetIconInfo).
+pub(super) fn nt_user_get_icon_info(arguments: &[u32]) -> NtStatus {
+    let [handle, info, module, resource, bpp, _internal] = arguments[..6] else { unreachable!("6 arguments") };
+    if info == 0 && module == 0 && resource == 0 {
+        return fail(ERROR_INVALID_PARAMETER, 0);
+    }
+    let Some(cursor) = win32k::cursor::get(handle) else { return fail(ERROR_INVALID_CURSOR_HANDLE, 0) };
+    if info != 0 {
+        let icon = win32k::cursor::icon_info(&cursor);
+        let written = copy_to_user(u64::from(info), icon.record.as_bytes()).and_then(|()| {
+            if bpp != 0 {
+                UserPtr::<u32>::new(bpp).write(&icon.bpp)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(status) = written {
+            for copy in [icon.record.hbm_mask, icon.record.hbm_color].into_iter().filter(|&copy| copy != 0) {
+                win32k::gdi::delete_object(copy);
+            }
+            return fail(dos_error(status), 0);
+        }
+    }
+    if module != 0 {
+        let Some(name) = cursor.module() else { return NtStatus(0) };
+        if let Err(status) = give_name(module, |asked| win32k::cursor::module_reply(asked, &name)) {
+            return fail(dos_error(status), 0);
+        }
+    }
+    if resource != 0 {
+        let Some(name) = cursor.resource() else { return NtStatus(0) };
+        if let Err(status) = give_name(resource, |asked| win32k::cursor::resource_reply(asked, &name)) {
+            return fail(dos_error(status), 0);
+        }
+    }
+    NtStatus(1)
 }
 
 /// NtUserDrawIconEx(hdc, xLeft, yTop, hIcon, cxWidth, cyWidth,

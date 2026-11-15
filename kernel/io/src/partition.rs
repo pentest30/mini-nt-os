@@ -32,6 +32,19 @@ impl<D: BlockDevice> PartitionDevice<D> {
         }
         self.first.checked_add(lba).ok_or(FatError::Io)
     }
+
+    /// The device's sector of the run of `len` bytes (whole sectors) from
+    /// `lba`, all inside the partition.
+    fn translate_run(&self, lba: u64, len: usize) -> Result<u64, FatError> {
+        let size = self.disk.sector_size() as usize;
+        if len == 0 || size == 0 || !len.is_multiple_of(size) {
+            return Err(FatError::Io);
+        }
+        if lba.checked_add((len / size) as u64).is_none_or(|end| end > self.sectors) {
+            return Err(FatError::Io);
+        }
+        self.first.checked_add(lba).ok_or(FatError::Io)
+    }
 }
 
 impl<D: BlockDevice> BlockDevice for PartitionDevice<D> {
@@ -40,6 +53,9 @@ impl<D: BlockDevice> BlockDevice for PartitionDevice<D> {
     }
     fn read_sector(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
         self.disk.read_sector(self.translate(lba, out.len())?, out)
+    }
+    fn read_sectors(&self, lba: u64, out: &mut [u8]) -> Result<(), FatError> {
+        self.disk.read_sectors(self.translate_run(lba, out.len())?, out)
     }
     fn write_sector(&self, lba: u64, data: &[u8]) -> Result<(), FatError> {
         self.disk.write_sector(self.translate(lba, data.len())?, data)
@@ -143,5 +159,20 @@ mod tests {
         for (first, size) in [(u64::MAX, 2), (99, 2), (0, 0)] {
             assert!(PartitionDevice::new(Disk(last.clone()), 100, first, size).is_err());
         }
+    }
+
+    #[test]
+    fn partition_reads_a_run_in_one_call_inside_its_bounds() {
+        let last = Arc::new(AtomicU64::new(0));
+        let p = PartitionDevice::new(Disk(last.clone()), 100, 10, 20).unwrap();
+        // The default read_sectors reads one sector at a time: the last one
+        // read shows where the run went.
+        p.read_sectors(16, &mut [0; 4 * 512]).unwrap();
+        assert_eq!(last.load(Ordering::SeqCst), 29, "sectors 16 to 19 of the partition: 26 to 29 of the disk");
+        assert_eq!(p.read_sectors(17, &mut [0; 4 * 512]), Err(FatError::Io), "past its end");
+        assert_eq!(p.read_sectors(0, &mut [0; 700]), Err(FatError::Io), "not whole sectors");
+        assert_eq!(p.read_sectors(0, &mut []), Err(FatError::Io), "nothing");
+        assert_eq!(p.read_sectors(u64::MAX, &mut [0; 512]), Err(FatError::Io));
+        assert_eq!(last.load(Ordering::SeqCst), 29, "nothing read by a refused run");
     }
 }

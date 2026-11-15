@@ -7,7 +7,7 @@ use core::mem::size_of;
 
 use abi::ntstatus::NtStatus;
 use abi::user::{Accel32, WM_CHAR, WM_KEYDOWN, WM_SYSCHAR, WM_SYSKEYDOWN};
-use abi::winerror::{dos_error, ERROR_INVALID_ACCEL_HANDLE, ERROR_INVALID_WINDOW_HANDLE};
+use abi::winerror::{dos_error, ERROR_INVALID_ACCEL_HANDLE, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY};
 use ke::usermem::{copy_from_user, copy_to_user, probe_for_read, probe_for_write};
 use win32k::accel::{self, Accel};
 
@@ -23,34 +23,48 @@ fn table(handle: u32) -> Result<Vec<Accel>, NtStatus> {
     accel::entries(handle).ok_or_else(|| fail(ERROR_INVALID_ACCEL_HANDLE))
 }
 
+/// Le plus d'entrées qu'une table prend (384 Kio d'ACCEL) : le compte vient
+/// de l'appelant, et la copie comme la table sont prises au pool non paginé.
+/// Au-delà, la table est refusée comme une allocation qui échoue chez
+/// ReactOS (NULL, ERROR_NOT_ENOUGH_MEMORY).
+const MAX_ENTRIES: usize = 0x1_0000;
+
 /// NtUserCreateAcceleratorTable(Entries, EntriesCount) : une table des
 /// `EntriesCount` ACCEL de l'appelant (`win32k::accel::create`) ; rend son
-/// handle. 0 sans entrée, pour des entrées illisibles (l'erreur de la
-/// copie) ou une table des handles pleine.
+/// handle. 0 sans entrée ; 0 et ERROR_NOT_ENOUGH_MEMORY pour plus de
+/// [`MAX_ENTRIES`] entrées ou sans mémoire ; 0 pour des entrées illisibles
+/// (l'erreur de la copie) ou une table des handles pleine. La plage de
+/// l'appelant est sondée, et le compte borné, avant toute allocation.
 pub(super) fn nt_user_create_accelerator_table(arguments: &[u32]) -> NtStatus {
-    let (address, count) = (arguments[0], arguments[1]);
+    let (address, count) = (arguments[0], arguments[1] as usize);
     if address == 0 || count == 0 {
         return NtStatus(0);
     }
-    let Some(length) = (count as usize).checked_mul(size_of::<Accel32>()) else { return NtStatus(0) };
-    let mut bytes = alloc::vec![0u8; length];
-    let read =
-        probe_for_read(u64::from(address), length, 4).and_then(|()| copy_from_user(&mut bytes, u64::from(address)));
-    if let Err(status) = read {
+    if count > MAX_ENTRIES {
+        return fail(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    let length = count * size_of::<Accel32>();
+    if let Err(status) = probe_for_read(u64::from(address), length, 4) {
         return fail(dos_error(status));
     }
-    let entries = bytes
-        .chunks_exact(size_of::<Accel32>())
-        .map(|entry| {
-            let user = Accel32 {
-                f_virt: entry[0],
-                pad: entry[1],
-                key: u16::from_le_bytes([entry[2], entry[3]]),
-                cmd: u16::from_le_bytes([entry[4], entry[5]]),
-            };
-            Accel::from_user(&user)
-        })
-        .collect();
+    let mut bytes = Vec::new();
+    let mut entries = Vec::new();
+    if bytes.try_reserve_exact(length).is_err() || entries.try_reserve_exact(count).is_err() {
+        return fail(ERROR_NOT_ENOUGH_MEMORY);
+    }
+    bytes.resize(length, 0);
+    if let Err(status) = copy_from_user(&mut bytes, u64::from(address)) {
+        return fail(dos_error(status));
+    }
+    entries.extend(bytes.chunks_exact(size_of::<Accel32>()).map(|entry| {
+        let user = Accel32 {
+            f_virt: entry[0],
+            pad: entry[1],
+            key: u16::from_le_bytes([entry[2], entry[3]]),
+            cmd: u16::from_le_bytes([entry[4], entry[5]]),
+        };
+        Accel::from_user(&user)
+    }));
     match accel::create(entries) {
         Ok(handle) => NtStatus(handle),
         Err(status) => fail(dos_error(status)),

@@ -17,13 +17,16 @@
 //!
 //! Les DC pris pour une fenêtre détruite retournent au repos
 //! ([`free_window_dcs`], DceFreeWindowDCE), comme ceux d'un processus qui se
-//! termine ([`free_process_dcs`]).
+//! termine ([`free_process_dcs`]). Une fenêtre qui bouge, change de taille
+//! ou de rang refait la région des DC pris ([`reset_active_dcs`],
+//! DceResetActiveDCEs) : `explorer` garde le DC de son bureau, pris quand
+//! celui-ci était au-dessus de tout, et peint son fond par lui une fois le
+//! bureau sous la barre des tâches.
 //!
 //! Pas encore, journalisé une fois : les DC d'une fenêtre ou d'une classe
 //! (`CS_OWNDC`, `CS_CLASSDC` : un DC du cache à la place), le DC du parent
 //! (`CS_PARENTDC`, `DCX_PARENTCLIP` : la fenêtre seule), `DCX_INTERSECTUPDATE`
-//! (ignoré), les DC dont la fenêtre bouge pendant qu'ils sont pris
-//! (DceResetActiveDCEs).
+//! (ignoré).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -53,6 +56,10 @@ struct Dce {
     /// La région d'un client qui le coupe (`hrgnClip`), à supprimer à sa
     /// remise.
     clip_region: Option<u32>,
+    /// Ce qui le coupe, à l'écran (la région du client ou du noyau, ou le
+    /// rectangle de la fenêtre), pour refaire sa région quand des fenêtres
+    /// bougent.
+    cut: Option<Region>,
     busy: bool,
 }
 
@@ -238,7 +245,7 @@ pub fn get_dc(window: Option<&Window>, clip: Clip<'_>, flags: u32) -> Result<u32
         }
     };
     let handle = window.map_or(0, |window| window.handle);
-    let (hdc, dc) = take_cache_entry(handle, flags, clip_region)?;
+    let (hdc, dc) = take_cache_entry(handle, flags, clip_region, region.clone())?;
     let (vis, origin) = visible(window, flags, region.as_ref());
     if let Err(status) = dc::take(hdc, &dc, vis, origin) {
         set_free(hdc);
@@ -259,17 +266,84 @@ pub fn get_dc_ex(window: &Window, clip: Option<&Region>, flags: u32) -> Result<u
 }
 
 /// Un DC du cache au repos, pris pour `window` ; un neuf s'il n'y en a pas.
-fn take_cache_entry(window: u32, flags: u32, clip_region: Option<u32>) -> Result<(u32, Arc<Dc>), NtStatus> {
+fn take_cache_entry(
+    window: u32,
+    flags: u32,
+    clip_region: Option<u32>,
+    cut: Option<Region>,
+) -> Result<(u32, Arc<Dc>), NtStatus> {
     {
         let mut cache = CACHE.lock();
         if let Some(entry) = cache.iter_mut().find(|entry| !entry.busy) {
             (entry.window, entry.flags, entry.clip_region, entry.busy) = (window, flags, clip_region, true);
+            entry.cut = cut;
             return Ok((entry.hdc, entry.dc.clone()));
         }
     }
     let (hdc, dc) = dc::create_display_dc()?;
-    CACHE.lock().push(Dce { hdc, dc: dc.clone(), window, flags, clip_region, busy: true });
+    CACHE.lock().push(Dce { hdc, dc: dc.clone(), window, flags, clip_region, cut, busy: true });
     Ok((hdc, dc))
+}
+
+/// `window` est `ancestor` ou l'une de ses filles (IntIsChildWindow).
+fn is_within(window: &Window, ancestor: u32) -> bool {
+    let mut current = Some(window.handle);
+    while let Some(hwnd) = current.filter(|&hwnd| hwnd != 0) {
+        if hwnd == ancestor {
+            return true;
+        }
+        current = crate::window::get(hwnd).map(|window| window.state().parent);
+    }
+    false
+}
+
+/// DceResetActiveDCEs : `moved` a bougé, changé de taille, de rang ou de
+/// visibilité (SetWindowPos). Chaque DC du cache pris pour une fenêtre
+/// refait sa région visible (DceUpdateVisRgn), que la fenêtre soit `moved`
+/// ou non : une sœur au-dessus a pu bouger. Celui de `moved` ou d'une de
+/// ses filles suit en plus son coin (son origine), et ce qui le coupe est
+/// décalé d'autant.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn reset_active_dcs(moved: &Window) {
+    /// Un DC pris, tel qu'il était pris.
+    struct Taken {
+        hdc: u32,
+        dc: Arc<Dc>,
+        window: u32,
+        flags: u32,
+        cut: Option<Region>,
+    }
+    let taken: Vec<Taken> = CACHE
+        .lock()
+        .iter()
+        .filter(|entry| entry.busy && entry.window != 0)
+        .map(|entry| Taken {
+            hdc: entry.hdc,
+            dc: entry.dc.clone(),
+            window: entry.window,
+            flags: entry.flags,
+            cut: entry.cut.clone(),
+        })
+        .collect();
+    for Taken { hdc, dc, window, flags, mut cut } in taken {
+        let Some(window) = crate::window::get(window) else { continue };
+        if is_within(&window, moved.handle) {
+            let state = window.state();
+            let corner = if flags & DCX_WINDOW == 0 { state.client } else { state.window };
+            let old = dc.state().origin;
+            if let Some(region) = cut.as_mut() {
+                region.offset(corner.left - old.0, corner.top - old.1);
+            }
+            let mut cache = CACHE.lock();
+            if let Some(entry) = cache.iter_mut().find(|entry| entry.hdc == hdc && entry.busy) {
+                entry.cut.clone_from(&cut);
+            }
+        }
+        let (vis, origin) = visible(Some(&window), flags, cut.as_ref());
+        dc.change(|state| (state.vis, state.origin) = (vis, origin));
+    }
 }
 
 /// Le DC `hdc` du cache est de nouveau au repos ; rend la région d'un
@@ -280,6 +354,7 @@ fn set_free(hdc: u32) -> Option<u32> {
     let cut = entry.flags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN) != 0 && entry.flags & DCX_KEEPCLIPRGN == 0;
     let clip_region = entry.clip_region.take().filter(|_| cut);
     (entry.window, entry.flags, entry.busy) = (0, 0, false);
+    entry.cut = None;
     clip_region
 }
 

@@ -827,7 +827,7 @@ gardé. co_IntCreateScrollBars de ReactOS recalcule aussi la zone cliente (co_Wi
 pas, la zone cliente étant déjà celle du style.
 
 Ce qui manque : les barres des contrôles (SB_CTL, la classe ScrollBar : leur SBCALC dans les octets de plus du `WND`,
-journalisé une fois), ScrollWindowEx et ScrollDC (le contenu ne défile pas encore : NtUserScrollWindowEx est le
+journalisé une fois ; faites à l'étape 33), ScrollWindowEx et ScrollDC (le contenu ne défile pas encore : NtUserScrollWindowEx est le
 prochain manque de `consrv` et de la listview), les barres d'une fenêtre de droite à gauche, les thèmes ; HideCaret et
 ShowCaret, que `user32` appelle autour du clic (journalisés, sans effet). Les symboles que `user32` dessine lui-même
 pendant un clic sont lissés, ceux du noyau monochromes (la qualité de la police Marlett de DrawFrameControl).
@@ -1122,7 +1122,7 @@ NtUserSetWindowPlacement), ReactOS comme spécification ; `win32k::winpos`, `abi
 Écarts, faute de réduire et d'agrandir : pas de place gardée à part (`InternalPos` : le rectangle normal d'une
 fenêtre réduite ou agrandie, les places de l'icône et de la fenêtre agrandie) ; une fenêtre réduite ou agrandie
 n'est pas déplacée (journalisé une fois) ; WPF_ASYNCWINDOWPLACEMENT est fait tout de suite (journalisé une fois) ;
-la tolérance de longueur pour un module qui attend Windows 3.x manque. Les deux premiers sont levés à l'étape 26
+la tolérance de longueur pour un module qui attend Windows 3.x manque. Les deux premiers sont levés à l'étape 35
 (réduire, agrandir, rétablir) ; les deux derniers restent.
 
 Ce que le Bloc-notes montre ensuite (journal du scénario) : NtUserRegisterWindowMessage (FINDMSGSTRING : rendu 0,
@@ -1148,7 +1148,7 @@ translate_accelerator) pour la recherche de l'item ; `win32k::accel`, `win32k::w
 |---|---|
 | RegisterWindowMessage | l'atome du nom dans la table des atomes de USER (`win32k::atom`) : un message de 0xC000 à 0xFFFF, le même pour le même nom sans tenir compte de la casse ; 0 pour un nom nul (ERROR_INVALID_PARAMETER) ou un thread sans bureau. Sans lui, le Bloc-notes avait FINDMSGSTRING = 0 et aurait pris WM_NULL pour le message de sa recherche |
 | NtUserQueryWindow | le PID et le TID du thread de la fenêtre (GetWindowThreadProcessId) ; pour une fenêtre console de `csrss` (sa classe est celle que `consrv` donne par NtUserConsoleControl), ceux du processus qui mène la console, dans ses octets de plus (0 et 4) ; la fenêtre active et celle qui a le clavier dans la file de son thread ; le PID (REAL_ID) ; si sa file est au premier plan ; 0 pour ISHUNG et l'IME |
-| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon |
+| Les tables (`accel::create`, `entries`, `destroy`) | un objet USER du processus (TYPE_ACCELTABLE), rendu par DestroyAcceleratorTable ou à la fin du processus ; `fVirt` sans FVIRT_TBL_END ; la touche d'une entrée sans FVIRTKEY est un caractère ANSI (son octet bas) ; CopyAcceleratorTable rend le nombre d'entrées sans tampon ; au plus 65 536 entrées (au-delà, NULL et ERROR_NOT_ENOUGH_MEMORY, comme une allocation qui échoue chez ReactOS), la plage de l'appelant sondée et le compte borné avant toute allocation, les allocations faillibles |
 | TranslateAccelerator (`accel::translate`) | WM_KEYDOWN, WM_SYSKEYDOWN : une entrée FVIRTKEY de même touche, Maj, Ctrl et Alt du thread exactement ; WM_CHAR, WM_SYSCHAR : une entrée de caractère de même code, Alt seul comparé ; la commande, si c'est un item du menu de la fenêtre (non fille) : WM_INITMENU, puis WM_INITMENUPOPUP du menu qui porte l'item et sa position, sauf souris capturée ; WM_COMMAND (HIWORD 1) sauf fenêtre désactivée, item désactivé ou grisé (après WM_INITMENUPOPUP), fenêtre réduite ; le message est alors traduit |
 
 Écarts voulus avec ReactOS : il cherche l'item du menu à la position égale à la commande (MF_BYPOSITION), et donne
@@ -1173,10 +1173,408 @@ rendus) ; Ctrl+G tapé par QEMU (« ^G » : WM_CHAR 7 par TranslateMessage, puis
 line », Échap la ferme, et le contrôle Edit est repeint là où elle était.
 
 Tests : hôte (`accel` : touches virtuelles et modificateurs, caractères et Alt, FVIRT_TBL_END et l'ANSI, les
-messages du menu, ce qui empêche WM_COMMAND) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
+messages du menu, ce qui empêche WM_COMMAND) ; la sonde crée, copie et détruit une table d'une entrée, et
+CreateAcceleratorTableW d'un compte de 0xFFFFFFFF est refusé (la revue de la PR 125 : le noyau allouait 24 Gio
+avant de regarder le compte, et l'échec de l'allocation arrêtait le système ; le scénario le reproduit sans le
+correctif) ; `notepad` sur AMD et Intel, qui échoue sans le WM_COMMAND de
 l'accélérateur (mutation) ; `cmd`, `desktop-launch`, `console` (qui appelaient NtUserQueryWindow) sur AMD et Intel.
 
-## Étape 26 : réduire, agrandir et rétablir (ShowWindow, les boutons du titre, le double-clic)
+## Étape 26 : le texte d'Uniscribe (GetFontData, GetGlyphIndicesW, GetCharABCWidths, ETO_GLYPH_INDEX)
+
+Le contrôle Edit de `user32` (repris de Wine) place et dessine son texte par Uniscribe (`usp10` :
+ScriptStringAnalyse, ScriptShape, ScriptPlace, ScriptTextOut). Uniscribe lit la police du DC : GetTextMetricsW,
+GetOutlineTextMetricsW (facultatif), GetFontData de la table `head` (une police TrueType : les glyphes viennent de
+sa `cmap`), GetGlyphIndicesW, GetCharABCWidthsI (une police TMPF_TRUETYPE), puis dessine par ExtTextOutW avec
+ETO_GLYPH_INDEX. Sans ces services, il prenait la police pour une police bitmap : les codes des caractères passaient
+pour des glyphes, leurs avances valaient 0, et tout le texte d'une ligne se superposait.
+
+`freetype.c` et `font.c` de win32k (ftGdiGetFontData, GreGetGlyphIndicesW, NtGdiGetGlyphIndicesWInternal,
+GreGetCharABCWidthsW, NtGdiGetCharABCWidthsW, NtGdiGetFontData), ReactOS comme spécification ; `libs/glyph`
+(`Font::table`, `glyph_count`, `default_char`, `abc`), `win32k::font` (`font_data`, `glyph_indices`, `glyph_count`,
+`abc_widths`, `glyph_run`), `sys::gdi`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| GetFontData | la table demandée (MS_MAKE_TAG : son premier caractère dans l'octet bas), ou le fichier entier pour 0 : sa taille sans tampon, sinon ses octets depuis `Offset`, au plus sa taille ; GDI_ERROR sans la table ou au-delà d'elle |
+| GetGlyphIndicesW | le glyphe de chaque unité UTF-16 par la `cmap` (Unicode, sinon symboles) ; une moitié de paire de substitution est un caractère absent ; un caractère absent a 0xFFFF (GGI_MARK_NONEXISTING_GLYPHS) ou le glyphe du caractère par défaut (`OS/2` usDefaultChar dès la version 2, 0 avant) ; sans rien, le nombre de glyphes |
+| GetCharABCWidths(I) | A : du stylo au bord gauche du glyphe, arrondi vers le bas ; B : jusqu'au bord droit arrondi vers le haut ; C : ce que l'avance arrondie laisse ; tout en avance pour un glyphe sans contour ; des caractères ou des indices (GCABCW_INDICES) ; des entiers pour tout drapeau, des ABCFLOAT sans drapeau (comme ReactOS) |
+| ExtTextOut ETO_GLYPH_INDEX | le texte est fait d'indices de glyphes, rendus et placés comme les caractères |
+
+Ce qui manque : GetOutlineTextMetricsW (rend 0 : Uniscribe s'en passe), GetTextExtentExPointI (GTEF_INDICES), les
+collections TrueType (`ttcf`) dans GetFontData, le hinting des largeurs ABC (ReactOS les prend de FreeType, avec
+hinting ; Mino des contours, sans).
+
+Le banc d'essai : le scénario `notepad` tape « Hello, Mino! », Entrée, « Line 2 » dans le contrôle Edit du
+Bloc-notes : le texte est à sa place (la hampe du H, le « ! » douze caractères plus loin, le L de la seconde ligne),
+et la barre d'état dit « Line 2, column 7 ».
+
+Tests : hôte (`font` : glyphes absents marqués ou par défaut, A + B + C = l'avance, par caractère ou par glyphe,
+`head` et le fichier entier ; `gdi::text` : des indices dessinent ce que dessinent leurs caractères) ; `notepad` et
+`desktop-launch` (le gestionnaire des tâches passait par ces services) sur AMD et Intel.
+
+## Étape 27 : la boîte Enregistrer sous trouve ses dossiers (KeyNameInformation, ObjectBasicInformation, ProcessDeviceMap)
+
+Ctrl+S ouvre la boîte « Save As » de `comdlg32`, qui parcourt le shell (`shell32`, `browseui`). Elle s'affichait,
+mais vide (« Save in » sans dossier, la liste sans fichiers), et un nom tapé rendait « Path does not exist ». Trois
+services du noyau manquaient en chemin :
+
+| Service | Ce que fait Mino | Qui le demande |
+|---|---|---|
+| NtQueryKey(KeyNameInformation) | le chemin complet de la clé depuis `\REGISTRY`, avec la casse des clés (celui de la cible pour une clé ouverte par un lien) : `cm::Key::full_name`, `cm::info::name_information` ; NtQueryKey seul (à l'énumération, ReactOS refuse la classe) | `advapi32` (`hkcr.c`) : les clés de HKEY_CLASSES_ROOT, HKCU d'abord, HKLM sinon |
+| NtQueryObject(ObjectBasicInformation) | OBJECT_BASIC_INFORMATION (56 octets exactement) : attributs du handle et OBJ_PERMANENT, droits accordés, comptes de handles et de pointeurs, place du nom complet et du type, celle du descripteur de sécurité avec READ_CONTROL | `advapi32` (`hkcr.c`, GetKeySam) |
+| NtQueryInformationProcess(ProcessDeviceMap) | la carte des lecteurs DOS : un bit par lien « X: » de `\GLOBAL??`, le type de chaque lecteur d'après le périphérique cible (`io_manager::device::dos_drive_type`, comme ObpProcessDosDeviceSymbolicLink : disque fixe ou amovible, virtuel, CD-ROM, réseau) ; la taille de Query exactement (36) ; la forme EX demande les cartes par LUID (STATUS_INVALID_PARAMETER) | `kernel32` : GetLogicalDrives (rendait 0 : « My Computer » n'avait aucun lecteur, et `C:\` n'était pas un chemin), GetDriveTypeW |
+
+Écart : Mino calcule la carte à chaque demande, à partir des liens présents, au lieu de la tenir à jour à leur
+création ; le résultat est le même tant qu'il n'y a qu'une carte (celle de tous).
+
+Vu en chemin : la fin du processus du Bloc-notes, après la boîte, arrêtait le système (« buddy free list overflow »)
+: les listes libres de `mm::buddy` sont désormais chaînées, sans limite (commit `mm`, voir la passation).
+
+Ce qui manque encore pour enregistrer (journal du scénario, Ctrl+S puis « hello.txt » et Entrée) : une assertion
+d'ATL dans le shell (`atlwin.h:1118`, `::IsWindow(m_hWnd)` dans CWindow::SendMessage : une fenêtre ATL qui n'a pas
+été créée ; à identifier, peut-être la liste d'autocomplétion de `browseui`), les fenêtres message seul
+(HWND_MESSAGE : la fenêtre d'appartement de `combase`), NtUserSetParent, NtUserGetIconInfo, StretchDIBits d'une DIB à
+palette (les icônes du shell), NtUserGetClassName, NtUserGetSystemMenu, NtUserSetActiveWindow, NtUserSetThreadState,
+les barres de défilement des contrôles (SB_CTL). Le Bloc-notes se termine alors avec le code 3 (abort).
+
+Tests : hôte (`cm` : le chemin complet par ouverture sans casse, lien, nom relatif, énumération, création ;
+`cm::info` : l'encodage de KEY_NAME_INFORMATION) ; la sonde de `notepad` appelle GetLogicalDrives, GetDriveTypeW,
+NtQueryInformationProcess(ProcessDeviceMap), NtOpenKey puis NtQueryKey(KeyNameInformation) sur
+`\Registry\Machine\Software\Classes` (taille d'abord, puis le nom `\REGISTRY\MACHINE\SOFTWARE\Classes`) et
+NtQueryObject(ObjectBasicInformation) (une mauvaise taille refusée, les droits KEY_READ, un handle) ; une carte des
+lecteurs vide la fait échouer (mutation). `notepad` sur AMD et Intel, et toute la suite sur AMD (54 sur 55 ; `gui`
+échouait par l'ordre de peinture des sœurs, corrigé à l'étape 28).
+
+## Étape 28 : SetWindowLong du style (GWL_STYLE, GWL_EXSTYLE)
+
+La page Applications du gestionnaire des tâches se repeignait en gris. Son contrôle d'onglets (`SysTabControl32`,
+sœur de la page, sous elle dans l'ordre Z) ne traite pas WM_ERASEBKGND : DefWindowProc efface sa région à mettre à
+jour du pinceau de sa classe (COLOR_BTNFACE), et cette région couvre la page quand une autre page se cache. Les sœurs
+se repeignent de haut en bas de l'ordre Z (IntFindWindowToRepaint) : l'onglet passe après la page. Dans ReactOS, son
+DC est coupé par la page, parce que `comctl32` (TAB_Create) se donne `WS_CLIPSIBLINGS` par SetWindowLongW(GWL_STYLE)
+à sa création ; Mino refusait GWL_STYLE (`ERROR_CALL_NOT_IMPLEMENTED`), l'onglet restait sans le style et peignait
+sur la page.
+
+Un premier correctif avait inversé l'ordre de peinture des sœurs (du bas vers le haut, écart avec ReactOS) : la page
+passait, mais le premier WM_PAINT n'allait plus au popup qu'attend le scénario `gui`. L'ordre de ReactOS est rétabli,
+et la cause corrigée :
+
+- `win32k::window::set_style` (co_IntSetWindowLongPtr, GWL_STYLE et GWL_EXSTYLE) : WM_STYLECHANGING porte un
+  STYLESTRUCT (`abi::user::StyleStruct32`) dont la procédure peut changer le nouveau style ; puis le style change, et
+  WM_STYLECHANGED le dit. Rend l'ancien style.
+- `restyle` (GWL_STYLE) : une fenêtre de premier niveau garde `WS_CLIPSIBLINGS`, une fenêtre réduite `WS_MINIMIZE` ;
+  `WS_EX_WINDOWEDGE` suit le cadre (IntCheckFrameEdge, d'après la valeur de l'appelant) ; une fille qui cesse de
+  l'être perd son identifiant, une fenêtre qui devient fille sa barre de menus (`WNDS_HASMENU`), son `IDMenu` gardant
+  la valeur de la barre comme dans ReactOS, qui n'a qu'un champ pour les deux.
+- `restyle_ex` (GWL_EXSTYLE) : `WS_EX_WINDOWEDGE` d'après le style et la valeur de l'appelant. Pas encore :
+  `WS_EX_TOPMOST` ôté à la fenêtre du shell (SetShellWindow manque) ; les fenêtres en couches.
+- Rien à refaire pour les DC : un DC du cache tire du style ce qui le coupe à chaque GetDCEx
+  (`dce::effective_flags`), et Mino ne garde pas de DC propre (DceResetActiveDCEs de ReactOS, au changement de
+  `WS_VISIBLE`).
+
+À cette étape, GWLP_WNDPROC et GWLP_HWNDPARENT restaient à faire (suite ci-dessous).
+
+Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZE` gardés, le bord de fenêtre, la
+fille qui cesse ou devient fille) ; `desktop-launch` sur AMD et Intel, qui échoue avec l'ordre de ReactOS sans
+GWL_STYLE (la page grise, ses quatre pixels) ; `gui` passe de nouveau sur AMD et Intel ; toute la suite sur AMD (55
+sur 55).
+
+## Étape 29 : sauvegarder, fermer et rouvrir ; petites applications x86
+
+Le parcours Bloc-notes est complet dans `notepad-save` (PR #127) : saisie
+QEMU, vrai dialogue Enregistrer sous, contrôle des 20 octets du fichier,
+Alt+F4, sortie normale, puis nouveau processus et texte relu à l'écran.
+Le remplacement de GWLP_WNDPROC pour une procédure cliente de même encodage
+débloque les fenêtres ATL du shell. Alt+F4 poste SC_CLOSE à la fenêtre de
+premier niveau ; CS_NOCLOSE est respecté. Les ponts ANSI/Unicode et les
+procédures serveur restent refusés ; GWLP_HWNDPARENT reste à faire.
+
+La Calculatrice demandait ensuite GetClassName avant de transformer une
+touche en clic sur un bouton. NtUserGetClassName rend maintenant le nom
+non versionné, avec troncature et NUL dans le tampon UTF-16 de l'appelant.
+`calculator` vérifie `12+30=42`, ferme le processus, relance et vérifie
+`6*7=42`, avec contrôle du texte et du rendu. `minesweeper` contrôle un
+drapeau posé au clic droit, F2, la fermeture et la relance. Les détails,
+résultats, captures et limites sont dans [applications.md](applications.md).
+
+Ces scénarios utilisent les vrais exécutables ReactOS épinglés, sans les
+modifier. Le test Bloc-notes vérifie une relance sur le même volume RAM ;
+la persistance après redémarrage de l'OS n'est pas couverte par ce parcours.
+## Étape 30 : la vue des fichiers de la boîte Enregistrer sous (GetIconInfo, GetDIBits, StretchBlt ; GetAtomName et SendMessage corrigés)
+
+Sous VirtualBox, la boîte « Save As » du Bloc-notes restait figée : sa vue des fichiers vide, le thread du Bloc-notes
+bouclait (environ 25 lignes par seconde : « GetIconInfo Failed », « Failed to add IDI_SHELL_DOCUMENT icon to cache »,
+« Imagelist no longer valid », puis `shell32.dll` rechargé). Sous QEMU la boucle tournait aussi (18 tours avant la
+saisie) ; `notepad-save` passait parce qu'il tapait un chemin complet sans attendre la vue. Ce que la boîte demandait,
+dans l'ordre où elle bloquait :
+
+1. **NtUserGetIconInfo.** Le cache d'icônes de `shell32` (SIC_Initialize) met IDI_SHELL_DOCUMENT dans deux listes
+   d'images de `comctl32` (ILC_COLOR32 | ILC_MASK). ImageList_ReplaceIcon demande d'abord CopyImage(LR_COPYFROMRESOURCE),
+   qui veut le module et la ressource de l'icône (NtUserGetIconInfo, deux fois : la place, puis les noms) pour la
+   recharger à la taille de la liste ; puis GetIconInfo, des copies de ses bitmaps. Sans le service, l'ajout échouait,
+   le cache était détruit, et chaque icône demandée le refaisait. Fait : `win32k::cursor::icon_info` (ICONINFO, `pbpp`
+   tiré de CURSORDATA.bpp, désormais gardé) ; les copies par `gdi::surface::copy_bitmap` (BITMAP_CopyBitmap : un
+   bitmap du noyau de la même taille, monochrome ou non, les pixels et leur octet haut, au processus appelant, qui les
+   supprime) ; `module_reply` et `resource_reply` (la place qu'il faut quand le tampon est trop petit, un identifiant
+   MAKEINTRESOURCE dans `Buffer`) ; `abi::user::IconInfo32` ; `sys::cursor::nt_user_get_icon_info`. Écarts : le nom
+   d'une ressource revient en majuscules (Mino le garde ainsi pour la recherche sans casse) ; sa place compte un NUL,
+   que `user32` écrit lui-même au bout.
+2. **NtUserGetAtomName écrasait la pile.** Son second argument est un PUNICODE_STRING : `user32` (ClassNameToVersion,
+   à CreateWindowEx d'une classe désignée par son atome) y donne un tampon de MAX_PATH caractères. Mino écrivait le nom
+   par-dessus la structure elle-même : « SHELLDLL_DefView » écrasait les registres sauvés de l'appelant, et
+   SHGetSetSettings de `shell32` partait avec des arguments faits de texte UTF-16 (une exception dans le WM_INITDIALOG
+   de la boîte). Le nom va dans `Buffer`, tronqué à `MaximumLength` avec son nul, comme NtUserGetAtomName de
+   ReactOS ; `Length` n'est pas touché. `main` l'a corrigé en même temps (`win32k::atom::copied_name_units`,
+   « #n » d'un atome entier) : c'est sa correction qui reste à la fusion.
+3. **SendMessage à une fenêtre qui n'existe pas.** NtUserMessageCall(FNID_SENDMESSAGE) rendait FALSE sans écrire
+   `ResultInfo`, et `user32` (SendMessageW) rend alors sa variable non initialisée. CDefView::LoadColumns demande
+   Header_GetItemCount de l'en-tête de sa liste, qui n'existe pas encore en vue liste (`comctl32` le crée à la
+   première colonne) : il croyait avoir deux millions de colonnes, les changeait au lieu de les insérer, et
+   l'assertion `MapFolderColumnToListColumn(0)` (CDefView.cpp:1178) arrêtait le Bloc-notes (abort, code 3). Comme
+   ReactOS (co_IntDoSendMessage rend 0, l'appel réussit) : 0 en `ResultInfo`, l'erreur posée
+   (`ERROR_INVALID_WINDOW_HANDLE`), TRUE. SendMessageTimeout et SendNotifyMessage rendent toujours FALSE. Là
+   aussi, la correction de `main` (`sys::message::send_message_result`) reste à la fusion.
+4. **Les icônes de la liste.** ImageList_ReplaceIcon lit les copies de GetIconInfo par GetDIBits (add_with_alpha), et
+   la liste se dessine par StretchBlt :
+   - GetDIBits (`gdi::dibits::get_dibits`, NtGdiGetDIBitsInternal) : en 1 bit (noir 0, blanc 1, la table de deux
+     couleurs) et en 32 bits (l'octet haut gardé, les masques écrits pour BI_BITFIELDS) ; un en-tête de 0 bit demande
+     le format seul (BI_BITFIELDS en 32 bits, comme ReactOS ; la hauteur négative d'une DIB section descendante) ; les
+     lignes comptées depuis le bas, une DIB moins haute que le bitmap prenant son haut, comme ReactOS
+     (`scan_window`, `encode_lines`). Pas encore : les autres profondeurs (journalisé), DIB_PAL_COLORS, un
+     BITMAPCOREHEADER.
+   - StretchBlt (`gdi::bitblt::stretch_blt`, NtGdiStretchBlt) : aux mêmes tailles, BitBlt ; sinon le pixel le plus
+     proche, la source lue d'abord dans un tampon (`read_area`, `stretch_part`). Pas encore : une étendue négative.
+   - GetNearestColor (NtGdiGetNearestColor) : sur 32 bits, la couleur elle-même.
+5. **La barre d'outils.** Ses bitmaps (ceux de `comctl32`, LoadImage) sont de 32 bits en BI_BITFIELDS, avec un en-tête
+   V4 : StretchDIBits lit maintenant les masques de 16 et 32 bits, derrière un BITMAPINFOHEADER ou dans un en-tête V4
+   ou V5 (`DibFormat::masks`). Son « not yet » dit désormais la profondeur, la compression et l'usage (le « DIB à
+   palette » vu sous VirtualBox était ce BI_BITFIELDS).
+
+La boîte montre maintenant `C:\` filtré sur `*.txt` : Documents and Settings, MINODIR, WINDOWS, A long name.txt,
+MINOTEST.TXT, avec leurs icônes ; Alt+N et le chemin tapé enregistrent le fichier. Le scénario `notepad-save` attend
+que la vue soit remplie avant de taper (`app_file_view` : GetDlgItem de `lst2`, puis de la liste, LVM_GETITEMCOUNT) :
+tapées plus tôt, les touches allaient au premier contrôle de la boîte encore en construction.
+
+Vu, pas fait (fait à l'étape 31) : l'alpha des images de 32 bits (StretchDIBits le perd ; NtGdiCreateDIBitmapInternal, le bitmap d'alpha
+d'une icône, create_alpha_bitmap de `user32` ; NtGdiAlphaBlend) et la conversion couleur ↔ monochrome de BitBlt
+(ImageList_AddMasked de `comctl32` en tire le masque : la couleur de fond du DC source devient le blanc) : les boutons
+de la barre d'outils et la barre des emplacements ont un fond noir et des images fausses. La DIB section de 4 bits
+vue sous VirtualBox paraît sous QEMU dans le gestionnaire des tâches (`desktop-launch`) : sa liste d'images est de
+4 bits par pixel (GetDIBits de 4 bits pour la table par défaut, puis CreateDIBSection, tous deux « not yet ») ; ses
+tâches, sans icône avant (ImageList_ReplaceIcon échouait), en ont maintenant une, noire, qui décale le texte de la
+ligne : le scénario vérifie la ligne choisie après son texte. NtUserGetClassName, NtUserSetWindowsHookEx (le WH_MSGFILTER de
+`comdlg32`), NtUserCallTwoParam 0x60 ; NtQueryDebugFilterState rend TRUE, ce qui fait évaluer les TRACE des DLL de
+ReactOS (des fautes gérées dans leurs `debugstr`).
+
+Tests : hôte (`cursor` : ce que GetIconInfo dit d'une icône, d'un curseur monochrome, d'un curseur sans données ;
+la place du module et du nom de ressource, un identifiant ; `atom` : le nom tronqué à la place du tampon ; `dibits`
+: les lignes de GetDIBits depuis le bas, l'encodage en 1 et 32 bits, les masques de BI_BITFIELDS en 16 et 32 bits ;
+`bitblt` : StretchBlt plus grand, plus petit, plus haut, SRCAND). Sondes : `icons` (GetIconInfo de IDI_HAND, ses
+copies lues par GetDIBits puis supprimées, une icône qui n'existe pas, CopyImage(LR_COPYFROMRESOURCE) à 16 × 16),
+`bitmap` (StretchBlt, GetNearestColor, GetDIBits d'un bitmap de 32 bits et d'un monochrome, StretchDIBits en 5-6-5),
+`listview` (une fenêtre « Files » dont le WM_CREATE fait ce que fait la vue de `shell32` : SendMessage à l'en-tête
+absent rend 0 et `ERROR_INVALID_WINDOW_HANDLE`, la colonne Name insérée crée l'en-tête et se relit en sous-élément 0),
+`notepad-saveas` (nouveau : `tests/native/notepad3.c`, la vue liste 5 éléments ; l'icône de dossier de la première
+ligne, un coin transparent de sa case blanc et non noir, une ligne grise de l'icône de document ; les messages de la
+boucle et de l'assertion interdits), `notepad-save` (la sonde attend la vue avant de taper). Quatorze mutations, une
+par correction, font chacune échouer un test (sans NtUserGetIconInfo, sans copie, la copie qui perd « monochrome »,
+la place du NUL oubliée, l'ancien NtUserGetAtomName — l'exception revient dans `notepad-saveas` —, MaximumLength
+ignoré, SendMessage sans `ResultInfo`, sans GetDIBits, GetDIBits toujours descendant ou sans le décalage de ReactOS,
+sans StretchBlt, StretchBlt sur le mauvais axe, sans GetNearestColor, BI_BITFIELDS refusé). 1107 tests hôte ;
+`notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` sur AMD
+et Intel.
+
+## Étape 31 : les images de `comctl32` (BitBlt monochrome, alpha, DIB sections de 4 et 8 bits)
+
+Après l'étape 30, la barre d'outils de la boîte Enregistrer sous et sa barre des emplacements montraient leurs images
+sur un fond noir, et les icônes des tâches du gestionnaire des tâches étaient des carrés noirs. Trois manques du
+moteur GDI, dans l'ordre où ils jouaient :
+
+1. **BitBlt entre un bitmap monochrome et des couleurs** (`gdi::bitblt::Convert`, comme EXLATEOBJ_vInitXlateFromDCs
+   de ReactOS) : vers un bitmap monochrome, la couleur de fond du DC source donne le blanc et toute autre le noir ;
+   d'une source monochrome, le noir donne la couleur du texte du DC de destination et le blanc sa couleur de fond.
+   ImageList_AddMasked en tire le masque d'une image, puis l'ôte de l'image par NOTSRCAND. Un bitmap monochrome de
+   Mino garde des pixels de 32 bits, et le texte lissé qu'on y dessine laisse des gris : la source se lit au plus
+   proche du noir ou du blanc (DrawState peint ainsi le texte désactivé des boutons, en relief). StretchBlt convertit
+   de même.
+2. **L'alpha des images de 32 bits.** StretchDIBits garde l'octet alpha d'une DIB de 32 bits (BI_RGB, ou les masques
+   de BI_RGB) sur un bitmap de 32 bits, comme EngCopyBits avec une traduction triviale ; les ROP avec une source
+   (BitBlt, défilement, StretchBlt) portent sur les 32 bits, comme le moteur de 32 bits de ReactOS (le NOTSRCAND
+   d'ImageList_AddMasked effaçait l'alpha : `comctl32` ne voyait plus l'alpha de la barre d'outils et la dessinait par
+   un masque tout noir) ; PatBlt garde l'octet haut à zéro. NtGdiCreateDIBitmapInternal
+   (`gdi::dibits::create_dibitmap`, IntCreateDIBitmap : monochrome pour une DIB d'un bit noir puis blanc, ou sans
+   CBM_CREATDIB pour un DC dont le bitmap est monochrome ; CBM_INIT) : `user32` en fait le bitmap d'alpha d'une icône
+   (create_alpha_bitmap). NtGdiAlphaBlend (`gdi::bitblt::alpha_blend`, `blend` : DIB_32BPP_AlphaBlend, AC_SRC_OVER,
+   l'alpha constant et, avec AC_SRC_ALPHA, celui de chaque pixel, couleurs prémultipliées ; le pixel le plus proche
+   pour étirer) : les listes d'images ILC_COLOR32 dessinent ainsi une image qui a son alpha (alpha_blend_image). Le
+   pixel d'une icône à alpha (`cursor::Pixel::Blend`) se mélange de même, prémultiplié, comme le bitmap d'alpha de
+   `user32`. Jusqu'ici, CreateDIBitmap manquant, `user32` ne faisait aucun bitmap d'alpha : les curseurs et icônes de
+   32 bits se dessinaient par leurs masques (ce que l'étape 15 dit de l'alpha qui l'emporte sur les masques ne valait
+   pas encore). Ils se mélangent maintenant par leur alpha, comme UserDrawIconEx de ReactOS : les bords et les ombres
+   des icônes des titres changent. Les pixels attendus de `gui` (le contour de WINLOGO) et d'`icons` (ceux de WINLOGO
+   et d'IDI_ASTERISK) ont été recalculés à part, des images de 32 bits des ressources de `user32.dll` mélangées sur
+   le fond du titre : toute l'icône est identique au pixel près.
+3. **Les DIB sections de 4 et 8 bits** (`gdi::surface::Format::Indexed`) : la section garde des index dans la table
+   de la DIB, comme le processus les lit ; le moteur dessine sur leurs couleurs décodées en 32 bits
+   (`decode_indexed`) puis réécrit les pixels changés par l'index de la couleur la plus proche (`encode_indexed`,
+   `nearest_index`). GetObject dit leurs bits et leur table ; GetDIBits rend en 4 et 8 bits la table de la DIB section
+   de même profondeur, sinon la table par défaut (`gdi::dibits::default_palette` : les 16 couleurs de la VGA, ou 256 :
+   les 20 couleurs fixes et le cube de 6 × 6 × 6), que ImageList_CreateImage demande pour une liste ILC_COLOR4 ou
+   ILC_COLOR8. La liste du gestionnaire des tâches est de 4 bits : ses icônes y prennent les 16 couleurs.
+
+Pas encore : les DIB sections de 1, 16 et 24 bits, une table DIB_PAL_COLORS, SetDIBits, la couleur de fond d'un DC
+dans StretchDIBits vers le monochrome, StretchBlt et AlphaBlend d'une étendue négative, MaskBlt ; « My Documents » et
+« My Computer » de la barre des emplacements montrent l'icône de document par défaut (fait à l'étape 32 : `shell32`
+n'était pas enregistré).
+
+Tests : hôte (`surface` : l'index le plus proche, décodage et réécriture d'une DIB de 4 et 8 bits, la géométrie ;
+`object` : le DIBSECTION d'une DIB de 4 bits ; `dibits` : l'alpha d'une DIB de 32 bits, le choix monochrome de
+CreateDIBitmap, les tables par défaut, GetDIBits de 4 et 8 bits ; `bitblt` : la conversion monochrome, le texte
+lissé, AlphaBlend ; `dib` : un ROP garde l'alpha ; `cursor` : le pixel prémultiplié). Sonde `bitmap` : BitBlt vers le
+monochrome et retour, une DIB section de 4 bits (peinte presque rouge : l'index du rouge ; GetObject ; GetDIBits : sa
+table, ou celle de la VGA), CreateDIBitmap qui garde l'alpha, GdiAlphaBlend. `notepad-saveas` : la flèche verte du
+bouton « Up » et un pixel transparent de son image (noir avant), un coin transparent de l'icône « Desktop ».
+`desktop-launch` : le teal de la barre de titre de l'icône de `cmd` (noire avant), et l'ombre du T de « End Task »,
+dans la lettre (le texte désactivé, lu au noir exact, disparaissait). Douze mutations, une par correction, font
+chacune échouer un test.
+
+## Étape 32 : la barre des emplacements de la boîte Enregistrer sous (`shell32` enregistré)
+
+Après l'étape 31, la barre des emplacements montrait trois emplacements au lieu des cinq de ReactOS (Recent, Desktop,
+My Documents, My Computer, My Network Places : filedlg_collect_places_pidls de `comdlg32`), et « My Documents » et
+« My Computer » y avaient le papier blanc d'IDI_SHELL_DOCUMENT. `shell32` tire l'icône d'un dossier à CLSID de
+`HKCR\CLSID\{…}\DefaultIcon` (CGuidItemExtractIcon_CreateInstance), et prend le papier blanc faute de mieux. Ces
+clés n'existaient pas : elles viennent des scripts que DllRegisterServer de `shell32` applique (ses ressources
+`REGISTRY` : My Computer, My Documents, My Network Places…), et c'est l'installation de ReactOS qui l'appelle
+(`syssetup.inf`, RegistrationPhase2 ; `setup -mini` du LiveCD aussi). `minoinit.exe`, qui tient ce rôle chez Mino,
+ne le faisait pas (ADR-023 : l'enregistrement des DLL restait à faire).
+
+1. **NtQueryKey(KeyNameInformation) pour un handle sans KEY_QUERY_VALUE** (`sys::registry`,
+   `ob::HandleTable::reference_as_with_any_access`) : comme NtQueryKey de ReactOS, le nom d'une clé se lit avec un
+   droit quelconque, pas aucun ; les autres classes demandent KEY_QUERY_VALUE. L'émulation de HKCR d'`advapi32`
+   (`hkcr.c`) demande le nom de chaque clé qu'elle crée avec KEY_WRITE : elle recevait `STATUS_ACCESS_DENIED`, et
+   DllRegisterServer de `shell32` rendait E_FAIL.
+2. **`minoinit.exe` enregistre `shell32`** (`tests/native/minoinit.c`, son étape 3, entre les profils et la ruche de
+   `Default User`, comme RegistrationPhase2 vient après les profils) : les CLSID des dossiers du shell et leurs
+   icônes sous HKCR, les dossiers du shell de l'utilisateur (SHELL_RegisterShellFolders). Un échec se journalise sans
+   arrêter, comme dans `syssetup`. Des DLL de RegistrationPhase2, seul `shell32` est enregistré : les autres ne sont
+   pas sur le disque ou ne servent pas encore.
+3. **NtSetInformationFile(FileBasicInformation) d'un tampon aligné sur 4** (`sys::file`) : la sonde demandait 8, ReactOS
+   `sizeof(ULONG)`, comme notre NtQueryInformationFile. CopyFileW de `kernel32` pose les dates de la copie depuis une
+   variable locale qu'une pile i386 n'aligne que sur 4 : ses cadres déplacés, la copie du `NTUSER.DAT` de
+   `Default User` par `minoinit` échouait (`STATUS_DATATYPE_MISALIGNMENT`, ERROR_NOACCESS).
+
+Un Mino installé montre ainsi les cinq emplacements avec leurs icônes. Le dossier « My Documents » existant, la boîte
+s'ouvre dedans, comme sous XP quand l'application ne donne pas de répertoire (CSIDL_PERSONAL).
+
+Vu, pas fait : « Recent » s'affiche « RECENT » : Io crée un nom que le format 8.3 tient sans entrée de nom long, donc
+en majuscules (`io::fat_volume`, `create`) ; le pilote FAT de ReactOS garde la casse d'un nom mixte par une entrée
+de nom long (fait à l'étape 34).
+
+Tests : hôte (`ob` : un droit quelconque suffit, aucun ne suffit pas). La sonde de `dir` pose les dates de
+`KERNEL.BIN` depuis un tampon à 4 octets d'un multiple de 8. La sonde de `notepad-saveas` enregistre
+`shell32` comme `minoinit` (DllRegisterServer rend 0), puis tape `C:\` dans le nom de fichier pour revenir à la
+racine ; le bleu du dossier de « My Documents » et l'écran de « My Computer » (les icônes 235 et 16 de `shell32`,
+recalculées à part depuis ses ressources : identiques au pixel près) ; le coin transparent vérifié est maintenant
+celui de « Recent ». `logon` : `[minoinit] shell32.dll registered`. Quatre mutations font chacune échouer un test :
+NtQueryKey qui demande KEY_QUERY_VALUE pour le nom (`notepad-saveas`), une référence sans aucun droit acceptée
+(hôte), FileBasicInformation aligné sur 8 (`dir`), `minoinit` sans l'enregistrement (`logon`).
+
+## Étape 33 : les contrôles ScrollBar (SB_CTL) et le sous-classement d'une fenêtre à procédure du serveur
+
+Un item de dossier du menu Démarrer (« My Documents ») tuait `explorer` (voir [`m6-logon.md`](m6-logon.md)) : la
+barre d'adresse de la fenêtre de dossier demande l'autocomplétion (SHAutoComplete de `shlwapi`), dont la liste
+déroulante (CAutoComplete de `browseui`) crée dans son WM_CREATE une ListView, puis une poignée de taille et une barre
+de défilement, deux contrôles de la classe ScrollBar. Deux manques, dans l'ordre où le second masquait le premier :
+
+1. **Les barres des contrôles (SB_CTL)** (`win32k::scroll`, la troisième barre) : la fenêtre d'un contrôle ScrollBar
+   garde l'état de sa barre dans ses octets de plus, un `SBWND` de ReactOS (`abi::user::SbWndExtra32` : `fVert`,
+   `wDisableFlags`, puis un `SBCALC` dont les quatre premiers champs sont le `SBDATA`), que `user32` lit lui-même
+   (GetScrollPos, SBM_GETPOS, SBM_GETRANGE ; `Window::write_extra`). SetScrollInfo et GetScrollInfo de SB_CTL ;
+   GetScrollBarInfo(OBJID_CLIENT) : la barre est la zone cliente du contrôle (SBS_VERT), ses flèches et son curseur,
+   l'état « indisponible » quand il n'y a rien à faire défiler ou que le contrôle est désactivé ; EnableScrollBar(SB_CTL)
+   change les flèches (l'activation de la fenêtre, EnableWindow, journalisée : pas encore) ; ShowScrollBar(SB_CTL)
+   montre ou cache le contrôle (ShowWindow). Le dessin est celui de `user32` (IntDrawScrollBar, son WM_PAINT).
+   Un écart voulu : ReactOS marque la barre indisponible quand le contrôle n'est *pas* désactivé ; Mino suit Wine.
+2. **GWLP_WNDPROC d'une fenêtre à procédure du serveur** (`win32k::window::replace_procedure`, IntSetWindowProc ;
+   `window_procedure`, IntGetWindowProc). ATL sous-classe la poignée de taille (SubclassWindow : SetWindowLongPtr de
+   GWLP_WNDPROC) ; la classe ScrollBar est une classe du serveur (`CSF_SERVERSIDEPROC`), et win32k refusait
+   (`ERROR_CALL_NOT_IMPLEMENTED`). OnCreate rendait alors -1 et la liste n'était pas créée ; OnFinalMessage relâchait
+   CAutoComplete sans l'AddRef de OnCreate, si bien qu'à la seconde tentative (SetOptions) l'objet était détruit, et
+   SHAutoComplete appelait une méthode virtuelle pure (l'emplacement `__cxa_pure_virtual` de la vtable de
+   CAutoComplete, `int 3` dans `browseui`, 80000003). Comme ReactOS : l'ancienne procédure d'une fenêtre à procédure
+   du serveur est celle du client de son FNID, ANSI ou non, sans CALLPROCDATA ; la nouvelle en fait une procédure du
+   client, dans son jeu de caractères (NULL garde l'actuelle) ; la procédure du client d'un FNID qui a une procédure
+   du serveur rend celle-ci à la fenêtre (`WNDS_SERVERSIDEWINDOWPROC`, Unicode). Un contrôle (de FNID_BUTTON à
+   FNID_GHOST, sauf Edit) passe d'un jeu de caractères à l'autre par ses deux procédures du client. Reste refusée
+   l'ancienne procédure d'une fenêtre du client demandée dans l'autre jeu de caractères : ReactOS rend un
+   CALLPROCDATA (UserGetCPD), que Mino n'a pas encore. `win32k::client` cherche dans une copie des procédures du
+   client (`procedures`, `client_procedure_in`, `server_procedure_in`, `server_fnid_in`).
+
+La fenêtre « My Documents » s'ouvre alors (titre, menus, barre d'outils) ; sa barre d'adresse et sa vue des fichiers
+restent vides : la suite.
+
+Tests : hôte (`win32k::window` : une procédure du client remplacée, rendue, NULL qui la garde, l'autre jeu de
+caractères refusé ; une procédure du serveur sous-classée en Unicode puis en ANSI et rendue ; un contrôle qui passe
+d'un jeu de caractères à l'autre, Edit refusé ; `win32k::scroll`). Scénario `scroll-control`
+(`tests/native/sbctl1.c`, AMD et Intel) : un contrôle ScrollBar vertical dans une fenêtre blanche ; SetScrollInfo et
+GetScrollInfo, GetScrollPos et SBM_GETRANGE (lus par `user32` dans les octets de plus), SetScrollPos au-delà de la
+fin, GetScrollBarInfo(OBJID_CLIENT), EnableScrollBar(ESB_DISABLE_UP), ShowScrollBar ; sous-classé comme par ATL
+(SetWindowLongW : l'ancienne procédure est celle de la classe, ses messages passent par la nouvelle, la procédure
+rendue), puis en ANSI (SetWindowLongA : celle, ANSI, de la classe ; rendue, la procédure du serveur revient) ; le
+contrôle peint par `user32` (quatre pixels : la face et le symbole de la flèche du haut, le curseur au bout).
+Deux mutations font échouer le scénario : SB_CTL refusé (les étapes 1 à 6), une procédure du serveur refusée (les
+étapes 7 et 8).
+
+## Étape 34 : la casse des noms que le format 8.3 tient (Io)
+
+La barre des emplacements de l'étape 32 montrait « RECENT » : `shell32` crée le dossier `Recent` du profil
+(CreateDirectoryW), et Io créait tout nom que le format 8.3 tient avec sa seule entrée 8.3, en majuscules
+(`io::fat::FatVolume::add_entry_long`) ; la boîte relit le nom par NtQueryDirectoryFile. Io fait maintenant comme
+`vfatfs`, le pilote FAT de ReactOS 0.4.16 (FATAddEntry de `dirwr.c`, vfat8Dot3ToString de `create.c`, lus comme
+spécification ; le `drivers/filesystems/fastfat` de l'arbre de ReactOS est l'exemple FastFAT du WDK de Microsoft, qu'on
+ne lit pas) :
+
+- un nom tout en majuscules (`NTUSER.DAT`) garde son entrée 8.3 seule ;
+- une base ou une extension toute en minuscules (`readme.txt`, `lower.TXT`) prend les drapeaux de casse de NT dans
+  l'octet 12 de l'entrée 8.3 (`fat::CASE_LOWER_BASE` 0x08, `fat::CASE_LOWER_EXT` 0x10), sans nom long ; une partie
+  sans lettre (`123`) n'en prend pas ;
+- une base ou une extension à casse mixte (`Recent`, `MIXEXT.Txt`) reçoit des entrées de nom long (VFAT) devant son
+  entrée 8.3, qui est le nom en majuscules, sans `~N` ;
+- à la lecture (`FatVolume::dir_entries`, donc `Volume::list` et `Volume::entries`), une entrée sans nom long rend
+  la partie que son drapeau dit en minuscules, comme son nom 8.3 ; la recherche reste sans casse.
+
+Un caractère hors de l'ASCII n'entre déjà pas dans un nom 8.3 chez Io : il prend un nom long et un alias `~N`, comme
+chez `vfatfs`. Les dossiers du profil que `minoinit` et `shell32` créent (`Desktop`, `Recent`, `NetHood`, `SendTo`,
+`Cookies`…) gardent ainsi leur casse.
+
+Tests : hôte (`io` : les sept règles de casse et ce qu'elles relisent, octet 12 et entrées de nom long compris ;
+`Recent` créé par `Volume::create`, relu après un nouveau montage, une collision dans toute casse ; `fsck.vfat` quand
+il est là). `notepad-saveas` vérifie deux pixels du texte « Recent » de la barre des emplacements (un trait du premier « e »,
+et le fond au-dessus des minuscules, où était le haut du « C » de « RECENT »). Mutations : la règle
+réduite à l'entrée 8.3 seule (les deux tests hôte, `notepad-saveas`), les drapeaux non relus (les deux tests hôte).
+
+Les images des outils de l'hôte suivent la même règle : `libs/fatfs` (ADR-022, la source unique du format FAT32 de
+Mino) la tient (`fatfs::image::case_flags`, `CASE_LOWER_BASE`, `CASE_LOWER_EXT`), Io la reprend (`io::fat` les
+réexporte), et `fatfs::build` (les images de `tools/mkfat`, l'ESP et le volume système de l'image GPT de `xtask`)
+écrit les drapeaux de casse ou le nom long. `xtask` met déjà en majuscules les noms de l'espace utilisateur qu'il
+donne ; l'ESP de l'image GPT tient `kernel.elf` et `fat.img`, maintenant en minuscules (drapeaux 0x18), que le
+micrologiciel et Io ouvrent sans casse. Tests : hôte (`fatfs` : les sept règles dans une image, relues par le
+lecteur du noyau ; le lecteur à part de `xtask/src/fat32.rs` parcourt un dossier `Recent` et un `readme.txt`) ; trois
+mutations (règle réduite à l'entrée seule : les tests de `fatfs` et d'Io ; octet 12 non écrit ; casse mixte sans nom
+long).
+
+Le nom 8.3 de toute entrée FAT est rendu dans FileBothDirectoryInformation (`io::FatMount::entries`,
+`Listed::short_name`), comme `vfatfs` le rend (DirContext->ShortNameU, drapeaux de casse appliqués, `.` et `..`
+compris) : `NTDLL.DLL` rend `NTDLL.DLL`, `readme.txt` rend `readme.txt`, `Recent` rend `RECENT`. Il ne venait
+qu'à côté d'un nom long depuis le 2026-11-06 (commit `8e5103f`, la sonde de `dir` voulait un nom vide pour un nom
+déjà en 8.3) ; le mainteneur a choisi de suivre `vfatfs`. NTFS garde son nom DOS apparié à un nom long. Tests : hôte
+(`a_directory_is_enumerated` : `.`, `..`, `NTDLL.DLL`, `CONFIG` avec leur nom 8.3 ; `notes.txt` dans sa casse) ; la
+sonde de `dir` (`tests/native/dir1.c`) attend `alternate NTDLL.DLL` et crée `readme.txt` et `Recent`, relus par
+FindFirstFileW avec leur nom et leur nom de remplacement exacts ; une mutation (le nom 8.3 seulement à côté d'un nom
+long : les deux tests hôte et `dir`).
+
+## Étape 35 : réduire, agrandir et rétablir (ShowWindow, les boutons du titre, le double-clic)
 
 Sous VirtualBox, les boutons Réduire et Agrandir du Bloc-notes et du gestionnaire des tâches étaient sans effet :
 ShowWindow journalisait « minimizing and maximizing (co_WinPosMinMaximize): not yet » et rendait FALSE.

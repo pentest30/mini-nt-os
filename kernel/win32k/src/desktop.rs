@@ -22,7 +22,7 @@
 use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
-use core::mem::size_of;
+use core::mem::{offset_of, size_of};
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use abi::ntstatus::{NtStatus, STATUS_NO_MEMORY, STATUS_OBJECT_NAME_NOT_FOUND, STATUS_OBJECT_PATH_INVALID};
@@ -242,12 +242,58 @@ pub struct Desktop {
     pub desk_info: u32,
     /// Sa fenêtre (`DesktopWindow`, `pDeskInfo->spwnd`).
     pub window: Arc<crate::window::Window>,
+    /// Sa fenêtre des messages (`spwndMessage`) : le parent des fenêtres
+    /// créées avec `HWND_MESSAGE` (`crate::window::create_message_window`).
+    pub message_window: Arc<crate::window::Window>,
     /// dwConsoleThreadId : le thread d'entrée des consoles de `consrv` sur
     /// ce bureau ; 0 sans lui.
     console_thread: AtomicU32,
 }
 
 impl Desktop {
+    /// NtUserSetShellWindowEx : son `DESKTOPINFO` reçoit la fenêtre du shell
+    /// (`hShellWindow`, `spwndShell`), celle de son fond (`spwndBkGnd`) et
+    /// le `PROCESSINFO` de son processus (`ppiShellProcess`, son adresse du
+    /// serveur) ; `user32` y lit GetShellWindow.
+    ///
+    /// # Errors
+    /// Celles de l'écriture du tas.
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn set_shell(
+        &self,
+        shell: &crate::window::Window,
+        background: &crate::window::Window,
+        process: u32,
+    ) -> Result<(), NtStatus> {
+        let at = u64::from(self.desk_info);
+        let fields = [
+            (offset_of!(DeskInfoHead32, shell_window), shell.handle),
+            (offset_of!(DeskInfoHead32, spwnd_shell), shell.server_address()),
+            (offset_of!(DeskInfoHead32, spwnd_bk_gnd), background.server_address()),
+            (offset_of!(DeskInfoHead32, ppi_shell_process), process),
+        ];
+        for (offset, value) in fields {
+            self.heap.section.write_kernel(at + offset as u64, &value.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// co_UserDestroyWindow : `hwnd`, détruite, n'est plus la fenêtre du
+    /// shell de son `DESKTOPINFO` (`hShellWindow` à NULL ; comme ReactOS,
+    /// `spwndShell` et `spwndBkGnd` restent).
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL.
+    pub fn forget_shell_window(&self, hwnd: u32) {
+        let at = u64::from(self.desk_info) + offset_of!(DeskInfoHead32, shell_window) as u64;
+        let mut current = [0u8; 4];
+        if self.heap.section.read_kernel(at, &mut current).is_ok() && u32::from_le_bytes(current) == hwnd {
+            let _ = self.heap.section.write_kernel(at, &0u32.to_le_bytes());
+        }
+    }
+
     /// ConsoleCtrlDesktopConsoleThread : le thread d'entrée des consoles du
     /// bureau devient `thread`, s'il est donné ; rend celui d'avant.
     ///
@@ -258,6 +304,45 @@ impl Desktop {
             Some(thread) => self.console_thread.swap(thread, Ordering::AcqRel),
             None => self.console_thread.load(Ordering::Acquire),
         }
+    }
+}
+
+/// IntPaintDesktop (PaintDesktop : NtUserPaintDesktop) : le DC `hdc` prend,
+/// dans sa boîte de découpage, le pinceau de la classe de la fenêtre du
+/// bureau du thread courant (COLOR_BACKGROUND : la classe garde la forme
+/// « couleur + 1 », ramenée au pinceau public de la couleur), comme le
+/// fond du bureau sans papier peint. Pas encore : le papier peint
+/// (SPI_SETDESKWALLPAPER), le texte de version (PaintDesktopVersion), le
+/// fond noir du mode sans échec (SM_CLEANBOOT, jamais levé).
+///
+/// # Errors
+/// L'erreur Win32 : `ERROR_INVALID_HANDLE` pour un DC qui n'est pas au
+/// processus (GdiGetClipBox), `ERROR_INVALID_WINDOW_HANDLE` pour un thread
+/// sans bureau (UserGetWindowObject de la fenêtre du bureau).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système.
+pub fn paint_desktop(hdc: u32) -> Result<bool, u32> {
+    crate::gdi::dc::lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    let desktop = ps::ethread::current_thread()
+        .and_then(|thread| thread.win32_thread())
+        .map(crate::gui::thread_info)
+        .and_then(|thread| thread.desktop())
+        .ok_or(abi::winerror::ERROR_INVALID_WINDOW_HANDLE)?;
+    let window = &desktop.desktop.window;
+    let mut background = [0u8; 4];
+    let at = u64::from(window.cls) + offset_of!(abi::user::Cls32, background) as u64;
+    window.heap.section.read_kernel(at, &mut background).map_err(|_| abi::winerror::ERROR_INVALID_WINDOW_HANDLE)?;
+    crate::gdi::dc::fill_with_brush(hdc, class_brush_handle(u32::from_le_bytes(background)))
+}
+
+/// Le pinceau d'une classe : une couleur du système plus un (`COLOR_* + 1`,
+/// jusqu'à COLOR_MENUBAR) désigne le pinceau public de cette couleur ; le
+/// reste est un handle de pinceau.
+pub fn class_brush_handle(background: u32) -> u32 {
+    match background as usize {
+        index @ 1..=abi::user::NUM_SYSCOLORS => crate::gdi::brush::sys_color_brush(index - 1),
+        _ => background,
     }
 }
 
@@ -295,6 +380,7 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
     // The window of the desktop, the size of the screen (SM_CXVIRTUALSCREEN).
     let (width, height) = crate::display::mode().map_or((0, 0), |mode| (mode.width, mode.height));
     let window = crate::window::create_desktop_window(&heap, name, at, width, height)?;
+    let message_window = crate::window::create_message_window(&heap)?;
     let desktop = ob::create_object(
         &DESKTOP_TYPE,
         Desktop {
@@ -303,6 +389,7 @@ pub fn create(station: &Arc<Object<WindowStation>>, name: &str) -> Result<Arc<Ob
             heap,
             desk_info: at,
             window,
+            message_window,
             console_thread: AtomicU32::new(0),
         },
     );
@@ -389,6 +476,13 @@ mod tests {
         ranges.give(0x10, 0x10, 8);
         assert_eq!(ranges, FreeRanges::new(0, 0x100), "all merged back");
         assert_eq!(ranges.take(0x101, 8), None, "too big");
+    }
+
+    #[test]
+    fn a_class_brush_past_the_system_colours_is_a_handle() {
+        assert_eq!(class_brush_handle(0), 0, "no brush");
+        assert_eq!(class_brush_handle(0x0110_0010), 0x0110_0010, "a brush handle");
+        assert_eq!(class_brush_handle(abi::user::NUM_SYSCOLORS as u32 + 1), abi::user::NUM_SYSCOLORS as u32 + 1);
     }
 
     #[test]

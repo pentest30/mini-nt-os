@@ -276,6 +276,7 @@ static UNSUPPORTED_QUERY_CLASSES: super::ClassReport = super::ClassReport::new("
 
 /// NtQueryObject(Handle, ObjectInformationClass, ObjectInformation, Length,
 /// ReturnLength) : ce que l'on sait d'un handle ou de son objet.
+/// `ObjectBasicInformation` (0) : [`query_basic_information`].
 /// `ObjectHandleFlagInformation` (4) : les attributs du handle, héritable et
 /// protégé contre la fermeture (deux BOOLEAN, `STATUS_INFO_LENGTH_MISMATCH`
 /// pour une autre taille, alignés sur un octet). Les autres classes rendent
@@ -285,6 +286,9 @@ pub(super) fn nt_query_object(arguments: &[u32]) -> NtStatus {
 
     let (handle, class, information, length, return_length) =
         (arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]);
+    if class == abi::object::OBJECT_BASIC_INFORMATION {
+        return query_basic_information(handle, information, length, return_length);
+    }
     if class != OBJECT_HANDLE_FLAG_INFORMATION {
         return UNSUPPORTED_QUERY_CLASSES.report(class);
     }
@@ -296,6 +300,68 @@ pub(super) fn nt_query_object(arguments: &[u32]) -> NtStatus {
             return_length,
             1,
         ),
+        Err(status) => status,
+    }
+}
+
+/// NtQueryObject(`ObjectBasicInformation`) : l'OBJECT_BASIC_INFORMATION du
+/// handle (ObjectBasicInformation de NtQueryObject dans ReactOS) : les
+/// attributs du handle (OBJ_INHERIT, OBJ_PROTECT_CLOSE) et OBJ_PERMANENT de
+/// l'objet, les droits accordés, les comptes de handles et de pointeurs, la
+/// place qu'il faut pour son nom complet (0 sans nom) et pour son type, et
+/// celle de son descripteur de sécurité si le handle a READ_CONTROL. Pas de
+/// quotas du pool (0), ni la date de création d'un lien symbolique (0).
+/// `STATUS_INFO_LENGTH_MISMATCH` pour une autre taille que 56 octets.
+fn query_basic_information(handle: u32, information: u32, length: u32, return_length: u32) -> NtStatus {
+    use abi::object::{
+        ObjectBasicInformation32, OBJECT_NAME_INFORMATION_SIZE, OBJECT_TYPE_INFORMATION_SIZE, OBJ_INHERIT,
+        OBJ_PERMANENT, OBJ_PROTECT_CLOSE,
+    };
+    let size = core::mem::size_of::<ObjectBasicInformation32>() as u32;
+    let query = || -> Result<ObjectBasicInformation32, NtStatus> {
+        if return_length != 0 {
+            ke::usermem::UserPtr::<u32>::new(return_length).write(&size)?;
+        }
+        if length != size {
+            return Err(abi::ntstatus::STATUS_INFO_LENGTH_MISMATCH);
+        }
+        let (object, access, attributes) = super::current_process().handle_table.query_entry(ob::Handle(handle))?;
+        let mut flags = 0;
+        if attributes.inherit {
+            flags |= OBJ_INHERIT;
+        }
+        if attributes.protect_from_close {
+            flags |= OBJ_PROTECT_CLOSE;
+        }
+        if object.is_permanent() {
+            flags |= OBJ_PERMANENT;
+        }
+        let name_info_size = match ob::namespace().full_name(&object) {
+            Some(name) if name != "\\" => (name.encode_utf16().count() * 2) as u32 + OBJECT_NAME_INFORMATION_SIZE + 2,
+            _ => 0,
+        };
+        let type_name = object.object_type().name.encode_utf16().count() as u32 * 2;
+        let security_descriptor_size = if access.contains(ob::AccessMask::READ_CONTROL) {
+            object.security_descriptor().map_or(0, |descriptor| descriptor.len() as u32)
+        } else {
+            0
+        };
+        Ok(ObjectBasicInformation32 {
+            attributes: flags,
+            granted_access: access.0,
+            handle_count: object.handle_count(),
+            pointer_count: alloc::sync::Arc::strong_count(&object) as u32,
+            name_info_size,
+            type_info_size: OBJECT_TYPE_INFORMATION_SIZE + type_name + 2,
+            security_descriptor_size,
+            ..ObjectBasicInformation32::default()
+        })
+    };
+    match query() {
+        Ok(info) => match ke::usermem::copy_to_user(u64::from(information), &info.to_bytes()) {
+            Ok(()) => abi::ntstatus::STATUS_SUCCESS,
+            Err(status) => status,
+        },
         Err(status) => status,
     }
 }

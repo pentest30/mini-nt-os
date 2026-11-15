@@ -1,6 +1,7 @@
 //! Les services de Se (`se`) : les jetons d'un processus et d'un thread,
-//! leurs classes d'information, l'état de leurs privilèges ; les
-//! descripteurs de sécurité des objets.
+//! leurs classes d'information, l'état de leurs privilèges, un jeton créé de
+//! toutes pièces (NtCreateToken, celui que `lsasrv` fait pour l'utilisateur
+//! qui ouvre sa session) ; les descripteurs de sécurité des objets.
 //!
 //! L'emprunt d'identité : un serveur prend celle d'un thread client
 //! (NtImpersonateThread, comme CsrImpersonateClient), un thread prend celle
@@ -13,7 +14,7 @@
 //! (un thread peut emprunter tout jeton : ils viennent tous de celui de
 //! System), le DACL d'une copie à l'ouverture, OpenAsSelf (sans contrôle
 //! d'accès, il ne change rien), `IsImpersonating` dans le TEB,
-//! NtDuplicateToken, NtAdjustGroupsToken, NtSetInformationToken, les SACL
+//! NtAdjustGroupsToken, NtSetInformationToken, les SACL
 //! (aucun handle n'a `ACCESS_SYSTEM_SECURITY`).
 
 use alloc::sync::Arc;
@@ -21,22 +22,27 @@ use alloc::vec::Vec;
 
 use abi::lpc::SecurityQualityOfService32;
 use abi::ntstatus::{
-    NtStatus, STATUS_ACCESS_DENIED, STATUS_BAD_TOKEN_TYPE, STATUS_BUFFER_TOO_SMALL, STATUS_CANT_OPEN_ANONYMOUS,
-    STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED, STATUS_NOT_IMPLEMENTED, STATUS_NO_TOKEN, STATUS_SUCCESS,
+    NtStatus, STATUS_ACCESS_DENIED, STATUS_BAD_IMPERSONATION_LEVEL, STATUS_BAD_TOKEN_TYPE, STATUS_BUFFER_TOO_SMALL,
+    STATUS_CANT_OPEN_ANONYMOUS, STATUS_INVALID_PARAMETER, STATUS_NOT_ALL_ASSIGNED, STATUS_NOT_IMPLEMENTED,
+    STATUS_NO_SUCH_LOGON_SESSION, STATUS_NO_TOKEN, STATUS_PRIVILEGE_NOT_HELD, STATUS_SUCCESS,
 };
-use abi::object::{AccessMask, OBJ_INHERIT};
+use abi::object::{AccessMask, ObjectAttributes32, OBJ_INHERIT};
 use abi::process::{NT_CURRENT_PROCESS, NT_CURRENT_THREAD};
 use abi::security::{
-    LuidAndAttributes32, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION,
-    SACL_SECURITY_INFORMATION, SECURITY_ANONYMOUS, TOKEN_TYPE_IMPERSONATION,
+    LuidAndAttributes32, SidAndAttributes32, TokenSource32, DACL_SECURITY_INFORMATION, GROUP_SECURITY_INFORMATION,
+    OWNER_SECURITY_INFORMATION, SACL_SECURITY_INFORMATION, SECURITY_ANONYMOUS, SECURITY_DELEGATION,
+    SECURITY_IMPERSONATION, SE_ASSIGNPRIMARYTOKEN_PRIVILEGE, SE_CREATE_TOKEN_PRIVILEGE, TOKEN_TYPE_IMPERSONATION,
+    TOKEN_TYPE_PRIMARY,
 };
 use ke::usermem::UserPtr;
 use ob::{Handle, Object, ObjectRef};
 use ps::eprocess::PROCESS_QUERY_INFORMATION;
 use ps::ethread::{Impersonation, THREAD_DIRECT_IMPERSONATION, THREAD_IMPERSONATE, THREAD_QUERY_INFORMATION};
 use se::client::ClientToken;
-use se::token::{TOKEN_ADJUST_PRIVILEGES, TOKEN_IMPERSONATE, TOKEN_QUERY};
-use se::{Luid, Privilege, PrivilegeChange, SecurityDescriptor, Token, TOKEN_OBJECT_TYPE};
+use se::token::{TOKEN_ADJUST_PRIVILEGES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_IMPERSONATE, TOKEN_QUERY};
+use se::{
+    Luid, NewToken, Privilege, PrivilegeChange, SecurityDescriptor, Sid, SidAndAttributes, Token, TOKEN_OBJECT_TYPE,
+};
 
 /// Les classes de NtQueryInformationToken demandées sans être implémentées.
 static UNSUPPORTED_TOKEN_CLASSES: super::ClassReport = super::ClassReport::new("NtQueryInformationToken");
@@ -321,6 +327,211 @@ pub(super) fn nt_adjust_privileges_token(arguments: &[u32]) -> NtStatus {
         Ok(if adjusted.all_assigned { STATUS_SUCCESS } else { STATUS_NOT_ALL_ASSIGNED })
     };
     status(adjust())
+}
+
+/// Les groupes que NtCreateToken accepte dans un jeton.
+const MAX_GROUPS: u32 = 1024;
+
+/// SeCaptureSid : le SID en `at` de l'appelant.
+fn capture_sid(at: u32) -> Result<Sid, NtStatus> {
+    se::capture_sid(at, &mut |at, buffer| ke::usermem::copy_from_user(buffer, u64::from(at)))
+}
+
+/// Le SID_AND_ATTRIBUTES en `at` de l'appelant, et son SID.
+fn capture_sid_and_attributes(at: u32) -> Result<SidAndAttributes, NtStatus> {
+    let [sid, attributes] = UserPtr::<[u32; 2]>::new(at).read()?;
+    Ok(SidAndAttributes { sid: capture_sid(sid)?, attributes })
+}
+
+/// Le TOKEN_GROUPS en `address` : son compte, ses entrées et leurs SID.
+/// `STATUS_INVALID_PARAMETER` au-delà de [`MAX_GROUPS`] entrées.
+fn capture_groups(address: u32) -> Result<Vec<SidAndAttributes>, NtStatus> {
+    let count = UserPtr::<u32>::new(address).read()?;
+    if count > MAX_GROUPS {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let entry_size = core::mem::size_of::<SidAndAttributes32>() as u32;
+    (0..count).map(|index| capture_sid_and_attributes(address.wrapping_add(4 + index * entry_size))).collect()
+}
+
+/// Le niveau d'emprunt d'identité que donne la qualité de service des
+/// OBJECT_ATTRIBUTES `attributes` (SepCaptureSecurityQualityOfService) ;
+/// `None` sans elle.
+fn capture_qos_level(attributes: &ObjectAttributes32) -> Result<Option<u32>, NtStatus> {
+    match attributes.security_quality_of_service {
+        0 => Ok(None),
+        at => Ok(Some(UserPtr::<SecurityQualityOfService32>::new(at).read()?.impersonation_level)),
+    }
+}
+
+/// NtCreateToken(*TokenHandle, DesiredAccess, ObjectAttributes, TokenType,
+/// AuthenticationId, ExpirationTime, TokenUser, TokenGroups,
+/// TokenPrivileges, TokenOwner, TokenPrimaryGroup, TokenDefaultDacl,
+/// TokenSource) : un jeton neuf (`se::Token::create`), tout capturé, et un
+/// handle sur lui avec les droits `DesiredAccess` (et `OBJ_INHERIT` des
+/// attributs). C'est ainsi que `lsasrv` fait le jeton d'un utilisateur qui
+/// ouvre sa session.
+///
+/// Un jeton d'emprunt d'identité prend son niveau de la qualité de service
+/// des attributs. `TokenOwner` et `TokenDefaultDacl` sont facultatifs (le
+/// propriétaire est alors l'utilisateur, et il n'y a pas de DACL par
+/// défaut), comme la DACL qu'un TOKEN_DEFAULT_DACL désigne.
+///
+/// # Errors
+/// `STATUS_PRIVILEGE_NOT_HELD` sans `SeCreateTokenPrivilege` actif ;
+/// `STATUS_BAD_TOKEN_TYPE` pour un autre type ; `STATUS_BAD_IMPERSONATION_LEVEL`
+/// pour un jeton d'emprunt d'identité sans qualité de service ou d'un niveau
+/// inconnu ; `STATUS_NO_SUCH_LOGON_SESSION` pour une session que le moniteur
+/// de références ne connaît pas ; celles des captures et de
+/// `se::Token::create`.
+pub(super) fn nt_create_token(arguments: &[u32]) -> NtStatus {
+    let [out, desired, attributes, token_type, authentication_id, expiration_time, user, groups, privileges, owner, primary_group, default_dacl, source] =
+        arguments[..13]
+    else {
+        unreachable!("13 arguments")
+    };
+    let create = || {
+        // ProbeForWriteHandle: written first, so that a NULL faults.
+        UserPtr::<u32>::new(out).write(&0)?;
+        if !privilege_enabled(SE_CREATE_TOKEN_PRIVILEGE) {
+            return Err(STATUS_PRIVILEGE_NOT_HELD);
+        }
+        if token_type != TOKEN_TYPE_PRIMARY && token_type != TOKEN_TYPE_IMPERSONATION {
+            return Err(STATUS_BAD_TOKEN_TYPE);
+        }
+        let attributes = match attributes {
+            0 => ObjectAttributes32::default(),
+            at => UserPtr::<ObjectAttributes32>::new(at).read()?,
+        };
+        let impersonation_level = match (token_type, capture_qos_level(&attributes)?) {
+            (TOKEN_TYPE_PRIMARY, _) => SECURITY_ANONYMOUS,
+            (_, Some(level)) if level <= SECURITY_DELEGATION => level,
+            _ => return Err(STATUS_BAD_IMPERSONATION_LEVEL),
+        };
+        let authentication_id = Luid(UserPtr::<u64>::new(authentication_id).read()?);
+        let expiration_time = UserPtr::<i64>::new(expiration_time).read()?;
+        let user = capture_sid_and_attributes(user)?;
+        let groups = capture_groups(groups)?;
+        let privileges = capture_privileges(privileges)?;
+        let owner = match owner {
+            0 => None,
+            at => Some(capture_sid(UserPtr::<u32>::new(at).read()?)?),
+        };
+        let primary_group = capture_sid(UserPtr::<u32>::new(primary_group).read()?)?;
+        let default_dacl = match default_dacl {
+            0 => None,
+            at => match UserPtr::<u32>::new(at).read()? {
+                0 => None,
+                acl => {
+                    Some(se::capture_acl(acl, &mut |at, buffer| ke::usermem::copy_from_user(buffer, u64::from(at)))?)
+                }
+            },
+        };
+        let source_bytes = UserPtr::<[u8; 16]>::new(source).read()?;
+        let mut source = TokenSource32::default();
+        source.source_name.copy_from_slice(&source_bytes[..8]);
+        source.source_identifier = Luid(u64::from_le_bytes(source_bytes[8..].try_into().expect("8 bytes"))).to_abi();
+        if !se::logon::LOGON_SESSIONS.exists(authentication_id.to_abi()) {
+            return Err(STATUS_NO_SUCH_LOGON_SESSION);
+        }
+        let token = Token::create(NewToken {
+            token_type,
+            impersonation_level,
+            authentication_id,
+            expiration_time,
+            user,
+            groups,
+            privileges,
+            owner,
+            primary_group,
+            default_dacl,
+            source,
+        })?;
+        give_new_handle(out, token, desired, attributes.attributes)
+    };
+    status(create())
+}
+
+/// NtDuplicateToken(ExistingTokenHandle, DesiredAccess, ObjectAttributes,
+/// EffectiveOnly, TokenType, *NewTokenHandle) : une copie du jeton
+/// (`TOKEN_DUPLICATE`) du type `TokenType` (`se::Token::duplicate_as`), et un
+/// handle sur elle avec les droits `DesiredAccess` (ceux du handle copié si
+/// c'est 0, comme DuplicateTokenEx le demande) et `OBJ_INHERIT` des
+/// attributs. Une copie d'emprunt d'identité prend son niveau de la qualité
+/// de service des attributs (SecurityAnonymous sans elle). Avec
+/// `EffectiveOnly`, seuls les groupes et privilèges actifs sont copiés.
+/// ImpersonateLoggedOnUser en fait la copie d'emprunt d'identité du jeton
+/// d'un utilisateur, que `winlogon` emprunte pour préparer sa session.
+///
+/// # Errors
+/// `STATUS_INVALID_PARAMETER` pour un autre type ;
+/// `STATUS_BAD_IMPERSONATION_LEVEL` pour un niveau inconnu, au-dessus de
+/// celui d'un jeton d'emprunt d'identité copié, ou pour un jeton primaire
+/// tiré d'un jeton d'emprunt d'identité sous SecurityImpersonation ; celles
+/// des captures et du handle.
+pub(super) fn nt_duplicate_token(arguments: &[u32]) -> NtStatus {
+    let [existing, desired, attributes, effective_only, token_type, out] = arguments[..6] else {
+        unreachable!("6 arguments")
+    };
+    // A BOOLEAN, in the low byte of its argument.
+    let effective_only = effective_only as u8 != 0;
+    let duplicate = || {
+        // ProbeForWriteHandle: written first, so that a NULL faults
+        // (STATUS_ACCESS_VIOLATION, as the NtDuplicateToken apitest wants).
+        UserPtr::<u32>::new(out).write(&0)?;
+        if token_type != TOKEN_TYPE_PRIMARY && token_type != TOKEN_TYPE_IMPERSONATION {
+            return Err(STATUS_INVALID_PARAMETER);
+        }
+        let attributes = match attributes {
+            0 => ObjectAttributes32::default(),
+            at => UserPtr::<ObjectAttributes32>::new(at).read()?,
+        };
+        let asked = capture_qos_level(&attributes)?;
+        let level = asked.unwrap_or(SECURITY_ANONYMOUS);
+        if level > SECURITY_DELEGATION {
+            return Err(STATUS_BAD_IMPERSONATION_LEVEL);
+        }
+        let token = reference_token(existing, TOKEN_DUPLICATE)?;
+        if token.token_type() == TOKEN_TYPE_IMPERSONATION {
+            let above_source = asked.is_some() && level > token.impersonation_level();
+            let primary_too_low =
+                token_type == TOKEN_TYPE_PRIMARY && token.impersonation_level() < SECURITY_IMPERSONATION;
+            if above_source || primary_too_low {
+                return Err(STATUS_BAD_IMPERSONATION_LEVEL);
+            }
+        }
+        let level = if token_type == TOKEN_TYPE_PRIMARY { SECURITY_ANONYMOUS } else { level };
+        let copy = token.duplicate_as(token_type, level, effective_only);
+        // DuplicateTokenEx's 0: the access the existing handle has.
+        let desired = match desired {
+            0 => super::current_process().handle_table.query(Handle(existing))?.0 .0,
+            desired => desired,
+        };
+        give_new_handle(out, copy, desired, attributes.attributes)
+    };
+    status(duplicate())
+}
+
+/// PspSetPrimaryToken (NtSetInformationProcess, `ProcessAccessToken`) :
+/// `process` prend pour jeton primaire celui de `handle`
+/// (`TOKEN_ASSIGN_PRIMARY`), comme CreateProcessAsUser le fait d'un processus
+/// créé suspendu (`userinit.exe`, que `msgina` lance pour l'utilisateur).
+///
+/// # Errors
+/// `STATUS_BAD_TOKEN_TYPE` pour un jeton d'emprunt d'identité ;
+/// `STATUS_PRIVILEGE_NOT_HELD` sans `SeAssignPrimaryTokenPrivilege` actif :
+/// Mino ne suit pas encore la parenté des jetons (SeIsTokenChild,
+/// SeIsTokenSibling), qui en dispense un jeton tiré de celui de l'appelant.
+pub(super) fn assign_primary_token(process: &ps::EProcess, handle: u32) -> Result<NtStatus, NtStatus> {
+    let token = reference_token(handle, TOKEN_ASSIGN_PRIMARY)?;
+    if token.token_type() != TOKEN_TYPE_PRIMARY {
+        return Err(STATUS_BAD_TOKEN_TYPE);
+    }
+    if !privilege_enabled(SE_ASSIGNPRIMARYTOKEN_PRIVILEGE) {
+        return Err(STATUS_PRIVILEGE_NOT_HELD);
+    }
+    process.set_primary_token(token);
+    Ok(STATUS_SUCCESS)
 }
 
 /// SeSinglePrivilegeCheck : le privilège `privilege` (`SE_*_PRIVILEGE`) est

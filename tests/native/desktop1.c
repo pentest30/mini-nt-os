@@ -3,10 +3,11 @@
  * the desktop shell in Mino's blue theme (theme.c) — blue sky wallpaper,
  * desktop icons, a Files window, the two-column Start menu and the blue
  * taskbar — and keeps the Start menu keyboard-accessible; with the mouse, the
- * Start button opens and closes it and a press selects an entry. Terminal
- * starts ReactOS's cmd.exe in a console of its own, Task Manager its
- * taskmgr.exe, by a press or by Enter on the entry; the other entries only
- * show. Every shape is drawn by the program; built freestanding by xtask.
+ * Start button opens and closes it and a press selects an entry. Text Editor
+ * starts ReactOS's notepad.exe, Terminal its cmd.exe in a console of its
+ * own, Task Manager its taskmgr.exe, by a press or by Enter on the entry; the
+ * other entries only show. Every shape is drawn by the program; built
+ * freestanding by xtask.
  */
 
 #include "theme.h"
@@ -456,7 +457,7 @@ static const struct {
     const WCHAR *program;
     DWORD flags;
 } entry_programs[] = {
-    {0, 0}, {0, 0}, {L"C:\\WINDOWS\\SYSTEM32\\CMD.EXE", CREATE_NEW_CONSOLE},
+    {0, 0}, {L"C:\\WINDOWS\\SYSTEM32\\NOTEPAD.EXE", 0}, {L"C:\\WINDOWS\\SYSTEM32\\CMD.EXE", CREATE_NEW_CONSOLE},
     {0, 0}, {L"C:\\WINDOWS\\SYSTEM32\\TASKMGR.EXE", 0}, {0, 0}, {0, 0}, {0, 0},
 };
 

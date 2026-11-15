@@ -320,6 +320,17 @@ pub(super) fn nt_user_set_prop(arguments: &[u32]) -> NtStatus {
     NtStatus(u32::from(set().is_ok()))
 }
 
+/// NtUserRemoveProp(hWnd, Atom) : la propriété `Atom` de la fenêtre (pas
+/// une du système) part (UserRemoveProp) ; rend sa donnée, 0 si elle ne
+/// l'avait pas, 0 et `ERROR_INVALID_WINDOW_HANDLE` sans fenêtre.
+pub(super) fn nt_user_remove_prop(arguments: &[u32]) -> NtStatus {
+    let (handle, atom) = (arguments[0], arguments[1] as u16);
+    let Some(window) = win32k::window::get(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    NtStatus(win32k::window::remove_property(&window, atom, false).unwrap_or(0))
+}
+
 /// NtUserRegisterWindowMessage(MessageName) : l'atome du nom dans la table
 /// des atomes de USER (IntAddAtom), créé s'il le faut : RegisterWindowMessage
 /// rend un message de `0xC000` à `0xFFFF`, le même pour le même nom (sans

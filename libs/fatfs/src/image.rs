@@ -2,10 +2,14 @@
 //! the FAT32 specification want it.
 //!
 //! Each file is given by its path, a list of names; the directories on the
-//! way are created. A name 8.3 can hold is written in upper case, as an 8.3
-//! entry only; another one keeps its case in a long name (VFAT): the entries
-//! of its parts, the last first, before an 8.3 entry whose name is a unique
-//! alias (`BASIS~N.EXT`), as other systems make it. Directories, the root included, take as many
+//! way are created. A name 8.3 can hold keeps its case as ReactOS's vfatfs
+//! keeps it ([`case_flags`]): all in upper case, an 8.3 entry only; with a
+//! base or an extension all in lower case, an 8.3 entry with the NT case
+//! flags; with a base or an extension of mixed case (`Recent`), a long name
+//! (VFAT) before its 8.3 entry, the name in upper case. Another name keeps
+//! its case in a long name: the entries of its parts, the last first, before
+//! an 8.3 entry whose name is a unique alias (`BASIS~N.EXT`), as other
+//! systems make it. Directories, the root included, take as many
 //! clusters as their entries need; a subdirectory starts with its `.` and
 //! `..` entries. Every directory and file is one contiguous run of clusters,
 //! in depth-first order from the root; an empty file has no cluster. The
@@ -23,7 +27,8 @@
 //!   DataStartLBA     = ReservedSectors + 2 × FAT sectors
 //!   lba(cluster)     = DataStartLBA + (cluster − 2)
 //!
-//! Directory entry (32 bytes): [0..11] name, [11] attributes, [14..18]
+//! Directory entry (32 bytes): [0..11] name, [11] attributes, [12] the NT
+//! case flags ([`CASE_LOWER_BASE`], [`CASE_LOWER_EXT`]), [14..18]
 //! creation time and date, [18..20] last access date, [20..22] first
 //! cluster (high), [22..26] last write time and date, [26..28] first
 //! cluster (low), [28..32] size. Every entry carries the same date and
@@ -59,6 +64,31 @@ const LONG_NAME_LAST: u8 = 0x40;
 const LONG_NAME_UNITS: usize = 13;
 /// A long name has at most this many UTF-16 units.
 const LONG_NAME_MAX: usize = 255;
+
+/// The NT case flags of an 8.3 entry, in its byte 12 (which DOS reserved):
+/// the base of its name is in lower case…
+pub const CASE_LOWER_BASE: u8 = 0x08;
+/// … its extension is.
+pub const CASE_LOWER_EXT: u8 = 0x10;
+
+/// The case flags that keep the case of `name`, a name 8.3 holds
+/// ([`short_name`]): a base or an extension all in lower case gets its flag,
+/// one without letters none; `None` when one of them mixes cases, which only
+/// a long name keeps. As ReactOS's vfatfs decides (FATAddEntry, its
+/// `BaseAllLower` and `ExtensionAllLower`); the kernel's FAT writer
+/// (`io::fat`) follows it too.
+pub fn case_flags(name: &str) -> Option<u8> {
+    let (base, extension) = name.split_once('.').unwrap_or((name, ""));
+    let flag = |part: &str, lower: u8| {
+        let has_lower = part.bytes().any(|byte| byte.is_ascii_lowercase());
+        match (has_lower, part.bytes().any(|byte| byte.is_ascii_uppercase())) {
+            (true, true) => None,
+            (true, false) => Some(lower),
+            (false, _) => Some(0),
+        }
+    };
+    Some(flag(base, CASE_LOWER_BASE)? | flag(extension, CASE_LOWER_EXT)?)
+}
 
 /// The 8.3 name of `s`, as `FOO.BAR` or `FOOBAR`, in upper case.
 pub fn short_name(s: &str) -> Result<ShortName, String> {
@@ -177,11 +207,12 @@ fn long_entries(long: &str, short: &ShortName) -> Vec<[u8; ENTRY]> {
         .collect()
 }
 
-/// A name in a directory: its 8.3 name, and its long name when 8.3 cannot
-/// hold it.
+/// A name in a directory: its 8.3 name, its long name when 8.3 cannot hold
+/// it or its case, and the case flags of its 8.3 entry.
 struct Name {
     short: ShortName,
     long: Option<String>,
+    case: u8,
 }
 
 impl Name {
@@ -233,14 +264,20 @@ impl Dir {
         Ok(())
     }
 
-    /// The name of a new entry `name`: its 8.3 name, or its long name and an
-    /// alias no other entry has. (An 8.3 name that is an alias already names
-    /// that entry: [`Name::is`].)
+    /// The name of a new entry `name`: its 8.3 name with its case flags, or,
+    /// for a mixed case, its long name and its 8.3 name; else its long name
+    /// and an alias no other entry has. (An 8.3 name that is an alias, or
+    /// another entry's 8.3 name, already names that entry: [`Name::is`].)
     fn name(&self, name: &str) -> Result<Name, String> {
         let taken = |short: &ShortName| self.entries.iter().any(|(entry, _)| entry.short == *short);
         match short_name(name) {
-            Ok(short) => Ok(Name { short, long: None }),
-            Err(_) if long_name_valid(name) => Ok(Name { short: alias(name, taken), long: Some(name.to_string()) }),
+            Ok(short) => Ok(match case_flags(name) {
+                Some(case) => Name { short, long: None, case },
+                None => Name { short, long: Some(name.to_string()), case: 0 },
+            }),
+            Err(_) if long_name_valid(name) => {
+                Ok(Name { short: alias(name, taken), long: Some(name.to_string()), case: 0 })
+            }
             Err(error) => Err(error),
         }
     }
@@ -275,10 +312,12 @@ impl Dir {
             if let Some(long) = &name.long {
                 entries.extend(long_entries(long, &name.short));
             }
-            entries.push(match node {
+            let mut short = match node {
                 Node::File { data, first } => entry(&name.short, ATTR_ARCHIVE, *first, files[*data].len() as u32),
                 Node::Dir(dir) => entry(&name.short, ATTR_DIRECTORY, dir.first, 0),
-            });
+            };
+            short[12] = name.case;
+            entries.push(short);
         }
         image.put(self.first, &entries.concat());
         // `..` of a directory under the root names cluster 0.
@@ -581,6 +620,56 @@ mod tests {
         assert_eq!(read(&volume, "/PROGRA~1/x"), b"x", "a directory with a long name");
         let listed: Vec<String> = volume.list_dir("/WINDOWS/SYSTEM32").unwrap().into_iter().map(|e| e.name).collect();
         assert_eq!(listed, [".", "..", "NTDLL.DLL", "advapi32_vista.dll", "ADVAPI32_VISTB.DLL", "kernel32_vista.dll"]);
+        match fsck(&image) {
+            None => std::eprintln!("fsck.vfat not found: the image is not checked (dosfstools)"),
+            Some(result) => result.expect("fsck.vfat finds no error"),
+        }
+    }
+
+    #[test]
+    fn a_name_8_3_holds_keeps_its_case() {
+        // As ReactOS's vfatfs (and the kernel's `io::fat`): all in upper case,
+        // the 8.3 entry alone; a base or an extension all in lower case, the
+        // NT case flags; mixed case, a long name before the 8.3 entry. They
+        // all came out in upper case.
+        let names = ["UPPER.DAT", "readme.txt", "lower.TXT", "UPCASE.txt", "123.dat", "Mixed.txt", "MIXEXT.Txt"];
+        let files: Vec<_> = names.iter().map(|name| file(&format!("Recent/{name}"), name.as_bytes())).collect();
+        let image = build(&files).unwrap();
+        let volume = FatVolume::mount(Disk(image.clone())).unwrap();
+        // The 8.3 entry of `name` in the directory at `dir`, and how many
+        // long-name entries come right before it.
+        let entry = |dir: u32, name: &str| {
+            let (_, at) = volume.find_entry(dir, name).unwrap();
+            let parts = (0..at.index)
+                .rev()
+                .map(|index| volume.read_entry(io_manager::fat::EntryRef { index, ..at }).unwrap())
+                .take_while(|before| before[11] == ATTR_LONG_NAME)
+                .count();
+            (volume.read_entry(at).unwrap(), parts)
+        };
+        let (recent, parts) = entry(volume.root_cluster(), "RECENT");
+        assert_eq!((&recent[..11], recent[12], parts), (&b"RECENT     "[..], 0, 1), "a long name before RECENT");
+        let root: Vec<String> = volume.list_dir("/").unwrap().into_iter().map(|e| e.name).collect();
+        assert_eq!(root, ["Recent"]);
+        let dir = volume.find_in_dir(volume.root_cluster(), "recent").unwrap().first_cluster;
+        let expected: [(&ShortName, u8, usize); 7] = [
+            (b"UPPER   DAT", 0, 0),
+            (b"README  TXT", CASE_LOWER_BASE | CASE_LOWER_EXT, 0),
+            (b"LOWER   TXT", CASE_LOWER_BASE, 0),
+            (b"UPCASE  TXT", CASE_LOWER_EXT, 0),
+            (b"123     DAT", CASE_LOWER_EXT, 0),
+            (b"MIXED   TXT", 0, 1),
+            (b"MIXEXT  TXT", 0, 1),
+        ];
+        for (name, (short, case, long_parts)) in names.iter().zip(expected) {
+            let (entry, parts) = entry(dir, name);
+            assert_eq!((&entry[..11], entry[12], parts), (&short[..], case, long_parts), "{name}");
+            assert_eq!(read(&volume, &format!("/RECENT/{}", name.to_uppercase())), name.as_bytes());
+        }
+        // The kernel reads each back in its case.
+        let listed: Vec<String> = volume.list_dir("/Recent").unwrap().into_iter().skip(2).map(|e| e.name).collect();
+        assert_eq!(listed, names);
+        assert!(build(&[file("Recent", b"1"), file("RECENT", b"2")]).is_err(), "the same 8.3 name twice");
         match fsck(&image) {
             None => std::eprintln!("fsck.vfat not found: the image is not checked (dosfstools)"),
             Some(result) => result.expect("fsck.vfat finds no error"),

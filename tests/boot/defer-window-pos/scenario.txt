@@ -1,0 +1,43 @@
+# What explorer's taskbar asks of USER to lay its controls out
+# (tests/native/defer1.c, MinGW, linked to ReactOS's kernel32 and user32):
+# DEFER1.EXE takes the place of winlogon.exe and takes WinSta0\Default.
+# The taskbar places its Start button, band site and tray by
+# BeginDeferWindowPos (NtUserCallOneParam, ONEPARAM_ROUTINE_BEGINDEFERWNDPOS),
+# DeferWindowPos and EndDeferWindowPos (win32k::deferpos, a TYPE_SETWINDOWPOS
+# object of USER); without them the Start button kept its size of 0
+# ("BeginDeferWindowPos failed. lastErr=120", traywnd.cpp:1705). Then:
+# 1. a negative count: NULL, ERROR_INVALID_PARAMETER (87);
+# 2. three moves, the third merged with the first (SWP_NOMOVE keeps A's
+#    place, its size is the third's), each returning the batch;
+# 3. the ended batch: ERROR_INVALID_DWP_HANDLE (1405) both ways;
+# 4. an unknown flag: ERROR_INVALID_FLAGS (1004); SWP_ASYNCWINDOWPOS,
+#    accepted by the service but not by the batch: ERROR_INVALID_PARAMETER;
+#    the desktop window refused; an empty batch ends (TRUE), A unmoved;
+# 5. SetWindowRgn(NULL) (the taskbar on one monitor): A, under B, goes to
+#    the top of its siblings (SetWindowPos HWND_TOP, as ReactOS);
+# 6. RemoveProp gives the property's data, then nothing is left.
+features = test-smss
+requires = userland, native
+initial-command = DEFER1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [defer] ready
+expect = [defer] step 1: BeginDeferWindowPos(-1): 0, error 87
+expect = [defer] step 2: a batch of three moves, the same handle 1; EndDeferWindowPos 1
+expect = [defer] A at 100,100-350,280
+expect = [defer] B at 400,120-550,220
+expect = [defer] step 3: the ended batch: EndDeferWindowPos 0, error 1405; DeferWindowPos 0, error 1405
+expect = [defer] step 4: an unknown flag: 0, error 1004; SWP_ASYNCWINDOWPOS: 0, error 87; the desktop window: 0; the empty batch ends 1
+expect = [defer] A still at 100,100-350,280
+expect = [defer] step 5: A under B: 1; SetWindowRgn(A, NULL) 1, A on top 1
+expect = [defer] step 6: RemoveProp 1234, then GetProp 0 and RemoveProp 0
+expect = [defer] done
+expect = exit status 0x00007006
+
+forbid = *** STOP:
+forbid = NtUserCallOneParam class 0x1e
+forbid = sys: NtUserDeferWindowPos (
+forbid = sys: NtUserEndDeferWindowPosEx (
+forbid = sys: NtUserSetWindowRgn (
+forbid = sys: NtUserRemoveProp (
