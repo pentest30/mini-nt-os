@@ -1,13 +1,18 @@
 //! Les services du clavier (`win32k::input`) : NtUserGetKeyState,
 //! NtUserGetAsyncKeyState, NtUserGetKeyboardState, NtUserToUnicodeEx,
-//! NtUserTranslateMessage et NtUserSetFocus.
+//! NtUserTranslateMessage et NtUserSetFocus ; les raccourcis
+//! (`win32k::hotkey`) : NtUserRegisterHotKey, NtUserUnregisterHotKey.
 //!
 //! Ils rendent une valeur : un échec rend 0, avec l'erreur Win32 comme
 //! dernière erreur.
 
 use abi::ntstatus::NtStatus;
-use abi::winerror::{dos_error, ERROR_INVALID_PARAMETER};
+use abi::user::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN};
+use abi::winerror::{
+    dos_error, ERROR_INVALID_FLAGS, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_WINDOW_OF_OTHER_THREAD,
+};
 use ke::usermem::{copy_from_user, copy_to_user};
+use win32k::hotkey::HotKey;
 use win32k::kbdtables::{KeyState, DOWN, LOCKED};
 
 /// SC_KEY_UP : le bit d'un scan code relâché (ToUnicodeEx ne traduit pas).
@@ -99,8 +104,48 @@ pub(super) fn nt_user_set_focus(arguments: &[u32]) -> NtStatus {
         0 => None,
         hwnd => match win32k::window::get(hwnd) {
             Some(window) => Some(window),
-            None => return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE),
+            None => return fail(ERROR_INVALID_WINDOW_HANDLE),
         },
     };
     NtStatus(win32k::input::set_focus(&thread, window.as_ref()))
+}
+
+/// NtUserRegisterHotKey(hWnd, id, fsModifiers, vk) : BOOL, le raccourci
+/// `fsModifiers` et `vk` posé pour la fenêtre `hWnd` du thread, ou pour le
+/// thread sans fenêtre (`win32k::hotkey::register`). FALSE et
+/// `ERROR_INVALID_FLAGS` pour un autre modificateur que MOD_ALT,
+/// MOD_CONTROL, MOD_SHIFT et MOD_WIN ; `ERROR_INVALID_WINDOW_HANDLE` pour une
+/// fenêtre inconnue, `ERROR_WINDOW_OF_OTHER_THREAD` pour celle d'un autre
+/// thread ; `ERROR_HOTKEY_ALREADY_REGISTERED` pour une combinaison qui en a
+/// un ; FALSE sans erreur pour VK_PACKET.
+pub(super) fn nt_user_register_hot_key(arguments: &[u32]) -> NtStatus {
+    let [hwnd, id, modifiers, vk] = arguments[..4] else { unreachable!("4 arguments") };
+    if modifiers & !(MOD_ALT | MOD_CONTROL | MOD_SHIFT | MOD_WIN) != 0 {
+        return fail(ERROR_INVALID_FLAGS);
+    }
+    let thread = win32k::convert_current_thread().expect("a GUI thread at a win32k service");
+    if hwnd != 0 {
+        let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE) };
+        if window.pti != thread.server {
+            return fail(ERROR_WINDOW_OF_OTHER_THREAD);
+        }
+    }
+    let key = HotKey { pti: thread.server, hwnd, modifiers, vk, id: id as i32, shell: false };
+    match win32k::hotkey::register(key) {
+        Ok(()) => NtStatus(1),
+        Err(Some(error)) => fail(error),
+        Err(None) => NtStatus(0),
+    }
+}
+
+/// NtUserUnregisterHotKey(hWnd, id) : BOOL, les raccourcis `id` de la
+/// fenêtre `hWnd`, ou du thread sans fenêtre, retirés ; FALSE s'il n'y en
+/// avait pas, avec `ERROR_INVALID_WINDOW_HANDLE` pour une fenêtre inconnue.
+pub(super) fn nt_user_unregister_hot_key(arguments: &[u32]) -> NtStatus {
+    let [hwnd, id] = arguments[..2] else { unreachable!("2 arguments") };
+    if hwnd != 0 && win32k::window::get(hwnd).is_none() {
+        return fail(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    let thread = win32k::convert_current_thread().expect("a GUI thread at a win32k service");
+    NtStatus(u32::from(win32k::hotkey::unregister(thread.server, hwnd, id as i32)))
 }

@@ -311,6 +311,9 @@ pub const FNID_SWITCH: u32 = 0x02A0;
 pub const FNID_BUTTON: u32 = 0x02A1;
 /// FNID_DIALOG: a dialog (SetDialogPointer, DefDlgProc).
 pub const FNID_DIALOG: u32 = 0x02A4;
+/// FNID_EDIT: an Edit control, whose procedure the client sees as it is
+/// (IntGetWindowProc).
+pub const FNID_EDIT: u32 = 0x02A5;
 /// DLGWINDOWEXTRA: the extra bytes of a dialog's window (the dialog
 /// class's), the least SetDialogPointer accepts.
 pub const DLGWINDOWEXTRA: u32 = 30;
@@ -468,6 +471,9 @@ pub const HWNDLOCK_ROUTINE_UPDATEWINDOW: u32 = 0x5E;
 /// HWNDLOCK_ROUTINE_DRAWMENUBAR: DrawMenuBar, by NtUserCallHwndLock (XP's
 /// order of the enum, as the routines above).
 pub const HWNDLOCK_ROUTINE_DRAWMENUBAR: u32 = 0x55;
+/// HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW: SetForegroundWindow, by
+/// NtUserCallHwndLock.
+pub const HWNDLOCK_ROUTINE_SETFOREGROUNDWINDOW: u32 = 0x5B;
 
 /// SPI_*: the actions of SystemParametersInfo that win32k answers.
 /// SPI_GETICONTITLELOGFONT: the font of the icon titles (`pvParam` a
@@ -655,6 +661,14 @@ pub mod fvirt {
 /// TYPE_ACCELTABLE: an accelerator table in the USER handle table.
 pub const TYPE_ACCELTABLE: u8 = 8;
 
+/// TYPE_SETWINDOWPOS: a batch of BeginDeferWindowPos (`SMWP`, an HDWP) in
+/// the USER handle table.
+pub const TYPE_SETWINDOWPOS: u8 = 4;
+/// ONEPARAM_ROUTINE_BEGINDEFERWNDPOS: BeginDeferWindowPos, by
+/// NtUserCallOneParam (the parameter is the number of windows; the result
+/// the HDWP).
+pub const ONEPARAM_ROUTINE_BEGINDEFERWNDPOS: u32 = 0x1E;
+
 /// NtUserQueryWindow's indexes (QUERY_WINDOW_*, ReactOS `ntuser.h`).
 pub mod query_window {
     pub const UNIQUE_PROCESS_ID: u32 = 0x00;
@@ -676,6 +690,24 @@ pub const WPF_RESTORETOMAXIMIZED: u32 = 0x0002;
 /// WPF_ASYNCWINDOWPLACEMENT: the window of another thread is placed without
 /// waiting for it.
 pub const WPF_ASYNCWINDOWPLACEMENT: u32 = 0x0004;
+/// WPF_MININIT, WPF_MAXINIT (internal to win32k, `InternalPos.flags`): the
+/// place of the window minimized, maximized, has been set.
+pub const WPF_MININIT: u32 = 0x0008;
+pub const WPF_MAXINIT: u32 = 0x0010;
+
+/// ARW_* (MINIMIZEDMETRICS.iArrange, SM_ARRANGE): the corner where
+/// minimized windows start, and the direction they go; ARW_HIDE, a shell
+/// shows them itself (they go off the screen).
+pub const ARW_BOTTOMLEFT: u32 = 0x0000;
+pub const ARW_BOTTOMRIGHT: u32 = 0x0001;
+pub const ARW_TOPLEFT: u32 = 0x0002;
+pub const ARW_TOPRIGHT: u32 = 0x0003;
+pub const ARW_STARTMASK: u32 = 0x0003;
+pub const ARW_LEFT: u32 = 0x0000;
+pub const ARW_RIGHT: u32 = 0x0000;
+pub const ARW_UP: u32 = 0x0004;
+pub const ARW_DOWN: u32 = 0x0004;
+pub const ARW_HIDE: u32 = 0x0008;
 
 /// NCCALCSIZE_PARAMS, 32-bit: three rectangles (left, top, right, bottom),
 /// then the address of a WINDOWPOS (packed after it in a message).
@@ -954,6 +986,9 @@ pub const CTLCOLOR_MAX: u32 = 7;
 pub const HRGN_WINDOW: u32 = 1;
 pub const WM_NCPAINT: u32 = 0x0085;
 pub const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+/// WS_EX_LAYERED: a layered window; with WS_EX_TRANSPARENT, the mouse goes
+/// through it (WindowFromPoint skips it).
+pub const WS_EX_LAYERED: u32 = 0x0008_0000;
 /// WNDS_NONCPAINT: no WM_NCPAINT until the frame is invalidated again.
 pub const WNDS_NONCPAINT: u32 = 0x0000_0100;
 
@@ -962,6 +997,7 @@ pub const SW_HIDE: u32 = 0;
 pub const SW_SHOWNORMAL: u32 = 1;
 pub const SW_SHOWMINIMIZED: u32 = 2;
 pub const SW_SHOWMAXIMIZED: u32 = 3;
+pub const SW_MAXIMIZE: u32 = 3;
 pub const SW_SHOWNOACTIVATE: u32 = 4;
 pub const SW_SHOW: u32 = 5;
 pub const SW_MINIMIZE: u32 = 6;
@@ -1033,6 +1069,8 @@ pub const MK_MBUTTON: u32 = 0x0010;
 /// HT*: where a point falls in a window (WM_NCHITTEST).
 /// HTTRANSPARENT (-1): the window lets the point through to the one under it.
 pub const HTTRANSPARENT: u32 = u32::MAX;
+/// HTERROR: on a disabled window (-2).
+pub const HTERROR: u32 = 0xFFFF_FFFE;
 pub const HTNOWHERE: u32 = 0;
 pub const HTCLIENT: u32 = 1;
 pub const HTCAPTION: u32 = 2;
@@ -1071,6 +1109,11 @@ pub const WM_ENTERSIZEMOVE: u32 = 0x0231;
 pub const WM_EXITSIZEMOVE: u32 = 0x0232;
 /// WM_CLOSE: the window is asked to close (DefWindowProc destroys it).
 pub const WM_CLOSE: u32 = 0x0010;
+/// WM_QUERYOPEN: a minimized window may be restored (FALSE: it stays
+/// minimized).
+pub const WM_QUERYOPEN: u32 = 0x0013;
+/// WS_EX_NOACTIVATE: the window is never activated by the system.
+pub const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
 /// WM_SYSCOMMAND: a command of the window menu or of the frame; `wParam`
 /// SC_* in its upper 12 bits, `lParam` the point on the screen.
 pub const WM_SYSCOMMAND: u32 = 0x0112;
@@ -1090,6 +1133,8 @@ pub const SC_MOUSEMENU: u32 = 0xF090;
 /// MENU_TrackKbdMenuBar.
 pub const SC_KEYMENU: u32 = 0xF100;
 pub const SC_RESTORE: u32 = 0xF120;
+/// SC_TASKLIST: the task list (the Start menu of the shell, Ctrl+Esc).
+pub const SC_TASKLIST: u32 = 0xF130;
 /// WMSZ_*: the edge SC_SIZE drags, in the low 4 bits of `wParam`; WMSZ_LEFT
 /// (1) to WMSZ_BOTTOMRIGHT (8) follow HTLEFT (10) to HTBOTTOMRIGHT (17).
 pub const WMSZ_LEFT: u32 = 1;
@@ -1158,6 +1203,8 @@ pub mod vk {
     pub const VK_DOWN: u8 = 0x28;
     pub const VK_INSERT: u8 = 0x2D;
     pub const VK_DELETE: u8 = 0x2E;
+    pub const VK_LWIN: u8 = 0x5B;
+    pub const VK_RWIN: u8 = 0x5C;
     pub const VK_NUMPAD0: u8 = 0x60;
     pub const VK_DECIMAL: u8 = 0x6E;
     pub const VK_F4: u8 = 0x73;
@@ -1169,7 +1216,18 @@ pub mod vk {
     pub const VK_RCONTROL: u8 = 0xA3;
     pub const VK_LMENU: u8 = 0xA4;
     pub const VK_RMENU: u8 = 0xA5;
+    /// VK_PACKET: a character of SendInput (KEYEVENTF_UNICODE), not a key.
+    pub const VK_PACKET: u8 = 0xE7;
 }
+
+/// WM_HOTKEY: a hotkey pressed (RegisterHotKey); its identifier in
+/// `wParam`, MAKELONG(the modifiers down, the key) in `lParam`.
+pub const WM_HOTKEY: u32 = 0x0312;
+/// MOD_*: the modifiers of a hotkey (RegisterHotKey).
+pub const MOD_ALT: u32 = 0x0001;
+pub const MOD_CONTROL: u32 = 0x0002;
+pub const MOD_SHIFT: u32 = 0x0004;
+pub const MOD_WIN: u32 = 0x0008;
 
 /// WM_MAXIMUM (ReactOS): the highest message a filter can name.
 pub const WM_MAXIMUM: u32 = 0x0001_FFFF;
@@ -1543,8 +1601,127 @@ pub struct Cls32 {
     pub bits: u32,
 }
 
+/// GA_*: the ancestors of GetAncestor.
+pub const GA_PARENT: u32 = 1;
+pub const GA_ROOT: u32 = 2;
+pub const GA_ROOTOWNER: u32 = 3;
+
 /// NB_HOOKS: the hook types, `WH_MSGFILTER` (-1) to `WH_MOUSE_LL` (14).
 pub const NB_HOOKS: usize = 16;
+
+/// WH_*: the hook types of SetWindowsHookEx.
+pub mod wh {
+    pub const MSGFILTER: i32 = -1;
+    pub const JOURNALRECORD: i32 = 0;
+    pub const JOURNALPLAYBACK: i32 = 1;
+    pub const KEYBOARD: i32 = 2;
+    pub const GETMESSAGE: i32 = 3;
+    pub const CALLWNDPROC: i32 = 4;
+    pub const CBT: i32 = 5;
+    pub const SYSMSGFILTER: i32 = 6;
+    pub const MOUSE: i32 = 7;
+    pub const HARDWARE: i32 = 8;
+    pub const DEBUG: i32 = 9;
+    pub const SHELL: i32 = 10;
+    pub const FOREGROUNDIDLE: i32 = 11;
+    pub const CALLWNDPROCRET: i32 = 12;
+    pub const KEYBOARD_LL: i32 = 13;
+    pub const MOUSE_LL: i32 = 14;
+    /// WH_MINHOOK, WH_MAXHOOK.
+    pub const MIN: i32 = MSGFILTER;
+    pub const MAX: i32 = MOUSE_LL;
+}
+
+/// HC_ACTION: the code of a hook call about a message or an event.
+pub const HC_ACTION: i32 = 0;
+
+/// HOOKID_TO_FLAG: the bit of hook type `id` in `fsHooks` (CLIENTINFO,
+/// DESKTOPINFO), which `user32` tests (ISITHOOKED: CallMsgFilter).
+pub const fn hook_flag(id: i32) -> u32 {
+    1 << (id + 1)
+}
+
+/// TYPE_HOOK: a handle entry of a hook (`HANDLE_TYPE`).
+pub const TYPE_HOOK: u8 = 5;
+
+/// USER32_CALLBACK_HOOKPROC: a hook procedure of the client
+/// (User32CallHookProcFromKernel).
+pub const USER32_CALLBACK_HOOKPROC: u32 = 4;
+
+/// HOOK: a hook, in the desktop heap of its thread. `user32` reads
+/// `phkNext`, `HookId` and `Ansi` of the hook its `CLIENTINFO` names
+/// (`phkCurrent`) in CallNextHookEx; the rest is the server's. Pointers are
+/// server addresses.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Hook32 {
+    /// THRDESKHEAD: h, cLockObj, pti, rpdesk, pSelf.
+    pub handle: u32,
+    pub lock_count: u32,
+    pub pti: u32,
+    pub desktop: u32,
+    pub self_: u32,
+    /// The next hook of its chain, while one of its chain is being called;
+    /// 0 otherwise or at the end.
+    pub phk_next: u32,
+    pub hook_id: i32,
+    /// offPfn: the procedure's offset in its module (`ihmod`), 0 without
+    /// a module.
+    pub off_pfn: u32,
+    pub flags: u32,
+    pub ihmod: u32,
+    /// ptiHooked: the hooked thread; 0 for a global hook.
+    pub pti_hooked: u32,
+    pub rpdesk: u32,
+    pub chain: ListEntry32,
+    pub proc_: u32,
+    /// BOOLEAN, then 3 bytes of padding.
+    pub ansi: u32,
+    /// UNICODE_STRING ModuleName: the server's copy, never read here.
+    pub module_name: [u32; 2],
+}
+
+/// HOOKPROC_CALLBACK_ARGUMENTS: a hook procedure's call
+/// (USER32_CALLBACK_HOOKPROC), followed by what `lParam` points to; there,
+/// `l_param` is that record's offset from the start of the arguments.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookProcArguments32 {
+    pub hook_id: i32,
+    pub code: i32,
+    pub w_param: u32,
+    pub l_param: u32,
+    pub proc_: u32,
+    /// Mod: the module of a hook set with one (`ihmod`).
+    pub module: u32,
+    pub off_pfn: u32,
+    /// BOOLEAN, then 3 bytes of padding.
+    pub ansi: u32,
+    /// LRESULT: what the procedure returned, written back by `user32`.
+    pub result: u32,
+    pub l_param_size: u32,
+    /// The module's path, which `user32` loads for a procedure of another
+    /// process (`offPfn` and `Mod` set); nul-terminated.
+    pub module_name: [u16; 512],
+}
+
+impl Default for HookProcArguments32 {
+    fn default() -> Self {
+        Self {
+            hook_id: 0,
+            code: 0,
+            w_param: 0,
+            l_param: 0,
+            proc_: 0,
+            module: 0,
+            off_pfn: 0,
+            ansi: 0,
+            result: 0,
+            l_param_size: 0,
+            module_name: [0; 512],
+        }
+    }
+}
 
 /// LIST_ENTRY, 32-bit: two server addresses in the desktop heap.
 #[repr(C)]
@@ -1624,6 +1801,16 @@ const _: () = {
     assert!(offset_of!(DeskInfoHead32, ppi_shell_process) == 0xA4);
     // szDesktopName follows, at 0xAC; sizeof(DESKTOPINFO) is 0xB0.
     assert!(size_of::<DeskInfoHead32>() == 0xAC);
+    // user32!CallNextHookEx: `pHook->phkNext`, then `phkNext->HookId` and
+    // `pHook->Ansi`.
+    assert!(offset_of!(Hook32, phk_next) == 0x14);
+    assert!(offset_of!(Hook32, hook_id) == 0x18);
+    assert!(offset_of!(Hook32, chain) == 0x30);
+    assert!(offset_of!(Hook32, ansi) == 0x3C);
+    assert!(size_of::<Hook32>() == 0x48);
+    assert!(offset_of!(HookProcArguments32, result) == 0x20);
+    assert!(offset_of!(HookProcArguments32, module_name) == 0x28);
+    assert!(size_of::<HookProcArguments32>() == 0x428);
     assert!(offset_of!(ClientThreadInfo32, time_last_read) == 0x0C);
     assert!(size_of::<ClientThreadInfo32>() == 0x14);
     assert!(size_of::<UserHandleEntry32>() == 12);
@@ -1905,6 +2092,38 @@ pub struct SbInfo32 {
     pub vert: SbData32,
 }
 
+/// SBCALC, 32-bit: the state of a scroll bar control (the ScrollBar class),
+/// its SBDATA first; win32k keeps those four fields, `user32` reads them
+/// (GetScrollPos, SBM_GETPOS, SBM_GETRANGE) and the rest is unused.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SbCalc32 {
+    pub data: SbData32,
+    pub px_top: i32,
+    pub px_bottom: i32,
+    pub px_left: i32,
+    pub px_right: i32,
+    pub cpx_thumb: i32,
+    pub px_up_arrow: i32,
+    pub px_down_arrow: i32,
+    pub px_start: i32,
+    pub px_thumb_bottom: i32,
+    pub px_thumb_top: i32,
+    pub cpx: i32,
+    pub px_min: i32,
+}
+
+/// What a scroll bar control's WND carries past the WND (SBWND, less the
+/// WND): its class has these extra bytes (`sizeof(SBWND) - sizeof(WND)`),
+/// and its SB_CTL bar lives there (`SBCalc`), not in an SBINFO.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SbWndExtra32 {
+    pub f_vert: i32,
+    pub w_disable_flags: u32,
+    pub sb_calc: SbCalc32,
+}
+
 /// SCROLLINFO, 32-bit (SetScrollInfo, GetScrollInfo); an application may
 /// give it without `nTrackPos`, 24 bytes.
 #[repr(C)]
@@ -1947,6 +2166,9 @@ pub struct SetScrollBarInfo32 {
 const _: () = {
     assert!(size_of::<SbData32>() == 16);
     assert!(size_of::<SbInfo32>() == 36);
+    assert!(size_of::<SbCalc32>() == 64);
+    assert!(size_of::<SbWndExtra32>() == 72);
+    assert!(offset_of!(SbWndExtra32, sb_calc) == 8);
     assert!(offset_of!(SbInfo32, horz) == 4);
     assert!(offset_of!(SbInfo32, vert) == 20);
     assert!(size_of::<ScrollInfo32>() == 28);
@@ -2057,6 +2279,28 @@ pub struct FindExistingCurIconParam32 {
     pub cy: i32,
 }
 
+/// ICONINFO, 32-bit: what NtUserGetIconInfo (GetIconInfo) gives of a cursor
+/// or an icon.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct IconInfo32 {
+    /// TRUE for an icon, FALSE for a cursor.
+    pub icon: i32,
+    pub x_hotspot: u32,
+    pub y_hotspot: u32,
+    /// Its AND mask; for a monochrome one, over its XOR mask.
+    pub hbm_mask: u32,
+    /// Its colors; 0 for a monochrome one.
+    pub hbm_color: u32,
+}
+
+const _: () = {
+    assert!(size_of::<IconInfo32>() == 20);
+    assert!(offset_of!(IconInfo32, x_hotspot) == 4);
+    assert!(offset_of!(IconInfo32, hbm_mask) == 12);
+    assert!(offset_of!(IconInfo32, hbm_color) == 16);
+};
+
 const _: () = {
     assert!(size_of::<CursorData32>() == 88);
     assert!(offset_of!(CursorData32, rt) == 8);
@@ -2161,12 +2405,16 @@ as_bytes!(
     MonitorInfo32,
     PaintStruct32,
     CursorData32,
+    IconInfo32,
     FindExistingCurIconParam32,
     SetWndIconsArguments32,
     Property32,
+    SbData32,
     SbInfo32,
     ScrollInfo32,
-    ScrollBarInfo32
+    ScrollBarInfo32,
+    Hook32,
+    HookProcArguments32
 );
 
 #[cfg(test)]

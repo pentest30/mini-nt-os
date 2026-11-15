@@ -496,7 +496,8 @@ la console, rendent ce qu'ils rendent sur XP.
 
 Pas encore :
 
-- la casse des noms 8.3 (octet 12), la date de dernier accès à la lecture, le fuseau horaire ;
+- la date de dernier accès à la lecture, le fuseau horaire (la casse des noms 8.3, octet 12 : faite, étape 34 de
+  [`m6-fenetres.md`](m6-fenetres.md)) ;
 - NtSetDefaultLocale (la locale de l'utilisateur) ;
 - ProcessDeviceMap (NtQueryInformationProcess, classe 0x17, que GetDriveType demande ; `dir` s'en passe) ;
 - `del`, `ren`, `md`, `rd` (suppression et renommage d'Io) ;

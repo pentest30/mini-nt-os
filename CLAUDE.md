@@ -47,7 +47,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
 - Commits au format `<composant>: <résumé à l'impératif>`, par exemple `mm: séparer reserve et commit dans la VAD`.
   Déplacements par `git mv`. Une PR traite un seul sujet.
 - **Jalon courant : M6 — win32k** ([05](docs/05-feuille-de-route.md#m6--win32k-avec-le-spike-s3-en-premier)) : le
-  bureau d'`explorer` et le changement de résolution restent. M0 à M5 sont terminés (spikes S1, S2 et S3 réussis ;
+  changement de résolution reste (le bureau d'`explorer` est fait). M0 à M5 sont terminés (spikes S1, S2 et S3 réussis ;
   l'ADR-002 qui les attendait est à confirmer par le mainteneur). Acquis de M1 (Ke) : dispatcher (ADR-005) sur l'ordonnanceur à 32 priorités de
   `kernel/ke/src/sched.rs` (préemption différée sous `DISPATCH_LEVEL`, quantum en tiers de tick, boosts, balance set
   manager `ke::balance`), DPC et APC noyau sans allocation (`ke::dpc`, `ke::apc`), roue de timers, état FPU/SSE par
@@ -167,7 +167,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`fsck.vfat` l'accepte) ; `FatVolume` écrit, `Volume` et `File` créent et écrivent ; NtCreateFile crée, NtReadFile,
   NtWriteFile, NtSetInformationFile, NtFlushBuffersFile. Disque système ATA fait : `hal::ata` (PIO, lecture,
   écriture, FLUSH CACHE), `io::disk::AtaDisk` ; un disque FAT32 au maître du canal secondaire devient
-  `\Device\HarddiskVolume1`, et `C:` (sans lui, le disque RAM). Scénario `persistence` (`disk = system`, `boots = 2`,
+  `\Device\HarddiskVolume1`, et `C:` (sans lui, le disque RAM). Les fichiers se lisent par suites de secteurs
+  (`BlockDevice::read_sectors` : 256 secteurs par commande ATA) et les sections d'un même fichier inchangé partagent
+  ses octets (`io::section_cache`, `File::contents`) : scénario `section-cache`. Scénario `persistence`
+  (`disk = system`, `boots = 2`,
   `fsck.vfat` sur l'image) : le critère 3 du M4 est coché. Ruches réécrites sur disque : une ruche
   lue d'un fichier s'y réécrit en entier, sans ses clés volatiles (`cm::HiveFile::flush`, `regf::builder` avec
   classes et dates), NtFlushKey ; scénario `registry-persistence` (une valeur et l'empreinte de la ruche SYSTEM
@@ -303,7 +306,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserGetScrollBarInfo, NtUserSetScrollBarInfo, NtUserShowScrollBar, NtUserEnableScrollBar ; le cadre dessine
   flèches, fond en damier (`Op::Mono`), curseur, coin et poignée de taille ; HTVSCROLL, HTHSCROLL, HTSIZE ; un clic
   devient WM_SYSCOMMAND SC_VSCROLL, que `user32` suit (DefWndTrackScrollBar) ; scénario `scroll`
-  (`tests/native/scroll1.c`). Pas encore SB_CTL.
+  (`tests/native/scroll1.c`). SB_CTL à l'étape 33.
   M6, étape 18 (le défilement, `win32k::scrollex`) : NtUserScrollDC (la copie dans la surface du DC, la région
   découverte) et NtUserScrollWindowEx (par un DC du cache, la région déjà à repeindre décalée, SW_SCROLLCHILDREN,
   SW_INVALIDATE, SW_ERASE) ; BitBlt dans une même surface copie dans le sens du décalage
@@ -348,6 +351,41 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 28 : SetWindowLong de GWL_STYLE et GWL_EXSTYLE (`win32k::window::set_style` : WM_STYLECHANGING,
   `restyle`, `restyle_ex`, WM_STYLECHANGED) ; l'onglet du gestionnaire des tâches se donne `WS_CLIPSIBLINGS` et ne
   peint plus sur sa page ; les sœurs se repeignent de haut en bas de l'ordre Z, comme ReactOS.
+  M6, étape 30 (la vue des fichiers de la boîte Enregistrer sous) : NtUserGetIconInfo (`win32k::cursor::icon_info`,
+  copies des bitmaps par `gdi::surface::copy_bitmap`, module et ressource), GetDIBits (`gdi::dibits::get_dibits`, 1
+  et 32 bits), StretchBlt (`gdi::bitblt::stretch_blt`), GetNearestColor, BI_BITFIELDS de StretchDIBits ;
+  NtUserGetAtomName écrit dans le UNICODE_STRING de l'appelant (il écrasait la pile), un SendMessage qui échoue rend 0
+  dans `ResultInfo` : le cache d'icônes de `shell32` ne boucle plus, la vue liste `C:\` avec ses icônes ; scénario
+  `notepad-saveas`.
+  M6, étape 31 (les images de `comctl32`) : BitBlt et StretchBlt entre un bitmap monochrome et des couleurs
+  (`gdi::bitblt::Convert` : la couleur de fond du DC source, celles du texte et du fond de la destination) ; l'alpha
+  des images de 32 bits (StretchDIBits le garde, les ROP avec source portent sur 32 bits, NtGdiCreateDIBitmapInternal
+  `gdi::dibits::create_dibitmap`, NtGdiAlphaBlend `gdi::bitblt::alpha_blend`, le pixel d'une icône prémultiplié ;
+  `user32` fait enfin le bitmap d'alpha des curseurs et icônes de 32 bits, mélangés par leur alpha et non leurs masques) ;
+  les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`, la couleur la plus proche) et GetDIBits de 4 et 8
+  bits (`gdi::dibits::default_palette`) : la barre d'outils de la boîte Enregistrer sous, sa barre des emplacements et
+  les icônes du gestionnaire des tâches s'affichent justes.
+  M6, étape 32 (la barre des emplacements) : `minoinit.exe` enregistre `shell32` (DllRegisterServer, RegistrationPhase2
+  de `syssetup.inf`) ; NtQueryKey(KeyNameInformation) accepte un handle qui porte un droit quelconque
+  (`ob::HandleTable::reference_as_with_any_access`) ; NtSetInformationFile(FileBasicInformation) sonde sur 4
+  octets, comme ReactOS : les CLSID du shell et leurs icônes sous HKCR, les cinq emplacements de la boîte
+  Enregistrer sous avec leurs icônes.
+  M6, étape 34 (la casse des noms 8.3, Io) : comme `vfatfs` de ReactOS (FATAddEntry), un nom que le 8.3 tient garde
+  sa casse : tout en majuscules, son entrée 8.3 seule ; une base ou une extension toute en minuscules, les drapeaux
+  de casse de NT (octet 12 : `fat::CASE_LOWER_BASE`, `CASE_LOWER_EXT`), relus par `FatVolume::dir_entries` ; à casse
+  mixte, des entrées de nom long devant l'entrée 8.3 en majuscules : « Recent » s'affiche « Recent ». La règle est
+  dans `libs/fatfs` (`fatfs::image::case_flags`, que Io réexporte), dont les images (`tools/mkfat`, image GPT) la
+  suivent aussi. FileBothDirectoryInformation rend le nom 8.3 de toute entrée FAT, comme `vfatfs`.
+  M6, étape 35 (réduire, agrandir, rétablir, `win32k::winpos`) : co_WinPosMinMaximize (`winpos::min_maximize` :
+  `WS_MINIMIZE`, `WS_MAXIMIZE`, WM_QUERYOPEN, WM_GETMINMAXINFO, WM_SIZE `SIZE_MINIMIZED` ou `SIZE_MAXIMIZED` par
+  `SWP_STATECHANGED`) et la place gardée de chaque fenêtre (`winpos::InternalPos` : rectangle normal, places réduite
+  et agrandie), que lisent et donnent GetWindowPlacement et SetWindowPlacement ; ShowWindow de toutes ses commandes,
+  une fenêtre créée réduite ou agrandie ; la fenêtre active réduite cède l'activation
+  (`input::activate_other_min`). Agrandie, une fenêtre a son cadre épais hors de l'écran ; réduite, sans shell, elle
+  devient une barre de titre à la première case libre en bas à gauche (MINIMIZEDMETRICS `ARW_BOTTOMLEFT`, pas
+  `ARW_HIDE` comme ReactOS : `winpos::icon_slot`), dont les boutons répondent. Le cadre : le bouton du titre peint
+  enfoncé pendant son suivi (`paint::draw_caption_button`), le glyphe Rétablir, le double-clic sur le titre
+  (`defwnd::double_click`) ; scénario `minmax` (`tests/native/minmax1.c` : ShowWindow, puis la souris de QEMU).
   M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
   NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
   NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),
@@ -364,7 +402,28 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   l'événement de la file de chaque thread GUI dans la table de son processus (ONEPARAM_ROUTINE_GETINPUTEVENT,
   `win32k::queue::input_event`) ; la fenêtre du shell (NtUserSetShellWindowEx, `win32k::shell` : station,
   `DESKTOPINFO`, au fond de l'ordre Z) ; SetWindowPos découvre par régions visibles (VisBefore moins VisAfter). Le
-  bureau d'`explorer` est créé sous sa barre des tâches ; pas encore son fond (NtUserPaintDesktop) ni ses icônes.
+  bureau d'`explorer` est créé sous sa barre des tâches, et il en peint le fond (NtUserPaintDesktop,
+  `win32k::desktop::paint_desktop`) ; un chemin de bureau sans station prend la station héritée ou WinSta0
+  (`win32k::startup::default_station`, `ob::HandleTable::find_by_type`) ; les DC pris refont leur région après
+  chaque SetWindowPos (`win32k::dce::reset_active_dcs`). Pas encore ses icônes. La PR 133 fusionnée : fenêtres
+  `HWND_MESSAGE`, serveurs COM du disque enregistrés par `minoinit` (CLSID_StartMenu, CLSID_RebarBandSite). Le bouton
+  Démarrer placé par DeferWindowPos (`win32k::deferpos` : BeginDeferWindowPos par NtUserCallOneParam 0x1E, un lot
+  `TYPE_SETWINDOWPOS`, NtUserDeferWindowPos, NtUserEndDeferWindowPosEx) ; NtUserSetWindowRgn sans région,
+  NtUserRemoveProp ; scénario `defer-window-pos`. La branche des icônes fusionnée (étapes 30 à 32 de
+  `m6-fenetres.md`) : le menu Démarrer se crée, la barre aussi (zone de notification, horloge), le bureau montre ses
+  icônes, et un clic sur Démarrer ouvre le menu (scénario `logon`, `screen-wait`) : **le premier critère du M6 est
+  coché**. Les crochets (PR 136) le font suivre la souris (`win32k::hook` : objets `TYPE_HOOK` dans le tas du bureau,
+  chaînes par thread et par bureau, `fsHooks`, NtUserSetWindowsHookEx, NtUserUnhookWindowsHookEx,
+  NtUserCallNextHookEx, NtUserCallMsgFilter ; WH_GETMESSAGE dans `queue::peek`, WH_MSGFILTER dans la boucle des
+  menus), avec NtUserWindowFromPoint, NtUserGetAncestor, Get/SetForegroundWindow ; scénario `hooks`
+  (`tests/native/hook1.c`). M6, étape 33 : les contrôles ScrollBar (SB_CTL : le `SBWND` dans les octets de plus,
+  `abi::user::SbWndExtra32`, lu par `user32` ; GetScrollBarInfo(OBJID_CLIENT), EnableScrollBar, ShowScrollBar) et
+  GWLP_WNDPROC d'une fenêtre à procédure du serveur (`win32k::window::replace_procedure`, IntSetWindowProc : ATL
+  sous-classe la poignée de taille de l'autocomplétion de `browseui`) ; scénario `scroll-control`
+  (`tests/native/sbctl1.c`) : la fenêtre de dossier d'`explorer` s'ouvre (« My Documents »), sa vue encore vide.
+  Les raccourcis clavier (`win32k::hotkey` : NtUserRegisterHotKey, NtUserUnregisterHotKey, WM_HOTKEY au clavier,
+  Ctrl+Échap de la fenêtre du shell) : `winlogon` reçoit Ctrl+Alt+Suppr (la SAS : « Security », « Unlock
+  Computer »), Win+R d'`explorer` ouvre « Run » ; scénario `hotkey` (`tests/native/hotkey1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
@@ -480,6 +539,8 @@ cargo build -p mino-loader --target x86_64-unknown-uefi --profile kernel
   `llvm`). Sans eux, ils sont sautés.
 - `screen = X Y RRGGBB` : une fois les marqueurs trouvés, le moniteur de QEMU fait une capture de l'écran
   (`screen.ppm` dans le répertoire du run) où le pixel (X, Y) doit avoir cette couleur.
+- `screen-wait = SECONDES` : l'écran peut mettre ce temps à montrer les pixels de `screen` après les marqueurs
+  (ce qu'ont lancé des `keys`) ; la capture est refaite chaque seconde jusque-là.
 - `keys = MARQUEUR => TOUCHES` : quand le marqueur paraît dans le journal série, le moniteur de QEMU tape ces
   touches (`sendkey` : `a`, `shift-a`, `ret`…), une ligne après l'autre ; `"dir C:\"` entre guillemets donne les
   touches de chaque caractère (clavier américain).

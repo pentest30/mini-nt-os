@@ -14,6 +14,8 @@ pub const DEFAULT_MEMORY_MB: u32 = 256;
 
 /// How often a watched boot rereads its serial log.
 const POLL: Duration = Duration::from_millis(250);
+/// How often the screen is captured again while `screen-wait` runs.
+const SCREEN_RETRY: Duration = Duration::from_secs(1);
 
 /// QEMU CPU model.
 #[derive(Clone)]
@@ -341,6 +343,8 @@ fn boot_once(
     let start = Instant::now();
     // The `keys` lines already typed, in order.
     let mut typed = 0;
+    // When the markers were all found, for `screen-wait`.
+    let mut markers_found: Option<Instant> = None;
     let (passed, mut reason) = loop {
         std::thread::sleep(POLL);
         // Read the log after checking for exit, so that it is complete.
@@ -372,13 +376,18 @@ fn boot_once(
             continue;
         }
         match scenario.check(&log) {
-            // The screen, once the markers are found (the last boot).
+            // The screen, once the markers are found (the last boot): captured
+            // again until it shows the pixels, for `screen-wait` at most.
             Verdict::Pass if !scenario.screen.is_empty() => {
                 let dump = run_dir.join("screen.ppm");
                 let monitor = monitor.as_ref().expect("built when the screen is checked");
+                let found = *markers_found.get_or_insert_with(Instant::now);
                 match crate::screen::capture(monitor, &dump).and_then(|image| image.check(&scenario.screen)) {
                     Ok(()) => break (true, String::new()),
-                    Err(why) => break (false, why),
+                    Err(why) if found.elapsed() >= scenario.screen_wait || start.elapsed() >= timeout => {
+                        break (false, why)
+                    }
+                    Err(_) => std::thread::sleep(SCREEN_RETRY),
                 }
             }
             Verdict::Pass => break (true, String::new()),

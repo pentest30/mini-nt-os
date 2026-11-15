@@ -11,9 +11,18 @@
  * - C:\*.EXE gives only the .EXE files;
  * - C:\KERNEL.BIN, an exact name, gives the file and its size;
  * - C:\WINDOWS\SYSTEM32\NT* gives at least NTDLL.DLL; an exact name gives
- *   its size back, with no alternate name because it is already 8.3;
+ *   its size back, and its 8.3 name as the alternate name, as ReactOS's
+ *   vfatfs gives it for every entry (it was empty for an 8.3 name);
+ * - a file created as readme.txt and a directory created as Recent come
+ *   back in their case: readme.txt by the NT case flags of its 8.3 entry,
+ *   its alternate name readme.txt too; Recent by its long name, its
+ *   alternate name RECENT;
  * - a name nothing matches fails with ERROR_FILE_NOT_FOUND;
- * - the whole enumeration again, restarted, gives the same entries.
+ * - the whole enumeration again, restarted, gives the same entries;
+ * - NtSetInformationFile(FileBasicInformation) takes a buffer aligned on 4
+ *   bytes only, as an i386 stack gives kernel32's CopyFileW its local one
+ *   (sizeof(ULONG), as ReactOS probes it): asking 8, Mino's kernel refused
+ *   it with STATUS_DATATYPE_MISALIGNMENT, and CopyFileW failed.
  * Each result goes to the debug port (DbgPrint), where the scenario looks
  * for it; the program ends with EXIT_STATUS.
  *
@@ -53,6 +62,19 @@ typedef struct {
 #define INVALID_HANDLE_VALUE ((HANDLE)-1)
 #define ERROR_FILE_NOT_FOUND 2
 #define EXIT_STATUS 0x600D
+#define FILE_WRITE_ATTRIBUTES 0x100
+#define OPEN_EXISTING 3
+#define CREATE_NEW 1
+#define GENERIC_WRITE 0x40000000
+#define FILE_ATTRIBUTE_NORMAL 0x80
+#define FILE_BASIC_INFORMATION_CLASS 4
+/* FILE_BASIC_INFORMATION: four times and the attributes, 40 bytes. */
+#define FILE_BASIC_INFORMATION_SIZE 40
+
+typedef struct {
+    LONG status;
+    DWORD information;
+} IO_STATUS_BLOCK;
 
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
 
@@ -62,6 +84,12 @@ __declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) BOOL __stdcall FindClose(HANDLE find);
 __declspec(dllimport) HANDLE __stdcall FindFirstFileW(const WCHAR *pattern, FIND_DATA *data);
 __declspec(dllimport) BOOL __stdcall FindNextFileW(HANDLE find, FIND_DATA *data);
+__declspec(dllimport) HANDLE __stdcall CreateFileW(const WCHAR *name, DWORD access, DWORD share, void *security,
+                                                   DWORD disposition, DWORD flags, HANDLE template_file);
+__declspec(dllimport) BOOL __stdcall CloseHandle(HANDLE handle);
+__declspec(dllimport) BOOL __stdcall CreateDirectoryW(const WCHAR *name, void *security);
+__declspec(dllimport) LONG __stdcall NtSetInformationFile(HANDLE file, IO_STATUS_BLOCK *status, void *information,
+                                                          DWORD length, DWORD information_class);
 
 __declspec(dllimport) HDESK __stdcall CreateDesktopW(const WCHAR *name, const WCHAR *device, void *mode, DWORD flags,
                                                      DWORD access, void *attributes);
@@ -102,6 +130,15 @@ static BOOL same_name(const WCHAR *a, const WCHAR *b)
         if (ca != cb)
             return 0;
     }
+    return a[i] == b[i];
+}
+
+/* Are two wide strings the same, case included? */
+static BOOL exact_name(const WCHAR *a, const WCHAR *b)
+{
+    unsigned int i;
+    for (i = 0; a[i] && a[i] == b[i]; i++)
+        ;
     return a[i] == b[i];
 }
 
@@ -169,6 +206,55 @@ static int enumerate(const WCHAR *pattern, const WCHAR *watch)
     return count;
 }
 
+/* NtSetInformationFile(FileBasicInformation) of KERNEL.BIN from a buffer at
+ * 4 bytes past a multiple of 8, all zero: each time and the attributes as
+ * they are. Its status. */
+static LONG set_basic_information_aligned_on_four(void)
+{
+    unsigned char room[FILE_BASIC_INFORMATION_SIZE + 12];
+    unsigned char *information = (unsigned char *)((((unsigned long)room + 7) & ~7ul) + 4);
+    IO_STATUS_BLOCK status_block;
+    HANDLE file = CreateFileW(L"C:\\KERNEL.BIN", FILE_WRITE_ATTRIBUTES, 7, 0, OPEN_EXISTING, 0, 0);
+    LONG status;
+
+    if (file == INVALID_HANDLE_VALUE)
+        return -1;
+    memset(information, 0, FILE_BASIC_INFORMATION_SIZE);
+    status = NtSetInformationFile(file, &status_block, information, FILE_BASIC_INFORMATION_SIZE,
+                                  FILE_BASIC_INFORMATION_CLASS);
+    CloseHandle(file);
+    return status;
+}
+
+/* Creates `path` (a directory with `directory`), finds it again by its
+ * path, and reports the name and the alternate name it comes back with:
+ * true if they are `name` and `alternate`, case included. */
+static BOOL report_case(const WCHAR *path, BOOL directory, const WCHAR *name, const WCHAR *alternate)
+{
+    FIND_DATA data;
+    HANDLE found;
+    char shown[MAX_PATH], shown_alternate[14];
+
+    if (directory) {
+        if (!CreateDirectoryW(path, 0))
+            return 0;
+    } else {
+        HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
+        if (file == INVALID_HANDLE_VALUE)
+            return 0;
+        CloseHandle(file);
+    }
+    memset(&data, 0, sizeof data);
+    found = FindFirstFileW(path, &data);
+    if (found == INVALID_HANDLE_VALUE)
+        return 0;
+    FindClose(found);
+    ascii(data.file_name, shown, sizeof shown);
+    ascii(data.alternate_file_name, shown_alternate, sizeof shown_alternate);
+    DbgPrint("[dir] created %s, alternate %s\n", shown, shown_alternate);
+    return exact_name(data.file_name, name) && exact_name(data.alternate_file_name, alternate);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     FIND_DATA data;
@@ -199,8 +285,8 @@ DWORD __stdcall GuiStartup(void)
     if (data.size_low != 4)
         ExitProcess(5);
 
-    /* A directory of the system. An entry already named in 8.3 form has
-     * no distinct alternate name in FILE_BOTH_DIR_INFORMATION. */
+    /* A directory of the system. An entry already named in 8.3 form still
+     * has its 8.3 name in FILE_BOTH_DIR_INFORMATION, as vfatfs gives it. */
     count = enumerate(L"C:\\WINDOWS\\SYSTEM32\\NT*", L"NTDLL.DLL");
     DbgPrint("[dir] SYSTEM32\\NT*: %d entries\n", count);
     if (count < 1)
@@ -210,7 +296,7 @@ DWORD __stdcall GuiStartup(void)
         ExitProcess(7);
     ascii(data.alternate_file_name, alternate, sizeof alternate);
     DbgPrint("[dir] NTDLL.DLL: %lu bytes, alternate %s\n", data.size_low, alternate);
-    if (data.alternate_file_name[0] != 0 || data.size_low == 0)
+    if (!exact_name(data.alternate_file_name, L"NTDLL.DLL") || data.size_low == 0)
         ExitProcess(8);
 
     /* A name nothing matches fails as the callers expect. */
@@ -227,6 +313,13 @@ DWORD __stdcall GuiStartup(void)
     DbgPrint("[dir] C:\\* again: %d entries\n", count);
     if (count < 4)
         ExitProcess(11);
+
+    DbgPrint("[dir] FileBasicInformation aligned on 4: %lx\n", (DWORD)set_basic_information_aligned_on_four());
+
+    if (!report_case(L"C:\\readme.txt", 0, L"readme.txt", L"readme.txt"))
+        ExitProcess(12);
+    if (!report_case(L"C:\\Recent", 1, L"Recent", L"RECENT"))
+        ExitProcess(13);
 
     DbgPrint("[dir] done\n");
     ExitProcess(EXIT_STATUS);

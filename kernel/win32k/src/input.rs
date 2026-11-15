@@ -33,9 +33,12 @@
 //! système) d'après l'état du clavier du thread ; ToUnicodeEx
 //! ([`to_unicode_ex`]) traduit une touche selon un état donné.
 //!
-//! Pas encore : la souris, les crochets (WH_KEYBOARD_LL), les raccourcis
-//! (RegisterHotKey), Alt + pavé numérique, Alt + Tab, le changement de
-//! disposition par Alt + Maj, les voyants, Impr. écran, SendInput, le
+//! Une touche d'un raccourci (RegisterHotKey) devient WM_HOTKEY
+//! (`crate::hotkey::process`) au lieu d'un message de touche.
+//!
+//! Pas encore : la souris, les crochets (WH_KEYBOARD_LL), Alt + pavé
+//! numérique, Alt + Tab, le changement de disposition par Alt + Maj, les
+//! voyants, Impr. écran, SendInput, le
 //! premier plan perdu (WM_NCACTIVATE, WM_ACTIVATE inactif et WM_KILLFOCUS
 //! à un autre thread), plusieurs bureaux d'entrée.
 
@@ -51,7 +54,8 @@ use abi::user::vk::{
 use abi::user::{
     Msg32, KF_ALTDOWN, KF_EXTENDED, KF_REPEAT, KF_UP, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_CHAR,
     WM_DEADCHAR, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_NCACTIVATE, WM_SETFOCUS, WM_SYSCHAR, WM_SYSDEADCHAR,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WNDS_ACTIVEFRAME, WS_CHILD, WS_DISABLED, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WNDS_ACTIVEFRAME, WS_CHILD, WS_DISABLED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_MINIMIZE, WS_POPUP, WS_VISIBLE,
 };
 use hal::sync::KSpinLock;
 
@@ -259,6 +263,30 @@ pub fn foreground() -> Option<Arc<ThreadInfo>> {
     FOREGROUND.lock().clone()
 }
 
+/// UserGetForegroundWindow : la fenêtre active du thread du premier plan ;
+/// 0 sans premier plan.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn foreground_window() -> u32 {
+    foreground().map_or(0, |thread| thread.queue.with(|queue| queue.active).0)
+}
+
+/// co_IntSetForegroundWindow (SetForegroundWindow) : la fenêtre de premier
+/// niveau de `window` est activée et passe au premier plan ([`activate`]) ;
+/// rend si elle a pu l'être (visible, ni réduite ni fille, pas détruite).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn set_foreground_window(window: &Arc<Window>) -> bool {
+    let root = root_of(window.clone());
+    if !can_activate(&root) {
+        return false;
+    }
+    activate(&root);
+    true
+}
+
 /// `thread`, qui se termine, n'est plus au premier plan
 /// (IntSetFocusMessageQueue(NULL) de MsqDestroyMessageQueue) ; rend s'il
 /// l'était. Le dernier pointeur vers lui part une fois le verrou rendu.
@@ -360,6 +388,48 @@ pub fn activate_other(window: &Arc<Window>, excluded: Option<u32>, notify: bool)
     }
 }
 
+/// ActivateOtherWindowMin : `window`, de premier niveau, active, vient
+/// d'être réduite ; la première de ses sœurs (sous les fenêtres toujours
+/// au-dessus, puis depuis la première) qui est visible, activée, ni réduite
+/// ni `WS_EX_NOACTIVATE` et n'est pas une fenêtre d'outils devient active
+/// ([`activate`]), sinon la première fenêtre d'outils qui l'est. Rend
+/// faux sans elle (co_WinPosActivateOtherWindow, [`activate_other`],
+/// cherchera). La fenêtre active d'avant (`spwndActivePrev`) n'est pas
+/// encore gardée : la recherche part de l'ordre Z.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir.
+pub fn activate_other_min(window: &Arc<Window>) -> bool {
+    let Some(parent) = crate::window::get(window.state().parent) else { return false };
+    let siblings: alloc::vec::Vec<Arc<Window>> =
+        crate::window::children(&parent, false).into_iter().filter_map(crate::window::get).collect();
+    let below_topmost =
+        siblings.iter().rposition(|sibling| sibling.state().ex_style & WS_EX_TOPMOST != 0).map_or(0, |last| last + 1);
+    let usable = |candidate: &&Arc<Window>| {
+        let state = candidate.state();
+        candidate.is_alive()
+            && candidate.handle != window.handle
+            && state.ex_style & WS_EX_NOACTIVATE == 0
+            && state.style & (WS_VISIBLE | WS_DISABLED | WS_MINIMIZE) == WS_VISIBLE
+    };
+    let order = siblings[below_topmost..].iter().chain(siblings.iter());
+    let mut tool = None;
+    for candidate in order.filter(usable) {
+        if candidate.state().ex_style & WS_EX_TOOLWINDOW == 0 {
+            activate(candidate);
+            return true;
+        }
+        tool.get_or_insert_with(|| candidate.clone());
+    }
+    match tool {
+        Some(tool) => {
+            activate(&tool);
+            true
+        }
+        None => false,
+    }
+}
+
 /// La disposition de `thread` (aucun : la première chargée,
 /// W32kGetDefaultKeyLayout).
 fn layout_of(thread: Option<&ThreadInfo>) -> Option<Arc<KeyboardLayout>> {
@@ -410,7 +480,15 @@ pub fn process_keyboard_input(data: &KeyboardInputData) {
 fn send_key(input: &KeyInput, foreground: Option<&ThreadInfo>) {
     let (active, focus) = foreground.map_or((0, 0), |thread| thread.queue.with(|q| (q.active, q.focus)).0);
     let hwnd = if focus != 0 { focus } else { active };
-    let message = key_message(&mut ASYNC.lock(), input, hwnd, foreground.is_some() && focus == 0, message_time());
+    let (message, modifiers) = {
+        let mut keys = ASYNC.lock();
+        let message = key_message(&mut keys, input, hwnd, foreground.is_some() && focus == 0, message_time());
+        (message, crate::hotkey::modifiers(&keys.state))
+    };
+    // A hotkey (Ctrl+Alt+Del for winlogon) takes the key: no key message.
+    if crate::hotkey::process(simplify_vk(input.vk), !input.up, modifiers, message.time) {
+        return;
+    }
     if let Some(thread) = foreground {
         crate::queue::post_input(thread, message);
     }

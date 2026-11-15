@@ -50,6 +50,9 @@ Ce que les binaires réels ont révélé :
   l'étoile d'un motif avant l'extension en `<` (`C:\*.EXE` arrive comme
   `<.EXE`). `io::name` les connaît : `<` nomme n'importe quoi jusqu'au
   dernier point (exclu), `>` un caractère, rien au dernier point.
+- **Le nom 8.3 de chaque entrée** dans `ShortName`, même sans nom long,
+  comme `vfatfs` de ReactOS (étape 34 de [`m6-fenetres.md`](m6-fenetres.md) ;
+  entre le 2026-11-06 et elle, seulement à côté d'un nom long).
 - **`ShortNameLength` en octets** : le kernel32 épinglé copie ce compte
   d'octets en caractères larges (`NTDL` pour `NTDLL.DLL` quand il compte
   des caractères) — le noyau écrit donc des octets, comme ce kernel32 le
@@ -377,6 +380,9 @@ cible préparée et formatée, avec les mêmes refus et la même revalidation :
   à chaque fichier (lent), et le premier nom long (`KERNEL32_VISTA.DLL`)
   arrêtait la copie : `Volume::create` écrit maintenant les entrées VFAT et
   l'alias 8.3 (`BASE~N.EXT`, unique dans le répertoire, extension comprise) ;
+  un nom que le 8.3 tient garde sa casse comme chez `vfatfs` (drapeaux de casse de
+  NT, ou un nom long pour une casse mixte : étape 34 de
+  [`m6-fenetres.md`](m6-fenetres.md)) ;
 - **les fichiers de boot** : quand l'ESP de démarrage est montable en FAT32
   (une image GPT, VirtualBox), `EFI/BOOT/BOOTX64.EFI`, `kernel.elf` et
   `fat.img` (le ramdisk, 42,5 Mo avec l'espace utilisateur) vont à leur place

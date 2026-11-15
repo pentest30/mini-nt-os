@@ -315,14 +315,17 @@ mod tests {
             (fatfs::path("WINDOWS/SYSTEM32/KERNEL32_VISTA.DLL").unwrap(), payload.clone()),
             (fatfs::path("WINDOWS/SYSTEM32/CONFIG/SYSTEM").unwrap(), b"regf-hive-bytes".to_vec()),
             (fatfs::path("WINDOWS/FONTS/TAHOMA.TTF").unwrap(), vec![7u8; 100]),
+            // A mixed case (a long name before RECENT), a lower case (the NT
+            // case flags of its 8.3 entry).
+            (fatfs::path("WINDOWS/Recent/readme.txt").unwrap(), b"r".to_vec()),
         ])
         .unwrap();
         let mut file = std::io::Cursor::new(image.clone());
         let volume = Fat32::read(&mut file, 0, u64::from(image.len() as u32).div_ceil(512)).unwrap();
         let stats = volume.walk().unwrap();
-        assert_eq!(stats.files, 5);
-        assert_eq!(stats.directories, 4, "WINDOWS, SYSTEM32, CONFIG, FONTS");
-        assert_eq!(stats.bytes, 4 + 2500 + 2500 + 15 + 100);
+        assert_eq!(stats.files, 6);
+        assert_eq!(stats.directories, 5, "WINDOWS, SYSTEM32, CONFIG, FONTS, Recent");
+        assert_eq!(stats.bytes, 4 + 2500 + 2500 + 15 + 100 + 1);
         // The hash of a file read through its chain is the hash of its bytes.
         assert_eq!(stats.contents.get("WINDOWS/SYSTEM32/NTDLL.DLL"), Some(&(2500, fnv1a(&payload))));
         assert_eq!(stats.contents.get("KERNEL.BIN"), Some(&(4, fnv1a(b"ABCD"))));
@@ -334,6 +337,7 @@ mod tests {
             "WINDOWS/SYSTEM32/KERNEL32_VISTA.DLL",
             "WINDOWS/SYSTEM32/CONFIG/SYSTEM",
             "WINDOWS/FONTS/TAHOMA.TTF",
+            "WINDOWS/RECENT/README.TXT",
         ] {
             assert!(upcased.contains(path), "{path} not seen in {:?}", stats.paths);
         }

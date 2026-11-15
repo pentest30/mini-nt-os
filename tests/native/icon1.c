@@ -12,6 +12,12 @@
  *   DrawIconEx;
  * - C, of A's class, given IDI_ASTERISK by WM_SETICON (ICON_SMALL), which
  *   WM_GETICON gives back: its caption shows it.
+ * GetIconInfo of IDI_HAND gives copies of its bitmaps, the program's own:
+ * GetObject sizes them, GetDIBits reads the icon's red back from the colour
+ * copy, DeleteObject deletes them, and the icon still draws (B's client area,
+ * painted after). CopyImage with LR_COPYFROMRESOURCE asks GetIconInfo for the
+ * icon's module (user32) and resource, and loads it again at 16 x 16, as
+ * shell32's icon cache does through comctl32's image lists.
  * Each step goes to the debug port (DbgPrint); the program ends with
  * EXIT_STATUS.
  *
@@ -32,6 +38,8 @@ typedef void *HICON;
 typedef void *HCURSOR;
 typedef void *HBRUSH;
 typedef void *HDC;
+typedef void *HBITMAP;
+typedef unsigned short WORD;
 typedef void *HWINSTA;
 typedef void *HDESK;
 typedef unsigned int WPARAM;
@@ -86,6 +94,10 @@ typedef struct {
 
 #define WS_VISIBLE 0x10000000
 #define WS_OVERLAPPEDWINDOW 0x00CF0000
+#define IMAGE_ICON 1
+#define LR_COPYFROMRESOURCE 0x4000
+#define DIB_RGB_COLORS 0
+#define HAND_RED 0x00F34B4B
 #define WM_PAINT 0x000F
 #define WM_GETICON 0x007F
 #define WM_SETICON 0x0080
@@ -100,7 +112,49 @@ typedef struct {
 #define IDI_WINLOGO ((const WCHAR *)32517)
 #define EXIT_STATUS 0x6010
 
+typedef struct {
+    BOOL fIcon;
+    DWORD xHotspot;
+    DWORD yHotspot;
+    HBITMAP hbmMask;
+    HBITMAP hbmColor;
+} ICONINFO;
+
+typedef struct {
+    LONG bmType;
+    LONG bmWidth;
+    LONG bmHeight;
+    LONG bmWidthBytes;
+    WORD bmPlanes;
+    WORD bmBitsPixel;
+    void *bmBits;
+} BITMAP;
+
+typedef struct {
+    DWORD biSize;
+    LONG biWidth;
+    LONG biHeight;
+    WORD biPlanes;
+    WORD biBitCount;
+    DWORD biCompression;
+    DWORD biSizeImage;
+    LONG biXPelsPerMeter;
+    LONG biYPelsPerMeter;
+    DWORD biClrUsed;
+    DWORD biClrImportant;
+    DWORD bmiColors[2];
+} BITMAPINFO;
+
 __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
+__declspec(dllimport) HDC __stdcall CreateCompatibleDC(HDC dc);
+__declspec(dllimport) BOOL __stdcall DeleteDC(HDC dc);
+__declspec(dllimport) BOOL __stdcall DeleteObject(void *object);
+__declspec(dllimport) int __stdcall GetDIBits(HDC dc, HBITMAP bitmap, UINT start, UINT lines, void *bits, BITMAPINFO *info,
+                                              UINT usage);
+__declspec(dllimport) int __stdcall GetObjectW(void *object, int size, void *buffer);
+__declspec(dllimport) void *__stdcall CopyImage(void *image, UINT type, int width, int height, UINT flags);
+__declspec(dllimport) BOOL __stdcall DestroyIcon(HICON icon);
+__declspec(dllimport) BOOL __stdcall GetIconInfo(HICON icon, ICONINFO *info);
 __declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
 
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
@@ -211,6 +265,72 @@ static ATOM register_class(const WCHAR *name, HICON icon)
     return RegisterClassExW(&class_info);
 }
 
+/* The pixels of IDI_HAND's red in the colour bitmap `color` (32 x 32),
+   read by GetDIBits; -1 if it reads nothing. */
+static int count_red(HBITMAP color)
+{
+    static DWORD pixels[32 * 32];
+    BITMAPINFO info;
+    HDC dc = CreateCompatibleDC(0);
+    int lines, red = 0, i;
+
+    memset(&info, 0, sizeof info);
+    info.biSize = 40;
+    info.biWidth = 32;
+    info.biHeight = -32;
+    info.biPlanes = 1;
+    info.biBitCount = 32;
+    lines = GetDIBits(dc, color, 0, 32, pixels, &info, DIB_RGB_COLORS);
+    DeleteDC(dc);
+    if (lines != 32)
+        return -1;
+    for (i = 0; i < 32 * 32; i++)
+        red += (pixels[i] & 0x00FFFFFF) == HAND_RED;
+    return red;
+}
+
+/* GetIconInfo: copies of the icon's bitmaps, the program's own; of no icon,
+   an error. CopyImage(LR_COPYFROMRESOURCE): the icon loaded again from its
+   module and resource, at the size asked for. */
+static void check_icon_info(void)
+{
+    ICONINFO info, small_info;
+    BITMAP mask, color, small_mask;
+    HICON small;
+    BOOL got, refused, deleted_mask, deleted_color;
+    DWORD error;
+    int red;
+
+    memset(&info, 0, sizeof info);
+    memset(&mask, 0, sizeof mask);
+    memset(&color, 0, sizeof color);
+    got = GetIconInfo(hand, &info);
+    GetObjectW(info.hbmMask, sizeof mask, &mask);
+    GetObjectW(info.hbmColor, sizeof color, &color);
+    DbgPrint("[icon] GetIconInfo(IDI_HAND): %d, an icon %d, hot spot %lu %lu; mask %ldx%ld %u bit, colours %ldx%ld %u bits\n",
+             got, info.fIcon, info.xHotspot, info.yHotspot, mask.bmWidth, mask.bmHeight, mask.bmBitsPixel,
+             color.bmWidth, color.bmHeight, color.bmBitsPixel);
+    red = count_red(info.hbmColor);
+    deleted_mask = DeleteObject(info.hbmMask);
+    deleted_color = DeleteObject(info.hbmColor);
+    DbgPrint("[icon] its colours read back: red %s; the copies deleted %d %d\n", red > 0 ? "yes" : "no", deleted_mask,
+             deleted_color);
+    SetLastError(0);
+    refused = !GetIconInfo((HICON)0x00DEAD02, &small_info);
+    error = GetLastError();
+    DbgPrint("[icon] GetIconInfo of no icon: refused %d, error %lu\n", refused, error);
+    small = CopyImage(hand, IMAGE_ICON, 16, 16, LR_COPYFROMRESOURCE);
+    memset(&small_info, 0, sizeof small_info);
+    memset(&small_mask, 0, sizeof small_mask);
+    GetIconInfo(small, &small_info);
+    GetObjectW(small_info.hbmMask, sizeof small_mask, &small_mask);
+    DbgPrint("[icon] CopyImage(IDI_HAND, 16 x 16, LR_COPYFROMRESOURCE): %s, mask %ldx%ld\n",
+             small && small != hand ? "a new icon" : "WRONG", small_mask.bmWidth, small_mask.bmHeight);
+    DeleteObject(small_info.hbmMask);
+    DeleteObject(small_info.hbmColor);
+    DestroyIcon(small);
+}
+
 DWORD __stdcall GuiStartup(void)
 {
     HINSTANCE instance = GetModuleHandleW(0);
@@ -226,6 +346,7 @@ DWORD __stdcall GuiStartup(void)
     DbgPrint("[icon] IDI_APPLICATION %d, shared %d; IDI_HAND %d, IDI_ASTERISK %d, IDI_WINLOGO %d\n", application != 0,
              LoadIconW(0, IDI_APPLICATION) == application, hand != 0, asterisk != 0, LoadIconW(0, IDI_WINLOGO) != 0);
 
+    check_icon_info();
     if (!register_class(PLAIN_CLASS, 0) || !register_class(HAND_CLASS, hand))
         ExitProcess(2);
     window_a = CreateWindowExW(0, PLAIN_CLASS, L"A", WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 100, 380, 250, 0, 0,

@@ -1,0 +1,49 @@
+# The hooks (win32k::hook) and the queries of the Start menu's hook
+# (tests/native/hook1.c, MinGW, linked to ReactOS's kernel32 and user32):
+# HOOK1.EXE takes the place of winlogon.exe and switches to WinSta0\Default.
+features = test-smss
+requires = userland, native
+initial-command = HOOK1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [hooks] on WinSta0\Default
+# ERROR_INVALID_HOOK_FILTER, ERROR_INVALID_FILTER_PROC, ERROR_GLOBAL_ONLY_HOOK,
+# ERROR_HOOK_NEEDS_HMOD.
+expect = [hooks] refusals: type 99 1426, no procedure 1427, global-only 1429, global without a module 1428
+expect = [hooks] WH_GETMESSAGE set: 1
+# HC_ACTION, the message out of the queue (PM_REMOVE), changed by the hook.
+expect = [hooks] GetMessage: the hook saw code 0, removed 1, wParam 11 lParam 22; GetMessage gives wParam 77
+expect = [hooks] PeekMessage: removed 0, then 1
+# The last set first; CallNextHookEx gives what the next one returned.
+expect = [hooks] two hooks: called ba, CallNextHookEx gave 5a, the message's wParam 77
+# ERROR_INVALID_HOOK_HANDLE.
+expect = [hooks] the second unhooked: 1, again: 0 (1404); then called a
+expect = [hooks] all unhooked: called '', wParam 5; CallNextHookEx outside a hook: 0
+expect = [hooks] WH_MSGFILTER: CallMsgFilter 1, the filter saw code 4242 and 8000
+# user32 tests the thread's fsHooks: no call to the kernel.
+expect = [hooks] WH_MSGFILTER unhooked: CallMsgFilter 0
+# The menu's loop gives each message to the filters (MSGF_MENU); the one
+# they handle is not the menu's.
+expect = [hooks] TrackPopupMenu: the filter saw WM_APP+1 with MSGF_MENU 1, the menu ended: 0
+expect = [hooks] another thread hooked: 1, the hook ran in it: 1, its message 33
+# The hook goes with the thread it hooks.
+expect = [hooks] its thread ended: UnhookWindowsHookEx 0 (1404)
+expect = [hooks] GetAncestor: C parent W, root W, rootowner W; W parent the desktop, root W, rootowner W
+expect = [hooks] GetAncestor: P parent the desktop, root P, rootowner W; M root itself 1, parent not the desktop 1
+# ERROR_INVALID_WINDOW_HANDLE (user32), ERROR_INVALID_PARAMETER.
+expect = [hooks] GetAncestor: of the desktop 0; an unknown window 0 (1400); type 4 (87)
+# A child transparent to the mouse (HTTRANSPARENT), disabled or hidden
+# leaves the point to W; outside every window, the desktop.
+expect = [hooks] WindowFromPoint: C C, the caption W, T W, D W, H W, P P, outside the desktop
+# A child brings its top-level window to the foreground.
+expect = [hooks] SetForegroundWindow: W 1, then W; P 1, then P; C 1, then W
+expect = [hooks] done
+
+forbid = *** STOP:
+forbid = NtUserSetWindowsHookEx (0x1221) is not implemented
+forbid = NtUserCallNextHookEx (0x1140) is not implemented
+forbid = NtUserCallMsgFilter (0x113f) is not implemented
+forbid = NtUserGetAncestor (0x117c) is not implemented
+forbid = NtUserWindowFromPoint (0x124c) is not implemented
+forbid = NtUserGetForegroundWindow (0x1193) is not implemented

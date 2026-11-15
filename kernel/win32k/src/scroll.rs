@@ -42,9 +42,23 @@
 //! indisponible, hors de l'écran) se calcule à chaque GetScrollBarInfo, ce
 //! que ReactOS écrit puis écrase.
 //!
-//! Pas encore : les barres de défilement des contrôles (SB_CTL, la classe
-//! ScrollBar), les barres d'une fenêtre de droite à gauche
-//! (WS_EX_LAYOUTRTL), les thèmes.
+//! Les barres de défilement des contrôles (SB_CTL, la classe ScrollBar de
+//! `user32`, FNID_SCROLLBAR) : leur état est la troisième barre ([`CTL`]),
+//! leur SBDATA dans les octets de plus du contrôle (`SBWND.SBCalc`), où
+//! `user32` le lit lui-même (SBM_GETPOS, SBM_GETRANGE, GetScrollPos) ; une
+//! fenêtre qui n'a pas ces octets n'a pas de barre SB_CTL. SetScrollInfo
+//! ne la cache ni ne la montre ; GetScrollBarInfo (OBJID_CLIENT) la donne
+//! dans la zone cliente du contrôle (verticale avec SBS_VERT) ;
+//! EnableScrollBar change ses flèches ; ShowScrollBar montre ou cache le
+//! contrôle (ShowWindow). C'est `user32` qui la peint (WM_PAINT du
+//! contrôle) : SetScrollInfo invalide le contrôle au lieu d'en repeindre
+//! l'intérieur aussitôt (IntRefeshScrollInterior), un écart voulu.
+//! Comme Wine et la documentation, un contrôle désactivé (WS_DISABLED)
+//! est indisponible dans `rgstate[0]` ; ReactOS teste l'inverse.
+//!
+//! Pas encore : EnableWindow du contrôle par EnableScrollBar
+//! (ESB_DISABLE_BOTH, ESB_ENABLE_BOTH : journalisé une fois), les barres
+//! d'une fenêtre de droite à gauche (WS_EX_LAYOUTRTL), les thèmes.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -53,12 +67,12 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use abi::ntstatus::NtStatus;
 use abi::user::{
-    color, esb, sb, sif, sm, state_system, Rect32, SbData32, SbInfo32, ScrollBarInfo32, ScrollInfo32,
-    SetScrollBarInfo32, CCHILDREN_SCROLLBAR, OBJID_HSCROLL, RDW_FRAME, RDW_INVALIDATE, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_BORDER, WS_CHILD, WS_EX_LEFTSCROLLBAR, WS_HSCROLL,
-    WS_MAXIMIZE, WS_THICKFRAME, WS_VSCROLL,
+    color, esb, sb, sif, sm, state_system, Rect32, SbData32, SbInfo32, SbWndExtra32, ScrollBarInfo32, ScrollInfo32,
+    SetScrollBarInfo32, CCHILDREN_SCROLLBAR, OBJID_HSCROLL, RDW_FRAME, RDW_INVALIDATE, SBS_VERT, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WS_BORDER, WS_CHILD, WS_DISABLED,
+    WS_EX_LEFTSCROLLBAR, WS_HSCROLL, WS_MAXIMIZE, WS_THICKFRAME, WS_VISIBLE, WS_VSCROLL,
 };
-use abi::winerror::{ERROR_CALL_NOT_IMPLEMENTED, ERROR_INVALID_PARAMETER, ERROR_NO_SCROLLBARS};
+use abi::winerror::{ERROR_INVALID_PARAMETER, ERROR_NO_SCROLLBARS};
 
 use crate::gdi::brush::GRAY_PATTERN;
 use crate::gdi::dib::{ColorRef, MonoFill, Rect};
@@ -66,9 +80,15 @@ use crate::gdi::draw::{draw_edge, Op, BF_FLAT, BF_MIDDLE, BF_RECT, EDGE_RAISED, 
 use crate::nonclient::{button_symbol, marlett, square_in, Layout};
 use crate::window::{self, Window, WindowState};
 
-/// SB_HORZ et SB_VERT, en indices de [`ScrollBars::bars`].
+/// SB_HORZ, SB_VERT et SB_CTL, en indices de [`ScrollBars::bars`].
 pub const HORZ: usize = 0;
 pub const VERT: usize = 1;
+pub const CTL: usize = 2;
+
+/// Les octets de plus d'un contrôle barre de défilement
+/// (`sizeof(SBWND) - sizeof(WND)`), et la place de son SBDATA parmi eux.
+pub const CONTROL_EXTRA: u32 = size_of::<SbWndExtra32>() as u32;
+const CONTROL_DATA_AT: u32 = core::mem::offset_of!(SbWndExtra32, sb_calc) as u32;
 
 /// Les parties d'une barre dans `rgstate` (SCROLL_*) : la flèche du haut ou
 /// de gauche, la page avant le curseur, le curseur, la page après, la flèche
@@ -130,15 +150,15 @@ pub struct ScrollBars {
     /// La place de leur `SBINFO` dans le tas du bureau.
     pub at: u32,
     /// WSBflags : les flèches désactivées (ESB_*), le même champ pour les
-    /// deux barres (comme ReactOS).
+    /// trois barres (comme ReactOS).
     pub flags: u32,
-    pub bars: [Bar; 2],
+    pub bars: [Bar; 3],
 }
 
 impl ScrollBars {
     /// Des barres neuves, leur `SBINFO` en `at`.
     pub const fn new(at: u32) -> Self {
-        Self { at, flags: 0, bars: [Bar::new(); 2] }
+        Self { at, flags: 0, bars: [Bar::new(); 3] }
     }
 
     /// Leur `SBINFO`.
@@ -147,21 +167,26 @@ impl ScrollBars {
     }
 }
 
-/// La barre de SB_HORZ ou SB_VERT. `ERROR_INVALID_PARAMETER` pour une autre
-/// valeur ; `ERROR_CALL_NOT_IMPLEMENTED` pour SB_CTL (journalisé une fois).
+/// La barre de SB_HORZ, SB_VERT ou SB_CTL. `ERROR_INVALID_PARAMETER` pour
+/// une autre valeur.
 pub fn index(which: u32) -> Result<usize, u32> {
     match which {
         sb::HORZ => Ok(HORZ),
         sb::VERT => Ok(VERT),
-        sb::CTL => {
-            static REPORTED: AtomicBool = AtomicBool::new(false);
-            if !REPORTED.swap(true, Ordering::Relaxed) {
-                log::warn!("win32k: scroll bar controls (SB_CTL): not yet");
-            }
-            Err(ERROR_CALL_NOT_IMPLEMENTED)
-        }
+        sb::CTL => Ok(CTL),
         _ => Err(ERROR_INVALID_PARAMETER),
     }
+}
+
+/// La barre `which` de `window` ([`index`]) ; SB_CTL seulement pour une
+/// fenêtre qui a les octets de plus d'un contrôle (IntGetSBData :
+/// `ERROR_INVALID_PARAMETER` sinon).
+fn bar_of(window: &Window, which: u32) -> Result<usize, u32> {
+    let bar = index(which)?;
+    if bar == CTL && window.extra_size() < CONTROL_EXTRA {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    Ok(bar)
 }
 
 /// Le style d'une fenêtre qui montre la barre `bar`.
@@ -292,13 +317,18 @@ pub fn set_info(bars: &mut ScrollBars, bar: usize, info: &ScrollInfo32) -> Resul
             if mask & sif::DISABLENOSCROLL != 0 {
                 flags = esb::DISABLE_BOTH;
                 set.changed = true;
-            } else if set.changed {
+            } else if bar != CTL && set.changed {
                 set.hide = true;
             }
-        } else if mask & !sif::THEMED != sif::PAGE && set.changed {
-            // Shown and enabled again, unless only the page changed.
-            flags = esb::ENABLE_BOTH;
-            set.show = true;
+        } else if mask & !sif::THEMED != sif::PAGE {
+            // Shown and enabled again, unless only the page changed; a
+            // control is never hidden, only enabled.
+            if bar == CTL {
+                flags = esb::ENABLE_BOTH;
+            } else if set.changed {
+                flags = esb::ENABLE_BOTH;
+                set.show = true;
+            }
         }
         if bars.flags != flags {
             bars.flags = flags;
@@ -670,6 +700,12 @@ fn publish(window: &Window, bars: &ScrollBars) -> Result<(), NtStatus> {
     window.heap.section.write_kernel(u64::from(bars.at), bars.sb_info().as_bytes())
 }
 
+/// Écrit le SBDATA de la barre d'un contrôle (`SBWND.SBCalc`) dans ses
+/// octets de plus.
+fn publish_control(window: &Window, bar: &Bar) -> Result<(), u32> {
+    window.write_extra(CONTROL_DATA_AT, bar.data().as_bytes()).map_err(abi::winerror::dos_error)
+}
+
 /// Change les barres de `window` (créées s'il le faut) par `change`, puis
 /// réécrit leur `SBINFO`.
 fn update<R>(window: &Window, change: impl FnOnce(&mut ScrollBars) -> R) -> Result<R, u32> {
@@ -685,21 +721,40 @@ fn update<R>(window: &Window, change: impl FnOnce(&mut ScrollBars) -> R) -> Resu
     result.ok_or(ERROR_NO_SCROLLBARS)
 }
 
-/// NtUserSetScrollInfo de la barre `which` (SB_HORZ, SB_VERT) de `window` :
-/// [`set_info`], puis la barre cachée ou montrée ([`show_scroll_bar`]), ou
+/// NtUserSetScrollInfo de la barre `which` (SB_HORZ, SB_VERT, SB_CTL) de
+/// `window` : [`set_info`], puis la barre cachée ou montrée ([`show_scroll_bar`]), ou
 /// repeinte si `redraw` et qu'elle se voit : par le cadre si ses flèches
 /// changent (ou avec un thème), sinon son intérieur aussitôt
-/// (IntRefeshScrollInterior). Rend la position (ou celle d'avant).
+/// (IntRefeshScrollInterior). La barre d'un contrôle (SB_CTL) se publie
+/// dans ses octets de plus, et le contrôle s'invalide. Rend la position (ou
+/// celle d'avant).
 ///
 /// # Errors
-/// L'erreur de Win32 : celles de [`index`] et de [`set_info`] ;
+/// L'erreur de Win32 : celles de [`index`] et de [`set_info`], et
+/// `ERROR_INVALID_PARAMETER` pour SB_CTL d'une fenêtre qui n'est pas un
+/// contrôle ;
 /// `ERROR_NOT_ENOUGH_MEMORY` si le tas du bureau est plein.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système. Rappelle le mode utilisateur.
 pub fn set_scroll_info(window: &Arc<Window>, which: u32, info: &ScrollInfo32, redraw: bool) -> Result<i32, u32> {
-    let bar = index(which)?;
-    let set = update(window, |bars| set_info(bars, bar, info))??;
+    let bar = bar_of(window, which)?;
+    let mut control = None;
+    let set = update(window, |bars| {
+        let set = set_info(bars, bar, info);
+        control = Some(bars.bars[CTL]);
+        set
+    })??;
+    if bar == CTL {
+        if let Some(control) = control {
+            publish_control(window, &control)?;
+        }
+        // The control paints itself (user32, its WM_PAINT): invalidated.
+        if !set.nothing && redraw && window.state().style & WS_VISIBLE != 0 && window::is_visible(window) {
+            crate::paint::redraw_window(window, None, None, RDW_INVALIDATE);
+        }
+        return Ok(set.returned);
+    }
     if set.nothing {
         return Ok(set.returned);
     }
@@ -746,31 +801,65 @@ pub fn set_scroll_info(window: &Arc<Window>, which: u32, info: &ScrollInfo32, re
 /// Celles de [`index`] ; `ERROR_NO_SCROLLBARS` si elle n'a pas encore de
 /// barres.
 pub fn scroll_info(window: &Window, which: u32, info: ScrollInfo32) -> Result<ScrollInfo32, u32> {
-    let bar = index(which)?;
-    let bars = window.state().scroll.ok_or(ERROR_NO_SCROLLBARS)?;
+    let bar = bar_of(window, which)?;
+    let bars = match window.state().scroll {
+        Some(bars) => bars,
+        // A control's bar exists from its creation (co_IntCreateScrollBars).
+        None if bar == CTL => ensure(window).map_err(abi::winerror::dos_error)?,
+        None => return Err(ERROR_NO_SCROLLBARS),
+    };
     Ok(get_info(&bars.bars[bar], info))
 }
 
-/// La barre d'un OBJID_* (SBOBJ_TO_SBID).
-fn bar_of_object(object: i32) -> Result<usize, u32> {
-    let which = object.wrapping_sub(OBJID_HSCROLL);
-    index(u32::try_from(which).map_err(|_| ERROR_INVALID_PARAMETER)?)
+/// co_IntGetScrollBarInfo de la barre d'un contrôle (SB_CTL, d'état
+/// `state`) de style `style` et de zone cliente `client` : dans la zone
+/// cliente (IntGetScrollBarRect), verticale avec SBS_VERT ; ses flèches et
+/// son curseur ([`thumb`]) ; indisponible sans rien à faire défiler ou
+/// désactivée (WS_DISABLED, comme Wine), jamais invisible.
+pub fn control_bar_info(state: &Bar, style: u32, client: Rect, m: &impl Fn(usize) -> i32) -> ScrollBarInfo32 {
+    let rect = Rect::new(0, 0, client.right - client.left, client.bottom - client.top);
+    let (line, top, bottom) = thumb(rect, style & SBS_VERT != 0, state, m);
+    let mut states = state.states;
+    states[0] = 0;
+    if state.nothing_to_scroll() || style & WS_DISABLED != 0 {
+        states[0] |= state_system::UNAVAILABLE;
+    }
+    ScrollBarInfo32 {
+        cb_size: size_of::<ScrollBarInfo32>() as u32,
+        rc_scroll_bar: rect32(rect),
+        dxy_line_button: line,
+        xy_thumb_top: top,
+        xy_thumb_bottom: bottom,
+        reserved: state.reserved,
+        rgstate: states,
+    }
 }
 
-/// NtUserGetScrollBarInfo de l'objet `object` (OBJID_HSCROLL, OBJID_VSCROLL)
-/// de `window`, ses barres créées s'il le faut : [`bar_info`].
+/// La barre d'un OBJID_* de `window` (SBOBJ_TO_SBID : OBJID_HSCROLL,
+/// OBJID_VSCROLL, OBJID_CLIENT pour SB_CTL).
+fn bar_of_object(window: &Window, object: i32) -> Result<usize, u32> {
+    let which = object.wrapping_sub(OBJID_HSCROLL);
+    bar_of(window, u32::try_from(which).map_err(|_| ERROR_INVALID_PARAMETER)?)
+}
+
+/// NtUserGetScrollBarInfo de l'objet `object` (OBJID_HSCROLL, OBJID_VSCROLL,
+/// OBJID_CLIENT d'un contrôle) de `window`, ses barres créées s'il le faut :
+/// [`bar_info`], [`control_bar_info`].
 ///
 /// # Errors
-/// `ERROR_INVALID_PARAMETER` pour un autre objet ;
-/// `ERROR_CALL_NOT_IMPLEMENTED` pour OBJID_CLIENT (SB_CTL) ;
-/// `ERROR_NOT_ENOUGH_MEMORY` si le tas du bureau est plein.
+/// `ERROR_INVALID_PARAMETER` pour un autre objet, ou OBJID_CLIENT d'une
+/// fenêtre qui n'est pas un contrôle ; `ERROR_NOT_ENOUGH_MEMORY` si le tas
+/// du bureau est plein.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn scroll_bar_info(window: &Window, object: i32) -> Result<ScrollBarInfo32, u32> {
-    let bar = bar_of_object(object)?;
+    let bar = bar_of_object(window, object)?;
     let bars = ensure(window).map_err(abi::winerror::dos_error)?;
     let state = window.state();
+    if bar == CTL {
+        return Ok(control_bar_info(&bars.bars[CTL], state.style, state.client, &crate::metrics::get));
+    }
     Ok(bar_info(bar, &bars.bars[bar], state.style, state.ex_style, (state.window, state.client), &crate::metrics::get))
 }
 
@@ -783,7 +872,7 @@ pub fn scroll_bar_info(window: &Window, object: i32) -> Result<ScrollBarInfo32, 
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn set_scroll_bar_info(window: &Window, object: i32, info: &SetScrollBarInfo32) -> Result<(), u32> {
-    let bar = bar_of_object(object)?;
+    let bar = bar_of_object(window, object)?;
     update(window, |bars| {
         let current = &mut bars.bars[bar];
         current.track_pos = info.n_track_pos;
@@ -793,13 +882,15 @@ pub fn set_scroll_bar_info(window: &Window, object: i32, info: &SetScrollBarInfo
 }
 
 /// NtUserEnableScrollBar : les flèches de la barre `which` (SB_HORZ,
-/// SB_VERT, SB_BOTH) de `window` selon `arrows` (ESB_*), qui devient aussi
-/// `WSBflags` ; rend si elles ont changé (`user32` repeint alors la barre).
-/// Faux pour la fenêtre d'un bureau.
+/// SB_VERT, SB_BOTH, SB_CTL) de `window` selon `arrows` (ESB_*), qui devient
+/// aussi `WSBflags` ; rend si elles ont changé (`user32` repeint alors la
+/// barre), et toujours vrai pour un contrôle (comme ReactOS). Faux pour la
+/// fenêtre d'un bureau.
 ///
 /// # Errors
-/// `ERROR_INVALID_PARAMETER` pour une autre barre ; celles de [`index`]
-/// pour SB_CTL ; `ERROR_NOT_ENOUGH_MEMORY` si le tas du bureau est plein.
+/// `ERROR_INVALID_PARAMETER` pour une autre barre, ou SB_CTL d'une fenêtre
+/// qui n'est pas un contrôle ; `ERROR_NOT_ENOUGH_MEMORY` si le tas du
+/// bureau est plein.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
@@ -811,10 +902,21 @@ pub fn enable_scroll_bar(window: &Window, which: u32, arrows: u32) -> Result<boo
         sb::BOTH => &[VERT, HORZ],
         sb::HORZ => &[HORZ],
         sb::VERT => &[VERT],
-        other => {
-            index(other)?;
-            return Err(ERROR_INVALID_PARAMETER);
+        sb::CTL => {
+            bar_of(window, which)?;
+            update(window, |scroll| {
+                scroll.flags = arrows;
+                enable_arrows(&mut scroll.bars[CTL].states, arrows);
+            })?;
+            if matches!(arrows, esb::DISABLE_BOTH | esb::ENABLE_BOTH) {
+                static REPORTED: AtomicBool = AtomicBool::new(false);
+                if !REPORTED.swap(true, Ordering::Relaxed) {
+                    log::warn!("win32k: EnableScrollBar(SB_CTL) enabling the control (EnableWindow): not yet");
+                }
+            }
+            return Ok(true);
         }
+        _ => return Err(ERROR_INVALID_PARAMETER),
     };
     update(window, |scroll| {
         scroll.flags = arrows;
@@ -829,11 +931,11 @@ pub fn enable_scroll_bar(window: &Window, which: u32, arrows: u32) -> Result<boo
 /// co_UserShowScrollBar : la barre `which` de `window` montrée ou cachée
 /// (`show_h` pour SB_HORZ, `show_v` pour SB_VERT, les deux pour SB_BOTH) ;
 /// si son style change, le cadre est recalculé et repeint (SetWindowPos,
-/// `SWP_FRAMECHANGED`). Rend si le cadre a changé.
+/// `SWP_FRAMECHANGED`). Rend si le cadre a changé. SB_CTL montre ou cache
+/// le contrôle lui-même (ShowWindow, `show_h`) et rend vrai.
 ///
 /// # Errors
-/// `ERROR_INVALID_PARAMETER` pour une autre barre ; celles de [`index`]
-/// pour SB_CTL.
+/// `ERROR_INVALID_PARAMETER` pour une autre barre.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système. Rappelle le mode utilisateur.
@@ -853,10 +955,10 @@ pub fn show_scroll_bar(window: &Arc<Window>, which: u32, show_h: bool, show_v: b
             put(show_h, WS_HSCROLL);
             put(show_v, WS_VSCROLL);
         }
-        // The control itself (co_WinPosShowWindow): not yet, `index` says so.
+        // The control itself (co_WinPosShowWindow).
         sb::CTL => {
-            index(which)?;
-            return Ok(false);
+            crate::winpos::show_window(window, if show_h { SW_SHOW } else { SW_HIDE });
+            return Ok(true);
         }
         _ => return Err(ERROR_INVALID_PARAMETER),
     }

@@ -12,7 +12,7 @@
 //! ([`batch`]).
 //!
 //! Pas encore : stylos et palettes comme objets GDI, transformations, lignes
-//! et courbes, StretchBlt.
+//! et courbes, MaskBlt.
 
 pub mod batch;
 pub mod bitblt;

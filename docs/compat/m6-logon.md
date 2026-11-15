@@ -52,8 +52,7 @@ Chaque ligne est un arrêt du scénario `logon`, sa cause, et ce qui l'a levé.
 `userinit.exe` (sur le disque depuis cette étape) tourne alors sous le jeton de l'utilisateur : il se connecte à
 `csrss` et à win32k, charge la disposition de clavier, applique les paramètres de l'utilisateur
 (UpdatePerUserSystemParameters), puis cherche le shell de `Winlogon\Shell`, `C:\WINDOWS\explorer.exe`, qui n'est pas
-sur le disque : « Failed to start default shell », puis la boîte « Userinit failed to start the shell! ». **C'est là
-que le logon s'arrête aujourd'hui.**
+sur le disque : « Failed to start default shell », puis la boîte « Userinit failed to start the shell! ».
 
 ## Vu en chemin, pas fait
 
@@ -76,6 +75,22 @@ que le logon s'arrête aujourd'hui.**
 `shdocvw` compris). Les autres disques ne le prennent pas : avec ces trois fichiers, la copie du disque de
 l'installateur ne tenait plus sur sa cible (`installer-finish` : « copy failed: c0000185 »). `userinit` le lance
 sous le jeton de l'utilisateur.
+
+**Les classes COM d'`explorer` et les fenêtres message seul** (PR 133, `claude/logon-explorer`, fusionnée ici).
+`explorer` crée par COM son menu Démarrer (CLSID_StartMenu, `{4622AD11-FF23-11D0-8D34-00A0C90F2719}`) et le site de
+bandes de sa barre (CLSID_RebarBandSite, `{ECD4FC4D-521C-11D0-B792-00A0C90312E1}`), que rien n'enregistrait
+(`REGDB_E_CLASSNOTREG`) : l'installation de ReactOS appelle DllRegisterServer des DLL de `syssetup.inf`
+(`RegistrationPhase2`, `OleControlDlls`). `minoinit.exe` appelle CoInitialize, puis DllRegisterServer de celles de
+cette liste qui sont sur le disque, avant la réécriture des ruches. `browseui` et `rpcrt4` réussissent (le scénario
+`logon` attend `browseui`) ; `oleaut32`, `shdocvw` et `urlmon` rendent `E_NOINTERFACE`, `shell32` `E_FAIL`, `wininet`
+n'a pas de DllRegisterServer : à diagnostiquer (sans doute le registrar d'ATL, `atl.dll`, en tête de la liste et pas
+sur le disque, et l'enregistrement des bibliothèques de types). La fenêtre d'appartement de COM n'était pas créée non
+plus (`combase` apartment.c : « CreateWindow failed with error 1400 ») : chaque bureau a maintenant sa fenêtre des
+messages (`win32k::window::create_message_window`, `spwndMessage`, `FNID_MESSAGEWND`), dont les fenêtres créées avec
+`HWND_MESSAGE` sont les enfants (cachées, hors des fenêtres de premier niveau ; scénario `gui`). En chemin, CopyFileW
+de `minoinit` échouait (erreur 998) selon la profondeur de sa pile : NtSetInformationFile(FileBasicInformation)
+exigeait un tampon aligné sur 8 octets, que les compilateurs x86 ne garantissent pas à une structure posée sur la
+pile ; 4 suffisent maintenant, comme pour les autres valeurs de 64 bits (scénario `cmd`, `concmd1.c`).
 
 **Le premier lancement a mis au jour un bogue du noyau.** `explorer` mourait (`c0000096`, une instruction privilégiée à
 l'adresse `0x006E0057`) dans la création de sa barre des tâches. Ses registres sauvés portaient les mots successifs de
@@ -134,8 +149,9 @@ sa vue de dossier sur le Bureau de l'utilisateur et de All Users) et déclare sa
 (`win32k::shell`, comme `window.c`) : une fois par station (ShellWindow, ShellListView), dans le `DESKTOPINFO` du
 bureau (`hShellWindow`, `spwndShell`, `spwndBkGnd`, `ppiShellProcess`, que `user32` lit pour GetShellWindow), et
 la fenêtre du shell passe au bas de l'ordre Z (`WNDS2_BOTTOMMOST`), que SetWindowPos ne lui fait plus quitter
-(UserGetShellWindow dans co_WinPosSetWindowPos). Détruite, elle quitte la station et le `DESKTOPINFO`. Pas encore :
-le raccourci Ctrl+Échap (SC_TASKLIST), faute de RegisterHotKey.
+(UserGetShellWindow dans co_WinPosSetWindowPos). Détruite, elle quitte la station et le `DESKTOPINFO`. Ctrl+Échap
+devient son raccourci (WM_SYSCOMMAND SC_TASKLIST, voir plus bas « Ctrl+Alt+Suppr ») ; le menu Démarrer attend
+encore la notification HSHELL_TASKMAN des fenêtres de crochet du shell.
 
 **Ce qu'une fenêtre découvre en changeant seulement de rang.** Le bureau d'`explorer`, d'abord au-dessus de tout,
 avait recouvert la barre des tâches ; passé au fond, il ne la découvrait pas : SetWindowPos tenait pour découvert
@@ -144,21 +160,146 @@ l'ancien rectangle moins le nouveau, vide quand seul l'ordre Z change. Comme co_
 voyait de la fenêtre avant et après, ses sœurs au-dessus déduites (`paint::visible_region`) : la barre des tâches
 se repeint.
 
-**Où `explorer` va maintenant.** Sa barre des tâches (vide : ni bouton Démarrer ni horloge) au-dessus de son bureau,
-sans assertion. Le bureau n'a encore ni fond (NtUserPaintDesktop : on voit celui de la fenêtre du bureau de win32k)
-ni icônes (NtUserGetIconInfo ; CDesktopFolder.cpp:977 et CDefView.cpp:2744 pour les détails des éléments). En
-chemin : BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo (classes 0x2B, 0x2F, 0x30,
-0x100A), les fenêtres message seul (HWND_MESSAGE), NtGdiGetDIBitsInternal, NtGdiAlphaBlend, NtUserRemoveProp,
-NtUserSetWindowRgn, NtUserFindWindowEx, NtUserCallOneParam (0x1E BEGINDEFERWNDPOS, 0x28 GETKEYBOARDLAYOUT), le
-fond du bureau repeint à la demande. Les threads de `userinit` et d'`explorer` n'ont pas de bureau de démarrage :
-`msgina` leur donne un chemin sans station, que win32k ne résout pas encore (la station du processus,
-IntResolveDesktop).
+**La station d'un chemin de bureau sans station.** NtUserSetShellWindowEx prend la station du processus ; celui
+d'`explorer` n'en avait pas : `msgina` donne à `userinit`, puis à `explorer`, le chemin `Default`, sans station, que
+win32k refusait (STATUS_NOT_IMPLEMENTED, « no startup desktop »). Le bureau restait alors au-dessus de tout, et
+une fois son fond peint, il couvrait la barre des tâches. Comme IntResolveDesktop, `win32k::startup::resolve_desktop`
+prend maintenant la station héritée du processus (ObFindHandleForObject, `ob::HandleTable::find_by_type`) si son
+interactivité (`!WSS_NOIO`) correspond à son droit sur WinSta0, sinon WinSta0 s'il y a droit (le LUID de son
+utilisateur, ou System avec des handles hérités) (`default_station`). Pas encore : la station des services
+(`Service-0x…$`), dont `services.exe` et `lsass.exe` restent privés comme avant, et le bureau hérité d'un chemin
+sans bureau (`Default` à la place).
+
+**Le fond du bureau : NtUserPaintDesktop.** `explorer` peint le fond de son bureau par PaintDesktop. Comme
+IntPaintDesktop sans papier peint (`win32k::desktop::paint_desktop`), la boîte de découpage du DC prend le pinceau
+de la classe de la fenêtre du bureau, COLOR_BACKGROUND (la classe garde la forme « couleur + 1 », ramenée au pinceau
+public de la couleur), par PATCOPY, sans changer le pinceau choisi dans le DC. Pas encore : le papier peint
+(SPI_SETDESKWALLPAPER, classe 0x14 de NtUserSystemParametersInfo), le texte de version (PaintDesktopVersion), le
+fond noir du mode sans échec.
+
+**Les DC pris pendant qu'une fenêtre bouge.** `explorer` prend le DC de son bureau quand celui-ci est au-dessus de
+tout, et le garde. Comme DceResetActiveDCEs, `win32k::dce::reset_active_dcs` refait après chaque SetWindowPos la
+région visible de chaque DC du cache pris pour une fenêtre ; ceux de la fenêtre déplacée ou de ses filles suivent
+son coin, et la région qui les coupe, gardée à leur prise, est décalée d'autant.
+
+**Le bouton Démarrer : DeferWindowPos.** La barre des tâches place son bouton Démarrer, son site de bandes et sa
+zone de notification par BeginDeferWindowPos, DeferWindowPos et EndDeferWindowPos (traywnd.cpp, AlignControls), que
+Mino n'avait pas (« BeginDeferWindowPos failed. lastErr=120 », traywnd.cpp:1705) : le bouton, créé de taille nulle,
+le restait. Comme `simplecall.c` et `winpos.c` (`win32k::deferpos`) : BeginDeferWindowPos
+(NtUserCallOneParam, ONEPARAM_ROUTINE_BEGINDEFERWNDPOS, 0x1E) rend un lot, objet USER `TYPE_SETWINDOWPOS` du
+processus (rendu à sa fin) ; DeferWindowPos (NtUserDeferWindowPos) y range un déplacement par fenêtre, un second
+déplacement de la même fenêtre se fondant dans le premier (IntDeferWindowPos : ce que le second change remplace, ses
+`SWP_NO*` ne restent que si les deux les portaient) ; EndDeferWindowPos (NtUserEndDeferWindowPosEx) les fait l'un après
+l'autre par SetWindowPos, saute une fenêtre détruite entre-temps, s'arrête au premier échec et rend le lot. Les
+drapeaux et les fenêtres refusés le sont comme dans ReactOS (`ERROR_INVALID_FLAGS`, `ERROR_INVALID_PARAMETER`,
+`ERROR_INVALID_DWP_HANDLE`, le bureau et sa fenêtre des messages). La barre appelle aussi NtUserSetWindowRgn sans région
+(un seul moniteur) : la fenêtre n'en a pas, son cadre se recalcule et elle passe en tête de ses sœurs (SetWindowPos
+HWND_TOP, SWP_FRAMECHANGED), et NtUserRemoveProp (UserRemoveProp, la liste des propriétés republiée dans le tas
+partagé). Le bouton Démarrer est maintenant à gauche de la barre, (2, 776)-(66, 796), le bouton de `user32` avec son
+texte « Start » : pas encore son logo, ni le thème de comctl32 6, faute de l'assemblage côte à côte
+`Microsoft.Windows.Common-Controls` 6.0 (« Could not find dependent assembly ») et des listes d'images. Pas encore :
+une vraie région de fenêtre (refusée, journalisée une fois), EndDeferWindowPos asynchrone.
+
+**Le menu Démarrer attendait les icônes.** Avec les classes COM de la PR 133, `explorer` crée son menu Démarrer
+pendant la création de sa barre (CTrayWindow::OnCreate, CreateStartMenu : les dossiers `Start Menu` de
+l'utilisateur et de All Users parcourus), mais ses barres d'outils demandent la liste d'images du système
+(CMenuToolbars.cpp:356, SHGetImageList), que `shell32` ne pouvait pas créer sans les icônes (« Failed to add
+IDI_SHELL_DOCUMENT icon to cache ») : SHGetImageList appelait QueryInterface d'une liste NULL (une lecture en 0 dans
+`shell32`, RVA `0xF4533`), que `user32` rattrapait (« Exception when calling unicode WndProc ... Msg 1 ») ; OnCreate
+s'arrêtait là, sans site de bandes ni zone de notification, et un clic sur Démarrer donnait traywnd.cpp:2997 (E_FAIL)
+et l'assertion d'ATL atlwin.h:1124. La branche des icônes (`claude/blissful-herschel-4bf0cc`, fusionnée ici :
+NtUserGetIconInfo, GetDIBits, StretchBlt, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend, les images de `comctl32`,
+`shell32` enregistré) lève ce blocage.
+
+**Le bureau, la barre des tâches et le menu Démarrer.** `explorer` crée maintenant toute sa barre : le bouton
+Démarrer, le site de bandes, la zone de notification et son horloge ; son bureau montre ses quatre icônes (My
+Documents, My Computer, My Network Places, Recycle Bin). Un clic sur le bouton Démarrer (la souris de QEMU, scénario
+`logon`) poste TWM_OPENSTARTMENU à la barre, qui ouvre son menu (CMenuDeskBar::Popup : la fenêtre « BaseBar »,
+SetWindowPos HWND_TOPMOST, SWP_SHOWWINDOW) au-dessus du bouton, en (2, 498)-(175, 776), et enfonce le bouton
+(BM_SETSTATE) : Programs, Documents, Settings, Search, Help and Support, Run..., Shut Down..., avec leurs icônes et le
+bandeau. **Le premier critère du M6 est atteint.**
+
+Écarts et dettes vus en chemin :
+
+- **Le menu met 15 à 30 s à paraître la première fois.** Chacune de ses icônes fait créer par `shell32` une section de
+  données de `shell32.dll` (NtCreateSection, `SEC_COMMIT`, pour LoadImage), et Mino copie le fichier entier dans
+  chaque section (`sys::section`, `io_manager::File::read_all` : 10,9 Mo lus en PIO sur le disque ATA à chaque fois).
+  NT partage une seule *control area* par fichier entre ses sections ; Mino en est loin. Tâche : une copie par fichier
+  (ou des pages lues à la demande), pour toutes les sections d'un même fichier. Le scénario `logon` attend le menu
+  jusqu'à 120 s (`screen-wait`).
+- Le suivi du menu par la souris et le clavier n'est pas vérifié : `shell32` (CMenuFocusManager) pose des crochets
+  WH_GETMESSAGE et WH_MSGFILTER (SetWindowsHookEx, pas encore).
+- En chemin : NtUserSystemParametersInfo (classes 0x14 SPI_SETDESKWALLPAPER, 0x2B et 0x2C MINIMIZEDMETRICS, 0x2F et
+  0x30 WORKAREA, 0x42, 0x100A), NtUserCallHwnd (0x48), NtUserCallHwndOpt (0x4B), NtUserGetAncestor,
+  NtUserGetDoubleClickTime, NtUserFindWindowEx, NtUserSetParent, NtUserRegisterHotKey (fait depuis : `win32k::hotkey`),
+  NtUserGetSystemMenu,
+  NtUserCallOneParam (0x28 GETKEYBOARDLAYOUT, 0x31 MESSAGEBEEP), NtQueryInformationThread (classe 0x10),
+  NtNotifyChangeDirectoryFile (« ReadDirectoryChangesW ... failed », le bureau ne suit pas son dossier). La fenêtre
+  « Progman » mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à vérifier
+  (SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN). Le bouton Démarrer n'a pas son logo (comctl32 6, l'assemblage côte à côte
+  manque).
+
+**Le menu Démarrer s'ouvre et suit la souris : les crochets.** Avec les icônes (PR 135), un clic sur Démarrer crée
+le menu (ses barres d'outils, leurs icônes, sa fenêtre CMenuDeskBar montrée au-dessus de la barre), mais le menu
+restait inerte : son suivi est celui de `shell32` (CMenuFocusManager), qui pose un crochet WH_GETMESSAGE sur son
+thread, prend la capture et regarde chaque message de la souris avant que GetMessage le rende (WindowFromPoint,
+GetAncestor, TB_HITTEST, puis WM_USER_CHANGETRACKEDITEM à la barre d'outils sous la souris). `win32k::hook` (`hook.c`
+et `callback.c` de ReactOS) : un crochet est un objet USER (`TYPE_HOOK`) dans le tas du bureau
+(`abi::user::Hook32`, dont CallNextHookEx de `user32` lit `phkNext`, `HookId` et `Ansi`), dans la chaîne de son
+thread et de son type, ou dans celle du bureau pour un crochet global ; `fsHooks` dans le `CLIENTINFO` et le
+`DESKTOPINFO` (`user32` le teste : CallMsgFilter) ; NtUserSetWindowsHookEx (les refus de ReactOS),
+NtUserSetWindowsHookAW, NtUserUnhookWindowsHookEx, NtUserCallNextHookEx (le crochet courant du thread et
+`phkCurrent`), NtUserCallMsgFilter ; la procédure appelée par `user32` (USER32_CALLBACK_HOOKPROC, le MSG après
+HOOKPROC_CALLBACK_ARGUMENTS, relu pour WH_GETMESSAGE). WH_GETMESSAGE est appelé par `queue::peek` (PeekMessage,
+GetMessage et les boucles du noyau, comme co_IntGetPeekMessage), WH_SYSMSGFILTER puis WH_MSGFILTER par la boucle des
+menus (MSGF_MENU) ; les autres types se posent sans être appelés (journalisé une fois par type). Un crochet part avec
+le thread qu'il accroche, avec celui qui l'a posé (ReactOS : le premier seul) ou avec son processus. Et ce que le
+crochet du menu demande : NtUserWindowFromPoint (`win32k::mouse::window_from_point`, co_WinPosSearchChildren : une
+fille transparente à la souris, désactivée ou cachée laisse le point à son parent, le bureau hors de toute fenêtre),
+NtUserGetAncestor (`win32k::window::ancestor`), NtUserGetForegroundWindow et SetForegroundWindow (NtUserCallHwndLock
+0x5B : la fenêtre de premier niveau activée). Dans la VM, le menu s'ouvre, le survol de « Programs » ouvre son
+sous-menu et un clic exécute l'item. La première ouverture prenait 55 s dans VirtualBox : `shell32` ouvre
+`shell32.dll` (11 Mio) comme fichier de données pour chaque icône, et NtCreateSection relisait le fichier entier, une
+commande ATA par secteur (14 fois, 55,2 s) ; la branche `claude/file-read-speed` (le partage des octets d'un fichier
+entre ses sections, `io::section_cache`) la ramène à 75 ms. Les suivantes sont immédiates (0,13 s) ; le sous-menu de
+« Programs », dont le dossier est vide, s'ouvre sans son item « (Empty) » dessiné, à vérifier. Un item de dossier tuait `explorer` (`int 3`, 80000003, NtRaiseHardError absent) : la liste
+d'autocomplétion de la barre d'adresse (CAutoComplete de `browseui`, par SHAutoComplete de `shlwapi`) crée deux
+contrôles ScrollBar, et ATL sous-classe sa poignée de taille par SetWindowLongPtr(GWLP_WNDPROC), que win32k refusait
+pour une fenêtre à procédure du serveur. La liste n'était pas créée, CAutoComplete se relâchait une fois de trop, et
+SHAutoComplete appelait une méthode virtuelle pure de l'objet détruit. Faits : SB_CTL et le sous-classement d'une
+fenêtre à procédure du serveur (étape 33 de [`m6-fenetres.md`](m6-fenetres.md), scénario `scroll-control`). La
+fenêtre « My Documents » s'ouvre alors, avec son titre, ses menus et sa barre d'outils ; sa barre d'adresse et sa vue
+des fichiers restent vides (NtUserLockWindowUpdate et NtUserDrawCaption manquent, entre autres). Pas encore, vus en chemin : NtUserTrackMouseEvent, SPI_GETMENUSHOWDELAY
+(0x6A : le sous-menu s'ouvre sans délai), NtUserGetDoubleClickTime, NtUserCallNoParam 9, NtUserGetThreadState 0xB.
+
+**Ctrl+Alt+Suppr : les raccourcis clavier.** L'écran de ReactOS qui demande Ctrl+Alt+Suppr (l'invite de `msgina`
+quand l'ouverture automatique ne s'applique pas : après une fermeture de session, l'autologon ne servant qu'une
+fois, Maj enfoncée, ou un poste verrouillé) ne réagissait pas : `winlogon` attend la SAS comme un raccourci de sa
+fenêtre SAS (RegisterHotKeys de `sas.c` : MOD_CONTROL | MOD_ALT et VK_DELETE, puis Ctrl+Maj+Échap, Win+L, Win+U), et
+NtUserRegisterHotKey manquait (« WL: Unable to register Ctrl+Alt+Del hotkey »). `win32k::hotkey` (hotkey.c) :
+NtUserRegisterHotKey, NtUserUnregisterHotKey ; le thread d'entrée brute présente chaque touche
+(co_UserProcessHotKeys, après l'état asynchrone du clavier) : la touche d'un raccourci avec ses modificateurs poste
+WM_HOTKEY (son identifiant, MAKELONG(modificateurs, touche)) à sa fenêtre ou à son thread, sans message de touche ;
+des modificateurs seuls partent à leur relâchement. Les raccourcis d'une fenêtre partent avec elle, ceux d'un thread
+à sa fin. Un écart voulu : UnregisterHotKey sans fenêtre ne retire que ceux du thread appelant (ReactOS : ceux de tous
+les threads). Dans la session d'`explorer`, Ctrl+Alt+Suppr ouvre la boîte « Security » de `msgina` (sur le bureau
+Winlogon) ; « Lock Computer » donne « Computer Locked… Press Ctrl-Alt-Del to unlock », et Ctrl+Alt+Suppr y ouvre
+« Unlock Computer » (le nom d'utilisateur rempli). Les raccourcis de la barre des tâches (Win+R, Win+E, Win+D…)
+marchent : Win+R ouvre « Run ». La fenêtre du shell reçoit Ctrl+Échap (NtUserSetShellWindowEx :
+UserRegisterHotKey(SC_TASKLIST), WM_SYSCOMMAND SC_TASKLIST) ; pour ouvrir le menu Démarrer, la barre des tâches
+attend HSHELL_TASKMAN de ses crochets du shell (RegisterShellHookWindow, pas encore). Vus en chemin, pas faits :
+EnableWindow (NtUserCallTwoParam 0x60, TWOPARAM_ROUTINE_ENABLEWINDOW), NtUserAlterWindowStyle, NtUserGetComboBoxInfo,
+Tab dans la boîte « Security » (le focus ne change pas : DefWindowProc de WM_KEYDOWN, journalisé), le texte
+« Logon Information » vide.
 
 ## La suite
 
-Le bureau d'`explorer` : son fond (NtUserPaintDesktop : la couleur COLOR_BACKGROUND et le papier peint) et ses
-icônes (NtUserGetIconInfo, les détails des éléments) ; la station par défaut d'un chemin de bureau, puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
-presse-papiers, notifications, `NtNotifyChangeKey`) et le bureau du critère.
+Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
+ChangeDisplaySettings, le panneau Affichage). Pour le shell : la fenêtre de dossier qu'ouvre un item du menu Démarrer
+(sa barre d'adresse et sa vue des fichiers, vides : LockWindowUpdate, DrawCaption, puis ce que `browseui` et `shell32`
+demandent) ; les fenêtres de crochet du shell (RegisterShellHookWindow : les boutons de la barre des tâches,
+HSHELL_TASKMAN pour Ctrl+Échap) ; EnableWindow, Tab dans les boîtes de `msgina` ; la zone de travail (SPI_SETWORKAREA), FindWindowEx, SetParent, TrackMouseEvent ; le papier peint
+(SPI_SETDESKWALLPAPER), la station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
 
 ## Tests
 
@@ -184,7 +325,23 @@ chevauchent, celle du dessus envoyée au fond sans bouger ; la capture montre la
 chevauchement (l'ancien calcul y laisse la seconde). Hôte : `win32k::winsta` (une station prend un seul shell,
 jusqu'à la destruction de sa fenêtre). Scénario `logon` : `Documents and Settings\Administrator\Desktop` parcouru,
 `desktop.cpp:193` et `atlcomcli.h` interdits, la barre des tâches visible au-dessus du bureau (ses deux pixels, que
-le bureau recouvrait sans SetShellWindowEx).
+le bureau recouvrait sans SetShellWindowEx), « no startup desktop » interdit pour `userinit` et `explorer`. Scénario
+`paint-desktop` (`paintdsk1.c`) : un DC en mémoire peint en blanc prend la couleur du bureau par PaintDesktop et
+garde son pinceau ; une fenêtre dont WM_ERASEBKGND appelle PaintDesktop montre cette couleur (sans le service, le
+blanc reste). Scénario `dc-reset` (`dcreset1.c`) : le DC gardé d'une fenêtre passée sous une autre ne peint plus
+sur elle, ni à son ancienne place une fois déplacée ; le programme lit l'écran (l'ancien DC faisait les deux).
+Hôte : `ob` (le premier handle d'un type), `win32k::startup` (la station d'un chemin sans station),
+`win32k::desktop` (le pinceau d'une classe).
+Scénario `defer-window-pos` (`defer1.c`, AMD et Intel) : BeginDeferWindowPos(-1) refusé ; un lot de trois
+déplacements, le troisième fondu dans le premier, chacun rendant le lot, EndDeferWindowPos place les deux fenêtres ;
+le lot fini refusé (`ERROR_INVALID_DWP_HANDLE`) ; un drapeau inconnu, SWP_ASYNCWINDOWPOS et le bureau refusés, un lot
+vide fini ; SetWindowRgn(NULL) met la fenêtre en tête ; RemoveProp rend la donnée puis plus rien. Quatre mutations
+(sans la routine BEGINDEFERWNDPOS, SetWindowRgn qui garde le rang, RemoveProp sans republier la liste, les drapeaux
+du lot non vérifiés) le font échouer. Hôte : `win32k::deferpos` (la fusion de deux déplacements). Scénario `logon` :
+le bouton Démarrer à l'écran (ses bords gauche et droit), « BeginDeferWindowPos failed » interdit. Puis, avec les
+icônes : un clic sur Démarrer (`keys`, la souris de QEMU) et le menu ouvert au-dessus du bouton (sa face, son bord
+droit, le bouton enfoncé ; `screen-wait = 120`, une option de `xtask` : l'écran capturé de nouveau chaque seconde
+jusqu'à montrer les pixels) ; `minoinit` enregistre `browseui` et `shell32` (0).
 
 Les apitests de `ntdll` (scénario `rostests`) restent à 43 sur 84, le plancher, mais pas les mêmes : NtDuplicateToken
 (un `NewTokenHandle` nul : `STATUS_ACCESS_VIOLATION`, la poignée écrite d'abord, comme ProbeForWriteHandle) et
@@ -193,3 +350,20 @@ NtDuplicateToken (GetToken), vont maintenant jusqu'à NtAccessCheck, pas encore 
 NtSetDefaultLocale de l'utilisateur rend `STATUS_OBJECT_NAME_NOT_FOUND` pour un LCID que `Nls\Locale` ne connaît
 pas, comme l'apitest l'attend d'XP (ExpValidateNlsLocaleId : la valeur introuvable) ; un groupe de langues absent
 reste `STATUS_INVALID_PARAMETER`.
+
+Scénario `hooks` (`tests/native/hook1.c`, AMD et Intel) : les refus de SetWindowsHookEx, WH_GETMESSAGE (le code, le
+message sorti ou non, changé par le crochet), deux crochets dans l'ordre et CallNextHookEx, UnhookWindowsHookEx deux
+fois, CallMsgFilter avec et sans crochet, WH_MSGFILTER dans TrackPopupMenu (MSGF_MENU, le message traité finit le
+menu), un crochet sur un autre thread (appelé dans ce thread, rendu à sa fin), GetAncestor, WindowFromPoint (filles
+transparente, désactivée, cachée ; le bureau), SetForegroundWindow et GetForegroundWindow. Sept mutations le font
+échouer : WH_GETMESSAGE ou MSGF_MENU retiré, crochets gardés à la fin du thread, le dernier posé appelé le dernier,
+`fsHooks` non publié, HTTRANSPARENT ignoré, SetForegroundWindow sur la fille elle-même. Hôte : `win32k::hook`.
+
+Scénario `hotkey` (`tests/native/hotkey1.c`, AMD et Intel) : RegisterHotKey de Ctrl+Alt+Suppr pour une fenêtre, la
+même combinaison refusée (1409), MOD_NOREPEAT (1004), la fenêtre du bureau (1408), Ctrl+Maj+Échap pour le thread ;
+QEMU tape Ctrl+Alt+Suppr, Ctrl+Maj+Échap puis Suppr : WM_HOTKEY à la fenêtre (id 0, 0x002E0003) sans WM_KEYDOWN de
+Suppr, WM_HOTKEY au thread (id 3, 0x001B0006), Suppr seule une touche ; UnregisterHotKey (puis plus rien, puis celui du
+thread) ; Ctrl+Alt+Suppr redevient une touche. Une mutation (aucun raccourci présenté) le fait échouer. Hôte :
+`win32k::hotkey` (la SAS, une combinaison par raccourci, les modificateurs seuls au relâchement, les raccourcis d'une
+fenêtre et d'un thread retirés, les modificateurs de l'état du clavier, Ctrl+Échap du shell). Scénario `logon` :
+« WL: Unable to register Ctrl+Alt+Del hotkey » interdit.

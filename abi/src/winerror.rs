@@ -43,8 +43,24 @@ pub const ERROR_TIMEOUT: u32 = 1460;
 pub const ERROR_SUCCESS: u32 = 0;
 /// ERROR_INVALID_MENU_HANDLE.
 pub const ERROR_INVALID_MENU_HANDLE: u32 = 1401;
+/// ERROR_INVALID_HOOK_HANDLE: UnhookWindowsHookEx of a handle that is no
+/// hook.
+pub const ERROR_INVALID_HOOK_HANDLE: u32 = 1404;
+/// ERROR_INVALID_HOOK_FILTER: SetWindowsHookEx of an unknown hook type.
+pub const ERROR_INVALID_HOOK_FILTER: u32 = 1426;
+/// ERROR_INVALID_FILTER_PROC: SetWindowsHookEx without a procedure.
+pub const ERROR_INVALID_FILTER_PROC: u32 = 1427;
+/// ERROR_HOOK_NEEDS_HMOD: a hook into another process without a module.
+pub const ERROR_HOOK_NEEDS_HMOD: u32 = 1428;
+/// ERROR_GLOBAL_ONLY_HOOK: a thread hook of a type that is global only.
+pub const ERROR_GLOBAL_ONLY_HOOK: u32 = 1429;
+/// ERROR_HOOK_TYPE_NOT_ALLOWED: a hook into a thread of csrss or the system.
+pub const ERROR_HOOK_TYPE_NOT_ALLOWED: u32 = 1458;
 /// ERROR_INVALID_ACCEL_HANDLE.
 pub const ERROR_INVALID_ACCEL_HANDLE: u32 = 1403;
+/// ERROR_INVALID_DWP_HANDLE: an HDWP that BeginDeferWindowPos did not
+/// give, or that EndDeferWindowPos already ended.
+pub const ERROR_INVALID_DWP_HANDLE: u32 = 1405;
 /// ERROR_MENU_ITEM_NOT_FOUND.
 pub const ERROR_MENU_ITEM_NOT_FOUND: u32 = 1456;
 /// ERROR_POPUP_ALREADY_ACTIVE: TrackPopupMenu on a menu already shown.
@@ -55,6 +71,10 @@ pub const ERROR_INVALID_CURSOR_HANDLE: u32 = 1402;
 pub const ERROR_NO_SCROLLBARS: u32 = 1447;
 /// ERROR_TLW_WITH_WSCHILD: a child window without a parent.
 pub const ERROR_TLW_WITH_WSCHILD: u32 = 1406;
+/// ERROR_WINDOW_OF_OTHER_THREAD: a window of another thread (RegisterHotKey).
+pub const ERROR_WINDOW_OF_OTHER_THREAD: u32 = 1408;
+/// ERROR_HOTKEY_ALREADY_REGISTERED: the key and modifiers have a hotkey.
+pub const ERROR_HOTKEY_ALREADY_REGISTERED: u32 = 1409;
 /// ERROR_CANNOT_FIND_WND_CLASS.
 pub const ERROR_CANNOT_FIND_WND_CLASS: u32 = 1407;
 /// ERROR_INVALID_MONITOR_HANDLE.

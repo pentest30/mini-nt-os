@@ -1,0 +1,26 @@
+# A DC taken while its window moves (win32k::dce::reset_active_dcs,
+# DceResetActiveDCEs; tests/native/dcreset1.c, MinGW, linked to ReactOS's
+# kernel32, user32 and gdi32): DCRESET1.EXE takes the place of winlogon.exe
+# and takes WinSta0\Default. Popup B, green, at (100, 100)-(400, 300), then
+# popup A, red, above it at (200, 200)-(500, 400); a DC of A taken and kept
+# (explorer keeps the DC of its desktop this way):
+# 1. A sent to the bottom without moving, then A's DC filled blue: the
+#    overlap stays green (B is above A now), the rest of A is blue;
+# 2. A moved to (600, 200), then A's DC filled yellow: yellow at A's new
+#    place, not at the old one.
+# After each SetWindowPos, every DC taken recomputes what it may paint; the
+# DCs of the moved window follow its corner. A DC that kept the region and
+# the origin of its taking painted over B, then at A's old place.
+features = test-smss
+requires = userland, native
+initial-command = DCRESET1.EXE
+cpus     = default
+timeout  = 120
+
+expect = [dcreset] ready, A above B, a DC of A taken
+expect = [dcreset] step 1: A sent to the bottom; the overlap stays B's 1, the rest of A painted 1
+expect = [dcreset] step 2: A moved; painted at its new place 1, not at the old one 1
+expect = [dcreset] done
+expect = exit status 0x00007005
+
+forbid = *** STOP:

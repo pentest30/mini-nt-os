@@ -8,8 +8,10 @@ CancelIo@4
 CloseHandle@4
 ConnectNamedPipe@8
 CopyFileW@12
+CreateDirectoryW@8
 CreateEventW@16
 CreateFileW@28
+CreateFileMappingW@24
 CreateNamedPipeW@32
 CreatePipe@16
 CreateProcessW@40
@@ -43,6 +45,10 @@ LoadLibraryW@4
 PeekNamedPipe@24
 ReadConsoleW@20
 ReadFile@20
+MapViewOfFile@20
+QueryPerformanceCounter@4
+QueryPerformanceFrequency@4
+UnmapViewOfFile@4
 SetEvent@4
 SetLastError@4
 SetNamedPipeHandleState@16

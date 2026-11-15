@@ -723,7 +723,10 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     match class {
         FILE_BASIC_INFORMATION => {
             let mut bytes = [0u8; size_of::<FileBasicInformation>()];
-            ke::usermem::probe_for_read(u64::from(buffer), bytes.len(), 8)?;
+            // Aligné sur 4 (sizeof(ULONG)), comme la sonde de ReactOS : sur
+            // i386, la variable locale de CopyFileW n'est alignée que sur 4
+            // quand la pile de l'appelant l'est.
+            ke::usermem::probe_for_read(u64::from(buffer), bytes.len(), 4)?;
             ke::usermem::copy_from_user(&mut bytes, u64::from(buffer))?;
             file.set_basic_information(&FileBasicInformation::from_bytes(&bytes))?;
         }

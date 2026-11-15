@@ -7,9 +7,14 @@
 # First boot: samsrv makes the accounts (setup mode), winlogon starts
 # MINOINIT.EXE (SYSTEM\Setup\CmdLine), which waits for Administrator in
 # the SAM, makes the profiles (userenv's InitializeProfiles: C:\Documents
-# and Settings, a long-named directory), copies HKU\.DEFAULT, written back,
-# as NTUSER.DAT of Default User, sets SetupType = 0, writes the hives back
-# and reboots. Every step logs "[minoinit] ..."; a failed step stops it
+# and Settings, a long-named directory), registers the COM servers on the
+# disk (DllRegisterServer after CoInitialize, as syssetup's
+# RegistrationPhase2: browseui's Start menu and band site, which explorer
+# creates; shell32's CLSIDs of the shell's folders under HKCR, where
+# advapi32 asks the name of each key it creates by NtQueryKey, which a
+# handle without KEY_QUERY_VALUE must get), copies HKU\.DEFAULT, written
+# back, as NTUSER.DAT of Default User, sets SetupType = 0, writes the hives
+# back and reboots. Every step logs "[minoinit] ..."; a failed step stops it
 # ("[minoinit] stopped: ..."). It also logs its environment: smss passes on
 # SystemDrive, which the kernel gives it as ReactOS's does.
 #
@@ -38,8 +43,29 @@
 # desktop, lists the user's Desktop folder, and declares its window the
 # shell's (NtUserSetShellWindowEx), which goes to the bottom of the Z order:
 # the taskbar stays above it, painted again where the desktop covered it
-# (the two pixels). The desktop's background and icons are not yet there
-# (NtUserPaintDesktop, NtUserGetIconInfo).
+# (the two pixels). That needs explorer's process to have a window station:
+# msgina gives userinit, then explorer, a desktop path without one
+# ("Default"), which takes WinSta0 (IntResolveDesktop; "no startup desktop"
+# forbidden for both). The desktop paints its background by PaintDesktop
+# (NtUserPaintDesktop) through a DC it took while it was above everything
+# (DceResetActiveDCEs keeps that DC off the taskbar). Its icons are not yet
+# there (NtUserGetIconInfo). The taskbar lays its Start button out by
+# BeginDeferWindowPos, DeferWindowPos and EndDeferWindowPos
+# (win32k::deferpos), which once failed ("BeginDeferWindowPos failed",
+# traywnd.cpp:1705): the button kept a size of 0; it is now at the left of
+# the taskbar, (2, 776)-(66, 796), its right edge dark (COLOR_3DDKSHADOW).
+# With the icons (the system image list of shell32, which the Start menu's
+# toolbars ask by SHGetImageList), explorer creates its Start menu, then
+# the rest of its taskbar (the notification area and its clock). A click on
+# the Start button (the mouse of QEMU, from the middle of the screen) opens
+# the Start menu above it ("BaseBar", (2, 498)-(175, 776)): its face where
+# the desktop was blue, its dark right edge, the button pushed. The menu
+# takes 15 to 30 s to appear the first time: each of its icons makes a data
+# section of shell32.dll, which the kernel copies whole (10.9 MB, read from
+# the ATA disk); hence `screen-wait`.
+# winlogon registers Ctrl+Alt+Del, the SAS, as a hotkey of its SAS window
+# (win32k::hotkey): « WL: Unable to register Ctrl+Alt+Del hotkey » is
+# forbidden.
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
@@ -49,18 +75,27 @@ shell = explorer
 disk = system
 boots = 2
 cpus = default
-timeout = 300
+timeout = 420
 
 expect = [boot] .DEFAULT hive mounted at \REGISTRY\USER\.DEFAULT
 expect = [minoinit] environment: SystemDrive=C:
+expect = [minoinit] CoInitialize: 0
+expect = [minoinit] DllRegisterServer browseui.dll: 0
+expect = [minoinit] DllRegisterServer shell32.dll: 0
 expect = [minoinit] done; rebooting
 expect = IncrementRefCount(S-1-5-21-
 expect = We are logged on
 expect = of userinit.exe
 expect = of explorer.exe
 expect = Documents and Settings\Administrator\Desktop\*.*
+keys = Documents and Settings\Administrator\Desktop\*.* => move:-300,193 move:-300,193 press:1 release
 screen = 640 790 D4D0C8
 screen = 640 773 FFFFFF
+screen = 2 786 404040
+screen = 65 786 FFFFFF
+screen = 100 560 D4D0C8
+screen = 174 600 404040
+screen-wait = 120
 
 forbid = [minoinit] stopped:
 forbid = *** STOP:
@@ -75,3 +110,7 @@ forbid = Failed to start default shell
 forbid = (explorer.exe) ended
 forbid = desktop.cpp:193
 forbid = atlcomcli.h
+forbid = of userinit.exe (NtStatus
+forbid = of explorer.exe (NtStatus
+forbid = BeginDeferWindowPos failed
+forbid = WL: Unable to register Ctrl+Alt+Del hotkey

@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 169 | 737 |
+| win32k | 190 | 737 |
 
 ## ntoskrnl
 
@@ -323,7 +323,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1004` | `NtGdiAddFontMemResourceEx` | 5 |  |
 | `0x1005` | `NtGdiRemoveMergeFont` | 2 |  |
 | `0x1006` | `NtGdiAddRemoteMMInstanceToDC` | 3 |  |
-| `0x1007` | `NtGdiAlphaBlend` | 12 |  |
+| `0x1007` | `NtGdiAlphaBlend` | 12 | ✅ |
 | `0x1008` | `NtGdiAngleArc` | 6 |  |
 | `0x1009` | `NtGdiAnyLinkedFonts` | 0 |  |
 | `0x100a` | `NtGdiFontIsLinked` | 1 |  |
@@ -348,7 +348,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x101d` | `NtGdiCreateCompatibleBitmap` | 3 | ✅ |
 | `0x101e` | `NtGdiCreateCompatibleDC` | 1 | ✅ |
 | `0x101f` | `NtGdiCreateDIBBrush` | 6 |  |
-| `0x1020` | `NtGdiCreateDIBitmapInternal` | 11 |  |
+| `0x1020` | `NtGdiCreateDIBitmapInternal` | 11 | ✅ |
 | `0x1021` | `NtGdiCreateDIBSection` | 9 | ✅ |
 | `0x1022` | `NtGdiCreateEllipticRgn` | 4 |  |
 | `0x1023` | `NtGdiCreateHalftonePalette` | 1 |  |
@@ -489,7 +489,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10aa` | `NtGdiGetDeviceCaps` | 2 |  |
 | `0x10ab` | `NtGdiGetDeviceGammaRamp` | 2 |  |
 | `0x10ac` | `NtGdiGetDeviceCapsAll` | 2 |  |
-| `0x10ad` | `NtGdiGetDIBitsInternal` | 9 |  |
+| `0x10ad` | `NtGdiGetDIBitsInternal` | 9 | ✅ |
 | `0x10ae` | `NtGdiGetETM` | 2 |  |
 | `0x10af` | `NtGdiGetEudcTimeStampEx` | 3 |  |
 | `0x10b0` | `NtGdiGetFontData` | 5 | ✅ |
@@ -501,7 +501,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x10b6` | `NtGdiGetLinkedUFIs` | 3 |  |
 | `0x10b7` | `NtGdiGetMiterLimit` | 2 |  |
 | `0x10b8` | `NtGdiGetMonitorID` | 3 |  |
-| `0x10b9` | `NtGdiGetNearestColor` | 2 |  |
+| `0x10b9` | `NtGdiGetNearestColor` | 2 | ✅ |
 | `0x10ba` | `NtGdiGetNearestPaletteIndex` | 2 |  |
 | `0x10bb` | `NtGdiGetObjectBitmapHandle` | 2 |  |
 | `0x10bc` | `NtGdiGetOutlineTextMetricsInternalW` | 4 |  |
@@ -607,7 +607,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1120` | `NtGdiSetSizeDevice` | 3 |  |
 | `0x1121` | `NtGdiStartDoc` | 4 |  |
 | `0x1122` | `NtGdiStartPage` | 1 |  |
-| `0x1123` | `NtGdiStretchBlt` | 12 |  |
+| `0x1123` | `NtGdiStretchBlt` | 12 | ✅ |
 | `0x1124` | `NtGdiStretchDIBitsInternal` | 16 | ✅ |
 | `0x1125` | `NtGdiStrokeAndFillPath` | 1 |  |
 | `0x1126` | `NtGdiStrokePath` | 1 |  |
@@ -635,8 +635,8 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x113c` | `NtUserCallHwndOpt` | 2 |  |
 | `0x113d` | `NtUserCallHwndParam` | 3 | ✅ |
 | `0x113e` | `NtUserCallHwndParamLock` | 3 | ✅ |
-| `0x113f` | `NtUserCallMsgFilter` | 2 |  |
-| `0x1140` | `NtUserCallNextHookEx` | 4 |  |
+| `0x113f` | `NtUserCallMsgFilter` | 2 | ✅ |
+| `0x1140` | `NtUserCallNextHookEx` | 4 | ✅ |
 | `0x1141` | `NtUserCallNoParam` | 1 | ✅ |
 | `0x1142` | `NtUserCallOneParam` | 2 | ✅ |
 | `0x1143` | `NtUserCallTwoParam` | 3 | ✅ |
@@ -663,7 +663,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1158` | `NtUserDdeGetQualityOfService` | 3 |  |
 | `0x1159` | `NtUserDdeInitialize` | 5 |  |
 | `0x115a` | `NtUserDdeSetQualityOfService` | 3 |  |
-| `0x115b` | `NtUserDeferWindowPos` | 8 |  |
+| `0x115b` | `NtUserDeferWindowPos` | 8 | ✅ |
 | `0x115c` | `NtUserDefSetText` | 2 | ✅ |
 | `0x115d` | `NtUserDeleteMenu` | 3 | ✅ |
 | `0x115e` | `NtUserDestroyAcceleratorTable` | 1 | ✅ |
@@ -683,7 +683,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x116c` | `NtUserEmptyClipboard` | 0 |  |
 | `0x116d` | `NtUserEnableMenuItem` | 3 | ✅ |
 | `0x116e` | `NtUserEnableScrollBar` | 3 | ✅ |
-| `0x116f` | `NtUserEndDeferWindowPosEx` | 2 |  |
+| `0x116f` | `NtUserEndDeferWindowPosEx` | 2 | ✅ |
 | `0x1170` | `NtUserEndMenu` | 0 | ✅ |
 | `0x1171` | `NtUserEndPaint` | 2 | ✅ |
 | `0x1172` | `NtUserEnumDisplayDevices` | 4 |  |
@@ -696,7 +696,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1179` | `NtUserFindWindowEx` | 5 |  |
 | `0x117a` | `NtUserFlashWindowEx` | 1 |  |
 | `0x117b` | `NtUserGetAltTabInfo` | 6 |  |
-| `0x117c` | `NtUserGetAncestor` | 2 |  |
+| `0x117c` | `NtUserGetAncestor` | 2 | ✅ |
 | `0x117d` | `NtUserGetAppImeLevel` | 1 |  |
 | `0x117e` | `NtUserGetAsyncKeyState` | 1 | ✅ |
 | `0x117f` | `NtUserGetAtomName` | 2 | ✅ |
@@ -719,10 +719,10 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1190` | `NtUserGetDC` | 1 | ✅ |
 | `0x1191` | `NtUserGetDCEx` | 3 | ✅ |
 | `0x1192` | `NtUserGetDoubleClickTime` | 0 |  |
-| `0x1193` | `NtUserGetForegroundWindow` | 0 |  |
+| `0x1193` | `NtUserGetForegroundWindow` | 0 | ✅ |
 | `0x1194` | `NtUserGetGuiResources` | 2 | ✅ |
 | `0x1195` | `NtUserGetGUIThreadInfo` | 2 |  |
-| `0x1196` | `NtUserGetIconInfo` | 6 |  |
+| `0x1196` | `NtUserGetIconInfo` | 6 | ✅ |
 | `0x1197` | `NtUserGetIconSize` | 4 | ✅ |
 | `0x1198` | `NtUserGetImeHotKey` | 4 |  |
 | `0x1199` | `NtUserGetImeInfoEx` | 2 |  |
@@ -788,7 +788,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11d5` | `NtUserOpenDesktop` | 3 | ✅ |
 | `0x11d6` | `NtUserOpenInputDesktop` | 3 |  |
 | `0x11d7` | `NtUserOpenWindowStation` | 2 | ✅ |
-| `0x11d8` | `NtUserPaintDesktop` | 1 |  |
+| `0x11d8` | `NtUserPaintDesktop` | 1 | ✅ |
 | `0x11d9` | `NtUserPeekMessage` | 5 | ✅ |
 | `0x11da` | `NtUserPostMessage` | 4 | ✅ |
 | `0x11db` | `NtUserPostThreadMessage` | 4 | ✅ |
@@ -804,12 +804,12 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e5` | `NtUserRedrawWindow` | 4 | ✅ |
 | `0x11e6` | `NtUserRegisterClassExWOW` | 7 | ✅ |
 | `0x11e7` | `NtUserRegisterUserApiHook` | 4 |  |
-| `0x11e8` | `NtUserRegisterHotKey` | 4 |  |
+| `0x11e8` | `NtUserRegisterHotKey` | 4 | ✅ |
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |
 | `0x11ea` | `NtUserRegisterTasklist` | 1 |  |
 | `0x11eb` | `NtUserRegisterWindowMessage` | 1 | ✅ |
 | `0x11ec` | `NtUserRemoveMenu` | 3 | ✅ |
-| `0x11ed` | `NtUserRemoveProp` | 2 |  |
+| `0x11ed` | `NtUserRemoveProp` | 2 | ✅ |
 | `0x11ee` | `NtUserResolveDesktop` | 4 | ✅ |
 | `0x11ef` | `NtUserResolveDesktopForWOW` | 1 |  |
 | `0x11f0` | `NtUserSBGetParms` | 4 | ✅ |
@@ -859,9 +859,9 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x121c` | `NtUserSetWindowLong` | 4 | ✅ |
 | `0x121d` | `NtUserSetWindowPlacement` | 2 | ✅ |
 | `0x121e` | `NtUserSetWindowPos` | 7 | ✅ |
-| `0x121f` | `NtUserSetWindowRgn` | 3 |  |
-| `0x1220` | `NtUserSetWindowsHookAW` | 3 |  |
-| `0x1221` | `NtUserSetWindowsHookEx` | 6 |  |
+| `0x121f` | `NtUserSetWindowRgn` | 3 | ✅ |
+| `0x1220` | `NtUserSetWindowsHookAW` | 3 | ✅ |
+| `0x1221` | `NtUserSetWindowsHookEx` | 6 | ✅ |
 | `0x1222` | `NtUserSetWindowStationUser` | 4 | ✅ |
 | `0x1223` | `NtUserSetWindowWord` | 3 |  |
 | `0x1224` | `NtUserSetWinEventHook` | 8 |  |
@@ -882,13 +882,13 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1233` | `NtUserPaintMenuBar` | 6 |  |
 | `0x1234` | `NtUserTranslateAccelerator` | 3 | ✅ |
 | `0x1235` | `NtUserTranslateMessage` | 2 | ✅ |
-| `0x1236` | `NtUserUnhookWindowsHookEx` | 1 |  |
+| `0x1236` | `NtUserUnhookWindowsHookEx` | 1 | ✅ |
 | `0x1237` | `NtUserUnhookWinEvent` | 1 |  |
 | `0x1238` | `NtUserUnloadKeyboardLayout` | 1 |  |
 | `0x1239` | `NtUserUnlockWindowStation` | 1 |  |
 | `0x123a` | `NtUserUnregisterClass` | 3 |  |
 | `0x123b` | `NtUserUnregisterUserApiHook` | 0 |  |
-| `0x123c` | `NtUserUnregisterHotKey` | 2 |  |
+| `0x123c` | `NtUserUnregisterHotKey` | 2 | ✅ |
 | `0x123d` | `NtUserUpdateInputContext` | 3 |  |
 | `0x123e` | `NtUserUpdateInstance` | 3 |  |
 | `0x123f` | `NtUserUpdateLayeredWindow` | 10 |  |
@@ -904,7 +904,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1249` | `NtUserWaitForMsgAndEvent` | 1 |  |
 | `0x124a` | `NtUserWaitMessage` | 0 | ✅ |
 | `0x124b` | `NtUserWin32PoolAllocationStats` | 6 |  |
-| `0x124c` | `NtUserWindowFromPoint` | 2 |  |
+| `0x124c` | `NtUserWindowFromPoint` | 2 | ✅ |
 | `0x124d` | `NtUserYieldTask` | 0 |  |
 | `0x124e` | `NtUserRemoteConnect` | 3 |  |
 | `0x124f` | `NtUserRemoteRedrawRectangle` | 4 |  |

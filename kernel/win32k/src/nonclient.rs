@@ -30,11 +30,11 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use abi::user::WS_BORDER;
 use abi::user::{
     color, sm, WS_CAPTION, WS_DLGFRAME, WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_STATICEDGE, WS_EX_TOOLWINDOW,
     WS_HSCROLL, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME, WS_VSCROLL,
 };
+use abi::user::{HTCLOSE, HTMAXBUTTON, HTMINBUTTON, WS_BORDER};
 
 use crate::defwnd::has_window_edge;
 use crate::font::{Named, Quality, TextRun, MARLETT, TAHOMA, TAHOMA_BOLD};
@@ -155,9 +155,64 @@ pub(crate) fn button_symbol(
     marlett(cell, symbol, c(if inactive { color::BTNSHADOW } else { color::BTNTEXT }), 0, button, layout, ops)
 }
 
-/// Les boutons du titre `caption` (UserDrawCaptionButton) : fermer, puis
-/// réduire et agrandir, des boutons en relief doux (DrawFrameControl
-/// `DFC_CAPTION`) avec leur symbole ; faux si les symboles manquent.
+/// Les boutons du titre `caption` d'une fenêtre de style `style` et
+/// `ex_style` (UserDrawCaptionButton) : fermer, puis réduire et agrandir,
+/// avec leur endroit (HTCLOSE, HTMINBUTTON, HTMAXBUTTON), leur rectangle,
+/// leur symbole Marlett (rétablir, `2`, pour réduire une fenêtre réduite et
+/// agrandir une fenêtre agrandie) et s'ils sont grisés (sans le style qui
+/// les permet).
+pub(crate) fn caption_button_places(
+    caption: Rect,
+    style: u32,
+    ex_style: u32,
+    m: &impl Fn(usize) -> i32,
+) -> Vec<(u32, Rect, char, bool)> {
+    let mut places = Vec::new();
+    let (cx, cy) = if ex_style & WS_EX_TOOLWINDOW != 0 {
+        (m(sm::CXSMSIZE), m(sm::CYSMSIZE))
+    } else {
+        (m(sm::CXSIZE), m(sm::CYSIZE))
+    };
+    let close = Rect::new(caption.right - cx, caption.top + 2, caption.right - 2, caption.top + cy - 2);
+    places.push((HTCLOSE, close, 'r', false));
+    if style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX) == 0 || ex_style & WS_EX_TOOLWINDOW != 0 {
+        return places;
+    }
+    let (cx, cy) = (m(sm::CXSIZE), m(sm::CYSIZE));
+    let height = (caption.top + 2, caption.top + cy - 2);
+    // Minimize: past the close button and the maximize one.
+    let right = caption.right - (cx + 1) - (cx - 2);
+    let minimize = if style & WS_MINIMIZE != 0 { '2' } else { '0' };
+    let rect = Rect::new(right - cx + 1, height.0, right - 1, height.1);
+    places.push((HTMINBUTTON, rect, minimize, style & WS_MINIMIZEBOX == 0));
+    // Maximize: past the close button.
+    let right = caption.right - (cx + 1);
+    let maximize = if style & WS_MAXIMIZE != 0 { '2' } else { '1' };
+    let rect = Rect::new(right - cx + 1, height.0, right - 1, height.1);
+    places.push((HTMAXBUTTON, rect, maximize, style & WS_MAXIMIZEBOX == 0));
+    places
+}
+
+/// Un bouton du titre (UITOOLS95_DrawFrameCaption) : en relief doux
+/// (DrawFrameControl `DFC_CAPTION`), ou creux s'il est enfoncé (`pushed`,
+/// `DFCS_PUSHED`, son symbole décalé d'un pixel) ; faux si le symbole
+/// manque.
+fn caption_button(
+    rect: Rect,
+    symbol: char,
+    inactive: bool,
+    pushed: bool,
+    c: &impl Fn(usize) -> ColorRef,
+    layout: Layout,
+    ops: &mut Vec<Op>,
+) -> bool {
+    let edge = if pushed { EDGE_SUNKEN } else { EDGE_RAISED };
+    draw_edge(&mut rect.clone(), edge, BF_RECT | BF_MIDDLE | BF_SOFT, c, ops);
+    button_symbol(rect, symbol, inactive, pushed, c, layout, ops)
+}
+
+/// Les boutons du titre `caption` ([`caption_button_places`]), aucun
+/// enfoncé ; faux si les symboles manquent.
 fn caption_buttons(
     caption: Rect,
     style: u32,
@@ -167,33 +222,39 @@ fn caption_buttons(
     layout: Layout,
     ops: &mut Vec<Op>,
 ) -> bool {
-    let button = |rect: Rect, symbol: char, inactive: bool, ops: &mut Vec<Op>| {
-        draw_edge(&mut rect.clone(), EDGE_RAISED, BF_RECT | BF_MIDDLE | BF_SOFT, c, ops);
-        button_symbol(rect, symbol, inactive, false, c, layout, ops)
-    };
-    let (cx, cy) = if ex_style & WS_EX_TOOLWINDOW != 0 {
-        (m(sm::CXSMSIZE), m(sm::CYSMSIZE))
-    } else {
-        (m(sm::CXSIZE), m(sm::CYSIZE))
-    };
-    let close = Rect::new(caption.right - cx, caption.top + 2, caption.right - 2, caption.top + cy - 2);
-    let mut drawn = button(close, 'r', false, ops);
-    if style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX) == 0 || ex_style & WS_EX_TOOLWINDOW != 0 {
-        return drawn;
+    let mut drawn = true;
+    for (_, rect, symbol, inactive) in caption_button_places(caption, style, ex_style, m) {
+        drawn &= caption_button(rect, symbol, inactive, false, c, layout, ops);
     }
-    let (cx, cy) = (m(sm::CXSIZE), m(sm::CYSIZE));
-    let height = (caption.top + 2, caption.top + cy - 2);
-    // Minimize: past the close button and the maximize one.
-    let right = caption.right - (cx + 1) - (cx - 2);
-    let minimize = if style & WS_MINIMIZE != 0 { '2' } else { '0' };
-    let rect = Rect::new(right - cx + 1, height.0, right - 1, height.1);
-    drawn &= button(rect, minimize, style & WS_MINIMIZEBOX == 0, ops);
-    // Maximize: past the close button.
-    let right = caption.right - (cx + 1);
-    let maximize = if style & WS_MAXIMIZE != 0 { '2' } else { '1' };
-    let rect = Rect::new(right - cx + 1, height.0, right - 1, height.1);
-    drawn &= button(rect, maximize, style & WS_MAXIMIZEBOX == 0, ops);
     drawn
+}
+
+/// UserDrawCaptionButtonWnd : le bouton `hit` (HTCLOSE, HTMINBUTTON,
+/// HTMAXBUTTON) du titre d'une fenêtre de style `style` et `ex_style`, de
+/// `width` × `height`, enfoncé ou non (`pushed`), dans les coordonnées de la
+/// fenêtre ; son titre commence sous ses bordures (UserGetWindowBorders).
+/// `None` pour une fenêtre sans ce bouton, ou sans la police des symboles.
+#[expect(clippy::too_many_arguments, reason = "the button, its window's styles and size, and the system")]
+pub fn caption_button_ops(
+    style: u32,
+    ex_style: u32,
+    (width, _height): (i32, i32),
+    hit: u32,
+    pushed: bool,
+    m: &impl Fn(usize) -> i32,
+    c: &impl Fn(usize) -> ColorRef,
+    layout: Layout,
+) -> Option<Vec<Op>> {
+    if style & WS_CAPTION != WS_CAPTION || style & WS_SYSMENU == 0 {
+        return None;
+    }
+    let (bx, by) = crate::defwnd::window_borders(style, ex_style, m);
+    let caption_height = if ex_style & WS_EX_TOOLWINDOW != 0 { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) };
+    let caption = Rect::new(bx, by, width - bx, by + caption_height - 1);
+    let (_, rect, symbol, inactive) =
+        caption_button_places(caption, style, ex_style, m).into_iter().find(|place| place.0 == hit)?;
+    let mut ops = Vec::new();
+    caption_button(rect, symbol, inactive, pushed, c, layout, &mut ops).then_some(ops)
 }
 
 /// UserDrawCaptionText : `text` dans le titre `caption`, en Tahoma gras (ou
@@ -715,6 +776,91 @@ mod tests {
         assert!(count(&at, face, color::BTNSHADOW) > 4, "a grey one");
         assert!(count(&at, face, color::BTNHIGHLIGHT) > 4, "with its light shadow");
         assert!(count(&at, minimize, color::BTNTEXT) > 4 && count(&at, close, color::BTNTEXT) > 4, "the others");
+    }
+
+    /// `ops` (a button alone) painted over the coded frame of `style`.
+    fn over_frame(style: u32, ops: &[Op]) -> impl Fn(i32, i32) -> u32 {
+        let layout: Layout = &crate::font::text_run_named;
+        let (frame, _) = frame_ops(
+            style,
+            WS_EX_WINDOWEDGE,
+            (200, 100),
+            &[],
+            &no_bar,
+            true,
+            false,
+            &metric,
+            &coded,
+            layout,
+            None,
+            (&[], false),
+        );
+        let mut pixels = alloc::vec![0u32; 200 * 100];
+        let mut surface = Bitmap::new(&mut pixels, 200, 100, 200, PixelLayout::Rgbx).unwrap();
+        let all = Region::from_rect(Rect::new(0, 0, 200, 100));
+        paint(&mut surface, &frame, (0, 0), &all);
+        paint(&mut surface, ops, (0, 0), &all);
+        move |x: i32, y: i32| pixels[(y * 200 + x) as usize]
+    }
+
+    #[test]
+    fn a_pressed_button_is_sunken_and_its_symbol_moves() {
+        if !crate::font::tests::install_reactos_fonts() {
+            return;
+        }
+        let layout: Layout = &crate::font::text_run_named;
+        let style = WS_OVERLAPPEDWINDOW;
+        let button = |hit: u32, pushed: bool| {
+            caption_button_ops(style, WS_EX_WINDOWEDGE, (200, 100), hit, pushed, &metric, &coded, layout).unwrap()
+        };
+        let (frame, _) = render_caption(style, "", true);
+        let [close, maximize, minimize] = buttons();
+        // Drawn alone, raised, it is the button of the frame.
+        let raised = over_frame(style, &button(HTMAXBUTTON, false));
+        for y in 0..100 {
+            for x in 0..200 {
+                assert_eq!(raised(x, y), frame(x, y), "{x}, {y}");
+            }
+        }
+        let sunken = over_frame(style, &button(HTMAXBUTTON, true));
+        let corner = (maximize.left, maximize.top);
+        assert_eq!(frame(corner.0, corner.1), coded(color::BTNHIGHLIGHT).0, "raised: light at the top left");
+        assert_ne!(sunken(corner.0, corner.1), coded(color::BTNHIGHLIGHT).0, "sunken: dark at the top left");
+        let symbol = |at: &dyn Fn(i32, i32) -> u32| {
+            (maximize.left..maximize.right)
+                .find(|&x| (maximize.top..maximize.bottom).any(|y| at(x, y) == coded(color::BTNTEXT).0))
+                .unwrap()
+        };
+        assert_eq!(symbol(&sunken), symbol(&frame) + 1, "the symbol a pixel further");
+        for other in [close, minimize] {
+            assert_eq!(sunken(other.left + 3, other.top + 3), frame(other.left + 3, other.top + 3), "the others stay");
+        }
+        assert!(caption_button_ops(WS_POPUP, 0, (200, 100), HTCLOSE, true, &metric, &coded, layout).is_none());
+        let tool = caption_button_ops(style, WS_EX_TOOLWINDOW, (200, 100), HTMAXBUTTON, true, &metric, &coded, layout);
+        assert!(tool.is_none(), "a tool window has no maximize button");
+    }
+
+    #[test]
+    fn a_minimized_window_is_its_caption_and_restores() {
+        if !crate::font::tests::install_reactos_fonts() {
+            return;
+        }
+        let style = WS_OVERLAPPEDWINDOW | WS_MINIMIZE;
+        let size = (metric(sm::CXMINIMIZED), metric(sm::CYMINIMIZED));
+        let layout: Layout = &crate::font::text_run_named;
+        let (at, _) = render_text(style, WS_EX_WINDOWEDGE, size, &[], true, false, &coded, layout);
+        // No thick frame: the edge (2) and the thin frame (1), then the
+        // caption to the bottom edge.
+        assert_eq!(at(3, 3), coded(color::ACTIVECAPTION).0, "the caption from 3, 3");
+        assert_eq!(at(3, size.1 - 4), coded(color::ACTIVECAPTION).0, "down to the bottom edge");
+        assert_eq!(at(2, 10), coded(color::BTNFACE).0, "the thin frame");
+        let caption = Rect::new(3, 3, size.0 - 3, 3 + metric(sm::CYCAPTION) - 1);
+        let places = caption_button_places(caption, style, WS_EX_WINDOWEDGE, &metric);
+        let minimize = places.iter().find(|place| place.0 == HTMINBUTTON).unwrap();
+        let maximize = places.iter().find(|place| place.0 == HTMAXBUTTON).unwrap();
+        assert_eq!((minimize.2, maximize.2), ('2', '1'), "restore, then maximize");
+        let maximized = caption_button_places(caption, WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, 0, &metric);
+        assert_eq!(maximized.iter().find(|place| place.0 == HTMAXBUTTON).unwrap().2, '2', "maximized: restore");
     }
 
     #[test]

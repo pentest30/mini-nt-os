@@ -1,5 +1,260 @@
 # Notes de passation
 
+- **Réduire, agrandir, rétablir** (`claude/stoic-margulis-2f5356`, PR 131, partie de `claude/new-session-696xfc`
+  `509ad05`, puis fusionnée avec la PR 134 le 2026-11-15 ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 35 ; demandé parce que sous VirtualBox les boutons Réduire
+  et Agrandir du Bloc-notes et du gestionnaire des tâches étaient sans effet) : co_WinPosMinMaximize
+  (`win32k::winpos::min_maximize`), la place gardée de chaque fenêtre (`winpos::InternalPos`, WinPosInitInternalPos),
+  dont GetWindowPlacement et SetWindowPlacement tiennent compte (les écarts de l'étape 24 levés), ShowWindow de toutes
+  ses commandes (`winpos::show_command`, `MinMax { cmd, swp }`), une fenêtre créée réduite ou agrandie
+  (`window::create_window`), WM_QUERYOPEN, la place agrandie gardée comme `ptMaxPosition` de WM_GETMINMAXINFO
+  (`window::min_max_info`) ; la fenêtre active réduite cède l'activation (`input::activate_other_min`,
+  ActivateOtherWindowMin) et le clavier. Le cadre : le bouton du titre peint enfoncé pendant son suivi
+  (`nonclient::caption_button_ops`, `paint::draw_caption_button`, `sizemove::track_button`), le bouton Réduire d'une
+  fenêtre réduite la rétablit, le double-clic sur le titre (`defwnd::double_click`), les boutons d'une fenêtre réduite
+  répondent à WM_NCHITTEST. **Choix sans shell** : MINIMIZEDMETRICS `iArrange` vaut `ARW_BOTTOMLEFT | ARW_RIGHT`
+  (SM_ARRANGE 0, `metrics::Parameters::DEFAULT`), pas ARW_HIDE comme ReactOS : une fenêtre réduite devient une barre
+  de titre à la première case libre en bas à gauche (`winpos::icon_slot`) au lieu de partir en (−32000, −32000) ;
+  ARW_HIDE reste suivi pour quand un shell le demandera (SPI_SETMINIMIZEDMETRICS, pas encore). Les autres écarts
+  voulus (SW_FORCEMINIMIZE réduit, (−1, −1) n'est pas une place pour SetWindowPlacement, le rectangle de
+  co_WinPosMinMaximize, la première case libre) sont dans l'étape 35. Tests : hôte (`winpos`, `defwnd`, `sizemove`,
+  `nonclient`) ; scénario `minmax` (`tests/native/minmax1.c` : ShowWindow, placements, puis la souris de QEMU sur
+  les boutons et le titre ; pixels du cadre hors de l'écran, du bouton Rétablir enfoncé, de la barre réduite) sur
+  AMD et Intel, que vingt mutations (une par comportement, liste dans l'étape 35) font échouer chacune ; `menu`,
+  `notepad`, `desktop-launch` passent sur AMD et Intel ; lint propre, 1082 tests hôte. `gui` échouait à la base
+  `509ad05` (l'ordre des WM_PAINT des sœurs) ; il passe une fois fusionnée avec la PR 134, qui a revu cet ordre.
+  **Fusion avec la PR 134** (`a480aa0`) : conflits de documentation seuls (l'étape 26 devient la 35) ;
+  `window::report_missing` retiré, sans appelant après la fusion (la PR 134 a fait HWND_MESSAGE, celle-ci les
+  fenêtres créées réduites ou agrandies). Lint propre, 1154 tests hôte ; la suite de démarrage : 126 runs sur 127
+  (`ntfs-readonly` sauté faute de `mkntfs`), seul `rostests` échoue, 43/84 sous son plancher de 44 (voir l'entrée
+  des crochets plus bas : déjà vu sur la PR 134). **Vu, pas fait** : `window::link` place une fenêtre
+  HWND_TOP au-dessus de la dernière de ses sœurs quand toutes sont WS_EX_TOPMOST (comme IntLinkHwnd de ReactOS) ;
+  SW_HIDE de la fenêtre active ne cède toujours pas l'activation ; IntShowOwnedPopups (les fenêtres possédées d'une
+  fenêtre réduite restent montrées), le crochet HCBT_MINMAX, `spwndActivePrev`, le menu de la fenêtre. **Suite** :
+  vérifier sous VirtualBox avec le Bloc-notes et le gestionnaire des tâches (refaire l'image), puis le menu de la
+  fenêtre (SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE par lui).
+
+- **Le nom 8.3 de toute entrée FAT dans FileBothDirectoryInformation** (`claude/new-session-696xfc`, PR 134, suite des
+  entrées ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). Comme `vfatfs`,
+  `FatMount::entries` donne le nom 8.3 de chaque entrée (drapeaux de casse appliqués, `.` et `..` compris), pas
+  seulement à côté d'un nom long : le choix du 2026-11-06 (`8e5103f`, nom vide pour un nom déjà en 8.3) est
+  abandonné à la demande du mainteneur. La sonde de `dir` attend `alternate NTDLL.DLL`, crée `readme.txt` et `Recent`
+  et les relit par FindFirstFileW (`CreateDirectoryW` ajouté à `tests/native/kernel32.def`). Tests : hôte
+  (`a_directory_is_enumerated`, `a_volume_creates_a_mixed_case_name_in_its_case`) ; une mutation (l'ancienne règle :
+  les deux tests hôte et `dir`). Les trois commits de la casse des noms 8.3 (écrits sur
+  `claude/blissful-herschel-4bf0cc`) rejoués sur la PR 134 (`b2c89ef`), leur étape devenue la 34 : 1146 tests hôte,
+  `cargo xtask lint` propre ; `smoke`, `dir`, `cmd`, `notepad-save`, `notepad-saveas`, `section-cache`,
+  `installer-finish`, `installed-boot`, `gpt-persistence` (AMD et Intel), `logon`, `persistence`,
+  `registry-persistence` passent. `fsck.vfat` n'est pas sur l'hôte Windows (la CI le passe).
+
+- **La même casse dans les images des outils** (`claude/new-session-696xfc`, PR 134, suite de l'entrée ci-dessous ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). `libs/fatfs` (ADR-022) tient maintenant la règle de
+  `vfatfs` (`fatfs::image::case_flags`, `CASE_LOWER_BASE`, `CASE_LOWER_EXT`), qu'Io réexporte au lieu de la copier ;
+  `fatfs::build` écrit les drapeaux de casse ou le nom long d'un nom que le 8.3 tient. `xtask` donne déjà en
+  majuscules les noms de l'espace utilisateur ; l'ESP de l'image GPT tient `kernel.elf` et `fat.img` avec les
+  drapeaux 0x18 (le micrologiciel et Io les ouvrent sans casse ; l'installateur les recopie tels quels). Tests : hôte
+  (`fatfs` : les sept règles dans une image relue par le lecteur du noyau ; `xtask/src/fat32.rs` parcourt `Recent`
+  et `readme.txt`) ; trois mutations (règle réduite à l'entrée seule : les tests de `fatfs` et d'Io ; octet 12 non
+  écrit ; casse mixte sans nom long). 1121 tests hôte, lint propre ; `smoke`, `dir`, `cmd`, `notepad-saveas`,
+  `installer-finish`, `installed-boot`, `installed-persistence`, `gpt-persistence` (AMD et Intel), `persistence`,
+  `registry-persistence`, `logon` passent.
+
+- **La casse des noms que le format 8.3 tient** (`claude/new-session-696xfc`, PR 134 ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). La
+  barre des emplacements de la boîte Enregistrer sous montrait « RECENT » : Io créait tout nom que le 8.3 tient avec
+  sa seule entrée 8.3. Comme `vfatfs` de ReactOS (FATAddEntry ; le `fastfat` de l'arbre de ReactOS est l'exemple du
+  WDK de Microsoft, à ne pas lire), `FatVolume::add_entry_long` garde la casse : entrée seule pour un nom tout en
+  majuscules ; drapeaux de casse de NT (octet 12 : 0x08 base, 0x10 extension) pour une partie toute en minuscules,
+  relus par `dir_entries` ; entrées de nom long devant l'entrée 8.3 en majuscules pour une casse mixte. Tests : deux
+  tests hôte (`io` : les règles, l'octet 12, les entrées de nom long, `Recent` par `Volume::create` relu après un
+  nouveau montage) ; `notepad-saveas` (deux pixels du texte « Recent » de la barre des emplacements) ; deux mutations
+  (règle réduite à l'entrée seule : les deux tests hôte et `notepad-saveas` ; drapeaux non relus : les deux tests
+  hôte). 1120 tests hôte ; `cargo xtask lint` propre ; `notepad-saveas`, `dir`, `cmd`, `installer-finish` (AMD et
+  Intel), `persistence`, `registry-persistence`, `logon` passent. `fsck.vfat` n'est pas sur l'hôte Windows : les
+  images n'y sont pas vérifiées par lui ; un lecteur à part (Python, hors dépôt) a relu celle de `logon` : 66 noms
+  longs aux sommes justes, aucun nom 8.3 en double, les dossiers du profil dans leur casse. **Vu, pas fait** :
+  `libs/fatfs` (l'image de `tools/mkfat`) écrivait aussi en majuscules tout nom que le 8.3 tient ; une entrée sans
+  nom long ne rendait pas son nom 8.3 dans FileBothDirectoryInformation (faits : les deux entrées ci-dessus).
+
+- **Ctrl+Alt+Suppr arrive à `winlogon` : les raccourcis clavier** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe), « Ctrl+Alt+Suppr »). L'écran de ReactOS qui
+  demande Ctrl+Alt+Suppr (après une fermeture de session, l'autologon ne servant qu'une fois, Maj enfoncée, ou un
+  poste verrouillé) ne réagissait pas : `winlogon` attend la SAS comme un raccourci de sa fenêtre SAS, et
+  NtUserRegisterHotKey manquait (« WL: Unable to register Ctrl+Alt+Del hotkey »). `win32k::hotkey` : RegisterHotKey,
+  UnregisterHotKey, WM_HOTKEY au clavier (`input::send_key`), raccourcis retirés avec leur fenêtre et leur thread,
+  Ctrl+Échap de la fenêtre du shell (SC_TASKLIST). Ctrl+Alt+Suppr ouvre « Security » ; verrouillé, « Unlock
+  Computer » ; Win+R ouvre « Run ». Scénario `hotkey` (`tests/native/hotkey1.c`, AMD et Intel ; une mutation
+  détectée) ; « WL: Unable to register Ctrl+Alt+Del hotkey » interdit dans `logon`. **Suite** : les fenêtres de
+  crochet du shell (RegisterShellHookWindow : les boutons de la barre des tâches, HSHELL_TASKMAN pour que Ctrl+Échap
+  ouvre le menu Démarrer), EnableWindow (TwoParam 0x60), Tab dans les boîtes de `msgina`.
+
+- **La fenêtre de dossier d'`explorer` s'ouvre : SB_CTL et le sous-classement des contrôles du serveur**
+  (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 33 ;
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Les PR 136 (les crochets) et 137 (le partage
+  des octets d'un fichier entre ses sections) fusionnées ici. Un item de dossier du menu Démarrer tuait `explorer`
+  (`int 3` dans `browseui`) : la liste de l'autocomplétion de la barre d'adresse (CAutoComplete) crée deux contrôles
+  ScrollBar et ATL sous-classe sa poignée de taille ; win32k refusait SB_CTL et GWLP_WNDPROC d'une fenêtre à
+  procédure du serveur, la liste n'était pas créée, CAutoComplete se relâchait une fois de trop et SHAutoComplete
+  appelait une méthode virtuelle pure de l'objet détruit (diagnostic : la vtable de l'objet dans `EDX`, ses trois
+  premiers emplacements `__cxa_pure_virtual` ; un journal temporaire de CreateWindowEx, retiré). Faits : SB_CTL
+  (`win32k::scroll`, `abi::user::SbWndExtra32`) et IntGetWindowProc, IntSetWindowProc
+  (`win32k::window::window_procedure`, `replace_procedure` ; sans CALLPROCDATA, toujours refusé pour une procédure du
+  client dans l'autre jeu de caractères). Scénario `scroll-control` (`tests/native/sbctl1.c`, AMD et Intel) ; deux
+  mutations détectées (SB_CTL refusé, procédure du serveur refusée). « My Documents » s'ouvre (titre, menus, barre
+  d'outils). **Suite** : sa barre d'adresse et sa vue des fichiers, vides (NtUserLockWindowUpdate, NtUserDrawCaption
+  manquent) ; le logon de ReactOS qui demande Ctrl+Alt+Suppr (NtUserRegisterHotKey absent : la SAS de `winlogon`).
+
+- **Le menu Démarrer s'ouvre : le premier critère du M6 est atteint** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La branche des icônes
+  (`claude/blissful-herschel-4bf0cc`) fusionnée ici : NtUserGetIconInfo, GetDIBits, StretchBlt, les images de
+  `comctl32`, `shell32` enregistré ; les trois correctifs faits des deux côtés (NtUserGetAtomName, le ResultInfo de
+  SendMessage, FileBasicInformation) gardent la version de cette branche ; `minoinit` enregistre en une étape, avant la
+  ruche de Default User, les serveurs COM du disque (browseui et shell32 réussissent) ; ses étapes 29 à 31 de
+  `m6-fenetres.md` deviennent 30 à 32. Avec la liste d'images du système, `explorer` crée son menu Démarrer et toute sa
+  barre (zone de notification, horloge), son bureau montre ses icônes, et un clic sur Démarrer ouvre le menu (« BaseBar »,
+  (2, 498)-(175, 776), Programs… Shut Down…). `xtask` : `screen-wait = SECONDES`, l'écran capturé de nouveau chaque
+  seconde jusqu'à montrer les pixels. Scénario `logon` : le clic (`keys`), le menu ouvert et le bouton enfoncé
+  (`screen-wait = 120`). Case cochée dans `05-feuille-de-route.md`. Capture `target/screenshots/menu-demarrer.png`.
+  `cargo xtask lint` propre ; toute la suite : 1126 tests hôte, 119 runs de démarrage sur 119 (rostests 44/84 et
+  16/29, aux planchers).
+  **Dette** : le menu met 15 à 30 s à paraître la première fois, chaque icône copiant `shell32.dll` (10,9 Mo) dans une
+  section de données (`sys::section`, `File::read_all`). **Suite** : partager les sections d'un même fichier (une
+  copie par fichier) ; les crochets WH_GETMESSAGE et WH_MSGFILTER (le menu suivi) ; puis le troisième critère, la
+  résolution (`bochs-dispi`, ChangeDisplaySettings, le panneau Affichage).
+
+- **Le menu Démarrer suit la souris : les crochets** (`claude/start-menu-hooks`, sur la fusion locale des PR 134 et
+  135 ; M6, premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Avec les icônes, un
+  clic sur Démarrer ouvre le menu, mais il restait inerte : CMenuFocusManager de `shell32` le suit par un crochet
+  WH_GETMESSAGE. `win32k::hook` (hook.c, callback.c) : objets `TYPE_HOOK` dans le tas du bureau
+  (`abi::user::Hook32`, lu par CallNextHookEx de `user32`), chaînes par thread et par type, chaînes globales du
+  bureau, `fsHooks` du `CLIENTINFO` et du `DESKTOPINFO` ; NtUserSetWindowsHookEx, NtUserSetWindowsHookAW,
+  NtUserUnhookWindowsHookEx, NtUserCallNextHookEx (`phkCurrent`), NtUserCallMsgFilter ; USER32_CALLBACK_HOOKPROC ;
+  WH_GETMESSAGE dans `queue::peek`, WH_SYSMSGFILTER puis WH_MSGFILTER dans la boucle des menus (MSGF_MENU) ; les
+  autres types posés, pas appelés (journalisé). Et NtUserWindowFromPoint (co_WinPosSearchChildren), NtUserGetAncestor,
+  NtUserGetForegroundWindow, SetForegroundWindow (NtUserCallHwndLock 0x5B). Dans VirtualBox : le menu s'ouvre, le
+  survol ouvre les sous-menus, un clic exécute l'item (la première ouverture prenait 55 s : NtCreateSection relisait
+  `shell32.dll` pour chaque icône ; 75 ms avec `claude/file-read-speed`) ; un item de dossier tue `explorer` (la fenêtre de dossier de
+  `browseui` échoue après une barre de défilement contrôle, SB_CTL ; assertion, `int 3`). Scénario `hooks`
+  (`tests/native/hook1.c`, AMD et Intel) ; sept mutations détectées (WH_GETMESSAGE ou MSGF_MENU retiré, crochets
+  gardés à la fin du thread, ordre de la chaîne, `fsHooks` non publié, HTTRANSPARENT ignoré, SetForegroundWindow
+  sans la fenêtre de premier niveau). Hôte : `win32k::hook` (chaînes, suivant, `fsHooks`, arguments du rappel).
+  `cargo xtask lint` propre, 1130 tests hôte ; la suite de démarrage : `rostests` 43/84 sous son plancher (44), le
+  même verdict, apitest par apitest, que la branche de la PR 135 seule.
+  **Suite** : la fenêtre de dossier (SB_CTL, puis `browseui`) ; TrackMouseEvent, SPI_GETMENUSHOWDELAY,
+  GetDoubleClickTime ; Ctrl+Échap (RegisterHotKey). La branche dépend des PR 134 et 135 (à rebaser une fois
+  fusionnées).
+
+- **Le bouton Démarrer d'`explorer` placé ; son menu attend les icônes** (`claude/new-session-696xfc`, M6, premier
+  critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La barre des tâches place ses contrôles
+  par DeferWindowPos, absent (« BeginDeferWindowPos failed », traywnd.cpp:1705) : le bouton gardait une taille nulle.
+  `win32k::deferpos` (simplecall.c, winpos.c) : BeginDeferWindowPos (NtUserCallOneParam 0x1E, un lot
+  `TYPE_SETWINDOWPOS` du processus, rendu à sa fin), NtUserDeferWindowPos (un déplacement par fenêtre, le second fondu
+  dans le premier), NtUserEndDeferWindowPosEx (l'un après l'autre par SetWindowPos ; `bAsync` pas encore) ;
+  NtUserSetWindowRgn sans région (SetWindowPos HWND_TOP, SWP_FRAMECHANGED ; une vraie région refusée, journalisée) ;
+  NtUserRemoveProp. Le bouton « Start » s'affiche (celui de `user32` : pas de logo ni de comctl32 6, l'assemblage
+  côte à côte manque). **Le menu Démarrer ne s'ouvre pas encore** : sa création (dans OnCreate de la barre) meurt dans
+  SHGetImageList de `shell32` (CMenuToolbars.cpp:356), la liste d'images du système étant NULL faute des icônes
+  (NtUserGetIconInfo, NtGdiCreateDIBitmapInternal, NtGdiGetDIBitsInternal, le travail d'une autre session) ; OnCreate
+  s'arrête là (ni site de bandes ni zone de notification). Un clic sur Démarrer (essayé au moniteur de QEMU) donne
+  traywnd.cpp:2997 (E_FAIL) et l'assertion d'ATL atlwin.h:1124 ; captures `target/screenshots/demarrer-bouton.png`
+  et `demarrer-clic.png`. Tests : `defer-window-pos` (`defer1.c`, AMD et Intel, quatre mutations détectées), hôte
+  (`win32k::deferpos`), `logon` (deux pixels du bouton, « BeginDeferWindowPos failed » interdit). `cargo xtask
+  lint` propre ; toute la suite (`cargo xtask test`) : 1107 tests hôte, 117 runs de démarrage sur 117 (rostests 44/84
+  et 16/29, aux planchers).
+  **Suite** : les icônes d'abord (l'autre session), puis le menu Démarrer d'un clic : les crochets WH_GETMESSAGE et
+  WH_MSGFILTER (CMenuFocusManager), SPI_SETWORKAREA, RegisterHotKey, FindWindowEx, SetParent.
+
+- **La PR 133 (`claude/logon-explorer`) fusionnée dans `claude/new-session-696xfc`** (M6, premier critère,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Elle apporte les fenêtres message seul
+  (`win32k::window::create_message_window`, `HWND_MESSAGE` ; scénario `gui`), DllRegisterServer des serveurs COM du
+  disque dans `minoinit` (`browseui` et `rpcrt4` réussissent : CLSID_StartMenu et CLSID_RebarBandSite, qu'`explorer`
+  crée ; `oleaut32`, `shdocvw`, `urlmon`, `shell32` échouent, à diagnostiquer) et FILE_BASIC_INFORMATION pris sur une
+  limite de 4 octets (scénario `cmd`). Sa façon de mettre `explorer.exe` sur le disque (`WINDOWS_PROGRAMS`, sur tous
+  les disques) cède la place à `shell = explorer` (`SHELL_FILES`), qui garde la copie de l'installateur sur sa cible ;
+  son correctif attendu de NtUserGetAtomName est déjà ici. Le scénario `logon` garde les attendus des deux côtés.
+
+- **explorer peint le fond de son bureau ; sa station ; les DC pris** (`claude/new-session-696xfc`, M6, premier
+  critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). NtUserPaintDesktop
+  (`win32k::desktop::paint_desktop`, IntPaintDesktop sans papier peint : la boîte de découpage du DC prend le pinceau
+  de la classe du bureau, COLOR_BACKGROUND, par PATCOPY ; `gdi::dc::fill_with_brush`). Le fond peint couvrait la
+  barre des tâches : NtUserSetShellWindowEx échouait, le processus d'`explorer` n'ayant pas de station, parce que le
+  chemin de bureau que `msgina` donne (`Default`) n'en nomme pas ; `win32k::startup::resolve_desktop` prend
+  maintenant, comme IntResolveDesktop, la station héritée (ObFindHandleForObject : `ob::HandleTable::find_by_type`)
+  ou WinSta0 selon le droit du processus (`default_station`) ; la station des services (`Service-0x…$`) reste à
+  faire (`services.exe`, `lsass.exe`). Et un DC pris gardait la région de sa prise : `win32k::dce::reset_active_dcs`
+  (DceResetActiveDCEs) la refait après chaque SetWindowPos, l'origine suivant la fenêtre déplacée. Tests :
+  `paint-desktop` (`paintdsk1.c`), `dc-reset` (`dcreset1.c`, le programme lit l'écran), `logon` (« no startup
+  desktop » interdit pour `userinit` et `explorer`, la barre visible au-dessus du fond peint), hôte (`ob`,
+  `win32k::startup`, `win32k::desktop`) ; chacun échoue sans sa correction. `cargo xtask lint` propre, 1104 tests
+  hôte ; toute la suite sur AMD : 65 sur 65 (rostests 44/84 et 16/29, aux planchers) ; sur Intel, `msg-wait`,
+  `send-messages`, `activate-app`, `notepad-save`, `gui`, `menu` passent.
+  **Suite** : les icônes du bureau (NtUserGetIconInfo, les détails des éléments), le papier peint
+  (SPI_SETDESKWALLPAPER), la taille de « Progman » (1, 0)-(32768, 32767) à vérifier, la station des services ; le
+  bouton Démarrer et ce que la barre demande.
+
+- **La barre des emplacements de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée
+  ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 32). « My Documents » et « My Computer »
+  avaient le papier blanc : leurs CLSID manquaient sous HKCR, que DllRegisterServer de `shell32` écrit et que
+  l'installation de ReactOS appelle (RegistrationPhase2). `minoinit.exe` enregistre maintenant `shell32` ; il fallait
+  pour cela que NtQueryKey(KeyNameInformation) accepte un handle sans KEY_QUERY_VALUE (un droit quelconque, comme
+  ReactOS : `ob::HandleTable::reference_as_with_any_access`), et que NtSetInformationFile(FileBasicInformation)
+  accepte un tampon aligné sur 4 (CopyFileW du `NTUSER.DAT` de `Default User` échouait une fois les cadres de
+  `minoinit` déplacés). La barre montre les cinq emplacements de ReactOS avec leurs icônes ; la boîte s'ouvre dans
+  « My Documents », créé par l'enregistrement. Tests : hôte (`ob`) ; `dir` (les dates d'un fichier depuis un tampon
+  aligné sur 4) ; `notepad-saveas` (sa sonde enregistre `shell32`, tape `C:\` ; un pixel de chaque icône) ; `logon`
+  (`[minoinit] shell32.dll registered`) ; quatre mutations. **Vu, pas fait** : « Recent » s'affichait « RECENT » (Io créait un nom 8.3
+  sans nom long : fait, étape 34 de `m6-fenetres.md`) ; les autres DLL de RegistrationPhase2.
+
+- **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). La barre d'outils de la boîte Enregistrer sous, sa
+  barre des emplacements et les icônes des tâches du gestionnaire des tâches s'affichent justes : BitBlt et
+  StretchBlt convertissent entre monochrome et couleurs (`gdi::bitblt::Convert`, la source monochrome lue au plus
+  proche du noir ou du blanc : le texte lissé de DrawState) ; l'alpha des images de 32 bits passe (StretchDIBits le
+  garde, les ROP avec source portent sur 32 bits, NtGdiCreateDIBitmapInternal, NtGdiAlphaBlend, `Pixel::Blend`
+  prémultiplié) ; les DIB sections de 4 et 8 bits (`gdi::surface::Format::Indexed`) et GetDIBits de 4 et 8 bits
+  (`gdi::dibits::default_palette`). Avec CreateDIBitmap, `user32` fait enfin le bitmap d'alpha des curseurs et icônes
+  de 32 bits, qui se mélangent par leur alpha au lieu de leurs masques : les pixels des icônes des titres de `gui` et
+  d'`icons` ont changé (recalculés à part depuis les ressources de `user32.dll`, identiques). Tests : hôte ; la sonde de `bitmap` (BitBlt monochrome, DIB section de 4 bits,
+  CreateDIBitmap, GdiAlphaBlend) ; des pixels de `notepad-saveas` (la barre d'outils, l'icône « Desktop ») et de
+  `desktop-launch` (l'icône de `cmd`). Douze mutations font chacune échouer un test (sans DIB section indexée, index réécrits à 0, table par défaut dans l'ancien ordre, sans conversion monochrome, source monochrome lue au noir exact, couleur de fond comparée avec son octet haut, StretchDIBits sans alpha, sans CreateDIBitmap, sans AlphaBlend, AlphaBlend sans l'alpha des pixels, ROP qui effacent l'alpha, alpha d'icône non prémultiplié). **Vu, pas fait** : les DIB sections de 1, 16 et 24 bits,
+  DIB_PAL_COLORS, SetDIBits, MaskBlt ; « My Documents » et « My Computer » de la barre des emplacements montraient
+  l'icône de document par défaut (fait : l'entrée ci-dessus).
+
+- **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
+  `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). Sous VirtualBox la boîte « Save As »
+  du Bloc-notes restait vide et son thread bouclait sur le cache d'icônes de `shell32`. Fait, dans l'ordre où la
+  boîte bloquait : NtUserGetIconInfo (`win32k::cursor::icon_info`, copies des bitmaps par
+  `gdi::surface::copy_bitmap`, module et ressource pour CopyImage(LR_COPYFROMRESOURCE)) ; NtUserGetAtomName écrit
+  dans le tampon du UNICODE_STRING de l'appelant (il écrasait la pile de `user32` : exception dans le WM_INITDIALOG
+  de la boîte ; à la fusion, la correction de `main` reste) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
+  CDefView croyait sa liste pleine de colonnes et s'arrêtait sur une assertion) ; GetDIBits (1 et 32 bits),
+  StretchBlt, GetNearestColor, BI_BITFIELDS de StretchDIBits (la barre d'outils). La boîte montre `C:\` et ses
+  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 31, entrée
+  ci-dessus) : NtUserGetClassName ;
+  NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
+- **Les lectures de fichiers accélérées : le menu Démarrer s'ouvre en 75 ms au lieu de 55 s**
+  (`claude/file-read-speed`, depuis `main`). Mesuré dans VirtualBox (un profileur temporaire, jamais committé, qui
+  compte le temps de chaque service d'`explorer` du clic à la pose du crochet du menu) : 55,2 des 55,3 s passaient
+  dans 14 NtCreateSection, `shell32` ouvrant `shell32.dll` (11 Mio) comme fichier de données pour chaque icône, et
+  NtCreateSection relisant le fichier entier (`File::read_all`), une commande ATA par secteur. Deux corrections :
+  `BlockDevice::read_sectors` (une suite de secteurs en un appel : 256 secteurs par commande pour `io::disk::AtaDisk`,
+  une copie pour le disque RAM, bornée par `PartitionDevice`) et `FatVolume::read` qui lit chaque suite de clusters
+  contigus d'un coup (128 Kio au plus, droit dans le tampon de l'appelant) ; `io::section_cache` (le rôle des
+  SECTION_OBJECT_POINTERS : `File::contents` reprend les octets qu'une section du même fichier inchangé tient encore,
+  clés volume, entrée, taille, premier cluster ; sans référence forte ; `Volume::write` et `Volume::set_size`
+  invalident avant et après, et ce qui est lu pendant un changement n'est pas gardé). Mesures du scénario
+  `section-cache` (QEMU, Intel, avant / après) : une section de 2 Mio 524 / 504 ms (le transfert PIO domine dans
+  QEMU, ~125 µs par secteur), une seconde section du même fichier 505 / 0 ms, `shell32.dll` en données 4853 / 1 ms ;
+  dans VirtualBox, avec la branche des crochets (`claude/start-menu-hooks`), du clic au menu 55,3 s / 75 ms
+  (NtCreateSection : 55,2 s / 2 ms). Tests hôte (`io::section_cache`, suites contiguës et fragmentées, appels comptés,
+  partition), scénario `section-cache` (AMD et Intel) ; huit mutations détectées (contiguïté ignorée, décalage dans
+  le cluster ignoré, invalidation retirée, lecture pendant un changement gardée, suite de partition non bornée,
+  suites d'un cluster, cache jamais consulté ; une seule des deux invalidations retirée reste sans effet, voulu).
+  **Suite** : le verrou du volume FAT est un `KSpinLock` tenu pendant toute la lecture (DISPATCH_LEVEL : une lecture
+  longue gèle la machine, le pointeur compris) ; la pagination à la demande des sections (lire à la faute les seules
+  pages touchées) ; le DMA ATA (bus master), le transfert PIO restant le coût de chaque secteur ; la suppression et
+  le renommage, quand les volumes les feront, devront invalider le cache.
+
 - **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects
   échouait (WAIT_FAILED) faute de NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27) : chaque thread GUI reçoit
@@ -15,9 +270,8 @@
   `logon` (le Bureau de l'utilisateur parcouru, `desktop.cpp:193` et `atlcomcli.h` interdits, la barre visible :
   sans SetShellWindowEx le bureau la recouvre), hôte (`win32k::winsta`, un seul shell par station). Captures avant
   et après dans `target/screenshots/` (régénérées par `logon`). `cargo xtask lint` propre, 1101 tests hôte ; la suite
-  complète sur AMD tourne.
-  **Suite** : le fond du bureau (NtUserPaintDesktop) et ses icônes (NtUserGetIconInfo) ; la station par défaut d'un
-  chemin de bureau ; le bouton Démarrer et ce que la barre demande.
+  complète a tourné avec le point suivant.
+  **Suite** : faite au point précédent (le fond, la station) ; restent les icônes et le bouton Démarrer.
 
 - **`explorer.exe` démarre ; NtUserGetAtomName écrasait la pile de `user32`** (`claude/new-session-696xfc`, M6,
   premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). `explorer.exe` est sur le
@@ -81,7 +335,6 @@
   Editor » du menu Démarrer de `tests/native/desktop1.c` ne lançait rien (seuls Terminal et Task Manager avaient un
   programme) ; elle lance `NOTEPAD.EXE`. Scénario `desktop-notepad` (Bas, Entrée : « launched Text Editor », le
   thread de `NOTEPAD.EXE` converti) sur AMD et Intel ; la mutation (l'entrée vide) le fait échouer.
-
 - **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, PR #127, base main `3942dd5`) : `notepad-save` passe sur AMD et Intel : saisie QEMU, vrai Save As, vérification des 20 octets, Alt+F4, sortie normale, nouveau processus et texte relu à l'écran. GWLP_WNDPROC client de même encodage débloque ATL ; Alt+F4 poste SC_CLOSE au premier niveau, sauf CS_NOCLOSE. Conversions ANSI/Unicode et procédures serveur refusées explicitement (thunks à faire). 322 tests hôte win32k passent. Critère Bloc-notes de M6 coché ; pas de reboot/persistance dans ce scénario RAM. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` et lint global à rejouer.
 
 - **Le logon jusqu'à `userinit`** (`claude/logon-token`, tirée de `claude/new-session-696xfc` à `509ad05`, qui y
@@ -1390,7 +1643,7 @@ aussi (étape 8). `NtOpenKey`, `NtQueryValueKey`, `NtOpenDirectoryObject`, `NtOp
   périphérique, le positionnement et l'entrée : 0, journalisés une fois) ; les autres types de NtUserMessageCall
   rendent FALSE ; la fenêtre inconnue de NtUserMessageCall n'a pas de test (`user32` valide le handle avant) ; ni
   profil d'utilisateur pour les métriques, ni SystemParametersInfo.
-- Sonde console (M5, étape 8) : ni casse des noms 8.3 (octet 12), ni dernier accès à la lecture, ni fuseau horaire
+- Sonde console (M5, étape 8) : ni dernier accès à la lecture, ni fuseau horaire
   (les dates de FAT passent pour de l'UTC) ; NtSetDefaultLocale absent (la locale de l'utilisateur est celle du
   système) ; ProcessDeviceMap (NtQueryInformationProcess, classe 0x17) absent ; FileFsVolumeInformation sans date de
   création du volume ; la place libre compte toute la FAT à chaque requête (le secteur FSInfo n'est ni cru ni tenu à

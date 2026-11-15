@@ -63,8 +63,11 @@ impl Parameters {
         minimized_width: 160,
         minimized_horizontal_gap: 160,
         minimized_vertical_gap: 24,
-        // ARW_HIDE.
-        minimized_arrange: 8,
+        // ARW_BOTTOMLEFT | ARW_RIGHT: minimized windows at the bottom left,
+        // as on a system without a shell. ReactOS has ARW_HIDE, its
+        // explorer showing them in its taskbar (a shell asks for it by
+        // SPI_SETMINIMIZEDMETRICS, not yet).
+        minimized_arrange: 0,
         icon_horizontal_spacing: 64,
         icon_vertical_spacing: 64,
         double_click_width: 4,
@@ -292,7 +295,7 @@ mod tests {
         assert_eq!((m[sm::CXVSCROLL], m[sm::CYHSCROLL], m[sm::CXICON], m[sm::CXSMICON]), (16, 16, 32, 16));
         assert_eq!((m[sm::CYMENU], m[sm::CXMENUCHECK], m[sm::CXMENUSIZE]), (19, 13, 18));
         assert_eq!((m[sm::MOUSEPRESENT], m[sm::CMOUSEBUTTONS], m[sm::CXDOUBLECLK]), (1, 2, 4));
-        assert_eq!((m[sm::NETWORK], m[sm::CMONITORS], m[sm::ARRANGE]), (3, 1, 8));
+        assert_eq!((m[sm::NETWORK], m[sm::CMONITORS], m[sm::ARRANGE]), (3, 1, 0));
         assert_eq!(m[sm::CXPADDEDBORDER], 0);
     }
 

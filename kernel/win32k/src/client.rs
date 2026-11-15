@@ -14,7 +14,7 @@ use hal::sync::KSpinLock;
 use crate::shared;
 
 /// Les procédures ANSI et Unicode du client, dans l'ordre des FNID.
-static PROCEDURES: KSpinLock<Option<(PfnClient32, PfnClient32)>> = KSpinLock::new(None);
+static PROCEDURES: KSpinLock<Option<ClientProcedures>> = KSpinLock::new(None);
 
 /// Les procédures sont enregistrées (ClientPfnInit).
 static REGISTERED: AtomicBool = AtomicBool::new(false);
@@ -71,15 +71,22 @@ pub(crate) fn set_procedures_for_test(ansi: PfnClient32, unicode: PfnClient32) {
     *PROCEDURES.lock() = Some((ansi, unicode));
 }
 
-/// GETPFNCLIENTA, GETPFNCLIENTW : la procédure du client (ANSI ou non) de
-/// `fnid`, une fois les procédures enregistrées.
+/// Les procédures du client, ANSI puis Unicode, dans l'ordre des FNID.
+pub type ClientProcedures = (PfnClient32, PfnClient32);
+
+/// Une copie des procédures du client, une fois enregistrées.
 ///
 /// # IRQL
 /// <= DISPATCH_LEVEL.
-pub fn client_procedure(fnid: u32, ansi: bool) -> Option<u32> {
+pub fn procedures() -> Option<ClientProcedures> {
+    *PROCEDURES.lock()
+}
+
+/// GETPFNCLIENTA, GETPFNCLIENTW dans `procedures` : la procédure du client
+/// (ANSI ou non) de `fnid`.
+pub fn client_procedure_in(procedures: &ClientProcedures, fnid: u32, ansi: bool) -> Option<u32> {
     let index = usize::try_from(fnid.checked_sub(FNID_FIRST)?).ok()?;
-    let procedures = PROCEDURES.lock();
-    let (a, w) = procedures.as_ref()?;
+    let (a, w) = procedures;
     if ansi {
         a.get(index).copied()
     } else {
@@ -87,18 +94,40 @@ pub fn client_procedure(fnid: u32, ansi: bool) -> Option<u32> {
     }
 }
 
-/// GETPFNSERVER : la procédure du serveur de `fnid` (de `FNID_SCROLLBAR` à
-/// `FNID_SWITCH`). Comme ReactOS tant que ses procédures du serveur
-/// manquent (`aStoCidPfn`), c'est celle, Unicode, du client.
-///
-/// # IRQL
-/// <= DISPATCH_LEVEL.
-pub fn server_procedure(fnid: u32) -> Option<u32> {
+/// GETPFNSERVER dans `procedures` : la procédure du serveur de `fnid` (de
+/// `FNID_SCROLLBAR` à `FNID_SWITCH`). Comme ReactOS tant que ses procédures
+/// du serveur manquent (`aStoCidPfn`), c'est celle, Unicode, du client.
+pub fn server_procedure_in(procedures: &ClientProcedures, fnid: u32) -> Option<u32> {
     let index = usize::try_from(fnid.checked_sub(FNID_FIRST)?).ok()?;
     if index >= FNID_NUMSERVERPROC {
         return None;
     }
-    client_procedure(fnid, false)
+    client_procedure_in(procedures, fnid, false)
+}
+
+/// Dans `procedures`, le FNID à procédure du serveur dont `procedure` est
+/// la procédure du client, ANSI ou non.
+pub fn server_fnid_in(procedures: &ClientProcedures, procedure: u32) -> Option<u32> {
+    let (a, w) = procedures;
+    (0..FNID_NUMSERVERPROC).find(|&i| a[i] == procedure || w[i] == procedure).map(|i| FNID_FIRST + i as u32)
+}
+
+/// GETPFNCLIENTA, GETPFNCLIENTW : la procédure du client (ANSI ou non) de
+/// `fnid`, une fois les procédures enregistrées.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn client_procedure(fnid: u32, ansi: bool) -> Option<u32> {
+    client_procedure_in(PROCEDURES.lock().as_ref()?, fnid, ansi)
+}
+
+/// GETPFNSERVER : la procédure du serveur de `fnid`
+/// ([`server_procedure_in`]), une fois les procédures enregistrées.
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn server_procedure(fnid: u32) -> Option<u32> {
+    server_procedure_in(PROCEDURES.lock().as_ref()?, fnid)
 }
 
 /// Si `procedure` est la procédure du client (ANSI ou non) d'un FNID qui a
@@ -108,9 +137,7 @@ pub fn server_procedure(fnid: u32) -> Option<u32> {
 /// # IRQL
 /// <= DISPATCH_LEVEL.
 pub fn server_procedure_of(procedure: u32) -> Option<u32> {
-    let procedures = PROCEDURES.lock();
-    let (a, w) = procedures.as_ref()?;
-    (0..FNID_NUMSERVERPROC).find(|&i| a[i] == procedure || w[i] == procedure).map(|i| FNID_FIRST + i as u32)
+    server_fnid_in(PROCEDURES.lock().as_ref()?, procedure)
 }
 
 /// L'adresse de `user32` dans le client qui a enregistré ses procédures ;

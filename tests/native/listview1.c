@@ -15,6 +15,10 @@
  *   NtUserBuildHwndList), EnumChildWindows sees it and its header,
  *   EnumThreadWindows and EnumWindows the parent;
  * - a column and three items, read back;
+ * - a window "Files" whose WM_CREATE does what shell32's file view does
+ *   with its ListView in list view (file_view_columns): SendMessage to its
+ *   header, not there yet, gives 0, and the Name column inserted at the
+ *   end creates the header and reads back as subitem 0;
  * - once painted: the ListView's background and the parent's.
  * Then it ends with EXIT_STATUS. Each result goes to the debug port
  * (DbgPrint), where the scenario looks for it.
@@ -145,6 +149,11 @@ typedef struct {
 #define LVM_INSERTITEMW 0x104D
 #define LVM_INSERTCOLUMNW 0x1061
 #define LVM_GETITEMTEXTW 0x1073
+#define LVM_GETCOLUMNW 0x105F
+#define LVCF_FMT 0x0001
+#define LVCF_SUBITEM 0x0008
+#define HDM_GETITEMCOUNT 0x1200
+#define WM_CREATE 0x0001
 #define SPI_GETICONTITLELOGFONT 0x001F
 #define SPI_GETNONCLIENTMETRICS 0x0029
 #define PM_REMOVE 0x0001
@@ -157,6 +166,8 @@ __declspec(dllimport) unsigned long __cdecl DbgPrint(const char *format, ...);
 __declspec(dllimport) void __stdcall ExitProcess(UINT code);
 __declspec(dllimport) DWORD __stdcall GetCurrentProcessId(void);
 __declspec(dllimport) DWORD __stdcall GetCurrentThreadId(void);
+__declspec(dllimport) DWORD __stdcall GetLastError(void);
+__declspec(dllimport) void __stdcall SetLastError(DWORD error);
 __declspec(dllimport) HINSTANCE __stdcall GetModuleHandleW(const WCHAR *name);
 __declspec(dllimport) HMODULE __stdcall LoadLibraryW(const WCHAR *name);
 __declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
@@ -211,6 +222,49 @@ static BOOL take_a_desktop(void)
     if (!desktop || !SetThreadDesktop(desktop) || !SwitchDesktop(desktop))
         return 0;
     return 1;
+}
+
+/* What shell32's file view (CDefView::LoadColumns) does with its ListView,
+ * in its parent's WM_CREATE: a list view (LVS_LIST) has no header yet, and
+ * Header_GetItemCount of it is SendMessage to no window, which must give 0
+ * (user32 returns what win32k writes in its result, an uninitialised
+ * variable otherwise: shell32 then believed it had columns, set instead of
+ * inserting, and asserted); then the Name column, folder column 0, inserted
+ * at the end, creates the header and reads back as subitem 0. */
+static void file_view_columns(HWND window)
+{
+    static WCHAR name[] = L"Name";
+    HWND files, header;
+    LVCOLUMNW column;
+    long count, at, got;
+    DWORD error;
+
+    files = CreateWindowExW(0x200 /* WS_EX_CLIENTEDGE */, L"SysListView32", L"", 0x56010b4f /* LVS_LIST */, 0, 0,
+                            280, 100, window, (HMENU)1, GetModuleHandleW(0), 0);
+    header = (HWND)SendMessageW(files, LVM_GETHEADER, 0, 0);
+    SetLastError(0);
+    count = SendMessageW(header, HDM_GETITEMCOUNT, 0, 0);
+    error = GetLastError();
+    memset(&column, 0, sizeof column);
+    column.mask = LVCF_TEXT | LVCF_FMT | LVCF_WIDTH | LVCF_SUBITEM;
+    column.pszText = name;
+    column.cx = 120;
+    at = SendMessageW(files, LVM_INSERTCOLUMNW, 0x7fffffff, (LPARAM)&column);
+    memset(&column, 0, sizeof column);
+    column.mask = LVCF_SUBITEM;
+    column.iSubItem = 77;
+    got = SendMessageW(files, LVM_GETCOLUMNW, 0, (LPARAM)&column);
+    DbgPrint("[list] a file view: no header %d, its item count %ld (error %lu); Name inserted at %ld, header %s, "
+             "column 0 read %ld, subitem %d\n",
+             header == 0, count, error, at, SendMessageW(files, LVM_GETHEADER, 0, 0) ? "present" : "missing", got,
+             column.iSubItem);
+}
+
+static LRESULT __stdcall files_procedure(HWND window, UINT message, WPARAM w, LPARAM l)
+{
+    if (message == WM_CREATE)
+        file_view_columns(window);
+    return DefWindowProcW(window, message, w, l);
 }
 
 static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM w, LPARAM l)
@@ -327,6 +381,11 @@ DWORD __stdcall GuiStartup(void)
     DbgPrint("[list] EnumWindows: %d\n", counted);
     if (list)
         items();
+    class_info.lpfnWndProc = files_procedure;
+    class_info.lpszClassName = L"MinoFiles";
+    if (!RegisterClassExW(&class_info) || !CreateWindowExW(0, L"MinoFiles", L"Files", WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                                                           700, 450, 300, 150, 0, 0, instance, 0))
+        ExitProcess(4);
     UpdateWindow(parent);
     for (i = 0; i < 100; i++) {
         while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE)) {

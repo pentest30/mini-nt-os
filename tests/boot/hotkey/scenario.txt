@@ -1,0 +1,40 @@
+# Hotkeys (tests/native/hotkey1.c, MinGW, linked to ReactOS's kernel32 and
+# user32): HOTKEY1.EXE takes the place of winlogon.exe and takes
+# WinSta0\Default. winlogon waits for Ctrl+Alt+Del (the SAS) as a hotkey of
+# its SAS window (RegisterHotKey(MOD_CONTROL | MOD_ALT, VK_DELETE), sas.c);
+# without NtUserRegisterHotKey it logged « WL: Unable to register
+# Ctrl+Alt+Del hotkey », and the logon screen that asks for Ctrl+Alt+Del
+# never got it. The window, shown, gets the keyboard, then:
+# 1. RegisterHotKey (win32k::hotkey): Ctrl+Alt+Delete for the window; the
+#    same combination refused (1409, ERROR_HOTKEY_ALREADY_REGISTERED),
+#    MOD_NOREPEAT (1004, ERROR_INVALID_FLAGS), the desktop window (1408,
+#    ERROR_WINDOW_OF_OTHER_THREAD); Ctrl+Shift+Esc for the thread;
+# 2. QEMU types Ctrl+Alt+Delete, Ctrl+Shift+Esc, then Delete: WM_HOTKEY to
+#    the window (id 0, MAKELONG(MOD_CONTROL | MOD_ALT, VK_DELETE)) without a
+#    WM_KEYDOWN of Delete; WM_HOTKEY to the thread (id 3,
+#    MAKELONG(MOD_CONTROL | MOD_SHIFT, VK_ESCAPE)); Delete alone a key;
+# 3. UnregisterHotKey: the window's, then nothing left, the thread's;
+# 4. Ctrl+Alt+Delete again: a WM_KEYDOWN, no WM_HOTKEY.
+features = test-smss
+requires = userland, native
+initial-command = HOTKEY1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [hotkey] waiting => ctrl-alt-delete ctrl-shift-esc delete
+keys = [hotkey] unregistered => ctrl-alt-delete
+
+expect = [hotkey] step 1: Ctrl+Alt+Delete: 1, error 0
+expect = [hotkey] step 1: again: 0, error 1409
+expect = [hotkey] step 1: MOD_NOREPEAT: 0, error 1004
+expect = [hotkey] step 1: the desktop window: 0, error 1408
+expect = [hotkey] step 1: Ctrl+Shift+Esc for the thread: 1, error 0
+expect = [hotkey] waiting
+expect = [hotkey] step 2: WM_HOTKEY to the window 1: id 0, 002e0003; to the thread 1: id 3, 001b0006; Ctrl+Delete keys 0
+expect = [hotkey] step 3: UnregisterHotKey 1, again 0, the thread's 1
+expect = [hotkey] unregistered
+expect = [hotkey] step 4: Ctrl+Alt+Delete without the hotkey: a key 1, hotkeys 0
+expect = [hotkey] done
+forbid = *** STOP:
+forbid = sys: NtUserRegisterHotKey (0x11e8) is not implemented
+forbid = sys: NtUserUnregisterHotKey (0x123c) is not implemented
