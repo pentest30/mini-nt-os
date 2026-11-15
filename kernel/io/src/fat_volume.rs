@@ -109,6 +109,19 @@ pub struct Node {
 }
 
 impl Node {
+    /// Ce qui le désigne sur son volume, tant qu'il existe : la place de son
+    /// entrée (FAT : son cluster et son rang), ou sa référence (NTFS : son
+    /// enregistrement et sa séquence) ; aucune pour la racine.
+    pub fn identity(&self) -> Option<u64> {
+        match (self.entry, self.reference) {
+            (Some(at), _) => Some((u64::from(at.cluster) << 32) | u64::from(at.index)),
+            (None, Some(reference)) => {
+                Some((u64::from(reference.sequence) << 48) | (reference.record & 0xFFFF_FFFF_FFFF))
+            }
+            (None, None) => None,
+        }
+    }
+
     /// Ce que dit `entry`, dont l'entrée est en `at` (`None` : une description seule,
     /// qui ne relit rien).
     fn from_entry(entry: &DirEntry, at: Option<EntryRef>) -> Self {

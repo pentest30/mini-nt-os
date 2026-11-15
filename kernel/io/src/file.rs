@@ -403,6 +403,32 @@ impl File {
         Ok((filled.bytes, if filled.overflow { STATUS_BUFFER_OVERFLOW } else { STATUS_SUCCESS }))
     }
 
+    /// Le contenu du fichier pour une section (NtCreateSection) : celui que
+    /// tient déjà une section du même fichier inchangé, sinon lu en entier
+    /// (`crate::section_cache`).
+    ///
+    /// # IRQL
+    /// PASSIVE_LEVEL for filesystem I/O; may allocate and perform device reads.
+    pub fn contents(&self) -> Result<Arc<[u8]>, NtStatus> {
+        let node = self.node()?;
+        let cache = &crate::section_cache::CACHE;
+        let key = node.identity().filter(|_| !node.directory).map(|identity| crate::section_cache::Key {
+            volume: self.volume.cache_id(),
+            identity,
+            size: node.size,
+            first_cluster: node.first_cluster,
+        });
+        if let Some(bytes) = key.as_ref().and_then(|key| cache.lookup(key)) {
+            return Ok(bytes);
+        }
+        let read_at = cache.generation();
+        let bytes: Arc<[u8]> = Arc::from(self.read_all()?);
+        if let Some(key) = key {
+            cache.insert(key, &bytes, read_at);
+        }
+        Ok(bytes)
+    }
+
     /// Le fichier en entier.
     ///
     /// # IRQL
