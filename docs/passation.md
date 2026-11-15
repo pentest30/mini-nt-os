@@ -1,5 +1,15 @@
 # Notes de passation
 
+- **Le nom 8.3 de toute entrée FAT dans FileBothDirectoryInformation** (`claude/new-session-696xfc`, PR 134, suite des
+  entrées ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). Comme `vfatfs`,
+  `FatMount::entries` donne le nom 8.3 de chaque entrée (drapeaux de casse appliqués, `.` et `..` compris), pas
+  seulement à côté d'un nom long : le choix du 2026-11-06 (`8e5103f`, nom vide pour un nom déjà en 8.3) est
+  abandonné à la demande du mainteneur. La sonde de `dir` attend `alternate NTDLL.DLL`, crée `readme.txt` et `Recent`
+  et les relit par FindFirstFileW (`CreateDirectoryW` ajouté à `tests/native/kernel32.def`). Tests : hôte
+  (`a_directory_is_enumerated`, `a_volume_creates_a_mixed_case_name_in_its_case`) ; une mutation (l'ancienne règle :
+  les deux tests hôte et `dir`). 1121 tests hôte, lint propre ; `dir`, `cmd`, `notepad-save`, `notepad-saveas`,
+  `installer-finish` (AMD et Intel), `logon`, `persistence` passent.
+
 - **La même casse dans les images des outils** (`claude/new-session-696xfc`, PR 134, suite de l'entrée ci-dessous ; M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 34). `libs/fatfs` (ADR-022) tient maintenant la règle de
   `vfatfs` (`fatfs::image::case_flags`, `CASE_LOWER_BASE`, `CASE_LOWER_EXT`), qu'Io réexporte au lieu de la copier ;
@@ -26,9 +36,8 @@
   Intel), `persistence`, `registry-persistence`, `logon` passent. `fsck.vfat` n'est pas sur l'hôte Windows : les
   images n'y sont pas vérifiées par lui ; un lecteur à part (Python, hors dépôt) a relu celle de `logon` : 66 noms
   longs aux sommes justes, aucun nom 8.3 en double, les dossiers du profil dans leur casse. **Vu, pas fait** :
-  `libs/fatfs` (l'image de `tools/mkfat`) écrivait aussi en majuscules tout nom que le 8.3 tient (fait : l'entrée
-  ci-dessus) ; une entrée sans nom long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend
-  toujours).
+  `libs/fatfs` (l'image de `tools/mkfat`) écrivait aussi en majuscules tout nom que le 8.3 tient ; une entrée sans
+  nom long ne rendait pas son nom 8.3 dans FileBothDirectoryInformation (faits : les deux entrées ci-dessus).
 
 - **Ctrl+Alt+Suppr arrive à `winlogon` : les raccourcis clavier** (`claude/new-session-696xfc`, M6,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe), « Ctrl+Alt+Suppr »). L'écran de ReactOS qui

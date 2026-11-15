@@ -153,7 +153,9 @@ impl Node {
 pub struct Listed {
     /// Raw UTF-16 long name, or the 8.3 name when no long name exists.
     pub name: Vec<u16>,
-    /// Raw UTF-16 DOS alias, when paired with a long name.
+    /// Son nom 8.3 (FILE_BOTH_DIR_INFORMATION.ShortName) : sur FAT, celui de
+    /// toute entrée, avec ses drapeaux de casse, `.` et `..` compris, comme
+    /// vfatfs de ReactOS le rend ; sur NTFS, le nom DOS apparié à un nom long.
     pub short_name: Option<Vec<u16>>,
     /// La place de son entrée dans le répertoire, en octets (`FileIndex`).
     pub offset: u32,
@@ -325,7 +327,8 @@ impl FatMount {
     /// Ce que tient le répertoire `directory`, dans l'ordre de ses entrées,
     /// décrit pour NtQueryDirectoryFile : `.` et `..` compris (un
     /// sous-répertoire de FAT les tient ; la racine, non), sans le nom du
-    /// volume. `STATUS_NOT_A_DIRECTORY` pour un fichier.
+    /// volume ; chaque entrée avec son nom 8.3, même sans nom long (vfatfs).
+    /// `STATUS_NOT_A_DIRECTORY` pour un fichier.
     ///
     /// # IRQL
     /// <= DISPATCH_LEVEL.
@@ -345,7 +348,8 @@ impl FatMount {
                 let node = Node::from_entry(&listed.entry, None);
                 Listed {
                     name: listed.name.encode_utf16().collect(),
-                    short_name: listed.short_name.map(|name| name.encode_utf16().collect()),
+                    // Its 8.3 name: beside a long name, or the name itself.
+                    short_name: Some(listed.short_name.as_ref().unwrap_or(&listed.name).encode_utf16().collect()),
                     offset: listed.offset,
                     directory: node.directory,
                     attributes: node.attributes,

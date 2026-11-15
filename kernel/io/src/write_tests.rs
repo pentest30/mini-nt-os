@@ -771,6 +771,9 @@ fn a_volume_creates_a_mixed_case_name_in_its_case() {
     assert!(listed[0].directory);
     assert_eq!(volume.list(&root).unwrap(), ["Recent"]);
     assert_eq!(volume.list(&recent).unwrap(), ["notes.txt"]);
+    // Its 8.3 name too, in the case its flags give (vfatfs).
+    let notes = volume.entries(&recent).unwrap().into_iter().find(|e| e.name == utf16("notes.txt")).unwrap();
+    assert_eq!(notes.short_name, Some(utf16("notes.txt")));
     // Found in any case, and taken in any case.
     assert_eq!(volume.lookup(&root, "RECENT\\NOTES.TXT").unwrap().size, 0);
     assert_eq!(volume.create(&root, "RECENT", true, 0).err(), Some(STATUS_OBJECT_NAME_COLLISION));

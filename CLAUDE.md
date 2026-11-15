@@ -375,7 +375,7 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   de casse de NT (octet 12 : `fat::CASE_LOWER_BASE`, `CASE_LOWER_EXT`), relus par `FatVolume::dir_entries` ; à casse
   mixte, des entrées de nom long devant l'entrée 8.3 en majuscules : « Recent » s'affiche « Recent ». La règle est
   dans `libs/fatfs` (`fatfs::image::case_flags`, que Io réexporte), dont les images (`tools/mkfat`, image GPT) la
-  suivent aussi.
+  suivent aussi. FileBothDirectoryInformation rend le nom 8.3 de toute entrée FAT, comme `vfatfs`.
   M6, le logon jusqu'à `userinit` ([`docs/compat/m6-logon.md`](docs/compat/m6-logon.md), scénario `logon`) :
   NtCreateToken (`se::Token::create` ; propriétaire et groupe principal vérifiés, session du moniteur de références),
   NtDuplicateToken (`Token::duplicate_as`, EffectiveOnly, les droits du handle copié pour un accès nul),

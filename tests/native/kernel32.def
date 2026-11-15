@@ -8,6 +8,7 @@ CancelIo@4
 CloseHandle@4
 ConnectNamedPipe@8
 CopyFileW@12
+CreateDirectoryW@8
 CreateEventW@16
 CreateFileW@28
 CreateFileMappingW@24

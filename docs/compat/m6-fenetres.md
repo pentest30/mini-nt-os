@@ -1563,5 +1563,12 @@ lecteur du noyau ; le lecteur à part de `xtask/src/fat32.rs` parcourt un dossie
 mutations (règle réduite à l'entrée seule : les tests de `fatfs` et d'Io ; octet 12 non écrit ; casse mixte sans nom
 long).
 
-Vu, pas fait : une entrée sans nom long ne rend pas son nom 8.3 dans FileBothDirectoryInformation (`vfatfs` le rend
-toujours).
+Le nom 8.3 de toute entrée FAT est rendu dans FileBothDirectoryInformation (`io::FatMount::entries`,
+`Listed::short_name`), comme `vfatfs` le rend (DirContext->ShortNameU, drapeaux de casse appliqués, `.` et `..`
+compris) : `NTDLL.DLL` rend `NTDLL.DLL`, `readme.txt` rend `readme.txt`, `Recent` rend `RECENT`. Il ne venait
+qu'à côté d'un nom long depuis le 2026-11-06 (commit `8e5103f`, la sonde de `dir` voulait un nom vide pour un nom
+déjà en 8.3) ; le mainteneur a choisi de suivre `vfatfs`. NTFS garde son nom DOS apparié à un nom long. Tests : hôte
+(`a_directory_is_enumerated` : `.`, `..`, `NTDLL.DLL`, `CONFIG` avec leur nom 8.3 ; `notes.txt` dans sa casse) ; la
+sonde de `dir` (`tests/native/dir1.c`) attend `alternate NTDLL.DLL` et crée `readme.txt` et `Recent`, relus par
+FindFirstFileW avec leur nom et leur nom de remplacement exacts ; une mutation (le nom 8.3 seulement à côté d'un nom
+long : les deux tests hôte et `dir`).
