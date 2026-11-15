@@ -181,20 +181,47 @@ tout, et le garde. Comme DceResetActiveDCEs, `win32k::dce::reset_active_dcs` ref
 région visible de chaque DC du cache pris pour une fenêtre ; ceux de la fenêtre déplacée ou de ses filles suivent
 son coin, et la région qui les coupe, gardée à leur prise, est décalée d'autant.
 
-**Où `explorer` va maintenant.** Sa barre des tâches (vide : ni bouton Démarrer ni horloge) au-dessus de son bureau,
-dont il peint le fond lui-même (COLOR_BACKGROUND), sans assertion. Le bureau n'a pas encore d'icônes
-(NtUserGetIconInfo ; CDesktopFolder.cpp:977 et CDefView.cpp:2744 pour les détails des éléments). En chemin :
-BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo (classes 0x14, 0x2B, 0x2F, 0x30,
-0x100A), NtGdiGetDIBitsInternal, NtGdiAlphaBlend, NtUserRemoveProp,
-NtUserSetWindowRgn, NtUserFindWindowEx, NtUserCallOneParam (0x1E BEGINDEFERWNDPOS, 0x28 GETKEYBOARDLAYOUT). La
-fenêtre « Progman » d'`explorer` mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à
-vérifier (SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN).
+**Le bouton Démarrer : DeferWindowPos.** La barre des tâches place son bouton Démarrer, son site de bandes et sa
+zone de notification par BeginDeferWindowPos, DeferWindowPos et EndDeferWindowPos (traywnd.cpp, AlignControls), que
+Mino n'avait pas (« BeginDeferWindowPos failed. lastErr=120 », traywnd.cpp:1705) : le bouton, créé de taille nulle,
+le restait. Comme `simplecall.c` et `winpos.c` (`win32k::deferpos`) : BeginDeferWindowPos
+(NtUserCallOneParam, ONEPARAM_ROUTINE_BEGINDEFERWNDPOS, 0x1E) rend un lot, objet USER `TYPE_SETWINDOWPOS` du
+processus (rendu à sa fin) ; DeferWindowPos (NtUserDeferWindowPos) y range un déplacement par fenêtre, un second
+déplacement de la même fenêtre se fondant dans le premier (IntDeferWindowPos : ce que le second change remplace, ses
+`SWP_NO*` ne restent que si les deux les portaient) ; EndDeferWindowPos (NtUserEndDeferWindowPosEx) les fait l'un après
+l'autre par SetWindowPos, saute une fenêtre détruite entre-temps, s'arrête au premier échec et rend le lot. Les
+drapeaux et les fenêtres refusés le sont comme dans ReactOS (`ERROR_INVALID_FLAGS`, `ERROR_INVALID_PARAMETER`,
+`ERROR_INVALID_DWP_HANDLE`, le bureau et sa fenêtre des messages). La barre appelle aussi NtUserSetWindowRgn sans région
+(un seul moniteur) : la fenêtre n'en a pas, son cadre se recalcule et elle passe en tête de ses sœurs (SetWindowPos
+HWND_TOP, SWP_FRAMECHANGED), et NtUserRemoveProp (UserRemoveProp, la liste des propriétés republiée dans le tas
+partagé). Le bouton Démarrer est maintenant à gauche de la barre, (2, 776)-(66, 796), le bouton de `user32` avec son
+texte « Start » : pas encore son logo, ni le thème de comctl32 6, faute de l'assemblage côte à côte
+`Microsoft.Windows.Common-Controls` 6.0 (« Could not find dependent assembly ») et des listes d'images. Pas encore :
+une vraie région de fenêtre (refusée, journalisée une fois), EndDeferWindowPos asynchrone.
+
+**Où `explorer` va maintenant : le menu Démarrer attend les icônes.** Avec les classes COM de la PR 133, `explorer`
+crée son menu Démarrer pendant la création de sa barre (CTrayWindow::OnCreate, CreateStartMenu : les dossiers
+`Start Menu` de l'utilisateur et de All Users parcourus), mais ses barres d'outils demandent la liste d'images du
+système (CMenuToolbars.cpp:356, SHGetImageList), que `shell32` n'a pas pu créer faute des icônes (NtUserGetIconInfo,
+NtGdiCreateDIBitmapInternal, NtGdiGetDIBitsInternal : « Failed to add IDI_SHELL_DOCUMENT icon to cache ») ;
+SHGetImageList appelle alors QueryInterface d'une liste NULL (une lecture en 0 dans `shell32`, RVA `0xF4533`), que
+`user32` rattrape (« Exception when calling unicode WndProc ... Msg 1 ») : OnCreate s'arrête là, sans site de bandes,
+ni bouton des tâches, ni zone de notification. Un clic sur le bouton Démarrer arrive à la barre (TWM_OPENSTARTMENU),
+mais la fenêtre du menu n'existe pas (traywnd.cpp:2997, E_FAIL), et une assertion d'ATL s'affiche (atlwin.h:1124,
+`::IsWindow(hWnd)`). La chaîne des icônes est le travail d'une autre session ; le bureau, lui, montre déjà les noms
+de ses éléments (« My... », « Rec... ») sans leurs icônes. En chemin : NtUserSystemParametersInfo (classes 0x14,
+0x2B, 0x2F, 0x30, 0x100A), NtGdiAlphaBlend, NtGdiStretchBlt, NtUserFindWindowEx, NtUserSetParent,
+NtUserRegisterHotKey, NtUserCallOneParam (0x28 GETKEYBOARDLAYOUT, 0x31 MESSAGEBEEP). La fenêtre « Progman »
+d'`explorer` mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à vérifier
+(SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN).
 
 ## La suite
 
-Le bureau d'`explorer` : ses icônes (NtUserGetIconInfo, les détails des éléments), son papier peint
-(SPI_SETDESKWALLPAPER) ; la station des services ; puis ce qu'il demande pour la barre (le bouton Démarrer, crochets, `SetWindowsHookEx`,
-presse-papiers, notifications, `NtNotifyChangeKey`) et le bureau du critère.
+Les icônes (la liste d'images du système : NtUserGetIconInfo, NtGdiCreateDIBitmapInternal, NtGdiGetDIBitsInternal),
+dont dépendent le menu Démarrer et le reste de la barre ; puis le menu Démarrer ouvert d'un clic (les crochets
+WH_GETMESSAGE et WH_MSGFILTER que pose le suivi du menu de `shell32`, CMenuFocusManager), la zone de travail que la
+barre réserve (SPI_SETWORKAREA), RegisterHotKey, FindWindowEx, SetParent ; le papier peint (SPI_SETDESKWALLPAPER), la
+station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`, et le bureau du critère.
 
 ## Tests
 
@@ -227,6 +254,13 @@ blanc reste). Scénario `dc-reset` (`dcreset1.c`) : le DC gardé d'une fenêtre 
 sur elle, ni à son ancienne place une fois déplacée ; le programme lit l'écran (l'ancien DC faisait les deux).
 Hôte : `ob` (le premier handle d'un type), `win32k::startup` (la station d'un chemin sans station),
 `win32k::desktop` (le pinceau d'une classe).
+Scénario `defer-window-pos` (`defer1.c`, AMD et Intel) : BeginDeferWindowPos(-1) refusé ; un lot de trois
+déplacements, le troisième fondu dans le premier, chacun rendant le lot, EndDeferWindowPos place les deux fenêtres ;
+le lot fini refusé (`ERROR_INVALID_DWP_HANDLE`) ; un drapeau inconnu, SWP_ASYNCWINDOWPOS et le bureau refusés, un lot
+vide fini ; SetWindowRgn(NULL) met la fenêtre en tête ; RemoveProp rend la donnée puis plus rien. Quatre mutations
+(sans la routine BEGINDEFERWNDPOS, SetWindowRgn qui garde le rang, RemoveProp sans republier la liste, les drapeaux
+du lot non vérifiés) le font échouer. Hôte : `win32k::deferpos` (la fusion de deux déplacements). Scénario `logon` :
+le bouton Démarrer à l'écran (ses bords gauche et droit), « BeginDeferWindowPos failed » interdit.
 
 Les apitests de `ntdll` (scénario `rostests`) restent à 43 sur 84, le plancher, mais pas les mêmes : NtDuplicateToken
 (un `NewTokenHandle` nul : `STATUS_ACCESS_VIOLATION`, la poignée écrite d'abord, comme ProbeForWriteHandle) et

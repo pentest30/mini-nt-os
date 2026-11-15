@@ -367,7 +367,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   bureau d'`explorer` est créé sous sa barre des tâches, et il en peint le fond (NtUserPaintDesktop,
   `win32k::desktop::paint_desktop`) ; un chemin de bureau sans station prend la station héritée ou WinSta0
   (`win32k::startup::default_station`, `ob::HandleTable::find_by_type`) ; les DC pris refont leur région après
-  chaque SetWindowPos (`win32k::dce::reset_active_dcs`). Pas encore ses icônes.
+  chaque SetWindowPos (`win32k::dce::reset_active_dcs`). Pas encore ses icônes. La PR 133 fusionnée : fenêtres
+  `HWND_MESSAGE`, serveurs COM du disque enregistrés par `minoinit` (CLSID_StartMenu, CLSID_RebarBandSite). Le bouton
+  Démarrer placé par DeferWindowPos (`win32k::deferpos` : BeginDeferWindowPos par NtUserCallOneParam 0x1E, un lot
+  `TYPE_SETWINDOWPOS`, NtUserDeferWindowPos, NtUserEndDeferWindowPosEx) ; NtUserSetWindowRgn sans région,
+  NtUserRemoveProp ; scénario `defer-window-pos`. Le menu Démarrer meurt à sa création dans SHGetImageList (la
+  liste d'images du système, faute des icônes).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

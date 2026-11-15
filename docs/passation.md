@@ -1,5 +1,23 @@
 # Notes de passation
 
+- **Le bouton Démarrer d'`explorer` placé ; son menu attend les icônes** (`claude/new-session-696xfc`, M6, premier
+  critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La barre des tâches place ses contrôles
+  par DeferWindowPos, absent (« BeginDeferWindowPos failed », traywnd.cpp:1705) : le bouton gardait une taille nulle.
+  `win32k::deferpos` (simplecall.c, winpos.c) : BeginDeferWindowPos (NtUserCallOneParam 0x1E, un lot
+  `TYPE_SETWINDOWPOS` du processus, rendu à sa fin), NtUserDeferWindowPos (un déplacement par fenêtre, le second fondu
+  dans le premier), NtUserEndDeferWindowPosEx (l'un après l'autre par SetWindowPos ; `bAsync` pas encore) ;
+  NtUserSetWindowRgn sans région (SetWindowPos HWND_TOP, SWP_FRAMECHANGED ; une vraie région refusée, journalisée) ;
+  NtUserRemoveProp. Le bouton « Start » s'affiche (celui de `user32` : pas de logo ni de comctl32 6, l'assemblage
+  côte à côte manque). **Le menu Démarrer ne s'ouvre pas encore** : sa création (dans OnCreate de la barre) meurt dans
+  SHGetImageList de `shell32` (CMenuToolbars.cpp:356), la liste d'images du système étant NULL faute des icônes
+  (NtUserGetIconInfo, NtGdiCreateDIBitmapInternal, NtGdiGetDIBitsInternal, le travail d'une autre session) ; OnCreate
+  s'arrête là (ni site de bandes ni zone de notification). Un clic sur Démarrer (essayé au moniteur de QEMU) donne
+  traywnd.cpp:2997 (E_FAIL) et l'assertion d'ATL atlwin.h:1124 ; captures `target/screenshots/demarrer-bouton.png`
+  et `demarrer-clic.png`. Tests : `defer-window-pos` (`defer1.c`, AMD et Intel, quatre mutations détectées), hôte
+  (`win32k::deferpos`), `logon` (deux pixels du bouton, « BeginDeferWindowPos failed » interdit).
+  **Suite** : les icônes d'abord (l'autre session), puis le menu Démarrer d'un clic : les crochets WH_GETMESSAGE et
+  WH_MSGFILTER (CMenuFocusManager), SPI_SETWORKAREA, RegisterHotKey, FindWindowEx, SetParent.
+
 - **La PR 133 (`claude/logon-explorer`) fusionnée dans `claude/new-session-696xfc`** (M6, premier critère,
   [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Elle apporte les fenêtres message seul
   (`win32k::window::create_message_window`, `HWND_MESSAGE` ; scénario `gui`), DllRegisterServer des serveurs COM du

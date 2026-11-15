@@ -46,7 +46,13 @@
 # forbidden for both). The desktop paints its background by PaintDesktop
 # (NtUserPaintDesktop) through a DC it took while it was above everything
 # (DceResetActiveDCEs keeps that DC off the taskbar). Its icons are not yet
-# there (NtUserGetIconInfo).
+# there (NtUserGetIconInfo). The taskbar lays its Start button out by
+# BeginDeferWindowPos, DeferWindowPos and EndDeferWindowPos
+# (win32k::deferpos), which once failed ("BeginDeferWindowPos failed",
+# traywnd.cpp:1705): the button kept a size of 0; it is now at the left of
+# the taskbar, (2, 776)-(66, 796), its right edge dark (COLOR_3DDKSHADOW).
+# Its Start menu is not yet created: its toolbars ask the system image list
+# (SHGetImageList), which the missing icons leave NULL.
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
@@ -70,6 +76,8 @@ expect = of explorer.exe
 expect = Documents and Settings\Administrator\Desktop\*.*
 screen = 640 790 D4D0C8
 screen = 640 773 FFFFFF
+screen = 65 786 404040
+screen = 2 786 FFFFFF
 
 forbid = [minoinit] stopped:
 forbid = *** STOP:
@@ -86,3 +94,4 @@ forbid = desktop.cpp:193
 forbid = atlcomcli.h
 forbid = of userinit.exe (NtStatus
 forbid = of explorer.exe (NtStatus
+forbid = BeginDeferWindowPos failed
