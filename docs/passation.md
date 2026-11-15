@@ -1,5 +1,27 @@
 # Notes de passation
 
+- **Le menu Démarrer suit la souris : les crochets** (`claude/start-menu-hooks`, sur la fusion locale des PR 134 et
+  135 ; M6, premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Avec les icônes, un
+  clic sur Démarrer ouvre le menu, mais il restait inerte : CMenuFocusManager de `shell32` le suit par un crochet
+  WH_GETMESSAGE. `win32k::hook` (hook.c, callback.c) : objets `TYPE_HOOK` dans le tas du bureau
+  (`abi::user::Hook32`, lu par CallNextHookEx de `user32`), chaînes par thread et par type, chaînes globales du
+  bureau, `fsHooks` du `CLIENTINFO` et du `DESKTOPINFO` ; NtUserSetWindowsHookEx, NtUserSetWindowsHookAW,
+  NtUserUnhookWindowsHookEx, NtUserCallNextHookEx (`phkCurrent`), NtUserCallMsgFilter ; USER32_CALLBACK_HOOKPROC ;
+  WH_GETMESSAGE dans `queue::peek`, WH_SYSMSGFILTER puis WH_MSGFILTER dans la boucle des menus (MSGF_MENU) ; les
+  autres types posés, pas appelés (journalisé). Et NtUserWindowFromPoint (co_WinPosSearchChildren), NtUserGetAncestor,
+  NtUserGetForegroundWindow, SetForegroundWindow (NtUserCallHwndLock 0x5B). Dans VirtualBox : le menu s'ouvre, le
+  survol ouvre les sous-menus, un clic exécute l'item (la première ouverture prenait 55 s : NtCreateSection relisait
+  `shell32.dll` pour chaque icône ; 75 ms avec `claude/file-read-speed`) ; un item de dossier tue `explorer` (la fenêtre de dossier de
+  `browseui` échoue après une barre de défilement contrôle, SB_CTL ; assertion, `int 3`). Scénario `hooks`
+  (`tests/native/hook1.c`, AMD et Intel) ; sept mutations détectées (WH_GETMESSAGE ou MSGF_MENU retiré, crochets
+  gardés à la fin du thread, ordre de la chaîne, `fsHooks` non publié, HTTRANSPARENT ignoré, SetForegroundWindow
+  sans la fenêtre de premier niveau). Hôte : `win32k::hook` (chaînes, suivant, `fsHooks`, arguments du rappel).
+  `cargo xtask lint` propre, 1130 tests hôte ; la suite de démarrage : `rostests` 43/84 sous son plancher (44), le
+  même verdict, apitest par apitest, que la branche de la PR 135 seule.
+  **Suite** : la fenêtre de dossier (SB_CTL, puis `browseui`) ; TrackMouseEvent, SPI_GETMENUSHOWDELAY,
+  GetDoubleClickTime ; Ctrl+Échap (RegisterHotKey). La branche dépend des PR 134 et 135 (à rebaser une fois
+  fusionnées).
+
 - **Le bouton Démarrer d'`explorer` placé ; son menu attend les icônes** (`claude/new-session-696xfc`, M6, premier
   critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). La barre des tâches place ses contrôles
   par DeferWindowPos, absent (« BeginDeferWindowPos failed », traywnd.cpp:1705) : le bouton gardait une taille nulle.

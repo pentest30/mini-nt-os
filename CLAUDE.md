@@ -390,8 +390,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `HWND_MESSAGE`, serveurs COM du disque enregistrés par `minoinit` (CLSID_StartMenu, CLSID_RebarBandSite). Le bouton
   Démarrer placé par DeferWindowPos (`win32k::deferpos` : BeginDeferWindowPos par NtUserCallOneParam 0x1E, un lot
   `TYPE_SETWINDOWPOS`, NtUserDeferWindowPos, NtUserEndDeferWindowPosEx) ; NtUserSetWindowRgn sans région,
-  NtUserRemoveProp ; scénario `defer-window-pos`. Le menu Démarrer meurt à sa création dans SHGetImageList (la
-  liste d'images du système, faute des icônes).
+  NtUserRemoveProp ; scénario `defer-window-pos`. Avec les icônes (PR 135), le menu Démarrer s'ouvre ; les
+  crochets le font suivre la souris (`win32k::hook` : objets `TYPE_HOOK` dans le tas du bureau, chaînes par thread et
+  par bureau, `fsHooks`, NtUserSetWindowsHookEx, NtUserUnhookWindowsHookEx, NtUserCallNextHookEx,
+  NtUserCallMsgFilter ; WH_GETMESSAGE dans `queue::peek`, WH_MSGFILTER dans la boucle des menus), avec
+  NtUserWindowFromPoint, NtUserGetAncestor, Get/SetForegroundWindow ; scénario `hooks` (`tests/native/hook1.c`). Un
+  item de dossier tue encore `explorer` (la fenêtre de dossier de `browseui`, SB_CTL).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
