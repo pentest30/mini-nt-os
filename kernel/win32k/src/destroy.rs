@@ -246,6 +246,7 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
     }
     crate::mouse::forget_capture(hwnd);
     crate::shell::forget(hwnd);
+    crate::hotkey::forget_window(hwnd);
     let state = window::change(window, |state| {
         state.style &= !WS_VISIBLE;
         state.update = Region::default();
@@ -270,8 +271,8 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
 /// ExitThreadCallback : `thread`, un thread GUI, se termine. Ses fenêtres
 /// sont détruites sans message (celles de premier niveau d'abord), puis
 /// celles dont la destruction aurait été interrompue ; ses minuteries
-/// partent, et les crochets qui l'accrochent ou qu'il a posés
-/// (`crate::hook::thread_exit`) ; sa file est vidée, les messages qu'on lui avait envoyés
+/// partent, ses raccourcis (`crate::hotkey::thread_exit`), et les crochets
+/// qui l'accrochent ou qu'il a posés (`crate::hook::thread_exit`) ; sa file est vidée, les messages qu'on lui avait envoyés
 /// reviennent à leurs envoyeurs ; il n'est plus au premier plan et quitte
 /// son bureau ; le handle de l'événement de sa file est fermé.
 ///
@@ -301,6 +302,7 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
     drop((top, rest));
     crate::timer::destroy_thread_timers(&info);
     let hooks = crate::hook::thread_exit(info.server);
+    crate::hotkey::thread_exit(info.server);
     let (sent, _, _) = info.queue.with(crate::queue::QueueState::clear);
     let abandoned = sent.len();
     crate::sent::abandon_all(sent);

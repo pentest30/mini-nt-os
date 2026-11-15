@@ -181,3 +181,5 @@ CallWindowProcA@20
 GetClassLongA@8
 GetClassLongW@8
 SetWindowLongA@12
+RegisterHotKey@16
+UnregisterHotKey@8

@@ -33,9 +33,12 @@
 //! système) d'après l'état du clavier du thread ; ToUnicodeEx
 //! ([`to_unicode_ex`]) traduit une touche selon un état donné.
 //!
-//! Pas encore : la souris, les crochets (WH_KEYBOARD_LL), les raccourcis
-//! (RegisterHotKey), Alt + pavé numérique, Alt + Tab, le changement de
-//! disposition par Alt + Maj, les voyants, Impr. écran, SendInput, le
+//! Une touche d'un raccourci (RegisterHotKey) devient WM_HOTKEY
+//! (`crate::hotkey::process`) au lieu d'un message de touche.
+//!
+//! Pas encore : la souris, les crochets (WH_KEYBOARD_LL), Alt + pavé
+//! numérique, Alt + Tab, le changement de disposition par Alt + Maj, les
+//! voyants, Impr. écran, SendInput, le
 //! premier plan perdu (WM_NCACTIVATE, WM_ACTIVATE inactif et WM_KILLFOCUS
 //! à un autre thread), plusieurs bureaux d'entrée.
 
@@ -434,7 +437,15 @@ pub fn process_keyboard_input(data: &KeyboardInputData) {
 fn send_key(input: &KeyInput, foreground: Option<&ThreadInfo>) {
     let (active, focus) = foreground.map_or((0, 0), |thread| thread.queue.with(|q| (q.active, q.focus)).0);
     let hwnd = if focus != 0 { focus } else { active };
-    let message = key_message(&mut ASYNC.lock(), input, hwnd, foreground.is_some() && focus == 0, message_time());
+    let (message, modifiers) = {
+        let mut keys = ASYNC.lock();
+        let message = key_message(&mut keys, input, hwnd, foreground.is_some() && focus == 0, message_time());
+        (message, crate::hotkey::modifiers(&keys.state))
+    };
+    // A hotkey (Ctrl+Alt+Del for winlogon) takes the key: no key message.
+    if crate::hotkey::process(simplify_vk(input.vk), !input.up, modifiers, message.time) {
+        return;
+    }
     if let Some(thread) = foreground {
         crate::queue::post_input(thread, message);
     }

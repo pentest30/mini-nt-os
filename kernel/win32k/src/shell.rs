@@ -7,10 +7,9 @@
 //! l'ordre Z (`WNDS2_BOTTOMMOST`) et SetWindowPos ne l'en fait plus bouger
 //! ([`is_shell_window`]) : les autres fenêtres, la barre des tâches
 //! comprise, restent au-dessus. Détruite, elle quitte la station et le
-//! `DESKTOPINFO` ([`forget`]).
-//!
-//! Pas encore : le raccourci Ctrl+Échap vers le shell (SC_TASKLIST,
-//! UserRegisterHotKey), faute de RegisterHotKey.
+//! `DESKTOPINFO` ([`forget`]). Elle reçoit Ctrl+Échap en WM_SYSCOMMAND
+//! SC_TASKLIST (`crate::hotkey`, `HotKey::task_list`), qui ouvre le menu
+//! Démarrer ; ses raccourcis partent avec elle.
 
 use alloc::sync::Arc;
 
@@ -42,7 +41,8 @@ fn is_topmost(window: &Window) -> bool {
 /// s'il y a déjà un shell, ou si l'une est au premier plan (`Err(None)`,
 /// sans erreur, comme ReactOS). La fenêtre du shell passe au bas de l'ordre
 /// Z sans être activée ; le `DESKTOPINFO` du bureau du thread courant les
-/// reçoit, avec le `PROCESSINFO` du processus.
+/// reçoit, avec le `PROCESSINFO` du processus ; Ctrl+Échap devient son
+/// raccourci (SC_TASKLIST).
 ///
 /// # Errors
 /// `ERROR_INVALID_WINDOW_HANDLE` pour une fenêtre qui n'existe pas,
@@ -66,6 +66,8 @@ pub fn set_shell_window(shell: u32, list_view: u32) -> Result<(), Option<u32>> {
     if !station.station.with_shell(|windows| windows.claim(shell, list_view)) {
         return Err(None);
     }
+    // Ctrl+Esc for the shell, its result ignored like ReactOS's.
+    let _ = crate::hotkey::register(crate::hotkey::HotKey::task_list(shell_window.pti, shell));
     let process = ps::ethread::current_thread().and_then(|thread| crate::gui::existing_process_info(thread.process()));
     if let (Some(thread), Some(process)) = (current_thread_info(), process) {
         if let Some(desktop) = thread.desktop() {

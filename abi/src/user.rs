@@ -1109,6 +1109,8 @@ pub const SC_MOUSEMENU: u32 = 0xF090;
 /// MENU_TrackKbdMenuBar.
 pub const SC_KEYMENU: u32 = 0xF100;
 pub const SC_RESTORE: u32 = 0xF120;
+/// SC_TASKLIST: the task list (the Start menu of the shell, Ctrl+Esc).
+pub const SC_TASKLIST: u32 = 0xF130;
 /// WMSZ_*: the edge SC_SIZE drags, in the low 4 bits of `wParam`; WMSZ_LEFT
 /// (1) to WMSZ_BOTTOMRIGHT (8) follow HTLEFT (10) to HTBOTTOMRIGHT (17).
 pub const WMSZ_LEFT: u32 = 1;
@@ -1177,6 +1179,8 @@ pub mod vk {
     pub const VK_DOWN: u8 = 0x28;
     pub const VK_INSERT: u8 = 0x2D;
     pub const VK_DELETE: u8 = 0x2E;
+    pub const VK_LWIN: u8 = 0x5B;
+    pub const VK_RWIN: u8 = 0x5C;
     pub const VK_NUMPAD0: u8 = 0x60;
     pub const VK_DECIMAL: u8 = 0x6E;
     pub const VK_F4: u8 = 0x73;
@@ -1188,7 +1192,18 @@ pub mod vk {
     pub const VK_RCONTROL: u8 = 0xA3;
     pub const VK_LMENU: u8 = 0xA4;
     pub const VK_RMENU: u8 = 0xA5;
+    /// VK_PACKET: a character of SendInput (KEYEVENTF_UNICODE), not a key.
+    pub const VK_PACKET: u8 = 0xE7;
 }
+
+/// WM_HOTKEY: a hotkey pressed (RegisterHotKey); its identifier in
+/// `wParam`, MAKELONG(the modifiers down, the key) in `lParam`.
+pub const WM_HOTKEY: u32 = 0x0312;
+/// MOD_*: the modifiers of a hotkey (RegisterHotKey).
+pub const MOD_ALT: u32 = 0x0001;
+pub const MOD_CONTROL: u32 = 0x0002;
+pub const MOD_SHIFT: u32 = 0x0004;
+pub const MOD_WIN: u32 = 0x0008;
 
 /// WM_MAXIMUM (ReactOS): the highest message a filter can name.
 pub const WM_MAXIMUM: u32 = 0x0001_FFFF;

@@ -71,6 +71,10 @@ pub const ERROR_INVALID_CURSOR_HANDLE: u32 = 1402;
 pub const ERROR_NO_SCROLLBARS: u32 = 1447;
 /// ERROR_TLW_WITH_WSCHILD: a child window without a parent.
 pub const ERROR_TLW_WITH_WSCHILD: u32 = 1406;
+/// ERROR_WINDOW_OF_OTHER_THREAD: a window of another thread (RegisterHotKey).
+pub const ERROR_WINDOW_OF_OTHER_THREAD: u32 = 1408;
+/// ERROR_HOTKEY_ALREADY_REGISTERED: the key and modifiers have a hotkey.
+pub const ERROR_HOTKEY_ALREADY_REGISTERED: u32 = 1409;
 /// ERROR_CANNOT_FIND_WND_CLASS.
 pub const ERROR_CANNOT_FIND_WND_CLASS: u32 = 1407;
 /// ERROR_INVALID_MONITOR_HANDLE.

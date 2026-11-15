@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 188 | 737 |
+| win32k | 190 | 737 |
 
 ## ntoskrnl
 
@@ -804,7 +804,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11e5` | `NtUserRedrawWindow` | 4 | ✅ |
 | `0x11e6` | `NtUserRegisterClassExWOW` | 7 | ✅ |
 | `0x11e7` | `NtUserRegisterUserApiHook` | 4 |  |
-| `0x11e8` | `NtUserRegisterHotKey` | 4 |  |
+| `0x11e8` | `NtUserRegisterHotKey` | 4 | ✅ |
 | `0x11e9` | `NtUserRegisterRawInputDevices` | 3 |  |
 | `0x11ea` | `NtUserRegisterTasklist` | 1 |  |
 | `0x11eb` | `NtUserRegisterWindowMessage` | 1 | ✅ |
@@ -888,7 +888,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1239` | `NtUserUnlockWindowStation` | 1 |  |
 | `0x123a` | `NtUserUnregisterClass` | 3 |  |
 | `0x123b` | `NtUserUnregisterUserApiHook` | 0 |  |
-| `0x123c` | `NtUserUnregisterHotKey` | 2 |  |
+| `0x123c` | `NtUserUnregisterHotKey` | 2 | ✅ |
 | `0x123d` | `NtUserUpdateInputContext` | 3 |  |
 | `0x123e` | `NtUserUpdateInstance` | 3 |  |
 | `0x123f` | `NtUserUpdateLayeredWindow` | 10 |  |

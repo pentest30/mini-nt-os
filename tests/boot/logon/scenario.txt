@@ -63,6 +63,9 @@
 # takes 15 to 30 s to appear the first time: each of its icons makes a data
 # section of shell32.dll, which the kernel copies whole (10.9 MB, read from
 # the ATA disk); hence `screen-wait`.
+# winlogon registers Ctrl+Alt+Del, the SAS, as a hotkey of its SAS window
+# (win32k::hotkey): « WL: Unable to register Ctrl+Alt+Del hotkey » is
+# forbidden.
 #
 # `interactive`: the probe waits for smss for good (the reboot ends the
 # first boot); without it, it would end smss 10 s after its start.
@@ -110,3 +113,4 @@ forbid = atlcomcli.h
 forbid = of userinit.exe (NtStatus
 forbid = of explorer.exe (NtStatus
 forbid = BeginDeferWindowPos failed
+forbid = WL: Unable to register Ctrl+Alt+Del hotkey
