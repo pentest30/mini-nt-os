@@ -232,6 +232,8 @@ expect = [gui] the menu bar: its client area SM_CYMENU less tall; a menu that do
 # MENU_001, a popup's items, wraps to two lines in 292 pixels; 206, one.
 expect = [gui] the menu of a class, loaded by user32: a bar of 2 lines
 expect = [gui] the menu of a class, loaded by win32k: by its name a bar of 2 lines, by its identifier 1
+expect = [gui] message-only window: created, hidden, not enumerated, its message received
+expect = [gui] message-only window destroyed: 1
 expect = [gui] done
 
 # The windows left visible, drawn by the kernel's DefWindowProc

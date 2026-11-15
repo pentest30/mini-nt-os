@@ -14,8 +14,10 @@
  * 3. the hive of Default User: HKU\.DEFAULT written back to its file
  *    (NtFlushKey), copied as NTUSER.DAT in the Default User profile
  *    (syssetup's SaveDefaultUserHive saves the key itself, RegSaveKeyEx);
- * 4. setup done: SetupType = 0, SystemSetupInProgress = 0, CmdLine empty;
- * 5. the hives written back to their files (NtFlushKey), then a reboot
+ * 4. the COM servers on the disk registered (DllRegisterServer, syssetup's
+ *    RegistrationPhase2): the classes explorer creates;
+ * 5. setup done: SetupType = 0, SystemSetupInProgress = 0, CmdLine empty;
+ * 6. the hives written back to their files (NtFlushKey), then a reboot
  *    (NtShutdownSystem).
  *
  * Each step says how it went by DbgPrint ("[minoinit] ..."); a failed step
@@ -85,6 +87,8 @@ __declspec(dllimport) void __stdcall ExitProcess(UINT code);
 
 typedef BOOL(__stdcall *InitializeProfilesFn)(void);
 typedef BOOL(__stdcall *GetDefaultUserProfileDirectoryWFn)(WCHAR *path, DWORD *size);
+typedef LONG(__stdcall *CoInitializeFn)(void *reserved);
+typedef LONG(__stdcall *DllRegisterServerFn)(void);
 
 /* How long samsrv may take to make the accounts. */
 #define SAM_WAIT_MS 30000
@@ -257,7 +261,37 @@ static void make_the_profiles(void)
     DbgPrint("[minoinit] the hive of Default User: %s\n", ascii(profile));
 }
 
-/* 4 and 5. Setup done, the hives written back, the reboot. */
+/* 4. The COM servers of syssetup.inf's OleControlDlls (RegistrationPhase2)
+ * that are on the disk, in its order, as syssetup's RegisterDlls does it:
+ * CoInitialize, then each DLL's DllRegisterServer, which writes its classes
+ * in HKCR (SOFTWARE\Classes). explorer needs them: the Start menu and the
+ * taskbar's band site are browseui's, the desktop's folders shell32's. A DLL
+ * that does not load or fails is reported; it does not stop the setup (as
+ * syssetup). */
+static void register_the_com_servers(void)
+{
+    static const WCHAR *const dlls[] = {
+        L"browseui.dll", L"oleaut32.dll", L"rpcrt4.dll", L"shdocvw.dll", L"shell32.dll", L"urlmon.dll", L"wininet.dll",
+    };
+    HMODULE ole32 = LoadLibraryW(L"ole32.dll");
+    CoInitializeFn co_initialize = ole32 ? (CoInitializeFn)GetProcAddress(ole32, "CoInitialize") : 0;
+    DWORD i;
+
+    if (!co_initialize)
+        stop("ole32 has no CoInitialize");
+    DbgPrint("[minoinit] CoInitialize: %lx\n", (DWORD)co_initialize(0));
+    for (i = 0; i < sizeof dlls / sizeof dlls[0]; ++i) {
+        HMODULE dll = LoadLibraryW(dlls[i]);
+        DllRegisterServerFn register_server = dll ? (DllRegisterServerFn)GetProcAddress(dll, "DllRegisterServer") : 0;
+        if (!register_server) {
+            DbgPrint("[minoinit] DllRegisterServer %s: not found (%lu)\n", ascii(dlls[i]), GetLastError());
+            continue;
+        }
+        DbgPrint("[minoinit] DllRegisterServer %s: %lx\n", ascii(dlls[i]), (DWORD)register_server());
+    }
+}
+
+/* 5 and 6. Setup done, the hives written back, the reboot. */
 static void finish(void)
 {
     static const DWORD zero = 0;
@@ -290,6 +324,7 @@ DWORD __stdcall GuiStartup(void)
         DbgPrint("[minoinit] environment: %s\n", ascii(environment));
     wait_for_the_accounts();
     make_the_profiles();
+    register_the_com_servers();
     finish();
     ExitProcess(0);
     return 0;

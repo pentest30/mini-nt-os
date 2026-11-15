@@ -52,8 +52,7 @@ Chaque ligne est un arrêt du scénario `logon`, sa cause, et ce qui l'a levé.
 `userinit.exe` (sur le disque depuis cette étape) tourne alors sous le jeton de l'utilisateur : il se connecte à
 `csrss` et à win32k, charge la disposition de clavier, applique les paramètres de l'utilisateur
 (UpdatePerUserSystemParameters), puis cherche le shell de `Winlogon\Shell`, `C:\WINDOWS\explorer.exe`, qui n'est pas
-sur le disque : « Failed to start default shell », puis la boîte « Userinit failed to start the shell! ». **C'est là
-que le logon s'arrête aujourd'hui.**
+sur le disque : « Failed to start default shell », puis la boîte « Userinit failed to start the shell! ».
 
 ## Vu en chemin, pas fait
 
@@ -76,6 +75,22 @@ que le logon s'arrête aujourd'hui.**
 `shdocvw` compris). Les autres disques ne le prennent pas : avec ces trois fichiers, la copie du disque de
 l'installateur ne tenait plus sur sa cible (`installer-finish` : « copy failed: c0000185 »). `userinit` le lance
 sous le jeton de l'utilisateur.
+
+**Les classes COM d'`explorer` et les fenêtres message seul** (PR 133, `claude/logon-explorer`, fusionnée ici).
+`explorer` crée par COM son menu Démarrer (CLSID_StartMenu, `{4622AD11-FF23-11D0-8D34-00A0C90F2719}`) et le site de
+bandes de sa barre (CLSID_RebarBandSite, `{ECD4FC4D-521C-11D0-B792-00A0C90312E1}`), que rien n'enregistrait
+(`REGDB_E_CLASSNOTREG`) : l'installation de ReactOS appelle DllRegisterServer des DLL de `syssetup.inf`
+(`RegistrationPhase2`, `OleControlDlls`). `minoinit.exe` appelle CoInitialize, puis DllRegisterServer de celles de
+cette liste qui sont sur le disque, avant la réécriture des ruches. `browseui` et `rpcrt4` réussissent (le scénario
+`logon` attend `browseui`) ; `oleaut32`, `shdocvw` et `urlmon` rendent `E_NOINTERFACE`, `shell32` `E_FAIL`, `wininet`
+n'a pas de DllRegisterServer : à diagnostiquer (sans doute le registrar d'ATL, `atl.dll`, en tête de la liste et pas
+sur le disque, et l'enregistrement des bibliothèques de types). La fenêtre d'appartement de COM n'était pas créée non
+plus (`combase` apartment.c : « CreateWindow failed with error 1400 ») : chaque bureau a maintenant sa fenêtre des
+messages (`win32k::window::create_message_window`, `spwndMessage`, `FNID_MESSAGEWND`), dont les fenêtres créées avec
+`HWND_MESSAGE` sont les enfants (cachées, hors des fenêtres de premier niveau ; scénario `gui`). En chemin, CopyFileW
+de `minoinit` échouait (erreur 998) selon la profondeur de sa pile : NtSetInformationFile(FileBasicInformation)
+exigeait un tampon aligné sur 8 octets, que les compilateurs x86 ne garantissent pas à une structure posée sur la
+pile ; 4 suffisent maintenant, comme pour les autres valeurs de 64 bits (scénario `cmd`, `concmd1.c`).
 
 **Le premier lancement a mis au jour un bogue du noyau.** `explorer` mourait (`c0000096`, une instruction privilégiée à
 l'adresse `0x006E0057`) dans la création de sa barre des tâches. Ses registres sauvés portaient les mots successifs de
@@ -170,7 +185,7 @@ son coin, et la région qui les coupe, gardée à leur prise, est décalée d'au
 dont il peint le fond lui-même (COLOR_BACKGROUND), sans assertion. Le bureau n'a pas encore d'icônes
 (NtUserGetIconInfo ; CDesktopFolder.cpp:977 et CDefView.cpp:2744 pour les détails des éléments). En chemin :
 BeginDeferWindowPos (ERROR_CALL_NOT_IMPLEMENTED), NtUserSystemParametersInfo (classes 0x14, 0x2B, 0x2F, 0x30,
-0x100A), les fenêtres message seul (HWND_MESSAGE), NtGdiGetDIBitsInternal, NtGdiAlphaBlend, NtUserRemoveProp,
+0x100A), NtGdiGetDIBitsInternal, NtGdiAlphaBlend, NtUserRemoveProp,
 NtUserSetWindowRgn, NtUserFindWindowEx, NtUserCallOneParam (0x1E BEGINDEFERWNDPOS, 0x28 GETKEYBOARDLAYOUT). La
 fenêtre « Progman » d'`explorer` mesure (1, 0)-(32768, 32767) : la taille de l'écran virtuel qu'il demande est à
 vérifier (SM_CXVIRTUALSCREEN, SM_XVIRTUALSCREEN).

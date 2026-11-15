@@ -1,5 +1,14 @@
 # Notes de passation
 
+- **La PR 133 (`claude/logon-explorer`) fusionnée dans `claude/new-session-696xfc`** (M6, premier critère,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Elle apporte les fenêtres message seul
+  (`win32k::window::create_message_window`, `HWND_MESSAGE` ; scénario `gui`), DllRegisterServer des serveurs COM du
+  disque dans `minoinit` (`browseui` et `rpcrt4` réussissent : CLSID_StartMenu et CLSID_RebarBandSite, qu'`explorer`
+  crée ; `oleaut32`, `shdocvw`, `urlmon`, `shell32` échouent, à diagnostiquer) et FILE_BASIC_INFORMATION pris sur une
+  limite de 4 octets (scénario `cmd`). Sa façon de mettre `explorer.exe` sur le disque (`WINDOWS_PROGRAMS`, sur tous
+  les disques) cède la place à `shell = explorer` (`SHELL_FILES`), qui garde la copie de l'installateur sur sa cible ;
+  son correctif attendu de NtUserGetAtomName est déjà ici. Le scénario `logon` garde les attendus des deux côtés.
+
 - **explorer peint le fond de son bureau ; sa station ; les DC pris** (`claude/new-session-696xfc`, M6, premier
   critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). NtUserPaintDesktop
   (`win32k::desktop::paint_desktop`, IntPaintDesktop sans papier peint : la boîte de découpage du DC prend le pinceau

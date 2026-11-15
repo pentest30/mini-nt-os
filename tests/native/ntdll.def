@@ -15,6 +15,7 @@ RtlUnwind@16
 NtCreateFile@44
 NtReadFile@36
 NtQueryInformationFile@20
+NtSetInformationFile@20
 NtQueryVolumeInformationFile@20
 NtQueryDirectoryFile@44
 NtWriteFile@36

@@ -723,7 +723,11 @@ fn set_information_file(arguments: &[u32]) -> Result<(), NtStatus> {
     match class {
         FILE_BASIC_INFORMATION => {
             let mut bytes = [0u8; size_of::<FileBasicInformation>()];
-            ke::usermem::probe_for_read(u64::from(buffer), bytes.len(), 8)?;
+            // A 4-byte boundary, as for every 64-bit value here: x86
+            // compilers may leave a structure of LARGE_INTEGERs on the stack
+            // there (kernel32's CopyFileW, from a caller whose frames are not
+            // 8-aligned), and the copy does not care.
+            ke::usermem::probe_for_read(u64::from(buffer), bytes.len(), 4)?;
             ke::usermem::copy_from_user(&mut bytes, u64::from(buffer))?;
             file.set_basic_information(&FileBasicInformation::from_bytes(&bytes))?;
         }
