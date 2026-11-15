@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 173 | 737 |
+| win32k | 175 | 737 |
 
 ## ntoskrnl
 
@@ -703,7 +703,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1180` | `NtUserGetCaretBlinkTime` | 0 | ✅ |
 | `0x1181` | `NtUserGetCaretPos` | 1 | ✅ |
 | `0x1182` | `NtUserGetClassInfo` | 5 | ✅ |
-| `0x1183` | `NtUserGetClassName` | 3 |  |
+| `0x1183` | `NtUserGetClassName` | 3 | ✅ |
 | `0x1184` | `NtUserGetClipboardData` | 2 |  |
 | `0x1185` | `NtUserGetClipboardFormatName` | 3 |  |
 | `0x1186` | `NtUserGetClipboardOwner` | 0 |  |
@@ -846,7 +846,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x120f` | `NtUserSetProcessWindowStation` | 1 | ✅ |
 | `0x1210` | `NtUserSetProp` | 3 | ✅ |
 | `0x1211` | `NtUserSetScrollInfo` | 4 | ✅ |
-| `0x1212` | `NtUserSetShellWindowEx` | 2 |  |
+| `0x1212` | `NtUserSetShellWindowEx` | 2 | ✅ |
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
 | `0x1214` | `NtUserSetSystemCursor` | 2 | ✅ |
 | `0x1215` | `NtUserSetSystemMenu` | 2 |  |

@@ -1,7 +1,7 @@
 # Notes de passation
 
 - **La barre des emplacements de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée
-  ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). « My Documents » et « My Computer »
+  ci-dessous ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 32). « My Documents » et « My Computer »
   avaient le papier blanc : leurs CLSID manquaient sous HKCR, que DllRegisterServer de `shell32` écrit et que
   l'installation de ReactOS appelle (RegistrationPhase2). `minoinit.exe` enregistre maintenant `shell32` ; il fallait
   pour cela que NtQueryKey(KeyNameInformation) accepte un handle sans KEY_QUERY_VALUE (un droit quelconque, comme
@@ -14,7 +14,7 @@
   sans nom long : la casse se perd) ; les autres DLL de RegistrationPhase2.
 
 - **Les images de `comctl32`** (`claude/blissful-herschel-4bf0cc`, suite de l'entrée ci-dessous ; M6,
-  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). La barre d'outils de la boîte Enregistrer sous, sa
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 31). La barre d'outils de la boîte Enregistrer sous, sa
   barre des emplacements et les icônes des tâches du gestionnaire des tâches s'affichent justes : BitBlt et
   StretchBlt convertissent entre monochrome et couleurs (`gdi::bitblt::Convert`, la source monochrome lue au plus
   proche du noir ou du blanc : le texte lissé de DrawState) ; l'alpha des images de 32 bits passe (StretchDIBits le
@@ -29,17 +29,99 @@
   l'icône de document par défaut (fait : l'entrée ci-dessus).
 
 - **La vue des fichiers de la boîte Enregistrer sous** (`claude/blissful-herschel-4bf0cc`, partie de `origin/main`
-  `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 29). Sous VirtualBox la boîte « Save As »
+  `a4fa4c3` ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 30). Sous VirtualBox la boîte « Save As »
   du Bloc-notes restait vide et son thread bouclait sur le cache d'icônes de `shell32`. Fait, dans l'ordre où la
   boîte bloquait : NtUserGetIconInfo (`win32k::cursor::icon_info`, copies des bitmaps par
   `gdi::surface::copy_bitmap`, module et ressource pour CopyImage(LR_COPYFROMRESOURCE)) ; NtUserGetAtomName écrit
   dans le tampon du UNICODE_STRING de l'appelant (il écrasait la pile de `user32` : exception dans le WM_INITDIALOG
-  de la boîte) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
+  de la boîte ; à la fusion, la correction de `main` reste) ; un SendMessage qui échoue rend 0 dans `ResultInfo` (`user32` rendait sa variable non initialisée :
   CDefView croyait sa liste pleine de colonnes et s'arrêtait sur une assertion) ; GetDIBits (1 et 32 bits),
   StretchBlt, GetNearestColor, BI_BITFIELDS de StretchDIBits (la barre d'outils). La boîte montre `C:\` et ses
-  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 30, entrée
+  icônes ; `notepad-save` attend la vue avant de taper. Tests : 1107 tests hôte ; nouveau scénario `notepad-saveas` (pixels des icônes) ; `icons`, `bitmap`, `listview` vérifient chaque correction ; quatorze mutations font chacune échouer un test ; `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` passent sur AMD et Intel ; `cargo xtask lint` propre. `desktop-launch` vérifie la ligne choisie du gestionnaire des tâches après son texte : ses tâches ont maintenant des icônes (noires : sa liste d'images est de 4 bits par pixel), qui décalent le texte. **Vu, pas fait** (les images faites à l'étape 31, entrée
   ci-dessus) : NtUserGetClassName ;
   NtUserSetWindowsHookEx ; NtQueryDebugFilterState rend TRUE (les TRACE de ReactOS évalués).
+
+- **Le bureau d'`explorer` est créé, sous sa barre des tâches** (`claude/new-session-696xfc`, M6, premier critère,
+  [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). Trois écarts : (1) MsgWaitForMultipleObjects
+  échouait (WAIT_FAILED) faute de NtUserCallOneParam(ONEPARAM_ROUTINE_GETINPUTEVENT, 0x27) : chaque thread GUI reçoit
+  à sa conversion un handle sur l'événement de sa file (`hEventQueueClient`, fermé à sa fin),
+  `win32k::queue::input_event` (IntMsqSetWakeMask) le rend, NOPARAM_ROUTINE_MSQCLEARWAKEMASK rend TRUE (pas de masque
+  de réveil à effacer ; les bits de réveil ne sont pas remis à zéro comme le fait ReactOS) ; `explorer` ne s'arrête
+  plus à `desktop.cpp:193`, son thread du bureau crée le bureau ; (2) NtUserSetShellWindowEx (`win32k::shell`) : la
+  fenêtre du shell et celle de son fond dans la station et le `DESKTOPINFO`, la première au bas de l'ordre Z, que
+  SetWindowPos ne lui fait plus quitter, oubliées à leur destruction ; (3) SetWindowPos tenait pour découvert l'ancien
+  rectangle moins le nouveau, rien quand seul l'ordre Z change : il compare maintenant les régions visibles avant et
+  après (VisBefore moins VisAfter), la barre des tâches se repeint. Tests : `msg-wait` (`msgwait1.c` ; WAIT_FAILED
+  sans la routine), `zorder` (`zorder1.c`, trois pixels ; l'ancien calcul laisse la fenêtre du dessous recouverte),
+  `logon` (le Bureau de l'utilisateur parcouru, `desktop.cpp:193` et `atlcomcli.h` interdits, la barre visible :
+  sans SetShellWindowEx le bureau la recouvre), hôte (`win32k::winsta`, un seul shell par station). Captures avant
+  et après dans `target/screenshots/` (régénérées par `logon`). `cargo xtask lint` propre, 1101 tests hôte ; la suite
+  complète sur AMD tourne.
+  **Suite** : le fond du bureau (NtUserPaintDesktop) et ses icônes (NtUserGetIconInfo) ; la station par défaut d'un
+  chemin de bureau ; le bouton Démarrer et ce que la barre demande.
+
+- **`explorer.exe` démarre ; NtUserGetAtomName écrasait la pile de `user32`** (`claude/new-session-696xfc`, M6,
+  premier critère, [`compat/m6-logon.md`](compat/m6-logon.md#le-shell--explorerexe)). `explorer.exe` est sur le
+  disque des scénarios qui le demandent (`shell = explorer`, `xtask/src/scenario.rs` ; `SHELL_FILES`,
+  `xtask/src/userland.rs`, avec la fermeture de ses imports, `browseui` et `shdocvw`) : sur tous les disques, la
+  copie de l'installateur ne tenait plus sur sa cible (`installer-finish`). `userinit` le lance. Il mourait dans la
+  création de sa barre des tâches, « Shell_TrayWnd » dans ses registres sauvés et son adresse de retour :
+  NtUserGetAtomName prend une UNICODE_STRING (useratom.c) que `user32` pose sur sa pile (ClassNameToVersion), et Mino
+  y écrivait le nom entier, comme dans un tampon. Corrigé selon useratom.c (`win32k::atom::query_name`,
+  `copied_name_units` : 255 caractères au plus, « #n » pour un atome entier, tronqué à `MaximumLength` avec son nul,
+  0 pour un thread sans bureau) ; NtQueryInformationAtom rend aussi « #n ». `explorer` affiche maintenant sa barre
+  des tâches (vide), puis s'arrête à son bureau (`desktop.cpp:193` : CDesktopThread::Initialize attend le thread du
+  bureau par MsgWaitForMultipleObjects, dont l'événement de file, NtUserCallOneParam(GETINPUTEVENT, 0x27), manque :
+  WAIT_FAILED, E_FAIL, puis le thread du bureau déréférence `m_Tray` remis à NULL, l'assertion d'ATL atlcomcli.h:208).
+  La correction a montré deux écarts, par la boîte Enregistrer sous du Bloc-notes, dont la vue de dossier (CDefView)
+  n'était jamais créée tant que la pile de `user32` était écrasée : (1) NtUserMessageCall(FNID_SENDMESSAGE) rendait
+  FALSE sans écrire `ResultInfo` pour une fenêtre inconnue, et `user32` rendait alors sa variable non initialisée
+  (CDefView comptait des colonnes dans un en-tête absent, CDefView.cpp:1178) : TRUE et 0 avec l'erreur, comme
+  ReactOS (`sys::message::send_message_result`) ; (2) `win32k::input::activate` réactivait une fenêtre déjà active
+  dont une fille avait le focus (SetWindowPos de comdlg32 sans SWP_NOACTIVATE : le focus passait à la liste
+  « Enregistrer dans ») : rien pour une fenêtre déjà active, et le focus à la fenêtre activée seulement s'il n'est pas
+  dans l'une de ses filles, comme co_IntSetActiveWindow (`focus_is_in`). Tests : hôte (`win32k::atom`, deux tests ;
+  `xtask`, la clé `shell`) ; `logon` (`explorer` converti, `desktop.cpp:193`, deux pixels de la barre ; « Failed to
+  start default shell » et la fin d'`explorer` interdits), qui échoue avec l'ancien `atom.rs` ; `send-messages`
+  (SendMessageW(NULL) après la pile salie : 0 et 1400 ; l'ancien service rend le motif) ; `activate-app`, étapes 4 et
+  5 (l'ancien `activate` échoue aux deux) ; `notepad-save` de nouveau au bout. `cargo xtask lint` propre ; la suite
+  complète a tourné avec le point suivant.
+  **Suite** : faite au point précédent (MsgWaitForMultipleObjects, la fenêtre du shell).
+
+- **Le dernier critère du M5 : les apitests passent le seuil** (`claude/new-session-696xfc`, sur main `6f60178` ;
+  [`compat/m5-rostests.md`](compat/m5-rostests.md)). Sous Ubuntu 24.04 (mingw-w64 11, GCC 13), le banc n'avait plus
+  rien à mesurer : `_Ret_opt_z_` (SAL 1, `rtlfuncs.h`) manquait au `sal.h` de ce MinGW, et GCC 13 laissait compiler
+  des tests qui appellent ce que le banc ne déclare pas, puis le lien du module échouait. Le banc définit
+  `_Ret_opt_z_` et impose les quatre erreurs de GCC 14 (`GCC14_ERRORS`, sans `-w` ; diagnostics dans
+  `target/xtask/rostests/<module>/<test>.log`) : les mêmes tests tournent sous GCC 13 et 14 (84 et 29). Puis trois
+  tests kernel32 passent par ce qui manquait à un système installé : les pages de code 936, 949, 950 et
+  `dnsapi.dll` sur le disque (`xtask/src/userland.rs`), le nom DNS (`Services\Tcpip\Parameters` : `NV Hostname`,
+  `Hostname`, `NV Domain`, `Domain`) dans `tools/mkhive/mino.inf`. **ntdll 44/84 (52 %), kernel32 16/29 (55 %)** :
+  planchers relevés (44 et 16), critère coché, **le M5 est terminé** ; S1, S2 et S3 ont réussi, l'ADR-002 est à
+  confirmer (décision du mainteneur, skill `mino-adr`). `cargo xtask lint` propre, tests hôte de `xtask` (37) ; toute la suite sur AMD (le disque de chaque scénario a
+  changé) : 61 sur 61, les deux rostests compris. **Suite** : le bureau d'`explorer`
+  (M6), puis les tests kernel32 les moins coûteux (FindFiles et `\Device\Mup`, l'exception SSE #XM pour
+  SetUnhandledExceptionFilter, JapaneseCalendar ; liste dans le document).
+
+- **Applications Win32 x86 validées** (`feat/m7-classic-apps`, PR #130, base main `abfe106`, suite de #127) :
+  Calculatrice (`12+30=42`, fermeture, relance, `6*7=42`), Démineur (drapeau au clic droit, F2, fermeture/relance),
+  Bloc-notes (saisie, sauvegarde, fermeture/réouverture), bureau et Gestionnaire des tâches : les six scénarios passent
+  sur AMD et Intel (12 parcours). NtUserGetClassName débloque les boutons de la Calculatrice ; copie UTF-16 bornée,
+  tests W/A, troncature, NUL seul, pointeur/HWND invalides. NOTEPAD2 vérifie aussi CS_NOCLOSE et le refus du
+  subclassing interprocessus. La sonde attend les contrôles et un aller-retour WM_NULL ; `desktop-click` sélectionne
+  Settings pour rester un test de menu depuis le lancement réel de Text Editor (#129).
+  **Validation** : lint propre, 1 098 tests hôte ; 59 scénarios AMD distincts réussis après reprises ciblées, 6 scénarios
+  applicatifs Intel réussis ; CI applications AMD/Intel verte. Deux rostests sautés faute d'arbre de tests.
+  `installed-boot` repris avec OVMF pflash (le firmware combiné écrivait NVVARS dans l'ESP) ; aucune vérification de
+  disque assouplie. Suite terminée après libération des images temporaires ayant rempli le disque de travail.
+  Captures dans `docs/images`, commandes et limites dans `docs/compat/applications.md`. Pas de validation VirtualBox,
+  ni de sauvegarde du document après reboot dans le scénario RAM. Reprise : revue de #130 ; conserver les scénarios
+  dans la CI, puis étendre la matrice avec un parcours précis par application.
+
+- **Text Editor du bureau lance le Bloc-notes** (`claude/desktop-notepad`, sur main `a4fa4c3`) : l'entrée « Text
+  Editor » du menu Démarrer de `tests/native/desktop1.c` ne lançait rien (seuls Terminal et Task Manager avaient un
+  programme) ; elle lance `NOTEPAD.EXE`. Scénario `desktop-notepad` (Bas, Entrée : « launched Text Editor », le
+  thread de `NOTEPAD.EXE` converti) sur AMD et Intel ; la mutation (l'entrée vide) le fait échouer.
 
 - **Parcours Bloc-notes et applications x86** (`feat/m7-notepad-app-validation`, PR #127, base main `3942dd5`) : `notepad-save` passe sur AMD et Intel : saisie QEMU, vrai Save As, vérification des 20 octets, Alt+F4, sortie normale, nouveau processus et texte relu à l'écran. GWLP_WNDPROC client de même encodage débloque ATL ; Alt+F4 poste SC_CLOSE au premier niveau, sauf CS_NOCLOSE. Conversions ANSI/Unicode et procédures serveur refusées explicitement (thunks à faire). 322 tests hôte win32k passent. Critère Bloc-notes de M6 coché ; pas de reboot/persistance dans ce scénario RAM. Campagne et reprise : `docs/compat/applications.md`. Calculatrice et Démineur à exercer, `desktop-launch` et lint global à rejouer.
 

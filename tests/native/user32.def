@@ -4,6 +4,8 @@
 ; DLL exports them undecorated.
 LIBRARY user32.dll
 EXPORTS
+GetClassNameW@12
+GetClassNameA@12
 AppendMenuW@16
 BeginPaint@8
 CheckMenuItem@12
@@ -108,6 +110,8 @@ ModifyMenuW@20
 MonitorFromPoint@12
 MonitorFromWindow@8
 MoveWindow@24
+MsgWaitForMultipleObjects@20
+MsgWaitForMultipleObjectsEx@20
 PeekMessageW@20
 PostMessageW@16
 PostQuitMessage@4

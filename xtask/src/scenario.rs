@@ -74,6 +74,10 @@
 //!   `tests/native/` (or of the rostests) takes the place of `winlogon.exe` on the ramdisk, so
 //!   that `smss` starts it as its initial command (with `requires =
 //!   userland, native`).
+//! - `shell = explorer` (with `requires = userland`): the boot disk also
+//!   takes the shell, `explorer.exe` in `WINDOWS`, and the DLLs it imports
+//!   that the other scenarios' disk does not have (`browseui`, `shdocvw`),
+//!   which userinit starts after the logon.
 
 use std::fs;
 use std::path::Path;
@@ -111,6 +115,8 @@ pub struct Scenario {
     pub screen: Vec<crate::screen::Pixel>,
     /// The test program that takes the place of `winlogon.exe`.
     pub initial_command: Option<String>,
+    /// The boot disk takes the shell, `explorer.exe`, and its imports.
+    pub shell: bool,
     /// Keys to type once a marker is in the serial log, in order.
     pub keys: Vec<Keys>,
     expect: Vec<Vec<String>>,
@@ -234,6 +240,7 @@ impl Scenario {
             boots: 1,
             screen: Vec::new(),
             initial_command: None,
+            shell: false,
             keys: Vec::new(),
             expect: Vec::new(),
             forbid: Vec::new(),
@@ -261,6 +268,10 @@ impl Scenario {
                 "forbid" => sc.forbid.push(value.to_string()),
                 "forbid-line-start" => sc.forbid_line_start.push(value.to_string()),
                 "initial-command" => sc.initial_command = Some(value.to_string()),
+                "shell" => match value {
+                    "explorer" => sc.shell = true,
+                    _ => return Err(format!("{}: unknown shell `{value}`", at())),
+                },
                 "apitests-floor" => {
                     let floor =
                         value.parse().map_err(|_| format!("{}: apitests-floor `{value}` is not a number", at()))?;
@@ -318,6 +329,9 @@ impl Scenario {
         }
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
+        }
+        if sc.shell && !sc.requires_userland {
+            return Err(format!("{name}/{SCENARIO_FILE}: `shell` needs `requires = userland`"));
         }
         if sc.requires_rostests != sc.apitests_floor.is_some() {
             return Err(format!("{name}/{SCENARIO_FILE}: `requires = rostests` goes with `apitests-floor`"));
@@ -444,6 +458,9 @@ requires = userland
         assert_eq!(gui.initial_command.as_deref(), Some("GUI1.EXE"));
         assert_eq!(sc.initial_command, None);
         assert!(Scenario::parse("x", "expect = a\ninitial-command = GUI1.EXE").is_err(), "without the userland");
+        let shell = Scenario::parse("x", "expect = a\nrequires = userland\nshell = explorer").unwrap();
+        assert!(shell.shell && !sc.shell);
+        assert!(Scenario::parse("x", "expect = a\nshell = explorer").is_err(), "a shell without the userland");
         let bench = Scenario::parse("x", "expect = a\nrequires = rostests\napitests-floor = 12").unwrap();
         assert!(bench.requires_rostests && bench.apitests_floor == Some(12));
         assert_eq!(sc.apitests_floor, None);
@@ -478,6 +495,7 @@ requires = userland
         assert!(Scenario::parse("x", "expect =").is_err());
         assert!(Scenario::parse("x", "expect = a\nrequires = network").is_err());
         assert!(Scenario::parse("x", "expect = a\ndisk = floppy").is_err());
+        assert!(Scenario::parse("x", "expect = a\nrequires = userland\nshell = progman").is_err());
         assert!(Scenario::parse("x", "expect = a\nboots = 0").is_err());
         assert!(Scenario::parse("x", "expect = a\nscreen = 1 2").is_err());
         assert!(Scenario::parse("x", "expect = a\nkeys = ready").is_err(), "no keys");

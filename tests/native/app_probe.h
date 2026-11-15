@@ -39,10 +39,10 @@ struct app_find { DWORD pid; const WCHAR *title; HWND window; };
 static BOOL CALLBACK app_find_window(HWND window, LPARAM argument)
 {
     struct app_find *find=(struct app_find *)argument;
-    DWORD pid=0; WCHAR title[128];
+    DWORD pid=0; WCHAR title[128]={0};
     GetWindowThreadProcessId(window,&pid);
     if(pid!=find->pid) return TRUE;
-    GetWindowTextW(window,title,128);
+    if(GetWindowTextW(window,title,128)<=0) return TRUE;
     unsigned int i=0;
     while(title[i] && title[i]==find->title[i]) ++i;
     if(title[i]==find->title[i]) {find->window=window;return FALSE;}

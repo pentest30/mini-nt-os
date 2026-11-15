@@ -1271,14 +1271,36 @@ et la cause corrigée :
   (`dce::effective_flags`), et Mino ne garde pas de DC propre (DceResetActiveDCEs de ReactOS, au changement de
   `WS_VISIBLE`).
 
-GWLP_WNDPROC et GWLP_HWNDPARENT restent à faire (`ERROR_CALL_NOT_IMPLEMENTED`, journalisé une fois).
+À cette étape, GWLP_WNDPROC et GWLP_HWNDPARENT restaient à faire (suite ci-dessous).
 
 Tests : hôte (`window` : le style d'une fille, `WS_CLIPSIBLINGS` et `WS_MINIMIZE` gardés, le bord de fenêtre, la
 fille qui cesse ou devient fille) ; `desktop-launch` sur AMD et Intel, qui échoue avec l'ordre de ReactOS sans
 GWL_STYLE (la page grise, ses quatre pixels) ; `gui` passe de nouveau sur AMD et Intel ; toute la suite sur AMD (55
 sur 55).
 
-## Étape 29 : la vue des fichiers de la boîte Enregistrer sous (GetIconInfo, GetDIBits, StretchBlt ; GetAtomName et SendMessage corrigés)
+## Étape 29 : sauvegarder, fermer et rouvrir ; petites applications x86
+
+Le parcours Bloc-notes est complet dans `notepad-save` (PR #127) : saisie
+QEMU, vrai dialogue Enregistrer sous, contrôle des 20 octets du fichier,
+Alt+F4, sortie normale, puis nouveau processus et texte relu à l'écran.
+Le remplacement de GWLP_WNDPROC pour une procédure cliente de même encodage
+débloque les fenêtres ATL du shell. Alt+F4 poste SC_CLOSE à la fenêtre de
+premier niveau ; CS_NOCLOSE est respecté. Les ponts ANSI/Unicode et les
+procédures serveur restent refusés ; GWLP_HWNDPARENT reste à faire.
+
+La Calculatrice demandait ensuite GetClassName avant de transformer une
+touche en clic sur un bouton. NtUserGetClassName rend maintenant le nom
+non versionné, avec troncature et NUL dans le tampon UTF-16 de l'appelant.
+`calculator` vérifie `12+30=42`, ferme le processus, relance et vérifie
+`6*7=42`, avec contrôle du texte et du rendu. `minesweeper` contrôle un
+drapeau posé au clic droit, F2, la fermeture et la relance. Les détails,
+résultats, captures et limites sont dans [applications.md](applications.md).
+
+Ces scénarios utilisent les vrais exécutables ReactOS épinglés, sans les
+modifier. Le test Bloc-notes vérifie une relance sur le même volume RAM ;
+la persistance après redémarrage de l'OS n'est pas couverte par ce parcours.
+
+## Étape 30 : la vue des fichiers de la boîte Enregistrer sous (GetIconInfo, GetDIBits, StretchBlt ; GetAtomName et SendMessage corrigés)
 
 Sous VirtualBox, la boîte « Save As » du Bloc-notes restait figée : sa vue des fichiers vide, le thread du Bloc-notes
 bouclait (environ 25 lignes par seconde : « GetIconInfo Failed », « Failed to add IDI_SHELL_DOCUMENT icon to cache »,
@@ -1301,15 +1323,17 @@ dans l'ordre où elle bloquait :
    à CreateWindowEx d'une classe désignée par son atome) y donne un tampon de MAX_PATH caractères. Mino écrivait le nom
    par-dessus la structure elle-même : « SHELLDLL_DefView » écrasait les registres sauvés de l'appelant, et
    SHGetSetSettings de `shell32` partait avec des arguments faits de texte UTF-16 (une exception dans le WM_INITDIALOG
-   de la boîte). Le nom va dans `Buffer`, tronqué à `MaximumLength` avec son NUL (`win32k::atom::name_in_buffer`,
-   comme NtUserGetAtomName de ReactOS) ; `Length` n'est pas touché.
+   de la boîte). Le nom va dans `Buffer`, tronqué à `MaximumLength` avec son nul, comme NtUserGetAtomName de
+   ReactOS ; `Length` n'est pas touché. `main` l'a corrigé en même temps (`win32k::atom::copied_name_units`,
+   « #n » d'un atome entier) : c'est sa correction qui reste à la fusion.
 3. **SendMessage à une fenêtre qui n'existe pas.** NtUserMessageCall(FNID_SENDMESSAGE) rendait FALSE sans écrire
    `ResultInfo`, et `user32` (SendMessageW) rend alors sa variable non initialisée. CDefView::LoadColumns demande
    Header_GetItemCount de l'en-tête de sa liste, qui n'existe pas encore en vue liste (`comctl32` le crée à la
    première colonne) : il croyait avoir deux millions de colonnes, les changeait au lieu de les insérer, et
    l'assertion `MapFolderColumnToListColumn(0)` (CDefView.cpp:1178) arrêtait le Bloc-notes (abort, code 3). Comme
    ReactOS (co_IntDoSendMessage rend 0, l'appel réussit) : 0 en `ResultInfo`, l'erreur posée
-   (`ERROR_INVALID_WINDOW_HANDLE`), TRUE. SendMessageTimeout et SendNotifyMessage rendent toujours FALSE.
+   (`ERROR_INVALID_WINDOW_HANDLE`), TRUE. SendMessageTimeout et SendNotifyMessage rendent toujours FALSE. Là
+   aussi, la correction de `main` (`sys::message::send_message_result`) reste à la fusion.
 4. **Les icônes de la liste.** ImageList_ReplaceIcon lit les copies de GetIconInfo par GetDIBits (add_with_alpha), et
    la liste se dessine par StretchBlt :
    - GetDIBits (`gdi::dibits::get_dibits`, NtGdiGetDIBitsInternal) : en 1 bit (noir 0, blanc 1, la table de deux
@@ -1331,7 +1355,7 @@ MINOTEST.TXT, avec leurs icônes ; Alt+N et le chemin tapé enregistrent le fich
 que la vue soit remplie avant de taper (`app_file_view` : GetDlgItem de `lst2`, puis de la liste, LVM_GETITEMCOUNT) :
 tapées plus tôt, les touches allaient au premier contrôle de la boîte encore en construction.
 
-Vu, pas fait (fait à l'étape 30) : l'alpha des images de 32 bits (StretchDIBits le perd ; NtGdiCreateDIBitmapInternal, le bitmap d'alpha
+Vu, pas fait (fait à l'étape 31) : l'alpha des images de 32 bits (StretchDIBits le perd ; NtGdiCreateDIBitmapInternal, le bitmap d'alpha
 d'une icône, create_alpha_bitmap de `user32` ; NtGdiAlphaBlend) et la conversion couleur ↔ monochrome de BitBlt
 (ImageList_AddMasked de `comctl32` en tire le masque : la couleur de fond du DC source devient le blanc) : les boutons
 de la barre d'outils et la barre des emplacements ont un fond noir et des images fausses. La DIB section de 4 bits
@@ -1360,9 +1384,9 @@ sans StretchBlt, StretchBlt sur le mauvais axe, sans GetNearestColor, BI_BITFIEL
 `notepad`, `notepad-save`, `notepad-saveas`, `gui`, `icons`, `cursor`, `bitmap`, `desktop-launch`, `listview` sur AMD
 et Intel.
 
-## Étape 30 : les images de `comctl32` (BitBlt monochrome, alpha, DIB sections de 4 et 8 bits)
+## Étape 31 : les images de `comctl32` (BitBlt monochrome, alpha, DIB sections de 4 et 8 bits)
 
-Après l'étape 29, la barre d'outils de la boîte Enregistrer sous et sa barre des emplacements montraient leurs images
+Après l'étape 30, la barre d'outils de la boîte Enregistrer sous et sa barre des emplacements montraient leurs images
 sur un fond noir, et les icônes des tâches du gestionnaire des tâches étaient des carrés noirs. Trois manques du
 moteur GDI, dans l'ordre où ils jouaient :
 
@@ -1400,7 +1424,7 @@ moteur GDI, dans l'ordre où ils jouaient :
 
 Pas encore : les DIB sections de 1, 16 et 24 bits, une table DIB_PAL_COLORS, SetDIBits, la couleur de fond d'un DC
 dans StretchDIBits vers le monochrome, StretchBlt et AlphaBlend d'une étendue négative, MaskBlt ; « My Documents » et
-« My Computer » de la barre des emplacements montrent l'icône de document par défaut (fait à l'étape 31 : `shell32`
+« My Computer » de la barre des emplacements montrent l'icône de document par défaut (fait à l'étape 32 : `shell32`
 n'était pas enregistré).
 
 Tests : hôte (`surface` : l'index le plus proche, décodage et réécriture d'une DIB de 4 et 8 bits, la géométrie ;
@@ -1414,9 +1438,9 @@ bouton « Up » et un pixel transparent de son image (noir avant), un coin trans
 dans la lettre (le texte désactivé, lu au noir exact, disparaissait). Douze mutations, une par correction, font
 chacune échouer un test.
 
-## Étape 31 : la barre des emplacements de la boîte Enregistrer sous (`shell32` enregistré)
+## Étape 32 : la barre des emplacements de la boîte Enregistrer sous (`shell32` enregistré)
 
-Après l'étape 30, la barre des emplacements montrait trois emplacements au lieu des cinq de ReactOS (Recent, Desktop,
+Après l'étape 31, la barre des emplacements montrait trois emplacements au lieu des cinq de ReactOS (Recent, Desktop,
 My Documents, My Computer, My Network Places : filedlg_collect_places_pidls de `comdlg32`), et « My Documents » et
 « My Computer » y avaient le papier blanc d'IDI_SHELL_DOCUMENT. `shell32` tire l'icône d'un dossier à CLSID de
 `HKCR\CLSID\{…}\DefaultIcon` (CGuidItemExtractIcon_CreateInstance), et prend le papier blanc faute de mieux. Ces

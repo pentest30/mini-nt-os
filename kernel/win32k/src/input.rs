@@ -510,16 +510,18 @@ pub fn translate_message(thread: &ThreadInfo, message: &Msg32) -> bool {
 /// premier niveau du thread qui le perd, puis celles du thread de `window`,
 /// reçoivent WM_ACTIVATEAPP ([`send_activate_app`]). Au thread courant,
 /// `window` reçoit ensuite WM_ACTIVATE (dont DefWindowProc lui donne le
-/// clavier : SetFocus), puis le clavier s'il ne lui a pas été donné. D'un
-/// autre thread, elle prend le clavier sans WM_ACTIVATE.
+/// clavier : SetFocus), puis le clavier s'il n'est ni à elle ni à l'une de
+/// ses filles. D'un autre thread, elle prend le clavier sans WM_ACTIVATE.
+/// Déjà active, elle ne reçoit rien et le clavier ne bouge pas (une boîte
+/// de dialogue redimensionnée par SetWindowPos garde le focus sur son
+/// contrôle).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn activate(window: &Arc<Window>) {
     let Some(thread) = crate::gui::thread_info_of(window.pti) else { return };
     let hwnd = window.handle;
-    let (previous_active, focus) =
-        thread.queue.with(|queue| (core::mem::replace(&mut queue.active, hwnd), queue.focus)).0;
+    let previous_active = thread.queue.with(|queue| core::mem::replace(&mut queue.active, hwnd)).0;
     let previous_foreground = FOREGROUND.lock().replace(thread.clone());
     let same_thread = previous_foreground.as_ref().is_some_and(|left| Arc::ptr_eq(left, &thread));
     let left = previous_foreground.filter(|_| !same_thread);
@@ -545,9 +547,11 @@ pub fn activate(window: &Arc<Window>) {
     };
     let ours = current.as_ref().is_some_and(|current| current.server == window.pti);
     let old = crate::window::get(previous_active).filter(|_| previous_active != hwnd);
-    if previous_active == hwnd && focus == hwnd {
-        // Already active: WM_ACTIVATEAPP if the foreground comes back to its
-        // thread, and its frame, if it went inactive with the foreground.
+    if previous_active == hwnd {
+        // Already active (co_IntSetActiveWindow): the focus stays where it
+        // is, on one of its children if it has it. WM_ACTIVATEAPP if the
+        // foreground comes back to its thread, and its frame, if it went
+        // inactive with the foreground.
         announce();
         if window.state().state & WNDS_ACTIVEFRAME == 0 {
             if ours {
@@ -578,9 +582,28 @@ pub fn activate(window: &Arc<Window>) {
     announce();
     let _ = crate::window::send_message(window, WM_NCACTIVATE, 1, LParam::Value(0));
     let _ = crate::window::send_message(window, WM_ACTIVATE, WA_ACTIVE, LParam::Value(previous_active));
-    if thread.queue.with(|queue| queue.focus).0 != hwnd {
+    // The focus goes to the window unless WM_ACTIVATE gave it to one of its
+    // children (DefDlgProc: the control that had it).
+    if !focus_is_in(thread.queue.with(|queue| queue.focus).0, hwnd) {
         send_focus_messages(&thread, Some(window));
     }
+}
+
+/// IntGetNonChildAncestor : la fenêtre `focus` est `top` ou l'une de ses
+/// filles (sa chaîne de parents `WS_CHILD` mène à `top`).
+fn focus_is_in(focus: u32, top: u32) -> bool {
+    let mut current = crate::window::get(focus);
+    while let Some(window) = current {
+        if window.handle == top {
+            return true;
+        }
+        let state = window.state();
+        if state.style & (WS_CHILD | WS_POPUP) != WS_CHILD {
+            return false;
+        }
+        current = crate::window::get(state.parent);
+    }
+    false
 }
 
 /// Le TID du thread GUI `thread`.

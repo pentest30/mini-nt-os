@@ -234,17 +234,35 @@ pub fn name(atom: u16) -> Option<Vec<u16>> {
     USER_ATOMS.lock().name(atom)
 }
 
-/// NtUserGetAtomName (RtlQueryAtomInAtomTable dans un tampon) : ce qu'un
-/// tampon de `maximum_length` octets — le `MaximumLength` du UNICODE_STRING
-/// de l'appelant — reçoit du nom `name` : autant de ses unités qu'il en
-/// tient avec un NUL, puis le NUL ; rien s'il ne tient pas même le NUL.
-/// Rend les octets à écrire et le nombre d'unités du nom qu'ils portent.
-pub fn name_in_buffer(name: &[u16], maximum_length: u16) -> (Vec<u8>, u32) {
-    let Some(room) = usize::from(maximum_length).checked_sub(2) else { return (Vec::new(), 0) };
-    let count = (room / 2).min(name.len());
-    let mut bytes: Vec<u8> = name[..count].iter().flat_map(|unit| unit.to_le_bytes()).collect();
-    bytes.extend_from_slice(&[0, 0]);
-    (bytes, count as u32)
+/// RtlQueryAtomInAtomTable, le nom : celui de l'atome en chaîne `atom` de
+/// `table`, ou « #n » pour un atome entier (sous `FIRST_STRING_ATOM`, que la
+/// table ne garde pas) ; `None` pour un atome en chaîne inconnu.
+pub fn query_name(table: &AtomTable, atom: u16) -> Option<Vec<u16>> {
+    if atom < FIRST_STRING_ATOM {
+        return Some(alloc::format!("#{atom}").encode_utf16().collect());
+    }
+    table.name(atom)
+}
+
+/// Le nom de l'atome `atom` de la table de USER, comme le rend
+/// RtlQueryAtomInAtomTable ([`query_name`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn queried_name(atom: u16) -> Option<Vec<u16>> {
+    query_name(&USER_ATOMS.lock(), atom)
+}
+
+/// NtUserGetAtomName, ce qu'il copie d'un nom de `name_len` caractères dans
+/// une UNICODE_STRING de `maximum_length` octets : le nom, pris dans un
+/// tampon de 256 caractères (IntGetAtomName : 255 au plus), tronqué pour
+/// laisser la place du nul ; rien sans la place du nul. Rend le nombre de
+/// caractères copiés, nul en plus.
+pub fn copied_name_units(name_len: usize, maximum_length: u16) -> usize {
+    if maximum_length < 2 {
+        return 0;
+    }
+    name_len.min(MAXIMUM_ATOM_LENGTH).min(usize::from(maximum_length - 2) / 2)
 }
 
 /// Le compte de références de l'atome en chaîne `atom` de la table de USER.
@@ -264,6 +282,28 @@ mod tests {
     }
 
     #[test]
+    fn an_integer_atom_is_named_by_its_number_after_a_hash() {
+        let mut table = AtomTable::new();
+        let button = table.add(AtomName::String(&w("Button"))).unwrap();
+        assert_eq!(query_name(&table, 0x0123), Some(w("#291")));
+        assert_eq!(query_name(&table, button), Some(w("Button")));
+        assert_eq!(query_name(&table, button + 1), None, "an unknown string atom");
+    }
+
+    /// user32 passes a UNICODE_STRING on its stack (ClassNameToVersion):
+    /// the name written past its MaximumLength overwrote the caller's frame
+    /// (explorer's "Shell_TrayWnd" in its saved registers).
+    #[test]
+    fn the_atom_name_fits_the_callers_string_with_its_nul() {
+        assert_eq!(copied_name_units(13, 2 * 260), 13, "room enough");
+        assert_eq!(copied_name_units(13, 8), 3, "8 bytes: 3 characters and the nul");
+        assert_eq!(copied_name_units(13, 7), 2, "an odd length rounds down");
+        assert_eq!(copied_name_units(13, 2), 0, "the nul alone");
+        assert_eq!(copied_name_units(13, 1), 0, "no room for the nul: nothing");
+        assert_eq!(copied_name_units(300, u16::MAX), MAXIMUM_ATOM_LENGTH, "255 characters at most");
+    }
+
+    #[test]
     fn a_name_gets_one_atom_whatever_its_case() {
         let mut table = AtomTable::new();
         let button = table.add(AtomName::String(&w("Button"))).unwrap();
@@ -277,22 +317,6 @@ mod tests {
         assert_eq!(table.name(edit), Some(w("Edit")), "the first spelling");
         let accented = table.add(AtomName::String(&w("Fenêtre"))).unwrap();
         assert_eq!(table.find(AtomName::String(&w("FENÊTRE"))), Some(accented), "beyond ASCII");
-    }
-
-    #[test]
-    fn a_name_goes_into_the_room_of_the_callers_buffer() {
-        let name = w("SHELLDLL_DefView");
-        let (bytes, count) = name_in_buffer(&name, 520);
-        assert_eq!(count, 16);
-        assert_eq!(bytes.len(), 34, "the name and its NUL, nothing past them");
-        assert_eq!(&bytes[..4], &[b'S', 0, b'H', 0]);
-        assert_eq!(&bytes[32..], &[0, 0]);
-        let (bytes, count) = name_in_buffer(&name, 10);
-        assert_eq!((count, bytes.len()), (4, 10), "four units and the NUL: ten bytes, no more");
-        assert_eq!(&bytes[8..], &[0, 0]);
-        assert_eq!(name_in_buffer(&name, 7).0.len(), 6, "an odd room: whole units");
-        assert_eq!(name_in_buffer(&name, 2), (alloc::vec![0, 0], 0), "the NUL alone");
-        assert_eq!(name_in_buffer(&name, 1), (Vec::new(), 0), "not even the NUL");
     }
 
     #[test]

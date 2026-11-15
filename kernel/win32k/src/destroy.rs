@@ -245,6 +245,7 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
         crate::sent::abandon_all(gone);
     }
     crate::mouse::forget_capture(hwnd);
+    crate::shell::forget(hwnd);
     let state = window::change(window, |state| {
         state.style &= !WS_VISIBLE;
         state.update = Region::default();
@@ -271,7 +272,7 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
 /// celles dont la destruction aurait été interrompue ; ses minuteries
 /// partent ; sa file est vidée, les messages qu'on lui avait envoyés
 /// reviennent à leurs envoyeurs ; il n'est plus au premier plan et quitte
-/// son bureau.
+/// son bureau ; le handle de l'événement de sa file est fermé.
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans le thread qui se termine (rappel de Ps : ses APC
@@ -303,6 +304,7 @@ pub fn thread_exit(thread: &Arc<Object<EThread>>) {
     crate::sent::abandon_all(sent);
     crate::gui::leave_desktop(&info, thread.process());
     info.drop_keyboard_layout();
+    info.close_queue_event(thread.process());
     let left = core::mem::take(&mut *info.windows.lock());
     if count != 0 || abandoned != 0 || !left.is_empty() {
         log::info!(

@@ -27,6 +27,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::{offset_of, size_of};
+use core::sync::atomic::Ordering;
 
 use abi::ntstatus::{NtStatus, STATUS_INVALID_PARAMETER};
 use abi::peb32::Peb32;
@@ -238,6 +239,11 @@ pub struct ThreadInfo {
     /// Son curseur (`MessageQueue->CursorObject`, SetCursor) : son handle, 0
     /// sans curseur (`crate::cursor`).
     pub cursor: core::sync::atomic::AtomicU32,
+    /// `hEventQueueClient` : le handle, dans la table de son processus, de
+    /// l'événement de sa file (`pEventQueueServer`, `MessageQueue::event`),
+    /// que MsgWaitForMultipleObjects attend ; 0 avant sa conversion et après
+    /// sa fin.
+    queue_event_handle: core::sync::atomic::AtomicU32,
 }
 
 /// Le bureau d'un thread : le handle qu'il a donné, le bureau, et la
@@ -260,6 +266,48 @@ impl ThreadInfo {
             queue: MessageQueue::new(),
             windows: KSpinLock::new(Vec::new()),
             cursor: core::sync::atomic::AtomicU32::new(0),
+            queue_event_handle: core::sync::atomic::AtomicU32::new(0),
+        }
+    }
+
+    /// `hEventQueueClient`, le handle de l'événement de sa file dans la table
+    /// de son processus (0 : aucun).
+    pub fn queue_event_handle(&self) -> u32 {
+        self.queue_event_handle.load(Ordering::Acquire)
+    }
+
+    /// InitThreadCallback : un handle sur l'événement de sa file, avec
+    /// `EVENT_ALL_ACCESS`, dans la table de `process`, son processus.
+    ///
+    /// # Errors
+    /// `STATUS_INSUFFICIENT_RESOURCES` quand la table est pleine.
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    fn open_queue_event(&self, process: &EProcess) -> Result<(), NtStatus> {
+        let event: ob::ObjectRef = self.queue.event().clone();
+        let handle = process.handle_table.insert(event, ex::EVENT_ALL_ACCESS, ob::HandleAttributes::default())?;
+        self.queue_event_handle.store(handle.0, Ordering::Release);
+        Ok(())
+    }
+
+    /// ExitThreadCallback : ferme le handle de l'événement de sa file dans la
+    /// table de `process`, s'il désigne encore cet événement (le programme a
+    /// pu le fermer, et la valeur resservir).
+    ///
+    /// # IRQL
+    /// <= DISPATCH_LEVEL.
+    pub fn close_queue_event(&self, process: &EProcess) {
+        let handle = ob::Handle(self.queue_event_handle.swap(0, Ordering::AcqRel));
+        if handle.0 == 0 {
+            return;
+        }
+        let ours = process
+            .handle_table
+            .query_entry(handle)
+            .is_ok_and(|(object, _, _)| core::ptr::addr_eq(Arc::as_ptr(&object), Arc::as_ptr(self.queue.event())));
+        if ours {
+            let _ = process.handle_table.close(handle);
         }
     }
 
@@ -583,7 +631,8 @@ pub fn process_info(process: &Arc<Object<EProcess>>) -> Result<Arc<ProcessInfo>,
 
 /// PsConvertToGuiThread : le thread courant devient un thread GUI, s'il ne
 /// l'est pas, et son processus un processus GUI ; rend son `THREADINFO`.
-/// Son TEB reçoit son `THREADINFO` et son `CLIENTINFO`. Un thread client
+/// Son TEB reçoit son `THREADINFO` et son `CLIENTINFO`, la table de son
+/// processus un handle sur l'événement de sa file (`hEventQueueClient`). Un thread client
 /// (ni du système ni de `csrss`) va sur le bureau de démarrage de son
 /// processus, pris de ses paramètres s'il n'en a pas encore
 /// ([`crate::startup::assign_startup_desktop`] ; sans lui, il reste sans
@@ -612,6 +661,7 @@ pub fn convert_current_thread() -> Result<Arc<ThreadInfo>, NtStatus> {
     ));
     write_teb(&thread, &process, &process_info, &info)?;
     let info: Arc<ThreadInfo> = downcast(thread.set_win32_thread(info));
+    info.open_queue_event(&process)?;
     if !is_client_thread(info.ti_flags) {
         return Ok(info);
     }

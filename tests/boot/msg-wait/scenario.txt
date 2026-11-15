@@ -1,0 +1,31 @@
+# MsgWaitForMultipleObjects (tests/native/msgwait1.c, MinGW, linked to
+# ReactOS's kernel32 and user32): MSGWAIT1.EXE takes the place of
+# winlogon.exe and takes WinSta0\Default. user32 adds the event of the
+# thread's queue to the caller's objects: NtUserCallOneParam
+# (ONEPARAM_ROUTINE_GETINPUTEVENT) gives its handle (hEventQueueClient, in
+# the process's table from the thread's conversion; win32k::queue::
+# input_event), and NOPARAM_ROUTINE_MSQCLEARWAKEMASK follows the wait.
+# Without them every call fails at once (WAIT_FAILED, 4294967295), as
+# explorer's CDesktopThread::Initialize did (desktop.cpp:193). Then:
+# 1. 100 ms on an empty queue: WAIT_TIMEOUT (258);
+# 2. a message that a worker posts 200 ms later: the queue's turn (1), in
+#    time, the message in the queue;
+# 3. a worker thread or the event it sets 200 ms later, as explorer waits
+#    for its desktop thread: the event's turn (1), in time;
+# 4. WaitMessage between two waits: the queue still wakes the next one.
+features = test-smss
+requires = userland, native
+initial-command = MSGWAIT1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [msgwait] ready
+expect = [msgwait] step 1: an empty queue: 258
+expect = [msgwait] step 2: a message posted by another thread: 1, in time 1, the message there 1
+expect = [msgwait] step 3: a thread or the event it sets: 1, in time 1
+expect = [msgwait] step 4: WaitMessage got its message 1; the queue again: 0
+expect = [msgwait] done
+expect = exit status 0x00007004
+
+forbid = *** STOP:
+forbid = 4294967295

@@ -1,6 +1,7 @@
 //! Les fenêtres (`win32k::window`, `win32k::winpos`, `win32k::destroy`) :
 //! NtUserCreateWindowEx, NtUserDestroyWindow, NtUserDefSetText,
-//! NtUserSetWindowPos, NtUserMoveWindow, NtUserShowWindow.
+//! NtUserSetWindowPos, NtUserMoveWindow, NtUserShowWindow,
+//! NtUserSetShellWindowEx (`win32k::shell`).
 //! Comme dans win32k, un échec rend 0 et met l'erreur Win32 dans le TEB du
 //! thread.
 
@@ -190,6 +191,19 @@ pub(super) fn nt_user_set_window_pos(arguments: &[u32]) -> NtStatus {
         (cx, cy) = (cx.clamp(0, 32767), cy.clamp(0, 32767));
     }
     NtStatus(u32::from(win32k::winpos::set_window_pos(&window, after, x, y, cx, cy, flags)))
+}
+
+/// NtUserSetShellWindowEx(hwndShell, hwndShellListView) : la fenêtre du
+/// shell et celle de son fond pour la station du processus
+/// (`win32k::shell::set_shell_window`) ; la première passe au bas de
+/// l'ordre Z. FALSE s'il y a déjà un shell ou si l'une est au premier plan
+/// ; FALSE et l'erreur pour une fenêtre qui n'existe pas, ou sans station.
+pub(super) fn nt_user_set_shell_window_ex(arguments: &[u32]) -> NtStatus {
+    match win32k::shell::set_shell_window(arguments[0], arguments[1]) {
+        Ok(()) => NtStatus(1),
+        Err(Some(error)) => fail(error),
+        Err(None) => NtStatus(0),
+    }
 }
 
 /// NtUserMoveWindow(hWnd, X, Y, nWidth, nHeight, bRepaint) :
