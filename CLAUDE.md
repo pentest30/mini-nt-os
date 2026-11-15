@@ -167,7 +167,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`fsck.vfat` l'accepte) ; `FatVolume` écrit, `Volume` et `File` créent et écrivent ; NtCreateFile crée, NtReadFile,
   NtWriteFile, NtSetInformationFile, NtFlushBuffersFile. Disque système ATA fait : `hal::ata` (PIO, lecture,
   écriture, FLUSH CACHE), `io::disk::AtaDisk` ; un disque FAT32 au maître du canal secondaire devient
-  `\Device\HarddiskVolume1`, et `C:` (sans lui, le disque RAM). Scénario `persistence` (`disk = system`, `boots = 2`,
+  `\Device\HarddiskVolume1`, et `C:` (sans lui, le disque RAM). Les fichiers se lisent par suites de secteurs
+  (`BlockDevice::read_sectors` : 256 secteurs par commande ATA) et les sections d'un même fichier inchangé partagent
+  ses octets (`io::section_cache`, `File::contents`) : scénario `section-cache`. Scénario `persistence`
+  (`disk = system`, `boots = 2`,
   `fsck.vfat` sur l'image) : le critère 3 du M4 est coché. Ruches réécrites sur disque : une ruche
   lue d'un fichier s'y réécrit en entier, sans ses clés volatiles (`cm::HiveFile::flush`, `regf::builder` avec
   classes et dates), NtFlushKey ; scénario `registry-persistence` (une valeur et l'empreinte de la ruche SYSTEM
