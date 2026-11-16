@@ -2,12 +2,15 @@
  * The display settings (M6), second probe: the Display panel. A Win32
  * program (subsystem WINDOWS), built with MinGW and linked to ReactOS's
  * kernel32, user32 and gdi32, which the scenario `display-panel` puts in the
- * place of winlogon.exe. Like winlogon, it takes WinSta0\Default, and keeps a
- * top-level window of its own, which hears WM_DISPLAYCHANGE. Then it starts
+ * place of winlogon.exe. Like winlogon, it takes WinSta0\Default; a second
+ * thread keeps a top-level window of its own, which hears WM_DISPLAYCHANGE,
+ * and its messages (GetMessage). Then the first thread starts
  * ReactOS's Display panel on its Settings page:
  *     rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,3
  * and, four times a second, lists the top-level windows with their titles
- * when they change. It says when the panel ("Properties for Display",
+ * when they change, until rundll32 ends (WaitForSingleObject: with
+ * MsgWaitForMultipleObjects, the queue's event stayed signaled and the probe
+ * spun, starving the panel; see docs/passation.md). It says when the panel ("Properties for Display",
  * comctl32's PSH_PROPTITLE) is up:
  * the scenario then types Alt+S (the "Screen area" slider), Home (its
  * smallest resolution, 640x480) and Enter (OK: the page applies it by
@@ -145,13 +148,12 @@ typedef char devmode_is_220_bytes[sizeof(DEVMODEW) == 220 ? 1 : -1];
 #define WM_DISPLAYCHANGE 0x007E
 #define SWP_NOZORDER 0x0004
 #define SWP_NOACTIVATE 0x0010
-#define PM_REMOVE 0x0001
-#define WAIT_TIMEOUT 0x102
+#define INFINITE 0xFFFFFFFF
 #define SM_CXSCREEN 0
 #define SM_CYSCREEN 1
 #define ENUM_CURRENT_SETTINGS ((DWORD)-1)
 #define ENUM_REGISTRY_SETTINGS ((DWORD)-2)
-#define PROBE_SECONDS 90
+#define PROBE_SECONDS 180
 #define POLL_MS 250
 #define MAX_WINDOWS 16
 #define SETTLE_MS 3000
@@ -171,8 +173,13 @@ __declspec(dllimport) BOOL __stdcall CreateProcessW(const WCHAR *application, WC
 __declspec(dllimport) BOOL __stdcall GetExitCodeProcess(HANDLE process, DWORD *code);
 __declspec(dllimport) DWORD __stdcall GetLastError(void);
 __declspec(dllimport) DWORD __stdcall GetTickCount(void);
-__declspec(dllimport) DWORD __stdcall MsgWaitForMultipleObjects(DWORD count, const HANDLE *handles, BOOL all,
-                                                                DWORD milliseconds, DWORD mask);
+__declspec(dllimport) DWORD __stdcall WaitForSingleObject(HANDLE handle, DWORD milliseconds);
+typedef DWORD(__stdcall *THREADPROC)(void *);
+__declspec(dllimport) HANDLE __stdcall CreateThread(void *attributes, DWORD stack, THREADPROC start, void *parameter,
+                                                    DWORD flags, DWORD *id);
+__declspec(dllimport) HANDLE __stdcall CreateEventW(void *attributes, BOOL manual, BOOL initial, const WCHAR *name);
+__declspec(dllimport) BOOL __stdcall SetEvent(HANDLE event);
+__declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
 __declspec(dllimport) HDESK __stdcall CreateDesktopW(const WCHAR *name, const WCHAR *device, void *mode, DWORD flags,
                                                      DWORD access, void *attributes);
 __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, DWORD flags, DWORD access,
@@ -188,14 +195,12 @@ __declspec(dllimport) HWND __stdcall CreateWindowExW(DWORD ex_style, const WCHAR
                                                      void *menu, HINSTANCE instance, void *parameter);
 __declspec(dllimport) LRESULT __stdcall DefWindowProcW(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 __declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT first, UINT last);
-__declspec(dllimport) BOOL __stdcall PeekMessageW(MSG *message, HWND window, UINT first, UINT last, UINT remove);
 __declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
 __declspec(dllimport) HDC __stdcall BeginPaint(HWND window, PAINTSTRUCT *paint);
 __declspec(dllimport) BOOL __stdcall EndPaint(HWND window, const PAINTSTRUCT *paint);
 __declspec(dllimport) int __stdcall FillRect(HDC dc, const RECT *rect, HBRUSH brush);
 __declspec(dllimport) BOOL __stdcall SetWindowPos(HWND window, HWND after, int x, int y, int width, int height,
                                                   UINT flags);
-__declspec(dllimport) BOOL __stdcall UpdateWindow(HWND window);
 __declspec(dllimport) int __stdcall GetSystemMetrics(int index);
 __declspec(dllimport) BOOL __stdcall EnumWindows(WNDENUMPROC procedure, LPARAM parameter);
 __declspec(dllimport) int __stdcall GetWindowTextW(HWND window, WCHAR *text, int max);
@@ -232,11 +237,14 @@ static BOOL take_a_desktop(void)
     return 1;
 }
 
-/* What its window heard of WM_DISPLAYCHANGE: how many, the last one. */
-static int heard;
-static WPARAM heard_wparam;
-static LPARAM heard_lparam;
+/* What its window heard of WM_DISPLAYCHANGE: how many, the last one (in
+ * the window's thread, read by the first one). */
+static volatile int heard;
+static volatile WPARAM heard_wparam;
+static volatile LPARAM heard_lparam;
 static HBRUSH green;
+static HWND probe_window;
+static HANDLE window_ready;
 
 static LRESULT __stdcall window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
 {
@@ -258,12 +266,17 @@ static LRESULT __stdcall window_proc(HWND window, UINT message, WPARAM wparam, L
     return DefWindowProcW(window, message, wparam, lparam);
 }
 
-/* Its own messages, without waiting. */
-static void pump(void)
+/* The second thread: the probe's window, and its messages. */
+static DWORD __stdcall window_thread(void *parameter)
 {
     MSG message;
-    while (PeekMessageW(&message, 0, 0, 0, PM_REMOVE))
+    (void)parameter;
+    probe_window = CreateWindowExW(0, L"MinoDisplay", L"probe", WS_POPUP | WS_VISIBLE, 0, 0, 40, 40, 0, 0,
+                                   GetModuleHandleW(0), 0);
+    SetEvent(window_ready);
+    while (GetMessageW(&message, 0, 0, 0) > 0)
         DispatchMessageW(&message);
+    return 0;
 }
 
 /* The top-level windows, as EnumWindows gives them. */
@@ -369,9 +382,7 @@ DWORD __stdcall GuiStartup(void)
     PROCESS_INFORMATION process;
     WCHAR command_line[] = L"rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,3";
     DEVMODEW current, registry;
-    HWND window;
-    MSG message;
-    DWORD code = 0, waited, start;
+    DWORD code = 0, start;
     int ended = 0;
 
     if (!take_a_desktop())
@@ -383,9 +394,9 @@ DWORD __stdcall GuiStartup(void)
     klass.hInstance = GetModuleHandleW(0);
     klass.lpszClassName = L"MinoDisplay";
     RegisterClassExW(&klass);
-    window = CreateWindowExW(0, L"MinoDisplay", L"probe", WS_POPUP | WS_VISIBLE, 0, 0, 40, 40, 0, 0,
-                             GetModuleHandleW(0), 0);
-    pump();
+    window_ready = CreateEventW(0, 1, 0, 0);
+    CreateThread(0, 0, window_thread, 0, 0, 0);
+    WaitForSingleObject(window_ready, INFINITE);
 
     memset(&startup, 0, sizeof startup);
     startup.cb = sizeof startup;
@@ -399,10 +410,7 @@ DWORD __stdcall GuiStartup(void)
     start = GetTickCount();
     while (GetTickCount() - start < PROBE_SECONDS * 1000) {
         list_windows();
-        /* Its window hears WM_DISPLAYCHANGE while it waits. */
-        waited = MsgWaitForMultipleObjects(1, &process.hProcess, 0, POLL_MS, 0x04FF);
-        pump();
-        if (waited == 0) {
+        if (WaitForSingleObject(process.hProcess, POLL_MS) == 0) {
             GetExitCodeProcess(process.hProcess, &code);
             ended = 1;
             break;
@@ -423,13 +431,11 @@ DWORD __stdcall GuiStartup(void)
              registry.dmPelsWidth, registry.dmPelsHeight, heard, heard_wparam, heard_lparam);
 
     /* Its window in the corner of the new screen, green. */
-    SetWindowPos(window, 0, GetSystemMetrics(SM_CXSCREEN) - 40, GetSystemMetrics(SM_CYSCREEN) - 40, 40, 40,
+    SetWindowPos(probe_window, 0, GetSystemMetrics(SM_CXSCREEN) - 40, GetSystemMetrics(SM_CYSCREEN) - 40, 40, 40,
                  SWP_NOZORDER | SWP_NOACTIVATE);
-    UpdateWindow(window);
-    pump();
+    Sleep(500);
     DbgPrint("[display] done\n");
-    while (GetMessageW(&message, 0, 0, 0) > 0)
-        DispatchMessageW(&message);
+    Sleep(INFINITE);
     ExitProcess(EXIT_STATUS);
     return 0;
 }

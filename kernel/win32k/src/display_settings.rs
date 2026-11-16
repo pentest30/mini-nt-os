@@ -33,7 +33,7 @@ use alloc::vec::Vec;
 use abi::display::{
     cds, disp_change, display_device, dm, set_text, DevModeW, DisplayDeviceW, DM_SPECVERSION, WM_DISPLAYCHANGE,
 };
-use abi::user::{RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE};
+use abi::user::{RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE};
 
 use crate::display::Mode;
 use crate::gdi::dib::Rect;
@@ -91,10 +91,8 @@ pub fn adapter(index: u32, key: &str) -> Option<DisplayDeviceW> {
 /// seul, actif et attaché. `None` sans pilote ou au-delà.
 pub fn monitor(index: u32, key: &str) -> Option<DisplayDeviceW> {
     crate::display::adapter().filter(|_| index == 0)?;
-    let mut device = DisplayDeviceW {
-        state_flags: display_device::ACTIVE | display_device::ATTACHED,
-        ..DisplayDeviceW::default()
-    };
+    let mut device =
+        DisplayDeviceW { state_flags: display_device::ACTIVE | display_device::ATTACHED, ..DisplayDeviceW::default() };
     set_text(&mut device.device_name, MONITOR_NAME);
     set_text(&mut device.device_string, MONITOR_DESCRIPTION);
     set_text(&mut device.device_key, key);
@@ -226,7 +224,7 @@ fn desktops() -> Vec<Arc<ob::Object<crate::desktop::Desktop>>> {
 /// MAKELONG(largeur, hauteur)) aux fenêtres de premier niveau du bureau du
 /// thread courant, [`DISPLAY_CHANGE_TIMEOUT_MS`] au plus chacune ; puis
 /// UserRedrawDesktop : la fenêtre du bureau et toutes ses filles sont
-/// invalidées, cadre et fond compris, et le fond du bureau se repeint
+/// invalidées, fond et cadres compris, et le fond du bureau se repeint
 /// aussitôt (les autres fenêtres, par leur WM_PAINT).
 ///
 /// # IRQL
@@ -250,7 +248,8 @@ fn broadcast(mode: &Mode) {
     }
     for desktop in desktops() {
         let window = &desktop.window;
-        crate::paint::redraw_window(window, None, None, RDW_FRAME | RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
+        // Its children get RDW_FRAME too; the desktop window has no frame.
+        crate::paint::redraw_window(window, None, None, RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
         crate::paint::update_window(window, 0);
     }
 }
@@ -298,11 +297,7 @@ mod tests {
         assert_eq!(find_mode(&request(full, 800, 600, 32, 75), &modes), Err(disp_change::BADMODE), "75 Hz");
         // A depth that is not in the fields is not looked at.
         assert_eq!(find_mode(&request(both, 800, 600, 16, 75), &modes), Ok(mode(800, 600)));
-        assert_eq!(
-            find_mode(&request(dm::PELSWIDTH, 800, 600, 0, 0), &modes),
-            Err(disp_change::BADMODE),
-            "no height"
-        );
+        assert_eq!(find_mode(&request(dm::PELSWIDTH, 800, 600, 0, 0), &modes), Err(disp_change::BADMODE), "no height");
     }
 
     #[test]

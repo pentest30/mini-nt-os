@@ -192,6 +192,7 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtGdiLineTo, Handler::Status(gdi::nt_gdi_line_to)),
     (services::NtGdiMoveTo, Handler::Status(gdi::nt_gdi_move_to)),
     (services::NtGdiOpenDCW, Handler::Status(gdi::nt_gdi_open_dc_w)),
+    (services::NtGdiTransparentBlt, Handler::Status(gdi::nt_gdi_transparent_blt)),
     (services::NtGdiPatBlt, Handler::Status(gdi::nt_gdi_pat_blt)),
     (services::NtGdiRectVisible, Handler::Status(gdi::nt_gdi_rect_visible)),
     (services::NtGdiGetDIBitsInternal, Handler::Status(gdi::nt_gdi_get_dibits_internal)),

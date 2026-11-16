@@ -295,7 +295,8 @@ impl Scenario {
                     let size = value
                         .split_once(' ')
                         .and_then(|(width, height)| Some((width.trim().parse().ok()?, height.trim().parse().ok()?)));
-                    sc.screen_size = Some(size.ok_or_else(|| format!("{}: screen-size `{value}`: WIDTH HEIGHT", at()))?);
+                    sc.screen_size =
+                        Some(size.ok_or_else(|| format!("{}: screen-size `{value}`: WIDTH HEIGHT", at()))?);
                 }
                 "screen-wait" => {
                     let secs = value.parse().map_err(|_| format!("{}: screen-wait `{value}` is not a number", at()))?;

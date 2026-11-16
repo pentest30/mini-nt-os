@@ -1238,6 +1238,36 @@ pub fn resize_desktop_window(desktop: &Desktop, width: i32, height: i32) {
     crate::dce::reset_active_dcs(window);
 }
 
+/// co_IntEnableWindow (EnableWindow) : `window` est activée (`enable`) ou
+/// désactivée (`WS_DISABLED`). Avant d'être désactivée, elle reçoit
+/// WM_CANCELMODE et perd le clavier si elle l'a dans la file de `thread`
+/// (le thread courant) ; si son état change, elle reçoit WM_ENABLE. Rend
+/// si elle était désactivée.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur.
+pub fn enable_window(thread: &crate::gui::ThreadInfo, window: &Arc<Window>, enable: bool) -> bool {
+    use abi::user::WS_DISABLED;
+    let was_disabled = window.state().style & WS_DISABLED != 0;
+    let send = |message: u32, wparam: u32| {
+        let _ = crate::sent::send_to_window(thread, window, message, wparam, 0, None);
+    };
+    if enable {
+        change(window, |state| state.style &= !WS_DISABLED);
+    } else {
+        send(abi::user::WM_CANCELMODE, 0);
+        if thread.queue.with(|queue| queue.focus).0 == window.handle {
+            crate::input::set_focus(thread, None);
+        }
+        change(window, |state| state.style |= WS_DISABLED);
+    }
+    if was_disabled == enable {
+        send(abi::user::WM_ENABLE, u32::from(enable));
+    }
+    was_disabled
+}
+
 /// IntHideDesktop : la fenêtre du bureau n'est plus visible.
 ///
 /// # IRQL

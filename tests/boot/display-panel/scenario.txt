@@ -1,17 +1,52 @@
 # The display settings (M6), by the Display panel: DISPLAY2.EXE
-# (tests/native/display2.c) takes the place of winlogon.exe, takes
-# WinSta0\Default and starts ReactOS's panel on its Settings page
-# (rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,3).
+# (tests/native/display2.c, MinGW, linked to ReactOS's kernel32, user32 and
+# gdi32) takes the place of winlogon.exe, takes WinSta0\Default, keeps a
+# window of its own and starts ReactOS's panel on its Settings page:
+#     rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,3
+# (shell32's Control_RunDLL loads desk.cpl, whose third page, `,,3`, is
+# Settings). The page lists the adapter (EnumDisplayDevices), its modes
+# (EnumDisplaySettingsEx, a slider of 19 resolutions) and the mode in use
+# (CreateIC, GetDeviceCaps), draws the monitor's preview (GdiTransparentBlt)
+# and enables its controls (EnableWindow). Once the panel is visible and
+# painted, QEMU types Alt+S (the "Screen area" slider), Home (its smallest
+# resolution, 640x480) and Enter (OK: the page applies it,
+# ChangeDisplaySettingsEx(CDS_UPDATEREGISTRY)); the screen is then 640x480
+# and the probe's window has heard WM_DISPLAYCHANGE. The panel asks whether
+# to keep the settings ("Display Settings", 15 s before it goes back): QEMU
+# types Alt+Y. The panel ends; the mode in use, the system metrics and the
+# registry's mode are 640x480. The probe's window, in the corner of the new
+# screen, is green; the desktop repainted around it. `interactive`: the
+# probe of smss would end the run 10 s after smss's start if the panel
+# (shell32, comctl32, desk.cpl) were not up by then.
 features = test-smss, interactive
 requires = userland, native
 initial-command = DISPLAY2.EXE
 cpus     = default, intel
-timeout  = 240
+timeout  = 120
 
+keys = [display] the panel is up => alt-s home ret
+keys = [display] the panel asks to keep the settings => alt-y
 
 expect = [display] on WinSta0\Default
+expect = [display] the panel launched (PID
 expect = [display] the panel is up: 1280x800
+expect = win32k: display mode changed to 640x480
+expect = [display] the panel asks to keep the settings: 640x480, WM_DISPLAYCHANGE 1 (32, 01e00280)
+expect = [display] the panel ended: exit code 00000000
+expect = [display] after the panel: current 640x480, metrics 640x480, the registry's 640x480; WM_DISPLAYCHANGE 1 (32, 01e00280)
+expect = [display] done
 
 forbid = *** STOP:
+forbid = sys: NtUserEnumDisplayDevices (0x1172) is not implemented
+forbid = sys: NtUserChangeDisplaySettings (0x1145) is not implemented
+forbid = sys: NtGdiTransparentBlt (0x1129) is not implemented
+forbid = sys: NtUserCallTwoParam class 0x60 is not implemented
 
-screen = 0 0 FF00FF
+# The screen of the new mode: its size, the probe's window in its corner,
+# the desktop's colour elsewhere.
+screen-size = 640 480
+screen = 639 479 20A040
+screen = 600 440 20A040
+screen = 599 439 5A7EDC
+screen = 0 0 5A7EDC
+screen = 320 240 5A7EDC

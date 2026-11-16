@@ -150,9 +150,7 @@ pub(super) fn nt_user_enum_display_devices(arguments: &[u32]) -> NtStatus {
         let key = device_key_name();
         let found = match capture_device(device)? {
             None => win32k::display_settings::adapter(index, &key),
-            Some(name) if win32k::display_settings::is_device(&name) => {
-                win32k::display_settings::monitor(index, &key)
-            }
+            Some(name) if win32k::display_settings::is_device(&name) => win32k::display_settings::monitor(index, &key),
             Some(_) => None,
         };
         let mut found = found.ok_or(STATUS_UNSUCCESSFUL)?;

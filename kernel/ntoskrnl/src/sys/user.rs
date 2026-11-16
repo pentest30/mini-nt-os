@@ -170,6 +170,15 @@ pub(super) fn nt_user_call_two_param(arguments: &[u32]) -> NtStatus {
     if routine == abi::user::TWOPARAM_ROUTINE_SETCARETPOS {
         return NtStatus(u32::from(win32k::caret::set_pos(first as i32, second as i32)));
     }
+    if routine == abi::user::TWOPARAM_ROUTINE_ENABLEWINDOW {
+        // EnableWindow(hWnd, bEnable): TRUE if it was disabled.
+        let Some(window) = win32k::window::get(first) else {
+            let _ = win32k::set_last_error(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+            return NtStatus(0);
+        };
+        let thread = win32k::convert_current_thread().expect("a GUI thread at a win32k service");
+        return NtStatus(u32::from(win32k::window::enable_window(&thread, &window, second != 0)));
+    }
     UNSUPPORTED_TWO_PARAM_ROUTINES.report(routine);
     let _ = win32k::set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
     NtStatus(0)
