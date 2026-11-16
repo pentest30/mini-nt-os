@@ -1,0 +1,92 @@
+# The window menu (win32k::sysmenu, the system menu; tests/native/sysmenu1.c,
+# MinGW, linked to ReactOS's kernel32 and user32): SYSMENU1.EXE takes the
+# place of winlogon.exe and switches to WinSta0\Default, with W at
+# (100, 100, 400 x 300) and B. Update with docs/compat/m6-fenetres.md,
+# steps 37 and 38.
+# 1. SW_HIDE of the active W hands the activation to B (co_WinPosShowWindow,
+#    winpos::give_up_activation), which takes the keyboard; SW_SHOW gives it
+#    back to W.
+# 2. GetSystemMenu (NtUserGetSystemMenu): user32's SYSMENU (LoadMenu
+#    callback), Restore to Close, Restore's glyph HBMMENU_POPUP_RESTORE,
+#    Close the default; GetSystemMenu(TRUE) destroys it; none without
+#    WS_SYSMENU; an item appended by the program.
+# 3. Alt+Space (SC_KEYMENU ' ', menutrack::track_kbd_menu_bar) opens it
+#    (WM_INITMENUPOPUP, system), n chooses Minimize (WM_SYSCOMMAND posted by
+#    the menu): W minimized, B active; the menu showed Restore grayed
+#    (sysmenu::popup_states).
+# 4. A click on the icon of the minimized W (at the bottom left, without a
+#    shell) opens its menu; r restores it; Minimize was grayed, Restore the
+#    default.
+# 5. A click on W's icon (HTSYSMENU, SC_MOUSEMENU + HTSYSMENU) opens it
+#    under the icon; x maximizes W; Close the default (from the icon).
+# 6. Alt+Space, o: the program's item (WM_SYSCOMMAND 0x0110).
+# 7. A right click in the maximized W's client area: WM_CONTEXTMENU from
+#    user32, no menu (sysmenu::context_menu, HTCLIENT).
+# 8. A right click on its caption (WM_NCRBUTTONDOWN: sysmenu::nc_rbutton_down,
+#    then WM_CONTEXTMENU): the menu opens at the point; r restores W;
+#    Maximize grayed, Close the default (menutrack::track_popup_menu,
+#    HTSYSMENU).
+# 9. A right click on the restored W's caption, then the right button on
+#    Maximize (TPM_RIGHTBUTTON from the caption): W maximized.
+# 10. A double click on the maximized W's icon: SC_CLOSE, W destroyed.
+features = test-smss
+requires = userland, native
+initial-command = SYSMENU1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [sysmenu] keyboard: Alt+Space and n => alt-spc n
+# The pointer starts at the centre of the screen (640, 400); one move token
+# at a time, each under 255 pixels. The minimized W (1, 774, 166 x 25): its
+# icon at (4, 777)-(22, 796).
+keys = [sysmenu] mouse: the icon of the minimized W => move:-157,96 move:-157,96 move:-157,97 move:-157,97 press:1 release
+keys = [sysmenu] popup 2: the window menu 1 => r
+# Restored, W's icon: (104, 104)-(122, 122).
+keys = [sysmenu] mouse: the icon => move:25,-168 move:25,-168 move:25,-169 move:25,-169 press:1 release
+keys = [sysmenu] popup 3: the window menu 1 => x
+keys = [sysmenu] keyboard: Alt+Space and o => alt-spc o
+# Maximized (-4, -4, 1288 x 808): (400, 300) in its client area, (400, 10)
+# on its caption.
+keys = [sysmenu] mouse: a right click in the client area => move:144,94 move:144,94 press:2 release
+keys = [sysmenu] mouse: a right click on the caption => move:0,-145 move:0,-145 press:2 release
+keys = [sysmenu] step 8: the menu at => r
+# Restored (100, 100, 400 x 300): (250, 110) on its caption.
+keys = [sysmenu] mouse: a right click on the restored caption => move:-150,100 press:2 release
+# The menu at (250, 110), Maximize (253, 181)-(405, 198): (329, 189).
+keys = [sysmenu] step 9: the menu at => move:79,79 press:2 release
+# Maximized again: its icon at (0, 0)-(18, 18).
+keys = [sysmenu] mouse: a double click on the icon => move:-160,-90 move:-160,-90 press:1 release press:1 release
+
+expect = [sysmenu] step 1: W active 1; SW_HIDE: active B 1, foreground B 1, focus B 1
+expect = [sysmenu] step 1: SW_SHOW: active W 1
+expect = [sysmenu] step 2: GetSystemMenu 1: 7 items, f120 to f060, the same 1; Restore's glyph 1, default f060
+expect = [sysmenu] step 2: GetSystemMenu(TRUE) none 1, then a new one 1 (7 items); without WS_SYSMENU none 1
+expect = [sysmenu] step 2: appended, 8 items
+expect = [sysmenu] popup 1: the window menu 1
+expect = [sysmenu] step 3: WM_SYSCOMMAND f020, iconic 1, active B 1
+expect = [sysmenu] step 3: the menu showed Restore grayed 1, Minimize grayed 0, Maximize grayed 0, default f060
+expect = [sysmenu] popup 2: the window menu 1
+expect = [sysmenu] step 4: WM_SYSCOMMAND f120, iconic 0, zoomed 0
+expect = [sysmenu] step 4: the menu showed Restore grayed 0, Minimize grayed 1, Maximize grayed 0, default f120
+expect = [sysmenu] popup 3: the window menu 1
+expect = [sysmenu] step 5: WM_SYSCOMMAND f030, zoomed 1
+expect = [sysmenu] step 5: the menu showed Restore grayed 1, Minimize grayed 0, Maximize grayed 0, default f060
+expect = [sysmenu] popup 4: the window menu 1
+expect = [sysmenu] step 6: WM_SYSCOMMAND 110, the item added
+expect = [sysmenu] step 7: WM_CONTEXTMENU W 1 at (400, 300), menus opened 0
+expect = [sysmenu] popup 5: the window menu 1
+expect = [sysmenu] step 8: the menu at (400, 10); Maximize (403, 81)-(555, 98)
+expect = [sysmenu] step 8: WM_CONTEXTMENU W 1 at (400, 10), menus opened 1
+expect = [sysmenu] step 8: WM_SYSCOMMAND f120, zoomed 0
+expect = [sysmenu] step 8: the menu showed Restore grayed 0, Minimize grayed 0, Maximize grayed 1, default f060
+expect = [sysmenu] popup 6: the window menu 1
+expect = [sysmenu] step 9: the menu at (250, 110); Maximize (253, 181)-(405, 198)
+expect = [sysmenu] step 9: WM_CONTEXTMENU W 1 at (250, 110), menus opened 1
+expect = [sysmenu] step 9: WM_SYSCOMMAND f030, zoomed 1
+expect = [sysmenu] popup 7: the window menu 1
+expect = [sysmenu] step 10: WM_SYSCOMMAND f060
+expect = [sysmenu] W destroyed
+expect = [sysmenu] done
+forbid = *** STOP:
+forbid = sys: NtUserGetSystemMenu (0x11b0) is not implemented
+forbid = the window menu: LoadMenu of SYSMENU failed

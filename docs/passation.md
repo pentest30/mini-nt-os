@@ -1,5 +1,42 @@
 # Notes de passation
 
+- **Le clic droit sur le titre** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 38 ; demandé après l'étape 37). Un clic droit sur le titre ou l'icône d'une fenêtre ouvre son menu système au
+  point du relâchement : WM_NCRBUTTONDOWN (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la fenêtre prend la
+  souris jusqu'au relâchement du bouton droit, puis WM_CONTEXTMENU si le bouton est relâché sur le titre, l'icône ou
+  une barre de défilement) ; WM_CONTEXTMENU d'une fenêtre de premier niveau (`sysmenu::context_menu` : sur le titre ou
+  l'icône, MENU_InitSysMenuPopup puis `menutrack::track_popup_menu` au point, les deux boutons depuis le titre, le
+  gauche depuis l'icône ; une fenêtre fille le passe à son parent, ce que `user32` fait déjà) ; TrackPopupMenu d'un
+  menu MNF_SYSMENU le met à l'état de sa fenêtre comme ouvert de l'icône (Close par défaut). `user32` fait lui-même
+  WM_RBUTTONUP → WM_CONTEXTMENU dans la zone cliente. Constantes : `WM_CONTEXTMENU`, `MSGF_MAX`, `TPM_LEFTBUTTON`.
+  Scénario `window-menu` étendu (étapes 7 à 9 de `tests/native/sysmenu1.c` : la zone cliente sans menu, le titre de
+  la fenêtre agrandie puis r, le titre de la fenêtre rétablie puis le bouton droit sur Maximize ; la place du menu par
+  WM_ENTERIDLE et GetMenuItemRect sans fenêtre), AMD et Intel ; test hôte `sysmenu`. Six mutations détectées (WM_NCRBUTTONDOWN ignoré, le relâchement sur le titre, le menu
+  depuis la zone cliente, le menu ailleurs qu'au point, le bouton droit refusé, TrackPopupMenu sans l'état de la
+  fenêtre). Lint propre ; toute la suite : 1160 tests hôte, 131 runs de démarrage sur 131 (rostests 44/84 et 16/29,
+  aux planchers). `main` fusionné ensuite (PR 138, la fenêtre de dossier, qui a pris l'étape 36 : nos étapes sont
+  devenues 37 et 38) : lint propre, 1162 tests hôte, 136 runs sur 136 (`rebar`, `caption`, `folder-view` compris),
+  rostests 44/84 et 16/29.
+  **Suite** : SC_MOVE et SC_SIZE au clavier, ←/→ entre le menu système et la barre, le bouton de fermeture grisé
+  quand Close l'est ; SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS
+  l'active) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du
+  clavier) ; vérifier sous VirtualBox avec le Bloc-notes.
+
+- **Le menu de la fenêtre ; cacher la fenêtre active cède l'activation** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 37 ; demandé après la PR 131, la suite qu'elle annonçait).
+  SW_HIDE de la fenêtre active passe l'activation et le clavier comme SW_MINIMIZE (`winpos::show_window`,
+  co_WinPosShowWindow). Le menu système (`win32k::sysmenu` : IntGetSystemMenu, MENU_GetSystemMenu,
+  IntSetSystemMenu, MENU_InitSysMenuPopup) : un menu d'un item dans `WND.SystemMenu`, son sous-menu le gabarit
+  SYSMENU de `user32` (rappel LoadMenu) avec les glyphes HBMMENU_POPUP_*, MNS_CHECKORBMP, Close par défaut ;
+  NtUserGetSystemMenu, NtUserSetSystemMenu ; HTSYSMENU (l'icône du titre, `defwnd::nc_hit_test`) ; le suivi
+  (`menutrack` : le clic sur l'icône, SC_MOUSEMENU + HTSYSMENU ; Alt+Espace et une fenêtre réduite ou sans barre,
+  SC_KEYMENU ; le menu sous l'icône, NC_GetSysPopupPos ; un second clic le referme ; le double-clic ferme la
+  fenêtre) ; les glyphes de Marlett dans le menu (`menupopup`, `cxTextAlign`). Écarts voulus (créé au premier
+  besoin, pas cloné, WM_INITMENU, le double-clic dans la boucle) dans l'étape 37. Scénario `window-menu`
+  (`tests/native/sysmenu1.c`, AMD et Intel ; cinq mutations détectées) ; tests hôte (`sysmenu`, `menupopup`,
+  `defwnd`). `gui` attend maintenant la désactivation de sa fenêtre cachée (seule de son thread : WM_NCACTIVATE,
+  WM_ACTIVATE inactif, WM_KILLFOCUS). Lint propre ; toute la suite : 1159 tests hôte, 131 runs de démarrage sur 131
+  (rostests 44/84 et 16/29, aux planchers). La suite : l'entrée du clic droit sur le titre, au-dessus.
 - **La fenêtre de dossier montre ses fichiers** (`claude/folder-view`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 36 ; demandé : « sa barre d'adresse et sa liste de
   fichiers sont vides (NtUserLockWindowUpdate et NtUserDrawCaption manquent) »). La cause n'était ni l'un ni

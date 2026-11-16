@@ -156,7 +156,12 @@ expect = [gui] ShowWindow(SW_SHOWNORMAL) received 11: 0018 0046 001c 0086 0006 0
 expect = [gui] ShowWindow(SW_SHOWNORMAL): was 0, visible 1, WM_SHOWWINDOW 1, WM_SIZE 952 572, WM_MOVE 50 70
 expect = [gui] ShowWindow(SW_SHOW), visible received 0:
 expect = [gui] ShowWindow(SW_SHOW), visible: was 1
-expect = [gui] ShowWindow(SW_HIDE) received 3: 0018 0046 0047
+# Hidden while active, the only window of its thread: no other takes the
+# activation (co_WinPosShowWindow, co_WinPosActivateOtherWindow), it is
+# deactivated (UserSetActiveWindow(NULL): WM_NCACTIVATE, WM_ACTIVATE
+# WA_INACTIVE) and loses the keyboard (WM_KILLFOCUS), after
+# WM_WINDOWPOSCHANGED, as Wine's WmHideOverlappedSeq allows.
+expect = [gui] ShowWindow(SW_HIDE) received 6: 0018 0046 0047 0086 0006 0008
 expect = [gui] ShowWindow(SW_HIDE): was 1, visible 0, WM_SHOWWINDOW 0
 expect = [gui] ShowWindow(SW_HIDE), hidden received 0:
 expect = [gui] ShowWindow(SW_HIDE), hidden: was 0

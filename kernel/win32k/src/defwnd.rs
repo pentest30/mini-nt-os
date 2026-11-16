@@ -24,6 +24,10 @@
 //!   fenêtre de premier niveau activée et passée devant, puis SC_MOVE ; sur
 //!   un bord ou un coin, SC_SIZE ; sur un bouton du titre, son suivi
 //!   ([`crate::sizemove`]) ;
+//! - WM_NCRBUTTONDOWN (NC_HandleNCRButtonDown) et WM_CONTEXTMENU : un clic
+//!   droit sur le titre ou son icône ouvre le menu de la fenêtre au point
+//!   ([`crate::sysmenu::nc_rbutton_down`], [`crate::sysmenu::context_menu`]) ;
+//!   une fenêtre fille passe WM_CONTEXTMENU à son parent ;
 //! - WM_NCACTIVATE : le cadre peint actif ou inactif
 //!   (`crate::paint::set_frame_active`, NC_HandleNCActivate ; pas de
 //!   peinture pour un `lParam` de -1) ; rend TRUE ;
@@ -63,9 +67,9 @@ use abi::user::{
 };
 use abi::user::{
     CS_HREDRAW, CS_VREDRAW, HTBORDER, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTHSCROLL,
-    HTLEFT, HTMAXBUTTON, HTMENU, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTSIZE, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL,
-    MA_ACTIVATE, MA_NOACTIVATE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_NC_MOUSE_OFFSET,
-    WM_SYSCOMMAND, WS_MINIMIZEBOX, WS_SYSMENU,
+    HTLEFT, HTMAXBUTTON, HTMENU, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTSIZE, HTSYSMENU, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+    HTVSCROLL, MA_ACTIVATE, MA_NOACTIVATE, SC_CLOSE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST,
+    WM_NC_MOUSE_OFFSET, WM_SYSCOMMAND, WS_MINIMIZEBOX, WS_SYSMENU,
 };
 use abi::user::{
     KF_ALTDOWN, KF_REPEAT, SC_KEYMENU, SC_MAXIMIZE, SC_RESTORE, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
@@ -368,16 +372,18 @@ fn sizing_border(along: i32, from: i32, to: i32, size: i32, (low, middle, high):
 /// entre ses côtés, sa barre de menus si elle en a une (`has_menu` :
 /// HAS_MENU, une fenêtre qui n'est pas fille et a un menu) ; contre la zone
 /// cliente, ses barres de défilement (HTVSCROLL, HTHSCROLL, et HTSIZE dans le
-/// coin entre les deux) ; HTNOWHERE ailleurs (pas encore de menu système :
-/// pas de HTSYSMENU). Une fenêtre réduite est toute en titre, sauf les
+/// coin entre les deux) ; HTNOWHERE ailleurs. L'icône du titre (`has_icon`,
+/// NC_IconForWindow) ouvre le menu de la fenêtre (HTSYSMENU). Une fenêtre réduite est toute en titre, sauf les
 /// boutons de sa barre : GetNCHitEx de ReactOS rend HTCAPTION partout, mais
 /// sa version d'avant (DefWndNCHitTest, gardée sous `#if 0`) et XP donnent
 /// les boutons ; sans shell, celui qui rétablit est le chemin de la fenêtre
 /// réduite à la souris.
+#[expect(clippy::too_many_arguments, reason = "what GetNCHitEx reads of the window, the point and the system")]
 pub fn nc_hit_test(
     style: u32,
     ex_style: u32,
     has_menu: bool,
+    has_icon: bool,
     window: Rect,
     client: Rect,
     (x, y): (i32, i32),
@@ -395,7 +401,7 @@ pub fn nc_hit_test(
         if !inside(&rect) || style & WS_CAPTION != WS_CAPTION {
             return HTCAPTION;
         }
-        return caption_part(style, ex_style, rect.right, x, m);
+        return caption_part(style, ex_style, (rect.left, rect.right), x, has_icon, m);
     }
     if inside(&client) {
         return HTCLIENT;
@@ -429,7 +435,7 @@ pub fn nc_hit_test(
         let tool = ex_style & WS_EX_TOOLWINDOW != 0;
         rect.top += if tool { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) } - 1;
         if !inside(&rect) {
-            return caption_part(style, ex_style, rect.right, x, m);
+            return caption_part(style, ex_style, (rect.left, rect.right), x, has_icon, m);
         }
     }
     if has_menu && y < client.top && x >= client.left && x < client.right {
@@ -460,12 +466,24 @@ pub fn nc_hit_test(
     HTNOWHERE
 }
 
-/// Sur la barre de titre d'une fenêtre de style `style`, dont le côté droit
-/// est en `right`, le bouton sous `x` (fermer, agrandir, réduire, de droite
-/// à gauche, pour une fenêtre à menu système), sinon HTCAPTION.
-fn caption_part(style: u32, ex_style: u32, right: i32, x: i32, m: &impl Fn(usize) -> i32) -> u32 {
+/// Sur la barre de titre d'une fenêtre de style `style`, entre `left` et
+/// `right`, ce qui est sous `x` pour une fenêtre à menu système : son icône
+/// (`icon`, le menu de la fenêtre : HTSYSMENU, sauf une fenêtre d'outils),
+/// les boutons fermer, agrandir, réduire, de droite à gauche ; HTCAPTION
+/// ailleurs.
+fn caption_part(
+    style: u32,
+    ex_style: u32,
+    (left, right): (i32, i32),
+    x: i32,
+    icon: bool,
+    m: &impl Fn(usize) -> i32,
+) -> u32 {
     if style & WS_SYSMENU == 0 {
         return HTCAPTION;
+    }
+    if icon && ex_style & WS_EX_TOOLWINDOW == 0 && x < left + m(sm::CYCAPTION) - 1 {
+        return HTSYSMENU;
     }
     let mut right = right - m(sm::CYCAPTION);
     if x >= right {
@@ -492,7 +510,9 @@ fn caption_part(style: u32, ex_style: u32, right: i32, x: i32, m: &impl Fn(usize
 pub fn window_hit_test(window: &Window, point: (i32, i32)) -> u32 {
     let state = window.state();
     let has_menu = state.style & WS_CHILD == 0 && state.menu != 0;
-    nc_hit_test(state.style, state.ex_style, has_menu, state.window, state.client, point, &metrics::get)
+    // NC_IconForWindow: the icon of the caption, where the window menu opens.
+    let has_icon = state.style & WS_SYSMENU != 0 && crate::cursor::caption_icon(window).is_some();
+    nc_hit_test(state.style, state.ex_style, has_menu, has_icon, state.window, state.client, point, &metrics::get)
 }
 
 /// DefWindowProc de WM_MOUSEACTIVATE : une fenêtre fille pose la question à
@@ -515,9 +535,10 @@ fn mouse_activate(window: &Arc<Window>, wparam: u32, lparam: u32) -> u32 {
     }
 }
 
-/// WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK.
+/// WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK, WM_NCRBUTTONDOWN.
 const NC_LBUTTONDOWN: u32 = WM_LBUTTONDOWN - WM_NC_MOUSE_OFFSET;
 const NC_LBUTTONDBLCLK: u32 = abi::user::WM_LBUTTONDBLCLK - WM_NC_MOUSE_OFFSET;
+const NC_RBUTTONDOWN: u32 = abi::user::WM_RBUTTONDOWN - WM_NC_MOUSE_OFFSET;
 
 /// Ce que fait un double-clic sur le cadre (NC_HandleNCLButtonDblClk).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -530,6 +551,9 @@ pub enum DoubleClick {
     NotYet,
     /// Comme un appui (WM_NCLBUTTONDOWN).
     ButtonDown,
+    /// Sur l'icône du titre : WM_SYSCOMMAND SC_CLOSE si l'item Fermer du
+    /// menu système est actif.
+    Close,
 }
 
 /// NC_HandleNCLButtonDblClk : un double-clic à l'endroit `hit` d'une
@@ -537,7 +561,8 @@ pub enum DoubleClick {
 /// bouton d'agrandissement : SC_RESTORE d'une fenêtre réduite ou agrandie,
 /// SC_MAXIMIZE sinon. Sur le bord du haut ou du bas, ReactOS agrandit la
 /// fenêtre en hauteur sur la zone de travail : pas encore. Pas de menu
-/// système (HTSYSMENU). Ailleurs, comme un appui.
+/// système (HTSYSMENU) : fermer, si son item Fermer est actif. Ailleurs, comme
+/// un appui.
 pub fn double_click(hit: u32, style: u32) -> DoubleClick {
     match hit {
         HTCAPTION if style & WS_CAPTION == WS_CAPTION && style & WS_MAXIMIZEBOX != 0 => {
@@ -545,6 +570,7 @@ pub fn double_click(hit: u32, style: u32) -> DoubleClick {
             DoubleClick::Command(if restore { SC_RESTORE } else { SC_MAXIMIZE })
         }
         HTCAPTION => DoubleClick::Nothing,
+        HTSYSMENU => DoubleClick::Close,
         HTTOP | HTBOTTOM => DoubleClick::NotYet,
         _ => DoubleClick::ButtonDown,
     }
@@ -769,6 +795,14 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
             crate::sizemove::nc_lbutton_down(window, wparam, lparam);
             Ok(0)
         }
+        (NC_RBUTTONDOWN, Some(window)) => {
+            crate::sysmenu::nc_rbutton_down(window, wparam);
+            Ok(0)
+        }
+        (abi::user::WM_CONTEXTMENU, Some(window)) => {
+            crate::sysmenu::context_menu(window, lparam);
+            Ok(0)
+        }
         (NC_LBUTTONDBLCLK, Some(window)) => {
             match double_click(wparam, window.state().style) {
                 DoubleClick::Command(command) => {
@@ -779,6 +813,11 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
                     static REPORTED: AtomicBool = AtomicBool::new(false);
                     if !REPORTED.swap(true, Ordering::Relaxed) {
                         log::warn!("win32k: DefWindowProc: a double-click on the top or bottom border: not yet");
+                    }
+                }
+                DoubleClick::Close => {
+                    if crate::sysmenu::close_enabled(window) {
+                        let _ = crate::window::send_message(window, WM_SYSCOMMAND, SC_CLOSE, LParam::Value(lparam));
                     }
                 }
                 DoubleClick::Nothing => {}
@@ -1019,7 +1058,7 @@ mod tests {
         let (style, ex) = (WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE);
         let window = Rect::new(100, 100, 900, 700);
         let client = Rect::new(104, 124, 896, 696);
-        let at = |x, y| nc_hit_test(style, ex, false, window, client, (x, y), &metric);
+        let at = |x, y| nc_hit_test(style, ex, false, false, window, client, (x, y), &metric);
         assert_eq!(at(500, 400), HTCLIENT);
         assert_eq!(at(99, 400), HTNOWHERE, "outside");
         assert_eq!(at(500, 110), HTCAPTION);
@@ -1086,7 +1125,7 @@ mod tests {
         let (style, ex) = (WS_OVERLAPPEDWINDOW, WS_EX_WINDOWEDGE);
         let window = Rect::new(100, 100, 900, 700);
         let client = Rect::new(104, 143, 896, 696);
-        let at = |has_menu, x, y| nc_hit_test(style, ex, has_menu, window, client, (x, y), &metric);
+        let at = |has_menu, x, y| nc_hit_test(style, ex, has_menu, false, window, client, (x, y), &metric);
         assert_eq!(at(true, 500, 130), HTMENU);
         assert_eq!(at(true, 104, 142), HTMENU, "from the client area's left");
         assert_eq!(at(true, 500, 143), HTCLIENT);
@@ -1101,19 +1140,23 @@ mod tests {
         // A dialog: a dialog frame, a caption with only the close button.
         let dialog = WS_POPUP | WS_CAPTION | WS_SYSMENU;
         let client = Rect::new(3, 22, 197, 97);
-        assert_eq!(nc_hit_test(dialog, WS_EX_DLGMODALFRAME, false, window, client, (1, 50), &metric), HTBORDER);
-        assert_eq!(nc_hit_test(dialog, 0, false, window, client, (190, 10), &metric), HTCLOSE);
-        assert_eq!(nc_hit_test(dialog, 0, false, window, client, (165, 10), &metric), HTCAPTION, "no other buttons");
+        assert_eq!(nc_hit_test(dialog, WS_EX_DLGMODALFRAME, false, false, window, client, (1, 50), &metric), HTBORDER);
+        assert_eq!(nc_hit_test(dialog, 0, false, false, window, client, (190, 10), &metric), HTCLOSE);
+        assert_eq!(
+            nc_hit_test(dialog, 0, false, false, window, client, (165, 10), &metric),
+            HTCAPTION,
+            "no other buttons"
+        );
         // A popup without a frame: its client area is the whole window.
-        assert_eq!(nc_hit_test(WS_POPUP, 0, false, window, window, (5, 5), &metric), HTCLIENT);
+        assert_eq!(nc_hit_test(WS_POPUP, 0, false, false, window, window, (5, 5), &metric), HTCLIENT);
         // A bordered popup: its border.
         let inner = Rect::new(1, 1, 199, 99);
-        assert_eq!(nc_hit_test(WS_POPUP | WS_BORDER, 0, false, window, inner, (0, 50), &metric), HTBORDER);
+        assert_eq!(nc_hit_test(WS_POPUP | WS_BORDER, 0, false, false, window, inner, (0, 50), &metric), HTBORDER);
         // Minimized: all caption, but for its buttons.
         let min = WS_OVERLAPPEDWINDOW | WS_MINIMIZE;
-        assert_eq!(nc_hit_test(min, 0, false, window, Rect::new(0, 0, 0, 0), (50, 50), &metric), HTCAPTION);
+        assert_eq!(nc_hit_test(min, 0, false, false, window, Rect::new(0, 0, 0, 0), (50, 50), &metric), HTCAPTION);
         let icon = Rect::new(1, 774, 167, 799);
-        let at = |x: i32, y: i32| nc_hit_test(min, 0, false, icon, Rect::new(1, 774, 1, 774), (x, y), &metric);
+        let at = |x: i32, y: i32| nc_hit_test(min, 0, false, false, icon, Rect::new(1, 774, 1, 774), (x, y), &metric);
         assert_eq!(at(160, 786), HTCLOSE, "its close button");
         assert_eq!(at(135, 786), HTMAXBUTTON);
         assert_eq!(at(115, 786), HTMINBUTTON, "the restore button");
@@ -1121,7 +1164,7 @@ mod tests {
         assert_eq!(at(160, 775), HTCAPTION, "its edges are caption");
         assert_eq!(at(166, 786), HTCAPTION);
         let no_caption = WS_POPUP | WS_MINIMIZE | WS_SYSMENU;
-        assert_eq!(nc_hit_test(no_caption, 0, false, icon, icon, (160, 786), &metric), HTCAPTION, "no buttons");
+        assert_eq!(nc_hit_test(no_caption, 0, false, false, icon, icon, (160, 786), &metric), HTCAPTION, "no buttons");
     }
 
     #[test]
@@ -1134,6 +1177,7 @@ mod tests {
         assert_eq!(double_click(HTCAPTION, WS_POPUP | WS_BORDER | WS_MAXIMIZEBOX), DoubleClick::Nothing);
         assert_eq!(double_click(HTTOP, style), DoubleClick::NotYet);
         assert_eq!(double_click(HTMAXBUTTON, style), DoubleClick::ButtonDown, "a button: pressed again");
+        assert_eq!(double_click(HTSYSMENU, style), DoubleClick::Close, "the icon");
     }
 
     #[test]
@@ -1143,7 +1187,7 @@ mod tests {
         let style = WS_POPUP | WS_BORDER | WS_VSCROLL | WS_HSCROLL;
         let window = Rect::new(0, 0, 200, 100);
         let client = Rect::new(1, 1, 183, 83);
-        let at = |ex: u32, x, y| nc_hit_test(style, ex, false, window, client, (x, y), &metric);
+        let at = |ex: u32, x, y| nc_hit_test(style, ex, false, false, window, client, (x, y), &metric);
         assert_eq!(at(0, 190, 40), HTVSCROLL);
         assert_eq!(at(0, 100, 90), HTHSCROLL);
         assert_eq!(at(0, 190, 90), HTSIZE, "the corner between them");
@@ -1151,9 +1195,9 @@ mod tests {
         assert_eq!(at(0, 0, 40), HTBORDER);
         // On the left: the client area moves right.
         let left = Rect::new(17, 1, 199, 83);
-        let at = |x, y| nc_hit_test(style, WS_EX_LEFTSCROLLBAR, false, window, left, (x, y), &metric);
+        let at = |x, y| nc_hit_test(style, WS_EX_LEFTSCROLLBAR, false, false, window, left, (x, y), &metric);
         assert_eq!((at(5, 40), at(5, 90), at(100, 90)), (HTVSCROLL, HTSIZE, HTHSCROLL));
-        let hidden = nc_hit_test(WS_POPUP | WS_BORDER, 0, false, window, client, (190, 40), &metric);
+        let hidden = nc_hit_test(WS_POPUP | WS_BORDER, 0, false, false, window, client, (190, 40), &metric);
         assert_eq!(hidden, HTNOWHERE, "no bar without its style");
     }
 

@@ -308,6 +308,8 @@ pub const IMPLEMENTED: &[(u32, Handler)] = &[
     (services::NtUserCheckMenuItem, Handler::Status(menu::nt_user_check_menu_item)),
     (services::NtUserDeleteMenu, Handler::Status(menu::nt_user_delete_menu)),
     (services::NtUserSetMenuDefaultItem, Handler::Status(menu::nt_user_set_menu_default_item)),
+    (services::NtUserGetSystemMenu, Handler::Status(menu::nt_user_get_system_menu)),
+    (services::NtUserSetSystemMenu, Handler::Status(menu::nt_user_set_system_menu)),
     (services::NtUserSetMenuContextHelpId, Handler::Status(menu::nt_user_set_menu_context_help_id)),
     (services::NtUserSetMenuFlagRtoL, Handler::Status(menu::nt_user_set_menu_flag_rtol)),
     (services::NtUserThunkedMenuInfo, Handler::Status(menu::nt_user_thunked_menu_info)),

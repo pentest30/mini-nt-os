@@ -138,6 +138,9 @@ pub mod wm {
 
 /// MSGF_MENU: WM_ENTERIDLE from a menu.
 pub const MSGF_MENU: u32 = 2;
+/// MSGF_MAX: the code of WH_MSGFILTER for the loop of a right button down on
+/// a frame (NC_HandleNCRButtonDown).
+pub const MSGF_MAX: u32 = 8;
 
 /// MNC_*: what WM_MENUCHAR answers (its high word).
 pub mod mnc {
@@ -149,6 +152,8 @@ pub mod mnc {
 
 /// TPM_*: TrackPopupMenuEx's flags.
 pub mod tpm {
+    /// The left button chooses an item (0: always).
+    pub const LEFTBUTTON: u32 = 0x0000;
     pub const RECURSE: u32 = 0x0001;
     pub const RIGHTBUTTON: u32 = 0x0002;
     pub const CENTERALIGN: u32 = 0x0004;

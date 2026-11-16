@@ -1126,6 +1126,9 @@ pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUERYOPEN: u32 = 0x0013;
 /// WS_EX_NOACTIVATE: the window is never activated by the system.
 pub const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+/// WM_CONTEXTMENU: the user asks for a context menu; `wParam` the window
+/// clicked, `lParam` the point on the screen (-1, -1 from the keyboard).
+pub const WM_CONTEXTMENU: u32 = 0x007B;
 /// WM_SYSCOMMAND: a command of the window menu or of the frame; `wParam`
 /// SC_* in its upper 12 bits, `lParam` the point on the screen.
 pub const WM_SYSCOMMAND: u32 = 0x0112;

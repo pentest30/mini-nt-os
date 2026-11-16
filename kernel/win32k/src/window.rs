@@ -113,6 +113,9 @@ pub struct WindowState {
     pub id_menu: u32,
     /// Sa barre de menus (SetMenu) ; 0 sans barre.
     pub menu: u32,
+    /// Son menu système (`SystemMenu`, `crate::sysmenu`) ; 0 tant qu'il
+    /// n'est pas créé.
+    pub system_menu: u32,
     /// Ses liens, des handles (0 : aucun).
     pub parent: u32,
     pub owner: u32,
@@ -458,6 +461,7 @@ fn wnd(window: &Window, state: &WindowState) -> Wnd32 {
         },
         prop_list_items: state.prop_list.map_or(0, |(_, _, count)| count),
         sb_info: state.scroll.map_or(0, |bars| heap.server_address(bars.at)),
+        system_menu: state.system_menu,
         ..Wnd32::default()
     }
 }
