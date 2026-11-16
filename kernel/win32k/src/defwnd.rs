@@ -24,6 +24,10 @@
 //!   fenêtre de premier niveau activée et passée devant, puis SC_MOVE ; sur
 //!   un bord ou un coin, SC_SIZE ; sur un bouton du titre, son suivi
 //!   ([`crate::sizemove`]) ;
+//! - WM_NCRBUTTONDOWN (NC_HandleNCRButtonDown) et WM_CONTEXTMENU : un clic
+//!   droit sur le titre ou son icône ouvre le menu de la fenêtre au point
+//!   ([`crate::sysmenu::nc_rbutton_down`], [`crate::sysmenu::context_menu`]) ;
+//!   une fenêtre fille passe WM_CONTEXTMENU à son parent ;
 //! - WM_NCACTIVATE : le cadre peint actif ou inactif
 //!   (`crate::paint::set_frame_active`, NC_HandleNCActivate ; pas de
 //!   peinture pour un `lParam` de -1) ; rend TRUE ;
@@ -531,9 +535,10 @@ fn mouse_activate(window: &Arc<Window>, wparam: u32, lparam: u32) -> u32 {
     }
 }
 
-/// WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK.
+/// WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK, WM_NCRBUTTONDOWN.
 const NC_LBUTTONDOWN: u32 = WM_LBUTTONDOWN - WM_NC_MOUSE_OFFSET;
 const NC_LBUTTONDBLCLK: u32 = abi::user::WM_LBUTTONDBLCLK - WM_NC_MOUSE_OFFSET;
+const NC_RBUTTONDOWN: u32 = abi::user::WM_RBUTTONDOWN - WM_NC_MOUSE_OFFSET;
 
 /// Ce que fait un double-clic sur le cadre (NC_HandleNCLButtonDblClk).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -788,6 +793,14 @@ pub fn def_window_proc(window: Option<&Arc<Window>>, message: u32, wparam: u32, 
         }
         (NC_LBUTTONDOWN, Some(window)) => {
             crate::sizemove::nc_lbutton_down(window, wparam, lparam);
+            Ok(0)
+        }
+        (NC_RBUTTONDOWN, Some(window)) => {
+            crate::sysmenu::nc_rbutton_down(window, wparam);
+            Ok(0)
+        }
+        (abi::user::WM_CONTEXTMENU, Some(window)) => {
+            crate::sysmenu::context_menu(window, lparam);
             Ok(0)
         }
         (NC_LBUTTONDBLCLK, Some(window)) => {

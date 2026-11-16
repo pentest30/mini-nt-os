@@ -25,23 +25,33 @@
 //! impossible ; le menu chargé est gardé tel quel, ReactOS le clone
 //! (IntCloneMenu) avant de détruire l'original.
 //!
+//! Un clic droit sur le titre ou son icône l'ouvre au point du relâchement
+//! ([`nc_rbutton_down`], WM_CONTEXTMENU : [`context_menu`]) ; TrackPopupMenu
+//! d'un menu système le met aussi à l'état de la fenêtre
+//! (`crate::menutrack::track_popup_menu`).
+//!
 //! Pas encore : le bouton de fermeture grisé quand SC_CLOSE l'est, le menu
 //! système d'un bureau (MNF_SYSDESKMN), WM_POPUPSYSTEMMENU, SC_MOVE et
-//! SC_SIZE au clavier.
+//! SC_SIZE au clavier, le menu des barres de défilement (comme ReactOS),
+//! GUI_SYSTEMMENUMODE de GetGUIThreadInfo (TPM_SYSTEM_MENU).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::mem::size_of;
 
-use abi::menu::{hbmmenu, mf, miim, mnf, mns, MenuItemInfoW32};
+use abi::menu::{hbmmenu, mf, miim, mnf, mns, tpm, MenuItemInfoW32, MSGF_MAX};
 use abi::user::{
     sm, CS_NOCLOSE, HTCAPTION, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, WS_EX_MDICHILD,
     WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
 };
+use abi::user::{
+    HTHSCROLL, HTSYSMENU, HTVSCROLL, WM_CONTEXTMENU, WM_MOUSEFIRST, WM_MOUSELAST, WM_QUIT, WM_RBUTTONUP, WS_CHILD,
+};
 
 use crate::callback::MenuResource;
 use crate::gdi::dib::Rect;
-use crate::window::{self, Window};
+use crate::queue::Filter;
+use crate::window::{self, LParam, Window};
 
 /// MF_ENABLED.
 const ENABLED: u32 = 0;
@@ -238,6 +248,109 @@ pub fn init_popup(menu: u32, window: &Window, hit: u32) {
     crate::menu::set_default(menu, default, false);
 }
 
+/// NC_HandleNCRButtonDown, la règle : le bouton droit, enfoncé sur le titre
+/// ou son icône, relâché à l'endroit `hit`, demande WM_CONTEXTMENU sur le
+/// titre, l'icône ou une barre de défilement.
+pub fn releases_to_context_menu(hit: u32) -> bool {
+    matches!(hit, HTCAPTION | HTSYSMENU | HTHSCROLL | HTVSCROLL)
+}
+
+/// DefWindowProc de WM_CONTEXTMENU, la règle : les boutons qui choisissent
+/// un item du menu système ouvert au point d'un clic droit tombé à l'endroit
+/// `hit` (TPM_*) : les deux sur le titre, le gauche sur son icône ; ailleurs,
+/// pas de menu système.
+pub fn context_menu_buttons(hit: u32) -> Option<u32> {
+    match hit {
+        HTCAPTION => Some(tpm::LEFTBUTTON | tpm::RIGHTBUTTON),
+        HTSYSMENU => Some(tpm::LEFTBUTTON),
+        _ => None,
+    }
+}
+
+/// NC_HandleNCRButtonDown : un appui droit sur le cadre de `window`, à
+/// l'endroit `hit`. Sur le titre ou son icône, si la fenêtre a un menu
+/// système ([`get`]), elle prend la souris jusqu'au relâchement du bouton
+/// droit : les messages de la souris sortent de la file sans être
+/// distribués, après les crochets WH_SYSMSGFILTER et WH_MSGFILTER
+/// (MSGF_MAX) ; si elle perd la souris, rien. Relâché sur le titre, l'icône
+/// ou une barre de défilement ([`releases_to_context_menu`]), WM_CONTEXTMENU
+/// (elle, le point de l'écran) lui est envoyé. Un WM_QUIT finit la boucle,
+/// reposté, sans WM_CONTEXTMENU (ReactOS l'envoie alors, au point du
+/// WM_QUIT).
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur (LoadMenu, la procédure de la fenêtre).
+pub fn nc_rbutton_down(window: &Arc<Window>, hit: u32) {
+    if !matches!(hit, HTCAPTION | HTSYSMENU) {
+        return;
+    }
+    let Ok(thread) = crate::convert_current_thread() else { return };
+    if window.pti != thread.server || get(window, false).is_none() {
+        return;
+    }
+    crate::mouse::set_capture(&thread, Some(window));
+    let mouse = Filter { hwnd: 0, min: WM_MOUSEFIRST, max: WM_MOUSELAST };
+    let mut released = None;
+    while let Ok(mut message) = crate::queue::get(&thread, &mouse) {
+        if message.message == WM_QUIT {
+            crate::queue::post_quit(&thread, message.w_param);
+            break;
+        }
+        if crate::hook::call_msg_filter(&thread, &mut message, MSGF_MAX as i32) != 0 {
+            continue;
+        }
+        if message.message == WM_RBUTTONUP {
+            released = Some((message.pt_x, message.pt_y));
+            break;
+        }
+        if thread.queue.with(|queue| queue.capture).0 != window.handle {
+            return;
+        }
+    }
+    if thread.queue.with(|queue| queue.capture).0 == window.handle {
+        crate::mouse::set_capture(&thread, None);
+    }
+    drop(thread);
+    let Some(point) = released else { return };
+    if releases_to_context_menu(crate::defwnd::window_hit_test(window, point)) {
+        let lparam = crate::mouse::make_lparam(point.0, point.1);
+        let _ = window::send_message(window, WM_CONTEXTMENU, window.handle, LParam::Value(lparam));
+    }
+}
+
+/// IntDefWindowProc de WM_CONTEXTMENU : une fenêtre fille le passe à son
+/// parent (`wParam` elle-même, `lparam` le point de l'écran) ; sinon, si le
+/// point tombe sur le titre ou son icône, le menu système de `window`
+/// ([`get`]) s'y ouvre, ses items selon l'état de la fenêtre et l'endroit
+/// ([`init_popup`]), choisis par les boutons de [`context_menu_buttons`]
+/// (IntTrackPopupMenuEx : `crate::menutrack::track_popup_menu`) ; ailleurs
+/// (la zone cliente, le point (-1, -1) du clavier), rien. Le menu des barres
+/// de défilement n'est pas fait, comme chez ReactOS.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans un service système, sans rien tenir. Rappelle le mode
+/// utilisateur ; ne revient qu'à la fin du suivi du menu.
+pub fn context_menu(window: &Arc<Window>, lparam: u32) {
+    let state = window.state();
+    if state.style & WS_CHILD != 0 {
+        if let Some(parent) = window::get(state.parent) {
+            let _ = window::send_message(&parent, WM_CONTEXTMENU, window.handle, LParam::Value(lparam));
+        }
+        return;
+    }
+    let point = (i32::from(lparam as u16 as i16), i32::from((lparam >> 16) as u16 as i16));
+    let hit = crate::defwnd::window_hit_test(window, point);
+    let Some(buttons) = context_menu_buttons(hit) else { return };
+    // The menu is tracked in the window's thread (IntTrackPopupMenuEx).
+    if crate::convert_current_thread().map_or(true, |thread| thread.server != window.pti) {
+        return;
+    }
+    let Some(popup) = get(window, false) else { return };
+    init_popup(popup, window, hit);
+    let _ = crate::menutrack::track_popup_menu(popup, buttons, point, window, None);
+}
+
 /// NC_GetSysPopupPos, la règle : sous l'icône du titre d'une fenêtre de
 /// rectangle `window` (à l'écran) et de bordures `borders`, un carré de la
 /// hauteur du titre moins un ; toute la fenêtre si elle est réduite.
@@ -306,6 +419,20 @@ mod tests {
         assert_eq!(state_of(&states, SC_MAXIMIZE), Some(mf::GRAYED), "no maximize box");
         assert_eq!(state_of(&states, SC_SIZE), Some(mf::GRAYED), "no thick frame");
         assert_eq!(state_of(&states, SC_CLOSE), Some(mf::GRAYED), "CS_NOCLOSE");
+    }
+
+    #[test]
+    fn a_right_click_on_the_caption_or_its_icon_asks_for_the_window_menu() {
+        for hit in [HTCAPTION, HTSYSMENU, HTHSCROLL, HTVSCROLL] {
+            assert!(releases_to_context_menu(hit), "{hit}: WM_CONTEXTMENU");
+        }
+        for hit in [abi::user::HTCLIENT, abi::user::HTCLOSE, abi::user::HTMENU, abi::user::HTNOWHERE] {
+            assert!(!releases_to_context_menu(hit), "{hit}: released elsewhere, nothing");
+        }
+        assert_eq!(context_menu_buttons(HTCAPTION), Some(tpm::LEFTBUTTON | tpm::RIGHTBUTTON), "both from the caption");
+        assert_eq!(context_menu_buttons(HTSYSMENU), Some(tpm::LEFTBUTTON), "the left one from the icon");
+        assert_eq!(context_menu_buttons(HTHSCROLL), None, "no scroll bar menu");
+        assert_eq!(context_menu_buttons(abi::user::HTCLIENT), None, "nothing in the client area");
     }
 
     #[test]

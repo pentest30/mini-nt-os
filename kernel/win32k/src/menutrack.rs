@@ -32,10 +32,15 @@
 //! était ouvert ; ↑ et ↓ ouvrent le menu de l'item. WM_CANCELMODE à la
 //! fenêtre du menu ou à sa propriétaire finit le suivi ([`end_menu_of`]).
 //!
-//! Pas encore : le menu de la fenêtre (HTSYSMENU, Alt+Espace) et
-//! WM_NEXTMENU (aux bouts de la barre, la sélection fait le tour), les
-//! colonnes au clavier (MENU_GetStartOfNextColumn), l'aide (F1, WM_HELP),
-//! MENU_SuspendPopup (le menu s'ouvre à chaque flèche, même répétée).
+//! Le menu de la fenêtre (`crate::sysmenu`) se suit comme une barre d'un
+//! seul item, ouvert sous l'icône du titre : un clic sur l'icône
+//! (HTSYSMENU), Alt+Espace ; un clic droit sur le titre le suit comme un
+//! menu déroulant, au point ([`track_popup_menu`]).
+//!
+//! Pas encore : WM_NEXTMENU (aux bouts de la barre, la sélection fait le
+//! tour), les colonnes au clavier (MENU_GetStartOfNextColumn), l'aide (F1,
+//! WM_HELP), MENU_SuspendPopup (le menu s'ouvre à chaque flèche, même
+//! répétée).
 
 use alloc::sync::Arc;
 
@@ -976,7 +981,9 @@ fn exit_tracking(owner: &Window, popup: bool, flags: u32) {
 /// IntTrackPopupMenuEx : le menu déroulant `menu` montré en (`x`, `y`)
 /// (selon `flags`, à côté de `exclude`) et suivi pour `owner`, une fenêtre
 /// du thread courant ; rend ce que la boucle rend (l'identifiant de l'item
-/// choisi avec TPM_RETURNCMD).
+/// choisi avec TPM_RETURNCMD). Un menu système (MNF_SYSMENU) prend l'état de
+/// sa fenêtre après WM_INITMENUPOPUP, comme ouvert de l'icône du titre
+/// (`crate::sysmenu::init_popup`, HTSYSMENU : Fermer par défaut).
 ///
 /// # Errors
 /// `ERROR_POPUP_ALREADY_ACTIVE` pour un menu déjà montré.
@@ -999,6 +1006,10 @@ pub fn track_popup_menu(
     init_tracking(owner, menu, true, flags);
     if flags & tpm::NONOTIFY == 0 {
         send(owner, wm::INITMENUPOPUP, menu, make_long(0, u32::from(system_flag(menu) != 0)));
+    }
+    // A window menu follows the state of its window, as opened from the icon.
+    if system_flag(menu) != 0 {
+        crate::sysmenu::init_popup(menu, owner, HTSYSMENU);
     }
     let result = if show_popup(menu, flags | tpm::POPUPMENU, (x, y), exclude) {
         track_menu(menu, flags | tpm::POPUPMENU, (0, 0), owner)

@@ -25,7 +25,17 @@
  * 5. the mouse clicks W's icon (112, 112): the menu opens under it, and x
  *    maximizes W;
  * 6. Alt+Space then o: the item of the program, WM_SYSCOMMAND 0x0110;
- * 7. a double click on the maximized W's icon (9, 9) closes it (SC_CLOSE,
+ * 7. a right click in the client area of the maximized W (400, 300):
+ *    user32 sends WM_CONTEXTMENU (W, the point on the screen), and
+ *    DefWindowProc opens no menu;
+ * 8. a right click on its caption (400, 10) (WM_NCRBUTTONDOWN, the mouse
+ *    held until the button is up, then WM_CONTEXTMENU): DefWindowProc opens
+ *    the window menu there (its window at the point, WM_ENTERIDLE), and r
+ *    restores W; when the menu showed, Maximize was grayed, Close the
+ *    default (TrackPopupMenu sets a window menu as from the icon);
+ * 9. a right click on the restored W's caption (250, 110): the menu opens
+ *    there, and the right button chooses Maximize (TPM_RIGHTBUTTON);
+ * 10. a double click on the maximized W's icon (9, 9) closes it (SC_CLOSE,
  *    WM_CLOSE, WM_DESTROY).
  * Each result goes to the debug port (DbgPrint), where the scenario looks
  * for it; a "[sysmenu] keyboard:" or "[sysmenu] mouse:" line asks the
@@ -77,6 +87,13 @@ typedef struct {
 } POINT;
 
 typedef struct {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+
+typedef struct {
     HWND hwnd;
     UINT message;
     WPARAM wParam;
@@ -107,8 +124,11 @@ typedef struct {
 #define SW_HIDE 0
 #define SW_SHOW 5
 #define WM_DESTROY 0x0002
+#define WM_CONTEXTMENU 0x007B
 #define WM_SYSCOMMAND 0x0112
 #define WM_INITMENUPOPUP 0x0117
+#define WM_ENTERIDLE 0x0121
+#define MSGF_MENU 2
 #define SC_MINIMIZE 0xF020
 #define SC_MAXIMIZE 0xF030
 #define SC_CLOSE 0xF060
@@ -148,10 +168,12 @@ __declspec(dllimport) HWND __stdcall GetForegroundWindow(void);
 __declspec(dllimport) UINT __stdcall GetMenuDefaultItem(HMENU menu, UINT by_position, UINT flags);
 __declspec(dllimport) int __stdcall GetMenuItemCount(HMENU menu);
 __declspec(dllimport) UINT __stdcall GetMenuItemID(HMENU menu, int position);
+__declspec(dllimport) BOOL __stdcall GetMenuItemRect(HWND window, HMENU menu, UINT item, RECT *rect);
 __declspec(dllimport) BOOL __stdcall GetMenuItemInfoW(HMENU menu, UINT item, BOOL by_position, MENUITEMINFOW *info);
 __declspec(dllimport) UINT __stdcall GetMenuState(HMENU menu, UINT id, UINT flags);
 __declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT min, UINT max);
 __declspec(dllimport) HMENU __stdcall GetSystemMenu(HWND window, BOOL revert);
+__declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
 __declspec(dllimport) BOOL __stdcall IsIconic(HWND window);
 __declspec(dllimport) BOOL __stdcall IsZoomed(HWND window);
 __declspec(dllimport) HKL __stdcall LoadKeyboardLayoutW(const WCHAR *klid, UINT flags);
@@ -166,9 +188,10 @@ __declspec(dllimport) BOOL __stdcall SwitchDesktop(HDESK desktop);
 __declspec(dllimport) BOOL __stdcall TranslateMessage(const MSG *message);
 
 static HWND w, b;
-/* The step whose WM_SYSCOMMAND W waits for (3 to 7), and the window menus
-   opened so far. */
-static int stage = 3, popups;
+/* The step whose WM_SYSCOMMAND W waits for (3 to 6, then 8 to 10), the
+   window menus opened so far, the last one whose place was told, and the
+   WM_CONTEXTMENU received. */
+static int stage = 3, popups, placed, contexts;
 
 void *memset(void *destination, int value, unsigned int count)
 {
@@ -232,12 +255,55 @@ static void command_done(UINT command)
         break;
     case 6:
         DbgPrint("[sysmenu] step 6: WM_SYSCOMMAND %x, the item added\n", command);
+        DbgPrint("[sysmenu] mouse: a right click in the client area\n");
+        /* Step 7 has no command. */
+        stage = 8;
+        return;
+    case 8:
+        DbgPrint("[sysmenu] step 8: WM_SYSCOMMAND %x, zoomed %d\n", command, IsZoomed(w));
+        shown(8);
+        DbgPrint("[sysmenu] mouse: a right click on the restored caption\n");
+        break;
+    case 9:
+        DbgPrint("[sysmenu] step 9: WM_SYSCOMMAND %x, zoomed %d\n", command, IsZoomed(w));
         DbgPrint("[sysmenu] mouse: a double click on the icon\n");
         break;
     default:
         break;
     }
     stage++;
+}
+
+/* WM_CONTEXTMENU of W: what DefWindowProc did with it (the window menus it
+   opened, until it returned). */
+static LRESULT context_menu(HWND window, WPARAM wp, LPARAM lp)
+{
+    int before = popups;
+    LRESULT result = DefWindowProcW(window, WM_CONTEXTMENU, wp, lp);
+
+    contexts++;
+    DbgPrint("[sysmenu] step %d: WM_CONTEXTMENU W %d at (%d, %d), menus opened %d\n", contexts == 1 ? 7 : stage,
+             (HWND)wp == w, (int)(short)(lp & 0xFFFF), (int)(short)((lp >> 16) & 0xFFFF), popups - before);
+    if (contexts == 1)
+        DbgPrint("[sysmenu] mouse: a right click on the caption\n");
+    return result;
+}
+
+/* WM_ENTERIDLE of a window menu opened by a right click (steps 8 and 9),
+   once it shows: where its window is, and Maximize in it (on the screen:
+   GetMenuItemRect without a window takes the menu's). */
+static void menu_shown(HWND popup)
+{
+    RECT place, maximize;
+
+    if (placed == popups || (stage != 8 && stage != 9))
+        return;
+    placed = popups;
+    GetWindowRect(popup, &place);
+    if (!GetMenuItemRect(0, GetSystemMenu(w, 0), 4, &maximize))
+        maximize.left = maximize.top = maximize.right = maximize.bottom = -1;
+    DbgPrint("[sysmenu] step %d: the menu at (%d, %d); Maximize (%d, %d)-(%d, %d)\n", stage, place.left, place.top,
+             maximize.left, maximize.top, maximize.right, maximize.bottom);
 }
 
 static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM wp, LPARAM lp)
@@ -253,12 +319,18 @@ static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM wp, LPARAM 
             DbgPrint("[sysmenu] popup %d: the window menu %d\n", popups, (HMENU)wp == GetSystemMenu(w, 0));
         }
         return 0;
+    case WM_ENTERIDLE:
+        if (wp == MSGF_MENU)
+            menu_shown((HWND)lp);
+        return 0;
+    case WM_CONTEXTMENU:
+        return context_menu(window, wp, lp);
     case WM_SYSCOMMAND:
         /* What opens the menu is not a step. */
         if ((wp & 0xFFF0) == SC_KEYMENU || (wp & 0xFFF0) == SC_MOUSEMENU)
             return DefWindowProcW(window, message, wp, lp);
-        if (stage == 7) {
-            DbgPrint("[sysmenu] step 7: WM_SYSCOMMAND %x\n", wp & 0xFFF0);
+        if (stage == 10) {
+            DbgPrint("[sysmenu] step 10: WM_SYSCOMMAND %x\n", wp & 0xFFF0);
             return DefWindowProcW(window, message, wp, lp);
         }
         if (wp == MINO_COMMAND) {

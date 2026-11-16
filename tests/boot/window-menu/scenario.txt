@@ -20,7 +20,15 @@
 # 5. A click on W's icon (HTSYSMENU, SC_MOUSEMENU + HTSYSMENU) opens it
 #    under the icon; x maximizes W; Close the default (from the icon).
 # 6. Alt+Space, o: the program's item (WM_SYSCOMMAND 0x0110).
-# 7. A double click on the maximized W's icon: SC_CLOSE, W destroyed.
+# 7. A right click in the maximized W's client area: WM_CONTEXTMENU from
+#    user32, no menu (sysmenu::context_menu, HTCLIENT).
+# 8. A right click on its caption (WM_NCRBUTTONDOWN: sysmenu::nc_rbutton_down,
+#    then WM_CONTEXTMENU): the menu opens at the point; r restores W;
+#    Maximize grayed, Close the default (menutrack::track_popup_menu,
+#    HTSYSMENU).
+# 9. A right click on the restored W's caption, then the right button on
+#    Maximize (TPM_RIGHTBUTTON from the caption): W maximized.
+# 10. A double click on the maximized W's icon: SC_CLOSE, W destroyed.
 features = test-smss
 requires = userland, native
 initial-command = SYSMENU1.EXE
@@ -37,8 +45,17 @@ keys = [sysmenu] popup 2: the window menu 1 => r
 keys = [sysmenu] mouse: the icon => move:25,-168 move:25,-168 move:25,-169 move:25,-169 press:1 release
 keys = [sysmenu] popup 3: the window menu 1 => x
 keys = [sysmenu] keyboard: Alt+Space and o => alt-spc o
-# Maximized (-4, -4, 1288 x 808): its icon at (0, 0)-(18, 18).
-keys = [sysmenu] mouse: a double click on the icon => move:-103,-103 press:1 release press:1 release
+# Maximized (-4, -4, 1288 x 808): (400, 300) in its client area, (400, 10)
+# on its caption.
+keys = [sysmenu] mouse: a right click in the client area => move:144,94 move:144,94 press:2 release
+keys = [sysmenu] mouse: a right click on the caption => move:0,-145 move:0,-145 press:2 release
+keys = [sysmenu] step 8: the menu at => r
+# Restored (100, 100, 400 x 300): (250, 110) on its caption.
+keys = [sysmenu] mouse: a right click on the restored caption => move:-150,100 press:2 release
+# The menu at (250, 110), Maximize (253, 181)-(405, 198): (329, 189).
+keys = [sysmenu] step 9: the menu at => move:79,79 press:2 release
+# Maximized again: its icon at (0, 0)-(18, 18).
+keys = [sysmenu] mouse: a double click on the icon => move:-160,-90 move:-160,-90 press:1 release press:1 release
 
 expect = [sysmenu] step 1: W active 1; SW_HIDE: active B 1, foreground B 1, focus B 1
 expect = [sysmenu] step 1: SW_SHOW: active W 1
@@ -56,8 +73,18 @@ expect = [sysmenu] step 5: WM_SYSCOMMAND f030, zoomed 1
 expect = [sysmenu] step 5: the menu showed Restore grayed 1, Minimize grayed 0, Maximize grayed 0, default f060
 expect = [sysmenu] popup 4: the window menu 1
 expect = [sysmenu] step 6: WM_SYSCOMMAND 110, the item added
+expect = [sysmenu] step 7: WM_CONTEXTMENU W 1 at (400, 300), menus opened 0
 expect = [sysmenu] popup 5: the window menu 1
-expect = [sysmenu] step 7: WM_SYSCOMMAND f060
+expect = [sysmenu] step 8: the menu at (400, 10); Maximize (403, 81)-(555, 98)
+expect = [sysmenu] step 8: WM_CONTEXTMENU W 1 at (400, 10), menus opened 1
+expect = [sysmenu] step 8: WM_SYSCOMMAND f120, zoomed 0
+expect = [sysmenu] step 8: the menu showed Restore grayed 0, Minimize grayed 0, Maximize grayed 1, default f060
+expect = [sysmenu] popup 6: the window menu 1
+expect = [sysmenu] step 9: the menu at (250, 110); Maximize (253, 181)-(405, 198)
+expect = [sysmenu] step 9: WM_CONTEXTMENU W 1 at (250, 110), menus opened 1
+expect = [sysmenu] step 9: WM_SYSCOMMAND f030, zoomed 1
+expect = [sysmenu] popup 7: the window menu 1
+expect = [sysmenu] step 10: WM_SYSCOMMAND f060
 expect = [sysmenu] W destroyed
 expect = [sysmenu] done
 forbid = *** STOP:
