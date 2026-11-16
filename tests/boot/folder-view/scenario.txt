@@ -1,0 +1,41 @@
+# A folder window of explorer (browseui's CShellBrowser), opened by Win+R
+# and "C:\WINDOWS" after the logon (see the `logon` scenario). It opened
+# with an empty view: comctl32 of ReactOS asks SPI_GETNONCLIENTMETRICS with
+# Vista's NONCLIENTMETRICSW (504 bytes, iPaddedBorderWidth after XP's 500);
+# win32k refused it, the address bar's ReBar made its font of garbage
+# (lfMenuFont never written), its band's header came out millions of pixels
+# wide and the ReBar 32767 high, so the folder view (SHELLDLL_DefView) was
+# placed below it, off the window. The Run box and the address bar also ask
+# NtUserGetComboBoxInfo (CB_GETCOMBOBOXINFO to the ComboBox).
+#
+# The window at (0, 0)-(958, 598): the address bar's edit, white (where the
+# window's face was gray), the list of the folder's files, white (it was
+# COLOR_BTNFACE), the status bar's face below it. The window takes a while to
+# open (shell32 and browseui from the ATA disk): `screen-wait`.
+#
+# Run starts a second explorer.exe, which hands the path to the shell and
+# ends (0 windows): not forbidden here.
+#
+# `interactive`: the probe waits for smss for good (the reboot ends the
+# first boot).
+features = test-smss, interactive
+requires = userland, native
+shell = explorer
+disk = system
+boots = 2
+cpus = default
+timeout = 420
+
+expect = of explorer.exe
+expect = Documents and Settings\Administrator\Desktop\*.*
+keys = Documents and Settings\Administrator\Desktop\*.* => pause:8000 meta_l-r pause:6000 "C:\WINDOWS" ret
+expect = ReadDirectoryChangesW for 'C:\WINDOWS' failed
+screen = 500 90 FFFFFF
+screen = 500 350 FFFFFF
+screen = 700 300 FFFFFF
+screen = 300 586 D4D0C8
+screen-wait = 60
+
+forbid = *** STOP:
+forbid = of explorer.exe (NtStatus
+forbid = sys: NtUserGetComboBoxInfo

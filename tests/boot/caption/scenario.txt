@@ -1,0 +1,42 @@
+# LockWindowUpdate and DrawCaption (tests/native/caption1.c, MinGW, linked
+# to ReactOS's kernel32, user32 and gdi32): CAPTION1.EXE takes the place of
+# winlogon.exe and takes WinSta0\Default. explorer's folder window locks
+# itself while it makes its view (browseui's CShellBrowser::BrowseToPath)
+# and unlocks only if the lock was taken; user32 repaints a caption after
+# WM_SETTEXT by NtUserDrawCaption (DC_DRAWCAPTIONMD). Neither was
+# implemented: the caption kept its old title until the next WM_NCPAINT.
+# 1. W's caption wiped black: SetWindowText repaints it;
+# 2. LockWindowUpdate(W), then V refused; the clip boxes of W's DCs (one
+#    taken before the lock) and of its child C empty (NULLREGION), not with
+#    DCX_LOCKWINDOWUPDATE nor V's (SIMPLEREGION); a PatBlt in W leaves its
+#    white; its caption, wiped before the lock, stays black after
+#    SetWindowText;
+# 3. LockWindowUpdate(NULL): W's whole client area to update, the DC taken
+#    before paints again, WM_PAINT comes, the caption is repainted;
+# 4. unlocking without a lock (TRUE, as Wine), V locked and unlocked, a bad
+#    handle (ERROR_INVALID_WINDOW_HANDLE), a destroyed window gives the lock
+#    up;
+# 5. DrawCaption in (20, 500)-(220, 518) of the screen's DC: COLOR_ACTIVECAPTION,
+#    COLOR_INACTIVECAPTION, COLOR_BTNFACE (DC_INBUTTON), the gradient
+#    (DC_GRADIENT), W's text (DC_TEXT; none without a window), its icon
+#    (DC_ICON); no rectangle (ERROR_NOACCESS), a bad window, a bad DC
+#    (ERROR_INVALID_HANDLE).
+features = test-smss
+requires = userland, native
+initial-command = CAPTION1.EXE
+cpus = default, intel
+timeout = 120
+
+expect = [caption] step 1: the caption wiped 000000, after SetWindowText black 0
+expect = [caption] step 2: LockWindowUpdate W 1, V 0
+expect = [caption] step 2: clip boxes W 1, taken before 1, its child 1, DCX_LOCKWINDOWUPDATE 2, V 2; PatBlt leaves ffffff, the caption after SetWindowText 000000
+expect = [caption] step 3: LockWindowUpdate(NULL) 1; to update 1, the client area 1; the DC taken before 2; WM_PAINT 1, the caption black 0
+expect = [caption] step 4: unlocking unlocked 1; V 1, then 1; a bad handle 0 (1400); a destroyed window 1, then V 1, 1
+expect = [caption] step 5: DrawCaption active 1 1, inactive 1 1, in a button 1 1
+expect = [caption] step 5: DC_GRADIENT 1: from the caption's colour 1, lighter at the right 1
+expect = [caption] step 5: W's text 1 1, without a window 1 0, its icon 1 1, neither 1 0
+expect = [caption] step 5: no rectangle 0 (998), a bad window 0 (1400), a bad DC 0 (6)
+expect = [caption] done
+forbid = *** STOP:
+forbid = sys: NtUserLockWindowUpdate (0x11c7) is not implemented
+forbid = sys: NtUserDrawCaption (0x1168) is not implemented

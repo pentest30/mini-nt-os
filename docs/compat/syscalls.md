@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 190 | 737 |
+| win32k | 193 | 737 |
 
 ## ntoskrnl
 
@@ -676,7 +676,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1165` | `NtUserDragDetect` | 3 |  |
 | `0x1166` | `NtUserDragObject` | 5 |  |
 | `0x1167` | `NtUserDrawAnimatedRects` | 4 |  |
-| `0x1168` | `NtUserDrawCaption` | 4 |  |
+| `0x1168` | `NtUserDrawCaption` | 4 | ✅ |
 | `0x1169` | `NtUserDrawCaptionTemp` | 7 |  |
 | `0x116a` | `NtUserDrawIconEx` | 11 | ✅ |
 | `0x116b` | `NtUserDrawMenuBarTemp` | 5 |  |
@@ -710,7 +710,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1187` | `NtUserGetClipboardSequenceNumber` | 0 |  |
 | `0x1188` | `NtUserGetClipboardViewer` | 0 |  |
 | `0x1189` | `NtUserGetClipCursor` | 1 |  |
-| `0x118a` | `NtUserGetComboBoxInfo` | 2 |  |
+| `0x118a` | `NtUserGetComboBoxInfo` | 2 | ✅ |
 | `0x118b` | `NtUserGetControlBrush` | 3 | ✅ |
 | `0x118c` | `NtUserGetControlColor` | 4 | ✅ |
 | `0x118d` | `NtUserGetCPD` | 3 |  |
@@ -771,7 +771,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c4` | `NtUserKillTimer` | 2 | ✅ |
 | `0x11c5` | `NtUserLoadKeyboardLayoutEx` | 7 | ✅ |
 | `0x11c6` | `NtUserLockWindowStation` | 1 |  |
-| `0x11c7` | `NtUserLockWindowUpdate` | 1 |  |
+| `0x11c7` | `NtUserLockWindowUpdate` | 1 | ✅ |
 | `0x11c8` | `NtUserLockWorkStation` | 0 |  |
 | `0x11c9` | `NtUserMapVirtualKeyEx` | 4 |  |
 | `0x11ca` | `NtUserMenuItemFromPoint` | 4 | ✅ |
