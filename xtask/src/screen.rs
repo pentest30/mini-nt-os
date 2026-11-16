@@ -288,6 +288,12 @@ pub fn mouse_command(token: &str) -> Option<String> {
     }
 }
 
+/// `pause:MS`: how long to wait, in milliseconds, before the next token (a
+/// window the keys before it open, say).
+pub fn pause_ms(token: &str) -> Option<u64> {
+    token.strip_prefix("pause:")?.parse().ok()
+}
+
 /// From `info mice`: the index of the PS/2 mouse, and whether it is the
 /// current one (`*`), which `mouse_move` and `mouse_button` drive.
 pub fn ps2_mouse(info: &str) -> Option<(u32, bool)> {
@@ -348,11 +354,15 @@ impl Session {
 /// ([`key_duration`]) before the next. A mouse token ([`mouse_command`])
 /// drives QEMU's PS/2 mouse instead: the first one selects it (`info mice`,
 /// `mouse_set`) and sends an empty move (QEMU loses the first mouse event of
-/// a monitor connection).
+/// a monitor connection). A pause ([`pause_ms`]) waits.
 pub fn send_keys(monitor: &Monitor, keys: &[String]) -> Result<()> {
     let mut session = Session::open(monitor)?;
     let mut mouse_ready = false;
     for key in keys {
+        if let Some(ms) = pause_ms(key) {
+            std::thread::sleep(Duration::from_millis(ms));
+            continue;
+        }
         match mouse_command(key) {
             Some(command) => {
                 if !mouse_ready {
@@ -395,6 +405,9 @@ mod tests {
     #[test]
     fn mouse_tokens_become_monitor_commands() {
         assert_eq!(mouse_command("move:12,-7").as_deref(), Some("mouse_move 12 -7"));
+        assert_eq!(pause_ms("pause:1500"), Some(1500));
+        assert_eq!(pause_ms("pause:"), None);
+        assert_eq!(pause_ms("p"), None, "a key");
         assert_eq!(mouse_command("press:1").as_deref(), Some("mouse_button 1"));
         assert_eq!(mouse_command("release").as_deref(), Some("mouse_button 0"));
         assert_eq!(mouse_command("wheel:-1").as_deref(), Some("mouse_move 0 0 -1"));

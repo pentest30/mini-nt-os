@@ -269,7 +269,11 @@ pour une fenêtre à procédure du serveur. La liste n'était pas créée, CAuto
 SHAutoComplete appelait une méthode virtuelle pure de l'objet détruit. Faits : SB_CTL et le sous-classement d'une
 fenêtre à procédure du serveur (étape 33 de [`m6-fenetres.md`](m6-fenetres.md), scénario `scroll-control`). La
 fenêtre « My Documents » s'ouvre alors, avec son titre, ses menus et sa barre d'outils ; sa barre d'adresse et sa vue
-des fichiers restent vides (NtUserLockWindowUpdate et NtUserDrawCaption manquent, entre autres). Pas encore, vus en chemin : NtUserTrackMouseEvent, SPI_GETMENUSHOWDELAY
+des fichiers restaient vides : le `comctl32` de ReactOS demande SPI_GETNONCLIENTMETRICS avec la structure de Vista
+(504 octets), que Mino refusait, et le ReBar de la barre d'adresse se faisait une police de n'importe quoi, haute
+de 32767 pixels, qui poussait la vue hors de la fenêtre. Accepter les 504 octets, NtUserGetComboBoxInfo,
+NtUserLockWindowUpdate et NtUserDrawCaption : la fenêtre montre sa barre d'adresse et ses fichiers (étape 36 de
+[`m6-fenetres.md`](m6-fenetres.md), scénarios `rebar`, `caption`, `folder-view`). Pas encore, vus en chemin : NtUserTrackMouseEvent, SPI_GETMENUSHOWDELAY
 (0x6A : le sous-menu s'ouvre sans délai), NtUserGetDoubleClickTime, NtUserCallNoParam 9, NtUserGetThreadState 0xB.
 
 **Ctrl+Alt+Suppr : les raccourcis clavier.** L'écran de ReactOS qui demande Ctrl+Alt+Suppr (l'invite de `msgina`
@@ -288,16 +292,16 @@ Winlogon) ; « Lock Computer » donne « Computer Locked… Press Ctrl-Alt-Del t
 marchent : Win+R ouvre « Run ». La fenêtre du shell reçoit Ctrl+Échap (NtUserSetShellWindowEx :
 UserRegisterHotKey(SC_TASKLIST), WM_SYSCOMMAND SC_TASKLIST) ; pour ouvrir le menu Démarrer, la barre des tâches
 attend HSHELL_TASKMAN de ses crochets du shell (RegisterShellHookWindow, pas encore). Vus en chemin, pas faits :
-EnableWindow (NtUserCallTwoParam 0x60, TWOPARAM_ROUTINE_ENABLEWINDOW), NtUserAlterWindowStyle, NtUserGetComboBoxInfo,
+EnableWindow (NtUserCallTwoParam 0x60, TWOPARAM_ROUTINE_ENABLEWINDOW), NtUserAlterWindowStyle,
 Tab dans la boîte « Security » (le focus ne change pas : DefWindowProc de WM_KEYDOWN, journalisé), le texte
 « Logon Information » vide.
 
 ## La suite
 
 Le premier critère du M6 est atteint ; restent le changement de résolution (troisième critère : `bochs-dispi`,
-ChangeDisplaySettings, le panneau Affichage). Pour le shell : la fenêtre de dossier qu'ouvre un item du menu Démarrer
-(sa barre d'adresse et sa vue des fichiers, vides : LockWindowUpdate, DrawCaption, puis ce que `browseui` et `shell32`
-demandent) ; les fenêtres de crochet du shell (RegisterShellHookWindow : les boutons de la barre des tâches,
+ChangeDisplaySettings, le panneau Affichage). Pour le shell : ce que la fenêtre de dossier demande encore
+(SetActiveWindow, EnableWindow, SetParent, EnumDisplayMonitors, les chemins de GDI, ReadDirectoryChangesW ; étape 36
+de [`m6-fenetres.md`](m6-fenetres.md)) ; les fenêtres de crochet du shell (RegisterShellHookWindow : les boutons de la barre des tâches,
 HSHELL_TASKMAN pour Ctrl+Échap) ; EnableWindow, Tab dans les boîtes de `msgina` ; la zone de travail (SPI_SETWORKAREA), FindWindowEx, SetParent, TrackMouseEvent ; le papier peint
 (SPI_SETDESKWALLPAPER), la station des services, le presse-papiers, les notifications, `NtNotifyChangeKey`.
 

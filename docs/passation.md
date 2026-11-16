@@ -1,5 +1,64 @@
 # Notes de passation
 
+- **Le clic droit sur le titre** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 38 ; demandé après l'étape 37). Un clic droit sur le titre ou l'icône d'une fenêtre ouvre son menu système au
+  point du relâchement : WM_NCRBUTTONDOWN (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la fenêtre prend la
+  souris jusqu'au relâchement du bouton droit, puis WM_CONTEXTMENU si le bouton est relâché sur le titre, l'icône ou
+  une barre de défilement) ; WM_CONTEXTMENU d'une fenêtre de premier niveau (`sysmenu::context_menu` : sur le titre ou
+  l'icône, MENU_InitSysMenuPopup puis `menutrack::track_popup_menu` au point, les deux boutons depuis le titre, le
+  gauche depuis l'icône ; une fenêtre fille le passe à son parent, ce que `user32` fait déjà) ; TrackPopupMenu d'un
+  menu MNF_SYSMENU le met à l'état de sa fenêtre comme ouvert de l'icône (Close par défaut). `user32` fait lui-même
+  WM_RBUTTONUP → WM_CONTEXTMENU dans la zone cliente. Constantes : `WM_CONTEXTMENU`, `MSGF_MAX`, `TPM_LEFTBUTTON`.
+  Scénario `window-menu` étendu (étapes 7 à 9 de `tests/native/sysmenu1.c` : la zone cliente sans menu, le titre de
+  la fenêtre agrandie puis r, le titre de la fenêtre rétablie puis le bouton droit sur Maximize ; la place du menu par
+  WM_ENTERIDLE et GetMenuItemRect sans fenêtre), AMD et Intel ; test hôte `sysmenu`. Six mutations détectées (WM_NCRBUTTONDOWN ignoré, le relâchement sur le titre, le menu
+  depuis la zone cliente, le menu ailleurs qu'au point, le bouton droit refusé, TrackPopupMenu sans l'état de la
+  fenêtre). Lint propre ; toute la suite : 1160 tests hôte, 131 runs de démarrage sur 131 (rostests 44/84 et 16/29,
+  aux planchers). `main` fusionné ensuite (PR 138, la fenêtre de dossier, qui a pris l'étape 36 : nos étapes sont
+  devenues 37 et 38) : lint propre, 1162 tests hôte, 136 runs sur 136 (`rebar`, `caption`, `folder-view` compris),
+  rostests 44/84 et 16/29.
+  **Suite** : SC_MOVE et SC_SIZE au clavier, ←/→ entre le menu système et la barre, le bouton de fermeture grisé
+  quand Close l'est ; SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS
+  l'active) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du
+  clavier) ; vérifier sous VirtualBox avec le Bloc-notes.
+
+- **Le menu de la fenêtre ; cacher la fenêtre active cède l'activation** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 37 ; demandé après la PR 131, la suite qu'elle annonçait).
+  SW_HIDE de la fenêtre active passe l'activation et le clavier comme SW_MINIMIZE (`winpos::show_window`,
+  co_WinPosShowWindow). Le menu système (`win32k::sysmenu` : IntGetSystemMenu, MENU_GetSystemMenu,
+  IntSetSystemMenu, MENU_InitSysMenuPopup) : un menu d'un item dans `WND.SystemMenu`, son sous-menu le gabarit
+  SYSMENU de `user32` (rappel LoadMenu) avec les glyphes HBMMENU_POPUP_*, MNS_CHECKORBMP, Close par défaut ;
+  NtUserGetSystemMenu, NtUserSetSystemMenu ; HTSYSMENU (l'icône du titre, `defwnd::nc_hit_test`) ; le suivi
+  (`menutrack` : le clic sur l'icône, SC_MOUSEMENU + HTSYSMENU ; Alt+Espace et une fenêtre réduite ou sans barre,
+  SC_KEYMENU ; le menu sous l'icône, NC_GetSysPopupPos ; un second clic le referme ; le double-clic ferme la
+  fenêtre) ; les glyphes de Marlett dans le menu (`menupopup`, `cxTextAlign`). Écarts voulus (créé au premier
+  besoin, pas cloné, WM_INITMENU, le double-clic dans la boucle) dans l'étape 37. Scénario `window-menu`
+  (`tests/native/sysmenu1.c`, AMD et Intel ; cinq mutations détectées) ; tests hôte (`sysmenu`, `menupopup`,
+  `defwnd`). `gui` attend maintenant la désactivation de sa fenêtre cachée (seule de son thread : WM_NCACTIVATE,
+  WM_ACTIVATE inactif, WM_KILLFOCUS). Lint propre ; toute la suite : 1159 tests hôte, 131 runs de démarrage sur 131
+  (rostests 44/84 et 16/29, aux planchers). La suite : l'entrée du clic droit sur le titre, au-dessus.
+- **La fenêtre de dossier montre ses fichiers** (`claude/folder-view`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 36 ; demandé : « sa barre d'adresse et sa liste de
+  fichiers sont vides (NtUserLockWindowUpdate et NtUserDrawCaption manquent) »). La cause n'était ni l'un ni
+  l'autre. Le `comctl32` de ReactOS demande SPI_GETNONCLIENTMETRICS avec la NONCLIENTMETRICSW de Vista (504 octets),
+  que Mino refusait comme XP. Le ReBar de la barre d'adresse se faisait alors une police de n'importe quoi :
+  l'en-tête de sa bande était large de millions de pixels, le ReBar haut de 32767, et la vue (SHELLDLL_DefView)
+  était placée hors de la fenêtre. **Écart voulu avec XP** : 500 et 504 octets acceptés, comme ReactOS, qui ne lit
+  pas `cbSize` (`sys::user`, `give_non_client_metrics`). Faits en chemin : NtUserGetComboBoxInfo (CB_GETCOMBOBOXINFO
+  envoyé même à un ComboBox du système, un écart voulu), NtUserLockWindowUpdate (`win32k::dce::lock_window_update` :
+  une fenêtre à la fois, DC et cadre sans rien à peindre, la fenêtre invalidée en entier au déverrouillage ; ReactOS
+  n'a qu'un stub), NtUserDrawCaption (`win32k::paint::draw_caption`, `nonclient::caption_ops` : `DC_DRAWCAPTIONMD`
+  repeint le cadre après WM_SETTEXT ; un titre dans un rectangle). `xtask` : le jeton `pause:MS` des `keys`.
+  Tests : scénarios `rebar` (`tests/native/rebar1.c`), `caption` (`tests/native/caption1.c`), AMD et Intel ;
+  `folder-view` (Win+R, `C:\WINDOWS` après le logon : barre d'adresse et vue blanches, barre d'état) ; hôte
+  (`nonclient::caption_ops`, `xtask` : `pause_ms`) ; neuf mutations (détail dans l'étape 36). La barre d'état de
+  `comctl32` a maintenant sa vraie police (`lfStatusFont`) : les pixels attendus de `notepad` sont refaits d'après
+  les avances de Tahoma. Suite de démarrage : 128 runs sur 132 ; `rostests` 43/84 et `rostests-kernel32` 15/29
+  sous leurs planchers, comme `main` sur cette machine (l'apitest Pipes est une course : ERROR_PIPE_LISTENING),
+  `ntfs-readonly` sauté. **Suite** : ce que la
+  fenêtre de dossier demande encore (NtUserSetActiveWindow, EnableWindow, NtUserSetParent, NtUserEnumDisplayMonitors,
+  les chemins de GDI, NtNotifyChangeDirectoryFile), NtUserDrawCaptionTemp.
+
 - **Réduire, agrandir, rétablir** (`claude/stoic-margulis-2f5356`, PR 131, partie de `claude/new-session-696xfc`
   `509ad05`, puis fusionnée avec la PR 134 le 2026-11-15 ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 35 ; demandé parce que sous VirtualBox les boutons Réduire

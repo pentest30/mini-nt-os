@@ -436,6 +436,18 @@ pub const DCX_USESTYLE: u32 = 0x0001_0000;
 pub const DCX_KEEPCLIPRGN: u32 = 0x0004_0000;
 /// DCX_NOCLIPCHILDREN: from the cache, without clipping the children.
 pub const DCX_NOCLIPCHILDREN: u32 = 0x0008_0000;
+/// DC_*: what DrawCaption draws. DC_NOVISIBLE and DC_DRAWCAPTIONMD are
+/// win32k's own (undocuser.h of ReactOS): draw even an invisible window, and
+/// the whole caption bar of the window (user32's UserPaintCaption, after
+/// WM_SETTEXT).
+pub const DC_ACTIVE: u32 = 0x0000_0001;
+pub const DC_SMALLCAP: u32 = 0x0000_0002;
+pub const DC_ICON: u32 = 0x0000_0004;
+pub const DC_TEXT: u32 = 0x0000_0008;
+pub const DC_INBUTTON: u32 = 0x0000_0010;
+pub const DC_GRADIENT: u32 = 0x0000_0020;
+pub const DC_NOVISIBLE: u32 = 0x0000_0800;
+pub const DC_DRAWCAPTIONMD: u32 = 0x1000_0000;
 /// RDW_*: what RedrawWindow does. RDW_CLIPCHILDREN and RDW_NOUPDATEDIRTY are
 /// win32k's own.
 pub const RDW_INVALIDATE: u32 = 0x0001;
@@ -1114,6 +1126,9 @@ pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUERYOPEN: u32 = 0x0013;
 /// WS_EX_NOACTIVATE: the window is never activated by the system.
 pub const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+/// WM_CONTEXTMENU: the user asks for a context menu; `wParam` the window
+/// clicked, `lParam` the point on the screen (-1, -1 from the keyboard).
+pub const WM_CONTEXTMENU: u32 = 0x007B;
 /// WM_SYSCOMMAND: a command of the window menu or of the frame; `wParam`
 /// SC_* in its upper 12 bits, `lParam` the point on the screen.
 pub const WM_SYSCOMMAND: u32 = 0x0112;

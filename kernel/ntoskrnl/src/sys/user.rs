@@ -83,11 +83,42 @@ fn give_parameter(pv: u32, size: u32, bytes: &[u8], with_cb_size: bool) -> NtSta
     NtStatus(u32::from(ke::usermem::copy_to_user(u64::from(pv), bytes).is_ok()))
 }
 
+/// La taille d'un NONCLIENTMETRICSW de Vista : celui d'XP suivi
+/// d'iPaddedBorderWidth.
+const NON_CLIENT_METRICS_VISTA: u32 = 504;
+
+/// SPI_GETNONCLIENTMETRICS : écrit en `pv` les métriques `bytes` (le
+/// NONCLIENTMETRICSW d'XP, 500 octets) dans la structure de l'appelant, dont
+/// le `cbSize` dit celui d'XP ou celui de Vista ; pour Vista,
+/// iPaddedBorderWidth vaut 0. `uiParam` (`size`), s'il n'est pas nul, doit
+/// dire la même taille. Écart voulu avec XP, qui refuse la taille de Vista :
+/// le `comctl32` de ReactOS est compilé avec elle (le ReBar en tire sa
+/// police, `lfMenuFont`), et ReactOS copie sa structure sans lire `cbSize`.
+/// Une autre taille : FALSE et `ERROR_INVALID_PARAMETER`.
+fn give_non_client_metrics(pv: u32, size: u32, bytes: &[u8]) -> NtStatus {
+    let fail = || {
+        let _ = win32k::set_last_error(abi::winerror::ERROR_INVALID_PARAMETER);
+        NtStatus(0)
+    };
+    let mut cb_size = [0u8; 4];
+    if ke::usermem::copy_from_user(&mut cb_size, u64::from(pv)).is_err() {
+        return fail();
+    }
+    let cb_size = u32::from_le_bytes(cb_size);
+    if (cb_size != bytes.len() as u32 && cb_size != NON_CLIENT_METRICS_VISTA) || (size != 0 && size != cb_size) {
+        return fail();
+    }
+    let mut given = bytes.to_vec();
+    given[..4].copy_from_slice(&cb_size.to_le_bytes());
+    given.resize(cb_size as usize, 0);
+    NtStatus(u32::from(ke::usermem::copy_to_user(u64::from(pv), &given).is_ok()))
+}
+
 /// NtUserSystemParametersInfo(uiAction, uiParam, pvParam, fWinIni) : BOOL
 /// (UserSystemParametersInfo).
 /// - SPI_GETNONCLIENTMETRICS : les tailles du cadre et les polices du système
-///   (`win32k::metrics::non_client_metrics`) ; le `cbSize` lu en `pvParam`
-///   doit être la taille de NONCLIENTMETRICSW ;
+///   (`win32k::metrics::non_client_metrics`), pour un NONCLIENTMETRICSW d'XP
+///   ou de Vista ([`give_non_client_metrics`]) ;
 /// - SPI_GETICONTITLELOGFONT : la police des titres d'icônes, Tahoma de 8
 ///   points, la police par défaut d'une ListView ;
 /// - SPI_GETFOCUSBORDERWIDTH, SPI_GETFOCUSBORDERHEIGHT : l'épaisseur d'un
@@ -102,7 +133,7 @@ pub(super) fn nt_user_system_parameters_info(arguments: &[u32]) -> NtStatus {
     match action {
         abi::user::SPI_GETNONCLIENTMETRICS => {
             let metrics = win32k::metrics::non_client_metrics(&win32k::metrics::Parameters::DEFAULT);
-            give_parameter(pv, param, metrics.as_bytes(), true)
+            give_non_client_metrics(pv, param, metrics.as_bytes())
         }
         abi::user::SPI_GETICONTITLELOGFONT => {
             give_parameter(pv, param, win32k::metrics::system_font(400).as_bytes(), false)

@@ -258,6 +258,7 @@ fn finish(window: &Arc<Window>, thread: Option<&Arc<ThreadInfo>>) {
         crate::menu::destroy(state.menu);
         window::change(window, |state| state.menu = 0);
     }
+    crate::sysmenu::destroy_of(window);
     crate::dce::free_window_dcs(hwnd);
     window::unlink(window);
     window::remove_properties(hwnd);

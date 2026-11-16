@@ -484,6 +484,47 @@ pub(super) fn nt_user_redraw_window(arguments: &[u32]) -> NtStatus {
     NtStatus(1)
 }
 
+/// La fenêtre `handle`, aucune pour 0 ; `Err` pour une fenêtre inconnue.
+fn optional_window(handle: u32) -> Result<Option<alloc::sync::Arc<win32k::window::Window>>, ()> {
+    match handle {
+        0 => Ok(None),
+        handle => win32k::window::get(handle).map(Some).ok_or(()),
+    }
+}
+
+/// NtUserLockWindowUpdate(hWndLock) : LockWindowUpdate
+/// (`win32k::dce::lock_window_update`) ; hWndLock nul déverrouille. Une
+/// fenêtre inconnue : FALSE et `ERROR_INVALID_WINDOW_HANDLE`. ReactOS n'a
+/// qu'un stub, qui rend FALSE : `browseui` ne déverrouille que s'il a pu
+/// verrouiller.
+pub(super) fn nt_user_lock_window_update(arguments: &[u32]) -> NtStatus {
+    let [handle] = arguments[..1] else { unreachable!("1 argument") };
+    let Ok(window) = optional_window(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    NtStatus(u32::from(win32k::dce::lock_window_update(window.as_ref())))
+}
+
+/// NtUserDrawCaption(hWnd, hDC, lpRc, uFlags) : DrawCaption
+/// (`win32k::paint::draw_caption`), le rectangle lu chez l'appelant (nul :
+/// `ERROR_NOACCESS`, comme la sonde de ReactOS) ; hWnd peut être nul, une
+/// fenêtre inconnue rend FALSE et `ERROR_INVALID_WINDOW_HANDLE`.
+pub(super) fn nt_user_draw_caption(arguments: &[u32]) -> NtStatus {
+    let [handle, hdc, rect, flags] = arguments[..4] else { unreachable!("4 arguments") };
+    let Ok(window) = optional_window(handle) else {
+        return fail(abi::winerror::ERROR_INVALID_WINDOW_HANDLE);
+    };
+    let rect = match read_rect(rect) {
+        Ok(Some(rect)) => rect,
+        Ok(None) => return fail(dos_error(abi::ntstatus::STATUS_ACCESS_VIOLATION)),
+        Err(status) => return fail(dos_error(status)),
+    };
+    match win32k::paint::draw_caption(window.as_deref(), hdc, rect, flags) {
+        Ok(drawn) => NtStatus(u32::from(drawn)),
+        Err(error) => fail(error),
+    }
+}
+
 /// NtUserInvalidateRgn(hWnd, hRgn, bErase) : RedrawWindow de la région
 /// (aucune : la zone cliente) avec `RDW_INVALIDATE` (et `RDW_ERASE`). hWnd
 /// nul : FALSE et `ERROR_INVALID_WINDOW_HANDLE`.

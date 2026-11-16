@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 190 | 737 |
+| win32k | 195 | 737 |
 
 ## ntoskrnl
 
@@ -676,7 +676,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1165` | `NtUserDragDetect` | 3 |  |
 | `0x1166` | `NtUserDragObject` | 5 |  |
 | `0x1167` | `NtUserDrawAnimatedRects` | 4 |  |
-| `0x1168` | `NtUserDrawCaption` | 4 |  |
+| `0x1168` | `NtUserDrawCaption` | 4 | ✅ |
 | `0x1169` | `NtUserDrawCaptionTemp` | 7 |  |
 | `0x116a` | `NtUserDrawIconEx` | 11 | ✅ |
 | `0x116b` | `NtUserDrawMenuBarTemp` | 5 |  |
@@ -710,7 +710,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1187` | `NtUserGetClipboardSequenceNumber` | 0 |  |
 | `0x1188` | `NtUserGetClipboardViewer` | 0 |  |
 | `0x1189` | `NtUserGetClipCursor` | 1 |  |
-| `0x118a` | `NtUserGetComboBoxInfo` | 2 |  |
+| `0x118a` | `NtUserGetComboBoxInfo` | 2 | ✅ |
 | `0x118b` | `NtUserGetControlBrush` | 3 | ✅ |
 | `0x118c` | `NtUserGetControlColor` | 4 | ✅ |
 | `0x118d` | `NtUserGetCPD` | 3 |  |
@@ -748,7 +748,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ad` | `NtUserGetRawInputDeviceList` | 3 |  |
 | `0x11ae` | `NtUserGetRegisteredRawInputDevices` | 3 |  |
 | `0x11af` | `NtUserGetScrollBarInfo` | 3 | ✅ |
-| `0x11b0` | `NtUserGetSystemMenu` | 2 |  |
+| `0x11b0` | `NtUserGetSystemMenu` | 2 | ✅ |
 | `0x11b1` | `NtUserGetThreadDesktop` | 2 |  |
 | `0x11b2` | `NtUserGetThreadState` | 1 | ✅ |
 | `0x11b3` | `NtUserGetTitleBarInfo` | 2 |  |
@@ -771,7 +771,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11c4` | `NtUserKillTimer` | 2 | ✅ |
 | `0x11c5` | `NtUserLoadKeyboardLayoutEx` | 7 | ✅ |
 | `0x11c6` | `NtUserLockWindowStation` | 1 |  |
-| `0x11c7` | `NtUserLockWindowUpdate` | 1 |  |
+| `0x11c7` | `NtUserLockWindowUpdate` | 1 | ✅ |
 | `0x11c8` | `NtUserLockWorkStation` | 0 |  |
 | `0x11c9` | `NtUserMapVirtualKeyEx` | 4 |  |
 | `0x11ca` | `NtUserMenuItemFromPoint` | 4 | ✅ |
@@ -849,7 +849,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1212` | `NtUserSetShellWindowEx` | 2 | ✅ |
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
 | `0x1214` | `NtUserSetSystemCursor` | 2 | ✅ |
-| `0x1215` | `NtUserSetSystemMenu` | 2 |  |
+| `0x1215` | `NtUserSetSystemMenu` | 2 | ✅ |
 | `0x1216` | `NtUserSetSystemTimer` | 4 | ✅ |
 | `0x1217` | `NtUserSetThreadDesktop` | 1 | ✅ |
 | `0x1218` | `NtUserSetThreadLayoutHandles` | 2 |  |

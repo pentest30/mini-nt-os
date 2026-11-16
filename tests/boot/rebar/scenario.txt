@@ -1,0 +1,23 @@
+# The address bar of explorer's folder window (tests/native/rebar1.c):
+# SPI_GETNONCLIENTMETRICS of Vista's 504 bytes, which comctl32 of ReactOS
+# asks (refused, the ReBar's font was garbage and the folder view went off
+# the window), the ReBar's band of a ComboBoxEx laid out with that font, and
+# GetComboBoxInfo (CB_GETCOMBOBOXINFO to a ComboBox of user32), which the
+# address bar and the Run box ask.
+features = test-smss
+requires = userland, native
+initial-command = REBAR1.EXE
+cpus = default, intel
+timeout = 120
+
+expect = [rebar] SPI_GETNONCLIENTMETRICS of 500 bytes: 1, cbSize 500, lfMenuFont height -11, after it 77777777
+expect = [rebar] SPI_GETNONCLIENTMETRICS of 504 bytes: 1, cbSize 504, iPaddedBorderWidth 0
+expect = [rebar] SPI_GETNONCLIENTMETRICS of 503 bytes: 0 (87)
+expect = [rebar] GetComboBoxInfo 1: the combo box 1, an edit 1, a list 1
+expect = [rebar] GetComboBoxInfo of 20 bytes 0 (87)
+expect = [rebar] its font: LOGFONT 92 bytes, height -11; "Address" 1, 39 x 13
+expect = [rebar] the address band beside the links: band 540 21 696 51, the combo at 594 27, 100 x 22, the bar 55 high
+expect = [rebar] the address band on a row of its own: band 0 53 696 75, the combo at 54 55, 640 x 22, the bar 79 high
+expect = [rebar] done
+forbid = *** STOP:
+forbid = sys: NtUserGetComboBoxInfo

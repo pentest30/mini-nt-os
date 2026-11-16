@@ -666,9 +666,9 @@ fn show_owned_popups(window: &Window, show: bool) {
 /// co_WinPosShowWindow : montre, cache, réduit, agrandit ou rétablit
 /// `window` selon `cmd` (`SW_*`) ; rend si elle était visible.
 ///
-/// Après le placement : réduite par SW_MINIMIZE, la fenêtre active du
-/// premier plan cède l'activation (ActivateOtherWindowMin, sinon
-/// co_WinPosActivateOtherWindow : [`crate::input::activate_other_min`],
+/// Après le placement : cachée par SW_HIDE ou réduite par SW_MINIMIZE, la
+/// fenêtre active du premier plan cède l'activation (ActivateOtherWindowMin,
+/// sinon co_WinPosActivateOtherWindow : [`crate::input::activate_other_min`],
 /// [`crate::input::activate_other`]) et le clavier revient à son parent
 /// (personne pour une fenêtre de premier niveau) ; rétablie d'une fenêtre
 /// réduite, elle prend le clavier et, de premier niveau, WM_ACTIVATE.
@@ -724,11 +724,11 @@ pub fn show_window(window: &Arc<Window>, cmd: u32) -> bool {
     if cmd == SW_SHOWMAXIMIZED && swp & SWP_STATECHANGED != 0 {
         show_owned_popups(window, true);
     }
-    if cmd == SW_HIDE {
-        return was_visible;
-    }
-    if cmd == SW_MINIMIZE || cmd == SW_FORCEMINIMIZE {
+    if cmd == SW_HIDE || cmd == SW_MINIMIZE || cmd == SW_FORCEMINIMIZE {
         give_up_activation(window);
+        if cmd == SW_HIDE {
+            return was_visible;
+        }
     }
     if window.state().state & WNDS_SENDSIZEMOVEMSGS != 0 {
         window::send_size_move(window);
@@ -745,9 +745,10 @@ pub fn show_window(window: &Arc<Window>, cmd: u32) -> bool {
     was_visible
 }
 
-/// Après SW_MINIMIZE : la fenêtre active du premier plan cède l'activation
-/// (à une autre fenêtre de premier niveau d'abord, ActivateOtherWindowMin),
-/// et le clavier revient à son parent.
+/// Après SW_HIDE ou SW_MINIMIZE : la fenêtre active du premier plan cède
+/// l'activation (à une autre fenêtre de premier niveau d'abord,
+/// ActivateOtherWindowMin), et le clavier revient à son parent. Cachée,
+/// elle ne peut plus être choisie (`WS_VISIBLE`).
 fn give_up_activation(window: &Arc<Window>) {
     let Ok(thread) = crate::convert_current_thread() else { return };
     if thread.server != window.pti {

@@ -17,7 +17,13 @@
 //! puce de MFT_RADIOCHECK) de Marlett ; un sous-menu, la flèche de Marlett ;
 //! un séparateur, un sillon (EDGE_ETCHED).
 //!
-//! Pas encore : les items à bitmap et dessinés par l'application, les
+//! Les glyphes du menu système (HBMMENU_POPUP_RESTORE, _MINIMIZE, _MAXIMIZE,
+//! _CLOSE : MENU_DrawPopupGlyph) : la place d'un bitmap de SM_CXSIZE - 2 ×
+//! SM_CYSIZE - 4 avant la coche (deux places de coche après lui), le symbole
+//! de Marlett (2, 0, 1, r) dedans ; avec MNS_CHECKORBMP, le texte de tous les
+//! items du menu commence après le plus large d'entre eux (`cxTextAlign`).
+//!
+//! Pas encore : les autres items à bitmap et dessinés par l'application, les
 //! menus trop hauts pour l'écran (les flèches de défilement), le fond
 //! d'un MENUINFO (`hbrBack`), le rappel SETOBM (la taille de la flèche est
 //! celle du bitmap OBM_MNARROW du `user32` de ReactOS épinglé).
@@ -25,7 +31,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use abi::menu::{item_kind, mf, mfs, mft, mns, wm};
+use abi::menu::{hbmmenu, item_kind, mf, mfs, mft, mns, wm};
 use abi::user::{
     color, sm, MA_NOACTIVATE, WM_CREATE, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCDESTROY,
     WM_NCHITTEST, WM_NCPAINT, WM_PAINT,
@@ -45,6 +51,24 @@ use crate::window::{LParam, Window};
 pub const ARROW_WIDTH: i32 = 6;
 /// MENU_COL_SPACE : les pixels entre deux colonnes.
 const COL_SPACE: i32 = 4;
+
+/// Le symbole de Marlett du glyphe `bitmap` du menu système
+/// (MENU_DrawPopupGlyph) ; `None` pour un autre bitmap.
+fn popup_glyph(bitmap: u32) -> Option<char> {
+    match bitmap {
+        hbmmenu::POPUP_RESTORE => Some('2'),
+        hbmmenu::POPUP_MINIMIZE => Some('0'),
+        hbmmenu::POPUP_MAXIMIZE => Some('1'),
+        hbmmenu::POPUP_CLOSE => Some('r'),
+        _ => None,
+    }
+}
+
+/// MENU_GetBitmapItemSize d'un glyphe du menu système : SM_CXSIZE - 2 ×
+/// SM_CYSIZE - 4.
+fn glyph_size(m: &impl Fn(usize) -> i32) -> (i32, i32) {
+    (m(sm::CXSIZE) - 2, m(sm::CYSIZE) - 4)
+}
 
 /// IS_STRING_ITEM : un item de texte (ni bitmap, ni dessiné par
 /// l'application, ni séparateur).
@@ -70,13 +94,21 @@ fn calc_item(
         item.dx_tab = 0;
         return (right, bottom);
     }
-    if !no_check {
+    let mut height = 0;
+    if popup_glyph(item.bitmap).is_some() {
+        // A glyph of the window menu, then two check marks' room.
+        let (width, glyph_height) = glyph_size(m);
+        right += width + 2;
+        height = glyph_height + 2;
+        if !no_check {
+            right += 2 * m(sm::CXMENUCHECK);
+        }
+    } else if !no_check {
         right += m(sm::CXMENUCHECK);
     }
     right += 4 + font.char_width;
     let mut tab = right;
     right += ARROW_WIDTH;
-    let mut height = 0;
     if !item.text.is_empty() && item.f_type & mf::SYSMENU == 0 {
         let bold = item.f_state & mfs::DEFAULT != 0;
         let measure = |text: &[u16]| (font.measure)(&strip_prefix(text).0, bold);
@@ -94,7 +126,7 @@ fn calc_item(
             }
         };
         right += 2 + text_width;
-        height = (text_height + 2).max(font.char_height + 4);
+        height = height.max((text_height + 2).max(font.char_height + 4));
     }
     item.dx_tab = tab as u32;
     bottom += height;
@@ -154,6 +186,8 @@ pub struct PopupItem {
     pub f_state: u32,
     /// Il ouvre un sous-menu (la flèche).
     pub submenu: bool,
+    /// Son bitmap (`hbmp`), un handle ou un HBMMENU_*.
+    pub bitmap: u32,
     /// Où commence son raccourci (`dxTab`).
     pub dx_tab: i32,
 }
@@ -186,20 +220,26 @@ fn item_text(
 }
 
 /// MENU_DrawPopupMenu et MENU_DrawMenuItem : le fond de la zone cliente
-/// `client` (COLOR_MENU), puis chaque item : surligné, son fond en
-/// COLOR_HIGHLIGHT ; la coche (ou la puce) s'il est coché, la flèche s'il
-/// ouvre un sous-menu, son texte et son raccourci ; un séparateur, un sillon.
-/// Rend faux si la police manquait.
+/// `client` (COLOR_MENU), puis chaque item d'un menu de style `menu_flags`
+/// (MNS_NOCHECK, MNS_CHECKORBMP) : surligné, son fond en COLOR_HIGHLIGHT ; la
+/// coche (ou la puce) s'il est coché, son glyphe du menu système, la flèche
+/// s'il ouvre un sous-menu, son texte et son raccourci ; un séparateur, un
+/// sillon. Rend faux si la police manquait.
 pub fn popup_ops(
     client: Rect,
     items: &[PopupItem],
-    no_check: bool,
+    menu_flags: u32,
     c: &impl Fn(usize) -> ColorRef,
     m: &impl Fn(usize) -> i32,
     layout: Layout,
     ops: &mut Vec<Op>,
 ) -> bool {
     let mut painted = true;
+    let no_check = menu_flags & mns::NOCHECK != 0;
+    let check_or_bitmap = menu_flags & mns::CHECKORBMP != 0;
+    let glyph_width = glyph_size(m).0;
+    // Menu->cxTextAlign: the widest bitmap of the menu.
+    let text_align = if items.iter().any(|item| popup_glyph(item.bitmap).is_some()) { glyph_width } else { 0 };
     ops.push(Op::Fill(client, c(color::MENU)));
     for item in items {
         if item.f_type & (mft::OWNERDRAW | mf::SYSMENU) != 0 {
@@ -225,9 +265,20 @@ pub fn popup_ops(
             (false, false) => color::MENUTEXT,
         });
         let check = m(sm::CXMENUCHECK);
-        if !no_check && item.f_state & mf::CHECKED != 0 {
+        let checked = !no_check && item.f_state & mf::CHECKED != 0;
+        if checked {
             let symbol = if item.f_type & mft::RADIOCHECK != 0 { 'h' } else { 'a' };
             let cell = square_in(Rect::new(rect.left, rect.top, rect.left + check, rect.bottom));
+            painted &= marlett(cell, symbol, color, 0, rect, layout, ops);
+        }
+        if let Some(symbol) = popup_glyph(item.bitmap).filter(|_| !(checked && check_or_bitmap)) {
+            // MENU_DrawPopupGlyph: in the bitmap's room less two pixels, a
+            // raised shadow when grayed.
+            let left = if check_or_bitmap || no_check { rect.left } else { rect.left + check + 2 };
+            let cell = Rect::new(left + 2, rect.top + 2, left + glyph_width - 2, rect.bottom - 2);
+            if grayed && !hilite {
+                painted &= marlett(cell, symbol, c(color::HIGHLIGHTTEXT), 1, rect, layout, ops);
+            }
             painted &= marlett(cell, symbol, color, 0, rect, layout, ops);
         }
         if item.submenu {
@@ -239,6 +290,7 @@ pub fn popup_ops(
         }
         let mut text_rect = rect;
         text_rect.left += 4 + if no_check { 0 } else { check };
+        text_rect.left += if check_or_bitmap { (text_align - check).max(0) } else { text_align };
         text_rect.right -= ARROW_WIDTH;
         text_rect.bottom -= 1;
         let bold = item.f_state & mfs::DEFAULT != 0;
@@ -285,7 +337,7 @@ pub fn menu_of(hwnd: u32) -> Option<u32> {
 
 /// Les items du menu de la fenêtre `window` (un menu déroulant) dans ses
 /// coordonnées, et sa zone cliente.
-fn items_of(window: &Window, menu: u32) -> Option<(Rect, Vec<PopupItem>, bool)> {
+fn items_of(window: &Window, menu: u32) -> Option<(Rect, Vec<PopupItem>, u32)> {
     let state = crate::menu::state(menu)?;
     let window_state = window.state();
     let (dx, dy) =
@@ -305,10 +357,11 @@ fn items_of(window: &Window, menu: u32) -> Option<(Rect, Vec<PopupItem>, bool)> 
             f_type: item.f_type,
             f_state: item.f_state,
             submenu: item.submenu != 0,
+            bitmap: item.bitmap,
             dx_tab: item.dx_tab as i32 + dx,
         })
         .collect();
-    Some((client, items, state.flags & mns::NOCHECK != 0))
+    Some((client, items, state.flags))
 }
 
 /// MENU_DrawPopupMenu : la zone cliente de la fenêtre `window` d'un menu
@@ -318,12 +371,12 @@ fn items_of(window: &Window, menu: u32) -> Option<(Rect, Vec<PopupItem>, bool)> 
 /// PASSIVE_LEVEL (les polices).
 pub fn paint(window: &Window) {
     let Some(menu) = menu_of(window.handle) else { return };
-    let Some((client, items, no_check)) = items_of(window, menu) else { return };
+    let Some((client, items, menu_flags)) = items_of(window, menu) else { return };
     let mut ops = Vec::new();
     let painted = popup_ops(
         client,
         &items,
-        no_check,
+        menu_flags,
         &crate::paint::system_color,
         &crate::metrics::get,
         &crate::font::text_run_named,
@@ -401,6 +454,7 @@ pub fn window_proc(window: &Window, message: u32, wparam: u32, lparam: &mut LPar
                 state.style,
                 state.ex_style,
                 false,
+                false,
                 state.window,
                 state.client,
                 point,
@@ -429,6 +483,7 @@ mod tests {
         match index {
             sm::CYMENUSIZE => 18,
             sm::CXMENUCHECK => 13,
+            sm::CXSIZE | sm::CYSIZE => 18,
             _ => 0,
         }
     }
@@ -458,6 +513,25 @@ mod tests {
         // 24 of text: 55; 17 high (13 + 4); the separator 9.
         assert_eq!(places(&items), [(0, 0, 55, 17, 47), (0, 17, 55, 26, 0), (0, 26, 55, 43, 47)]);
         assert_eq!(size, (55, 43));
+    }
+
+    /// The window menu: Restore has its glyph's room (16 + 2) and two check
+    /// marks' room before its text; Move, without a glyph, one.
+    #[test]
+    fn a_glyph_of_the_window_menu_takes_its_room() {
+        let restore = Item { bitmap: hbmmenu::POPUP_RESTORE, ..item("&Restore", 0) };
+        let mut items = [restore, item("&Move", 0)];
+        let size = layout(&mut items, false, &font(), &metric);
+        // Restore: 18 + 26 + 4 + 6 = 54, then 6 (arrow), 2, 42 of text: 104;
+        // 17 high (the text's 13 + 4, more than the glyph's 14 + 2).
+        // Move: 13 + 4 + 6 = 23, 6, 2, 24: 55. Both 104 wide, their text
+        // after 96 (54 + 42).
+        assert_eq!(places(&items), [(0, 0, 104, 17, 96), (0, 17, 104, 34, 96)]);
+        assert_eq!(size, (104, 34));
+        assert_eq!(popup_glyph(hbmmenu::POPUP_CLOSE), Some('r'));
+        assert_eq!(popup_glyph(hbmmenu::POPUP_MINIMIZE), Some('0'));
+        assert_eq!(popup_glyph(hbmmenu::POPUP_MAXIMIZE), Some('1'));
+        assert_eq!(popup_glyph(hbmmenu::MBAR_CLOSE), None, "a menu bar's button: not here");
     }
 
     #[test]
@@ -498,6 +572,7 @@ mod tests {
                 f_type: 0,
                 f_state: mf::HILITE,
                 submenu: false,
+                bitmap: 0,
                 dx_tab: 50,
             },
             PopupItem {
@@ -506,11 +581,12 @@ mod tests {
                 f_type: mft::SEPARATOR,
                 f_state: 0,
                 submenu: false,
+                bitmap: 0,
                 dx_tab: 0,
             },
         ];
         let mut ops = Vec::new();
-        assert!(!popup_ops(Rect::new(3, 3, 58, 46), &items, false, &palette, &metric, &no_fonts, &mut ops));
+        assert!(!popup_ops(Rect::new(3, 3, 58, 46), &items, 0, &palette, &metric, &no_fonts, &mut ops));
         assert_eq!(ops[0], Op::Fill(Rect::new(3, 3, 58, 46), ColorRef(color::MENU as u32)));
         assert_eq!(ops[1], Op::Fill(Rect::new(3, 3, 58, 20), ColorRef(color::HIGHLIGHT as u32)), "hilited");
         assert_eq!(ops[2], Op::Fill(Rect::new(3, 20, 58, 29), ColorRef(color::MENU as u32)));
