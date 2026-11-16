@@ -12,7 +12,9 @@
   fenêtre) ; les glyphes de Marlett dans le menu (`menupopup`, `cxTextAlign`). Écarts voulus (créé au premier
   besoin, pas cloné, WM_INITMENU, le double-clic dans la boucle) dans l'étape 36. Scénario `window-menu`
   (`tests/native/sysmenu1.c`, AMD et Intel ; cinq mutations détectées) ; tests hôte (`sysmenu`, `menupopup`,
-  `defwnd`). **Suite** : le clic
+  `defwnd`). `gui` attend maintenant la désactivation de sa fenêtre cachée (seule de son thread : WM_NCACTIVATE,
+  WM_ACTIVATE inactif, WM_KILLFOCUS). Lint propre ; toute la suite : 1159 tests hôte, 131 runs de démarrage sur 131
+  (rostests 44/84 et 16/29, aux planchers). **Suite** : le clic
   droit sur le titre (WM_NCRBUTTONDOWN, WM_CONTEXTMENU), SC_MOVE et SC_SIZE au clavier, ←/→ entre le menu système
   et la barre, le bouton de fermeture grisé quand Close l'est ; SetForegroundWindow d'une fenêtre réduite
   (`input::can_activate` la refuse, ReactOS l'active) ; vérifier sous VirtualBox avec le Bloc-notes.
