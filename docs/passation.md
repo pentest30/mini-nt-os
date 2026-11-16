@@ -14,7 +14,9 @@
   WM_ENTERIDLE et GetMenuItemRect sans fenêtre), AMD et Intel ; test hôte `sysmenu`. Six mutations détectées (WM_NCRBUTTONDOWN ignoré, le relâchement sur le titre, le menu
   depuis la zone cliente, le menu ailleurs qu'au point, le bouton droit refusé, TrackPopupMenu sans l'état de la
   fenêtre). Lint propre ; toute la suite : 1160 tests hôte, 131 runs de démarrage sur 131 (rostests 44/84 et 16/29,
-  aux planchers).
+  aux planchers). `main` fusionné ensuite (PR 138, la fenêtre de dossier, qui a pris l'étape 36 : nos étapes sont
+  devenues 37 et 38) : lint propre, 1162 tests hôte, 136 runs sur 136 (`rebar`, `caption`, `folder-view` compris),
+  rostests 44/84 et 16/29.
   **Suite** : SC_MOVE et SC_SIZE au clavier, ←/→ entre le menu système et la barre, le bouton de fermeture grisé
   quand Close l'est ; SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS
   l'active) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du
