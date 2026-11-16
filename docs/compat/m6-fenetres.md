@@ -1704,7 +1704,7 @@ clone (IntCloneMenu) avant de détruire l'original ; WM_INITMENU porte au clavie
 l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message à DefWindowProc
 (WM_NCLBUTTONDBLCLK), qu'ici la capture du menu a fait message de la zone cliente.
 
-Pas encore : le clic droit sur le titre (WM_NCRBUTTONDOWN, WM_CONTEXTMENU : le menu système au point), SC_MOVE et
+Pas encore : le clic droit sur le titre (fait à l'étape 37), SC_MOVE et
 SC_SIZE au clavier (Move et Size choisis ne font rien), ←/→ entre le menu système et la barre (MENU_DoNextMenu),
 le bouton de fermeture grisé quand Close l'est, WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
 bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
@@ -1726,3 +1726,42 @@ CS_NOCLOSE ; la place du menu sous l'icône ; `menupopup` : la place d'un glyphe
 `defwnd` : le double-clic sur l'icône) ; `window-menu` sur AMD et Intel. Cinq mutations le font échouer
 chacune : SW_HIDE qui ne cède pas l'activation, pas de HTSYSMENU, Alt+Espace ignoré, Restore grisé à l'envers, le
 double-clic sur l'icône sans effet.
+
+## Étape 37 : le clic droit sur le titre
+
+Demandé après l'étape 36 : un clic droit sur le titre d'une fenêtre (ou sur son icône) n'ouvrait pas le menu de la
+fenêtre ; DefWindowProc journalisait WM_NCRBUTTONDOWN et WM_CONTEXTMENU comme « pas encore ».
+
+`nonclient.c` (NC_HandleNCRButtonDown), `defwnd.c` de win32k (IntDefWindowProc : WM_NCRBUTTONDOWN, WM_CONTEXTMENU),
+`menu.c` (IntTrackPopupMenuEx), `defwnd.c` de `user32` (User32DefWindowProc : WM_RBUTTONUP, WM_CONTEXTMENU d'une
+fenêtre fille), ReactOS comme spécification ; `win32k::sysmenu`, `win32k::defwnd`, `win32k::menutrack`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Qui fait quoi | `user32` fait de WM_RBUTTONUP dans la zone cliente un WM_CONTEXTMENU (la fenêtre, le point à l'écran) et passe celui d'une fenêtre fille à son parent ; il confie au noyau (NtUserMessageCall, FNID_DEFWINDOWPROC) WM_NCRBUTTONDOWN et le WM_CONTEXTMENU d'une fenêtre de premier niveau |
+| WM_NCRBUTTONDOWN (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown) | sur le titre ou son icône d'une fenêtre qui a un menu système, la fenêtre prend la souris ; les messages de la souris sortent de la file sans être distribués (après WH_SYSMSGFILTER et WH_MSGFILTER, MSGF_MAX) jusqu'au relâchement du bouton droit ; si elle perd la souris, rien ; relâché sur le titre, l'icône ou une barre de défilement, WM_CONTEXTMENU (elle, le point du relâchement) |
+| WM_CONTEXTMENU (`sysmenu::context_menu`) | une fenêtre fille le passe à son parent ; sinon, au point sur le titre ou son icône (GetNCHitEx), le menu système (IntGetSystemMenu) mis à l'état de la fenêtre depuis cet endroit (MENU_InitSysMenuPopup), puis suivi comme un menu déroulant au point (`menutrack::track_popup_menu`), TPM_LEFTBUTTON et TPM_RIGHTBUTTON depuis le titre, TPM_LEFTBUTTON seul depuis l'icône (`sysmenu::context_menu_buttons`) ; ailleurs (la zone cliente, (−1, −1) du clavier), rien ; DefWindowProc ne revient qu'à la fin du suivi |
+| TrackPopupMenu d'un menu système (`menutrack::track_popup_menu`, IntTrackPopupMenuEx) | après WM_INITMENUPOPUP, un menu MNF_SYSMENU prend l'état de sa fenêtre comme ouvert de l'icône (HTSYSMENU) : Close par défaut, aussi depuis le titre, comme chez ReactOS ; vaut aussi pour TrackPopupMenu(GetSystemMenu(…)) d'une application |
+| Choisir | comme à l'étape 36 : WM_SYSCOMMAND posté de l'item (`menutrack::exec_focused`), que DefWindowProc exécute |
+
+Écart voulu avec ReactOS : un WM_QUIT pendant la boucle du bouton droit la finit, reposté, sans WM_CONTEXTMENU
+(ReactOS l'envoie alors, au point du WM_QUIT), comme la boucle des boutons du titre (`sizemove::track_button`).
+
+Pas encore : TPM_SYSTEM_MENU (GUI_SYSTEMMENUMODE de GetGUIThreadInfo, que Mino ne fait pas), le menu des barres de
+défilement (pas plus chez ReactOS : « Scroll Menu Not Supported »), Maj+F10 et VK_APPS (WM_CONTEXTMENU du clavier,
+qui n'ouvre de toute façon pas le menu système). Vu, pas fait : DefWindowProc de WM_LBUTTONDOWN, WM_RBUTTONDOWN et
+WM_MBUTTONDOWN oublie chez ReactOS un Alt enfoncé (QF_FMENUSTATUS) ; Mino ne le fait pas et journalise le message
+(« message 0x0204 not yet »).
+
+Le banc d'essai : `tests/native/sysmenu1.c`, scénario `window-menu`, trois étapes de plus avant le double-clic qui
+ferme W (étape 10). W agrandie : un clic droit dans la zone cliente (400, 300) donne WM_CONTEXTMENU (W, (400, 300))
+et aucun menu (étape 7) ; un clic droit sur le titre (400, 10) ouvre le menu là (sa fenêtre en (400, 10),
+WM_ENTERIDLE ; Maximize en (403, 81)-(555, 98) selon GetMenuItemRect sans fenêtre), WM_CONTEXTMENU revient après
+le suivi, r rétablit W ; le menu montrait Maximize grisé, Close par défaut (étape 8). W rétablie : un clic droit
+sur son titre (250, 110) ouvre le menu là, et le bouton droit sur Maximize l'agrandit (TPM_RIGHTBUTTON, étape 9).
+
+Tests : hôte (`sysmenu` : les endroits qui demandent WM_CONTEXTMENU au relâchement, les boutons du menu depuis le
+titre et l'icône, rien dans la zone cliente) ; `window-menu` sur AMD et Intel. Six mutations le font échouer
+chacune : WM_NCRBUTTONDOWN ignoré, le relâchement sur le titre qui ne demande rien, le menu ouvert aussi depuis la
+zone cliente, le menu sous l'icône au lieu du point, le bouton droit refusé depuis le titre, TrackPopupMenu qui ne
+met pas le menu système à l'état de la fenêtre (Restore par défaut au lieu de Close).

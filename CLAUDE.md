@@ -429,6 +429,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserGetSystemMenu, NtUserSetSystemMenu ; HTSYSMENU ; le clic sur l'icône, Alt+Espace, le double-clic qui
   ferme : `menutrack`) ; SW_HIDE de la fenêtre active cède l'activation ; scénario `window-menu`
   (`tests/native/sysmenu1.c`).
+  M6, étape 37 : le clic droit sur le titre ou son icône ouvre le menu de la fenêtre au point
+  (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la souris prise jusqu'au relâchement ;
+  `sysmenu::context_menu`, WM_CONTEXTMENU : TrackPopupMenu, les deux boutons depuis le titre) ; TrackPopupMenu
+  d'un menu système le met à l'état de sa fenêtre (`menutrack::track_popup_menu`) ; scénario `window-menu`.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
