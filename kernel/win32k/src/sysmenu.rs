@@ -31,9 +31,10 @@
 //! (`crate::menutrack::track_popup_menu`).
 //!
 //! Pas encore : le bouton de fermeture grisé quand SC_CLOSE l'est, le menu
-//! système d'un bureau (MNF_SYSDESKMN), WM_POPUPSYSTEMMENU, SC_MOVE et
-//! SC_SIZE au clavier, le menu des barres de défilement (comme ReactOS),
-//! GUI_SYSTEMMENUMODE de GetGUIThreadInfo (TPM_SYSTEM_MENU).
+//! système d'un bureau (MNF_SYSDESKMN), WM_POPUPSYSTEMMENU, le menu des
+//! barres de défilement (comme ReactOS), GUI_SYSTEMMENUMODE de
+//! GetGUIThreadInfo (TPM_SYSTEM_MENU). Move et Size déplacent et
+//! redimensionnent au clavier (`crate::sizemove`).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;

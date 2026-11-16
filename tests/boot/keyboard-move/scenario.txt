@@ -1,0 +1,53 @@
+# Moving and sizing a window with the keyboard (SC_MOVE and SC_SIZE from the
+# window menu: win32k::sizemove::keyboard_start, size_move;
+# tests/native/kbdmove1.c, MinGW, linked to ReactOS's kernel32 and user32):
+# KBDMOVE1.EXE takes the place of winlogon.exe and switches to
+# WinSta0\Default, with W at (100, 100, 400 x 300). Update with
+# docs/compat/m6-fenetres.md, step 39.
+# 1. SC_SIZE of a dialog without a thick frame, SC_MOVE of a hidden window:
+#    nothing (sizemove::can_size_move).
+# 2. Alt+Space, m: the cursor goes to the middle of the caption
+#    (sizemove::move_start_point); right, right, down move W by (16, 8)
+#    (the cursor 8 pixels each, sizemove::arrow_step); Enter ends.
+# 3. Alt+Space, m, left three times, Escape: W back where it was.
+# 4. Alt+Space, m, the mouse (30, 20), Enter: the mouse moves W too.
+# 5. Alt+Space, s, Escape: no edge picked, nothing.
+# 6. Alt+Space, s, right: the right edge (sizemove::size_start_edge), the
+#    cursor at its middle; right twice: 16 pixels wider.
+# 7. Alt+Space, s, down: the bottom edge; up three times: 24 pixels shorter.
+features = test-smss
+requires = userland, native
+initial-command = KBDMOVE1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [kbdmove] keyboard: step 2 => alt-spc m
+keys = [kbdmove] step 2: WM_ENTERSIZEMOVE => right right down ret
+keys = [kbdmove] keyboard: step 3 => alt-spc m
+keys = [kbdmove] step 3: WM_ENTERSIZEMOVE => left left left esc
+keys = [kbdmove] keyboard: step 4 => alt-spc m
+keys = [kbdmove] step 4: WM_ENTERSIZEMOVE => move:30,20 pause:500 ret
+keys = [kbdmove] keyboard: step 5 => alt-spc s
+keys = [kbdmove] step 5: WM_SYSCOMMAND f000 => esc
+keys = [kbdmove] keyboard: step 6 => alt-spc s
+keys = [kbdmove] step 6: WM_SYSCOMMAND f000 => right
+keys = [kbdmove] step 6: WM_ENTERSIZEMOVE => right right ret
+keys = [kbdmove] keyboard: step 7 => alt-spc s
+keys = [kbdmove] step 7: WM_SYSCOMMAND f000 => down
+keys = [kbdmove] step 7: WM_ENTERSIZEMOVE => up up up ret
+
+expect = [kbdmove] step 1: SC_SIZE without a thick frame, SC_MOVE of a hidden window: WM_ENTERSIZEMOVE 0
+expect = [kbdmove] step 2: WM_SYSCOMMAND f010
+expect = [kbdmove] step 2: WM_ENTERSIZEMOVE, the cursor at (290, 109)
+expect = [kbdmove] step 2: done, W at (116, 108)-(516, 408), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 1
+expect = [kbdmove] step 3: WM_ENTERSIZEMOVE, the cursor at (306, 117)
+expect = [kbdmove] step 3: done, W at (116, 108)-(516, 408), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 2
+expect = [kbdmove] step 4: done, W at (146, 128)-(546, 428), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 3
+expect = [kbdmove] step 5: done, W at (146, 128)-(546, 428), WM_ENTERSIZEMOVE 0, WM_EXITSIZEMOVE 3
+expect = [kbdmove] step 6: WM_ENTERSIZEMOVE, the cursor at (544, 278)
+expect = [kbdmove] step 6: done, W at (146, 128)-(562, 428), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 4
+expect = [kbdmove] step 7: WM_ENTERSIZEMOVE, the cursor at (354, 426)
+expect = [kbdmove] step 7: done, W at (146, 128)-(562, 404), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 5
+expect = [kbdmove] W destroyed
+expect = [kbdmove] done
+forbid = *** STOP:
