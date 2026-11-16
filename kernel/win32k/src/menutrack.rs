@@ -47,7 +47,7 @@ use abi::user::{
     WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSTIMER, WM_TIMER,
     WS_BORDER, WS_CLIPSIBLINGS, WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_POPUP,
 };
-use abi::user::{HTMENU, WS_CHILD, WS_EX_LAYOUTRTL, WS_MINIMIZE};
+use abi::user::{HTMENU, HTSYSMENU, SC_CLOSE, WS_CHILD, WS_EX_LAYOUTRTL, WS_MINIMIZE, WS_SYSMENU};
 use abi::winerror::ERROR_POPUP_ALREADY_ACTIVE;
 use hal::sync::KSpinLock;
 
@@ -114,6 +114,12 @@ fn post(window: &Window, message: u32, wparam: u32, lparam: u32) {
 /// fenêtre.
 fn is_popup(menu: u32) -> bool {
     crate::menu::state(menu).is_some_and(|state| state.flags & mnf::POPUP != 0)
+}
+
+/// Le menu système d'une fenêtre, sa « barre » d'un seul item
+/// (MNF_SYSMENU sans MNF_POPUP : `crate::sysmenu`).
+fn is_system_bar(menu: u32) -> bool {
+    crate::menu::state(menu).is_some_and(|state| state.flags & (mnf::SYSMENU | mnf::POPUP) == mnf::SYSMENU)
 }
 
 /// MF_SYSMENU pour un menu système (MNF_SYSMENU).
@@ -419,6 +425,20 @@ fn show_sub_popup(owner: &Window, menu: u32, select_first: bool, flags: u32) -> 
         redraw(menu);
     }
     crate::menu::set_mouse_select(menu, index, true);
+    if is_system_bar(menu) {
+        // The window menu, under the caption's icon (NC_GetSysPopupPos),
+        // its items following the window's state.
+        crate::sysmenu::init_popup(submenu, &window, HTSYSMENU);
+        let icon = crate::sysmenu::icon_rect(&window);
+        let x = if flags & tpm::LAYOUTRTL != 0 { icon.right } else { icon.left };
+        if !init_popup(owner, submenu) || !show_popup(submenu, flags, (x, icon.bottom), Some(icon)) {
+            return menu;
+        }
+        if select_first {
+            move_selection(owner, submenu, 1);
+        }
+        return submenu;
+    }
     let place = if popup {
         (window_rect.left + item_rect.right - m(sm::CXDLGFRAME), window_rect.top + item_rect.top)
     } else {
@@ -486,6 +506,10 @@ fn switch_tracking(tracker: &mut Tracker, menu: u32, index: u32, flags: u32) {
 /// sa barre.
 fn item_at(menu: u32, (x, y): (i32, i32)) -> Option<u32> {
     let state = crate::menu::state(menu)?;
+    // The window menu's bar: its one item is the icon (MENU_ButtonDown).
+    if state.flags & (mnf::SYSMENU | mnf::POPUP) == mnf::SYSMENU {
+        return (!state.items.is_empty()).then_some(0);
+    }
     let window = window::get(state.hwnd)?;
     let window_state = window.state();
     let origin = if state.flags & mnf::POPUP != 0 { window_state.client } else { window_state.window };
@@ -499,7 +523,7 @@ fn item_at(menu: u32, (x, y): (i32, i32)) -> Option<u32> {
 
 /// MENU_PtMenu : le menu sous `pt` : un sous-menu ouvert d'abord, puis la
 /// fenêtre de `menu` (un menu déroulant), ou la barre de sa fenêtre
-/// (HTMENU).
+/// (HTMENU), ou son menu système (HTSYSMENU, l'icône du titre).
 fn menu_at(menu: u32, pt: (i32, i32)) -> Option<u32> {
     if let Some(found) = sub_popup(menu).and_then(|submenu| menu_at(submenu, pt)) {
         return Some(found);
@@ -510,7 +534,11 @@ fn menu_at(menu: u32, pt: (i32, i32)) -> Option<u32> {
         let inside = pt.0 >= rect.left && pt.0 < rect.right && pt.1 >= rect.top && pt.1 < rect.bottom;
         inside.then_some(menu)
     } else {
-        (crate::defwnd::window_hit_test(&window, pt) == HTMENU).then(|| bar_of(&window)).flatten()
+        match crate::defwnd::window_hit_test(&window, pt) {
+            HTMENU => bar_of(&window),
+            HTSYSMENU => crate::sysmenu::of(&window),
+            _ => None,
+        }
     }
 }
 
@@ -749,6 +777,7 @@ fn track_menu(menu: u32, flags: u32, (x, y): (i32, i32), owner: &Arc<Window>) ->
     }
     let mut executed = -1;
     let mut idle_sent = false;
+    let mut close_after = false;
     while inside {
         if !crate::menu::exists(tracker.current) {
             break;
@@ -780,6 +809,14 @@ fn track_menu(menu: u32, flags: u32, (x, y): (i32, i32), owner: &Arc<Window>) ->
                 // still ends the tracking.
                 WM_RBUTTONDBLCLK if !right => inside = false,
                 WM_RBUTTONDOWN if !right => {}
+                // A double click on the icon closes the window
+                // (NC_HandleNCLButtonDblClk, HTSYSMENU), once the menu is
+                // gone.
+                WM_LBUTTONDBLCLK if on_system_icon(&tracker) => {
+                    close_after = true;
+                    remove = true;
+                    inside = false;
+                }
                 WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_RBUTTONDOWN | WM_RBUTTONDBLCLK => {
                     remove = button_down(&mut tracker, under, flags);
                     inside = remove && kind != WM_RBUTTONDBLCLK;
@@ -872,10 +909,29 @@ fn track_menu(menu: u32, flags: u32, (x, y): (i32, i32), owner: &Arc<Window>) ->
         send(&owner, wm::MENUSELECT, make_long(0, 0xFFFF), 0);
     }
     let _ = crate::set_last_error(0);
+    if close_after && crate::sysmenu::close_enabled(&owner) {
+        post(&owner, wm::SYSCOMMAND, SC_CLOSE, 0);
+    }
     if flags & tpm::RETURNCMD == 0 {
         return 1;
     }
     executed.max(0)
+}
+
+/// Le point du suivi est sur l'icône du titre de la fenêtre dont le menu
+/// système est suivi.
+fn on_system_icon(tracker: &Tracker) -> bool {
+    is_system_bar(tracker.top)
+        && window_of(tracker.top).is_some_and(|window| crate::defwnd::window_hit_test(&window, tracker.pt) == HTSYSMENU)
+}
+
+/// Après le suivi du menu système de `window` : son menu déroulant, que
+/// MENU_InitTracking a donné à la fenêtre (WM_INITMENU), ne s'y rattache
+/// plus s'il n'a pas été ouvert (sinon TrackPopupMenu le croirait montré).
+fn forget_system_owner(window: &Window, popup: u32) {
+    if crate::menu::state(popup).is_some_and(|state| state.hwnd == window.handle) {
+        crate::menu::set_hwnd(popup, 0);
+    }
 }
 
 /// MENU_InitTracking : le caret caché, WM_ENTERMENULOOP, la souris capturée
@@ -997,59 +1053,81 @@ pub fn tracked_menu() -> Option<u32> {
 }
 
 /// MENU_TrackMouseMenuBar : un appui sur la barre de `window` (`hit`
-/// HTMENU), au point `pt` de l'écran : la barre est suivie, l'item sous le
-/// point sélectionné et son menu ouvert (TPM_BUTTONDOWN, TPM_VERTICAL).
-/// Pas encore : le menu de la fenêtre (HTSYSMENU).
+/// HTMENU) ou sur l'icône de son titre (HTSYSMENU : son menu système), au
+/// point `pt` de l'écran : la barre est suivie, l'item sous le point
+/// sélectionné et son menu ouvert (TPM_BUTTONDOWN, TPM_VERTICAL).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
 /// rien tenir.
 pub fn track_mouse_menu_bar(window: &Arc<Window>, hit: u32, pt: (i32, i32)) {
-    if hit != HTMENU {
-        return;
-    }
+    // The bar, or the window menu (WM_INITMENU carries GetSystemMenu's).
+    let menu = match hit {
+        HTMENU => bar_of(window),
+        HTSYSMENU => crate::sysmenu::get(window, false),
+        _ => None,
+    };
+    let Some(menu) = menu else { return };
     let mut flags = tpm::BUTTONDOWN | tpm::VERTICAL;
     if window.state().ex_style & WS_EX_LAYOUTRTL != 0 {
         flags |= tpm::LAYOUTRTL;
     }
-    let Some(menu) = bar_of(window) else { return };
     init_tracking(window, menu, false, flags);
     // Fetched again: WM_INITMENU may have changed it.
-    if let Some(menu) = bar_of(window) {
-        track_menu(menu, flags, pt, window);
+    let tracked = if hit == HTSYSMENU { crate::sysmenu::of(window) } else { bar_of(window) };
+    if let Some(tracked) = tracked {
+        track_menu(tracked, flags, pt, window);
     } else if let Ok(thread) = crate::convert_current_thread() {
         release_capture(&thread);
     }
     exit_tracking(window, false, flags);
+    if hit == HTSYSMENU {
+        forget_system_owner(window, menu);
+    }
 }
 
 /// MENU_TrackKbdMenuBar : la barre de la fenêtre de premier niveau de
 /// `window` suivie au clavier : avec une lettre (`character`), l'item
 /// qu'elle souligne est choisi (son menu s'ouvre, par un VK_RETURN posté) ;
 /// sans item, le suivi finit aussitôt ; sans lettre (Alt, F10), le premier
-/// item est sélectionné. Pas encore : le menu de la fenêtre (Alt+Espace,
-/// une fenêtre réduite ou sans barre).
+/// item est sélectionné. Alt+Espace (`' '`), une fenêtre réduite ou sans
+/// barre : son menu système à la place (`crate::sysmenu`), son icône
+/// sélectionnée et, pour Alt+Espace, son menu ouvert ; rien sans
+/// WS_SYSMENU. WM_INITMENU porte le menu de GetSystemMenu (ReactOS y met le
+/// menu d'un item, comme sa barre).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
 /// rien tenir.
 pub fn track_kbd_menu_bar(window: &Arc<Window>, character: u16) {
     let window = crate::mouse::top_level(window);
-    if window.state().style & WS_MINIMIZE != 0 || character == u16::from(b' ') {
-        return;
-    }
-    let Some(menu) = bar_of(&window) else { return };
+    let space = character == u16::from(b' ');
+    let system = bar_of(&window).is_none() || window.state().style & WS_MINIMIZE != 0 || space;
+    let notified = if system {
+        if window.state().style & WS_SYSMENU == 0 {
+            return;
+        }
+        crate::sysmenu::get(&window, false)
+    } else {
+        bar_of(&window)
+    };
+    let Some(notified) = notified else { return };
     let mut flags = 0;
-    init_tracking(&window, menu, false, flags);
-    let Some(menu) = bar_of(&window) else {
+    init_tracking(&window, notified, false, flags);
+    // Fetched again: WM_INITMENU may have changed it.
+    let tracked = if system { crate::sysmenu::of(&window) } else { bar_of(&window) };
+    let Some(menu) = tracked else {
         if let Ok(thread) = crate::convert_current_thread() {
             release_capture(&thread);
         }
         exit_tracking(&window, false, flags);
+        if system {
+            forget_system_owner(&window, notified);
+        }
         return;
     };
-    let mut item = NO_SELECTED_ITEM;
-    if character != 0 {
+    let mut item = if system { 0 } else { NO_SELECTED_ITEM };
+    if character != 0 && !space {
         match find_item_by_key(&window, menu, character) {
             -1 | -2 => flags |= TF_ENDMENU,
             at => item = at as u32,
@@ -1057,14 +1135,19 @@ pub fn track_kbd_menu_bar(window: &Arc<Window>, character: u16) {
     }
     if flags & TF_ENDMENU == 0 {
         select_item(&window, menu, item, true, None);
-        if item == NO_SELECTED_ITEM {
-            move_selection(&window, menu, 1);
-        } else {
-            post(&window, WM_KEYDOWN, u32::from(VK_RETURN), 0);
+        if !system || space {
+            if item == NO_SELECTED_ITEM {
+                move_selection(&window, menu, 1);
+            } else {
+                post(&window, WM_KEYDOWN, u32::from(VK_RETURN), 0);
+            }
         }
     }
     track_menu(menu, flags, (0, 0), &window);
     exit_tracking(&window, false, flags);
+    if system {
+        forget_system_owner(&window, notified);
+    }
 }
 
 #[cfg(test)]

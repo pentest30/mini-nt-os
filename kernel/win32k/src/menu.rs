@@ -489,6 +489,15 @@ impl Menus {
         Some(if recurse && item.submenu != 0 { self.destroy(item.submenu) } else { Vec::new() })
     }
 
+    /// Les drapeaux `flags` (MNF_*, MNS_*) s'ajoutent à ceux du menu
+    /// `handle` ; faux sans lui.
+    pub fn add_flags(&mut self, handle: u32, flags: u32) -> bool {
+        let Some(entry) = self.map.get_mut(&handle) else { return false };
+        entry.state.flags |= flags;
+        entry.dirty = true;
+        true
+    }
+
     /// IntEnableMenuItem : l'item `id` (selon `flags`, MF_BYPOSITION) prend
     /// l'état grisé et désactivé de `flags` ; rend celui d'avant (MF_GRAYED,
     /// MF_DISABLED), `None` sans l'item.
@@ -1035,6 +1044,14 @@ pub fn remove(handle: u32, at: u32, flags: u32, recurse: bool) -> bool {
 /// PASSIVE_LEVEL.
 pub fn enable(handle: u32, id: u32, flags: u32) -> u32 {
     with(|menus| menus.enable(handle, id, flags).ok_or(ERROR_MENU_ITEM_NOT_FOUND)).unwrap_or(u32::MAX)
+}
+
+/// [`Menus::add_flags`], publié.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn add_flags(handle: u32, flags: u32) -> bool {
+    with(|menus| Ok(menus.add_flags(handle, flags))).unwrap_or(false)
 }
 
 /// CheckMenuItem : [`Menus::check`] ; -1 sans le menu ou l'item.

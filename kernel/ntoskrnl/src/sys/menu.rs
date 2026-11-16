@@ -3,7 +3,8 @@
 //! par NtUserThunkedMenuItemInfo, leur état par NtUserEnableMenuItem,
 //! NtUserCheckMenuItem et NtUserSetMenuDefaultItem, le menu par
 //! NtUserThunkedMenuInfo, NtUserSetMenuContextHelpId et
-//! NtUserSetMenuFlagRtoL, la barre d'une fenêtre par NtUserSetMenu ; la
+//! NtUserSetMenuFlagRtoL, la barre d'une fenêtre par NtUserSetMenu, son
+//! menu système par NtUserGetSystemMenu et NtUserSetSystemMenu ; la
 //! destruction par NtUserRemoveMenu, NtUserDeleteMenu, NtUserDestroyMenu ;
 //! la barre se mesure par NtUserGetMenuBarInfo, NtUserGetMenuItemRect,
 //! NtUserMenuItemFromPoint et se surligne par NtUserHiliteMenuItem ; un menu
@@ -217,6 +218,29 @@ pub(super) fn nt_user_set_menu(arguments: &[u32]) -> NtStatus {
     let [hwnd, hmenu, repaint] = arguments[..3] else { unreachable!("3 arguments") };
     let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
     boolean(win32k::window::set_menu(&window, hmenu, repaint != 0))
+}
+
+/// NtUserGetSystemMenu(hWnd, bRevert) : HMENU, le menu de la fenêtre (son
+/// menu système, `win32k::sysmenu::get`, créé au premier appel) ; avec
+/// `bRevert`, il est détruit et rien n'est rendu. 0 pour une fenêtre qui
+/// n'existe pas ou sans WS_SYSMENU.
+pub(super) fn nt_user_get_system_menu(arguments: &[u32]) -> NtStatus {
+    let [hwnd, revert] = arguments[..2] else { unreachable!("2 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    NtStatus(win32k::sysmenu::get(&window, revert != 0).unwrap_or(0))
+}
+
+/// NtUserSetSystemMenu(hWnd, hMenu) : BOOL, le menu déroulant `hMenu`
+/// devient le menu de la fenêtre (`win32k::sysmenu::set`) ; FALSE pour une
+/// fenêtre qui n'existe pas ou sans WS_SYSMENU, et
+/// `ERROR_INVALID_MENU_HANDLE` pour un menu qui n'existe pas.
+pub(super) fn nt_user_set_system_menu(arguments: &[u32]) -> NtStatus {
+    let [hwnd, hmenu] = arguments[..2] else { unreachable!("2 arguments") };
+    let Some(window) = win32k::window::get(hwnd) else { return fail(ERROR_INVALID_WINDOW_HANDLE, 0) };
+    match menu(hmenu) {
+        Ok(hmenu) => NtStatus(u32::from(win32k::sysmenu::set(&window, hmenu))),
+        Err(error) => fail(error, 0),
+    }
 }
 
 /// Le RECT `rect` en `address` chez le client.

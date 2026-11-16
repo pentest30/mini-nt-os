@@ -187,3 +187,4 @@ GetClassLongW@8
 SetWindowLongA@12
 RegisterHotKey@16
 UnregisterHotKey@8
+GetSystemMenu@8

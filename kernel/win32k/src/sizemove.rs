@@ -35,11 +35,11 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::user::vk::{VK_ESCAPE, VK_RETURN};
 use abi::user::{
     Msg32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLOSE, HTHSCROLL, HTLEFT, HTMAXBUTTON, HTMENU,
-    HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, SC_CLOSE, SC_HSCROLL, SC_KEYMENU, SC_MAXIMIZE,
-    SC_MINIMIZE, SC_MOUSEMENU, SC_MOVE, SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-    SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE,
+    HTMINBUTTON, HTRIGHT, HTSYSMENU, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, SC_CLOSE, SC_HSCROLL, SC_KEYMENU,
+    SC_MAXIMIZE, SC_MINIMIZE, SC_MOUSEMENU, SC_MOVE, SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE,
     WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SYSCOMMAND, WS_CHILD, WS_MAXIMIZE,
-    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX,
+    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_SYSMENU,
 };
 
 use crate::gdi::dib::Rect;
@@ -285,6 +285,11 @@ pub fn nc_lbutton_down(window: &Arc<Window>, hit: u32, lparam: u32) {
         // The menu bar: DefWindowProc tracks it (SC_MOUSEMENU).
         HTMENU => {
             let _ = crate::window::send_message(window, WM_SYSCOMMAND, SC_MOUSEMENU + HTMENU, LParam::Value(lparam));
+        }
+        // The caption's icon: the window menu.
+        HTSYSMENU if window.state().style & WS_SYSMENU != 0 => {
+            let command = SC_MOUSEMENU + HTSYSMENU;
+            let _ = crate::window::send_message(window, WM_SYSCOMMAND, command, LParam::Value(lparam));
         }
         // user32 follows the mouse on the bar (DefWndTrackScrollBar).
         HTHSCROLL => {

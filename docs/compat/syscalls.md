@@ -9,7 +9,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | Table | Implémentés | Services |
 |---|---:|---:|
 | ntoskrnl | 131 | 296 |
-| win32k | 190 | 737 |
+| win32k | 192 | 737 |
 
 ## ntoskrnl
 
@@ -748,7 +748,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x11ad` | `NtUserGetRawInputDeviceList` | 3 |  |
 | `0x11ae` | `NtUserGetRegisteredRawInputDevices` | 3 |  |
 | `0x11af` | `NtUserGetScrollBarInfo` | 3 | ✅ |
-| `0x11b0` | `NtUserGetSystemMenu` | 2 |  |
+| `0x11b0` | `NtUserGetSystemMenu` | 2 | ✅ |
 | `0x11b1` | `NtUserGetThreadDesktop` | 2 |  |
 | `0x11b2` | `NtUserGetThreadState` | 1 | ✅ |
 | `0x11b3` | `NtUserGetTitleBarInfo` | 2 |  |
@@ -849,7 +849,7 @@ rendent `STATUS_NOT_IMPLEMENTED`.
 | `0x1212` | `NtUserSetShellWindowEx` | 2 | ✅ |
 | `0x1213` | `NtUserSetSysColors` | 4 |  |
 | `0x1214` | `NtUserSetSystemCursor` | 2 | ✅ |
-| `0x1215` | `NtUserSetSystemMenu` | 2 |  |
+| `0x1215` | `NtUserSetSystemMenu` | 2 | ✅ |
 | `0x1216` | `NtUserSetSystemTimer` | 4 | ✅ |
 | `0x1217` | `NtUserSetThreadDesktop` | 1 | ✅ |
 | `0x1218` | `NtUserSetThreadLayoutHandles` | 2 |  |
