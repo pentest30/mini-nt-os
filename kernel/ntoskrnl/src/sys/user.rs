@@ -361,38 +361,6 @@ fn fail(error: u32) -> NtStatus {
     NtStatus(0)
 }
 
-/// NtUserEnumDisplaySettings(lpszDevice, iMode, lpDevMode, dwFlags) : le
-/// mode d'affichage `iMode` dans le DEVMODEW de l'appelant — le mode
-/// courant seul (ENUM_CURRENT_SETTINGS ou 0) : le périphérique de Mino
-/// n'en a qu'un, celui du framebuffer. TRUE écrit, FALSE autrement.
-pub(super) fn nt_user_enum_display_settings(arguments: &[u32]) -> NtStatus {
-    let [_device, mode, devmode, _flags] = arguments[..4] else { unreachable!("4 arguments") };
-    const ENUM_CURRENT_SETTINGS: u32 = 0xFFFF_FFFF;
-    if devmode == 0 || mode != 0 && mode != ENUM_CURRENT_SETTINGS {
-        let _ = win32k::set_last_error(ERROR_CALL_NOT_IMPLEMENTED);
-        return NtStatus(0);
-    }
-    let Some((width, height)) = win32k::display::mode().map(|mode| (mode.width, mode.height)) else {
-        return NtStatus(0);
-    };
-    /// La taille d'un DEVMODEW de XP (212 octets), tout champs compris.
-    const DEVMODEW_SIZE: usize = 212;
-    let mut out = alloc::vec![0u8; DEVMODEW_SIZE];
-    let word = |out: &mut [u8], at: usize, value: u16| out[at..at + 2].copy_from_slice(&value.to_le_bytes());
-    let dword = |out: &mut [u8], at: usize, value: u32| out[at..at + 4].copy_from_slice(&value.to_le_bytes());
-    for (at, unit) in "MINO".encode_utf16().enumerate() {
-        word(&mut out, at * 2, unit);
-    }
-    word(&mut out, 64, 0x0401); // dmSpecVersion
-    word(&mut out, 68, DEVMODEW_SIZE as u16); // dmSize
-    dword(&mut out, 72, 0x80000 | 0x100000 | 0x40000 | 0x400000); // Pels W/H, BPP, Frequency
-    dword(&mut out, 160, 32); // dmBitsPerPel
-    dword(&mut out, 164, width); // dmPelsWidth
-    dword(&mut out, 168, height); // dmPelsHeight
-    dword(&mut out, 176, 60); // dmDisplayFrequency
-    NtStatus(u32::from(ke::usermem::copy_to_user(u64::from(devmode), &out).is_ok()))
-}
-
 /// NtGdiInit() : TRUE, GDI n'a rien à préparer pour le client (ReactOS non
 /// plus).
 pub(super) fn nt_gdi_init(_arguments: &[u32]) -> NtStatus {

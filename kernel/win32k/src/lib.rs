@@ -43,6 +43,7 @@ pub mod defwnd;
 pub mod desktop;
 pub mod destroy;
 pub mod display;
+pub mod display_settings;
 pub mod font;
 pub mod gdi;
 pub mod gui;

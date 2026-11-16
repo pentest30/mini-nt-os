@@ -1,0 +1,17 @@
+# The display settings (M6), by the Display panel: DISPLAY2.EXE
+# (tests/native/display2.c) takes the place of winlogon.exe, takes
+# WinSta0\Default and starts ReactOS's panel on its Settings page
+# (rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,3).
+features = test-smss, interactive
+requires = userland, native
+initial-command = DISPLAY2.EXE
+cpus     = default, intel
+timeout  = 240
+
+
+expect = [display] on WinSta0\Default
+expect = [display] the panel is up: 1280x800
+
+forbid = *** STOP:
+
+screen = 0 0 FF00FF

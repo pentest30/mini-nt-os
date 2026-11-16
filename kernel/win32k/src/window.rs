@@ -1220,6 +1220,20 @@ pub fn show_desktop_window(desktop: &Desktop, width: u32, height: u32) {
     update_window(window);
 }
 
+/// La fenêtre du bureau `desktop` prend la taille d'un écran de `width` ×
+/// `height`, après un changement de mode (ce que fait DesktopWindowProc de
+/// WM_DISPLAYCHANGE chez ReactOS, par co_WinPosSetWindowPos) ; les DC pris
+/// de ses fenêtres refont leur région. L'appelant repeint ensuite.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn resize_desktop_window(desktop: &Desktop, width: i32, height: i32) {
+    let window = &desktop.window;
+    let rect = Rect::new(0, 0, width, height);
+    update(window, |state| (state.window, state.client) = (rect, rect));
+    crate::dce::reset_active_dcs(window);
+}
+
 /// IntHideDesktop : la fenêtre du bureau n'est plus visible.
 ///
 /// # IRQL

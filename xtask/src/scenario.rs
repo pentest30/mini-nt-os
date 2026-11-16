@@ -67,6 +67,8 @@
 //! - `screen-wait = SECONDS` (with `screen`): the screen may take that long
 //!   to show the pixels once the markers are found (what keys started is
 //!   slow to appear): it is dumped again every second until it does.
+//! - `screen-size = WIDTH HEIGHT` (with `screen`): the dumped screen must
+//!   also have that size (a scenario that changes the display mode).
 //! - `keys = MARKER => KEY…`: once MARKER is in the serial log of the boot,
 //!   QEMU's monitor types the keys, one after the other (`sendkey`, with
 //!   QEMU's key names: `a`, `shift-a`, `ret`, `spc`…), once
@@ -120,6 +122,8 @@ pub struct Scenario {
     /// (`screen-wait`, in seconds): captured again until it does; 0, one
     /// capture.
     pub screen_wait: Duration,
+    /// The size the dumped screen must have (`screen-size`), if given.
+    pub screen_size: Option<(u32, u32)>,
     /// The test program that takes the place of `winlogon.exe`.
     pub initial_command: Option<String>,
     /// The boot disk takes the shell, `explorer.exe`, and its imports.
@@ -247,6 +251,7 @@ impl Scenario {
             boots: 1,
             screen: Vec::new(),
             screen_wait: Duration::ZERO,
+            screen_size: None,
             initial_command: None,
             shell: false,
             keys: Vec::new(),
@@ -286,6 +291,12 @@ impl Scenario {
                     sc.apitests_floor = Some(floor);
                 }
                 "screen" => sc.screen.push(crate::screen::Pixel::parse(value).map_err(|e| format!("{}: {e}", at()))?),
+                "screen-size" => {
+                    let size = value
+                        .split_once(' ')
+                        .and_then(|(width, height)| Some((width.trim().parse().ok()?, height.trim().parse().ok()?)));
+                    sc.screen_size = Some(size.ok_or_else(|| format!("{}: screen-size `{value}`: WIDTH HEIGHT", at()))?);
+                }
                 "screen-wait" => {
                     let secs = value.parse().map_err(|_| format!("{}: screen-wait `{value}` is not a number", at()))?;
                     sc.screen_wait = Duration::from_secs(secs);
@@ -341,6 +352,9 @@ impl Scenario {
         }
         if sc.initial_command.is_some() && !(sc.requires_userland && sc.requires_native) {
             return Err(format!("{name}/{SCENARIO_FILE}: `initial-command` needs `requires = userland, native`"));
+        }
+        if sc.screen_size.is_some() && sc.screen.is_empty() {
+            return Err(format!("{name}/{SCENARIO_FILE}: `screen-size` without `screen` pixels"));
         }
         if !sc.screen_wait.is_zero() && sc.screen.is_empty() {
             return Err(format!("{name}/{SCENARIO_FILE}: `screen-wait` without `screen` pixels"));
@@ -473,6 +487,10 @@ requires = userland
         let waiting = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5\nscreen-wait = 60").unwrap();
         assert_eq!(waiting.screen_wait, Duration::from_secs(60));
         assert!(Scenario::parse("x", "expect = a\nscreen-wait = 60").is_err(), "a wait without pixels");
+        let sized = Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5\nscreen-size = 800 600").unwrap();
+        assert_eq!((sized.screen_size, screen.screen_size), (Some((800, 600)), None));
+        assert!(Scenario::parse("x", "expect = a\nscreen-size = 800 600").is_err(), "a size without pixels");
+        assert!(Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5\nscreen-size = 800").is_err());
         assert!(Scenario::parse("x", "expect = a\nscreen = 1 2 3A6EA5\nscreen-wait = soon").is_err());
         let gui = Scenario::parse("x", "expect = a\nrequires = userland, native\ninitial-command = GUI1.EXE").unwrap();
         assert_eq!(gui.initial_command.as_deref(), Some("GUI1.EXE"));
