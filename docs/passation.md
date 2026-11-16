@@ -1,5 +1,22 @@
 # Notes de passation
 
+- **Le menu de la fenêtre ; cacher la fenêtre active cède l'activation** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 36 ; demandé après la PR 131, la suite qu'elle annonçait).
+  SW_HIDE de la fenêtre active passe l'activation et le clavier comme SW_MINIMIZE (`winpos::show_window`,
+  co_WinPosShowWindow). Le menu système (`win32k::sysmenu` : IntGetSystemMenu, MENU_GetSystemMenu,
+  IntSetSystemMenu, MENU_InitSysMenuPopup) : un menu d'un item dans `WND.SystemMenu`, son sous-menu le gabarit
+  SYSMENU de `user32` (rappel LoadMenu) avec les glyphes HBMMENU_POPUP_*, MNS_CHECKORBMP, Close par défaut ;
+  NtUserGetSystemMenu, NtUserSetSystemMenu ; HTSYSMENU (l'icône du titre, `defwnd::nc_hit_test`) ; le suivi
+  (`menutrack` : le clic sur l'icône, SC_MOUSEMENU + HTSYSMENU ; Alt+Espace et une fenêtre réduite ou sans barre,
+  SC_KEYMENU ; le menu sous l'icône, NC_GetSysPopupPos ; un second clic le referme ; le double-clic ferme la
+  fenêtre) ; les glyphes de Marlett dans le menu (`menupopup`, `cxTextAlign`). Écarts voulus (créé au premier
+  besoin, pas cloné, WM_INITMENU, le double-clic dans la boucle) dans l'étape 36. Scénario `window-menu`
+  (`tests/native/sysmenu1.c`, AMD et Intel ; cinq mutations détectées) ; tests hôte (`sysmenu`, `menupopup`,
+  `defwnd`). **Suite** : le clic
+  droit sur le titre (WM_NCRBUTTONDOWN, WM_CONTEXTMENU), SC_MOVE et SC_SIZE au clavier, ←/→ entre le menu système
+  et la barre, le bouton de fermeture grisé quand Close l'est ; SetForegroundWindow d'une fenêtre réduite
+  (`input::can_activate` la refuse, ReactOS l'active) ; vérifier sous VirtualBox avec le Bloc-notes.
+
 - **Réduire, agrandir, rétablir** (`claude/stoic-margulis-2f5356`, PR 131, partie de `claude/new-session-696xfc`
   `509ad05`, puis fusionnée avec la PR 134 le 2026-11-15 ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 35 ; demandé parce que sous VirtualBox les boutons Réduire

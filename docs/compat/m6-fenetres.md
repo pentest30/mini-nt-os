@@ -1670,3 +1670,59 @@ fenêtre réduite qui la réduit ; une fenêtre réduite toute en titre ; le dou
 Agrandir sur une fenêtre agrandie, Réduire sur une fenêtre réduite. `menu`, `notepad`, `desktop-launch` passent sur
 AMD et Intel ; `gui` échoue comme au commit de départ (l'ordre des WM_PAINT des sœurs, de bas en haut depuis
 l'étape 24 : voir la passation).
+
+## Étape 36 : le menu de la fenêtre (le menu système) ; cacher la fenêtre active
+
+Demandés après l'étape 35 : le menu de la fenêtre (l'icône du titre, Alt+Espace : Restaurer, Réduire, Agrandir,
+Fermer) n'existait pas, et cacher la fenêtre active (ShowWindow SW_HIDE) ne passait l'activation à aucune autre.
+
+`menu.c` de win32k (IntGetSystemMenu, MENU_GetSystemMenu, IntSetSystemMenu, MENU_InitSysMenuPopup,
+MENU_TrackMouseMenuBar, MENU_TrackKbdMenuBar, MENU_ShowSubPopup, MENU_ButtonDown, MENU_PtMenu, MENU_TrackMenu,
+MENU_DrawPopupGlyph, MENU_GetBitmapItemSize, MENU_CalcItemSize, MENU_DrawMenuItem, NtUserGetSystemMenu,
+NtUserSetSystemMenu), `nonclient.c` (GetNCHitEx, NC_GetSysPopupPos, NC_HandleNCLButtonDown,
+NC_HandleNCLButtonDblClk), `winpos.c` (co_WinPosShowWindow), `window.c` (co_UserFreeWindow), ReactOS comme
+spécification ; `win32k::sysmenu`, `win32k::menutrack`, `win32k::menupopup`, `win32k::defwnd`,
+`win32k::sizemove`, `win32k::winpos`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Cacher la fenêtre active (`winpos::show_window`) | comme pour SW_MINIMIZE, la fenêtre active du premier plan cachée par SW_HIDE cède l'activation (`give_up_activation` : ActivateOtherWindowMin, sinon co_WinPosActivateOtherWindow) et le clavier revient à son parent ; ShowWindow rendait avant d'y arriver |
+| Le menu système (`sysmenu::get`, IntGetSystemMenu, MENU_GetSystemMenu) | un menu d'un seul item (MNF_SYSMENU), dans `WND.SystemMenu` ; son sous-menu, ce que rend GetSystemMenu (MNF_SYSSUBMENU), est le gabarit SYSMENU de `user32` (SYSMENUMDI d'une fenêtre fille MDI) chargé par le rappel LoadMenu (`callback::load_menu`) : Restore, Move, Size, Minimize, Maximize, un séparateur, Close ; MNS_CHECKORBMP, les glyphes HBMMENU_POPUP_RESTORE, _MINIMIZE, _MAXIMIZE, _CLOSE, Close par défaut, retiré d'une classe CS_NOCLOSE ; créé au premier besoin pour une fenêtre WS_SYSMENU ; GetSystemMenu(TRUE) le détruit et ne rend rien ; détruit avec la fenêtre (`destroy::finish`) |
+| NtUserGetSystemMenu, NtUserSetSystemMenu (`sys::menu`) | le menu déroulant du menu système ; un menu déroulant de l'application à la place (IntSetSystemMenu : l'ancien détruit, le nouveau dans un menu d'un item neuf) |
+| Les items selon la fenêtre (`sysmenu::popup_states`, MENU_InitSysMenuPopup) | avant d'être montré : Size grisé sans cadre épais ou pour une fenêtre réduite ou agrandie, Move pour une fenêtre réduite ou agrandie, Minimize sans WS_MINIMIZEBOX ou pour une fenêtre réduite, Maximize sans WS_MAXIMIZEBOX ou pour une fenêtre agrandie, Restore pour une fenêtre ni réduite ni agrandie, Close pour une classe CS_NOCLOSE (sinon il garde l'état qu'on lui a donné) ; l'item par défaut : Restore d'une fenêtre réduite, depuis le titre Restore ou Maximize, Close depuis l'icône ou le clavier |
+| L'icône du titre (`defwnd::nc_hit_test`, GetNCHitEx) | HTSYSMENU sur la hauteur du titre moins un depuis le bord gauche, pour une fenêtre WS_SYSMENU qui a une icône (NC_IconForWindow : `cursor::caption_icon`), pas une fenêtre d'outils ; une fenêtre réduite aussi (sa barre sans shell) |
+| Ouvrir à la souris (`sizemove::nc_lbutton_down`, `menutrack::track_mouse_menu_bar`) | WM_NCLBUTTONDOWN sur HTSYSMENU : WM_SYSCOMMAND SC_MOUSEMENU + HTSYSMENU ; le suivi du menu d'un item (son item est l'icône : MENU_ButtonDown, MENU_PtMenu), son menu ouvert sous l'icône (`sysmenu::icon_rect`, NC_GetSysPopupPos ; toute la fenêtre réduite), WM_INITMENUPOPUP (le mot haut de lParam TRUE), WM_MENUSELECT (MF_SYSMENU) ; un second clic sur l'icône le referme ; un double-clic sur l'icône ferme la fenêtre (SC_CLOSE si Close est actif ; aussi par WM_NCLBUTTONDBLCLK, `defwnd::DoubleClick::Close`) |
+| Ouvrir au clavier (`menutrack::track_kbd_menu_bar`) | Alt+Espace (SC_KEYMENU ' ') ; Alt, F10 ou Alt et une lettre d'une fenêtre réduite ou sans barre : le menu système à la place de la barre (rien sans WS_SYSMENU), son icône sélectionnée ; Alt+Espace ouvre aussi son menu (un VK_RETURN posté) ; les lettres soulignées choisissent (Mi**n**imize…) |
+| Choisir | l'item choisi poste WM_SYSCOMMAND de son identifiant à la fenêtre (`menutrack::exec_focused`) ; DefWindowProc exécute SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE et SC_CLOSE (`sizemove::sys_command`) ; un item ajouté par l'application (AppendMenu sur GetSystemMenu) lui envoie le sien |
+| Le dessin (`menupopup`) | la place d'un glyphe de SM_CXSIZE - 2 × SM_CYSIZE - 4 avant les deux places de coche (MENU_CalcItemSize) ; le symbole de Marlett (`2`, `0`, `1`, `r`) dedans moins deux pixels, grisé en relief (COLOR_HIGHLIGHTTEXT décalé d'un pixel) ; avec MNS_CHECKORBMP, le texte de tous les items après le plus large des glyphes (`cxTextAlign`) |
+
+Écarts voulus avec ReactOS : le menu système est créé au premier besoin (GetSystemMenu, le suivi), pas au premier
+dessin du bouton de fermeture, qui lit chez ReactOS l'état de SC_CLOSE : le cadre se peint aussi hors du
+processus de la fenêtre, où le rappel LoadMenu est impossible ; le gabarit chargé est gardé tel quel, ReactOS le
+clone (IntCloneMenu) avant de détruire l'original ; WM_INITMENU porte au clavier aussi le menu de GetSystemMenu
+(ReactOS y met le menu d'un item, à la souris celui de GetSystemMenu) ; pendant le suivi, le double-clic sur
+l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message à DefWindowProc
+(WM_NCLBUTTONDBLCLK), qu'ici la capture du menu a fait message de la zone cliente.
+
+Pas encore : le clic droit sur le titre (WM_NCRBUTTONDOWN, WM_CONTEXTMENU : le menu système au point), SC_MOVE et
+SC_SIZE au clavier (Move et Size choisis ne font rien), ←/→ entre le menu système et la barre (MENU_DoNextMenu),
+le bouton de fermeture grisé quand Close l'est, WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
+bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
+la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
+
+Le banc d'essai : `tests/native/sysmenu1.c` (`SYSMENU1.EXE`, MinGW), scénario `window-menu`, à la place de
+`winlogon.exe`. W (100, 100, 400 × 300) et B. SW_HIDE de W active : B active, au premier plan, avec le clavier ;
+SW_SHOW : W active. GetSystemMenu : sept items de Restore à Close, le même handle, le glyphe de Restore, Close par
+défaut ; GetSystemMenu(TRUE) n'en rend pas, le suivant est neuf ; aucun sans WS_SYSMENU ; un item « Min&o »
+(0x0110) ajouté. Puis QEMU : Alt+Espace et n (W réduite, B active ; Restore était grisé, Close par défaut) ; un
+clic sur l'icône de W réduite (en bas à gauche) et r (rétablie ; Minimize était grisé, Restore par défaut) ; un
+clic sur l'icône de W et x (agrandie) ; Alt+Espace et o (WM_SYSCOMMAND 0x0110) ; un double-clic sur l'icône de W
+agrandie (SC_CLOSE, W détruite). Chaque menu ouvert envoie WM_INITMENUPOPUP du menu de GetSystemMenu, le mot haut
+de lParam TRUE. Une capture pendant le suivi montre le menu sous l'icône : Restore grisé en relief, les glyphes de
+Minimize, Maximize et Close, Close en gras avec « Alt+F4 », puis « Mino ».
+
+Tests : hôte (`sysmenu` : les items et l'item par défaut d'une fenêtre normale, agrandie, réduite, d'un dialogue
+CS_NOCLOSE ; la place du menu sous l'icône ; `menupopup` : la place d'un glyphe et des items qui n'en ont pas ;
+`defwnd` : le double-clic sur l'icône) ; `window-menu` sur AMD et Intel. Cinq mutations le font échouer
+chacune : SW_HIDE qui ne cède pas l'activation, pas de HTSYSMENU, Alt+Espace ignoré, Restore grisé à l'envers, le
+double-clic sur l'icône sans effet.
