@@ -336,6 +336,46 @@ fn report_broadcast(message: u32) {
     }
 }
 
+/// CB_GETCOMBOBOXINFO : une boîte combinée remplit le COMBOBOXINFO en
+/// `lParam`.
+const CB_GETCOMBOBOXINFO: u32 = 0x0164;
+/// sizeof(COMBOBOXINFO) : cbSize, rcItem, rcButton, stateButton,
+/// hwndCombo, hwndItem, hwndList.
+const COMBOBOXINFO_SIZE: u32 = 52;
+
+/// NtUserGetComboBoxInfo(hWnd, pcbi) : BOOL, le COMBOBOXINFO en `pcbi`
+/// (GetComboBoxInfo) rempli par la boîte combinée elle-même : le message
+/// CB_GETCOMBOBOXINFO lui est envoyé avec le pointeur de l'appelant, comme
+/// ReactOS le fait pour une boîte qui n'est pas celle du système. Écart
+/// voulu : pour la ComboBox du système, ReactOS lit lui-même le HEADCOMBO de
+/// `user32` (textRect, buttonRect, wState, hWndEdit, hWndLBox) ; Mino lui
+/// envoie le même message, auquel sa procédure, celle de `user32`, répond
+/// avec les mêmes champs (COMBO_GetComboBoxInfo). Pas encore : la boîte
+/// d'un autre processus, où ce pointeur ne désigne rien. FALSE et
+/// `ERROR_INVALID_WINDOW_HANDLE` pour une fenêtre inconnue, l'erreur de la
+/// faute pour un COMBOBOXINFO où l'on ne peut écrire, `ERROR_INVALID_PARAMETER`
+/// pour un `cbSize` trop petit.
+pub(super) fn nt_user_get_combo_box_info(arguments: &[u32]) -> NtStatus {
+    let [handle, info] = arguments[..2] else { unreachable!("2 arguments") };
+    if win32k::window::get(handle).is_none() {
+        return fail(ERROR_INVALID_WINDOW_HANDLE);
+    }
+    if let Err(status) = ke::usermem::probe_for_write(u64::from(info), COMBOBOXINFO_SIZE as usize, 1) {
+        return fail(dos_error(status));
+    }
+    let size = match ke::usermem::UserPtr::<u32>::new(info).read() {
+        Ok(size) => size,
+        Err(status) => return fail(dos_error(status)),
+    };
+    if size < COMBOBOXINFO_SIZE {
+        return fail(abi::winerror::ERROR_INVALID_PARAMETER);
+    }
+    match send_message(handle, CB_GETCOMBOBOXINFO, 0, info) {
+        Ok(filled) => NtStatus(u32::from(filled != 0)),
+        Err(error) => fail(error),
+    }
+}
+
 /// SendMessage : la valeur de la procédure de la fenêtre, ou l'erreur
 /// Win32 de l'envoi.
 fn send_message(handle: u32, message: u32, wparam: u32, lparam: u32) -> Result<u32, u32> {

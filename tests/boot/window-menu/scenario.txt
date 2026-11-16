@@ -2,7 +2,7 @@
 # MinGW, linked to ReactOS's kernel32 and user32): SYSMENU1.EXE takes the
 # place of winlogon.exe and switches to WinSta0\Default, with W at
 # (100, 100, 400 x 300) and B. Update with docs/compat/m6-fenetres.md,
-# step 36.
+# steps 37 and 38.
 # 1. SW_HIDE of the active W hands the activation to B (co_WinPosShowWindow,
 #    winpos::give_up_activation), which takes the keyboard; SW_SHOW gives it
 #    back to W.

@@ -23,6 +23,13 @@
 //! celui-ci était au-dessus de tout, et peint son fond par lui une fois le
 //! bureau sous la barre des tâches.
 //!
+//! LockWindowUpdate ([`lock_window_update`]) : une seule fenêtre à la fois
+//! est verrouillée ; les DC de cette fenêtre et de ses filles ont une région
+//! visible vide (sauf `DCX_LOCKWINDOWUPDATE`), comme son cadre peint par le
+//! noyau ([`is_locked`]). Au déverrouillage, elle est invalidée en entier,
+//! cadre et filles comprises : XP n'invalide que ce qu'on a tenté d'y peindre,
+//! un rectangle que Mino ne tient pas encore. ReactOS n'a qu'un stub.
+//!
 //! Pas encore, journalisé une fois : les DC d'une fenêtre ou d'une classe
 //! (`CS_OWNDC`, `CS_CLASSDC` : un DC du cache à la place), le DC du parent
 //! (`CS_PARENTDC`, `DCX_PARENTCLIP` : la fenêtre seule), `DCX_INTERSECTUPDATE`
@@ -35,8 +42,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use abi::ntstatus::NtStatus;
 use abi::user::{
     CS_CLASSDC, CS_OWNDC, CS_PARENTDC, DCX_CACHE, DCX_CLIPCHILDREN, DCX_CLIPSIBLINGS, DCX_EXCLUDERGN, DCX_INTERSECTRGN,
-    DCX_INTERSECTUPDATE, DCX_KEEPCLIPRGN, DCX_NOCLIPCHILDREN, DCX_PARENTCLIP, DCX_USESTYLE, DCX_WINDOW, WS_CHILD,
-    WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MINIMIZE, WS_VISIBLE,
+    DCX_INTERSECTUPDATE, DCX_KEEPCLIPRGN, DCX_LOCKWINDOWUPDATE, DCX_NOCLIPCHILDREN, DCX_PARENTCLIP, DCX_USESTYLE,
+    DCX_WINDOW, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_MINIMIZE, WS_VISIBLE,
 };
 use hal::sync::KSpinLock;
 
@@ -195,12 +202,91 @@ fn screen() -> Rect {
 fn visible(window: Option<&Window>, flags: u32, clip: Option<&Region>) -> (Region, (i32, i32)) {
     let Some(window) = window else { return (cut(Region::from_rect(screen()), flags, clip), (0, 0)) };
     let client = flags & DCX_WINDOW == 0;
-    let region =
-        crate::paint::visible_region(window, client, flags & DCX_CLIPCHILDREN != 0, flags & DCX_CLIPSIBLINGS != 0);
-    let region = cut(region, flags, clip);
+    let region = if flags & DCX_LOCKWINDOWUPDATE == 0 && is_locked(window) {
+        Region::default()
+    } else {
+        let region =
+            crate::paint::visible_region(window, client, flags & DCX_CLIPCHILDREN != 0, flags & DCX_CLIPSIBLINGS != 0);
+        cut(region, flags, clip)
+    };
     let state = window.state();
     let corner = if client { state.client } else { state.window };
     (region, (corner.left, corner.top))
+}
+
+/// La fenêtre que LockWindowUpdate verrouille, 0 sans elle.
+static LOCKED: KSpinLock<u32> = KSpinLock::new(0);
+
+/// La fenêtre verrouillée par LockWindowUpdate, si elle existe encore (une
+/// fenêtre détruite ne l'est plus).
+fn locked_window() -> Option<Arc<Window>> {
+    let locked = *LOCKED.lock();
+    if locked == 0 {
+        None
+    } else {
+        crate::window::get(locked)
+    }
+}
+
+/// `window` est la fenêtre verrouillée par LockWindowUpdate ou l'une de ses
+/// filles : ses DC ne peignent rien (sauf `DCX_LOCKWINDOWUPDATE`), son
+/// cadre non plus.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn is_locked(window: &Window) -> bool {
+    locked_window().is_some_and(|locked| is_within(window, locked.handle))
+}
+
+/// NtUserLockWindowUpdate : verrouille `window` (faux si une autre fenêtre
+/// l'est déjà), ou, sans fenêtre, déverrouille celle qui l'est, qui est
+/// alors invalidée en entier (cadre, effacement, filles) ; vrai s'il n'y en
+/// avait pas, comme Wine. Les DC déjà pris de la fenêtre et de ses filles
+/// refont leur région.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn lock_window_update(window: Option<&Arc<Window>>) -> bool {
+    use abi::user::{RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE};
+    let previous = locked_window();
+    match window {
+        Some(window) => {
+            if previous.is_some_and(|previous| previous.handle != window.handle) {
+                return false;
+            }
+            *LOCKED.lock() = window.handle;
+            refresh_dcs_within(window);
+        }
+        None => {
+            *LOCKED.lock() = 0;
+            if let Some(previous) = previous {
+                refresh_dcs_within(&previous);
+                crate::paint::redraw_window(
+                    &previous,
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN,
+                );
+            }
+        }
+    }
+    true
+}
+
+/// Les DC pris pour `window` ou l'une de ses filles refont leur région
+/// visible (son verrou a changé).
+fn refresh_dcs_within(window: &Window) {
+    let taken: Vec<(Arc<Dc>, u32, u32, Option<Region>)> = CACHE
+        .lock()
+        .iter()
+        .filter(|entry| entry.busy && entry.window != 0)
+        .map(|entry| (entry.dc.clone(), entry.window, entry.flags, entry.cut.clone()))
+        .collect();
+    for (dc, handle, flags, cut) in taken {
+        let Some(taken) = crate::window::get(handle).filter(|taken| is_within(taken, window.handle)) else { continue };
+        let (vis, origin) = visible(Some(&taken), flags, cut.as_ref());
+        dc.change(|state| (state.vis, state.origin) = (vis, origin));
+    }
 }
 
 /// UserGetDCEx : un DC du cache pour `window` (aucune : tout l'écran), au

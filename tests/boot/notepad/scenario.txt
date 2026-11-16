@@ -41,15 +41,20 @@ forbid = sys: NtGdiGetFontData (0x10b0) is not implemented
 forbid = sys: NtGdiGetGlyphIndicesW (0x10b2) is not implemented
 forbid = sys: NtGdiGetCharABCWidthsW (0x109f) is not implemented
 # The Edit control, white; the active caption; "Line 2, column 7" in the
-# status bar (comctl32), the foot of the L and two pixels of the 2; the Edit
+# status bar (comctl32), the foot of the L and two pixels of the 2. The
+# status bar's font is lfStatusFont of SPI_GETNONCLIENTMETRICS (Tahoma, 11
+# pixels), which comctl32 asks with Vista's 504 bytes: refused until
+# step 36 of m6-fenetres.md, its LOGFONT was garbage and the 2 one pixel to
+# the left. From Tahoma's advances (5, 3, 6, 6, 3): the text from x = 6, the
+# L's stem at 7, the 2 at 6 + 23 + 0.59, its ink from 29 to 34; the Edit
 # control where the dialog was, repainted; the typed text: the stem of the H,
 # the "!" that ends the first line twelve characters on (the advances), the
 # foot of the L of "Line 2".
 screen = 400 300 FFFFFF
 screen = 500 13 5B7AAF
-screen = 7 590 0C0B0B
-screen = 28 590 080808
-screen = 31 585 080808
+screen = 7 590 020202
+screen = 30 590 020202
+screen = 32 583 111010
 screen = 100 80 FFFFFF
 screen = 12 53 000000
 screen = 68 50 3E3E3E

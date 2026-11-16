@@ -420,16 +420,22 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   `abi::user::SbWndExtra32`, lu par `user32` ; GetScrollBarInfo(OBJID_CLIENT), EnableScrollBar, ShowScrollBar) et
   GWLP_WNDPROC d'une fenêtre à procédure du serveur (`win32k::window::replace_procedure`, IntSetWindowProc : ATL
   sous-classe la poignée de taille de l'autocomplétion de `browseui`) ; scénario `scroll-control`
-  (`tests/native/sbctl1.c`) : la fenêtre de dossier d'`explorer` s'ouvre (« My Documents »), sa vue encore vide.
+  (`tests/native/sbctl1.c`) : la fenêtre de dossier d'`explorer` s'ouvre (« My Documents »). M6, étape 36 : elle
+  montre sa barre d'adresse et ses fichiers ; SPI_GETNONCLIENTMETRICS accepte la structure de Vista (504 octets,
+  celle du `comctl32` de ReactOS : refusée, le ReBar de la barre d'adresse avait une police de n'importe quoi et
+  32767 pixels de haut), NtUserGetComboBoxInfo (CB_GETCOMBOBOXINFO), NtUserLockWindowUpdate
+  (`win32k::dce::lock_window_update` : DC et cadre de la fenêtre verrouillée sans rien à peindre), NtUserDrawCaption
+  (`win32k::paint::draw_caption`, `nonclient::caption_ops` : le titre repeint après WM_SETTEXT) ; scénarios
+  `rebar` (`tests/native/rebar1.c`), `caption` (`tests/native/caption1.c`), `folder-view` (Win+R, `C:\WINDOWS`).
   Les raccourcis clavier (`win32k::hotkey` : NtUserRegisterHotKey, NtUserUnregisterHotKey, WM_HOTKEY au clavier,
   Ctrl+Échap de la fenêtre du shell) : `winlogon` reçoit Ctrl+Alt+Suppr (la SAS : « Security », « Unlock
   Computer »), Win+R d'`explorer` ouvre « Run » ; scénario `hotkey` (`tests/native/hotkey1.c`).
-  M6, étape 36 : le menu de la fenêtre (`win32k::sysmenu` : le menu système dans `WND.SystemMenu`, le gabarit
+  M6, étape 37 : le menu de la fenêtre (`win32k::sysmenu` : le menu système dans `WND.SystemMenu`, le gabarit
   SYSMENU de `user32` par le rappel LoadMenu, ses glyphes de Marlett, ses items selon l'état de la fenêtre ;
   NtUserGetSystemMenu, NtUserSetSystemMenu ; HTSYSMENU ; le clic sur l'icône, Alt+Espace, le double-clic qui
   ferme : `menutrack`) ; SW_HIDE de la fenêtre active cède l'activation ; scénario `window-menu`
   (`tests/native/sysmenu1.c`).
-  M6, étape 37 : le clic droit sur le titre ou son icône ouvre le menu de la fenêtre au point
+  M6, étape 38 : le clic droit sur le titre ou son icône ouvre le menu de la fenêtre au point
   (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la souris prise jusqu'au relâchement ;
   `sysmenu::context_menu`, WM_CONTEXTMENU : TrackPopupMenu, les deux boutons depuis le titre) ; TrackPopupMenu
   d'un menu système le met à l'état de sa fenêtre (`menutrack::track_popup_menu`) ; scénario `window-menu`.

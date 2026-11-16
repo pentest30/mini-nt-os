@@ -33,6 +33,7 @@ DestroyIcon@4
 DestroyMenu@4
 DestroyWindow@4
 DispatchMessageW@4
+DrawCaption@16
 DrawIconEx@36
 EndDeferWindowPos@4
 DrawMenuBar@4
@@ -54,6 +55,7 @@ GetCaretPos@4
 GetAncestor@8
 GetClassInfoExW@12
 GetClientRect@8
+GetComboBoxInfo@8
 GetCursor@0
 GetCursorPos@4
 GetForegroundWindow@0
@@ -116,6 +118,7 @@ LoadCursorW@8
 LoadIconW@8
 LoadKeyboardLayoutW@8
 LoadMenuIndirectW@4
+LockWindowUpdate@4
 MenuItemFromPoint@16
 ModifyMenuW@20
 MonitorFromPoint@12

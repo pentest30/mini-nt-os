@@ -1512,7 +1512,7 @@ de défilement, deux contrôles de la classe ScrollBar. Deux manques, dans l'ord
    client (`procedures`, `client_procedure_in`, `server_procedure_in`, `server_fnid_in`).
 
 La fenêtre « My Documents » s'ouvre alors (titre, menus, barre d'outils) ; sa barre d'adresse et sa vue des fichiers
-restent vides : la suite.
+restent vides : voir l'étape 36.
 
 Tests : hôte (`win32k::window` : une procédure du client remplacée, rendue, NULL qui la garde, l'autre jeu de
 caractères refusé ; une procédure du serveur sous-classée en Unicode puis en ANSI et rendue ; un contrôle qui passe
@@ -1671,7 +1671,85 @@ Agrandir sur une fenêtre agrandie, Réduire sur une fenêtre réduite. `menu`, 
 AMD et Intel ; `gui` échoue comme au commit de départ (l'ordre des WM_PAINT des sœurs, de bas en haut depuis
 l'étape 24 : voir la passation).
 
-## Étape 36 : le menu de la fenêtre (le menu système) ; cacher la fenêtre active
+## Étape 36 : la fenêtre de dossier montre ses fichiers (SPI_GETNONCLIENTMETRICS de Vista, GetComboBoxInfo, LockWindowUpdate, DrawCaption)
+
+La fenêtre de dossier d'`explorer` (CShellBrowser de `browseui` : « My Documents » du menu Démarrer, ou Win+R puis
+`C:\WINDOWS`) s'ouvrait avec son titre, ses menus et sa barre d'outils, mais sans barre d'adresse et sur une vue grise.
+NtUserLockWindowUpdate et NtUserDrawCaption, journalisés absents en chemin, n'y étaient pour rien. Une trace
+temporaire des services de win32k appelés par le thread de la fenêtre (le nom de la classe de chaque fenêtre créée,
+retirée depuis) montrait que SHELLDLL_DefView, la vue, était bien créée et listait le dossier, mais placée en
+y = 32767 avec une hauteur négative, et que le ReBar de la barre d'adresse avait 32767 pixels de haut.
+
+Le banc `tests/native/rebar1.c` reproduit la barre d'adresse : un ReBar de `comctl32` avec deux bandes de barres
+d'outils, puis une bande ComboBoxEx titrée « Address » (CDockSite::GetRBBandInfo). L'en-tête de la bande, la place du
+titre, faisait des millions de pixels de large : la police du ReBar (REBAR_Create : `lfMenuFont` de
+SPI_GETNONCLIENTMETRICS) était faite de n'importe quoi. Le `comctl32` de ReactOS est compilé pour Vista et passe à
+SPI_GETNONCLIENTMETRICS une NONCLIENTMETRICSW de 504 octets (`iPaddedBorderWidth` après les 500 d'XP). Mino la
+refusait, comme XP, et `comctl32` ne vérifie pas le résultat : sa structure restait non initialisée. Le SpiGet de
+ReactOS copie `sizeof(NONCLIENTMETRICSW)` sans lire `cbSize`. **Écart voulu avec XP** : Mino accepte 500 et 504
+octets (`uiParam` nul ou égal à `cbSize`), remplit les 500 d'XP, met `iPaddedBorderWidth` à 0 et rend `cbSize` tel
+quel ; une autre taille est refusée (`ERROR_INVALID_PARAMETER`). La bande d'adresse se place alors à (540, 21)-(696,
+51) à côté des liens, ou sur sa propre ligne avec `RBBS_BREAK`, le ReBar a 55 pixels de haut, et la vue de la
+fenêtre de dossier montre les fichiers.
+
+En chemin :
+
+- NtUserGetComboBoxInfo (`sys::message::nt_user_get_combo_box_info`) : `cbSize` de 52 octets au moins, sinon
+  `ERROR_INVALID_PARAMETER`, puis CB_GETCOMBOBOXINFO envoyé au contrôle, qui remplit lui-même sa COMBOBOXINFO. La
+  boîte « Run » et la barre d'adresse le demandent. **Écart voulu** : ReactOS lit lui-même la HEADCOMBO d'un ComboBox
+  du système et n'envoie le message qu'aux autres. Mino l'envoie à tous : la structure est celle de `user32`, qui y
+  répond. Pas encore : un ComboBox d'un autre processus (le message y irait avec une adresse de l'appelant).
+- NtUserLockWindowUpdate (`win32k::dce::lock_window_update`). ReactOS n'a qu'un stub qui rend FALSE, et
+  CShellBrowser::BrowseToPath ne déverrouille que s'il a pu verrouiller. Une seule fenêtre est verrouillée à la fois
+  (une autre : FALSE). Les DC de cette fenêtre et de ses filles, même pris avant le verrou, ont une région visible
+  vide (sauf `DCX_LOCKWINDOWUPDATE`), et son cadre peint par le noyau aussi (`paint::draw_frame_ops`). Une fenêtre
+  détruite rend le verrou. Au déverrouillage, la fenêtre est invalidée en entier, cadre, effacement et filles
+  compris. XP n'invalide que ce qu'on a tenté d'y peindre, un rectangle que Mino ne tient pas encore. Sans fenêtre
+  verrouillée, LockWindowUpdate(NULL) rend TRUE, comme Wine.
+- NtUserDrawCaption (`win32k::paint::draw_caption`, `nonclient::caption_ops` ; UserDrawCaption et
+  UserDrawCaptionBar de ReactOS comme spécification). Après WM_SETTEXT, DefWindowProc de `user32` (UserPaintCaption)
+  repeint le titre par NtUserDrawCaption(`DC_DRAWCAPTIONMD`, rectangle vide) : sans lui, le titre gardait l'ancien
+  texte jusqu'au WM_NCPAINT suivant. Mino repeint alors tout le cadre, actif ou non selon `DC_ACTIVE`, et ReactOS le
+  titre et le bord seulement. Avec un rectangle, le titre est dessiné dans le DC donné : le fond (la couleur du titre
+  actif ou inactif, le dégradé avec `DC_GRADIENT`, la face d'un bouton avec `DC_INBUTTON`), l'icône (`DC_ICON`) et
+  le texte de la fenêtre (`DC_TEXT`, en Tahoma normal avec `DC_SMALLCAP`). Les erreurs : sans rectangle,
+  `ERROR_NOACCESS` ; une fenêtre inconnue, `ERROR_INVALID_WINDOW_HANDLE` ; un DC inconnu, `ERROR_INVALID_HANDLE`.
+  Pas encore : NtUserDrawCaptionTemp (une police, une icône ou un texte donnés), `WNDS2_CAPTIONTEXTTRUNCATED`.
+- `xtask` : le jeton `pause:MS` dans `keys` attend avant le jeton suivant (une fenêtre que les touches d'avant
+  ouvrent).
+
+Vus en chemin, pas faits : NtUserSetActiveWindow, EnableWindow (NtUserCallTwoParam 0x60), NtUserCallOneParam 0x20 et
+0x28, NtUserSetParent, NtUserEnumDisplayMonitors, NtGdiBeginPath, NtGdiEndPath, NtGdiPathToRegion,
+NtQueryInformationThread (classe 0x10), NtNotifyChangeDirectoryFile (« ReadDirectoryChangesW … failed »),
+NtUserFindWindowEx.
+
+Tests : scénario `rebar` (`tests/native/rebar1.c`, AMD et Intel) : SPI_GETNONCLIENTMETRICS de 500, 504 et 503
+octets, GetComboBoxInfo d'un ComboBox de `user32` (et un `cbSize` trop petit), la police du ReBar, la place de la
+bande d'adresse et la hauteur du ReBar. Scénario `caption` (`tests/native/caption1.c`, AMD et Intel) : le titre effacé
+repeint par SetWindowText ; LockWindowUpdate (une autre fenêtre refusée, les boîtes de découpage des DC de la fenêtre,
+d'un DC pris avant, de sa fille, avec `DCX_LOCKWINDOWUPDATE`, d'une autre fenêtre ; un PatBlt sans effet ; le titre
+pas repeint), le déverrouillage (la zone cliente à mettre à jour, WM_PAINT, le titre repeint), les cas limites ;
+DrawCaption dans un rectangle de l'écran (les couleurs, le dégradé, le texte, l'icône, les erreurs). Scénario
+`folder-view` (`disk = system`, deux démarrages) : après le logon, Win+R puis `C:\WINDOWS` ; l'écran montre la barre
+d'adresse blanche, la vue des fichiers blanche (elle était grise) et la barre d'état.
+
+Hôte : `nonclient::caption_ops` (le fond, le dégradé, la face d'un bouton, un rectangle remis en ordre, le
+texte et sa couleur, rien sans police), `xtask::screen::pause_ms`. Chacune de ces neuf mutations fait échouer
+`rebar` ou `caption` : 504 octets refusés ; NtUserGetComboBoxInfo retiré ; les DC de la fenêtre verrouillée qui
+peignent ; son cadre qui peint ; rien d'invalidé au déverrouillage ; les DC pris avant le verrou gardés tels
+quels ; le titre pas repeint (`DC_DRAWCAPTIONMD`) ; `DC_INBUTTON` ignoré ; une seconde fenêtre verrouillée.
+
+La barre d'état de `comctl32` prend aussi sa police de SPI_GETNONCLIENTMETRICS (`lfStatusFont`, demandée avec
+504 octets) : refusée, elle avait elle aussi une police de n'importe quoi, et les pixels attendus du scénario
+`notepad` en venaient. Ils sont refaits d'après les avances de Tahoma à 11 pixels, lues dans la police : le texte
+part de x = 6, le 2 de « Line 2 » est un pixel plus à droite qu'avant. La suite de démarrage : 128 runs sur 132
+passent, `ntfs-readonly` est sauté (pas de `mkntfs`). `notepad` échouait sur AMD et Intel avec ses anciens
+pixels et passe avec les nouveaux. `rostests` (43/84) et `rostests-kernel32` (15/29) restent sous leurs
+planchers, comme `main` (`93197f3`) sur la même machine : NtProtectVirtualMemory y dépasse son délai, et
+l'apitest Pipes est une course (son lecteur lit l'extrémité serveur avant que le client se connecte :
+ERROR_PIPE_LISTENING).
+
+## Étape 37 : le menu de la fenêtre (le menu système) ; cacher la fenêtre active
 
 Demandés après l'étape 35 : le menu de la fenêtre (l'icône du titre, Alt+Espace : Restaurer, Réduire, Agrandir,
 Fermer) n'existait pas, et cacher la fenêtre active (ShowWindow SW_HIDE) ne passait l'activation à aucune autre.
@@ -1704,7 +1782,7 @@ clone (IntCloneMenu) avant de détruire l'original ; WM_INITMENU porte au clavie
 l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message à DefWindowProc
 (WM_NCLBUTTONDBLCLK), qu'ici la capture du menu a fait message de la zone cliente.
 
-Pas encore : le clic droit sur le titre (fait à l'étape 37), SC_MOVE et
+Pas encore : le clic droit sur le titre (fait à l'étape 38), SC_MOVE et
 SC_SIZE au clavier (Move et Size choisis ne font rien), ←/→ entre le menu système et la barre (MENU_DoNextMenu),
 le bouton de fermeture grisé quand Close l'est, WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
 bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
@@ -1727,9 +1805,9 @@ CS_NOCLOSE ; la place du menu sous l'icône ; `menupopup` : la place d'un glyphe
 chacune : SW_HIDE qui ne cède pas l'activation, pas de HTSYSMENU, Alt+Espace ignoré, Restore grisé à l'envers, le
 double-clic sur l'icône sans effet.
 
-## Étape 37 : le clic droit sur le titre
+## Étape 38 : le clic droit sur le titre
 
-Demandé après l'étape 36 : un clic droit sur le titre d'une fenêtre (ou sur son icône) n'ouvrait pas le menu de la
+Demandé après l'étape 37 : un clic droit sur le titre d'une fenêtre (ou sur son icône) n'ouvrait pas le menu de la
 fenêtre ; DefWindowProc journalisait WM_NCRBUTTONDOWN et WM_CONTEXTMENU comme « pas encore ».
 
 `nonclient.c` (NC_HandleNCRButtonDown), `defwnd.c` de win32k (IntDefWindowProc : WM_NCRBUTTONDOWN, WM_CONTEXTMENU),
@@ -1742,7 +1820,7 @@ fenêtre fille), ReactOS comme spécification ; `win32k::sysmenu`, `win32k::defw
 | WM_NCRBUTTONDOWN (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown) | sur le titre ou son icône d'une fenêtre qui a un menu système, la fenêtre prend la souris ; les messages de la souris sortent de la file sans être distribués (après WH_SYSMSGFILTER et WH_MSGFILTER, MSGF_MAX) jusqu'au relâchement du bouton droit ; si elle perd la souris, rien ; relâché sur le titre, l'icône ou une barre de défilement, WM_CONTEXTMENU (elle, le point du relâchement) |
 | WM_CONTEXTMENU (`sysmenu::context_menu`) | une fenêtre fille le passe à son parent ; sinon, au point sur le titre ou son icône (GetNCHitEx), le menu système (IntGetSystemMenu) mis à l'état de la fenêtre depuis cet endroit (MENU_InitSysMenuPopup), puis suivi comme un menu déroulant au point (`menutrack::track_popup_menu`), TPM_LEFTBUTTON et TPM_RIGHTBUTTON depuis le titre, TPM_LEFTBUTTON seul depuis l'icône (`sysmenu::context_menu_buttons`) ; ailleurs (la zone cliente, (−1, −1) du clavier), rien ; DefWindowProc ne revient qu'à la fin du suivi |
 | TrackPopupMenu d'un menu système (`menutrack::track_popup_menu`, IntTrackPopupMenuEx) | après WM_INITMENUPOPUP, un menu MNF_SYSMENU prend l'état de sa fenêtre comme ouvert de l'icône (HTSYSMENU) : Close par défaut, aussi depuis le titre, comme chez ReactOS ; vaut aussi pour TrackPopupMenu(GetSystemMenu(…)) d'une application |
-| Choisir | comme à l'étape 36 : WM_SYSCOMMAND posté de l'item (`menutrack::exec_focused`), que DefWindowProc exécute |
+| Choisir | comme à l'étape 37 : WM_SYSCOMMAND posté de l'item (`menutrack::exec_focused`), que DefWindowProc exécute |
 
 Écart voulu avec ReactOS : un WM_QUIT pendant la boucle du bouton droit la finit, reposté, sans WM_CONTEXTMENU
 (ReactOS l'envoie alors, au point du WM_QUIT), comme la boucle des boutons du titre (`sizemove::track_button`).
