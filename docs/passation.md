@@ -1,5 +1,27 @@
 # Notes de passation
 
+- **Déplacer et redimensionner au clavier** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 39 ; demandé après l'étape 38). Move et Size du menu de la
+  fenêtre (WM_SYSCOMMAND SC_MOVE, SC_SIZE sans endroit) : `sizemove::keyboard_start` (DefWndStartSizeMove : le
+  curseur au milieu du titre pour déplacer ; pour redimensionner, une boucle attend une flèche, qui choisit un bord,
+  ou la souris sur un bord ; Entrée, Échap ou un clic renoncent), puis la boucle de la souris (`sizemove::size_move`),
+  où chaque flèche déplace le curseur de 8 pixels ; Entrée finit, Échap rend la place de départ ; les autres touches
+  enfoncées sont mangées. `sizemove::can_size_move` : une fenêtre visible, pas agrandie, et pour Size un cadre épais et
+  pas réduite. `mouse::set_cursor_pos` (UserSetCursorPos : le curseur placé et un WM_MOUSEMOVE brut, comme la souris).
+  **Écart voulu** : la boucle de ReactOS finit sur un WM_MOUSEMOVE sans le bouton gauche, ce qui arrêterait le
+  clavier au premier mouvement ; Mino ne finit qu'au relâchement, à Entrée ou à Échap. Scénario `keyboard-move`
+  (`tests/native/kbdmove1.c`, AMD et Intel) ; tests hôte (`sizemove`). Sept mutations détectées (le curseur ailleurs
+  qu'au titre, les flèches ignorées, Échap sans retour, Size d'un cadre fin ou une fenêtre cachée acceptés, aucun bord
+  choisi, Échap sans renoncer, `set_cursor_pos` sans son mouvement). Trouvé en relisant, corrigé avant le commit :
+  `i32::clamp` paniquait pour une fenêtre de largeur ou de hauteur nulle quand la souris cherche un bord
+  (`sizemove::point_into`, comme ReactOS `min(max(..))` ; test hôte). Lint propre ; toute la suite : 1166 tests
+  hôte, 137 runs de démarrage sur 138 : `rostests-kernel32` à 15/29 (l'apitest Pipes, ERROR_PIPE_LISTENING, la
+  course notée par la PR 138), 16/29 relancé seul ; `keyboard-move` refait sur AMD et Intel après la correction.
+  **Suite** : ←/→ entre le menu système et la barre, le bouton de fermeture grisé quand Close l'est ;
+  SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS l'active) ; DefWindowProc de
+  WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du clavier) ; WM_MOVING, WM_SIZING, le
+  cadre en pointillés, SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ; vérifier sous VirtualBox avec le Bloc-notes.
+
 - **Le clic droit sur le titre** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 38 ; demandé après l'étape 37). Un clic droit sur le titre ou l'icône d'une fenêtre ouvre son menu système au
   point du relâchement : WM_NCRBUTTONDOWN (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la fenêtre prend la
@@ -17,10 +39,7 @@
   aux planchers). `main` fusionné ensuite (PR 138, la fenêtre de dossier, qui a pris l'étape 36 : nos étapes sont
   devenues 37 et 38) : lint propre, 1162 tests hôte, 136 runs sur 136 (`rebar`, `caption`, `folder-view` compris),
   rostests 44/84 et 16/29.
-  **Suite** : SC_MOVE et SC_SIZE au clavier, ←/→ entre le menu système et la barre, le bouton de fermeture grisé
-  quand Close l'est ; SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS
-  l'active) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du
-  clavier) ; vérifier sous VirtualBox avec le Bloc-notes.
+  La suite : l'entrée du clavier, au-dessus.
 
 - **Le menu de la fenêtre ; cacher la fenêtre active cède l'activation** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 37 ; demandé après la PR 131, la suite qu'elle annonçait).

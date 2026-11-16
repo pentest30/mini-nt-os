@@ -439,6 +439,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la souris prise jusqu'au relâchement ;
   `sysmenu::context_menu`, WM_CONTEXTMENU : TrackPopupMenu, les deux boutons depuis le titre) ; TrackPopupMenu
   d'un menu système le met à l'état de sa fenêtre (`menutrack::track_popup_menu`) ; scénario `window-menu`.
+  M6, étape 39 : déplacer et redimensionner au clavier (Move et Size du menu de la fenêtre : `sizemove::keyboard_start`,
+  DefWndStartSizeMove ; le curseur au milieu du titre, ou un bord choisi par une flèche ; dans la boucle, chaque flèche
+  déplace le curseur de 8 pixels, Entrée finit, Échap rend la place) ; `mouse::set_cursor_pos` (UserSetCursorPos : le
+  curseur placé et son WM_MOUSEMOVE) ; scénario `keyboard-move` (`tests/native/kbdmove1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

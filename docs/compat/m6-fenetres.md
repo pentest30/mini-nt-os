@@ -1783,7 +1783,7 @@ l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message 
 (WM_NCLBUTTONDBLCLK), qu'ici la capture du menu a fait message de la zone cliente.
 
 Pas encore : le clic droit sur le titre (fait à l'étape 38), SC_MOVE et
-SC_SIZE au clavier (Move et Size choisis ne font rien), ←/→ entre le menu système et la barre (MENU_DoNextMenu),
+SC_SIZE au clavier (faits à l'étape 39), ←/→ entre le menu système et la barre (MENU_DoNextMenu),
 le bouton de fermeture grisé quand Close l'est, WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
 bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
 la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
@@ -1843,3 +1843,45 @@ titre et l'icône, rien dans la zone cliente) ; `window-menu` sur AMD et Intel. 
 chacune : WM_NCRBUTTONDOWN ignoré, le relâchement sur le titre qui ne demande rien, le menu ouvert aussi depuis la
 zone cliente, le menu sous l'icône au lieu du point, le bouton droit refusé depuis le titre, TrackPopupMenu qui ne
 met pas le menu système à l'état de la fenêtre (Restore par défaut au lieu de Close).
+
+## Étape 39 : déplacer et redimensionner au clavier (SC_MOVE, SC_SIZE)
+
+Demandé après l'étape 38 : Move et Size du menu de la fenêtre ne faisaient rien. WM_SYSCOMMAND SC_MOVE ou SC_SIZE
+sans endroit (les quatre bits bas à 0) arrivait à DefWindowProc, qui journalisait « moving or sizing with the
+keyboard: not yet ».
+
+`nonclient.c` de win32k (DefWndStartSizeMove, DefWndDoSizeMove), `cursoricon.c` (UserSetCursorPos), ReactOS comme
+spécification ; `win32k::sizemove`, `win32k::mouse`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Quand (`sizemove::can_size_move`) | une fenêtre visible et pas agrandie ; Size demande en plus un cadre épais (UserHasThickFrameStyle : pas un cadre de dialogue seul) et une fenêtre pas réduite ; sinon WM_SYSCOMMAND revient tout de suite, sans WM_ENTERSIZEMOVE |
+| Déplacer (`sizemove::keyboard_start`, `move_start_point`) | le curseur va au milieu du titre, sans l'icône (SM_CXSIZE + 1 avec WS_SYSMENU) ni les boutons Réduire et Agrandir (autant chacun), à SM_CYSIZE / 2 sous le haut de la fenêtre ; puis WM_SETCURSOR (HTCAPTION, WM_MOUSEMOVE) |
+| Redimensionner (`sizemove::keyboard_start`, `size_start_edge`) | la fenêtre prend la souris et une boucle attend un bord : une flèche le choisit (le curseur va au milieu de ce bord, à mi-épaisseur du cadre), ou la souris, ramenée dans la fenêtre, en atteint un ; Entrée, Échap ou un clic relâché renoncent, sans WM_ENTERSIZEMOVE ; les autres messages sont distribués |
+| La boucle (`sizemove::size_move`) | celle de la souris : WM_ENTERSIZEMOVE, la fenêtre suit le curseur, son contenu avec elle ; une flèche déplace le curseur de 8 pixels (`sizemove::arrow_step`), et le WM_MOUSEMOVE qui en vient fait le reste ; la souris aussi déplace ou redimensionne ; Entrée ou un clic relâché finit, Échap rend la place de départ ; les autres touches enfoncées sont mangées, comme chez ReactOS (aussi pendant un déplacement à la souris, où les flèches déplacent elles aussi le curseur) |
+| Placer le curseur (`mouse::set_cursor_pos`, UserSetCursorPos sans les crochets) | le curseur va au point, borné à l'écran, et un WM_MOUSEMOVE brut part comme d'un mouvement de la souris (à la fenêtre qui a la capture, sinon à celle sous le curseur). La boucle tient sa propre idée de la place du curseur : deux flèches lues avant le mouvement de la première comptent toutes les deux |
+
+Écart voulu avec ReactOS : sa boucle finit aussi sur un WM_MOUSEMOVE sans le bouton gauche (les deux branches de
+`g_bWindowSnapEnabled`) ; au clavier, le mouvement que produit UserSetCursorPos la finirait aussitôt. Mino ne la
+finit qu'au relâchement du bouton gauche, à Entrée ou à Échap.
+
+Pas encore : le cadre en pointillés (sans le contenu), WM_MOVING et WM_SIZING, WH_MSGFILTER (MSGF_SIZE) dans les
+boucles, le curseur borné à la zone de travail (ReactOS borne le point à SPI_GETWORKAREA), un coin choisi au clavier
+(ReactOS ne prend qu'un bord), le déplacement d'une fenêtre agrandie (ReactOS le permet pour la détacher de son bord ;
+Move y est grisé), SetCursorPos des applications (TWOPARAM_ROUTINE_SETCURSORPOS, que `mouse::set_cursor_pos`
+servira).
+
+Le banc d'essai : `tests/native/kbdmove1.c` (`KBDMOVE1.EXE`, MinGW), scénario `keyboard-move`, à la place de
+`winlogon.exe`. W (100, 100, 400 × 300), un dialogue D sans cadre épais, une fenêtre cachée H. SC_SIZE à D et SC_MOVE
+à H reviennent sans WM_ENTERSIZEMOVE (étape 1). Puis QEMU : Alt+Espace et m, le curseur au milieu du titre (290, 109),
+→ → ↓ et Entrée : W en (116, 108) (étape 2) ; Alt+Espace, m, ← ← ← et Échap : W reste en (116, 108) (étape 3) ;
+Alt+Espace, m, la souris de (30, 20) et Entrée : W en (146, 128) (étape 4) ; Alt+Espace, s et Échap : rien, pas de
+WM_ENTERSIZEMOVE (étape 5) ; Alt+Espace, s, → (le bord droit, le curseur en (544, 278)), → → et Entrée : 16 pixels de
+plus en largeur (étape 6) ; Alt+Espace, s, ↓ (le bord du bas, le curseur en (354, 426)), ↑ ↑ ↑ et Entrée : 24 pixels de
+moins en hauteur (étape 7).
+
+Tests : hôte (`sizemove` : quand déplacer ou redimensionner, le point du titre, le bord de chaque flèche, le pas des
+flèches, le point ramené dans la fenêtre, même vide : `i32::clamp` y paniquait avant le commit) ; `keyboard-move` sur AMD et Intel. Sept mutations le font échouer chacune : le curseur ailleurs qu'au
+milieu du titre ; les flèches ignorées ; Échap qui ne rend pas la place ; Size sans cadre épais ou une fenêtre cachée
+qui entrent dans la boucle ; aucune flèche ne choisit de bord ; Échap qui ne renonce pas au choix du bord ;
+`mouse::set_cursor_pos` sans son WM_MOUSEMOVE.
