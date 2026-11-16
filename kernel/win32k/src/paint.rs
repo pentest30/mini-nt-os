@@ -822,6 +822,12 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
         static REPORTED: AtomicBool = AtomicBool::new(false);
         report_missing("WM_NCPAINT for a part of the frame (region handles)", &REPORTED);
     }
+    paint_frame(window, state.state & WNDS_ACTIVEFRAME != 0);
+}
+
+/// Le cadre de `window`, actif ou non, peint là où elle se voit.
+fn paint_frame(window: &Window, active: bool) {
+    let state = window.state();
     let size = (state.window.right - state.window.left, state.window.bottom - state.window.top);
     let text = window::text(window).unwrap_or_default();
     let (bars, size_grip) = crate::scroll::frame_bars(window, &state);
@@ -831,7 +837,7 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
         size,
         &text,
         &|rect| crate::menubar::paint(window, rect),
-        state.state & WNDS_ACTIVEFRAME != 0,
+        active,
         true,
         &crate::metrics::get,
         &system_color,
@@ -848,6 +854,59 @@ pub fn nc_paint(window: &Window, hrgn: u32) {
         report_missing("scroll bars without their SBINFO (the desktop heap is full)", &REPORTED);
     }
     draw_frame_ops(window, &state, &ops);
+}
+
+/// NtUserDrawCaption (NtUserDrawCaptionTemp sans police, icône ni texte
+/// donnés) : avec `DC_DRAWCAPTIONMD` et un rectangle vide, le cadre de
+/// `window` peint de nouveau, actif ou non selon `DC_ACTIVE` (le titre que
+/// `user32` repeint après WM_SETTEXT, UserDrawCaptionBar ; rien pour une
+/// fenêtre invisible, sauf `DC_NOVISIBLE`) ; sinon un titre dans `rect`,
+/// coordonnées logiques de `hdc` (UserDrawCaption,
+/// [`crate::nonclient::caption_ops`]), du texte de `window` s'il y en a une.
+/// UserDrawCaptionBar ne peint que le titre et le bord : Mino repeint tout
+/// le cadre.
+///
+/// # Errors
+/// `ERROR_INVALID_HANDLE` pour un DC inconnu.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, sans rien tenir.
+pub fn draw_caption(window: Option<&Window>, hdc: u32, rect: Rect, flags: u32) -> Result<bool, u32> {
+    use abi::user::{DC_ACTIVE, DC_DRAWCAPTIONMD, DC_NOVISIBLE};
+    if let Some(window) = window.filter(|_| flags & DC_DRAWCAPTIONMD != 0 && rect.is_empty()) {
+        let state = window.state();
+        if (flags & DC_NOVISIBLE != 0 || window::is_visible(window)) && state.window != state.client {
+            paint_frame(window, flags & DC_ACTIVE != 0);
+        }
+        return Ok(true);
+    }
+    let dc = crate::gdi::dc::lock(hdc).ok_or(abi::winerror::ERROR_INVALID_HANDLE)?;
+    let (styles, text, icon) = match window {
+        Some(window) => {
+            let state = window.state();
+            (
+                (state.style, state.ex_style),
+                window::text(window).unwrap_or_default(),
+                crate::cursor::caption_icon(window),
+            )
+        }
+        None => ((0, 0), Vec::new(), None),
+    };
+    let (ops, _) = crate::nonclient::caption_ops(
+        rect,
+        flags,
+        styles,
+        &text,
+        icon,
+        &crate::metrics::get,
+        &system_color,
+        &crate::font::text_run_named,
+    );
+    let state = dc.state();
+    let origin = crate::gdi::dc::logical_origin(&state, None);
+    let clip = state.rao();
+    state.draw(|surface| crate::gdi::draw::paint(surface, &ops, origin, &clip));
+    Ok(true)
 }
 
 /// UserDrawCaptionButtonWnd : le bouton `hit` (HTCLOSE, HTMINBUTTON,
@@ -881,11 +940,16 @@ pub fn draw_caption_button(window: &Window, hit: u32, pushed: bool) {
 /// Fait `ops` (dans les coordonnées de `window`, d'état `state`) à l'écran,
 /// là où elle se voit, sans ses enfants (WS_CLIPCHILDREN) ni ses sœurs
 /// (WS_CLIPSIBLINGS) si son style le dit : le cadre, ou l'intérieur d'une
-/// barre de défilement (IntRefeshScrollInterior).
+/// barre de défilement (IntRefeshScrollInterior). Rien tant que
+/// LockWindowUpdate la verrouille, elle ou un parent
+/// ([`crate::dce::is_locked`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn draw_frame_ops(window: &Window, state: &WindowState, ops: &[crate::gdi::draw::Op]) {
+    if crate::dce::is_locked(window) {
+        return;
+    }
     let clip = visible_region(window, false, state.style & WS_CLIPCHILDREN != 0, state.style & WS_CLIPSIBLINGS != 0);
     let origin = (state.window.left, state.window.top);
     crate::display::draw(|screen| crate::gdi::draw::paint(screen, ops, origin, &clip));

@@ -258,8 +258,7 @@ pub fn caption_button_ops(
 }
 
 /// UserDrawCaptionText : `text` dans le titre `caption`, en Tahoma gras (ou
-/// normal pour une fenêtre d'outils), de la couleur du texte du titre actif
-/// ou inactif ; de deux pixels après le bord gauche (après l'icône, s'il y
+/// normal pour un petit titre, `small`), de la couleur `color` ; de deux pixels après le bord gauche (après l'icône, s'il y
 /// en a une) jusqu'aux boutons, centré en hauteur, fini par « ... » s'il ne
 /// tient pas. Faux sans la police.
 #[expect(clippy::too_many_arguments, reason = "the caption, its window's text and styles, and the system")]
@@ -267,25 +266,23 @@ fn caption_text(
     caption: Rect,
     text: &[u16],
     icon: bool,
-    active: bool,
+    (small, color): (bool, ColorRef),
     style: u32,
     ex_style: u32,
     m: &impl Fn(usize) -> i32,
-    c: &impl Fn(usize) -> ColorRef,
     layout: Layout,
     ops: &mut Vec<Op>,
 ) -> bool {
     if text.is_empty() {
         return true;
     }
-    let small = ex_style & WS_EX_TOOLWINDOW != 0;
     let mut room = Rect::new(caption.left + 2, caption.top, caption.right, caption.bottom);
     if icon {
         room.left += caption.bottom - caption.top;
     }
     if style & WS_SYSMENU != 0 {
         room.right -= m(sm::CYCAPTION) - 1;
-        if style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX) != 0 && !small {
+        if style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX) != 0 && ex_style & WS_EX_TOOLWINDOW == 0 {
             room.right -= 2 * (m(sm::CXSIZE) + 1);
         }
     }
@@ -296,12 +293,77 @@ fn caption_text(
     };
     let top = caption.top + (caption.bottom - caption.top - run.metrics.height()) / 2;
     let baseline = top + run.metrics.ascent;
-    let color = c(if active { color::CAPTIONTEXT } else { color::INACTIVECAPTIONTEXT });
     for glyph in run.glyphs {
         let at = (room.left + glyph.x + glyph.bitmap.left, baseline - glyph.bitmap.top);
         ops.push(Op::Glyph { at, bitmap: glyph.bitmap, color, clip: room });
     }
     true
+}
+
+/// UserDrawCaption (DrawCaption) : un titre dans `rect`, selon `flags`
+/// (`DC_*`), pour une fenêtre de style `style` et `ex_style` (zéro sans
+/// fenêtre), de titre `text`, d'icône `icon` (NC_IconForWindow). Le fond :
+/// le dégradé du titre actif ou inactif (`DC_GRADIENT`), sinon sa couleur,
+/// ou la face d'un bouton (`DC_INBUTTON`, sans dégradé). L'icône
+/// (`DC_ICON`, pas avec `DC_SMALLCAP`) d'une fenêtre qui a un menu système
+/// et n'est pas une fenêtre d'outils, comme dans le cadre ; le texte
+/// (`DC_TEXT`) la suit, en Tahoma normal avec `DC_SMALLCAP`, de la couleur
+/// du texte des boutons avec `DC_INBUTTON`. Rend aussi si le texte a pu
+/// être dessiné (pas sans sa police).
+#[expect(clippy::too_many_arguments, reason = "what UserDrawCaption reads of the window and the system")]
+pub fn caption_ops(
+    rect: Rect,
+    flags: u32,
+    (style, ex_style): (u32, u32),
+    text: &[u16],
+    icon: Option<Arc<crate::cursor::Shape>>,
+    m: &impl Fn(usize) -> i32,
+    c: &impl Fn(usize) -> ColorRef,
+    layout: Layout,
+) -> (Vec<Op>, bool) {
+    use abi::user::{DC_ACTIVE, DC_GRADIENT, DC_ICON, DC_INBUTTON, DC_SMALLCAP, DC_TEXT};
+    let mut ops = Vec::new();
+    let rect = Rect::new(
+        rect.left.min(rect.right),
+        rect.top.min(rect.bottom),
+        rect.left.max(rect.right),
+        rect.top.max(rect.bottom),
+    );
+    let active = flags & DC_ACTIVE != 0;
+    let (from, to) = if active {
+        (color::ACTIVECAPTION, color::GRADIENTACTIVECAPTION)
+    } else {
+        (color::INACTIVECAPTION, color::GRADIENTINACTIVECAPTION)
+    };
+    if flags & DC_INBUTTON != 0 {
+        ops.push(Op::Fill(rect, c(color::BTNFACE)));
+    } else if flags & DC_GRADIENT != 0 {
+        ops.push(Op::GradientH(rect, c(from), c(to)));
+    } else {
+        ops.push(Op::Fill(rect, c(from)));
+    }
+    let icon = icon.filter(|_| {
+        flags & DC_ICON != 0 && flags & DC_SMALLCAP == 0 && style & WS_SYSMENU != 0 && ex_style & WS_EX_TOOLWINDOW == 0
+    });
+    if let Some(icon) = &icon {
+        let (cx, cy) = (m(sm::CXSMICON), m(sm::CYSMICON));
+        let x = rect.left - cx / 2 + 1 + (rect.bottom - rect.top) / 2;
+        let y = (rect.top + rect.bottom - cy) / 2;
+        ops.push(Op::Icon(Rect::new(x, y, x + cx, y + cy), icon.clone()));
+    }
+    let mut drawn = true;
+    if flags & DC_TEXT != 0 {
+        let color = c(if flags & DC_INBUTTON != 0 {
+            color::BTNTEXT
+        } else if active {
+            color::CAPTIONTEXT
+        } else {
+            color::INACTIVECAPTIONTEXT
+        });
+        let font = (flags & DC_SMALLCAP != 0, color);
+        drawn = caption_text(rect, text, icon.is_some(), font, style, ex_style, m, layout, &mut ops);
+    }
+    (ops, drawn)
 }
 
 /// NC_DoNCPaint : le cadre d'une fenêtre de style `style` et `ex_style`,
@@ -374,7 +436,9 @@ pub fn frame_ops(
             let y = (caption.top + caption.bottom - cy) / 2;
             ops.push(Op::Icon(Rect::new(x, y, x + cx, y + cy), icon.clone()));
         }
-        unpainted.text = !caption_text(caption, text, icon.is_some(), active, style, ex_style, m, c, layout, &mut ops);
+        let text_color = c(if active { color::CAPTIONTEXT } else { color::INACTIVECAPTIONTEXT });
+        let font = (ex_style & WS_EX_TOOLWINDOW != 0, text_color);
+        unpainted.text = !caption_text(caption, text, icon.is_some(), font, style, ex_style, m, layout, &mut ops);
         if style & WS_SYSMENU != 0 && !caption_buttons(caption, style, ex_style, m, c, layout, &mut ops) {
             unpainted.text = true;
         }
@@ -872,5 +936,64 @@ mod tests {
         assert_eq!(inactive(4, 4), coded(color::INACTIVECAPTION).0);
         assert_eq!(active(4, 4), coded(color::ACTIVECAPTION).0);
         assert_eq!(inactive(185, 13), coded(color::BTNFACE).0, "a button face");
+    }
+
+    /// DrawCaption (`caption_ops`) in `rect`, on a 120 × 18 surface, with the
+    /// coded palette: each pixel's colour, and whether the text was drawn.
+    fn draw_caption_in(
+        rect: Rect,
+        flags: u32,
+        styles: (u32, u32),
+        text: &str,
+        layout: Layout,
+    ) -> (impl Fn(i32, i32) -> u32, bool) {
+        let (width, height) = (120, 18);
+        let (ops, drawn) = caption_ops(rect, flags, styles, &units(text), None, &metric, &coded, layout);
+        let mut pixels = alloc::vec![0u32; (width * height) as usize];
+        let mut surface =
+            Bitmap::new(&mut pixels, width as u32, height as u32, width as u32, PixelLayout::Rgbx).unwrap();
+        paint(&mut surface, &ops, (0, 0), &Region::from_rect(Rect::new(0, 0, width, height)));
+        (move |x: i32, y: i32| pixels[(y * width + x) as usize], drawn)
+    }
+
+    #[test]
+    fn draw_caption_fills_its_rectangle_as_its_flags_say() {
+        use abi::user::{DC_ACTIVE, DC_GRADIENT, DC_INBUTTON};
+        let whole = Rect::new(0, 0, 120, 18);
+        let (at, drawn) = draw_caption_in(whole, DC_ACTIVE, (0, 0), "", &no_fonts);
+        assert!(drawn, "no text asked");
+        assert_eq!((at(0, 0), at(119, 17)), (coded(color::ACTIVECAPTION).0, coded(color::ACTIVECAPTION).0));
+        let (at, _) = draw_caption_in(whole, 0, (0, 0), "", &no_fonts);
+        assert_eq!(at(60, 9), coded(color::INACTIVECAPTION).0, "inactive");
+        let (at, _) = draw_caption_in(whole, DC_ACTIVE | DC_INBUTTON | DC_GRADIENT, (0, 0), "", &no_fonts);
+        assert_eq!((at(0, 9), at(119, 9)), (coded(color::BTNFACE).0, coded(color::BTNFACE).0), "never a gradient");
+        let (at, _) = draw_caption_in(whole, DC_ACTIVE | DC_GRADIENT, (0, 0), "", &no_fonts);
+        assert_eq!(at(0, 9), coded(color::ACTIVECAPTION).0, "the gradient, from the caption's colour");
+        assert_ne!(at(119, 9), at(0, 9), "towards the gradient's");
+        let (at, _) = draw_caption_in(Rect::new(100, 10, 20, 2), DC_ACTIVE, (0, 0), "", &no_fonts);
+        assert_eq!((at(20, 2), at(99, 9)), (coded(color::ACTIVECAPTION).0, coded(color::ACTIVECAPTION).0), "reordered");
+        assert_eq!((at(19, 2), at(100, 9), at(50, 10)), (0, 0, 0), "nothing outside it");
+    }
+
+    #[test]
+    fn draw_caption_writes_the_window_text_in_the_colour_its_flags_say() {
+        use abi::user::{DC_ACTIVE, DC_INBUTTON, DC_TEXT};
+        if !crate::font::tests::install_reactos_fonts() {
+            return;
+        }
+        let layout: Layout = &crate::font::text_run_named;
+        let (whole, styles) = (Rect::new(0, 0, 120, 18), (WS_OVERLAPPEDWINDOW, 0));
+        let (at, drawn) = draw_caption_in(whole, DC_ACTIVE | DC_TEXT, styles, "Mino", layout);
+        assert!(drawn);
+        assert!(count(&at, Rect::new(2, 0, 60, 18), color::CAPTIONTEXT) > 20, "the text");
+        assert_eq!(count(&at, Rect::new(0, 0, 2, 18), color::CAPTIONTEXT), 0, "two pixels before it");
+        let (at, _) = draw_caption_in(whole, DC_TEXT, styles, "Mino", layout);
+        assert!(count(&at, Rect::new(2, 0, 60, 18), color::INACTIVECAPTIONTEXT) > 20, "inactive");
+        let (at, _) = draw_caption_in(whole, DC_ACTIVE | DC_TEXT | DC_INBUTTON, styles, "Mino", layout);
+        assert!(count(&at, Rect::new(2, 0, 60, 18), color::BTNTEXT) > 20, "a button's text");
+        let (at, _) = draw_caption_in(whole, DC_ACTIVE, styles, "Mino", layout);
+        assert_eq!(count(&at, whole, color::CAPTIONTEXT), 0, "no DC_TEXT, no text");
+        let (_, drawn) = draw_caption_in(whole, DC_ACTIVE | DC_TEXT, styles, "Mino", &no_fonts);
+        assert!(!drawn, "no font");
     }
 }
