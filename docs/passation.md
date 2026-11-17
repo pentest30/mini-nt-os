@@ -1,5 +1,42 @@
 # Notes de passation
 
+- **Le changement de résolution : le troisième critère du M6 est coché** (`claude/display-resolution`, partie de
+  `main` 93197f3 puis fusionnée avec `main` c16673b (PR 138 et 139) ; M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
+  étape 39). Le pilote `drivers/video/bochs-dispi` (le VGA standard de QEMU, le VBoxVGA de VirtualBox : Bochs DISPI
+  par `hal::bochs`, le framebuffer sur la barre 0 PCI par `hal::pci::memory_bar`, GETCAPS et la mémoire vidéo ; 19
+  modes à 32 bits de 640×480 à 2560×1600 sous QEMU, plus celui du micrologiciel), préféré à `gopfb`, redevenu fixe
+  (le `set_mode` qu'on lui avait ajouté pour `test-resolution` est passé à `bochs-dispi`) ; la console de démarrage
+  suit le mode pour l'écran STOP. `abi::display` (`DEVMODEW` de 220 octets, `DISPLAY_DEVICEW`, CDS_*, DISP_CHANGE_*,
+  DM_*). `win32k::display_settings` : `\\.\DISPLAY1` et son moniteur, les modes du pilote en `DEVMODEW`, `find_mode`
+  (LDEVOBJ_bProbeAndCaptureDevmode), `switch` et `apply` (métriques par `metrics::write_screen`, moniteur, capacités
+  de l'écran, pointeur, fenêtre de chaque bureau de la station interactive, DC du cache et DC ouverts sur l'écran ;
+  WM_DISPLAYCHANGE aux fenêtres de premier niveau, 100 ms chacune ; tout repeint). `sys::display` :
+  NtUserEnumDisplayDevices, NtUserEnumDisplaySettings (l'ancien rendait 1/0, deux succès pour `NT_SUCCESS`, et
+  écrivait la largeur à l'octet 164), NtUserChangeDisplaySettings ; le registre (`Control\Video\{4D494E4F-…}\0000`,
+  réécrit dans son fichier ; `HARDWARE\DEVICEMAP\VIDEO`) repris au démarrage. Pour le panneau : EnableWindow
+  (NtUserCallTwoParam 0x60, `window::enable_window`) et NtGdiTransparentBlt (`gdi::bitblt::transparent_blt`,
+  l'aperçu du moniteur) ; `desk.cpl` et `rundll32.exe` sur le disque des scénarios. `xtask` : `screen-size = L H`.
+  Scénarios `display-mode` (`tests/native/display1.c` : énumération, refus, 800×600 par ChangeDisplaySettings avec
+  métriques, WM_DISPLAYCHANGE à deux threads, moniteur, bureau, devcaps, pointeur, registre, capture 800×600) et
+  `display-panel` (`tests/native/display2.c` : le vrai panneau Affichage, Alt+S, Origine, Entrée, puis Alt+Y dans
+  « Display Settings » : 640×480, registre compris, capture 640×480), AMD et Intel. Dix-huit mutations détectées (quatorze par
+  `display-mode`, quatre par `display-panel` : la liste dans l'étape 39).
+  Case cochée dans `05-feuille-de-route.md` : **les trois critères du M6 sont cochés**. CHECKS_PLACEHOLDER
+  **Tâche de diagnostic** (règle 9) : MsgWaitForMultipleObjects d'un thread qui a reçu un message envoyé rend
+  aussitôt « entrée », sans fin (3,8 millions de tours en 180 s, même avec le seul QS_SENDMESSAGE) : l'événement de
+  la file reste signalé. Piste, à vérifier : les bits « changés » de `win32k::queue`, que co_IntPeekMessage efface à
+  chaque PeekMessage et co_MsqDispatchOneSentMessage pour QS_SENDMESSAGE quand la liste des envoyés se vide (et
+  `queue::input_event` qui signale l'événement d'après eux). La sonde du
+  panneau tournait ainsi et affamait `rundll32` (plus d'une minute avant le panneau) ; contournée dans
+  `display2.c` (WaitForSingleObject, sa fenêtre dans un second thread). À corriger avec un test qui l'aurait vu
+  (`msgwait`).
+  **Dettes** : NtGdiPolyPolyDraw, NtGdiSetLayout, NtUserSetParent, SPI_GETKEYBOARDCUES (0x100A),
+  NtUserSetThreadState, NtUserSetActiveWindow, NtUserUnregisterClass (vus dans le panneau, sans effet sur le
+  parcours) ; CDS_FULLSCREEN et le retour au mode du registre à la fin du processus ; ClipCursor ; le
+  `VisRectRegion` chez le client d'un DC ouvert sur l'écran ; la barre des tâches et le bureau d'`explorer` après
+  WM_DISPLAYCHANGE ; « Advanced… » du panneau ; essayer sous VirtualBox (VBoxVGA : la mémoire vidéo n'est pas lue,
+  seuls les modes qui tiennent où celui du micrologiciel tient).
+
 - **Le clic droit sur le titre** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 38 ; demandé après l'étape 37). Un clic droit sur le titre ou l'icône d'une fenêtre ouvre son menu système au
   point du relâchement : WM_NCRBUTTONDOWN (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la fenêtre prend la
