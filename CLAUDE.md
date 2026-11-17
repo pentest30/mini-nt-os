@@ -450,6 +450,11 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   menu système, une classe CS_NOCLOSE ; le menu pas créé pour le lire) : grisé au dessin, sans effet au clic,
   repeint quand EnableMenuItem change une commande du système (`menu::enable`, `paint::draw_caption_buttons`) ;
   scénario `close-button` (`tests/native/closebtn1.c`).
+  M6, étape 42 : SetForegroundWindow active une fenêtre réduite (`input::can_set_foreground` ; `can_activate`
+  reste la règle de co_WinPosActivateOtherWindow), sans lui donner le clavier (`input::activation_takes_focus` :
+  ses touches lui vont en touches système), WM_ACTIVATE dit si elle est réduite (`input::activate_wparam`) ;
+  Entrée la rétablit (`defwnd::key_menu`, `KeyMenu::Restore`) ; scénario `foreground-minimized`
+  (`tests/native/fgmin1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

@@ -1785,8 +1785,8 @@ l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message 
 Pas encore : le clic droit sur le titre (fait à l'étape 38), SC_MOVE et
 SC_SIZE au clavier (faits à l'étape 39), ←/→ entre le menu système et la barre (fait à l'étape 40),
 le bouton de fermeture grisé quand Close l'est (fait à l'étape 41), WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
-bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
-la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
+bureau (MNF_SYSDESKMN). Vu alors, fait à l'étape 42 : SetForegroundWindow refusait une fenêtre réduite
+(`input::can_activate`, la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
 
 Le banc d'essai : `tests/native/sysmenu1.c` (`SYSMENU1.EXE`, MinGW), scénario `window-menu`, à la place de
 `winlogon.exe`. W (100, 100, 400 × 300) et B. SW_HIDE de W active : B active, au premier plan, avec le clavier ;
@@ -1970,3 +1970,41 @@ grisé ; `menu` : ce qui repeint les boutons) ; `close-button` sur AMD et Intel.
 chacune : le bouton jamais grisé au dessin ; EnableMenuItem qui ne repeint pas ; la fenêtre du menu système pas
 trouvée ; SC_CLOSE hors des commandes qui repeignent ; le clic sur un bouton grisé qui ferme ; CS_NOCLOSE ignoré ;
 MF_GRAYED ignoré (MF_DISABLED seul) ; le double-clic sur l'icône qui ferme.
+
+## Étape 42 : SetForegroundWindow d'une fenêtre réduite ; Entrée la rétablit
+
+Demandé après l'étape 41 (vu à l'étape 37) : SetForegroundWindow refusait une fenêtre réduite, parce qu'il suivait la
+règle de co_WinPosActivateOtherWindow (`input::can_activate` : visible, ni réduite ni fille). ReactOS l'active : rien
+dans co_IntSetForegroundWindow ni co_IntSetActiveWindow ne regarde WS_MINIMIZE, hormis le clavier.
+
+`focus.c` de win32k (co_IntSetForegroundAndFocusWindow, co_IntSetForegroundMessageQueue, co_IntSetActiveWindow,
+co_IntSendActivateMessages, co_IntSendDeactivateMessages), `keyboard.c` (ProcessKeyEvent), `defwnd.c`
+(IntDefWindowProc de WM_SYSCHAR) et `winpos.c` (co_WinPosShowWindow), ReactOS comme spécification ; `win32k::input`,
+`win32k::defwnd`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| SetForegroundWindow (`input::set_foreground_window`, `input::can_set_foreground`) | la fenêtre de premier niveau, visible, réduite ou non, devient active et passe au premier plan (TRUE) ; `can_activate` reste la règle de co_WinPosActivateOtherWindow et d'ActivateOtherWindowMin, qui sautent les fenêtres réduites |
+| WM_ACTIVATE (`input::activate_wparam`) | le mot haut de wParam dit si la fenêtre est réduite : 0x10001 pour une fenêtre réduite activée, 0x10000 pour une fenêtre réduite désactivée (aussi par co_WinPosActivateOtherWindow sans autre fenêtre) |
+| Le clavier (`input::activation_takes_focus`, `input::activate`) | une fenêtre réduite activée ne le prend pas : personne ne l'a (l'ancienne fenêtre qui l'avait reçoit WM_KILLFOCUS de 0), comme co_IntSetActiveWindow ; `user32` ne le lui donne pas non plus (DefWindowProc de WM_ACTIVATE saute une fenêtre réduite). Vrai aussi d'un clic sur la barre d'une fenêtre réduite et d'une fenêtre d'un autre thread |
+| Ses touches (`input::send_key`, déjà fait) | sans fenêtre qui a le clavier, elles vont à la fenêtre active en touches système (WM_SYSKEYDOWN, WM_SYSCHAR) : Alt+Espace ouvre son menu (`menutrack::track_kbd_menu_bar`), et ses lettres choisissent dans la boucle du menu |
+| Entrée (`defwnd::key_menu`, `KeyMenu::Restore`) | le WM_SYSCHAR d'Entrée d'une fenêtre réduite, Alt ou non, poste SC_RESTORE à elle-même (IntDefWindowProc), qu'elle reçoit par sa file ; rétablie, elle prend le clavier et reçoit WM_ACTIVATE (`winpos::show_window`, déjà fait) |
+
+Écart avec ReactOS : SetForegroundWindow refuse encore une fenêtre cachée (ReactOS l'active aussi) ; ni la règle du
+premier plan (CanForceFG, LockSetForegroundWindow, le processus de la dernière entrée), ni WM_ASYNC_SETACTIVEWINDOW
+vers un autre thread : une fenêtre d'un autre thread est activée sans messages, comme avant (son clavier suit
+la même règle).
+
+Le banc d'essai : `tests/native/fgmin1.c` (`FGMIN1.EXE`, MinGW), scénario `foreground-minimized`, à la place de
+`winlogon.exe`. W (100, 100, 400 × 300) et sa fille C, B (550, 300). C a le clavier, W est réduite : B active, avec
+le clavier (étape 1). SetForegroundWindow(W) rend TRUE : W active et au premier plan, toujours réduite, personne n'a
+le clavier ; son WM_ACTIVATE porte 0x10001, B reçoit WM_ACTIVATE (0) et WM_KILLFOCUS de 0 (étape 2). QEMU tape a :
+W le reçoit en WM_SYSKEYDOWN (étape 3) ; Alt+Espace puis r : WM_INITMENUPOPUP du menu de la fenêtre, Restore, W
+rétablie avec le clavier ; réduite de nouveau puis SetForegroundWindow(W) (étape 4) ; Entrée : SC_RESTORE, W
+rétablie avec le clavier (étape 5).
+
+Tests : hôte (`input` : la règle de SetForegroundWindow, le mot haut de WM_ACTIVATE, le clavier ; `defwnd` : Entrée
+sur une fenêtre réduite) ; `foreground-minimized` sur AMD et Intel. Six mutations le font échouer chacune : SetForegroundWindow qui suit
+encore `can_activate` ; la règle qui refuse une fenêtre réduite ; le clavier donné à la fenêtre réduite ; WM_ACTIVATE
+sans son mot haut ; Entrée qui ne demande rien ; SC_RESTORE pas posté (la première et la dernière par le scénario
+seul, les autres aussi par les tests hôte).

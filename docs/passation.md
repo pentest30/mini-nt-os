@@ -1,5 +1,24 @@
 # Notes de passation
 
+- **SetForegroundWindow d'une fenêtre réduite ; Entrée la rétablit** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 42 ; demandé après l'étape 41). SetForegroundWindow suivait
+  la règle de co_WinPosActivateOtherWindow (`input::can_activate`) et refusait une fenêtre réduite ; il prend
+  désormais toute fenêtre de premier niveau visible (`input::can_set_foreground`), comme co_IntSetForegroundWindow.
+  Activée, une fenêtre réduite n'a pas le clavier (`input::activation_takes_focus`, co_IntSetActiveWindow : personne
+  ne l'a, aussi après un clic sur sa barre ou pour une fenêtre d'un autre thread) et ses touches lui vont en touches
+  système (déjà fait : `input::send_key`) ; WM_ACTIVATE dit dans son mot haut si la fenêtre est réduite
+  (`input::activate_wparam`, à l'activation comme à la désactivation). Entrée sur une fenêtre réduite (son
+  WM_SYSCHAR) poste SC_RESTORE (`defwnd::key_menu`, `KeyMenu::Restore`, `defwnd::post_sys_command`). **Écart** :
+  une fenêtre cachée reste refusée (ReactOS l'active). Scénario `foreground-minimized` (`tests/native/fgmin1.c`, AMD
+  et Intel : SetForegroundWindow, a, Alt+Espace et r, Entrée) ; tests hôte (`input`, `defwnd`). Six mutations
+  détectées (la règle, le clavier, le mot haut, Entrée, le message posté). Lint propre ; `foreground-minimized` passe
+  sur AMD et Intel ; la suite complète est à faire après ce commit (elle ira dans cette entrée).
+  **Suite** : SetForegroundWindow d'une fenêtre cachée ; WM_ASYNC_SETACTIVEWINDOW (l'activation d'une fenêtre d'un
+  autre thread avec ses messages) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10
+  (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés, SetCursorPos
+  (TWOPARAM_ROUTINE_SETCURSORPOS) ; RemoveMenu et DeleteMenu de Close qui repeignent le bouton ; vérifier sous
+  VirtualBox avec le Bloc-notes.
+
 - **Le bouton de fermeture grisé quand Close l'est** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 41 ; demandé après l'étape 40). `sysmenu::close_enabled`
   (`close_rule`) : Close actif pour une fenêtre WS_SYSMENU sans CS_NOCLOSE dont l'item Close n'est ni grisé, ni
@@ -14,10 +33,7 @@
   c0000185` (STATUS_IO_DEVICE_ERROR à l'écriture du disque ATA) quand l'hôte n'avait plus que 4,5 Gio libres ; relancé
   seul après avoir libéré de la place (le `target/` d'un vieux worktree, `/home/user/wtc`), il passe. Le lien avec la
   place n'est pas prouvé : si l'erreur revient avec de la place, c'est à diagnostiquer.
-  **Suite** : SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS l'active) ;
-  DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du clavier) ;
-  MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés, SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ;
-  RemoveMenu et DeleteMenu de Close qui repeignent le bouton ; vérifier sous VirtualBox avec le Bloc-notes.
+  La suite : l'entrée de SetForegroundWindow d'une fenêtre réduite, au-dessus.
 
 - **← et → entre le menu de la fenêtre et la barre** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 40 ; demandé après l'étape 39). `menutrack::do_next_menu`
