@@ -839,6 +839,7 @@ fn paint_frame(window: &Window, active: bool) {
         &|rect| crate::menubar::paint(window, rect),
         active,
         true,
+        crate::sysmenu::close_enabled(window),
         &crate::metrics::get,
         &system_color,
         &crate::font::text_run_named,
@@ -928,12 +929,25 @@ pub fn draw_caption_button(window: &Window, hit: u32, pushed: bool) {
         size,
         hit,
         pushed,
+        crate::sysmenu::close_enabled(window),
         &crate::metrics::get,
         &system_color,
         &crate::font::text_run_named,
     );
     if let Some(ops) = ops {
         draw_frame_ops(window, &state, &ops);
+    }
+}
+
+/// UserPaintCaption (`DC_BUTTONS`) : les boutons du titre de `window`
+/// repeints aussitôt, relevés ([`draw_caption_button`]) : l'état de Close
+/// dans son menu système a changé.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn draw_caption_buttons(window: &Window) {
+    for hit in [abi::user::HTCLOSE, abi::user::HTMAXBUTTON, abi::user::HTMINBUTTON] {
+        draw_caption_button(window, hit, false);
     }
 }
 

@@ -1,0 +1,33 @@
+# The close button follows Close in the window menu (win32k::sysmenu::
+# close_enabled, win32k::menu::enable; tests/native/closebtn1.c, MinGW,
+# linked to ReactOS's kernel32, user32 and gdi32): CLOSEBTN1.EXE takes the
+# place of winlogon.exe and switches to WinSta0\Default, with W1 (100, 100,
+# 300 x 200), W2 (450, 100) of a CS_NOCLOSE class and W3 (100, 350). It
+# reads the symbol of each close button on the screen (black: enabled;
+# COLOR_BTNSHADOW: grayed). Update with docs/compat/m6-fenetres.md, step 41.
+# 1. EnableMenuItem(SC_CLOSE, MF_GRAYED) on W1's window menu: the button
+#    grayed at once (menu::enable repaints the caption's buttons).
+# 2. W2: grayed (CS_NOCLOSE).
+# 3. W3: grayed, then enabled again: black.
+# 4. The mouse clicks W1's close button, double-clicks W1's icon, clicks W2's
+#    close button: no SC_CLOSE, no WM_CLOSE (sizemove::button_command,
+#    menutrack's double click); W3's close button: WM_CLOSE.
+features = test-smss
+requires = userland, native
+initial-command = CLOSEBTN1.EXE
+cpus     = default, intel
+timeout  = 120
+
+# The pointer starts at (640, 400). W1's close button (378, 106)-(394, 120),
+# its icon (104, 104)-(122, 122); W2's close button (728, 106)-(744, 120);
+# W3's (378, 356)-(394, 370).
+keys = [closebtn] mouse: the close buttons => move:-127,-144 move:-127,-143 press:1 release move:-137,-1 move:-137,0 press:1 release press:1 release move:208,0 move:208,0 move:208,1 press:1 release move:-175,125 move:-175,125 press:1 release
+
+expect = [closebtn] step 1: before, W1's close button enabled
+expect = [closebtn] step 1: EnableMenuItem 0; W1's close button grayed
+expect = [closebtn] step 2: W2's close button grayed
+expect = [closebtn] step 3: grayed 0, W3's close button grayed
+expect = [closebtn] step 3: enabled again 1, W3's close button enabled
+expect = [closebtn] step 4: W3 WM_CLOSE; W1 SC_CLOSE 0, WM_CLOSE 0, its window menus 1; W2 SC_CLOSE 0, WM_CLOSE 0
+expect = [closebtn] done
+forbid = *** STOP:

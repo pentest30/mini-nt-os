@@ -174,11 +174,13 @@ pub fn dragged_rect(start: Rect, part: u32, (dx, dy): (i32, i32), min: [i32; 2],
 }
 
 /// La commande d'un bouton du titre `hit` d'une fenêtre de style `style` :
-/// fermer, réduire ou rétablir une fenêtre réduite, agrandir ou rétablir
-/// une fenêtre agrandie ; `None` pour un bouton que le style désactive.
-pub fn button_command(hit: u32, style: u32) -> Option<u32> {
+/// fermer (si Close est actif, `close_enabled` :
+/// `crate::sysmenu::close_enabled`), réduire ou rétablir une fenêtre
+/// réduite, agrandir ou rétablir une fenêtre agrandie ; `None` pour un
+/// bouton que le style ou Close désactive (NC_DoButton : rien ne se passe).
+pub fn button_command(hit: u32, style: u32, close_enabled: bool) -> Option<u32> {
     match hit {
-        HTCLOSE => Some(SC_CLOSE),
+        HTCLOSE => close_enabled.then_some(SC_CLOSE),
         HTMINBUTTON if style & WS_MINIMIZEBOX != 0 => {
             Some(if style & WS_MINIMIZE != 0 { SC_RESTORE } else { SC_MINIMIZE })
         }
@@ -372,7 +374,9 @@ pub fn size_move(window: &Arc<Window>, wparam: u32, lparam: u32) {
 /// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
 /// rien tenir.
 pub fn track_button(window: &Arc<Window>, hit: u32) {
-    let Some(command) = button_command(hit, window.state().style) else { return };
+    let Some(command) = button_command(hit, window.state().style, crate::sysmenu::close_enabled(window)) else {
+        return;
+    };
     let Ok(thread) = crate::convert_current_thread() else { return };
     if window.pti != thread.server {
         return;
@@ -588,13 +592,15 @@ mod tests {
     #[test]
     fn caption_buttons_and_their_commands() {
         let style = WS_OVERLAPPEDWINDOW;
-        assert_eq!(button_command(HTCLOSE, style), Some(SC_CLOSE));
-        assert_eq!(button_command(HTMINBUTTON, style), Some(SC_MINIMIZE));
-        assert_eq!(button_command(HTMAXBUTTON, style), Some(SC_MAXIMIZE));
-        assert_eq!(button_command(HTMAXBUTTON, style | WS_MAXIMIZE), Some(SC_RESTORE));
-        assert_eq!(button_command(HTMINBUTTON, style | WS_MINIMIZE), Some(SC_RESTORE), "minimized: restore");
-        assert_eq!(button_command(HTMAXBUTTON, style | WS_MINIMIZE), Some(SC_MAXIMIZE));
-        assert_eq!(button_command(HTMINBUTTON, style & !WS_MINIMIZEBOX), None, "a disabled box");
-        assert_eq!(button_command(HTCLIENT, style), None);
+        assert_eq!(button_command(HTCLOSE, style, true), Some(SC_CLOSE));
+        assert_eq!(button_command(HTMINBUTTON, style, true), Some(SC_MINIMIZE));
+        assert_eq!(button_command(HTMAXBUTTON, style, true), Some(SC_MAXIMIZE));
+        assert_eq!(button_command(HTMAXBUTTON, style | WS_MAXIMIZE, true), Some(SC_RESTORE));
+        assert_eq!(button_command(HTMINBUTTON, style | WS_MINIMIZE, true), Some(SC_RESTORE), "minimized: restore");
+        assert_eq!(button_command(HTMAXBUTTON, style | WS_MINIMIZE, true), Some(SC_MAXIMIZE));
+        assert_eq!(button_command(HTMINBUTTON, style & !WS_MINIMIZEBOX, true), None, "a disabled box");
+        assert_eq!(button_command(HTCLIENT, style, true), None);
+        assert_eq!(button_command(HTCLOSE, style, false), None, "Close grayed: nothing");
+        assert_eq!(button_command(HTMAXBUTTON, style, false), Some(SC_MAXIMIZE), "Close only");
     }
 }
