@@ -15,6 +15,12 @@
 # 6. Alt+Space, s, right: the right edge (sizemove::size_start_edge), the
 #    cursor at its middle; right twice: 16 pixels wider.
 # 7. Alt+Space, s, down: the bottom edge; up three times: 24 pixels shorter.
+# 8. Alt+Space, m; W's WM_ENTERSIZEMOVE sleeps while right, right and Enter
+#    are typed: queued together, they still move W 16 pixels (an arrow moves
+#    the window at once: sizemove::size_move).
+# 9. W minimized, active by SetForegroundWindow (no keyboard: system keys),
+#    SC_MOVE posted: right, right, Enter move its bar 16 pixels, and it stays
+#    minimized, no SC_RESTORE (sizemove::loop_key: WM_SYSKEYDOWN too).
 features = test-smss
 requires = userland, native
 initial-command = KBDMOVE1.EXE
@@ -35,6 +41,9 @@ keys = [kbdmove] step 6: WM_ENTERSIZEMOVE => right right ret
 keys = [kbdmove] keyboard: step 7 => alt-spc s
 keys = [kbdmove] step 7: WM_SYSCOMMAND f000 => down
 keys = [kbdmove] step 7: WM_ENTERSIZEMOVE => up up up ret
+keys = [kbdmove] keyboard: step 8 => alt-spc m
+keys = [kbdmove] step 8: WM_ENTERSIZEMOVE => right right ret
+keys = [kbdmove] step 9: WM_ENTERSIZEMOVE => right right ret
 
 expect = [kbdmove] step 1: SC_SIZE without a thick frame, SC_MOVE of a hidden window: WM_ENTERSIZEMOVE 0
 expect = [kbdmove] step 2: WM_SYSCOMMAND f010
@@ -48,6 +57,12 @@ expect = [kbdmove] step 6: WM_ENTERSIZEMOVE, the cursor at (544, 278)
 expect = [kbdmove] step 6: done, W at (146, 128)-(562, 428), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 4
 expect = [kbdmove] step 7: WM_ENTERSIZEMOVE, the cursor at (354, 426)
 expect = [kbdmove] step 7: done, W at (146, 128)-(562, 404), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 5
+expect = [kbdmove] step 8: WM_ENTERSIZEMOVE, the cursor at (344, 137)
+expect = [kbdmove] step 8: done, W at (162, 128)-(578, 404), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 6
+expect = [kbdmove] step 9: W minimized and active: iconic 1, active W 1, focus nobody 1
+expect = [kbdmove] step 9: WM_ENTERSIZEMOVE, the cursor at (74, 783)
+expect = [kbdmove] step 9: done, W at (17, 774)-(183, 799), WM_ENTERSIZEMOVE 1, WM_EXITSIZEMOVE 7
+expect = [kbdmove] step 9: iconic 1, SC_RESTORE 0
 expect = [kbdmove] W destroyed
 expect = [kbdmove] done
 forbid = *** STOP:

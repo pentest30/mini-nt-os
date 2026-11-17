@@ -29,10 +29,13 @@
 //! [`keyboard_start`], DefWndStartSizeMove), le curseur va au milieu du
 //! titre pour déplacer ; pour redimensionner, une flèche choisit le bord
 //! (le curseur va en son milieu), ou la souris l'atteint. Dans la boucle,
-//! chaque flèche déplace le curseur de 8 pixels ([`arrow_step`]), ce qui
-//! produit le mouvement de la souris que la boucle suit ; la souris aussi
+//! chaque flèche déplace le curseur de 8 pixels ([`arrow_step`]) et la
+//! fenêtre avec lui, tout de suite (le mouvement de la souris qu'elle
+//! produit arrive derrière les touches déjà dans la file) ; la souris aussi
 //! déplace ou redimensionne, Entrée ou un clic finit, Échap rend la place de
-//! départ. Les autres touches enfoncées sont mangées.
+//! départ. Les autres touches enfoncées sont mangées. Les touches comptent
+//! aussi en WM_SYSKEYDOWN ([`loop_key`]) : sans fenêtre qui a le clavier
+//! (une fenêtre réduite active), elles arrivent ainsi.
 //!
 //! Pas encore : le cadre en pointillés (sans le contenu), WM_MOVING et
 //! WM_SIZING, WH_MSGFILTER (MSGF_SIZE) dans les boucles, le curseur borné à
@@ -48,8 +51,9 @@ use abi::user::{
     HTMINBUTTON, HTRIGHT, HTSYSMENU, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, SC_CLOSE, SC_HSCROLL, SC_KEYMENU,
     SC_MAXIMIZE, SC_MINIMIZE, SC_MOUSEMENU, SC_MOVE, SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE,
     SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE,
-    WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SETCURSOR, WM_SYSCOMMAND, WS_BORDER, WS_CHILD,
-    WS_DLGFRAME, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+    WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+    WS_BORDER, WS_CHILD, WS_DLGFRAME, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_SYSMENU,
+    WS_THICKFRAME, WS_VISIBLE,
 };
 
 use crate::gdi::dib::Rect;
@@ -144,6 +148,41 @@ pub fn arrow_step(key: u32) -> Option<(i32, i32)> {
         VK_RIGHT => Some((STEP, 0)),
         _ => None,
     }
+}
+
+/// Ce qu'une touche fait dans les boucles du déplacement ([`loop_key`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopKey {
+    /// Entrée : finir.
+    End,
+    /// Échap : renoncer (rendre la place de départ).
+    Cancel,
+    /// Une flèche : le curseur, et la fenêtre, de ce décalage
+    /// ([`arrow_step`]).
+    Arrow(i32, i32),
+    /// Une autre touche.
+    Other,
+}
+
+/// DefWndDoSizeMove, la règle des touches : ce que fait le message `message`
+/// de la touche `key` ; `None` pour un autre message qu'une touche
+/// enfoncée. WM_SYSKEYDOWN compte comme WM_KEYDOWN : sans fenêtre qui a le
+/// clavier, une fenêtre réduite active, ses touches sont système (écart
+/// voulu avec ReactOS, dont la boucle ne lit que WM_KEYDOWN : Échap ne la
+/// finirait pas, et Entrée, traduite, rétablirait la fenêtre).
+pub fn loop_key(message: u32, key: u32) -> Option<LoopKey> {
+    if message != WM_KEYDOWN && message != WM_SYSKEYDOWN {
+        return None;
+    }
+    Some(if key == u32::from(VK_RETURN) {
+        LoopKey::End
+    } else if key == u32::from(VK_ESCAPE) {
+        LoopKey::Cancel
+    } else if let Some((dx, dy)) = arrow_step(key) {
+        LoopKey::Arrow(dx, dy)
+    } else {
+        LoopKey::Other
+    })
 }
 
 /// Le rectangle de la fenêtre partie de `start` quand la souris a bougé de
@@ -253,21 +292,21 @@ fn keyboard_start(thread: &ThreadInfo, window: &Arc<Window>, command: u32) -> Op
         loop {
             let message = next_message(thread)?;
             let rect = window.state().window;
-            match message.message {
-                WM_MOUSEMOVE => {
+            match (message.message, loop_key(message.message, message.w_param)) {
+                (WM_MOUSEMOVE, _) => {
                     let point = point_into((message.pt_x, message.pt_y), rect);
                     let hit = crate::defwnd::window_hit_test(window, point);
                     if (HTLEFT..=HTBOTTOMRIGHT).contains(&hit) {
                         break (hit, point);
                     }
                 }
-                WM_LBUTTONUP => return None,
-                WM_KEYDOWN if [VK_RETURN, VK_ESCAPE].map(u32::from).contains(&message.w_param) => return None,
-                WM_KEYDOWN => {
+                (WM_LBUTTONUP, _) | (_, Some(LoopKey::End | LoopKey::Cancel)) => return None,
+                (_, Some(LoopKey::Arrow(..))) => {
                     if let Some(found) = size_start_edge(message.w_param, rect, (m(sm::CXFRAME), m(sm::CYFRAME))) {
                         break found;
                     }
                 }
+                (WM_KEYDOWN, _) => {}
                 _ => pass_on(thread, &message),
             }
         }
@@ -283,8 +322,10 @@ fn keyboard_start(thread: &ThreadInfo, window: &Arc<Window>, command: u32) -> Op
 /// à la souris, depuis l'endroit du `wparam` et le point `lparam` de
 /// l'écran ; sans endroit (le menu de la fenêtre), d'abord le départ au
 /// clavier ([`keyboard_start`]). La souris déplace ou redimensionne, chaque
-/// flèche déplace le curseur ([`arrow_step`]) ; un clic relâché ou Entrée
-/// finit, Échap rend la place de départ.
+/// flèche déplace le curseur ([`arrow_step`]) et la fenêtre tout de suite
+/// (Entrée peut déjà attendre derrière elle, avant le mouvement de la
+/// souris qu'elle produit) ; un clic relâché ou Entrée finit, Échap rend la
+/// place de départ ([`loop_key`] : WM_KEYDOWN ou WM_SYSKEYDOWN).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
@@ -327,30 +368,36 @@ pub fn size_move(window: &Arc<Window>, wparam: u32, lparam: u32) {
     // Where the cursor is, as far as the loop knows: an arrow moves it from
     // there even before the move it makes comes out of the queue.
     let mut pointer = origin;
+    // The window's rectangle with the cursor at `point`, and the window
+    // placed on a rectangle (if it is not there yet).
+    let rect_at = |point: (i32, i32)| {
+        let delta = (point.0 - origin.0, point.1 - origin.1);
+        dragged_rect(start, part, delta, info.min_track_size, info.max_track_size)
+    };
+    let go = |rect: Rect, current: &mut Rect| {
+        if rect != *current {
+            *current = rect;
+            place(window, rect, moving);
+        }
+    };
     while let Some(message) = next_message(&thread) {
-        match message.message {
-            WM_MOUSEMOVE => {
+        match (message.message, loop_key(message.message, message.w_param)) {
+            (WM_MOUSEMOVE, _) => {
                 pointer = (message.pt_x, message.pt_y);
-                let delta = (message.pt_x - origin.0, message.pt_y - origin.1);
-                let rect = dragged_rect(start, part, delta, info.min_track_size, info.max_track_size);
-                if rect != current {
-                    current = rect;
-                    place(window, rect, moving);
-                }
+                go(rect_at(pointer), &mut current);
             }
-            WM_LBUTTONUP => break,
-            WM_KEYDOWN if message.w_param == u32::from(VK_RETURN) => break,
-            WM_KEYDOWN if message.w_param == u32::from(VK_ESCAPE) => {
-                if current != start {
-                    place(window, start, moving);
-                }
+            (WM_LBUTTONUP, _) | (_, Some(LoopKey::End)) => break,
+            (_, Some(LoopKey::Cancel)) => {
+                go(start, &mut current);
                 break;
             }
-            WM_KEYDOWN => {
-                if let Some((dx, dy)) = arrow_step(message.w_param) {
-                    pointer = crate::mouse::set_cursor_pos(pointer.0 + dx, pointer.1 + dy);
-                }
+            (_, Some(LoopKey::Arrow(dx, dy))) => {
+                // At once: the move it makes comes behind the keys already
+                // queued (Enter may be one of them).
+                pointer = crate::mouse::set_cursor_pos(pointer.0 + dx, pointer.1 + dy);
+                go(rect_at(pointer), &mut current);
             }
+            (WM_KEYDOWN, _) => {}
             _ => pass_on(&thread, &message),
         }
         if thread.queue.with(|queue| queue.capture).0 != window.handle {
@@ -557,6 +604,20 @@ mod tests {
         // A window of no width or height (WM_WINDOWPOSCHANGING answered by
         // the program): i32::clamp would panic, its minimum above its maximum.
         assert_eq!(point_into((300, 200), Rect::new(100, 100, 100, 100)), (99, 99));
+    }
+
+    #[test]
+    fn the_loop_reads_system_keys_too() {
+        // A minimized active window has no keyboard: its keys are system
+        // keys, and still end, cancel and move.
+        for message in [WM_KEYDOWN, WM_SYSKEYDOWN] {
+            assert_eq!(loop_key(message, u32::from(VK_RETURN)), Some(LoopKey::End));
+            assert_eq!(loop_key(message, u32::from(VK_ESCAPE)), Some(LoopKey::Cancel));
+            assert_eq!(loop_key(message, u32::from(VK_RIGHT)), Some(LoopKey::Arrow(8, 0)));
+            assert_eq!(loop_key(message, u32::from(b'A')), Some(LoopKey::Other));
+        }
+        assert_eq!(loop_key(WM_MOUSEMOVE, u32::from(VK_RETURN)), None, "not a key");
+        assert_eq!(loop_key(abi::user::WM_KEYUP, u32::from(VK_RETURN)), None, "a key up");
     }
 
     #[test]

@@ -20,7 +20,15 @@
  * 6. Alt+Space, s, then right picks the right edge (the cursor goes to its
  *    middle), right twice widens W by 16, Enter ends;
  * 7. Alt+Space, s, then down picks the bottom edge, up three times makes W
- *    24 pixels shorter, Enter ends; then W is destroyed.
+ *    24 pixels shorter, Enter ends;
+ * 8. Alt+Space, m, then W's WM_ENTERSIZEMOVE sleeps while QEMU types right,
+ *    right and Enter: all three wait in the queue when the loop starts, and
+ *    W still moves 16 pixels (each arrow moves it at once, before the mouse
+ *    move it makes, which comes behind Enter);
+ * 9. W minimized, then made active by SetForegroundWindow (nobody has the
+ *    keyboard: its keys are system keys); SC_MOVE posted to it: right, right
+ *    and Enter move its bar 16 pixels, and it stays minimized (no
+ *    SC_RESTORE); then W is destroyed.
  * Each result goes to the debug port (DbgPrint), where the scenario looks
  * for it; a "[kbdmove] keyboard:" line, or the WM_SYSCOMMAND and
  * WM_ENTERSIZEMOVE of a step, asks the scenario for its keys.
@@ -96,6 +104,8 @@ typedef struct {
 #define WM_EXITSIZEMOVE 0x0232
 #define SC_SIZE 0xF000
 #define SC_MOVE 0xF010
+#define SC_RESTORE 0xF120
+#define SW_MINIMIZE 6
 #define COLOR_WINDOW 5
 #define MAXIMUM_ALLOWED 0x02000000
 #define KLF_ACTIVATE 0x00000001
@@ -117,10 +127,14 @@ __declspec(dllimport) HWINSTA __stdcall CreateWindowStationW(const WCHAR *name, 
 __declspec(dllimport) LRESULT __stdcall DefWindowProcW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) BOOL __stdcall DestroyWindow(HWND window);
 __declspec(dllimport) LRESULT __stdcall DispatchMessageW(const MSG *message);
+__declspec(dllimport) HWND __stdcall GetActiveWindow(void);
 __declspec(dllimport) BOOL __stdcall GetCursorPos(POINT *point);
+__declspec(dllimport) HWND __stdcall GetFocus(void);
 __declspec(dllimport) BOOL __stdcall GetMessageW(MSG *message, HWND window, UINT min, UINT max);
 __declspec(dllimport) BOOL __stdcall GetWindowRect(HWND window, RECT *rect);
+__declspec(dllimport) BOOL __stdcall IsIconic(HWND window);
 __declspec(dllimport) HKL __stdcall LoadKeyboardLayoutW(const WCHAR *klid, UINT flags);
+__declspec(dllimport) BOOL __stdcall PostMessageW(HWND window, UINT message, WPARAM w, LPARAM l);
 __declspec(dllimport) void __stdcall PostQuitMessage(int code);
 __declspec(dllimport) ATOM __stdcall RegisterClassExW(const WNDCLASSEXW *class_info);
 __declspec(dllimport) BOOL __stdcall RegisterLogonProcess(DWORD process, BOOL logon);
@@ -128,13 +142,16 @@ __declspec(dllimport) LRESULT __stdcall SendMessageW(HWND window, UINT message, 
 __declspec(dllimport) BOOL __stdcall SetForegroundWindow(HWND window);
 __declspec(dllimport) BOOL __stdcall SetProcessWindowStation(HWINSTA station);
 __declspec(dllimport) BOOL __stdcall SetThreadDesktop(HDESK desktop);
+__declspec(dllimport) BOOL __stdcall ShowWindow(HWND window, int command);
+__declspec(dllimport) void __stdcall Sleep(DWORD milliseconds);
 __declspec(dllimport) BOOL __stdcall SwitchDesktop(HDESK desktop);
 __declspec(dllimport) BOOL __stdcall TranslateMessage(const MSG *message);
 
 static HWND w;
-/* The step of W's next WM_SYSCOMMAND (2 to 7), and the WM_ENTERSIZEMOVE and
-   WM_EXITSIZEMOVE received: by W, and by the other windows. */
-static int stage = 2, entered, exited, others_entered;
+/* The step of W's next WM_SYSCOMMAND (2 to 9), and the WM_ENTERSIZEMOVE and
+   WM_EXITSIZEMOVE received: by W, and by the other windows; the SC_RESTORE
+   W received. */
+static int stage = 2, entered, exited, others_entered, restores;
 
 void *memset(void *destination, int value, unsigned int count)
 {
@@ -175,10 +192,18 @@ static LRESULT size_move(HWND window, WPARAM wp, LPARAM lp)
     DbgPrint("[kbdmove] step %d: done, W at (%d, %d)-(%d, %d), WM_ENTERSIZEMOVE %d, WM_EXITSIZEMOVE %d\n", step,
              rect.left, rect.top, rect.right, rect.bottom, entered - before, exited);
     stage++;
-    if (stage <= 7)
+    if (stage <= 8) {
         DbgPrint("[kbdmove] keyboard: step %d\n", stage);
-    else
+    } else if (stage == 9) {
+        ShowWindow(w, SW_MINIMIZE);
+        SetForegroundWindow(w);
+        DbgPrint("[kbdmove] step 9: W minimized and active: iconic %d, active W %d, focus nobody %d\n", IsIconic(w),
+                 GetActiveWindow() == w, GetFocus() == 0);
+        PostMessageW(w, WM_SYSCOMMAND, SC_MOVE, 0);
+    } else {
+        DbgPrint("[kbdmove] step 9: iconic %d, SC_RESTORE %d\n", IsIconic(w), restores);
         DestroyWindow(w);
+    }
     return result;
 }
 
@@ -195,11 +220,16 @@ static LRESULT __stdcall procedure(HWND window, UINT message, WPARAM wp, LPARAM 
     case WM_SYSCOMMAND:
         if ((wp & 0xFFF0) == SC_MOVE || (wp & 0xFFF0) == SC_SIZE)
             return size_move(window, wp, lp);
+        if ((wp & 0xFFF0) == SC_RESTORE)
+            restores++;
         break;
     case WM_ENTERSIZEMOVE:
         entered++;
         GetCursorPos(&cursor);
         DbgPrint("[kbdmove] step %d: WM_ENTERSIZEMOVE, the cursor at (%d, %d)\n", stage, cursor.x, cursor.y);
+        /* Step 8: the keys QEMU types meanwhile wait in the queue. */
+        if (stage == 8)
+            Sleep(2000);
         return 0;
     case WM_EXITSIZEMOVE:
         exited++;
