@@ -31,6 +31,14 @@
 //! attendent à part (`QS_SENDMESSAGE`) : PeekMessage, GetMessage et
 //! WaitMessage les traitent d'abord, sans jamais les rendre.
 //!
+//! Les événements de la file ([`QueueEvent`], `dwQEvent` : POSTEVENT_SAW,
+//! WM_ASYNC_SETACTIVEWINDOW, et POSTEVENT_DAW) disent au thread, posté par
+//! un autre, d'activer une de ses fenêtres ou de se désactiver
+//! (`crate::input`) : ce qui envoie des messages à ses fenêtres se fait dans
+//! son thread. PeekMessage, GetMessage et WaitMessage les traitent quand
+//! aucun message posté ni aucune entrée ne sort, avant WM_PAINT et WM_TIMER
+//! (co_IntPeekMessage, handle_internal_events) ; ils ne sortent jamais.
+//!
 //! Une fenêtre détruite emporte ses messages de la file
 //! ([`QueueState::remove_window_messages`]) ; la fin du thread la vide
 //! ([`QueueState::clear`]).
@@ -139,10 +147,29 @@ pub enum Peeked {
     RawMouse { index: usize, raw: Msg32 },
 }
 
+/// Un événement de la file (`dwQEvent`), qu'un autre thread y a posté pour
+/// ce que le thread doit faire lui-même de son activation
+/// (handle_internal_events).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueEvent {
+    /// POSTEVENT_SAW (WM_ASYNC_SETACTIVEWINDOW) : la fenêtre `hwnd` du
+    /// thread devient active (IntActivateWindow,
+    /// `crate::input::activate_event`). `foreground_from` : le premier plan
+    /// vient d'un autre thread, de ce TID (0 : d'aucun), et ses fenêtres
+    /// recevront WM_ACTIVATEAPP ; `None` s'il était déjà au thread.
+    Activate { hwnd: u32, foreground_from: Option<u32> },
+    /// POSTEVENT_DAW : le thread a perdu le premier plan au profit du thread
+    /// `tid` (IntDeactivateWindow, `crate::input::deactivate_thread`).
+    Deactivate { tid: u32 },
+}
+
 /// Ce que tient une file.
 #[derive(Debug)]
 pub struct QueueState {
     posted: VecDeque<Msg32>,
+    /// Les événements, dans l'ordre (dans `PostedMessagesListHead`, avec
+    /// QS_EVENT, chez ReactOS).
+    events: VecDeque<QueueEvent>,
     /// Les touches du clavier, dans l'ordre (`HardwareMessagesListHead`).
     input: VecDeque<Msg32>,
     /// Les messages envoyés par d'autres threads, dans l'ordre
@@ -180,6 +207,7 @@ impl Default for QueueState {
     fn default() -> Self {
         Self {
             posted: VecDeque::new(),
+            events: VecDeque::new(),
             input: VecDeque::new(),
             sent: VecDeque::new(),
             keys: [0; 256],
@@ -283,6 +311,7 @@ impl QueueState {
     /// sont plus elle.
     pub fn remove_window_messages(&mut self, hwnd: u32) -> Vec<Arc<crate::sent::SentMessage>> {
         self.posted.retain(|message| message.hwnd != hwnd);
+        self.events.retain(|event| !matches!(event, QueueEvent::Activate { hwnd: target, .. } if *target == hwnd));
         self.input.retain(|message| message.hwnd != hwnd);
         let (gone, kept): (Vec<_>, Vec<_>) = self.sent.drain(..).partition(|sent| sent.hwnd == hwnd);
         self.sent = kept.into();
@@ -320,6 +349,38 @@ impl QueueState {
         }
         self.change |= bit;
         self.refresh();
+    }
+
+    /// MsqPostMessage d'un événement (QS_EVENT) : `event` après les autres.
+    pub fn post_event(&mut self, event: QueueEvent) {
+        self.events.push_back(event);
+    }
+
+    /// Le premier événement, sorti de la file.
+    pub fn take_event(&mut self) -> Option<QueueEvent> {
+        self.events.pop_front()
+    }
+
+    /// FindRemoveEventMsg(POSTEVENT_DAW, POSTEVENT_NONE) : les
+    /// désactivations attendues partent (le thread regagne le premier plan
+    /// avant de les avoir vues) ; rend s'il y en avait.
+    pub fn remove_deactivations(&mut self) -> bool {
+        let before = self.events.len();
+        self.events.retain(|event| !matches!(event, QueueEvent::Deactivate { .. }));
+        self.events.len() != before
+    }
+
+    /// FindRemoveEventMsg(POSTEVENT_SAW, POSTEVENT_DAW) : les activations
+    /// attendues avant la première désactivation partent (le thread
+    /// s'active lui-même : elles sont dépassées).
+    pub fn remove_activations(&mut self) {
+        let stop = self.events.iter().position(|event| matches!(event, QueueEvent::Deactivate { .. }));
+        let mut index = 0;
+        self.events.retain(|event| {
+            let keep = stop.is_some_and(|stop| index >= stop) || !matches!(event, QueueEvent::Activate { .. });
+            index += 1;
+            keep
+        });
     }
 
     /// MsqPostMessage : `message` à la fin de la file.
@@ -525,6 +586,36 @@ pub fn post(thread: &ThreadInfo, message: Msg32) {
     thread.queue.wake();
 }
 
+/// L'événement `event` pour `thread`, qui est réveillé : il le traitera à
+/// son prochain PeekMessage, GetMessage ou WaitMessage ([`process_events`]).
+///
+/// # IRQL
+/// <= DISPATCH_LEVEL.
+pub fn post_event(thread: &ThreadInfo, event: QueueEvent) {
+    thread.queue.with(|queue| queue.post_event(event));
+    thread.queue.wake();
+}
+
+/// handle_internal_events : le thread courant `thread` fait ce que disent
+/// les événements de sa file, dans l'ordre ([`crate::input::activate_event`],
+/// [`crate::input::deactivate_thread`]) ; rend s'il y en avait.
+///
+/// # IRQL
+/// PASSIVE_LEVEL, dans le thread, sans rien tenir (des rappels).
+pub fn process_events(thread: &ThreadInfo) -> bool {
+    let mut any = false;
+    while let Some(event) = thread.queue.with(QueueState::take_event).0 {
+        any = true;
+        match event {
+            QueueEvent::Activate { hwnd, foreground_from } => {
+                crate::input::activate_event(thread, hwnd, foreground_from);
+            }
+            QueueEvent::Deactivate { tid } => crate::input::deactivate_thread(thread, tid),
+        }
+    }
+    any
+}
+
 /// La touche `message` pour `thread` (`QS_KEY`), qui est réveillé.
 ///
 /// # IRQL
@@ -546,7 +637,8 @@ pub fn post_quit(thread: &ThreadInfo, code: u32) {
 }
 
 /// PeekMessage : le premier message de la file de `thread` que demande
-/// `filter`, sorti si `remove` ; sinon WM_PAINT pour une de ses fenêtres
+/// `filter`, sorti si `remove` ; sinon, ses événements faits
+/// ([`process_events`]), on regarde de nouveau ; sinon WM_PAINT pour une de ses fenêtres
 /// qui a à se peindre, s'il en a (il ne sort pas : il revient tant que la
 /// fenêtre n'est pas peinte) ; sinon WM_TIMER pour une de ses minuteries
 /// prêtes, qui ne l'est plus si `remove`.
@@ -585,6 +677,13 @@ fn peek_unhooked(thread: &ThreadInfo, filter: &Filter, remove: bool) -> Option<M
             Some(Peeked::RawMouse { index, raw }) => (index, raw),
             Some(Peeked::Message(message)) => return Some(message),
             None => {
+                // Events last (co_IntPeekMessage): done, then everything is
+                // looked at again (they send messages, post some).
+                if process_events(thread) {
+                    crate::sent::dispatch_all(thread);
+                    skip = 0;
+                    continue;
+                }
                 if paints != 0 {
                     if let Some(paint) = crate::paint::paint_message(thread, filter) {
                         return Some(paint);
@@ -702,7 +801,8 @@ pub fn get(thread: &ThreadInfo, filter: &Filter) -> Result<Msg32, NtStatus> {
 /// WaitMessage : attend qu'un message arrive dans la file du thread courant
 /// `thread`, s'il n'y en a pas (ni message posté, ni entrée, ni fenêtre à
 /// peindre, ni minuterie prête) ; les messages envoyés par d'autres threads
-/// sont traités, avant et pendant l'attente, sans la finir.
+/// et les événements de la file sont traités, avant et pendant l'attente,
+/// sans la finir.
 ///
 /// # Errors
 /// Le statut d'une attente qui finit autrement.
@@ -714,7 +814,11 @@ pub fn wait_message(thread: &ThreadInfo) -> Result<(), NtStatus> {
     loop {
         // A message sent while the thread waits is handled here, and the
         // wait goes on: its sender may need it to post what ends the wait.
+        // So are the events (its activation).
         crate::sent::dispatch_all(thread);
+        if process_events(thread) {
+            continue;
+        }
         let ((), wake, _) = thread.queue.with(|_| ());
         if wake & waking != 0 {
             return Ok(());
@@ -947,6 +1051,37 @@ mod tests {
         assert_eq!(queue.peek(&all, true).map(|m| m.w_param), Some(3), "the thread's");
         assert_eq!(queue.peek(&all, true), None);
         assert!(queue.pop_sent().is_some_and(|sent| Arc::ptr_eq(&sent, &to_8)), "another window's stays");
+    }
+
+    #[test]
+    fn events_wait_apart_and_the_stale_ones_go() {
+        let mut queue = QueueState::default();
+        let all = Filter { hwnd: 0, min: 0, max: 0 };
+        let activate = |hwnd| QueueEvent::Activate { hwnd, foreground_from: Some(4) };
+        queue.post_event(activate(7));
+        queue.post_event(QueueEvent::Deactivate { tid: 8 });
+        queue.post_event(activate(9));
+        assert_eq!((queue.wake, queue.peek(&all, true)), (0, None), "not messages, no wake bit");
+        // The thread activates itself: the activations before the first
+        // deactivation are stale.
+        queue.remove_activations();
+        assert_eq!(queue.take_event(), Some(QueueEvent::Deactivate { tid: 8 }));
+        assert_eq!(queue.take_event(), Some(activate(9)), "after the deactivation: kept");
+        assert_eq!(queue.take_event(), None);
+        // The thread gains the foreground back: its deactivations go.
+        queue.post_event(QueueEvent::Deactivate { tid: 8 });
+        queue.post_event(activate(7));
+        queue.post_event(QueueEvent::Deactivate { tid: 9 });
+        assert!(queue.remove_deactivations());
+        assert!(!queue.remove_deactivations(), "none left");
+        // A destroyed window takes its activation; the end of the thread
+        // takes everything.
+        queue.post_event(activate(9));
+        queue.remove_window_messages(7);
+        assert_eq!(queue.take_event(), Some(activate(9)));
+        queue.post_event(activate(7));
+        queue.clear();
+        assert_eq!(queue.take_event(), None);
     }
 
     #[test]
