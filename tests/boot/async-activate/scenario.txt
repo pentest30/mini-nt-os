@@ -1,0 +1,94 @@
+# Activating a window of another thread (win32k::input::activate,
+# activate_event, deactivate_thread; win32k::queue's events, POSTEVENT_SAW or
+# WM_ASYNC_SETACTIVEWINDOW, and POSTEVENT_DAW; tests/native/asyncact1.c,
+# MinGW, linked to ReactOS's kernel32 and user32): ASYNCACT1.EXE takes the
+# place of winlogon.exe and switches to WinSta0\Default. Its thread A shows
+# A1; its thread B shows B1 (with a child BC) and B2 without activating them.
+# Update with docs/compat/m6-fenetres.md, step 43.
+# 1. A: SetForegroundWindow(B1). A deactivates itself at once (A1:
+#    WM_NCACTIVATE, WM_ACTIVATE, WM_ACTIVATEAPP, WM_KILLFOCUS); B, in its
+#    thread, activates B1 (WM_ACTIVATEAPP to B1 and B2, then B1's
+#    WM_NCACTIVATE, WM_ACTIVATE, WM_SETFOCUS).
+# 2. B gives the focus to BC; A: SetForegroundWindow(B2). B moves its
+#    activation from B1 to B2 in its thread; no WM_ACTIVATEAPP.
+# 3. While B sleeps in a handler, A: SetForegroundWindow(A1), then
+#    SetForegroundWindow(B2). B's deactivation goes (QueueState::
+#    remove_deactivations); B, awake: WM_ACTIVATEAPP to B1 and B2, B2's
+#    WM_NCACTIVATE, nothing else (B2 still active).
+# 4. While B sleeps, A: SetForegroundWindow(B1); B, awake, makes B2 active
+#    itself: the activation of B1 that waited goes (QueueState::
+#    remove_activations).
+# 5. A: SetForegroundWindow(A1). B deactivates itself in its thread (B2:
+#    WM_NCACTIVATE, WM_ACTIVATE; WM_ACTIVATEAPP to B1 and B2; B2's
+#    WM_KILLFOCUS); A activates A1.
+features = test-smss
+requires = userland, native
+initial-command = ASYNCACT1.EXE
+cpus     = default, intel
+timeout  = 120
+
+expect = [async] B ready: active none, focus none
+expect = [async] step 1: A1 WM_NCACTIVATE 0, in thread A
+expect = [async] step 1: A1 WM_ACTIVATE 0, other none, in thread A
+expect = [async] step 1: A1 WM_ACTIVATEAPP 0, other thread B, in thread A
+expect = [async] step 1: A1 WM_KILLFOCUS, to none, in thread A; active none, focus none
+expect = [async] step 1: SetForegroundWindow(B1) 1; A after it: active none, focus none
+expect = [async] step 1: B1 WM_ACTIVATEAPP 1, other thread A, in thread B
+expect = [async] step 1: B2 WM_ACTIVATEAPP 1, other thread A, in thread B
+expect = [async] step 1: B1 WM_NCACTIVATE 1, in thread B
+expect = [async] step 1: B1 WM_ACTIVATE 1, other none, in thread B
+expect = [async] step 1: B1 WM_SETFOCUS, from none, in thread B; active B1
+expect = [async] step 1: foreground B1
+expect = [async] step 2: B gave the focus to BC
+expect = [async] step 2: SetForegroundWindow(B2) 1
+expect = [async] step 2: B1 WM_NCACTIVATE 0, in thread B
+expect = [async] step 2: B1 WM_ACTIVATE 0, other B2, in thread B
+expect = [async] step 2: B2 WM_NCACTIVATE 1, in thread B
+expect = [async] step 2: B2 WM_ACTIVATE 1, other B1, in thread B
+expect = [async] step 2: BC WM_KILLFOCUS, to B2, in thread B; active B2, focus B2
+expect = [async] step 2: B2 WM_SETFOCUS, from BC, in thread B; active B2
+expect = [async] step 2: foreground B2
+expect = [async] step 3: A1 WM_ACTIVATEAPP 1, other thread B, in thread A
+expect = [async] step 3: A1 WM_ACTIVATE 1, other none, in thread A
+expect = [async] step 3: A1 WM_ACTIVATE 0, other none, in thread A
+expect = [async] step 3: A1 WM_ACTIVATEAPP 0, other thread B, in thread A
+expect = [async] step 3: while B sleeps, SetForegroundWindow(A1) 1, then (B2) 1
+expect = [async] step 3: B1 WM_ACTIVATEAPP 1, other thread A, in thread B
+expect = [async] step 3: B2 WM_ACTIVATEAPP 1, other thread A, in thread B
+expect = [async] step 3: B2 WM_NCACTIVATE 1, in thread B
+expect = [async] step 3: foreground B2
+expect = [async] step 4: while B sleeps, SetForegroundWindow(B1) 1
+expect = [async] step 4: B chose B2 itself: active B2
+expect = [async] step 4: foreground B2
+expect = [async] step 5: A1 WM_ACTIVATEAPP 1, other thread B, in thread A
+expect = [async] step 5: A1 WM_ACTIVATE 1, other none, in thread A
+expect = [async] step 5: A1 WM_SETFOCUS, from none, in thread A; active A1
+expect = [async] step 5: SetForegroundWindow(A1) 1; A after it: active A1, focus A1
+expect = [async] step 5: B2 WM_NCACTIVATE 0, in thread B
+expect = [async] step 5: B2 WM_ACTIVATE 0, other none, in thread B
+expect = [async] step 5: B1 WM_ACTIVATEAPP 0, other thread A, in thread B
+expect = [async] step 5: B2 WM_ACTIVATEAPP 0, other thread A, in thread B
+expect = [async] step 5: B2 WM_KILLFOCUS, to none, in thread B; active none, focus none
+expect = [async] step 5: foreground A1
+expect = [async] done
+forbid = *** STOP:
+forbid = step 2: A1
+forbid = step 2: B1 WM_ACTIVATEAPP
+forbid = step 2: B2 WM_ACTIVATEAPP
+forbid = BC WM_ACTIVATEAPP
+forbid = [async] step 1: B made
+forbid = [async] step 2: B made
+forbid = [async] step 3: B made
+forbid = [async] step 4: B made
+forbid = [async] step 5: B made
+forbid = B made no sleep
+forbid = step 3: B2 WM_ACTIVATE 0, other
+forbid = step 3: B2 WM_ACTIVATE 1, other
+forbid = step 3: B2 WM_KILLFOCUS
+forbid = step 3: B1 WM_ACTIVATEAPP 0
+forbid = step 3: B2 WM_ACTIVATEAPP 0
+forbid = step 4: A1
+forbid = step 4: B1 WM_
+forbid = step 4: B2 WM_
+forbid = B's windows missing
+forbid = B has no desktop

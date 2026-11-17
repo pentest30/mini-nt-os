@@ -335,7 +335,19 @@ pub fn process_mouse_input(data: &MouseInputData) {
     for &(index, down) in &transitions {
         crate::input::update_async_button(BUTTONS[index].3, down);
     }
+    deliver((x, y), buttons, time, moved_now, &transitions);
 
+    if data.button_flags & MOUSE_WHEEL != 0 {
+        wheel(data.button_data as i16, buttons, x, y, time);
+    }
+}
+
+/// Les messages bruts d'une entrée de la souris au point (`x`, `y`), les
+/// boutons `buttons` (MK_*) enfoncés : WM_MOUSEMOVE si le curseur a bougé
+/// (`moved_now`), puis l'appui ou le relâchement de chaque bouton de
+/// `transitions` (son indice, enfoncé) ; à la fenêtre qui a la capture,
+/// sinon à la fenêtre sous le curseur.
+fn deliver((x, y): (i32, i32), buttons: u32, time: u32, moved_now: bool, transitions: &[(usize, bool)]) {
     let captured = crate::window::get(*CAPTURE.lock());
     let target =
         captured.or_else(|| crate::desktop::input_desktop().and_then(|desktop| window_at(&desktop.window, x, y)));
@@ -354,14 +366,40 @@ pub fn process_mouse_input(data: &MouseInputData) {
         if moved_now {
             post(window, raw(WM_MOUSEMOVE));
         }
-        for &(index, down) in &transitions {
+        for &(index, down) in transitions {
             post(window, raw(button_message(index, down, false, true)));
         }
     }
+}
 
-    if data.button_flags & MOUSE_WHEEL != 0 {
-        wheel(data.button_data as i16, buttons, x, y, time);
+/// UserSetCursorPos (sans les crochets) : le curseur va en (`x`, `y`),
+/// borné à l'écran, et, s'il a bougé, un WM_MOUSEMOVE brut part comme d'un
+/// mouvement de la souris (à la fenêtre qui a la capture, sinon à celle sous
+/// le curseur). Rend la place prise ; sans écran, rien ne change et le point
+/// est rendu tel quel.
+///
+/// # IRQL
+/// PASSIVE_LEVEL.
+pub fn set_cursor_pos(x: i32, y: i32) -> (i32, i32) {
+    let Some(mode) = crate::display::mode() else { return (x, y) };
+    let (x, y) = moved((x, y), 0, 0, mode.width, mode.height);
+    let (moved_now, buttons) = {
+        let mut guard = STATE.lock();
+        let state = guard.get_or_insert(MouseState {
+            x: mode.width as i32 / 2,
+            y: mode.height as i32 / 2,
+            buttons: 0,
+            last_click: None,
+        });
+        let moved_now = (x, y) != (state.x, state.y);
+        (state.x, state.y) = (x, y);
+        (moved_now, state.buttons)
+    };
+    if moved_now {
+        crate::display::set_cursor(x, y);
+        deliver((x, y), buttons, crate::input::message_time(), true, &[]);
     }
+    (x, y)
 }
 
 /// Le bouton (0 gauche, 1 droit, 2 milieu) et l'appui d'un message brut de

@@ -47,7 +47,7 @@ use abi::menu::{
     UnicodeString32, MENUITEMINFO_TYPE_MASK, NO_SELECTED_ITEM,
 };
 use abi::ntstatus::NtStatus;
-use abi::user::TYPE_MENU;
+use abi::user::{SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE, TYPE_MENU};
 use abi::winerror::{
     dos_error, ERROR_INVALID_MENU_HANDLE, ERROR_INVALID_PARAMETER, ERROR_MENU_ITEM_NOT_FOUND, ERROR_NOT_ENOUGH_MEMORY,
 };
@@ -507,6 +507,17 @@ impl Menus {
         let before = item.f_state & (mf::GRAYED | mf::DISABLED);
         item.f_state ^= (before ^ flags) & (mf::GRAYED | mf::DISABLED);
         Some(before)
+    }
+
+    /// La fenêtre dont `popup` est le menu système (`spwndNotify`) : celle
+    /// du menu d'un item (MNF_SYSMENU sans MNF_POPUP, `crate::sysmenu`) dont
+    /// l'item ouvre `popup` ; `None` sans elle.
+    pub fn system_owner(&self, popup: u32) -> Option<u32> {
+        let system = self.map.values().find(|entry| {
+            entry.state.flags & (mnf::SYSMENU | mnf::POPUP) == mnf::SYSMENU
+                && entry.state.items.first().is_some_and(|item| item.submenu == popup)
+        })?;
+        (system.state.hwnd != 0).then_some(system.state.hwnd)
     }
 
     /// IntCheckMenuItem : l'item `id` (selon `flags`) est coché si `flags`
@@ -1038,12 +1049,41 @@ pub fn remove(handle: u32, at: u32, flags: u32, recurse: bool) -> bool {
     gone.map(|gone| free_handles(&gone)).is_ok()
 }
 
-/// EnableMenuItem : [`Menus::enable`] ; -1 sans le menu ou l'item.
+/// IntEnableMenuItem, la règle : un item d'identifiant `id` dont l'état
+/// grisé et désactivé passe de `before` à `after` dans un menu de drapeaux
+/// `menu_flags` change les boutons du titre de sa fenêtre : une commande du
+/// système (SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE,
+/// SC_SIZE) dans le menu de GetSystemMenu (MNF_SYSSUBMENU).
+pub fn changes_caption_buttons(id: u32, menu_flags: u32, before: u32, after: u32) -> bool {
+    let state = mf::GRAYED | mf::DISABLED;
+    menu_flags & mnf::SYSSUBMENU != 0
+        && before & state != after & state
+        && [SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE].contains(&id)
+}
+
+/// EnableMenuItem : [`Menus::enable`] ; -1 sans le menu ou l'item. Quand
+/// l'état d'une commande du système change dans un menu système
+/// ([`changes_caption_buttons`]), les boutons du titre de sa fenêtre
+/// ([`Menus::system_owner`]) sont repeints (`crate::paint::draw_caption_buttons` :
+/// le bouton de fermeture suit Close).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL.
 pub fn enable(handle: u32, id: u32, flags: u32) -> u32 {
-    with(|menus| menus.enable(handle, id, flags).ok_or(ERROR_MENU_ITEM_NOT_FOUND)).unwrap_or(u32::MAX)
+    let changed = with(|menus| {
+        let (menu, at) = menus.find(handle, id, flags & mf::BYPOSITION != 0).ok_or(ERROR_MENU_ITEM_NOT_FOUND)?;
+        let item_id = menus.state(menu).and_then(|state| state.items.get(at)).map_or(0, |item| item.id);
+        let menu_flags = menus.state(menu).map_or(0, |state| state.flags);
+        let before = menus.enable(handle, id, flags).ok_or(ERROR_MENU_ITEM_NOT_FOUND)?;
+        let owner =
+            changes_caption_buttons(item_id, menu_flags, before, flags).then(|| menus.system_owner(menu)).flatten();
+        Ok((before, owner))
+    });
+    let Ok((before, owner)) = changed else { return u32::MAX };
+    if let Some(window) = owner.and_then(crate::window::get) {
+        crate::paint::draw_caption_buttons(&window);
+    }
+    before
 }
 
 /// [`Menus::add_flags`], publié.
@@ -1129,6 +1169,18 @@ pub fn destroy(handle: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_system_command_changed_in_the_window_menu_repaints_the_buttons() {
+        let popup = mnf::SYSMENU | mnf::POPUP | mnf::SYSSUBMENU;
+        assert!(changes_caption_buttons(SC_CLOSE, popup, 0, mf::GRAYED), "Close grayed");
+        assert!(changes_caption_buttons(SC_CLOSE, popup, mf::GRAYED, 0), "Close enabled again");
+        assert!(changes_caption_buttons(SC_MAXIMIZE, popup, 0, mf::DISABLED));
+        assert!(!changes_caption_buttons(SC_CLOSE, popup, mf::GRAYED, mf::GRAYED), "no change");
+        assert!(!changes_caption_buttons(SC_CLOSE, popup, 0, mf::BYPOSITION), "MF_BYPOSITION is not a state");
+        assert!(!changes_caption_buttons(0x110, popup, 0, mf::GRAYED), "an item of the program");
+        assert!(!changes_caption_buttons(SC_CLOSE, mnf::POPUP, 0, mf::GRAYED), "another menu");
+    }
 
     /// Un tas en mémoire : des blocs les uns après les autres, à partir de
     /// 8 ; ce qui est rendu est noté.

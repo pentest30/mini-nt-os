@@ -30,10 +30,15 @@
 //! d'un menu système le met aussi à l'état de la fenêtre
 //! (`crate::menutrack::track_popup_menu`).
 //!
-//! Pas encore : le bouton de fermeture grisé quand SC_CLOSE l'est, le menu
-//! système d'un bureau (MNF_SYSDESKMN), WM_POPUPSYSTEMMENU, SC_MOVE et
-//! SC_SIZE au clavier, le menu des barres de défilement (comme ReactOS),
-//! GUI_SYSTEMMENUMODE de GetGUIThreadInfo (TPM_SYSTEM_MENU).
+//! Le bouton de fermeture suit l'item Close ([`close_enabled`]) : grisé et
+//! sans effet quand Close l'est, ou pour une classe CS_NOCLOSE ; repeint
+//! quand EnableMenuItem change Close (`crate::menu::enable`).
+//!
+//! Pas encore : le menu système d'un bureau (MNF_SYSDESKMN),
+//! WM_POPUPSYSTEMMENU, le menu des
+//! barres de défilement (comme ReactOS), GUI_SYSTEMMENUMODE de
+//! GetGUIThreadInfo (TPM_SYSTEM_MENU). Move et Size déplacent et
+//! redimensionnent au clavier (`crate::sizemove`).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -125,16 +130,38 @@ pub fn set(window: &Arc<Window>, menu: u32) -> bool {
     system.is_some()
 }
 
-/// IntGetMenuState(SC_CLOSE) du menu système de `window` : Fermer y est, et
-/// actif ; un double-clic sur l'icône du titre ferme alors la fenêtre
-/// (NC_HandleNCLButtonDblClk).
+/// La règle du bouton de fermeture (UserDrawCaptionButton, NC_DoButton,
+/// NC_HandleNCLButtonDblClk) : Close est actif pour une fenêtre de style
+/// `style` (WS_SYSMENU) et de classe de style `class_style` (sans
+/// CS_NOCLOSE) dont l'item Close du menu système a l'état `close` : sans
+/// MF_GRAYED ni MF_DISABLED (`Some(Some(état))`) ; pas absent
+/// (`Some(None)`, ReactOS lit alors -1 : grisé) ; `None` tant que le menu
+/// système n'existe pas, et le gabarit SYSMENU a Close actif.
+pub fn close_rule(style: u32, class_style: u32, close: Option<Option<u32>>) -> bool {
+    if style & WS_SYSMENU == 0 || class_style & CS_NOCLOSE != 0 {
+        return false;
+    }
+    match close {
+        None => true,
+        Some(None) => false,
+        Some(Some(state)) => state & (mf::GRAYED | mf::DISABLED) == 0,
+    }
+}
+
+/// IntGetMenuState(SC_CLOSE) du menu système de `window` ([`close_rule`]) :
+/// le bouton de fermeture se peint actif, un clic dessus ferme, un
+/// double-clic sur l'icône du titre aussi. Le menu système n'est pas créé
+/// s'il n'existe pas : le cadre se peint aussi hors du processus de la
+/// fenêtre, où le rappel LoadMenu est impossible.
 ///
 /// # IRQL
-/// PASSIVE_LEVEL, dans un service système d'un thread GUI. Rappelle le mode
-/// utilisateur (LoadMenu).
-pub fn close_enabled(window: &Arc<Window>) -> bool {
-    let Some(popup) = get(window, false) else { return false };
-    crate::menu::find_command(popup, SC_CLOSE).is_some_and(|(_, state)| state & (mf::GRAYED | mf::DISABLED) == 0)
+/// <= DISPATCH_LEVEL.
+pub fn close_enabled(window: &Window) -> bool {
+    let class_style = window.class.as_ref().map_or(0, |class| class.info.style);
+    let close = of(window).map(|system| {
+        popup_of(system).and_then(|popup| crate::menu::find_command(popup, SC_CLOSE)).map(|(_, state)| state)
+    });
+    close_rule(window.state().style, class_style, close)
 }
 
 /// Le menu système de `window`, détruit avec elle (co_UserFreeWindow).
@@ -433,6 +460,18 @@ mod tests {
         assert_eq!(context_menu_buttons(HTSYSMENU), Some(tpm::LEFTBUTTON), "the left one from the icon");
         assert_eq!(context_menu_buttons(HTHSCROLL), None, "no scroll bar menu");
         assert_eq!(context_menu_buttons(abi::user::HTCLIENT), None, "nothing in the client area");
+    }
+
+    #[test]
+    fn the_close_button_follows_close() {
+        let style = WS_OVERLAPPEDWINDOW;
+        assert!(close_rule(style, 0, None), "no window menu yet: the template's Close");
+        assert!(close_rule(style, 0, Some(Some(0))), "Close enabled");
+        assert!(!close_rule(style, 0, Some(Some(mf::GRAYED))), "Close grayed");
+        assert!(!close_rule(style, 0, Some(Some(mf::DISABLED))), "Close disabled");
+        assert!(!close_rule(style, 0, Some(None)), "no Close in the window menu");
+        assert!(!close_rule(style, CS_NOCLOSE, None), "CS_NOCLOSE");
+        assert!(!close_rule(style & !WS_SYSMENU, 0, None), "no WS_SYSMENU");
     }
 
     #[test]

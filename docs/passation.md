@@ -1,5 +1,100 @@
 # Notes de passation
 
+- **Activer la fenêtre d'un autre thread (WM_ASYNC_SETACTIVEWINDOW)** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 43 ; demandé après l'étape 42). Activer la fenêtre d'un
+  autre thread ne lui envoyait ni WM_NCACTIVATE, ni WM_ACTIVATE, ni WM_SETFOCUS (le noyau peignait son cadre), et le
+  thread qui perdait le premier plan gardait sa fenêtre active, sans WM_ACTIVATE inactif ni WM_KILLFOCUS. Comme
+  co_IntSetForegroundMessageQueue, la file tient des événements (`queue::QueueEvent` : `Activate`, POSTEVENT_SAW,
+  et `Deactivate`, POSTEVENT_DAW), traités dans le thread par PeekMessage, GetMessage et WaitMessage après les
+  messages postés et les entrées (`queue::process_events`) : `input::activate_event` (IntActivateWindow) et
+  `input::deactivate_thread` (IntDeactivateWindow), tout de suite au thread courant ; `input::set_active_window`
+  (co_IntSetActiveWindow) ; les désactivations attendues partent quand le thread regagne le premier plan, les
+  activations attendues quand il s'active lui-même (FindRemoveEventMsg). WM_ACTIVATEAPP va à chaque thread dans son
+  thread. **Écarts** : WM_ACTIVATEAPP (TRUE) porte le TID du thread qui perd le premier plan, et vient aussi quand la
+  fenêtre était déjà active. Scénario `async-activate` (`tests/native/asyncact1.c`, AMD et Intel, cinq étapes dont
+  les deux événements dépassés) ; tests hôte (`queue`, `input`). Avant le commit : `activate-app`,
+  `foreground-minimized`, `window-menu`, `minmax`, `hotkey`, `destroy`, `logon`, `folder-view`, `console`, `cmd`,
+  `notepad`, `keyboard` passent (AMD). Onze mutations détectées (dix par le scénario ; Ctrl, Alt et Maj par le test
+  hôte seul). **Revue de la PR 140** (deux remarques de Codex sur `sizemove`, vérifiées et corrigées, étape 39 de
+  `m6-fenetres.md`) : une flèche place la fenêtre tout de suite (avec Entrée déjà dans la file, le déplacement se
+  perdait ; ReactOS a le même défaut) ; la boucle lit aussi WM_SYSKEYDOWN (`sizemove::loop_key` : une fenêtre
+  réduite active n'a plus le clavier depuis l'étape 42 ; écart voulu avec ReactOS). `keyboard-move` a deux étapes
+  de plus (8 : touches en file pendant que le thread dort ; 9 : la barre d'une fenêtre réduite active), trois
+  mutations détectées. À faire : la suite complète (elle ira dans cette entrée).
+  **Suite** : SetForegroundWindow d'une fenêtre cachée ; la règle du premier plan (CanForceFG,
+  LockSetForegroundWindow) ; AttachThreadInput ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ;
+  Maj+F10 (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés,
+  SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ; RemoveMenu et DeleteMenu de Close qui repeignent le bouton ;
+  vérifier sous VirtualBox avec le Bloc-notes.
+
+- **SetForegroundWindow d'une fenêtre réduite ; Entrée la rétablit** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 42 ; demandé après l'étape 41). SetForegroundWindow suivait
+  la règle de co_WinPosActivateOtherWindow (`input::can_activate`) et refusait une fenêtre réduite ; il prend
+  désormais toute fenêtre de premier niveau visible (`input::can_set_foreground`), comme co_IntSetForegroundWindow.
+  Activée, une fenêtre réduite n'a pas le clavier (`input::activation_takes_focus`, co_IntSetActiveWindow : personne
+  ne l'a, aussi après un clic sur sa barre ou pour une fenêtre d'un autre thread) et ses touches lui vont en touches
+  système (déjà fait : `input::send_key`) ; WM_ACTIVATE dit dans son mot haut si la fenêtre est réduite
+  (`input::activate_wparam`, à l'activation comme à la désactivation). Entrée sur une fenêtre réduite (son
+  WM_SYSCHAR) poste SC_RESTORE (`defwnd::key_menu`, `KeyMenu::Restore`, `defwnd::post_sys_command`). **Écart** :
+  une fenêtre cachée reste refusée (ReactOS l'active). Scénario `foreground-minimized` (`tests/native/fgmin1.c`, AMD
+  et Intel : SetForegroundWindow, a, Alt+Espace et r, Entrée) ; tests hôte (`input`, `defwnd`). Six mutations
+  détectées (la règle, le clavier, le mot haut, Entrée, le message posté). Lint propre ; toute la suite : 1173 tests
+  hôte, 142 runs sur 144, rostests 44/84 et 16/29. Les deux runs manquants, `minmax` (AMD et Intel), attendaient
+  l'ancienne suite de SW_RESTORE : la fenêtre, activée réduite par le SW_RESTORE refusé, avait alors le clavier ;
+  personne ne l'a plus, et SW_RESTORE envoie WM_SETFOCUS avant WM_ACTIVATE (co_WinPosShowWindow : co_UserSetFocus,
+  puis WM_ACTIVATE). L'attente est corrigée (11 messages, `0007 0006`) ; `minmax` passe sur AMD et Intel.
+  La suite : l'entrée de WM_ASYNC_SETACTIVEWINDOW, au-dessus.
+
+- **Le bouton de fermeture grisé quand Close l'est** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 41 ; demandé après l'étape 40). `sysmenu::close_enabled`
+  (`close_rule`) : Close actif pour une fenêtre WS_SYSMENU sans CS_NOCLOSE dont l'item Close n'est ni grisé, ni
+  désactivé, ni absent ; le menu système pas créé pour le lire (le gabarit, actif, tant qu'il n'existe pas). Le
+  dessin (`nonclient::caption_button_places`, `frame_ops`, `caption_button_ops` : un paramètre `close_enabled`), le
+  clic (`sizemove::button_command` : rien sur un bouton grisé), le double-clic sur l'icône ; EnableMenuItem d'une
+  commande du système dans le menu de GetSystemMenu repeint les boutons du titre (`menu::enable`,
+  `changes_caption_buttons`, `Menus::system_owner`, `paint::draw_caption_buttons`). Alt+F4 ne regarde que
+  CS_NOCLOSE, comme ReactOS. Scénario `close-button` (`tests/native/closebtn1.c`, AMD et Intel : les symboles lus par
+  GetPixel) ; tests hôte. Huit mutations détectées. Lint propre ; toute la suite : 1171 tests hôte, 141 runs sur 142,
+  rostests 44/84 et 16/29. Le run manquant, `installer-finish` (AMD), s'est arrêté sur `[setup] copy failed:
+  c0000185` (STATUS_IO_DEVICE_ERROR à l'écriture du disque ATA) quand l'hôte n'avait plus que 4,5 Gio libres ; relancé
+  seul après avoir libéré de la place (le `target/` d'un vieux worktree, `/home/user/wtc`), il passe. Le lien avec la
+  place n'est pas prouvé : si l'erreur revient avec de la place, c'est à diagnostiquer.
+  La suite : l'entrée de SetForegroundWindow d'une fenêtre réduite, au-dessus.
+
+- **← et → entre le menu de la fenêtre et la barre** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 40 ; demandé après l'étape 39). `menutrack::do_next_menu`
+  (MENU_DoNextMenu) : aux bouts du menu suivi (`menutrack::at_menu_end` : ← sur le premier item, → sur le dernier,
+  les items de MDI sautés), WM_NEXTMENU à la propriétaire (`abi::menu::MdiNextMenu32`, `wm::NEXTMENU`) ; sans
+  réponse, de la barre au menu de la fenêtre et retour (← arrive sur le dernier item de la barre) ; une réponse (la
+  barre ou le menu de la fenêtre d'une autre fenêtre) y fait passer le suivi, cette fenêtre devenant la
+  propriétaire. Branché dans `key_left` et `key_right` (MENU_KeyLeft, MENU_KeyRight). **Écart voulu** : une réponse
+  par GetSystemMenu est acceptée (ReactOS la compare au menu d'un item). Scénario `next-menu`
+  (`tests/native/nextmenu1.c`, AMD et Intel) ; tests hôte (`menutrack`). Sept mutations détectées ; une huitième a
+  montré une ligne inutile, retirée (la barre a déjà sa fenêtre par SetMenu, `menu::attach`). Le scénario `menu`
+  attendait encore que ← fasse le tour de la barre depuis File (étape 23, avant le menu de la fenêtre) : ses touches
+  10 sont devenues `alt left left ret`. Lint propre ; toute la suite : 1169 tests hôte, 138 runs sur 140, les deux
+  `menu` à l'ancienne attente, puis `menu` refait sur AMD et Intel avec la nouvelle ; rostests 44/84 et 16/29.
+  La suite : l'entrée du bouton de fermeture, au-dessus.
+
+- **Déplacer et redimensionner au clavier** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 39 ; demandé après l'étape 38). Move et Size du menu de la
+  fenêtre (WM_SYSCOMMAND SC_MOVE, SC_SIZE sans endroit) : `sizemove::keyboard_start` (DefWndStartSizeMove : le
+  curseur au milieu du titre pour déplacer ; pour redimensionner, une boucle attend une flèche, qui choisit un bord,
+  ou la souris sur un bord ; Entrée, Échap ou un clic renoncent), puis la boucle de la souris (`sizemove::size_move`),
+  où chaque flèche déplace le curseur de 8 pixels ; Entrée finit, Échap rend la place de départ ; les autres touches
+  enfoncées sont mangées. `sizemove::can_size_move` : une fenêtre visible, pas agrandie, et pour Size un cadre épais et
+  pas réduite. `mouse::set_cursor_pos` (UserSetCursorPos : le curseur placé et un WM_MOUSEMOVE brut, comme la souris).
+  **Écart voulu** : la boucle de ReactOS finit sur un WM_MOUSEMOVE sans le bouton gauche, ce qui arrêterait le
+  clavier au premier mouvement ; Mino ne finit qu'au relâchement, à Entrée ou à Échap. Scénario `keyboard-move`
+  (`tests/native/kbdmove1.c`, AMD et Intel) ; tests hôte (`sizemove`). Sept mutations détectées (le curseur ailleurs
+  qu'au titre, les flèches ignorées, Échap sans retour, Size d'un cadre fin ou une fenêtre cachée acceptés, aucun bord
+  choisi, Échap sans renoncer, `set_cursor_pos` sans son mouvement). Trouvé en relisant, corrigé avant le commit :
+  `i32::clamp` paniquait pour une fenêtre de largeur ou de hauteur nulle quand la souris cherche un bord
+  (`sizemove::point_into`, comme ReactOS `min(max(..))` ; test hôte). Lint propre ; toute la suite : 1166 tests
+  hôte, 137 runs de démarrage sur 138 : `rostests-kernel32` à 15/29 (l'apitest Pipes, ERROR_PIPE_LISTENING, la
+  course notée par la PR 138), 16/29 relancé seul ; `keyboard-move` refait sur AMD et Intel après la correction.
+  La suite : l'entrée de ← et →, au-dessus.
+
 - **Le clic droit sur le titre** (`claude/new-session-696xfc`, M6, [`compat/m6-fenetres.md`](compat/m6-fenetres.md),
   étape 38 ; demandé après l'étape 37). Un clic droit sur le titre ou l'icône d'une fenêtre ouvre son menu système au
   point du relâchement : WM_NCRBUTTONDOWN (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la fenêtre prend la
@@ -17,10 +112,7 @@
   aux planchers). `main` fusionné ensuite (PR 138, la fenêtre de dossier, qui a pris l'étape 36 : nos étapes sont
   devenues 37 et 38) : lint propre, 1162 tests hôte, 136 runs sur 136 (`rebar`, `caption`, `folder-view` compris),
   rostests 44/84 et 16/29.
-  **Suite** : SC_MOVE et SC_SIZE au clavier, ←/→ entre le menu système et la barre, le bouton de fermeture grisé
-  quand Close l'est ; SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS
-  l'active) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du
-  clavier) ; vérifier sous VirtualBox avec le Bloc-notes.
+  La suite : l'entrée du clavier, au-dessus.
 
 - **Le menu de la fenêtre ; cacher la fenêtre active cède l'activation** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 37 ; demandé après la PR 131, la suite qu'elle annonçait).

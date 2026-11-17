@@ -25,21 +25,35 @@
 //! dessus. Un double-clic sur le titre agrandit ou rétablit la fenêtre
 //! (`crate::defwnd::double_click`).
 //!
-//! Pas encore : le déplacement au clavier (SC_MOVE du menu de la fenêtre),
-//! le cadre en pointillés (sans le contenu), WM_MOVING et WM_SIZING, le
-//! menu de la fenêtre.
+//! Au clavier (SC_MOVE ou SC_SIZE sans endroit, le menu de la fenêtre :
+//! [`keyboard_start`], DefWndStartSizeMove), le curseur va au milieu du
+//! titre pour déplacer ; pour redimensionner, une flèche choisit le bord
+//! (le curseur va en son milieu), ou la souris l'atteint. Dans la boucle,
+//! chaque flèche déplace le curseur de 8 pixels ([`arrow_step`]) et la
+//! fenêtre avec lui, tout de suite (le mouvement de la souris qu'elle
+//! produit arrive derrière les touches déjà dans la file) ; la souris aussi
+//! déplace ou redimensionne, Entrée ou un clic finit, Échap rend la place de
+//! départ. Les autres touches enfoncées sont mangées. Les touches comptent
+//! aussi en WM_SYSKEYDOWN ([`loop_key`]) : sans fenêtre qui a le clavier
+//! (une fenêtre réduite active), elles arrivent ainsi.
+//!
+//! Pas encore : le cadre en pointillés (sans le contenu), WM_MOVING et
+//! WM_SIZING, WH_MSGFILTER (MSGF_SIZE) dans les boucles, le curseur borné à
+//! la zone de travail (ReactOS borne le point à SPI_GETWORKAREA), le
+//! curseur en flèches croisées pendant le déplacement au clavier.
 
 use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use abi::user::vk::{VK_ESCAPE, VK_RETURN};
+use abi::user::vk::{VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_UP};
 use abi::user::{
-    Msg32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLOSE, HTHSCROLL, HTLEFT, HTMAXBUTTON, HTMENU,
+    sm, Msg32, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLOSE, HTHSCROLL, HTLEFT, HTMAXBUTTON, HTMENU,
     HTMINBUTTON, HTRIGHT, HTSYSMENU, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTVSCROLL, SC_CLOSE, SC_HSCROLL, SC_KEYMENU,
     SC_MAXIMIZE, SC_MINIMIZE, SC_MOUSEMENU, SC_MOVE, SC_RESTORE, SC_SIZE, SC_VSCROLL, SWP_NOACTIVATE, SWP_NOSIZE,
     SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WM_CLOSE, WM_ENTERSIZEMOVE,
-    WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SYSCOMMAND, WS_CHILD, WS_MAXIMIZE,
-    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_SYSMENU,
+    WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_SETCURSOR, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+    WS_BORDER, WS_CHILD, WS_DLGFRAME, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_SYSMENU,
+    WS_THICKFRAME, WS_VISIBLE,
 };
 
 use crate::gdi::dib::Rect;
@@ -65,6 +79,110 @@ pub fn dragged_part(wparam: u32) -> Option<u32> {
         SC_SIZE if (WMSZ_LEFT..=WMSZ_BOTTOMRIGHT).contains(&low) => Some(low + EDGE_OFFSET),
         _ => None,
     }
+}
+
+/// DefWndDoSizeMove, la règle : la commande `command` (SC_MOVE ou SC_SIZE)
+/// peut commencer pour une fenêtre de style `style` : visible, pas agrandie ;
+/// pour redimensionner, un cadre épais (UserHasThickFrameStyle : pas
+/// seulement un cadre de dialogue), et pas réduite.
+pub fn can_size_move(style: u32, command: u32) -> bool {
+    if style & WS_VISIBLE == 0 || style & WS_MAXIMIZE != 0 {
+        return false;
+    }
+    let thick = style & WS_THICKFRAME != 0 && style & (WS_DLGFRAME | WS_BORDER) != WS_DLGFRAME;
+    command != SC_SIZE || (thick && style & WS_MINIMIZE == 0)
+}
+
+/// DefWndStartSizeMove, la règle de SC_MOVE au clavier : le point où le
+/// curseur va pour déplacer une fenêtre de rectangle `window` (à l'écran) et
+/// de style `style` : au milieu du titre sans l'icône ni les boutons Réduire
+/// et Agrandir, à une demi-hauteur de bouton sous le haut de la fenêtre,
+/// d'après les métriques `m`.
+pub fn move_start_point(window: Rect, style: u32, m: &impl Fn(usize) -> i32) -> (i32, i32) {
+    let button = m(sm::CXSIZE) + 1;
+    let mut rect = window;
+    if style & WS_SYSMENU != 0 {
+        rect.left += button;
+    }
+    if style & WS_MINIMIZEBOX != 0 {
+        rect.right -= button;
+    }
+    if style & WS_MAXIMIZEBOX != 0 {
+        rect.right -= button;
+    }
+    ((rect.left + rect.right) / 2, rect.top + m(sm::CYSIZE) / 2)
+}
+
+/// DefWndStartSizeMove, la règle de SC_SIZE au clavier : le bord que la
+/// flèche `key` (VK_*) choisit sur une fenêtre de rectangle `window` et de
+/// cadre épais `frame` (SM_CXFRAME, SM_CYFRAME), et le point où le curseur va :
+/// le milieu de ce bord, à mi-épaisseur du cadre ; `None` pour une autre
+/// touche.
+pub fn size_start_edge(key: u32, window: Rect, frame: (i32, i32)) -> Option<(u32, (i32, i32))> {
+    let (middle_x, middle_y) = ((window.left + window.right) / 2, (window.top + window.bottom) / 2);
+    match u8::try_from(key).ok()? {
+        VK_UP => Some((HTTOP, (middle_x, window.top + frame.1 / 2))),
+        VK_DOWN => Some((HTBOTTOM, (middle_x, window.bottom - frame.1 / 2))),
+        VK_LEFT => Some((HTLEFT, (window.left + frame.0 / 2, middle_y))),
+        VK_RIGHT => Some((HTRIGHT, (window.right - frame.0 / 2, middle_y))),
+        _ => None,
+    }
+}
+
+/// DefWndStartSizeMove, la règle : le point (`x`, `y`) ramené dans le
+/// rectangle `rect`, pour chercher le bord que la souris atteint. Comme
+/// ReactOS (`min(max(x, gauche), droite - 1)`), un rectangle vide ne fait pas
+/// d'erreur : le point va à droite - 1 (ou en bas - 1).
+pub fn point_into((x, y): (i32, i32), rect: Rect) -> (i32, i32) {
+    (x.max(rect.left).min(rect.right - 1), y.max(rect.top).min(rect.bottom - 1))
+}
+
+/// DefWndDoSizeMove, la règle : ce dont la flèche `key` (VK_*) déplace le
+/// curseur pendant la boucle, 8 pixels ; `None` pour une autre touche.
+pub fn arrow_step(key: u32) -> Option<(i32, i32)> {
+    const STEP: i32 = 8;
+    match u8::try_from(key).ok()? {
+        VK_UP => Some((0, -STEP)),
+        VK_DOWN => Some((0, STEP)),
+        VK_LEFT => Some((-STEP, 0)),
+        VK_RIGHT => Some((STEP, 0)),
+        _ => None,
+    }
+}
+
+/// Ce qu'une touche fait dans les boucles du déplacement ([`loop_key`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoopKey {
+    /// Entrée : finir.
+    End,
+    /// Échap : renoncer (rendre la place de départ).
+    Cancel,
+    /// Une flèche : le curseur, et la fenêtre, de ce décalage
+    /// ([`arrow_step`]).
+    Arrow(i32, i32),
+    /// Une autre touche.
+    Other,
+}
+
+/// DefWndDoSizeMove, la règle des touches : ce que fait le message `message`
+/// de la touche `key` ; `None` pour un autre message qu'une touche
+/// enfoncée. WM_SYSKEYDOWN compte comme WM_KEYDOWN : sans fenêtre qui a le
+/// clavier, une fenêtre réduite active, ses touches sont système (écart
+/// voulu avec ReactOS, dont la boucle ne lit que WM_KEYDOWN : Échap ne la
+/// finirait pas, et Entrée, traduite, rétablirait la fenêtre).
+pub fn loop_key(message: u32, key: u32) -> Option<LoopKey> {
+    if message != WM_KEYDOWN && message != WM_SYSKEYDOWN {
+        return None;
+    }
+    Some(if key == u32::from(VK_RETURN) {
+        LoopKey::End
+    } else if key == u32::from(VK_ESCAPE) {
+        LoopKey::Cancel
+    } else if let Some((dx, dy)) = arrow_step(key) {
+        LoopKey::Arrow(dx, dy)
+    } else {
+        LoopKey::Other
+    })
 }
 
 /// Le rectangle de la fenêtre partie de `start` quand la souris a bougé de
@@ -95,11 +213,13 @@ pub fn dragged_rect(start: Rect, part: u32, (dx, dy): (i32, i32), min: [i32; 2],
 }
 
 /// La commande d'un bouton du titre `hit` d'une fenêtre de style `style` :
-/// fermer, réduire ou rétablir une fenêtre réduite, agrandir ou rétablir
-/// une fenêtre agrandie ; `None` pour un bouton que le style désactive.
-pub fn button_command(hit: u32, style: u32) -> Option<u32> {
+/// fermer (si Close est actif, `close_enabled` :
+/// `crate::sysmenu::close_enabled`), réduire ou rétablir une fenêtre
+/// réduite, agrandir ou rétablir une fenêtre agrandie ; `None` pour un
+/// bouton que le style ou Close désactive (NC_DoButton : rien ne se passe).
+pub fn button_command(hit: u32, style: u32, close_enabled: bool) -> Option<u32> {
     match hit {
-        HTCLOSE => Some(SC_CLOSE),
+        HTCLOSE => close_enabled.then_some(SC_CLOSE),
         HTMINBUTTON if style & WS_MINIMIZEBOX != 0 => {
             Some(if style & WS_MINIMIZE != 0 { SC_RESTORE } else { SC_MINIMIZE })
         }
@@ -153,52 +273,131 @@ fn place(window: &Arc<Window>, rect: Rect, moving: bool) {
     crate::winpos::set_window_pos(window, 0, x, y, rect.right - rect.left, rect.bottom - rect.top, flags);
 }
 
+/// DefWndStartSizeMove : le départ au clavier de la commande `command`
+/// (SC_MOVE ou SC_SIZE) pour `window`, du thread `thread` : l'endroit tiré
+/// (HTCAPTION, ou le bord choisi) et le point où le curseur est allé, que
+/// [`size_move`] suit. Pour déplacer, le milieu du titre
+/// ([`move_start_point`]) ; pour redimensionner, la boucle attend une flèche
+/// ([`size_start_edge`]) ou que la souris, ramenée dans la fenêtre,
+/// atteigne un bord ; Entrée, Échap ou un clic relâché renoncent (`None`) ;
+/// les autres messages sont distribués. Le curseur va au point
+/// ([`crate::mouse::set_cursor_pos`]), puis WM_SETCURSOR (l'endroit,
+/// WM_MOUSEMOVE).
+fn keyboard_start(thread: &ThreadInfo, window: &Arc<Window>, command: u32) -> Option<(u32, (i32, i32))> {
+    let m = crate::metrics::get;
+    let (part, point) = if command == SC_MOVE {
+        let state = window.state();
+        (HTCAPTION, move_start_point(state.window, state.style, &m))
+    } else {
+        loop {
+            let message = next_message(thread)?;
+            let rect = window.state().window;
+            match (message.message, loop_key(message.message, message.w_param)) {
+                (WM_MOUSEMOVE, _) => {
+                    let point = point_into((message.pt_x, message.pt_y), rect);
+                    let hit = crate::defwnd::window_hit_test(window, point);
+                    if (HTLEFT..=HTBOTTOMRIGHT).contains(&hit) {
+                        break (hit, point);
+                    }
+                }
+                (WM_LBUTTONUP, _) | (_, Some(LoopKey::End | LoopKey::Cancel)) => return None,
+                (_, Some(LoopKey::Arrow(..))) => {
+                    if let Some(found) = size_start_edge(message.w_param, rect, (m(sm::CXFRAME), m(sm::CYFRAME))) {
+                        break found;
+                    }
+                }
+                (WM_KEYDOWN, _) => {}
+                _ => pass_on(thread, &message),
+            }
+        }
+    };
+    let point = crate::mouse::set_cursor_pos(point.0, point.1);
+    let lparam = (part & 0xFFFF) | (WM_MOUSEMOVE << 16);
+    let _ = crate::window::send_message(window, WM_SETCURSOR, window.handle, LParam::Value(lparam));
+    Some((part, point))
+}
+
 /// DefWndDoSizeMove : la boucle qui déplace (`wparam` SC_MOVE) ou
-/// redimensionne (SC_SIZE et un bord) `window` à la souris, depuis le point
-/// `lparam` de l'écran.
+/// redimensionne (SC_SIZE) `window`, si elle le peut ([`can_size_move`]) :
+/// à la souris, depuis l'endroit du `wparam` et le point `lparam` de
+/// l'écran ; sans endroit (le menu de la fenêtre), d'abord le départ au
+/// clavier ([`keyboard_start`]). La souris déplace ou redimensionne, chaque
+/// flèche déplace le curseur ([`arrow_step`]) et la fenêtre tout de suite
+/// (Entrée peut déjà attendre derrière elle, avant le mouvement de la
+/// souris qu'elle produit) ; un clic relâché ou Entrée finit, Échap rend la
+/// place de départ ([`loop_key`] : WM_KEYDOWN ou WM_SYSKEYDOWN).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
 /// rien tenir.
 pub fn size_move(window: &Arc<Window>, wparam: u32, lparam: u32) {
-    let Some(part) = dragged_part(wparam) else {
-        static REPORTED: AtomicBool = AtomicBool::new(false);
-        return report_missing("moving or sizing with the keyboard", &REPORTED);
-    };
     let Ok(thread) = crate::convert_current_thread() else { return };
     if window.pti != thread.server {
         return;
     }
+    let command = wparam & 0xFFF0;
     let state = window.state();
-    if state.style & WS_MAXIMIZE != 0 {
+    if !can_size_move(state.style, command) {
         return;
     }
-    let start = state.window;
-    let origin = point_of(lparam);
+    let (part, origin) = match dragged_part(wparam) {
+        Some(part) => (part, point_of(lparam)),
+        None => {
+            // Sizing: the mouse is the window's while an edge is chosen.
+            if command == SC_SIZE {
+                crate::mouse::set_capture(&thread, Some(window));
+            }
+            match keyboard_start(&thread, window, command) {
+                Some(start) => start,
+                None => {
+                    if thread.queue.with(|queue| queue.capture).0 == window.handle {
+                        crate::mouse::set_capture(&thread, None);
+                    }
+                    return;
+                }
+            }
+        }
+    };
+    let start = window.state().window;
     let info = crate::window::min_max_info(window);
     let moving = part == HTCAPTION;
 
     crate::mouse::set_capture(&thread, Some(window));
     let _ = crate::window::send_message(window, WM_ENTERSIZEMOVE, 0, LParam::Value(0));
     let mut current = start;
+    // Where the cursor is, as far as the loop knows: an arrow moves it from
+    // there even before the move it makes comes out of the queue.
+    let mut pointer = origin;
+    // The window's rectangle with the cursor at `point`, and the window
+    // placed on a rectangle (if it is not there yet).
+    let rect_at = |point: (i32, i32)| {
+        let delta = (point.0 - origin.0, point.1 - origin.1);
+        dragged_rect(start, part, delta, info.min_track_size, info.max_track_size)
+    };
+    let go = |rect: Rect, current: &mut Rect| {
+        if rect != *current {
+            *current = rect;
+            place(window, rect, moving);
+        }
+    };
     while let Some(message) = next_message(&thread) {
-        match message.message {
-            WM_MOUSEMOVE => {
-                let delta = (message.pt_x - origin.0, message.pt_y - origin.1);
-                let rect = dragged_rect(start, part, delta, info.min_track_size, info.max_track_size);
-                if rect != current {
-                    current = rect;
-                    place(window, rect, moving);
-                }
+        match (message.message, loop_key(message.message, message.w_param)) {
+            (WM_MOUSEMOVE, _) => {
+                pointer = (message.pt_x, message.pt_y);
+                go(rect_at(pointer), &mut current);
             }
-            WM_LBUTTONUP => break,
-            WM_KEYDOWN if message.w_param == u32::from(VK_RETURN) => break,
-            WM_KEYDOWN if message.w_param == u32::from(VK_ESCAPE) => {
-                if current != start {
-                    place(window, start, moving);
-                }
+            (WM_LBUTTONUP, _) | (_, Some(LoopKey::End)) => break,
+            (_, Some(LoopKey::Cancel)) => {
+                go(start, &mut current);
                 break;
             }
+            (_, Some(LoopKey::Arrow(dx, dy))) => {
+                // At once: the move it makes comes behind the keys already
+                // queued (Enter may be one of them).
+                pointer = crate::mouse::set_cursor_pos(pointer.0 + dx, pointer.1 + dy);
+                go(rect_at(pointer), &mut current);
+            }
+            (WM_KEYDOWN, _) => {}
             _ => pass_on(&thread, &message),
         }
         if thread.queue.with(|queue| queue.capture).0 != window.handle {
@@ -222,7 +421,9 @@ pub fn size_move(window: &Arc<Window>, wparam: u32, lparam: u32) {
 /// PASSIVE_LEVEL, dans un service système du thread de la fenêtre, sans
 /// rien tenir.
 pub fn track_button(window: &Arc<Window>, hit: u32) {
-    let Some(command) = button_command(hit, window.state().style) else { return };
+    let Some(command) = button_command(hit, window.state().style, crate::sysmenu::close_enabled(window)) else {
+        return;
+    };
     let Ok(thread) = crate::convert_current_thread() else { return };
     if window.pti != thread.server {
         return;
@@ -346,10 +547,86 @@ mod tests {
     fn the_part_a_command_drags() {
         assert_eq!(dragged_part(SC_MOVE + HTCAPTION), Some(HTCAPTION));
         assert_eq!(dragged_part(SC_MOVE), None, "from the keyboard");
+        assert_eq!(dragged_part(SC_SIZE), None, "from the keyboard");
         assert_eq!(dragged_part(SC_SIZE + 1), Some(HTLEFT));
         assert_eq!(dragged_part(SC_SIZE + 8), Some(HTBOTTOMRIGHT));
         assert_eq!(dragged_part(SC_SIZE + 9), None);
         assert_eq!(dragged_part(SC_CLOSE), None);
+    }
+
+    #[test]
+    fn what_may_be_moved_or_sized() {
+        let style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+        assert!(can_size_move(style, SC_MOVE));
+        assert!(can_size_move(style, SC_SIZE));
+        assert!(!can_size_move(style & !WS_VISIBLE, SC_MOVE), "hidden");
+        assert!(!can_size_move(style | WS_MAXIMIZE, SC_MOVE), "maximized");
+        assert!(can_size_move(style | WS_MINIMIZE, SC_MOVE), "a minimized window moves");
+        assert!(!can_size_move(style | WS_MINIMIZE, SC_SIZE), "but is not sized");
+        let dialog = abi::user::WS_POPUP | abi::user::WS_CAPTION | WS_SYSMENU | WS_VISIBLE;
+        assert!(can_size_move(dialog, SC_MOVE));
+        assert!(!can_size_move(dialog, SC_SIZE), "no thick frame");
+        assert!(!can_size_move(WS_THICKFRAME | WS_DLGFRAME | WS_VISIBLE, SC_SIZE), "a dialog frame only");
+    }
+
+    #[test]
+    fn the_keyboard_moves_from_the_middle_of_the_caption() {
+        let m = |index: usize| match index {
+            sm::CXSIZE => 18,
+            sm::CYSIZE => 18,
+            _ => 0,
+        };
+        let window = Rect::new(100, 100, 500, 400);
+        // The icon (19) on the left, two boxes (2 × 19) on the right.
+        assert_eq!(move_start_point(window, WS_OVERLAPPEDWINDOW, &m), (290, 109));
+        let bare = abi::user::WS_POPUP | abi::user::WS_CAPTION;
+        assert_eq!(move_start_point(window, bare, &m), (300, 109), "no icon, no boxes");
+    }
+
+    #[test]
+    fn an_arrow_picks_the_edge_to_size() {
+        let window = Rect::new(100, 100, 500, 400);
+        let frame = (4, 4);
+        assert_eq!(size_start_edge(u32::from(VK_UP), window, frame), Some((HTTOP, (300, 102))));
+        assert_eq!(size_start_edge(u32::from(VK_DOWN), window, frame), Some((HTBOTTOM, (300, 398))));
+        assert_eq!(size_start_edge(u32::from(VK_LEFT), window, frame), Some((HTLEFT, (102, 250))));
+        assert_eq!(size_start_edge(u32::from(VK_RIGHT), window, frame), Some((HTRIGHT, (498, 250))));
+        assert_eq!(size_start_edge(u32::from(VK_RETURN), window, frame), None);
+        assert_eq!(size_start_edge(0x125, window, frame), None, "not a key code");
+    }
+
+    #[test]
+    fn the_mouse_is_brought_into_the_window_to_pick_an_edge() {
+        let window = Rect::new(100, 100, 500, 400);
+        assert_eq!(point_into((50, 250), window), (100, 250), "left of it");
+        assert_eq!(point_into((700, 900), window), (499, 399), "below right");
+        assert_eq!(point_into((300, 200), window), (300, 200), "inside");
+        // A window of no width or height (WM_WINDOWPOSCHANGING answered by
+        // the program): i32::clamp would panic, its minimum above its maximum.
+        assert_eq!(point_into((300, 200), Rect::new(100, 100, 100, 100)), (99, 99));
+    }
+
+    #[test]
+    fn the_loop_reads_system_keys_too() {
+        // A minimized active window has no keyboard: its keys are system
+        // keys, and still end, cancel and move.
+        for message in [WM_KEYDOWN, WM_SYSKEYDOWN] {
+            assert_eq!(loop_key(message, u32::from(VK_RETURN)), Some(LoopKey::End));
+            assert_eq!(loop_key(message, u32::from(VK_ESCAPE)), Some(LoopKey::Cancel));
+            assert_eq!(loop_key(message, u32::from(VK_RIGHT)), Some(LoopKey::Arrow(8, 0)));
+            assert_eq!(loop_key(message, u32::from(b'A')), Some(LoopKey::Other));
+        }
+        assert_eq!(loop_key(WM_MOUSEMOVE, u32::from(VK_RETURN)), None, "not a key");
+        assert_eq!(loop_key(abi::user::WM_KEYUP, u32::from(VK_RETURN)), None, "a key up");
+    }
+
+    #[test]
+    fn an_arrow_moves_the_cursor_by_eight_pixels() {
+        assert_eq!(arrow_step(u32::from(VK_UP)), Some((0, -8)));
+        assert_eq!(arrow_step(u32::from(VK_DOWN)), Some((0, 8)));
+        assert_eq!(arrow_step(u32::from(VK_LEFT)), Some((-8, 0)));
+        assert_eq!(arrow_step(u32::from(VK_RIGHT)), Some((8, 0)));
+        assert_eq!(arrow_step(u32::from(VK_ESCAPE)), None);
     }
 
     #[test]
@@ -376,13 +653,15 @@ mod tests {
     #[test]
     fn caption_buttons_and_their_commands() {
         let style = WS_OVERLAPPEDWINDOW;
-        assert_eq!(button_command(HTCLOSE, style), Some(SC_CLOSE));
-        assert_eq!(button_command(HTMINBUTTON, style), Some(SC_MINIMIZE));
-        assert_eq!(button_command(HTMAXBUTTON, style), Some(SC_MAXIMIZE));
-        assert_eq!(button_command(HTMAXBUTTON, style | WS_MAXIMIZE), Some(SC_RESTORE));
-        assert_eq!(button_command(HTMINBUTTON, style | WS_MINIMIZE), Some(SC_RESTORE), "minimized: restore");
-        assert_eq!(button_command(HTMAXBUTTON, style | WS_MINIMIZE), Some(SC_MAXIMIZE));
-        assert_eq!(button_command(HTMINBUTTON, style & !WS_MINIMIZEBOX), None, "a disabled box");
-        assert_eq!(button_command(HTCLIENT, style), None);
+        assert_eq!(button_command(HTCLOSE, style, true), Some(SC_CLOSE));
+        assert_eq!(button_command(HTMINBUTTON, style, true), Some(SC_MINIMIZE));
+        assert_eq!(button_command(HTMAXBUTTON, style, true), Some(SC_MAXIMIZE));
+        assert_eq!(button_command(HTMAXBUTTON, style | WS_MAXIMIZE, true), Some(SC_RESTORE));
+        assert_eq!(button_command(HTMINBUTTON, style | WS_MINIMIZE, true), Some(SC_RESTORE), "minimized: restore");
+        assert_eq!(button_command(HTMAXBUTTON, style | WS_MINIMIZE, true), Some(SC_MAXIMIZE));
+        assert_eq!(button_command(HTMINBUTTON, style & !WS_MINIMIZEBOX, true), None, "a disabled box");
+        assert_eq!(button_command(HTCLIENT, style, true), None);
+        assert_eq!(button_command(HTCLOSE, style, false), None, "Close grayed: nothing");
+        assert_eq!(button_command(HTMAXBUTTON, style, false), Some(SC_MAXIMIZE), "Close only");
     }
 }

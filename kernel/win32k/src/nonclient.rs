@@ -159,12 +159,15 @@ pub(crate) fn button_symbol(
 /// `ex_style` (UserDrawCaptionButton) : fermer, puis réduire et agrandir,
 /// avec leur endroit (HTCLOSE, HTMINBUTTON, HTMAXBUTTON), leur rectangle,
 /// leur symbole Marlett (rétablir, `2`, pour réduire une fenêtre réduite et
-/// agrandir une fenêtre agrandie) et s'ils sont grisés (sans le style qui
-/// les permet).
+/// agrandir une fenêtre agrandie) et s'ils sont grisés : sans le style qui
+/// les permet ; fermer, sans `close_enabled` (l'item Close du menu système
+/// grisé, désactivé ou absent, une classe CS_NOCLOSE :
+/// `crate::sysmenu::close_enabled`).
 pub(crate) fn caption_button_places(
     caption: Rect,
     style: u32,
     ex_style: u32,
+    close_enabled: bool,
     m: &impl Fn(usize) -> i32,
 ) -> Vec<(u32, Rect, char, bool)> {
     let mut places = Vec::new();
@@ -174,7 +177,7 @@ pub(crate) fn caption_button_places(
         (m(sm::CXSIZE), m(sm::CYSIZE))
     };
     let close = Rect::new(caption.right - cx, caption.top + 2, caption.right - 2, caption.top + cy - 2);
-    places.push((HTCLOSE, close, 'r', false));
+    places.push((HTCLOSE, close, 'r', !close_enabled));
     if style & (WS_MAXIMIZEBOX | WS_MINIMIZEBOX) == 0 || ex_style & WS_EX_TOOLWINDOW != 0 {
         return places;
     }
@@ -213,17 +216,19 @@ fn caption_button(
 
 /// Les boutons du titre `caption` ([`caption_button_places`]), aucun
 /// enfoncé ; faux si les symboles manquent.
+#[expect(clippy::too_many_arguments, reason = "the caption, its window's styles and Close, and the system")]
 fn caption_buttons(
     caption: Rect,
     style: u32,
     ex_style: u32,
+    close_enabled: bool,
     m: &impl Fn(usize) -> i32,
     c: &impl Fn(usize) -> ColorRef,
     layout: Layout,
     ops: &mut Vec<Op>,
 ) -> bool {
     let mut drawn = true;
-    for (_, rect, symbol, inactive) in caption_button_places(caption, style, ex_style, m) {
+    for (_, rect, symbol, inactive) in caption_button_places(caption, style, ex_style, close_enabled, m) {
         drawn &= caption_button(rect, symbol, inactive, false, c, layout, ops);
     }
     drawn
@@ -233,7 +238,8 @@ fn caption_buttons(
 /// HTMAXBUTTON) du titre d'une fenêtre de style `style` et `ex_style`, de
 /// `width` × `height`, enfoncé ou non (`pushed`), dans les coordonnées de la
 /// fenêtre ; son titre commence sous ses bordures (UserGetWindowBorders).
-/// `None` pour une fenêtre sans ce bouton, ou sans la police des symboles.
+/// Le bouton de fermeture est grisé sans `close_enabled`. `None` pour une
+/// fenêtre sans ce bouton, ou sans la police des symboles.
 #[expect(clippy::too_many_arguments, reason = "the button, its window's styles and size, and the system")]
 pub fn caption_button_ops(
     style: u32,
@@ -241,6 +247,7 @@ pub fn caption_button_ops(
     (width, _height): (i32, i32),
     hit: u32,
     pushed: bool,
+    close_enabled: bool,
     m: &impl Fn(usize) -> i32,
     c: &impl Fn(usize) -> ColorRef,
     layout: Layout,
@@ -252,7 +259,7 @@ pub fn caption_button_ops(
     let caption_height = if ex_style & WS_EX_TOOLWINDOW != 0 { m(sm::CYSMCAPTION) } else { m(sm::CYCAPTION) };
     let caption = Rect::new(bx, by, width - bx, by + caption_height - 1);
     let (_, rect, symbol, inactive) =
-        caption_button_places(caption, style, ex_style, m).into_iter().find(|place| place.0 == hit)?;
+        caption_button_places(caption, style, ex_style, close_enabled, m).into_iter().find(|place| place.0 == hit)?;
     let mut ops = Vec::new();
     caption_button(rect, symbol, inactive, pushed, c, layout, &mut ops).then_some(ops)
 }
@@ -386,6 +393,7 @@ pub fn frame_ops(
     menu_bar: &dyn Fn(Rect) -> Option<crate::menubar::Bar>,
     active: bool,
     gradient: bool,
+    close_enabled: bool,
     m: &impl Fn(usize) -> i32,
     c: &impl Fn(usize) -> ColorRef,
     layout: Layout,
@@ -439,7 +447,8 @@ pub fn frame_ops(
         let text_color = c(if active { color::CAPTIONTEXT } else { color::INACTIVECAPTIONTEXT });
         let font = (ex_style & WS_EX_TOOLWINDOW != 0, text_color);
         unpainted.text = !caption_text(caption, text, icon.is_some(), font, style, ex_style, m, layout, &mut ops);
-        if style & WS_SYSMENU != 0 && !caption_buttons(caption, style, ex_style, m, c, layout, &mut ops) {
+        if style & WS_SYSMENU != 0 && !caption_buttons(caption, style, ex_style, close_enabled, m, c, layout, &mut ops)
+        {
             unpainted.text = true;
         }
         if style & WS_MINIMIZE == 0 {
@@ -547,6 +556,7 @@ mod tests {
             &no_bar,
             active,
             gradient,
+            true,
             &metric,
             palette,
             layout,
@@ -576,6 +586,7 @@ mod tests {
             &[],
             &no_bar,
             false,
+            true,
             true,
             &metric,
             &system,
@@ -615,6 +626,7 @@ mod tests {
             &[],
             &bar,
             false,
+            true,
             true,
             &metric,
             &coded,
@@ -685,6 +697,7 @@ mod tests {
             &no_bar,
             false,
             true,
+            true,
             &metric,
             &system,
             &no_fonts,
@@ -716,6 +729,7 @@ mod tests {
                 &no_bar,
                 false,
                 false,
+                true,
                 &metric,
                 &system,
                 &no_fonts,
@@ -853,6 +867,7 @@ mod tests {
             &no_bar,
             true,
             false,
+            true,
             &metric,
             &coded,
             layout,
@@ -875,7 +890,7 @@ mod tests {
         let layout: Layout = &crate::font::text_run_named;
         let style = WS_OVERLAPPEDWINDOW;
         let button = |hit: u32, pushed: bool| {
-            caption_button_ops(style, WS_EX_WINDOWEDGE, (200, 100), hit, pushed, &metric, &coded, layout).unwrap()
+            caption_button_ops(style, WS_EX_WINDOWEDGE, (200, 100), hit, pushed, true, &metric, &coded, layout).unwrap()
         };
         let (frame, _) = render_caption(style, "", true);
         let [close, maximize, minimize] = buttons();
@@ -899,8 +914,9 @@ mod tests {
         for other in [close, minimize] {
             assert_eq!(sunken(other.left + 3, other.top + 3), frame(other.left + 3, other.top + 3), "the others stay");
         }
-        assert!(caption_button_ops(WS_POPUP, 0, (200, 100), HTCLOSE, true, &metric, &coded, layout).is_none());
-        let tool = caption_button_ops(style, WS_EX_TOOLWINDOW, (200, 100), HTMAXBUTTON, true, &metric, &coded, layout);
+        assert!(caption_button_ops(WS_POPUP, 0, (200, 100), HTCLOSE, true, true, &metric, &coded, layout).is_none());
+        let tool =
+            caption_button_ops(style, WS_EX_TOOLWINDOW, (200, 100), HTMAXBUTTON, true, true, &metric, &coded, layout);
         assert!(tool.is_none(), "a tool window has no maximize button");
     }
 
@@ -919,12 +935,17 @@ mod tests {
         assert_eq!(at(3, size.1 - 4), coded(color::ACTIVECAPTION).0, "down to the bottom edge");
         assert_eq!(at(2, 10), coded(color::BTNFACE).0, "the thin frame");
         let caption = Rect::new(3, 3, size.0 - 3, 3 + metric(sm::CYCAPTION) - 1);
-        let places = caption_button_places(caption, style, WS_EX_WINDOWEDGE, &metric);
+        let places = caption_button_places(caption, style, WS_EX_WINDOWEDGE, true, &metric);
         let minimize = places.iter().find(|place| place.0 == HTMINBUTTON).unwrap();
         let maximize = places.iter().find(|place| place.0 == HTMAXBUTTON).unwrap();
         assert_eq!((minimize.2, maximize.2), ('2', '1'), "restore, then maximize");
-        let maximized = caption_button_places(caption, WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, 0, &metric);
+        let maximized = caption_button_places(caption, WS_OVERLAPPEDWINDOW | WS_MAXIMIZE, 0, true, &metric);
         assert_eq!(maximized.iter().find(|place| place.0 == HTMAXBUTTON).unwrap().2, '2', "maximized: restore");
+        let close = |enabled: bool| {
+            let places = caption_button_places(caption, style, WS_EX_WINDOWEDGE, enabled, &metric);
+            places.iter().find(|place| place.0 == HTCLOSE).unwrap().3
+        };
+        assert_eq!((close(true), close(false)), (false, true), "the close button grayed with Close");
     }
 
     #[test]

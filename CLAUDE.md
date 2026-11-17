@@ -439,6 +439,28 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   (`sysmenu::nc_rbutton_down`, NC_HandleNCRButtonDown : la souris prise jusqu'au relâchement ;
   `sysmenu::context_menu`, WM_CONTEXTMENU : TrackPopupMenu, les deux boutons depuis le titre) ; TrackPopupMenu
   d'un menu système le met à l'état de sa fenêtre (`menutrack::track_popup_menu`) ; scénario `window-menu`.
+  M6, étape 39 : déplacer et redimensionner au clavier (Move et Size du menu de la fenêtre : `sizemove::keyboard_start`,
+  DefWndStartSizeMove ; le curseur au milieu du titre, ou un bord choisi par une flèche ; dans la boucle, chaque flèche
+  déplace le curseur de 8 pixels, Entrée finit, Échap rend la place) ; `mouse::set_cursor_pos` (UserSetCursorPos : le
+  curseur placé et son WM_MOUSEMOVE) ; scénario `keyboard-move` (`tests/native/kbdmove1.c`).
+  M6, étape 40 : ← et → aux bouts de la barre passent au menu de la fenêtre, et de lui à la barre
+  (`menutrack::do_next_menu`, MENU_DoNextMenu : WM_NEXTMENU à la propriétaire, qui peut donner la barre ou le menu
+  d'une autre fenêtre, le suivi y passant) ; scénario `next-menu` (`tests/native/nextmenu1.c`).
+  M6, étape 41 : le bouton de fermeture suit Close (`sysmenu::close_enabled` : Close grisé, désactivé ou absent du
+  menu système, une classe CS_NOCLOSE ; le menu pas créé pour le lire) : grisé au dessin, sans effet au clic,
+  repeint quand EnableMenuItem change une commande du système (`menu::enable`, `paint::draw_caption_buttons`) ;
+  scénario `close-button` (`tests/native/closebtn1.c`).
+  M6, étape 42 : SetForegroundWindow active une fenêtre réduite (`input::can_set_foreground` ; `can_activate`
+  reste la règle de co_WinPosActivateOtherWindow), sans lui donner le clavier (`input::activation_takes_focus` :
+  ses touches lui vont en touches système), WM_ACTIVATE dit si elle est réduite (`input::activate_wparam`) ;
+  Entrée la rétablit (`defwnd::key_menu`, `KeyMenu::Restore`) ; scénario `foreground-minimized`
+  (`tests/native/fgmin1.c`).
+  M6, étape 43 : activer la fenêtre d'un autre thread passe par les événements de sa file (`queue::QueueEvent` :
+  `Activate`, POSTEVENT_SAW ou WM_ASYNC_SETACTIVEWINDOW, et `Deactivate`, POSTEVENT_DAW ; `queue::process_events`
+  après les messages postés et les entrées) : `input::activate_event` (IntActivateWindow) et
+  `input::deactivate_thread` (IntDeactivateWindow : WM_NCACTIVATE et WM_ACTIVATE inactifs, WM_ACTIVATEAPP,
+  WM_KILLFOCUS, Ctrl, Alt et Maj relâchées) dans le thread des fenêtres, tout de suite au thread courant ; les
+  événements dépassés partent (FindRemoveEventMsg) ; scénario `async-activate` (`tests/native/asyncact1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité
