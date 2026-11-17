@@ -1,0 +1,39 @@
+# SetForegroundWindow of a minimized window (win32k::input::
+# set_foreground_window, can_set_foreground, activate; tests/native/fgmin1.c,
+# MinGW, linked to ReactOS's kernel32 and user32): FGMIN1.EXE takes the place
+# of winlogon.exe and switches to WinSta0\Default, with W (100, 100,
+# 400 x 300), its child C, and B (550, 300). Update with
+# docs/compat/m6-fenetres.md, step 42.
+# 1. C has the keyboard; W minimized: B active, with the keyboard.
+# 2. SetForegroundWindow(W): TRUE, W active and in the foreground, still
+#    minimized; nobody has the keyboard (input::activation_takes_focus);
+#    W's WM_ACTIVATE 0x10001 (input::activate_wparam), B's 0 and its
+#    WM_KILLFOCUS to nobody.
+# 3. a: W's WM_SYSKEYDOWN (nobody has the keyboard: a system key).
+# 4. Alt+Space, r: the window menu of the minimized W, Restore; W restored,
+#    with the keyboard. Minimized again, SetForegroundWindow(W) again.
+# 5. Enter: WM_SYSCHAR of Enter, SC_RESTORE (defwnd::key_menu,
+#    KeyMenu::Restore); W restored, with the keyboard.
+features = test-smss
+requires = userland, native
+initial-command = FGMIN1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [fgmin] keyboard: step 3 => a
+keys = [fgmin] keyboard: step 4 => alt-spc r
+keys = [fgmin] keyboard: step 5 => ret
+
+expect = [fgmin] step 1: C had the keyboard; W minimized 1, active B 1, focus B 1
+expect = [fgmin] step 2: SetForegroundWindow 1; foreground W 1, active W 1, focus nobody 1, iconic 1
+expect = [fgmin] step 2: W WM_ACTIVATE 10001, WM_SETFOCUS 0; B WM_ACTIVATE 0, WM_KILLFOCUS 1 to nobody 1
+expect = [fgmin] step 3: W WM_SYSKEYDOWN 41, focus nobody 1
+expect = [fgmin] step 4: WM_INITMENUPOPUP, the window menu 1
+expect = [fgmin] step 4: SC_RESTORE; iconic 0, active W 1, focus W 1
+expect = [fgmin] step 4: minimized again, active B 1
+expect = [fgmin] step 4: SetForegroundWindow 1; foreground W 1, active W 1, focus nobody 1, iconic 1
+expect = [fgmin] step 4: W WM_ACTIVATE 10001, WM_SETFOCUS 0; B WM_ACTIVATE 0, WM_KILLFOCUS 1 to nobody 1
+expect = [fgmin] step 5: SC_RESTORE; iconic 0, active W 1, focus W 1
+expect = [fgmin] W destroyed
+expect = [fgmin] done
+forbid = *** STOP:

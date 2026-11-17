@@ -16,7 +16,9 @@
 //! co_IntSetForegroundWindow) : elle devient sa fenêtre active et celle qui
 //! a le clavier ; l'ancienne fenêtre active du thread reçoit WM_NCACTIVATE
 //! et WM_ACTIVATE inactifs, la nouvelle WM_NCACTIVATE, WM_ACTIVATE, puis
-//! WM_SETFOCUS. Quand le premier plan change de thread, les fenêtres de
+//! WM_SETFOCUS. Une fenêtre réduite s'active aussi (SetForegroundWindow, un
+//! clic sur sa barre) ; personne n'a alors le clavier, et ses touches vont à
+//! elle en touches système (Alt+Espace ouvre son menu, Entrée la rétablit). Quand le premier plan change de thread, les fenêtres de
 //! premier niveau des deux threads reçoivent WM_ACTIVATEAPP
 //! ([`send_activate_app`]) : celles du thread qui le perd d'abord, celles du
 //! thread qui le gagne avant les messages de sa fenêtre activée. Une
@@ -273,18 +275,42 @@ pub fn foreground_window() -> u32 {
 }
 
 /// co_IntSetForegroundWindow (SetForegroundWindow) : la fenêtre de premier
-/// niveau de `window` est activée et passe au premier plan ([`activate`]) ;
-/// rend si elle a pu l'être (visible, ni réduite ni fille, pas détruite).
+/// niveau de `window` est activée et passe au premier plan ([`activate`]),
+/// réduite aussi (elle n'a pas alors le clavier) ; rend si elle a pu l'être
+/// ([`can_set_foreground`]).
 ///
 /// # IRQL
 /// PASSIVE_LEVEL, dans un service système, sans rien tenir.
 pub fn set_foreground_window(window: &Arc<Window>) -> bool {
     let root = root_of(window.clone());
-    if !can_activate(&root) {
+    if !root.is_alive() || !can_set_foreground(root.state().style) {
         return false;
     }
     activate(&root);
     true
+}
+
+/// La règle de SetForegroundWindow : une fenêtre visible qui n'est pas une
+/// fille, réduite ou non ; co_IntSetForegroundWindow active une fenêtre
+/// réduite. Écart avec ReactOS : une fenêtre cachée est refusée (ReactOS
+/// l'active aussi).
+pub(crate) fn can_set_foreground(style: u32) -> bool {
+    style & WS_VISIBLE != 0 && style & (WS_POPUP | WS_CHILD) != WS_CHILD
+}
+
+/// MAKEWPARAM(`state`, réduite) : le wParam de WM_ACTIVATE pour une fenêtre
+/// de style `style` (co_IntSendActivateMessages,
+/// co_IntSendDeactivateMessages) ; le mot haut dit si elle est réduite.
+pub(crate) fn activate_wparam(state: u32, style: u32) -> u32 {
+    state | u32::from(style & WS_MINIMIZE != 0) << 16
+}
+
+/// co_IntSetActiveWindow : une fenêtre de style `style` qui devient active
+/// sans que le clavier soit à elle ni à l'une de ses filles le prend, sauf
+/// réduite : personne ne l'a alors, et ses touches vont à elle en touches
+/// système ([`send_key`]).
+pub(crate) fn activation_takes_focus(style: u32) -> bool {
+    style & WS_MINIMIZE == 0
 }
 
 /// `thread`, qui se termine, n'est plus au premier plan
@@ -304,8 +330,8 @@ pub fn forget_foreground(thread: &ThreadInfo) -> bool {
     left.is_some()
 }
 
-/// can_activate_window : une fenêtre qui n'est pas détruite, visible, ni
-/// réduite ni fille.
+/// can_activate_window (co_WinPosActivateOtherWindow) : une fenêtre qui
+/// n'est pas détruite, visible, ni réduite ni fille.
 fn can_activate(window: &Window) -> bool {
     let style = window.state().style;
     window.is_alive()
@@ -383,8 +409,9 @@ pub fn activate_other(window: &Arc<Window>, excluded: Option<u32>, notify: bool)
         .0;
     let ours = crate::convert_current_thread().is_ok_and(|current| current.server == window.pti);
     if was_active && notify && ours {
+        let wparam = activate_wparam(WA_INACTIVE, window.state().style);
         let _ = crate::window::send_message(window, WM_NCACTIVATE, 0, LParam::Value(0));
-        let _ = crate::window::send_message(window, WM_ACTIVATE, WA_INACTIVE, LParam::Value(0));
+        let _ = crate::window::send_message(window, WM_ACTIVATE, wparam, LParam::Value(0));
     }
 }
 
@@ -588,8 +615,10 @@ pub fn translate_message(thread: &ThreadInfo, message: &Msg32) -> bool {
 /// premier niveau du thread qui le perd, puis celles du thread de `window`,
 /// reçoivent WM_ACTIVATEAPP ([`send_activate_app`]). Au thread courant,
 /// `window` reçoit ensuite WM_ACTIVATE (dont DefWindowProc lui donne le
-/// clavier : SetFocus), puis le clavier s'il n'est ni à elle ni à l'une de
-/// ses filles. D'un autre thread, elle prend le clavier sans WM_ACTIVATE.
+/// clavier : SetFocus ; le mot haut dit si elle est réduite,
+/// [`activate_wparam`]), puis le clavier s'il n'est ni à elle ni à l'une de
+/// ses filles ; réduite, personne ne l'a ([`activation_takes_focus`]). D'un
+/// autre thread, elle prend le clavier sans WM_ACTIVATE (réduite, personne).
 /// Déjà active, elle ne reçoit rien et le clavier ne bouge pas (une boîte
 /// de dialogue redimensionnée par SetWindowPos garde le focus sur son
 /// contrôle).
@@ -645,7 +674,8 @@ pub fn activate(window: &Arc<Window>) {
         if !REPORTED.swap(true, Ordering::Relaxed) {
             log::warn!("win32k: WM_ACTIVATE and WM_SETFOCUS to a window of another thread: not yet");
         }
-        thread.queue.with(|queue| queue.focus = hwnd);
+        let focus = if activation_takes_focus(window.state().style) { hwnd } else { 0 };
+        thread.queue.with(|queue| queue.focus = focus);
         announce();
         if let Some(old) = &old {
             crate::paint::set_frame_active(old, false, true);
@@ -654,16 +684,19 @@ pub fn activate(window: &Arc<Window>) {
         return;
     }
     if let Some(old) = &old {
+        let wparam = activate_wparam(WA_INACTIVE, old.state().style);
         let _ = crate::window::send_message(old, WM_NCACTIVATE, 0, LParam::Value(0));
-        let _ = crate::window::send_message(old, WM_ACTIVATE, WA_INACTIVE, LParam::Value(hwnd));
+        let _ = crate::window::send_message(old, WM_ACTIVATE, wparam, LParam::Value(hwnd));
     }
     announce();
     let _ = crate::window::send_message(window, WM_NCACTIVATE, 1, LParam::Value(0));
-    let _ = crate::window::send_message(window, WM_ACTIVATE, WA_ACTIVE, LParam::Value(previous_active));
+    let wparam = activate_wparam(WA_ACTIVE, window.state().style);
+    let _ = crate::window::send_message(window, WM_ACTIVATE, wparam, LParam::Value(previous_active));
     // The focus goes to the window unless WM_ACTIVATE gave it to one of its
-    // children (DefDlgProc: the control that had it).
+    // children (DefDlgProc: the control that had it); to nobody if it is
+    // minimized.
     if !focus_is_in(thread.queue.with(|queue| queue.focus).0, hwnd) {
-        send_focus_messages(&thread, Some(window));
+        send_focus_messages(&thread, activation_takes_focus(window.state().style).then_some(window));
     }
 }
 
@@ -776,6 +809,28 @@ mod tests {
 
     fn key(vk: u8, scan: u16, extended: bool, up: bool) -> KeyInput {
         KeyInput { vk, scan, extended, up }
+    }
+
+    #[test]
+    fn set_foreground_window_activates_a_minimized_window_without_the_keyboard() {
+        use abi::user::WS_OVERLAPPEDWINDOW;
+        let minimized = WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_MINIMIZE;
+        // SetForegroundWindow takes it; co_WinPosActivateOtherWindow skips it.
+        assert!(can_set_foreground(minimized));
+        assert!(can_set_foreground(WS_OVERLAPPEDWINDOW | WS_VISIBLE));
+        assert!(can_set_foreground(WS_POPUP | WS_CHILD | WS_VISIBLE), "a popup is not a child");
+        assert!(!can_set_foreground(WS_CHILD | WS_VISIBLE));
+        assert!(!can_set_foreground(WS_OVERLAPPEDWINDOW), "hidden: not yet (ReactOS takes it)");
+        // WM_ACTIVATE says so in its high word, active or not.
+        assert_eq!(activate_wparam(WA_ACTIVE, minimized), 0x0001_0001);
+        assert_eq!(activate_wparam(WA_INACTIVE, minimized), 0x0001_0000);
+        assert_eq!(activate_wparam(WA_ACTIVE, WS_OVERLAPPEDWINDOW | WS_VISIBLE), WA_ACTIVE);
+        // Nobody gets the keyboard: its keys become system keys.
+        assert!(!activation_takes_focus(minimized));
+        assert!(activation_takes_focus(WS_OVERLAPPEDWINDOW | WS_VISIBLE));
+        let mut keys = AsyncKeys::default();
+        let down = key_message(&mut keys, &key(b'A', 0x1E, false, false), 0x10, true, 0);
+        assert_eq!((down.hwnd, down.message), (0x10, WM_SYSKEYDOWN));
     }
 
     #[test]
