@@ -455,6 +455,12 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   ses touches lui vont en touches système), WM_ACTIVATE dit si elle est réduite (`input::activate_wparam`) ;
   Entrée la rétablit (`defwnd::key_menu`, `KeyMenu::Restore`) ; scénario `foreground-minimized`
   (`tests/native/fgmin1.c`).
+  M6, étape 43 : activer la fenêtre d'un autre thread passe par les événements de sa file (`queue::QueueEvent` :
+  `Activate`, POSTEVENT_SAW ou WM_ASYNC_SETACTIVEWINDOW, et `Deactivate`, POSTEVENT_DAW ; `queue::process_events`
+  après les messages postés et les entrées) : `input::activate_event` (IntActivateWindow) et
+  `input::deactivate_thread` (IntDeactivateWindow : WM_NCACTIVATE et WM_ACTIVATE inactifs, WM_ACTIVATEAPP,
+  WM_KILLFOCUS, Ctrl, Alt et Maj relâchées) dans le thread des fenêtres, tout de suite au thread courant ; les
+  événements dépassés partent (FindRemoveEventMsg) ; scénario `async-activate` (`tests/native/asyncact1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

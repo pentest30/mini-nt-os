@@ -1,5 +1,26 @@
 # Notes de passation
 
+- **Activer la fenêtre d'un autre thread (WM_ASYNC_SETACTIVEWINDOW)** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 43 ; demandé après l'étape 42). Activer la fenêtre d'un
+  autre thread ne lui envoyait ni WM_NCACTIVATE, ni WM_ACTIVATE, ni WM_SETFOCUS (le noyau peignait son cadre), et le
+  thread qui perdait le premier plan gardait sa fenêtre active, sans WM_ACTIVATE inactif ni WM_KILLFOCUS. Comme
+  co_IntSetForegroundMessageQueue, la file tient des événements (`queue::QueueEvent` : `Activate`, POSTEVENT_SAW,
+  et `Deactivate`, POSTEVENT_DAW), traités dans le thread par PeekMessage, GetMessage et WaitMessage après les
+  messages postés et les entrées (`queue::process_events`) : `input::activate_event` (IntActivateWindow) et
+  `input::deactivate_thread` (IntDeactivateWindow), tout de suite au thread courant ; `input::set_active_window`
+  (co_IntSetActiveWindow) ; les désactivations attendues partent quand le thread regagne le premier plan, les
+  activations attendues quand il s'active lui-même (FindRemoveEventMsg). WM_ACTIVATEAPP va à chaque thread dans son
+  thread. **Écarts** : WM_ACTIVATEAPP (TRUE) porte le TID du thread qui perd le premier plan, et vient aussi quand la
+  fenêtre était déjà active. Scénario `async-activate` (`tests/native/asyncact1.c`, AMD et Intel, cinq étapes dont
+  les deux événements dépassés) ; tests hôte (`queue`, `input`). Avant le commit : `activate-app`,
+  `foreground-minimized`, `window-menu`, `minmax`, `hotkey`, `destroy` passent (AMD). À faire : les mutations, le
+  lint, la suite complète (elles iront dans cette entrée).
+  **Suite** : SetForegroundWindow d'une fenêtre cachée ; la règle du premier plan (CanForceFG,
+  LockSetForegroundWindow) ; AttachThreadInput ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ;
+  Maj+F10 (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés,
+  SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ; RemoveMenu et DeleteMenu de Close qui repeignent le bouton ;
+  vérifier sous VirtualBox avec le Bloc-notes.
+
 - **SetForegroundWindow d'une fenêtre réduite ; Entrée la rétablit** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 42 ; demandé après l'étape 41). SetForegroundWindow suivait
   la règle de co_WinPosActivateOtherWindow (`input::can_activate`) et refusait une fenêtre réduite ; il prend
@@ -16,11 +37,7 @@
   l'ancienne suite de SW_RESTORE : la fenêtre, activée réduite par le SW_RESTORE refusé, avait alors le clavier ;
   personne ne l'a plus, et SW_RESTORE envoie WM_SETFOCUS avant WM_ACTIVATE (co_WinPosShowWindow : co_UserSetFocus,
   puis WM_ACTIVATE). L'attente est corrigée (11 messages, `0007 0006`) ; `minmax` passe sur AMD et Intel.
-  **Suite** : SetForegroundWindow d'une fenêtre cachée ; WM_ASYNC_SETACTIVEWINDOW (l'activation d'une fenêtre d'un
-  autre thread avec ses messages) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10
-  (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés, SetCursorPos
-  (TWOPARAM_ROUTINE_SETCURSORPOS) ; RemoveMenu et DeleteMenu de Close qui repeignent le bouton ; vérifier sous
-  VirtualBox avec le Bloc-notes.
+  La suite : l'entrée de WM_ASYNC_SETACTIVEWINDOW, au-dessus.
 
 - **Le bouton de fermeture grisé quand Close l'est** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 41 ; demandé après l'étape 40). `sysmenu::close_enabled`

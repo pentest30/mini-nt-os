@@ -2008,3 +2008,46 @@ sur une fenêtre réduite) ; `foreground-minimized` sur AMD et Intel. Six mutati
 encore `can_activate` ; la règle qui refuse une fenêtre réduite ; le clavier donné à la fenêtre réduite ; WM_ACTIVATE
 sans son mot haut ; Entrée qui ne demande rien ; SC_RESTORE pas posté (la première et la dernière par le scénario
 seul, les autres aussi par les tests hôte).
+
+## Étape 43 : activer la fenêtre d'un autre thread (WM_ASYNC_SETACTIVEWINDOW)
+
+Demandé après l'étape 42 : activer la fenêtre d'un autre thread (SetForegroundWindow, SetWindowPos, ShowWindow) ne lui
+envoyait ni WM_NCACTIVATE, ni WM_ACTIVATE, ni WM_SETFOCUS : le noyau changeait sa fenêtre active et son clavier et
+peignait son cadre lui-même. De même pour le thread qui perdait le premier plan, dont la fenêtre active restait la
+sienne, sans WM_ACTIVATE inactif ni WM_KILLFOCUS ; seul WM_ACTIVATEAPP lui arrivait.
+
+`focus.c` de win32k (co_IntSetForegroundMessageQueue, IntActivateWindow, IntDeactivateWindow, co_IntSetActiveWindow,
+FindRemoveEventMsg), `message.c` (handle_internal_events, co_IntPeekMessage), `msgqueue.c` (MsqPostMessage avec
+QS_EVENT, MsqReleaseModifierKeys), ReactOS comme spécification ; `win32k::queue`, `win32k::input`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| Les événements de la file (`queue::QueueEvent`, `QueueState::post_event`, `queue::post_event`) | à part des messages postés, dans l'ordre, sans bit de réveil visible de `user32` : `Activate` (POSTEVENT_SAW, WM_ASYNC_SETACTIVEWINDOW : une fenêtre du thread à activer, et le TID du thread qui perd le premier plan s'il change de thread) et `Deactivate` (POSTEVENT_DAW : le thread a perdu le premier plan, et le TID de celui qui le prend) ; le thread est réveillé |
+| Leur traitement (`queue::process_events`) | dans le thread, par PeekMessage, GetMessage (les boucles du noyau aussi : menus, déplacement) et WaitMessage, quand aucun message posté ni aucune entrée ne sort, avant WM_PAINT et WM_TIMER ; tout est ensuite regardé de nouveau ; ils ne sortent jamais |
+| L'activation (`input::activate`, co_IntSetForegroundMessageQueue) | le premier plan change tout de suite ; le thread qui le perd se désactive tout de suite si c'est le thread courant, sinon par `Deactivate` ; le thread de la fenêtre l'active tout de suite si c'est le thread courant, sinon par `Activate`, dont ses désactivations encore attendues partent (FindRemoveEventMsg DAW) ; déjà au premier plan avec cette fenêtre active, rien |
+| `Activate` (`input::activate_event`, IntActivateWindow) | la fenêtre, si elle vit, devient active (`input::set_active_window`, co_IntSetActiveWindow : les activations attendues avant la première désactivation partent, FindRemoveEventMsg SAW ; WM_ACTIVATEAPP si le premier plan vient d'un autre thread ; WM_NCACTIVATE et WM_ACTIVATE inactifs à l'ancienne fenêtre active, WM_NCACTIVATE, WM_ACTIVATE et le clavier à la nouvelle) ; sans premier plan, le thread le prend ; déjà active, WM_NCACTIVATE seul (et WM_ACTIVATEAPP), puis devant ses sœurs |
+| `Deactivate` (`input::deactivate_thread`, IntDeactivateWindow) | rien sans fenêtre active ; sinon WM_CANCELMODE à la fenêtre qui a la capture, WM_NCACTIVATE et WM_ACTIVATE inactifs (lParam 0) à la fenêtre active, qui ne l'est plus, WM_ACTIVATEAPP (FALSE, le TID qui prend le premier plan) aux fenêtres de premier niveau du thread, plus de clavier (WM_KILLFOCUS de 0), Ctrl, Alt et Maj relâchées dans l'état du clavier du thread (`input::release_modifier_keys`) |
+
+Conséquences : WM_ACTIVATEAPP va aux fenêtres de chaque thread dans ce thread (plus par SendNotifyMessage depuis le
+thread qui active) ; GetForegroundWindow rend la fenêtre active du thread du premier plan, que ce thread change en
+traitant son événement (juste après SetForegroundWindow vers un autre thread, l'ancienne, ou aucune).
+
+Écarts avec ReactOS : WM_ACTIVATEAPP (TRUE) porte le TID du thread qui perd le premier plan aussi quand l'événement est
+traité plus tard (ReactOS y met celui de l'ancienne fenêtre active du thread, souvent aucun) ; il est envoyé aussi
+quand la fenêtre était déjà active. Pas encore : la règle du premier plan (CanForceFG, LockSetForegroundWindow),
+une application qui garde l'activation en refusant WM_NCACTIVATE, le mouvement de la souris refait après
+WM_CANCELMODE, AttachThreadInput (des files partagées), WM_ASYNC_SHOWWINDOW et WM_ASYNC_SETWINDOWPOS.
+
+Le banc d'essai : `tests/native/asyncact1.c` (`ASYNCACT1.EXE`, MinGW), scénario `async-activate`, à la place de
+`winlogon.exe`. Le thread A montre A1 ; le thread B montre B1 (et sa fille BC) et B2 sans les activer. Étape 1 : A
+appelle SetForegroundWindow(B1) ; A se désactive pendant l'appel (A1 : WM_NCACTIVATE, WM_ACTIVATE, WM_ACTIVATEAPP de
+B, WM_KILLFOCUS ; ni fenêtre active ni clavier ensuite), B active B1 dans son thread (WM_ACTIVATEAPP de A à B1 et B2,
+puis WM_NCACTIVATE, WM_ACTIVATE, WM_SETFOCUS). Étape 2 : B donne le clavier à BC ; SetForegroundWindow(B2) par A : B
+passe de B1 à B2 dans son thread, sans WM_ACTIVATEAPP. Étape 3 : pendant que B dort dans un traitement,
+SetForegroundWindow(A1) puis SetForegroundWindow(B2) : la désactivation de B part, B2 n'a que WM_ACTIVATEAPP et
+WM_NCACTIVATE. Étape 4 : pendant que B dort, SetForegroundWindow(B1) ; réveillé, B active B2 lui-même : l'activation
+de B1 qui attendait part. Étape 5 : SetForegroundWindow(A1) : B se désactive dans son thread (B2 : WM_NCACTIVATE,
+WM_ACTIVATE, WM_ACTIVATEAPP à B1 et B2, WM_KILLFOCUS ; ni fenêtre active ni clavier ensuite).
+
+Tests : hôte (`queue` : les événements à part, ceux qui partent ; `input` : Ctrl, Alt et Maj relâchées) ;
+`async-activate` sur AMD et Intel. Les mutations et la suite complète : voir la passation.
