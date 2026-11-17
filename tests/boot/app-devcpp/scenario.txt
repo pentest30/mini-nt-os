@@ -1,0 +1,17 @@
+# M7 bench: Dev-C++ 4.9.9.2 (NSIS), installed silently by APPBENCH.EXE
+# (tests/native/appbench.c) from C:\APPS, then started and closed.
+# The markers say how far it goes; docs/compat/applications.md has the
+# report.
+features = test-smss, interactive
+requires = userland, native
+initial-command = APPBENCH.EXE
+app = devcpp
+cpus = default
+timeout = 900
+# What works today, a floor: the installer starts (and for Dev-C++,
+# its files are copied and its program starts).
+expect = [appbench] installer started
+expect = [appbench] installed: C:\Dev-Cpp\devcpp.exe
+expect = [appbench] program started
+expect = [appbench] Dev-C++ 4.9.9.2: report done
+forbid = *** STOP:

@@ -94,6 +94,7 @@ const PROGRAMS: &[(&[&str], &str, Toolchain)] = &[
     (&["concmd1.c"], "CONCMD1.EXE", Toolchain::MinGwWin32),
     (&["notepad1.c"], "NOTEPAD1.EXE", Toolchain::MinGwWin32),
     (&["notepad2.c"], "NOTEPAD2.EXE", Toolchain::MinGwWin32),
+    (&["appbench.c"], "APPBENCH.EXE", Toolchain::MinGwWin32),
     (&["calc1.c"], "CALC1.EXE", Toolchain::MinGwWin32),
     (&["mine1.c"], "MINE1.EXE", Toolchain::MinGwWin32),
     (&["notepad3.c"], "NOTEPAD3.EXE", Toolchain::MinGwWin32),

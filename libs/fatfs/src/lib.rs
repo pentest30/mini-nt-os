@@ -19,7 +19,7 @@ extern crate std;
 pub mod format;
 pub mod image;
 
-pub use image::{build, path};
+pub use image::{build, build_with_free, path};
 
 #[cfg(test)]
 mod gpt_tests;
