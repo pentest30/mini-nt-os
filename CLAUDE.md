@@ -446,6 +446,10 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   M6, étape 40 : ← et → aux bouts de la barre passent au menu de la fenêtre, et de lui à la barre
   (`menutrack::do_next_menu`, MENU_DoNextMenu : WM_NEXTMENU à la propriétaire, qui peut donner la barre ou le menu
   d'une autre fenêtre, le suivi y passant) ; scénario `next-menu` (`tests/native/nextmenu1.c`).
+  M6, étape 41 : le bouton de fermeture suit Close (`sysmenu::close_enabled` : Close grisé, désactivé ou absent du
+  menu système, une classe CS_NOCLOSE ; le menu pas créé pour le lire) : grisé au dessin, sans effet au clic,
+  repeint quand EnableMenuItem change une commande du système (`menu::enable`, `paint::draw_caption_buttons`) ;
+  scénario `close-button` (`tests/native/closebtn1.c`).
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

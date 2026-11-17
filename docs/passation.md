@@ -1,5 +1,24 @@
 # Notes de passation
 
+- **Le bouton de fermeture grisé quand Close l'est** (`claude/new-session-696xfc`, M6,
+  [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 41 ; demandé après l'étape 40). `sysmenu::close_enabled`
+  (`close_rule`) : Close actif pour une fenêtre WS_SYSMENU sans CS_NOCLOSE dont l'item Close n'est ni grisé, ni
+  désactivé, ni absent ; le menu système pas créé pour le lire (le gabarit, actif, tant qu'il n'existe pas). Le
+  dessin (`nonclient::caption_button_places`, `frame_ops`, `caption_button_ops` : un paramètre `close_enabled`), le
+  clic (`sizemove::button_command` : rien sur un bouton grisé), le double-clic sur l'icône ; EnableMenuItem d'une
+  commande du système dans le menu de GetSystemMenu repeint les boutons du titre (`menu::enable`,
+  `changes_caption_buttons`, `Menus::system_owner`, `paint::draw_caption_buttons`). Alt+F4 ne regarde que
+  CS_NOCLOSE, comme ReactOS. Scénario `close-button` (`tests/native/closebtn1.c`, AMD et Intel : les symboles lus par
+  GetPixel) ; tests hôte. Huit mutations détectées. Lint propre ; toute la suite : 1171 tests hôte, 141 runs sur 142,
+  rostests 44/84 et 16/29. Le run manquant, `installer-finish` (AMD), s'est arrêté sur `[setup] copy failed:
+  c0000185` (STATUS_IO_DEVICE_ERROR à l'écriture du disque ATA) quand l'hôte n'avait plus que 4,5 Gio libres ; relancé
+  seul après avoir libéré de la place (le `target/` d'un vieux worktree, `/home/user/wtc`), il passe. Le lien avec la
+  place n'est pas prouvé : si l'erreur revient avec de la place, c'est à diagnostiquer.
+  **Suite** : SetForegroundWindow d'une fenêtre réduite (`input::can_activate` la refuse, ReactOS l'active) ;
+  DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du clavier) ;
+  MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés, SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ;
+  RemoveMenu et DeleteMenu de Close qui repeignent le bouton ; vérifier sous VirtualBox avec le Bloc-notes.
+
 - **← et → entre le menu de la fenêtre et la barre** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 40 ; demandé après l'étape 39). `menutrack::do_next_menu`
   (MENU_DoNextMenu) : aux bouts du menu suivi (`menutrack::at_menu_end` : ← sur le premier item, → sur le dernier,
@@ -13,10 +32,7 @@
   attendait encore que ← fasse le tour de la barre depuis File (étape 23, avant le menu de la fenêtre) : ses touches
   10 sont devenues `alt left left ret`. Lint propre ; toute la suite : 1169 tests hôte, 138 runs sur 140, les deux
   `menu` à l'ancienne attente, puis `menu` refait sur AMD et Intel avec la nouvelle ; rostests 44/84 et 16/29.
-  **Suite** : le bouton de fermeture grisé quand Close l'est ; SetForegroundWindow d'une fenêtre réduite
-  (`input::can_activate` la refuse, ReactOS l'active) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt
-  (QF_FMENUSTATUS) ; Maj+F10 (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en
-  pointillés, SetCursorPos (TWOPARAM_ROUTINE_SETCURSORPOS) ; vérifier sous VirtualBox avec le Bloc-notes.
+  La suite : l'entrée du bouton de fermeture, au-dessus.
 
 - **Déplacer et redimensionner au clavier** (`claude/new-session-696xfc`, M6,
   [`compat/m6-fenetres.md`](compat/m6-fenetres.md), étape 39 ; demandé après l'étape 38). Move et Size du menu de la

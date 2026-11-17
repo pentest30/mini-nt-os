@@ -1784,7 +1784,7 @@ l'icône finit le suivi et poste SC_CLOSE lui-même : ReactOS laisse le message 
 
 Pas encore : le clic droit sur le titre (fait à l'étape 38), SC_MOVE et
 SC_SIZE au clavier (faits à l'étape 39), ←/→ entre le menu système et la barre (fait à l'étape 40),
-le bouton de fermeture grisé quand Close l'est, WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
+le bouton de fermeture grisé quand Close l'est (fait à l'étape 41), WM_POPUPSYSTEMMENU (la barre des tâches), le menu système d'un
 bureau (MNF_SYSDESKMN). Vu, pas fait : SetForegroundWindow refuse une fenêtre réduite (`input::can_activate`,
 la règle de co_WinPosActivateOtherWindow), ReactOS l'active.
 
@@ -1932,3 +1932,41 @@ sort pas du premier item ; → qui ne sort pas du menu de la fenêtre ; WM_NEXTM
 GetSystemMenu refusée (la règle de ReactOS) ; la réponse par une barre refusée ; ← qui arrive sur le premier item de
 la barre ; la propriétaire gardée après une réponse. Une huitième a montré une ligne inutile, retirée avant le
 commit : poser la fenêtre de la barre au passage, que SetMenu lui donne déjà (`menu::attach`).
+
+## Étape 41 : le bouton de fermeture grisé quand Close l'est
+
+Demandé après l'étape 40 : le bouton de fermeture du titre se peignait toujours actif et fermait la fenêtre, même
+quand l'application grisait Close dans le menu de la fenêtre (EnableMenuItem(GetSystemMenu(…), SC_CLOSE,
+MF_GRAYED)) ou que sa classe avait CS_NOCLOSE.
+
+`nonclient.c` de win32k (UserDrawCaptionButton, NC_DoButton, NC_HandleNCLButtonDblClk), `menu.c` (IntEnableMenuItem),
+ReactOS comme spécification ; `win32k::sysmenu`, `win32k::nonclient`, `win32k::sizemove`, `win32k::menu`,
+`win32k::paint`.
+
+| Partie | Ce que fait Mino |
+|---|---|
+| L'état de Close (`sysmenu::close_enabled`, `sysmenu::close_rule`) | actif pour une fenêtre WS_SYSMENU sans CS_NOCLOSE dont l'item Close du menu système n'est ni grisé ni désactivé ; absent (DeleteMenu), il compte comme grisé (ReactOS lit alors -1) ; tant que le menu système n'existe pas, celui du gabarit SYSMENU, actif. Le menu n'est pas créé pour le lire : le cadre se peint aussi hors du processus de la fenêtre, où le rappel LoadMenu est impossible (ReactOS le crée au premier dessin, voir l'étape 37) |
+| Le dessin (`nonclient::caption_button_places`, `frame_ops`, `caption_button_ops`) | le symbole Marlett du bouton grisé en relief (COLOR_BTNHIGHLIGHT décalé d'un pixel, puis COLOR_BTNSHADOW), comme Réduire et Agrandir sans leur style |
+| Le clic (`sizemove::button_command`, NC_DoButton) | sur un bouton de fermeture grisé, rien : ni suivi ni WM_SYSCOMMAND ; le double-clic sur l'icône du titre ne ferme pas non plus (`close_enabled`, comme avant, sans plus créer le menu) |
+| La mise à jour (`menu::enable`, `menu::changes_caption_buttons`, `Menus::system_owner`, `paint::draw_caption_buttons`) | quand EnableMenuItem change l'état grisé ou désactivé d'une commande du système (SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_MOVE, SC_RESTORE, SC_SIZE) dans le menu de GetSystemMenu (MNF_SYSSUBMENU), les boutons du titre de sa fenêtre sont repeints aussitôt (UserPaintCaption `DC_BUTTONS`) ; sa fenêtre (`spwndNotify` chez ReactOS) est celle du menu d'un item qui ouvre ce menu |
+
+Comme ReactOS, Alt+F4 ne regarde que CS_NOCLOSE (`defwnd::key_menu`) : une fenêtre dont Close est grisé reçoit
+encore SC_CLOSE au clavier.
+
+Pas encore : RemoveMenu et DeleteMenu de Close ne repeignent pas le bouton (IntEnableMenuItem seul le fait chez
+ReactOS) ; le prochain dessin du cadre le grise.
+
+Le banc d'essai : `tests/native/closebtn1.c` (`CLOSEBTN1.EXE`, MinGW, avec `gdi32`), scénario `close-button`, à la
+place de `winlogon.exe`. W1, W2 d'une classe CS_NOCLOSE, W3. Le programme lit le symbole de chaque bouton de fermeture
+à l'écran (GetPixel : ses pixels noirs, actif, et ceux de COLOR_BTNSHADOW, grisé). EnableMenuItem grise Close de W1 :
+il rend MF_ENABLED et le bouton est grisé aussitôt, sans message traité entre les deux (étape 1) ; celui de W2 est
+grisé (étape 2) ; celui de W3, grisé puis réactivé, est noir (étape 3). Puis la souris de QEMU clique le bouton de W1,
+double-clique son icône (son menu s'ouvre, le double-clic ne ferme pas), clique le bouton de W2 : ni SC_CLOSE ni
+WM_CLOSE ; puis celui de W3 : WM_CLOSE (étape 4). Une capture montre les X de W1 et W2 grisés en relief, celui de W3
+noir.
+
+Tests : hôte (`sysmenu` : la règle de Close ; `nonclient` : le bouton grisé ; `sizemove` : le clic sur un bouton
+grisé ; `menu` : ce qui repeint les boutons) ; `close-button` sur AMD et Intel. Huit mutations le font échouer
+chacune : le bouton jamais grisé au dessin ; EnableMenuItem qui ne repeint pas ; la fenêtre du menu système pas
+trouvée ; SC_CLOSE hors des commandes qui repeignent ; le clic sur un bouton grisé qui ferme ; CS_NOCLOSE ignoré ;
+MF_GRAYED ignoré (MF_DISABLED seul) ; le double-clic sur l'icône qui ferme.
