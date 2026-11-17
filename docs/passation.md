@@ -30,7 +30,9 @@
   EnableWindow change les attentes de `desktop-launch` : End Task et Switch To du Gestionnaire des tâches sont
   maintenant activés pour la tâche sélectionnée (comme XP), l'icône sélectionnée mêlée au surlignage (8491B4, le
   blanc mêlé à moitié à 0A246A) ; le texte désactivé reste vérifié par `dialog`.
-  Case cochée dans `05-feuille-de-route.md` : **les trois critères du M6 sont cochés**. CHECKS_PLACEHOLDER
+  Case cochée dans `05-feuille-de-route.md` : **les trois critères du M6 sont cochés**. Lint propre ;
+  toute la suite : 1186 tests hôte, 149 runs de démarrage sur 150 (`rostests` à 43/84 sous son plancher de 44, l'écart
+  connu de cet hôte, NtProtectVirtualMemory ; `rostests-kernel32` 16/29 ; `ntfs-readonly` sauté, sans `mkntfs`).
   **Tâche de diagnostic** (règle 9) : MsgWaitForMultipleObjects d'un thread qui a reçu un message envoyé rend
   aussitôt « entrée », sans fin (3,8 millions de tours en 180 s, même avec le seul QS_SENDMESSAGE) : l'événement de
   la file reste signalé. Piste, à vérifier : les bits « changés » de `win32k::queue`, que co_IntPeekMessage efface à
