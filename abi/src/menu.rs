@@ -134,6 +134,40 @@ pub mod wm {
     pub const MN_GETHMENU: u32 = 0x01E1;
     pub const ENTERMENULOOP: u32 = 0x0211;
     pub const EXITMENULOOP: u32 = 0x0212;
+    /// WM_NEXTMENU: the arrow (VK_LEFT, VK_RIGHT) that leaves the tracked
+    /// menu by its end, `lParam` an [`super::MdiNextMenu32`].
+    pub const NEXTMENU: u32 = 0x0213;
+}
+
+/// MDINEXTMENU, 32-bit: what WM_NEXTMENU carries: the menu left, and the
+/// menu and window to go to, which the window procedure may fill.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MdiNextMenu32 {
+    pub hmenu_in: u32,
+    pub hmenu_next: u32,
+    pub hwnd_next: u32,
+}
+
+const _: () = assert!(size_of::<MdiNextMenu32>() == 12);
+const _: () = assert!(offset_of!(MdiNextMenu32, hmenu_next) == 4);
+const _: () = assert!(offset_of!(MdiNextMenu32, hwnd_next) == 8);
+
+impl MdiNextMenu32 {
+    /// The structure from its 12 bytes.
+    pub fn from_bytes(bytes: &[u8; 12]) -> Self {
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        Self { hmenu_in: word(0), hmenu_next: word(4), hwnd_next: word(8) }
+    }
+
+    /// Its 12 bytes.
+    pub fn as_bytes(&self) -> [u8; 12] {
+        let mut bytes = [0u8; 12];
+        bytes[..4].copy_from_slice(&self.hmenu_in.to_le_bytes());
+        bytes[4..8].copy_from_slice(&self.hmenu_next.to_le_bytes());
+        bytes[8..].copy_from_slice(&self.hwnd_next.to_le_bytes());
+        bytes
+    }
 }
 
 /// MSGF_MENU: WM_ENTERIDLE from a menu.

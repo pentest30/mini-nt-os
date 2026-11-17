@@ -1,0 +1,61 @@
+# The arrows that leave a menu by its ends (win32k::menutrack::do_next_menu,
+# MENU_DoNextMenu; tests/native/nextmenu1.c, MinGW, linked to ReactOS's
+# kernel32 and user32): NEXTMENU1.EXE takes the place of winlogon.exe and
+# switches to WinSta0\Default, with W (its bar File, Edit, Help) and W2 (its
+# bar Other). Update with docs/compat/m6-fenetres.md, step 40.
+# 1. F10, left: from the first item of the bar to the window menu
+#    (WM_NEXTMENU VK_LEFT, the bar left), down opens it.
+# 2. Alt+Space, then right: to the bar, File opens (the window menu left is
+#    GetSystemMenu's); left: back to the window menu, opened; left: to the
+#    last item of the bar, Help, opened; right: to the window menu.
+# 3. F10, right: inside the bar (Edit), no WM_NEXTMENU.
+# 4. F10, left: W answers with W2's bar, the tracking goes to W2 (its
+#    WM_INITMENUPOPUP, its WM_COMMAND).
+# 5. F10, left: W answers with W2's window menu (GetSystemMenu's, which
+#    ReactOS would refuse: menutrack::do_next_menu), down opens it.
+features = test-smss
+requires = userland, native
+initial-command = NEXTMENU1.EXE
+cpus     = default, intel
+timeout  = 120
+
+keys = [nextmenu] keyboard: step 1 => f10 left down
+keys = [nextmenu] step 1: popup 1: => esc esc
+keys = [nextmenu] keyboard: step 2 => alt-spc
+keys = [nextmenu] step 2: popup 1: => right
+keys = [nextmenu] step 2: popup 2: => left
+keys = [nextmenu] step 2: popup 3: => left
+keys = [nextmenu] step 2: popup 4: => right
+keys = [nextmenu] step 2: popup 5: => esc esc
+keys = [nextmenu] keyboard: step 3 => f10 right down
+keys = [nextmenu] step 3: popup 1: => esc esc
+keys = [nextmenu] keyboard: step 4 => f10 left down
+keys = [nextmenu] step 4: W2 popup: => k
+keys = [nextmenu] keyboard: step 5 => f10 left down
+keys = [nextmenu] step 5: W2 popup: => esc esc
+
+expect = [nextmenu] step 1: WM_NEXTMENU 1: left, from the bar
+expect = [nextmenu] step 1: popup 1: the window menu, system 1
+expect = [nextmenu] step 1: the menu loop is over, WM_NEXTMENU so far 1
+expect = [nextmenu] step 2: popup 1: the window menu, system 1
+expect = [nextmenu] step 2: WM_NEXTMENU 2: right, from the window menu
+expect = [nextmenu] step 2: popup 2: File, system 0
+expect = [nextmenu] step 2: WM_NEXTMENU 3: left, from the bar
+expect = [nextmenu] step 2: popup 3: the window menu, system 1
+expect = [nextmenu] step 2: WM_NEXTMENU 4: left, from the window menu
+expect = [nextmenu] step 2: popup 4: Help, system 0
+expect = [nextmenu] step 2: WM_NEXTMENU 5: right, from the bar
+expect = [nextmenu] step 2: popup 5: the window menu, system 1
+expect = [nextmenu] step 2: the menu loop is over, WM_NEXTMENU so far 5
+expect = [nextmenu] step 3: popup 1: Edit, system 0
+expect = [nextmenu] step 3: the menu loop is over, WM_NEXTMENU so far 5
+expect = [nextmenu] step 4: WM_NEXTMENU 6: left, from the bar
+expect = [nextmenu] step 4: W2 popup: Other, system 0
+expect = [nextmenu] step 4: W2 WM_COMMAND 401
+expect = [nextmenu] step 5: WM_NEXTMENU 7: left, from the bar
+expect = [nextmenu] step 5: W2 popup: W2's window menu, system 1
+expect = [nextmenu] step 5: the menu loop is over, WM_NEXTMENU so far 7
+expect = [nextmenu] W destroyed
+expect = [nextmenu] done
+forbid = *** STOP:
+forbid = [nextmenu] step 3: WM_NEXTMENU

@@ -88,8 +88,11 @@ expect = [menu] the bar 8, WM_CANCELMODE: WM_COMMAND 0, UNINITMENUPOPUP 1, EXITM
 # SC_KEYMENU): Alt+F opens File, x is its Exit (102).
 keys = [menu] keys 9 => alt-f x
 expect = [menu] keys 9: WM_COMMAND 102; ENTERMENULOOP 1 0, INITMENU 1, INITMENUPOPUP 1, UNINITMENUPOPUP 1, WM_MENUCHAR 0
-# Alt alone selects File; left goes round to Help; Enter chooses it.
-keys = [menu] keys 10 => alt left ret
+# Alt alone selects File; left goes to the window menu (W has WS_SYSMENU:
+# menutrack::do_next_menu, docs/compat/m6-fenetres.md, step 40), left again
+# to the last item, Help; Enter chooses it. Before step 40, the first left
+# went round to Help.
+keys = [menu] keys 10 => alt left left ret
 expect = [menu] keys 10: WM_COMMAND 300; ENTERMENULOOP 1 0, INITMENU 1, INITMENUPOPUP 0, UNINITMENUPOPUP 0, WM_MENUCHAR 0
 # F10, down opens File's menu, right closes it for Help.
 keys = [menu] keys 11 => f10 down right ret

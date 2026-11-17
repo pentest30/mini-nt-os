@@ -35,16 +35,17 @@
 //! Le menu de la fenêtre (`crate::sysmenu`) se suit comme une barre d'un
 //! seul item, ouvert sous l'icône du titre : un clic sur l'icône
 //! (HTSYSMENU), Alt+Espace ; un clic droit sur le titre le suit comme un
-//! menu déroulant, au point ([`track_popup_menu`]).
+//! menu déroulant, au point ([`track_popup_menu`]). Aux bouts de la barre,
+//! ← et → passent au menu système, et de lui à la barre (WM_NEXTMENU à la
+//! propriétaire, qui peut donner un autre menu : [`do_next_menu`]).
 //!
-//! Pas encore : WM_NEXTMENU (aux bouts de la barre, la sélection fait le
-//! tour), les colonnes au clavier (MENU_GetStartOfNextColumn), l'aide (F1,
-//! WM_HELP), MENU_SuspendPopup (le menu s'ouvre à chaque flèche, même
+//! Pas encore : les colonnes au clavier (MENU_GetStartOfNextColumn), l'aide
+//! (F1, WM_HELP), MENU_SuspendPopup (le menu s'ouvre à chaque flèche, même
 //! répétée).
 
 use alloc::sync::Arc;
 
-use abi::menu::{mf, mft, mnc, mnf, mns, tpm, wm, MSGF_MENU, NO_SELECTED_ITEM};
+use abi::menu::{mf, mft, mnc, mnf, mns, tpm, wm, MdiNextMenu32, MSGF_MENU, NO_SELECTED_ITEM};
 use abi::user::vk::{VK_DOWN, VK_END, VK_ESCAPE, VK_F10, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_UP};
 use abi::user::{
     sm, Msg32, HTCAPTION, HWND_TOPMOST, RDW_ALLCHILDREN, SWP_NOACTIVATE, SWP_SHOWWINDOW, WC_MENU, WM_CHAR, WM_KEYDOWN,
@@ -52,7 +53,7 @@ use abi::user::{
     WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSTIMER, WM_TIMER,
     WS_BORDER, WS_CLIPSIBLINGS, WS_EX_DLGMODALFRAME, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_WINDOWEDGE, WS_POPUP,
 };
-use abi::user::{HTMENU, HTSYSMENU, SC_CLOSE, WS_CHILD, WS_EX_LAYOUTRTL, WS_MINIMIZE, WS_SYSMENU};
+use abi::user::{HTMENU, HTSYSMENU, SC_CLOSE, SC_RESTORE, SC_SIZE, WS_CHILD, WS_EX_LAYOUTRTL, WS_MINIMIZE, WS_SYSMENU};
 use abi::winerror::ERROR_POPUP_ALREADY_ACTIVE;
 use hal::sync::KSpinLock;
 
@@ -640,9 +641,140 @@ fn key_escape(tracker: &mut Tracker, flags: u32) -> bool {
     false
 }
 
+/// Un item que MDI ajoute à la barre de la fenêtre cadre quand une fille
+/// est agrandie (son icône, ses boutons) : un identifiant de SC_SIZE à
+/// SC_RESTORE, que les flèches sautent aux bouts de la barre.
+fn is_mdi_button(id: u32) -> bool {
+    (SC_SIZE..=SC_RESTORE).contains(&id)
+}
+
+/// MENU_DoNextMenu, la règle : la flèche `key` (VK_LEFT, VK_RIGHT) sort du
+/// menu suivi par son bout, sa sélection étant `focused` parmi les items
+/// d'identifiants `ids` : ← sur le premier item ; → sur le dernier du menu
+/// système (`system`), ou d'une barre sans rien après la sélection que des
+/// items de MDI ([`is_mdi_button`]). Sans sélection, → ne sort pas.
+pub(crate) fn at_menu_end(key: u8, system: bool, focused: u32, ids: &[u32]) -> bool {
+    let count = ids.len() as u32;
+    match key {
+        VK_LEFT => focused == 0,
+        VK_RIGHT if system => count != 0 && focused == count - 1,
+        VK_RIGHT => {
+            let mut at = focused.saturating_add(1);
+            while at < count && is_mdi_button(ids[at as usize]) {
+                at += 1;
+            }
+            at == count
+        }
+        _ => false,
+    }
+}
+
+/// MENU_DoNextMenu, la règle : l'item que ← sélectionne en arrivant sur une
+/// barre d'identifiants `ids` depuis le menu système : le dernier, avant les
+/// items de MDI ([`is_mdi_button`]).
+pub(crate) fn last_bar_item(ids: &[u32]) -> u32 {
+    let mut at = ids.len().saturating_sub(1);
+    while at > 0 && is_mdi_button(ids[at]) {
+        at -= 1;
+    }
+    at as u32
+}
+
+/// WM_NEXTMENU à `owner` : la flèche `key`, le menu quitté `menu_in` (un
+/// MDINEXTMENU, que sa procédure peut remplir) ; rend le menu et la fenêtre
+/// donnés (0, 0 sans réponse).
+fn ask_next_menu(owner: &Arc<Window>, key: u8, menu_in: u32) -> (u32, u32) {
+    let next = MdiNextMenu32 { hmenu_in: menu_in, ..MdiNextMenu32::default() };
+    let mut bytes = next.as_bytes();
+    let lparam = LParam::Buffer { bytes: &mut bytes, write_back: true };
+    if window::send_message(owner, wm::NEXTMENU, u32::from(key), lparam).is_err() {
+        return (0, 0);
+    }
+    let answer = MdiNextMenu32::from_bytes(&bytes);
+    (answer.hmenu_next, answer.hwnd_next)
+}
+
+/// MENU_DoNextMenu : la flèche `key` sort du menu suivi par son bout
+/// ([`at_menu_end`]) ; la propriétaire reçoit WM_NEXTMENU (le menu quitté :
+/// celui de GetSystemMenu pour le menu système). Si elle donne un menu et
+/// sa fenêtre, le suivi y passe : la barre d'une fenêtre qui n'est pas
+/// fille, ou son menu système, cette fenêtre devenant la propriétaire (la
+/// souris, `queue.menu_owner`) ; un autre menu, rien. Écart voulu : pour le
+/// menu système, ReactOS compare la réponse au menu d'un item
+/// (`get_win_sys_menu`), puis la remplace par lui (« get the real system
+/// menu ») ; cela n'a de sens qu'avec son sous-menu, le menu de
+/// GetSystemMenu, le seul qu'une application connaisse : Mino accepte l'un
+/// et l'autre. Sans réponse, du menu système à la barre de la fenêtre (← :
+/// son dernier item, [`last_bar_item`]), de la barre à son menu système
+/// (WS_SYSMENU). Une barre et le menu système ont déjà leur fenêtre (SetMenu,
+/// `crate::sysmenu`). L'ancien menu perd sa sélection, le nouveau
+/// sélectionne son item (WM_MENUSELECT). Vrai si le menu suivi a changé.
+fn do_next_menu(tracker: &mut Tracker, key: u8, flags: u32) -> bool {
+    let top = tracker.top;
+    let Some(state) = crate::menu::state(top) else { return false };
+    let system = state.flags & mnf::SYSMENU != 0;
+    let ids: alloc::vec::Vec<u32> = state.items.iter().map(|item| item.id).collect();
+    if !at_menu_end(key, system, state.focused, &ids) {
+        return false;
+    }
+    let owner = tracker.owner.clone();
+    let menu_in = if system { crate::sysmenu::popup_of(top).unwrap_or(0) } else { top };
+    let (target, item) = match ask_next_menu(&owner, key, menu_in) {
+        (menu, hwnd) if menu != 0 && hwnd != 0 => {
+            let Some(window) = window::get(hwnd).filter(|_| crate::menu::exists(menu)) else { return false };
+            let system_menu = crate::sysmenu::of(&window);
+            let is_system = window.state().style & WS_SYSMENU != 0
+                && system_menu.is_some_and(|system| system == menu || crate::sysmenu::popup_of(system) == Some(menu));
+            match system_menu {
+                Some(system_menu) if is_system => ((system_menu, window), 0),
+                // bar_of: a top-level window's bar only.
+                _ if bar_of(&window) == Some(menu) => ((menu, window), 0),
+                _ => return false,
+            }
+        }
+        _ if system => {
+            let Some(bar) = bar_of(&owner) else { return false };
+            let ids: alloc::vec::Vec<u32> = crate::menu::state(bar)
+                .map(|state| state.items.iter().map(|item| item.id).collect())
+                .unwrap_or_default();
+            let item = if key == VK_LEFT { last_bar_item(&ids) } else { 0 };
+            ((bar, owner), item)
+        }
+        _ if owner.state().style & WS_SYSMENU != 0 => {
+            let _ = crate::sysmenu::get(&owner, false);
+            let Some(system_menu) = crate::sysmenu::of(&owner) else { return false };
+            ((system_menu, owner), 0)
+        }
+        _ => return false,
+    };
+    let (menu, window) = target;
+    if menu != top {
+        select_item(&tracker.owner, top, NO_SELECTED_ITEM, false, None);
+        if tracker.current != top {
+            hide_sub_popups(&tracker.owner, top, false, flags);
+        }
+    }
+    if window.handle != tracker.owner.handle {
+        if let Ok(thread) = crate::convert_current_thread() {
+            thread.queue.with(|queue| queue.menu_owner = window.handle);
+            crate::mouse::set_capture(&thread, Some(&window));
+        }
+        tracker.owner = window.clone();
+    }
+    if let Some(top) = TOP.lock().as_mut() {
+        *top = Top { hwnd: window.handle, menu, owner: window.handle };
+    }
+    tracker.top = menu;
+    tracker.current = menu;
+    select_item(&window, menu, item, true, None);
+    true
+}
+
 /// MENU_KeyLeft : le sous-menu le plus profond se ferme ; revenu à la barre
-/// suivie, la sélection passe à l'item de gauche (du premier, au dernier),
-/// dont le menu s'ouvre si un menu était ouvert.
+/// suivie, la sélection passe au menu d'avant ([`do_next_menu`] : du
+/// premier item, au menu système, et de lui à la barre), sinon à l'item de
+/// gauche (du premier, au dernier) ; son menu s'ouvre si un menu était
+/// ouvert.
 fn key_left(tracker: &mut Tracker, flags: u32) {
     let previous = parent_of_current(tracker);
     let was_open = tracker.current != tracker.top;
@@ -650,17 +782,21 @@ fn key_left(tracker: &mut Tracker, flags: u32) {
     hide_sub_popups(&owner, previous, true, flags);
     tracker.current = previous;
     if previous == tracker.top && !is_popup(tracker.top) {
-        move_selection(&owner, tracker.top, -1);
+        if !do_next_menu(tracker, VK_LEFT, flags) {
+            move_selection(&owner, tracker.top, -1);
+        }
         if was_open {
+            let owner = tracker.owner.clone();
             tracker.current = show_sub_popup(&owner, tracker.top, true, flags);
         }
     }
 }
 
 /// MENU_KeyRight : le sous-menu de l'item sélectionné s'ouvre, son premier
-/// item sélectionné ; sans lui, sur la barre suivie, la sélection passe à
-/// l'item de droite (du dernier, au premier), dont le menu s'ouvre si un
-/// menu était ouvert.
+/// item sélectionné ; sans lui, sur la barre suivie, la sélection passe au
+/// menu d'après ([`do_next_menu`] : du dernier item, au menu système, et de
+/// lui à la barre), sinon à l'item de droite (du dernier, au premier) ; son
+/// menu s'ouvre si un menu était ouvert.
 fn key_right(tracker: &mut Tracker, flags: u32) {
     let owner = tracker.owner.clone();
     if is_popup(tracker.top) || tracker.current != tracker.top {
@@ -676,8 +812,11 @@ fn key_right(tracker: &mut Tracker, flags: u32) {
             hide_sub_popups(&owner, tracker.top, false, flags);
             tracker.current = tracker.top;
         }
-        move_selection(&owner, tracker.top, 1);
+        if !do_next_menu(tracker, VK_RIGHT, flags) {
+            move_selection(&owner, tracker.top, 1);
+        }
         if was_open {
+            let owner = tracker.owner.clone();
             tracker.current = show_sub_popup(&owner, tracker.top, true, flags);
         }
     }
@@ -1174,6 +1313,35 @@ mod tests {
     }
 
     const SCREEN: Rect = Rect { left: 0, top: 0, right: 640, bottom: 480 };
+
+    #[test]
+    fn an_arrow_leaves_a_menu_by_its_ends() {
+        use abi::user::{SC_CLOSE, SC_MINIMIZE};
+        let bar = [0x10, 0x20, 0x30];
+        assert!(at_menu_end(VK_LEFT, false, 0, &bar), "left of the first item");
+        assert!(!at_menu_end(VK_LEFT, false, 1, &bar));
+        assert!(at_menu_end(VK_RIGHT, false, 2, &bar), "right of the last item");
+        assert!(!at_menu_end(VK_RIGHT, false, 1, &bar));
+        assert!(!at_menu_end(VK_RIGHT, false, NO_SELECTED_ITEM, &bar), "no selection");
+        // A maximized MDI child's buttons at the end of the frame's bar.
+        let mdi = [0x10, 0x20, SC_MINIMIZE, SC_RESTORE, SC_CLOSE];
+        assert!(at_menu_end(VK_RIGHT, false, 1, &mdi), "only MDI buttons after");
+        assert!(!at_menu_end(VK_RIGHT, false, 0, &mdi));
+        // The window menu: one item.
+        assert!(at_menu_end(VK_LEFT, true, 0, &[0]));
+        assert!(at_menu_end(VK_RIGHT, true, 0, &[0]));
+        assert!(!at_menu_end(VK_RIGHT, true, 0, &[]), "an empty menu");
+        assert!(!at_menu_end(VK_UP, false, 0, &bar), "not an arrow left or right");
+    }
+
+    #[test]
+    fn the_bar_is_entered_from_its_last_item() {
+        use abi::user::{SC_CLOSE, SC_MINIMIZE};
+        assert_eq!(last_bar_item(&[0x10, 0x20, 0x30]), 2);
+        assert_eq!(last_bar_item(&[0x10, 0x20, SC_MINIMIZE, SC_RESTORE, SC_CLOSE]), 1, "before the MDI buttons");
+        assert_eq!(last_bar_item(&[SC_CLOSE]), 0, "the first item at least");
+        assert_eq!(last_bar_item(&[]), 0);
+    }
 
     #[test]
     fn a_popup_goes_where_asked_and_stays_on_the_screen() {
