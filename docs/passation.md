@@ -11,8 +11,11 @@
   WM_SYSCHAR) poste SC_RESTORE (`defwnd::key_menu`, `KeyMenu::Restore`, `defwnd::post_sys_command`). **Écart** :
   une fenêtre cachée reste refusée (ReactOS l'active). Scénario `foreground-minimized` (`tests/native/fgmin1.c`, AMD
   et Intel : SetForegroundWindow, a, Alt+Espace et r, Entrée) ; tests hôte (`input`, `defwnd`). Six mutations
-  détectées (la règle, le clavier, le mot haut, Entrée, le message posté). Lint propre ; `foreground-minimized` passe
-  sur AMD et Intel ; la suite complète est à faire après ce commit (elle ira dans cette entrée).
+  détectées (la règle, le clavier, le mot haut, Entrée, le message posté). Lint propre ; toute la suite : 1173 tests
+  hôte, 142 runs sur 144, rostests 44/84 et 16/29. Les deux runs manquants, `minmax` (AMD et Intel), attendaient
+  l'ancienne suite de SW_RESTORE : la fenêtre, activée réduite par le SW_RESTORE refusé, avait alors le clavier ;
+  personne ne l'a plus, et SW_RESTORE envoie WM_SETFOCUS avant WM_ACTIVATE (co_WinPosShowWindow : co_UserSetFocus,
+  puis WM_ACTIVATE). L'attente est corrigée (11 messages, `0007 0006`) ; `minmax` passe sur AMD et Intel.
   **Suite** : SetForegroundWindow d'une fenêtre cachée ; WM_ASYNC_SETACTIVEWINDOW (l'activation d'une fenêtre d'un
   autre thread avec ses messages) ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ; Maj+F10
   (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés, SetCursorPos
