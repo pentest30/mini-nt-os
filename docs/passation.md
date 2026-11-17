@@ -20,7 +20,8 @@
   perdait ; ReactOS a le même défaut) ; la boucle lit aussi WM_SYSKEYDOWN (`sizemove::loop_key` : une fenêtre
   réduite active n'a plus le clavier depuis l'étape 42 ; écart voulu avec ReactOS). `keyboard-move` a deux étapes
   de plus (8 : touches en file pendant que le thread dort ; 9 : la barre d'une fenêtre réduite active), trois
-  mutations détectées. À faire : la suite complète (elle ira dans cette entrée).
+  mutations détectées. Suite complète sur `main` après la fusion de la PR 140 (2b634b8) : 1176 tests hôte, 146 runs
+  de démarrage, tous passés.
   **Suite** : SetForegroundWindow d'une fenêtre cachée ; la règle du premier plan (CanForceFG,
   LockSetForegroundWindow) ; AttachThreadInput ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ;
   Maj+F10 (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés,
