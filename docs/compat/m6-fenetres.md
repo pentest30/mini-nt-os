@@ -2102,11 +2102,16 @@ spécification ; `drivers/video/bochs-dispi`, `hal::bochs`, `hal::pci`, `abi::di
 
 Écarts voulus avec ReactOS : la fenêtre de chaque bureau de la station interactive est remise à la taille de l'écran
 directement, pas par le WM_DISPLAYCHANGE de la seule fenêtre du bureau de l'appelant (les bureaux partagent
-l'écran) ; une profondeur autre que 32 bits est refusée (le moteur DIB écrit l'écran en 32 bits) ; le registre est
+l'écran) ; une fenêtre dont le thread ne répond pas à WM_DISPLAYCHANGE en 100 ms le reçoit plus tard, sans attente
+(SendNotifyMessage), comme Windows livre le message d'un SendMessageTimeout dépassé, là où ReactOS le retire ; une profondeur autre que 32 bits est refusée (le moteur DIB écrit l'écran en 32 bits) ; le registre est
 réécrit dans son fichier aussitôt.
 
 `explorer` suit le changement de lui-même : à WM_DISPLAYCHANGE, sa barre des tâches se replace au bas du nouvel écran
-et son bureau se repeint.
+et son bureau se repeint. Vu en chemin, corrigé : le fond du bureau (DesktopWindowProc, `window::paint_desktop`) se
+peignait sur tout le rectangle à peindre, par-dessus les fenêtres ; si le thread d'`explorer` avait déjà repeint sa
+barre replacée, elle disparaissait (son horloge revenait seule, à la minute suivante) : `display-desktop` l'a vu deux
+fois sur dix runs. Il se peint maintenant dans sa région visible sans ses filles (WS_CLIPCHILDREN, comme le DC de
+BeginPaint chez ReactOS) ; six runs de suite passent depuis, trois sur AMD, trois sur Intel.
 
 EnableWindow change aussi le Gestionnaire des tâches (scénario `desktop-launch`) : End Task et Switch To, créés
 désactivés, sont activés quand une tâche est sélectionnée, comme chez XP et ReactOS ; la liste, qui a le clavier,

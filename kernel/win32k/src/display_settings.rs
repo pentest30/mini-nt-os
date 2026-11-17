@@ -222,7 +222,11 @@ fn desktops() -> Vec<Arc<ob::Object<crate::desktop::Desktop>>> {
 
 /// WM_DISPLAYCHANGE (`wParam` : les bits par pixel ; `lParam` :
 /// MAKELONG(largeur, hauteur)) aux fenêtres de premier niveau du bureau du
-/// thread courant, [`DISPLAY_CHANGE_TIMEOUT_MS`] au plus chacune ; puis
+/// thread courant, [`DISPLAY_CHANGE_TIMEOUT_MS`] au plus chacune. Une fenêtre
+/// dont le thread n'a pas répondu à temps le reçoit plus tard, sans attente
+/// ([`crate::sent::notify_window`]) : comme Windows, qui livre le message
+/// d'un SendMessageTimeout dépassé ; ReactOS le retire, et la barre des
+/// tâches d'`explorer`, occupée, restait en bas de l'ancien écran. Puis
 /// UserRedrawDesktop : la fenêtre du bureau et toutes ses filles sont
 /// invalidées, fond et cadres compris, et le fond du bureau se repeint
 /// aussitôt (les autres fenêtres, par leur WM_PAINT).
@@ -236,7 +240,7 @@ fn broadcast(mode: &Mode) {
     if let Some(desktop) = thread.desktop() {
         let top_level = crate::window::children(&desktop.desktop.window, false);
         for window in top_level.into_iter().filter_map(crate::window::get) {
-            let _ = crate::sent::send_to_window(
+            let sent = crate::sent::send_to_window(
                 &thread,
                 &window,
                 WM_DISPLAYCHANGE,
@@ -244,6 +248,10 @@ fn broadcast(mode: &Mode) {
                 lparam,
                 Some(DISPLAY_CHANGE_TIMEOUT_MS),
             );
+            if sent == Err(crate::sent::SendError::Timeout) {
+                log::info!("win32k: WM_DISPLAYCHANGE to {:#x}: no answer within 100 ms, sent later", window.handle);
+                let _ = crate::sent::notify_window(&thread, &window, WM_DISPLAYCHANGE, BITS_PER_PEL, lparam);
+            }
         }
     }
     for desktop in desktops() {

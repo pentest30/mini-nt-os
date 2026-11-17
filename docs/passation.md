@@ -21,7 +21,11 @@
   `display-panel` (`tests/native/display2.c` : le vrai panneau Affichage, Alt+S, Origine, Entrée, puis Alt+Y dans
   « Display Settings » : 640×480, registre compris, capture 640×480), et le critère lui-même, `display-desktop`
   (depuis le bureau d'`explorer` après le logon : Win+R, « control desk.cpl,,3 » ; `control.exe` sur le disque ;
-  la barre des tâches se replace d'elle-même au bas de l'écran de 640×480), AMD et Intel. Vingt mutations détectées (quatorze par
+  la barre des tâches se replace d'elle-même au bas de l'écran de 640×480), AMD et Intel. Corrigé en chemin : le fond
+  du bureau (`window::paint_desktop`) se peignait par-dessus les fenêtres et recouvrait parfois la barre des tâches
+  qu'`explorer` venait de replacer (deux runs sur dix de `display-desktop`) : il est coupé aux fenêtres filles
+  (WS_CLIPCHILDREN) ; WM_DISPLAYCHANGE resté sans réponse 100 ms est livré plus tard (comme Windows, pas ReactOS) ;
+  Win+R attend 15 s après le bureau (une fois sur quatre, il arrivait trop tôt). Vingt mutations détectées (quatorze par
   `display-mode`, quatre par `display-panel`, deux par `display-desktop` : la liste dans l'étape 44).
   EnableWindow change les attentes de `desktop-launch` : End Task et Switch To du Gestionnaire des tâches sont
   maintenant activés pour la tâche sélectionnée (comme XP), l'icône sélectionnée mêlée au surlignage (8491B4, le

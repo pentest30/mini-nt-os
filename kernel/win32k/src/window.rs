@@ -1333,9 +1333,19 @@ fn desktop_window_proc(window: &Window, message: u32, _wparam: u32, _lparam: u32
 }
 
 /// IntPaintDesktop : le fond du bureau, de la couleur système
-/// `COLOR_BACKGROUND`, dans `rect` (journalisé : c'est rare).
+/// `COLOR_BACKGROUND`, dans `rect` hors de ses fenêtres filles (journalisé :
+/// c'est rare).
 fn paint_desktop(window: &Window, rect: Rect) {
-    let painted = crate::display::draw(|screen| screen.fill_rect(rect, crate::gdi::syscolor::BACKGROUND));
+    // Where no child is (WS_CLIPCHILDREN, as the DC of BeginPaint): a window
+    // of another thread that has painted itself in the meantime stays (the
+    // taskbar of explorer, moved on WM_DISPLAYCHANGE, was painted over).
+    let mut region = crate::paint::visible_region(window, true, true, false);
+    region.intersect_rect(rect);
+    let painted = crate::display::draw(|screen| {
+        for &part in region.rects() {
+            screen.fill_rect(part, crate::gdi::syscolor::BACKGROUND);
+        }
+    });
     if painted {
         log::info!(
             "win32k: the desktop window of {} erased (WM_ERASEBKGND), {}x{}",
