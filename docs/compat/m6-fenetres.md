@@ -1886,6 +1886,23 @@ milieu du titre ; les flèches ignorées ; Échap qui ne rend pas la place ; Siz
 qui entrent dans la boucle ; aucune flèche ne choisit de bord ; Échap qui ne renonce pas au choix du bord ;
 `mouse::set_cursor_pos` sans son WM_MOUSEMOVE.
 
+Corrigé après la revue de la PR 140 (deux remarques, vérifiées) :
+- une flèche ne faisait que déplacer le curseur, dont le mouvement de la souris arrive derrière les touches déjà dans
+  la file : flèches et Entrée tapées pendant que le thread était occupé finissaient la boucle sans déplacer la
+  fenêtre. Chaque flèche place maintenant la fenêtre tout de suite (`sizemove::size_move`) ; le mouvement de la
+  souris qui suit ne change plus rien. ReactOS a le même défaut (DefWndDoSizeMove : `UserSetCursorPos` seul) ;
+- la boucle ne lisait que WM_KEYDOWN : depuis l'étape 42, une fenêtre réduite active n'a pas le clavier et ses
+  touches sont WM_SYSKEYDOWN ; déplacée (sa barre tirée à la souris, ou SC_MOVE d'une application), ni les flèches
+  ni Échap n'agissaient, et Entrée, traduite, demandait SC_RESTORE. `sizemove::loop_key` lit les deux, dans la boucle
+  et dans le choix du bord. **Écart voulu** : la boucle de ReactOS ne lit que WM_KEYDOWN.
+
+Le banc a deux étapes de plus : Alt+Espace, m, puis WM_ENTERSIZEMOVE de W dort pendant que QEMU tape → → et Entrée,
+qui attendent ensemble dans la file : W se déplace quand même de 16 pixels (étape 8) ; W réduite, rendue active par
+SetForegroundWindow (personne n'a le clavier), SC_MOVE posté : → → et Entrée déplacent sa barre de 16 pixels, elle
+reste réduite, sans SC_RESTORE (étape 9). Test hôte `sizemove::tests::the_loop_reads_system_keys_too`. Trois
+mutations le font échouer chacune : la flèche qui attend le mouvement de la souris (l'étape 8, le défaut de la
+revue) ; WM_KEYDOWN seul (le test hôte et l'étape 9) ; Échap qui ne rend pas la place.
+
 ## Étape 40 : ← et → entre le menu de la fenêtre et la barre (WM_NEXTMENU)
 
 Demandé après l'étape 39 : aux bouts de la barre suivie, ← et → faisaient le tour de ses items (du premier au
@@ -2050,4 +2067,9 @@ de B1 qui attendait part. Étape 5 : SetForegroundWindow(A1) : B se désactive d
 WM_ACTIVATE, WM_ACTIVATEAPP à B1 et B2, WM_KILLFOCUS ; ni fenêtre active ni clavier ensuite).
 
 Tests : hôte (`queue` : les événements à part, ceux qui partent ; `input` : Ctrl, Alt et Maj relâchées) ;
-`async-activate` sur AMD et Intel. Les mutations et la suite complète : voir la passation.
+`async-activate` sur AMD et Intel. Onze mutations le font échouer chacune : aucune désactivation postée au thread qui
+perd le premier plan ; le thread courant qui ne se désactive pas ; aucune activation postée ; les événements jamais
+traités par PeekMessage et GetMessage ; le thread désactivé qui garde sa fenêtre active ; pas de WM_ACTIVATEAPP à
+l'activation ; la désactivation dépassée gardée ; l'activation dépassée gardée ; pas de WM_NCACTIVATE à une fenêtre
+déjà active ; pas de WM_KILLFOCUS au thread désactivé (le scénario) ; Ctrl, Alt et Maj pas relâchées (le test hôte
+seul).

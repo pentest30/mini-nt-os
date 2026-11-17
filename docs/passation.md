@@ -13,8 +13,14 @@
   thread. **Écarts** : WM_ACTIVATEAPP (TRUE) porte le TID du thread qui perd le premier plan, et vient aussi quand la
   fenêtre était déjà active. Scénario `async-activate` (`tests/native/asyncact1.c`, AMD et Intel, cinq étapes dont
   les deux événements dépassés) ; tests hôte (`queue`, `input`). Avant le commit : `activate-app`,
-  `foreground-minimized`, `window-menu`, `minmax`, `hotkey`, `destroy` passent (AMD). À faire : les mutations, le
-  lint, la suite complète (elles iront dans cette entrée).
+  `foreground-minimized`, `window-menu`, `minmax`, `hotkey`, `destroy`, `logon`, `folder-view`, `console`, `cmd`,
+  `notepad`, `keyboard` passent (AMD). Onze mutations détectées (dix par le scénario ; Ctrl, Alt et Maj par le test
+  hôte seul). **Revue de la PR 140** (deux remarques de Codex sur `sizemove`, vérifiées et corrigées, étape 39 de
+  `m6-fenetres.md`) : une flèche place la fenêtre tout de suite (avec Entrée déjà dans la file, le déplacement se
+  perdait ; ReactOS a le même défaut) ; la boucle lit aussi WM_SYSKEYDOWN (`sizemove::loop_key` : une fenêtre
+  réduite active n'a plus le clavier depuis l'étape 42 ; écart voulu avec ReactOS). `keyboard-move` a deux étapes
+  de plus (8 : touches en file pendant que le thread dort ; 9 : la barre d'une fenêtre réduite active), trois
+  mutations détectées. À faire : la suite complète (elle ira dans cette entrée).
   **Suite** : SetForegroundWindow d'une fenêtre cachée ; la règle du premier plan (CanForceFG,
   LockSetForegroundWindow) ; AttachThreadInput ; DefWindowProc de WM_xBUTTONDOWN qui oublie Alt (QF_FMENUSTATUS) ;
   Maj+F10 (WM_CONTEXTMENU du clavier) ; MENU_SuspendPopup ; WM_MOVING, WM_SIZING, le cadre en pointillés,
