@@ -1,5 +1,20 @@
 # Notes de passation
 
+- **Le banc d'essai des applications du M7** (`claude/m7-test-bench`, M7,
+  [`compat/applications.md`](compat/applications.md#le-banc-dessai) ; demandé le 2026-11-17, sur la PR 142).
+  `cargo xtask fetch-apps` (`xtask/src/apps.rs` : les dix installeurs épinglés, vérifiés par taille et SHA-256,
+  estampillés) ; la clé de scénario `app = ID` : un disque système plus grand (`mkfat --free-mib` et `@LISTE`,
+  `fatfs::build_with_free`) avec tout l'arbre de ReactOS (`userland::whole_tree`), l'installeur et
+  `C:\APPS\PROBE.TXT`, la mémoire de QEMU de l'application ; `APPBENCH.EXE` (`tests/native/appbench.c`) installe
+  en silencieux, répond aux boîtes figées, relance visible un NSIS qui échoue, imprime fenêtres, journal et
+  fichiers, puis lance le programme installé. Dix scénarios `app-<id>` (AMD), sautés sans les installeurs ; leur
+  plancher : l'installeur démarre (Dev-C++ : ses fichiers et son programme). Bilan : aucune application ne
+  s'installe ; NtSetInformationFile classe 0x13 (les quatre Inno Setup), le dossier de plugins de NSIS
+  (NtQueryInformationFile classe 0x23 ?), NtLockFile (`msiexec`), SumatraPDF (accès mémoire après
+  ProcessDebugPort), Dev-C++ (EReadError, GDI et USER manquants), la lenteur des gros fichiers. Tests hôte :
+  `apps`, `mkfat`, `fatfs` (`build_with_free`), `scenario` (clé `app`). **Suite** : corriger ces blocages dans
+  l'ordre du bilan, en remontant le plancher de chaque application débloquée.
+
 - **La liste des dix applications du M7** (`claude/m7-applications`, M7,
   [`compat/applications.md`](compat/applications.md#la-liste-du-m7-premier-critère) ; demandé le 2026-11-17).
   Le premier critère du M7 a sa liste : 7-Zip 9.20 (MSI), Notepad++ 7.9.2 (NSIS), KeePass 1.18, WinMerge 2.12.4,
