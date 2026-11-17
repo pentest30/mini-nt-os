@@ -2105,10 +2105,17 @@ directement, pas par le WM_DISPLAYCHANGE de la seule fenêtre du bureau de l'app
 l'écran) ; une profondeur autre que 32 bits est refusée (le moteur DIB écrit l'écran en 32 bits) ; le registre est
 réécrit dans son fichier aussitôt.
 
+`explorer` suit le changement de lui-même : à WM_DISPLAYCHANGE, sa barre des tâches se replace au bas du nouvel écran
+et son bureau se repeint.
+
+EnableWindow change aussi le Gestionnaire des tâches (scénario `desktop-launch`) : End Task et Switch To, créés
+désactivés, sont activés quand une tâche est sélectionnée, comme chez XP et ReactOS ; la liste, qui a le clavier,
+dessine l'icône sélectionnée mêlée à moitié à COLOR_HIGHLIGHT. Le texte désactivé (DrawState) reste vérifié par le
+scénario `dialog`.
+
 Pas encore : plusieurs écrans, le panoramique (`dmPanningWidth`), CDS_FULLSCREEN et le retour au mode du registre à
 la fin du processus (UserDisplayNotifyShutdown), ClipCursor ; les attributs chez le client d'un DC de tout l'écran
-gardent l'ancien `VisRectRegion` jusqu'à ce qu'il soit repris ; la barre des tâches et le bureau d'`explorer` ne
-suivent pas encore (leur WM_DISPLAYCHANGE). Vu dans le panneau, pas fait : NtGdiPolyPolyDraw, NtGdiSetLayout,
+gardent l'ancien `VisRectRegion` jusqu'à ce qu'il soit repris. Vu dans le panneau, pas fait : NtGdiPolyPolyDraw, NtGdiSetLayout,
 NtUserSetParent, SPI_GETKEYBOARDCUES (0x100A), NtUserSetThreadState, NtUserSetActiveWindow,
 NtUserUnregisterClass ; « Advanced… » (les pages de propriétés du pilote) n'est pas essayé.
 
@@ -2131,7 +2138,11 @@ effacée au changement). `tests/native/display2.c` (`DISPLAY2.EXE`, scénario `d
 Settings et peint, QEMU tape Alt+S (le curseur « Screen area »), Origine (640×480) et Entrée (OK : la page applique
 par ChangeDisplaySettingsEx(CDS_UPDATEREGISTRY)), puis Alt+Y dans « Display Settings » (garder) ; le panneau finit ;
 le mode, les métriques et le registre sont à 640×480, la fenêtre de la sonde a entendu WM_DISPLAYCHANGE de
-640×480 ; la capture : 640×480, la fenêtre verte au coin.
+640×480 ; la capture : 640×480, la fenêtre verte au coin. Le critère lui-même, depuis le bureau de ReactOS
+(scénario `display-desktop`, `shell = explorer`, deux démarrages comme `logon`) : la session ouverte, Win+R et
+« control desk.cpl,,3 » (`control.exe` sur le disque, qui passe l'applet à `rundll32`) ; les mêmes touches dans le
+panneau ; le panneau fini, l'écran reste à 640×480 (revenir à 1280×800 est interdit) ; la capture : 640×480, la
+barre des tâches d'`explorer` au nouveau bas (son bord blanc en y = 453), le bureau repeint au-dessus.
 
 Tests : hôte (`abi::display` : le `DEVMODEW` relu de ses octets, les textes bornés ; `bochs-dispi` : les modes dans
 les limites et la mémoire, celui du départ à sa place ; `hal::pci` : les barres de mémoire ; `display_settings` : le
@@ -2142,4 +2153,5 @@ mis à jour, le pointeur non borné, les fenêtres des bureaux non redimensionn�
 WM_DISPLAYCHANGE au seul thread appelant, le bureau non repeint (l'écran noir à la capture), toute profondeur
 acceptée, CDS_NORESET seul accepté, CDS_TEST qui change le mode, le registre non écrit, aucun moniteur énuméré, le
 pilote qui garde son mode. Quatre font échouer `display-panel` : sans EnableWindow, sans TransparentBlt, le
-registre non écrit, le pilote qui garde son mode.
+registre non écrit, le pilote qui garde son mode. Deux font échouer `display-desktop` : sans WM_DISPLAYCHANGE (la
+barre des tâches reste en bas de l'ancien écran, hors du nouveau), le pilote qui garde son mode.

@@ -471,8 +471,9 @@ Le détail est dans [06 — Conventions](docs/06-conventions.md).
   NtUserChangeDisplaySettings ; le registre `Control\Video\{4D494E4F-…}\0000`, repris au démarrage ;
   `HARDWARE\DEVICEMAP\VIDEO`) ; EnableWindow (NtUserCallTwoParam 0x60, `window::enable_window`), NtGdiTransparentBlt ;
   `desk.cpl` et `rundll32.exe` sur le disque ; `screen-size = L H` dans un scénario ; scénarios `display-mode`
-  (`tests/native/display1.c`) et `display-panel` (`tests/native/display2.c` : le panneau Affichage au clavier passe
-  l'écran à 640×480) : **le troisième critère du M6 est coché**.
+  (`tests/native/display1.c`), `display-panel` (`tests/native/display2.c` : le panneau Affichage au clavier passe
+  l'écran à 640×480) et `display-desktop` (le même panneau ouvert depuis le bureau d'`explorer` par Win+R et
+  « control desk.cpl,,3 » ; la barre des tâches suit) : **le troisième critère du M6 est coché**.
   M5, la console ([`docs/compat/m5-console.md`](docs/compat/m5-console.md), scénario `console`) : `CONSOLE1.EXE`
   lance par CreateProcessW `THREADS1.EXE` (sous-système CONSOLE, construit par `xtask`) ; NtCreateProcess(Ex) rend le
   PEB dans le TEB du créateur (`NtTib.ArbitraryUserPointer`, comme ReactOS) ; emprunt d'identité

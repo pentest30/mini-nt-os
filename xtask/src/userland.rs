@@ -130,7 +130,9 @@ fn files_with(ws: &Workspace, windows_files: &[&str]) -> Option<Vec<(PathBuf, St
         // (SetComputerNameExW: BaseVerifyDnsName, DnsValidateName_W).
         "dnsapi.dll",
         // The Display panel (M6): `rundll32 shell32.dll,Control_RunDLL
-        // desk.cpl`; shell32 loads the applet by name.
+        // desk.cpl`, which `control desk.cpl` starts; shell32 loads the
+        // applet by name.
+        "control.exe",
         "rundll32.exe",
         "desk.cpl",
     ]

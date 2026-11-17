@@ -119,7 +119,7 @@ M0 Assainir ─► M1 Ke ─► M2 Mm/Ob/Ps ─► M3 Frontière NT ─► M4 Io
 **Critères de sortie**
 - [x] `winlogon` (ouverture de session automatique), `userinit` et `explorer` affichent le bureau, la barre des tâches et le menu Démarrer (`logon`, AMD ; [parcours](compat/m6-logon.md#le-shell--explorerexe)).
 - [x] Bloc-notes s'ouvre, on y tape du texte, on l'enregistre puis on le rouvre (`notepad-save`, AMD et Intel ; [parcours vérifié](compat/applications.md)).
-- [x] La résolution se change depuis le panneau Affichage (QEMU) (`display-panel`, AMD et Intel ; [parcours](compat/m6-fenetres.md#étape-44--le-changement-de-résolution-le-pilote-bochs-dispi-changedisplaysettings-le-panneau-affichage)).
+- [x] La résolution se change depuis le panneau Affichage (QEMU) (`display-desktop` : ouvert depuis le bureau d'`explorer`, AMD et Intel ; [parcours](compat/m6-fenetres.md#étape-44--le-changement-de-résolution-le-pilote-bochs-dispi-changedisplaysettings-le-panneau-affichage)).
 
 ## M7 — Bureau et applications
 

@@ -19,8 +19,13 @@
   Scénarios `display-mode` (`tests/native/display1.c` : énumération, refus, 800×600 par ChangeDisplaySettings avec
   métriques, WM_DISPLAYCHANGE à deux threads, moniteur, bureau, devcaps, pointeur, registre, capture 800×600) et
   `display-panel` (`tests/native/display2.c` : le vrai panneau Affichage, Alt+S, Origine, Entrée, puis Alt+Y dans
-  « Display Settings » : 640×480, registre compris, capture 640×480), AMD et Intel. Dix-huit mutations détectées (quatorze par
-  `display-mode`, quatre par `display-panel` : la liste dans l'étape 44).
+  « Display Settings » : 640×480, registre compris, capture 640×480), et le critère lui-même, `display-desktop`
+  (depuis le bureau d'`explorer` après le logon : Win+R, « control desk.cpl,,3 » ; `control.exe` sur le disque ;
+  la barre des tâches se replace d'elle-même au bas de l'écran de 640×480), AMD et Intel. Vingt mutations détectées (quatorze par
+  `display-mode`, quatre par `display-panel`, deux par `display-desktop` : la liste dans l'étape 44).
+  EnableWindow change les attentes de `desktop-launch` : End Task et Switch To du Gestionnaire des tâches sont
+  maintenant activés pour la tâche sélectionnée (comme XP), l'icône sélectionnée mêlée au surlignage (8491B4, le
+  blanc mêlé à moitié à 0A246A) ; le texte désactivé reste vérifié par `dialog`.
   Case cochée dans `05-feuille-de-route.md` : **les trois critères du M6 sont cochés**. CHECKS_PLACEHOLDER
   **Tâche de diagnostic** (règle 9) : MsgWaitForMultipleObjects d'un thread qui a reçu un message envoyé rend
   aussitôt « entrée », sans fin (3,8 millions de tours en 180 s, même avec le seul QS_SENDMESSAGE) : l'événement de
@@ -33,8 +38,7 @@
   **Dettes** : NtGdiPolyPolyDraw, NtGdiSetLayout, NtUserSetParent, SPI_GETKEYBOARDCUES (0x100A),
   NtUserSetThreadState, NtUserSetActiveWindow, NtUserUnregisterClass (vus dans le panneau, sans effet sur le
   parcours) ; CDS_FULLSCREEN et le retour au mode du registre à la fin du processus ; ClipCursor ; le
-  `VisRectRegion` chez le client d'un DC ouvert sur l'écran ; la barre des tâches et le bureau d'`explorer` après
-  WM_DISPLAYCHANGE ; « Advanced… » du panneau ; essayer sous VirtualBox (VBoxVGA : la mémoire vidéo n'est pas lue,
+  `VisRectRegion` chez le client d'un DC ouvert sur l'écran ; « Advanced… » du panneau ; essayer sous VirtualBox (VBoxVGA : la mémoire vidéo n'est pas lue,
   seuls les modes qui tiennent où celui du micrologiciel tient).
 
 - **Activer la fenêtre d'un autre thread (WM_ASYNC_SETACTIVEWINDOW)** (`claude/new-session-696xfc`, M6,
