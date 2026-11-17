@@ -2381,6 +2381,94 @@ impl FindExistingCurIconParam32 {
     }
 }
 
+/// The clipboard (`clipboard.c` of ReactOS's win32k and user32, as a
+/// specification).
+///
+/// TYPE_CLIPDATA: the data of a clipboard format (`CLIPBOARDDATA`, its bytes
+/// in the kernel), in the USER handle table: NtUserConvertMemHandle makes
+/// one, NtUserCreateLocalMemHandle copies it back.
+pub const TYPE_CLIPDATA: u8 = 6;
+/// ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS: EnumClipboardFormats, by
+/// NtUserCallOneParam (the parameter is the previous format, 0 for the
+/// first; the result the next one, 0 after the last).
+pub const ONEPARAM_ROUTINE_ENUMCLIPBOARDFORMATS: u32 = 0x25;
+
+/// The standard clipboard formats (`CF_*`); registered formats are atoms of
+/// USER, from 0xC000 (RegisterClipboardFormat).
+pub mod cf {
+    pub const CF_TEXT: u32 = 1;
+    pub const CF_BITMAP: u32 = 2;
+    pub const CF_METAFILEPICT: u32 = 3;
+    pub const CF_OEMTEXT: u32 = 7;
+    pub const CF_DIB: u32 = 8;
+    pub const CF_PALETTE: u32 = 9;
+    pub const CF_UNICODETEXT: u32 = 13;
+    pub const CF_ENHMETAFILE: u32 = 14;
+    pub const CF_LOCALE: u32 = 16;
+    pub const CF_DIBV5: u32 = 17;
+    pub const CF_DSPBITMAP: u32 = 0x82;
+    pub const CF_DSPMETAFILEPICT: u32 = 0x83;
+    pub const CF_DSPENHMETAFILE: u32 = 0x8E;
+    /// The first registered format (MAXINTATOM).
+    pub const FIRST_REGISTERED: u32 = 0xC000;
+}
+
+/// WM_RENDERFORMAT: to the clipboard owner, render the delayed format
+/// `wParam` now (SetClipboardData without opening the clipboard).
+pub const WM_RENDERFORMAT: u32 = 0x0305;
+/// WM_RENDERALLFORMATS: to the clipboard owner before it is destroyed,
+/// while it has delayed formats.
+pub const WM_RENDERALLFORMATS: u32 = 0x0306;
+/// WM_DESTROYCLIPBOARD: to the clipboard owner, EmptyClipboard by anyone.
+pub const WM_DESTROYCLIPBOARD: u32 = 0x0307;
+/// WM_DRAWCLIPBOARD: to the first clipboard viewer, the content changed
+/// (sent as a notification).
+pub const WM_DRAWCLIPBOARD: u32 = 0x0308;
+/// WM_CHANGECBCHAIN: to the first clipboard viewer, the window `wParam`
+/// leaves the chain, `lParam` follows it.
+pub const WM_CHANGECBCHAIN: u32 = 0x030D;
+
+/// GETCLIPBDATA, 32-bit: what NtUserGetClipboardData says of the data it
+/// returns: the format it really is (another text format for a synthesized
+/// one, which `user32` converts), if the handle is a TYPE_CLIPDATA, and for
+/// CF_TEXT the data of CF_LOCALE (for CF_BITMAP, that of CF_PALETTE).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GetClipbData32 {
+    pub fmt_ret: u32,
+    pub global_handle: u32,
+    pub locale_or_palette: u32,
+}
+
+/// SETCLIPBDATA, 32-bit: NtUserSetClipboardData's third argument: the
+/// handle is a TYPE_CLIPDATA; the serial number grows (ReactOS's `user32`
+/// never sets it).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SetClipbData32 {
+    pub global_handle: u32,
+    pub inc_serial_number: u32,
+}
+
+impl SetClipbData32 {
+    /// The record in `bytes`; `None` if they are too few.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        let word = |at: usize| u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+        Some(Self { global_handle: word(0), inc_serial_number: word(4) })
+    }
+}
+
+const _: () = {
+    assert!(size_of::<GetClipbData32>() == 12);
+    assert!(offset_of!(GetClipbData32, global_handle) == 4);
+    assert!(offset_of!(GetClipbData32, locale_or_palette) == 8);
+    assert!(size_of::<SetClipbData32>() == 8);
+    assert!(offset_of!(SetClipbData32, inc_serial_number) == 4);
+};
+
 /// `as_bytes` for records of integers whose sizes, checked above, leave no
 /// padding.
 macro_rules! as_bytes {
@@ -2429,12 +2517,24 @@ as_bytes!(
     ScrollInfo32,
     ScrollBarInfo32,
     Hook32,
-    HookProcArguments32
+    HookProcArguments32,
+    GetClipbData32,
+    SetClipbData32
 );
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clipboard_records_have_their_layout() {
+        let set = SetClipbData32 { global_handle: 1, inc_serial_number: 0 };
+        assert_eq!(SetClipbData32::from_bytes(set.as_bytes()), Some(set));
+        assert_eq!(SetClipbData32::from_bytes(&set.as_bytes()[..7]), None, "one byte short");
+        let get = GetClipbData32 { fmt_ret: cf::CF_UNICODETEXT, global_handle: 1, locale_or_palette: 0x0001_0040 };
+        assert_eq!(&get.as_bytes()[..4], &[13, 0, 0, 0]);
+        assert_eq!(&get.as_bytes()[8..], &[0x40, 0, 1, 0]);
+    }
 
     #[test]
     fn scroll_records_read_back_from_their_bytes() {
